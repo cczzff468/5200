@@ -110,14 +110,18 @@ import {
   mtCanRefund,
   mtCancelWithRefund,
   mtCheckoutCalc,
+  mtClaimGodCoupons,
   mtClearHistory,
   mtClearSearchHist,
+  mtCouponTypeLabel,
   mtCurAddrId,
   mtGetOrder,
   mtGetSearchHist,
   mtGetSession,
+  mtListUsableCoupons,
   mtLoadAddresses,
   mtLoadCart,
+  mtLoadCoupons,
   mtLoadFavs,
   mtLoadHistory,
   mtLoadOrders,
@@ -132,10 +136,12 @@ import {
   mtSetSession,
   mtToggleFav,
   mtUidOf,
+  mtUseCoupon,
   mtValidateSession,
   MT_STATUS_LABEL,
   type MtAddress,
   type MtCart,
+  type MtCoupon,
   type MtFavs,
   type MtHistItem,
   type MtOrder,
@@ -143,7 +149,7 @@ import {
 } from '@/lib/ios/meituan-store';
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
 
-type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail';
+type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons';
 type Tab = 'home' | 'orders' | 'cart' | 'my';
 
 const MT_YELLOW = '#FFD100';
@@ -864,8 +870,8 @@ function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerc
     : [];
 
   return (
-    <div className="flex h-full flex-col bg-[#F4F5F7]">
-      <div className="flex items-center gap-2 bg-white px-3 pb-2.5 pt-[54px]">
+    <div className="flex h-full flex-col bg-white">
+      <div className="flex items-center gap-2 border-b border-black/[0.04] bg-white px-3 pb-2.5 pt-[54px]">
         <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-6 w-6 text-black/70" />
         </button>
@@ -898,7 +904,7 @@ function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerc
             <p className="text-[14px] font-semibold text-black/70">搜索发现</p>
             <div className="mt-2.5 flex flex-wrap gap-2">
               {['奶茶', '汉堡', '麻辣烫', '水果', '药品', '比萨', '盖浇饭', '火锅'].map((h) => (
-                <button key={h} type="button" onClick={() => run(h)} className="rounded-full bg-white px-3 py-1.5 text-[12px] text-black/65 shadow-sm active:opacity-70">
+                <button key={h} type="button" onClick={() => run(h)} className="rounded-full bg-[#F5F6F7] px-3 py-1.5 text-[12px] text-black/65 active:opacity-70">
                   {h}
                 </button>
               ))}
@@ -920,7 +926,7 @@ function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerc
                 </div>
                 <div className="mt-2.5 flex flex-wrap gap-2">
                   {hist.map((h) => (
-                    <button key={h} type="button" onClick={() => run(h)} className="rounded-full bg-white px-3 py-1.5 text-[12px] text-black/65 shadow-sm active:opacity-70">
+                    <button key={h} type="button" onClick={() => run(h)} className="rounded-full bg-[#F5F6F7] px-3 py-1.5 text-[12px] text-black/65 active:opacity-70">
                       {h}
                     </button>
                   ))}
@@ -933,15 +939,15 @@ function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerc
         {done && (
           <>
             {merchantHits.length > 0 && <p className="text-[13px] font-semibold text-black/45">相关商家</p>}
-            <div className="mt-2 space-y-2.5">
+            <div className="mt-2 divide-y divide-black/[0.04]">
               {merchantHits.map((m) => (
                 <SearchMerchantRow key={m.id} m={m} onOpen={() => onOpenMerchant(m.id)} />
               ))}
             </div>
             {dishHits.length > 0 && <p className="mt-4 text-[13px] font-semibold text-black/45">相关菜品</p>}
-            <div className="mt-2 space-y-2">
+            <div className="mt-2 divide-y divide-black/[0.04]">
               {dishHits.map(({ m, d }) => (
-                <button key={d.id} type="button" onClick={() => onOpenMerchant(m.id)} className="flex w-full items-center gap-3 rounded-2xl bg-white p-2.5 text-left shadow-sm active:bg-black/[0.02]">
+                <button key={d.id} type="button" onClick={() => onOpenMerchant(m.id)} className="flex w-full items-center gap-3 p-2.5 text-left active:bg-black/[0.02]">
                   <FoodImg src={d.img} emoji={d.emoji} className="h-12 w-12 shrink-0 rounded-lg" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[14px] font-medium text-black/85">{d.name}</span>
@@ -955,7 +961,9 @@ function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerc
             </div>
             {merchantHits.length === 0 && dishHits.length === 0 && (
               <div className="mt-16 text-center">
-                <p className="text-[40px]">🍽️</p>
+                <p className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#F5F6F7]">
+                  <SearchIcon className="h-6 w-6 text-black/25" strokeWidth={1.8} />
+                </p>
                 <p className="mt-2 text-[13px] text-black/40">没有找到「{done}」相关的商家或菜品</p>
               </div>
             )}
@@ -969,7 +977,7 @@ function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerc
 /** 搜索结果商家行（列表式） */
 function SearchMerchantRow({ m, onOpen }: { m: MtMerchant; onOpen: () => void }) {
   return (
-    <button type="button" onClick={onOpen} className="flex w-full gap-3 rounded-2xl bg-white p-3 text-left shadow-sm active:bg-black/[0.02]">
+    <button type="button" onClick={onOpen} className="flex w-full gap-3 p-3 text-left active:bg-black/[0.02]">
       <FoodImg src={m.cover} emoji={m.emoji} className="h-[76px] w-[76px] shrink-0 rounded-xl" />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[15px] font-semibold text-black/85">{m.name}</span>
@@ -1011,6 +1019,7 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
   const [cart, setCart] = useState<MtCart>(() => mtLoadCart(uid));
   const [cartOpen, setCartOpen] = useState(false);
   const [activeCat, setActiveCat] = useState(0);
+  const [specDish, setSpecDish] = useState<MtDish | null>(null); // 规格/小料选择弹窗
   const catRefs = useRef<(HTMLDivElement | null)[]>([]);
   useOrdersTick();
   const shopOrders = uid ? mtLoadOrders(uid).filter((o) => o.merchantId === merchant.id) : [];
@@ -1032,6 +1041,11 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
       onToast('不同商家商品不能合并结算，请先结算或清空购物车');
       return;
     }
+    // 有规格的菜品（奶茶小料/食物配菜）先弹规格选择弹窗
+    if (d.specs && d.specs.length > 0) {
+      setSpecDish(d);
+      return;
+    }
     mutateCart((prev) => ({
       merchantId: merchant.id,
       items: prev.items.some((i) => i.dishId === d.id)
@@ -1039,9 +1053,29 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
         : [...prev.items, { dishId: d.id, qty: 1 }],
     }));
   };
-  const dec = (d: MtDish) => {
+  /** 规格弹窗「选好了」：同菜不同规格分行（dishId+spec 为唯一键） */
+  const addWithSpec = (d: MtDish, qty: number, spec: string, unitPrice: number) => {
+    if (!cartMerchantOk && cart.items.length > 0) {
+      onToast('不同商家商品不能合并结算，请先结算或清空购物车');
+      setSpecDish(null);
+      return;
+    }
     mutateCart((prev) => {
-      const items = prev.items.map((i) => (i.dishId === d.id ? { ...i, qty: i.qty - 1 } : i)).filter((i) => i.qty > 0);
+      const sameKey = (i: { dishId: string; spec?: string }): boolean => i.dishId === d.id && (i.spec ?? '') === spec;
+      const items = prev.items.some(sameKey)
+        ? prev.items.map((i) => (sameKey(i) ? { ...i, qty: i.qty + qty } : i))
+        : [...prev.items, { dishId: d.id, qty, spec, unitPrice }];
+      return { merchantId: merchant.id, items };
+    });
+    setSpecDish(null);
+    onToast(`已加入购物车${spec ? `（${spec}）` : ''}`);
+  };
+  const dec = (d: MtDish) => {
+    // 多规格分行：减最后一个同菜行
+    mutateCart((prev) => {
+      const idx = prev.items.map((i) => i.dishId).lastIndexOf(d.id);
+      if (idx < 0) return prev;
+      const items = prev.items.map((i, k) => (k === idx ? { ...i, qty: i.qty - 1 } : i)).filter((i) => i.qty > 0);
       return { merchantId: items.length > 0 ? merchant.id : null, items };
     });
   };
@@ -1086,9 +1120,8 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
         </div>
       </div>
 
-      {/* 商家信息卡 */}
-      <div className="relative z-10 -mt-6 px-3">
-        <div className="rounded-2xl bg-white p-3.5 shadow-[0_2px_10px_rgba(0,0,0,0.05)]">
+      {/* 商家信息（白底直排无面板） */}
+      <div className="relative z-10 -mt-6 border-y border-black/[0.05] bg-white px-4 py-3.5">
           <div className="flex gap-3">
             <span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl">
               <FoodImg src={merchant.cover} emoji={merchant.emoji} className="h-full w-full" />
@@ -1113,11 +1146,10 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
             ))}
             <span className="ml-auto text-[11px] text-black/35">公告：{merchant.notice?.slice(0, 12) ?? '无'}</span>
           </div>
-        </div>
       </div>
 
       {/* 页签（点菜/评价/商家/本店订单） */}
-      <div className="mt-2.5 flex shrink-0 items-center gap-6 px-5">
+      <div className="mt-0 flex shrink-0 items-center gap-6 px-5">
         {(['点菜', '评价', '商家', '订单'] as const).map((t) => (
           <button key={t} type="button" onClick={() => { merchantTabMemo = t; setTab(t); }} className={`relative py-2 text-[15px] ${tab === t ? 'font-bold text-black/85' : 'text-black/45'}`}>
             {t}
@@ -1295,13 +1327,16 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
                   const d = mtDishesOf(merchant).find((x) => x.id === i.dishId);
                   if (!d) return null;
                   return (
-                    <div key={i.dishId} className="flex items-center gap-2.5 py-2.5">
+                    <div key={`${i.dishId}-${i.spec ?? ''}`} className="flex items-center gap-2.5 py-2.5">
                       <FoodImg src={d.img} emoji={d.emoji} className="h-10 w-10 shrink-0 rounded-lg" />
-                      <span className="min-w-0 flex-1 truncate text-[13px] text-black/80">{d.name}</span>
-                      <span className="text-[14px] font-semibold" style={{ color: MT_PRICE }}>
-                        ¥{fmtMoney(d.price * i.qty)}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] text-black/80">{d.name}</span>
+                        {i.spec && <span className="block truncate text-[11px] text-black/40">{i.spec}</span>}
                       </span>
-                      <Stepper qty={i.qty} onAdd={() => add(d)} onDec={() => dec(d)} />
+                      <span className="text-[14px] font-semibold" style={{ color: MT_PRICE }}>
+                        ¥{fmtMoney((i.unitPrice ?? d.price) * i.qty)}
+                      </span>
+                      <Stepper qty={i.qty} onAdd={() => (d.specs?.length ? setSpecDish(d) : add(d))} onDec={() => dec(d)} />
                     </div>
                   );
                 })}
@@ -1334,6 +1369,18 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
           </div>
         </div>
       )}
+
+      {/* 规格/小料选择弹窗（奶茶小料/食物配菜） */}
+      <AnimatePresence>
+        {specDish && (
+          <DishSpecSheet
+            key={`${specDish.id}-${cart.items.reduce((s, i) => s + (i.dishId === specDish.id ? i.qty : 0), 0)}`}
+            dish={specDish}
+            onClose={() => setSpecDish(null)}
+            onConfirm={({ qty, spec, unitPrice }) => addWithSpec(specDish, qty, spec, unitPrice)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1544,27 +1591,26 @@ function PayPage({
   };
 
   return (
-    <motion.div className="absolute inset-0 z-50 flex flex-col bg-[#F5F6F7]" initial={{ x: 24, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: 24, opacity: 0 }} transition={{ duration: 0.18 }}>
+    <motion.div className="absolute inset-0 z-50 flex flex-col bg-white" initial={{ x: 24, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: 24, opacity: 0 }} transition={{ duration: 0.18 }}>
       {/* 顶栏：返回 + 居中「订单」 */}
-      <div className="relative grid h-[100px] shrink-0 place-items-center pt-[50px]">
+      <div className="relative grid h-[100px] shrink-0 place-items-center border-b border-black/[0.04] pt-[50px]">
         <button type="button" aria-label="返回" onClick={onClose} className="absolute left-1 top-[50px] grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-[24px] w-[24px] text-black/85" strokeWidth={2.2} />
         </button>
         <p className="text-[20px] font-semibold text-black/90">订单</p>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3.5 pb-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="min-h-0 flex-1 overflow-y-auto pb-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {/* 倒计时 + 金额 */}
-        <p className="mt-1 text-center text-[15px] text-black/50">交易剩余时间 {countdown}</p>
+        <p className="mt-3 text-center text-[15px] text-black/50">交易剩余时间 {countdown}</p>
         <p className="mt-1 text-center text-[42px] font-bold leading-tight tracking-tight text-black/90">
           <span className="text-[26px]">¥</span>
           {payAmount.toFixed(2)}
         </p>
 
-        {/* 支付方式：美团支付（绿卡 + 白内卡） */}
-        <p className="mb-2 mt-4 px-1 text-[15px] text-black/50">支付方式</p>
-        <div className="rounded-2xl bg-gradient-to-br from-[#DDF5C2] via-[#F1FAD6] to-[#FCF2C6] p-2.5">
-          <div className="flex items-center gap-2 px-1.5 pb-2 pt-1.5">
+        {/* 支付方式：美团支付（白底直排） */}
+        <div className="mt-4 border-t-[7px] border-[#F5F6F7] px-4 pt-3">
+          <div className="flex items-center gap-2 pb-1">
             <span className="grid h-[26px] w-[26px] place-items-center rounded-[8px] bg-gradient-to-br from-[#FFD100] to-[#FFB800] shadow-sm">
               <Zap className="h-[15px] w-[15px] fill-white text-white" strokeWidth={0} />
             </span>
@@ -1574,7 +1620,7 @@ function PayPage({
               <Leaf className="h-3.5 w-3.5" strokeWidth={2} />
             </span>
           </div>
-          <div className="rounded-xl bg-white px-4 shadow-[0_2px_10px_rgba(110,150,60,0.08)]">
+          <div>
             <button type="button" onClick={() => selBankRow('bank')} className="flex w-full items-center gap-2 py-[15px] text-left active:opacity-80">
               <span className="flex-1 text-[15px] text-black/85">使用银行卡支付</span>
               <Radio on={selBank === 'bank'} />
@@ -1597,8 +1643,8 @@ function PayPage({
         </div>
 
         {/* 其他支付方式：微信 / QQ（点行展开渠道） */}
-        <p className="mb-2 mt-4 px-1 text-[15px] text-black/50">其他支付方式</p>
-        <div className="rounded-2xl bg-white px-4 shadow-sm">
+        <div className="border-t-[7px] border-[#F5F6F7] px-4 pt-3">
+          <p className="pb-2 text-[15px] text-black/50">其他支付方式</p>
           {(
             [
               ['wx', '/icons/wechat.png', '微信支付'],
@@ -1662,8 +1708,8 @@ function PayPage({
       </div>
 
       {/* 底部：立减横幅 + 确认交易 */}
-      <div className="shrink-0 bg-[#F5F6F7] px-3.5 pb-[max(12px,env(safe-area-inset-bottom))] pt-1.5">
-        <div className="flex items-center gap-3 rounded-2xl bg-[#FFF6D8] px-4 py-2.5">
+      <div className="shrink-0 border-t border-black/[0.05] bg-white px-3.5 pb-[max(12px,env(safe-area-inset-bottom))] pt-1.5">
+        <div className="mt-1 flex items-center gap-3 bg-[#FFF6D8] px-4 py-2.5">
           <div className="min-w-0 flex-1">
             <p className="text-[14px] font-bold text-black/85">
               使用工商银行储蓄卡立减 <span className="text-[#FF4B33]">2.28</span> 元
@@ -1712,13 +1758,19 @@ function CheckoutSheet({
   const cart = mtLoadCart(uid);
   const calc = mtCheckoutCalc(uid, merchant, cart);
   const [note, setNote] = useState('');
+  // 优惠券（外卖券，达门槛可用）
+  const [selCoupon, setSelCoupon] = useState<MtCoupon | null>(null);
+  const [couponPick, setCouponPick] = useState(false);
+  const couponOff = selCoupon ? Math.min(selCoupon.amount, Math.max(0.01, calc.total - 0.01)) : 0;
+  const payable = Math.max(0.01, Math.round((calc.total - couponOff) * 100) / 100);
+  const usableCoupons = mtListUsableCoupons(uid, 'waimai', calc.itemTotal);
 
   const items = cart.items
     .map((i) => {
       const d = mtDishesOf(merchant).find((x) => x.id === i.dishId);
-      return d ? { dish: d, qty: i.qty } : null;
+      return d ? { dish: d, qty: i.qty, spec: i.spec, unitPrice: i.unitPrice } : null;
     })
-    .filter((x): x is { dish: MtDish; qty: number } => x !== null);
+    .filter((x): x is { dish: MtDish; qty: number; spec: string | undefined; unitPrice: number | undefined } => x !== null);
 
   const submit = () => {
     if (items.length === 0) {
@@ -1738,17 +1790,20 @@ function CheckoutSheet({
       merchantEmoji: merchant.emoji,
       merchantImg: merchant.cover,
       kind: 'waimai',
-      items: items.map(({ dish, qty }) => ({ dishId: dish.id, name: dish.name, price: dish.price, qty, emoji: dish.emoji, img: dish.img })),
+      items: items.map(({ dish, qty, spec, unitPrice }) => ({ dishId: dish.id, name: dish.name, price: unitPrice ?? dish.price, qty, emoji: dish.emoji, img: dish.img, spec })),
       itemTotal: calc.itemTotal,
       deliveryFee: calc.deliveryFee,
-      discount: calc.discount,
-      total: calc.total,
+      discount: Math.round((calc.discount + couponOff) * 100) / 100,
+      couponId: selCoupon?.id,
+      couponAmount: couponOff > 0 ? couponOff : undefined,
+      total: payable,
       note: note.trim() || undefined,
       address: cur,
       status: 'pendingPay',
       createdAt: now,
       statusLog: [{ status: 'pendingPay', at: now }],
     };
+    if (selCoupon) mtUseCoupon(uid, selCoupon.id);
     const list = mtLoadOrders(uid);
     mtSaveOrders(uid, [order, ...list]);
     mtSaveCart(uid, { merchantId: null, items: [] });
@@ -1762,7 +1817,7 @@ function CheckoutSheet({
       {/* 遮罩：点击弹窗外任意区域关闭 */}
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <motion.div
-        className="absolute inset-x-0 bottom-0 top-[72px] flex flex-col overflow-hidden rounded-t-[20px] bg-[#F4F5F7]"
+        className="absolute inset-x-0 bottom-0 top-[72px] flex flex-col overflow-hidden rounded-t-[20px] bg-white"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -1795,9 +1850,9 @@ function CheckoutSheet({
           </div>
         ) : (
           <>
-            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+            <div className="min-h-0 flex-1 overflow-y-auto">
               {/* 地址 */}
-              <button type="button" onClick={onPickAddress} className="w-full rounded-2xl bg-white p-4 text-left shadow-sm active:bg-black/[0.02]">
+              <button type="button" onClick={onPickAddress} className="w-full px-4 py-4 text-left active:bg-black/[0.02]">
                 <span className="flex items-start gap-2">
                   <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#FF6000]" />
                   <span className="min-w-0 flex-1">
@@ -1821,7 +1876,7 @@ function CheckoutSheet({
               </button>
 
               {/* 商品 */}
-              <div className="mt-2.5 rounded-2xl bg-white p-4 shadow-sm">
+              <div className="border-t border-black/5 px-4 py-3.5">
                 <p className="flex items-center gap-2 text-[14px] font-semibold text-black/80">
                   <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-md">
                     <FoodImg src={merchant.cover} emoji={merchant.emoji} className="h-full w-full" />
@@ -1829,12 +1884,15 @@ function CheckoutSheet({
                   {merchant.name}
                 </p>
                 <div className="mt-2.5 space-y-2.5">
-                  {items.map(({ dish, qty }) => (
-                    <div key={dish.id} className="flex items-center gap-2.5">
+                  {items.map(({ dish, qty, spec, unitPrice }) => (
+                    <div key={`${dish.id}-${spec ?? ''}`} className="flex items-center gap-2.5">
                       <FoodImg src={dish.img} emoji={dish.emoji} className="h-10 w-10 shrink-0 rounded-lg" />
-                      <span className="min-w-0 flex-1 truncate text-[13px] text-black/75">{dish.name}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] text-black/75">{dish.name}</span>
+                        {spec && <span className="block truncate text-[11px] text-black/40">{spec}</span>}
+                      </span>
                       <span className="text-[12px] text-black/40">×{qty}</span>
-                      <span className="w-14 text-right text-[13px] text-black/80">¥{fmtMoney(dish.price * qty)}</span>
+                      <span className="w-14 text-right text-[13px] text-black/80">¥{fmtMoney((unitPrice ?? dish.price) * qty)}</span>
                     </div>
                   ))}
                 </div>
@@ -1847,9 +1905,16 @@ function CheckoutSheet({
                     <span>配送费{calc.itemTotal >= 45 && <span className="ml-1 text-[#00A661]">（满45已免）</span>}</span>
                     <span>¥{fmtMoney(calc.deliveryFee)}</span>
                   </p>
+                  <button type="button" onClick={() => setCouponPick(true)} className="flex w-full justify-between text-black/55 active:opacity-70">
+                    <span>优惠券</span>
+                    <span className={`flex items-center gap-0.5 ${selCoupon || couponOff > 0 ? 'font-medium text-[#FF4B33]' : 'text-black/40'}`}>
+                      {selCoupon ? `-¥${fmtMoney(couponOff)}` : usableCoupons.usable.length > 0 ? `${usableCoupons.usable.length}张可用` : '暂无可用'}
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </span>
+                  </button>
                   {calc.discount > 0 && (
                     <p className="flex justify-between text-[#FF4B33]">
-                      <span>优惠{calc.labels.length > 0 && `（${calc.labels.join('、')}）`}</span>
+                      <span>满减优惠{calc.labels.length > 0 && `（${calc.labels.join('、')}）`}</span>
                       <span>-¥{fmtMoney(calc.discount)}</span>
                     </p>
                   )}
@@ -1857,7 +1922,7 @@ function CheckoutSheet({
               </div>
 
               {/* 备注 */}
-              <div className="mt-2.5 rounded-2xl bg-white p-4 shadow-sm">
+              <div className="border-t border-black/5 px-4 py-3.5">
                 <p className="text-[13px] font-semibold text-black/75">订单备注</p>
                 <textarea
                   value={note}
@@ -1875,9 +1940,9 @@ function CheckoutSheet({
                 <span className="min-w-0 flex-1">
                   <span className="text-[13px] text-black/45">合计 </span>
                   <span className="text-[20px] font-bold" style={{ color: MT_PRICE }}>
-                    ¥{calc.total.toFixed(2)}
+                    ¥{payable.toFixed(2)}
                   </span>
-                  {calc.discount > 0 && <span className="ml-1 text-[11px] text-black/35">已优惠¥{fmtMoney(calc.discount)}</span>}
+                  {calc.discount + couponOff > 0 && <span className="ml-1 text-[11px] text-black/35">已优惠¥{fmtMoney(calc.discount + couponOff)}</span>}
                 </span>
                 <button type="button" onClick={submit} className="h-12 rounded-full bg-[#FFD100] px-8 text-[16px] font-semibold text-black/90 shadow active:opacity-85">
                   提交订单
@@ -1886,6 +1951,25 @@ function CheckoutSheet({
             </div>
           </>
         )}
+
+        {/* 优惠券选择弹层 */}
+        <AnimatePresence>
+          {couponPick && (
+            <CouponPickerSheet
+              key="mt-coupon-pick"
+              uid={uid}
+              type="waimai"
+              itemTotal={calc.itemTotal}
+              selId={selCoupon?.id ?? null}
+              onClose={() => setCouponPick(false)}
+              onPick={(c) => {
+                setSelCoupon(c);
+                setCouponPick(false);
+              }}
+              onToast={onToast}
+            />
+          )}
+        </AnimatePresence>
       </motion.div>
     </motion.div>
   );
@@ -1898,8 +1982,8 @@ const ORDER_TABS: { key: string; match: (o: MtOrder) => boolean }[] = [
   { key: '待付款', match: (o) => o.status === 'pendingPay' },
   { key: '待收货/待使用', match: (o) => o.status === 'pendingAccept' || o.status === 'accepted' || o.status === 'delivering' },
   { key: '评价', match: (o) => o.status === 'completed' },
-  // 退款/售后：申请过退款或已取消关闭的订单
-  { key: '退款/售后', match: (o) => !!o.refund || o.status === 'canceled' },
+  // 退款/售后：只显示买了以后退款的（有退款记录的已支付订单；未支付就取消的不算售后）
+  { key: '退款/售后', match: (o) => !!o.refund },
 ];
 
 function OrdersPage({
@@ -1945,9 +2029,9 @@ function OrdersPage({
   };
 
   return (
-    <div className="flex h-full flex-col bg-[#F0F3F5]">
+    <div className="flex h-full flex-col bg-white">
       {/* 返回 + 搜索 + 筛选 + 发票（独立页：无底部 tab，顶部返回键回首页） */}
-      <div className="shrink-0 bg-[#F0F3F5] px-3 pb-1 pt-[54px]">
+      <div className="shrink-0 border-b border-black/[0.04] bg-white px-3 pb-1 pt-[54px]">
         <div className="flex items-center gap-2.5">
           <button type="button" aria-label="返回" onClick={onGoHome} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/5">
             <ChevronLeft className="h-6 w-6 text-black/75" />
@@ -1988,20 +2072,21 @@ function OrdersPage({
             </button>
           </div>
         )}
-        <div className="space-y-2.5">
+        <div>
           {list.map((o) => {
             const tuangou = o.kind === 'tuangou';
             const qtyTotal = o.items.reduce((s, i) => s + i.qty, 0);
             // 退款/售后页签：对齐真机专项卡（橙色圆标↓ + 商家名 + 右侧退款状态 + 总价行 + 退款进度橙钮）
+            // 页签只显示买了以后退款的订单（均有退款记录）
             if (tab === '退款/售后') {
-              const rs = o.refund?.status;
-              const statusText = !o.refund ? mtStatusText(o) : rs === 'pending' ? '退款中' : rs === 'failed' ? '退款失败' : '退款成功';
-              const statusTone = !o.refund ? 'text-[#9A9A9A]' : rs === 'approved' ? 'text-black/45' : 'text-[#FF6000]';
+              const rs = o.refund!.status;
+              const statusText = rs === 'pending' ? '退款中' : rs === 'failed' ? '退款失败' : '退款成功';
+              const statusTone = rs === 'approved' ? 'text-black/45' : 'text-[#FF6000]';
               return (
-                <div key={o.id} className="rounded-2xl bg-white p-3.5 shadow-sm">
+                <div key={o.id} className="border-t-[7px] border-[#F5F6F7] px-4 py-3.5 first:border-t-0">
                   <button
                     type="button"
-                    onClick={() => (o.refund ? onOpenRefund(o.id) : onOpenOrder(o.id))}
+                    onClick={() => onOpenRefund(o.id)}
                     className="w-full text-left active:opacity-80"
                   >
                     <span className="flex items-center gap-2">
@@ -2019,24 +2104,24 @@ function OrdersPage({
                         <span className="mt-1 block truncate text-[13px] text-black/40">
                           {tuangou ? `有效期至 ${fmtDate(o.createdAt + 90 * 86400_000)} 23:59` : `下单：${fmtDate(o.createdAt)}`}
                         </span>
-                        {o.refund && <span className="mt-0.5 block truncate text-[12px] text-black/35">{o.refund.reason}</span>}
+                        <span className="mt-0.5 block truncate text-[12px] text-black/35">{o.refund!.reason}</span>
                       </span>
                     </span>
                   </button>
                   <div className="mt-3 flex items-center justify-end border-t border-black/[0.05] pt-2.5">
                     <button
                       type="button"
-                      onClick={() => (o.refund ? onOpenRefund(o.id) : onOpenOrder(o.id))}
-                      className="rounded-full bg-gradient-to-r from-[#FF8A21] to-[#FF6000] px-5 py-2 text-[13px] font-medium text-white shadow-sm active:opacity-85"
+                      onClick={() => onOpenRefund(o.id)}
+                      className="rounded-full bg-gradient-to-r from-[#FF8A21] to-[#FF6000] px-5 py-2 text-[13px] font-medium text-white active:opacity-85"
                     >
-                      {o.refund ? '退款进度' : '查看订单'}
+                      退款进度
                     </button>
                   </div>
                 </div>
               );
             }
             return (
-              <div key={o.id} className="rounded-2xl bg-white p-3.5 shadow-sm">
+              <div key={o.id} className="border-t-[7px] border-[#F5F6F7] px-4 py-3.5 first:border-t-0">
                 <button type="button" onClick={() => onOpenOrder(o.id)} className="w-full text-left">
                   <span className="flex items-center gap-1.5">
                     <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-[#FFF3DC]">
@@ -2280,9 +2365,9 @@ function OrderDetailPage({
   })();
 
   return (
-    <div className="flex h-full flex-col bg-[#F0F3F5]">
+    <div className="flex h-full flex-col bg-white">
       {/* 顶栏：返回 + 金币/分享/客服/刷新 */}
-      <div className="shrink-0 bg-white px-3 pb-2 pt-[54px]">
+      <div className="shrink-0 border-b border-black/[0.04] bg-white px-3 pb-2 pt-[54px]">
         <div className="flex items-center gap-1">
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
             <ChevronLeft className="h-6 w-6 text-black/75" />
@@ -2303,7 +2388,7 @@ function OrderDetailPage({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {/* 状态 hero */}
         <div className="bg-white px-5 pb-4 pt-1">
           <p className="flex items-center gap-2 text-[24px] font-bold leading-tight text-black/90">
@@ -2342,14 +2427,14 @@ function OrderDetailPage({
 
         {/* 配送地图 */}
         {order.status === 'delivering' && (
-          <div className="mx-3 mt-3">
+          <div className="mt-3 border-y-[7px] border-[#F5F6F7]">
             <DeliveryMap merchantName={order.merchantName} />
           </div>
         )}
 
         {/* 退款/售后进度卡（点击进「售后详情」，截图2） */}
         {order.refund && (
-          <div className="mx-3 mt-3 rounded-2xl bg-white p-4 shadow-sm">
+          <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
             <button type="button" onClick={() => onOpenRefund(order)} className="flex w-full items-center gap-2.5 text-left active:opacity-75">
               <span
                 className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${
@@ -2395,7 +2480,7 @@ function OrderDetailPage({
 
         {/* 操作按钮 */}
         {(order.status === 'accepted' || order.status === 'delivering') && (
-          <div className="mt-3 flex gap-2 px-3">
+          <div className="flex gap-2 overflow-x-auto px-3 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {['更多', '申请售后', '催一下', '联系商家', '联系骑手'].map((t, i) => (
               <button
                 key={t}
@@ -2411,13 +2496,13 @@ function OrderDetailPage({
 
         {/* 待支付使用限制 */}
         {order.status === 'pendingPay' && (
-          <div className="mx-3 mt-3 rounded-xl bg-white p-3.5 shadow-sm">
+          <div className="border-t-[7px] border-[#F5F6F7] px-4 py-3.5">
             <p className="text-[13px] font-medium leading-relaxed text-[#FF6000]">【使用限制】该订单为特惠订单，请在30分钟内完成支付，超时未支付将自动取消</p>
           </div>
         )}
 
         {/* 订单信息 */}
-        <div className="mx-3 mt-3 rounded-2xl bg-white p-4 shadow-sm">
+        <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
           <p className="text-[16px] font-bold text-black/85">订单信息</p>
           <div className="mt-1.5">
             {tuangou ? (
@@ -2458,7 +2543,7 @@ function OrderDetailPage({
         </div>
 
         {/* 商品费用 */}
-        <div className="mx-3 mt-2.5 rounded-2xl bg-white p-4 shadow-sm">
+        <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
           <div className="flex items-center gap-2">
             <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-md">
               <FoodImg src={order.merchantImg} emoji={order.merchantEmoji} className="h-full w-full" />
@@ -2470,9 +2555,12 @@ function OrderDetailPage({
           </div>
           <div className="mt-2.5 space-y-2">
             {order.items.map((i) => (
-              <div key={i.dishId} className="flex items-center gap-2.5">
+              <div key={`${i.dishId}-${i.spec ?? ''}`} className="flex items-center gap-2.5">
                 <FoodImg src={i.img} emoji={i.emoji} className="h-11 w-11 shrink-0 rounded-lg" />
-                <span className="min-w-0 flex-1 truncate text-[13px] text-black/75">{i.name}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] text-black/75">{i.name}</span>
+                  {i.spec && <span className="block truncate text-[11px] text-black/40">{i.spec}</span>}
+                </span>
                 <span className="text-[12px] text-black/35">×{i.qty}</span>
                 <span className="w-14 text-right text-[13px] text-black/80">¥{fmtMoney(i.price * i.qty)}</span>
               </div>
@@ -2492,7 +2580,7 @@ function OrderDetailPage({
             )}
             {order.discount > 0 && (
               <p className="flex justify-between text-[#FF4B33]">
-                <span>优惠共减</span>
+                <span>优惠共减{order.couponAmount ? <span className="ml-1 text-black/40">（含优惠券¥{fmtMoney(order.couponAmount)}）</span> : null}</span>
                 <span>-¥{fmtMoney(order.discount)}</span>
               </p>
             )}
@@ -2584,8 +2672,8 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
   }
 
   return (
-    <div className="flex h-full flex-col bg-[#F4F5F7]">
-      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+    <div className="flex h-full flex-col bg-white">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {/* 头图 + 悬浮搜索 */}
         <div className="relative h-[228px]">
           <FoodImg src={deal.img} emoji={deal.emoji} className="h-full w-full" />
@@ -2631,7 +2719,7 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
         </div>
 
         {/* 价格块（粉）+ 标题/须知/门店/规则/详情 */}
-        <div className="mx-3 mt-2.5 overflow-hidden rounded-2xl shadow-sm">
+        <div className="mt-2.5 overflow-hidden border-y-[7px] border-[#F5F6F7]">
           <div className="bg-gradient-to-r from-[#FF2D7E] to-[#FF5E9E] px-4 pb-3 pt-3">
             <div className="flex items-start gap-2">
               <p className="flex items-baseline leading-none">
@@ -2725,7 +2813,7 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
         </div>
 
         {/* 团购详情 */}
-        <div className="mx-3 mt-2.5 rounded-2xl bg-white p-4 shadow-sm">
+        <div className="border-y-[7px] border-[#F5F6F7] px-4 py-4">
           <p className="text-[16px] font-bold text-black/85">团购详情</p>
           {deal.menu.map((sec) => (
             <div key={sec.sec} className="mt-3">
@@ -2790,10 +2878,16 @@ function DealConfirmSheet({
   const uid = session ? mtUidOf(session) : '';
   const merchant = mtMerchantOf(deal.merchantId);
   const [qty, setQty] = useState(1);
+  // 优惠券（到店券）
+  const [selCoupon, setSelCoupon] = useState<MtCoupon | null>(null);
+  const [couponPick, setCouponPick] = useState(false);
   const unitPrice = mode === 'group' ? (deal.groupPrice ?? Math.max(0.1, Math.round((deal.price - 2) * 10) / 10)) : deal.price;
   const itemTotal = Math.round(deal.origPrice * qty * 100) / 100;
-  const total = Math.round(unitPrice * qty * 100) / 100;
+  const baseTotal = Math.round(unitPrice * qty * 100) / 100;
+  const couponOff = selCoupon ? Math.min(selCoupon.amount, Math.max(0.01, baseTotal - 0.01)) : 0;
+  const total = Math.max(0.01, Math.round((baseTotal - couponOff) * 100) / 100);
   const discount = Math.round((itemTotal - total) * 100) / 100;
+  const usableCoupons = uid ? mtListUsableCoupons(uid, 'daodian', baseTotal) : { usable: [], others: [] };
 
   const submit = () => {
     if (!merchant || !uid) {
@@ -2813,11 +2907,14 @@ function DealConfirmSheet({
       itemTotal,
       deliveryFee: 0,
       discount,
+      couponId: selCoupon?.id,
+      couponAmount: couponOff > 0 ? couponOff : undefined,
       total,
       status: 'pendingPay',
       createdAt: now,
       statusLog: [{ status: 'pendingPay', at: now }],
     };
+    if (selCoupon) mtUseCoupon(uid, selCoupon.id);
     const list = mtLoadOrders(uid);
     mtSaveOrders(uid, [order, ...list]);
     window.dispatchEvent(new CustomEvent('mt-orders-changed'));
@@ -2831,7 +2928,7 @@ function DealConfirmSheet({
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
 
       <motion.div
-        className="absolute inset-x-0 bottom-0 top-[64px] flex flex-col overflow-hidden rounded-t-[20px] bg-[#F4F5F7]"
+        className="absolute inset-x-0 bottom-0 top-[64px] flex flex-col overflow-hidden rounded-t-[20px] bg-white"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -2848,9 +2945,9 @@ function DealConfirmSheet({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="space-y-2.5 px-3 pt-3 pb-2">
+          <div>
             {/* 商品卡 */}
-            <div className="rounded-2xl bg-white p-3.5 shadow-sm">
+            <div className="px-4 py-3.5">
               <div className="flex gap-3">
                 <FoodImg src={deal.img} emoji={deal.emoji} className="h-[84px] w-[84px] shrink-0 rounded-xl" />
                 <div className="flex min-w-0 flex-1 flex-col">
@@ -2871,14 +2968,23 @@ function DealConfirmSheet({
               </div>
             </div>
 
+            {/* 优惠券（到店券） */}
+            <button type="button" onClick={() => setCouponPick(true)} className="flex w-full items-center border-t border-black/5 px-4 py-3.5 text-left active:opacity-70">
+              <span className="flex-1 text-[14px] text-black/80">优惠券</span>
+              <span className={`flex items-center gap-0.5 text-[13px] ${selCoupon || usableCoupons.usable.length > 0 ? 'font-medium text-[#FF2D7E]' : 'text-black/40'}`}>
+                {selCoupon ? `-¥${fmtMoney(couponOff)}` : usableCoupons.usable.length > 0 ? `${usableCoupons.usable.length}张可用` : '暂无可用'}
+                <ChevronRight className="h-4 w-4" />
+              </span>
+            </button>
+
             {/* 过期提醒 */}
-            <div className="flex items-center gap-2 rounded-2xl bg-white px-3.5 py-3 shadow-sm">
+            <div className="flex items-center gap-2 border-t border-black/5 px-4 py-3">
               <Bell className="h-4 w-4 shrink-0 text-black/55" />
               <p className="text-[12px] leading-relaxed text-black/55">{deal.notice}</p>
             </div>
 
             {/* 价格卡 */}
-            <div className="space-y-3.5 rounded-2xl bg-white p-4 shadow-sm">
+            <div className="space-y-3.5 border-t border-black/5 px-4 py-4">
               <p className="flex items-baseline justify-between text-[14px]">
                 <span className="text-black/80">
                   商品总价<span className="ml-1 text-[12px] text-black/40">（共{qty}件）</span>
@@ -2901,7 +3007,7 @@ function DealConfirmSheet({
             </div>
 
             {/* 购买后可领 */}
-            <div className="flex items-center gap-3 rounded-2xl bg-white p-3.5 shadow-sm">
+            <div className="flex items-center gap-3 border-t border-black/5 px-4 py-3.5">
               <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[#FF6A4D] to-[#FF3B30] shadow-sm">
                 <Gift className="h-5 w-5 text-white" strokeWidth={2} />
               </span>
@@ -2914,14 +3020,14 @@ function DealConfirmSheet({
             </div>
 
             {/* 评价后享 */}
-            <div className="flex items-center justify-between rounded-2xl bg-white px-3.5 py-3.5 shadow-sm">
+            <div className="flex items-center justify-between border-t border-black/5 px-4 py-3.5">
               <span className="text-[14px] text-black/80">评价后享</span>
               <span className="text-[13px] text-black/55">
                 评价可得最高<span className="font-semibold text-[#FF3B30]">100积分</span>
               </span>
             </div>
 
-            <p className="px-1 pt-1 text-[11px] leading-relaxed text-black/35">订单支付后即可消费，如有问题可随时申请退款</p>
+            <p className="px-4 pt-3 text-[11px] leading-relaxed text-black/35">订单支付后即可消费，如有问题可随时申请退款</p>
           </div>
         </div>
 
@@ -2942,7 +3048,521 @@ function DealConfirmSheet({
           </div>
         </div>
       </motion.div>
+
+      {/* 优惠券选择弹层（到店券） */}
+      <AnimatePresence>
+        {couponPick && uid && (
+          <CouponPickerSheet
+            key="mt-deal-coupon-pick"
+            uid={uid}
+            type="daodian"
+            itemTotal={baseTotal}
+            selId={selCoupon?.id ?? null}
+            onClose={() => setCouponPick(false)}
+            onPick={(c) => {
+              setSelCoupon(c);
+              setCouponPick(false);
+            }}
+            onToast={onToast}
+          />
+        )}
+      </AnimatePresence>
     </motion.div>
+  );
+}
+
+// ================================ 优惠券选择弹层（下单用券） ================================
+
+function CouponPickerSheet({
+  uid,
+  type,
+  itemTotal,
+  selId,
+  onClose,
+  onPick,
+  onToast,
+}: {
+  uid: string;
+  type: 'waimai' | 'daodian';
+  itemTotal: number;
+  selId: string | null;
+  onClose: () => void;
+  onPick: (c: MtCoupon | null) => void;
+  onToast: (m: string) => void;
+}) {
+  const { usable, others } = mtListUsableCoupons(uid, type, itemTotal);
+  return (
+    <motion.div className="absolute inset-0 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+      {/* 点弹窗外任意区域关闭 */}
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <motion.div
+        className="absolute inset-x-0 bottom-0 flex max-h-[72%] flex-col overflow-hidden rounded-t-[20px] bg-white"
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'tween', ease: [0.32, 0.72, 0, 1], duration: 0.3 }}
+      >
+        <div className="relative flex shrink-0 items-center justify-center pb-2.5 pt-4">
+          <span className="absolute left-1/2 top-[7px] h-1 w-9 -translate-x-1/2 rounded-full bg-black/12" aria-hidden="true" />
+          <p className="text-[16px] font-semibold text-black/85">选择优惠券</p>
+          <button type="button" aria-label="关闭" onClick={onClose} className="absolute right-3 grid h-8 w-8 place-items-center rounded-full bg-black/[0.05] active:bg-black/10">
+            <X className="h-4 w-4 text-black/60" />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {/* 不使用优惠券 */}
+          <button type="button" onClick={() => onPick(null)} className="flex w-full items-center justify-between border-b border-black/[0.05] py-3.5 text-left active:bg-black/[0.02]">
+            <span className="text-[14px] text-black/75">不使用优惠券</span>
+            <span className={`grid h-[19px] w-[19px] place-items-center rounded-full ${selId === null ? 'bg-[#FFC300]' : 'border border-black/20'}`}>
+              {selId === null && <Check className="h-3 w-3 text-black/80" strokeWidth={3} />}
+            </span>
+          </button>
+
+          {usable.map((c) => (
+            <button key={c.id} type="button" onClick={() => onPick(c)} className="flex w-full items-center gap-3 border-b border-black/[0.05] py-3.5 text-left active:bg-black/[0.02]">
+              <span className="grid h-11 w-[64px] shrink-0 place-items-center bg-gradient-to-br from-[#FF5A3C] to-[#FF3B6B] text-white">
+                <span className="text-[19px] font-bold leading-none">
+                  <span className="text-[11px]">¥</span>
+                  {c.amount}
+                </span>
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[14px] font-medium text-black/85">{c.name}</span>
+                <span className="block text-[11px] text-black/40">
+                  满{c.min}可用 · {fmtDate(c.expireAt)}前有效
+                </span>
+              </span>
+              <span className={`grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full ${selId === c.id ? 'bg-[#FFC300]' : 'border border-black/20'}`}>
+                {selId === c.id && <Check className="h-3 w-3 text-black/80" strokeWidth={3} />}
+              </span>
+            </button>
+          ))}
+
+          {others.length > 0 && (
+            <>
+              <p className="mt-3 text-[12px] text-black/35">不可用券</p>
+              {others.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => onToast(c.type === type ? `未满足使用门槛（满${c.min}可用）` : '该券与当前订单类型不符')}
+                  className="flex w-full items-center gap-3 py-3.5 text-left opacity-45"
+                >
+                  <span className="grid h-11 w-[64px] shrink-0 place-items-center bg-black/15 text-white">
+                    <span className="text-[19px] font-bold leading-none">
+                      <span className="text-[11px]">¥</span>
+                      {c.amount}
+                    </span>
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[14px] font-medium text-black/85">{c.name}</span>
+                    <span className="block text-[11px] text-black/40">{c.type === type ? `满${c.min}可用` : `限${mtCouponTypeLabel(c.type)}使用`}</span>
+                  </span>
+                </button>
+              ))}
+            </>
+          )}
+          {usable.length === 0 && <p className="py-8 text-center text-[13px] text-black/35">暂无本单可用的优惠券</p>}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ================================ 商品规格选择弹窗（奶茶小料/食物小料配菜） ================================
+
+/** 菜品规格弹窗（对齐截图2：图+标题、单选/多选粉选芯片、底价+步进+选好了） */
+function DishSpecSheet({
+  dish,
+  onClose,
+  onConfirm,
+}: {
+  dish: MtDish;
+  onClose: () => void;
+  onConfirm: (payload: { qty: number; spec: string; unitPrice: number }) => void;
+}) {
+  const specs = dish.specs ?? [];
+  // 初始选中：单选组默认第一项；多选组默认空
+  const initSel = (): Record<string, string[]> => {
+    const m: Record<string, string[]> = {};
+    for (const g of specs) m[g.name] = g.multi ? [] : [g.options[0]?.label ?? ''];
+    return m;
+  };
+  const [sel, setSel] = useState<Record<string, string[]>>(initSel);
+  const [qty, setQty] = useState(1);
+
+  const optionPrice = (gName: string, label: string): number => specs.find((g) => g.name === gName)?.options.find((o) => o.label === label)?.price ?? 0;
+
+  const tapOption = (gName: string, label: string) => {
+    const g = specs.find((x) => x.name === gName);
+    if (!g) return;
+    setSel((prev) => {
+      const cur = prev[gName] ?? [];
+      if (g.multi) {
+        const has = cur.includes(label);
+        if (has) return { ...prev, [gName]: cur.filter((x) => x !== label) };
+        const max = g.max ?? g.options.length;
+        if (cur.length >= max) {
+          // 超上限：替换最早选中（保持可选，体验顺滑）
+          return { ...prev, [gName]: [...cur.slice(1), label] };
+        }
+        return { ...prev, [gName]: [...cur, label] };
+      }
+      return { ...prev, [gName]: [label] };
+    });
+  };
+
+  const unitPrice = Math.max(0.1, dish.price + specs.reduce((s, g) => s + (sel[g.name] ?? []).reduce((t, l) => t + optionPrice(g.name, l), 0), 0));
+  const specText = specs
+    .map((g) => {
+      const picked = sel[g.name] ?? [];
+      if (picked.length === 0) return '';
+      return picked.join('、');
+    })
+    .filter(Boolean)
+    .join('/');
+
+  const chipBase = 'min-h-[44px] rounded-lg px-2 text-[15px] transition-colors';
+  const chipOn = 'border-[1.5px] border-[#FF2D7E] bg-[#FFEBF3] font-medium text-[#FF2D7E]';
+  const chipOff = 'border-[1.5px] border-transparent bg-[#F5F6F7] text-black/80';
+
+  return (
+    <motion.div className="absolute inset-0 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
+      {/* 点弹窗外任意区域关闭 */}
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <motion.div
+        className="absolute inset-x-0 bottom-0 top-[56px] flex flex-col overflow-hidden rounded-t-[20px] bg-white"
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'tween', ease: [0.32, 0.72, 0, 1], duration: 0.3 }}
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {/* 头部：图 + 标题 + 关闭 */}
+          <div className="flex items-start gap-3">
+            <FoodImg src={dish.img} emoji={dish.emoji} className="h-[88px] w-[88px] shrink-0 rounded-xl" />
+            <p className="min-w-0 flex-1 pt-1 text-[17px] font-bold leading-snug text-black/90">{dish.name}</p>
+            <button type="button" aria-label="关闭" onClick={onClose} className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-black/[0.05] active:bg-black/10">
+              <X className="h-4 w-4 text-black/60" />
+            </button>
+          </div>
+
+          {specs.map((g, gi) => (
+            <div key={g.name} className="mt-5">
+              <p className="text-[16px] font-semibold text-black/90">
+                {g.name === '规格' && gi === 0 ? '' : g.multi && g.max ? `${g.name}（最多可选${g.max}份）` : g.name}
+              </p>
+              <div className="mt-2.5 grid grid-cols-3 gap-2.5">
+                {g.options.map((o) => {
+                  const on = (sel[g.name] ?? []).includes(o.label);
+                  return (
+                    <button
+                      key={o.label}
+                      type="button"
+                      onClick={() => tapOption(g.name, o.label)}
+                      className={`${chipBase} ${on ? chipOn : chipOff} ${o.price !== undefined && g.multi ? 'flex items-center justify-between px-3' : 'flex items-center justify-center'}`}
+                    >
+                      <span className="truncate">{o.label}</span>
+                      {o.price !== undefined && g.multi && (
+                        <>
+                          <span className="mx-2 h-4 w-px shrink-0 bg-black/10" aria-hidden="true" />
+                          <span className="shrink-0">{o.price > 0 ? `¥${o.price}` : o.price < 0 ? `-¥${-o.price}` : ''}</span>
+                        </>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* 底部：价格 + 步进 + 选好了 */}
+        <div className="shrink-0 border-t border-black/[0.05] bg-white px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[24px] font-bold leading-none text-[#FF2D7E]">
+              <span className="text-[14px]">¥</span>
+              {fmtMoney(unitPrice)}
+            </span>
+            {dish.origPrice && dish.origPrice > dish.price && <span className="text-[13px] font-medium text-[#FF2D7E]">已优惠¥{fmtMoney(Math.round((dish.origPrice - dish.price) * 100) / 100)}</span>}
+            <span className="flex-1" />
+            <span className="flex items-center gap-2.5">
+              <button
+                type="button"
+                aria-label="减少"
+                onClick={() => setQty((q) => Math.max(1, q - 1))}
+                className="grid h-8 w-8 place-items-center rounded-full border border-black/15 text-black/55 active:bg-black/5"
+              >
+                <Minus className="h-4 w-4" strokeWidth={2.4} />
+              </button>
+              <span className="min-w-5 text-center text-[16px] font-semibold">{qty}</span>
+              <button
+                type="button"
+                aria-label="增加"
+                onClick={() => setQty((q) => Math.min(9, q + 1))}
+                className="grid h-8 w-8 place-items-center rounded-full bg-[#FF2D7E] text-white active:opacity-85"
+              >
+                <span className="-mt-px text-[18px] leading-none">＋</span>
+              </button>
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onConfirm({ qty, spec: specText, unitPrice })}
+            className="mt-3 h-[52px] w-full rounded-[26px] bg-gradient-to-r from-[#FF2D7E] to-[#FF5E9E] text-[17px] font-bold text-white shadow-[0_4px_14px_rgba(255,45,126,0.3)] active:opacity-85"
+          >
+            选好了
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ================================ 我的券（优惠券页，对齐截图1） ================================
+
+type CouponCat = 'all' | 'waimai' | 'daodian' | 'hotel' | 'shangou';
+const COUPON_CATS: { key: CouponCat; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'waimai', label: '外卖' },
+  { key: 'daodian', label: '美食' },
+  { key: 'hotel', label: '酒店民宿' },
+  { key: 'shangou', label: '闪购' },
+];
+
+function CouponsPage({
+  session,
+  onBack,
+  onGoUse,
+  onToast,
+}: {
+  session: MtSession;
+  onBack: () => void;
+  onGoUse: () => void;
+  onToast: (m: string) => void;
+}) {
+  const uid = mtUidOf(session);
+  const [, setVer] = useState(0);
+  const [cat, setCat] = useState<CouponCat>('all');
+  const [quick, setQuick] = useState<string | null>(null);
+  const [listTab, setListTab] = useState<'coupon' | 'card'>('coupon');
+  const coupons = mtLoadCoupons(uid);
+  const now = Date.now();
+
+  // 即将过期（24h 内）
+  const expiringSoon = coupons.filter((c) => !c.usedAt && c.expireAt - now < 24 * 3600_000 && c.expireAt > now).length;
+
+  const list = (() => {
+    let arr = [...coupons];
+    if (cat !== 'all') arr = arr.filter((c) => c.type === cat);
+    if (quick === 'god') arr = arr.filter((c) => c.god);
+    else if (quick === 'recent') arr.sort((a, b) => b.obtainedAt - a.obtainedAt);
+    else if (quick === 'expiring') arr = arr.filter((c) => !c.usedAt && c.expireAt - now < 24 * 3600_000 && c.expireAt > now);
+    else if (quick === 'discount') arr.sort((a, b) => b.amount / Math.max(1, b.min) - a.amount / Math.max(1, a.min));
+    else if (quick === 'big') arr.sort((a, b) => b.amount - a.amount);
+    else arr.sort((a, b) => Number(Boolean(a.usedAt)) - Number(Boolean(b.usedAt)) || b.obtainedAt - a.obtainedAt);
+    return arr;
+  })();
+
+  const claim = () => {
+    const n = mtClaimGodCoupons(uid);
+    setVer((v) => v + 1);
+    onToast(n > 0 ? `已领取${n}张神券，快去下单使用吧` : '神券已领取过了，可在列表查看');
+  };
+
+  const expireLine = (c: MtCoupon): ReactNode => {
+    const left = c.expireAt - now;
+    if (c.usedAt) return <span className="text-black/30">已使用</span>;
+    if (left <= 24 * 3600_000) {
+      const h = Math.max(0, Math.floor(left / 3600_000));
+      const mnt = Math.max(0, Math.floor((left % 3600_000) / 60_000));
+      const s = Math.max(0, Math.floor((left % 60_000) / 1000));
+      return (
+        <>
+          <span className="text-[#FF6000]">仅剩{String(h).padStart(2, '0')}:{String(mnt).padStart(2, '0')}:{String(s).padStart(2, '0')}</span>
+          <span className="text-black/35"> 规则</span>
+        </>
+      );
+    }
+    if (left <= 2 * 24 * 3600_000) {
+      return (
+        <>
+          <span className="text-black/45">明日到期</span>
+          <span className="text-black/35"> 规则</span>
+        </>
+      );
+    }
+    return (
+      <>
+        <span className="text-black/45">{fmtDate(c.expireAt)}到期</span>
+        <span className="text-black/35"> 规则</span>
+      </>
+    );
+  };
+
+  return (
+    <div className="flex h-full flex-col bg-[#F5F5F7]">
+      {/* 顶栏：返回 + 我的券/卡 胶囊 + 更多 */}
+      <div className="relative grid h-[100px] shrink-0 place-items-center border-b border-black/[0.04] bg-white pt-[50px]">
+        <button type="button" aria-label="返回" onClick={onBack} className="absolute left-1 top-[50px] grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
+          <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+        </button>
+        <div className="flex h-[40px] items-center rounded-full bg-[#F1F2F4] p-[3px]">
+          {([
+            ['coupon', '我的券'],
+            ['card', '卡'],
+          ] as ['coupon' | 'card', string][]).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setListTab(k)}
+              className={`h-[34px] rounded-full px-5 text-[15px] font-medium transition-colors ${listTab === k ? 'bg-white text-black/90 shadow-sm' : 'text-black/45'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <button type="button" aria-label="更多" onClick={() => onToast('券码兑换/帮助中心（演示）')} className="absolute right-3 top-[50px] grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
+          <span className="flex gap-[3px]">
+            <span className="h-[4px] w-[4px] rounded-full bg-black/60" />
+            <span className="h-[4px] w-[4px] rounded-full bg-black/60" />
+            <span className="h-[4px] w-[4px] rounded-full bg-black/60" />
+          </span>
+        </button>
+      </div>
+
+      {listTab === 'card' ? (
+        /* 卡 tab：卡包空态 */
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 text-center">
+          <span className="grid h-16 w-16 place-items-center rounded-full bg-black/[0.05]">
+            <CreditCard className="h-7 w-7 text-black/25" strokeWidth={1.8} />
+          </span>
+          <p className="mt-4 text-[15px] font-medium text-black/60">暂无可用的卡</p>
+          <p className="mt-1 text-[12px] text-black/35">美团联名卡、储值卡将展示在这里</p>
+        </div>
+      ) : (
+        <>
+          {/* 分类页签 */}
+          <div className="shrink-0 bg-white px-4">
+            <div className="flex gap-6 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {COUPON_CATS.map((t) => (
+                <button key={t.key} type="button" onClick={() => setCat(t.key)} className={`relative shrink-0 py-3 text-[16px] ${cat === t.key ? 'font-bold text-black/90' : 'text-black/55'}`}>
+                  {t.label}
+                  {cat === t.key && <span className="absolute inset-x-0 bottom-[4px] mx-auto h-[3px] w-6 rounded-full bg-[#FFC300]" />}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 快捷筛选 chips */}
+          <div className="shrink-0 border-b border-black/[0.04] bg-white px-3 pb-2.5">
+            <div className="flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {([
+                ['god', '神券', true],
+                ['recent', '最近获得', false],
+                ['expiring', `即将过期(${expiringSoon})`, false],
+                ['discount', '折扣最大', false],
+                ['big', '面额最大', false],
+              ] as [string, string, boolean][]).map(([k, label, hot]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setQuick((q) => (q === k ? null : k))}
+                  className={`shrink-0 rounded-lg px-3.5 py-2 text-[13px] transition-colors ${quick === k ? 'bg-[#FFF3B8] font-semibold text-[#B77900]' : hot ? 'bg-[#F5F6F7] font-bold text-[#FF3B30]' : 'bg-[#F5F6F7] text-black/70'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 券列表 */}
+          <div className="min-h-0 flex-1 overflow-y-auto pb-28 pt-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {list.length === 0 ? (
+              <div className="pt-20 text-center">
+                <p className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-white">
+                  <Ticket className="h-7 w-7 text-black/25" strokeWidth={1.8} />
+                </p>
+                <p className="mt-3 text-[14px] text-black/45">暂无相关优惠券</p>
+                <button type="button" onClick={claim} className="mt-4 rounded-full bg-[#FFD100] px-6 py-2.5 text-[14px] font-medium text-black/85 active:opacity-85">
+                  去领神券
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2.5 px-3">
+                {list.map((c) => {
+                  const used = Boolean(c.usedAt);
+                  const expired = c.expireAt <= now && !used;
+                  const dead = used || expired;
+                  return (
+                    <div key={c.id} className={`relative flex items-stretch overflow-hidden rounded-2xl bg-white ${dead ? 'opacity-55' : ''}`}>
+                      {/* 左侧信息 */}
+                      <div className="min-w-0 flex-1 p-3.5">
+                        <p className="flex items-center gap-1.5">
+                          {c.god && (
+                            <span className="rounded-t-md rounded-br-md bg-gradient-to-r from-[#FF5A3C] to-[#FF3B6B] px-1.5 py-px text-[11px] font-bold italic text-white">神券</span>
+                          )}
+                          <span className="rounded-t-md rounded-br-md bg-[#FFF0C2] px-1.5 py-px text-[11px] text-[#B77900]">{mtCouponTypeLabel(c.type)}</span>
+                        </p>
+                        <p className="mt-1.5 truncate text-[17px] font-bold text-black/90">{c.name}</p>
+                        <p className="mt-1.5 flex items-center text-[12px]">
+                          {expireLine(c)}
+                          <ChevronRight className="h-3 w-3 text-black/25" />
+                        </p>
+                      </div>
+                      {/* 右侧面额 + 去使用 */}
+                      <div className="flex w-[110px] shrink-0 flex-col items-center justify-center gap-1.5 border-l border-dashed border-black/[0.08] py-3">
+                        <span className="text-[26px] font-bold leading-none text-[#FF3B30]">
+                          {c.amount}
+                          <span className="text-[14px]">元</span>
+                        </span>
+                        <span className="text-[11px] text-black/40">满{c.min}可用</span>
+                        <button
+                          type="button"
+                          disabled={dead}
+                          onClick={() => {
+                            if (dead) {
+                              onToast(used ? '该券已使用' : '该券已过期');
+                              return;
+                            }
+                            onGoUse();
+                          }}
+                          className={`mt-1 rounded-full px-5 py-1.5 text-[13px] font-semibold ${dead ? 'bg-[#F5F6F7] text-black/30' : 'bg-[#FFD100] text-black/90 active:opacity-85'}`}
+                        >
+                          {used ? '已使用' : expired ? '已过期' : '去使用'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* 底部功能条：我的钱包 / 领神券 / 返利 / 会员中心 */}
+          <div className="absolute inset-x-0 bottom-0 flex shrink-0 items-start border-t border-black/[0.05] bg-white pb-[max(8px,env(safe-area-inset-bottom))] pt-2.5">
+            <button type="button" onClick={() => onToast('美团钱包（演示）')} className="flex flex-1 flex-col items-center gap-1 active:opacity-70">
+              <Wallet className="h-[22px] w-[22px] text-black/80" strokeWidth={1.8} />
+              <span className="text-[11px] text-black/70">我的钱包</span>
+            </button>
+            <button type="button" onClick={claim} className="flex flex-1 flex-col items-center active:opacity-80">
+              <span className="grid h-[46px] w-[46px] -translate-y-1.5 place-items-center rounded-full bg-gradient-to-br from-[#FF5A3C] to-[#FF3B6B] px-1 text-center text-[12px] font-bold italic leading-[1.15] text-white shadow-[0_3px_10px_rgba(255,59,107,0.4)]">
+                领神券
+              </span>
+            </button>
+            <button type="button" onClick={() => onToast('返利 1 笔待提现（演示）')} className="flex flex-1 flex-col items-center gap-1 active:opacity-70">
+              <span className="grid h-[22px] w-[22px] place-items-center rounded-full border-[1.5px] border-black/70 text-[12px] font-bold text-black/75">返</span>
+              <span className="text-[11px] text-black/70">1笔返利</span>
+            </button>
+            <button type="button" onClick={() => onToast('会员中心（演示）')} className="flex flex-1 flex-col items-center gap-1 active:opacity-70">
+              <Crown className="h-[22px] w-[22px] text-black/80" strokeWidth={1.8} />
+              <span className="text-[11px] text-black/70">会员中心</span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -2967,18 +3587,18 @@ function AddressesPage({ session, onBack, onAdd, onEdit, onToast }: { session: M
   };
 
   return (
-    <div className="flex h-full flex-col bg-[#F4F5F7]">
-      <div className="flex shrink-0 items-center gap-2 bg-white px-3 pb-2.5 pt-[54px]">
+    <div className="flex h-full flex-col bg-white">
+      <div className="flex shrink-0 items-center gap-2 border-b border-black/[0.04] bg-white px-3 pb-2.5 pt-[54px]">
         <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-6 w-6 text-black/70" />
         </button>
         <p className="flex-1 text-center text-[16px] font-semibold text-black/85">收货地址</p>
         <span className="h-9 w-9" />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        <div className="space-y-2.5">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div>
           {addrs.map((a) => (
-            <div key={a.id} className="rounded-2xl bg-white p-4 shadow-sm">
+            <div key={a.id} className="border-b border-black/[0.04] px-4 py-4 last:border-b-0">
               <div className="flex items-center gap-2">
                 <span className="rounded bg-[#FFF3B8] px-1.5 text-[11px] text-[#B77900]">{a.tag}</span>
                 <span className="text-[15px] font-semibold text-black/85">{a.name}</span>
@@ -3001,7 +3621,7 @@ function AddressesPage({ session, onBack, onAdd, onEdit, onToast }: { session: M
           ))}
         </div>
       </div>
-      <div className="shrink-0 bg-white px-4 py-3">
+      <div className="shrink-0 border-t border-black/5 bg-white px-4 py-3">
         <button type="button" onClick={onAdd} className="h-12 w-full rounded-full bg-[#FFD100] text-[15px] font-semibold text-black/90 active:opacity-85">
           + 新增收货地址
         </button>
@@ -3033,8 +3653,8 @@ function AddAddressPage({ session, onBack, editing, onToast }: { session: MtSess
   };
 
   return (
-    <div className="flex h-full flex-col bg-[#F4F5F7]">
-      <div className="flex shrink-0 items-center gap-2 bg-white px-3 pb-2.5 pt-[54px]">
+    <div className="flex h-full flex-col bg-white">
+      <div className="flex shrink-0 items-center gap-2 border-b border-black/[0.04] bg-white px-3 pb-2.5 pt-[54px]">
         <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-6 w-6 text-black/70" />
         </button>
@@ -3042,18 +3662,18 @@ function AddAddressPage({ session, onBack, editing, onToast }: { session: MtSess
         <span className="h-9 w-9" />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="space-y-3 rounded-2xl bg-white p-4 shadow-sm">
+        <div className="divide-y divide-black/[0.04]">
           {([
             ['联系人', name, setName, '收货人姓名'],
             ['手机号', phone, setPhone, '11 位手机号'],
             ['详细地址', text, setText, '小区 / 写字楼 / 门牌号'],
           ] as const).map(([label, val, set, ph]) => (
-            <label key={label} className="flex items-center gap-3 border-b border-black/5 pb-3 last:border-0 last:pb-0">
+            <label key={label} className="flex items-center gap-3 py-3.5">
               <span className="w-[64px] shrink-0 text-[14px] text-black/50">{label}</span>
               <input value={val} onChange={(e) => set(e.target.value)} placeholder={ph} className="h-9 flex-1 bg-transparent text-[14px] outline-none placeholder:text-black/25" />
             </label>
           ))}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 py-3.5">
             <span className="w-[64px] shrink-0 text-[14px] text-black/50">标签</span>
             {['家', '公司', '学校'].map((t) => (
               <button key={t} type="button" onClick={() => setTag(t)} className={`rounded-full px-3 py-1.5 text-[12px] ${tag === t ? 'bg-[#FFD100] font-medium text-black/85' : 'bg-[#F5F6F7] text-black/55'}`}>
@@ -3097,13 +3717,13 @@ function CartPage({
     .map((i) => {
       if (!merchant) return null;
       const d = mtDishesOf(merchant).find((x) => x.id === i.dishId);
-      return d ? { dish: d, qty: i.qty } : null;
+      return d ? { dish: d, qty: i.qty, spec: i.spec, unitPrice: i.unitPrice } : null;
     })
-    .filter((x): x is { dish: MtDish; qty: number } => x !== null);
+    .filter((x): x is { dish: MtDish; qty: number; spec: string | undefined; unitPrice: number | undefined } => x !== null);
 
   const selIds = selected ?? new Set(rows.map((r) => r.dish.id));
   const selRows = rows.filter((r) => selIds.has(r.dish.id));
-  const sum = selRows.reduce((s, r) => s + r.dish.price * r.qty, 0);
+  const sum = selRows.reduce((s, r) => s + (r.unitPrice ?? r.dish.price) * r.qty, 0);
   const allSel = selRows.length === rows.length && rows.length > 0;
 
   const mutate = (next: MtCart) => {
@@ -3125,9 +3745,9 @@ function CartPage({
   };
 
   return (
-    <div className="flex h-full flex-col bg-[#F4F5F7]">
+    <div className="flex h-full flex-col bg-white">
       {/* 头部 */}
-      <div className="flex shrink-0 items-center gap-2 bg-white px-4 pb-2.5 pt-[54px]">
+      <div className="flex shrink-0 items-center gap-2 border-b border-black/[0.04] bg-white px-4 pb-2.5 pt-[54px]">
         <p className="shrink-0 text-[22px] font-bold text-black/90">购物车</p>
         <button type="button" onClick={() => onToast('地址选择请到「我的-收货地址」或下单时选择')} className="flex min-w-0 flex-1 items-center gap-1 text-left active:opacity-60">
           <MapPin className="h-3.5 w-3.5 shrink-0 text-black/45" />
@@ -3150,8 +3770,8 @@ function CartPage({
         </button>
 
         {rows.length === 0 || !merchant ? (
-          /* 空态（对齐截图3插画卡） */
-          <div className="mx-3 mt-2.5 rounded-2xl bg-white py-12 text-center shadow-sm">
+          /* 空态（对齐截图3插画） */
+          <div className="py-12 text-center">
             <div className="relative mx-auto h-16 w-20">
               <span className="absolute left-1/2 top-2 h-10 w-16 -translate-x-1/2 rotate-[-4deg] rounded-lg bg-gradient-to-br from-[#C9CDFF] to-[#A7AEFF] shadow-sm" />
               <span className="absolute left-1/2 top-6 h-9 w-16 -translate-x-1/2 rotate-[3deg] rounded-lg bg-gradient-to-br from-[#B5BCFF] to-[#8E96FF] shadow" />
@@ -3165,7 +3785,7 @@ function CartPage({
         ) : (
           <>
             {/* 商家组 */}
-            <div className="mx-3 mt-2.5 rounded-2xl bg-white p-3.5 shadow-sm">
+            <div className="border-t-[7px] border-[#F5F6F7] px-4 py-3.5">
               <button type="button" onClick={() => onOpenMerchant(merchant.id)} className="flex w-full items-center gap-1.5 text-left active:opacity-70">
                 <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-md">
                   <FoodImg src={merchant.cover} emoji={merchant.emoji} className="h-full w-full" />
@@ -3174,10 +3794,10 @@ function CartPage({
                 <ChevronRight className="h-4 w-4 shrink-0 text-black/25" />
               </button>
               <div className="mt-1 divide-y divide-black/[0.04]">
-                {rows.map(({ dish, qty }) => {
+                {rows.map(({ dish, qty, spec, unitPrice }) => {
                   const checked = selIds.has(dish.id);
                   return (
-                    <div key={dish.id} className="flex items-center gap-2.5 py-3">
+                    <div key={`${dish.id}-${spec ?? ''}`} className="flex items-center gap-2.5 py-3">
                       <button
                         type="button"
                         aria-label={checked ? '取消选择' : '选择'}
@@ -3194,6 +3814,7 @@ function CartPage({
                       <FoodImg src={dish.img} emoji={dish.emoji} className="h-16 w-16 shrink-0 rounded-lg" />
                       <div className="flex min-w-0 flex-1 flex-col self-stretch">
                         <p className="line-clamp-1 text-[14px] font-medium text-black/85">{dish.name}</p>
+                        {spec && <p className="mt-0.5 line-clamp-1 text-[11px] text-black/40">{spec}</p>}
                         {manage && (
                           <button type="button" onClick={() => removeRow(dish)} className="mt-1 w-fit rounded-full border border-[#FF4B33]/40 px-2.5 py-0.5 text-[11px] text-[#FF4B33] active:bg-black/5">
                             删除
@@ -3202,7 +3823,7 @@ function CartPage({
                         <div className="mt-auto flex items-center justify-between">
                           <span className="text-[16px] font-bold" style={{ color: MT_PRICE }}>
                             <span className="text-[11px]">¥</span>
-                            {fmtMoney(dish.price)}
+                            {fmtMoney(unitPrice ?? dish.price)}
                           </span>
                           {!manage && <Stepper qty={qty} onAdd={() => add(dish)} onDec={() => dec(dish)} />}
                         </div>
@@ -3219,7 +3840,7 @@ function CartPage({
                   mutate({ merchantId: null, items: [] });
                   onToast('购物车已清空');
                 }}
-                className="mx-3 mt-2.5 flex w-[calc(100%-24px)] items-center justify-center gap-1.5 rounded-2xl bg-white py-3 text-[13px] text-[#FF4B33] shadow-sm active:bg-black/[0.02]"
+                className="mt-2.5 flex w-full items-center justify-center gap-1.5 border-t-[7px] border-[#F5F6F7] py-3 text-[13px] text-[#FF4B33] active:bg-black/[0.02]"
               >
                 <Trash2 className="h-4 w-4" /> 清空购物车
               </button>
@@ -3274,6 +3895,8 @@ function MyPage({
   onOpenSettings,
   onOpenFavorites,
   onOpenHistory,
+  onOpenCoupons,
+  onClaimCoupons,
   onToast,
 }: {
   session: MtSession;
@@ -3281,6 +3904,8 @@ function MyPage({
   onOpenSettings: () => void;
   onOpenFavorites: () => void;
   onOpenHistory: () => void;
+  onOpenCoupons: () => void;
+  onClaimCoupons: () => void;
   onToast: (m: string) => void;
 }) {
   const uid = mtUidOf(session);
@@ -3343,7 +3968,7 @@ function MyPage({
                 <Star key={i} className={`h-3 w-3 ${i === 0 ? 'fill-[#5A4200] text-[#5A4200]' : 'text-[#5A4200]/40'}`} strokeWidth={1.6} />
               ))}
             </span>
-            <button type="button" onClick={() => onToast('会员中心（演示）')} className="ml-auto rounded-l-full rounded-r-xl bg-white/70 px-2.5 py-1 text-right active:opacity-70">
+            <button type="button" onClick={onOpenCoupons} className="ml-auto rounded-l-full rounded-r-xl bg-white/70 px-2.5 py-1 text-right active:opacity-70">
               <span className="block text-[11px] font-semibold text-[#5A4200]">会员中心 ›</span>
               <span className="block text-[9px] text-[#5A4200]/70">查看8项权益</span>
             </button>
@@ -3355,7 +3980,7 @@ function MyPage({
               [Wallet, '会员神券包'],
               [Building, '延迟退房'],
             ] as [LucideIcon, string][]).map(([Icon, l], i) => (
-              <button key={l} type="button" onClick={() => onToast(`${l}（演示）`)} className="relative py-2.5 text-center active:opacity-70">
+              <button key={l} type="button" onClick={() => (l === '会员神券包' ? onOpenCoupons() : onToast(`${l}（演示）`))} className="relative py-2.5 text-center active:opacity-70">
                 {i === 0 && <span className="absolute -right-1 -top-1.5 rounded-full rounded-bl-none bg-[#FF3B30] px-1 py-px text-[8px] font-bold text-white">待领取</span>}
                 <span className="mx-auto grid h-[22px] w-[22px] place-items-center">
                   <Icon className="h-[22px] w-[22px] text-[#5A4200]" strokeWidth={1.9} />
@@ -3370,14 +3995,14 @@ function MyPage({
               ['¥11', '堂食膨胀神券'],
               ['¥7', '堂食神券'],
             ].map(([p, l], i) => (
-              <button key={l} type="button" onClick={() => onToast(`${l}（演示）`)} className={`flex flex-1 flex-col items-center ${i > 0 ? 'border-l border-[#5A4200]/10' : ''}`}>
+              <button key={l} type="button" onClick={onOpenCoupons} className={`flex flex-1 flex-col items-center ${i > 0 ? 'border-l border-[#5A4200]/10' : ''}`}>
                 <span className="text-[15px] font-bold text-[#5A4200]">{p}</span>
                 <span className="text-[9px] text-[#5A4200]/60">{l}</span>
               </button>
             ))}
             <div className="ml-1 flex flex-col items-center gap-1 border-l border-[#5A4200]/10 pl-2.5">
               <span className="text-[10px] font-medium text-[#5A4200]">每日领券</span>
-              <button type="button" onClick={() => onToast('已领取3张神券（演示）')} className="rounded-full bg-[#FFD100] px-2.5 py-1 text-[10px] font-semibold text-black/85 active:opacity-80">
+              <button type="button" onClick={onClaimCoupons} className="rounded-full bg-[#FFD100] px-2.5 py-1 text-[10px] font-semibold text-black/85 active:opacity-80">
                 一键领取
               </button>
             </div>
@@ -3390,7 +4015,7 @@ function MyPage({
         {([
           [Star, '收藏', null, () => onOpenFavorites()],
           [Eye, '浏览记录', null, () => onOpenHistory()],
-          [Ticket, '红包卡券', null, () => onToast('红包卡券（演示）')],
+          [Ticket, '红包卡券', null, () => onOpenCoupons()],
           [Coins, '美团币', '1', () => onToast('美团币（演示）')],
         ] as [LucideIcon, string, string | null, () => void][]).map(([Icon, l, badge, tap]) => (
           <button key={l} type="button" onClick={tap} className="flex flex-col items-center gap-1.5 active:opacity-70">
@@ -3496,53 +4121,51 @@ function SettingsPage({
 }) {
   const idpLabel = session.idp === 'wx' ? '微信账号' : session.idp === 'qq' ? 'QQ账号' : `手机用户 ${session.phone ?? ''}`;
   return (
-    <div className="flex h-full flex-col bg-[#F5F5FA]">
+    <div className="flex h-full flex-col bg-white">
       {/* 顶栏：返回 + 居中标题 */}
-      <div className="relative grid h-[110px] shrink-0 place-items-center pt-[54px]">
+      <div className="relative grid h-[110px] shrink-0 place-items-center border-b border-black/[0.04] pt-[54px]">
         <button type="button" aria-label="返回" onClick={onBack} className="absolute left-1 top-[54px] grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
         </button>
         <p className="text-[19px] font-semibold text-black/90">设置</p>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div className="mt-1 divide-y divide-black/[0.04] overflow-hidden rounded-2xl bg-white shadow-sm">
+      <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="divide-y divide-black/[0.04] px-4">
           <SettingsRow label="个人信息" value={session.name} onClick={() => onToast('个人信息（演示）')} />
           <SettingsRow label="收货地址" onClick={onOpenAddresses} />
         </div>
 
-        <div className="mt-3 divide-y divide-black/[0.04] overflow-hidden rounded-2xl bg-white shadow-sm">
+        <div className="mt-2 divide-y divide-black/[0.04] border-t-[7px] border-[#F5F6F7] px-4 pt-1">
           <SettingsRow label="账号安全" value="实名待完善" onClick={() => onToast('账号安全（演示）')} />
           <SettingsRow label="隐私设置" onClick={() => onToast('隐私设置（演示）')} />
         </div>
 
-        <div className="mt-3 divide-y divide-black/[0.04] overflow-hidden rounded-2xl bg-white shadow-sm">
+        <div className="mt-2 divide-y divide-black/[0.04] border-t-[7px] border-[#F5F6F7] px-4 pt-1">
           <SettingsRow label="支付设置" onClick={() => onToast('支付设置（演示）')} />
           <SettingsRow label="消息通知" onClick={() => onToast('消息通知（演示）')} />
           <SettingsRow label="通用设置" onClick={() => onToast('通用设置（演示）')} />
           <SettingsRow label="清理缓存" onClick={() => onToast('已清理完成，存储空间更清爽')} />
         </div>
 
-        <div className="mt-3 divide-y divide-black/[0.04] overflow-hidden rounded-2xl bg-white shadow-sm">
+        <div className="mt-2 divide-y divide-black/[0.04] border-t-[7px] border-[#F5F6F7] px-4 pt-1">
           <SettingsRow label="长辈版" value="未开启" onClick={() => onToast('长辈版（演示）')} />
           <SettingsRow label="未成年人模式" value="未开启" onClick={() => onToast('未成年人模式（演示）')} />
           <SettingsRow label="语言切换/Language" value="简体中文" onClick={() => onToast('语言切换（演示）')} />
         </div>
 
-        <div className="mt-3 divide-y divide-black/[0.04] overflow-hidden rounded-2xl bg-white shadow-sm">
+        <div className="mt-2 divide-y divide-black/[0.04] border-t-[7px] border-[#F5F6F7] px-4 pt-1">
           <SettingsRow label="关于美团" value="当前已是最新版本" onClick={onOpenAbout} />
           <SettingsRow label="意见反馈" onClick={() => onToast('意见反馈（演示）')} />
         </div>
 
-        {/* 账号管理（需求：切换账号/退出登录移至设置；对齐截图3：两个独立白圆角大按钮） */}
-        <button type="button" onClick={onLogout} className="mt-5 h-[56px] w-full rounded-[18px] bg-white text-[16px] text-black/85 shadow-sm active:bg-black/[0.03]">
-          切换账号
-        </button>
-        <button type="button" onClick={onLogout} className="mt-3 h-[56px] w-full rounded-[18px] bg-white text-[16px] text-black/40 shadow-sm active:bg-black/[0.03]">
-          退出登录
-        </button>
+        {/* 账号管理（需求：切换账号/退出登录移至设置；白底直排无面板） */}
+        <div className="mt-2 divide-y divide-black/[0.04] border-t-[7px] border-[#F5F6F7] px-4 pt-1">
+          <SettingsRow label="切换账号" onClick={onLogout} />
+          <SettingsRow label="退出登录" danger onClick={onLogout} />
+        </div>
 
-        <p className="mt-4 text-center text-[10px] text-black/25">美团 v10.18.0 · 数据仅保存在本机 · 按账号隔离 · {idpLabel}</p>
+        <p className="py-5 text-center text-[10px] text-black/25">美团 v10.18.0 · 数据仅保存在本机 · 按账号隔离 · {idpLabel}</p>
       </div>
     </div>
   );
@@ -3660,9 +4283,9 @@ function FavoritesPage({
   );
 
   return (
-    <div className="relative flex h-full flex-col bg-[#F5F6F7]">
+    <div className="relative flex h-full flex-col bg-white">
       {/* 顶栏：返回 + 标题 + 搜索/购物车（对齐截图1） */}
-      <div className="relative grid h-[100px] shrink-0 place-items-center pt-[50px]">
+      <div className="relative grid h-[100px] shrink-0 place-items-center border-b border-black/[0.04] pt-[50px]">
         <button type="button" aria-label="返回" onClick={onBack} className="absolute left-1 top-[50px] grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
         </button>
@@ -3687,9 +4310,9 @@ function FavoritesPage({
         ))}
       </div>
 
-      {/* 白色圆角内容板 */}
-      <div className="min-h-0 flex-1 overflow-hidden rounded-t-2xl bg-white">
-        <div className="h-full overflow-y-auto px-3 pb-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* 内容区（白底直排，无圆角面板） */}
+      <div className="min-h-0 flex-1 overflow-hidden bg-white">
+        <div className="h-full overflow-y-auto pb-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {/* ===== 空态（黄放大镜插画 + 暂未收藏"X"） ===== */}
           {tabEmpty[tab] ? (
             <div className="pt-16 text-center">
@@ -3734,10 +4357,10 @@ function FavoritesPage({
               ))}
             </div>
           ) : tab === 'deal' ? (
-            /* ===== 团购收藏 ===== */
-            <div className="space-y-2.5 pt-3">
+            /* ===== 团购收藏（白底直排行） ===== */
+            <div>
               {favDeals.map((d) => (
-                <div key={d.id} className="flex items-center gap-3 rounded-2xl border border-black/[0.05] bg-white p-3 shadow-[0_1px_6px_rgba(0,0,0,0.04)]">
+                <div key={d.id} className="flex items-center gap-3 border-b border-black/[0.04] p-3.5 last:border-b-0">
                   <button type="button" onClick={() => onOpenDeal(d.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left active:opacity-80">
                     <FoodImg src={d.img} emoji={d.emoji} className="h-16 w-16 shrink-0 rounded-xl" />
                     <span className="min-w-0 flex-1">
@@ -3756,10 +4379,10 @@ function FavoritesPage({
               ))}
             </div>
           ) : (
-            /* ===== 商品/菜品收藏（商家卡内勾选/步进，可加购） ===== */
-            <div className="pt-3">
+            /* ===== 商品/菜品收藏（商家卡内勾选/步进，可加购；白底直排） ===== */
+            <div>
               {[...dishGroups.values()].map(({ m, dishes }) => (
-                <div key={m.id} className="mb-2.5 rounded-2xl border border-black/[0.05] bg-white p-3.5 shadow-[0_1px_6px_rgba(0,0,0,0.04)]">
+                <div key={m.id} className="border-b border-black/[0.04] px-3.5 py-3 last:border-b-0">
                   <button type="button" onClick={() => onOpenMerchant(m.id)} className="flex w-full items-center gap-2 text-left active:opacity-70">
                     <span className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-lg">
                       <FoodImg src={m.cover} emoji={m.emoji} className="h-full w-full" />
@@ -3894,9 +4517,9 @@ function HistoryPage({
   };
 
   return (
-    <div className="flex h-full flex-col bg-[#F5F6F7]">
+    <div className="flex h-full flex-col bg-white">
       {/* 顶栏：返回 + 标题 + 管理 */}
-      <div className="relative grid h-[100px] shrink-0 place-items-center pt-[50px]">
+      <div className="relative grid h-[100px] shrink-0 place-items-center border-b border-black/[0.04] pt-[50px]">
         <button type="button" aria-label="返回" onClick={onBack} className="absolute left-1 top-[50px] grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
         </button>
@@ -3931,9 +4554,9 @@ function HistoryPage({
         ))}
       </div>
 
-      {/* 白色圆角内容板 */}
-      <div className="relative min-h-0 flex-1 overflow-hidden rounded-t-2xl bg-white">
-        <div className="h-full overflow-y-auto px-3 pb-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* 内容区（白底直排，无圆角面板） */}
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-white">
+        <div className="h-full overflow-y-auto pb-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {/* 周日期条（今高亮黄框+黄点；有记录的日期下方小黄点） */}
           {stripOpen && tabItems.length > 0 && (
             <div className="px-1 pt-3">
@@ -4061,7 +4684,7 @@ function HistoryPage({
 
           {/* 管理模式：清空全部 */}
           {manage && tabItems.length > 0 && (
-            <button type="button" onClick={clearAll} className="mx-1 mb-2 flex w-[calc(100%-8px)] items-center justify-center gap-1.5 rounded-2xl border border-[#FF4B33]/30 py-3 text-[14px] text-[#FF4B33] active:bg-[#FFF4F0]">
+            <button type="button" onClick={clearAll} className="mx-4 mb-2 mt-3 flex items-center justify-center gap-1.5 rounded-full border border-[#FF4B33]/30 py-3 text-[14px] text-[#FF4B33] active:bg-[#FFF4F0]">
               <Trash2 className="h-4 w-4" /> 清空全部浏览记录
             </button>
           )}
@@ -4113,7 +4736,7 @@ function RefundApplySheet({ order, onClose, onToast }: { order: MtOrder; onClose
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="mt-1 flex items-center justify-between rounded-2xl bg-[#FFF7F3] px-4 py-3">
+          <div className="mt-1 flex items-center justify-between bg-[#FFF7F3] px-4 py-3">
             <span className="text-[14px] text-black/70">退款金额</span>
             <span className="text-[20px] font-bold" style={{ color: MT_PRICE }}>
               ¥{order.total.toFixed(2)}
@@ -4163,7 +4786,7 @@ function RefundSatisfaction({ onToast }: { onToast: (m: string) => void }) {
   const [score, setScore] = useState<number | null>(null);
   if (!show) return null;
   return (
-    <div className="mx-3 mt-3 rounded-2xl bg-white p-4 shadow-sm">
+    <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
       <div className="flex items-start">
         <p className="flex-1 text-[15px] font-bold text-black/85">您对本次退款体验满意吗?</p>
         <button type="button" aria-label="关闭" onClick={() => setShow(false)} className="grid h-6 w-6 place-items-center rounded-full text-black/30 active:bg-black/5">
@@ -4263,9 +4886,9 @@ function RefundDetailPage({
   const flowShown = open ? flow : flow.slice(0, 1);
 
   return (
-    <div className="flex h-full flex-col bg-[#F5F6F7]">
+    <div className="flex h-full flex-col bg-white">
       {/* 顶栏：返回 + 居中标题 + 客服（失败页对齐截图3） */}
-      <div className="relative grid h-[100px] shrink-0 place-items-center pt-[50px]">
+      <div className="relative grid h-[100px] shrink-0 place-items-center border-b border-black/[0.04] pt-[50px]">
         <button type="button" aria-label="返回" onClick={onBack} className="absolute left-1 top-[50px] grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
         </button>
@@ -4281,7 +4904,7 @@ function RefundDetailPage({
         {failed ? (
           /* ===== 退款失败（截图3：红 X + 大金额 + 明细 + 进度 + 您可能想问 + 满意度） ===== */
           <>
-            <div className="mx-3 mt-1.5 rounded-2xl bg-white p-5 shadow-sm">
+            <div className="px-5 py-5">
               <div className="flex items-center gap-3">
                 <span className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-[#F53F3F]">
                   <X className="h-[18px] w-[18px] text-white" strokeWidth={3} />
@@ -4314,7 +4937,7 @@ function RefundDetailPage({
             </div>
 
             {/* 退款进度 */}
-            <div className="mx-3 mt-3 rounded-2xl bg-white p-4 shadow-sm">
+            <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
               <p className="text-[17px] font-bold text-black/85">退款进度</p>
               <div className="mt-3">
                 {flow.map((f, i) => (
@@ -4345,7 +4968,7 @@ function RefundDetailPage({
             </div>
 
             {/* 您可能想问 */}
-            <div className="mx-3 mt-3 rounded-2xl bg-white p-4 shadow-sm">
+            <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
               <div className="flex items-center">
                 <p className="flex-1 text-[17px] font-bold text-black/85">您可能想问</p>
                 <button type="button" onClick={() => onToast('更多问题请拨打客服电话（演示）')} className="text-[13px] text-black/45 active:opacity-60">
@@ -4367,13 +4990,13 @@ function RefundDetailPage({
           /* ===== 退款成功 / 处理中（截图1：绿色渐变状态卡 + 时间线 + 退款信息） ===== */
           <>
             {/* 状态卡（绿色渐变 + 右上大对勾水印） */}
-            <div className="relative mx-3 mt-1.5 overflow-hidden rounded-2xl bg-gradient-to-br from-[#F3FBF3] via-[#EAF7EC] to-[#DDF2E1] p-5 shadow-sm">
-              <span className="pointer-events-none absolute -right-4 -top-6 text-[150px] leading-none text-[#C8E9CF]/70" aria-hidden="true">
-                ✓
-              </span>
-              <p className="relative text-[24px] font-bold leading-tight text-black/90">{done ? '退款成功' : '退款处理中'}</p>
-              <p className="relative mt-1.5 text-[13px] text-black/45">预计最晚{expectDate}前到账</p>
-              <div className="relative mt-4 rounded-xl bg-white/70 p-4">
+              <div className="relative overflow-hidden bg-gradient-to-br from-[#F3FBF3] via-[#EAF7EC] to-[#DDF2E1] p-5">
+                <span className="pointer-events-none absolute -right-4 -top-6 text-[150px] leading-none text-[#C8E9CF]/70" aria-hidden="true">
+                  ✓
+                </span>
+                <p className="relative text-[24px] font-bold leading-tight text-black/90">{done ? '退款成功' : '退款处理中'}</p>
+                <p className="relative mt-1.5 text-[13px] text-black/45">预计最晚{expectDate}前到账</p>
+                <div className="relative mt-4 bg-white/70 p-4">
                 <p className="flex items-baseline justify-between">
                   <span className="text-[14px] text-black/60">退款金额</span>
                   <span className="text-[19px] font-bold text-black/90">¥{fmtMoney(r.amount)}</span>
@@ -4393,7 +5016,7 @@ function RefundDetailPage({
             </div>
 
             {/* 退款流程 */}
-            <div className="mt-5 flex items-center justify-between px-4">
+            <div className="flex items-center justify-between px-4 pt-5">
               <p className="text-[17px] font-bold text-black/85">退款流程</p>
               <button type="button" onClick={() => onToast('已通知商家，将尽快处理您的售后')} className="flex items-center gap-1 rounded-full border border-black/10 bg-white px-3 py-1.5 text-[12px] text-black/70 active:opacity-70">
                 <span className="relative">
@@ -4403,7 +5026,7 @@ function RefundDetailPage({
                 联系商家
               </button>
             </div>
-            <div className="mx-3 mt-2 rounded-2xl bg-white p-4 shadow-sm">
+            <div className="mx-4 mt-2 border-t border-black/[0.05] pt-4">
               {flowShown.map((f, i) => {
                 const first = i === 0;
                 return (
@@ -4432,8 +5055,8 @@ function RefundDetailPage({
             </div>
 
             {/* 退款信息 */}
-            <p className="mt-5 px-4 text-[17px] font-bold text-black/85">退款信息</p>
-            <div className="mx-3 mt-2 rounded-2xl bg-white p-4 shadow-sm">
+            <p className="border-t-[7px] border-[#F5F6F7] px-4 pt-5 text-[17px] font-bold text-black/85">退款信息</p>
+            <div className="mx-4 mt-3 pb-2">
               <div className="flex gap-3">
                 <FoodImg src={order.items[0]?.img} emoji={order.items[0]?.emoji ?? order.merchantEmoji} className="h-14 w-14 shrink-0 rounded-lg" />
                 <p className="line-clamp-2 min-w-0 flex-1 text-[14px] leading-snug text-black/85">{order.items[0]?.name ?? order.merchantName}</p>
@@ -4682,6 +5305,11 @@ export default function MeituanApp() {
                 onOpenSettings={() => setPage('settings')}
                 onOpenFavorites={() => setPage('favorites')}
                 onOpenHistory={() => setPage('history')}
+                onOpenCoupons={() => setPage('coupons')}
+                onClaimCoupons={() => {
+                  const n = mtClaimGodCoupons(uid);
+                  showToast(n > 0 ? `已领取${n}张神券，可在「红包卡券」查看` : '神券已领取过了');
+                }}
                 onToast={showToast}
               />
             )}
@@ -4766,6 +5394,19 @@ export default function MeituanApp() {
           onBack={() => setPage('main')}
           onOpenMerchant={openMerchant}
           onOpenDeal={openDeal}
+          onToast={showToast}
+        />
+      )}
+      {page === 'coupons' && (
+        <CouponsPage
+          session={session}
+          onBack={() => setPage('main')}
+          onGoUse={() => {
+            // 去使用：回首页逛对应频道（外卖/团购卡都在首页瀑布流）
+            setTab('home');
+            setPage('main');
+            showToast('选好商品后，结算时选择该券即可抵扣');
+          }}
           onToast={showToast}
         />
       )}

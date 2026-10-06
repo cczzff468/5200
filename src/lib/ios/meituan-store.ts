@@ -12,7 +12,7 @@ import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { accLs, getActiveAccountFor } from '@/lib/ios/accounts';
 import { getContact, listContacts } from '@/lib/ios/contacts-store';
 import type { ContactRecord } from '@/lib/contacts';
-import { MT_MERCHANTS, mtDishesOf, type MtMerchant } from './meituan-data';
+import { MT_COUPON_SEED, MT_COUPON_TYPE_LABEL, MT_GOD_CLAIMS, MT_MERCHANTS, mtDishesOf, type MtCouponSeed, type MtCouponType, type MtMerchant } from './meituan-data';
 
 // ---------------- 登录态 ----------------
 
@@ -181,7 +181,7 @@ export async function mtValidateSession(s: MtSession | null): Promise<MtSession 
 
 export interface MtCart {
   merchantId: string | null;
-  items: { dishId: string; qty: number }[];
+  items: { dishId: string; qty: number; /** 规格文案（大杯/正常冰/珍珠/正常糖） */ spec?: string; /** 含小料加价的单价（覆盖菜品原价） */ unitPrice?: number }[];
 }
 
 const cartKey = (uid: string) => `mt-cart:${uid}`;
@@ -191,7 +191,12 @@ export function mtLoadCart(uid: string): MtCart {
   if (c && typeof c === 'object' && Array.isArray(c.items)) {
     return {
       merchantId: typeof c.merchantId === 'string' ? c.merchantId : null,
-      items: c.items.filter((i) => i && typeof i.dishId === 'string' && typeof i.qty === 'number' && i.qty > 0),
+      items: c.items.filter((i) => i && typeof i.dishId === 'string' && typeof i.qty === 'number' && i.qty > 0).map((i) => ({
+        dishId: i.dishId,
+        qty: i.qty,
+        spec: typeof i.spec === 'string' && i.spec ? i.spec : undefined,
+        unitPrice: typeof i.unitPrice === 'number' && i.unitPrice > 0 ? i.unitPrice : undefined,
+      })),
     };
   }
   return { merchantId: null, items: [] };
@@ -284,6 +289,8 @@ export interface MtOrderItem {
   qty: number;
   emoji: string;
   img?: string;
+  /** 规格文案（含小料：大杯/正常冰/珍珠/正常糖） */
+  spec?: string;
 }
 
 // ---------------- 收藏（商家/菜品/团购） ----------------
@@ -381,6 +388,10 @@ export interface MtOrder {
   itemTotal: number;
   deliveryFee: number;
   discount: number;
+  /** 使用的优惠券 id（核销标记） */
+  couponId?: string;
+  /** 优惠券抵扣金额（含在 discount 内） */
+  couponAmount?: number;
   /** 实付金额（pendingPay 时为应付金额） */
   total: number;
   note?: string;
@@ -429,6 +440,8 @@ export function mtLoadOrders(uid: string): MtOrder[] {
       itemTotal: typeof o.itemTotal === 'number' ? o.itemTotal : 0,
       deliveryFee: typeof o.deliveryFee === 'number' ? o.deliveryFee : 0,
       discount: typeof o.discount === 'number' ? o.discount : 0,
+      couponId: typeof o.couponId === 'string' ? o.couponId : undefined,
+      couponAmount: typeof o.couponAmount === 'number' ? o.couponAmount : undefined,
       total: typeof o.total === 'number' ? o.total : 0,
       note: typeof o.note === 'string' ? o.note : undefined,
       kind: o.kind === 'tuangou' ? 'tuangou' : 'waimai',
@@ -704,12 +717,14 @@ export function mtCalcDeals(uid: string, merchant: MtMerchant, itemTotal: number
   return { discount: Math.round(discount * 100) / 100, labels };
 }
 
-/** 结算合计：商品 - 满减/新客 + 配送费（满45免） */
+/** 结算合计：商品（含规格小料加价）- 满减/新客 + 配送费（满45免） */
 export function mtCheckoutCalc(uid: string, merchant: MtMerchant, cart: MtCart): { itemTotal: number; deliveryFee: number; discount: number; total: number; labels: string[]; count: number } {
   const all = mtDishesOf(merchant);
   const itemTotal = cart.items.reduce((s, i) => {
     const d = all.find((x) => x.id === i.dishId);
-    return s + (d ? d.price * i.qty : 0);
+    if (!d) return s;
+    const unit = i.unitPrice ?? d.price;
+    return s + unit * i.qty;
   }, 0);
   const count = cart.items.reduce((s, i) => s + i.qty, 0);
   const baseFee = merchant.deliveryFee;
@@ -720,11 +735,117 @@ export function mtCheckoutCalc(uid: string, merchant: MtMerchant, cart: MtCart):
   return { itemTotal, deliveryFee, discount: deals.discount, total, labels: deals.labels, count };
 }
 
-/** 从订单复制购物车（再来一单） */
+/** 从订单复制购物车（再来一单，保留规格小料） */
 export function mtReorder(uid: string, o: MtOrder): boolean {
   const merchant = MT_MERCHANTS.find((m) => m.id === o.merchantId);
   if (!merchant) return false;
   const all = mtDishesOf(merchant);
-  mtSaveCart(uid, { merchantId: merchant.id, items: o.items.filter((i) => all.some((d) => d.id === i.dishId)).map((i) => ({ dishId: i.dishId, qty: i.qty })) });
+  mtSaveCart(
+    uid,
+    {
+      merchantId: merchant.id,
+      items: o.items
+        .filter((i) => all.some((d) => d.id === i.dishId))
+        .map((i) => ({ dishId: i.dishId, qty: i.qty, spec: i.spec, unitPrice: i.price })),
+    }
+  );
   return true;
 }
+
+// ---------------- 优惠券（我的券，按账号隔离） ----------------
+
+export interface MtCoupon {
+  id: string;
+  name: string;
+  type: MtCouponType;
+  /** 神券角标 */
+  god: boolean;
+  /** 面额 */
+  amount: number;
+  /** 门槛（满 min 可用） */
+  min: number;
+  /** 到期时间戳 */
+  expireAt: number;
+  /** 获得时间（最近获得排序） */
+  obtainedAt: number;
+  /** 使用时间（已使用置灰） */
+  usedAt?: number;
+}
+
+const couponKey = (uid: string) => `mt-coupons:${uid}`;
+
+export function mtLoadCoupons(uid: string): MtCoupon[] {
+  const list = kvGet<Partial<MtCoupon>[]>(couponKey(uid));
+  if (Array.isArray(list) && list.length > 0) {
+    return list
+      .filter((c): c is MtCoupon => Boolean(c) && typeof (c as MtCoupon).id === 'string' && typeof (c as MtCoupon).amount === 'number')
+      .map((c) => ({ ...c, type: (c.type ?? 'waimai') as MtCouponType, usedAt: typeof c.usedAt === 'number' ? c.usedAt : undefined }));
+  }
+  // 首次播种（对齐真机截图1）
+  const now = Date.now();
+  const seeded: MtCoupon[] = MT_COUPON_SEED.map((s, i) => ({
+    id: `cp${now.toString(36)}${i}`,
+    name: s.name,
+    type: s.type,
+    god: s.god,
+    amount: s.amount,
+    min: s.min,
+    expireAt: now + s.ttl,
+    obtainedAt: now - (MT_COUPON_SEED.length - i) * 60_000,
+  }));
+  kvSet(couponKey(uid), seeded);
+  return seeded;
+}
+
+export function mtSaveCoupons(uid: string, list: MtCoupon[]): void {
+  kvSet(couponKey(uid), list.slice(0, 60));
+}
+
+/** 领神券/一键领取：发放 MT_GOD_CLAIMS 中未拥有的同名同面额券，返回新领张数 */
+export function mtClaimGodCoupons(uid: string): number {
+  const cur = mtLoadCoupons(uid);
+  const now = Date.now();
+  let added = 0;
+  const next = [...cur];
+  for (const s of MT_GOD_CLAIMS) {
+    const exists = cur.some((c) => c.name === s.name && c.amount === s.amount && !c.usedAt);
+    if (exists) continue;
+    next.unshift({
+      id: `cp${now.toString(36)}g${added}`,
+      name: s.name,
+      type: s.type,
+      god: s.god,
+      amount: s.amount,
+      min: s.min,
+      expireAt: now + s.ttl,
+      obtainedAt: now,
+    });
+    added += 1;
+  }
+  if (added > 0) mtSaveCoupons(uid, next);
+  return added;
+}
+
+/** 可用于下单的券（类型匹配 + 未使用 + 未过期 + 达到门槛），面额大在前 */
+export function mtListUsableCoupons(uid: string, type: 'waimai' | 'daodian', itemTotal: number): { usable: MtCoupon[]; others: MtCoupon[] } {
+  const now = Date.now();
+  const all = mtLoadCoupons(uid).filter((c) => !c.usedAt && c.expireAt > now);
+  const ok = all.filter((c) => c.type === type && itemTotal >= c.min);
+  const notOk = all.filter((c) => !(c.type === type && itemTotal >= c.min));
+  return { usable: ok.sort((a, b) => b.amount - a.amount), others: notOk };
+}
+
+/** 核销优惠券（下单时调用） */
+export function mtUseCoupon(uid: string, couponId: string): void {
+  const list = mtLoadCoupons(uid);
+  mtSaveCoupons(
+    uid,
+    list.map((c) => (c.id === couponId ? { ...c, usedAt: Date.now() } : c))
+  );
+}
+
+/** 券类型角标文案 */
+export const mtCouponTypeLabel = (t: MtCouponType): string => MT_COUPON_TYPE_LABEL[t] ?? '外卖';
+
+/** 种子类型再导出（UI 层构造用） */
+export type { MtCouponSeed };

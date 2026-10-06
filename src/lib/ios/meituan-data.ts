@@ -38,6 +38,52 @@ export interface MtDish {
   monthSale: number;
   /** 招牌菜（菜单角标） */
   sig?: boolean;
+  /** 规格组（点 + 弹出规格选择弹窗：奶茶=规格/温度/小料/糖度，食物=小料配菜） */
+  specs?: MtDishSpec[];
+}
+
+/** 规格选项（price 为加价，如小料 ¥1） */
+export interface MtSpecOption {
+  label: string;
+  price?: number;
+}
+
+/** 规格组：单选（默认选第一项）或多选（multi，最多 max 份） */
+export interface MtDishSpec {
+  /** 组名：规格 / 温度 / 小料 / 糖度 / 小料配菜 / 辣度… */
+  name: string;
+  /** 多选（默认单选必选） */
+  multi?: boolean;
+  /** 多选最多可选份数 */
+  max?: number;
+  options: MtSpecOption[];
+}
+
+/** 奶茶饮品通用规格（对齐真机截图：规格/温度/小料（最多可选1份）/糖度） */
+function teaSpecs(): MtDishSpec[] {
+  return [
+    { name: '规格', options: [{ label: '大杯' }, { label: '中杯', price: -1 }] },
+    { name: '温度', options: [{ label: '正常冰' }, { label: '少冰' }, { label: '多冰' }, { label: '常温' }, { label: '温热' }, { label: '热' }] },
+    {
+      name: '小料',
+      multi: true,
+      max: 1,
+      options: [
+        { label: '珍珠', price: 1 },
+        { label: '奶冻', price: 1 },
+        { label: '爆爆珠', price: 1 },
+        { label: '椰果', price: 1 },
+        { label: '原味果冻', price: 1 },
+        { label: '脆啵啵', price: 1 },
+      ],
+    },
+    { name: '糖度', options: [{ label: '正常糖' }, { label: '七分糖' }, { label: '不额外加糖' }, { label: '五分糖' }, { label: '三分糖' }] },
+  ];
+}
+
+/** 食物小料/配菜通用规格（多选加价） */
+function foodSides(opts: { name: string; price: number }[], max = 2, groupName = '小料配菜'): MtDishSpec[] {
+  return [{ name: groupName, multi: true, max, options: opts.map((o) => ({ label: o.name, price: o.price })) }];
 }
 
 export interface MtReview {
@@ -334,17 +380,28 @@ export const MT_MERCHANTS: MtMerchant[] = [
       {
         cat: '招牌套餐',
         dishes: [
-          { id: 'ta-set', name: '爆款单人四件套', price: 13.9, origPrice: 34, emoji: '🍔', img: img('burger'), desc: '汉堡2选1+小食2选1+固选可乐，任选搭配', monthSale: 580000, sig: true },
+          {
+            id: 'ta-set',
+            name: '爆款单人四件套',
+            price: 13.9,
+            origPrice: 34,
+            emoji: '🍔',
+            img: img('burger'),
+            desc: '汉堡2选1+小食2选1+固选可乐，任选搭配',
+            monthSale: 580000,
+            sig: true,
+            specs: foodSides([{ name: '升级大薯条', price: 3 }, { name: '鸡米花', price: 5 }, { name: '葡式蛋挞', price: 2 }]),
+          },
           { id: 'ta-set2', name: '炙香鸡肉串（买1送1）', price: 8.9, origPrice: 17.8, emoji: '🍖', img: img('chicken'), desc: '炙香入味，串串满足', monthSale: 12000 },
         ],
       },
       {
         cat: '中国汉堡',
         dishes: [
-          { id: 'ta-b1', name: '香辣鸡腿中国汉堡', price: 12, emoji: '🍔', img: img('burger'), desc: '现烤堡胚，香辣多汁', monthSale: 8900, sig: true },
-          { id: 'ta-b2', name: '藤椒鸡腿中国汉堡', price: 12, emoji: '🍔', img: img('burger'), desc: '藤椒微麻，回味十足', monthSale: 6600 },
-          { id: 'ta-b3', name: '培根煎蛋中国汉堡', price: 13, emoji: '🍳', img: img('burger'), desc: '培根+煎蛋，早餐也能吃', monthSale: 4300 },
-          { id: 'ta-b4', name: '黄金香酥鸡柳堡', price: 14, emoji: '🍔', img: img('chicken'), desc: '整块鸡柳，外酥里嫩', monthSale: 3900 },
+          { id: 'ta-b1', name: '香辣鸡腿中国汉堡', price: 12, emoji: '🍔', img: img('burger'), desc: '现烤堡胚，香辣多汁', monthSale: 8900, sig: true, specs: foodSides([{ name: '薯条（小份）', price: 3 }, { name: '香辣鸡翅1块', price: 5 }, { name: '可口可乐', price: 2 }, { name: '葡式蛋挞', price: 2 }]) },
+          { id: 'ta-b2', name: '藤椒鸡腿中国汉堡', price: 12, emoji: '🍔', img: img('burger'), desc: '藤椒微麻，回味十足', monthSale: 6600, specs: foodSides([{ name: '薯条（小份）', price: 3 }, { name: '香辣鸡翅1块', price: 5 }, { name: '可口可乐', price: 2 }]) },
+          { id: 'ta-b3', name: '培根煎蛋中国汉堡', price: 13, emoji: '🍳', img: img('burger'), desc: '培根+煎蛋，早餐也能吃', monthSale: 4300, specs: foodSides([{ name: '豆浆（热）', price: 2 }, { name: '可口可乐', price: 2 }]) },
+          { id: 'ta-b4', name: '黄金香酥鸡柳堡', price: 14, emoji: '🍔', img: img('chicken'), desc: '整块鸡柳，外酥里嫩', monthSale: 3900, specs: foodSides([{ name: '薯条（小份）', price: 3 }, { name: '鸡米花', price: 5 }]) },
         ],
       },
       {
@@ -383,18 +440,29 @@ export const MT_MERCHANTS: MtMerchant[] = [
       {
         cat: '奶茶',
         dishes: [
-          { id: 'mx-1', name: '珍珠奶茶', price: 7.2, emoji: '🧋', img: img('milktea'), desc: '经典款，珍珠软糯', monthSale: 99000, sig: true },
-          { id: 'mx-2', name: '厚芋泥奶茶', price: 7.2, emoji: '🍠', img: img('milktea'), desc: '芋泥厚厚一层', monthSale: 66000 },
-          { id: 'mx-3', name: '茉莉奶绿', price: 6.6, emoji: '🍵', img: img('milktea'), monthSale: 33000 },
+          { id: 'mx-1', name: '【热销】珍珠奶茶大杯（冷/热）', price: 4.89, origPrice: 9, emoji: '🧋', img: img('milktea'), desc: '经典款，珍珠软糯', monthSale: 99000, sig: true, specs: teaSpecs() },
+          { id: 'mx-2', name: '厚芋泥奶茶', price: 4.99, origPrice: 10, emoji: '🍠', img: img('milktea'), desc: '芋泥厚厚一层', monthSale: 66000, specs: teaSpecs() },
+          { id: 'mx-3', name: '茉莉奶绿', price: 6.6, emoji: '🍵', img: img('milktea'), monthSale: 33000, specs: teaSpecs() },
         ],
       },
       {
         cat: '柠水冰品',
         dishes: [
-          { id: 'mx-4', name: '冰鲜柠檬水', price: 4, emoji: '🍋', monthSale: 150000, sig: true },
+          {
+            id: 'mx-4',
+            name: '冰鲜柠檬水',
+            price: 4,
+            emoji: '🍋',
+            monthSale: 150000,
+            sig: true,
+            specs: [
+              { name: '温度', options: [{ label: '正常冰' }, { label: '少冰' }, { label: '多冰' }, { label: '常温' }] },
+              { name: '糖度', options: [{ label: '正常糖' }, { label: '七分糖' }, { label: '不额外加糖' }, { label: '五分糖' }] },
+            ],
+          },
           { id: 'mx-5', name: '黑糖珍珠大圣代', price: 6.5, emoji: '🍦', monthSale: 28000 },
           { id: 'mx-6', name: '新鲜冰淇淋', price: 3, emoji: '🍨', monthSale: 88000 },
-          { id: 'mx-7', name: '摇摇奶昔（草莓）', price: 8, emoji: '🥛', monthSale: 21000 },
+          { id: 'mx-7', name: '摇摇奶昔（草莓）', price: 8, emoji: '🥛', monthSale: 21000, specs: [{ name: '糖度', options: [{ label: '正常糖' }, { label: '七分糖' }, { label: '不额外加糖' }] }] },
         ],
       },
     ],
@@ -423,9 +491,9 @@ export const MT_MERCHANTS: MtMerchant[] = [
       {
         cat: '招牌麻辣烫',
         dishes: [
-          { id: 'yg-1', name: '番茄麻辣烫（微辣）', price: 16.8, emoji: '🍅', img: img('malatang'), desc: '番茄汤底+经典配菜', monthSale: 32000, sig: true },
-          { id: 'yg-2', name: '骨汤麻辣烫（不辣）', price: 15.8, emoji: '🥣', img: img('malatang'), monthSale: 26000 },
-          { id: 'yg-3', name: '金汤肥牛麻辣烫', price: 21.8, emoji: '🌶️', img: img('malatang'), monthSale: 15000 },
+          { id: 'yg-1', name: '番茄麻辣烫（微辣）', price: 16.8, emoji: '🍅', img: img('malatang'), desc: '番茄汤底+经典配菜', monthSale: 32000, sig: true, specs: foodSides([{ name: '宽粉', price: 2 }, { name: '蟌鹑蛋（5个）', price: 3 }, { name: '午餐肉', price: 4 }, { name: '肥牛卷', price: 6 }], 3, '加料') },
+          { id: 'yg-2', name: '骨汤麻辣烫（不辣）', price: 15.8, emoji: '🥣', img: img('malatang'), monthSale: 26000, specs: foodSides([{ name: '宽粉', price: 2 }, { name: '蟌鹑蛋（5个）', price: 3 }, { name: '午餐肉', price: 4 }], 3, '加料') },
+          { id: 'yg-3', name: '金汤肥牛麻辣烫', price: 21.8, emoji: '🌶️', img: img('malatang'), monthSale: 15000, specs: foodSides([{ name: '宽粉', price: 2 }, { name: '金针菇', price: 2 }, { name: '肥牛卷加量', price: 6 }], 3, '加料') },
         ],
       },
       {
@@ -465,9 +533,9 @@ export const MT_MERCHANTS: MtMerchant[] = [
       {
         cat: '招牌面',
         dishes: [
-          { id: 'nd-1', name: '红烧牛肉面', price: 13.8, emoji: '🍜', img: img('noodle'), desc: '牛腱肉大块，汤浓味香', monthSale: 21000, sig: true },
-          { id: 'nd-2', name: '牛肉拌面', price: 14.8, emoji: '🍝', img: img('noodle'), monthSale: 13000 },
-          { id: 'nd-3', name: '酸菜肉丝面', price: 11.8, emoji: '🍲', monthSale: 8600 },
+          { id: 'nd-1', name: '红烧牛肉面', price: 13.8, emoji: '🍜', img: img('noodle'), desc: '牛腱肉大块，汤浓味香', monthSale: 21000, sig: true, specs: [{ name: '面型', options: [{ label: '细面' }, { label: '宽面' }, { label: '刀削面' }] }, foodSides([{ name: '卤蛋', price: 2 }, { name: '涮肥牛', price: 6 }, { name: '青菜', price: 1.5 }], 2, '小料配菜')[0]] },
+          { id: 'nd-2', name: '牛肉拌面', price: 14.8, emoji: '🍝', img: img('noodle'), monthSale: 13000, specs: [{ name: '面型', options: [{ label: '细面' }, { label: '宽面' }] }, foodSides([{ name: '卤蛋', price: 2 }, { name: '面筋', price: 2 }], 2, '小料配菜')[0]] },
+          { id: 'nd-3', name: '酸菜肉丝面', price: 11.8, emoji: '🍲', monthSale: 8600, specs: [{ name: '面型', options: [{ label: '细面' }, { label: '宽面' }] }] },
         ],
       },
       {
@@ -611,9 +679,9 @@ export const MT_MERCHANTS: MtMerchant[] = [
       {
         cat: '比萨',
         dishes: [
-          { id: 'pz-1', name: '经典夏威夷比萨 9 寸', price: 35.9, emoji: '🍕', img: img('pizza'), desc: '菠萝+火腿，咸甜经典', monthSale: 14000, sig: true },
-          { id: 'pz-2', name: '意式肉酱比萨 9 寸', price: 39.9, emoji: '🍕', img: img('pizza'), monthSale: 9900 },
-          { id: 'pz-3', name: '榴莲比萨 9 寸', price: 49.9, emoji: '🍕', monthSale: 7700, sig: true },
+          { id: 'pz-1', name: '经典夏威夷比萨 9 寸', price: 35.9, emoji: '🍕', img: img('pizza'), desc: '菠萝+火腿，咸甜经典', monthSale: 14000, sig: true, specs: [{ name: '饼底', options: [{ label: '经典手拍' }, { label: '芝士心卷边', price: 4 }] }, foodSides([{ name: '薯条（小份）', price: 3 }, { name: '蒜香鸡翅2只', price: 7 }, { name: '可乐 1 罐', price: 3 }], 2, '小料配菜')[0]] },
+          { id: 'pz-2', name: '意式肉酱比萨 9 寸', price: 39.9, emoji: '🍕', img: img('pizza'), monthSale: 9900, specs: [{ name: '饼底', options: [{ label: '经典手拍' }, { label: '芝士心卷边', price: 4 }] }] },
+          { id: 'pz-3', name: '榴莲比萨 9 寸', price: 49.9, emoji: '🍕', monthSale: 7700, sig: true, specs: [{ name: '饼底', options: [{ label: '经典手拍' }, { label: '芝士心卷边', price: 4 }] }] },
         ],
       },
       {
@@ -647,9 +715,9 @@ export const MT_MERCHANTS: MtMerchant[] = [
       {
         cat: '招牌盖浇饭',
         dishes: [
-          { id: 'rc-1', name: '鱼香肉丝盖浇饭', price: 15.8, emoji: '🍛', img: img('rice'), monthSale: 18000, sig: true },
-          { id: 'rc-2', name: '宫保鸡丁盖浇饭', price: 16.8, emoji: '🍛', img: img('rice'), monthSale: 15000 },
-          { id: 'rc-3', name: '红烧肉盖浇饭', price: 19.8, emoji: '🍖', img: img('rice'), monthSale: 12000, sig: true },
+          { id: 'rc-1', name: '鱼香肉丝盖浇饭', price: 15.8, emoji: '🍛', img: img('rice'), monthSale: 18000, sig: true, specs: foodSides([{ name: '卤蛋', price: 2 }, { name: '紫菜蛋花汤', price: 3 }, { name: '可乐 1 罐', price: 3 }]) },
+          { id: 'rc-2', name: '宫保鸡丁盖浇饭', price: 16.8, emoji: '🍛', img: img('rice'), monthSale: 15000, specs: foodSides([{ name: '卤蛋', price: 2 }, { name: '可乐 1 罐', price: 3 }]) },
+          { id: 'rc-3', name: '红烧肉盖浇饭', price: 19.8, emoji: '🍖', img: img('rice'), monthSale: 12000, sig: true, specs: foodSides([{ name: '卤蛋', price: 2 }, { name: '青菜', price: 1.5 }]) },
           { id: 'rc-4', name: '番茄鸡蛋盖浇饭', price: 13.8, emoji: '🍅', monthSale: 9900 },
           { id: 'rc-5', name: '酸辣土豆丝盖浇饭', price: 12.8, emoji: '🥔', monthSale: 8600 },
         ],
@@ -678,8 +746,8 @@ export const MT_MERCHANTS: MtMerchant[] = [
       {
         cat: '锅底',
         dishes: [
-          { id: 'hp-1', name: '鸳鸯锅底（微辣/菌汤）', price: 29.8, emoji: '🍲', img: img('hotpot'), monthSale: 8600, sig: true },
-          { id: 'hp-2', name: '重庆牛油红锅', price: 26.8, emoji: '🌶️', img: img('hotpot'), monthSale: 6600 },
+          { id: 'hp-1', name: '鸳鸯锅底（微辣/菌汤）', price: 29.8, emoji: '🍲', img: img('hotpot'), monthSale: 8600, sig: true, specs: foodSides([{ name: '精品肥牛卷', price: 26.8 }, { name: '鲜毛肚', price: 22.8 }, { name: '宽粉', price: 4.8 }], 3, '加菜') },
+          { id: 'hp-2', name: '重庆牛油红锅', price: 26.8, emoji: '🌶️', img: img('hotpot'), monthSale: 6600, specs: [{ name: '辣度', options: [{ label: '微辣' }, { label: '中辣' }, { label: '特辣' }] }, foodSides([{ name: '精品肥牛卷', price: 26.8 }, { name: '鲜毛肚', price: 22.8 }], 3, '加菜')[0]] },
         ],
       },
       {
@@ -755,3 +823,51 @@ export function mtFindDish(id: string): { merchant: MtMerchant; dish: MtDish } |
 export function mtDishesOf(m: MtMerchant): MtDish[] {
   return m.sections.flatMap((s) => s.dishes);
 }
+
+// ================================ 优惠券（我的券）种子数据 ================================
+
+/** 券类型：外卖 / 到店（美食）/ 酒店民宿 / 闪购 */
+export type MtCouponType = 'waimai' | 'daodian' | 'hotel' | 'shangou';
+
+export interface MtCouponSeed {
+  /** 券名（外卖夜宵神券） */
+  name: string;
+  type: MtCouponType;
+  /** 神券角标（橙红渐变） */
+  god: boolean;
+  /** 面额（30元） */
+  amount: number;
+  /** 门槛（满60可用） */
+  min: number;
+  /** 相对获得时刻的过期偏移（毫秒）；倒计时类券用短偏移 */
+  ttl: number;
+}
+
+const DAY = 86_400_000;
+
+/** 首次进入「我的券」播种（对齐真机截图1：外卖神券×2 + 新客到店×2 + 酒店民宿×2） */
+export const MT_COUPON_SEED: MtCouponSeed[] = [
+  { name: '外卖夜宵神券', type: 'waimai', god: true, amount: 30, min: 60, ttl: 2 * DAY - 60_000 },
+  { name: '外卖大额神券', type: 'waimai', god: true, amount: 24, min: 68, ttl: 2 * 3600_000 + 45 * 60_000 + 7_000 },
+  { name: '【新客专享】玩乐变美通用券', type: 'daodian', god: true, amount: 7, min: 10, ttl: 7 * DAY },
+  { name: '【娱乐专享】境外酒店100元券', type: 'hotel', god: false, amount: 100, min: 10000, ttl: 7 * DAY },
+  { name: '【娱乐专享】境外酒店100元券', type: 'hotel', god: false, amount: 100, min: 3333, ttl: 7 * DAY },
+  { name: '【新客专享】玩乐变美通用券', type: 'daodian', god: true, amount: 6, min: 10, ttl: 7 * DAY },
+  { name: '外卖满减券', type: 'waimai', god: false, amount: 5, min: 20, ttl: 5 * DAY },
+  { name: '到店立减券', type: 'daodian', god: false, amount: 3, min: 10, ttl: 5 * DAY },
+];
+
+/** 「一键领取/领神券」发放的 3 张会员神券（可重复触发则跳过同名单） */
+export const MT_GOD_CLAIMS: MtCouponSeed[] = [
+  { name: '外卖大额神券', type: 'waimai', god: true, amount: 12, min: 50, ttl: 3 * DAY },
+  { name: '堂食膨胀神券', type: 'daodian', god: true, amount: 11, min: 30, ttl: 3 * DAY },
+  { name: '堂食神券', type: 'daodian', god: true, amount: 7, min: 15, ttl: 3 * DAY },
+];
+
+/** 券类型角标文案 */
+export const MT_COUPON_TYPE_LABEL: Record<MtCouponType, string> = {
+  waimai: '外卖',
+  daodian: '到店',
+  hotel: '酒店/民宿',
+  shangou: '闪购',
+};
