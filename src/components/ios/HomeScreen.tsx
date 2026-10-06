@@ -100,9 +100,10 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  *   （旧 grid 迁移为第 1 页；v6 起旧版本整体重置为新排布）。
  *
  * - 文件夹（iOS 同款）：编辑模式把 App 拖到另一 App/文件夹上「压住」~240ms（图标重叠
- *   ≥ 三成且指针基本静止）→ 弹出合并预览：目标 App 原地变成文件夹样式的毛玻璃缩略图 /
- *   目标文件夹微放大，外圈罩一圈呼吸的圆角方边框（缩放脉动，iOS 同款），
- *   被拖 App 轻微收拢；松手 App 缩小飞入文件夹并建夹/入夹/并夹，拖开即取消。
+ *   ≥ 三成且指针基本静止）→ 弹出合并预览：目标保持原样（App 仍是自己、文件夹预览
+ *   不混入被拖 App——用户要求被拖 App 不显示在里面），原地轻微缩放脉动 + 外圈罩
+ *   一圈呼吸的圆角方边框（贴形描边与脉动同频呼吸，iOS 同款），被拖 App 轻微收拢；
+ *   松手 App 缩小飞入文件夹并建夹/入夹/并夹，拖开即取消。
  *   只有重叠 ≥ 三成才暂停挤位换位（轻微擦过照常换位）——App 拖到下面/旁边/底部都能
  *   顺畅移过去、随时可换位；移动中永不弹预览，快速放到目标上松手 = 正常落位不是建夹；
  *   文件夹图标 = 毛玻璃圆角方（前 6 个 App 缩略图 3×2 + 超额数量角标）+ 名称；
@@ -1649,7 +1650,7 @@ export default function HomeScreen() {
   };
 
   /** 悬停合并预览激活（纯视觉，不改布局）：预览数据只是标记 + 目标当前落位，
-   *  目标 App 原地显示成文件夹样式的合并缩略图（渲染层处理）、目标文件夹放大高亮；
+   *  目标原地轻微缩放脉动 + 外圈一圈呼吸的圆角方边框（渲染层处理）；
    *  松手才真正建夹/入夹/并夹（用户要求：预览阶段 App 不放进去） */
   const showMergePreview = (data: MergePreviewData) => {
     mergeRef.current = data;
@@ -2804,16 +2805,16 @@ export default function HomeScreen() {
         : { kind: 'app', id: dragId as AppId }
     : null;
 
-  /** 文件夹样式的毛玻璃缩略图（3×2 迷你图标网格）：文件夹图标与合并预览共用，
-   *  合并预览时传入「目标 + 被拖」即得到松手后文件夹的样子（显示文件夹了，
-   *  但 App 并不放进去——松手才真正建夹）；
-   *  迷你图标内容统一放大 1.16 再由圆角方容器裁切（用户要求预览图标为正方形圆角）：
-   *  圆形图标（时钟/QQ 等 PNG 自带圆形底）放大后四边被容器裁平、圆弧在四角收出
-   *  iOS 风格圆角方剪影；本就方圆角的图标仅轻微放大，观感基本不变 */
+  /** 文件夹样式的毛玻璃缩略图（3×2 迷你图标网格）：文件夹图标与拖拽浮动副本共用；
+   *  合并预览阶段目标文件夹保持原样（不混入被拖 App 的缩略图——用户要求被拖 App
+   *  不显示在里面）；
+   *  迷你图标内容统一放大 1.16 再由圆角方容器裁切（用户要求预览图标为正方形圆角、
+   *  圆角不要太圆）：圆形图标（时钟/QQ 等 PNG 自带圆形底）放大后四边被容器裁平、
+   *  圆弧在四角收出 iOS 风格圆角方剪影；本就方圆角的图标仅轻微放大，观感基本不变 */
   const folderIconNode = (apps: AppId[]) => (
     <span className="grid h-full w-full grid-cols-3 grid-rows-2 place-items-center gap-[2px]">
       {apps.slice(0, 6).map((id) => (
-        <span key={id} className="block h-[14px] w-[14px] overflow-hidden rounded-[4px] shadow-[0_0.5px_1.5px_rgba(0,0,0,0.25)]">
+        <span key={id} className="block h-[14px] w-[14px] overflow-hidden rounded-[3px] shadow-[0_0.5px_1.5px_rgba(0,0,0,0.25)]">
           <span className="block h-full w-full scale-[1.16]">{appIconNode(id)}</span>
         </span>
       ))}
@@ -2874,12 +2875,8 @@ export default function HomeScreen() {
       const f = folders.find((x) => x.id === tile.id);
       const key = folderKey(tile.id);
       const merging = mergePreview?.kind === 'folder' && mergePreview.targetKey === key;
-      // App→文件夹预览：把被拖 App 的缩略图加进预览（夹内未满 6 个时），展示松手后的样子
-      const mergingAdd =
-        merging && dragId && !isFolderKey(dragId) && (f?.apps.length ?? 0) < 6 && !(f?.apps ?? []).includes(dragId as AppId)
-          ? (dragId as AppId)
-          : null;
-      const apps6 = [...(f?.apps ?? []), ...(mergingAdd ? [mergingAdd] : [])].slice(0, 6);
+      // 预览保持文件夹原样（不把被拖 App 的缩略图混进迷你网格——用户要求被拖 App 不显示在里面）
+      const apps6 = (f?.apps ?? []).slice(0, 6);
       const appCount = f?.apps.length ?? 0;
       return (
         <div
@@ -2887,7 +2884,7 @@ export default function HomeScreen() {
           style={edit ? { animationDelay: `${(i % 5) * -0.06}s` } : undefined}
         >
           <span
-            className={`relative block h-[60px] w-[60px] rounded-[15px] bg-white/[0.22] p-[5px] shadow-[0_1px_6px_rgba(0,0,0,0.14)] ring-1 ring-white/25 backdrop-blur-md transition-transform duration-200 ${
+            className={`relative block h-[60px] w-[60px] rounded-[13px] bg-white/[0.22] p-[5px] shadow-[0_1px_6px_rgba(0,0,0,0.14)] ring-1 ring-white/25 backdrop-blur-md transition-transform duration-200 ${
               merging ? 'merge-target-pulse' : ''
             }`}
           >
@@ -2901,6 +2898,7 @@ export default function HomeScreen() {
                 {appCount}
               </span>
             )}
+            {merging && <span aria-hidden="true" className="merge-target-ring" />}
           </span>
           <span
             className={`max-w-[74px] truncate text-center text-[11px] font-medium leading-none ${
@@ -2913,8 +2911,8 @@ export default function HomeScreen() {
       );
     }
     const app = APP_MAP[tile.id];
-    // App→App 悬停合并预览：目标 App 原地变成文件夹样式的缩略图（目标 + 被拖两枚迷你图标，
-    // 即松手后文件夹的样子）；纯视觉——目标 App 仍在布局里，松手才真正建夹
+    // App→App 悬停合并预览：目标 App 保持原样，仅原地轻微缩放脉动 + 外圈一圈呼吸的
+    // 圆角方边框（iOS 同款）；被拖 App 不显示进目标里（用户要求），松手才真正建夹
     const mergingHere = mergePreview?.kind === 'app' && mergePreview.targetKey === tile.id;
     return (
       <div
@@ -2922,16 +2920,9 @@ export default function HomeScreen() {
         style={edit ? { animationDelay: `${(i % 5) * -0.06}s` } : undefined}
       >
         <span className={`relative block h-[60px] w-[60px] ${mergingHere ? 'merge-target-pulse' : ''}`}>
-          {mergingHere && dragId ? (
-            <span className="block h-full w-full rounded-[15px] bg-white/[0.22] p-[5px] shadow-[0_1px_6px_rgba(0,0,0,0.14)] ring-1 ring-white/25 backdrop-blur-md">
-              {folderIconNode([tile.id, dragId as AppId])}
-            </span>
-          ) : (
-            <>
-              <span className="block h-full w-full overflow-hidden rounded-[15px]">{appIconNode(tile.id)}</span>
-              <AppUnreadBadge appId={tile.id} count={appUnreadOf(tile.id)} />
-            </>
-          )}
+          <span className="block h-full w-full overflow-hidden rounded-[15px]">{appIconNode(tile.id)}</span>
+          <AppUnreadBadge appId={tile.id} count={appUnreadOf(tile.id)} />
+          {mergingHere && <span aria-hidden="true" className="merge-target-ring" />}
         </span>
         <span
           className={`max-w-[74px] truncate text-center text-[11px] font-medium leading-none ${
@@ -2959,8 +2950,8 @@ export default function HomeScreen() {
     const lh = dragVisual.h / sc;
     const ldx = dragDelta.dx / sc;
     const ldy = dragDelta.dy / sc;
-    // 合并预览中：被拖 App/文件夹轻微收拢（iOS 同款「即将入夹」），
-    // 目标图标原地呼吸缩放脉动（槽位渲染层处理；用户要求白色边框全部删除）
+    // 合并预览中：被拖 App/文件夹轻微收拢（iOS 同款「即将入夹」）；
+    // 目标图标原地轻微缩放脉动 + 外圈一圈呼吸的圆角方边框（槽位渲染层处理）
     if (mergePreview && (tile.kind === 'app' || tile.kind === 'folder')) {
       return (
         <div
@@ -2981,7 +2972,7 @@ export default function HomeScreen() {
               {tile.kind === 'app' ? (
                 <span className="block h-[60px] w-[60px] overflow-hidden rounded-[15px]">{appIconNode(tile.id)}</span>
               ) : (
-                <span className="block h-[60px] w-[60px] overflow-hidden rounded-[15px] bg-white/[0.22] p-[5px] ring-1 ring-white/25 backdrop-blur-md">
+                <span className="block h-[60px] w-[60px] overflow-hidden rounded-[13px] bg-white/[0.22] p-[5px] ring-1 ring-white/25 backdrop-blur-md">
                   {folderIconNode((folders.find((f) => f.id === tile.id)?.apps ?? []).slice(0, 6))}
                 </span>
               )}

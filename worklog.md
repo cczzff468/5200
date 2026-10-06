@@ -16114,3 +16114,21 @@ Stage Summary:
 - 交付文件：src/components/ios/HomeScreen.tsx（merge-target-ring 移除+MAX_PAGE_ROWS/rowsOf/pageHasRoom+9 处容量判断切换+存量重排+加载回写+overflow-hidden）、src/app/globals.css（.merge-target-pulse 呼吸脉动，无边框无光晕）
 - 关键决策：①行数封顶是硬约束（页面不可滚动后超出即被页点/Dock 裁切），格数上限（14/20）保留为次级约束 ②存量超行用「尾部摘出顺延后页」而非重置布局——保留用户文件夹/排布，LAYOUT_VERSION 不动 ③Dock 不参与行数模型（独立 4 槽轨道，拖入 Dock 行为原样保留）
 - 验证：eslint 0、tsc 0、八项浏览器 E2E 全通过、已推送 6741a39
+
+---
+Task ID: home-fix-6
+Agent: 主协调者 (Z.ai Code)
+Task: 入夹动画美化——目标外圈呼吸圆角方边框+轻微缩放脉动、被拖 App 不再显示进目标预览里；文件夹预览圆角收小
+
+Work Log:
+- globals.css：新增 @keyframes merge-target-ring + .merge-target-ring（absolute inset -4px、border-radius 19px、2.5px 白色圆角方描边、1px 深色投影保浅色壁纸可读性），呼吸动画 opacity 0.45→1 与 merge-target-breathe 同频（1.05s ease-in-out infinite）；merge-target-breathe 去掉旧 opacity 关键帧只留 scale 1→1.07 脉动
+- HomeScreen.tsx App→App 预览：删除「目标 App 原地变成文件夹缩略图（目标+被拖两枚迷你图标）」分支——目标保持自己的图标+未读角标，仅加 merge-target-pulse + merge-target-ring（用户要求被拖 App 不显示在里面）
+- HomeScreen.tsx App→文件夹预览：删除 mergingAdd（把被拖 App 缩略图混进迷你网格）逻辑，apps6 恒为夹内自身前 6 个；目标文件夹 span 同样加 ring
+- 文件夹预览圆角收小：迷你图标 rounded-[4px]→rounded-[3px]（14px 上 28.6%→21.4%，对齐 iOS squircle 比例）、容器 rounded-[15px]→rounded-[13px]（HomeScreen 3 处：网格文件夹 tile、拖拽浮动副本文件夹分支）；同步更新 4 处注释
+- agent-browser E2E（430×932，锁屏上滑解锁）：①建夹流 weather→themes 压住 900ms→ring 计数 1、animationName=merge-target-ring、border 2px→2.5px、radius 19px、opacity 呼吸中（0.79 实测）、目标 themes 带 merge-target-pulse(merge-target-breathe)、目标无 .grid-cols-3 缩略图 ✓ 松手建夹成功 ②入夹流 browser→文件夹→ring+脉动+夹内迷你恒 2 个（旧版会变 3）✓ 松手后夹内 3 个、browser 离开网格 ✓ ③圆角 computed：容器 13px、迷你 3px ✓ ④demo ring 注入 A/B 截图+放大对比确认可见性，峰值冻结截图确认观感 ✓ ⑤布局重置回默认、errors/console 干净 ✓
+- 踩坑：agent-browser mouse 流程漏 mouse up 会把下次拖拽状态搞乱（左键保持按下）；eval 里模板字符串会被 bash 吞掉（用 '+' 拼接）；页面默认停在锁屏需先上滑解锁；全仓 eslint 在沙箱被 SIGKILL（内存），对改动文件单跑 eslint 通过
+
+Stage Summary:
+- 交付文件：src/components/ios/HomeScreen.tsx（预览不再混入被拖 App+双目标 ring+圆角收小）、src/app/globals.css（merge-target-ring 呼吸描边）
+- 关键决策：ring 挂在 60px 目标 span 内部（随脉动同缩放、天然同心）；描边用纯白圆角方+深色微投影（非白色光晕，避开用户此前反感的 halo 观感）；App→App 预览回到 iOS 原生语义（目标原样高亮，松手才变文件夹）
+- 验证：改动文件 eslint 0、八项浏览器 E2E 全通过、已推送
