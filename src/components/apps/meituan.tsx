@@ -76,7 +76,6 @@ import {
   Share2,
   ShoppingBag,
   ShoppingCart,
-  SquarePlay,
   Star,
   Stethoscope,
   Store,
@@ -528,52 +527,27 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
   );
 }
 
-// ================================ 底部导航（首页/视频/小团/购物车/我的） ================================
+// ================================ 底部导航（首页/购物车/我的） ================================
 
-/** 底部 Tab（对齐真机截图）：首页=房子、视频=圆角方块播放+红点1、小团=彩虹渐变凸起圆+白兔、
- *  购物车=推车、我的=黄底笑脸+金皇冠；选中态黑色加粗，全站无「＞」箭头 */
-function BottomTabBar({ active, onTab, onToast }: { active: Tab; onTab: (t: Tab) => void; onToast: (m: string) => void }) {
+/** 底部 Tab（对齐真机截图）：首页=房子、购物车=推车、我的=黄底笑脸+金皇冠；
+ *  选中态黑色加粗，全站无「＞」箭头；底部加高让内容避开 Home 指示条 */
+function BottomTabBar({ active, onTab }: { active: Tab; onTab: (t: Tab) => void }) {
   const labelCls = (on: boolean) => `text-[10px] leading-none ${on ? 'font-semibold text-black/95' : 'font-medium text-black/75'}`;
   const stroke = (on: boolean) => (on ? 2.3 : 1.8);
   return (
-    <div className="relative z-20 flex shrink-0 items-start border-t border-black/[0.06] bg-white pb-[max(7px,env(safe-area-inset-bottom))]">
+    <div className="relative z-20 flex shrink-0 items-start border-t border-black/[0.06] bg-white pb-[max(18px,env(safe-area-inset-bottom))] pt-[9px]">
       {/* 首页：房子 */}
-      <button type="button" onClick={() => onTab('home')} className="flex flex-1 flex-col items-center gap-[3px] pt-[7px] active:opacity-70">
+      <button type="button" onClick={() => onTab('home')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
         <House className="h-[24px] w-[24px] text-black/90" strokeWidth={stroke(active === 'home')} />
         <span className={labelCls(active === 'home')}>首页</span>
       </button>
-      {/* 视频：圆角方块播放 + 红点 1 */}
-      <button type="button" onClick={() => onToast('美团视频敬请期待')} className="flex flex-1 flex-col items-center gap-[3px] pt-[7px] active:opacity-70">
-        <span className="relative">
-          <SquarePlay className="h-[24px] w-[24px] text-black/90" strokeWidth={1.8} />
-          <span className="absolute -right-[10px] -top-[5px] grid h-[15px] min-w-[15px] place-items-center rounded-full bg-[#FA2C19] px-[3px] text-[9px] font-bold leading-none text-white">1</span>
-        </span>
-        <span className={labelCls(false)}>视频</span>
-      </button>
-      {/* 小团：凸起彩虹渐变圆 + 白兔（对齐截图） */}
-      <button type="button" onClick={() => onToast('小团 AI 助手敬请期待')} className="flex flex-1 flex-col items-center gap-[3px] pt-[7px] active:opacity-70">
-        <span className="relative h-[24px] w-[24px]">
-          <span
-            className="absolute bottom-[-5px] left-1/2 h-[46px] w-[46px] -translate-x-1/2 rounded-full p-[2px] shadow-[0_2px_10px_rgba(0,0,0,0.16)]"
-            style={{ background: 'conic-gradient(from 200deg, #FF9AA2, #FFC48A, #FFF3A6, #B8F2C9, #A6D8FF, #C9B8FF, #FFB8EC, #FF9AA2)' }}
-          >
-            <span
-              className="grid h-full w-full place-items-center overflow-hidden rounded-full"
-              style={{ background: 'conic-gradient(from 30deg, #FFD3E0, #FFE9C2, #FFF9CE, #D2F4DE, #CCE4FF, #E7DAFF, #FFDCF1, #FFD3E0)' }}
-            >
-              <Rabbit className="h-[25px] w-[25px] text-white" fill="white" strokeWidth={1.6} />
-            </span>
-          </span>
-        </span>
-        <span className={labelCls(false)}>小团</span>
-      </button>
       {/* 购物车 */}
-      <button type="button" onClick={() => onTab('cart')} className="flex flex-1 flex-col items-center gap-[3px] pt-[7px] active:opacity-70">
+      <button type="button" onClick={() => onTab('cart')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
         <ShoppingCart className="h-[24px] w-[24px] text-black/90" strokeWidth={stroke(active === 'cart')} />
         <span className={labelCls(active === 'cart')}>购物车</span>
       </button>
       {/* 我的：黄色笑脸 + 金皇冠（对齐截图） */}
-      <button type="button" onClick={() => onTab('my')} className="flex flex-1 flex-col items-center gap-[3px] pt-[7px] active:opacity-70">
+      <button type="button" onClick={() => onTab('my')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
         <span className="relative">
           <span className="grid h-[24px] w-[24px] place-items-center rounded-full bg-gradient-to-b from-[#FFE14D] to-[#FFC300]">
             <svg viewBox="0 0 24 24" className="h-[24px] w-[24px]" aria-hidden="true">
@@ -631,17 +605,17 @@ function DealListCard({ onOpen }: { onOpen: (id: string) => void }) {
   if (deals.length === 0) return null;
   return (
     <div className="mb-2 break-inside-avoid rounded-xl bg-white p-3 shadow-[0_1px_6px_rgba(0,0,0,0.04)]">
-      <button type="button" onClick={() => onOpen(deals[0].id)} className="flex w-full items-center gap-1.5 whitespace-nowrap text-left active:opacity-70">
+      <button type="button" onClick={() => onOpen(deals[0].id)} className="flex w-full items-center gap-1.5 text-left active:opacity-70">
         <TuanMark className="shrink-0 text-[15px]" />
         <span className="shrink-0 rounded-[4px] bg-[#FF3B30] px-1 py-px text-[10px] font-medium text-white">{MT_HOME_LIST.badge}</span>
-        <span className="min-w-0 flex-1 truncate text-[14px] font-bold text-black/85">{MT_HOME_LIST.title}</span>
       </button>
+      <p className="mt-1.5 truncate text-[13px] font-bold text-black/85">{MT_HOME_LIST.title}</p>
       <div className="mt-2.5 space-y-3">
         {deals.map((d) => (
           <button key={d.id} type="button" onClick={() => onOpen(d.id)} className="flex w-full items-center gap-2.5 text-left active:opacity-80">
             <FoodImg src={d.img} emoji={d.emoji} className="h-[56px] w-[56px] shrink-0 rounded-lg" />
             <span className="min-w-0 flex-1">
-              <span className="line-clamp-2 text-[13px] leading-snug text-black/85">{d.title.length > 9 ? `${d.title.slice(0, 9)}…` : d.title}【{d.tips}】</span>
+              <span className="line-clamp-2 text-[13px] leading-snug text-black/85">{d.title}</span>
               <span className="mt-1 flex items-baseline gap-1">
                 <span className="rounded-[3px] bg-[#FFE8F1] px-1 text-[10px] text-[#FF2D7E]">{d.discount}</span>
                 <span className="text-[15px] font-bold leading-none" style={{ color: MT_PRICE }}>
@@ -764,15 +738,15 @@ function HomePage({
       <div className="bg-[#FFD100] px-4 pb-3 pt-[54px]">
         <div className="flex items-center gap-2">
           <button type="button" onClick={onPickAddress} className="flex min-w-0 items-center gap-1 text-left active:opacity-70">
-            <MapPin className="h-[18px] w-[18px] shrink-0 text-black/80" strokeWidth={2.2} />
+            <MapPin className="h-[17px] w-[17px] shrink-0 text-black/80" strokeWidth={2.1} />
             <span className="truncate text-[17px] font-semibold text-black/90">{cur ? cur.text.slice(0, 9) : '选择地址'}</span>
           </button>
           <span className="flex-1" />
-          <button type="button" aria-label="消息" onClick={() => onToast('暂无新消息')} className="active:opacity-60">
-            <MessageCircleMore className="h-[22px] w-[22px] text-black/80" strokeWidth={1.9} />
+          <button type="button" aria-label="消息" onClick={() => onToast('暂无新消息')} className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-white/40 active:opacity-60">
+            <MessageCircleMore className="h-[19px] w-[19px] text-black/75" strokeWidth={1.8} />
           </button>
-          <button type="button" aria-label="扫一扫" onClick={() => onToast('扫一扫（演示）')} className="ml-3 active:opacity-60">
-            <ScanLine className="h-[22px] w-[22px] text-black/80" strokeWidth={1.9} />
+          <button type="button" aria-label="扫一扫" onClick={() => onToast('扫一扫（演示）')} className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-white/40 active:opacity-60">
+            <ScanLine className="h-[19px] w-[19px] text-black/75" strokeWidth={1.8} />
           </button>
         </div>
         <button type="button" onClick={onOpenSearch} className="mt-3 flex h-10 w-full items-center gap-2 rounded-full bg-white pl-4 pr-1 text-left shadow-sm active:opacity-95">
@@ -2752,24 +2726,23 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
         {/* 价格块（粉）+ 标题/须知/门店/规则/详情 */}
         <div className="mt-2.5 overflow-hidden border-y-[7px] border-[#F5F6F7]">
           <div className="bg-gradient-to-r from-[#FF2D7E] to-[#FF5E9E] px-4 pb-3 pt-3">
-            <div className="flex items-start gap-2">
-              <p className="flex items-baseline leading-none">
+            <div className="flex items-center gap-1.5">
+              <p className="flex shrink-0 items-baseline whitespace-nowrap leading-none">
                 <span className="text-[15px] font-bold text-[#A5001F]">¥</span>
-                <span className="text-[30px] font-bold tracking-tight text-[#A5001F]">{fmtMoney(deal.price)}</span>
+                <span className="text-[28px] font-bold tracking-tight text-[#A5001F]">{fmtMoney(deal.price)}</span>
               </p>
-              <span className="mt-1 flex items-center rounded-full bg-white px-1.5 py-0.5 text-[11px] font-semibold text-[#FF2D7E]">
+              <span className="shrink-0 whitespace-nowrap rounded-full bg-white px-1.5 py-[3px] text-[11px] font-semibold leading-none text-[#FF2D7E]">
                 {deal.discount}
               </span>
-              <span className="mt-1.5 text-[13px] text-white/85 line-through">¥{fmtMoney(deal.origPrice)}</span>
-              <span className="mt-1.5 text-[13px] text-white/85">{deal.sold}</span>
-              <span className="ml-auto mt-0.5 rounded-lg bg-[#E6197A] px-2 py-1 text-center text-[10px] font-bold leading-[1.3] text-white">
-                限量·低价
-                <br />
-                特价团
+              <span className="shrink-0 whitespace-nowrap text-[12px] leading-none text-white/85 line-through">¥{fmtMoney(deal.origPrice)}</span>
+              <span className="min-w-0 flex-1 truncate whitespace-nowrap text-right text-[12px] leading-none text-white/90">{deal.sold}</span>
+              <span className="shrink-0 rounded-lg bg-[#E6197A] px-2 py-1 text-center text-[10px] font-bold leading-[1.35] text-white">
+                <span className="block whitespace-nowrap">限量·低价</span>
+                <span className="block whitespace-nowrap">特价团</span>
               </span>
             </div>
-            <p className="mt-1 flex items-center gap-1 text-[12px] text-white/95">
-              <Zap className="h-3.5 w-3.5" />
+            <p className="mt-1.5 flex items-center gap-1 whitespace-nowrap text-[12px] text-white/95">
+              <Zap className="h-3.5 w-3.5 shrink-0" />
               品牌新客价
             </p>
           </div>
@@ -5400,7 +5373,7 @@ export default function MeituanApp() {
             )}
           </div>
           {/* 底部导航（订单页为独立页：无底部 tab） */}
-          {tab !== 'orders' && <BottomTabBar active={tab} onTab={(t) => setTab(t)} onToast={showToast} />}
+          {tab !== 'orders' && <BottomTabBar active={tab} onTab={(t) => setTab(t)} />}
         </div>
       )}
       {page === 'search' && <SearchPage onBack={() => setPage('main')} onOpenMerchant={openMerchant} />}
