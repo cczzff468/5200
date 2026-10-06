@@ -266,18 +266,15 @@
   animation: folder-pop 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-/* 拖拽合并预览：目标 App/文件夹外圈的呼吸光环（iOS 同款「即将入夹」提示）——
-   白色圆角方边框 + 白晕呼吸 + 轻微缩放脉动（用户要求光环罩在目标 APP 外面） */
+/* 压住入夹：目标外圈呼吸的圆角方边框（仅缩放脉动+淡入淡出，用户要求去掉白色光环/光晕） */
 @keyframes merge-target-breathe {
   0%,
   100% {
     transform: scale(1);
-    box-shadow: 0 0 8px 1px rgba(255, 255, 255, 0.25);
-    opacity: 0.82;
+    opacity: 0.8;
   }
   50% {
-    transform: scale(1.05);
-    box-shadow: 0 0 20px 5px rgba(255, 255, 255, 0.45);
+    transform: scale(1.07);
     opacity: 1;
   }
 }

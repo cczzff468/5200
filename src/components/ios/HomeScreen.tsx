@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import dynamic from 'next/dynamic';
 import { Plus, Search, X } from 'lucide-react';
 import { useUI, useSettings, type AppId } from '@/lib/ios/store';
+import { shellScale } from '@/lib/ios/shell-scale';
 import { useHomeWallpaperLight } from '@/lib/ios/foreground';
 import { localDB } from '@/lib/ios/db';
 import { useUnreadTotal, useBadge, wxUnreads, qqUnreads, chatBadge, phoneBadge } from '@/lib/unread-store';
@@ -99,7 +100,7 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  *
  * - 文件夹（iOS 同款）：编辑模式把 App 拖到另一 App/文件夹上「压住」~240ms（图标重叠
  *   ≥ 三成且指针基本静止）→ 弹出合并预览：目标 App 原地变成文件夹样式的毛玻璃缩略图 /
- *   目标文件夹微放大，外圈罩一圈呼吸的白色圆角方光环（白晕+缩放脉动，iOS 同款），
+ *   目标文件夹微放大，外圈罩一圈呼吸的圆角方边框（缩放脉动，iOS 同款），
  *   被拖 App 轻微收拢；松手 App 缩小飞入文件夹并建夹/入夹/并夹，拖开即取消。
  *   只有重叠 ≥ 三成才暂停挤位换位（轻微擦过照常换位）——App 拖到下面/旁边/底部都能
  *   顺畅移过去、随时可换位；移动中永不弹预览，快速放到目标上松手 = 正常落位不是建夹；
@@ -1346,6 +1347,9 @@ export default function HomeScreen() {
   const mergeDwellT = useRef<number | null>(null);
   /** 计时器起点的指针位置：大幅移动（>6px）重置计时，轻微手抖不重置 */
   const mergeDwellPos = useRef<{ x: number; y: number } | null>(null);
+  /** 拖拽开始时的壳缩放系数（桌面端机身可能被等比缩小；窗口 resize 中途变化忽略，下次拖拽重捕）。
+   *  壳 transform 后 fixed 层用「壳本地坐标」渲染：viewport px ÷ scale = 本地 px */
+  const scaleRef = useRef(1);
 
   // ref 与 state 同步（render 期间禁止写 ref，故放 effect）
   useEffect(() => {
@@ -1402,13 +1406,16 @@ export default function HomeScreen() {
   }, []);
 
   // ---------------- 非编辑模式：跟手翻页 ----------------
-  /** 跟手平移轨道：首页右拖/末页左拖给橡皮筋阻尼 */
+  /** 跟手平移轨道：首页右拖/末页左拖给橡皮筋阻尼。
+   *  位移取自 clientX 差（视口 px）；轨道 transform 在壳本地坐标系（壳可能被等比缩小）
+   *  → 先 ÷ 壳缩放换算成本地 px，跟手速度才与手指一致 */
   const setTrackFollow = (dx: number) => {
     const track = trackRef.current;
     if (!track) return;
     const last = Math.max(0, layoutRef.current.pages.length - 1);
     const p = pageRef.current;
-    const off = (p === 0 && dx > 0) || (p === last && dx < 0) ? dx * 0.32 : dx;
+    const local = dx / (shellScale.value || 1);
+    const off = (p === 0 && local > 0) || (p === last && local < 0) ? local * 0.32 : local;
     track.style.transform = `translateX(calc(${-p * 100}% + ${off}px))`;
   };
 
@@ -1635,7 +1642,9 @@ export default function HomeScreen() {
     if (isWidgetKey(draggedId)) return null;
     const dv = dragVisualRef.current;
     if (!dv) return null;
-    const dl = dv.x + d.dx + dv.w / 2 - ICON_SIZE / 2;
+    // 图标逻辑尺寸 60px 是壳本地 px；重叠比较在视口矩形（已缩放）上做 → 同比放大后口径一致
+    const IS = ICON_SIZE * (scaleRef.current || 1);
+    const dl = dv.x + d.dx + dv.w / 2 - IS / 2;
     const dt = dv.y + d.dy;
     const p = pageRef.current;
     const tiles = layoutRef.current.pages[p] ?? [];
@@ -1648,9 +1657,9 @@ export default function HomeScreen() {
       if (t.kind === 'app' && isFolderKey(draggedId)) continue;
       const g = dragGeo.current.find((gg) => gg.zone === 'grid' && gg.page === p && gg.index === i);
       if (!g) continue;
-      const tl = g.left + g.w / 2 - ICON_SIZE / 2;
-      const ix = Math.max(0, Math.min(dl + ICON_SIZE, tl + ICON_SIZE) - Math.max(dl, tl));
-      const iy = Math.max(0, Math.min(dt + ICON_SIZE, g.top + ICON_SIZE) - Math.max(dt, g.top));
+      const tl = g.left + g.w / 2 - IS / 2;
+      const ix = Math.max(0, Math.min(dl + IS, tl + IS) - Math.max(dl, tl));
+      const iy = Math.max(0, Math.min(dt + IS, g.top + IS) - Math.max(dt, g.top));
       const area = ix * iy;
       if (area <= (best?.area ?? 0)) continue;
       best = {
@@ -2038,9 +2047,13 @@ export default function HomeScreen() {
       }
     }
     if (best) return best;
-    // ③ 空白位兜底（行+列双定位）
+    // ③ 空白位兜底（行+列双定位）。
+    //  槽位矩形是视口 px（已随壳缩放），行/列几何常量是壳本地 px → 同比放大后口径一致
     const rect = dragRootRect.current;
     if (rect && x > rect.left && x < rect.right && y > rect.top && y < rect.bottom) {
+      const sc = scaleRef.current || 1;
+      const GAPX = GRID_GAP_X * sc;
+      const GAPY = GRID_GAP_Y * sc;
       const p = Math.min(pageRef.current, layoutRef.current.pages.length - 1);
       const cur = dragId0 !== undefined ? zoneIndexOf(dragId0) : null;
       const isW = dragId0 !== undefined && isWidgetKey(dragId0);
@@ -2054,19 +2067,19 @@ export default function HomeScreen() {
       const appSlot = slots.find((s) => s.kind === 'app');
       const refSlot = appSlot ?? slots[0];
       const refSpanC = refSlot.kind === 'widget' ? WIDGET_SPAN_SIZE[widgetOfKey(refSlot.id)].c : 1;
-      const colW = (refSlot.w - (refSpanC - 1) * GRID_GAP_X) / refSpanC;
+      const colW = (refSlot.w - (refSpanC - 1) * GAPX) / refSpanC;
       const minLeft = Math.min(...slots.map((s) => s.left));
-      const targetCol = Math.max(0, Math.min(3, Math.round((x - colW / 2 - minLeft) / (colW + GRID_GAP_X))));
+      const targetCol = Math.max(0, Math.min(3, Math.round((x - colW / 2 - minLeft) / (colW + GAPX))));
       // 行线：槽位 top 聚类（相邻 >12px 视为新行）；行距 = App 槽高 + 行间隙
       //（无 App 槽时从通栏/方格小组件槽高反推；self-center 的方格小组件高度不含行间隙，跳过）
       const sortedTops = slots.map((s) => s.top).sort((a, b) => a - b);
       const rowTops: number[] = [];
       for (const t of sortedTops) {
-        if (rowTops.length === 0 || t - rowTops[rowTops.length - 1] > 12) rowTops.push(t);
+        if (rowTops.length === 0 || t - rowTops[rowTops.length - 1] > 12 * sc) rowTops.push(t);
       }
       const pitchSrc = appSlot ?? slots.find((s) => !(s.kind === 'widget' && ['weather', 'bubble'].includes(widgetOfKey(s.id)))) ?? slots[0];
       const pitchSrcR = pitchSrc.kind === 'widget' ? WIDGET_SPAN_SIZE[widgetOfKey(pitchSrc.id)].r : 1;
-      const pitch = pitchSrc.h / pitchSrcR + GRID_GAP_Y;
+      const pitch = pitchSrc.h / pitchSrcR + GAPY;
       const top0 = rowTops[0];
       // 行边界取行间隙中点：round(f - 0.41)（行高 ≈76、行距 ≈92 → 间隙中点在 0.913 行距处）
       const gridRow = Math.max(0, Math.round((y - top0) / pitch - 0.41));
@@ -2123,10 +2136,11 @@ export default function HomeScreen() {
   const updateEdgeFlip = (cx: number) => {
     edgePointer.current = { x: cx };
     const rect = dragRootRect.current;
+    const ez = EDGE_ZONE_PX * (scaleRef.current || 1);
     let dir: -1 | 0 | 1 = 0;
     if (rect) {
-      if (cx - rect.left < EDGE_ZONE_PX) dir = -1;
-      else if (rect.right - cx < EDGE_ZONE_PX) dir = 1;
+      if (cx - rect.left < ez) dir = -1;
+      else if (rect.right - cx < ez) dir = 1;
     }
     if (dir !== edgeFlip.current) {
       edgeFlip.current = dir;
@@ -2208,6 +2222,8 @@ export default function HomeScreen() {
     // 先结束上一轮落位/FLIP 残留动画，保证 rect/几何采样干净
     finishTileAnimations();
     const r = el.getBoundingClientRect();
+    // 捕获本轮拖拽用的壳缩放系数（壳本地坐标换算基准，见 floatingCopy/flyIn/FLIP）
+    scaleRef.current = shellScale.value || 1;
     rectsRef.current = captureRects();
     dragRootRect.current = rootRef.current?.getBoundingClientRect() ?? null;
     dragPageW.current = trackRef.current?.getBoundingClientRect().width || dragRootRect.current?.width || 0;
@@ -2287,13 +2303,18 @@ export default function HomeScreen() {
         const resKey = applyMerge(merge, m.id);
         const v = dragVisualRef.current;
         if (v && !isFolderKey(m.id) && tRect) {
-          // 入夹飞入动画（iOS 同款）：App 图标从松手位置缩小飞进文件夹
+          // 入夹飞入动画（iOS 同款）：App 图标从松手位置缩小飞进文件夹。
+          // flyIn 层是 fixed（壳 transform 下用壳本地坐标渲染）→ 视口坐标先换算成本地
+          const rr = dragRootRect.current;
+          const sc = scaleRef.current || 1;
+          const ox = rr?.left ?? 0;
+          const oy = rr?.top ?? 0;
           setFlyIn({
             appId: m.id as AppId,
-            fx: v.x + dragDeltaRef.current.dx + (v.w - ICON_SIZE) / 2,
-            fy: v.y + dragDeltaRef.current.dy,
-            tx: tRect.left + tRect.width / 2 - ICON_SIZE / 2,
-            ty: tRect.top,
+            fx: (v.x + dragDeltaRef.current.dx + (v.w - ICON_SIZE) / 2 - ox) / sc,
+            fy: (v.y + dragDeltaRef.current.dy - oy) / sc,
+            tx: (tRect.left + tRect.width / 2 - ICON_SIZE / 2 - ox) / sc,
+            ty: (tRect.top - oy) / sc,
           });
         }
         if (resKey) {
@@ -2463,17 +2484,19 @@ export default function HomeScreen() {
     };
   }, [dragging]);
 
-  // FLIP：布局提交后，让位项从旧位置平滑滑到新位置（被拖项是 fixed 副本，不参与）
+  // FLIP：布局提交后，让位项从旧位置平滑滑到新位置（被拖项是 fixed 副本，不参与）。
+  // 位移采样自视口矩形；tile 动画在壳本地坐标系（壳可能被等比缩小）→ ÷ 缩放换算
   useLayoutEffect(() => {
     if (!dragging) return;
     // 先结束上一轮 FLIP（若仍在进行）：其 transform 会污染 fresh 采样
     finishTileAnimations();
     const fresh = captureRects();
+    const sc = scaleRef.current || 1;
     rectsRef.current.forEach((old, id) => {
       const now = fresh.get(id);
       if (!now) return;
-      const dx = old.left - now.left;
-      const dy = old.top - now.top;
+      const dx = (old.left - now.left) / sc;
+      const dy = (old.top - now.top) / sc;
       if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
       tileEls.current.get(id)?.animate(
         [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0px, 0px)' }],
@@ -2492,9 +2515,10 @@ export default function HomeScreen() {
     const el = tileEls.current.get(s.id);
     if (!el) return;
     const r = el.getBoundingClientRect();
+    const sc = scaleRef.current || 1;
     el.animate(
       [
-        { transform: `translate(${s.x - r.left}px, ${s.y - r.top}px) scale(1.06)` },
+        { transform: `translate(${(s.x - r.left) / sc}px, ${(s.y - r.top) / sc}px) scale(1.06)` },
         { transform: 'translate(0px, 0px) scale(1)' },
       ],
       { duration: 270, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }
@@ -2813,7 +2837,7 @@ export default function HomeScreen() {
                 {appCount}
               </span>
             )}
-            {/* 压住入夹：目标文件夹外圈呼吸的白色圆角方光环（白晕+缩放脉动，iOS 同款） */}
+            {/* 压住入夹：目标文件夹外圈呼吸的圆角方边框（缩放脉动，无白晕） */}
             {merging && <span aria-hidden="true" className="merge-target-ring absolute -inset-[6px] rounded-[21px] border-2 border-white/95" />}
           </span>
           <span
@@ -2846,7 +2870,7 @@ export default function HomeScreen() {
               <AppUnreadBadge appId={tile.id} count={appUnreadOf(tile.id)} />
             </>
           )}
-          {/* 压住建夹：目标 App 外圈呼吸的白色圆角方光环（白晕+缩放脉动，iOS 同款，用户要求光环在目标 APP 外面） */}
+          {/* 压住建夹：目标 App 外圈呼吸的圆角方边框（缩放脉动，无白晕，用户要求光环在目标 APP 外面） */}
           {mergingHere && <span aria-hidden="true" className="merge-target-ring absolute -inset-[6px] rounded-[21px] border-2 border-white/95" />}
         </span>
         <span
@@ -2862,22 +2886,32 @@ export default function HomeScreen() {
     );
   };
 
-  /** 浮动副本（fixed + 跟随指针，挂在根层级渲染，绝不落入带 backdrop-filter 的容器内） */
+  /** 浮动副本（fixed + 跟随指针，挂在根层级渲染，绝不落入带 backdrop-filter 的容器内）。
+   *  壳 transform 后 fixed 以壳为包含块（壳本地坐标、缩放前坐标系）→ 拖拽逻辑给的
+   *  视口矩形/位移先 ÷ 壳缩放并平移到壳原点，副本才与手指重合 */
   const floatingCopy = (tile: Tile | null) => {
     if (!dragVisual || !tile) return null;
+    const rr = dragRootRect.current;
+    const sc = scaleRef.current || 1;
+    const lx = (dragVisual.x - (rr?.left ?? 0)) / sc;
+    const ly = (dragVisual.y - (rr?.top ?? 0)) / sc;
+    const lw = dragVisual.w / sc;
+    const lh = dragVisual.h / sc;
+    const ldx = dragDelta.dx / sc;
+    const ldy = dragDelta.dy / sc;
     // 合并预览中：被拖 App/文件夹轻微收拢（iOS 同款「即将入夹」），
-    // 呼吸的白色圆角方光环移到「目标」外圈（槽位渲染层处理，用户要求光环在目标 APP 外面）
+    // 呼吸的圆角方边框移到「目标」外圈（槽位渲染层处理，用户要求光环在目标 APP 外面）
     if (mergePreview && (tile.kind === 'app' || tile.kind === 'folder')) {
       return (
         <div
           aria-hidden="true"
           className="pointer-events-none fixed z-[80]"
           style={{
-            left: dragVisual.x,
-            top: dragVisual.y,
-            width: dragVisual.w,
-            height: dragVisual.h,
-            transform: `translate(${dragDelta.dx}px, ${dragDelta.dy}px)`,
+            left: lx,
+            top: ly,
+            width: lw,
+            height: lh,
+            transform: `translate(${ldx}px, ${ldy}px)`,
             transition: 'none',
             filter: 'drop-shadow(0 18px 30px rgba(0,0,0,0.5))',
           }}
@@ -2904,11 +2938,11 @@ export default function HomeScreen() {
         aria-hidden="true"
         className="pointer-events-none fixed z-[80]"
         style={{
-          left: dragVisual.x,
-          top: dragVisual.y,
-          width: dragVisual.w,
-          height: dragVisual.h,
-          transform: `translate(${dragDelta.dx}px, ${dragDelta.dy}px) scale(1.08)`,
+          left: lx,
+          top: ly,
+          width: lw,
+          height: lh,
+          transform: `translate(${ldx}px, ${ldy}px) scale(1.08)`,
           transition: 'none',
           filter: 'drop-shadow(0 18px 30px rgba(0,0,0,0.5))',
         }}
@@ -3250,9 +3284,10 @@ export default function HomeScreen() {
           })}
       </div>
 
-      {/* 浮动副本：挂在根层级（根元素无 transform/filter/backdrop-filter，fixed 即视口坐标）。
+      {/* 浮动副本：挂在根层级（根元素无 transform/filter/backdrop-filter，副本的 fixed
+          包含块 = 手机壳；壳被等比缩小时用壳本地坐标渲染，见 floatingCopy 开头的换算）。
           之前渲染在 Dock 容器内，Dock 的 backdrop-blur-2xl 使其成为 fixed 后代的包含块，
-          视口坐标被解释为相对 Dock → 副本飞出手机壳被裁掉，从 Dock 拖 App 时图标“消失”。 */}
+          坐标被解释为相对 Dock → 副本飞出手机壳被裁掉，从 Dock 拖 App 时图标“消失”。 */}
       {floatingCopy(floatingTile)}
 
       {/* 入夹飞入动画层：合并落手后 App 图标从松手点缩小飞进文件夹（纯视觉，挂在根层级） */}

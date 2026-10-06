@@ -12,6 +12,7 @@ import { ensureAccountOwnerContacts, migrateFromServer } from '@/lib/ios/contact
 import { ensureAppFontApplied } from '@/lib/ios/fonts';
 import { ensureKvReady } from '@/lib/ios/idb-kv';
 import { migrateLegacyAccounts } from '@/lib/ios/accounts';
+import { shellScale } from '@/lib/ios/shell-scale';
 import StatusBar from './StatusBar';
 import HomeScreen from './HomeScreen';
 import { preloadHeavyApps } from '@/components/apps/registry';
@@ -64,6 +65,13 @@ const IncomingCallLayer = dynamic(() => import('./IncomingCallLayer'), { ssr: fa
 const EDGE_ZONE = 72;
 /** 上滑超过该距离即打开多任务切换器（真机好滑：短距离即触发） */
 const OPEN_DELTA = 18;
+/** 桌面端机身逻辑尺寸（border-box，含 12px 边框；内部布局全部按此尺寸计算） */
+const FRAME_W = 390;
+const FRAME_H = 844;
+/** 桌面端机身四周留白（sm:p-8 = 32px） */
+const SHELL_PAD = 32;
+/** 缩放下限：窗口再矮也不缩得没法看（拖拽/文字仍可用） */
+const MIN_SCALE = 0.4;
 
 /**
  * 手机壳：桌面端显示 iPhone 机身外框（含电源键），移动端全屏。
@@ -91,6 +99,29 @@ export default function PhoneShell() {
   const shellRef = useRef<HTMLDivElement | null>(null);
   /** 底部边缘上滑手势进行中状态（fired 防止同一次滑动重复触发） */
   const edgeGesture = useRef<{ x: number; y: number; fired: boolean } | null>(null);
+  /** 桌面端机身等比缩放（按当前视口把 390×844 机身缩到正好放得下；移动端恒 1/非 desktop）。
+   *  矮窗口（预览面板/小笔记本）里固定 844px 高的机身底部会被裁掉——最下面一两行网格和
+   *  Dock 看不见也摸不着，App 就「不能往下放了」；缩放后整个机身始终完整可见可达。
+   *  壳 transform 后成为 fixed 后代的包含块，HomeScreen 渲染拖拽副本/飞入动画时用
+   *  shellScale.value 把视口坐标换算回壳本地坐标（见 shell-scale.ts）。 */
+  const [fit, setFit] = useState<{ desktop: boolean; scale: number }>({ desktop: false, scale: 1 });
+  useEffect(() => {
+    const compute = () => {
+      if (!window.matchMedia('(min-width: 640px)').matches) {
+        setFit({ desktop: false, scale: 1 });
+        shellScale.value = 1;
+        return;
+      }
+      const availW = window.innerWidth - SHELL_PAD * 2;
+      const availH = window.innerHeight - SHELL_PAD * 2;
+      const s = Math.max(MIN_SCALE, Math.min(1, availW / FRAME_W, availH / FRAME_H));
+      setFit({ desktop: true, scale: s });
+      shellScale.value = s;
+    };
+    compute();
+    window.addEventListener('resize', compute);
+    return () => window.removeEventListener('resize', compute);
+  }, []);
 
   // 启动时一次性迁移：旧版存服务端的联系人/微信背景图 → 本地 IndexedDB（先搬后删，详见 contacts-store.ts）
   useEffect(() => {
@@ -222,16 +253,23 @@ export default function PhoneShell() {
   if (!loaded) {
     return (
       <div className="flex min-h-[100svh] w-full items-center justify-center bg-[#dcdce1] dark:bg-black sm:p-8">
+        {/* 外层按缩放后尺寸占位（transform 不改变布局，需显式给包裹盒防溢出/滚动条） */}
         <div
-          className={`relative h-[100svh] w-full overflow-hidden bg-black sm:h-[844px] sm:w-[390px] sm:rounded-[56px] sm:border-[12px] sm:border-[#151517] sm:shadow-[0_40px_90px_-20px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.08)] ${
-            dark ? 'dark' : ''
-          }`}
+          className="relative h-[100svh] w-full shrink-0 sm:h-auto sm:w-auto"
+          style={fit.desktop ? { width: FRAME_W * fit.scale, height: FRAME_H * fit.scale } : undefined}
         >
-          {/* 灵动岛（开机阶段仅保留硬件开孔） */}
           <div
-            className="pointer-events-none absolute left-1/2 top-[11px] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
-            aria-hidden="true"
-          />
+            className={`relative h-[100svh] w-full overflow-hidden bg-black sm:h-[844px] sm:w-[390px] sm:rounded-[56px] sm:border-[12px] sm:border-[#151517] sm:shadow-[0_40px_90px_-20px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.08)] ${
+              dark ? 'dark' : ''
+            }`}
+            style={{ transform: `scale(${fit.scale})`, transformOrigin: 'top left' }}
+          >
+            {/* 灵动岛（开机阶段仅保留硬件开孔） */}
+            <div
+              className="pointer-events-none absolute left-1/2 top-[11px] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
+              aria-hidden="true"
+            />
+          </div>
         </div>
       </div>
     );
@@ -239,12 +277,19 @@ export default function PhoneShell() {
 
   return (
     <div className="flex min-h-[100svh] w-full items-center justify-center bg-[#dcdce1] dark:bg-black sm:p-8">
+      {/* 外层按缩放后尺寸占位（transform 不改变布局，需显式给包裹盒防溢出/滚动条）；
+          移动端不缩放，保持全屏 */}
       <div
-        ref={shellRef}
-        className={`relative h-[100svh] w-full overflow-hidden bg-black text-foreground sm:h-[844px] sm:w-[390px] sm:rounded-[56px] sm:border-[12px] sm:border-[#151517] sm:shadow-[0_40px_90px_-20px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.08)] ${
-          dark ? 'dark' : ''
-        }`}
+        className="relative h-[100svh] w-full shrink-0 sm:h-auto sm:w-auto"
+        style={fit.desktop ? { width: FRAME_W * fit.scale, height: FRAME_H * fit.scale } : undefined}
       >
+        <div
+          ref={shellRef}
+          className={`relative h-[100svh] w-full overflow-hidden bg-black text-foreground sm:h-[844px] sm:w-[390px] sm:rounded-[56px] sm:border-[12px] sm:border-[#151517] sm:shadow-[0_40px_90px_-20px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.08)] ${
+            dark ? 'dark' : ''
+          }`}
+          style={{ transform: `scale(${fit.scale})`, transformOrigin: 'top left' }}
+        >
         {/* 壁纸层：自定义壁纸绘制见 CustomWallpaperLayers（D6：四周「边缘色延伸带」——
             取原图最外一行/列像素拉伸铺出，无 blur、接缝逐像素同色，肉眼几乎看不出垫了东西；
             预设壁纸保持单层 cover，-inset-[2px] 超采样防边缘细缝） */}
@@ -357,6 +402,7 @@ export default function PhoneShell() {
           onClick={pressPower}
           className="absolute -right-[17px] top-[196px] z-[10] hidden h-[64px] w-[6px] rounded-r-[3px] bg-[#3a3a3d] transition-colors hover:bg-[#5a5a5e] active:bg-[#6a6a6e] sm:block"
         />
+        </div>
       </div>
     </div>
   );
