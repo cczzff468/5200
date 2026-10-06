@@ -16038,3 +16038,21 @@ Stage Summary:
 - 可靠性：endDrag try/finally + beginDrag 重入防护 + blur 收尾，任何异常/丢事件后拖拽状态都能自愈，不再出现浮动副本冻结半空
 - 视觉：呼吸白色圆角方光环（光晕+缩放脉动）按 iOS 样式罩在目标 App/文件夹外圈，被拖 App 收拢
 - 涉及文件：src/components/ios/HomeScreen.tsx、src/app/globals.css
+
+---
+Task ID: shell-fit-4
+Agent: Z.ai Code (主协调者)
+Task: 用户第四轮反馈——①入夹动画去掉白色光环（保留呼吸圆角方边框+缩放脉动）②界面按当前预览尺寸显示（矮窗口机身被裁）③APP 不能往下放了（拖到下面/Dock 不可达，第三轮修复后用户仍复现）
+
+Work Log:
+- 根因定位（「APP不能往下放了」真正元凶）：PhoneShell 桌面端机身固定 sm:h-[844px] sm:w-[390px]+p-8，视口高度 <932px（预览面板/小笔记本常态）时底部整段被裁——最下 1~2 行网格与 Dock 看不见也摸不着，拖拽无从谈起（此前三轮都是拖拽逻辑内因，本轮发现是外因几何裁切；390×844 全尺寸 E2E 因此一直测不出来）
+- 机身等比缩放：PhoneShell 新增 fit 状态（resize+640px 断点监听），s=min(1,(vw-64)/390,(vh-64)/844) 夹到[0.4,1]，机身 transform: scale(s) origin top-left，外层包裹盒显式给 390s×844s 占位（transform 不改布局，防溢出滚动条）；移动端全屏恒 1；开机屏同步处理。内部布局仍按 390×844 计算，视觉如图片整体缩放
+- 壳 transform 副作用接管：壳成为 fixed 后代包含块（padding box）→ 新建 src/lib/ios/shell-scale.ts 单例，HomeScreen 拖拽开始时 scaleRef 捕获，渲染层全部换算：浮动副本 left/top/w/h/delta ÷s 并平移到壳原点；flyIn fx/fy/tx/ty 同换算；FLIP/落位 WAAPI translate 增量 ÷s；滑动跟手 setTrackFollow 位移 ÷s；hitTest 空白兜底的 GRID_GAP_X/Y、12px 行聚类阈值、EDGE_ZONE_PX 同比 ×s；mergeScan 的 ICON_SIZE 口径 ×s（命中检测本身用视口矩形+clientX，缩放下天然一致，无需改）
+- 入夹动画去白晕：globals.css merge-target-breathe 删除两级 box-shadow 白晕，仅保留 scale 1→1.07 脉动+opacity 0.8→1 呼吸（用户要求「不要白色光环」）；目标外圈 border-2 白色圆角方边框保留；相关注释同步更新
+- E2E（agent-browser）：①1440×810 机身缩至 345×746 完整可见（matrix 0.8839 均匀、wrapper 精确占位、root=壳 padding box 校验）②缩放下长按拖主题→浮副本全程贴指针→Dock 第 4 位落位、电话被挤出回网格（此前用户主诉场景）③拖电话到下部空白网格落位 ✓④快拖文件到相机=顺移换位不建夹 ✓⑤压住 600ms 出预览：computed boxShadow=none、animation=merge-target-breathe、边框 2px 白 ✓ 松手建夹+网格重排 ✓⑥文件夹面板点开=324×725 恰好覆盖手机屏（fixed→absolute 全屏毛玻璃在缩放下正确）、点空白收起 ✓⑦缩放下轻扫翻页（track -100%=本页宽）✓⑧390×844 回归：scale(1) 全屏、拖相机进满员 Dock→主题被挤回网格 ✓⑨干净 reload 无 console 错误；dev.log 仅 Next.js dev worker HMR 噪音
+- 踩坑：MultiEdit 非原子（多次重复应用），PhoneShell 中间态重复块靠 rg 核查后逐条清理重写；agent-browser 坐标点击要按缩放后的视觉位置算（手机框 x∈[548,893]），第一次翻页测试点在框外空手而归
+
+Stage Summary:
+- 交付文件：src/components/ios/PhoneShell.tsx（fit 缩放+包裹盒+开机屏）、src/lib/ios/shell-scale.ts（新，缩放单例+坐标契约文档）、src/components/ios/HomeScreen.tsx（scaleRef+9 处坐标换算）、src/app/globals.css（merge-target-breathe 去白晕）
+- 核心结论：「不能往下放」是固定 844px 机身在矮视口被裁切的几何问题，缩放后底部/Dock 全程可见可达；拖拽/动画坐标系在壳 transform 下统一为「命中=视口、渲染=壳本地」双口径，换算集中在 HomeScreen 一处
+- 验证：eslint 0 错误、tsc 0 错误、九项浏览器 E2E 全通过、已推送 1062be4
