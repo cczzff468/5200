@@ -16246,3 +16246,27 @@ Stage Summary:
 - E2E（agent-browser 430×932 实测）：首页宫格彩色 SVG ✓；商家页四页签（订单角标）✓；商家订单→详情→返回商家闭环 ✓；加购→结算弹窗（21.60−2+1.50=21.10 正确）✓；提交→支付第一步微信/QQ ✓→微信渠道（零钱不足红字拦截/亲属卡可选）✓→亲属卡确认支付→待接单详情 ✓；团购详情→直接购买→截图7弹窗（黑条+粉横幅）✓→QQ渠道余额不足 ✓→微信亲属卡支付→订单已完成+消费时间+toast「已用小雪支付」✓；订单列表返回键+无底部 tab ✓；旧待使用团购单自动迁移已完成+消费时间 ✓；购物车/我的页对齐截图 ✓；全站 emoji 检测通过（noEmoji:true）
 - 改动文件：src/components/apps/meituan.tsx、src/lib/ios/meituan-data.ts、src/lib/ios/meituan-store.ts、src/components/apps/appstore.tsx、src/components/ios/IslandNotification.tsx
 - 不破坏既有功能：支付链路（微信/QQ 零钱银行卡亲属卡 + recordFcSpend 美团记忆感知）原样复用；MeituanOrderWatcher/island-notify 兼容；单聊/群聊/朋友圈/支付宝等未触碰
+
+---
+Task ID: meituan-4
+Agent: 主协调者 (Z.ai Code)
+Task: 美团 App 第四轮修改——支付界面改设置风格全页收银台、底部 tab 对齐真机、账号管理迁入设置页、购买弹窗删文案+点外关闭、新增收藏/浏览记录/退款售后三大功能
+
+Work Log:
+- meituan-store.ts：新增收藏（MtFavs：stores/dishes/deals 三类，mtLoadFavs/mtSaveFavs/mtToggleFav，键 mt-favs:<uid>）；新增浏览记录（MtHistItem，mtPushHistory 去重+50 条上限/mtLoadHistory/mtClearHistory）；新增退款售后（MtRefund 挂到 MtOrder.refund：reason/note/appliedAt/status pending|approved/amount/doneAt/channel，mtApplyRefund 全额原路退回，mtCanRefund 校验，mtLoadOrders 兼容旧数据，mtAdvanceOrders 内 20s 自动审核通过——已完成单保持 completed，进行中单退款后 canceled「退款成功，订单已关闭」，不产生灵动岛通知）
+- meituan.tsx（~4200 行）：
+  ① 支付界面重做（用户指「第三张」= 设置页风格）：PayMethodSheet 弹层删除 → PayPage 全页收银台——浅灰底 + 白圆角分组卡（应付金额卡 / 选择支付方式：微信支付+QQ支付带 radio / 选择支付渠道：该平台渠道列表 radio），余额不足灰显+红字拦截，底栏「确认支付 ¥xx」未选渠道禁用；确认后仍进 PayConfirmSheet（黄头+渠道+绿色支付钮），onChangeChannel 回收银台；收银台顶栏对齐设置页（返回键+居中标题+pt-54 避开状态栏）
+  ② 底部 tab 对齐截图2：推荐=黑底白 N 圆标（品牌标恒黑）、视频=播放圈+红点1、小团=黄底袋鼠凸起+彩虹 conic 环（图标区 24px 占位+absolute 44px 圆上凸，标签不再被压）、购物车/我的线性图标；选中态改黑色加粗（原误用黄色），删掉我的图标上的小金星装饰
+  ③ 新增设置页（截图3）：浅紫底+白卡分组（个人信息/收货地址｜账号安全·实名待完善/隐私设置｜支付设置/消息通知/通用设置/清理缓存｜长辈版·未成年人模式·语言切换｜关于美团/意见反馈｜切换账号/退出登录红字）；我的页删除原「收货地址管理/切换账号/退出登录」卡，设置齿轮改进设置页；subReturn 机制：设置进的收货地址/关于美团返回时回设置，弹层管理地址进的原路返回
+  ④ 收藏页（截图1）：白底+星标收藏 chip（N 项计数）+收藏团购卡+商家卡内菜品行（黄圆勾选框/菜品图/红价/步进器−1+，与截图1逐项对齐）+纯商家行（评分·距离+黄星取消）；商家页头图收藏钮与团购详情收藏钮改为真实切换（黄亮填充），商家页菜品图右上角加粉色心形收藏钮；选中菜品后底部条「取消收藏(n)/加入购物车(n)」（跨店自动切换商家并提示）；购物车收藏 chip 与我的页收藏宫格均进收藏页
+  ⑤ 浏览记录页：今天/更早分组（商家行=封面+评分·月售·距离+时间，团购行=图+价+折扣+时间），右上清空；root openMerchant/openDeal 统一打点（sessionRef 取 uid）
+  ⑥ 退款售后：订单详情已支付单（待接单/已接单/配送中/已完成）底栏加「申请退款」橙描边钮 → RefundApplySheet（退款金额卡+原路退回渠道提示+六项原因 radio+补充说明+提交申请）；详情页加退款进度卡（退款审核中橙/已退款绿+原因/方式/申请时间/退款时间）；订单列表退款/售后页签改为按 refund||canceled 匹配，卡头加「退款中/已退款」chip
+  ⑦ 购买弹窗：删除面板外黑条「未成团自动退·过期自动退」与面板内粉条「您正在购买的商品需要到商家店内消费」；面板上移（top-108→64）露出面积更小；全部弹层遮罩加深至 bg-black/60；DealConfirmSheet/CheckoutSheet/RefundApplySheet 点击面板外任意区域关闭（收银台整页用返回键取消）
+- 兼容检查：MeituanOrderWatcher/island-notify 未触碰；亲属卡支付 recordFcSpend 美团记忆感知原样复用；微信/QQ 一键登录与账号隔离不变；eslint + tsc --noEmit 全绿
+- E2E（agent-browser 430×932）：设置页布局/收货地址进回导航 ✓；商家页心形收藏+星标 → 收藏页截图1布局（勾选+步进+加购 toast「已加入购物车」→ 购物车出现商品）✓；浏览记录今天分组+清空入口 ✓；团购详情→直接购买→弹窗无两段文案+点外关闭 ✓；提交订单→收银台（微信/QQ radio→QQ 余额不足红字拦截→微信→零钱不足拦截→亲属卡可选）→确认支付→正在支付→订单已完成 ✓；已完成订单申请退款→原因单→提交→退款审核中卡→20s 后自动已退款（退款时间/原路退回亲属卡）✓；退款/售后页签含退款 chip 与已取消单 ✓
+- 未解歧义说明：用户「支付界面是第三张那样的」按本轮第三张截图（设置页）的分组白卡风格实现为全页收银台；「全部后面的白色面板」按弹层背后白色页面残留处理（遮罩加深+面板上移+支付改全页），如另有所指待用户再指认
+
+Stage Summary:
+- 美团 8 项修改全部落地：全页收银台两步支付、真机底部 tab、账号管理进设置页、购买弹窗净化+点外关闭、收藏/浏览记录/退款售后三套功能+界面全可用，数据仍按账号隔离持久化
+- 改动文件：src/components/apps/meituan.tsx、src/lib/ios/meituan-store.ts
+- eslint/tsc 零告警，E2E 全流程 agent-browser 实测通过

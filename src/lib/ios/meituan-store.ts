@@ -286,6 +286,82 @@ export interface MtOrderItem {
   img?: string;
 }
 
+// ---------------- 收藏（商家/菜品/团购） ----------------
+
+export interface MtFavs {
+  stores: string[];
+  dishes: string[];
+  deals: string[];
+}
+
+const favsKey = (uid: string) => `mt-favs:${uid}`;
+
+export function mtLoadFavs(uid: string): MtFavs {
+  const f = kvGet<Partial<MtFavs>>(favsKey(uid));
+  const arr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  return { stores: arr(f?.stores), dishes: arr(f?.dishes), deals: arr(f?.deals) };
+}
+
+export function mtSaveFavs(uid: string, favs: MtFavs): void {
+  kvSet(favsKey(uid), favs);
+}
+
+/** 切换收藏状态；返回切换后是否已收藏 */
+export function mtToggleFav(uid: string, kind: keyof MtFavs, id: string): boolean {
+  const favs = mtLoadFavs(uid);
+  const list = favs[kind];
+  const has = list.includes(id);
+  const next = has ? list.filter((x) => x !== id) : [id, ...list];
+  mtSaveFavs(uid, { ...favs, [kind]: next.slice(0, 99) });
+  return !has;
+}
+
+// ---------------- 浏览记录（商家/团购，按时间倒序） ----------------
+
+export interface MtHistItem {
+  kind: 'merchant' | 'deal';
+  id: string;
+  at: number;
+}
+
+const histKey = (uid: string) => `mt-history:${uid}`;
+const MAX_HIST = 50;
+
+export function mtLoadHistory(uid: string): MtHistItem[] {
+  const list = kvGet<Partial<MtHistItem>[]>(histKey(uid));
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((h): h is MtHistItem => Boolean(h) && typeof h.id === 'string' && typeof h.at === 'number' && (h.kind === 'merchant' || h.kind === 'deal'))
+    .slice(0, MAX_HIST);
+}
+
+export function mtPushHistory(uid: string, kind: 'merchant' | 'deal', id: string): void {
+  if (!uid || !id) return;
+  const rest = mtLoadHistory(uid).filter((h) => !(h.kind === kind && h.id === id));
+  kvSet(histKey(uid), [{ kind, id, at: Date.now() }, ...rest].slice(0, MAX_HIST));
+}
+
+export function mtClearHistory(uid: string): void {
+  kvSet(histKey(uid), []);
+}
+
+// ---------------- 退款/售后 ----------------
+
+export interface MtRefund {
+  reason: string;
+  note?: string;
+  /** 申请时间 */
+  appliedAt: number;
+  /** pending=商家审核中 / approved=已退款（原路退回） */
+  status: 'pending' | 'approved';
+  /** 退款金额（当前为全额） */
+  amount: number;
+  /** 审核通过/到账时间 */
+  doneAt?: number;
+  /** 原路退回渠道（微信零钱/QQ钱包余额/亲属卡等） */
+  channel?: string;
+}
+
 export interface MtOrder {
   id: string;
   /** 数据隔离 uid（订单归属的美团账号） */
@@ -306,6 +382,8 @@ export interface MtOrder {
   address?: MtAddress;
   /** 到店消费完成时间（团购单支付成功即写入） */
   consumedAt?: number;
+  /** 退款/售后信息（申请后挂载） */
+  refund?: MtRefund;
   /** 支付方式：'wx' | 'qq'（pendingPay 时为空） */
   payIdp?: 'wx' | 'qq';
   /** 具体支付渠道展示名（零钱/银行卡/亲属卡） */
@@ -352,6 +430,18 @@ export function mtLoadOrders(uid: string): MtOrder[] {
       payIdp: o.payIdp === 'wx' || o.payIdp === 'qq' ? o.payIdp : undefined,
       payChannelLabel: typeof o.payChannelLabel === 'string' ? o.payChannelLabel : undefined,
       payFc: o.payFc === true,
+      refund:
+        o.refund && typeof o.refund === 'object' && typeof o.refund.appliedAt === 'number'
+          ? {
+              reason: typeof o.refund.reason === 'string' ? o.refund.reason : '用户申请退款',
+              note: typeof o.refund.note === 'string' ? o.refund.note : undefined,
+              appliedAt: o.refund.appliedAt,
+              status: o.refund.status === 'approved' ? 'approved' : 'pending',
+              amount: typeof o.refund.amount === 'number' ? o.refund.amount : 0,
+              doneAt: typeof o.refund.doneAt === 'number' ? o.refund.doneAt : undefined,
+              channel: typeof o.refund.channel === 'string' ? o.refund.channel : undefined,
+            }
+          : undefined,
       status: (o.status ?? 'pendingPay') as MtOrderStatus,
       createdAt: typeof o.createdAt === 'number' ? o.createdAt : Date.now(),
       paidAt: typeof o.paidAt === 'number' ? o.paidAt : undefined,
@@ -440,8 +530,69 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
     }
     return cur;
   });
-  if (changed) mtSaveOrders(uid, next);
+  // 退款售后：审核中超时自动通过（原路退回，不产生灵动岛通知）
+  let refundChanged = false;
+  const withRefunds = next.map((o) => {
+    if (!o.refund || o.refund.status !== 'pending') return o;
+    if (now - o.refund.appliedAt < REFUND_AUTO_MS) return o;
+    refundChanged = true;
+    const approved: MtOrder = {
+      ...o,
+      // 未完成的配送单退款后关闭
+      status: o.status === 'completed' ? o.status : 'canceled',
+      cancelReason: o.status === 'completed' ? o.cancelReason : '退款成功，订单已关闭',
+      statusLog:
+        o.status === 'completed'
+          ? o.statusLog
+          : [...o.statusLog, { status: 'canceled' as const, at: now }],
+      refund: { ...o.refund, status: 'approved', doneAt: now, channel: mtRefundChannelOf(o) },
+    };
+    return approved;
+  });
+  if (changed || refundChanged) mtSaveOrders(uid, withRefunds);
   return transitions;
+}
+
+// ---------------- 退款/售后操作 ----------------
+
+/** 审核时长（演示节奏：20 秒后自动通过，原路退回） */
+const REFUND_AUTO_MS = 20_000;
+
+/** 是否可申请退款（已支付且未退款未取消） */
+export function mtCanRefund(o: MtOrder): boolean {
+  return !o.refund && o.status !== 'pendingPay' && o.status !== 'canceled';
+}
+
+/** 提交退款申请（全额、原路退回） */
+export function mtApplyRefund(uid: string, orderId: string, reason: string, note?: string): boolean {
+  const orders = mtLoadOrders(uid);
+  const target = orders.find((o) => o.id === orderId);
+  if (!target || !mtCanRefund(target)) return false;
+  const now = Date.now();
+  const next = orders.map((o) =>
+    o.id === orderId
+      ? {
+          ...o,
+          refund: {
+            reason: reason.trim() || '用户申请退款',
+            note: note?.trim() || undefined,
+            appliedAt: now,
+            status: 'pending' as const,
+            amount: o.total,
+            channel: o.payChannelLabel ?? (o.payIdp === 'qq' ? 'QQ钱包' : '微信支付'),
+          },
+        }
+      : o
+  );
+  mtSaveOrders(uid, next);
+  window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+  return true;
+}
+
+/** 原路退回渠道短名（订单详情展示） */
+function mtRefundChannelOf(o: MtOrder): string {
+  if (o.payChannelLabel) return o.payChannelLabel;
+  return o.payIdp === 'qq' ? 'QQ钱包余额' : '微信零钱';
 }
 
 /** 商家接单后写一条骑手取餐前的等待文案（订单详情/通知用） */
