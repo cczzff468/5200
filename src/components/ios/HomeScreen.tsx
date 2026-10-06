@@ -94,7 +94,8 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  * - 添加界面的方式：编辑模式把 App 拖到屏幕左右边缘停留 ~320ms 翻到相邻页（可连续翻）；
  *   在最后一页继续贴住右缘 → 自动新建一页接住 App（页数无上限，每次拖拽限建一页）；
  *   退出编辑时自动清掉空白页（末尾连续的与中间空页都回收，至少保留 1 页）；
- * - 页容量：含小组件的页 14 格（小组件行 + 3 行 App），普通页 20 格，超员拒绝落入；
+ * - 页容量：格数上限（含小组件的页 14 格、普通页 20 格）+ 行数硬上限 6 行（主屏永不上下滚动，
+ *   App 不落到页点/Dock 下方的可视区外），超员拒绝落入；
  * - 布局持久化到 IndexedDB（settings store，key = 'homeLayout'），兼容旧单页格式
  *   （旧 grid 迁移为第 1 页；v6 起旧版本整体重置为新排布）。
  *
@@ -366,6 +367,27 @@ function pageCap(page: Tile[], insertingWidget = false): number {
   return page.some((t) => t.kind === 'widget') || insertingWidget ? PAGE_WIDGET_CAP : PAGE_CAP;
 }
 
+/** 主屏网格最大行数（用户要求：主屏不上下滑动、App 不放到可视区下方；Dock 不受影响）：
+ *  页网格从顶部内边距 72px（编辑模式 120px）到页点上方的可视边界（844−164=680px）共 608px，
+ *  行高 76px+行距 16px → 6 行（536px）完整可见、7 行（628px）会顶进页点/Dock 区域。
+ *  页面已改为 overflow-hidden 永不滚动，所有落点/补位/加小组件入口都按 6 行封顶 */
+const MAX_PAGE_ROWS = 6;
+
+/** 一页 tiles 顺序摆放占用的总行数（含小组件跨行与空占位格；空页=0） */
+function rowsOf(tiles: Tile[]): number {
+  if (tiles.length === 0) return 0;
+  const { end } = flowPositions(tiles);
+  return end.c === 0 ? end.r : end.r + 1;
+}
+
+/** 页内还能否容纳 extra 一批 tile：把「现内容 + extra」整体模拟摆放后校验——
+ *  行数 ≤ MAX_PAGE_ROWS（硬约束：超出即顶进页点/Dock 被裁，页面又不可滚动）
+ *  且格数 ≤ 页容量。extra 会按顺序接在页尾摆放，与各入口的追加语义一致 */
+function pageHasRoom(page: Tile[], extra: Tile[] = [], insertingWidget = false): boolean {
+  if (page.length + extra.length > pageCap(page, insertingWidget)) return false;
+  return rowsOf([...page, ...extra]) <= MAX_PAGE_ROWS;
+}
+
 /**
  * 校验/修复持久化布局：
  * - 兼容旧单页 {grid}：迁移为第 1 页；
@@ -597,12 +619,48 @@ function sanitizeLayout(raw: unknown): HomeLayout {
     p4.splice(ti >= 0 ? ti + 1 : p4.length, 0, { kind: 'widget', widget: 'polaroid' });
   }
 
-  // 缺失的 App：从末尾往前找还有容量的页补入，都满了就开新页
+  // 存量超行页一次性归位（用户要求主屏不上下滚动、App 不放到可视区下方；本步必须
+  // 在小组件补回之后——unshift 通栏小组件可能把存量页顶超 6 行）：逐页把 6 行装不下的
+  // 尾部 tile 摘出（优先摘 App/文件夹，页内只剩小组件仍超行才摘小组件），按原顺序
+  // 回填到来源页之后第一张装得下的页（都不满则新建页；小组件按跨行占位校验）
+  const carry: { t: Tile; from: number }[] = [];
+  for (let i = 0; i < pages.length; i++) {
+    const pg = pages[i];
+    const overflow: Tile[] = [];
+    while (rowsOf(pg) > MAX_PAGE_ROWS && pg.length > 0) {
+      let cut = -1;
+      for (let j = pg.length - 1; j >= 0; j--) {
+        if (pg[j].kind !== 'widget') {
+          cut = j;
+          break;
+        }
+      }
+      if (cut < 0) cut = pg.length - 1;
+      overflow.unshift(...pg.splice(cut));
+    }
+    carry.push(...overflow.map((t) => ({ t, from: i })));
+  }
+  for (const { t, from } of carry) {
+    let target = -1;
+    for (let i = Math.min(from + 1, pages.length - 1); i < pages.length; i++) {
+      if (pageHasRoom(pages[i], [t], t.kind === 'widget')) {
+        target = i;
+        break;
+      }
+    }
+    if (target === -1) {
+      pages.push([]);
+      target = pages.length - 1;
+    }
+    pages[target].push(t);
+  }
+
+  // 缺失的 App：从末尾往前找还有容量的页补入，都满了就开新页（同样受 6 行封顶约束）
   for (const id of allIds) {
     if (hidden.has(id) || placed.has(id)) continue;
     let target = -1;
     for (let i = pages.length - 1; i >= 0; i--) {
-      if (pages[i].length < pageCap(pages[i])) {
+      if (pageHasRoom(pages[i], [{ kind: 'app', id: id as AppId }])) {
         target = i;
         break;
       }
@@ -631,7 +689,7 @@ const persist = (l: HomeLayout) => {
 
 /**
  * 把拖拽项移动到目标区/目标页/目标索引（跨区、跨页可搬；小组件/文件夹不可进 Dock；
- * Dock 超员时挤出最后一个回网格；目标页超容量则整体放弃）。
+ * Dock 超员时挤出最后一个回网格；目标页超容量/超 6 行则整体放弃）。
  * 命中索引来自拖拽开始时捕获的静态几何，先移除被拖项再插入目标索引即可。
  * 拖拽源支持文件夹（zone:'folder'）：把 App 从文件夹里移出；
  * 文件夹解体由调用方处理（dissolveSmallFolders：全部拖出或只剩 1 个 App 时消失）。
@@ -708,27 +766,14 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
     return { ...layout, pages, dock, folders };
   }
 
-  // 落入网格某页：超容量整体放弃（放回原位）；同页内换位不改变页内数量，始终放行
+  // 落入网格某页：超容量/超 6 行则整体放弃（放回原位）；行数是硬约束（含同页换位——
+  // 垫空占位格可能新开行），主屏页面不可滚动，超出即顶进页点/Dock 被裁
   //（folder 仅作拖拽源永不作为落点，见 Hit 注释——此处收窄类型）
   if (to.zone !== 'grid') return layout;
   const target = pages[Math.min(to.page, pages.length - 1)];
   const samePageMove = fromZone === 'grid' && fromPage === to.page;
   const padEmpty = to.zone === 'grid' ? Math.max(0, Math.min(8, to.padEmpty ?? 0)) : 0;
-  if (!samePageMove && target.length + padEmpty >= pageCap(target, isWidget)) {
-    if (fromZone === 'grid' || fromZone === 'folder') {
-      const homePage = fromZone === 'grid' ? fromPage : Math.max(0, pages.length - 1);
-      const tile: Tile = isWidget
-        ? { kind: 'widget', widget: widgetOfKey(id) }
-        : isFolder
-          ? { kind: 'folder', id: folderIdOfKey(id) }
-          : { kind: 'app', id: id as AppId };
-      pages[homePage].splice(Math.max(0, Math.min(pages[homePage].length, fromIndex)), 0, tile);
-    } else {
-      dock.splice(fromIndex, 0, id as AppId);
-    }
-    return { ...layout, pages, dock, folders };
-  }
-  const idx = Math.max(0, Math.min(target.length, to.index));
+  const idx0 = Math.max(0, Math.min(target.length, to.index));
   // 空占位格：把新项从自然落点推到指针所指的（行,列）（拖到行尾空位/任意空白格的精确定位）
   const empties: Tile[] = Array.from({ length: padEmpty }, () => ({ kind: 'empty' as const }));
   const tile: Tile = isWidget
@@ -736,7 +781,16 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
     : isFolder
       ? { kind: 'folder', id: folderIdOfKey(id) }
       : { kind: 'app', id: id as AppId };
-  target.splice(idx, 0, ...empties, tile);
+  if (!pageHasRoom(target, [...empties, tile], isWidget)) {
+    if (fromZone === 'grid' || fromZone === 'folder') {
+      const homePage = fromZone === 'grid' ? fromPage : Math.max(0, pages.length - 1);
+      pages[homePage].splice(Math.max(0, Math.min(pages[homePage].length, fromIndex)), 0, tile);
+    } else {
+      dock.splice(fromIndex, 0, id as AppId);
+    }
+    return { ...layout, pages, dock, folders };
+  }
+  target.splice(idx0, 0, ...empties, tile);
   return { ...layout, pages, dock, folders };
 }
 
@@ -764,7 +818,7 @@ function dissolveSmallFolders(l: HomeLayout): HomeLayout {
     if (pages.some((p) => p.some((t) => t.kind === 'app' && t.id === id))) continue;
     let target = -1;
     for (let i = pages.length - 1; i >= 0; i--) {
-      if (pages[i].length < pageCap(pages[i])) {
+      if (pageHasRoom(pages[i], [{ kind: 'app', id }])) {
         target = i;
         break;
       }
@@ -1486,13 +1540,14 @@ export default function HomeScreen() {
       try {
         const rec = await localDB.get('settings', LAYOUT_KEY);
         if (alive) {
-          const raw = rec?.value as { v?: number } | undefined;
+          const raw = rec?.value as { v?: number; pages?: unknown } | undefined;
           const next = sanitizeLayout(raw);
           layoutRef.current = next;
           setLayout(next);
           // 迁移回写：旧版本布局经 sanitize 升级后立即持久化——否则主题 App「小组件」
-          // 界面等直读 DB 的场景会看到旧布局，且每次加载都要重跑迁移
-          if (raw?.v !== LAYOUT_VERSION) persist(next);
+          // 界面等直读 DB 的场景会看到旧布局，且每次加载都要重跑迁移；
+          // 存量超行页被重排（6 行封顶）时同样回写，保持 DB 与屏上布局一致
+          if (raw?.v !== LAYOUT_VERSION || JSON.stringify(next.pages) !== JSON.stringify(raw?.pages ?? null)) persist(next);
         }
       } catch {
         /* IndexedDB 不可用时保持默认 */
@@ -1772,10 +1827,12 @@ export default function HomeScreen() {
     const queue = [...folder.apps];
     let cur2 = pg;
     let at = Math.max(0, idx);
+    const roomForNext = (pi: number): boolean =>
+      queue.length > 0 && pageHasRoom(pages[pi], [{ kind: 'app', id: queue[0] as AppId }]);
     while (queue.length) {
       if (cur2 < 0 || cur2 >= pages.length) {
         for (let i = pages.length - 1; i >= 0; i--) {
-          if (pages[i].length < pageCap(pages[i])) {
+          if (roomForNext(i)) {
             cur2 = i;
             break;
           }
@@ -1786,14 +1843,14 @@ export default function HomeScreen() {
         }
         at = pages[cur2].length;
       }
-      while (queue.length && pages[cur2].length < pageCap(pages[cur2])) {
+      while (roomForNext(cur2)) {
         pages[cur2].splice(Math.min(at, pages[cur2].length), 0, { kind: 'app', id: queue.shift() as AppId });
         at++;
       }
       if (!queue.length) break;
       let next2 = -1;
       for (let i = cur2 + 1; i < pages.length; i++) {
-        if (pages[i].length < pageCap(pages[i])) {
+        if (roomForNext(i)) {
           next2 = i;
           break;
         }
@@ -1878,7 +1935,8 @@ export default function HomeScreen() {
   };
 
   /** 编辑模式「+」画廊：把全部 9 种小组件添加回主屏（× 删除后在此找回；已在屏上则忽略）。
-   *  落点 = 当前编辑页起第一张装得下的页（插入小组件后页容量按 14），都满则新建一页接住 */
+   *  落点 = 当前编辑页起第一张装得下的页（格数按 14、行数按 6 行封顶——小组件按跨行占位
+   *  校验，装不下会顺延到后面的页/新建页接住） */
   const addWidgetFromGallery = (kind: WidgetKind) => {
     const cur = layoutRef.current;
     if (cur.pages.some((p) => p.some((t) => t.kind === 'widget' && t.widget === kind))) return;
@@ -1887,7 +1945,7 @@ export default function HomeScreen() {
     const start = Math.min(pageRef.current, pages.length - 1);
     for (let off = 0; off < pages.length; off++) {
       const pi = (start + off) % pages.length;
-      if (pages[pi].length < pageCap(pages[pi], true)) {
+      if (pageHasRoom(pages[pi], [{ kind: 'widget', widget: kind }], true)) {
         target = pi;
         break;
       }
@@ -2092,8 +2150,9 @@ export default function HomeScreen() {
         return t.kind !== 'empty';
       });
       const { starts, after, end } = flowPositions(sim);
-      // 目标行夹到 flow 末行：内容下方空白不新开行，落到 flow 末行并按列定位
-      const targetRow = Math.min(gridRow, end.r);
+      // 目标行夹到 flow 末行与 6 行封顶之内：内容下方空白不新开行，落到 flow 末行并按列
+      // 定位；主屏不可滚动，落点行不得使总行数超过 MAX_PAGE_ROWS（超出会被 reorder 整体弹回）
+      const targetRow = Math.min(gridRow, end.r, MAX_PAGE_ROWS - 1);
       // 插入点：第一个 flow 起点 ≥ 目标格（行主序）的 tile 之前；没有则页尾
       let idx = sim.length;
       for (let i = 0; i < starts.length; i++) {
@@ -2182,14 +2241,19 @@ export default function HomeScreen() {
     }
   };
 
-  /** 翻页后把被拖项搬到新当前页末尾（页满时不搬，保留在原页） */
+  /** 翻页后把被拖项搬到新当前页末尾（页满/6 行装不下时不搬，保留在原页） */
   const moveDraggedToPageEnd = () => {
     const m = dragMeta.current;
     if (!m) return;
     const p = Math.min(pageRef.current, layoutRef.current.pages.length - 1);
     const tiles = layoutRef.current.pages[p] ?? [];
     const isWidget = isWidgetKey(m.id);
-    if (tiles.length >= pageCap(tiles, isWidget)) return;
+    const tile: Tile = isWidget
+      ? { kind: 'widget', widget: widgetOfKey(m.id) }
+      : isFolderKey(m.id)
+        ? { kind: 'folder', id: folderIdOfKey(m.id) }
+        : { kind: 'app', id: m.id as AppId };
+    if (!pageHasRoom(tiles, [tile], isWidget)) return;
     const cur = zoneIndexOf(m.id);
     if (cur && cur.zone === 'grid' && cur.page === p && cur.index === tiles.length - 1) return;
     setLayout(reorderForDrag(m.id, { zone: 'grid', page: p, index: tiles.length }));
@@ -2824,7 +2888,7 @@ export default function HomeScreen() {
         >
           <span
             className={`relative block h-[60px] w-[60px] rounded-[15px] bg-white/[0.22] p-[5px] shadow-[0_1px_6px_rgba(0,0,0,0.14)] ring-1 ring-white/25 backdrop-blur-md transition-transform duration-200 ${
-              merging ? 'scale-[1.06]' : ''
+              merging ? 'merge-target-pulse' : ''
             }`}
           >
             {folderIconNode(apps6)}
@@ -2837,8 +2901,6 @@ export default function HomeScreen() {
                 {appCount}
               </span>
             )}
-            {/* 压住入夹：目标文件夹外圈呼吸的圆角方边框（缩放脉动，无白晕） */}
-            {merging && <span aria-hidden="true" className="merge-target-ring absolute -inset-[6px] rounded-[21px] border-2 border-white/95" />}
           </span>
           <span
             className={`max-w-[74px] truncate text-center text-[11px] font-medium leading-none ${
@@ -2859,7 +2921,7 @@ export default function HomeScreen() {
         className={`flex w-[68px] flex-col items-center gap-[5px] ${edit && dragId !== tile.id ? 'home-jiggle' : 'transition-transform duration-150 active:scale-90'}`}
         style={edit ? { animationDelay: `${(i % 5) * -0.06}s` } : undefined}
       >
-        <span className="relative block h-[60px] w-[60px]">
+        <span className={`relative block h-[60px] w-[60px] ${mergingHere ? 'merge-target-pulse' : ''}`}>
           {mergingHere && dragId ? (
             <span className="block h-full w-full rounded-[15px] bg-white/[0.22] p-[5px] shadow-[0_1px_6px_rgba(0,0,0,0.14)] ring-1 ring-white/25 backdrop-blur-md">
               {folderIconNode([tile.id, dragId as AppId])}
@@ -2870,8 +2932,6 @@ export default function HomeScreen() {
               <AppUnreadBadge appId={tile.id} count={appUnreadOf(tile.id)} />
             </>
           )}
-          {/* 压住建夹：目标 App 外圈呼吸的圆角方边框（缩放脉动，无白晕，用户要求光环在目标 APP 外面） */}
-          {mergingHere && <span aria-hidden="true" className="merge-target-ring absolute -inset-[6px] rounded-[21px] border-2 border-white/95" />}
         </span>
         <span
           className={`max-w-[74px] truncate text-center text-[11px] font-medium leading-none ${
@@ -2900,7 +2960,7 @@ export default function HomeScreen() {
     const ldx = dragDelta.dx / sc;
     const ldy = dragDelta.dy / sc;
     // 合并预览中：被拖 App/文件夹轻微收拢（iOS 同款「即将入夹」），
-    // 呼吸的圆角方边框移到「目标」外圈（槽位渲染层处理，用户要求光环在目标 APP 外面）
+    // 目标图标原地呼吸缩放脉动（槽位渲染层处理；用户要求白色边框全部删除）
     if (mergePreview && (tile.kind === 'app' || tile.kind === 'folder')) {
       return (
         <div
@@ -3126,13 +3186,10 @@ export default function HomeScreen() {
 
       {/* 分页视口：绝对定位铺满整块屏幕（横竖都全屏——用户要求把这个「扩展到全局」）。
           横向：视口占满全屏宽，翻页裁切发生在屏幕真实边缘（水平内边距由每页 px-5 承担，
-          否则滑动时内容在离边缘 20px 处被硬裁、两侧露壁纸条——D2 修复）；纵向：视口占满
-          全屏高——旧实现视口只占中间约 600px（上下让位状态栏/页点/Dock），小组件多的页
-          （每页上限 14 格）底部小组件会被 overflow-hidden 悬空裁掉，静止状态就被「盖住」
-          （实测日历下半截消失、下一行小组件整行不可见）。现在每页自身可竖向滚动
-          （overscroll-contain 防浏览器下拉刷新；拖拽中 overflow 冻结——scrollTop 保留，
-          保证边缘翻页与拖拽落位的几何采样一致），底部小组件滚上来即完整可见；
-          页点与 Dock（relative z-10）悬浮在页面之上，内容从其下方穿过 */}
+          否则滑动时内容在离边缘 20px 处被硬裁、两侧露壁纸条——D2 修复）；纵向：页面
+          overflow-hidden 永不上下滚动（用户要求：APP 放到下面时主屏会跟着竖向滑动，已废）——
+          页内容按 6 行封顶（MAX_PAGE_ROWS），全部落在页点上方可视区内，存量超行布局加载时
+          由 sanitizeLayout 摘出重排到后续页；页点与 Dock（relative z-10）悬浮在页面之上 */}
       <div className="absolute inset-0">
         <div
           ref={trackRef}
@@ -3144,11 +3201,9 @@ export default function HomeScreen() {
             <div
               key={p}
               data-testid={`home-page-${p}`}
-              data-page-scroller
               aria-hidden={p !== page}
               inert={p !== page}
-              className="no-scrollbar h-full w-full shrink-0 overflow-y-auto overscroll-contain [touch-action:pan-y]"
-              style={{ overflow: dragId ? 'hidden' : undefined }}
+              className="no-scrollbar h-full w-full shrink-0 overflow-hidden"
             >
               <div
                 className={`grid h-fit w-full grid-cols-4 items-start gap-x-2 gap-y-[16px] px-5 pb-[164px] transition-[padding-top] duration-300 ${

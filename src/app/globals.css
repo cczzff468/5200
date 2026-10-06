@@ -266,24 +266,24 @@
   animation: folder-pop 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-/* 压住入夹：目标外圈呼吸的圆角方边框（仅缩放脉动+淡入淡出，用户要求去掉白色光环/光晕） */
+/* 压住入夹：目标图标自身的缩放脉动+呼吸（用户要求：白色边框/光环全部删除，只留轻微缩放脉动） */
 @keyframes merge-target-breathe {
   0%,
   100% {
     transform: scale(1);
-    opacity: 0.8;
+    opacity: 0.92;
   }
   50% {
     transform: scale(1.07);
     opacity: 1;
   }
 }
-.merge-target-ring {
+.merge-target-pulse {
   animation: merge-target-breathe 1.05s ease-in-out infinite;
   pointer-events: none;
 }
 
-/* 合并预览期间被拖 App 轻微收拢（iOS 同款：手指上的图标缩一点，光环在目标上） */
+/* 合并预览期间被拖 App 轻微收拢（iOS 同款：手指上的图标缩一点，目标图标呼吸脉动） */
 @keyframes merge-copy-shrink {
   from {
     transform: scale(1.08);
