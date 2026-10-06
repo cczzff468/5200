@@ -16056,3 +16056,22 @@ Stage Summary:
 - 交付文件：src/components/ios/PhoneShell.tsx（fit 缩放+包裹盒+开机屏）、src/lib/ios/shell-scale.ts（新，缩放单例+坐标契约文档）、src/components/ios/HomeScreen.tsx（scaleRef+9 处坐标换算）、src/app/globals.css（merge-target-breathe 去白晕）
 - 核心结论：「不能往下放」是固定 844px 机身在矮视口被裁切的几何问题，缩放后底部/Dock 全程可见可达；拖拽/动画坐标系在壳 transform 下统一为「命中=视口、渲染=壳本地」双口径，换算集中在 HomeScreen 一处
 - 验证：eslint 0 错误、tsc 0 错误、九项浏览器 E2E 全通过、已推送 1062be4
+
+---
+Task ID: notify-sound-1
+Agent: Z.ai Code (主协调者)
+Task: 设置 › 通知页新增完整「声音与铃声」配置系统——五分类提示音（接收/发送/朋友圈互动/QQ动态互动/群消息）每类独立铃声选择/试听/音量/开关/免打扰时段 + 全局总开关/总音量/震动/免打扰 + 内置铃声 + 自定义铃声上传永久保存/删除（用户六节需求全量落地）
+
+Work Log:
+- 挂点选型（少侵入+全覆盖）：接收/群消息收口到 island-notify.pushChatNotification（普通回复/主动消息/跨 App 唤醒全走此函数，sessionKey 含 ':group:' 分流群消息类，其余为接收类）；朋友圈/QQ动态互动收口到 moments.ts pushMomentNotice（点赞 1355/评论回复 1514/转发 1176 三处调用全汇于此，platform wx→moments / qq→qzone）；发送声挂五端 send()（wechat 6359 / qq 4933 / chat 2233 / wx-group 3770 / qq-group 3446，均在校验与拉黑拦截之后、ttsSend 分支之前——文字/图片/组合/转语音共用链）+ 各端 sendSticker
+- 声音引擎（新文件 src/lib/ios/notify-sound.ts，~630 行）：zustand useNotifySound（settings/ringtones/loaded + load/update/updateCategory/refreshRingtones，改动即时写 settings 表 'notifySound' 键）；模块导入即异步预热（首条消息到达前设置必就绪）；8 种内置铃声全部 Web Audio 实时合成（备注=接收默认 E6→C6 双音、清脆=C大调琶音、叮、铃铛非谐泛音、马林巴三角波双击、水泡上滑、水滴下滑、嗖=带通噪声扫频=发送默认），共享 AudioContext 懒建+suspended 自动 resume，节点播完延迟断开防泄漏；自定义铃声走 HTMLAudioElement+ObjectURL 缓存，新播停旧防叠音；playTone custom 记录缺失自动回落 builtin:note 永不无声失败
+- 免打扰 inDndWindow 支持'HH:mm'解析与跨夜区间（22:00–08:00，start>end 取或）；isNotifySoundSilent 四级闸门 = 总开关→分类开关→全局免打扰→分类免打扰；实际音量=总音量×分类音量；震动 navigator.vibrate（接收/群=[16,70,16] 两短，其余 12ms 轻振），不支持的环境自动忽略；playNotifySound 整体 try/catch——提示音绝不影响消息主流程
+- db.ts 升版 7→8：新增 ringtones 表（id/name/mime/blob/duration/createdAt + createdAt 索引），upgrade 块含 contains 防重入；addCustomRingtone 校验（audio 类型/8MB/非空）+ measureAudioDuration 探时长 + 文件名去扩展截 40 字；deleteCustomRingtone 联动三步：清 ObjectURL 缓存→使用中分类自动回落默认铃声并重新持久化→refreshRingtones
+- 设置页 UI（settings.tsx +506 行）：NotificationPage 内嵌 NotifySoundSection——①全局卡（提示音总开关/总音量 Slider/响铃时震动/免打扰时段行展开 DndTimeEditor 原生 time 对+清除，静音时显示"已一键静音"说明、处于免打扰时显示绿色在效提示）②五分类卡（行=名称+描述+当前铃声小字+Switch，展开=提示音选择行→TonePickerList（内置/我的铃声分组、每项喇叭试听、选中绿勾、上传入口）+试听按钮（显示实际合成音量%）+分类音量 Slider+分类免打扰）③我的铃声卡（上传按钮+列表（试听/时长/永久保存标注/删除）+空态文案）④删除走 AlertDialog 确认⑤改动即时生效页脚说明（免打扰只静音不拦记录、整机共享不随账号切换）
+- E2E（agent-browser 430×932 真机流）：解锁→主屏翻页→文件夹→设置›通知渲染完整（全局+5分类+我的铃声全显示）；试听「备注」→hook 计数 osc=3 真实发声；切「清脆」→oscDelta=4（琶音）+IndexedDB receiveTone=builtin:chime 落库；upload 命令传 /tmp/test-ring.wav→toast"已保存"、选用后试听 audioPlays=1（Audio 元素路径）；真实消息流：信息 App 发消息→bs+1（嗖）AI 文字回复→audioPlays+1（test-ring）；全局免打扰 00:00–23:59 落库→再发消息：AI 回复"OK"照常到达但 audioDelta=0/bsDelta=0（不响保留记录✓）清除后→audioDelta=1/bsDelta=1（恢复✓）；总开关关→"已一键静音"提示+checked=false，分类开关（发送消息声音）关/开状态机正确；删除 test-ring→确认弹窗→分类小字回落"备注"+ringtones 表 count=0+持久化 toneId=builtin:note（自动回落✓）；console 零错误、dev.log 无应用错误、eslint/tsc 双 0
+- 踩坑：agent-browser eval 不 await Promise（IndexedDB 验证必须挂 window.__x 再二次读取）；输入框是 input 非 textarea（placeholder='iMessage信息'，React 受控组件需用 HTMLInputElement.prototype.value 描述符 set + dispatch input 事件）；主屏 App 图标无 aria-label 需坐标点击；锁屏大时钟是桌面时钟小组件（hasSweep=false + gridVisible=true 判断已解锁而非界面长相）；发送声「嗖」是 BufferSource 不是 Oscillator——hook 两类节点分别计数；自定义铃声播放走 Audio 元素，验证接收声时看 audioPlays 而非 osc
+
+Stage Summary:
+- 交付：src/lib/ios/notify-sound.ts（新，声音引擎全量）、src/lib/ios/db.ts（v8 +ringtones 表 +RingtoneRecord）、src/lib/ios/island-notify.ts（pushChatNotification 挂接收/群声）、src/lib/moments.ts（pushMomentNotice 挂互动声）、五聊天端 send/sendSticker 挂发送声（wechat/qq/chat/wx-group/qq-group）、src/components/apps/settings.tsx（NotifySoundSection + DndTimeEditor + TonePickerList）
+- 关键决策：①声音设置为整机共享（设备级，与真实 iOS 一致，用户"按需求决定"授权下选择更简单不易错方案）②收发声跟随灵动岛弹出口径（每条消息响一次；会话级消息免打扰的会话连弹窗都无，自然无声音）③全局免打扰对所有分类生效（含发送，"期间不响"字面语义）④内置铃声 Web Audio 合成零音频文件（仓库无音频资产，与来电铃声同技术栈）
+- 验证：eslint 0、tsc 0、十四项浏览器 E2E 全通过（渲染/试听合成/切换铃声/上传/选用/真实收发双端发声/免打扰静音+记录保留/清除恢复/总开关/分类开关/删除回落/持久化/回归无破坏），已推送 387a4ac
