@@ -16132,3 +16132,23 @@ Stage Summary:
 - 交付文件：src/components/ios/HomeScreen.tsx（预览不再混入被拖 App+双目标 ring+圆角收小）、src/app/globals.css（merge-target-ring 呼吸描边）
 - 关键决策：ring 挂在 60px 目标 span 内部（随脉动同缩放、天然同心）；描边用纯白圆角方+深色微投影（非白色光晕，避开用户此前反感的 halo 观感）；App→App 预览回到 iOS 原生语义（目标原样高亮，松手才变文件夹）
 - 验证：改动文件 eslint 0、八项浏览器 E2E 全通过、已推送
+
+---
+Task ID: home-fix-7
+Agent: 主协调者 (Z.ai Code)
+Task: 修复文件夹迷你图标「变成菱形/八边形」+ 解决「合成文件夹太难」
+
+Work Log:
+- 菱形根因：文件夹迷你缩略图复用 registry 的 60px 图标壳（RealIconTile 自带 rounded-[15px]+overflow-hidden），缩到 14px 后该裁切被 CSS 钳制成 7px 半径（≈圆形裁切），与外层 rounded-[3px] 裁切、PNG 自带 ~25% squircle 圆角透明区三层嵌套叠加，四角被不同弧线交替削切呈现八边形/菱形（1.16 外层放大不足以让 PNG 圆角落到裁切框外）
+- 修复①registry.tsx：导出 appImage(id)（appId→图标原图路径）；修复②HomeScreen folderIconNode 重写：迷你图标不再走 appIconNode/60px 壳，直接平铺原图（customIcons 优先、appImage 兜底、纯 JSX 图标最后 fallback）并统一 scale 1.16→1.3——图标自带圆角完全落到裁切框外，四角只由 rounded-[3px] 一层决定，收出干净正方形圆角
+- 建夹太难根因：合并只有一条路——指针压住目标槽位静止 240ms 弹预览后松手；快速松手一律走落位换位，且 pointermove 被 rAF 帧节流丢弃时 dragDeltaRef 滞后、目标常在到达前已被挤位换位挪走
+- 修复③快捷合并（iOS 同款「压上即合」）：endDrag 落位分支新增 mergeScanLive——用松手瞬间实时 tile 矩形（拖拽中挤位使 beginDrag 静态几何过期）扫描被拖图标与可合并目标的重叠，≥MERGE_DROP_RATIO(0.3) 图标面积直接 runMerge（建夹/入夹/并夹+飞入+弹跳），不必等预览；相邻槽位图标零重叠、槽间隙投放重叠<两成不会误合
+- 修复④endDrag 开头以指针终点同步 dragDeltaRef（被节流丢弃的 move 不再导致扫描/飞入/落位起点失准——快捷合并测试首跑失败即此因）
+- 修复⑤悬停预览更跟手：MERGE_DWELL_MS 240→180、静止判定容差 6px→10px（轻微手抖不重置计时）；endDrag 合并落手代码提取为 runMerge(dwellMerge/快捷合并共用)
+- agent-browser E2E（430×932）：①计算器+备注建夹→迷你图标 8× 放大截图：四角干净 3px 圆弧、无八边形 ✓ ②快捷合并：weather 快速压上 themes 立即松手→新夹 2 迷你图标 ✓ ③防误合：browser 投两列中点（重叠~17%）→正常落位无建夹 ✓ ④Dock 投放：camera 入 Dock 不触发合并 ✓ ⑤悬停回归：压住 500ms→ring+pulse 出现→松手建夹 ✓ ⑥布局重置、errors 无、eslint(two files) 0、tsc 0 ✓
+- 踩坑：rAF 帧节流会丢弃密集 pointermove（dragDeltaRef 滞后是快捷合并首测失败的元凶）；border-radius 大于盒宽一半时被 CSS 钳制成半宽（15px 壳在 14px 盒=7px 圆形裁切）；三层嵌套裁切的可见形状=各弧线的逐点交集
+
+Stage Summary:
+- 交付文件：src/components/apps/registry.tsx（appImage 导出）、src/components/ios/HomeScreen.tsx（folderIconNode 直铺原图 1.3 倍、mergeScanLive 快捷合并、MERGE_DROP_RATIO、dwell 180ms/容差 10px、runMerge 提取、endDrag 指针终点同步）
+- 关键决策：快捷合并阈值 0.3（与挤位暂停阈值一致，图标压上即合、间隙轻放即落位）；迷你图标四角唯一决定权交给外层 rounded-[3px]（嵌套裁切是八边形根源）
+- 验证：eslint/tsc 0、五项浏览器 E2E 全通过、已推送

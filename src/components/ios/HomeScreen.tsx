@@ -8,7 +8,7 @@ import { shellScale } from '@/lib/ios/shell-scale';
 import { useHomeWallpaperLight } from '@/lib/ios/foreground';
 import { localDB } from '@/lib/ios/db';
 import { useUnreadTotal, useBadge, wxUnreads, qqUnreads, chatBadge, phoneBadge } from '@/lib/unread-store';
-import { DOCK_APPS, APPS, APP_MAP } from '../apps/registry';
+import { DOCK_APPS, APPS, APP_MAP, appImage } from '../apps/registry';
 import {
   ProfileCardEditor,
   ProfileCardWidget,
@@ -99,11 +99,11 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  * - 布局持久化到 IndexedDB（settings store，key = 'homeLayout'），兼容旧单页格式
  *   （旧 grid 迁移为第 1 页；v6 起旧版本整体重置为新排布）。
  *
- * - 文件夹（iOS 同款）：编辑模式把 App 拖到另一 App/文件夹上「压住」~240ms（图标重叠
- *   ≥ 三成且指针基本静止）→ 弹出合并预览：目标保持原样（App 仍是自己、文件夹预览
- *   不混入被拖 App——用户要求被拖 App 不显示在里面），原地轻微缩放脉动 + 外圈罩
- *   一圈呼吸的圆角方边框（贴形描边与脉动同频呼吸，iOS 同款），被拖 App 轻微收拢；
- *   松手 App 缩小飞入文件夹并建夹/入夹/并夹，拖开即取消。
+ * - 文件夹（iOS 同款）：编辑模式把 App 拖到另一 App/文件夹上，两种合入方式：
+ *   ① 快捷压上松手：被拖图标压在目标上（重叠 ≥ 三成图标面积）直接建夹/入夹/并夹，
+ *   不必等预览（用户反馈建夹太难）；② 悬停预览：指针压在目标槽位内且重叠任意，
+ *   静止 ~180ms 弹预览（目标保持原样，原地轻微缩放脉动 + 外圈呼吸圆角方边框，
+ *   被拖 App 不显示在里面）后松手合入；拖开即取消。轻放/擦过（重叠小）照常落位。
  *   只有重叠 ≥ 三成才暂停挤位换位（轻微擦过照常换位）——App 拖到下面/旁边/底部都能
  *   顺畅移过去、随时可换位；移动中永不弹预览，快速放到目标上松手 = 正常落位不是建夹；
  *   文件夹图标 = 毛玻璃圆角方（前 6 个 App 缩略图 3×2 + 超额数量角标）+ 名称；
@@ -309,8 +309,13 @@ const DOCK_HIT_PAD_PX = 30;
  *  拖出目标槽位即取消并恢复挤位换位。
  *  关键：只有「指针压在目标槽位内」才暂停换位——拖到目标的下方/旁边/穿过/进 Dock 都
  *  照常换位（旧版任意重叠就全局冻结换位，密集网格里拖到哪都被卡死，用户实测
- *  「移到下面移不动/不能换位」已修）；移动中永不弹预览，快速放到目标上松手 = 正常落位 */
-const MERGE_DWELL_MS = 240;
+ *  「移到下面移不动/不能换位」已修）；移动中永不弹预览，快速放到目标上松手 =
+ *  快捷建夹/入夹（重叠 ≥ MERGE_DROP_RATIO）或正常落位（重叠小） */
+const MERGE_DWELL_MS = 180;
+/** 快捷合并阈值：松手时被拖图标与可合并目标的重叠 ≥ 图标面积的该比例 → 直接建夹/
+ *  入夹/并夹（不必等悬停预览；用户反馈合成文件夹太难）。相邻槽位图标零重叠、
+ *  槽间隙投放重叠 < 两成，都不会误触发；三成以上已经是明确「压在目标上」 */
+const MERGE_DROP_RATIO = 0.3;
 /** 图标可视尺寸（网格/Dock 槽位顶部居中的方形图标区；槽位矩形还包含下方标签） */
 const ICON_SIZE = 60;
 /** 文件夹展开面板每页 App 数（3 列 × 4 行） */
@@ -1729,6 +1734,50 @@ export default function HomeScreen() {
     return best;
   };
 
+  /** 松手快捷合并扫描：拖拽中挤位换位会让 beginDrag 捕获的静态槽位矩形过期，
+   *  这里用松手瞬间的实时 tile 矩形重算——找与被拖图标重叠最大的可合并目标
+   *  （App→App 建夹 / App→文件夹 入夹 / 文件夹→文件夹 并夹），重叠 ≥
+   *  MERGE_DROP_RATIO × 图标面积才算「压在目标上」，否则返回 null 照常落位 */
+  const mergeScanLive = (draggedId: string): MergePreviewData | null => {
+    if (isWidgetKey(draggedId)) return null;
+    const v = dragVisualRef.current;
+    if (!v) return null;
+    const sc = scaleRef.current || 1;
+    const IS = ICON_SIZE * sc;
+    const d = dragDeltaRef.current;
+    const dl = v.x + d.dx + v.w / 2 - IS / 2;
+    const dt = v.y + d.dy;
+    const p = pageRef.current;
+    const tiles = layoutRef.current.pages[p] ?? [];
+    let best: { data: MergePreviewData; area: number } | null = null;
+    const els = rootRef.current?.querySelectorAll<HTMLElement>('[data-tile][data-zone="grid"][data-page="' + p + '"]') ?? [];
+    for (const t of Array.from(els)) {
+      const key = t.dataset.id ?? '';
+      if (!key || key === draggedId) continue;
+      const idx = Number(t.dataset.index);
+      if (!Number.isFinite(idx)) continue;
+      const tile = tiles[idx];
+      if (!tile || (tile.kind !== 'app' && tile.kind !== 'folder')) continue;
+      if (tile.kind === 'app' && isFolderKey(draggedId)) continue; // 文件夹不能并入单个 App
+      if (tile.kind === 'folder' && key !== folderKey(tile.id)) continue; // data-id 必须与 tile 对上
+      const tr = t.getBoundingClientRect();
+      const tl = tr.left + tr.width / 2 - IS / 2;
+      const ix = Math.max(0, Math.min(dl + IS, tl + IS) - Math.max(dl, tl));
+      const iy = Math.max(0, Math.min(dt + IS, tr.top + IS) - Math.max(dt, tr.top));
+      const area = ix * iy;
+      if (area <= (best?.area ?? 0)) continue;
+      best = {
+        area,
+        data:
+          tile.kind === 'folder'
+            ? { targetKey: key, kind: 'folder', folderId: tile.id, targetPos: { page: p, index: idx } }
+            : { targetKey: key, kind: 'app', appId: tile.id, targetPos: { page: p, index: idx } },
+      };
+    }
+    if (!best || best.area < IS * IS * MERGE_DROP_RATIO) return null;
+    return best.data;
+  };
+
   /** 悬停合并落手：建夹（App→App）/ 入夹（App→文件夹）/ 并夹（文件夹→文件夹）。
    *  预览是纯视觉——此刻目标仍在原位、被拖项也未被消费，这里一次性完成：
    *  摘除被拖项（网格/Dock/来源文件夹——面板拖出时被拖项还在夹里），再按合并语义落子。
@@ -2349,23 +2398,30 @@ export default function HomeScreen() {
     }
     try {
       const m = dragMeta.current;
+      // 松手瞬间的真实位移：最后几个 pointermove 可能被 rAF 帧节流丢弃（快速拖动时
+      // dragDeltaRef 滞后一帧甚至几帧）——以指针终点为准同步，快捷合并的重叠扫描、
+      // 飞入动画起点、落位动画起点才准确
+      if (e) {
+        dragDeltaRef.current = { dx: e.clientX - m.startX, dy: e.clientY - m.startY };
+      }
       // 注意：dragMeta.current 此处不能提前清空——下方松手落位的 hitTestAt 依赖它
       // （Dock 连续轨道分支与空白兑底的 dragId0 都从 dragMeta 读；提前清空会让拖到
       //   Dock 条上松手时命中永远失配、App 被弹回网格——用户实测「移到下面移不进」），
       //   统一挪到函数末尾清理
       // 拖回原位松手 → 整布局复原（撤销拖拽过程中的一切中间换位）。
       // 命中判定用「最近 tile 兜底」，落在格子间隙也能正确还原。
-      const merge = mergeRef.current;
+      const dwellMerge = mergeRef.current;
       mergeRef.current = null;
       let merged = false;
-      if (merge && e) {
-        // 悬停合并落手：建夹/入夹/并夹（被拖项已被合并消费，不做落位动画）
+      /** 合并落手（悬停预览后松手 / 快捷压上松手共用）：建夹/入夹/并夹 +
+       *  入夹飞入动画 + 文件夹接住弹一下（被拖项已被合并消费，不做落位动画） */
+      const runMerge = (mg: MergePreviewData) => {
         setMergePreview(null);
         merged = true;
-        // 目标 tile 的实时矩形（弹预览前已静止 ≥240ms，FLIP 必已结束 → 即最终落点）
-        const tEl = rootRef.current?.querySelector<HTMLElement>(`[data-tile][data-zone="grid"][data-id="${merge.targetKey}"]`);
+        // 目标 tile 的实时矩形（预览期已静止 / 松手瞬间 FLIP 必已结束 → 即最终落点）
+        const tEl = rootRef.current?.querySelector<HTMLElement>(`[data-tile][data-zone="grid"][data-id="${mg.targetKey}"]`);
         const tRect = tEl?.getBoundingClientRect() ?? null;
-        const resKey = applyMerge(merge, m.id);
+        const resKey = applyMerge(mg, m.id);
         const v = dragVisualRef.current;
         if (v && !isFolderKey(m.id) && tRect) {
           // 入夹飞入动画（iOS 同款）：App 图标从松手位置缩小飞进文件夹。
@@ -2391,6 +2447,10 @@ export default function HomeScreen() {
             });
           });
         }
+      };
+      if (dwellMerge && e) {
+        // 悬停合并落手：预览已弹，松手直接建夹/入夹/并夹
+        runMerge(dwellMerge);
       } else if (e) {
         const origin = dragOrigin.current;
         const moved = Math.hypot(e.clientX - m.startX, e.clientY - m.startY);
@@ -2405,23 +2465,29 @@ export default function HomeScreen() {
             layoutRef.current = origin.layout;
             setLayout(origin.layout);
           } else {
-            // 拖回原位松手 → 整布局复原（撤销拖拽过程中的一切中间换位）。
-            // 命中判定用「最近 tile 兑底」，落在格子间隙也能正确还原。
+            // 快捷合并（用户反馈合成文件夹太难）：不必等悬停预览——松手时被拖图标
+            // 压在可合并目标上（重叠 ≥ MERGE_DROP_RATIO）直接建夹/入夹/并夹；
+            // 轻放/擦过（重叠小）照常落位换位，不会误合
             const hit = hitTestAt(e.clientX, e.clientY);
-            const cur = zoneIndexOf(m.id);
-            if (sameHit(hit, origin.hit)) {
-              layoutRef.current = origin.layout;
-              setLayout(origin.layout);
-            } else if (!hit && origin.hit.zone === 'folder') {
-              // 从文件夹拖出的 App 没找到落点 → 退回文件夹
-              layoutRef.current = origin.layout;
-              setLayout(origin.layout);
-            } else if (hit && (!cur || !sameHit(cur, hit))) {
-              // 悬停/压住期间挤位被冻结（重叠在目标上）——松手按当前指针位置
-              // 补一次落位，避免 App 落在悬停前的旧位置
-              const next = reorderForDrag(m.id, hit);
-              layoutRef.current = next;
-              setLayout(next);
+            const dropMerge = hit && hit.zone === 'grid' ? mergeScanLive(m.id) : null;
+            if (dropMerge) {
+              runMerge(dropMerge);
+            } else {
+              const cur = zoneIndexOf(m.id);
+              if (sameHit(hit, origin.hit)) {
+                layoutRef.current = origin.layout;
+                setLayout(origin.layout);
+              } else if (!hit && origin.hit.zone === 'folder') {
+                // 从文件夹拖出的 App 没找到落点 → 退回文件夹
+                layoutRef.current = origin.layout;
+                setLayout(origin.layout);
+              } else if (hit && (!cur || !sameHit(cur, hit))) {
+                // 悬停/压住期间挤位被冻结（重叠在目标上）——松手按当前指针位置
+                // 补一次落位，避免 App 落在悬停前的旧位置
+                const next = reorderForDrag(m.id, hit);
+                layoutRef.current = next;
+                setLayout(next);
+              }
             }
           }
         }
@@ -2493,9 +2559,9 @@ export default function HomeScreen() {
             if (scan.data.targetKey !== mergeRef.current.targetKey) showMergePreview(scan.data);
             return;
           }
-          // 未弹预览：静止压住 ~240ms 后弹出（大幅移动重置计时，轻微手抖不重置）
+          // 未弹预览：静止压住 ~180ms 后弹出（大幅移动重置计时，轻微手抖≤10px 不重置）
           const prev = mergeDwellPos.current;
-          if (mergeDwellT.current === null || !prev || Math.hypot(cx - prev.x, cy - prev.y) > 6) {
+          if (mergeDwellT.current === null || !prev || Math.hypot(cx - prev.x, cy - prev.y) > 10) {
             clearMergeDwell();
             mergeDwellPos.current = { x: cx, y: cy };
             mergeDwellT.current = window.setTimeout(() => {
@@ -2808,16 +2874,24 @@ export default function HomeScreen() {
   /** 文件夹样式的毛玻璃缩略图（3×2 迷你图标网格）：文件夹图标与拖拽浮动副本共用；
    *  合并预览阶段目标文件夹保持原样（不混入被拖 App 的缩略图——用户要求被拖 App
    *  不显示在里面）；
-   *  迷你图标内容统一放大 1.16 再由圆角方容器裁切（用户要求预览图标为正方形圆角、
-   *  圆角不要太圆）：圆形图标（时钟/QQ 等 PNG 自带圆形底）放大后四边被容器裁平、
-   *  圆弧在四角收出 iOS 风格圆角方剪影；本就方圆角的图标仅轻微放大，观感基本不变 */
+   *  迷你图标不走 registry 的 60px 图标壳（其自带 rounded-[15px] 裁切缩到 14px 会被
+   *  钳制成圆形裁切，与外层裁切、PNG 自带圆角三层叠加会把四角削成八边形/菱形——
+   *  用户实测），改为直接平铺原图（customIcons 优先）并统一放大 1.3：图标自带
+   *  圆角完全落到裁切框外，四角只由 rounded-[3px] 决定，收出干净的正方形圆角 */
   const folderIconNode = (apps: AppId[]) => (
     <span className="grid h-full w-full grid-cols-3 grid-rows-2 place-items-center gap-[2px]">
-      {apps.slice(0, 6).map((id) => (
-        <span key={id} className="block h-[14px] w-[14px] overflow-hidden rounded-[3px] shadow-[0_0.5px_1.5px_rgba(0,0,0,0.25)]">
-          <span className="block h-full w-full scale-[1.16]">{appIconNode(id)}</span>
-        </span>
-      ))}
+      {apps.slice(0, 6).map((id) => {
+        const src = customIcons[id] ?? appImage(id);
+        return (
+          <span key={id} className="block h-[14px] w-[14px] overflow-hidden rounded-[3px] shadow-[0_0.5px_1.5px_rgba(0,0,0,0.25)]">
+            {src ? (
+              <img src={src} alt="" draggable={false} className="block h-full w-full scale-[1.3] object-cover" />
+            ) : (
+              <span className="block h-full w-full scale-[1.3]">{appIconNode(id)}</span>
+            )}
+          </span>
+        );
+      })}
     </span>
   );
 

@@ -359,10 +359,17 @@ const APP_DEFS: AppDef[] = [
   },
 ];
 
-/** appId → 真实图标图片路径（有 image 字段的 App），供卡片底色场景（AppIconTile）复用 */
+/** appId → 真实图标原图路径（有 image 字段的 App），供卡片底色场景（AppIconTile）复用 */
 const IMAGES = Object.fromEntries(
   APP_DEFS.filter((d) => d.image).map((d) => [d.id, d.image]),
 ) as Partial<Record<AppId, string>>;
+
+/** appId → 图标原图路径（无则 null）。文件夹迷你缩略图等需要绕过 60px 图标壳
+ *  （RealIconTile 自带 rounded-[15px] 裁切，缩到 14px 会被钳制成圆形裁切，
+ *  与外层裁切、PNG 自带圆角叠加把四角削成八边形）直接平铺原图的场景使用 */
+export function appImage(id: AppId): string | null {
+  return IMAGES[id] ?? null;
+}
 
 /** 壁纸上的图标（主屏网格 / Dock / Spotlight / 多任务）：真实 iOS 图标满槽铺满；
  *  其余保持磨砂玻璃底座随壁纸明暗与主题自适应 */
