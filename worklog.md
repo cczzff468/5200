@@ -16152,3 +16152,21 @@ Stage Summary:
 - 交付文件：src/components/apps/registry.tsx（appImage 导出）、src/components/ios/HomeScreen.tsx（folderIconNode 直铺原图 1.3 倍、mergeScanLive 快捷合并、MERGE_DROP_RATIO、dwell 180ms/容差 10px、runMerge 提取、endDrag 指针终点同步）
 - 关键决策：快捷合并阈值 0.3（与挤位暂停阈值一致，图标压上即合、间隙轻放即落位）；迷你图标四角唯一决定权交给外层 rounded-[3px]（嵌套裁切是八边形根源）
 - 验证：eslint/tsc 0、五项浏览器 E2E 全通过、已推送
+
+---
+Task ID: home-fix-8
+Agent: 主协调者 (Z.ai Code)
+Task: 用户第六轮反馈三连修——①编辑模式下底部 App 按住拖拽不了 ②文件夹可以移到底部（拖到底部消失）③文件夹预览与 iOS 还有差异
+
+Work Log:
+- 根因定位（截图像素级分析 + agent-browser 复现）：用户手机在分屏/自由小窗中运行，浏览器视口仅 ~358×517 CSS px（移动端路径 scale=1，壳高=100svh）——网格几何按 844 满高壳写死：①底部行图标伸进 z-10 的页点带（h-34）/Dock 背板（py-13+58）下方，按压被浮层截胡（elementFromPoint 实测底两行命中 DIV/DIV.dock 而非 tile）；②hitTest 空白兜底把落点行夹到静态 MAX_PAGE_ROWS-1=5，第 5/6 行在屏幕外——文件夹拖到底部空白落进不可见行「移到底部消失」；③文件夹迷你缩略图固定 3 列网格，1/2 个图标靠左顶死，iOS 实际按行居中
+- 修复①（按压穿透）：页点带容器与搜索/页点两个内层 wrapper 全部 pointer-events-none，页点按钮与搜索胶囊 pointer-events-auto；Dock 容器 pointer-events-none，Dock 图标 tile pointer-events-auto——矮视口下底行图标穿过浮层可按可拖，标准视口行为零变化（无重叠区）
+- 修复①②（动态行数上限）：MAX_PAGE_ROWS(6) 旁新增运行时模块变量 GRID_ROW_CAP，HomeScreen 挂载/resize/Dock 满空切换时按「最后一行图标底边不越过页点带顶边」实测收敛：桌面壳逻辑高恒 844→恒 6 行为零变化；移动端 scale 恒 1 直读 root 实测高。公式 cap=floor((bandTop−72−60)/92)+1 夹到 [3,6]。收敛值全链路生效：pageHasRoom/rowsOf 校验、sanitizeLayout 存量重排、hitTest 空白兜底夹行、（rowCap 变化的 mid-session 重排 effect 回写 persist）；实测 517 高+空 Dock=4 行（用户现有 4 行布局零重排）、520 高+满 Dock=3 行
+- 修复③（预览居中）：folderIconNode 重写为 iOS 同款按行分块——≤3 个一行居中、4 个 2×2、5/6 个 3+3，行内 justify-center（旧版 grid-cols-3 固定列把少量图标顶在左侧）；迷你图标 14px/rounded-3px/1.3 放大与三层裁切规避注释原样保留
+- E2E（agent-browser 360×520 模拟用户矮视口 + 430×932 标准回归 + 1280×800 桌面缩放路径）：①360×520 默认布局自动收敛 3 行、全部 tile elementFromPoint 命中 tile 本体（修复前底两行命中 DIV/DIV.dock）✓ ②编辑模式拖底行 App 真实起拖（浮动副本+占位槽）、拖入 Dock 过渡区正常入 Dock、最后一个 Dock 图标被挤出回网格 ✓ ③建夹后拖文件夹压 Dock 图标悬停：无合并预览（文件夹不入 Dock）、松手留在原位；拖到页点带空白松手：落最后可见行不消失 ✓ ④文件夹预览 2 图标 leftGap 32px/rightGap 30px 量化居中+放大截图 ✓ ⑤430×932：默认布局零重排（cap=6）、搜索胶囊/Dock 图标/页点全部可命中可点、页点翻页 ✓、快捷合并（电话压计算器建夹）✓、拖 files 到底部署空白落末行 aboveBand ✓ ⑥1280×800 桌面 fit 缩放：page0=10 零重排、Dock 可点 ✓ ⑦布局重置回默认（page0=10+dock=4）、console/errors 零应用错误
+- 踩坑：agent-browser 长按空白进编辑时若起手点落在搜索胶囊上会先开 Spotlight 挡住后续断言（先 Esc/点空白关掉再测）；CSS 转义类名 .z-\\[80\\] 在 eval 里非法（改用 aria-hidden+className 包含判断）；indexDB 注入的布局会被 sanitizeLayout 按 v10 规则回填缺省 App/Dock（dock:[] 会被补满 4 个），构造「空 Dock」场景需走 UI 删除路径；git 环境已内嵌 PAT 于 origin
+
+Stage Summary:
+- 交付文件：src/components/ios/HomeScreen.tsx（GRID_ROW_CAP 运行时行数上限+实测收敛 effect、页点带/Dock pointer-events 穿透、folderIconNode 按行居中分块、3 处纯函数切换+注释同步）
+- 关键决策：①行数上限用模块变量而非参数穿线（sanitize/pageHasRoom/hitTest 全链路一处收敛，单实例组件安全）②桌面分支直接恒 844 不做 DOM 实测（规避 fit scale 与子组件 layout effect 的时序竞争）③「图标底边不越带顶」而非「整 tile 不越带」——标签允许轻擦带顶，用户现有 4 行布局零重排 ④穿透只给容器，页点/搜索/Dock 图标保留 pointer-events-auto（交互零损失）
+- 验证：eslint 0、tsc 0、三档视口（360×520 矮窗 / 430×932 标准 / 1280×800 桌面缩放）十四项浏览器 E2E 全通过

@@ -122,6 +122,9 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  * - 长按住拖拽可自由放置：App↔App、小组件↔小组件、小组件↔App（小组件不能进 Dock）、跨页拖拽；
  *   插入语义——放到哪格就落哪格，其余项顺移让位（不要求先与目标换位，旁边没 App 也能放）；
  *   Dock 是连续插入轨道（按指针 x 决定插入点，空位直接放入）；
+ * - 矮视口（手机分屏/自由小窗）：网格行数按实测壳高收敛（GRID_ROW_CAP 3~6 行），
+ *   页点带/Dock 容器 pointer-events-none 穿透（底行图标不被浮层挡住按压），
+ *   拖到底部空白只落到最后一条可视行（不会落进屏幕外「消失」）；
  * - 拖拽动画：被拖项为 fixed 浮动副本（挂在根层级，绝不落入带 backdrop-filter 的
  *   Dock 容器内——否则 fixed 会被当成本容器定位，图标拖起来就“消失”），
  *   原位置留占位槽（尺寸取目标区真实槽位，避免跨区拖拽时 Dock 拉高/网格行压缩），
@@ -378,6 +381,13 @@ function pageCap(page: Tile[], insertingWidget = false): number {
  *  行高 76px+行距 16px → 6 行（536px）完整可见、7 行（628px）会顶进页点/Dock 区域。
  *  页面已改为 overflow-hidden 永不滚动，所有落点/补位/加小组件入口都按 6 行封顶 */
 const MAX_PAGE_ROWS = 6;
+/** 行数上限的运行时值：默认 = MAX_PAGE_ROWS（390×844 满高壳）。矮视口（手机分屏/自由小窗，
+ *  移动端壳高 =100svh 可低至 ~500px）由 HomeScreen 挂载后按真实壳高收紧（3~6 行）——
+ *  否则 6 行网格会顶进 z-10 的页点带/Dock（底行 App 被盖住按住拖不动，用户实测），
+ *  且拖到底部空白会落到屏幕外第 5/6 行「移到底部消失」（用户实测）。
+ *  纯函数（pageHasRoom/rowsOf 校验、hitTest 空白兜底、sanitize 重排）都读这里，
+ *  保证「布局允许的行」与「屏幕上摸得到的行」永远一致 */
+let GRID_ROW_CAP = MAX_PAGE_ROWS;
 
 /** 一页 tiles 顺序摆放占用的总行数（含小组件跨行与空占位格；空页=0） */
 function rowsOf(tiles: Tile[]): number {
@@ -387,11 +397,12 @@ function rowsOf(tiles: Tile[]): number {
 }
 
 /** 页内还能否容纳 extra 一批 tile：把「现内容 + extra」整体模拟摆放后校验——
- *  行数 ≤ MAX_PAGE_ROWS（硬约束：超出即顶进页点/Dock 被裁，页面又不可滚动）
+ *  行数 ≤ GRID_ROW_CAP（硬约束：超出即顶进页点/Dock 被裁/屏幕外，页面又不可滚动；
+ *  矮视口下由组件实测收敛，见 GRID_ROW_CAP 注释）
  *  且格数 ≤ 页容量。extra 会按顺序接在页尾摆放，与各入口的追加语义一致 */
 function pageHasRoom(page: Tile[], extra: Tile[] = [], insertingWidget = false): boolean {
   if (page.length + extra.length > pageCap(page, insertingWidget)) return false;
-  return rowsOf([...page, ...extra]) <= MAX_PAGE_ROWS;
+  return rowsOf([...page, ...extra]) <= GRID_ROW_CAP;
 }
 
 /**
@@ -633,7 +644,7 @@ function sanitizeLayout(raw: unknown): HomeLayout {
   for (let i = 0; i < pages.length; i++) {
     const pg = pages[i];
     const overflow: Tile[] = [];
-    while (rowsOf(pg) > MAX_PAGE_ROWS && pg.length > 0) {
+    while (rowsOf(pg) > GRID_ROW_CAP && pg.length > 0) {
       let cut = -1;
       for (let j = pg.length - 1; j >= 0; j--) {
         if (pg[j].kind !== 'widget') {
@@ -1539,6 +1550,46 @@ export default function HomeScreen() {
     showDots();
   };
 
+  // ---------------- 矮视口网格行数收敛 ----------------
+  // 用户实测（手机分屏/自由小窗，壳高仅 ~500px）：①编辑模式下底部行 App 按住拖不动——
+  // 底行图标被 z-10 的页点带/Dock 盖住，按压全落在浮层上；②文件夹拖到底部空白会
+  // 「移到底部消失」——空白兜底夹到静态 6 行上限，第 5/6 行在屏幕外。
+  // 这里按真实壳高把 GRID_ROW_CAP 收敛到「最后一行图标底边不越过页点带顶边」：
+  // 桌面壳逻辑高恒 844（fit 缩放只影响视觉不改内部布局）→ 恒 6 行、行为不变；
+  // 移动端 scale 恒 1，root 实测高即壳本地高（100svh，URL 栏显隐不影响）。
+  const [rowCap, setRowCap] = useState(MAX_PAGE_ROWS);
+  const dockCount = layout.dock.length;
+  useLayoutEffect(() => {
+    const measure = () => {
+      let shellH = 844;
+      if (!window.matchMedia('(min-width: 640px)').matches) {
+        const root = rootRef.current;
+        if (!root) return;
+        shellH = root.getBoundingClientRect().height / (shellScale.value || 1);
+      }
+      // 页点带顶边 = 壳高 − 根容器 pb-38 − Dock 高（有 App 84 / 空 26）− 页点带 34（与渲染处常量一致）
+      const dockH = layoutRef.current.dock.length > 0 ? 84 : 26;
+      const bandTop = shellH - 38 - dockH - 34;
+      // 首行图标顶 = 网格 pt-72；行距 = 行高 76（图标 60+间距 5+标签 11）+ 行间隙 16 = 92
+      const cap = Math.floor((bandTop - 72 - ICON_SIZE) / (ICON_SIZE + 5 + 11 + GRID_GAP_Y)) + 1;
+      const next = Math.max(3, Math.min(MAX_PAGE_ROWS, cap));
+      GRID_ROW_CAP = next;
+      setRowCap((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [dockCount]);
+  // 行数上限收紧（窗口缩放/Dock 满空切换）后，把存量超行布局重排到后续页并回写
+  useEffect(() => {
+    const cur = layoutRef.current;
+    if (!cur.pages.some((pg) => rowsOf(pg) > GRID_ROW_CAP)) return;
+    const next = sanitizeLayout(cur);
+    layoutRef.current = next;
+    setLayout(next);
+    persist(next);
+  }, [rowCap]);
+
   // 首次加载：读取持久化布局（兼容旧单页格式）
   useEffect(() => {
     let alive = true;
@@ -2200,9 +2251,10 @@ export default function HomeScreen() {
         return t.kind !== 'empty';
       });
       const { starts, after, end } = flowPositions(sim);
-      // 目标行夹到 flow 末行与 6 行封顶之内：内容下方空白不新开行，落到 flow 末行并按列
-      // 定位；主屏不可滚动，落点行不得使总行数超过 MAX_PAGE_ROWS（超出会被 reorder 整体弹回）
-      const targetRow = Math.min(gridRow, end.r, MAX_PAGE_ROWS - 1);
+      // 目标行夹到 flow 末行与 GRID_ROW_CAP（矮视口实测收敛，默认 6）之内：内容下方空白不
+      // 新开行，落到 flow 末行并按列定位；主屏不可滚动，落点行不得使总行数超上限
+      // （超出会被 reorder 整体弹回；夹到可视行内——矮视口下第 5/6 行在屏幕外，落进去=「移到底部消失」）
+      const targetRow = Math.min(gridRow, end.r, GRID_ROW_CAP - 1);
       // 插入点：第一个 flow 起点 ≥ 目标格（行主序）的 tile 之前；没有则页尾
       let idx = sim.length;
       for (let i = 0; i < starts.length; i++) {
@@ -2871,29 +2923,39 @@ export default function HomeScreen() {
         : { kind: 'app', id: dragId as AppId }
     : null;
 
-  /** 文件夹样式的毛玻璃缩略图（3×2 迷你图标网格）：文件夹图标与拖拽浮动副本共用；
+  /** 文件夹样式的毛玻璃缩略图（迷你图标网格）：文件夹图标与拖拽浮动副本共用；
    *  合并预览阶段目标文件夹保持原样（不混入被拖 App 的缩略图——用户要求被拖 App
    *  不显示在里面）；
+   *  排布对齐 iOS：≤3 个一行居中、4 个 2×2、5/6 个 3+3，不足一行的行整体居中
+   *  （旧版固定 3 列网格会把 1/2 个图标靠左顶死，用户实测与 iOS 有差异）；
    *  迷你图标不走 registry 的 60px 图标壳（其自带 rounded-[15px] 裁切缩到 14px 会被
    *  钳制成圆形裁切，与外层裁切、PNG 自带圆角三层叠加会把四角削成八边形/菱形——
    *  用户实测），改为直接平铺原图（customIcons 优先）并统一放大 1.3：图标自带
    *  圆角完全落到裁切框外，四角只由 rounded-[3px] 决定，收出干净的正方形圆角 */
-  const folderIconNode = (apps: AppId[]) => (
-    <span className="grid h-full w-full grid-cols-3 grid-rows-2 place-items-center gap-[2px]">
-      {apps.slice(0, 6).map((id) => {
-        const src = customIcons[id] ?? appImage(id);
-        return (
-          <span key={id} className="block h-[14px] w-[14px] overflow-hidden rounded-[3px] shadow-[0_0.5px_1.5px_rgba(0,0,0,0.25)]">
-            {src ? (
-              <img src={src} alt="" draggable={false} className="block h-full w-full scale-[1.3] object-cover" />
-            ) : (
-              <span className="block h-full w-full scale-[1.3]">{appIconNode(id)}</span>
-            )}
+  const folderIconNode = (apps: AppId[]) => {
+    const list = apps.slice(0, 6);
+    const rows: AppId[][] = list.length <= 3 ? [list] : list.length === 4 ? [list.slice(0, 2), list.slice(2, 4)] : [list.slice(0, 3), list.slice(3, 6)];
+    return (
+      <span className="flex h-full w-full flex-col items-center gap-[2px]">
+        {rows.map((row, ri) => (
+          <span key={ri} className="flex w-full items-center justify-center gap-[2px]">
+            {row.map((id) => {
+              const src = customIcons[id] ?? appImage(id);
+              return (
+                <span key={id} className="block h-[14px] w-[14px] overflow-hidden rounded-[3px] shadow-[0_0.5px_1.5px_rgba(0,0,0,0.25)]">
+                  {src ? (
+                    <img src={src} alt="" draggable={false} className="block h-full w-full scale-[1.3] object-cover" />
+                  ) : (
+                    <span className="block h-full w-full scale-[1.3]">{appIconNode(id)}</span>
+                  )}
+                </span>
+              );
+            })}
           </span>
-        );
-      })}
-    </span>
-  );
+        ))}
+      </span>
+    );
+  };
 
   const handlersFor = (id: string) => ({
     onPointerDown: (e: React.PointerEvent<HTMLElement>) => cellPointerDown(e, id),
@@ -3253,7 +3315,7 @@ export default function HomeScreen() {
           横向：视口占满全屏宽，翻页裁切发生在屏幕真实边缘（水平内边距由每页 px-5 承担，
           否则滑动时内容在离边缘 20px 处被硬裁、两侧露壁纸条——D2 修复）；纵向：页面
           overflow-hidden 永不上下滚动（用户要求：APP 放到下面时主屏会跟着竖向滑动，已废）——
-          页内容按 6 行封顶（MAX_PAGE_ROWS），全部落在页点上方可视区内，存量超行布局加载时
+          页内容按行封顶（GRID_ROW_CAP：满高壳 6 行，矮视口实测收敛 3~6 行），全部落在页点上方可视区内，存量超行布局加载时
           由 sanitizeLayout 摘出重排到后续页；页点与 Dock（relative z-10）悬浮在页面之上 */}
       <div className="absolute inset-0">
         <div
@@ -3288,12 +3350,14 @@ export default function HomeScreen() {
       <div className="flex-1" />
 
       {/* 页点/搜索互换区：滑动中或编辑模式显示页点（点按跳页），静止时同位置淡入搜索胶囊
-          （整体上移 6px：pb-12px 让内容在 34px 高度带内偏上，用户要求搜索往上移一点点） */}
-      <div className="relative z-10 h-[34px] w-full shrink-0" data-testid="page-indicator">
+          （整体上移 6px：pb-12px 让内容在 34px 高度带内偏上，用户要求搜索往上移一点点）。
+          容器 pointer-events-none：矮视口下网格底行图标会伸进这条带（z-10 在网格之上），
+          不穿透的话按压全被带子截胡、底行 App 按住拖不动（用户实测）；只有页点/搜索钮可点 */}
+      <div className="pointer-events-none relative z-10 h-[34px] w-full shrink-0" data-testid="page-indicator">
         <div
           aria-hidden={!dotsVisible}
           className={`absolute inset-0 flex items-center justify-center gap-[7px] pb-[12px] transition-all duration-200 ${
-            dotsVisible ? 'scale-100 opacity-100' : 'pointer-events-none scale-90 opacity-0'
+            dotsVisible ? 'scale-100 opacity-100' : 'scale-90 opacity-0'
           }`}
         >
           {layout.pages.map((_, i) => (
@@ -3307,7 +3371,7 @@ export default function HomeScreen() {
                 flipTo(i);
                 showDots();
               }}
-              className={`h-[7px] rounded-full transition-all duration-200 ${
+              className={`pointer-events-auto h-[7px] rounded-full transition-all duration-200 ${
                 i === page
                   ? wallpaperLight
                     ? 'w-[20px] bg-black'
@@ -3328,7 +3392,7 @@ export default function HomeScreen() {
           >
             <button
               onClick={() => setSpotlight(true)}
-              className="flex items-center gap-[6px] rounded-full bg-black/45 px-[16px] py-[7px] text-[13px] font-medium text-white backdrop-blur-xl transition-transform duration-150 active:scale-95"
+              className="pointer-events-auto flex items-center gap-[6px] rounded-full bg-black/45 px-[16px] py-[7px] text-[13px] font-medium text-white backdrop-blur-xl transition-transform duration-150 active:scale-95"
               aria-label="搜索应用"
             >
               <Search className="h-[13px] w-[13px]" aria-hidden="true" />
@@ -3340,10 +3404,12 @@ export default function HomeScreen() {
 
       {/* Dock（hairline 轮廓随壁纸明暗：浅色壁纸白底座画不出边界 → 淡黑描边，
           深色壁纸 → 淡白描边与半透明白底座呼应）；mx-5 保持原根容器 px-5 时的水平内缩；
-          relative z-10 悬浮在绝对定位的分页视口之上（页面竖向滚动时内容从 Dock 下方穿过） */}
+          relative z-10 悬浮在绝对定位的分页视口之上（页面竖向滚动时内容从 Dock 下方穿过）。
+          容器 pointer-events-none：矮视口下网格底行图标会伸进 Dock 背板（z-10 在网格之上），
+          不穿透的话底行 App 按压全被 Dock 截胡、按住拖不动（用户实测）；只有 Dock 图标可点 */}
       <div
         data-dock
-        className={`relative z-10 mx-5 flex items-center gap-[18px] rounded-[32px] bg-white/[0.16] ring-1 ${
+        className={`pointer-events-none relative z-10 mx-5 flex items-center gap-[18px] rounded-[32px] bg-white/[0.16] ring-1 ${
           wallpaperLight ? 'ring-black/[0.08]' : 'ring-white/[0.12]'
         } px-[14px] py-[13px] shadow-[0_4px_18px_rgba(0,0,0,0.18)] backdrop-blur-2xl dark:bg-white/[0.10] ${
           edit ? 'touch-none select-none' : ''
@@ -3377,7 +3443,7 @@ export default function HomeScreen() {
                 data-zone="dock"
                 data-index={i}
                 data-id={id}
-                className="relative block h-[58px] w-[58px] touch-none select-none"
+                className="pointer-events-auto relative block h-[58px] w-[58px] touch-none select-none"
                 role="button"
                 tabIndex={0}
                 aria-label={`打开${app.name}`}
