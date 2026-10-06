@@ -530,36 +530,38 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
 
 // ================================ 底部导航（首页/购物车/我的） ================================
 
-/** 底部 Tab（对齐真机截图）：首页=房子、购物车=推车、我的=黄底笑脸+金皇冠；
- *  选中态黑色加粗，全站无「＞」箭头；底部加高让内容避开 Home 指示条 */
+/** 底部 Tab：首页=房子、购物车=推车、我的=笑脸+金皇冠；
+ *  选中态变黄（「我的」选中变黑：黑底黄脸），未选中黑色 75%；底部加高避开 Home 指示条 */
 function BottomTabBar({ active, onTab }: { active: Tab; onTab: (t: Tab) => void }) {
-  const labelCls = (on: boolean) => `text-[10px] leading-none ${on ? 'font-semibold text-black/95' : 'font-medium text-black/75'}`;
-  const stroke = (on: boolean) => (on ? 2.3 : 1.8);
+  const labelCls = (on: boolean, activeCls: string) => `text-[10px] leading-none ${on ? `font-semibold ${activeCls}` : 'font-medium text-black/75'}`;
+  const homeOn = active === 'home';
+  const cartOn = active === 'cart';
+  const myOn = active === 'my';
   return (
     <div className="relative z-20 flex shrink-0 items-start border-t border-black/[0.06] bg-white pb-[max(18px,env(safe-area-inset-bottom))] pt-[9px]">
-      {/* 首页：房子 */}
+      {/* 首页：房子（选中=黄色） */}
       <button type="button" onClick={() => onTab('home')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
-        <House className="h-[24px] w-[24px] text-black/90" strokeWidth={stroke(active === 'home')} />
-        <span className={labelCls(active === 'home')}>首页</span>
+        <House className="h-[24px] w-[24px]" style={{ color: homeOn ? '#FFC300' : 'rgba(0,0,0,0.9)' }} strokeWidth={homeOn ? 2.4 : 1.8} />
+        <span className={labelCls(homeOn, 'text-[#FFA200]')}>首页</span>
       </button>
-      {/* 购物车 */}
+      {/* 购物车（选中=黄色） */}
       <button type="button" onClick={() => onTab('cart')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
-        <ShoppingCart className="h-[24px] w-[24px] text-black/90" strokeWidth={stroke(active === 'cart')} />
-        <span className={labelCls(active === 'cart')}>购物车</span>
+        <ShoppingCart className="h-[24px] w-[24px]" style={{ color: cartOn ? '#FFC300' : 'rgba(0,0,0,0.9)' }} strokeWidth={cartOn ? 2.4 : 1.8} />
+        <span className={labelCls(cartOn, 'text-[#FFA200]')}>购物车</span>
       </button>
-      {/* 我的：黄色笑脸 + 金皇冠（对齐截图） */}
+      {/* 我的：笑脸 + 金皇冠（选中=黑色：黑底黄脸） */}
       <button type="button" onClick={() => onTab('my')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
         <span className="relative">
-          <span className="grid h-[24px] w-[24px] place-items-center rounded-full bg-gradient-to-b from-[#FFE14D] to-[#FFC300]">
+          <span className={`grid h-[24px] w-[24px] place-items-center rounded-full ${myOn ? 'bg-gradient-to-b from-[#2E2E2E] to-[#0A0A0A]' : 'bg-gradient-to-b from-[#FFE14D] to-[#FFC300]'}`}>
             <svg viewBox="0 0 24 24" className="h-[24px] w-[24px]" aria-hidden="true">
-              <circle cx="8.8" cy="10" r="1.5" fill="#3A2B00" />
-              <circle cx="15.2" cy="10" r="1.5" fill="#3A2B00" />
-              <path d="M7.8 13.8c1.3 1.8 2.7 2.7 4.2 2.7s2.9-.9 4.2-2.7" stroke="#3A2B00" strokeWidth="1.7" strokeLinecap="round" fill="none" />
+              <circle cx="8.8" cy="10" r="1.5" fill={myOn ? '#FFD100' : '#3A2B00'} />
+              <circle cx="15.2" cy="10" r="1.5" fill={myOn ? '#FFD100' : '#3A2B00'} />
+              <path d="M7.8 13.8c1.3 1.8 2.7 2.7 4.2 2.7s2.9-.9 4.2-2.7" stroke={myOn ? '#FFD100' : '#3A2B00'} strokeWidth="1.7" strokeLinecap="round" fill="none" />
             </svg>
           </span>
           <Crown className="absolute -right-[7px] -top-[6px] h-[13px] w-[13px] text-[#E8A200]" fill="#FFC93A" strokeWidth={1.4} />
         </span>
-        <span className={labelCls(active === 'my')}>我的</span>
+        <span className={labelCls(myOn, 'text-black/95')}>我的</span>
       </button>
     </div>
   );
@@ -774,7 +776,10 @@ function HomePage({
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 280) loadMore();
   }, [loadMore]);
 
-  const feed = useMemo<FeedItem[]>(() => {
+  // 首屏瀑布流每次进首页/切分类都整体重洗（需求「刷新的东西都要让他不一样」）；
+  // deps 不含 extraFeed：上滑追加不影响已展示内容的顺序
+  const [mountSeed] = useState(() => Math.random());
+  const baseFeed = useMemo<FeedItem[]>(() => {
     const base: FeedItem[] = [];
     if (filter === 'tuangou') {
       base.push(...MT_DEALS.map<FeedItem>((d) => ({ t: 'deal', d })));
@@ -806,8 +811,10 @@ function HomePage({
       push(mById('m-breakfast') && { t: 'm', m: mById('m-breakfast')! });
       push(mById('m-yangguofu') && { t: 'm', m: mById('m-yangguofu')! });
     }
-    return [...base, ...extraFeed];
-  }, [filter, extraFeed]);
+    return shuffle(base);
+  }, [filter, mountSeed]);
+
+  const feed = useMemo<FeedItem[]>(() => [...baseFeed, ...extraFeed], [baseFeed, extraFeed]);
 
   const tapCat = (c: (typeof MT_HOME_GRID)[number][number]) => {
     if (c.filter === null || c.filter === undefined) {
@@ -827,16 +834,16 @@ function HomePage({
             <span className="truncate text-[17px] font-semibold text-black/90">{cur ? cur.text.slice(0, 9) : '选择地址'}</span>
           </button>
           <span className="flex-1" />
-          <button type="button" aria-label="消息" onClick={() => onToast('暂无新消息')} className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-white/40 active:opacity-60">
-            <MessageCircleMore className="h-[19px] w-[19px] text-black/75" strokeWidth={1.8} />
+          <button type="button" aria-label="消息" onClick={() => onToast('暂无新消息')} className="grid shrink-0 place-items-center rounded-full p-1 active:opacity-60">
+            <MessageCircleMore className="h-[22px] w-[22px] text-black/75" strokeWidth={1.9} />
           </button>
-          <button type="button" aria-label="扫一扫" onClick={() => onToast('扫一扫（演示）')} className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-white/40 active:opacity-60">
-            <ScanLine className="h-[19px] w-[19px] text-black/75" strokeWidth={1.8} />
+          <button type="button" aria-label="扫一扫" onClick={() => onToast('扫一扫（演示）')} className="grid shrink-0 place-items-center rounded-full p-1 active:opacity-60">
+            <ScanLine className="h-[22px] w-[22px] text-black/75" strokeWidth={1.9} />
           </button>
         </div>
         <button type="button" onClick={onOpenSearch} className="mt-3 flex h-10 w-full items-center gap-2 rounded-full bg-white pl-4 pr-1 text-left shadow-sm active:opacity-95">
           <span key={hintIdx} className="min-w-0 flex-1 truncate text-[14px] text-black/75">{HOME_SEARCH_HINTS[hintIdx]}</span>
-          <span className="rounded-full bg-[#FFD100] px-5 py-[7px] text-[14px] font-semibold text-black/85">搜索</span>
+          <span className="shrink-0 whitespace-nowrap rounded-full bg-[#FFD100] px-5 py-[7px] text-[14px] font-semibold text-black/85">搜索</span>
         </button>
       </div>
 
@@ -903,11 +910,37 @@ function HomePage({
 
 // ================================ 搜索页 ================================
 
+/** 搜索结果条目：商家 / 菜品（带所属商家） */
+type SearchHit = { t: 'm'; m: MtMerchant } | { t: 'd'; m: MtMerchant; d: MtDish };
+
+/** 组装搜索池：精确命中（商家+菜品洗牌）在前，「猜你喜欢」全库洗牌垫后，供分批加载 */
+function makeSearchPool(kw: string): { hits: SearchHit[]; pool: SearchHit[] } {
+  const hitMerchants = MT_MERCHANTS.filter(
+    (m) => m.name.includes(kw) || m.cats.some((c) => MT_CATS.find((x) => x.id === c)?.name.includes(kw)) || m.sections.some((s) => s.cat.includes(kw))
+  );
+  const hitDishes = MT_MERCHANTS.flatMap((m) => mtDishesOf(m).filter((d) => d.name.includes(kw)).map((d) => ({ t: 'd' as const, m, d })));
+  const hits: SearchHit[] = [...shuffle(hitMerchants).map((m) => ({ t: 'm' as const, m })), ...hitDishes];
+  const seen = new Set(hits.map((h) => (h.t === 'm' ? `m:${h.m.id}` : `d:${h.d.id}`)));
+  const restM = shuffle(MT_MERCHANTS.filter((m) => !seen.has(`m:${m.id}`))).map((m) => ({ t: 'm' as const, m }));
+  const restD = shuffle(MT_MERCHANTS.flatMap((m) => mtDishesOf(m).filter((d) => !seen.has(`d:${d.id}`)).map((d) => ({ t: 'd' as const, m, d }))));
+  return { hits, pool: [...restM, ...restD] };
+}
+
+/** 每批 15~20 个（需求「搜索以后要加载 15~20 个，下滑还可以加载」） */
+const searchBatchSize = () => 15 + Math.floor(Math.random() * 6);
+
 function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerchant: (id: string) => void }) {
   const [kw, setKw] = useState('');
   const [done, setDone] = useState('');
   const [hist, setHist] = useState<string[]>(() => mtGetSearchHist());
   const inputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [hits, setHits] = useState<SearchHit[]>([]); // 精确命中
+  const [res, setRes] = useState<SearchHit[]>([]); // 已展示（命中 + 猜你喜欢）
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingRef = useRef(false);
+  const poolRef = useRef<SearchHit[]>([]);
+  const doneRef = useRef('');
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -918,6 +951,7 @@ function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerc
     if (!key) return;
     setKw(key);
     setDone(key);
+    doneRef.current = key;
     const next = [key, ...mtGetSearchHist().filter((x) => x !== key)].slice(0, 10);
     try {
       window.localStorage.setItem('mt-search-hist', JSON.stringify(next));
@@ -925,23 +959,41 @@ function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerc
       /* 忽略 */
     }
     setHist(next);
+    const { hits: hs, pool } = makeSearchPool(key);
+    setHits(hs);
+    poolRef.current = pool;
+    setRes([...hs, ...poolRef.current.splice(0, searchBatchSize())]);
+    scrollRef.current?.scrollTo({ top: 0 });
   };
 
-  const merchantHits = done
-    ? MT_MERCHANTS.filter((m) => m.name.includes(done) || m.cats.some((c) => MT_CATS.find((x) => x.id === c)?.name.includes(done)) || m.sections.some((s) => s.cat.includes(done)))
-    : [];
-  const dishHits = done
-    ? MT_MERCHANTS.flatMap((m) => mtDishesOf(m).filter((d) => d.name.includes(done)).map((d) => ({ m, d }))).slice(0, 12)
-    : [];
+  // 下滑加载下一批 15~20 个；垫池耗尽 → 重洗全库续上（每次内容随机，刷新不一样）
+  const loadMore = useCallback(() => {
+    if (loadingRef.current || !doneRef.current) return;
+    loadingRef.current = true;
+    setLoadingMore(true);
+    window.setTimeout(() => {
+      if (poolRef.current.length === 0) poolRef.current = makeSearchPool(doneRef.current).pool;
+      const batch = poolRef.current.splice(0, searchBatchSize());
+      setRes((prev) => [...prev, ...batch]);
+      loadingRef.current = false;
+      setLoadingMore(false);
+    }, 450);
+  }, []);
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || loadingRef.current) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 280) loadMore();
+  }, [loadMore]);
 
   return (
     <div className="flex h-full flex-col bg-white">
       <div className="flex items-center gap-2 border-b border-black/[0.04] bg-white px-3 pb-2.5 pt-[54px]">
-        <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+        <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-6 w-6 text-black/70" />
         </button>
-        <div className="flex h-10 flex-1 items-center gap-2 rounded-full bg-[#F5F6F7] px-3.5">
-          <SearchIcon className="h-4 w-4 text-black/35" />
+        <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full bg-[#F5F6F7] px-3.5">
+          <SearchIcon className="h-4 w-4 shrink-0 text-black/35" />
           <input
             ref={inputRef}
             value={kw}
@@ -950,20 +1002,21 @@ function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerc
               if (e.key === 'Enter') run(kw);
             }}
             placeholder="搜索商家、菜品"
-            className="h-full flex-1 bg-transparent text-[14px] outline-none placeholder:text-black/30"
+            className="h-full min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-black/30"
           />
           {kw && (
-            <button type="button" aria-label="清空" onClick={() => { setKw(''); setDone(''); }}>
+            <button type="button" aria-label="清空" onClick={() => { setKw(''); setDone(''); }} className="shrink-0">
               <X className="h-4 w-4 text-black/30" />
             </button>
           )}
         </div>
-        <button type="button" onClick={() => run(kw)} className="rounded-full bg-[#FFD100] px-4 py-2 text-[14px] font-medium text-black/85 active:opacity-80">
+        {/* 横排搜索按钮（shrink-0 防挤压换行） */}
+        <button type="button" onClick={() => run(kw)} className="shrink-0 whitespace-nowrap rounded-full bg-[#FFD100] px-4 py-2 text-[14px] font-medium text-black/85 active:opacity-80">
           搜索
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
+      <div ref={scrollRef} onScroll={onScroll} className="flex-1 overflow-y-auto overscroll-contain p-4">
         {!done && (
           <>
             <p className="text-[14px] font-semibold text-black/70">搜索发现</p>
@@ -1003,34 +1056,39 @@ function SearchPage({ onBack, onOpenMerchant }: { onBack: () => void; onOpenMerc
 
         {done && (
           <>
-            {merchantHits.length > 0 && <p className="text-[13px] font-semibold text-black/45">相关商家</p>}
-            <div className="mt-2 divide-y divide-black/[0.04]">
-              {merchantHits.map((m) => (
-                <SearchMerchantRow key={m.id} m={m} onOpen={() => onOpenMerchant(m.id)} />
-              ))}
-            </div>
-            {dishHits.length > 0 && <p className="mt-4 text-[13px] font-semibold text-black/45">相关菜品</p>}
-            <div className="mt-2 divide-y divide-black/[0.04]">
-              {dishHits.map(({ m, d }) => (
-                <button key={d.id} type="button" onClick={() => onOpenMerchant(m.id)} className="flex w-full items-center gap-3 p-2.5 text-left active:bg-black/[0.02]">
-                  <FoodImg src={d.img} emoji={d.emoji} className="h-12 w-12 shrink-0 rounded-lg" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[14px] font-medium text-black/85">{d.name}</span>
-                    <span className="block text-[11px] text-black/40">{m.name}</span>
-                  </span>
-                  <span className="text-[15px] font-semibold" style={{ color: MT_PRICE }}>
-                    ¥{fmtMoney(d.price)}
-                  </span>
-                </button>
-              ))}
-            </div>
-            {merchantHits.length === 0 && dishHits.length === 0 && (
-              <div className="mt-16 text-center">
-                <p className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#F5F6F7]">
-                  <SearchIcon className="h-6 w-6 text-black/25" strokeWidth={1.8} />
-                </p>
-                <p className="mt-2 text-[13px] text-black/40">没有找到「{done}」相关的商家或菜品</p>
+            {hits.length === 0 ? (
+              <div className="mt-2">
+                <div className="text-center">
+                  <p className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#F5F6F7]">
+                    <SearchIcon className="h-6 w-6 text-black/25" strokeWidth={1.8} />
+                  </p>
+                  <p className="mt-2 text-[13px] text-black/40">没有找到「{done}」相关的商家或菜品</p>
+                </div>
+                <p className="mt-5 text-[13px] font-semibold text-black/45">猜你喜欢</p>
               </div>
+            ) : (
+              <p className="text-[13px] font-semibold text-black/45">找到「{done}」相关结果</p>
+            )}
+            <div className="mt-2 divide-y divide-black/[0.04]">
+              {res.map((it, i) =>
+                it.t === 'm' ? (
+                  <SearchMerchantRow key={`sm-${it.m.id}-${i}`} m={it.m} onOpen={() => onOpenMerchant(it.m.id)} />
+                ) : (
+                  <button key={`sd-${it.d.id}-${i}`} type="button" onClick={() => onOpenMerchant(it.m.id)} className="flex w-full items-center gap-3 p-2.5 text-left active:bg-black/[0.02]">
+                    <FoodImg src={it.d.img} emoji={it.d.emoji} className="h-12 w-12 shrink-0 rounded-lg" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[14px] font-medium text-black/85">{it.d.name}</span>
+                      <span className="block text-[11px] text-black/40">{it.m.name}</span>
+                    </span>
+                    <span className="shrink-0 text-[15px] font-semibold" style={{ color: MT_PRICE }}>
+                      ¥{fmtMoney(it.d.price)}
+                    </span>
+                  </button>
+                )
+              )}
+            </div>
+            {res.length > 0 && (
+              <p className="py-3 text-center text-[12px] text-black/35">{loadingMore ? '正在加载更多…' : '上滑加载更多'}</p>
             )}
           </>
         )}
