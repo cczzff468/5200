@@ -72,26 +72,242 @@ export interface MtMerchant {
   reviews: MtReview[];
 }
 
-/** 首页分类入口（对齐需求：美食、外卖、超市、水果、药品等） */
-export const MT_CATS: { id: string; name: string; emoji: string; tint: string }[] = [
-  { id: 'waimai', name: '外卖', emoji: '🛵', tint: 'from-[#FFE9B8] to-[#FFD45E]' },
-  { id: 'meishi', name: '美食', emoji: '🍜', tint: 'from-[#FFE0D1] to-[#FFB08A]' },
-  { id: 'chaoshi', name: '超市便利', emoji: '🛒', tint: 'from-[#D6F5E3] to-[#7FDCAE]' },
-  { id: 'shuiguo', name: '水果', emoji: '🍓', tint: 'from-[#FFDDE3] to-[#FFA3B5]' },
-  { id: 'maiyao', name: '买药', emoji: '💊', tint: 'from-[#D9EFFF] to-[#8CCBFF]' },
-  { id: 'yinyin', name: '甜点饮品', emoji: '🧋', tint: 'from-[#F3E3FF] to-[#D3A8FF]' },
-  { id: 'hamburg', name: '汉堡披萨', emoji: '🍔', tint: 'from-[#FFE7C7] to-[#FFC36B]' },
-  { id: 'mala', name: '麻辣烫', emoji: '🍲', tint: 'from-[#FFDCD6] to-[#FF9C8A]' },
-  { id: 'zaocan', name: '早餐', emoji: '🥟', tint: 'from-[#FFF3CE] to-[#FFDD7A]' },
-  { id: 'all', name: '全部分类', emoji: '🧭', tint: 'from-[#EEEFF3] to-[#C9CDD6]' },
+/** 商家筛选分类（分类宫格映射到商家池用） */
+export const MT_CATS: { id: string; name: string; emoji: string }[] = [
+  { id: 'waimai', name: '外卖', emoji: '🛵' },
+  { id: 'meishi', name: '美食', emoji: '🍜' },
+  { id: 'chaoshi', name: '超市便利', emoji: '🛒' },
+  { id: 'shuiguo', name: '水果', emoji: '🍓' },
+  { id: 'maiyao', name: '看病买药', emoji: '💊' },
+  { id: 'yinyin', name: '甜点饮品', emoji: '🧋' },
+  { id: 'hamburg', name: '汉堡披萨', emoji: '🍔' },
+  { id: 'mala', name: '麻辣烫', emoji: '🍲' },
+  { id: 'zaocan', name: '早餐', emoji: '🥟' },
 ];
 
-/** 首页优惠活动卡（点击直达对应商家） */
-export const MT_HOME_DEALS: { tag: string; title: string; sub: string; img?: string; emoji: string; merchantId: string }[] = [
-  { tag: '特价团', title: '爆款单人四件套 4.1 折', sub: '¥13.9 已售58万+', emoji: '🍔', img: img('burger'), merchantId: 'm-tasiting' },
-  { tag: '限时惠', title: '厚芋泥奶茶 第二杯半价', sub: '¥7.2 已售20万+', emoji: '🧋', img: img('milktea'), merchantId: 'm-mixue' },
-  { tag: '新客礼', title: '麻辣烫套餐 满25减4', sub: '¥15.8 已售8万+', emoji: '🍲', img: img('malatang'), merchantId: 'm-yangguofu' },
+/** 首页分类宫格（两页 15 项，对齐真机布局）；filter=null 的频道为演示占位 */
+export interface MtGridCat {
+  id: string;
+  name: string;
+  emoji: string;
+  tint: string;
+  /** 商家筛选分类 id（null = 演示频道，点击提示） */
+  filter?: string | null;
+}
+export const MT_HOME_GRID: MtGridCat[][] = [
+  [
+    { id: 'waimai', name: '外卖', emoji: '🛵', tint: 'from-[#FFF6D6] to-[#FFD84D]', filter: 'waimai' },
+    { id: 'tuangou', name: '团购', emoji: '🎟️', tint: 'from-[#FFE7CC] to-[#FFA24E]', filter: 'tuangou' },
+    { id: 'hotel', name: '酒店/旅行', emoji: '🏨', tint: 'from-[#D9ECFF] to-[#84BAFF]', filter: null },
+    { id: 'shangou', name: '闪购', emoji: '⚡', tint: 'from-[#FFF1C0] to-[#FFD24D]', filter: null },
+    { id: 'yao', name: '看病买药', emoji: '💊', tint: 'from-[#FFF0C2] to-[#FFCE54]', filter: 'maiyao' },
+    { id: 'meishi', name: '美食', emoji: '🍴', tint: 'from-[#FFDED2] to-[#FF9E7A]', filter: 'meishi' },
+    { id: 'xiuxian', name: '休闲玩乐', emoji: '🎮', tint: 'from-[#E6DFFF] to-[#AD92FF]', filter: null },
+    { id: 'anmo', name: '按摩足疗', emoji: '💆', tint: 'from-[#FFDCE8] to-[#FF93BB]', filter: null },
+    { id: 'paotui', name: '跑腿', emoji: '🏃', tint: 'from-[#FFF6D6] to-[#FFD84D]', filter: null },
+    { id: 'dianying', name: '电影演出', emoji: '🎬', tint: 'from-[#FFDCCB] to-[#FF9E6B]', filter: null },
+  ],
+  [
+    { id: 'liren', name: '丽人美发', emoji: '💇', tint: 'from-[#FFDCE8] to-[#FF93BB]', filter: null },
+    { id: 'jipiao', name: '机票火车票', emoji: '✈️', tint: 'from-[#D9ECFF] to-[#84BAFF]', filter: null },
+    { id: 'yiliao', name: '医疗牙科', emoji: '🦷', tint: 'from-[#D9F1FF] to-[#82C4FF]', filter: null },
+    { id: 'xiaoshuo', name: '免费小说', emoji: '📖', tint: 'from-[#FFE9C8] to-[#FFC36B]', filter: null },
+    { id: 'more', name: '更多服务', emoji: '🧭', tint: 'from-[#EEEFF3] to-[#C9CDD6]', filter: null },
+  ],
 ];
+
+// ---------------- 特价团（团购）数据：首页瀑布流 + 团购详情页 + 确认订单页 ----------------
+
+export interface MtDealMenu {
+  sec: string;
+  items: { name: string; price: number }[];
+}
+
+export interface MtDeal {
+  id: string;
+  merchantId: string;
+  /** 套餐标题（如 爆款单人四件套TG1548） */
+  title: string;
+  img?: string;
+  emoji: string;
+  /** 团购价（直接购买） */
+  price: number;
+  /** 原价（划线价 = 商品总价） */
+  origPrice: number;
+  /** 折扣角标（4.1折） */
+  discount: string;
+  /** 销量文案（已售58万+） */
+  sold: string;
+  praise: string;
+  /** 履约方式（秒提 / 到店吃） */
+  tips: string;
+  distanceKm: number;
+  /** 可用时间文案（周一至周日可用） */
+  usable: string;
+  /** 过期提醒 */
+  notice: string;
+  /** 拼团价（可选，低于直接购买价） */
+  groupPrice?: number;
+  /** 团购详情（套餐内容清单） */
+  menu: MtDealMenu[];
+  storeTags: string[];
+}
+
+const D = (d: MtDeal): MtDeal => d;
+
+export const MT_DEALS: MtDeal[] = [
+  D({
+    id: 'd-tast-set',
+    merchantId: 'm-tasiting',
+    title: '爆款单人四件套TG1548',
+    img: img('burger'),
+    emoji: '🍔',
+    price: 13.9,
+    origPrice: 34,
+    discount: '4.1折',
+    sold: '已售58万+',
+    praise: '94%好评',
+    tips: '秒提',
+    distanceKm: 1.2,
+    usable: '周一至周日可用',
+    notice: '本单将于7天后过期，请注意周末、节假日是否可用',
+    groupPrice: 11.9,
+    menu: [
+      { sec: '主食 2选1', items: [{ name: '香辣鸡腿中国汉堡', price: 12 }, { name: '藤椒鸡腿中国汉堡', price: 12 }] },
+      { sec: '小食 2选1', items: [{ name: '黄金鸡块（5块）', price: 9.9 }, { name: '香辣鸡翅（2块）', price: 10.5 }] },
+      { sec: '固选', items: [{ name: '冰镇可口可乐（中杯）', price: 4 }] },
+    ],
+    storeTags: ['金冠好店', '不可吸烟', '有Wi-Fi', '不可带宠物'],
+  }),
+  D({
+    id: 'd-mixue-hyn',
+    merchantId: 'm-mixue',
+    title: '厚芋泥奶茶 经典芋泥 3张',
+    img: img('milktea'),
+    emoji: '🧋',
+    price: 21.6,
+    origPrice: 31.5,
+    discount: '6.9折',
+    sold: '已售20万+',
+    praise: '95%好评',
+    tips: '秒提',
+    distanceKm: 0.8,
+    usable: '周一至周日可用',
+    notice: '本单将于30天后过期，免预约随时可用',
+    menu: [{ sec: '内含券 3张', items: [{ name: '厚芋泥奶茶（中杯）', price: 10.5 }, { name: '厚芋泥奶茶（中杯）', price: 10.5 }, { name: '厚芋泥奶茶（中杯）', price: 10.5 }] }],
+    storeTags: ['免预约', '随时退'],
+  }),
+  D({
+    id: 'd-mixue-mjlv',
+    merchantId: 'm-mixue',
+    title: '茉莉奶绿（特价团购） 3张',
+    img: img('milktea'),
+    emoji: '🍵',
+    price: 13.3,
+    origPrice: 19.5,
+    discount: '6.8折',
+    sold: '半年售10万+',
+    praise: '93%好评',
+    tips: '秒提',
+    distanceKm: 0.8,
+    usable: '周一至周日可用',
+    notice: '本单将于30天后过期，免预约随时可用',
+    menu: [{ sec: '内含券 3张', items: [{ name: '茉莉奶绿（中杯）', price: 6.5 }, { name: '茉莉奶绿（中杯）', price: 6.5 }, { name: '茉莉奶绿（中杯）', price: 6.5 }] }],
+    storeTags: ['免预约', '随时退'],
+  }),
+  D({
+    id: 'd-ygf-set',
+    merchantId: 'm-yangguofu',
+    title: '麻辣烫单人套餐（番茄微辣）',
+    img: img('malatang'),
+    emoji: '🍲',
+    price: 15.8,
+    origPrice: 25,
+    discount: '6.3折',
+    sold: '已售8万+',
+    praise: '92%好评',
+    tips: '到店吃',
+    distanceKm: 1.5,
+    usable: '周一至周五可用',
+    notice: '本单将于14天后过期，法定节假日不可用',
+    groupPrice: 13.9,
+    menu: [
+      { sec: '主食', items: [{ name: '番茄麻辣烫（微辣）', price: 16.8 }] },
+      { sec: '小食', items: [{ name: '宽粉', price: 2 }, { name: '鹌鹑蛋（5个）', price: 3 }] },
+      { sec: '饮品', items: [{ name: '酸梅汤（中杯）', price: 5 }] },
+    ],
+    storeTags: ['金冠好店', '免费Wi-Fi', '可停车'],
+  }),
+  D({
+    id: 'd-zb-pizza',
+    merchantId: 'm-pizza',
+    title: '9寸金牌比萨 4选1',
+    img: img('pizza'),
+    emoji: '🍕',
+    price: 19.9,
+    origPrice: 36,
+    discount: '5.5折',
+    sold: '已售15万+',
+    praise: '94%好评',
+    tips: '秒提',
+    distanceKm: 2.1,
+    usable: '周一至周日可用',
+    notice: '本单将于7天后过期，随时退·过期自动退',
+    menu: [
+      { sec: '比萨 4选1', items: [{ name: '超级至尊比萨', price: 36 }, { name: '夏威夷比萨', price: 32 }, { name: '肉香四溢比萨', price: 35 }, { name: '田园风光比萨', price: 28 }] },
+      { sec: '固选', items: [{ name: '柠檬红茶（中杯）', price: 6 }] },
+    ],
+    storeTags: ['金冠好店', '有Wi-Fi'],
+  }),
+  D({
+    id: 'd-fruit-3x1',
+    merchantId: 'm-fruit',
+    title: '应季鲜果拼盘 3选1',
+    img: img('fruit'),
+    emoji: '🍓',
+    price: 9.9,
+    origPrice: 19.9,
+    discount: '5折',
+    sold: '已售5万+',
+    praise: '96%好评',
+    tips: '秒提',
+    distanceKm: 0.6,
+    usable: '周一至周日可用',
+    notice: '本单将于7天后过期，鲜果当日切配',
+    menu: [
+      { sec: '鲜果 3选1', items: [{ name: '当季草莓盒（300g）', price: 19.9 }, { name: '海南金菠萝（1个）', price: 12.9 }, { name: '新疆西梅（500g）', price: 19.9 }] },
+    ],
+    storeTags: ['新鲜直达', '坏果包赔'],
+  }),
+  D({
+    id: 'd-bf-2r',
+    merchantId: 'm-breakfast',
+    title: '豆浆油条元气早餐 2人份',
+    img: img('breakfast'),
+    emoji: '🥟',
+    price: 6.9,
+    origPrice: 12,
+    discount: '5.8折',
+    sold: '已售12万+',
+    praise: '95%好评',
+    tips: '到店吃',
+    distanceKm: 0.9,
+    usable: '周一至周日可用',
+    notice: '本单将于7天后过期，仅限早餐时段（6:00-10:30）',
+    groupPrice: 5.9,
+    menu: [
+      { sec: '套餐内容', items: [{ name: '现磨豆浆（大杯）×2', price: 4 }, { name: '现炸油条×2', price: 4 }, { name: '鲜肉小笼包（4只）', price: 4 }] },
+    ],
+    storeTags: ['免预约', '清晨现做'],
+  }),
+];
+
+/** 首页「特价团聚合卡」（右侧列表位，展示 2 条券） */
+export const MT_HOME_LIST: { title: string; badge: string; dealIds: string[] } = {
+  title: '十一寻味5折起',
+  badge: '特价团',
+  dealIds: ['d-mixue-hyn', 'd-zb-pizza'],
+};
 
 const R = (user: string, rating: number, content: string, time: string, tags?: string[]): MtReview => ({ user, rating, content, time, tags });
 

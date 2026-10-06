@@ -262,16 +262,20 @@ export function mtSaveAddresses(uid: string, list: MtAddress[]): void {
 
 // ---------------- 订单 ----------------
 
-export type MtOrderStatus = 'pendingPay' | 'pendingAccept' | 'accepted' | 'delivering' | 'completed' | 'canceled';
+export type MtOrderStatus = 'pendingPay' | 'pendingAccept' | 'accepted' | 'delivering' | 'pendingUse' | 'completed' | 'canceled';
 
 export const MT_STATUS_LABEL: Record<MtOrderStatus, string> = {
   pendingPay: '待支付',
   pendingAccept: '待接单',
   accepted: '商家已接单',
   delivering: '配送中',
+  pendingUse: '待使用',
   completed: '已完成',
   canceled: '已取消',
 };
+
+/** 订单履约类型：外卖配送（默认，兼容旧数据） / 团购到店（券码核销） */
+export type MtOrderKind = 'waimai' | 'tuangou';
 
 export interface MtOrderItem {
   dishId: string;
@@ -297,7 +301,13 @@ export interface MtOrder {
   /** 实付金额（pendingPay 时为应付金额） */
   total: number;
   note?: string;
-  address: MtAddress;
+  /** 履约类型（团购单无收货地址，凭券码到店） */
+  kind?: MtOrderKind;
+  address?: MtAddress;
+  /** 团购券码（支付成功后生成，如 8305 1249 0027） */
+  voucher?: string;
+  /** 到店核销时间 */
+  consumedAt?: number;
   /** 支付方式：'wx' | 'qq'（pendingPay 时为空） */
   payIdp?: 'wx' | 'qq';
   /** 具体支付渠道展示名（零钱/银行卡/亲属卡） */
@@ -338,7 +348,10 @@ export function mtLoadOrders(uid: string): MtOrder[] {
       discount: typeof o.discount === 'number' ? o.discount : 0,
       total: typeof o.total === 'number' ? o.total : 0,
       note: typeof o.note === 'string' ? o.note : undefined,
-      address: (o.address ?? { id: '', name: '', phone: '', text: '—', tag: '家' }) as MtAddress,
+      kind: o.kind === 'tuangou' ? 'tuangou' : 'waimai',
+      address: (o.address ?? undefined) as MtAddress | undefined,
+      voucher: typeof o.voucher === 'string' ? o.voucher : undefined,
+      consumedAt: typeof o.consumedAt === 'number' ? o.consumedAt : undefined,
       payIdp: o.payIdp === 'wx' || o.payIdp === 'qq' ? o.payIdp : undefined,
       payChannelLabel: typeof o.payChannelLabel === 'string' ? o.payChannelLabel : undefined,
       payFc: o.payFc === true,
@@ -362,12 +375,12 @@ export function mtGetOrder(uid: string, id: string): MtOrder | undefined {
 
 // ---------------- 订单状态机（时间戳确定性推进） ----------------
 
-/** 支付后：10s 商家接单 → 26s 骑手取餐/配送中 → 75s 已送达（演示节奏，重启按时间戳补推进） */
+/** 支付后：10s 商家接单 → 26s 骑手取餐/配送中 → 75s 已送达（演示节奏，重启按时间戳补推进）；团购单支付后直接待使用 */
 const ACCEPT_MS = 10_000;
 const PICKUP_MS = 26_000;
 const DELIVERED_MS = 75_000;
-/** 待支付超时（自动取消） */
-const PAY_TIMEOUT_MS = 15 * 60_000;
+/** 待支付超时（自动取消，对齐真机 30 分钟） */
+const PAY_TIMEOUT_MS = 30 * 60_000;
 
 const RIDER_POOL = ['宋世超', '刘志伟', '王建平', '李海峰', '赵国栋', '陈志强'];
 
@@ -419,6 +432,7 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
         }
         break;
       }
+      // 团购单：待使用 → 无自动推进，用户到店核销
       break;
     }
     return cur;
@@ -438,8 +452,10 @@ export function mtStatusBody(o: MtOrder): string {
       return '商家已接单，正在为您准备餐品';
     case 'delivering':
       return `骑手${o.riderName ?? ''}已取餐，正在火速配送`;
+    case 'pendingUse':
+      return `支付成功¥${o.total.toFixed(2)}，凭券码${o.voucher ?? ''}到店使用`;
     case 'completed':
-      return '订单已送达，感谢您的信任，欢迎评价';
+      return o.kind === 'tuangou' ? '团购券已核销，感谢光临，欢迎评价' : '订单已送达，感谢您的信任，欢迎评价';
     case 'canceled':
       return o.cancelReason ?? '订单已取消';
   }
