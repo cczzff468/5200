@@ -15996,3 +15996,22 @@ Stage Summary:
 - 交付文件：src/components/ios/HomeScreen.tsx（唯一改动文件，+87/-44）
 - 关键决策：①预览图标放大 1.16（圆角半径≈21%，贴近 iOS 22.4%）而非换图——22 枚 PNG 全圆形，改渲染层一处即可全量生效；②解体规则同时覆盖拖拽预览（实时反馈）与提交路径（×/合并），拖回原位松手仍整布局复原（origin 快照）不受影响；③×=隐藏与主屏编辑模式 × 行为对齐，App Store「已移除」列表天然可找回，无死锁
 - LAYOUT_VERSION 未动（避免 v11 重置清掉用户现有文件夹/布局）；TSC 0 错误、ESLint 干净、dev server 200
+
+---
+Task ID: folder-ux-2
+Agent: 主协调者 (Z.ai Code)
+Task: 桌面拖拽三项修复/打磨——①App 拖到下面/旁边移不动（挤位被合并预览阻断 + Dock 松手弹回）②合并预览美化（被拖 App 外圈呼吸圆角方边框）③松手入夹飞入动画（iOS 同款）
+
+Work Log:
+- 根因一（移动被阻断，用户主诉「APP 移到下面移动不了」）：r4 版 onMove 只要被拖图标与任一 App/文件夹图标重叠 >0 就冻结挤位换位，且重叠 ≥50% 立即弹合并预览——满格网格里往下拖必然压到下面的 App，要么冻结无反馈、要么弹预览后松手误建夹。重写为 iOS 同款「压住出预览」：重叠 >0 仍冻结换位（目标不挪窝），但预览只在「重叠 ≥30%(MERGE_PIN_AREA) 且指针基本静止 240ms(MERGE_DWELL_MS)」后弹出；移动中永不弹——快速放到目标上松手=正常落位换位；大幅移动(>6px)重置计时、轻微手抖不重置；预览弹出后重叠掉出 30% 即取消；新增 mergeDwellT/mergeDwellPos refs + clearMergeDwell（beginDrag/endDrag/拖拽 effect cleanup 全部清理）
+- 根因二（Dock 松手弹回，同属「移到下面移不进」）：endDrag 开头就清空 dragDockRect 与 dragMeta.current，而松手落位 hitTestAt 的 Dock 连续轨道分支依赖 dragDockRect 和 dragMeta.current?.id——永远失配，拖到 Dock 条上（非精确压图标）松手 hitTest 落进空白兜底被弹回网格；拖拽过程中的 Dock 预览也被撤回。修复：dragMeta.current 与 dragDockRect.current 统一挪到 endDrag 末尾（命中检测全部结束后）再清
+- 根因三（满员 Dock 右端插入无效）：hitTestAt Dock 分支算出的插入下标可为 capacity(4)，reorder 追加后 pop 挤出的正是被拖 App 自己=原地不动；修复：被拖项不在 Dock 时下标夹到 DOCK_CAPACITY-1（改为挤走最后一个 Dock 图标回网格）
+- 预览美化（用户要求「APP 外面会显示一个正方形边框」）：floatingCopy 合并预览期间不再隐藏（原来 App→App 时直接消失），改为被拖 App/文件夹外圈套 74px 圆角方呼吸边框（.merge-frame：scale 1↔1.06 + 白色光环 box-shadow，1.05s 循环）+ 名称标签照旧；目标处文件夹预览（毛玻璃缩略图/放大 ring）保持
+- 入夹飞入动画：applyMerge 改为返回合并后文件夹 tile key（resKey）；endDrag 合并分支先取目标 tile 实时矩形（压住 240ms 后 FLIP 必已结束），applyMerge 落子后 setFlyIn({appId, from, to}) 渲染 fixed 浮层（z-85，App 图标 360ms iOS 曲线缩小飞向文件夹并淡出，fill forwards，380ms 后卸载），同时 rAF 对目标文件夹 tile 播 300ms scale(1.15→1) 回弹「接住」动画
+- E2E（agent-browser 430×932，合成 PointerEvent 精控时序）：①满格页拖浏览器下移两行→落位正确、无文件夹✓ ②天气快放到主题上松手→互换位置、无文件夹✓（旧版此处会误建夹）③备忘录压住主题 600ms→.merge-frame 出现→松手→建夹+飞入浮层(z-85)出现后自动清理✓ ④编辑模式轻点文件夹→面板打开（编辑态带入）✓ ⑤面板 × 移除→剩 1 App 自动解体、面板关闭、剩余 App 原位落格✓ ⑥App 压住文件夹 800ms→预览→松手→夹内 3 App（IndexedDB 校验）✓ ⑦拖 App 到 Dock 条右端松手→入 Dock、末位图标挤出回网格✓（修复前被弹回）⑧面板长按 320ms 拖出到桌面✓ ⑨编辑完成退出、设置 App 打开等回归✓；errors 仅剩本轮调试 eval 自身的两条残留，无应用错误
+- 踩坑记录：agent-browser eval 不 await Promise（超时 30s）——异步结果一律挂 window 再二次读取；React 合成事件须把 pointermove/up 派发到元素（冒泡到 root 容器），派发到 window 收不到（但拖拽中的窗口级原生监听不受影响）；HMR 后务必 reload 再验证，否则新旧代码混杂
+
+Stage Summary:
+- 交付文件：src/components/ios/HomeScreen.tsx（onMove 压住判定重写 + endDrag 清理顺序修复 + hitTestAt Dock 满员下标钳位 + floatingCopy 预览边框 + flyIn 浮层/effects + applyMerge 返回 resKey）、src/app/globals.css（merge-frame 呼吸边框动画）
+- 关键决策：合并预览从「重叠≥50% 立即弹」改为「重叠≥30% 静止 240ms 弹」——移动中换位永远通畅（用户主诉），快速放置=移动、压住=入夹，与 iOS 手感一致；endDrag 的 dragMeta/dragDockRect 清理顺序是本次 Dock 弹回的真正根因
+- 验证：eslint 0 错误、tsc 0 错误、dev.log 无应用错误；九项浏览器 E2E 全通过

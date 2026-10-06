@@ -97,9 +97,11 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  * - 布局持久化到 IndexedDB（settings store，key = 'homeLayout'），兼容旧单页格式
  *   （旧 grid 迁移为第 1 页；v6 起旧版本整体重置为新排布）。
  *
- * - 文件夹（iOS 同款）：编辑模式把 App 拖到另一 App/文件夹上、图标重叠约一半 → 立即出现
- *   合并预览（目标 App 原地变成文件夹样式的毛玻璃缩略图 / 目标文件夹放大并列出将入夹的
- *   App——预览是纯视觉，目标不挪窝、被拖 App 也不入夹），松手才建夹/入夹/并夹，拖开即取消；
+ * - 文件夹（iOS 同款）：编辑模式把 App 拖到另一 App/文件夹上「压住」~240ms（图标重叠
+ *   ≥ 三成且指针基本静止）→ 弹出合并预览（目标 App 原地变成文件夹样式的毛玻璃缩略图 /
+ *   目标文件夹放大高亮；被拖 App 外圈有呼吸的圆角方边框），松手 App 缩小飞入文件夹并
+ *   建夹/入夹/并夹，拖开即取消；移动中永不弹预览——挤位换位照常进行（App 拖到下面/
+ *   旁边能顺畅移过去，快速放到目标上松手 = 正常落位而不是建夹）；
  *   文件夹图标 = 毛玻璃圆角方（前 6 个 App 缩略图 3×2 + 超额数量角标）+ 名称；
  *   点按弹出全屏毛玻璃面板（点名称改名/分页滑动/点外部收起/点 App 打开；非编辑态长按
  *   面板任意处进入面板编辑——App 抖动、长按 320ms 拖出 App 到桌面），
@@ -297,12 +299,18 @@ const HIT_PAD_PX = 6;
 /** 拖拽命中：Dock 槽位外扩（px）——Dock 图标间隙 18px，需要更大的感应范围才能
  *  顺畅地插入/排序 Dock（同时避免拖到 Dock 上方空白时误入网格兜底） */
 const DOCK_HIT_PAD_PX = 30;
-/** 悬停建夹/入夹的阈值：被拖图标与目标 App/文件夹图标矩形重叠 ≥ 一半（MERGE_OVERLAP）
- *  → 立即出现合并预览（纯视觉）；有任何重叠（>0）即暂停挤位换位（悬停态，目标不挪窝），
- *  松手才建夹/入夹/并夹，拖开（重叠归零）即取消并恢复挤位换位 */
-const MERGE_OVERLAP = 0.5;
+/** 悬停建夹/入夹的判定：被拖图标与目标 App/文件夹图标重叠 ≥ 三成（MERGE_PIN_AREA）即视为
+ *  「压在目标上」——暂停挤位换位（目标不挪窝），指针基本静止 MERGE_DWELL_MS 后弹出合并预览，
+ *  松手才建夹/入夹/并夹，拖开（重叠归零）即取消并恢复挤位换位。
+ *  关键：预览只在「压住不动」时出现——移动中永不弹（挤位换位照常），快速把 App 拖到
+ *  另一个 App 上松手 = 正常落位换位而不是建夹（用户反馈：App 拖到下面/旁边必须能顺畅移过去） */
+const MERGE_PIN_FRAC = 0.3;
+/** 合并预览的静止压住时长（ms）：压住目标不动此时长后弹出预览（轻微手抖 ≤6px 不重置） */
+const MERGE_DWELL_MS = 240;
 /** 图标可视尺寸（网格/Dock 槽位顶部居中的方形图标区；槽位矩形还包含下方标签） */
 const ICON_SIZE = 60;
+/** 压住判定面积（px²）：图标可视区 60×60 的三成 */
+const MERGE_PIN_AREA = MERGE_PIN_FRAC * ICON_SIZE * ICON_SIZE;
 /** 文件夹展开面板每页 App 数（3 列 × 4 行） */
 const FOLDER_PANEL_PAGE = 12;
 /** 翻页后页点保持显示的时长（之后淡出回搜索胶囊） */
@@ -1335,6 +1343,10 @@ export default function HomeScreen() {
   const dotsTimer = useRef<number | null>(null);
   /** 悬停合并预览（非响应式镜像，事件处理里读） */
   const mergeRef = useRef<MergePreviewData | null>(null);
+  /** 合并预览的静止压住计时器：压住目标 ≥240ms 才弹预览（移动中永不弹，快速放下=正常换位） */
+  const mergeDwellT = useRef<number | null>(null);
+  /** 计时器起点的指针位置：大幅移动（>6px）重置计时，轻微手抖不重置 */
+  const mergeDwellPos = useRef<{ x: number; y: number } | null>(null);
 
   // ref 与 state 同步（render 期间禁止写 ref，故放 effect）
   useEffect(() => {
@@ -1455,7 +1467,9 @@ export default function HomeScreen() {
       window.setTimeout(() => {
         suppressClick.current = false;
       }, 400);
+      dragMeta.current = null;
     }
+    // Dock 矩形同理：松手落位 hitTestAt 全部结束后再清（beginDrag 每次重新捕获）
     showDots();
   };
 
@@ -1595,11 +1609,25 @@ export default function HomeScreen() {
     lastDragHit.current = null;
   };
 
+  /** 清除合并预览的静止压住计时器（endDrag/beginDrag/拖出重叠区时调用） */
+  const clearMergeDwell = () => {
+    if (mergeDwellT.current !== null) {
+      window.clearTimeout(mergeDwellT.current);
+      mergeDwellT.current = null;
+    }
+    mergeDwellPos.current = null;
+  };
+
+  /** 入夹飞入动画（iOS 同款）：松手合并后，被拖 App 图标从松手位置缩小飞进目标文件夹。
+   *  纯视觉浮层——布局在 applyMerge 已一次性提交，这里只补「飞进去」的过程感 */
+  const [flyIn, setFlyIn] = useState<{ appId: AppId; fx: number; fy: number; tx: number; ty: number } | null>(null);
+  const flyInEl = useRef<HTMLSpanElement | null>(null);
+
   /**
    * 即时合并扫描：在当前页上找「与被拖图标矩形重叠最大」的可合并 tile。
    * - 纯几何判定：遍历当前布局的 App/文件夹 tile，取其「当前槽位」（数组下标即流式槽位，
    *   槽位矩形来自 beginDrag 捕获的静态网格几何）顶部居中的 60×60 图标区，与被拖浮动
-   *   副本顶部居中的 60×60 图标区求重叠面积——拖到谁身上一半就是谁，与指针命中无关，
+   *   副本顶部居中的 60×60 图标区求重叠面积——压在谁身上就是谁，与指针命中无关，
    *   也不受挤位换位把目标推走的影响（追赶问题免疫）；
    * - 可合并组合：App→App（建夹）、App→文件夹（入夹）、文件夹→文件夹（并夹）；
    *   小组件不可合并、文件夹不能并入单个 App。
@@ -1639,8 +1667,9 @@ export default function HomeScreen() {
 
   /** 悬停合并落手：建夹（App→App）/ 入夹（App→文件夹）/ 并夹（文件夹→文件夹）。
    *  预览是纯视觉——此刻目标仍在原位、被拖项也未被消费，这里一次性完成：
-   *  摘除被拖项（网格/Dock/来源文件夹——面板拖出时被拖项还在夹里），再按合并语义落子 */
-  const applyMerge = (merge: MergePreviewData, draggedId: string) => {
+   *  摘除被拖项（网格/Dock/来源文件夹——面板拖出时被拖项还在夹里），再按合并语义落子。
+   *  返回合并后文件夹 tile 的 key（飞入动画落点/接住弹一下用；无合并语义时返回 null） */
+  const applyMerge = (merge: MergePreviewData, draggedId: string): string | null => {
     const cur = layoutRef.current;
     const pages = cur.pages.map((p) => p.slice());
     const dock = cur.dock.slice();
@@ -1668,6 +1697,7 @@ export default function HomeScreen() {
         }
       }
     }
+    let resKey: string | null = null;
     if (merge.kind === 'app' && !isFolderKey(draggedId)) {
       // App→App：目标 App 原地变新文件夹（目标 App 在前、被拖 App 在后），默认名「文件夹」
       const fid = newFolderId();
@@ -1676,6 +1706,7 @@ export default function HomeScreen() {
       const ti = pages[pg].findIndex((t) => tileKey(t) === merge.targetKey);
       if (ti >= 0) pages[pg].splice(ti, 1);
       pages[pg].splice(Math.max(0, Math.min(pages[pg].length, ti >= 0 ? ti : merge.targetPos.index)), 0, { kind: 'folder', id: fid });
+      resKey = folderKey(fid);
     } else if (merge.kind === 'folder') {
       const dst = folders.find((f) => f.id === merge.folderId);
       if (dst) {
@@ -1689,6 +1720,7 @@ export default function HomeScreen() {
         } else if (!dst.apps.includes(draggedId as AppId)) {
           dst.apps.push(draggedId as AppId);
         }
+        resKey = folderKey(dst.id);
       }
     } else {
       // 防御兜底：无合并语义时被拖项原样放回目标位
@@ -1708,6 +1740,7 @@ export default function HomeScreen() {
     } catch {
       /* 震动不可用 */
     }
+    return resKey;
   };
 
   /** 编辑模式 × 删除文件夹：夹内 App 全部退回主屏（从文件夹原位置起顺延；页满顺延到
@@ -1982,6 +2015,10 @@ export default function HomeScreen() {
       }
       const cur = zoneIndexOf(dragId0);
       if (cur && cur.zone === 'dock' && cur.index === idx) return cur;
+      // 满员 Dock 末端：从网格来的 App 插到 capacity 位置会在 reorder 里挤出自己
+      // （追加了又 pop 回去 = 原地不动，用户实测「App 移到下面移不进 Dock」）——
+      // 这里把插入下标夹到 capacity-1，改为挤走最后一个 Dock 图标回网格
+      if (cur && cur.zone !== 'dock') idx = Math.min(idx, DOCK_CAPACITY - 1);
       return { zone: 'dock', index: idx };
     }
     // ② 矩形命中（网格槽位；Dock 图标矩形仅用于小组件——App 已走上面的轨道）
@@ -2194,9 +2231,10 @@ export default function HomeScreen() {
     dragMeta.current = { id, startX: x, startY: y };
     pageCreated.current = false;
     lastDragHit.current = null;
-    // 拖拽总是从干净状态开始（清掉上一轮合并预览残留）
+    // 拖拽总是从干净状态开始（清掉上一轮合并预览/静止压住计时残留）
     mergeRef.current = null;
     setMergePreview(null);
+    clearMergeDwell();
     dragOrigin.current = { hit: loc, layout: structuredClone(layoutRef.current) };
     setDragId(id);
     try {
@@ -2212,11 +2250,14 @@ export default function HomeScreen() {
       frame.current = null;
     }
     clearFlipTimer();
-    dragDockRect.current = null;
+    clearMergeDwell();
     lastDragHit.current = null;
     if (dragMeta.current) {
       const m = dragMeta.current;
-      dragMeta.current = null;
+      // 注意：dragMeta.current 此处不能提前清空——下方松手落位的 hitTestAt 依赖它
+      // （Dock 连续轨道分支与空白兑底的 dragId0 都从 dragMeta 读；提前清空会让拖到
+      //   Dock 条上松手时命中永远失配、App 被弹回网格——用户实测「移到下面移不进」），
+      //   统一挪到函数末尾清理
       // 拖回原位松手 → 整布局复原（撤销拖拽过程中的一切中间换位）。
       // 命中判定用「最近 tile 兜底」，落在格子间隙也能正确还原。
       const merge = mergeRef.current;
@@ -2226,7 +2267,30 @@ export default function HomeScreen() {
         // 悬停合并落手：建夹/入夹/并夹（被拖项已被合并消费，不做落位动画）
         setMergePreview(null);
         merged = true;
-        applyMerge(merge, m.id);
+        // 目标 tile 的实时矩形（弹预览前已静止 ≥240ms，FLIP 必已结束 → 即最终落点）
+        const tEl = rootRef.current?.querySelector<HTMLElement>(`[data-tile][data-zone="grid"][data-id="${merge.targetKey}"]`);
+        const tRect = tEl?.getBoundingClientRect() ?? null;
+        const resKey = applyMerge(merge, m.id);
+        const v = dragVisualRef.current;
+        if (v && !isFolderKey(m.id) && tRect) {
+          // 入夹飞入动画（iOS 同款）：App 图标从松手位置缩小飞进文件夹
+          setFlyIn({
+            appId: m.id as AppId,
+            fx: v.x + dragDeltaRef.current.dx + (v.w - ICON_SIZE) / 2,
+            fy: v.y + dragDeltaRef.current.dy,
+            tx: tRect.left + tRect.width / 2 - ICON_SIZE / 2,
+            ty: tRect.top,
+          });
+        }
+        if (resKey) {
+          // 文件夹接住 App 后弹一下（回弹曲线）
+          requestAnimationFrame(() => {
+            tileEls.current.get(resKey)?.animate([{ transform: 'scale(1.15)' }, { transform: 'scale(1)' }], {
+              duration: 300,
+              easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
+            });
+          });
+        }
       } else if (e) {
         const origin = dragOrigin.current;
         const moved = Math.hypot(e.clientX - m.startX, e.clientY - m.startY);
@@ -2253,7 +2317,7 @@ export default function HomeScreen() {
               layoutRef.current = origin.layout;
               setLayout(origin.layout);
             } else if (hit && (!cur || !sameHit(cur, hit))) {
-              // 悬停期间挤位被暂停（压在可合并目标上未到一半）——松手按当前指针位置
+              // 悬停/压住期间挤位被冻结（重叠在目标上）——松手按当前指针位置
               // 补一次落位，避免 App 落在悬停前的旧位置
               const next = reorderForDrag(m.id, hit);
               layoutRef.current = next;
@@ -2278,7 +2342,12 @@ export default function HomeScreen() {
       window.setTimeout(() => {
         suppressClick.current = false;
       }, 400);
+      dragMeta.current = null;
     }
+    // Dock 矩形同理：松手落位 hitTestAt 全部结束后再清（beginDrag 每次重新捕获）
+    // Dock 矩形在命中检测（含松手落位）全部结束后再清——之前在 endDrag 开头就清空，
+    // 导致松手时 hitTestAt 的 Dock 分支永远失配、拖到 Dock 条上松手被弹回网格
+    dragDockRect.current = null;
     if (pressTimer.current !== null) {
       window.clearTimeout(pressTimer.current);
       pressTimer.current = null;
@@ -2301,26 +2370,44 @@ export default function HomeScreen() {
         const d = { dx: cx - m.startX, dy: cy - m.startY };
         dragDeltaRef.current = d;
         setDragDelta(d);
-        // 即时合并检测（纯几何扫描）：重叠 ≥ 一半 → 立即出合并预览。
-        // 预览是纯视觉（目标不挪窝、被拖 App 也不入夹），松手才建夹/入夹/并夹，拖开即取消；
-        // 预览期间挤位换位与边缘翻页暂停
+        // 合并检测（iOS 同款「压住出预览」）：
+        // - 与可合并目标图标有任何重叠 → 冻结挤位换位（目标不挪窝，压住即「放在上面」），
+        //   完全拖过/拖开（重叠归零）后自动恢复换位（换位在松手/拖出时补上）；
+        // - 重叠 ≥ 三成且指针基本静止 MERGE_DWELL_MS → 弹出合并预览（松手才入夹）；
+        // - 移动中永不弹预览：快速把 App 拖到另一个 App 上松手 = 正常落位换位而不是建夹
+        //   （用户反馈：App 拖到下面/旁边必须能顺畅移过去）
         const scan = mergeScan(m.id, d);
-        const full = MERGE_OVERLAP * ICON_SIZE * ICON_SIZE;
-        if (scan && scan.area >= full) {
-          clearFlipTimer();
-          if (mergeRef.current?.targetKey !== scan.data.targetKey) showMergePreview(scan.data);
-          return;
-        }
-        if (mergeRef.current) clearMergePreview();
-        // 与可合并目标图标有任何重叠：暂停挤位换位（目标不被推走——用户要求“APP 不放里面”）。
-        // 继续推进到重叠≥一半出合并预览；完全拖过/拖开（重叠归零）后自动恢复挤位换位，
-        // 松手时由 endDrag 按当前指针位置补一次落位。否则细步拖拽时指针刚进目标格
-        // （图标仅重叠十几个像素）就会触发换位把目标挤走，图标永远叠不到一半
         if (scan && scan.area > 0) {
           clearFlipTimer();
           lastDragHit.current = null;
+          if (mergeRef.current && scan.area < MERGE_PIN_AREA) {
+            // 已弹预览但重叠掉出阈值：取消预览（完全拖出重叠区后恢复换位）
+            clearMergePreview();
+            clearMergeDwell();
+          }
+          if (scan.area >= MERGE_PIN_AREA) {
+            if (mergeRef.current) return; // 预览保持（轻微移动不丢）
+            // 未弹预览：静止压住 ~240ms 后弹出（大幅移动重置计时，轻微手抖不重置）
+            const prev = mergeDwellPos.current;
+            if (mergeDwellT.current === null || !prev || Math.hypot(cx - prev.x, cy - prev.y) > 6) {
+              clearMergeDwell();
+              mergeDwellPos.current = { x: cx, y: cy };
+              mergeDwellT.current = window.setTimeout(() => {
+                mergeDwellT.current = null;
+                mergeDwellPos.current = null;
+                const m2 = dragMeta.current;
+                if (!m2) return;
+                const s2 = mergeScan(m2.id, dragDeltaRef.current);
+                if (s2 && s2.area >= MERGE_PIN_AREA) showMergePreview(s2.data);
+              }, MERGE_DWELL_MS);
+            }
+          } else {
+            clearMergeDwell();
+          }
           return;
         }
+        if (mergeRef.current) clearMergePreview();
+        clearMergeDwell();
         updateEdgeFlip(cx);
         const hit = hitTestAt(cx, cy);
         if (!hit) {
@@ -2346,6 +2433,7 @@ export default function HomeScreen() {
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
       clearFlipTimer();
+      clearMergeDwell();
       if (frame.current !== null) {
         cancelAnimationFrame(frame.current);
         frame.current = null;
@@ -2390,6 +2478,25 @@ export default function HomeScreen() {
       { duration: 270, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }
     );
   }, [dragging]);
+
+  // 入夹飞入动画：合并落手后，App 图标从松手位置缩小飞进目标文件夹（360ms iOS 曲线）
+  useLayoutEffect(() => {
+    if (!flyIn) return;
+    const el = flyInEl.current;
+    if (!el) return;
+    el.animate(
+      [
+        { transform: 'translate(0px, 0px) scale(1)', opacity: 1 },
+        { transform: `translate(${flyIn.tx - flyIn.fx}px, ${flyIn.ty - flyIn.fy}px) scale(0.4)`, opacity: 0 },
+      ],
+      { duration: 360, easing: 'cubic-bezier(0.32, 0.72, 0, 1)', fill: 'forwards' }
+    );
+  }, [flyIn]);
+  useEffect(() => {
+    if (!flyIn) return;
+    const t = window.setTimeout(() => setFlyIn(null), 380);
+    return () => window.clearTimeout(t);
+  }, [flyIn]);
 
   // ---------------- 单元格手势 ----------------
   const cellPointerDown = (e: React.PointerEvent<HTMLElement>, id: string) => {
@@ -2732,8 +2839,40 @@ export default function HomeScreen() {
   /** 浮动副本（fixed + 跟随指针，挂在根层级渲染，绝不落入带 backdrop-filter 的容器内） */
   const floatingCopy = (tile: Tile | null) => {
     if (!dragVisual || !tile) return null;
-    // App→App 悬停合并中：浮动副本隐去（合并气泡由占位槽渲染，模拟图标「飞入」）
-    if (mergePreview?.kind === 'app') return null;
+    // 合并预览中：被拖 App/文件夹外圈套呼吸的圆角方边框（iOS 同款「即将入夹」提示，
+    // 用户要求「APP 外面会显示一个正方形边框」）；目标处同时显示文件夹预览（槽位渲染层处理）
+    if (mergePreview && (tile.kind === 'app' || tile.kind === 'folder')) {
+      return (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed z-[80]"
+          style={{
+            left: dragVisual.x,
+            top: dragVisual.y,
+            width: dragVisual.w,
+            height: dragVisual.h,
+            transform: `translate(${dragDelta.dx}px, ${dragDelta.dy}px) scale(1.08)`,
+            transition: 'none',
+            filter: 'drop-shadow(0 18px 30px rgba(0,0,0,0.5))',
+          }}
+        >
+          <div className="flex w-[68px] flex-col items-center gap-[5px]">
+            <span className="merge-frame flex h-[74px] w-[74px] items-center justify-center rounded-[20px] bg-white/[0.13] ring-2 ring-white/90">
+              {tile.kind === 'app' ? (
+                <span className="block h-[58px] w-[58px] overflow-hidden rounded-[14px]">{appIconNode(tile.id)}</span>
+              ) : (
+                <span className="block h-[58px] w-[58px] rounded-[14px] bg-white/[0.22] p-[4px] ring-1 ring-white/25 backdrop-blur-md">
+                  {folderIconNode((folders.find((f) => f.id === tile.id)?.apps ?? []).slice(0, 6))}
+                </span>
+              )}
+            </span>
+            <span className="max-w-[74px] truncate text-center text-[11px] font-medium leading-none text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.65)]">
+              {tile.kind === 'app' ? APP_MAP[tile.id].name : (folders.find((f) => f.id === tile.id)?.name ?? '文件夹')}
+            </span>
+          </div>
+        </div>
+      );
+    }
     return (
       <div
         aria-hidden="true"
@@ -3089,6 +3228,22 @@ export default function HomeScreen() {
           之前渲染在 Dock 容器内，Dock 的 backdrop-blur-2xl 使其成为 fixed 后代的包含块，
           视口坐标被解释为相对 Dock → 副本飞出手机壳被裁掉，从 Dock 拖 App 时图标“消失”。 */}
       {floatingCopy(floatingTile)}
+
+      {/* 入夹飞入动画层：合并落手后 App 图标从松手点缩小飞进文件夹（纯视觉，挂在根层级） */}
+      {flyIn && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed z-[85]"
+          style={{ left: flyIn.fx, top: flyIn.fy, width: ICON_SIZE, height: ICON_SIZE }}
+        >
+          <span
+            ref={flyInEl}
+            className="block h-full w-full overflow-hidden rounded-[15px] shadow-[0_12px_26px_rgba(0,0,0,0.4)]"
+          >
+            {appIconNode(flyIn.appId)}
+          </span>
+        </div>
+      )}
 
       {/* 信息卡片小组件编辑器（底部弹窗：换头像/换背景图/改文字；打开时才挂载） */}
       {profileEditorOpen && (
