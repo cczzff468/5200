@@ -237,7 +237,7 @@ export const MT_DEALS: MtDeal[] = [
   D({
     id: 'd-mixue-hyn',
     merchantId: 'm-mixue',
-    title: '厚芋泥奶茶 经典芋泥 3张',
+    title: '厚芋泥奶茶 经典芋泥 3杯',
     img: img('milktea'),
     emoji: '🧋',
     price: 21.6,
@@ -250,13 +250,13 @@ export const MT_DEALS: MtDeal[] = [
     usable: '周一至周日可用',
     notice: '本单将于30天后过期，免预约随时可用',
     specs: teaSpecs(),
-    menu: [{ sec: '内含券 3张', items: [{ name: '厚芋泥奶茶（中杯）', price: 10.5 }, { name: '厚芋泥奶茶（中杯）', price: 10.5 }, { name: '厚芋泥奶茶（中杯）', price: 10.5 }] }],
+    menu: [{ sec: '内含券 3杯', items: [{ name: '厚芋泥奶茶（中杯）', price: 10.5 }, { name: '厚芋泥奶茶（中杯）', price: 10.5 }, { name: '厚芋泥奶茶（中杯）', price: 10.5 }] }],
     storeTags: ['免预约', '随时退'],
   }),
   D({
     id: 'd-mixue-mjlv',
     merchantId: 'm-mixue',
-    title: '茉莉奶绿（特价团购） 3张',
+    title: '茉莉奶绿（特价团购）3杯',
     img: img('milktea'),
     emoji: '🍵',
     price: 13.3,
@@ -269,7 +269,7 @@ export const MT_DEALS: MtDeal[] = [
     usable: '周一至周日可用',
     notice: '本单将于30天后过期，免预约随时可用',
     specs: teaSpecs(),
-    menu: [{ sec: '内含券 3张', items: [{ name: '茉莉奶绿（中杯）', price: 6.5 }, { name: '茉莉奶绿（中杯）', price: 6.5 }, { name: '茉莉奶绿（中杯）', price: 6.5 }] }],
+    menu: [{ sec: '内含券 3杯', items: [{ name: '茉莉奶绿（中杯）', price: 6.5 }, { name: '茉莉奶绿（中杯）', price: 6.5 }, { name: '茉莉奶绿（中杯）', price: 6.5 }] }],
     storeTags: ['免预约', '随时退'],
   }),
   D({
