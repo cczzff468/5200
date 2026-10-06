@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
 import {
   AlertCircle,
+  ArrowDownLeft,
+  ArrowUpRight,
   AudioLines,
   Bell,
   Bluetooth,
@@ -16,6 +18,7 @@ import {
   Database,
   Eye,
   EyeOff,
+  Heart,
   Image as ImageIcon,
   ImagePlus,
   Info,
@@ -25,7 +28,6 @@ import {
   Minus,
   Monitor,
   Moon,
-  Phone as PhoneIcon,
   Plane,
   PenLine,
   Plus,
@@ -35,12 +37,14 @@ import {
   ScanEye,
   ScanFace,
   Smartphone,
+  Star,
   Sun,
   Trash2,
   Type,
   Upload,
   User,
   UsersRound,
+  Vibrate,
   Volume2,
   Wifi,
   Wrench,
@@ -809,12 +813,6 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
             aria-label="允许通知"
           />
         </div>
-        {/* 主动来电设置已迁移到电话 App 右上角设置图标（与 AI 来电归属更直观；Task 44）。
-            保留一行引导提示，让用户知道在哪配置。 */}
-        <div className="flex min-h-[44px] items-center gap-2 px-4 py-2 text-[12px] leading-[16px] text-muted-foreground">
-          <PhoneIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
-          <span>AI 主动来电与频率设置已移至「电话」App 右上角齿轮</span>
-        </div>
       </GroupCard>
       {denied && (
         <p className="mt-3 px-1 text-[13px] leading-relaxed" style={{ color: IOS_RED }}>
@@ -872,11 +870,6 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
           重新尝试订阅后台推送
         </button>
       )}
-      <p className="mt-3 px-1 text-[12px] leading-relaxed text-muted-foreground">
-        切走标签页 / 最小化 / 锁屏时，AI 的新消息通过系统通知提醒（每条一条，不合并）；
-        页面完全关闭后，新回复由服务器接力生成并推送。闹钟和计时器到点时也会通过系统通知提醒。
-        关闭「允许通知」只停用系统级提醒，应用内灵动岛弹窗照常。
-      </p>
       <NotifySoundSection />
       <LocalToast msg={toastMsg} />
     </DetailShell>
@@ -930,11 +923,21 @@ function DndTimeEditor({
   );
 }
 
-/** 铃声选择列表（内置 8 个 + 我的铃声；每项可试听；上传入口；已选打勾） */
-function TonePickerList({
+/** 五分类的 iOS 设置风行首图标（纯色圆角方块 + 白色线性图标） */
+const CATEGORY_ICON: Record<NotifySoundCategory, { icon: LucideIcon; tone: string }> = {
+  receive: { icon: ArrowDownLeft, tone: TONE_GREEN },
+  send: { icon: ArrowUpRight, tone: TONE_BLUE },
+  moments: { icon: Heart, tone: TONE_PINK },
+  qzone: { icon: Star, tone: TONE_ORANGE },
+  group: { icon: UsersRound, tone: TONE_PURPLE },
+};
+
+/** 底部弹窗内容：铃声列表（内置 8 个 + 我的铃声；每项可试听；上传入口；已选打勾） */
+function ToneSheetContent({
   value,
   ringtones,
   uploading,
+  previewingId,
   onPick,
   onPreview,
   onUpload,
@@ -943,92 +946,171 @@ function TonePickerList({
   value: string;
   ringtones: RingtoneMeta[];
   uploading: boolean;
+  /** 正在试听的铃声 id（喇叭图标变为绿色音波动画） */
+  previewingId: string | null;
   onPick: (id: string) => void;
   onPreview: (id: string) => void;
   onUpload: () => void;
   onRequestDelete: (r: RingtoneMeta) => void;
 }) {
   return (
-    <div className="mx-3 mb-1 overflow-hidden rounded-[12px] bg-white/60 ring-1 ring-black/[0.06] dark:bg-white/[0.04] dark:ring-white/[0.08]">
-      <p className="px-3 pb-0.5 pt-2 text-[11px] text-muted-foreground">内置铃声</p>
-      <div className="divide-y divide-black/[0.04] dark:divide-white/[0.05]">
-        {BUILTIN_NOTIFY_TONES.map((t) => (
-          <div key={t.id} className="flex h-[40px] items-center px-2">
-            <button
-              type="button"
-              onClick={() => onPreview(t.id)}
-              aria-label={`试听${t.name}`}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-muted/70"
-            >
-              <Volume2 className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onPick(t.id)}
-              className="flex min-w-0 flex-1 items-center justify-between pl-1.5 text-left"
-            >
-              <span className="truncate text-[15px]">{t.name}</span>
-              {value === t.id && <Check className="h-4 w-4 shrink-0 text-[#34C759]" aria-label="已选中" />}
-            </button>
-          </div>
-        ))}
-      </div>
-      {ringtones.length > 0 && (
-        <>
-          <p className="px-3 pb-0.5 pt-2 text-[11px] text-muted-foreground">我的铃声</p>
-          <div className="divide-y divide-black/[0.04] dark:divide-white/[0.05]">
-            {ringtones.map((r) => (
-              <div key={r.id} className="flex h-[40px] items-center px-2">
+    <div className="space-y-4">
+      <div>
+        <p className="pb-1.5 pl-1 text-[13px] font-medium text-muted-foreground">内置铃声</p>
+        <GroupCard>
+          {BUILTIN_NOTIFY_TONES.map((t) => {
+            const active = value === t.id;
+            const playing = previewingId === t.id;
+            return (
+              <div key={t.id} className="flex h-[46px] items-center px-2">
                 <button
                   type="button"
-                  onClick={() => onPreview(`custom:${r.id}`)}
-                  aria-label={`试听${r.name}`}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-muted/70"
+                  onClick={() => onPreview(t.id)}
+                  aria-label={`试听${t.name}`}
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:bg-muted/70 ${
+                    playing ? 'text-[#34C759]' : 'text-muted-foreground'
+                  }`}
                 >
-                  <Volume2 className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onPick(`custom:${r.id}`)}
-                  className="flex min-w-0 flex-1 items-center justify-between pl-1.5 text-left"
-                >
-                  <span className="truncate text-[15px]">
-                    {r.name}
-                    <span className="ml-1.5 text-[11px] text-muted-foreground">
-                      {r.duration > 0 ? formatDuration(r.duration) : '—'}
-                    </span>
-                  </span>
-                  {value === `custom:${r.id}` && (
-                    <Check className="h-4 w-4 shrink-0 text-[#34C759]" aria-label="已选中" />
+                  {playing ? (
+                    <AudioLines className="h-[18px] w-[18px] animate-pulse" />
+                  ) : (
+                    <Volume2 className="h-[18px] w-[18px]" />
                   )}
                 </button>
                 <button
                   type="button"
-                  onClick={() => onRequestDelete(r)}
-                  aria-label={`删除${r.name}`}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-muted/70"
+                  onClick={() => onPick(t.id)}
+                  className="flex min-w-0 flex-1 items-center justify-between pl-1.5 pr-1 text-left"
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <span className="truncate text-[16px]">{t.name}</span>
+                  {active && <Check className="h-[18px] w-[18px] shrink-0 text-[#34C759]" aria-label="已选中" />}
                 </button>
               </div>
-            ))}
-          </div>
-        </>
+            );
+          })}
+        </GroupCard>
+      </div>
+      {ringtones.length > 0 && (
+        <div>
+          <p className="pb-1.5 pl-1 text-[13px] font-medium text-muted-foreground">我的铃声</p>
+          <GroupCard>
+            {ringtones.map((r) => {
+              const id = `custom:${r.id}`;
+              const active = value === id;
+              const playing = previewingId === id;
+              return (
+                <div key={r.id} className="flex h-[46px] items-center px-2">
+                  <button
+                    type="button"
+                    onClick={() => onPreview(id)}
+                    aria-label={`试听${r.name}`}
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:bg-muted/70 ${
+                      playing ? 'text-[#34C759]' : 'text-muted-foreground'
+                    }`}
+                  >
+                    {playing ? (
+                      <AudioLines className="h-[18px] w-[18px] animate-pulse" />
+                    ) : (
+                      <Volume2 className="h-[18px] w-[18px]" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onPick(id)}
+                    className="flex min-w-0 flex-1 items-center justify-between pl-1.5 pr-1 text-left"
+                  >
+                    <span className="min-w-0 truncate text-[16px]">
+                      {r.name}
+                      <span className="ml-1.5 text-[11px] text-muted-foreground">
+                        {r.duration > 0 ? formatDuration(r.duration) : '—'}
+                      </span>
+                    </span>
+                    {active && <Check className="h-[18px] w-[18px] shrink-0 text-[#34C759]" aria-label="已选中" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onRequestDelete(r)}
+                    aria-label={`删除${r.name}`}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-muted/70"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              );
+            })}
+          </GroupCard>
+        </div>
       )}
+      <div>
+        <p className="pb-1.5 pl-1 text-[13px] font-medium text-muted-foreground">更多</p>
+        <GroupCard>
+          <button
+            type="button"
+            onClick={onUpload}
+            disabled={uploading}
+            className="flex h-[48px] w-full items-center gap-3 px-4 text-left disabled:opacity-60"
+          >
+            <RowIcon icon={Upload} tone={TONE_BLUE} />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[16px]">{uploading ? '正在保存…' : '上传自定义铃声'}</span>
+              <span className="block text-[11px] text-muted-foreground">音频文件 · ≤8MB · 永久保存</span>
+            </span>
+            {uploading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          </button>
+        </GroupCard>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * iOS 风格底部弹窗：从屏幕底部滑入的铃声选择面板（抓手 + 居中标题 + 右上「完成」）。
+ * fixed 定位在 PhoneShell 内（壳 transform 使 fixed 相对机身定位，天然只覆盖手机屏）；
+ * 点遮罩 / 「完成」/ Esc 关闭；内容超长时内部滚动。
+ */
+function ToneSheet({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  // 挂载期间 Esc 关闭（桌面端键盘友好）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[70]" role="dialog" aria-modal="true" aria-label={title}>
+      {/* 遮罩：点击空白关闭 */}
       <button
         type="button"
-        onClick={onUpload}
-        disabled={uploading}
-        className="flex h-[42px] w-full items-center gap-2 border-t border-black/[0.04] px-3 text-left disabled:opacity-60 dark:border-white/[0.05]"
-      >
-        {uploading ? (
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        ) : (
-          <Upload className="h-4 w-4 text-muted-foreground" />
-        )}
-        <span className="text-[15px]">上传自定义铃声</span>
-        <span className="ml-auto text-[11px] text-muted-foreground">音频 · ≤8MB</span>
-      </button>
+        aria-label="关闭"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default bg-black/45 animate-in fade-in duration-200"
+      />
+      {/* 面板：从底部滑入 */}
+      <div className="absolute inset-x-0 bottom-0 overflow-hidden rounded-t-[18px] bg-[#F7F7F8]/95 shadow-[0_-10px_44px_rgba(0,0,0,0.28)] ring-1 ring-white/60 backdrop-blur-2xl animate-in slide-in-from-bottom-10 fade-in duration-300 dark:bg-[#1C1C1E]/95 dark:ring-white/10">
+        <div className="mx-auto mt-2.5 h-[5px] w-10 shrink-0 rounded-full bg-black/15 dark:bg-white/25" aria-hidden="true" />
+        <div className="flex items-center justify-between px-4 pb-1 pt-2.5">
+          <span className="w-14" aria-hidden="true" />
+          <span className="text-[17px] font-semibold">{title}</span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-14 text-right text-[17px] text-[#007AFF] transition-opacity active:opacity-40"
+          >
+            完成
+          </button>
+        </div>
+        <div className="no-scrollbar max-h-[540px] overflow-y-auto px-4 pb-8 pt-1">{children}</div>
+      </div>
     </div>
   );
 }
@@ -1044,25 +1126,57 @@ function NotifySoundSection() {
   const update = useNotifySound((s) => s.update);
   const updateCategory = useNotifySound((s) => s.updateCategory);
   const [openCat, setOpenCat] = useState<NotifySoundCategory | null>(null);
-  const [pickerCat, setPickerCat] = useState<NotifySoundCategory | null>(null);
+  /** 底部弹窗当前选择铃声的分类 */
+  const [sheetCat, setSheetCat] = useState<NotifySoundCategory | null>(null);
   const [globalDndOpen, setGlobalDndOpen] = useState(false);
   const [catDndOpen, setCatDndOpen] = useState<NotifySoundCategory | null>(null);
   const [uploading, setUploading] = useState(false);
   const [delTarget, setDelTarget] = useState<RingtoneMeta | null>(null);
+  /** 正在试听的铃声 id（喇叭图标变绿色音波，播完自动恢复） */
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [toastMsg, showToast] = useLocalToast();
+
+  // 分类独立开关已从界面移除（总开关 + 音量/免打扰已足够，界面更简洁）：
+  // 历史数据里手动关过的分类一次性恢复，避免「无声且无处再开启」的死角
+  useEffect(() => {
+    const cats = settings.categories;
+    const off = (Object.keys(cats) as NotifySoundCategory[]).filter((k) => !cats[k].enabled);
+    if (off.length === 0) return;
+    const next = { ...settings, categories: { ...cats } };
+    for (const k of off) next.categories[k] = { ...next.categories[k], enabled: true };
+    update(next);
+  }, [settings, update]);
+
+  // 卸载清理试听状态计时器
+  useEffect(
+    () => () => {
+      if (previewTimer.current) clearTimeout(previewTimer.current);
+    },
+    []
+  );
 
   /** 分类实际音量（总音量 × 分类音量，试听同口径） */
   const categoryVolume = (key: NotifySoundCategory): number =>
     Math.max(0, Math.min(1, settings.masterVolume * settings.categories[key].volume));
 
-  /** 试听（音量为 0 时提示，不白点） */
+  /** 试听（音量为 0 时提示，不白点；播放中喇叭变音波，播完自动恢复） */
   const preview = (toneId: string, vol: number): void => {
     if (vol <= 0.001) {
       showToast('音量为 0，请先调高音量');
       return;
     }
-    void playTone(toneId, vol);
+    setPreviewingId(toneId);
+    if (previewTimer.current) clearTimeout(previewTimer.current);
+    void playTone(toneId, vol)
+      .catch(() => undefined)
+      .finally(() => {
+        previewTimer.current = setTimeout(
+          () => setPreviewingId((cur) => (cur === toneId ? null : cur)),
+          260
+        );
+      });
   };
 
   const handleUploadFile = async (e: ChangeEvent<HTMLInputElement>): Promise<void> => {
@@ -1099,32 +1213,38 @@ function NotifySoundSection() {
       {/* ---------- 全局 ---------- */}
       <p className="mt-6 px-1 pb-1.5 text-[13px] font-medium text-muted-foreground">声音与铃声</p>
       <GroupCard>
-        <div className="flex h-[46px] items-center justify-between px-4">
-          <span className="text-[16px]">提示音</span>
+        <div className="flex h-[48px] items-center gap-3 px-4">
+          <RowIcon icon={Bell} tone={TONE_RED} />
+          <span className="min-w-0 flex-1 text-[16px]">提示音</span>
           <Switch
             checked={settings.master}
             onCheckedChange={(v) => update({ master: v })}
             aria-label="提示音总开关"
           />
         </div>
-        <div className="px-4 py-3">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-[16px]">总音量</span>
-            <span className="text-[13px] tabular-nums text-muted-foreground">
+        <div className="pb-3.5 pt-1">
+          <div className="flex items-center gap-3 px-4">
+            <RowIcon icon={Volume2} tone={TONE_BLUE} />
+            <span className="min-w-0 flex-1 text-[16px]">总音量</span>
+            <span className="text-[15px] tabular-nums text-muted-foreground">
               {Math.round(settings.masterVolume * 100)}%
             </span>
           </div>
-          <Slider
-            value={[Math.round(settings.masterVolume * 100)]}
-            min={0}
-            max={100}
-            step={5}
-            onValueChange={(v) => update({ masterVolume: (v[0] ?? 90) / 100 })}
-            aria-label="总音量"
-          />
+          <div className="px-4 pt-3">
+            <Slider
+              className="ios-slider"
+              value={[Math.round(settings.masterVolume * 100)]}
+              min={0}
+              max={100}
+              step={5}
+              onValueChange={(v) => update({ masterVolume: (v[0] ?? 90) / 100 })}
+              aria-label="总音量"
+            />
+          </div>
         </div>
-        <div className="flex h-[46px] items-center justify-between px-4">
-          <span className="text-[16px]">响铃时震动</span>
+        <div className="flex h-[48px] items-center gap-3 px-4">
+          <RowIcon icon={Vibrate} tone={TONE_PURPLE} />
+          <span className="min-w-0 flex-1 text-[16px]">响铃时震动</span>
           <Switch
             checked={settings.vibrate}
             onCheckedChange={(v) => update({ vibrate: v })}
@@ -1134,16 +1254,17 @@ function NotifySoundSection() {
         <button
           type="button"
           onClick={() => setGlobalDndOpen((v) => !v)}
-          className="flex h-[46px] w-full items-center justify-between px-4 text-left"
+          className="flex min-h-[48px] w-full items-center gap-3 px-4 py-2 text-left"
           aria-expanded={globalDndOpen}
         >
-          <span className="text-[16px]">免打扰时段</span>
-          <span className="flex items-center gap-1 text-[14px] text-muted-foreground">
+          <RowIcon icon={Moon} tone={TONE_CYAN} />
+          <span className="min-w-0 flex-1 text-[16px]">免打扰时段</span>
+          <span className="shrink-0 text-[15px] text-muted-foreground">
             {soundDndLabel(settings.dndFrom, settings.dndTo)}
-            <ChevronRight
-              className={`h-4 w-4 transition-transform ${globalDndOpen ? 'rotate-90' : ''}`}
-            />
           </span>
+          <ChevronRight
+            className={`h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform ${globalDndOpen ? 'rotate-90' : ''}`}
+          />
         </button>
         {globalDndOpen && (
           <DndTimeEditor
@@ -1164,72 +1285,50 @@ function NotifySoundSection() {
         </p>
       )}
 
-      {/* ---------- 五分类 ---------- */}
+      {/* ---------- 五分类（无独立开关：总开关 + 音量/免打扰已足够，界面更简洁） ---------- */}
       <p className="mt-4 px-1 pb-1.5 text-[13px] font-medium text-muted-foreground">按类型配置</p>
       <GroupCard>
         {categoryKeys.map((key) => {
           const meta = NOTIFY_SOUND_CATEGORY_META[key];
           const cfg = settings.categories[key];
+          const ic = CATEGORY_ICON[key];
           const open = openCat === key;
           return (
             <div key={key}>
-              <div className="flex h-[46px] items-center px-4">
-                <button
-                  type="button"
-                  onClick={() => setOpenCat(open ? null : key)}
-                  className="flex min-w-0 flex-1 items-center justify-between pr-2 text-left"
-                  aria-expanded={open}
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate text-[16px]">{meta.label}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">
-                      {meta.desc} · {toneDisplayName(cfg.toneId, ringtones)}
-                    </span>
-                  </span>
-                  <ChevronRight
-                    className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`}
-                  />
-                </button>
-                <Switch
-                  checked={cfg.enabled}
-                  onCheckedChange={(v) => updateCategory(key, { enabled: v })}
-                  aria-label={meta.label}
+              <button
+                type="button"
+                onClick={() => setOpenCat(open ? null : key)}
+                className="flex min-h-[56px] w-full items-center gap-3 px-4 py-2 text-left transition-colors active:bg-muted/40"
+                aria-expanded={open}
+              >
+                <RowIcon icon={ic.icon} tone={ic.tone} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[16px]">{meta.label}</span>
+                  <span className="block truncate text-[12px] text-muted-foreground">{meta.desc}</span>
+                </span>
+                <span className="max-w-[96px] shrink-0 truncate text-[14px] text-muted-foreground">
+                  {toneDisplayName(cfg.toneId, ringtones)}
+                </span>
+                <ChevronRight
+                  className={`h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform ${open ? 'rotate-90' : ''}`}
                 />
-              </div>
+              </button>
               {open && (
-                <div className="pb-3">
-                  {/* 提示音选择 */}
+                <div className="animate-in fade-in slide-in-from-top-1 pb-3.5 duration-200">
+                  {/* 提示音 → 底部弹窗选择 */}
                   <button
                     type="button"
-                    onClick={() => setPickerCat(pickerCat === key ? null : key)}
-                    className="flex h-[42px] w-full items-center justify-between px-4 text-left"
-                    aria-expanded={pickerCat === key}
+                    onClick={() => setSheetCat(key)}
+                    className="flex h-[44px] w-full items-center justify-between px-4 text-left"
                   >
                     <span className="text-[15px]">提示音</span>
-                    <span className="flex items-center gap-1 text-[14px] text-muted-foreground">
+                    <span className="flex items-center gap-1 text-[15px] text-muted-foreground">
                       {toneDisplayName(cfg.toneId, ringtones)}
-                      <ChevronRight
-                        className={`h-4 w-4 transition-transform ${pickerCat === key ? 'rotate-90' : ''}`}
-                      />
+                      <ChevronRight className="h-4 w-4 text-muted-foreground/60" />
                     </span>
                   </button>
-                  {pickerCat === key && (
-                    <TonePickerList
-                      value={cfg.toneId}
-                      ringtones={ringtones}
-                      uploading={uploading}
-                      onUpload={() => fileRef.current?.click()}
-                      onPreview={(id) => preview(id, categoryVolume(key))}
-                      onPick={(id) => {
-                        updateCategory(key, { toneId: id });
-                        // 选完立即试听；分类音量为 0 时给最低可闻度（纯选铃声场景）
-                        preview(id, Math.max(categoryVolume(key), 0.25));
-                      }}
-                      onRequestDelete={setDelTarget}
-                    />
-                  )}
                   {/* 试听 */}
-                  <div className="mt-0.5 flex h-[42px] items-center justify-between px-4">
+                  <div className="flex h-[44px] items-center justify-between px-4">
                     <span className="text-[15px] text-muted-foreground">
                       试听（实际音量 {Math.round(categoryVolume(key) * 100)}%）
                     </span>
@@ -1237,20 +1336,29 @@ function NotifySoundSection() {
                       type="button"
                       onClick={() => preview(cfg.toneId, categoryVolume(key))}
                       aria-label={`试听${meta.label}`}
-                      className="flex h-9 w-9 items-center justify-center rounded-full bg-black/[0.05] transition-colors active:bg-black/10 dark:bg-white/10 dark:active:bg-white/20"
+                      className={`flex h-10 w-10 items-center justify-center rounded-full transition-colors ${
+                        previewingId === cfg.toneId
+                          ? 'bg-[#34C759]/15 text-[#34C759]'
+                          : 'bg-black/[0.05] text-foreground/80 active:bg-black/10 dark:bg-white/10 dark:text-white/85 dark:active:bg-white/20'
+                      }`}
                     >
-                      <Volume2 className="h-[18px] w-[18px]" />
+                      {previewingId === cfg.toneId ? (
+                        <AudioLines className="h-5 w-5 animate-pulse" />
+                      ) : (
+                        <Volume2 className="h-5 w-5" />
+                      )}
                     </button>
                   </div>
                   {/* 分类音量 */}
                   <div className="px-4 py-1.5">
                     <div className="mb-2 flex items-center justify-between">
-                      <span className="text-[14px] text-muted-foreground">分类音量</span>
+                      <span className="text-[14px] text-muted-foreground">音量</span>
                       <span className="text-[13px] tabular-nums text-muted-foreground">
                         {Math.round(cfg.volume * 100)}%
                       </span>
                     </div>
                     <Slider
+                      className="ios-slider"
                       value={[Math.round(cfg.volume * 100)]}
                       min={0}
                       max={100}
@@ -1263,14 +1371,14 @@ function NotifySoundSection() {
                   <button
                     type="button"
                     onClick={() => setCatDndOpen(catDndOpen === key ? null : key)}
-                    className="flex h-[42px] w-full items-center justify-between px-4 text-left"
+                    className="flex h-[44px] w-full items-center justify-between px-4 text-left"
                     aria-expanded={catDndOpen === key}
                   >
                     <span className="text-[15px]">免打扰时段</span>
                     <span className="flex items-center gap-1 text-[14px] text-muted-foreground">
                       {soundDndLabel(cfg.dndFrom, cfg.dndTo)}
                       <ChevronRight
-                        className={`h-4 w-4 transition-transform ${catDndOpen === key ? 'rotate-90' : ''}`}
+                        className={`h-4 w-4 text-muted-foreground/60 transition-transform ${catDndOpen === key ? 'rotate-90' : ''}`}
                       />
                     </span>
                   </button>
@@ -1295,27 +1403,35 @@ function NotifySoundSection() {
           type="button"
           onClick={() => fileRef.current?.click()}
           disabled={uploading}
-          className="flex h-[46px] w-full items-center gap-2.5 px-4 text-left disabled:opacity-60"
+          className="flex h-[48px] w-full items-center gap-3 px-4 text-left disabled:opacity-60"
         >
+          <RowIcon icon={Upload} tone={TONE_GREEN} />
+          <span className="min-w-0 flex-1 text-[16px]">{uploading ? '正在保存…' : '上传自定义铃声'}</span>
           {uploading ? (
-            <Loader2 className="h-[18px] w-[18px] animate-spin text-muted-foreground" />
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           ) : (
-            <Upload className="h-[18px] w-[18px] text-muted-foreground" />
+            <span className="text-[12px] text-muted-foreground">音频 · ≤8MB</span>
           )}
-          <span className="flex-1 text-[16px]">上传自定义铃声</span>
-          <span className="text-[12px] text-muted-foreground">≤8MB</span>
         </button>
         {ringtones.length > 0 ? (
           <div>
             {ringtones.map((r) => (
-              <div key={r.id} className="flex h-[46px] items-center gap-2 px-4">
+              <div key={r.id} className="flex h-[48px] items-center gap-2.5 px-4">
                 <button
                   type="button"
                   onClick={() => preview(`custom:${r.id}`, Math.max(settings.masterVolume, 0.25))}
                   aria-label={`试听${r.name}`}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/[0.05] transition-colors active:bg-black/10 dark:bg-white/10 dark:active:bg-white/20"
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${
+                    previewingId === `custom:${r.id}`
+                      ? 'bg-[#34C759]/15 text-[#34C759]'
+                      : 'bg-black/[0.05] text-foreground/80 active:bg-black/10 dark:bg-white/10 dark:text-white/85 dark:active:bg-white/20'
+                  }`}
                 >
-                  <Volume2 className="h-4 w-4" />
+                  {previewingId === `custom:${r.id}` ? (
+                    <AudioLines className="h-[18px] w-[18px] animate-pulse" />
+                  ) : (
+                    <Volume2 className="h-4 w-4" />
+                  )}
                 </button>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[15px]">{r.name}</span>
@@ -1353,6 +1469,30 @@ function NotifySoundSection() {
         className="hidden"
         onChange={(e) => void handleUploadFile(e)}
       />
+
+      {/* ---------- 提示音选择底部弹窗 ---------- */}
+      {sheetCat && (
+        <ToneSheet title="选择提示音" onClose={() => setSheetCat(null)}>
+          <ToneSheetContent
+            value={settings.categories[sheetCat].toneId}
+            ringtones={ringtones}
+            uploading={uploading}
+            previewingId={previewingId}
+            onUpload={() => fileRef.current?.click()}
+            onPreview={(id) => preview(id, categoryVolume(sheetCat))}
+            onPick={(id) => {
+              updateCategory(sheetCat, { toneId: id });
+              // 选完立即试听；分类音量为 0 时给最低可闻度（纯选铃声场景）
+              preview(id, Math.max(categoryVolume(sheetCat), 0.25));
+            }}
+            onRequestDelete={(r) => {
+              // 先收弹窗再确认删除（确认框层级在弹窗之上）
+              setSheetCat(null);
+              setDelTarget(r);
+            }}
+          />
+        </ToneSheet>
+      )}
 
       <AlertDialog open={!!delTarget} onOpenChange={(o) => { if (!o) setDelTarget(null); }}>
         <AlertDialogContent>

@@ -360,3 +360,23 @@
     transform: rotate(360deg);
   }
 }
+
+/* iOS 风格绿色滑杆（通知声音设置）：粗轨道 + #34C759 已选段 + 白色大圆钮带投影 */
+.ios-slider[data-slot='slider'] [data-slot='slider-track'] {
+  height: 6px;
+}
+.ios-slider[data-slot='slider'] [data-slot='slider-range'] {
+  background: #34c759;
+}
+.ios-slider[data-slot='slider'] [data-slot='slider-thumb'] {
+  height: 26px;
+  width: 26px;
+  border: none;
+  background: #fff;
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.22),
+    0 1px 1px rgba(0, 0, 0, 0.1);
+}
+.dark .ios-slider[data-slot='slider'] [data-slot='slider-thumb'] {
+  background: #fff;
+}
