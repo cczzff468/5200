@@ -102,9 +102,10 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  *   App——预览是纯视觉，目标不挪窝、被拖 App 也不入夹），松手才建夹/入夹/并夹，拖开即取消；
  *   文件夹图标 = 毛玻璃圆角方（前 6 个 App 缩略图 3×2 + 超额数量角标）+ 名称；
  *   点按弹出全屏毛玻璃面板（点名称改名/分页滑动/点外部收起/点 App 打开；非编辑态长按
- *   面板任意处进入面板编辑——App 抖动、× 退回主屏、长按 320ms 拖出 App 到桌面），
+ *   面板任意处进入面板编辑——App 抖动、长按 320ms 拖出 App 到桌面），
  *   编辑模式轻点文件夹同样能打开面板；编辑模式可 × 整夹删除（App 退回主屏）、
- *   面板 × 退回单个 App；夹内 App 全部拖出后文件夹自动消失；
+ *   面板 × 从主屏移除单个 App（App 隐藏不回到桌面——用户要求回主屏一律长按拖出，
+ *   App Store 可找回）；夹内 App 全部拖出或只剩 1 个时文件夹自动解体；
  *   文件夹结构持久化（layout.folders，App 实体存在夹内，从主网格移除）。
  * 编辑模式（长按任意图标/小组件或长按空白处进入）：
  * - 全部图标/小组件抖动，左上角出现深色「删除」× 角标；
@@ -125,7 +126,7 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
 
 /** 桌面小组件种类：时钟（大数字卡）/ 天气 / 信息卡片（个人名片）/ 气泡（双头像+各自头顶气泡）/ 日记（日记卡）/ 一起听（双人气泡+迷你播放器）/ 音乐（封面+进度+控制键，真实播放状态）/ 网易云（黑胶播放器卡）/ 对话气泡（双头像+交错双气泡）/ 黑胶（大唱片+唱针）/ 日历（月历横版）/ iCity（名字+日期+头像胶囊）/ 表盘时钟（刻度表圈）/ 拍立得（三张胶片照） */
 export type WidgetKind = 'weather' | 'clock' | 'profile' | 'bubble' | 'diary' | 'listen' | 'music' | 'netease' | 'dialog' | 'vinyl' | 'calendar' | 'icity' | 'tickclock' | 'polaroid';
-/** 桌面文件夹：名称 + 内部 App 序列（App 从主网格移入；全部拖出后文件夹自动消失） */
+/** 桌面文件夹：名称 + 内部 App 序列（App 从主网格移入；全部拖出或只剩 1 个时文件夹自动解体） */
 type FolderData = { id: string; name: string; apps: AppId[] };
 type Tile = { kind: 'widget'; widget: WidgetKind } | { kind: 'app'; id: AppId } | { kind: 'folder'; id: string } | { kind: 'empty' };
 type Zone = 'grid' | 'dock';
@@ -367,7 +368,7 @@ function sanitizeLayout(raw: unknown): HomeLayout {
   const allIds = APPS.map((a) => a.id);
   const def = defaultLayout();
   if (!raw || typeof raw !== 'object') return def;
-  const r = raw as { v?: unknown; pages?: unknown; grid?: unknown; dock?: unknown; hidden?: unknown };
+  const r = raw as { v?: unknown; pages?: unknown; grid?: unknown; dock?: unknown; hidden?: unknown; folders?: unknown };
 
   const hidden = new Set<string>();
   if (Array.isArray(r.hidden)) {
@@ -497,7 +498,27 @@ function sanitizeLayout(raw: unknown): HomeLayout {
       else pg.splice(i, 1);
     }
   }
-  const folders = foldersOut.filter((f) => seenFolderTiles.has(f.id));
+  let folders = foldersOut.filter((f) => seenFolderTiles.has(f.id));
+  // 文件夹只剩 ≤1 个 App 时自动解体（新规则，存量数据同样生效）：1 个 → 剩余 App 原位
+  // 变普通图标；0 个 → tile 剔除；1 个但无 tile 的孤儿从 placed 移除，交给下方缺失
+  // App 补位兑底，避免 App 凭空丢失
+  const dyingIds = new Set(folders.filter((f) => f.apps.length <= 1).map((f) => f.id));
+  if (dyingIds.size > 0) {
+    for (const pg of pages) {
+      for (let i = pg.length - 1; i >= 0; i--) {
+        const t = pg[i];
+        if (t.kind !== 'folder' || !dyingIds.has(t.id)) continue;
+        const f = folders.find((x) => x.id === t.id);
+        if (f && f.apps.length === 1) pg[i] = { kind: 'app', id: f.apps[0] };
+        else pg.splice(i, 1);
+      }
+    }
+    for (const f of folders) {
+      if (f.apps.length !== 1) continue;
+      if (!pages.some((pg) => pg.some((t) => t.kind === 'app' && t.id === f.apps[0]))) placed.delete(f.apps[0]);
+    }
+    folders = folders.filter((f) => f.apps.length > 1);
+  }
   // 缺失的小组件按默认位置补回（hidden 的不补——默认收起的第 3/4 页小组件与被删除的
   // 小组件都在 hidden 里，不会自动复活；用户主动加回后此处不再介入）：时钟→第 1 页头、
   // 天气→时钟旁、信息卡片→第 2 页头、气泡→信息卡片后、日记/一起听/网易云→第 3 页、
@@ -605,7 +626,7 @@ const persist = (l: HomeLayout) => {
  * Dock 超员时挤出最后一个回网格；目标页超容量则整体放弃）。
  * 命中索引来自拖拽开始时捕获的静态几何，先移除被拖项再插入目标索引即可。
  * 拖拽源支持文件夹（zone:'folder'）：把 App 从文件夹里移出；
- * 变更后自动清空空文件夹（App 全部拖出后文件夹消失，tile 同步剔除）。
+ * 文件夹解体由调用方处理（dissolveSmallFolders：全部拖出或只剩 1 个 App 时消失）。
  */
 function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
   const pages = layout.pages.map((p) => p.slice());
@@ -680,6 +701,8 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
   }
 
   // 落入网格某页：超容量整体放弃（放回原位）；同页内换位不改变页内数量，始终放行
+  //（folder 仅作拖拽源永不作为落点，见 Hit 注释——此处收窄类型）
+  if (to.zone !== 'grid') return layout;
   const target = pages[Math.min(to.page, pages.length - 1)];
   const samePageMove = fromZone === 'grid' && fromPage === to.page;
   const padEmpty = to.zone === 'grid' ? Math.max(0, Math.min(8, to.padEmpty ?? 0)) : 0;
@@ -709,16 +732,42 @@ function reorder(layout: HomeLayout, id: string, to: Hit): HomeLayout {
   return { ...layout, pages, dock, folders };
 }
 
-/** 清空空文件夹（App 全部拖出/移除后文件夹自动消失，页内 tile 同步剔除） */
-function pruneEmptyFolders(l: HomeLayout): HomeLayout {
+/** 文件夹自动解体（用户要求）：夹内 App 全部移出（0 个）或只剩 1 个时文件夹消失——
+ *  0 个：tile 直接剔除；1 个：剩余 App 落回文件夹 tile 原格（原位变回普通 App 图标）。
+ *  无 tile 的孤儿文件夹（异常数据兑底）把剩余 App 补到末尾第一张装得下的页（都不满则开新页） */
+function dissolveSmallFolders(l: HomeLayout): HomeLayout {
   const folders = l.folders ?? [];
-  if (!folders.some((f) => f.apps.length === 0)) return l;
-  const dead = new Set(folders.filter((f) => f.apps.length === 0).map((f) => folderKey(f.id)));
-  return {
-    ...l,
-    pages: l.pages.map((p) => p.filter((t) => !(t.kind === 'folder' && dead.has(folderKey(t.id))))),
-    folders: folders.filter((f) => f.apps.length > 0),
-  };
+  const dying = folders.filter((f) => f.apps.length <= 1);
+  if (dying.length === 0) return l;
+  const deadIds = new Set(dying.map((f) => f.id));
+  const pages = l.pages.map((p) => p.slice());
+  for (const pg of pages) {
+    for (let i = pg.length - 1; i >= 0; i--) {
+      const t = pg[i];
+      if (t.kind !== 'folder' || !deadIds.has(t.id)) continue;
+      const f = dying.find((x) => x.id === t.id);
+      if (f && f.apps.length === 1) pg[i] = { kind: 'app', id: f.apps[0] };
+      else pg.splice(i, 1);
+    }
+  }
+  for (const f of dying) {
+    if (f.apps.length !== 1) continue;
+    const id = f.apps[0];
+    if (pages.some((p) => p.some((t) => t.kind === 'app' && t.id === id))) continue;
+    let target = -1;
+    for (let i = pages.length - 1; i >= 0; i--) {
+      if (pages[i].length < pageCap(pages[i])) {
+        target = i;
+        break;
+      }
+    }
+    if (target === -1) {
+      pages.push([]);
+      target = pages.length - 1;
+    }
+    pages[target].push({ kind: 'app', id });
+  }
+  return { ...l, pages, folders: folders.filter((f) => f.apps.length > 1) };
 }
 
 function sameHit(a: Hit | null, b: Hit | null): boolean {
@@ -799,7 +848,8 @@ function AppUnreadBadge({
  * - App 网格：3 列 × 4 行 = 每页 12 个，多页时左右滑动（跟手 + 阈值翻页）+ 页点；
  * - 点面板外部收起；点 App 打开 App（面板同步关闭）；
  * - 编辑态：主屏编辑态带入，或非编辑态长按面板任意处 420ms 进入面板本地编辑
- *   （App 抖动 + × 退回主屏；点面板内空白退出本地编辑；点面板外仍收起整个面板）；
+ *   （App 抖动 + × 从主屏移除——App 隐藏不回到桌面，回主屏一律长按拖出；
+ *   点面板内空白退出本地编辑；点面板外仍收起整个面板）；
  * - 编辑态按住 320ms 起拖（拖出即关面板，进入桌面级拖拽，可落到网格任意格/
  *   其他文件夹/Dock）。
  */
@@ -840,6 +890,9 @@ function FolderPanel({
   /** 非编辑态长按进编辑的计时器（面板空白处与 App 图标共用，与主屏同款 420ms） */
   const lpT = useRef<number | null>(null);
   const lpPos = useRef<{ x: number; y: number } | null>(null);
+  /** 本次指针手势的按下时刻：长按（进编辑）后的 click 不再视为点按——桌面端鼠标长按
+   *  松手会补发 click，不拦会被根 onClick 立刻退出编辑/收起面板（移动端无 click 不受影响） */
+  const rootDownAt = useRef(0);
 
   const commitRename = () => {
     setRenaming(false);
@@ -927,6 +980,7 @@ function FolderPanel({
       onPointerDown={(e) => {
         // 面板分页滑动起手（阻断向主屏冒泡，避免误触主屏手势）；
         // 非编辑态长按面板任意处（除按钮/输入框）→ 进入面板本地编辑
+        rootDownAt.current = performance.now();
         swipeP.current = { x: e.clientX, y: e.clientY, claimed: false, dx: 0 };
         if (!eEdit) {
           const t = e.target as HTMLElement;
@@ -969,6 +1023,9 @@ function FolderPanel({
         swipeP.current = null;
       }}
       onClick={() => {
+        // 长按（≥350ms，如长按进编辑）后的 click 不视为点按——否则桌面端长按进编辑
+        // 后松手补发的 click 会立刻退出编辑/收起面板
+        if (performance.now() - rootDownAt.current >= 350) return;
         // 编辑态点面板内空白 = 退出面板本地编辑；其余情况点面板外（含主屏编辑态）= 收起面板
         if (localEdit) {
           setLocalEdit(false);
@@ -1056,7 +1113,7 @@ function FolderPanel({
             ))}
           </div>
         )}
-        <p className="mt-5 text-[12px] text-white/60">{eEdit ? '长按 App 拖出到桌面 · × 退回主屏' : '长按可整理 · 点按名称改名 · 点面板外收起'}</p>
+        <p className="mt-5 text-[12px] text-white/60">{eEdit ? '长按 App 拖出到桌面 · × 从主屏移除' : '长按可整理 · 点按名称改名 · 点面板外收起'}</p>
       </div>
     </div>
   );
@@ -1642,7 +1699,7 @@ export default function HomeScreen() {
         isFolderKey(draggedId) ? { kind: 'folder', id: folderIdOfKey(draggedId) } : { kind: 'app', id: draggedId as AppId }
       );
     }
-    const next = pruneEmptyFolders({ ...cur, pages, dock, folders });
+    const next = dissolveSmallFolders({ ...cur, pages, dock, folders });
     layoutRef.current = next;
     setLayout(next);
     persist(next);
@@ -1718,33 +1775,15 @@ export default function HomeScreen() {
     }
   };
 
-  /** 面板 × 退回：把单个 App 从文件夹退回主屏（优先插回文件夹 tile 后一格，页满顺延） */
+  /** 面板 × 移除（用户要求）：App 从文件夹移除并记入 hidden——直接从主界面消失，
+   *  不再退回桌面（回主屏一律用长按拖出；App Store 可找回）；夹内剩 ≤1 个 App 时
+   *  文件夹自动解体（剩余 App 原位变普通图标），面板随之关闭 */
   const removeAppFromFolder = (folderId: string, appId: AppId) => {
     const cur = layoutRef.current;
     if (!(cur.folders ?? []).some((f) => f.id === folderId && f.apps.includes(appId))) return;
     const pages = cur.pages.map((p) => p.slice());
     const folders = (cur.folders ?? []).map((f) => (f.id === folderId ? { ...f, apps: f.apps.filter((a) => a !== appId) } : { ...f, apps: f.apps.slice() }));
-    let placed = false;
-    for (let p = 0; p < pages.length; p++) {
-      const fi = pages[p].findIndex((t) => t.kind === 'folder' && t.id === folderId);
-      if (fi < 0) continue;
-      if (pages[p].length < pageCap(pages[p])) {
-        pages[p].splice(fi + 1, 0, { kind: 'app', id: appId });
-        placed = true;
-      }
-      break;
-    }
-    if (!placed) {
-      for (let p = 0; p < pages.length; p++) {
-        if (pages[p].length < pageCap(pages[p])) {
-          pages[p].push({ kind: 'app', id: appId });
-          placed = true;
-          break;
-        }
-      }
-    }
-    if (!placed) pages.push([{ kind: 'app', id: appId }]);
-    const next = pruneEmptyFolders({ ...cur, pages, folders });
+    const next = dissolveSmallFolders({ ...cur, pages, folders, hidden: Array.from(new Set([...cur.hidden, appId])) });
     layoutRef.current = next;
     setLayout(next);
     persist(next);
@@ -2031,12 +2070,13 @@ export default function HomeScreen() {
 
   /** 拖拽预览专用 reorder：先把各页的空占位格全部压平（历史垫格洞是隐形占位，
    *  留在序列里会污染后续 hitTest 的 flow 模拟，洞后 App 错位、洞位永久放不进东西；
-   *  洞只在松手落定位存在，下次拖拽预览开始时自动吸收归位）再按命中换位。
+   *  洞只在松手落定位存在，下次拖拽预览开始时自动吸收归位）再按命中换位；
+   *  顺带解体只剩 ≤1 个 App 的文件夹（拖出后夹内剩余 App 原位落回桌面）。
    *  垫格按 hit.padEmpty 重新垫（reorder 内部），与 hitTest 的紧凑 flow 模拟保持同构 */
   const reorderForDrag = (id: string, hit: Hit) => {
     const cur = layoutRef.current;
     const pages = cur.pages.map((p) => p.filter((t) => t.kind !== 'empty'));
-    const next = pruneEmptyFolders(reorder({ ...cur, pages }, id, hit));
+    const next = dissolveSmallFolders(reorder({ ...cur, pages }, id, hit));
     layoutRef.current = next;
     return next;
   };
@@ -2549,12 +2589,15 @@ export default function HomeScreen() {
 
   /** 文件夹样式的毛玻璃缩略图（3×2 迷你图标网格）：文件夹图标与合并预览共用，
    *  合并预览时传入「目标 + 被拖」即得到松手后文件夹的样子（显示文件夹了，
-   *  但 App 并不放进去——松手才真正建夹） */
+   *  但 App 并不放进去——松手才真正建夹）；
+   *  迷你图标内容统一放大 1.16 再由圆角方容器裁切（用户要求预览图标为正方形圆角）：
+   *  圆形图标（时钟/QQ 等 PNG 自带圆形底）放大后四边被容器裁平、圆弧在四角收出
+   *  iOS 风格圆角方剪影；本就方圆角的图标仅轻微放大，观感基本不变 */
   const folderIconNode = (apps: AppId[]) => (
     <span className="grid h-full w-full grid-cols-3 grid-rows-2 place-items-center gap-[2px]">
       {apps.slice(0, 6).map((id) => (
         <span key={id} className="block h-[14px] w-[14px] overflow-hidden rounded-[4px] shadow-[0_0.5px_1.5px_rgba(0,0,0,0.25)]">
-          {appIconNode(id)}
+          <span className="block h-full w-full scale-[1.16]">{appIconNode(id)}</span>
         </span>
       ))}
     </span>

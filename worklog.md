@@ -15977,3 +15977,22 @@ Work Log:
 Stage Summary:
 - 仓库代码已在 /home/z/my-project 完整恢复并可运行，git 历史与 remote 就绪（后续可直接 commit+push 回 GitHub）
 - 待用户提出具体修改/新增功能需求后继续开发
+
+---
+Task ID: folder-ux-1
+Agent: 主协调者 (Z.ai Code)
+Task: 文件夹三项体验优化——预览图标圆角方剪影 / 面板编辑 × 语义改为从主屏移除 / 夹内剩 ≤1 个 App 自动解体
+
+Work Log:
+- folderIconNode 迷你图标内容统一 scale-[1.16] 再由 14px 圆角方容器 overflow-hidden 裁切：全部 22 枚 App PNG 经采样确认均为圆形底（四角 alpha=0），放大后四边被裁平、圆弧在四角收出 iOS 风格圆角方剪影（用户截图痛点：预览图标呈圆形）
+- pruneEmptyFolders 重写为 dissolveSmallFolders（0 个=剔除 tile；1 个=剩余 App 原位变普通图标；无 tile 孤儿兜底补到末尾有容量的页），三个调用点全替换：applyMerge（合并落子）/ removeAppFromFolder（× 移除）/ reorderForDrag（拖拽预览实时解体）
+- removeAppFromFolder 语义变更（用户要求）：× 不再退回主屏，改为移除 + 记入 hidden（主界面消失，App Store 可找回）；回主屏一律走面板编辑态长按 320ms 拖出（已有能力，未改动）
+- sanitizeLayout 增量：存量 1-App 文件夹加载时自动解体（tile 原位替换；孤儿从 placed 移除交给缺失 App 补位兜底）
+- 修复桌面端面板长按进编辑被补发 click 立即退出的 bug：FolderPanel 根记录 rootDownAt，onClick 对 ≥350ms 的手势不再视为点按（移动端无 click 不受影响）
+- 顺手修复仓库存量 TS 错误（tsc 8→0）：sanitizeLayout 的 raw cast 补 folders 字段；reorder 在网格分支前对 to.zone !== 'grid' 收窄（folder 仅作拖拽源）；Prisma client 重新生成（schema 已含 Contact/WxBackground，client 未再生导致 contacts/migrate 路由 500）
+- agent-browser 端到端验证：建夹预览/落子 → 面板长按进编辑 → × 移除浏览器（面板自动关闭、themes 原位落格、browser 进入 hidden 且不在任何页/Dock）→ 重建文件夹拖出主题（拖拽预览期间文件夹实时解体、备忘录原位落格）→ IndexedDB homeLayout 校验（folders:[]、hidden 含 browser）全通过
+
+Stage Summary:
+- 交付文件：src/components/ios/HomeScreen.tsx（唯一改动文件，+87/-44）
+- 关键决策：①预览图标放大 1.16（圆角半径≈21%，贴近 iOS 22.4%）而非换图——22 枚 PNG 全圆形，改渲染层一处即可全量生效；②解体规则同时覆盖拖拽预览（实时反馈）与提交路径（×/合并），拖回原位松手仍整布局复原（origin 快照）不受影响；③×=隐藏与主屏编辑模式 × 行为对齐，App Store「已移除」列表天然可找回，无死锁
+- LAYOUT_VERSION 未动（避免 v11 重置清掉用户现有文件夹/布局）；TSC 0 错误、ESLint 干净、dev server 200
