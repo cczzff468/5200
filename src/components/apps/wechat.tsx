@@ -62,6 +62,7 @@ import {
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
+import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { decideAiVoiceMessage, synthesizeAiVoice, getAiVoiceFreq, saveAiVoiceFreq, aiVoiceFreqLabel } from '@/lib/ios/ai-voice';
@@ -6365,6 +6366,8 @@ function ChatPage({
       onToast('对方已将你拉黑，无法发送');
       return;
     }
+    // 发送提示音（设置 › 通知可配；文字/图片/转语音共用的发送链入口）
+    playNotifySound('send');
     // 文字转语音发送：合成语音气泡（transcript 带原文，AI 直接读得到内容）；失败只 toast 不发文字。
     // 开着转语音时文字优先走语音（待发图片留在预览条，再点一次「发送」走纯图路径）
     if (ttsSend && text) {
@@ -7208,6 +7211,8 @@ function ChatPage({
       onToast('对方已将你拉黑，无法发送');
       return;
     }
+    // 发送提示音（表情也走「发送消息」分类）
+    playNotifySound('send');
     const msg: WxMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: s.url, meaning: s.meaning } };
     if (peer.id === me.id) {
       setMsgs((prev) => [...prev, msg]);

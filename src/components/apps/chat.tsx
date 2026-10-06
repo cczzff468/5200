@@ -35,6 +35,7 @@ import { DefaultAvatar } from '@/components/apps/default-avatar';
 import PeerStatusCard from '@/components/apps/peer-status-card';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
+import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { consumeBgPending, onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import {
@@ -2240,6 +2241,9 @@ function ChatView({
       showToast('对方已将你拉黑，无法发送');
       return;
     }
+
+    // 发送提示音（设置 › 通知可配；文字/图片/转语音共用的发送链入口）
+    playNotifySound('send');
 
     // 加号选图随文字一起发出（先图后文）：图片消息先入列，随后文字照常走下方流程触发 AI 回合
     if (pendingImgs.length > 0) {

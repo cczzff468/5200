@@ -201,6 +201,19 @@ export interface KvRecord {
   value: unknown;
 }
 
+/** 通知自定义铃声（设置 › 通知 · 声音与铃声上传；IndexedDB 永久保存） */
+export interface RingtoneRecord {
+  id: string;
+  /** 展示名（去扩展名，≤40 字） */
+  name: string;
+  mime: string;
+  /** 音频本体（任意浏览器可播格式） */
+  blob: Blob;
+  /** 秒（元数据解析失败为 0） */
+  duration: number;
+  createdAt: number;
+}
+
 /** 联系人记录：CHAR（AI 角色）/ USER（我自己）/ NPC（配角），四 App 共享（存本地 IndexedDB） */
 export type { ContactRecord };
 
@@ -247,6 +260,7 @@ interface IOSDB extends DBSchema {
   visionDecisions: { key: string; value: VisionDecisionRecord; indexes: { contactId: string; createdAt: number } };
   settings: { key: string; value: AppSettingRecord };
   kv: { key: string; value: KvRecord };
+  ringtones: { key: string; value: RingtoneRecord; indexes: { createdAt: number } };
 }
 
 export type IOSStoreName =
@@ -266,9 +280,10 @@ export type IOSStoreName =
   | 'albums'
   | 'visionDecisions'
   | 'settings'
-  | 'kv';
+  | 'kv'
+  | 'ringtones';
 
-const DB_VERSION = 7;
+const DB_VERSION = 8;
 
 /**
  * 库名恒定（Task 40 v2）：单库 + 键作用域的多账号模型——所有账号共用 ios-phone-db，
@@ -335,6 +350,11 @@ function getDB(): Promise<IDBPDatabase<IOSDB>> {
             vds.createIndex('contactId', 'contactId');
             vds.createIndex('createdAt', 'createdAt');
           }
+        }
+        if (oldVersion < 8 && !db.objectStoreNames.contains('ringtones')) {
+          // 通知自定义铃声（设置 › 通知上传；永久保存，删除即移除记录）
+          const ringtones = db.createObjectStore('ringtones', { keyPath: 'id' });
+          ringtones.createIndex('createdAt', 'createdAt');
         }
       },
     });

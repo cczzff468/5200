@@ -176,6 +176,7 @@ import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
+import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, isAiDelivering, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { splitVisionDesc } from '@/lib/vision-client';
 import {
@@ -3778,6 +3779,8 @@ export function WxGroupChatPage({
       if (sentenceSend && pendingDispatch) dispatchBatch();
       return;
     }
+    // 发送提示音（设置 › 通知可配；文字/图片/转语音共用的发送链入口）
+    playNotifySound('send');
     // 文字转语音发送：合成语音气泡（transcript 带原文，成员直接读得到内容）；失败只 toast 不发文字。
     // 开着转语音时文字优先走语音（待发图片留在预览条，再点一次「发送」走纯图路径）
     if (ttsSend && text) {
@@ -3974,6 +3977,8 @@ export function WxGroupChatPage({
       onToast('你已被禁言，暂时无法发言');
       return;
     }
+    // 发送提示音（表情也走「发送消息」分类）
+    playNotifySound('send');
     const msg: WxGroupMsg = {
       id: uid(),
       role: 'me',

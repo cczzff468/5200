@@ -30,6 +30,7 @@ import { create } from 'zustand';
 import { useUI } from './store';
 import { setupPushSubscription } from './push-client';
 import { wxChatFlags, qqChatFlags } from '@/lib/chat-flags';
+import { playNotifySound } from './notify-sound';
 
 // ---------------- 类型 ----------------
 
@@ -214,6 +215,9 @@ export function pushChatNotification(input: ChatNotifyInput): void {
   const body = truncateBody(input.body);
   if (!body) return;
   if (chatMuted(input.sessionKey)) return; // 消息免打扰：不弹灵动岛、不发系统通知（#15）
+  // 通知提示音（设置 › 通知可配）：群会话走「群消息」，其余走「接收消息」；
+  // 声音闸门（总开关/分类开关/免打扰）由 playNotifySound 内部判定——静音时弹窗与记录照常
+  playNotifySound(input.sessionKey.includes(':group:') ? 'group' : 'receive');
   const st = useIslandNotify.getState();
   const n: IslandNotification = {
     id: genNotifyId(),

@@ -139,6 +139,7 @@ import {
 } from 'lucide-react';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
+import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { consumeBgPending, onBgPageVisible, peekBgBadgeCounts, pullBgPending, registerBgSession, unregisterBgSession, type BgPendingItem } from '@/lib/ios/bg-turn';
 import { stopSpeaking } from '@/lib/ios/tts-client';
@@ -4941,9 +4942,15 @@ function ChatPage({
     }
     // 预览条还有待发图、输入框没文字：只发图（照原 flushPendingImages 口径）
     if (!text) {
-      if (staged.length > 0) flushPendingImages();
+      if (staged.length > 0) {
+        // 发送提示音（纯图发送也走「发送消息」分类）
+        playNotifySound('send');
+        flushPendingImages();
+      }
       return;
     }
+    // 发送提示音（设置 › 通知可配；文字/组合/转语音共用的发送链入口）
+    playNotifySound('send');
     // 组合发送：输入框有文字且预览条有待发图 → 文字消息在前、图片在后一起上屏+落盘，只触发一轮 AI 回复
     //（runAiTurnRef(textMsg, created)：上下文按消息数组顺序「文字在前图片在后」，识图收集本轮图片、
     // 请求附带文字取输入框原文；textMsg 已先行上屏 → runAiTurn 的 userMsg 入列按 id 幂等跳过）。
@@ -5624,6 +5631,8 @@ function ChatPage({
         onToast('对方已将你拉黑，无法发送');
         return;
       }
+      // 发送提示音（表情也走「发送消息」分类）
+      playNotifySound('send');
       const msg: QQMsg = { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'sticker', stk: { url: st.url, meaning: st.meaning } };
       if (peer.id === me.id) {
         setMsgs((prev) => [...prev, msg]);

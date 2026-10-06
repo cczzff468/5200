@@ -29,6 +29,7 @@
  */
 
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
+import { playNotifySound } from '@/lib/ios/notify-sound';
 import { contactByRef, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { useSettings, type ApiConfig } from '@/lib/ios/store';
 import { contactRealName, listContacts, ownerRealName, ownerRealNameFor } from '@/lib/ios/contacts-store';
@@ -633,6 +634,9 @@ function saveNotices(platform: MomentPlatform, list: MomentNotice[]): void {
 
 /** 追加一条互动消息（引擎在角色点赞/评论/回复/转发用户相关内容时调用；未读，置顶） */
 function pushMomentNotice(platform: MomentPlatform, n: Omit<MomentNotice, 'id' | 'platform' | 'createdAt' | 'read'>): void {
+  // 互动提示音（设置 › 通知可配）：朋友圈(wx)→moments，QQ空间(qq)→qzone；
+  // 静音/免打扰由 playNotifySound 内部闸门判定，收件箱记录照常落
+  playNotifySound(platform === 'wx' ? 'moments' : 'qzone');
   const list = loadNoticesSafe(platform);
   const next: MomentNotice = { ...n, id: uid(), platform, createdAt: Date.now(), read: false };
   saveNotices(platform, [next, ...(list ?? [])]);

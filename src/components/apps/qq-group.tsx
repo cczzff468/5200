@@ -169,6 +169,7 @@ import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
+import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, isAiDelivering, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, typingDelayOf } from '@/lib/ios/ai-delivery';
 import { splitVisionDesc } from '@/lib/vision-client';
 import {
@@ -3452,12 +3453,16 @@ export function QqGroupChatPage({
     // 空输入点「发送」= 先发预览条待发图（需求2 发图先预览）；无图再触发分句发送批次回复（分句开启且有未回复的批次时）
     if (!text) {
       if (pendingImgs.length > 0) {
+        // 发送提示音（纯图发送也走「发送消息」分类）
+        playNotifySound('send');
         flushPendingImages();
         return;
       }
       if (sentenceSend && pendingDispatch) dispatchBatch();
       return;
     }
+    // 发送提示音（设置 › 通知可配；文字/组合/转语音共用的发送链入口）
+    playNotifySound('send');
     // 组合发送：输入框有文字且预览条有待发图 → 文字消息在前、图片在后一起上屏+落盘，只触发一轮群回复。
     //  触发方式照 flushPendingImages 对齐（runGroupTurnRef(trigger)）；trigger 用文字消息——@ 提及从
     //  trigger.content 解析，传最后一张图（content 为空）会丢 @ 必答；图片已落群消息库，
@@ -3654,6 +3659,8 @@ export function QqGroupChatPage({
       onToast('你已被禁言，暂时无法发言');
       return;
     }
+    // 发送提示音（表情也走「发送消息」分类）
+    playNotifySound('send');
     const msg: WxGroupMsg = {
       id: uid(),
       role: 'me',
