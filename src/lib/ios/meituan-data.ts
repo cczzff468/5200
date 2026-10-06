@@ -86,6 +86,10 @@ function foodSides(opts: { name: string; price: number }[], max = 2, groupName =
   return [{ name: groupName, multi: true, max, options: opts.map((o) => ({ label: o.name, price: o.price })) }];
 }
 
+/** 规格工厂再导出（团购购买弹窗内嵌规格/小料选择用） */
+export const mtTeaSpecs = teaSpecs;
+export const mtFoodSides = foodSides;
+
 export interface MtReview {
   user: string;
   rating: number;
@@ -196,6 +200,8 @@ export interface MtDeal {
   notice: string;
   /** 拼团价（可选，低于直接购买价） */
   groupPrice?: number;
+  /** 规格组（购买弹窗内选规格/小料，奶茶=规格/温度/小料/糖度，食物=小料配菜；加价计入实付） */
+  specs?: MtDishSpec[];
   /** 团购详情（套餐内容清单） */
   menu: MtDealMenu[];
   storeTags: string[];
@@ -220,6 +226,7 @@ export const MT_DEALS: MtDeal[] = [
     usable: '周一至周日可用',
     notice: '本单将于7天后过期，请注意周末、节假日是否可用',
     groupPrice: 11.9,
+    specs: foodSides([{ name: '薯条（小份）', price: 3 }, { name: '香辣鸡翅1块', price: 5 }, { name: '可口可乐（中杯）', price: 2 }, { name: '葡式蛋挞', price: 2 }]),
     menu: [
       { sec: '主食 2选1', items: [{ name: '香辣鸡腿中国汉堡', price: 12 }, { name: '藤椒鸡腿中国汉堡', price: 12 }] },
       { sec: '小食 2选1', items: [{ name: '黄金鸡块（5块）', price: 9.9 }, { name: '香辣鸡翅（2块）', price: 10.5 }] },
@@ -242,6 +249,7 @@ export const MT_DEALS: MtDeal[] = [
     distanceKm: 0.8,
     usable: '周一至周日可用',
     notice: '本单将于30天后过期，免预约随时可用',
+    specs: teaSpecs(),
     menu: [{ sec: '内含券 3张', items: [{ name: '厚芋泥奶茶（中杯）', price: 10.5 }, { name: '厚芋泥奶茶（中杯）', price: 10.5 }, { name: '厚芋泥奶茶（中杯）', price: 10.5 }] }],
     storeTags: ['免预约', '随时退'],
   }),
@@ -260,6 +268,7 @@ export const MT_DEALS: MtDeal[] = [
     distanceKm: 0.8,
     usable: '周一至周日可用',
     notice: '本单将于30天后过期，免预约随时可用',
+    specs: teaSpecs(),
     menu: [{ sec: '内含券 3张', items: [{ name: '茉莉奶绿（中杯）', price: 6.5 }, { name: '茉莉奶绿（中杯）', price: 6.5 }, { name: '茉莉奶绿（中杯）', price: 6.5 }] }],
     storeTags: ['免预约', '随时退'],
   }),
@@ -279,6 +288,7 @@ export const MT_DEALS: MtDeal[] = [
     usable: '周一至周五可用',
     notice: '本单将于14天后过期，法定节假日不可用',
     groupPrice: 13.9,
+    specs: foodSides([{ name: '宽粉', price: 2 }, { name: '鹌鹑蛋（5个）', price: 3 }, { name: '午餐肉', price: 4 }, { name: '肥牛卷', price: 6 }], 3, '加料'),
     menu: [
       { sec: '主食', items: [{ name: '番茄麻辣烫（微辣）', price: 16.8 }] },
       { sec: '小食', items: [{ name: '宽粉', price: 2 }, { name: '鹌鹑蛋（5个）', price: 3 }] },
@@ -301,6 +311,7 @@ export const MT_DEALS: MtDeal[] = [
     distanceKm: 2.1,
     usable: '周一至周日可用',
     notice: '本单将于7天后过期，随时退·过期自动退',
+    specs: foodSides([{ name: '薯条（小份）', price: 3 }, { name: '蒜香鸡翅2只', price: 7 }, { name: '可乐 1 罐', price: 3 }]),
     menu: [
       { sec: '比萨 4选1', items: [{ name: '超级至尊比萨', price: 36 }, { name: '夏威夷比萨', price: 32 }, { name: '肉香四溢比萨', price: 35 }, { name: '田园风光比萨', price: 28 }] },
       { sec: '固选', items: [{ name: '柠檬红茶（中杯）', price: 6 }] },

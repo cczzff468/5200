@@ -9,6 +9,7 @@
  *   渠道灰显 + 提示切换其他支付方式（需求 6.4）。
  */
 import { ownerRealNameFor } from '@/lib/ios/contacts-store';
+import type { MtOrder } from './meituan-store';
 
 export interface MtPayChannel {
   /** 列表内唯一键 */
@@ -25,6 +26,7 @@ export interface MtPayChannel {
 }
 
 export interface MtFcPart {
+  cardInId: string;
   giverId: string | null;
   giverName: string;
   amount: number;
@@ -130,7 +132,7 @@ export async function mtExecutePay(
     if (!pay) return { ok: false, error: channel.isFc ? '亲属卡本月额度不足，请切换其他支付方式' : '余额不足，支付失败，请重试或更换支付方式' };
     if (pay.fc) {
       // 亲属卡消费感知（与微信内商户消费同一管线）：账本 + 赠卡人记忆（channel='美团'）+ 赠卡人聊天通知行
-      const parts: MtFcPart[] = pay.fc.parts.map((p) => ({ giverId: p.giverId, giverName: p.giverName, amount: p.amount }));
+      const parts: MtFcPart[] = pay.fc.parts.map((p) => ({ cardInId: p.cardInId, giverId: p.giverId, giverName: p.giverName, amount: p.amount }));
       const owner = (await ownerRealNameFor('wx').catch(() => '')) || '机主';
       ww.recordFcSpend({
         total: amount,
@@ -159,4 +161,68 @@ export async function mtExecutePay(
   if (!qq.canPay(channel.methodId, amount)) return { ok: false, error: '余额不足，支付失败，请重试或更换支付方式' };
   const ok = qq.executePayment(channel.methodId, amount, '美团外卖', { avatar: null });
   return ok ? { ok: true } : { ok: false, error: '余额不足，支付失败，请重试或更换支付方式' };
+}
+
+/**
+ * 退款原路退回入账（退款成功后调用，需求「订单退款的钱按原路返回」）：
+ * - 微信零钱 → 零钱回补 + 零钱明细写一条「美团外卖」收入；
+ * - 微信银行卡 → 卡余额回补；
+ * - 微信亲属卡 → 按支付时各卡分摊（payFcParts）回补本月可用额度；
+ * - QQ余额 → QQ钱包余额入账 + 账单（kind=refund）；QQ银行卡 → 卡余额回补 + 账单；
+ * - 美团支付·银行卡（演示通道，未真实扣款）→ 无需入账，返回 false。
+ */
+export async function mtRefundToOrigin(order: MtOrder): Promise<boolean> {
+  const amount = Math.round((order.refund?.amount ?? order.total) * 100) / 100;
+  const methodId = order.payMethodId;
+  if (!(amount > 0) || !order.payIdp || !methodId) return false;
+  try {
+    if (order.payIdp === 'wx') {
+      const w = await import('@/components/apps/wechat');
+      const ww = await import('@/components/apps/wechat-wallet');
+      if (methodId === 'balance') {
+        return w.wxPatchBalance(amount, { kind: '美团外卖', amount, peer: order.merchantName });
+      }
+      if (methodId.startsWith('fcin-')) {
+        // 亲属卡：恢复本月额度（优先按支付时分摊明细回补；无明细则按扣款顺序回补该赠卡人名下卡）
+        const list = ww.resetFamilyCardsInMonth();
+        const back = new Map<string, number>();
+        if (order.payFcParts && order.payFcParts.length > 0) {
+          for (const p of order.payFcParts) back.set(p.cardInId, (back.get(p.cardInId) ?? 0) + p.amount);
+        } else {
+          const anchor = list.find((f) => f.id === methodId);
+          if (!anchor) return false;
+          const key = anchor.friendId ?? anchor.id;
+          let remain = amount;
+          for (const f of list.filter((x) => (x.friendId ?? x.id) === key && x.used > 0)) {
+            const take = Math.min(f.used, remain);
+            if (take > 0) {
+              back.set(f.id, take);
+              remain = Math.round((remain - take) * 100) / 100;
+            }
+            if (remain <= 0) break;
+          }
+        }
+        if (back.size === 0) return false;
+        ww.saveFamilyCardsIn(
+          list.map((f) => (back.has(f.id) ? { ...f, used: Math.round((f.used - (back.get(f.id) ?? 0)) * 100) / 100 } : f))
+        );
+        return true;
+      }
+      const cards = ww.loadCards();
+      if (!cards.some((x) => x.id === methodId)) return false;
+      ww.saveJSON(
+        ww.LS_CARDS,
+        cards.map((x) => (x.id === methodId ? { ...x, balance: Math.round((x.balance + amount) * 100) / 100 } : x))
+      );
+      return true;
+    }
+    const qq = await import('@/components/apps/qq');
+    if (methodId === 'balance') {
+      qq.gainToWallet(amount, '美团外卖-退款', { kind: 'refund' });
+      return true;
+    }
+    return qq.refundToBankCard(methodId, amount);
+  } catch {
+    return false;
+  }
 }

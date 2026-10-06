@@ -13799,6 +13799,22 @@ export function executePayment(methodId: string, amount: number, billTitle: stri
   return payFromCard(methodId, amount, billTitle, meta);
 }
 
+/** 退款原路退回银行卡（美团退款用）：卡余额回补 + 写一条收入账单（kind=refund） */
+export function refundToBankCard(cardId: string, amount: number, billTitle = '美团外卖-退款'): boolean {
+  if (!(amount > 0)) return false;
+  const list = loadBankCards();
+  const idx = list.findIndex((c) => c.id === cardId);
+  if (idx < 0) return false;
+  const card = list[idx];
+  list[idx] = { ...card, balance: round2((card.balance ?? 0) + amount) };
+  saveBankCards(list);
+  saveWalletBills([
+    { id: uid(), title: `${billTitle}（${card.bank}尾号${card.last4}）`, amount, ts: Date.now(), kind: 'refund' as const },
+    ...loadWalletBills(),
+  ].slice(0, 100));
+  return true;
+}
+
 /** 支付方式展示名（支付密码验证浮层副标题用） */
 function methodLabel(methodId: string): string {
   if (methodId === 'balance') return 'QQ钱包余额';

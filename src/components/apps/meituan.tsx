@@ -157,6 +157,9 @@ const MT_PRICE = '#FF4B33';
 const MT_PINK = '#FF2D7E';
 const MT_ORANGE = '#FF6000';
 
+/** 计数单位：饮品/奶茶类「杯」，其余「件」（对齐真机量词，奶茶不再用「张」） */
+const mtCountUnit = (name: string): string => (/奶茶|奶绿|奶昔|果茶|柠檬水|咖啡|豆浆|杨枝甘露|可乐|果汁|茶饮|奶蒂/.test(name) ? '杯' : '件');
+
 const fmtMoney = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 const fmtTime = (ts: number): string => {
   const d = new Date(ts);
@@ -1010,7 +1013,7 @@ function SearchMerchantRow({ m, onOpen }: { m: MtMerchant; onOpen: () => void })
 /** 商家页页签记忆（进订单详情再返回时停留在原页签，如「订单」） */
 let merchantTabMemo: '点菜' | '评价' | '商家' | '订单' = '点菜';
 
-function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { merchant: MtMerchant; onBack: () => void; onCheckout: () => void; onOpenOrder: (id: string) => void; onToast: (m: string) => void }) {
+function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { merchant: MtMerchant; onBack: () => void; onCheckout: (mid?: string) => void; onOpenOrder: (id: string) => void; onToast: (m: string) => void }) {
   const { favs, toggle } = useFavs();
   const storeFav = favs.stores.includes(merchant.id);
   const session = mtGetSession();
@@ -1026,6 +1029,9 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
 
   const calc = mtCheckoutCalc(uid, merchant, cart);
   const cartMerchantOk = cart.merchantId === null || cart.merchantId === merchant.id || cart.items.length === 0;
+  // 跨店购物车：当前购物车属于其他商家（对齐真机：底栏展示他店商品，可一键清空或去他店结算）
+  const foreignMerchant = cart.merchantId && cart.merchantId !== merchant.id && cart.items.length > 0 ? mtMerchantOf(cart.merchantId) : undefined;
+  const foreignCalc = foreignMerchant ? mtCheckoutCalc(uid, foreignMerchant, cart) : null;
 
   /** 函数式更新 + 持久化（连续点击同一帧内也正确累加，避免 stale state 相互覆盖） */
   const mutateCart = (updater: (prev: MtCart) => MtCart): void => {
@@ -1053,7 +1059,7 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
         : [...prev.items, { dishId: d.id, qty: 1 }],
     }));
   };
-  /** 规格弹窗「选好了」：同菜不同规格分行（dishId+spec 为唯一键） */
+  /** 规格弹窗「选好了」：同菜不同规格分行（dishId+spec 为唯一键）；静默入车（对齐真机无 toast，角标即反馈） */
   const addWithSpec = (d: MtDish, qty: number, spec: string, unitPrice: number) => {
     if (!cartMerchantOk && cart.items.length > 0) {
       onToast('不同商家商品不能合并结算，请先结算或清空购物车');
@@ -1068,7 +1074,6 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
       return { merchantId: merchant.id, items };
     });
     setSpecDish(null);
-    onToast(`已加入购物车${spec ? `（${spec}）` : ''}`);
   };
   const dec = (d: MtDish) => {
     // 多规格分行：减最后一个同菜行
@@ -1324,7 +1329,8 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
               </div>
               <div className="max-h-52 overflow-y-auto px-4 py-1">
                 {cart.items.map((i) => {
-                  const d = mtDishesOf(merchant).find((x) => x.id === i.dishId);
+                  // 跨店购物车：行按购物车归属商家的菜品解析
+                  const d = mtDishesOf(foreignMerchant ?? merchant).find((x) => x.id === i.dishId);
                   if (!d) return null;
                   return (
                     <div key={`${i.dishId}-${i.spec ?? ''}`} className="flex items-center gap-2.5 py-2.5">
@@ -1347,25 +1353,51 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
           <div className="flex items-center gap-3 rounded-full bg-[#2B2B33] py-2 pl-2 pr-2 shadow-lg">
             <button type="button" aria-label="购物车" onClick={() => setCartOpen((o) => !o)} className="relative grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#FFD100] active:opacity-85">
               <ShoppingCart className="h-5 w-5 text-black/80" />
-              {calc.count > 0 && (
-                <span className="absolute -right-1 -top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-[#FF4B33] px-1 text-[10px] font-bold text-white">{calc.count}</span>
+              {(foreignCalc ? foreignCalc.count : calc.count) > 0 && (
+                <span className="absolute -right-1 -top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-[#FF4B33] px-1 text-[10px] font-bold text-white">{foreignCalc ? foreignCalc.count : calc.count}</span>
               )}
             </button>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[17px] font-bold text-white">
-                ¥{fmtMoney(calc.itemTotal)}
-                {calc.discount > 0 && <span className="ml-1.5 text-[11px] font-normal text-white/50">已优惠¥{fmtMoney(calc.discount)}</span>}
-              </span>
-              <span className="block text-[10px] text-white/45">{belowMin ? `还差 ¥${fmtMoney(merchant.minOrder - calc.itemTotal)} 起送` : '配送费 ¥' + fmtMoney(calc.deliveryFee) + (calc.itemTotal >= 45 ? '（已免）' : '')}</span>
-            </span>
-            <button
-              type="button"
-              disabled={belowMin || calc.count === 0}
-              onClick={onCheckout}
-              className={`h-11 shrink-0 rounded-full px-6 text-[15px] font-semibold ${belowMin || calc.count === 0 ? 'bg-white/15 text-white/40' : 'bg-[#FFD100] text-black/90 active:opacity-85'}`}
-            >
-              {belowMin && calc.count > 0 ? `¥${fmtMoney(merchant.minOrder)}起送` : '去结算'}
-            </button>
+            {foreignMerchant && foreignCalc ? (
+              /* 跨店：底栏展示他店购物车 + 一键清空/去他店结算（对齐真机跨店提示） */
+              <>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[15px] font-bold text-white">¥{fmtMoney(foreignCalc.itemTotal)}</span>
+                  <span className="block truncate text-[10px] text-white/45">已选「{foreignMerchant.name.split('（')[0]}」的商品 · 不能合并结算</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={clearCart}
+                  className="h-11 shrink-0 rounded-full border border-white/25 px-4 text-[13px] text-white/85 active:bg-white/10"
+                >
+                  清空
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onCheckout(foreignMerchant.id)}
+                  className="h-11 shrink-0 rounded-full bg-[#FFD100] px-6 text-[15px] font-semibold text-black/90 active:opacity-85"
+                >
+                  去结算
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[17px] font-bold text-white">
+                    ¥{fmtMoney(calc.itemTotal)}
+                    {calc.discount > 0 && <span className="ml-1.5 text-[11px] font-normal text-white/50">已优惠¥{fmtMoney(calc.discount)}</span>}
+                  </span>
+                  <span className="block text-[10px] text-white/45">{belowMin ? `还差 ¥${fmtMoney(merchant.minOrder - calc.itemTotal)} 起送` : '配送费 ¥' + fmtMoney(calc.deliveryFee) + (calc.itemTotal >= 45 ? '（已免）' : '')}</span>
+                </span>
+                <button
+                  type="button"
+                  disabled={belowMin || calc.count === 0}
+                  onClick={() => onCheckout()}
+                  className={`h-11 shrink-0 rounded-full px-6 text-[15px] font-semibold ${belowMin || calc.count === 0 ? 'bg-white/15 text-white/40' : 'bg-[#FFD100] text-black/90 active:opacity-85'}`}
+                >
+                  {belowMin && calc.count > 0 ? `¥${fmtMoney(merchant.minOrder)}起送` : '去结算'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1566,6 +1598,8 @@ function PayPage({
         payIdp: chan.idp,
         payChannelLabel: `${chan.idp === 'wx' ? '微信' : 'QQ'}${chan.isFc ? '亲属卡' : ''} · ${chan.label}`,
         payFc: chan.isFc === true,
+        payMethodId: chan.methodId,
+        payFcParts: res.fc ? res.fc.parts.map((p) => ({ cardInId: p.cardInId, amount: p.amount })) : undefined,
         statusLog: [...order.statusLog, { status: tuangouDone ? 'completed' : 'pendingAccept', at: now }],
       };
       mtSaveOrders(order.uid, mtLoadOrders(order.uid).map((o) => (o.id === order.id ? paid : o)));
@@ -2029,7 +2063,7 @@ function OrdersPage({
   };
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="flex h-full flex-col bg-[#F5F6F7]">
       {/* 返回 + 搜索 + 筛选 + 发票（独立页：无底部 tab，顶部返回键回首页） */}
       <div className="shrink-0 border-b border-black/[0.04] bg-white px-3 pb-1 pt-[54px]">
         <div className="flex items-center gap-2.5">
@@ -2072,7 +2106,7 @@ function OrdersPage({
             </button>
           </div>
         )}
-        <div>
+        <div className="space-y-2.5">
           {list.map((o) => {
             const tuangou = o.kind === 'tuangou';
             const qtyTotal = o.items.reduce((s, i) => s + i.qty, 0);
@@ -2083,7 +2117,7 @@ function OrdersPage({
               const statusText = rs === 'pending' ? '退款中' : rs === 'failed' ? '退款失败' : '退款成功';
               const statusTone = rs === 'approved' ? 'text-black/45' : 'text-[#FF6000]';
               return (
-                <div key={o.id} className="border-t-[7px] border-[#F5F6F7] px-4 py-3.5 first:border-t-0">
+                <div key={o.id} className="rounded-2xl bg-white px-4 py-3.5 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
                   <button
                     type="button"
                     onClick={() => onOpenRefund(o.id)}
@@ -2121,16 +2155,14 @@ function OrdersPage({
               );
             }
             return (
-              <div key={o.id} className="border-t-[7px] border-[#F5F6F7] px-4 py-3.5 first:border-t-0">
+              <div key={o.id} className="rounded-2xl bg-white px-4 py-3.5 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
                 <button type="button" onClick={() => onOpenOrder(o.id)} className="w-full text-left">
                   <span className="flex items-center gap-1.5">
                     <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-[#FFF3DC]">
                       <Utensils className="h-3 w-3 text-[#FF8A00]" strokeWidth={2.4} />
                     </span>
                     <span className="min-w-0 flex-1 truncate text-[16px] font-bold text-black/90">{o.merchantName.split('（')[0]}</span>
-                    {tuangou && <span className="shrink-0 rounded-[3px] border border-black/15 px-1 py-px text-[10px] text-black/45">多店可用</span>}
-                    <ChevronRight className="h-4 w-4 shrink-0 text-black/25" />
-                    <span className={`ml-1 shrink-0 text-[13px] ${['pendingPay', 'pendingAccept', 'accepted', 'delivering'].includes(o.status) ? 'font-medium text-[#FF6000]' : 'text-[#9A9A9A]'}`}>
+                    <span className={`shrink-0 text-[13px] ${['pendingPay', 'pendingAccept', 'accepted', 'delivering'].includes(o.status) ? 'font-medium text-[#FF6000]' : 'text-[#9A9A9A]'}`}>
                       {mtStatusText(o)}
                     </span>
                     {o.refund && (
@@ -2160,7 +2192,7 @@ function OrdersPage({
                     </span>
                     <span className="shrink-0 text-right">
                       <span className="block text-[16px] font-semibold text-black/90">¥{o.total.toFixed(2)}</span>
-                      {tuangou && qtyTotal > 1 && <span className="block text-[11px] text-black/40">共{qtyTotal}张</span>}
+                      {tuangou && qtyTotal > 1 && <span className="block text-[11px] text-black/40">共{qtyTotal}{mtCountUnit(o.items[0]?.name ?? '')}</span>}
                     </span>
                   </span>
                 </button>
@@ -2365,17 +2397,14 @@ function OrderDetailPage({
   })();
 
   return (
-    <div className="flex h-full flex-col bg-white">
-      {/* 顶栏：返回 + 金币/分享/客服/刷新 */}
+    <div className="flex h-full flex-col bg-[#F5F6F7]">
+      {/* 顶栏：返回 + 分享/客服/刷新 */}
       <div className="shrink-0 border-b border-black/[0.04] bg-white px-3 pb-2 pt-[54px]">
         <div className="flex items-center gap-1">
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
           <span className="flex-1" />
-          <button type="button" aria-label="美团币" onClick={() => onToast('下单返美团币（演示）')} className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-b from-[#FFD76E] to-[#FFB800] text-[10px] font-bold text-[#8A5B00] shadow-sm">
-            30
-          </button>
           <button type="button" aria-label="分享" onClick={() => onToast('分享（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
             <Share2 className="h-[19px] w-[19px] text-black/70" strokeWidth={1.8} />
           </button>
@@ -2389,14 +2418,14 @@ function OrderDetailPage({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* 状态 hero */}
-        <div className="bg-white px-5 pb-4 pt-1">
+        {/* 状态 hero（美团黄渐变圆底） */}
+        <div className="rounded-b-[18px] bg-gradient-to-b from-[#FFE14D] to-[#FFD100] px-5 pb-5 pt-3 shadow-[0_2px_10px_rgba(255,190,0,0.25)]">
           <p className="flex items-center gap-2 text-[24px] font-bold leading-tight text-black/90">
             {hero.icon && <ClockIcon className="h-6 w-6 text-black/75" strokeWidth={2} />}
             {hero.big}
-            {hero.tag && <span className="text-[13px] font-normal text-black/45">{hero.tag}</span>}
+            {hero.tag && <span className="text-[13px] font-normal text-black/55">{hero.tag}</span>}
           </p>
-          <p className="mt-1 text-[15px] font-semibold text-black/80">{hero.sub}</p>
+          <p className="mt-1 text-[15px] font-semibold text-black/75">{hero.sub}</p>
 
           {/* 四节点进度（仅外卖） */}
           {!tuangou && order.status !== 'pendingPay' && order.status !== 'canceled' && (
@@ -2405,18 +2434,18 @@ function OrderDetailPage({
                 {steps.map((s, i) => (
                   <div key={s.key} className="flex flex-1 items-center last:flex-none">
                     <span
-                      className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${i <= doneIdx ? 'bg-[#FFD100] text-black/85 shadow-sm' : 'bg-[#E8EAED] text-white'}`}
+                      className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${i <= doneIdx ? 'bg-white text-black/80 shadow-sm' : 'bg-black/10 text-white/80'}`}
                     >
                       {s.icon === 'pay' && <span className="text-[13px] font-bold">¥</span>}
                       {s.icon === 'store' && <Store className="h-4 w-4" strokeWidth={2.2} />}
                       {s.icon === 'bike' && <Bike className="h-4 w-4" strokeWidth={2.4} />}
                       {s.icon === 'home' && <Check className="h-4 w-4" strokeWidth={3} />}
                     </span>
-                    {i < steps.length - 1 && <span className={`mx-0.5 h-[5px] flex-1 rounded-full ${i < doneIdx ? 'bg-[#FFD100]' : 'bg-[#E8EAED]'}`} />}
+                    {i < steps.length - 1 && <span className={`mx-0.5 h-[5px] flex-1 rounded-full ${i < doneIdx ? 'bg-white/85' : 'bg-black/10'}`} />}
                   </div>
                 ))}
               </div>
-              <div className="mt-1 flex justify-between text-[10px] text-black/45">
+              <div className="mt-1 flex justify-between text-[10px] text-black/55">
                 {steps.map((s) => (
                   <span key={s.key} className="w-8 text-center first:text-left last:text-right">{s.key}</span>
                 ))}
@@ -2427,14 +2456,14 @@ function OrderDetailPage({
 
         {/* 配送地图 */}
         {order.status === 'delivering' && (
-          <div className="mt-3 border-y-[7px] border-[#F5F6F7]">
+          <div className="mx-3 mt-2.5 overflow-hidden rounded-2xl shadow-[0_1px_4px_rgba(0,0,0,0.06)]">
             <DeliveryMap merchantName={order.merchantName} />
           </div>
         )}
 
         {/* 退款/售后进度卡（点击进「售后详情」，截图2） */}
         {order.refund && (
-          <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
+          <div className="mx-3 mt-2.5 rounded-2xl bg-white px-4 py-4 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
             <button type="button" onClick={() => onOpenRefund(order)} className="flex w-full items-center gap-2.5 text-left active:opacity-75">
               <span
                 className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${
@@ -2486,7 +2515,7 @@ function OrderDetailPage({
                 key={t}
                 type="button"
                 onClick={() => onToast(t === '催一下' ? '已提醒商家尽快出餐' : t === '申请售后' ? '售后申请已提交（演示）' : '已发起联系（演示）')}
-                className={`flex-1 whitespace-nowrap rounded-full bg-white py-2.5 text-[12px] text-black/70 shadow-sm active:bg-black/5 ${i === 4 ? 'border border-[#FFD100] font-medium text-[#B77900]' : ''}`}
+                className={`flex-1 whitespace-nowrap rounded-full bg-white py-2.5 text-[12px] text-black/70 shadow-[0_1px_4px_rgba(0,0,0,0.06)] active:bg-black/5 ${i === 4 ? 'border border-[#FFD100] font-medium text-[#B77900]' : ''}`}
               >
                 {t}
               </button>
@@ -2496,13 +2525,13 @@ function OrderDetailPage({
 
         {/* 待支付使用限制 */}
         {order.status === 'pendingPay' && (
-          <div className="border-t-[7px] border-[#F5F6F7] px-4 py-3.5">
+          <div className="mx-3 mt-2.5 rounded-2xl bg-white px-4 py-3.5 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
             <p className="text-[13px] font-medium leading-relaxed text-[#FF6000]">【使用限制】该订单为特惠订单，请在30分钟内完成支付，超时未支付将自动取消</p>
           </div>
         )}
 
         {/* 订单信息 */}
-        <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
+        <div className="mx-3 mt-2.5 rounded-2xl bg-white px-4 py-4 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
           <p className="text-[16px] font-bold text-black/85">订单信息</p>
           <div className="mt-1.5">
             {tuangou ? (
@@ -2543,7 +2572,7 @@ function OrderDetailPage({
         </div>
 
         {/* 商品费用 */}
-        <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
+        <div className="mx-3 mb-3 mt-2.5 rounded-2xl bg-white px-4 py-4 shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
           <div className="flex items-center gap-2">
             <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-md">
               <FoodImg src={order.merchantImg} emoji={order.merchantEmoji} className="h-full w-full" />
@@ -2878,10 +2907,39 @@ function DealConfirmSheet({
   const uid = session ? mtUidOf(session) : '';
   const merchant = mtMerchantOf(deal.merchantId);
   const [qty, setQty] = useState(1);
+  // 规格/小料（购买弹窗内选择：奶茶=规格/温度/小料/糖度，食物=小料配菜；加价计入实付）
+  const specs = deal.specs ?? [];
+  const [selSpec, setSelSpec] = useState<Record<string, string[]>>(() => {
+    const m: Record<string, string[]> = {};
+    for (const g of specs) m[g.name] = g.multi ? [] : [g.options[0]?.label ?? ''];
+    return m;
+  });
+  const specOptPrice = (gName: string, label: string): number => specs.find((g) => g.name === gName)?.options.find((o) => o.label === label)?.price ?? 0;
+  const tapSpec = (gName: string, label: string) => {
+    const g = specs.find((x) => x.name === gName);
+    if (!g) return;
+    setSelSpec((prev) => {
+      const cur = prev[gName] ?? [];
+      if (g.multi) {
+        const has = cur.includes(label);
+        if (has) return { ...prev, [gName]: cur.filter((x) => x !== label) };
+        const max = g.max ?? g.options.length;
+        if (cur.length >= max) return { ...prev, [gName]: [...cur.slice(1), label] };
+        return { ...prev, [gName]: [...cur, label] };
+      }
+      return { ...prev, [gName]: [label] };
+    });
+  };
+  const specExtra = specs.reduce((s, g) => s + (selSpec[g.name] ?? []).reduce((t, l) => t + specOptPrice(g.name, l), 0), 0);
+  const specText = specs
+    .map((g) => (selSpec[g.name] ?? []).join('、'))
+    .filter(Boolean)
+    .join('/');
   // 优惠券（到店券）
   const [selCoupon, setSelCoupon] = useState<MtCoupon | null>(null);
   const [couponPick, setCouponPick] = useState(false);
-  const unitPrice = mode === 'group' ? (deal.groupPrice ?? Math.max(0.1, Math.round((deal.price - 2) * 10) / 10)) : deal.price;
+  const baseDealPrice = mode === 'group' ? (deal.groupPrice ?? Math.max(0.1, Math.round((deal.price - 2) * 10) / 10)) : deal.price;
+  const unitPrice = Math.max(0.1, Math.round((baseDealPrice + specExtra) * 100) / 100);
   const itemTotal = Math.round(deal.origPrice * qty * 100) / 100;
   const baseTotal = Math.round(unitPrice * qty * 100) / 100;
   const couponOff = selCoupon ? Math.min(selCoupon.amount, Math.max(0.01, baseTotal - 0.01)) : 0;
@@ -2903,7 +2961,7 @@ function DealConfirmSheet({
       merchantEmoji: merchant.emoji,
       merchantImg: merchant.cover,
       kind: 'tuangou',
-      items: [{ dishId: deal.id, name: deal.title, price: deal.origPrice, qty, emoji: deal.emoji, img: deal.img }],
+      items: [{ dishId: deal.id, name: deal.title, price: deal.origPrice, qty, emoji: deal.emoji, img: deal.img, spec: specText || undefined }],
       itemTotal,
       deliveryFee: 0,
       discount,
@@ -2967,6 +3025,38 @@ function DealConfirmSheet({
                 </div>
               </div>
             </div>
+
+            {/* 规格/小料（购买弹窗内选择：奶茶=规格/温度/小料/糖度，食物=小料配菜，加价计入实付） */}
+            {specs.length > 0 && (
+              <div className="border-t border-black/5 px-4 py-3.5">
+                <p className="text-[14px] font-semibold text-black/80">选择规格</p>
+                {specs.map((g) => (
+                  <div key={g.name} className="mt-3">
+                    <p className="text-[12px] text-black/50">{g.multi && g.max ? `${g.name}（最多可选${g.max}份）` : g.name}</p>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {g.options.map((o) => {
+                        const on = (selSpec[g.name] ?? []).includes(o.label);
+                        return (
+                          <button
+                            key={o.label}
+                            type="button"
+                            onClick={() => tapSpec(g.name, o.label)}
+                            className={`flex min-h-[38px] items-center justify-center rounded-lg px-1.5 text-[13px] transition-colors ${
+                              on ? 'border-[1.5px] border-[#FF2D7E] bg-[#FFEBF3] font-medium text-[#FF2D7E]' : 'border-[1.5px] border-transparent bg-[#F5F6F7] text-black/80'
+                            }`}
+                          >
+                            <span className="truncate">{o.label}</span>
+                            {g.multi && o.price !== undefined && o.price !== 0 && (
+                              <span className="ml-0.5 shrink-0 text-[11px]">{o.price > 0 ? `+¥${o.price}` : `-¥${-o.price}`}</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* 优惠券（到店券） */}
             <button type="button" onClick={() => setCouponPick(true)} className="flex w-full items-center border-t border-black/5 px-4 py-3.5 text-left active:opacity-70">
@@ -4260,13 +4350,17 @@ function FavoritesPage({
     const mid = first.m.id;
     const inMerchant = selArr.filter((id) => dishOwners.get(id)?.m.id === mid);
     const cart = mtLoadCart(uid);
-    const merged = new Map(cart.merchantId === mid ? cart.items.map((i) => [i.dishId, i.qty]) : []);
+    // 跨店拦截（对齐真机）：购物车已有其他商家商品 → 提示先结算或清空，不静默换商家
+    if (cart.items.length > 0 && cart.merchantId !== mid) {
+      onToast('不同商家商品不能合并结算，请先结算或清空购物车');
+      return;
+    }
+    const merged = new Map(cart.items.map((i) => [i.dishId, i.qty]));
     for (const id of inMerchant) merged.set(id, (merged.get(id) ?? 0) + qtyOf(id));
-    const switched = cart.items.length > 0 && cart.merchantId !== mid;
     mtSaveCart(uid, { merchantId: mid, items: [...merged.entries()].map(([dishId, qty]) => ({ dishId, qty })) });
     setSel(new Set());
     window.dispatchEvent(new CustomEvent('mt-cart-changed'));
-    onToast(switched ? '已切换商家并加入购物车' : '已加入购物车');
+    onToast('已加入购物车');
   };
 
   const tabEmpty: Record<FavTab, boolean> = {
@@ -5115,6 +5209,8 @@ export default function MeituanApp() {
   const [editAddr, setEditAddr] = useState<MtAddress | null>(null);
   const [addrPicker, setAddrPicker] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  /** 结算目标商家（跨店底栏「去结算」传购物车归属商家；空 = 当前商家页） */
+  const [checkoutMid, setCheckoutMid] = useState<string | null>(null);
   const [dealConfirmOpen, setDealConfirmOpen] = useState(false);
   const [payFor, setPayFor] = useState<MtOrder | null>(null);
   const [payPage, setPayPage] = useState(false);
@@ -5252,6 +5348,7 @@ export default function MeituanApp() {
   const uid = mtUidOf(session);
   const merchant = merchantId ? mtMerchantOf(merchantId) : undefined;
   const deal = dealId ? MT_DEALS.find((d) => d.id === dealId) : undefined;
+  const checkoutMerchant = (checkoutMid ?? merchantId) ? mtMerchantOf((checkoutMid ?? merchantId) as string) : undefined;
 
   const pickAddr = (a: MtAddress) => {
     mtSetCurAddr(uid, a.id);
@@ -5323,7 +5420,10 @@ export default function MeituanApp() {
         <MerchantPage
           merchant={merchant}
           onBack={() => setPage('main')}
-          onCheckout={() => setCheckoutOpen(true)}
+          onCheckout={(mid) => {
+            setCheckoutMid(mid ?? null);
+            setCheckoutOpen(true);
+          }}
           onOpenOrder={(id) => openOrder(id, 'merchant')}
           onToast={showToast}
         />
@@ -5449,12 +5549,15 @@ export default function MeituanApp() {
 
       {/* 下单确认弹窗（外卖结算 / 团购确认，slide-up 覆盖在商家页/团购详情页上） */}
       <AnimatePresence>
-        {checkoutOpen && merchant && (
+        {checkoutOpen && checkoutMerchant && (
           <CheckoutSheet
             key="mt-checkout"
             session={session}
-            merchant={merchant}
-            onClose={() => setCheckoutOpen(false)}
+            merchant={checkoutMerchant}
+            onClose={() => {
+              setCheckoutOpen(false);
+              setCheckoutMid(null);
+            }}
             onOpenPay={openPay}
             onPickAddress={() => setAddrPicker(true)}
             onToast={showToast}

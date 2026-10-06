@@ -374,6 +374,8 @@ export interface MtRefund {
   channel?: string;
   /** 失败原因文案（status=failed 时展示） */
   failMsg?: string;
+  /** 原路退回入账已完成（防止重复入账的幂等标记） */
+  paidBack?: boolean;
 }
 
 export interface MtOrder {
@@ -408,6 +410,10 @@ export interface MtOrder {
   payChannelLabel?: string;
   /** 亲属卡支付标记（支付方式展示「亲属卡」） */
   payFc?: boolean;
+  /** 支付渠道 methodId（退款原路退回定位账户用：balance/银行卡id/fcin-亲属卡id） */
+  payMethodId?: string;
+  /** 亲属卡多卡分摊明细（退款时按原分摊回补各卡额度） */
+  payFcParts?: { cardInId: string; amount: number }[];
   status: MtOrderStatus;
   createdAt: number;
   paidAt?: number;
@@ -450,6 +456,12 @@ export function mtLoadOrders(uid: string): MtOrder[] {
       payIdp: o.payIdp === 'wx' || o.payIdp === 'qq' ? o.payIdp : undefined,
       payChannelLabel: typeof o.payChannelLabel === 'string' ? o.payChannelLabel : undefined,
       payFc: o.payFc === true,
+      payMethodId: typeof o.payMethodId === 'string' ? o.payMethodId : undefined,
+      payFcParts: Array.isArray(o.payFcParts)
+        ? (o.payFcParts as { cardInId?: unknown; amount?: unknown }[])
+            .filter((p) => p && typeof p.cardInId === 'string' && typeof p.amount === 'number')
+            .map((p) => ({ cardInId: p.cardInId as string, amount: p.amount as number }))
+        : undefined,
       refund:
         o.refund && typeof o.refund === 'object' && typeof o.refund.appliedAt === 'number'
           ? {
@@ -461,6 +473,7 @@ export function mtLoadOrders(uid: string): MtOrder[] {
               doneAt: typeof o.refund.doneAt === 'number' ? o.refund.doneAt : undefined,
               channel: typeof o.refund.channel === 'string' ? o.refund.channel : undefined,
               failMsg: typeof o.refund.failMsg === 'string' ? o.refund.failMsg : undefined,
+              paidBack: o.refund.paidBack === true,
             }
           : undefined,
       status: (o.status ?? 'pendingPay') as MtOrderStatus,
@@ -553,6 +566,7 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
   });
   // 退款售后：审核超时自动出结果（原路退回；按订单号确定性地约 1/4 概率退款失败，对齐真机「退款失败」态）
   let refundChanged = false;
+  const credited: MtOrder[] = [];
   const withRefunds = next.map((o) => {
     if (!o.refund || o.refund.status !== 'pending') return o;
     if (now - o.refund.appliedAt < REFUND_AUTO_MS) return o;
@@ -575,11 +589,14 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
         o.status === 'completed'
           ? o.statusLog
           : [...o.statusLog, { status: 'canceled' as const, at: now }],
-      refund: { ...o.refund, status: 'approved' as const, doneAt: now, channel: mtRefundChannelOf(o) },
+      refund: { ...o.refund, status: 'approved' as const, doneAt: now, channel: mtRefundChannelOf(o), paidBack: true },
     };
+    credited.push(approved);
     return approved;
   });
   if (changed || refundChanged) mtSaveOrders(uid, withRefunds);
+  // 退款成功 → 原路退回入账（微信零钱/银行卡回补、亲属卡恢复本月额度、QQ钱包余额/银行卡入账）
+  for (const o of credited) mtFireRefundCredit(o);
   return transitions;
 }
 
@@ -602,26 +619,29 @@ export function mtCancelWithRefund(uid: string, orderId: string, cancelReason: s
   const target = orders.find((o) => o.id === orderId);
   if (!target || target.status === 'canceled' || target.refund) return false;
   const now = Date.now();
+  let refunded: MtOrder | null = null;
   const next = orders.map((o) =>
     o.id === orderId
-      ? {
-          ...o,
-          status: 'canceled' as const,
-          cancelReason,
-          statusLog: [...o.statusLog, { status: 'canceled' as const, at: now }],
-          refund: {
-            reason: '订单取消时，自动退款',
-            appliedAt: now,
-            status: 'approved' as const,
-            amount: o.total,
-            doneAt: now,
-            channel: mtRefundChannelOf(o),
-          },
-        }
+      ? (refunded = {
+            ...o,
+            status: 'canceled' as const,
+            cancelReason,
+            statusLog: [...o.statusLog, { status: 'canceled' as const, at: now }],
+            refund: {
+              reason: '订单取消时，自动退款',
+              appliedAt: now,
+              status: 'approved' as const,
+              amount: o.total,
+              doneAt: now,
+              channel: mtRefundChannelOf(o),
+              paidBack: true,
+            },
+          })
       : o
   );
   mtSaveOrders(uid, next);
   window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+  if (refunded) mtFireRefundCredit(refunded);
   return true;
 }
 
@@ -655,6 +675,13 @@ export function mtApplyRefund(uid: string, orderId: string, reason: string, note
 function mtRefundChannelOf(o: MtOrder): string {
   if (o.payChannelLabel) return o.payChannelLabel;
   return o.payIdp === 'qq' ? 'QQ钱包余额' : '微信零钱';
+}
+
+/** 退款成功后原路退回入账（异步动态 import 钱包模块，失败静默；幂等由 paidBack 标记保证） */
+export function mtFireRefundCredit(o: MtOrder): void {
+  void import('./meituan-pay')
+    .then((m) => m.mtRefundToOrigin(o))
+    .catch(() => undefined);
 }
 
 /** 商家接单后写一条骑手取餐前的等待文案（订单详情/通知用） */

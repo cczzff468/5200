@@ -16316,3 +16316,35 @@ Stage Summary:
 - 购买弹窗支持规格：奶茶五组规格（截图2同款），食物小料配菜/面型/饼底/辣度多选加价，同菜不同规格分行入购物车与订单
 - 全部页面白底圆角面板删除完毕（白底直排+粗分隔线统一风格）；退款售后只显示买了以后退款的订单
 - 改动文件：src/components/apps/meituan.tsx、src/lib/ios/meituan-data.ts、src/lib/ios/meituan-store.ts
+
+---
+Task ID: meituan-7
+Agent: 主协调者 (Z.ai Code)
+Task: 美团第七轮——订单退款原路返回、订单界面美化（圆角化）、店铺订单进详情、奶茶量词修正、跨店购物车语义化（不同商家不能合并结算）、购买弹窗内嵌规格小料
+
+Work Log:
+- 退款原路返回全链路（需求「订单退款的钱按原路返回」）：
+  - meituan-store.ts：MtRefund 加 paidBack 幂等标记；MtOrder 加 payMethodId（balance/银行卡id/fcin-亲属卡id）与 payFcParts（亲属卡多卡分摊明细），normalizer 兼容旧数据；mtAdvanceOrders 退款通过分支与 mtCancelWithRefund 同步写 paidBack 并触发 mtFireRefundCredit（动态 import meituan-pay，fire-and-forget）
+  - meituan-pay.ts：新增 mtRefundToOrigin(order)——微信零钱回补+零钱明细写「美团外卖」收入条、微信银行卡余额回补、微信亲属卡按支付时分摊明细恢复本月额度（无明细按扣款顺序回补该赠卡人名下卡）、QQ余额 gainToWallet 入账（kind=refund）、QQ银行卡 refundToBankCard 回补+账单；美团支付·银行卡为演示通道不真实扣款故不入账；MtFcPart 增加 cardInId
+  - qq.tsx：新增导出 refundToBankCard（卡余额回补 + 收入账单）
+  - PayPage：支付成功时把 chan.methodId 与亲属卡分摊明细写入订单（payMethodId/payFcParts）
+- 订单界面美化+圆角（对齐真机美团风格）：
+  - OrdersPage：白底 → 灰底 #F5F6F7 + 白色 rounded-2xl 卡片（space-y-2.5，普通卡与退款专项卡统一）；「多店可用」chip 与商家名后的「＞」彻底删除
+  - OrderDetailPage：顶部状态区改美团黄渐变（#FFE14D→#FFD100）rounded-b-[18px] 圆底 hero（进度节点改白底黑标/黑10%轨道）；配送地图/退款进度卡/使用限制/订单信息/商品费用全部改白卡 rounded-2xl + 细阴影，页脚白条保留；右上角「下单返美团币」金币图标删除（顶栏仅剩分享/客服/刷新）
+- 店铺界面订单点击进订单详情：MerchantPage 订单 tab 卡片 onOpenOrder → openOrder(id,'merchant')，返回回商家页且停留原 tab（merchantTabMemo）；agent-browser 实测跳转+返回闭环 ✓
+- 奶茶量词修正：新增 mtCountUnit()（奶茶/奶绿/奶昔/果茶/柠檬水/咖啡等饮品名 → 「杯」，其余「件」），团购订单卡「共N张」→「共N杯」（实测买2份茉莉奶绿显示「共2杯」）
+- 跨店购物车语义化（需求「不同商家商品不能合并结算…我这是在店铺买东西为什么是添加到购物车」）：
+  - 商家页：购物车属于其他商家时，底栏改为他店语境（他店总价 + 「已选「XX」的商品 · 不能合并结算」+ 清空钮 + 去结算钮直达他店结算），购物车面板行按购物车归属商家解析菜品；根组件新增 checkoutMid 支持跨店结算不换当前商家页
+  - 规格「选好了」加购去掉「已加入购物车」toast（对齐真机静默入车，角标即反馈）
+  - FavoritesPage addSelectedToCart：跨店从「静默换商家并清空」改为拦截 toast「不同商家商品不能合并结算，请先结算或清空购物车」（与真机截图一致）
+- 购买弹窗内嵌规格小料（需求「规格小料应该放在购买弹窗里面」）：
+  - meituan-data.ts：MtDeal 加 specs 字段，导出 mtTeaSpecs/mtFoodSides；给爆款四件套/厚芋泥奶茶/茉莉奶绿/麻辣烫套餐/金牌比萨挂规格（奶茶=规格/温度/小料最多1份/糖度，食物=小料配菜/加料）
+  - DealConfirmSheet：弹窗内新增「选择规格」区（粉色芯片单选/多选，多选带+¥加价与份数上限），加价并入 unitPrice 实时联动实付（实测珍珠+¥1：¥13.30→¥14.30），提交时 specText 写入订单商品规格（订单详情显示「大杯/正常冰/珍珠/正常糖」）
+- E2E（agent-browser 430×932）：团购直接购买→弹窗内选规格加价→提交→亲属卡支付→订单已完成（黄色圆角hero+白卡+规格行）→申请退款（提示原路退回亲属卡）→22s自动通过→「已退款·退款已原路退回」→IndexedDB 核查亲属卡 used 86 = 100.30-14.30（额度精确回补）✓；买2份→订单卡「共2杯」✓；跨店底栏+拦截toast+清空后正常加购（红烧牛肉面+涮肥牛¥6→¥19.80）✓；店铺订单进详情+返回闭环 ✓；刷新后 console 零错误
+- 改动文件：src/components/apps/meituan.tsx、src/lib/ios/meituan-store.ts、src/lib/ios/meituan-data.ts、src/lib/ios/meituan-pay.ts、src/components/apps/qq.tsx；tsc + eslint 零告警
+
+Stage Summary:
+- 退款资金真正原路退回：微信零钱/银行卡/QQ余额/QQ卡回补并入账，亲属卡按支付分摊精确恢复本月额度（幂等防重复入账）
+- 订单列表/详情按真机风格圆角化（灰底白卡+黄色状态头），「多店可用/＞」与「下单返美团币」图标删除，奶茶量词改「杯」
+- 跨店购物车全链路语义化：店内加购静默、跨店拦截 toast 与真机一致、他店底栏可清空或直达他店结算
+- 购买弹窗（团购确认）内嵌完整规格/小料选择，加价联动实付并写入订单
