@@ -16075,3 +16075,23 @@ Stage Summary:
 - 交付：src/lib/ios/notify-sound.ts（新，声音引擎全量）、src/lib/ios/db.ts（v8 +ringtones 表 +RingtoneRecord）、src/lib/ios/island-notify.ts（pushChatNotification 挂接收/群声）、src/lib/moments.ts（pushMomentNotice 挂互动声）、五聊天端 send/sendSticker 挂发送声（wechat/qq/chat/wx-group/qq-group）、src/components/apps/settings.tsx（NotifySoundSection + DndTimeEditor + TonePickerList）
 - 关键决策：①声音设置为整机共享（设备级，与真实 iOS 一致，用户"按需求决定"授权下选择更简单不易错方案）②收发声跟随灵动岛弹出口径（每条消息响一次；会话级消息免打扰的会话连弹窗都无，自然无声音）③全局免打扰对所有分类生效（含发送，"期间不响"字面语义）④内置铃声 Web Audio 合成零音频文件（仓库无音频资产，与来电铃声同技术栈）
 - 验证：eslint 0、tsc 0、十四项浏览器 E2E 全通过（渲染/试听合成/切换铃声/上传/选用/真实收发双端发声/免打扰静音+记录保留/清除恢复/总开关/分类开关/删除回落/持久化/回归无破坏），已推送 387a4ac
+
+---
+Task ID: notify-sound-2
+Agent: Z.ai Code (主协调者)
+Task: 设置›通知页美化——①界面美化（iOS 图标行/绿色滑杆）②去掉每类声音的独立开关 ③铃声选择改底部弹窗 ④开关全局升级 iOS 大绿开关 ⑤删除两段说明文案（系统通知长文案 + 主动来电迁移提示）
+
+Work Log:
+- Switch 组件全局重写（src/components/ui/switch.tsx）：51×31 大开关、选中 #34C759 绿 + 绿色投影、白色 27px 滑块带阴影 + active:scale-95，对齐 moments-settings 的 BigGreenSwitch 视觉；Radix 语义保留，settings/calendar/clock/reminders 四端统一生效（闹钟 App 截图回归验证布局无破坏）
+- 删除两段文案：NotificationPage 中「AI 主动来电与频率设置已移至…」引导行（连同 PhoneIcon 导入一并清理）和系统通知长段说明（切走标签页/服务器接力/闹钟计时器/灵动岛照常）
+- 五分类去开关：分类行改为整行点击展开（RowIcon 彩色方块 + 名称/描述 + 右侧当前铃声名 + chevron），数据层 categories[k].enabled 保留但 UI 不再暴露；新增挂载 effect 自动把历史 enabled=false 的分类恢复 true（收敛：off.length===0 即停），避免无声且无处再开启
+- 底部弹窗 ToneSheet（新组件）：fixed 相对 PhoneShell 机身（壳 transform 使 fixed 只覆盖手机屏）、黑色 45% 遮罩 + 底部滑入面板（圆角顶 18px + 毛玻璃 + 抓手 + 居中标题 + 右上蓝色「完成」）、内容 max-h-540 内部滚动、遮罩/完成/Esc 三路关闭；TonePickerList 重构为 ToneSheetContent（内置铃声/我的铃声/更多上传三组卡），点删除会先收弹窗再弹确认框
+- 全局卡美化：每行加 RowIcon（提示音=红铃铛、总音量=蓝喇叭、响铃时震动=紫 Vibrate、免打扰=青 Moon），总音量/分类音量 Slider 加 .ios-slider（globals.css：6px 轨道 + #34C759 已选段 + 26px 白色圆钮带投影）
+- 试听状态反馈：previewingId state + playTone promise finally 延迟 260ms 清除，播放中喇叭变绿色 AudioLines 音波动画（弹窗列表/分类试听钮/我的铃声列表三处同款）
+- E2E（agent-browser 430×932）：解锁→设置›通知渲染（文案已删、大绿开关、图标行、绿色滑杆全到位）→ 展开分类（提示音/试听/音量/免打扰四行齐全）→ 底部弹窗滑入（内置 8 铃声 + 备注绿勾 + 上传入口）→ 选「清脆」绿勾迁移 → 完成后分类值同步 + IndexedDB settings 表 receiveTone=builtin:chime 落库 → 试听按钮变绿色音波（真实发声）→ 遮罩点击关闭弹窗 → 总开关关（灰态 +「已一键静音」提示）→ 重开 → 上传 test-ring.wav（toast + 我的铃声列表）→ 弹窗内我的铃声分组选用成功（sendTone=custom:* 落库）→ 删除确认 → ringtones 清空 + sendTone 自动回落 builtin:swoosh → 闹钟 App 开关布局回归 → 真实消息流（信息 App 发「声音设置测试」→ AI 语音回复 + 灵动岛弹出，收发链路无破坏）；console 零错误、eslint/tsc 双 0
+- 踩坑：AudioContext hook 只拦截新实例——页面早已实例化并缓存的 ctx 不计数（osc=0 不代表无声，改用 previewingId 视觉态验证）；agent-browser find 对隐藏 DOM 的主屏按钮会误命中（App 未退出时点击被遮挡报 covered）；eval 内联 Promise 需挂 window 二次读取且箭头函数内不能再用 IIFE 包裹（转义复杂易 SyntaxError，用 new Promise(function...) 直写）
+
+Stage Summary:
+- 交付：src/components/ui/switch.tsx（iOS 大绿开关全局）、src/components/apps/settings.tsx（NotificationPage 删文案 + ToneSheet/ToneSheetContent/CATEGORY_ICON 新组件 + NotifySoundSection 重构：去分类开关/图标行/绿色滑杆/试听音波反馈/enabled 兼容恢复）、src/app/globals.css（.ios-slider 样式）
+- 关键决策：①分类开关移除但数据字段保留（向前兼容 + 静音语义由总开关/音量/免打扰承接），历史关闭自动恢复 ②铃声选择弹窗自实现而非 Radix Sheet/Drawer——portal 到 body 会脱离壳 transform 包含块导致弹窗覆盖整个浏览器视口 ③试听音量沿用分类实际音量（总×分类），弹窗内选铃声给 0.25 下限保证可闻
+- 验证：eslint 0、tsc 0、九项浏览器 E2E 全通过、已推送 50c4356
