@@ -345,6 +345,11 @@ export function mtClearHistory(uid: string): void {
   kvSet(histKey(uid), []);
 }
 
+/** 删除单条浏览记录（浏览记录页管理模式） */
+export function mtRemoveHistory(uid: string, kind: 'merchant' | 'deal', id: string): void {
+  kvSet(histKey(uid), mtLoadHistory(uid).filter((h) => !(h.kind === kind && h.id === id)));
+}
+
 // ---------------- 退款/售后 ----------------
 
 export interface MtRefund {
@@ -352,14 +357,16 @@ export interface MtRefund {
   note?: string;
   /** 申请时间 */
   appliedAt: number;
-  /** pending=商家审核中 / approved=已退款（原路退回） */
-  status: 'pending' | 'approved';
+  /** pending=商家审核中 / approved=已退款（原路退回） / failed=退款失败（异常） */
+  status: 'pending' | 'approved' | 'failed';
   /** 退款金额（当前为全额） */
   amount: number;
   /** 审核通过/到账时间 */
   doneAt?: number;
   /** 原路退回渠道（微信零钱/QQ钱包余额/亲属卡等） */
   channel?: string;
+  /** 失败原因文案（status=failed 时展示） */
+  failMsg?: string;
 }
 
 export interface MtOrder {
@@ -436,10 +443,11 @@ export function mtLoadOrders(uid: string): MtOrder[] {
               reason: typeof o.refund.reason === 'string' ? o.refund.reason : '用户申请退款',
               note: typeof o.refund.note === 'string' ? o.refund.note : undefined,
               appliedAt: o.refund.appliedAt,
-              status: o.refund.status === 'approved' ? 'approved' : 'pending',
+              status: o.refund.status === 'approved' ? 'approved' : o.refund.status === 'failed' ? 'failed' : 'pending',
               amount: typeof o.refund.amount === 'number' ? o.refund.amount : 0,
               doneAt: typeof o.refund.doneAt === 'number' ? o.refund.doneAt : undefined,
               channel: typeof o.refund.channel === 'string' ? o.refund.channel : undefined,
+              failMsg: typeof o.refund.failMsg === 'string' ? o.refund.failMsg : undefined,
             }
           : undefined,
       status: (o.status ?? 'pendingPay') as MtOrderStatus,
@@ -530,12 +538,21 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
     }
     return cur;
   });
-  // 退款售后：审核中超时自动通过（原路退回，不产生灵动岛通知）
+  // 退款售后：审核超时自动出结果（原路退回；按订单号确定性地约 1/4 概率退款失败，对齐真机「退款失败」态）
   let refundChanged = false;
   const withRefunds = next.map((o) => {
     if (!o.refund || o.refund.status !== 'pending') return o;
     if (now - o.refund.appliedAt < REFUND_AUTO_MS) return o;
     refundChanged = true;
+    // 确定性伪随机：同一订单结果稳定，重进页面不变卦
+    const h = [...o.id].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) >>> 0, 7);
+    const failed = h % 4 === 1;
+    if (failed) {
+      return {
+        ...o,
+        refund: { ...o.refund, status: 'failed' as const, doneAt: now, failMsg: '退款过程中出现异常，退款失败' },
+      };
+    }
     const approved: MtOrder = {
       ...o,
       // 未完成的配送单退款后关闭
@@ -545,7 +562,7 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
         o.status === 'completed'
           ? o.statusLog
           : [...o.statusLog, { status: 'canceled' as const, at: now }],
-      refund: { ...o.refund, status: 'approved', doneAt: now, channel: mtRefundChannelOf(o) },
+      refund: { ...o.refund, status: 'approved' as const, doneAt: now, channel: mtRefundChannelOf(o) },
     };
     return approved;
   });
@@ -561,6 +578,38 @@ const REFUND_AUTO_MS = 20_000;
 /** 是否可申请退款（已支付且未退款未取消） */
 export function mtCanRefund(o: MtOrder): boolean {
   return !o.refund && o.status !== 'pendingPay' && o.status !== 'canceled';
+}
+
+/**
+ * 取消订单并自动退款（对齐真机：取消订单 → 退款/售后列表出现「退款成功」记录，
+ * 售后详情退款原因 =「订单取消时，自动退款」）。
+ */
+export function mtCancelWithRefund(uid: string, orderId: string, cancelReason: string): boolean {
+  const orders = mtLoadOrders(uid);
+  const target = orders.find((o) => o.id === orderId);
+  if (!target || target.status === 'canceled' || target.refund) return false;
+  const now = Date.now();
+  const next = orders.map((o) =>
+    o.id === orderId
+      ? {
+          ...o,
+          status: 'canceled' as const,
+          cancelReason,
+          statusLog: [...o.statusLog, { status: 'canceled' as const, at: now }],
+          refund: {
+            reason: '订单取消时，自动退款',
+            appliedAt: now,
+            status: 'approved' as const,
+            amount: o.total,
+            doneAt: now,
+            channel: mtRefundChannelOf(o),
+          },
+        }
+      : o
+  );
+  mtSaveOrders(uid, next);
+  window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+  return true;
 }
 
 /** 提交退款申请（全额、原路退回） */
