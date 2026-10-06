@@ -12,7 +12,8 @@ import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { accLs, getActiveAccountFor } from '@/lib/ios/accounts';
 import { getContact, listContacts } from '@/lib/ios/contacts-store';
 import type { ContactRecord } from '@/lib/contacts';
-import { MT_COUPON_SEED, MT_COUPON_TYPE_LABEL, MT_GOD_CLAIMS, MT_MERCHANTS, mtDishesOf, type MtCouponSeed, type MtCouponType, type MtMerchant } from './meituan-data';
+import { avatarFor } from '@/lib/contacts';
+import { MT_COUPON_SEED, MT_COUPON_TYPE_LABEL, MT_GOD_CLAIMS, MT_DEALS, MT_MERCHANTS, mtDishesOf, type MtCouponSeed, type MtCouponType, type MtMerchant } from './meituan-data';
 
 // ---------------- 登录态 ----------------
 
@@ -155,7 +156,7 @@ export async function mtResolveIdpIdentity(idp: 'wx' | 'qq'): Promise<{ contactI
     }
     if (me) {
       const name = (me.nickname?.trim() || me.name || '').trim() || (idp === 'wx' ? '微信用户' : 'QQ用户');
-      return { contactId: me.id, name, avatar: typeof me.avatar === 'string' && me.avatar ? me.avatar : null };
+      return { contactId: me.id, name, avatar: avatarFor(me, idp) };
     }
   } catch {
     /* 联系人库异常 → 走虚拟账号兜底 */
@@ -174,6 +175,26 @@ export async function mtValidateSession(s: MtSession | null): Promise<MtSession 
     return c && c.kind === 'user' ? s : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * 会话资料跟随全局账号信息（需求「我的界面的头像跟随全局信息的头像」）：
+ * 按会话绑定的联系人实时读取微信/QQ「我」页的昵称/头像（avatarFor 按 App 投影，与微信/QQ 显示一致），
+ * 变化则返回新会话（uid 不变，数据隔离不受影响）；联系人缺失/异常时原样返回。
+ * 配合 contact-avatar-changed 事件可实时同步。
+ */
+export async function mtSyncSessionIdentity(s: MtSession): Promise<MtSession> {
+  if (s.idp === 'phone' || !s.contactId) return s;
+  try {
+    const c = await getContact(s.contactId);
+    if (!c || c.kind !== 'user') return s;
+    const name = (c.nickname?.trim() || c.name || '').trim() || s.name;
+    const avatar = avatarFor(c, s.idp);
+    if (name === s.name && avatar === s.avatar) return s;
+    return { ...s, name, avatar };
+  } catch {
+    return s;
   }
 }
 
@@ -485,11 +506,30 @@ export function mtLoadOrders(uid: string): MtOrder[] {
       statusLog: Array.isArray(o.statusLog) ? (o.statusLog as MtOrder['statusLog']).filter((s) => s && typeof s.at === 'number') : [],
     })) as MtOrder[];
   // 旧数据迁移：「待使用+券码」已废弃 → 团购单待使用态直接归档为已完成（消费时间取支付时间）
-  return normalized.map((o) =>
+  return normalized.map((o) => mtBackfillOrderImgs(
     (o.status as string) === 'pendingUse'
       ? { ...o, status: 'completed' as const, consumedAt: o.consumedAt ?? o.paidAt ?? o.createdAt, statusLog: [...o.statusLog, { status: 'completed' as const, at: o.consumedAt ?? o.paidAt ?? Date.now() }] }
       : o
-  );
+  ));
+}
+
+/** 订单图片补全（需求「订单所有的图片补充完整」）：历史订单缺图时按 商品图→团购图→商家图 逐级回填 */
+function mtBackfillOrderImgs(o: MtOrder): MtOrder {
+  const merchant = MT_MERCHANTS.find((m) => m.id === o.merchantId);
+  const dishes = merchant ? mtDishesOf(merchant) : [];
+  let itemsChanged = false;
+  const items = o.items.map((it) => {
+    if (it.img) return it;
+    const dish = dishes.find((d) => d.id === it.dishId);
+    const deal = MT_DEALS.find((d) => d.id === it.dishId);
+    const img = dish?.img ?? deal?.img ?? merchant?.cover;
+    if (!img) return it;
+    itemsChanged = true;
+    return { ...it, img };
+  });
+  const merchantImg = o.merchantImg ?? merchant?.cover;
+  if (!itemsChanged && merchantImg === o.merchantImg) return o;
+  return { ...o, items, merchantImg };
 }
 
 export function mtSaveOrders(uid: string, list: MtOrder[]): void {

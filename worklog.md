@@ -16387,3 +16387,22 @@ Work Log:
 Stage Summary:
 - meituan.tsx 共 5 处改动：BottomTabBar 重构(3 tab)、DealDetailPage 价格块 nowrap 化、DealListCard 标题两行化、HomePage 顶栏图标磨砂圆钮化、import 清理
 - 浏览器实测截图确认：价格行 ¥13.30/6.8折/¥19.50/半年售10万+/限量徽章 单行无溢出；tab 标签已避开底部横条
+
+---
+Task ID: mt-ui-fix-102
+Agent: Z.ai Code (main)
+Task: 美团第二轮——①我的页头像跟随全局账号 ②删实名待完善 ③首页灰字出卡片修复 ④订单图片补全 ⑤首页/分类上滑加载更多(每批15~20) ⑥删「外卖·点击分类名可取消」
+
+Work Log:
+- meituan-store.ts 新增 mtSyncSessionIdentity：按会话联系人用 avatarFor(c,idp) 读微信/QQ「我」页头像昵称（App 投影口径）；mtResolveIdpIdentity 同步改用 avatarFor
+- MeituanApp 启动时 mtValidateSession 后自动 mtSyncSessionIdentity 并写回 mt-session；监听 contacts-store 的 contact-avatar-changed 事件实时同步头像（uid 不变，数据隔离不受影响）
+- 我的页删除「实名待完善」按钮，改为显示账号来源（微信账号/QQ账号）；设置页「账号安全」行去掉实名待完善值
+- 首页「特价团」聚合卡价格行加 flex-wrap：划线价(灰色小字)独占一行收进卡片内，修复溢出卡边（用户截图 ¥31 被切）
+- 删除首页筛选条「外卖 · 点击分类名可取消」整块；取消筛选仍靠再点分类图标
+- 首页新增上滑加载更多：buildFeedBatch 每批 15~20 个（推荐=团购+商家洗牌交替；团购频道=全部团购循环；分类=该分类商家洗牌循环）；滚动近底部 280px 触发，450ms 假加载态，footer 提示「上滑加载更多/正在加载更多好店…」；filter 切换用 React 渲染期调整状态模式重置（过 lint react-hooks/refs、set-state-in-effect），竞态用 filterRef 丢弃跨分类批次
+- mtLoadOrders 增加 mtBackfillOrderImgs：历史订单缺图按 菜品图→团购图→商家cover 回填（含 merchantImg）
+- eslint 通过；agent-browser 全流程自验：登录→首页加载更多(19→38、分类 6→21)→分类筛选无提示条→我的页头像=全局头像→改联系人头像+触发 contact-avatar-changed 实时生效→种子无图历史订单在列表/详情均显示补全图片
+
+Stage Summary:
+- 改动文件：meituan.tsx（我的页/首页瀑布流/DealListCard/根组件头像同步）、meituan-store.ts（mtSyncSessionIdentity、订单图片回填）
+- 关键决策：头像同步走 avatarFor(App 投影) 与微信/QQ 显示一致；无限流每批 15~20 对齐需求；订单图片在数据层读取时兜底，新旧订单通吃

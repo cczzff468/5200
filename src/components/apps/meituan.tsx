@@ -135,6 +135,7 @@ import {
   mtSaveOrders,
   mtSetCurAddr,
   mtSetSession,
+  mtSyncSessionIdentity,
   mtToggleFav,
   mtUidOf,
   mtUseCoupon,
@@ -616,12 +617,12 @@ function DealListCard({ onOpen }: { onOpen: (id: string) => void }) {
             <FoodImg src={d.img} emoji={d.emoji} className="h-[56px] w-[56px] shrink-0 rounded-lg" />
             <span className="min-w-0 flex-1">
               <span className="line-clamp-2 text-[13px] leading-snug text-black/85">{d.title}</span>
-              <span className="mt-1 flex items-baseline gap-1">
-                <span className="rounded-[3px] bg-[#FFE8F1] px-1 text-[10px] text-[#FF2D7E]">{d.discount}</span>
-                <span className="text-[15px] font-bold leading-none" style={{ color: MT_PRICE }}>
+              <span className="mt-1 flex flex-wrap items-baseline gap-x-1 gap-y-0.5">
+                <span className="shrink-0 rounded-[3px] bg-[#FFE8F1] px-1 text-[10px] leading-[1.6] text-[#FF2D7E]">{d.discount}</span>
+                <span className="shrink-0 text-[15px] font-bold leading-none" style={{ color: MT_PRICE }}>
                   ¥{fmtMoney(d.price)}
                 </span>
-                <span className="text-[11px] text-black/30 line-through">¥{fmtMoney(d.origPrice)}</span>
+                <span className="w-full whitespace-nowrap text-[10px] leading-none text-black/30 line-through">¥{fmtMoney(d.origPrice)}</span>
               </span>
             </span>
           </button>
@@ -658,6 +659,49 @@ function MerchantCard({ m, onOpen }: { m: MtMerchant; onOpen: () => void }) {
 
 const HOME_SEARCH_HINTS = ['衣服女装套装', '珍珠奶茶', '爆款汉堡4件套', '麻辣烫', '应季草莓', '电影票'];
 
+type FeedItem = { t: 'deal'; d: MtDeal } | { t: 'list' } | { t: 'm'; m: MtMerchant };
+
+const shuffle = <T,>(arr: T[]): T[] => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+
+/** 追加流：每批 15~20 个（需求「上滑刷新，每个刷新15个到20个」）。
+ *  推荐=团购+商家洗牌交替；团购频道=全部团购；分类=该分类商家洗牌循环（池子小于批量时轮询补齐）。 */
+function buildFeedBatch(filter: string | null): FeedItem[] {
+  const target = 15 + Math.floor(Math.random() * 6);
+  const out: FeedItem[] = [];
+  if (filter === 'tuangou') {
+    const pool = shuffle(MT_DEALS);
+    while (out.length < target && pool.length > 0) out.push({ t: 'deal', d: pool[out.length % pool.length] });
+    return out;
+  }
+  const merchants = filter ? MT_MERCHANTS.filter((m) => m.cats.includes(filter)) : MT_MERCHANTS;
+  const mPool = shuffle(merchants);
+  const dPool = shuffle(MT_DEALS);
+  if (filter) {
+    let i = 0;
+    while (out.length < target && mPool.length > 0) out.push({ t: 'm', m: mPool[i++ % mPool.length] });
+    return out;
+  }
+  let di = 0;
+  let mi = 0;
+  let dealTurn = Math.random() < 0.5;
+  while (out.length < target) {
+    if (dealTurn || mi >= mPool.length) {
+      out.push({ t: 'deal', d: dPool[di++ % dPool.length] });
+    } else {
+      out.push({ t: 'm', m: mPool[mi++ % mPool.length] });
+    }
+    dealTurn = !dealTurn;
+  }
+  return out;
+}
+
 function HomePage({
   session,
   onOpenMerchant,
@@ -680,47 +724,90 @@ function HomePage({
   const [hintIdx, setHintIdx] = useState(0);
   const [gridPage, setGridPage] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
+  // 上滑加载更多：追加流批次 + 加载态（需求「上滑可以刷新，每个刷新15个到20个」）
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [extraFeed, setExtraFeed] = useState<FeedItem[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadingRef = useRef(false);
+  const filterRef = useRef(filter);
 
   useEffect(() => {
     const iv = setInterval(() => setHintIdx((i) => (i + 1) % HOME_SEARCH_HINTS.length), 3200);
     return () => clearInterval(iv);
   }, []);
 
-  const feed = useMemo(() => {
-    type FeedItem = { t: 'deal'; d: MtDeal } | { t: 'list' } | { t: 'm'; m: MtMerchant };
-    if (filter === 'tuangou') {
-      return MT_DEALS.map<FeedItem>((d) => ({ t: 'deal', d }));
-    }
-    if (filter) {
-      return MT_MERCHANTS.filter((m) => m.cats.includes(filter)).map<FeedItem>((m) => ({ t: 'm', m }));
-    }
-    const byId = (id: string) => MT_DEALS.find((d) => d.id === id);
-    const mById = (id: string) => MT_MERCHANTS.find((m) => m.id === id);
-    const seq: FeedItem[] = [];
-    const push = (i: FeedItem | undefined) => {
-      if (i) seq.push(i);
-    };
-    push(byId('d-tast-set') && { t: 'deal', d: byId('d-tast-set')! });
-    push({ t: 'list' });
-    push(byId('d-ygf-set') && { t: 'deal', d: byId('d-ygf-set')! });
-    push(mById('m-mixue') && { t: 'm', m: mById('m-mixue')! });
-    push(byId('d-zb-pizza') && { t: 'deal', d: byId('d-zb-pizza')! });
-    push(byId('d-fruit-3x1') && { t: 'deal', d: byId('d-fruit-3x1')! });
-    push(mById('m-tasiting') && { t: 'm', m: mById('m-tasiting')! });
-    push(byId('d-bf-2r') && { t: 'deal', d: byId('d-bf-2r')! });
-    push(mById('m-hotpot') && { t: 'm', m: mById('m-hotpot')! });
-    push(byId('d-mixue-hyn') && { t: 'deal', d: byId('d-mixue-hyn')! });
-    push(byId('d-mixue-mjlv') && { t: 'deal', d: byId('d-mixue-mjlv')! });
-    push(mById('m-noodle') && { t: 'm', m: mById('m-noodle')! });
-    push(mById('m-store') && { t: 'm', m: mById('m-store')! });
-    push(mById('m-fruit') && { t: 'm', m: mById('m-fruit')! });
-    push(mById('m-pharmacy') && { t: 'm', m: mById('m-pharmacy')! });
-    push(mById('m-pizza') && { t: 'm', m: mById('m-pizza')! });
-    push(mById('m-rice') && { t: 'm', m: mById('m-rice')! });
-    push(mById('m-breakfast') && { t: 'm', m: mById('m-breakfast')! });
-    push(mById('m-yangguofu') && { t: 'm', m: mById('m-yangguofu')! });
-    return seq;
+  // 切换分类/频道 → 渲染期重置追加流（React 官方调整状态模式，从精选首屏重新累积）
+  const [prevFilter, setPrevFilter] = useState(filter);
+  if (prevFilter !== filter) {
+    setPrevFilter(filter);
+    setExtraFeed([]);
+    setLoadingMore(false);
+  }
+
+  // ref 与滚动位置的复位放 effect（ref 不能在渲染期读写）
+  useEffect(() => {
+    filterRef.current = filter;
+    loadingRef.current = false;
+    scrollRef.current?.scrollTo({ top: 0 });
   }, [filter]);
+
+  const loadMore = useCallback(() => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setLoadingMore(true);
+    const forFilter = filter;
+    window.setTimeout(() => {
+      loadingRef.current = false;
+      if (filterRef.current !== forFilter) {
+        // 等待期间切换了分类 → 丢弃这批
+        setLoadingMore(false);
+        return;
+      }
+      setExtraFeed((prev) => [...prev, ...buildFeedBatch(forFilter)]);
+      setLoadingMore(false);
+    }, 450);
+  }, [filter]);
+
+  const onHomeScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || loadingRef.current) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 280) loadMore();
+  }, [loadMore]);
+
+  const feed = useMemo<FeedItem[]>(() => {
+    const base: FeedItem[] = [];
+    if (filter === 'tuangou') {
+      base.push(...MT_DEALS.map<FeedItem>((d) => ({ t: 'deal', d })));
+    } else if (filter) {
+      base.push(...MT_MERCHANTS.filter((m) => m.cats.includes(filter)).map<FeedItem>((m) => ({ t: 'm', m })));
+    } else {
+      const byId = (id: string) => MT_DEALS.find((d) => d.id === id);
+      const mById = (id: string) => MT_MERCHANTS.find((m) => m.id === id);
+      const push = (i: FeedItem | undefined) => {
+        if (i) base.push(i);
+      };
+      push(byId('d-tast-set') && { t: 'deal', d: byId('d-tast-set')! });
+      push({ t: 'list' });
+      push(byId('d-ygf-set') && { t: 'deal', d: byId('d-ygf-set')! });
+      push(mById('m-mixue') && { t: 'm', m: mById('m-mixue')! });
+      push(byId('d-zb-pizza') && { t: 'deal', d: byId('d-zb-pizza')! });
+      push(byId('d-fruit-3x1') && { t: 'deal', d: byId('d-fruit-3x1')! });
+      push(mById('m-tasiting') && { t: 'm', m: mById('m-tasiting')! });
+      push(byId('d-bf-2r') && { t: 'deal', d: byId('d-bf-2r')! });
+      push(mById('m-hotpot') && { t: 'm', m: mById('m-hotpot')! });
+      push(byId('d-mixue-hyn') && { t: 'deal', d: byId('d-mixue-hyn')! });
+      push(byId('d-mixue-mjlv') && { t: 'deal', d: byId('d-mixue-mjlv')! });
+      push(mById('m-noodle') && { t: 'm', m: mById('m-noodle')! });
+      push(mById('m-store') && { t: 'm', m: mById('m-store')! });
+      push(mById('m-fruit') && { t: 'm', m: mById('m-fruit')! });
+      push(mById('m-pharmacy') && { t: 'm', m: mById('m-pharmacy')! });
+      push(mById('m-pizza') && { t: 'm', m: mById('m-pizza')! });
+      push(mById('m-rice') && { t: 'm', m: mById('m-rice')! });
+      push(mById('m-breakfast') && { t: 'm', m: mById('m-breakfast')! });
+      push(mById('m-yangguofu') && { t: 'm', m: mById('m-yangguofu')! });
+    }
+    return [...base, ...extraFeed];
+  }, [filter, extraFeed]);
 
   const tapCat = (c: (typeof MT_HOME_GRID)[number][number]) => {
     if (c.filter === null || c.filter === undefined) {
@@ -730,10 +817,8 @@ function HomePage({
     setFilter((f) => (f === c.filter ? null : c.filter!));
   };
 
-  const filterName = filter === 'tuangou' ? '团购' : filter ? (MT_CATS.find((c) => c.id === filter)?.name ?? '') : '';
-
   return (
-    <div className="h-full overflow-y-auto overscroll-contain bg-[#F4F5F7] pb-4">
+    <div ref={scrollRef} onScroll={onHomeScroll} className="h-full overflow-y-auto overscroll-contain bg-[#F4F5F7] pb-4">
       {/* 黄头：定位 / 消息 / 扫一扫 / 搜索 */}
       <div className="bg-[#FFD100] px-4 pb-3 pt-[54px]">
         <div className="flex items-center gap-2">
@@ -795,30 +880,23 @@ function HomePage({
         </div>
       </div>
 
-      {/* 筛选条 */}
-      {filterName && (
-        <div className="mx-3 mt-2 flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-[12px] shadow-sm">
-          <span className="font-medium text-black/75">{filterName}</span>
-          <span className="text-black/35">· 点击分类名可取消</span>
-          <button type="button" onClick={() => setFilter(null)} className="ml-auto grid h-4 w-4 place-items-center rounded-full bg-black/10">
-            <X className="h-2.5 w-2.5 text-black/60" />
-          </button>
-        </div>
-      )}
-
       {/* 瀑布流 */}
       <div className="mt-2 columns-2 gap-2 px-2">
         {feed.map((it, i) =>
           it.t === 'deal' ? (
             <DealCard key={`deal-${it.d.id}-${i}`} deal={it.d} onOpen={() => onOpenDeal(it.d.id)} />
           ) : it.t === 'list' ? (
-            <DealListCard key="deal-list" onOpen={onOpenDeal} />
+            <DealListCard key={`deal-list-${i}`} onOpen={onOpenDeal} />
           ) : (
             <MerchantCard key={`m-${it.m.id}-${i}`} m={it.m} onOpen={() => onOpenMerchant(it.m.id)} />
           )
         )}
       </div>
-      {feed.length === 0 && <p className="mx-3 mt-6 rounded-2xl bg-white p-8 text-center text-[13px] text-black/40">该分类下暂无商家</p>}
+      {feed.length === 0 ? (
+        <p className="mx-3 mt-6 rounded-2xl bg-white p-8 text-center text-[13px] text-black/40">该分类下暂无商家</p>
+      ) : (
+        <p className="py-3 text-center text-[12px] text-black/35">{loadingMore ? '正在加载更多好店…' : '上滑加载更多'}</p>
+      )}
     </div>
   );
 }
@@ -3994,9 +4072,7 @@ function MyPage({
           )}
           <div className="min-w-0 flex-1">
             <p className="truncate text-[22px] font-bold text-black/90">{session.name}</p>
-            <button type="button" onClick={() => onToast('实名认证（演示）')} className="mt-0.5 flex items-center gap-0.5 text-[13px] text-black/55 active:opacity-60">
-              实名待完善
-            </button>
+            <p className="mt-0.5 truncate text-[12px] text-black/45">{idpLabel}</p>
           </div>
           <button type="button" onClick={() => onToast('美团客服：0539-000-0000（演示）')} className="flex flex-col items-center gap-0.5 active:opacity-60">
             <Headset className="h-[22px] w-[22px] text-black/80" strokeWidth={1.8} />
@@ -4190,7 +4266,7 @@ function SettingsPage({
         </div>
 
         <div className="mt-2 divide-y divide-black/[0.04] border-t-[7px] border-[#F5F6F7] px-4 pt-1">
-          <SettingsRow label="账号安全" value="实名待完善" onClick={() => onToast('账号安全（演示）')} />
+          <SettingsRow label="账号安全" onClick={() => onToast('账号安全（演示）')} />
           <SettingsRow label="隐私设置" onClick={() => onToast('隐私设置（演示）')} />
         </div>
 
@@ -5186,10 +5262,17 @@ export default function MeituanApp() {
     sessionRef.current = session;
   }, [session]);
 
-  // 启动：恢复登录态 + 消费灵动岛通知点击跳转（订单详情）
+  // 启动：恢复登录态（资料跟随全局账号）+ 消费灵动岛通知点击跳转（订单详情）
   useEffect(() => {
     void (async () => {
-      const v = await mtValidateSession(mtGetSession());
+      let v = await mtValidateSession(mtGetSession());
+      if (v) {
+        const synced = await mtSyncSessionIdentity(v);
+        if (synced !== v) {
+          v = synced;
+          mtSetSession(synced);
+        }
+      }
       setSession(v);
       setBooting(false);
       const nav = takeNotifyNavigation('meituan');
@@ -5209,6 +5292,23 @@ export default function MeituanApp() {
     };
     window.addEventListener(ISLAND_NAV_EVENT, onNav);
     return () => window.removeEventListener(ISLAND_NAV_EVENT, onNav);
+  }, []);
+
+  // 头像/昵称跟随全局账号信息：微信/QQ 内改头像、换装扮后实时同步到美团（contact-avatar-changed）
+  useEffect(() => {
+    const onAvatarChanged = () => {
+      const s = sessionRef.current;
+      if (!s) return;
+      void (async () => {
+        const synced = await mtSyncSessionIdentity(s);
+        if (synced !== s) {
+          mtSetSession(synced);
+          setSession(synced);
+        }
+      })();
+    };
+    window.addEventListener('contact-avatar-changed', onAvatarChanged);
+    return () => window.removeEventListener('contact-avatar-changed', onAvatarChanged);
   }, []);
 
   const login = useCallback((s: MtSession) => {
