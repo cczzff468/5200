@@ -16517,3 +16517,27 @@ Stage Summary:
 - 修复期间发现并顺手修：首页 feed 热重载后 v6 生效；特价团种子卡芋泥奶茶图从蔬菜变为奶昔
 - 图片匹配深度优化方案（Pexels key/TheMealDB/Wikimedia/LLM搜索词）已列清单给用户选择，待用户拍板后实施
 - 未推送提交累计 5+1=6 个
+
+---
+Task ID: mt-channels-3pages-imgv7
+Agent: Z.ai Code (main)
+Task: ①首页宫格按用户指定排序 ②药房名多样化（不再全是康宁）③开发休闲玩乐/酒店旅行/电影演出三大频道页 ④修复"奶茶不是茶"（图库问题）
+
+Work Log:
+- mt-img v7（三级→四级链）：新增 Wikimedia Commons 源（免 key，curl 子进程：搜索+图片下载均走 curl，Node fetch 被 TLS 指纹拦 403）；COMMONS_SEARCH 22 词映射（milk-tea→bubble tea、hotel→hotel room interior、cinema/ktv/arcade/escape/spa/pool/mahjong/billiiards/boardgame/scenic/park/fun/medicine/pharmacy interior…），COMMONS_FIRST 类直取，食物类 FF/stock 失败后兜底
+- 修复"奶茶不是茶"根因：Foodiesfeed milk-tea 池全是茶/咖啡/拿铁（bubble-tea/boba 搜索不存在），改走 Commons "bubble tea" 真奶茶池（30+ 命中）+ 标题白名单（bubble|boba|tapioca|pearl|タピオカ|trân châu|milk tea，剔除姆明联名杯垫/政客照）；药房池白名单（pharmac|apothe|lékárna|patika…剔除 Budapest 建筑院落），全局黑名单补 wellcome|fortepan（黑白历史藏品图）
+- 加固：curlBytes 图片魔数校验（RIFF/WEBP/JPEG/PNG/GIF，Wikimedia 高频时 200+HTML 错误页不再混入）、tryCommons 单张失败自动换池内下一张（最多3张）、无 FF 映射的 tag（酒店/电玩/KTV 等）禁止落食物池（宁走分类默认图）；DEFAULT_ART 新增 hotel/cinema/ktv/arcade/spa/pool 等 16 项
+- mt-feed：看病买药频道注入药房命名规则（20 前缀池自创组合+同批禁重复前缀+明确禁止整批康宁）；种子药房 康宁大药房→仁安大药房（id 不变，引用零影响）
+- 新 API /api/mt-fun：kind=fun/hotel/movie 三类 LLM 生成（用户配置模型→内置模型→服务端种子三级兜底，种子含 6 门店/6 酒店/6 影片），类型导出供客户端 import type
+- meituan.tsx 新增三大频道页（约 1100 行）：酒店旅行（黄头+日期条+特价酒店/酒店团购双卡+主题页签+酒店卡→酒店详情→房型列表→房型详情弹层（对齐截图：属性网格/普通会员券包/积分）→确认订单（间夜/明细）→收银台）；休闲玩乐（搜索胶囊+品类筛选+门店卡（人气榜/评分/人均）→门店详情（头图+营业时间+打车电话+团购/评价页签+团购行（划线价/折扣/单位价/销量）→确认订单→收银台）；电影演出（热映/待映页签+影片卡（算法渐变海报：片名哈希配色+竖排片名，无 AI 生图）→影片详情（对齐截图：深色影厅风+想看/看过+猫眼想看卡+特殊场/纪念票+简介+红色特惠购票横幅+演职人员+底部领券购票）→选影院/场次/数量→确认订单→收银台）
+- 主路由接线：Page 类型 + 'hotel'/'fun'/'movies'；tapCat 三个 filter 值路由到频道页；频道下单复用 MtOrder（kind='tuangou' 到店语义）→ mtSaveOrders(IDB) → PayPage 收银台；电影票订单补影院实景缩略图
+- 修三大频道共用 bug：确认订单弹层原本只挂在列表分支，购买动作全在详情分支 → 弹层永不出现；已补进各详情分支
+- 修 react-hooks 违规：useFunChannel ref-render 写入→useEffect 化；effect 内同步 setState→.then 回调化（含过期批次丢弃 cleanup）
+- E2E（agent-browser）：宫格顺序截图确认；酒店列表（Commons 真实客房/大堂图）→详情→房型→预订→确认单（¥98 房费/会员优惠-30）→收银台；玩乐列表（街机/麦克风/密室/泳池/台球实景）→门店详情（对齐截图2）→抢购→确认单（¥9.90 已省10）→收银台；电影列表→详情（对齐截图1 深色风）→想看激活（粉）→选座购票（影院/场次/¥53×2 立减26.5）→收银台 ¥106；订单列表三笔新单正确显示；页面零报错
+- tsc + eslint 全绿；LLM 429 限流期间种子兜底自动生效（频道永远可用）
+
+Stage Summary:
+- 三大频道全链路（列表→详情→下单→支付）可用；图片走 Commons 实景（酒店客房/电玩/KTV/药房），电影海报为本地算法渐变+竖排片名（无 AI 生图）
+- 奶茶图从"纯茶/咖啡"换为真奶茶池（BOBA TIGERS 店面/抹茶珍珠奶茶特写等）；池内 1~2 张主题杯盖图属真奶茶饮品，可接受
+- 药房名多样化提示词就位（429 窗口期未采到 AI 输出样例，下次生成自动生效）；种子药房已改名仁安大药房
+- 未推送提交累计 7 个（本轮 +1），推送仍待可用 PAT

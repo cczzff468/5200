@@ -10,7 +10,7 @@
  *  - s=变体序号（区分缓存），w/h=尺寸，p=f 菜品图 / c 门头图；
  *  - 服务端内存缓存 + 浏览器强缓存 15min：期内秒出，过期自动轮换同分类新图 */
 export function mtImg(tag: string, w = 480, h = 360, s = 0, kind: 'f' | 'c' = 'f'): string {
-  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}&v=6`;
+  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}&v=7`;
 }
 
 /** 中文名 → 英文品类词词典（AI 未返回 tag 时兜底，保证图片与内容匹配） */
@@ -231,7 +231,8 @@ export const MT_CATS: { id: string; name: string }[] = [
   { id: 'zaocan', name: '早餐' },
 ];
 
-/** 首页分类宫格（两页 15 项，对齐真机布局）；filter=null 的频道为演示占位。
+/** 首页分类宫格（两页 15 项，对齐真机布局）；用户指定首屏顺序：
+ *  外卖、团购、美食、看病买药、休闲玩乐、酒店旅行、电影演出，其余频道依次后移。
  *  icon 为 UI 层 Lucide 图标 key（GRID_ICONS 映射），fg 为图标主色（对齐真机彩色拟物图）。 */
 export interface MtGridCat {
   id: string;
@@ -239,21 +240,21 @@ export interface MtGridCat {
   icon: string;
   fg: string;
   tint: string;
-  /** 商家筛选分类 id（null = 演示频道，点击提示） */
+  /** 商家筛选分类 id；'hotel'/'xiuxian'/'dianying' = 频道页（点击进频道）；其余 null = 演示占位提示 */
   filter?: string | null;
 }
 export const MT_HOME_GRID: MtGridCat[][] = [
   [
     { id: 'waimai', name: '外卖', icon: 'Bike', fg: '#F5A700', tint: 'from-[#FFF6D6] to-[#FFD84D]', filter: 'waimai' },
     { id: 'tuangou', name: '团购', icon: 'Ticket', fg: '#FF8A00', tint: 'from-[#FFE7CC] to-[#FFA24E]', filter: 'tuangou' },
-    { id: 'hotel', name: '酒店/旅行', icon: 'Building', fg: '#3E8BFF', tint: 'from-[#D9ECFF] to-[#84BAFF]', filter: null },
-    { id: 'shangou', name: '闪购', icon: 'Zap', fg: '#F5A700', tint: 'from-[#FFF1C0] to-[#FFD24D]', filter: null },
-    { id: 'yao', name: '看病买药', icon: 'Cross', fg: '#FF7A45', tint: 'from-[#FFF0C2] to-[#FFCE54]', filter: 'maiyao' },
     { id: 'meishi', name: '美食', icon: 'Utensils', fg: '#FF6000', tint: 'from-[#FFDED2] to-[#FF9E7A]', filter: 'meishi' },
-    { id: 'xiuxian', name: '休闲玩乐', icon: 'Gamepad2', fg: '#8B5CF6', tint: 'from-[#E6DFFF] to-[#AD92FF]', filter: null },
+    { id: 'yao', name: '看病买药', icon: 'Cross', fg: '#FF7A45', tint: 'from-[#FFF0C2] to-[#FFCE54]', filter: 'maiyao' },
+    { id: 'xiuxian', name: '休闲玩乐', icon: 'Gamepad2', fg: '#8B5CF6', tint: 'from-[#E6DFFF] to-[#AD92FF]', filter: 'xiuxian' },
+    { id: 'hotel', name: '酒店旅行', icon: 'Building', fg: '#3E8BFF', tint: 'from-[#D9ECFF] to-[#84BAFF]', filter: 'hotel' },
+    { id: 'dianying', name: '电影演出', icon: 'Clapperboard', fg: '#FF6F1E', tint: 'from-[#FFDCCB] to-[#FF9E6B]', filter: 'dianying' },
+    { id: 'shangou', name: '闪购', icon: 'Zap', fg: '#F5A700', tint: 'from-[#FFF1C0] to-[#FFD24D]', filter: null },
     { id: 'anmo', name: '按摩足疗', icon: 'Footprints', fg: '#FF5E9E', tint: 'from-[#FFDCE8] to-[#FF93BB]', filter: null },
     { id: 'paotui', name: '跑腿', icon: 'Rabbit', fg: '#FF8A00', tint: 'from-[#FFF6D6] to-[#FFD84D]', filter: null },
-    { id: 'dianying', name: '电影演出', icon: 'Clapperboard', fg: '#FF6F1E', tint: 'from-[#FFDCCB] to-[#FF9E6B]', filter: null },
   ],
   [
     { id: 'liren', name: '丽人美发', icon: 'Scissors', fg: '#FF5E9E', tint: 'from-[#FFDCE8] to-[#FF93BB]', filter: null },
@@ -758,7 +759,7 @@ export const MT_MERCHANTS: MtMerchant[] = [
   },
   {
     id: 'm-pharmacy',
-    name: '康宁大药房（解放路店）',
+    name: '仁安大药房（解放路店）',
     emoji: '💊',
     cover: img('pharmacy'),
     cats: ['maiyao'],

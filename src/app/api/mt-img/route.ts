@@ -5,17 +5,21 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * 美团内容匹配图（v4，Foodiesfeed 优先链；解决图片不符/不好看问题）：
+ * 美团内容匹配图（v7，Foodiesfeed + Wikimedia Commons 双图库链；解决图片不符/不好看问题）：
  * - ① Foodiesfeed（CC0 可商用免署名）：tag → 图库分类关键词搜索（按关键词取图，不随机），
  *     每分类缓存一次搜索结果（~50 张直链，TTL 6h，按需请求不大规模抓取），per-分类轮换指针：
  *     同分类每次刷新可换图、不重复太频繁，且永远同分类（图片与内容一致）；
  *     图片流式经 sharp 按展示尺寸 cover 裁剪压缩为 webp（不落盘、不转存，只内存流转）；
- * - ② Pixabay / Pexels（免费商用）：仅当环境变量 PIXABAY_KEY / PEXELS_KEY 配置时启用，
+ * - ② Wikimedia Commons（免 key 免费图库）：奶茶等 Foodiesfeed 缺失品类（milk-tea 池全是茶/咖啡，
+ *     无真珍珠奶茶）+ 酒店/电玩/KTV 等非食物实景（Foodiesfeed 为纯美食图库）走 Commons 关键词搜索；
+ *     奶茶优先级高于 Foodiesfeed（bubble tea 真奶茶池），其余食物 tag 在 FF/-stock 失败后兑底；
+ * - ③ Pixabay / Pexels（免费商用）：仅当环境变量 PIXABAY_KEY / PEXELS_KEY 配置时启用，
  *     同样关键词搜索 + 轮换；未配置自动跳过；
- * - ③ 默认图（本地算法图兜底）：按分类配色渐变 + 分类 emoji 的 SVG，服务端直出，
+ * - ④ 默认图（本地算法图兜底）：按分类配色渐变 + 分类 emoji 的 SVG，服务端直出，
  *     永远 200 —— 保证任何情况下都有图可显示；
  * - 浏览器强缓存（15min，与字节缓存同步）：命中秒出，过期自动换图；
  * - 并发队列（同时最多 4 个取图任务）：避免信息流 burst 打爆图库。
+ * - 注：Foodiesfeed 与 Wikimedia 对 Node fetch 均按 TLS 指纹拦截（403），搜索与下载统一走 curl 子进程。
  */
 
 // ---------------- 参数 ----------------
@@ -28,6 +32,7 @@ const MIN_POOL = 3; // 搜索结果少于 3 张视为无有效分类 → 走下�
 const MAX_CONCURRENCY = 4;
 
 const FF_BASE = 'https://www.foodiesfeed.com/zh/s/';
+const COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
 const FF_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
@@ -110,6 +115,47 @@ const FF_SEARCH: Record<string, string> = {
   'noodle-soup': 'noodle-soup', // 49（汤面/河粉）
 };
 
+/** Wikimedia Commons 搜索词映射（免 key 免费图库，实景照片）。
+ *  覆盖两类：① Foodiesfeed 没有真图池的品类（奶茶→bubble tea，FF 的 milk-tea 池全是茶/咖啡/拿铁）；
+ *  ② 非食物品类（酒店/影院/KTV/电玩等，FF 是纯美食图库搜不到）。 */
+const COMMONS_SEARCH: Record<string, string> = {
+  'milk-tea': 'bubble tea', // 30+（真珍珠奶茶，修复「奶茶不是茶」）
+  'bubble-tea': 'bubble tea',
+  boba: 'bubble tea',
+  hotel: 'hotel room interior', // 酒店客房实景
+  'hotel-room': 'hotel room',
+  resort: 'resort hotel',
+  minsu: 'homestay bedroom', // 民宿
+  cinema: 'cinema auditorium',
+  movie: 'cinema auditorium',
+  ktv: 'karaoke room',
+  karaoke: 'karaoke',
+  arcade: 'arcade game machines', // 电玩城
+  esports: 'esports arena',
+  escape: 'escape room game', // 密室逃脱
+  spa: 'spa massage', // 洗浴按摩
+  pool: 'swimming pool indoor', // 游泳健身
+  mahjong: 'mahjong', // 棋牌
+  billiards: 'billiards', // 台球
+  boardgame: 'board game', // 桌游
+  scenic: 'china scenic mountain', // 景区
+  park: 'amusement park', // 游乐场
+  fun: 'entertainment center', // 休闲玩乐通用
+  medicine: 'pharmacy interior', // 药房实景（FF 无药房池，v7 起走 Commons）
+};
+
+/** Commons 优先的 tag（其余 tag 在 FF/stock 失败后用 Commons 同词兑底） */
+const COMMONS_FIRST = new Set(Object.keys(COMMONS_SEARCH));
+
+/** Commons 文件标题黑名单：图表/地图/徽标等非照片结果剔除；Wellcome/Fortepan 为黑白历史藏品图，观感不符现代店铺 */
+const COMMONS_TITLE_EXCLUDE = /diagram|map|logo|plan|scheme|drawing|chart|graph|coat[-_ ]of[-_ ]arms|flag[-_ ]of|seal[-_ ]of|icon|screenshot|wellcome|fortepan/i;
+
+/** Commons 标题白名单（按搜索词）：搜索结果混入无关图时精准过滤（奶茶池剔联名杯垫/政客照，药房池剔建筑院落） */
+const COMMONS_REQUIRE: Record<string, RegExp> = {
+  'bubble tea': /bubble|boba|tapioca|pearl|タピオカ|trân[ _-]?châu|milk[ _-]?tea/i,
+  'pharmacy interior': /pharmac|apothe|lékárna|patika|drugstore|chemist/i,
+};
+
 /** AI/图库tag 同义词收敛：模型自由发挥的菜系词 → 图库实际有效的分类词。
  *  未知 tag 一律落 'food'（比透传到无关词的搜索结果更贴内容）。 */
 const TAG_SYNONYMS: Record<string, string> = {
@@ -163,9 +209,6 @@ function filterPool(urls: string[], kw: string): string[] {
   if (!FF_SCENE_POOLS.has(kw)) return base;
   return base.filter((u) => !FF_SCENE_EXCLUDE.test(u.toLowerCase()));
 }
-
-/** 图库无对应分类的 tag（medicine 等）→ 直接走默认图（不浪费时间搜索） */
-const FF_SKIP = new Set(['medicine']);
 
 /** tag → Foodiesfeed 搜索词：映射表 → 同义词链 → 未知落 food（防 AI 自造词搜出无关图） */
 function ffKeywordOf(tag: string): string {
@@ -225,6 +268,25 @@ const DEFAULT_ART: Record<string, { bg: [string, string]; emoji: string }> = {
   spicy: { bg: ['#D9452B', '#8C1F14'], emoji: '🌶️' },
   store: { bg: ['#5CA86B', '#2E6B3B'], emoji: '🛒' },
   medicine: { bg: ['#7AA8C9', '#3B6B8C'], emoji: '💊' },
+  hotel: { bg: ['#6FA8DC', '#2E5C8C'], emoji: '🏨' },
+  'hotel-room': { bg: ['#6FA8DC', '#2E5C8C'], emoji: '🛏️' },
+  resort: { bg: ['#5CB8B0', '#2A6B66'], emoji: '🏝️' },
+  minsu: { bg: ['#C9A87A', '#8C6B3B'], emoji: '🏡' },
+  cinema: { bg: ['#5A4A6B', '#2B2038'], emoji: '🎬' },
+  movie: { bg: ['#5A4A6B', '#2B2038'], emoji: '🎬' },
+  ktv: { bg: ['#E86B9E', '#8C2B5A'], emoji: '🎤' },
+  karaoke: { bg: ['#E86B9E', '#8C2B5A'], emoji: '🎤' },
+  arcade: { bg: ['#8B5CF6', '#4A2B8C'], emoji: '🕹️' },
+  esports: { bg: ['#5C6BC0', '#283593'], emoji: '🎮' },
+  escape: { bg: ['#4A5568', '#1A202C'], emoji: '🔐' },
+  spa: { bg: ['#C98A9E', '#7A3B52'], emoji: '♨️' },
+  pool: { bg: ['#4AbedC', '#1A5A8C'], emoji: '🏊' },
+  mahjong: { bg: ['#C9B86B', '#7A6B28'], emoji: '🀄' },
+  billiards: { bg: ['#2E7D4F', '#143D26'], emoji: '🎱' },
+  boardgame: { bg: ['#C98A5B', '#7A4A28'], emoji: '🎲' },
+  scenic: { bg: ['#5CA86B', '#2E6B3B'], emoji: '🏞️' },
+  park: { bg: ['#E8A45C', '#9C5F28'], emoji: '🎡' },
+  fun: { bg: ['#B86BC9', '#6B2A7A'], emoji: '🎪' },
   food: { bg: ['#F2C94C', '#C9822E'], emoji: '🍽️' },
 };
 const DEFAULT_FALLBACK = DEFAULT_ART.food;
@@ -347,6 +409,39 @@ function curlText(url: string, timeoutMs = 15_000): Promise<string> {
   });
 }
 
+/** curl 下载二进制（图库对 Node fetch 按 TLS 指纹拦截，图片下载同样走 curl 子进程）。
+ *  魔数校验：Wikimedia 偶尔对高频请求返回 200+HTML 错误页，非图片字节直接拒绝走下一张。 */
+function looksLikeImage(buf: Buffer): boolean {
+  if (buf.length < 500) return false;
+  if (buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') return true;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return true; // JPEG
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return true; // PNG
+  if (buf.subarray(0, 3).toString('latin1') === 'GIF') return true;
+  return false;
+}
+
+function curlBytes(url: string, timeoutMs = 15_000): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'curl',
+      ['-sL', '--max-time', String(Math.ceil(timeoutMs / 1000)), '-A', FF_UA, url],
+      { timeout: timeoutMs + 2_000, maxBuffer: 24 * 1024 * 1024, encoding: 'buffer' },
+      (err, stdout) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        const buf = stdout;
+        if (!looksLikeImage(buf)) {
+          reject(new Error(`curl 非图片响应（${buf ? buf.byteLength : 0}B）`));
+          return;
+        }
+        resolve(buf);
+      },
+    );
+  });
+}
+
 async function ffSearchUrls(kw: string): Promise<string[]> {
   const rec = ffLists.get(kw);
   const now = Date.now();
@@ -379,11 +474,50 @@ async function ffSearchUrls(kw: string): Promise<string[]> {
   }
 }
 
-// ---------------- ② Pixabay / Pexels（配置 key 才启用） ----------------
+// ---------------- ② Wikimedia Commons（免 key，奶茶/酒店/娱乐实景） ----------------
+
+const cmLists = new Map<string, { urls: string[]; at: number; failedAt?: number }>();
+
+/** Commons 搜索：返回缩略图直链（thumburl 带 utm 参数已剥除，可直接下载） */
+async function commonsSearchUrls(q: string): Promise<string[]> {
+  const rec = cmLists.get(q);
+  const now = Date.now();
+  if (rec) {
+    if (rec.urls.length >= MIN_POOL && now - rec.at < LIST_TTL) return rec.urls;
+    if (rec.failedAt && now - rec.failedAt < LIST_NEG_TTL) return [];
+  }
+  try {
+    const api = `${COMMONS_API}?action=query&generator=search&gsrsearch=${encodeURIComponent(`filetype:bitmap ${q}`)}&gsrlimit=40&gsrnamespace=6&prop=imageinfo&iiprop=url%7Cmime&iiurlwidth=1200&format=json`;
+    const raw = await curlText(api);
+    const j = JSON.parse(raw) as {
+      query?: { pages?: Record<string, { title?: string; imageinfo?: Array<{ thumburl?: string; mime?: string }> }> };
+    };
+    const urls: string[] = [];
+    const seen = new Set<string>();
+    const requireRe = COMMONS_REQUIRE[q];
+    for (const page of Object.values(j.query?.pages ?? {})) {
+      const info = page.imageinfo?.[0];
+      const thumb = info?.thumburl?.split('?')[0];
+      if (!thumb || seen.has(thumb)) continue;
+      if (!/^image\/(jpeg|png|webp)$/.test(info?.mime ?? '')) continue;
+      if (COMMONS_TITLE_EXCLUDE.test(page.title ?? '')) continue;
+      if (requireRe && !requireRe.test(page.title ?? '')) continue;
+      seen.add(thumb);
+      urls.push(thumb);
+    }
+    if (urls.length < MIN_POOL) throw new Error(`commons 命中不足（${urls.length}）`);
+    cmLists.set(q, { urls, at: now });
+    return urls;
+  } catch {
+    cmLists.set(q, { urls: rec?.urls ?? [], at: rec?.at ?? 0, failedAt: now });
+    return rec?.urls ?? [];
+  }
+}
+
+// ---------------- ③ Pixabay / Pexels（配置 key 才启用） ----------------
 
 const PIXABAY_KEY = process.env.PIXABAY_KEY ?? '';
 const PEXELS_KEY = process.env.PEXELS_KEY ?? '';
-
 async function stockSearchUrls(kw: string): Promise<string[]> {
   const rec = pxLists.get(kw);
   const now = Date.now();
@@ -475,46 +609,80 @@ async function shrink(buf: Buffer, w: number, h: number): Promise<Buffer> {
 
 type GenResult = { buf: Buffer };
 
-async function genBytes(tag: string, w: number, h: number): Promise<GenResult> {
-  const kw = ffKeywordOf(tag);
+/** Commons 取图：搜索池轮换，单张下载失败自动换池内下一张（最多试 3 张） */
+async function tryCommons(q: string, w: number, h: number): Promise<Buffer | null> {
+  const urls = await commonsSearchUrls(q);
+  if (urls.length < MIN_POOL) return null;
+  let c = cursor.get(`cm:${q}`);
+  if (c === undefined) c = Math.floor(Math.random() * urls.length);
+  cursor.set(`cm:${q}`, (c + 3) % urls.length);
+  for (let i = 0; i < 3; i++) {
+    const pick = urls[(c + i) % urls.length];
+    try {
+      const raw = await curlBytes(pick);
+      const out = await shrink(raw, w, h);
+      if (Buffer.isBuffer(out) && out.byteLength > 500) return out;
+    } catch {
+      // 单张失败（429/HTML错误页/坏图）→ 换池内下一张
+    }
+  }
+  return null;
+}
 
-  // ① Foodiesfeed（CC0，按分类关键词搜索 + 轮换）
-  if (!FF_SKIP.has(tag)) {
+async function genBytes(tag: string, w: number, h: number): Promise<GenResult> {
+  // FF/stock 只对「有 FF 映射」的 tag 生效：酒店/电玩/KTV 等非食物 tag 绝不落食物池（宁走默认图）
+  const ffMapped = FF_SEARCH[tag] !== undefined || TAG_SYNONYMS[tag] !== undefined;
+  const kw = ffKeywordOf(tag);
+  const commonsQ = COMMONS_SEARCH[tag] ?? null;
+  const commonsFirst = COMMONS_FIRST.has(tag);
+
+  // ① Commons 优先类（奶茶/酒店/影院/娱乐等）：真品类池直取
+  if (commonsFirst && commonsQ) {
+    const buf = await tryCommons(commonsQ, w, h);
+    if (buf) return { buf };
+  }
+
+  // ② Foodiesfeed（CC0，按分类关键词搜索 + 轮换）
+  if (ffMapped) {
     const urls = await ffSearchUrls(kw);
     if (urls.length >= MIN_POOL) {
       const pick = pickFrom(urls, `ff:${kw}`);
       if (pick) {
-        const res = await fetch(pick, { signal: AbortSignal.timeout(12_000) });
-        if (res.ok) {
-          const raw = Buffer.from(await res.arrayBuffer());
-          if (raw.byteLength > 500) {
-            const out = await shrink(raw, w, h);
-            if (Buffer.isBuffer(out) && out.byteLength > 500) return { buf: out };
-          }
+        try {
+          const raw = await curlBytes(pick);
+          const out = await shrink(raw, w, h);
+          if (Buffer.isBuffer(out) && out.byteLength > 500) return { buf: out };
+        } catch {
+          // 单张失败 → 走下一级
         }
       }
     }
   }
 
-  // ② Pixabay / Pexels（环境变量配置 key 才启用；未配置跳过）
-  if (PIXABAY_KEY || PEXELS_KEY) {
+  // ③ Pixabay / Pexels（环境变量配置 key 才启用；未配置跳过）
+  if (ffMapped && (PIXABAY_KEY || PEXELS_KEY)) {
     const urls = await stockSearchUrls(kw);
     if (urls.length >= MIN_POOL) {
       const pick = pickFrom(urls, `px:${kw}`);
       if (pick) {
-        const res = await fetch(pick, { signal: AbortSignal.timeout(12_000) });
-        if (res.ok) {
-          const raw = Buffer.from(await res.arrayBuffer());
-          if (raw.byteLength > 500) {
-            const out = await shrink(raw, w, h);
-            if (Buffer.isBuffer(out) && out.byteLength > 500) return { buf: out };
-          }
+        try {
+          const raw = await curlBytes(pick);
+          const out = await shrink(raw, w, h);
+          if (Buffer.isBuffer(out) && out.byteLength > 500) return { buf: out };
+        } catch {
+          // 单张失败 → 走下一级
         }
       }
     }
   }
 
-  // ③ 默认图（本地算法图：分类配色 + emoji SVG，永远成功）
+  // ③.5 Commons 兑底（食物类 tag FF/stock 都失败时，用同词在 Commons 搜实景）
+  if (!commonsFirst && commonsQ) {
+    const buf = await tryCommons(commonsQ, w, h);
+    if (buf) return { buf };
+  }
+
+  // ④ 默认图（本地算法图：分类配色 + emoji SVG，永远成功）
   throw new Error('fall-to-default');
 }
 
@@ -527,7 +695,7 @@ export async function GET(req: NextRequest) {
   const h = intOf(sp.get('h'), 400, 100, 800);
   const s = intOf(sp.get('s'), 0, 0, 999);
   // v=链路版本：升级后浏览器旧缓存自然失效（URL 变了）
-  const key = `${tag}|${w}x${h}|${s}|v6`;
+  const key = `${tag}|${w}x${h}|${s}|v7`;
 
   const hit = cacheGet(key);
   if (hit) {
