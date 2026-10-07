@@ -2660,6 +2660,16 @@ function InfoRow({ k, v, action }: { k: string; v: string; action?: ReactNode })
   );
 }
 
+/** 团购标题里带的数量（如「厚芋泥奶茶 经典芋泥 3杯」「A套餐·经典芋泥3杯」）在订单详情里不再显示：
+ *  商品行已有 ×N 数量列，再带「3杯」读起来重复；历史订单（已落库的旧名称）渲染时同样生效 */
+const stripDealQty = (s: string): string =>
+  s
+    .replace(/\s*\d+杯/g, '')
+    .replace(/（\s*）/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[·、]\s*$/u, '')
+    .trim();
+
 function OrderDetailPage({
   session,
   orderId,
@@ -2953,8 +2963,8 @@ function OrderDetailPage({
               <div key={`${i.dishId}-${i.spec ?? ''}`} className="flex items-center gap-2.5">
                 <FoodImg src={i.img} emoji={i.emoji} className="h-11 w-11 shrink-0 rounded-lg" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] text-black/75">{i.name}</span>
-                  {i.spec && <span className="block truncate text-[11px] text-black/40">{i.spec}</span>}
+                  <span className="block truncate text-[13px] text-black/75">{stripDealQty(i.name)}</span>
+                  {i.spec && <span className="block truncate text-[11px] text-black/40">{stripDealQty(i.spec)}</span>}
                 </span>
                 <span className="text-[12px] text-black/35">×{i.qty}</span>
                 <span className="w-14 text-right text-[13px] text-black/80">¥{fmtMoney(i.price * i.qty)}</span>
