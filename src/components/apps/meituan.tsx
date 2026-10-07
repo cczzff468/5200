@@ -13,9 +13,12 @@
  *   + 宫格 + 钱包 + 服务宫格 + 地址/切换账号/退出（已迁设置页）；
  * - 订单列表（截图5）：搜索/筛选/发票 + 全部/待付款/待收货·待使用/评价/退款售后 五页签，
  *   团购卡带「消费时间/免预约/共N杯」、更多/领神券/再来一单；
- * - 订单详情（截图8/9）：预计送达大标题 + 四节点进度条 + 骑手假地图（美团专送/放心吃）+
- *   申请售后/催一下/联系商家骑手 + 订单信息（配送服务/骑手/号码保护/录音保护/复制）+ 商品费用；
- * - 待支付详情（截图10）：待付款倒计时 + 使用限制 + 取消订单/继续支付（橙色）；
+ * - 订单详情（截图8/9+取餐流程参考图）：白底 ETA 大标题（可点开「订单跟踪」时间线底栏，真实流水时间）+
+ *   黄节点四段进度条 + 圆角骑手假地图（美团专送/真实剩余单量分钟气泡/放心吃）+ 更多/售后/催单/联系商家骑手 +
+ *   灰底白卡订单信息（取件/收件地址、可展开订单号/下单时间/费用明细）+ 费用明细卡（放心吃/神券/红包/已优惠合计）
+ *   + 遇到问题帮助卡；
+ * - 待支付详情（截图10）：请在 XX:XX 内支付（15分钟真实倒计时）+ 现在支付预计送达 + ⋮/他人代付/立即支付 +
+ *   取件/收件地址 + 实付款 + 帮助卡，⋮ 面板可取消订单；
  * - 支付：微信/QQ → 零钱/银行卡/亲属卡渠道（meituan-pay.ts 复用现有钱包），失败重试；
  *   亲属卡消费 recordFcSpend(channel='美团') → AI 记忆感知；余额不足灰显拦截；
  * - 全局状态推进与灵动岛通知见 MeituanOrderWatcher。
@@ -45,6 +48,7 @@ import {
   Cross,
   Crosshair,
   Crown,
+  EllipsisVertical,
   Eye,
   EyeOff,
   FileText,
@@ -134,6 +138,7 @@ import {
   mtClearSearchHist,
   mtCouponTypeLabel,
   mtCurAddrId,
+  mtDeliveryMinutesOf,
   mtGetOrder,
   mtGetSearchHist,
   mtGetSession,
@@ -160,6 +165,7 @@ import {
   mtUseCoupon,
   mtValidateSession,
   MT_STATUS_LABEL,
+  PAY_TIMEOUT_MS,
   type MtAddress,
   type MtCart,
   type MtCoupon,
@@ -197,6 +203,32 @@ const fmtDateTime = (ts: number): string => {
 const fmtDate = (ts: number): string => {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/** 下单时间（带秒，对齐真机 2025.02.26 09:55:37 格式） */
+const fmtDateTimeSec = (ts: number): string => {
+  const d = new Date(ts);
+  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+};
+
+/** 手机号脱敏（139****0171） */
+const maskPhone = (p: string): string => (/^1\d{10}$/.test(p) ? `${p.slice(0, 3)}****${p.slice(7)}` : p);
+
+/** 商家联系人（订单详情「取件地址」行，按商家 id 确定性生成，对齐真机脱敏样式） */
+const MT_KEEPER_SURNAMES = ['黄', '李', '张', '王', '陈', '陶', '刘', '周'];
+const mtMerchantContact = (id: string): string => {
+  const h = [...id].reduce((acc, ch) => (acc * 33 + ch.charCodeAt(0)) >>> 0, 9);
+  return `${MT_KEEPER_SURNAMES[h % MT_KEEPER_SURNAMES.length]}老板 139****${String(h % 10000).padStart(4, '0')}`;
+};
+
+/** 订单跟踪时间标签：今天/昨天 HH:MM（跨天回退日期） */
+const fmtTrackTime = (ts: number): string => {
+  const d = new Date(ts);
+  const now = new Date();
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (d.toDateString() === now.toDateString()) return `今天 ${hm}`;
+  if (new Date(now.getTime() - 86_400_000).toDateString() === d.toDateString()) return `昨天 ${hm}`;
+  return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${hm}`;
 };
 
 /** 状态展示文案（对齐真机：待付款/已关闭；机票/火车票：待出行/出行中） */
@@ -1944,12 +1976,12 @@ function PayPage({
   const [proxyContact, setProxyContact] = useState<string | null>(null);
   const [proxySending, setProxySending] = useState(false);
 
-  // 待支付倒计时（30 分钟，对齐真机「交易剩余时间」）
+  // 待支付倒计时（15 分钟，对齐真机「交易剩余时间」）
   useEffect(() => {
     const iv = setInterval(() => tick((t) => t + 1), 1000);
     return () => clearInterval(iv);
   }, []);
-  const leftMs = Math.max(0, order.createdAt + 30 * 60_000 - Date.now());
+  const leftMs = Math.max(0, order.createdAt + PAY_TIMEOUT_MS - Date.now());
   const countdown = `${String(Math.floor(leftMs / 60000)).padStart(2, '0')}:${String(Math.floor((leftMs % 60000) / 1000)).padStart(2, '0')}`;
 
   // 选中工商银行储蓄卡 → 立减（其他方式原价）
@@ -2019,7 +2051,7 @@ function PayPage({
         status: tuangouDone ? 'completed' : 'pendingAccept',
         paidAt: now,
         // 团购单：支付后=待使用（券码页出示券码核销；consumedAt 不再支付时自动写入）
-        ...(tuangouDone ? {} : { etaAt: now + 45 * 60_000 }),
+        ...(tuangouDone ? {} : { etaAt: now + mtDeliveryMinutesOf(order.id) * 60_000 }),
         payChannelLabel: selBank === 'icbc' ? `美团支付 · 工商银行储蓄卡（已立减${fmtMoney(off)}元）` : '美团支付 · 银行卡',
         statusLog: [...order.statusLog, { status: tuangouDone ? 'completed' : 'pendingAccept', at: now }],
       };
@@ -2048,7 +2080,7 @@ function PayPage({
         status: tuangouDone ? 'completed' : 'pendingAccept',
         paidAt: now,
         // 团购单：支付后=待使用（券码页出示券码核销）
-        ...(tuangouDone ? {} : { etaAt: now + 45 * 60_000 }),
+        ...(tuangouDone ? {} : { etaAt: now + mtDeliveryMinutesOf(order.id) * 60_000 }),
         payIdp: chan.idp,
         payChannelLabel: `${chan.idp === 'wx' ? '微信' : 'QQ'}${chan.isFc ? '亲属卡' : ''} · ${chan.label}`,
         payFc: chan.isFc === true,
@@ -2964,33 +2996,47 @@ function OrdersPage({
 
 // ================================ 订单详情页（截图8/9/10） ================================
 
-/** 配送小地图（CSS 假地图：路网 + 商家/家 pin + 骑手沿虚线轨迹巡航 + 撒漏必赔胶囊） */
-function DeliveryMap({ merchantName }: { merchantName: string }) {
+/** 配送小地图（圆角卡片假地图：绿地水系/路网地名 + 商家/家 pin + 骑手巡航 + 真实剩余单量分钟气泡 + 撒漏必赔胶囊） */
+function DeliveryMap({ merchantName, remainMin, remainOrders }: { merchantName: string; remainMin: number; remainOrders: number }) {
   return (
-    <div className="relative h-52 overflow-hidden bg-[#EAF0E4]">
-      <div className="absolute left-0 right-0 top-[38%] h-[7px] -rotate-3 bg-white/85" />
-      <div className="absolute bottom-0 left-[30%] top-0 w-[6px] rotate-6 bg-white/85" />
-      <div className="absolute left-[-8%] right-[20%] top-[68%] h-[5px] rotate-6 bg-white/70" />
-      <div className="absolute left-[62%] bottom-[-6%] top-[16%] w-[5px] -rotate-12 bg-white/70" />
-      <TreePine className="absolute left-[14%] top-[16%] h-4 w-4 text-[#7BAE6B]" strokeWidth={2} />
-      <Building className="absolute bottom-[18%] right-[28%] h-4 w-4 text-black/30" strokeWidth={2} />
-      <TreePine className="absolute right-[10%] top-[22%] h-4 w-4 text-[#7BAE6B]" strokeWidth={2} />
-      <span className="absolute left-[38%] top-[64%] text-[12px] text-black/35">河北大道</span>
+    <div className="relative h-52 overflow-hidden rounded-xl bg-[#EAF0E3] ring-1 ring-black/5">
+      {/* 绿地与水系 */}
+      <div className="absolute -left-8 top-6 h-24 w-40 rounded-[46%] bg-[#D7E7C9]" />
+      <div className="absolute -right-10 -top-6 h-28 w-48 rounded-[48%] bg-[#DDEBD0]" />
+      <div className="absolute -bottom-10 left-16 h-24 w-44 rounded-[48%] bg-[#C7DFF2]" />
+      <div className="absolute bottom-10 right-[-30px] h-16 w-28 rounded-[45%] bg-[#D7E7C9]" />
+      {/* 建筑块 */}
+      <div className="absolute bottom-[30%] right-[26%] h-5 w-9 rounded-[3px] bg-black/[0.05]" />
+      <div className="absolute bottom-[36%] right-[34%] h-4 w-6 rounded-[3px] bg-black/[0.05]" />
+      <div className="absolute left-[30%] top-[14%] h-4 w-8 rounded-[3px] bg-black/[0.05]" />
+      {/* 路网 */}
+      <div className="absolute left-0 right-0 top-[42%] h-[7px] -rotate-3 bg-white/90" />
+      <div className="absolute bottom-[-4%] left-[34%] top-[-4%] w-[6px] rotate-6 bg-white/90" />
+      <div className="absolute left-[-6%] right-[24%] top-[70%] h-[5px] rotate-6 bg-white/75" />
+      <div className="absolute bottom-[-6%] left-[68%] top-[12%] w-[5px] -rotate-12 bg-white/75" />
+      <div className="absolute left-[-4%] right-[-4%] top-[16%] h-[4px] rotate-2 bg-white/60" />
+      {/* 地名（对齐真机地图要素） */}
+      <span className="absolute left-[7%] top-[24%] text-[11px] text-black/30">营里徐家</span>
+      <span className="absolute right-[7%] top-[7%] text-[12px] font-medium text-black/40">洗鱼塘</span>
+      <span className="absolute right-[4%] top-[47%] text-[11px] tracking-wide text-black/30">赤壁大道</span>
+      <span className="absolute left-[34%] top-[60%] -rotate-3 text-[12px] tracking-wide text-black/35">河北大道</span>
+      <span className="absolute bottom-[14%] left-[52%] text-[11px] text-black/30">新福佳</span>
+      <span className="absolute bottom-[5%] right-[6%] text-[11px] text-black/30">赤壁国贸</span>
       {/* 配送路线（与骑手 offset-path 轨迹一致） */}
       <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 208" fill="none" aria-hidden="true">
-        <path d="M 52 138 C 150 118 240 60 400 158" stroke="#FF8A00" strokeWidth="3" strokeLinecap="round" strokeDasharray="1 9" opacity="0.55" />
+        <path d="M 52 138 C 150 118 240 60 400 158" stroke="#FFC300" strokeWidth="3" strokeLinecap="round" strokeDasharray="1 9" opacity="0.85" />
       </svg>
-      {/* 骑手气泡 */}
-      <span className="absolute left-[16%] top-[24%] rounded-lg bg-white px-2.5 py-1.5 text-[12px] font-medium text-black/80 shadow-md">
-        前方剩余<span className="text-[#FF6000]">2单</span>·9分钟
+      {/* 骑手气泡（剩余单量/分钟为按 ETA 实时推算的真实值） */}
+      <span className="absolute left-[14%] top-[28%] rounded-lg bg-white px-2.5 py-1.5 text-[12px] font-medium text-black/80 shadow-md">
+        前方剩余<span className="text-[#FF6000]">{remainOrders}单</span>·{remainMin}分钟
       </span>
       {/* 商家 pin */}
       <span className="absolute left-[12%] top-[62%] grid h-8 w-8 place-items-center rounded-full bg-white shadow-md ring-1 ring-black/5" title={merchantName}>
         <Store className="h-4 w-4 text-[#FF8A00]" strokeWidth={2.2} />
       </span>
       {/* 家 pin */}
-      <span className="absolute bottom-[12%] right-[10%] grid h-9 w-9 place-items-center rounded-xl bg-white shadow-md ring-1 ring-black/5">
-        <HomeIcon className="h-4.5 w-4.5 text-[#FFB300]" strokeWidth={2.2} />
+      <span className="absolute bottom-[10%] right-[8%] grid h-10 w-10 place-items-center rounded-xl bg-white shadow-md ring-1 ring-black/5">
+        <HomeIcon className="h-5 w-5 text-[#FFC300]" strokeWidth={2.2} />
       </span>
       {/* 骑手 */}
       <span className="mt-rider absolute grid h-9 w-9 place-items-center rounded-full bg-[#FFD100] shadow-lg ring-2 ring-white">
@@ -3061,6 +3107,10 @@ function OrderDetailPage({
     const iv = setInterval(() => forceTick((t) => t + 1), 1000);
     return () => clearInterval(iv);
   }, []);
+  // 面板状态：订单信息展开 / 订单跟踪底栏 / 待支付更多操作（hooks 必须在提前 return 之前）
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [trackOpen, setTrackOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const order = mtGetOrder(uid, orderId);
   if (!order) {
     return (
@@ -3115,13 +3165,21 @@ function OrderDetailPage({
     onToast('已复制');
   };
 
-  const countdown = (() => {
-    if (order.status !== 'pendingPay') return null;
-    const left = Math.max(0, order.createdAt + 30 * 60_000 - Date.now());
+  // 待支付 15 分钟真实倒计时（对齐真机「请在 14:10 内支付」）
+  const payCountdown = (() => {
+    const left = Math.max(0, order.createdAt + PAY_TIMEOUT_MS - Date.now());
     const m = Math.floor(left / 60000);
     const s = Math.floor((left % 60000) / 1000);
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    return `${m}:${String(s).padStart(2, '0')}`;
   })();
+  // 配送时长（31~40 分钟，按订单号确定性推导）→ 承诺送达时刻（与支付页/状态机完全同源）
+  const deliveryMin = mtDeliveryMinutesOf(order.id);
+  const payEtaText = fmtTime(order.createdAt + deliveryMin * 60_000);
+  const inProgress = order.status === 'pendingAccept' || order.status === 'accepted' || order.status === 'delivering';
+  const trackable = inProgress || order.status === 'completed' || order.status === 'canceled';
+  const etaText = order.etaAt ? fmtTime(order.etaAt) : '--:--';
+  const couponAmt = Math.min(order.couponAmount ?? 0, order.discount);
+  const voucherCut = Math.max(0, Math.round((order.discount - couponAmt) * 100) / 100);
 
   const reorder = () => {
     if (tuangou) {
@@ -3134,29 +3192,96 @@ function OrderDetailPage({
     if (mtReorder(uid, order)) onToast('已加入购物车');
   };
 
-  // 详情头文案（机票/火车票用出行专属文案）
-  const hero: { big: string; sub: string; icon?: boolean; tag?: string } = (() => {
+  // 详情头文案（待支付=真实倒计时；进行中=ETA 大字；机票/火车票用出行专属文案）
+  const hero: { big: ReactNode; sub: ReactNode; tag?: string } = (() => {
+    if (order.status === 'pendingPay') {
+      return {
+        big: (
+          <>
+            请在 <span data-testid="pay-countdown">{payCountdown}</span> 内支付
+          </>
+        ),
+        sub: order.proxy ? (
+          `已请「${order.proxy.name}」代付，好友付款后自动完成`
+        ) : (
+          <>
+            现在支付，预计<span className="font-medium text-[#FF6000]">{payEtaText}</span>送达
+          </>
+        ),
+      };
+    }
     if (trip) {
-      if (order.status === 'pendingPay') return { big: `待付款，还剩 ${countdown ?? '30:00'}`, sub: order.proxy ? `已请「${order.proxy.name}」代付，好友付款后自动完成` : '超时未支付订单将自动取消', icon: true };
       if (order.status === 'pendingAccept') return { big: '待出行', sub: mtStatusBody(order), tag: order.kind === 'flight' ? '已出票' : '购票成功' };
       if (order.status === 'accepted') return { big: '出行中', sub: mtStatusBody(order) };
       if (order.status === 'completed') return { big: '行程已结束', sub: '感谢乘坐，欢迎评价' };
       return { big: '订单已取消', sub: order.cancelReason ?? '订单已取消' };
     }
-    if (order.status === 'pendingPay') return { big: `待付款，还剩 ${countdown ?? '30:00'}`, sub: order.proxy ? `已请「${order.proxy.name}」代付，好友付款后自动完成` : '超时未支付订单将自动取消', icon: true };
-    if (order.status === 'pendingAccept') return { big: order.etaAt ? fmtTime(order.etaAt) : '--:--', sub: '等待商家接单', tag: '预计送达' };
-    if (order.status === 'accepted') return { big: order.etaAt ? fmtTime(order.etaAt) : '--:--', sub: '商家正在准备餐品', tag: '预计送达' };
-    if (order.status === 'delivering') return { big: order.etaAt ? fmtTime(order.etaAt) : '--:--', sub: `骑手${order.riderName ?? ''}正在送货`, tag: '预计送达' };
-    if (order.status === 'completed')
-      return tuangou && !order.consumedAt ? { big: '团购已购，待使用', sub: '到店出示券码即可核销' } : { big: '订单已完成', sub: '感谢您的信任，欢迎评价' };
+    if (order.status === 'pendingAccept') return { big: etaText, sub: '等待商家接单', tag: '预计送达' };
+    if (order.status === 'accepted') return { big: etaText, sub: '商家已接单，商品备餐中', tag: '预计送达' };
+    if (order.status === 'delivering') return { big: etaText, sub: '骑手正在送货', tag: '预计送达' };
+    if (order.status === 'completed') {
+      if (tuangou && !order.consumedAt) return { big: '团购已购，待使用', sub: '到店出示券码即可核销' };
+      if (tuangou) return { big: '团购已消费', sub: '感谢光临，欢迎再次光临' };
+      return { big: '订单已完成', sub: '订单已送达，请厉行节约，拒绝浪费，期待能再次光临' };
+    }
     return { big: '订单已取消', sub: order.cancelReason ?? '订单已取消' };
   })();
 
-  return (
-    <div className="flex h-full flex-col bg-white">
-      {/* 顶栏：返回 + 分享/客服/刷新 */}
-      <div className="shrink-0 border-b border-black/[0.04] bg-white px-3 pb-2 pt-[54px]">
-        <div className="flex items-center gap-1">
+  // 订单跟踪时间线（全部取真实状态流水时间，对齐真机「订单跟踪」底栏）
+  const trackEvents: { text: string; at: number; rider?: boolean; final?: boolean }[] = (() => {
+    const logAt = (s: string) => order.statusLog.find((x) => x.status === s)?.at;
+    const evs: { text: string; at: number; rider?: boolean; final?: boolean }[] = [];
+    if (trip) {
+      evs.push({ text: '您提交了订单，请完成支付', at: order.createdAt });
+      if (order.paidAt) evs.push({ text: order.kind === 'flight' ? '支付成功，出票成功，值机选座已开启' : '支付成功，购票成功，请提前到站候车', at: logAt('pendingAccept') ?? order.paidAt });
+      const acc = logAt('accepted');
+      if (acc) evs.push({ text: order.kind === 'flight' ? '航班起飞，行程开始' : '列车发车，行程开始', at: acc });
+      const done = logAt('completed');
+      if (done) {
+        evs.push({ text: order.kind === 'flight' ? '航班落地，行程结束' : '列车到达，行程结束', at: done });
+        evs.push({ text: '订单已完成', at: done, final: true });
+      }
+      return evs;
+    }
+    if (tuangou) {
+      evs.push({ text: '您提交了订单，请完成支付', at: order.createdAt });
+      if (order.paidAt) evs.push({ text: '支付成功，团购券已发放', at: logAt('completed') ?? order.paidAt });
+      if (order.consumedAt) evs.push({ text: '到店核销成功，订单已完成', at: order.consumedAt, final: true });
+      return evs;
+    }
+    evs.push({ text: '您提交了订单，请等待第三方卖家系统确认', at: order.createdAt });
+    if (order.paidAt) evs.push({ text: '待商家接单', at: logAt('pendingAccept') ?? order.paidAt });
+    const acc = logAt('accepted');
+    if (acc) evs.push({ text: '商家已接单，商品备餐中', at: acc });
+    const del = logAt('delivering');
+    if (del) evs.push({ text: `骑手已接单，骑手 ${order.riderName ?? ''}`, at: del, rider: true });
+    const done = logAt('completed');
+    if (done) {
+      evs.push({ text: '订单已送达，感谢您的信任，期待能再次为您服务', at: done });
+      evs.push({ text: '订单已完成', at: done, final: true });
+    }
+    if (order.status === 'canceled') evs.push({ text: order.cancelReason ?? '订单已取消', at: logAt('canceled') ?? Date.now(), final: true });
+    return evs;
+  })();
+
+  // 顶栏（待支付=返回+客服胶囊；进行中=返回+分享/客服/刷新；完成/取消=返回+客服）
+  const topBar = (() => {
+    if (order.status === 'pendingPay') {
+      return (
+        <div className="flex items-center justify-between px-3 pb-1 pt-[54px]">
+          <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full bg-white shadow-sm ring-1 ring-black/5 active:opacity-75">
+            <ChevronLeft className="h-5 w-5 text-black/80" />
+          </button>
+          <button type="button" aria-label="联系客服" onClick={() => onToast('美团客服：0539-000-0000（演示）')} className="flex h-9 items-center gap-1 rounded-full bg-white px-3.5 shadow-sm ring-1 ring-black/5 active:opacity-75">
+            <Headset className="h-4 w-4 text-black/70" strokeWidth={1.9} />
+            <span className="text-[13px] font-medium text-black/75">客服</span>
+          </button>
+        </div>
+      );
+    }
+    if (inProgress) {
+      return (
+        <div className="flex items-center gap-1 px-3 pb-1 pt-[54px]">
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
@@ -3171,55 +3296,163 @@ function OrderDetailPage({
             <RotateCw className="h-[18px] w-[18px] text-black/70" strokeWidth={1.8} />
           </button>
         </div>
+      );
+    }
+    return (
+      <div className="flex items-center gap-1 px-3 pb-1 pt-[54px]">
+        <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+          <ChevronLeft className="h-6 w-6 text-black/75" />
+        </button>
+        <span className="flex-1" />
+        <button type="button" aria-label="客服" onClick={() => onToast('美团客服：0539-000-0000（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+          <Headset className="h-[19px] w-[19px] text-black/70" strokeWidth={1.8} />
+        </button>
       </div>
+    );
+  })();
 
+  // 状态 hero（白色块：ETA 大字可点开「订单跟踪」；待支付/完成后灰底直排）
+  const heroTitle = (
+    <p className="flex items-center gap-1.5 text-[26px] font-bold leading-tight text-black/90">
+      {hero.big}
+      {hero.tag && <span className="text-[13px] font-normal text-black/45">{hero.tag}</span>}
+      {trackable && <ChevronRight className="h-5 w-5 text-black/30" />}
+    </p>
+  );
+  const heroBlock = (
+    <div className="px-4 pb-2 pt-1">
+      {trackable ? (
+        <button type="button" data-testid="open-track" onClick={() => setTrackOpen(true)} className="w-full text-left active:opacity-70">
+          {heroTitle}
+        </button>
+      ) : (
+        heroTitle
+      )}
+      <p className="mt-1 text-[15px] font-semibold text-black/80">{hero.sub}</p>
+    </div>
+  );
+
+  // 四节点进度（黄色已完节点 + 灰色待完成，对齐真机）
+  const progressBlock = !tuangou && order.status !== 'pendingPay' && order.status !== 'canceled' ? (
+    <div className="mt-2 px-5 pb-1">
+      <div className="flex items-center">
+        {steps.map((s, i) => (
+          <div key={s.key} className="flex flex-1 items-center last:flex-none">
+            <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${i <= doneIdx ? 'bg-[#FFD100] text-black/85' : 'bg-[#F0F1F2] text-black/30'}`}>
+              {s.icon === 'pay' && <span className="text-[13px] font-bold">¥</span>}
+              {s.icon === 'store' && <Store className="h-4 w-4" strokeWidth={2.2} />}
+              {s.icon === 'bike' && <Bike className="h-4 w-4" strokeWidth={2.4} />}
+              {s.icon === 'home' && <Check className="h-4 w-4" strokeWidth={3} />}
+            </span>
+            {i < steps.length - 1 && <span className={`mx-0.5 h-[5px] flex-1 rounded-full ${i < doneIdx ? 'bg-[#FFD100]' : 'bg-[#F0F1F2]'}`} />}
+          </div>
+        ))}
+      </div>
+      <div className="mt-1.5 flex justify-between text-[10px] text-black/45">
+        {steps.map((s) => (
+          <span key={s.key} className="w-8 text-center first:text-left last:text-right">{s.key}</span>
+        ))}
+      </div>
+    </div>
+  ) : null;
+
+  // 配送地图（仅配送中；剩余单量/分钟按 ETA 实时推算）
+  const mapBlock = order.status === 'delivering' ? (
+    <div className="px-3 pb-1 pt-3">
+      <DeliveryMap
+        merchantName={order.merchantName}
+        remainMin={order.etaAt ? Math.max(1, Math.ceil((order.etaAt - Date.now()) / 60_000)) : 9}
+        remainOrders={1 + (([...order.id].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7) >> 4) % 3)}
+      />
+    </div>
+  ) : null;
+
+  // 操作按钮行（进行中；对齐真机：更多平铺 + 白胶囊 + 联系骑手黄描边）
+  const actionBlock = trip && (order.status === 'pendingAccept' || order.status === 'accepted') ? (
+    <div className="flex gap-2 overflow-x-auto px-3 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {['更多', order.kind === 'flight' ? '值机选座' : '改签', '联系客服', order.kind === 'flight' ? '航班动态' : '正晚点查询'].map((t, i) => (
+        <button
+          key={t}
+          type="button"
+          onClick={() => onToast(i === 0 ? '更多服务（演示）' : `${t}（演示）`)}
+          className={`flex-1 whitespace-nowrap rounded-full border py-2.5 text-[12px] active:bg-black/5 ${i === 1 ? 'border-[#FFD100] bg-[#FFFBE0] font-medium text-[#B77900]' : 'border-black/10 bg-white text-black/65'}`}
+        >
+          {t}
+        </button>
+      ))}
+    </div>
+  ) : !trip && (order.status === 'accepted' || order.status === 'delivering') ? (
+    <div className="flex items-center gap-2 overflow-x-auto px-3 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <button type="button" onClick={() => onToast('更多服务（演示）')} className="shrink-0 px-2 text-[13px] text-black/65 active:opacity-70">
+        更多
+      </button>
+      {['申请售后', '催一下', '联系商家'].map((t) => (
+        <button
+          key={t}
+          type="button"
+          onClick={() => onToast(t === '催一下' ? '已提醒商家尽快出餐' : t === '申请售后' ? '售后申请已提交（演示）' : '已发起联系（演示）')}
+          className="shrink-0 whitespace-nowrap rounded-full border border-black/10 bg-white px-4 py-2.5 text-[12px] text-black/70 active:bg-black/5"
+        >
+          {t}
+        </button>
+      ))}
+      <button type="button" onClick={() => onToast('已发起联系（演示）')} className="shrink-0 whitespace-nowrap rounded-full border border-[#FFC53D] bg-white px-4 py-2.5 text-[12px] font-medium text-black/80 active:bg-black/5">
+        联系骑手
+      </button>
+    </div>
+  ) : null;
+
+  // 帮助胶囊（待支付=收货码/改地址/红包；其余=保单/邀请红包/充值）
+  const helpPills: { t: string; a: () => void }[] =
+    order.status === 'pendingPay'
+      ? [
+          { t: '收货码的作用', a: () => onToast('收货码用于确认收货（演示）') },
+          { t: '修改订单地址', a: onPickAddress },
+          { t: '红包无法使用', a: () => onToast('红包可与商家券叠加使用（演示）') },
+        ]
+      : [
+          { t: '如何查询保单号', a: () => onToast('放心吃保单可在客服处查询（演示）') },
+          { t: '邀请领红包', a: () => onToast('邀请好友下单得红包（演示）') },
+          { t: '充值享优惠', a: () => onToast('充值享优惠（演示）') },
+        ];
+
+  return (
+    <div className="relative flex h-full flex-col bg-[#F4F5F7]">
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* 状态 hero（美团黄渐变，全宽直排） */}
-        <div className="bg-gradient-to-b from-[#FFE14D] to-[#FFD100] px-5 pb-5 pt-3">
-          <p className="flex items-center gap-2 text-[24px] font-bold leading-tight text-black/90">
-            {hero.icon && <ClockIcon className="h-6 w-6 text-black/75" strokeWidth={2} />}
-            {hero.big}
-            {hero.tag && <span className="text-[13px] font-normal text-black/55">{hero.tag}</span>}
-          </p>
-          <p className="mt-1 text-[15px] font-semibold text-black/75">{hero.sub}</p>
+        {/* 顶部：进行中为白色块（顶栏+ETA+进度+地图+操作行），其余灰底直排 */}
+        {inProgress ? (
+          <div className="bg-white pb-1">
+            {topBar}
+            {heroBlock}
+            {progressBlock}
+            {mapBlock}
+            {actionBlock}
+          </div>
+        ) : (
+          <>
+            {topBar}
+            {heroBlock}
+          </>
+        )}
 
-          {/* 四节点进度（仅外卖） */}
-          {!tuangou && order.status !== 'pendingPay' && order.status !== 'canceled' && (
-            <div className="mt-4 px-1">
-              <div className="flex items-center">
-                {steps.map((s, i) => (
-                  <div key={s.key} className="flex flex-1 items-center last:flex-none">
-                    <span
-                      className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${i <= doneIdx ? 'bg-white text-black/80 shadow-sm' : 'bg-black/10 text-white/80'}`}
-                    >
-                      {s.icon === 'pay' && <span className="text-[13px] font-bold">¥</span>}
-                      {s.icon === 'store' && <Store className="h-4 w-4" strokeWidth={2.2} />}
-                      {s.icon === 'bike' && <Bike className="h-4 w-4" strokeWidth={2.4} />}
-                      {s.icon === 'home' && <Check className="h-4 w-4" strokeWidth={3} />}
-                    </span>
-                    {i < steps.length - 1 && <span className={`mx-0.5 h-[5px] flex-1 rounded-full ${i < doneIdx ? 'bg-white/85' : 'bg-black/10'}`} />}
-                  </div>
-                ))}
-              </div>
-              <div className="mt-1 flex justify-between text-[10px] text-black/55">
-                {steps.map((s) => (
-                  <span key={s.key} className="w-8 text-center first:text-left last:text-right">{s.key}</span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* 配送地图（全宽直排） */}
-        {order.status === 'delivering' && (
-          <div className="border-t-[7px] border-[#F5F6F7]">
-            <DeliveryMap merchantName={order.merchantName} />
+        {/* 待支付操作行：⋮ / 他人代付 / 立即支付（对齐真机收银台样式） */}
+        {order.status === 'pendingPay' && (
+          <div className="flex items-center gap-2 px-3 pb-1 pt-3">
+            <button type="button" aria-label="更多操作" onClick={() => setMoreOpen(true)} className="grid h-10 w-9 shrink-0 place-items-center rounded-full active:bg-black/5">
+              <EllipsisVertical className="h-5 w-5 text-black/70" />
+            </button>
+            <button type="button" onClick={() => onOpenPay(order)} className="h-10 shrink-0 rounded-full bg-white px-4 text-[14px] font-medium text-black/80 shadow-sm ring-1 ring-black/5 active:opacity-80">
+              他人代付
+            </button>
+            <button type="button" onClick={() => onOpenPay(order)} className="h-10 min-w-0 flex-1 truncate rounded-full bg-[#FFD100] text-[15px] font-semibold text-black/90 active:opacity-85">
+              立即支付 ¥{fmtMoney(order.total)}
+            </button>
           </div>
         )}
 
-        {/* 退款/售后进度（点击进「售后详情」，全宽直排） */}
+        {/* 退款/售后进度（点击进「售后详情」） */}
         {order.refund && (
-          <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
+          <div className="mx-3 mt-2.5 rounded-xl bg-white px-4 py-4">
             <button type="button" onClick={() => onOpenRefund(order)} className="flex w-full items-center gap-2.5 text-left active:opacity-75">
               <span
                 className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${
@@ -3261,46 +3494,51 @@ function OrderDetailPage({
           </div>
         )}
 
-        {/* 操作按钮（出行单用出行专属按钮） */}
-        {trip && (order.status === 'pendingAccept' || order.status === 'accepted') ? (
-          <div className="flex gap-2 overflow-x-auto border-t-[7px] border-[#F5F6F7] px-3 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {['更多', order.kind === 'flight' ? '值机选座' : '改签', '联系客服', order.kind === 'flight' ? '航班动态' : '正晚点查询'].map((t, i) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => onToast(i === 0 ? '更多服务（演示）' : `${t}（演示）`)}
-                className={`flex-1 whitespace-nowrap rounded-full border py-2.5 text-[12px] active:bg-black/5 ${i === 1 ? 'border-[#FFD100] bg-[#FFFBE0] font-medium text-[#B77900]' : 'border-black/12 text-black/65'}`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {!trip && (order.status === 'accepted' || order.status === 'delivering') && (
-          <div className="flex gap-2 overflow-x-auto border-t-[7px] border-[#F5F6F7] px-3 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {['更多', '申请售后', '催一下', '联系商家', '联系骑手'].map((t, i) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => onToast(t === '催一下' ? '已提醒商家尽快出餐' : t === '申请售后' ? '售后申请已提交（演示）' : '已发起联系（演示）')}
-                className={`flex-1 whitespace-nowrap rounded-full border py-2.5 text-[12px] active:bg-black/5 ${i === 4 ? 'border-[#FFD100] bg-[#FFFBE0] font-medium text-[#B77900]' : 'border-black/12 text-black/65'}`}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* 待支付使用限制 */}
-        {order.status === 'pendingPay' && (
-          <div className="border-t-[7px] border-[#F5F6F7] px-4 py-3.5">
-            <p className="text-[13px] font-medium leading-relaxed text-[#FF6000]">【使用限制】该订单为特惠订单，请在30分钟内完成支付，超时未支付将自动取消</p>
-          </div>
-        )}
-
-        {/* 订单信息（全宽白底直排 + 虚线分组，对齐团购详情截图风格） */}
-        <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
+        {/* 订单信息（灰底白卡；待支付=取件/收件地址+可展开明细，其余=配送信息） */}
+        <div className="mx-3 mt-2.5 rounded-xl bg-white px-4 py-4">
           <p className="text-[16px] font-bold text-black/85">订单信息</p>
+          {order.status === 'pendingPay' && !tuangou && !trip ? (
+            <>
+              <div className="mt-2 space-y-3">
+                <div className="flex items-start justify-between gap-5">
+                  <span className="shrink-0 text-[13px] text-black/35">取件地址</span>
+                  <span className="min-w-0 text-right text-[13px] leading-[1.6] text-black/80">
+                    {order.merchantName}
+                    <br />
+                    {mtMerchantContact(order.merchantId || order.id)}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-5">
+                  <span className="shrink-0 text-[13px] text-black/35">收件地址</span>
+                  <span className="min-w-0 text-right text-[13px] leading-[1.6] text-black/80">
+                    {order.address?.text ?? '—'}
+                    <br />
+                    {order.address ? `${order.address.name} ${maskPhone(order.address.phone)}` : ''}
+                  </span>
+                </div>
+              </div>
+              <div className="mt-3 border-t border-dashed border-black/10 pt-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[14px] text-black/60">实付款</span>
+                  <span className="text-[17px] font-bold text-black/90">¥{fmtMoney(order.total)}</span>
+                </div>
+              </div>
+              <button type="button" onClick={() => setInfoOpen((v) => !v)} className="mx-auto mt-2.5 flex items-center gap-0.5 text-[12px] text-black/35 active:opacity-70">
+                订单号/下单时间/费用明细
+                <ChevronDown className={`h-3.5 w-3.5 transition-transform ${infoOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {infoOpen && (
+                <div className="mt-1 border-t border-black/5 pt-1">
+                  <InfoRow k="订单号码" v={order.id} action={<CopyBtn onClick={() => copy(order.id)} />} />
+                  <InfoRow k="下单时间" v={fmtDateTimeSec(order.createdAt)} />
+                  <InfoRow k="商品总价" v={`¥${fmtMoney(order.itemTotal)}`} />
+                  {!tuangou && <InfoRow k="配送费" v={`¥${fmtMoney(order.deliveryFee)}`} />}
+                  {order.discount > 0 && <InfoRow k="优惠共减" v={`-¥${fmtMoney(order.discount)}`} />}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
           <div className="mt-1.5">
             {tuangou ? (
               <>
@@ -3318,11 +3556,7 @@ function OrderDetailPage({
             ) : (
               <>
                 <InfoRow k="期望时间" v="立即配送" />
-                <InfoRow
-                  k="配送地址"
-                  v={order.address ? `${order.address.text}（${order.address.name} ${order.address.phone}）` : '—'}
-                  action={order.status === 'pendingPay' ? <SmallPill onClick={onPickAddress}>修改</SmallPill> : undefined}
-                />
+                <InfoRow k="配送地址" v={order.address ? `${order.address.text}（${order.address.name} ${maskPhone(order.address.phone)}）` : '—'} />
                 <InfoRow k="餐具数量" v="2份" />
                 {order.paidAt && <InfoRow k="配送服务" v="美团专送" />}
                 {(order.status === 'accepted' || order.status === 'delivering') && (
@@ -3339,14 +3573,16 @@ function OrderDetailPage({
           </div>
           <div className="mt-2 border-t border-dashed border-black/10 pt-1.5">
             <InfoRow k="订单号码" v={order.id} action={<CopyBtn onClick={() => copy(order.id)} />} />
-            <InfoRow k="下单时间" v={fmtDateTime(order.createdAt)} />
+            <InfoRow k="下单时间" v={fmtDateTimeSec(order.createdAt)} />
             <InfoRow k="支付方式" v={order.paidAt ? (order.payChannelLabel ?? (order.payIdp === 'wx' ? '微信支付' : order.payIdp === 'qq' ? 'QQ支付' : '美团支付')) : '在线支付（未支付）'} />
             {tuangou && order.consumedAt && <InfoRow k="消费时间" v={fmtDateTime(order.consumedAt)} />}
           </div>
+            </>
+          )}
         </div>
 
-        {/* 商品费用（全宽直排） */}
-        <div className="border-t-[7px] border-[#F5F6F7] px-4 py-4">
+        {/* 商品费用（灰底白卡：明细 + 红包/神券分项 + 已优惠合计，对齐真机） */}
+        <div className="mx-3 mt-2.5 rounded-xl bg-white px-4 py-4">
           <div className="flex items-center gap-2">
             {order.merchantImg ? (
               <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-md">
@@ -3389,71 +3625,194 @@ function OrderDetailPage({
                 <span>¥{fmtMoney(order.deliveryFee)}</span>
               </p>
             )}
-            {order.discount > 0 && (
-              <p className="flex justify-between text-[#FF4B33]">
-                <span>优惠共减{order.couponAmount ? <span className="ml-1 text-black/40">（含优惠券¥{fmtMoney(order.couponAmount)}）</span> : null}</span>
-                <span>-¥{fmtMoney(order.discount)}</span>
+            {order.paidAt && !tuangou && (
+              <p className="flex justify-between text-black/55">
+                <span>放心吃（商家赠送）</span>
+                <span>¥0</span>
               </p>
             )}
-            <p className="flex justify-between border-t border-black/5 pt-2 text-[14px] font-bold text-black/85">
-              <span>{order.status === 'pendingPay' ? '待付款' : '实付'}</span>
-              <span style={{ color: order.status === 'pendingPay' ? MT_ORANGE : MT_PRICE }}>¥{order.total.toFixed(2)}</span>
+            {voucherCut > 0 && (
+              <p className="flex justify-between text-black/55">
+                <span>神券省钱包</span>
+                <span>-¥{fmtMoney(voucherCut)}</span>
+              </p>
+            )}
+            {couponAmt > 0 && (
+              <p className="flex justify-between text-[#FF4B33]">
+                <span className="flex items-center gap-1.5">
+                  <span className="grid h-4 w-4 place-items-center rounded-[4px] bg-[#F53F3F] text-[9px] font-bold leading-none text-white">¥</span>
+                  美团红包
+                </span>
+                <span>-¥{fmtMoney(couponAmt)}</span>
+              </p>
+            )}
+            <p className="flex items-baseline justify-end gap-2 border-t border-black/5 pt-2.5">
+              {order.discount > 0 && <span className="text-[12px] font-medium text-[#FF4B33]">已优惠 ¥{fmtMoney(order.discount)}</span>}
+              <span className="text-[13px] text-black/55">合计</span>
+              <span className="text-[17px] font-bold text-black/90">¥{fmtMoney(order.total)}</span>
             </p>
           </div>
         </div>
-      </div>
 
-      {/* 底部操作 */}
-      <div className="shrink-0 border-t border-black/5 bg-white px-4 py-3">
-        <div className="flex items-center justify-end gap-2.5">
+        {/* 遇到问题需要帮助（灰底白卡 + 胶囊 + 待支付地址反馈行） */}
+        <div className="mx-3 mb-4 mt-2.5 rounded-xl bg-white px-4 py-4">
+          <p className="text-[15px] font-bold text-black/85">遇到问题需要帮助?</p>
+          <div className="mt-3 flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {helpPills.map((p) => (
+              <button key={p.t} type="button" onClick={p.a} className="shrink-0 whitespace-nowrap rounded-full bg-[#F5F6F7] px-3.5 py-2 text-[12px] text-black/65 active:bg-black/10">
+                {p.t}
+              </button>
+            ))}
+          </div>
           {order.status === 'pendingPay' && (
-            <>
-              <button type="button" onClick={cancel} className="rounded-full border border-[#FF6000] px-6 py-2.5 text-[14px] font-medium text-[#FF6000] active:opacity-75">
-                取消订单
-              </button>
-              <button type="button" onClick={() => onOpenPay(order)} className="rounded-full bg-gradient-to-r from-[#FF9A21] to-[#FF6F1E] px-7 py-2.5 text-[15px] font-semibold text-white active:opacity-85">
-                ¥{order.total.toFixed(2)} 继续支付
-              </button>
-            </>
-          )}
-          {order.status === 'pendingAccept' && (
-            <button type="button" onClick={cancel} className="rounded-full border border-black/15 px-6 py-2.5 text-[13px] text-black/60 active:bg-black/5">
-              取消订单（退款）
-            </button>
-          )}
-          {['pendingAccept', 'accepted', 'delivering', 'completed'].includes(order.status) && mtCanRefund(order) && (
             <button
               type="button"
-              onClick={() => onApplyRefund(order)}
-              className="rounded-full border border-[#FF6000] px-6 py-2.5 text-[13px] font-medium text-[#FF6000] active:opacity-75"
+              onClick={() => onToast('感谢反馈，客服将尽快核实处理（演示）')}
+              className="mt-3 flex w-full items-center gap-1.5 border-t border-dashed border-black/10 pt-3 text-left active:opacity-70"
             >
-              申请退款
+              <TriangleAlert className="h-4 w-4 shrink-0 text-black/45" strokeWidth={1.9} />
+              <span className="flex-1 text-[13px] text-black/70">地址有误，我要反馈</span>
+              <span className="flex items-center text-[13px] text-black/55">
+                去反馈
+                <ChevronRight className="h-3.5 w-3.5" />
+              </span>
             </button>
-          )}
-          {(order.status === 'completed' || order.status === 'canceled') && (
-            <>
-              {order.status === 'completed' && order.kind === 'tuangou' && (
-                <button type="button" onClick={() => onOpenCouponCode(order)} className="rounded-full border border-black/15 px-6 py-2.5 text-[13px] text-black/60 active:bg-black/5">
-                  券码
-                </button>
-              )}
-              {order.status === 'completed' &&
-                (order.review ? (
-                  <button type="button" onClick={() => onToast('已评价过了，感谢您的反馈')} className="rounded-full border border-black/15 px-6 py-2.5 text-[13px] text-black/60">
-                    已评价
-                  </button>
-                ) : (
-                  <button type="button" onClick={() => onRate(order)} className="rounded-full border border-black/15 px-6 py-2.5 text-[13px] text-black/60 active:bg-black/5">
-                    评价
-                  </button>
-                ))}
-              <button type="button" onClick={reorder} className="rounded-full bg-[#FFD100] px-7 py-2.5 text-[14px] font-semibold text-black/90 active:opacity-85">
-                再来一单
-              </button>
-            </>
           )}
         </div>
       </div>
+
+      {/* 底部操作（待支付的操作已上移到标题下方） */}
+      {order.status !== 'pendingPay' && (
+        <div className="shrink-0 border-t border-black/5 bg-white px-4 pb-3 pt-3">
+          <div className="flex items-center justify-end gap-2.5">
+            {order.status === 'pendingAccept' && (
+              <button type="button" onClick={cancel} className="rounded-full border border-black/15 px-6 py-2.5 text-[13px] text-black/60 active:bg-black/5">
+                取消订单（退款）
+              </button>
+            )}
+            {['pendingAccept', 'accepted', 'delivering', 'completed'].includes(order.status) && mtCanRefund(order) && (
+              <button
+                type="button"
+                onClick={() => onApplyRefund(order)}
+                className="rounded-full border border-[#FF6000] px-6 py-2.5 text-[13px] font-medium text-[#FF6000] active:opacity-75"
+              >
+                申请退款
+              </button>
+            )}
+            {(order.status === 'completed' || order.status === 'canceled') && (
+              <>
+                {order.status === 'completed' && order.kind === 'tuangou' && (
+                  <button type="button" onClick={() => onOpenCouponCode(order)} className="rounded-full border border-black/15 px-6 py-2.5 text-[13px] text-black/60 active:bg-black/5">
+                    券码
+                  </button>
+                )}
+                {order.status === 'completed' &&
+                  (order.review ? (
+                    <button type="button" onClick={() => onToast('已评价过了，感谢您的反馈')} className="rounded-full border border-black/15 px-6 py-2.5 text-[13px] text-black/60">
+                      已评价
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => onRate(order)} className="rounded-full border border-black/15 px-6 py-2.5 text-[13px] text-black/60 active:bg-black/5">
+                      评价
+                    </button>
+                  ))}
+                <button type="button" onClick={reorder} className="rounded-full bg-[#FFD100] px-7 py-2.5 text-[14px] font-semibold text-black/90 active:opacity-85">
+                  再来一单
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 订单跟踪底栏（真实状态流水时间线，对齐真机） */}
+      <AnimatePresence>
+        {trackOpen && (
+          <motion.div key="track" className="absolute inset-0 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <button type="button" aria-label="关闭订单跟踪" className="absolute inset-0 bg-black/45" onClick={() => setTrackOpen(false)} />
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'tween', duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
+              className="absolute inset-x-0 bottom-0 flex max-h-[76%] flex-col rounded-t-2xl bg-white"
+            >
+              <div className="relative flex shrink-0 items-center justify-center py-4">
+                <p className="text-[16px] font-bold text-black/85">订单跟踪</p>
+                <button type="button" aria-label="关闭" onClick={() => setTrackOpen(false)} className="absolute right-3 grid h-8 w-8 place-items-center rounded-full active:bg-black/5">
+                  <X className="h-5 w-5 text-black/55" />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-8 pt-1">
+                {trackEvents.map((e, i) => {
+                  const last = i === trackEvents.length - 1;
+                  return (
+                    <div key={`${e.text}-${i}`} className="flex gap-3">
+                      <div className="flex w-3 shrink-0 flex-col items-center">
+                        <span className={`mt-[7px] h-2 w-2 shrink-0 rounded-full ${e.final ? 'bg-[#F53F3F]' : last ? 'bg-[#FFD100]' : 'bg-black/15'}`} />
+                        {!last && <span className="w-px flex-1 bg-black/[0.08]" />}
+                      </div>
+                      <div className={`min-w-0 flex-1 ${last ? '' : 'pb-7'}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <p className={`min-w-0 text-[14px] leading-[1.55] ${e.final || last ? 'font-medium text-black/85' : 'text-black/55'}`}>{e.text}</p>
+                          <span className={`shrink-0 text-[13px] ${e.final ? 'font-semibold text-black/85' : 'text-black/40'}`}>{fmtTrackTime(e.at)}</span>
+                        </div>
+                        {e.rider && (
+                          <button
+                            type="button"
+                            onClick={() => onToast('已发起联系（演示）')}
+                            className="mt-2 flex items-center gap-1.5 rounded-md border border-black/15 px-3 py-1.5 text-[13px] text-black/75 active:bg-black/5"
+                          >
+                            <PhoneIcon className="h-3.5 w-3.5" strokeWidth={1.9} />
+                            联系骑手
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 待支付 ⋮ 操作面板（取消订单/联系客服） */}
+      <AnimatePresence>
+        {moreOpen && (
+          <motion.div key="more" className="absolute inset-0 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <button type="button" aria-label="关闭" className="absolute inset-0 bg-black/40" onClick={() => setMoreOpen(false)} />
+            <motion.div initial={{ y: 140 }} animate={{ y: 0 }} exit={{ y: 160 }} transition={{ type: 'tween', duration: 0.24, ease: [0.32, 0.72, 0, 1] }} className="absolute inset-x-3 bottom-3">
+              <div className="overflow-hidden rounded-xl bg-white">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    cancel();
+                  }}
+                  className="w-full py-3.5 text-center text-[15px] text-[#F53F3F] active:bg-black/5"
+                >
+                  取消订单
+                </button>
+                <div className="h-px bg-black/5" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    onToast('美团客服：0539-000-0000（演示）');
+                  }}
+                  className="w-full py-3.5 text-center text-[15px] text-black/80 active:bg-black/5"
+                >
+                  联系客服
+                </button>
+              </div>
+              <button type="button" onClick={() => setMoreOpen(false)} className="mt-2 w-full rounded-xl bg-white py-3.5 text-center text-[15px] font-medium text-black/85 active:bg-black/5">
+                取消
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

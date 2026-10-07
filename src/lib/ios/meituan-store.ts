@@ -569,12 +569,21 @@ export function mtGetOrder(uid: string, id: string): MtOrder | undefined {
 
 // ---------------- 订单状态机（时间戳确定性推进） ----------------
 
-/** 支付后：10s 商家接单 → 26s 骑手取餐/配送中 → 75s 已送达（演示节奏，重启按时间戳补推进）；团购单支付后即完成 */
-const ACCEPT_MS = 10_000;
-const PICKUP_MS = 26_000;
-const DELIVERED_MS = 75_000;
-/** 待支付超时（自动取消，对齐真机 30 分钟） */
-const PAY_TIMEOUT_MS = 30 * 60_000;
+/**
+ * 支付后全程按真实外卖节奏推进（重启按时间戳补推进）：
+ * 约2分钟商家接单 → 约7分钟骑手取餐 → 预计送达时间(etaAt=支付后31~40分钟)系统确认送达；
+ * etaAt 缺失的旧订单按 45 分钟兜底；团购单支付后即完成。
+ * 时长与支付页「现在支付，预计XX:XX送达」承诺、详情页 ETA 大字完全一致（同一订单号确定性推导）。
+ */
+const ACCEPT_MS = 2 * 60_000;
+const PICKUP_MS = 7 * 60_000;
+const DELIVERED_MS = 45 * 60_000;
+/** 待支付超时（自动取消，对齐真机 15 分钟） */
+export const PAY_TIMEOUT_MS = 15 * 60_000;
+
+/** 按订单号确定性推导配送时长（31~40 分钟）：支付页 ETA、状态机送达时刻、详情页承诺保持一致 */
+export const mtDeliveryMinutesOf = (orderId: string): number =>
+  31 + ([...orderId].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) >>> 0, 7) % 10);
 
 const RIDER_POOL = ['宋世超', '刘志伟', '王建平', '李海峰', '赵国栋', '陈志强'];
 
@@ -614,9 +623,10 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
         break;
       }
       if (cur.status === 'accepted') {
-        // 出行单：值机/检票后直接行程完成（跳过配送档）
+        // 出行单：值机/检票后按预计到达时间完成行程（跳过配送档）
         if (cur.kind === 'flight' || cur.kind === 'train') {
-          if (cur.paidAt && now - cur.paidAt >= DELIVERED_MS) {
+          const doneAt = cur.etaAt ?? (cur.paidAt ? cur.paidAt + DELIVERED_MS : 0);
+          if (doneAt && now >= doneAt) {
             step('completed');
             continue;
           }
@@ -629,7 +639,9 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
         break;
       }
       if (cur.status === 'delivering') {
-        if (cur.paidAt && now - cur.paidAt >= DELIVERED_MS) {
+        // 按预计送达时间（etaAt）确认送达——与详情页大字/骑手气泡剩余分钟同源
+        const doneAt = cur.etaAt ?? (cur.paidAt ? cur.paidAt + DELIVERED_MS : 0);
+        if (doneAt && now >= doneAt) {
           step('completed');
           continue;
         }
