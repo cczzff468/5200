@@ -236,35 +236,33 @@ export const MT_CATS: { id: string; name: string }[] = [
 
 /** 首页分类宫格（两页 15 项，对齐真机布局）；用户指定首屏顺序：
  *  外卖、团购、美食、看病买药、休闲玩乐、酒店旅行、电影演出，其余频道依次后移。
- *  icon 为 UI 层 Lucide 图标 key（GRID_ICONS 映射），fg 为图标主色（对齐真机彩色拟物图）。 */
+ *  icon 为 UI 层 Lucide 线条图标 key（GRID_ICONS 映射）。 */
 export interface MtGridCat {
   id: string;
   name: string;
   icon: string;
-  fg: string;
-  tint: string;
   /** 商家筛选分类 id；'hotel'/'xiuxian'/'dianying' = 频道页（点击进频道）；其余 null = 演示占位提示 */
   filter?: string | null;
 }
 export const MT_HOME_GRID: MtGridCat[][] = [
   [
-    { id: 'waimai', name: '外卖', icon: 'Bike', fg: '#F5A700', tint: 'from-[#FFF6D6] to-[#FFD84D]', filter: 'waimai' },
-    { id: 'tuangou', name: '团购', icon: 'Ticket', fg: '#FF8A00', tint: 'from-[#FFE7CC] to-[#FFA24E]', filter: 'tuangou' },
-    { id: 'meishi', name: '美食', icon: 'Utensils', fg: '#FF6000', tint: 'from-[#FFDED2] to-[#FF9E7A]', filter: 'meishi' },
-    { id: 'yao', name: '看病买药', icon: 'Cross', fg: '#FF7A45', tint: 'from-[#FFF0C2] to-[#FFCE54]', filter: 'maiyao' },
-    { id: 'xiuxian', name: '休闲玩乐', icon: 'Gamepad2', fg: '#8B5CF6', tint: 'from-[#E6DFFF] to-[#AD92FF]', filter: 'xiuxian' },
-    { id: 'hotel', name: '酒店旅行', icon: 'Building', fg: '#3E8BFF', tint: 'from-[#D9ECFF] to-[#84BAFF]', filter: 'hotel' },
-    { id: 'dianying', name: '电影演出', icon: 'Clapperboard', fg: '#FF6F1E', tint: 'from-[#FFDCCB] to-[#FF9E6B]', filter: 'dianying' },
-    { id: 'shangou', name: '闪购', icon: 'Zap', fg: '#F5A700', tint: 'from-[#FFF1C0] to-[#FFD24D]', filter: null },
-    { id: 'anmo', name: '按摩足疗', icon: 'Footprints', fg: '#FF5E9E', tint: 'from-[#FFDCE8] to-[#FF93BB]', filter: null },
-    { id: 'paotui', name: '跑腿', icon: 'Rabbit', fg: '#FF8A00', tint: 'from-[#FFF6D6] to-[#FFD84D]', filter: null },
+    { id: 'waimai', name: '外卖', icon: 'Bike', filter: 'waimai' },
+    { id: 'tuangou', name: '团购', icon: 'Ticket', filter: 'tuangou' },
+    { id: 'meishi', name: '美食', icon: 'Utensils', filter: 'meishi' },
+    { id: 'yao', name: '看病买药', icon: 'Cross', filter: 'maiyao' },
+    { id: 'xiuxian', name: '休闲玩乐', icon: 'Gamepad2', filter: 'xiuxian' },
+    { id: 'hotel', name: '酒店旅行', icon: 'Building', filter: 'hotel' },
+    { id: 'dianying', name: '电影演出', icon: 'Clapperboard', filter: 'dianying' },
+    { id: 'shangou', name: '闪购', icon: 'Zap', filter: null },
+    { id: 'anmo', name: '按摩足疗', icon: 'Footprints', filter: null },
+    { id: 'paotui', name: '跑腿', icon: 'Rabbit', filter: null },
   ],
   [
-    { id: 'liren', name: '丽人美发', icon: 'Scissors', fg: '#FF5E9E', tint: 'from-[#FFDCE8] to-[#FF93BB]', filter: null },
-    { id: 'jipiao', name: '机票火车票', icon: 'Plane', fg: '#3E8BFF', tint: 'from-[#D9ECFF] to-[#84BAFF]', filter: null },
-    { id: 'yiliao', name: '医疗牙科', icon: 'Stethoscope', fg: '#4AA3FF', tint: 'from-[#D9F1FF] to-[#82C4FF]', filter: null },
-    { id: 'xiaoshuo', name: '免费小说', icon: 'BookOpen', fg: '#FF9A21', tint: 'from-[#FFE9C8] to-[#FFC36B]', filter: null },
-    { id: 'more', name: '更多服务', icon: 'LayoutGrid', fg: '#6B7280', tint: 'from-[#EEEFF3] to-[#C9CDD6]', filter: null },
+    { id: 'liren', name: '丽人美发', icon: 'Scissors', filter: null },
+    { id: 'jipiao', name: '机票火车票', icon: 'Plane', filter: null },
+    { id: 'yiliao', name: '医疗牙科', icon: 'Stethoscope', filter: null },
+    { id: 'xiaoshuo', name: '免费小说', icon: 'BookOpen', filter: null },
+    { id: 'more', name: '更多服务', icon: 'LayoutGrid', filter: null },
   ],
 ];
 

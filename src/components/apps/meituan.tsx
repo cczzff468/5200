@@ -195,7 +195,7 @@ const mtStatusText = (o: MtOrder): string => {
 /** 菜单分节名「N选M」识别（鲜果 3选1 / 比萨 4选1 → 购买弹窗内必选分组） */
 const MT_CHOICE_RE = /（?(\d+)\s*选\s*(\d+)）?/;
 
-/** 首页宫格图标（icon key → Lucide 组件，对齐真机彩色拟物图） */
+/** 首页宫格图标（icon key → Lucide 线条图标，简约单色风） */
 const GRID_ICONS: Record<string, LucideIcon> = {
   Bike,
   Ticket,
@@ -1076,16 +1076,17 @@ function HomePage({
           className="flex snap-x snap-mandatory overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           {MT_HOME_GRID.map((pageCats, pi) => (
-            <div key={pi} className="grid w-full shrink-0 snap-center grid-cols-5 gap-y-4 px-2 py-3.5">
+            <div key={pi} className="grid w-full shrink-0 snap-center grid-cols-5 gap-y-5 px-2 py-4">
               {pageCats.map((c) => {
                 const activeFilter = filter !== null && c.filter === filter;
                 const GIcon = GRID_ICONS[c.icon] ?? LayoutGrid;
                 return (
-                  <button key={c.id} type="button" onClick={() => tapCat(c)} className="flex flex-col items-center gap-1.5 active:opacity-70">
-                    <span className={`grid h-[46px] w-[46px] place-items-center rounded-2xl bg-gradient-to-br ${c.tint} ${activeFilter ? 'ring-2 ring-[#FFC300]' : ''}`}>
-                      <GIcon className="h-[24px] w-[24px]" style={{ color: c.fg }} strokeWidth={2.1} />
-                    </span>
-                    <span className={`text-[11px] ${activeFilter ? 'font-semibold text-black/85' : 'text-black/65'}`}>{c.name}</span>
+                  <button key={c.id} type="button" onClick={() => tapCat(c)} className="flex flex-col items-center gap-2 active:opacity-70">
+                    <GIcon
+                      className={`h-[26px] w-[26px] ${activeFilter ? 'text-[#F5A700]' : 'text-black/80'}`}
+                      strokeWidth={1.8}
+                    />
+                    <span className={`text-[11px] leading-none ${activeFilter ? 'font-semibold text-[#F5A700]' : 'text-black/65'}`}>{c.name}</span>
                   </button>
                 );
               })}
