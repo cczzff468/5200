@@ -50,8 +50,9 @@ function useProxyCountdown(createdAt: number): string {
 export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' | 'done'; onClick: () => void }) {
   const p = mtGetProxy(pid);
   const paid = p?.status === 'paid';
-  // 仅请求卡付款后整体褪色（与红包/转账终态卡同语义）；完成卡保持彩色成功面
-  const settled = role === 'req' && paid;
+  // 颜色互换（用户反馈）：请求卡恒亮黄（引导好友付款）；完成卡=终态整体褪灰（同红包/转账领取后语义）
+  const faded = role === 'done';
+  const reqDone = role === 'req' && paid;
   const countdown = useProxyCountdown(p?.createdAt ?? Date.now());
   const [bannerOk, setBannerOk] = useState(true);
   const channel = p?.paidChannel ?? (p ? mtProxyChannelName(p.idp) : '');
@@ -63,10 +64,10 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
       onClick={onClick}
       className="relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 active:brightness-95"
       style={{
-        // 已代付后卡面褪色（黄横幅/按钮变灰，白底不脏）
-        filter: settled ? 'grayscale(0.72) brightness(0.98)' : undefined,
+        // 完成卡（终态）整体褪色：黄横幅/按钮变灰黄，白底不脏
+        filter: faded ? 'grayscale(0.72) brightness(0.98)' : undefined,
       }}
-      aria-label={`美团代付卡 ¥${fmt2(p?.amount ?? 0)}（${role === 'done' || settled ? '已代付' : '待代付'}）`}
+      aria-label={`美团代付卡 ¥${fmt2(p?.amount ?? 0)}（${role === 'done' || reqDone ? '已代付' : '待代付'}）`}
     >
       {/* 箭头指向头像侧：请求卡=我发出（右）/ 完成卡=好友发来（左） */}
       <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${role === 'done' ? '-left-[4px]' : '-right-[4px]'}`} />
@@ -114,7 +115,7 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
               {channel ? `${channel} · 已到账` : '好友已代付'}
             </span>
           </>
-        ) : settled ? (
+        ) : reqDone ? (
           <>
             <span className="block text-[11.5px] text-black/40">代付状态</span>
             <span className="mt-0.5 block text-[24px] font-bold leading-tight text-black/90">好友已代付</span>

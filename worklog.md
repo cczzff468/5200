@@ -16692,3 +16692,22 @@ Stage Summary:
 - 状态栏背景统一：代付详情（微信/QQ/美团三端共用组件）、美团消息中心、美团券码页、微信好友申请详情共 5 处分界消除
 - 横幅 3D 人物图因账号 429 未落地，组件带 onError 渐变回退（图生成成功后刷新即生效）；后台重试循环持续运行
 - 改动文件：mt-proxy-detail.tsx、meituan.tsx、wechat.tsx
+
+---
+Task ID: 8
+Agent: Z.ai Code (主会话)
+Task: ①首页搜索框毛玻璃化（搜索按钮不变） ②两张代付卡颜色互换 ③新增地址页照真机截图重做美化
+
+Work Log:
+- 【毛玻璃搜索框】meituan.tsx 首页黄头加 relative overflow-hidden + 3 个装饰光斑（白/黄/橙半透明 blur-2xl，作为 backdrop-blur 的磨砂来源）；搜索框 bg-white → bg-white/55 + backdrop-blur-xl + ring-1 ring-white/70 + 柔和阴影，新增放大镜图标；「搜索」按钮保持 #FFD100 正黄不变（用户要求）
+- 【代付卡颜色互换】mt-proxy-detail.tsx MtPayBubble：原 settled=req 已付灰化/done 彩色 → 按用户反馈互换为 faded=role==='done'（完成卡=终态整体褪灰，同红包/转账领取后语义）+ reqDone=req&&paid（请求卡恒亮黄，付款后内层显示「好友已代付+金额渠道」不灰化）；aria-label 同步
+- 【新增地址页重做】AddAddressPage 照真机截图重写：顶部悬浮栏（毛玻璃返回钮+居中标题+右上搜索胶囊）+ 纯 SVG 假地图（路网/绿地/水域/建筑块 + 白色地址气泡 marker 随输入实时更新 + 黑针蓝点 + 右下 Crosshair 定位钮）+ 白色上拉圆角面板（地址行=加粗大字点开联想浮层 / 门牌号 / 联系人+先生女士黄 radio / 手机号 / 标签 chips 黄选中态）+ 粘贴智能识别条（「粘贴」读剪贴板自动识别 / 手输后变「识别」按钮：抽 1[3-9]xxxxxxxxx 手机号+剩余文本进地址）+ 保存按钮分态（未填完=灰、填完=黄渐变）；新增 AddrHits 联想组件（本地池=已存地址+10 条内置小区地标，空匹配时「使用输入内容」行）；lucide 新增 Crosshair 导入
+- 【排障插曲】工具输出链路会把 `[h` 两字符序列吞掉显示（如 HOME_SEARCH_HINTS[hintIdx] 显示为 ...intIdx]），一度误判文件语法损坏；经 python 逐字节对比证实文件完好、tsc exit=0，未误改任何代码
+- E2E（agent-browser 500×940）：首页毛玻璃搜索框（半透明透出光斑、按钮正黄不变）✓ → 微信晴晴聊天两张卡颜色互换（请求卡亮黄横幅+亮黄按钮「好友已代付 ¥21.60」，完成卡整体灰化）✓ → 美团新增地址页（地图+marker+面板+灰保存钮）→ 联想浮层选「阳光花园 12 号楼」→ marker 实时更新 → 填门牌/联系人/手机号 → 保存钮变黄 → 保存成功入列表（门牌拼接正确）✓ → 智能识别「李明 15899987777 望江名邸8栋」→ 手机号抽出+文本进地址+toast ✓
+- tsc --noEmit exit=0 + eslint（meituan.tsx/mt-proxy-detail.tsx）全绿；横幅 3D 图仍账号 429（渐变兜底运行中）
+- 改动文件：meituan.tsx、mt-proxy-detail.tsx
+
+Stage Summary:
+- 首页搜索框毛玻璃化完成（装饰光斑+半透明白+backdrop-blur，按钮原样）
+- 代付卡配色互换：请求卡=亮黄主卡，完成卡=灰色终态卡（与用户截图正好对调）
+- 新增地址页从纯表单升级为真机同款「地图+上拉面板」结构，含地址联想、先生/女士、智能识别、分态保存

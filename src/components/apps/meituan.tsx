@@ -43,6 +43,7 @@ import {
   Copy,
   CreditCard,
   Cross,
+  Crosshair,
   Crown,
   Eye,
   EyeOff,
@@ -1036,9 +1037,13 @@ function HomePage({
       onTouchEnd={onTouchEnd}
       className="h-full overflow-y-auto overscroll-contain bg-[#F4F5F7] pb-4"
     >
-      {/* 黄头（再浅一档的淡黄）：定位 / 消息 / 扫一扫 / 搜索 */}
-      <div className="bg-[#FFF0A8] px-4 pb-3 pt-[54px]">
-        <div className="flex items-center gap-2">
+      {/* 黄头（再浅一档的淡黄）+ 毛玻璃装饰光斑：定位 / 消息 / 扫一扫 / 搜索 */}
+      <div className="relative overflow-hidden bg-[#FFF0A8] px-4 pb-3 pt-[54px]">
+        {/* 装饰光斑（搜索框 backdrop-blur 的磨砂来源，毛玻璃质感） */}
+        <span aria-hidden="true" className="pointer-events-none absolute -right-7 top-1 h-28 w-28 rounded-full bg-white/55 blur-2xl" />
+        <span aria-hidden="true" className="pointer-events-none absolute left-6 top-14 h-24 w-32 rounded-full bg-[#FFD100]/45 blur-2xl" />
+        <span aria-hidden="true" className="pointer-events-none absolute right-28 top-20 h-16 w-16 rounded-full bg-[#FF9F1C]/25 blur-xl" />
+        <div className="relative flex items-center gap-2">
           <button type="button" onClick={onPickAddress} className="flex min-w-0 items-center gap-1 text-left active:opacity-70">
             <MapPin className="h-[17px] w-[17px] shrink-0 text-black/80" strokeWidth={2.1} />
             <span className="truncate text-[17px] font-semibold text-black/90">{cur ? cur.text.slice(0, 9) : '选择地址'}</span>
@@ -1051,9 +1056,10 @@ function HomePage({
             <ScanLine className="h-[22px] w-[22px] text-black/75" strokeWidth={1.9} />
           </button>
         </div>
-        <button type="button" onClick={() => onOpenSearch(HOME_SEARCH_HINTS[hintIdx])} className="mt-3 flex h-10 w-full items-center gap-2 rounded-full bg-white pl-4 pr-1 text-left shadow-sm active:opacity-95">
+        <button type="button" onClick={() => onOpenSearch(HOME_SEARCH_HINTS[hintIdx])} className="relative mt-3 flex h-10 w-full items-center gap-2 rounded-full bg-white/55 pl-4 pr-1 text-left shadow-[0_4px_16px_rgba(160,120,0,0.10)] ring-1 ring-white/70 backdrop-blur-xl active:opacity-95">
+          <SearchIcon className="h-[15px] w-[15px] shrink-0 text-black/45" strokeWidth={2.2} />
           <span key={hintIdx} className="min-w-0 flex-1 truncate text-[14px] text-black/75">{HOME_SEARCH_HINTS[hintIdx]}</span>
-          <span className="shrink-0 whitespace-nowrap rounded-full bg-[#FFD100] px-5 py-[7px] text-[14px] font-semibold text-black/85">搜索</span>
+          <span className="shrink-0 whitespace-nowrap rounded-full bg-[#FFD100] px-5 py-[7px] text-[14px] font-semibold text-black/85 shadow-[0_2px_8px_rgba(255,180,0,0.35)]">搜索</span>
         </button>
       </div>
 
@@ -4643,58 +4649,259 @@ function AddAddressPage({ session, onBack, editing, onToast }: { session: MtSess
   const uid = mtUidOf(session);
   const [name, setName] = useState(editing?.name ?? '');
   const [phone, setPhone] = useState(editing?.phone ?? '');
-  const [text, setText] = useState(editing?.text ?? '');
+  const [addr, setAddr] = useState(editing?.text ?? '');
+  const [door, setDoor] = useState('');
   const [tag, setTag] = useState(editing?.tag ?? '家');
+  const [gender, setGender] = useState<'先生' | '女士'>('先生');
+  const [pickOpen, setPickOpen] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+
+  /** 从一段文本里抽手机号 + 地址（智能识别） */
+  const recognize = (raw: string): boolean => {
+    if (!raw.trim()) return false;
+    const phoneHit = raw.match(/1[3-9]\d{9}/);
+    const rest = raw.replace(/1[3-9]\d{9}/g, '').replace(/[,，;；\s]+/g, ' ').trim();
+    if (phoneHit) setPhone(phoneHit[0]);
+    if (rest) setAddr(rest);
+    return Boolean(phoneHit || rest);
+  };
 
   const save = () => {
-    if (!name.trim() || !text.trim()) {
+    if (!name.trim() || !addr.trim()) {
       onToast('请填写联系人和地址');
       return;
     }
+    const finalText = door.trim() && addr.trim() ? `${addr.trim()} ${door.trim()}` : addr.trim();
     const addrs = mtLoadAddresses(uid);
     if (editing) {
-      mtSaveAddresses(uid, addrs.map((a) => (a.id === editing.id ? { ...a, name: name.trim(), phone: phone.trim(), text: text.trim(), tag } : a)));
+      mtSaveAddresses(uid, addrs.map((a) => (a.id === editing.id ? { ...a, name: name.trim(), phone: phone.trim(), text: finalText || editing.text, tag } : a)));
     } else {
-      mtSaveAddresses(uid, [...addrs, { id: `addr${Date.now().toString(36)}`, name: name.trim(), phone: phone.trim() || '138****0000', text: text.trim(), tag }]);
+      mtSaveAddresses(uid, [...addrs, { id: `addr${Date.now().toString(36)}`, name: name.trim(), phone: phone.trim() || '138****0000', text: finalText, tag }]);
     }
     onToast('地址已保存');
     onBack();
   };
 
+  const pasteFromBoard = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (!t.trim()) {
+        onToast('剪贴板是空的');
+        return;
+      }
+      if (recognize(t)) onToast('已识别地址信息');
+      else onToast('没有识别出地址，请手动填写');
+    } catch {
+      onToast('剪贴板不可用，请在下方输入后点识别');
+    }
+  };
+
+  const canSave = Boolean(name.trim() && addr.trim());
+
   return (
-    <div className="flex h-full flex-col bg-white">
-      <div className="flex shrink-0 items-center gap-2 border-b border-black/[0.04] bg-white px-3 pb-2.5 pt-[54px]">
-        <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
-          <ChevronLeft className="h-6 w-6 text-black/70" />
-        </button>
-        <p className="flex-1 text-center text-[16px] font-semibold text-black/85">{editing ? '编辑地址' : '新增地址'}</p>
-        <span className="h-9 w-9" />
+    <div className="relative flex h-full flex-col bg-[#F4F5F7]">
+      {/* 顶部悬浮栏：返回 + 标题 + 搜索（悬浮在地图上） */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
+        <div className="pointer-events-auto flex items-center gap-2 px-3 pt-[54px]">
+          <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full bg-white/85 shadow-sm backdrop-blur active:bg-black/5">
+            <ChevronLeft className="h-6 w-6 text-black/75" />
+          </button>
+          <p className="flex-1 text-center text-[17px] font-semibold text-black/90">{editing ? '编辑地址' : '新增地址'}</p>
+          <button type="button" data-testid="mt-addr-search" onClick={() => setPickOpen(true)} className="flex h-9 items-center gap-1 rounded-full bg-white/90 px-3.5 shadow-sm backdrop-blur active:opacity-80">
+            <SearchIcon className="h-[14px] w-[14px] text-black/70" strokeWidth={2.2} />
+            <span className="text-[14px] font-medium text-black/80">搜索</span>
+          </button>
+        </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="divide-y divide-black/[0.04]">
-          {([
-            ['联系人', name, setName, '收货人姓名'],
-            ['手机号', phone, setPhone, '11 位手机号'],
-            ['详细地址', text, setText, '小区 / 写字楼 / 门牌号'],
-          ] as const).map(([label, val, set, ph]) => (
-            <label key={label} className="flex items-center gap-3 py-3.5">
-              <span className="w-[64px] shrink-0 text-[14px] text-black/50">{label}</span>
-              <input value={val} onChange={(e) => set(e.target.value)} placeholder={ph} className="h-9 flex-1 bg-transparent text-[14px] outline-none placeholder:text-black/25" />
-            </label>
+
+      {/* 假地图（纯 SVG 绘制，无外部依赖）：路网 + 绿地 + 水域 + 建筑块 */}
+      <div className="relative h-[300px] shrink-0 overflow-hidden">
+        <svg viewBox="0 0 500 300" preserveAspectRatio="xMidYMid slice" className="absolute inset-0 h-full w-full" aria-hidden="true">
+          <rect width="500" height="300" fill="#F0EFE9" />
+          <path d="M300 0 H500 V120 Q430 150 380 110 Q330 70 300 40 Z" fill="#D3EBC0" />
+          <path d="M0 210 Q80 190 130 230 Q160 255 120 300 H0 Z" fill="#DCEFC9" opacity="0.9" />
+          <path d="M470 220 Q500 240 500 300 H430 Q440 250 470 220 Z" fill="#C9E3F5" />
+          <path d="M-10 150 L510 110" stroke="#FFFFFF" strokeWidth="14" fill="none" />
+          <path d="M120 -10 L180 310" stroke="#FFFFFF" strokeWidth="12" fill="none" />
+          <path d="M-10 60 L510 30" stroke="#FFFFFF" strokeWidth="8" fill="none" />
+          <path d="M330 -10 L300 310" stroke="#FFFFFF" strokeWidth="8" fill="none" />
+          <path d="M-10 240 L510 260" stroke="#FFFFFF" strokeWidth="10" fill="none" />
+          <path d="M240 -10 L270 310" stroke="#FFFFFF" strokeWidth="5" fill="none" />
+          <path d="M-10 200 L240 170" stroke="#FFFFFF" strokeWidth="5" fill="none" />
+          <path d="M400 150 L510 190" stroke="#FFFFFF" strokeWidth="5" fill="none" />
+          {[
+            [30, 90, 34, 22],
+            [90, 70, 26, 18],
+            [220, 60, 30, 20],
+            [380, 170, 30, 22],
+            [40, 260, 36, 20],
+            [200, 220, 28, 18],
+            [300, 200, 24, 16],
+            [150, 130, 22, 14],
+          ].map(([x, y, w, h], i) => (
+            <rect key={i} x={x} y={y} width={w} height={h} rx="3" fill="#E4E2DA" />
           ))}
-          <div className="flex items-center gap-2 py-3.5">
-            <span className="w-[64px] shrink-0 text-[14px] text-black/50">标签</span>
+        </svg>
+        {/* Marker：地址气泡 + 针杆 + 蓝点（文案随地址输入实时变） */}
+        <div className="absolute left-1/2 top-[64%] -translate-x-1/2 -translate-y-full text-center">
+          <div className="mx-auto max-w-[240px] truncate rounded-lg bg-white px-3 py-1.5 text-[13px] font-medium text-black/85 shadow-[0_4px_14px_rgba(0,0,0,0.12)]" data-testid="mt-addr-marker">
+            {addr.trim() || '点击搜索选择地址'}
+          </div>
+          <span aria-hidden="true" className="mx-auto block h-5 w-[2.5px] bg-black/85" />
+          <span aria-hidden="true" className="mx-auto block h-3 w-3 rounded-full border-2 border-white bg-[#3B82F6] shadow" />
+        </div>
+        <button type="button" aria-label="定位" onClick={() => onToast('已回到当前定位')} className="absolute bottom-4 right-4 grid h-10 w-10 place-items-center rounded-xl bg-white shadow-[0_3px_10px_rgba(0,0,0,0.12)] active:opacity-80">
+          <Crosshair className="h-5 w-5 text-black/70" strokeWidth={2} />
+        </button>
+      </div>
+
+      {/* 表单面板（上拉圆角盖住地图底部，对齐真机截图） */}
+      <div className="relative -mt-5 flex min-h-0 flex-1 flex-col rounded-t-[20px] bg-white shadow-[0_-6px_20px_rgba(0,0,0,0.06)]">
+        <span aria-hidden="true" className="mx-auto mt-2 block h-1 w-9 shrink-0 rounded-full bg-black/10" />
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {/* 地址：点开联想浮层 */}
+          <button type="button" data-testid="mt-addr-pick" onClick={() => setPickOpen(true)} className="flex w-full items-center gap-2 rounded-2xl border border-black/[0.07] bg-[#FAFAF8] px-4 py-4 text-left active:opacity-80">
+            <span className="w-[52px] shrink-0 text-[14px] text-black/50">地址</span>
+            <span className="min-w-0 flex-1 truncate text-[18px] font-bold text-black/90">{addr.trim() || '选择收货地址'}</span>
+            <ChevronRight className="h-5 w-5 shrink-0 text-black/30" />
+          </button>
+
+          {/* 门牌号 */}
+          <label className="flex items-center gap-2 border-b border-black/[0.05] py-4">
+            <span className="w-[52px] shrink-0 text-[14px] text-black/50">门牌号</span>
+            <input value={door} onChange={(e) => setDoor(e.target.value)} placeholder="输入详细地址，例1单元101" className="h-8 min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-black/30" />
+          </label>
+
+          {/* 联系人 + 先生/女士 */}
+          <div className="flex items-center gap-2 border-b border-black/[0.05] py-4">
+            <span className="w-[52px] shrink-0 text-[14px] text-black/50">联系人</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="输入收货人姓名" className="h-8 min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-black/30" />
+            <div className="flex shrink-0 items-center gap-3">
+              {(['先生', '女士'] as const).map((g) => (
+                <button key={g} type="button" onClick={() => setGender(g)} className="flex items-center gap-1 text-[14px] text-black/80">
+                  <span className={`grid h-[18px] w-[18px] place-items-center rounded-full border-2 ${gender === g ? 'border-[#FFD100] bg-[#FFD100]' : 'border-black/20 bg-white'}`}>
+                    {gender === g && <span className="h-[6px] w-[6px] rounded-full bg-white" />}
+                  </span>
+                  {g}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 手机号 */}
+          <label className="flex items-center gap-2 border-b border-black/[0.05] py-4">
+            <span className="w-[52px] shrink-0 text-[14px] text-black/50">手机号</span>
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="输入收货人手机号" inputMode="numeric" className="h-8 min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-black/30" />
+          </label>
+
+          {/* 标签 */}
+          <div className="flex items-center gap-2.5 py-4">
+            <span className="w-[52px] shrink-0 text-[14px] text-black/50">标签</span>
             {['家', '公司', '学校'].map((t) => (
-              <button key={t} type="button" onClick={() => setTag(t)} className={`rounded-full px-3 py-1.5 text-[12px] ${tag === t ? 'bg-[#FFD100] font-medium text-black/85' : 'bg-[#F5F6F7] text-black/55'}`}>
+              <button key={t} type="button" onClick={() => setTag(t)} className={`rounded-xl px-5 py-2 text-[14px] transition-colors ${tag === t ? 'bg-[#FFF6D8] font-semibold text-[#B77900] ring-1 ring-[#FFD100]' : 'bg-[#F5F6F7] text-black/60'}`}>
                 {t}
               </button>
             ))}
           </div>
         </div>
-        <button type="button" onClick={save} className="mt-5 h-12 w-full rounded-full bg-[#FFD100] text-[15px] font-semibold text-black/90 active:opacity-85">
-          保存地址
-        </button>
+
+        {/* 粘贴智能识别条 */}
+        <div className="mx-3 mb-2 flex shrink-0 items-center gap-2 rounded-2xl bg-[#F7F7F5] px-4 py-2.5">
+          <input value={pasteText} onChange={(e) => setPasteText(e.target.value)} placeholder="粘贴文本，智能识别地址信息" className="h-8 min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-black/30" />
+          {pasteText.trim() ? (
+            <button type="button" data-testid="mt-addr-recognize" onClick={() => { if (recognize(pasteText)) { setPasteText(''); onToast('已识别地址信息'); } else onToast('没有识别出地址，请手动填写'); }} className="shrink-0 rounded-full bg-[#FFD100] px-3.5 py-1.5 text-[13px] font-semibold text-black/85 active:opacity-80">
+              识别
+            </button>
+          ) : (
+            <button type="button" data-testid="mt-addr-paste" onClick={() => void pasteFromBoard()} className="shrink-0 rounded-full border border-black/15 px-3.5 py-1.5 text-[13px] text-black/70 active:opacity-70">
+              粘贴
+            </button>
+          )}
+        </div>
+
+        {/* 保存（未填完=灰禁用态；填完=黄渐变） */}
+        <div className="shrink-0 px-4 pb-5 pt-1">
+          <button type="button" onClick={save} data-testid="mt-addr-save" className={`h-[52px] w-full rounded-full text-[16px] font-semibold transition-colors ${canSave ? 'bg-gradient-to-r from-[#FFDC30] to-[#FFC300] text-black/90 shadow-[0_4px_14px_rgba(255,180,0,0.35)] active:opacity-85' : 'bg-[#F0F0F0] text-black/30'}`}>
+            保存地址
+          </button>
+        </div>
       </div>
+
+      {/* 地址联想浮层（本地池：已存地址 + 内置小区/地标，输入过滤） */}
+      <AnimatePresence>
+        {pickOpen && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-30 flex flex-col justify-end bg-black/40" onClick={() => setPickOpen(false)}>
+            <motion.div
+              initial={{ y: '45%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 30, stiffness: 330 }}
+              className="rounded-t-[20px] bg-white pb-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="py-3.5 text-center text-[16px] font-semibold text-black/85">选择收货地址</p>
+              <div className="px-4">
+                <div className="flex h-10 items-center gap-2 rounded-full bg-[#F5F6F7] px-4">
+                  <SearchIcon className="h-4 w-4 shrink-0 text-black/35" strokeWidth={2.2} />
+                  <input autoFocus value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="搜索小区 / 写字楼 / 学校" className="h-full min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-black/30" />
+                  {addr && (
+                    <button type="button" aria-label="清空" onClick={() => setAddr('')} className="shrink-0">
+                      <X className="h-4 w-4 text-black/30" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <AddrHits uid={uid} query={addr} onPick={(s) => { setAddr(s); setPickOpen(false); }} />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** 地址联想列表（本地池：已存地址 + 内置小区/地标；空匹配时可直接用输入内容） */
+function AddrHits({ uid, query, onPick }: { uid: string; query: string; onPick: (s: string) => void }) {
+  const pool = useMemo(() => {
+    const builtin = [
+      '幸福小区西区 3 号院',
+      '幸福小区东区 5 号楼',
+      '阳光花园 12 号楼',
+      '科技园写字楼 B 座',
+      '万达广场（朝阳店）',
+      '第一人民医院门诊部',
+      '实验中学（南门）',
+      '星河湾 6 号楼',
+      '滨河公寓 2 单元',
+      '望江名邸 8 栋',
+    ];
+    const saved = mtLoadAddresses(uid).map((a) => a.text);
+    return [...new Set([...saved, ...builtin])];
+  }, [uid]);
+  const q = query.trim();
+  const hits = q ? pool.filter((s) => s.includes(q)) : pool;
+  const showUseRaw = q && !pool.some((s) => s === q);
+  return (
+    <div className="mt-2 max-h-[44vh] overflow-y-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {hits.map((s) => (
+        <button key={s} type="button" onClick={() => onPick(s)} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left active:bg-black/[0.04]">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#FFF6D8]">
+            <MapPin className="h-4 w-4 text-[#B77900]" strokeWidth={2} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[14.5px] text-black/85">{s}</span>
+        </button>
+      ))}
+      {showUseRaw && (
+        <button type="button" onClick={() => onPick(q)} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left active:bg-black/[0.04]">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#EFF6EE]">
+            <Check className="h-4 w-4 text-[#3D9A50]" strokeWidth={2.2} />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[14.5px] text-black/85">
+            使用「{q}」
+          </span>
+        </button>
+      )}
+      {!hits.length && !showUseRaw && <p className="py-8 text-center text-[13px] text-black/35">暂无匹配地址</p>}
     </div>
   );
 }
