@@ -211,23 +211,16 @@ const GRID_ICONS: Record<string, LucideIcon> = {
   LayoutGrid,
 };
 
-/** 兑底图：对主源 URL 哈希派生稳定 picsum 地址（主源失败时仍能出图） */
-function imgFallback(src?: string): string | undefined {
-  if (!src) return undefined;
-  let h = 0;
-  for (let i = 0; i < src.length; i++) h = (h * 31 + src.charCodeAt(i)) >>> 0;
-  return `https://picsum.photos/seed/mtfb${h % 100000}/480/480.jpg`;
-}
-
-/** 菜品图（/api/mt-img 内容匹配图；主源重试一次 → picsum 兑底 → 灰色+文字占位；src 变化经 key 重挂载重置） */
+/** 菜品图（/api/mt-img 内容匹配图：Foodiesfeed 分类图 → 图库兜底 → 服务端默认图，全链有图；
+ *  前端仅做一次重试，再失败显示灰色+文字占位；src 变化经 key 重挂载重置） */
 function FoodImg({ src, className = '' }: { src?: string; emoji?: string; className?: string }) {
   return <FoodImgInner key={src ?? 'none'} src={src} className={className} />;
 }
 
 function FoodImgInner({ src, className = '' }: { src?: string; className?: string }) {
-  // stage：0=主源首载 1=主源重试 2=picsum 兑底 3=占位图
+  // stage：0=主源首载 1=主源重试 2=灰色+文字占位（服务端 v4 永远 200，占位仅极端网络故障出现）
   const [stage, setStage] = useState(0);
-  const cur = stage <= 1 ? src : stage === 2 ? imgFallback(src) : undefined;
+  const cur = stage <= 1 ? src : undefined;
   if (!cur) {
     return (
       <div className={`flex flex-col items-center justify-center gap-1 bg-[#EBEDF0] ${className}`} aria-hidden="true">
@@ -243,7 +236,7 @@ function FoodImgInner({ src, className = '' }: { src?: string; className?: strin
       alt=""
       draggable={false}
       loading="lazy"
-      onError={() => setStage((s) => Math.min(3, s + 1))}
+      onError={() => setStage((s) => Math.min(2, s + 1))}
       className={`bg-[#F5F6F7] object-cover ${className}`}
     />
   );

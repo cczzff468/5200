@@ -6,11 +6,11 @@
  */
 
 /** 内容匹配图地址（/api/mt-img 服务端代理）：
- *  - k=英文品类词（hotpot/pizza/milk-tea…），服务端按关键词生成与内容一致的图片；
- *  - s=变体序号（同词不同变体出不同图），w/h=尺寸，p=f 菜品图 / c 门头图；
- *  - 服务端内存缓存 + 浏览器强缓存：同 tag+变体只生成一次，之后秒出 */
+ *  - k=英文品类词（hotpot/pizza/milk-tea…），服务端按分类关键词搜图（Foodiesfeed CC0 优先 → Pixabay/Pexels → 本地默认图）；
+ *  - s=变体序号（区分缓存），w/h=尺寸，p=f 菜品图 / c 门头图；
+ *  - 服务端内存缓存 + 浏览器强缓存 15min：期内秒出，过期自动轮换同分类新图 */
 export function mtImg(tag: string, w = 480, h = 360, s = 0, kind: 'f' | 'c' = 'f'): string {
-  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}&v=3`;
+  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}&v=4`;
 }
 
 /** 中文名 → 英文品类词词典（AI 未返回 tag 时兜底，保证图片与内容匹配） */

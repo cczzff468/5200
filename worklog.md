@@ -16462,3 +16462,21 @@ Stage Summary:
 - 图片链路抗限流：Pollinations 配额耗尽时 z-ai 生图自动接管（内容匹配不降级），Wikimedia/picsum 仅作临时兜底且不缓存、后续自愈；v=3 一次性清掉浏览器里的旧坏图
 - N选1（3选1/4选1/2选1）全部在购买弹窗内可选，默认选中、单选/多选自适应，选择结果进订单规格
 - AI 商家菜单从 2~4 菜扩到 8~10 菜，分「招牌菜/小吃甜品/饮品」三区，与商家页左侧分类联动
+---
+Task ID: mt-img-foodiesfeed-107
+Agent: Z.ai Code (main)
+Task: 美团图片源切换——Lorem Picsum → Foodiesfeed 分类图优先链（解决图片不符/不好看）
+
+Work Log:
+- 调研：Foodiesfeed（CC0 免署名）为 Next.js 站点，无公开 API，但搜索页 /zh/s/{kw} HTML 内嵌 RSC payload 带 R2 直链（pub-…r2.dev/{gen}/thumbnails/{slug}.webp，1200px CC0 实拍）；实测 26 个关键词命中 24~51 张/分类（hot-pot 24 / chinese-food 26 / roast-duck 32 / milk-tea 49 / pizza 51…）；Node fetch 被 Cloudflare TLS 指纹拦（403 挑战页，加全浏览器头仍 403）但 curl 指纹可通过；R2 直链 Node fetch 正常（200 webp）
+- /api/mt-img v4 重写（三级链）：①Foodiesfeed——tag→搜索词映射表（FF_SEARCH 45+条，实测标注命中数）+同义词收敛（TAG_SYNONYMS：japanese→sushi/sichuan→spicy/korean→barbecue…，未知 tag 一律落 food 防自造词搜出无关图）；搜索页走 curl 子进程（每分类 6h 仅一次，负缓存 60s），图片下载走 Node fetch；搜索池 slug 黑名单二次过滤（sushi 池混入桃子/草莓等图库全文搜索副作用 → FF_POOL_EXCLUDE 剔除，水果分类豁免）；per-分类轮换指针（进程启动随机初值）：同分类每次刷新可换图、不重复太频繁；sharp 流式 cover 裁剪+attention 聚焦主体+webp q78（8~36KB，不落盘不转存）+内存缓存 15min（过期自动轮换新图）+immutable 强缓存同步；②Pixabay/Pexels——env PIXABAY_KEY/PEXELS_KEY 配置才启用（未配置自动跳过），同样搜索+轮换；③默认图（本地算法图）——分类配色渐变+分类 emoji 的 SVG 服务端直出（如药房=💊蓝底、火锅=🍲红底，<1KB 永远 200）保证任何情况有图
+- 修复三处关键 bug：①sharp .webp() 返回 Sharp thenable 而非 Buffer，直接 await 得到 Sharp 实例进缓存 → 二次响应 500（Buffer.from(Sharp) ERR_INVALID_ARG_TYPE）→ 显式 .toBuffer()+Buffer.isBuffer 校验；②缓存 Buffer 被 Next.js wrap 成 stream 后二次复用报 disturbed/locked → Buffer.from 拷贝每次新对象；③inflight promise 无 catch 的 unhandledRejection → 先挂 catch 再异步清理
+- meituan-data.ts mtImg() v=3→v=4（浏览器旧缓存自然失效）；meituan.tsx FoodImg 删除 picsum imgFallback 兑底（服务端 v4 永远 200，前端仅重试一次→灰底+文字占位）
+- E2E（agent-browser 500×940）：首页 feed 图片全部内容匹配（火锅店=鸳鸯火锅/汉堡店=汉堡特写/奶茶团购=奶茶图/披萨团购=披萨图/水果店=水果拼盘/早点铺=煎蛋早餐）vs 之前 picsum 随机风景；下拉刷新→新内容新图（同分类轮换：同店从拼盘换另一张寿司卷）；上滑加载更多正常；康宁大药房=💊药丸分类色块默认图（兜底链路真实业务验证）；商家详情/购买弹窗缩略图正常；B 套餐切换全链联动（选中态/单价/节省/实付）；console 零错误；tsc+eslint 零告警
+- 改动文件：src/app/api/mt-img/route.ts（v4 重写）、src/lib/ios/meituan-data.ts（v=4）、src/components/apps/meituan.tsx（去 picsum 兑底）
+
+Stage Summary:
+- 图片链：Foodiesfeed CC0 分类图（关键词搜索+池过滤+轮换，内容匹配大幅提升）→ Pixabay/Pexels（预留 key）→ 本地分类配色+emoji 默认图（永远有图）
+- 合规：CC0 免署名；按需请求（每分类 6h 一次搜索）；不转存（内存流转+直链）
+- 图片按展示尺寸 sharp 裁剪压缩为 webp；15min 内稳定秒出、过期自动换图
+- 生成数据仅展示用，不影响真实订单和支付；其他 App 零影响
