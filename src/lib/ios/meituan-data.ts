@@ -1,63 +1,70 @@
 /**
  * 美团 App 种子数据（商家/菜单/评价/分类入口）：
  * - 纯前端静态数据，对齐真机演示口径（评分/月售/起送/配送费/距离/满减）；
- * - 菜品图走图片搜索 OSS 直链（MT_IMG），加载失败由 UI 回退 emoji 渐变占位，无图也可用；
+ * - 菜品图/门头图走 Lorem Picsum 稳定图（seed 格式），加载失败由 UI 显示灰色占位图；
  * - 商家与菜品 id 稳定（购物车/订单跨重启引用）。
  */
 
-/** 图片槽位（图片搜索 OSS 直链；空 = emoji 渐变占位） */
+/** Lorem Picsum 稳定图地址：https://picsum.photos/seed/{seed}/{width}/{height}
+ *  同 seed 返回同一张图 → 浏览器缓存后不重复加载；失败时 UI 显示灰色占位图 */
+function picsum(seed: string, width = 480, height = 360): string {
+  return `https://picsum.photos/seed/${encodeURIComponent(seed)}/${width}/${height}`;
+}
+
+/** 图片槽位（Lorem Picsum 稳定图：https://picsum.photos/seed/{seed}/{w}/{h}，
+ *  同 seed 同图 → 浏览器缓存不重复加载；加载失败由 UI 显示灰色占位图） */
 export const MT_IMG: Record<string, string> = {
-  burger: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/601329bde485.jpg',
-  milktea: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/8e0d77c2240a.jpg',
-  chicken: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/028191e49842.jpg',
-  malatang: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/7e4988d7f7c7.jpeg',
-  hotpot: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/637b9d4d5b77.jpg',
-  fruit: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/255d285daf50.jpg',
-  store: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/18a20ee2a3f6.jpg',
-  pharmacy: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/d00dfd7a4473.jpg',
-  rice: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/0e5816453a07.jpg',
-  noodle: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/5e4fa4eee327.jpg',
-  pizza: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/f7d99ad1904b.jpg',
-  breakfast: 'https://z-cdn.chatglm.cn/image-search-mcp/images-ppt/802e97a4e89e.jpg',
-  // 菜品补图（本地 public/mt-dishes AI 美食图；文件缺失时 UI 回退渐变占位）
-  'cucumber-salad': '/mt-dishes/cucumber-salad.jpg',
-  'braised-egg': '/mt-dishes/braised-egg.jpg',
-  'soymilk': '/mt-dishes/soymilk.jpg',
-  'suancai-noodle': '/mt-dishes/suancai-noodle.jpg',
-  'egg-tart': '/mt-dishes/egg-tart.jpg',
-  'cola': '/mt-dishes/cola.jpg',
-  'sundae': '/mt-dishes/sundae.jpg',
-  'icecream': '/mt-dishes/icecream.jpg',
-  'milkshake': '/mt-dishes/milkshake.jpg',
-  'beefroll': '/mt-dishes/beefroll.jpg',
-  'kuanfen': '/mt-dishes/kuanfen.jpg',
-  'quail-egg': '/mt-dishes/quail-egg.jpg',
-  'luncheon-meat': '/mt-dishes/luncheon-meat.jpg',
-  'suanmeitang': '/mt-dishes/suanmeitang.jpg',
-  'mandarin': '/mt-dishes/mandarin.jpg',
-  'cherry': '/mt-dishes/cherry.jpg',
-  'kiwi': '/mt-dishes/kiwi.jpg',
-  'fruit-mix': '/mt-dishes/fruit-mix.jpg',
-  'banana': '/mt-dishes/banana.jpg',
-  'milk': '/mt-dishes/milk.jpg',
-  'chips': '/mt-dishes/chips.jpg',
-  'latiao': '/mt-dishes/latiao.jpg',
-  'tissue': '/mt-dishes/tissue.jpg',
-  'eggs': '/mt-dishes/eggs.jpg',
-  'huoxiang': '/mt-dishes/huoxiang.jpg',
-  'mask': '/mt-dishes/mask.jpg',
-  'bandaid': '/mt-dishes/bandaid.jpg',
-  'vitamin-c': '/mt-dishes/vitamin-c.jpg',
-  'durian-pizza': '/mt-dishes/durian-pizza.jpg',
-  'shrimp': '/mt-dishes/shrimp.jpg',
-  'tomato-rice': '/mt-dishes/tomato-rice.jpg',
-  'potato-rice': '/mt-dishes/potato-rice.jpg',
-  'seaweed-soup': '/mt-dishes/seaweed-soup.jpg',
-  'maodu': '/mt-dishes/maodu.jpg',
-  'xiahua': '/mt-dishes/xiahua.jpg',
-  'potato-slice': '/mt-dishes/potato-slice.jpg',
-  'frozen-tofu': '/mt-dishes/frozen-tofu.jpg',
-  'youtiao': '/mt-dishes/youtiao.jpg',
+  burger: picsum('mt-burger'),
+  milktea: picsum('mt-milktea'),
+  chicken: picsum('mt-chicken'),
+  malatang: picsum('mt-malatang'),
+  hotpot: picsum('mt-hotpot'),
+  fruit: picsum('mt-fruit'),
+  store: picsum('mt-store'),
+  pharmacy: picsum('mt-pharmacy'),
+  rice: picsum('mt-rice'),
+  noodle: picsum('mt-noodle'),
+  pizza: picsum('mt-pizza'),
+  breakfast: picsum('mt-breakfast'),
+  // 菜品补图（同 Picsum 稳定图；加载失败时 UI 显示灰色占位）
+  'cucumber-salad': picsum('mt-cucumber-salad'),
+  'braised-egg': picsum('mt-braised-egg'),
+  'soymilk': picsum('mt-soymilk'),
+  'suancai-noodle': picsum('mt-suancai-noodle'),
+  'egg-tart': picsum('mt-egg-tart'),
+  'cola': picsum('mt-cola'),
+  'sundae': picsum('mt-sundae'),
+  'icecream': picsum('mt-icecream'),
+  'milkshake': picsum('mt-milkshake'),
+  'beefroll': picsum('mt-beefroll'),
+  'kuanfen': picsum('mt-kuanfen'),
+  'quail-egg': picsum('mt-quail-egg'),
+  'luncheon-meat': picsum('mt-luncheon-meat'),
+  'suanmeitang': picsum('mt-suanmeitang'),
+  'mandarin': picsum('mt-mandarin'),
+  'cherry': picsum('mt-cherry'),
+  'kiwi': picsum('mt-kiwi'),
+  'fruit-mix': picsum('mt-fruit-mix'),
+  'banana': picsum('mt-banana'),
+  'milk': picsum('mt-milk'),
+  'chips': picsum('mt-chips'),
+  'latiao': picsum('mt-latiao'),
+  'tissue': picsum('mt-tissue'),
+  'eggs': picsum('mt-eggs'),
+  'huoxiang': picsum('mt-huoxiang'),
+  'mask': picsum('mt-mask'),
+  'bandaid': picsum('mt-bandaid'),
+  'vitamin-c': picsum('mt-vitamin-c'),
+  'durian-pizza': picsum('mt-durian-pizza'),
+  'shrimp': picsum('mt-shrimp'),
+  'tomato-rice': picsum('mt-tomato-rice'),
+  'potato-rice': picsum('mt-potato-rice'),
+  'seaweed-soup': picsum('mt-seaweed-soup'),
+  'maodu': picsum('mt-maodu'),
+  'xiahua': picsum('mt-xiahua'),
+  'potato-slice': picsum('mt-potato-slice'),
+  'frozen-tofu': picsum('mt-frozen-tofu'),
+  'youtiao': picsum('mt-youtiao'),
 };
 
 function img(key: string): string | undefined {
@@ -853,9 +860,30 @@ export const MT_MERCHANTS: MtMerchant[] = [
   },
 ];
 
-/** 按 id 查商家 */
+// ================================ AI 生成内容注册表（信息流动态注入，仅展示用） ================================
+// AI 生成的商家/团购在运行时注册进这里：详情页/购买弹窗/购物车等既有链路通过
+// mtMerchantOf / mtDealOf 无感命中，不改任何调用方；刷新后清空（内容本来就是每次重新生成的）
+const AI_MERCHANTS = new Map<string, MtMerchant>();
+const AI_DEALS = new Map<string, MtDeal>();
+
+/** 注册 AI 生成的商家（同 id 覆盖） */
+export function mtRegisterAiMerchant(m: MtMerchant): void {
+  AI_MERCHANTS.set(m.id, m);
+}
+
+/** 注册 AI 生成的团购（同 id 覆盖） */
+export function mtRegisterAiDeal(d: MtDeal): void {
+  AI_DEALS.set(d.id, d);
+}
+
+/** 按 id 查商家（AI 生成优先，种子数据兜底） */
 export function mtMerchantOf(id: string): MtMerchant | undefined {
-  return MT_MERCHANTS.find((m) => m.id === id);
+  return AI_MERCHANTS.get(id) ?? MT_MERCHANTS.find((m) => m.id === id);
+}
+
+/** 按 id 查团购（AI 生成优先，种子数据兜底） */
+export function mtDealOf(id: string): MtDeal | undefined {
+  return AI_DEALS.get(id) ?? MT_DEALS.find((d) => d.id === id);
 }
 
 /** 菜品全局索引（搜索用） */

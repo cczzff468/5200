@@ -16406,3 +16406,20 @@ Work Log:
 Stage Summary:
 - 改动文件：meituan.tsx（我的页/首页瀑布流/DealListCard/根组件头像同步）、meituan-store.ts（mtSyncSessionIdentity、订单图片回填）
 - 关键决策：头像同步走 avatarFor(App 投影) 与微信/QQ 显示一致；无限流每批 15~20 对齐需求；订单图片在数据层读取时兜底，新旧订单通吃
+---
+Task ID: mt-ai-feed-104
+Agent: Z.ai Code (main)
+Task: 美团信息流 AI 化——①全站图片换 Lorem Picsum(seed 格式+失败灰底占位) ②内容用「设置›API 配置」用户配置模型生成 ③进页面/下拉刷新/切分类重新生成+加载动画 ④上滑追加新内容(上方不变,每批15~20) ⑤不破坏其他App,生成数据仅展示用
+
+Work Log:
+- meituan-data.ts：MT_IMG 全量替换为 Lorem Picsum（picsum(seed) 助手，https://picsum.photos/seed/mt-{key}/480/360，同 seed 同图→浏览器缓存）；新增 AI 内容注册表（AI_MERCHANTS/AI_DEALS Map + mtRegisterAiMerchant/mtRegisterAiDeal）；mtMerchantOf 扩展为 AI 优先/种子兜底；新增 mtDealOf（meituan.tsx 订单/收藏/历史/详情页 5 处 MT_DEALS.find 全部切换，AI 团购下单后列表详情可解析）
+- 新建 src/app/api/mt-feed/route.ts：POST {config(设置App用户配置的OpenAI兼容模型), filter(null=混合/tuangou=团购/分类id), exclude(已展示名单), count}；用户模型优先→内置SDK兜底；单次输出受上限→并发两批(不同随机口令)合并凑足15~20条；提示词带排除名单+禁止示例名；数据塑形层强过滤 exclude（不依赖模型自觉）+按名称/标题去重；容错解析（整体JSON失败→逐对象括号配对扫描，救回截断/坏字节输出）；coerceDish 兼容字符串菜品；图片全部服务端 picsum；仅展示用
+- meituan.tsx：FoodImg 失败改灰底(#EBEDF0)+ImageOff+「图片加载失败」文字；HomePage 重写为 AI 信息流——进入页面/切分类/下拉刷新→regenerate()（骨架 pulse 动画+「AI 正在生成新内容…」转圈），上滑近底部→loadMore() 追加批次（上方内容不动），下拉手势（scrollTop=0 下拉≥55px 松手→刷新，指示区显示 下拉刷新/松手刷新），竞态用 genSeqRef 丢弃过期批次，apiConfig 经 ref 读取避免配置变更误触发；旧 baseFeed/extraFeed/buildFeedBatch 删除，localBatch 本地洗牌兜底（AI 不可用时分店变体续流）；FeedItem 补 'm' 类型收窄修复 TS2339
+- E2E（agent-browser 500×940）：解锁→美团→登录→首页骨架动画→AI 内容（巷口葱油饼·中关村店/小笼包记忆·三里屯店/街角咖啡·五道口店+双人火锅套餐 ¥168 5.6折 已售8千+ 等全新数据）→上滑追加 3203→5812px 上方不动→切「美食」分类重新生成（巷口粥铺·朝阳店/胡同包子铺·西城店 等 12 家全厂商家卡）→切「团购」频道纯团购流→AI 团购详情页全渲染（套餐内容/适用门店/拼团规则/直接购买）→AI 商家页打通（注册表命中）→picsum 12/12 加载 0 失败→console 无美团错误、dev.log 无新增错误→eslint+tsc 零告警
+- 改动文件：src/components/apps/meituan.tsx、src/lib/ios/meituan-data.ts、新增 src/app/api/mt-feed/route.ts
+
+Stage Summary:
+- 美团首页/分类/团购三频道内容全部 AI 实时生成：每次进入/下拉/切分类都是全新数据（商家名/评分/月售/起送/配送费/距离/菜品/价格），上滑追加不重复（塑形层强过滤+模型排除名单双保险）
+- 图片统一 Lorem Picsum seed 稳定图（可缓存），失败显示灰底+文字占位
+- 用户在「设置›API 配置」配置的模型即插即用（请求体传 config，不落盘）；未配置/失败自动落内置 SDK
+- AI 内容经注册表打通详情页/购买/购物车既有链路，其他 App 与种子订单零影响

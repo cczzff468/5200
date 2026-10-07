@@ -55,6 +55,7 @@ import {
   Heart,
   Home as HomeIcon,
   House,
+  ImageOff,
   Languages,
   Laugh,
   LayoutGrid,
@@ -100,12 +101,16 @@ import {
   MT_HOME_GRID,
   MT_HOME_LIST,
   MT_MERCHANTS,
+  mtDealOf,
   mtDishesOf,
   mtMerchantOf,
+  mtRegisterAiDeal,
+  mtRegisterAiMerchant,
   type MtDeal,
   type MtDish,
   type MtMerchant,
 } from '@/lib/ios/meituan-data';
+import { useSettings } from '@/lib/ios/store';
 import {
   mtApplyRefund,
   mtCanRefund,
@@ -207,8 +212,9 @@ function FoodImg({ src, className = '' }: { src?: string; emoji?: string; classN
   const [err, setErr] = useState(false);
   if (!src || err) {
     return (
-      <div className={`flex items-center justify-center bg-gradient-to-br from-[#FFE7C2] to-[#FFC96B] ${className}`} aria-hidden="true">
-        <Utensils className="h-[36%] w-[36%] text-white/85" strokeWidth={2.2} />
+      <div className={`flex flex-col items-center justify-center gap-1 bg-[#EBEDF0] ${className}`} aria-hidden="true">
+        <ImageOff className="h-[30%] w-[30%] text-black/25" strokeWidth={1.8} />
+        <span className="text-[10px] leading-none text-black/30">图片加载失败</span>
       </div>
     );
   }
@@ -672,34 +678,62 @@ const shuffle = <T,>(arr: T[]): T[] => {
   return a;
 };
 
-/** 追加流：每批 15~20 个（需求「上滑刷新，每个刷新15个到20个」）。
- *  推荐=团购+商家洗牌交替；团购频道=全部团购；分类=该分类商家洗牌循环（池子小于批量时轮询补齐）。 */
-function buildFeedBatch(filter: string | null): FeedItem[] {
-  const target = 15 + Math.floor(Math.random() * 6);
+/** FeedItem 的展示名（刷新排重用：AI 排除名单 / 本地兜底排重） */
+const feedName = (it: FeedItem): string => (it.t === 'm' ? it.m.name : it.t === 'deal' ? it.d.title : '');
+
+/** 团购与商家交替排列（推荐流更像真实信息流） */
+function interleave(deals: MtDeal[], merchants: MtMerchant[]): FeedItem[] {
   const out: FeedItem[] = [];
-  if (filter === 'tuangou') {
-    const pool = shuffle(MT_DEALS);
-    while (out.length < target && pool.length > 0) out.push({ t: 'deal', d: pool[out.length % pool.length] });
-    return out;
-  }
-  const merchants = filter ? MT_MERCHANTS.filter((m) => m.cats.includes(filter)) : MT_MERCHANTS;
-  const mPool = shuffle(merchants);
-  const dPool = shuffle(MT_DEALS);
-  if (filter) {
-    let i = 0;
-    while (out.length < target && mPool.length > 0) out.push({ t: 'm', m: mPool[i++ % mPool.length] });
-    return out;
-  }
   let di = 0;
   let mi = 0;
   let dealTurn = Math.random() < 0.5;
-  while (out.length < target) {
-    if (dealTurn || mi >= mPool.length) {
-      out.push({ t: 'deal', d: dPool[di++ % dPool.length] });
-    } else {
-      out.push({ t: 'm', m: mPool[mi++ % mPool.length] });
-    }
+  while (di < deals.length || mi < merchants.length) {
+    if (dealTurn && di < deals.length) out.push({ t: 'deal', d: deals[di++] });
+    else if (mi < merchants.length) out.push({ t: 'm', m: merchants[mi++] });
+    else if (di < deals.length) out.push({ t: 'deal', d: deals[di++] });
     dealTurn = !dealTurn;
+  }
+  return out;
+}
+
+/** 本地兜底批（AI 不可用时）：种子池洗牌 + 排除已展示名称；池子耗尽 → 分店变体续流 */
+function localBatch(filter: string | null, exclude: string[]): FeedItem[] {
+  const ex = new Set(exclude);
+  const target = 15 + Math.floor(Math.random() * 4);
+  const out: FeedItem[] = [];
+  const takeM = (m: MtMerchant) => {
+    if (out.length < target && !ex.has(m.name)) {
+      ex.add(m.name);
+      out.push({ t: 'm', m });
+    }
+  };
+  const takeD = (d: MtDeal) => {
+    if (out.length < target && !ex.has(d.title)) {
+      ex.add(d.title);
+      out.push({ t: 'deal', d });
+    }
+  };
+  if (filter === 'tuangou') {
+    shuffle(MT_DEALS).forEach(takeD);
+    while (out.length < target) out.push({ t: 'deal', d: MT_DEALS[Math.floor(Math.random() * MT_DEALS.length)] });
+    return out;
+  }
+  const merchants = filter ? MT_MERCHANTS.filter((m) => m.cats.includes(filter)) : MT_MERCHANTS;
+  shuffle(merchants).forEach(takeM);
+  if (!filter) shuffle(MT_DEALS).forEach(takeD);
+  // 池子耗尽 → 分店变体（注册进注册表，点击可打开详情）
+  const BRANCHES = ['望京店', '国贸店', '五道口店', '中关村店', '亚运村店', '回龙观店', '双井店', '上地店'];
+  let guard = 0;
+  while (out.length < target && merchants.length > 0 && guard < BRANCHES.length * 2) {
+    const base = merchants[Math.floor(Math.random() * merchants.length)];
+    const clone: MtMerchant = {
+      ...base,
+      id: `ai-m-local-${Date.now().toString(36)}-${guard}`,
+      name: `${base.name}·${BRANCHES[guard % BRANCHES.length]}`,
+    };
+    mtRegisterAiMerchant(clone);
+    out.push({ t: 'm', m: clone });
+    guard++;
   }
   return out;
 }
@@ -726,95 +760,134 @@ function HomePage({
   const [hintIdx, setHintIdx] = useState(0);
   const [gridPage, setGridPage] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
-  // 上滑加载更多：追加流批次 + 加载态（需求「上滑可以刷新，每个刷新15个到20个」）
+  // AI 信息流：进入页面 / 下拉刷新 / 切换分类 → 重新生成；上滑 → 下方追加全新内容（上方不变）
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [extraFeed, setExtraFeed] = useState<FeedItem[]>([]);
+  const [feed, setFeed] = useState<FeedItem[]>([]);
+  const [generating, setGenerating] = useState(true); // 首屏/刷新骨架动画
   const [loadingMore, setLoadingMore] = useState(false);
+  const [pullDist, setPullDist] = useState(0);
+  const [pullHint, setPullHint] = useState<'pull' | 'release'>('pull');
+  // 设置 › API 配置里用户配置好的模型（OpenAI 兼容），随请求体传给 /api/mt-feed
+  const apiConfig = useSettings((s) => s.apiConfig);
+  const apiCfgRef = useRef(apiConfig);
+  apiCfgRef.current = apiConfig;
+  const genSeqRef = useRef(0); // 竞态丢弃：刷新/切分类期间旧响应作废
+  const generatingRef = useRef(true);
   const loadingRef = useRef(false);
   const filterRef = useRef(filter);
+  const feedRef = useRef<FeedItem[]>([]);
+  feedRef.current = feed;
+  const pullStartRef = useRef<number | null>(null);
 
   useEffect(() => {
     const iv = setInterval(() => setHintIdx((i) => (i + 1) % HOME_SEARCH_HINTS.length), 3200);
     return () => clearInterval(iv);
   }, []);
 
-  // 切换分类/频道 → 渲染期重置追加流（React 官方调整状态模式，从精选首屏重新累积）
-  const [prevFilter, setPrevFilter] = useState(filter);
-  if (prevFilter !== filter) {
-    setPrevFilter(filter);
-    setExtraFeed([]);
-    setLoadingMore(false);
-  }
+  // ---- AI 取数：/api/mt-feed（用户配置模型 → 服务端内置模型兜底），失败走本地洗牌兜底 ----
+  const fetchBatch = useCallback(async (f: string | null, exclude: string[]): Promise<FeedItem[]> => {
+    try {
+      const res = await fetch('/api/mt-feed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config: apiCfgRef.current,
+          filter: f,
+          exclude,
+          count: 15 + Math.floor(Math.random() * 4),
+        }),
+      });
+      const data = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        merchants?: MtMerchant[];
+        deals?: MtDeal[];
+      } | null;
+      if (!res.ok || !data || data.ok !== true) throw new Error('AI 生成失败');
+      const merchants = (data.merchants ?? []).map((m) => {
+        mtRegisterAiMerchant(m);
+        return m;
+      });
+      const deals = (data.deals ?? []).map((d) => {
+        mtRegisterAiDeal(d);
+        return d;
+      });
+      if (merchants.length === 0 && deals.length === 0) throw new Error('空数据');
+      if (f === 'tuangou') return deals.map<FeedItem>((d) => ({ t: 'deal', d }));
+      if (f) return merchants.map<FeedItem>((m) => ({ t: 'm', m }));
+      return interleave(deals, merchants);
+    } catch {
+      return localBatch(f, exclude);
+    }
+  }, []);
 
-  // ref 与滚动位置的复位放 effect（ref 不能在渲染期读写）
+  // 重新生成：进入页面 / 下拉刷新 / 切换分类（排除名单 = 上一次已展示内容 → 出来的是全新内容）
+  const regenerate = useCallback(async () => {
+    const seq = ++genSeqRef.current;
+    const f = filterRef.current;
+    const exclude = feedRef.current.map(feedName).filter(Boolean).slice(0, 80);
+    generatingRef.current = true;
+    loadingRef.current = false;
+    setGenerating(true);
+    setLoadingMore(false);
+    setFeed([]);
+    setPullDist(0);
+    scrollRef.current?.scrollTo({ top: 0 });
+    const items = await fetchBatch(f, exclude);
+    if (genSeqRef.current !== seq) return; // 期间又触发了刷新/切分类：丢弃过期批次
+    setFeed(items);
+    generatingRef.current = false;
+    setGenerating(false);
+  }, [fetchBatch]);
+
+  // 进入页面自动生成；切换分类重新生成（需求三：进页面生成 / 切分类重新生成）
   useEffect(() => {
     filterRef.current = filter;
-    loadingRef.current = false;
-    scrollRef.current?.scrollTo({ top: 0 });
-  }, [filter]);
+    void regenerate();
+  }, [filter, regenerate]);
 
-  const loadMore = useCallback(() => {
-    if (loadingRef.current) return;
+  // 上滑追加：新内容接在下方，上方已展示内容保持不变（每批 15~20 条）
+  const loadMore = useCallback(async () => {
+    if (loadingRef.current || generatingRef.current) return;
     loadingRef.current = true;
     setLoadingMore(true);
-    const forFilter = filter;
-    window.setTimeout(() => {
+    const f = filterRef.current;
+    const exclude = feedRef.current.map(feedName).filter(Boolean).slice(0, 80);
+    const items = await fetchBatch(f, exclude);
+    if (filterRef.current !== f || generatingRef.current) {
+      // 等待期间切换了分类/触发了刷新 → 丢弃这批
       loadingRef.current = false;
-      if (filterRef.current !== forFilter) {
-        // 等待期间切换了分类 → 丢弃这批
-        setLoadingMore(false);
-        return;
-      }
-      setExtraFeed((prev) => [...prev, ...buildFeedBatch(forFilter)]);
       setLoadingMore(false);
-    }, 450);
-  }, [filter]);
+      return;
+    }
+    setFeed((prev) => [...prev, ...items]);
+    loadingRef.current = false;
+    setLoadingMore(false);
+  }, [fetchBatch]);
 
   const onHomeScroll = useCallback(() => {
     const el = scrollRef.current;
-    if (!el || loadingRef.current) return;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 280) loadMore();
+    if (!el || generatingRef.current || loadingRef.current) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 280) void loadMore();
   }, [loadMore]);
 
-  // 首屏瀑布流每次进首页/切分类都整体重洗（需求「刷新的东西都要让他不一样」）；
-  // deps 不含 extraFeed：上滑追加不影响已展示内容的顺序
-  const [mountSeed] = useState(() => Math.random());
-  const baseFeed = useMemo<FeedItem[]>(() => {
-    const base: FeedItem[] = [];
-    if (filter === 'tuangou') {
-      base.push(...MT_DEALS.map<FeedItem>((d) => ({ t: 'deal', d })));
-    } else if (filter) {
-      base.push(...MT_MERCHANTS.filter((m) => m.cats.includes(filter)).map<FeedItem>((m) => ({ t: 'm', m })));
-    } else {
-      const byId = (id: string) => MT_DEALS.find((d) => d.id === id);
-      const mById = (id: string) => MT_MERCHANTS.find((m) => m.id === id);
-      const push = (i: FeedItem | undefined) => {
-        if (i) base.push(i);
-      };
-      push(byId('d-tast-set') && { t: 'deal', d: byId('d-tast-set')! });
-      push({ t: 'list' });
-      push(byId('d-ygf-set') && { t: 'deal', d: byId('d-ygf-set')! });
-      push(mById('m-mixue') && { t: 'm', m: mById('m-mixue')! });
-      push(byId('d-zb-pizza') && { t: 'deal', d: byId('d-zb-pizza')! });
-      push(byId('d-fruit-3x1') && { t: 'deal', d: byId('d-fruit-3x1')! });
-      push(mById('m-tasiting') && { t: 'm', m: mById('m-tasiting')! });
-      push(byId('d-bf-2r') && { t: 'deal', d: byId('d-bf-2r')! });
-      push(mById('m-hotpot') && { t: 'm', m: mById('m-hotpot')! });
-      push(byId('d-mixue-hyn') && { t: 'deal', d: byId('d-mixue-hyn')! });
-      push(byId('d-mixue-mjlv') && { t: 'deal', d: byId('d-mixue-mjlv')! });
-      push(mById('m-noodle') && { t: 'm', m: mById('m-noodle')! });
-      push(mById('m-store') && { t: 'm', m: mById('m-store')! });
-      push(mById('m-fruit') && { t: 'm', m: mById('m-fruit')! });
-      push(mById('m-pharmacy') && { t: 'm', m: mById('m-pharmacy')! });
-      push(mById('m-pizza') && { t: 'm', m: mById('m-pizza')! });
-      push(mById('m-rice') && { t: 'm', m: mById('m-rice')! });
-      push(mById('m-breakfast') && { t: 'm', m: mById('m-breakfast')! });
-      push(mById('m-yangguofu') && { t: 'm', m: mById('m-yangguofu')! });
+  // ---- 下拉刷新手势：顶部继续下拉 → 松手重新生成（需求三：下拉刷新，重新生成） ----
+  const onTouchStart = (e: React.TouchEvent) => {
+    pullStartRef.current = (scrollRef.current?.scrollTop ?? 1) <= 0 ? e.touches[0].clientY : null;
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (pullStartRef.current === null || generatingRef.current) return;
+    const d = e.touches[0].clientY - pullStartRef.current;
+    if (d > 0) {
+      setPullDist(Math.min(Math.round(d * 0.45), 110));
+      setPullHint(d > 90 ? 'release' : 'pull');
     }
-    return shuffle(base);
-  }, [filter, mountSeed]);
-
-  const feed = useMemo<FeedItem[]>(() => [...baseFeed, ...extraFeed], [baseFeed, extraFeed]);
+  };
+  const onTouchEnd = () => {
+    const shouldRefresh = pullStartRef.current !== null && pullDist > 55 && !generatingRef.current;
+    pullStartRef.current = null;
+    setPullDist(0);
+    if (shouldRefresh) void regenerate();
+  };
 
   const tapCat = (c: (typeof MT_HOME_GRID)[number][number]) => {
     if (c.filter === null || c.filter === undefined) {
@@ -825,7 +898,33 @@ function HomePage({
   };
 
   return (
-    <div ref={scrollRef} onScroll={onHomeScroll} className="h-full overflow-y-auto overscroll-contain bg-[#F4F5F7] pb-4">
+    <div
+      ref={scrollRef}
+      onScroll={onHomeScroll}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      className="h-full overflow-y-auto overscroll-contain bg-[#F4F5F7] pb-4"
+    >
+      {/* 下拉刷新指示区：刷新中转圈，下拉时跟随高度提示松手 */}
+      <div
+        className="grid place-items-center overflow-hidden transition-[height] duration-150"
+        style={{ height: generating ? 52 : pullDist }}
+      >
+        {generating ? (
+          <span className="flex items-center gap-1.5 text-[12px] text-black/40">
+            <RotateCw className="h-4 w-4 animate-spin text-[#FFC300]" />
+            AI 正在生成新内容…
+          </span>
+        ) : (
+          pullDist > 8 && (
+            <span className="flex items-center gap-1 text-[12px] text-black/35">
+              <ArrowDown className={`h-3.5 w-3.5 transition-transform ${pullHint === 'release' ? 'rotate-180' : ''}`} />
+              {pullHint === 'release' ? '松手刷新' : '下拉刷新'}
+            </span>
+          )
+        )}
+      </div>
       {/* 黄头：定位 / 消息 / 扫一扫 / 搜索 */}
       <div className="bg-[#FFD100] px-4 pb-3 pt-[54px]">
         <div className="flex items-center gap-2">
@@ -887,22 +986,38 @@ function HomePage({
         </div>
       </div>
 
-      {/* 瀑布流 */}
-      <div className="mt-2 columns-2 gap-2 px-2">
-        {feed.map((it, i) =>
-          it.t === 'deal' ? (
-            <DealCard key={`deal-${it.d.id}-${i}`} deal={it.d} onOpen={() => onOpenDeal(it.d.id)} />
-          ) : it.t === 'list' ? (
-            <DealListCard key={`deal-list-${i}`} onOpen={onOpenDeal} />
-          ) : (
-            <MerchantCard key={`m-${it.m.id}-${i}`} m={it.m} onOpen={() => onOpenMerchant(it.m.id)} />
-          )
-        )}
-      </div>
-      {feed.length === 0 ? (
-        <p className="mx-3 mt-6 rounded-2xl bg-white p-8 text-center text-[13px] text-black/40">该分类下暂无商家</p>
+      {/* 瀑布流：AI 生成内容（生成中显示骨架动画） */}
+      {generating ? (
+        <div className="mt-2 columns-2 gap-2 px-2">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="mb-2 break-inside-avoid rounded-xl bg-white p-2.5">
+              <div className="h-[110px] w-full animate-pulse rounded-lg bg-black/[0.06]" />
+              <div className="mt-2 h-3.5 w-3/4 animate-pulse rounded bg-black/[0.06]" />
+              <div className="mt-1.5 h-3 w-1/2 animate-pulse rounded bg-black/[0.06]" />
+              <div className="mt-2 h-4 w-2/3 animate-pulse rounded bg-black/[0.06]" />
+            </div>
+          ))}
+        </div>
       ) : (
-        <p className="py-3 text-center text-[12px] text-black/35">{loadingMore ? '正在加载更多好店…' : '上滑加载更多'}</p>
+        <>
+          <div className="mt-2 columns-2 gap-2 px-2">
+            {filter === null && <DealListCard onOpen={onOpenDeal} />}
+            {feed.map((it, i) =>
+              it.t === 'deal' ? (
+                <DealCard key={`deal-${it.d.id}-${i}`} deal={it.d} onOpen={() => onOpenDeal(it.d.id)} />
+              ) : it.t === 'm' ? (
+                <MerchantCard key={`m-${it.m.id}-${i}`} m={it.m} onOpen={() => onOpenMerchant(it.m.id)} />
+              ) : null
+            )}
+          </div>
+          {feed.length === 0 ? (
+            <p className="mx-3 mt-6 rounded-2xl bg-white p-8 text-center text-[13px] text-black/40">该分类下暂无商家</p>
+          ) : (
+            <p className="py-3 text-center text-[12px] text-black/35">
+              {loadingMore ? 'AI 正在生成更多好店…' : '上滑加载更多 · 下拉刷新'}
+            </p>
+          )}
+        </>
       )}
     </div>
   );
@@ -2169,7 +2284,7 @@ function OrdersPage({
 
   const reorder = (o: MtOrder) => {
     if (o.kind === 'tuangou') {
-      const deal = MT_DEALS.find((d) => d.id === o.items[0]?.dishId);
+      const deal = mtDealOf(o.items[0]?.dishId ?? '');
       if (deal) {
         onOpenDeal(deal.id);
         return;
@@ -2492,7 +2607,7 @@ function OrderDetailPage({
 
   const reorder = () => {
     if (tuangou) {
-      const deal = MT_DEALS.find((d) => d.id === order.items[0]?.dishId);
+      const deal = mtDealOf(order.items[0]?.dishId ?? '');
       if (deal) {
         onOpenDeal(deal.id);
         return;
@@ -4410,7 +4525,7 @@ function FavoritesPage({
   const favs = mtLoadFavs(uid);
 
   // 收藏的团购
-  const favDeals = favs.deals.map((id) => MT_DEALS.find((d) => d.id === id)).filter((d): d is MtDeal => Boolean(d));
+  const favDeals = favs.deals.map((id) => mtDealOf(id)).filter((d): d is MtDeal => Boolean(d));
   // 收藏的菜品 → 按归属商家分组（商家卡内菜品行）
   const dishOwners = new Map<string, { m: MtMerchant; d: MtDish }>();
   for (const m of MT_MERCHANTS) {
@@ -4835,7 +4950,7 @@ function HistoryPage({
                         </div>
                       );
                     }
-                    const d = MT_DEALS.find((x) => x.id === h.id);
+                    const d = mtDealOf(h.id);
                     if (!d) return null;
                     return (
                       <div key={`${h.kind}-${h.id}`} className="flex items-start gap-3 border-b border-black/[0.04] p-3 last:border-b-0">
@@ -5466,7 +5581,7 @@ export default function MeituanApp() {
 
   const uid = mtUidOf(session);
   const merchant = merchantId ? mtMerchantOf(merchantId) : undefined;
-  const deal = dealId ? MT_DEALS.find((d) => d.id === dealId) : undefined;
+  const deal = dealId ? mtDealOf(dealId) : undefined;
   const checkoutMerchant = (checkoutMid ?? merchantId) ? mtMerchantOf((checkoutMid ?? merchantId) as string) : undefined;
 
   const pickAddr = (a: MtAddress) => {
