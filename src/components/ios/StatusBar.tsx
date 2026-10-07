@@ -5,6 +5,7 @@ import { formatIOSTime } from '@/lib/ios/clock';
 import { useBattery } from '@/lib/ios/battery';
 import { useLightForeground } from '@/lib/ios/foreground';
 import { useMusic } from '@/lib/ios/music-store';
+import { useMtIsland } from '@/lib/ios/mt-island-store';
 
 function SignalBars() {
   return (
@@ -56,7 +57,8 @@ function BatteryIcon({ level, charging, low }: { level: number; charging: boolea
  *
  * 第二十三轮反馈：灵动岛音乐弹窗（小/大）可见期间，只有「移动数据」（信号）图标消失，
  * WiFi/电量保留（真机 iOS 灵动岛同语义）；弹窗消失后图标恢复。
- * 可见性由 MusicIsland 写入 music-store.islandVisible（本组件只读，不重复维护口径）。
+ * 可见性由 MusicIsland 写入 music-store.islandVisible、美团灵动岛写入 mt-island-store
+ * （本组件只读两者任一，不重复维护口径）。
  */
 export default function StatusBar() {
   const clockSecond = useSyncExternalStore(
@@ -69,8 +71,10 @@ export default function StatusBar() {
   );
   const battery = useBattery();
   const lightText = useLightForeground();
-  // 灵动岛音乐弹窗可见时隐藏「移动数据」（信号）图标（只这一个，WiFi/电量保留）
-  const islandVisible = useMusic((s) => s.islandVisible);
+  // 灵动岛弹窗（音乐/美团配送任一）可见时隐藏「移动数据」（信号）图标（只这一个，WiFi/电量保留）
+  const musicIslandVisible = useMusic((s) => s.islandVisible);
+  const mtIslandVisible = useMtIsland((s) => s.visible);
+  const islandVisible = musicIslandVisible || mtIslandVisible;
 
   const now = clockSecond > 0 ? new Date(clockSecond * 1000) : null;
   const level = battery?.level ?? 100;
@@ -85,7 +89,7 @@ export default function StatusBar() {
     >
       <time className="w-[70px] leading-none tabular-nums tracking-tight">{now ? formatIOSTime(now) : ''}</time>
       <div className="flex items-center gap-[4px] leading-none">
-        {/* 移动数据（信号）：灵动岛音乐弹窗可见时隐藏，弹窗消失后恢复（第二十三轮反馈） */}
+        {/* 移动数据（信号）：灵动岛弹窗（音乐/美团配送）可见时隐藏，弹窗消失后恢复（第二十三轮反馈） */}
         {!islandVisible && <SignalBars />}
         {/* WiFi（加大版，整体上移一点避免视觉偏低） */}
         <svg width="21" height="16" viewBox="0 0 16 12" fill="currentColor" aria-hidden="true" className="relative -top-[1.5px]">

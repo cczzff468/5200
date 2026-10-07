@@ -16755,3 +16755,24 @@ Stage Summary:
 - 美团币入口替换为骑手（显示已收集数量），代付卡两态金额与「好友已代付」合并为一行
 - 新增资产：public/mt/riders/r1~r9.png + scripts/proc-riders.mjs（可复用的 JPG 去底流水线）
 - 改动文件：meituan.tsx、mt-proxy-detail.tsx、globals.css、scripts/proc-riders.mjs（新）、public/mt/riders/*（新）
+
+---
+Task ID: 11
+Agent: Z.ai Code (主会话)
+Task: ①代付卡片「代付金额」后面的圆角白色内层面板删除 ②地图骑手不出地图、在商家/家两图标间来回 ③配送时间 5-30 分钟自动安排 ④可点击催一下：>5分钟减5分钟、时间少减10秒~1分钟 ⑤新增外面灵动岛：小窗常驻显示剩余分钟送达、大窗显示5秒消失、点小窗展开大窗、点大窗进订单详情
+
+Work Log:
+- 【配送时长 5-30 分钟】meituan-store.ts mtDeliveryMinutesOf：31+hash%10 → 5+hash%26（5~30 分钟，订单号确定性）；接单/取餐两档由固定 2min/7min 改为按总时长等比缩放（acceptMsOf=min(2min,35%)、pickupMsOf=50%），5 分钟单也能节奏自洽；mt-proxy-pay.ts 代付路径 etaAt 硬编码 45min 改为 mtDeliveryMinutesOf 同口径；确认订单页「立即配送·预计X分钟送达」由 merchant.deliveryMin(54) 改为 mtDeliveryMinutesOf(merchant.id) 预演推导，全链统一 5-30
+- 【催一下真实化】新增 mtUrgeOrder(uid,orderId)：剩余>5分钟→etaAt-5分钟；剩余≤5分钟→随机减 10~60 秒；钳制不早于 now+8s；仅进行中外卖单可用；写库+派发 mt-orders-changed；订单详情操作行「催一下」按钮接入，toast 回显「预计提前X分钟/秒送达」
+- 【地图骑手不出图】globals.css 废弃 offset-path（绝对像素坐标在窄容器下溢出地图）→ 新 mt-rider-travel 关键帧：left/top calc(百分比-29px) 五取样点，与 DeliveryMap 重绘的 SVG 二次贝塞尔虚线 M75 139 Q241 92 443 177（viewBox 500×208 + preserveAspectRatio=none，坐标=百分比）完全同一条曲线；alternate 10s 往返=两图标间来回；任意地图尺寸下骑手恒在商家(15%,67%)与家(88.7%,85%)之间
+- 【灵动岛】新建 MeituanIsland.tsx（z-82，仿 MusicIsland 形态机）：有进行中外卖单时常驻小窗 198×33（当前骑手形象+商家接单中/商家备餐中/送货中+剩余分钟黄色「N分钟送达」，<60s 显「即将送达」）；大窗 348px（商家图+黄「预计HH:MM送达」+状态副文案+美团袋鼠标+接单/取餐/送达三节点进度条，骑手形象骑在进度头上随时间推进，配送段按真实时钟插值）；状态签名(订单id|status)变化自动展开 5 秒收回（通知层让位期间不消费签名、恢复可见补放）；点小窗=手动展开常驻、点大窗=navigateToChatSession('meituan',订单id) 进订单详情、点别处收回（z-81 捕获层）；隐身条件=聊天通知展示中/来电响铃/熄屏/关状态栏；每秒轮询 kv+mt-orders-changed 事件，剩余分钟秒级真实推算（催单后立即变小）；锁屏也显示
+- 【共享接线】新建 mt-island-store.ts（visible zustand）+ mt-rider.ts（MT_RIDERS/读写从 meituan.tsx 抽出双端共用）；MusicIsland hidden 加 mtIslandVisible 条件（美团配送优先，同锚位音乐让位）；StatusBar 信号图标隐藏条件改为 音乐||美团 灵动岛任一可见；PhoneShell dynamic 挂载 MeituanIsland
+- 【代付卡白面板】mt-proxy-detail.tsx MtPayBubble 内层「好友已代付 ¥x / 剩余支付时间」去掉 rounded-[10px]+border+bg-white+shadow 白面板（内容直接落在白卡上，保留呼吸留白），「查看详情」黄胶囊不变
+- E2E（agent-browser 500×940）：锁屏即见大窗（历史单）→解锁小窗「送货中 9分钟送达」+信号图标隐藏✓→点小窗展开大窗✓→点大窗进订单详情✓→催一下 toast「提前5分钟」ETA 12:12→12:07+小窗 8→3分钟✓→再催「提前31秒（约2分钟后送达）」✓→地图骑手三点采样 127→314→301 恒在界内且往返✓→新下一单：确认页「预计23分钟送达」✓→美团支付银行卡直付→支付瞬间大窗自动弹出（商家图+预计12:25送达=8分钟+进度条骑手在起点）✓→6秒后自动收回小窗✓→骑手形象选「圆圆」后小窗形象即时同步✓→微信聊天代付卡（请求卡 14:28 倒计时/完成卡「好友已代付 ¥6.39」）均无白色内层面板✓
+- tsc --noEmit 0 错误；eslint（meituan.tsx/MeituanIsland/MusicIsland/StatusBar/PhoneShell/meituan-store/mt-rider/mt-island-store/mt-proxy-detail）0 问题；react-hooks/set-state-in-effect 用微任务包裹规避；console 无美团相关错误
+
+Stage Summary:
+- 灵动岛全链路：支付→大窗 5 秒自动弹（预计送达+三节点进度+骑手骑在进度上）→小窗常驻倒计时→接单/取餐状态变化再弹→点大窗直达订单详情；与音乐灵动岛/聊天通知/来电按层级互斥
+- 配送时间全线 5-30 分钟（确认页/支付页/详情大字/灵动岛/状态机三源一致），催一下真实缩短 ETA（大额减 5 分钟、小额减 10-60 秒）
+- 地图骑手改为百分比轨迹与 SVG 路线同曲线，任意尺寸下都只在商家↔家两图标间巡航；代付卡片金额区白面板删除
+- 新增文件：src/components/ios/MeituanIsland.tsx、src/lib/ios/mt-island-store.ts、src/lib/ios/mt-rider.ts；改动：meituan-store.ts、mt-proxy-pay.ts、meituan.tsx、mt-proxy-detail.tsx、globals.css、MusicIsland.tsx、StatusBar.tsx、PhoneShell.tsx

@@ -163,6 +163,7 @@ import {
   mtStatusBody,
   mtUidOf,
   mtUseCoupon,
+  mtUrgeOrder,
   mtValidateSession,
   MT_STATUS_LABEL,
   PAY_TIMEOUT_MS,
@@ -176,6 +177,7 @@ import {
 } from '@/lib/ios/meituan-store';
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
 import { mtCreateProxyRequest } from '@/lib/ios/mt-proxy-pay';
+import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
 import { listContacts } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
@@ -189,37 +191,7 @@ const MT_PINK = '#FF2D7E';
 const MT_ORANGE = '#FF6000';
 
 // ================================ 骑手形象（「我的」可选，配送地图立体巡航） ================================
-/** 可选骑手形象（public/mt/riders 已去白边透明 PNG；默认圆圆） */
-const MT_RIDERS: { id: string; name: string; src: string }[] = [
-  { id: 'r4', name: '圆圆', src: '/mt/riders/r4.png' },
-  { id: 'r7', name: '蹦蹦', src: '/mt/riders/r7.png' },
-  { id: 'r1', name: '呜呜', src: '/mt/riders/r1.png' },
-  { id: 'r2', name: '惬惬', src: '/mt/riders/r2.png' },
-  { id: 'r3', name: '蓝蓝', src: '/mt/riders/r3.png' },
-  { id: 'r5', name: '帽帽', src: '/mt/riders/r5.png' },
-  { id: 'r6', name: '萝卜', src: '/mt/riders/r6.png' },
-  { id: 'r8', name: '瘫瘫', src: '/mt/riders/r8.png' },
-  { id: 'r9', name: '屁屁', src: '/mt/riders/r9.png' },
-];
-const MT_RIDER_KEY = 'mt-rider-avatar';
-
-function mtGetRiderId(): string {
-  try {
-    return localStorage.getItem(MT_RIDER_KEY) ?? MT_RIDERS[0].id;
-  } catch {
-    return MT_RIDERS[0].id;
-  }
-}
-function mtSetRiderId(id: string): void {
-  try {
-    localStorage.setItem(MT_RIDER_KEY, id);
-  } catch {
-    /* 隐私模式忽略 */
-  }
-}
-function mtRiderSrcOf(id: string): string {
-  return (MT_RIDERS.find((r) => r.id === id) ?? MT_RIDERS[0]).src;
-}
+// 形象数据与读写已抽到 @/lib/ios/mt-rider（配送地图 / 灵动岛小窗共用同一选中形象）
 
 /** 计数单位：饮品/奶茶类「杯」，其余「件」（对齐真机量词，奶茶不再用「张」） */
 const mtCountUnit = (name: string): string => (/奶茶|奶绿|奶昔|果茶|柠檬水|咖啡|豆浆|杨枝甘露|可乐|果汁|茶饮|奶蒂/.test(name) ? '杯' : '件');
@@ -2663,7 +2635,8 @@ function CheckoutSheet({
                   </span>
                 </span>
                 <span className="mt-2 flex items-center gap-1.5 border-t border-black/5 pt-2 text-[11px] text-black/40">
-                  <ClockIcon className="h-3.5 w-3.5" /> 立即配送 · 预计 {merchant.deliveryMin} 分钟送达
+                  {/* 配送时长与支付后真实 ETA 同口径（5~30 分钟，mtDeliveryMinutesOf 按商家号预演推导） */}
+                  <ClockIcon className="h-3.5 w-3.5" /> 立即配送 · 预计 {mtDeliveryMinutesOf(merchant.id)} 分钟送达
                 </span>
               </button>
 
@@ -3055,9 +3028,10 @@ function DeliveryMap({ merchantName }: { merchantName: string }) {
       <span className="absolute left-[34%] top-[60%] -rotate-3 text-[12px] tracking-wide text-black/35">河北大道</span>
       <span className="absolute bottom-[14%] left-[52%] text-[11px] text-black/30">新福佳</span>
       <span className="absolute bottom-[5%] right-[6%] text-[11px] text-black/30">赤壁国贸</span>
-      {/* 配送路线（与骑手 offset-path 轨迹一致） */}
-      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 208" fill="none" aria-hidden="true">
-        <path d="M 52 138 C 150 118 240 60 400 158" stroke="#FFC300" strokeWidth="3" strokeLinecap="round" strokeDasharray="1 9" opacity="0.85" />
+      {/* 配送路线（商家标记 → 家标记 的弧线虚线；与 .mt-rider 关键帧轨迹同一条曲线，
+          viewBox 拉伸铺满容器（preserveAspectRatio=none），坐标即百分比×(500,208)，骑手永不跑出地图） */}
+      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 208" preserveAspectRatio="none" fill="none" aria-hidden="true">
+        <path d="M 75 139 Q 241 92 443 177" stroke="#FFC300" strokeWidth="3" strokeLinecap="round" strokeDasharray="1 9" opacity="0.85" />
       </svg>
       {/* 商家标记（扁平小图标，无白底面板） */}
       <Store className="absolute left-[12%] top-[62%] h-[22px] w-[22px] text-[#FF8A00] drop-shadow-[0_2px_2px_rgba(0,0,0,0.22)]" strokeWidth={2.2} />
@@ -3407,11 +3381,21 @@ function OrderDetailPage({
       <button type="button" onClick={() => onToast('更多服务（演示）')} className="shrink-0 px-2 text-[13px] text-black/65 active:opacity-70">
         更多
       </button>
-      {['申请售后', '催一下', '联系商家'].map((t) => (
+      <button
+        type="button"
+        onClick={() => {
+          // 催一下：真实催单（etaAt 提前——剩余>5分钟减5分钟，剩余少减10秒~1分钟）
+          onToast(mtUrgeOrder(uid, order.id).msg);
+        }}
+        className="shrink-0 whitespace-nowrap rounded-full border border-black/10 bg-white px-4 py-2.5 text-[12px] text-black/70 active:bg-black/5"
+      >
+        催一下
+      </button>
+      {['申请售后', '联系商家'].map((t) => (
         <button
           key={t}
           type="button"
-          onClick={() => onToast(t === '催一下' ? '已提醒商家尽快出餐' : t === '申请售后' ? '售后申请已提交（演示）' : '已发起联系（演示）')}
+          onClick={() => onToast(t === '申请售后' ? '售后申请已提交（演示）' : '已发起联系（演示）')}
           className="shrink-0 whitespace-nowrap rounded-full border border-black/10 bg-white px-4 py-2.5 text-[12px] text-black/70 active:bg-black/5"
         >
           {t}

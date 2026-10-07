@@ -571,19 +571,28 @@ export function mtGetOrder(uid: string, id: string): MtOrder | undefined {
 
 /**
  * 支付后全程按真实外卖节奏推进（重启按时间戳补推进）：
- * 约2分钟商家接单 → 约7分钟骑手取餐 → 预计送达时间(etaAt=支付后31~40分钟)系统确认送达；
+ * 商家接单/骑手取餐两档按配送总时长等比缩放（接单 ≤2 分钟、取餐在总时长 50% 处）；
+ * 预计送达时间(etaAt=支付后5~30分钟)系统确认送达；
  * etaAt 缺失的旧订单按 45 分钟兜底；团购单支付后即完成。
  * 时长与支付页「现在支付，预计XX:XX送达」承诺、详情页 ETA 大字完全一致（同一订单号确定性推导）。
  */
+/** 商家接单上限（配送总时长更长时也最多 2 分钟接单） */
 const ACCEPT_MS = 2 * 60_000;
-const PICKUP_MS = 7 * 60_000;
+/** etaAt 缺失的旧订单兜底送达时长 */
 const DELIVERED_MS = 45 * 60_000;
 /** 待支付超时（自动取消，对齐真机 15 分钟） */
 export const PAY_TIMEOUT_MS = 15 * 60_000;
 
-/** 按订单号确定性推导配送时长（31~40 分钟）：支付页 ETA、状态机送达时刻、详情页承诺保持一致 */
+/** 按订单号确定性推导配送时长（5~30 分钟）：支付页 ETA、状态机送达时刻、详情页承诺保持一致 */
 export const mtDeliveryMinutesOf = (orderId: string): number =>
-  31 + ([...orderId].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) >>> 0, 7) % 10);
+  5 + ([...orderId].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) >>> 0, 7) % 26);
+
+/** 配送总时长（毫秒） */
+const deliveryMsOf = (o: { id: string }): number => mtDeliveryMinutesOf(o.id) * 60_000;
+/** 商家接单档（总时长 ×35%，上限 2 分钟）：5 分钟单约 1 分 45 秒接单，30 分钟单 2 分钟接单 */
+const acceptMsOf = (o: { id: string }): number => Math.min(ACCEPT_MS, Math.round(deliveryMsOf(o) * 0.35));
+/** 骑手取餐档（总时长 ×50%）：接单后备餐到一半时长即取餐出发 */
+const pickupMsOf = (o: { id: string }): number => Math.round(deliveryMsOf(o) * 0.5);
 
 const RIDER_POOL = ['宋世超', '刘志伟', '王建平', '李海峰', '赵国栋', '陈志强'];
 
@@ -615,7 +624,7 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
         break;
       }
       if (cur.status === 'pendingAccept') {
-        if (cur.paidAt && now - cur.paidAt >= ACCEPT_MS) {
+        if (cur.paidAt && now - cur.paidAt >= acceptMsOf(cur)) {
           // 出行单（机票/火车票）：无骑手概念，直接进入「出行中」
           step('accepted', cur.kind === 'flight' || cur.kind === 'train' ? {} : { riderName: RIDER_POOL[Math.floor(now / 60000) % RIDER_POOL.length] });
           continue;
@@ -632,7 +641,7 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
           }
           break;
         }
-        if (cur.paidAt && now - cur.paidAt >= PICKUP_MS) {
+        if (cur.paidAt && now - cur.paidAt >= pickupMsOf(cur)) {
           step('delivering');
           continue;
         }
@@ -793,6 +802,50 @@ export function mtStatusBody(o: MtOrder): string {
     case 'canceled':
       return o.cancelReason ?? '订单已取消';
   }
+}
+
+// ---------------- 催单（催一下） ----------------
+
+export interface MtUrgeResult {
+  ok: boolean;
+  /** 提示文案（催单结果：提前了多少） */
+  msg: string;
+  /** 催单后的预计送达时刻（成功时返回） */
+  etaAt?: number;
+}
+
+/**
+ * 催一下：把预计送达时间（etaAt）提前——
+ * - 剩余 > 5 分钟：直接提前 5 分钟；
+ * - 剩余 ≤ 5 分钟（时间少）：随机提前 10 秒 ~ 1 分钟；
+ * - 提前后不早于「现在 + 8 秒」（再催就真的马上送到了）。
+ * 仅对进行中的外卖单生效（pendingAccept/accepted/delivering 且已有 etaAt）。
+ */
+export function mtUrgeOrder(uid: string, orderId: string): MtUrgeResult {
+  const orders = mtLoadOrders(uid);
+  const idx = orders.findIndex((o) => o.id === orderId);
+  if (idx < 0) return { ok: false, msg: '订单不存在' };
+  const o = orders[idx];
+  if (o.status !== 'pendingAccept' && o.status !== 'accepted' && o.status !== 'delivering') {
+    return { ok: false, msg: '当前状态无法催单' };
+  }
+  if (!o.etaAt) return { ok: false, msg: '当前状态无法催单' };
+  const now = Date.now();
+  const left = o.etaAt - now;
+  if (left <= 0) return { ok: false, msg: '骑手马上就到，无需催单' };
+  // 剩余多 → 减 5 分钟；剩余少（≤5 分钟）→ 减 10 秒 ~ 1 分钟
+  const cutMs = left > 5 * 60_000 ? 5 * 60_000 : (10 + Math.floor(Math.random() * 51)) * 1000;
+  const etaAt = Math.max(now + 8_000, o.etaAt - cutMs);
+  const savedSec = Math.round((o.etaAt - etaAt) / 1000);
+  orders[idx] = { ...o, etaAt };
+  mtSaveOrders(uid, orders);
+  window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+  const leftMin = Math.ceil((etaAt - now) / 60_000);
+  const msg =
+    savedSec >= 60
+      ? `已催单，骑手正在加急，预计提前${Math.floor(savedSec / 60)}分钟送达`
+      : `已催单，骑手正在加急，预计提前${savedSec}秒送达（约${leftMin}分钟后送达）`;
+  return { ok: true, msg, etaAt };
 }
 
 // ---------------- 下单金额计算 ----------------

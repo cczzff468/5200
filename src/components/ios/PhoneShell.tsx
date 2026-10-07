@@ -56,6 +56,10 @@ const MusicGlobalMini = dynamic(() => import('./MusicGlobalMini'), { ssr: false 
 // （小弹窗常驻 / 大弹窗 5 秒 / 点小弹窗展开 / 点大弹窗跳听歌 / 点别处收回；消息通知展示期间隐身）
 const MusicIsland = dynamic(() => import('./MusicIsland'), { ssr: false });
 
+// 美团外卖灵动岛（用户本轮需求）：有进行中外卖单时常驻小窗（骑手形象+送货中+剩余分钟送达），
+// 状态变化自动展开大窗 5 秒（商家图+预计送达+三节点进度），点小窗展开 / 点大窗进订单详情
+const MeituanIsland = dynamic(() => import('./MeituanIsland'), { ssr: false });
+
 // 全局语音通话层（全屏通话页 + 悬浮小窗）：懒加载，仅在通话会话存在时渲染内容
 const GlobalCallLayer = dynamic(() => import('./GlobalCallLayer'), { ssr: false });
 
@@ -367,6 +371,10 @@ export default function PhoneShell() {
 
         {/* 音乐灵动岛（z-81：同位盖住静态灵动岛，低于聊天通知 z-93；消息通知展示期间整层隐身） */}
         <MusicIsland />
+
+        {/* 美团外卖灵动岛（z-82：同锚位盖住音乐灵动岛 z-81，低于聊天通知 z-93；
+            小窗常驻（骑手+送货中+剩余分钟），状态变化大窗 5 秒，点大窗进订单详情） */}
+        <MeituanIsland />
 
         {/* 通知权限友好申请卡（首次使用时展示，应用内说明 → 用户手势内才弹浏览器授权框） */}
         <NotifyPermissionCard />

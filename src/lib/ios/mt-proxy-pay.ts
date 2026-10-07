@@ -15,7 +15,7 @@
 import { kvGet, kvSet } from './idb-kv';
 import { getContact } from './contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '../contacts';
-import { mtLoadOrders, mtSaveOrders, type MtOrder } from './meituan-store';
+import { mtDeliveryMinutesOf, mtLoadOrders, mtSaveOrders, type MtOrder } from './meituan-store';
 
 // ---------------- 数据模型 ----------------
 
@@ -269,7 +269,8 @@ export function mtProxyPayOrder(pid: string): MtProxyPayResult {
     ...cur,
     status: tuangou ? 'completed' : 'pendingAccept',
     paidAt: now,
-    ...(tuangou ? {} : { etaAt: now + 45 * 60_000 }),
+    // 配送时长与收银台直付同口径（5~30 分钟，按订单号确定性推导）
+    ...(tuangou ? {} : { etaAt: now + mtDeliveryMinutesOf(cur.id) * 60_000 }),
     payIdp: p.idp,
     payChannelLabel: `好友代付 · ${channel}（${p.contactName}）`,
     // 好友代付不落本机账户渠道：退款原路退还代付人（mtRefundToOrigin 无 methodId 自然跳过本机入账）

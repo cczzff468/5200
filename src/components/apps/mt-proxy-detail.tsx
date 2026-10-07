@@ -3,7 +3,7 @@
 /**
  * 美团「找人代付」共享 UI（微信/QQ 聊天端与美团端共用）：
  * - MtPayBubble：聊天里的代付卡片气泡（白卡 + 美团logo/交易保障 + 标题 +
- *   黄色 3D 人物横幅 + 内层倒计时/「好友已代付 ¥x」合并卡 + 查看详情钮；req=代付请求卡 / done=代付完成卡；
+ *   黄色 3D 人物横幅 + 倒计时/「好友已代付 ¥x」合并行（内层白面板已按需求删除）+ 查看详情钮；req=代付请求卡 / done=代付完成卡；
  *   请求卡付款后由 kv 状态驱动变已代付灰化，与红包/转账卡同语义）；
  * - MtProxyDetailPage：点卡片进入的「代付详情」全屏页（对齐真机截图）：
  *   待付 = 请求人头像行 + 等待代付 + 付款须知 + 立即代付（聊天端 canPay）；
@@ -102,8 +102,8 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
         </span>
       </span>
 
-      {/* 内层信息卡：剩余支付时间倒计时 / 好友已代付+金额（合并为一行） + 查看详情 */}
-      <span className="relative mt-2 block rounded-[10px] border border-black/[0.05] bg-white px-3 pb-3 pt-2.5 text-center shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
+      {/* 金额区（内层白色圆角面板已按需求删除：文字直接落在卡片上，仅保留呼吸感留白） */}
+      <span className="relative mt-2.5 block px-3 pb-1 pt-1 text-center">
         {role === 'done' || reqDone ? (
           <>
             <span className="mt-0.5 block text-[21px] font-bold leading-tight tracking-tight text-black/90" data-testid={`mt-pay-bubble-${role}-status`}>
@@ -121,7 +121,7 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
             </span>
           </>
         )}
-        <span className="mt-2 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[14px] font-bold text-black/85">查看详情</span>
+        <span className="mt-2.5 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[14px] font-bold text-black/85">查看详情</span>
       </span>
     </button>
   );
