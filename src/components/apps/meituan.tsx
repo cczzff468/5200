@@ -66,7 +66,6 @@ import {
   Home as HomeIcon,
   House,
   ImageOff,
-  ImagePlus,
   Languages,
   Laugh,
   LayoutGrid,
@@ -177,7 +176,7 @@ import {
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
 import { mtCreateProxyRequest } from '@/lib/ios/mt-proxy-pay';
 import { mtCreateOrderShare } from '@/lib/ios/mt-order-share';
-import { MT_RIDERS, mtAddCustomRider, mtAllRiders, mtGetCustomRiders, mtGetRiderId, mtRemoveWhiteEdges, mtRiderSrcOf, mtSetRiderId, type MtRider } from '@/lib/ios/mt-rider';
+import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
 import { listContacts } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
@@ -5802,31 +5801,7 @@ function MyPage({
   // 骑手形象选择（原美团币入口改为骑手，选中形象用于配送地图）
   const [riderOpen, setRiderOpen] = useState(false);
   const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
-  // 用户上传骑手形象：手机相册选图 → 前端 canvas 去白边 → dataURL 持久化；上传期间按钮转圈
-  const [customRiders, setCustomRiders] = useState<MtRider[]>([]);
-  const [uploadingRider, setUploadingRider] = useState(false);
-  const riderFileRef = useRef<HTMLInputElement | null>(null);
-  // 打开弹层时读一次本机自定义形象（避免 effect 内 setState）；上传后本地同步追加
-  const openRiderSheet = () => {
-    setCustomRiders(mtGetCustomRiders());
-    setRiderOpen(true);
-  };
-  const handleRiderUpload = async (file: File) => {
-    if (uploadingRider) return;
-    setUploadingRider(true);
-    const src = await mtRemoveWhiteEdges(file);
-    setUploadingRider(false);
-    if (!src) {
-      onToast('没能认出形象，换张背景简单的图片试试');
-      return;
-    }
-    const rider = mtAddCustomRider(src);
-    setCustomRiders((list) => [...list, rider]);
-    setRiderId(rider.id);
-    mtSetRiderId(rider.id);
-    setRiderOpen(false);
-    onToast('形象已去白边并保存，配送地图即刻上身');
-  };
+  const openRiderSheet = () => setRiderOpen(true);
 
   const cell = (Icon: LucideIcon, label: string, badge: number | null, onTap: () => void, tint = 'text-black/75') => (
     <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-70">
@@ -5946,7 +5921,7 @@ function MyPage({
         <button type="button" data-testid="my-rider" onClick={openRiderSheet} className="flex flex-col items-center gap-1.5 active:opacity-70">
           <span className="relative">
             <img src={mtRiderSrcOf(riderId)} alt="骑手形象" draggable={false} className="h-[24px] w-[24px] object-contain" />
-            <span className="absolute -right-2 -top-1 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-[#FF3B30] px-1 text-[9px] font-bold text-white">{MT_RIDERS.length + customRiders.length}</span>
+            <span className="absolute -right-2 -top-1 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-[#FF3B30] px-1 text-[9px] font-bold text-white">{MT_RIDERS.length}</span>
           </span>
           <span className="text-[11px] text-black/70">骑手</span>
         </button>
@@ -6028,24 +6003,9 @@ function MyPage({
                   <X className="h-5 w-5 text-black/55" />
                 </button>
               </div>
-              <p className="px-5 pb-3 text-[12px] text-black/40">内置 {MT_RIDERS.length} 位 + 自定义 {customRiders.length} 位 · 骑手会带着你的订单跑腿送餐</p>
+              <p className="px-5 pb-3 text-[12px] text-black/40">内置 {MT_RIDERS.length} 位骑手 · 骑手会带着你的订单跑腿送餐</p>
               <div className="grid max-h-[52vh] grid-cols-3 gap-3 overflow-y-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {/* 上传形象：手机相册选图 → 自动去白边变透明 PNG（前端 canvas 算法），存本机 */}
-                <button
-                  type="button"
-                  data-testid="rider-upload"
-                  onClick={() => riderFileRef.current?.click()}
-                  className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border-[1.5px] border-dashed border-black/20 bg-[#FBFBFC] px-2 pb-2.5 pt-3 text-black/40 transition-all active:scale-[0.97] active:bg-black/[0.03]"
-                >
-                  {uploadingRider ? (
-                    <RotateCw className="h-8 w-8 animate-spin text-black/45" strokeWidth={1.8} />
-                  ) : (
-                    <ImagePlus className="h-8 w-8 text-black/45" strokeWidth={1.8} />
-                  )}
-                  <span className="text-[12px] text-black/60">{uploadingRider ? '去白边中…' : '上传形象'}</span>
-                  <span className="text-[10px] leading-none text-black/35">自动去白边 · 变立体</span>
-                </button>
-                {[...customRiders, ...MT_RIDERS].map((r) => {
+                {MT_RIDERS.map((r) => {
                   const active = r.id === riderId;
                   return (
                     <button
@@ -6065,31 +6025,17 @@ function MyPage({
                           <Check className="h-3 w-3 text-black/80" strokeWidth={3} />
                         </span>
                       )}
-                      {/* 自定义形象叠立体投影（与地图巡航同款阴影），内置图已带描边不加 */}
                       <img
                         src={r.src}
                         alt={r.name}
                         draggable={false}
                         className="h-20 w-20 object-contain"
-                        style={r.custom ? { filter: 'drop-shadow(0 4px 3px rgba(0,0,0,0.28)) drop-shadow(0 1.5px 2px rgba(0,0,0,0.2))' } : undefined}
                       />
                       <span className={`mt-1 text-[12px] ${active ? 'font-semibold text-black/85' : 'text-black/60'}`}>{r.name}</span>
                     </button>
                   );
                 })}
               </div>
-              <input
-                ref={riderFileRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                data-testid="rider-upload-input"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  e.target.value = '';
-                  if (f) void handleRiderUpload(f);
-                }}
-              />
             </motion.div>
           </motion.div>
         )}

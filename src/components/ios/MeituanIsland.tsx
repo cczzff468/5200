@@ -284,9 +284,9 @@ export default function MeituanIsland() {
                   {subLabelOf(active)}
                 </p>
               </div>
-              {/* 美团袋鼠标（白底圆角方块） */}
+              {/* 美团袋鼠标（白底圆角方块；图标自带圆角白描边，不再二次裁切） */}
               <span className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[9px] bg-white">
-                <img src="/icons/meituan-app.png" alt="" draggable={false} className="h-[26px] w-[26px] rounded-[6px] object-contain" />
+                <img src="/icons/meituan-app.png" alt="" draggable={false} className="h-[30px] w-[30px] object-contain" />
               </span>
             </div>
 

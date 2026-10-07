@@ -306,12 +306,64 @@ function buildUser(a: GenerateArgs): string {
     '字段规范（示例名称仅示意格式，输出中禁止出现「老灶火锅」「炭一烤肉」等示例名）：',
     `merchant = ${merchantSchema}`,
     `deal = ${dealSchema}`,
-    `要求：rating 3.8~5.0；monthSale 50~90000 整数；price 与 origPrice 自洽（origPrice 更高，折扣约 3~8 折）；distanceKm 0.3~8 一位小数；deals 为 0~2 个优惠文案；merchant 的 menu 分「招牌菜/小吃甜品/饮品」2~3 个 sec、共 8~10 个菜品（招牌菜 5~6 个+小吃甜品 2~3 个+饮品 1~2 个，items 只含 name/price）；tag 必须从以下白名单中选最贴切的一个，禁止自造词：hotpot、barbecue、bbq、chinese-food、stir-fry、japanese、sushi、thai、asian、curry、kimchi、pizza、burger、fried-chicken、fast-food、milk-tea、coffee、tea、juice、dessert、ice-cream、seafood、steak、beef、pork、duck、lamb、salad、sandwich、bread、dumplings、porridge、soup、noodles、rice、rice-bowl、breakfast、fruit、braised、spicy、store、flower、medicine、food；deal 的 packages 为 2~3 个可选套餐（name 以 A套餐/B套餐开头且简短、price 递增、每个含 3~6 个 items 短语）；deal 的 menu 用「XX N选1」分节（如「烤肉 3选1」，供用户购买时选择，另加 1 个「固选」节）。全部简体中文（tag 除外），数据要合理逼真。输出尽量精炼，确保 ${a.count} 条全部输出完整。`,
+    `要求：rating 3.8~5.0；monthSale 50~90000 整数；price 与 origPrice 自洽（origPrice 更高，折扣约 3~8 折）；distanceKm 0.3~8 一位小数；deals 为 0~2 个优惠文案；merchant 的 menu 分「招牌菜/小吃甜品/饮品」2~3 个 sec、共 10~14 个菜品（招牌菜 6~8 个+小吃甜品 2~4 个+饮品 2 个，items 只含 name/price）；tag 必须从以下白名单中选最贴切的一个，禁止自造词：hotpot、barbecue、bbq、chinese-food、stir-fry、japanese、sushi、thai、asian、curry、kimchi、pizza、burger、fried-chicken、fast-food、milk-tea、coffee、tea、juice、dessert、ice-cream、seafood、steak、beef、pork、duck、lamb、salad、sandwich、bread、dumplings、porridge、soup、noodles、rice、rice-bowl、breakfast、fruit、braised、spicy、store、flower、medicine、food；deal 的 packages 为 2~3 个可选套餐（name 以 A套餐/B套餐开头且简短、price 递增、每个含 3~6 个 items 短语）；deal 的 menu 用「XX N选1」分节（如「烤肉 3选1」，供用户购买时选择，另加 1 个「固选」节）。全部简体中文（tag 除外），数据要合理逼真。输出尽量精炼，确保 ${a.count} 条全部输出完整。`,
     '只输出一个 JSON 数组，不要 markdown 代码块，不要解释。',
   ].filter(Boolean).join('\n');
 }
 
 // ---------------- 数据塑形 ----------------
+
+/** 兜底菜单库：模型菜单缺失/过少时按商家 tag 分组补齐，保证每店 7~15 个菜 */
+type FallbackMenu = { sec: string; items: [string, number][] }[];
+const FALLBACK_MENUS: Record<string, FallbackMenu> = {
+  chinese: [
+    { sec: '招牌菜', items: [['红烧狮子头', 32], ['宫保鸡丁', 26], ['糖醋排骨', 38], ['鱼香肉丝', 24], ['清蒸鲈鱼', 48], ['辣子鸡丁', 36], ['番茄牛腩', 42]] },
+    { sec: '小吃主食', items: [['手工水饺', 12], ['葱油饼', 8], ['扬州炒饭', 16], ['鲜肉小笼包', 13]] },
+    { sec: '饮品', items: [['鲜榨橙汁', 9], ['酸梅汤', 6], ['绿豆沙', 7]] },
+  ],
+  hotpot: [
+    { sec: '招牌菜', items: [['招牌毛肚', 38], ['鲜切牛肉', 45], ['手打虾滑', 32], ['蜜汁烤翅', 18], ['香辣烤鱼', 58], ['雪花肥牛', 52], ['烤羊肉串', 6]] },
+    { sec: '小吃甜品', items: [['红糖糍粑', 12], ['烤茄子', 10], ['烤韭菜', 8], ['蒜蓉扇贝', 15]] },
+    { sec: '饮品', items: [['冰镇酸梅汤', 6], ['王老吉', 5]] },
+  ],
+  sushi: [
+    { sec: '招牌菜', items: [['三文鱼刺身', 48], ['炙烤寿司拼盘', 39], ['鳗鱼饭', 36], ['天妇罗大虾', 28], ['金枪鱼手卷', 22], ['海鲜乌冬面', 30], ['咖喱猪排饭', 34]] },
+    { sec: '小吃甜品', items: [['抹茶大福', 12], ['玉子烧', 10], ['章鱼小丸子', 15], ['海苔便当卷', 14]] },
+    { sec: '饮品', items: [['玄米茶', 8], ['可尔必思', 9], ['朝日生啤', 15]] },
+  ],
+  western: [
+    { sec: '招牌菜', items: [['经典玛格丽特披萨', 39], ['芝士牛肉堡', 22], ['香辣炸鸡桶', 45], ['黑椒牛排', 68], ['火腿三明治', 18], ['凯撒鸡肉沙拉', 26], ['蒜香法棍', 12]] },
+    { sec: '小吃甜品', items: [['经典薯条', 10], ['洋葱圈', 12], ['鸡米花', 14], ['提拉米苏', 16]] },
+    { sec: '饮品', items: [['美式咖啡', 12], ['柠檬气泡水', 10], ['可口可乐', 4]] },
+  ],
+  drinks: [
+    { sec: '招牌饮品', items: [['厚芋泥波波奶茶', 15], ['生椰拿铁', 18], ['杨枝甘露', 16], ['珍珠奶茶', 10], ['芒果冰沙', 13], ['茉莉奶绿', 11], ['抹茶星冰乐', 22]] },
+    { sec: '甜品小食', items: [['葡式蛋挞', 6], ['巴斯克蛋糕', 18], ['雪顶泡芙', 9], ['芋圆烧仙草', 14]] },
+  ],
+  store: [
+    { sec: '热销推荐', items: [['冰镇可乐 500ml', 3], ['农夫山泉 550ml', 2], ['抽纸 3层8包', 12], ['乐事薯片 135g', 6], ['奥利奥家庭装', 10], ['士力架 4连包', 9], ['垃圾袋 45只装', 8]] },
+    { sec: '水果鲜食', items: [['海南香蕉 1把', 6], ['红富士苹果 4个', 12], ['海苔饭团', 5], ['金枪鱼三明治', 9]] },
+  ],
+};
+
+/** 白名单 tag → 兜底菜单分组（未命中的落 chinese 通用组） */
+const MENU_GROUP_OF_TAG: Record<string, string> = {
+  'chinese-food': 'chinese', 'stir-fry': 'chinese', braised: 'chinese', spicy: 'chinese',
+  rice: 'chinese', 'rice-bowl': 'chinese', breakfast: 'chinese', dumplings: 'chinese',
+  porridge: 'chinese', soup: 'chinese', noodles: 'chinese', food: 'chinese', asian: 'chinese', pork: 'chinese',
+  hotpot: 'hotpot', barbecue: 'hotpot', bbq: 'hotpot', kimchi: 'hotpot', duck: 'hotpot', lamb: 'hotpot', beef: 'hotpot',
+  japanese: 'sushi', sushi: 'sushi', seafood: 'sushi', thai: 'sushi', curry: 'sushi',
+  pizza: 'western', burger: 'western', 'fried-chicken': 'western', 'fast-food': 'western',
+  steak: 'western', sandwich: 'western', bread: 'western', salad: 'western',
+  'milk-tea': 'drinks', coffee: 'drinks', tea: 'drinks', juice: 'drinks', dessert: 'drinks', 'ice-cream': 'drinks',
+  store: 'store', flower: 'store', medicine: 'store', fruit: 'store',
+};
+
+/** 取商家对应的兜底菜单组（未知 tag 落中餐组） */
+function fallbackMenuFor(fallbackTag: string | null): FallbackMenu {
+  const key = (fallbackTag && MENU_GROUP_OF_TAG[fallbackTag]) || 'chinese';
+  return FALLBACK_MENUS[key] ?? FALLBACK_MENUS.chinese;
+}
 
 function coerceDish(merchantName: string, idx: number, raw: unknown, fallbackTag: string | null): MtDish {
   // 模型可能把菜品返回为字符串（"毛肚"）而非对象：统一收窄
@@ -334,7 +386,8 @@ function coerceDish(merchantName: string, idx: number, raw: unknown, fallbackTag
   };
 }
 
-/** 商家菜单塑形：优先「分节」结构（招牌菜/小吃甜品/饮品），兼容旧版扁平菜品数组；保证 5~10 个菜 */
+/** 商家菜单塑形：优先「分节」结构（招牌菜/小吃甜品/饮品），兼容旧版扁平菜品数组；
+ *  模型返回缺失/过少时按商家 tag 从兜底菜单库补齐，保证 7~15 个菜 */
 function coerceMenuSections(merchantName: string, rawMenu: unknown, fallbackTag: string | null): { cat: string; dishes: MtDish[] }[] {
   const arr = Array.isArray(rawMenu) ? rawMenu : [];
   const out: { cat: string; dishes: MtDish[] }[] = [];
@@ -351,7 +404,27 @@ function coerceMenuSections(merchantName: string, rawMenu: unknown, fallbackTag:
     const dishes = arr.slice(0, 10).map((d, i) => coerceDish(merchantName, i, d, fallbackTag));
     if (dishes.length > 0) out.push({ cat: '推荐', dishes });
   }
-  if (out.length === 0) out.push({ cat: '推荐', dishes: [coerceDish(merchantName, 0, {}, fallbackTag)] });
+  // 补齐：菜单总数 < 7（模型漏返/字段错乱）→ 按商家 tag 从兜底库取菜补入，目标 7~12 个
+  let total = out.reduce((n, s) => n + s.dishes.length, 0);
+  if (total < 7) {
+    const group = fallbackMenuFor(fallbackTag);
+    const target = 7 + (imgVariant(`menu-${merchantName}`) % 6);
+    const seen = new Set(out.flatMap((s) => s.dishes.map((d) => d.name)));
+    outer: for (const pSec of group) {
+      for (const [name, price] of pSec.items) {
+        if (total >= target || total >= 15) break outer;
+        if (seen.has(name)) continue;
+        seen.add(name);
+        let sec = out.find((s) => s.cat === pSec.sec);
+        if (!sec) {
+          sec = { cat: pSec.sec, dishes: [] };
+          out.push(sec);
+        }
+        sec.dishes.push(coerceDish(merchantName, total, { name, price }, fallbackTag));
+        total++;
+      }
+    }
+  }
   return out;
 }
 

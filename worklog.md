@@ -16852,3 +16852,20 @@ Work Log:
 
 Stage Summary:
 - 全部功能实测通过；推送因 PAT 权限不足受阻，等用户授权后 git push -u origin main 即可
+
+---
+Task ID: 2
+Agent: Z.ai Code (main)
+Task: 店铺菜品 7-15 个 + 动态卡片文案（官方保障/美团订单）+ 删除骑手自定义上传 + 灵动岛大窗图标裁剪修复
+
+Work Log:
+- mt-feed/route.ts：新增 FALLBACK_MENUS 兜底菜单库（chinese/hotpot/sushi/western/drinks/store 六组，按 tag 白名单映射 MENU_GROUP_OF_TAG）；coerceMenuSections 总菜数 <7 时从兜底组补齐（同 cat 合并节、跳重名、目标 7~12、上限 15）；AI prompt 菜品数 8~10 → 10~14；curl 实测兜底补齐生效（10 菜/8 菜）
+- mt-share-card.tsx：头部「官方同步」→「官方保障」；底注「{fromName} 的美团订单 · 状态实时同步」→「美团订单」
+- meituan.tsx + mt-rider.ts：删除骑手自定义上传全链路（上传按钮/隐藏 file input/customRiders state/handleRiderUpload/mtGetCustomRiders/mtAddCustomRider/mtAllRiders/mtRemoveWhiteEdges/ImagePlus 导入）；弹层文案改「内置 22 位骑手」；mtRiderSrcOf/mtCurrentRider 直查 MT_RIDERS
+- MeituanIsland.tsx 大窗美团图标：去掉 img 的 rounded-[6px]（图标本体自带圆角白描边且无透明边距，二次圆角裁切把描边四角切出直角缺口）+ 尺寸 26→30
+- E2E（agent-browser）：登录墙（微信一键登录→同意授权）→美团首页→和风小筑进店（招牌菜 7 种+小吃甜品 4 种=11 菜，图片正确匹配日料）→我的骑手弹层（22 位内置、无上传入口、文案正确）→加购三文鱼刺身→提交订单→工商银行卡支付 ¥45 成功→灵动岛大窗弹出（美团图标白描边完整无缺角）→订单详情分享→微信好友晴晴→toast 发送成功→IndexedDB 注入 user(凡凡 fanfan001)/char(晴晴) 后微信登录→聊天卡片：头部「官方保障」✓、底注「美团订单」✓、五段时间线实时同步至已送达 23:36
+- npx eslint（meituan.tsx/mt-rider.ts/route.ts/mt-share-card.tsx/MeituanIsland.tsx）0 问题；tsc --noEmit 0 错误
+
+Stage Summary:
+- 每店菜单保证 7~15 个（AI 正常 10~14，缺失兜底补齐 7~12）；分享卡文案简化为「官方保障/美团订单」；骑手形象回归 22 位纯内置；灵动岛大窗图标描边完整
+- 微信登录账号数据源=联系人 App kind=user 记录（IndexedDB ios-phone-db/contacts），E2E 用注入法建号

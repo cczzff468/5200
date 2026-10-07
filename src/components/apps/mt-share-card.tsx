@@ -75,7 +75,7 @@ export function MtShareBubble({ sid }: { sid: string }) {
         <span className="rounded-full bg-[#FFF3D1] px-1.5 py-[2px] text-[10px] font-medium leading-none text-[#B77900]">订单动态</span>
         <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#00B862]">
           <ShieldCheck className="h-[13px] w-[13px]" strokeWidth={2.2} />
-          官方同步
+          官方保障
         </span>
       </span>
 
@@ -153,7 +153,7 @@ export function MtShareBubble({ sid }: { sid: string }) {
 
       {/* 底注 */}
       <span className="relative mt-2 block border-t border-black/[0.05] pt-1.5 text-[10px] text-black/30">
-        {share.fromName} 的美团订单 · 状态实时同步
+        美团订单
       </span>
     </div>
   );
