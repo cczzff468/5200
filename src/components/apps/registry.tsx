@@ -362,7 +362,7 @@ const APP_DEFS: AppDef[] = [
   {
     id: 'meituan',
     name: '美团',
-    image: '/icons/meituan.png',
+    image: '/icons/meituan-app.png',
     // 备用线条图（有 image 时不会展示）：外卖袋贴近美团黄袋形象
     glyph: <UtensilsCrossed className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: MeituanApp,

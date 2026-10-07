@@ -252,7 +252,7 @@ export const NOTIFY_APP_ICON: Record<NotifyApp, string> = {
   wechat: '/icons/wechat.png',
   qq: '/icons/qq.png',
   chat: '/icons/chat.png',
-  meituan: '/icons/meituan.png',
+  meituan: '/icons/meituan-app.png',
 };
 
 let webPermAsked = false;

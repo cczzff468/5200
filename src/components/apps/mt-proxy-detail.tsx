@@ -74,7 +74,7 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
 
       {/* 头部：美团 logo + 交易保障 */}
       <span className="relative flex items-center gap-1.5">
-        <img src="/icons/meituan.png" alt="" className="h-[22px] w-[22px] rounded-full object-cover" />
+        <img src="/icons/meituan-app.png" alt="" className="h-[22px] w-[22px] rounded-full object-cover" />
         <span className="text-[13px] font-semibold text-black/85">美团</span>
         <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#00B862]">
           <ShieldCheck className="h-[13px] w-[13px]" strokeWidth={2.2} />

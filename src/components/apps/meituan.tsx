@@ -545,7 +545,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
           <div className="w-full rounded-2xl bg-white p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2.5">
               <img src={auth.idp === 'wx' ? '/icons/wechat.png' : '/icons/qq.png'} alt="" className="h-9 w-9 rounded-lg" />
-              <img src="/icons/meituan.png" alt="" className="h-6 w-6 rounded-md" />
+              <img src="/icons/meituan-app.png" alt="" className="h-6 w-6 rounded-md" />
               <p className="text-[15px] font-semibold text-black/80">{auth.idp === 'wx' ? '微信' : 'QQ'}授权登录</p>
             </div>
             <p className="mt-3 text-[13px] text-black/55">美团申请获取以下信息：</p>
@@ -5850,7 +5850,7 @@ function MyPage({
             <img src={session.avatar} alt="" className="h-[54px] w-[54px] rounded-full object-cover ring-2 ring-white/70" />
           ) : (
             <span className="grid h-[54px] w-[54px] place-items-center overflow-hidden rounded-full bg-white shadow">
-              <img src="/icons/meituan.png" alt="" className="h-full w-full object-cover" />
+              <img src="/icons/meituan-app.png" alt="" className="h-full w-full object-cover" />
             </span>
           )}
           <div className="min-w-0 flex-1">
@@ -8993,7 +8993,7 @@ export default function MeituanApp() {
   if (booting) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-[#FFD100]">
-        <img src="/icons/meituan.png" alt="美团" className="h-20 w-20 rounded-[22px] shadow-lg" />
+        <img src="/icons/meituan-app.png" alt="美团" className="h-20 w-20 rounded-[22px] shadow-lg" />
         <p className="mt-4 text-[15px] font-semibold text-black/70">美团 · 吃喝玩乐什么都有</p>
       </div>
     );
@@ -9216,7 +9216,7 @@ export default function MeituanApp() {
       )}
       {page === 'about' && (
         <div className="flex h-full flex-col items-center justify-center bg-white px-8 text-center">
-          <img src="/icons/meituan.png" alt="美团" className="h-20 w-20 rounded-[22px] shadow-lg" />
+          <img src="/icons/meituan-app.png" alt="美团" className="h-20 w-20 rounded-[22px] shadow-lg" />
           <p className="mt-4 text-[19px] font-bold text-black/85">美团</p>
           <p className="mt-1 text-[12px] text-black/40">v10.18.0 · 演示版</p>
           <p className="mt-4 text-[12px] leading-relaxed text-black/45">

@@ -302,7 +302,7 @@ export function mtProxyPayOrder(pid: string): MtProxyPayResult {
         sessionKey: `mt:order:${paid.id}`,
         app: 'meituan',
         title: '美团订单',
-        avatar: '/icons/meituan.png',
+        avatar: '/icons/meituan-app.png',
         body: `好友${p.contactName}已代付¥${fmt2(p.amount)}，订单已支付`,
         target: { app: 'meituan', contactId: paid.id },
       })

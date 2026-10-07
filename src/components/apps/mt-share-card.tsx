@@ -70,7 +70,7 @@ export function MtShareBubble({ sid }: { sid: string }) {
 
       {/* 头部：美团 logo + 订单动态 */}
       <span className="relative flex items-center gap-1.5">
-        <img src="/icons/meituan.png" alt="" className="h-[22px] w-[22px] rounded-full object-cover" />
+        <img src="/icons/meituan-app.png" alt="" className="h-[22px] w-[22px] rounded-full object-cover" />
         <span className="text-[13px] font-semibold text-black/85">美团</span>
         <span className="rounded-full bg-[#FFF3D1] px-1.5 py-[2px] text-[10px] font-medium leading-none text-[#B77900]">订单动态</span>
         <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#00B862]">
