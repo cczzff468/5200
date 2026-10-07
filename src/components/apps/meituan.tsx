@@ -150,7 +150,6 @@ import {
   mtLoadHistory,
   mtLoadOrders,
   mtPushHistory,
-  mtReorder,
   mtRemoveHistory,
   mtResolveIdpIdentity,
   mtSaveAddresses,
@@ -177,6 +176,7 @@ import {
 } from '@/lib/ios/meituan-store';
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
 import { mtCreateProxyRequest } from '@/lib/ios/mt-proxy-pay';
+import { mtCreateOrderShare } from '@/lib/ios/mt-order-share';
 import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
 import { listContacts } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
@@ -2499,6 +2499,170 @@ function ProxySheet({
   );
 }
 
+/** 订单分享弹层：第一步选平台（微信/QQ好友），第二步选联系人 → 动态订单卡片进好友聊天（与找人代付同交互） */
+function ShareSheet({
+  step,
+  plat,
+  contactId,
+  sending,
+  onPickPlat,
+  onPickContact,
+  onBack,
+  onClose,
+  onSend,
+}: {
+  step: 'plat' | 'contact';
+  plat: 'wx' | 'qq' | null;
+  contactId: string | null;
+  sending: boolean;
+  onPickPlat: (v: 'wx' | 'qq') => void;
+  onPickContact: (id: string) => void;
+  onBack: () => void;
+  onClose: () => void;
+  onSend: () => void;
+}) {
+  /** 平台好友列表（第二步加载；kind!=='user' 且该平台好友标记为真；组件按 step 重建，进入即为 null） */
+  const [friends, setFriends] = useState<ContactRecord[] | null>(null);
+  useEffect(() => {
+    if (step !== 'contact' || !plat) return;
+    let alive = true;
+    listContacts()
+      .then((all) => {
+        if (alive) setFriends(all.filter((c) => c.kind !== 'user' && isFriendIn(c, plat)));
+      })
+      .catch(() => {
+        if (alive) setFriends([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [step, plat]);
+
+  const platName = plat === 'wx' ? '微信' : 'QQ';
+  const Radio = ({ on }: { on: boolean }) => (
+    <span className={`grid h-[21px] w-[21px] shrink-0 place-items-center rounded-full ${on ? 'bg-[#FFC300]' : 'border-[1.5px] border-black/15'}`}>
+      {on && <Check className="h-3.5 w-3.5 text-black/80" strokeWidth={3.2} />}
+    </span>
+  );
+  return (
+    <motion.div
+      className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/60"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.16 }}
+      onClick={onClose}
+    >
+      <motion.div
+        className="max-h-[82%] overflow-hidden rounded-t-2xl bg-white pb-[max(14px,env(safe-area-inset-bottom))]"
+        initial={{ y: 260 }}
+        animate={{ y: 0 }}
+        exit={{ y: 260 }}
+        transition={{ type: 'spring', damping: 30, stiffness: 320 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 标题栏 */}
+        <div className="relative grid h-[54px] shrink-0 place-items-center">
+          {step === 'contact' && (
+            <button type="button" aria-label="返回" onClick={onBack} className="absolute left-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+              <ChevronLeft className="h-[22px] w-[22px] text-black/80" />
+            </button>
+          )}
+          <p className="text-[16px] font-bold text-black/90">{step === 'plat' ? '分享订单' : `分享到${platName}`}</p>
+          <button type="button" aria-label="关闭" onClick={onClose} className="absolute right-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+            <X className="h-[20px] w-[20px] text-black/55" />
+          </button>
+        </div>
+        <p className="px-5 pb-2.5 text-[11.5px] leading-relaxed text-black/40">
+          {step === 'plat' ? '把订单动态卡片发给好友，买的什么、金额、配送状态都会实时同步' : `从${platName}好友里选一位分享本单动态`}
+        </p>
+
+        {step === 'plat' ? (
+          <div className="px-4">
+            {([
+              ['wx', '/icons/wechat.png', '微信好友', '发给微信里的好友看订单动态'],
+              ['qq', '/icons/qq.png', 'QQ好友', '发给QQ里的好友看订单动态'],
+            ] as ['wx' | 'qq', string, string, string][]).map(([v, img, name, sub]) => (
+              <button
+                key={v}
+                type="button"
+                data-testid={`share-plat-${v}`}
+                onClick={() => onPickPlat(v)}
+                className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3.5 text-left first:border-t-0 active:opacity-80"
+              >
+                <img src={img} alt="" className="h-[38px] w-[38px] shrink-0 rounded-[9px]" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium text-black/85">{name}</span>
+                  <span className="block text-[11px] text-black/40">{sub}</span>
+                </span>
+                <Radio on={plat === v} />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="max-h-[48vh] overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {friends === null ? (
+              <p className="py-8 text-center text-[12px] text-black/35">正在获取好友列表…</p>
+            ) : friends.length === 0 ? (
+              <div className="py-8 text-center">
+                <p className="text-[13px] text-black/45">暂无{platName}好友</p>
+                <p className="mt-1 text-[11px] text-black/30">先去{platName}App添加好友，再回来分享订单</p>
+              </div>
+            ) : (
+              friends.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`share-contact-${c.id}`}
+                  onClick={() => onPickContact(c.id)}
+                  className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3 text-left first:border-t-0 active:opacity-80"
+                >
+                  {avatarFor(c, plat ?? 'wx') ? (
+                    <img src={avatarFor(c, plat ?? 'wx') ?? ''} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#FFF3B8] text-[15px] font-semibold text-black/60">
+                      {displayNameOf(c).slice(0, 1)}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px] text-black/85">{displayNameOf(c)}</span>
+                    {c.relation && <span className="block text-[11px] text-black/40">{c.relation}</span>}
+                  </span>
+                  <Radio on={contactId === c.id} />
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* 底部按钮 */}
+        <div className="px-4 pt-3">
+          {step === 'plat' ? (
+            <button
+              type="button"
+              disabled={!plat}
+              onClick={() => plat && onPickPlat(plat)}
+              className={`h-[48px] w-full rounded-full text-[16px] font-semibold ${plat ? 'bg-[#FFD100] text-black/90 active:opacity-85' : 'bg-[#F6EC9F] text-black/40'}`}
+            >
+              下一步
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid="share-send"
+              disabled={!contactId || sending}
+              onClick={onSend}
+              className={`h-[48px] w-full rounded-full text-[16px] font-semibold ${contactId && !sending ? 'bg-gradient-to-r from-[#FFC300] to-[#FF9500] text-white active:opacity-85' : 'bg-[#F6EC9F] text-black/40'}`}
+            >
+              {sending ? '正在发送…' : '分享给TA'}
+            </button>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 // ================================ 外卖确认订单弹窗（截图7 弹窗式，非独立页面） ================================
 
 function CheckoutSheet({
@@ -2756,6 +2920,7 @@ function OrdersPage({
   setTab,
   onOpenOrder,
   onOpenDeal,
+  onOpenMerchant,
   onOpenRefund,
   onGoHome,
   onRate,
@@ -2768,6 +2933,7 @@ function OrdersPage({
   setTab: (t: string) => void;
   onOpenOrder: (id: string) => void;
   onOpenDeal: (id: string) => void;
+  onOpenMerchant: (id: string) => void;
   onOpenRefund: (id: string) => void;
   onGoHome: () => void;
   onRate: (o: MtOrder) => void;
@@ -2788,6 +2954,7 @@ function OrdersPage({
   };
 
   const reorder = (o: MtOrder) => {
+    // 再来一单：跳回对应商家页重新挑选（团购跳团购详情），不再直接塞购物车
     if (o.kind === 'tuangou') {
       const deal = mtDealOf(o.items[0]?.dishId ?? '');
       if (deal) {
@@ -2795,7 +2962,7 @@ function OrdersPage({
         return;
       }
     }
-    if (mtReorder(uid, o)) onGoHome();
+    onOpenMerchant(o.merchantId);
   };
 
   return (
@@ -3002,19 +3169,31 @@ function OrdersPage({
 
 // ================================ 订单详情页（截图8/9/10） ================================
 
-/** 配送小地图（纯地图：绿地水系/路网 + 商家/家扁平小标记 + 立体骑手形象巡航；全部白色圆角面板已按需求移除。
+/** 配送小地图（纯地图：绿地水系/路网 + 商家/家扁平小标记 + 立体骑手形象；全部白色圆角面板已按需求移除。
  *  地名按真实地址显示：商家侧路名取自商家数据 addr、收货侧小区取自订单收货地址（如「幸福小区西区 3 栋…」→「幸福小区西区」），
- *  其余路网名从美团在售商家真实路名池按商家名散列选取，同一商家稳定不变） */
+ *  其余路网名从美团在售商家真实路名池按商家名散列选取，同一商家稳定不变。
+ *  骑手按真实配送时间从商家图标单向驶向家图标（不再来回）：取餐时刻→预计送达时刻沿贝塞尔曲线插值，父组件逐秒刷新） */
 const MT_ROAD_POOL = ['解放大道', '红旗路', '建设路', '朝阳路', '人民路', '文化路', '东风路', '新华路', '学院路', '濮上中路'];
+
+/** 配送路线二次贝塞尔曲线（与 SVG path M 75 139 Q 241 92 443 177 同一条，viewBox 500×208） */
+const MT_ROUTE_P0: [number, number] = [75, 139];
+const MT_ROUTE_PC: [number, number] = [241, 92];
+const MT_ROUTE_P1: [number, number] = [443, 177];
 
 function DeliveryMap({
   merchantName,
   merchantId,
   addressText,
+  deliveringAt,
+  etaAt,
 }: {
   merchantName: string;
   merchantId: string;
   addressText?: string;
+  /** 骑手取餐时刻（delivering 流水时间）：进度起点 */
+  deliveringAt?: number;
+  /** 预计送达时刻（etaAt，催单后已提前）：进度终点 */
+  etaAt?: number;
 }) {
   // 真实地址推导：商家路名 / 收货小区 / 交叉路名（按商家名散列稳定选取）
   const addr = mtMerchantOf(merchantId)?.addr ?? '';
@@ -3026,6 +3205,16 @@ function DeliveryMap({
   const cross = others[hash % others.length];
   const third = others[(hash + 3) % others.length];
   const storeShort = merchantName.split(/[（(]/)[0] ?? merchantName;
+  // 骑手进度：取餐(0%)→预计送达(100%) 按真实时间插值；无流水/异常时刻兜底起点，永不倒退出地图
+  const prog = (() => {
+    const start = deliveringAt ?? Date.now();
+    const end = etaAt && etaAt > start ? etaAt : start + 30 * 60_000;
+    return Math.min(1, Math.max(0, (Date.now() - start) / (end - start)));
+  })();
+  const u = 1 - prog;
+  // 二次贝塞尔插值（x/500、y/208 → 百分比，preserveAspectRatio=none 拉伸铺满容器）
+  const riderX = (u * u * MT_ROUTE_P0[0] + 2 * u * prog * MT_ROUTE_PC[0] + prog * prog * MT_ROUTE_P1[0]) / 5;
+  const riderY = (u * u * MT_ROUTE_P0[1] + 2 * u * prog * MT_ROUTE_PC[1] + prog * prog * MT_ROUTE_P1[1]) / 2.08;
   return (
     <div className="relative h-52 overflow-hidden rounded-xl bg-[#EAF0E3] ring-1 ring-black/5" aria-label={`${merchantName} 配送地图`}>
       {/* 绿地与水系 */}
@@ -3053,7 +3242,7 @@ function DeliveryMap({
       <span className="absolute bottom-[24%] right-[4%] text-[11px] font-medium text-black/45">{community}</span>
       {/* 商家名（商家标记上方，跟真实店铺） */}
       <span className="absolute left-[4%] top-[48%] max-w-[38%] truncate text-[10px] font-medium text-black/45">{storeShort}</span>
-      {/* 配送路线（商家标记 → 家标记 的弧线虚线；与 .mt-rider 关键帧轨迹同一条曲线，
+      {/* 配送路线（商家标记 → 家标记 的弧线虚线；与骑手内联插值同一条二次贝塞尔曲线，
           viewBox 拉伸铺满容器（preserveAspectRatio=none），坐标即百分比×(500,208)，骑手永不跑出地图） */}
       <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 208" preserveAspectRatio="none" fill="none" aria-hidden="true">
         <path d="M 75 139 Q 241 92 443 177" stroke="#FFC300" strokeWidth="3" strokeLinecap="round" strokeDasharray="1 9" opacity="0.85" />
@@ -3062,8 +3251,9 @@ function DeliveryMap({
       <Store className="absolute left-[12%] top-[62%] h-[22px] w-[22px] text-[#FF8A00] drop-shadow-[0_2px_2px_rgba(0,0,0,0.22)]" strokeWidth={2.2} />
       {/* 家标记 */}
       <HomeIcon className="absolute bottom-[9%] right-[8%] h-6 w-6 text-[#F5A300] drop-shadow-[0_2px_2px_rgba(0,0,0,0.22)]" strokeWidth={2.2} />
-      {/* 骑手形象（立体投影 + 巡航颠簸；透明 PNG 无白边，形象在「我的-骑手」选择；地图内缩小一号不遮挡路线） */}
-      <span className="mt-rider absolute block">
+      {/* 骑手形象（立体投影 + 颠簸；透明 PNG 无白边，形象在「我的-骑手」选择；
+          位置按真实配送时间沿曲线从商家→家单向前进，46px 缩小一号不遮挡路线） */}
+      <span className="mt-rider absolute block" style={{ left: `calc(${riderX}% - 23px)`, top: `calc(${riderY}% - 23px)` }}>
         <img
           src={mtRiderSrcOf(mtGetRiderId())}
           alt="外卖骑手"
@@ -3104,6 +3294,7 @@ function OrderDetailPage({
   onOpenPay,
   onGoOrders,
   onOpenDeal,
+  onOpenMerchant,
   onPickAddress,
   onApplyRefund,
   onOpenRefund,
@@ -3117,6 +3308,7 @@ function OrderDetailPage({
   onOpenPay: (o: MtOrder) => void;
   onGoOrders: () => void;
   onOpenDeal: (id: string) => void;
+  onOpenMerchant: (id: string) => void;
   onPickAddress: () => void;
   onApplyRefund: (o: MtOrder) => void;
   onOpenRefund: (o: MtOrder) => void;
@@ -3131,10 +3323,15 @@ function OrderDetailPage({
     const iv = setInterval(() => forceTick((t) => t + 1), 1000);
     return () => clearInterval(iv);
   }, []);
-  // 面板状态：订单信息展开 / 订单跟踪底栏 / 待支付更多操作（hooks 必须在提前 return 之前）
+  // 面板状态：订单信息展开 / 订单跟踪底栏 / 待支付更多操作 / 订单分享（hooks 必须在提前 return 之前）
   const [infoOpen, setInfoOpen] = useState(false);
   const [trackOpen, setTrackOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  // 分享面板：plat → contact → 发送动态卡片进好友聊天
+  const [shareStep, setShareStep] = useState<'plat' | 'contact' | null>(null);
+  const [sharePlat, setSharePlat] = useState<'wx' | 'qq' | null>(null);
+  const [shareContact, setShareContact] = useState<string | null>(null);
+  const [shareSending, setShareSending] = useState(false);
   const order = mtGetOrder(uid, orderId);
   if (!order) {
     return (
@@ -3206,6 +3403,7 @@ function OrderDetailPage({
   const voucherCut = Math.max(0, Math.round((order.discount - couponAmt) * 100) / 100);
 
   const reorder = () => {
+    // 再来一单：跳回商家页重新挑选（团购跳团购详情），不再直接塞购物车
     if (tuangou) {
       const deal = mtDealOf(order.items[0]?.dishId ?? '');
       if (deal) {
@@ -3213,8 +3411,36 @@ function OrderDetailPage({
         return;
       }
     }
-    if (mtReorder(uid, order)) onToast('已加入购物车');
+    onOpenMerchant(order.merchantId);
   };
+
+  /** 发送订单分享：动态卡片进好友聊天（买的什么/金额/五段状态/骑手名实时同步） */
+  const sendShare = async () => {
+    if (!sharePlat || !shareContact || shareSending) return;
+    setShareSending(true);
+    await new Promise((r) => setTimeout(r, 650));
+    const res = await mtCreateOrderShare({ order, idp: sharePlat, contactId: shareContact, fromName: session.name });
+    setShareSending(false);
+    if (!res.ok) {
+      onToast(res.error);
+      return;
+    }
+    setShareStep(null);
+    onToast(`订单动态已分享给${res.share.contactName}`);
+  };
+
+  // 美化分享按钮（美团黄渐变圆钮：待支付/进行中/配送中/已完成详情右上角统一）
+  const shareBtn = (
+    <button
+      type="button"
+      aria-label="分享"
+      data-testid="order-share-btn"
+      onClick={() => setShareStep('plat')}
+      className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-[#FFD100] to-[#FFB800] shadow-[0_2px_8px_rgba(255,180,0,0.45)] active:opacity-80"
+    >
+      <Share2 className="h-[17px] w-[17px] text-white" strokeWidth={2.2} />
+    </button>
+  );
 
   // 详情头文案（待支付=真实倒计时；进行中=ETA 大字；机票/火车票用出行专属文案）
   const hero: { big: ReactNode; sub: ReactNode; tag?: string } = (() => {
@@ -3296,10 +3522,13 @@ function OrderDetailPage({
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full bg-white shadow-sm ring-1 ring-black/5 active:opacity-75">
             <ChevronLeft className="h-5 w-5 text-black/80" />
           </button>
-          <button type="button" aria-label="联系客服" onClick={() => onToast('美团客服：0539-000-0000（演示）')} className="flex h-9 items-center gap-1 rounded-full bg-white px-3.5 shadow-sm ring-1 ring-black/5 active:opacity-75">
-            <Headset className="h-4 w-4 text-black/70" strokeWidth={1.9} />
-            <span className="text-[13px] font-medium text-black/75">客服</span>
-          </button>
+          <span className="flex items-center gap-2">
+            {shareBtn}
+            <button type="button" aria-label="联系客服" onClick={() => onToast('美团客服：0539-000-0000（演示）')} className="flex h-9 items-center gap-1 rounded-full bg-white px-3.5 shadow-sm ring-1 ring-black/5 active:opacity-75">
+              <Headset className="h-4 w-4 text-black/70" strokeWidth={1.9} />
+              <span className="text-[13px] font-medium text-black/75">客服</span>
+            </button>
+          </span>
         </div>
       );
     }
@@ -3310,9 +3539,7 @@ function OrderDetailPage({
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
           <span className="flex-1" />
-          <button type="button" aria-label="分享" onClick={() => onToast('分享（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
-            <Share2 className="h-[19px] w-[19px] text-black/70" strokeWidth={1.8} />
-          </button>
+          {shareBtn}
           <button type="button" aria-label="客服" onClick={() => onToast('美团客服：0539-000-0000（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
             <Headset className="h-[19px] w-[19px] text-black/70" strokeWidth={1.8} />
           </button>
@@ -3328,6 +3555,7 @@ function OrderDetailPage({
           <ChevronLeft className="h-6 w-6 text-black/75" />
         </button>
         <span className="flex-1" />
+        {order.status === 'completed' && shareBtn}
         <button type="button" aria-label="客服" onClick={() => onToast('美团客服：0539-000-0000（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
           <Headset className="h-[19px] w-[19px] text-black/70" strokeWidth={1.8} />
         </button>
@@ -3380,10 +3608,16 @@ function OrderDetailPage({
     </div>
   ) : null;
 
-  // 配送地图（仅配送中；骑手形象在「我的-骑手」选择，剩余分钟见 ETA 大标题；地名跟真实商家/收货地址）
+  // 配送地图（仅配送中；骑手按真实时间从商家→家单向前进，形象在「我的-骑手」选择，剩余分钟见 ETA 大标题；地名跟真实商家/收货地址）
   const mapBlock = order.status === 'delivering' ? (
     <div className="px-3 pb-1 pt-3">
-      <DeliveryMap merchantName={order.merchantName} merchantId={order.merchantId} addressText={order.address?.text} />
+      <DeliveryMap
+        merchantName={order.merchantName}
+        merchantId={order.merchantId}
+        addressText={order.address?.text}
+        deliveringAt={order.statusLog.find((s) => s.status === 'delivering')?.at}
+        etaAt={order.etaAt}
+      />
     </div>
   ) : null;
 
@@ -3841,6 +4075,26 @@ function OrderDetailPage({
               </button>
             </motion.div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 订单分享弹层（动态订单卡片进好友聊天） */}
+      <AnimatePresence>
+        {shareStep && (
+          <ShareSheet
+            step={shareStep}
+            plat={sharePlat}
+            contactId={shareContact}
+            sending={shareSending}
+            onPickPlat={(v) => {
+              setSharePlat(v);
+              if (shareStep === 'plat') setShareStep('contact');
+            }}
+            onPickContact={(id) => setShareContact(id)}
+            onBack={() => setShareStep('plat')}
+            onClose={() => setShareStep(null)}
+            onSend={() => void sendShare()}
+          />
         )}
       </AnimatePresence>
     </div>
@@ -8705,6 +8959,7 @@ export default function MeituanApp() {
                 setTab={setOrderTab}
                 onOpenOrder={openOrder}
                 onOpenDeal={openDeal}
+                onOpenMerchant={openMerchant}
                 onOpenRefund={(id) => openRefundById(id, 'orders')}
                 onGoHome={goHome}
                 onRate={(o) => setRateFor(o)}
@@ -8790,6 +9045,7 @@ export default function MeituanApp() {
           onOpenPay={openPay}
           onGoOrders={() => goOrders()}
           onOpenDeal={openDeal}
+          onOpenMerchant={openMerchant}
           onPickAddress={() => setAddrPicker(true)}
           onApplyRefund={(o) => setRefundFor(o)}
           onOpenRefund={openRefund}

@@ -83,6 +83,8 @@ import { WxPhotoStack, WxPhotoViewer, findPhotoStackSpans, type PhotoStackItem }
 import { LocalToast, useLocalToast } from './page-toast';
 import { MtPayBubble, MtProxyDetailPage } from './mt-proxy-detail';
 import { MT_PROXY_CARD_EVENT } from '@/lib/ios/mt-proxy-pay';
+import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
+import { MtShareBubble } from './mt-share-card';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import {
   abortStreamsByPrefix,
@@ -389,8 +391,8 @@ interface WxMsg {
   content: string;
   time: number;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
-   *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片；mtpay = 美团找人代付卡片（请求/完成） */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay';
+   *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片 */
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -435,6 +437,8 @@ interface WxMsg {
   fr?: 'apply' | 'greet' | 'added';
   /** 美团找人代付卡片（kind='mtpay'）：pid = 代付请求（mt-proxy:<pid>），role req=请求卡/done=完成卡 */
   mtpay?: { pid: string; role: 'req' | 'done' };
+  /** 美团订单分享动态卡片（kind='mtshare'）：sid = 分享快照（mt-share:<sid>），状态时间线实时跟订单走 */
+  mtshare?: { sid: string };
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -4924,6 +4928,21 @@ function ChatPage({
     return () => window.removeEventListener(MT_PROXY_CARD_EVENT, onMtProxy);
   }, [peer.id]);
 
+  /** 美团订单分享卡片落库监听：订单详情分享卡直写 kv 后广播，聊天页在场时实时合并 */
+  useEffect(() => {
+    const onMtShare = (e: Event) => {
+      const d = (e as CustomEvent<{ cid?: string; app?: string }>).detail;
+      if (!d || d.cid !== peer.id || d.app !== 'wx') return;
+      setMsgs((prev) => {
+        const saved = loadMsgs(peer.id);
+        const ids = new Set(prev.map((m) => m.id));
+        return sortMsgsByTime([...prev, ...saved.filter((m) => !ids.has(m.id))]);
+      });
+    };
+    window.addEventListener(MT_SHARE_CARD_EVENT, onMtShare);
+    return () => window.removeEventListener(MT_SHARE_CARD_EVENT, onMtShare);
+  }, [peer.id]);
+
   /** 过期清算后的落盘合并（存储为权威）：既有消息以落盘版本覆盖（卡片过期终态），落盘新增的
    *  过期通知行追加进来；按创建时间排序。与上方投递 tick 同一套合并模式，不丢本地新消息 */
   const mergeExpiredSweep = useCallback(() => {
@@ -7756,6 +7775,11 @@ function ChatPage({
                 /* 美团找人代付卡片（美团收银台发请求卡；好友代付后完成卡回聊天）；点卡进代付详情 */
                 <div {...bubblePress}>
                   <MtPayBubble pid={m.mtpay.pid} role={m.mtpay.role} onClick={() => setProxyPid(m.mtpay!.pid)} />
+                </div>
+              ) : m.kind === 'mtshare' && m.mtshare ? (
+                /* 美团订单分享动态卡片（订单详情右上角分享；状态时间线实时跟订单走） */
+                <div {...bubblePress}>
+                  <MtShareBubble sid={m.mtshare.sid} />
                 </div>
               ) : m.kind === 'image' && m.img && stackHead.has(i) && !expandedStacks.has(m.id) ? (
                 /* 照片堆叠卡片（连续 ≥4 张的折叠态）：左「展开 N」胶囊 + 主图右侧扇形露边；左滑下一张/右滑上一张、点击开大图。

@@ -400,34 +400,13 @@
   background: #fff;
 }
 
-/* 美团订单详情：配送小地图骑手沿商家→家的弧线巡航（关键帧 left/top 百分比轨迹，
-   与 DeliveryMap 内 SVG 路线 M 75 139 Q 241 92 443 177（viewBox 500×208，preserveAspectRatio=none）
-   为同一条二次贝塞尔曲线的 5 个取样点——坐标全用百分比 + 定宽偏移，任意地图尺寸下骑手都
-   恰好活动在商家/家两个图标之间，永不跑出地图；alternate 往返 = 两个图标间来回） */
-@keyframes mt-rider-travel {
-  0% {
-    left: calc(15% - 23px);
-    top: calc(67% - 23px);
-  }
-  25% {
-    left: calc(32.1% - 23px);
-    top: calc(59.5% - 23px);
-  }
-  50% {
-    left: calc(50% - 23px);
-    top: calc(60.1% - 23px);
-  }
-  75% {
-    left: calc(68.9% - 23px);
-    top: calc(68.7% - 23px);
-  }
-  100% {
-    left: calc(88.7% - 23px);
-    top: calc(85% - 23px);
-  }
-}
+/* 美团订单详情：配送小地图骑手沿商家→家的弧线按真实配送时间单向前进（关键帧已废弃：
+   位置改由 DeliveryMap 内联 style 按订单时间进度沿贝塞尔曲线 M 75 139 Q 241 92 443 177
+   （viewBox 500×208，preserveAspectRatio=none）实时插值，1s linear 过渡让逐秒刷新平滑） */
 .mt-rider {
-  animation: mt-rider-travel 10s ease-in-out infinite alternate;
+  transition:
+    left 1s linear,
+    top 1s linear;
 }
 
 /* 骑手形象立体颠簸（配合百分比轨迹巡航；投影由内联 drop-shadow 提供，无白边白环） */

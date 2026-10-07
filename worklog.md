@@ -16797,3 +16797,25 @@ Stage Summary:
 - 状态栏与灵动岛联动升级：美团配送小窗可见=信号+WiFi 全隐（Live Activity 真机同语义），订单状态不再弹白色毛玻璃通知卡
 - 配送地图信息真实化：商家路名/收货小区/商家名全部来自真实订单与商家数据，路名池按商家稳定散列；骑手形象 46px 立体巡航
 - 骑手形象库 9→17：去白边/去水印管线脚本化（scripts/cut_riders.py），新形象同步作用于配送地图与灵动岛小窗
+
+---
+Task ID: 13
+Agent: Z.ai Code (主会话)
+Task: ①地图骑手按时间从商家图标单向走到家图标（不要来回）②再来一单改为跳转商家页开始选择（不是加购物车）③待支付/进行中/配送中详情右上角分享图标美化 ④订单完成详情添加分享图标 ⑤点分享选QQ/微信→选联系人→发动态订单卡片（买的什么/金额/提交订单→待商家接单→商家已接单→骑手已接单→已送达/骑手名）⑥骑手改名 喵喵→一二、嘟嘟→布布、熊熊→懒懒
+
+Work Log:
+- 【骑手按时间单向走】meituan.tsx DeliveryMap 新签名 {deliveringAt, etaAt}（订单详情传 statusLog delivering 流水时间+etaAt）：骑手位置改内联 style 按真实配送进度沿二次贝塞尔曲线 M75 139 Q241 92 443 177 插值（u=1-t 二次插值，t=clamp((now-取餐)/(etaAt-取餐))，百分比×(500,208)），进度 0%=商家图标、100%=家图标，父组件逐秒 forceTick 刷新 + .mt-rider 1s linear transition 平滑；globals.css 删除 mt-rider-travel 五取样点往返关键帧（alternate 来回语义废除），保留 bob 颠簸动画；催单提前 etaAt 会自动加速，永不倒退/出地图
+- 【再来一单跳商家】OrdersPage/OrderDetailPage 各加 onOpenMerchant prop 并接入 reorder()：外卖单点「再来一单」→ openMerchant(order.merchantId) 跳商家页点菜开始选（购物车不再被塞入，页面购物车显示 ¥0），团购仍跳团购详情；meituan.tsx 移除 mtReorder import；两处调用点接 openMerchant
+- 【分享按钮美化】OrderDetailPage 新增 shareBtn（美团黄渐变圆钮 from-[#FFD100] to-[#FFB800] + 白 Share2 + 阴影）：待支付顶栏（客服胶囊左侧新增）、进行中/配送中顶栏（原裸图标替换）、已完成顶栏（新增，取消单不加）；原「分享（演示）」toast 废除
+- 【分享链路】新建 src/lib/ios/mt-order-share.ts（MtOrderShare 快照 kv mt-share:<sid> + mt-share-index + mtCreateOrderShare 校验好友/平台 + insertShareCard 写 wx/qq-chat-msgs + MT_SHARE_CARD_EVENT 广播）+ mtShareStagesOf（五段时间线：提交订单 createdAt→待商家接单 paidAt→商家已接单 accepted→骑手已接单 delivering+riderName→已送达 completed，状态不入快照、每次渲染实时读订单 statusLog 推导）
+- 【动态卡片】新建 src/components/apps/mt-share-card.tsx MtShareBubble（微信/QQ 共用）：美团logo+订单动态徽章+官方同步 / 商家名+金额 / 商品行（FoodImg+名称×数量+等N件）/ 五段竖排时间线（已完成黄点+时刻，当前节点黄圆图标+「进行中」徽章，未到灰点，骑手段显示「骑手 X 正在为您配送」）/ 底注「XX 的美团订单 · 状态实时同步」；逐秒 tick + mt-orders-changed 监听自动跟随订单推进
+- 【聊天接线】wechat.tsx/qq.tsx：WxMsg/QQMsg kind 加 'mtshare' + mtshare?:{sid} 字段，气泡分支渲染 MtShareBubble（bubblePress 长按可用），MT_SHARE_CARD_EVENT 落库实时合并监听（与代付卡同机制）
+- 【骑手改名】mt-rider.ts：喵喵(r15)→一二、嘟嘟(r16)→布布、熊熊(r11)→懒懒（形象图不变）
+- E2E（agent-browser 500×940）：解锁→美团「我的」骑手弹层滚到底目检 一二/布布/懒懒 ✓→订单列表点已完成川湘人家「再来一单」→跳塔斯汀商家页点菜态（购物车 ¥0 未加购）✓→已完成详情右上角黄渐变分享钮→分享订单弹层→微信好友→晴晴→发送 toast「订单动态已分享给晴晴」✓→微信聊天卡片：商家+¥29.60+鱼香肉丝盖浇饭×2+五段时间线（提交订单12:15→待商家接单12:17→商家已接单12:19→骑手已接单12:21·骑手名→已送达12:25 进行中徽章）全部实时渲染✓→新下单蜜雪冰城珍珠奶茶¥4.11（工行立减）支付→灵动岛大窗弹出→IDB 快进 delivering→订单详情地图：骑手（一二形象）63.06%@13:33 → 45s 后 80.24%@13:34 → 临门 96%+，全程单向从蜜雪冰城图标走向幸福小区西区家图标、无来回✓→配送中详情分享→QQ 好友晴晴发送✓（QQ 未登录环境，落库验证 qq-chat-msgs:c-qingqing-e2e 含 mtshare 卡片消息）→再下单老磨坊¥4 留待支付→待支付详情右上角分享钮+弹层正常✓
+- npx eslint（meituan.tsx/mt-share-card.tsx/mt-order-share.ts/mt-rider.ts/mt-proxy-detail.tsx/wechat.tsx/qq.tsx）0 问题；tsc --noEmit 0 错误；console 无美团相关错误（仅 429 兜底与热更新全量刷新提示）
+
+Stage Summary:
+- 配送地图骑手语义重定义：不再 alternate 来回，改为按真实配送时间（取餐→预计送达）沿贝塞尔曲线单向推进，催单自动加速，到点即到家
+- 再来一单 = 回商家重新挑选（两处入口统一）；订单详情四态（待支付/进行中/配送中/已完成）右上角统一美团黄渐变分享钮
+- 订单分享跨 App 全链路：分享→选微信/QQ→选好友→动态卡片进聊天，卡片实时跟随订单状态（五段时间线+骑手名+商品+金额），微信端视觉验证、QQ 端落库验证
+- 新增文件：src/lib/ios/mt-order-share.ts、src/components/apps/mt-share-card.tsx；改动：meituan.tsx、globals.css、mt-rider.ts、wechat.tsx、qq.tsx

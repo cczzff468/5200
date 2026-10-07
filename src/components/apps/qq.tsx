@@ -151,6 +151,8 @@ import { triggerIncomingCall, useIncomingCall, type IncomingCallSnapshot } from 
 import { buildLocationBlock, locationAiText, locDataOf, locFromRich } from '@/lib/ios/chat-location';
 import { MtPayBubble, MtProxyDetailPage } from './mt-proxy-detail';
 import { MT_PROXY_CARD_EVENT } from '@/lib/ios/mt-proxy-pay';
+import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
+import { MtShareBubble } from './mt-share-card';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat-media-rules';
@@ -381,8 +383,8 @@ interface QQMsg {
   content: string;
   time: number;
   /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
-   *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；textcard = 文字图片卡片（card 有值，无生图依赖）；mtpay = 美团找人代付卡片（请求/完成） */
-  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song' | 'mtpay';
+   *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；textcard = 文字图片卡片（card 有值，无生图依赖）；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片 */
+  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare';
   /** 歌曲卡片（kind='song'，Task 68 音乐 × AI）：结构同微信端 */
   song?: { name: string; artist: string; cover?: string; songId?: number; note?: string; autoPlay?: boolean; inviteDone?: boolean; agree?: boolean };
   /** 语音消息数据（kind='voice'；音频 dataURL + 时长 + 波形 + 转写，与微信端共用 VoiceMsgData 结构） */
@@ -427,6 +429,8 @@ interface QQMsg {
   fr?: 'apply' | 'greet' | 'added';
   /** 美团找人代付卡片（kind='mtpay'）：pid = 代付请求（mt-proxy:<pid>），role req=请求卡/done=完成卡 */
   mtpay?: { pid: string; role: 'req' | 'done' };
+  /** 美团订单分享动态卡片（kind='mtshare'）：sid = 分享快照（mt-share:<sid>），状态时间线实时跟订单走 */
+  mtshare?: { sid: string };
 }
 
 /** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账；转账收款改用接收卡片消息）：居中灰字 + 彩色尾词 */
@@ -3439,6 +3443,21 @@ function ChatPage({
     return () => window.removeEventListener(MT_PROXY_CARD_EVENT, onMtProxy);
   }, [peer.id]);
 
+  /** 美团订单分享卡片落库监听：订单详情分享卡直写 kv 后广播，聊天页在场时实时合并 */
+  useEffect(() => {
+    const onMtShare = (e: Event) => {
+      const d = (e as CustomEvent<{ cid?: string; app?: string }>).detail;
+      if (!d || d.cid !== peer.id || d.app !== 'qq') return;
+      setMsgs((prev) => {
+        const saved = loadMsgs(peer.id);
+        const ids = new Set(prev.map((m) => m.id));
+        return sortMsgsByTime([...prev, ...saved.filter((m) => !ids.has(m.id))]);
+      });
+    };
+    window.addEventListener(MT_SHARE_CARD_EVENT, onMtShare);
+    return () => window.removeEventListener(MT_SHARE_CARD_EVENT, onMtShare);
+  }, [peer.id]);
+
   /** 投递进行中（含排队批次）：标题维持「正在输入中…」，直到最后一条消息发出 */
   const [delivering, setDelivering] = useState(() => isAiDelivering(sessionKey));
   useEffect(() => {
@@ -6144,6 +6163,11 @@ function ChatPage({
                   /* 美团找人代付卡片（美团收银台发请求卡；好友代付后完成卡回聊天）；点卡进代付详情 */
                   <div {...bubblePress}>
                     <MtPayBubble pid={m.mtpay.pid} role={m.mtpay.role} onClick={() => setLayer({ view: 'mtpay-detail', pid: m.mtpay!.pid })} />
+                  </div>
+                ) : m.kind === 'mtshare' && m.mtshare ? (
+                  /* 美团订单分享动态卡片（订单详情右上角分享；状态时间线实时跟订单走） */
+                  <div {...bubblePress}>
+                    <MtShareBubble sid={m.mtshare.sid} />
                   </div>
                 ) : m.kind === 'location' && m.loc ? (
                   <div {...bubblePress}>
