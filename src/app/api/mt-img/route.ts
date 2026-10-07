@@ -5,16 +5,19 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * 美团内容匹配图（v7，Foodiesfeed + Wikimedia Commons 双图库链；解决图片不符/不好看问题）：
+ * 美团内容匹配图（v10，Foodiesfeed + TheMealDB + Wikimedia Commons + LLM搜索词 四级图库链；解决图片不符/不好看问题）：
  * - ① Foodiesfeed（CC0 可商用免署名）：tag → 图库分类关键词搜索（按关键词取图，不随机），
  *     每分类缓存一次搜索结果（~50 张直链，TTL 6h，按需请求不大规模抓取），per-分类轮换指针：
  *     同分类每次刷新可换图、不重复太频繁，且永远同分类（图片与内容一致）；
  *     图片流式经 sharp 按展示尺寸 cover 裁剪压缩为 webp（不落盘、不转存，只内存流转）；
+ * - ①.5 TheMealDB（免 key 免注册）：Foodiesfeed 失败时的菜品实景兜底池（真实菜品照片）；
  * - ② Wikimedia Commons（免 key 免费图库）：奶茶等 Foodiesfeed 缺失品类（milk-tea 池全是茶/咖啡，
- *     无真珍珠奶茶）+ 酒店/电玩/KTV 等非食物实景（Foodiesfeed 为纯美食图库）走 Commons 关键词搜索；
- *     奶茶优先级高于 Foodiesfeed（bubble tea 真奶茶池），其余食物 tag 在 FF/-stock 失败后兑底；
+ *     无真珍珠奶茶）+ 酒店/电玩/KTV/药房/口罩/保健品等非食物实景（Foodiesfeed 为纯美食图库）走 Commons 关键词搜索；
+ *     奶茶等 COMMONS_FIRST 品类优先级高于 Foodiesfeed，其余食物 tag 在 FF/MealDB 失败后兑底；
  * - ③ Pixabay / Pexels（免费商用）：仅当环境变量 PIXABAY_KEY / PEXELS_KEY 配置时启用，
  *     同样关键词搜索 + 轮换；未配置自动跳过；
+ * - ⑤ LLM 搜索词：完全未知的品类 tag 由内置模型译成英文 Commons 搜索短语（按 tag 缓存 6h，
+ *     一次性开销）——仍然「按关键词搜真实图库」，不引入 AI 生图；
  * - ④ 默认图（本地算法图兜底）：按分类配色渐变 + 分类 emoji 的 SVG，服务端直出，
  *     永远 200 —— 保证任何情况下都有图可显示；
  * - 浏览器强缓存（15min，与字节缓存同步）：命中秒出，过期自动换图；
@@ -142,6 +145,9 @@ const COMMONS_SEARCH: Record<string, string> = {
   park: 'amusement park', // 游乐场
   fun: 'entertainment center', // 休闲玩乐通用
   medicine: 'pharmacy interior', // 药房实景（FF 无药房池，v7 起走 Commons）
+  mask: 'surgical mask', // 医用口罩商品图（v10）
+  bandage: 'adhesive bandage', // 创可贴/绷带商品图（v10）
+  vitamin: 'dietary supplement', // 维生素/保健品商品图（v10）
 };
 
 /** Commons 优先的 tag（其余 tag 在 FF/stock 失败后用 Commons 同词兑底） */
@@ -154,6 +160,9 @@ const COMMONS_TITLE_EXCLUDE = /diagram|map|logo|plan|scheme|drawing|chart|graph|
 const COMMONS_REQUIRE: Record<string, RegExp> = {
   'bubble tea': /bubble|boba|tapioca|pearl|タピオカ|trân[ _-]?châu|milk[ _-]?tea/i,
   'pharmacy interior': /pharmac|apothe|lékárna|patika|drugstore|chemist/i,
+  'surgical mask': /mask|respirator/i,
+  'adhesive bandage': /bandage|pflaster|plaster|band[ _-]?aid/i,
+  'dietary supplement': /supplement|vitamin|tablet|capsule|pill/i,
 };
 
 /** Commons 标题黑名单（按搜索词，可叠加）：药房池剔除博物馆/历史复原老照片
@@ -274,6 +283,9 @@ const DEFAULT_ART: Record<string, { bg: [string, string]; emoji: string }> = {
   spicy: { bg: ['#D9452B', '#8C1F14'], emoji: '🌶️' },
   store: { bg: ['#5CA86B', '#2E6B3B'], emoji: '🛒' },
   medicine: { bg: ['#7AA8C9', '#3B6B8C'], emoji: '💊' },
+  mask: { bg: ['#8FB8D8', '#4A7A9C'], emoji: '😷' },
+  bandage: { bg: ['#E8C9A8', '#B08858'], emoji: '🩹' },
+  vitamin: { bg: ['#F2C94C', '#C9822E'], emoji: '💊' },
   hotel: { bg: ['#6FA8DC', '#2E5C8C'], emoji: '🏨' },
   'hotel-room': { bg: ['#6FA8DC', '#2E5C8C'], emoji: '🛏️' },
   resort: { bg: ['#5CB8B0', '#2A6B66'], emoji: '🏝️' },
@@ -522,6 +534,38 @@ async function commonsSearchUrls(q: string): Promise<string[]> {
   }
 }
 
+// ---------------- ②.5 TheMealDB（免 key 菜品实景：Foodiesfeed 失败时的食物兜底池） ----------------
+
+const mdbLists = new Map<string, { urls: string[]; at: number; failedAt?: number }>();
+
+/** TheMealDB 免费接口（开发测试 key=1，无需注册）：按英文菜名搜真实菜品照片直链。
+ *  只在 FF 搜索词（食物域）失败后启用；非食物词搜不到自动负缓存跳过。 */
+async function mealdbSearchUrls(kw: string): Promise<string[]> {
+  const rec = mdbLists.get(kw);
+  const now = Date.now();
+  if (rec) {
+    if (rec.urls.length >= MIN_POOL && now - rec.at < LIST_TTL) return rec.urls;
+    if (rec.failedAt && now - rec.failedAt < LIST_NEG_TTL) return [];
+  }
+  try {
+    const res = await fetch(`https://www.themealdb.com/api/json/v1/1/search.php?s=${encodeURIComponent(kw.replace(/-/g, ' '))}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) throw new Error(`themealdb ${res.status}`);
+    const j: unknown = await res.json();
+    const meals = (j as { meals?: Array<{ strMealThumb?: string }> | null }).meals ?? [];
+    const urls = meals
+      .map((m) => (m.strMealThumb ?? '').trim())
+      .filter((u) => /^https:\/\/www\.themealdb\.com\/images\/media\/meals\/[a-z0-9]+\.jpg$/.test(u));
+    if (urls.length < MIN_POOL) throw new Error(`themealdb 命中不足（${urls.length}）`);
+    mdbLists.set(kw, { urls, at: now });
+    return urls;
+  } catch {
+    mdbLists.set(kw, { urls: rec?.urls ?? [], at: rec?.at ?? 0, failedAt: now });
+    return rec?.urls ?? [];
+  }
+}
+
 // ---------------- ③ Pixabay / Pexels（配置 key 才启用） ----------------
 
 const PIXABAY_KEY = process.env.PIXABAY_KEY ?? '';
@@ -572,6 +616,54 @@ async function stockSearchUrls(kw: string): Promise<string[]> {
   }
   pxLists.set(kw, { urls: rec?.urls ?? [], at: rec?.at ?? 0, failedAt: now });
   return rec?.urls ?? [];
+}
+
+// ---------------- ⑤ LLM 搜索词（未知品类：内置模型译英文短语 → Commons 实景，免 AI 生图） ----------------
+
+const LLM_TAG_TTL = 6 * 3600_000;
+const llmTagCache = new Map<string, { q: string | null; at: number }>();
+const llmTagInflight = new Map<string, Promise<string | null>>();
+
+/** 内置模型把任意品类词（如「flower-shop」「3c」）译成 Wikimedia Commons 英文搜索短语（1~4 个英文词）。
+ *  结果按 tag 缓存 6h；同一 tag 并发去重；失败返回 null（落默认图）。 */
+async function llmCommonsQuery(tag: string): Promise<string | null> {
+  const hit = llmTagCache.get(tag);
+  if (hit && Date.now() - hit.at < LLM_TAG_TTL) return hit.q;
+  const running = llmTagInflight.get(tag);
+  if (running) return running;
+  const task = (async (): Promise<string | null> => {
+    try {
+      const ZAI = (await import('z-ai-web-dev-sdk')).default;
+      const zai = await ZAI.create();
+      const completion = await zai.chat.completions.create({
+        messages: [
+          {
+            role: 'assistant',
+            content:
+              'You translate commerce/scene category words into short English image-search phrases for Wikimedia Commons photo search. Reply with ONLY the phrase: 1-4 plain English words, lowercase, no punctuation, no explanation. Prefer concrete everyday visual scenes over abstract concepts.',
+          },
+          { role: 'user', content: tag.replace(/-+/g, ' ').slice(0, 30) },
+        ],
+        thinking: { type: 'disabled' },
+      });
+      const raw = (completion.choices[0]?.message?.content ?? '')
+        .toLowerCase()
+        .replace(/[^a-z ]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60);
+      const q = /^[a-z]{2,}( [a-z]{2,}){0,3}$/.test(raw) ? raw : null;
+      llmTagCache.set(tag, { q, at: Date.now() });
+      return q;
+    } catch {
+      llmTagCache.set(tag, { q: null, at: Date.now() }); // 负缓存：同一 tag 6h 内不再重试打模型
+      return null;
+    } finally {
+      llmTagInflight.delete(tag);
+    }
+  })();
+  llmTagInflight.set(tag, task);
+  return task;
 }
 
 // ---------------- sharp 按展示尺寸裁剪压缩（内存流转，不落盘） ----------------
@@ -667,6 +759,23 @@ async function genBytes(tag: string, w: number, h: number): Promise<GenResult> {
     }
   }
 
+  // ②.5 TheMealDB（免 key 菜品实景：FF 池不可用时的食物兜底）
+  if (ffMapped) {
+    const urls = await mealdbSearchUrls(kw);
+    if (urls.length >= MIN_POOL) {
+      const pick = pickFrom(urls, `mdb:${kw}`);
+      if (pick) {
+        try {
+          const raw = await curlBytes(pick);
+          const out = await shrink(raw, w, h);
+          if (Buffer.isBuffer(out) && out.byteLength > 500) return { buf: out };
+        } catch {
+          // 单张失败 → 走下一级
+        }
+      }
+    }
+  }
+
   // ③ Pixabay / Pexels（环境变量配置 key 才启用；未配置跳过）
   if (ffMapped && (PIXABAY_KEY || PEXELS_KEY)) {
     const urls = await stockSearchUrls(kw);
@@ -690,6 +799,15 @@ async function genBytes(tag: string, w: number, h: number): Promise<GenResult> {
     if (buf) return { buf };
   }
 
+  // ⑤ 未知品类（无任何映射）：内置模型译英文搜索短语 → Commons 实景（一次性开销，按 tag 缓存 6h）
+  if (!commonsQ) {
+    const q = await llmCommonsQuery(tag);
+    if (q) {
+      const buf = await tryCommons(q, w, h);
+      if (buf) return { buf };
+    }
+  }
+
   // ④ 默认图（本地算法图：分类配色 + emoji SVG，永远成功）
   throw new Error('fall-to-default');
 }
@@ -703,7 +821,7 @@ export async function GET(req: NextRequest) {
   const h = intOf(sp.get('h'), 400, 100, 800);
   const s = intOf(sp.get('s'), 0, 0, 999);
   // v=链路版本：升级后浏览器旧缓存自然失效（URL 变了）
-  const key = `${tag}|${w}x${h}|${s}|v9`;
+  const key = `${tag}|${w}x${h}|${s}|v10`;
 
   const hit = cacheGet(key);
   if (hit) {

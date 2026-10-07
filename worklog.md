@@ -16581,3 +16581,23 @@ Work Log:
 Stage Summary:
 - 订单详情页不再显示"3杯"类数量尾缀（含历史订单）；其余界面（订单列表/收银台）保持原样，是否同步修改列入待选清单
 - 待用户选择清单（12 项）已当面列出：含图片匹配改进方案（禁 AI 生图）、实名认证卡删除、订单列表/收银台 3杯 同步、药品类目图池等
+---
+Task ID: 3
+Agent: Z.ai Code (主会话)
+Task: 全部修（上轮待选清单）+ 订单详情粉色条上方空隙修复
+
+Work Log:
+- 粉色条空隙：团购详情页价格块容器「mt-2.5 + border-y-[7px]」→「border-b-[7px] 无上边距」，粉色特价团横幅紧贴套餐缩略条（原白 10px+灰 7px 空隙消除），浏览器实测确认
+- 3杯 同步剥离：stripDealQty 应用到全部剩余可见点——收藏页订单条（2 处）、订单列表条目名、退款页商品名与条目汇总行；订单详情此前已做，至此全站一致（历史订单渲染层生效）
+- 实名认证格删除：我的页钱包区删「2.90元/实名认证/待完善」格与「去查看」角标，剩 3 格（美团借钱/我的卡额度/购药抵扣金）
+- 药品图池真实化：meituan-data.ts TAG_RULES 拆分 口罩→mask / 创可贴绷带→bandage / 维生素钙片鱼油→vitamin / 药品类→medicine；mt-img COMMONS_SEARCH 新增 surgical mask / adhesive bandage / dietary supplement 三池（带 REQUIRE 标题白名单：mask|respirator、bandage|pflaster|plaster、supplement|vitamin|tablet|capsule）+ DEFAULT_ART 三分类兜底 emoji；实测口罩→蓝色医用口罩、维D→胶囊特写、退热贴→医用敷贴、感冒药→药房货架，灰色占位消失
+- 图片匹配深度优化（用户选「全部修」后落地）：①TheMealDB 免 key 层（FF 失败后的菜品实景兜底，search.php?s=<FF词>，URL 白名单过滤，6h 池缓存+60s 负缓存）②LLM 搜索词（完全未知 tag → 内置模型译 1-4 词英文短语 → Commons 实景；按 tag 缓存 6h、并发去重、失败负缓存；账号 429 期间自动落默认图，额度恢复即生效）③v9→v10 链路版本号（旧缓存自然失效）。Wikimedia/黑名单过滤/同义词轮换/菜名词典此前已在；Pexels 代码就绪仅需用户配 PEXELS_KEY 环境变量
+- mt-feed 提示词：看病买药分支强制「商家与菜品 tag=medicine（口罩 mask/创可贴 bandage/维生素 vitamin）+ 药字号菜单分节」；tag 白名单补 medicine——此前 AI 药房商家可能落 store/food tag 导致门头配便利店图
+- E2E（agent-browser 500×940）：解锁→主屏翻页→美团→图标顺序（外卖→团购→美食→看病买药→休闲玩乐→酒店旅行→电影演出）→芋泥奶茶团购详情（粉色条紧贴缩略条、bubble tea 真图）→直接购买→A套餐/规格→提交订单→收银台（工行立减 2.28）→订单完成→订单列表（新旧订单均无 3杯）→我的页（实名格已删、头像微信账号）→看病买药（10 家店名/评分/月售/配送/优惠全不同、门头全现代药房实景）→商详药品图全真实
+- tsc + eslint 全绿；dev.log 仅内置模型账号级 429（已知，localBatch 兜底，页面数据照常多样）
+
+Stage Summary:
+- 上轮 12 项待选清单全部落地：粉色空隙/3杯 全站同步/实名认证删除/药品图池/图片匹配深度优化（TheMealDB+LLM 搜索词+版本升级）
+- 图片链现为五级：Foodiesfeed → TheMealDB → Pixabay/Pexels(需key) → Wikimedia Commons（含 LLM 译词扩展）→ 本地算法图；全程真实图库关键词搜索，无 AI 生图
+- 外部依赖现状：内置模型 429（账号级）与 Wikimedia 瞬时 429 均有负缓存+多级兜底，页面体验无感
+- 历史小项全部完结：图标排序/搜索横排按钮/搜索分批/上滑加载/tab 激活色/点击分类取消提示/头像联动/灰字溢出/订单图片回填 此前已验证，本轮无回退

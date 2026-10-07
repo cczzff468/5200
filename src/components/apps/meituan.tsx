@@ -1673,12 +1673,12 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
               {shopOrders.map((o) => (
                 <button key={o.id} type="button" onClick={() => onOpenOrder(o.id)} className="block w-full border-t-[7px] border-[#F5F6F7] px-4 py-3.5 text-left active:opacity-80">
                   <span className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-black/85">{o.items[0]?.name ?? o.merchantName}</span>
+                    <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-black/85">{o.items[0] ? stripDealQty(o.items[0].name) : o.merchantName}</span>
                     <span className={`shrink-0 text-[12px] ${['pendingPay', 'pendingAccept', 'accepted', 'delivering'].includes(o.status) ? 'font-medium text-[#FF6000]' : 'text-[#9A9A9A]'}`}>{mtStatusText(o)}</span>
                   </span>
                   <span className="mt-2 flex items-center gap-2.5">
                     <FoodImg src={o.items[0]?.img} emoji={o.items[0]?.emoji ?? o.merchantEmoji} className="h-11 w-11 shrink-0 rounded-lg" />
-                    <span className="min-w-0 flex-1 truncate text-[12px] text-black/45">{o.items.length > 1 ? `${o.items[0]?.name} 等${o.items.reduce((s, i) => s + i.qty, 0)}件商品` : `共${o.items.reduce((s, i) => s + i.qty, 0)}件`}</span>
+                    <span className="min-w-0 flex-1 truncate text-[12px] text-black/45">{o.items.length > 1 ? `${o.items[0] ? stripDealQty(o.items[0].name) : ''} 等${o.items.reduce((s, i) => s + i.qty, 0)}件商品` : `共${o.items.reduce((s, i) => s + i.qty, 0)}件`}</span>
                     <span className="shrink-0 text-[14px] font-semibold text-black/85">¥{o.total.toFixed(2)}</span>
                   </span>
                   <span className="mt-1.5 block text-[11px] text-black/30">下单：{fmtDateTime(o.createdAt)}</span>
@@ -2547,7 +2547,7 @@ function OrdersPage({
                   <span className="mt-2.5 flex items-center gap-2.5">
                     <FoodImg src={o.items[0]?.img} emoji={o.items[0]?.emoji ?? o.merchantEmoji} className="h-[64px] w-[64px] shrink-0 rounded-lg" />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[15px] text-black/85">{o.items[0]?.name}</span>
+                      <span className="block truncate text-[15px] text-black/85">{o.items[0] ? stripDealQty(o.items[0].name) : ''}</span>
                       <span className="mt-0.5 block truncate text-[13px] text-black/45">
                         {o.status === 'completed' && o.consumedAt ? `消费时间: ${fmtDate(o.consumedAt)}` : o.status === 'canceled' ? `下单: ${fmtDate(o.createdAt)}` : `下单: ${fmtDate(o.createdAt)}`}
                       </span>
@@ -3123,8 +3123,8 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
           </button>
         </div>
 
-        {/* 价格块（粉）+ 标题/须知/门店/规则/详情 */}
-        <div className="mt-2.5 overflow-hidden border-y-[7px] border-[#F5F6F7]">
+        {/* 价格块（粉）+ 标题/须知/门店/规则/详情（紧贴套餐缩略条：无上边距/上分隔带，消除粉色条上方空隙） */}
+        <div className="overflow-hidden border-b-[7px] border-[#F5F6F7]">
           <div className="bg-gradient-to-r from-[#FF2D7E] to-[#FF5E9E] px-4 pb-3 pt-3">
             <div className="flex items-center gap-1.5">
               <p className="flex shrink-0 items-baseline whitespace-nowrap leading-none">
@@ -4646,14 +4646,10 @@ function MyPage({
           {[
             ['***', '美团借钱', '随借随还'],
             ['9.98万', '我的卡额度', '免费申领'],
-            ['2.90元', '实名认证', '待完善'],
             ['1笔', '购药抵扣金', '去查看'],
           ].map(([v, l, s]) => (
             <button key={l} type="button" onClick={() => onToast(`${l}（演示）`)} className="flex flex-col items-center gap-0.5 active:opacity-70">
-              <span className="relative text-[16px] font-bold leading-tight text-black/85">
-                {v}
-                {l === '实名认证' && <span className="absolute -right-4 -top-2 rounded-full rounded-bl-none bg-[#FF3B30] px-1 py-px text-[8px] font-bold text-white">去查看</span>}
-              </span>
+              <span className="text-[16px] font-bold leading-tight text-black/85">{v}</span>
               <span className="text-[11px] text-black/70">{l}</span>
               <span className="text-[9px] text-black/35">{s}</span>
             </button>
@@ -5654,11 +5650,11 @@ function RefundDetailPage({
             <div className="mx-4 mt-3 pb-2">
               <div className="flex gap-3">
                 <FoodImg src={order.items[0]?.img} emoji={order.items[0]?.emoji ?? order.merchantEmoji} className="h-14 w-14 shrink-0 rounded-lg" />
-                <p className="line-clamp-2 min-w-0 flex-1 text-[14px] leading-snug text-black/85">{order.items[0]?.name ?? order.merchantName}</p>
+                <p className="line-clamp-2 min-w-0 flex-1 text-[14px] leading-snug text-black/85">{order.items[0] ? stripDealQty(order.items[0].name) : order.merchantName}</p>
                 <p className="shrink-0 text-[14px] font-bold text-black/90">¥{fmtMoney(r.amount)}</p>
               </div>
               <p className="mt-1.5 truncate text-[11px] text-black/35">
-                {order.merchantName} · {order.items.map((i) => `${i.name}×${i.qty}`).join('，')} × 1
+                {order.merchantName} · {order.items.map((i) => `${stripDealQty(i.name)}×${i.qty}`).join('，')} × 1
               </p>
               <div className="mt-3 border-t border-black/[0.05] pt-1">
                 <p className="flex items-center justify-between py-[7px]">
