@@ -188,6 +188,39 @@ const MT_PRICE = '#FF4B33';
 const MT_PINK = '#FF2D7E';
 const MT_ORANGE = '#FF6000';
 
+// ================================ 骑手形象（「我的」可选，配送地图立体巡航） ================================
+/** 可选骑手形象（public/mt/riders 已去白边透明 PNG；默认圆圆） */
+const MT_RIDERS: { id: string; name: string; src: string }[] = [
+  { id: 'r4', name: '圆圆', src: '/mt/riders/r4.png' },
+  { id: 'r7', name: '蹦蹦', src: '/mt/riders/r7.png' },
+  { id: 'r1', name: '呜呜', src: '/mt/riders/r1.png' },
+  { id: 'r2', name: '惬惬', src: '/mt/riders/r2.png' },
+  { id: 'r3', name: '蓝蓝', src: '/mt/riders/r3.png' },
+  { id: 'r5', name: '帽帽', src: '/mt/riders/r5.png' },
+  { id: 'r6', name: '萝卜', src: '/mt/riders/r6.png' },
+  { id: 'r8', name: '瘫瘫', src: '/mt/riders/r8.png' },
+  { id: 'r9', name: '屁屁', src: '/mt/riders/r9.png' },
+];
+const MT_RIDER_KEY = 'mt-rider-avatar';
+
+function mtGetRiderId(): string {
+  try {
+    return localStorage.getItem(MT_RIDER_KEY) ?? MT_RIDERS[0].id;
+  } catch {
+    return MT_RIDERS[0].id;
+  }
+}
+function mtSetRiderId(id: string): void {
+  try {
+    localStorage.setItem(MT_RIDER_KEY, id);
+  } catch {
+    /* 隐私模式忽略 */
+  }
+}
+function mtRiderSrcOf(id: string): string {
+  return (MT_RIDERS.find((r) => r.id === id) ?? MT_RIDERS[0]).src;
+}
+
 /** 计数单位：饮品/奶茶类「杯」，其余「件」（对齐真机量词，奶茶不再用「张」） */
 const mtCountUnit = (name: string): string => (/奶茶|奶绿|奶昔|果茶|柠檬水|咖啡|豆浆|杨枝甘露|可乐|果汁|茶饮|奶蒂/.test(name) ? '杯' : '件');
 
@@ -2996,10 +3029,10 @@ function OrdersPage({
 
 // ================================ 订单详情页（截图8/9/10） ================================
 
-/** 配送小地图（圆角卡片假地图：绿地水系/路网地名 + 商家/家 pin + 骑手巡航 + 真实剩余单量分钟气泡 + 撒漏必赔胶囊） */
-function DeliveryMap({ merchantName, remainMin, remainOrders }: { merchantName: string; remainMin: number; remainOrders: number }) {
+/** 配送小地图（纯地图：绿地水系/路网地名 + 商家/家扁平小标记 + 立体骑手形象巡航；全部白色圆角面板已按需求移除） */
+function DeliveryMap({ merchantName }: { merchantName: string }) {
   return (
-    <div className="relative h-52 overflow-hidden rounded-xl bg-[#EAF0E3] ring-1 ring-black/5">
+    <div className="relative h-52 overflow-hidden rounded-xl bg-[#EAF0E3] ring-1 ring-black/5" aria-label={`${merchantName} 配送地图`}>
       {/* 绿地与水系 */}
       <div className="absolute -left-8 top-6 h-24 w-40 rounded-[46%] bg-[#D7E7C9]" />
       <div className="absolute -right-10 -top-6 h-28 w-48 rounded-[48%] bg-[#DDEBD0]" />
@@ -3026,27 +3059,19 @@ function DeliveryMap({ merchantName, remainMin, remainOrders }: { merchantName: 
       <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 208" fill="none" aria-hidden="true">
         <path d="M 52 138 C 150 118 240 60 400 158" stroke="#FFC300" strokeWidth="3" strokeLinecap="round" strokeDasharray="1 9" opacity="0.85" />
       </svg>
-      {/* 骑手气泡（剩余单量/分钟为按 ETA 实时推算的真实值） */}
-      <span className="absolute left-[14%] top-[28%] rounded-lg bg-white px-2.5 py-1.5 text-[12px] font-medium text-black/80 shadow-md">
-        前方剩余<span className="text-[#FF6000]">{remainOrders}单</span>·{remainMin}分钟
-      </span>
-      {/* 商家 pin */}
-      <span className="absolute left-[12%] top-[62%] grid h-8 w-8 place-items-center rounded-full bg-white shadow-md ring-1 ring-black/5" title={merchantName}>
-        <Store className="h-4 w-4 text-[#FF8A00]" strokeWidth={2.2} />
-      </span>
-      {/* 家 pin */}
-      <span className="absolute bottom-[10%] right-[8%] grid h-10 w-10 place-items-center rounded-xl bg-white shadow-md ring-1 ring-black/5">
-        <HomeIcon className="h-5 w-5 text-[#FFC300]" strokeWidth={2.2} />
-      </span>
-      {/* 骑手 */}
-      <span className="mt-rider absolute grid h-9 w-9 place-items-center rounded-full bg-[#FFD100] shadow-lg ring-2 ring-white">
-        <Bike className="h-4.5 w-4.5 text-black/80" strokeWidth={2.2} />
-      </span>
-      <span className="absolute right-3 top-3 rounded-[4px] bg-[#FFD100] px-1.5 py-0.5 text-[10px] font-medium text-black/80">美团专送</span>
-      {/* 放心吃 */}
-      <span className="absolute bottom-2.5 left-2.5 flex items-center gap-1 rounded-full bg-white/95 px-2.5 py-1 text-[10px] text-black/70 shadow-sm">
-        <CircleCheck className="h-3 w-3 text-[#FF6000]" />
-        放心吃：撒漏必赔 · 食品安全保障中
+      {/* 商家标记（扁平小图标，无白底面板） */}
+      <Store className="absolute left-[12%] top-[62%] h-[22px] w-[22px] text-[#FF8A00] drop-shadow-[0_2px_2px_rgba(0,0,0,0.22)]" strokeWidth={2.2} />
+      {/* 家标记 */}
+      <HomeIcon className="absolute bottom-[9%] right-[8%] h-6 w-6 text-[#F5A300] drop-shadow-[0_2px_2px_rgba(0,0,0,0.22)]" strokeWidth={2.2} />
+      {/* 骑手形象（立体投影 + 巡航颠簸；透明 PNG 无白边，形象在「我的-骑手」选择） */}
+      <span className="mt-rider absolute block">
+        <img
+          src={mtRiderSrcOf(mtGetRiderId())}
+          alt="外卖骑手"
+          draggable={false}
+          className="mt-rider-img h-[58px] w-[58px] select-none object-contain"
+          style={{ filter: 'drop-shadow(0 6px 5px rgba(0,0,0,0.25)) drop-shadow(0 1.5px 2px rgba(0,0,0,0.18))' }}
+        />
       </span>
     </div>
   );
@@ -3356,14 +3381,10 @@ function OrderDetailPage({
     </div>
   ) : null;
 
-  // 配送地图（仅配送中；剩余单量/分钟按 ETA 实时推算）
+  // 配送地图（仅配送中；骑手形象在「我的-骑手」选择，剩余分钟见 ETA 大标题）
   const mapBlock = order.status === 'delivering' ? (
     <div className="px-3 pb-1 pt-3">
-      <DeliveryMap
-        merchantName={order.merchantName}
-        remainMin={order.etaAt ? Math.max(1, Math.ceil((order.etaAt - Date.now()) / 60_000)) : 9}
-        remainOrders={1 + (([...order.id].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7) >> 4) % 3)}
-      />
+      <DeliveryMap merchantName={order.merchantName} />
     </div>
   ) : null;
 
@@ -5487,6 +5508,9 @@ function MyPage({
   const orders = mtLoadOrders(uid);
   const inFlight = orders.filter((o) => ['pendingAccept', 'accepted', 'delivering'].includes(o.status)).length;
   const idpLabel = session.idp === 'wx' ? '微信账号' : session.idp === 'qq' ? 'QQ账号' : `手机用户 ${session.phone ?? ''}`;
+  // 骑手形象选择（原美团币入口改为骑手，选中形象用于配送地图）
+  const [riderOpen, setRiderOpen] = useState(false);
+  const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
 
   const cell = (Icon: LucideIcon, label: string, badge: number | null, onTap: () => void, tint = 'text-black/75') => (
     <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-70">
@@ -5501,7 +5525,8 @@ function MyPage({
   );
 
   return (
-    <div className="h-full overflow-y-auto bg-white pb-4">
+    <>
+      <div className="h-full overflow-y-auto bg-white pb-4">
       {/* 淡黄头部 + 会员卡（对齐截图：浅黄渐变背景、右上会员中心切角白卡、三权益白卡、神券行） */}
       <div className="bg-gradient-to-b from-[#FFF8CF] via-[#FFF2A6] to-white px-4 pb-4 pt-[58px]">
         <div className="flex items-center gap-3">
@@ -5586,13 +5611,12 @@ function MyPage({
         </div>
       </div>
 
-      {/* 功能宫格（白底直排，无圆角面板；收藏/浏览记录为真实页面，红包卡券/美团币演示） */}
+      {/* 功能宫格（白底直排，无圆角面板；收藏/浏览记录为真实页面，红包卡券真实页，骑手可选形象） */}
       <div className="grid grid-cols-4 gap-y-4 px-2 pb-4 pt-1">
         {([
           [Star, '收藏', null, () => onOpenFavorites()],
           [Eye, '浏览记录', null, () => onOpenHistory()],
           [Ticket, '红包卡券', null, () => onOpenCoupons()],
-          [Coins, '美团币', '1', () => onToast('美团币（演示）')],
         ] as [LucideIcon, string, string | null, () => void][]).map(([Icon, l, badge, tap]) => (
           <button key={l} type="button" onClick={tap} className="flex flex-col items-center gap-1.5 active:opacity-70">
             <span className="relative">
@@ -5602,6 +5626,14 @@ function MyPage({
             <span className="text-[11px] text-black/70">{l}</span>
           </button>
         ))}
+        {/* 骑手（原美团币）：显示当前骑手形象，点按进入选择弹层 */}
+        <button type="button" data-testid="my-rider" onClick={() => setRiderOpen(true)} className="flex flex-col items-center gap-1.5 active:opacity-70">
+          <span className="relative">
+            <img src={mtRiderSrcOf(riderId)} alt="骑手形象" draggable={false} className="h-[24px] w-[24px] object-contain" />
+            <span className="absolute -right-2 -top-1 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-[#FF3B30] px-1 text-[9px] font-bold text-white">{MT_RIDERS.length}</span>
+          </span>
+          <span className="text-[11px] text-black/70">骑手</span>
+        </button>
       </div>
 
       {/* 订单 */}
@@ -5659,7 +5691,60 @@ function MyPage({
 
       {/* 账号管理已移至「设置」（收货地址/切换账号/退出登录） */}
       <p className="py-4 text-center text-[10px] text-black/25">美团 v10.18.0 · 数据仅保存在本机 · 按账号隔离 · {idpLabel}</p>
-    </div>
+      </div>
+
+      {/* 骑手形象选择（底部弹层；选中形象用于配送地图巡航） */}
+      <AnimatePresence>
+        {riderOpen && (
+          <motion.div key="rider" className="absolute inset-0 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <button type="button" aria-label="关闭骑手形象选择" className="absolute inset-0 bg-black/45" onClick={() => setRiderOpen(false)} />
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'tween', duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
+              className="absolute inset-x-0 bottom-0 rounded-t-2xl bg-white pb-8"
+              data-testid="rider-sheet"
+            >
+              <div className="relative flex shrink-0 items-center justify-center py-4">
+                <p className="text-[16px] font-bold text-black/85">选择骑手形象</p>
+                <button type="button" aria-label="关闭" data-testid="rider-sheet-close" onClick={() => setRiderOpen(false)} className="absolute right-3 grid h-8 w-8 place-items-center rounded-full active:bg-black/5">
+                  <X className="h-5 w-5 text-black/55" />
+                </button>
+              </div>
+              <p className="px-5 pb-3 text-[12px] text-black/40">已收集 {MT_RIDERS.length}/{MT_RIDERS.length} · 骑手会带着你的订单跑腿送餐</p>
+              <div className="grid max-h-[52vh] grid-cols-3 gap-3 overflow-y-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {MT_RIDERS.map((r) => {
+                  const active = r.id === riderId;
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      data-testid={`rider-${r.id}`}
+                      onClick={() => {
+                        setRiderId(r.id);
+                        mtSetRiderId(r.id);
+                        setRiderOpen(false);
+                        onToast(`骑手「${r.name}」已接单出发`);
+                      }}
+                      className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${active ? 'bg-[#FFF3C4] ring-2 ring-[#FFD100]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
+                    >
+                      {active && (
+                        <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FFD100]">
+                          <Check className="h-3 w-3 text-black/80" strokeWidth={3} />
+                        </span>
+                      )}
+                      <img src={r.src} alt={r.name} draggable={false} className="h-20 w-20 object-contain" />
+                      <span className={`mt-1 text-[12px] ${active ? 'font-semibold text-black/85' : 'text-black/60'}`}>{r.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   );
 }
 

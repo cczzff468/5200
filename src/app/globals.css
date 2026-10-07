@@ -436,3 +436,22 @@
     animation: mt-rider-move 9s ease-in-out infinite alternate;
   }
 }
+
+/* 骑手形象立体颠簸（配合 offset-path 巡航；投影由内联 drop-shadow 提供，无白边白环） */
+@keyframes mt-rider-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2.5deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(2.5deg);
+  }
+}
+.mt-rider-img {
+  animation: mt-rider-bob 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mt-rider-img {
+    animation: none;
+  }
+}
