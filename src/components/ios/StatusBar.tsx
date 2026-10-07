@@ -57,7 +57,8 @@ function BatteryIcon({ level, charging, low }: { level: number; charging: boolea
  *
  * 第二十三轮反馈：灵动岛音乐弹窗（小/大）可见期间，只有「移动数据」（信号）图标消失，
  * WiFi/电量保留（真机 iOS 灵动岛同语义）；弹窗消失后图标恢复。
- * 美团外卖配送小窗可见期间：信号与 WiFi 图标都消失（Live Activity 占据状态栏右侧，真机同语义）。
+ * 美团外卖配送小窗可见期间：信号图标消失，WiFi/电量保留
+ * （用户反馈小窗出现时 WiFi 跟着消失是 bug，已修：WiFi 恒常驻）。
  * 可见性由 MusicIsland 写入 music-store.islandVisible、美团灵动岛写入 mt-island-store
  * （本组件只读两者任一，不重复维护口径）。
  */
@@ -76,8 +77,7 @@ export default function StatusBar() {
   const musicIslandVisible = useMusic((s) => s.islandVisible);
   const mtIslandVisible = useMtIsland((s) => s.visible);
   const islandVisible = musicIslandVisible || mtIslandVisible;
-  // 美团外卖配送小窗可见时 WiFi 图标也消失（用户要求：小窗出现 → WiFi 隐藏，恢复后回归）
-  const hideWifi = mtIslandVisible;
+  // WiFi 恒常驻（用户反馈：美团外卖小窗出现时 WiFi 消失是 bug，已修复；信号图标仍按灵动岛语义隐藏）
 
   const now = clockSecond > 0 ? new Date(clockSecond * 1000) : null;
   const level = battery?.level ?? 100;
@@ -94,14 +94,12 @@ export default function StatusBar() {
       <div className="flex items-center gap-[4px] leading-none">
         {/* 移动数据（信号）：灵动岛弹窗（音乐/美团配送）可见时隐藏，弹窗消失后恢复（第二十三轮反馈） */}
         {!islandVisible && <SignalBars />}
-        {/* WiFi（加大版，整体上移一点避免视觉偏低）：美团外卖配送小窗可见时隐藏（用户要求） */}
-        {!hideWifi && (
-          <svg width="21" height="16" viewBox="0 0 16 12" fill="currentColor" aria-hidden="true" className="relative -top-[1.5px]">
-            <path d="M8 9.6a1.7 1.7 0 0 1 1.7 1.7c0 .3-.5.7-1.7.7s-1.7-.4-1.7-.7A1.7 1.7 0 0 1 8 9.6Z" />
-            <path d="M8 5.9c1.5 0 2.9.6 3.9 1.6l-1.3 1.3a3.7 3.7 0 0 0-5.2 0L4.1 7.5A5.5 5.5 0 0 1 8 5.9Z" />
-            <path d="M8 2.2c2.5 0 4.8 1 6.5 2.7l-1.3 1.3A7.3 7.3 0 0 0 8 4a7.3 7.3 0 0 0-5.2 2.2L1.5 4.9A9.2 9.2 0 0 1 8 2.2Z" />
-          </svg>
-        )}
+        {/* WiFi（加大版，整体上移一点避免视觉偏低）：恒常驻（小窗出现时消失属 bug，已修复） */}
+        <svg width="21" height="16" viewBox="0 0 16 12" fill="currentColor" aria-hidden="true" className="relative -top-[1.5px]">
+          <path d="M8 9.6a1.7 1.7 0 0 1 1.7 1.7c0 .3-.5.7-1.7.7s-1.7-.4-1.7-.7A1.7 1.7 0 0 1 8 9.6Z" />
+          <path d="M8 5.9c1.5 0 2.9.6 3.9 1.6l-1.3 1.3a3.7 3.7 0 0 0-5.2 0L4.1 7.5A5.5 5.5 0 0 1 8 5.9Z" />
+          <path d="M8 2.2c2.5 0 4.8 1 6.5 2.7l-1.3 1.3A7.3 7.3 0 0 0 8 4a7.3 7.3 0 0 0-5.2 2.2L1.5 4.9A9.2 9.2 0 0 1 8 2.2Z" />
+        </svg>
         {/* 电量图标常驻（未就绪时按 100% 绘制；缓存已在首帧绘制前同步恢复，不再闪断） */}
         <BatteryIcon level={level} charging={battery?.charging ?? false} low={low} />
       </div>

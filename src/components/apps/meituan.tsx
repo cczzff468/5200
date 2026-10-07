@@ -66,6 +66,7 @@ import {
   Home as HomeIcon,
   House,
   ImageOff,
+  ImagePlus,
   Languages,
   Laugh,
   LayoutGrid,
@@ -84,7 +85,6 @@ import {
   ScanLine,
   Scissors,
   Search as SearchIcon,
-  Share2,
   ShoppingBag,
   ShoppingCart,
   Star,
@@ -177,7 +177,7 @@ import {
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
 import { mtCreateProxyRequest } from '@/lib/ios/mt-proxy-pay';
 import { mtCreateOrderShare } from '@/lib/ios/mt-order-share';
-import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
+import { MT_RIDERS, mtAddCustomRider, mtAllRiders, mtGetRiderId, mtRemoveWhiteEdges, mtRiderSrcOf, mtSetRiderId, type MtRider } from '@/lib/ios/mt-rider';
 import { listContacts } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
@@ -2499,6 +2499,29 @@ function ProxySheet({
   );
 }
 
+/** 分享图标（箭头式，简约）：向上箭头穿出圆角托盘（iOS 分享语义）；
+ *  纯线条无杂饰，替换原 Share2 三点盒（用户要求「变成箭头一样的，简约」） */
+function MtShareGlyph({ className = '' }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.1}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      {/* 向上箭头（穿出托盘） */}
+      <path d="M12 3.2v10.3" />
+      <path d="M8.4 6.6 12 3l3.6 3.6" />
+      {/* 圆角托盘（顶部开口，箭头从中穿出） */}
+      <path d="M8.6 10.6H7.4A2.9 2.9 0 0 0 4.5 13.5v4.6a2.9 2.9 0 0 0 2.9 2.9h9.2a2.9 2.9 0 0 0 2.9-2.9v-4.6a2.9 2.9 0 0 0-2.9-2.9h-1.2" />
+    </svg>
+  );
+}
+
 /** 订单分享弹层：第一步选平台（微信/QQ好友），第二步选联系人 → 动态订单卡片进好友聊天（与找人代付同交互） */
 function ShareSheet({
   step,
@@ -3429,7 +3452,7 @@ function OrderDetailPage({
     onToast(`订单动态已分享给${res.share.contactName}`);
   };
 
-  // 美化分享按钮（美团黄渐变圆钮：待支付/进行中/配送中/已完成详情右上角统一）
+  // 美化分享按钮（箭头式简约图标 + 美团黄渐变圆钮：待支付/进行中/配送中/已完成详情右上角统一）
   const shareBtn = (
     <button
       type="button"
@@ -3438,7 +3461,7 @@ function OrderDetailPage({
       onClick={() => setShareStep('plat')}
       className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-br from-[#FFD100] to-[#FFB800] shadow-[0_2px_8px_rgba(255,180,0,0.45)] active:opacity-80"
     >
-      <Share2 className="h-[17px] w-[17px] text-white" strokeWidth={2.2} />
+      <MtShareGlyph className="h-[18px] w-[18px] text-white" />
     </button>
   );
 
@@ -4159,7 +4182,7 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
               <Star className={`h-4 w-4 ${dealFav ? 'fill-[#FFD100] text-[#FFD100]' : ''}`} />
             </button>
             <button type="button" aria-label="分享" onClick={() => onToast('分享（演示）')} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/35 text-white active:opacity-75">
-              <Share2 className="h-4 w-4" />
+              <MtShareGlyph className="h-4 w-4" />
             </button>
           </div>
           <span className="absolute bottom-3 right-3 rounded-full bg-black/45 px-2 py-0.5 text-[10px] text-white">1/3</span>
@@ -5774,6 +5797,29 @@ function MyPage({
   // 骑手形象选择（原美团币入口改为骑手，选中形象用于配送地图）
   const [riderOpen, setRiderOpen] = useState(false);
   const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
+  // 用户上传骑手形象：手机相册选图 → 前端 canvas 去白边 → dataURL 持久化；上传期间按钮转圈
+  const [customRiders, setCustomRiders] = useState<MtRider[]>([]);
+  const [uploadingRider, setUploadingRider] = useState(false);
+  const riderFileRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (riderOpen) setCustomRiders(mtGetCustomRiders());
+  }, [riderOpen]);
+  const handleRiderUpload = async (file: File) => {
+    if (uploadingRider) return;
+    setUploadingRider(true);
+    const src = await mtRemoveWhiteEdges(file);
+    setUploadingRider(false);
+    if (!src) {
+      onToast('没能认出形象，换张背景简单的图片试试');
+      return;
+    }
+    const rider = mtAddCustomRider(src);
+    setCustomRiders((list) => [...list, rider]);
+    setRiderId(rider.id);
+    mtSetRiderId(rider.id);
+    setRiderOpen(false);
+    onToast('形象已去白边并保存，配送地图即刻上身');
+  };
 
   const cell = (Icon: LucideIcon, label: string, badge: number | null, onTap: () => void, tint = 'text-black/75') => (
     <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-70">
@@ -7976,7 +8022,7 @@ function MovieDetailPage({ movie, mark, onMark, onBack, onBuy }: { movie: FunMov
             <ChevronLeft className="h-5 w-5" />
           </button>
           <button type="button" aria-label="分享" onClick={onBack} className="absolute right-3 top-[52px] grid h-9 w-9 place-items-center rounded-full bg-white/10 text-white active:opacity-75">
-            <Share2 className="h-4 w-4" />
+            <MtShareGlyph className="h-4 w-4" />
           </button>
           <div className="mt-2 flex gap-4">
             <PosterArt movie={movie} className="h-[172px] w-[124px] shrink-0 rounded-lg" />
