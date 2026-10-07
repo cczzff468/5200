@@ -10,7 +10,7 @@
  *  - s=变体序号（同词不同变体出不同图），w/h=尺寸，p=f 菜品图 / c 门头图；
  *  - 服务端内存缓存 + 浏览器强缓存：同 tag+变体只生成一次，之后秒出 */
 export function mtImg(tag: string, w = 480, h = 360, s = 0, kind: 'f' | 'c' = 'f'): string {
-  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}`;
+  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}&v=3`;
 }
 
 /** 中文名 → 英文品类词词典（AI 未返回 tag 时兜底，保证图片与内容匹配） */

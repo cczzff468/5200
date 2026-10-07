@@ -189,6 +189,9 @@ const mtStatusText = (o: MtOrder): string => {
   return MT_STATUS_LABEL[o.status];
 };
 
+/** 菜单分节名「N选M」识别（鲜果 3选1 / 比萨 4选1 → 购买弹窗内必选分组） */
+const MT_CHOICE_RE = /（?(\d+)\s*选\s*(\d+)）?/;
+
 /** 首页宫格图标（icon key → Lucide 组件，对齐真机彩色拟物图） */
 const GRID_ICONS: Record<string, LucideIcon> = {
   Bike,
@@ -241,7 +244,7 @@ function FoodImgInner({ src, className = '' }: { src?: string; className?: strin
       draggable={false}
       loading="lazy"
       onError={() => setStage((s) => Math.min(3, s + 1))}
-      className={`object-cover ${className}`}
+      className={`bg-[#F5F6F7] object-cover ${className}`}
     />
   );
 }
@@ -3259,6 +3262,34 @@ function DealConfirmSheet({
     .map((g) => (selSpec[g.name] ?? []).join('、'))
     .filter(Boolean)
     .join('/');
+  // 菜单 N选1 分组（如「鲜果 3选1」「比萨 4选1」）：购买弹窗内必选，默认选前 M 项；价格已含在套餐内
+  const choiceGroups = deal.menu
+    .filter((s) => MT_CHOICE_RE.test(s.sec) && s.items.length > 0)
+    .map((s) => {
+      const m = MT_CHOICE_RE.exec(s.sec);
+      const pick = Math.max(1, Math.min(m ? Number(m[2]) || 1 : 1, 3));
+      return { name: s.sec, pick, multi: pick > 1, options: s.items.slice(0, 8).map((it) => ({ label: it.name })) };
+    });
+  const [selChoice, setSelChoice] = useState<Record<string, string[]>>(() => {
+    const m: Record<string, string[]> = {};
+    for (const g of choiceGroups) m[g.name] = g.options.slice(0, g.pick).map((o) => o.label);
+    return m;
+  });
+  const tapChoice = (gName: string, label: string) => {
+    const g = choiceGroups.find((x) => x.name === gName);
+    if (!g) return;
+    setSelChoice((prev) => {
+      const cur = prev[gName] ?? [];
+      if (g.multi) {
+        const has = cur.includes(label);
+        if (has) return { ...prev, [gName]: cur.filter((x) => x !== label) };
+        if (cur.length >= g.pick) return { ...prev, [gName]: [...cur.slice(1), label] };
+        return { ...prev, [gName]: [...cur, label] };
+      }
+      return { ...prev, [gName]: [label] };
+    });
+  };
+  const choiceText = choiceGroups.map((g) => (selChoice[g.name] ?? []).join('、')).filter(Boolean).join('；');
   // 优惠券（到店券）
   const [selCoupon, setSelCoupon] = useState<MtCoupon | null>(null);
   const [couponPick, setCouponPick] = useState(false);
@@ -3299,7 +3330,7 @@ function DealConfirmSheet({
           qty,
           emoji: deal.emoji,
           img: deal.img,
-          spec: [hasPkgs && pkgs.length > 1 ? pkg.name : '', specText].filter(Boolean).join(' / ') || undefined,
+          spec: [hasPkgs && pkgs.length > 1 ? pkg.name : '', choiceText, specText].filter(Boolean).join(' / ') || undefined,
         },
       ],
       itemTotal,
@@ -3405,6 +3436,36 @@ function DealConfirmSheet({
                     );
                   })}
                 </div>
+              </div>
+            )}
+
+            {/* 选择内容（菜单 N选1 分组必选：鲜果 3选1 / 比萨 4选1 等，价格已含在套餐内） */}
+            {choiceGroups.length > 0 && (
+              <div className="border-t border-black/5 px-4 py-3.5">
+                <p className="text-[14px] font-semibold text-black/80">选择内容</p>
+                {choiceGroups.map((g) => (
+                  <div key={g.name} className="mt-3">
+                    <p className="text-[12px] text-black/50">{g.multi ? `${g.name}（选${g.pick}样）` : g.name}</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {g.options.map((o) => {
+                        const on = (selChoice[g.name] ?? []).includes(o.label);
+                        return (
+                          <button
+                            key={o.label}
+                            type="button"
+                            onClick={() => tapChoice(g.name, o.label)}
+                            aria-pressed={on}
+                            className={`flex min-h-[38px] items-center justify-center rounded-lg px-1.5 text-[13px] transition-colors ${
+                              on ? 'border-[1.5px] border-[#FF2D7E] bg-[#FFEBF3] font-medium text-[#FF2D7E]' : 'border-[1.5px] border-transparent bg-[#F5F6F7] text-black/80'
+                            }`}
+                          >
+                            <span className="truncate">{o.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 

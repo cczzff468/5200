@@ -16443,3 +16443,22 @@ Stage Summary:
 - 首页信息流生命周期修正：返回/tab 切换恢复缓存不重生成，刷新/切分类才重新生成
 - 特价团聚合卡随刷新整体 AI 重新生成（主题+团购）
 - 生成动画位置对齐需求（宫格图标下方）
+---
+Task ID: mt-img-menu-106
+Agent: Z.ai Code (main)
+Task: 美团三项迭代——①调研并升级图片方案（图片与内容不符/不好看）②菜单 N选1 进购买弹窗可选 ③AI 商家菜单扩到 8~10 菜（招牌/小吃/饮品）
+
+Work Log:
+- 图片方案调研（web search + 实测）：LoremFlickr(401)/Unsplash Source(503)/Foodish(503) 均已死；TheMealDB 中文覆盖差；Openverse 限 200/天；Wikimedia Commons 可用但相关度不稳；Pollinations 仍是最佳关键词出图（配额内 2~5s，突发 402）
+- mt-img v3 四级生成链：①Pollinations（402/403 快跳不浪费时间）→ ②z-ai 内置生图（内容匹配、质量稳定，单张 ~60s 但结果永久缓存一次生成）→ ③Wikimedia Commons 实拍图（快/免费/不缓存，相关度不稳故下次请求自愈给 z-ai）→ ④Lorem Picsum（最终兜底，不缓存自愈）；URL 加 v=3 版本号使浏览器旧坏缓存自然失效；并发队列 2→3；FoodImg <img> 加灰底加载态
+- 提示词美化（用户反馈"有的不好看"）：菜品=professional food photography/appetizing plating/soft warm light；饮品=杯装+condensation；门头=shop storefront+warm lights
+- 购买弹窗「选择内容」：deal.menu 分节名匹配 /N选M/（鲜果 3选1、比萨 4选1）→ 弹窗内必选分组（默认选前 M 项，单选/多选自动识别），价格含在套餐内不变；选中项写入订单 spec（套餐名 / N选1选择 / 规格小料 三段拼接）
+- AI 商家菜单扩容：schema 改「招牌菜/小吃甜品/饮品」分节结构共 8~10 个菜品（招牌 5~6+小吃 2~3+饮品 1~2）；coerceMenuSections 兼容新分节与旧扁平结构；用户模型默认 maxTokens 4096→8192 防截断
+- AI 团购 menu 用「XX N选1」分节 + 固选节（与弹窗选择内容打通）；static deals（比萨 4选1/鲜果 3选1）自动走同一弹窗逻辑
+- E2E（agent-browser）：静态比萨团购弹窗=选择套餐(A/B)+选择内容(比萨4选1)+选择规格 三区联动正确；AI 寿司团购=A套餐¥128/B套餐¥188 切换+刺身3选1 切换+实付联动+订单命名「日式双人寿司套餐（B套餐·豪华双人餐）」；AI 商家「老街糖水铺」菜单=招牌菜6种+小吃甜品2种+饮品1种 共9菜且分区正确；图片门头/菜品内容匹配（芒果班戟=水果、绿豆汤=汤、门头=店内暖光）；eslint+tsc 零告警；dev.log worker 报错为早前热更风暴残留、服务已恢复
+- 改动文件：src/app/api/mt-img/route.ts（四级链重写）、src/app/api/mt-feed/route.ts（菜单 schema/收窄/maxTokens）、src/lib/ios/meituan-data.ts（mtImg v3 + 可乐词典）、src/components/apps/meituan.tsx（FoodImg 底色 + 弹窗选择内容区）
+
+Stage Summary:
+- 图片链路抗限流：Pollinations 配额耗尽时 z-ai 生图自动接管（内容匹配不降级），Wikimedia/picsum 仅作临时兜底且不缓存、后续自愈；v=3 一次性清掉浏览器里的旧坏图
+- N选1（3选1/4选1/2选1）全部在购买弹窗内可选，默认选中、单选/多选自适应，选择结果进订单规格
+- AI 商家菜单从 2~4 菜扩到 8~10 菜，分「招牌菜/小吃甜品/饮品」三区，与商家页左侧分类联动

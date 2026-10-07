@@ -278,11 +278,11 @@ function buildSystem(): string {
   return '你是美团信息流数据引擎，负责生成逼真的本地生活商家与团购数据。数值必须符合现实常识（评分 3.8~5.0、价格与折扣自洽、距离 0.3~8 公里）。只输出 JSON，不要输出任何解释、注释或 markdown 代码块。';
 }
 function buildUser(a: GenerateArgs): string {
-  // schema 精简（menu 2~4 个、去掉 hours/notice）以在模型输出上限内装下更多条目
+  // schema：商家菜单分节（招牌菜/小吃甜品/饮品）以装下 8~10 个菜品
   const merchantSchema =
-    '{"kind":"merchant","name":"老灶火锅·望京店","emoji":"🍲","tag":"hotpot","rating":4.8,"monthSale":3200,"minOrder":20,"deliveryFee":2,"distanceKm":1.5,"deals":["满30减5"],"addr":"望京街道湖光中街1号","menu":[{"name":"招牌毛肚","price":38,"emoji":"🍲"},{"name":"鲜切牛肉","price":45,"emoji":"🥩"}]}';
+    '{"kind":"merchant","name":"老灶火锅·望京店","emoji":"🍲","tag":"hotpot","rating":4.8,"monthSale":3200,"minOrder":20,"deliveryFee":2,"distanceKm":1.5,"deals":["满30减5"],"addr":"望京街道湖光中街1号","menu":[{"sec":"招牌菜","items":[{"name":"招牌毛肚","price":38},{"name":"鲜切牛肉","price":45},{"name":"手打虾滑","price":32}]},{"sec":"小吃甜品","items":[{"name":"红糖糍粑","price":12}]},{"sec":"饮品","items":[{"name":"酸梅汤","price":6}]}]}';
   const dealSchema =
-    '{"kind":"deal","title":"双人烤肉超值套餐","emoji":"🍖","tag":"bbq","price":88,"origPrice":168,"sold":"已售1.2万+","praise":"96%好评","tips":"到店吃","distanceKm":2.1,"merchantName":"炭一烤肉·望京店","packages":[{"name":"A套餐·经典双人餐","price":88,"items":["经典烤肉拼盘","时蔬拼盘","饮品2杯"]},{"name":"B套餐·豪华双人餐","price":118,"items":["豪华烤肉拼盘","海鲜拼盘","主食2份","饮品2杯"]}],"menu":[{"sec":"套餐内容","items":[{"name":"烤肉拼盘","price":168},{"name":"饮品2杯","price":20}]}]}';
+    '{"kind":"deal","title":"双人烤肉超值套餐","emoji":"🍖","tag":"bbq","price":88,"origPrice":168,"sold":"已售1.2万+","praise":"96%好评","tips":"到店吃","distanceKm":2.1,"merchantName":"炭一烤肉·望京店","packages":[{"name":"A套餐·经典双人餐","price":88,"items":["经典烤肉拼盘","时蔬拼盘","饮品2杯"]},{"name":"B套餐·豪华双人餐","price":118,"items":["豪华烤肉拼盘","海鲜拼盘","主食2份","饮品2杯"]}],"menu":[{"sec":"烤肉 3选1","items":[{"name":"经典烤肉拼盘","price":168},{"name":"时蔬拼盘","price":98},{"name":"海鲜拼盘","price":198}]},{"sec":"固选","items":[{"name":"饮品2杯","price":20}]}]}';
 
   const kindRule =
     a.mode === 'merchant'
@@ -300,7 +300,7 @@ function buildUser(a: GenerateArgs): string {
     '字段规范（示例名称仅示意格式，输出中禁止出现「老灶火锅」「炭一烤肉」等示例名）：',
     `merchant = ${merchantSchema}`,
     `deal = ${dealSchema}`,
-    `要求：rating 3.8~5.0；monthSale 50~90000 整数；price 与 origPrice 自洽（origPrice 更高，折扣约 3~8 折）；distanceKm 0.3~8 一位小数；deals 为 0~2 个优惠文案；merchant 的 menu 为 2~4 个菜品；tag 为与品类一致的英文品类词（如 hotpot、bbq、pizza、milk-tea、noodles、sushi、dessert）；deal 的 packages 为 2~3 个可选套餐（name 以 A套餐/B套餐开头且简短、price 递增、每个含 3~6 个 items 短语）；deal 的 menu 为默认套餐内容清单。全部简体中文（tag 除外），数据要合理逼真。输出尽量精炼，确保 ${a.count} 条全部输出完整。`,
+    `要求：rating 3.8~5.0；monthSale 50~90000 整数；price 与 origPrice 自洽（origPrice 更高，折扣约 3~8 折）；distanceKm 0.3~8 一位小数；deals 为 0~2 个优惠文案；merchant 的 menu 分「招牌菜/小吃甜品/饮品」2~3 个 sec、共 8~10 个菜品（招牌菜 5~6 个+小吃甜品 2~3 个+饮品 1~2 个，items 只含 name/price）；tag 为与品类一致的英文品类词（如 hotpot、bbq、pizza、milk-tea、noodles、sushi、dessert）；deal 的 packages 为 2~3 个可选套餐（name 以 A套餐/B套餐开头且简短、price 递增、每个含 3~6 个 items 短语）；deal 的 menu 用「XX N选1」分节（如「烤肉 3选1」，供用户购买时选择，另加 1 个「固选」节）。全部简体中文（tag 除外），数据要合理逼真。输出尽量精炼，确保 ${a.count} 条全部输出完整。`,
     '只输出一个 JSON 数组，不要 markdown 代码块，不要解释。',
   ].join('\n');
 }
@@ -328,11 +328,25 @@ function coerceDish(merchantName: string, idx: number, raw: unknown, fallbackTag
   };
 }
 
+/** 商家菜单塑形：优先「分节」结构（招牌菜/小吃甜品/饮品），兼容旧版扁平菜品数组；保证 5~10 个菜 */
 function coerceMenuSections(merchantName: string, rawMenu: unknown, fallbackTag: string | null): { cat: string; dishes: MtDish[] }[] {
-  const arr = Array.isArray(rawMenu) ? rawMenu.slice(0, 8) : [];
-  const dishes = arr.map((d, i) => coerceDish(merchantName, i, d, fallbackTag));
-  if (dishes.length === 0) dishes.push(coerceDish(merchantName, 0, {}, fallbackTag));
-  return [{ cat: '推荐', dishes }];
+  const arr = Array.isArray(rawMenu) ? rawMenu : [];
+  const out: { cat: string; dishes: MtDish[] }[] = [];
+  const first: RawRec | null = arr.length > 0 && typeof arr[0] === 'object' && arr[0] !== null ? (arr[0] as RawRec) : null;
+  if (first && Array.isArray(first.items)) {
+    // 新结构：[{sec:'招牌菜', items:[{name,price}]}, ...]
+    for (const sec of arr.slice(0, 4)) {
+      const s: RawRec = typeof sec === 'object' && sec !== null ? (sec as RawRec) : {};
+      const dishes = (Array.isArray(s.items) ? s.items : []).slice(0, 6).map((d, i) => coerceDish(merchantName, i, d, fallbackTag));
+      if (dishes.length > 0) out.push({ cat: strOf(s.sec, '推荐', 12), dishes });
+    }
+  } else {
+    // 旧结构：扁平菜品数组/字符串
+    const dishes = arr.slice(0, 10).map((d, i) => coerceDish(merchantName, i, d, fallbackTag));
+    if (dishes.length > 0) out.push({ cat: '推荐', dishes });
+  }
+  if (out.length === 0) out.push({ cat: '推荐', dishes: [coerceDish(merchantName, 0, {}, fallbackTag)] });
+  return out;
 }
 
 function buildMerchant(id: string, raw: unknown, filter: string | null): MtMerchant {
@@ -488,7 +502,7 @@ export async function POST(req: NextRequest) {
         apiKey: typeof c.apiKey === 'string' ? c.apiKey.trim() : '',
         model: typeof c.model === 'string' && c.model.trim() ? c.model.trim() : 'gpt-4o-mini',
         temperature: num(c.temperature, 0.9, 0, 2),
-        maxTokens: intOf(c.maxTokens, 4096, 256, 32768),
+        maxTokens: intOf(c.maxTokens, 8192, 256, 32768),
       };
     }
   }
