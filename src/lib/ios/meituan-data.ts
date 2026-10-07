@@ -10,7 +10,7 @@
  *  - s=变体序号（区分缓存），w/h=尺寸，p=f 菜品图 / c 门头图；
  *  - 服务端内存缓存 + 浏览器强缓存 15min：期内秒出，过期自动轮换同分类新图 */
 export function mtImg(tag: string, w = 480, h = 360, s = 0, kind: 'f' | 'c' = 'f'): string {
-  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}&v=4`;
+  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}&v=6`;
 }
 
 /** 中文名 → 英文品类词词典（AI 未返回 tag 时兜底，保证图片与内容匹配） */
@@ -21,11 +21,17 @@ const TAG_RULES: [RegExp, string][] = [
   [/咖啡|拿铁|美式|摩卡/, 'coffee'],
   [/柠檬茶|红茶|绿茶|乌龙|花茶|茶/, 'tea'],
   [/果汁|鲜榨|椰汁|酸奶|柠檬水|酸梅汤|饮/, 'juice'],
+  [/咖喱/, 'curry'],
+  [/泰式|泰国|冬阴功|菠萝饭|青柠蒸鱼/, 'thai'],
+  [/东南亚|越南|新加坡|马来西亚|印尼|南洋/, 'asian'],
+  [/和风|日式|居酒屋|天妇罗|寿喜烧|味噌|丼物|日料/, 'japanese'],
   [/比萨|披萨/, 'pizza'],
   [/汉堡/, 'burger'],
-  [/寿司|刺身|日料|三文鱼|鳗鱼/, 'sushi'],
+  [/寿司|刺身|三文鱼|鳗鱼/, 'sushi'],
   [/烧烤|烤肉|烤鱼|串串|烤/, 'barbecue'],
+  [/韩式|韩国|部队锅|年糕火锅/, 'barbecue'],
   [/炸鸡|鸡排|鸡翅|烧鸡|口水鸡|鸡肉/, 'fried-chicken'],
+  [/港式|粤菜|广东|茶餐厅|烧腊|潮汕|闽南|福建|客家/, 'chinese-food'],
   [/饺子|包子|馄饨|云吞|烧麦|生煎|锅贴|点心|馒头/, 'dumplings'],
   [/蛋糕|慕斯|提拉米苏|千层|泡芙|蛋挞|甜品|甜点|布丁|圣代|冰激凌|冰淇淋|雪糕|雪媚娘/, 'dessert'],
   [/海鲜|虾|蟹|鲍鱼|生蚝|扇贝|鱼/, 'seafood'],

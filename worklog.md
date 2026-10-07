@@ -16492,3 +16492,28 @@ Work Log:
 
 Stage Summary:
 - 本地代码与 worklog 完整；推送待凭据
+
+---
+Task ID: mt-img-v6-scroll-107
+Agent: Z.ai Code (main)
+Task: ①修复小部分图片与内容不符（非AI生图方向）②刷新/返回后保持浏览位置不回顶部
+
+Work Log:
+- 排查截图反馈的 4 家不符商家：泰香阁×2（苹果图）、和风小厨/和风料理（果盘图）→ 全部命中 /api/mt-img 的 food 通用池泄漏（FF_POOL_EXCLUDE 无 apple/fruit 词）
+- 实测 Foodiesfeed 12+ 关键词命中数：asian 49、japanese 50、thai 12、stir-fry 50、rice-bowl 49、noodle-soup 49、curry 30、kimchi 30 → 新增进 FF_SEARCH
+- 发现 hot-pot 池混入 steaming-hot-coffee（截图里麻辣烫/火锅店显示咖啡杯的根因）、milk-tea 池混入大量咖啡图
+- 重构 mt-img 过滤为分池策略：FF_POOL_EXCLUDE（基础黑名单：水果/生鲜/咖啡/生食材）+ FF_SCENE_EXCLUDE（人物聚餐，仅通用池）+ FF_FILTER_SKIP（coffee/tea/juice/fruit/milk/ice-cream 等搜索词重叠池跳过）；milk-tea 不跳过（剔除咖啡图）
+- TAG_SYNONYMS 大扩充（japanese-food/washoku/thai-food/pad-thai/vietnamese/hong-kong/cantonese/chinese/stirfry/wok/donburi/japanese-curry/hunan 等）；修复 cantonese/chinese 同义词遗漏；新增中文 TAG_RULES（咖喱→curry、泰式→thai、和风/日式→japanese、港式/粤→chinese-food、韩式→barbecue 等）
+- mt-feed 提示词加 tag 白名单（42 个已验证池词，禁止自造词）
+- 滚动位置保持：homeFeedCache 加 scroll 字段；onHomeScroll 随时记录；useLayoutEffect 挂载时恢复（无闪顶）；regenerate 去掉强制 scrollTo(0)，改为 keepY 捕获+双 rAF 恢复（下拉刷新/切分类通用）
+- 版本号 v5→v6（路由 key + mtImg URL），浏览器旧缓存失效
+- node 验证过滤效果：food 49→25（苹果/果盘/摊位全剔）、hot-pot 24→9（咖啡剔除、家庭火锅聚餐保留）、milk-tea 25→12（咖啡剔、抹茶拿铁/奶昔保留）
+- agent-browser 验证：下滑 1200px→点商家→详情→返回 → top=2132 精确恢复到点击卡片处；下拉刷新（分两步派发 TouchEvent）→骨架→新内容→停在顶部；图片全部匹配品类（奶茶→奶昔、汉堡→汉堡、药房→药丸默认图）
+- lint 4 文件 0 告警；tsc 通过；页面无报错（控制台历史报错为热更新中间态残留，非当前代码）
+
+Stage Summary:
+- 图片不符三大根因全部修复：①food 通用池混入苹果/果盘（黑名单补齐）②hot-pot/milk-tea 池混入咖啡图（分池过滤）③模型自造 tag 落 food（白名单+同义词扩充）
+- 滚动位置：返回/切 tab 恢复离开时位置（useLayoutEffect）；刷新/切分类保持刷新前位置（keepY+双rAF）
+- 修复期间发现并顺手修：首页 feed 热重载后 v6 生效；特价团种子卡芋泥奶茶图从蔬菜变为奶昔
+- 图片匹配深度优化方案（Pexels key/TheMealDB/Wikimedia/LLM搜索词）已列清单给用户选择，待用户拍板后实施
+- 未推送提交累计 5+1=6 个

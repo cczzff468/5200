@@ -99,37 +99,69 @@ const FF_SEARCH: Record<string, string> = {
   'chinese-food': 'chinese-food', // 26
   'hot-pot': 'hot-pot',
   'fast-food': 'fast-food',
-  food: 'food', // 49（通用食物兑底池）
+  food: 'food', // 49（通用食物兑底池，v5 已去水果/生鲜图）
+  japanese: 'japanese', // 50（日料通用，v5 实测）
+  thai: 'thai', // 12（泰国菜，v5 实测）
+  asian: 'asian', // 49（亚洲/东南亚菜兑底，v5 实测）
+  curry: 'curry', // 30
+  kimchi: 'kimchi', // 30（韩式泡菜/韩餐）
+  'rice-bowl': 'rice-bowl', // 49（盖饭/井物）
+  'stir-fry': 'stir-fry', // 50（小炒/炒菜）
+  'noodle-soup': 'noodle-soup', // 49（汤面/河粉）
 };
 
 /** AI/图库tag 同义词收敛：模型自由发挥的菜系词 → 图库实际有效的分类词。
  *  未知 tag 一律落 'food'（比透传到无关词的搜索结果更贴内容）。 */
 const TAG_SYNONYMS: Record<string, string> = {
-  japanese: 'sushi', japan: 'sushi', sashimi: 'sushi', ramen: 'noodles',
-  korean: 'barbecue', 'korean-bbq': 'barbecue', kbbq: 'barbecue', bbq: 'barbecue',
-  grill: 'barbecue', skewer: 'barbecue', chuanr: 'barbecue',
-  sichuan: 'spicy', szechuan: 'spicy', mala: 'spicy', spicy: 'spicy',
-  cantonese: 'chinese-food', chinese: 'chinese-food', 'chinese-food': 'chinese-food',
+  japanese: 'japanese', 'japanese-food': 'japanese', 'japanese-cuisine': 'japanese', washoku: 'japanese',
+  japan: 'japanese', sashimi: 'sushi', ramen: 'noodles',
+  'thai-food': 'thai', thailand: 'thai', 'tom-yum': 'thai', 'pad-thai': 'thai', tomyum: 'thai',
+  vietnamese: 'asian', 'south-east-asian': 'asian', southeast: 'asian', singapore: 'asian',
+  malaysian: 'asian', indonesian: 'asian',
+  'hong-kong': 'chinese-food', hongkong: 'chinese-food', canton: 'chinese-food', cantonese: 'chinese-food',
+  chinese: 'chinese-food', 'chinese-food': 'chinese-food', 'chinese-restaurant': 'chinese-food',
+  chaoshan: 'chinese-food', teochew: 'chinese-food',
+  korean: 'barbecue', 'korean-bbq': 'barbecue', kbbq: 'barbecue', 'south-korean': 'barbecue', korea: 'barbecue',
+  bbq: 'barbecue', grill: 'barbecue', skewer: 'barbecue', chuanr: 'barbecue',
+  sichuan: 'spicy', szechuan: 'spicy', mala: 'spicy', spicy: 'spicy', hunan: 'spicy',
   dimsum: 'dumplings', 'dim-sum': 'dumplings', dim: 'dumplings',
   shabu: 'hotpot', malatang: 'hotpot', huo: 'hotpot',
   boba: 'milk-tea', bubble: 'milk-tea', pearl: 'milk-tea',
   beverage: 'drink', drinks: 'drink', softdrink: 'drink',
   american: 'burger', fastfood: 'fast-food', western: 'steak',
   italian: 'pizza', pasta: 'noodles', spaghetti: 'noodles',
+  stirfry: 'stir-fry', 'stir-fried': 'stir-fry', saute: 'stir-fry', wok: 'stir-fry',
+  donburi: 'rice-bowl',
+  'japanese-curry': 'curry', 'green-curry': 'curry', massaman: 'curry',
   bakery: 'bread', bakes: 'bread', cake: 'dessert', pastry: 'dessert',
   hotpot: 'hot-pot', 'hot-pot': 'hot-pot',
   veg: 'salad', vegan: 'salad', vegetarian: 'salad',
 };
 
-/** 图库全文搜索会带入少量无关图（如 sushi 池里混入桃子/草莓）：
- *  对搜索结果按 slug 二次过滤（黑名单命中即剔除，提高分类纯度）。 */
+/** 基础黑名单（v6 实测，所有池适用）：水果/生鲜摊位/咖啡茶饮乱入（hot-pot 池混入 steaming-hot-coffee、
+ *  milk-tea 池混入 latte/coffee-reading）/生食材/节日场景。搜索词与黑名单重叠的池（咖啡池搜 coffee、
+ *  水果池搜 fruit、奶茶池等）在 filterPool 里跳过对应词。 */
 const FF_POOL_EXCLUDE =
-  /disco|neon|abstract|rainbow|flower|floral|forest|landscape|mountain|beach|sunset|sunrise|animal|dog|cat|bird|building|portrait|nature|(-|^)festival(-|$)|strawberr|peach|nectarin|watermelon|grape|melon|banana|mango|pomegranate|pineapple|papaya|lychee|dragonfruit/;
+  /disco|neon|abstract|rainbow|flower|floral|forest|landscape|mountain|beach|sunset|sunrise|animal|dog|cat|bird|building|portrait|nature|festival|strawberr|peach|nectarin|watermelon|grape|melon|banana|mango|pomegranate|pineapple|papaya|lychee|dragonfruit|apple|berries|berry|fruit|crate|stall|market|produce|ingredient|vegetable|tomato|eggplant|sweet-potato|seeds|[/_-]nuts?[/_-]|[/_-]peas[/_-]|[/_-]corn[/_-]|christmas|halloween|coffee|cappuccino|espresso|barista|flatwhite|macchiato|kettle|clean-pan|boiling-egg|pouring|meeting/;
+
+/** 场景图黑名单（仅通用池适用）：人物聚餐/出镜类。具体菜系池（如 hot-pot 的家庭聚餐图）是自然门头图，不剔除 */
+const FF_SCENE_EXCLUDE = /family|friends|people|dinner-with/;
+
+/** 通用池：内容宽泛最易被场景图污染，应用全部黑名单 */
+const FF_SCENE_POOLS = new Set([
+  'food', 'asian', 'japanese', 'thai', 'chinese-food', 'stir-fry', 'rice-bowl', 'noodle-soup', 'curry', 'kimchi', 'fast-food', 'store',
+]);
+
+/** 搜索词本身与基础黑名单重叠的池（咖啡池搜 coffee、水果池搜 fruit、茶/果汁/冰淇淋池同理），整体跳过过滤。
+ *  注意 milk-tea 不跳过：其搜索结果混入大量咖啡图，对奶茶品牌属于内容不符，需要按黑名单剔除。 */
+const FF_FILTER_SKIP = /^(fruit|banana|cherry|cherries|mandarin|kiwi|strawberr|coffee|tea|juice|drink|milk$|ice-cream)/;
 
 function filterPool(urls: string[], kw: string): string[] {
-  // 水果/浆果分类本身不做水果词过滤
-  if (/^(fruit|banana|cherry|cherries|mandarin|kiwi|strawberr)/.test(kw)) return urls;
-  return urls.filter((u) => !FF_POOL_EXCLUDE.test(u.toLowerCase()));
+  if (FF_FILTER_SKIP.test(kw)) return urls;
+  const low = urls.map((u) => u.toLowerCase());
+  const base = urls.filter((_, i) => !FF_POOL_EXCLUDE.test(low[i]));
+  if (!FF_SCENE_POOLS.has(kw)) return base;
+  return base.filter((u) => !FF_SCENE_EXCLUDE.test(u.toLowerCase()));
 }
 
 /** 图库无对应分类的 tag（medicine 等）→ 直接走默认图（不浪费时间搜索） */
@@ -495,7 +527,7 @@ export async function GET(req: NextRequest) {
   const h = intOf(sp.get('h'), 400, 100, 800);
   const s = intOf(sp.get('s'), 0, 0, 999);
   // v=链路版本：升级后浏览器旧缓存自然失效（URL 变了）
-  const key = `${tag}|${w}x${h}|${s}|v4`;
+  const key = `${tag}|${w}x${h}|${s}|v6`;
 
   const hit = cacheGet(key);
   if (hit) {

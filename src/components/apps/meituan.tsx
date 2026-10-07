@@ -20,7 +20,7 @@
  *   亲属卡消费 recordFcSpend(channel='美团') → AI 记忆感知；余额不足灰显拦截；
  * - 全局状态推进与灵动岛通知见 MeituanOrderWatcher。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowDown,
   Bell,
@@ -716,14 +716,16 @@ function interleave(deals: MtDeal[], merchants: MtMerchant[]): FeedItem[] {
   return out;
 }
 
-/** 首页信息流缓存：从详情页/其他 tab 返回时直接恢复，不重新生成（仅首次进入/下拉刷新/切分类才生成） */
+/** 首页信息流缓存：从详情页/其他 tab 返回时直接恢复，不重新生成（仅首次进入/下拉刷新/切分类才生成）；
+ *  scroll=离开时的浏览位置，返回时原样恢复（不回顶部） */
 const homeFeedCache: {
   ready: boolean;
   filter: string | null;
   feed: FeedItem[];
   listDeals: MtDeal[];
   listTitle: string | null;
-} = { ready: false, filter: null, feed: [], listDeals: [], listTitle: null };
+  scroll: number;
+} = { ready: false, filter: null, feed: [], listDeals: [], listTitle: null, scroll: 0 };
 
 /** 本地兜底批（AI 不可用时）：种子池洗牌 + 排除已展示名称；池子耗尽 → 分店变体续流 */
 function localBatch(filter: string | null, exclude: string[]): { items: FeedItem[]; listDeals: MtDeal[]; listTitle: string | null } {
@@ -879,18 +881,27 @@ function HomePage({
     const seq = ++genSeqRef.current;
     const f = filterRef.current;
     const exclude = feedRef.current.map(feedName).filter(Boolean).slice(0, 80);
+    const keepY = scrollRef.current?.scrollTop ?? 0; // 刷新前的浏览位置：新内容渲染后回到这里（不强制回顶部）
     generatingRef.current = true;
     loadingRef.current = false;
     setGenerating(true);
     setLoadingMore(false);
     setPullDist(0);
-    scrollRef.current?.scrollTo({ top: 0 });
     const batch = await fetchBatch(f, exclude);
     if (genSeqRef.current !== seq) return; // 期间又触发了刷新/切分类：丢弃过期批次
     setFeed(batch.items);
     setListData({ deals: batch.listDeals, title: batch.listTitle });
     generatingRef.current = false;
     setGenerating(false);
+    if (keepY > 0) {
+      // 双 rAF：等新内容完成布局后回到刷新前的位置（内容变短则夹到最大可滚动处）
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const el = scrollRef.current;
+          if (el) el.scrollTop = Math.min(keepY, Math.max(0, el.scrollHeight - el.clientHeight));
+        }),
+      );
+    }
   }, [fetchBatch]);
 
   // 首次挂载：有缓存直接恢复（从详情页/其他 tab 返回不重新生成）；否则生成
@@ -939,9 +950,20 @@ function HomePage({
 
   const onHomeScroll = useCallback(() => {
     const el = scrollRef.current;
-    if (!el || generatingRef.current || loadingRef.current) return;
+    if (!el) return;
+    homeFeedCache.scroll = el.scrollTop; // 随时记录浏览位置（返回/刷新后恢复用）
+    if (generatingRef.current || loadingRef.current) return;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 280) void loadMore();
   }, [loadMore]);
+
+  // 返回恢复浏览位置：布局完成后、首次绘制前跳回离开时的位置（无闪顶）
+  useLayoutEffect(() => {
+    const y = homeFeedCache.scroll;
+    if (homeFeedCache.ready && y > 0) {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = Math.min(y, Math.max(0, el.scrollHeight - el.clientHeight));
+    }
+  }, []);
 
   // ---- 下拉刷新手势：顶部继续下拉 → 松手重新生成（需求三：下拉刷新，重新生成） ----
   const onTouchStart = (e: React.TouchEvent) => {

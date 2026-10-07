@@ -300,7 +300,7 @@ function buildUser(a: GenerateArgs): string {
     '字段规范（示例名称仅示意格式，输出中禁止出现「老灶火锅」「炭一烤肉」等示例名）：',
     `merchant = ${merchantSchema}`,
     `deal = ${dealSchema}`,
-    `要求：rating 3.8~5.0；monthSale 50~90000 整数；price 与 origPrice 自洽（origPrice 更高，折扣约 3~8 折）；distanceKm 0.3~8 一位小数；deals 为 0~2 个优惠文案；merchant 的 menu 分「招牌菜/小吃甜品/饮品」2~3 个 sec、共 8~10 个菜品（招牌菜 5~6 个+小吃甜品 2~3 个+饮品 1~2 个，items 只含 name/price）；tag 为与品类一致的英文品类词（如 hotpot、bbq、pizza、milk-tea、noodles、sushi、dessert）；deal 的 packages 为 2~3 个可选套餐（name 以 A套餐/B套餐开头且简短、price 递增、每个含 3~6 个 items 短语）；deal 的 menu 用「XX N选1」分节（如「烤肉 3选1」，供用户购买时选择，另加 1 个「固选」节）。全部简体中文（tag 除外），数据要合理逼真。输出尽量精炼，确保 ${a.count} 条全部输出完整。`,
+    `要求：rating 3.8~5.0；monthSale 50~90000 整数；price 与 origPrice 自洽（origPrice 更高，折扣约 3~8 折）；distanceKm 0.3~8 一位小数；deals 为 0~2 个优惠文案；merchant 的 menu 分「招牌菜/小吃甜品/饮品」2~3 个 sec、共 8~10 个菜品（招牌菜 5~6 个+小吃甜品 2~3 个+饮品 1~2 个，items 只含 name/price）；tag 必须从以下白名单中选最贴切的一个，禁止自造词：hotpot、barbecue、bbq、chinese-food、stir-fry、japanese、sushi、thai、asian、curry、kimchi、pizza、burger、fried-chicken、fast-food、milk-tea、coffee、tea、juice、dessert、ice-cream、seafood、steak、beef、pork、duck、lamb、salad、sandwich、bread、dumplings、porridge、soup、noodles、rice、rice-bowl、breakfast、fruit、braised、spicy、store、food；deal 的 packages 为 2~3 个可选套餐（name 以 A套餐/B套餐开头且简短、price 递增、每个含 3~6 个 items 短语）；deal 的 menu 用「XX N选1」分节（如「烤肉 3选1」，供用户购买时选择，另加 1 个「固选」节）。全部简体中文（tag 除外），数据要合理逼真。输出尽量精炼，确保 ${a.count} 条全部输出完整。`,
     '只输出一个 JSON 数组，不要 markdown 代码块，不要解释。',
   ].join('\n');
 }
