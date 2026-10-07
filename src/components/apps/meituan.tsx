@@ -7321,7 +7321,7 @@ function MessagesPage({
   const orders = mtLoadOrders(uid).slice(0, 8);
   return (
     <div className="flex h-full flex-col bg-[#F4F5F7]">
-      <div className="flex shrink-0 items-center gap-2 bg-white px-3 pb-2.5 pt-[54px]">
+      <div className="flex shrink-0 items-center gap-2 bg-[#F4F5F7] px-3 pb-2.5 pt-[54px]">
         <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-6 w-6 text-black/70" />
         </button>
@@ -7644,7 +7644,7 @@ function CouponCodePage({
 
   return (
     <div className="flex h-full flex-col bg-[#F4F5F7]">
-      <div className="flex shrink-0 items-center gap-2 bg-white px-3 pb-2.5 pt-[54px]">
+      <div className="flex shrink-0 items-center gap-2 bg-[#F4F5F7] px-3 pb-2.5 pt-[54px]">
         <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/5">
           <ChevronLeft className="h-6 w-6 text-black/70" />
         </button>

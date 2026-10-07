@@ -10156,8 +10156,8 @@ function FriendReqDetailPage({
   };
 
   return (
-    <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
-      <div className="shrink-0 bg-white pt-[54px] dark:bg-[#1A1A1A]">
+    <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-req-detail">
+      <div className="shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
         <div className="flex h-11 items-center px-2">
           <button type="button" aria-label="返回" data-testid="wx-reqdetail-back" onClick={onBack} className="active:opacity-50">
             <ChevronLeft className="h-7 w-7" strokeWidth={2} />

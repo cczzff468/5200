@@ -2,14 +2,15 @@
 
 /**
  * 美团「找人代付」共享 UI（微信/QQ 聊天端与美团端共用）：
- * - MtPayBubble：聊天里的代付卡片气泡（美团黄渐变，req=代付请求卡 / done=代付完成卡；
+ * - MtPayBubble：聊天里的代付卡片气泡（对齐真机参考图：白卡 + 美团logo/交易保障 + 标题 +
+ *   黄色 3D 人物横幅 + 内层倒计时/金额卡 + 查看详情钮；req=代付请求卡 / done=代付完成卡；
  *   请求卡付款后由 kv 状态驱动变已代付灰化，与红包/转账卡同语义）；
  * - MtProxyDetailPage：点卡片进入的「代付详情」全屏页（对齐真机截图）：
  *   待付 = 请求人头像行 + 等待代付 + 付款须知 + 立即代付（聊天端 canPay）；
  *   已付 = 代付人头像行 + 支付成功 + 金额 + 渠道 + 付款须知 + 完成 + 订单商品卡。
  */
 import { useEffect, useState } from 'react';
-import { ChevronLeft, CircleCheck, Clock as ClockIcon, HandCoins } from 'lucide-react';
+import { ChevronLeft, CircleCheck, Clock as ClockIcon, ShieldCheck } from 'lucide-react';
 import { FoodImg } from './mt-food-img';
 import { MT_PROXY_CARD_EVENT, mtGetProxy, mtProxyChannelName, mtProxyPayOrder } from '@/lib/ios/mt-proxy-pay';
 
@@ -33,42 +34,104 @@ const stripDealQty = (s: string): string =>
     .replace(/[·、]\s*$/u, '')
     .trim();
 
-// ---------------- 聊天气泡（微信/QQ 共用） ----------------
+// ---------------- 聊天气泡（微信/QQ 共用；对齐真机参考图） ----------------
+
+/** 请求卡 15 分钟倒计时（口径同代付详情「15分钟内未付款自动取消」） */
+function useProxyCountdown(createdAt: number): string {
+  const calc = (): number => Math.max(0, Math.floor((createdAt + 15 * 60_000 - Date.now()) / 1000));
+  const [left, setLeft] = useState(calc);
+  useEffect(() => {
+    const timer = window.setInterval(() => setLeft(calc()), 1000);
+    return () => window.clearInterval(timer);
+  }, [createdAt]);
+  return `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
+}
 
 export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' | 'done'; onClick: () => void }) {
   const p = mtGetProxy(pid);
   const paid = p?.status === 'paid';
-  const settled = role === 'done' || paid;
+  // 仅请求卡付款后整体褪色（与红包/转账终态卡同语义）；完成卡保持彩色成功面
+  const settled = role === 'req' && paid;
+  const countdown = useProxyCountdown(p?.createdAt ?? Date.now());
+  const [bannerOk, setBannerOk] = useState(true);
+  const channel = p?.paidChannel ?? (p ? mtProxyChannelName(p.idp) : '');
+
   return (
     <button
       type="button"
       data-testid={`mt-pay-bubble-${role}`}
       onClick={onClick}
-      className="relative block w-[206px] overflow-hidden rounded-[8px] text-left shadow-sm transition-all duration-300 active:brightness-95"
+      className="relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 active:brightness-95"
       style={{
-        background: 'linear-gradient(135deg, #FFC53D, #FF9F1C)',
-        // 已代付后卡面褪色（与红包/转账终态卡同语义）
-        filter: settled ? 'grayscale(0.62) brightness(0.97)' : undefined,
+        // 已代付后卡面褪色（黄横幅/按钮变灰，白底不脏）
+        filter: settled ? 'grayscale(0.72) brightness(0.98)' : undefined,
       }}
-      aria-label={`美团代付卡 ¥${fmt2(p?.amount ?? 0)}（${settled ? '已代付' : '待代付'}）`}
+      aria-label={`美团代付卡 ¥${fmt2(p?.amount ?? 0)}（${role === 'done' || settled ? '已代付' : '待代付'}）`}
     >
-      <span aria-hidden="true" className={`absolute top-[11px] h-[13px] w-[13px] rotate-45 rounded-[2px] bg-[#FFB42E] ${role === 'done' ? '-right-[3px]' : '-left-[3px]'}`} />
-      <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
-        <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border-2 border-white/90" aria-hidden="true">
-          {settled ? <CircleCheck className="h-5 w-5 text-white" strokeWidth={2.4} /> : <HandCoins className="h-5 w-5 text-white" strokeWidth={2} />}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[15px] font-semibold leading-tight text-white">{role === 'done' ? '代付成功' : p ? `${p.merchantName}的订单` : '美团代付请求'}</span>
-          <span className="mt-0.5 block truncate text-[12.5px] text-white/95" data-testid={`mt-pay-bubble-${role}-status`}>
-            {role === 'done'
-              ? p
-                ? `¥${fmt2(p.amount)} · ${p.paidChannel ?? mtProxyChannelName(p.idp)}`
-                : '美团代付'
-              : `¥${fmt2(p?.amount ?? 0)} · ${settled ? '好友已代付' : '待好友代付'}`}
-          </span>
+      {/* 箭头指向头像侧：请求卡=我发出（右）/ 完成卡=好友发来（左） */}
+      <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${role === 'done' ? '-left-[4px]' : '-right-[4px]'}`} />
+
+      {/* 头部：美团 logo + 交易保障 */}
+      <span className="relative flex items-center gap-1.5">
+        <img src="/icons/meituan.png" alt="" className="h-[22px] w-[22px] rounded-full object-cover" />
+        <span className="text-[13px] font-semibold text-black/85">美团</span>
+        <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#00B862]">
+          <ShieldCheck className="h-[13px] w-[13px]" strokeWidth={2.2} />
+          交易保障
         </span>
       </span>
-      <span className="relative block bg-black/[0.08] px-3 py-[5px] text-[12px] text-white/95">美团 · 找人代付</span>
+
+      {/* 主标题（对齐参考图文案） */}
+      <span className="relative mt-1.5 block truncate text-[15px] font-semibold leading-snug text-black/90">
+        {role === 'done' ? 'Hi~你的订单代付成功啦~' : 'Hi~快来帮我支付这笔订单吧~'}
+      </span>
+
+      {/* 黄色 3D 人物横幅（图缺失时退纯黄渐变，文案恒在） */}
+      <span className="relative mt-2 block h-[88px] overflow-hidden rounded-[10px] bg-gradient-to-r from-[#FFDB3D] to-[#FFC933]">
+        {bannerOk && (
+          <img
+            src={role === 'done' ? '/mt/proxy-banner-done.png' : '/mt/proxy-banner.png'}
+            alt=""
+            onError={() => setBannerOk(false)}
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        )}
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[15px] font-bold text-black/85">
+          {role === 'done' ? '好友已代付啦~' : '来帮我代付吧~'}
+        </span>
+      </span>
+
+      {/* 内层信息卡：剩余支付时间倒计时 / 代付金额 + 查看详情 */}
+      <span className="relative mt-2 block rounded-[10px] border border-black/[0.05] bg-white px-3 pb-3 pt-2.5 text-center shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
+        {role === 'done' ? (
+          <>
+            <span className="block text-[11.5px] text-black/40">代付金额</span>
+            <span className="mt-0.5 block text-[30px] font-bold leading-tight tracking-tight text-black/90">
+              <span className="text-[19px]">¥</span>
+              {fmt2(p?.amount ?? 0)}
+            </span>
+            <span className="mt-0.5 block truncate text-[11.5px] text-black/40" data-testid={`mt-pay-bubble-${role}-status`}>
+              {channel ? `${channel} · 已到账` : '好友已代付'}
+            </span>
+          </>
+        ) : settled ? (
+          <>
+            <span className="block text-[11.5px] text-black/40">代付状态</span>
+            <span className="mt-0.5 block text-[24px] font-bold leading-tight text-black/90">好友已代付</span>
+            <span className="mt-0.5 block truncate text-[11.5px] text-black/40" data-testid={`mt-pay-bubble-${role}-status`}>
+              ¥{fmt2(p?.amount ?? 0)} · {channel}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="block text-[11.5px] text-black/40">剩余支付时间</span>
+            <span className="mt-0.5 block text-[32px] font-bold leading-tight tabular-nums tracking-tight text-black/90" data-testid={`mt-pay-bubble-${role}-status`}>
+              {countdown}
+            </span>
+          </>
+        )}
+        <span className="mt-2 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[14px] font-bold text-black/85">查看详情</span>
+      </span>
     </button>
   );
 }
@@ -102,7 +165,7 @@ export function MtProxyDetailPage({
   if (!p) {
     return (
       <div className="absolute inset-0 z-50 flex flex-col bg-[#F4F5F7]">
-        <div className="flex shrink-0 items-center bg-white px-2 pb-2 pt-[54px]">
+        <div className="flex shrink-0 items-center bg-[#F4F5F7] px-2 pb-2 pt-[54px]">
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
@@ -134,9 +197,9 @@ export function MtProxyDetailPage({
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col bg-[#F4F5F7]" data-testid="mt-proxy-detail">
-      {/* 顶栏 */}
-      <div className="shrink-0 bg-white">
-        <div className="relative grid h-[52px] place-items-center border-b border-black/[0.04]">
+      {/* 顶栏（背景与页身同色：状态栏区域不再出现白/灰分界） */}
+      <div className="shrink-0 bg-[#F4F5F7] pt-[54px]">
+        <div className="relative grid h-[48px] place-items-center">
           <button type="button" aria-label="返回" data-testid="mt-proxy-detail-back" onClick={onBack} className="absolute left-1 grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
             <ChevronLeft className="h-[24px] w-[24px] text-black/85" strokeWidth={2.2} />
           </button>
