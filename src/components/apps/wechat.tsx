@@ -81,6 +81,8 @@ import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { WxPhotoStack, WxPhotoViewer, findPhotoStackSpans, type PhotoStackItem } from './photo-stack';
 import { LocalToast, useLocalToast } from './page-toast';
+import { MtPayBubble, MtProxyDetailPage } from './mt-proxy-detail';
+import { MT_PROXY_CARD_EVENT } from '@/lib/ios/mt-proxy-pay';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import {
   abortStreamsByPrefix,
@@ -387,8 +389,8 @@ interface WxMsg {
   content: string;
   time: number;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
-   *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song';
+   *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片；mtpay = 美团找人代付卡片（请求/完成） */
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -431,6 +433,8 @@ interface WxMsg {
    *  greet = AI 发起的验证消息（气泡下胶囊标注「以上是打招呼的内容」）；
    *  added = 加好友成功提示（kind='sys' 携带文案，落入普通 sys 胶囊分支与其他系统提示同款包裹；不进 AI 上下文走 sys 既有口径） */
   fr?: 'apply' | 'greet' | 'added';
+  /** 美团找人代付卡片（kind='mtpay'）：pid = 代付请求（mt-proxy:<pid>），role req=请求卡/done=完成卡 */
+  mtpay?: { pid: string; role: 'req' | 'done' };
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -4723,6 +4727,8 @@ function ChatPage({
   const [fwdMode, setFwdMode] = useState<FwdMode>('each');
   /** 合并转发「聊天记录」卡片详情（点卡片打开） */
   const [fwdDetailId, setFwdDetailId] = useState<string | null>(null);
+  /** 美团找人代付详情（点代付卡片打开；好友视角可代付） */
+  const [proxyPid, setProxyPid] = useState<string | null>(null);
   /** 聊天页根元素（长按菜单定位参照） */
   const pageRef = useRef<HTMLDivElement>(null);
   /** 聊天背景（本会话）：置顶/免打扰/背景在 chat-flags 总线，图片本体在 IndexedDB */
@@ -4900,6 +4906,22 @@ function ChatPage({
     };
     window.addEventListener(TG_CARD_INSERTED_EVENT, onTgCard);
     return () => window.removeEventListener(TG_CARD_INSERTED_EVENT, onTgCard);
+  }, [peer.id]);
+
+  /** 美团找人代付卡片落库监听：美团收银台发请求卡/好友代付完成卡直写 kv 后广播，
+   *  聊天页在场时实时合并落库消息（新卡片显示 + 请求卡状态刷新），不用重开聊天 */
+  useEffect(() => {
+    const onMtProxy = (e: Event) => {
+      const d = (e as CustomEvent<{ cid?: string; app?: string }>).detail;
+      if (!d || d.cid !== peer.id || d.app !== 'wx') return;
+      setMsgs((prev) => {
+        const saved = loadMsgs(peer.id);
+        const ids = new Set(prev.map((m) => m.id));
+        return sortMsgsByTime([...prev, ...saved.filter((m) => !ids.has(m.id))]);
+      });
+    };
+    window.addEventListener(MT_PROXY_CARD_EVENT, onMtProxy);
+    return () => window.removeEventListener(MT_PROXY_CARD_EVENT, onMtProxy);
   }, [peer.id]);
 
   /** 过期清算后的落盘合并（存储为权威）：既有消息以落盘版本覆盖（卡片过期终态），落盘新增的
@@ -7730,6 +7752,11 @@ function ChatPage({
                   settled={m.fam.claimed === true || m.fam.rejected === true}
                   onClick={() => (m.role === 'me' ? openFamilyDetail(m.id) : setDetailId(m.id))}
                 />
+              ) : m.kind === 'mtpay' && m.mtpay ? (
+                /* 美团找人代付卡片（美团收银台发请求卡；好友代付后完成卡回聊天）；点卡进代付详情 */
+                <div {...bubblePress}>
+                  <MtPayBubble pid={m.mtpay.pid} role={m.mtpay.role} onClick={() => setProxyPid(m.mtpay!.pid)} />
+                </div>
               ) : m.kind === 'image' && m.img && stackHead.has(i) && !expandedStacks.has(m.id) ? (
                 /* 照片堆叠卡片（连续 ≥4 张的折叠态）：左「展开 N」胶囊 + 主图右侧扇形露边；左滑下一张/右滑上一张、点击开大图。
                    不套 {...bubblePress} 长按——展开后逐条平铺的每张照片仍带长按菜单 */
@@ -8618,6 +8645,9 @@ function ChatPage({
           onToast={onToast}
         />
       )}
+
+      {/* 美团找人代付详情页（聊天内打开：好友视角可立即代付） */}
+      {proxyPid && <MtProxyDetailPage pid={proxyPid} canPay onBack={() => setProxyPid(null)} onToast={onToast} />}
 
       {/* 亲属卡详情页：我发的 → 管理详情（图③）；对方发的 → 领取页（图②） */}
       {detailMsg?.kind === 'family' && detailMsg.fam && (detailMsg.role === 'me' ? (

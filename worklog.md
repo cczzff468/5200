@@ -16648,3 +16648,28 @@ Stage Summary:
 - 图片链 v11：10 个新 Commons 池 + 同义词扩展 + spa 池修复 + 高频预热 + shimmer；仍无 AI 生图
 - 券码模型变更：团购支付后=待使用，券码页核销（旧订单自动视为已核销，不受影响）
 - 备注：本地 commit 936f0ef 已创建；git push 因 remote 内嵌 token 在本会话被沙箱脱敏（[REDACTED:github_token]）认证失败，待凭据恢复后重推
+
+---
+Task ID: 6
+Agent: Z.ai Code (主会话)
+Task: 美团三项——①首页浅黄头部再浅一档 ②消息中心/会员中心图标去 emoji 美化 ③支付页「找人代付」全链路（选微信/QQ → 选联系人 → 代付卡片进聊天 → 好友代付 → 完成卡片 → 代付详情页）
+
+Work Log:
+- 首页头部 #FFE066 → #FFF0A8（更浅的淡黄，搜索按钮保持正黄对比）
+- MessagesPage 图标美化：👑→Headset（琥珀渐变圆）、👥→Users、🎫→Ticket、🎁→Gift，全部 Lucide 线条图标+柔和渐变底圆，无 emoji
+- MemberPage 图标美化：头像兜底 👑→Crown、等级徽章 ✓→Check（未达成=Crown 灰线）、8 项权益宫格 🚴🎫🎬🏨🎧🎂⚡💎→Bike/Ticket/Clapperboard/Building/Headset/Cake/Zap/Gem（各自色调软底圆，meituan.tsx 新增 Cake/Gem/HandCoins 图标导入）
+- 新建 src/lib/ios/mt-proxy-pay.ts（代付数据层）：MtProxyPay 存 IDB kv `mt-proxy:<pid>`（全局键，聊天侧可读）+ pid 索引防重复；mtCreateProxyRequest（校验待支付/平台好友标记/同订单同好友防重 → 生成请求 → 订单挂 proxy{name} 快照 → 请求卡片 role:'me' 写入 wx/qq-chat-msgs + 广播）；mtProxyPayOrder（好友视角立即代付：请求置 paid + 订单状态机接手（团购 completed/外卖 pendingAccept + etaAt）+ payChannelLabel「好友代付 · 微信支付/QQ钱包（好友名）」+ payMethodId 置空（退款原路退还代付人，不落本机账户）→ 完成卡片 role:'peer' 回聊天 + mt-orders-changed + 灵动岛通知「好友XX已代付¥x，订单已支付」）
+- MtOrder 新增 proxy?: {id, name}（normalizer 兼容旧数据）
+- 新建 src/components/apps/mt-proxy-detail.tsx 共享组件：MtPayBubble（美团黄渐变卡 206px，req=HandCoins「商家名+¥x·待好友代付」/ done=CircleCheck「代付成功+¥x·渠道」，已代付灰化同红包/转账终态语义，footer「美团 · 找人代付」）+ MtProxyDetailPage（对齐用户截图：待付=请求人头像行「拍下了订单，快来帮我付一下吧～」+橙色时钟等待代付+付款须知黄条+立即代付（聊天端 canPay，以好友身份支付）；已付=代付人头像行「我们友谊的小船更加稳固了～」+黄勾支付成功+金额+渠道+支付时间+付款须知+完成+订单商品卡；商品名/spec 剥「N杯」与全站同口径）
+- wechat.tsx：WxMsg kind+'mtpay' + mtpay{pid,role} 字段；ChatPage 加 MT_PROXY_CARD_EVENT 监听（与一起听卡片同机制实时合并落库消息）；气泡分支（mtpay→MtPayBubble 点卡 setProxyPid）；TrDetailPage 后挂 MtProxyDetailPage 覆盖层（canPay）
+- qq.tsx：QQMsg 同步扩展 kind/mtpay；ChatLayer 加 {view:'mtpay-detail', pid}；同款监听/气泡分支/浮层渲染
+- meituan.tsx：PayPage 新增「帮付 · 找人代付」入口（HandCoins 琥珀圆标，order.proxy 时显示「已请XX代付」chip+说明行）；ProxySheet 两步弹层（平台 微信/QQ好友 → 联系人列表 listContacts+isFriendIn 过滤+avatarFor 头像+relation 副文案 → 发送代付请求；空态引导；max-h 滚动、点外关闭、联系人步按 step 重建修复 set-state-in-effect lint）；onProxySent → 关收银台回订单列表「待付款」页签
+- OrdersPage：待付款卡「已请XX代付」橙 chip + 「代付详情」描边钮（onOpenProxy → 根组件 MtProxyDetailPage 只读覆盖层 canPay=false）；OrderDetailPage 待付款 hero sub 适配（已请「XX」代付，好友付款后自动完成）
+- E2E（agent-browser 500×940 全新环境）：解锁→美团微信登录→团购下单→收银台「找人代付」→微信好友→晴晴→发送→待付款列表「已请晴晴代付」chip+代付详情（只读等待态 ✓）→微信 App 会话列表预览「[美团代付]帮我付一下¥21.60的订单」→聊天内黄卡（待代付）→点卡进代付详情→立即代付（以晴晴的身份支付）→支付成功页（微信支付+支付时间+付款须知+完成+商品卡）+灵动岛「好友晴晴已代付」+toast→聊天内请求卡灰化「好友已代付」+新完成卡「代付成功 ¥21.60·微信支付」→点完成卡进已付详情 ✓；美团订单变「已完成」✓；第二单走 QQ 好友王大壮同链路全通（QQ钱包渠道、完成卡、灵动岛）✓；消息中心/会员中心截图确认线条图标+成长值 58 动态正确；console 无美团相关错误
+- tsc --noEmit + eslint（meituan.tsx/wechat.tsx/qq.tsx/mt-proxy-pay.ts/mt-proxy-detail.tsx/meituan-store.ts）全绿；dev.log 仅既有内置模型 429
+
+Stage Summary:
+- 找人代付跨 App 全链路可用：美团收银台（选平台/联系人/发请求）→ 微信/QQ 聊天代付卡片 → 卡内代付详情（待付可付/已付对齐真机截图）→ 好友代付 → 完成卡片 + 订单自动支付进状态机 + 灵动岛通知；美团侧订单列表/详情显示代付状态与只读详情
+- 演示语义：好友付款不扣本机钱包；代付订单退款原路退还代付人（payMethodId 置空跳过本机入账）
+- 首页头部再浅一档（#FFF0A8）；消息中心/会员中心全部图标 Lucide 线条化零 emoji
+- 改动文件：meituan.tsx、wechat.tsx、qq.tsx、meituan-store.ts、mt-proxy-detail.tsx（新）、mt-proxy-pay.ts（新）

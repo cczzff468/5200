@@ -28,6 +28,7 @@ import {
   BookOpen,
   BriefcaseMedical,
   Building,
+  Cake,
   Car as CarIcon,
   Check,
   ChevronDown,
@@ -51,6 +52,8 @@ import {
   Footprints,
   Gamepad2,
   Gift,
+  Gem,
+  HandCoins,
   Handshake,
   HardHat,
   Headset,
@@ -165,6 +168,10 @@ import {
   type MtSession,
 } from '@/lib/ios/meituan-store';
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
+import { mtCreateProxyRequest } from '@/lib/ios/mt-proxy-pay';
+import { listContacts } from '@/lib/ios/contacts-store';
+import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
+import { MtProxyDetailPage } from './mt-proxy-detail';
 
 type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode';
 type Tab = 'home' | 'orders' | 'cart' | 'my';
@@ -1029,8 +1036,8 @@ function HomePage({
       onTouchEnd={onTouchEnd}
       className="h-full overflow-y-auto overscroll-contain bg-[#F4F5F7] pb-4"
     >
-      {/* 黄头（浅黄）：定位 / 消息 / 扫一扫 / 搜索 */}
-      <div className="bg-[#FFE066] px-4 pb-3 pt-[54px]">
+      {/* 黄头（再浅一档的淡黄）：定位 / 消息 / 扫一扫 / 搜索 */}
+      <div className="bg-[#FFF0A8] px-4 pb-3 pt-[54px]">
         <div className="flex items-center gap-2">
           <button type="button" onClick={onPickAddress} className="flex min-w-0 items-center gap-1 text-left active:opacity-70">
             <MapPin className="h-[17px] w-[17px] shrink-0 text-black/80" strokeWidth={2.1} />
@@ -1902,13 +1909,18 @@ const ICBC_OFF = 2.28;
 
 function PayPage({
   order,
+  session,
   onClose,
   onPaid,
+  onProxySent,
   onToast,
 }: {
   order: MtOrder;
+  session: MtSession;
   onClose: () => void;
   onPaid: (o: MtOrder) => void;
+  /** 代付请求已发出（关收银台 → 回订单列表待付款页签） */
+  onProxySent: () => void;
   onToast: (m: string) => void;
 }) {
   // 美团支付银行卡（bank=普通银行卡 / icbc=工商银行储蓄卡·最优惠）与 微信/QQ 渠道二选一
@@ -1920,6 +1932,11 @@ function PayPage({
   const [err, setErr] = useState('');
   const [tried, setTried] = useState(0);
   const [, tick] = useState(0);
+  // 找人代付：plat = 选平台 / contact = 选好友；null = 关闭
+  const [proxyStep, setProxyStep] = useState<'plat' | 'contact' | null>(null);
+  const [proxyPlat, setProxyPlat] = useState<'wx' | 'qq' | null>(null);
+  const [proxyContact, setProxyContact] = useState<string | null>(null);
+  const [proxySending, setProxySending] = useState(false);
 
   // 待支付倒计时（30 分钟，对齐真机「交易剩余时间」）
   useEffect(() => {
@@ -2041,6 +2058,28 @@ function PayPage({
       return;
     }
     onToast('请先选择支付方式');
+  };
+
+  /** 发送代付请求：生成请求 + 卡片进好友聊天 + 关收银台回订单列表 */
+  const sendProxy = async () => {
+    if (!proxyPlat || !proxyContact || proxySending) return;
+    setProxySending(true);
+    await new Promise((r) => setTimeout(r, 650));
+    const res = await mtCreateProxyRequest({
+      order,
+      idp: proxyPlat,
+      contactId: proxyContact,
+      fromName: session.name,
+      fromAvatar: session.avatar,
+    });
+    setProxySending(false);
+    if (!res.ok) {
+      onToast(res.error);
+      return;
+    }
+    setProxyStep(null);
+    onToast(`代付请求已发给${res.proxy.contactName}，等TA付款`);
+    onProxySent();
   };
 
   const Radio = ({ on }: { on: boolean }) => (
@@ -2168,6 +2207,39 @@ function PayPage({
           })}
         </div>
 
+        {/* 找人代付（发给微信/QQ好友帮付） */}
+        <div className="border-t-[7px] border-[#F5F6F7] px-4 pt-3">
+          <p className="pb-2 text-[15px] text-black/50">帮付</p>
+          <button
+            type="button"
+            data-testid="pay-proxy-entry"
+            onClick={() => {
+              if (state === 'processing') return;
+              setProxyPlat(null);
+              setProxyContact(null);
+              setErr('');
+              setProxyStep('plat');
+            }}
+            className="flex w-full items-center gap-3 py-[13px] text-left active:opacity-80"
+          >
+            <span className="grid h-[28px] w-[28px] shrink-0 place-items-center rounded-[7px] bg-gradient-to-br from-[#FFC300] to-[#FF9500]">
+              <HandCoins className="h-[16px] w-[16px] text-white" strokeWidth={2} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-medium text-black/85">找人代付</span>
+              <span className="block text-[10.5px] text-black/40">发给微信/QQ好友，帮你支付本单</span>
+            </span>
+            {order.proxy && (
+              <span className="shrink-0 rounded-full bg-[#FFF0EB] px-2 py-1 text-[10px] font-medium text-[#FF6000]">已请{order.proxy.name}代付</span>
+            )}
+          </button>
+          {order.proxy && (
+            <p className="border-t border-black/[0.04] py-2 text-[10.5px] leading-relaxed text-black/30">
+              已向{order.proxy.name}发送代付请求，好友付款后本单自动完成；也可以继续自己支付。
+            </p>
+          )}
+        </div>
+
         <p className="px-2 pb-1 pt-3.5 text-center text-[11px] leading-relaxed text-black/30">支付结果以商家订单为准 · 资金由微信支付/QQ钱包保障</p>
       </div>
 
@@ -2194,6 +2266,192 @@ function PayPage({
           {state === 'processing' ? '正在支付…' : state === 'fail' ? '重新支付' : '确认交易'}
         </button>
       </div>
+
+      {/* 找人代付弹层（选平台 → 选好友 → 发送请求） */}
+      <AnimatePresence>
+        {proxyStep && (
+          <ProxySheet
+            key={proxyStep}
+            step={proxyStep}
+            plat={proxyPlat}
+            contactId={proxyContact}
+            sending={proxySending}
+            onPickPlat={(v) => {
+              setProxyPlat(v);
+              setProxyContact(null);
+              setProxyStep('contact');
+            }}
+            onPickContact={setProxyContact}
+            onBack={() => (proxyStep === 'contact' ? setProxyStep('plat') : setProxyStep(null))}
+            onClose={() => setProxyStep(null)}
+            onSend={() => void sendProxy()}
+          />
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+/** 找人代付弹层：第一步选平台（微信/QQ好友），第二步选联系人 → 发送代付请求（卡片进好友聊天） */
+function ProxySheet({
+  step,
+  plat,
+  contactId,
+  sending,
+  onPickPlat,
+  onPickContact,
+  onBack,
+  onClose,
+  onSend,
+}: {
+  step: 'plat' | 'contact';
+  plat: 'wx' | 'qq' | null;
+  contactId: string | null;
+  sending: boolean;
+  onPickPlat: (v: 'wx' | 'qq') => void;
+  onPickContact: (id: string) => void;
+  onBack: () => void;
+  onClose: () => void;
+  onSend: () => void;
+}) {
+  /** 平台好友列表（第二步加载；kind!=='user' 且该平台好友标记为真；组件按 step 重建，进入即为 null） */
+  const [friends, setFriends] = useState<ContactRecord[] | null>(null);
+  useEffect(() => {
+    if (step !== 'contact' || !plat) return;
+    let alive = true;
+    listContacts()
+      .then((all) => {
+        if (alive) setFriends(all.filter((c) => c.kind !== 'user' && isFriendIn(c, plat)));
+      })
+      .catch(() => {
+        if (alive) setFriends([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [step, plat]);
+
+  const platName = plat === 'wx' ? '微信' : 'QQ';
+  const Radio = ({ on }: { on: boolean }) => (
+    <span className={`grid h-[21px] w-[21px] shrink-0 place-items-center rounded-full ${on ? 'bg-[#FFC300]' : 'border-[1.5px] border-black/15'}`}>
+      {on && <Check className="h-3.5 w-3.5 text-black/80" strokeWidth={3.2} />}
+    </span>
+  );
+  return (
+    <motion.div
+      className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/60"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.16 }}
+      onClick={onClose}
+    >
+      <motion.div
+        className="max-h-[82%] overflow-hidden rounded-t-2xl bg-white pb-[max(14px,env(safe-area-inset-bottom))]"
+        initial={{ y: 260 }}
+        animate={{ y: 0 }}
+        exit={{ y: 260 }}
+        transition={{ type: 'spring', damping: 30, stiffness: 320 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 标题栏 */}
+        <div className="relative grid h-[54px] shrink-0 place-items-center">
+          {step === 'contact' && (
+            <button type="button" aria-label="返回" onClick={onBack} className="absolute left-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+              <ChevronLeft className="h-[22px] w-[22px] text-black/80" />
+            </button>
+          )}
+          <p className="text-[16px] font-bold text-black/90">{step === 'plat' ? '找人代付' : `选择${platName}好友`}</p>
+          <button type="button" aria-label="关闭" onClick={onClose} className="absolute right-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+            <X className="h-[20px] w-[20px] text-black/55" />
+          </button>
+        </div>
+        <p className="px-5 pb-2.5 text-[11.5px] leading-relaxed text-black/40">
+          {step === 'plat' ? '把订单发给好友，TA付款后订单自动完成；15分钟内未付款订单自动取消' : `从${platName}好友里选一位帮忙支付本单`}
+        </p>
+
+        {step === 'plat' ? (
+          <div className="px-4">
+            {([
+              ['wx', '/icons/wechat.png', '微信好友', '发给微信里的好友代付'],
+              ['qq', '/icons/qq.png', 'QQ好友', '发给QQ里的好友代付'],
+            ] as ['wx' | 'qq', string, string, string][]).map(([v, img, name, sub]) => (
+              <button
+                key={v}
+                type="button"
+                data-testid={`proxy-plat-${v}`}
+                onClick={() => onPickPlat(v)}
+                className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3.5 text-left first:border-t-0 active:opacity-80"
+              >
+                <img src={img} alt="" className="h-[38px] w-[38px] shrink-0 rounded-[9px]" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium text-black/85">{name}</span>
+                  <span className="block text-[11px] text-black/40">{sub}</span>
+                </span>
+                <Radio on={plat === v} />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="max-h-[48vh] overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {friends === null ? (
+              <p className="py-8 text-center text-[12px] text-black/35">正在获取好友列表…</p>
+            ) : friends.length === 0 ? (
+              <div className="py-8 text-center">
+                <p className="text-[13px] text-black/45">暂无{platName}好友</p>
+                <p className="mt-1 text-[11px] text-black/30">先去{platName}App添加好友，再回来发起代付</p>
+              </div>
+            ) : (
+              friends.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`proxy-contact-${c.id}`}
+                  onClick={() => onPickContact(c.id)}
+                  className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3 text-left first:border-t-0 active:opacity-80"
+                >
+                  {avatarFor(c, plat ?? 'wx') ? (
+                    <img src={avatarFor(c, plat ?? 'wx') ?? ''} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#FFF3B8] text-[15px] font-semibold text-black/60">
+                      {displayNameOf(c).slice(0, 1)}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px] text-black/85">{displayNameOf(c)}</span>
+                    {c.relation && <span className="block text-[11px] text-black/40">{c.relation}</span>}
+                  </span>
+                  <Radio on={contactId === c.id} />
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* 底部按钮 */}
+        <div className="px-4 pt-3">
+          {step === 'plat' ? (
+            <button
+              type="button"
+              disabled={!plat}
+              onClick={() => plat && onPickPlat(plat)}
+              className={`h-[48px] w-full rounded-full text-[16px] font-semibold ${plat ? 'bg-[#FFD100] text-black/90 active:opacity-85' : 'bg-[#F6EC9F] text-black/40'}`}
+            >
+              下一步
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid="proxy-send"
+              disabled={!contactId || sending}
+              onClick={onSend}
+              className={`h-[48px] w-full rounded-full text-[16px] font-semibold ${contactId && !sending ? 'bg-gradient-to-r from-[#FFC300] to-[#FF9500] text-white active:opacity-85' : 'bg-[#F6EC9F] text-black/40'}`}
+            >
+              {sending ? '正在发送…' : '发送代付请求'}
+            </button>
+          )}
+        </div>
+      </motion.div>
     </motion.div>
   );
 }
@@ -2458,6 +2716,7 @@ function OrdersPage({
   onGoHome,
   onRate,
   onOpenCouponCode,
+  onOpenProxy,
   onToast,
 }: {
   session: MtSession;
@@ -2469,6 +2728,7 @@ function OrdersPage({
   onGoHome: () => void;
   onRate: (o: MtOrder) => void;
   onOpenCouponCode: (o: MtOrder) => void;
+  onOpenProxy: (pid: string) => void;
   onToast: (m: string) => void;
 }) {
   const uid = mtUidOf(session);
@@ -2605,6 +2865,11 @@ function OrdersPage({
                         {o.refund.status === 'pending' ? '退款中' : o.refund.status === 'failed' ? '退款失败' : '已退款'}
                       </span>
                     )}
+                    {o.proxy && o.status === 'pendingPay' && (
+                      <span className="shrink-0 rounded-full bg-[#FFF0EB] px-1.5 py-px text-[10px] font-medium text-[#FF6000]" data-testid="order-proxy-chip">
+                        已请{o.proxy.name}代付
+                      </span>
+                    )}
                   </span>
                   <span className="mt-2.5 flex items-center gap-2.5">
                     <FoodImg src={o.items[0]?.img} emoji={o.items[0]?.emoji ?? o.merchantEmoji} className="h-[64px] w-[64px] shrink-0 rounded-lg" />
@@ -2638,6 +2903,11 @@ function OrdersPage({
                   )}
                   {o.status === 'pendingPay' && (
                     <>
+                      {o.proxy && (
+                        <button type="button" onClick={() => onOpenProxy(o.proxy!.id)} className="rounded-full border border-[#FF6000] px-4 py-1.5 text-[12px] font-medium text-[#FF6000] active:opacity-75" data-testid="order-proxy-detail-btn">
+                          代付详情
+                        </button>
+                      )}
                       <button type="button" onClick={() => cancelOrder(o)} className="rounded-full border border-black/15 px-4 py-1.5 text-[12px] text-black/60 active:bg-black/5">
                         取消订单
                       </button>
@@ -2861,13 +3131,13 @@ function OrderDetailPage({
   // 详情头文案（机票/火车票用出行专属文案）
   const hero: { big: string; sub: string; icon?: boolean; tag?: string } = (() => {
     if (trip) {
-      if (order.status === 'pendingPay') return { big: `待付款，还剩 ${countdown ?? '30:00'}`, sub: '超时未支付订单将自动取消', icon: true };
+      if (order.status === 'pendingPay') return { big: `待付款，还剩 ${countdown ?? '30:00'}`, sub: order.proxy ? `已请「${order.proxy.name}」代付，好友付款后自动完成` : '超时未支付订单将自动取消', icon: true };
       if (order.status === 'pendingAccept') return { big: '待出行', sub: mtStatusBody(order), tag: order.kind === 'flight' ? '已出票' : '购票成功' };
       if (order.status === 'accepted') return { big: '出行中', sub: mtStatusBody(order) };
       if (order.status === 'completed') return { big: '行程已结束', sub: '感谢乘坐，欢迎评价' };
       return { big: '订单已取消', sub: order.cancelReason ?? '订单已取消' };
     }
-    if (order.status === 'pendingPay') return { big: `待付款，还剩 ${countdown ?? '30:00'}`, sub: '超时未支付订单将自动取消', icon: true };
+    if (order.status === 'pendingPay') return { big: `待付款，还剩 ${countdown ?? '30:00'}`, sub: order.proxy ? `已请「${order.proxy.name}」代付，好友付款后自动完成` : '超时未支付订单将自动取消', icon: true };
     if (order.status === 'pendingAccept') return { big: order.etaAt ? fmtTime(order.etaAt) : '--:--', sub: '等待商家接单', tag: '预计送达' };
     if (order.status === 'accepted') return { big: order.etaAt ? fmtTime(order.etaAt) : '--:--', sub: '商家正在准备餐品', tag: '预计送达' };
     if (order.status === 'delivering') return { big: order.etaAt ? fmtTime(order.etaAt) : '--:--', sub: `骑手${order.riderName ?? ''}正在送货`, tag: '预计送达' };
@@ -7093,7 +7363,9 @@ function MessagesPage({
         <p className="mt-5 px-1 text-[13px] font-semibold text-black/50">互动消息</p>
         <div className="mt-2 space-y-2">
           <button type="button" onClick={() => onToast('小美客服：0539-000-0000（演示）')} className="flex w-full items-center gap-3 rounded-2xl bg-white p-3 text-left active:opacity-80">
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#FFD100] text-[18px]">👑</span>
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#FFE14D] to-[#FFC300]">
+              <Headset className="h-[21px] w-[21px] text-black/70" strokeWidth={1.8} />
+            </span>
             <span className="min-w-0 flex-1">
               <span className="block text-[14px] font-semibold text-black/85">小美客服</span>
               <span className="mt-0.5 block truncate text-[12px] text-black/50">您好呀，下单遇到任何问题都可以找我～</span>
@@ -7101,7 +7373,9 @@ function MessagesPage({
             <span className="shrink-0 text-[10px] text-black/35">刚刚</span>
           </button>
           <button type="button" onClick={() => onToast('暂无新粉丝（演示）')} className="flex w-full items-center gap-3 rounded-2xl bg-white p-3 text-left active:opacity-80">
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#FFE0D1] text-[18px]">👥</span>
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#FFE7D6] to-[#FFC9A3]">
+              <Users className="h-[21px] w-[21px] text-[#D96A1E]" strokeWidth={1.8} />
+            </span>
             <span className="min-w-0 flex-1">
               <span className="block text-[14px] font-semibold text-black/85">粉丝互动</span>
               <span className="mt-0.5 block truncate text-[12px] text-black/50">你的评价帮助了 32 位吃货</span>
@@ -7114,7 +7388,9 @@ function MessagesPage({
         <p className="mt-5 px-1 text-[13px] font-semibold text-black/50">活动优惠</p>
         <div className="mt-2 space-y-2">
           <button type="button" onClick={onOpenCoupons} className="flex w-full items-center gap-3 rounded-2xl bg-white p-3 text-left active:opacity-80">
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#FFECE6] text-[18px]">🎫</span>
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[#FFECE6] to-[#FFD3C4]">
+              <Ticket className="h-[21px] w-[21px] text-[#FF4B33]" strokeWidth={1.8} />
+            </span>
             <span className="min-w-0 flex-1">
               <span className="block text-[14px] font-semibold text-black/85">神券到账提醒</span>
               <span className="mt-0.5 block truncate text-[12px] text-black/50">大额神券已放入「红包卡券」，7 天内有效</span>
@@ -7122,7 +7398,9 @@ function MessagesPage({
             <span className="shrink-0 rounded-full bg-[#FFD100] px-2.5 py-1 text-[11px] font-semibold text-black/85">去使用</span>
           </button>
           <button type="button" onClick={() => onToast('会员日：每周三领双倍神券（演示）')} className="flex w-full items-center gap-3 rounded-2xl bg-white p-3 text-left active:opacity-80">
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#FFF1C0] text-[18px]">🎁</span>
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[#FFF3C9] to-[#FFDF8A]">
+              <Gift className="h-[21px] w-[21px] text-[#C77700]" strokeWidth={1.8} />
+            </span>
             <span className="min-w-0 flex-1">
               <span className="block text-[14px] font-semibold text-black/85">会员日活动</span>
               <span className="mt-0.5 block truncate text-[12px] text-black/50">每周三会员日，领双倍成长值与神券</span>
@@ -7187,7 +7465,9 @@ function MemberPage({
           {session.avatar ? (
             <img src={session.avatar} alt="" className="h-14 w-14 rounded-full object-cover ring-2 ring-white/80" />
           ) : (
-            <span className="grid h-14 w-14 place-items-center rounded-full bg-white text-[20px]">👑</span>
+            <span className="grid h-14 w-14 place-items-center rounded-full bg-white">
+              <Crown className="h-6 w-6 text-[#B77900]" strokeWidth={2} />
+            </span>
           )}
           <div className="min-w-0 flex-1">
             <p className="truncate text-[18px] font-bold text-[#5A4200]">
@@ -7239,8 +7519,8 @@ function MemberPage({
           <div className="mt-3 space-y-3">
             {MEMBER_LEVELS.map((l) => (
               <div key={l.name} className="flex items-center gap-3">
-                <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-[13px] font-bold ${growth >= l.need ? 'bg-[#FFD100] text-black/80' : 'bg-[#F5F6F7] text-black/35'}`}>
-                  {growth >= l.need ? '✓' : l.need >= 1000 ? '金' : l.name.slice(0, 1)}
+                <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${growth >= l.need ? 'bg-gradient-to-br from-[#FFE14D] to-[#FFC300] text-black/75' : 'bg-[#F5F6F7]'}`}>
+                  {growth >= l.need ? <Check className="h-[18px] w-[18px]" strokeWidth={2.6} /> : <Crown className="h-[18px] w-[18px] text-black/25" strokeWidth={2} />}
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="flex items-center gap-2 text-[13px] font-semibold text-black/85">
@@ -7260,18 +7540,20 @@ function MemberPage({
         <div className="mt-3 rounded-2xl bg-white p-4">
           <p className="text-[15px] font-bold text-black/90">8 项会员权益</p>
           <div className="mt-3 grid grid-cols-4 gap-y-4">
-            {[
-              ['🚴', '免配送费'],
-              ['🎫', '神券包'],
-              ['🎬', '观影立减'],
-              ['🏨', '酒店折扣'],
-              ['🎧', '专属客服'],
-              ['🎂', '生日礼'],
-              ['⚡', '优先派单'],
-              ['💎', '成长加速'],
-            ].map(([e, l]) => (
-              <button key={l} type="button" onClick={() => onToast(`${l}权益已生效（演示）`)} className="flex flex-col items-center gap-1 active:opacity-70">
-                <span className="text-[20px]">{e}</span>
+            {([
+              [Bike, '免配送费', 'text-[#FF6000]', 'bg-[#FFF0EB]'],
+              [Ticket, '神券包', 'text-[#FF4B33]', 'bg-[#FFECE6]'],
+              [Clapperboard, '观影立减', 'text-[#C77700]', 'bg-[#FFF1C0]'],
+              [Building, '酒店折扣', 'text-[#B77900]', 'bg-[#FFF3B8]'],
+              [Headset, '专属客服', 'text-[#D96A1E]', 'bg-[#FFE8D9]'],
+              [Cake, '生日礼', 'text-[#FF2D7E]', 'bg-[#FFE8F1]'],
+              [Zap, '优先派单', 'text-[#D98A00]', 'bg-[#FFF7E0]'],
+              [Gem, '成长加速', 'text-[#1D9A6C]', 'bg-[#E9F7F0]'],
+            ] as [LucideIcon, string, string, string][]).map(([Icon, l, tone, bg]) => (
+              <button key={l} type="button" onClick={() => onToast(`${l}权益已生效（演示）`)} className="flex flex-col items-center gap-1.5 active:opacity-70">
+                <span className={`grid h-10 w-10 place-items-center rounded-full ${bg}`}>
+                  <Icon className={`h-[20px] w-[20px] ${tone}`} strokeWidth={1.8} />
+                </span>
                 <span className="text-[10px] text-black/60">{l}</span>
               </button>
             ))}
@@ -7573,6 +7855,8 @@ export default function MeituanApp() {
   const [searchSeed, setSearchSeed] = useState('');
   /** 评价弹层目标订单 */
   const [rateFor, setRateFor] = useState<MtOrder | null>(null);
+  /** 找人代付详情（订单列表「代付详情」入口；只读） */
+  const [proxyViewId, setProxyViewId] = useState<string | null>(null);
   const [toastMsg, showToast] = useLocalToast();
   const sessionRef = useRef<MtSession | null>(null);
   useEffect(() => {
@@ -7768,6 +8052,7 @@ export default function MeituanApp() {
                   setOrderId(o.id);
                   setPage('couponCode');
                 }}
+                onOpenProxy={(pid) => setProxyViewId(pid)}
                 onToast={showToast}
               />
             )}
@@ -7982,6 +8267,7 @@ export default function MeituanApp() {
           <PayPage
             key={payFor.id}
             order={payFor}
+            session={session}
             onClose={() => {
               // 返回 → 取消支付，回到来源页（订单保持待支付，可继续支付）
               setPayPage(false);
@@ -7994,6 +8280,14 @@ export default function MeituanApp() {
               setOrderFrom('orders');
               setTab('orders');
               setPage('orderDetail');
+            }}
+            onProxySent={() => {
+              // 代付请求已发出 → 关收银台，回订单列表待付款页签（卡片已进好友聊天）
+              setPayPage(false);
+              setPayFor(null);
+              setOrderTab('待付款');
+              setTab('orders');
+              setPage('main');
             }}
             onToast={showToast}
           />
@@ -8011,6 +8305,9 @@ export default function MeituanApp() {
           />
         )}
       </AnimatePresence>
+
+      {/* 找人代付详情（只读视角：等待好友付款中） */}
+      {proxyViewId && <MtProxyDetailPage pid={proxyViewId} canPay={false} onBack={() => setProxyViewId(null)} onToast={showToast} />}
 
       <LocalToast msg={toastMsg} />
     </div>

@@ -435,6 +435,8 @@ export interface MtOrder {
   payMethodId?: string;
   /** 亲属卡多卡分摊明细（退款时按原分摊回补各卡额度） */
   payFcParts?: { cardInId: string; amount: number }[];
+  /** 找人代付（待支付时发起）：id = 代付请求（mt-proxy:<id>），name = 代付好友 */
+  proxy?: { id: string; name: string };
   status: MtOrderStatus;
   createdAt: number;
   paidAt?: number;
@@ -494,6 +496,10 @@ export function mtLoadOrders(uid: string): MtOrder[] {
             .filter((p) => p && typeof p.cardInId === 'string' && typeof p.amount === 'number')
             .map((p) => ({ cardInId: p.cardInId as string, amount: p.amount as number }))
         : undefined,
+      proxy:
+        o.proxy && typeof o.proxy === 'object' && typeof (o.proxy as { id?: unknown }).id === 'string'
+          ? { id: (o.proxy as { id: string }).id, name: typeof (o.proxy as { name?: unknown }).name === 'string' ? (o.proxy as { name: string }).name : '好友' }
+          : undefined,
       refund:
         o.refund && typeof o.refund === 'object' && typeof o.refund.appliedAt === 'number'
           ? {
