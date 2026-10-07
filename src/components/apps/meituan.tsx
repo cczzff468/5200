@@ -207,9 +207,10 @@ const GRID_ICONS: Record<string, LucideIcon> = {
   LayoutGrid,
 };
 
-/** 菜品图（搜索 OSS 图；失败回退图形渐变占位） */
+/** 菜品图（Lorem Picsum 稳定图；瞬断自动重试一次，再失败显示灰色+文字占位） */
 function FoodImg({ src, className = '' }: { src?: string; emoji?: string; className?: string }) {
   const [err, setErr] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   if (!src || err) {
     return (
       <div className={`flex flex-col items-center justify-center gap-1 bg-[#EBEDF0] ${className}`} aria-hidden="true">
@@ -218,7 +219,20 @@ function FoodImg({ src, className = '' }: { src?: string; emoji?: string; classN
       </div>
     );
   }
-  return <img src={src} alt="" draggable={false} loading="lazy" onError={() => setErr(true)} className={`object-cover ${className}`} />;
+  return (
+    <img
+      key={attempt}
+      src={src}
+      alt=""
+      draggable={false}
+      loading="lazy"
+      onError={() => {
+        if (attempt === 0) setAttempt(1);
+        else setErr(true);
+      }}
+      className={`object-cover ${className}`}
+    />
+  );
 }
 
 /** 数量步进器（对齐真机：灰色 − / 描边数量框 / 灰色 +） */
@@ -608,17 +622,16 @@ function DealCard({ deal, onOpen }: { deal: MtDeal; onOpen: () => void }) {
   );
 }
 
-/** 特价团聚合卡（列表位） */
-function DealListCard({ onOpen }: { onOpen: (id: string) => void }) {
-  const deals = MT_HOME_LIST.dealIds.map((id) => MT_DEALS.find((d) => d.id === id)).filter((d): d is MtDeal => !!d);
+/** 特价团聚合卡（列表位）：主题名 + 2 个团购由 AI 生成（AI 未给时用种子兜底） */
+function DealListCard({ title, deals, onOpen }: { title: string; deals: MtDeal[]; onOpen: (id: string) => void }) {
   if (deals.length === 0) return null;
   return (
     <div className="mb-2 break-inside-avoid rounded-xl bg-white p-3 shadow-[0_1px_6px_rgba(0,0,0,0.04)]">
       <button type="button" onClick={() => onOpen(deals[0].id)} className="flex w-full items-center gap-1.5 text-left active:opacity-70">
         <TuanMark className="shrink-0 text-[15px]" />
-        <span className="shrink-0 rounded-[4px] bg-[#FF3B30] px-1 py-px text-[10px] font-medium text-white">{MT_HOME_LIST.badge}</span>
+        <span className="shrink-0 rounded-[4px] bg-[#FF3B30] px-1 py-px text-[10px] font-medium text-white">特价团</span>
       </button>
-      <p className="mt-1.5 truncate text-[13px] font-bold text-black/85">{MT_HOME_LIST.title}</p>
+      <p className="mt-1.5 truncate text-[13px] font-bold text-black/85">{title}</p>
       <div className="mt-2.5 space-y-3">
         {deals.map((d) => (
           <button key={d.id} type="button" onClick={() => onOpen(d.id)} className="flex w-full items-center gap-2.5 text-left active:opacity-80">
@@ -696,8 +709,17 @@ function interleave(deals: MtDeal[], merchants: MtMerchant[]): FeedItem[] {
   return out;
 }
 
+/** 首页信息流缓存：从详情页/其他 tab 返回时直接恢复，不重新生成（仅首次进入/下拉刷新/切分类才生成） */
+const homeFeedCache: {
+  ready: boolean;
+  filter: string | null;
+  feed: FeedItem[];
+  listDeals: MtDeal[];
+  listTitle: string | null;
+} = { ready: false, filter: null, feed: [], listDeals: [], listTitle: null };
+
 /** 本地兜底批（AI 不可用时）：种子池洗牌 + 排除已展示名称；池子耗尽 → 分店变体续流 */
-function localBatch(filter: string | null, exclude: string[]): FeedItem[] {
+function localBatch(filter: string | null, exclude: string[]): { items: FeedItem[]; listDeals: MtDeal[]; listTitle: string | null } {
   const ex = new Set(exclude);
   const target = 15 + Math.floor(Math.random() * 4);
   const out: FeedItem[] = [];
@@ -716,7 +738,7 @@ function localBatch(filter: string | null, exclude: string[]): FeedItem[] {
   if (filter === 'tuangou') {
     shuffle(MT_DEALS).forEach(takeD);
     while (out.length < target) out.push({ t: 'deal', d: MT_DEALS[Math.floor(Math.random() * MT_DEALS.length)] });
-    return out;
+    return { items: out, listDeals: [], listTitle: null };
   }
   const merchants = filter ? MT_MERCHANTS.filter((m) => m.cats.includes(filter)) : MT_MERCHANTS;
   shuffle(merchants).forEach(takeM);
@@ -735,7 +757,12 @@ function localBatch(filter: string | null, exclude: string[]): FeedItem[] {
     out.push({ t: 'm', m: clone });
     guard++;
   }
-  return out;
+  // 特价团聚合卡兜底：种子聚合卡
+  const seedDeals = MT_HOME_LIST.dealIds
+    .map((id) => MT_DEALS.find((d) => d.id === id))
+    .filter((d): d is MtDeal => !!d)
+    .slice(0, 2);
+  return { items: out, listDeals: filter === null ? seedDeals : [], listTitle: filter === null ? MT_HOME_LIST.title : null };
 }
 
 function HomePage({
@@ -756,14 +783,18 @@ function HomePage({
   const uid = mtUidOf(session);
   const addrs = useMemo(() => mtLoadAddresses(uid), [uid]);
   const cur = addrs.find((a) => a.id === mtCurAddrId(uid)) ?? addrs[0];
-  const [filter, setFilter] = useState<string | null>(null); // null=推荐流 / 'tuangou' / 商家分类id
+  const [filter, setFilter] = useState<string | null>(homeFeedCache.filter); // null=推荐流 / 'tuangou' / 商家分类id
   const [hintIdx, setHintIdx] = useState(0);
   const [gridPage, setGridPage] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
   // AI 信息流：进入页面 / 下拉刷新 / 切换分类 → 重新生成；上滑 → 下方追加全新内容（上方不变）
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [feed, setFeed] = useState<FeedItem[]>([]);
-  const [generating, setGenerating] = useState(true); // 首屏/刷新骨架动画
+  const [feed, setFeed] = useState<FeedItem[]>(homeFeedCache.feed);
+  const [listData, setListData] = useState<{ deals: MtDeal[]; title: string | null }>({
+    deals: homeFeedCache.listDeals,
+    title: homeFeedCache.listTitle,
+  });
+  const [generating, setGenerating] = useState(!homeFeedCache.ready); // 首屏/刷新骨架动画
   const [loadingMore, setLoadingMore] = useState(false);
   const [pullDist, setPullDist] = useState(0);
   const [pullHint, setPullHint] = useState<'pull' | 'release'>('pull');
@@ -772,7 +803,7 @@ function HomePage({
   const apiCfgRef = useRef(apiConfig);
   apiCfgRef.current = apiConfig;
   const genSeqRef = useRef(0); // 竞态丢弃：刷新/切分类期间旧响应作废
-  const generatingRef = useRef(true);
+  const generatingRef = useRef(!homeFeedCache.ready);
   const loadingRef = useRef(false);
   const filterRef = useRef(filter);
   const feedRef = useRef<FeedItem[]>([]);
@@ -785,42 +816,58 @@ function HomePage({
   }, []);
 
   // ---- AI 取数：/api/mt-feed（用户配置模型 → 服务端内置模型兜底），失败走本地洗牌兜底 ----
-  const fetchBatch = useCallback(async (f: string | null, exclude: string[]): Promise<FeedItem[]> => {
-    try {
-      const res = await fetch('/api/mt-feed', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          config: apiCfgRef.current,
-          filter: f,
-          exclude,
-          count: 15 + Math.floor(Math.random() * 4),
-        }),
-      });
-      const data = (await res.json().catch(() => null)) as {
-        ok?: boolean;
-        merchants?: MtMerchant[];
-        deals?: MtDeal[];
-      } | null;
-      if (!res.ok || !data || data.ok !== true) throw new Error('AI 生成失败');
-      const merchants = (data.merchants ?? []).map((m) => {
-        mtRegisterAiMerchant(m);
-        return m;
-      });
-      const deals = (data.deals ?? []).map((d) => {
-        mtRegisterAiDeal(d);
-        return d;
-      });
-      if (merchants.length === 0 && deals.length === 0) throw new Error('空数据');
-      if (f === 'tuangou') return deals.map<FeedItem>((d) => ({ t: 'deal', d }));
-      if (f) return merchants.map<FeedItem>((m) => ({ t: 'm', m }));
-      return interleave(deals, merchants);
-    } catch {
-      return localBatch(f, exclude);
-    }
-  }, []);
+  const fetchBatch = useCallback(
+    async (
+      f: string | null,
+      exclude: string[]
+    ): Promise<{ items: FeedItem[]; listDeals: MtDeal[]; listTitle: string | null }> => {
+      try {
+        const res = await fetch('/api/mt-feed', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            config: apiCfgRef.current,
+            filter: f,
+            exclude,
+            count: 15 + Math.floor(Math.random() * 4),
+          }),
+        });
+        const data = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          merchants?: MtMerchant[];
+          deals?: MtDeal[];
+          listTitle?: string | null;
+        } | null;
+        if (!res.ok || !data || data.ok !== true) throw new Error('AI 生成失败');
+        const merchants = (data.merchants ?? []).map((m) => {
+          mtRegisterAiMerchant(m);
+          return m;
+        });
+        const deals = (data.deals ?? []).map((d) => {
+          mtRegisterAiDeal(d);
+          return d;
+        });
+        if (merchants.length === 0 && deals.length === 0) throw new Error('空数据');
+        if (f === 'tuangou') return { items: deals.map<FeedItem>((d) => ({ t: 'deal', d })), listDeals: [], listTitle: null };
+        if (f) return { items: merchants.map<FeedItem>((m) => ({ t: 'm', m })), listDeals: [], listTitle: null };
+        // 推荐流：前 2 个团购进「特价团」聚合卡（AI 生成），其余进瀑布流；AI 未给主题 → 种子兜底
+        const listDeals = deals.slice(0, 2);
+        if (listDeals.length > 0) {
+          return { items: interleave(deals.slice(2), merchants), listDeals, listTitle: data.listTitle ?? null };
+        }
+        const seedDeals = MT_HOME_LIST.dealIds
+          .map((id) => MT_DEALS.find((d) => d.id === id))
+          .filter((d): d is MtDeal => !!d)
+          .slice(0, 2);
+        return { items: interleave(deals, merchants), listDeals: seedDeals, listTitle: MT_HOME_LIST.title };
+      } catch {
+        return localBatch(f, exclude);
+      }
+    },
+    []
+  );
 
-  // 重新生成：进入页面 / 下拉刷新 / 切换分类（排除名单 = 上一次已展示内容 → 出来的是全新内容）
+  // 重新生成：下拉刷新 / 切换分类 / 首次进入（排除名单 = 上一次已展示内容 → 出来的是全新内容）
   const regenerate = useCallback(async () => {
     const seq = ++genSeqRef.current;
     const f = filterRef.current;
@@ -829,21 +876,40 @@ function HomePage({
     loadingRef.current = false;
     setGenerating(true);
     setLoadingMore(false);
-    setFeed([]);
     setPullDist(0);
     scrollRef.current?.scrollTo({ top: 0 });
-    const items = await fetchBatch(f, exclude);
+    const batch = await fetchBatch(f, exclude);
     if (genSeqRef.current !== seq) return; // 期间又触发了刷新/切分类：丢弃过期批次
-    setFeed(items);
+    setFeed(batch.items);
+    setListData({ deals: batch.listDeals, title: batch.listTitle });
     generatingRef.current = false;
     setGenerating(false);
   }, [fetchBatch]);
 
-  // 进入页面自动生成；切换分类重新生成（需求三：进页面生成 / 切分类重新生成）
+  // 首次挂载：有缓存直接恢复（从详情页/其他 tab 返回不重新生成）；否则生成
+  // 之后 filter 变化（切分类/切回推荐）→ 重新生成
+  const firstRunRef = useRef(true);
   useEffect(() => {
     filterRef.current = filter;
+    if (firstRunRef.current) {
+      firstRunRef.current = false;
+      if (homeFeedCache.ready && homeFeedCache.filter === filter) {
+        generatingRef.current = false;
+        setGenerating(false);
+        return;
+      }
+    }
     void regenerate();
   }, [filter, regenerate]);
+
+  // 信息流写入缓存：返回首页时原样恢复
+  useEffect(() => {
+    homeFeedCache.ready = !generating && feed.length > 0;
+    homeFeedCache.filter = filter;
+    homeFeedCache.feed = feed;
+    homeFeedCache.listDeals = listData.deals;
+    homeFeedCache.listTitle = listData.title;
+  }, [feed, generating, filter, listData]);
 
   // 上滑追加：新内容接在下方，上方已展示内容保持不变（每批 15~20 条）
   const loadMore = useCallback(async () => {
@@ -852,14 +918,14 @@ function HomePage({
     setLoadingMore(true);
     const f = filterRef.current;
     const exclude = feedRef.current.map(feedName).filter(Boolean).slice(0, 80);
-    const items = await fetchBatch(f, exclude);
+    const batch = await fetchBatch(f, exclude);
     if (filterRef.current !== f || generatingRef.current) {
       // 等待期间切换了分类/触发了刷新 → 丢弃这批
       loadingRef.current = false;
       setLoadingMore(false);
       return;
     }
-    setFeed((prev) => [...prev, ...items]);
+    setFeed((prev) => [...prev, ...batch.items]);
     loadingRef.current = false;
     setLoadingMore(false);
   }, [fetchBatch]);
@@ -906,25 +972,6 @@ function HomePage({
       onTouchEnd={onTouchEnd}
       className="h-full overflow-y-auto overscroll-contain bg-[#F4F5F7] pb-4"
     >
-      {/* 下拉刷新指示区：刷新中转圈，下拉时跟随高度提示松手 */}
-      <div
-        className="grid place-items-center overflow-hidden transition-[height] duration-150"
-        style={{ height: generating ? 52 : pullDist }}
-      >
-        {generating ? (
-          <span className="flex items-center gap-1.5 text-[12px] text-black/40">
-            <RotateCw className="h-4 w-4 animate-spin text-[#FFC300]" />
-            AI 正在生成新内容…
-          </span>
-        ) : (
-          pullDist > 8 && (
-            <span className="flex items-center gap-1 text-[12px] text-black/35">
-              <ArrowDown className={`h-3.5 w-3.5 transition-transform ${pullHint === 'release' ? 'rotate-180' : ''}`} />
-              {pullHint === 'release' ? '松手刷新' : '下拉刷新'}
-            </span>
-          )
-        )}
-      </div>
       {/* 黄头：定位 / 消息 / 扫一扫 / 搜索 */}
       <div className="bg-[#FFD100] px-4 pb-3 pt-[54px]">
         <div className="flex items-center gap-2">
@@ -986,6 +1033,26 @@ function HomePage({
         </div>
       </div>
 
+      {/* 生成中 / 下拉刷新提示（分类宫格图标下方） */}
+      <div
+        className="grid place-items-center overflow-hidden transition-[height] duration-150"
+        style={{ height: generating ? 48 : pullDist }}
+      >
+        {generating ? (
+          <span className="flex items-center gap-1.5 text-[12px] text-black/40">
+            <RotateCw className="h-4 w-4 animate-spin text-[#FFC300]" />
+            AI 正在生成新内容…
+          </span>
+        ) : (
+          pullDist > 8 && (
+            <span className="flex items-center gap-1 text-[12px] text-black/35">
+              <ArrowDown className={`h-3.5 w-3.5 transition-transform ${pullHint === 'release' ? 'rotate-180' : ''}`} />
+              {pullHint === 'release' ? '松手刷新' : '下拉刷新'}
+            </span>
+          )
+        )}
+      </div>
+
       {/* 瀑布流：AI 生成内容（生成中显示骨架动画） */}
       {generating ? (
         <div className="mt-2 columns-2 gap-2 px-2">
@@ -1001,7 +1068,7 @@ function HomePage({
       ) : (
         <>
           <div className="mt-2 columns-2 gap-2 px-2">
-            {filter === null && <DealListCard onOpen={onOpenDeal} />}
+            {filter === null && <DealListCard title={listData.title ?? MT_HOME_LIST.title} deals={listData.deals} onOpen={onOpenDeal} />}
             {feed.map((it, i) =>
               it.t === 'deal' ? (
                 <DealCard key={`deal-${it.d.id}-${i}`} deal={it.d} onOpen={() => onOpenDeal(it.d.id)} />

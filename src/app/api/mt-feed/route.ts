@@ -50,9 +50,9 @@ function strOf(v: unknown, def: string, maxLen = 40): string {
   return (s || def).slice(0, maxLen);
 }
 
-/** Lorem Picsum 稳定图（同 seed 同图 → 浏览器缓存不重复加载） */
+/** Lorem Picsum 稳定图（.jpg 直出文件免重定向更稳定；同 seed 同图 → 浏览器缓存不重复加载） */
 function picsum(seed: string, w = 480, h = 360): string {
-  return `https://picsum.photos/seed/${encodeURIComponent(seed)}/${w}/${h}`;
+  return `https://picsum.photos/seed/${encodeURIComponent(seed)}/${w}/${h}.jpg`;
 }
 
 /** baseUrl 归一化候选：完整端点 / /v1 结尾 / 裸域名（与 /api/chat 同策略） */
@@ -161,20 +161,34 @@ async function upstreamText(cfg: FeedConfig, system: string, user: string): Prom
   throw new Error('上游接口重试次数用尽');
 }
 
-/** 内置模型兜底（z-ai-web-dev-sdk，仅后端） */
+/** 内置模型兜底（z-ai-web-dev-sdk，仅后端）；429 限流自动退避重试 */
 async function sdkText(system: string, user: string): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
-  const completion = await zai.chat.completions.create({
-    messages: [
-      { role: 'assistant', content: system },
-      { role: 'user', content: user },
-    ],
-    thinking: { type: 'disabled' },
-  });
-  const text = completion.choices[0]?.message?.content ?? '';
-  if (!text.trim()) throw new Error('内置模型返回空内容');
-  return text;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const completion = await zai.chat.completions.create({
+        messages: [
+          { role: 'assistant', content: system },
+          { role: 'user', content: user },
+        ],
+        thinking: { type: 'disabled' },
+      });
+      const text = completion.choices[0]?.message?.content ?? '';
+      if (!text.trim()) throw new Error('内置模型返回空内容');
+      return text;
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/429|Too many requests/i.test(msg) && attempt < 2) {
+        await new Promise((r) => setTimeout(r, 2500 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('内置模型请求失败');
 }
 
 // ---------------- 输出解析 ----------------
@@ -257,7 +271,7 @@ function buildUser(a: GenerateArgs): string {
       ? '每条都是 kind="merchant" 的商家。'
       : a.mode === 'deal'
         ? '每条都是 kind="deal" 的团购（必须带 merchantName）。'
-        : '商家（kind="merchant"）与团购（kind="deal"，必须带 merchantName）数量大致各半。';
+        : '在数组最前面加 1 条 {"kind":"list","title":"<新颖主题名，5~8字，如「深秋寻味6折起」>"}；其余条目中商家（kind="merchant"）与团购（kind="deal"，必须带 merchantName）数量大致各半。';
 
   return [
     `生成 ${a.count} 条美团「${a.topic}」信息流数据。${kindRule}`,
@@ -275,7 +289,7 @@ function buildUser(a: GenerateArgs): string {
 
 // ---------------- 数据塑形 ----------------
 
-function coerceDish(mid: string, idx: number, raw: unknown): MtDish {
+function coerceDish(merchantName: string, idx: number, raw: unknown): MtDish {
   // 模型可能把菜品返回为字符串（"毛肚"）而非对象：统一收窄
   const rec: RawRec =
     typeof raw === 'string'
@@ -283,33 +297,36 @@ function coerceDish(mid: string, idx: number, raw: unknown): MtDish {
       : typeof raw === 'object' && raw !== null
         ? (raw as RawRec)
         : {};
+  const name = strOf(rec.name, `招牌菜${idx + 1}`, 24);
+  // seed 用「商家名+菜名」派生：同名店/同名菜永远同一张图（稳定可缓存，不随生成批次漂移）
   return {
-    id: `${mid}-d${idx}`,
-    name: strOf(rec.name, `招牌菜${idx + 1}`, 24),
+    id: `ai-${merchantName}-${idx}-${Math.floor(Math.random() * 1e6).toString(36)}`,
+    name,
     price: num(rec.price, 12 + idx * 3, 0.5, 999),
     emoji: strOf(rec.emoji, '🍽️', 4),
-    img: picsum(`${mid}-d${idx}`, 400, 400),
+    img: picsum(`mt-${merchantName}-${name}`, 400, 400),
     monthSale: intOf(rec.monthSale, 800 + Math.floor(Math.random() * 9000), 20, 999999),
   };
 }
 
-function coerceMenuSections(mid: string, rawMenu: unknown): { cat: string; dishes: MtDish[] }[] {
+function coerceMenuSections(merchantName: string, rawMenu: unknown): { cat: string; dishes: MtDish[] }[] {
   const arr = Array.isArray(rawMenu) ? rawMenu.slice(0, 8) : [];
-  const dishes = arr.map((d, i) => coerceDish(mid, i, d));
-  if (dishes.length === 0) dishes.push(coerceDish(mid, 0, {}));
+  const dishes = arr.map((d, i) => coerceDish(merchantName, i, d));
+  if (dishes.length === 0) dishes.push(coerceDish(merchantName, 0, {}));
   return [{ cat: '推荐', dishes }];
 }
 
 function buildMerchant(id: string, raw: unknown, filter: string | null): MtMerchant {
   const rec: RawRec = typeof raw === 'object' && raw !== null ? (raw as RawRec) : {};
+  const name = strOf(rec.name, '宝藏好店', 24);
   const deals = (Array.isArray(rec.deals) ? rec.deals : [])
     .filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
     .slice(0, 2);
   return {
     id,
-    name: strOf(rec.name, '宝藏好店', 24),
+    name,
     emoji: strOf(rec.emoji, '🏪', 4),
-    cover: picsum(`${id}-cover`),
+    cover: picsum(`mt-${name}`),
     cats: filter && filter !== 'tuangou' ? [filter] : ['meishi'],
     rating: Math.round(num(rec.rating, 4.7, 3.5, 5) * 10) / 10,
     monthSale: intOf(rec.monthSale, 1200 + Math.floor(Math.random() * 6000), 10, 999999),
@@ -321,7 +338,7 @@ function buildMerchant(id: string, raw: unknown, filter: string | null): MtMerch
     deals: deals.length > 0 ? deals : ['新客立减'],
     hours: strOf(rec.hours, '09:00-22:00', 24),
     addr: strOf(rec.addr, '望京街道湖光中街1号', 40),
-    sections: coerceMenuSections(id, rec.menu),
+    sections: coerceMenuSections(name, rec.menu),
     reviews: [],
   };
 }
@@ -348,6 +365,7 @@ function coerceDealMenu(rawMenu: unknown): MtDealMenu[] {
 
 function buildDeal(id: string, raw: unknown, merchantId: string): MtDeal {
   const rec: RawRec = typeof raw === 'object' && raw !== null ? (raw as RawRec) : {};
+  const title = strOf(rec.title, '超值双人套餐', 30);
   const price = num(rec.price, 29.9, 0.5, 9999);
   let origPrice = num(rec.origPrice, price * 2, 0.5, 99999);
   if (origPrice < price * 1.15) origPrice = Math.round(price * 2 * 10) / 10;
@@ -358,8 +376,8 @@ function buildDeal(id: string, raw: unknown, merchantId: string): MtDeal {
   return {
     id,
     merchantId,
-    title: strOf(rec.title, '超值双人套餐', 30),
-    img: picsum(`${id}-img`),
+    title,
+    img: picsum(`mt-${title}`),
     emoji: strOf(rec.emoji, '🍱', 4),
     price: Math.round(price * 10) / 10,
     origPrice: Math.round(origPrice * 10) / 10,
@@ -450,6 +468,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'AI 生成失败：两次生成均未返回有效数据' }, { status: 200 });
   }
 
+  // 特价团聚合卡主题（mixed 模式：kind="list" 条目）
+  let listTitle: string | null = null;
+  for (const it of allItems) {
+    const rec: RawRec = typeof it === 'object' && it !== null ? (it as RawRec) : {};
+    if (rec.kind === 'list' && typeof rec.title === 'string' && rec.title.trim()) {
+      listTitle = rec.title.trim().slice(0, 14);
+      break;
+    }
+  }
+
   const items = allItems;
   const ts = Date.now().toString(36);
   const merchants: MtMerchant[] = [];
@@ -499,5 +527,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: '模型未返回有效数据' }, { status: 200 });
   }
 
-  return NextResponse.json({ ok: true, source, merchants, deals });
+  return NextResponse.json({ ok: true, source, merchants, deals, listTitle });
 }

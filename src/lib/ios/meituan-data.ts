@@ -5,10 +5,10 @@
  * - 商家与菜品 id 稳定（购物车/订单跨重启引用）。
  */
 
-/** Lorem Picsum 稳定图地址：https://picsum.photos/seed/{seed}/{width}/{height}
- *  同 seed 返回同一张图 → 浏览器缓存后不重复加载；失败时 UI 显示灰色占位图 */
+/** Lorem Picsum 稳定图地址：https://picsum.photos/seed/{seed}/{width}/{height}.jpg
+ *  带扩展名直出图片文件（官方推荐写法，免重定向/内容协商，加载更稳）；同 seed 同图 → 浏览器缓存 */
 function picsum(seed: string, width = 480, height = 360): string {
-  return `https://picsum.photos/seed/${encodeURIComponent(seed)}/${width}/${height}`;
+  return `https://picsum.photos/seed/${encodeURIComponent(seed)}/${width}/${height}.jpg`;
 }
 
 /** 图片槽位（Lorem Picsum 稳定图：https://picsum.photos/seed/{seed}/{w}/{h}，

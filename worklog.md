@@ -16423,3 +16423,23 @@ Stage Summary:
 - 图片统一 Lorem Picsum seed 稳定图（可缓存），失败显示灰底+文字占位
 - 用户在「设置›API 配置」配置的模型即插即用（请求体传 config，不落盘）；未配置/失败自动落内置 SDK
 - AI 内容经注册表打通详情页/购买/购物车既有链路，其他 App 与种子订单零影响
+---
+Task ID: mt-ai-feed-105
+Agent: Z.ai Code (main)
+Task: 美团 AI 信息流五项修正——①Picsum 稳定化(.jpg+失败重试) ②图片 seed 名称派生 ③返回首页不重新生成 ④特价团聚合卡 AI 生成 ⑤生成动画移到宫格图标下方
+
+Work Log:
+- picsum 稳定化：meituan-data.ts 与 route.ts 两处 picsum() URL 追加 .jpg 后缀（官方推荐写法，直出图片文件，免重定向/内容协商失败）；FoodImg 失败自动重试一次（attempt state + key 重挂载），再失败才显示灰底+「图片加载失败」占位
+- 图片 seed 名称派生：AI 商家门头 = picsum(`mt-{商家名}`)、菜品 = picsum(`mt-{商家名}-{菜名}`)、团购图 = picsum(`mt-{标题}`)——同名店/同名菜永远同一张图（稳定一致+可缓存），不再随生成批次漂移
+- 返回首页不重新生成：HomePage 新增模块级 homeFeedCache{ready,filter,feed,listDeals,listTitle}；state 初值从缓存取，首次挂载命中缓存直接恢复（firstRunRef 守卫），信息流变化写回缓存；实测进商家详情返回 same:true、切购物车 tab 返回 sameAfterTab:true，零重新生成；仅首次进入/下拉刷新/切分类触发 regenerate
+- 特价团聚合卡 AI 化：mixed 模式提示词加 {"kind":"list","title":"..."} 项（5~8字新颖主题）；路由解析 listTitle 随响应返回；fetchBatch 取当批前 2 个团购进聚合卡（其余进瀑布流），DealListCard 改 props 驱动（title/deals/onOpen），AI 未给时种子兜底；实测生成主题「秋味特惠6.8折」+ 2 个 AI 团购
+- 生成动画移位：删除顶部指示区，「⟳ AI 正在生成新内容…」与下拉提示条移到分类宫格图标下方（黄头→宫格→指示条→瀑布流），截图确认
+- sdkText 加 429 限流退避重试（2.5s/5s 两轮），修复测试高峰「两次生成均未返回有效数据」
+- eslint+tsc 零告警；dev.log 无业务错误；loadMore 适配 fetchBatch 新返回类型（batch.items）
+- 改动文件：src/components/apps/meituan.tsx、src/lib/ios/meituan-data.ts、src/app/api/mt-feed/route.ts
+
+Stage Summary:
+- 图片链路稳定：.jpg 直出 + 失败重试 + 名称派生 seed（同店同图）
+- 首页信息流生命周期修正：返回/tab 切换恢复缓存不重生成，刷新/切分类才重新生成
+- 特价团聚合卡随刷新整体 AI 重新生成（主题+团购）
+- 生成动画位置对齐需求（宫格图标下方）
