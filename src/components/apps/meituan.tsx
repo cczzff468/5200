@@ -107,6 +107,7 @@ import {
   mtRegisterAiDeal,
   mtRegisterAiMerchant,
   type MtDeal,
+  type MtDealPackage,
   type MtDish,
   type MtMerchant,
 } from '@/lib/ios/meituan-data';
@@ -207,11 +208,24 @@ const GRID_ICONS: Record<string, LucideIcon> = {
   LayoutGrid,
 };
 
-/** 菜品图（Lorem Picsum 稳定图；瞬断自动重试一次，再失败显示灰色+文字占位） */
+/** 兑底图：对主源 URL 哈希派生稳定 picsum 地址（主源失败时仍能出图） */
+function imgFallback(src?: string): string | undefined {
+  if (!src) return undefined;
+  let h = 0;
+  for (let i = 0; i < src.length; i++) h = (h * 31 + src.charCodeAt(i)) >>> 0;
+  return `https://picsum.photos/seed/mtfb${h % 100000}/480/480.jpg`;
+}
+
+/** 菜品图（/api/mt-img 内容匹配图；主源重试一次 → picsum 兑底 → 灰色+文字占位；src 变化经 key 重挂载重置） */
 function FoodImg({ src, className = '' }: { src?: string; emoji?: string; className?: string }) {
-  const [err, setErr] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  if (!src || err) {
+  return <FoodImgInner key={src ?? 'none'} src={src} className={className} />;
+}
+
+function FoodImgInner({ src, className = '' }: { src?: string; className?: string }) {
+  // stage：0=主源首载 1=主源重试 2=picsum 兑底 3=占位图
+  const [stage, setStage] = useState(0);
+  const cur = stage <= 1 ? src : stage === 2 ? imgFallback(src) : undefined;
+  if (!cur) {
     return (
       <div className={`flex flex-col items-center justify-center gap-1 bg-[#EBEDF0] ${className}`} aria-hidden="true">
         <ImageOff className="h-[30%] w-[30%] text-black/25" strokeWidth={1.8} />
@@ -221,15 +235,12 @@ function FoodImg({ src, className = '' }: { src?: string; emoji?: string; classN
   }
   return (
     <img
-      key={attempt}
-      src={src}
+      key={`${stage}-${cur}`}
+      src={cur}
       alt=""
       draggable={false}
       loading="lazy"
-      onError={() => {
-        if (attempt === 0) setAttempt(1);
-        else setErr(true);
-      }}
+      onError={() => setStage((s) => Math.min(3, s + 1))}
       className={`object-cover ${className}`}
     />
   );
@@ -3131,6 +3142,24 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
         {/* 团购详情 */}
         <div className="border-y-[7px] border-[#F5F6F7] px-4 py-4">
           <p className="text-[16px] font-bold text-black/85">团购详情</p>
+          {/* 可选套餐清单（与购买弹窗内选择一致） */}
+          {(deal.packages?.length ?? 0) > 1 && (
+            <div className="mt-3">
+              <p className="text-[14px] font-bold text-black/80">可选套餐</p>
+              <div className="mt-2 space-y-2">
+                {deal.packages!.map((p, i) => (
+                  <div key={`${p.name}-${i}`} className="rounded-lg bg-[#FFF3F8] p-2.5">
+                    <p className="flex items-center gap-2 text-[13px] font-semibold text-black/80">
+                      <span className="shrink-0 rounded bg-[#FF2D7E] px-1 py-px text-[10px] font-bold text-white">{String.fromCharCode(65 + i)}</span>
+                      <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                      <span className="shrink-0 font-bold text-[#FF2D7E]">¥{fmtMoney(p.price)}</span>
+                    </p>
+                    {p.items && p.items.length > 0 && <p className="mt-1 text-[11px] leading-relaxed text-black/50">{p.items.join(' / ')}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {deal.menu.map((sec) => (
             <div key={sec.sec} className="mt-3">
               <p className="text-[14px] font-bold text-black/80">{sec.sec}</p>
@@ -3194,6 +3223,14 @@ function DealConfirmSheet({
   const uid = session ? mtUidOf(session) : '';
   const merchant = mtMerchantOf(deal.merchantId);
   const [qty, setQty] = useState(1);
+  // 可选套餐（购买弹窗内单选：选中后价格/内容/订单项联动；无套餐数据时回退单体套餐不出选择器）
+  const pkgs: MtDealPackage[] =
+    deal.packages && deal.packages.length > 0
+      ? deal.packages
+      : [{ name: deal.title, price: deal.price, origPrice: deal.origPrice }];
+  const hasPkgs = (deal.packages?.length ?? 0) > 0;
+  const [selPkg, setSelPkg] = useState(0);
+  const pkg = pkgs[Math.min(selPkg, pkgs.length - 1)];
   // 规格/小料（购买弹窗内选择：奶茶=规格/温度/小料/糖度，食物=小料配菜；加价计入实付）
   const specs = deal.specs ?? [];
   const [selSpec, setSelSpec] = useState<Record<string, string[]>>(() => {
@@ -3225,9 +3262,15 @@ function DealConfirmSheet({
   // 优惠券（到店券）
   const [selCoupon, setSelCoupon] = useState<MtCoupon | null>(null);
   const [couponPick, setCouponPick] = useState(false);
-  const baseDealPrice = mode === 'group' ? (deal.groupPrice ?? Math.max(0.1, Math.round((deal.price - 2) * 10) / 10)) : deal.price;
+  // 有套餐时：直接购买 = 所选套餐价；拼团 = 套餐价 - 2；无套餐保持原逻辑
+  const baseDealPrice =
+    mode === 'group'
+      ? hasPkgs
+        ? Math.max(0.1, Math.round((pkg.price - 2) * 10) / 10)
+        : (deal.groupPrice ?? Math.max(0.1, Math.round((deal.price - 2) * 10) / 10))
+      : pkg.price;
   const unitPrice = Math.max(0.1, Math.round((baseDealPrice + specExtra) * 100) / 100);
-  const itemTotal = Math.round(deal.origPrice * qty * 100) / 100;
+  const itemTotal = Math.round((pkg.origPrice ?? deal.origPrice) * qty * 100) / 100;
   const baseTotal = Math.round(unitPrice * qty * 100) / 100;
   const couponOff = selCoupon ? Math.min(selCoupon.amount, Math.max(0.01, baseTotal - 0.01)) : 0;
   const total = Math.max(0.01, Math.round((baseTotal - couponOff) * 100) / 100);
@@ -3248,7 +3291,17 @@ function DealConfirmSheet({
       merchantEmoji: merchant.emoji,
       merchantImg: merchant.cover,
       kind: 'tuangou',
-      items: [{ dishId: deal.id, name: deal.title, price: deal.origPrice, qty, emoji: deal.emoji, img: deal.img, spec: specText || undefined }],
+      items: [
+        {
+          dishId: deal.id,
+          name: hasPkgs && pkgs.length > 1 ? `${deal.title}（${pkg.name}）` : deal.title,
+          price: pkg.origPrice ?? deal.origPrice,
+          qty,
+          emoji: deal.emoji,
+          img: deal.img,
+          spec: [hasPkgs && pkgs.length > 1 ? pkg.name : '', specText].filter(Boolean).join(' / ') || undefined,
+        },
+      ],
       itemTotal,
       deliveryFee: 0,
       discount,
@@ -3302,7 +3355,7 @@ function DealConfirmSheet({
                     <span className="grid h-3.5 w-3.5 place-items-center rounded-full border border-black/20 text-[9px] text-black/40">?</span>
                   </p>
                   <div className="mt-auto flex items-end justify-between">
-                    <span className="text-[15px] font-bold text-black/85">¥{fmtMoney(deal.origPrice)}</span>
+                    <span className="text-[15px] font-bold text-black/85">¥{fmtMoney(pkg.origPrice ?? deal.origPrice)}</span>
                     <Stepper
                       qty={qty}
                       onAdd={() => setQty((q) => Math.min(9, q + 1))}
@@ -3312,6 +3365,48 @@ function DealConfirmSheet({
                 </div>
               </div>
             </div>
+
+            {/* 选择套餐（可选套餐单选，选中后价格/内容联动） */}
+            {pkgs.length > 1 && (
+              <div className="border-t border-black/5 px-4 py-3.5">
+                <p className="text-[14px] font-semibold text-black/80">选择套餐</p>
+                <div className="mt-2.5 space-y-2">
+                  {pkgs.map((p, i) => {
+                    const on = i === selPkg;
+                    return (
+                      <button
+                        key={`${p.name}-${i}`}
+                        type="button"
+                        onClick={() => setSelPkg(i)}
+                        aria-pressed={on}
+                        className={`flex w-full items-start gap-2.5 rounded-xl border-[1.5px] p-3 text-left transition-colors ${
+                          on ? 'border-[#FF2D7E] bg-[#FFEBF3]' : 'border-transparent bg-[#F5F6F7]'
+                        }`}
+                      >
+                        <span
+                          className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border-[1.5px] ${
+                            on ? 'border-[#FF2D7E]' : 'border-black/25'
+                          }`}
+                        >
+                          {on && <span className="h-2 w-2 rounded-full bg-[#FF2D7E]" />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2">
+                            <span className="truncate text-[14px] font-medium text-black/85">{p.name}</span>
+                            <span className="ml-auto shrink-0 text-[15px] font-bold" style={{ color: MT_PINK }}>
+                              ¥{fmtMoney(p.price)}
+                            </span>
+                          </span>
+                          {p.items && p.items.length > 0 && (
+                            <span className="mt-1 block line-clamp-2 text-[11px] leading-relaxed text-black/45">{p.items.join(' / ')}</span>
+                          )}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* 规格/小料（购买弹窗内选择：奶茶=规格/温度/小料/糖度，食物=小料配菜，加价计入实付） */}
             {specs.length > 0 && (

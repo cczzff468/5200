@@ -1,70 +1,114 @@
 /**
  * 美团 App 种子数据（商家/菜单/评价/分类入口）：
  * - 纯前端静态数据，对齐真机演示口径（评分/月售/起送/配送费/距离/满减）；
- * - 菜品图/门头图走 Lorem Picsum 稳定图（seed 格式），加载失败由 UI 显示灰色占位图；
+ * - 菜品图/门头图走 /api/mt-img 内容匹配图（按品类关键词生成，图片与内容一致），失败由 UI 逐级兜底；
  * - 商家与菜品 id 稳定（购物车/订单跨重启引用）。
  */
 
-/** Lorem Picsum 稳定图地址：https://picsum.photos/seed/{seed}/{width}/{height}.jpg
- *  带扩展名直出图片文件（官方推荐写法，免重定向/内容协商，加载更稳）；同 seed 同图 → 浏览器缓存 */
-function picsum(seed: string, width = 480, height = 360): string {
-  return `https://picsum.photos/seed/${encodeURIComponent(seed)}/${width}/${height}.jpg`;
+/** 内容匹配图地址（/api/mt-img 服务端代理）：
+ *  - k=英文品类词（hotpot/pizza/milk-tea…），服务端按关键词生成与内容一致的图片；
+ *  - s=变体序号（同词不同变体出不同图），w/h=尺寸，p=f 菜品图 / c 门头图；
+ *  - 服务端内存缓存 + 浏览器强缓存：同 tag+变体只生成一次，之后秒出 */
+export function mtImg(tag: string, w = 480, h = 360, s = 0, kind: 'f' | 'c' = 'f'): string {
+  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}`;
 }
 
-/** 图片槽位（Lorem Picsum 稳定图：https://picsum.photos/seed/{seed}/{w}/{h}，
- *  同 seed 同图 → 浏览器缓存不重复加载；加载失败由 UI 显示灰色占位图） */
+/** 中文名 → 英文品类词词典（AI 未返回 tag 时兜底，保证图片与内容匹配） */
+const TAG_RULES: [RegExp, string][] = [
+  [/火锅|麻辣烫|麻辣拌|冒菜|香锅/, 'hotpot'],
+  [/奶茶|奶绿|芋泥|波霸|珍珠/, 'milk-tea'],
+  [/可乐|汽水|雪碧|苏打|气泡水/, 'cola'],
+  [/咖啡|拿铁|美式|摩卡/, 'coffee'],
+  [/柠檬茶|红茶|绿茶|乌龙|花茶|茶/, 'tea'],
+  [/果汁|鲜榨|椰汁|酸奶|柠檬水|酸梅汤|饮/, 'juice'],
+  [/比萨|披萨/, 'pizza'],
+  [/汉堡/, 'burger'],
+  [/寿司|刺身|日料|三文鱼|鳗鱼/, 'sushi'],
+  [/烧烤|烤肉|烤鱼|串串|烤/, 'barbecue'],
+  [/炸鸡|鸡排|鸡翅|烧鸡|口水鸡|鸡肉/, 'fried-chicken'],
+  [/饺子|包子|馄饨|云吞|烧麦|生煎|锅贴|点心|馒头/, 'dumplings'],
+  [/蛋糕|慕斯|提拉米苏|千层|泡芙|蛋挞|甜品|甜点|布丁|圣代|冰激凌|冰淇淋|雪糕|雪媚娘/, 'dessert'],
+  [/海鲜|虾|蟹|鲍鱼|生蚝|扇贝|鱼/, 'seafood'],
+  [/牛排|西冷|菲力/, 'steak'],
+  [/牛肉|肥牛|牛腩|毛肚/, 'beef'],
+  [/羊肉|羊蝎子/, 'lamb'],
+  [/烤鸭|鸭脖|鸭血|鸭/, 'duck'],
+  [/排骨|红烧肉|猪肉|回锅肉|腊肉|卤肉|午餐肉/, 'pork'],
+  [/沙拉|轻食|蔬菜/, 'salad'],
+  [/三明治|帕尼尼|贝果/, 'sandwich'],
+  [/面包|欧包|吐司|可颂/, 'bread'],
+  [/粥|稀饭/, 'porridge'],
+  [/汤|煲/, 'soup'],
+  [/米线|米粉|河粉|螺蛳粉|宽粉|粉/, 'noodles'],
+  [/面|拌面|拉面|刀削/, 'noodles'],
+  [/饭|盖浇|煲仔|拌饭|炒饭/, 'rice'],
+  [/早餐|豆浆|油条|煎饼/, 'breakfast'],
+  [/水果|鲜果|果切|果盘|草莓|芒果|西瓜|橙子|奇异果|猕猴桃|车厘子|葡萄|哈密瓜/, 'fruit'],
+  [/卤味|卤/, 'braised'],
+  [/麻辣/, 'spicy'],
+  [/药|感冒|维生素|口罩|创可贴|板蓝根/, 'medicine'],
+  [/便利|超市|日用|纸巾/, 'store'],
+];
+
+/** 菜名/店名 → 英文品类词（无命中返回 null，由调用方回退商家品类或通用 food） */
+export function mtFoodTagOf(name: string): string | null {
+  for (const [re, tag] of TAG_RULES) if (re.test(name)) return tag;
+  return null;
+}
+
+/** 图片槽位（内容匹配图：按关键词生成，同 key 稳定同图 → 可缓存） */
 export const MT_IMG: Record<string, string> = {
-  burger: picsum('mt-burger'),
-  milktea: picsum('mt-milktea'),
-  chicken: picsum('mt-chicken'),
-  malatang: picsum('mt-malatang'),
-  hotpot: picsum('mt-hotpot'),
-  fruit: picsum('mt-fruit'),
-  store: picsum('mt-store'),
-  pharmacy: picsum('mt-pharmacy'),
-  rice: picsum('mt-rice'),
-  noodle: picsum('mt-noodle'),
-  pizza: picsum('mt-pizza'),
-  breakfast: picsum('mt-breakfast'),
-  // 菜品补图（同 Picsum 稳定图；加载失败时 UI 显示灰色占位）
-  'cucumber-salad': picsum('mt-cucumber-salad'),
-  'braised-egg': picsum('mt-braised-egg'),
-  'soymilk': picsum('mt-soymilk'),
-  'suancai-noodle': picsum('mt-suancai-noodle'),
-  'egg-tart': picsum('mt-egg-tart'),
-  'cola': picsum('mt-cola'),
-  'sundae': picsum('mt-sundae'),
-  'icecream': picsum('mt-icecream'),
-  'milkshake': picsum('mt-milkshake'),
-  'beefroll': picsum('mt-beefroll'),
-  'kuanfen': picsum('mt-kuanfen'),
-  'quail-egg': picsum('mt-quail-egg'),
-  'luncheon-meat': picsum('mt-luncheon-meat'),
-  'suanmeitang': picsum('mt-suanmeitang'),
-  'mandarin': picsum('mt-mandarin'),
-  'cherry': picsum('mt-cherry'),
-  'kiwi': picsum('mt-kiwi'),
-  'fruit-mix': picsum('mt-fruit-mix'),
-  'banana': picsum('mt-banana'),
-  'milk': picsum('mt-milk'),
-  'chips': picsum('mt-chips'),
-  'latiao': picsum('mt-latiao'),
-  'tissue': picsum('mt-tissue'),
-  'eggs': picsum('mt-eggs'),
-  'huoxiang': picsum('mt-huoxiang'),
-  'mask': picsum('mt-mask'),
-  'bandaid': picsum('mt-bandaid'),
-  'vitamin-c': picsum('mt-vitamin-c'),
-  'durian-pizza': picsum('mt-durian-pizza'),
-  'shrimp': picsum('mt-shrimp'),
-  'tomato-rice': picsum('mt-tomato-rice'),
-  'potato-rice': picsum('mt-potato-rice'),
-  'seaweed-soup': picsum('mt-seaweed-soup'),
-  'maodu': picsum('mt-maodu'),
-  'xiahua': picsum('mt-xiahua'),
-  'potato-slice': picsum('mt-potato-slice'),
-  'frozen-tofu': picsum('mt-frozen-tofu'),
-  'youtiao': picsum('mt-youtiao'),
+  burger: mtImg('burger'),
+  milktea: mtImg('milk-tea'),
+  chicken: mtImg('fried-chicken'),
+  malatang: mtImg('hotpot'),
+  hotpot: mtImg('hotpot'),
+  fruit: mtImg('fruit'),
+  store: mtImg('store'),
+  pharmacy: mtImg('medicine'),
+  rice: mtImg('rice'),
+  noodle: mtImg('noodles'),
+  pizza: mtImg('pizza'),
+  breakfast: mtImg('breakfast'),
+  // 菜品补图（按关键词内容匹配；加载失败时 UI 逐级兜底显示灰色占位）
+  'cucumber-salad': mtImg('salad'),
+  'braised-egg': mtImg('egg'),
+  'soymilk': mtImg('soymilk'),
+  'suancai-noodle': mtImg('noodles'),
+  'egg-tart': mtImg('egg-tart'),
+  'cola': mtImg('cola'),
+  'sundae': mtImg('sundae'),
+  'icecream': mtImg('ice-cream'),
+  'milkshake': mtImg('milkshake'),
+  'beefroll': mtImg('beef'),
+  'kuanfen': mtImg('noodles'),
+  'quail-egg': mtImg('quail-egg'),
+  'luncheon-meat': mtImg('pork'),
+  'suanmeitang': mtImg('juice'),
+  'mandarin': mtImg('mandarin'),
+  'cherry': mtImg('cherry'),
+  'kiwi': mtImg('kiwi'),
+  'fruit-mix': mtImg('fruit'),
+  'banana': mtImg('banana'),
+  'milk': mtImg('milk'),
+  'chips': mtImg('fries'),
+  'latiao': mtImg('spicy'),
+  'tissue': mtImg('tissue'),
+  'eggs': mtImg('eggs'),
+  'huoxiang': mtImg('medicine'),
+  'mask': mtImg('mask'),
+  'bandaid': mtImg('bandage'),
+  'vitamin-c': mtImg('vitamin'),
+  'durian-pizza': mtImg('pizza'),
+  'shrimp': mtImg('shrimp'),
+  'tomato-rice': mtImg('rice'),
+  'potato-rice': mtImg('rice'),
+  'seaweed-soup': mtImg('soup'),
+  'maodu': mtImg('hotpot'),
+  'xiahua': mtImg('hotpot'),
+  'potato-slice': mtImg('potato'),
+  'frozen-tofu': mtImg('tofu'),
+  'youtiao': mtImg('youtiao'),
 };
 
 function img(key: string): string | undefined {
@@ -248,9 +292,21 @@ export interface MtDeal {
   groupPrice?: number;
   /** 规格组（购买弹窗内选规格/小料，奶茶=规格/温度/小料/糖度，食物=小料配菜；加价计入实付） */
   specs?: MtDishSpec[];
+  /** 可选套餐（购买弹窗内单选，选中后价格/内容联动；2 个以上才出选择器） */
+  packages?: MtDealPackage[];
   /** 团购详情（套餐内容清单） */
   menu: MtDealMenu[];
   storeTags: string[];
+}
+
+/** 可选套餐（购买弹窗内单选：名称/价格/包含内容） */
+export interface MtDealPackage {
+  name: string;
+  price: number;
+  /** 原价（划线价，可选） */
+  origPrice?: number;
+  /** 套餐包含内容（简短文案清单） */
+  items?: string[];
 }
 
 const D = (d: MtDeal): MtDeal => d;
@@ -272,6 +328,10 @@ export const MT_DEALS: MtDeal[] = [
     usable: '周一至周日可用',
     notice: '本单将于7天后过期，请注意周末、节假日是否可用',
     groupPrice: 11.9,
+    packages: [
+      { name: 'A套餐·经典四件套', price: 13.9, origPrice: 34, items: ['主食 2选1', '小食 2选1', '冰镇可口可乐（中杯）'] },
+      { name: 'B套餐·超值五件套', price: 19.9, origPrice: 46, items: ['主食 2选1', '黄金鸡块（5块）', '香辣鸡翅（2块）', '可口可乐（中杯）'] },
+    ],
     specs: foodSides([{ name: '薯条（小份）', price: 3 }, { name: '香辣鸡翅1块', price: 5 }, { name: '可口可乐（中杯）', price: 2 }, { name: '葡式蛋挞', price: 2 }]),
     menu: [
       { sec: '主食 2选1', items: [{ name: '香辣鸡腿中国汉堡', price: 12 }, { name: '藤椒鸡腿中国汉堡', price: 12 }] },
@@ -295,6 +355,11 @@ export const MT_DEALS: MtDeal[] = [
     distanceKm: 0.8,
     usable: '周一至周日可用',
     notice: '本单将于30天后过期，免预约随时可用',
+    groupPrice: 19.6,
+    packages: [
+      { name: 'A套餐·经典芋泥3杯', price: 21.6, origPrice: 31.5, items: ['厚芋泥奶茶（中杯）×3'] },
+      { name: 'B套餐·芋泥奶绿5杯', price: 32.9, origPrice: 52.5, items: ['厚芋泥奶茶（中杯）×2', '茉莉奶绿（中杯）×3'] },
+    ],
     specs: teaSpecs(),
     menu: [{ sec: '内含券 3杯', items: [{ name: '厚芋泥奶茶（中杯）', price: 10.5 }, { name: '厚芋泥奶茶（中杯）', price: 10.5 }, { name: '厚芋泥奶茶（中杯）', price: 10.5 }] }],
     storeTags: ['免预约', '随时退'],
@@ -357,6 +422,11 @@ export const MT_DEALS: MtDeal[] = [
     distanceKm: 2.1,
     usable: '周一至周日可用',
     notice: '本单将于7天后过期，随时退·过期自动退',
+    groupPrice: 17.9,
+    packages: [
+      { name: 'A套餐·比萨单人餐', price: 19.9, origPrice: 36, items: ['9寸比萨 4选1', '柠檬红茶（中杯）'] },
+      { name: 'B套餐·比萨双享餐', price: 35.9, origPrice: 68, items: ['9寸比萨 4选1×2', '蒜香鸡翅2只', '柠檬红茶（中杯）×2'] },
+    ],
     specs: foodSides([{ name: '薯条（小份）', price: 3 }, { name: '蒜香鸡翅2只', price: 7 }, { name: '可乐 1 罐', price: 3 }]),
     menu: [
       { sec: '比萨 4选1', items: [{ name: '超级至尊比萨', price: 36 }, { name: '夏威夷比萨', price: 32 }, { name: '肉香四溢比萨', price: 35 }, { name: '田园风光比萨', price: 28 }] },

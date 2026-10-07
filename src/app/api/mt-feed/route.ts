@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { MT_CATS, type MtDeal, type MtDealMenu, type MtDish, type MtMerchant } from '@/lib/ios/meituan-data';
+import { mtFoodTagOf, mtImg, MT_CATS, type MtDeal, type MtDealPackage, type MtDealMenu, type MtDish, type MtMerchant } from '@/lib/ios/meituan-data';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
  * - 优先用「设置 › API 配置」里用户配置好的 OpenAI 兼容模型（config 随请求体传入）；
  * - 未配置 / 上游失败 → 内置模型（z-ai-web-dev-sdk）兜底；
  * - 每次请求注入随机口令 + 排除名单（已展示内容），保证下拉刷新 / 上滑加载出来的都是新内容；
- * - 图片统一 Lorem Picsum（seed 格式，稳定可缓存）；生成数据仅展示用。
+ * - 图片走 /api/mt-img 内容匹配图（按品类关键词生成，图片与内容一致），生成数据仅展示用。
  */
 
 // ---------------- 类型 ----------------
@@ -50,9 +50,28 @@ function strOf(v: unknown, def: string, maxLen = 40): string {
   return (s || def).slice(0, maxLen);
 }
 
-/** Lorem Picsum 稳定图（.jpg 直出文件免重定向更稳定；同 seed 同图 → 浏览器缓存不重复加载） */
-function picsum(seed: string, w = 480, h = 360): string {
-  return `https://picsum.photos/seed/${encodeURIComponent(seed)}/${w}/${h}.jpg`;
+/** 名称哈希 → 图变体序号（同名词同图，5 个变体轮换增加多样性） */
+function imgVariant(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return h % 5;
+}
+
+/** tag 清洗（模型可能返回任意字符串）：小写、仅留 a-z0-9- */
+function tagOf(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const t = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 24);
+  return t || null;
+}
+
+/** 内容匹配图：菜名词典 → 模型 tag → 通用 food（保证图片与内容一致） */
+function dishTagOf(name: string, modelTag: string | null): string {
+  return mtFoodTagOf(name) ?? modelTag ?? 'food';
 }
 
 /** baseUrl 归一化候选：完整端点 / /v1 结尾 / 裸域名（与 /api/chat 同策略） */
@@ -258,13 +277,12 @@ function parseItems(raw: string): RawRec[] {
 function buildSystem(): string {
   return '你是美团信息流数据引擎，负责生成逼真的本地生活商家与团购数据。数值必须符合现实常识（评分 3.8~5.0、价格与折扣自洽、距离 0.3~8 公里）。只输出 JSON，不要输出任何解释、注释或 markdown 代码块。';
 }
-
 function buildUser(a: GenerateArgs): string {
   // schema 精简（menu 2~4 个、去掉 hours/notice）以在模型输出上限内装下更多条目
   const merchantSchema =
-    '{"kind":"merchant","name":"老灶火锅·望京店","emoji":"🍲","rating":4.8,"monthSale":3200,"minOrder":20,"deliveryFee":2,"distanceKm":1.5,"deals":["满30减5"],"addr":"望京街道湖光中街1号","menu":[{"name":"招牌毛肚","price":38,"emoji":"🍲"},{"name":"鲜切牛肉","price":45,"emoji":"🥩"}]}';
+    '{"kind":"merchant","name":"老灶火锅·望京店","emoji":"🍲","tag":"hotpot","rating":4.8,"monthSale":3200,"minOrder":20,"deliveryFee":2,"distanceKm":1.5,"deals":["满30减5"],"addr":"望京街道湖光中街1号","menu":[{"name":"招牌毛肚","price":38,"emoji":"🍲"},{"name":"鲜切牛肉","price":45,"emoji":"🥩"}]}';
   const dealSchema =
-    '{"kind":"deal","title":"双人烤肉超值套餐","emoji":"🍖","price":88,"origPrice":168,"sold":"已售1.2万+","praise":"96%好评","tips":"到店吃","distanceKm":2.1,"merchantName":"炭一烤肉·望京店","menu":[{"sec":"套餐内容","items":[{"name":"烤肉拼盘","price":168},{"name":"饮品2杯","price":20}]}]}';
+    '{"kind":"deal","title":"双人烤肉超值套餐","emoji":"🍖","tag":"bbq","price":88,"origPrice":168,"sold":"已售1.2万+","praise":"96%好评","tips":"到店吃","distanceKm":2.1,"merchantName":"炭一烤肉·望京店","packages":[{"name":"A套餐·经典双人餐","price":88,"items":["经典烤肉拼盘","时蔬拼盘","饮品2杯"]},{"name":"B套餐·豪华双人餐","price":118,"items":["豪华烤肉拼盘","海鲜拼盘","主食2份","饮品2杯"]}],"menu":[{"sec":"套餐内容","items":[{"name":"烤肉拼盘","price":168},{"name":"饮品2杯","price":20}]}]}';
 
   const kindRule =
     a.mode === 'merchant'
@@ -282,14 +300,14 @@ function buildUser(a: GenerateArgs): string {
     '字段规范（示例名称仅示意格式，输出中禁止出现「老灶火锅」「炭一烤肉」等示例名）：',
     `merchant = ${merchantSchema}`,
     `deal = ${dealSchema}`,
-    `要求：rating 3.8~5.0；monthSale 50~90000 整数；price 与 origPrice 自洽（origPrice 更高，折扣约 3~8 折）；distanceKm 0.3~8 一位小数；deals 为 0~2 个优惠文案；merchant 的 menu 为 2~4 个菜品；deal 的 menu 为套餐内容清单。全部简体中文，数据要合理逼真。输出尽量精炼，确保 ${a.count} 条全部输出完整。`,
+    `要求：rating 3.8~5.0；monthSale 50~90000 整数；price 与 origPrice 自洽（origPrice 更高，折扣约 3~8 折）；distanceKm 0.3~8 一位小数；deals 为 0~2 个优惠文案；merchant 的 menu 为 2~4 个菜品；tag 为与品类一致的英文品类词（如 hotpot、bbq、pizza、milk-tea、noodles、sushi、dessert）；deal 的 packages 为 2~3 个可选套餐（name 以 A套餐/B套餐开头且简短、price 递增、每个含 3~6 个 items 短语）；deal 的 menu 为默认套餐内容清单。全部简体中文（tag 除外），数据要合理逼真。输出尽量精炼，确保 ${a.count} 条全部输出完整。`,
     '只输出一个 JSON 数组，不要 markdown 代码块，不要解释。',
   ].join('\n');
 }
 
 // ---------------- 数据塑形 ----------------
 
-function coerceDish(merchantName: string, idx: number, raw: unknown): MtDish {
+function coerceDish(merchantName: string, idx: number, raw: unknown, fallbackTag: string | null): MtDish {
   // 模型可能把菜品返回为字符串（"毛肚"）而非对象：统一收窄
   const rec: RawRec =
     typeof raw === 'string'
@@ -298,27 +316,29 @@ function coerceDish(merchantName: string, idx: number, raw: unknown): MtDish {
         ? (raw as RawRec)
         : {};
   const name = strOf(rec.name, `招牌菜${idx + 1}`, 24);
-  // seed 用「商家名+菜名」派生：同名店/同名菜永远同一张图（稳定可缓存，不随生成批次漂移）
+  // 内容匹配图：菜名词典 → 商家 tag → food；同名词同图（稳定可缓存）
+  const tag = dishTagOf(name, fallbackTag);
   return {
     id: `ai-${merchantName}-${idx}-${Math.floor(Math.random() * 1e6).toString(36)}`,
     name,
     price: num(rec.price, 12 + idx * 3, 0.5, 999),
     emoji: strOf(rec.emoji, '🍽️', 4),
-    img: picsum(`mt-${merchantName}-${name}`, 400, 400),
+    img: mtImg(tag, 400, 400, imgVariant(`${merchantName}-${name}`), 'f'),
     monthSale: intOf(rec.monthSale, 800 + Math.floor(Math.random() * 9000), 20, 999999),
   };
 }
 
-function coerceMenuSections(merchantName: string, rawMenu: unknown): { cat: string; dishes: MtDish[] }[] {
+function coerceMenuSections(merchantName: string, rawMenu: unknown, fallbackTag: string | null): { cat: string; dishes: MtDish[] }[] {
   const arr = Array.isArray(rawMenu) ? rawMenu.slice(0, 8) : [];
-  const dishes = arr.map((d, i) => coerceDish(merchantName, i, d));
-  if (dishes.length === 0) dishes.push(coerceDish(merchantName, 0, {}));
+  const dishes = arr.map((d, i) => coerceDish(merchantName, i, d, fallbackTag));
+  if (dishes.length === 0) dishes.push(coerceDish(merchantName, 0, {}, fallbackTag));
   return [{ cat: '推荐', dishes }];
 }
 
 function buildMerchant(id: string, raw: unknown, filter: string | null): MtMerchant {
   const rec: RawRec = typeof raw === 'object' && raw !== null ? (raw as RawRec) : {};
   const name = strOf(rec.name, '宝藏好店', 24);
+  const tag = tagOf(rec.tag) ?? mtFoodTagOf(name) ?? 'food';
   const deals = (Array.isArray(rec.deals) ? rec.deals : [])
     .filter((d): d is string => typeof d === 'string' && d.trim().length > 0)
     .slice(0, 2);
@@ -326,7 +346,7 @@ function buildMerchant(id: string, raw: unknown, filter: string | null): MtMerch
     id,
     name,
     emoji: strOf(rec.emoji, '🏪', 4),
-    cover: picsum(`mt-${name}`),
+    cover: mtImg(tag, 480, 360, imgVariant(name), 'c'),
     cats: filter && filter !== 'tuangou' ? [filter] : ['meishi'],
     rating: Math.round(num(rec.rating, 4.7, 3.5, 5) * 10) / 10,
     monthSale: intOf(rec.monthSale, 1200 + Math.floor(Math.random() * 6000), 10, 999999),
@@ -338,9 +358,33 @@ function buildMerchant(id: string, raw: unknown, filter: string | null): MtMerch
     deals: deals.length > 0 ? deals : ['新客立减'],
     hours: strOf(rec.hours, '09:00-22:00', 24),
     addr: strOf(rec.addr, '望京街道湖光中街1号', 40),
-    sections: coerceMenuSections(name, rec.menu),
+    sections: coerceMenuSections(name, rec.menu, tag),
     reviews: [],
   };
+}
+
+/** 可选套餐收窄（购买弹窗单选用）：名称必填、价格>0、items 转短文案 */
+function coercePackages(raw: unknown): MtDealPackage[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: MtDealPackage[] = [];
+  for (const p of raw.slice(0, 4)) {
+    const r: RawRec = typeof p === 'object' && p !== null ? (p as RawRec) : {};
+    const name = strOf(r.name, '', 18);
+    const price = num(r.price, 0, 0.5, 9999);
+    if (!name || price <= 0) continue;
+    const items = (Array.isArray(r.items) ? r.items : [])
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .slice(0, 8)
+      .map((x) => x.trim().slice(0, 20));
+    const orig = num(r.origPrice, 0, 0.5, 99999);
+    out.push({
+      name,
+      price: Math.round(price * 10) / 10,
+      origPrice: orig > price ? Math.round(orig * 10) / 10 : undefined,
+      items: items.length > 0 ? items : undefined,
+    });
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 function coerceDealMenu(rawMenu: unknown): MtDealMenu[] {
@@ -373,11 +417,20 @@ function buildDeal(id: string, raw: unknown, merchantId: string): MtDeal {
     typeof rec.discount === 'string' && rec.discount.trim()
       ? rec.discount.trim().slice(0, 8)
       : `${Math.round((price / origPrice) * 100) / 10}折`;
+  const packages = coercePackages(rec.packages);
+  // 默认套餐内容：模型给了 menu 用 menu；否则用第一个套餐的 items 兼容详情页展示
+  const menu: MtDealMenu[] =
+    Array.isArray(rec.menu) && rec.menu.length > 0
+      ? coerceDealMenu(rec.menu)
+      : packages && packages[0]?.items
+        ? [{ sec: '套餐内容', items: packages[0].items.map((n) => ({ name: n, price: 0 })) }]
+        : coerceDealMenu(rec.menu);
+  const tag = mtFoodTagOf(title) ?? tagOf(rec.tag) ?? 'food';
   return {
     id,
     merchantId,
     title,
-    img: picsum(`mt-${title}`),
+    img: mtImg(tag, 480, 360, imgVariant(title), 'f'),
     emoji: strOf(rec.emoji, '🍱', 4),
     price: Math.round(price * 10) / 10,
     origPrice: Math.round(origPrice * 10) / 10,
@@ -394,7 +447,8 @@ function buildDeal(id: string, raw: unknown, merchantId: string): MtDeal {
     distanceKm: Math.round(num(rec.distanceKm, 1.5, 0.2, 9.9) * 10) / 10,
     usable: '周一至周日可用',
     notice: '本单将于7天后过期，请注意周末、节假日是否可用',
-    menu: coerceDealMenu(rec.menu),
+    packages,
+    menu,
     storeTags: ['随时退', '免预约', '过期自动退'],
   };
 }
