@@ -300,8 +300,8 @@ export const MT_STATUS_LABEL: Record<MtOrderStatus, string> = {
   canceled: '已取消',
 };
 
-/** 订单履约类型：外卖配送（默认，兼容旧数据） / 团购到店（支付后直接完成） */
-export type MtOrderKind = 'waimai' | 'tuangou';
+/** 订单履约类型：外卖配送（默认，兼容旧数据）/ 团购到店（支付后直接完成）/ 机票 / 火车票（支付后→待出行→出行中→完成） */
+export type MtOrderKind = 'waimai' | 'tuangou' | 'flight' | 'train';
 
 export interface MtOrderItem {
   dishId: string;
@@ -445,6 +445,17 @@ export interface MtOrder {
   etaAt?: number;
   /** 状态流水（新的在后） */
   statusLog: { status: MtOrderStatus; at: number }[];
+  /** 用户评价（订单完成后提交；商详评价 tab 聚合展示） */
+  review?: MtOrderReview;
+}
+
+/** 订单评价（星级 + 文字 + 标签 + 晒图，演示图取内容匹配图链） */
+export interface MtOrderReview {
+  rating: number;
+  content: string;
+  tags: string[];
+  imgs: string[];
+  at: number;
 }
 
 const ordersKey = (uid: string) => `mt-orders:${uid}`;
@@ -471,7 +482,7 @@ export function mtLoadOrders(uid: string): MtOrder[] {
       couponAmount: typeof o.couponAmount === 'number' ? o.couponAmount : undefined,
       total: typeof o.total === 'number' ? o.total : 0,
       note: typeof o.note === 'string' ? o.note : undefined,
-      kind: o.kind === 'tuangou' ? 'tuangou' : 'waimai',
+      kind: o.kind === 'tuangou' || o.kind === 'flight' || o.kind === 'train' ? o.kind : 'waimai',
       address: (o.address ?? undefined) as MtAddress | undefined,
       consumedAt: typeof o.consumedAt === 'number' ? o.consumedAt : undefined,
       payIdp: o.payIdp === 'wx' || o.payIdp === 'qq' ? o.payIdp : undefined,
@@ -504,6 +515,16 @@ export function mtLoadOrders(uid: string): MtOrder[] {
       riderName: typeof o.riderName === 'string' ? o.riderName : undefined,
       etaAt: typeof o.etaAt === 'number' ? o.etaAt : undefined,
       statusLog: Array.isArray(o.statusLog) ? (o.statusLog as MtOrder['statusLog']).filter((s) => s && typeof s.at === 'number') : [],
+      review:
+        o.review && typeof o.review === 'object' && typeof o.review.at === 'number'
+          ? {
+              rating: typeof o.review.rating === 'number' ? Math.min(5, Math.max(1, Math.round(o.review.rating))) : 5,
+              content: typeof o.review.content === 'string' ? o.review.content : '',
+              tags: Array.isArray(o.review.tags) ? (o.review.tags as unknown[]).filter((x): x is string => typeof x === 'string') : [],
+              imgs: Array.isArray(o.review.imgs) ? (o.review.imgs as unknown[]).filter((x): x is string => typeof x === 'string') : [],
+              at: o.review.at,
+            }
+          : undefined,
     })) as MtOrder[];
   // 旧数据迁移：「待使用+券码」已废弃 → 团购单待使用态直接归档为已完成（消费时间取支付时间）
   return normalized.map((o) => mtBackfillOrderImgs(
@@ -580,12 +601,21 @@ export function mtAdvanceOrders(uid: string): MtOrderTransition[] {
       }
       if (cur.status === 'pendingAccept') {
         if (cur.paidAt && now - cur.paidAt >= ACCEPT_MS) {
-          step('accepted', { riderName: RIDER_POOL[Math.floor(now / 60000) % RIDER_POOL.length] });
+          // 出行单（机票/火车票）：无骑手概念，直接进入「出行中」
+          step('accepted', cur.kind === 'flight' || cur.kind === 'train' ? {} : { riderName: RIDER_POOL[Math.floor(now / 60000) % RIDER_POOL.length] });
           continue;
         }
         break;
       }
       if (cur.status === 'accepted') {
+        // 出行单：值机/检票后直接行程完成（跳过配送档）
+        if (cur.kind === 'flight' || cur.kind === 'train') {
+          if (cur.paidAt && now - cur.paidAt >= DELIVERED_MS) {
+            step('completed');
+            continue;
+          }
+          break;
+        }
         if (cur.paidAt && now - cur.paidAt >= PICKUP_MS) {
           step('delivering');
           continue;
@@ -724,18 +754,23 @@ export function mtFireRefundCredit(o: MtOrder): void {
     .catch(() => undefined);
 }
 
-/** 商家接单后写一条骑手取餐前的等待文案（订单详情/通知用） */
+/** 商家接单后写一条骑手取餐前的等待文案（订单详情/通知用；机票/火车票有专属文案） */
 export function mtStatusBody(o: MtOrder): string {
   switch (o.status) {
     case 'pendingPay':
       return '订单已提交，请尽快完成支付';
     case 'pendingAccept':
+      if (o.kind === 'flight') return `出票成功，已支付¥${o.total.toFixed(2)}，祝您旅途愉快`;
+      if (o.kind === 'train') return `购票成功，已支付¥${o.total.toFixed(2)}，请提前到站候车`;
       return `已支付¥${o.total.toFixed(2)}，等待商家接单`;
     case 'accepted':
+      if (o.kind === 'flight') return '值机已开始，航班准点，祝您一路平安';
+      if (o.kind === 'train') return '检票口已开放，请凭身份证检票乘车';
       return '商家已接单，正在为您准备餐品';
     case 'delivering':
       return `骑手${o.riderName ?? ''}已取餐，正在火速配送`;
     case 'completed':
+      if (o.kind === 'flight' || o.kind === 'train') return '行程已结束，感谢乘坐，欢迎评价';
       return o.kind === 'tuangou' ? `团购已完成¥${o.total.toFixed(2)}，感谢光临，欢迎评价` : '订单已送达，感谢您的信任，欢迎评价';
     case 'canceled':
       return o.cancelReason ?? '订单已取消';

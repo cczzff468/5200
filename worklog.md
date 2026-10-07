@@ -16619,3 +16619,31 @@ Stage Summary:
 - 图标线条化完成并验证：无色块、单色黑线、激活态琥珀，数据层 fg/tint 已清理，不影响三频道/筛选/刷新保位等既有功能
 - 8+ 页面/流程走查全部可用，无阻断性问题；dev.log 仅内置模型账号级 429（已知，有兜底）
 - 优化清单已当面列出 14 项（问题修复 8 + 图源增强 2 + 新功能 4），等待用户勾选后实施
+
+---
+Task ID: 5
+Agent: Z.ai Code (主会话)
+Task: 全量 17 项：清单 1~14 全修 + 浅黄头部 + 宫格排序（机票火车票→闪购后）+ 新开「闪购」「机票火车票」两大频道
+
+Work Log:
+- 【小改】宫格重排：机票火车票移到闪购后（page1 10 项 / page2 5 项），闪购 filter='shangou'、机票火车票 filter='travel'，tapCat/onOpenChannel/Page 类型同步扩展
+- 【小改】首页黄头 #FFD100→浅黄 #FFE066（搜索按钮保持正黄）；DealCard/DealListCard 标题剥「3杯」（stripDealQty 同步首页）；首页热词点击带入搜索页输入框（searchSeed state）
+- 【图源 v11】mt-img 新增 6 Commons 池：pill（药片 blister）/syrup（口服液）/sanitizer（洗手液）/flower（鲜花）/supermarket（超市）/gym（健身）+ plane/train（机票火车票订单图）；COMMONS_REQUIRE 按词白名单；spa 池黑名单剔除比利时 Spa 镇山丘缆车系列（修「洗浴会馆配索道图」）；TAG_SYNONYMS 扩 15 词；高频 tag 预热（每次图片请求后后台预取 2 个热词池，灰块期大幅缩短）；TAG_RULES 中文词典加 药品细分（含片/颗粒→pill、滴眼液/糖浆→syrup、酒精/洗手液→sanitizer、鲜花、健身），顺序保证 酒精喷雾→sanitizer
+- 【搜索】相关性打分 makeSearchPool 重写（名称4/菜品3/分类2/分节1，0 分不进池）；「猜你喜欢」只从 weak 命中 + 命中商家同分类延伸补齐，不再全库硬凑——搜「奶茶」药房/汉堡消失（E2E 实测）；AI 商家（mtAllMerchants）纳入搜索池；搜索空态=历史+热门榜单（前3橙热标）+搜索发现
+- 【机票火车票】新组件 meituan-travel.tsx（~700 行）：预订页（单程/往返、城市对可换、日期、舱等、找机票、单单返现金、特价机票、权益卡、观演横幅）→航班列表（5 日价格条、筛选 chips、航班卡 起降/航司/机型/已优惠/神券包、青春省钱飞绿色专享卡、底部排序 价格/时间可排）→订票弹层（乘机人/价格明细/退改）→建单；火车票（只看高铁票 toggle、车次列表 二等/一等/商务座 有票/候补）→订票；确定性伪随机（城市对+日期播种，同日稳定换日换价）；数据层 MtOrderKind 扩 'flight'|'train'（store 归一化/状态机出行档/专属通知文案 mtStatusBody），状态机 出行单 pendingAccept→accepted(值机)→completed(到达) 无骑手
+- 【闪购】新组件 meituan-shangou.tsx：mt-feed filter='shangou'（提示词=超市便利/水果/鲜花/药房闪购，tag 白名单+flower）AI 生成 + 7 家本地种子店兜底；分类 chips/商家列表/店页（分节商品+步进加购）/购物车条（起送差价）/确认单（地址/配送费/包装费/预计送达）→ kind:'waimai' 建单走完整配送状态机（骑手+地图）
+- 【订单详情】出行单适配：四节点（已支付/值机/飞行中/已到达）、hero（待出行·已出票/出行中/行程已结束）、订单信息区（出行人/出行信息/出票状态/退改规则替换配送字段）、出行专属操作行（值机选座/改签/航班动态）、商品/商家图 emoji 兜底；mtStatusText 待出行/出行中
+- 【消息中心】MessagesPage：订单通知（读真实订单+mtStatusBody 文案+状态角标，点击进订单详情）/互动消息/活动优惠；首页铃铛接入
+- 【会员中心】MemberPage：成长值=34+订单×12 动态、四级体系（普通/白银/黄金/黑钻）+进度条、神券包一键领取（复用 mtClaimGodCoupons）、8 项权益宫格；我的页会员卡点击进入
+- 【券码】CouponCodePage：确定性伪二维码（21×21 定位角，按订单号播种）+券号+有效期90天+使用规则；支付后=待使用（PayPage 两分支去掉 consumedAt 自动写入）→「模拟到店核销」写 consumedAt（灰化+已使用）；订单列表/详情 tuangou 单「券码」按钮
+- 【评价晒单】RateSheet：五星/标签/140 字/演示晒图（mtImg food 池最多3张）→写 order.review；订单列表/详情 completed 单「评价/已评价」按钮；商详评价 tab 聚合本账号真实评价（含图）+计数合并
+- 【骑手轨迹】globals.css mt-rider 升级 offset-path 沿 SVG 虚线路径行驶（@supports 回退旧 keyframes）；DeliveryMap 加路线 SVG
+- 【图组件】FoodImg 抽共享 src/components/apps/mt-food-img.tsx（含加载 shimmer），meituan.tsx/闪购共用，避免循环导入
+- E2E（agent-browser 500×940 全流程）：登录→首页（浅黄头/新宫格序/线条图标）→机票频道（预订页/航班列表/订票/收银台/支付→订单详情 待出行）→评价（五星+标签+图→已评价）→消息中心→会员中心（成长值46）→闪购（7店图全真实→加购→结算→支付→配送状态机）→搜索（热榜/奶茶相关性）→团购（购买→券码→核销灰化）；tsc+eslint 8 文件全绿；dev.log 仅既有内置模型 429
+- .env 追加 PEXELS_KEY/PIXABAY_KEY 配置说明（免费申请即启用，未配置自动跳过）
+
+Stage Summary:
+- 14 项清单全落地 + 3 项新需求；美团现共 7 个可用频道（外卖/团购/美食/看病买药/酒店旅行/休闲玩乐/电影演出/闪购/机票火车票——其中后两为本轮新增）
+- 订单体系扩至 4 类（外卖配送/团购券码/机票/火车票），状态机/文案/图全部按类型区分
+- 图片链 v11：10 个新 Commons 池 + 同义词扩展 + spa 池修复 + 高频预热 + shimmer；仍无 AI 生图
+- 券码模型变更：团购支付后=待使用，券码页核销（旧订单自动视为已核销，不受影响）

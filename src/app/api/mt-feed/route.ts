@@ -297,13 +297,16 @@ function buildUser(a: GenerateArgs): string {
     a.topic.includes('看病买药')
       ? '本频道是药房/药店：商家名 = 自创前缀 + 业态后缀。前缀从「益丰堂/百信/仁安/济民/同泽/安康/惠民/德信/民泰/众康/泰安/华康/保生/杏林/回春/百草/康本/顺安/泽民/正德」等中挑选并自由组合，同一批内前缀不得重复，禁止整批都用「康宁」或都用同一前缀；后缀在大药房/医药/药店/健康药房/医药商场中变化，可带分店名（如·建设路店）。商家与菜品的 tag 一律填 medicine（口罩类菜品可填 mask、创可贴 bandage、维生素/保健品 vitamin），菜单分节改为「感冒发烧/肠胃用药/保健养生/医疗器械」等药字号分节。'
       : '',
+    a.topic.includes('闪购超市便利')
+      ? '本频道是闪购（30~60 分钟即时配送）：商家都是 便利店/超市/水果店/鲜花店/零食仓/日用百货仓/药房闪购店，同一批业态尽量多样不重复，店名自创（可带·分店后缀）；菜品 = 可即时配送的商品（零食饮料/速食/日用/纸巾/水果果切/鲜花花束/应急药品），商品名口语化（如「冰镇可乐 500ml」「抽纸 3 层 8 包」）；tag 按商品填（饮料 cola、零食/日用/百货 store、水果 fruit、鲜花 flower、药品 medicine），分节名用「热销推荐/零食饮料/日用清洁/应急药品」等闪购分节；价格 2~69 元，monthSale 100~30000。'
+      : '',
     a.exclude.length > 0
       ? `以下名称已展示过，禁止再出现（商家名与套餐名都不得重复）：\n${a.exclude.join('、')}`
       : '无排除名单。',
     '字段规范（示例名称仅示意格式，输出中禁止出现「老灶火锅」「炭一烤肉」等示例名）：',
     `merchant = ${merchantSchema}`,
     `deal = ${dealSchema}`,
-    `要求：rating 3.8~5.0；monthSale 50~90000 整数；price 与 origPrice 自洽（origPrice 更高，折扣约 3~8 折）；distanceKm 0.3~8 一位小数；deals 为 0~2 个优惠文案；merchant 的 menu 分「招牌菜/小吃甜品/饮品」2~3 个 sec、共 8~10 个菜品（招牌菜 5~6 个+小吃甜品 2~3 个+饮品 1~2 个，items 只含 name/price）；tag 必须从以下白名单中选最贴切的一个，禁止自造词：hotpot、barbecue、bbq、chinese-food、stir-fry、japanese、sushi、thai、asian、curry、kimchi、pizza、burger、fried-chicken、fast-food、milk-tea、coffee、tea、juice、dessert、ice-cream、seafood、steak、beef、pork、duck、lamb、salad、sandwich、bread、dumplings、porridge、soup、noodles、rice、rice-bowl、breakfast、fruit、braised、spicy、store、medicine、food；deal 的 packages 为 2~3 个可选套餐（name 以 A套餐/B套餐开头且简短、price 递增、每个含 3~6 个 items 短语）；deal 的 menu 用「XX N选1」分节（如「烤肉 3选1」，供用户购买时选择，另加 1 个「固选」节）。全部简体中文（tag 除外），数据要合理逼真。输出尽量精炼，确保 ${a.count} 条全部输出完整。`,
+    `要求：rating 3.8~5.0；monthSale 50~90000 整数；price 与 origPrice 自洽（origPrice 更高，折扣约 3~8 折）；distanceKm 0.3~8 一位小数；deals 为 0~2 个优惠文案；merchant 的 menu 分「招牌菜/小吃甜品/饮品」2~3 个 sec、共 8~10 个菜品（招牌菜 5~6 个+小吃甜品 2~3 个+饮品 1~2 个，items 只含 name/price）；tag 必须从以下白名单中选最贴切的一个，禁止自造词：hotpot、barbecue、bbq、chinese-food、stir-fry、japanese、sushi、thai、asian、curry、kimchi、pizza、burger、fried-chicken、fast-food、milk-tea、coffee、tea、juice、dessert、ice-cream、seafood、steak、beef、pork、duck、lamb、salad、sandwich、bread、dumplings、porridge、soup、noodles、rice、rice-bowl、breakfast、fruit、braised、spicy、store、flower、medicine、food；deal 的 packages 为 2~3 个可选套餐（name 以 A套餐/B套餐开头且简短、price 递增、每个含 3~6 个 items 短语）；deal 的 menu 用「XX N选1」分节（如「烤肉 3选1」，供用户购买时选择，另加 1 个「固选」节）。全部简体中文（tag 除外），数据要合理逼真。输出尽量精炼，确保 ${a.count} 条全部输出完整。`,
     '只输出一个 JSON 数组，不要 markdown 代码块，不要解释。',
   ].filter(Boolean).join('\n');
 }
@@ -485,8 +488,14 @@ export async function POST(req: NextRequest) {
   const filter = typeof root.filter === 'string' && root.filter.trim() ? root.filter.trim() : null;
   const catName = MT_CATS.find((c) => c.id === filter)?.name;
   const topic =
-    filter === 'tuangou' ? '到店团购' : catName ? `${catName}频道` : '综合推荐（外卖商家+到店团购混合）';
-  const mode: GenerateArgs['mode'] = filter === 'tuangou' ? 'deal' : catName ? 'merchant' : 'mixed';
+    filter === 'tuangou'
+      ? '到店团购'
+      : filter === 'shangou'
+        ? '闪购超市便利'
+        : catName
+          ? `${catName}频道`
+          : '综合推荐（外卖商家+到店团购混合）';
+  const mode: GenerateArgs['mode'] = filter === 'tuangou' || filter === 'shangou' ? 'merchant' : catName ? 'merchant' : 'mixed';
   const count = intOf(root.count, 16, 8, 20);
   const exclude = (Array.isArray(root.exclude) ? root.exclude : [])
     .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)

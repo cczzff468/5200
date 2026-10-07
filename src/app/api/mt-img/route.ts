@@ -148,6 +148,14 @@ const COMMONS_SEARCH: Record<string, string> = {
   mask: 'surgical mask', // 医用口罩商品图（v10）
   bandage: 'adhesive bandage', // 创可贴/绷带商品图（v10）
   vitamin: 'dietary supplement', // 维生素/保健品商品图（v10）
+  pill: 'pill tablets blister pack', // 药片/胶囊/颗粒特写（v11 细分）
+  syrup: 'medicine syrup bottle', // 口服液/滴剂/糖浆类药品（v11 细分）
+  sanitizer: 'hand sanitizer gel', // 洗手液/消毒用品（v11）
+  flower: 'flower bouquet shop', // 鲜花花束/花店（v11，闪购）
+  supermarket: 'supermarket aisle', // 超市货架/卖场（v11，闪购）
+  gym: 'gym fitness equipment', // 健身房器材（v11，休闲玩乐细分）
+  plane: 'airplane cabin window', // 机票订单图（v11）
+  train: 'high speed train china', // 火车票订单图（v11）
 };
 
 /** Commons 优先的 tag（其余 tag 在 FF/stock 失败后用 Commons 同词兑底） */
@@ -163,12 +171,23 @@ const COMMONS_REQUIRE: Record<string, RegExp> = {
   'surgical mask': /mask|respirator/i,
   'adhesive bandage': /bandage|pflaster|plaster|band[ _-]?aid/i,
   'dietary supplement': /supplement|vitamin|tablet|capsule|pill/i,
+  'spa massage': /spa|massage|sauna|wellness|bath|bathing/i,
+  'pill tablets blister pack': /pill|tablet|capsule|blister|medic/i,
+  'medicine syrup bottle': /syrup|syrups|bottle|liquid|dropper|medicine|pharmac/i,
+  'hand sanitizer gel': /sanitizer|soap|gel|disinfect|antiseptic/i,
+  'flower bouquet shop': /flower|bouquet|florist|roses|bloom/i,
+  'supermarket aisle': /supermarket|grocery|aisle|shelf|hypermarket/i,
+  'gym fitness equipment': /gym|fitness|dumbbell|treadmill|weightlift|sport/i,
+  'airplane cabin window': /airplane|aircraft|wing|aviation|flight|cabin/i,
+  'high speed train china': /train|railway|high[-_ ]?speed|crh|bullet/i,
 };
 
 /** Commons 标题黑名单（按搜索词，可叠加）：药房池剔除博物馆/历史复原老照片
  *  （Sweny's 都柏林 19 世纪老药房 / Brening 不来梅博物馆复原药房 / Victorian 等 —— 观感是「古董店」不是现代药店） */
 const COMMONS_EXCLUDE: Record<string, RegExp> = {
   'pharmacy interior': /sweny|brening|victorian|museum|heritage|joyce|historic|antique|vintage|19\d\d|18\d\d/i,
+  // 比利时小镇 Spa（Thermes de Spa）系列：山丘/缆车/城镇外景，与洗浴按摩业态无关（v11）
+  'spa massage': /thermes[ _-]?de[ _-]?spa|colline|annette|lubin|cable|seilbahn|tramway|funicular/i,
 };
 
 /** AI/图库tag 同义词收敛：模型自由发挥的菜系词 → 图库实际有效的分类词。
@@ -197,6 +216,12 @@ const TAG_SYNONYMS: Record<string, string> = {
   bakery: 'bread', bakes: 'bread', cake: 'dessert', pastry: 'dessert',
   hotpot: 'hot-pot', 'hot-pot': 'hot-pot',
   veg: 'salad', vegan: 'salad', vegetarian: 'salad',
+  tablets: 'pill', capsule: 'pill', capsules: 'pill', medication: 'pill', drug: 'pill', drugs: 'pill', granule: 'pill', granules: 'pill',
+  'liquid-medicine': 'syrup', eyedrop: 'syrup', eyedrops: 'syrup', spray: 'syrup', cough: 'syrup',
+  disinfect: 'sanitizer', 'hand-wash': 'sanitizer', toiletries: 'sanitizer',
+  bouquet: 'flower', florist: 'flower', roses: 'flower',
+  grocery: 'supermarket', hypermarket: 'supermarket', 'convenience-store': 'supermarket',
+  fitness: 'gym', workout: 'gym',
 };
 
 /** 基础黑名单（v6 实测，所有池适用）：水果/生鲜摊位/咖啡茶饮乱入（hot-pot 池混入 steaming-hot-coffee、
@@ -812,6 +837,26 @@ async function genBytes(tag: string, w: number, h: number): Promise<GenResult> {
   throw new Error('fall-to-default');
 }
 
+// ---------------- 高频 tag 预热（每次图片请求后后台预取热词池，滑到对应卡片时命中字节缓存秒出） ----------------
+
+const WARM_TAGS = [
+  'food', 'store', 'milk-tea', 'bubble-tea', 'pizza', 'burger', 'coffee', 'fruit', 'medicine', 'hotel',
+  'noodles', 'hot-pot', 'dessert', 'rice', 'spicy', 'supermarket', 'flower', 'pill', 'syrup', 'breakfast',
+];
+let warmPos = 0;
+
+function warmNext(): void {
+  const t = WARM_TAGS[warmPos % WARM_TAGS.length];
+  const key = `${t}|480x360|0|v10`;
+  warmPos++;
+  if (cacheGet(key) || inflight.has(key)) return;
+  const p = acquire()
+    .then(() => genBytes(t, 480, 360))
+    .finally(release);
+  inflight.set(key, p);
+  p.catch(() => undefined).finally(() => inflight.delete(key));
+}
+
 // ---------------- 路由 ----------------
 
 export async function GET(req: NextRequest) {
@@ -852,6 +897,15 @@ export async function GET(req: NextRequest) {
   try {
     const r = await t;
     cacheSet(key, r.buf);
+    // 预热：本次请求完成后后台预取 2 个高频 tag（借用并发队列，不抢用户请求）
+    setTimeout(() => {
+      try {
+        warmNext();
+        warmNext();
+      } catch {
+        /* 预热失败不影响主链路 */
+      }
+    }, 200);
     return webp(r.buf);
   } catch {
     return defaultArtSvg(tag, w, h); // 兜底：任何情况都有图

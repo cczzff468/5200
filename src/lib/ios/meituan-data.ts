@@ -55,6 +55,11 @@ const TAG_RULES: [RegExp, string][] = [
   [/口罩|mask/i, 'mask'],
   [/创可贴|绷带|bandage/i, 'bandage'],
   [/维生素|维C|钙片|鱼油|保健品|泡腾片/, 'vitamin'],
+  [/洗手液|消毒|酒精|棉签|棉球/, 'sanitizer'],
+  [/滴眼液|滴鼻|滴耳|眼药水|泪液|口服液|糖浆|合剂|喷雾|气雾/, 'syrup'],
+  [/含片|含漱|颗粒|冲剂|分散片|缓释片|泡腾|丸$|栓|乳膏|凝胶/, 'pill'],
+  [/鲜花|花束|玫瑰|百合|康乃馨|向日葵|花店/, 'flower'],
+  [/健身|哑铃|瑜伽|跑步|运动/, 'gym'],
   [/药|感冒|板蓝根|连花|胶囊|片剂|软膏|消毒液|碘伏/, 'medicine'],
   [/便利|超市|日用|纸巾/, 'store'],
 ];
@@ -253,13 +258,13 @@ export const MT_HOME_GRID: MtGridCat[][] = [
     { id: 'xiuxian', name: '休闲玩乐', icon: 'Gamepad2', filter: 'xiuxian' },
     { id: 'hotel', name: '酒店旅行', icon: 'Building', filter: 'hotel' },
     { id: 'dianying', name: '电影演出', icon: 'Clapperboard', filter: 'dianying' },
-    { id: 'shangou', name: '闪购', icon: 'Zap', filter: null },
+    { id: 'shangou', name: '闪购', icon: 'Zap', filter: 'shangou' },
+    { id: 'jipiao', name: '机票火车票', icon: 'Plane', filter: 'travel' },
     { id: 'anmo', name: '按摩足疗', icon: 'Footprints', filter: null },
-    { id: 'paotui', name: '跑腿', icon: 'Rabbit', filter: null },
   ],
   [
+    { id: 'paotui', name: '跑腿', icon: 'Rabbit', filter: null },
     { id: 'liren', name: '丽人美发', icon: 'Scissors', filter: null },
-    { id: 'jipiao', name: '机票火车票', icon: 'Plane', filter: null },
     { id: 'yiliao', name: '医疗牙科', icon: 'Stethoscope', filter: null },
     { id: 'xiaoshuo', name: '免费小说', icon: 'BookOpen', filter: null },
     { id: 'more', name: '更多服务', icon: 'LayoutGrid', filter: null },
@@ -1383,6 +1388,11 @@ export function mtRegisterAiDeal(d: MtDeal): void {
 /** 按 id 查商家（AI 生成优先，种子数据兜底） */
 export function mtMerchantOf(id: string): MtMerchant | undefined {
   return AI_MERCHANTS.get(id) ?? MT_MERCHANTS.find((m) => m.id === id);
+}
+
+/** 全量商家（种子 + AI 动态注册），搜索池用 */
+export function mtAllMerchants(): MtMerchant[] {
+  return [...AI_MERCHANTS.values(), ...MT_MERCHANTS];
 }
 
 /** 按 id 查团购（AI 生成优先，种子数据兜底） */
