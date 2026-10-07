@@ -3002,8 +3002,30 @@ function OrdersPage({
 
 // ================================ 订单详情页（截图8/9/10） ================================
 
-/** 配送小地图（纯地图：绿地水系/路网地名 + 商家/家扁平小标记 + 立体骑手形象巡航；全部白色圆角面板已按需求移除） */
-function DeliveryMap({ merchantName }: { merchantName: string }) {
+/** 配送小地图（纯地图：绿地水系/路网 + 商家/家扁平小标记 + 立体骑手形象巡航；全部白色圆角面板已按需求移除。
+ *  地名按真实地址显示：商家侧路名取自商家数据 addr、收货侧小区取自订单收货地址（如「幸福小区西区 3 栋…」→「幸福小区西区」），
+ *  其余路网名从美团在售商家真实路名池按商家名散列选取，同一商家稳定不变） */
+const MT_ROAD_POOL = ['解放大道', '红旗路', '建设路', '朝阳路', '人民路', '文化路', '东风路', '新华路', '学院路', '濮上中路'];
+
+function DeliveryMap({
+  merchantName,
+  merchantId,
+  addressText,
+}: {
+  merchantName: string;
+  merchantId: string;
+  addressText?: string;
+}) {
+  // 真实地址推导：商家路名 / 收货小区 / 交叉路名（按商家名散列稳定选取）
+  const addr = mtMerchantOf(merchantId)?.addr ?? '';
+  const road = addr.match(/[\u4e00-\u9fa5]{2,6}(?:大道|路|街)/)?.[0] ?? '解放大道';
+  const community = (addressText ?? '').trim().split(/\s+/)[0] || '幸福小区西区';
+  const otherCommunity = community.includes('科技园') ? '幸福小区西区' : '科技园写字楼';
+  const hash = [...merchantName].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+  const others = MT_ROAD_POOL.filter((r) => r !== road);
+  const cross = others[hash % others.length];
+  const third = others[(hash + 3) % others.length];
+  const storeShort = merchantName.split(/[（(]/)[0] ?? merchantName;
   return (
     <div className="relative h-52 overflow-hidden rounded-xl bg-[#EAF0E3] ring-1 ring-black/5" aria-label={`${merchantName} 配送地图`}>
       {/* 绿地与水系 */}
@@ -3021,13 +3043,16 @@ function DeliveryMap({ merchantName }: { merchantName: string }) {
       <div className="absolute left-[-6%] right-[24%] top-[70%] h-[5px] rotate-6 bg-white/75" />
       <div className="absolute bottom-[-6%] left-[68%] top-[12%] w-[5px] -rotate-12 bg-white/75" />
       <div className="absolute left-[-4%] right-[-4%] top-[16%] h-[4px] rotate-2 bg-white/60" />
-      {/* 地名（对齐真机地图要素） */}
-      <span className="absolute left-[7%] top-[24%] text-[11px] text-black/30">营里徐家</span>
-      <span className="absolute right-[7%] top-[7%] text-[12px] font-medium text-black/40">洗鱼塘</span>
-      <span className="absolute right-[4%] top-[47%] text-[11px] tracking-wide text-black/30">赤壁大道</span>
-      <span className="absolute left-[34%] top-[60%] -rotate-3 text-[12px] tracking-wide text-black/35">河北大道</span>
-      <span className="absolute bottom-[14%] left-[52%] text-[11px] text-black/30">新福佳</span>
-      <span className="absolute bottom-[5%] right-[6%] text-[11px] text-black/30">赤壁国贸</span>
+      {/* 地名（按真实地址：商家路名 + 收货小区 + 在售商家真实路名池） */}
+      <span className="absolute left-[7%] top-[24%] text-[11px] text-black/30">中心广场</span>
+      <span className="absolute right-[7%] top-[7%] text-[12px] font-medium text-black/40">{otherCommunity}</span>
+      <span className="absolute right-[4%] top-[47%] text-[11px] tracking-wide text-black/30">{cross}</span>
+      <span className="absolute left-[34%] top-[60%] -rotate-3 text-[12px] tracking-wide text-black/35">{road}</span>
+      <span className="absolute bottom-[14%] left-[52%] text-[11px] text-black/30">{third}</span>
+      {/* 收货小区（家标记上方，跟真实收货地址） */}
+      <span className="absolute bottom-[24%] right-[4%] text-[11px] font-medium text-black/45">{community}</span>
+      {/* 商家名（商家标记上方，跟真实店铺） */}
+      <span className="absolute left-[4%] top-[48%] max-w-[38%] truncate text-[10px] font-medium text-black/45">{storeShort}</span>
       {/* 配送路线（商家标记 → 家标记 的弧线虚线；与 .mt-rider 关键帧轨迹同一条曲线，
           viewBox 拉伸铺满容器（preserveAspectRatio=none），坐标即百分比×(500,208)，骑手永不跑出地图） */}
       <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 208" preserveAspectRatio="none" fill="none" aria-hidden="true">
@@ -3037,14 +3062,14 @@ function DeliveryMap({ merchantName }: { merchantName: string }) {
       <Store className="absolute left-[12%] top-[62%] h-[22px] w-[22px] text-[#FF8A00] drop-shadow-[0_2px_2px_rgba(0,0,0,0.22)]" strokeWidth={2.2} />
       {/* 家标记 */}
       <HomeIcon className="absolute bottom-[9%] right-[8%] h-6 w-6 text-[#F5A300] drop-shadow-[0_2px_2px_rgba(0,0,0,0.22)]" strokeWidth={2.2} />
-      {/* 骑手形象（立体投影 + 巡航颠簸；透明 PNG 无白边，形象在「我的-骑手」选择） */}
+      {/* 骑手形象（立体投影 + 巡航颠簸；透明 PNG 无白边，形象在「我的-骑手」选择；地图内缩小一号不遮挡路线） */}
       <span className="mt-rider absolute block">
         <img
           src={mtRiderSrcOf(mtGetRiderId())}
           alt="外卖骑手"
           draggable={false}
-          className="mt-rider-img h-[58px] w-[58px] select-none object-contain"
-          style={{ filter: 'drop-shadow(0 6px 5px rgba(0,0,0,0.25)) drop-shadow(0 1.5px 2px rgba(0,0,0,0.18))' }}
+          className="mt-rider-img h-[46px] w-[46px] select-none object-contain"
+          style={{ filter: 'drop-shadow(0 5px 4px rgba(0,0,0,0.25)) drop-shadow(0 1.5px 2px rgba(0,0,0,0.18))' }}
         />
       </span>
     </div>
@@ -3355,10 +3380,10 @@ function OrderDetailPage({
     </div>
   ) : null;
 
-  // 配送地图（仅配送中；骑手形象在「我的-骑手」选择，剩余分钟见 ETA 大标题）
+  // 配送地图（仅配送中；骑手形象在「我的-骑手」选择，剩余分钟见 ETA 大标题；地名跟真实商家/收货地址）
   const mapBlock = order.status === 'delivering' ? (
     <div className="px-3 pb-1 pt-3">
-      <DeliveryMap merchantName={order.merchantName} />
+      <DeliveryMap merchantName={order.merchantName} merchantId={order.merchantId} addressText={order.address?.text} />
     </div>
   ) : null;
 

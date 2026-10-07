@@ -406,24 +406,24 @@
    恰好活动在商家/家两个图标之间，永不跑出地图；alternate 往返 = 两个图标间来回） */
 @keyframes mt-rider-travel {
   0% {
-    left: calc(15% - 29px);
-    top: calc(67% - 29px);
+    left: calc(15% - 23px);
+    top: calc(67% - 23px);
   }
   25% {
-    left: calc(32.1% - 29px);
-    top: calc(59.5% - 29px);
+    left: calc(32.1% - 23px);
+    top: calc(59.5% - 23px);
   }
   50% {
-    left: calc(50% - 29px);
-    top: calc(60.1% - 29px);
+    left: calc(50% - 23px);
+    top: calc(60.1% - 23px);
   }
   75% {
-    left: calc(68.9% - 29px);
-    top: calc(68.7% - 29px);
+    left: calc(68.9% - 23px);
+    top: calc(68.7% - 23px);
   }
   100% {
-    left: calc(88.7% - 29px);
-    top: calc(85% - 29px);
+    left: calc(88.7% - 23px);
+    top: calc(85% - 23px);
   }
 }
 .mt-rider {

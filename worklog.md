@@ -16776,3 +16776,24 @@ Stage Summary:
 - 配送时间全线 5-30 分钟（确认页/支付页/详情大字/灵动岛/状态机三源一致），催一下真实缩短 ETA（大额减 5 分钟、小额减 10-60 秒）
 - 地图骑手改为百分比轨迹与 SVG 路线同曲线，任意尺寸下都只在商家↔家两图标间巡航；代付卡片金额区白面板删除
 - 新增文件：src/components/ios/MeituanIsland.tsx、src/lib/ios/mt-island-store.ts、src/lib/ios/mt-rider.ts；改动：meituan-store.ts、mt-proxy-pay.ts、meituan.tsx、mt-proxy-detail.tsx、globals.css、MusicIsland.tsx、StatusBar.tsx、PhoneShell.tsx
+
+---
+Task ID: 12
+Agent: Z.ai Code (主会话)
+Task: ①代付卡片恢复圆角白色面板并与上方黄色横幅拼接 ②外卖灵动岛小窗出现时状态栏 WiFi 图标消失 ③删除取餐弹窗（白色毛玻璃通知卡，非灵动岛小窗大窗）④地图上骑手形象调小 ⑤地图地名按真实地址显示 ⑥骑手形象再添加 8 个（立体、无白边）
+
+Work Log:
+- 【代付卡片白面板恢复】mt-proxy-detail.tsx MtPayBubble：黄横幅+金额区重新包进一个 overflow-hidden rounded-[10px] ring-1 ring-black/[0.06] 整体圆角块——黄横幅（88px，3D人物图）在上、白色面板（bg-white，含 好友已代付¥x/剩余支付时间 + 查看详情黄胶囊）在下无缝拼接成一个块；同时发现 /mt/proxy-banner*.png 404（此前一直走纯渐变兜底），图像生成 API 持续 429 → 用 PIL 本地合成两张横幅：黄色渐变底 + 柔光圆装饰 + 右侧骑手抠图带椭圆软阴影（请求卡=喵喵骑车载 r15、完成卡=笑笑小鸡 r12），460×180 输出，聊天卡片实测横幅+白面板拼接成型
+- 【WiFi 随小窗消失】StatusBar.tsx：新增 hideWifi=useMtIsland(visible)，美团配送小窗可见时 WiFi 图标与信号图标一起隐藏（恢复后回归）；音乐灵动岛维持原语义（只隐信号）；实测小窗常驻期间状态栏右侧仅剩电量
+- 【取餐弹窗删除】MeituanOrderWatcher.tsx：去掉 pushChatNotification（骑手取餐/商家接单等状态不再弹白色毛玻璃灵动岛通知卡），保留 mtAdvanceOrders 状态推进 + mt-orders-changed 事件派发；状态展示职责完全交给美团灵动岛小窗/大窗（mt-proxy-pay 好友代付完成的聊天类通知保留）
+- 【地图骑手调小】meituan.tsx DeliveryMap 骑手 img 58px→46px，drop-shadow 同步收敛；globals.css mt-rider-travel 五取样点偏移 -29px→-23px（半宽补偿，轨迹仍与 SVG 路线同曲线、恒在两图标间）
+- 【地图真实地址】DeliveryMap 新签名 {merchantName, merchantId, addressText}：商家侧路名正则取自 mtMerchantOf(merchantId).addr（如 川湘人家→红旗路 33 号附2→「红旗路」），收货侧小区取订单 address.text 首段（「幸福小区西区 3 栋…」→「幸福小区西区」，家标记上方）；另一收货地址（科技园写字楼/幸福小区西区互斥补位）、交叉路/第三路名从 MT_ROAD_POOL（美团在售商家真实路名池：解放大道/红旗路/建设路/朝阳路/人民路/文化路/东风路/新华路/学院路/濮上中路）按商家名散列稳定选取；商家名（去门店后缀）标注在商家标记上方；订单详情传 merchantId+addressText 接入
+- 【骑手形象 +8】scripts/cut_riders.py（PIL 洪泛填充去背景+大连通域保角色去水印+右下角浅色水印专项清除+alpha 羽化裁剪）：8 张新上传图 → public/mt/riders/r10~r17.png（钱钱抱钱袋/熊熊KFC头盔/笑笑/馋馋/嗨嗨三小鸡/喵喵白猫骑载/嘟嘟小熊骑载/兔兔黄盔特写），品红底合成图逐个目检无白边无水印；mt-rider.ts MT_RIDERS 9→17（17/17 全收集）
+- E2E（agent-browser 500×940）：锁屏大窗自动展开（无毛玻璃弹窗）→收回小窗+信号&WiFi 双隐✓→解锁→美团「我的」骑手选择层「已收集 17/17」滚动目检 8 新形象✓→选喵喵→小窗形象即时换✓→订单详情地图：骑手 46px 在商家↔家曲线上、地名 红旗路/建设路/文化路/幸福小区西区/川湘人家·盖浇饭/科技园写字楼/中心广场 全部真实✓→催一下 toast「提前5分钟」ETA 12:58→12:53 小窗 16→11分钟✓→走完整代付链路（塔斯汀下单 ¥25.30→支付面板找人代付→微信好友晴晴→发送）→微信聊天：请求卡黄横幅+白面板「剩余支付时间」拼接✓、完成卡「好友已代付 ¥29.60」白面板拼接✓、点卡进代付详情✓
+- npx eslint（meituan.tsx/mt-proxy-detail.tsx/MeituanOrderWatcher.tsx/StatusBar.tsx/mt-rider.ts）0 问题；tsc --noEmit 0 错误；dev.log 仅既知 429 兜底
+
+Stage Summary:
+- 代付卡片回归真机形态：黄横幅（3D 骑手合成图）+ 白色圆角金额面板上下无缝拼接为一个圆角块；两张横幅资源首次落盘（/mt/proxy-banner.png、/mt/proxy-banner-done.png）
+- 状态栏与灵动岛联动升级：美团配送小窗可见=信号+WiFi 全隐（Live Activity 真机同语义），订单状态不再弹白色毛玻璃通知卡
+- 配送地图信息真实化：商家路名/收货小区/商家名全部来自真实订单与商家数据，路名池按商家稳定散列；骑手形象 46px 立体巡航
+- 骑手形象库 9→17：去白边/去水印管线脚本化（scripts/cut_riders.py），新形象同步作用于配送地图与灵动岛小窗

@@ -87,41 +87,42 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
         {role === 'done' ? 'Hi~你的订单代付成功啦~' : 'Hi~快来帮我支付这笔订单吧~'}
       </span>
 
-      {/* 黄色 3D 人物横幅（图缺失时退纯黄渐变，文案恒在） */}
-      <span className="relative mt-2 block h-[88px] overflow-hidden rounded-[10px] bg-gradient-to-r from-[#FFDB3D] to-[#FFC933]">
-        {bannerOk && (
-          <img
-            src={role === 'done' ? '/mt/proxy-banner-done.png' : '/mt/proxy-banner.png'}
-            alt=""
-            onError={() => setBannerOk(false)}
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-        )}
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[15px] font-bold text-black/85">
-          {role === 'done' ? '好友已代付啦~' : '来帮我代付吧~'}
+      {/* 黄色 3D 人物横幅 + 白色圆角金额面板：拼接为一个整体圆角块（黄上白下、无缝相连，用户要求恢复白面板） */}
+      <span className="relative mt-2 block overflow-hidden rounded-[10px] ring-1 ring-black/[0.06]">
+        <span className="relative block h-[88px] overflow-hidden bg-gradient-to-r from-[#FFDB3D] to-[#FFC933]">
+          {bannerOk && (
+            <img
+              src={role === 'done' ? '/mt/proxy-banner-done.png' : '/mt/proxy-banner.png'}
+              alt=""
+              onError={() => setBannerOk(false)}
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          )}
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[15px] font-bold text-black/85">
+            {role === 'done' ? '好友已代付啦~' : '来帮我代付吧~'}
+          </span>
         </span>
-      </span>
-
-      {/* 金额区（内层白色圆角面板已按需求删除：文字直接落在卡片上，仅保留呼吸感留白） */}
-      <span className="relative mt-2.5 block px-3 pb-1 pt-1 text-center">
-        {role === 'done' || reqDone ? (
-          <>
-            <span className="mt-0.5 block text-[21px] font-bold leading-tight tracking-tight text-black/90" data-testid={`mt-pay-bubble-${role}-status`}>
-              好友已代付 <span>¥{fmt2(p?.amount ?? 0)}</span>
-            </span>
-            <span className="mt-1 block truncate text-[11.5px] text-black/40">
-              {channel ? (role === 'done' ? `${channel} · 已到账` : channel) : '好友已代付'}
-            </span>
-          </>
-        ) : (
-          <>
-            <span className="block text-[11.5px] text-black/40">剩余支付时间</span>
-            <span className="mt-0.5 block text-[32px] font-bold leading-tight tabular-nums tracking-tight text-black/90" data-testid={`mt-pay-bubble-${role}-status`}>
-              {countdown}
-            </span>
-          </>
-        )}
-        <span className="mt-2.5 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[14px] font-bold text-black/85">查看详情</span>
+        {/* 金额区（白色圆角面板，与上方黄色横幅拼接成一块） */}
+        <span className="relative block bg-white px-3 pb-3 pt-2 text-center">
+          {role === 'done' || reqDone ? (
+            <>
+              <span className="mt-0.5 block text-[21px] font-bold leading-tight tracking-tight text-black/90" data-testid={`mt-pay-bubble-${role}-status`}>
+                好友已代付 <span>¥{fmt2(p?.amount ?? 0)}</span>
+              </span>
+              <span className="mt-1 block truncate text-[11.5px] text-black/40">
+                {channel ? (role === 'done' ? `${channel} · 已到账` : channel) : '好友已代付'}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="block text-[11.5px] text-black/40">剩余支付时间</span>
+              <span className="mt-0.5 block text-[32px] font-bold leading-tight tabular-nums tracking-tight text-black/90" data-testid={`mt-pay-bubble-${role}-status`}>
+                {countdown}
+              </span>
+            </>
+          )}
+          <span className="mt-2.5 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[14px] font-bold text-black/85">查看详情</span>
+        </span>
       </span>
     </button>
   );

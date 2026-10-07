@@ -24,6 +24,14 @@ export const MT_RIDERS: MtRider[] = [
   { id: 'r6', name: '萝卜', src: '/mt/riders/r6.png' },
   { id: 'r8', name: '瘫瘫', src: '/mt/riders/r8.png' },
   { id: 'r9', name: '屁屁', src: '/mt/riders/r9.png' },
+  { id: 'r10', name: '钱钱', src: '/mt/riders/r10.png' },
+  { id: 'r11', name: '熊熊', src: '/mt/riders/r11.png' },
+  { id: 'r12', name: '笑笑', src: '/mt/riders/r12.png' },
+  { id: 'r13', name: '馋馋', src: '/mt/riders/r13.png' },
+  { id: 'r14', name: '嗨嗨', src: '/mt/riders/r14.png' },
+  { id: 'r15', name: '喵喵', src: '/mt/riders/r15.png' },
+  { id: 'r16', name: '嘟嘟', src: '/mt/riders/r16.png' },
+  { id: 'r17', name: '兔兔', src: '/mt/riders/r17.png' },
 ];
 
 const MT_RIDER_KEY = 'mt-rider-avatar';
