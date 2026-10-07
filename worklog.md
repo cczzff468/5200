@@ -16819,3 +16819,23 @@ Stage Summary:
 - 再来一单 = 回商家重新挑选（两处入口统一）；订单详情四态（待支付/进行中/配送中/已完成）右上角统一美团黄渐变分享钮
 - 订单分享跨 App 全链路：分享→选微信/QQ→选好友→动态卡片进聊天，卡片实时跟随订单状态（五段时间线+骑手名+商品+金额），微信端视觉验证、QQ 端落库验证
 - 新增文件：src/lib/ios/mt-order-share.ts、src/components/apps/mt-share-card.tsx；改动：meituan.tsx、globals.css、mt-rider.ts、wechat.tsx、qq.tsx
+
+---
+Task ID: 1
+Agent: Z.ai Code (main)
+Task: 分享图标箭头化简约 + 全部美团图标换新 + 新增5骑手 + 用户上传骑手(去白边/立体) + 首页定位返回主界面；顺带修 WiFi 图标 bug
+
+Work Log:
+- public/icons/meituan.png 替换为用户上传的「美团-问美团，都安排」黄底黑字图标（全站 9 处引用自动生效）
+- meituan.tsx 新增 MtShareGlyph 箭头式分享图标（上箭头穿出圆角托盘，简约线条），替换 shareBtn（待支付/进行中/配送中/已完成详情右上角统一）及团购详情、电影详情两处 Share2；移除 Share2 导入
+- scripts/add-riders.mjs：5 张新图（棕熊/白兔/哭哭熊/蓝猫/绵羊）预裁+泛洪去底+羽化 → public/mt/riders/r18-r22.png；r20/r21 奶油底用放宽阈值（min>=178, max-min<=70）
+- mt-rider.ts 注册 r18 笨笨 / r19 咻咻 / r20 哭哭 / r21 咪咪 / r22 咩咩（内置 17→22）
+- mt-rider.ts 新增自定义骑手：mtGetCustomRiders/mtAddCustomRider/mtAllRiders（localStorage 'mt-riders-custom'）+ mtRemoveWhiteEdges（canvas 版去白边算法：边缘泛洪+最大连通域+alpha 羽化+裁剪，256×256 dataURL）
+- 我的-骑手弹层：新增「上传形象」虚线入口（手机相册选图→自动去白边→变立体投影→落库并选中）；自定义形象网格置顶、带立体 drop-shadow；角标数量=内置+自定义
+- 美团首页左上角定位改为点击退出 App 返回手机主界面（useUI.closeApp()，data-testid=home-locate）；HomePage 移除 onPickAddress prop
+- StatusBar.tsx：修 WiFi 图标在美团外卖小窗出现时消失的 bug（WiFi 恒常驻，信号图标仍按灵动岛语义隐藏）
+- agent-browser 实测：解锁→登录墙(微信一键登录→同意授权)→首页；定位点击成功退回主屏；骑手弹层 22 内置+上传入口；选咩咩 toast；JS 注入白底测试图走完整上传管线 → 去白边成功、角标 22→23、localStorage 持久化、弹层显示「我的骑手」选中态；新骑手五枚均无白边
+
+Stage Summary:
+- 全部任务完成且实测通过（eslint 单文件组 + tsc --noEmit 零错误）
+- 美团图标/骑手资源/分享图标/上传链路/返回主界面 均落地；遗留：订单详情分享图标视觉复核（浏览器缓存需强刷）

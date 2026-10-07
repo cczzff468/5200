@@ -127,7 +127,7 @@ import {
 import type { FunDeal, FunHotel, FunMovie, FunRoom, FunVenue } from '@/app/api/mt-fun/route';
 import TravelChannelPage from './meituan-travel';
 import ShangouChannelPage from './meituan-shangou';
-import { useSettings } from '@/lib/ios/store';
+import { useSettings, useUI } from '@/lib/ios/store';
 import {
   mtApplyRefund,
   mtCanRefund,
@@ -177,7 +177,7 @@ import {
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
 import { mtCreateProxyRequest } from '@/lib/ios/mt-proxy-pay';
 import { mtCreateOrderShare } from '@/lib/ios/mt-order-share';
-import { MT_RIDERS, mtAddCustomRider, mtAllRiders, mtGetRiderId, mtRemoveWhiteEdges, mtRiderSrcOf, mtSetRiderId, type MtRider } from '@/lib/ios/mt-rider';
+import { MT_RIDERS, mtAddCustomRider, mtAllRiders, mtGetCustomRiders, mtGetRiderId, mtRemoveWhiteEdges, mtRiderSrcOf, mtSetRiderId, type MtRider } from '@/lib/ios/mt-rider';
 import { listContacts } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
@@ -820,7 +820,6 @@ function HomePage({
   onOpenMerchant,
   onOpenDeal,
   onOpenSearch,
-  onPickAddress,
   onOpenChannel,
   onOpenMessages,
   onToast,
@@ -831,7 +830,6 @@ function HomePage({
   onOpenChannel: (c: 'hotel' | 'fun' | 'movies' | 'shangou' | 'travel') => void;
   onOpenMessages: () => void;
   onOpenSearch: (kw?: string) => void;
-  onPickAddress: () => void;
   onToast: (m: string) => void;
 }) {
   const uid = mtUidOf(session);
@@ -1081,7 +1079,14 @@ function HomePage({
         <span aria-hidden="true" className="pointer-events-none absolute left-6 top-14 h-24 w-32 rounded-full bg-[#FFD100]/45 blur-2xl" />
         <span aria-hidden="true" className="pointer-events-none absolute right-28 top-20 h-16 w-16 rounded-full bg-[#FF9F1C]/25 blur-xl" />
         <div className="relative flex items-center gap-2">
-          <button type="button" onClick={onPickAddress} className="flex min-w-0 items-center gap-1 text-left active:opacity-70">
+          {/* 左上角定位：点击退回手机主界面（iOS Home；收货地址在「我的-收货地址/下单页」仍可改） */}
+          <button
+            type="button"
+            data-testid="home-locate"
+            aria-label="定位，点按返回手机主界面"
+            onClick={() => useUI.getState().closeApp()}
+            className="flex min-w-0 items-center gap-1 text-left active:opacity-70"
+          >
             <MapPin className="h-[17px] w-[17px] shrink-0 text-black/80" strokeWidth={2.1} />
             <span className="truncate text-[17px] font-semibold text-black/90">{cur ? cur.text.slice(0, 9) : '选择地址'}</span>
           </button>
@@ -5801,9 +5806,11 @@ function MyPage({
   const [customRiders, setCustomRiders] = useState<MtRider[]>([]);
   const [uploadingRider, setUploadingRider] = useState(false);
   const riderFileRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    if (riderOpen) setCustomRiders(mtGetCustomRiders());
-  }, [riderOpen]);
+  // 打开弹层时读一次本机自定义形象（避免 effect 内 setState）；上传后本地同步追加
+  const openRiderSheet = () => {
+    setCustomRiders(mtGetCustomRiders());
+    setRiderOpen(true);
+  };
   const handleRiderUpload = async (file: File) => {
     if (uploadingRider) return;
     setUploadingRider(true);
@@ -5936,10 +5943,10 @@ function MyPage({
           </button>
         ))}
         {/* 骑手（原美团币）：显示当前骑手形象，点按进入选择弹层 */}
-        <button type="button" data-testid="my-rider" onClick={() => setRiderOpen(true)} className="flex flex-col items-center gap-1.5 active:opacity-70">
+        <button type="button" data-testid="my-rider" onClick={openRiderSheet} className="flex flex-col items-center gap-1.5 active:opacity-70">
           <span className="relative">
             <img src={mtRiderSrcOf(riderId)} alt="骑手形象" draggable={false} className="h-[24px] w-[24px] object-contain" />
-            <span className="absolute -right-2 -top-1 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-[#FF3B30] px-1 text-[9px] font-bold text-white">{MT_RIDERS.length}</span>
+            <span className="absolute -right-2 -top-1 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-[#FF3B30] px-1 text-[9px] font-bold text-white">{MT_RIDERS.length + customRiders.length}</span>
           </span>
           <span className="text-[11px] text-black/70">骑手</span>
         </button>
@@ -6021,9 +6028,24 @@ function MyPage({
                   <X className="h-5 w-5 text-black/55" />
                 </button>
               </div>
-              <p className="px-5 pb-3 text-[12px] text-black/40">已收集 {MT_RIDERS.length}/{MT_RIDERS.length} · 骑手会带着你的订单跑腿送餐</p>
+              <p className="px-5 pb-3 text-[12px] text-black/40">内置 {MT_RIDERS.length} 位 + 自定义 {customRiders.length} 位 · 骑手会带着你的订单跑腿送餐</p>
               <div className="grid max-h-[52vh] grid-cols-3 gap-3 overflow-y-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {MT_RIDERS.map((r) => {
+                {/* 上传形象：手机相册选图 → 自动去白边变透明 PNG（前端 canvas 算法），存本机 */}
+                <button
+                  type="button"
+                  data-testid="rider-upload"
+                  onClick={() => riderFileRef.current?.click()}
+                  className="flex flex-col items-center justify-center gap-1.5 rounded-2xl border-[1.5px] border-dashed border-black/20 bg-[#FBFBFC] px-2 pb-2.5 pt-3 text-black/40 transition-all active:scale-[0.97] active:bg-black/[0.03]"
+                >
+                  {uploadingRider ? (
+                    <RotateCw className="h-8 w-8 animate-spin text-black/45" strokeWidth={1.8} />
+                  ) : (
+                    <ImagePlus className="h-8 w-8 text-black/45" strokeWidth={1.8} />
+                  )}
+                  <span className="text-[12px] text-black/60">{uploadingRider ? '去白边中…' : '上传形象'}</span>
+                  <span className="text-[10px] leading-none text-black/35">自动去白边 · 变立体</span>
+                </button>
+                {[...customRiders, ...MT_RIDERS].map((r) => {
                   const active = r.id === riderId;
                   return (
                     <button
@@ -6043,12 +6065,31 @@ function MyPage({
                           <Check className="h-3 w-3 text-black/80" strokeWidth={3} />
                         </span>
                       )}
-                      <img src={r.src} alt={r.name} draggable={false} className="h-20 w-20 object-contain" />
+                      {/* 自定义形象叠立体投影（与地图巡航同款阴影），内置图已带描边不加 */}
+                      <img
+                        src={r.src}
+                        alt={r.name}
+                        draggable={false}
+                        className="h-20 w-20 object-contain"
+                        style={r.custom ? { filter: 'drop-shadow(0 4px 3px rgba(0,0,0,0.28)) drop-shadow(0 1.5px 2px rgba(0,0,0,0.2))' } : undefined}
+                      />
                       <span className={`mt-1 text-[12px] ${active ? 'font-semibold text-black/85' : 'text-black/60'}`}>{r.name}</span>
                     </button>
                   );
                 })}
               </div>
+              <input
+                ref={riderFileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                data-testid="rider-upload-input"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  if (f) void handleRiderUpload(f);
+                }}
+              />
             </motion.div>
           </motion.div>
         )}
@@ -8992,7 +9033,6 @@ export default function MeituanApp() {
                   setSearchSeed(kw ?? '');
                   setPage('search');
                 }}
-                onPickAddress={() => setAddrPicker(true)}
                 onOpenChannel={(c) => setPage(c)}
                 onOpenMessages={() => setPage('messages')}
                 onToast={showToast}
