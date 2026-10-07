@@ -755,19 +755,33 @@ function localBatch(filter: string | null, exclude: string[]): { items: FeedItem
   const merchants = filter ? MT_MERCHANTS.filter((m) => m.cats.includes(filter)) : MT_MERCHANTS;
   shuffle(merchants).forEach(takeM);
   if (!filter) shuffle(MT_DEALS).forEach(takeD);
-  // 池子耗尽 → 分店变体（注册进注册表，点击可打开详情）
+  // 池子耗尽 → 分店变体（注册进注册表，点击可打开详情）：
+  // 变体不只是换店名——评分/月售/起送/配送/距离/优惠全部随机扰动，避免「同一张卡复制 16 遍」的观感
   const BRANCHES = ['望京店', '国贸店', '五道口店', '中关村店', '亚运村店', '回龙观店', '双井店', '上地店'];
+  const DEAL_POOL = ['满30减5', '满59减8', '满99减12', '新客立减4', '满39减6', '满79减10', '免配送费', '满20减3'];
   let guard = 0;
-  while (out.length < target && merchants.length > 0 && guard < BRANCHES.length * 2) {
+  while (out.length < target && merchants.length > 0 && guard < BRANCHES.length * 3) {
     const base = merchants[Math.floor(Math.random() * merchants.length)];
+    // 分店名从基名剥离原「（…店）」尾缀再拼新分店，避免「xx（解放路店）·望京店」式长名被截断成同名卡
+    const stem = base.name.replace(/（[^）]*）$/, '');
+    const name = `${stem}·${BRANCHES[guard % BRANCHES.length]}`;
+    guard++;
+    if (ex.has(name)) continue; // 分店撞名（池子极小且刷新多轮）：跳过，不产出同名卡
+    ex.add(name);
     const clone: MtMerchant = {
       ...base,
       id: `ai-m-local-${Date.now().toString(36)}-${guard}`,
-      name: `${base.name}·${BRANCHES[guard % BRANCHES.length]}`,
+      name,
+      rating: Math.round(Math.min(4.9, Math.max(3.8, base.rating + (Math.random() * 0.5 - 0.35))) * 10) / 10,
+      monthSale: 300 + Math.floor(Math.random() * 8000),
+      minOrder: [0, 0, 15, 20, 30][Math.floor(Math.random() * 5)],
+      deliveryFee: Math.round(Math.random() * 4 * 10) / 10,
+      distanceKm: Math.round((0.3 + Math.random() * 6.5) * 10) / 10,
+      deliveryMin: 25 + Math.floor(Math.random() * 45),
+      deals: [DEAL_POOL[Math.floor(Math.random() * DEAL_POOL.length)]],
     };
     mtRegisterAiMerchant(clone);
     out.push({ t: 'm', m: clone });
-    guard++;
   }
   // 特价团聚合卡兜底：种子聚合卡
   const seedDeals = MT_HOME_LIST.dealIds
@@ -862,18 +876,37 @@ function HomePage({
           return d;
         });
         if (merchants.length === 0 && deals.length === 0) throw new Error('空数据');
-        if (f === 'tuangou') return { items: deals.map<FeedItem>((d) => ({ t: 'deal', d })), listDeals: [], listTitle: null };
-        if (f) return { items: merchants.map<FeedItem>((m) => ({ t: 'm', m })), listDeals: [], listTitle: null };
-        // 推荐流：前 2 个团购进「特价团」聚合卡（AI 生成），其余进瀑布流；AI 未给主题 → 种子兜底
-        const listDeals = deals.slice(0, 2);
-        if (listDeals.length > 0) {
-          return { items: interleave(deals.slice(2), merchants), listDeals, listTitle: data.listTitle ?? null };
+        let items: FeedItem[];
+        let listDeals: MtDeal[] = [];
+        let listTitle: string | null = null;
+        if (f === 'tuangou') {
+          items = deals.map<FeedItem>((d) => ({ t: 'deal', d }));
+        } else if (f) {
+          items = merchants.map<FeedItem>((m) => ({ t: 'm', m }));
+        } else {
+          // 推荐流：前 2 个团购进「特价团」聚合卡（AI 生成），其余进瀑布流；AI 未给主题 → 种子兜底
+          const ld = deals.slice(0, 2);
+          if (ld.length > 0) {
+            listDeals = ld;
+            listTitle = data.listTitle ?? null;
+            items = interleave(deals.slice(2), merchants);
+          } else {
+            listDeals = MT_HOME_LIST.dealIds
+              .map((id) => MT_DEALS.find((d) => d.id === id))
+              .filter((d): d is MtDeal => !!d)
+              .slice(0, 2);
+            listTitle = MT_HOME_LIST.title;
+            items = interleave(deals, merchants);
+          }
         }
-        const seedDeals = MT_HOME_LIST.dealIds
-          .map((id) => MT_DEALS.find((d) => d.id === id))
-          .filter((d): d is MtDeal => !!d)
-          .slice(0, 2);
-        return { items: interleave(deals, merchants), listDeals: seedDeals, listTitle: MT_HOME_LIST.title };
+        // 数量下限：AI 偶发只返回 2~5 条（并发单批 429/截断）→ 本地池补齐到 ≥10，
+        // 保证任何情况下分类页/推荐流都有 7~15 家不重复店铺
+        if (items.length < 7) {
+          const seenNames = new Set(items.map(feedName).filter(Boolean));
+          const pad = localBatch(f, [...exclude, ...seenNames]);
+          items = [...items, ...pad.items.filter((p) => !seenNames.has(feedName(p)))].slice(0, 12);
+        }
+        return { items, listDeals, listTitle };
       } catch {
         return localBatch(f, exclude);
       }

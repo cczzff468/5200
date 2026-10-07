@@ -156,6 +156,12 @@ const COMMONS_REQUIRE: Record<string, RegExp> = {
   'pharmacy interior': /pharmac|apothe|lékárna|patika|drugstore|chemist/i,
 };
 
+/** Commons 标题黑名单（按搜索词，可叠加）：药房池剔除博物馆/历史复原老照片
+ *  （Sweny's 都柏林 19 世纪老药房 / Brening 不来梅博物馆复原药房 / Victorian 等 —— 观感是「古董店」不是现代药店） */
+const COMMONS_EXCLUDE: Record<string, RegExp> = {
+  'pharmacy interior': /sweny|brening|victorian|museum|heritage|joyce|historic|antique|vintage|19\d\d|18\d\d/i,
+};
+
 /** AI/图库tag 同义词收敛：模型自由发挥的菜系词 → 图库实际有效的分类词。
  *  未知 tag 一律落 'food'（比透传到无关词的搜索结果更贴内容）。 */
 const TAG_SYNONYMS: Record<string, string> = {
@@ -495,6 +501,7 @@ async function commonsSearchUrls(q: string): Promise<string[]> {
     const urls: string[] = [];
     const seen = new Set<string>();
     const requireRe = COMMONS_REQUIRE[q];
+    const excludeRe = COMMONS_EXCLUDE[q];
     for (const page of Object.values(j.query?.pages ?? {})) {
       const info = page.imageinfo?.[0];
       const thumb = info?.thumburl?.split('?')[0];
@@ -502,6 +509,7 @@ async function commonsSearchUrls(q: string): Promise<string[]> {
       if (!/^image\/(jpeg|png|webp)$/.test(info?.mime ?? '')) continue;
       if (COMMONS_TITLE_EXCLUDE.test(page.title ?? '')) continue;
       if (requireRe && !requireRe.test(page.title ?? '')) continue;
+      if (excludeRe && excludeRe.test(page.title ?? '')) continue;
       seen.add(thumb);
       urls.push(thumb);
     }
@@ -695,7 +703,7 @@ export async function GET(req: NextRequest) {
   const h = intOf(sp.get('h'), 400, 100, 800);
   const s = intOf(sp.get('s'), 0, 0, 999);
   // v=链路版本：升级后浏览器旧缓存自然失效（URL 变了）
-  const key = `${tag}|${w}x${h}|${s}|v7`;
+  const key = `${tag}|${w}x${h}|${s}|v9`;
 
   const hit = cacheGet(key);
   if (hit) {
