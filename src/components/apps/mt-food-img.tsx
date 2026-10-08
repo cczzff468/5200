@@ -8,16 +8,27 @@
 import { useState } from 'react';
 import { ImageOff } from 'lucide-react';
 
-export function FoodImg({ src, className = '' }: { src?: string; emoji?: string; className?: string }) {
-  return <FoodImgInner key={src ?? 'none'} src={src} className={className} />;
+export function FoodImg({ src, emoji, className = '' }: { src?: string; emoji?: string; className?: string }) {
+  return <FoodImgInner key={src ?? 'none'} src={src} emoji={emoji} className={className} />;
 }
 
-function FoodImgInner({ src, className = '' }: { src?: string; className?: string }) {
+function FoodImgInner({ src, emoji, className = '' }: { src?: string; emoji?: string; className?: string }) {
   // stage：0=主源首载 1=主源重试 2=灰色+文字占位（服务端永远 200，占位仅极端网络故障出现）
   const [stage, setStage] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const cur = stage <= 1 ? src : undefined;
   if (!cur) {
+    // 无图 + 有 emoji（商家入驻未上传图）：暖黄渐变 + emoji 大字兜底，不再是「加载失败」灰块
+    if (emoji) {
+      return (
+        <div
+          className={`flex items-center justify-center bg-gradient-to-br from-[#FFE9B8] via-[#FFDF9E] to-[#FFD100]/70 ${className}`}
+          aria-hidden="true"
+        >
+          <span className="text-[34px] leading-none drop-shadow-sm">{emoji}</span>
+        </div>
+      );
+    }
     return (
       <div className={`flex flex-col items-center justify-center gap-1 bg-[#EBEDF0] ${className}`} aria-hidden="true">
         <ImageOff className="h-[30%] w-[30%] text-black/25" strokeWidth={1.8} />

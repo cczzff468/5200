@@ -17126,3 +17126,24 @@ Stage Summary:
 - QQ 私聊联动补齐（此前只在微信可用）
 - 实测新增修复：历史序列化行回显剥除正则支持嵌套括号
 - 未验证项说明：QQ 私聊 LLM 行为级流程与微信同构同源（未重复跑 LLM）；expired UI 复用 declined 渲染路径；A2/B8/C9/C10 为确定性代码路径
+
+---
+Task ID: 11
+Agent: Z.ai Code (main)
+Task: 美团「我的-入驻美团」商家入驻功能——自定义店铺/菜品/小菜/优惠券/奶茶规格，店铺出现在首页
+
+Work Log:
+- 数据层 meituan-data.ts：MtMerchant 加 mine?/coupons?/mtStatus? 三可选字段；新增 MtShopCouponDef（店铺券定义）、mtAutoEmoji（按店名/菜名关键词自动配 emoji，22 条规则）、mtRegisterMyMerchants/mtUnregisterMerchant/mtUnregisterMyMerchants（my-shop-* 前缀注册表管理）；mtFindDish 改用 mtAllMerchants() 让入驻菜品可被搜到
+- 数据层 meituan-store.ts：新增「商家入驻」段——mtLoadShops/mtSaveShops/mtGetShop（kv mt-shops:<uid> 按账号隔离）+ mtClaimShopCoupon（店铺券领取进「红包卡券」，同名同面额未使用防重）
+- mt-food-img.tsx：FoodImg 无图时 emoji 兜底渲染（暖黄渐变+emoji 大字），入驻未上传图不再是「加载失败」灰块
+- 新文件 mt-merchant-edit.tsx（入驻/编辑表单）：店铺信息区（背景图上传 readImageFile 1280 压缩、店名、分类 chips 多选、公告、地址默认收货地址、起送价/配送费）；菜单管理（分区增删改 + 菜品卡列表）；DishEditSheet（名称/价格/图 720/描述 + 🧋奶茶模板：大杯+0/中杯-1/小杯-2+温度+小料多选max2各加价+糖度；🍚小菜模板：多选加价组；自定义规格组编辑器 SpecEditSheet：组名/单选多选max/选项+加价可负数）；优惠券区（行内添加满X减Y，保存后自动派生 deals 满减角标）；保存校验（店名/分类/至少一道菜）→ mtSaveShops + mtRegisterAiMerchant 即时生效
+- 新文件 mt-merchant-center.tsx（商家中心）：空状态入驻引导；店铺卡列表（emoji 封面、分类/菜品数/起送配送、券摘要、营业开关 toggle、编辑/进店看看/删除）；删除二次确认弹层（同步清归属购物车行 + mtUnregisterMerchant）；上下架即重建注册表
+- meituan.tsx 接线：Page 类型加 merchantCenter/merchantEdit；MyPage 服务宫格「入驻美团」→商家中心、「添加商户」→新建表单；MeituanApp 加 editShopId state + booting/login 注册自有店铺 + logout 注销（防跨账号残留搜索池）；MerchantCard 加「我的小店」黄角标；HomePage regenerate 置顶注入自有店铺（打烊过滤+分类匹配+exclude 防撞名，useCallback deps 补 uid）；MerchantPage 加打烊横幅+加购/规格/去结算三处拦截+店铺券领取条（已领取态防重）；保存/删除/上下架回调置 homeFeedCache.ready=false 强制首页重新生成
+- E2E（agent-browser 全链路实测通过）：注入测试机主档案 → 微信账密登录美团 → 商家中心空状态 → 立即入驻 → 填店名「琳琳的奶茶铺」/选甜点饮品/公告 → 加菜「杨枝甘露」¥12 → 奶茶模板一键填充 4 组规格 → 编辑规格组改大杯+3 → 保存 → 添加券满20减5 → 提交入驻 → 商家中心列表卡 → 进店看看（emoji 兜底头图/角标/券条）→ 领券 toast+已领取态 → 规格弹窗（大杯+3 生效 ¥15 → 选珍珠 ¥16）→ 选好了入车 → 去结算（满20减5 门槛判断 16<20 暂无可用 ✓；-¥3 为既有新客立减）→ 提交订单收银台 → 回首页瀑布流出现「我的小店」卡片 → 搜索「琳琳」命中 → 打烊（toast+灰开关+已打烊标签）→ 恢复营业重新露出 → App 重启后店铺保留（booting 注册）
+- tsc/eslint 零错误；dev.log 无运行时错误（2 Issues 为历史 instrumentation 警告，与本功能无关）
+
+Stage Summary:
+- 入驻美团功能全链路落地：开店 → 装修（图/菜品/小菜/奶茶小料与大小杯定价）→ 发券 → 首页露出 → 买家点单（规格/券/结算）→ 店铺管理（编辑/打烊/删除）
+- 数据模型变更：MtMerchant +mine/coupons/mtStatus；新 kv 键 mt-shops:<uid>；店铺券复用 MtCoupon（type waimai、name 带【店名】前缀）零改结算链路
+- 复用既有机制最大化：AI_MERCHANTS 注册表（详情/搜索/AI 代点零改动命中）、FoodImg、readImageFile、DishSpecSheet、CouponPickerSheet、mtCheckoutCalc/订单状态机全透明
+- 未验证项：店铺背景图上传走 readImageFile 同微信发图链路（未注入真图文件，代码路径与菜品图一致）；AI 代点选中自有店铺为预期行为未专项回归

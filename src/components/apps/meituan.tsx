@@ -115,6 +115,8 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ISLAND_NAV_EVENT, takeNotifyNavigation } from '@/lib/ios/island-notify';
 import { LocalToast, useLocalToast } from './page-toast';
 import { FoodImg } from './mt-food-img';
+import MerchantCenterPage from './mt-merchant-center';
+import MerchantEditPage from './mt-merchant-edit';
 import {
   MT_CATS,
   MT_DEALS,
@@ -128,6 +130,8 @@ import {
   mtMerchantOf,
   mtRegisterAiDeal,
   mtRegisterAiMerchant,
+  mtRegisterMyMerchants,
+  mtUnregisterMyMerchants,
   type MtDeal,
   type MtDealPackage,
   type MtDish,
@@ -149,6 +153,7 @@ import {
   mtCancelWithRefund,
   mtCheckoutCalc,
   mtClaimGodCoupons,
+  mtClaimShopCoupon,
   mtClearHistory,
   mtClearPayPwdLock,
   mtClearSearchHist,
@@ -181,6 +186,7 @@ import {
   mtLoadOrders,
   mtLoadPayPwd,
   mtLoadPayPwdLock,
+  mtLoadShops,
   mtLoadWallet,
   mtLoadWalletBills,
   mtPushHistory,
@@ -239,7 +245,7 @@ import { listContacts, loginQQ, loginWechat } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
 
-type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices';
+type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices' | 'merchantCenter' | 'merchantEdit';
 type Tab = 'home' | 'orders' | 'cart' | 'my';
 
 const MT_YELLOW = '#FFD100';
@@ -788,8 +794,13 @@ function DealListCard({ title, deals, onOpen }: { title: string; deals: MtDeal[]
 /** 外卖商家卡（瀑布流） */
 function MerchantCard({ m, onOpen }: { m: MtMerchant; onOpen: () => void }) {
   return (
-    <button type="button" onClick={onOpen} className="mb-2 block w-full break-inside-avoid overflow-hidden rounded-xl bg-white text-left shadow-[0_1px_6px_rgba(0,0,0,0.04)] active:opacity-90">
+    <button type="button" onClick={onOpen} className="relative mb-2 block w-full break-inside-avoid overflow-hidden rounded-xl bg-white text-left shadow-[0_1px_6px_rgba(0,0,0,0.04)] active:opacity-90">
       <FoodImg src={m.cover} emoji={m.emoji} className="h-[120px] w-full" />
+      {m.mine && (
+        <span className="absolute left-2 top-2 rounded-md bg-[#FFD100] px-1.5 py-0.5 text-[10px] font-bold text-black/85 shadow-sm" data-testid="merchant-mine-badge">
+          我的小店
+        </span>
+      )}
       <span className="block px-2.5 pb-2.5 pt-2">
         <span className="block truncate text-[14px] font-bold text-black/90">{m.name}</span>
         <span className="mt-1 flex items-center gap-1.5 text-[11px]">
@@ -1037,10 +1048,12 @@ function HomePage({
   );
 
   // 重新生成：下拉刷新 / 切换分类 / 首次进入（排除名单 = 上一次已展示内容 → 出来的是全新内容）
+  // 商家入驻：当前账号的自有店铺（营业中）置顶露出在瀑布流最前面
   const regenerate = useCallback(async () => {
     const seq = ++genSeqRef.current;
     const f = filterRef.current;
-    const exclude = feedRef.current.map(feedName).filter(Boolean).slice(0, 80);
+    const myShops = mtLoadShops(uid).filter((s) => s.mine && s.mtStatus !== 'closed' && (f === null || s.cats.includes(f)));
+    const exclude = [...feedRef.current.map(feedName).filter(Boolean).slice(0, 80), ...myShops.map((s) => s.name)];
     const keepY = scrollRef.current?.scrollTop ?? 0; // 刷新前的浏览位置：新内容渲染后回到这里（不强制回顶部）
     generatingRef.current = true;
     loadingRef.current = false;
@@ -1049,7 +1062,7 @@ function HomePage({
     setPullDist(0);
     const batch = await fetchBatch(f, exclude);
     if (genSeqRef.current !== seq) return; // 期间又触发了刷新/切分类：丢弃过期批次
-    setFeed(batch.items);
+    setFeed([...myShops.map((m) => ({ t: 'm' as const, m })), ...batch.items]);
     setListData({ deals: batch.listDeals, title: batch.listTitle });
     generatingRef.current = false;
     setGenerating(false);
@@ -1062,7 +1075,7 @@ function HomePage({
         }),
       );
     }
-  }, [fetchBatch]);
+  }, [fetchBatch, uid]);
 
   // 首次挂载：有缓存直接恢复（从详情页/其他 tab 返回不重新生成）；否则生成
   // 之后 filter 变化（切分类/切回推荐）→ 重新生成
@@ -1597,6 +1610,10 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
   };
 
   const add = (d: MtDish) => {
+    if (merchant.mine && merchant.mtStatus === 'closed') {
+      onToast('店铺已打烊，暂停接单');
+      return;
+    }
     if (!cartMerchantOk && cart.items.length > 0) {
       onToast('不同商家商品不能合并结算，请先结算或清空购物车');
       return;
@@ -1615,6 +1632,11 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
   };
   /** 规格弹窗「选好了」：同菜不同规格分行（dishId+spec 为唯一键）；静默入车（对齐真机无 toast，角标即反馈） */
   const addWithSpec = (d: MtDish, qty: number, spec: string, unitPrice: number) => {
+    if (merchant.mine && merchant.mtStatus === 'closed') {
+      onToast('店铺已打烊，暂停接单');
+      setSpecDish(null);
+      return;
+    }
     if (!cartMerchantOk && cart.items.length > 0) {
       onToast('不同商家商品不能合并结算，请先结算或清空购物车');
       setSpecDish(null);
@@ -1647,6 +1669,10 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
 
   const qtyOf = (dishId: string): number => cart.items.find((i) => i.dishId === dishId)?.qty ?? 0;
   const belowMin = calc.itemTotal < merchant.minOrder;
+  /** 商家入驻：自有店铺营业状态（closed = 详情页打烊横幅 + 加购/结算拦截） */
+  const shopClosed = merchant.mine && merchant.mtStatus === 'closed';
+  const shopCoupons = merchant.mine ? merchant.coupons ?? [] : [];
+  const [claimedCouponIds, setClaimedCouponIds] = useState<string[]>([]);
 
   // 点菜分区滚动跟随
   const onCatTap = (idx: number) => {
@@ -1679,6 +1705,13 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
         </div>
       </div>
 
+      {/* 商家入驻打烊横幅（自有店铺，暂停接单） */}
+      {shopClosed && (
+        <div className="relative z-10 bg-black/80 py-1.5 text-center text-[12px] text-white" data-testid="mt-shop-closed-banner">
+          店铺已打烊 · 暂停接单
+        </div>
+      )}
+
       {/* 商家信息（白底直排无面板） */}
       <div className="relative z-10 -mt-6 border-y border-black/[0.05] bg-white px-4 py-3.5">
           <div className="flex gap-3">
@@ -1705,6 +1738,37 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
             ))}
             <span className="ml-auto text-[11px] text-black/35">公告：{merchant.notice?.slice(0, 12) ?? '无'}</span>
           </div>
+          {/* 商家入驻：店铺券（可领，进「红包卡券」结算自动可用） */}
+          {shopCoupons.length > 0 && (
+            <div className="mt-2.5 flex gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="mt-shop-coupons">
+              {shopCoupons.map((c) => {
+                const got = claimedCouponIds.includes(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      if (got || !uid) return;
+                      if (mtClaimShopCoupon(uid, c, merchant.name)) {
+                        setClaimedCouponIds((p) => [...p, c.id]);
+                        onToast('已领取到「红包卡券」，结算时可用');
+                      } else {
+                        onToast('该券已领过，未使用的在卡券包里');
+                      }
+                    }}
+                    className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 ${got ? 'border-black/10 bg-black/[0.03] text-black/35' : 'border-[#FF4B33]/30 bg-[#FFF0EB] text-[#FF4B33]'} active:opacity-80`}
+                  >
+                    <span className="text-[13px] font-bold">¥{fmtMoney(c.amount)}</span>
+                    <span className="text-[10px] leading-tight">
+                      满{fmtMoney(c.min)}可用
+                      <br />
+                      {c.name} · {got ? '已领取' : '领取'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
       </div>
 
       {/* 页签（点菜/评价/商家/本店订单） */}
@@ -1972,11 +2036,11 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
                 </span>
                 <button
                   type="button"
-                  disabled={belowMin || calc.count === 0}
+                  disabled={belowMin || calc.count === 0 || shopClosed}
                   onClick={() => onCheckout()}
-                  className={`h-11 shrink-0 rounded-full px-6 text-[15px] font-semibold ${belowMin || calc.count === 0 ? 'bg-white/15 text-white/40' : 'bg-[#FFD100] text-black/90 active:opacity-85'}`}
+                  className={`h-11 shrink-0 rounded-full px-6 text-[15px] font-semibold ${belowMin || calc.count === 0 || shopClosed ? 'bg-white/15 text-white/40' : 'bg-[#FFD100] text-black/90 active:opacity-85'}`}
                 >
-                  {belowMin && calc.count > 0 ? `¥${fmtMoney(merchant.minOrder)}起送` : '去结算'}
+                  {shopClosed ? '已打烊' : belowMin && calc.count > 0 ? `¥${fmtMoney(merchant.minOrder)}起送` : '去结算'}
                 </button>
               </>
             )}
@@ -8647,6 +8711,8 @@ function MyPage({
   onOpenDrugFund,
   onOpenAddresses,
   onOpenInvoices,
+  onOpenMerchantCenter,
+  onOpenMerchantJoin,
   onClaimCoupons,
   onToast,
 }: {
@@ -8665,6 +8731,9 @@ function MyPage({
   /** 服务宫格：地址 / 开发票 */
   onOpenAddresses: () => void;
   onOpenInvoices: () => void;
+  /** 商家入驻：商家中心（管理已有店铺）/ 直接新建店铺 */
+  onOpenMerchantCenter: () => void;
+  onOpenMerchantJoin: () => void;
   onClaimCoupons: () => void;
   onToast: (m: string) => void;
 }) {
@@ -8851,8 +8920,8 @@ function MyPage({
           [MapPin, '地址', () => onOpenAddresses(), 'my-svc-address'],
           [Receipt, '开发票', () => onOpenInvoices(), 'my-svc-invoice'],
           [Heart, '我的公益', () => onToast('我的公益（演示）'), ''],
-          [Handshake, '入驻美团', () => onToast('入驻美团（演示）'), ''],
-          [Store, '添加商户', () => onToast('添加商户（演示）'), ''],
+          [Handshake, '入驻美团', () => onOpenMerchantCenter(), 'my-svc-merchant-center'],
+          [Store, '添加商户', () => onOpenMerchantJoin(), 'my-svc-merchant-join'],
           [HardHat, '工作兼职', () => onToast('工作兼职（演示）'), ''],
           [Leaf, '我的碳账户', () => onToast('我的碳账户（演示）'), ''],
           [LayoutGrid, '更多工具', () => onToast('更多工具（演示）'), ''],
@@ -11688,6 +11757,8 @@ export default function MeituanApp() {
   const [rateFor, setRateFor] = useState<MtOrder | null>(null);
   /** 找人代付详情（订单列表「代付详情」入口；只读） */
   const [proxyViewId, setProxyViewId] = useState<string | null>(null);
+  /** 商家入驻：编辑中的店铺 id（null = 新建） */
+  const [editShopId, setEditShopId] = useState<string | null>(null);
   const [toastMsg, showToast] = useLocalToast();
   const sessionRef = useRef<MtSession | null>(null);
   useEffect(() => {
@@ -11707,6 +11778,8 @@ export default function MeituanApp() {
       }
       setSession(v);
       setBooting(false);
+      // 商家入驻：登录态恢复后把本账号自有店铺重新注册进运行时注册表（详情页/搜索/AI 代点即时可用）
+      if (v) mtRegisterMyMerchants(mtLoadShops(mtUidOf(v)));
       const nav = takeNotifyNavigation('meituan');
       if (nav?.contactId && v) {
         // AI 代点草稿「确认下单」带 pay=true：目标订单仍待支付时直达收银台，否则进订单详情
@@ -11761,12 +11834,15 @@ export default function MeituanApp() {
     setSession(s);
     setTab('home');
     setPage('main');
+    mtRegisterMyMerchants(mtLoadShops(mtUidOf(s)));
     showToast(`欢迎回来，${s.name}`);
   }, [showToast]);
 
   const logout = useCallback(() => {
     mtSetSession(null);
     setSession(null);
+    // 商家入驻：退出登录后注销本账号自有店铺（防跨账号残留在搜索池/详情页）
+    mtUnregisterMyMerchants();
     setTab('home');
     setPage('main');
   }, []);
@@ -11932,6 +12008,11 @@ export default function MeituanApp() {
                 onOpenDrugFund={() => setPage('walletDrugFund')}
                 onOpenAddresses={() => goSub('addresses', 'main')}
                 onOpenInvoices={() => setPage('invoices')}
+                onOpenMerchantCenter={() => setPage('merchantCenter')}
+                onOpenMerchantJoin={() => {
+                  setEditShopId(null);
+                  setPage('merchantEdit');
+                }}
                 onClaimCoupons={() => {
                   const n = mtClaimGodCoupons(uid);
                   showToast(n > 0 ? `已领取${n}张神券，可在「红包卡券」查看` : '神券已领取过了');
@@ -11984,6 +12065,38 @@ export default function MeituanApp() {
             setCheckoutOpen(true);
           }}
           onOpenOrder={(id) => openOrder(id, 'merchant')}
+          onToast={showToast}
+        />
+      )}
+      {page === 'merchantCenter' && (
+        <MerchantCenterPage
+          session={session}
+          onBack={() => setPage('main')}
+          onCreate={() => {
+            setEditShopId(null);
+            setPage('merchantEdit');
+          }}
+          onEdit={(id) => {
+            setEditShopId(id);
+            setPage('merchantEdit');
+          }}
+          onOpenMerchant={openMerchant}
+          onChanged={() => {
+            homeFeedCache.ready = false; // 首页下次挂载重新生成，露出新店/改动
+          }}
+          onToast={showToast}
+        />
+      )}
+      {page === 'merchantEdit' && (
+        <MerchantEditPage
+          session={session}
+          editId={editShopId}
+          onBack={() => setPage('merchantCenter')}
+          onSaved={() => {
+            homeFeedCache.ready = false; // 保存/新建后首页重新生成，新店置顶露出
+            setEditShopId(null);
+            setPage('merchantCenter');
+          }}
           onToast={showToast}
         />
       )}

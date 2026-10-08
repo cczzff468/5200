@@ -224,6 +224,58 @@ export interface MtMerchant {
   /** 菜单分区 */
   sections: { cat: string; dishes: MtDish[] }[];
   reviews: MtReview[];
+  /** 商家入驻：本账号自己开的店（首页「我的小店」角标 / 详情页店铺券条） */
+  mine?: boolean;
+  /** 商家入驻：店铺优惠券（详情页可领，领取后进「红包卡券」结算可用） */
+  coupons?: MtShopCouponDef[];
+  /** 商家入驻：营业状态（缺省 open；closed = 已打烊，首页不露出、详情页暂停接单） */
+  mtStatus?: 'open' | 'closed';
+}
+
+/** 商家入驻：店铺优惠券定义（满 min 减 amount，店主自建） */
+export interface MtShopCouponDef {
+  id: string;
+  /** 券名（店铺满减券 / 新客立减券…） */
+  name: string;
+  /** 减免金额（减） */
+  amount: number;
+  /** 使用门槛（满） */
+  min: number;
+}
+
+/** 按名称自动配 emoji（商家入驻：店名/菜名无图时的兜底图），与 mtCountUnit 同风格关键词表 */
+const MT_EMOJI_RULES: [RegExp, string][] = [
+  [/奶茶|奶绿|奶昔|波霸|芝士茶|水果茶/, '🧋'],
+  [/咖啡|拿铁|美式|生椰/, '☕'],
+  [/柠檬|果茶|果汁|杨枝甘露|西柚|橙汁/, '🍋'],
+  [/可乐|雪碧|汽水|气泡水|苏打/, '🥤'],
+  [/汉堡|堡$/, '🍔'],
+  [/披萨|比萨/, '🍕'],
+  [/薯条|鸡米花|洋葱圈/, '🍟'],
+  [/炸鸡|鸡排|鸡翅|鸡腿|鸡块/, '🍗'],
+  [/蛋糕|慕斯|泡茨|泡芙|甜点|舒芙蕾|提拉米苏/, '🍰'],
+  [/麻辣烫|冒菜|麻辣香锅|火锅/, '🍲'],
+  [/粥|包|烧麦|豆浆|油条|煎饼|早茶/, '🥣'],
+  [/面|米线|粉丝|螺蛳粉/, '🍜'],
+  [/饭|煲仔|盖浇|卤肉|咖喱/, '🍛'],
+  [/串|烧烤|烤串|烤肉/, '🍢'],
+  [/寿司|刺身|日料/, '🍣'],
+  [/水果|草莓|西瓜|芒果|葡萄|橙子|奇异果/, '🍉'],
+  [/沙拉|轻食|鸡胸|牛油果/, '🥗'],
+  [/饺子|馄饨|云吞/, '🥟'],
+  [/龙虾|蟹|虾滑|海鲜/, '🦐'],
+  [/牛排|牛肉/, '🥩'],
+  [/面包|吐司|三明治|贝果|可颂/, '🥪'],
+  [/玉米|红薯|紫薯/, '🌽'],
+];
+
+export function mtAutoEmoji(name: string): string {
+  const n = name.trim();
+  if (!n) return '🍽️';
+  for (const [re, e] of MT_EMOJI_RULES) {
+    if (re.test(n)) return e;
+  }
+  return '🍽️';
 }
 
 /** 商家筛选分类（分类宫格映射到商家池用） */
@@ -1380,6 +1432,25 @@ export function mtRegisterAiMerchant(m: MtMerchant): void {
   AI_MERCHANTS.set(m.id, m);
 }
 
+/** 商家入驻：批量注册当前账号的自有店铺（App 启动恢复 / 保存后即时生效，同 id 覆盖） */
+export function mtRegisterMyMerchants(list: MtMerchant[]): void {
+  for (const m of list) {
+    if (m.id.startsWith('my-shop-')) AI_MERCHANTS.set(m.id, m);
+  }
+}
+
+/** 商家入驻：注销单个自有店铺（删除店铺时调用） */
+export function mtUnregisterMerchant(id: string): void {
+  if (id.startsWith('my-shop-')) AI_MERCHANTS.delete(id);
+}
+
+/** 商家入驻：注销全部自有店铺（退出登录/切换账号时调用，防止跨账号残留搜索池） */
+export function mtUnregisterMyMerchants(): void {
+  for (const id of [...AI_MERCHANTS.keys()]) {
+    if (id.startsWith('my-shop-')) AI_MERCHANTS.delete(id);
+  }
+}
+
 /** 注册 AI 生成的团购（同 id 覆盖） */
 export function mtRegisterAiDeal(d: MtDeal): void {
   AI_DEALS.set(d.id, d);
@@ -1400,9 +1471,9 @@ export function mtDealOf(id: string): MtDeal | undefined {
   return AI_DEALS.get(id) ?? MT_DEALS.find((d) => d.id === id);
 }
 
-/** 菜品全局索引（搜索用） */
+/** 菜品全局索引（搜索用；含 AI 注册表 → 商家入驻的菜品也能搜到） */
 export function mtFindDish(id: string): { merchant: MtMerchant; dish: MtDish } | undefined {
-  for (const m of MT_MERCHANTS) {
+  for (const m of mtAllMerchants()) {
     for (const sec of m.sections) {
       const d = sec.dishes.find((x) => x.id === id);
       if (d) return { merchant: m, dish: d };

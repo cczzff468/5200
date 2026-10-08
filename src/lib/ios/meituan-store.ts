@@ -13,7 +13,7 @@ import { accLs, getActiveAccountFor, isForceLoginWallActive } from '@/lib/ios/ac
 import { getContact, listContacts } from '@/lib/ios/contacts-store';
 import type { ContactRecord } from '@/lib/contacts';
 import { avatarFor } from '@/lib/contacts';
-import { MT_COUPON_SEED, MT_COUPON_TYPE_LABEL, MT_GOD_CLAIMS, MT_DEALS, MT_MERCHANTS, mtDishesOf, type MtCouponSeed, type MtCouponType, type MtMerchant } from './meituan-data';
+import { MT_COUPON_SEED, MT_COUPON_TYPE_LABEL, MT_GOD_CLAIMS, MT_DEALS, MT_MERCHANTS, mtDishesOf, type MtCouponSeed, type MtCouponType, type MtMerchant, type MtShopCouponDef } from './meituan-data';
 
 // ---------------- 登录态 ----------------
 
@@ -1062,6 +1062,62 @@ export const mtCouponTypeLabel = (t: MtCouponType): string => MT_COUPON_TYPE_LAB
 
 /** 种子类型再导出（UI 层构造用） */
 export type { MtCouponSeed };
+
+// ---------------- 商家入驻（我的店铺，按账号隔离） ----------------
+
+/** 店铺券类型从 data 层再导出（入驻表单/商家中心用） */
+export type { MtShopCouponDef } from './meituan-data';
+
+const shopsKey = (uid: string) => `mt-shops:${uid}`;
+
+/** 读当前账号的自有店铺（无则空数组；容错过滤残缺数据） */
+export function mtLoadShops(uid: string): MtMerchant[] {
+  const list = kvGet<Partial<MtMerchant>[]>(shopsKey(uid));
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (m): m is MtMerchant =>
+      Boolean(m) &&
+      typeof (m as MtMerchant).id === 'string' &&
+      typeof (m as MtMerchant).name === 'string' &&
+      Array.isArray((m as MtMerchant).sections)
+  );
+}
+
+/** 写当前账号的自有店铺（全量覆盖） */
+export function mtSaveShops(uid: string, list: MtMerchant[]): void {
+  kvSet(shopsKey(uid), list);
+}
+
+/** 按 id 查当前账号的自有店铺 */
+export function mtGetShop(uid: string, id: string): MtMerchant | undefined {
+  return mtLoadShops(uid).find((s) => s.id === id);
+}
+
+/**
+ * 领取店铺优惠券：写入「红包卡券」（外卖类型，结算选择弹窗自动可用）。
+ * 同名同面额未使用的券不重复发；返回是否新领到。
+ */
+export function mtClaimShopCoupon(uid: string, coupon: MtShopCouponDef, shopName: string): boolean {
+  const cur = mtLoadCoupons(uid);
+  const name = `【${shopName}】${coupon.name}`;
+  if (cur.some((c) => c.name === name && c.amount === coupon.amount && !c.usedAt)) return false;
+  const now = Date.now();
+  const next: MtCoupon[] = [
+    {
+      id: `cp${now.toString(36)}s${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      type: 'waimai',
+      god: false,
+      amount: coupon.amount,
+      min: coupon.min,
+      expireAt: now + 7 * 86_400_000,
+      obtainedAt: now,
+    },
+    ...cur,
+  ];
+  mtSaveCoupons(uid, next);
+  return true;
+}
 
 // ---------------- 美团钱包（余额/银行卡/账单/支付密码，按账号隔离） ----------------
 
