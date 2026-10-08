@@ -1469,3 +1469,137 @@ export function mtRepayLoanAll(uid: string, loanId: string): { ok: boolean; erro
   mtPushWalletBill(uid, { kind: 'repay', title: '还款', amount: -remain, at: Date.now(), card: '一次还清 · 美团余额' });
   return { ok: true };
 }
+
+// ---------------- 我的卡额度（美团联名卡） ----------------
+
+export interface MtCardQuota {
+  /** 是否已申领获批 */
+  applied: boolean;
+  /** 获批总额度（元） */
+  total: number;
+  appliedAt: number;
+}
+
+const cardQuotaKey = (uid: string) => `mt-card-quota:${uid}`;
+
+export function mtLoadCardQuota(uid: string): MtCardQuota {
+  const d = kvGet<Partial<MtCardQuota>>(cardQuotaKey(uid));
+  if (d && typeof d === 'object' && d.applied === true && typeof d.total === 'number') {
+    return { applied: true, total: d.total, appliedAt: typeof d.appliedAt === 'number' ? d.appliedAt : Date.now() };
+  }
+  return { applied: false, total: 0, appliedAt: 0 };
+}
+
+/** 免费申领：模拟审批，随机获批 19,800 ~ 99,800（取整到百） */
+export function mtApplyCardQuota(uid: string): MtCardQuota {
+  const total = (198 + Math.floor(Math.random() * 801)) * 100;
+  const next: MtCardQuota = { applied: true, total, appliedAt: Date.now() };
+  kvSet(cardQuotaKey(uid), next);
+  return next;
+}
+
+/** 已用额度：钱包账单里银行卡支付消费（card 字段含「尾号」的 pay 账单）累计 */
+export function mtCardQuotaUsed(uid: string): number {
+  return Math.round(
+    mtLoadWalletBills(uid)
+      .filter((b) => b.kind === 'pay' && (b.card ?? '').includes('尾号'))
+      .reduce((s, b) => s + Math.abs(b.amount), 0) * 100
+  ) / 100;
+}
+
+/** 可用额度 = 总额度 - 已用（不小于 0） */
+export function mtCardQuotaAvailable(uid: string): number {
+  const q = mtLoadCardQuota(uid);
+  return Math.max(0, Math.round((q.total - mtCardQuotaUsed(uid)) * 100) / 100);
+}
+
+// ---------------- 购药抵扣金 ----------------
+
+export interface MtDrugFundRecord {
+  id: string;
+  title: string;
+  /** 正数=获得，负数=使用 */
+  amount: number;
+  at: number;
+}
+
+export interface MtDrugFund {
+  activated: boolean;
+  activatedAt: number;
+  balance: number;
+  records: MtDrugFundRecord[];
+}
+
+const drugFundKey = (uid: string) => `mt-drug-fund:${uid}`;
+
+export function mtLoadDrugFund(uid: string): MtDrugFund {
+  const d = kvGet<Partial<MtDrugFund>>(drugFundKey(uid));
+  if (d && typeof d === 'object' && d.activated === true) {
+    return {
+      activated: true,
+      activatedAt: typeof d.activatedAt === 'number' ? d.activatedAt : Date.now(),
+      balance: typeof d.balance === 'number' ? d.balance : 0,
+      records: Array.isArray(d.records) ? d.records : [],
+    };
+  }
+  return { activated: false, activatedAt: 0, balance: 0, records: [] };
+}
+
+/** 激活：到账 ¥3.00 抵扣金（记一笔获得明细） */
+export function mtActivateDrugFund(uid: string): MtDrugFund {
+  const cur = mtLoadDrugFund(uid);
+  if (cur.activated) return cur;
+  const rec: MtDrugFundRecord = { id: `df${Date.now().toString(36)}`, title: '新用户专享 激活到账', amount: 3, at: Date.now() };
+  const next: MtDrugFund = { activated: true, activatedAt: Date.now(), balance: 3, records: [rec] };
+  kvSet(drugFundKey(uid), next);
+  return next;
+}
+
+/** 使用抵扣金（购药订单支付时抵扣；amount > 0，自动不超过余额） */
+export function mtUseDrugFund(uid: string, amount: number, title: string): MtDrugFund {
+  const cur = mtLoadDrugFund(uid);
+  if (!cur.activated) return cur;
+  const use = Math.min(cur.balance, Math.round(amount * 100) / 100);
+  if (use <= 0) return cur;
+  const rec: MtDrugFundRecord = { id: `df${Date.now().toString(36)}`, title, amount: -use, at: Date.now() };
+  const next: MtDrugFund = { ...cur, balance: Math.round((cur.balance - use) * 100) / 100, records: [rec, ...cur.records] };
+  kvSet(drugFundKey(uid), next);
+  return next;
+}
+
+// ---------------- 开发票 ----------------
+
+export interface MtInvoice {
+  id: string;
+  orderId: string;
+  merchantName: string;
+  amount: number;
+  /** 抬头类型 */
+  type: '个人' | '单位';
+  /** 抬头名称 */
+  title: string;
+  /** 单位税号 */
+  taxNo?: string;
+  /** 接收邮箱 */
+  email: string;
+  status: '开票中' | '已开票';
+  at: number;
+}
+
+const invoicesKey = (uid: string) => `mt-invoices:${uid}`;
+
+export function mtLoadInvoices(uid: string): MtInvoice[] {
+  const arr = kvGet<MtInvoice[]>(invoicesKey(uid));
+  return Array.isArray(arr) ? arr : [];
+}
+
+export function mtSaveInvoices(uid: string, list: MtInvoice[]): void {
+  kvSet(invoicesKey(uid), list);
+}
+
+/** 新开发票（插到最前） */
+export function mtAddInvoice(uid: string, inv: Omit<MtInvoice, 'id' | 'at' | 'status'>): MtInvoice {
+  const full: MtInvoice = { ...inv, id: `inv${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, status: '已开票', at: Date.now() };
+  mtSaveInvoices(uid, [full, ...mtLoadInvoices(uid)]);
+  return full;
+}

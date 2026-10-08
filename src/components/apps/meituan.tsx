@@ -139,8 +139,13 @@ import ShangouChannelPage from './meituan-shangou';
 import { useSettings, useUI } from '@/lib/ios/store';
 import {
   mtAddBankCard,
+  mtAddInvoice,
+  mtActivateDrugFund,
+  mtApplyCardQuota,
   mtApplyRefund,
   mtCanRefund,
+  mtCardQuotaAvailable,
+  mtCardQuotaUsed,
   mtCancelWithRefund,
   mtCheckoutCalc,
   mtClaimGodCoupons,
@@ -153,7 +158,6 @@ import {
   mtGetOrder,
   mtGetSearchHist,
   mtGetSession,
-  mtAnyIdpLoggedIn,
   mtApplyLoanCredit,
   mtBorrow,
   mtIdpLoggedIn,
@@ -169,6 +173,9 @@ import {
   mtLoadCoupons,
   mtLoadFavs,
   mtLoadHistory,
+  mtLoadCardQuota,
+  mtLoadDrugFund,
+  mtLoadInvoices,
   mtLoadLoanAccount,
   mtLoadLoans,
   mtLoadOrders,
@@ -198,6 +205,7 @@ import {
   mtStatusBody,
   mtUidOf,
   mtUseCoupon,
+  mtUseDrugFund,
   mtUrgeOrder,
   mtValidateSession,
   mtWalletRecharge,
@@ -212,6 +220,7 @@ import {
   type MtCart,
   type MtCoupon,
   type MtFavs,
+  type MtInvoice,
   type MtHistItem,
   type MtLoan,
   type MtLoanAccount,
@@ -221,14 +230,16 @@ import {
   type MtWalletBill,
 } from '@/lib/ios/meituan-store';
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
+import { WxPayPwdGate, wxLoadPayPwd } from './wechat-wallet';
+import { PayPwdGate as QqPayPwdGate, loadPayPwd as qqLoadPayPwd } from './qq';
 import { mtCreateProxyRequest } from '@/lib/ios/mt-proxy-pay';
 import { mtCreateOrderShare } from '@/lib/ios/mt-order-share';
 import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
-import { listContacts } from '@/lib/ios/contacts-store';
+import { listContacts, loginQQ, loginWechat } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
 
-type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan';
+type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices';
 type Tab = 'home' | 'orders' | 'cart' | 'my';
 
 const MT_YELLOW = '#FFD100';
@@ -385,33 +396,28 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
   const [agree, setAgree] = useState(true);
   const [auth, setAuth] = useState<{ idp: 'wx' | 'qq'; contactId: string; name: string; avatar: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState<'pwd' | 'code'>('pwd');
-  const [phone, setPhone] = useState('');
+  // 账号密码登录：先选登录方式（微信/QQ）→ 输入对应账号 + 密码
+  const [idp, setIdp] = useState<'wx' | 'qq' | null>(null);
+  const [account, setAccount] = useState('');
   const [pwd, setPwd] = useState('');
-  const [code, setCode] = useState('');
-  const [cd, setCd] = useState(0);
+  const [pwdErr, setPwdErr] = useState('');
 
-  useEffect(() => {
-    if (cd <= 0) return;
-    const t = setTimeout(() => setCd((c) => c - 1), 1000);
-    return () => clearTimeout(t);
-  }, [cd]);
-
-  const tapIdp = async (idp: 'wx' | 'qq') => {
+  /** 底部一键登录（授权卡流程，与微信/QQ App 登录态联动） */
+  const tapIdp = async (v: 'wx' | 'qq') => {
     if (busy) return;
     if (!agree) {
       onToast('请先阅读并同意《美团用户协议》和《隐私政策》');
       return;
     }
     // 登录态联动（需求：微信/QQ 没有登录时美团就登录不了）：对应授权源未在线 → 拦截并引导
-    if (!mtIdpLoggedIn(idp)) {
-      onToast(idp === 'wx' ? '微信尚未登录，请先登录微信后再试' : 'QQ尚未登录，请先登录QQ后再试');
+    if (!mtIdpLoggedIn(v)) {
+      onToast(v === 'wx' ? '微信尚未登录，请先登录微信后再试' : 'QQ尚未登录，请先登录QQ后再试');
       return;
     }
     setBusy(true);
     try {
-      const id = await mtResolveIdpIdentity(idp);
-      setAuth({ idp, contactId: id.contactId, name: id.name, avatar: id.avatar });
+      const id = await mtResolveIdpIdentity(v);
+      setAuth({ idp: v, contactId: id.contactId, name: id.name, avatar: id.avatar });
     } finally {
       setBusy(false);
     }
@@ -428,44 +434,60 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
     }
   };
 
-  const sendCode = () => {
-    if (!/^1\d{10}$/.test(phone)) {
-      onToast('请输入正确的手机号');
-      return;
-    }
-    setCd(60);
-    onToast('验证码：246810（演示）');
+  /** 选择登录方式（再次点击可取消选择），切换时清空输入与错误提示 */
+  const pickIdp = (v: 'wx' | 'qq') => {
+    if (busy) return;
+    setPwdErr('');
+    setIdp((cur) => (cur === v ? null : v));
+    setAccount('');
+    setPwd('');
   };
 
-  const phoneLogin = () => {
+  /** 账号密码登录：校验对应微信/QQ 的真实账号密码（与微信/QQ App 同源校验） */
+  const pwdLogin = async () => {
+    if (busy || !idp) return;
     if (!agree) {
       onToast('请先阅读并同意《美团用户协议》和《隐私政策》');
       return;
     }
-    // 登录态联动：微信/QQ 都不在线时美团整体登录不了（手机号登录同样拦截，引导先登录微信/QQ）
-    if (!mtAnyIdpLoggedIn()) {
-      onToast('请先登录微信或QQ后使用美团');
+    // 登录态联动：对应授权源 App 未在线 → 拦截并引导
+    if (!mtIdpLoggedIn(idp)) {
+      onToast(idp === 'wx' ? '微信尚未登录，请先登录微信后再试' : 'QQ尚未登录，请先登录QQ后再试');
       return;
     }
-    if (!/^1\d{10}$/.test(phone)) {
-      onToast('请输入正确的手机号');
+    const acc = account.trim();
+    if (!acc) {
+      onToast(idp === 'wx' ? '请输入微信号/QQ号/手机号' : '请输入QQ号');
       return;
     }
-    if (mode === 'pwd') {
-      if (pwd.length < 6 || pwd.length > 16) {
-        onToast('请输入 6-16 位密码');
-        return;
-      }
-    } else {
-      if (code !== '246810') {
-        onToast('验证码错误，请重新输入');
-        return;
-      }
+    if (!pwd) {
+      onToast('请输入密码');
+      return;
     }
-    onLogin({ idp: 'phone', phone, name: `用户${phone.slice(-4)}`, avatar: null, loginAt: Date.now() });
+    setBusy(true);
+    setPwdErr('');
+    try {
+      const res = idp === 'wx' ? await loginWechat('wechat', acc, pwd) : await loginQQ('account', acc, pwd);
+      if (!res.ok) {
+        setPwdErr(res.error);
+        return;
+      }
+      // 一致性校验：输入的账号必须与当前微信/QQ App 在线的账号一致（美团登录态跟随对应 App 会话）
+      const cur = await mtResolveIdpIdentity(idp);
+      if (cur.contactId && res.user.id !== cur.contactId) {
+        const msg = idp === 'wx' ? '该账号与当前微信登录的账号不一致，请切换微信账号后再试' : '该账号与当前QQ登录的账号不一致，请切换QQ账号后再试';
+        setPwdErr(msg);
+        return;
+      }
+      onLogin({ idp, contactId: res.user.id, name: res.user.name, avatar: res.user.avatar, loginAt: Date.now() });
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const loginReady = /^1\d{10}$/.test(phone) && (mode === 'pwd' ? pwd.length >= 6 : code.length === 6);
+  const idpName = idp === 'wx' ? '微信' : 'QQ';
+  const idpBrand = idp === 'wx' ? '#07C160' : '#12B7F5';
+  const pwdReady = account.trim().length > 0 && pwd.length > 0;
 
   return (
     <div className="relative flex h-full flex-col overflow-y-auto bg-white">
@@ -491,55 +513,83 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
         </button>
       </div>
 
-      <p className="mt-12 px-6 text-[30px] font-bold tracking-wide text-black/90">欢迎登录美团</p>
+      <p className="mt-10 px-6 text-[30px] font-bold tracking-wide text-black/90">欢迎登录美团</p>
+      <p className="mt-2 px-6 text-[13px] text-black/40">请选择登录方式，使用账号和密码登录</p>
 
-      {/* 输入区 */}
-      <div className="mt-10 space-y-4 px-6">
-        <div className="flex h-[54px] items-center gap-2 rounded-full bg-[#F5F6F7] px-5">
-          <button type="button" onClick={() => onToast('仅支持 +86（演示）')} className="flex shrink-0 items-center gap-1 text-[16px] font-medium text-black/85">
-            +86
-            <ChevronRight className="h-3.5 w-3.5 rotate-90 text-black/50" />
-          </button>
-          <input
-            value={phone}
-            onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))}
-            inputMode="numeric"
-            placeholder="请输入手机号"
-            className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-black/30"
-          />
-        </div>
+      {/* 选择登录方式：微信 / QQ 两张可选卡 */}
+      <div className="mt-7 grid grid-cols-2 gap-3 px-6">
+        {(
+          [
+            ['wx', '/icons/wechat.png', '微信登录', '#07C160'],
+            ['qq', '/icons/qq.png', 'QQ登录', '#12B7F5'],
+          ] as ['wx' | 'qq', string, string, string][]
+        ).map(([v, img, label, brand]) => {
+          const on = idp === v;
+          return (
+            <button
+              key={v}
+              type="button"
+              data-testid={`login-pick-${v}`}
+              onClick={() => pickIdp(v)}
+              className={`relative flex items-center gap-2.5 rounded-2xl border-2 bg-white px-4 py-3.5 text-left transition-colors active:opacity-80 ${on ? 'shadow-[0_4px_14px_rgba(0,0,0,0.06)]' : 'border-black/[0.08]'}`}
+              style={on ? { borderColor: brand } : undefined}
+            >
+              <img src={img} alt="" className="h-10 w-10 shrink-0 rounded-xl" />
+              <span className="min-w-0">
+                <span className="block truncate text-[15px] font-semibold text-black/85">{label}</span>
+                <span className="block text-[10.5px] text-black/35">{on ? '账号密码登录' : '点击选择'}</span>
+              </span>
+              {on && (
+                <span className="absolute -right-1.5 -top-1.5 grid h-[20px] w-[20px] place-items-center rounded-full text-white" style={{ background: brand }}>
+                  <Check className="h-3 w-3" strokeWidth={3.2} />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
 
-        {mode === 'pwd' ? (
-          <div className="flex h-[54px] items-center gap-2 rounded-full bg-[#F5F6F7] px-5">
+      {/* 账号密码输入区（选择登录方式后出现） */}
+      {idp && (
+        <div className="mt-5 space-y-3.5 px-6" data-testid="login-pwd-form">
+          <div className="flex h-[52px] items-center gap-2 rounded-full bg-[#F5F6F7] px-5">
+            <span className="w-[64px] shrink-0 text-[15px] text-black/45">账号</span>
+            <input
+              value={account}
+              onChange={(e) => {
+                setAccount(e.target.value);
+                setPwdErr('');
+              }}
+              autoCapitalize="none"
+              autoCorrect="off"
+              placeholder={idp === 'wx' ? '微信号 / QQ号 / 手机号' : 'QQ号'}
+              className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-black/30"
+            />
+            <img src={idp === 'wx' ? '/icons/wechat.png' : '/icons/qq.png'} alt="" className="h-5 w-5 shrink-0 rounded" />
+          </div>
+          <div className="flex h-[52px] items-center gap-2 rounded-full bg-[#F5F6F7] px-5">
+            <span className="w-[64px] shrink-0 text-[15px] text-black/45">密码</span>
             <input
               value={pwd}
-              onChange={(e) => setPwd(e.target.value.slice(0, 16))}
+              onChange={(e) => {
+                setPwd(e.target.value);
+                setPwdErr('');
+              }}
               type="password"
-              placeholder="请输入密码"
+              placeholder={`请输入${idpName}密码`}
               className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-black/30"
             />
-            <EyeOff className="h-5 w-5 shrink-0 text-black/60" />
+            <EyeOff className="h-5 w-5 shrink-0 text-black/50" />
           </div>
-        ) : (
-          <div className="flex h-[54px] items-center gap-2 rounded-full bg-[#F5F6F7] px-5">
-            <input
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              inputMode="numeric"
-              placeholder="请输入验证码"
-              className="h-full min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-black/30"
-            />
-            <button
-              type="button"
-              onClick={sendCode}
-              disabled={cd > 0}
-              className="shrink-0 rounded-full border border-[#FFC300] px-3 py-1.5 text-[12px] font-medium text-[#B77900] active:opacity-70 disabled:opacity-50"
-            >
-              {cd > 0 ? `${cd}s 后重发` : '获取验证码'}
+          {pwdErr && <p className="px-2 text-[12px] text-[#FF4B33]" data-testid="login-pwd-err">{pwdErr}</p>}
+          <div className="flex items-center justify-between px-2">
+            <p className="text-[12px] text-black/35">密码与{idpName}App登录密码一致</p>
+            <button type="button" onClick={() => onToast('密码找回：请到「联系人」App 查看账号密码')} className="text-[12px] text-black/45 active:opacity-60">
+              忘记密码？
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* 协议 */}
       <button type="button" onClick={() => setAgree((a) => !a)} className="mt-5 flex items-center gap-2 px-6 text-left">
@@ -551,50 +601,48 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
         </span>
       </button>
 
-      {/* 登录按钮（未就绪淡黄 → 就绪美团黄） */}
+      {/* 登录按钮（未选方式/未就绪淡黄 → 就绪美团黄） */}
       <div className="mt-5 px-6">
         <button
           type="button"
-          onClick={phoneLogin}
-          className={`h-[52px] w-full rounded-full text-[17px] font-medium active:opacity-85 ${loginReady ? 'bg-[#FFD100] text-black/90' : 'bg-[#F6EC9F] text-black/45'}`}
+          data-testid="login-pwd-submit"
+          onClick={() => void pwdLogin()}
+          disabled={!idp || busy}
+          className={`h-[52px] w-full rounded-full text-[17px] font-medium active:opacity-85 ${idp && pwdReady ? 'bg-[#FFD100] text-black/90 shadow-[0_4px_14px_rgba(255,209,0,0.3)]' : 'bg-[#F6EC9F] text-black/45'} disabled:opacity-70`}
         >
-          登录
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setMode(mode === 'pwd' ? 'code' : 'pwd');
-            setPwd('');
-            setCode('');
-          }}
-          className="mx-auto mt-6 block text-[15px] text-black/65 active:opacity-60"
-        >
-          {mode === 'pwd' ? '验证码登录' : '密码登录'}
+          {busy ? '登录中…' : idp ? `${idpName}账号登录` : '请先选择登录方式'}
         </button>
       </div>
 
-      {/* 底部三方登录 */}
-      <div className="mt-auto flex items-center justify-center gap-10 pb-[max(30px,env(safe-area-inset-bottom))] pt-10">
-        <button type="button" aria-label="微信一键登录" onClick={() => void tapIdp('wx')} disabled={busy} className="flex flex-col items-center gap-1.5 active:opacity-70">
-          <span className="grid h-[52px] w-[52px] place-items-center overflow-hidden rounded-full bg-[#07C160] shadow-sm">
-            <img src="/icons/wechat.png" alt="" className="h-full w-full rounded-full object-cover" />
-          </span>
-          <span className="text-[10px] text-black/40">微信</span>
-        </button>
-        <button type="button" onClick={() => onToast('数字身份登录暂未开通，试试微信/QQ')} className="flex flex-col items-center gap-1.5 active:opacity-70">
-          <span className="grid h-[52px] w-[52px] place-items-center rounded-full bg-[#F0412E] text-center text-[11px] font-semibold leading-[1.15] text-white shadow-sm">
-            数字
-            <br />
-            身份
-          </span>
-          <span className="text-[10px] text-black/40">数字身份</span>
-        </button>
-        <button type="button" aria-label="QQ一键登录" onClick={() => void tapIdp('qq')} disabled={busy} className="flex flex-col items-center gap-1.5 active:opacity-70">
-          <span className="grid h-[52px] w-[52px] place-items-center overflow-hidden rounded-full bg-[#12B7F5] shadow-sm">
-            <img src="/icons/qq.png" alt="" className="h-full w-full rounded-full object-cover" />
-          </span>
-          <span className="text-[10px] text-black/40">QQ</span>
-        </button>
+      {/* 底部三方一键登录 */}
+      <div className="mt-auto pb-[max(30px,env(safe-area-inset-bottom))] pt-9">
+        <div className="mb-4 flex items-center gap-3 px-10">
+          <span className="h-px flex-1 bg-black/[0.08]" />
+          <span className="text-[11px] text-black/35">一键登录（免输入）</span>
+          <span className="h-px flex-1 bg-black/[0.08]" />
+        </div>
+        <div className="flex items-center justify-center gap-10">
+          <button type="button" aria-label="微信一键登录" data-testid="login-onetap-wx" onClick={() => void tapIdp('wx')} disabled={busy} className="flex flex-col items-center gap-1.5 active:opacity-70">
+            <span className="grid h-[52px] w-[52px] place-items-center overflow-hidden rounded-full bg-[#07C160] shadow-sm">
+              <img src="/icons/wechat.png" alt="" className="h-full w-full rounded-full object-cover" />
+            </span>
+            <span className="text-[10px] text-black/40">微信一键登录</span>
+          </button>
+          <button type="button" onClick={() => onToast('数字身份登录暂未开通，试试微信/QQ')} className="flex flex-col items-center gap-1.5 active:opacity-70">
+            <span className="grid h-[52px] w-[52px] place-items-center rounded-full bg-[#F0412E] text-center text-[11px] font-semibold leading-[1.15] text-white shadow-sm">
+              数字
+              <br />
+              身份
+            </span>
+            <span className="text-[10px] text-black/40">数字身份</span>
+          </button>
+          <button type="button" aria-label="QQ一键登录" data-testid="login-onetap-qq" onClick={() => void tapIdp('qq')} disabled={busy} className="flex flex-col items-center gap-1.5 active:opacity-70">
+            <span className="grid h-[52px] w-[52px] place-items-center overflow-hidden rounded-full bg-[#12B7F5] shadow-sm">
+              <img src="/icons/qq.png" alt="" className="h-full w-full rounded-full object-cover" />
+            </span>
+            <span className="text-[10px] text-black/40">QQ一键登录</span>
+          </button>
+        </div>
       </div>
 
       {auth && (
@@ -2035,10 +2083,15 @@ function PayPage({
   // 美团支付（真实钱包数据）：余额 + 银行卡列表，与 微信/QQ 渠道二选一
   const [wallet, setWallet] = useState(() => mtLoadWallet(uid));
   const [cards, setCards] = useState(() => mtLoadBankCards(uid));
+  // 购药抵扣金（看病买药商家订单可用，自动抵扣）
+  const [fund, setFund] = useState(() => mtLoadDrugFund(uid));
+  const [useDrug, setUseDrug] = useState(true);
   // selMt: 'balance'=美团余额 / 银行卡id / null=未选（替代旧的演示 selBank）
   const [selMt, setSelMt] = useState<'balance' | string | null>(null);
-  // 余额支付密码验证浮层（开启支付密码后，余额支付前先验证）
-  const [pwdGate, setPwdGate] = useState(false);
+  // 余额/银行卡支付密码验证浮层（开启美团支付密码后，美团支付前先验证）
+  const [pwdGate, setPwdGate] = useState<null | 'balance' | 'card'>(null);
+  // 微信/QQ 渠道支付密码验证浮层（对应 App 开启了支付密码时：美团里用微信支付验微信密码，QQ 同理，三者相互独立）
+  const [idpGate, setIdpGate] = useState<'wx' | 'qq' | null>(null);
   const [idp, setIdp] = useState<'wx' | 'qq' | null>(null);
   const [chans, setChans] = useState<MtPayChannel[] | null>(null);
   const [chanKey, setChanKey] = useState<string | null>(null);
@@ -2063,11 +2116,21 @@ function PayPage({
   // 选中工商银行储蓄卡 → 立减（其余方式原价）；余额/其他卡按原价
   const selCard = selMt && selMt !== 'balance' ? (cards.find((c) => c.id === selMt) ?? null) : null;
   const icbcOff = selCard?.bank === '中国工商银行' ? Math.min(ICBC_OFF, order.total) : 0;
-  const payAmount = Math.max(0.01, Math.round((order.total - icbcOff) * 100) / 100);
-  /** 各卡需覆盖的金额（工行卡按立减后口径） */
+  // 购药抵扣金：看病买药商家 + 已激活且有余额 → 自动抵扣（最多抵到 0.01 元）
+  const isPharmacy = mtMerchantOf(order.merchantId)?.cats.includes('maiyao') ?? false;
+  const drugAvail = fund.activated && fund.balance > 0 ? fund.balance : 0;
+  const drugOff = isPharmacy && drugAvail > 0 && useDrug ? Math.min(drugAvail, Math.max(0, Math.round((order.total - icbcOff - 0.01) * 100) / 100)) : 0;
+  const payAmount = Math.max(0.01, Math.round((order.total - icbcOff - drugOff) * 100) / 100);
+  /** 各卡需覆盖的金额（工行卡按立减后口径，抵扣金对全部方式生效） */
   const cardNeed = (c: MtBankCard) =>
-    Math.max(0.01, Math.round((order.total - (c.bank === '中国工商银行' ? Math.min(ICBC_OFF, order.total) : 0)) * 100) / 100);
-  const balanceOk = wallet.balance >= order.total;
+    Math.max(0.01, Math.round((order.total - (c.bank === '中国工商银行' ? Math.min(ICBC_OFF, order.total) : 0) - drugOff) * 100) / 100);
+  const balanceOk = wallet.balance >= payAmount;
+  /** 支付成功后核销抵扣金（记一笔使用明细） */
+  const consumeDrugFund = () => {
+    if (drugOff <= 0) return;
+    mtUseDrugFund(uid, drugOff, `购药抵扣 · ${order.merchantName}`);
+    setFund(mtLoadDrugFund(uid));
+  };
 
   // 展开微信/QQ → 拉取渠道（余额/额度预检）；展开时自动选中首个可用渠道（对齐真机）
   useEffect(() => {
@@ -2150,15 +2213,16 @@ function PayPage({
       return;
     }
     const cur = mtLoadWallet(uid);
-    if (cur.balance < order.total) {
+    if (cur.balance < payAmount) {
       setWallet(cur);
       setErr('余额不足，请先充值或更换支付方式');
       setState('fail');
       return;
     }
-    mtSaveWallet(uid, { balance: Math.round((cur.balance - order.total) * 100) / 100 });
+    mtSaveWallet(uid, { balance: Math.round((cur.balance - payAmount) * 100) / 100 });
     setWallet(mtLoadWallet(uid));
-    finishPay('美团支付 · 余额', 0, order.total, 'mt-balance');
+    consumeDrugFund();
+    finishPay(`美团支付 · 余额${drugOff > 0 ? '（抵扣金已抵）' : ''}`, icbcOff + drugOff, payAmount, 'mt-balance');
   };
 
   /** 美团支付·银行卡扣款（真实扣卡内余额；工行卡享立减） */
@@ -2174,7 +2238,7 @@ function PayPage({
       return;
     }
     const off = card.bank === '中国工商银行' ? Math.min(ICBC_OFF, order.total) : 0;
-    const amt = Math.max(0.01, Math.round((order.total - off) * 100) / 100);
+    const amt = cardNeed(card);
     const cur = mtLoadBankCards(uid).find((c) => c.id === card.id);
     if (!cur || cur.balance < amt) {
       setCards(mtLoadBankCards(uid));
@@ -2188,7 +2252,8 @@ function PayPage({
     );
     setCards(mtLoadBankCards(uid));
     mtPushWalletBill(uid, { kind: 'pay', title: '消费', amount: -amt, at: Date.now(), card: `${card.bank} 尾号${card.tail}` });
-    finishPay(`美团支付 · ${card.bank}尾号${card.tail}${off > 0 ? `（已立减${fmtMoney(off)}元）` : ''}`, off, undefined, `mt-card:${card.id}`);
+    consumeDrugFund();
+    finishPay(`美团支付 · ${card.bank}尾号${card.tail}${off + drugOff > 0 ? `（已优惠${fmtMoney(off + drugOff)}元）` : ''}`, off + drugOff, undefined, `mt-card:${card.id}`);
   };
 
   const confirm = async () => {
@@ -2196,7 +2261,7 @@ function PayPage({
     if (selMt === 'balance') {
       // 美团支付·余额：开启支付密码 → 先验证再扣款
       if (mtLoadPayPwd(uid).enabled) {
-        setPwdGate(true);
+        setPwdGate('balance');
         return;
       }
       await payWithBalance();
@@ -2205,45 +2270,69 @@ function PayPage({
     if (selMt && selMt !== 'balance') {
       const card = cards.find((c) => c.id === selMt);
       if (card) {
+        // 美团支付·银行卡：开启支付密码同样先验证（美团支付密码独立于微信/QQ）
+        if (mtLoadPayPwd(uid).enabled) {
+          setPwdGate('card');
+          return;
+        }
         await payWithCard(card);
         return;
       }
     }
     if (chan) {
-      setErr('');
-      setState('processing');
-      await new Promise((r) => setTimeout(r, 1100));
-      const randomFail = tried === 0 && Math.random() < 0.12;
-      setTried((t) => t + 1);
-      const res = await mtExecutePay(chan.idp, chan, order.total, order.merchantName, randomFail);
-      if (!res.ok) {
-        setErr(res.error ?? '支付失败，请重试');
-        setState('fail');
+      // 独立支付密码：用微信支付 → 校验微信支付密码；用QQ支付 → 校验QQ支付密码
+      // （三者相互独立：微信设 123456 就输 123456，美团设 000000 互不影响）
+      if (chan.idp === 'wx' && wxLoadPayPwd().enabled) {
+        setIdpGate('wx');
         return;
       }
-      const now = Date.now();
-      const tuangouDone = order.kind === 'tuangou';
-      const paid: MtOrder = {
-        ...order,
-        status: tuangouDone ? 'completed' : 'pendingAccept',
-        paidAt: now,
-        // 团购单：支付后=待使用（券码页出示券码核销）
-        ...(tuangouDone ? {} : { etaAt: now + mtDeliveryMinutesOf(order.id) * 60_000 }),
-        payIdp: chan.idp,
-        payChannelLabel: `${chan.idp === 'wx' ? '微信' : 'QQ'}${chan.isFc ? '亲属卡' : ''} · ${chan.label}`,
-        payFc: chan.isFc === true,
-        payMethodId: chan.methodId,
-        payFcParts: res.fc ? res.fc.parts.map((p) => ({ cardInId: p.cardInId, amount: p.amount })) : undefined,
-        statusLog: [...order.statusLog, { status: tuangouDone ? 'completed' : 'pendingAccept', at: now }],
-      };
-      mtSaveOrders(order.uid, mtLoadOrders(order.uid).map((o) => (o.id === order.id ? paid : o)));
-      window.dispatchEvent(new CustomEvent('mt-orders-changed'));
-      if (res.fc) onToast(`已用${res.fc.parts[0]?.giverName ?? '亲属卡'}支付 ¥${fmtMoney(res.fc.total)}`);
-      else onToast('支付成功');
-      onPaid(paid);
+      if (chan.idp === 'qq' && qqLoadPayPwd().enabled) {
+        setIdpGate('qq');
+        return;
+      }
+      await payViaChannel();
       return;
     }
     onToast('请先选择支付方式');
+  };
+
+  /** 微信/QQ 渠道扣款（支付密码验证后调用；扣 payAmount=抵扣金后金额，资金走对应 App 钱包） */
+  const payViaChannel = async () => {
+    if (!chan) return;
+    setErr('');
+    setState('processing');
+    await new Promise((r) => setTimeout(r, 1100));
+    const randomFail = tried === 0 && Math.random() < 0.12;
+    setTried((t) => t + 1);
+    const res = await mtExecutePay(chan.idp, chan, payAmount, order.merchantName, randomFail);
+    if (!res.ok) {
+      setErr(res.error ?? '支付失败，请重试');
+      setState('fail');
+      return;
+    }
+    const now = Date.now();
+    const tuangouDone = order.kind === 'tuangou';
+    const paid: MtOrder = {
+      ...order,
+      total: Math.max(0.01, Math.round((order.total - drugOff) * 100) / 100),
+      discount: Math.round((order.discount + drugOff) * 100) / 100,
+      status: tuangouDone ? 'completed' : 'pendingAccept',
+      paidAt: now,
+      // 团购单：支付后=待使用（券码页出示券码核销）
+      ...(tuangouDone ? {} : { etaAt: now + mtDeliveryMinutesOf(order.id) * 60_000 }),
+      payIdp: chan.idp,
+      payChannelLabel: `${chan.idp === 'wx' ? '微信' : 'QQ'}${chan.isFc ? '亲属卡' : ''} · ${chan.label}`,
+      payFc: chan.isFc === true,
+      payMethodId: chan.methodId,
+      payFcParts: res.fc ? res.fc.parts.map((p) => ({ cardInId: p.cardInId, amount: p.amount })) : undefined,
+      statusLog: [...order.statusLog, { status: tuangouDone ? 'completed' : 'pendingAccept', at: now }],
+    };
+    mtSaveOrders(order.uid, mtLoadOrders(order.uid).map((o) => (o.id === order.id ? paid : o)));
+    window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+    consumeDrugFund();
+    if (res.fc) onToast(`已用${res.fc.parts[0]?.giverName ?? '亲属卡'}支付 ¥${fmtMoney(res.fc.total)}`);
+    else onToast(drugOff > 0 ? `支付成功，抵扣金已抵¥${fmtMoney(drugOff)}` : '支付成功');
+    onPaid(paid);
   };
 
   /** 发送代付请求：生成请求 + 卡片进好友聊天 + 关收银台回订单列表 */
@@ -2327,6 +2416,19 @@ function PayPage({
               {!balanceOk && <span className="shrink-0 text-[11px] text-[#FF4B33]">余额不足</span>}
               <Radio on={selMt === 'balance'} />
             </button>
+            {/* 购药抵扣金（看病买药订单可用；已激活有余额时展示，可切换是否抵扣） */}
+            {isPharmacy && fund.activated && fund.balance > 0 && (
+              <button type="button" data-testid="pay-drugfund" onClick={() => setUseDrug((v) => !v)} className="flex w-full items-center gap-2.5 border-t border-black/[0.05] py-[13px] text-left active:opacity-80">
+                <span className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full bg-[#E5F8EE]">
+                  <Cross className="h-[14px] w-[14px] text-[#00A860]" strokeWidth={2.4} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] text-black/85">购药抵扣金</span>
+                  <span className="block text-[10.5px] text-black/40">可用 ¥{mtW2(fund.balance)} · 本单抵扣 ¥{fmtMoney(drugOff)}</span>
+                </span>
+                <Radio on={useDrug} />
+              </button>
+            )}
             {/* 银行卡（真实钱包卡列表；工行卡最优惠立减） */}
             {cards.map((c) => {
               const meta = mtBankMeta(c.bank);
@@ -2518,16 +2620,42 @@ function PayPage({
         )}
       </AnimatePresence>
 
-      {/* 余额支付密码验证浮层（开启了支付密码时；验证通过后继续扣款） */}
+      {/* 美团支付密码验证浮层（余额/银行卡支付时；美团密码独立于微信/QQ） */}
       {pwdGate && (
         <MtPayPwdGate
           uid={uid}
           label={`支付 ¥${fmtMoney(payAmount)}`}
           onOk={() => {
-            setPwdGate(false);
-            void payWithBalance();
+            const kind = pwdGate;
+            setPwdGate(null);
+            if (kind === 'balance') void payWithBalance();
+            else if (kind === 'card' && selCard) void payWithCard(selCard);
           }}
-          onClose={() => setPwdGate(false)}
+          onClose={() => setPwdGate(null)}
+        />
+      )}
+
+      {/* 微信支付密码验证浮层（微信 App 里开启了支付密码时：美团用微信支付验微信的密码） */}
+      {idpGate === 'wx' && (
+        <WxPayPwdGate
+          label={`向美团支付 ¥${fmtMoney(payAmount)}`}
+          onOk={() => {
+            setIdpGate(null);
+            void payViaChannel();
+          }}
+          onClose={() => setIdpGate(null)}
+        />
+      )}
+
+      {/* QQ支付密码验证浮层（QQ App 里开启了支付密码时：美团用QQ支付验QQ的密码） */}
+      {idpGate === 'qq' && (
+        <QqPayPwdGate
+          label={`向美团支付 ¥${fmtMoney(payAmount)}`}
+          onOk={() => {
+            setIdpGate(null);
+            void payViaChannel();
+          }}
+          onClose={() => setIdpGate(null)}
         />
       )}
     </motion.div>
@@ -5975,6 +6103,15 @@ const mtW2 = (n: number): string => n.toFixed(2);
 const mtAmtComma = (n: number): string =>
   Number.isInteger(n) ? n.toLocaleString('en-US') : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+/** 万元口径展示（额度/金额 ≥1万 → 「9.98万」，否则原值逗号分隔） */
+const mtAmtWan = (n: number): string => {
+  if (n >= 10000) {
+    const w = n / 10000;
+    return `${Number.isInteger(w) ? w : w.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}万`;
+  }
+  return mtAmtComma(n);
+};
+
 /** 支持添加的银行（演示） */
 const MT_BANK_NAMES = ['中国工商银行', '中国建设银行', '中国农业银行', '中国银行', '招商银行', '交通银行', '中国邮政储蓄银行'];
 
@@ -6300,6 +6437,8 @@ function WalletPage({
   onOpenBills,
   onOpenPayPwd,
   onOpenLoan,
+  onOpenCardQuota,
+  onOpenDrugFund,
   onToast,
 }: {
   session: MtSession;
@@ -6309,10 +6448,14 @@ function WalletPage({
   onOpenBills: () => void;
   onOpenPayPwd: () => void;
   onOpenLoan: () => void;
+  onOpenCardQuota: () => void;
+  onOpenDrugFund: () => void;
   onToast: (m: string) => void;
 }) {
-  const wallet = mtLoadWallet(mtUidOf(session));
-  const cards = mtLoadBankCards(mtUidOf(session));
+  const uid = mtUidOf(session);
+  const wallet = mtLoadWallet(uid);
+  const cards = mtLoadBankCards(uid);
+  const drugFund = mtLoadDrugFund(uid);
   const [hideAmt, setHideAmt] = useState(false);
   const [finTab, setFinTab] = useState<'loan' | 'card' | 'drug'>('loan');
   const [promo, setPromo] = useState(true);
@@ -6388,7 +6531,7 @@ function WalletPage({
           <div className="grid grid-cols-4 rounded-[16px] bg-white px-2 py-4 shadow-[0_2px_10px_rgba(90,60,10,0.05)]">
             {statCell('余额', amtText, onOpenBalance)}
             {statCell('银行卡', String(cards.length), onOpenCards)}
-            {statCell('药划算', '1个', () => onToast('药划算（演示）'))}
+            {statCell('药划算', drugFund.activated ? `${drugFund.records.length}笔` : '1个', onOpenDrugFund)}
             {statCell('笔笔返', '0', () => onToast('笔笔返（演示）'))}
           </div>
         </div>
@@ -6402,7 +6545,7 @@ function WalletPage({
                 <span className="text-[20px] font-extrabold leading-tight tracking-[3px] text-black/85">*****</span>
                 <span className="text-[11px] text-black/40">随借随还 &gt;</span>
               </button>
-              <button type="button" onClick={() => onToast('联名卡（演示）')} className="flex flex-col items-start gap-0.5 pl-4 text-left active:opacity-70">
+              <button type="button" data-testid="wallet-quota-entry" onClick={onOpenCardQuota} className="flex flex-col items-start gap-0.5 pl-4 text-left active:opacity-70">
                 <span className="text-[15px] font-bold text-black/85">联名卡</span>
                 <span className="text-[20px] font-extrabold leading-tight tracking-[3px] text-black/85">****</span>
                 <span className="text-[11px] text-black/40">查看详情 &gt;</span>
@@ -6476,7 +6619,8 @@ function WalletPage({
               </div>
               <button
                 type="button"
-                onClick={() => (finTab === 'loan' ? onOpenLoan() : onToast(finTab === 'card' ? '联名卡申领（演示）' : '药划算额度（演示）'))}
+                data-testid="wallet-fin-apply"
+                onClick={() => (finTab === 'loan' ? onOpenLoan() : finTab === 'card' ? onOpenCardQuota() : onOpenDrugFund())}
                 className="rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] px-5 py-2.5 text-[13px] font-bold text-black/80 shadow-[0_4px_12px_rgba(255,195,0,0.35)] active:opacity-85"
               >
                 去申领
@@ -6817,7 +6961,7 @@ function WalletBalancePage({ session, onClose, onOpenCards, onToast }: { session
 }
 
 /** 银行卡专区（黑金主题）：金句 + 特性 + 添加卡流程 + 卡列表 + 图标行 + 权益活动 */
-function WalletCardsPage({ session, onClose, onOpenBills, onOpenPayPwd, onToast }: { session: MtSession; onClose: () => void; onOpenBills: () => void; onOpenPayPwd: () => void; onToast: (m: string) => void }) {
+function WalletCardsPage({ session, onClose, onOpenBills, onOpenPayPwd, onOpenDrugFund, onToast }: { session: MtSession; onClose: () => void; onOpenBills: () => void; onOpenPayPwd: () => void; onOpenDrugFund: () => void; onToast: (m: string) => void }) {
   const uid = mtUidOf(session);
   const [, setVer] = useState(0);
   const [addOpen, setAddOpen] = useState(false);
@@ -7017,7 +7161,7 @@ function WalletCardsPage({ session, onClose, onOpenBills, onOpenPayPwd, onToast 
               <p className="truncate text-[13.5px] font-bold text-black/85">你有一笔购药抵扣金待激活</p>
               <p className="mt-0.5 text-[10.5px] text-black/40">美团优质用户专享</p>
             </div>
-            <button type="button" onClick={() => onToast('购药抵扣金已激活（演示）')} className="shrink-0 rounded-full bg-[#FFC300] px-3.5 py-1.5 text-[12px] font-bold text-black/85 active:opacity-85">
+            <button type="button" data-testid="cards-drugfund-entry" onClick={onOpenDrugFund} className="shrink-0 rounded-full bg-[#FFC300] px-3.5 py-1.5 text-[12px] font-bold text-black/85 active:opacity-85">
               点我激活
             </button>
           </div>
@@ -7809,6 +7953,552 @@ function LoanRepaySheet({
   );
 }
 
+// ================================ 我的卡额度（美团联名卡，钱包区入口） ================================
+
+/** 我的卡额度页：未申领（免费申领+协议+模拟审批）/ 已获批（总额度·已用·可用 + 消费记录 + 权益） */
+function WalletCardQuotaPage({ session, onClose, onToast }: { session: MtSession; onClose: () => void; onToast: (m: string) => void }) {
+  const uid = mtUidOf(session);
+  const [quota, setQuota] = useState(() => mtLoadCardQuota(uid));
+  const [agree, setAgree] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const cards = mtLoadBankCards(uid);
+  const used = mtCardQuotaUsed(uid);
+  const avail = mtCardQuotaAvailable(uid);
+  /** 联名卡消费记录：钱包账单里的银行卡支付 */
+  const bills = mtLoadWalletBills(uid)
+    .filter((b) => b.kind === 'pay' && (b.card ?? '').includes('尾号'))
+    .slice(0, 8);
+
+  /** 免费申领：模拟审批（1.4s → 随机获批 19,800~99,800） */
+  const apply = async () => {
+    if (approving) return;
+    if (!agree) {
+      onToast('请先勾选同意协议');
+      return;
+    }
+    setApproving(true);
+    await new Promise((r) => setTimeout(r, 1400));
+    mtApplyCardQuota(uid);
+    setApproving(false);
+    setQuota(mtLoadCardQuota(uid));
+    onToast('申领成功，恭喜获得联名卡额度');
+  };
+
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#FAFAF8]">
+      <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+        {/* 黄渐变头部：返回 + 联名卡标识 + 大标题 */}
+        <div className="bg-gradient-to-b from-[#FFE9A0] via-[#FFF4C9] to-[#FAFAF8] px-4 pb-6 pt-[54px]">
+          <div className="relative flex h-10 items-center">
+            <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-black/10">
+              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.4} />
+            </button>
+            <button type="button" aria-label="联系客服" onClick={() => onToast('在线客服（演示）')} className="ml-auto grid h-9 w-9 place-items-center rounded-full active:bg-black/10">
+              <Headset className="h-[19px] w-[19px] text-black/70" strokeWidth={1.9} />
+            </button>
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="grid h-7 w-7 place-items-center rounded-[7px] bg-[#FFD100] text-[11px] font-bold leading-none text-black/85">美团</span>
+            <span className="text-[18px] font-bold text-black/85">我的卡额度</span>
+            <span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-medium text-[#8A6A1F]">美团联名卡 · 合作金融机构提供</span>
+          </div>
+          <p className="mt-3 text-[30px] font-extrabold leading-tight tracking-wide text-[#5C3A18]">免费申领 先享后付</p>
+        </div>
+
+        {/* 额度白卡：未申领（最高可享 ****** + 协议 + 免费申领）/ 已获批（可用额度 + 总额·已用） */}
+        <div className="px-4">
+          <div className="rounded-[18px] bg-white px-5 py-6 shadow-[0_4px_16px_rgba(90,60,10,0.05)]">
+            {!quota.applied ? (
+              <>
+                <p className="text-center text-[13.5px] text-black/55">最高可享额度 (元)</p>
+                <p className="mt-2 text-center text-[42px] font-extrabold leading-none tracking-[6px] text-black/85" data-testid="cardquota-hero">
+                  ******
+                </p>
+                <p className="mt-3 text-center text-[11.5px] text-black/35">最终获取额度，以实际审批为准</p>
+                <button
+                  type="button"
+                  data-testid="cardquota-apply"
+                  onClick={() => void apply()}
+                  disabled={approving}
+                  className="mt-5 w-full rounded-full bg-[#FFD100] py-3.5 text-[16px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,209,0,0.35)] active:opacity-90 disabled:opacity-70"
+                >
+                  {approving ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <RefreshCw className="h-4 w-4 animate-spin" strokeWidth={2.4} />
+                      审批中…
+                    </span>
+                  ) : (
+                    '免费申领'
+                  )}
+                </button>
+                <div className="mt-4 flex items-start gap-2">
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={agree}
+                    aria-label="同意协议"
+                    onClick={() => setAgree((v) => !v)}
+                    className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border transition-colors ${agree ? 'border-[#FFC300] bg-[#FFC300]' : 'border-black/25'}`}
+                  >
+                    {agree && <Check className="h-2.5 w-2.5 text-black" strokeWidth={3.5} />}
+                  </button>
+                  <p className="text-[10.5px] leading-relaxed text-black/40">
+                    已同意<span className="text-[#1677FF]">《美团联名卡服务协议》</span>及<span className="text-[#1677FF]">《个人信息处理授权书》</span>
+                    ，同意合作金融机构查询并留存必要信息用于额度审批
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-center text-[13.5px] text-black/55">可用额度 (元)</p>
+                <p className="mt-2 text-center text-[42px] font-extrabold leading-none text-black/85" data-testid="cardquota-avail">
+                  {mtAmtComma(avail)}
+                </p>
+                <div className="mt-3 flex items-center justify-center gap-2.5 text-[11.5px] text-black/40">
+                  <span data-testid="cardquota-total">总额度 ¥{mtAmtComma(quota.total)}</span>
+                  <span className="h-2.5 w-px bg-black/10" />
+                  <span>已用 ¥{mtAmtComma(used)}</span>
+                  <span className="h-2.5 w-px bg-black/10" />
+                  <span>{fmtDate(quota.appliedAt)} 获批</span>
+                </div>
+                <button type="button" onClick={() => onToast('额度会随使用情况不定期提升')} className="mt-4 w-full rounded-full border border-[#FFC300] bg-[#FFFBEB] py-3 text-[15px] font-bold text-[#B77900] active:opacity-85">
+                  申请提额
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* 绑定银行卡（联名卡额度绑定本机添加的银行卡展示） */}
+        <div className="mt-6 px-4">
+          <p className="pb-2 text-[16px] font-bold text-black/85">绑定银行卡</p>
+          {cards.length === 0 ? (
+            <button type="button" onClick={() => onToast('请在钱包「银行卡」页添加银行卡后再使用额度')} className="w-full rounded-[14px] bg-white px-4 py-5 text-center text-[13px] text-black/45 shadow-[0_2px_10px_rgba(0,0,0,0.03)] active:opacity-80">
+              还没有绑定银行卡，去钱包添加
+            </button>
+          ) : (
+            <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
+              {cards.map((c) => {
+                const meta = mtBankMeta(c.bank);
+                return (
+                  <div key={c.id} className="flex items-center gap-3 py-3.5">
+                    <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-[8px] bg-gradient-to-br ${meta.grad} text-[11px] font-bold text-white shadow-sm`}>{meta.short}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[14px] font-semibold text-black/85">{c.bank}（尾号{c.tail}）</p>
+                      <p className="mt-0.5 text-[11px] text-black/40">卡内余额 ¥{mtW2(c.balance)}</p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-[#FFF6D9] px-2 py-0.5 text-[10px] font-semibold text-[#C8860D]">额度可用</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* 消费记录（额度使用流水：钱包账单里银行卡支付） */}
+        {bills.length > 0 && (
+          <div className="mt-6 px-4">
+            <p className="pb-2 text-[16px] font-bold text-black/85">消费记录</p>
+            <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
+              {bills.map((b) => (
+                <div key={b.id} className="flex items-center gap-3 py-3.5">
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#FDEBEB]">
+                    <ArrowUp className="h-[16px] w-[16px] text-[#E64340]" strokeWidth={2} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[14px] font-semibold text-black/85">{b.card}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-black/35">{fmtDateTime(b.at)} · 消费</p>
+                  </div>
+                  <span className="shrink-0 text-[14px] font-bold text-[#E64340]">-¥{mtW2(Math.abs(b.amount))}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 三大用卡权益 */}
+        <p className="pt-7 text-center text-[16px] font-bold text-black/85">用卡权益</p>
+        <div className="mt-3 px-4 pb-[28px]">
+          <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
+            {(
+              [
+                ['终身免年费', '联名卡不分卡种、不设门槛，终身免年费'],
+                ['支付立减优惠', '美团支付使用联名卡，随机立减最高 2.28 元/笔'],
+                ['笔笔返积分', '消费 1 元累计 1 积分，积分可兑红包与优惠券'],
+              ] as [string, string][]
+            ).map(([t, d]) => (
+              <div key={t} className="py-3.5">
+                <p className="text-[13.5px] font-bold text-black/85">{t}</p>
+                <p className="mt-1 text-[12px] leading-relaxed text-black/45">{d}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================================ 购药抵扣金（钱包区入口） ================================
+
+/** 购药抵扣金页：未激活（点我激活 ¥3.00）/ 已激活（余额 + 明细 + 使用规则）；看病买药订单支付时自动抵扣 */
+function WalletDrugFundPage({ session, onClose, onToast }: { session: MtSession; onClose: () => void; onToast: (m: string) => void }) {
+  const uid = mtUidOf(session);
+  const [fund, setFund] = useState(() => mtLoadDrugFund(uid));
+
+  const activate = () => {
+    const next = mtActivateDrugFund(uid);
+    setFund({ ...next });
+    onToast('激活成功，¥3.00 购药抵扣金已到账');
+  };
+
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#FAFAF8]">
+      <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+        {/* 绿调渐变头部：返回 + 标识 + 大标题 */}
+        <div className="bg-gradient-to-b from-[#D9F5E4] via-[#ECFBF1] to-[#FAFAF8] px-4 pb-6 pt-[54px]">
+          <div className="relative flex h-10 items-center">
+            <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-black/10">
+              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.4} />
+            </button>
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="grid h-7 w-7 place-items-center rounded-[7px] bg-[#00B578] text-white">
+              <Cross className="h-4 w-4" strokeWidth={2.4} />
+            </span>
+            <span className="text-[18px] font-bold text-black/85">购药抵扣金</span>
+            <span className="rounded-full bg-white/75 px-2 py-0.5 text-[10px] font-medium text-[#0A8F5B]">看病买药专享</span>
+          </div>
+          <p className="mt-3 text-[30px] font-extrabold leading-tight tracking-wide text-[#0A6B47]">买药立抵 实名专享</p>
+        </div>
+
+        {/* 金额白卡：未激活（¥3.00 待激活）/ 已激活（余额） */}
+        <div className="px-4">
+          <div className="rounded-[18px] bg-white px-5 py-6 shadow-[0_4px_16px_rgba(20,90,60,0.06)]">
+            {!fund.activated ? (
+              <>
+                <p className="text-center text-[13.5px] text-black/55">你的专享抵扣金</p>
+                <p className="mt-2 text-center text-[42px] font-extrabold leading-none text-[#00A860]" data-testid="drugfund-hero">
+                  ¥3.00
+                </p>
+                <p className="mt-3 text-center text-[11.5px] text-black/35">激活后看病买药下单时自动抵扣</p>
+                <button
+                  type="button"
+                  data-testid="drugfund-activate"
+                  onClick={activate}
+                  className="mt-5 w-full rounded-full bg-[#FFD100] py-3.5 text-[16px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,209,0,0.35)] active:opacity-90"
+                >
+                  点我激活
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-center text-[13.5px] text-black/55">抵扣金余额</p>
+                <p className="mt-2 text-center text-[42px] font-extrabold leading-none text-[#00A860]" data-testid="drugfund-balance">
+                  ¥{mtW2(fund.balance)}
+                </p>
+                <div className="mt-3 flex items-center justify-center gap-2.5 text-[11.5px] text-black/40">
+                  <span>{fmtDate(fund.activatedAt)} 激活</span>
+                  <span className="h-2.5 w-px bg-black/10" />
+                  <span>{fund.records.length} 笔记录</span>
+                </div>
+                <button
+                  type="button"
+                  data-testid="drugfund-use"
+                  onClick={() => onToast(fund.balance > 0 ? '去「看病买药」下单，支付时自动抵扣' : '抵扣金已用完，可关注后续活动再次领取')}
+                  className="mt-4 w-full rounded-full bg-[#FFD100] py-3.5 text-[16px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,209,0,0.35)] active:opacity-90"
+                >
+                  去使用
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* 明细 */}
+        {fund.records.length > 0 && (
+          <div className="mt-6 px-4">
+            <p className="pb-2 text-[16px] font-bold text-black/85">明细记录</p>
+            <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
+              {fund.records.map((r) => (
+                <div key={r.id} className="flex items-center gap-3 py-3.5">
+                  <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${r.amount >= 0 ? 'bg-[#E5F8EE]' : 'bg-[#FDEBEB]'}`}>
+                    {r.amount >= 0 ? <ArrowDown className="h-[16px] w-[16px] text-[#00A860]" strokeWidth={2} /> : <ArrowUp className="h-[16px] w-[16px] text-[#E64340]" strokeWidth={2} />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[14px] font-semibold text-black/85">{r.title}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-black/35">{fmtDateTime(r.at)}</p>
+                  </div>
+                  <span className={`shrink-0 text-[14px] font-bold ${r.amount >= 0 ? 'text-[#00A860]' : 'text-[#E64340]'}`}>
+                    {r.amount >= 0 ? '+' : '-'}¥{mtW2(Math.abs(r.amount))}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 使用规则 */}
+        <p className="pt-7 text-center text-[16px] font-bold text-black/85">使用规则</p>
+        <div className="mt-3 px-4 pb-[28px]">
+          <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
+            {(
+              [
+                ['适用范围', '看病买药频道（大药房/医药连锁等商家）的外卖订单，下单支付时自动抵扣'],
+                ['抵扣方式', '每单最多抵扣 1 笔抵扣金，抵扣金额不高于订单实付金额'],
+                ['有效期', '激活到账后 30 天内有效，到期未使用自动清零'],
+                ['其他说明', '抵扣金不找零、不可转让；退款订单按实际抵扣金额退回抵扣金'],
+              ] as [string, string][]
+            ).map(([t, d]) => (
+              <div key={t} className="py-3.5">
+                <p className="text-[13.5px] font-bold text-black/85">{t}</p>
+                <p className="mt-1 text-[12px] leading-relaxed text-black/45">{d}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================================ 开发票（服务宫格入口） ================================
+
+/** 开发票页：待开票（已支付订单列表）+ 开票记录；抬头类型/抬头/税号/邮箱表单提交 */
+function InvoicePage({ session, onBack, onToast }: { session: MtSession; onBack: () => void; onToast: (m: string) => void }) {
+  const uid = mtUidOf(session);
+  const [tab, setTab] = useState<'todo' | 'done'>('todo');
+  const [, setVer] = useState(0);
+  const invoices = mtLoadInvoices(uid);
+  const invoicedIds = new Set(invoices.map((i) => i.orderId));
+  const orders = mtLoadOrders(uid)
+    .filter((o) => o.paidAt && o.status !== 'pendingPay' && o.status !== 'canceled' && !invoicedIds.has(o.id))
+    .reverse();
+  const [invFor, setInvFor] = useState<MtOrder | null>(null);
+
+  return (
+    <div className="flex h-full flex-col bg-[#F7F8FA]">
+      {/* 顶栏 */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-black/[0.04] bg-white px-3 pb-2.5 pt-[54px]">
+        <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+          <ChevronLeft className="h-6 w-6 text-black/70" />
+        </button>
+        <p className="flex-1 text-center text-[16px] font-semibold text-black/85">开发票</p>
+        <span className="h-9 w-9" />
+      </div>
+
+      {/* 页签：待开票 / 开票记录 */}
+      <div className="flex shrink-0 gap-6 bg-white px-5">
+        {(
+          [
+            ['todo', `待开票${orders.length > 0 ? ` (${orders.length})` : ''}`],
+            ['done', `开票记录${invoices.length > 0 ? ` (${invoices.length})` : ''}`],
+          ] as ['todo' | 'done', string][]
+        ).map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setTab(k)} className={`relative py-3 text-[15px] ${tab === k ? 'font-bold text-black/90' : 'text-black/45'}`}>
+            {label}
+            {tab === k && <span className="absolute inset-x-1 -bottom-px h-[3px] rounded-full bg-[#FFC300]" />}
+          </button>
+        ))}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar px-4 py-3">
+        {tab === 'todo' ? (
+          orders.length === 0 ? (
+            <div className="flex flex-col items-center pt-24 text-center">
+              <span className="grid h-16 w-16 place-items-center rounded-full bg-white shadow-sm">
+                <Receipt className="h-7 w-7 text-black/25" strokeWidth={1.6} />
+              </span>
+              <p className="mt-4 text-[14px] text-black/45">暂无可开发票的订单</p>
+              <p className="mt-1 text-[11.5px] text-black/30">订单完成支付后即可在这里申请开票</p>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {orders.map((o) => (
+                <div key={o.id} className="rounded-[14px] bg-white p-4 shadow-[0_1px_6px_rgba(0,0,0,0.03)]">
+                  <div className="flex items-center gap-2">
+                    <p className="min-w-0 flex-1 truncate text-[14.5px] font-bold text-black/85">{o.merchantName}</p>
+                    <span className="shrink-0 text-[15px] font-bold" style={{ color: MT_PRICE }}>
+                      ¥{fmtMoney(o.total)}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate text-[11.5px] text-black/40">{o.items.map((it) => `${it.name}×${it.qty}`).join('、')}</p>
+                  <div className="mt-2.5 flex items-center justify-between border-t border-black/[0.04] pt-2.5">
+                    <p className="text-[11px] text-black/35">{fmtDateTime(o.paidAt ?? o.createdAt)} 支付</p>
+                    <button type="button" data-testid={`invoice-open-${o.id}`} onClick={() => setInvFor(o)} className="rounded-full bg-[#FFD100] px-4 py-1.5 text-[12px] font-bold text-black/85 active:opacity-85">
+                      开发票
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        ) : invoices.length === 0 ? (
+          <div className="flex flex-col items-center pt-24 text-center">
+            <span className="grid h-16 w-16 place-items-center rounded-full bg-white shadow-sm">
+              <FileText className="h-7 w-7 text-black/25" strokeWidth={1.6} />
+            </span>
+            <p className="mt-4 text-[14px] text-black/45">暂无开票记录</p>
+            <p className="mt-1 text-[11.5px] text-black/30">开票成功后会在这里展示</p>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {invoices.map((inv) => (
+              <div key={inv.id} className="rounded-[14px] bg-white p-4 shadow-[0_1px_6px_rgba(0,0,0,0.03)]">
+                <div className="flex items-center gap-2">
+                  <span className="rounded bg-[#FFF3B8] px-1.5 py-0.5 text-[10px] text-[#B77900]">{inv.type}抬头</span>
+                  <p className="min-w-0 flex-1 truncate text-[14.5px] font-bold text-black/85">{inv.title}</p>
+                  <span className="shrink-0 rounded-full bg-[#E8F9EF] px-2 py-0.5 text-[10px] text-[#00A661]">{inv.status}</span>
+                </div>
+                <p className="mt-1.5 truncate text-[11.5px] text-black/40">
+                  {inv.merchantName} · 电子发票已发送至 {inv.email}
+                </p>
+                <div className="mt-2.5 flex items-center justify-between border-t border-black/[0.04] pt-2.5">
+                  <p className="text-[11px] text-black/35">{fmtDateTime(inv.at)}</p>
+                  <span className="text-[14px] font-bold text-black/85">¥{fmtMoney(inv.amount)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 开票表单弹层 */}
+      <AnimatePresence>
+        {invFor && (
+          <InvoiceSheet
+            key={invFor.id}
+            uid={uid}
+            order={invFor}
+            onClose={() => setInvFor(null)}
+            onDone={(inv) => {
+              setInvFor(null);
+              setVer((v) => v + 1);
+              setTab('done');
+              onToast(`开票成功，电子发票已发送至 ${inv.email}`);
+            }}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** 开票表单弹层：抬头类型（个人/单位）+ 抬头 + 税号（单位）+ 邮箱 → 提交开票 */
+function InvoiceSheet({ uid, order, onClose, onDone }: { uid: string; order: MtOrder; onClose: () => void; onDone: (inv: MtInvoice) => void }) {
+  const [type, setType] = useState<'个人' | '单位'>('个人');
+  const [title, setTitle] = useState('');
+  const [taxNo, setTaxNo] = useState('');
+  const [email, setEmail] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (busy) return;
+    const t = title.trim();
+    if (!t) {
+      setErr('请填写发票抬头');
+      return;
+    }
+    if (type === '单位' && !taxNo.trim()) {
+      setErr('单位抬头需要填写税号');
+      return;
+    }
+    const em = email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+      setErr('请填写正确的接收邮箱');
+      return;
+    }
+    setErr('');
+    setBusy(true);
+    await new Promise((r) => setTimeout(r, 900));
+    const inv = mtAddInvoice(uid, {
+      orderId: order.id,
+      merchantName: order.merchantName,
+      amount: order.total,
+      type,
+      title: t,
+      ...(type === '单位' ? { taxNo: taxNo.trim() } : {}),
+      email: em,
+    });
+    setBusy(false);
+    onDone(inv);
+  };
+
+  return (
+    <MtWalletSheet title="开发票" onClose={onClose}>
+      <div className="max-h-[72vh] overflow-y-auto px-4 pb-5">
+        {/* 订单摘要 */}
+        <div className="flex items-center gap-2.5 rounded-[12px] bg-[#F7F8FA] px-3.5 py-3">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[14px] font-bold text-black/85">{order.merchantName}</p>
+            <p className="mt-0.5 truncate text-[11px] text-black/40">{order.items.map((it) => `${it.name}×${it.qty}`).join('、')}</p>
+          </div>
+          <span className="shrink-0 text-[16px] font-bold" style={{ color: MT_PRICE }}>
+            ¥{fmtMoney(order.total)}
+          </span>
+        </div>
+
+        {/* 抬头类型 */}
+        <p className="mt-4 text-[13px] font-semibold text-black/70">抬头类型</p>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {(['个人', '单位'] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setType(t)}
+              className={`h-11 rounded-[10px] border text-[14px] font-medium active:opacity-80 ${type === t ? 'border-[#FFC300] bg-[#FFFBEB] text-black/85' : 'border-black/10 text-black/55'}`}
+            >
+              {t}抬头
+            </button>
+          ))}
+        </div>
+
+        {/* 表单 */}
+        <p className="mt-4 text-[13px] font-semibold text-black/70">抬头名称</p>
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder={type === '个人' ? '填写个人姓名' : '填写单位全称'}
+          className="mt-2 h-11 w-full rounded-[10px] border border-black/10 px-3.5 text-[14px] outline-none placeholder:text-black/25 focus:border-[#FFC300]"
+        />
+        {type === '单位' && (
+          <>
+            <p className="mt-3 text-[13px] font-semibold text-black/70">单位税号</p>
+            <input
+              value={taxNo}
+              onChange={(e) => setTaxNo(e.target.value)}
+              placeholder="统一社会信用代码"
+              className="mt-2 h-11 w-full rounded-[10px] border border-black/10 px-3.5 text-[14px] outline-none placeholder:text-black/25 focus:border-[#FFC300]"
+            />
+          </>
+        )}
+        <p className="mt-3 text-[13px] font-semibold text-black/70">接收邮箱</p>
+        <input
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          autoCapitalize="none"
+          placeholder="电子发票将发送至该邮箱"
+          className="mt-2 h-11 w-full rounded-[10px] border border-black/10 px-3.5 text-[14px] outline-none placeholder:text-black/25 focus:border-[#FFC300]"
+        />
+
+        {err && <p className="mt-3 text-[12px] text-[#FF4B33]">{err}</p>}
+
+        <button
+          type="button"
+          data-testid="invoice-submit"
+          onClick={() => void submit()}
+          disabled={busy}
+          className="mt-5 w-full rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] py-3.5 text-[16px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,209,0,0.35)] active:opacity-90 disabled:opacity-60"
+        >
+          {busy ? '提交中…' : `提交开票（¥${fmtMoney(order.total)}）`}
+        </button>
+        <p className="mt-3 text-[10.5px] leading-relaxed text-black/35">电子发票将在提交后即时开具并发送至邮箱，可在「开票记录」中查看。</p>
+      </div>
+    </MtWalletSheet>
+  );
+}
+
 /** 支付密码设置页：开启（两遍输入）/ 修改（旧密码验证→新密码）/ 关闭（验证后关闭） */
 function WalletPayPwdPage({ session, onClose, onToast }: { session: MtSession; onClose: () => void; onToast: (m: string) => void }) {
   const uid = mtUidOf(session);
@@ -7947,6 +8637,11 @@ function MyPage({
   onOpenCoupons,
   onOpenMember,
   onOpenWallet,
+  onOpenLoan,
+  onOpenCardQuota,
+  onOpenDrugFund,
+  onOpenAddresses,
+  onOpenInvoices,
   onClaimCoupons,
   onToast,
 }: {
@@ -7958,6 +8653,13 @@ function MyPage({
   onOpenCoupons: () => void;
   onOpenMember: () => void;
   onOpenWallet: () => void;
+  /** 钱包区三项真实入口：借钱 / 我的卡额度 / 购药抵扣金 */
+  onOpenLoan: () => void;
+  onOpenCardQuota: () => void;
+  onOpenDrugFund: () => void;
+  /** 服务宫格：地址 / 开发票 */
+  onOpenAddresses: () => void;
+  onOpenInvoices: () => void;
   onClaimCoupons: () => void;
   onToast: (m: string) => void;
 }) {
@@ -7966,6 +8668,11 @@ function MyPage({
   const orders = mtLoadOrders(uid);
   const inFlight = orders.filter((o) => ['pendingAccept', 'accepted', 'delivering'].includes(o.status)).length;
   const idpLabel = session.idp === 'wx' ? '微信账号' : session.idp === 'qq' ? 'QQ账号' : `手机用户 ${session.phone ?? ''}`;
+  // 钱包区三项动态值：借钱可借额度 / 联名卡额度 / 抵扣金笔数
+  const loanAcct = mtLoadLoanAccount(uid);
+  const loanAvail = mtLoanAvailable(uid);
+  const cardQuota = mtLoadCardQuota(uid);
+  const drugFund = mtLoadDrugFund(uid);
   // 骑手形象选择（原美团币入口改为骑手，选中形象用于配送地图）
   const [riderOpen, setRiderOpen] = useState(false);
   const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
@@ -8106,7 +8813,7 @@ function MyPage({
         </div>
       </div>
 
-      {/* 钱包 */}
+      {/* 钱包（三项真实入口：借钱→借钱页；我的卡额度→联名卡额度页；购药抵扣金→抵扣金页） */}
       <div className="border-t-[7px] border-[#F7F8FA] px-4 py-3.5">
         <div className="flex items-center">
           <p className="text-[16px] font-bold text-black/85">钱包</p>
@@ -8115,33 +8822,37 @@ function MyPage({
           </button>
         </div>
         <div className="mt-2.5 grid grid-cols-4">
-          {[
-            ['***', '美团借钱', '随借随还'],
-            ['9.98万', '我的卡额度', '免费申领'],
-            ['1笔', '购药抵扣金', '去查看'],
-          ].map(([v, l, s]) => (
-            <button key={l} type="button" onClick={() => onToast(`${l}（演示）`)} className="flex flex-col items-center gap-0.5 active:opacity-70">
-              <span className="text-[16px] font-bold leading-tight text-black/85">{v}</span>
-              <span className="text-[11px] text-black/70">{l}</span>
-              <span className="text-[9px] text-black/35">{s}</span>
-            </button>
-          ))}
+          <button type="button" data-testid="my-wallet-loan" onClick={onOpenLoan} className="flex flex-col items-center gap-0.5 active:opacity-70">
+            <span className="text-[16px] font-bold leading-tight text-black/85">{loanAcct.applied ? mtAmtWan(loanAvail) : '***'}</span>
+            <span className="text-[11px] text-black/70">美团借钱</span>
+            <span className="text-[9px] text-black/35">{loanAcct.applied ? '可借额度' : '随借随还'}</span>
+          </button>
+          <button type="button" data-testid="my-wallet-cardquota" onClick={onOpenCardQuota} className="flex flex-col items-center gap-0.5 active:opacity-70">
+            <span className="text-[16px] font-bold leading-tight text-black/85">{cardQuota.applied ? mtAmtWan(cardQuota.total) : '9.98万'}</span>
+            <span className="text-[11px] text-black/70">我的卡额度</span>
+            <span className="text-[9px] text-black/35">{cardQuota.applied ? '可用额度' : '免费申领'}</span>
+          </button>
+          <button type="button" data-testid="my-wallet-drugfund" onClick={onOpenDrugFund} className="flex flex-col items-center gap-0.5 active:opacity-70">
+            <span className="text-[16px] font-bold leading-tight text-black/85">{drugFund.activated ? `${drugFund.records.length}笔` : '¥3.00'}</span>
+            <span className="text-[11px] text-black/70">购药抵扣金</span>
+            <span className="text-[9px] text-black/35">{drugFund.activated ? '去查看' : '去激活'}</span>
+          </button>
         </div>
       </div>
 
-      {/* 服务宫格 */}
+      {/* 服务宫格（开发票→地址、小美评审团→开发票；地址/开发票为真实页面） */}
       <div className="grid grid-cols-4 gap-y-4 border-t-[7px] border-[#F7F8FA] px-2 py-3.5">
         {([
-          [Receipt, '开发票'],
-          [MessageCircleMore, '小美评审团'],
-          [Heart, '我的公益'],
-          [Handshake, '入驻美团'],
-          [Store, '添加商户'],
-          [HardHat, '工作兼职'],
-          [Leaf, '我的碳账户'],
-          [LayoutGrid, '更多工具'],
-        ] as [LucideIcon, string][]).map(([Icon, l]) => (
-          <button key={l} type="button" onClick={() => onToast(`${l}（演示）`)} className="flex flex-col items-center gap-1.5 active:opacity-70">
+          [MapPin, '地址', () => onOpenAddresses(), 'my-svc-address'],
+          [Receipt, '开发票', () => onOpenInvoices(), 'my-svc-invoice'],
+          [Heart, '我的公益', () => onToast('我的公益（演示）'), ''],
+          [Handshake, '入驻美团', () => onToast('入驻美团（演示）'), ''],
+          [Store, '添加商户', () => onToast('添加商户（演示）'), ''],
+          [HardHat, '工作兼职', () => onToast('工作兼职（演示）'), ''],
+          [Leaf, '我的碳账户', () => onToast('我的碳账户（演示）'), ''],
+          [LayoutGrid, '更多工具', () => onToast('更多工具（演示）'), ''],
+        ] as [LucideIcon, string, () => void, string][]).map(([Icon, l, tap, tid]) => (
+          <button key={l} type="button" data-testid={tid || undefined} onClick={tap} className="flex flex-col items-center gap-1.5 active:opacity-70">
             <Icon className="h-[22px] w-[22px] text-black/75" strokeWidth={1.8} />
             <span className="text-[11px] text-black/70">{l}</span>
           </button>
@@ -11127,6 +11838,11 @@ export default function MeituanApp() {
   const deal = dealId ? mtDealOf(dealId) : undefined;
   const checkoutMerchant = (checkoutMid ?? merchantId) ? mtMerchantOf((checkoutMid ?? merchantId) as string) : undefined;
 
+  // 兜底（渲染期状态修正，React 官方模式）：商家/团购详情目标不存在（如「再来一单」引用重启后
+  // 未再注册的 AI 商家）→ 立即回主页重渲染，避免白屏卡死
+  if (page === 'merchant' && merchantId && !merchant) setPage('main');
+  if (page === 'deal' && dealId && !deal) setPage('main');
+
   const pickAddr = (a: MtAddress) => {
     mtSetCurAddr(uid, a.id);
     showToast(`已选择：${a.text.slice(0, 12)}`);
@@ -11193,6 +11909,11 @@ export default function MeituanApp() {
                 onOpenCoupons={() => setPage('coupons')}
                 onOpenMember={() => setPage('member')}
                 onOpenWallet={() => setPage('wallet')}
+                onOpenLoan={() => setPage('walletLoan')}
+                onOpenCardQuota={() => setPage('walletCardQuota')}
+                onOpenDrugFund={() => setPage('walletDrugFund')}
+                onOpenAddresses={() => goSub('addresses', 'main')}
+                onOpenInvoices={() => setPage('invoices')}
                 onClaimCoupons={() => {
                   const n = mtClaimGodCoupons(uid);
                   showToast(n > 0 ? `已领取${n}张神券，可在「红包卡券」查看` : '神券已领取过了');
@@ -11218,13 +11939,18 @@ export default function MeituanApp() {
           onOpenBills={() => setPage('walletBills')}
           onOpenPayPwd={() => setPage('walletPayPwd')}
           onOpenLoan={() => setPage('walletLoan')}
+          onOpenCardQuota={() => setPage('walletCardQuota')}
+          onOpenDrugFund={() => setPage('walletDrugFund')}
           onToast={showToast}
         />
       )}
       {page === 'walletBalance' && <WalletBalancePage session={session} onClose={() => setPage('wallet')} onOpenCards={() => setPage('walletCards')} onToast={showToast} />}
-      {page === 'walletCards' && <WalletCardsPage session={session} onClose={() => setPage('wallet')} onOpenBills={() => setPage('walletBills')} onOpenPayPwd={() => setPage('walletPayPwd')} onToast={showToast} />}
+      {page === 'walletCards' && <WalletCardsPage session={session} onClose={() => setPage('wallet')} onOpenBills={() => setPage('walletBills')} onOpenPayPwd={() => setPage('walletPayPwd')} onOpenDrugFund={() => setPage('walletDrugFund')} onToast={showToast} />}
       {page === 'walletBills' && <WalletBillsPage session={session} onClose={() => setPage('wallet')} />}
       {page === 'walletLoan' && <WalletLoanPage session={session} onClose={() => setPage('wallet')} onToast={showToast} />}
+      {page === 'walletCardQuota' && <WalletCardQuotaPage session={session} onClose={() => setPage('wallet')} onToast={showToast} />}
+      {page === 'walletDrugFund' && <WalletDrugFundPage session={session} onClose={() => setPage('wallet')} onToast={showToast} />}
+      {page === 'invoices' && <InvoicePage session={session} onBack={() => setPage('main')} onToast={showToast} />}
       {page === 'walletPayPwd' && <WalletPayPwdPage session={session} onClose={() => setPage('wallet')} onToast={showToast} />}
       {page === 'travel' && session && <TravelChannelPage session={session} onBack={() => setPage('main')} onOpenPay={openPay} onToast={showToast} />}
       {page === 'shangou' && session && <ShangouChannelPage session={session} onBack={() => setPage('main')} onOpenPay={openPay} onToast={showToast} />}
