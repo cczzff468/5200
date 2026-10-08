@@ -26,6 +26,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowDown,
+  ArrowUp,
+  BadgePercent,
   Bell,
   Bike,
   BookOpen,
@@ -39,6 +41,7 @@ import {
   ChevronRight,
   ChevronUp,
   CircleCheck,
+  CircleDollarSign,
   Clapperboard,
   Plus,
   Clock as ClockIcon,
@@ -48,6 +51,7 @@ import {
   Cross,
   Crosshair,
   Crown,
+  Delete,
   EllipsisVertical,
   Eye,
   EyeOff,
@@ -66,10 +70,12 @@ import {
   Home as HomeIcon,
   House,
   ImageOff,
+  Landmark,
   Languages,
   Laugh,
   LayoutGrid,
   Leaf,
+  Lock,
   MapPin,
   Meh,
   MessageCircleMore,
@@ -84,6 +90,9 @@ import {
   ScanLine,
   Scissors,
   Search as SearchIcon,
+  Settings,
+  Shield,
+  ShieldCheck,
   ShoppingBag,
   ShoppingCart,
   Star,
@@ -128,12 +137,14 @@ import TravelChannelPage from './meituan-travel';
 import ShangouChannelPage from './meituan-shangou';
 import { useSettings, useUI } from '@/lib/ios/store';
 import {
+  mtAddBankCard,
   mtApplyRefund,
   mtCanRefund,
   mtCancelWithRefund,
   mtCheckoutCalc,
   mtClaimGodCoupons,
   mtClearHistory,
+  mtClearPayPwdLock,
   mtClearSearchHist,
   mtCouponTypeLabel,
   mtCurAddrId,
@@ -141,19 +152,30 @@ import {
   mtGetOrder,
   mtGetSearchHist,
   mtGetSession,
+  mtAnyIdpLoggedIn,
+  mtIdpLoggedIn,
   mtListUsableCoupons,
   mtLoadAddresses,
+  mtLoadBankCards,
   mtLoadCart,
   mtLoadCoupons,
   mtLoadFavs,
   mtLoadHistory,
   mtLoadOrders,
+  mtLoadPayPwd,
+  mtLoadPayPwdLock,
+  mtLoadWallet,
+  mtLoadWalletBills,
   mtPushHistory,
+  mtRecordPayPwdFail,
+  mtRemoveBankCard,
   mtRemoveHistory,
   mtResolveIdpIdentity,
   mtSaveAddresses,
   mtSaveCart,
   mtSaveOrders,
+  mtSavePayPwd,
+  mtSavePayPwdLock,
   mtSetCurAddr,
   mtSetSession,
   mtSyncSessionIdentity,
@@ -163,15 +185,23 @@ import {
   mtUseCoupon,
   mtUrgeOrder,
   mtValidateSession,
+  mtWalletRecharge,
+  mtWalletWithdraw,
+  MT_PAY_PWD_LOCK_MS,
+  MT_PAY_PWD_MAX_FAIL,
   MT_STATUS_LABEL,
+  MT_WALLET_BILL_LABEL,
   PAY_TIMEOUT_MS,
   type MtAddress,
+  type MtBankCard,
   type MtCart,
   type MtCoupon,
   type MtFavs,
   type MtHistItem,
   type MtOrder,
+  type MtPayPwdLock,
   type MtSession,
+  type MtWalletBill,
 } from '@/lib/ios/meituan-store';
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
 import { mtCreateProxyRequest } from '@/lib/ios/mt-proxy-pay';
@@ -181,7 +211,7 @@ import { listContacts } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
 
-type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode';
+type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan';
 type Tab = 'home' | 'orders' | 'cart' | 'my';
 
 const MT_YELLOW = '#FFD100';
@@ -334,6 +364,7 @@ const TuanMark = ({ className = '' }: { className?: string }) => (
 // ================================ 登录页（截图1） ================================
 
 function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onToast: (m: string) => void }) {
+  const closeApp = useUI((s) => s.closeApp);
   const [agree, setAgree] = useState(true);
   const [auth, setAuth] = useState<{ idp: 'wx' | 'qq'; contactId: string; name: string; avatar: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -353,6 +384,11 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
     if (busy) return;
     if (!agree) {
       onToast('请先阅读并同意《美团用户协议》和《隐私政策》');
+      return;
+    }
+    // 登录态联动（需求：微信/QQ 没有登录时美团就登录不了）：对应授权源未在线 → 拦截并引导
+    if (!mtIdpLoggedIn(idp)) {
+      onToast(idp === 'wx' ? '微信尚未登录，请先登录微信后再试' : 'QQ尚未登录，请先登录QQ后再试');
       return;
     }
     setBusy(true);
@@ -389,6 +425,11 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
       onToast('请先阅读并同意《美团用户协议》和《隐私政策》');
       return;
     }
+    // 登录态联动：微信/QQ 都不在线时美团整体登录不了（手机号登录同样拦截，引导先登录微信/QQ）
+    if (!mtAnyIdpLoggedIn()) {
+      onToast('请先登录微信或QQ后使用美团');
+      return;
+    }
     if (!/^1\d{10}$/.test(phone)) {
       onToast('请输入正确的手机号');
       return;
@@ -416,7 +457,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
         <button
           type="button"
           aria-label="关闭"
-          onClick={() => onToast('请先登录后使用美团')}
+          onClick={closeApp}
           className="grid h-10 w-10 place-items-center rounded-full bg-black/[0.06] active:bg-black/10"
         >
           <X className="h-5 w-5 text-black/80" strokeWidth={2.4} />
@@ -5021,11 +5062,13 @@ function CouponsPage({
   session,
   onBack,
   onGoUse,
+  onOpenWallet,
   onToast,
 }: {
   session: MtSession;
   onBack: () => void;
   onGoUse: () => void;
+  onOpenWallet: () => void;
   onToast: (m: string) => void;
 }) {
   const uid = mtUidOf(session);
@@ -5227,7 +5270,7 @@ function CouponsPage({
 
           {/* 底部功能条：我的钱包 / 领神券 / 返利 / 会员中心 */}
           <div className="absolute inset-x-0 bottom-0 flex shrink-0 items-start border-t border-black/[0.05] bg-white pb-[max(8px,env(safe-area-inset-bottom))] pt-2.5">
-            <button type="button" onClick={() => onToast('美团钱包（演示）')} className="flex flex-1 flex-col items-center gap-1 active:opacity-70">
+            <button type="button" onClick={onOpenWallet} className="flex flex-1 flex-col items-center gap-1 active:opacity-70">
               <Wallet className="h-[22px] w-[22px] text-black/80" strokeWidth={1.8} />
               <span className="text-[11px] text-black/70">我的钱包</span>
             </button>
@@ -5770,6 +5813,1233 @@ function CartPage({
   );
 }
 
+// ================================ 美团钱包（主页/余额/银行卡/账单/借钱/支付密码） ================================
+
+/** 金额统一两位小数（钱包规范：整数也显示 0.00 格式） */
+const mtW2 = (n: number): string => n.toFixed(2);
+
+/** 支持添加的银行（演示） */
+const MT_BANK_NAMES = ['中国工商银行', '中国建设银行', '中国农业银行', '中国银行', '招商银行', '交通银行', '中国邮政储蓄银行'];
+
+/** 余额页常见问题（首条默认展开） */
+const MT_BALANCE_FAQS: { q: string; a: string }[] = [
+  {
+    q: '为什么要完善账户信息？',
+    a: '根据人民银行《非银行支付机构网络支付业务管理办法》、《支付机构反洗钱和反恐怖融资管理办法》等法律法规规定，支付机构需要对用户进行实名制管理。您在使用余额支付、提现等服务前，需上传身份证照片或绑定本人银行卡完善实名信息，以保障您的账户与资金安全（演示文案）。',
+  },
+  { q: '我想变更实名，怎么清空余额？', a: '变更实名前需先将余额全部提现至本人银行卡，余额清零后即可解绑当前实名并重新认证（演示文案）。' },
+  { q: '余额无法支付怎么办？', a: '请确认已完成实名认证且账户状态正常；若仍无法支付，可尝试更换支付方式或联系在线客服处理（演示文案）。' },
+  { q: '实名非本人无法提现或支付怎么办？', a: '为保障资金安全，仅支持向本人实名银行卡提现；若实名信息非本人，请先完成本人实名认证后再操作（演示文案）。' },
+  { q: '余额能否提现到微信或支付宝？', a: '目前余额仅支持提现到本人实名银行卡，暂不支持提现到微信零钱或支付宝余额（演示文案）。' },
+];
+
+/** 借钱页四大安全保障（演示文案） */
+const MT_LOAN_GUARDS: { t: string; d: string }[] = [
+  { t: '严格遵守国家法律规定', d: '资质齐全，符合国家监管政策要求，借贷资金全部来自持牌金融机构。' },
+  { t: '利率公开透明', d: '年化利率明确公示，无任何隐藏费用，还款计划清晰可查。' },
+  { t: '个人信息保护', d: '金融级加密传输与存储，未经您的授权绝不向第三方泄露。' },
+  { t: '规范催收承诺', d: '催收流程规范合规，绝不骚扰联系人，逾期可主动协商（演示文案）。' },
+];
+
+/** 账单按日期分组标题（今天/昨天/M月d日） */
+const mtBillGroupLabel = (ts: number): string => {
+  const d = new Date(ts);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return '今天';
+  const yest = new Date(now.getTime() - 86_400_000);
+  if (d.toDateString() === yest.toDateString()) return '昨天';
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+};
+
+/** 账单条目时间（M月d日 HH:mm） */
+const mtBillItemTime = (ts: number): string => {
+  const d = new Date(ts);
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+/** 账单类型 → 圆图标（充值↓绿/提现↑橙/消费购物袋/退款旋转） */
+const mtBillIcon = (kind: MtWalletBill['kind']): { Icon: LucideIcon; cls: string } => {
+  switch (kind) {
+    case 'recharge':
+      return { Icon: ArrowDown, cls: 'bg-[#E8F8EF] text-[#07C160]' };
+    case 'withdraw':
+      return { Icon: ArrowUp, cls: 'bg-[#FFF3E0] text-[#FF7D00]' };
+    case 'pay':
+      return { Icon: ShoppingBag, cls: 'bg-[#F1F2F4] text-black/55' };
+    default:
+      return { Icon: RotateCw, cls: 'bg-[#FFF8E1] text-[#C8860D]' };
+  }
+};
+
+/** 钱包通用底部弹层（充值/提现/添加卡/卡片管理共用；点击遮罩关闭） */
+function MtWalletSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/50" role="dialog" aria-label={title} onClick={onClose}>
+      <div className="max-h-[86%] overflow-y-auto rounded-t-[18px] bg-white pb-[28px] no-scrollbar" onClick={(e) => e.stopPropagation()}>
+        <div className="sticky top-0 z-10 flex h-12 items-center justify-center border-b border-black/[0.05] bg-white">
+          <button
+            type="button"
+            aria-label="关闭"
+            onClick={onClose}
+            className="absolute left-3 grid h-8 w-8 place-items-center rounded-full text-black/45 active:bg-black/5"
+          >
+            <X className="h-5 w-5" strokeWidth={2.2} />
+          </button>
+          <p className="text-[15px] font-semibold text-black/85">{title}</p>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** 银行卡单选列表（充值选付款卡 / 提现选到账卡共用） */
+function MtWalletCardPicker({ cards, value, onPick }: { cards: MtBankCard[]; value: string | null; onPick: (id: string) => void }) {
+  return (
+    <div className="max-h-56 overflow-y-auto px-4 no-scrollbar">
+      {cards.map((c) => (
+        <button
+          key={c.id}
+          type="button"
+          onClick={() => onPick(c.id)}
+          className="flex w-full items-center gap-3 border-b border-black/[0.04] py-3 text-left last:border-b-0 active:bg-black/[0.03]"
+        >
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[8px] bg-gradient-to-br from-[#FFE9A8] to-[#FFD100]">
+            <Landmark className="h-[18px] w-[18px] text-[#8A5A00]" strokeWidth={1.9} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14px] font-medium text-black/85">{c.bank}</span>
+            <span className="mt-0.5 block truncate text-[11px] text-black/40">尾号{c.tail} · 可用余额 ¥{mtW2(c.balance)}</span>
+          </span>
+          <span className={`grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border ${value === c.id ? 'border-[#FFC300] bg-[#FFC300]' : 'border-black/20'}`}>
+            {value === c.id && <Check className="h-3 w-3 text-black" strokeWidth={3.5} />}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 美团风格 6 位支付密码自绘数字键盘（不唤起系统键盘；校验由父级完成，errorKey 变化时父级重挂载 → 清空并抖动） */
+function MtPayPwdSheet({
+  title,
+  sub,
+  hint,
+  errorKey,
+  locked = false,
+  onComplete,
+  onClose,
+}: {
+  title: string;
+  sub?: string;
+  hint?: string;
+  errorKey: number;
+  /** 锁定期间禁用输入（键位 click 失效、视觉灰显） */
+  locked?: boolean;
+  onComplete: (pwd: string) => void;
+  onClose: () => void;
+}) {
+  const [digits, setDigits] = useState('');
+  // 用 ref 累加避免同一 tick 内连点被 React 批处理吞掉（每次 push 都基于最新串）
+  const acc = useRef('');
+  const push = (d: string) => {
+    if (locked) return;
+    const next = (acc.current + d).slice(0, 6);
+    acc.current = next;
+    setDigits(next);
+    if (next.length === 6) {
+      const done = next;
+      acc.current = '';
+      window.setTimeout(() => onComplete(done), 150);
+    }
+  };
+  const keyBtn = 'flex h-[52px] items-center justify-center bg-white text-[22px] font-medium text-black active:bg-black/[0.06]';
+  const keyBtnLocked = 'flex h-[52px] items-center justify-center bg-white/60 text-[22px] font-medium text-black/30';
+  return (
+    <div className="rounded-t-[18px] bg-white pb-[28px]" onClick={(e) => e.stopPropagation()} data-testid="mt-keypad">
+      <style>{'@keyframes mtShake{0%,100%{transform:translateX(0)}20%{transform:translateX(-9px)}40%{transform:translateX(8px)}60%{transform:translateX(-6px)}80%{transform:translateX(4px)}}'}</style>
+      <div className="relative flex h-12 items-center justify-center border-b border-black/[0.06]">
+        <button
+          type="button"
+          aria-label="关闭"
+          data-testid="mt-keypad-close"
+          onClick={onClose}
+          disabled={locked}
+          className="absolute left-3 grid h-8 w-8 place-items-center rounded-full text-black/45 active:bg-black/5 disabled:opacity-40"
+        >
+          <X className="h-5 w-5" strokeWidth={2.2} />
+        </button>
+        <p className="text-[16px] font-medium text-black">{title}</p>
+      </div>
+      {sub ? <p className="pb-1 pt-2 text-center text-[13px] text-black/45">{sub}</p> : null}
+      <div className="mx-auto mt-2 flex w-fit gap-2.5" style={errorKey > 0 ? { animation: 'mtShake 0.46s' } : undefined}>
+        {Array.from({ length: 6 }).map((_, i) => (
+          <span key={i} className="grid h-11 w-10 place-items-center rounded-[6px] border border-black/15 bg-white" aria-hidden="true">
+            {i < digits.length ? <span className="h-2.5 w-2.5 rounded-full bg-black" /> : null}
+          </span>
+        ))}
+      </div>
+      <p className="mt-2 h-5 text-center text-[13px] text-[#FF3B30]" aria-live="polite">
+        {hint ?? ''}
+      </p>
+      <div className="grid grid-cols-3 gap-[1px] border-t border-black/10 bg-black/10">
+        {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((k) => (
+          <button key={k} type="button" data-testid={`mt-keypad-${k}`} onClick={() => push(k)} disabled={locked} className={locked ? keyBtnLocked : keyBtn}>
+            {k}
+          </button>
+        ))}
+        <span className="bg-white" aria-hidden="true" />
+        <button type="button" data-testid="mt-keypad-0" onClick={() => push('0')} disabled={locked} className={locked ? keyBtnLocked : keyBtn}>
+          0
+        </button>
+        <button
+          type="button"
+          aria-label="删除"
+          data-testid="mt-keypad-del"
+          disabled={locked}
+          onClick={() => {
+            acc.current = acc.current.slice(0, -1);
+            setDigits(acc.current);
+          }}
+          className={locked ? keyBtnLocked : keyBtn}
+        >
+          <Delete className="h-6 w-6" strokeWidth={1.8} aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 美团支付密码验证浮层（充值/提现/修改/关闭前验证；正确回调 onOk；5 次失败锁定 30s 防暴力试错） */
+function MtPayPwdGate({ uid, label, onOk, onClose }: { uid: string; label?: string; onOk: () => void; onClose: () => void }) {
+  const [errKey, setErrKey] = useState(0);
+  const [lock, setLock] = useState<MtPayPwdLock>(() => mtLoadPayPwdLock(uid));
+  // 倒计时（秒）：每秒刷新一次让 UI 显示剩余时间
+  const [remainSec, setRemainSec] = useState(0);
+  useEffect(() => {
+    if (lock.lockedUntil <= 0) return;
+    const tick = () => {
+      const remain = Math.max(0, Math.ceil((lock.lockedUntil - Date.now()) / 1000));
+      setRemainSec(remain);
+      if (remain <= 0) {
+        // 锁到期：清掉 lockedUntil（fails 一并清零，给用户重新试的机会）
+        const cleared = { fails: 0, lockedUntil: 0 };
+        mtSavePayPwdLock(uid, cleared);
+        setLock(cleared);
+      }
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [lock.lockedUntil, uid]);
+  const isLocked = lock.lockedUntil > 0 && Date.now() < lock.lockedUntil;
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60" role="dialog" aria-label="验证支付密码" onClick={isLocked ? undefined : onClose}>
+      <MtPayPwdSheet
+        key={errKey}
+        title="请输入支付密码"
+        sub={label}
+        hint={
+          isLocked
+            ? `密码错误次数过多，请 ${remainSec} 秒后再试`
+            : errKey > 0
+              ? `密码错误，请重新输入（已失败 ${lock.fails} 次，${MT_PAY_PWD_MAX_FAIL} 次后将锁定 ${Math.round(MT_PAY_PWD_LOCK_MS / 1000)} 秒）`
+              : undefined
+        }
+        errorKey={errKey}
+        locked={isLocked}
+        onClose={onClose}
+        onComplete={(pwd) => {
+          if (isLocked) return;
+          const d = mtLoadPayPwd(uid);
+          if (d.pwd && pwd === d.pwd) {
+            mtClearPayPwdLock(uid);
+            onOk();
+          } else {
+            const next = mtRecordPayPwdFail(uid);
+            setLock(next);
+            setErrKey((k) => k + 1);
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+/** 钱包主页（黄色渐变头部 + 四宫格 + 借钱联名卡 + 图标行 + 账单 + 金融 tab + 笔笔返） */
+function WalletPage({
+  session,
+  onClose,
+  onOpenBalance,
+  onOpenCards,
+  onOpenBills,
+  onOpenPayPwd,
+  onOpenLoan,
+  onToast,
+}: {
+  session: MtSession;
+  onClose: () => void;
+  onOpenBalance: () => void;
+  onOpenCards: () => void;
+  onOpenBills: () => void;
+  onOpenPayPwd: () => void;
+  onOpenLoan: () => void;
+  onToast: (m: string) => void;
+}) {
+  const wallet = mtLoadWallet(mtUidOf(session));
+  const cards = mtLoadBankCards(mtUidOf(session));
+  const [hideAmt, setHideAmt] = useState(false);
+  const [finTab, setFinTab] = useState<'loan' | 'card' | 'drug'>('loan');
+  const amtText = hideAmt ? '****' : `¥${mtW2(wallet.balance)}`;
+  const nameTail = session.name.slice(-1) || '*';
+
+  const gridCell = (label: string, value: string, onTap: () => void) => (
+    <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1 active:opacity-70">
+      <span className="text-[16px] font-bold leading-tight text-black/85">{value}</span>
+      <span className="text-[11px] text-black/50">{label}</span>
+    </button>
+  );
+
+  const iconCell = (Icon: LucideIcon, label: string, onTap: () => void) => (
+    <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-70">
+      <span className="grid h-[38px] w-[38px] place-items-center rounded-full bg-[#FFF6D9]">
+        <Icon className="h-[19px] w-[19px] text-[#C8860D]" strokeWidth={1.9} />
+      </span>
+      <span className="text-[11px] text-black/70">{label}</span>
+    </button>
+  );
+
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#FFFBEA]">
+      <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+        {/* 黄色渐变头部：顶栏 + 实名提示条 */}
+        <div className="bg-gradient-to-b from-[#FFD100] to-[#FDEFB2] px-4 pb-12 pt-[54px]">
+          <div className="relative flex h-10 items-center">
+            <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-black/10">
+              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+            </button>
+            <p className="absolute left-1/2 -translate-x-1/2 text-[16px] font-semibold text-black/85">**{nameTail}的钱包</p>
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                aria-label={hideAmt ? '显示余额' : '隐藏余额'}
+                onClick={() => {
+                  setHideAmt((v) => !v);
+                  onToast(hideAmt ? '余额已显示' : '余额已隐藏');
+                }}
+                className="grid h-9 w-9 place-items-center rounded-full active:bg-black/10"
+              >
+                {hideAmt ? <EyeOff className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} /> : <Eye className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => onToast('实名信息待完善（演示）')}
+                className="relative rounded-full bg-white/90 px-2.5 py-1 text-[11px] font-medium text-black/75 active:opacity-80"
+              >
+                实名待完善
+                <span className="absolute -right-0.5 -top-0.5 h-[7px] w-[7px] rounded-full border border-white bg-[#FF3B30]" />
+              </button>
+              <button type="button" aria-label="钱包设置" onClick={onOpenPayPwd} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/10">
+                <Settings className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} />
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onToast('实名信息完善（演示）')}
+            className="mt-3 flex w-full items-center justify-between rounded-[10px] bg-white/20 px-3 py-2.5 active:bg-white/30"
+          >
+            <span className="flex items-center gap-1.5 text-[12px] font-medium text-black/80">
+              <TriangleAlert className="h-3.5 w-3.5 text-black/70" strokeWidth={2.2} />
+              立即完善实名信息，解锁更多服务
+            </span>
+            <span className="text-[12px] font-semibold text-black/75">去完善 &gt;</span>
+          </button>
+        </div>
+
+        {/* 白卡四宫格：余额/银行卡/药划算/笔笔返 */}
+        <div className="-mt-8 px-4">
+          <div className="grid grid-cols-4 rounded-[14px] bg-white px-2 py-4 shadow-sm">
+            {gridCell('余额', amtText, onOpenBalance)}
+            {gridCell('银行卡', `${cards.length}张`, onOpenCards)}
+            {gridCell('药划算', '1个', () => onToast('药划算（演示）'))}
+            {gridCell('笔笔返', '0', () => onToast('笔笔返（演示）'))}
+          </div>
+        </div>
+
+        {/* 白卡双列：美团借钱 | 联名卡 + 新客专属条 */}
+        <div className="mt-3 px-4">
+          <div className="rounded-[14px] bg-white p-4 shadow-sm">
+            <div className="grid grid-cols-2 divide-x divide-black/[0.06]">
+              <button type="button" onClick={onOpenLoan} className="flex flex-col items-start gap-0.5 pr-4 text-left active:opacity-70">
+                <span className="text-[15px] font-bold text-black/85">美团借钱</span>
+                <span className="text-[20px] font-extrabold tracking-widest text-black/85">*****</span>
+                <span className="text-[11px] text-black/40">随借随还 &gt;</span>
+              </button>
+              <button type="button" onClick={() => onToast('联名卡（演示）')} className="flex flex-col items-start gap-0.5 pl-4 text-left active:opacity-70">
+                <span className="text-[15px] font-bold text-black/85">联名卡</span>
+                <span className="text-[20px] font-extrabold tracking-widest text-black/85">****</span>
+                <span className="text-[11px] text-black/40">查看详情 &gt;</span>
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => onToast('新客专属额度（演示）')}
+              className="mt-3 flex w-full items-center justify-between rounded-[10px] bg-[#FFF0F0] px-3 py-2.5 active:opacity-80"
+            >
+              <span className="flex items-center text-[12px] text-[#FF3B30]">
+                <span className="mr-1.5 rounded-[4px] bg-[#FF3B30] px-1 py-0.5 text-[10px] font-bold text-white">新客专属</span>
+                点击领取10月额度
+              </span>
+              <span className="text-[12px] font-semibold text-[#FF3B30]">去看看 &gt;</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 白卡图标行：借钱/美团保/笔笔返/银行卡/全部 */}
+        <div className="mt-3 px-4">
+          <div className="grid grid-cols-5 rounded-[14px] bg-white py-3.5 shadow-sm">
+            {iconCell(Coins, '借钱', onOpenLoan)}
+            {iconCell(Shield, '美团保', () => onToast('美团保（演示）'))}
+            {iconCell(BadgePercent, '笔笔返', () => onToast('笔笔返（演示）'))}
+            {iconCell(CreditCard, '银行卡', onOpenCards)}
+            {iconCell(LayoutGrid, '全部', () => onToast('更多钱包服务（演示）'))}
+          </div>
+        </div>
+
+        {/* 账单入口 */}
+        <div className="mt-3 px-4">
+          <button type="button" onClick={onOpenBills} className="flex w-full items-center justify-between rounded-[14px] bg-white px-4 py-4 shadow-sm active:bg-black/[0.02]">
+            <span className="text-[15px] font-bold text-black/85">账单</span>
+            <span className="flex items-center text-[12px] text-black/40">
+              查看
+              <ChevronRight className="h-3.5 w-3.5" />
+            </span>
+          </button>
+        </div>
+
+        {/* 金融 tab 白卡 */}
+        <div className="mt-3 px-4">
+          <div className="relative overflow-hidden rounded-[14px] bg-white p-4 shadow-sm">
+            <span className="absolute right-3 top-3 text-[10px] font-medium tracking-[3px] text-[#E8C880]/80">金融服务</span>
+            <div className="flex gap-5 border-b border-black/[0.05]">
+              {(
+                [
+                  ['loan', '借钱'],
+                  ['card', '联名卡'],
+                  ['drug', '药划算'],
+                ] as ['loan' | 'card' | 'drug', string][]
+              ).map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setFinTab(k)}
+                  className={`relative pb-2 text-[14px] transition-colors ${finTab === k ? 'font-bold text-black/85' : 'text-black/45'}`}
+                >
+                  {label}
+                  {finTab === k && <span className="absolute inset-x-0 -bottom-px mx-auto h-[3px] w-6 rounded-full bg-[#FFC300]" />}
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 flex items-end justify-between">
+              <div>
+                <p className="text-[11px] text-black/40">最高可享额度（元）</p>
+                <p className="mt-1 text-[28px] font-extrabold leading-none text-black/85">{finTab === 'loan' ? '99,800.00' : finTab === 'card' ? '6,600.00' : '300.00'}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onToast('额度申领（演示）')}
+                className="rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] px-5 py-2.5 text-[13px] font-bold text-black/80 active:opacity-85"
+              >
+                去申领
+              </button>
+            </div>
+            <div className="mt-3 flex gap-2">
+              {['10月额度升级', '首年免年费', '100元现金券'].map((t) => (
+                <span key={t} className="rounded-[6px] border border-[#FF3B30]/50 px-1.5 py-0.5 text-[10px] leading-4 text-[#FF3B30]">
+                  {t}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* 钱包笔笔返 */}
+        <div className="mt-3 px-4 pb-[28px]">
+          <button type="button" onClick={() => onToast('钱包笔笔返（演示）')} className="flex w-full items-center justify-between rounded-[14px] bg-white px-4 py-4 shadow-sm active:bg-black/[0.02]">
+            <span className="text-[15px] font-bold text-black/85">钱包笔笔返</span>
+            <span className="flex items-center text-[12px] text-black/40">
+              支付可抵钱
+              <ChevronRight className="h-3.5 w-3.5" />
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 余额页（仅可提现）：黄头余额卡 + 提现/充值 + 常见问题手风琴 + 美团支付 */
+function WalletBalancePage({ session, onClose, onOpenCards, onToast }: { session: MtSession; onClose: () => void; onOpenCards: () => void; onToast: (m: string) => void }) {
+  const uid = mtUidOf(session);
+  const [, setVer] = useState(0);
+  const [hideAmt, setHideAmt] = useState(false);
+  const [sheet, setSheet] = useState<'recharge' | 'withdraw' | null>(null);
+  const [cardId, setCardId] = useState<string | null>(null);
+  const [amtText, setAmtText] = useState('');
+  const [amtErr, setAmtErr] = useState('');
+  const [gate, setGate] = useState<null | { action: 'recharge' | 'withdraw' }>(null);
+  const [faqOpen, setFaqOpen] = useState<number | null>(0);
+  const wallet = mtLoadWallet(uid);
+  const cards = mtLoadBankCards(uid);
+
+  const openSheet = (s: 'recharge' | 'withdraw') => {
+    setSheet(s);
+    setCardId(cards.length > 0 ? (cards[0]?.id ?? null) : null);
+    setAmtText('');
+    setAmtErr('');
+  };
+
+  const amtNum = (() => {
+    const n = Number.parseFloat(amtText);
+    return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
+  })();
+  const limit = sheet === 'recharge' ? (cards.find((c) => c.id === cardId)?.balance ?? 0) : wallet.balance;
+
+  /** 校验通过后：开支付密码 → 验证后 exec；未开密码 → 直接 exec */
+  const confirmAmt = () => {
+    if (!(amtNum > 0)) {
+      setAmtErr('请输入正确的金额');
+      return;
+    }
+    if (amtNum > limit) {
+      setAmtErr(sheet === 'recharge' ? '超出卡内可用余额' : '超出可用余额');
+      return;
+    }
+    if (!cardId) {
+      setAmtErr(sheet === 'recharge' ? '请选择银行卡' : '请选择到账银行卡');
+      return;
+    }
+    setAmtErr('');
+    if (mtLoadPayPwd(uid).enabled) setGate({ action: sheet === 'recharge' ? 'recharge' : 'withdraw' });
+    else exec();
+  };
+
+  /** 执行充值/提现（store 内已完成卡扣款/余额入账/账单流水） */
+  const exec = () => {
+    setGate(null);
+    if (!cardId) return;
+    if (sheet === 'recharge') {
+      const r = mtWalletRecharge(uid, cardId, amtNum);
+      if (!r.ok) {
+        onToast(r.error ?? '充值失败');
+        return;
+      }
+      onToast('充值成功');
+    } else {
+      const r = mtWalletWithdraw(uid, cardId, amtNum);
+      if (!r.ok) {
+        onToast(r.error ?? '提现失败');
+        return;
+      }
+      const card = mtLoadBankCards(uid).find((c) => c.id === cardId);
+      onToast(card ? `提现成功，已到账 ${card.bank} 尾号${card.tail}` : '提现成功');
+    }
+    setSheet(null);
+    setAmtText('');
+    setCardId(null);
+    setVer((v) => v + 1);
+  };
+
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#F7F8FA]">
+      <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+        {/* 黄色渐变头部：顶栏 + 余额卡 + 按钮 */}
+        <div className="bg-gradient-to-b from-[#FFD100] to-[#FDEFB2] px-4 pb-8 pt-[54px]">
+          <div className="relative flex h-10 items-center">
+            <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-black/10">
+              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+            </button>
+            <p className="absolute left-1/2 -translate-x-1/2 text-[16px] font-semibold text-black/85">余额（仅可提现）</p>
+            <div className="ml-auto flex items-center">
+              <button type="button" aria-label="联系客服" onClick={() => onToast('在线客服（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/10">
+                <Headset className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} />
+              </button>
+              <button type="button" aria-label="更多" onClick={() => onToast('余额帮助（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/10">
+                <EllipsisVertical className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} />
+              </button>
+            </div>
+          </div>
+          <div className="mt-3 rounded-[14px] bg-white p-5 shadow-sm">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[12px] text-black/45">可用余额（元）</span>
+              <button
+                type="button"
+                aria-label={hideAmt ? '显示余额' : '隐藏余额'}
+                onClick={() => setHideAmt((v) => !v)}
+                className="grid h-6 w-6 place-items-center rounded-full active:bg-black/5"
+              >
+                {hideAmt ? <EyeOff className="h-3.5 w-3.5 text-black/40" strokeWidth={1.9} /> : <Eye className="h-3.5 w-3.5 text-black/40" strokeWidth={1.9} />}
+              </button>
+            </div>
+            <p className="mt-1.5 text-[40px] font-bold leading-none text-black/90">{hideAmt ? '****' : mtW2(wallet.balance)}</p>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <button type="button" onClick={() => openSheet('withdraw')} className="rounded-full border border-black/15 bg-white py-2.5 text-[14px] font-semibold text-black/80 active:opacity-80">
+              提现
+            </button>
+            <button type="button" onClick={() => openSheet('recharge')} className="rounded-full bg-[#FFC300] py-2.5 text-[14px] font-semibold text-black/85 active:opacity-85">
+              充值
+            </button>
+          </div>
+        </div>
+
+        {/* 常见问题手风琴 */}
+        <div className="px-4 pt-4">
+          <div className="rounded-[14px] bg-white px-4 py-2">
+            <div className="flex items-center justify-between py-2">
+              <p className="text-[15px] font-bold text-black/85">常见问题</p>
+              <button type="button" onClick={() => onToast('更多常见问题（演示）')} className="flex items-center text-[12px] text-black/40">
+                更多
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {MT_BALANCE_FAQS.map((f, i) => (
+              <div key={f.q} className={i > 0 ? 'border-t border-black/[0.04]' : ''}>
+                <button type="button" onClick={() => setFaqOpen((o) => (o === i ? null : i))} className="flex w-full items-center justify-between gap-3 py-3 text-left">
+                  <span className="text-[13px] font-medium text-black/80">{f.q}</span>
+                  <ChevronDown className={`h-4 w-4 shrink-0 text-black/30 transition-transform ${faqOpen === i ? 'rotate-180' : ''}`} />
+                </button>
+                {faqOpen === i && <p className="pb-3 text-[12.5px] leading-relaxed text-black/50">{f.a}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+        <p className="pb-[28px] pt-10 text-center text-[12px] text-black/30">美团支付</p>
+      </div>
+
+      {/* 充值/提现弹层：选卡 → 输金额 → 确认（→ 支付密码验证） */}
+      {sheet && (
+        <MtWalletSheet title={sheet === 'recharge' ? '余额充值' : '余额提现'} onClose={() => setSheet(null)}>
+          {cards.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 px-6 py-8">
+              <p className="text-[13px] text-black/45">暂无银行卡{sheet === 'recharge' ? '，无法充值' : '，无法提现'}</p>
+              <button type="button" onClick={onOpenCards} className="rounded-full bg-[#FFC300] px-6 py-2.5 text-[13px] font-semibold text-black/85 active:opacity-85">
+                暂无银行卡，去添加
+              </button>
+            </div>
+          ) : (
+            <div className="pt-2">
+              <p className="px-4 pb-1 pt-1 text-[12px] text-black/40">选择银行卡</p>
+              <MtWalletCardPicker
+                cards={cards}
+                value={cardId}
+                onPick={(id) => {
+                  setCardId(id);
+                  setAmtErr('');
+                }}
+              />
+              <p className="px-4 pb-1 pt-3 text-[12px] text-black/40">
+                {sheet === 'recharge' ? '充值金额' : `提现金额（可用 ¥${mtW2(wallet.balance)}）`}
+              </p>
+              <div className="px-4">
+                <div className="flex items-center gap-2 rounded-[10px] border border-black/10 bg-[#F7F8FA] px-3 py-2.5">
+                  <span className="text-[20px] font-bold text-black/70">¥</span>
+                  <input
+                    value={amtText}
+                    onChange={(e) => {
+                      setAmtText(e.target.value.replace(/[^\d.]/g, '').slice(0, 10));
+                      setAmtErr('');
+                    }}
+                    inputMode="decimal"
+                    placeholder={sheet === 'recharge' ? '从该卡划转至余额' : '全部提现可输入可用余额'}
+                    className="min-w-0 flex-1 bg-transparent text-[18px] font-semibold text-black/85 outline-none placeholder:text-[12px] placeholder:font-normal placeholder:text-black/30"
+                    aria-label={sheet === 'recharge' ? '充值金额' : '提现金额'}
+                  />
+                </div>
+                {amtErr ? <p className="mt-1.5 text-[12px] text-[#FF3B30]">{amtErr}</p> : null}
+              </div>
+              <div className="px-4 pt-4">
+                <button type="button" onClick={confirmAmt} className="w-full rounded-full bg-[#FFC300] py-3 text-[15px] font-bold text-black/85 active:opacity-85">
+                  确认{sheet === 'recharge' ? '充值' : '提现'}
+                </button>
+              </div>
+            </div>
+          )}
+        </MtWalletSheet>
+      )}
+
+      {/* 支付密码验证浮层 */}
+      {gate && (
+        <MtPayPwdGate
+          uid={uid}
+          label={`${gate.action === 'recharge' ? '充值' : '提现'} ¥${mtW2(amtNum)}`}
+          onOk={exec}
+          onClose={() => setGate(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** 银行卡专区（黑金主题）：金句 + 特性 + 添加卡流程 + 卡列表 + 图标行 + 权益活动 */
+function WalletCardsPage({ session, onClose, onOpenBills, onOpenPayPwd, onToast }: { session: MtSession; onClose: () => void; onOpenBills: () => void; onOpenPayPwd: () => void; onToast: (m: string) => void }) {
+  const uid = mtUidOf(session);
+  const [, setVer] = useState(0);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addStep, setAddStep] = useState<'bank' | 'no' | 'bal'>('bank');
+  const [bank, setBank] = useState<string | null>(null);
+  const [cardNo, setCardNo] = useState('');
+  const [balText, setBalText] = useState('1000');
+  const [addErr, setAddErr] = useState('');
+  const [manageId, setManageId] = useState<string | null>(null);
+  const cards = mtLoadBankCards(uid);
+  const manageCard = manageId ? cards.find((c) => c.id === manageId) : undefined;
+
+  const openAdd = () => {
+    setAddOpen(true);
+    setAddStep('bank');
+    setBank(null);
+    setCardNo('');
+    setBalText('1000');
+    setAddErr('');
+  };
+
+  const confirmAdd = () => {
+    const digits = cardNo.replace(/\D/g, '');
+    if (digits.length < 4) {
+      setAddErr('请输入至少 4 位卡号');
+      return;
+    }
+    const bal = Number.parseFloat(balText);
+    const balance = Number.isFinite(bal) && bal > 0 ? Math.round(bal * 100) / 100 : 0;
+    const r = mtAddBankCard(uid, bank ?? '银行卡', digits, balance);
+    if ('error' in r) {
+      setAddErr(r.error);
+      onToast(r.error);
+      return;
+    }
+    setAddOpen(false);
+    setVer((v) => v + 1);
+    onToast(`已添加${r.bank} 尾号${r.tail}`);
+  };
+
+  const removeCard = (id: string) => {
+    const card = cards.find((c) => c.id === id);
+    mtRemoveBankCard(uid, id);
+    setManageId(null);
+    setVer((v) => v + 1);
+    onToast(card ? `已删除${card.bank} 尾号${card.tail}` : '已删除银行卡');
+  };
+
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#0A0A0A]">
+      <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+        {/* 顶栏：返回 + 银行卡专区 + 设置 + 客服 */}
+        <div className="relative flex h-[94px] items-center px-3 pt-[54px]">
+          <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-white/10">
+            <ChevronLeft className="h-[22px] w-[22px] text-white" strokeWidth={2.2} />
+          </button>
+          <p className="absolute left-1/2 top-[74px] -translate-x-1/2 -translate-y-1/2 text-[16px] font-semibold text-white">银行卡专区</p>
+          <div className="ml-auto flex items-center">
+            <button type="button" aria-label="支付设置" onClick={onOpenPayPwd} className="grid h-9 w-9 place-items-center rounded-full active:bg-white/10">
+              <Settings className="h-[19px] w-[19px] text-white/85" strokeWidth={1.9} />
+            </button>
+            <button type="button" aria-label="联系客服" onClick={() => onToast('在线客服（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-white/10">
+              <Headset className="h-[19px] w-[19px] text-white/85" strokeWidth={1.9} />
+            </button>
+          </div>
+        </div>
+
+        {/* 黑底金色斜体大字 + 三特性 + 添加按钮 */}
+        <div className="px-4 pb-2 pt-1">
+          <p className="bg-gradient-to-r from-[#F7D9A0] to-[#E8B96A] bg-clip-text text-[22px] font-bold italic leading-snug text-transparent">
+            添加你在美团的第{cards.length + 1}张银行卡
+          </p>
+          <div className="mt-4 grid grid-cols-3">
+            {(
+              [
+                ['无卡号添加', CreditCard],
+                ['支付随心控', CircleDollarSign],
+                ['优惠权益多', ShieldCheck],
+              ] as [string, LucideIcon][]
+            ).map(([label, Icon]) => (
+              <div key={label} className="flex flex-col items-center gap-1.5">
+                <span className="grid h-[44px] w-[44px] place-items-center rounded-full bg-[#1E1E20]">
+                  <Icon className="h-5 w-5 text-[#E8B96A]" strokeWidth={1.8} />
+                </span>
+                <span className="text-[11px] text-[#E8C890]">{label}</span>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={openAdd}
+            className="mt-5 flex w-full items-center justify-center gap-1 rounded-[12px] bg-gradient-to-r from-[#F3D3A0] to-[#E4B36B] py-3 text-[15px] font-bold text-[#5A3A10] active:opacity-85"
+          >
+            <Plus className="h-[18px] w-[18px]" strokeWidth={2.6} />
+            添加银行卡
+          </button>
+        </div>
+
+        {/* 已有卡列表（黑金卡面） */}
+        {cards.length > 0 && (
+          <div className="mt-4 space-y-3 px-4">
+            {cards.map((c) => (
+              <div key={c.id} className="relative overflow-hidden rounded-[14px] bg-gradient-to-br from-[#2A2A2E] to-[#1A1A1C] p-4">
+                <span className="absolute right-4 top-4 grid h-9 w-9 place-items-center rounded-full bg-white/10" aria-hidden="true">
+                  <Landmark className="h-[18px] w-[18px] text-[#E8B96A]" strokeWidth={1.8} />
+                </span>
+                <p className="text-[15px] font-bold text-white/90">{c.bank}</p>
+                <p className="mt-2 text-[13px] tracking-[2px] text-white/60">尾号**** **** **** {c.tail}</p>
+                <div className="mt-3 flex items-end justify-between">
+                  <p className="text-[12px] text-white/45">
+                    卡内余额 <span className="text-[16px] font-bold text-[#F3D3A0]">¥{mtW2(c.balance)}</span>
+                  </p>
+                  <button type="button" onClick={() => setManageId(c.id)} className="rounded-full border border-white/20 px-3.5 py-1 text-[11px] text-white/70 active:bg-white/10">
+                    管理
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 白卡图标行：交易明细/支付设置/极速支付/联名卡/积分专区 */}
+        <div className="mt-4 px-4">
+          <div className="grid grid-cols-5 rounded-[14px] bg-white py-3.5">
+            {(
+              [
+                ['交易明细', Receipt, onOpenBills],
+                ['支付设置', Settings, onOpenPayPwd],
+                ['极速支付', Zap, () => onToast('极速支付（演示）')],
+                ['联名卡', CreditCard, () => onToast('联名卡（演示）')],
+                ['积分专区', Star, () => onToast('积分专区（演示）')],
+              ] as [string, LucideIcon, () => void][]
+            ).map(([label, Icon, onTap]) => (
+              <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-70">
+                <Icon className="h-[20px] w-[20px] text-black/75" strokeWidth={1.8} />
+                <span className="text-[10.5px] text-black/70">{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 权益活动白卡 */}
+        <div className="mt-3 px-4 pb-[28px]">
+          <div className="rounded-[14px] bg-white p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[15px] font-bold text-black/85">
+                  天天领券 <span className="ml-1 align-[1px] text-[10px] font-medium text-[#FF6000]">今日已上新</span>
+                </p>
+                <p className="mt-0.5 text-[11.5px] text-black/40">快来银行卡专区免费领福利吧</p>
+              </div>
+              <button type="button" onClick={() => onToast('已领取银行卡专享券（演示）')} className="shrink-0 rounded-full bg-[#FF3B30] px-4 py-1.5 text-[12px] font-bold text-white active:opacity-85">
+                去领取
+              </button>
+            </div>
+            <div className="mt-3 flex items-center justify-between gap-2 rounded-[10px] bg-[#FFF8E1] px-3 py-2.5">
+              <span className="min-w-0 truncate text-[12px] text-black/70">你有一笔购药抵扣金待激活</span>
+              <button type="button" onClick={() => onToast('购药抵扣金已激活（演示）')} className="shrink-0 rounded-full bg-[#FFC300] px-3 py-1 text-[11px] font-bold text-black/80 active:opacity-85">
+                点我激活
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 添加银行卡流程弹层：选银行 → 卡号 → 初始余额 */}
+      {addOpen && (
+        <MtWalletSheet title="添加银行卡" onClose={() => setAddOpen(false)}>
+          <div className="px-4 pb-4 pt-3">
+            {addStep === 'bank' && (
+              <>
+                <p className="pb-2 text-[12px] text-black/40">选择银行</p>
+                <div className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto no-scrollbar">
+                  {MT_BANK_NAMES.map((b) => (
+                    <button
+                      key={b}
+                      type="button"
+                      onClick={() => {
+                        setBank(b);
+                        setAddErr('');
+                        setAddStep('no');
+                      }}
+                      className={`flex items-center gap-1.5 rounded-[10px] border px-2.5 py-2.5 text-left text-[12.5px] active:opacity-80 ${
+                        bank === b ? 'border-[#E4B36B] bg-[#FFF8E9] font-medium text-black/85' : 'border-black/10 bg-[#F7F8FA] text-black/70'
+                      }`}
+                    >
+                      <Landmark className="h-4 w-4 shrink-0 text-[#C8860D]" strokeWidth={1.8} />
+                      <span className="truncate">{b}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            {addStep === 'no' && (
+              <>
+                <p className="pb-2 text-[12px] text-black/40">银行卡号（{bank ?? ''}）</p>
+                <input
+                  value={cardNo}
+                  onChange={(e) => {
+                    setCardNo(e.target.value.replace(/\D/g, '').slice(0, 19));
+                    setAddErr('');
+                  }}
+                  inputMode="numeric"
+                  placeholder="请输入银行卡号（取后 4 位为尾号）"
+                  className="w-full rounded-[10px] border border-black/10 bg-[#F7F8FA] px-3 py-2.5 text-[15px] tracking-wide text-black/85 outline-none placeholder:text-[12px] placeholder:tracking-normal placeholder:text-black/30"
+                  aria-label="银行卡号"
+                />
+                {addErr ? <p className="mt-1.5 text-[12px] text-[#FF3B30]">{addErr}</p> : null}
+                <div className="mt-4 flex gap-3">
+                  <button type="button" onClick={() => setAddStep('bank')} className="flex-1 rounded-full border border-black/15 py-2.5 text-[14px] text-black/70 active:opacity-80">
+                    上一步
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (cardNo.replace(/\D/g, '').length < 4) {
+                        setAddErr('请输入至少 4 位卡号');
+                        return;
+                      }
+                      setAddErr('');
+                      setAddStep('bal');
+                    }}
+                    className="flex-1 rounded-full bg-[#FFC300] py-2.5 text-[14px] font-bold text-black/85 active:opacity-85"
+                  >
+                    下一步
+                  </button>
+                </div>
+              </>
+            )}
+            {addStep === 'bal' && (
+              <>
+                <p className="pb-2 text-[12px] text-black/40">卡内余额（演示用，默认 1000）</p>
+                <input
+                  value={balText}
+                  onChange={(e) => {
+                    setBalText(e.target.value.replace(/[^\d.]/g, '').slice(0, 10));
+                    setAddErr('');
+                  }}
+                  inputMode="decimal"
+                  className="w-full rounded-[10px] border border-black/10 bg-[#F7F8FA] px-3 py-2.5 text-[15px] text-black/85 outline-none"
+                  aria-label="卡内余额"
+                />
+                {addErr ? <p className="mt-1.5 text-[12px] text-[#FF3B30]">{addErr}</p> : null}
+                <div className="mt-4 flex gap-3">
+                  <button type="button" onClick={() => setAddStep('no')} className="flex-1 rounded-full border border-black/15 py-2.5 text-[14px] text-black/70 active:opacity-80">
+                    上一步
+                  </button>
+                  <button type="button" onClick={confirmAdd} className="flex-1 rounded-full bg-[#FFC300] py-2.5 text-[14px] font-bold text-black/85 active:opacity-85">
+                    确认添加
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </MtWalletSheet>
+      )}
+
+      {/* 卡片管理弹层：删除卡片 */}
+      {manageId && (
+        <MtWalletSheet title="卡片管理" onClose={() => setManageId(null)}>
+          <div className="px-4 py-3">
+            {manageCard ? (
+              <p className="pb-2 text-[13px] text-black/60">
+                {manageCard.bank} 尾号{manageCard.tail} · 余额 ¥{mtW2(manageCard.balance)}
+              </p>
+            ) : null}
+            <button type="button" onClick={() => manageId && removeCard(manageId)} className="w-full rounded-[10px] bg-[#FFF0F0] py-3 text-[14px] font-medium text-[#FF3B30] active:opacity-80">
+              删除卡片
+            </button>
+            <button type="button" onClick={() => setManageId(null)} className="mt-2 w-full rounded-[10px] bg-[#F7F8FA] py-3 text-[14px] text-black/70 active:opacity-80">
+              取消
+            </button>
+          </div>
+        </MtWalletSheet>
+      )}
+    </div>
+  );
+}
+
+/** 账单页：按日分组（今天/昨天/M月d日）流水列表 */
+function WalletBillsPage({ session, onClose }: { session: MtSession; onClose: () => void }) {
+  const uid = mtUidOf(session);
+  const [toastMsg, showToast] = useLocalToast();
+  const bills = mtLoadWalletBills(uid);
+  const groups: { label: string; items: MtWalletBill[] }[] = [];
+  for (const b of bills) {
+    const label = mtBillGroupLabel(b.at);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(b);
+    else groups.push({ label, items: [b] });
+  }
+
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#F7F8FA]">
+      {/* 顶栏：返回 + 账单 + 按月 */}
+      <div className="relative flex h-[94px] shrink-0 items-center border-b border-black/[0.04] bg-white px-3 pt-[54px]">
+        <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
+          <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+        </button>
+        <p className="absolute left-1/2 top-[74px] -translate-x-1/2 -translate-y-1/2 text-[16px] font-semibold text-black/85">账单</p>
+        <button type="button" onClick={() => showToast('按月查看（演示）')} className="ml-auto pr-1 text-[12px] text-black/45 active:opacity-70">
+          按月
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto pt-3 no-scrollbar">
+        {bills.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 pt-24">
+            <Receipt className="h-10 w-10 text-black/15" strokeWidth={1.5} />
+            <p className="text-[13px] text-black/35">暂无账单</p>
+          </div>
+        ) : (
+          groups.map((g) => (
+            <div key={`${g.label}-${g.items[0]?.id ?? ''}`} className="px-4 pb-3">
+              <p className="pb-1.5 text-[12px] font-medium text-black/40">{g.label}</p>
+              <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4">
+                {g.items.map((b) => {
+                  const { Icon, cls } = mtBillIcon(b.kind);
+                  return (
+                    <div key={b.id} className="flex items-center gap-3 py-3">
+                      <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${cls}`}>
+                        <Icon className="h-[18px] w-[18px]" strokeWidth={2} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[14px] font-medium text-black/85">{b.title || MT_WALLET_BILL_LABEL[b.kind]}</p>
+                        <p className="mt-0.5 truncate text-[11px] text-black/35">{[b.card, mtBillItemTime(b.at)].filter(Boolean).join(' · ')}</p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className={`text-[15px] font-bold ${b.amount >= 0 ? 'text-[#07C160]' : 'text-black/85'}`}>
+                          {b.amount >= 0 ? '+' : '-'}¥{mtW2(Math.abs(b.amount))}
+                        </p>
+                        {b.status ? <p className="mt-0.5 text-[10px] text-black/35">{b.status}</p> : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))
+        )}
+        <div className="h-[28px]" />
+      </div>
+      <LocalToast msg={toastMsg} />
+    </div>
+  );
+}
+
+/** 借钱页：黄头 logo + 可借额度白卡 + 产品详情 + 四大安全保障 */
+function WalletLoanPage({ session, onClose, onToast }: { session: MtSession; onClose: () => void; onToast: (m: string) => void }) {
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#F7F8FA]">
+      <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+        {/* 黄渐变头部 */}
+        <div className="bg-gradient-to-b from-[#FFD100] to-[#FDEFB2] px-4 pb-10 pt-[54px]">
+          <div className="relative flex h-10 items-center">
+            <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-black/10">
+              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+            </button>
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="grid h-7 w-7 place-items-center rounded-[7px] bg-black text-[11px] font-bold leading-none text-[#FFD100]">美团</span>
+            <span className="text-[17px] font-bold text-black/85">美团·借钱</span>
+          </div>
+          <p className="mt-3 text-[26px] font-extrabold leading-tight text-[#5A3A10]">生活周转小帮手</p>
+        </div>
+
+        {/* 可借额度白卡 */}
+        <div className="-mt-6 px-4">
+          <div className="rounded-[16px] bg-white p-5 shadow-sm">
+            <p className="text-[12px] text-black/45">大约可借（元）</p>
+            <p className="mt-1.5 text-[40px] font-extrabold leading-none tracking-[6px] text-black/85">******</p>
+            <p className="mt-2.5 text-[11px] text-black/35">最终获取额度，以实际审批为准</p>
+            <button
+              type="button"
+              onClick={() => onToast('申请已提交，请以实际审批为准（演示）')}
+              className="mt-4 w-full rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] py-3 text-[15px] font-bold text-black/85 active:opacity-85"
+            >
+              点击申请
+            </button>
+            <p className="mt-3 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-black/35">
+              <span className="mt-[5px] h-1 w-1 shrink-0 rounded-full bg-black/25" aria-hidden="true" />
+              <span>
+                已同意并阅读
+                <span className="text-[#1677FF]">《美团借钱相关协议》</span>
+                <span className="text-[#1677FF]">《个人信息处理授权书》</span>
+                ，借款额度与利率以实际审批结果为准
+              </span>
+            </p>
+          </div>
+        </div>
+
+        {/* 产品详情 */}
+        <p className="px-5 pb-2 pt-6 text-[15px] font-bold text-black/85">产品详情</p>
+        <div className="px-4">
+          <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4">
+            {(
+              [
+                ['借款额度', '500-200,000 元'],
+                ['年化利率(单利)', '5.4%-24%'],
+                ['分期期限', '3、6、12期'],
+              ] as [string, string][]
+            ).map(([k, v]) => (
+              <div key={k} className="flex items-center justify-between py-3.5">
+                <span className="text-[13px] text-black/55">{k}</span>
+                <span className="text-[13px] font-semibold text-black/85">{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 四大安全保障 */}
+        <p className="px-5 pb-2 pt-6 text-[15px] font-bold text-black/85">四大安全保障</p>
+        <div className="px-4 pb-[28px]">
+          <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4">
+            {MT_LOAN_GUARDS.map((g) => (
+              <div key={g.t} className="py-3.5">
+                <p className="flex items-center gap-1.5 text-[13.5px] font-semibold text-black/80">
+                  <ShieldCheck className="h-4 w-4 shrink-0 text-[#C8860D]" strokeWidth={1.9} />
+                  {g.t}
+                </p>
+                <p className="mt-1 pl-[22px] text-[12px] leading-relaxed text-black/45">{g.d}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 支付密码设置页：开启（两遍输入）/ 修改（旧密码验证→新密码）/ 关闭（验证后关闭） */
+function WalletPayPwdPage({ session, onClose, onToast }: { session: MtSession; onClose: () => void; onToast: (m: string) => void }) {
+  const uid = mtUidOf(session);
+  const [data, setData] = useState(() => mtLoadPayPwd(uid));
+  const [flow, setFlow] = useState<null | { kind: 'open' | 'change'; step: 'set' | 'confirm'; first?: string }>(null);
+  const [gateFor, setGateFor] = useState<'change' | 'off' | null>(null);
+  const [errKey, setErrKey] = useState(0);
+
+  const refresh = () => setData(mtLoadPayPwd(uid));
+
+  return (
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#F7F8FA]">
+      {/* 顶栏 */}
+      <div className="relative flex h-[94px] shrink-0 items-center border-b border-black/[0.04] bg-white px-3 pt-[54px]">
+        <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
+          <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+        </button>
+        <p className="absolute left-1/2 top-[74px] -translate-x-1/2 -translate-y-1/2 text-[16px] font-semibold text-black/85">支付密码设置</p>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pt-4 no-scrollbar">
+        {/* 状态卡 */}
+        <div className="flex items-center gap-3 rounded-[14px] bg-white p-4">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#FFF6D9]">
+            <Lock className={`h-5 w-5 ${data.enabled ? 'text-[#C8860D]' : 'text-black/30'}`} strokeWidth={1.9} />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[15px] font-bold text-black/85">{data.enabled ? '已开启' : '未开启'}</p>
+            <p className="mt-0.5 text-[11.5px] leading-relaxed text-black/45">开启后，余额提现、充值等资金操作需验证 6 位支付密码（仅保存在本机）</p>
+          </div>
+        </div>
+        {!data.enabled ? (
+          <button
+            type="button"
+            onClick={() => {
+              setErrKey(0);
+              setFlow({ kind: 'open', step: 'set' });
+            }}
+            className="mt-5 w-full rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] py-3 text-[15px] font-bold text-black/85 active:opacity-85"
+          >
+            开启支付密码
+          </button>
+        ) : (
+          <div className="mt-4 divide-y divide-black/[0.04] rounded-[14px] bg-white px-4">
+            <button
+              type="button"
+              onClick={() => {
+                setGateFor('change');
+              }}
+              className="flex w-full items-center justify-between py-4 active:opacity-70"
+            >
+              <span className="text-[14px] text-black/85">修改支付密码</span>
+              <ChevronRight className="h-4 w-4 text-black/25" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setGateFor('off');
+              }}
+              className="flex w-full items-center justify-between py-4 active:opacity-70"
+            >
+              <span className="text-[14px] text-[#FF3B30]">关闭支付密码</span>
+              <ChevronRight className="h-4 w-4 text-black/25" />
+            </button>
+          </div>
+        )}
+        <p className="px-1 pt-3 text-[11px] leading-relaxed text-black/35">支付密码用于余额提现、充值等资金操作的身份验证；请勿设置连续、重复等过于简单的数字。</p>
+        <div className="h-[28px]" />
+      </div>
+
+      {/* 旧密码验证浮层（修改 / 关闭前） */}
+      {gateFor && (
+        <MtPayPwdGate
+          uid={uid}
+          label={gateFor === 'change' ? '验证旧支付密码后设置新密码' : '验证后关闭支付密码'}
+          onOk={() => {
+            if (gateFor === 'off') {
+              mtSavePayPwd(uid, { enabled: false, pwd: null });
+              mtClearPayPwdLock(uid);
+              refresh();
+              setGateFor(null);
+              onToast('支付密码已关闭');
+            } else {
+              mtClearPayPwdLock(uid);
+              setGateFor(null);
+              setErrKey(0);
+              setFlow({ kind: 'change', step: 'set' });
+            }
+          }}
+          onClose={() => setGateFor(null)}
+        />
+      )}
+
+      {/* 新密码输入浮层（开启 / 修改的第二步） */}
+      {flow && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60" role="dialog" aria-label="设置支付密码" onClick={() => setFlow(null)}>
+          <MtPayPwdSheet
+            key={`${flow.kind}-${flow.step}-${errKey}`}
+            title={flow.step === 'set' ? '请输入新密码' : '请再次输入新密码'}
+            sub={flow.step === 'confirm' ? '两次输入需一致' : undefined}
+            hint={errKey > 0 ? '两次输入不一致，请重新输入' : undefined}
+            errorKey={errKey}
+            onClose={() => setFlow(null)}
+            onComplete={(pwd) => {
+              if (flow.step === 'set') {
+                setErrKey(0);
+                setFlow({ kind: flow.kind, step: 'confirm', first: pwd });
+                return;
+              }
+              if (pwd !== flow.first) {
+                setErrKey((k) => k + 1);
+                setFlow({ kind: flow.kind, step: 'set' });
+                onToast('两次输入不一致，请重新输入');
+                return;
+              }
+              mtSavePayPwd(uid, { enabled: true, pwd });
+              mtClearPayPwdLock(uid);
+              refresh();
+              setFlow(null);
+              onToast(flow.kind === 'open' ? '支付密码已开启' : '支付密码已修改');
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ================================ 我的页（截图4） ================================
 
 function MyPage({
@@ -5780,6 +7050,7 @@ function MyPage({
   onOpenHistory,
   onOpenCoupons,
   onOpenMember,
+  onOpenWallet,
   onClaimCoupons,
   onToast,
 }: {
@@ -5790,6 +7061,7 @@ function MyPage({
   onOpenHistory: () => void;
   onOpenCoupons: () => void;
   onOpenMember: () => void;
+  onOpenWallet: () => void;
   onClaimCoupons: () => void;
   onToast: (m: string) => void;
 }) {
@@ -5942,7 +7214,7 @@ function MyPage({
       <div className="border-t-[7px] border-[#F7F8FA] px-4 py-3.5">
         <div className="flex items-center">
           <p className="text-[16px] font-bold text-black/85">钱包</p>
-          <button type="button" onClick={() => onToast('钱包（演示）')} className="ml-auto flex items-center text-[12px] text-black/40">
+          <button type="button" onClick={onOpenWallet} className="ml-auto flex items-center text-[12px] text-black/40">
             查看全部
           </button>
         </div>
@@ -9024,6 +10296,7 @@ export default function MeituanApp() {
                 onOpenHistory={() => setPage('history')}
                 onOpenCoupons={() => setPage('coupons')}
                 onOpenMember={() => setPage('member')}
+                onOpenWallet={() => setPage('wallet')}
                 onClaimCoupons={() => {
                   const n = mtClaimGodCoupons(uid);
                   showToast(n > 0 ? `已领取${n}张神券，可在「红包卡券」查看` : '神券已领取过了');
@@ -9040,6 +10313,23 @@ export default function MeituanApp() {
       {page === 'messages' && session && <MessagesPage session={session} onBack={() => setPage('main')} onOpenOrder={(id) => { setOrderId(id); setOrderFrom('orders'); setPage('orderDetail'); }} onOpenCoupons={() => setPage('coupons')} onToast={showToast} />}
       {page === 'member' && session && <MemberPage session={session} onBack={() => setPage('main')} onOpenCoupons={() => setPage('coupons')} onClaimCoupons={() => { const n = mtClaimGodCoupons(uid); showToast(n > 0 ? `已领取${n}张神券，可在「红包卡券」查看` : '神券已领取过了'); }} onToast={showToast} />}
       {page === 'couponCode' && session && orderId && <CouponCodePage session={session} orderId={orderId} onBack={() => setPage(orderFrom === 'orders' ? 'main' : 'orderDetail')} onToast={showToast} />}
+      {page === 'wallet' && (
+        <WalletPage
+          session={session}
+          onClose={() => setPage('main')}
+          onOpenBalance={() => setPage('walletBalance')}
+          onOpenCards={() => setPage('walletCards')}
+          onOpenBills={() => setPage('walletBills')}
+          onOpenPayPwd={() => setPage('walletPayPwd')}
+          onOpenLoan={() => setPage('walletLoan')}
+          onToast={showToast}
+        />
+      )}
+      {page === 'walletBalance' && <WalletBalancePage session={session} onClose={() => setPage('wallet')} onOpenCards={() => setPage('walletCards')} onToast={showToast} />}
+      {page === 'walletCards' && <WalletCardsPage session={session} onClose={() => setPage('wallet')} onOpenBills={() => setPage('walletBills')} onOpenPayPwd={() => setPage('walletPayPwd')} onToast={showToast} />}
+      {page === 'walletBills' && <WalletBillsPage session={session} onClose={() => setPage('wallet')} />}
+      {page === 'walletLoan' && <WalletLoanPage session={session} onClose={() => setPage('wallet')} onToast={showToast} />}
+      {page === 'walletPayPwd' && <WalletPayPwdPage session={session} onClose={() => setPage('wallet')} onToast={showToast} />}
       {page === 'travel' && session && <TravelChannelPage session={session} onBack={() => setPage('main')} onOpenPay={openPay} onToast={showToast} />}
       {page === 'shangou' && session && <ShangouChannelPage session={session} onBack={() => setPage('main')} onOpenPay={openPay} onToast={showToast} />}
       {page === 'hotel' && <HotelChannelPage onBack={() => setPage('main')} onOpenPay={openPay} onToast={showToast} />}
@@ -9139,6 +10429,7 @@ export default function MeituanApp() {
             setPage('main');
             showToast('选好商品后，结算时选择该券即可抵扣');
           }}
+          onOpenWallet={() => setPage('wallet')}
           onToast={showToast}
         />
       )}

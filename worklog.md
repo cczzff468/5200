@@ -16910,3 +16910,48 @@ Stage Summary:
 - 项目为"仿 iOS AI 聊天手机"：锁屏/主屏/灵动岛 + 信息/电话/微信/QQ/美团/音乐/天气/相机/照片/备忘录等 20+ App，数据层 IndexedDB + Prisma(SQLite)，AI 链路 z-ai-web-dev-sdk
 - 自检通过：lint 绿、页面渲染正常、解锁/聊天/AI回复/语音/导航核心交互全部可用
 - 待办：等待用户明确要修改或添加的功能
+
+---
+Task ID: 2
+Agent: meituan-wallet-developer
+Task: 美团钱包 UI（主页/余额/银行卡/账单/借钱/支付密码设置 + 入口接线）
+
+Work Log:
+- 数据层接线：meituan.tsx 追加 meituan-store 钱包 API 导入（mtLoadWallet/mtLoadBankCards/mtAddBankCard/mtRemoveBankCard/mtLoadWalletBills/mtWalletRecharge/mtWalletWithdraw/mtLoadPayPwd/mtSavePayPwd/mtLoadPayPwdLock/mtSavePayPwdLock/mtClearPayPwdLock/mtRecordPayPwdFail/MT_PAY_PWD_MAX_FAIL/MT_PAY_PWD_LOCK_MS/MT_WALLET_BILL_LABEL + 类型 MtBankCard/MtPayPwdLock/MtWalletBill）；lucide 新增 ArrowUp/BadgePercent/CircleDollarSign/Delete/Landmark/Lock/Settings/Shield/ShieldCheck（全部用上，无未用导入）；Page 联合类型追加 wallet/walletBalance/walletCards/walletBills/walletPayPwd/walletLoan 六路由
+- 通用件（MyPage 前新增）：mtW2 金额两位小数；MtWalletSheet 底部弹层（遮罩关闭/吸顶标题/max-h 滚动）；MtWalletCardPicker 银行卡单选列表（银行名+尾号+可用余额）；MtPayPwdSheet 美团黄风格 6 位自绘键盘（ref 累加防批处理、errorKey 重挂载清空+mtShake 抖动、锁定灰显禁用）；MtPayPwdGate 验证浮层（比对 mtLoadPayPwd、成功 mtClearPayPwdLock+onOk、失败 mtRecordPayPwdFail+errKey+1 提示已失败次数、5 次锁 30s 每秒倒计时禁用）
+- WalletPage 钱包主页：黄渐变头部（**X的钱包 + Eye 隐藏余额 + 实名待完善胶囊带红点 + 齿轮→支付密码设置）+ 实名提示条 + 白卡四宫格（余额/银行卡张数/药划算/笔笔返）+ 美团借钱|联名卡双列 + 新客专属红条 + 五图标行 + 账单入口 + 金融三 tab（黄色下划线/最高可享额度 99,800.00/去申领/三个红描边标签/金融服务水印）+ 钱包笔笔返
+- WalletBalancePage 余额页：黄头 + 可用余额大数字（Eye 切换）+ 提现/充值双按钮 + 弹层流程（选卡→金额校验 >0 且 ≤ 上限→开密码则 MtPayPwdGate→mtWalletRecharge/mtWalletWithdraw→toast 成功（提现带「已到账 X 尾号XXXX」）→刷新）；无卡空态「暂无银行卡，去添加」→银行卡专区；常见问题手风琴（首项默认展开，首条含人行管理办法长文案）+ 底部「美团支付」
+- WalletCardsPage 银行卡专区（黑金主题 #0A0A0A）：白字顶栏（返回/设置→支付密码/客服）+ 金色斜体渐变大字「添加你在美团的第N张银行卡」+ 三特性圆图标 + 金渐变添加按钮 → 三步添加弹层（7 银行宫格→卡号取后 4 位→初始余额默认 1000→mtAddBankCard，error toast）；卡列表黑金卡面（银行名/尾号**** **** ****/余额金色/管理→弹层红色删除卡片→mtRemoveBankCard）；白卡图标行（交易明细→账单/支付设置/极速支付/联名卡/积分专区）+ 权益活动白卡（去领取红钮 + 购药抵扣金待激活黄条）
+- WalletBillsPage 账单页：顶栏按月（内部 useLocalToast）；账单白卡按日分组（今天/昨天/M月d日）；每条 = 类型圆图标（充值↓绿 #07C160/提现↑橙/消费购物袋/退款 RotateCw）+ 标题（空标题回退 MT_WALLET_BILL_LABEL）+ 卡摘要·时间（M月d日 HH:mm）+ 金额（正绿加号/负黑粗体）+ 状态小字；空态灰图标「暂无账单」
+- WalletLoanPage 借钱页：黄头美团·借钱 logo 行 + 「生活周转小帮手」+ 白卡（大约可借 ******/以实际审批为准/黄大按钮点击申请 toast/协议蓝字行）+ 产品详情三行（额度 500-200,000/年化 5.4%-24%/3、6、12期）+ 四大安全保障白卡
+- WalletPayPwdPage 支付密码设置：状态卡（Lock+已开启/未开启+说明）→ 未开启黄大按钮「开启支付密码」走 MtPayPwdSheet 两遍输入（不一致 toast+抖动重输）→ mtSavePayPwd enabled；已开启两行：修改（MtPayPwdGate 验旧密码→新密码两遍→保存+清锁+toast）/ 关闭支付密码红字（Gate 验证→enabled:false,pwd:null→清锁+toast）
+- 入口接线：主路由区 couponCode 后加 6 条 wallet 路由（onToast=showToast 根 toast）；MyPage 加 onOpenWallet prop，钱包「查看全部」→ setPage('wallet')，调用处接线；CouponsPage 加 onOpenWallet prop，底部功能条「我的钱包」→ setPage('wallet')，调用处接线
+- 验证：bunx tsc --noEmit 0 错误；bun run lint 0 问题（仅 meituan/qq/wechat 超 500KB BABEL deoptimise 提示，可忽略）；dev server GET / 200 编译渲染正常、dev.log 无错误；沙箱浏览器网络隔离无法连 3000 端口，E2E 目检受阻（静态检查全绿兜底）
+
+Stage Summary:
+- 美团钱包六页全量落地：钱包主页/余额（充值+提现+支付密码验证+FAQ）/银行卡专区（黑金添加删除卡）/账单/借钱/支付密码设置，配套 MtPayPwdSheet 自绘键盘与 MtPayPwdGate 5 次失败锁 30s 防暴力验证浮层
+- 数据全部走既有 meituan-store 钱包 API（按 uid 隔离，充值/提现卡↔余额双向 + 账单流水一致）；金额统一两位小数
+- 入口两处：我的页钱包「查看全部」+ 红包卡券页底部「我的钱包」；只改 meituan.tsx 一个文件，store/支付/登录联动未动
+
+---
+
+Task ID: 3
+Agent: 主协调者 (Z.ai Code)
+Task: 美团登录交互与登录态联动 + 美团钱包全套功能（用户需求四项），端到端实测后推送 GitHub
+
+Work Log:
+- Task A1 登录页 X 关闭：meituan.tsx LoginPage 顶栏 X 按钮 onToast 拦截改为 useUI closeApp()（点击返回主屏幕）
+- Task A2 登录态联动（需求「微信/QQ 没有登录美团就登录不了」）：
+  - meituan-store.ts 新增 mtIdpLoggedIn(idp)（读 accLs('wx/qq-session-user-id') 与微信/QQ App 会话同源）+ mtAnyIdpLoggedIn()
+  - mtValidateSession 强化为恢复会话时校验授权源在线：wx/qq 会话对应端退出 → 美团同步登出；phone 会话要求微信/QQ 至少一个在线
+  - LoginPage tapIdp 前置拦截（微信未登录 → toast「微信尚未登录，请先登录微信后再试」，QQ 同理）；phoneLogin 前置 mtAnyIdpLoggedIn 拦截
+- Task B1 钱包数据层（meituan-store.ts 尾部新增，全部按 uid 隔离）：MtWallet/MtBankCard/MtWalletBill/MtPayPwd + mtLoadWallet/mtLoadBankCards/mtAddBankCard/mtRemoveBankCard/mtLoadWalletBills/mtPushWalletBill/mtWalletRecharge（卡→余额含账单）/mtWalletWithdraw（余额→卡含账单）/mtLoadPayPwd/mtSavePayPwd + 支付密码 5 次失败锁 30s（mtLoadPayPwdLock/mtRecordPayPwdFail/mtClearPayPwdLock）
+- Task B2 钱包 UI（子代理 meituan-wallet-developer 完成，meituan.tsx +1030 行）：WalletPage 黄主题主页（**X的钱包/实名待完善/四宫格/借钱联名卡/图标行/账单/金融tab/笔笔返）、WalletBalancePage（余额+提现充值弹层走银行卡+FAQ手风琴）、WalletCardsPage 黑金银行卡专区（7银行添加/卡面/管理删除/图标行/权益）、WalletBillsPage（按日分组+绿正黑负）、WalletLoanPage（生活周转小帮手+产品详情）、WalletPayPwdPage（开启/修改/关闭）、MtPayPwdSheet/MtPayPwdGate（美团黄 6 位自绘键盘+抖动+锁定倒计时）
+- Task B3 入口接线：Page 类型 +6 页；MyPage/CouponsPage 加 onOpenWallet prop（钱包「查看全部」/券包底部「我的钱包」）；路由区 6 条 wallet 路由
+- 端到端实测（agent-browser，11 项全过）：①登录页 X → 返回主屏 ✅ ②微信未登录点一键登录 → toast 拦截 ✅ ③联系人 App 建机主档案（陶凡/13800001234/w123456）→ 微信登录成功 ✅ ④美团微信一键登录 → 授权卡「陶凡」→ 同意授权 → 进入美团首页 ✅ ⑤我的→钱包查看全部 → 钱包主页对齐截图 ✅ ⑥银行卡专区（黑金）→ 添加工行卡（6222021234567890→尾号7890/¥1000）✅ ⑦余额页对齐截图 → 充值 300 → 余额 ¥300、卡 ¥700 ✅ ⑧钱包右上角齿轮 → 支付密码设置 → 开启（两遍 123456）→ 已开启态（修改/关闭行）✅ ⑨提现 100 → MtPayPwdGate「提现 ¥100.00」→ 输密码 → 余额 ¥200、卡 ¥800 ✅ ⑩账单页两条流水（提现-¥100.00/充值+¥300.00 按日分组）✅ ⑪修改密码 Gate 输错 999999 → 红字「密码错误，请重新输入（已失败 1 次，5 次后将锁定 30 秒）」✅
+- bun run lint 0 error（仅 3 个大文件 BABEL deoptimise 提示）、bunx tsc --noEmit 0 错误、dev.log 编译渲染正常
+
+Stage Summary:
+- 交付：meituan.tsx（登录联动+钱包全家桶）、meituan-store.ts（登录态判断/会话校验强化/钱包数据层）
+- 关键决策：美团登录态与微信/QQ App 会话键同源（退出微信即美团同步登出）；钱包资金唯一通道=美团银行卡（充值=卡扣款入余额，提现=余额入卡，双写账单）；支付密码按账号隔离存 IndexedDB kv、锁定计数存 localStorage；数据全部按 mtUidOf 隔离（换账号登录钱包互不串）
+- 注意事项：全新环境联系人库为空时微信无法直接登录（需先在联系人 App 创建机主档案，仿真微信既有行为）；测试数据：机主陶凡（phone 13800001234/wechat taofan123/pwd w123456/qq 10001234）

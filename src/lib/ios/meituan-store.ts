@@ -135,6 +135,24 @@ export function mtClearSearchHist(): void {
 // ---------------- 登录身份解析（QQ/微信一键登录） ----------------
 
 /**
+ * 微信/QQ App 登录态（需求「微信/QQ 没有登录时美团就登录不了」）：
+ * 会话键 `wx-session-user-id` / `qq-session-user-id`（账号作用域）有值 = 对应 App 当前已登录。
+ * 与微信/QQ App 自身的会话恢复同源（它们登录/退出时写/删该键），美团读取即时生效。
+ */
+export function mtIdpLoggedIn(idp: 'wx' | 'qq'): boolean {
+  try {
+    return Boolean(window.localStorage.getItem(accLs(`${idp}-session-user-id`, idp)));
+  } catch {
+    return false;
+  }
+}
+
+/** 是否至少一个授权源（微信或 QQ）在线：美团任何形式的登录都以此为前置 */
+export function mtAnyIdpLoggedIn(): boolean {
+  return mtIdpLoggedIn('wx') || mtIdpLoggedIn('qq');
+}
+
+/**
  * 解析微信/QQ 当前账号对应的「人」的联系人（一键登录读取账号信息）：
  * 1) 该端登录会话指针（与微信/QQ App 显示的「我」一致）；
  * 2) 回退：账号槽位关联的档案联系人（main = 机主，alt/anon = altOf/ownerContactId）；
@@ -164,11 +182,21 @@ export async function mtResolveIdpIdentity(idp: 'wx' | 'qq'): Promise<{ contactI
   return { contactId: '', name: idp === 'wx' ? '微信用户' : 'QQ用户', avatar: null };
 }
 
-/** 登录会话有效性校验（打开 App 时调用）：wx/qq 会话对应的联系人被删除 → 视为已退出；
- *  本地虚拟账号（联系人库为空时一键登录的兜底，contactId 空）直接有效 */
+/**
+ * 登录会话有效性校验（打开 App 时调用）：
+ * 1) 登录态联动（需求「微信/QQ 没有登录时美团就登录不了」）：
+ *    - wx/qq 会话：对应授权源 App 已退出登录 → 美团同步登出（回登录页）；
+ *    - phone 会话：微信与 QQ 都不在线 → 同步登出（登录前置已不满足）。
+ * 2) wx/qq 会话对应的联系人被删除 → 视为已退出；
+ *    本地虚拟账号（联系人库为空时一键登录的兜底，contactId 空）仅校验登录态。
+ */
 export async function mtValidateSession(s: MtSession | null): Promise<MtSession | null> {
   if (!s) return null;
-  if (s.idp === 'phone') return s.phone ? s : null;
+  if (s.idp === 'phone') {
+    if (!s.phone) return null;
+    return mtAnyIdpLoggedIn() ? s : null;
+  }
+  if (!mtIdpLoggedIn(s.idp)) return null;
   if (!s.contactId) return s;
   try {
     const c = await getContact(s.contactId);
@@ -1022,3 +1050,244 @@ export const mtCouponTypeLabel = (t: MtCouponType): string => MT_COUPON_TYPE_LAB
 
 /** 种子类型再导出（UI 层构造用） */
 export type { MtCouponSeed };
+
+// ---------------- 美团钱包（余额/银行卡/账单/支付密码，按账号隔离） ----------------
+
+/** 美团余额（仅可提现语义对齐真机：余额用于展示，资金进出全部经过银行卡） */
+export interface MtWallet {
+  balance: number;
+}
+
+const walletKey = (uid: string) => `mt-wallet:${uid}`;
+
+export function mtLoadWallet(uid: string): MtWallet {
+  const w = kvGet<Partial<MtWallet>>(walletKey(uid));
+  if (w && typeof w === 'object' && typeof w.balance === 'number' && Number.isFinite(w.balance) && w.balance >= 0) {
+    return { balance: Math.round(w.balance * 100) / 100 };
+  }
+  return { balance: 0 };
+}
+
+export function mtSaveWallet(uid: string, w: MtWallet): void {
+  kvSet(walletKey(uid), { balance: Math.max(0, Math.round(w.balance * 100) / 100) });
+}
+
+/** 美团银行卡（钱包「提现/充值都从银行卡」的唯一资金通道；演示卡带余额） */
+export interface MtBankCard {
+  id: string;
+  /** 银行名（如 中国工商银行） */
+  bank: string;
+  /** 卡号后四位 */
+  tail: string;
+  /** 卡内可用余额（演示） */
+  balance: number;
+  /** 添加时间（列表排序用） */
+  addedAt: number;
+}
+
+const cardsKey = (uid: string) => `mt-bank-cards:${uid}`;
+
+export function mtLoadBankCards(uid: string): MtBankCard[] {
+  const list = kvGet<Partial<MtBankCard>[]>(cardsKey(uid));
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((c): c is MtBankCard => Boolean(c) && typeof (c as MtBankCard).id === 'string' && typeof (c as MtBankCard).tail === 'string')
+    .map((c) => ({
+      id: c.id,
+      bank: typeof c.bank === 'string' && c.bank ? c.bank : '银行卡',
+      tail: c.tail,
+      balance: typeof c.balance === 'number' && Number.isFinite(c.balance) ? Math.max(0, Math.round(c.balance * 100) / 100) : 0,
+      addedAt: typeof c.addedAt === 'number' ? c.addedAt : 0,
+    }))
+    .sort((a, b) => b.addedAt - a.addedAt);
+}
+
+export function mtSaveBankCards(uid: string, cards: MtBankCard[]): void {
+  kvSet(cardsKey(uid), cards.slice(0, 20));
+}
+
+/** 添加银行卡（卡号取后四位；同一尾号 + 同一银行不重复添加） */
+export function mtAddBankCard(uid: string, bank: string, tail: string, balance: number): MtBankCard | { error: string } {
+  const t = tail.replace(/\D/g, '').slice(-4);
+  if (t.length !== 4) return { error: '卡号至少需要 4 位数字' };
+  const name = bank.trim() || '银行卡';
+  const exists = mtLoadBankCards(uid).find((c) => c.tail === t && c.bank === name);
+  if (exists) return { error: '该银行卡已添加' };
+  const card: MtBankCard = {
+    id: `card${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+    bank: name,
+    tail: t,
+    balance: Math.max(0, Math.round(balance * 100) / 100),
+    addedAt: Date.now(),
+  };
+  mtSaveBankCards(uid, [card, ...mtLoadBankCards(uid)]);
+  return card;
+}
+
+export function mtRemoveBankCard(uid: string, id: string): void {
+  mtSaveBankCards(
+    uid,
+    mtLoadBankCards(uid).filter((c) => c.id !== id)
+  );
+}
+
+/** 钱包账单流水（充值/提现/消费/退款，最新在前） */
+export interface MtWalletBill {
+  id: string;
+  kind: 'recharge' | 'withdraw' | 'pay' | 'refund';
+  /** 标题（如 充值-中国工商银行 尾号1234） */
+  title: string;
+  /** 正负金额：充值/退款入账为正，提现/消费为负 */
+  amount: number;
+  at: number;
+  /** 关联卡摘要（如 中国工商银行 尾号1234） */
+  card?: string;
+  /** 账单状态文案（成功/处理中等，缺省=成功） */
+  status?: string;
+}
+
+const billsKey = (uid: string) => `mt-wallet-bills:${uid}`;
+
+export function mtLoadWalletBills(uid: string): MtWalletBill[] {
+  const list = kvGet<Partial<MtWalletBill>[]>(billsKey(uid));
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((b): b is MtWalletBill => Boolean(b) && typeof (b as MtWalletBill).id === 'string' && typeof (b as MtWalletBill).amount === 'number')
+    .map((b): MtWalletBill => ({
+      id: b.id,
+      kind: b.kind === 'withdraw' || b.kind === 'pay' || b.kind === 'refund' ? b.kind : 'recharge',
+      title: typeof b.title === 'string' ? b.title : '',
+      amount: Math.round(b.amount * 100) / 100,
+      at: typeof b.at === 'number' ? b.at : Date.now(),
+      card: typeof b.card === 'string' ? b.card : undefined,
+      status: typeof b.status === 'string' ? b.status : undefined,
+    }))
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 200);
+}
+
+export function mtPushWalletBill(uid: string, bill: Omit<MtWalletBill, 'id'>): void {
+  const row: MtWalletBill = { id: `wb${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, ...bill };
+  kvSet(billsKey(uid), [row, ...mtLoadWalletBills(uid)].slice(0, 200));
+}
+
+/**
+ * 充值：从银行卡 → 美团余额（需求「充值从银行卡」）。
+ * 卡余额不足 → 失败；成功返回流水（卡扣款 + 余额入账 + 账单一致完成）。
+ */
+export function mtWalletRecharge(uid: string, cardId: string, amount: number): { ok: boolean; error?: string } {
+  const amt = Math.round(amount * 100) / 100;
+  if (!(amt > 0)) return { ok: false, error: '请输入正确的充值金额' };
+  const cards = mtLoadBankCards(uid);
+  const card = cards.find((c) => c.id === cardId);
+  if (!card) return { ok: false, error: '请选择银行卡' };
+  if (card.balance < amt) return { ok: false, error: `卡内余额不足（可用 ¥${card.balance.toFixed(2)}）` };
+  const label = `${card.bank} 尾号${card.tail}`;
+  mtSaveBankCards(
+    uid,
+    cards.map((c) => (c.id === cardId ? { ...c, balance: Math.round((c.balance - amt) * 100) / 100 } : c))
+  );
+  mtSaveWallet(uid, { balance: Math.round((mtLoadWallet(uid).balance + amt) * 100) / 100 });
+  mtPushWalletBill(uid, { kind: 'recharge', title: '充值', amount: amt, at: Date.now(), card: label });
+  return { ok: true };
+}
+
+/**
+ * 提现：美团余额 → 银行卡（需求「提现从银行卡」，免费实时到账演示口径）。
+ * 余额不足 → 失败；成功返回流水（余额扣款 + 卡入账 + 账单一致完成）。
+ */
+export function mtWalletWithdraw(uid: string, cardId: string, amount: number): { ok: boolean; error?: string } {
+  const amt = Math.round(amount * 100) / 100;
+  if (!(amt > 0)) return { ok: false, error: '请输入正确的提现金额' };
+  const wallet = mtLoadWallet(uid);
+  if (wallet.balance < amt) return { ok: false, error: `可用余额不足（可用 ¥${wallet.balance.toFixed(2)}）` };
+  const cards = mtLoadBankCards(uid);
+  const card = cards.find((c) => c.id === cardId);
+  if (!card) return { ok: false, error: '请选择提现到的银行卡' };
+  const label = `${card.bank} 尾号${card.tail}`;
+  mtSaveWallet(uid, { balance: Math.round((wallet.balance - amt) * 100) / 100 });
+  mtSaveBankCards(
+    uid,
+    cards.map((c) => (c.id === cardId ? { ...c, balance: Math.round((c.balance + amt) * 100) / 100 } : c))
+  );
+  mtPushWalletBill(uid, { kind: 'withdraw', title: '提现', amount: -amt, at: Date.now(), card: label });
+  return { ok: true };
+}
+
+/** 美团支付密码（钱包右上角设置：开启/关闭/修改；提现/充值前验证） */
+export interface MtPayPwd {
+  enabled: boolean;
+  /** 6 位数字密码（仅本机存储，不外传） */
+  pwd: string | null;
+}
+
+const payPwdKey = (uid: string) => `mt-pay-pwd:${uid}`;
+
+export function mtLoadPayPwd(uid: string): MtPayPwd {
+  const p = kvGet<Partial<MtPayPwd>>(payPwdKey(uid));
+  if (p && typeof p === 'object') {
+    const pwd = typeof p.pwd === 'string' && /^\d{6}$/.test(p.pwd) ? p.pwd : null;
+    return { enabled: p.enabled === true && pwd !== null, pwd };
+  }
+  return { enabled: false, pwd: null };
+}
+
+export function mtSavePayPwd(uid: string, d: MtPayPwd): void {
+  kvSet(payPwdKey(uid), d);
+}
+
+// 支付密码暴力试错保护（5 次失败锁定 30s；localStorage 跨组件共享，按账号隔离）
+export const MT_PAY_PWD_MAX_FAIL = 5;
+export const MT_PAY_PWD_LOCK_MS = 30 * 1000;
+
+export interface MtPayPwdLock {
+  fails: number;
+  lockedUntil: number;
+}
+
+const payPwdLockKey = (uid: string) => `mt-pay-pwd-lock:${uid}`;
+
+export function mtLoadPayPwdLock(uid: string): MtPayPwdLock {
+  try {
+    const raw = window.localStorage.getItem(payPwdLockKey(uid));
+    if (!raw) return { fails: 0, lockedUntil: 0 };
+    const p = JSON.parse(raw) as Partial<MtPayPwdLock>;
+    return {
+      fails: typeof p.fails === 'number' && p.fails >= 0 ? p.fails : 0,
+      lockedUntil: typeof p.lockedUntil === 'number' && p.lockedUntil > 0 ? p.lockedUntil : 0,
+    };
+  } catch {
+    return { fails: 0, lockedUntil: 0 };
+  }
+}
+
+export function mtSavePayPwdLock(uid: string, d: MtPayPwdLock): void {
+  try {
+    window.localStorage.setItem(payPwdLockKey(uid), JSON.stringify(d));
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 清零失败次数与锁定（验证成功 / 修改密码成功 / 关闭支付密码时调用） */
+export function mtClearPayPwdLock(uid: string): void {
+  mtSavePayPwdLock(uid, { fails: 0, lockedUntil: 0 });
+}
+
+/** 记录一次失败：累加 fails，达到 5 次设 lockedUntil；返回更新后的状态 */
+export function mtRecordPayPwdFail(uid: string): MtPayPwdLock {
+  const cur = mtLoadPayPwdLock(uid);
+  const fails = cur.fails + 1;
+  const lockedUntil = fails >= MT_PAY_PWD_MAX_FAIL ? Date.now() + MT_PAY_PWD_LOCK_MS : cur.lockedUntil;
+  const next = { fails, lockedUntil };
+  mtSavePayPwdLock(uid, next);
+  return next;
+}
+
+/** 账单类型 → 展示文案 */
+export const MT_WALLET_BILL_LABEL: Record<MtWalletBill['kind'], string> = {
+  recharge: '充值',
+  withdraw: '提现',
+  pay: '消费',
+  refund: '退款',
+};
