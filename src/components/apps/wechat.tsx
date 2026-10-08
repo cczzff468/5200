@@ -7810,9 +7810,9 @@ function ChatPage({
                   <MtPayBubble pid={m.mtpay.pid} role={m.mtpay.role} onClick={() => setProxyPid(m.mtpay!.pid)} />
                 </div>
               ) : m.kind === 'mtshare' && m.mtshare ? (
-                /* 美团订单分享动态卡片（订单详情右上角分享；状态时间线实时跟订单走） */
+                /* 美团订单分享动态卡片（订单详情右上角分享；状态时间线实时跟订单走；AI 请客卡 role peer 箭头指左） */
                 <div {...bubblePress}>
-                  <MtShareBubble sid={m.mtshare.sid} />
+                  <MtShareBubble sid={m.mtshare.sid} side={m.role === 'me' ? 'right' : 'left'} />
                 </div>
               ) : m.kind === 'mtdraft' && m.mtdraft ? (
                 /* 美团 AI 代点外卖草稿卡（AI [帮点外卖] 生成；机主确认后创建待支付订单并跳收银台） */

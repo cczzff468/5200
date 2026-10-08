@@ -5,14 +5,20 @@
  * - AI 输出 [帮点外卖:商家ID|菜名x数量|备注] 后生成草稿（mt-draft:<did>），卡片实时读 kv；
  * - pending：商家 + 菜品清单 + 预估合计 +【确认下单】（→ 创建美团待支付订单并跳收银台）
  *   与【不了谢谢】（→ 草稿取消）两个按钮；
- * - confirmed：显示「已下单 · 待支付」+【去美团支付】（直达收银台；订单已支付/取消则进订单详情）；
+ * - confirmed：实时跟订单走——
+ *   · 订单待支付 → 「应付」+【去美团支付】（直达收银台）；
+ *   · 订单已支付/配送中/已送达 → 内嵌五段实时状态时间线（与订单分享卡同渲染件，监听
+ *     mt-orders-changed + 逐秒 tick，商家接单/骑手取餐/送达自动推进）+【查看订单】；
+ *   · 订单已取消 → 灰化提示；
  * - declined：整卡灰化「已取消」。
  * 资金说明：本卡只创建待支付订单，真实支付走美团收银台既有渠道（不涉及真实资金）。
  */
 import { useEffect, useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
+import { ChevronRight, ShieldCheck } from 'lucide-react';
 import { FoodImg } from './mt-food-img';
+import { MtOrderTimeline } from './mt-share-card';
 import { MT_DRAFT_EVENT, mtConfirmAiDraft, mtDeclineAiDraft, mtGetDraft } from '@/lib/ios/mt-ai-engage';
+import { mtLoadOrders, type MtOrder } from '@/lib/ios/meituan-store';
 import { navigateToChatSession } from '@/lib/ios/island-notify';
 
 const fmt2 = (n: number): string => {
@@ -31,12 +37,14 @@ export function MtDraftBubble({
   const [busy, setBusy] = useState(false);
   const d = mtGetDraft(did);
 
-  // 草稿状态/订单状态被别处更新 → 重读渲染
+  // 草稿状态/订单状态被别处更新 → 重读渲染；逐秒 tick（时间线与倒计时实时感）
   useEffect(() => {
     const onChange = () => setVer((v) => v + 1);
+    const iv = window.setInterval(onChange, 1000);
     window.addEventListener(MT_DRAFT_EVENT, onChange);
     window.addEventListener('mt-orders-changed', onChange);
     return () => {
+      window.clearInterval(iv);
       window.removeEventListener(MT_DRAFT_EVENT, onChange);
       window.removeEventListener('mt-orders-changed', onChange);
     };
@@ -51,8 +59,15 @@ export function MtDraftBubble({
     );
   }
 
+  // confirmed 后实时读订单（与订单分享卡同源：statusLog 推导时间线）
+  const order: MtOrder | null = d.orderId ? (mtLoadOrders(d.uid).find((o) => o.id === d.orderId) ?? null) : null;
+  const paid = !!order && order.status !== 'pendingPay' && order.status !== 'canceled';
+
   const goPay = (orderId: string) => {
     navigateToChatSession('meituan', orderId, { pay: true });
+  };
+  const openDetail = () => {
+    if (d.orderId) navigateToChatSession('meituan', d.orderId);
   };
 
   const confirm = () => {
@@ -79,7 +94,7 @@ export function MtDraftBubble({
   return (
     <div
       data-testid={`mt-draft-card-${d.status}`}
-      className={`relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 ${d.status === 'declined' ? 'grayscale-[0.72]' : ''}`}
+      className={`relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 ${d.status === 'declined' || order?.status === 'canceled' ? 'grayscale-[0.72]' : ''}`}
     >
       {/* 头部：美团 logo + 交易保障 */}
       <div className="flex items-center gap-1.5">
@@ -119,7 +134,7 @@ export function MtDraftBubble({
 
       {d.note && <p className="mt-1.5 truncate text-[11px] text-black/40">备注：{d.note}</p>}
 
-      {/* 操作区 */}
+      {/* 操作区：pending 确认/拒绝；confirmed 实时跟订单（待支付→去付款；已支付→状态时间线）；declined 已取消 */}
       {d.status === 'pending' ? (
         <div className="mt-2.5 flex gap-2">
           <button
@@ -142,14 +157,34 @@ export function MtDraftBubble({
           </button>
         </div>
       ) : d.status === 'confirmed' ? (
-        <button
-          type="button"
-          data-testid="mt-draft-gopay"
-          onClick={() => d.orderId && goPay(d.orderId)}
-          className="mt-2.5 h-9 w-full rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[13px] font-bold text-black/85 active:opacity-85"
-        >
-          {d.orderId ? '去美团支付' : '查看订单'}
-        </button>
+        order && paid ? (
+          <>
+            {/* 已支付：五段实时状态时间线（商家接单/骑手取餐/送达自动推进） */}
+            <div data-testid="mt-draft-timeline" className="mt-2.5 border-t border-black/[0.05] pt-2">
+              <MtOrderTimeline order={order} />
+            </div>
+            <button
+              type="button"
+              data-testid="mt-draft-open-order"
+              onClick={openDetail}
+              className="mt-2 flex w-full items-center justify-center gap-0.5 text-[11px] font-medium text-[#B77900] active:opacity-70"
+            >
+              查看订单详情
+              <ChevronRight className="h-3 w-3" strokeWidth={2.4} />
+            </button>
+          </>
+        ) : order?.status === 'canceled' ? (
+          <p data-testid="mt-draft-canceled" className="mt-2.5 h-9 text-center text-[13px] leading-9 text-black/35">订单已取消</p>
+        ) : (
+          <button
+            type="button"
+            data-testid="mt-draft-gopay"
+            onClick={() => d.orderId && goPay(d.orderId)}
+            className="mt-2.5 h-9 w-full rounded-full bg-gradient-to-r from-[#FFD900] to-[#FFC300] text-[13px] font-bold text-black/85 active:opacity-85"
+          >
+            {d.orderId ? '去美团支付' : '查看订单'}
+          </button>
+        )
       ) : (
         <p className="mt-2.5 h-9 text-center text-[13px] leading-9 text-black/35">已取消</p>
       )}

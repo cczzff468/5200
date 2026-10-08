@@ -47,6 +47,8 @@ export interface MtOrderShare {
   items: MtShareItem[];
   note?: string;
   createdAt: number;
+  /** 付款人名（AI 请客代付时 = 角色名；卡片角标显示「X已买单」；普通分享无此字段） */
+  paidBy?: string;
 }
 
 /** 聊天里的订单分享卡片消息（微信 WxMsg / QQ QQMsg 同构，kind='mtshare'） */
@@ -102,6 +104,7 @@ export function mtGetShare(sid: string): MtOrderShare | null {
       : [],
     note: typeof s.note === 'string' && s.note ? s.note : undefined,
     createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now(),
+    paidBy: typeof s.paidBy === 'string' && s.paidBy ? s.paidBy : undefined,
   };
 }
 
@@ -147,6 +150,12 @@ export interface MtCreateShareOpts {
   idp: 'wx' | 'qq';
   contactId: string;
   fromName: string;
+  /** 卡片方向（缺省 'me'）：'peer' = AI 角色发给机主（请客代付场景），箭头指左 */
+  role?: 'me' | 'peer';
+  /** 卡片回退文案（缺省「分享一个xx的订单」） */
+  content?: string;
+  /** 付款人名（AI 请客代付；卡片角标「X已买单」+ AI 历史序列化用） */
+  paidBy?: string;
 }
 
 export type MtCreateShareResult = { ok: true; share: MtOrderShare } | { ok: false; error: string };
@@ -164,6 +173,11 @@ function insertShareCard(idp: 'wx' | 'qq', contactId: string, msg: MtShareCardMs
   } catch {
     /* 广播失败不影响落库 */
   }
+}
+
+/** 平台通知 App 名（AI 请客卡灵动岛通知用） */
+export function mtShareNotifyApp(idp: 'wx' | 'qq'): 'wechat' | 'qq' {
+  return idp === 'wx' ? 'wechat' : 'qq';
 }
 
 /**
@@ -199,6 +213,7 @@ export async function mtCreateOrderShare(opts: MtCreateShareOpts): Promise<MtCre
     items: order.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price, spec: i.spec, emoji: i.emoji, img: i.img })),
     note: order.note,
     createdAt: Date.now(),
+    ...(opts.paidBy ? { paidBy: opts.paidBy } : {}),
   };
   kvSet(`mt-share:${share.id}`, share);
   // sid 索引（扫单/管理用；幂等追加）
@@ -209,11 +224,11 @@ export async function mtCreateOrderShare(opts: MtCreateShareOpts): Promise<MtCre
     /* 忽略 */
   }
 
-  // 卡片进聊天（我发给好友）
+  // 卡片进聊天（role 'me' = 机主发给好友；'peer' = AI 角色发给机主（请客代付））
   insertShareCard(idp, contactId, {
     id: genMsgId(),
-    role: 'me',
-    content: `[美团订单]分享一个${order.merchantName}的订单`,
+    role: opts.role === 'peer' ? 'peer' : 'me',
+    content: opts.content?.trim() || `[美团订单]分享一个${order.merchantName}的订单`,
     time: Date.now(),
     kind: 'mtshare',
     mtshare: { sid: share.id },
