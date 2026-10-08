@@ -17099,3 +17099,30 @@ Stage Summary:
 - 网易云 API 本地部署完成且常驻：Next(启动树)→instrumentation→ncm-keeper(3010)→netease-api→next-keeper(3000)，四层互相守护、崩溃自愈、依赖缺失自补装
 - 改动文件：src/instrumentation.ts（新）、mini-services/netease-api/ncm-keeper.sh（新）、mini-services/netease-api/next-keeper.sh、next.config.ts（无害字段触发重启）
 - 用户体验恢复：扫码登录/手机号登录/搜索/歌单/播放全链路可用；VIP 歌曲非会员试听 30s 为源站限制
+
+---
+Task ID: 10
+Agent: Z.ai Code (main)
+Task: 美团×AI 联动规则审计后的批量修复——A1/A2/A3/B4/B5/B6/B7/B8/C9/C10/C11（用户选定全部 11 项）
+
+Work Log:
+- 全量审计 mt-ai-engage.ts / mt-proxy-pay.ts / mt-order-share.ts / wechat.tsx / qq.tsx 接线，产出 11 项问题清单供用户选择
+- A1: qq.tsx 私聊补齐 buildMtEngageCtx 注入（systemFull block+rules）与 isMtEngageActionKind 执行分支，与微信同构
+- A2+B8: buildMtEngageCtx 帮付规则排除全部「有 pending 代付请求」的订单（扫 mt-proxy-index 建 proxyOrderIds 集合），防 AI 帮付自己请机主代付的单、防 [代付:pid]/[帮付:订单id] 双口径
+- A3: 新增 insertEngageSys（sys 行直写聊天 kv + MT_PROXY_CARD_EVENT 广播）；mtSelfOrderFlow/mtTreatOrderFlow 失败不再静默；执行器同步预校验 mtValidateParsedOrder（商家/菜品/地址/金额）当场报错
+- B4: mt-proxy-pay 状态扩为 pending|paid|declined|expired + closeReason；新增 mtSyncProxiesForUid（订单取消/自行支付/其他好友代付 → pending 请求联动置终态），挂进 MeituanOrderWatcher tick + finishPay（meituan.tsx）+ mtCancelWithRefund（meituan-store 动态 import 防循环）+ mtProxyPayOrder 两条路径
+- B5: mtDeclineProxy + runProxyDecision 婉拒分支置 declined；MtPayBubble/MtProxyDetailPage 婉拒/失效态（褪灰+「TA婉拒了这次代付~」+「对方已婉拒」+知道了吗按钮）；mtProxyHistoryLine 状态文案同步
+- B6: 引擎级冷却 MT_ENGAGE_COOLDOWN_MS=5min（kv mt-engage-cd:<app>:<charId>，请客/帮付/自己点共用）+ MT_ENGAGE_AMOUNT_CAP=100（大额需 MT_ENGAGE_CONSENT_RE 匹配近期聊天才放行，否则拦截出 sys 提示）；执行器三处挂点 + 冷却中注入【参与节流】规则
+- B7: mtFoodSlotOf 时段划分（早/午/下午茶/晚/夜宵），buildCatalogBlock 稳定排序把匹配时段商家排前，目录头注时段
+- C9: mtWriteOrderTerminalMemory（friend 已支付代付→买单史；me 方向→AI 自己的单；confirmed 草稿→代点史；去重防互吞），挂进 MeituanOrderWatcher 终态 transition
+- C10: 美团未登录 + 食物话题命中时注入【美团未登录】规则（教 AI 别输出标记、提醒登录），平时不噪音
+- C11: groups.ts 群消息 kind 加 'mtdraft' + mtdraft 字段 + normalizeMsg 透传；wx-group/qq-group 注入 buildMtEngageCtx(scope:'group')（只下订单动态+目录+帮点教学）、buildGroupReplyMsgs 拦截 [帮点外卖]（charId=发言成员）、msgTextOf 序列化、渲染复用 MtDraftBubble
+- 附带修复（E2E 实测暴露）：MT_ECHO_LINE_RE 嵌套括号剥除失败（「珍珠奶茶（冰）」致 [^）]* 提前截断），改贪婪 （.*）
+- E2E（agent-browser）：建档苏凡/琳琳 → 微信登录 → 美团微信账密登录 → 私聊请客链路（请客下单+AI付款+实时时间线卡+灵动岛活动）→ 冷却期再请只回文字不出卡（B6 预防生效）→ IDB 种子 declined 卡验证 B5 请求卡+详情页 → 建群群内帮点外卖（草稿卡渲染+确认下单+收银台）全通过；tsc/eslint 零错误
+
+Stage Summary:
+- 11 项规则审计修复全部落地；联动引擎新增节流/阈值/终态记忆/失败反馈/群聊草稿五个维度
+- 数据模型变更：MtProxyPay.status 扩 4 态 + closeReason；群消息 kind 加 mtdraft（normalize 兼容旧数据）
+- QQ 私聊联动补齐（此前只在微信可用）
+- 实测新增修复：历史序列化行回显剥除正则支持嵌套括号
+- 未验证项说明：QQ 私聊 LLM 行为级流程与微信同构同源（未重复跑 LLM）；expired UI 复用 declined 渲染路径；A2/B8/C9/C10 为确定性代码路径

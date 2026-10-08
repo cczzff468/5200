@@ -190,7 +190,10 @@ export interface WxGroupMsg {
   senderName: string;
   content: string;
   time: number;
-  kind?: 'text' | 'notice' | 'image' | 'location' | 'sticker' | 'redpacket' | 'transfer' | 'forward' | 'voice';
+  kind?: 'text' | 'notice' | 'image' | 'location' | 'sticker' | 'redpacket' | 'transfer' | 'forward' | 'voice' | 'mtdraft';
+  /** 美团 AI 代点外卖草稿卡（kind='mtdraft'，C11 群内帮点外卖）：did = 草稿（mt-draft:<did>）；
+   *  机主确认后才真正下单并自己付，群里只出草稿卡不做代付/帮付/请客 */
+  mtdraft?: { did: string };
   /** 语音消息（kind = 'voice'）：音频/波形/时长/转写（结构等价于 components/apps/voice-bubble 的 VoiceMsgData，
    *  lib 层不反向依赖 UI 组件，这里用同形本地类型；字段变动需两处同步）。
    *  localText = 朗读原文（文字转语音/AI 语音内置引擎消息）；synth = AI 语音合成通道；contactId = 发送者联系人 id */
@@ -1097,9 +1100,14 @@ function normalizeMsg(m: unknown): WxGroupMsg | null {
     content: r.content,
     time: r.time,
     kind:
-      r.kind === 'notice' || r.kind === 'image' || r.kind === 'location' || r.kind === 'sticker' || r.kind === 'redpacket' || r.kind === 'transfer' || r.kind === 'forward' || r.kind === 'voice'
+      r.kind === 'notice' || r.kind === 'image' || r.kind === 'location' || r.kind === 'sticker' || r.kind === 'redpacket' || r.kind === 'transfer' || r.kind === 'forward' || r.kind === 'voice' || r.kind === 'mtdraft'
         ? r.kind
         : 'text',
+    // 美团代点草稿卡字段透传（C11 群内帮点外卖；旧记录无此字段照常兼容）
+    mtdraft:
+      r.kind === 'mtdraft' && r.mtdraft && typeof r.mtdraft.did === 'string'
+        ? { did: r.mtdraft.did }
+        : undefined,
     // 语音消息规范化（宽松字段兜底；音频 dataURL 随消息持久化，重启后仍可播放；
     // localText/synth/contactId 支持 AI 语音内置引擎消息的重启朗读与角色音色解析）
     voice:

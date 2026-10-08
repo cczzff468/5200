@@ -69,6 +69,9 @@ import { addressNameOf, displayNameOf, isFriendIn, meTileLabel, nameVariantHit, 
 import { aiVoiceFreqLabel, decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { buildPersonaSystemPrompt } from '@/lib/ios/persona';
+// 美团×AI 联动（C11 群内帮点外卖）：目录+代点教学注入 + [帮点外卖] 执行 + 草稿卡历史序列化
+import { buildMtEngageCtx, mtCreateAiDraft, mtDraftHistoryLine, mtEngageSessionUid, parseMtOrderBody } from '@/lib/ios/mt-ai-engage';
+import { MtDraftBubble } from './mt-draft-card';
 import { contactRealName, getChatBgImage, ownerRealNameFor, removeChatBgImage, setChatBgImage } from '@/lib/ios/contacts-store';
 import { genId } from '@/lib/ios/db';
 import {
@@ -2326,6 +2329,8 @@ export function QqGroupChatPage({
     if (m.kind === 'image') return m.img?.desc ? `[图片]（图片内容：${m.img.desc}）` : '[图片]';
     // 「文字图片」卡片：AI 直接读卡片文字（对齐单聊 scanTextOf 口径，防读到空内容/乱码；空文字脏数据给占位）
     if (m.kind === 'textcard') return m.card?.text || '[文字图片]';
+    // 美团代点卡：AI 读到结构化信息（谁帮点的/商家/菜品/状态），可自然接话
+    if (m.kind === 'mtdraft' && m.mtdraft) return mtDraftHistoryLine(m.mtdraft.did, m.senderName || '群友');
     // 语音消息：转写直接作为文本内容进上下文（识别不出时用本地原文兜底——AI 语音消息/文字转语音存了朗读原文；都没有时用占位，成员知道 TA 发了语音）
     if (m.kind === 'voice') return m.voice?.transcript || groupVoiceLocalText(m.voice) || '[语音]';
     if (m.kind === 'sticker' && m.stk) {
@@ -2744,6 +2749,16 @@ export function QqGroupChatPage({
         if (allowSkip) {
           groupRules.push('【发言判断】刚发出的这条消息如果与你无关、不需要你表态或你无话可说（比如别人在单独聊天），只回复 [SKIP] 两个词，不要说任何其他内容；有你要说的就正常回复。——『与你无关』指话题跟你完全沾不上边（没被问到、也插不上话）；被@/被点名/被问、或话题涉及你和你在意的人时就正常回应；大家聊得热闹、你自然想接一句时也可以正常发言，实在拿不准才 [SKIP]。');
         }
+        // 美团×AI 联动（C11 群内帮点外卖）：机主订单动态 + 食物话题命中时的商家目录与代点教学
+        //（scope 'group'：只下帮点外卖草稿，代付/帮付/请客/自己点是单聊语义不下发）
+        const mtEngage = buildMtEngageCtx(
+          gid,
+          'qq',
+          [lastUserText, ...ctxMsgs.slice(-6).map(msgTextOf)],
+          { scope: 'group' },
+        );
+        if (mtEngage.block) groupRules.push(mtEngage.block);
+        if (mtEngage.rules.length > 0) groupRules.push(...mtEngage.rules);
 
         const npcExtra = buildNpcPromptExtra(char, contactsRef.current);
         const system = buildPersonaSystemPrompt(char, {
@@ -2904,6 +2919,39 @@ export function QqGroupChatPage({
           const { text: tagStripped, tags: photoTags } = extractPhotoTags(rawText);
           for (const part of extractRichActionParts(tagStripped)) {
             if (part.type === 'action') {
+              // 美团代点（C11 群内帮点外卖）：[帮点外卖:商家ID|菜名x数量,...] → 代点草稿卡
+              //（机主确认后才真正下单并自己付；群里不接代付/帮付/请客/自己点）。
+              // 成员只帮机主代点：草稿发起人 = 当前发言成员（char），确认入口/订单归属都在机主侧
+              if (part.action.kind === 'mt-order-draft') {
+                const mtUidInfo = mtEngageSessionUid();
+                const mtBody = mtUidInfo ? parseMtOrderBody(part.action.targetId) : null;
+                if (mtUidInfo && mtBody) {
+                  const mtRes = mtCreateAiDraft({
+                    uid: mtUidInfo.uid,
+                    merchantId: mtBody.merchantId,
+                    items: mtBody.items,
+                    note: mtBody.note,
+                    charId: char.id,
+                    charName: charName,
+                    app: 'qq',
+                  });
+                  if (mtRes.ok) {
+                    all.push({
+                      id: msgIdx === 0 ? aiMsgId : `${aiMsgId}-${msgIdx}`,
+                      role: 'peer',
+                      senderId: char.id,
+                      senderName: charName,
+                      content: `[美团代点]帮你挑了「${mtRes.draft.merchantName}」的外卖，确认后就去下单`,
+                      time: t,
+                      kind: 'mtdraft',
+                      mtdraft: { did: mtRes.draft.id },
+                    });
+                    msgIdx += 1;
+                    t += 600 + Math.floor(Math.random() * 400);
+                  }
+                }
+                continue;
+              }
               // 管理标记（禁言/解禁/移出/改群名/改公告）与卡片处理标记（领红包/收转账）分流入各自的执行器
               if (isGroupAdminAction(part.action) || isGroupChatSocialAction(part.action)) applyGroupAdminAction(char, part.action);
               else applyGroupAiAction(char, part.action);
@@ -4742,6 +4790,10 @@ export function QqGroupChatPage({
                     />
                   )
                 ) : null
+              ) : m.kind === 'mtdraft' && m.mtdraft ? (
+                /* 美团代点草稿卡（C11 群内帮点外卖）：与单聊同渲染件（mt-draft-card），
+                   pending 确认/取消、confirmed 实时跟订单时间线；确认后机主自己付款 */
+                renderMsgRow(m, <MtDraftBubble did={m.mtdraft.did} onToast={onToast} />)
               ) : (
                 <div className={`mb-3 flex gap-2 ${mine ? 'flex-row-reverse' : ''}`}>
                   {selectMode && isSelectable(m) && (

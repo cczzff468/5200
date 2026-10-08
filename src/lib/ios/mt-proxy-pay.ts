@@ -49,11 +49,14 @@ export interface MtProxyPay {
   itemCount: number;
   items: MtProxyItem[];
   note?: string;
-  status: 'pending' | 'paid';
+  /** pending=待代付；paid=已代付；declined=对方婉拒（B5）；expired=请求失效（B4：订单取消/超时/机主已自行支付） */
+  status: 'pending' | 'paid' | 'declined' | 'expired';
   createdAt: number;
   paidAt?: number;
   /** 好友支付渠道名（微信支付 / QQ钱包） */
   paidChannel?: string;
+  /** 终态说明（declined/expired 时展示）：如「对方婉拒了这次代付」「订单已超时取消」「机主已自行支付」 */
+  closeReason?: string;
   /** 代付方向（旧记录无此字段按 'friend' 处理）：'friend' = 好友代付（请求人=机主，付款人=AI 角色，
    *  付款决策由角色 AI 根据人设/记忆自主做出）；'me' = 机主代付（AI 角色发起，请机主帮付） */
   direction?: 'friend' | 'me';
@@ -120,10 +123,11 @@ export function mtGetProxy(pid: string): MtProxyPay | null {
         }))
       : [],
     note: typeof p.note === 'string' && p.note ? p.note : undefined,
-    status: p.status === 'paid' ? 'paid' : 'pending',
+    status: p.status === 'paid' ? 'paid' : p.status === 'declined' ? 'declined' : p.status === 'expired' ? 'expired' : 'pending',
     createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
     paidAt: typeof p.paidAt === 'number' ? p.paidAt : undefined,
     paidChannel: typeof p.paidChannel === 'string' ? p.paidChannel : undefined,
+    closeReason: typeof p.closeReason === 'string' && p.closeReason ? p.closeReason : undefined,
     direction: p.direction === 'me' ? 'me' : 'friend',
     chatContactId: typeof p.chatContactId === 'string' && p.chatContactId ? p.chatContactId : undefined,
   };
@@ -324,6 +328,91 @@ export async function mtCreateProxyRequestByChar(opts: MtCreateProxyByCharOpts):
   return { ok: true, proxy };
 }
 
+// ---------------- 请求生命周期扩展（B4 失效联动 / B5 婉拒） ----------------
+
+/** 广播某几条代付卡所在聊天刷新（终态变更后开放中的聊天页即时重读渲染） */
+function broadcastProxyRefresh(ps: MtProxyPay[]): void {
+  const seen = new Set<string>();
+  for (const p of ps) {
+    const key = `${p.idp}:${mtProxyChatCid(p)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      window.dispatchEvent(new CustomEvent(MT_PROXY_CARD_EVENT, { detail: { cid: mtProxyChatCid(p), app: p.idp } }));
+    } catch {
+      /* 广播失败不影响落库 */
+    }
+  }
+}
+
+/**
+ * B4 失效联动：把某美团账号下「挂着的 pending 代付请求」与订单真实状态对齐——
+ * 订单已取消 → expired（原因透传 cancelReason）；订单已被机主直接支付/不存在 → expired；
+ * 订单已支付且该请求就是付款方 → paid（幂等落定，防快照滞后）。
+ * 由订单状态机 tick（MeituanOrderWatcher）/收银台直付（finishPay）/取消订单处调用；
+ * 返回是否有变更（供调用方决定是否广播）。
+ */
+export function mtSyncProxiesForUid(uid: string): boolean {
+  let changed = false;
+  const touched: MtProxyPay[] = [];
+  try {
+    const ids = kvGet<string[]>('mt-proxy-index') ?? [];
+    if (ids.length === 0) return false;
+    const orders = mtLoadOrders(uid);
+    for (const pid of ids) {
+      const p = mtGetProxy(pid);
+      if (!p || p.status !== 'pending' || p.uid !== uid) continue;
+      const o = orders.find((x) => x.id === p.orderId);
+      if (!o) {
+        const done: MtProxyPay = { ...p, status: 'expired', closeReason: '订单不存在，代付请求失效' };
+        mtSetProxy(done);
+        changed = true;
+        touched.push(done);
+        continue;
+      }
+      if (o.status === 'canceled') {
+        const done: MtProxyPay = { ...p, status: 'expired', closeReason: o.cancelReason ?? '订单已取消' };
+        mtSetProxy(done);
+        changed = true;
+        touched.push(done);
+        continue;
+      }
+      if (o.status !== 'pendingPay') {
+        // 订单已支付：若付款渠道文案里带该请求付款人名（好友已代付但快照未及更新）落 paid；
+        // 否则按渠道文案区分失效原因（含「代付」=别的好友付的；否则机主自己付的）
+        const selfPaid = !(o.payChannelLabel && o.payChannelLabel.includes(p.contactName));
+        const done: MtProxyPay = selfPaid
+          ? {
+              ...p,
+              status: 'expired',
+              closeReason: o.payChannelLabel && o.payChannelLabel.includes('代付') ? '订单已由其他好友代付' : '机主已自行支付，无需代付',
+            }
+          : { ...p, status: 'paid', paidAt: o.paidAt ?? Date.now(), paidChannel: mtProxyChannelName(p.idp) };
+        mtSetProxy(done);
+        changed = true;
+        touched.push(done);
+      }
+    }
+  } catch {
+    /* 忽略 */
+  }
+  if (touched.length > 0) broadcastProxyRefresh(touched);
+  return changed;
+}
+
+/**
+ * B5 婉拒：AI 代付决策婉拒后把请求置 declined（卡片「对方婉拒了」、规则块不再列出、
+ * 同订单可再向其他好友发起请求）。仅 pending 可婉拒；婉拒不影响订单本身（仍待支付/可自行支付）。
+ */
+export function mtDeclineProxy(pid: string, reason?: string): boolean {
+  const p = mtGetProxy(pid);
+  if (!p || p.status !== 'pending') return false;
+  const done: MtProxyPay = { ...p, status: 'declined', closeReason: reason ?? '对方婉拒了这次代付' };
+  mtSetProxy(done);
+  broadcastProxyRefresh([done]);
+  return true;
+}
+
 /** 某聊天内全部待处理代付请求（两个方向都在该聊天内流转；动作规则/等待态用） */
 export function mtPendingProxiesOfChat(chatContactId: string): MtProxyPay[] {
   const out: MtProxyPay[] = [];
@@ -399,11 +488,15 @@ export function mtProxyPayOrder(
   if (opts?.deferCard) {
     // AI 动作路径：卡片随回复投递管线落盘（调用方负责 out.push）
     window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+    // 完成后同账号其余 pending 请求对齐（defer 路径也要，防同单其他请求悬挂）
+    mtSyncProxiesForUid(p.uid);
     return { ok: true, proxy: done, order: paid, card };
   }
   insertProxyCard(p.idp, mtProxyChatCid(p), card);
 
   window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+  // 完成后同账号其余 pending 请求对齐（同单其他好友请求失效/机主自行支付判定）
+  mtSyncProxiesForUid(p.uid);
   // 灵动岛通知（美团订单 · 代付完成；点击进订单详情）
   void import('./island-notify')
     .then((m) =>

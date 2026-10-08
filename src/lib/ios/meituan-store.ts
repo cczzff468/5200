@@ -774,6 +774,10 @@ export function mtCancelWithRefund(uid: string, orderId: string, cancelReason: s
   );
   mtSaveOrders(uid, next);
   window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+  // B4：订单取消 → 挂着的 pending 代付请求同步失效（动态 import 防与 mt-proxy-pay 循环依赖）
+  void import('./mt-proxy-pay')
+    .then((m) => m.mtSyncProxiesForUid(uid))
+    .catch(() => undefined);
   if (refunded) mtFireRefundCredit(refunded);
   return true;
 }

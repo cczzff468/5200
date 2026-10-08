@@ -10,7 +10,7 @@
  *   已付 = 代付人头像行 + 支付成功 + 金额 + 渠道 + 付款须知 + 完成 + 订单商品卡。
  */
 import { useEffect, useState } from 'react';
-import { ChevronLeft, CircleCheck, Clock as ClockIcon, Loader2, ShieldCheck } from 'lucide-react';
+import { ChevronLeft, CircleCheck, CircleX, Clock as ClockIcon, Loader2, ShieldCheck } from 'lucide-react';
 import { FoodImg } from './mt-food-img';
 import { MT_PROXY_CARD_EVENT, mtGetProxy, mtProxyChannelName, mtProxyPayOrder } from '@/lib/ios/mt-proxy-pay';
 
@@ -50,8 +50,12 @@ function useProxyCountdown(createdAt: number): string {
 export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' | 'done'; onClick: () => void }) {
   const p = mtGetProxy(pid);
   const paid = p?.status === 'paid';
-  // 颜色互换（用户反馈）：请求卡恒亮黄（引导好友付款）；完成卡=终态整体褪灰（同红包/转账领取后语义）
-  const faded = role === 'done';
+  // B4/B5：请求终态（婉拒/失效）→ 卡片褪灰 + 终态文案（同红包/转账领取后语义）
+  const declined = p?.status === 'declined';
+  const expired = p?.status === 'expired';
+  const closed = declined || expired;
+  // 颜色互换（用户反馈）：请求卡恒亮黄（引导好友付款）；完成卡/终态卡整体褪灰
+  const faded = role === 'done' || !!closed;
   const reqDone = role === 'req' && paid;
   const countdown = useProxyCountdown(p?.createdAt ?? Date.now());
   const [bannerOk, setBannerOk] = useState(true);
@@ -67,7 +71,7 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
         // 完成卡（终态）整体褪色：黄横幅/按钮变灰黄，白底不脏
         filter: faded ? 'grayscale(0.72) brightness(0.98)' : undefined,
       }}
-      aria-label={`美团代付卡 ¥${fmt2(p?.amount ?? 0)}（${role === 'done' || reqDone ? '已代付' : '待代付'}）`}
+      aria-label={`美团代付卡 ¥${fmt2(p?.amount ?? 0)}（${role === 'done' || reqDone ? '已代付' : declined ? '已婉拒' : expired ? '已失效' : '待代付'}）`}
     >
       {/* 箭头指向头像侧：请求卡=我发出（右）/ 完成卡=好友发来（左） */}
       <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${role === 'done' ? '-left-[4px]' : '-right-[4px]'}`} />
@@ -82,9 +86,9 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
         </span>
       </span>
 
-      {/* 主标题（对齐参考图文案） */}
+      {/* 主标题（对齐参考图文案；终态换对应描述） */}
       <span className="relative mt-1.5 block truncate text-[15px] font-semibold leading-snug text-black/90">
-        {role === 'done' ? 'Hi~你的订单代付成功啦~' : 'Hi~快来帮我支付这笔订单吧~'}
+        {role === 'done' ? 'Hi~你的订单代付成功啦~' : declined ? '这次没能帮你代付呢~' : expired ? '这笔代付已经失效啦~' : 'Hi~快来帮我支付这笔订单吧~'}
       </span>
 
       {/* 黄色 3D 人物横幅 + 白色圆角金额面板：拼接为一个整体圆角块（黄上白下、无缝相连，用户要求恢复白面板） */}
@@ -99,7 +103,7 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
             />
           )}
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[15px] font-bold text-black/85">
-            {role === 'done' ? '好友已代付啦~' : '来帮我代付吧~'}
+            {role === 'done' ? '好友已代付啦~' : declined ? 'TA婉拒了这次代付~' : expired ? '代付已失效~' : '来帮我代付吧~'}
           </span>
         </span>
         {/* 金额区（白色圆角面板，与上方黄色横幅拼接成一块） */}
@@ -112,6 +116,20 @@ export function MtPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
               <span className="mt-1 block truncate text-[11.5px] text-black/40">
                 {channel ? (role === 'done' ? `${channel} · 已到账` : channel) : '好友已代付'}
               </span>
+            </>
+          ) : declined ? (
+            <>
+              <span className="block text-[19px] font-bold leading-tight tracking-tight text-black/70" data-testid={`mt-pay-bubble-${role}-status`}>
+                对方婉拒了
+              </span>
+              <span className="mt-1 block truncate text-[11.5px] text-black/40">可以再沟通，或自己支付这笔订单</span>
+            </>
+          ) : expired ? (
+            <>
+              <span className="block text-[19px] font-bold leading-tight tracking-tight text-black/70" data-testid={`mt-pay-bubble-${role}-status`}>
+                代付已失效
+              </span>
+              <span className="mt-1 block truncate text-[11.5px] text-black/40">{p?.closeReason || '订单未支付，请求已关闭'}</span>
             </>
           ) : (
             <>
@@ -175,6 +193,10 @@ export function MtProxyDetailPage({
   }
 
   const paid = p.status === 'paid';
+  // B4/B5：请求终态（婉拒/失效）
+  const declined = p.status === 'declined';
+  const expired = p.status === 'expired';
+  const closed = declined || expired;
   const channel = p.paidChannel ?? mtProxyChannelName(p.idp);
   const platform = p.idp === 'wx' ? '微信' : 'QQ';
   // 代付方向：'friend' = AI 好友代付（付款决策由对方 AI 自主做出，本页只等待）；
@@ -207,7 +229,7 @@ export function MtProxyDetailPage({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-6 pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {/* 人物行：已付 = 代付人；待付 = 请求人 */}
+        {/* 人物行：已付 = 代付人；待付 = 请求人（终态副文案按婉拒/失效区分） */}
         <div className="flex items-center gap-3 px-1 pb-3.5">
           {paid ? (
             <>
@@ -222,7 +244,9 @@ export function MtProxyDetailPage({
               <AvatarImg src={p.fromAvatar} name={p.fromName} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[17px] font-semibold text-black/90">{p.fromName}</p>
-                <p className="mt-0.5 truncate text-[13px] text-black/45">{meDir ? '拍了订单，想请你帮TA付一下～' : '拍下了订单，快来帮我付一下吧～'}</p>
+                <p className="mt-0.5 truncate text-[13px] text-black/45">
+                  {declined ? 'TA看了订单，婉拒了这次代付' : expired ? `请求已失效（${p.closeReason ?? '订单未支付'}）` : meDir ? '拍了订单，想请你帮TA付一下～' : '拍下了订单，快来帮我付一下吧～'}
+                </p>
               </div>
             </>
           )}
@@ -239,6 +263,20 @@ export function MtProxyDetailPage({
                   </span>
                   支付成功
                 </>
+              ) : declined ? (
+                <>
+                  <span className="grid h-7 w-7 place-items-center rounded-full bg-black/25">
+                    <CircleX className="h-[17px] w-[17px] text-white" strokeWidth={2.2} />
+                  </span>
+                  对方已婉拒
+                </>
+              ) : expired ? (
+                <>
+                  <span className="grid h-7 w-7 place-items-center rounded-full bg-black/25">
+                    <CircleX className="h-[17px] w-[17px] text-white" strokeWidth={2.2} />
+                  </span>
+                  代付已失效
+                </>
               ) : (
                 <>
                   <span className="grid h-7 w-7 place-items-center rounded-full bg-[#FF6000]">
@@ -253,7 +291,15 @@ export function MtProxyDetailPage({
               {fmt2(p.amount)}
             </p>
             <p className="mt-1 text-[13px] text-black/45" data-testid="mt-proxy-channel">
-              {paid ? channel : meDir ? `等待你代付（${platform}）` : `等待${p.contactName}代付（${platform}好友）`}
+              {paid
+                ? channel
+                : declined
+                  ? `对方不想代付（${platform}好友）`
+                  : expired
+                    ? p.closeReason ?? '订单未支付，请求已关闭'
+                    : meDir
+                      ? `等待你代付（${platform}）`
+                      : `等待${p.contactName}代付（${platform}好友）`}
             </p>
             {paid && p.paidAt && <p className="mt-0.5 text-[11px] text-black/30">支付时间 {fmtFull(p.paidAt)}</p>}
           </div>
@@ -279,6 +325,15 @@ export function MtProxyDetailPage({
               className="mt-4 h-[46px] w-full rounded-full bg-[#F6D554] text-[16px] font-semibold text-black/85 active:opacity-85"
             >
               完成
+            </button>
+          ) : closed ? (
+            <button
+              type="button"
+              onClick={onBack}
+              data-testid="mt-proxy-closed-btn"
+              className="mt-4 h-[46px] w-full rounded-full bg-[#F6D554] text-[16px] font-semibold text-black/85 active:opacity-85"
+            >
+              {declined ? '知道了' : '好的'}
             </button>
           ) : canPay && meDir ? (
             <button

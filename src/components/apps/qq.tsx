@@ -151,8 +151,8 @@ import { triggerIncomingCall, useIncomingCall, type IncomingCallSnapshot } from 
 import { buildLocationBlock, locationAiText, locDataOf, locFromRich } from '@/lib/ios/chat-location';
 import { MtPayBubble, MtProxyDetailPage } from './mt-proxy-detail';
 import { MT_PROXY_CARD_EVENT } from '@/lib/ios/mt-proxy-pay';
-// 美团×AI 联动：QQ 聊天历史里的代付/分享/代点卡片序列化为 AI 可读文本（动作执行与代点卡只在微信端接入）
-import { mtDraftHistoryLine, mtOrderShareHistoryLine, mtProxyHistoryLine, stripMtEchoText } from '@/lib/ios/mt-ai-engage';
+// 美团×AI 联动：QQ 私聊与微信同构接入（规则注入+动作执行），历史里的代付/分享/代点卡片序列化为 AI 可读文本
+import { applyMtEngageAction, buildMtEngageCtx, isMtEngageActionKind, mtDraftHistoryLine, mtOrderShareHistoryLine, mtProxyHistoryLine, stripMtEchoText } from '@/lib/ios/mt-ai-engage';
 import { MtDraftBubble } from './mt-draft-card';
 import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
 import { MtShareBubble } from './mt-share-card';
@@ -4240,6 +4240,24 @@ function ChatPage({
             }
             continue;
           }
+          // 美团外卖/代付联动动作（[代付:pid]/[帮付:订单id]/[帮点外卖:...]/[自己点外卖:...]/[请客点外卖:...]）：
+          // A1 与微信同构：同步执行（代付立即生效/草稿生成），产出的卡片随本回复队列投递；
+          // 异步流（请客/自己点）fire-and-forget，卡片/系统行经事件实时合并；角色记忆由执行器直写
+          if (isMtEngageActionKind(part.action.kind)) {
+            const mtRes = applyMtEngageAction(part.action, peer, {
+              app: 'qq',
+              recentTexts: cur.slice(-8).map((mm) => (typeof mm.content === 'string' ? mm.content : '')),
+            });
+            for (const cm of mtRes.msgs) {
+              out.push(cm as QQMsg);
+              t += 600 + Math.floor(Math.random() * 400);
+            }
+            if (mtRes.sys) {
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: mtRes.sys } });
+              t += 1;
+            }
+            continue;
+          }
           const applied = applyAiActions([part.action], cur, peer, t);
           cur = applied.msgs;
           out.push(...applied.notices, ...applied.extras);
@@ -4462,6 +4480,10 @@ function ChatPage({
     // QQ动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看 QQ 平台的动态），
     // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）
     const momentsBlock = buildMomentsChatBlock({ contactId: peer.id, app: 'qq', userName: me.name, peer });
+    // 美团×AI 联动（外卖/代付）：实时订单动态 + 本聊天的待处理代付请求/待付订单 +
+    // 食物话题命中时的商家目录与点外卖动作教学（全同步 kv 读，状态实时）——
+    // A1：QQ 私聊同微信同构接入（此前仅卡片渲染/历史序列化接了，AI 本体不参与外卖/代付）
+    const mtEngage = buildMtEngageCtx(peer.id, 'qq', [userMsg?.content, sysEvent, ...base.slice(-6).map(scanTextOf)]);
     // 时间感知（本会话独立开关，发送时现场读取；关闭时不注入任何时间信息，恢复普通聊天）：
     // 上次聊天间隔 = 该会话上一条消息时间戳（不含本轮刚发的消息）与当前时间的差值，按角色隔离不串台
     const priorMsgs = baseMsgs ?? msgs;
@@ -4528,12 +4550,14 @@ function ChatPage({
       // 40-b 跨 App 环境感知：当前 App 记忆 → 其他 App 最近 10 条 → 群聊最近 10 条（长期/核心在 memoryBlock 内）
       crossCtxRef.current.crossAppBlock,
       crossCtxRef.current.groupBlock,
+      // 美团外卖动态：机主最近订单/配送状态实时注入（AI 知道机主点了什么、哪家店、多少钱、什么时候、现在到哪了）
+      mtEngage.block,
       // 音乐实时情境（第三十八轮）：一起听中=一起听块；其余私聊=音乐点播块（播放器此刻歌名/歌手/进度/歌词
       // + 主动放歌引导 + 播控指令说明）（发消息瞬间现场构建，非缓存）
       togetherLiveBlock(peer.id, me.name),
       momentsBlock,
       locBlock,
-      actionRules.length > 0 ? actionRules.join('\n\n') : '',
+      [...actionRules, ...mtEngage.rules].length > 0 ? [...actionRules, ...mtEngage.rules].join('\n\n') : '',
       blkBlock,
       quitCtx?.section ?? '',
       kickSection,

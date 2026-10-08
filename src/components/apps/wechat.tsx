@@ -5683,7 +5683,12 @@ function ChatPage({
         // 同步执行（代付立即生效/草稿生成），产出的卡片随本回复队列投递；异步流（自己点外卖）
         // fire-and-forget，卡片经 MT_PROXY_CARD_EVENT 实时合并；角色记忆由执行器直写
         if (isMtEngageActionKind(part.action.kind)) {
-          const mtRes = applyMtEngageAction(part.action, peer, { app: 'wx', meName: addressNameOf(me, useSettings.getState().addressMode) });
+          const mtRes = applyMtEngageAction(part.action, peer, {
+            app: 'wx',
+            meName: addressNameOf(me, useSettings.getState().addressMode),
+            // B6：最近几条文本用于大额请客/帮付的「对方已明确同意」判定
+            recentTexts: cur.slice(-8).map((mm) => (typeof mm.content === 'string' ? mm.content : '')),
+          });
           for (const cm of mtRes.msgs) {
             out.push(cm as WxMsg);
             t += 600 + Math.floor(Math.random() * 400);

@@ -232,7 +232,7 @@ import {
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
 import { WxPayPwdGate, wxLoadPayPwd } from './wechat-wallet';
 import { PayPwdGate as QqPayPwdGate, loadPayPwd as qqLoadPayPwd } from './qq';
-import { mtCreateProxyRequest } from '@/lib/ios/mt-proxy-pay';
+import { mtCreateProxyRequest, mtGetProxy, mtSyncProxiesForUid } from '@/lib/ios/mt-proxy-pay';
 import { mtCreateOrderShare } from '@/lib/ios/mt-order-share';
 import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
 import { listContacts, loginQQ, loginWechat } from '@/lib/ios/contacts-store';
@@ -2184,6 +2184,12 @@ function PayPage({
       statusLog: [...order.statusLog, { status: tuangouDone ? 'completed' : 'pendingAccept', at: now }],
     };
     mtSaveOrders(order.uid, mtLoadOrders(order.uid).map((o) => (o.id === order.id ? paid : o)));
+    // B4：机主直接付掉了 → 该单挂着的 pending 代付请求失效（「机主已自行支付」），卡片/详情同步
+    try {
+      if (mtSyncProxiesForUid(order.uid)) window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+    } catch {
+      /* 忽略 */
+    }
     if (typeof walletDeduct === 'number') {
       // 余额支付 → 钱包账单记一笔消费（卡支付已在扣款处记账）
       mtPushWalletBill(uid, { kind: 'pay', title: '消费', amount: -walletDeduct, at: Date.now(), card: `${order.merchantName} · 美团余额` });
@@ -3795,7 +3801,13 @@ function OrderDetailPage({
           </>
         ),
         sub: order.proxy ? (
-          `已请「${order.proxy.name}」代付，好友付款后自动完成`
+          // B4/B5：请求终态时副文案如实反映（婉拒/失效/已代付），不再一律「好友付款后自动完成」
+          (() => {
+            const st = mtGetProxy(order.proxy.id)?.status;
+            if (st === 'declined') return `已请「${order.proxy.name}」代付，对方婉拒了——可以直接自己支付`;
+            if (st === 'expired') return `已请「${order.proxy.name}」代付，请求已失效——可以直接自己支付`;
+            return `已请「${order.proxy.name}」代付，好友付款后自动完成`;
+          })()
         ) : (
           <>
             现在支付，预计<span className="font-medium text-[#FF6000]">{payEtaText}</span>送达
