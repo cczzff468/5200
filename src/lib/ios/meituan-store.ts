@@ -930,7 +930,7 @@ export function mtCalcDeals(uid: string, merchant: MtMerchant, itemTotal: number
   return { discount: Math.round(discount * 100) / 100, labels };
 }
 
-/** 结算合计：商品（含规格小料加价）- 满减/新客 + 配送费（满45免） */
+/** 结算合计：商品（含规格小料加价）- 满减/新客/菜品券 + 配送费（满45免） */
 export function mtCheckoutCalc(uid: string, merchant: MtMerchant, cart: MtCart): { itemTotal: number; deliveryFee: number; discount: number; total: number; labels: string[]; count: number } {
   const all = mtDishesOf(merchant);
   const itemTotal = cart.items.reduce((s, i) => {
@@ -942,10 +942,25 @@ export function mtCheckoutCalc(uid: string, merchant: MtMerchant, cart: MtCart):
   const count = cart.items.reduce((s, i) => s + i.qty, 0);
   const baseFee = merchant.deliveryFee;
   const deals = mtCalcDeals(uid, merchant, itemTotal, baseFee);
+  const labels = [...deals.labels];
+  // 菜品优惠券：购物车含该菜品且商品总额达门槛时自动抵扣（每菜每单限一次，min=0 无门槛）
+  const seenDish = new Set<string>();
+  let dishOff = 0;
+  for (const it of cart.items) {
+    const d = all.find((x) => x.id === it.dishId);
+    const c = d?.coupon;
+    if (!d || !c || seenDish.has(d.id)) continue;
+    seenDish.add(d.id);
+    if (itemTotal >= c.min && c.amount > 0) {
+      dishOff += c.amount;
+      labels.push(`菜品券·${c.name || `${d.name}专享券`}`);
+    }
+  }
+  const discount = Math.round((deals.discount + dishOff) * 100) / 100;
   const freeShip = itemTotal >= 45;
   const deliveryFee = freeShip ? 0 : baseFee;
-  const total = Math.max(0.01, Math.round((itemTotal - deals.discount + deliveryFee) * 100) / 100);
-  return { itemTotal, deliveryFee, discount: deals.discount, total, labels: deals.labels, count };
+  const total = Math.max(0.01, Math.round((itemTotal - discount + deliveryFee) * 100) / 100);
+  return { itemTotal, deliveryFee, discount, total, labels, count };
 }
 
 /** 从订单复制购物车（再来一单，保留规格小料） */

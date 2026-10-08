@@ -27,8 +27,7 @@ import {
   Tags,
   Ticket,
   Trash2,
-} from 'lucide-react';
-import { MT_CATS, mtRegisterAiMerchant, mtUnregisterMerchant, type MtDish, type MtMerchant } from '@/lib/ios/meituan-data';
+} from 'lucide-react';import { MT_CATS, mtRegisterAiMerchant, mtUnregisterMerchant, type MtDish, type MtMerchant } from '@/lib/ios/meituan-data';
 import {
   MT_STATUS_LABEL,
   mtLoadCart,
@@ -40,7 +39,7 @@ import {
   type MtOrder,
   type MtSession,
 } from '@/lib/ios/meituan-store';
-import { DishImg, ShopImg } from './mt-merchant-ui';
+import { DishImg, GLASS_PANEL, MERCHANT_PAGE_BG, ShopImg } from './mt-merchant-ui';
 import DishEditPage from './mt-dish-edit';
 
 const MT_YELLOW = '#FFD100';
@@ -155,10 +154,10 @@ export default function ShopManagePage({
   if (!shop) {
     // 店铺刚被删除等极端情况：给出兜底返回
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-[#F4F5F7] gap-3">
+      <div className={`flex h-full flex-col items-center justify-center gap-3 ${MERCHANT_PAGE_BG}`}>
         <PackageOpen className="h-10 w-10 text-black/25" strokeWidth={1.6} />
         <p className="text-[14px] text-black/45">店铺不存在或已删除</p>
-        <button type="button" onClick={onBack} className="h-10 rounded-full px-8 text-[14px] font-medium text-black/80" style={{ background: MT_YELLOW }}>
+        <button type="button" onClick={onBack} className="h-10 rounded-full px-8 text-[14px] font-medium text-black/80 shadow-[0_6px_16px_rgba(255,190,0,0.4)]" style={{ background: MT_YELLOW }}>
           返回商家中心
         </button>
       </div>
@@ -169,22 +168,13 @@ export default function ShopManagePage({
   const liveOrderCount = orders.filter((o) => ['pendingPay', 'pendingAccept', 'accepted', 'delivering'].includes(o.status)).length;
 
   return (
-    <div className="flex h-full flex-col bg-[#F4F5F7]">
-      {/* 头图（店铺背景） */}
+    <div className={`flex h-full flex-col ${MERCHANT_PAGE_BG}`}>
+      {/* 头图（店铺背景；不放编辑笔图标，编辑入口在店铺信息右侧与「商家」页签） */}
       <div className="relative h-[150px] shrink-0">
         <ShopImg name={shop.name} cover={shop.cover} className="h-full w-full" />
         <div className="absolute inset-x-0 top-0 flex items-center justify-between px-3 pt-[54px]">
-          <button type="button" aria-label="返回商家中心" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full bg-black/35 text-white active:opacity-75">
+          <button type="button" aria-label="返回商家中心" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full bg-black/35 text-white backdrop-blur-md active:opacity-75">
             <ChevronLeft className="h-5 w-5" />
-          </button>
-          <button
-            type="button"
-            aria-label="编辑店铺信息"
-            data-testid="mt-manage-edit-shop"
-            onClick={onEditShop}
-            className="grid h-9 w-9 place-items-center rounded-full bg-black/35 text-white active:opacity-75"
-          >
-            <Pencil className="h-4 w-4" />
           </button>
         </div>
         {closed && (
@@ -192,10 +182,10 @@ export default function ShopManagePage({
         )}
       </div>
 
-      {/* 店铺信息（对齐买家端店铺头） */}
-      <div className="relative z-10 border-b border-black/[0.05] bg-white px-4 pb-3.5 pt-3.5">
+      {/* 店铺信息（对齐买家端店铺头，毛玻璃 + 右侧编辑入口） */}
+      <div className="relative z-10 border-b border-white/60 bg-white/60 px-4 pb-3.5 pt-3.5 backdrop-blur-2xl">
         <div className="flex gap-3">
-          <span className="h-14 w-14 shrink-0 overflow-hidden rounded-xl ring-1 ring-black/[0.06]">
+          <span className="h-14 w-14 shrink-0 overflow-hidden rounded-xl ring-1 ring-white/80">
             <ShopImg name={shop.name} cover={shop.cover} className="h-full w-full" />
           </span>
           <div className="min-w-0 flex-1">
@@ -214,12 +204,23 @@ export default function ShopManagePage({
               <span>{shop.deliveryMin}分钟 · {shop.distanceKm}km</span>
             </p>
           </div>
+          {/* 编辑店铺入口（替代原头图右上角笔图标） */}
+          <button
+            type="button"
+            aria-label="编辑店铺信息"
+            data-testid="mt-manage-edit-shop"
+            onClick={onEditShop}
+            className="flex h-8 shrink-0 items-center gap-1 self-start rounded-full bg-white/75 px-3 text-[12px] font-medium text-[#B77900] shadow-sm backdrop-blur-xl ring-1 ring-[#FFD100]/60 active:opacity-75"
+          >
+            <Pencil className="h-3 w-3" />
+            编辑
+          </button>
         </div>
         <p className="mt-2 text-right text-[11px] text-black/35">公告：{shop.notice?.slice(0, 14) || '无'}</p>
       </div>
 
-      {/* 页签（点菜/评价/商家/订单） */}
-      <div className="flex shrink-0 items-center gap-6 bg-white px-5">
+      {/* 页签（点菜/评价/商家/订单，毛玻璃胶囊条） */}
+      <div className="z-10 flex shrink-0 items-center gap-6 border-b border-white/60 bg-white/55 px-5 backdrop-blur-2xl">
         {(['点菜', '评价', '商家', '订单'] as const).map((t) => (
           <button
             key={t}
@@ -275,9 +276,6 @@ export default function ShopManagePage({
                   >
                     <span className="relative shrink-0">
                       <DishImg name={d.name} img={d.img} className="h-[80px] w-[80px] rounded-xl" />
-                      <span className="absolute right-1 top-1 grid h-[20px] w-[20px] place-items-center rounded-full bg-black/35 text-white">
-                        <Pencil className="h-2.5 w-2.5" strokeWidth={2.4} />
-                      </span>
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="flex items-center gap-1 text-[15px] font-semibold leading-snug text-black/85">
@@ -287,7 +285,15 @@ export default function ShopManagePage({
                         )}
                       </span>
                       {d.desc && <span className="mt-0.5 line-clamp-1 text-[11px] text-black/40">{d.desc}</span>}
-                      <span className="mt-0.5 text-[11px] text-black/35">月售{d.monthSale}</span>
+                      <span className="mt-0.5 flex items-center gap-1.5">
+                        <span className="text-[11px] text-black/35">月售{d.monthSale}</span>
+                        {d.coupon && (
+                          <span className="inline-flex items-center gap-0.5 rounded bg-[#FFF0EB] px-1 py-px text-[10px] text-[#FF4B33]" data-testid={`mt-dish-coupon-tag-${d.name}`}>
+                            <Ticket className="h-2.5 w-2.5" />
+                            券·{d.coupon.min > 0 ? `满${money(d.coupon.min)}` : '无门槛'}减{money(d.coupon.amount)}
+                          </span>
+                        )}
+                      </span>
                       <span className="mt-auto flex items-end pt-1 text-[17px] font-bold" style={{ color: MT_PRICE }}>
                         <span className="text-[11px]">¥</span>
                         {fmtMoney(d.price)}
@@ -326,10 +332,12 @@ export default function ShopManagePage({
 
       {/* 评价 */}
       {tab === '评价' && (
-        <div className="min-h-0 flex-1 overflow-y-auto bg-white px-4 pb-10 pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="flex items-end gap-2">
-            <span className="text-[34px] font-bold leading-none text-[#FF6000]">{shop.rating}</span>
-            <span className="pb-1 text-[12px] text-black/40">综合评分 · 月售{shop.monthSale}+</span>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className={`rounded-3xl px-4 pb-4 pt-3.5 ${GLASS_PANEL}`}>
+            <div className="flex items-end gap-2">
+              <span className="text-[34px] font-bold leading-none text-[#FF6000]">{shop.rating}</span>
+              <span className="pb-1 text-[12px] text-black/40">综合评分 · 月售{shop.monthSale}+</span>
+            </div>
           </div>
           {shop.reviews.length === 0 && myReviews.length === 0 ? (
             <div className="flex flex-col items-center gap-2 pb-10 pt-16 text-black/30">
@@ -377,13 +385,17 @@ export default function ShopManagePage({
         </div>
       )}
 
-      {/* 商家：信息 / 营业开关 / 优惠券 / 危险操作 */}
+      {/* 商家：信息 / 营业开关 / 优惠券 / 危险操作（毛玻璃卡） */}
       {tab === '商家' && (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="rounded-2xl bg-white p-4 ring-1 ring-black/[0.03]">
+          <div className={`rounded-3xl p-4 ${GLASS_PANEL}`}>
             <p className="flex items-center gap-1.5 text-[14px] font-bold text-black/80">
               <Store className="h-4 w-4 text-black/55" strokeWidth={1.9} />
               店铺信息
+              <button type="button" data-testid="mt-manage-edit-info" onClick={onEditShop} className="ml-auto flex items-center gap-0.5 text-[12px] font-medium text-[#B77900] active:opacity-70">
+                编辑店铺信息
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
             </p>
             <div className="mt-2.5 flex flex-col gap-2.5 text-[13px]">
               {([
@@ -403,7 +415,7 @@ export default function ShopManagePage({
             </div>
           </div>
 
-          <div className="mt-3 flex items-center rounded-2xl bg-white p-4 ring-1 ring-black/[0.03]">
+          <div className={`mt-3 flex items-center rounded-3xl p-4 ${GLASS_PANEL}`}>
             <div className="min-w-0 flex-1">
               <p className="text-[14px] font-bold text-black/80">营业状态</p>
               <p className="mt-0.5 text-[11px] text-black/40">{closed ? '已打烊：首页不再展示，买家无法下单' : '营业中：首页正常展示、可接单'}</p>
@@ -422,7 +434,7 @@ export default function ShopManagePage({
             </button>
           </div>
 
-          <div className="mt-3 rounded-2xl bg-white p-4 ring-1 ring-black/[0.03]">
+          <div className={`mt-3 rounded-3xl p-4 ${GLASS_PANEL}`}>
             <div className="flex items-center">
               <p className="flex items-center gap-1.5 text-[14px] font-bold text-black/80">
                 <Ticket className="h-4 w-4 text-black/55" strokeWidth={1.9} />
@@ -438,11 +450,11 @@ export default function ShopManagePage({
             ) : (
               <div className="mt-2.5 flex flex-col gap-2">
                 {(shop.coupons ?? []).map((c) => (
-                  <div key={c.id} className="flex items-center gap-2.5 rounded-xl bg-gradient-to-r from-[#FFF3C4] to-[#FFEDAD] px-3 py-2 ring-1 ring-[#FFD100]/50">
+                  <div key={c.id} className="flex items-center gap-2.5 rounded-xl bg-gradient-to-r from-[#FFF3C4]/90 to-[#FFEDAD]/90 px-3 py-2 ring-1 ring-[#FFD100]/50">
                     <BadgePercent className="h-4 w-4 shrink-0 text-[#8A4B00]" strokeWidth={1.9} />
                     <span className="text-[16px] font-bold text-[#8A4B00]">¥{money(c.amount)}</span>
                     <span className="min-w-0 flex-1 truncate text-[11px] text-[#5A4200]/80">
-                      {c.name} · 满 ¥{money(c.min)} 可用
+                      {c.name} · {c.min > 0 ? `满 ¥${money(c.min)} 可用` : '无门槛券'}
                     </span>
                   </div>
                 ))}
@@ -454,7 +466,7 @@ export default function ShopManagePage({
             type="button"
             data-testid="mt-manage-delete"
             onClick={() => setConfirmDel(true)}
-            className="mt-3 flex h-12 w-full items-center justify-center gap-1.5 rounded-2xl bg-white text-[14px] font-medium text-[#FF4B33] ring-1 ring-[#FF4B33]/25 active:bg-[#FFF0EB]"
+            className="mt-3 flex h-12 w-full items-center justify-center gap-1.5 rounded-3xl bg-white/62 text-[14px] font-medium text-[#FF4B33] ring-1 ring-[#FF4B33]/25 backdrop-blur-xl active:bg-[#FFF0EB]"
           >
             <Trash2 className="h-4 w-4" />
             删除店铺
@@ -475,7 +487,7 @@ export default function ShopManagePage({
               {orders.map((o) => {
                 const canceled = o.status === 'canceled';
                 return (
-                  <div key={o.id} className={`rounded-2xl bg-white p-3.5 ring-1 ring-black/[0.03] ${canceled ? 'opacity-60' : ''}`}>
+                  <div key={o.id} className={`rounded-3xl bg-white/68 p-3.5 backdrop-blur-2xl ring-1 ring-white/75 ${canceled ? 'opacity-60' : ''}`}>
                     <div className="flex items-center gap-2">
                       <Clock className="h-3.5 w-3.5 shrink-0 text-black/30" />
                       <span className="text-[11px] text-black/35">{new Date(o.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
@@ -527,7 +539,7 @@ export default function ShopManagePage({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'tween', duration: 0.24, ease: [0.32, 0.72, 0, 1] }}
-              className="absolute inset-x-0 bottom-0 rounded-t-3xl bg-white px-6 pb-9 pt-6"
+              className="absolute inset-x-3 bottom-3 rounded-[32px] bg-white/80 px-6 pb-9 pt-6 shadow-[0_18px_50px_rgba(40,30,0,0.22)] backdrop-blur-2xl ring-1 ring-white/70"
               data-testid="mt-shop-del-sheet"
             >
               <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#FFF0EB]">
@@ -543,7 +555,7 @@ export default function ShopManagePage({
                 <button
                   type="button"
                   onClick={() => setConfirmDel(false)}
-                  className="h-11 flex-1 rounded-full bg-[#F4F5F7] text-[14px] font-medium text-black/70 active:bg-black/[0.06]"
+                  className="h-11 flex-1 rounded-full bg-black/[0.05] text-[14px] font-medium text-black/70 active:bg-black/[0.1]"
                 >
                   再想想
                 </button>
@@ -551,7 +563,7 @@ export default function ShopManagePage({
                   type="button"
                   data-testid="mt-shop-del-confirm-btn"
                   onClick={removeShop}
-                  className="h-11 flex-1 rounded-full bg-[#FF4B33] text-[14px] font-semibold text-white active:opacity-85"
+                  className="h-11 flex-1 rounded-full bg-[#FF4B33] text-[14px] font-semibold text-white shadow-[0_8px_22px_rgba(255,75,51,0.35)] active:opacity-85"
                 >
                   确认删除
                 </button>

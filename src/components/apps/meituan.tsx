@@ -1821,6 +1821,12 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
                         {d.sig && <span className="shrink-0 rounded bg-[#FFF3B8] px-1 text-[10px] text-[#B77900]">招牌</span>}
                       </p>
                       {d.desc && <p className="mt-0.5 line-clamp-1 text-[11px] text-black/40">{d.desc}</p>}
+                      {d.coupon && (
+                        <p className="mt-0.5 flex items-center gap-0.5 text-[10px] text-[#FF4B33]" data-testid={`mt-buyer-dish-coupon-${d.name}`}>
+                          <Ticket className="h-2.5 w-2.5" />
+                          券·{d.coupon.min > 0 ? `满${fmtMoney(d.coupon.min)}` : '无门槛'}减{fmtMoney(d.coupon.amount)}，下单自动抵扣
+                        </p>
+                      )}
                       <p className="mt-0.5 text-[11px] text-black/35">月售{d.monthSale >= 10000 ? `${(d.monthSale / 10000).toFixed(1)}万` : d.monthSale}</p>
                       <div className="mt-auto flex items-end justify-between pt-1">
                         <span className="text-[16px] font-bold" style={{ color: MT_PRICE }}>
@@ -3220,12 +3226,12 @@ function CheckoutSheet({
 
               {/* 商品 */}
               <div className="border-t border-black/5 px-4 py-3.5">
-                <p className="flex items-center gap-2 text-[14px] font-semibold text-black/80">
+                <div className="flex items-center gap-2 text-[14px] font-semibold text-black/80">
                   <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-md">
                     <FoodImg src={merchant.cover} emoji={merchant.emoji} className="h-full w-full" />
                   </span>
                   {merchant.name}
-                </p>
+                </div>
                 <div className="mt-2.5 space-y-2.5">
                   {items.map(({ dish, qty, spec, unitPrice }) => (
                     <div key={`${dish.id}-${spec ?? ''}`} className="flex items-center gap-2.5">
@@ -12117,8 +12123,9 @@ export default function MeituanApp() {
           }}
           onSaved={(id) => {
             homeFeedCache.ready = false; // 保存/新建后首页重新生成，新店置顶露出
+            const isNew = editShopId === null; // 新入驻：直接带进店铺管理页加菜
             setEditShopId(null);
-            if (editFrom === 'manage') {
+            if (editFrom === 'manage' || isNew) {
               setManageShopId(id);
               setPage('shopManage');
             } else {

@@ -130,6 +130,16 @@ function img(key: string): string | undefined {
   return v && v.length > 0 ? v : undefined;
 }
 
+/** 菜品优惠券（每道菜一张；满 min 减 amount，min=0 无门槛，下单自动抵扣） */
+export interface MtDishCouponDef {
+  /** 券名（如 珍珠奶茶专享券） */
+  name: string;
+  /** 减免金额（减） */
+  amount: number;
+  /** 使用门槛（满，0 = 无门槛） */
+  min: number;
+}
+
 export interface MtDish {
   id: string;
   name: string;
@@ -144,6 +154,8 @@ export interface MtDish {
   sig?: boolean;
   /** 规格组（点 + 弹出规格选择弹窗：奶茶=规格/温度/小料/糖度，食物=小料配菜） */
   specs?: MtDishSpec[];
+  /** 菜品优惠券：下单含此菜且达门槛自动抵扣（每菜每单限一次） */
+  coupon?: MtDishCouponDef;
 }
 
 /** 规格选项（price 为加价，如小料 ¥1） */

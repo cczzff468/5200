@@ -17168,3 +17168,27 @@ Stage Summary:
 - 商家中心三层结构定型：「全部我入驻的店铺」列表（添加商户/入驻美团共用入口）→ 店铺管理页（买家端店铺页视觉 + 管理态：点菜品编辑/加号加菜/营业开关/删店删菜）→ 独立全屏菜品编辑页（大图+模板+规格组）
 - 全链路去 emoji：商家中心所有页面/弹窗/占位图统一 Lucide 线条图标 + 渐变占位；买家端（MerchantPage/FoodImg emoji 兜底）保持不变
 - 改动文件：mt-merchant-ui.tsx（新）/ mt-dish-edit.tsx（新）/ mt-shop-manage.tsx（新）/ mt-merchant-center.tsx（重写）/ mt-merchant-edit.tsx（瘦身）/ meituan.tsx（导航接线）
+
+---
+Task ID: 13
+Agent: Z.ai Code (main)
+Task: 商家中心第二轮打磨——全界面毛玻璃胶囊风格、修复规格选项输入框不显示文字、长按替代编辑/删除按钮、每道菜可设优惠券、店铺券自定义金额(无门槛)、编辑店铺删菜单管理区、编辑菜品页去白色面板、管理店铺页删头图笔图标
+
+Work Log:
+- 修复核心 bug（用户截图实证：选项名输入框被压成小圆圈、行溢出屏幕）：SpecEditSheet 选项行重构——名称输入 `w-auto min-w-0 flex-1`（杀掉 input 在 flex 下的自动最小宽度怪癖）、¥/加价输入/删除钮全部 `shrink-0`+固定宽；同时清理 Tailwind v4 不支持的 `!h-9` 前缀 important 旧写法（v4 应为后缀 `!`，原写法静默失效）
+- 数据层：meituan-data.ts 新增 MtDishCouponDef（name/min/amount，min=0 无门槛）+ MtDish.coupon?；meituan-store.ts mtCheckoutCalc 增加菜品券自动抵扣（购物车含该菜品且 itemTotal≥min 时每菜每单限减一次，labels 推「菜品券·xx专享券」）
+- 新增共享件 mt-merchant-ui.tsx：GLASS_PANEL/GLASS_CAPSULE/MERCHANT_PAGE_BG 毛玻璃风格常量、useLongPress hook（480ms 触发/移动 10px 取消/屏蔽 contextmenu，pressing 不再混入 DOM 展开属性）、HoldActionsSheet 长按操作毛玻璃弹层（编辑/删除/取消）
+- mt-dish-edit.tsx 重写：整页扁平化去掉白色圆角面板（字段直接铺在暖色渐变底上+毛玻璃输入胶囊）；规格组行删除笔/删除图标改长按呼出操作弹层；新增「菜品优惠券」区（每菜一张：券名可空/满0=无门槛/减金额，金券胶囊+×移除）；SpecEditSheet 毛玻璃化
+- mt-merchant-center.tsx 重写：店铺卡删除「管理店铺/编辑/删除」按钮行——轻点进店管理、长按呼出毛玻璃弹层（编辑店铺/删除店铺）、底部提示条引导；删除确认弹层毛玻璃化；券摘要「满0减3」改「无门槛减3」
+- mt-shop-manage.tsx：删除头图右上角笔图标与菜品缩略图笔角标；店铺信息右侧加「编辑」毛玻璃胶囊、商家页签店铺信息卡加「编辑店铺信息」入口（保证编辑可达）；商家/评价/订单页签卡片毛玻璃化；菜品行加菜品券角标（券·满X减Y/无门槛减Y）
+- mt-merchant-edit.tsx 重写：整个「菜单管理」区域删除（含分区增删/菜品行/加菜入口，菜单移交店铺管理页 FAB），保存校验放宽为店名+分类（允许 0 菜品开荒，透传默认分区）；店铺券支持自定义券名+任意金额+门槛 0（无门槛），deals 角标仅由满>0 的券派生；表单毛玻璃化+菜单去向引导卡
+- meituan.tsx：新入驻保存后直接带进店铺管理页（引导加菜）；买家端菜品行加菜品券角标「券·xx，下单自动抵扣」；顺手修复结算页商家行 `<p>` 嵌套 FoodImg `<div>` 的 hydration 错误
+- E2E（agent-browser 全链路实测）：①空状态→入驻（填名/分类/无门槛券满0减3）→提交直达管理页（两次验证）②FAB 加菜珍珠奶茶¥12+奶茶模板 4 组规格+菜品券无门槛减2 保存→列表行「4组规格」+「券·无门槛减2」角标 ③长按规格组→编辑弹层验证选项文字完整显示（珍珠/椰果/布丁/新输入椰奶均可见、行不溢出）④商家页签（编辑入口/中文分类/无门槛券展示）⑤买家端搜索命中→店铺券条领取（已领取态）→规格弹窗选珍珠→结算页「满减优惠（新客立减3、菜品券·珍珠奶茶专享券）-¥5」→选【琳琳的奶茶铺】无门槛券 -¥3→合计 ¥6.00 已优惠¥8 数学精确 ⑥首页瀑布流「我的小店」置顶露出→删除店铺长按链路×2（确认弹层/toast/首页同步消失）⑦console 零报错（嵌套修复后结算页干净）
+- bunx tsc --noEmit 0 错误；npx eslint 全部改动文件 0 问题；dev.log 无新增错误（仅既有 instrumentation Edge 警告）
+
+Stage Summary:
+- 商家中心全面毛玻璃化定型：暖色渐变底 + bg-white/60~70 backdrop-blur 玻璃卡/胶囊贯穿商家中心/店铺管理/菜品编辑/入驻表单/全部弹层，图标保持 Lucide 线条无 emoji
+- 交互范式调整：破坏性/编辑操作收进长按（店铺卡、规格组行），页面只保留轻点进店、营业开关、黄色 FAB；删除确认与长按弹层统一毛玻璃风格
+- 数据模型变更：MtDish +coupon（菜品券，结算自动抵扣每菜每单一次）；店铺券 min 语义扩展 0=无门槛（mtListUsableCoupons/mtClaimShopCoupon 天然兼容零改动）
+- 新店流程改为「开荒制」：入驻表单只管店铺信息+券 → 保存直达店铺管理页加菜（菜单管理职责完全移交管理页）
+- 修复三件旧账：规格选项输入框显示 bug（min-w-0）、Tailwind v4 `!` 前缀失效类、结算页 p>div hydration 嵌套
