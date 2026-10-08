@@ -17147,3 +17147,24 @@ Stage Summary:
 - 数据模型变更：MtMerchant +mine/coupons/mtStatus；新 kv 键 mt-shops:<uid>；店铺券复用 MtCoupon（type waimai、name 带【店名】前缀）零改结算链路
 - 复用既有机制最大化：AI_MERCHANTS 注册表（详情/搜索/AI 代点零改动命中）、FoodImg、readImageFile、DishSpecSheet、CouponPickerSheet、mtCheckoutCalc/订单状态机全透明
 - 未验证项：店铺背景图上传走 readImageFile 同微信发图链路（未注入真图文件，代码路径与菜品图一致）；AI 代点选中自有店铺为预期行为未专项回归
+
+---
+Task ID: 12
+Agent: Z.ai Code (main)
+Task: 商家中心全面改版——全部界面/弹窗/图标美化（去 emoji）、店铺管理页对齐买家端店铺页（截图样式）、右下角黄色大加号加菜、菜品编辑弹窗改独立全屏页、添加商户入口指向「全部我入驻的店铺」
+
+Work Log:
+- 新建 mt-merchant-ui.tsx：mtDishIcon（菜名关键词→Lucide 图标映射 26 组：奶茶→CupSoda/咖啡→Coffee/炸鸡→Drumstick/鱼→Fish/麻辣烫→CookingPot…）+ DishImg/ShopImg（有图显示图、无图显示「暖沙渐变+线条图标」占位，替代 emoji 大字兜底）；DishImg 用 createElement 规避 react-hooks/static-components 误报
+- 新建 mt-dish-edit.tsx：DishEditPage 独立全屏菜品编辑页（替代旧底部弹窗 DishEditSheet）——大图上传位、基本信息卡（名称/售价/描述）、快捷模板卡（奶茶模板/小菜模板，Lucide 图标无 emoji）、规格组列表 + SpecEditSheet 美化版（拖拽把手/编号选项/单选多选胶囊）；编辑态「删除这道菜」二次确认按钮态；保留原 testid（mt-dish-tea-template/mt-dish-save 等）
+- 新建 mt-shop-manage.tsx：ShopManagePage 店铺管理页，视觉对齐买家端店铺页——头图（cover 或渐变+Store 图标）+返回/编辑悬浮钮；店铺信息（logo/店名+营业中 chip/★评分 月售 时长·距离/公告右对齐）；页签 点菜（左分区栏 N种 + 右菜品列表，点菜品进编辑）/ 评价（综合评分+真实晒单聚合）/ 商家（店铺信息行组+营业开关+优惠券列表+删除店铺）/ 订单（本店订单实时状态，mt-orders-changed 事件+轮询）；右下角「黄色大加号」FAB（外圈黄色光晕 ring + 阴影）→ 添加菜品（默认当前选中分区）；页内 AnimatePresence x 推入动画承载 DishEditPage
+- 重写 mt-merchant-center.tsx：商家中心=「全部我入驻的店铺」——概览条（已入驻 N 家·营业中 M 家）、店铺卡（ShopImg 封面/名称+状态 chip/★评分·菜品数·起送·配送/券摘要带 Ticket 图标/营业开关）、操作行 管理店铺(黄) / 编辑 / 删除；「添加店铺」顶栏黄圆+按钮+底部虚线三处入口；删除确认弹层加红色警示图标；分类 id→中文名映射（catName）
+- 更新 mt-merchant-edit.tsx：删除 DishEditSheet/SpecEditSheet/两个模板函数（约 356 行），加菜/点菜品改为推入 DishEditPage 全屏页（x 动画）；菜品行缩略图改 DishImg；头部注释/分类映射同步
+- meituan.tsx 接线：Page 加 'shopManage'；新增 manageShopId/editFrom('center'|'manage') state；MyPage「入驻美团」「添加商户」两个入口都指向商家中心（全部我入驻的店铺列表，符合“添加商户才显示全部我入驻的店铺，可以添加店铺”）；merchantCenter 加 onManage；shopManage 渲染块（onEditShop→editFrom='manage'）；merchantEdit onBack/onSaved 按 editFrom 返回对应页（管理页保存后直接回管理页）
+- 修复遗留：店铺分类行显示原始 id（yinyin）→ MT_CATS 映射中文名（manage 商家 tab + center 卡片）
+- E2E（agent-browser 实测全通过）：商家中心列表（无 emoji/概览条/三处添加入口）→ 管理店铺（截图样式：头图/店铺信息/四页签/分区栏/菜品行 4组规格 chip/黄色加号）→ FAB 加菜全屏页 → 珍珠奶茶+奶茶模板一键 4 组规格 → 保存实时上列表（招牌推荐 2种）→ 编辑回填 → 规格组编辑器（大杯0/中杯-1/小杯-2）→ 商家 tab（分类「甜点饮品」中文/营业开关往复/优惠券/删除入口）→ 订单 tab（历史订单状态实收）→ 评价 tab → 编辑店铺保存后回管理页 → 添加店铺「小猪饭堂」（表单加菜走同一全屏页）→ 提交入驻 → 列表「已入驻 2 家」分类显示「外卖 / 美食」→ 首页瀑布流「我的小店」双卡置顶 → 买家端店铺页（收藏/点菜/购物车/去结算）回归正常 → 删除店铺（确认弹层）→ 首页同步消失 → 删除菜品（两击确认）→ 分区计数回落 → console 零错误
+- bunx tsc --noEmit 0 错误；npx eslint 全部改动文件 0 问题；dev.log 无新增运行时错误（仅既有 instrumentation Edge 警告）
+
+Stage Summary:
+- 商家中心三层结构定型：「全部我入驻的店铺」列表（添加商户/入驻美团共用入口）→ 店铺管理页（买家端店铺页视觉 + 管理态：点菜品编辑/加号加菜/营业开关/删店删菜）→ 独立全屏菜品编辑页（大图+模板+规格组）
+- 全链路去 emoji：商家中心所有页面/弹窗/占位图统一 Lucide 线条图标 + 渐变占位；买家端（MerchantPage/FoodImg emoji 兜底）保持不变
+- 改动文件：mt-merchant-ui.tsx（新）/ mt-dish-edit.tsx（新）/ mt-shop-manage.tsx（新）/ mt-merchant-center.tsx（重写）/ mt-merchant-edit.tsx（瘦身）/ meituan.tsx（导航接线）

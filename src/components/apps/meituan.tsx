@@ -117,6 +117,7 @@ import { LocalToast, useLocalToast } from './page-toast';
 import { FoodImg } from './mt-food-img';
 import MerchantCenterPage from './mt-merchant-center';
 import MerchantEditPage from './mt-merchant-edit';
+import ShopManagePage from './mt-shop-manage';
 import {
   MT_CATS,
   MT_DEALS,
@@ -245,7 +246,7 @@ import { listContacts, loginQQ, loginWechat } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
 
-type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices' | 'merchantCenter' | 'merchantEdit';
+type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices' | 'merchantCenter' | 'merchantEdit' | 'shopManage';
 type Tab = 'home' | 'orders' | 'cart' | 'my';
 
 const MT_YELLOW = '#FFD100';
@@ -8712,7 +8713,6 @@ function MyPage({
   onOpenAddresses,
   onOpenInvoices,
   onOpenMerchantCenter,
-  onOpenMerchantJoin,
   onClaimCoupons,
   onToast,
 }: {
@@ -8731,9 +8731,8 @@ function MyPage({
   /** 服务宫格：地址 / 开发票 */
   onOpenAddresses: () => void;
   onOpenInvoices: () => void;
-  /** 商家入驻：商家中心（管理已有店铺）/ 直接新建店铺 */
+  /** 商家入驻：入驻美团 / 添加商户都进「全部我入驻的店铺」商家中心（含添加店铺） */
   onOpenMerchantCenter: () => void;
-  onOpenMerchantJoin: () => void;
   onClaimCoupons: () => void;
   onToast: (m: string) => void;
 }) {
@@ -8921,7 +8920,7 @@ function MyPage({
           [Receipt, '开发票', () => onOpenInvoices(), 'my-svc-invoice'],
           [Heart, '我的公益', () => onToast('我的公益（演示）'), ''],
           [Handshake, '入驻美团', () => onOpenMerchantCenter(), 'my-svc-merchant-center'],
-          [Store, '添加商户', () => onOpenMerchantJoin(), 'my-svc-merchant-join'],
+          [Store, '添加商户', () => onOpenMerchantCenter(), 'my-svc-merchant-join'],
           [HardHat, '工作兼职', () => onToast('工作兼职（演示）'), ''],
           [Leaf, '我的碳账户', () => onToast('我的碳账户（演示）'), ''],
           [LayoutGrid, '更多工具', () => onToast('更多工具（演示）'), ''],
@@ -11759,6 +11758,10 @@ export default function MeituanApp() {
   const [proxyViewId, setProxyViewId] = useState<string | null>(null);
   /** 商家入驻：编辑中的店铺 id（null = 新建） */
   const [editShopId, setEditShopId] = useState<string | null>(null);
+  /** 商家入驻：编辑页返回目标（商家中心列表 / 店铺管理页） */
+  const [editFrom, setEditFrom] = useState<'center' | 'manage'>('center');
+  /** 店铺管理页（商家中心 → 管理店铺）当前店铺 id */
+  const [manageShopId, setManageShopId] = useState<string | null>(null);
   const [toastMsg, showToast] = useLocalToast();
   const sessionRef = useRef<MtSession | null>(null);
   useEffect(() => {
@@ -12009,10 +12012,6 @@ export default function MeituanApp() {
                 onOpenAddresses={() => goSub('addresses', 'main')}
                 onOpenInvoices={() => setPage('invoices')}
                 onOpenMerchantCenter={() => setPage('merchantCenter')}
-                onOpenMerchantJoin={() => {
-                  setEditShopId(null);
-                  setPage('merchantEdit');
-                }}
                 onClaimCoupons={() => {
                   const n = mtClaimGodCoupons(uid);
                   showToast(n > 0 ? `已领取${n}张神券，可在「红包卡券」查看` : '神券已领取过了');
@@ -12074,15 +12073,36 @@ export default function MeituanApp() {
           onBack={() => setPage('main')}
           onCreate={() => {
             setEditShopId(null);
+            setEditFrom('center');
             setPage('merchantEdit');
           }}
           onEdit={(id) => {
             setEditShopId(id);
+            setEditFrom('center');
             setPage('merchantEdit');
           }}
-          onOpenMerchant={openMerchant}
+          onManage={(id) => {
+            setManageShopId(id);
+            setPage('shopManage');
+          }}
           onChanged={() => {
             homeFeedCache.ready = false; // 首页下次挂载重新生成，露出新店/改动
+          }}
+          onToast={showToast}
+        />
+      )}
+      {page === 'shopManage' && manageShopId && (
+        <ShopManagePage
+          session={session}
+          shopId={manageShopId}
+          onBack={() => setPage('merchantCenter')}
+          onEditShop={() => {
+            setEditShopId(manageShopId);
+            setEditFrom('manage');
+            setPage('merchantEdit');
+          }}
+          onChanged={() => {
+            homeFeedCache.ready = false; // 菜品/上下架改动后首页重新生成
           }}
           onToast={showToast}
         />
@@ -12091,11 +12111,19 @@ export default function MeituanApp() {
         <MerchantEditPage
           session={session}
           editId={editShopId}
-          onBack={() => setPage('merchantCenter')}
-          onSaved={() => {
+          onBack={() => {
+            setEditShopId(null);
+            setPage(editFrom === 'manage' ? 'shopManage' : 'merchantCenter');
+          }}
+          onSaved={(id) => {
             homeFeedCache.ready = false; // 保存/新建后首页重新生成，新店置顶露出
             setEditShopId(null);
-            setPage('merchantCenter');
+            if (editFrom === 'manage') {
+              setManageShopId(id);
+              setPage('shopManage');
+            } else {
+              setPage('merchantCenter');
+            }
           }}
           onToast={showToast}
         />
