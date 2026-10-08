@@ -16886,3 +16886,27 @@ Stage Summary:
 - 大窗图标判定结论：黄徽章两轮截图均渲染完整，"剪裁不对"实为骑手低进度压图 + 白底容器角部漏白两个复合观感问题，均已修复且实测
 - 动态订单卡片（微信/QQ 聊天内）点击即达对应订单详情；失效分享卡不可点；灵动岛大窗点击跳详情此前已实现并复测通过
 - 改动文件：src/components/ios/MeituanIsland.tsx、src/components/apps/mt-share-card.tsx
+
+---
+
+Task ID: 1
+Agent: 主协调者 (Z.ai Code)
+Task: 从 GitHub 拉取 cczzff468/5200 仓库到本地工作区，恢复项目可运行状态并完成端到端自检
+
+Work Log:
+- 使用用户提供的 PAT 克隆 https://github.com/cczzff468/5200.git 到 /tmp/repo-5200（HEAD: 77308a5 美团：灵动岛大窗骑手不再压图…）
+- rsync 同步仓库全部内容（排除 .git/node_modules/.next/.env/dev.log）到 /home/z/my-project，upload/ 目录 220 个文件就位（chgrp 警告因 upload 为特殊挂载点，不影响文件同步）
+- 将仓库 .git 迁移为工作区 .git：保留完整提交历史，origin remote 已配置（含 PAT，可直接 push）
+- 重建被删除的 .env（DATABASE_URL=file:/home/z/my-project/db/custom.db）
+- bun install 安装 855 个依赖（新增 idb/jsmediatags/web-push/uuid 等）
+- prisma generate 成功（Prisma Client v6.19.2），复用仓库自带 db/custom.db（含 Contact/WxBackground 等表数据）
+- 启动 dev server（端口 3000），首页 200（compile+render 正常）
+- bun run lint 通过（仅 qq.tsx/wechat.tsx 超 500KB 的 BABEL 优化提示，非错误）
+- Agent Browser 端到端验证：锁屏渲染（农历/天气/电量小组件）→ 上滑解锁 → 主屏（天气小组件真实数据 16°晴·北京）→ 信息 App 会话列表 → 进入与"Clove"AI 助手对话 → 发送"你好，请介绍一下你自己" → POST /api/chat 200 → AI 回复以 14″ 语音消息形式到达 → 点击语音气泡播放正常 → 返回主屏 → 电话 App 拨号键盘正常
+- dev.log 确认全链路 API 正常：/api/chat、/api/weather、/api/mt-img、/api/contacts/migrate、/api/chat/bg 均 200；浏览器 console 无错误
+
+Stage Summary:
+- 工作区 /home/z/my-project 现为 cczzff468/5200 仓库 main 分支的完整可运行副本（git 历史完整、remote origin 可直接推送）
+- 项目为"仿 iOS AI 聊天手机"：锁屏/主屏/灵动岛 + 信息/电话/微信/QQ/美团/音乐/天气/相机/照片/备忘录等 20+ App，数据层 IndexedDB + Prisma(SQLite)，AI 链路 z-ai-web-dev-sdk
+- 自检通过：lint 绿、页面渲染正常、解锁/聊天/AI回复/语音/导航核心交互全部可用
+- 待办：等待用户明确要修改或添加的功能
