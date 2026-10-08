@@ -67,7 +67,11 @@ kill $(ss -tlnp | grep :3010 | grep -oP 'pid=\K[0-9]+')   # keeper 会自动拉�
 
 ## 沙箱外部署（离开本项目环境时）
 
-- Docker：`docker run -d -p 3000:3000 moefurina/ncm-api`（上游官方镜像）
-- 源码部署：clone 上述 fork → `pnpm i`（或 npm）→ `node app.js`（默认 3000，`PORT` 可改）
-- 用 pm2 / systemd 守护；推荐 Node ≥ 22（engines 允许 ≥12）。
-- App 侧在「音乐 → 设置」填 `http://<host>:<port>` 即可切换到自部署实例。
+**🚀 推荐：直接用仓库里的部署包 `deploy/ncm-api/`**（docker-compose 一键起 + check.sh 健康检查
++ 完整中文指南），详见 `deploy/ncm-api/README.md`。要点：
+
+- Docker：`cd deploy/ncm-api && docker compose up -d`（从 fork cczzff468/api-enhanced 构建，
+  宿主机 3010 端口，与本项目默认代理地址一致零配置对接；或直接用上游镜像 `moefurina/ncm-api`）
+- 源码部署：clone fork → `pnpm i --prod --ignore-scripts` → `PORT=3010 node app.js`，pm2 守护
+- API 换了地址/主机：给 App 设环境变量 `NCM_API_UPSTREAM=http://主机:端口`（route.ts 已支持），
+  或音乐 App 设置页填 baseUrl 直连

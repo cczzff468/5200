@@ -17236,3 +17236,23 @@ Stage Summary:
 - 关键决策：vendor 全量运行时文件含 public/（14M，保 /docs 文档界面可用）+ package-lock.json 入库（npm 可复现）；旧 keeper 不杀（启动树成员），以 stub 隔离其旧依赖检查逻辑
 - 改动文件：mini-services/netease-api/**（vendor 源码 + VENDOR.md + 新 index.js/ncm-keeper.sh）+ src/app/api/music/ncm/[...path]/route.ts + src/lib/ios/music-api.ts（注释口径）
 - 后续可做：用户离开沙箱后按 VENDOR.md 尾节用 Docker/源码自部署，音乐 App 设置页填 baseUrl 即切自建实例
+
+---
+Task ID: 16
+Agent: Z.ai Code (main)
+Task: 网易云 API「离开沙箱也能用」交付包——代理地址环境变量化 + deploy/ncm-api 一键部署包（docker-compose/check.sh/中文指南）+ 健康检查脚本实测修正
+
+Work Log:
+- route.ts 代理可配置化：UPSTREAM 改读环境变量 NCM_API_UPSTREAM（trim 后回退默认 http://localhost:3010），同机部署零配置、跨机改一个 env 即切；头注释补「沙箱内外行为一致 + /api/music/stream 不受影响 + 外部部署指南入口」
+- 新增 deploy/ncm-api/docker-compose.yml：build 直接指向用户 fork（cczzff468/api-enhanced，改代码 push 后 compose build --pull 即升级）+ 注释切换官方镜像 moefurina/ncm-api 免构建；端口映射宿主 3010→容器 3000（与 App 默认代理地址一致）；restart unless-stopped；healthcheck 探本地静态资源（不消耗网易配额不触发风控）
+- 新增 deploy/ncm-api/check.sh（可执行）：9 项核心接口健康检查（扫码key/云搜索/热搜/榜单/推荐歌单/每日推荐/歌曲详情/歌词/登录状态），支持传任意 baseUrl 检查远程/https 实例，exit code=失败数可接 CI
+- 新增 deploy/ncm-api/README.md：方式 A Docker Compose 两条命令 / 方式 B Node+pm2（强调必须 Node、bun crypto 不兼容）；与 App 对接三方式表（同机零配置 / NCM_API_UPSTREAM 跨机 / 音乐 App 设置页 baseUrl 直连）；Caddy 反代 HTTPS 配置样例；风控与公网鉴权建议；Vercel 不推荐理由；运维命令与 fork 同步上游流程
+- VENDOR.md 沙箱外部署节改为指向 deploy/ncm-api/ 部署包
+- 🐛 重要修正：check.sh 首跑 4 项「参数错误」→ 定位为脚本自身双重 ? 拼接 bug（路径含 query 时应接 &timestamp）——**Task 15 记录的「同秒并发瞬时风控」结论有误，实为同类测试脚本拼接 bug，API 本体一直稳定**；修复后 9/9 全过（exit=0）
+- tsc 0 错误、eslint 0 问题
+
+Stage Summary:
+- 交付：「离开沙箱也能用」完整闭环——任何服务器 git clone 5200 仓库 → cd deploy/ncm-api && docker compose up -d → bash check.sh 全绿即上线；App 侧同机零配置 / 跨机一个环境变量 / 多端直连三通道齐备
+- 架构分层：沙箱内 vendor 实例（3010 常驻，keeper 守护）与外部 Docker 实例同构（同为 api-enhanced 4.41.1），App 默认代理地址对两者透明；NCM_API_UPSTREAM 是唯一的切换点
+- 改动文件：src/app/api/music/ncm/[...path]/route.ts + deploy/ncm-api/{docker-compose.yml,check.sh,README.md}（新）+ mini-services/netease-api/VENDOR.md
+- 经验沉淀：测试脚本拼 URL 一律先判断路径是否已含 ?（本案两次踩坑：手写 curl 与 check.sh）；探活永远打本地静态资源而非上游接口

@@ -2,21 +2,24 @@ import { NextRequest } from 'next/server';
 
 /**
  * 网易云 API 代理（内置默认通道）：
- *   /api/music/ncm/<path>?<query>  →  http://localhost:3010/<path>?<query>
+ *   /api/music/ncm/<path>?<query>  →  ${NCM_API_UPSTREAM}/<path>?<query>
+ *     默认 http://localhost:3010（沙箱内 vendor 的 mini-services/netease-api，
+ *     或外部同机部署 deploy/ncm-api/docker-compose.yml 的端口映射，均零配置对接）；
+ *     离开沙箱后 API 部署在其它地址/主机时，设环境变量 NCM_API_UPSTREAM 指向即可
+ *     （支持 .env / .env.local，改后重启 dev server）。
  *
- * 为什么经这层而不是前端直连 3010（XTransformPort）：
- * - 预览面板走 Caddy(:81)，相对路径 + XTransformPort 可转发；但直连 3000 端口时
- *   Next.js 没有这些路由（404）。统一走同源 /api/music/ncm/*，两条通道行为完全一致；
- * - 顺带解决跨域与 cookie 透传。
+ * 为什么经这层而不是前端直连：
+ * - 统一同源 /api/music/ncm/*，沙箱内外行为一致，且顺带解决跨域与 cookie 透传；
+ * - 音频/封面直链另有 /api/music/stream 白名单代理（http 混合内容与防盗链），不受本配置影响。
  *
- * mini-services/netease-api（api-enhanced v4.41.1，vendor 于本目录；原
- * NeteaseCloudMusicApi@4.32.0 npm 包方案已替换，接口向下兼容）必须在本机 3010 端口运行。
+ * API 本体：api-enhanced v4.41.1（vendor 于 mini-services/netease-api，源 cczzff468/api-enhanced），
+ * 外部部署指南见 deploy/ncm-api/README.md。
  */
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const UPSTREAM = 'http://localhost:3010';
+const UPSTREAM = process.env.NCM_API_UPSTREAM?.trim() || 'http://localhost:3010';
 
 async function proxy(req: NextRequest, path: string[]) {
   const url = new URL(req.url);
