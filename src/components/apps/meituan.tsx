@@ -154,29 +154,43 @@ import {
   mtGetSearchHist,
   mtGetSession,
   mtAnyIdpLoggedIn,
+  mtApplyLoanCredit,
+  mtBorrow,
   mtIdpLoggedIn,
   mtListUsableCoupons,
+  mtLoanAvailable,
+  mtLoanAprOf,
+  mtLoanPlan,
+  mtLoanRemainOf,
+  mtLoanUsedCredit,
   mtLoadAddresses,
   mtLoadBankCards,
   mtLoadCart,
   mtLoadCoupons,
   mtLoadFavs,
   mtLoadHistory,
+  mtLoadLoanAccount,
+  mtLoadLoans,
   mtLoadOrders,
   mtLoadPayPwd,
   mtLoadPayPwdLock,
   mtLoadWallet,
   mtLoadWalletBills,
   mtPushHistory,
+  mtPushWalletBill,
   mtRecordPayPwdFail,
   mtRemoveBankCard,
   mtRemoveHistory,
+  mtRepayLoanAll,
+  mtRepayLoanPeriod,
   mtResolveIdpIdentity,
   mtSaveAddresses,
+  mtSaveBankCards,
   mtSaveCart,
   mtSaveOrders,
   mtSavePayPwd,
   mtSavePayPwdLock,
+  mtSaveWallet,
   mtSetCurAddr,
   mtSetSession,
   mtSyncSessionIdentity,
@@ -199,6 +213,8 @@ import {
   type MtCoupon,
   type MtFavs,
   type MtHistItem,
+  type MtLoan,
+  type MtLoanAccount,
   type MtOrder,
   type MtPayPwdLock,
   type MtSession,
@@ -2002,6 +2018,7 @@ function PayPage({
   onClose,
   onPaid,
   onProxySent,
+  onOpenWallet,
   onToast,
 }: {
   order: MtOrder;
@@ -2010,10 +2027,18 @@ function PayPage({
   onPaid: (o: MtOrder) => void;
   /** 代付请求已发出（关收银台 → 回订单列表待付款页签） */
   onProxySent: () => void;
+  /** 去美团钱包（收银台跳转：开通/充值余额/添加银行卡） */
+  onOpenWallet: () => void;
   onToast: (m: string) => void;
 }) {
-  // 美团支付银行卡（bank=普通银行卡 / icbc=工商银行储蓄卡·最优惠）与 微信/QQ 渠道二选一
-  const [selBank, setSelBank] = useState<'bank' | 'icbc' | null>(null);
+  const uid = mtUidOf(session);
+  // 美团支付（真实钱包数据）：余额 + 银行卡列表，与 微信/QQ 渠道二选一
+  const [wallet, setWallet] = useState(() => mtLoadWallet(uid));
+  const [cards, setCards] = useState(() => mtLoadBankCards(uid));
+  // selMt: 'balance'=美团余额 / 银行卡id / null=未选（替代旧的演示 selBank）
+  const [selMt, setSelMt] = useState<'balance' | string | null>(null);
+  // 余额支付密码验证浮层（开启支付密码后，余额支付前先验证）
+  const [pwdGate, setPwdGate] = useState(false);
   const [idp, setIdp] = useState<'wx' | 'qq' | null>(null);
   const [chans, setChans] = useState<MtPayChannel[] | null>(null);
   const [chanKey, setChanKey] = useState<string | null>(null);
@@ -2035,8 +2060,14 @@ function PayPage({
   const leftMs = Math.max(0, order.createdAt + PAY_TIMEOUT_MS - Date.now());
   const countdown = `${String(Math.floor(leftMs / 60000)).padStart(2, '0')}:${String(Math.floor((leftMs % 60000) / 1000)).padStart(2, '0')}`;
 
-  // 选中工商银行储蓄卡 → 立减（其他方式原价）
-  const payAmount = selBank === 'icbc' ? Math.max(0.01, Math.round((order.total - Math.min(ICBC_OFF, order.total)) * 100) / 100) : order.total;
+  // 选中工商银行储蓄卡 → 立减（其余方式原价）；余额/其他卡按原价
+  const selCard = selMt && selMt !== 'balance' ? (cards.find((c) => c.id === selMt) ?? null) : null;
+  const icbcOff = selCard?.bank === '中国工商银行' ? Math.min(ICBC_OFF, order.total) : 0;
+  const payAmount = Math.max(0.01, Math.round((order.total - icbcOff) * 100) / 100);
+  /** 各卡需覆盖的金额（工行卡按立减后口径） */
+  const cardNeed = (c: MtBankCard) =>
+    Math.max(0.01, Math.round((order.total - (c.bank === '中国工商银行' ? Math.min(ICBC_OFF, order.total) : 0)) * 100) / 100);
+  const balanceOk = wallet.balance >= order.total;
 
   // 展开微信/QQ → 拉取渠道（余额/额度预检）；展开时自动选中首个可用渠道（对齐真机）
   useEffect(() => {
@@ -2058,12 +2089,13 @@ function PayPage({
     };
   }, [idp, order.total]);
 
-  const selBankRow = (v: 'bank' | 'icbc') => {
+  /** 选美团支付方式（余额/某张银行卡；可再点取消选中） */
+  const pickMt = (v: 'balance' | string) => {
     if (state === 'processing') return;
-    setSelBank((cur) => (cur === v ? null : v));
-    setChanKey(null);
     setErr('');
     setState('idle');
+    setSelMt((cur) => (cur === v ? null : v));
+    setChanKey(null);
   };
 
   const toggleIdp = (v: 'wx' | 'qq') => {
@@ -2071,46 +2103,111 @@ function PayPage({
     setErr('');
     setState('idle');
     setIdp((cur) => (cur === v ? null : v));
-    setSelBank(null);
+    setSelMt(null);
     setChanKey(null);
   };
 
   const chan = chans?.find((c) => c.key === chanKey) ?? null;
   const chanOfIdp = (v: 'wx' | 'qq') => (idp === v ? chan : null);
 
+  /** 统一收尾：写订单已支付（+余额支付账单）→ 回调跳详情；mtMethod 留痕原路退回渠道 */
+  const finishPay = (label: string, off: number, walletDeduct?: number, mtMethod?: string) => {
+    const now = Date.now();
+    const tuangouDone = order.kind === 'tuangou';
+    const paid: MtOrder = {
+      ...order,
+      total: Math.max(0.01, Math.round((order.total - off) * 100) / 100),
+      discount: Math.round((order.discount + off) * 100) / 100,
+      status: tuangouDone ? 'completed' : 'pendingAccept',
+      paidAt: now,
+      // 团购单：支付后=待使用（券码页出示券码核销）
+      ...(tuangouDone ? {} : { etaAt: now + mtDeliveryMinutesOf(order.id) * 60_000 }),
+      payChannelLabel: label,
+      // 美团钱包支付：记 payIdp='mt' + payMethodId（退款原路退回用）
+      ...(mtMethod ? { payIdp: 'mt' as const, payMethodId: mtMethod } : {}),
+      statusLog: [...order.statusLog, { status: tuangouDone ? 'completed' : 'pendingAccept', at: now }],
+    };
+    mtSaveOrders(order.uid, mtLoadOrders(order.uid).map((o) => (o.id === order.id ? paid : o)));
+    if (typeof walletDeduct === 'number') {
+      // 余额支付 → 钱包账单记一笔消费（卡支付已在扣款处记账）
+      mtPushWalletBill(uid, { kind: 'pay', title: '消费', amount: -walletDeduct, at: Date.now(), card: `${order.merchantName} · 美团余额` });
+    }
+    window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+    onToast(off > 0 ? `支付成功，已立减${fmtMoney(off)}元` : '支付成功');
+    onPaid(paid);
+  };
+
+  /** 美团支付·余额扣款（真实扣美团钱包余额；支付密码验证后调用） */
+  const payWithBalance = async () => {
+    setErr('');
+    setState('processing');
+    await new Promise((r) => setTimeout(r, 1100));
+    const randomFail = tried === 0 && Math.random() < 0.12;
+    setTried((t) => t + 1);
+    if (randomFail) {
+      setErr('网络异常，支付失败，请重试');
+      setState('fail');
+      return;
+    }
+    const cur = mtLoadWallet(uid);
+    if (cur.balance < order.total) {
+      setWallet(cur);
+      setErr('余额不足，请先充值或更换支付方式');
+      setState('fail');
+      return;
+    }
+    mtSaveWallet(uid, { balance: Math.round((cur.balance - order.total) * 100) / 100 });
+    setWallet(mtLoadWallet(uid));
+    finishPay('美团支付 · 余额', 0, order.total, 'mt-balance');
+  };
+
+  /** 美团支付·银行卡扣款（真实扣卡内余额；工行卡享立减） */
+  const payWithCard = async (card: MtBankCard) => {
+    setErr('');
+    setState('processing');
+    await new Promise((r) => setTimeout(r, 1100));
+    const randomFail = tried === 0 && Math.random() < 0.12;
+    setTried((t) => t + 1);
+    if (randomFail) {
+      setErr('网络异常，支付失败，请重试');
+      setState('fail');
+      return;
+    }
+    const off = card.bank === '中国工商银行' ? Math.min(ICBC_OFF, order.total) : 0;
+    const amt = Math.max(0.01, Math.round((order.total - off) * 100) / 100);
+    const cur = mtLoadBankCards(uid).find((c) => c.id === card.id);
+    if (!cur || cur.balance < amt) {
+      setCards(mtLoadBankCards(uid));
+      setErr('卡内余额不足，请更换支付方式');
+      setState('fail');
+      return;
+    }
+    mtSaveBankCards(
+      uid,
+      mtLoadBankCards(uid).map((c) => (c.id === card.id ? { ...c, balance: Math.round((c.balance - amt) * 100) / 100 } : c))
+    );
+    setCards(mtLoadBankCards(uid));
+    mtPushWalletBill(uid, { kind: 'pay', title: '消费', amount: -amt, at: Date.now(), card: `${card.bank} 尾号${card.tail}` });
+    finishPay(`美团支付 · ${card.bank}尾号${card.tail}${off > 0 ? `（已立减${fmtMoney(off)}元）` : ''}`, off, undefined, `mt-card:${card.id}`);
+  };
+
   const confirm = async () => {
     if (state === 'processing') return;
-    if (selBank) {
-      // 美团支付·银行卡（演示）：不扣微信/QQ钱包，原路信息记为美团支付
-      setErr('');
-      setState('processing');
-      await new Promise((r) => setTimeout(r, 1100));
-      const randomFail = tried === 0 && Math.random() < 0.12;
-      setTried((t) => t + 1);
-      if (randomFail) {
-        setErr('网络异常，支付失败，请重试');
-        setState('fail');
+    if (selMt === 'balance') {
+      // 美团支付·余额：开启支付密码 → 先验证再扣款
+      if (mtLoadPayPwd(uid).enabled) {
+        setPwdGate(true);
         return;
       }
-      const off = selBank === 'icbc' ? Math.min(ICBC_OFF, order.total) : 0;
-      const now = Date.now();
-      const tuangouDone = order.kind === 'tuangou';
-      const paid: MtOrder = {
-        ...order,
-        total: Math.max(0.01, Math.round((order.total - off) * 100) / 100),
-        discount: Math.round((order.discount + off) * 100) / 100,
-        status: tuangouDone ? 'completed' : 'pendingAccept',
-        paidAt: now,
-        // 团购单：支付后=待使用（券码页出示券码核销；consumedAt 不再支付时自动写入）
-        ...(tuangouDone ? {} : { etaAt: now + mtDeliveryMinutesOf(order.id) * 60_000 }),
-        payChannelLabel: selBank === 'icbc' ? `美团支付 · 工商银行储蓄卡（已立减${fmtMoney(off)}元）` : '美团支付 · 银行卡',
-        statusLog: [...order.statusLog, { status: tuangouDone ? 'completed' : 'pendingAccept', at: now }],
-      };
-      mtSaveOrders(order.uid, mtLoadOrders(order.uid).map((o) => (o.id === order.id ? paid : o)));
-      window.dispatchEvent(new CustomEvent('mt-orders-changed'));
-      onToast(off > 0 ? `支付成功，已立减${fmtMoney(off)}元` : '支付成功');
-      onPaid(paid);
+      await payWithBalance();
       return;
+    }
+    if (selMt && selMt !== 'balance') {
+      const card = cards.find((c) => c.id === selMt);
+      if (card) {
+        await payWithCard(card);
+        return;
+      }
     }
     if (chan) {
       setErr('');
@@ -2201,7 +2298,7 @@ function PayPage({
           {payAmount.toFixed(2)}
         </p>
 
-        {/* 支付方式：美团支付（白底直排） */}
+        {/* 支付方式：美团支付（真实钱包：余额 + 银行卡列表，资金真实扣减） */}
         <div className="mt-4 border-t-[7px] border-[#F5F6F7] px-4 pt-3">
           <div className="flex items-center gap-2 pb-1">
             <span className="grid h-[26px] w-[26px] place-items-center rounded-[8px] bg-gradient-to-br from-[#FFD100] to-[#FFB800] shadow-sm">
@@ -2214,18 +2311,61 @@ function PayPage({
             </span>
           </div>
           <div>
-            <button type="button" onClick={() => selBankRow('bank')} className="flex w-full items-center gap-2 py-[15px] text-left active:opacity-80">
-              <span className="flex-1 text-[15px] text-black/85">使用银行卡支付</span>
-              <Radio on={selBank === 'bank'} />
-            </button>
-            <div className="border-t border-black/[0.05]" />
-            <button type="button" onClick={() => selBankRow('icbc')} className="flex w-full items-center gap-2 py-[15px] text-left active:opacity-80">
-              <span className="text-[15px] text-black/85">使用工商银行储蓄卡</span>
-              <span className="shrink-0 rounded-[4px] bg-[#FF4B33] px-1 py-px text-[10px] font-semibold text-white">最优惠</span>
-              <span className="ml-auto flex items-center gap-2">
-                <span className="text-[15px] font-medium text-[#FF4B33]">- ¥ {fmtMoney(Math.min(ICBC_OFF, order.total))}</span>
-                <Radio on={selBank === 'icbc'} />
+            {/* 使用余额（美团钱包余额；不足灰显拦截） */}
+            <button
+              type="button"
+              onClick={() => (balanceOk ? pickMt('balance') : onToast('余额不足，可去钱包用银行卡充值后再试'))}
+              className={`flex w-full items-center gap-2.5 py-[13px] text-left ${balanceOk ? 'active:opacity-80' : 'opacity-60'}`}
+            >
+              <span className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full bg-[#FFF6D9]">
+                <Wallet className="h-[14px] w-[14px] text-[#C8860D]" strokeWidth={2} />
               </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[15px] text-black/85">使用余额</span>
+                <span className="block text-[10.5px] text-black/40">可用余额 ¥{mtW2(wallet.balance)}</span>
+              </span>
+              {!balanceOk && <span className="shrink-0 text-[11px] text-[#FF4B33]">余额不足</span>}
+              <Radio on={selMt === 'balance'} />
+            </button>
+            {/* 银行卡（真实钱包卡列表；工行卡最优惠立减） */}
+            {cards.map((c) => {
+              const meta = mtBankMeta(c.bank);
+              const ok = c.balance >= cardNeed(c);
+              const icbc = c.bank === '中国工商银行';
+              return (
+                <div key={c.id} className="border-t border-black/[0.05]">
+                  <button
+                    type="button"
+                    onClick={() => (ok ? pickMt(c.id) : onToast('卡内余额不足，请更换支付方式'))}
+                    className={`flex w-full items-center gap-2.5 py-[13px] text-left ${ok ? 'active:opacity-80' : 'opacity-60'}`}
+                  >
+                    <span className={`grid h-[26px] w-[26px] shrink-0 place-items-center rounded-[7px] bg-gradient-to-br ${meta.grad} text-[11px] font-bold text-white shadow-sm`}>
+                      {meta.short}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[15px] text-black/85">{c.bank}（尾号{c.tail}）</span>
+                      <span className="block text-[10.5px] text-black/40">卡内余额 ¥{mtW2(c.balance)}</span>
+                    </span>
+                    {icbc && ok && (
+                      <span className="ml-auto flex shrink-0 items-center gap-2">
+                        <span className="rounded-[4px] bg-[#FF4B33] px-1 py-px text-[10px] font-semibold text-white">最优惠</span>
+                        <span className="text-[15px] font-medium text-[#FF4B33]">- ¥ {fmtMoney(Math.min(ICBC_OFF, order.total))}</span>
+                      </span>
+                    )}
+                    {!ok && <span className="ml-auto shrink-0 text-[11px] text-[#FF4B33]">余额不足</span>}
+                    <Radio on={selMt === c.id} />
+                  </button>
+                </div>
+              );
+            })}
+            <div className="border-t border-black/[0.05]" />
+            {/* 去钱包：充值余额 / 添加银行卡 */}
+            <button type="button" onClick={onOpenWallet} className="flex w-full items-center gap-1.5 py-[13px] text-left active:opacity-70">
+              <Plus className="h-4 w-4 shrink-0 text-black/40" strokeWidth={2.2} />
+              <span className="min-w-0 flex-1 truncate text-[15px] text-black/50">
+                {cards.length === 0 && wallet.balance <= 0 ? '开通美团钱包：充值余额或添加银行卡' : '管理余额与银行卡'}
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-black/25" />
             </button>
             <div className="border-t border-black/[0.05]" />
             <button type="button" onClick={() => onToast('更多绑卡优惠即将上线，敬请期待')} className="flex w-full items-center gap-1 py-[13px] text-left active:opacity-70">
@@ -2268,7 +2408,7 @@ function PayPage({
                               onToast(c.isFc ? '亲属卡本月额度不足，请切换其他支付方式' : '该渠道余额不足，请更换支付方式');
                               return;
                             }
-                            setSelBank(null);
+                            setSelMt(null);
                             setChanKey(c.key);
                             setErr('');
                             setState('idle');
@@ -2349,8 +2489,8 @@ function PayPage({
         <button
           type="button"
           onClick={() => void confirm()}
-          disabled={!selBank && !chan}
-          className={`mt-2.5 h-[52px] w-full rounded-[26px] text-[17px] font-bold active:opacity-85 ${selBank || chan ? 'bg-[#FFD100] text-black/90 shadow-[0_4px_14px_rgba(255,190,0,0.35)]' : 'bg-[#F6EC9F] text-black/40'}`}
+          disabled={!selMt && !chan}
+          className={`mt-2.5 h-[52px] w-full rounded-[26px] text-[17px] font-bold active:opacity-85 ${selMt || chan ? 'bg-[#FFD100] text-black/90 shadow-[0_4px_14px_rgba(255,190,0,0.35)]' : 'bg-[#F6EC9F] text-black/40'}`}
         >
           {state === 'processing' ? '正在支付…' : state === 'fail' ? '重新支付' : '确认交易'}
         </button>
@@ -2377,6 +2517,19 @@ function PayPage({
           />
         )}
       </AnimatePresence>
+
+      {/* 余额支付密码验证浮层（开启了支付密码时；验证通过后继续扣款） */}
+      {pwdGate && (
+        <MtPayPwdGate
+          uid={uid}
+          label={`支付 ¥${fmtMoney(payAmount)}`}
+          onOk={() => {
+            setPwdGate(false);
+            void payWithBalance();
+          }}
+          onClose={() => setPwdGate(false)}
+        />
+      )}
     </motion.div>
   );
 }
@@ -5818,6 +5971,9 @@ function CartPage({
 
 /** 金额统一两位小数（钱包规范：整数也显示 0.00 格式） */
 const mtW2 = (n: number): string => n.toFixed(2);
+/** 千分位金额（借钱额度/借据展示用）：整数不带小数，非整数两位小数 */
+const mtAmtComma = (n: number): string =>
+  Number.isInteger(n) ? n.toLocaleString('en-US') : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** 支持添加的银行（演示） */
 const MT_BANK_NAMES = ['中国工商银行', '中国建设银行', '中国农业银行', '中国银行', '招商银行', '交通银行', '中国邮政储蓄银行'];
@@ -5889,7 +6045,7 @@ const mtBillItemTime = (ts: number): string => {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
-/** 账单类型 → 圆图标（充值↓绿/提现↑橙/消费购物袋/退款旋转） */
+/** 账单类型 → 圆图标（充值↓绿/提现↑橙/消费购物袋/借款金币/还款↑红/退款旋转） */
 const mtBillIcon = (kind: MtWalletBill['kind']): { Icon: LucideIcon; cls: string } => {
   switch (kind) {
     case 'recharge':
@@ -5898,6 +6054,10 @@ const mtBillIcon = (kind: MtWalletBill['kind']): { Icon: LucideIcon; cls: string
       return { Icon: ArrowUp, cls: 'bg-[#FFF3E0] text-[#FF7D00]' };
     case 'pay':
       return { Icon: ShoppingBag, cls: 'bg-[#F1F2F4] text-black/55' };
+    case 'loan':
+      return { Icon: CircleDollarSign, cls: 'bg-[#FFF6D9] text-[#C8860D]' };
+    case 'repay':
+      return { Icon: ArrowUp, cls: 'bg-[#FDEBEB] text-[#E64340]' };
     default:
       return { Icon: RotateCw, cls: 'bg-[#FFF8E1] text-[#C8860D]' };
   }
@@ -6316,7 +6476,7 @@ function WalletPage({
               </div>
               <button
                 type="button"
-                onClick={() => onToast('额度申领（演示）')}
+                onClick={() => (finTab === 'loan' ? onOpenLoan() : onToast(finTab === 'card' ? '联名卡申领（演示）' : '药划算额度（演示）'))}
                 className="rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] px-5 py-2.5 text-[13px] font-bold text-black/80 shadow-[0_4px_12px_rgba(255,195,0,0.35)] active:opacity-85"
               >
                 去申领
@@ -7139,9 +7299,45 @@ function WalletBillsPage({ session, onClose }: { session: MtSession; onClose: ()
   );
 }
 
-/** 借钱页（截图对齐：黄渐变 + 返回/客服 + 美团·借钱 logo + 大标题 + 白卡可借额度（协议可勾选）+ 产品详情灰卡 + 四大安全保障） */
+/** 借钱页：额度申请（模拟审批）→ 去借款（金额/期数/还款计划）→ 还一期/一次还清（美团余额扣款）→ 借款记录 */
 function WalletLoanPage({ session, onClose, onToast }: { session: MtSession; onClose: () => void; onToast: (m: string) => void }) {
+  const uid = mtUidOf(session);
+  const [acct, setAcct] = useState(() => mtLoadLoanAccount(uid));
+  const [loans, setLoans] = useState(() => mtLoadLoans(uid));
+  const [wallet, setWallet] = useState(() => mtLoadWallet(uid));
   const [agree, setAgree] = useState(false);
+  const [approving, setApproving] = useState(false);
+  /** 借款弹层 / 还款弹层（loanId + 模式） */
+  const [borrowOpen, setBorrowOpen] = useState(false);
+  const [repayFor, setRepayFor] = useState<null | { loanId: string; mode: 'period' | 'all' }>(null);
+
+  const refresh = () => {
+    setAcct(mtLoadLoanAccount(uid));
+    setLoans(mtLoadLoans(uid));
+    setWallet(mtLoadWallet(uid));
+  };
+
+  const used = mtLoanUsedCredit(uid);
+  const avail = mtLoanAvailable(uid);
+  const activeLoans = loans.filter((l) => l.status === 'active');
+  const remainTotal = Math.round(activeLoans.reduce((s, l) => s + mtLoanRemainOf(l), 0) * 100) / 100;
+  const repayLoan = repayFor ? (loans.find((l) => l.id === repayFor.loanId) ?? null) : null;
+
+  /** 申请额度：模拟审批（1.4s 审批中 → 随机获批 8,800~99,800） */
+  const apply = async () => {
+    if (approving) return;
+    if (!agree) {
+      onToast('请先勾选同意协议');
+      return;
+    }
+    setApproving(true);
+    await new Promise((r) => setTimeout(r, 1400));
+    mtApplyLoanCredit(uid);
+    setApproving(false);
+    refresh();
+    onToast('审批通过，恭喜获得借款额度');
+  };
+
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#FAFAF8]">
       <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
@@ -7162,37 +7358,149 @@ function WalletLoanPage({ session, onClose, onToast }: { session: MtSession; onC
           <p className="mt-3 text-[30px] font-extrabold leading-tight tracking-wide text-[#5C3A18]">生活周转小帮手</p>
         </div>
 
-        {/* 可借额度白卡（协议可勾选，未勾选申请会被拦截提示） */}
+        {/* 额度白卡：未申请（大约可借 ****** + 协议 + 申请）/ 已申请（可借额度 + 去借款） */}
         <div className="px-4">
           <div className="rounded-[18px] bg-white px-5 py-6 shadow-[0_4px_16px_rgba(90,60,10,0.05)]">
-            <p className="text-center text-[13.5px] text-black/55">大约可借 (元)</p>
-            <p className="mt-2 text-center text-[42px] font-extrabold leading-none tracking-[6px] text-black/85">******</p>
-            <p className="mt-3 text-center text-[11.5px] text-black/35">最终获取额度，以实际审批为准</p>
-            <button
-              type="button"
-              onClick={() => onToast(agree ? '申请已提交，请以实际审批为准（演示）' : '请先勾选同意协议')}
-              className="mt-5 w-full rounded-full bg-[#FFD100] py-3.5 text-[16px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,209,0,0.35)] active:opacity-90"
-            >
-              点击申请
-            </button>
-            <div className="mt-4 flex items-start gap-2">
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={agree}
-                aria-label="同意协议"
-                onClick={() => setAgree((v) => !v)}
-                className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border transition-colors ${agree ? 'border-[#FFC300] bg-[#FFC300]' : 'border-black/25'}`}
-              >
-                {agree && <Check className="h-2.5 w-2.5 text-black" strokeWidth={3.5} />}
-              </button>
-              <p className="text-[10.5px] leading-relaxed text-black/40">
-                已同意<span className="text-[#1677FF]">协议</span>
-                ，将您美团留存的手机号、银行卡及身份证号用于美团金融服务，该服务由美团小贷及其合作金融机构提供
-              </p>
-            </div>
+            {!acct.applied ? (
+              <>
+                <p className="text-center text-[13.5px] text-black/55">大约可借 (元)</p>
+                <p className="mt-2 text-center text-[42px] font-extrabold leading-none tracking-[6px] text-black/85">******</p>
+                <p className="mt-3 text-center text-[11.5px] text-black/35">最终获取额度，以实际审批为准</p>
+                <button
+                  type="button"
+                  data-testid="loan-apply"
+                  onClick={() => void apply()}
+                  disabled={approving}
+                  className="mt-5 w-full rounded-full bg-[#FFD100] py-3.5 text-[16px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,209,0,0.35)] active:opacity-90 disabled:opacity-70"
+                >
+                  {approving ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <RefreshCw className="h-4 w-4 animate-spin" strokeWidth={2.4} />
+                      审批中…
+                    </span>
+                  ) : (
+                    '点击申请'
+                  )}
+                </button>
+                <div className="mt-4 flex items-start gap-2">
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={agree}
+                    aria-label="同意协议"
+                    onClick={() => setAgree((v) => !v)}
+                    className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border transition-colors ${agree ? 'border-[#FFC300] bg-[#FFC300]' : 'border-black/25'}`}
+                  >
+                    {agree && <Check className="h-2.5 w-2.5 text-black" strokeWidth={3.5} />}
+                  </button>
+                  <p className="text-[10.5px] leading-relaxed text-black/40">
+                    已同意<span className="text-[#1677FF]">协议</span>
+                    ，将您美团留存的手机号、银行卡及身份证号用于美团金融服务，该服务由美团小贷及其合作金融机构提供
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-center text-[13.5px] text-black/55">可借额度 (元)</p>
+                <p className="mt-2 text-center text-[42px] font-extrabold leading-none text-black/85" data-testid="loan-avail">
+                  {mtAmtComma(avail)}
+                </p>
+                <div className="mt-3 flex items-center justify-center gap-2.5 text-[11.5px] text-black/40">
+                  <span>总额度 ¥{mtAmtComma(acct.credit)}</span>
+                  <span className="h-2.5 w-px bg-black/10" />
+                  <span>在贷 ¥{mtAmtComma(used)}</span>
+                  <span className="h-2.5 w-px bg-black/10" />
+                  <span>余额 ¥{mtW2(wallet.balance)}</span>
+                </div>
+                <button
+                  type="button"
+                  data-testid="loan-borrow-entry"
+                  onClick={() => (avail >= 500 ? setBorrowOpen(true) : onToast('可借额度不足 ¥500，可先还款释放额度'))}
+                  className="mt-5 w-full rounded-full bg-[#FFD100] py-3.5 text-[16px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,209,0,0.35)] active:opacity-90"
+                >
+                  去借款
+                </button>
+              </>
+            )}
           </div>
         </div>
+
+        {/* 还款中借据（还一期 / 一次还清，均从美团余额扣款） */}
+        {activeLoans.length > 0 && (
+          <div className="mt-6 px-4">
+            <div className="flex items-end justify-between pb-2">
+              <p className="text-[16px] font-bold text-black/85">还款中</p>
+              <p className="text-[11.5px] text-black/40">
+                剩余待还 <span className="font-bold text-[#FF4B33]">¥{mtW2(remainTotal)}</span>
+              </p>
+            </div>
+            <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
+              {activeLoans.map((l) => (
+                <div key={l.id} className="py-3.5" data-testid="loan-active-item">
+                  <div className="flex items-center gap-2.5">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#FFF6D9]">
+                      <CircleDollarSign className="h-[17px] w-[17px] text-[#C8860D]" strokeWidth={2} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[14px] font-bold text-black/85">借款 ¥{mtAmtComma(l.amount)}</p>
+                      <p className="mt-0.5 truncate text-[11px] text-black/40">
+                        {l.periods}期 · 年化(单利) {l.apr}% · 每期 ¥{mtW2(l.monthly)} · 已还 {l.paidPeriods}/{l.periods} 期
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-[#FFF6D9] px-2 py-0.5 text-[10px] font-semibold text-[#C8860D]">还款中</span>
+                  </div>
+                  <div className="mt-2.5 flex items-center gap-2 pl-[46px]">
+                    <p className="min-w-0 flex-1 text-[11px] text-black/45">
+                      剩余待还 <span className="text-[13px] font-bold text-[#FF4B33]">¥{mtW2(mtLoanRemainOf(l))}</span>
+                    </p>
+                    <button
+                      type="button"
+                      data-testid="loan-repay-period"
+                      onClick={() => setRepayFor({ loanId: l.id, mode: 'period' })}
+                      className="shrink-0 rounded-full bg-[#FFD100] px-3.5 py-1.5 text-[12px] font-bold text-black/85 active:opacity-85"
+                    >
+                      还一期
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="loan-repay-all"
+                      onClick={() => setRepayFor({ loanId: l.id, mode: 'all' })}
+                      className="shrink-0 rounded-full border border-black/15 px-3.5 py-1.5 text-[12px] font-semibold text-black/70 active:opacity-70"
+                    >
+                      一次还清
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 借款记录 */}
+        {loans.length > 0 && (
+          <div className="mt-6 px-4">
+            <p className="pb-2 text-[16px] font-bold text-black/85">借款记录</p>
+            <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
+              {loans.slice(0, 8).map((l) => (
+                <div key={l.id} className="flex items-center gap-3 py-3.5">
+                  <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${l.status === 'repaid' ? 'bg-[#F1F2F4]' : 'bg-[#FFF6D9]'}`}>
+                    <CircleDollarSign className={`h-[17px] w-[17px] ${l.status === 'repaid' ? 'text-black/30' : 'text-[#C8860D]'}`} strokeWidth={2} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[14px] font-semibold text-black/85">
+                      借款 ¥{mtAmtComma(l.amount)} · {l.periods}期
+                    </p>
+                    <p className="mt-0.5 truncate text-[11px] text-black/35">{fmtDateTime(l.borrowedAt)} · 年化(单利) {l.apr}%</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className={`text-[11px] font-semibold ${l.status === 'repaid' ? 'text-black/35' : 'text-[#C8860D]'}`}>{l.status === 'repaid' ? '已还清' : '还款中'}</p>
+                    {l.status === 'active' && <p className="mt-0.5 text-[10.5px] text-black/35">剩 ¥{mtW2(mtLoanRemainOf(l))}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 产品详情（居中节标题 + 灰卡行） */}
         <p className="pt-7 text-center text-[16px] font-bold text-black/85">产品详情</p>
@@ -7226,7 +7534,278 @@ function WalletLoanPage({ session, onClose, onToast }: { session: MtSession; onC
           </div>
         </div>
       </div>
+
+      {/* 借款弹层（金额/期数/还款计划 → 放款到美团余额） */}
+      {borrowOpen && (
+        <LoanBorrowSheet
+          uid={uid}
+          avail={avail}
+          balance={wallet.balance}
+          onClose={() => setBorrowOpen(false)}
+          onDone={() => {
+            setBorrowOpen(false);
+            refresh();
+          }}
+          onToast={onToast}
+        />
+      )}
+      {/* 还款确认弹层（美团余额扣款；不足提示先充值） */}
+      {repayLoan && repayFor && (
+        <LoanRepaySheet
+          uid={uid}
+          loan={repayLoan}
+          mode={repayFor.mode}
+          balance={wallet.balance}
+          onClose={() => setRepayFor(null)}
+          onDone={() => {
+            setRepayFor(null);
+            refresh();
+          }}
+          onToast={onToast}
+        />
+      )}
     </div>
+  );
+}
+
+/** 借款弹层：金额（快捷chips）+ 期数（年化利率）+ 还款计划预览 → 确认借款放款到美团余额 */
+function LoanBorrowSheet({
+  uid,
+  avail,
+  balance,
+  onClose,
+  onDone,
+  onToast,
+}: {
+  uid: string;
+  avail: number;
+  balance: number;
+  onClose: () => void;
+  onDone: () => void;
+  onToast: (m: string) => void;
+}) {
+  const [amt, setAmt] = useState('');
+  const [periods, setPeriods] = useState<3 | 6 | 12>(3);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const num = Math.round((parseFloat(amt) || 0) * 100) / 100;
+  const plan = num >= 500 && num <= avail ? mtLoanPlan(num, periods) : null;
+
+  const submit = async () => {
+    if (busy) return;
+    if (!(num >= 500)) {
+      setErr('借款金额最低 ¥500');
+      return;
+    }
+    if (num > avail) {
+      setErr(`超出可借额度（可借 ¥${mtAmtComma(avail)}）`);
+      return;
+    }
+    setBusy(true);
+    await new Promise((r) => setTimeout(r, 900));
+    const res = mtBorrow(uid, num, periods);
+    setBusy(false);
+    if (!res.ok) {
+      setErr(res.error ?? '借款失败，请重试');
+      return;
+    }
+    onToast(`借款成功，¥${mtW2(num)} 已到账美团余额`);
+    onDone();
+  };
+
+  return (
+    <MtWalletSheet title="去借款" onClose={onClose}>
+      <div className="px-4 pb-2">
+        {/* 可借额度 / 美团余额 */}
+        <div className="grid grid-cols-2 gap-2.5">
+          <div className="rounded-[14px] bg-[#FFFBEA] px-4 py-3">
+            <p className="text-[11.5px] text-[#8A6116]/70">可借额度</p>
+            <p className="mt-0.5 text-[17px] font-extrabold text-black/85">¥{mtAmtComma(avail)}</p>
+          </div>
+          <div className="rounded-[14px] bg-[#F7F8FA] px-4 py-3">
+            <p className="text-[11.5px] text-black/45">美团余额（放款至）</p>
+            <p className="mt-0.5 text-[17px] font-extrabold text-black/85">¥{mtW2(balance)}</p>
+          </div>
+        </div>
+
+        <p className="pb-2 pt-4 text-[14px] font-semibold text-black/80">借款金额</p>
+        <div className="flex items-center gap-1.5 rounded-[12px] border border-black/10 bg-white px-4 transition-colors focus-within:border-[#FFC300]">
+          <span className="text-[22px] font-bold text-black/80">¥</span>
+          <input
+            value={amt}
+            onChange={(e) => {
+              setAmt(e.target.value.replace(/[^\d.]/g, '').replace(/(\..*?)\./g, '$1'));
+              setErr('');
+            }}
+            inputMode="decimal"
+            placeholder="最低500元"
+            aria-label="借款金额"
+            className="h-12 min-w-0 flex-1 bg-transparent text-[18px] font-bold text-black/90 outline-none placeholder:text-[13px] placeholder:font-normal placeholder:text-black/25"
+          />
+          {amt !== '' && (
+            <button type="button" aria-label="清空" onClick={() => setAmt('')}>
+              <X className="h-4 w-4 text-black/30" />
+            </button>
+          )}
+        </div>
+        <div className="mt-2.5 flex flex-wrap gap-2">
+          {[500, 1000, 5000, 10000].map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => {
+                setAmt(String(v));
+                setErr('');
+              }}
+              disabled={v > avail}
+              className={`rounded-full px-3.5 py-1.5 text-[12.5px] font-semibold ${v > avail ? 'bg-black/[0.04] text-black/25' : 'bg-[#FFF6D9] text-[#8A6116] active:opacity-80'}`}
+            >
+              ¥{v.toLocaleString('en-US')}
+            </button>
+          ))}
+          {avail >= 500 && (
+            <button
+              type="button"
+              onClick={() => {
+                setAmt(String(Math.floor(avail)));
+                setErr('');
+              }}
+              className="rounded-full bg-[#FFF6D9] px-3.5 py-1.5 text-[12.5px] font-semibold text-[#8A6116] active:opacity-80"
+            >
+              全部
+            </button>
+          )}
+        </div>
+
+        <p className="pb-2 pt-4 text-[14px] font-semibold text-black/80">借款期限</p>
+        <div className="grid grid-cols-3 gap-2.5">
+          {([3, 6, 12] as const).map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setPeriods(p)}
+              className={`rounded-[12px] border py-2.5 text-center transition-colors ${periods === p ? 'border-[#FFC300] bg-[#FFFBEA]' : 'border-black/10 bg-white'}`}
+            >
+              <span className={`block text-[15px] font-bold ${periods === p ? 'text-black/90' : 'text-black/60'}`}>{p}期</span>
+              <span className="mt-0.5 block text-[10px] text-black/40">年化 {mtLoanAprOf(p)}%</span>
+            </button>
+          ))}
+        </div>
+
+        {/* 还款计划预览 */}
+        <div className={`mt-4 rounded-[14px] px-4 py-3.5 ${plan ? 'bg-[#FFFBEA]' : 'bg-[#F7F8FA]'}`} data-testid="loan-plan">
+          {plan ? (
+            <>
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] text-black/50">每期应还（共{periods}期）</span>
+                <span className="text-[16px] font-extrabold text-black/90">¥{mtW2(plan.monthly)}</span>
+              </div>
+              <div className="mt-1.5 flex items-center justify-between text-[12px]">
+                <span className="text-black/40">总利息</span>
+                <span className="text-black/70">¥{mtW2(plan.totalInterest)}</span>
+              </div>
+              <div className="mt-1 flex items-center justify-between text-[12px]">
+                <span className="text-black/40">到期应还总额</span>
+                <span className="text-black/70">¥{mtW2(plan.totalDue)}</span>
+              </div>
+            </>
+          ) : (
+            <p className="text-center text-[12px] text-black/35">输入金额后查看每期还款计划</p>
+          )}
+        </div>
+        {err && <p className="mt-2 text-center text-[12px] text-[#FF4B33]">{err}</p>}
+        <p className="mt-3 text-[10.5px] leading-relaxed text-black/35">借款将放款至美团余额，可用于消费支付或提现到银行卡；还款从美团余额扣款。</p>
+        <button
+          type="button"
+          data-testid="loan-borrow-confirm"
+          onClick={() => void submit()}
+          disabled={busy}
+          className="mt-3 w-full rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] py-3.5 text-[16px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,209,0,0.35)] active:opacity-90 disabled:opacity-60"
+        >
+          {busy ? '放款中…' : '确认借款'}
+        </button>
+      </div>
+    </MtWalletSheet>
+  );
+}
+
+/** 还款确认弹层：还一期 / 一次还清（美团余额扣款；余额不足提示先充值） */
+function LoanRepaySheet({
+  uid,
+  loan,
+  mode,
+  balance,
+  onClose,
+  onDone,
+  onToast,
+}: {
+  uid: string;
+  loan: MtLoan;
+  mode: 'period' | 'all';
+  balance: number;
+  onClose: () => void;
+  onDone: () => void;
+  onToast: (m: string) => void;
+}) {
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const remain = mtLoanRemainOf(loan);
+  const amt = mode === 'period' ? loan.monthly : remain;
+  const isLast = loan.paidPeriods + 1 >= loan.periods;
+
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    await new Promise((r) => setTimeout(r, 700));
+    if (mode === 'period') {
+      const res = mtRepayLoanPeriod(uid, loan.id);
+      setBusy(false);
+      if (!res.ok) {
+        setErr(res.error ?? '还款失败，请重试');
+        return;
+      }
+      onToast(res.done ? '已还清，借据结清' : `已还第${loan.paidPeriods + 1}期`);
+    } else {
+      const res = mtRepayLoanAll(uid, loan.id);
+      setBusy(false);
+      if (!res.ok) {
+        setErr(res.error ?? '还款失败，请重试');
+        return;
+      }
+      onToast('一次还清成功，借据已结清');
+    }
+    onDone();
+  };
+
+  return (
+    <MtWalletSheet title={mode === 'period' ? '立即还款' : '一次还清'} onClose={onClose}>
+      <div className="px-4 pb-2">
+        <div className="rounded-[14px] bg-[#FFFBEA] px-4 py-3.5">
+          <p className="text-[12px] text-black/45">
+            借款 ¥{mtAmtComma(loan.amount)} · {loan.periods}期 · 已还 {loan.paidPeriods}/{loan.periods} 期
+          </p>
+          <p className="mt-1.5 text-[28px] font-extrabold leading-none text-black/90">¥{mtW2(amt)}</p>
+          <p className="mt-1.5 text-[11px] text-black/40">
+            {mode === 'period' ? (isLast ? '本期为最后一期，还完自动结清' : `第${loan.paidPeriods + 1}期应还（本息均摊）`) : `剩余全部本息（${loan.periods - loan.paidPeriods}期）`}
+          </p>
+        </div>
+        <div className="mt-3 flex items-center justify-between rounded-[14px] bg-white px-4 py-3 ring-1 ring-black/[0.06]">
+          <span className="min-w-0 flex-1 text-[13px] text-black/55">美团余额（还款来源）</span>
+          <span className="shrink-0 text-[14px] font-bold text-black/85">¥{mtW2(balance)}</span>
+        </div>
+        {err && <p className="mt-2 text-center text-[12px] text-[#FF4B33]">{err}</p>}
+        <button
+          type="button"
+          data-testid="loan-repay-confirm"
+          onClick={() => void submit()}
+          disabled={busy}
+          className="mt-3 w-full rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] py-3.5 text-[16px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,209,0,0.35)] active:opacity-90 disabled:opacity-60"
+        >
+          {busy ? '还款中…' : '确认还款'}
+        </button>
+        <p className="mt-3 text-[10.5px] leading-relaxed text-black/35">余额不足时，可先在钱包「余额」页用银行卡充值后再还款。</p>
+      </div>
+    </MtWalletSheet>
   );
 }
 
@@ -10844,6 +11423,12 @@ export default function MeituanApp() {
               setOrderTab('待付款');
               setTab('orders');
               setPage('main');
+            }}
+            onOpenWallet={() => {
+              // 收银台 → 美团钱包（充值余额/添加银行卡后可回来支付）
+              setPayPage(false);
+              setPayFor(null);
+              setPage('wallet');
             }}
             onToast={showToast}
           />

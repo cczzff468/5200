@@ -454,7 +454,7 @@ export interface MtOrder {
   /** 退款/售后信息（申请后挂载） */
   refund?: MtRefund;
   /** 支付方式：'wx' | 'qq'（pendingPay 时为空） */
-  payIdp?: 'wx' | 'qq';
+  payIdp?: 'wx' | 'qq' | 'mt';
   /** 具体支付渠道展示名（零钱/银行卡/亲属卡） */
   payChannelLabel?: string;
   /** 亲属卡支付标记（支付方式展示「亲属卡」） */
@@ -515,7 +515,7 @@ export function mtLoadOrders(uid: string): MtOrder[] {
       kind: o.kind === 'tuangou' || o.kind === 'flight' || o.kind === 'train' ? o.kind : 'waimai',
       address: (o.address ?? undefined) as MtAddress | undefined,
       consumedAt: typeof o.consumedAt === 'number' ? o.consumedAt : undefined,
-      payIdp: o.payIdp === 'wx' || o.payIdp === 'qq' ? o.payIdp : undefined,
+      payIdp: o.payIdp === 'wx' || o.payIdp === 'qq' || o.payIdp === 'mt' ? o.payIdp : undefined,
       payChannelLabel: typeof o.payChannelLabel === 'string' ? o.payChannelLabel : undefined,
       payFc: o.payFc === true,
       payMethodId: typeof o.payMethodId === 'string' ? o.payMethodId : undefined,
@@ -1131,10 +1131,10 @@ export function mtRemoveBankCard(uid: string, id: string): void {
   );
 }
 
-/** 钱包账单流水（充值/提现/消费/退款，最新在前） */
+/** 钱包账单流水（充值/提现/消费/退款/借款/还款，最新在前） */
 export interface MtWalletBill {
   id: string;
-  kind: 'recharge' | 'withdraw' | 'pay' | 'refund';
+  kind: 'recharge' | 'withdraw' | 'pay' | 'refund' | 'loan' | 'repay';
   /** 标题（如 充值-中国工商银行 尾号1234） */
   title: string;
   /** 正负金额：充值/退款入账为正，提现/消费为负 */
@@ -1155,7 +1155,7 @@ export function mtLoadWalletBills(uid: string): MtWalletBill[] {
     .filter((b): b is MtWalletBill => Boolean(b) && typeof (b as MtWalletBill).id === 'string' && typeof (b as MtWalletBill).amount === 'number')
     .map((b): MtWalletBill => ({
       id: b.id,
-      kind: b.kind === 'withdraw' || b.kind === 'pay' || b.kind === 'refund' ? b.kind : 'recharge',
+      kind: b.kind === 'withdraw' || b.kind === 'pay' || b.kind === 'refund' || b.kind === 'loan' || b.kind === 'repay' ? b.kind : 'recharge',
       title: typeof b.title === 'string' ? b.title : '',
       amount: Math.round(b.amount * 100) / 100,
       at: typeof b.at === 'number' ? b.at : Date.now(),
@@ -1290,4 +1290,182 @@ export const MT_WALLET_BILL_LABEL: Record<MtWalletBill['kind'], string> = {
   withdraw: '提现',
   pay: '消费',
   refund: '退款',
+  loan: '借款',
+  repay: '还款',
 };
+
+// ---------------- 美团借钱（额度/借据/还款，按账号隔离；借款到账美团余额） ----------------
+
+/** 借钱额度账户（点击申请后模拟审批开通；credit=获批总额度） */
+export interface MtLoanAccount {
+  applied: boolean;
+  appliedAt: number;
+  /** 获批总额度（元） */
+  credit: number;
+}
+
+/** 借据（一笔借款；按期均摊还本付息） */
+export interface MtLoan {
+  id: string;
+  /** 借款本金 */
+  amount: number;
+  /** 期数 */
+  periods: 3 | 6 | 12;
+  /** 年化利率（单利 %） */
+  apr: number;
+  /** 每期应还（本金+利息均摊） */
+  monthly: number;
+  /** 应还总额（本金+总利息） */
+  totalDue: number;
+  /** 已还期数 */
+  paidPeriods: number;
+  status: 'active' | 'repaid';
+  borrowedAt: number;
+  repaidAt?: number;
+}
+
+const loanAcctKey = (uid: string) => `mt-loan-acct:${uid}`;
+const loansKey = (uid: string) => `mt-loans:${uid}`;
+
+export function mtLoadLoanAccount(uid: string): MtLoanAccount {
+  const a = kvGet<Partial<MtLoanAccount>>(loanAcctKey(uid));
+  if (a && typeof a === 'object' && a.applied === true && typeof a.credit === 'number' && Number.isFinite(a.credit) && a.credit > 0) {
+    return { applied: true, appliedAt: typeof a.appliedAt === 'number' && a.appliedAt > 0 ? a.appliedAt : Date.now(), credit: Math.round(a.credit * 100) / 100 };
+  }
+  return { applied: false, appliedAt: 0, credit: 0 };
+}
+
+/** 提交额度申请 → 模拟审批：额度 8,800 ~ 99,800，取整到百（对齐「最高可享 99,800」口径） */
+export function mtApplyLoanCredit(uid: string): MtLoanAccount {
+  const credit = Math.round((8800 + Math.random() * (99800 - 8800)) / 100) * 100;
+  const acct: MtLoanAccount = { applied: true, appliedAt: Date.now(), credit };
+  kvSet(loanAcctKey(uid), acct);
+  return acct;
+}
+
+export function mtLoadLoans(uid: string): MtLoan[] {
+  const list = kvGet<Partial<MtLoan>[]>(loansKey(uid));
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((l): l is MtLoan => Boolean(l) && typeof (l as MtLoan).id === 'string' && typeof (l as MtLoan).amount === 'number')
+    .map((l): MtLoan => {
+      const periods: MtLoan['periods'] = l.periods === 6 || l.periods === 12 ? l.periods : 3;
+      return {
+        id: l.id,
+        amount: Math.max(0, Math.round(l.amount * 100) / 100),
+        periods,
+        apr: typeof l.apr === 'number' && Number.isFinite(l.apr) ? l.apr : mtLoanAprOf(periods),
+        monthly: typeof l.monthly === 'number' && Number.isFinite(l.monthly) ? Math.max(0, Math.round(l.monthly * 100) / 100) : 0,
+        totalDue: typeof l.totalDue === 'number' && Number.isFinite(l.totalDue) ? Math.max(0, Math.round(l.totalDue * 100) / 100) : 0,
+        paidPeriods: typeof l.paidPeriods === 'number' && l.paidPeriods >= 0 ? Math.floor(l.paidPeriods) : 0,
+        status: l.status === 'repaid' ? 'repaid' : 'active',
+        borrowedAt: typeof l.borrowedAt === 'number' && l.borrowedAt > 0 ? l.borrowedAt : Date.now(),
+        ...(typeof l.repaidAt === 'number' && l.repaidAt > 0 ? { repaidAt: l.repaidAt } : {}),
+      };
+    })
+    .sort((a, b) => b.borrowedAt - a.borrowedAt)
+    .slice(0, 50);
+}
+
+export function mtSaveLoans(uid: string, loans: MtLoan[]): void {
+  kvSet(loansKey(uid), loans.slice(0, 50));
+}
+
+/** 年化利率（单利）按期数：3期 5.4% / 6期 10.8% / 12期 19.8%（落在产品详情 5.4%-24% 区间） */
+export function mtLoanAprOf(periods: 3 | 6 | 12): number {
+  return periods === 3 ? 5.4 : periods === 6 ? 10.8 : 19.8;
+}
+
+/** 还款计划：总利息 = 本金 × 年化/100 × 期数/12（单利）；每期均摊两位小数，应还总额 = 每期 × 期数（口径一致，无尾差） */
+export function mtLoanPlan(amount: number, periods: 3 | 6 | 12): { apr: number; monthly: number; totalInterest: number; totalDue: number } {
+  const apr = mtLoanAprOf(periods);
+  const principal = Math.max(0, Math.round(amount * 100) / 100);
+  const rawTotal = Math.round((principal + ((principal * apr) / 100) * (periods / 12)) * 100) / 100;
+  const monthly = Math.round((rawTotal / periods) * 100) / 100;
+  const totalDue = Math.round(monthly * periods * 100) / 100;
+  const totalInterest = Math.round((totalDue - principal) * 100) / 100;
+  return { apr, monthly, totalInterest, totalDue };
+}
+
+/** 单笔借据剩余未还（每期应还 × 未还期数；已还清为 0） */
+export function mtLoanRemainOf(l: MtLoan): number {
+  if (l.status === 'repaid') return 0;
+  return Math.max(0, Math.round(l.monthly * (l.periods - l.paidPeriods) * 100) / 100);
+}
+
+/** 在贷总额（占用额度） */
+export function mtLoanUsedCredit(uid: string): number {
+  return Math.round(mtLoadLoans(uid).reduce((s, l) => s + mtLoanRemainOf(l), 0) * 100) / 100;
+}
+
+/** 可借额度 = 获批额度 - 在贷余额 */
+export function mtLoanAvailable(uid: string): number {
+  return Math.max(0, Math.round((mtLoadLoanAccount(uid).credit - mtLoanUsedCredit(uid)) * 100) / 100);
+}
+
+/**
+ * 借款：校验额度（最低 ¥500）→ 放款到美团余额 + 账单（kind=loan）。
+ */
+export function mtBorrow(uid: string, amount: number, periods: 3 | 6 | 12): { ok: boolean; error?: string; loan?: MtLoan } {
+  const acct = mtLoadLoanAccount(uid);
+  if (!acct.applied) return { ok: false, error: '请先申请借款额度' };
+  const amt = Math.round(amount * 100) / 100;
+  if (!(amt >= 500)) return { ok: false, error: '借款金额最低 ¥500' };
+  const avail = mtLoanAvailable(uid);
+  if (amt > avail) return { ok: false, error: `超出可借额度（可借 ¥${avail.toFixed(2)}）` };
+  const plan = mtLoanPlan(amt, periods);
+  const loan: MtLoan = {
+    id: `loan${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+    amount: amt,
+    periods,
+    apr: plan.apr,
+    monthly: plan.monthly,
+    totalDue: plan.totalDue,
+    paidPeriods: 0,
+    status: 'active',
+    borrowedAt: Date.now(),
+  };
+  mtSaveLoans(uid, [loan, ...mtLoadLoans(uid)]);
+  mtSaveWallet(uid, { balance: Math.round((mtLoadWallet(uid).balance + amt) * 100) / 100 });
+  mtPushWalletBill(uid, { kind: 'loan', title: '借款', amount: amt, at: Date.now(), card: `放款至美团余额 · ${periods}期` });
+  return { ok: true, loan };
+}
+
+/** 还一期：美团余额扣款；还完自动结清 */
+export function mtRepayLoanPeriod(uid: string, loanId: string): { ok: boolean; error?: string; done?: boolean } {
+  const loan = mtLoadLoans(uid).find((l) => l.id === loanId);
+  if (!loan || loan.status !== 'active') return { ok: false, error: '借据不存在或已还清' };
+  if (loan.paidPeriods >= loan.periods) return { ok: false, error: '各期均已还清' };
+  const wallet = mtLoadWallet(uid);
+  if (wallet.balance < loan.monthly) return { ok: false, error: `可用余额不足（可用 ¥${wallet.balance.toFixed(2)}），请先充值` };
+  mtSaveWallet(uid, { balance: Math.round((wallet.balance - loan.monthly) * 100) / 100 });
+  const paidPeriods = loan.paidPeriods + 1;
+  const done = paidPeriods >= loan.periods;
+  mtSaveLoans(
+    uid,
+    mtLoadLoans(uid).map((l) =>
+      l.id === loanId
+        ? { ...l, paidPeriods, status: (done ? 'repaid' : 'active') as MtLoan['status'], ...(done ? { repaidAt: Date.now() } : {}) }
+        : l
+    )
+  );
+  mtPushWalletBill(uid, { kind: 'repay', title: '还款', amount: -loan.monthly, at: Date.now(), card: `第${paidPeriods}/${loan.periods}期 · 美团余额` });
+  return { ok: true, done };
+}
+
+/** 一次还清：剩余全部本息从美团余额扣 */
+export function mtRepayLoanAll(uid: string, loanId: string): { ok: boolean; error?: string } {
+  const loan = mtLoadLoans(uid).find((l) => l.id === loanId);
+  if (!loan || loan.status !== 'active') return { ok: false, error: '借据不存在或已还清' };
+  const remain = mtLoanRemainOf(loan);
+  if (!(remain > 0)) return { ok: false, error: '借据不存在或已还清' };
+  const wallet = mtLoadWallet(uid);
+  if (wallet.balance < remain) return { ok: false, error: `可用余额不足（还清需 ¥${remain.toFixed(2)}），请先充值` };
+  mtSaveWallet(uid, { balance: Math.round((wallet.balance - remain) * 100) / 100 });
+  mtSaveLoans(
+    uid,
+    mtLoadLoans(uid).map((l) => (l.id === loanId ? { ...l, paidPeriods: l.periods, status: 'repaid' as const, repaidAt: Date.now() } : l))
+  );
+  mtPushWalletBill(uid, { kind: 'repay', title: '还款', amount: -remain, at: Date.now(), card: '一次还清 · 美团余额' });
+  return { ok: true };
+}

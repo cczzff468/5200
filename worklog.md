@@ -16979,3 +16979,28 @@ Stage Summary:
 - 添加银行卡弹窗重做：三步流程 + 实时卡面预览 + 按 BIN 前缀自动生成 16 位卡号（可换一个/可手改）+ 快捷金额
 - 改动仅 src/components/apps/meituan.tsx 一个文件；数据层/store/支付/登录联动未动
 - 测试环境说明：沙箱浏览器无联系人档案，E2E 通过注入 wx-session-user-id + 授权卡「微信用户」完成登录（虚拟账号回退路径，符合设计）
+
+---
+Task ID: 5
+Agent: Z.ai Code (main)
+Task: 美团支付收银台对齐真实美团钱包（使用余额+真实银行卡）、借钱功能全流程开发、外卖灵动岛小窗出现时 WiFi 图标隐藏
+
+Work Log:
+- StatusBar.tsx：美团外卖灵动岛（小窗/大窗）可见期间，状态栏「信号 + WiFi」一同隐藏、仅保留电量（真机灵动岛占位同语义），弹窗消失后两图标一同恢复；音乐灵动岛保持旧口径（只隐信号）。hideSignal = music || mt，hideWifi = mt only
+- meituan-store.ts 借钱数据层（按 uid 隔离）：MtLoanAccount（applied/credit）+ MtLoan（借据：amount/periods/apr/monthly/totalDue/paidPeriods/status）+ mtLoadLoanAccount/mtApplyLoanCredit（模拟审批 8,800~99,800 取整到百）/mtLoadLoans/mtLoanAprOf（3期5.4%/6期10.8%/12期19.8%）/mtLoanPlan（单利均摊，totalDue=monthly×期数 无尾差）/mtLoanRemainOf/mtLoanUsedCredit/mtLoanAvailable/mtBorrow（校验额度+最低¥500 → 放款到美团余额+账单）/mtRepayLoanPeriod（还一期，还完自动结清）/mtRepayLoanAll（一次还清）；MtWalletBill kind 扩展 'loan'|'repay'（解析器+MT_WALLET_BILL_LABEL 同步）
+- meituan.tsx 账单图标：借款=金色金币圆徽（#FFF6D9/#C8860D）、还款=红色上箭头（#FDEBEB/#E64340）
+- PayPage 收银台对齐真实美团钱包：删掉演示「使用银行卡支付/工商银行储蓄卡」静态行，改为 mtLoadWallet + mtLoadBankCards 真实渲染——「使用余额」行（Wallet 金色圆徽+可用余额+不足灰显拦截 toast）+ 真实银行卡逐张行（mtBankMeta 品牌渐变徽标+银行名尾号+卡内余额；中国工商银行自动带「最优惠」标与 -¥2.28 立减，选中后顶部金额实时变 ¥22.72）+「管理余额与银行卡」去钱包入口（onOpenWallet 关收银台跳钱包）+ 查看更多绑卡优惠；微信/QQ 渠道互斥逻辑保留
+- 美团支付真实扣款：余额支付 payWithBalance（扣 mtSaveWallet+账单 kind=pay「消费·商家名·美团余额」）；银行卡支付 payWithCard（扣卡内余额+账单，工行立减）；finishPay 写 payIdp='mt' + payMethodId('mt-balance'/'mt-card:{id}') 留痕原路退回；开启支付密码时余额支付先弹 MtPayPwdGate（支付 ¥N）验证后扣款
+- meituan-pay.ts mtRefundToOrigin 扩展：payIdp='mt' → 余额退款入美团余额+账单(kind=refund)、mt-card:{id} 退款回补对应银行卡+账单；MtOrder.payIdp 类型扩 'mt'
+- WalletLoanPage 全功能重做：未申请=截图版（******+协议勾选拦截+点击申请→审批中 spinner 1.4s→获批额度卡「可借额度/总额度·在贷·余额」+去借款）；还款中借据卡（每期应还/年化/已还x/N期/剩余待还红字+「还一期」「一次还清」按钮）；借款记录列表（还款中/已还清）；产品详情+四大安全保障保留
+- 新增 LoanBorrowSheet（可借额度/美团余额双卡 + 金额输入(最低500/清空钮)+快捷chips+全部 + 3/6/12期年化选择 + 还款计划预览(每期应还/总利息/到期总额) + 确认借款→放款到余额）；LoanRepaySheet（借据摘要+应还金额+还款来源美团余额+不足红字提示先充值）
+- 钱包主页金融tab「去申领」：借钱tab→直接进借钱页（联名卡/药划算仍 toast）
+- 端到端实测（agent-browser，全过）：借钱页未勾协议点申请→拦截 toast✓；勾选→审批中→获批¥79,900✓；去借款→¥1,000/3期→计划 每期¥337.83/总利息/总额✓；确认借款→余额¥1000、在贷¥1,013.49、记录+账单✓；还一期→余额¥662.17、已还1/3✓；一次还清→余额不足红字拦截✓；收银台：使用余额+工行卡（最优惠-¥2.28）真实渲染✓；余额支付→支付成功·美团支付·余额✓；取消→原路退回余额+25（账单退款 +¥25.00）✓；工行卡支付→已立减2.28元+卡扣款✓；取消→退回卡（已退款¥22.72）✓；开启支付密码后余额支付→收银台内弹支付密码Gate→输123456→支付成功✓；灵动岛小窗出现→信号+WiFi消失仅电量，取消订单后恢复✓；账单页借款/还款/消费/退款全类型渲染✓
+- bunx tsc --noEmit 0 错误；npx eslint 4 文件 0 问题；dev.log 无异常、console 无错误
+- 修复：最初余额支付后取消订单余额未回补（mtRefundToOrigin 不认识美团支付渠道）→ 已补 mt 渠道退款入账并实测恢复
+
+Stage Summary:
+- 收银台「美团支付」区=真实钱包镜像：使用余额（含支付密码Gate）+ 真实银行卡列表（工行立减），资金真实扣减/退款原路回补，订单 payIdp='mt' 留痕
+- 借钱=全流程闭环：申请额度（模拟审批）→ 借款放款到美团余额 → 还一期/一次还清（余额扣款+不足拦截）→ 借款记录/钱包账单全留痕；利率按期数 5.4%/10.8%/19.8%，还款计划无尾差
+- 外卖灵动岛可见期间状态栏只留电量（信号+WiFi 隐藏），恢复后图标回归；音乐灵动岛口径不变
+- 改动：meituan.tsx / meituan-store.ts / meituan-pay.ts / StatusBar.tsx；测试账号为虚拟微信账号（uid wx: 前缀），支付密码 123456 已在其名下开启

@@ -169,13 +169,37 @@ export async function mtExecutePay(
  * - 微信银行卡 → 卡余额回补；
  * - 微信亲属卡 → 按支付时各卡分摊（payFcParts）回补本月可用额度；
  * - QQ余额 → QQ钱包余额入账 + 账单（kind=refund）；QQ银行卡 → 卡余额回补 + 账单；
- * - 美团支付·银行卡（演示通道，未真实扣款）→ 无需入账，返回 false。
+ * - 美团支付·余额（payIdp='mt' + methodId='mt-balance'）→ 美团钱包余额入账 + 钱包账单；
+ * - 美团支付·银行卡（methodId='mt-card:{id}'）→ 钱包银行卡余额回补 + 钱包账单。
  */
 export async function mtRefundToOrigin(order: MtOrder): Promise<boolean> {
   const amount = Math.round((order.refund?.amount ?? order.total) * 100) / 100;
   const methodId = order.payMethodId;
   if (!(amount > 0) || !order.payIdp || !methodId) return false;
   try {
+    if (order.payIdp === 'mt') {
+      const st = await import('./meituan-store');
+      const uid = order.uid;
+      const r2 = (n: number) => Math.round(n * 100) / 100;
+      if (methodId === 'mt-balance') {
+        st.mtSaveWallet(uid, { balance: r2(st.mtLoadWallet(uid).balance + amount) });
+        st.mtPushWalletBill(uid, { kind: 'refund', title: '退款', amount, at: Date.now(), card: `${order.merchantName} · 美团余额` });
+        return true;
+      }
+      if (methodId.startsWith('mt-card:')) {
+        const cardId = methodId.slice('mt-card:'.length);
+        const cards = st.mtLoadBankCards(uid);
+        const card = cards.find((c) => c.id === cardId);
+        if (!card) return false;
+        st.mtSaveBankCards(
+          uid,
+          cards.map((c) => (c.id === cardId ? { ...c, balance: r2(c.balance + amount) } : c))
+        );
+        st.mtPushWalletBill(uid, { kind: 'refund', title: '退款', amount, at: Date.now(), card: `${card.bank} 尾号${card.tail}` });
+        return true;
+      }
+      return false;
+    }
     if (order.payIdp === 'wx') {
       const w = await import('@/components/apps/wechat');
       const ww = await import('@/components/apps/wechat-wallet');
