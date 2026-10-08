@@ -487,13 +487,15 @@ export interface MtOrder {
   review?: MtOrderReview;
 }
 
-/** 订单评价（星级 + 文字 + 标签 + 晒图，演示图取内容匹配图链） */
+/** 订单评价（星级 + 文字 + 标签 + 晒图 + 商家回复，演示图取内容匹配图链） */
 export interface MtOrderReview {
   rating: number;
   content: string;
   tags: string[];
   imgs: string[];
   at: number;
+  /** 商家回复（店铺管理页「评价」页签回复后写入；买家端店铺页同步展示） */
+  reply?: { text: string; at: number };
 }
 
 const ordersKey = (uid: string) => `mt-orders:${uid}`;
@@ -565,6 +567,10 @@ export function mtLoadOrders(uid: string): MtOrder[] {
               tags: Array.isArray(o.review.tags) ? (o.review.tags as unknown[]).filter((x): x is string => typeof x === 'string') : [],
               imgs: Array.isArray(o.review.imgs) ? (o.review.imgs as unknown[]).filter((x): x is string => typeof x === 'string') : [],
               at: o.review.at,
+              reply:
+                o.review.reply && typeof o.review.reply === 'object' && typeof (o.review.reply as { text?: unknown }).text === 'string'
+                  ? { text: (o.review.reply as { text: string }).text, at: typeof (o.review.reply as { at?: unknown }).at === 'number' ? (o.review.reply as { at: number }).at : Date.now() }
+                  : undefined,
             }
           : undefined,
     })) as MtOrder[];

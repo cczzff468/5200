@@ -138,6 +138,7 @@ import {
   X,
 } from 'lucide-react';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { ScanOverlayWhen, openScan } from './mt-scan';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -10213,7 +10214,7 @@ function MessagesPage({
                       { key: 'create-group', label: '创建群聊', icon: <MessageSquarePlus className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onCreateGroup(); } },
                       { key: 'create-channel', label: '创建频道', icon: <Hash className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('创建频道暂未开放'); } },
                       { key: 'add-friend', label: '加好友/群', icon: <UserPlus className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onAddFriend(); } },
-                      { key: 'scan', label: '扫一扫', icon: <ScanLine className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('扫一扫暂未开放'); } },
+                      { key: 'scan', label: '扫一扫', icon: <ScanLine className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); openScan('qq'); } },
                       { key: 'send-file', label: '传文件', icon: <FolderOutput className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('传文件暂未开放'); } },
                       { key: 'pay', label: '收付款', icon: <JapaneseYen className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('收付款暂未开放'); } },
                     ] as const
@@ -11381,7 +11382,7 @@ function AddFriendPage({
     <button
       key={g.label}
       type="button"
-      onClick={() => onToast(`${g.label}暂未开放`)}
+      onClick={() => (g.label === '扫一扫' ? openScan('qq') : onToast(`${g.label}暂未开放`))}
       className="flex w-full flex-col items-center gap-2 py-2.5 text-black/85 active:opacity-60 dark:text-white/85"
     >
       {g.icon}
@@ -16683,10 +16684,12 @@ export default function QQApp() {
 
   // key={accReloadKey}：切换 QQ 账号后 remount 主界面——route 归位消息 tab、子页全关、各页挂载重读当前账号数据
   return (
-    <>
+    <div className="relative h-full w-full">
       <MainScreen key={accReloadKey} me={user} contacts={contacts} onLogout={handleLogout} onPatchUser={handlePatchUser} refreshContacts={refreshContacts} onLoginAccount={handleLogin} />
       {/* 账号切换提示（规则五.1）：挂在根组件，remount 后依然可见 */}
       {switchToast && <QqToast text={switchToast} />}
-    </>
+      {/* 扫一扫（+菜单 / 加好友页入口；识别网页/文本/群二维码，演示语义） */}
+      <ScanOverlayWhen flavor="qq" />
+    </div>
   );
 }

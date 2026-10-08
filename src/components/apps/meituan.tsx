@@ -142,6 +142,8 @@ import type { FunDeal, FunHotel, FunMovie, FunRoom, FunVenue } from '@/app/api/m
 import TravelChannelPage from './meituan-travel';
 import ShangouChannelPage from './meituan-shangou';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { mtNotifyShopOrderPaid } from '@/lib/ios/mt-shop-notify';
+import { ScanOverlayWhen, openScan } from './mt-scan';
 import {
   mtAddBankCard,
   mtAddInvoice,
@@ -932,6 +934,7 @@ function HomePage({
   onOpenSearch,
   onOpenChannel,
   onOpenMessages,
+  onScan,
   onToast,
 }: {
   session: MtSession;
@@ -940,6 +943,7 @@ function HomePage({
   onOpenChannel: (c: 'hotel' | 'fun' | 'movies' | 'shangou' | 'travel') => void;
   onOpenMessages: () => void;
   onOpenSearch: (kw?: string) => void;
+  onScan: () => void;
   onToast: (m: string) => void;
 }) {
   const uid = mtUidOf(session);
@@ -1206,7 +1210,7 @@ function HomePage({
           <button type="button" aria-label="消息" onClick={onOpenMessages} className="grid shrink-0 place-items-center rounded-full p-1 active:opacity-60">
             <MessageCircleMore className="h-[22px] w-[22px] text-black/75" strokeWidth={1.9} />
           </button>
-          <button type="button" aria-label="扫一扫" onClick={() => onToast('扫一扫（演示）')} className="grid shrink-0 place-items-center rounded-full p-1 active:opacity-60">
+          <button type="button" aria-label="扫一扫" onClick={onScan} data-testid="home-scan" className="grid shrink-0 place-items-center rounded-full p-1 active:opacity-60">
             <ScanLine className="h-[22px] w-[22px] text-black/75" strokeWidth={1.9} />
           </button>
         </div>
@@ -1583,16 +1587,18 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
   const catRefs = useRef<(HTMLDivElement | null)[]>([]);
   useOrdersTick();
   const shopOrders = uid ? mtLoadOrders(uid).filter((o) => o.merchantId === merchant.id) : [];
-  /** 本账号在该商家的真实评价（评价晒单提交后聚合进评价 tab） */
+  /** 本账号在该商家的真实评价（评价晒单提交后聚合进评价 tab；含商家回复） */
   const myReviews = shopOrders
     .filter((o) => o.review)
     .map((o) => ({
+      orderId: o.id,
       user: `${session?.name ?? '我'}（本店订单）`,
       rating: o.review!.rating,
       content: o.review!.content,
       time: new Date(o.review!.at).toLocaleDateString('zh-CN'),
       tags: o.review!.tags,
       imgs: o.review!.imgs,
+      reply: o.review!.reply,
     }));
 
   const calc = mtCheckoutCalc(uid, merchant, cart);
@@ -1611,6 +1617,10 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
   };
 
   const add = (d: MtDish) => {
+    if (d.soldOut) {
+      onToast('这道菜已售罄，看看别的吧');
+      return;
+    }
     if (merchant.mine && merchant.mtStatus === 'closed') {
       onToast('店铺已打烊，暂停接单');
       return;
@@ -1803,7 +1813,7 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
               <div key={s.cat} ref={(el) => { catRefs.current[i] = el; }} className="scroll-mt-2">
                 <p className="py-2.5 text-[14px] font-bold text-black/80">{s.cat}</p>
                 {s.dishes.map((d) => (
-                  <div key={d.id} className="flex gap-2.5 py-2">
+                  <div key={d.id} className={`flex gap-2.5 py-2 ${d.soldOut ? 'opacity-55' : ''}`}>
                     <span className="relative shrink-0">
                       <FoodImg src={d.img} emoji={d.emoji} className="h-[72px] w-[72px] rounded-lg" />
                       <button
@@ -1819,6 +1829,11 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
                       <p className="flex items-center gap-1 text-[14px] font-medium leading-snug text-black/85">
                         <span className="truncate">{d.name}</span>
                         {d.sig && <span className="shrink-0 rounded bg-[#FFF3B8] px-1 text-[10px] text-[#B77900]">招牌</span>}
+                        {d.soldOut && (
+                          <span className="shrink-0 rounded bg-black/[0.07] px-1 py-px text-[10px] text-black/45" data-testid={`mt-dish-soldout-${d.name}`}>
+                            已售罄
+                          </span>
+                        )}
                       </p>
                       {d.desc && <p className="mt-0.5 line-clamp-1 text-[11px] text-black/40">{d.desc}</p>}
                       {d.coupon && (
@@ -1834,7 +1849,11 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
                           {fmtMoney(d.price)}
                           {d.origPrice && <span className="ml-1 text-[11px] font-normal text-black/30 line-through">¥{fmtMoney(d.origPrice)}</span>}
                         </span>
-                        <Stepper qty={qtyOf(d.id)} onAdd={() => add(d)} onDec={() => dec(d)} />
+                        {d.soldOut ? (
+                          <span className="rounded-full bg-black/[0.05] px-3 py-1 text-[11px] text-black/35">已售罄</span>
+                        ) : (
+                          <Stepper qty={qtyOf(d.id)} onAdd={() => add(d)} onDec={() => dec(d)} />
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1883,6 +1902,12 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
                       {r.tags.map((t) => (
                         <span key={t} className="rounded bg-[#F5F6F7] px-1.5 py-0.5 text-[10px] text-black/45">{t}</span>
                       ))}
+                    </p>
+                  )}
+                  {r.reply && (
+                    <p className="mt-1.5 rounded-lg bg-[#FFF7E6] px-2.5 py-1.5 text-[12px] leading-relaxed text-black/60" data-testid={`mt-buyer-reply-${r.orderId}`}>
+                      <span className="font-medium text-[#B77900]">商家回复：</span>
+                      {r.reply.text}
                     </p>
                   )}
                 </div>
@@ -2255,6 +2280,8 @@ function PayPage({
       statusLog: [...order.statusLog, { status: tuangouDone ? 'completed' : 'pendingAccept', at: now }],
     };
     mtSaveOrders(order.uid, mtLoadOrders(order.uid).map((o) => (o.id === order.id ? paid : o)));
+    // 商家接单通知：订单落在机主自己的店铺 → 灵动岛提醒商家（幂等，未支付不提醒）
+    mtNotifyShopOrderPaid(paid);
     // B4：机主直接付掉了 → 该单挂着的 pending 代付请求失效（「机主已自行支付」），卡片/详情同步
     try {
       if (mtSyncProxiesForUid(order.uid)) window.dispatchEvent(new CustomEvent('mt-orders-changed'));
@@ -2398,6 +2425,8 @@ function PayPage({
       statusLog: [...order.statusLog, { status: tuangouDone ? 'completed' : 'pendingAccept', at: now }],
     };
     mtSaveOrders(order.uid, mtLoadOrders(order.uid).map((o) => (o.id === order.id ? paid : o)));
+    // 商家接单通知：订单落在机主自己的店铺 → 灵动岛提醒商家（幂等，未支付不提醒）
+    mtNotifyShopOrderPaid(paid);
     window.dispatchEvent(new CustomEvent('mt-orders-changed'));
     consumeDrugFund();
     if (res.fc) onToast(`已用${res.fc.parts[0]?.giverName ?? '亲属卡'}支付 ¥${fmtMoney(res.fc.total)}`);
@@ -3334,6 +3363,17 @@ const ORDER_TABS: { key: string; match: (o: MtOrder) => boolean }[] = [
   { key: '退款/售后', match: (o) => !!o.refund },
 ];
 
+/** 订单筛选（顶栏筛选按钮：状态细分，与页签叠加） */
+type OrderFilterKey = 'all' | 'pendingPay' | 'live' | 'delivering' | 'completed' | 'canceled';
+const ORDER_FILTERS: { key: OrderFilterKey; label: string; match: (o: MtOrder) => boolean }[] = [
+  { key: 'all', label: '全部', match: () => true },
+  { key: 'pendingPay', label: '待付款', match: (o) => o.status === 'pendingPay' },
+  { key: 'live', label: '进行中', match: (o) => o.status === 'pendingAccept' || o.status === 'accepted' },
+  { key: 'delivering', label: '配送中', match: (o) => o.status === 'delivering' },
+  { key: 'completed', label: '已送达', match: (o) => o.status === 'completed' },
+  { key: 'canceled', label: '已取消', match: (o) => o.status === 'canceled' },
+];
+
 function OrdersPage({
   session,
   tab,
@@ -3346,6 +3386,7 @@ function OrdersPage({
   onRate,
   onOpenCouponCode,
   onOpenProxy,
+  onOpenInvoices,
   onToast,
 }: {
   session: MtSession;
@@ -3359,13 +3400,25 @@ function OrdersPage({
   onRate: (o: MtOrder) => void;
   onOpenCouponCode: (o: MtOrder) => void;
   onOpenProxy: (pid: string) => void;
+  onOpenInvoices: () => void;
   onToast: (m: string) => void;
 }) {
   const uid = mtUidOf(session);
   useOrdersTick();
   const orders = mtLoadOrders(uid);
   const cur = ORDER_TABS.find((t) => t.key === tab) ?? ORDER_TABS[0];
-  const list = orders.filter((o) => cur.match(o));
+  // 搜索（商家/菜品/订单号）+ 状态筛选（与页签叠加）
+  const [q, setQ] = useState('');
+  const [statusFilter, setStatusFilter] = useState<OrderFilterKey>('all');
+  const [filterOpen, setFilterOpen] = useState(false);
+  const filterDef = ORDER_FILTERS.find((f) => f.key === statusFilter) ?? ORDER_FILTERS[0];
+  const kw = q.trim().toLowerCase();
+  const list = orders.filter(
+    (o) =>
+      cur.match(o) &&
+      filterDef.match(o) &&
+      (!kw || o.merchantName.toLowerCase().includes(kw) || o.id.toLowerCase().includes(kw) || o.items.some((i) => i.name.toLowerCase().includes(kw)))
+  );
 
   const cancelOrder = (o: MtOrder) => {
     // 取消订单自动退款：退款/售后列表出现「退款成功」记录（对齐真机）
@@ -3386,22 +3439,40 @@ function OrdersPage({
   };
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="relative flex h-full flex-col bg-white">
       {/* 返回 + 搜索 + 筛选 + 发票（独立页：无底部 tab，顶部返回键回首页） */}
       <div className="shrink-0 border-b border-black/[0.04] bg-white px-3 pb-1 pt-[54px]">
         <div className="flex items-center gap-2.5">
           <button type="button" aria-label="返回" onClick={onGoHome} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/5">
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
-          <button type="button" onClick={() => onToast('订单搜索（演示）')} className="flex h-[38px] min-w-0 flex-1 items-center gap-2 rounded-full bg-white px-3.5 text-left shadow-sm active:opacity-80">
+          <div className="flex h-[38px] min-w-0 flex-1 items-center gap-2 rounded-full bg-white px-3.5 shadow-sm">
             <SearchIcon className="h-4 w-4 shrink-0 text-black/35" />
-            <span className="truncate text-[14px] text-black/30">搜索我的订单</span>
-          </button>
-          <button type="button" onClick={() => onToast('筛选（演示）')} className="flex w-[44px] shrink-0 flex-col items-center gap-0.5 text-black/70 active:opacity-60">
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="搜索商家 / 菜品 / 订单号"
+              data-testid="mt-order-search"
+              className="h-full w-full min-w-0 bg-transparent text-[14px] text-black/85 outline-none placeholder:text-black/30"
+              maxLength={20}
+            />
+            {q && (
+              <button type="button" aria-label="清空搜索" onClick={() => setQ('')} className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-black/[0.06] text-black/40 active:bg-black/[0.12]">
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setFilterOpen(true)}
+            data-testid="mt-order-filter-btn"
+            className={`relative flex w-[44px] shrink-0 flex-col items-center gap-0.5 ${statusFilter !== 'all' ? 'font-medium text-[#FF6000]' : 'text-black/70'} active:opacity-60`}
+          >
+            {statusFilter !== 'all' && <span className="absolute right-2.5 top-0 h-1.5 w-1.5 rounded-full bg-[#FF6000]" />}
             <Filter className="h-[19px] w-[19px]" strokeWidth={1.8} />
-            <span className="text-[10px]">筛选</span>
+            <span className="text-[10px]">{statusFilter !== 'all' ? ORDER_FILTERS.find((f) => f.key === statusFilter)?.label ?? '筛选' : '筛选'}</span>
           </button>
-          <button type="button" onClick={() => onToast('开发票（演示）')} className="flex w-[44px] shrink-0 flex-col items-center gap-0.5 text-black/70 active:opacity-60">
+          <button type="button" onClick={onOpenInvoices} data-testid="mt-order-invoice-btn" className="flex w-[44px] shrink-0 flex-col items-center gap-0.5 text-black/70 active:opacity-60">
             <FileText className="h-[19px] w-[19px]" strokeWidth={1.8} />
             <span className="text-[10px]">发票</span>
           </button>
@@ -3569,7 +3640,15 @@ function OrdersPage({
                             评价
                           </button>
                         ))}
-                      <button type="button" onClick={() => onToast('已领取神券（演示）')} className="rounded-full border border-black/15 px-4 py-1.5 text-[12px] text-black/60 active:bg-black/5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const n = mtClaimGodCoupons(uid);
+                          onToast(n > 0 ? `已领取${n}张神券，可在「红包卡券」查看` : '神券已领过了，未使用的在卡券包里');
+                        }}
+                        data-testid="mt-order-claim-god"
+                        className="rounded-full border border-black/15 px-4 py-1.5 text-[12px] text-black/60 active:bg-black/5"
+                      >
                         领神券
                       </button>
                       <button type="button" onClick={() => reorder(o)} className="rounded-full border border-[#FF6000] px-4 py-1.5 text-[12px] font-medium text-[#FF6000] active:opacity-75">
@@ -3583,6 +3662,55 @@ function OrdersPage({
           })}
         </div>
       </div>
+
+      {/* 筛选弹层（状态细分，与页签叠加） */}
+      <AnimatePresence>
+        {filterOpen && (
+          <motion.div key="mt-order-filter" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-50">
+            <button type="button" aria-label="关闭筛选" className="absolute inset-0 bg-black/45" onClick={() => setFilterOpen(false)} />
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'tween', duration: 0.24, ease: [0.32, 0.72, 0, 1] }}
+              className="absolute inset-x-0 bottom-0 rounded-t-3xl bg-white px-5 pb-9 pt-5 shadow-[0_-16px_50px_rgba(0,0,0,0.18)]"
+              data-testid="mt-order-filter-sheet"
+            >
+              <div className="flex items-center">
+                <p className="text-[16px] font-bold text-black/85">按状态筛选</p>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('all')}
+                  className="ml-auto text-[12px] text-black/45 active:opacity-70"
+                >
+                  重置
+                </button>
+              </div>
+              <div className="mt-3.5 flex flex-wrap gap-2">
+                {ORDER_FILTERS.map((f) => (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => setStatusFilter(f.key)}
+                    className={`h-9 rounded-full px-4 text-[13px] ${statusFilter === f.key ? 'font-semibold text-black/85 shadow-[0_4px_14px_rgba(255,190,0,0.45)]' : 'bg-[#F5F6F7] text-black/60'}`}
+                    style={statusFilter === f.key ? { background: '#FFD100' } : undefined}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setFilterOpen(false)}
+                className="mt-5 h-12 w-full rounded-full text-[15px] font-bold text-black/85 shadow-[0_8px_22px_rgba(255,190,0,0.45)] active:opacity-85"
+                style={{ background: '#FFD100' }}
+              >
+                查看{list.length}单
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -11768,6 +11896,8 @@ export default function MeituanApp() {
   const [editFrom, setEditFrom] = useState<'center' | 'manage'>('center');
   /** 店铺管理页（商家中心 → 管理店铺）当前店铺 id */
   const [manageShopId, setManageShopId] = useState<string | null>(null);
+  /** 发票页返回目标（我的宫格 / 订单页顶栏两个入口） */
+  const [invoicesReturn, setInvoicesReturn] = useState<'main' | 'orders'>('main');
   const [toastMsg, showToast] = useLocalToast();
   const sessionRef = useRef<MtSession | null>(null);
   useEffect(() => {
@@ -11968,6 +12098,7 @@ export default function MeituanApp() {
                 }}
                 onOpenChannel={(c) => setPage(c)}
                 onOpenMessages={() => setPage('messages')}
+                onScan={() => openScan('meituan')}
                 onToast={showToast}
               />
             )}
@@ -11987,6 +12118,10 @@ export default function MeituanApp() {
                   setPage('couponCode');
                 }}
                 onOpenProxy={(pid) => setProxyViewId(pid)}
+                onOpenInvoices={() => {
+                  setInvoicesReturn('orders');
+                  setPage('invoices');
+                }}
                 onToast={showToast}
               />
             )}
@@ -12016,7 +12151,10 @@ export default function MeituanApp() {
                 onOpenCardQuota={() => setPage('walletCardQuota')}
                 onOpenDrugFund={() => setPage('walletDrugFund')}
                 onOpenAddresses={() => goSub('addresses', 'main')}
-                onOpenInvoices={() => setPage('invoices')}
+                onOpenInvoices={() => {
+                  setInvoicesReturn('main');
+                  setPage('invoices');
+                }}
                 onOpenMerchantCenter={() => setPage('merchantCenter')}
                 onClaimCoupons={() => {
                   const n = mtClaimGodCoupons(uid);
@@ -12054,7 +12192,7 @@ export default function MeituanApp() {
       {page === 'walletLoan' && <WalletLoanPage session={session} onClose={() => setPage('wallet')} onToast={showToast} />}
       {page === 'walletCardQuota' && <WalletCardQuotaPage session={session} onClose={() => setPage('wallet')} onToast={showToast} />}
       {page === 'walletDrugFund' && <WalletDrugFundPage session={session} onClose={() => setPage('wallet')} onToast={showToast} />}
-      {page === 'invoices' && <InvoicePage session={session} onBack={() => setPage('main')} onToast={showToast} />}
+      {page === 'invoices' && <InvoicePage session={session} onBack={() => (invoicesReturn === 'orders' ? goOrders() : setPage('main'))} onToast={showToast} />}
       {page === 'walletPayPwd' && <WalletPayPwdPage session={session} onClose={() => setPage('wallet')} onToast={showToast} />}
       {page === 'travel' && session && <TravelChannelPage session={session} onBack={() => setPage('main')} onOpenPay={openPay} onToast={showToast} />}
       {page === 'shangou' && session && <ShangouChannelPage session={session} onBack={() => setPage('main')} onOpenPay={openPay} onToast={showToast} />}
@@ -12341,6 +12479,9 @@ export default function MeituanApp() {
 
       {/* 找人代付详情（只读视角：等待好友付款中） */}
       {proxyViewId && <MtProxyDetailPage pid={proxyViewId} canPay={false} onBack={() => setProxyViewId(null)} onToast={showToast} />}
+
+      {/* 扫一扫（首页顶部入口；扫到自家店铺码直达店铺页 / 神券真实入卡券包） */}
+      <ScanOverlayWhen flavor="meituan" onOpenShop={openMerchant} onOpenCoupons={() => setPage('coupons')} />
 
       <LocalToast msg={toastMsg} />
     </div>

@@ -156,6 +156,8 @@ export interface MtDish {
   specs?: MtDishSpec[];
   /** 菜品优惠券：下单含此菜且达门槛自动抵扣（每菜每单限一次） */
   coupon?: MtDishCouponDef;
+  /** 售罄/在售开关（true = 已售罄：买家端置灰不可加购，AI 代点/请客自动避开） */
+  soldOut?: boolean;
 }
 
 /** 规格选项（price 为加价，如小料 ¥1） */

@@ -287,6 +287,7 @@ export default function DishEditPage({
   const [dPrice, setDPrice] = useState(initial ? money(initial.price) : '');
   const [dImg, setDImg] = useState<string | undefined>(initial?.img);
   const [dDesc, setDDesc] = useState(initial?.desc ?? '');
+  const [dSoldOut, setDSoldOut] = useState(initial?.soldOut ?? false);
   const [dSpecs, setDSpecs] = useState<MtDishSpec[]>(initial?.specs ?? []);
   const [dCoupon, setDCoupon] = useState<MtDishCouponDef | null>(initial?.coupon ?? null);
   const [cpName, setCpName] = useState('');
@@ -423,6 +424,30 @@ export default function DishEditPage({
           <div>
             <p className="mb-1.5 text-[12px] text-black/45">一句话描述（可选）</p>
             <input value={dDesc} onChange={(e) => setDDesc(e.target.value)} placeholder="例：大颗芒果 + 浓稠酸奶" className={glassInput} maxLength={30} />
+          </div>
+          <div>
+            <p className="mb-1.5 text-[12px] text-black/45">商品状态</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                data-testid="mt-dish-status-onsale"
+                onClick={() => setDSoldOut(false)}
+                className={`h-9 rounded-full px-5 text-[13px] backdrop-blur-xl transition-colors ${!dSoldOut ? 'font-semibold text-black/85 shadow-[0_4px_14px_rgba(255,190,0,0.4)]' : 'bg-white/60 text-black/50 ring-1 ring-white/70'}`}
+                style={dSoldOut ? undefined : { background: MT_YELLOW }}
+              >
+                在售
+              </button>
+              <button
+                type="button"
+                data-testid="mt-dish-status-soldout"
+                onClick={() => setDSoldOut(true)}
+                className={`h-9 rounded-full px-5 text-[13px] backdrop-blur-xl transition-colors ${dSoldOut ? 'font-semibold text-black/85 shadow-[0_4px_14px_rgba(0,0,0,0.18)]' : 'bg-white/60 text-black/50 ring-1 ring-white/70'}`}
+                style={dSoldOut ? { background: '#E5E5E5' } : undefined}
+              >
+                已售罄
+              </button>
+            </div>
+            <p className="mt-1.5 text-[10px] leading-relaxed text-black/30">售罄的菜买家不能加购（显示「已售罄」），AI 代点/请客也会自动避开</p>
           </div>
         </div>
 
@@ -585,6 +610,7 @@ export default function DishEditPage({
               sig: initial?.sig,
               specs: dSpecs.length > 0 ? dSpecs : undefined,
               coupon: dCoupon ?? undefined,
+              soldOut: dSoldOut || undefined,
             });
           }}
           className={`h-12 w-full rounded-full text-[15px] font-bold ${valid ? 'text-black/85 shadow-[0_8px_22px_rgba(255,190,0,0.45)] active:opacity-85' : 'opacity-40'}`}

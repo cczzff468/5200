@@ -16,6 +16,7 @@ import { kvGet, kvSet } from './idb-kv';
 import { getContact } from './contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '../contacts';
 import { mtDeliveryMinutesOf, mtLoadOrders, mtSaveOrders, type MtOrder } from './meituan-store';
+import { mtNotifyShopOrderPaid } from './mt-shop-notify';
 
 // ---------------- 数据模型 ----------------
 
@@ -472,6 +473,8 @@ export function mtProxyPayOrder(
   };
   orders[idx] = paid;
   mtSaveOrders(p.uid, orders);
+  // 商家接单通知：订单落在机主自己的店铺 → 灵动岛提醒商家（幂等）
+  mtNotifyShopOrderPaid(paid);
 
   const done: MtProxyPay = { ...p, status: 'paid', paidAt: now, paidChannel: channel };
   mtSetProxy(done);

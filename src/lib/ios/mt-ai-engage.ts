@@ -37,6 +37,7 @@ import {
   mtCurAddrId,
   mtLoadAddresses,
   mtCheckoutCalc,
+  mtLoadCoupons,
   MT_STATUS_LABEL,
   type MtOrder,
 } from './meituan-store';
@@ -212,6 +213,13 @@ function resolveDish(merchant: MtMerchant, name: string): MtDish | null {
   return all.find((d) => d.name === clean) ?? all.find((d) => d.name.includes(clean) || clean.includes(d.name)) ?? null;
 }
 
+/** 商家可下单校验（存在 + 未打烊；AI 代点/请客/自己点共用） */
+function checkMerchantOrderable(merchant: MtMerchant | undefined): string | null {
+  if (!merchant) return null; // 不存在时由调用方各自报错（文案带商家 ID）
+  if (merchant.mine && merchant.mtStatus === 'closed') return `「${merchant.name}」已打烊，今天点不了`;
+  return null;
+}
+
 export type MtCreateDraftResult = { ok: true; draft: MtAiDraft } | { ok: false; error: string };
 
 /** 创建代点草稿（菜品按商家菜单解析，金额按菜单价 + 满减/免配送预估） */
@@ -226,10 +234,13 @@ export function mtCreateAiDraft(opts: {
 }): MtCreateDraftResult {
   const merchant = mtMerchantOf(opts.merchantId);
   if (!merchant) return { ok: false, error: `没有找到这家店（${opts.merchantId}）` };
+  const closedErr = checkMerchantOrderable(merchant);
+  if (closedErr) return { ok: false, error: closedErr };
   const items: MtDraftItem[] = [];
   for (const it of opts.items) {
     const dish = resolveDish(merchant, it.name);
     if (!dish) return { ok: false, error: `「${it.name}」不在「${merchant.name}」的菜单里` };
+    if (dish.soldOut) return { ok: false, error: `「${dish.name}」已售罄，换点别的吧` };
     items.push({ dishId: dish.id, name: dish.name, qty: it.qty, price: dish.price, emoji: dish.emoji, img: dish.img });
   }
   const cartItems = items.map((i) => ({ dishId: i.dishId as string, qty: i.qty }));
@@ -314,6 +325,10 @@ export function mtConfirmAiDraft(did: string): MtConfirmDraftResult {
   // 写发起角色记忆（按角色隔离；sourceTag 防同模板互吞）
   const summary = d.items.map((i) => `${i.name}x${i.qty}`).join('、');
   memAddEventFragment(d.charId, d.app, `你帮机主在美团点了「${merchant.name}」的外卖（${summary}，应付¥${calc.total}），订单已提交等机主支付`, { eventTime: now, sourceTag: 'mt-ai-order' });
+  // 商家附言：点的是机主自己的店 → 去该角色聊天里说一句（商家视角的活味）
+  if (merchant.mine) {
+    mtScheduleShopOrderChatLine(d.app, d.charId, `帮你在自家店里安排了${summary}，坐等老板接单啦~`);
+  }
   return { ok: true, orderId: order.id, total: calc.total };
 }
 
@@ -350,26 +365,96 @@ function mtFoodSlotOf(h: number): { label: string; cats: string[] } {
   return { label: '夜宵时段', cats: ['yinyin', 'waimai', 'mala', 'hamburg'] };
 }
 
-/** 美团外卖精选目录（食物话题命中时注入；时段加权稳定排序——同权重保持原顺序，确定性不换店） */
+/** 美团外卖精选目录（食物话题命中时注入；时段加权稳定排序——同权重保持原顺序，确定性不换店）。
+ *  排除机主自己的打烊店铺（AI 不该推荐点不了的店）与已售罄菜品。 */
 function buildCatalogBlock(): string {
   const foodCats = new Set(['waimai', 'meishi', 'yinyin', 'hamburg', 'mala', 'zaocan', 'chaoshi', 'shuiguo']);
   const slot = mtFoodSlotOf(new Date().getHours());
-  const pool = mtAllMerchants().filter((m) => m.cats.some((c) => foodCats.has(c)));
+  const shopOpen = (m: MtMerchant): boolean => !(m.mine && m.mtStatus === 'closed');
+  const pool = mtAllMerchants().filter((m) => shopOpen(m) && m.cats.some((c) => foodCats.has(c)));
   const slotFit = (m: MtMerchant): number => (slot.cats.some((c) => m.cats.includes(c)) ? 0 : 1);
   pool.sort((a, b) => slotFit(a) - slotFit(b));
   const picked = pool.slice(0, 10);
   const lines = picked.map((m) => {
-    const dishes = [...mtDishesOf(m)].sort((a, b) => (b.sig ? 1 : 0) - (a.sig ? 1 : 0)).slice(0, 3);
-    const dishText = dishes.map((d) => `${d.name}(¥${fmt2(d.price)})`).join('、');
+    const dishes = [...mtDishesOf(m)].filter((d) => !d.soldOut).sort((a, b) => (b.sig ? 1 : 0) - (a.sig ? 1 : 0)).slice(0, 3);
+    const dishText = dishes.length > 0 ? dishes.map((d) => `${d.name}(¥${fmt2(d.price)})`).join('、') : '（暂无在售菜品）';
     return `· ${m.id} 「${m.name}」 评分${m.rating} 月售${m.monthSale} 起送¥${fmt2(m.minOrder)} 配送费¥${fmt2(m.deliveryFee)} 约${m.deliveryMin}分钟 ｜ ${dishText}`;
   });
-  return `【美团外卖精选】（现在是${slot.label}，匹配时段的店排前面；商家ID就是标记里要用的 ID；菜名必须原样抄写）\n${lines.join('\n')}`;
+  return `【美团外卖精选】（现在是${slot.label}，匹配时段的店排前面；商家ID就是标记里要用的 ID；菜名必须原样抄写；已售罄的菜不会出现在这里，别点）\n${lines.join('\n')}`;
 }
 
 /** C10：美团未登录 + 聊到吃的时的口径（不输出任何标记，防止落生硬的系统报错） */
 const MT_NOT_LOGGED_IN_RULE =
   '【美团未登录】机主还没登录美团账号，现在点不了外卖：聊到想吃/点外卖的话题时，用正文自然回应（可以聊口味、推荐吃什么），' +
   '但不要输出 [帮点外卖]/[请客点外卖]/[自己点外卖]/[帮付]/[代付] 任何标记——发了也下不了单；可以顺势提醒TA先去美团登录，登录后就能让你帮忙点了。';
+
+/**
+ * 复购推荐候选：从历史订单聚合最常点的商家+菜品（商家≥2 单才算常点，确定性同额字典序）。
+ * 菜品已售罄/店铺已打烊/全部菜品下架时不推荐。
+ */
+function mtRepeatPickOf(orders: MtOrder[]): { merchant: MtMerchant; dishName: string; times: number } | null {
+  const done = orders.filter((o) => o.status !== 'canceled');
+  if (done.length === 0) return null;
+  const mCount = new Map<string, number>();
+  for (const o of done) mCount.set(o.merchantId, (mCount.get(o.merchantId) ?? 0) + 1);
+  let topMid = '';
+  let topN = 0;
+  for (const [mid, n] of mCount) {
+    if (n > topN || (n === topN && mid > topMid)) {
+      topMid = mid;
+      topN = n;
+    }
+  }
+  if (!topMid || topN < 2) return null;
+  const merchant = mtMerchantOf(topMid);
+  if (!merchant || (merchant.mine && merchant.mtStatus === 'closed')) return null;
+  const dCount = new Map<string, number>();
+  for (const o of done) {
+    if (o.merchantId !== topMid) continue;
+    for (const it of o.items) dCount.set(it.name, (dCount.get(it.name) ?? 0) + it.qty);
+  }
+  let topDish = '';
+  let dN = 0;
+  for (const [dn, n] of dCount) {
+    if (n > dN || (n === dN && dn > topDish)) {
+      topDish = dn;
+      dN = n;
+    }
+  }
+  if (!topDish) return null;
+  const dish = mtDishesOf(merchant).find((d) => d.name === topDish);
+  if (!dish || dish.soldOut) return null;
+  return { merchant, dishName: topDish, times: dN };
+}
+
+/**
+ * 券到期提醒（一次性）：24 小时内过期的未用券 → 注入规则让 AI 借聊天自然提一嘴。
+ * 注入即写 kv 标记（每张券最多提醒一轮，避免每回合复读）。
+ */
+function mtExpiringCouponRule(uid: string, ownerName: string): string | null {
+  const now = Date.now();
+  const expiring = mtLoadCoupons(uid).filter((c) => !c.usedAt && c.expireAt > now && c.expireAt - now < 24 * 3_600_000);
+  const toRemind = expiring.filter((c) => {
+    try {
+      return !kvGet<boolean>(`mt-coupon-remind:${c.id}`);
+    } catch {
+      return false;
+    }
+  });
+  if (toRemind.length === 0) return null;
+  for (const c of toRemind) {
+    try {
+      kvSet(`mt-coupon-remind:${c.id}`, true);
+    } catch {
+      /* 忽略 */
+    }
+  }
+  const lines = toRemind.slice(0, 2).map((c) => `·「${c.name}」减¥${fmt2(c.amount)}${c.min > 0 ? `（满¥${fmt2(c.min)}可用）` : '（无门槛）'}`);
+  return (
+    `【券快过期】${ownerName}有 ${toRemind.length} 张美团券 24 小时内就要过期了：\n${lines.join('\n')}\n` +
+    `找自然的时机提醒TA用掉（比如“你那张券今晚就过期了，要不要点点什么把它用掉？”），提醒过一次就好，别反复念叨；TA没兴趣就正常聊。`
+  );
+}
 
 export interface MtEngageCtx {
   /** 注入 system 的动态块（最近订单/待支付订单实时状态） */
@@ -458,6 +543,9 @@ export function buildMtEngageCtx(
         '【参与节流】你刚刚（5分钟内）已经主动请客/帮付/点过一次单了（冷却中）：这一轮不要再输出 [请客点外卖]/[帮付]/[自己点外卖] 标记（发了系统也不会执行），用正文正常聊就好。'
       );
     }
+    // 券到期提醒（一次性）：与食物话题无关，任何单聊回合都可能自然提一嘴
+    const couponRule = mtExpiringCouponRule(uid, ownerName);
+    if (couponRule) rules.push(couponRule);
   }
   if (foodHit) {
     if (group) {
@@ -474,6 +562,12 @@ export function buildMtEngageCtx(
           `【请客点外卖（你直接付好）】如果你按人设/你们的关系想直接请TA吃（说好了请客、想宠TA、庆祝纪念等，别频繁），可以输出标记 [请客点外卖:商家ID|菜名x数量,菜名x数量|备注?]——系统会直接下单并由你付款（演示语义，不扣真钱），TA会收到一张已支付的订单卡片（实时显示配送状态），不需要再付款。注意：单笔超过 ¥100 的请客，要对方在聊天里明确同意（说「好呀」「请吧」等）标记才会生效，所以大额请客先在正文问一句「我请你吃吧」，TA答应后再发标记。\n` +
           `【给你自己点外卖】你自己想吃/馋了的时候（按人设判断，别频繁），可以输出标记 [自己点外卖:商家ID|菜名x数量,菜名x数量]——系统会生成待支付订单并请机主帮你代付，记得用正文说一句让TA帮你付。`
       );
+      const repeat = mtRepeatPickOf(orders);
+      if (repeat) {
+        rules.push(
+          `【复购彩蛋】${ownerName}最近常点「${repeat.merchant.name}」（已经点过 ${repeat.times} 次），最常点「${repeat.dishName}」——如果你一时想不出推荐什么，可以自然提议“要不要再来一次那家？”，TA感兴趣就按上面的 [帮点外卖] 教学输出标记（同样遵守冷却和大额规则，一次就好，别太刻意）。`
+        );
+      }
     }
   }
   return { block: blockParts.join('\n\n'), rules };
@@ -641,10 +735,13 @@ function mtValidateParsedOrder(
 ): { ok: true; merchant: MtMerchant; total: number } | { ok: false; error: string } {
   const merchant = mtMerchantOf(body.merchantId);
   if (!merchant) return { ok: false, error: `没有找到这家店（${body.merchantId}）` };
+  const closedErr = checkMerchantOrderable(merchant);
+  if (closedErr) return { ok: false, error: closedErr };
   const items: { dishId: string; name: string; qty: number; price: number; emoji?: string; img?: string }[] = [];
   for (const it of body.items) {
     const dish = resolveDish(merchant, it.name);
     if (!dish) return { ok: false, error: `「${it.name}」不在「${merchant.name}」的菜单里` };
+    if (dish.soldOut) return { ok: false, error: `「${dish.name}」已售罄，换点别的吧` };
     items.push({ dishId: dish.id, name: dish.name, qty: it.qty, price: dish.price, emoji: dish.emoji, img: dish.img });
   }
   const addrs = mtLoadAddresses(uid);
@@ -731,6 +828,11 @@ async function mtSelfOrderFlow(
   const meName = opts.meName?.trim() || cachedOwnerName() || '机主';
   const summary = order.items.map((i) => `${i.name}x${i.qty}`).join('、');
   memAddEventFragment(peer.id, opts.app, `你在美团给自己点了「${order.merchantName}」的外卖（${summary}，¥${fmt2(order.total)}），请机主${meName}帮你代付`, { eventTime: order.createdAt, sourceTag: 'mt-self-order' });
+  // 商家附言：在自己老板店里点的，让老板接单+记得帮付
+  const selfMerchant = mtMerchantOf(order.merchantId);
+  if (selfMerchant?.mine) {
+    mtScheduleShopOrderChatLine(opts.app, peer.id, `我在你家店里点了${summary}，快接单呀，等下记得帮我付~`);
+  }
 }
 
 /**
@@ -799,6 +901,11 @@ async function mtTreatOrderFlow(
   }
   const meName2 = opts.meName?.trim() || cachedOwnerName() || '机主';
   memAddEventFragment(peer.id, opts.app, `你请机主${meName2}在美团吃了「${paidOrder.merchantName}」的外卖（${itemSummary}，¥${fmt2(paidOrder.total)}），订单已由你付款`, { eventTime: Date.now(), sourceTag: 'mt-treat-order' });
+  // 商家附言：请客点的是机主自家店 → 自产自销一句
+  const treatMerchant = mtMerchantOf(paidOrder.merchantId);
+  if (treatMerchant?.mine) {
+    mtScheduleShopOrderChatLine(opts.app, peer.id, `请你在你家店里吃了${itemSummary}，自产自销哈哈`);
+  }
 }
 
 // ---------------- C9：订单终态记忆（送达/取消 → 参与角色的事件记忆） ----------------
@@ -1081,5 +1188,30 @@ async function deliverPeerMsgs(app: MtEngageApp, contact: ContactRecord, msgs: {
     },
     { initialDelay: 0 },
   );
+}
+
+// ---------------- 商家附言（AI 在机主自家店里下单后去聊天里说一句） ----------------
+
+/**
+ * AI 买家附言：订单落在机主自己的店铺时，延时数秒让该 AI 角色在对应聊天里自然说一句
+ * （「在你家点了 xx，记得接单呀」），把「商家视角」的闭环串起来。
+ * 走与决策回复同一条投递管线（落库 + 灵动岛 + 未读角标）；找不到联系人/是机主本人时静默跳过。
+ */
+export function mtScheduleShopOrderChatLine(app: MtEngageApp, charId: string, text: string, delayMs?: number): void {
+  if (!charId || !text.trim()) return;
+  const delay = delayMs ?? 2600 + Math.floor(Math.random() * 3400);
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        const contact = await getContact(charId);
+        if (!contact || contact.kind === 'user') return;
+        await deliverPeerMsgs(app, contact, [
+          { id: `mtshopline-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`, role: 'peer', content: text.trim(), time: Date.now() },
+        ]);
+      } catch {
+        /* 附言失败静默 */
+      }
+    })();
+  }, delay);
 }
 

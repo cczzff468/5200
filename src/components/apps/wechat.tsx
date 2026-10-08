@@ -61,6 +61,7 @@ import {
 } from 'lucide-react';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { ScanOverlayWhen, openScan } from './mt-scan';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -13452,7 +13453,7 @@ function MainScreen({
               data-testid="wx-menu-scan"
               onClick={() => {
                 setMenuOpen(false);
-                showToast('「扫一扫」暂未开放');
+                openScan('wechat');
               }}
               className="flex w-full items-center gap-2.5 border-t border-white/10 px-4 py-[11px] text-left text-[15.5px] active:bg-white/10"
             >
@@ -13742,7 +13743,7 @@ function MainScreen({
               <WxMenuRow
                 first
                 label="扫一扫"
-                onClick={() => showToast('「扫一扫」暂未开放')}
+                onClick={() => openScan('wechat')}
                 icon={<WxIcScan />}
               />
               <WxMenuRow
@@ -14229,15 +14230,19 @@ export default function WeChatApp() {
   }
 
   return (
-    <MainScreen
-      me={user}
-      contacts={contacts}
-      myRealName={realNameById[user.id] ?? user.name}
-      ownerName={ownerName}
-      reloadContacts={reloadContacts}
-      onLogout={handleLogout}
-      onExit={closeApp}
-      onLoginAccount={handleLogin}
-    />
+    <div className="relative h-full w-full">
+      <MainScreen
+        me={user}
+        contacts={contacts}
+        myRealName={realNameById[user.id] ?? user.name}
+        ownerName={ownerName}
+        reloadContacts={reloadContacts}
+        onLogout={handleLogout}
+        onExit={closeApp}
+        onLoginAccount={handleLogin}
+      />
+      {/* 扫一扫（+菜单 / 发现页入口；识别网页/文本/名片，演示语义） */}
+      <ScanOverlayWhen flavor="wechat" />
+    </div>
   );
 }

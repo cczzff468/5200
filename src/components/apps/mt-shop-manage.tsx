@@ -17,11 +17,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Flame,
   Megaphone,
   PackageOpen,
   Pencil,
   Plus,
+  QrCode,
   Receipt,
+  Reply,
   Star,
   Store,
   Tags,
@@ -34,12 +37,15 @@ import {
   mtLoadOrders,
   mtLoadShops,
   mtSaveCart,
+  mtSaveOrders,
   mtSaveShops,
   mtUidOf,
   type MtOrder,
   type MtSession,
 } from '@/lib/ios/meituan-store';
+import { mtMarkShopOrdersSeen, mtShopUnseenCount } from '@/lib/ios/mt-shop-notify';
 import { DishImg, GLASS_PANEL, MERCHANT_PAGE_BG, ShopImg } from './mt-merchant-ui';
+import { PseudoQr } from './mt-scan';
 import DishEditPage from './mt-dish-edit';
 
 const MT_YELLOW = '#FFD100';
@@ -75,6 +81,10 @@ export default function ShopManagePage({
   const [dishPage, setDishPage] = useState<{ catIdx: number; dish: MtDish | null } | null>(null);
   const [confirmDel, setConfirmDel] = useState(false);
   const [orders, setOrders] = useState<MtOrder[]>(() => mtLoadOrders(uid).filter((o) => o.merchantId === shopId));
+  const [unseen, setUnseen] = useState(0);
+  const [qrOpen, setQrOpen] = useState(false);
+  const [replyFor, setReplyFor] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
   const catRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   // 订单状态推进刷新（事件 + 轮询双通道，同 useOrdersTick 口径）
@@ -87,6 +97,11 @@ export default function ShopManagePage({
       window.removeEventListener('mt-orders-changed', bump);
     };
   }, [uid, shopId]);
+
+  // 商家接单红点：已支付未查看的新单数（进入「订单」页签时清零）
+  useEffect(() => {
+    setUnseen(mtShopUnseenCount(uid, shopId, orders));
+  }, [uid, shopId, orders]);
 
   const reload = () => setShop(loadShop());
 
@@ -143,13 +158,37 @@ export default function ShopManagePage({
       orders
         .filter((o) => o.review)
         .map((o) => ({
+          orderId: o.id,
           user: `${session.name}（本店订单）`,
           rating: o.review!.rating,
           content: o.review!.content,
           time: new Date(o.review!.at).toLocaleDateString('zh-CN'),
+          reply: o.review!.reply,
         })),
     [orders, session.name]
   );
+
+  /** 商家回复买家评价（写入订单评价 reply，买家端店铺页同步展示） */
+  const submitReply = () => {
+    const orderId = replyFor;
+    const text = replyText.trim();
+    if (!orderId || !text) return;
+    mtSaveOrders(
+      uid,
+      mtLoadOrders(uid).map((o) => (o.id === orderId && o.review ? { ...o, review: { ...o.review, reply: { text, at: Date.now() } } } : o))
+    );
+    setOrders(mtLoadOrders(uid).filter((o) => o.merchantId === shopId));
+    setReplyFor(null);
+    setReplyText('');
+    onToast('已回复买家评价');
+  };
+
+  /** 打开「订单」页签：红点清零 */
+  const openOrdersTab = () => {
+    setTab('订单');
+    mtMarkShopOrdersSeen(uid, shopId);
+    setUnseen(0);
+  };
 
   if (!shop) {
     // 店铺刚被删除等极端情况：给出兜底返回
@@ -166,6 +205,25 @@ export default function ShopManagePage({
 
   const dishTotal = shop.sections.reduce((acc, s) => acc + s.dishes.length, 0);
   const liveOrderCount = orders.filter((o) => ['pendingPay', 'pendingAccept', 'accepted', 'delivering'].includes(o.status)).length;
+
+  // 经营小统计（今日口径；从本店订单流水实时算，无新表）：今日订单/营业额/热销
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const paidOrders = orders.filter((o) => o.status !== 'canceled' && o.status !== 'pendingPay');
+  const todayOrders = paidOrders.filter((o) => o.createdAt >= startOfToday.getTime());
+  const todayRevenue = Math.round(todayOrders.reduce((s, o) => s + o.total, 0) * 100) / 100;
+  const hotMap = new Map<string, number>();
+  for (const o of todayOrders.length > 0 ? todayOrders : paidOrders) {
+    for (const it of o.items) hotMap.set(it.name, (hotMap.get(it.name) ?? 0) + it.qty);
+  }
+  let hotName = '';
+  let hotCount = 0;
+  for (const [n, c] of hotMap) {
+    if (c > hotCount || (c === hotCount && n > hotName)) {
+      hotName = n;
+      hotCount = c;
+    }
+  }
 
   return (
     <div className={`flex h-full flex-col ${MERCHANT_PAGE_BG}`}>
@@ -226,11 +284,16 @@ export default function ShopManagePage({
             key={t}
             type="button"
             data-testid={`mt-manage-tab-${t}`}
-            onClick={() => setTab(t)}
+            onClick={() => (t === '订单' ? openOrdersTab() : setTab(t))}
             className={`relative py-2.5 text-[15px] ${tab === t ? 'font-bold text-black/85' : 'text-black/45'}`}
           >
             {t}
-            {t === '订单' && liveOrderCount > 0 && (
+            {t === '订单' && unseen > 0 && (
+              <span className="absolute -right-3 top-1.5 grid h-[14px] min-w-[14px] place-items-center rounded-full bg-[#FF3B30] px-0.5 text-[9px] font-bold text-white" data-testid="mt-manage-orders-dot">
+                {unseen > 9 ? '9+' : unseen}
+              </span>
+            )}
+            {t === '订单' && unseen === 0 && liveOrderCount > 0 && (
               <span className="absolute -right-3 top-1.5 grid h-[14px] min-w-[14px] place-items-center rounded-full bg-[#FF3B30] px-0.5 text-[9px] font-bold text-white">
                 {liveOrderCount}
               </span>
@@ -272,7 +335,7 @@ export default function ShopManagePage({
                     type="button"
                     data-testid={`mt-manage-dish-${d.name}`}
                     onClick={() => setDishPage({ catIdx: i, dish: d })}
-                    className="flex w-full gap-2.5 py-2 text-left active:opacity-80"
+                    className={`flex w-full gap-2.5 py-2 text-left active:opacity-80 ${d.soldOut ? 'opacity-60' : ''}`}
                   >
                     <span className="relative shrink-0">
                       <DishImg name={d.name} img={d.img} className="h-[80px] w-[80px] rounded-xl" />
@@ -291,6 +354,11 @@ export default function ShopManagePage({
                           <span className="inline-flex items-center gap-0.5 rounded bg-[#FFF0EB] px-1 py-px text-[10px] text-[#FF4B33]" data-testid={`mt-dish-coupon-tag-${d.name}`}>
                             <Ticket className="h-2.5 w-2.5" />
                             券·{d.coupon.min > 0 ? `满${money(d.coupon.min)}` : '无门槛'}减{money(d.coupon.amount)}
+                          </span>
+                        )}
+                        {d.soldOut && (
+                          <span className="inline-flex items-center rounded bg-black/[0.06] px-1 py-px text-[10px] text-black/45" data-testid={`mt-manage-dish-soldout-${d.name}`}>
+                            已售罄
                           </span>
                         )}
                       </span>
@@ -360,6 +428,52 @@ export default function ShopManagePage({
                       <span className="ml-1 text-[11px] text-black/30">{r.time}</span>
                     </p>
                     <p className="mt-1 text-[13px] leading-relaxed text-black/70">{r.content}</p>
+                    {r.reply && (
+                      <p className="mt-1.5 rounded-xl bg-[#FFF7E6]/90 px-2.5 py-1.5 text-[12px] leading-relaxed text-black/65 backdrop-blur-xl" data-testid={`mt-shop-reply-${r.orderId}`}>
+                        <span className="font-semibold text-[#B77900]">商家回复：</span>
+                        {r.reply.text}
+                      </p>
+                    )}
+                    {!r.reply && replyFor === r.orderId && (
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <input
+                          autoFocus
+                          value={replyText}
+                          onChange={(e) => setReplyText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') submitReply();
+                          }}
+                          placeholder="回复买家…（最多40字）"
+                          maxLength={40}
+                          data-testid="mt-reply-input"
+                          className="h-9 w-auto min-w-0 flex-1 rounded-xl bg-white/70 px-2.5 text-[12px] text-black/85 outline-none ring-1 ring-white/80 backdrop-blur-xl placeholder:text-black/25 focus:ring-[#FFD100]"
+                        />
+                        <button
+                          type="button"
+                          onClick={submitReply}
+                          disabled={!replyText.trim()}
+                          data-testid="mt-reply-send"
+                          className={`h-9 shrink-0 rounded-xl px-3.5 text-[12px] font-semibold ${replyText.trim() ? 'text-black/85 shadow-[0_4px_12px_rgba(255,190,0,0.35)]' : 'bg-black/[0.06] text-black/30'}`}
+                          style={replyText.trim() ? { background: MT_YELLOW } : undefined}
+                        >
+                          发送
+                        </button>
+                      </div>
+                    )}
+                    {!r.reply && replyFor !== r.orderId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReplyFor(r.orderId);
+                          setReplyText('');
+                        }}
+                        data-testid={`mt-reply-btn-${r.orderId}`}
+                        className="mt-1.5 flex items-center gap-1 text-[12px] font-medium text-[#B77900] active:opacity-70"
+                      >
+                        <Reply className="h-3 w-3" />
+                        回复
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -434,6 +548,23 @@ export default function ShopManagePage({
             </button>
           </div>
 
+          {/* 店铺码（扫码直达本店；与美团「扫一扫」闭环） */}
+          <button
+            type="button"
+            onClick={() => setQrOpen(true)}
+            data-testid="mt-manage-shop-qr"
+            className={`mt-3 flex w-full items-center gap-3 rounded-3xl p-4 text-left ${GLASS_PANEL} active:opacity-80`}
+          >
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[#FFF3C4] to-[#FFD100]/70">
+              <QrCode className="h-5 w-5 text-[#8A4B00]" strokeWidth={1.8} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[14px] font-bold text-black/80">店铺码</span>
+              <span className="block text-[11px] text-black/40">贴在店里 / 发给朋友，美团「扫一扫」直达本店</span>
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-black/30" />
+          </button>
+
           <div className={`mt-3 rounded-3xl p-4 ${GLASS_PANEL}`}>
             <div className="flex items-center">
               <p className="flex items-center gap-1.5 text-[14px] font-bold text-black/80">
@@ -474,9 +605,37 @@ export default function ShopManagePage({
         </div>
       )}
 
-      {/* 订单：本店订单列表 */}
+      {/* 订单：经营小统计 + 本店订单列表 */}
       {tab === '订单' && (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {/* 经营小统计（今日口径；从本店订单流水实时算，无新表） */}
+          <div className={`rounded-3xl px-4 py-3.5 ${GLASS_PANEL}`} data-testid="mt-manage-stats">
+            <p className="flex items-center gap-1.5 text-[14px] font-bold text-black/80">
+              <Flame className="h-4 w-4 text-[#FF6000]" strokeWidth={1.9} />
+              今日经营
+            </p>
+            <div className="mt-2.5 grid grid-cols-3 items-end gap-2 text-center">
+              <div>
+                <p className="text-[20px] font-bold leading-none text-black/85">{todayOrders.length}</p>
+                <p className="mt-1.5 text-[10px] text-black/40">今日订单</p>
+              </div>
+              <div>
+                <p className="text-[20px] font-bold leading-none" style={{ color: MT_PRICE }}>
+                  ¥{fmtMoney(todayRevenue)}
+                </p>
+                <p className="mt-1.5 text-[10px] text-black/40">今日营业额</p>
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-[14px] font-bold leading-none text-black/85" title={hotName}>
+                  {hotName || '—'}
+                </p>
+                <p className="mt-1.5 text-[10px] text-black/40">{hotName ? `热销·已售${hotCount}份` : '暂无热销'}</p>
+              </div>
+            </div>
+            {todayOrders.length === 0 && paidOrders.length > 0 && (
+              <p className="mt-2.5 text-[11px] text-black/35">今天还没开张 · 热销取自开店以来全部订单</p>
+            )}
+          </div>
           {orders.length === 0 ? (
             <div className="flex flex-col items-center gap-2 pb-10 pt-16 text-black/30">
               <Receipt className="h-9 w-9" strokeWidth={1.5} />
@@ -568,6 +727,31 @@ export default function ShopManagePage({
                   确认删除
                 </button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 店铺码弹窗（伪二维码，同一店铺永远同一图案） */}
+      <AnimatePresence>
+        {qrOpen && (
+          <motion.div key="mt-shop-qr" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-[70]">
+            <button type="button" aria-label="关闭店铺码" className="absolute inset-0 bg-black/55" onClick={() => setQrOpen(false)} />
+            <motion.div
+              initial={{ scale: 0.9, y: 24 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.94, opacity: 0 }}
+              transition={{ type: 'tween', duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
+              className="absolute left-1/2 top-1/2 w-[280px] -translate-x-1/2 -translate-y-1/2 rounded-3xl bg-white/92 px-6 pb-6 pt-7 text-center shadow-[0_24px_60px_rgba(0,0,0,0.28)] backdrop-blur-2xl ring-1 ring-white/70"
+              data-testid="mt-shop-qr-modal"
+            >
+              <p className="truncate text-[15px] font-bold text-black/85">{shop.name}</p>
+              <p className="mt-0.5 text-[11px] text-black/40">美团店铺码 · 扫一扫直达本店</p>
+              <PseudoQr seed={shop.id} className="mx-auto mt-3.5 h-[196px] w-[196px]" />
+              <p className="mt-3 text-[11px] text-black/35">打开美团「扫一扫」识别即可进店</p>
+              <button type="button" onClick={() => setQrOpen(false)} className="mt-4 h-10 w-full rounded-full bg-black/[0.05] text-[13px] font-medium text-black/65 active:bg-black/[0.1]">
+                关闭
+              </button>
             </motion.div>
           </motion.div>
         )}

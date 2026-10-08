@@ -17192,3 +17192,26 @@ Stage Summary:
 - 数据模型变更：MtDish +coupon（菜品券，结算自动抵扣每菜每单一次）；店铺券 min 语义扩展 0=无门槛（mtListUsableCoupons/mtClaimShopCoupon 天然兼容零改动）
 - 新店流程改为「开荒制」：入驻表单只管店铺信息+券 → 保存直达店铺管理页加菜（菜单管理职责完全移交管理页）
 - 修复三件旧账：规格选项输入框显示 bug（min-w-0）、Tailwind v4 `!` 前缀失效类、结算页 p>div hydration 嵌套
+
+---
+Task ID: 14
+Agent: Z.ai Code (main)
+Task: 美团商家经营深化九项（用户选定 1/2/3/4/5/7/8/9/11）——订单页真实化、菜品售罄、商家接单通知链路、经营统计、商家回复评价、AI 复购与券到期提醒、扫一扫三端（美团+微信+QQ，含店铺码）
+
+Work Log:
+- 数据层：MtDish +soldOut（售罄）；MtOrderReview +reply{text,at}（商家回复，mtLoadOrders 归一化）；新建 mt-shop-notify.ts（mtNotifyShopOrderPaid 幂等灵动岛通知 + mtMarkShopOrdersSeen/mtShopUnseenCount 红点基线 kv mt-shop-notify:<uid>）
+- 菜品售罄：DishEditPage 基本信息区加「商品状态」在售/已售罄胶囊开关（保存透传 soldOut）；管理页菜品行加「已售罄」角标+行置灰；买家端菜品行置灰+名称旁角标+「已售罄」胶囊替换 Stepper、add() 拦截 toast；mt-ai-engage 目录块过滤售罄菜品与打烊店铺（pool 排除 mine&&closed）、mtCreateAiDraft/mtValidateParsedOrder 双入口拒绝已售罄菜（「xx已售罄，换点别的吧」）与打烊店（checkMerchantOrderable）
+- 商家接单通知链路：支付完成才通知（finishPay/payViaChannel/mtProxyPayOrder 三处挂 mtNotifyShopOrderPaid，幂等 kv mt-shop-notify-done:<orderId>）——未支付脏单不打扰；灵动岛卡 app meituan「商家中心·新订单：xx，实收¥N，请及时接单」点击进订单详情；管理页「订单」页签红点（unseen= paidAt>seen 未取消数，进页签 markSeen 清零；基线语义=从未查看则全部已付单计未看）；消息中心天然同步（本店订单在 mtLoadOrders）
+- AI 买家附言：mt-ai-engage 新增 mtScheduleShopOrderChatLine（延时 2.6~6s 经 deliverPeerMsgs 落库+灵动岛+未读）；代点确认/自己点/请客三流在商家为机主自有店时各发一句（「帮你在自家店里安排了x，坐等老板接单啦~」/「我在你家店里点了x，快接单呀，等下记得帮我付~」/「请你在你家店里吃了x，自产自销哈哈」）
+- 经营小统计：管理页订单页签顶部毛玻璃「今日经营」卡（今日订单数/今日营业额/热销 Top1+已售份数，今日无单回退全量口径并提示），纯订单流水实时计算零新表
+- 商家回复评价：管理页评价页签每条真实订单评价加「回复」→ 内联毛玻璃输入+发送（mtSaveOrders 写 review.reply）→ 已回复显示「商家回复：」黄底胶囊；买家端店铺页评价区同步展示（myReviews 扩展 orderId/reply）
+- 订单页真实化：顶栏「搜索我的订单」改真实输入框（按商家/菜品/订单号过滤，带清空钮）；「筛选」按钮接状态筛选弹层（全部/待付款/进行中/配送中/已送达/已取消 chips+查看N单+重置，激活态橙字红点）；「发票」按钮接真实 InvoicePage（invoicesReturn state：我的宫格入口回 main、订单页入口 goOrders 回订单页）；「领神券」接 mtClaimGodCoupons 真实发放（当日防重语义沿用同名同面额未使用去重）
+- 扫一扫三端（新 mt-scan.tsx）：useScanOverlay 全局开关 + openScan + ScanOverlayWhen（各端根组件挂载，自带进出场）；拟真相机底+四角取景框+激光线动画，约1.8s出识别结果卡；美团端=店铺码（有入驻店时 62% 优先命中，「进店逛逛」直达店铺页）/美团神券（mtClaimGodCoupons 真实入卡券包+「去用券」跳转）/网页链接；微信端=链接/文本/名片（绿色主题）；QQ端=链接/文本/群二维码（蓝色主题）；PseudoQr 确定性伪二维码（FNV 哈希+三定位角+时序线）；管理页「商家」页签新增「店铺码」卡+弹窗（PseudoQr seed=店铺id）
+- 接入点：美团首页顶部扫一扫（HomePage +onScan prop）；微信 +菜单 wx-menu-scan 与发现页「扫一扫」（openScan('wechat')，WeChatApp 根 relative 包裹+overlay）；QQ +菜单 qq-plus-scan 与加好友页七宫格「扫一扫」特例（openScan('qq')，QQApp 根同构）
+- E2E（agent-browser 全链路实测，IDB 植入机主陶凡/taofan123 + QQ钱包充值）：①美团扫一扫→识别美团神券「已领取3张」→去用券直达卡券页可见3张神券 ②入驻「陶记甜品小铺」直达管理页→FAB加珍珠奶茶（奶茶模板）设已售罄保存→管理页角标+opacity0.6 ③加杨枝甘露在售 ④店铺码弹窗（238模块伪二维码）⑤买家端店铺页：珍珠奶茶置灰+已售罄角标+胶囊无加购、杨枝甘露可加购 ⑥加购→结算→QQ钱包支付→灵动岛弹「陶记甜品小铺·商家中心·新订单：杨枝甘露，实收¥12.00，请及时接单」 ⑦订单页搜索「杨枝」命中1单/「珍珠」空态；筛选「已送达」橙字红点+查看N单 ⑧etaAt回拨→状态机推进已完成→发布五星评价（味道赞）→按钮变已评价 ⑨管理页评价页签回复「谢谢亲的认可…」→黄底「商家回复」胶囊 ⑩买家端店铺页评价区同步显示商家回复 ⑪经营统计「今日经营 1单/¥12/热销杨枝甘露」 ⑫扫一扫识别到店铺码→进店逛逛直达买家店铺页 ⑬微信账密登录→+菜单扫一扫（绿主题链接卡+打开链接演示提示）→QQ账密登录→+菜单扫一扫（蓝主题链接卡） ⑭seen回拨→管理页订单页签红点「1」→进入清零重进不显示 ⑮订单页发票按钮→发票页待开票显示本单→返回回订单页；tsc 0 错误、eslint 全部改动文件 0 问题、console 零报错、dev.log 仅既有 mt-feed 429 限流
+
+Stage Summary:
+- 交付：订单页三处演示按钮全部真实化（搜索/筛选/发票）+ 领神券真实发放；菜品售罄全链路（管理端开关→买家端拦截→AI 自动避开+打烊店排除）；商家接单通知三通道（灵动岛/管理页红点/消息中心）；AI 买家在你店里下单会来聊天说一句；管理页新增今日经营统计与评价回复（买家端可见）；扫一扫三端共享组件 + 店铺码闭环（管理页出码→美团扫一扫直达）
+- 关键设计：接单通知挂「支付完成」而非订单创建（未支付脏单不打扰，幂等防重）；红点基线=从未查看时全部已付单计未看；扫一扫共用一组件按 flavor 换主题色与结果集，美团端结果接真实业务（店铺码/神券）
+- 改动文件：meituan-data.ts / meituan-store.ts / mt-shop-notify.ts（新）/ mt-scan.tsx（新）/ mt-ai-engage.ts / mt-proxy-pay.ts / meituan.tsx / mt-dish-edit.tsx / mt-shop-manage.tsx / wechat.tsx / qq.tsx
+- 未逐一验证项（确定性代码路径/LLM 行为级）：AI 复购彩蛋与券到期提醒为 buildMtEngageCtx 确定性规则注入（复购候选≥2次单才出现；券到期≤24h 注入一次并写 kv 防复读）；AI 附言需 LLM 聊天场景触发；售罄/打烊在 AI 代点/请客/自己点三入口的拒绝文案已由 mtCreateAiDraft/mtValidateParsedOrder 双入口保证
