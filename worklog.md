@@ -17054,3 +17054,26 @@ Stage Summary:
 - 登录规则最终形态：一键登录=授权联动（需微信/QQ App 在线，App 退出美团同步登出）；账密登录=独立通道（凭账号密码直接登录，会话不受微信/QQ App 登录态影响）
 - 附带修复：mtIdpLoggedIn 现按「自由登录墙」判定微信/QQ 未登录，退出 App 后美团一键会话正确联动登出（此前退出不删会话键导致联动失效）
 - 改动文件：src/lib/ios/meituan-store.ts / src/components/apps/meituan.tsx
+
+---
+Task ID: 8
+Agent: Z.ai Code (main)
+Task: 美团×AI 深度联动——代付详情按钮改「等待对方代付」+ AI 按人设/记忆/上下文参与外卖与双向代付（代付写记忆、AI帮点外卖、AI感知订单、双向联动、按角色隔离）
+
+Work Log:
+- 探索（3 个并行 Explore 代理）：mt-proxy-pay.ts 代付全链路 / wechat.tsx+chat-rich.ts AI 引擎（动作协议、记忆、世界书、时间感知、投递管线）/ meituan-store+data 订单体系
+- R0 代付详情按钮（mt-proxy-detail.tsx）：MtProxyPay 新增 direction('friend'|'me')+chatContactId；direction friend（AI 付款）时删除「立即代付（以X的身份支付）」→ 新「等待X代付…」禁用态（Loader2 旋转 + 「TA会根据自己的意愿决定是否代付，可以去聊天里提醒TA」）；direction me（机主付款）保留「立即代付（帮X支付）」；详情页补听 mt-orders-changed 实时刷新
+- R1 AI 主动代付（mt-ai-engage.ts 新建 760 行）：mtCreateProxyRequest 成功后动态 import 调度 scheduleMtProxyAiDecision（5.2~12s 延迟→callLlm 两级兜底→人设+记忆召回+时间感知构建 prompt→JSON 决策 {pay,reply}）；pay→mtProxyPayOrder(deferCard) + 决策回复经 scheduleAiDelivery 投递（落库+灵动岛通知+未读角标守卫）；decline→只回文字；两条路径均 memAddEventFragment 写角色记忆（sourceTag: mt-proxy-pay/mt-proxy-decline 防互吞）；防重入 Set
+- R2 AI 让用户代付：mtCreateProxyRequestByChar（direction me，请求卡 role='peer' 落角色聊天）；动作 [自己点外卖:商家ID|菜名x数量]→mtSelfOrderFlow（建待支付订单→请机主代付→写角色记忆）；机主在聊天点卡→详情「立即代付（帮X支付）」→支付→done 卡 role='me' + 订单支付 + 灵动岛「你已帮X代付」
+- R3 AI 帮点外卖：动作 [帮点外卖:商家ID|菜名x数量,...|备注?]→mtCreateAiDraft（菜品按菜单名解析、价格取菜单价、满减预估）→mtdraft 草稿卡（mt-draft-card.tsx 新建：菜品清单+预估+确认下单/不了谢谢）；确认→mtConfirmAiDraft（mtCheckoutCalc 同口径建单+当前地址+写角色记忆「你帮机主点了外卖」）→navigateToChatSession('meituan',orderId,{pay:true}) 直达美团收银台；拒绝→草稿灰化
+- R4 AI 感知订单：buildMtEngageCtx 每回合同步构建【美团外卖动态】（最近5单：时间/商家/商品/金额/状态/支付渠道，实时读 kv）注入 system；mtpay/mtshare/mtdraft 卡片历史序列化（wechat+qq 双端），AI 能读 pid/sid/did/商家/金额/状态
+- R5 联动：动作 [代付:pid]（AI 支付收到的请求）/ [帮付:订单id]（AI 主动为机主待付订单代付，mtAiPayPendingOrder 原子操作）；chat-rich.ts ACTION_RE 注册 4 新标记（代付/帮付/帮点外卖/自己点外卖+别名，body 整段透传）；wechat buildReplyMsgs 新增 mt 执行分支（卡片随回复队列投递防 cur 快照覆盖丢卡）；美团外卖精选目录（10 商家×招牌菜+价格）在食物话题命中时注入+动作教学（先问口味/结合记忆/时间推荐，用户确认才下单，AI 自己点别频繁）
+- 防护：stripMtEchoText 剥除 AI 照抄历史序列化行的幻觉回显（微信+QQ 正文管线）；[代付] 执行器校验 direction/chat 归属；mtProxyPayOrder deferCard 模式防双重落卡
+- meituan.tsx 导航消费支持 pay=true（待支付直达收银台，否则订单详情）；NotifyTarget.pay 扩展
+- E2E 实测（agent-browser，全新环境建机主陶凡+AI女友角色琳琳+微信加好友）：①美团下单→找人代付琳琳→聊天端请求卡实时变「好友已代付 ¥14.90」+完成卡+AI 回复「好啦好啦，给你付啦，赶紧吃吧我的宝~」（人设化决策支付）+订单「好友代付·微信支付（琳琳）」→配送状态机推进 ✓ ②「宝我饿了帮我点个外卖」→AI 先问口味+推荐商家→输出代点标记→草稿卡（巷口葱油饼 ¥12/预估¥15）→确认下单→直达美团收银台 ¥15.00 ✓ ③「葱油饼那单你帮我付了吧」→AI 输出[帮付]→完成卡「好友已代付 ¥15」✓ ④「你直接在美团点你想吃的发我」→[自己点外卖]→一品粥 ¥58.60 请求卡→详情「立即代付（帮琳琳支付）」→支付→done 卡 role='me'+灵动岛「你已帮琳琳代付¥58.60」✓ ⑤「我在美团点的单子到哪了」→AI 答「那品粥的订单还在待接单状态」（实时感知）✓ ⑥构造 pending 请求验证聊天端详情=「等待琳琳代付…」+「TA会根据自己的意愿决定是否代付」（旧按钮已消失）✓ ⑦连发 4 次代付请求 AI 全部按人设秒付+人设化回复 ✓ ⑧console/dev.log 无错误（仅既有 mt-feed 429 限流）
+- bunx tsc --noEmit 0 错误；npx eslint 全部改动文件 0 问题
+
+Stage Summary:
+- 交付：mt-ai-engage.ts（新，联动引擎：草稿/上下文/规则/执行器/决策调度/记忆）、mt-proxy-pay.ts（direction/deferCard/byChar/帮付）、chat-rich.ts（4 动作）、mt-proxy-detail.tsx（方向感知按钮）、mt-draft-card.tsx（新，代点卡）、wechat.tsx+qq.tsx（历史序列化+微信执行器+气泡）、island-notify.ts（pay 导航）、meituan.tsx（收银台直达）、proactive-msg.ts（导出会话活跃查询）
+- 关键设计：AI 付款全部走 mtProxyPayOrder 既有幂等管线（不碰钱包/不真扣款）；AI 参与的时刻写角色记忆（memAddEventFragment），普通订单靠每回合实时动态块感知（不刷记忆）；记忆按 contactId、订单按美团 uid 天然隔离
+- 已知边界：QQ 端接入历史序列化+决策调度+详情页（共享组件），动作标记执行器与代点卡按钮只在微信端（QQ 卡片也能渲染但确认下单按钮同组件可用）；婉拒路径代码对称已实现（LLM 自由裁量，实测均为同意，符合琳琳人设）

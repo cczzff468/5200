@@ -164,6 +164,9 @@ import {
   type GroupCardData,
 } from '@/lib/ios/group-social';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
+// 美团×AI 联动（外卖参与/双向代付）：动作执行、上下文块、历史序列化
+import { applyMtEngageAction, buildMtEngageCtx, isMtEngageActionKind, mtDraftHistoryLine, mtOrderShareHistoryLine, mtProxyHistoryLine, stripMtEchoText } from '@/lib/ios/mt-ai-engage';
+import { MtDraftBubble } from './mt-draft-card';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
@@ -392,7 +395,7 @@ interface WxMsg {
   time: number;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
    *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare';
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -439,6 +442,8 @@ interface WxMsg {
   mtpay?: { pid: string; role: 'req' | 'done' };
   /** 美团订单分享动态卡片（kind='mtshare'）：sid = 分享快照（mt-share:<sid>），状态时间线实时跟订单走 */
   mtshare?: { sid: string };
+  /** 美团 AI 代点外卖草稿卡（kind='mtdraft'）：did = 草稿（mt-draft:<did>），确认后创建待支付订单 */
+  mtdraft?: { did: string };
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -5674,6 +5679,21 @@ function ChatPage({
           }
           continue;
         }
+        // 美团外卖/代付联动动作（[代付:pid]/[帮付:订单id]/[帮点外卖:...]/[自己点外卖:...]）：
+        // 同步执行（代付立即生效/草稿生成），产出的卡片随本回复队列投递；异步流（自己点外卖）
+        // fire-and-forget，卡片经 MT_PROXY_CARD_EVENT 实时合并；角色记忆由执行器直写
+        if (isMtEngageActionKind(part.action.kind)) {
+          const mtRes = applyMtEngageAction(part.action, peer, { app: 'wx', meName: addressNameOf(me, useSettings.getState().addressMode) });
+          for (const cm of mtRes.msgs) {
+            out.push(cm as WxMsg);
+            t += 600 + Math.floor(Math.random() * 400);
+          }
+          if (mtRes.sys) {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: mtRes.sys } });
+            t += 1;
+          }
+          continue;
+        }
         const applied = wxApplyAiActions([part.action], cur, peer, t);
         cur = applied.msgs;
         out.push(...applied.notices, ...applied.extras);
@@ -5703,10 +5723,11 @@ function ChatPage({
             }
             // F1 兜底：尾部未闭合的半截照片标签剥掉不投递（后台接力整段直入本管线时防「[图片:黄昏的咖」
             // 半截上屏；流式路径上游已用 splitUnfinishedPhotoTag 提前切走尾段，此处通常为空操作）
-            const safePhotoText = stripUnfinishedPhotoTag(photoFreeText);
+            // 美团回显剥除：AI 照抄历史里的卡片序列化行（[美团代付/代点…]（…））当正文时整行剥掉
+            const safePhotoText2 = stripMtEchoText(stripUnfinishedPhotoTag(photoFreeText));
             // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
             // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-            const clean = cleanBubbleText(stickersOn ? safePhotoText : stripEmojiText(safePhotoText.replace(/\[表情包\]|\[表情\]/g, ' ')));
+            const clean = cleanBubbleText(stickersOn ? safePhotoText2 : stripEmojiText(safePhotoText2.replace(/\[表情包\]|\[表情\]/g, ' ')));
             if (!clean) continue;
             out.push({ id, role: 'peer', content: clean, time: t });
           }
@@ -5893,7 +5914,14 @@ function ChatPage({
                   ? `[亲属卡 ID:${m.fam.cid ?? m.id} 每月额度¥${m.fam.monthlyLimit}，${wxCardStateLabel(m, actorNames)}]`
                   : m.kind === 'groupcard' && m.gcard
                     ? `[群聊邀请卡片：${m.gcard.name}（${m.gcard.inviterName || '群友'}邀请${m.gcard.memberNames?.length ? `，成员：${m.gcard.memberNames.join('、')}` : ''}），${m.gcard.status === 'pending' ? '待处理' : m.gcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
-                    : m.content),
+                    : m.kind === 'mtpay' && m.mtpay
+                      ? // 美团代付卡：AI 读到结构化信息（pid/商家/金额/状态），待付请求可凭 id 用 [代付:pid] 处理
+                        mtProxyHistoryLine(m.mtpay.pid, m.mtpay.role, m.role === 'me' ? meAddrName : peer.name)
+                      : m.kind === 'mtshare' && m.mtshare
+                        ? mtOrderShareHistoryLine(m.mtshare.sid)
+                        : m.kind === 'mtdraft' && m.mtdraft
+                          ? mtDraftHistoryLine(m.mtdraft.did, peer.name)
+                          : m.content),
         };
       });
 
@@ -5960,6 +5988,9 @@ function ChatPage({
     // 朋友圈动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看朋友圈平台的动态），
     // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）
     const momentsBlock = buildMomentsChatBlock({ contactId: peer.id, app: 'wx', userName: me.name, peer });
+    // 美团×AI 联动（外卖/代付）：实时订单动态 + 本聊天的待处理代付请求/待付订单 +
+    // 食物话题命中时的商家目录与点外卖动作教学（全同步 kv 读，状态实时）
+    const mtEngage = buildMtEngageCtx(peer.id, 'wx', [userMsg?.content, sysEvent, ...base.slice(-6).map(scanTextOf)]);
     // 时间感知（本会话独立开关，发送时现场读取；关闭时不注入任何时间信息，恢复普通聊天）：
     // 上次聊天间隔 = 该会话上一条消息时间戳（不含本轮刚发的消息）与当前时间的差值，按角色隔离不串台
     const priorMsgs = baseMsgs ?? msgs;
@@ -6017,12 +6048,14 @@ function ChatPage({
       // 40-b 跨 App 环境感知：当前 App 记忆 → 其他 App 最近 10 条 → 群聊最近 10 条（长期/核心在 memoryBlock 内）
       crossCtxRef.current.crossAppBlock,
       crossCtxRef.current.groupBlock,
+      // 美团外卖动态：机主最近订单/配送状态实时注入（AI 知道机主点了什么、哪家店、多少钱、什么时候、现在到哪了）
+      mtEngage.block,
       // 音乐实时情境（第三十八轮）：一起听中=一起听块；其余私聊=音乐点播块（播放器此刻歌名/歌手/进度/歌词
       // + 主动放歌引导 + 播控指令说明）（发消息瞬间现场构建，非缓存）
       togetherLiveBlock(peer.id, me.name),
       momentsBlock,
       locBlock,
-      actionRules.length > 0 ? actionRules.join('\n\n') : '',
+      [...actionRules, ...mtEngage.rules].length > 0 ? [...actionRules, ...mtEngage.rules].join('\n\n') : '',
       blkBlock,
       quitCtx?.section ?? '',
       kickSection,
@@ -7780,6 +7813,11 @@ function ChatPage({
                 /* 美团订单分享动态卡片（订单详情右上角分享；状态时间线实时跟订单走） */
                 <div {...bubblePress}>
                   <MtShareBubble sid={m.mtshare.sid} />
+                </div>
+              ) : m.kind === 'mtdraft' && m.mtdraft ? (
+                /* 美团 AI 代点外卖草稿卡（AI [帮点外卖] 生成；机主确认后创建待支付订单并跳收银台） */
+                <div {...bubblePress}>
+                  <MtDraftBubble did={m.mtdraft.did} onToast={onToast} />
                 </div>
               ) : m.kind === 'image' && m.img && stackHead.has(i) && !expandedStacks.has(m.id) ? (
                 /* 照片堆叠卡片（连续 ≥4 张的折叠态）：左「展开 N」胶囊 + 主图右侧扇形露边；左滑下一张/右滑上一张、点击开大图。

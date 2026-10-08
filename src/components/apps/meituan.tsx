@@ -11697,17 +11697,30 @@ export default function MeituanApp() {
       setBooting(false);
       const nav = takeNotifyNavigation('meituan');
       if (nav?.contactId && v) {
+        // AI 代点草稿「确认下单」带 pay=true：目标订单仍待支付时直达收银台，否则进订单详情
+        const target = mtLoadOrders(mtUidOf(v)).find((o) => o.id === nav.contactId);
         setOrderId(nav.contactId);
         setTab('orders');
-        setPage('orderDetail');
+        if (nav.pay && target && target.status === 'pendingPay') {
+          setPayFor(target);
+          setPayPage(true);
+        } else {
+          setPage('orderDetail');
+        }
       }
     })();
     const onNav = () => {
       const nav = takeNotifyNavigation('meituan');
       if (nav?.contactId && sessionRef.current) {
+        const target = mtLoadOrders(mtUidOf(sessionRef.current)).find((o) => o.id === nav.contactId);
         setOrderId(nav.contactId);
         setTab('orders');
-        setPage('orderDetail');
+        if (nav.pay && target && target.status === 'pendingPay') {
+          setPayFor(target);
+          setPayPage(true);
+        } else {
+          setPage('orderDetail');
+        }
       }
     };
     window.addEventListener(ISLAND_NAV_EVENT, onNav);

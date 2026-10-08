@@ -10,7 +10,7 @@
  *   已付 = 代付人头像行 + 支付成功 + 金额 + 渠道 + 付款须知 + 完成 + 订单商品卡。
  */
 import { useEffect, useState } from 'react';
-import { ChevronLeft, CircleCheck, Clock as ClockIcon, ShieldCheck } from 'lucide-react';
+import { ChevronLeft, CircleCheck, Clock as ClockIcon, Loader2, ShieldCheck } from 'lucide-react';
 import { FoodImg } from './mt-food-img';
 import { MT_PROXY_CARD_EVENT, mtGetProxy, mtProxyChannelName, mtProxyPayOrder } from '@/lib/ios/mt-proxy-pay';
 
@@ -146,11 +146,15 @@ export function MtProxyDetailPage({
   const [paying, setPaying] = useState(false);
   const p = mtGetProxy(pid);
 
-  // 代付状态被别处更新（订单侧/另一端）→ 重读渲染
+  // 代付状态被别处更新（订单侧/另一端/AI 决策）→ 重读渲染
   useEffect(() => {
     const onCard = () => setVer((v) => v + 1);
     window.addEventListener(MT_PROXY_CARD_EVENT, onCard);
-    return () => window.removeEventListener(MT_PROXY_CARD_EVENT, onCard);
+    window.addEventListener('mt-orders-changed', onCard);
+    return () => {
+      window.removeEventListener(MT_PROXY_CARD_EVENT, onCard);
+      window.removeEventListener('mt-orders-changed', onCard);
+    };
   }, []);
   void ver;
 
@@ -173,6 +177,9 @@ export function MtProxyDetailPage({
   const paid = p.status === 'paid';
   const channel = p.paidChannel ?? mtProxyChannelName(p.idp);
   const platform = p.idp === 'wx' ? '微信' : 'QQ';
+  // 代付方向：'friend' = AI 好友代付（付款决策由对方 AI 自主做出，本页只等待）；
+  // 'me' = 机主代付（AI 角色发起，聊天端打开者就是付款人，保留立即代付）
+  const meDir = p.direction === 'me';
 
   const payNow = async () => {
     if (paying || paid) return;
@@ -215,7 +222,7 @@ export function MtProxyDetailPage({
               <AvatarImg src={p.fromAvatar} name={p.fromName} />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[17px] font-semibold text-black/90">{p.fromName}</p>
-                <p className="mt-0.5 truncate text-[13px] text-black/45">拍下了订单，快来帮我付一下吧～</p>
+                <p className="mt-0.5 truncate text-[13px] text-black/45">{meDir ? '拍了订单，想请你帮TA付一下～' : '拍下了订单，快来帮我付一下吧～'}</p>
               </div>
             </>
           )}
@@ -246,7 +253,7 @@ export function MtProxyDetailPage({
               {fmt2(p.amount)}
             </p>
             <p className="mt-1 text-[13px] text-black/45" data-testid="mt-proxy-channel">
-              {paid ? channel : `等待${p.contactName}代付（${platform}好友）`}
+              {paid ? channel : meDir ? `等待你代付（${platform}）` : `等待${p.contactName}代付（${platform}好友）`}
             </p>
             {paid && p.paidAt && <p className="mt-0.5 text-[11px] text-black/30">支付时间 {fmtFull(p.paidAt)}</p>}
           </div>
@@ -262,7 +269,8 @@ export function MtProxyDetailPage({
             </p>
           </div>
 
-          {/* 主按钮：待付 + 好友视角 = 立即代付；其余 = 完成/等待 */}
+          {/* 主按钮：待付 + 机主付款方向（聊天端）= 立即代付；好友付款方向 = 等待对方代付
+              （AI 按人设/记忆自主决策，不再由用户替角色点「立即代付」）；美团端发起者只读 */}
           {paid ? (
             <button
               type="button"
@@ -272,7 +280,7 @@ export function MtProxyDetailPage({
             >
               完成
             </button>
-          ) : canPay ? (
+          ) : canPay && meDir ? (
             <button
               type="button"
               onClick={() => void payNow()}
@@ -280,8 +288,23 @@ export function MtProxyDetailPage({
               data-testid="mt-proxy-pay-btn"
               className="mt-4 h-[46px] w-full rounded-full bg-gradient-to-r from-[#FFC300] to-[#FF9500] text-[16px] font-semibold text-white shadow-[0_3px_10px_rgba(255,170,0,0.35)] active:opacity-85 disabled:opacity-60"
             >
-              {paying ? '正在支付…' : `立即代付（以${p.contactName}的身份支付）`}
+              {paying ? '正在支付…' : `立即代付（帮${p.fromName}支付）`}
             </button>
+          ) : canPay ? (
+            <div>
+              <button
+                type="button"
+                disabled
+                data-testid="mt-proxy-wait-btn"
+                className="mt-4 flex h-[46px] w-full cursor-not-allowed items-center justify-center gap-2 rounded-full bg-[#F5F6F7] text-[15px] text-black/45"
+              >
+                <Loader2 className="h-4 w-4 animate-spin text-black/35" />
+                等待{p.contactName}代付…
+              </button>
+              <p className="mt-2 text-center text-[11px] leading-relaxed text-black/35">
+                TA会根据自己的意愿决定是否代付，可以去聊天里提醒TA
+              </p>
+            </div>
           ) : (
             <button type="button" disabled className="mt-4 h-[46px] w-full cursor-not-allowed rounded-full bg-[#F5F6F7] text-[15px] text-black/35">
               等待好友代付…

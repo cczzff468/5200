@@ -559,6 +559,11 @@ function isActiveChat(app: ProactiveApp, cid: string): boolean {
   return activeChats.has(`${app}:${cid}`);
 }
 
+/** 跨模块查询：某会话是否正被用户查看（美团 AI 决策投递角标守卫用） */
+export function isProactiveChatActive(app: ProactiveApp, cid: string): boolean {
+  return activeChats.has(`${app}:${cid}`);
+}
+
 // ---------------- LLM 调用（两级兜底：用户配置 → 内置模型；与 friend-state 同款） ----------------
 
 async function callLlmTwoTier(system: string, userContent: string, apiConfig: ApiConfig): Promise<string> {

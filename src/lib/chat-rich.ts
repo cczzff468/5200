@@ -136,7 +136,12 @@ export type RichActionKind =
   | 'save-to-album'
   | 'pick-album-avatar'
   | 'pick-album-bg'
-  | 'pick-album-send';
+  | 'pick-album-send'
+  // 美团外卖/代付联动（mt-ai-engage 执行器）：AI 为机主代付/帮付/代点外卖/给自己点外卖
+  | 'mt-proxy-pay'
+  | 'mt-pay-for'
+  | 'mt-order-draft'
+  | 'mt-order-self';
 
 /** 拉黑类动作（targetId 语义不同：request-unblock 的 targetId = 申请理由全文，其余为空） */
 export const BLOCK_ACTION_KINDS: ReadonlySet<RichActionKind> = new Set([
@@ -250,11 +255,19 @@ const ACTION_LABELS: Record<string, RichActionKind> = {
   选图发送: 'pick-album-send',
   换头像: 'change-avatar',
   存相册: 'save-to-album',
+  // 美团外卖/代付联动动作（mt-ai-engage；长词在前）
+  帮点外卖: 'mt-order-draft',
+  给我点外卖: 'mt-order-draft',
+  自己点外卖: 'mt-order-self',
+  给TA点外卖: 'mt-order-self',
+  帮我代付: 'mt-proxy-pay',
+  代付: 'mt-proxy-pay',
+  帮付: 'mt-pay-for',
 };
 
-const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|同意解除拉黑|拒绝解除拉黑|申请解除拉黑|解除拉黑|拉黑|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请|换朋友圈背景|选图设头像|选图设背景|选图发送|换头像|存相册)(?:[:：]([^\][]*))?\]/g;
+const ACTION_RE = /\[(领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|同意解除拉黑|拒绝解除拉黑|申请解除拉黑|解除拉黑|拉黑|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请|帮点外卖|给我点外卖|自己点外卖|给TA点外卖|帮我代付|代付|帮付|换朋友圈背景|选图设头像|选图设背景|选图发送|换头像|存相册)(?:[:：]([^\][]*))?\]/g;
 /** 段尾未闭合的动作标记（切分边界切碎时与后续段合并） */
-export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|同意解除拉黑|拒绝解除拉黑|申请解除拉黑|解除拉黑|拉黑|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请|换朋友圈背景|选图设头像|选图设背景|选图发送|换头像|存相册)(?:[:：][^\][]*)?$/;
+export const ACTION_TAIL_RE = /\[(?:领取红包|退回红包|拒收红包|收款转账|退回转账|拒收转账|收下亲属卡|拒收亲属卡|同意解除拉黑|拒绝解除拉黑|申请解除拉黑|解除拉黑|拉黑|禁言|解禁|取消禁言|移出群聊|踢出群聊|移出|踢出|改群名|修改群名|改公告|修改公告|更新公告|创建群聊|建群|邀请进群|拉进群|拉人进群|邀请|任命管理员|设管理员|拉回群聊|设为管理员|转让群主|放弃邀请|帮点外卖|给我点外卖|自己点外卖|给TA点外卖|帮我代付|代付|帮付|换朋友圈背景|选图设头像|选图设背景|选图发送|换头像|存相册)(?:[:：][^\][]*)?$/;
 
 /** 回复按出现顺序切开的片段：普通文字块 或 处理动作（两者交错，保持流式输出顺序） */
 export type RichActionPart = { type: 'text'; text: string } | { type: 'action'; action: RichAction };
@@ -330,6 +343,10 @@ export function extractRichActionParts(text: string): RichActionPart[] {
       // 空 body 时 targetId 留空，执行器兜底取当回合最后一张图
       const targetId = raw.split(/[:：]/)[0].trim();
       parts.push({ type: 'action', action: { kind, targetId } });
+    } else if (kind === 'mt-proxy-pay' || kind === 'mt-pay-for' || kind === 'mt-order-draft' || kind === 'mt-order-self') {
+      // 美团联动动作：body 整段保留（商家|菜品串里可能出现冒号/逗号，不能按冒号截断；
+      // [代付:pid]/[帮付:订单id] 同样整段透传，执行器自行校验）
+      if (raw) parts.push({ type: 'action', action: { kind, targetId: raw } });
     } else if (kind === 'pick-album-avatar' || kind === 'pick-album-bg' || kind === 'pick-album-send') {
       // [选图设头像:相册条目ID] / [选图设背景:相册条目ID] / [选图发送:相册条目ID]
       // targetId = body 第一段（相册条目 ID，必须原样抄自【相册清单】）；空 body 丢弃（不允许选不存在的图）

@@ -35,11 +35,11 @@ export interface MtProxyPay {
   orderId: string;
   /** 代付渠道平台 */
   idp: 'wx' | 'qq';
-  /** 好友（联系人） */
+  /** 付款人联系人：direction 'friend' = 代付好友（AI 角色）；'me' = 机主自己 */
   contactId: string;
   contactName: string;
   contactAvatar: string | null;
-  /** 请求人（美团登录账号本人） */
+  /** 请求人（direction 'friend' = 美团登录账号本人；'me' = 发起请求的 AI 角色） */
   fromName: string;
   fromAvatar: string | null;
   merchantName: string;
@@ -54,6 +54,11 @@ export interface MtProxyPay {
   paidAt?: number;
   /** 好友支付渠道名（微信支付 / QQ钱包） */
   paidChannel?: string;
+  /** 代付方向（旧记录无此字段按 'friend' 处理）：'friend' = 好友代付（请求人=机主，付款人=AI 角色，
+   *  付款决策由角色 AI 根据人设/记忆自主做出）；'me' = 机主代付（AI 角色发起，请机主帮付） */
+  direction?: 'friend' | 'me';
+  /** 卡片所在聊天的联系人 id（direction 'me' 时 = 发起角色 id，与付款人 contactId 不同）；缺省 = contactId */
+  chatContactId?: string;
 }
 
 /** 聊天里的代付卡片消息（微信 WxMsg / QQ QQMsg 同构，kind='mtpay'） */
@@ -119,6 +124,8 @@ export function mtGetProxy(pid: string): MtProxyPay | null {
     createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
     paidAt: typeof p.paidAt === 'number' ? p.paidAt : undefined,
     paidChannel: typeof p.paidChannel === 'string' ? p.paidChannel : undefined,
+    direction: p.direction === 'me' ? 'me' : 'friend',
+    chatContactId: typeof p.chatContactId === 'string' && p.chatContactId ? p.chatContactId : undefined,
   };
 }
 
@@ -129,6 +136,11 @@ function mtSetProxy(p: MtProxyPay): void {
 /** 平台支付渠道名（完成卡/详情页展示） */
 export function mtProxyChannelName(idp: 'wx' | 'qq'): string {
   return idp === 'wx' ? '微信支付' : 'QQ钱包';
+}
+
+/** 代付卡片所在聊天（direction 'me' = 发起角色聊天） */
+export function mtProxyChatCid(p: MtProxyPay): string {
+  return p.chatContactId ?? p.contactId;
 }
 
 // ---------------- 聊天卡片写入 ----------------
@@ -225,6 +237,11 @@ export async function mtCreateProxyRequest(opts: MtCreateProxyOpts): Promise<MtC
     kind: 'mtpay',
     mtpay: { pid: proxy.id, role: 'req' },
   });
+  // 目标为 AI 角色（mtCreateProxyRequest 已限定 kind!=='user'）→ 调度该角色的自主代付决策：
+  // 延时数秒后按人设/记忆/上下文决定是否代付（mt-ai-engage；动态 import 防模块循环）
+  void import('./mt-ai-engage')
+    .then((m) => m.scheduleMtProxyAiDecision(proxy.id))
+    .catch(() => undefined);
   return { ok: true, proxy };
 }
 
@@ -244,15 +261,100 @@ export function findPendingProxyOfOrder(uid: string, orderId: string): MtProxyPa
   return out;
 }
 
+// ---------------- AI 角色发起代付请求（请机主帮付） ----------------
+
+export interface MtCreateProxyByCharOpts {
+  order: MtOrder;
+  idp: 'wx' | 'qq';
+  /** 发起请求的 AI 角色联系人（卡片落在该角色聊天） */
+  char: { id: string; name: string; avatar: string | null };
+  /** 付款人（机主）联系人信息 */
+  payer: { id: string; name: string; avatar: string | null };
+}
+
+/**
+ * AI 角色请机主代付（direction 'me'）：生成请求 + 请求卡（角色→机主）落在该角色聊天。
+ * 同一订单同角色防重复；订单非待支付拒绝。不挂订单 proxy 快照（订单在机主美团账号里，
+ * 「已请 TA 代付」语义只适用好友代付方向；机主可直接在美团收银台支付本单）。
+ */
+export async function mtCreateProxyRequestByChar(opts: MtCreateProxyByCharOpts): Promise<MtCreateProxyResult> {
+  const { order, idp, char, payer } = opts;
+  if (order.status !== 'pendingPay') return { ok: false, error: '订单不是待支付状态' };
+  const dup = findPendingProxyOfOrder(order.uid, order.id).find((p) => p.direction === 'me' && p.chatContactId === char.id);
+  if (dup) return { ok: false, error: '已向机主发送过代付请求' };
+
+  const proxy: MtProxyPay = {
+    id: genPid(),
+    uid: order.uid,
+    orderId: order.id,
+    idp,
+    contactId: payer.id,
+    contactName: payer.name,
+    contactAvatar: payer.avatar,
+    fromName: char.name,
+    fromAvatar: char.avatar,
+    merchantName: order.merchantName,
+    merchantEmoji: order.merchantEmoji,
+    merchantImg: order.merchantImg,
+    amount: order.total,
+    itemCount: order.items.reduce((s, i) => s + i.qty, 0),
+    items: order.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price, spec: i.spec, emoji: i.emoji, img: i.img })),
+    note: order.note,
+    status: 'pending',
+    createdAt: Date.now(),
+    direction: 'me',
+    chatContactId: char.id,
+  };
+  mtSetProxy(proxy);
+  try {
+    const idx = kvGet<string[]>('mt-proxy-index') ?? [];
+    if (!idx.includes(proxy.id)) kvSet('mt-proxy-index', [...idx, proxy.id].slice(-50));
+  } catch {
+    /* 忽略 */
+  }
+  // 请求卡片进角色聊天（角色发给机主）
+  insertProxyCard(idp, char.id, {
+    id: genMsgId(),
+    role: 'peer',
+    content: `[美团代付]想请你帮我付一下¥${fmt2(proxy.amount)}的订单`,
+    time: Date.now(),
+    kind: 'mtpay',
+    mtpay: { pid: proxy.id, role: 'req' },
+  });
+  return { ok: true, proxy };
+}
+
+/** 某聊天内全部待处理代付请求（两个方向都在该聊天内流转；动作规则/等待态用） */
+export function mtPendingProxiesOfChat(chatContactId: string): MtProxyPay[] {
+  const out: MtProxyPay[] = [];
+  try {
+    const ids = kvGet<string[]>('mt-proxy-index') ?? [];
+    for (const pid of ids) {
+      const p = mtGetProxy(pid);
+      if (p && p.status === 'pending' && mtProxyChatCid(p) === chatContactId) out.push(p);
+    }
+  } catch {
+    /* 忽略 */
+  }
+  return out;
+}
+
 // ---------------- 好友代付（聊天侧详情页「立即代付」） ----------------
 
 export type MtProxyPayResult = { ok: true; proxy: MtProxyPay; order: MtOrder } | { ok: false; error: string };
 
 /**
- * 好友代付：请求置 paid + 订单支付完成（状态机接手）+ 完成卡片回聊天 + 灵动岛通知。
- * 演示语义：好友以「微信支付/QQ钱包」付款，不扣本机任何钱包余额。
+ * 代付支付：请求置 paid + 订单支付完成（状态机接手）+ 完成卡片回聊天 + 灵动岛通知。
+ * 演示语义：付款人以「微信支付/QQ钱包」付款，不扣本机任何钱包余额。
+ * direction 'friend'：AI 好友代付机主订单（完成卡 role='peer'）；
+ * direction 'me'：机主代付 AI 的订单（完成卡 role='me'）。
+ * deferCard：AI 动作路径用——不直接落库卡片，把完成卡消息返回给调用方随回复队列投递
+ * （防 buildReplyMsgs 的 cur 快照覆盖丢卡）；不传 = 立即落库+广播（UI 按钮路径）。
  */
-export function mtProxyPayOrder(pid: string): MtProxyPayResult {
+export function mtProxyPayOrder(
+  pid: string,
+  opts?: { deferCard?: boolean },
+): MtProxyPayResult & { card?: MtProxyCardMsg } {
   const p = mtGetProxy(pid);
   if (!p) return { ok: false, error: '代付请求不存在或已被清理' };
   if (p.status !== 'pending') return { ok: false, error: '该代付请求已处理，请勿重复支付' };
@@ -265,6 +367,7 @@ export function mtProxyPayOrder(pid: string): MtProxyPayResult {
   const now = Date.now();
   const tuangou = cur.kind === 'tuangou';
   const channel = mtProxyChannelName(p.idp);
+  const meDir = p.direction === 'me';
   const paid: MtOrder = {
     ...cur,
     status: tuangou ? 'completed' : 'pendingAccept',
@@ -272,8 +375,8 @@ export function mtProxyPayOrder(pid: string): MtProxyPayResult {
     // 配送时长与收银台直付同口径（5~30 分钟，按订单号确定性推导）
     ...(tuangou ? {} : { etaAt: now + mtDeliveryMinutesOf(cur.id) * 60_000 }),
     payIdp: p.idp,
-    payChannelLabel: `好友代付 · ${channel}（${p.contactName}）`,
-    // 好友代付不落本机账户渠道：退款原路退还代付人（mtRefundToOrigin 无 methodId 自然跳过本机入账）
+    payChannelLabel: meDir ? `代付 · ${channel}（${p.contactName}）` : `好友代付 · ${channel}（${p.contactName}）`,
+    // 代付不落本机账户渠道：退款原路退还代付人（mtRefundToOrigin 无 methodId 自然跳过本机入账）
     payMethodId: undefined,
     payFc: false,
     statusLog: [...cur.statusLog, { status: tuangou ? 'completed' : 'pendingAccept', at: now }],
@@ -284,18 +387,24 @@ export function mtProxyPayOrder(pid: string): MtProxyPayResult {
   const done: MtProxyPay = { ...p, status: 'paid', paidAt: now, paidChannel: channel };
   mtSetProxy(done);
 
-  // 完成卡片（好友发回给我）
-  insertProxyCard(p.idp, p.contactId, {
+  // 完成卡片（direction 'friend'：好友发回给我；'me'：我付完回执给角色）
+  const card: MtProxyCardMsg = {
     id: genMsgId(),
-    role: 'peer',
-    content: `[美团代付]已帮你代付¥${fmt2(p.amount)}`,
+    role: meDir ? 'me' : 'peer',
+    content: meDir ? `[美团代付]已帮${p.fromName}代付¥${fmt2(p.amount)}` : `[美团代付]已帮你代付¥${fmt2(p.amount)}`,
     time: now,
     kind: 'mtpay',
     mtpay: { pid: p.id, role: 'done' },
-  });
+  };
+  if (opts?.deferCard) {
+    // AI 动作路径：卡片随回复投递管线落盘（调用方负责 out.push）
+    window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+    return { ok: true, proxy: done, order: paid, card };
+  }
+  insertProxyCard(p.idp, mtProxyChatCid(p), card);
 
   window.dispatchEvent(new CustomEvent('mt-orders-changed'));
-  // 灵动岛通知（美团订单 · 好友已代付；点击进订单详情）
+  // 灵动岛通知（美团订单 · 代付完成；点击进订单详情）
   void import('./island-notify')
     .then((m) =>
       m.pushChatNotification({
@@ -303,10 +412,52 @@ export function mtProxyPayOrder(pid: string): MtProxyPayResult {
         app: 'meituan',
         title: '美团订单',
         avatar: '/icons/meituan-app.png',
-        body: `好友${p.contactName}已代付¥${fmt2(p.amount)}，订单已支付`,
+        body: meDir ? `你已帮${p.fromName}代付¥${fmt2(p.amount)}，订单已支付` : `好友${p.contactName}已代付¥${fmt2(p.amount)}，订单已支付`,
         target: { app: 'meituan', contactId: paid.id },
       })
     )
     .catch(() => undefined);
   return { ok: true, proxy: done, order: paid };
+}
+
+/**
+ * AI 帮机主代付指定待支付订单（[帮付:订单ID] 执行器用）：
+ * 建 direction 'friend' 代付记录（付款人 = 该 AI 角色）→ 立即支付（deferCard，完成卡由调用方投递）。
+ * 幂等：订单非待支付/已有同角色待处理请求时拒绝。
+ */
+export function mtAiPayPendingOrder(
+  order: MtOrder,
+  char: { id: string; name: string; avatar: string | null },
+  idp: 'wx' | 'qq',
+): MtProxyPayResult & { card?: MtProxyCardMsg } {
+  if (order.status !== 'pendingPay') return { ok: false, error: '订单不是待支付状态' };
+  const proxy: MtProxyPay = {
+    id: genPid(),
+    uid: order.uid,
+    orderId: order.id,
+    idp,
+    contactId: char.id,
+    contactName: char.name,
+    contactAvatar: char.avatar,
+    fromName: char.name,
+    fromAvatar: char.avatar,
+    merchantName: order.merchantName,
+    merchantEmoji: order.merchantEmoji,
+    merchantImg: order.merchantImg,
+    amount: order.total,
+    itemCount: order.items.reduce((s, i) => s + i.qty, 0),
+    items: order.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price, spec: i.spec, emoji: i.emoji, img: i.img })),
+    note: order.note,
+    status: 'pending',
+    createdAt: Date.now(),
+    direction: 'friend',
+  };
+  mtSetProxy(proxy);
+  try {
+    const idx = kvGet<string[]>('mt-proxy-index') ?? [];
+    if (!idx.includes(proxy.id)) kvSet('mt-proxy-index', [...idx, proxy.id].slice(-50));
+  } catch {
+    /* 忽略 */
+  }
+  return mtProxyPayOrder(proxy.id, { deferCard: true });
 }

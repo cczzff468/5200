@@ -37,11 +37,13 @@ import { playNotifySound } from './notify-sound';
 /** 通知归属 App（AppId 的聊天/生活服务子集；meituan = 订单状态通知） */
 export type NotifyApp = 'wechat' | 'qq' | 'chat' | 'meituan';
 
-/** 点击跳转目标：单聊给 contactId，群聊给 groupId（群聊宿主在 wechat/qq App 内） */
+/** 点击跳转目标：单聊给 contactId，群聊给 groupId（群聊宿主在 wechat/qq App 内）；
+ *  meituan 订单目标可带 pay=true（目标订单待支付时直达美团收银台，否则进订单详情） */
 export interface NotifyTarget {
   app: NotifyApp;
   contactId?: string;
   groupId?: string;
+  pay?: boolean;
 }
 
 /** 各端聊天 finalize 调用的通知输入（正文已由调用方按消息类型映射好占位符） */
@@ -547,8 +549,8 @@ export function takeNotifyNavigation(app: NotifyApp): NotifyTarget | null {
  * 目标 App 未打开时由其挂载后消费 pending，已打开时事件驱动立即打开会话。
  * 锁屏/熄屏时不跳转（与通知点击一致）。
  */
-export function navigateToChatSession(app: NotifyApp, contactId: string): void {
-  navigateToNotifyTarget({ app, contactId });
+export function navigateToChatSession(app: NotifyApp, contactId: string, opts?: { pay?: boolean }): void {
+  navigateToNotifyTarget({ app, contactId, pay: opts?.pay });
 }
 
 // ---------------- 消息 → 通知预览文本（各端共用映射；返回 null = 不弹） ----------------

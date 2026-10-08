@@ -151,6 +151,9 @@ import { triggerIncomingCall, useIncomingCall, type IncomingCallSnapshot } from 
 import { buildLocationBlock, locationAiText, locDataOf, locFromRich } from '@/lib/ios/chat-location';
 import { MtPayBubble, MtProxyDetailPage } from './mt-proxy-detail';
 import { MT_PROXY_CARD_EVENT } from '@/lib/ios/mt-proxy-pay';
+// 美团×AI 联动：QQ 聊天历史里的代付/分享/代点卡片序列化为 AI 可读文本（动作执行与代点卡只在微信端接入）
+import { mtDraftHistoryLine, mtOrderShareHistoryLine, mtProxyHistoryLine, stripMtEchoText } from '@/lib/ios/mt-ai-engage';
+import { MtDraftBubble } from './mt-draft-card';
 import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
 import { MtShareBubble } from './mt-share-card';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
@@ -384,7 +387,7 @@ interface QQMsg {
   time: number;
   /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
    *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；textcard = 文字图片卡片（card 有值，无生图依赖）；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片 */
-  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare';
+  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft';
   /** 歌曲卡片（kind='song'，Task 68 音乐 × AI）：结构同微信端 */
   song?: { name: string; artist: string; cover?: string; songId?: number; note?: string; autoPlay?: boolean; inviteDone?: boolean; agree?: boolean };
   /** 语音消息数据（kind='voice'；音频 dataURL + 时长 + 波形 + 转写，与微信端共用 VoiceMsgData 结构） */
@@ -431,6 +434,8 @@ interface QQMsg {
   mtpay?: { pid: string; role: 'req' | 'done' };
   /** 美团订单分享动态卡片（kind='mtshare'）：sid = 分享快照（mt-share:<sid>），状态时间线实时跟订单走 */
   mtshare?: { sid: string };
+  /** 美团 AI 代点外卖草稿卡（kind='mtdraft'）：did = 草稿（mt-draft:<did>）；QQ 端仅历史序列化，卡片渲染在微信端 */
+  mtdraft?: { did: string };
 }
 
 /** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账；转账收款改用接收卡片消息）：居中灰字 + 彩色尾词 */
@@ -4264,7 +4269,7 @@ function ChatPage({
               }
               // F1 兕底：尾部未闭合的半截照片标签剥掉不投递（后台接力整段直入本管线时防「[图片:黄昏的咖」
               // 半截上屏；流式路径上游已用 splitUnfinishedPhotoTag 提前切走尾段，此处通常为空操作）
-              const safePhotoText = stripUnfinishedPhotoTag(photoFreeText);
+              const safePhotoText = stripMtEchoText(stripUnfinishedPhotoTag(photoFreeText));
               // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
               // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
               const clean = cleanBubbleText(stickersOnNow ? safePhotoText : stripEmojiText(safePhotoText.replace(/\[表情包\]|\[表情\]/g, ' ')));
@@ -4387,7 +4392,13 @@ function ChatPage({
                   ? `[亲属卡 ID:${m.fam.cid ?? m.id} 每月额度¥${m.fam.monthlyLimit}${m.fam.message ? ` "${m.fam.message}"` : ''}，${cardStateLabel(m)}]`
                   : m.kind === 'groupcard' && m.gcard
                     ? `[群聊邀请卡片：${m.gcard.name}（${m.gcard.inviterName || '群友'}邀请${m.gcard.memberNames?.length ? `，成员：${m.gcard.memberNames.join('、')}` : ''}），${m.gcard.status === 'pending' ? '待处理' : m.gcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
-                    : m.content),
+                    : m.kind === 'mtpay' && m.mtpay
+                      ? mtProxyHistoryLine(m.mtpay.pid, m.mtpay.role, m.role === 'me' ? me.name : peer.name)
+                      : m.kind === 'mtshare' && m.mtshare
+                        ? mtOrderShareHistoryLine(m.mtshare.sid)
+                        : m.kind === 'mtdraft' && m.mtdraft
+                          ? mtDraftHistoryLine(m.mtdraft.did, peer.name)
+                          : m.content),
         };
       });
 
@@ -6168,6 +6179,11 @@ function ChatPage({
                   /* 美团订单分享动态卡片（订单详情右上角分享；状态时间线实时跟订单走） */
                   <div {...bubblePress}>
                     <MtShareBubble sid={m.mtshare.sid} />
+                  </div>
+                ) : m.kind === 'mtdraft' && m.mtdraft ? (
+                  /* 美团 AI 代点外卖草稿卡（动作只在微信端接入；QQ 端兜底渲染同款卡片） */
+                  <div {...bubblePress}>
+                    <MtDraftBubble did={m.mtdraft.did} onToast={onToast} />
                   </div>
                 ) : m.kind === 'location' && m.loc ? (
                   <div {...bubblePress}>
