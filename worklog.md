@@ -17031,3 +17031,26 @@ Stage Summary:
 - 支付密码三端独立：美团（余额+银行卡）验美团密码、微信支付验微信密码、QQ支付验QQ密码，实测互不串用
 - 开发票成为真实功能（待开票订单+抬头表单+开票记录），地址入口直达收货地址管理
 - 改动文件：src/components/apps/meituan.tsx / src/lib/ios/meituan-store.ts
+
+---
+Task ID: 7
+Agent: Z.ai Code (main)
+Task: 美团登录规则修正——仅一键登录需要微信/QQ App 在线，账密登录完全独立（无需登录微信/QQ App）
+
+Work Log:
+- 需求澄清（用户原话）：「美团微信QQ登录一键登录才需要登录微信QQ，使用微信QQ账号密码登录，不需要登录QQ微信APP」
+- meituan-store.ts：
+  - MtSession 新增 via?: 'oneclick' | 'password'（旧会话无字段按 oneclick 处理，mtGetSession 解析校验）
+  - mtValidateSession：wx/qq 会话仅 when via !== 'password' 才校验 mtIdpLoggedIn（一键会话跟随对应 App 登录态；账密会话独立，App 未登录/退出均不失效）；contactId 有效性校验保留
+  - mtIdpLoggedIn 修复联动误判：微信/QQ 2025 退出行为保留会话键（供免密切回）+ 置「自由登录墙」标记 → 原逻辑只看会话键导致退出后美团仍视为在线。现增加 isForceLoginWallActive(idp) 判定，登录墙激活即视为未登录（与用户视角一致）
+- meituan.tsx LoginPage：
+  - pwdLogin 移除「对应 App 未在线拦截」与「与当前在线账号一致性校验」，账密纯凭据校验（loginWechat/loginQQ 查联系人库，本就不依赖会话）后直接登录，onLogin 带 via: 'password'
+  - confirmAuth（一键授权卡）onLogin 带 via: 'oneclick'
+  - 密码表单提示改为两行：「无需登录{idpName}App，凭账号密码即可登录」+「密码与{idpName}App登录密码一致」
+- 端到端实测（agent-browser，全新档案：联系人建机主陶凡 taofan123/w123456）：①微信未登录点一键登录 → toast 拦截 ✓ ②微信未登录选微信卡 → 账密 taofan123/w123456 → 直接进美团首页 ✓ ③关掉重开美团 → 会话保持不登出 ✓ ④登录微信 App 后一键登录 → 授权卡「陶凡」→ 同意授权 → 进美团 ✓ ⑤微信退出登录 → 重开美团 → 联动登出回登录页（修复后生效）✓ ⑥退出态再点一键登录 → 再次拦截 ✓ ⑦最终态账密登录回归成功 ✓
+- bunx tsc --noEmit 0 错误；npx eslint（meituan.tsx/meituan-store.ts）0 问题；console 无错误、dev.log 无异常
+
+Stage Summary:
+- 登录规则最终形态：一键登录=授权联动（需微信/QQ App 在线，App 退出美团同步登出）；账密登录=独立通道（凭账号密码直接登录，会话不受微信/QQ App 登录态影响）
+- 附带修复：mtIdpLoggedIn 现按「自由登录墙」判定微信/QQ 未登录，退出 App 后美团一键会话正确联动登出（此前退出不删会话键导致联动失效）
+- 改动文件：src/lib/ios/meituan-store.ts / src/components/apps/meituan.tsx

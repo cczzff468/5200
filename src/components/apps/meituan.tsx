@@ -428,7 +428,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
     setBusy(true);
     try {
       await new Promise((r) => setTimeout(r, 700));
-      onLogin({ idp: auth.idp, contactId: auth.contactId, name: auth.name, avatar: auth.avatar, loginAt: Date.now() });
+      onLogin({ idp: auth.idp, contactId: auth.contactId, name: auth.name, avatar: auth.avatar, via: 'oneclick', loginAt: Date.now() });
     } finally {
       setBusy(false);
     }
@@ -443,16 +443,12 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
     setPwd('');
   };
 
-  /** 账号密码登录：校验对应微信/QQ 的真实账号密码（与微信/QQ App 同源校验） */
+  /** 账号密码登录：校验对应微信/QQ 的真实账号密码（与微信/QQ App 同源校验）。
+   *  需求：仅一键登录才要求微信/QQ App 在线；账密登录独立，凭账号密码即可登录（无需打开对应 App） */
   const pwdLogin = async () => {
     if (busy || !idp) return;
     if (!agree) {
       onToast('请先阅读并同意《美团用户协议》和《隐私政策》');
-      return;
-    }
-    // 登录态联动：对应授权源 App 未在线 → 拦截并引导
-    if (!mtIdpLoggedIn(idp)) {
-      onToast(idp === 'wx' ? '微信尚未登录，请先登录微信后再试' : 'QQ尚未登录，请先登录QQ后再试');
       return;
     }
     const acc = account.trim();
@@ -472,14 +468,8 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
         setPwdErr(res.error);
         return;
       }
-      // 一致性校验：输入的账号必须与当前微信/QQ App 在线的账号一致（美团登录态跟随对应 App 会话）
-      const cur = await mtResolveIdpIdentity(idp);
-      if (cur.contactId && res.user.id !== cur.contactId) {
-        const msg = idp === 'wx' ? '该账号与当前微信登录的账号不一致，请切换微信账号后再试' : '该账号与当前QQ登录的账号不一致，请切换QQ账号后再试';
-        setPwdErr(msg);
-        return;
-      }
-      onLogin({ idp, contactId: res.user.id, name: res.user.name, avatar: res.user.avatar, loginAt: Date.now() });
+      // 账密会话独立于微信/QQ App 登录态（via: 'password'），不校验与当前在线账号的一致性
+      onLogin({ idp, contactId: res.user.id, name: res.user.name, avatar: res.user.avatar, via: 'password', loginAt: Date.now() });
     } finally {
       setBusy(false);
     }
@@ -583,8 +573,11 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
           </div>
           {pwdErr && <p className="px-2 text-[12px] text-[#FF4B33]" data-testid="login-pwd-err">{pwdErr}</p>}
           <div className="flex items-center justify-between px-2">
-            <p className="text-[12px] text-black/35">密码与{idpName}App登录密码一致</p>
-            <button type="button" onClick={() => onToast('密码找回：请到「联系人」App 查看账号密码')} className="text-[12px] text-black/45 active:opacity-60">
+            <div>
+              <p className="text-[12px] text-black/35">无需登录{idpName}App，凭账号密码即可登录</p>
+              <p className="mt-0.5 text-[12px] text-black/35">密码与{idpName}App登录密码一致</p>
+            </div>
+            <button type="button" onClick={() => onToast('密码找回：请到「联系人」App 查看账号密码')} className="shrink-0 text-[12px] text-black/45 active:opacity-60">
               忘记密码？
             </button>
           </div>

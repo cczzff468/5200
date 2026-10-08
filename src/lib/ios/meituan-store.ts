@@ -9,7 +9,7 @@
  * 支付不在这里：meituan-pay.ts 动态 import 微信/QQ 钱包模块（避免全局加载 1.4 万行聊天模块）。
  */
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
-import { accLs, getActiveAccountFor } from '@/lib/ios/accounts';
+import { accLs, getActiveAccountFor, isForceLoginWallActive } from '@/lib/ios/accounts';
 import { getContact, listContacts } from '@/lib/ios/contacts-store';
 import type { ContactRecord } from '@/lib/contacts';
 import { avatarFor } from '@/lib/contacts';
@@ -24,6 +24,8 @@ export interface MtSession {
   contactId?: string;
   /** 手机号登录：手机号 */
   phone?: string;
+  /** 登录途径：'oneclick' 一键授权（登录态跟随微信/QQ App）；'password' 账号密码（独立于微信/QQ App 登录态）。旧会话无此字段按 oneclick 处理 */
+  via?: 'oneclick' | 'password';
   name: string;
   avatar: string | null;
   loginAt: number;
@@ -50,6 +52,7 @@ export function mtGetSession(): MtSession | null {
       idp: p.idp,
       contactId: typeof p.contactId === 'string' ? p.contactId : undefined,
       phone: typeof p.phone === 'string' ? p.phone : undefined,
+      via: p.via === 'password' || p.via === 'oneclick' ? p.via : undefined,
       name: p.name,
       avatar: typeof p.avatar === 'string' ? p.avatar : null,
       loginAt: typeof p.loginAt === 'number' ? p.loginAt : Date.now(),
@@ -135,19 +138,22 @@ export function mtClearSearchHist(): void {
 // ---------------- 登录身份解析（QQ/微信一键登录） ----------------
 
 /**
- * 微信/QQ App 登录态（需求「微信/QQ 没有登录时美团就登录不了」）：
- * 会话键 `wx-session-user-id` / `qq-session-user-id`（账号作用域）有值 = 对应 App 当前已登录。
- * 与微信/QQ App 自身的会话恢复同源（它们登录/退出时写/删该键），美团读取即时生效。
+ * 微信/QQ App 登录态（需求「一键登录才需要登录微信/QQ，账密登录不需要」）：
+ * 会话键 `wx-session-user-id` / `qq-session-user-id`（账号作用域）有值 = 对应 App 有登录过的账号
+ * （2025 登录态保持：退出也不删键，供免密切回）；但退出后 App 处于「自由登录墙」
+ * （wx/qq-force-login，用户视角即未登录）→ 同样视为未登录。
+ * 与微信/QQ App 自身的登录/退出语义同源，美团读取即时生效。
  */
 export function mtIdpLoggedIn(idp: 'wx' | 'qq'): boolean {
   try {
+    if (isForceLoginWallActive(idp)) return false;
     return Boolean(window.localStorage.getItem(accLs(`${idp}-session-user-id`, idp)));
   } catch {
     return false;
   }
 }
 
-/** 是否至少一个授权源（微信或 QQ）在线：美团任何形式的登录都以此为前置 */
+/** 是否至少一个授权源（微信或 QQ）在线：一键登录/旧手机号会话以此为前置（账密登录不依赖） */
 export function mtAnyIdpLoggedIn(): boolean {
   return mtIdpLoggedIn('wx') || mtIdpLoggedIn('qq');
 }
@@ -184,9 +190,10 @@ export async function mtResolveIdpIdentity(idp: 'wx' | 'qq'): Promise<{ contactI
 
 /**
  * 登录会话有效性校验（打开 App 时调用）：
- * 1) 登录态联动（需求「微信/QQ 没有登录时美团就登录不了」）：
- *    - wx/qq 会话：对应授权源 App 已退出登录 → 美团同步登出（回登录页）；
- *    - phone 会话：微信与 QQ 都不在线 → 同步登出（登录前置已不满足）。
+ * 1) 登录态联动（需求「一键登录才需要登录微信/QQ，账密登录不需要」）：
+ *    - wx/qq 一键会话（via 非 'password'）：对应授权源 App 已退出登录 → 美团同步登出（回登录页）；
+ *    - wx/qq 账密会话（via = 'password'）：独立于微信/QQ App 登录态，App 未登录/退出均不影响；
+ *    - phone 会话：微信与 QQ 都不在线 → 同步登出。
  * 2) wx/qq 会话对应的联系人被删除 → 视为已退出；
  *    本地虚拟账号（联系人库为空时一键登录的兜底，contactId 空）仅校验登录态。
  */
@@ -196,7 +203,8 @@ export async function mtValidateSession(s: MtSession | null): Promise<MtSession 
     if (!s.phone) return null;
     return mtAnyIdpLoggedIn() ? s : null;
   }
-  if (!mtIdpLoggedIn(s.idp)) return null;
+  // 账密登录的会话与微信/QQ App 登录态无关；仅一键授权会话跟随对应 App 会话
+  if (s.via !== 'password' && !mtIdpLoggedIn(s.idp)) return null;
   if (!s.contactId) return s;
   try {
     const c = await getContact(s.contactId);
