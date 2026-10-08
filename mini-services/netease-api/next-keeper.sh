@@ -21,6 +21,12 @@ fi
 echo $$ > "$PIDFILE"
 echo "$(date '+%F %T') keeper started pid=$$" >> "$LOG"
 
+# 顺带拉起网易云 API 守护（ncm-keeper，3010；PID 文件单实例守卫，已在跑则自动退出）
+NCM_KEEPER=/home/z/my-project/mini-services/netease-api/ncm-keeper.sh
+if [ -f "$NCM_KEEPER" ]; then
+  nohup bash "$NCM_KEEPER" >> /tmp/ncm-api.log 2>&1 &
+fi
+
 # TCP 连通性检测（比 HTTP 探测更快更稳，编译慢不会误判）
 port_up() {
   (exec 3<>/dev/tcp/127.0.0.1/3000) 2>/dev/null && { exec 3>&- 3<&-; return 0; }

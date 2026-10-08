@@ -17077,3 +17077,25 @@ Stage Summary:
 - 交付：mt-ai-engage.ts（新，联动引擎：草稿/上下文/规则/执行器/决策调度/记忆）、mt-proxy-pay.ts（direction/deferCard/byChar/帮付）、chat-rich.ts（4 动作）、mt-proxy-detail.tsx（方向感知按钮）、mt-draft-card.tsx（新，代点卡）、wechat.tsx+qq.tsx（历史序列化+微信执行器+气泡）、island-notify.ts（pay 导航）、meituan.tsx（收银台直达）、proactive-msg.ts（导出会话活跃查询）
 - 关键设计：AI 付款全部走 mtProxyPayOrder 既有幂等管线（不碰钱包/不真扣款）；AI 参与的时刻写角色记忆（memAddEventFragment），普通订单靠每回合实时动态块感知（不刷记忆）；记忆按 contactId、订单按美团 uid 天然隔离
 - 已知边界：QQ 端接入历史序列化+决策调度+详情页（共享组件），动作标记执行器与代点卡按钮只在微信端（QQ 卡片也能渲染但确认下单按钮同组件可用）；婉拒路径代码对称已实现（LLM 自由裁量，实测均为同意，符合琳琳人设）
+
+---
+Task ID: 9
+Agent: Z.ai Code (main)
+Task: 修复音乐 App「网络错误 502」——本地部署网易云 API（NeteaseCloudMusicApi）并使其常驻不被沙箱回收
+
+Work Log:
+- 根因定位：音乐 App 默认走同源代理 /api/music/ncm/* → localhost:3010（mini-services/netease-api，NeteaseCloudMusicApi@4.32.0），502 即该 mini service 未运行；实锤：node_modules 缺失 + 3010 无监听 + 双守护进程全灭
+- bun install 补装依赖（169 packages）
+- 新增 mini-services/netease-api/ncm-keeper.sh：与 next-keeper.sh 同模式（PID 单实例守卫 + 端口 3010 掉线自动拉起 + 崩溃 3s 自愈 + node_modules 缺失自动补装），必须用 node 跑（bun crypto 与 eapi 加密不兼容，index.js 注释已验证）
+- next-keeper.sh 增加顺带拉起 ncm-keeper（互护闭环：任一守护被拉起，两个端口都有人看）
+- 关键攻坚——进程常驻：实测 Bash 工具起的后台进程（含 setsid/nohup）在调用结束后被沙箱回收；启动树内进程（tini→start.sh→bun run dev→Next）不受影响。方案：新增 src/instrumentation.ts（Next 16 instrumentation hook），从 Next server 进程内 spawn ncm-keeper（detached），守护链整体挂进启动树 → 跨工具调用存活实测通过
+- 触发加载：dev server 不会因新增 instrumentation.ts 自动重载，借助「改 next.config.ts 触发进程内安全重启」（Next 自身重启，启动树不断）加载成功，[instrumentation] ncm-keeper spawned 落日志
+- 警告治理：child_process 静态 import 被 Turbopack 打进 Edge 产物刷「node-module-in-edge-runtime」警告，改用 process.getBuiltinModule('child_process')（Node≥22.3，本机 Node 24）后新编译零警告
+- 端到端实测（agent-browser）：①扫码登录页二维码正常渲染（502/二维码已过期消失）②游客模式首页排行榜+推荐歌单真实数据加载 ③打开网络热歌榜→播放全部→「琵琶曲(1.1xDJ版)」实际出声播放、进度持续推进、封面/点赞数/灵动岛音乐活动全部正常 ④console/page errors 零报错 ⑤三条链路（直连 3010 / Next 代理 / Caddy 网关 XTransformPort）/login/qr/key 全部 200
+- 已知非问题：「爵士圣经 JAZZ BIBLE vol.1」歌单报「网络错误 404」为网易侧内容下架（接口明示「歌单涉嫌违规，审核中」），非基础设施故障
+- bunx tsc --noEmit 0 错误；npx eslint src/instrumentation.ts 0 问题
+
+Stage Summary:
+- 网易云 API 本地部署完成且常驻：Next(启动树)→instrumentation→ncm-keeper(3010)→netease-api→next-keeper(3000)，四层互相守护、崩溃自愈、依赖缺失自补装
+- 改动文件：src/instrumentation.ts（新）、mini-services/netease-api/ncm-keeper.sh（新）、mini-services/netease-api/next-keeper.sh、next.config.ts（无害字段触发重启）
+- 用户体验恢复：扫码登录/手机号登录/搜索/歌单/播放全链路可用；VIP 歌曲非会员试听 30s 为源站限制
