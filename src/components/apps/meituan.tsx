@@ -28,6 +28,7 @@ import {
   ArrowDown,
   ArrowUp,
   BadgePercent,
+  BadgeJapaneseYen,
   Bell,
   Bike,
   BookOpen,
@@ -52,6 +53,7 @@ import {
   Crosshair,
   Crown,
   Delete,
+  Ellipsis,
   EllipsisVertical,
   Eye,
   EyeOff,
@@ -70,7 +72,6 @@ import {
   Home as HomeIcon,
   House,
   ImageOff,
-  Landmark,
   Languages,
   Laugh,
   LayoutGrid,
@@ -86,12 +87,12 @@ import {
   Orbit,
   Rabbit,
   Receipt,
+  RefreshCw,
   RotateCw,
   ScanLine,
   Scissors,
   Search as SearchIcon,
   Settings,
-  Shield,
   ShieldCheck,
   ShoppingBag,
   ShoppingCart,
@@ -5821,11 +5822,42 @@ const mtW2 = (n: number): string => n.toFixed(2);
 /** 支持添加的银行（演示） */
 const MT_BANK_NAMES = ['中国工商银行', '中国建设银行', '中国农业银行', '中国银行', '招商银行', '交通银行', '中国邮政储蓄银行'];
 
+/** 银行品牌信息：简称 / 卡面品牌色渐变 / 卡号前缀（自动生成卡号用） */
+const MT_BANK_META: Record<string, { short: string; grad: string; prefix: string }> = {
+  中国工商银行: { short: '工', grad: 'from-[#D81920] to-[#8E000A]', prefix: '622202' },
+  中国建设银行: { short: '建', grad: 'from-[#0A6EB4] to-[#054A78]', prefix: '621700' },
+  中国农业银行: { short: '农', grad: 'from-[#0AAE76] to-[#046A47]', prefix: '622848' },
+  中国银行: { short: '中', grad: 'from-[#BC0A24] to-[#7A0016]', prefix: '621785' },
+  招商银行: { short: '招', grad: 'from-[#E4392C] to-[#9E0E14]', prefix: '622588' },
+  交通银行: { short: '交', grad: 'from-[#0A57A8] to-[#03325F]', prefix: '622260' },
+  中国邮政储蓄银行: { short: '邮', grad: 'from-[#0A9455] to-[#045C33]', prefix: '621799' },
+};
+const mtBankMeta = (bank: string) => MT_BANK_META[bank] ?? { short: bank.slice(0, 1) || '卡', grad: 'from-[#F3D3A0] to-[#C8860D]', prefix: '622888' };
+
+/** 自动生成 16 位银行卡号（银行前缀 + 随机 10 位） */
+const mtGenCardNo = (bank: string): string => {
+  let no = mtBankMeta(bank).prefix;
+  for (let i = 0; i < 10; i++) no += Math.floor(Math.random() * 10);
+  return no;
+};
+
+/** 卡号 4 位一组空格分隔展示 */
+const mtFmtCardNo = (s: string): string => s.replace(/(\d{4})(?=\d)/g, '$1 ');
+
+/** 弹层动效（面板上滑 + 遮罩淡入 + 错误抖动），MtWalletSheet / MtPayPwdSheet 共用 */
+const MT_SHEET_CSS =
+  '@keyframes mtSheetUp{from{transform:translateY(55%);opacity:.35}to{transform:translateY(0);opacity:1}}' +
+  '@keyframes mtFadeIn{from{opacity:0}to{opacity:1}}' +
+  '@keyframes mtShake{0%,100%{transform:translateX(0)}20%{transform:translateX(-9px)}40%{transform:translateX(8px)}60%{transform:translateX(-6px)}80%{transform:translateX(4px)}}';
+
 /** 余额页常见问题（首条默认展开） */
-const MT_BALANCE_FAQS: { q: string; a: string }[] = [
+const MT_BALANCE_FAQS: { q: string; a: string; a2?: string; link?: string; tail?: string }[] = [
   {
     q: '为什么要完善账户信息？',
-    a: '根据人民银行《非银行支付机构网络支付业务管理办法》、《支付机构反洗钱和反恐怖融资管理办法》等法律法规规定，支付机构需要对用户进行实名制管理。您在使用余额支付、提现等服务前，需上传身份证照片或绑定本人银行卡完善实名信息，以保障您的账户与资金安全（演示文案）。',
+    a: '根据人民银行《非银行支付机构网络支付业务管理办法》、《支付机构反洗钱和反恐怖融资管理办法》等法律法规规定，支付机构需要对用户进行实名制管理，登记用户的身份基本信息，按规定核对有效身份证件并留存有效身份证件复印件或者影印件。',
+    a2: '因此若您尚未在美团上传身份证，或上传的证件已过期，建议您上传或更新证件信息，以正常使用美团余额充值、支付功能。您可以点击 ',
+    link: '完善身份信息',
+    tail: ' 直接完善您的身份信息。请您放心，美团会严格保障用户隐私安全，不会泄露任何个人信息。',
   },
   { q: '我想变更实名，怎么清空余额？', a: '变更实名前需先将余额全部提现至本人银行卡，余额清零后即可解绑当前实名并重新认证（演示文案）。' },
   { q: '余额无法支付怎么办？', a: '请确认已完成实名认证且账户状态正常；若仍无法支付，可尝试更换支付方式或联系在线客服处理（演示文案）。' },
@@ -5871,21 +5903,36 @@ const mtBillIcon = (kind: MtWalletBill['kind']): { Icon: LucideIcon; cls: string
   }
 };
 
-/** 钱包通用底部弹层（充值/提现/添加卡/卡片管理共用；点击遮罩关闭） */
+/** 钱包通用底部弹层（充值/提现/添加卡/卡片管理共用；点击遮罩关闭；上滑入场 + 遮罩淡入动效） */
 function MtWalletSheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
-    <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/50" role="dialog" aria-label={title} onClick={onClose}>
-      <div className="max-h-[86%] overflow-y-auto rounded-t-[18px] bg-white pb-[28px] no-scrollbar" onClick={(e) => e.stopPropagation()}>
-        <div className="sticky top-0 z-10 flex h-12 items-center justify-center border-b border-black/[0.05] bg-white">
-          <button
-            type="button"
-            aria-label="关闭"
-            onClick={onClose}
-            className="absolute left-3 grid h-8 w-8 place-items-center rounded-full text-black/45 active:bg-black/5"
-          >
-            <X className="h-5 w-5" strokeWidth={2.2} />
-          </button>
-          <p className="text-[15px] font-semibold text-black/85">{title}</p>
+    <div
+      className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55"
+      role="dialog"
+      aria-label={title}
+      onClick={onClose}
+      style={{ animation: 'mtFadeIn 0.22s ease both' }}
+    >
+      <style>{MT_SHEET_CSS}</style>
+      <div
+        className="max-h-[88%] overflow-y-auto rounded-t-[22px] bg-white pb-[30px] no-scrollbar"
+        style={{ animation: 'mtSheetUp 0.32s cubic-bezier(0.2, 0.85, 0.3, 1) both', boxShadow: '0 -10px 40px rgba(0,0,0,0.18)' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 z-10 bg-white">
+          <div className="mx-auto mt-2.5 h-1 w-9 rounded-full bg-black/15" aria-hidden="true" />
+          <div className="relative flex h-11 items-center justify-center">
+            <p className="text-[16px] font-bold text-black/90">{title}</p>
+            <button
+              type="button"
+              aria-label="关闭"
+              onClick={onClose}
+              className="absolute right-3 grid h-7 w-7 place-items-center rounded-full bg-black/[0.05] text-black/45 transition-colors active:bg-black/10"
+            >
+              <X className="h-4 w-4" strokeWidth={2.4} />
+            </button>
+          </div>
+          <div className="h-px bg-black/[0.04]" />
         </div>
         {children}
       </div>
@@ -5893,29 +5940,36 @@ function MtWalletSheet({ title, onClose, children }: { title: string; onClose: (
   );
 }
 
-/** 银行卡单选列表（充值选付款卡 / 提现选到账卡共用） */
+/** 银行卡单选列表（充值选付款卡 / 提现选到账卡共用；银行品牌色徽标） */
 function MtWalletCardPicker({ cards, value, onPick }: { cards: MtBankCard[]; value: string | null; onPick: (id: string) => void }) {
   return (
-    <div className="max-h-56 overflow-y-auto px-4 no-scrollbar">
-      {cards.map((c) => (
-        <button
-          key={c.id}
-          type="button"
-          onClick={() => onPick(c.id)}
-          className="flex w-full items-center gap-3 border-b border-black/[0.04] py-3 text-left last:border-b-0 active:bg-black/[0.03]"
-        >
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[8px] bg-gradient-to-br from-[#FFE9A8] to-[#FFD100]">
-            <Landmark className="h-[18px] w-[18px] text-[#8A5A00]" strokeWidth={1.9} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14px] font-medium text-black/85">{c.bank}</span>
-            <span className="mt-0.5 block truncate text-[11px] text-black/40">尾号{c.tail} · 可用余额 ¥{mtW2(c.balance)}</span>
-          </span>
-          <span className={`grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border ${value === c.id ? 'border-[#FFC300] bg-[#FFC300]' : 'border-black/20'}`}>
-            {value === c.id && <Check className="h-3 w-3 text-black" strokeWidth={3.5} />}
-          </span>
-        </button>
-      ))}
+    <div className="max-h-60 overflow-y-auto px-4 no-scrollbar">
+      {cards.map((c) => {
+        const meta = mtBankMeta(c.bank);
+        return (
+          <button
+            key={c.id}
+            type="button"
+            onClick={() => onPick(c.id)}
+            className="flex w-full items-center gap-3 border-b border-black/[0.04] py-3 text-left last:border-b-0 active:bg-black/[0.03]"
+          >
+            <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-[10px] bg-gradient-to-br ${meta.grad} text-[15px] font-bold text-white shadow-sm`}>
+              {meta.short}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[14px] font-semibold text-black/85">{c.bank}</span>
+              <span className="mt-0.5 block truncate text-[11px] text-black/40">尾号{c.tail} · 可用余额 ¥{mtW2(c.balance)}</span>
+            </span>
+            <span
+              className={`grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full border-2 transition-colors ${
+                value === c.id ? 'border-[#FFC300] bg-[#FFC300]' : 'border-black/15'
+              }`}
+            >
+              {value === c.id && <Check className="h-3 w-3 text-black" strokeWidth={3.5} />}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -5953,36 +6007,47 @@ function MtPayPwdSheet({
       window.setTimeout(() => onComplete(done), 150);
     }
   };
-  const keyBtn = 'flex h-[52px] items-center justify-center bg-white text-[22px] font-medium text-black active:bg-black/[0.06]';
+  const keyBtn = 'flex h-[52px] items-center justify-center bg-white text-[22px] font-medium text-black transition-colors active:bg-black/[0.06]';
   const keyBtnLocked = 'flex h-[52px] items-center justify-center bg-white/60 text-[22px] font-medium text-black/30';
   return (
-    <div className="rounded-t-[18px] bg-white pb-[28px]" onClick={(e) => e.stopPropagation()} data-testid="mt-keypad">
-      <style>{'@keyframes mtShake{0%,100%{transform:translateX(0)}20%{transform:translateX(-9px)}40%{transform:translateX(8px)}60%{transform:translateX(-6px)}80%{transform:translateX(4px)}}'}</style>
-      <div className="relative flex h-12 items-center justify-center border-b border-black/[0.06]">
+    <div
+      className="rounded-t-[22px] bg-white pb-[30px]"
+      style={{ animation: 'mtSheetUp 0.32s cubic-bezier(0.2, 0.85, 0.3, 1) both' }}
+      onClick={(e) => e.stopPropagation()}
+      data-testid="mt-keypad"
+    >
+      <style>{MT_SHEET_CSS}</style>
+      <div className="mx-auto mt-2.5 h-1 w-9 rounded-full bg-black/15" aria-hidden="true" />
+      <div className="relative mt-1 flex h-11 items-center justify-center">
+        <p className="text-[16px] font-bold text-black/90">{title}</p>
         <button
           type="button"
           aria-label="关闭"
           data-testid="mt-keypad-close"
           onClick={onClose}
           disabled={locked}
-          className="absolute left-3 grid h-8 w-8 place-items-center rounded-full text-black/45 active:bg-black/5 disabled:opacity-40"
+          className="absolute right-3 grid h-7 w-7 place-items-center rounded-full bg-black/[0.05] text-black/45 transition-colors active:bg-black/10 disabled:opacity-40"
         >
-          <X className="h-5 w-5" strokeWidth={2.2} />
+          <X className="h-4 w-4" strokeWidth={2.4} />
         </button>
-        <p className="text-[16px] font-medium text-black">{title}</p>
       </div>
-      {sub ? <p className="pb-1 pt-2 text-center text-[13px] text-black/45">{sub}</p> : null}
+      {sub ? <p className="pb-1 text-center text-[12.5px] text-black/45">{sub}</p> : null}
       <div className="mx-auto mt-2 flex w-fit gap-2.5" style={errorKey > 0 ? { animation: 'mtShake 0.46s' } : undefined}>
         {Array.from({ length: 6 }).map((_, i) => (
-          <span key={i} className="grid h-11 w-10 place-items-center rounded-[6px] border border-black/15 bg-white" aria-hidden="true">
+          <span
+            key={i}
+            className={`grid h-11 w-10 place-items-center rounded-[9px] border bg-white transition-colors ${i < digits.length ? 'border-[#FFC300]' : 'border-black/15'}`}
+            style={{ boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.04)' }}
+            aria-hidden="true"
+          >
             {i < digits.length ? <span className="h-2.5 w-2.5 rounded-full bg-black" /> : null}
           </span>
         ))}
       </div>
-      <p className="mt-2 h-5 text-center text-[13px] text-[#FF3B30]" aria-live="polite">
+      <p className="mt-2 h-5 text-center text-[12.5px] text-[#FF3B30]" aria-live="polite">
         {hint ?? ''}
       </p>
-      <div className="grid grid-cols-3 gap-[1px] border-t border-black/10 bg-black/10">
+      <div className="mt-1 grid grid-cols-3 gap-[1px] overflow-hidden rounded-t-[10px] border-t border-black/[0.08] bg-black/[0.08]">
         {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((k) => (
           <button key={k} type="button" data-testid={`mt-keypad-${k}`} onClick={() => push(k)} disabled={locked} className={locked ? keyBtnLocked : keyBtn}>
             {k}
@@ -6034,7 +6099,7 @@ function MtPayPwdGate({ uid, label, onOk, onClose }: { uid: string; label?: stri
   }, [lock.lockedUntil, uid]);
   const isLocked = lock.lockedUntil > 0 && Date.now() < lock.lockedUntil;
   return (
-    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60" role="dialog" aria-label="验证支付密码" onClick={isLocked ? undefined : onClose}>
+    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/60" role="dialog" aria-label="验证支付密码" onClick={isLocked ? undefined : onClose} style={{ animation: 'mtFadeIn 0.22s ease both' }}>
       <MtPayPwdSheet
         key={errKey}
         title="请输入支付密码"
@@ -6066,7 +6131,7 @@ function MtPayPwdGate({ uid, label, onOk, onClose }: { uid: string; label?: stri
   );
 }
 
-/** 钱包主页（黄色渐变头部 + 四宫格 + 借钱联名卡 + 图标行 + 账单 + 金融 tab + 笔笔返） */
+/** 钱包主页（截图对齐：黄头 + 标题旁眼睛 + ¥徽章设置 + 白卡四宫格 + 借钱联名卡 + 彩色图标行 + 账单 + 金融 tab + 笔笔返 + 底部领券浮条） */
 function WalletPage({
   session,
   onClose,
@@ -6090,36 +6155,35 @@ function WalletPage({
   const cards = mtLoadBankCards(mtUidOf(session));
   const [hideAmt, setHideAmt] = useState(false);
   const [finTab, setFinTab] = useState<'loan' | 'card' | 'drug'>('loan');
-  const amtText = hideAmt ? '****' : `¥${mtW2(wallet.balance)}`;
+  const [promo, setPromo] = useState(true);
+  const amtText = hideAmt ? '****' : wallet.balance % 1 === 0 ? String(wallet.balance) : mtW2(wallet.balance);
   const nameTail = session.name.slice(-1) || '*';
 
-  const gridCell = (label: string, value: string, onTap: () => void) => (
-    <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1 active:opacity-70">
-      <span className="text-[16px] font-bold leading-tight text-black/85">{value}</span>
-      <span className="text-[11px] text-black/50">{label}</span>
+  const statCell = (label: string, value: string, onTap: () => void) => (
+    <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-0.5 active:opacity-70">
+      <span className="text-[14px] leading-tight text-black/75">{label}</span>
+      <span className="text-[17px] font-semibold leading-tight text-black/90">{value}</span>
     </button>
   );
 
-  const iconCell = (Icon: LucideIcon, label: string, onTap: () => void) => (
-    <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-70">
-      <span className="grid h-[38px] w-[38px] place-items-center rounded-full bg-[#FFF6D9]">
-        <Icon className="h-[19px] w-[19px] text-[#C8860D]" strokeWidth={1.9} />
-      </span>
+  const iconCell = (label: string, grad: string, onTap: () => void, children: ReactNode) => (
+    <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-75">
+      <span className={`grid h-[42px] w-[42px] place-items-center rounded-[13px] bg-gradient-to-br ${grad} shadow-[0_4px_10px_rgba(0,0,0,0.12)]`}>{children}</span>
       <span className="text-[11px] text-black/70">{label}</span>
     </button>
   );
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#FFFBEA]">
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#F8F0CB]">
       <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
-        {/* 黄色渐变头部：顶栏 + 实名提示条 */}
-        <div className="bg-gradient-to-b from-[#FFD100] to-[#FDEFB2] px-4 pb-12 pt-[54px]">
+        {/* 黄色渐变头部：返回 + 标题 + 眼睛 + 实名胶囊 + ¥徽章设置 + 实名提示条 */}
+        <div className="bg-gradient-to-b from-[#FFDB00] via-[#FFE24D] to-[#F8F0CB] px-4 pb-5 pt-[54px]">
           <div className="relative flex h-10 items-center">
             <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-black/10">
-              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.4} />
             </button>
-            <p className="absolute left-1/2 -translate-x-1/2 text-[16px] font-semibold text-black/85">**{nameTail}的钱包</p>
-            <div className="ml-auto flex items-center gap-1">
+            <div className="absolute left-1/2 flex -translate-x-1/2 items-center gap-1">
+              <p className="text-[17px] font-bold text-black/90">**{nameTail}的钱包</p>
               <button
                 type="button"
                 aria-label={hideAmt ? '显示余额' : '隐藏余额'}
@@ -6127,89 +6191,93 @@ function WalletPage({
                   setHideAmt((v) => !v);
                   onToast(hideAmt ? '余额已显示' : '余额已隐藏');
                 }}
-                className="grid h-9 w-9 place-items-center rounded-full active:bg-black/10"
+                className="grid h-7 w-7 place-items-center rounded-full active:bg-black/10"
               >
-                {hideAmt ? <EyeOff className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} /> : <Eye className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} />}
+                {hideAmt ? <EyeOff className="h-[17px] w-[17px] text-black/70" strokeWidth={1.9} /> : <Eye className="h-[17px] w-[17px] text-black/70" strokeWidth={1.9} />}
               </button>
+            </div>
+            <div className="ml-auto flex items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => onToast('实名信息待完善（演示）')}
-                className="relative rounded-full bg-white/90 px-2.5 py-1 text-[11px] font-medium text-black/75 active:opacity-80"
+                className="relative rounded-full bg-white/85 px-2.5 py-1 text-[11px] font-medium text-black/75 active:opacity-80"
               >
                 实名待完善
                 <span className="absolute -right-0.5 -top-0.5 h-[7px] w-[7px] rounded-full border border-white bg-[#FF3B30]" />
               </button>
               <button type="button" aria-label="钱包设置" onClick={onOpenPayPwd} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/10">
-                <Settings className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} />
+                <BadgeJapaneseYen className="h-[21px] w-[21px] text-black/80" strokeWidth={1.8} />
               </button>
             </div>
           </div>
           <button
             type="button"
             onClick={() => onToast('实名信息完善（演示）')}
-            className="mt-3 flex w-full items-center justify-between rounded-[10px] bg-white/20 px-3 py-2.5 active:bg-white/30"
+            className="mt-3 flex w-full items-center justify-between rounded-[12px] bg-white/45 px-3.5 py-3 active:bg-white/60"
           >
-            <span className="flex items-center gap-1.5 text-[12px] font-medium text-black/80">
-              <TriangleAlert className="h-3.5 w-3.5 text-black/70" strokeWidth={2.2} />
+            <span className="flex items-center gap-2 text-[13px] font-medium text-black/80">
+              <TriangleAlert className="h-4 w-4 text-black/65" strokeWidth={2} />
               立即完善实名信息，解锁更多服务
             </span>
-            <span className="text-[12px] font-semibold text-black/75">去完善 &gt;</span>
+            <span className="text-[13px] font-semibold text-black/80">去完善 &gt;</span>
           </button>
         </div>
 
-        {/* 白卡四宫格：余额/银行卡/药划算/笔笔返 */}
-        <div className="-mt-8 px-4">
-          <div className="grid grid-cols-4 rounded-[14px] bg-white px-2 py-4 shadow-sm">
-            {gridCell('余额', amtText, onOpenBalance)}
-            {gridCell('银行卡', `${cards.length}张`, onOpenCards)}
-            {gridCell('药划算', '1个', () => onToast('药划算（演示）'))}
-            {gridCell('笔笔返', '0', () => onToast('笔笔返（演示）'))}
+        {/* 白卡四宫格：余额/银行卡/药划算/笔笔返（标签在上、数值在下） */}
+        <div className="mt-1 px-4">
+          <div className="grid grid-cols-4 rounded-[16px] bg-white px-2 py-4 shadow-[0_2px_10px_rgba(90,60,10,0.05)]">
+            {statCell('余额', amtText, onOpenBalance)}
+            {statCell('银行卡', String(cards.length), onOpenCards)}
+            {statCell('药划算', '1个', () => onToast('药划算（演示）'))}
+            {statCell('笔笔返', '0', () => onToast('笔笔返（演示）'))}
           </div>
         </div>
 
         {/* 白卡双列：美团借钱 | 联名卡 + 新客专属条 */}
         <div className="mt-3 px-4">
-          <div className="rounded-[14px] bg-white p-4 shadow-sm">
+          <div className="rounded-[16px] bg-white p-4 shadow-[0_2px_10px_rgba(90,60,10,0.05)]">
             <div className="grid grid-cols-2 divide-x divide-black/[0.06]">
               <button type="button" onClick={onOpenLoan} className="flex flex-col items-start gap-0.5 pr-4 text-left active:opacity-70">
                 <span className="text-[15px] font-bold text-black/85">美团借钱</span>
-                <span className="text-[20px] font-extrabold tracking-widest text-black/85">*****</span>
+                <span className="text-[20px] font-extrabold leading-tight tracking-[3px] text-black/85">*****</span>
                 <span className="text-[11px] text-black/40">随借随还 &gt;</span>
               </button>
               <button type="button" onClick={() => onToast('联名卡（演示）')} className="flex flex-col items-start gap-0.5 pl-4 text-left active:opacity-70">
                 <span className="text-[15px] font-bold text-black/85">联名卡</span>
-                <span className="text-[20px] font-extrabold tracking-widest text-black/85">****</span>
+                <span className="text-[20px] font-extrabold leading-tight tracking-[3px] text-black/85">****</span>
                 <span className="text-[11px] text-black/40">查看详情 &gt;</span>
               </button>
             </div>
             <button
               type="button"
               onClick={() => onToast('新客专属额度（演示）')}
-              className="mt-3 flex w-full items-center justify-between rounded-[10px] bg-[#FFF0F0] px-3 py-2.5 active:opacity-80"
+              className="mt-3 flex w-full items-center justify-between rounded-[10px] bg-[#FFF1F1] px-3 py-2.5 active:opacity-80"
             >
-              <span className="flex items-center text-[12px] text-[#FF3B30]">
-                <span className="mr-1.5 rounded-[4px] bg-[#FF3B30] px-1 py-0.5 text-[10px] font-bold text-white">新客专属</span>
-                点击领取10月额度
+              <span className="flex items-center text-[12.5px] text-black/80">
+                <span className="mr-2 rounded-[4px] bg-gradient-to-r from-[#FF4D4F] to-[#FF2E63] px-1.5 py-[3px] text-[10px] font-bold text-white">新客专属</span>
+                <span>
+                  点击领取<span className="font-semibold text-[#FF3B30]">10月额度</span>
+                </span>
               </span>
-              <span className="text-[12px] font-semibold text-[#FF3B30]">去看看 &gt;</span>
+              <span className="text-[12.5px] font-semibold text-[#FF3B30]">去看看 &gt;</span>
             </button>
           </div>
         </div>
 
-        {/* 白卡图标行：借钱/美团保/笔笔返/银行卡/全部 */}
+        {/* 白卡彩色图标行：借钱/美团保/笔笔返/银行卡/全部 */}
         <div className="mt-3 px-4">
-          <div className="grid grid-cols-5 rounded-[14px] bg-white py-3.5 shadow-sm">
-            {iconCell(Coins, '借钱', onOpenLoan)}
-            {iconCell(Shield, '美团保', () => onToast('美团保（演示）'))}
-            {iconCell(BadgePercent, '笔笔返', () => onToast('笔笔返（演示）'))}
-            {iconCell(CreditCard, '银行卡', onOpenCards)}
-            {iconCell(LayoutGrid, '全部', () => onToast('更多钱包服务（演示）'))}
+          <div className="grid grid-cols-5 rounded-[16px] bg-white py-4 shadow-[0_2px_10px_rgba(90,60,10,0.05)]">
+            {iconCell('借钱', 'from-[#7CB0FF] to-[#3D7BFF]', onOpenLoan, <HandCoins className="h-5 w-5 text-white" strokeWidth={2} />)}
+            {iconCell('美团保', 'from-[#FFB02E] to-[#FF6A00]', () => onToast('美团保（演示）'), <span className="text-[15px] font-bold leading-none text-white">保</span>)}
+            {iconCell('笔笔返', 'from-[#FF7EB3] to-[#FF2E63]', () => onToast('笔笔返（演示）'), <BadgePercent className="h-5 w-5 text-white" strokeWidth={2.1} />)}
+            {iconCell('银行卡', 'from-[#FFC24D] to-[#FF8A00]', onOpenCards, <ShieldCheck className="h-5 w-5 text-white" strokeWidth={2.1} />)}
+            {iconCell('全部', 'from-[#FF8A8A] to-[#FF3B5C]', () => onToast('更多钱包服务（演示）'), <Ellipsis className="h-5 w-5 text-white" strokeWidth={2.6} />)}
           </div>
         </div>
 
         {/* 账单入口 */}
         <div className="mt-3 px-4">
-          <button type="button" onClick={onOpenBills} className="flex w-full items-center justify-between rounded-[14px] bg-white px-4 py-4 shadow-sm active:bg-black/[0.02]">
+          <button type="button" onClick={onOpenBills} className="flex w-full items-center justify-between rounded-[16px] bg-white px-4 py-4 shadow-[0_2px_10px_rgba(90,60,10,0.05)] active:bg-black/[0.02]">
             <span className="text-[15px] font-bold text-black/85">账单</span>
             <span className="flex items-center text-[12px] text-black/40">
               查看
@@ -6220,9 +6288,9 @@ function WalletPage({
 
         {/* 金融 tab 白卡 */}
         <div className="mt-3 px-4">
-          <div className="relative overflow-hidden rounded-[14px] bg-white p-4 shadow-sm">
-            <span className="absolute right-3 top-3 text-[10px] font-medium tracking-[3px] text-[#E8C880]/80">金融服务</span>
-            <div className="flex gap-5 border-b border-black/[0.05]">
+          <div className="relative overflow-hidden rounded-[16px] bg-white p-4 shadow-[0_2px_10px_rgba(90,60,10,0.05)]">
+            <span className="absolute right-3 top-3 select-none text-[10px] font-medium tracking-[3px] text-[#E8C880]/80">金融服务</span>
+            <div className="flex gap-5">
               {(
                 [
                   ['loan', '借钱'],
@@ -6234,22 +6302,22 @@ function WalletPage({
                   key={k}
                   type="button"
                   onClick={() => setFinTab(k)}
-                  className={`relative pb-2 text-[14px] transition-colors ${finTab === k ? 'font-bold text-black/85' : 'text-black/45'}`}
+                  className={`relative pb-2 text-[14.5px] transition-colors ${finTab === k ? 'font-bold text-black/85' : 'text-black/45'}`}
                 >
                   {label}
-                  {finTab === k && <span className="absolute inset-x-0 -bottom-px mx-auto h-[3px] w-6 rounded-full bg-[#FFC300]" />}
+                  {finTab === k && <span className="absolute inset-x-0 -bottom-px mx-auto h-[3px] w-7 rounded-full bg-[#FFC300]" />}
                 </button>
               ))}
             </div>
             <div className="mt-3 flex items-end justify-between">
               <div>
-                <p className="text-[11px] text-black/40">最高可享额度（元）</p>
-                <p className="mt-1 text-[28px] font-extrabold leading-none text-black/85">{finTab === 'loan' ? '99,800.00' : finTab === 'card' ? '6,600.00' : '300.00'}</p>
+                <p className="text-[11px] text-black/40">最高可享额度</p>
+                <p className="mt-1 text-[30px] font-extrabold leading-none text-black/85">{finTab === 'loan' ? '99,800.00' : finTab === 'card' ? '6,600.00' : '300.00'}</p>
               </div>
               <button
                 type="button"
                 onClick={() => onToast('额度申领（演示）')}
-                className="rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] px-5 py-2.5 text-[13px] font-bold text-black/80 active:opacity-85"
+                className="rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] px-5 py-2.5 text-[13px] font-bold text-black/80 shadow-[0_4px_12px_rgba(255,195,0,0.35)] active:opacity-85"
               >
                 去申领
               </button>
@@ -6265,15 +6333,59 @@ function WalletPage({
         </div>
 
         {/* 钱包笔笔返 */}
-        <div className="mt-3 px-4 pb-[28px]">
-          <button type="button" onClick={() => onToast('钱包笔笔返（演示）')} className="flex w-full items-center justify-between rounded-[14px] bg-white px-4 py-4 shadow-sm active:bg-black/[0.02]">
-            <span className="text-[15px] font-bold text-black/85">钱包笔笔返</span>
-            <span className="flex items-center text-[12px] text-black/40">
-              支付可抵钱
-              <ChevronRight className="h-3.5 w-3.5" />
-            </span>
-          </button>
+        <div className="mt-3 px-4">
+          <div className="rounded-[16px] bg-white p-4 shadow-[0_2px_10px_rgba(90,60,10,0.05)]">
+            <button type="button" onClick={() => onToast('钱包笔笔返（演示）')} className="flex w-full items-center justify-between active:opacity-80">
+              <span className="text-[15px] font-bold text-black/85">钱包笔笔返</span>
+              <span className="flex items-center text-[12px] text-black/40">
+                支付可抵钱
+                <ChevronRight className="h-3.5 w-3.5" />
+              </span>
+            </button>
+            <div className="mt-3 rounded-[12px] bg-gradient-to-r from-[#FFF0F3] to-[#FFE9EC] px-4 py-3">
+              <div className="grid grid-cols-3">
+                {(
+                  [
+                    ['1笔', '今日笔笔返'],
+                    ['500个', '美团币可抵钱'],
+                    ['更多', '奖励待解锁'],
+                  ] as [string, string][]
+                ).map(([v, l], i) => (
+                  <div key={l} className={`flex flex-col items-center ${i > 0 ? 'border-l border-[#FF2E63]/10' : ''}`}>
+                    <p className="text-[15px] font-bold text-[#FF2E63]">{v}</p>
+                    <p className="mt-0.5 text-[10.5px] text-black/40">{l}</p>
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={() => onToast('支付奖励（演示）')} className="mt-2.5 flex w-full items-center justify-between border-t border-[#FF2E63]/10 pt-2.5 active:opacity-70">
+                <span className="text-[11.5px] text-black/55">支付奖励</span>
+                <span className="text-[11.5px] text-black/40">点击查看 &gt;</span>
+              </button>
+            </div>
+          </div>
         </div>
+
+        {/* 底部领券浮条（可关闭，吸附滚动区底部） */}
+        {promo && (
+          <div className="sticky bottom-3 z-20 mx-3 mt-4">
+            <div className="flex items-center gap-2.5 rounded-[14px] bg-[#1C1C1E]/95 px-3 py-2.5 shadow-[0_8px_24px_rgba(0,0,0,0.25)] backdrop-blur">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-gradient-to-br from-[#FF5E7E] to-[#FF2E63] text-[18px]" aria-hidden="true">
+                🧧
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[13px] font-semibold text-white">点击领3元外卖券</p>
+                <p className="truncate text-[10.5px] text-white/55">订阅月付交易通知可领</p>
+              </div>
+              <button type="button" onClick={() => onToast('已领取3元外卖券（演示）')} className="shrink-0 rounded-full bg-[#FFC300] px-3.5 py-1.5 text-[12px] font-bold text-black/85 active:opacity-85">
+                去领取
+              </button>
+              <button type="button" aria-label="关闭" onClick={() => setPromo(false)} className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-white/50 active:bg-white/10">
+                <X className="h-4 w-4" strokeWidth={2.2} />
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="h-4" />
       </div>
     </div>
   );
@@ -6354,25 +6466,25 @@ function WalletBalancePage({ session, onClose, onOpenCards, onToast }: { session
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#F7F8FA]">
       <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
-        {/* 黄色渐变头部：顶栏 + 余额卡 + 按钮 */}
-        <div className="bg-gradient-to-b from-[#FFD100] to-[#FDEFB2] px-4 pb-8 pt-[54px]">
+        {/* 黄色渐变头部：顶栏 + 余额卡（提现/充值按钮在卡内，对齐截图） */}
+        <div className="bg-gradient-to-b from-[#FFDB00] via-[#FFE24D] to-[#F7F8FA] px-4 pb-6 pt-[54px]">
           <div className="relative flex h-10 items-center">
             <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-black/10">
-              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.4} />
             </button>
-            <p className="absolute left-1/2 -translate-x-1/2 text-[16px] font-semibold text-black/85">余额（仅可提现）</p>
+            <p className="absolute left-1/2 -translate-x-1/2 text-[16px] font-bold text-black/85">余额（仅可提现）</p>
             <div className="ml-auto flex items-center">
               <button type="button" aria-label="联系客服" onClick={() => onToast('在线客服（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/10">
                 <Headset className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} />
               </button>
               <button type="button" aria-label="更多" onClick={() => onToast('余额帮助（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/10">
-                <EllipsisVertical className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} />
+                <Ellipsis className="h-[19px] w-[19px] text-black/75" strokeWidth={1.9} />
               </button>
             </div>
           </div>
-          <div className="mt-3 rounded-[14px] bg-white p-5 shadow-sm">
+          <div className="mt-3 rounded-[18px] bg-white px-5 pb-5 pt-5 shadow-[0_4px_16px_rgba(90,60,10,0.06)]">
             <div className="flex items-center gap-1.5">
-              <span className="text-[12px] text-black/45">可用余额（元）</span>
+              <span className="text-[13px] text-black/45">可用余额 (元)</span>
               <button
                 type="button"
                 aria-label={hideAmt ? '显示余额' : '隐藏余额'}
@@ -6382,23 +6494,31 @@ function WalletBalancePage({ session, onClose, onOpenCards, onToast }: { session
                 {hideAmt ? <EyeOff className="h-3.5 w-3.5 text-black/40" strokeWidth={1.9} /> : <Eye className="h-3.5 w-3.5 text-black/40" strokeWidth={1.9} />}
               </button>
             </div>
-            <p className="mt-1.5 text-[40px] font-bold leading-none text-black/90">{hideAmt ? '****' : mtW2(wallet.balance)}</p>
-          </div>
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <button type="button" onClick={() => openSheet('withdraw')} className="rounded-full border border-black/15 bg-white py-2.5 text-[14px] font-semibold text-black/80 active:opacity-80">
-              提现
-            </button>
-            <button type="button" onClick={() => openSheet('recharge')} className="rounded-full bg-[#FFC300] py-2.5 text-[14px] font-semibold text-black/85 active:opacity-85">
-              充值
-            </button>
+            <p className="mt-1.5 text-[42px] font-bold leading-none text-black/90">{hideAmt ? '****' : mtW2(wallet.balance)}</p>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => openSheet('withdraw')}
+                className="rounded-full border border-black/[0.12] bg-white py-3 text-[15px] font-semibold text-black/85 active:opacity-80"
+              >
+                提现
+              </button>
+              <button
+                type="button"
+                onClick={() => openSheet('recharge')}
+                className="rounded-full bg-[#FFC300] py-3 text-[15px] font-bold text-black/85 shadow-[0_4px_12px_rgba(255,195,0,0.3)] active:opacity-90"
+              >
+                充值
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* 常见问题手风琴 */}
+        {/* 常见问题手风琴（黄色「问」徽章 + 展开答案含蓝色链接，对齐截图） */}
         <div className="px-4 pt-4">
-          <div className="rounded-[14px] bg-white px-4 py-2">
-            <div className="flex items-center justify-between py-2">
-              <p className="text-[15px] font-bold text-black/85">常见问题</p>
+          <div className="rounded-[18px] bg-white px-4 py-2 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
+            <div className="flex items-center justify-between py-2.5">
+              <p className="text-[16px] font-bold text-black/85">常见问题</p>
               <button type="button" onClick={() => onToast('更多常见问题（演示）')} className="flex items-center text-[12px] text-black/40">
                 更多
                 <ChevronRight className="h-3.5 w-3.5" />
@@ -6406,31 +6526,55 @@ function WalletBalancePage({ session, onClose, onOpenCards, onToast }: { session
             </div>
             {MT_BALANCE_FAQS.map((f, i) => (
               <div key={f.q} className={i > 0 ? 'border-t border-black/[0.04]' : ''}>
-                <button type="button" onClick={() => setFaqOpen((o) => (o === i ? null : i))} className="flex w-full items-center justify-between gap-3 py-3 text-left">
-                  <span className="text-[13px] font-medium text-black/80">{f.q}</span>
+                <button type="button" onClick={() => setFaqOpen((o) => (o === i ? null : i))} className="flex w-full items-center gap-2.5 py-3.5 text-left">
+                  <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#FFC300] text-[11px] font-bold text-white">问</span>
+                  <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-black/85">{f.q}</span>
                   <ChevronDown className={`h-4 w-4 shrink-0 text-black/30 transition-transform ${faqOpen === i ? 'rotate-180' : ''}`} />
                 </button>
-                {faqOpen === i && <p className="pb-3 text-[12.5px] leading-relaxed text-black/50">{f.a}</p>}
+                {faqOpen === i && (
+                  <div className="pb-4 pl-[30px] pr-1">
+                    <p className="text-[12.5px] leading-relaxed text-black/45">{f.a}</p>
+                    {f.a2 ? (
+                      <p className="mt-2 text-[12.5px] leading-relaxed text-black/45">
+                        {f.a2}
+                        <button type="button" onClick={() => onToast('完善身份信息（演示）')} className="text-[#1677FF]">
+                          {f.link}
+                        </button>
+                        {f.tail}
+                      </p>
+                    ) : null}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         </div>
-        <p className="pb-[28px] pt-10 text-center text-[12px] text-black/30">美团支付</p>
+        <div className="pb-[30px] pt-10 text-center">
+          <p className="text-[15px] font-semibold text-black/20">美团支付</p>
+          <p className="mt-1 text-[10px] text-black/15">美团支付，省钱省心</p>
+        </div>
       </div>
 
       {/* 充值/提现弹层：选卡 → 输金额 → 确认（→ 支付密码验证） */}
       {sheet && (
         <MtWalletSheet title={sheet === 'recharge' ? '余额充值' : '余额提现'} onClose={() => setSheet(null)}>
           {cards.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 px-6 py-8">
+            <div className="flex flex-col items-center gap-3 px-6 py-9">
+              <span className="grid h-14 w-14 place-items-center rounded-full bg-[#FFF6D9]">
+                <CreditCard className="h-7 w-7 text-[#C8860D]" strokeWidth={1.8} />
+              </span>
               <p className="text-[13px] text-black/45">暂无银行卡{sheet === 'recharge' ? '，无法充值' : '，无法提现'}</p>
-              <button type="button" onClick={onOpenCards} className="rounded-full bg-[#FFC300] px-6 py-2.5 text-[13px] font-semibold text-black/85 active:opacity-85">
-                暂无银行卡，去添加
+              <button
+                type="button"
+                onClick={onOpenCards}
+                className="rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] px-6 py-2.5 text-[13px] font-bold text-black/85 shadow-[0_4px_12px_rgba(255,195,0,0.3)] active:opacity-90"
+              >
+                去添加银行卡
               </button>
             </div>
           ) : (
-            <div className="pt-2">
-              <p className="px-4 pb-1 pt-1 text-[12px] text-black/40">选择银行卡</p>
+            <div className="pt-3">
+              <p className="px-4 pb-2 text-[12px] font-medium text-black/45">{sheet === 'recharge' ? '选择付款银行卡' : '选择到账银行卡'}</p>
               <MtWalletCardPicker
                 cards={cards}
                 value={cardId}
@@ -6439,11 +6583,11 @@ function WalletBalancePage({ session, onClose, onOpenCards, onToast }: { session
                   setAmtErr('');
                 }}
               />
-              <p className="px-4 pb-1 pt-3 text-[12px] text-black/40">
-                {sheet === 'recharge' ? '充值金额' : `提现金额（可用 ¥${mtW2(wallet.balance)}）`}
-              </p>
-              <div className="px-4">
-                <div className="flex items-center gap-2 rounded-[10px] border border-black/10 bg-[#F7F8FA] px-3 py-2.5">
+              <div className="px-4 pt-4">
+                <p className="pb-2 text-[12px] font-medium text-black/45">
+                  {sheet === 'recharge' ? '充值金额' : `提现金额（可用 ¥${mtW2(wallet.balance)}）`}
+                </p>
+                <div className="flex items-center gap-2 rounded-[12px] border border-black/[0.08] bg-[#F7F8FA] px-4 py-3 transition-colors focus-within:border-[#FFC300]">
                   <span className="text-[20px] font-bold text-black/70">¥</span>
                   <input
                     value={amtText}
@@ -6453,16 +6597,46 @@ function WalletBalancePage({ session, onClose, onOpenCards, onToast }: { session
                     }}
                     inputMode="decimal"
                     placeholder={sheet === 'recharge' ? '从该卡划转至余额' : '全部提现可输入可用余额'}
-                    className="min-w-0 flex-1 bg-transparent text-[18px] font-semibold text-black/85 outline-none placeholder:text-[12px] placeholder:font-normal placeholder:text-black/30"
+                    className="min-w-0 flex-1 bg-transparent text-[19px] font-semibold text-black/85 outline-none placeholder:text-[12px] placeholder:font-normal placeholder:text-black/30"
                     aria-label={sheet === 'recharge' ? '充值金额' : '提现金额'}
                   />
+                  {sheet === 'withdraw' && wallet.balance > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAmtText(String(wallet.balance));
+                        setAmtErr('');
+                      }}
+                      className="shrink-0 rounded-full bg-[#FFF6D9] px-2.5 py-1 text-[11px] font-semibold text-[#C8860D] active:opacity-80"
+                    >
+                      全部
+                    </button>
+                  ) : null}
                 </div>
                 {amtErr ? <p className="mt-1.5 text-[12px] text-[#FF3B30]">{amtErr}</p> : null}
-              </div>
-              <div className="px-4 pt-4">
-                <button type="button" onClick={confirmAmt} className="w-full rounded-full bg-[#FFC300] py-3 text-[15px] font-bold text-black/85 active:opacity-85">
+                <div className="mt-3 flex gap-2">
+                  {[50, 100, 200, 500].map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => {
+                        setAmtText(String(v));
+                        setAmtErr('');
+                      }}
+                      className="flex-1 rounded-full border border-black/[0.08] bg-white py-1.5 text-[12px] text-black/65 transition-colors active:border-[#FFC300]"
+                    >
+                      ¥{v}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={confirmAmt}
+                  className="mt-4 w-full rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] py-3 text-[15px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,195,0,0.35)] active:opacity-90"
+                >
                   确认{sheet === 'recharge' ? '充值' : '提现'}
                 </button>
+                <p className="mt-2.5 text-center text-[11px] text-black/35">资金仅在本人银行卡与余额间划转（演示环境）</p>
               </div>
             </div>
           )}
@@ -6535,165 +6709,257 @@ function WalletCardsPage({ session, onClose, onOpenBills, onOpenPayPwd, onToast 
   return (
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#0A0A0A]">
       <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
-        {/* 顶栏：返回 + 银行卡专区 + 设置 + 客服 */}
-        <div className="relative flex h-[94px] items-center px-3 pt-[54px]">
-          <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-white/10">
-            <ChevronLeft className="h-[22px] w-[22px] text-white" strokeWidth={2.2} />
-          </button>
-          <p className="absolute left-1/2 top-[74px] -translate-x-1/2 -translate-y-1/2 text-[16px] font-semibold text-white">银行卡专区</p>
-          <div className="ml-auto flex items-center">
-            <button type="button" aria-label="支付设置" onClick={onOpenPayPwd} className="grid h-9 w-9 place-items-center rounded-full active:bg-white/10">
-              <Settings className="h-[19px] w-[19px] text-white/85" strokeWidth={1.9} />
-            </button>
-            <button type="button" aria-label="联系客服" onClick={() => onToast('在线客服（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-white/10">
-              <Headset className="h-[19px] w-[19px] text-white/85" strokeWidth={1.9} />
-            </button>
-          </div>
-        </div>
-
-        {/* 黑底金色斜体大字 + 三特性 + 添加按钮 */}
-        <div className="px-4 pb-2 pt-1">
-          <p className="bg-gradient-to-r from-[#F7D9A0] to-[#E8B96A] bg-clip-text text-[22px] font-bold italic leading-snug text-transparent">
-            添加你在美团的第{cards.length + 1}张银行卡
-          </p>
-          <div className="mt-4 grid grid-cols-3">
-            {(
-              [
-                ['无卡号添加', CreditCard],
-                ['支付随心控', CircleDollarSign],
-                ['优惠权益多', ShieldCheck],
-              ] as [string, LucideIcon][]
-            ).map(([label, Icon]) => (
-              <div key={label} className="flex flex-col items-center gap-1.5">
-                <span className="grid h-[44px] w-[44px] place-items-center rounded-full bg-[#1E1E20]">
-                  <Icon className="h-5 w-5 text-[#E8B96A]" strokeWidth={1.8} />
-                </span>
-                <span className="text-[11px] text-[#E8C890]">{label}</span>
+        {/* 黑金首屏：星空背景 + 顶栏（返回+标题左对齐/设置/客服）+ 金句 + 三特性 + 金色添加按钮 + 卡列表 */}
+        <div className="relative overflow-hidden bg-[#0A0A0A] px-4 pb-7 pt-[54px]">
+          <div
+            className="pointer-events-none absolute inset-0"
+            aria-hidden="true"
+            style={{
+              backgroundImage:
+                'radial-gradient(1.2px 1.2px at 12% 16%, rgba(255,255,255,0.85) 50%, transparent 51%), radial-gradient(1px 1px at 30% 7%, rgba(255,255,255,0.5) 50%, transparent 51%), radial-gradient(1.4px 1.4px at 56% 20%, rgba(255,255,255,0.7) 50%, transparent 51%), radial-gradient(1px 1px at 76% 10%, rgba(255,255,255,0.55) 50%, transparent 51%), radial-gradient(1.6px 1.6px at 90% 28%, rgba(255,236,190,0.85) 50%, transparent 51%), radial-gradient(1px 1px at 20% 36%, rgba(255,255,255,0.4) 50%, transparent 51%), radial-gradient(1.2px 1.2px at 66% 40%, rgba(255,255,255,0.5) 50%, transparent 51%), radial-gradient(1px 1px at 44% 30%, rgba(255,255,255,0.35) 50%, transparent 51%), linear-gradient(115deg, transparent 40%, rgba(255,214,130,0.16) 47%, transparent 53%), linear-gradient(60deg, transparent 58%, rgba(255,214,130,0.1) 65%, transparent 71%)',
+            }}
+          />
+          <div className="relative">
+            <div className="flex items-center">
+              <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-white/10">
+                <ChevronLeft className="h-[22px] w-[22px] text-white" strokeWidth={2.4} />
+              </button>
+              <p className="ml-1 text-[17px] font-bold text-white">银行卡专区</p>
+              <div className="ml-auto flex items-center">
+                <button type="button" aria-label="支付设置" onClick={onOpenPayPwd} className="grid h-9 w-9 place-items-center rounded-full active:bg-white/10">
+                  <Settings className="h-[19px] w-[19px] text-white/85" strokeWidth={1.9} />
+                </button>
+                <button type="button" aria-label="联系客服" onClick={() => onToast('在线客服（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-white/10">
+                  <Headset className="h-[19px] w-[19px] text-white/85" strokeWidth={1.9} />
+                </button>
               </div>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={openAdd}
-            className="mt-5 flex w-full items-center justify-center gap-1 rounded-[12px] bg-gradient-to-r from-[#F3D3A0] to-[#E4B36B] py-3 text-[15px] font-bold text-[#5A3A10] active:opacity-85"
-          >
-            <Plus className="h-[18px] w-[18px]" strokeWidth={2.6} />
-            添加银行卡
-          </button>
-        </div>
+            </div>
 
-        {/* 已有卡列表（黑金卡面） */}
-        {cards.length > 0 && (
-          <div className="mt-4 space-y-3 px-4">
-            {cards.map((c) => (
-              <div key={c.id} className="relative overflow-hidden rounded-[14px] bg-gradient-to-br from-[#2A2A2E] to-[#1A1A1C] p-4">
-                <span className="absolute right-4 top-4 grid h-9 w-9 place-items-center rounded-full bg-white/10" aria-hidden="true">
-                  <Landmark className="h-[18px] w-[18px] text-[#E8B96A]" strokeWidth={1.8} />
-                </span>
-                <p className="text-[15px] font-bold text-white/90">{c.bank}</p>
-                <p className="mt-2 text-[13px] tracking-[2px] text-white/60">尾号**** **** **** {c.tail}</p>
-                <div className="mt-3 flex items-end justify-between">
-                  <p className="text-[12px] text-white/45">
-                    卡内余额 <span className="text-[16px] font-bold text-[#F3D3A0]">¥{mtW2(c.balance)}</span>
-                  </p>
-                  <button type="button" onClick={() => setManageId(c.id)} className="rounded-full border border-white/20 px-3.5 py-1 text-[11px] text-white/70 active:bg-white/10">
-                    管理
-                  </button>
+            <p className="mt-7 bg-gradient-to-r from-[#E8B96A] via-[#FFEDC9] to-[#E8B96A] bg-clip-text text-center text-[24px] font-bold italic leading-snug text-transparent">
+              添加你在美团的第{cards.length + 1}张银行卡
+            </p>
+
+            <div className="mt-7 grid grid-cols-3">
+              {(
+                [
+                  ['无卡号添加', CreditCard],
+                  ['支付随心控', CircleDollarSign],
+                  ['优惠权益多', ShieldCheck],
+                ] as [string, LucideIcon][]
+              ).map(([label, Icon]) => (
+                <div key={label} className="flex flex-col items-center gap-2">
+                  <span className="grid h-[50px] w-[50px] place-items-center rounded-[16px] bg-[#17171A] ring-1 ring-[#E8B96A]/25">
+                    <Icon className="h-[22px] w-[22px] text-[#E8B96A]" strokeWidth={1.8} />
+                  </span>
+                  <span className="text-[12px] text-[#E8C890]">{label}</span>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
 
-        {/* 白卡图标行：交易明细/支付设置/极速支付/联名卡/积分专区 */}
-        <div className="mt-4 px-4">
-          <div className="grid grid-cols-5 rounded-[14px] bg-white py-3.5">
+            <button
+              type="button"
+              onClick={openAdd}
+              className="mt-7 flex w-full items-center justify-center gap-1 rounded-full bg-gradient-to-r from-[#F3D3A0] to-[#E4B36B] py-3.5 text-[16px] font-bold text-[#5A3A10] shadow-[0_8px_24px_rgba(228,179,107,0.22)] active:opacity-90"
+            >
+              <Plus className="h-[18px] w-[18px]" strokeWidth={2.8} />
+              添加银行卡
+            </button>
+
+            {/* 已添加卡列表（银行品牌色卡面） */}
+            {cards.length > 0 && (
+              <div className="mt-6 space-y-3.5">
+                {cards.map((c) => {
+                  const meta = mtBankMeta(c.bank);
+                  return (
+                    <div key={c.id} className={`relative overflow-hidden rounded-[16px] bg-gradient-to-br ${meta.grad} p-4 shadow-[0_10px_28px_rgba(0,0,0,0.45)]`}>
+                      <span className="pointer-events-none absolute -right-8 -top-10 h-28 w-28 rounded-full bg-white/10" aria-hidden="true" />
+                      <div className="relative flex items-start justify-between">
+                        <div className="min-w-0">
+                          <p className="text-[15px] font-bold text-white">{c.bank}</p>
+                          <p className="mt-0.5 text-[10.5px] text-white/65">储蓄卡 · 尾号{c.tail}</p>
+                        </div>
+                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/20 text-[13px] font-bold text-white">{meta.short}</span>
+                      </div>
+                      <p className="relative mt-4 text-[16px] font-semibold tracking-[3px] text-white/95">**** **** **** {c.tail}</p>
+                      <div className="relative mt-3.5 flex items-end justify-between">
+                        <p className="text-[11px] text-white/60">
+                          卡内余额 <span className="text-[17px] font-bold text-white">¥{mtW2(c.balance)}</span>
+                        </p>
+                        <button type="button" onClick={() => setManageId(c.id)} className="rounded-full bg-white/20 px-3.5 py-1 text-[11px] font-medium text-white active:bg-white/30">
+                          管理
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 白色圆角面板：彩色图标行 + 翻页点 + 权益活动 + 底部落款 */}
+        <div className="relative min-h-[430px] rounded-t-[22px] bg-white px-4 pb-6 pt-4">
+          <div className="grid grid-cols-5 py-1">
             {(
               [
-                ['交易明细', Receipt, onOpenBills],
-                ['支付设置', Settings, onOpenPayPwd],
-                ['极速支付', Zap, () => onToast('极速支付（演示）')],
-                ['联名卡', CreditCard, () => onToast('联名卡（演示）')],
-                ['积分专区', Star, () => onToast('积分专区（演示）')],
-              ] as [string, LucideIcon, () => void][]
-            ).map(([label, Icon, onTap]) => (
+                ['交易明细', Receipt, 'from-[#FF7EB3] to-[#FF2E63]', onOpenBills],
+                ['支付设置', Settings, 'from-[#FFB02E] to-[#FF6A00]', onOpenPayPwd],
+                ['极速支付', Zap, 'from-[#FFD54D] to-[#FFAB00]', () => onToast('极速支付（演示）')],
+                ['联名卡', CreditCard, 'from-[#5AA9FF] to-[#2E7BFF]', () => onToast('联名卡（演示）')],
+                ['积分专区', Star, 'from-[#FFA24D] to-[#FF7A00]', () => onToast('积分专区（演示）')],
+              ] as [string, LucideIcon, string, () => void][]
+            ).map(([label, Icon, grad, onTap]) => (
               <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-70">
-                <Icon className="h-[20px] w-[20px] text-black/75" strokeWidth={1.8} />
+                <span className={`grid h-[42px] w-[42px] place-items-center rounded-[13px] bg-gradient-to-br ${grad} shadow-[0_4px_10px_rgba(0,0,0,0.12)]`}>
+                  <Icon className="h-5 w-5 text-white" strokeWidth={2} />
+                </span>
                 <span className="text-[10.5px] text-black/70">{label}</span>
               </button>
             ))}
           </div>
-        </div>
+          <div className="mt-2 flex items-center justify-center gap-1">
+            <span className="h-1 w-4 rounded-full bg-[#FFC300]" />
+            <span className="h-1 w-1.5 rounded-full bg-black/15" />
+          </div>
 
-        {/* 权益活动白卡 */}
-        <div className="mt-3 px-4 pb-[28px]">
-          <div className="rounded-[14px] bg-white p-4">
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-[15px] font-bold text-black/85">
-                  天天领券 <span className="ml-1 align-[1px] text-[10px] font-medium text-[#FF6000]">今日已上新</span>
+          <p className="mt-6 text-[17px] font-bold text-black/85">权益活动</p>
+          <div className="mt-3 rounded-[16px] bg-gradient-to-br from-[#FFF9EC] to-[#FFF3DC] p-4">
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-1.5">
+                  <span className="text-[16px] font-bold text-black/85">天天领券</span>
+                  <span className="h-3 w-px bg-black/15" aria-hidden="true" />
+                  <span className="text-[11px] font-medium text-[#FF3B30]">今日已上新</span>
                 </p>
-                <p className="mt-0.5 text-[11.5px] text-black/40">快来银行卡专区免费领福利吧</p>
+                <p className="mt-1 text-[11.5px] text-black/40">快来银行卡专区免费领福利吧</p>
+                <button
+                  type="button"
+                  onClick={() => onToast('已领取银行卡专享券（演示）')}
+                  className="mt-2.5 rounded-full bg-gradient-to-r from-[#FF5E4D] to-[#FF3B30] px-4 py-1.5 text-[12px] font-bold text-white shadow-[0_4px_10px_rgba(255,59,48,0.3)] active:opacity-85"
+                >
+                  去领取
+                </button>
               </div>
-              <button type="button" onClick={() => onToast('已领取银行卡专享券（演示）')} className="shrink-0 rounded-full bg-[#FF3B30] px-4 py-1.5 text-[12px] font-bold text-white active:opacity-85">
-                去领取
-              </button>
+              <span className="shrink-0 text-[38px] leading-none" aria-hidden="true">
+                🍔🧧
+              </span>
             </div>
-            <div className="mt-3 flex items-center justify-between gap-2 rounded-[10px] bg-[#FFF8E1] px-3 py-2.5">
-              <span className="min-w-0 truncate text-[12px] text-black/70">你有一笔购药抵扣金待激活</span>
-              <button type="button" onClick={() => onToast('购药抵扣金已激活（演示）')} className="shrink-0 rounded-full bg-[#FFC300] px-3 py-1 text-[11px] font-bold text-black/80 active:opacity-85">
-                点我激活
-              </button>
+          </div>
+
+          <div className="mt-3 flex items-center gap-2.5 rounded-[16px] bg-[#FFF6D9] p-3.5">
+            <span
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] bg-gradient-to-br from-[#FF5E4D] to-[#E4372B] text-[10px] font-bold leading-none text-[#FFE9B8]"
+              aria-hidden="true"
+            >
+              限时
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13.5px] font-bold text-black/85">你有一笔购药抵扣金待激活</p>
+              <p className="mt-0.5 text-[10.5px] text-black/40">美团优质用户专享</p>
             </div>
+            <button type="button" onClick={() => onToast('购药抵扣金已激活（演示）')} className="shrink-0 rounded-full bg-[#FFC300] px-3.5 py-1.5 text-[12px] font-bold text-black/85 active:opacity-85">
+              点我激活
+            </button>
+          </div>
+          <div className="mt-3 flex items-center justify-center gap-1.5">
+            {[0, 1, 2, 3].map((i) => (
+              <span key={i} className={`h-1 rounded-full ${i === 0 ? 'w-3.5 bg-black/35' : 'w-1 bg-black/15'}`} />
+            ))}
+          </div>
+
+          <div className="pt-9 text-center">
+            <p className="text-[15px] font-semibold text-black/20">美团支付</p>
+            <p className="mt-1 text-[10px] tracking-[2px] text-black/15">— 美团旗下金融服务 —</p>
           </div>
         </div>
       </div>
 
-      {/* 添加银行卡流程弹层：选银行 → 卡号 → 初始余额 */}
+      {/* 添加银行卡流程弹层（美化版）：选银行 → 卡面预览 + 自动生成卡号（可换/可改）→ 初始余额 */}
       {addOpen && (
         <MtWalletSheet title="添加银行卡" onClose={() => setAddOpen(false)}>
-          <div className="px-4 pb-4 pt-3">
+          <div className="px-4 pb-2 pt-3">
+            {/* 步骤指示条 */}
+            <div className="mb-4 flex items-center justify-center gap-1.5">
+              {(['bank', 'no', 'bal'] as const).map((s, i) => {
+                const cur = ['bank', 'no', 'bal'].indexOf(addStep);
+                return <span key={s} className={`h-1 rounded-full transition-all ${addStep === s ? 'w-6 bg-[#FFC300]' : i < cur ? 'w-2.5 bg-[#FFD900]/50' : 'w-2.5 bg-black/10'}`} />;
+              })}
+            </div>
+
             {addStep === 'bank' && (
               <>
-                <p className="pb-2 text-[12px] text-black/40">选择银行</p>
-                <div className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto no-scrollbar">
-                  {MT_BANK_NAMES.map((b) => (
-                    <button
-                      key={b}
-                      type="button"
-                      onClick={() => {
-                        setBank(b);
-                        setAddErr('');
-                        setAddStep('no');
-                      }}
-                      className={`flex items-center gap-1.5 rounded-[10px] border px-2.5 py-2.5 text-left text-[12.5px] active:opacity-80 ${
-                        bank === b ? 'border-[#E4B36B] bg-[#FFF8E9] font-medium text-black/85' : 'border-black/10 bg-[#F7F8FA] text-black/70'
-                      }`}
-                    >
-                      <Landmark className="h-4 w-4 shrink-0 text-[#C8860D]" strokeWidth={1.8} />
-                      <span className="truncate">{b}</span>
-                    </button>
-                  ))}
+                <p className="pb-2.5 text-[12px] font-medium text-black/45">选择银行</p>
+                <div className="grid max-h-64 grid-cols-2 gap-2.5 overflow-y-auto no-scrollbar">
+                  {MT_BANK_NAMES.map((b) => {
+                    const meta = mtBankMeta(b);
+                    return (
+                      <button
+                        key={b}
+                        type="button"
+                        onClick={() => {
+                          setBank(b);
+                          setCardNo(mtGenCardNo(b));
+                          setAddErr('');
+                          setAddStep('no');
+                        }}
+                        className={`flex items-center gap-2.5 rounded-[12px] border px-3 py-3 text-left transition-colors active:opacity-80 ${
+                          bank === b ? 'border-[#E4B36B] bg-[#FFF8E9]' : 'border-black/[0.08] bg-[#F7F8FA]'
+                        }`}
+                      >
+                        <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-[9px] bg-gradient-to-br ${meta.grad} text-[13px] font-bold text-white`}>{meta.short}</span>
+                        <span className="min-w-0 truncate text-[12.5px] font-medium text-black/80">{b}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </>
             )}
-            {addStep === 'no' && (
+
+            {addStep === 'no' && bank && (
               <>
-                <p className="pb-2 text-[12px] text-black/40">银行卡号（{bank ?? ''}）</p>
+                {/* 卡面实时预览 */}
+                <div className={`relative overflow-hidden rounded-[16px] bg-gradient-to-br ${mtBankMeta(bank).grad} p-4 text-white shadow-[0_10px_26px_rgba(0,0,0,0.22)]`}>
+                  <span className="pointer-events-none absolute -right-8 -top-10 h-28 w-28 rounded-full bg-white/10" aria-hidden="true" />
+                  <div className="relative flex items-center justify-between">
+                    <p className="text-[14px] font-bold">{bank}</p>
+                    <span className="grid h-7 w-7 place-items-center rounded-full bg-white/20 text-[12px] font-bold">{mtBankMeta(bank).short}</span>
+                  </div>
+                  <div className="relative mt-4 h-7 w-10 rounded-[5px] bg-gradient-to-br from-[#FFE9A8] to-[#D8A93F]" aria-hidden="true">
+                    <span className="absolute left-1 top-1/2 h-[1.5px] w-8 -translate-y-1/2 bg-[#B58524]/60" />
+                  </div>
+                  <p className="relative mt-3 text-[17px] font-semibold tracking-[2px]" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {mtFmtCardNo(cardNo) || '•••• •••• •••• ••••'}
+                  </p>
+                  <div className="relative mt-2.5 flex items-center justify-between text-[10.5px] text-white/70">
+                    <span>储蓄卡</span>
+                    <span>美团演示卡</span>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex items-center justify-between">
+                  <p className="flex items-center text-[12px] font-medium text-black/45">
+                    银行卡号
+                    <span className="ml-2 rounded-[4px] bg-[#FFF6D9] px-1.5 py-0.5 text-[10px] font-medium text-[#C8860D]">已自动生成 · 可修改</span>
+                  </p>
+                  <button type="button" onClick={() => { setCardNo(mtGenCardNo(bank)); setAddErr(''); }} className="flex items-center gap-1 text-[12px] font-semibold text-[#C8860D] active:opacity-70">
+                    <RefreshCw className="h-3.5 w-3.5" strokeWidth={2.2} />
+                    换一个
+                  </button>
+                </div>
                 <input
-                  value={cardNo}
+                  value={mtFmtCardNo(cardNo)}
                   onChange={(e) => {
                     setCardNo(e.target.value.replace(/\D/g, '').slice(0, 19));
                     setAddErr('');
                   }}
                   inputMode="numeric"
-                  placeholder="请输入银行卡号（取后 4 位为尾号）"
-                  className="w-full rounded-[10px] border border-black/10 bg-[#F7F8FA] px-3 py-2.5 text-[15px] tracking-wide text-black/85 outline-none placeholder:text-[12px] placeholder:tracking-normal placeholder:text-black/30"
+                  placeholder="请输入或使用自动生成的卡号"
+                  className="mt-2 w-full rounded-[12px] border border-black/[0.08] bg-[#F7F8FA] px-4 py-3 text-[15px] tracking-[1.5px] text-black/85 outline-none transition-colors placeholder:tracking-normal placeholder:text-[12px] placeholder:text-black/30 focus:border-[#FFC300]"
                   aria-label="银行卡号"
                 />
                 {addErr ? <p className="mt-1.5 text-[12px] text-[#FF3B30]">{addErr}</p> : null}
                 <div className="mt-4 flex gap-3">
-                  <button type="button" onClick={() => setAddStep('bank')} className="flex-1 rounded-full border border-black/15 py-2.5 text-[14px] text-black/70 active:opacity-80">
+                  <button type="button" onClick={() => setAddStep('bank')} className="flex-1 rounded-full border border-black/[0.12] py-2.5 text-[14px] text-black/70 active:opacity-80">
                     上一步
                   </button>
                   <button
@@ -6706,32 +6972,62 @@ function WalletCardsPage({ session, onClose, onOpenBills, onOpenPayPwd, onToast 
                       setAddErr('');
                       setAddStep('bal');
                     }}
-                    className="flex-1 rounded-full bg-[#FFC300] py-2.5 text-[14px] font-bold text-black/85 active:opacity-85"
+                    className="flex-1 rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] py-2.5 text-[14px] font-bold text-black/85 shadow-[0_4px_12px_rgba(255,195,0,0.3)] active:opacity-90"
                   >
                     下一步
                   </button>
                 </div>
               </>
             )}
-            {addStep === 'bal' && (
+
+            {addStep === 'bal' && bank && (
               <>
-                <p className="pb-2 text-[12px] text-black/40">卡内余额（演示用，默认 1000）</p>
-                <input
-                  value={balText}
-                  onChange={(e) => {
-                    setBalText(e.target.value.replace(/[^\d.]/g, '').slice(0, 10));
-                    setAddErr('');
-                  }}
-                  inputMode="decimal"
-                  className="w-full rounded-[10px] border border-black/10 bg-[#F7F8FA] px-3 py-2.5 text-[15px] text-black/85 outline-none"
-                  aria-label="卡内余额"
-                />
+                <div className="flex items-center gap-3 rounded-[12px] bg-[#F7F8FA] p-3">
+                  <span className={`grid h-10 w-10 place-items-center rounded-[10px] bg-gradient-to-br ${mtBankMeta(bank).grad} text-[15px] font-bold text-white`}>{mtBankMeta(bank).short}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13.5px] font-semibold text-black/85">{bank}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-black/40">尾号{cardNo.replace(/\D/g, '').slice(-4)} · {mtFmtCardNo(cardNo)}</p>
+                  </div>
+                </div>
+                <p className="mt-4 pb-2 text-[12px] font-medium text-black/45">卡内余额（演示用）</p>
+                <div className="flex items-center gap-2 rounded-[12px] border border-black/[0.08] bg-[#F7F8FA] px-4 py-3 transition-colors focus-within:border-[#FFC300]">
+                  <span className="text-[18px] font-bold text-black/70">¥</span>
+                  <input
+                    value={balText}
+                    onChange={(e) => {
+                      setBalText(e.target.value.replace(/[^\d.]/g, '').slice(0, 10));
+                      setAddErr('');
+                    }}
+                    inputMode="decimal"
+                    className="min-w-0 flex-1 bg-transparent text-[17px] font-semibold text-black/85 outline-none"
+                    aria-label="卡内余额"
+                  />
+                </div>
                 {addErr ? <p className="mt-1.5 text-[12px] text-[#FF3B30]">{addErr}</p> : null}
+                <div className="mt-3 flex gap-2">
+                  {[500, 1000, 5000, 10000].map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => {
+                        setBalText(String(v));
+                        setAddErr('');
+                      }}
+                      className="flex-1 rounded-full border border-black/[0.08] bg-white py-1.5 text-[12px] text-black/65 transition-colors active:border-[#FFC300]"
+                    >
+                      ¥{v >= 10000 ? '1万' : v >= 1000 ? `${v / 1000}千` : v}
+                    </button>
+                  ))}
+                </div>
                 <div className="mt-4 flex gap-3">
-                  <button type="button" onClick={() => setAddStep('no')} className="flex-1 rounded-full border border-black/15 py-2.5 text-[14px] text-black/70 active:opacity-80">
+                  <button type="button" onClick={() => setAddStep('no')} className="flex-1 rounded-full border border-black/[0.12] py-2.5 text-[14px] text-black/70 active:opacity-80">
                     上一步
                   </button>
-                  <button type="button" onClick={confirmAdd} className="flex-1 rounded-full bg-[#FFC300] py-2.5 text-[14px] font-bold text-black/85 active:opacity-85">
+                  <button
+                    type="button"
+                    onClick={confirmAdd}
+                    className="flex-1 rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] py-2.5 text-[14px] font-bold text-black/85 shadow-[0_4px_12px_rgba(255,195,0,0.3)] active:opacity-90"
+                  >
                     确认添加
                   </button>
                 </div>
@@ -6741,19 +7037,32 @@ function WalletCardsPage({ session, onClose, onOpenBills, onOpenPayPwd, onToast 
         </MtWalletSheet>
       )}
 
-      {/* 卡片管理弹层：删除卡片 */}
+      {/* 卡片管理弹层（美化版）：卡摘要 + 删除/取消 */}
       {manageId && (
         <MtWalletSheet title="卡片管理" onClose={() => setManageId(null)}>
           <div className="px-4 py-3">
             {manageCard ? (
-              <p className="pb-2 text-[13px] text-black/60">
-                {manageCard.bank} 尾号{manageCard.tail} · 余额 ¥{mtW2(manageCard.balance)}
-              </p>
+              <div className="flex items-center gap-3 rounded-[12px] bg-[#F7F8FA] p-3">
+                <span className={`grid h-10 w-10 place-items-center rounded-[10px] bg-gradient-to-br ${mtBankMeta(manageCard.bank).grad} text-[15px] font-bold text-white`}>
+                  {mtBankMeta(manageCard.bank).short}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[14px] font-semibold text-black/85">
+                    {manageCard.bank} 尾号{manageCard.tail}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-black/40">卡内余额 ¥{mtW2(manageCard.balance)}</p>
+                </div>
+              </div>
             ) : null}
-            <button type="button" onClick={() => manageId && removeCard(manageId)} className="w-full rounded-[10px] bg-[#FFF0F0] py-3 text-[14px] font-medium text-[#FF3B30] active:opacity-80">
+            <button
+              type="button"
+              onClick={() => manageId && removeCard(manageId)}
+              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-full bg-[#FFF0F0] py-3 text-[14px] font-medium text-[#FF3B30] active:opacity-80"
+            >
+              <Trash2 className="h-4 w-4" strokeWidth={2} />
               删除卡片
             </button>
-            <button type="button" onClick={() => setManageId(null)} className="mt-2 w-full rounded-[10px] bg-[#F7F8FA] py-3 text-[14px] text-black/70 active:opacity-80">
+            <button type="button" onClick={() => setManageId(null)} className="mt-2 w-full rounded-full bg-[#F7F8FA] py-3 text-[14px] text-black/70 active:opacity-80">
               取消
             </button>
           </div>
@@ -6830,80 +7139,88 @@ function WalletBillsPage({ session, onClose }: { session: MtSession; onClose: ()
   );
 }
 
-/** 借钱页：黄头 logo + 可借额度白卡 + 产品详情 + 四大安全保障 */
+/** 借钱页（截图对齐：黄渐变 + 返回/客服 + 美团·借钱 logo + 大标题 + 白卡可借额度（协议可勾选）+ 产品详情灰卡 + 四大安全保障） */
 function WalletLoanPage({ session, onClose, onToast }: { session: MtSession; onClose: () => void; onToast: (m: string) => void }) {
+  const [agree, setAgree] = useState(false);
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#F7F8FA]">
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#FAFAF8]">
       <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
-        {/* 黄渐变头部 */}
-        <div className="bg-gradient-to-b from-[#FFD100] to-[#FDEFB2] px-4 pb-10 pt-[54px]">
+        {/* 黄渐变头部：返回 + 客服 + logo 行 + 大标题 */}
+        <div className="bg-gradient-to-b from-[#FFE9A0] via-[#FFF4C9] to-[#FAFAF8] px-4 pb-6 pt-[54px]">
           <div className="relative flex h-10 items-center">
             <button type="button" aria-label="返回" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-full active:bg-black/10">
-              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+              <ChevronLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.4} />
+            </button>
+            <button type="button" aria-label="联系客服" onClick={() => onToast('在线客服（演示）')} className="ml-auto grid h-9 w-9 place-items-center rounded-full active:bg-black/10">
+              <Headset className="h-[19px] w-[19px] text-black/70" strokeWidth={1.9} />
             </button>
           </div>
           <div className="mt-1 flex items-center gap-2">
-            <span className="grid h-7 w-7 place-items-center rounded-[7px] bg-black text-[11px] font-bold leading-none text-[#FFD100]">美团</span>
-            <span className="text-[17px] font-bold text-black/85">美团·借钱</span>
+            <span className="grid h-7 w-7 place-items-center rounded-[7px] bg-[#FFD100] text-[11px] font-bold leading-none text-black/85">美团</span>
+            <span className="text-[18px] font-bold text-black/85">美团·借钱</span>
           </div>
-          <p className="mt-3 text-[26px] font-extrabold leading-tight text-[#5A3A10]">生活周转小帮手</p>
+          <p className="mt-3 text-[30px] font-extrabold leading-tight tracking-wide text-[#5C3A18]">生活周转小帮手</p>
         </div>
 
-        {/* 可借额度白卡 */}
-        <div className="-mt-6 px-4">
-          <div className="rounded-[16px] bg-white p-5 shadow-sm">
-            <p className="text-[12px] text-black/45">大约可借（元）</p>
-            <p className="mt-1.5 text-[40px] font-extrabold leading-none tracking-[6px] text-black/85">******</p>
-            <p className="mt-2.5 text-[11px] text-black/35">最终获取额度，以实际审批为准</p>
+        {/* 可借额度白卡（协议可勾选，未勾选申请会被拦截提示） */}
+        <div className="px-4">
+          <div className="rounded-[18px] bg-white px-5 py-6 shadow-[0_4px_16px_rgba(90,60,10,0.05)]">
+            <p className="text-center text-[13.5px] text-black/55">大约可借 (元)</p>
+            <p className="mt-2 text-center text-[42px] font-extrabold leading-none tracking-[6px] text-black/85">******</p>
+            <p className="mt-3 text-center text-[11.5px] text-black/35">最终获取额度，以实际审批为准</p>
             <button
               type="button"
-              onClick={() => onToast('申请已提交，请以实际审批为准（演示）')}
-              className="mt-4 w-full rounded-full bg-gradient-to-r from-[#FFD100] to-[#FFC300] py-3 text-[15px] font-bold text-black/85 active:opacity-85"
+              onClick={() => onToast(agree ? '申请已提交，请以实际审批为准（演示）' : '请先勾选同意协议')}
+              className="mt-5 w-full rounded-full bg-[#FFD100] py-3.5 text-[16px] font-bold text-black/85 shadow-[0_6px_16px_rgba(255,209,0,0.35)] active:opacity-90"
             >
               点击申请
             </button>
-            <p className="mt-3 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-black/35">
-              <span className="mt-[5px] h-1 w-1 shrink-0 rounded-full bg-black/25" aria-hidden="true" />
-              <span>
-                已同意并阅读
-                <span className="text-[#1677FF]">《美团借钱相关协议》</span>
-                <span className="text-[#1677FF]">《个人信息处理授权书》</span>
-                ，借款额度与利率以实际审批结果为准
-              </span>
-            </p>
+            <div className="mt-4 flex items-start gap-2">
+              <button
+                type="button"
+                role="checkbox"
+                aria-checked={agree}
+                aria-label="同意协议"
+                onClick={() => setAgree((v) => !v)}
+                className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border transition-colors ${agree ? 'border-[#FFC300] bg-[#FFC300]' : 'border-black/25'}`}
+              >
+                {agree && <Check className="h-2.5 w-2.5 text-black" strokeWidth={3.5} />}
+              </button>
+              <p className="text-[10.5px] leading-relaxed text-black/40">
+                已同意<span className="text-[#1677FF]">协议</span>
+                ，将您美团留存的手机号、银行卡及身份证号用于美团金融服务，该服务由美团小贷及其合作金融机构提供
+              </p>
+            </div>
           </div>
         </div>
 
-        {/* 产品详情 */}
-        <p className="px-5 pb-2 pt-6 text-[15px] font-bold text-black/85">产品详情</p>
-        <div className="px-4">
-          <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4">
+        {/* 产品详情（居中节标题 + 灰卡行） */}
+        <p className="pt-7 text-center text-[16px] font-bold text-black/85">产品详情</p>
+        <div className="mt-3 px-4">
+          <div className="divide-y divide-black/[0.04] rounded-[14px] bg-[#F5F6F7] px-4">
             {(
               [
-                ['借款额度', '500-200,000 元'],
-                ['年化利率(单利)', '5.4%-24%'],
-                ['分期期限', '3、6、12期'],
+                ['借款额度', '500 - 200,000'],
+                ['年化利率 (单利)', '5.4% - 24%'],
+                ['分期期限', '3、6、12 期'],
               ] as [string, string][]
             ).map(([k, v]) => (
               <div key={k} className="flex items-center justify-between py-3.5">
-                <span className="text-[13px] text-black/55">{k}</span>
-                <span className="text-[13px] font-semibold text-black/85">{v}</span>
+                <span className="text-[13px] text-black/50">{k}</span>
+                <span className="text-[13.5px] font-semibold text-black/85">{v}</span>
               </div>
             ))}
           </div>
         </div>
 
         {/* 四大安全保障 */}
-        <p className="px-5 pb-2 pt-6 text-[15px] font-bold text-black/85">四大安全保障</p>
-        <div className="px-4 pb-[28px]">
-          <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4">
+        <p className="pt-7 text-center text-[16px] font-bold text-black/85">四大安全保障</p>
+        <div className="mt-3 px-4 pb-[28px]">
+          <div className="divide-y divide-black/[0.04] rounded-[14px] bg-white px-4 shadow-[0_2px_10px_rgba(0,0,0,0.03)]">
             {MT_LOAN_GUARDS.map((g) => (
               <div key={g.t} className="py-3.5">
-                <p className="flex items-center gap-1.5 text-[13.5px] font-semibold text-black/80">
-                  <ShieldCheck className="h-4 w-4 shrink-0 text-[#C8860D]" strokeWidth={1.9} />
-                  {g.t}
-                </p>
-                <p className="mt-1 pl-[22px] text-[12px] leading-relaxed text-black/45">{g.d}</p>
+                <p className="text-[13.5px] font-bold text-black/85">{g.t}</p>
+                <p className="mt-1 text-[12px] leading-relaxed text-black/45">{g.d}</p>
               </div>
             ))}
           </div>
