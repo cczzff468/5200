@@ -2,6 +2,9 @@
 # ncm-keeper.sh —— netease-api（网易云 API，端口 3010）守护脚本
 # 与 next-keeper.sh 同模式：PID 单实例守卫 + 端口掉线自动拉起 + 崩溃自愈
 #
+# 代码源：cczzff468/api-enhanced（NeteaseCloudMusicApiEnhanced v4.41.1 vendor 于本目录，
+#         原 NeteaseCloudMusicApi@4.32.0 npm 包方案已替换，接口向下兼容）。
+#
 # 注意：必须用 node 运行 index.js（bun 的 crypto 与 eapi 加密不兼容，
 #       会导致 /login/qr/key 等接口被网易返回「参数错误」，见 index.js 注释）。
 #
@@ -31,10 +34,10 @@ while true; do
   fi
   echo "$(date '+%F %T') port 3010 down, starting netease-api..." >> "$LOG"
   cd /home/z/my-project/mini-services/netease-api || { sleep 5; continue; }
-  # 依赖缺失时自动补装（防止 node_modules 被清理后服务起不来）
-  if [ ! -f node_modules/NeteaseCloudMusicApi/package.json ]; then
-    echo "$(date '+%F %T') node_modules missing, running bun install..." >> "$LOG"
-    bun install >> "$LOG" 2>&1
+  # 依赖缺失时自动补装（防止 node_modules 被清理后服务起不来；npm + Node 24 运行时）
+  if [ ! -f node_modules/express/package.json ]; then
+    echo "$(date '+%F %T') node_modules missing, running npm install..." >> "$LOG"
+    npm i --omit=dev --no-audit --no-fund --ignore-scripts >> "$LOG" 2>&1
   fi
   node index.js >> "$LOG" 2>&1
   echo "$(date '+%F %T') netease-api exited code=$?, restarting in 3s" >> "$LOG"

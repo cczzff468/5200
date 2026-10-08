@@ -9,7 +9,8 @@ import { NextRequest } from 'next/server';
  *   Next.js 没有这些路由（404）。统一走同源 /api/music/ncm/*，两条通道行为完全一致；
  * - 顺带解决跨域与 cookie 透传。
  *
- * mini-services/netease-api（NeteaseCloudMusicApi@4.32.0）必须在本机 3010 端口运行。
+ * mini-services/netease-api（api-enhanced v4.41.1，vendor 于本目录；原
+ * NeteaseCloudMusicApi@4.32.0 npm 包方案已替换，接口向下兼容）必须在本机 3010 端口运行。
  */
 
 export const runtime = 'nodejs';

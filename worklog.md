@@ -17215,3 +17215,24 @@ Stage Summary:
 - 关键设计：接单通知挂「支付完成」而非订单创建（未支付脏单不打扰，幂等防重）；红点基线=从未查看时全部已付单计未看；扫一扫共用一组件按 flavor 换主题色与结果集，美团端结果接真实业务（店铺码/神券）
 - 改动文件：meituan-data.ts / meituan-store.ts / mt-shop-notify.ts（新）/ mt-scan.tsx（新）/ mt-ai-engage.ts / mt-proxy-pay.ts / meituan.tsx / mt-dish-edit.tsx / mt-shop-manage.tsx / wechat.tsx / qq.tsx
 - 未逐一验证项（确定性代码路径/LLM 行为级）：AI 复购彩蛋与券到期提醒为 buildMtEngageCtx 确定性规则注入（复购候选≥2次单才出现；券到期≤24h 注入一次并写 kv 防复读）；AI 附言需 LLM 聊天场景触发；售罄/打烊在 AI 代点/请客/自己点三入口的拒绝文案已由 mtCreateAiDraft/mtValidateParsedOrder 双入口保证
+
+---
+Task ID: 15
+Agent: Z.ai Code (main)
+Task: 网易云 API 升级部署——GitHub 调研选型最佳维护版 → fork 进用户仓库 → vendor 进沙箱热切换（原 NeteaseCloudMusicApi@4.32.0 npm 包方案替换为 api-enhanced v4.41.1 源码部署）
+
+Work Log:
+- 调研选型（GitHub API 实时数据）：原版 Binaryify/NeteaseCloudMusicApi（30243⭐）2024-02 已归档；选定社区复活项目 NeteaseCloudMusicApiEnhanced/api-enhanced（1941⭐/2868 forks，MIT，JavaScript，推送 2026-10-06 仍活跃，自称"全网最全"，同一条 4.x 版本线 v4.41.1，200+ 接口向下完全兼容，npm @neteasecloudmusicapienhanced/api + Docker moefurina/ncm-api 双发布）
+- 入用户仓库：用用户 PAT 调 GitHub Fork API 成功 → cczzff468/api-enhanced（用户可自行同步上游）
+- 沙箱部署（零停机热切换）：clone fork → 剥离 .git/开发期文件 vendor 进 mini-services/netease-api（保留 module/util/plugins/data/public/server.js/generateConfig.js 等，去 .github/test/examples/module_example/scripts/pnpm 配置）；新 index.js 包装器 = 保留 next-keeper 注入块 + 沿用上游 app.js 初始化（anonymous_token→generateConfig）+ serveNcmApi({port:3010, checkVersion:false})（NCM_PORT 可覆盖供测试）
+- 安装：npm i --omit=dev --ignore-scripts（husky prepare 在非 git 目录报错需 ignore-scripts）；Express 5.2.1 + axios 1.20.0
+- 安全上线流程：3999 端口试运行全通过后才动生产 → kill 旧 node(17285) → 原子 mv 换入 → 守护 keeper(17279) 自动拉起新代码（793），next-keeper(17292) 存活，全程不杀启动树
+- 踩坑修复：①旧 keeper 内存脚本 bun-install 分支在重启间隙与 npm 竞争产生 bun.lock → rm + npm prune + stub node_modules/NeteaseCloudMusicApi/package.json 防复发（新 ncm-keeper.sh 依赖检查改 express + npm i）②启动期 xeapi public key is missing / Z_BUF_ERROR 告警 = 增强版附加功能非致命（generateConfig 内部已捕获，核心 weapi/eapi 接口不受影响）
+- 验证（三通道 × 25 端点）：直连 3010 / Next 同源代理 /api/music/ncm/* / Caddy 网关 XTransformPort=3010 全通；扫码登录 key→create(qrimg base64) 链路通；cloudsearch/toplist/personalized/newsong/recommend/songs/dj/hot/search hot/song detail/song url v1/lyric/playlist detail/artists/album/simi song/user playlist/likelist/vip info/artist sublist/album sublist/login status 全 200（song/url 未登录 url:null 为正常）；「参数错误」复测确认为同秒并发瞬时风控非代码问题；tsc 0 错误、eslint 0 问题、dev.log 无新错误（仅既有 instrumentation Edge 良性警告）
+- 文档：新增 mini-services/netease-api/VENDOR.md（代码来源/与上游差异/运行要求/守护链/接入通道/告警说明/上游更新方法/沙箱外部署指南 Docker+pnpm+pm2）；route.ts 与 music-api.ts 头注释版本口径同步
+
+Stage Summary:
+- 交付：沙箱网易云 API 从停维护的 npm 包 4.32.0 升级为活跃维护的 api-enhanced 4.41.1 源码 vendor 部署，接口全兼容零前端改动；用户 GitHub 新增 fork cczzff468/api-enhanced；守护链（instrumentation→ncm-keeper→node→next-keeper）完整保留
+- 关键决策：vendor 全量运行时文件含 public/（14M，保 /docs 文档界面可用）+ package-lock.json 入库（npm 可复现）；旧 keeper 不杀（启动树成员），以 stub 隔离其旧依赖检查逻辑
+- 改动文件：mini-services/netease-api/**（vendor 源码 + VENDOR.md + 新 index.js/ncm-keeper.sh）+ src/app/api/music/ncm/[...path]/route.ts + src/lib/ios/music-api.ts（注释口径）
+- 后续可做：用户离开沙箱后按 VENDOR.md 尾节用 Docker/源码自部署，音乐 App 设置页填 baseUrl 即切自建实例

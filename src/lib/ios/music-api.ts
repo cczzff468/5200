@@ -4,8 +4,9 @@
  * 网易云音乐 API 客户端（音乐 App 专用）
  *
  * 双模式：
- * - 内置默认（baseUrl 为空）：走本机 mini service（mini-services/netease-api，端口 3010），
- *   前端相对路径 + ?XTransformPort=3010 经 Caddy 网关原路径转发，凭证不出本机；
+ * - 内置默认（baseUrl 为空）：走本机 mini service（mini-services/netease-api，端口 3010，
+ *   api-enhanced v4.41.1 vendor 部署），前端相对路径 + ?XTransformPort=3010 经 Caddy 网关
+ *   原路径转发（或同源 Next 代理 /api/music/ncm/*），凭证不出本机；
  * - 自定义（baseUrl 非空）：直连用户自部署的 NeteaseCloudMusicApi 服务（其 server.js 默认
  *   带 CORS: *），可选 apiKey（header X-API-Key + query apikey 双通道兼容不同部署）。
  *
