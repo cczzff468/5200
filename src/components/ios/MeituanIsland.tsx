@@ -267,8 +267,13 @@ export default function MeituanIsland() {
             </span>
           </motion.div>
 
-          {/* ---------- 大窗内容（展开基本完成后淡入；对齐参考截图布局） ---------- */}
-          <motion.div initial={false} animate={{ opacity: expanded ? 1 : 0 }} transition={{ duration: expanded ? 0.18 : 0.08 }} className={expanded ? 'block' : 'hidden'}>
+          {/* ---------- 大窗内容（宽度形变基本完成后错峰淡入，避免形变中内容被裁切的观感） ---------- */}
+          <motion.div
+            initial={false}
+            animate={{ opacity: expanded ? 1 : 0 }}
+            transition={{ duration: expanded ? 0.2 : 0.08, delay: expanded ? 0.18 : 0 }}
+            className={expanded ? 'block' : 'hidden'}
+          >
             <div className="flex items-center gap-2.5 p-3 pb-2">
               {/* 商家图 */}
               {active.merchantImg ? (
@@ -284,22 +289,25 @@ export default function MeituanIsland() {
                   {subLabelOf(active)}
                 </p>
               </div>
-              {/* 美团袋鼠标（白底圆角方块；图标自带圆角白描边，不再二次裁切） */}
-              <span className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[9px] bg-white">
-                <img src="/icons/meituan-app.png" alt="" draggable={false} className="h-[30px] w-[30px] object-contain" />
-              </span>
+              {/* 美团图标（黄底圆角方块直出：去白底容器，黑底高对比，任何缩放下无二次裁切/描边漏白） */}
+              <img
+                src="/icons/meituan-app.png?v=2"
+                alt=""
+                draggable={false}
+                className="h-[34px] w-[34px] shrink-0 select-none object-contain"
+              />
             </div>
 
-            {/* 接单 → 取餐 → 送达 进度条（骑手形象骑在进度上） */}
-            <div className="px-5 pb-1 pt-2">
+            {/* 接单 → 取餐 → 送达 进度条（骑手形象骑在进度上；pt-6 顶部净空，骑手不压上方商家图/文案） */}
+            <div className="px-5 pb-1 pt-6">
               <div className="relative h-[10px]">
-                {/* 骑手（贴在进度头顶上方） */}
+                {/* 骑手（骑在进度线上：头部探出线上方，不侵入上方内容行） */}
                 <img
                   src={riderSrc}
                   alt=""
                   draggable={false}
-                  className="absolute bottom-[7px] h-[30px] w-[30px] -translate-x-1/2 select-none object-contain transition-[left] duration-700 ease-linear"
-                  style={{ left: `${p * 100}%`, filter: 'drop-shadow(0 3px 3px rgba(0,0,0,0.4))' }}
+                  className="absolute h-[30px] w-[30px] -translate-x-1/2 select-none object-contain transition-[left] duration-700 ease-linear"
+                  style={{ left: `${p * 100}%`, bottom: -6, filter: 'drop-shadow(0 3px 3px rgba(0,0,0,0.4))' }}
                 />
                 {/* 轨道 */}
                 <div className="absolute inset-x-0 top-1/2 h-[5px] -translate-y-1/2 rounded-full bg-white/22">

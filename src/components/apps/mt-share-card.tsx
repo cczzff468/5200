@@ -8,9 +8,10 @@
  *   与逐秒 tick——订单推进时聊天里的卡片自动跟随（真·动态卡片）。
  */
 import { useEffect, useState } from 'react';
-import { Bike, Check, CircleCheck, Clock as ClockIcon, ShieldCheck, Store } from 'lucide-react';
+import { Bike, Check, ChevronRight, CircleCheck, Clock as ClockIcon, ShieldCheck, Store } from 'lucide-react';
 import { FoodImg } from './mt-food-img';
 import { mtGetShare, mtShareOrderOf, mtShareStagesOf } from '@/lib/ios/mt-order-share';
+import { navigateToChatSession } from '@/lib/ios/island-notify';
 
 const fmt2 = (n: number): string => {
   const s = n.toFixed(2);
@@ -59,18 +60,26 @@ export function MtShareBubble({ sid }: { sid: string }) {
   const reachedCnt = stages.filter((s) => s.at).length;
   const canceled = order?.status === 'canceled';
 
+  /** 点击卡片 → 唤起美团 App 打开对应订单详情（复用灵动岛导航总线；订单已不存在时不跳） */
+  const openOrderDetail = () => {
+    if (!order) return;
+    navigateToChatSession('meituan', order.id);
+  };
+
   return (
     <div
       data-testid="mt-share-bubble"
-      className="relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)]"
-      aria-label={`美团订单分享 ¥${fmt2(share.amount)}（${stages[reachedCnt - 1]?.label ?? '提交订单'}）`}
+      role={order ? 'button' : undefined}
+      aria-label={`美团订单分享 ¥${fmt2(share.amount)}（${stages[reachedCnt - 1]?.label ?? '提交订单'}）${order ? '，点击查看订单详情' : ''}`}
+      onClick={openOrderDetail}
+      className={`relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] ${order ? 'cursor-pointer transition-transform duration-150 active:scale-[0.97]' : ''}`}
     >
       {/* 箭头指向头像侧（我发出 → 右） */}
       <span aria-hidden="true" className="absolute top-[13px] -right-[4px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white" />
 
       {/* 头部：美团 logo + 订单动态 */}
       <span className="relative flex items-center gap-1.5">
-        <img src="/icons/meituan-app.png" alt="" className="h-[22px] w-[22px] rounded-full object-cover" />
+        <img src="/icons/meituan-app.png?v=2" alt="" className="h-[22px] w-[22px] rounded-md object-cover" />
         <span className="text-[13px] font-semibold text-black/85">美团</span>
         <span className="rounded-full bg-[#FFF3D1] px-1.5 py-[2px] text-[10px] font-medium leading-none text-[#B77900]">订单动态</span>
         <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#00B862]">
@@ -151,9 +160,15 @@ export function MtShareBubble({ sid }: { sid: string }) {
         )}
       </span>
 
-      {/* 底注 */}
-      <span className="relative mt-2 block border-t border-black/[0.05] pt-1.5 text-[10px] text-black/30">
-        美团订单
+      {/* 底注：来源 + 查看详情提示（整卡可点） */}
+      <span className="relative mt-2 flex items-center justify-between border-t border-black/[0.05] pt-1.5 text-[10px] text-black/30">
+        <span>美团订单</span>
+        {order && !canceled && (
+          <span className="flex items-center gap-0.5 font-medium text-[#B77900]">
+            查看详情
+            <ChevronRight className="h-3 w-3" strokeWidth={2.4} />
+          </span>
+        )}
       </span>
     </div>
   );

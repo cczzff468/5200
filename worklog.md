@@ -16869,3 +16869,20 @@ Work Log:
 Stage Summary:
 - 每店菜单保证 7~15 个（AI 正常 10~14，缺失兜底补齐 7~12）；分享卡文案简化为「官方保障/美团订单」；骑手形象回归 22 位纯内置；灵动岛大窗图标描边完整
 - 微信登录账号数据源=联系人 App kind=user 记录（IndexedDB ios-phone-db/contacts），E2E 用注入法建号
+
+---
+Task ID: 3
+Agent: Z.ai Code (main)
+Task: 灵动岛大窗图标二次修复（骑手压图/白底漏白）+ 动态订单卡片点击跳转订单详情
+
+Work Log:
+- 用户复测反馈大窗图标"还是有问题"并附放大截图；像素级测量两轮截图（PIL bbox/圆角轮廓比对）确认美团黄徽章本身渲染完整，真正问题有二：①pendingAccept 等低进度时骑手形象(30px, bottom-7px)上探 27px 压住上方商家图/文案行（用户截图里猪骑在寿司图角上，观感即"剪裁不对"）；②白底圆角容器在岛右上角与屏外白色页面背景融合产生"漏白/描边异常"观感
+- MeituanIsland.tsx：去白底容器改黄底圆角图标直出（h-34 object-contain，黑底高对比零裁切）；URL 加 ?v=2 防陈旧缓存；进度区 pt-2→pt-6 顶部净空 + 骑手改骑线姿态（30px、bottom:-6px，头部探线上方、脚部略过线），任何进度下不再侵入内容行；大窗内容错峰淡入（delay 0.18s）避免形变中内容被裁切的观感
+- mt-share-card.tsx：动态订单卡片整卡可点 → navigateToChatSession('meituan', orderId)（复用灵动岛导航总线，switchToApp+pendingNav+ISLAND_NAV_EVENT → 美团消费后 setPage('orderDetail')）；订单不存在(order=null)不可点；头部 logo rounded-full→rounded-md（方形图标不再圆切四角）；URL ?v=2；底注右侧新增「查看详情›」（#B77900）可点性提示；失效卡（旧分享）保持灰态不可点；active:scale-[0.97] 按压反馈
+- E2E（agent-browser）：注入 delivering 单→大窗弹出→徽章直出无白底、骑手 93% 骑线不压内容→点大窗直达 mt-e2e-island-1 订单详情（配送地图/时间线完整）；详情页分享→微信晴晴→卡片入会话（新卡带「查看详情›」，历史失效卡无入口✓）→点卡片→美团订单详情直达✓；再注入 pendingAccept 单（复现用户截图场景）→大窗猪骑手在 10% 进度处与商家图零重叠✓；console 无错误
+- npx eslint（MeituanIsland.tsx/mt-share-card.tsx）0 问题；tsc --noEmit 0 错误
+
+Stage Summary:
+- 大窗图标判定结论：黄徽章两轮截图均渲染完整，"剪裁不对"实为骑手低进度压图 + 白底容器角部漏白两个复合观感问题，均已修复且实测
+- 动态订单卡片（微信/QQ 聊天内）点击即达对应订单详情；失效分享卡不可点；灵动岛大窗点击跳详情此前已实现并复测通过
+- 改动文件：src/components/ios/MeituanIsland.tsx、src/components/apps/mt-share-card.tsx
