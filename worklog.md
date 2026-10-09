@@ -17488,3 +17488,17 @@ Stage Summary:
 - 淘宝 App 第三批 11 项反馈全部落地并浏览器逐项实测通过：取消订单原因弹窗+交易关闭页（截图1/2 全要素）、点击订单一律进物流页（无轨迹三态状态头）、SkuSheet 三删一改（删笔/删X/删支付单选/地址点击切换）、手机 8 档存储+四组新规格、购物车截图4 重构（含结算栏遮挡修复）、添加地址沉浸式地图（状态栏后面是地图）、地图后笔图标删除
 - 范围限定零破坏：微信/QQ/美团/音乐/聊天链路零改动；支付仍 100% 复用既有钱包；tb-* kv 仍按 uid 隔离
 - 改动文件：src/components/apps/taobao.tsx（CancelOrderSheet/交易关闭页/LogisticsPage prepare 态/SkuSheet/CartPage 重构/AddressEditPage 沉浸式/路由）；src/lib/ios/taobao-store.ts（tbDeleteOrder）；src/lib/ios/taobao-data.ts（手机规格）
+
+---
+Task ID: 27-b
+Agent: main (Z.ai Code)
+Task: 交易成功详情页对齐用户补充截图（IMG_20261009_162307）
+
+Work Log:
+- 详情页顶栏右上：复制图标（ClipboardList）→「…」更多图标（MoreHorizontal，点击仍复制订单号），对齐截图顶栏
+- 交易成功底栏按钮组对齐截图：更多(圆圈图标) | 加入购物车(灰) | 再买一单(橙渐变)——原 闲鱼转卖|加入购物车|评价|再买一单 五钮精简为三钮；闲鱼转卖/申请售后保留在商品卡中部按钮行（对齐截图中部）
+- bunx tsc --noEmit 0 错误；bun run lint 0 错误
+
+Stage Summary:
+- 交易成功详情页与用户补充截图一致（已签收绿字+88VIP店铺卡+商品行+推荐条+三钮行+实付款共减+补贴标+订单信息+底栏三钮）
+- 改动文件：src/components/apps/taobao.tsx（OrderDetailPage 顶栏+completed 底栏）

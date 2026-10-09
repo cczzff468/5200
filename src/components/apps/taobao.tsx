@@ -3062,8 +3062,8 @@ function OrderDetailPage({
         title={o.status === 'cancelled' ? (o.refund ? '退款成功' : '交易关闭') : o.status === 'completed' ? '交易成功' : st}
         onBack={onBack}
         right={
-          <button type="button" aria-label="复制订单信息" onClick={() => copyText(o.id, '订单号已复制')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
-            <ClipboardList className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
+          <button type="button" aria-label="更多操作" onClick={() => copyText(o.id, '订单号已复制')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+            <MoreHorizontal className="h-[20px] w-[20px] text-black/75" strokeWidth={2.2} />
           </button>
         }
       />
@@ -3597,22 +3597,14 @@ function OrderDetailPage({
       {o.status === 'completed' ? (
         <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
           <button type="button" onClick={() => onToast('更多操作（演示）')} className="flex w-11 shrink-0 flex-col items-center gap-0.5 active:opacity-60">
-            <MoreHorizontal className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
+            <MoreHorizontal className="h-[20px] w-[20px] rounded-full bg-black/[0.05] p-0.5 text-black/70" strokeWidth={2.2} />
             <span className="text-[10px] text-black/50">更多</span>
           </button>
           <div className="ml-auto flex items-center gap-2">
-            <button type="button" onClick={() => onToast('已复制商品信息，可去闲鱼转卖')} className="rounded-lg border border-black/12 bg-white px-3.5 py-2 text-[13px] text-black/60 active:opacity-70">
-              闲鱼转卖
-            </button>
-            <button type="button" onClick={addAllToCart} className="rounded-lg border border-black/12 bg-white px-3.5 py-2 text-[13px] text-black/60 active:opacity-70">
+            <button type="button" onClick={addAllToCart} className="rounded-lg bg-black/[0.05] px-4 py-2 text-[13px] text-black/70 active:opacity-70">
               加入购物车
             </button>
-            {!o.review ? (
-              <button type="button" onClick={() => onRate(o.id)} className="rounded-lg border border-[#FF5000] bg-white px-3.5 py-2 text-[13px] font-medium text-[#FF5000] active:opacity-70">
-                评价
-              </button>
-            ) : null}
-            <button type="button" onClick={addAllToCart} className="rounded-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-4 py-2 text-[13px] font-semibold text-white active:opacity-85">
+            <button type="button" onClick={addAllToCart} className="rounded-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-5 py-2 text-[13px] font-semibold text-white active:opacity-85">
               再买一单
             </button>
           </div>
