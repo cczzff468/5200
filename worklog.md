@@ -17502,3 +17502,20 @@ Work Log:
 Stage Summary:
 - 交易成功详情页与用户补充截图一致（已签收绿字+88VIP店铺卡+商品行+推荐条+三钮行+实付款共减+补贴标+订单信息+底栏三钮）
 - 改动文件：src/components/apps/taobao.tsx（OrderDetailPage 顶栏+completed 底栏）
+
+---
+Task ID: 28
+Agent: main (Z.ai Code)
+Task: 淘宝第四轮收尾——退款/售后只显示退款的订单 + 订单卡退款入口修复
+
+Work Log:
+- 核对第三轮/第四轮遗留：f79c106 已落地交易关闭页+点击订单一律进物流页+SkuSheet 三删一改+8档存储+购物车重构+沉浸式地图；52403d7 已对齐交易成功详情页（顶栏更多+底栏三钮）
+- 修复 OrdersPage 退款/售后筛选：原 filter o.status==='cancelled' 会把「仅取消未退款」的交易关闭单一并显示 → 改为 !!o.refund，只显示真正退过款的订单（与我的页面退款/售后角标口径一致，角标本就只数 refund 单）
+- 修复连带死角：待发货订单卡「退款」按钮原 onClick={onOpen} 在「点击订单一律进物流页」后变成进物流页无法退款 → 新增 onRefund prop + RefundConfirmSheet（申请退款弹层：原路退回说明 + 暂不退款/确认退款，busy 态防重复提交）→ 确认后 tbRefundToOrigin 原路退回 + tbMarkRefund（status→cancelled+refund）+ tbPushMsg 退款成功消息 + toast
+- 浏览器端到端实测：①下单马克杯¥25.9→微信零钱支付成功→待发货详情 ②订单卡点退款→弹层→确认退款→toast「退款成功，已原路退回」+卡状态变「退款成功」+消息角标+1 ③退款/售后 tab 只显示这 1 个退款成功单，「交易关闭」马克杯单不再混入 ④点退款订单卡头→物流页显示「交易已关闭/退款已原路退回」气泡+退款成功状态头 ⑤交易成功详情页复验（已签收绿字+88VIP店铺卡+粉色推荐条+闲鱼转卖/申请售后/加入购物车+底栏组）全部对齐截图 ⑥点订单卡内商品图仍进商品页（设计如此），点卡体进物流页
+- bunx tsc --noEmit 0 错误；bun run lint 0 错误；dev.log 仅既有 instrumentation.ts Edge Runtime 告警（网易云 keeper，与本任务无关）
+
+Stage Summary:
+- 退款/售后列表口径修正：只显示退款订单（o.refund 存在），取消未退款的交易关闭单不再混入
+- 待发货卡退款链路打通：RefundConfirmSheet → 原路退回 → 进入退款/售后
+- 改动文件：src/components/apps/taobao.tsx（OrdersPage 筛选+refundFor 状态+RefundConfirmSheet、OrderCard onRefund）

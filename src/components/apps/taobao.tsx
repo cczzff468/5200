@@ -285,6 +285,33 @@ function CancelOrderSheet({ onClose, onConfirm }: { onClose: () => void; onConfi
   );
 }
 
+/** 退款确认弹层（订单卡「退款」按钮）：确认后原路退回，订单进入「退款/售后」 */
+function RefundConfirmSheet({ busy, onClose, onConfirm }: { busy: boolean; onClose: () => void; onConfirm: () => void }) {
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={busy ? undefined : onClose}>
+      <div className="rounded-t-2xl bg-white [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()}>
+        <div className="relative flex items-center justify-center pb-3 pt-5">
+          <span className="text-[17px] font-bold text-black/90">申请退款</span>
+          {!busy ? (
+            <button type="button" aria-label="关闭" onClick={onClose} className="absolute right-4 top-5 grid h-7 w-7 place-items-center active:opacity-60">
+              <X className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
+            </button>
+          ) : null}
+        </div>
+        <div className="mx-4 rounded-lg bg-black/[0.045] px-3.5 py-2.5 text-[13.5px] leading-5 text-black/60">退款将按支付方式原路退回（余额/零钱/亲属卡），到账后订单进入「退款/售后」</div>
+        <div className="flex gap-3 px-4 pb-8 pt-5">
+          <button type="button" disabled={busy} onClick={onClose} className="h-12 flex-1 rounded-lg bg-black/[0.05] text-[16px] font-semibold text-black/70 active:opacity-85 disabled:opacity-50">
+            暂不退款
+          </button>
+          <button type="button" disabled={busy} onClick={onConfirm} className="h-12 flex-1 rounded-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[16px] font-semibold text-white active:opacity-85 disabled:opacity-60">
+            {busy ? '退款中…' : '确认退款'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TmallMark() {
   return <span className="mr-1 inline-block rounded-[3px] bg-[#FF0036] px-1 py-[1px] align-[2px] text-[10px] font-bold leading-none text-white">天猫</span>;
 }
@@ -2599,6 +2626,9 @@ function OrdersPage({
   const [, setTick] = useState(0);
   /** 取消订单弹窗（截图2：原因选择） */
   const [cancelFor, setCancelFor] = useState<string | null>(null);
+  /** 退款确认弹窗（需求：退款/售后只显示退款订单——订单卡直接可发起退款） */
+  const [refundFor, setRefundFor] = useState<string | null>(null);
+  const [refunding, setRefunding] = useState(false);
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 5000);
     return () => clearInterval(t);
@@ -2609,7 +2639,8 @@ function OrdersPage({
   }, [uid]);
   const msgCount = tbLoadMsgs(uid).length;
   const orders = tbLoadOrders(uid)
-    .filter((o) => (filter === 'all' ? true : filter === 'refund' ? o.status === 'cancelled' : o.status === filter))
+    // 需求：退款/售后界面只显示退款的订单（不含仅取消未退款的「交易关闭」单）
+    .filter((o) => (filter === 'all' ? true : filter === 'refund' ? !!o.refund : o.status === filter))
     .filter((o) => {
       const k = kw.trim();
       if (!k) return true;
@@ -2690,7 +2721,7 @@ function OrdersPage({
         ) : (
           <div className="space-y-2 px-2 pt-1">
             {orders.map((o) => (
-              <OrderCard key={o.id} o={o} uid={uid} onOpen={() => onOpenOrder(o.id)} onPay={() => onPayOrder(o.id)} onToast={onToast} onOpenProduct={onOpenProduct} onOpenLogistics={onOpenLogistics} onRate={onRate} onCancel={() => setCancelFor(o.id)} />
+              <OrderCard key={o.id} o={o} uid={uid} onOpen={() => onOpenOrder(o.id)} onPay={() => onPayOrder(o.id)} onToast={onToast} onOpenProduct={onOpenProduct} onOpenLogistics={onOpenLogistics} onRate={onRate} onCancel={() => setCancelFor(o.id)} onRefund={() => setRefundFor(o.id)} />
             ))}
           </div>
         )}
@@ -2711,6 +2742,31 @@ function OrdersPage({
           }}
         />
       ) : null}
+      {/* 退款确认弹层：确认后原路退回 → 订单进入「退款/售后」（只显示退款单） */}
+      {refundFor ? (
+        <RefundConfirmSheet
+          busy={refunding}
+          onClose={() => (refunding ? null : setRefundFor(null))}
+          onConfirm={async () => {
+            const o = tbLoadOrders(uid).find((x) => x.id === refundFor);
+            if (!o) {
+              setRefundFor(null);
+              return;
+            }
+            setRefunding(true);
+            const okPay = await tbRefundToOrigin(o);
+            setRefunding(false);
+            if (!okPay) {
+              onToast('退款失败，请稍后重试');
+              return;
+            }
+            tbMarkRefund(uid, o.id, o.total, '买家申请退款，已原路退回');
+            tbPushMsg(uid, { kind: 'refund', title: '退款成功', text: `订单退款 ¥${fmtMoney(o.total)} 已原路退回（${o.payChannelLabel ?? '原支付方式'}）`, orderId: o.id });
+            setRefundFor(null);
+            onToast('退款成功，已原路退回');
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2726,6 +2782,7 @@ function OrderCard({
   onOpenLogistics,
   onRate,
   onCancel,
+  onRefund,
 }: {
   o: TbOrder;
   uid: string;
@@ -2736,6 +2793,8 @@ function OrderCard({
   onOpenLogistics: (id: string) => void;
   onRate: (id: string) => void;
   onCancel: () => void;
+  /** 待发货卡「退款」按钮：弹退款确认（不再进物流页死角） */
+  onRefund: () => void;
 }) {
   const countdown = useCountdown(o.status === 'pendingPay' ? o.createdAt + TB_PAY_TTL : undefined);
   const shop = shopById(o.shopId);
@@ -2828,7 +2887,7 @@ function OrderCard({
               <button type="button" onClick={() => onToast('已提醒商家尽快发货')} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 提醒发货
               </button>
-              <button type="button" onClick={onOpen} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+              <button type="button" onClick={onRefund} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 退款
               </button>
             </>
