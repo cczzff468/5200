@@ -1278,6 +1278,7 @@ export type AppId =
   | 'chat'
   | 'wechat'
   | 'qq'
+  | 'taobao'
   | 'phone'
   | 'photos'
   | 'camera'

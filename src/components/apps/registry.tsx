@@ -25,6 +25,7 @@ import {
   Settings as SettingsIcon,
   Store,
   UtensilsCrossed,
+  ShoppingBag,
   Users as UsersIcon,
 } from 'lucide-react';
 import type { AppId } from '@/lib/ios/store';
@@ -56,6 +57,7 @@ const AppStoreApp = dynamic(() => import('./appstore'), { ssr: false });
 const MemoryBankApp = dynamic(() => import('./memory-bank'), { ssr: false });
 const WorldBookApp = dynamic(() => import('./worldbook'), { ssr: false });
 const MeituanApp = dynamic(() => import('./meituan'), { ssr: false });
+const TaobaoApp = dynamic(() => import('./taobao'), { ssr: false });
 
 export interface AppMeta {
   id: AppId;
@@ -366,6 +368,13 @@ const APP_DEFS: AppDef[] = [
     // 备用线条图（有 image 时不会展示）：外卖袋贴近美团黄袋形象
     glyph: <UtensilsCrossed className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: MeituanApp,
+  },
+  {
+    id: 'taobao',
+    name: '淘宝',
+    // 备用线条图（无实体图标时展示）：购物袋贴近电商形象
+    glyph: <ShoppingBag className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
+    component: TaobaoApp,
   },
 ];
 

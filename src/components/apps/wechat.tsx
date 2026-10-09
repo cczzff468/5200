@@ -1043,8 +1043,8 @@ interface WxBillMeta {
   avatar?: string | null;
 }
 
-/** 零钱增减 + 可选写一条零钱明细账单；余额不足返回 false（单聊/群聊共用） */
-export function wxPatchBalance(delta: number, bill?: { kind: '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款' | '美团外卖'; amount: number } & WxBillMeta): boolean {
+/** 零钱增减 + 可选写一条零钱明细账单；余额不足返回 false（单聊/群聊共用；'淘宝购物' = 淘宝 App 支付/退款入账） */
+export function wxPatchBalance(delta: number, bill?: { kind: '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款' | '美团外卖' | '淘宝购物'; amount: number } & WxBillMeta): boolean {
   const next = Math.round((wxLoadBalance() + delta) * 100) / 100;
   if (next < 0) return false;
   saveJSON(LS_WALLET, { balance: next });
@@ -1066,7 +1066,7 @@ function wxMarkLatestBillRefund(kind: '红包' | '转账', amount: number): void
 }
 
 /** 追加一条零钱明细账单（新的在前，最多 100 条；退款类同时标注原支出条目） */
-function wxPushBill(kind: '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款' | '美团外卖', amount: number, meta?: WxBillMeta): void {
+function wxPushBill(kind: '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款' | '美团外卖' | '淘宝购物', amount: number, meta?: WxBillMeta): void {
   const bills = loadJSON<{ id?: string; kind?: string; amount?: number; time?: number; peer?: string; avatar?: string | null; refunded?: boolean }[]>(LS_BILLS, []).filter(
     (b) => Boolean(b) && typeof b.kind === 'string' && typeof b.amount === 'number' && typeof b.time === 'number'
   );
@@ -1117,7 +1117,7 @@ export function wxCanPay(methodId: string, amount: number): boolean {
 /** 按所选支付方式扣款（零钱 / 银行卡 / 亲属卡额度；亲属卡不动零钱不写账单，其余写零钱明细）；单聊/群聊共用。
  *  成功返回 { ok:true, fc? }：fc 存在 = 本次用亲属卡扣款（含分摊明细，调用方据此插通知行 + 落消费流水/赠卡人记忆）；
  *  金额非法 / 额度不足 / 卡不存在等失败一律返回 null。meta 传对方名/头像（账单条目展示用） */
-export function wxExecutePayment(methodId: string, amount: number, kind: '红包' | '转账' | '亲属卡付款' | '美团外卖', meta?: WxBillMeta): WxFcPayResult | null {
+export function wxExecutePayment(methodId: string, amount: number, kind: '红包' | '转账' | '亲属卡付款' | '美团外卖' | '淘宝购物', meta?: WxBillMeta): WxFcPayResult | null {
   if (!(amount > 0)) return null;
   if (methodId === 'balance') return wxPatchBalance(-amount, { kind, amount: -amount, ...meta }) ? { ok: true } : null;
   if (methodId.startsWith('fcin-')) {

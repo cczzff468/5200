@@ -17382,3 +17382,26 @@ Stage Summary:
 - 全链路人设字段审计完成：18 个调用点中 11 个此前已有完整注入（含网易云一起听三条链、微信/QQ/信息主聊天、退群私信、线下见面），7 处缺口全部修复
 - 通话/状态卡/好友申请/跨App找人/代付/建群开场白/主动消息的人设注入补齐到与聊天主链路同一口径：17 个人设字段全量、小号分账号关系生效、配角圈/归属者资料卡不再被服务端丢弃
 - 改动文件：src/lib/ios/call-upstream.ts、src/app/api/phone/{turn,answer,followup,proactive}/route.ts、src/app/api/character-status/route.ts、src/lib/ios/{chat-call,call-decision,call-followup,proactive-call,friend-state,cross-app-reach,mt-ai-engage,group-social,proactive-msg}.ts、src/components/apps/{phone,chat,peer-status-card}.tsx
+
+---
+Task ID: 24
+Agent: main (Z.ai Code)
+Task: 新增淘宝 App——首页/搜索/详情/购物车/下单/支付/订单/我的 全链路（复用美团与支付宝底层逻辑；支付复用 QQ/微信；亲属卡支付写 AI 记忆）
+
+Work Log:
+- 新建 src/lib/ios/taobao-data.ts：种子数据 14 店铺 / 36 商品（数码/服饰/家居/美妆/食品/图书 6 分类，含 SKU 组/缺货/价差/促销角标/领券）、评价词库（按商品确定性取 3 条）、热门搜索 12 词、tbSearchScore 分词打分；商品图复用 /api/mt-img 内容匹配图链（tbImg 同 mtImg 口径）
+- src/app/api/mt-img/route.ts：COMMONS_SEARCH 新增 38 个电商品类映射（phone/earbuds/laptop/sneakers/dress/lipstick/sofa/books…→ Commons 实景搜索词，自动进 COMMONS_FIRST 优先级，绝不落 FF 食物池；未知 tag 仍走 LLM→Commons 兜底）
+- 新建 src/lib/ios/taobao-store.ts（与 meituan-store 同架构）：tb-session 登录态（localStorage）+ 全部数据 kv 键按 uid 隔离（tb-cart/favs/foots/addrs/coupons/orders/shopfollow/search/msg:<uid>，需求「淘宝数据按账号隔离」）；tbResolveIdpIdentity/tbIdpLoggedIn 与美团同源（session-user-id:wx/qq + contacts-store）；订单状态机确定性时间戳推进（tbTickOrders：待付款 30min 超时取消 → 支付后 75s 自动发货 → 物流 4 节点每 40s 推进 → 手动确认收货；tbStartOrderWatcher 全局 10s tick + 打页 catch-up，重启不丢进度）；购物车数量减到 0 自动移除；最优券自动选取；站内消息（交易物流/售后保障）
+- 新建 src/lib/ios/taobao-pay.ts（复制 meituan-pay.ts 模式）：tbListPayChannels（微信零钱/银行卡/亲属卡按赠卡人聚合 + QQ余额/银行卡，带余额预检灰显）、tbExecutePay（wxExecutePayment / qq.executePayment 复用扣款；亲属卡成功走 recordFcSpend(channel='淘宝') 记账本+按赠卡人写记忆碎片+appendWxChatMsg 赠卡人通知行——需求 6.3「亲属卡支付后 AI 要知道并写入记忆」）、tbRefundToOrigin（零钱回补/卡余额回补/亲属卡按分摊回补，与美团同一套钱包写入口）
+- src/components/apps/wechat.tsx：wxExecutePayment/wxPatchBalance/wxPushBill 的账单 kind union 加 '淘宝购物'（向后兼容，零钱明细页正确显示「淘宝购物」条目）
+- 新建 src/components/apps/taobao.tsx（3700 行）：LoginPage（微信/QQ 一键授权卡+账密登录，与美团同源）→ 主框架（首页/消息/购物车/我的淘宝 4 tab，毛玻璃底栏+角标）；首页（关注/推荐/闪购/国补/穿搭 feed tab + 搜索框扫码相机入口 + 6 分类宫格 + 直播/百亿补贴/超级88 运营位 + 双列瀑布商品流 + 触摸下拉刷新 + 滚动触底加载更多）；搜索页（自动聚焦/历史可清空/热门词）+ 结果页（综合/销量/价格升降排序 + 包邮/天猫筛选 + 空态）；商品详情（4 图轮播 snap+页码/SKU 快选条/超级88 价格条/官方立减/服务标签/领券/店铺卡/评价摘要+全部评价页（订单晒单聚合）/图文详情/底栏 店铺客服收藏+加购立即购买/SkuSheet 缺货灰显+价差+步进）；购物车（勾选/全选/管理删除/数量加减/减 0 自动移除/空态+推荐/合计结算）；结算页（地址卡/商品确认可调数量/商品总价/运费包邮/优惠券选择/实付/提交订单）；PaySheet 收银台（渠道分组 微信支付/QQ支付/余额预检灰显/支付中态/成功推站内消息）；订单列表（6 状态 tab/倒计时/继续付款/取消/再来一单/查看物流）；订单详情（状态头/地址/物流轨迹时间线/商品/价格明细/订单号复制/支付方式含亲属卡标注/操作组：提醒发货/退款/确认收货/评价/再来一单）；RateSheet（星级/标签/内容）；我的淘宝（会员头部/资产条 账户余额(微信+QQ 只读弹层)+优惠券+淘金币+红包/快捷 4 宫格 快递收藏关注店铺足迹/订单 5 宫格带角标/领券中心横滑领取去重/猜你喜欢）；消息页（交易物流/售后保障固定卡+通知列表跳详情）；地址管理/编辑（默认标记/删除保护/表单校验）；优惠券页（未使用/已使用）；收藏页/足迹页（今天/更早分组）/关注店铺页；店铺页（头部+关注+全部商品）；我的快递（在途包裹聚合）；设置页（清除数据/退出登录）；AddrPickerSheet（结算页选地址，含管理入口回跳结算）
+- src/components/apps/registry.tsx + src/lib/ios/store.ts：AppId 加 'taobao' + APP_DEFS 注册（ShoppingBag 备用线条图；桌面 sanitize 缺失补位自动上屏，不 bump 布局版本零破坏存量布局）
+- src/components/apps/appstore.tsx：TAGLINES/CATEGORY 补 taobao 条目（Record<AppId,...> 类型完备）
+- 浏览器端到端实测（agent-browser，注入机主档案 woailin520 微信账密登录）：①登录页→微信一键登录→授权卡「林晓」→首页渲染（tab/宫格/运营位/瀑布流/图片加载 49/57）②搜索「蓝牙耳机」→结果排序价格升降验证→筛选 tab 存在 ③商品详情→SKU 弹层（缺货灰显/2XL+5 价差/步进）→加购 toast+角标 2 ④购物车勾选结算→地址管理新增地址（表单校验/默认标记）→结算页地址自动带出+明细（¥119.60 包邮）⑤提交订单→收银台：微信零钱 ¥0 额度不足灰显+QQ余额 ¥1.03 灰显（预检正确）→kv 注入微信余额 500+银行卡 3000 后渠道可用 ⑥继续付款→微信零钱支付成功→订单待发货+支付方式「微信零钱」+微信余额 500→380.4+零钱账单 kind='淘宝购物' -119.6 peer=淘宝 ⑦75s 后自动发货→待收货+物流轨迹 3 节点依次推进（40s 间隔准确：揽收→运输中→派送中）→确认收货→已完成→评价（5星+标签+内容）→订单详情「我的评价」区块 ⑧领券中心领 2 张→「已领取」灰态去重 ⑨亲属卡链路（核心）：kv 注入 AI 角色「小雪」+收到的亲属卡（月额度 200）→收银台出现「小雪的亲属卡 本月可用 ¥200」→选卡支付 ¥119（优惠券自动最优 -¥15）→订单支付方式「小雪的亲属卡（亲属卡）」→额度 200-119=剩 81→mem-frag:char-xiaoxue 出现 fc-spend 碎片「机主「林晓」…在淘宝里用你（AI角色本人）送的亲属卡支付了在淘宝购买【双主机降噪】真无线蓝牙耳机…金额¥119.00」（AI 下一轮聊天经记忆召回自然知道）→小雪微信聊天出现通知行「你用小雪送的亲属卡在淘宝购物消费了 ¥119」⑩退款原路退回→订单「退款成功」+亲属卡额度回补 81→200+售后保障消息 ⑪购物车数量减到 0 自动移除（空态「购物车竟然是空的」）⑫足迹(3)按时间倒序+今天/更早分组 ⑬我的快递页/消息页/优惠券页/设置页/退出登录→重登数据完整恢复（券 1 张/足迹 3/退款角标/消息 5 条/领券去重）
+- 修复实测发现的问题：①PayPendingSheet 与 PaySheet 双重推送支付消息→PaySheet 内部统一推送 ②结算页地址管理返回断点→addrReturn 状态（'me'|'checkout'）③OrderDetailPage useCountdown 在早 return 后调用（hooks 规则）→无条件前置 ④boot/角标 effect 同步 setState 级联→Promise.resolve 异步包装
+- bunx tsc --noEmit 0 错误；bun run lint 0 错误（仅既有 BABEL 500KB 提示三条）；dev.log 无新增运行时错误（instrumentation ncm-keeper 警告为既有误报）
+
+Stage Summary:
+- 淘宝 App 全量上线：首页（搜索/扫码/消息入口+6 分类宫格+推荐瀑布流+下拉刷新/上滑加载）、搜索（历史/热门/筛选排序）、商品详情（轮播/SKU/店铺/评价/收藏/加购/立即购买）、购物车（勾选/全选/删除/加减/减0移除/结算）、下单（地址/优惠券/运费）、支付（复用 QQ 余额/银行卡+微信零钱/银行卡/亲属卡，余额预检灰显）、订单（5 状态机+物流轨迹+确认收货+评价+退款原路退回+再来一单）、我的（订单宫格/收藏/足迹/地址/优惠券/账户余额/设置）——与需求清单逐条对齐
+- 核心承诺落地：①支付 100% 复用现有 QQ/微信钱包扣款写入口（零新资金管线）②亲属卡支付写 AI 记忆（channel='淘宝'，记忆碎片+账本+赠卡人聊天通知行三件套，AI 下轮聊天自然知道）③淘宝数据按账号隔离（kv 键全部带 uid，换号互不串、退出重登恢复）④范围限定零破坏：微信/QQ/美团/音乐/聊天链路仅扩 3 处账单 kind union（向后兼容），桌面不重排
+- 改动文件：src/lib/ios/taobao-data.ts、taobao-store.ts、taobao-pay.ts（新增）；src/components/apps/taobao.tsx（新增）；src/app/api/mt-img/route.ts（+38 电商品类 Commons 映射）；src/components/apps/wechat.tsx（账单 kind +淘宝购物）；src/components/apps/registry.tsx、src/lib/ios/store.ts、src/components/apps/appstore.tsx（注册）
