@@ -24,12 +24,16 @@ import {
   Crosshair,
   Flame,
   Info,
+  Loader2,
   MapPin,
   Mic,
+  Minus,
   MoreHorizontal,
   Pencil,
+  Phone,
   Plane,
   Play,
+  Plus,
   Search,
   ShoppingBag,
   ShoppingCart,
@@ -44,8 +48,12 @@ import {
 import {
   TB_BEST_ZONE,
   TB_CINEMAS,
+  TB_COMEDY_SHOWS,
+  TB_CONCERTS,
   TB_FLIGGY,
+  TB_MERCH,
   TB_MOVIES,
+  TB_MOVIE_SESSIONS,
   TB_MOVIES_SOON,
   TB_SEAT_LAYOUT,
   TB_SECKILL,
@@ -56,10 +64,14 @@ import {
   tbSaveSign,
   tbSeatSold,
   tbSignToday,
+  type TbConcert,
+  type TbMerch,
   type TbMovie,
+  type TbShow,
 } from '@/lib/ios/taobao-channels-data';
 import { tbImg } from '@/lib/ios/taobao-data';
-import { tbClaimCoupon, tbLoadCoupons, tbLoadOrders, type TbSession } from '@/lib/ios/taobao-store';
+import { tbClaimCoupon, tbCreateMerchOrder, tbCreateTicketOrder, tbLoadCoupons, tbLoadOrders, tbMarkRefund, tbPushMsg, tbTickOrders, type TbSession, type TbTicketInfo } from '@/lib/ios/taobao-store';
+import { tbRefundToOrigin } from '@/lib/ios/taobao-pay';
 
 const fmtMoney = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, ''));
 
@@ -733,20 +745,61 @@ function MoviePoster({ m, h = 146, onOpen }: { m: TbMovie; h?: number; onOpen?: 
   );
 }
 
-/** 淘票票（截图4/5/6/7：首页→影院列表→选座；内部三级导航） */
+/** 淘票票（第十三轮重构：顶部四大频道 tab（电影/喜剧脱口秀/演唱会/周边商城），
+ *  仅顶部标签固定、其余内容全部跟随滚动，底部上拉刷新；
+ *  电影保留 首页→影院列表→选座 链路，出票写真实票务订单（全部订单·待收货）） */
+type TpTab = 'movie' | 'comedy' | 'concert' | 'merch';
+const TP_TABS: { id: TpTab; label: string }[] = [
+  { id: 'movie', label: '电影' },
+  { id: 'comedy', label: '喜剧脱口秀' },
+  { id: 'concert', label: '演唱会' },
+  { id: 'merch', label: '周边商城' },
+];
+
 export function MoviePage({
+  uid,
+  initialTab = 'movie',
   onBack,
   onToast,
   onOpenCouponCenter,
+  onIssued,
+  onPayOrder,
 }: {
+  uid: string;
+  initialTab?: TpTab;
   onBack: () => void;
   onToast: (m: string) => void;
   onOpenCouponCenter: () => void;
+  /** 出票成功 → 根组件跳电影票详情（票已进全部订单·待收货） */
+  onIssued: (orderId: string) => void;
+  /** 周边下单（待付款）→ 根组件唤起支付面板 */
+  onPayOrder: (orderId: string) => void;
 }) {
-  const [view, setView] = useState<'home' | 'cinemas' | 'seats'>('home');
+  const [tab, setTab] = useState<TpTab>(initialTab);
+  const [view, setView] = useState<'tabs' | 'cinemas' | 'seats' | 'comedyVenue' | 'comedySeats' | 'concertBuy'>('tabs');
   const [movie, setMovie] = useState<TbMovie>(TB_MOVIES[3]);
   const [day, setDay] = useState(0);
   const [sel, setSel] = useState<Set<string>>(new Set());
+  // 喜剧脱口秀
+  const [show, setShow] = useState<TbShow>(TB_COMEDY_SHOWS[0]);
+  const [showDay, setShowDay] = useState(0);
+  // 演唱会
+  const [concert, setConcert] = useState<TbConcert>(TB_CONCERTS[0]);
+  const [tierIdx, setTierIdx] = useState(0);
+  const [cQty, setCQty] = useState(2);
+  // 周边商城
+  const [buyMerch, setBuyMerch] = useState<TbMerch | null>(null);
+  const [mQty, setMQty] = useState(1);
+  // 上拉刷新
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const pullRef = useRef({ startY: 0, active: false, dist: 0 });
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
+
   const dateLabels = useMemo(() => {
     const fmt = (d: Date) => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     return ['今天', '明天', '后天'].map((l, i) => {
@@ -759,6 +812,18 @@ export function MoviePage({
     const d = new Date();
     return `${d.getMonth() + 1}月${d.getDate()}日`;
   }, []);
+  /** 未来三天 ISO 日期（出票写真实日期 → 票详情倒计时/已放映判定） */
+  const isoDates = useMemo(
+    () =>
+      [0, 1, 2].map((i) => {
+        const d = new Date();
+        d.setDate(d.getDate() + i);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      }),
+    []
+  );
+  /** 刷新轮换：列表数据按 refreshKey 旋转，肉眼可见「换了新内容」 */
+  const rot = <T,>(arr: T[]): T[] => (refreshKey === 0 ? arr : arr.map((_, i) => arr[(i + refreshKey * 2) % arr.length]));
 
   const toggleSeat = (r: number, k: number) => {
     const key = `${r}-${k}`;
@@ -795,11 +860,146 @@ export function MoviePage({
     }
     onToast('最佳观影区暂无连座');
   };
+  /** 座位 key → 座位文案（2排4座） */
+  const seatTexts = (keys: Set<string>): string[] =>
+    [...keys].map((k) => {
+      const [r, c] = k.split('-').map(Number);
+      return `${r + 1}排${c + 1}座`;
+    });
+
+  /** 电影出票：直接写票务订单（全部订单·待收货），跳电影票详情 */
   const confirmSeats = () => {
     if (sel.size === 0) return;
-    onToast(`出票成功：${sel.size}张 共¥${sel.size * 38}（${movie.title}）`);
+    const sess = TB_MOVIE_SESSIONS[day];
+    const order = tbCreateTicketOrder(uid, {
+      kind: 'movie',
+      title: movie.title,
+      posterC1: movie.c1,
+      posterC2: movie.c2,
+      badge: `国语 ${movie.badge}`,
+      qty: sel.size,
+      venue: TB_CINEMAS[0].name,
+      hall: '2号厅',
+      date: isoDates[day],
+      dateLabel: `${dateLabels[day].label} ${dateLabels[day].date}`,
+      start: sess.start,
+      end: sess.end,
+      seats: seatTexts(sel),
+      unitPrice: 38,
+    });
+    tbPushMsg(uid, { kind: 'logistics', title: '出票成功', text: `《${movie.title}》已出票，取票号 ${order.ticket?.ticketNo ?? ''}，开场凭码取票入场`, orderId: order.id });
+    onToast(`出票成功：${sel.size}张 共¥${sel.size * 38}`);
     setSel(new Set());
-    setView('cinemas');
+    setView('tabs');
+    onIssued(order.id);
+  };
+
+  /** 喜剧脱口秀出票（小剧场选座） */
+  const confirmComedy = () => {
+    if (sel.size === 0) return;
+    const sess = [
+      { start: '19:30', end: '21:30' },
+      { start: '19:30', end: '21:40' },
+      { start: '14:30', end: '16:40' },
+    ][showDay];
+    const order = tbCreateTicketOrder(uid, {
+      kind: 'comedy',
+      title: show.title,
+      posterC1: show.c1,
+      posterC2: show.c2,
+      badge: show.tag,
+      qty: sel.size,
+      venue: show.venue,
+      hall: '小剧场',
+      date: isoDates[showDay],
+      dateLabel: `${dateLabels[showDay].label} ${dateLabels[showDay].date}`,
+      start: sess.start,
+      end: sess.end,
+      seats: seatTexts(sel),
+      unitPrice: 120,
+    });
+    tbPushMsg(uid, { kind: 'logistics', title: '出票成功', text: `《${show.title}》已出票，取票号 ${order.ticket?.ticketNo ?? ''}，演出当天凭码入场`, orderId: order.id });
+    onToast(`出票成功：${sel.size}张 共¥${sel.size * 120}`);
+    setSel(new Set());
+    setView('tabs');
+    onIssued(order.id);
+  };
+
+  /** 演唱会出票（票档 + 数量，无座位图） */
+  const confirmConcert = () => {
+    const tier = concert.tiers[tierIdx];
+    if (!tier || tier.left === '已售罄') return;
+    const dm = concert.dateRange.match(/(\d{1,2})\.(\d{1,2})/);
+    const y = new Date().getFullYear();
+    const date = dm ? `${y}-${String(Number(dm[1])).padStart(2, '0')}-${String(Number(dm[2])).padStart(2, '0')}` : isoDates[0];
+    const sm = concert.dateRange.match(/(\d{1,2}:\d{2})/);
+    const order = tbCreateTicketOrder(
+      uid,
+      {
+        kind: 'concert',
+        title: `${concert.artist}「${concert.tour}」`,
+        posterC1: concert.c1,
+        posterC2: concert.c2,
+        badge: '演唱会',
+        qty: cQty,
+        venue: concert.venue,
+        hall: tier.name,
+        date,
+        dateLabel: concert.dateRange,
+        start: sm ? sm[1] : '19:00',
+        end: '22:00',
+        seats: [`${tier.name}×${cQty}`],
+        unitPrice: tier.price,
+      },
+      { total: Math.round(tier.price * cQty * 100) / 100 }
+    );
+    tbPushMsg(uid, { kind: 'logistics', title: '出票成功', text: `${concert.artist}演唱会已锁定 ${cQty} 张${tier.name}，取票号 ${order.ticket?.ticketNo ?? ''}`, orderId: order.id });
+    onToast(`购票成功：${tier.name}×${cQty} 共¥${fmtMoney(tier.price * cQty)}`);
+    setView('tabs');
+    onIssued(order.id);
+  };
+
+  /** 周边下单：待付款订单 → 根组件唤起支付（支付后走正常发货/物流链路） */
+  const buyMerchNow = () => {
+    if (!buyMerch) return;
+    const order = tbCreateMerchOrder(uid, buyMerch, mQty);
+    setBuyMerch(null);
+    setMQty(1);
+    onToast('已提交订单，请完成支付');
+    onPayOrder(order.id);
+  };
+
+  /** 底部上拉刷新（淘票票主界面）：到底继续上拉 >60px 触发 */
+  const doTpRefresh = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    window.setTimeout(() => {
+      setRefreshing(false);
+      setRefreshKey((k) => k + 1);
+      onToast('已为你刷新，场次和演出信息已更新');
+      scrollRef.current?.scrollTo({ top: 0 });
+    }, 800);
+  };
+  const onTpTouchStart = (e: React.TouchEvent) => {
+    const el = scrollRef.current;
+    if (!el || refreshing) {
+      pullRef.current.active = false;
+      return;
+    }
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
+      pullRef.current = { startY: e.touches[0].clientY, active: true, dist: 0 };
+    } else {
+      pullRef.current.active = false;
+    }
+  };
+  const onTpTouchMove = (e: React.TouchEvent) => {
+    if (!pullRef.current.active) return;
+    pullRef.current.dist = pullRef.current.startY - e.touches[0].clientY;
+  };
+  const onTpTouchEnd = () => {
+    if (pullRef.current.active && pullRef.current.dist > 60) doTpRefresh();
+    pullRef.current.active = false;
+    pullRef.current.dist = 0;
   };
 
   // ---------- 选座 ----------
@@ -894,10 +1094,10 @@ export function MoviePage({
               <button type="button" onClick={() => setView('cinemas')} className="ml-auto shrink-0 text-[13.5px] font-medium text-[#3B82F6] active:opacity-70">切换场次</button>
             </div>
             <div className="mt-0.5 text-[13.5px] text-black/75">
-              <span className="font-semibold text-[#FF3676]">{dateLabels[day].label}</span> {fmtLong} 21:00-22:28 国语 2D
+              <span className="font-semibold text-[#FF3676]">{dateLabels[day].label}</span> {fmtLong} {TB_MOVIE_SESSIONS[day].start}-{TB_MOVIE_SESSIONS[day].end} 国语 2D
             </div>
             <span className="mt-2 inline-block rounded-lg border-[1.5px] border-[#FF3676] bg-[#FFF0F5] px-3 py-1.5">
-              <span className="text-[13.5px] font-bold text-black/90">21:00</span>
+              <span className="text-[13.5px] font-bold text-black/90">{TB_MOVIE_SESSIONS[day].start}</span>
               <span className="ml-1.5 text-[11px] text-black/50">国语 2D</span>
               <span className="ml-1.5 text-[13px] font-bold text-[#FF3676]">¥38</span>
             </span>
@@ -948,7 +1148,7 @@ export function MoviePage({
       <div className="flex h-full flex-col bg-[#F4F5F7]">
         <div className="shrink-0 bg-white">
           <div className="flex items-center gap-2 px-3 pb-2 pt-[56px]">
-            <button type="button" aria-label="返回" onClick={() => setView('home')} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:opacity-60">
+            <button type="button" aria-label="返回" onClick={() => setView('tabs')} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:opacity-60">
               <ArrowLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
             </button>
             <span className="min-w-0 flex-1 truncate text-center text-[18px] font-bold text-black/90">{movie.title}</span>
@@ -1054,27 +1254,285 @@ export function MoviePage({
     );
   }
 
-  // ---------- 淘票票首页 ----------
-  const ticketIcons = [
-    { icon: <Clapperboard className="h-[22px] w-[22px] text-[#FF3676]" strokeWidth={1.9} />, label: '电影', on: () => onToast('电影频道（演示）') },
-    {
-      icon: (
-        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M3 10c2.5-3.5 7-5 9-5s6.5 1.5 9 5c-1 4-4.5 8-9 8s-8-4-9-8Z" fill="#FF5A78" />
-          <path d="M8 9.5c.8-1.2 2-2 3.5-2M13 14.5c1 .3 2.2.2 3.2-.4" stroke="#fff" strokeWidth="1.4" fill="none" strokeLinecap="round" />
-        </svg>
-      ),
-      label: '喜剧脱口秀',
-      on: () => onToast('喜剧脱口秀（演示）'),
-    },
-    { icon: <Ticket className="h-[22px] w-[22px] text-[#FF3676]" strokeWidth={1.9} />, label: '领券中心', on: onOpenCouponCenter, badge: '国庆领' },
-    { icon: <Mic className="h-[22px] w-[22px] text-[#FF3676]" strokeWidth={1.9} />, label: '演唱会', on: () => onToast('演唱会（演示）') },
-    { icon: <ShoppingBag className="h-[22px] w-[22px] text-[#FF3676]" strokeWidth={1.9} />, label: '周边商城', on: () => onToast('周边商城（演示）') },
-  ];
+  // ---------- 喜剧脱口秀·剧场场次列表 ----------
+  if (view === 'comedyVenue' && show) {
+    const cSess = [
+      { start: '19:30', end: '21:30', price: 120 },
+      { start: '19:30', end: '21:40', price: 120 },
+      { start: '14:30', end: '16:40', price: 100 },
+    ];
+    return (
+      <div className="flex h-full flex-col bg-[#F4F5F7]">
+        <div className="shrink-0 bg-white">
+          <div className="flex items-center gap-2 px-3 pb-2 pt-[56px]">
+            <button type="button" aria-label="返回" onClick={() => setView('tabs')} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:opacity-60">
+              <ArrowLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+            </button>
+            <span className="min-w-0 flex-1 truncate text-center text-[18px] font-bold text-black/90">{show.title}</span>
+            <button type="button" aria-label="更多" onClick={() => onToast('更多（演示）')} className="grid h-8 w-[52px] shrink-0 place-items-center rounded-full bg-black/[0.05]">
+              <MoreHorizontal className="h-[17px] w-[17px] text-black/70" />
+            </button>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-8">
+          {/* 剧场卡 */}
+          <div className="mt-1 rounded-2xl bg-white p-3.5">
+            <div className="flex items-center">
+              <span className="min-w-0 flex-1 truncate text-[17px] font-black text-black/90">{show.venue}</span>
+              <span className="ml-2 shrink-0 text-[#FF7A00]">
+                <span className="text-[12px] font-semibold">¥</span>
+                <span className="text-[20px] font-black leading-none">{show.price.split('-')[0]}</span>
+                <span className="text-[12px]">起</span>
+              </span>
+            </div>
+            <div className="mt-1 truncate text-[13px] text-black/45">
+              {show.city} · {show.sub}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {[show.tag, '可选座', '退票', '改签'].map((tg) => (
+                <span key={tg} className={`rounded-[4px] border px-1.5 py-px text-[11px] ${tg === show.tag ? 'border-[#FF7A00]/50 text-[#FF7A00]' : tg === '退票' || tg === '改签' ? 'border-[#3B82F6]/40 text-[#3B82F6]' : 'border-black/12 text-black/40'}`}>
+                  {tg}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="px-2 pb-1 pt-4 text-[15px] text-black/40">近期场次</div>
+          {cSess.map((s, i) => (
+            <button key={i} type="button" onClick={() => { setShowDay(i); setSel(new Set()); setView('comedySeats'); }} className="mt-2 flex w-full items-center rounded-2xl bg-white p-3.5 text-left active:opacity-80">
+              <div className="min-w-0 flex-1">
+                <div className="text-[16px] font-bold text-black/90">
+                  {dateLabels[i].label} {dateLabels[i].date} {s.start}
+                </div>
+                <div className="mt-0.5 text-[13px] text-black/45">
+                  {show.venue} · 小剧场 {s.start}-{s.end}
+                </div>
+              </div>
+              <div className="mr-3 shrink-0 text-[#FF7A00]">
+                <span className="text-[11px]">¥</span>
+                <span className="text-[17px] font-black">{s.price}</span>
+                <span className="text-[11px] text-black/40">起</span>
+              </div>
+              <span className="shrink-0 rounded-full bg-gradient-to-r from-[#FFB03A] to-[#FF7A00] px-4 py-1.5 text-[13px] font-bold text-white">选座购票</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- 喜剧脱口秀·选座（橙主题） ----------
+  if (view === 'comedySeats' && show) {
+    const cSess = [
+      { start: '19:30', end: '21:30' },
+      { start: '19:30', end: '21:40' },
+      { start: '14:30', end: '16:40' },
+    ][showDay];
+    return (
+      <div className="flex h-full flex-col bg-white">
+        <div className="flex shrink-0 items-center gap-2 px-3 pb-2 pt-[56px]">
+          <button type="button" aria-label="返回" onClick={() => setView('comedyVenue')} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:opacity-60">
+            <ArrowLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
+          </button>
+          <span className="min-w-0 flex-1 truncate text-center text-[18px] font-bold text-black/90">{show.title}·选座</span>
+          <button type="button" aria-label="更多" onClick={() => onToast('更多（演示）')} className="grid h-8 w-[52px] shrink-0 place-items-center rounded-full bg-black/[0.05]">
+            <MoreHorizontal className="h-[17px] w-[17px] text-black/70" />
+          </button>
+        </div>
+        <div className="flex shrink-0 items-center justify-center gap-7 pb-2 pt-1 text-[13px] text-black/60">
+          <span className="flex items-center gap-1.5">
+            <span className="h-[15px] w-[15px] rounded-[4px] border border-black/20 bg-white" />
+            可选
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="grid h-[15px] w-[15px] place-items-center rounded-[4px] bg-[#F03E3E]">
+              <span className="h-[3px] w-[3px] rounded-full bg-white/90 shadow-[3px_0_0_0_rgba(255,255,255,0.9)]" />
+            </span>
+            已售
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-[15px] w-[15px] rounded-[4px] border border-dashed border-[#FF7A00]" />
+            最佳观演区
+          </span>
+        </div>
+        <div className="shrink-0 px-8">
+          <svg viewBox="0 0 300 14" className="h-[14px] w-full" aria-hidden="true">
+            <path d="M4 12 Q150 -8 296 12" stroke="#FF7A00" strokeWidth="3" fill="none" strokeLinecap="round" />
+            <path d="M4 12 Q150 -8 296 12" stroke="#FF7A00" strokeWidth="9" fill="none" opacity="0.18" />
+          </svg>
+          <div className="pb-1 pt-0.5 text-center text-[12px] text-black/35">小剧场 舞台</div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4">
+          <div className="relative mx-auto w-fit py-2">
+            {TB_SEAT_LAYOUT.map((row, r) => {
+              let k = -1;
+              return (
+                <div key={r} className="flex items-center gap-[6px] pb-[10px] last:pb-0">
+                  <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded bg-black/[0.06] text-[11px] text-black/45">{r + 1}</span>
+                  {row.map((v, ci) => {
+                    if (!v) return <span key={ci} className="h-[20px] w-[6px]" />;
+                    k++;
+                    const key = `${r}-${k}`;
+                    const sold = tbSeatSold(r, k);
+                    const picked = sel.has(key);
+                    return (
+                      <button
+                        key={ci}
+                        type="button"
+                        aria-label={`${r + 1}排${k + 1}列`}
+                        onClick={() => toggleSeat(r, k)}
+                        disabled={sold}
+                        className={`h-[20px] w-[24px] rounded-[5px] transition-colors ${sold ? 'bg-[#F03E3E]' : picked ? 'grid place-items-center bg-[#FF7A00]' : 'border border-black/15 bg-white'}`}
+                      >
+                        {picked ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            <span
+              className="pointer-events-none absolute rounded-md border-[1.5px] border-dashed border-[#FF7A00]"
+              style={{ left: 26 + TB_BEST_ZONE.c1 * 30 - 5, top: TB_BEST_ZONE.r1 * 30 - 4, width: (TB_BEST_ZONE.c2 - TB_BEST_ZONE.c1 + 1) * 30 - 8, height: (TB_BEST_ZONE.r2 - TB_BEST_ZONE.r1 + 1) * 30 - 12 }}
+            />
+            <span className="pointer-events-none absolute bottom-1 left-1/2 top-1 border-l border-dashed border-black/15" />
+          </div>
+          <div className="pb-2 pt-3 text-center text-[15px] font-bold text-[#C6CBD4]">淘票票·喜剧</div>
+        </div>
+        <div className="shrink-0 bg-[#F4F5F7] px-3 pb-5 pt-2">
+          <div className="rounded-xl bg-white p-3">
+            <div className="flex items-center">
+              <span className="truncate text-[15px] font-bold text-black/90">{show.title}</span>
+              <button type="button" onClick={() => setView('comedyVenue')} className="ml-auto shrink-0 text-[13.5px] font-medium text-[#3B82F6] active:opacity-70">切换场次</button>
+            </div>
+            <div className="mt-0.5 text-[13.5px] text-black/75">
+              <span className="font-semibold text-[#FF7A00]">{dateLabels[showDay].label}</span> {fmtLong} {cSess.start}-{cSess.end} {show.tag}
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-[13px] text-black/55">推荐座位</span>
+              {[1, 2, 3, 4].map((n) => (
+                <button key={n} type="button" onClick={() => pickRecommend(n)} className="rounded-lg bg-black/[0.045] px-3 py-1.5 text-[13.5px] text-black/80 active:opacity-70">
+                  {n}人
+                </button>
+              ))}
+            </div>
+            {sel.size > 0 ? (
+              <div className="mt-2.5 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {[...sel].map((key) => {
+                  const [r, k] = key.split('-').map(Number);
+                  return (
+                    <span key={key} className="relative shrink-0 rounded-lg bg-white px-3 py-1.5 text-center shadow-sm">
+                      <button type="button" aria-label="移除座位" onClick={() => toggleSeat(r, k)} className="absolute right-0.5 top-0.5 grid h-3.5 w-3.5 place-items-center">
+                        <X className="h-2.5 w-2.5 text-black/30" strokeWidth={3} />
+                      </button>
+                      <span className="block text-[13.5px] font-bold leading-[16px] text-black/85">{r + 1}排{k + 1}列</span>
+                      <span className="block text-[10.5px] leading-[13px] text-[#FF7A00]">票价¥120</span>
+                    </span>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            onClick={confirmComedy}
+            className={`mt-2.5 h-[52px] w-full rounded-full text-[17px] font-bold text-white active:opacity-90 ${sel.size === 0 ? 'bg-[#F5C9A0]/70' : 'bg-gradient-to-r from-[#FFB03A] to-[#FF7A00]'}`}
+          >
+            {sel.size === 0 ? '请先选座' : `${sel.size * 120}元 确认选座`}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- 演唱会·票档选择 ----------
+  if (view === 'concertBuy' && concert) {
+    const tier = concert.tiers[tierIdx];
+    const isSoon = concert.status === 'soon';
+    return (
+      <div className="flex h-full flex-col bg-[#F4F5F7]">
+        <div className="relative shrink-0 overflow-hidden px-3 pb-4 pt-[56px]" style={{ background: `linear-gradient(150deg, ${concert.c1} 0%, ${concert.c2} 100%)` }}>
+          <div className="flex items-center gap-2">
+            <HeadBtn onClick={() => setView('tabs')} label="返回">
+              <ArrowLeft className="h-[20px] w-[20px] text-white" strokeWidth={2.4} />
+            </HeadBtn>
+            <span className="text-[19px] font-bold leading-none text-white">演出详情</span>
+          </div>
+          <div className="mt-3 text-[26px] font-black leading-tight text-white">{concert.artist}</div>
+          <div className="mt-1 truncate text-[15px] font-medium text-white/90">「{concert.tour}」</div>
+          <div className="mt-2 flex items-center gap-1 text-[13.5px] text-white/85">
+            <MapPin className="h-4 w-4 fill-white/90 text-white" />
+            {concert.city}·{concert.venue}
+          </div>
+          <div className="mt-1 text-[13.5px] text-white/85">{concert.dateRange}</div>
+          {concert.hot ? <div className="mt-2 inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[11.5px] font-semibold text-white">{concert.hot}</div> : null}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+          <div className="mt-2 rounded-2xl bg-white p-3">
+            <div className="text-[17px] font-black text-black/90">选择票档</div>
+            <div className="mt-2.5 space-y-2">
+              {concert.tiers.map((tr, i) => (
+                <button key={tr.name} type="button" disabled={isSoon} onClick={() => setTierIdx(i)} className={`flex w-full items-center rounded-xl border px-3.5 py-3 text-left ${i === tierIdx && !isSoon ? 'border-[#7C5CFF] bg-[#F4F0FF]' : 'border-black/[0.08] bg-white'}`}>
+                  <span className={`grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border-2 ${i === tierIdx && !isSoon ? 'border-[#7C5CFF]' : 'border-black/20'}`}>{i === tierIdx && !isSoon ? <span className="h-2 w-2 rounded-full bg-[#7C5CFF]" /> : null}</span>
+                  <span className="ml-3 min-w-0 flex-1">
+                    <span className="block text-[15px] font-bold text-black/90">{tr.name}</span>
+                    <span className="mt-0.5 block text-[12px] text-black/40">电子票 · 凭取票码入场</span>
+                  </span>
+                  <span className={`mr-3 shrink-0 text-[12px] font-medium ${tr.left === '紧张' ? 'text-[#FF7A00]' : tr.left === '预售' ? 'text-[#3B82F6]' : 'text-[#12B76A]'}`}>{tr.left}</span>
+                  <span className="shrink-0 text-[17px] font-black text-[#FF3B30]">
+                    <span className="text-[11px]">¥</span>
+                    {tr.price}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-2 rounded-2xl bg-white p-3 text-[13px] leading-6 text-black/55">
+            <div className="text-[15px] font-bold text-black/85">购票须知</div>
+            <div>· 一人一票，凭电子取票码入场；</div>
+            <div>· 演出票支持开演前48小时退票/改签；</div>
+            <div>· 请提前60分钟到场安检取票。</div>
+          </div>
+        </div>
+        <div className="shrink-0 bg-white px-3 pb-5 pt-2.5">
+          <div className="flex items-center gap-3">
+            <span className="text-[14px] text-black/70">数量</span>
+            <div className="flex items-center gap-3 rounded-full bg-black/[0.04] px-2 py-1">
+              <button type="button" aria-label="减少数量" onClick={() => setCQty((n) => Math.max(1, n - 1))} className="grid h-7 w-7 place-items-center rounded-full bg-white shadow-sm active:opacity-70">
+                <Minus className="h-4 w-4 text-black/70" />
+              </button>
+              <span className="min-w-[20px] text-center text-[15px] font-bold text-black/85">{cQty}</span>
+              <button type="button" aria-label="增加数量" onClick={() => setCQty((n) => Math.min(4, n + 1))} className="grid h-7 w-7 place-items-center rounded-full bg-white shadow-sm active:opacity-70">
+                <Plus className="h-4 w-4 text-black/70" />
+              </button>
+            </div>
+            <span className="ml-auto text-[13px] text-black/45">合计</span>
+            <span className="text-[19px] font-black text-[#FF3B30]">
+              <span className="text-[12px]">¥</span>
+              {tier ? fmtMoney(tier.price * cQty) : 0}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={isSoon ? () => onToast(`已预约提醒：${concert.dateRange} 10:00 正式开抢`) : confirmConcert}
+            className={`mt-2.5 h-[52px] w-full rounded-full text-[17px] font-bold text-white active:opacity-90 ${isSoon ? 'bg-[#C9B8F5]' : 'bg-gradient-to-r from-[#7C5CFF] to-[#5A3BD8]'}`}
+          >
+            {isSoon ? '预售中·点击预约提醒' : `确认选票 · ${tier?.name ?? ''}`}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- 淘票票主界面（顶部四频道 tab 固定，其余内容全部跟随滚动；底部上拉刷新） ----------
+  const movies = rot(TB_MOVIES);
+  const soonMovies = rot(TB_MOVIES_SOON);
+  const shows = rot(TB_COMEDY_SHOWS);
+  const concerts = rot(TB_CONCERTS);
+  const merchs = rot(TB_MERCH);
   return (
-    <div className="flex h-full flex-col bg-[#F4F5F7]">
-      {/* 顶栏（粉底） */}
-      <div className="relative z-30 shrink-0 bg-gradient-to-b from-[#FF5C8A] to-[#FF3676] px-3 pb-3 pt-[56px]">
+    <div className="relative flex h-full flex-col bg-[#F4F5F7]">
+      {/* 顶栏（粉底）+ 频道 tab（唯一固定区） */}
+      <div className="relative z-30 shrink-0 bg-gradient-to-b from-[#FF5C8A] to-[#FF3676] px-3 pb-0 pt-[56px]">
         <div className="flex items-center gap-2">
           <HeadBtn onClick={onBack} label="返回">
             <ArrowLeft className="h-[20px] w-[20px] text-white" strokeWidth={2.4} />
@@ -1093,120 +1551,667 @@ export function MoviePage({
             </HeadBtn>
           </div>
         </div>
-        {/* 光影故事横幅 */}
-        <button type="button" onClick={() => onToast('惠民观影活动（演示）')} className="relative mt-2 block h-[140px] w-full overflow-hidden rounded-2xl bg-gradient-to-r from-[#8EC9F0] via-[#F6CBD8] to-[#FFE29A] text-left active:opacity-90">
-          <span className="absolute left-0 right-0 top-6 text-center text-[30px] font-black italic leading-[38px] tracking-wide text-[#2B3A67] drop-shadow-[0_1px_0_rgba(255,255,255,0.6)]">
-            光影故事 美好生活
-          </span>
-          <span className="absolute left-1/2 top-[86px] -translate-x-1/2 rotate-[-3deg] rounded-full bg-[#5C6BC0]/90 px-3.5 py-1 text-[12px] font-medium text-white">2026年河南省惠民观影活动</span>
-          <span className="absolute bottom-2 right-3 grid h-[38px] w-[38px] place-items-center rounded-full bg-[#FF8A00] shadow-md">
-            <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
-              <circle cx="11" cy="12" r="7" fill="#FFD100" />
-              <circle cx="8.5" cy="11" r="1.3" fill="#5b3a00" />
-              <circle cx="13.5" cy="11" r="1.3" fill="#5b3a00" />
-              <path d="M8 14.5c1.6 1.4 4.4 1.4 6 0" stroke="#5b3a00" strokeWidth="1.4" fill="none" strokeLinecap="round" />
-              <path d="M4 8C3 5.5 3.6 4 5 3.6c1.2-.3 2.4.7 3 2A8 8 0 0 0 4 8Zm14 0c1-2.5.4-4-1-4.4-1.2-.3-2.4.7-3 2A8 8 0 0 1 18 8Z" fill="#FF8A00" />
-            </svg>
-          </span>
-          <span className="absolute bottom-2 left-1/2 flex -translate-x-1/2 gap-1">
-            <span className="h-[4px] w-[10px] rounded-full bg-white" />
-            <span className="h-[4px] w-[4px] rounded-full bg-white/50" />
-          </span>
+        {/* 四大频道 tab */}
+        <div className="mt-1.5 flex items-center gap-5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {TP_TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => {
+                setTab(t.id);
+                scrollRef.current?.scrollTo({ top: 0 });
+              }}
+              className={`relative shrink-0 pb-2 text-[16px] ${tab === t.id ? 'font-bold text-white' : 'text-white/70'}`}
+            >
+              {t.label}
+              {tab === t.id ? <span className="absolute inset-x-1 bottom-0 h-[3px] rounded-full bg-white" /> : null}
+            </button>
+          ))}
+        </div>
+        {/* 上拉刷新中胶囊 */}
+        {refreshing ? (
+          <div className="absolute left-1/2 top-[104px] z-40 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/55 px-3.5 py-1.5 text-[12.5px] text-white">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            正在刷新…
+          </div>
+        ) : null}
+      </div>
+      {/* 内容区（全部跟随滚动） */}
+      <div ref={scrollRef} onTouchStart={onTpTouchStart} onTouchMove={onTpTouchMove} onTouchEnd={onTpTouchEnd} className="min-h-0 flex-1 overflow-y-auto pb-8">
+        {/* ===== 电影 ===== */}
+        {tab === 'movie' ? (
+          <>
+            {/* 光影故事横幅（跟随滚动） */}
+            <div className="px-3 pt-2">
+              <button type="button" onClick={() => onToast('惠民观影活动（演示）')} className="relative block h-[132px] w-full overflow-hidden rounded-2xl bg-gradient-to-r from-[#8EC9F0] via-[#F6CBD8] to-[#FFE29A] text-left active:opacity-90">
+                <span className="absolute left-0 right-0 top-5 text-center text-[28px] font-black italic leading-[36px] tracking-wide text-[#2B3A67] drop-shadow-[0_1px_0_rgba(255,255,255,0.6)]">
+                  光影故事 美好生活
+                </span>
+                <span className="absolute left-1/2 top-[80px] -translate-x-1/2 rotate-[-3deg] rounded-full bg-[#5C6BC0]/90 px-3.5 py-1 text-[12px] font-medium text-white">2026年河南省惠民观影活动</span>
+                <span className="absolute bottom-2 right-3 grid h-[36px] w-[36px] place-items-center rounded-full bg-[#FF8A00] shadow-md">
+                  <Clapperboard className="h-[19px] w-[19px] text-white" strokeWidth={2} />
+                </span>
+                <span className="absolute bottom-2 left-1/2 flex -translate-x-1/2 gap-1">
+                  <span className="h-[4px] w-[10px] rounded-full bg-white" />
+                  <span className="h-[4px] w-[4px] rounded-full bg-white/50" />
+                </span>
+              </button>
+            </div>
+            {/* 新人限时福利 */}
+            <div className="mx-2 mt-2 rounded-2xl bg-white p-3">
+              <div className="text-[17px] font-black text-[#FF3676]">新人限时福利</div>
+              <div className="mt-2.5 grid grid-cols-2 gap-2">
+                <button type="button" onClick={onOpenCouponCenter} className="flex items-center justify-between rounded-xl bg-gradient-to-br from-[#FFE1EC] to-[#FFD0E0] p-3 text-left active:opacity-85">
+                  <span>
+                    <span className="block text-[15px] font-bold text-black/90">观影权益</span>
+                    <span className="mt-0.5 block text-[12px] text-black/45">月月领</span>
+                    <span className="mt-2 inline-block rounded-full bg-gradient-to-r from-[#FF5C8A] to-[#FF2D6B] px-3 py-1 text-[12.5px] font-semibold text-white">去领券</span>
+                  </span>
+                  <Ticket className="h-9 w-9 rotate-[-12deg] text-white/80" strokeWidth={1.6} />
+                </button>
+                <button type="button" onClick={() => onToast('抽免单卡（演示）')} className="flex items-center justify-between rounded-xl bg-[#FFF3DC] p-3 text-left active:opacity-85">
+                  <span>
+                    <span className="block text-[15px] font-bold text-black/90">抽免单卡</span>
+                    <span className="mt-0.5 block text-[12px] text-black/45">0.01元喝</span>
+                    <span className="mt-2 inline-block rounded-full bg-gradient-to-r from-[#FFB03A] to-[#FF8A00] px-3 py-1 text-[12.5px] font-semibold text-white">去看看</span>
+                  </span>
+                  <span className="grid h-9 w-9 place-items-center rounded-lg bg-[#FFD100]/70 text-[12px] font-black text-[#8a6300]">免18元</span>
+                </button>
+              </div>
+            </div>
+            {/* 热映影片 */}
+            <div className="mx-2 mt-2 rounded-2xl bg-white p-3">
+              <div className="flex items-baseline">
+                <span className="text-[19px] font-black text-black/90">热映影片</span>
+                <span className="ml-3 text-[15px] text-black/35">新热预告</span>
+                <button type="button" onClick={() => onToast('全部热映（演示）')} className="ml-auto flex items-center text-[13px] text-black/45 active:opacity-70">
+                  全部
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mt-2.5 flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {movies.map((m) => (
+                  <div key={m.id} className="w-[106px] shrink-0">
+                    <MoviePoster m={m} onOpen={() => { setMovie(m); setDay(0); setSel(new Set()); setView('cinemas'); }} />
+                    <div className="mt-1.5 truncate text-[13.5px] text-black/85">{m.title}</div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMovie(m);
+                        setDay(0);
+                        setSel(new Set());
+                        setView('cinemas');
+                      }}
+                      className="mt-1.5 block w-full rounded-full bg-gradient-to-r from-[#FF5C8A] to-[#FF2D6B] py-1.5 text-center text-[13.5px] font-bold text-white active:opacity-85"
+                    >
+                      购票
+                    </button>
+                    <div className="mt-1 text-center text-[10.5px] text-[#FF3676]">特惠</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* 即将上映 */}
+            <div className="mx-2 mt-2 rounded-2xl bg-white p-3">
+              <div className="flex items-baseline">
+                <span className="text-[19px] font-black text-black/90">即将上映</span>
+                <span className="ml-3 text-[15px] text-black/35">新片想看榜</span>
+                <button type="button" onClick={() => onToast('全部新片（演示）')} className="ml-auto flex items-center text-[13px] text-black/45 active:opacity-70">
+                  全部
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="mt-2.5 flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {soonMovies.map((m) => (
+                  <div key={m.id} className="w-[106px] shrink-0">
+                    <MoviePoster m={m} onOpen={() => onToast(`已预约《${m.title}》上映提醒`)} />
+                    <div className="mt-1.5 truncate text-[13.5px] text-black/85">{m.title}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        ) : null}
+        {/* ===== 喜剧脱口秀 ===== */}
+        {tab === 'comedy' ? (
+          <>
+            <div className="px-3 pt-2">
+              <button type="button" onClick={() => onToast('开心喜剧节（演示）')} className="relative block h-[118px] w-full overflow-hidden rounded-2xl bg-gradient-to-r from-[#FF9A3C] via-[#FF7A3C] to-[#FF5A2A] text-left active:opacity-90">
+                <span className="absolute left-4 top-5 text-[24px] font-black italic tracking-wide text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.25)]">开心喜剧节</span>
+                <span className="absolute left-4 top-[52px] text-[13px] font-medium text-white/95">笑到打鸣 · 全城开麦</span>
+                <span className="absolute bottom-3 left-4 rounded-full bg-white/25 px-3 py-1 text-[12px] font-semibold text-white">领30元演出券</span>
+                <span className="absolute bottom-2 right-3 grid h-[38px] w-[38px] place-items-center rounded-full bg-white/20">
+                  <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M3 10c2.5-3.5 7-5 9-5s6.5 1.5 9 5c-1 4-4.5 8-9 8s-8-4-9-8Z" fill="#fff" opacity="0.9" />
+                    <path d="M8 9.5c.8-1.2 2-2 3.5-2M13 14.5c1 .3 2.2.2 3.2-.4" stroke="#FF7A3C" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+                  </svg>
+                </span>
+              </button>
+            </div>
+            <div className="mx-2 mt-2 space-y-2 pb-1">
+              {shows.map((s) => (
+                <div key={s.id} className="flex gap-3 rounded-2xl bg-white p-3">
+                  <button
+                    type="button"
+                    aria-label={`打开${s.title}`}
+                    onClick={() => { setShow(s); setShowDay(0); setSel(new Set()); setView('comedyVenue'); }}
+                    className="relative h-[104px] w-[84px] shrink-0 overflow-hidden rounded-xl text-left active:opacity-85"
+                    style={{ background: `linear-gradient(160deg, ${s.c1}, ${s.c2})` }}
+                  >
+                    <span className="absolute left-1 top-1 rounded-[3px] bg-black/40 px-1 py-px text-[9px] font-bold text-white">{s.tag}</span>
+                    <span className="absolute inset-x-1.5 top-6 line-clamp-3 text-[13px] font-black leading-[17px] text-white">{s.title}</span>
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <button type="button" onClick={() => { setShow(s); setShowDay(0); setSel(new Set()); setView('comedyVenue'); }} className="block w-full text-left active:opacity-80">
+                      <div className="truncate text-[15px] font-bold text-black/90">{s.title}</div>
+                      <div className="mt-0.5 truncate text-[12px] text-black/45">{s.sub}</div>
+                      <div className="mt-0.5 flex items-center gap-0.5 text-[12px] text-black/45">
+                        <MapPin className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{s.venue}</span>
+                      </div>
+                      <div className="mt-0.5 truncate text-[12px] text-black/45">{s.dateRange}</div>
+                    </button>
+                    <div className="mt-1.5 flex items-center">
+                      <span className="text-[15px] font-black text-[#FF3B30]">
+                        <span className="text-[10px]">¥</span>
+                        {s.price}
+                      </span>
+                      {s.hot ? <span className="ml-2 text-[11px] text-black/35">{s.hot}</span> : null}
+                      <button type="button" onClick={() => { setShow(s); setShowDay(0); setSel(new Set()); setView('comedyVenue'); }} className="ml-auto shrink-0 rounded-full bg-gradient-to-r from-[#FFB03A] to-[#FF7A00] px-4 py-1.5 text-[13px] font-bold text-white active:opacity-85">
+                        选座购票
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : null}
+        {/* ===== 演唱会 ===== */}
+        {tab === 'concert' ? (
+          <>
+            <div className="px-3 pt-2">
+              <div className="relative h-[112px] overflow-hidden rounded-2xl bg-gradient-to-r from-[#7C5CFF] via-[#9F7BFF] to-[#C9A8FF] p-4 text-left">
+                <div className="text-[22px] font-black italic tracking-wide text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.25)]">演唱会 · 重启现场</div>
+                <div className="mt-1 text-[13px] text-white/95">炸场阵容陆续官宣中</div>
+                <div className="mt-2 inline-block rounded-full bg-white/25 px-3 py-1 text-[12px] font-semibold text-white">大麦VIP印花票根</div>
+                <Mic className="absolute bottom-3 right-3 h-10 w-10 text-white/40" strokeWidth={1.6} />
+              </div>
+            </div>
+            <div className="mx-2 mt-2 space-y-2 pb-1">
+              {concerts.map((cc) => (
+                <button
+                  key={cc.id}
+                  type="button"
+                  onClick={() => { setConcert(cc); setTierIdx(0); setCQty(2); setView('concertBuy'); }}
+                  className="block w-full overflow-hidden rounded-2xl text-left active:opacity-90"
+                  style={{ background: `linear-gradient(140deg, ${cc.c1}, ${cc.c2})` }}
+                >
+                  <div className="p-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[20px] font-black text-white">{cc.artist}</span>
+                      {cc.status === 'soon' ? (
+                        <span className="rounded-full bg-white/25 px-2 py-0.5 text-[11px] font-bold text-white">预售</span>
+                      ) : (
+                        <span className="rounded-full bg-[#FFD100] px-2 py-0.5 text-[11px] font-black text-black/80">开售中</span>
+                      )}
+                      {cc.hot ? <span className="ml-auto text-[11.5px] text-white/80">{cc.hot}</span> : null}
+                    </div>
+                    <div className="mt-1 truncate text-[14px] font-medium text-white/95">「{cc.tour}」</div>
+                    <div className="mt-2 flex items-center gap-1 text-[12.5px] text-white/85">
+                      <MapPin className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{cc.city}·{cc.venue}</span>
+                    </div>
+                    <div className="mt-0.5 text-[12.5px] text-white/85">{cc.dateRange}</div>
+                    <div className="mt-2 flex items-center">
+                      <span className="text-[16px] font-black text-[#FFD100]">
+                        <span className="text-[10px]">¥</span>
+                        {cc.tiers[cc.tiers.length - 1].price}
+                        <span className="text-[11px]">起</span>
+                      </span>
+                      <span className="ml-auto rounded-full bg-white px-4 py-1.5 text-[13px] font-bold text-black/85">{cc.status === 'soon' ? '预约提醒' : '立即选票'}</span>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </>
+        ) : null}
+        {/* ===== 周边商城 ===== */}
+        {tab === 'merch' ? (
+          <>
+            <div className="px-3 pt-2">
+              <div className="relative h-[112px] overflow-hidden rounded-2xl bg-gradient-to-r from-[#FF8A9E] via-[#FF6A8A] to-[#FF4A6A] p-4 text-left">
+                <div className="text-[22px] font-black italic tracking-wide text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.25)]">电影周边商城</div>
+                <div className="mt-1 text-[13px] text-white/95">官方授权 · 正品保障</div>
+                <div className="mt-2 inline-block rounded-full bg-white/25 px-3 py-1 text-[12px] font-semibold text-white">全场满69包邮</div>
+                <ShoppingBag className="absolute bottom-3 right-3 h-10 w-10 text-white/40" strokeWidth={1.6} />
+              </div>
+            </div>
+            <div className="mx-2 mt-2 grid grid-cols-2 gap-2 pb-1">
+              {merchs.map((m) => (
+                <button key={m.id} type="button" onClick={() => { setBuyMerch(m); setMQty(1); }} className="overflow-hidden rounded-2xl bg-white text-left active:opacity-85">
+                  <img src={tbImg(m.tag, 300, 300)} alt={m.title} className="h-[142px] w-full object-cover" draggable={false} />
+                  <div className="p-2.5">
+                    <div className="line-clamp-2 text-[13.5px] font-semibold leading-[18px] text-black/85">{m.title}</div>
+                    <div className="mt-1 truncate text-[11px] text-black/35">{m.from}</div>
+                    <div className="mt-1.5 flex items-baseline">
+                      <span className="text-[17px] font-black text-[#FF3B30]">
+                        <span className="text-[10px]">¥</span>
+                        {fmtMoney(m.price)}
+                      </span>
+                      {m.orig ? <span className="ml-1 text-[11px] text-black/30 line-through">¥{fmtMoney(m.orig)}</span> : null}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-black/35">{m.hot}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="pb-1 pt-4 text-center text-[15px] font-bold text-[#C6CBD4]">淘票票·周边商城</div>
+          </>
+        ) : null}
+      </div>
+      {/* 周边购买弹层（数量步进 + 立即购买 → 待付款订单 → 支付面板） */}
+      {buyMerch ? (
+        <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/40" onClick={() => setBuyMerch(null)}>
+          <div className="rounded-t-2xl bg-white p-4 pb-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex gap-3">
+              <img src={tbImg(buyMerch.tag, 200, 200)} alt={buyMerch.title} className="h-[84px] w-[84px] shrink-0 rounded-xl object-cover" draggable={false} />
+              <div className="min-w-0 flex-1">
+                <div className="line-clamp-2 text-[15px] font-bold leading-5 text-black/90">{buyMerch.title}</div>
+                <div className="mt-1 truncate text-[12px] text-black/40">{buyMerch.from}</div>
+                <div className="mt-1.5 text-[19px] font-black text-[#FF3B30]">
+                  <span className="text-[12px]">¥</span>
+                  {fmtMoney(buyMerch.price)}
+                  {buyMerch.orig ? <span className="ml-1.5 text-[12px] font-normal text-black/35 line-through">¥{fmtMoney(buyMerch.orig)}</span> : null}
+                </div>
+              </div>
+              <button type="button" aria-label="关闭" onClick={() => setBuyMerch(null)} className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-black/[0.05]">
+                <X className="h-4 w-4 text-black/50" />
+              </button>
+            </div>
+            <div className="mt-4 flex items-center">
+              <span className="text-[14px] text-black/70">购买数量</span>
+              <div className="ml-auto flex items-center gap-3 rounded-full bg-black/[0.04] px-2 py-1">
+                <button type="button" aria-label="减少数量" onClick={() => setMQty((n) => Math.max(1, n - 1))} className="grid h-7 w-7 place-items-center rounded-full bg-white shadow-sm active:opacity-70">
+                  <Minus className="h-4 w-4 text-black/70" />
+                </button>
+                <span className="min-w-[20px] text-center text-[15px] font-bold text-black/85">{mQty}</span>
+                <button type="button" aria-label="增加数量" onClick={() => setMQty((n) => Math.min(4, n + 1))} className="grid h-7 w-7 place-items-center rounded-full bg-white shadow-sm active:opacity-70">
+                  <Plus className="h-4 w-4 text-black/70" />
+                </button>
+              </div>
+            </div>
+            <button type="button" onClick={buyMerchNow} className="mt-4 h-[48px] w-full rounded-full bg-gradient-to-r from-[#FF5C8A] to-[#FF2D6B] text-[16px] font-bold text-white active:opacity-90">
+              立即购买 · ¥{fmtMoney(buyMerch.price * mQty)}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ============================== 电影票详情（截图1/2/3：待开场/已放映/已退款 三态） ==============================
+
+/** 伪二维码（21×21 + 三定位角，按取票号播种 → 同一票稳定同图；演示用） */
+function tbQrGrid(seed: string): boolean[][] {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const rnd = (): number => {
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h >>> 0) % 1000) / 1000;
+  };
+  const n = 21;
+  const grid: boolean[][] = Array.from({ length: n }, () => Array.from({ length: n }, () => rnd() > 0.52));
+  const finder = (r0: number, c0: number) => {
+    for (let r = 0; r < 7; r++)
+      for (let c = 0; c < 7; c++) {
+        const edge = r === 0 || r === 6 || c === 0 || c === 6;
+        const core = r >= 2 && r <= 4 && c >= 2 && c <= 4;
+        grid[r0 + r][c0 + c] = edge || core;
+      }
+    for (let i = -1; i < 8; i++) {
+      if (r0 - 1 >= 0 && c0 + i >= 0 && c0 + i < n) grid[r0 - 1][c0 + i] = false;
+      if (r0 + 7 < n && c0 + i >= 0 && c0 + i < n) grid[r0 + 7][c0 + i] = false;
+      if (c0 - 1 >= 0 && r0 + i >= 0 && r0 + i < n) grid[r0 + i][c0 - 1] = false;
+      if (c0 + 7 < n && r0 + i >= 0 && r0 + i < n) grid[r0 + i][c0 + 7] = false;
+    }
+  };
+  finder(0, 0);
+  finder(0, n - 7);
+  finder(n - 7, 0);
+  return grid;
+}
+
+/** 电影票详情（截图1/2/3 三态：
+ *  待开场=紫底倒计时「N小时N分钟后开场」+黑色取票码+退改签(支持改签)；
+ *  已放映=橙底「电影已放映」+评价影片/影院+灰码已放映章+本单权益+周边推广；
+ *  已退款=靛蓝底「已退款」+退款时间金额+灰码已退款章+退改签(已退款)） */
+export function TicketDetailPage({
+  uid,
+  orderId,
+  onBack,
+  onToast,
+  onRate,
+  onOpenMerch,
+}: {
+  uid: string;
+  orderId: string;
+  onBack: () => void;
+  onToast: (m: string) => void;
+  /** 评价影片/影院（订单已完成且有评价入口时走 RateSheet） */
+  onRate: (id: string) => void;
+  /** 去周边商城（已放映态推广卡） */
+  onOpenMerch: () => void;
+}) {
+  const [, setTick] = useState(0);
+  const [qrTab, setQrTab] = useState<'pick' | 'scan'>('pick');
+  const [refundOpen, setRefundOpen] = useState(false);
+  const [refunding, setRefunding] = useState(false);
+  // 30s 心跳：倒计时走字 + 开场后自动切「已放映」
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  tbTickOrders(uid);
+  const o = tbLoadOrders(uid).find((x) => x.id === orderId);
+  if (!o || !o.ticket) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 bg-white">
+        <p className="text-[13px] text-black/40">票务订单不存在</p>
+        <button type="button" onClick={onBack} className="rounded-full bg-gradient-to-r from-[#FF5C8A] to-[#FF2D6B] px-6 py-2 text-[13px] font-semibold text-white">
+          返回
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto pb-8">
-        {/* 五宫格图标 */}
-        <div className="mx-2 mt-2 rounded-2xl bg-white py-3.5">
-          <div className="grid grid-cols-5">
-            {ticketIcons.map((it) => (
-              <button key={it.label} type="button" onClick={it.on} className="relative flex flex-col items-center gap-1.5 active:opacity-70">
-                <span className="relative grid h-[46px] w-[46px] place-items-center rounded-full bg-[#FFE9F1]">
-                  {it.icon}
-                  {it.badge ? <span className="absolute -top-1.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-gradient-to-r from-[#FF5A3C] to-[#FF2D00] px-1.5 py-px text-[9px] font-bold text-white">{it.badge}</span> : null}
-                </span>
-                <span className="text-[12px] text-black/80">{it.label}</span>
+    );
+  }
+  const t = o.ticket;
+  const startAt = new Date(`${t.date}T${t.start}:00`).getTime();
+  const now = Date.now();
+  const refunded = !!t.refunded;
+  const screened = !refunded && Number.isFinite(startAt) && now >= startAt;
+  const theme = refunded
+    ? { from: '#3D4785', to: '#5A64A8' }
+    : screened
+      ? { from: '#FF6A3C', to: '#FF9E75' }
+      : { from: '#4A3A9C', to: '#6C5BD4' };
+  // 开场倒计时（截图1口径：21小时48分钟后开场；跨天>N天N小时后开场）
+  const countdown = (() => {
+    if (refunded || screened) return null;
+    const diff = Math.max(0, startAt - now);
+    const h = Math.floor(diff / 3_600_000);
+    const m = Math.floor((diff % 3_600_000) / 60_000);
+    if (h >= 48) {
+      const d = Math.floor(h / 24);
+      return `${d}天${h % 24}小时后开场`;
+    }
+    return h > 0 ? `${h}小时${m}分钟后开场` : `${Math.max(1, m)}分钟后开场`;
+  })();
+  const refundAtText = t.refunded
+    ? `${new Date(t.refunded.at).getFullYear()}-${String(new Date(t.refunded.at).getMonth() + 1).padStart(2, '0')}-${String(new Date(t.refunded.at).getDate()).padStart(2, '0')} ${String(new Date(t.refunded.at).getHours()).padStart(2, '0')}:${String(new Date(t.refunded.at).getMinutes()).padStart(2, '0')}:${String(new Date(t.refunded.at).getSeconds()).padStart(2, '0')}`
+    : '';
+  const qrCells = tbQrGrid(t.ticketNo);
+  const qrDead = refunded || screened;
+  const pickLabel = t.kind === 'movie' ? '取电影票' : '取演出票';
+  const canRate = o.status === 'completed' && !o.review;
+  const doRate = () => {
+    if (canRate) onRate(o.id);
+    else onToast('散场后开放评价（演示）');
+  };
+  /** 申请退款：原路退回 → 订单退款成功 → 详情切「已退款」态 */
+  const doRefund = async () => {
+    if (refunding) return;
+    setRefunding(true);
+    const okPay = await tbRefundToOrigin(o);
+    setRefunding(false);
+    if (!okPay) {
+      onToast('退款失败，请稍后重试');
+      return;
+    }
+    tbMarkRefund(uid, o.id, o.total, '观影计划有变，申请退票');
+    tbPushMsg(uid, { kind: 'refund', title: '退票成功', text: `《${t.title}》退票 ¥${fmtMoney(o.total)} 已原路退回`, orderId: o.id });
+    setRefundOpen(false);
+    onToast('退票成功，退款已原路退回');
+  };
+  return (
+    <div className="relative flex h-full flex-col bg-[#F4F5F7]">
+      {/* 渐变头部：返回/标题 + 状态区 */}
+      <div className="relative shrink-0 px-3 pb-10 pt-[56px]" style={{ background: `linear-gradient(165deg, ${theme.from} 0%, ${theme.to} 100%)` }}>
+        <div className="relative z-10 flex items-center">
+          <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:opacity-70">
+            <ArrowLeft className="h-[21px] w-[21px] text-white" strokeWidth={2.4} />
+          </button>
+          <span className="flex-1 text-center text-[18px] font-bold text-white">电影票详情</span>
+          <span className="h-9 w-9 shrink-0" />
+        </div>
+        {/* 状态大区 */}
+        <div className="relative z-10 pb-1 pt-3 text-center">
+          {refunded ? (
+            <>
+              <div className="text-[24px] font-black text-white">已退款</div>
+              <div className="mt-1.5 text-[13px] text-white/85">{refundAtText} 已退款，退款金额：{fmtMoney(t.refunded!.amount)}元</div>
+              <button type="button" onClick={() => onToast('退款明细（演示）：已原路退回')} className="mt-2.5 rounded-full border border-white/80 px-5 py-1.5 text-[14px] font-medium text-white active:opacity-75">
+                查看退款
               </button>
-            ))}
-          </div>
-          <div className="mt-2.5 flex justify-center gap-1">
-            <span className="h-[3.5px] w-[12px] rounded-full bg-[#FF3676]" />
-            <span className="h-[3.5px] w-[5px] rounded-full bg-black/15" />
-          </div>
-        </div>
-        {/* 新人限时福利 */}
-        <div className="mx-2 mt-2 rounded-2xl bg-white p-3">
-          <div className="text-[17px] font-black text-[#FF3676]">新人限时福利</div>
-          <div className="mt-2.5 grid grid-cols-2 gap-2">
-            <button type="button" onClick={onOpenCouponCenter} className="flex items-center justify-between rounded-xl bg-gradient-to-br from-[#FFE1EC] to-[#FFD0E0] p-3 text-left active:opacity-85">
-              <span>
-                <span className="block text-[15px] font-bold text-black/90">观影权益</span>
-                <span className="mt-0.5 block text-[12px] text-black/45">月月领</span>
-                <span className="mt-2 inline-block rounded-full bg-gradient-to-r from-[#FF5C8A] to-[#FF2D6B] px-3 py-1 text-[12.5px] font-semibold text-white">去领券</span>
-              </span>
-              <Ticket className="h-9 w-9 rotate-[-12deg] text-white/80" strokeWidth={1.6} />
-            </button>
-            <button type="button" onClick={() => onToast('抽免单卡（演示）')} className="flex items-center justify-between rounded-xl bg-[#FFF3DC] p-3 text-left active:opacity-85">
-              <span>
-                <span className="block text-[15px] font-bold text-black/90">抽免单卡</span>
-                <span className="mt-0.5 block text-[12px] text-black/45">0.01元喝</span>
-                <span className="mt-2 inline-block rounded-full bg-gradient-to-r from-[#FFB03A] to-[#FF8A00] px-3 py-1 text-[12.5px] font-semibold text-white">去看看</span>
-              </span>
-              <span className="grid h-9 w-9 place-items-center rounded-lg bg-[#FFD100]/70 text-[12px] font-black text-[#8a6300]">免18元</span>
-            </button>
-          </div>
-        </div>
-        {/* 热映影片 */}
-        <div className="mx-2 mt-2 rounded-2xl bg-white p-3">
-          <div className="flex items-baseline">
-            <span className="text-[19px] font-black text-black/90">热映影片</span>
-            <span className="ml-3 text-[15px] text-black/35">新热预告</span>
-            <button type="button" onClick={() => onToast('全部热映（演示）')} className="ml-auto flex items-center text-[13px] text-black/45 active:opacity-70">
-              全部
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="mt-2.5 flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {TB_MOVIES.map((m) => (
-              <div key={m.id} className="w-[106px] shrink-0">
-                <MoviePoster m={m} onOpen={() => { setMovie(m); setDay(0); setSel(new Set()); setView('cinemas'); }} />
-                <div className="mt-1.5 truncate text-[13.5px] text-black/85">{m.title}</div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMovie(m);
-                    setDay(0);
-                    setSel(new Set());
-                    setView('cinemas');
-                  }}
-                  className="mt-1.5 block w-full rounded-full bg-gradient-to-r from-[#FF5C8A] to-[#FF2D6B] py-1.5 text-center text-[13.5px] font-bold text-white active:opacity-85"
-                >
-                  购票
+            </>
+          ) : screened ? (
+            <>
+              <div className="text-[24px] font-black text-white">电影已放映</div>
+              <div className="mt-2.5 flex items-center justify-center gap-3">
+                <button type="button" onClick={doRate} className="rounded-full border border-white/80 px-5 py-1.5 text-[14px] font-medium text-white active:opacity-75">
+                  评价影片
                 </button>
-                <div className="mt-1 text-center text-[10.5px] text-[#FF3676]">特惠</div>
+                <button type="button" onClick={() => onToast('评价影院（演示）')} className="rounded-full border border-white/80 px-5 py-1.5 text-[14px] font-medium text-white active:opacity-75">
+                  评价影院
+                </button>
               </div>
-            ))}
+            </>
+          ) : (
+            <>
+              <div className="text-[24px] font-black text-white">{countdown}</div>
+              <div className="mt-1.5 text-[13px] text-white/85">是否购票成功以订单信息为准</div>
+            </>
+          )}
+        </div>
+        {/* 背景装饰（钻石切面感） */}
+        <svg viewBox="0 0 430 160" preserveAspectRatio="none" className="pointer-events-none absolute inset-0 h-full w-full opacity-25" aria-hidden="true">
+          <path d="M0 0 L430 0 L430 90 L280 40 L120 110 L0 60 Z" fill="#fff" opacity="0.08" />
+          <path d="M0 30 L180 130 L430 50 L430 160 L0 160 Z" fill="#fff" opacity="0.06" />
+        </svg>
+      </div>
+      {/* 内容卡（上提覆盖头部下沿） */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-8">
+        {/* 影院/场馆卡 */}
+        <button type="button" onClick={() => onToast('影院详情（演示）')} className="relative z-10 -mt-7 flex w-full items-center rounded-t-2xl bg-white px-4 py-3.5 text-left active:opacity-85">
+          <span className="min-w-0 flex-1 truncate text-[17px] font-black text-black/90">{t.venue}</span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-black/30" />
+          <span className="ml-3 flex shrink-0 items-center gap-3">
+            <Phone className="h-[18px] w-[18px] text-black/75" strokeWidth={2} />
+            <MapPin className="h-[18px] w-[18px] text-black/75" strokeWidth={2} />
+          </span>
+        </button>
+        {/* 影片/演出信息卡 */}
+        <div className="bg-white px-4 pb-4 pt-1">
+          <div className="rounded-xl bg-white p-3 shadow-[0_2px_14px_rgba(0,0,0,0.08)]">
+            <div className="flex gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[17px] font-bold text-black/90">{t.title}</div>
+                <div className="mt-0.5 text-[14px] text-black/60">
+                  {t.badge} {t.qty}张
+                </div>
+                <div className="mt-2.5 flex gap-4 text-[13px] leading-[22px] text-black/80">
+                  <div>
+                    <div className="text-black/45">{t.dateLabel}</div>
+                    <div className="text-[15px] font-bold text-black/90">{t.start}~{t.end}</div>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate">{t.hall}</div>
+                    <div className="truncate">{t.seats.join('  ')}</div>
+                  </div>
+                </div>
+              </div>
+              {/* 渐变海报 */}
+              <div className="relative h-[118px] w-[86px] shrink-0 overflow-hidden rounded-lg" style={{ background: `linear-gradient(160deg, ${t.posterC1} 0%, ${t.posterC2} 100%)` }}>
+                <span className="absolute inset-x-1.5 top-2 line-clamp-3 text-[12.5px] font-black leading-[16px] text-white/95 drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]">{t.title}</span>
+                <span className="absolute bottom-1.5 left-1.5 rounded-[3px] bg-black/45 px-1 py-px text-[9px] font-bold text-white">{t.kind === 'movie' ? '电影票' : t.kind === 'comedy' ? '演出票' : '演唱会'}</span>
+              </div>
+            </div>
           </div>
         </div>
-        {/* 即将上映 */}
-        <div className="mx-2 mt-2 rounded-2xl bg-white p-3">
-          <div className="flex items-baseline">
-            <span className="text-[19px] font-black text-black/90">即将上映</span>
-            <span className="ml-3 text-[15px] text-black/35">新片想看榜</span>
-            <button type="button" onClick={() => onToast('全部新片（演示）')} className="ml-auto flex items-center text-[13px] text-black/45 active:opacity-70">
-              全部
-              <ChevronRight className="h-4 w-4" />
+        {/* 取电影票卡（tab + 二维码 + 取票号） */}
+        <div className="mt-2.5 rounded-2xl bg-white p-4">
+          <div className="flex items-center">
+            <button type="button" onClick={() => setQrTab('pick')} className={`relative pb-2 text-[17px] font-bold ${qrTab === 'pick' ? 'text-black/90' : 'text-black/35'}`}>
+              {pickLabel}
+              {qrTab === 'pick' ? <span className="absolute inset-x-1 bottom-0 h-[3px] rounded-full bg-[#FF3B5C]" /> : null}
             </button>
+            <button type="button" onClick={() => setQrTab('scan')} className={`relative ml-6 pb-2 text-[17px] font-bold ${qrTab === 'scan' ? 'text-black/90' : 'text-black/35'}`}>
+              扫码入场
+              {qrTab === 'scan' ? <span className="absolute inset-x-1 bottom-0 h-[3px] rounded-full bg-[#FF3B5C]" /> : null}
+            </button>
+            {screened ? (
+              <button type="button" onClick={() => onToast('如何取票（演示）')} className="ml-auto flex items-center pb-2 text-[14px] text-black/45 active:opacity-70">
+                如何取票
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            ) : null}
           </div>
-          <div className="mt-2.5 flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {TB_MOVIES_SOON.map((m) => (
-              <div key={m.id} className="w-[106px] shrink-0">
-                <MoviePoster m={m} onOpen={() => onToast(`已预约《${m.title}》上映提醒`)} />
-                <div className="mt-1.5 truncate text-[13.5px] text-black/85">{m.title}</div>
+          <div className="relative mx-auto mt-4 w-fit">
+            {/* 二维码（已放映/已退款灰化） */}
+            <div className={`grid gap-[2px] rounded-lg p-2 ${qrDead ? 'opacity-25 grayscale' : ''}`} style={{ gridTemplateColumns: `repeat(21, 9px)` }}>
+              {qrCells.map((row, r) =>
+                row.map((v, c) => (
+                  <span key={`${r}-${c}`} className={`h-[9px] w-[9px] ${v ? 'bg-black' : 'bg-white'}`} />
+                ))
+              )}
+            </div>
+            {/* 已放映/已退款 圆形红章 */}
+            {qrDead ? (
+              <span className={`absolute left-1/2 top-1/2 grid h-[92px] w-[92px] -translate-x-1/2 -translate-y-1/2 rotate-[-14deg] place-items-center rounded-full border-[3px] ${refunded ? 'border-[#E4237A] text-[#E4237A]' : 'border-[#E42323] text-[#E42323]'}`}>
+                <span className="text-[19px] font-black tracking-widest">{refunded ? '已退款' : '已放映'}</span>
+                <span className="absolute inset-[6px] rounded-full border border-current opacity-70" />
+              </span>
+            ) : null}
+          </div>
+          <div className={`mt-2 text-center text-[13px] ${qrDead ? 'text-black/35' : 'text-black/55'}`}>{t.qty}张{t.kind === 'movie' ? '电影票' : '演出票'}</div>
+          <div className="mx-auto mt-3 w-fit rounded-xl border border-black/[0.08] px-4 py-2.5">
+            <span className={`text-[14px] ${qrDead ? 'text-black/35' : 'text-black/55'}`}>取票号：</span>
+            <span className={`text-[17px] font-black tracking-wide ${qrDead ? 'text-black/30 line-through' : 'text-black/90'}`}>{t.ticketNo}</span>
+          </div>
+        </div>
+        {/* 已放映：本单权益 + 周边推广 */}
+        {screened ? (
+          <>
+            <div className="mt-2.5 rounded-2xl bg-white p-4">
+              <div className="text-[16px] font-bold text-black/90">本单权益</div>
+              <div className="mt-3 grid grid-cols-2 gap-2.5">
+                <button type="button" onClick={() => onToast('66会员积分映后发放（演示）')} className="flex items-center justify-between rounded-xl bg-[#F6F7F8] px-3 py-3 text-left active:opacity-80">
+                  <span>
+                    <span className="block text-[14px] font-bold text-black/85">66会员积分</span>
+                    <span className="mt-0.5 flex items-center text-[12px] text-black/40">
+                      映后发放
+                      <ChevronRight className="h-3 w-3" />
+                    </span>
+                  </span>
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#2B2B2B] text-[11px] font-black text-[#FFD100]">66</span>
+                </button>
+                <button type="button" onClick={() => onToast('电子纪念票（演示）')} className="flex items-center justify-between rounded-xl bg-[#F6F7F8] px-3 py-3 text-left active:opacity-80">
+                  <span>
+                    <span className="block text-[14px] font-bold text-black/85">电子纪念票</span>
+                    <span className="mt-0.5 flex items-center text-[12px] text-black/40">
+                      去看看
+                      <ChevronRight className="h-3 w-3" />
+                    </span>
+                  </span>
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[#2B2B2B]">
+                    <Ticket className="h-4.5 w-4.5 text-[#FFD100]" strokeWidth={2} />
+                  </span>
+                </button>
               </div>
-            ))}
-          </div>
+            </div>
+            <button type="button" onClick={onOpenMerch} className="mt-2.5 flex w-full items-center rounded-2xl bg-white p-3.5 text-left active:opacity-85">
+              <span className="relative h-[52px] w-[52px] shrink-0 overflow-hidden rounded-xl" style={{ background: `linear-gradient(160deg, ${t.posterC1}, ${t.posterC2})` }}>
+                <span className="absolute inset-x-1 top-2 line-clamp-2 text-[9.5px] font-black leading-[12px] text-white">{t.title}</span>
+              </span>
+              <span className="ml-3 min-w-0 flex-1">
+                <span className="block truncate text-[15px] font-bold text-black/90">《{t.title}》官方周边</span>
+                <span className="mt-0.5 block text-[12px] text-black/40">热卖中</span>
+              </span>
+              <span className="mr-3 rounded-[3px] border border-[#FF3676]/50 px-1 py-px text-[10.5px] font-bold text-[#FF3676]">近期热卖</span>
+              <span className="shrink-0 rounded-full border-[1.5px] border-[#FF3676] px-3.5 py-1.5 text-[13.5px] font-bold text-[#FF3676]">去看看</span>
+            </button>
+          </>
+        ) : null}
+        {/* 退改签卡 */}
+        <div className="mt-2.5 rounded-2xl bg-white p-4">
+          <div className="text-[16px] font-bold text-black/90">退改签</div>
+          {refunded ? (
+            <button type="button" onClick={() => onToast('退款明细（演示）')} className="mt-3 flex w-full items-center rounded-xl bg-[#F6F7F8] px-3 py-3 text-left active:opacity-80">
+              <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-[#12B76A]">
+                <Check className="h-3 w-3 text-white" strokeWidth={3} />
+              </span>
+              <span className="ml-2.5 flex-1">
+                <span className="block text-[14.5px] font-bold text-black/85">已退款</span>
+                <span className="mt-0.5 block text-[12.5px] text-black/45">
+                  退款金额<span className="font-bold text-[#FF3B5C]">{fmtMoney(t.refunded!.amount)}元</span>
+                </span>
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-black/25" />
+            </button>
+          ) : (
+            <>
+              <div className="mt-3 flex w-full items-center rounded-xl bg-[#F6F7F8] px-3 py-3">
+                <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-[#12B76A]">
+                  <Check className="h-3 w-3 text-white" strokeWidth={3} />
+                </span>
+                <span className="ml-2.5 min-w-0 flex-1">
+                  <span className="block text-[14.5px] font-bold text-black/85">支持改签</span>
+                  <span className="mt-0.5 block text-[12.5px] text-black/45">
+                    未取票开场前1小时可改签，<span className="font-bold text-[#FF3B5C]">改签费5.0元/张</span>
+                  </span>
+                </span>
+                <button type="button" onClick={() => onToast('已提交改签申请（改签费¥5.0/张，演示）')} className="shrink-0 rounded-full border-[1.5px] border-[#FF3B5C] px-4 py-1.5 text-[13.5px] font-bold text-[#FF3B5C] active:opacity-75">
+                  改签
+                </button>
+              </div>
+              <div className="mt-2 flex w-full items-center rounded-xl bg-[#F6F7F8] px-3 py-3">
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[14.5px] font-bold text-black/85">申请退票</span>
+                  <span className="mt-0.5 block text-[12.5px] text-black/45">开场前可退，退款原路退回</span>
+                </span>
+                <button type="button" onClick={() => setRefundOpen(true)} className="shrink-0 rounded-full border border-black/12 px-4 py-1.5 text-[13.5px] font-medium text-black/65 active:opacity-75">
+                  退款
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
+      {/* 退票确认弹层 */}
+      {refundOpen ? (
+        <div className="absolute inset-0 z-40 grid place-items-center bg-black/45 px-8" onClick={() => (refunding ? null : setRefundOpen(false))}>
+          <div className="w-full rounded-2xl bg-white p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center text-[17px] font-bold text-black/90">确认退票</div>
+            <div className="mt-2 text-center text-[13.5px] leading-6 text-black/55">
+              《{t.title}》{t.qty}张，实付 ¥{fmtMoney(o.total)}
+              <br />
+              退款将原路退回，确认退票吗？
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2.5">
+              <button type="button" onClick={() => setRefundOpen(false)} className="h-11 rounded-full border border-black/12 text-[15px] text-black/65 active:opacity-75">
+                再想想
+              </button>
+              <button type="button" onClick={doRefund} disabled={refunding} className="h-11 rounded-full bg-gradient-to-r from-[#FF3B5C] to-[#E42323] text-[15px] font-bold text-white active:opacity-85 disabled:opacity-60">
+                {refunding ? '退款中…' : '确认退票'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

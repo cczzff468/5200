@@ -164,6 +164,143 @@ export function tbSeatSold(r: number, c: number): boolean {
   return h % 9 === 0;
 }
 
+/** 电影场次（按日 tab，第十三轮：出票写真实日期时间 → 票详情倒计时/已放映按此判定） */
+export const TB_MOVIE_SESSIONS = [
+  { start: '21:00', end: '22:28' },
+  { start: '09:15', end: '11:03' },
+  { start: '14:30', end: '16:08' },
+];
+
+/** 淘票票·喜剧脱口秀频道 */
+
+export interface TbShow {
+  id: string;
+  title: string;
+  /** 副标题（厂牌/演员阵容） */
+  sub: string;
+  venue: string;
+  city: string;
+  /** 场期文案（10.24 周六 19:30 场次多） */
+  dateRange: string;
+  price: string;
+  tag: string;
+  c1: string;
+  c2: string;
+  hot?: string;
+}
+
+export const TB_COMEDY_SHOWS: TbShow[] = [
+  { id: 'c1', title: '脱口秀专场·冒犯之夜', sub: '笑果厂牌 · 卡司盲盒', venue: '濮阳文化艺术中心小剧场', city: '濮阳', dateRange: '10.24 周六 19:30', price: '120-280', tag: '脱口秀', c1: '#FF8A00', c2: '#E84A1F', hot: '已售812' },
+  { id: 'c2', title: '开心麻花爆笑舞台剧《旋转卡门》', sub: '开心麻花 · 经典爆笑', venue: '濮阳市工人文化宫大剧院', city: '濮阳', dateRange: '11.01 周日 15:00 / 19:30', price: '180-580', tag: '舞台剧', c1: '#FFB03A', c2: '#F0641E', hot: '已售1247' },
+  { id: 'c3', title: '即兴喜剧互动专场·观众决定结局', sub: '毛豆喜剧厂牌', venue: '悦尚城奥斯卡影城多功能厅', city: '濮阳', dateRange: '10.26 周一 20:00', price: '99-159', tag: '即兴喜剧', c1: '#FFC93A', c2: '#EF7B1A', hot: '已售396' },
+  { id: 'c4', title: '相声大会·德云班主带队', sub: '传统曲艺 · 贯口快板', venue: '台前县人民会堂', city: '台前', dateRange: '11.08 周日 19:00', price: '88-380', tag: '相声', c1: '#F5A623', c2: '#D95318', hot: '已售2210' },
+  { id: 'c5', title: '漫才&短剧混合秀·双人成行', sub: '新人开放麦冠军场', venue: '圣雅国际影城丹尼斯店4F', city: '濮阳', dateRange: '10.31 周五 19:30', price: '68-128', tag: '漫才', c1: '#FF9A3C', c2: '#E85A2A' },
+  { id: 'c6', title: '脱口秀开放麦·新手村大乱斗', sub: '每周三固定场次', venue: '濮阳星光国际影城2F咖啡厅', city: '濮阳', dateRange: '每周三 20:00', price: '39.9', tag: '开放麦', c1: '#FFAD42', c2: '#F07B25', hot: '已售158' },
+];
+
+/** 淘票票·演唱会频道 */
+
+export interface TbConcertTier {
+  name: string;
+  price: number;
+  /** 票况文案（紧张/充足/已售罄） */
+  left: string;
+}
+
+export interface TbConcert {
+  id: string;
+  artist: string;
+  tour: string;
+  city: string;
+  venue: string;
+  dateRange: string;
+  tiers: TbConcertTier[];
+  /** on 开售中 / soon 预售 */
+  status: 'on' | 'soon';
+  c1: string;
+  c2: string;
+  hot?: string;
+}
+
+export const TB_CONCERTS: TbConcert[] = [
+  {
+    id: 'cc1', artist: '周杰伦', tour: '嘉年华世界巡回演唱会', city: '郑州', venue: '郑州奥林匹克体育中心',
+    dateRange: '11.15-11.16 周六日 19:00', status: 'on', c1: '#7C5CFF', c2: '#3B2A8C', hot: '已售3.2万',
+    tiers: [
+      { name: '内场VIP', price: 2280, left: '紧张' },
+      { name: '内场A区', price: 1680, left: '紧张' },
+      { name: '看台A', price: 1280, left: '充足' },
+      { name: '看台B', price: 880, left: '充足' },
+      { name: '看台C', price: 580, left: '充足' },
+    ],
+  },
+  {
+    id: 'cc2', artist: '五月天', tour: '诺亚方舟10周年进化复刻版', city: '郑州', venue: '郑州航海体育场',
+    dateRange: '11.22-11.23 周六日 19:30', status: 'on', c1: '#3B82F6', c2: '#1E3A8C', hot: '已售2.8万',
+    tiers: [
+      { name: '摇滚区', price: 1855, left: '紧张' },
+      { name: '看台A', price: 1255, left: '充足' },
+      { name: '看台B', price: 855, left: '充足' },
+      { name: '看台C', price: 555, left: '充足' },
+    ],
+  },
+  {
+    id: 'cc3', artist: '薛之谦', tour: '天外来物巡回演唱会', city: '洛阳', venue: '洛阳市体育中心体育场',
+    dateRange: '12.06 周六 19:00', status: 'on', c1: '#FF6A5A', c2: '#8C1F1F', hot: '已售1.9万',
+    tiers: [
+      { name: '内场', price: 1717, left: '紧张' },
+      { name: '看台A', price: 1317, left: '充足' },
+      { name: '看台B', price: 917, left: '充足' },
+      { name: '看台C', price: 517, left: '充足' },
+    ],
+  },
+  {
+    id: 'cc4', artist: '邓紫棋', tour: 'I AM GLORIA世界巡回', city: '安阳', venue: '安阳市文体中心体育馆',
+    dateRange: '12.20 周六 19:30', status: 'soon', c1: '#F03E8C', c2: '#7A1F4D',
+    tiers: [
+      { name: '内场', price: 1580, left: '预售' },
+      { name: '看台A', price: 1180, left: '预售' },
+      { name: '看台B', price: 780, left: '预售' },
+    ],
+  },
+  {
+    id: 'cc5', artist: '凤凰传奇', tour: '吉祥如意巡回演唱会', city: '濮阳', venue: '濮阳市体育场',
+    dateRange: '11.09 周日 19:30', status: 'on', c1: '#3BC46A', c2: '#1E6E3C', hot: '已售1.1万',
+    tiers: [
+      { name: '内场', price: 1280, left: '充足' },
+      { name: '看台A', price: 880, left: '充足' },
+      { name: '看台B', price: 580, left: '充足' },
+      { name: '看台C', price: 380, left: '充足' },
+    ],
+  },
+];
+
+/** 淘票票·周边商城频道 */
+
+export interface TbMerch {
+  id: string;
+  title: string;
+  /** 所属影片 */
+  from: string;
+  price: number;
+  orig?: number;
+  /** 图片品类（tbImg 复用） */
+  tag: string;
+  hot: string;
+  kind: string;
+}
+
+export const TB_MERCH: TbMerch[] = [
+  { id: 'pm1', title: '浪浪山小妖怪猪妖手办盲盒', from: '《浪浪山小妖怪》官方周边', price: 69, orig: 99, tag: 'toy', hot: '已售1.2万', kind: '手办' },
+  { id: 'pm2', title: '官方授权收藏级海报套装8张', from: '《群星闪耀时》周边', price: 35, tag: 'book', hot: '已售6411', kind: '海报' },
+  { id: 'pm3', title: '电影原声黑胶唱片限量编号版', from: '《生如夏花》原声带', price: 199, orig: 259, tag: 'speaker', hot: '已售890', kind: '音乐' },
+  { id: 'pm4', title: '小猪佩奇完美假期亲子玩偶礼包', from: '《小猪佩奇·完美假期》', price: 129, tag: 'toy', hot: '已售3.4万', kind: '玩偶' },
+  { id: 'pm5', title: '生化危机主题战术水杯', from: '《生化危机：净化》周边', price: 89, tag: 'water-bottle', hot: '已售2280', kind: '日用' },
+  { id: 'pm6', title: '神探之痕迹放大镜书签礼盒', from: '《神探之痕迹》官方', price: 45, tag: 'book', hot: '已售1735', kind: '文具' },
+  { id: 'pm7', title: '什么意思夫妇表情包钥匙扣', from: '《什么意思夫妇》周边', price: 25, tag: 'backpack', hot: '已售8.6万', kind: '钥匙扣' },
+  { id: 'pm8', title: '偷偷藏不住情侣纪念票根套装', from: '《偷偷藏不住》映前周边', price: 39.9, tag: 'book', hot: '已售5213', kind: '票根' },
+];
+
 /** 飞猪旅行频道 */
 export const TB_FLIGGY = {
   chips: ['濮阳的酒店', '新加坡', '旅行租赁', '民宿公寓', '政府补贴'],

@@ -136,7 +136,7 @@ import {
   type TbSession,
 } from '@/lib/ios/taobao-store';
 import { tbExecutePay, tbListPayChannels, tbRefundToOrigin, type TbPayChannel } from '@/lib/ios/taobao-pay';
-import { BillPage, FliggyPage, MoviePage, SeckillPage, SignInPage, SubsidyPage } from './taobao-channels';
+import { BillPage, FliggyPage, MoviePage, SeckillPage, SignInPage, SubsidyPage, TicketDetailPage } from './taobao-channels';
 import { LocalToast, useLocalToast } from './page-toast';
 
 const TB_ORANGE = '#FF5000';
@@ -3189,6 +3189,90 @@ function OrderCard({
   onRefund: () => void;
 }) {
   const countdown = useCountdown(o.status === 'pendingPay' ? o.createdAt + TB_PAY_TTL : undefined);
+  // 票务订单卡（第十三轮淘票票：电影/喜剧脱口秀/演唱会——无物流不发货，直接「待收货」，点击进电影票详情）
+  if (o.ticket) {
+    const t = o.ticket;
+    const stText = o.status === 'cancelled' ? (o.refund ? '退款成功' : '交易关闭') : o.status === 'completed' ? '交易成功' : '待收货';
+    return (
+      <div onClick={onOpen} className="cursor-pointer rounded-2xl bg-white px-3.5 py-3 active:bg-black/[0.015]">
+        <div className="flex w-full items-center gap-1.5">
+          <span className="mr-0.5 inline-block rounded-[3px] bg-gradient-to-r from-[#FF5C8A] to-[#FF2D6B] px-1 py-[1px] text-[10px] font-bold leading-none text-white">淘票票</span>
+          <span className="min-w-0 truncate text-[14px] font-semibold text-black/85">{o.shopName}</span>
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/30" />
+          <span className={`ml-auto shrink-0 text-[13px] ${o.status === 'cancelled' ? 'text-black/40' : 'text-[#FF6A1E]'}`}>{stText}</span>
+        </div>
+        <div className="mt-2.5 flex gap-2.5">
+          {/* 渐变海报（票务单无实体图） */}
+          <span className="relative h-[74px] w-[58px] shrink-0 overflow-hidden rounded-lg" style={{ background: `linear-gradient(160deg, ${t.posterC1} 0%, ${t.posterC2} 100%)` }}>
+            <span className="absolute inset-x-1 top-2 line-clamp-3 text-[10.5px] font-black leading-[13px] text-white/95">{t.title}</span>
+            <span className="absolute bottom-1 left-1 rounded-[2px] bg-black/45 px-0.5 py-px text-[8px] font-bold text-white">{t.kind === 'movie' ? '电影票' : t.kind === 'comedy' ? '演出票' : '演唱会'}</span>
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex gap-2">
+              <span className="line-clamp-1 min-w-0 flex-1 text-[13.5px] leading-5 text-black/85">{t.title}</span>
+              <span className="shrink-0 text-[13.5px] leading-5 text-black/70">¥{fmtMoney(t.unitPrice)}</span>
+            </div>
+            <div className="mt-0.5 truncate text-[12px] text-black/40">
+              {t.dateLabel} {t.start} · {t.venue}
+            </div>
+            <div className="mt-0.5 truncate text-[12px] text-black/40">
+              {t.seats.join(' ')} · {t.qty}张
+            </div>
+            <div className="mt-1 flex gap-2.5 text-[11.5px] text-[#FF6A1E]">
+              <span>电子票</span>
+              <span>免配送</span>
+              <span>开场前可退</span>
+            </div>
+          </div>
+        </div>
+        <div className="mt-2.5 flex items-center justify-end">
+          <span className="text-[12px] text-black/45">
+            实付款 <span className="text-[16px] font-semibold text-black/85">¥{fmtMoney(o.total)}</span>
+          </span>
+        </div>
+        <div className="mt-2.5 flex items-center">
+          {o.status === 'shipped' || o.status === 'completed' ? (
+            <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(); }} className="text-[13px] text-black/50 active:opacity-60">
+              更多
+            </button>
+          ) : (
+            <span />
+          )}
+          <div className="ml-auto flex gap-2">
+            {o.status === 'shipped' ? (
+              <>
+                <button type="button" onClick={(e) => { e.stopPropagation(); onRefund(); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                  申请退款
+                </button>
+                <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(); }} className="rounded-lg bg-gradient-to-r from-[#FF5C8A] to-[#FF2D6B] px-3.5 py-1.5 text-[13px] font-semibold text-white active:opacity-85">
+                  取票码
+                </button>
+              </>
+            ) : null}
+            {o.status === 'completed' ? (
+              <>
+                {o.review ? (
+                  <span className="rounded-lg border border-black/[0.08] px-3.5 py-1.5 text-[13px] text-black/30">已评价</span>
+                ) : (
+                  <button type="button" onClick={(e) => { e.stopPropagation(); onRate(o.id); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                    评价
+                  </button>
+                )}
+                <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(); }} className="rounded-lg border border-[#FF3676] px-3.5 py-1.5 text-[13px] font-medium text-[#FF3676] active:opacity-70">
+                  去看看
+                </button>
+              </>
+            ) : null}
+            {o.status === 'cancelled' ? (
+              <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                查看详情
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
   const shop = shopById(o.shopId);
   const nodeIdx = o.track.length - 1;
   const statusRight = (() => {
@@ -6194,7 +6278,7 @@ function SettingsPage({ session, onBack, onToast, onLogout }: { session: TbSessi
 
 // ---------------- 主入口（tab 框架 + 页面栈） ----------------
 
-type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill';
+type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill' | 'ticketDetail';
 type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 
 /** 底部导航（首页/消息/购物车/我的淘宝） */
@@ -6328,6 +6412,10 @@ export default function TaobaoApp() {
   /** 物流页订单 + 返回目标（订单列表/详情/快递页均可进） */
   const [logisticsId, setLogisticsId] = useState<string | null>(null);
   const [logiBack, setLogiBack] = useState<'orders' | 'orderDetail'>('orders');
+  /** 票务订单详情（第十三轮淘票票）+ 返回目标（订单列表/淘票票）+ 淘票票初始频道 */
+  const [ticketId, setTicketId] = useState<string | null>(null);
+  const [ticketReturn, setTicketReturn] = useState<'movie' | 'orders'>('orders');
+  const [movieTab, setMovieTab] = useState<'movie' | 'comedy' | 'concert' | 'merch'>('movie');
   /** 二级页返回目标（订单页可从「我的」或首页进入） */
   const [subReturn, setSubReturn] = useState<TbTab>('me');
   /** 地址页返回目标：'me'（我的页进）/ 'checkout'（下单页地址弹层进） */
@@ -6385,6 +6473,19 @@ export default function TaobaoApp() {
   // 底部消息角标 = 未读数（消息页「清除未读」后归零）
   const msgCount = tbMsgUnreadCount(uid);
 
+  /** 打开订单（票务单 → 电影票详情；普通单 → 对应状态详情页；from 记录返回目标） */
+  const openOrderSmart = (id: string, from: 'orders' | 'movie' = 'orders') => {
+    const o = tbLoadOrders(uid).find((x) => x.id === id);
+    if (o?.ticket) {
+      setTicketId(id);
+      setTicketReturn(from);
+      setPage('ticketDetail');
+    } else {
+      setOrderId(id);
+      setPage('orderDetail');
+    }
+  };
+
   /** 二级页返回（订单/地址等可能从「我的」或主框架进入） */
   const backToReturn = () => {
     setPage('main');
@@ -6417,10 +6518,7 @@ export default function TaobaoApp() {
         {tab === 'msgs' ? (
           <MsgsPage
             uid={uid}
-            onOpenOrder={(id) => {
-              setOrderId(id);
-              setPage('orderDetail');
-            }}
+            onOpenOrder={(id) => openOrderSmart(id, 'orders')}
             onOpenExpress={() => setPage('express')}
             onOpenRefundOrders={() => {
               setOrderTab('cancelled');
@@ -6531,16 +6629,11 @@ export default function TaobaoApp() {
         initialTab={orderTab}
         onBack={backToReturn}
         onOpenOrder={(id) => {
-          // 需求（第四轮澄清）：全部订单/我的订单点击订单进入订单详情页——
-          // 按状态分别显示 待付款/待发货/已发货/交易成功/交易关闭 详情界面（不是物流页）；
-          // 物流页保留「查看物流」入口（订单卡物流条/详情物流头卡/底栏按钮）
-          setOrderId(id);
-          setPage('orderDetail');
+          // 需求（第四轮澄清）：全部订单/我的订单点击订单进入对应详情页；
+          // 票务单（第十三轮）→ 电影票详情，普通单 → 对应状态订单详情页
+          openOrderSmart(id, 'orders');
         }}
-        onOpenDetail={(id) => {
-          setOrderId(id);
-          setPage('orderDetail');
-        }}
+        onOpenDetail={(id) => openOrderSmart(id, 'orders')}
         onPayOrder={(id) => setPayOrderId(id)}
         onToast={showToast}
         onOpenLogistics={(id) => {
@@ -6602,15 +6695,44 @@ export default function TaobaoApp() {
     // 红包签到·领现金（第九轮：首页运营位图标入口）
     content = <SignInPage uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
   } else if (page === 'movie') {
-    // 淘票票（第九轮：首页运营位图标入口；首页→影院→选座内部导航）
-    content = <MoviePage onBack={() => setPage('main')} onToast={showToast} onOpenCouponCenter={() => setPage('couponCenter')} />;
+    // 淘票票（第十三轮重构：四大频道 tab；出票→票详情；周边下单→支付面板）
+    content = (
+      <MoviePage
+        uid={uid}
+        initialTab={movieTab}
+        onBack={() => setPage('main')}
+        onToast={showToast}
+        onOpenCouponCenter={() => setPage('couponCenter')}
+        onIssued={(id) => {
+          setTicketId(id);
+          setTicketReturn('movie');
+          setPage('ticketDetail');
+        }}
+        onPayOrder={(id) => setPayOrderId(id)}
+      />
+    );
+  } else if (page === 'ticketDetail' && ticketId) {
+    // 电影票详情（待开场/已放映/已退款 三态）
+    content = (
+      <TicketDetailPage
+        uid={uid}
+        orderId={ticketId}
+        onBack={() => setPage(ticketReturn === 'movie' ? 'movie' : 'orders')}
+        onToast={showToast}
+        onRate={(id) => setRateFor(id)}
+        onOpenMerch={() => {
+          setMovieTab('merch');
+          setPage('movie');
+        }}
+      />
+    );
   } else if (page === 'fliggy') {
     // 飞猪旅行（第九轮：首页运营位图标入口；首页→酒店列表内部导航）
     content = <FliggyPage onBack={() => setPage('main')} onToast={showToast} />;
   } else if (page === 'bill') {
     // 淘宝账单/我的消费明细（第九轮：我的淘宝消费明细卡入口；真实订单数据；
     // 需求（第十轮）：本月消费行点击进对应订单详情页）
-    content = <BillPage session={session} uid={uid} onBack={() => setPage('main')} onToast={showToast} onOpenOrder={(id) => { setSubReturn('me'); setOrderId(id); setPage('orderDetail'); }} />;
+    content = <BillPage session={session} uid={uid} onBack={() => setPage('main')} onToast={showToast} onOpenOrder={(id) => { setSubReturn('me'); openOrderSmart(id, 'orders'); }} />;
   } else if (page === 'favorites') {
     content = <FavoritesPage uid={uid} onBack={() => setPage('main')} onOpenProduct={openProduct} onToast={showToast} />;
   } else if (page === 'foots') {
@@ -6621,7 +6743,7 @@ export default function TaobaoApp() {
     content = <ShopPage shopId={shopId} uid={uid} onBack={() => setPage('product')} onOpenProduct={openProduct} onToast={showToast} />;
   } else if (page === 'express') {
     // 用户口径统一：点击订单/包裹一律进对应状态订单详情页（物流页走详情内「查看物流」）
-    content = <ExpressPage uid={uid} onBack={() => setPage('main')} onOpenOrder={(id) => { setOrderId(id); setPage('orderDetail'); }} />;
+    content = <ExpressPage uid={uid} onBack={() => setPage('main')} onOpenOrder={(id) => openOrderSmart(id, 'orders')} />;
   } else if (page === 'settings') {
     content = (
       <SettingsPage

@@ -17709,3 +17709,26 @@ Work Log:
 Stage Summary:
 - 仓库已完整部署到 /home/z/my-project 并通过浏览器真机验证（锁屏/主屏/翻页/淘宝打开均正常）
 - 等待用户指定要修改或新增的功能
+
+---
+Task ID: 39
+Agent: main (Z.ai Code)
+Task: 淘票票第十三轮——上滑更新/滚动跟随/四大频道（电影·喜剧脱口秀·演唱会·周边商城）/购票进全部订单待收货/电影票详情三态
+
+Work Log:
+- 数据层 taobao-channels-data.ts：TB_MOVIE_SESSIONS（今天21:00/明天09:15/后天14:30 真实场次）、TB_COMEDY_SHOWS 六场喜剧（脱口秀/舞台剧/即兴/相声/漫才/开放麦）、TB_CONCERTS 五场演唱会（含票档 tiers）、TB_MERCH 八件周边
+- 存储层 taobao-store.ts：TbTicketInfo（kind/title/海报渐变/venue/hall/date/start/end/seats/ticketNo/refunded）+ TbOrder.ticket；tbCreateTicketOrder（status=shipped 直接待收货无物流、取票号 4×4 确定性派生）；tbCreateMerchOrder（周边待付款单）；tbTickOrders 票单散场自动 completed；tbMarkRefund 同步写 ticket.refunded
+- 淘票票重构 taobao-channels.tsx MoviePage：顶部固定四大频道 tab（电影/喜剧脱口秀/演唱会/周边商城），其余内容（横幅/福利/影片流）全部跟随滚动；底部上拉刷新（>60px→刷新胶囊 800ms→列表 rot 轮换+toast）；电影保留影院列表→选座（场次时间引用 TB_MOVIE_SESSIONS）
+- 喜剧脱口秀：演出列表（渐变海报块+价格已售+选座购票）→剧场场次页（今天/明天/后天）→小剧场选座（橙主题+最佳观演区）→出票
+- 演唱会：渐变大卡列表（开售中/预售标）→演出详情（票档五档单选+数量步进1-4+合计+购票须知）→出票（seats=看台B×2）；预售场预约提醒
+- 周边商城：hero+2列商品网格（tbImg 图/价格/划线价/已售）→购买弹层（数量步进+立即购买）→tbCreateMerchOrder 待付款→收银台（复用 PaySheet，支付后走正常发货物流）
+- 电影票详情 TicketDetailPage 三态（对照截图1/2/3）：待开场=紫底「N小时N分钟后开场」倒计时+黑码+取票号+退改签（支持改签5元/张+申请退票）；已放映=橙底「电影已放映」+评价影片/影院+灰码已放映红章+取票号删除线+本单权益（66积分/电子纪念票）+周边推广卡；已退款=靛蓝底+退款时间戳金额+查看退款+灰码已退款章；取票号 tbQrGrid 伪二维码（同一票稳定同图）；退票确认弹层→tbRefundToOrigin 原路退回→tbMarkRefund
+- 订单集成：OrderCard 票务分支（淘票票标/待收货/渐变海报/场次座位/电子票标签/无物流条无确认收货/申请退款+取票码钮）；openOrderSmart 分流（票单→ticketDetail，普通单→orderDetail）接入 全部订单/消息页/我的快递/淘宝账单 四个入口；BillPage 票单自动计入月账单
+- 修复：tbCreateTicketOrder 补 payMethodId:'balance'（此前缺失导致退款原路校验失败静默回退）；倒计时≥48h 显示「N天N小时后开场」
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误
+- agent-browser 全真浏览器逐项验证：①四大 tab 渲染 ②滚动 90px 横幅滚出仅 tab 固定 ③电影购票→选座（今天21:00）→出票→详情自动「电影已放映」橙态（23:30 已过开场）④买明天 09:15 场→紫态倒计时「9小时43分钟后开场」精确 ⑤退票→确认弹层→靛蓝「已退款」+时间戳金额+已退款章+取票号删除线 ⑥全部订单·待收货 tab 票务卡（淘票票标/场次座位/取票码钮）→点击进详情 ⑦喜剧：列表→场次→选座→出票（取演出票文案）38小时52分钟倒计时 ⑧演唱会：票档看台B×2→出票「36天19小时后开场」⑨周边：购买→收银台弹出（测试账号余额不足属正常）⑩上拉刷新：胶囊→影片列表轮换→滚回顶部 ⑪出票消息推送角标+2
+
+Stage Summary:
+- 六点需求全部落地并浏览器逐项实测：淘票票上滑更新、滚动仅顶部标签固定、电影/喜剧脱口秀/演唱会/周边商城四大频道、购票直接进全部订单待收货（无物流）、电影票详情三态（对照三张截图）
+- 范围限定零破坏：美团/微信/QQ/聊天链路零改动；普通订单状态机不动（票单单独分支）；支付/退款复用 tbRefundToOrigin/tbMarkRefund
+- 改动文件：src/lib/ios/taobao-channels-data.ts（新增四组数据）、src/lib/ios/taobao-store.ts（TbTicketInfo/tbCreateTicketOrder/tbCreateMerchOrder/tick/markRefund 扩展）、src/components/apps/taobao-channels.tsx（MoviePage 重构+三个新视图+TicketDetailPage+tbQrGrid）、src/components/apps/taobao.tsx（OrderCard 票务分支/openOrderSmart 分流/ticketDetail 路由/MoviePage 新 props）

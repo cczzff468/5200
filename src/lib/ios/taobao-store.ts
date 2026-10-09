@@ -445,6 +445,36 @@ export function tbClearSearchHist(uid: string): void {
 
 export type TbOrderStatus = 'pendingPay' | 'pendingDeliver' | 'shipped' | 'completed' | 'cancelled';
 
+/** 票务订单信息（第十三轮淘票票：电影/喜剧脱口秀/演唱会出票；无物流，直接待收货） */
+export interface TbTicketInfo {
+  kind: 'movie' | 'comedy' | 'concert';
+  /** 影片/演出名 */
+  title: string;
+  /** 海报渐变色（无实体图时渲染渐变海报） */
+  posterC1: string;
+  posterC2: string;
+  /** 版本行（国语 2D / 脱口秀 / 演唱会） */
+  badge: string;
+  qty: number;
+  /** 影院/剧场/场馆 */
+  venue: string;
+  /** 影厅/场馆区域 */
+  hall: string;
+  /** 场次日期 YYYY-MM-DD */
+  date: string;
+  /** 场次日期文案（明天 10-10） */
+  dateLabel: string;
+  start: string;
+  end: string;
+  /** 座位（演唱会为票档名） */
+  seats: string[];
+  /** 取票号（4×4 数字分组） */
+  ticketNo: string;
+  unitPrice: number;
+  /** 退款信息（票详情已退款态判定优先于时间） */
+  refunded?: { amount: number; at: number };
+}
+
 export interface TbOrderItem {
   pid: string;
   title: string;
@@ -489,6 +519,8 @@ export interface TbOrder {
   refund?: { amount: number; reason: string; at: number };
   /** 用户评价（已完成提交） */
   review?: { rating: number; content: string; tags: string[]; at: number };
+  /** 票务信息（有值 = 票务订单：无物流、无地址，卡/详情走票务渲染） */
+  ticket?: TbTicketInfo;
 }
 
 const orderKey = (uid: string) => `tb-orders:${uid}`;
@@ -551,12 +583,107 @@ export function tbCreateOrder(opts: {
   return order;
 }
 
+/** 取票号（4×4 数字分组：3353 8086 1298 6080 口径，确定性派生自订单号） */
+function ticketNoOf(id: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const digits: string[] = [];
+  for (let i = 0; i < 16; i++) {
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    digits.push(String((h >>> 0) % 10));
+  }
+  return digits.join('').replace(/(\d{4})(?=\d)/g, '$1 ');
+}
+
+/** 票务出票（淘票票电影/喜剧脱口秀/演唱会共用）：
+ *  需求——买了票直接进「全部订单」待收货（status=shipped），不需要发货/物流 */
+export function tbCreateTicketOrder(
+  uid: string,
+  t: Omit<TbTicketInfo, 'ticketNo'>,
+  opts?: { total?: number }
+): TbOrder {
+  const total = opts?.total ?? Math.round(t.unitPrice * t.qty * 100) / 100;
+  const order: TbOrder = {
+    id: `${Date.now()}${Math.floor(Math.random() * 1000)}`,
+    uid,
+    shopId: '',
+    shopName: '淘票票',
+    items: [
+      {
+        pid: `ticket-${t.kind}-${t.title}`,
+        title: t.title,
+        img: '',
+        sku: {},
+        price: t.unitPrice,
+        qty: t.qty,
+      },
+    ],
+    itemTotal: total,
+    freight: 0,
+    discount: 0,
+    total,
+    status: 'shipped',
+    createdAt: Date.now(),
+    paidAt: Date.now(),
+    payIdp: 'wx',
+    payChannelLabel: '微信零钱',
+    payMethodId: 'balance',
+    track: [],
+    ticket: { ...t, ticketNo: '' },
+  };
+  order.ticket!.ticketNo = ticketNoOf(order.id);
+  const list = tbLoadOrders(uid);
+  list.unshift(order);
+  tbSaveOrders(uid, list);
+  return order;
+}
+
+/** 淘票票周边商城下单（实体货走正常待付款→发货→物流链路） */
+export function tbCreateMerchOrder(uid: string, m: { id: string; title: string; tag: string; price: number }, qty: number): TbOrder {
+  const items: TbOrderItem[] = [
+    { pid: `merch-${m.id}`, title: m.title, img: tbImg(m.tag, 300, 300), sku: { 类型: '官方周边' }, price: m.price, qty },
+  ];
+  const itemTotal = Math.round(m.price * qty * 100) / 100;
+  const order: TbOrder = {
+    id: `${Date.now()}${Math.floor(Math.random() * 1000)}`,
+    uid,
+    shopId: '',
+    shopName: '淘票票周边商城',
+    items,
+    itemTotal,
+    freight: 0,
+    discount: 0,
+    total: itemTotal,
+    address: tbCurAddr(uid) ?? undefined,
+    status: 'pendingPay',
+    createdAt: Date.now(),
+    track: [],
+  };
+  const list = tbLoadOrders(uid);
+  list.unshift(order);
+  tbSaveOrders(uid, list);
+  return order;
+}
+
 /** 状态推进 catch-up：全局 tick 与打开 App 时都调用（确定性时间戳，重启不丢进度） */
 export function tbTickOrders(uid: string): boolean {
   let changed = false;
   const list = tbLoadOrders(uid);
   const now = Date.now();
   for (const o of list) {
+    // 票务订单：散场（end 时间过）自动完成（详情页已同步切换「电影已放映」）
+    if (o.ticket && o.status === 'shipped') {
+      const endAt = new Date(`${o.ticket.date}T${o.ticket.end}:00`).getTime();
+      if (Number.isFinite(endAt) && now > endAt) {
+        o.status = 'completed';
+        o.completedAt = now;
+        changed = true;
+      }
+      continue;
+    }
     if (o.status === 'pendingPay' && now - o.createdAt > TB_PAY_TTL) {
       o.status = 'cancelled';
       o.cancelReason = '超时未付款，订单自动取消';
@@ -628,13 +755,14 @@ export function tbCancelOrder(uid: string, id: string, reason: string): boolean 
   return true;
 }
 
-/** 标记退款（taobao-pay 原路退回成功后调用） */
+/** 标记退款（taobao-pay 原路退回成功后调用）；票务单同步写 ticket.refunded（票详情已退款态） */
 export function tbMarkRefund(uid: string, id: string, amount: number, reason: string): boolean {
   const list = tbLoadOrders(uid);
   const hit = list.find((x) => x.id === id);
   if (!hit) return false;
   hit.status = 'cancelled';
   hit.refund = { amount, reason, at: Date.now() };
+  if (hit.ticket && !hit.ticket.refunded) hit.ticket.refunded = { amount, at: Date.now() };
   tbSaveOrders(uid, list);
   return true;
 }
