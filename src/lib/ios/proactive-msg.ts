@@ -1021,7 +1021,9 @@ async function tickInner(): Promise<void> {
     }
 
     const last = getLast(app, cid);
-    const npcExtra = contact.kind === 'npc' ? (buildNpcPromptExtra(contact, allContacts) as unknown as Record<string, unknown> | null) : null;
+    // 配角圈注入不再限 NPC：CHAR 同样产出认识的配角 + 背景近况（buildNpcPromptExtra 按类型分叉），
+    // 与四端聊天主链路的 npcExtra 口径对齐；全空返回 null 不注入，旧行为不变
+    const npcExtra = buildNpcPromptExtra(contact, allContacts) as unknown as Record<string, unknown> | null;
 
     // ① 定时触发（interval=按间隔累计；daily=对齐钟表时刻，按天去重+宽限）
     if (cfg.timerOn && !convActive) {
@@ -1176,7 +1178,8 @@ export async function manuallyFireEvent(app: ProactiveApp, cid: string, eventId:
     if (!contact || contact.kind === 'user' || !contact.name?.trim() || !contact.persona?.trim()) return false;
     const blk = loadBlock(app, cid);
     if (blk.byUser || blk.byChar) return false;
-    const npcExtra = contact.kind === 'npc' ? (buildNpcPromptExtra(contact, all) as unknown as Record<string, unknown> | null) : null;
+    // 配角圈注入不再限 NPC（与上方 generateProactiveText 同口径；CHAR 也有配角圈/背景近况）
+    const npcExtra = buildNpcPromptExtra(contact, all) as unknown as Record<string, unknown> | null;
     await fireProactive(app, contact, { kind: 'event', eventName: evt.name }, npcExtra);
     return true;
   } catch {

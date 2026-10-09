@@ -45,6 +45,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ContactRecord } from '@/lib/contacts';
 import { memAfterAiTurn, memConvoFromRaw, memSummarizeCallNow } from '@/lib/memory';
 import { ownerRealNameFor, ownerProfileFor } from './contacts-store';
+import { getActiveAccountIdFor } from './accounts';
 import { useSettings } from './store';
 import { directChatStream } from './direct-api';
 import { transcribeAudioBlob } from './stt-client';
@@ -608,9 +609,13 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
               kind: peer.kind,
               gender: peer.gender,
               age: peer.age,
+              height: peer.height,
+              weight: peer.weight,
               occupation: peer.occupation,
+              company: peer.company,
               region: peer.region,
               relation: peer.relation,
+              relationByAcc: peer.relationByAcc ?? null,
               relationToUser: peer.relationToUser ?? null,
               birthday: peer.birthday ?? null,
               persona: peer.persona,
@@ -638,6 +643,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
             userRealName: owner?.realName || undefined,
             userNickname: owner?.nickname || undefined,
+            // 多账号关系感知：小号续聊读分账号关系（服务端 relationForCtx 同口径）
+            accountId: getActiveAccountIdFor(optsRef.current.app),
           });
         } catch {
           texts = []; // 续聊失败静默：不影响记忆总结
@@ -783,9 +790,13 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
                   kind: c.kind,
                   gender: c.gender,
                   age: c.age,
+                  height: c.height,
+                  weight: c.weight,
                   occupation: c.occupation,
+                  company: c.company,
                   region: c.region,
                   relation: c.relation,
+                  relationByAcc: c.relationByAcc ?? null,
                   relationToUser: c.relationToUser ?? null,
                   birthday: c.birthday ?? null,
                   persona: c.persona,
@@ -809,6 +820,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             timeBlock: optsRef.current.timeBlock || undefined,
             locBlock: optsRef.current.locBlock || undefined,
             multiApp: optsRef.current.multiApp,
+            // 多账号关系感知：小号通话读分账号关系（与机主资料同账号口径）
+            accountId: getActiveAccountIdFor(optsRef.current.app),
             // 通话方向（AI 视角）：out=用户打来的 / in=你打出去的——接通问候语按方向区分主被动
             direction,
             // 通话媒体（voice=语音 / video=视频）：服务端 channel 与场景规则按此分叉
@@ -1493,9 +1506,13 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
                     kind: peer.kind,
                     gender: peer.gender,
                     age: peer.age,
+                    height: peer.height,
+                    weight: peer.weight,
                     occupation: peer.occupation,
+                    company: peer.company,
                     region: peer.region,
                     relation: peer.relation,
+                    relationByAcc: peer.relationByAcc ?? null,
                     relationToUser: peer.relationToUser ?? null,
                     birthday: peer.birthday ?? null,
                     persona: peer.persona,
@@ -1508,6 +1525,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
                   // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
                   userRealName: owner?.realName || undefined,
                   userNickname: owner?.nickname || undefined,
+                  // 跨 App 身份感知 + 多账号关系感知（与 followup/turn 同口径）
+                  multiApp: optsRef.current.multiApp,
+                  accountId: getActiveAccountIdFor(optsRef.current.app),
                   config: useSettings.getState().apiConfig,
                 }),
               )

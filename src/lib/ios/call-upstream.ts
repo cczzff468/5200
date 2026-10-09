@@ -240,19 +240,27 @@ export async function callUpstream(
 
 // ---------------- 前端直传的联系人资料 ----------------
 
-/** 前端直传的对端联系人资料（联系人已本地化，服务端不再查库） */
+/** 前端直传的对端联系人资料（联系人已本地化，服务端不再查库）。
+ *  人设字段与 PersonaSource 的 17 字段一一同名同义（height/weight/company/relationByAcc 曾长期缺失，
+ *  导致电话/状态卡链路人设注入比聊天 App 少 4 个字段，现已补齐） */
 export interface InlineContact {
   name: string;
   kind: string;
   gender: string | null;
   age: string | null;
+  height: string | null;
+  weight: string | null;
   occupation: string | null;
+  company: string | null;
   region: string | null;
   persona: string | null;
   background: string | null;
   relation: string | null;
   /** 仅 NPC：对机主（USER）的关系 */
   relationToUser: string | null;
+  /** 与角色的关系·按账号隔离（多账号关系感知）：键 = 账号 id；配合路由侧传入的 accountId
+   *  取分账号关系（persona.ts relationForCtx 同口径）；老数据/未传回退全局 relation */
+  relationByAcc?: Record<string, string> | null;
   /** 生日（几月几号，如 6.20 / 6月20日；注入人设前归一化） */
   birthday: string | null;
   /** 昵称（软件上显示的名字；人设注入「真名 vs 昵称」关系用） */
@@ -275,12 +283,16 @@ export function parseInlineContact(raw: unknown): InlineContact | null {
     kind: typeof c.kind === 'string' ? c.kind : 'char',
     gender: typeof c.gender === 'string' ? c.gender : null,
     age: typeof c.age === 'string' ? c.age : null,
+    height: typeof c.height === 'string' ? c.height : null,
+    weight: typeof c.weight === 'string' ? c.weight : null,
     occupation: typeof c.occupation === 'string' ? c.occupation : null,
+    company: typeof c.company === 'string' ? c.company : null,
     region: typeof c.region === 'string' ? c.region : null,
     persona: typeof c.persona === 'string' ? c.persona : null,
     background: typeof c.background === 'string' ? c.background : null,
     relation: typeof c.relation === 'string' ? c.relation : null,
     relationToUser: typeof c.relationToUser === 'string' ? c.relationToUser : null,
+    relationByAcc: parseRelationByAcc(c.relationByAcc),
     birthday: typeof c.birthday === 'string' ? c.birthday : null,
     nickname: typeof c.nickname === 'string' ? c.nickname : null,
     realName: typeof c.realName === 'string' ? c.realName : null,
@@ -289,6 +301,18 @@ export function parseInlineContact(raw: unknown): InlineContact | null {
     ownerCard: parseStrList(c.ownerCard),
     backgroundNotes: parseStrList(c.backgroundNotes),
   };
+}
+
+/** 前端直传的分账号关系 map（宽松解析：键/值都要是字符串，值去空；整体非法/为空 = undefined 回退全局 relation） */
+function parseRelationByAcc(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const src = raw as Record<string, unknown>;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(src)) {
+    const key = k.trim().slice(0, 40);
+    if (key && typeof v === 'string' && v.trim()) out[key] = v.trim().slice(0, 60);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** 前端直传的配角圈条目（宽松解析，非法条目丢弃，上限 6 条） */

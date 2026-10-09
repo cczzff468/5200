@@ -72,13 +72,19 @@ function parseRecentChats(raw: unknown): RecentChatItem[] {
 function buildProactiveSystemPrompt(
   peer: Parameters<typeof buildPersonaSystemPrompt>[0],
   hasChat: boolean,
-  user?: { name: string | null; realName: string | null; nickname: string | null }
+  user?: { name: string | null; realName: string | null; nickname: string | null },
+  /** 配角圈/归属者资料/背景近况（客户端已随 contact 发送，此前被服务端丢弃；现接入与 turn 路由同口径） */
+  npcExtra?: { ownerLabel?: string; npcCircle?: Parameters<typeof buildPersonaSystemPrompt>[1]['npcCircle']; ownerCard?: string[]; backgroundNotes?: string[] },
+  /** 多账号关系感知：当前账号 id（不传 = 大号口径） */
+  accountId?: string | null
 ): string {
   return buildPersonaSystemPrompt(peer, {
     channel: '决定此刻要不要主动给机主打一通电话',
     userName: user?.name ?? null,
     userRealName: user?.realName ?? null,
     userNickname: user?.nickname ?? null,
+    ...npcExtra,
+    accountId: accountId ?? undefined,
     extraRules: [
       '现在手机在你自己手里：请完全代入你的人设、性格和你们的关系，决定此刻要不要主动给机主打一通语音电话（不是发消息说「我给你打个电话」，而是真的拨打让 TA 的手机响铃）。',
       '判断依据（逐条对照）：',
@@ -133,11 +139,15 @@ export async function POST(req: NextRequest) {
     kind: inline.kind,
     gender: inline.gender,
     age: inline.age,
+    height: inline.height,
+    weight: inline.weight,
     occupation: inline.occupation,
+    company: inline.company,
     region: inline.region,
     persona: inline.persona,
     background: inline.background,
     relation: inline.relation,
+    relationByAcc: inline.relationByAcc ?? null,
     relationToUser: inline.relationToUser,
     birthday: inline.birthday,
     nickname: inline.nickname ?? null,
@@ -155,10 +165,19 @@ export async function POST(req: NextRequest) {
   // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
   const userReal = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
   const userNick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
+  // 多账号关系感知 + 配角圈注入（客户端已发送的数据此前在服务端被丢弃）
+  const accountId = typeof root.accountId === 'string' && root.accountId.trim() ? root.accountId.trim().slice(0, 40) : undefined;
   const system = buildProactiveSystemPrompt(
     peer,
     recentChats.length > 0,
-    userReal || userNick ? { name: userReal || userNick, realName: userReal || null, nickname: userNick || null } : undefined
+    userReal || userNick ? { name: userReal || userNick, realName: userReal || null, nickname: userNick || null } : undefined,
+    {
+      ownerLabel: inline?.ownerLabel,
+      npcCircle: inline?.npcCircle,
+      ownerCard: inline?.ownerCard,
+      backgroundNotes: inline?.backgroundNotes,
+    },
+    accountId
   );
 
   // 上游要求 user 消息收尾：最近聊天摘要 + 当前时间/距上次互动作为决策依据

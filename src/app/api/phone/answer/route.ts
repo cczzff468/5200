@@ -40,13 +40,19 @@ function buildDecisionSystemPrompt(
   peer: Parameters<typeof buildPersonaSystemPrompt>[0],
   hasChat: boolean,
   /** 机主身份（前端直传）：名字/真名/昵称——软件上显示的名字只是昵称，被问是谁报真名 */
-  user?: { name: string | null; realName: string | null; nickname: string | null }
+  user?: { name: string | null; realName: string | null; nickname: string | null },
+  /** 跨 App 身份感知（与 followup 同口径；undefined=不注入） */
+  multiApp?: boolean,
+  /** 多账号关系感知：当前账号 id（小号来电读 relationByAcc；不传 = 大号口径） */
+  accountId?: string | null
 ): string {
   return buildPersonaSystemPrompt(peer, {
     channel: '决定是否接听一通来电',
     userName: user?.name ?? null,
     userRealName: user?.realName ?? null,
     userNickname: user?.nickname ?? null,
+    multiApp,
+    accountId: accountId ?? undefined,
     extraRules: [
       '机主（你的联系人）刚刚拨通了你的电话，你正在响铃。请完全代入你的人设、你们的关系和此刻的真实状态，判断你会不会接这通电话：',
       '大多数情况下应该接（熟人来电、正闲着、关系亲近、正聊得起劲……）；',
@@ -103,11 +109,15 @@ export async function POST(req: NextRequest) {
     kind: inline.kind,
     gender: inline.gender,
     age: inline.age,
+    height: inline.height,
+    weight: inline.weight,
     occupation: inline.occupation,
+    company: inline.company,
     region: inline.region,
     persona: inline.persona,
     background: inline.background,
     relation: inline.relation,
+    relationByAcc: inline.relationByAcc ?? null,
     relationToUser: inline.relationToUser,
     birthday: inline.birthday,
     nickname: inline.nickname ?? null,
@@ -117,10 +127,14 @@ export async function POST(req: NextRequest) {
   // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
   const userReal = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
   const userNick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
+  const multiApp = root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined;
+  const accountId = typeof root.accountId === 'string' && root.accountId.trim() ? root.accountId.trim().slice(0, 40) : undefined;
   const system = buildDecisionSystemPrompt(
     peer,
     recentChat.length > 0,
-    userReal || userNick ? { name: userReal || userNick, realName: userReal || null, nickname: userNick || null } : undefined
+    userReal || userNick ? { name: userReal || userNick, realName: userReal || null, nickname: userNick || null } : undefined,
+    multiApp,
+    accountId
   );
   const messages: CallApiMessage[] = [
     { role: 'system', content: [system, timeBlock].filter(Boolean).join('\n\n') },

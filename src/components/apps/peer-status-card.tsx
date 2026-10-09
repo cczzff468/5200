@@ -27,6 +27,7 @@ import {
 
 import { addressNameOf, type ContactRecord } from '@/lib/contacts';
 import { useSettings } from '@/lib/ios/store';
+import { getActiveAccountIdFor } from '@/lib/ios/accounts';
 import { listContacts, ownerProfileFor } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
 import { getMemSettings, memAddEventFragment, memRecentConvo, memRecallBlock } from '@/lib/memory';
@@ -147,9 +148,13 @@ export default function PeerStatusCard({
             kind: contact.kind,
             gender: contact.gender || null,
             age: contact.age || null,
+            height: contact.height || null,
+            weight: contact.weight || null,
             occupation: contact.occupation || null,
+            company: contact.company || null,
             region: contact.region || null,
             relation: contact.relation || null,
+            relationByAcc: contact.relationByAcc ?? null,
             relationToUser: contact.relationToUser || null,
             birthday: contact.birthday || null,
             persona: contact.persona || null,
@@ -166,6 +171,8 @@ export default function PeerStatusCard({
           userRealName: realName || null,
           userNickname: nickname || null,
           multiApp: getMemSettings(contact.id).share,
+          // 多账号关系感知：小号下生成状态卡读分账号关系（与机主身份同账号口径）
+          accountId: getActiveAccountIdFor(app),
           bondHint: bondHint ?? null,
           // 每次点击都换随机种子：同样的人设/近况两次生成的内容也不同
           seed: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

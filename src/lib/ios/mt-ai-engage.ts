@@ -28,6 +28,7 @@
 import { kvGet, kvSet } from './idb-kv';
 import { getContact, listContacts, ownerProfileFor, cachedOwnerName } from './contacts-store';
 import { avatarFor, type ContactRecord } from '../contacts';
+import { getMemSettings } from '@/lib/memory';
 import { getActiveAccountFor, getActiveAccountIdFor, type AccountApp } from './accounts';
 import {
   mtGetSession,
@@ -1113,6 +1114,8 @@ async function runProxyDecision(pid: string): Promise<void> {
     userNickname: owner?.nickname || null,
     ownerName: owner?.realName || null,
     accountId: getActiveAccountIdFor(app as AccountApp),
+    // 跨 App 身份与记忆感知（与 proactive-msg/friend-state 等代际调用点同口径；按每联系人互通开关）
+    multiApp: getMemSettings(contact.id).share,
   });
   const summary = p.items.map((i) => `${i.name}x${i.qty}`).join('、');
   const memoryBlock = memChatRecallBlock(contact.id, app, `美团 代付 外卖 ${p.merchantName} ${summary} ${p.note ?? ''}`, {});

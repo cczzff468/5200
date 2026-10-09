@@ -110,12 +110,16 @@ function normalizeStatus(raw: unknown): CharacterStatusCard | null {
   };
 }
 
-/** 状态卡 system prompt：复用全 App 共用的七要素人设组装，追加状态卡专属输出规则 */
+/** 状态卡 system prompt：复用全 App 共用的七要素人设组装，追加状态卡专属输出规则。
+ *  npcExtra：配角圈/归属者资料/背景近况（客户端已随 contact 发送，此前被服务端丢弃；现接入与聊天同口径）
+ *  accountId：多账号关系感知（小号读 relationByAcc 分账号关系；不传 = 大号口径） */
 function buildStatusSystemPrompt(
   peer: Parameters<typeof buildPersonaSystemPrompt>[0],
   user?: { name: string | null; realName: string | null; nickname: string | null },
   channel = '微信',
-  multiApp?: boolean
+  multiApp?: boolean,
+  npcExtra?: { ownerLabel?: string; npcCircle?: Parameters<typeof buildPersonaSystemPrompt>[1]['npcCircle']; ownerCard?: string[]; backgroundNotes?: string[] },
+  accountId?: string | null
 ): string {
   return buildPersonaSystemPrompt(peer, {
     channel,
@@ -123,6 +127,8 @@ function buildStatusSystemPrompt(
     userRealName: user?.realName ?? null,
     userNickname: user?.nickname ?? null,
     multiApp,
+    accountId: accountId ?? undefined,
+    ...npcExtra,
     extraRules: [
       '现在的任务：机主刚点开了你的头像，想看看你此刻的状态——你要生成一张「你此刻的状态卡」（像真人此刻的实时快照），不是回复消息，也不是自我介绍。',
       '严格输出一个 JSON 对象，不要输出任何其他文字或代码块围栏：',
@@ -153,11 +159,15 @@ export async function POST(req: NextRequest) {
     kind: inline.kind,
     gender: inline.gender,
     age: inline.age,
+    height: inline.height,
+    weight: inline.weight,
     occupation: inline.occupation,
+    company: inline.company,
     region: inline.region,
     persona: inline.persona,
     background: inline.background,
     relation: inline.relation,
+    relationByAcc: inline.relationByAcc ?? null,
     relationToUser: inline.relationToUser,
     birthday: inline.birthday,
     nickname: inline.nickname ?? null,
@@ -165,6 +175,8 @@ export async function POST(req: NextRequest) {
   };
 
   const app = typeof body.app === 'string' && APP_CHANNEL[body.app] ? body.app : 'wx';
+  // 多账号关系感知：前端按当前 App 账号传入；不传 = 大号口径（零破坏）
+  const accountId = typeof body.accountId === 'string' && body.accountId.trim() ? body.accountId.trim().slice(0, 40) : undefined;
   const recentChats = parseRecentChats(body.recentChats);
   const memoryBlock = typeof body.memoryBlock === 'string' ? body.memoryBlock.trim().slice(0, 4000) : '';
   const now = typeof body.now === 'string' ? body.now.trim().slice(0, 60) : '';
@@ -181,7 +193,15 @@ export async function POST(req: NextRequest) {
     peer,
     userRealName || userNickname ? { name: userName || userRealName || userNickname, realName: userRealName || null, nickname: userNickname || null } : undefined,
     APP_CHANNEL[app],
-    multiApp
+    multiApp,
+    // 配角圈/归属者资料/背景近况：客户端已随 contact 发送（此前在服务端被丢弃），现接入
+    {
+      ownerLabel: inline.ownerLabel,
+      npcCircle: inline.npcCircle,
+      ownerCard: inline.ownerCard,
+      backgroundNotes: inline.backgroundNotes,
+    },
+    accountId
   );
 
   // user 消息：场景 + 最近聊天（带机主/你 主语锚点，防归属混淆）+ 记忆块 + 当前时间 + 种子

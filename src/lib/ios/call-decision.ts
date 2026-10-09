@@ -39,6 +39,10 @@ export interface AnswerDecisionArgs {
   /** 机主身份（真实名字 + 昵称）：AI 知道软件上显示的名字只是昵称，被问是谁报真名 */
   userRealName?: string;
   userNickname?: string;
+  /** 跨 App 身份感知（人设【多端身份与记忆】段；undefined=不注入） */
+  multiApp?: boolean;
+  /** 多账号关系感知：当前账号 id（小号来电读分账号关系；不传 = 大号口径） */
+  accountId?: string;
   config: unknown;
 }
 

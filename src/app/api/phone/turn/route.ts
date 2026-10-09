@@ -45,6 +45,8 @@ import {
  * 组装通话场景 system prompt：七要素人设（名字/身份/性格/说话风格/背景/与用户的关系/禁止事项）
  * 由全 App 共用模块从联系人数据组装；这里只追加语音/视频通话场景规则。
  * multiApp：跨 App 身份感知（前端按每联系人互通开关传入；undefined=不注入）。
+ * accountId：当前通话所在账号 id（多账号关系感知——小号通话用 relationByAcc[accId]，
+ * 缺省 = 大号全局 relation 口径，与聊天端 activeAccountIdOf 同源）。
  * media（Task 22 视频通话）：video=视频通话——channel、场景规则、接通问候按视频分叉；默认 voice 与旧行为一致。
  */
 function buildCallSystemPrompt(
@@ -61,7 +63,9 @@ function buildCallSystemPrompt(
   /** 机主身份（前端直传）：名字/真名/昵称——人设注入【用户的称呼】段（软件上显示的名字只是昵称） */
   user?: { name: string | null; realName: string | null; nickname: string | null },
   /** 通话媒体（Task 22）：'voice'=语音通话（默认）/ 'video'=视频通话 */
-  media: 'voice' | 'video' = 'voice'
+  media: 'voice' | 'video' = 'voice',
+  /** 多账号关系感知：当前账号 id（小号通话读 relationByAcc；不传 = 大号口径） */
+  accountId?: string | null
 ): string {
   const base = buildPersonaSystemPrompt(peer, {
     channel: media === 'video' ? '视频通话' : '语音通话',
@@ -70,6 +74,7 @@ function buildCallSystemPrompt(
     userNickname: user?.nickname ?? null,
     ...npcExtra,
     multiApp,
+    accountId: accountId ?? undefined,
     extraRules: [
       `这是实时${media === 'video' ? '视频' : '语音'}通话：用第一人称口语化说话，像真人${media === 'video' ? '视频' : '打'}电话；每次只说 1~5 句——具体句数由你的人设性格和当下情绪决定：健谈外向的人自然多聊几句，高冷话少的人往往只说一两个短句；同一次通话里长短也可以随话题起伏变化，不要每句都一样长；一次只说一两件事；`,
       '禁止任何表情符号、emoji、引号、括号、列表；只输出要说出口的话；',
@@ -133,11 +138,15 @@ export async function POST(req: NextRequest) {
         kind: inline.kind,
         gender: inline.gender,
         age: inline.age,
+        height: inline.height,
+        weight: inline.weight,
         occupation: inline.occupation,
+        company: inline.company,
         region: inline.region,
         persona: inline.persona,
         background: inline.background,
         relation: inline.relation,
+        relationByAcc: inline.relationByAcc ?? null,
         relationToUser: inline.relationToUser,
         birthday: inline.birthday,
         nickname: inline.nickname ?? null,
@@ -148,6 +157,8 @@ export async function POST(req: NextRequest) {
         return { name: p.name, persona: p.persona };
       })();
   const peerName = peer.name;
+  // 多账号关系感知：前端按当前通话账号传入（activeAccountIdOf）；不传 = 大号口径（零破坏）
+  const accountId = typeof root.accountId === 'string' && root.accountId.trim() ? root.accountId.trim().slice(0, 40) : undefined;
 
   const system = buildCallSystemPrompt(
     peer,
@@ -170,7 +181,9 @@ export async function POST(req: NextRequest) {
       return { name: real || nick, realName: real || null, nickname: nick || null };
     })(),
     // 通话媒体（Task 22 视频通话）：channel 与场景规则按此分叉
-    media
+    media,
+    // 多账号关系感知：小号通话读分账号关系，不再恒用大号全局 relation
+    accountId
   );
   // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';

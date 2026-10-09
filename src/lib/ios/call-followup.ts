@@ -25,9 +25,14 @@ export interface CallFollowupContact {
   kind: string;
   gender: string | null;
   age: string | null;
+  height?: string | null;
+  weight?: string | null;
   occupation: string | null;
+  company?: string | null;
   region: string | null;
   relation: string | null;
+  /** 与角色的关系·按账号隔离（多账号关系感知；配合 payload.accountId 取分账号关系） */
+  relationByAcc?: Record<string, string> | null;
   relationToUser: string | null;
   birthday: string | null;
   persona: string | null;
@@ -70,6 +75,8 @@ export interface CallFollowupPayload {
   /** 机主身份（真实名字 + 昵称）：AI 知道软件上显示的名字只是昵称，被问是谁报真名 */
   userRealName?: string;
   userNickname?: string;
+  /** 多账号关系感知：当前账号 id（小号续聊读分账号关系；不传 = 大号口径） */
+  accountId?: string;
 }
 
 /** 条数上限收窄：非法/未传回退 2（旧行为），合法值夹在 [1, 30]（与回复条数选项同范围） */

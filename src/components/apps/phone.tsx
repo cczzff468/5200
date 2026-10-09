@@ -914,9 +914,13 @@ function CallScreen({
                   kind: contact.kind,
                   gender: contact.gender,
                   age: contact.age,
+                  height: contact.height,
+                  weight: contact.weight,
                   occupation: contact.occupation,
+                  company: contact.company,
                   region: contact.region,
                   relation: contact.relation,
+                  relationByAcc: contact.relationByAcc ?? null,
                   relationToUser: contact.relationToUser ?? null,
                   birthday: contact.birthday ?? null,
                   persona: contact.persona,
@@ -929,6 +933,8 @@ function CallScreen({
             // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
             userRealName: meUser?.name?.trim() || undefined,
             userNickname: meUser?.nickname?.trim() || undefined,
+            // 多账号关系感知：小号通话读分账号关系（与机主资料同账号口径）
+            accountId: getActiveAccountIdFor('phone'),
             number: target.number,
             // 通话方向（谁发起）：'in' = AI 打来的电话（AI 来电接听交接进来的，AI 主叫视角问候）/
             // 'out' = 用户在电话 App 里主动拨打（缺省）——服务端按方向区分接通问候语的主被动视角
@@ -1496,9 +1502,13 @@ function CallScreen({
                   kind: contact.kind,
                   gender: contact.gender,
                   age: contact.age,
+                  height: contact.height,
+                  weight: contact.weight,
                   occupation: contact.occupation,
+                  company: contact.company,
                   region: contact.region,
                   relation: contact.relation,
+                  relationByAcc: contact.relationByAcc ?? null,
                   relationToUser: contact.relationToUser ?? null,
                   birthday: contact.birthday ?? null,
                   persona: contact.persona,
@@ -1513,6 +1523,8 @@ function CallScreen({
                 // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
                 userRealName: owner?.realName || undefined,
                 userNickname: owner?.nickname || undefined,
+                // 多账号关系感知：小号来电读分账号关系（与通话轮次同账号口径）
+                accountId: getActiveAccountIdFor('phone'),
                 config: apiConfig,
               }),
             )

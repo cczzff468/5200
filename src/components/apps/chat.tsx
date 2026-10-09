@@ -428,9 +428,13 @@ async function recordMissedPhoneCall(
         kind: contact.kind,
         gender: contact.gender || null,
         age: contact.age || null,
+        height: contact.height || null,
+        weight: contact.weight || null,
         occupation: contact.occupation || null,
+        company: contact.company || null,
         region: contact.region || null,
         relation: contact.relation || null,
+        relationByAcc: contact.relationByAcc ?? null,
         relationToUser: contact.relationToUser || null,
         birthday: contact.birthday || null,
         persona: contact.persona || null,
@@ -458,6 +462,8 @@ async function recordMissedPhoneCall(
       replyCount: getReplyCount(`sms:c:${contact.id}`),
       userRealName: owner?.realName || undefined,
       userNickname: owner?.nickname || undefined,
+      // 多账号关系感知：留言归属当前信息账号，分账号关系同口径
+      accountId: getActiveAccountIdFor('sms'),
     });
     for (const text of texts) {
       await localDB.put('voicemails', {
@@ -4584,7 +4590,9 @@ export default function ChatApp() {
         owner?.name ?? null,
         getMemSettings(c.id).share,
         buildNpcPromptExtra(c, contacts),
-        meCard?.realName ?? null,
+        // 与微信/QQ 端同口径双重兜底：展示副本没写 realName（机主卡无昵称/备注）时回退真名本身，
+        // 避免人设回退「用户只是占位词」段落（明明有真名却没用）
+        meCard?.realName ?? meCard?.name ?? null,
         meCard?.nickname ?? null
       ),
     });

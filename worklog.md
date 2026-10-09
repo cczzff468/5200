@@ -17364,3 +17364,21 @@ Stage Summary:
 - AI 模式全自动：按品类关键词去重生成（kv 跨会话持久、刷新秒出）、生成中默认插画兜底不空白、可一键重新生成；未配置生图 API 明确拦截指路
 - 公益三选一按用户澄清撤销移除（公益图概念不再存在），原图标位置与交互形态（底部弹层菜单）延续
 - 改动文件：src/lib/ios/mt-img-style.ts（新增）、src/components/apps/mt-food-img.tsx（重写）、src/components/apps/meituan.tsx（宫格+弹层+状态）、src/app/api/mt-img/route.ts（d=1 直出）、src/lib/ios/mt-charity.ts（删除）
+
+---
+Task ID: 23
+Agent: main (Z.ai Code)
+Task: 全链路人设字段注入审计——检查全部 buildPersonaSystemPrompt 调用点的人设字段是否全部加上，并修复所有缺失
+
+Work Log:
+- 审计范围：全项目 18 个 buildPersonaSystemPrompt 调用点（网易云一起听 3 条链 + 微信/QQ/信息/群聊/电话 4 路由/状态卡/主动消息/好友申请/跨App找/美团代付/退群私信/线下见面/建群开场白），另排查了绕过 persona 组装器的 LLM 调用点（call-decision/call-followup/call-upstream/global-call/music-remote 等均无「角色说话却没人设」的遗漏）
+- 网易云一起听核查：回复(runTogetherReplyOnce)/主动消息(aiSayOnce)/推荐歌曲(togetherRecommend) 三条链全部走 personaSystemFor（人设+记忆+跨App+音乐情境+规则），peer 强转完整 ContactRecord ✅
+- 实锤缺口（修复）：①传输层 InlineContact+parseInlineContact（call-upstream.ts）缺 height/weight/company/relationByAcc 4 个人设字段——电话 answer/turn/followup/proactive 4 条路由与 character-status 的 peer 构造恒为 13/17 字段子集，身高/体重/公司/分账号关系从未进过通话与状态卡人设；②character-status 与 phone/proactive 服务端把客户端已发送的 npcExtra（配角圈/归属者资料卡/背景近况）解析后丢弃；③wx/QQ 通话引擎 chat-call.ts 三处 payload（turn/followup/answer）缺 4 字段且不发 accountId/multiApp；④friend-state 两处（buildReqSystem/decideCharFriendReq 小号好友决策）与 cross-app-reach 缺 accountId——小号场景人设【与用户的关系】恒用大号全局 relation，与披露门控设计相抵触；⑤mt-ai-engage 代付决策缺 multiApp；⑥chat.tsx openContactChat userReal 缺 ?? name 兜底（机主卡无昵称/备注时人设回退「用户」占位词）；⑦group-social 建群开场白缺 groupTurn/multiApp；⑧proactive-msg 两处 npcExtra 恒限 NPC，CHAR 主动消息缺配角圈
+- 修复方式：InlineContact 补 4 字段+parseRelationByAcc 宽松解析；4 路由+状态卡 peer 补全 17/17 并透传 accountId（proactive/character-status 同时接收 npcExtra）；CallFollowupContact/AnswerDecisionArgs/CallFollowupPayload 类型同步扩展；客户端 6 个构造点（phone.tsx×2/chat-call.ts×3/proactive-call.ts×2/chat.tsx/peer-status-card.tsx）补发字段+accountId；friend-state/cross-app-reach/mt-ai-engage/group-social/proactive-msg 按同代际口径补 ctx 字段；全部改动不传即缺省、老数据零破坏
+- 冒烟实测：/api/phone/answer 200、/api/character-status 200、/api/phone/turn(greeting) 200 真实回复「喂，你好呀…」viaSdk；bunx tsc --noEmit 0 错误；bun run lint 0 错误（仅既有 BABEL 500KB 三条）
+- 未动（记录在案）：phone 系列 proactive-msg 的 ownerName 语义（NPC 归属者 vs 机主名）保持现状；wx-group/qq-group 不传 accountId（群功能无账号维度，边界而非漏传）；character-status 的 altAccountsDigest（由 chat-stream-store 注入的设计不变）
+
+Stage Summary:
+- 全链路人设字段审计完成：18 个调用点中 11 个此前已有完整注入（含网易云一起听三条链、微信/QQ/信息主聊天、退群私信、线下见面），7 处缺口全部修复
+- 通话/状态卡/好友申请/跨App找人/代付/建群开场白/主动消息的人设注入补齐到与聊天主链路同一口径：17 个人设字段全量、小号分账号关系生效、配角圈/归属者资料卡不再被服务端丢弃
+- 改动文件：src/lib/ios/call-upstream.ts、src/app/api/phone/{turn,answer,followup,proactive}/route.ts、src/app/api/character-status/route.ts、src/lib/ios/{chat-call,call-decision,call-followup,proactive-call,friend-state,cross-app-reach,mt-ai-engage,group-social,proactive-msg}.ts、src/components/apps/{phone,chat,peer-status-card}.tsx

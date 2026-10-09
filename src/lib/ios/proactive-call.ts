@@ -346,6 +346,11 @@ async function requestProactiveDecision(args: {
   // G-2 跨 App 拉黑情境：wx/qq 被用户拉黑（来电路径不受影响）→ 决策端要知道
   //「这次来电可能是被拉黑后来电话找机主」，call 时 reason 会带上这层动机作为接通开场
   crossBlockedIn?: string;
+  // 机主身份（真实名字 + 昵称）：服务端人设【用户的称呼】段用；缺省回退「用户」占位词
+  userRealName?: string;
+  userNickname?: string;
+  // 多账号关系感知：当前电话账号 id（小号读分账号关系；不传 = 大号口径）
+  accountId?: string;
 }): Promise<ProactiveDecision | null> {
   try {
     const res = await fetch('/api/phone/proactive', {
@@ -412,9 +417,13 @@ async function recordMissedPhoneCall(
         kind: contact.kind,
         gender: contact.gender || null,
         age: contact.age || null,
+        height: contact.height || null,
+        weight: contact.weight || null,
         occupation: contact.occupation || null,
+        company: contact.company || null,
         region: contact.region || null,
         relation: contact.relation || null,
+        relationByAcc: contact.relationByAcc ?? null,
         relationToUser: contact.relationToUser || null,
         birthday: contact.birthday || null,
         persona: contact.persona || null,
@@ -441,6 +450,8 @@ async function recordMissedPhoneCall(
       replyCount: getReplyCount(`sms:c:${contact.id}`),
       userRealName: owner?.realName || undefined,
       userNickname: owner?.nickname || undefined,
+      // 多账号关系感知：留言归属当前电话账号，分账号关系同口径（与 call-logs/owner 同一账号）
+      accountId: getActiveAccountIdFor('phone'),
     });
     for (const text of texts) {
       await localDB.put('voicemails', {
@@ -477,9 +488,13 @@ function contactPayloadOf(
     kind: c.kind,
     gender: c.gender || null,
     age: c.age || null,
+    height: c.height || null,
+    weight: c.weight || null,
     occupation: c.occupation || null,
+    company: c.company || null,
     region: c.region || null,
     relation: c.relation || null,
+    relationByAcc: c.relationByAcc ?? null,
     relationToUser: c.relationToUser || null,
     birthday: c.birthday || null,
     persona: c.persona || null,
@@ -633,6 +648,14 @@ async function tickInner(): Promise<void> {
     lastInteractionLabel: gapLabel(nowMs - best.lastInteractionAt),
     now: fmtNow(nowMs),
     ...(crossBlockedIn ? { crossBlockedIn } : {}),
+    // 机主身份 + 多账号关系感知：服务端人设不再回退「用户」占位词，小号读分账号关系
+    ...(await ownerProfileFor('phone')
+      .then((o) => ({
+        userRealName: o?.realName || undefined,
+        userNickname: o?.nickname || undefined,
+      }))
+      .catch(() => ({}))),
+    accountId: getActiveAccountIdFor('phone'),
   });
 
   // 决策失败（null）：按 wait 口径落 6h 冷却，防止 90s 重试上游轰炸

@@ -27,6 +27,7 @@ import { kvGetScoped, kvSetScoped } from './idb-kv';
 import { genId } from './db';
 // 多账号（Task 40-2d v2）：跨 App 触达的机主身份按「目标 App 当前账号」取（ownerProfileFor）
 import { getContact, ownerProfileFor } from './contacts-store';
+import { getActiveAccountIdFor } from './accounts';
 import { avatarFor } from '@/lib/contacts';
 import { useSettings } from './store';
 import { BLOCK_CHANNEL, loadBlock, type BlockApp } from './block-state';
@@ -125,6 +126,9 @@ async function buildReachSystem(
     userRealName,
     userNickname,
     multiApp: getMemSettings(contact.id).share,
+    // 多账号关系感知：跨 App 找人落在目标 App 当前账号名下（与下方 kv 作用域同账号），
+    // 分账号关系按该账号解析，不再恒用大号全局 relation
+    accountId: getActiveAccountIdFor(targetApp),
     extraRules: [
       '你此刻正在主动给 TA 发消息（不是回复），直接开口说话。',
       '一条消息只说一件事，长度像真人随手打出的一句话或两句话，不要长篇大论。',

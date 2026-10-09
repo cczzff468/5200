@@ -118,7 +118,9 @@ function buildFollowupSystemPrompt(
   maxCount: number,
   multiApp?: boolean,
   /** 机主身份（前端直传）：名字/真名/昵称——软件上显示的名字只是昵称，被问是谁报真名 */
-  user?: { name: string | null; realName: string | null; nickname: string | null }
+  user?: { name: string | null; realName: string | null; nickname: string | null },
+  /** 多账号关系感知：当前账号 id（小号续聊读 relationByAcc；不传 = 大号口径） */
+  accountId?: string | null
 ): string {
   // 条数语义与主聊回复条数同源：上限 = 聊天设置里该会话的回复条数；上限不是任务，没话可以少
   const countRule =
@@ -149,6 +151,7 @@ function buildFollowupSystemPrompt(
     userRealName: user?.realName ?? null,
     userNickname: user?.nickname ?? null,
     multiApp,
+    accountId: accountId ?? undefined,
     extraRules: [
       `你刚结束一通语音通话（${scene}${ended ? `，通话时长 ${durationLabel}` : ''}）。现在像平时发消息那样，主动给对方发文字，自然衔接这件事：`,
       ...(ended ? endedRules : [NOT_CONNECTED_RULES[outcome][0], NOT_CONNECTED_RULES[outcome][1], NOT_CONNECTED_BANS]),
@@ -209,16 +212,22 @@ export async function POST(req: NextRequest) {
     kind: inline.kind,
     gender: inline.gender,
     age: inline.age,
+    height: inline.height,
+    weight: inline.weight,
     occupation: inline.occupation,
+    company: inline.company,
     region: inline.region,
     persona: inline.persona,
     background: inline.background,
     relation: inline.relation,
+    relationByAcc: inline.relationByAcc ?? null,
     relationToUser: inline.relationToUser,
     birthday: inline.birthday,
     nickname: inline.nickname ?? null,
     realName: inline.realName ?? null,
   };
+  // 多账号关系感知：前端按当前通话账号传入（activeAccountIdOf）；不传 = 大号口径（零破坏）
+  const accountId = typeof root.accountId === 'string' && root.accountId.trim() ? root.accountId.trim().slice(0, 40) : undefined;
 
   // 条数上限：聊天设置「回复条数」（前端随请求直传该会话的设置值）；未传/非法回退 2（旧行为）
   const rcRaw = typeof root.replyCount === 'number' && Number.isFinite(root.replyCount) ? Math.floor(root.replyCount) : NaN;
@@ -271,7 +280,9 @@ export async function POST(req: NextRequest) {
       const nick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
       if (!real && !nick) return undefined;
       return { name: real || nick, realName: real || null, nickname: nick || null };
-    })()
+    })(),
+    // 多账号关系感知：小号续聊读分账号关系，不再恒用大号全局 relation
+    accountId
   );
   // 通话媒体（Task 22 视频通话）：视频通话时补一行媒体说明，AI 的后续文字知道刚才/刚才那通是视频
   const media = root.media === 'video' ? 'video' : 'voice';

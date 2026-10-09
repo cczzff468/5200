@@ -30,6 +30,7 @@ import { useSettings } from './store';
 import { pushChatNotification } from './island-notify';
 import { genId } from './db';
 import { ownerRealNameFor } from './contacts-store';
+import { getMemSettings } from '@/lib/memory';
 import { kvGet, kvSet } from './idb-kv';
 import {
   addGroupMember,
@@ -550,6 +551,10 @@ async function sendGroupOpening(g: ChatGroup, char: ContactRecord): Promise<void
       userRealName: meRec?.realName ?? meRec?.name ?? null,
       userNickname: meRec?.nickname ?? null,
       ownerName: char.kind === 'npc' && char.ownerId ? contacts.find((c) => c.id === char.ownerId)?.name ?? null : null,
+      // 与 wx-group/qq-group 群聊回合同口径：群聊语义（最后一条不是私聊里的「用户刚说的话」）
+      // + 跨 App 身份与记忆感知（互通开关）；配角圈/背景近况由 npc-bond 在宿主侧注入的口径对齐
+      groupTurn: true,
+      multiApp: getMemSettings(char.id).share,
       extraRules: groupRules,
     });
     const trigger =

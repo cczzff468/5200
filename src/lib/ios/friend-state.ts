@@ -453,6 +453,9 @@ async function buildReqSystem(
     userRealName,
     userNickname,
     multiApp: getMemSettings(contact.id).share,
+    // 多账号关系感知：小号侧申请/回复/欢迎读 relationByAcc 分账号关系，不再恒用大号全局 relation
+    // （本模块的删除/申请状态本就按账号作用域，同口径）
+    accountId: getActiveAccountIdFor(app),
     extraRules: sceneRules[scene],
   });
   // 多账号：小号侧追加大号记忆感知（规则三/四）；大号侧 = 纯本账号召回，输出与旧版一致
@@ -771,6 +774,9 @@ export async function decideCharFriendReq(
     userRealName,
     userNickname,
     multiApp: getMemSettings(contact.id).share,
+    // 多账号关系感知（与上方披露门控配套）：有分账号关系记录时按 relationByAcc[当前小号] 解析，
+    // 不再恒用大号全局 relation——小号处出来的独立关系不再被大号关系覆盖
+    accountId: getActiveAccountIdFor(app),
     extraRules: sceneRules,
   });
   const timeBlock = buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null });
