@@ -865,6 +865,8 @@ export async function GET(req: NextRequest) {
   const w = intOf(sp.get('w'), 400, 100, 800);
   const h = intOf(sp.get('h'), 400, 100, 800);
   const s = intOf(sp.get('s'), 0, 0, 999);
+  // d=1：强制默认图（本地算法插画直出，跳过图库链与缓存）——「我的→图片样式=默认图片」模式由前端改写 URL 使用
+  if (sp.get('d') === '1') return defaultArtSvg(tag, w, h);
   // v=链路版本：升级后浏览器旧缓存自然失效（URL 变了）
   const key = `${tag}|${w}x${h}|${s}|v10`;
 

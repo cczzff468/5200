@@ -17343,3 +17343,24 @@ Stage Summary:
 - 游客 VIP 徽章默认隐藏（可编辑资料里重新打开）；登录账号头像支持手机上传或跟随网易云账号，真实账号换头像进页即全 App 同步
 - 复验确认网易云 API 本机+UI 全链路正常（用户感知的「聊天不按人设/上下文」实为 Task 20 修复前的复读问题，修复已生效且本轮实测无复读）
 - 改动文件：src/lib/ios/music-ai.ts（多条消息+防复读按段+minSegments）、src/components/apps/music-player.tsx（气泡堆叠重写）、src/lib/ios/music-store.ts（vipHidden+头像偏好）、src/components/apps/music-mine.tsx（徽章开关+头像弹层）
+
+---
+Task ID: 22
+Agent: main (Z.ai Code)
+Task: 美团「我的公益」→「图片样式」菜单：全站图片三选一（真实图库 / 设置生图 API AI 生成 / 内置默认插画），作用于订单、店铺门头、菜品全部内容匹配图（用户澄清：不是公益图）
+
+Work Log:
+- 需求澄清落地：用户指出此前把三选一做在「公益图」上是误解——三选一应作用于全站食物图。方案改为全局样式层：入口保留在「我的」宫格原位置（「我的公益」→「图片样式」Images 图标），公益三选一整套（mt-charity.ts + meituan.tsx 状态/弹层/上传/AI 生成）删除
+- src/app/api/mt-img/route.ts：GET 新增 d=1 参数——强制 defaultArtSvg(tag,w,h) 直出（跳过图库链与字节缓存），curl 实测 200 image/svg+xml，19ms；「默认图片」模式由前端把现有 URL 追加 &d=1 实现，服务端零新增状态
+- 新建 src/lib/ios/mt-img-style.ts（与 mt-rider 同构的样式层）：MtFoodStyle='real'|'ai'|'default'（默认 real 保持既有观感）；样式存 localStorage(mt-food-img-style)+版本号广播（useSyncExternalStore 口径）；AI 图缓存 kv 键 mt-ai-food:{tag}|{kind}（内存同步读+写穿 IndexedDB，按账号隔离），mtClearAiFoods 走 kvDelByPrefix；生成队列并发 2、同 key 去重、失败静默（展示端默认插画兜底，槽位释放允许重试）；mtFoodPrompt：TAG_ZH 词典（60+ 品类英→中）+ f 菜品（美食摄影特写）/c 门头（门店外观）双口径，要求无文字无水印
+- src/components/apps/mt-food-img.tsx 重写：FoodImg 订阅 styleVer+aiVer 双版本（useSyncExternalStore）+ useSettings(imgGenConfig)；parseMtImg 从 URL 解出 k/p；仅 /api/mt-img 链接做改写（real=原样 / default=+&d=1 / ai=mtGetAiFood(tag,kind)||默认插画占位），用户上传 dataURL 任何样式原样显示；AI 模式挂载时无缓存且 imgGenConfigReady → mtEnqueueAiFood 入队（useEffect 钩子全组件统一顶层，无违反 hooks 规则）；key=effSrc 使替换时干净重挂载（onLoad 淡入保留）
+- src/components/apps/meituan.tsx：删 charity import/state/弹层/宫格特判/charitySrc；新增 styleOpen/foodStyle/styleErr 状态 + applyFoodStyle（AI 未配置拦截：toast+弹层红字指路「设置→图像生成」）；宫格 [Images,'图片样式',my-svc-imgstyle]；新弹层三卡（真实图片=真实照片预览 / AI 生成=Sparkles 或缓存品类图实时预览+「已配置/需配置」副标 / 默认图片=算法插画预览，选中黄底黄圈对勾同骑手弹层），AI 模式下附「重新生成全部 AI 图片」（RefreshCw+mtClearAiFoods）；useSyncExternalStore(subscribeAiFood) 保持 AI 卡预览实时
+- 删除 src/lib/ios/mt-charity.ts；bunx tsc --noEmit 0 错误；bun run lint 0 错误（仅既有 BABEL 500KB 三条）
+- 浏览器端到端实测（agent-browser，注入 user 档案 woailin520 账密登录美团）：①弹层三卡+关闭 testid 全在 ②AI 未配置点击→toast「请先在设置→图像生成配置生图 API」+弹层红字、选中态不被切换 ③选「默认图片」→首页 13/13 张 img 全部带 d=1（算法插画全站生效），店铺菜品/门头同链路 ④切「真实图片」→13/13 立即恢复真实图库 URL ⑤配置生图 API（临时 mock OpenAI 兼容服务 :3031，/tmp 级不入库）后选「AI 生成」→ 首页 13/13 张自动逐张替换为 AI dataURL，mock 收到 3 个不同 prompt 长度的请求=按品类 tag 去重生效（并发 2 队列）⑥kv 持久化：IndexedDB 出现 9 个 mt-ai-food:{tag}|{kind} 键（f/c 分槽正确）⑦reload 后首页 13/13 即时命中缓存显示（mock 仅 2 个新品类新请求）⑧「重新生成全部」→ kv 键清零 → 回首页 12s 内 13/13 重新生成替换 ⑨还原：样式复位 real、测试配置清除、mock 服务 kill 且文件删除、注入联系人删除
+- 约束遵守：无 emoji（全部 SVG 图标/文字）；微信/QQ 链路零改动；毛玻璃/胶囊 UI 未动；不涉真实资金；mt-img 原有取图链/缓存/预热逻辑零改动（仅入口处 d=1 短路）
+
+Stage Summary:
+- 美团全站图片样式三选一上线：「我的→图片样式」菜单（替代原公益格子）切换真实图库 / AI 生成 / 默认插画，订单、店铺门头、菜品全部内容匹配图统一生效、选择即用
+- AI 模式全自动：按品类关键词去重生成（kv 跨会话持久、刷新秒出）、生成中默认插画兜底不空白、可一键重新生成；未配置生图 API 明确拦截指路
+- 公益三选一按用户澄清撤销移除（公益图概念不再存在），原图标位置与交互形态（底部弹层菜单）延续
+- 改动文件：src/lib/ios/mt-img-style.ts（新增）、src/components/apps/mt-food-img.tsx（重写）、src/components/apps/meituan.tsx（宫格+弹层+状态）、src/app/api/mt-img/route.ts（d=1 直出）、src/lib/ios/mt-charity.ts（删除）
