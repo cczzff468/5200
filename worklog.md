@@ -17321,3 +17321,25 @@ Stage Summary:
 - 多样性三管齐下：两级请求都强制带 temperature（缺省 0.9）+ 3 次防复读尝试 + 被拒草稿回灌/开头 4 字查重；生成中来的新消息 1 槽排队不再丢；联系人库故障时人设兜底不再裸奔
 - bun run lint 0 错误（仅既有 BABEL 500KB 提示 meituan/qq/wechat 三条）；bunx tsc --noEmit 0 错误；未 git commit
 - 改动文件：src/lib/ios/music-ai.ts（+265/-73 主改动）、src/app/api/chat/route.ts（sdkChat temperature 透传）
+
+---
+Task ID: 21
+Agent: main (Z.ai Code)
+Task: 网易云聊天多条消息(3-10条连发) + 一起听浮窗气泡(3条/最新在上/10s/错峰消失) + 游客VIP徽章可隐藏 + 登录头像(手机上传/跟随网易云账号同步) + API与聊天链路复验
+
+Work Log:
+- 用户上轮反馈「网易云API弄错了」复验：直连 3010 与经代理 3000 双路 curl 均 200，响应头 x-ncm-upstream: local（本机优先），Vercel 兜底链在库未触发；UI 内榜单/歌单/搜索/播放/歌词/评论/音频流(206)全部真实数据工作——API 未坏；用户截图（已入库 upload/Screenshot_20261009_083352.jpg）显示的真问题是 AI 复读（「哎呀，被你这么…」模板连现两次），属 Task 20 修复前的表现（截图 08:33 早于修复提交 09:41）
+- src/lib/ios/music-ai.ts 多条消息连发（用户需求：3~10条，内容多多发/少少发）：playingBlock 增 multi 参数（默认 true）注入「一行一条拆 3~10 条、行间不空行、不编号」规则，aiSayOnce 主动消息传 false 保持单条（第三十五轮防骚扰约束仍在）；新增 splitReplySegments（剥行首序号/项目符号、单条截120字、一整段>40字按句读拆、不足3条补拆、超10条尾部合并）+ splitBySentence（。！？～；…后断、碎句并入前段）+ deliverPeerSegments（锁内逐条投递，间隔650~1200ms模拟真人连发，当前批次投递完才处理排队输入，天然不乱序）；runTogetherReplyOnce 改消费 segments（错误兜底仍单条）；genUniqueReply 返回 {segments, controls}，防复读升级为按段检查（任一段与近12条相似/开头4字撞近5轮AI回复→整批重试，被拒草稿以「 / 」连接回灌），新增 opts.minSegments（回复链路传 TG_SEGMENTS_MIN=3，条数不足时带明确指令补试一次，仍不足按实际条数发自然优先）
+- src/components/apps/music-player.tsx 浮窗气泡重写（用户需求：3条/最新在上/10秒/不同时消失）：BUBBLE_TTL 5000→10000，BUBBLE_MAX_PER_SIDE=3，TogetherHead 从「每侧最新1条」改为「每侧最近3条堆叠」（从尾向前扫，超TTL即停，mine/peer 各自成堆，新→旧=上→下）；到期定时器改为「最早到期的那条」触发重渲染，逐条按各自 m.time+10s 消失（不同时）；HeadBubble 增 tail 参数，尾巴只画堆顶（最新）一条；时长行隐形占位逻辑保留
+- src/lib/ios/music-store.ts：GuestProfile 新增 vipHidden（默认 true=游客「我的」页不显示 VIP 图标，getGuestProfile 对老存档 v?.vipHidden !== false 兜底）；新增登录头像偏好 getLoginAvatarPref/setLoginAvatarLocal/setLoginAvatarFollowNcm（kv music-login-avatar-pref，mode: 'ncm'|'local' + local dataURL，切回 ncm 保留本机那张）
+- src/components/apps/music-mine.tsx：游客昵称旁 VIP 徽章改 !guest.vipHidden 条件渲染（登录态真实 VIP 不受影响）；游客资料编辑器 VIP 段新增「主页显示 显示/隐藏」分段开关（隐藏时类型/等级置灰仅预览），save 透传 vipHidden；登录态头像解析改「local 模式用上传图，否则 detail.profile.avatarUrl(每次进页拉 userDetail 最新) || loginAvatar」——真实网易云账号换头像后进页即同步；userDetail 拉回后 ncm 模式反写 useMusic.loginAvatar（播放器/一起听头部全 App 同步）；头像按钮登录态从 disabled 改为弹出 LoginAvatarSheet（从手机上传头像 fileToAvatarDataUrl 裁方压缩 / 跟随网易云账号头像，当前模式标注+说明文案，上传/切换即反写 store 并 toast）
+- 约束遵守：未加 emoji（开关/按钮全部文字+SVG 图标）；微信/QQ 聊天链路零改动；对外导出签名兼容（genUniqueReply 新参数可选、sendTogetherText/togetherRecommend 不变）
+- 浏览器端到端实测（agent-browser，游客模式+新建角色「小雨」+信息App加好友+一起听会话）：①回复连发实测 3条/4条/3条（逐条错峰到达，跳动点在批次间显示）②浮窗气泡实测：左侧对方3条堆叠最新在最上+右侧我方1条；t+10s 我方气泡（最早发出）先消失、对方3条仍在；t+13s 对方最旧一条消失、其余保留——逐条按各自时间错峰到期实锤③minSegments 补试生效（第二轮曾出1条，加补试后稳定≥3）④游客「我的」页 VIP 徽章默认隐藏、编辑器切「显示」保存后徽章出现、切回「隐藏」再保存消失⑤AI 播放控制顺带验证（[放歌:为你写的歌] 真实切歌、[红心] 点亮）⑥防复读实证：三轮回复无模板复读、语气贴合小雨人设
+- bun run lint 0 错误（仅既有 BABEL 500KB 提示三条）；bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误（instrumentation.ts Edge 警告为既有误报）
+- 登录头像双模式 UI 已实现并过编译，沙箱内无真实网易云账号扫码，登录态上传/跟随的端到端留待用户真机验证（游客路径点头像仍是编辑资料不受影响）
+
+Stage Summary:
+- 一起听聊天从「单条长回复」升级为「3~10 条短消息真人式连发」，浮窗气泡 3 条堆叠/最新在上/10 秒逐条错峰消失——用户四项聊天体验需求全部落地并浏览器实测通过
+- 游客 VIP 徽章默认隐藏（可编辑资料里重新打开）；登录账号头像支持手机上传或跟随网易云账号，真实账号换头像进页即全 App 同步
+- 复验确认网易云 API 本机+UI 全链路正常（用户感知的「聊天不按人设/上下文」实为 Task 20 修复前的复读问题，修复已生效且本轮实测无复读）
+- 改动文件：src/lib/ios/music-ai.ts（多条消息+防复读按段+minSegments）、src/components/apps/music-player.tsx（气泡堆叠重写）、src/lib/ios/music-store.ts（vipHidden+头像偏好）、src/components/apps/music-mine.tsx（徽章开关+头像弹层）

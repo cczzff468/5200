@@ -1551,8 +1551,10 @@ function fakeHotCount(id: number): number {
 
 // ---------------- 一起听头部 ----------------
 
-/** 气泡展示时长（毫秒）：超过后自动隐藏 */
-const BUBBLE_TTL = 5000;
+/** 气泡展示时长（毫秒）：Task 21 改为 10 秒，逐条各自到期（不同时消失） */
+const BUBBLE_TTL = 10_000;
+/** 每侧最多同时显示几条（Task 21：最新在上，依次排序） */
+const BUBBLE_MAX_PER_SIDE = 3;
 
 function TogetherHead({
   session,
@@ -1560,37 +1562,41 @@ function TogetherHead({
   showBubbles = false,
 }: {
   session: TogetherSessionLike;
-  /** 一起听消息（音乐视图下取双方最新一条，显示为头像下气泡，5 秒后消失） */
+  /** 一起听消息（音乐视图下取双方最近各 3 条，头像下堆叠气泡，每条 10 秒后各自消失） */
   msgs?: TogetherMsgLike[];
   showBubbles?: boolean;
 }) {
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
-  // 双方最新一条消息（推荐卡取文字）
-  let lastMine: TogetherMsgLike | undefined;
-  let lastPeer: TogetherMsgLike | undefined;
+  // 双方最近消息堆（Task 21：每侧最多 3 条，最新在最上）
+  const [, tickNow] = useState(0);
+  const nowMs = Date.now();
+  const mineStack: TogetherMsgLike[] = [];
+  const peerStack: TogetherMsgLike[] = [];
   if (showBubbles && msgs) {
+    // 消息按时间升序追加，从尾往头扫：超出 TTL 的更早消息直接停（全部更旧）
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
-      if (!lastMine && m.role === 'me') lastMine = m;
-      if (!lastPeer && (m.role === 'peer' || m.role === 'recs')) lastPeer = m;
-      if (lastMine && lastPeer) break;
+      if (nowMs - m.time >= BUBBLE_TTL) break;
+      if (m.role === 'me') {
+        if (mineStack.length < BUBBLE_MAX_PER_SIDE) mineStack.push(m);
+      } else if (m.role === 'peer' || m.role === 'recs') {
+        if (peerStack.length < BUBBLE_MAX_PER_SIDE) peerStack.push(m);
+      }
+      if (mineStack.length >= BUBBLE_MAX_PER_SIDE && peerStack.length >= BUBBLE_MAX_PER_SIDE) break;
     }
   }
-  // 气泡 5 秒自动消失：到期后触发一次重渲染抹掉
-  const lastAt = Math.max(lastMine?.time ?? 0, lastPeer?.time ?? 0);
-  const [, tickNow] = useState(0);
+  // 逐条错峰消失：在「最早到期的那条」时刻触发一次重渲染抹掉它，剩下的继续各自计时
+  const nextExpiry = [...mineStack, ...peerStack].reduce(
+    (min, m) => Math.min(min, m.time + BUBBLE_TTL - nowMs),
+    Number.POSITIVE_INFINITY,
+  );
   useEffect(() => {
-    if (!showBubbles || !lastAt) return;
-    const remain = BUBBLE_TTL - (Date.now() - lastAt);
-    if (remain <= 0) return;
-    const t = setTimeout(() => tickNow((n) => n + 1), remain + 60);
+    if (!showBubbles || !Number.isFinite(nextExpiry) || nextExpiry <= 0) return;
+    const t = setTimeout(() => tickNow((n) => n + 1), nextExpiry + 60);
     return () => clearTimeout(t);
-  }, [lastAt, showBubbles]);
-  const nowMs = Date.now();
-  const visMine = !!lastMine && nowMs - lastMine.time < BUBBLE_TTL;
-  const visPeer = !!lastPeer && nowMs - lastPeer.time < BUBBLE_TTL;
-  const hasBubble = visMine || visPeer;
+  }, [nextExpiry, showBubbles]);
+  const hasBubble = mineStack.length > 0 || peerStack.length > 0;
   // 累计时长（跨会话永久保存：since 锚点 = 现在 - 历史累计）
   const durText = fmtTogetherDur(nowMs - session.since);
   // 自定义距离（第三十八轮）：点击「相距 N 公里」的数字进入行内编辑，确认后写回活跃会话 + 按角色持久化
@@ -1687,17 +1693,22 @@ function TogetherHead({
         公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——
+          Task 21：每侧最多 3 条堆叠，最新在最上依次排序，每条 10 秒后各自消失（不同时消失）；
           双头像交叠居中（对方在左/我在右，交叠 10px，各自圆心距中线 ±27px）：
           对方气泡右缘锚在对方头像圆心 +8px（尾巴在气泡右上，指向对方头像）；
           我的气泡左缘锚在我头像圆心 -8px（尾巴在气泡左上，指向我头像）——
-          两条尾巴各自垂直指向发送者头像，短气泡贴头像、长气泡向外展开互不重叠，5 秒后消失 */}
+          尾巴只画在最新一条（堆顶）上，避免整组尾巴重复显乱 */}
       {showBubbles && hasBubble && (
         <div className="pointer-events-none absolute inset-x-0 top-[78px] z-20 h-0">
-          <div className="absolute right-[calc(50%+19px)] top-0 flex max-w-[46%] justify-end">
-            {visPeer && lastPeer && <HeadBubble text={lastPeer.text} mine={false} />}
+          <div className="absolute right-[calc(50%+19px)] top-0 flex max-w-[46%] flex-col items-end gap-1.5">
+            {peerStack.map((m, i) => (
+              <HeadBubble key={m.id} text={m.text} mine={false} tail={i === 0} />
+            ))}
           </div>
-          <div className="absolute left-[calc(50%+19px)] top-0 flex max-w-[46%] justify-start">
-            {visMine && lastMine && <HeadBubble text={lastMine.text} mine />}
+          <div className="absolute left-[calc(50%+19px)] top-0 flex max-w-[46%] flex-col items-start gap-1.5">
+            {mineStack.map((m, i) => (
+              <HeadBubble key={m.id} text={m.text} mine tail={i === 0} />
+            ))}
           </div>
         </div>
       )}
@@ -1819,15 +1830,18 @@ function QuickInputBar({
 }
 
 /** 头像下的小气泡（实色深灰，尾巴从气泡顶部指向发送者头像：对方尾巴在右上/我的尾巴在左上，最宽 165px） */
-function HeadBubble({ text, mine }: { text: string; mine: boolean }) {
+function HeadBubble({ text, mine, tail = true }: { text: string; mine: boolean; tail?: boolean }) {
   return (
     <div
       className="relative max-w-[165px] min-w-0 rounded-[16px] bg-[#5a5a5f] px-3 py-1.5"
       data-testid={mine ? 'music-tg-bubble-me' : 'music-tg-bubble-peer'}
     >
-      <span
-        className={`absolute -top-[5px] h-3 w-3 rotate-45 rounded-[3px] bg-[#5a5a5f] ${mine ? 'left-2' : 'right-2'}`}
-      />
+      {/* 尾巴只画在最新一条（堆顶）上：整组只保留一个指向发送者头像的尾巴 */}
+      {tail && (
+        <span
+          className={`absolute -top-[5px] h-3 w-3 rotate-45 rounded-[3px] bg-[#5a5a5f] ${mine ? 'left-2' : 'right-2'}`}
+        />
+      )}
       <p className="relative break-words text-[12px] leading-snug text-white/95">{text}</p>
     </div>
   );

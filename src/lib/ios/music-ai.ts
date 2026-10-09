@@ -24,7 +24,9 @@
  *      生成中来新消息不再静默丢弃（1 槽排队，只留最新一条，当前回复结束后接着回）；
  *      联系人库读取失败时回退最小内联人设，不再裸奔音乐块。
  * 2. AI 推荐歌曲：LLM 返回 JSON 歌单 → /search 匹配真实曲库 → 消息内歌曲卡（点击播放）；
- * 3. 听歌记忆：【39 聚合制】一起听的歌/结束不再逐条写记忆——会话内攒批（歌名去重保序），
+ * 3. 多条消息连发（Task 21）：回复拆成 3~10 条短消息逐条投递（内容多多发/少少发），
+ *    每条间隔 650~1200ms 模拟真人连发；浮窗气泡与聊天流均按多气泡呈现；
+ * 4. 听歌记忆：【39 聚合制】一起听的歌/结束不再逐条写记忆——会话内攒批（歌名去重保序），
  *    攒满 5 首、退出一起听或切后台时合并写一条（memAddEventFragment, sourceTag='music-play'），
  *    自动参与后续所有聊天 App 的记忆召回——无需改任何聊天代码；
  *    solo 听歌同理（24h/8 首阈值合并一条，sourceTag='music-solo'）。
@@ -597,7 +599,7 @@ function lyricNowBlock(): string {
   return `【正在唱到的歌词】\n${parts.join('\n')}`;
 }
 
-function playingBlock(extra: string, who: string, cid: string): string {
+function playingBlock(extra: string, who: string, cid: string, multi = true): string {
   const st = useMusic.getState();
   const cur = st.current;
   const lines: string[] = ['【一起听 · 音乐情境（真实数据）】'];
@@ -638,7 +640,13 @@ function playingBlock(extra: string, who: string, cid: string): string {
     '',
     '【一起听聊天规则】',
     '- 你正在和对方一起实时听歌，像坐在同一间屋子里各戴一只耳机那样自然聊天；',
-    '- 消息要口语化、短（1~2 句）、符合你的人设语气；',
+    // Task 21 多条消息：multi=true 时要求一行一条拆 3~10 条连发；主动消息（aiSayOnce）传 multi=false 只发一条
+    ...(multi
+      ? [
+          '- 每次回复拆成 3~10 条短消息连发，一行一条（行与行之间不要空行、不要编号/序号/项目符号）：想说内容越丰富条数越多（上限 10 条），简单回应也至少 3 条；',
+          '- 每条消息就像单独发出的一条：口语化、1~2 句以内、符合你的人设语气，条与条之间接着说但各有侧重点；',
+        ]
+      : ['- 只发一条消息：口语化、1~2 句、符合你的人设语气；']),
     '- 对方聊到歌时，可以引用「正在唱到的歌词」里的一两句聊感受，但不要整段抄歌词；',
     '- 绝对禁止复读：聊天记录里（不管是你还是对方说过的）已有的句子、句式和意思都不许再重复，每次都要换一个全新的角度（旋律/歌手音色/歌词/回忆/当下氛围/联想画面……任选一个没聊过的切入口）；',
     '- 不要输出 markdown、不要伪装成系统；直接输出消息正文。',
@@ -658,7 +666,7 @@ const FALLBACK_PERSONA = [
   '【人设（联系人库暂不可用，使用兜底人设）】你是机主的亲密聊天伙伴，此刻正陪机主一起听歌：',
   '- 说话温柔自然、口语化，像真实的亲密朋友，不用书面腔；',
   '- 每次回复都换着说法，绝不重复之前用过的句式和开场白；',
-  '- 一次只说 1~3 句话，短而自然；',
+  '- 回复拆成几条短消息连发（一行一条），每条 1~2 句，短而自然；',
   '- 不承认自己是模板、程序或助手，不讨论人设本身。',
 ].join('\n');
 
@@ -916,7 +924,9 @@ async function drainPendingAfterProactive(): Promise<void> {
 }
 
 /** 单次回复执行（不含排队/互斥）：system（人设+记忆+跨App+音乐情境+规则）+ 最近真实历史轮次
- *  + 当前消息做最后一条 user 轮；聊天记录不再压平进 system */
+ *  + 当前消息做最后一条 user 轮；聊天记录不再压平进 system。
+ *  Task 21：回复拆成 3~10 条短消息，锁内逐条错峰投递（650~1200ms/条），
+ *  生成下一条排队输入继续回复时投递已全部落盘，不会交错乱序 */
 async function runTogetherReplyOnce(cid: string, userText: string): Promise<void> {
   try {
     const who = await ownerName();
@@ -934,9 +944,9 @@ async function runTogetherReplyOnce(cid: string, userText: string): Promise<void
       ...priorTurns,
       { role: 'user', content: userText || '（对方点了推荐按钮，想让你推荐几首歌）' },
     ];
-    const { text, controls } = await genUniqueReply(cid, messages);
-    if (text) {
-      appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
+    const { segments, controls } = await genUniqueReply(cid, messages, { minSegments: TG_SEGMENTS_MIN });
+    if (segments.length) {
+      await deliverPeerSegments(cid, segments);
     } else {
       appendMsg(cid, {
         id: genMsgId(),
@@ -947,7 +957,7 @@ async function runTogetherReplyOnce(cid: string, userText: string): Promise<void
       });
     }
     // AI 的播放控制指令（切歌/暂停/选歌/红心/快进快退）异步真实执行（不阻塞回复 flag；用户随时可手动覆盖）
-    void runTgControls(cid, controls, text);
+    void runTgControls(cid, controls, segments.join(' '));
   } catch {
     // 生成链路异常：兜底一条失败消息，保持聊天不卡死（兜底自身失败也静默）
     try {
@@ -968,6 +978,92 @@ function cleanAiText(raw: string): string {
   let t = (raw ?? '').trim();
   t = t.replace(/^[「"'『]+|[」"'』]+$/g, '').trim();
   return t.slice(0, 300);
+}
+
+// ---------------- 多条消息连发（Task 21：3~10 条，内容多多发/少少发） ----------------
+
+/** 单条气泡长度上限：多消息模式下每条都要短，超长截断 */
+const TG_SEGMENT_MAX_LEN = 120;
+/** 分条数上下限（用户需求：3~10 条） */
+const TG_SEGMENTS_MIN = 3;
+const TG_SEGMENTS_MAX = 10;
+/** 连发节奏：每条间隔 650~1200ms，模拟真人连发 */
+const TG_SEGMENT_GAP_BASE = 650;
+const TG_SEGMENT_GAP_JITTER = 550;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** 剥掉行首序号/项目符号（模型偶尔不听话会输出 1. xxx / - xxx / ① xxx） */
+function stripListMarker(line: string): string {
+  return line
+    .replace(/^\s*(?:[0-9]{1,2}[.、)．]|[①②③④⑤⑥⑦⑧⑨⑩]|[-•·])\s*/, '')
+    .trim();
+}
+
+/** 单条清洗：去首尾引号 + 截断 */
+function cleanSegment(s: string): string {
+  let t = (s ?? '').trim();
+  t = t.replace(/^[「"'『]+|[」"'』]+$/g, '').trim();
+  return t.slice(0, TG_SEGMENT_MAX_LEN);
+}
+
+/** 按句读拆分（。！？!?～；…后断开），过碎的短句并入前段避免碎片化 */
+function splitBySentence(text: string): string[] {
+  const parts = text
+    .split(/(?<=[。！？!?～～；;…])\s*/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const out: string[] = [];
+  for (const p of parts) {
+    const last = out[out.length - 1];
+    if (last && (last.length < 6 || p.length < 6)) out[out.length - 1] = last + p;
+    else out.push(p);
+  }
+  return out.length ? out : [text];
+}
+
+/** AI 多条回复解析：期望一行一条；
+ *  - 模型没分行（一整段且较长）→ 按句读拆；
+ *  - 不足 3 条且内容够长 → 继续按句读拆到 3 条（拆不动就按实际条数发，自然优先）；
+ *  - 超过 10 条 → 尾部合并；
+ *  - 每条剥序号、去首尾引号、截断 120 字 */
+function splitReplySegments(raw: string): string[] {
+  let lines = (raw ?? '')
+    .split(/\n+/)
+    .map((l) => cleanSegment(stripListMarker(l)))
+    .filter(Boolean);
+  if (!lines.length) return [];
+  if (lines.length === 1 && lines[0].length > 40) {
+    lines = splitBySentence(lines[0]).map(cleanSegment).filter(Boolean);
+  }
+  if (lines.length < TG_SEGMENTS_MIN) {
+    const expanded: string[] = [];
+    for (const l of lines) {
+      if (lines.length + expanded.length >= TG_SEGMENTS_MIN) {
+        expanded.push(l);
+        continue;
+      }
+      expanded.push(...splitBySentence(l));
+    }
+    lines = expanded.map(cleanSegment).filter(Boolean);
+  }
+  if (lines.length > TG_SEGMENTS_MAX) {
+    const head = lines.slice(0, TG_SEGMENTS_MAX - 1);
+    const tail = lines.slice(TG_SEGMENTS_MAX - 1).join(' '); // 已是清洗过的文本，合并不再二次截断
+    lines = tail ? [...head, tail.slice(0, TG_SEGMENT_MAX_LEN)] : head;
+  }
+  return lines.slice(0, TG_SEGMENTS_MAX);
+}
+
+/** 锁内逐条投递（调用方持有 replying 锁）：每条间隔 650~1200ms，
+ *  浮窗气泡与聊天流各自按新消息渲染，逐条出现天然错峰 */
+async function deliverPeerSegments(cid: string, segs: string[]): Promise<void> {
+  for (let i = 0; i < segs.length; i++) {
+    appendMsg(cid, { id: genMsgId(), role: 'peer', text: segs[i], time: Date.now() });
+    if (i < segs.length - 1) await sleep(TG_SEGMENT_GAP_BASE + Math.random() * TG_SEGMENT_GAP_JITTER);
+  }
 }
 
 function genMsgId(): string {
@@ -1029,21 +1125,25 @@ function startsLikeRecentAiReply(cid: string, text: string): boolean {
 }
 
 /**
- * 生成一条不与近期消息重复的对方回复（Task 20 加强）：
+ * 生成一批不与近期消息重复的对方回复（Task 20 加强 + Task 21 多条）：
  * - 输入是完整多轮 messages（system + 历史轮次 + 最后一条 user 轮 = 当前消息）；
- * - 最多 3 次尝试：与最近 12 条消息相似、或开头 4 字与最近 5 轮 AI 回复相同都算复读；
+ * - 输出拆成 3~10 条短消息（splitReplySegments）；
+ * - 最多 3 次尝试：任一条与最近 12 条消息相似、或开头 4 字与最近 5 轮 AI 回复相同都算复读，整批重试；
  * - 重试不换 system、不加新 system：把被拒草稿回灌进最后一条 user 消息末尾，
  *   明确告诉模型「这些表达已经说过，换完全不同的说法」；
- * - 每次尝试带多样性种子，绕开同输入→同输出。
+ * - 每次尝试带多样性种子，绕开同输入→同输出；
+ * - opts.minSegments>1：条数不足时最多补试一次（要求拆成至少 N 条，Task 21 连发下限）。
  */
 async function genUniqueReply(
   cid: string,
   baseMessages: LlmTurn[],
-): Promise<{ text: string; controls: TgControl[] }> {
+  opts: { minSegments?: number } = {},
+): Promise<{ segments: string[]; controls: TgControl[] }> {
+  const minSegments = opts.minSegments ?? 0;
   const run = async (messages: LlmTurn[]) => {
     const raw = await callLlmTwoTier(messages);
     const { text: ctrlText, controls } = extractTgControls(raw);
-    return { text: cleanAiText(ctrlText), controls };
+    return { segments: splitReplySegments(ctrlText), controls };
   };
   /** 把附加说明拼进最后一条 user 消息末尾（不新增 system、不动历史轮次） */
   const withLastUserNote = (messages: LlmTurn[], note: string): LlmTurn[] => {
@@ -1053,11 +1153,12 @@ async function genUniqueReply(
     return [...messages.slice(0, lastIdx), { role: 'user' as const, content: `${last.content}${note}` }];
   };
   const isRepeat = (t: string): boolean => !!t && (isDupOfRecent(cid, t) || startsLikeRecentAiReply(cid, t));
+  const isRepeatBatch = (segs: string[]): boolean => segs.some(isRepeat);
   const rejected: string[] = [];
   let messages = withLastUserNote(baseMessages, `（回复多样性种子：${varietySeed()}）`);
   let out = await run(messages);
-  for (let attempt = 1; attempt < 3 && out.text && isRepeat(out.text); attempt++) {
-    rejected.push(out.text);
+  for (let attempt = 1; attempt < 3 && out.segments.length && isRepeatBatch(out.segments); attempt++) {
+    rejected.push(out.segments.join(' / '));
     // 被拒草稿截到 40 字：足够指认表达，又不把 prompt 撑爆
     const quoted = rejected.map((d) => `"${d.slice(0, 40)}"`).join(' ');
     messages = withLastUserNote(
@@ -1065,6 +1166,17 @@ async function genUniqueReply(
       `（注意：不要重复类似这些之前说过的表达：${quoted}，换一种完全不同的说法。多样性种子：${varietySeed()}）`,
     );
     out = await run(messages);
+  }
+  // Task 21：条数下限补发重试——模型偶尔对短回应只给一行（用户要求 3~10 条连发），
+  // 最多补试一次；重试仍不足就按实际条数发（自然优先，不为凑数硬拆）
+  if (minSegments > 1 && out.segments.length > 0 && out.segments.length < minSegments) {
+    const note = `（刚才那样只是一条消息，请把你想说的拆成至少 ${minSegments} 条短消息连发：一行一条、不要编号/序号，像真人连发那样把话按语气自然断开，每条 1~2 句。多样性种子：${varietySeed()}）`;
+    try {
+      const retry = await run(withLastUserNote(baseMessages, note));
+      if (retry.segments.length > out.segments.length) out = retry;
+    } catch {
+      // 补发失败就用已有条数
+    }
   }
   return out;
 }
@@ -1097,7 +1209,8 @@ async function aiSayOnce(cid: string, hint: string): Promise<void> {
   try {
     const who = await ownerName();
     const situation = `${hint ? `【情境】${hint}\n` : ''}现在轮到你主动开口：请根据你的人设、性格、心情、你们的关系、共同记忆和最近聊过的内容，主动发一条像平时聊天一样的消息（内容由你按人设和当下情境自然决定，一两句话就好）。`;
-    const system = await personaSystemFor(cid, playingBlock(situation, who, cid));
+    // 主动消息保持单条（第三十五轮「AI 一直在发信息」的约束仍在）：multi=false 关掉分条规则
+    const system = await personaSystemFor(cid, playingBlock(situation, who, cid, false));
     const nudge =
       '（主动发一条消息）。注意：不要点评/评价/感想正在听的这首歌，不要以「这首歌」开头，不要提「这首歌」；就按你的人设和你们平时聊的天，想说什么说什么；不要重复聊天记录里已有的句子。';
     const messages: LlmTurn[] = [
@@ -1105,12 +1218,12 @@ async function aiSayOnce(cid: string, hint: string): Promise<void> {
       ...recentTurns(cid, TG_HISTORY_TURNS, who),
       { role: 'user', content: nudge },
     ];
-    const { text, controls } = await genUniqueReply(cid, messages);
-    if (text) {
+    const { segments, controls } = await genUniqueReply(cid, messages);
+    if (segments.length) {
       lastProactiveAt = Date.now();
-      appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
+      appendMsg(cid, { id: genMsgId(), role: 'peer', text: segments.join(' '), time: Date.now() });
     }
-    void runTgControls(cid, controls, text);
+    void runTgControls(cid, controls, segments.join(' '));
   } finally {
     replying = false;
     useMusic.setState({ tgAiBusy: false });

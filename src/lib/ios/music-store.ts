@@ -852,6 +852,8 @@ export interface GuestProfile {
   vipType: 'vip' | 'svip';
   /** VIP 等级（展示为中文数字，如 VIP·柒） */
   vipLevel: number;
+  /** Task 21：隐藏 VIP 徽章（默认 true = 游客「我的」页不显示 VIP 图标；编辑资料里可重新打开） */
+  vipHidden: boolean;
 }
 
 const GUEST_PROFILE_KEY = 'music-guest-profile';
@@ -893,6 +895,8 @@ export function getGuestProfile(): GuestProfile {
     fans: typeof v?.fans === 'number' ? v.fans : 0,
     vipType: v?.vipType === 'svip' ? 'svip' : 'vip',
     vipLevel: typeof v?.vipLevel === 'number' && v.vipLevel >= 1 ? Math.min(99, Math.floor(v.vipLevel)) : 7,
+    // Task 21：默认隐藏（用户要求游客「我的」页不显示 VIP 图标）；老存档里没有该字段时同样隐藏
+    vipHidden: v?.vipHidden !== false,
   };
 }
 
@@ -916,6 +920,36 @@ export function setGuestProfile(p: Partial<GuestProfile>): GuestProfile {
   const next = { ...getGuestProfile(), ...p };
   kvSet(GUEST_PROFILE_KEY, next);
   return next;
+}
+
+// ---------------- 登录账号头像来源（Task 21：跟随网易云账号 / 从手机上传） ----------------
+
+const LOGIN_AVATAR_PREF_KEY = 'music-login-avatar-pref';
+
+export interface LoginAvatarPref {
+  /** ncm = 跟随网易云账号头像（真实账号换头像后同步）；local = 手机上传的本机头像 */
+  mode: 'ncm' | 'local';
+  /** mode='local' 时的本机头像（dataURL） */
+  local: string;
+}
+
+export function getLoginAvatarPref(): LoginAvatarPref {
+  const v = kvGet<Partial<LoginAvatarPref>>(LOGIN_AVATAR_PREF_KEY);
+  return {
+    mode: v?.mode === 'local' && typeof v?.local === 'string' && !!v.local ? 'local' : 'ncm',
+    local: typeof v?.local === 'string' ? v.local : '',
+  };
+}
+
+/** 从手机上传登录头像（存本机 dataURL，并切到 local 模式） */
+export function setLoginAvatarLocal(dataUrl: string): void {
+  kvSet(LOGIN_AVATAR_PREF_KEY, { mode: 'local', local: dataUrl } satisfies LoginAvatarPref);
+}
+
+/** 切回跟随网易云账号头像（保留本机上传的那张，方便再切回 local） */
+export function setLoginAvatarFollowNcm(): void {
+  const cur = getLoginAvatarPref();
+  kvSet(LOGIN_AVATAR_PREF_KEY, { mode: 'ncm', local: cur.local } satisfies LoginAvatarPref);
 }
 
 export interface GuestPlaylist {

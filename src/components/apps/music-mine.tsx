@@ -54,6 +54,9 @@ import {
   getGuestProfile,
   getGuestAvatar,
   setGuestProfile,
+  getLoginAvatarPref,
+  setLoginAvatarLocal,
+  setLoginAvatarFollowNcm,
   GUEST_DEFAULT_AVATAR,
   GUEST_AVATAR_PRESETS,
   guestPlaylistCreate,
@@ -198,6 +201,9 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const [showRecord, setShowRecord] = useState(false);
   // 登录账号真实 VIP（VIP 是几显示几）
   const [loginVip, setLoginVip] = useState<VipInfo | null>(null);
+  // Task 21：登录账号头像来源选择弹层（从手机上传 / 跟随网易云账号）
+  const [avatarSheet, setAvatarSheet] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
 
   const showToast = (m: string) => {
     setToast(m);
@@ -214,7 +220,16 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
       return;
     }
     void (async () => {
-      setDetail(await userDetail(loginUid));
+      const d = await userDetail(loginUid);
+      setDetail(d);
+      // Task 21 头像跟随：跟随模式下用刚拉到的最新网易云头像同步全局 store
+      // （播放器/一起听头部等直接读 store 的 loginAvatar，这样真实账号换头像后全 App 同步）
+      const fresh = d?.profile?.avatarUrl || '';
+      if (fresh && getLoginAvatarPref().mode === 'ncm' && useMusic.getState().loginAvatar !== fresh) {
+        useMusic.setState({ loginAvatar: fresh });
+      }
+    })();
+    void (async () => {
       try {
         setPlaylists(await userPlaylists(loginUid));
       } catch {
@@ -251,7 +266,13 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
   const guest = getGuestProfile();
   void profRev; // 依赖：保存资料后重读
   const name = loginUid ? loginNickname || detail?.profile.nickname || '…' : guest.nickname;
-  const avatar = loginUid ? loginAvatar || detail?.profile.avatarUrl : getGuestAvatar();
+  // Task 21 头像：登录 = 跟随网易云（每次进页面拉 userDetail 最新头像）或本机上传；游客 = 本地资料
+  const avatarPref = getLoginAvatarPref();
+  const avatar = loginUid
+    ? avatarPref.mode === 'local' && avatarPref.local
+      ? avatarPref.local
+      : detail?.profile.avatarUrl || loginAvatar
+    : getGuestAvatar();
   const signature = loginUid ? detail?.profile.signature || '' : guest.signature;
 
   const owned = (playlists ?? []).filter((p) => p.creator?.userId === loginUid);
@@ -394,15 +415,14 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </button>
         </div>
 
-        {/* 头像（游客：点按编辑资料；无编辑图标） */}
+        {/* 头像（游客：点按编辑资料；登录：点按选头像来源——上传/跟随网易云；无编辑图标） */}
         <div className="mt-1.5 flex justify-center">
           <button
             type="button"
-            onClick={loginUid ? undefined : () => setSheet('profile')}
-            disabled={!!loginUid}
-            aria-label={loginUid ? '头像' : '编辑资料'}
+            onClick={loginUid ? () => setAvatarSheet(true) : () => setSheet('profile')}
+            aria-label={loginUid ? '更换头像' : '编辑资料'}
             data-testid="music-mine-avatar"
-            className="relative active:scale-95 disabled:active:scale-100"
+            className="relative active:scale-95"
           >
             <CoverImg
               src={avatar}
@@ -428,7 +448,8 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
               )
             ) : null
           ) : (
-            <VipBadge type={guest.vipType} level={guest.vipLevel} />
+            // Task 21：游客 VIP 徽章默认隐藏（编辑资料里「主页显示：显示/隐藏」可重新打开）
+            !guest.vipHidden && <VipBadge type={guest.vipType} level={guest.vipLevel} />
           )}
         </div>
 
@@ -728,6 +749,35 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
 
       {/* ================= 半屏面板 ================= */}
       {showRecord && <RecordPage onClose={() => setShowRecord(false)} />}
+      {/* Task 21：登录账号头像来源选择（点头像弹出） */}
+      {avatarSheet && (
+        <LoginAvatarSheet
+          ncmAvatar={detail?.profile.avatarUrl || loginAvatar || ''}
+          busy={avatarBusy}
+          onClose={() => setAvatarSheet(false)}
+          onPickFile={(f) => {
+            setAvatarBusy(true);
+            fileToAvatarDataUrl(f)
+              .then((d) => {
+                setLoginAvatarLocal(d);
+                useMusic.setState({ loginAvatar: d }); // 播放器/一起听等直接读 store，立即同步
+                setProfRev((r) => r + 1);
+                setAvatarSheet(false);
+                showToast('头像已更新');
+              })
+              .catch(() => showToast('图片处理失败'))
+              .finally(() => setAvatarBusy(false));
+          }}
+          onFollow={() => {
+            setLoginAvatarFollowNcm();
+            const fresh = detail?.profile.avatarUrl || '';
+            if (fresh) useMusic.setState({ loginAvatar: fresh });
+            setProfRev((r) => r + 1);
+            setAvatarSheet(false);
+            showToast('已跟随网易云头像');
+          }}
+        />
+      )}
       {sheet === 'profile' && (
         <ProfileEditSheet
           onClose={() => {
@@ -884,6 +934,88 @@ function PlRow({
   );
 }
 
+// ---------------- 登录账号头像来源（Task 21：从手机上传 / 跟随网易云账号，点头像进入） ----------------
+
+/**
+ * 登录账号头像设置弹层：
+ * - 跟随网易云账号头像：每次进「我的」页拉 userDetail 最新头像并同步全 App——
+ *   真实账号换头像后这里自动跟着换（music-store.getLoginAvatarPref/setLoginAvatarFollowNcm）；
+ * - 从手机上传：本机裁方压缩后存 dataURL，作为登录头像展示（不改动网易云账号本体）。
+ */
+function LoginAvatarSheet({
+  ncmAvatar,
+  busy,
+  onClose,
+  onPickFile,
+  onFollow,
+}: {
+  /** 网易云账号当前头像（预览用） */
+  ncmAvatar: string;
+  busy: boolean;
+  onClose: () => void;
+  onPickFile: (f: File) => void;
+  onFollow: () => void;
+}) {
+  const pref = getLoginAvatarPref();
+  const preview = pref.mode === 'local' && pref.local ? pref.local : ncmAvatar || GUEST_DEFAULT_AVATAR;
+  return (
+    <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-login-avatar-sheet">
+      <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
+      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
+        <div className="mb-4 flex items-center justify-between">
+          <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">头像设置</p>
+          <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
+            取消
+          </button>
+        </div>
+        <div className="mb-4 flex items-center gap-4">
+          <CoverImg src={preview} className="h-16 w-16" rounded="rounded-full" alt="当前头像" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-medium text-zinc-900 dark:text-zinc-100">
+              {pref.mode === 'local' ? '使用手机上传的头像' : '跟随网易云账号头像'}
+            </p>
+            <p className="mt-0.5 text-[11px] leading-snug text-zinc-400">
+              {pref.mode === 'local'
+                ? '切回跟随网易云后，真实账号换头像会自动同步'
+                : '真实网易云账号换头像后，这里也会同步更新'}
+            </p>
+          </div>
+        </div>
+        <div className="space-y-2.5">
+          <label
+            data-testid="music-login-avatar-upload"
+            className="flex h-11 cursor-pointer items-center justify-center gap-1.5 rounded-full bg-zinc-900 text-[14px] font-medium text-white active:scale-[0.98] dark:bg-white dark:text-zinc-900"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
+            从手机上传头像
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = ''; // 允许重复选同一张
+                if (f) onPickFile(f);
+              }}
+              data-testid="music-login-avatar-file"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={onFollow}
+            disabled={pref.mode === 'ncm'}
+            data-testid="music-login-avatar-follow"
+            className="flex h-11 w-full items-center justify-center gap-1.5 rounded-full border border-black/10 text-[14px] font-medium text-zinc-900 active:scale-[0.98] disabled:opacity-45 dark:border-white/15 dark:text-zinc-100"
+          >
+            <RotateCcw className="h-4 w-4" />
+            跟随网易云账号头像{pref.mode === 'ncm' ? '（当前）' : ''}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- 游客资料编辑（头像/昵称/签名/关注粉丝/VIP 一站式；无编辑图标，点头像进入） ----------------
 
 function ProfileEditSheet({ onClose }: { onClose: () => void }) {
@@ -901,6 +1033,8 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
   const [avatar, setAvatar] = useState(cur.avatar);
   const [follows, setFollows] = useState(String(cur.follows));
   const [fans, setFans] = useState(String(cur.fans));
+  // Task 21：VIP 徽章可整体隐藏（默认隐藏，见 getGuestProfile）
+  const [vipHidden, setVipHidden] = useState(cur.vipHidden);
   const [vipType, setVipType] = useState<'vip' | 'svip'>(cur.vipType);
   const [vipLevel, setVipLevel] = useState(String(cur.vipLevel));
   const [busy, setBusy] = useState(false);
@@ -925,6 +1059,7 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
       signature: signature.trim().slice(0, 40),
       follows: Math.max(0, Math.min(999999, Number(follows.replace(/\D/g, '')) || 0)),
       fans: Math.max(0, Math.min(999999, Number(fans.replace(/\D/g, '')) || 0)),
+      vipHidden,
       vipType,
       vipLevel: Math.max(1, Math.min(99, Number(vipLevel.replace(/\D/g, '')) || 7)),
     });
@@ -1029,9 +1164,27 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        {/* VIP 徽章自定义 */}
+        {/* VIP 徽章自定义（Task 21：可整体隐藏，隐藏后类型/等级仅预览不生效） */}
         <p className="mb-2 text-[12px] text-zinc-500">VIP 徽章</p>
-        <div className="mb-3 flex items-center gap-3">
+        <div className="mb-3 flex items-center gap-2" data-testid="music-vip-show-toggle">
+          <span className="text-[12px] text-zinc-500">主页显示</span>
+          <div className="flex rounded-full bg-zinc-100 p-0.5 dark:bg-zinc-800">
+            {([false, true] as const).map((hidden) => (
+              <button
+                key={String(hidden)}
+                type="button"
+                onClick={() => setVipHidden(hidden)}
+                data-testid={`music-vip-hidden-${hidden ? 'on' : 'off'}`}
+                className={`rounded-full px-4 py-1.5 text-[12px] font-medium ${
+                  vipHidden === hidden ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-600 dark:text-white' : 'text-zinc-400'
+                }`}
+              >
+                {hidden ? '隐藏' : '显示'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className={`mb-3 flex items-center gap-3 ${vipHidden ? 'pointer-events-none opacity-40' : ''}`}>
           <div className="flex rounded-full bg-zinc-100 p-0.5 dark:bg-zinc-800">
             {(['vip', 'svip'] as const).map((t) => (
               <button
