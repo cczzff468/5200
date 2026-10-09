@@ -13,7 +13,6 @@
  * - 数据：tb-* IndexedDB kv 按 uid 隔离（taobao-store.ts）；UI 图标一律 SVG（禁 emoji）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import Image from 'next/image';
 import {
   ArrowLeft,
   Bell,
@@ -56,6 +55,7 @@ import {
   Wallet,
   X,
   Zap,
+  Loader2,
 } from 'lucide-react';
 import { mtGetRiderId, mtRiderSrcOf } from '@/lib/ios/mt-rider';
 import { useUI } from '@/lib/ios/store';
@@ -305,6 +305,11 @@ function tbMaskPhone(phone: string): string {
   return `86-${phone.slice(0, 3)}****${phone.slice(-4)}`;
 }
 
+/** 完整地址（省市区/街道村 + 详细地址；需求：显示地址时省市村地址都要展示，不只门牌号） */
+function tbFullAddr(a: TbAddress): string {
+  return `${a.region.replace(/\s+/g, '')}${a.detail.trim()}`;
+}
+
 /** 物流阶段（地图形态）：揽收 / 运输 / 派送（骑手巡航）/ 驿站待取件 */
 type TbExpressPhase = 'pickup' | 'transit' | 'delivering' | 'station';
 
@@ -540,7 +545,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onTo
             type="button"
             onClick={() => tapIdp('wx')}
             disabled={busy}
-            className="flex h-12 items-center justify-center gap-2 rounded-full bg-[#07C160] text-[15px] font-medium text-white active:opacity-80 disabled:opacity-60"
+            className="flex h-12 items-center justify-center gap-2 rounded-xl bg-[#07C160] text-[15px] font-medium text-white active:opacity-80 disabled:opacity-60"
           >
             <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <ellipse cx="9.8" cy="8.6" rx="6.6" ry="5.7" />
@@ -552,7 +557,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onTo
             type="button"
             onClick={() => tapIdp('qq')}
             disabled={busy}
-            className="flex h-12 items-center justify-center gap-2 rounded-full bg-[#12B7F5] text-[15px] font-medium text-white active:opacity-80 disabled:opacity-60"
+            className="flex h-12 items-center justify-center gap-2 rounded-xl bg-[#12B7F5] text-[15px] font-medium text-white active:opacity-80 disabled:opacity-60"
           >
             <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 3c3.6 0 5.5 2.6 5.5 6 0 .9 0 1.7.5 2.8.6 1.4 1.6 2.7 1.6 3.4 0 .9-1.4 1-2.3 1.5-.7.4-1.4 1.2-2.6 1.2" />
@@ -570,7 +575,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onTo
             <button
               type="button"
               onClick={() => pickIdp('wx')}
-              className={`flex h-10 items-center justify-center gap-1.5 rounded-full border text-[14px] ${idp === 'wx' ? 'border-[#07C160] bg-[#07C160]/10 text-[#07C160]' : 'border-black/10 text-black/70'}`}
+              className={`flex h-10 items-center justify-center gap-1.5 rounded-lg border text-[14px] ${idp === 'wx' ? 'border-[#07C160] bg-[#07C160]/10 text-[#07C160]' : 'border-black/10 text-black/70'}`}
             >
               <span className={`h-2 w-2 rounded-full ${idp === 'wx' ? 'bg-[#07C160]' : 'bg-black/20'}`} />
               微信账密
@@ -578,7 +583,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onTo
             <button
               type="button"
               onClick={() => pickIdp('qq')}
-              className={`flex h-10 items-center justify-center gap-1.5 rounded-full border text-[14px] ${idp === 'qq' ? 'border-[#12B7F5] bg-[#12B7F5]/10 text-[#12B7F5]' : 'border-black/10 text-black/70'}`}
+              className={`flex h-10 items-center justify-center gap-1.5 rounded-lg border text-[14px] ${idp === 'qq' ? 'border-[#12B7F5] bg-[#12B7F5]/10 text-[#12B7F5]' : 'border-black/10 text-black/70'}`}
             >
               <span className={`h-2 w-2 rounded-full ${idp === 'qq' ? 'bg-[#12B7F5]' : 'bg-black/20'}`} />
               QQ账密
@@ -604,7 +609,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onTo
                 type="button"
                 onClick={pwdLogin}
                 disabled={busy || !account.trim() || !pwd}
-                className="h-11 w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-80 disabled:opacity-50"
+                className="h-11 w-full rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-80 disabled:opacity-50"
               >
                 {busy ? '登录中…' : '登录'}
               </button>
@@ -642,10 +647,10 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onTo
             </div>
             <div className="mt-3 text-[12px] leading-5 text-black/45">淘宝将获得你的昵称、头像，用于创建淘宝账号；购物数据按账号独立隔离保存。</div>
             <div className="mt-4 grid grid-cols-2 gap-3">
-              <button type="button" onClick={() => setAuth(null)} className="h-11 rounded-full bg-black/[0.05] text-[15px] text-black/70 active:opacity-80">
+              <button type="button" onClick={() => setAuth(null)} className="h-11 rounded-xl bg-black/[0.05] text-[15px] text-black/70 active:opacity-80">
                 拒绝
               </button>
-              <button type="button" onClick={confirmAuth} disabled={busy} className="h-11 rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-80 disabled:opacity-60">
+              <button type="button" onClick={confirmAuth} disabled={busy} className="h-11 rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-80 disabled:opacity-60">
                 {busy ? '登录中…' : '同意'}
               </button>
             </div>
@@ -760,16 +765,9 @@ function HomePage({
   }, [pool, batch, refreshKey]);
 
   return (
-    <div
-      ref={scrollerRef}
-      className="h-full overflow-y-auto overscroll-contain bg-[#f4f4f4]"
-      onScroll={onScroll}
-      onTouchStart={onTouchStart}
-      onTouchMove={onTouchMove}
-      onTouchEnd={onTouchEnd}
-    >
-      {/* 顶部品牌区（橙红渐变，含 tab + 搜索框 + 图标宫格背景） */}
-      <div className="relative bg-gradient-to-b from-[#FF6A1E] via-[#FF6A1E] to-[#FF6A1E]/90 pb-3">
+    <div className="flex h-full flex-col bg-[#f4f4f4]">
+      {/* 顶部品牌区（固定不随列表滚动：状态栏/顶栏背景始终与本页一致；橙红渐变，含 tab + 搜索框 + 图标宫格背景） */}
+      <div className="relative z-30 shrink-0 bg-gradient-to-b from-[#FF6A1E] via-[#FF6A1E] to-[#FF6A1E]/90 pb-3">
         {/* 顶部 feed tab */}
         <div className="flex items-center gap-5 overflow-x-auto px-4 pb-1 pt-[58px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {feedTabs.map((t) => (
@@ -815,64 +813,76 @@ function HomePage({
         </div>
       </div>
 
-      {/* 运营位：直播 / 百亿补贴（演示装饰） */}
-      <div className="mt-2 grid grid-cols-2 gap-2 px-2">
-        <button type="button" onClick={() => onToast('淘宝直播（演示）')} className="flex flex-col rounded-xl bg-gradient-to-br from-[#fff1e8] to-[#ffe3d2] p-3 text-left active:opacity-80">
-          <div className="flex items-center justify-between">
-            <span className="text-[15px] font-bold text-[#7a3b12]">淘宝直播</span>
-            <span className="rounded-full bg-[#FF2D7E] px-1.5 py-0.5 text-[10px] font-bold text-white">直播有好价</span>
+      {/* 商品流滚动区（header 固定后单独滚动；包裹层 relative 用于悬浮刷新指示器定位） */}
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollerRef}
+          className="h-full overflow-y-auto overscroll-contain"
+          onScroll={onScroll}
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+        >
+          {/* 运营位：直播 / 百亿补贴（演示装饰） */}
+          <div className="mt-2 grid grid-cols-2 gap-2 px-2">
+            <button type="button" onClick={() => onToast('淘宝直播（演示）')} className="flex flex-col rounded-xl bg-gradient-to-br from-[#fff1e8] to-[#ffe3d2] p-3 text-left active:opacity-80">
+              <div className="flex items-center justify-between">
+                <span className="text-[15px] font-bold text-[#7a3b12]">淘宝直播</span>
+                <span className="rounded-full bg-[#FF2D7E] px-1.5 py-0.5 text-[10px] font-bold text-white">直播有好价</span>
+              </div>
+              <div className="mt-2 flex gap-1.5">
+                <img src={tbImg('earbuds', 140, 100, 2)} alt="直播好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
+                <img src={tbImg('phone', 140, 100, 2)} alt="直播好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
+              </div>
+            </button>
+            <button type="button" onClick={() => onToast('百亿补贴（演示）')} className="flex flex-col rounded-xl bg-gradient-to-br from-[#fff4f4] to-[#ffe0e0] p-3 text-left active:opacity-80">
+              <div className="flex items-center justify-between">
+                <span className="text-[15px] font-bold text-[#8a1f1f]">百亿补贴</span>
+                <span className="rounded-full bg-[#FF0036] px-1.5 py-0.5 text-[10px] font-bold text-white">国家补贴</span>
+              </div>
+              <div className="mt-2 flex gap-1.5">
+                <img src={tbImg('toy', 140, 100, 2)} alt="补贴好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
+                <img src={tbImg('laptop', 140, 100, 2)} alt="补贴好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
+              </div>
+            </button>
           </div>
-          <div className="mt-2 flex gap-1.5">
-            <img src={tbImg('earbuds', 140, 100, 2)} alt="直播好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
-            <img src={tbImg('phone', 140, 100, 2)} alt="直播好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
+
+          {/* 超级88 横条（装饰） */}
+          <button type="button" onClick={() => onToast('超级88 领券中心（演示）')} className="mx-2 mt-2 flex w-[calc(100%-16px)] items-center gap-2 rounded-xl bg-gradient-to-r from-[#FF2D2D] to-[#FF5000] px-3 py-2.5 text-left active:opacity-90">
+            <span className="text-[16px] font-black italic text-white">超级88</span>
+            <span className="flex-1 truncate text-[13px] text-white/95">叠加大额消费券 7.7 折起，速抢</span>
+            <span className="rounded-full bg-white px-2.5 py-1 text-[12px] font-bold text-[#FF4400]">去抢购</span>
+          </button>
+
+          {/* 推荐商品流（双列瀑布） */}
+          {feedTab === 'follow' ? (
+            <FollowFeed uid={uid} follows={follows} onOpenProduct={onOpenProduct} onOpenSearch={() => setFeedTab('rec')} />
+          ) : (
+            <div className="mt-2 flex items-start gap-2 px-2 pb-24">
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                {feed.filter((_, i) => i % 2 === 0).map(({ p, v }, i) => (
+                  <ProductCard key={`${p.id}-${v}-${i}`} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
+                ))}
+              </div>
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                {feed.filter((_, i) => i % 2 === 1).map(({ p, v }, i) => (
+                  <ProductCard key={`${p.id}-${v}-${i}`} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 下拉刷新指示器（悬浮于列表区顶部，不随内容滚动） */}
+        {(pullY > 0 || refreshing) && (
+          <div className="pointer-events-none absolute inset-x-0 top-2 z-40 grid place-items-center" style={{ transform: `translateY(${pullY - 40}px)` }}>
+            <div className={`flex h-9 items-center gap-2 rounded-full bg-white px-4 text-[13px] text-black/60 shadow-lg ${refreshing ? 'animate-pulse' : ''}`}>
+              <ScanLine className={`h-4 w-4 text-[#FF5000] ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? '正在刷新…' : pullY > 40 ? '松开刷新' : '下拉刷新'}
+            </div>
           </div>
-        </button>
-        <button type="button" onClick={() => onToast('百亿补贴（演示）')} className="flex flex-col rounded-xl bg-gradient-to-br from-[#fff4f4] to-[#ffe0e0] p-3 text-left active:opacity-80">
-          <div className="flex items-center justify-between">
-            <span className="text-[15px] font-bold text-[#8a1f1f]">百亿补贴</span>
-            <span className="rounded-full bg-[#FF0036] px-1.5 py-0.5 text-[10px] font-bold text-white">国家补贴</span>
-          </div>
-          <div className="mt-2 flex gap-1.5">
-            <img src={tbImg('toy', 140, 100, 2)} alt="补贴好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
-            <img src={tbImg('laptop', 140, 100, 2)} alt="补贴好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
-          </div>
-        </button>
+        )}
       </div>
-
-      {/* 超级88 横条（装饰） */}
-      <button type="button" onClick={() => onToast('超级88 领券中心（演示）')} className="mx-2 mt-2 flex w-[calc(100%-16px)] items-center gap-2 rounded-xl bg-gradient-to-r from-[#FF2D2D] to-[#FF5000] px-3 py-2.5 text-left active:opacity-90">
-        <span className="text-[16px] font-black italic text-white">超级88</span>
-        <span className="flex-1 truncate text-[13px] text-white/95">叠加大额消费券 7.7 折起，速抢</span>
-        <span className="rounded-full bg-white px-2.5 py-1 text-[12px] font-bold text-[#FF4400]">去抢购</span>
-      </button>
-
-      {/* 推荐商品流（双列瀑布） */}
-      {feedTab === 'follow' ? (
-        <FollowFeed uid={uid} follows={follows} onOpenProduct={onOpenProduct} onOpenSearch={() => setFeedTab('rec')} />
-      ) : (
-        <div className="mt-2 flex items-start gap-2 px-2 pb-24">
-          <div className="flex min-w-0 flex-1 flex-col gap-2">
-            {feed.filter((_, i) => i % 2 === 0).map(({ p, v }, i) => (
-              <ProductCard key={`${p.id}-${v}-${i}`} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
-            ))}
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-2">
-            {feed.filter((_, i) => i % 2 === 1).map(({ p, v }, i) => (
-              <ProductCard key={`${p.id}-${v}-${i}`} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 下拉刷新指示器 */}
-      {(pullY > 0 || refreshing) && (
-        <div className="pointer-events-none fixed left-0 right-0 top-[120px] z-40 grid place-items-center" style={{ transform: `translateY(${pullY - 40}px)` }}>
-          <div className={`flex h-9 items-center gap-2 rounded-full bg-white px-4 text-[13px] text-black/60 shadow-lg ${refreshing ? 'animate-pulse' : ''}`}>
-            <ScanLine className={`h-4 w-4 text-[#FF5000] ${refreshing ? 'animate-spin' : ''}`} />
-            {refreshing ? '正在刷新…' : pullY > 40 ? '松开刷新' : '下拉刷新'}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -935,7 +945,7 @@ function FollowFeed({ uid, follows, onOpenProduct, onOpenSearch }: { uid: string
                 </div>
                 <div className="mt-0.5 text-[11px] text-black/40">{s.fans}粉丝数</div>
               </div>
-              <button type="button" onClick={onOpenSearch} className="rounded-full bg-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-white active:opacity-80">
+              <button type="button" onClick={onOpenSearch} className="rounded-lg bg-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-white active:opacity-80">
                 进店逛逛
               </button>
             </div>
@@ -965,7 +975,7 @@ function ShopRow({ shopId, uid, onOpenProduct }: { shopId: string; uid: string; 
         <button
           type="button"
           onClick={() => tbToggleShopFollow(uid, shopId)}
-          className={`rounded-full px-3.5 py-1.5 text-[13px] font-medium ${followed ? 'bg-black/[0.06] text-black/50' : 'bg-[#FF5000] text-white'} active:opacity-80`}
+          className={`rounded-lg px-3.5 py-1.5 text-[13px] font-medium ${followed ? 'bg-black/[0.06] text-black/50' : 'bg-[#FF5000] text-white'} active:opacity-80`}
         >
           {followed ? '已关注' : '关注'}
         </button>
@@ -1046,7 +1056,7 @@ function SearchPage({ uid, onBack, onSearch }: { uid: string; onBack: () => void
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
               {hist.map((h) => (
-                <button key={h} type="button" onClick={() => go(h)} className="rounded-full bg-black/[0.04] px-3 py-1.5 text-[13px] text-black/70 active:bg-black/[0.08]">
+                <button key={h} type="button" onClick={() => go(h)} className="rounded-lg bg-black/[0.04] px-3 py-1.5 text-[13px] text-black/70 active:bg-black/[0.08]">
                   {h}
                 </button>
               ))}
@@ -1061,7 +1071,7 @@ function SearchPage({ uid, onBack, onSearch }: { uid: string; onBack: () => void
                 key={h}
                 type="button"
                 onClick={() => go(h)}
-                className={`rounded-full px-3 py-1.5 text-[13px] active:opacity-70 ${i < 2 ? 'bg-[#FF5000]/[0.08] font-medium text-[#FF5000]' : 'bg-black/[0.04] text-black/70'}`}
+                className={`rounded-lg px-3 py-1.5 text-[13px] active:opacity-70 ${i < 2 ? 'bg-[#FF5000]/[0.08] font-medium text-[#FF5000]' : 'bg-black/[0.04] text-black/70'}`}
               >
                 {h}
               </button>
@@ -1164,14 +1174,14 @@ function SearchResultPage({ kw, onBack, onOpenProduct, onSearchSeed }: { kw: str
           <button
             type="button"
             onClick={() => setOnlyFree((v) => !v)}
-            className={`rounded-full px-2.5 py-1 text-[12px] ${onlyFree ? 'bg-[#FF5000] font-medium text-white' : 'bg-black/[0.05] text-black/60'}`}
+            className={`rounded-lg px-2.5 py-1 text-[12px] ${onlyFree ? 'bg-[#FF5000] font-medium text-white' : 'bg-black/[0.05] text-black/60'}`}
           >
             包邮
           </button>
           <button
             type="button"
             onClick={() => setOnlyTmall((v) => !v)}
-            className={`rounded-full px-2.5 py-1 text-[12px] ${onlyTmall ? 'bg-[#FF0036] font-medium text-white' : 'bg-black/[0.05] text-black/60'}`}
+            className={`rounded-lg px-2.5 py-1 text-[12px] ${onlyTmall ? 'bg-[#FF0036] font-medium text-white' : 'bg-black/[0.05] text-black/60'}`}
           >
             天猫
           </button>
@@ -1182,7 +1192,7 @@ function SearchResultPage({ kw, onBack, onOpenProduct, onSearchSeed }: { kw: str
           <div className="grid place-items-center bg-white py-16">
             <Search className="h-12 w-12 text-black/10" strokeWidth={1.6} />
             <div className="mt-3 text-[15px] text-black/45">没有找到与「{kw}」相关的商品</div>
-            <button type="button" onClick={onBack} className="mt-4 rounded-full bg-[#FF5000] px-5 py-2 text-[14px] font-medium text-white active:opacity-80">
+            <button type="button" onClick={onBack} className="mt-4 rounded-lg bg-[#FF5000] px-5 py-2 text-[14px] font-medium text-white active:opacity-80">
               重新搜索
             </button>
           </div>
@@ -1303,7 +1313,7 @@ function SkuSheet({
           <div className="px-4 pb-2 pt-3">
             <button type="button" onClick={onClose} className="flex w-full items-center gap-1.5 text-left active:opacity-70">
               <MapPin className="h-4 w-4 shrink-0 text-black/75" strokeWidth={2.1} />
-              <span className="min-w-0 truncate text-[14.5px] font-semibold text-black/85">{addr ? `${addr.name} ${addr.detail}` : '请选择收货地址'}</span>
+              <span className="min-w-0 truncate text-[14.5px] font-semibold text-black/85">{addr ? `${addr.name} ${tbFullAddr(addr)}` : '请选择收货地址'}</span>
               <Pencil className="ml-1 h-3.5 w-3.5 shrink-0 text-black/35" />
               <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/25" />
             </button>
@@ -1554,6 +1564,13 @@ function ProductPage({
   const [faved, setFaved] = useState(() => tbLoadFavs(uid).includes(pid));
   const [skuMode, setSkuMode] = useState<'cart' | 'buy' | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  // 收藏人数（确定性，展示用；收藏后数字橙色高亮）
+  const favCount = String(1000 + (tbHash(`${pid}fav`) % 9000));
+  // 预计送达日期（与 SkuSheet 同口径：3 天后）
+  const etaDate = (() => {
+    const d = new Date(Date.now() + 3 * 86_400_000);
+    return `${d.getMonth() + 1}月${d.getDate()}日送达`;
+  })();
   if (!p) {
     return (
       <div className="grid h-full place-items-center bg-white">
@@ -1708,15 +1725,21 @@ function ProductPage({
             <div>· 发货地：浙江杭州 · 快递：{p.freight === 0 ? '免运费' : `¥${fmtMoney(p.freight)}`}</div>
           </div>
         </div>
+        {/* 预计送达行（截图1：绿字卡车 + 预计X月X日送达） */}
+        <div className="mt-2 flex items-center gap-2 bg-white px-4 py-4">
+          <Truck className="h-5 w-5 shrink-0 text-black/80" strokeWidth={2} />
+          <span className="text-[16px] font-semibold text-[#00B578]">预计{etaDate}</span>
+          <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-black/25" />
+        </div>
       </div>
 
-      {/* 底部操作栏（店铺/客服/收藏 + 加购/立即购买） */}
+      {/* 底部操作栏（截图1：店铺/客服/收藏数 + 黄色加入购物车 + 橙色领券购买，方形圆角） */}
       <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-1 border-t border-black/[0.06] bg-white/95 px-3 pb-6 pt-2 backdrop-blur-md">
-        <button type="button" onClick={() => onOpenShop(shop.id)} className="flex w-[52px] flex-col items-center gap-0.5 active:opacity-60">
+        <button type="button" onClick={() => onOpenShop(shop.id)} className="flex w-[48px] flex-col items-center gap-0.5 active:opacity-60">
           <ShoppingBag className="h-[20px] w-[20px] text-black/70" strokeWidth={2} />
           <span className="text-[10px] text-black/50">店铺</span>
         </button>
-        <button type="button" onClick={() => onToast('客服（演示）')} className="flex w-[52px] flex-col items-center gap-0.5 active:opacity-60">
+        <button type="button" onClick={() => onToast('客服（演示）')} className="flex w-[48px] flex-col items-center gap-0.5 active:opacity-60">
           <MessageSquare className="h-[20px] w-[20px] text-black/70" strokeWidth={2} />
           <span className="text-[10px] text-black/50">客服</span>
         </button>
@@ -1730,14 +1753,14 @@ function ProductPage({
           className="flex w-[52px] flex-col items-center gap-0.5 active:opacity-60"
         >
           <Star className={`h-[20px] w-[20px] ${faved ? 'fill-[#FFA400] text-[#FFA400]' : 'text-black/70'}`} strokeWidth={2} />
-          <span className={`text-[10px] ${faved ? 'text-[#FFA400]' : 'text-black/50'}`}>收藏</span>
+          <span className={`text-[10px] ${faved ? 'font-medium text-[#FFA400]' : 'text-black/50'}`}>{favCount}</span>
         </button>
-        <div className="ml-1 flex min-w-0 flex-1 gap-2">
-          <button type="button" onClick={() => openSku('cart')} className="h-11 min-w-0 flex-1 rounded-l-full bg-[#FFA400] text-[15px] font-semibold text-white active:opacity-85">
+        <div className="ml-1 flex min-w-0 flex-1 overflow-hidden rounded-xl">
+          <button type="button" onClick={() => openSku('cart')} className="h-11 min-w-0 flex-1 bg-[#FFB400] text-[15px] font-semibold text-white active:opacity-85">
             加入购物车
           </button>
-          <button type="button" onClick={() => openSku('buy')} className="h-11 min-w-0 flex-1 rounded-r-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
-            立即购买
+          <button type="button" onClick={() => openSku('buy')} className="h-11 min-w-0 flex-1 bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
+            领券购买
           </button>
         </div>
       </div>
@@ -1870,7 +1893,7 @@ function CartPage({
                             reload();
                             if (c.qty <= 1) onToast('已从购物车移除');
                           }}
-                          className="grid h-6 w-6 place-items-center rounded-full border border-black/15 text-black/60 active:opacity-60"
+                          className="grid h-6 w-6 place-items-center rounded-[7px] border border-black/15 text-black/60 active:opacity-60"
                         >
                           <Minus className="h-3.5 w-3.5" strokeWidth={2.6} />
                         </button>
@@ -1882,7 +1905,7 @@ function CartPage({
                             tbUpdateCartItem(uid, c.pid, sig, { qty: c.qty + 1 });
                             reload();
                           }}
-                          className="grid h-6 w-6 place-items-center rounded-full border border-black/15 text-black/60 active:opacity-60"
+                          className="grid h-6 w-6 place-items-center rounded-[7px] border border-black/15 text-black/60 active:opacity-60"
                         >
                           <Plus className="h-3.5 w-3.5" strokeWidth={2.6} />
                         </button>
@@ -1910,7 +1933,7 @@ function CartPage({
                     setManage(false);
                     onToast('已删除所选商品');
                   }}
-                  className="rounded-full border border-[#FF5000] px-4 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70"
+                  className="rounded-lg border border-[#FF5000] px-4 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70"
                 >
                   删除所选
                 </button>
@@ -1942,7 +1965,7 @@ function CartPage({
             <button
               type="button"
               onClick={checkout}
-              className={`ml-1 h-10 rounded-full px-6 text-[15px] font-semibold text-white ${checkedItems.length > 0 ? 'bg-gradient-to-r from-[#FF7A21] to-[#FF4400] active:opacity-85' : 'bg-black/20'}`}
+              className={`ml-1 h-10 rounded-xl px-6 text-[15px] font-semibold text-white ${checkedItems.length > 0 ? 'bg-gradient-to-r from-[#FF7A21] to-[#FF4400] active:opacity-85' : 'bg-black/20'}`}
             >
               结算{checkedItems.length > 0 ? `(${checkedItems.length})` : ''}
             </button>
@@ -1950,7 +1973,7 @@ function CartPage({
         </div>
       ) : (
         <div className="absolute inset-x-0 bottom-0 z-30 border-t border-black/[0.06] bg-white/95 px-3 pb-6 pt-2 backdrop-blur-md">
-          <button type="button" onClick={onOpenHome} className="h-10 w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
+          <button type="button" onClick={onOpenHome} className="h-10 w-full rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
             去逛逛
           </button>
         </div>
@@ -2050,7 +2073,7 @@ function CheckoutPage({
                         type="button"
                         aria-label="减少"
                         onClick={() => setQtyOverride((q) => ({ ...q, [it.pid + it.img]: Math.max(1, qty - 1) }))}
-                        className="grid h-6 w-6 place-items-center rounded-full border border-black/15 text-black/60 active:opacity-60"
+                        className="grid h-6 w-6 place-items-center rounded-[7px] border border-black/15 text-black/60 active:opacity-60"
                       >
                         <Minus className="h-3.5 w-3.5" strokeWidth={2.6} />
                       </button>
@@ -2059,7 +2082,7 @@ function CheckoutPage({
                         type="button"
                         aria-label="增加"
                         onClick={() => setQtyOverride((q) => ({ ...q, [it.pid + it.img]: Math.min(99, qty + 1) }))}
-                        className="grid h-6 w-6 place-items-center rounded-full border border-black/15 text-black/60 active:opacity-60"
+                        className="grid h-6 w-6 place-items-center rounded-[7px] border border-black/15 text-black/60 active:opacity-60"
                       >
                         <Plus className="h-3.5 w-3.5" strokeWidth={2.6} />
                       </button>
@@ -2115,7 +2138,7 @@ function CheckoutPage({
           <span className="text-[13px] text-black/50">合计：</span>
           <Price value={total} size={20} />
         </div>
-        <button type="button" onClick={submit} className="h-11 rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-8 text-[15px] font-semibold text-white active:opacity-85">
+        <button type="button" onClick={submit} className="h-11 rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-8 text-[15px] font-semibold text-white active:opacity-85">
           提交订单
         </button>
       </div>
@@ -2174,6 +2197,7 @@ function PaySheet({
   const [chans, setChans] = useState<TbPayChannel[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [paying, setPaying] = useState(false);
+  const [paid, setPaid] = useState(false);
   const [errMsg, setErrMsg] = useState('');
 
   useEffect(() => {
@@ -2213,64 +2237,84 @@ function PaySheet({
       });
       // 站内消息：支付成功（交易物流）
       tbPushMsg(uid, { kind: 'logistics', title: '支付成功', text: `订单已支付 ¥${fmtMoney(amount)}（${selChan.isFc ? selChan.label : labelMap[selChan.methodId] ?? selChan.label}），商家将尽快发货`, orderId });
-      onSuccess(orderId);
+      // 成功态：绿色对勾短展示后跳转订单详情
+      setPaid(true);
+      window.setTimeout(() => onSuccess(orderId), 750);
     } finally {
       setPaying(false);
     }
   };
 
   return (
-    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={paying ? undefined : onClose}>
-      <div className="rounded-t-2xl bg-white pb-8" onClick={(e) => e.stopPropagation()}>
-        <div className="relative flex flex-col items-center pb-3 pt-4">
+    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/50" onClick={paying ? undefined : onClose}>
+      <div className="max-h-[88%] overflow-y-auto rounded-t-[22px] bg-[#F6F7F9] pb-8 [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()}>
+        {/* 顶部拖拽指示条 + 标题 */}
+        <div className="flex justify-center pt-2.5">
+          <span className="h-1 w-9 rounded-full bg-black/12" />
+        </div>
+        <div className="relative flex items-center justify-center pb-2 pt-2">
           <span className="text-[16px] font-semibold text-black/85">收银台</span>
-          <button type="button" aria-label="关闭" onClick={onClose} disabled={paying} className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-black/[0.04] disabled:opacity-40">
+          <button type="button" aria-label="关闭" onClick={onClose} disabled={paying} className="absolute right-3 top-1.5 grid h-8 w-8 place-items-center rounded-full bg-black/[0.05] disabled:opacity-40">
             <X className="h-4 w-4 text-black/60" strokeWidth={2.4} />
           </button>
         </div>
-        <div className="pb-3 text-center">
-          <span className="text-[13px] text-black/45">应付金额</span>
-          <div className="mt-1">
-            <Price value={amount} size={34} />
+        <div className="px-4">
+          {/* 金额卡（订单信息 + 大数字） */}
+          <div className="rounded-2xl bg-white px-4 py-4 text-center shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+            {paid ? (
+              <>
+                <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#00B578]/10">
+                  <CircleCheck className="h-7 w-7 text-[#00B578]" strokeWidth={2.2} />
+                </span>
+                <div className="mt-2 text-[17px] font-semibold text-black/85">支付成功</div>
+                <div className="mt-0.5 text-[12px] text-black/35">{goodsBrief}</div>
+              </>
+            ) : (
+              <>
+                <div className="truncate text-[12px] text-black/40">{goodsBrief}</div>
+                <div className="mt-1.5 flex items-baseline justify-center gap-1.5">
+                  <Price value={amount} size={40} />
+                </div>
+                <div className="mt-1 text-[11px] text-black/30">订单号 {orderId} · 淘宝</div>
+              </>
+            )}
           </div>
-        </div>
-        <div className="max-h-[320px] overflow-y-auto px-4">
+          {/* 渠道列表（白色圆角卡分组，方形圆角图标） */}
           {chans === null ? (
             <div className="grid place-items-center py-10 text-[14px] text-black/40">正在获取支付方式…</div>
           ) : chans.length === 0 ? (
-            <div className="py-8 text-center text-[14px] text-black/40">
+            <div className="mt-3 rounded-2xl bg-white py-8 text-center text-[14px] text-black/40">
               暂无可用支付方式
               <div className="mt-1 text-[12px] text-black/35">请先在微信/QQ 中开通钱包或添加银行卡</div>
             </div>
           ) : (
-            <div className="space-y-1.5">
-              {/* 渠道分组标签 */}
+            <div className="mt-3 space-y-3">
               {(['wx', 'qq'] as const).map((idp) => {
                 const list = chans.filter((c) => c.idp === idp);
                 if (list.length === 0) return null;
                 return (
-                  <div key={idp}>
-                    <div className="px-1 pb-1 pt-2 text-[12px] font-medium text-black/35">{idp === 'wx' ? '微信支付' : 'QQ支付'}</div>
+                  <div key={idp} className="overflow-hidden rounded-2xl bg-white px-2 py-1 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+                    <div className="px-2.5 pb-0.5 pt-2 text-[12px] font-medium text-black/35">{idp === 'wx' ? '微信支付' : 'QQ支付'}</div>
                     {list.map((c) => (
                       <button
                         key={c.key}
                         type="button"
-                        disabled={paying}
+                        disabled={paying || paid}
                         onClick={() => {
                           setSel(c.key);
                           setErrMsg(c.insufficient ? '该渠道额度不足，请选择其他支付方式' : '');
                         }}
-                        className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left ${sel === c.key ? 'border-[#FF5000] bg-[#FF5000]/[0.04]' : 'border-black/[0.08]'} ${c.insufficient ? 'opacity-50' : ''}`}
+                        className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-3 text-left transition-colors ${sel === c.key && !c.insufficient ? 'bg-[#FFF3EC]' : ''} ${c.insufficient ? 'opacity-45' : 'active:bg-black/[0.03]'}`}
                       >
-                        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-white ${c.idp === 'wx' ? 'bg-[#07C160]' : 'bg-[#12B7F5]'}`}>
-                          {c.isFc ? <Heart className="h-4.5 w-4.5" strokeWidth={2.2} /> : c.methodId === 'balance' ? <Wallet className="h-[18px] w-[18px]" strokeWidth={2.2} /> : <CreditCard className="h-[18px] w-[18px]" strokeWidth={2.2} />}
+                        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-[10px] text-white shadow-sm ${c.idp === 'wx' ? 'bg-[#07C160]' : 'bg-[#12B7F5]'}`}>
+                          {c.isFc ? <Heart className="h-4 w-4" strokeWidth={2.2} /> : c.methodId === 'balance' ? <Wallet className="h-[17px] w-[17px]" strokeWidth={2.2} /> : <CreditCard className="h-[17px] w-[17px]" strokeWidth={2.2} />}
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-[15px] font-medium text-black/85">{c.label}</span>
                           <span className="block truncate text-[12px] text-black/40">{c.sub}</span>
                         </span>
-                        {c.insufficient ? <span className="shrink-0 text-[12px] text-red-400">额度不足</span> : null}
-                        <span className={`grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border-2 ${sel === c.key && !c.insufficient ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}>
+                        {c.insufficient ? <span className="shrink-0 rounded-md bg-black/[0.04] px-1.5 py-0.5 text-[11px] text-red-400">额度不足</span> : null}
+                        <span className={`grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full border-2 ${sel === c.key && !c.insufficient ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}>
                           {sel === c.key && !c.insufficient ? <CircleCheck className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
                         </span>
                       </button>
@@ -2280,18 +2324,27 @@ function PaySheet({
               })}
             </div>
           )}
-        </div>
-        {errMsg ? <div className="px-4 pt-2 text-center text-[12px] text-red-500">{errMsg}</div> : null}
-        <div className="px-4 pt-3">
-          <button
-            type="button"
-            onClick={pay}
-            disabled={paying || !selChan || chans?.length === 0}
-            className="h-12 w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[16px] font-semibold text-white active:opacity-85 disabled:opacity-50"
-          >
-            {paying ? '正在支付…' : `立即支付 ¥${fmtMoney(amount)}`}
-          </button>
-          {selChan?.isFc ? <div className="pt-1.5 text-center text-[11px] text-black/35">使用亲属卡支付后，赠卡人将收到消费通知</div> : null}
+          {errMsg && !paid ? <div className="pt-2 text-center text-[12px] text-red-500">{errMsg}</div> : null}
+          {/* 支付按钮（方形圆角 + 支付中转圈） */}
+          <div className="pt-4">
+            <button
+              type="button"
+              onClick={pay}
+              disabled={paying || paid || !selChan || chans?.length === 0}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[16px] font-semibold text-white shadow-[0_6px_16px_rgba(255,80,0,0.28)] active:opacity-85 disabled:opacity-50"
+            >
+              {paying ? (
+                <>
+                  <Loader2 className="h-4.5 w-4.5 animate-spin" strokeWidth={2.4} />
+                  正在支付…
+                </>
+              ) : (
+                `立即支付 ¥${fmtMoney(amount)}`
+              )}
+            </button>
+            {selChan?.isFc && !paid ? <div className="pt-1.5 text-center text-[11px] text-black/35">使用亲属卡支付后，赠卡人将收到消费通知</div> : null}
+            <div className="pt-2.5 text-center text-[11px] text-black/30">由微信支付 / QQ钱包提供安全保障 · 支付即同意《淘宝支付规则》</div>
+          </div>
         </div>
       </div>
     </div>
@@ -2457,7 +2510,8 @@ function OrderCard({
       case 'pendingDeliver':
         return '待发货';
       case 'shipped':
-        return '卖家已发货';
+        // 需求：已发货待收货的时候显示「已发货」（动态状态，不再写死卖家已发货）
+        return '已发货';
       case 'completed':
         return '交易成功';
       case 'cancelled':
@@ -2529,31 +2583,31 @@ function OrderCard({
                 onClick={() => {
                   if (tbCancelOrder(uid, o.id, '买家主动取消')) onToast('订单已取消');
                 }}
-                className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70"
+                className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70"
               >
                 取消订单
               </button>
-              <button type="button" onClick={onPay} className="rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-3.5 py-1.5 text-[13px] font-semibold text-white active:opacity-85">
+              <button type="button" onClick={onPay} className="rounded-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-3.5 py-1.5 text-[13px] font-semibold text-white active:opacity-85">
                 继续付款
               </button>
             </>
           ) : null}
           {o.status === 'pendingDeliver' ? (
             <>
-              <button type="button" onClick={() => onToast('已提醒商家尽快发货')} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+              <button type="button" onClick={() => onToast('已提醒商家尽快发货')} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 提醒发货
               </button>
-              <button type="button" onClick={onOpen} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+              <button type="button" onClick={onOpen} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 退款
               </button>
             </>
           ) : null}
           {o.status === 'shipped' ? (
             <>
-              <button type="button" onClick={() => onToast('收货时间已延长 7 天')} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+              <button type="button" onClick={() => onToast('收货时间已延长 7 天')} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 延长收货
               </button>
-              <button type="button" onClick={() => onOpenLogistics(o.id)} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+              <button type="button" onClick={() => onOpenLogistics(o.id)} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 查看物流
               </button>
               <button
@@ -2564,7 +2618,7 @@ function OrderCard({
                     onToast('确认收货成功');
                   }
                 }}
-                className="rounded-full bg-[#FFF1E6] px-3.5 py-1.5 text-[13px] font-semibold text-[#FF5000] active:opacity-80"
+                className="rounded-lg bg-[#FFF1E6] px-3.5 py-1.5 text-[13px] font-semibold text-[#FF5000] active:opacity-80"
               >
                 确认收货
               </button>
@@ -2573,19 +2627,19 @@ function OrderCard({
           {o.status === 'completed' ? (
             <>
               {o.review ? (
-                <span className="rounded-full border border-black/[0.08] px-3.5 py-1.5 text-[13px] text-black/30">已评价</span>
+                <span className="rounded-lg border border-black/[0.08] px-3.5 py-1.5 text-[13px] text-black/30">已评价</span>
               ) : (
-                <button type="button" onClick={() => onRate(o.id)} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                <button type="button" onClick={() => onRate(o.id)} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                   评价
                 </button>
               )}
-              <button type="button" onClick={rebuy} className="rounded-full border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70">
+              <button type="button" onClick={rebuy} className="rounded-lg border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70">
                 再买一单
               </button>
             </>
           ) : null}
           {o.status === 'cancelled' ? (
-            <button type="button" onClick={rebuy} className="rounded-full border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70">
+            <button type="button" onClick={rebuy} className="rounded-lg border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70">
               再买一单
             </button>
           ) : null}
@@ -2792,7 +2846,7 @@ function OrderDetailPage({
               <div className="ml-2 my-1 h-6 w-px border-l border-dashed border-black/15" />
               <div className="flex items-center gap-2">
                 <MapPin className="h-5 w-5 shrink-0 text-black/75" strokeWidth={2.1} />
-                <span className="min-w-0 truncate text-[17px] font-semibold text-black/85">送至 {o.address?.detail ?? '待填写地址'}</span>
+                <span className="min-w-0 truncate text-[17px] font-semibold text-black/85">送至 {o.address ? tbFullAddr(o.address) : '待填写地址'}</span>
                 <button type="button" onClick={onOpenAddrPicker} className="ml-auto flex shrink-0 items-center text-[13px] text-black/45 active:opacity-70">
                   修改
                   <ChevronRight className="h-3.5 w-3.5" />
@@ -2819,7 +2873,7 @@ function OrderDetailPage({
               </div>
               {itemRows('pay')}
               <div className="mt-2.5 flex justify-end">
-                <button type="button" onClick={addAllToCart} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
+                <button type="button" onClick={addAllToCart} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
                   加入购物车
                 </button>
               </div>
@@ -2902,13 +2956,13 @@ function OrderDetailPage({
               </div>
               {itemRows('deliver')}
               <div className="mt-3 flex justify-end gap-2">
-                <button type="button" onClick={() => onToast('可在商品页重新选择款式')} className="rounded-full bg-[#FFF1E6] px-3.5 py-1.5 text-[13px] text-[#FF6A1E] active:opacity-75">
+                <button type="button" onClick={() => onToast('可在商品页重新选择款式')} className="rounded-lg bg-[#FFF1E6] px-3.5 py-1.5 text-[13px] text-[#FF6A1E] active:opacity-75">
                   更换款式
                 </button>
-                <button type="button" onClick={addAllToCart} className="rounded-full bg-black/[0.04] px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
+                <button type="button" onClick={addAllToCart} className="rounded-lg bg-black/[0.04] px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
                   加入购物车
                 </button>
-                <button type="button" onClick={() => void applyRefund()} className="rounded-full bg-black/[0.04] px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
+                <button type="button" onClick={() => void applyRefund()} className="rounded-lg bg-black/[0.04] px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
                   退款
                 </button>
               </div>
@@ -3046,7 +3100,7 @@ function OrderDetailPage({
                 <div className="flex items-center gap-2">
                   <MapPin className="h-5 w-5 shrink-0 text-black/75" strokeWidth={2.1} />
                   <span className="shrink-0 text-[16px] font-semibold text-[#00B578]">已签收</span>
-                  <span className="min-w-0 truncate text-[16px] font-semibold text-black/85">{o.address.detail}</span>
+                  <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-black/85">{o.address ? tbFullAddr(o.address) : ''}</span>
                   <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-black/25" />
                 </div>
                 <div className="mt-1 pl-7 text-[13px] text-black/45">
@@ -3075,13 +3129,13 @@ function OrderDetailPage({
                 <span className="shrink-0 text-[13px] text-[#FF4D88]">更多</span>
               </button>
               <div className="mt-3 flex justify-end gap-2">
-                <button type="button" onClick={() => onToast('已复制商品信息，可去闲鱼转卖')} className="rounded-full bg-black/[0.04] px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
+                <button type="button" onClick={() => onToast('已复制商品信息，可去闲鱼转卖')} className="rounded-lg border border-black/12 bg-white px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
                   闲鱼转卖
                 </button>
-                <button type="button" onClick={() => void applyRefund()} className="rounded-full bg-black/[0.04] px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
+                <button type="button" onClick={() => void applyRefund()} className="rounded-lg border border-black/12 bg-white px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
                   申请售后
                 </button>
-                <button type="button" onClick={addAllToCart} className="rounded-full bg-[#FFF1E6] px-3.5 py-1.5 text-[13px] font-medium text-[#FF6A1E] active:opacity-75">
+                <button type="button" onClick={addAllToCart} className="rounded-lg bg-[#FFF1E6] px-3.5 py-1.5 text-[13px] font-medium text-[#FF6A1E] active:opacity-75">
                   加入购物车
                 </button>
               </div>
@@ -3193,7 +3247,7 @@ function OrderDetailPage({
             </div>
             {o.discount > 0 ? <div className="text-[11px] text-[#FF4400]">共减 ¥{fmtMoney(o.discount)}</div> : null}
           </div>
-          <button type="button" onClick={() => onPayOrder(o.id)} className="shrink-0 rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-5 py-2 text-center text-white active:opacity-85">
+          <button type="button" onClick={() => onPayOrder(o.id)} className="shrink-0 rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-5 py-2 text-center text-white active:opacity-85">
             <span className="block text-[14px] font-semibold leading-[18px]">继续付款</span>
             <span className="block text-[10px] leading-[14px] opacity-85">剩余{countdown}</span>
           </button>
@@ -3210,10 +3264,10 @@ function OrderDetailPage({
             <span className="text-[10px] text-black/50">投诉</span>
           </button>
           <div className="ml-auto flex gap-2">
-            <button type="button" onClick={() => onToast('开票申请已提交')} className="rounded-full bg-black/[0.05] px-4 py-2 text-[13px] text-black/70 active:opacity-70">
+            <button type="button" onClick={() => onToast('开票申请已提交')} className="rounded-lg bg-black/[0.05] px-4 py-2 text-[13px] text-black/70 active:opacity-70">
               申请开票
             </button>
-            <button type="button" onClick={() => onToast('已提醒商家尽快发货')} className="rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-4 py-2 text-[13px] font-semibold text-white active:opacity-85">
+            <button type="button" onClick={() => onToast('已提醒商家尽快发货')} className="rounded-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-4 py-2 text-[13px] font-semibold text-white active:opacity-85">
               催发货
             </button>
           </div>
@@ -3221,13 +3275,13 @@ function OrderDetailPage({
       ) : null}
       {o.status === 'shipped' ? (
         <div className="absolute inset-x-0 bottom-0 z-30 flex items-center justify-end gap-2 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
-          <button type="button" onClick={() => void applyRefund()} className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
+          <button type="button" onClick={() => void applyRefund()} className="rounded-lg border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
             退款
           </button>
-          <button type="button" onClick={() => onToast('收货时间已延长 7 天')} className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
+          <button type="button" onClick={() => onToast('收货时间已延长 7 天')} className="rounded-lg border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
             延长收货
           </button>
-          <button type="button" onClick={() => onOpenLogistics(o.id)} className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
+          <button type="button" onClick={() => onOpenLogistics(o.id)} className="rounded-lg border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
             查看物流
           </button>
           <button
@@ -3239,7 +3293,7 @@ function OrderDetailPage({
                 setTick((n) => n + 1);
               }
             }}
-            className="rounded-full bg-[#FFF1E6] px-4 py-2 text-[13px] font-semibold text-[#FF5000] active:opacity-80"
+            className="rounded-lg bg-[#FFF1E6] px-4 py-2 text-[13px] font-semibold text-[#FF5000] active:opacity-80"
           >
             确认收货
           </button>
@@ -3252,18 +3306,18 @@ function OrderDetailPage({
             <span className="text-[10px] text-black/50">更多</span>
           </button>
           <div className="ml-auto flex items-center gap-2">
-            <button type="button" onClick={() => onToast('已复制商品信息，可去闲鱼转卖')} className="rounded-full border border-black/12 px-3.5 py-2 text-[13px] text-black/60 active:opacity-70">
+            <button type="button" onClick={() => onToast('已复制商品信息，可去闲鱼转卖')} className="rounded-lg border border-black/12 bg-white px-3.5 py-2 text-[13px] text-black/60 active:opacity-70">
               闲鱼转卖
             </button>
-            <button type="button" onClick={addAllToCart} className="rounded-full border border-black/12 px-3.5 py-2 text-[13px] text-black/60 active:opacity-70">
+            <button type="button" onClick={addAllToCart} className="rounded-lg border border-black/12 bg-white px-3.5 py-2 text-[13px] text-black/60 active:opacity-70">
               加入购物车
             </button>
             {!o.review ? (
-              <button type="button" onClick={() => onRate(o.id)} className="rounded-full border border-[#FF5000] px-3.5 py-2 text-[13px] font-medium text-[#FF5000] active:opacity-70">
+              <button type="button" onClick={() => onRate(o.id)} className="rounded-lg border border-[#FF5000] bg-white px-3.5 py-2 text-[13px] font-medium text-[#FF5000] active:opacity-70">
                 评价
               </button>
             ) : null}
-            <button type="button" onClick={addAllToCart} className="rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-4 py-2 text-[13px] font-semibold text-white active:opacity-85">
+            <button type="button" onClick={addAllToCart} className="rounded-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-4 py-2 text-[13px] font-semibold text-white active:opacity-85">
               再买一单
             </button>
           </div>
@@ -3271,7 +3325,7 @@ function OrderDetailPage({
       ) : null}
       {o.status === 'cancelled' && !o.refund ? (
         <div className="absolute inset-x-0 bottom-0 z-30 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
-          <button type="button" onClick={addAllToCart} className="h-11 w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
+          <button type="button" onClick={addAllToCart} className="h-11 w-full rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
             再买一单
           </button>
         </div>
@@ -3452,10 +3506,10 @@ function LogisticsPage({
                         </button>
                       </div>
                       <div className="mt-2.5 flex gap-2.5">
-                        <button type="button" onClick={() => onToast('已生成帮取码，可分享给亲友')} className="h-9 flex-1 rounded-full border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
+                        <button type="button" onClick={() => onToast('已生成帮取码，可分享给亲友')} className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
                           找人帮取
                         </button>
-                        <button type="button" onClick={() => onToast('已向驿站发送取件请求')} className="h-9 flex-1 rounded-full border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
+                        <button type="button" onClick={() => onToast('已向驿站发送取件请求')} className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
                           一键取件
                         </button>
                       </div>
@@ -3586,7 +3640,7 @@ function RateSheet({ order, uid, onClose, onToast }: { order: TbOrder; uid: stri
               key={t}
               type="button"
               onClick={() => setTags((v) => (v.includes(t) ? v.filter((x) => x !== t) : [...v, t]))}
-              className={`rounded-full border px-3 py-1 text-[12px] ${tags.includes(t) ? 'border-[#FF5000] bg-[#FF5000]/[0.06] text-[#FF5000]' : 'border-black/10 text-black/55'}`}
+              className={`rounded-lg border px-3 py-1 text-[12px] ${tags.includes(t) ? 'border-[#FF5000] bg-[#FF5000]/[0.06] text-[#FF5000]' : 'border-black/10 text-black/55'}`}
             >
               {t}
             </button>
@@ -3795,7 +3849,7 @@ function MePage({
                     setTick((n) => n + 1);
                     onToast(`领取成功：${c.name} ¥${c.amount}`);
                   }}
-                  className={`mt-1.5 w-full rounded-full py-1 text-[11px] font-medium ${claimed ? 'bg-black/[0.06] text-black/40' : 'bg-[#FF5000] text-white active:opacity-80'}`}
+                  className={`mt-1.5 w-full rounded-lg py-1 text-[11px] font-medium ${claimed ? 'bg-black/[0.06] text-black/40' : 'bg-[#FF5000] text-white active:opacity-80'}`}
                 >
                   {claimed ? '已领取' : '去领取'}
                 </button>
@@ -3938,7 +3992,7 @@ function MsgsPage({ uid, onBack, onOpenOrder }: { uid: string; onBack: () => voi
 // ---------------- 地址管理 ----------------
 
 function AddressListPage({ uid, onBack, onEdit, onToast, picker }: { uid: string; onBack: () => void; onEdit: (a: TbAddress | null) => void; onToast: (m: string) => void; picker?: boolean }) {
-  const [list, setList] = useState<TbAddress[]>(() => tbLoadAddrs(uid));
+  const [list] = useState<TbAddress[]>(() => tbLoadAddrs(uid));
   const curId = tbCurAddrId(uid);
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
@@ -3973,8 +4027,12 @@ function AddressListPage({ uid, onBack, onEdit, onToast, picker }: { uid: string
                   type="button"
                   onClick={() => {
                     if (picker) {
+                      // 地址选择模式（结算页）：点击选中返回
                       tbSetCurAddr(uid, a.id);
                       onToast('已选择该地址');
+                    } else {
+                      // 需求：地址列表不显示删除/编辑按钮，点击地址直接进入编辑
+                      onEdit(a);
                     }
                   }}
                   className="flex w-full items-start gap-2.5 text-left"
@@ -3988,40 +4046,17 @@ function AddressListPage({ uid, onBack, onEdit, onToast, picker }: { uid: string
                       <span className="text-[13px] text-black/45">{a.phone}</span>
                       {a.tag ? <span className="rounded bg-[#FF5000]/[0.08] px-1.5 py-0.5 text-[10px] text-[#FF5000]">{a.tag}</span> : null}
                     </span>
-                    <span className="mt-0.5 block text-[13px] leading-5 text-black/60">{a.region} {a.detail}</span>
+                    <span className="mt-0.5 block text-[13px] leading-5 text-black/60">{tbFullAddr(a)}</span>
                   </span>
+                  {picker ? null : <Pencil className="mt-1 h-3.5 w-3.5 shrink-0 text-black/25" />}
                 </button>
-                <div className="mt-2 flex justify-end gap-2 border-t border-black/[0.05] pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (list.length <= 1) {
-                        onToast('至少保留一个地址');
-                        return;
-                      }
-                      const next = list.filter((x) => x.id !== a.id);
-                      tbSaveAddrs(uid, next);
-                      if (curId === a.id) tbSetCurAddr(uid, next[0]?.id ?? '');
-                      setList(next);
-                      onToast('地址已删除');
-                    }}
-                    className="flex items-center gap-1 rounded-full border border-black/10 px-3 py-1.5 text-[12px] text-black/55 active:opacity-70"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    删除
-                  </button>
-                  <button type="button" onClick={() => onEdit(a)} className="flex items-center gap-1 rounded-full border border-black/10 px-3 py-1.5 text-[12px] text-black/55 active:opacity-70">
-                    <SettingsIcon className="h-3.5 w-3.5" />
-                    编辑
-                  </button>
-                </div>
               </div>
             ))}
           </div>
         )}
       </div>
       <div className="absolute inset-x-0 bottom-0 z-30 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
-        <button type="button" onClick={() => onEdit(null)} className="h-11 w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
+        <button type="button" onClick={() => onEdit(null)} className="h-11 w-full rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
           新增收货地址
         </button>
       </div>
@@ -4029,19 +4064,124 @@ function AddressListPage({ uid, onBack, onEdit, onToast, picker }: { uid: string
   );
 }
 
-/** 新增/编辑地址（截图10：地图选址 + 智能粘贴 + 省市区 + 默认地址 + 6 标签） */
-const TB_REGIONS = ['浙江省杭州市西湖区文新街道', '河南省濮阳市濮阳县徐镇镇', '广东省东莞市南城街道', '贵州省贵阳市乌当区'];
+/** 新增/编辑地址（截图10：真实地图选址 + 智能粘贴 + 省市区 + 默认地址 + 6 标签） */
+const TB_REGIONS: { name: string; lat: number; lon: number }[] = [
+  { name: '浙江省杭州市西湖区文新街道', lat: 30.2845, lon: 120.0932 },
+  { name: '河南省濮阳市濮阳县徐镇镇', lat: 35.7099, lon: 115.395 },
+  { name: '广东省东莞市南城街道', lat: 23.0205, lon: 113.7563 },
+  { name: '贵州省贵阳市乌当区', lat: 26.6497, lon: 106.76 },
+];
 const TB_ADDR_TAGS = ['家', '公司', '学校', '父母', '朋友', '自定义'];
+
+/** 经纬度 → OSM 瓦片坐标（浮点） */
+function tbLon2TileX(lon: number, z: number): number {
+  return ((lon + 180) / 360) * 2 ** z;
+}
+function tbLat2TileY(lat: number, z: number): number {
+  const r = (Math.max(-85.05, Math.min(85.05, lat)) * Math.PI) / 180;
+  return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z;
+}
+
+/** 真实地图（OpenStreetMap 瓦片，服务端 /api/tb-tile 代理 + 缓存；3×3 视口，中心=定位点） */
+function TbRealMap({ lat, lon, zoom = 15 }: { lat: number; lon: number; zoom?: number }) {
+  const tx = tbLon2TileX(lon, zoom);
+  const ty = tbLat2TileY(lat, zoom);
+  const itx = Math.floor(tx);
+  const ity = Math.floor(ty);
+  const fx = tx - itx;
+  const fy = ty - ity;
+  return (
+    <div className="absolute inset-0 overflow-hidden bg-[#E8EDF2]" aria-label="选址地图">
+      <div
+        className="absolute left-1/2 top-1/2 h-[768px] w-[768px]"
+        style={{ transform: `translate(calc(-50% - ${(fx - 0.5) * 256}px), calc(-50% - ${(fy - 0.5) * 256}px))` }}
+      >
+        {[-1, 0, 1].map((i) =>
+          [-1, 0, 1].map((j) => (
+            <img
+              key={`${i},${j}`}
+              src={`/api/tb-tile?z=${zoom}&x=${itx + i}&y=${ity + j}`}
+              alt=""
+              draggable={false}
+              className="absolute h-[256px] w-[256px] max-w-none select-none bg-[#E8EDF2]"
+              style={{ left: (i + 1) * 256, top: (j + 1) * 256 }}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
 
 function AddressEditPage({ uid, editing, onBack, onToast }: { uid: string; editing: TbAddress | null; onBack: () => void; onToast: (m: string) => void }) {
   const [name, setName] = useState(editing?.name ?? '');
   const [phone, setPhone] = useState(editing?.phone ?? '');
-  const [region, setRegion] = useState(editing?.region?.replace(/\s+/g, '') ?? TB_REGIONS[0]);
+  const [region, setRegion] = useState(editing?.region?.replace(/\s+/g, '') ?? TB_REGIONS[0].name);
   const [regionOpen, setRegionOpen] = useState(false);
   const [detail, setDetail] = useState(editing?.detail ?? '');
   const [tag, setTag] = useState(editing?.tag && TB_ADDR_TAGS.includes(editing.tag) ? editing.tag : editing ? '自定义' : '家');
   const [customTag, setCustomTag] = useState(editing?.tag && !TB_ADDR_TAGS.includes(editing.tag) ? editing.tag : '');
   const [isDefault, setIsDefault] = useState(() => (editing ? tbCurAddrId(uid) === editing.id : tbLoadAddrs(uid).length === 0));
+  /** 真实地图：中心坐标（预设区域坐标 / 搜索选中点） */
+  const [latLon, setLatLon] = useState<{ lat: number; lon: number }>(() => {
+    const hit = TB_REGIONS.find((r) => r.name === (editing?.region?.replace(/\s+/g, '') ?? ''));
+    return hit ? { lat: hit.lat, lon: hit.lon } : { lat: TB_REGIONS[0].lat, lon: TB_REGIONS[0].lon };
+  });
+  /** 逆地理编码得到的真实地址行（省市区街道/村；需求：地图显示真实地址） */
+  const [geoLine, setGeoLine] = useState('');
+  /** 地址搜索：关键词 + 候选（/api/tb-geo?q=，Nominatim 正向） */
+  const [searchKw, setSearchKw] = useState('');
+  const [suggests, setSuggests] = useState<{ label: string; tail: string; full: string; lat: number; lon: number }[]>([]);
+  const [searching, setSearching] = useState(false);
+  /** 删除确认（编辑态：顶栏「删除」→ 二次确认弹层） */
+  const [delOpen, setDelOpen] = useState(false);
+  /** 用户是否主动改过所在地区（选预设/搜索选中）：初始编辑已有地址时不让反解码覆盖原 region */
+  const regionTouched = useRef(!!editing);
+
+  // 逆地理编码：地图中心变化 → /api/tb-geo?lat&lon 拉取真实地址（600ms 防抖，失败静默回退预设名）
+  useEffect(() => {
+    let alive = true;
+    const t = window.setTimeout(() => {
+      fetch(`/api/tb-geo?lat=${latLon.lat}&lon=${latLon.lon}`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('geo failed'))))
+        .then((j: { region?: string; road?: string; formatted?: string }) => {
+          if (!alive) return;
+          const line = j.region || j.formatted || '';
+          if (line) {
+            setGeoLine(line);
+            // 真实反解码区域回填（仅新建/用户主动换过定位点时；编辑已有地址不覆盖原 region）
+            if (!regionTouched.current) setRegion(line.slice(0, 30));
+          }
+        })
+        .catch(() => undefined);
+    }, 600);
+    return () => {
+      alive = false;
+      window.clearTimeout(t);
+    };
+  }, [latLon]);
+
+  // 地址搜索建议：350ms 防抖（≥2 字才搜；setState 全部在定时器回调内，避免 effect 同步更新）
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      const k = searchKw.trim();
+      if (k.length < 2) {
+        setSuggests([]);
+        setSearching(false);
+        return;
+      }
+      setSearching(true);
+      fetch(`/api/tb-geo?q=${encodeURIComponent(k)}`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('search failed'))))
+        .then((arr: { label: string; tail: string; full: string; lat: number; lon: number }[]) => {
+          setSuggests(Array.isArray(arr) ? arr : []);
+        })
+        .catch(() => setSuggests([]))
+        .finally(() => setSearching(false));
+    }, 350);
+    return () => window.clearTimeout(t);
+  }, [searchKw]);
+
   const save = () => {
     if (!detail.trim()) {
       onToast('请填写详细地址与门牌号');
@@ -4072,6 +4212,21 @@ function AddressEditPage({ uid, editing, onBack, onToast }: { uid: string; editi
     }
     onBack();
   };
+  /** 删除地址（编辑态；至少保留一个） */
+  const removeAddr = () => {
+    if (!editing) return;
+    const list = tbLoadAddrs(uid);
+    if (list.length <= 1) {
+      onToast('至少保留一个地址');
+      setDelOpen(false);
+      return;
+    }
+    const next = list.filter((x) => x.id !== editing.id);
+    tbSaveAddrs(uid, next);
+    if (tbCurAddrId(uid) === editing.id) tbSetCurAddr(uid, next[0]?.id ?? '');
+    onToast('地址已删除');
+    onBack();
+  };
   const smartPaste = async () => {
     try {
       const t = await navigator.clipboard.readText();
@@ -4086,51 +4241,80 @@ function AddressEditPage({ uid, editing, onBack, onToast }: { uid: string; editi
       onToast('无法读取剪贴板，请手动填写');
     }
   };
+  /** 搜索建议选中：地图移到该点 + 真实区域回填 + 详址填入最小地名 */
+  const pickSuggest = (s: { label: string; tail: string; full: string; lat: number; lon: number }) => {
+    setLatLon({ lat: s.lat, lon: s.lon });
+    regionTouched.current = true;
+    setRegion(s.label.slice(0, 30));
+    if (!detail.trim()) setDetail(s.tail || s.label);
+    setSearchKw('');
+    setSuggests([]);
+    onToast('已定位到所选地址');
+  };
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
-      <TopBar title={editing ? '编辑地址' : '新增地址'} onBack={onBack} />
+      <TopBar
+        title={editing ? '编辑地址' : '新增地址'}
+        onBack={onBack}
+        right={
+          editing ? (
+            <button type="button" onClick={() => setDelOpen(true)} className="text-[14px] text-[#FF4400] active:opacity-60">
+              删除
+            </button>
+          ) : null
+        }
+      />
       <div className="flex-1 overflow-y-auto pb-32">
-        {/* 所在地区条（地图上方灰条） */}
-        <div className="bg-[#F5F6F7] px-4 py-1.5 text-[12px] text-black/45">{region}</div>
-        {/* 选址地图（高德风，X 关闭/定位回中） */}
-        <div className="relative h-[172px] overflow-hidden bg-[#E9EFF5]">
-          <div className="absolute -left-6 top-8 h-20 w-36 rounded-[46%] bg-[#C7DFF2]" />
-          <div className="absolute -right-8 bottom-[-24px] h-20 w-40 rounded-[48%] bg-[#C7DFF2]" />
-          <div className="absolute right-[22%] top-[-16px] h-16 w-28 rounded-[45%] bg-[#D8EDD3]" />
-          <div className="absolute left-0 right-0 top-[46%] h-[6px] -rotate-2 bg-white/90" />
-          <div className="absolute bottom-[-4%] left-[38%] top-[-4%] w-[5px] rotate-6 bg-white/90" />
-          <div className="absolute left-[-6%] right-[26%] top-[74%] h-[4px] rotate-3 bg-white/75" />
-          <span className="absolute left-[8%] top-[22%] text-[10px] text-black/25">蔡吉村</span>
-          <span className="absolute left-[7%] top-[38%] text-[10px] font-medium text-[#E05A5A]">蔡吉村村民委员会</span>
-          {/* 定位点 */}
-          <svg className="absolute left-1/2 top-[42%] -translate-x-1/2 -translate-y-1/2" width="30" height="38" viewBox="0 0 30 38" aria-hidden="true">
+        {/* 所在地区条（真实反解码地址：省市区/街道村） */}
+        <div className="bg-[#F5F6F7] px-4 py-1.5 text-[12px] text-black/45">{geoLine || region}</div>
+        {/* 真实选址地图（OpenStreetMap 瓦片 + 定位针，X 关闭/回正/图源标注） */}
+        <div className="relative h-[200px] overflow-hidden bg-[#E8EDF2]">
+          <TbRealMap lat={latLon.lat} lon={latLon.lon} zoom={15} />
+          {/* 中心定位针 */}
+          <svg className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-full drop-shadow-[0_3px_3px_rgba(0,0,0,0.3)]" width="32" height="40" viewBox="0 0 30 38" aria-hidden="true">
             <path d="M15 1C7.8 1 2 6.8 2 14c0 9.4 13 23 13 23s13-13.6 13-23C28 6.8 22.2 1 15 1Z" fill="#FF5000" />
             <circle cx="15" cy="14" r="5" fill="#fff" />
           </svg>
-          <button type="button" aria-label="关闭选址" onClick={() => onToast('已定位到所选地址')} className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-white shadow-sm active:opacity-70">
+          <button type="button" aria-label="关闭选址" onClick={() => onToast('已定位到所选地址')} className="absolute right-3 top-3 z-10 grid h-8 w-8 place-items-center rounded-full bg-white shadow-sm active:opacity-70">
             <X className="h-4 w-4 text-black/65" strokeWidth={2.4} />
           </button>
-          <button type="button" aria-label="回正定位" onClick={() => onToast('已回到当前位置')} className="absolute bottom-3 right-3 grid h-9 w-9 place-items-center rounded-full bg-white shadow-sm active:opacity-70">
+          <button type="button" aria-label="回正定位" onClick={() => {
+            const hit = TB_REGIONS.find((r) => r.name === region) ?? TB_REGIONS[0];
+            setLatLon({ lat: hit.lat, lon: hit.lon });
+            onToast('已回到所选区域');
+          }} className="absolute bottom-3 right-3 z-10 grid h-9 w-9 place-items-center rounded-full bg-white shadow-sm active:opacity-70">
             <Crosshair className="h-[18px] w-[18px] text-black/70" strokeWidth={2} />
           </button>
-          <span className="absolute bottom-2 left-3 flex items-center gap-0.5 text-[11px] font-semibold text-[#00A0F0]">
-            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-              <path d="M1 8.5 6 1v4h5L6 11V7H1Z" fill="#00A0F0" />
-            </svg>
-            高德地图
-          </span>
+          <span className="absolute bottom-1.5 left-2 z-10 text-[10px] text-black/45">© OpenStreetMap</span>
         </div>
         {/* 白色表单（截图10下半） */}
         <div className="relative z-10 -mt-3 rounded-t-2xl bg-white px-4 pb-4 pt-3">
-          <div className="flex items-center gap-2">
+          <div className="relative flex items-center gap-2">
             <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full bg-[#F5F6F7] px-3.5">
               <Search className="h-4 w-4 shrink-0 text-black/35" strokeWidth={2.2} />
-              <input value={detail} onChange={(e) => setDetail(e.target.value)} placeholder="搜索地址，更快填写" className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-black/30" />
+              <input
+                value={searchKw}
+                onChange={(e) => setSearchKw(e.target.value)}
+                placeholder="搜索地址，更快填写"
+                className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-black/30"
+              />
+              {searching ? <span className="text-[11px] text-black/30">搜索中…</span> : null}
             </div>
             <button type="button" onClick={() => void smartPaste()} className="flex w-[52px] shrink-0 flex-col items-center gap-0.5 active:opacity-60">
               <ClipboardList className="h-5 w-5 text-black/70" strokeWidth={2} />
               <span className="text-[10px] text-black/55">智能粘贴</span>
             </button>
+            {/* 搜索建议（真实地点，选中定位到地图） */}
+            {suggests.length > 0 ? (
+              <div className="absolute inset-x-0 top-[44px] z-20 divide-y divide-black/[0.04] overflow-hidden rounded-xl bg-white shadow-[0_8px_24px_rgba(0,0,0,0.14)]">
+                {suggests.map((s, i) => (
+                  <button key={i} type="button" onClick={() => pickSuggest(s)} className="block w-full px-3.5 py-2.5 text-left active:bg-black/[0.04]">
+                    <span className="block truncate text-[14px] text-black/85">{s.label}</span>
+                    <span className="mt-0.5 block truncate text-[11px] text-black/35">{s.full}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
           {/* 所在地区 + 默认地址 */}
           <div className="mt-1">
@@ -4151,15 +4335,17 @@ function AddressEditPage({ uid, editing, onBack, onToast }: { uid: string; editi
               <div className="divide-y divide-black/[0.04] border-b border-black/[0.05]">
                 {TB_REGIONS.map((r) => (
                   <button
-                    key={r}
+                    key={r.name}
                     type="button"
                     onClick={() => {
-                      setRegion(r);
+                      setRegion(r.name);
+                      regionTouched.current = true;
+                      setLatLon({ lat: r.lat, lon: r.lon });
                       setRegionOpen(false);
                     }}
-                    className={`block w-full py-2.5 text-left text-[14px] ${region === r ? 'font-medium text-[#FF5000]' : 'text-black/75'}`}
+                    className={`block w-full py-2.5 text-left text-[14px] ${region === r.name ? 'font-medium text-[#FF5000]' : 'text-black/75'}`}
                   >
-                    {r}
+                    {r.name}
                   </button>
                 ))}
               </div>
@@ -4217,10 +4403,27 @@ function AddressEditPage({ uid, editing, onBack, onToast }: { uid: string; editi
         </div>
       </div>
       <div className="absolute inset-x-0 bottom-0 z-30 bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
-        <button type="button" onClick={save} className="h-12 w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[16px] font-semibold text-white active:opacity-85">
+        <button type="button" onClick={save} className="h-12 w-full rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[16px] font-semibold text-white active:opacity-85">
           保存地址
         </button>
       </div>
+      {/* 删除确认弹层 */}
+      {delOpen ? (
+        <div className="absolute inset-0 z-50 grid place-items-center bg-black/45 px-10" onClick={() => setDelOpen(false)}>
+          <div className="w-full max-w-[280px] rounded-2xl bg-white p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center text-[16px] font-semibold text-black/85">删除地址</div>
+            <div className="mt-2 text-center text-[13px] leading-5 text-black/50">确定删除「{editing?.name}」的地址吗？删除后不可恢复。</div>
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <button type="button" onClick={() => setDelOpen(false)} className="h-10 rounded-xl bg-black/[0.05] text-[14px] text-black/70 active:opacity-80">
+                取消
+              </button>
+              <button type="button" onClick={removeAddr} className="h-10 rounded-xl bg-[#FF4400] text-[14px] font-medium text-white active:opacity-80">
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -4475,7 +4678,7 @@ function CouponsPage({ uid, onBack, onToast }: { uid: string; onBack: () => void
                   <div className="mt-0.5 text-[11px] text-black/40">{c.pids.length === 0 ? '全场通用' : '限指定商品'} · {new Date(c.expireAt).getMonth() + 1}月{new Date(c.expireAt).getDate()}日到期</div>
                 </div>
                 {!c.usedAt ? (
-                  <button type="button" onClick={() => onToast('下单时自动使用最优券，也可在结算页手动选择')} className="mr-3 rounded-full bg-[#FF5000] px-3.5 py-1.5 text-[12px] font-medium text-white active:opacity-80">
+                  <button type="button" onClick={() => onToast('下单时自动使用最优券，也可在结算页手动选择')} className="mr-3 rounded-lg bg-[#FF5000] px-3.5 py-1.5 text-[12px] font-medium text-white active:opacity-80">
                     去使用
                   </button>
                 ) : (
@@ -4504,7 +4707,7 @@ function ExpressPage({ uid, onBack, onOpenOrder }: { uid: string; onBack: () => 
       <TopBar title="我的快递" onBack={onBack} />
       <div className="flex gap-2 overflow-x-auto bg-white px-3 pb-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {['待取件', '派送中', '运输中', '已揽收'].map((s, i) => (
-          <span key={s} className={`rounded-full px-3 py-1 text-[12px] ${i === 0 ? 'bg-[#FF5000]/[0.08] font-medium text-[#FF5000]' : 'bg-black/[0.04] text-black/45'}`}>{s}</span>
+          <span key={s} className={`rounded-lg px-3 py-1 text-[12px] ${i === 0 ? 'bg-[#FF5000]/[0.08] font-medium text-[#FF5000]' : 'bg-black/[0.04] text-black/45'}`}>{s}</span>
         ))}
       </div>
       <div className="flex-1 overflow-y-auto pb-10">
@@ -4894,8 +5097,16 @@ export default function TaobaoApp() {
         initialTab={orderTab}
         onBack={backToReturn}
         onOpenOrder={(id) => {
-          setOrderId(id);
-          setPage('orderDetail');
+          // 需求：全部订单点击订单进入物流界面（不是订单详情）；无物流轨迹的订单（待付款/待发货）仍进详情
+          const hit = tbLoadOrders(uid).find((x) => x.id === id);
+          if (hit && hit.track.length > 0) {
+            setLogisticsId(id);
+            setLogiBack('orders');
+            setPage('logistics');
+          } else {
+            setOrderId(id);
+            setPage('orderDetail');
+          }
         }}
         onPayOrder={(id) => setPayOrderId(id)}
         onToast={showToast}
