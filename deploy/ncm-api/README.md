@@ -7,6 +7,41 @@
 
 ---
 
+## 〇、让我替你部署（只需一个 Token）
+
+不想自己动手？把下面任意一个 token 发给助手（聊天里直接粘贴），其余全自动：
+创建实例、部署、健康检查、给你成品 API 地址。
+
+| 平台 | 获取 Token（约 30 秒） | 特点 |
+|---|---|---|
+| **Hugging Face（推荐）** | 打开 https://huggingface.co/settings/tokens → Create new token → 权限选 **Write** → 复制 `hf_` 开头的串 | 真 Node 容器、无 serverless 怪癖；免费；闲置 48h 自动休眠、下次访问自动唤醒（约 1 分钟） |
+| Vercel | 打开 https://vercel.com/account/settings/tokens → Add → 复制 | 部署快，但免费版冷启动慢 + 共享出口 IP 风控高发 |
+
+助手拿到 token 后执行的就是这两个脚本（你自己在任何机器上也能跑）：
+
+```bash
+bash deploy/ncm-api/deploy-hf.sh <HF_TOKEN>          # HF Spaces 一条龙
+bash deploy/ncm-api/deploy-vercel.sh <VERCEL_TOKEN>  # Vercel 一条龙
+```
+
+> 安全提示：token 等同于账号写权限，用完可在平台设置页随时吊销。
+
+### 已经自己部署过但「打不开」？
+
+把你的访问地址发出来让助手查，或直接跑诊断脚本：
+
+```bash
+bash deploy/ncm-api/troubleshoot.sh https://你的地址
+```
+
+常见原因速查：
+- `404` = serverless 构建不完整/入口缺失；
+- `连接失败/000` = 实例没启动或平台休眠；
+- `域名打不开但接口其实通` = 打开的是部署平台后台页，不是 API 地址本身；
+- `接口通但报参数错误` = 网易对数据中心 IP 风控（扫码登录一次可缓解）。
+
+---
+
 ## 一、部署方式
 
 ### 方式 A：Docker Compose（推荐，两条命令）
