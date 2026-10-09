@@ -10,7 +10,7 @@ import {
   WALLPAPER_PRESETS,
   type AppId,
 } from '@/lib/ios/store';
-import { APP_MAP } from '../apps/registry';
+import { APP_MAP, AppIconById } from '../apps/registry';
 
 /** 手机屏幕逻辑尺寸（App 按此尺寸 1:1 渲染再整体缩放进卡片，保证卡片内是真实界面的等比还原） */
 const SCREEN_W = 390;
@@ -331,7 +331,8 @@ export default function AppSwitcher() {
                 写死 rounded-[15px]（按 60px 主屏槽位设计），作用到 30px 槽位正好内切成圆——
                 这里用子选择器压掉内层圆角与自带投影，圆角交给本容器 rounded-[8px] 统一裁剪 */}
             <span className="block h-[30px] w-[30px] overflow-hidden rounded-[8px] ring-1 ring-black/10 [&>div>span]:rounded-none [&>div>span]:shadow-none">
-              {APP_MAP[focusApp].icon}
+              {/* 图标随全局「图标样式」三选一实时变化（主题页切换后多任务同步） */}
+              <AppIconById id={focusApp} />
             </span>
             <span className={`text-[16px] font-medium ${lightGlass ? 'text-black/85' : 'text-white'}`}>
               {APP_MAP[focusApp].name}

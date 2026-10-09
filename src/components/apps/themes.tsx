@@ -16,13 +16,14 @@ import { Check, ChevronRight, LayoutGrid, Lock, RotateCcw, Upload, X } from 'luc
 import { IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
 import { ThemesWidgetsPage } from '@/components/ios/WidgetGallery';
-import { APPS, AppIconTile } from '@/components/apps/registry';
+import { APPS, AppStylePreview, AppIconTile } from '@/components/apps/registry';
 import {
   selectResolvedTheme,
   useSettings,
   useSystemDark,
   WALLPAPER_PRESETS,
   type AppId,
+  type IconStyle,
   type ThemeMode,
 } from '@/lib/ios/store';
 
@@ -34,6 +35,14 @@ const APPEARANCE_OPTIONS: { value: ThemeMode; name: string; desc: string }[] = [
   { value: 'light', name: '浅色', desc: '明亮界面' },
   { value: 'dark', name: '深色', desc: '夜间护眼' },
   { value: 'auto', name: '自适应', desc: '跟随系统自动切换' },
+];
+
+/** 主屏图标样式三选一（本轮新增）：真实=原始彩色实体图；毛玻璃=磨砂玻璃底座+粗线条；
+ *  液态透明=透明液态玻璃泡+高光亮边。预览用微信图标（彩色实体图 App，三态差异最直观） */
+const ICON_STYLES: { value: IconStyle; name: string; desc: string }[] = [
+  { value: 'real', name: '真实图标', desc: '原始彩色' },
+  { value: 'glass', name: '毛玻璃图标', desc: '磨砂粗线条' },
+  { value: 'liquid', name: '液态透明', desc: '透明玻璃' },
 ];
 
 // ---------------- 外观缩略图 ----------------
@@ -254,6 +263,9 @@ export default function ThemesApp() {
       return true;
     }
   });
+  /** 全局图标样式（本轮：真实/毛玻璃/液态透明三选一，持久化，主屏/多任务实时跟随） */
+  const iconStyle = useSettings((s) => s.iconStyle);
+  const setIconStyle = useSettings((s) => s.setIconStyle);
 
   const systemDark = useSystemDark();
   const resolved = selectResolvedTheme(theme, systemDark);
@@ -336,6 +348,47 @@ export default function ThemesApp() {
           主屏幕与锁屏壁纸完全独立：各自选择预设或从手机上传，互不影响。上传的壁纸保存在本机
           IndexedDB，永久生效，不会上传服务器。
         </p>
+
+        {/* 图标样式（本轮：自定义图标上方新增；全局三选一，主屏/文件夹/Spotlight/多任务实时跟随） */}
+        <div className="mb-2 mt-6 px-8 text-[13px] text-muted-foreground">图标样式</div>
+        <div className="mx-4 overflow-hidden rounded-[20px] bg-white/60 px-4 pb-4 pt-4 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
+          <div className="grid grid-cols-3 gap-2">
+            {ICON_STYLES.map((opt) => {
+              const selected = iconStyle === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  data-testid={`icon-style-${opt.value}`}
+                  aria-pressed={selected}
+                  aria-label={`图标样式：${opt.name}`}
+                  onClick={() => {
+                    setIconStyle(opt.value);
+                    navigator.vibrate?.(6);
+                  }}
+                  className="flex flex-col items-center gap-1.5 transition active:opacity-70"
+                >
+                  <span
+                    className={`relative block h-[56px] w-[56px] overflow-hidden rounded-[14px] bg-muted shadow-[0_2px_6px_rgba(0,0,0,0.25)] transition ${
+                      selected ? 'ring-[1.5px] ring-inset ring-foreground' : 'ring-1 ring-inset ring-border/60'
+                    }`}
+                  >
+                    <AppStylePreview id="wechat" style={opt.value} />
+                    {selected && (
+                      <span className="absolute right-1 top-1 flex h-[14px] w-[14px] items-center justify-center rounded-full bg-foreground text-background shadow-sm">
+                        <Check className="h-2 w-2" strokeWidth={4} aria-hidden="true" />
+                      </span>
+                    )}
+                  </span>
+                  <span className={`text-[11px] leading-none ${selected ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
+                    {opt.name}
+                  </span>
+                  <span className="text-[10px] leading-none text-muted-foreground/70">{opt.desc}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         {/* 自定义图标（排在小组件上面；区块可收缩——点标题展开/收起并记忆选择）：
             点图标从手机上传自定义，左上角 × 单独恢复默认，底部恢复全部默认（带确认）；

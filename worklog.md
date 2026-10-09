@@ -17658,3 +17658,22 @@ Stage Summary:
 - 七点全部落地并浏览器逐项实测：两处券条删除、搜索框以下跟随滚动、视频/我的淘宝上滑刷新、底部 tab 变窄、首页返回主屏按钮、淘票票/账单页交互完善
 - 范围限定零破坏：美团/微信/QQ/聊天/支付链路零改动；订单点击分流、支付复用、uid 隔离、骑手共用不变
 - 改动文件：src/components/apps/taobao.tsx（HomePage 券条删除+头部重构+图标行入滚动区+返回钮、VideoPage 上滑刷新、MePage 券条删除+刷新文案、BottomTabBar 变窄、root BillPage 接线）、src/components/apps/taobao-channels.tsx（MoviePage 海报进影院、BillPage onOpenOrder）
+
+---
+Task ID: 36
+Agent: main (Z.ai Code)
+Task: 淘宝第十一轮 3 点——购物车底部空隙修复、淘宝图标换「购物袋笑脸」、主题 App 自定义图标上方新增图标样式三选一（真实/毛玻璃/液态透明）
+
+Work Log:
+- 购物车底部空隙：根因=结算栏 bottom-[68px] 是按旧 tab 栏高度写的，第十轮 tab 变窄后多出 ~15px 空隙。BottomTabBar 外层加固定 h-[53px]（=1px 边线+pt0.5+图标23+文字15+pb3，防字体行高抖动），CartPage 结算栏与空车「去逛逛」栏 bottom-[68px]→bottom-[53px] 与 tab 栏顶边严丝合缝
+- 淘宝图标：registry.tsx 新增 TaobaoGlyph SVG（用户提供参考图标：圆角矩形袋身 + 顶部两只小耳朵提手环 + 袋身居中 U 形微笑弧，viewBox 24、GLYPH_STROKE 2.2 粗线条、同 30px 规格），taobao 条目 glyph 从 lucide ShoppingBag 换为 <TaobaoGlyph/>（移除未用 import）；磨砂/液态底座仍由 LineIcon/LiquidIcon 统一包装，主屏/Spotlight/文件夹/多任务全场景生效
+- 图标样式三选一：store.ts 新增 export type IconStyle('real'|'glass'|'liquid') + SettingsState.iconStyle(默认'real') + setIconStyle(立即持久化 settings.iconStyle) + load 读取校验；registry.tsx 新增 LiquidIcon（液态透明玻璃泡：轻模糊 backdrop-blur-[2px] + 上下渐变模拟顶部高光/底部反光 + 亮边 ring，明暗口径与 LineIcon 同源——浅壁纸深灰线/深壁纸白线，variant=card 强制烟熏玻璃白线）+ AppIconById（按全局 iconStyle 动态渲染：real=有 image 用实体 PNG 无则磨砂线条；glass=全部磨砂+粗线条忽略实体图；liquid=液态透明）+ AppStylePreview（选择器固定预览：每张永远按自己代表的样式渲染，不随全局翻转，任意选中态都能三态对比）
+- HomeScreen appIconNode 默认分支 APP_MAP[id].icon → <AppIconById id/>（主屏网格/文件夹迷你/拖拽浮动/Spotlight/flyIn/文件夹面板全走此函数）；AppSwitcher 多任务卡片图标同步 AppIconById（主题页切换后多任务实时跟随）
+- themes.tsx「自定义图标」上方新增「图标样式」区块：标题同款式样 + 白卡 grid-cols-3 三个选项（真实图标/原始彩色、毛玻璃图标/磨砂粗线条、液态透明/透明玻璃），56px 预览用微信图标（彩色实体图 App 三态差异最直观），选中态 ring-foreground + 右上对号（对齐壁纸预设口径），点击 setIconStyle + vibrate(6)，data-testid=icon-style-real/glass/liquid
+- bunx tsc --noEmit 0 错误；bun run lint 0 错误（仅既有 BABEL 500KB 三条）；dev.log 无新增运行时错误
+- agent-browser 全真浏览器逐项验证：①加购落地灯进购物车——结算栏紧贴 tab 栏空隙消除（对比用户截图空隙带已消失）②Spotlight 看淘宝新图标=灰磨砂底+白粗线购物袋笑脸（双耳+袋身+微笑弧，与用户参考图一致）③主题页「图标样式」区块位于自定义图标上方，三预览分别=彩色微信/磨砂线条/透明玻璃，选中态对号正确 ④选毛玻璃→主屏+Spotlight 全部图标（微信/QQ/照片/淘宝等）统一变磨砂玻璃+白粗线条 ⑤选液态透明→全部图标变液态玻璃泡（更透+高光亮边，与毛玻璃视觉区分明显）⑥修预览跟随全局的瑕疵（AppStylePreview 固定三态）后复验：选中毛玻璃时「真实图标」预览仍显示彩色微信 ⑦刷新页面毛玻璃持久化生效，切回真实图标彩色 PNG 全部恢复
+- 范围限定零破坏：美团/微信/QQ/聊天/支付链路零改动；淘宝登录态注入仅测试用（wx-session-user-id+tb-session），登录/订单/uid 隔离逻辑未动
+
+Stage Summary:
+- 三点全部落地并浏览器逐项实测：购物车底部空隙消除（tab 栏固定 53px+结算栏贴齐）、淘宝图标换用户参考的购物袋笑脸、主题 App 图标样式三选一（真实/毛玻璃/液态透明）全局生效+持久化+预览固定
+- 改动文件：src/lib/ios/store.ts（IconStyle/iconStyle/setIconStyle/load）、src/components/apps/registry.tsx（TaobaoGlyph/LiquidIcon/AppIconById/AppStylePreview、删 ShoppingBag import）、src/components/ios/HomeScreen.tsx（appIconNode→AppIconById）、src/components/ios/AppSwitcher.tsx（卡片图标→AppIconById）、src/components/apps/themes.tsx（图标样式区块）、src/components/apps/taobao.tsx（BottomTabBar h-53px+两处 bottom-[53px]）

@@ -290,8 +290,16 @@ export const WALLPAPER_PRESETS: WallpaperPreset[] = [
 
 // ---------------- 设置 Store ----------------
 
+/** 主屏图标风格（本轮新增，主题页「图标样式」三选一）：
+ *  real=真实图标（实体 PNG，无实体图的 App 保持磨砂线条）；
+ *  glass=毛玻璃图标（全部磨砂玻璃底座 + 粗线条，忽略实体图）；
+ *  liquid=液态透明（透明液态玻璃 + 高光亮边） */
+export type IconStyle = 'real' | 'glass' | 'liquid';
+
 interface SettingsState {
   theme: ThemeMode;
+  /** 主屏图标风格（默认 real=真实图标；持久化 settings.iconStyle） */
+  iconStyle: IconStyle;
   wallpaperPreset: string;
   /** 自定义壁纸的 ObjectURL（Blob 存 IndexedDB） */
   customWallpaperUrl: string | null;
@@ -333,6 +341,9 @@ interface SettingsState {
   /** 全局字重（400=标准；300/400/500/600，未显式设 font-weight 的文本生效） */
   appFontWeight: number;
   loaded: boolean;
+
+  /** 设置主屏图标风格（立即持久化；HomeScreen/多任务实时响应） */
+  setIconStyle: (s: IconStyle) => void;
 
   load: () => Promise<void>;
   /** 锁屏总开关：关闭时同时停用密码并立即回到主屏幕 */
@@ -402,12 +413,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
   appFontScale: 1,
   appFontWeight: 400,
   statusBarVisible: true,
+  iconStyle: 'real',
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -426,7 +438,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'appFontScale'),
         localDB.get('settings', 'appFontWeight'),
         localDB.get('settings', 'statusBarVisible'),
+        localDB.get('settings', 'iconStyle'),
       ]);
+
+      // 图标风格：无记录/记录非法 → 'real'（真实图标）
+      let iconStyle: IconStyle = 'real';
+      const savedIconStyle = iconStyleRec?.value;
+      if (savedIconStyle === 'glass' || savedIconStyle === 'liquid') iconStyle = savedIconStyle;
 
       // 自定义 App 图标：{ AppId: Blob } → 为每个 Blob 建 ObjectURL
       let customIcons: Record<string, string> = {};
@@ -708,6 +726,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
             : 400,
         // 状态栏开关：无记录 = 显示（默认开）；仅接受布尔值
         statusBarVisible: typeof statusBarRec?.value === 'boolean' ? statusBarRec.value : true,
+        iconStyle,
         loaded: true,
       });
       // 锁屏被用户关闭：本次开机直接进主屏幕（跳过锁屏）
@@ -735,6 +754,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setTheme: (t) => {
     set({ theme: t });
     void localDB.put('settings', { key: 'theme', value: t });
+  },
+
+  setIconStyle: (s) => {
+    set({ iconStyle: s });
+    void localDB.put('settings', { key: 'iconStyle', value: s });
   },
 
   setAppFont: (id) => {

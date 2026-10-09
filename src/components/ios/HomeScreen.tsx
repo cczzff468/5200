@@ -8,7 +8,7 @@ import { shellScale } from '@/lib/ios/shell-scale';
 import { useHomeWallpaperLight } from '@/lib/ios/foreground';
 import { localDB } from '@/lib/ios/db';
 import { useUnreadTotal, useBadge, wxUnreads, qqUnreads, chatBadge, phoneBadge } from '@/lib/unread-store';
-import { DOCK_APPS, APPS, APP_MAP, appImage } from '../apps/registry';
+import { DOCK_APPS, APPS, APP_MAP, appImage, AppIconById } from '../apps/registry';
 import {
   ProfileCardEditor,
   ProfileCardWidget,
@@ -2886,13 +2886,14 @@ export default function HomeScreen() {
   /** 页点可见性：编辑模式常显；平时滑动中/翻页后短暂显示，静止时同位置显示搜索胶囊 */
   const dotsVisible = edit || dotsShown;
 
-  /** App 图标内容：有自定义图标（主题页上传）则显示图片，否则用默认线性图标 */
+  /** App 图标内容：有自定义图标（主题页上传）则显示图片；否则按全局「图标样式」
+   *  （真实/毛玻璃/液态透明，主题页三选一）渲染默认图标 */
   const appIconNode = (id: AppId) => {
     const url = customIcons[id];
     if (url) {
       return <img src={url} alt="" draggable={false} className="h-full w-full select-none object-cover" />;
     }
-    return APP_MAP[id].icon;
+    return <AppIconById id={id} />;
   };
 
   /** 画廊内各小组件是否已在主屏上（+ 浮层用；已在屏上的不可重复添加） */

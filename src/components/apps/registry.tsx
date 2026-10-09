@@ -25,10 +25,9 @@ import {
   Settings as SettingsIcon,
   Store,
   UtensilsCrossed,
-  ShoppingBag,
   Users as UsersIcon,
 } from 'lucide-react';
-import type { AppId } from '@/lib/ios/store';
+import type { AppId, IconStyle } from '@/lib/ios/store';
 import { selectResolvedTheme, useSettings, useSystemDark } from '@/lib/ios/store';
 import { useHomeWallpaperLight } from '@/lib/ios/foreground';
 
@@ -113,6 +112,35 @@ function LineIcon({ children, variant = 'auto' }: { children: ReactNode; variant
   );
 }
 
+/** 液态透明图标（图标样式第三选）：比毛玻璃更透的「液态玻璃泡」——
+ *  底座近乎全透明（轻模糊只留一点折射感）+ 上下渐变模拟玻璃顶部高光/底部反光 + 亮边 ring；
+ *  与 LineIcon 同一套明暗口径：浅色主题 + 浅色壁纸 → 深灰线保证可见，
+ *  深色主题 / 深色壁纸 → 白线 + 白高光；variant="card"：卡片底色场景强制
+ *  烟熏玻璃白线不随壁纸翻转（同 LineIcon card 口径，主题页预览用） */
+function LiquidIcon({ children, variant = 'auto' }: { children: ReactNode; variant?: 'auto' | 'card' }) {
+  const themeMode = useSettings((s) => s.theme);
+  const systemDark = useSystemDark();
+  const dark = variant === 'card' ? false : selectResolvedTheme(themeMode, systemDark) === 'dark';
+  const lightWallpaper = useHomeWallpaperLight();
+  const lightGlass = variant === 'card' ? false : !dark && lightWallpaper;
+  return (
+    <IconTile className={lightGlass ? 'text-[#4b4b53]' : 'text-[#f8f8fb]'}>
+      <span
+        aria-hidden="true"
+        className={`flex h-full w-full items-center justify-center rounded-[15px] ring-1 backdrop-blur-[2px] ${
+          lightGlass
+            ? 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.52),rgba(255,255,255,0.16)_45%,rgba(0,0,0,0.03))] shadow-[inset_0_1px_2px_rgba(255,255,255,0.8),0_2px_8px_rgba(0,0,0,0.08)] ring-black/[0.10]'
+            : variant === 'card'
+              ? 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.34),rgba(120,120,128,0.18)_45%,rgba(60,60,67,0.30))] shadow-[inset_0_1.5px_2.5px_rgba(255,255,255,0.40),0_2px_8px_rgba(0,0,0,0.14)] ring-white/[0.35]'
+              : 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.28),rgba(255,255,255,0.06)_45%,rgba(255,255,255,0.13))] shadow-[inset_0_1.5px_2.5px_rgba(255,255,255,0.44),0_2px_10px_rgba(0,0,0,0.11)] ring-white/[0.36]'
+        }`}
+      >
+        {children}
+      </span>
+    </IconTile>
+  );
+}
+
 /** 图标统一规格：60px 位内 30px 线性图标（与 iOS 线性图标比例一致）；
  *  线条加粗（1.7 → 2.2，用户要求图标「里面的变粗一点」） */
 /** 真实 iOS 图标（public/icons 的 PNG：自带彩色圆角底），满槽铺满图标位。
@@ -183,6 +211,32 @@ function WeChatGlyph() {
       <circle cx="12.2" cy="7.4" r="1" fill="currentColor" stroke="none" />
       <circle cx="14.9" cy="13.2" r="0.85" fill="currentColor" stroke="none" />
       <circle cx="18.3" cy="13.2" r="0.85" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** 淘宝图标：白色粗线条「购物袋笑脸」（用户提供的参考图标）——圆角矩形袋身 +
+ *  顶部两只小耳朵（提手环）+ 袋身居中 U 形微笑弧，与其他 App 图标同规格
+ *  （同磨砂/液态底座包装、30px 尺寸、2.2 粗线条） */
+function TaobaoGlyph() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={GLYPH_CLASS}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={GLYPH_STROKE}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {/* 顶部两只小耳朵（提手环） */}
+      <path d="M7.7 8.4V6.8a1.85 1.85 0 0 1 3.7 0v1.6" />
+      <path d="M12.6 8.4V6.8a1.85 1.85 0 0 1 3.7 0v1.6" />
+      {/* 袋身（圆角矩形） */}
+      <rect x="3.8" y="8.4" width="16.4" height="12.2" rx="3.1" />
+      {/* 袋身居中微笑弧 */}
+      <path d="M9.2 13.1c0 1.9 1.26 3.1 2.8 3.1s2.8-1.2 2.8-3.1" />
     </svg>
   );
 }
@@ -372,8 +426,8 @@ const APP_DEFS: AppDef[] = [
   {
     id: 'taobao',
     name: '淘宝',
-    // 备用线条图（无实体图标时展示）：购物袋贴近电商形象
-    glyph: <ShoppingBag className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
+    // 本轮：线条图换用户提供的「购物袋笑脸」参考图标（磨砂/液态底座由 LineIcon/LiquidIcon 统一包装）
+    glyph: <TaobaoGlyph />,
     component: TaobaoApp,
   },
 ];
@@ -404,6 +458,31 @@ const GLYPHS = Object.fromEntries(APP_DEFS.map((d) => [d.id, d.glyph])) as Recor
  *  原样展示（自带彩色底任何卡片上都清晰）；线条图标 App 强制「浅磨砂玻璃底座 +
  *  深灰线条」不随壁纸/主题翻转——修复浅色主题 + 深色壁纸时预览一片空白 */
 export function AppIconTile({ id }: { id: AppId }) {
+  const image = IMAGES[id];
+  if (image) return <RealIconTile src={image} />;
+  return <LineIcon variant="card">{GLYPHS[id]}</LineIcon>;
+}
+
+/** 按全局「图标样式」渲染的动态 App 图标（主屏/文件夹/Spotlight/多任务等壁纸场景）：
+ *  real=真实图标（有 image 用实体 PNG，无则磨砂线条）；glass=毛玻璃图标（全部磨砂
+ *  玻璃底座 + 粗线条，忽略实体图——「把图标变成毛玻璃粗线条」）；liquid=液态透明。
+ *  自定义图标（主题页上传）由调用方优先处理，不经过这里。
+ *  variant='card'：卡片底色场景（主题页「图标样式」预览），毛玻璃/液态强制
+ *  「浅磨砂/烟熏玻璃 + 白线/深灰线」不随壁纸翻转 */
+export function AppIconById({ id, variant = 'auto' }: { id: AppId; variant?: 'auto' | 'card' }) {
+  const style = useSettings((s) => s.iconStyle);
+  if (style === 'liquid') return <LiquidIcon variant={variant}>{GLYPHS[id]}</LiquidIcon>;
+  if (style === 'glass') return <LineIcon variant={variant}>{GLYPHS[id]}</LineIcon>;
+  const image = IMAGES[id];
+  if (image) return <RealIconTile src={image} />;
+  return <LineIcon variant={variant}>{GLYPHS[id]}</LineIcon>;
+}
+
+/** 图标样式选择器的固定预览（主题页「图标样式」三选一）：每张预览永远按自己代表的
+ *  样式渲染（不随全局 iconStyle 翻转），用户在任意选中态下都能对比三种样式的真实长相 */
+export function AppStylePreview({ id, style }: { id: AppId; style: IconStyle }) {
+  if (style === 'liquid') return <LiquidIcon variant="card">{GLYPHS[id]}</LiquidIcon>;
+  if (style === 'glass') return <LineIcon variant="card">{GLYPHS[id]}</LineIcon>;
   const image = IMAGES[id];
   if (image) return <RealIconTile src={image} />;
   return <LineIcon variant="card">{GLYPHS[id]}</LineIcon>;

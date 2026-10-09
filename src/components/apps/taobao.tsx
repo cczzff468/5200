@@ -2557,7 +2557,7 @@ function CartPage({
 
       {/* 底部（截图5/6：普通=全选+合计共减+结算；管理=全选+分享/移入收藏/删除；tab 模式避开底栏） */}
       {items.length > 0 ? (
-        <div className={`absolute inset-x-0 z-30 flex items-center gap-2 border-t border-black/[0.06] bg-white/95 px-3 pt-2.5 backdrop-blur-md ${onBack ? 'bottom-0 pb-6' : 'bottom-[68px] pb-3'}`}>
+        <div className={`absolute inset-x-0 z-30 flex items-center gap-2 border-t border-black/[0.06] bg-white/95 px-3 pt-2.5 backdrop-blur-md ${onBack ? 'bottom-0 pb-6' : 'bottom-[53px] pb-3'}`}>
           <button
             type="button"
             onClick={() => {
@@ -2608,7 +2608,7 @@ function CartPage({
           )}
         </div>
       ) : (
-        <div className={`absolute inset-x-0 z-30 border-t border-black/[0.06] bg-white/95 px-3 pt-2 backdrop-blur-md ${onBack ? 'bottom-0 pb-6' : 'bottom-[68px] pb-3'}`}>
+        <div className={`absolute inset-x-0 z-30 border-t border-black/[0.06] bg-white/95 px-3 pt-2 backdrop-blur-md ${onBack ? 'bottom-0 pb-6' : 'bottom-[53px] pb-3'}`}>
           <button type="button" onClick={onOpenHome} className="h-10 w-full rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
             去逛逛
           </button>
@@ -6200,8 +6200,9 @@ type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 /** 底部导航（首页/消息/购物车/我的淘宝） */
 function BottomTabBar({ active, onTab, cartCount, msgCount }: { active: TbTab; onTab: (t: TbTab) => void; cartCount: number; msgCount: number }) {
   return (
-    <div className="absolute inset-x-0 bottom-0 z-40 flex items-stretch border-t border-black/[0.05] bg-white/95 pb-3 pt-0.5 backdrop-blur-lg">
-      {/* 需求（第十轮）：底部 tab 上下变窄一点（pt-1.5→pt-0.5、pb-5→pb-3、行距/内边距收紧） */}
+    <div className="absolute inset-x-0 bottom-0 z-40 flex h-[53px] items-stretch border-t border-black/[0.05] bg-white/95 pb-3 pt-0.5 backdrop-blur-lg">
+      {/* 需求（第十轮）：底部 tab 上下变窄一点（pt-1.5→pt-0.5、pb-5→pb-3、行距/内边距收紧）；
+          本轮：固定高 53px（=1px 边线+2+图标 23+文字 15+12），购物车结算栏按此对齐消除底部空隙 */}
       {/* 首页（active：橙色淘 logo 圆，截图1） */}
       <button type="button" onClick={() => onTab('home')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
         {active === 'home' ? (
