@@ -17637,3 +17637,24 @@ Stage Summary:
 - 十点全部落地并浏览器逐项实测：购物车 V-GIRL 双横幅删除、百亿补贴/淘票票/红包签到/淘宝秒杀/飞猪旅行/淘宝账单六大频道页开发完成、首页淘宝直播删除+领券中心移入原位、我的消费明细文字平行+可点进账单页
 - 范围限定零破坏：美团/微信/QQ/聊天/支付链路零改动；领券复用 tbClaimCoupon、签到按 tb-sign:<uid> 隔离、账单页只读真实订单；订单点击分流/支付复用/uid 隔离不变
 - 改动文件：新增 src/lib/ios/taobao-channels-data.ts、src/components/apps/taobao-channels.tsx；修改 src/components/apps/taobao.tsx（HomePage 双卡+图标接线、CartPage 横幅删除、MePage 消费明细卡、TbPage 路由+根 switch、频道页导入）
+
+---
+Task ID: 35
+Agent: main (Z.ai Code)
+Task: 淘宝第十轮 7 点——首页/我的淘宝删「消费券待使用」条目、首页搜索框以下跟随滚动、视频+我的淘宝上滑刷新、底部 tab 变窄、首页「关注」左侧返回主屏按钮、完善新增功能
+
+Work Log:
+- 首页底部「N张共X元消费券待使用,剩 hh:mm:ss + 去使用 + ×」浮条整块删除（stripCoupons/stripSum/stripOpen/ccLeft 倒计时 state 一并清理）；我的淘宝「N张共X元消费券待使用 + 去使用」条目删除（couponSum 清理，coupons 保留给资产行「优惠券 N张」计数）
+- 首页滚动重构：运营位图标行（红包签到/淘宝秒杀/领淘金币/阿里拍卖/淘票票/飞猪）+ 页点从固定 header 移入滚动容器——现在频道 tab + 搜索框固定，搜索框以下（图标行/页点/领券中心+百亿补贴双卡/商品流）全部跟随滚动
+- 首页频道 tab「关注」左侧新增返回按钮（ArrowLeft，圆钮 active 反馈），useUI.closeApp() 返回手机主屏幕
+- VideoPage 上滑刷新：新增 vKey 视频池轮换 + 底部触摸上拉检测（touchstart 判定到底 / touchmove 累计上拉 / touchend >60px 触发），刷新时顶部「正在刷新…」毛玻璃胶囊 + Loader2 转圈，800ms 后换一批视频 + 滚回顶部 + toast「视频已刷新，为你换了新一批」
+- 我的淘宝上滑刷新：保留第八轮上拉机制，文案从「更新菜单」改为刷新口径——toast「已为你刷新」、载入行「正在刷新…」、底部提示「上滑到底继续拉一拉，可刷新页面」（菜单轮换逻辑不变）
+- BottomTabBar 变窄：pb-5 pt-1.5 → pb-3 pt-0.5，按钮 gap-0.5 py-0.5 → gap-0 py-0（五个 tab 统一）
+- 完善新增功能：①淘票票热映影片海报点击从「详情（演示）」toast 改为真实进入该影片的影院列表（setMovie+setDay 重置+选座清空）②淘宝账单页新增 onOpenOrder prop，本月消费行点击进对应订单详情页（root 接线 setSubReturn('me')+setPage('orderDetail')）
+- bunx tsc --noEmit 0 错误；bun run lint 0 错误（仅既有 BABEL 500KB 三条）；dev.log 无新增运行时错误
+- agent-browser 全真浏览器逐项验证：①首页无消费券浮条、我的淘宝无券条（资产行「优惠券 5张」保留）②滚动 350px 后图标行 top=-186（跟随滚出）而搜索框/频道 tab 固定 ③「关注」左侧 ← 点击→回手机主屏幕 ④我的淘宝到底合成上拉→「正在刷新…」→toast「已为你刷新」+猜你喜欢菜单轮换 ⑤视频 tab 到底上拉→「正在刷新…」胶囊→toast「视频已刷新，为你换了新一批」+视频流换批 ⑥底部 tab 视觉变窄 ⑦淘票票点《生化危机：净化》海报→影院列表（标题=影片名+日期tab+新人¥38起）⑧淘宝账单点《落地灯台灯》消费行→已发货订单详情页（驿站卡+取件码+退款/延长收货/查看物流/确认收货底栏）
+
+Stage Summary:
+- 七点全部落地并浏览器逐项实测：两处券条删除、搜索框以下跟随滚动、视频/我的淘宝上滑刷新、底部 tab 变窄、首页返回主屏按钮、淘票票/账单页交互完善
+- 范围限定零破坏：美团/微信/QQ/聊天/支付链路零改动；订单点击分流、支付复用、uid 隔离、骑手共用不变
+- 改动文件：src/components/apps/taobao.tsx（HomePage 券条删除+头部重构+图标行入滚动区+返回钮、VideoPage 上滑刷新、MePage 券条删除+刷新文案、BottomTabBar 变窄、root BillPage 接线）、src/components/apps/taobao-channels.tsx（MoviePage 海报进影院、BillPage onOpenOrder）

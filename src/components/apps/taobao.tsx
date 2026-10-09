@@ -995,41 +995,44 @@ function HomePage({
     return out;
   }, [pool, batch, refreshKey]);
 
-  // 底部消费券浮条（截图1：4张共88元消费券待使用,剩 04:37:32 + 去使用 + 关闭）
-  const stripCoupons = tbLoadCoupons(uid).filter((c) => !c.usedAt && c.expireAt > Date.now());
-  const stripSum = stripCoupons.reduce((n, c) => n + c.amount, 0);
-  const [stripOpen, setStripOpen] = useState(true);
-  const [ccLeft, setCcLeft] = useState(4 * 3600 + 37 * 60 + 32);
-  useEffect(() => {
-    const t = setInterval(() => setCcLeft((n) => (n > 0 ? n - 1 : 0)), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const ccText = `${String(Math.floor(ccLeft / 3600)).padStart(2, '0')}:${String(Math.floor((ccLeft % 3600) / 60)).padStart(2, '0')}:${String(ccLeft % 60).padStart(2, '0')}`;
+  // 需求（第十轮）：频道 tab「关注」左侧返回按钮 → 返回手机主屏幕
+  const closeApp = useUI((s) => s.closeApp);
 
   return (
     // 需求（第八轮）：首页整体奶油肉粉色（截图1 口径），不再是橙色渐变
     <div className="flex h-full flex-col bg-[#FBF0E3]">
-      {/* 顶部品牌区（固定不随列表滚动：奶油底 + 黑字频道 tab + 橙描边搜索框 + 彩色运营位图标） */}
+      {/* 顶部品牌区（固定：奶油底 + 返回主屏 + 黑字频道 tab + 橙描边搜索框；
+          需求（第十轮）：搜索框以下的运营位图标/页点/双卡/商品流全部跟随列表滚动） */}
       <div className="relative z-30 shrink-0 bg-[#FDF2E6] pb-2">
-        {/* 顶部频道 tab（关注/推荐/闪购外卖/国补/超级88/飞猪/穿搭；选中橙字+微笑弧） */}
-        <div className="flex items-center gap-[18px] overflow-x-auto px-4 pt-[56px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {feedTabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setFeedTab(t.id)}
-              className={`relative shrink-0 pb-2 text-[18px] font-semibold transition-colors ${feedTab === t.id ? 'text-[#FF5000]' : 'text-black/85'}`}
-            >
-              {t.label}
-              {t.tag ? <span className="ml-0.5 inline-block rounded-[4px] bg-[#FF0036] px-1 align-[3px] text-[10px] font-bold leading-[14px] text-white">{t.tag}</span> : null}
-              {/* 微笑弧（截图1 选中 tab 下方弧线） */}
-              {feedTab === t.id ? (
-                <svg viewBox="0 0 26 7" className="absolute bottom-0 left-1/2 h-[6px] w-[26px] -translate-x-1/2" aria-hidden="true">
-                  <path d="M2 1.2 Q13 7.6 24 1.2" stroke="#FF5000" strokeWidth="2.4" fill="none" strokeLinecap="round" />
-                </svg>
-              ) : null}
-            </button>
-          ))}
+        {/* 顶部频道 tab（关注/推荐/闪购外卖/国补/超级88/飞猪/穿搭；选中橙字+微笑弧）+ 左侧返回主屏按钮 */}
+        <div className="flex items-end pt-[56px]">
+          <button
+            type="button"
+            aria-label="返回主屏幕"
+            onClick={closeApp}
+            className="mb-1 ml-2 mr-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/5"
+          >
+            <ArrowLeft className="h-[21px] w-[21px] text-black/80" strokeWidth={2.3} />
+          </button>
+          <div className="flex min-w-0 flex-1 items-center gap-[18px] overflow-x-auto pr-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {feedTabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setFeedTab(t.id)}
+                className={`relative shrink-0 pb-2 text-[18px] font-semibold transition-colors ${feedTab === t.id ? 'text-[#FF5000]' : 'text-black/85'}`}
+              >
+                {t.label}
+                {t.tag ? <span className="ml-0.5 inline-block rounded-[4px] bg-[#FF0036] px-1 align-[3px] text-[10px] font-bold leading-[14px] text-white">{t.tag}</span> : null}
+                {/* 微笑弧（截图1 选中 tab 下方弧线） */}
+                {feedTab === t.id ? (
+                  <svg viewBox="0 0 26 7" className="absolute bottom-0 left-1/2 h-[6px] w-[26px] -translate-x-1/2" aria-hidden="true">
+                    <path d="M2 1.2 Q13 7.6 24 1.2" stroke="#FF5000" strokeWidth="2.4" fill="none" strokeLinecap="round" />
+                  </svg>
+                ) : null}
+              </button>
+            ))}
+          </div>
         </div>
         {/* 搜索框（白底橙描边胶囊：扫码/占位/相机/橙搜索钮） */}
         <div className="px-3 pt-2">
@@ -1045,30 +1048,9 @@ function HomePage({
             <span className="grid h-[34px] shrink-0 place-items-center rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-[18px] text-[15px] font-semibold text-white">搜索</span>
           </button>
         </div>
-        {/* 运营位图标行（红包签到/淘宝秒杀/领淘金币/阿里拍卖/淘票票/飞猪；彩色 SVG） */}
-        <div className="mt-2 grid grid-cols-6 px-2">
-          {[
-            { icon: <HongbaoIcon />, label: '红包签到', on: () => onOpenPage('signin') },
-            { icon: <MiaoshaIcon />, label: '淘宝秒杀', on: () => onOpenPage('seckill') },
-            { icon: <TbCoinIcon />, label: '领淘金币', on: () => onToast('领淘金币（演示）') },
-            { icon: <PaiIcon />, label: '阿里拍卖', on: () => onToast('阿里拍卖（演示）') },
-            { icon: <TicketPiaoIcon />, label: '淘票票', on: () => onOpenPage('movie') },
-            { icon: <FliggyIcon />, label: '飞猪', on: () => onOpenPage('fliggy') },
-          ].map((it) => (
-            <button key={it.label} type="button" onClick={it.on} className="flex flex-col items-center gap-1 py-0.5 active:opacity-70">
-              {it.icon}
-              <span className="text-[11.5px] text-black/80">{it.label}</span>
-            </button>
-          ))}
-        </div>
-        {/* 页点（两页指示） */}
-        <div className="mt-1.5 flex justify-center gap-1">
-          <span className="h-[3.5px] w-[9px] rounded-full bg-[#FF5000]" />
-          <span className="h-[3.5px] w-[9px] rounded-full bg-black/15" />
-        </div>
       </div>
 
-      {/* 商品流滚动区（header 固定后单独滚动；包裹层 relative 用于悬浮刷新指示器定位） */}
+      {/* 商品流滚动区（需求（第十轮）：搜索框以下——运营位图标/页点/双卡/商品流全部跟随滚动；包裹层 relative 用于悬浮刷新指示器定位） */}
       <div className="relative min-h-0 flex-1">
         <div
           ref={scrollerRef}
@@ -1078,6 +1060,27 @@ function HomePage({
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
         >
+          {/* 运营位图标行（红包签到/淘宝秒杀/领淘金币/阿里拍卖/淘票票/飞猪；彩色 SVG，随列表滚动） */}
+          <div className="mt-2.5 grid grid-cols-6 px-2">
+            {[
+              { icon: <HongbaoIcon />, label: '红包签到', on: () => onOpenPage('signin') },
+              { icon: <MiaoshaIcon />, label: '淘宝秒杀', on: () => onOpenPage('seckill') },
+              { icon: <TbCoinIcon />, label: '领淘金币', on: () => onToast('领淘金币（演示）') },
+              { icon: <PaiIcon />, label: '阿里拍卖', on: () => onToast('阿里拍卖（演示）') },
+              { icon: <TicketPiaoIcon />, label: '淘票票', on: () => onOpenPage('movie') },
+              { icon: <FliggyIcon />, label: '飞猪', on: () => onOpenPage('fliggy') },
+            ].map((it) => (
+              <button key={it.label} type="button" onClick={it.on} className="flex flex-col items-center gap-1 py-0.5 active:opacity-70">
+                {it.icon}
+                <span className="text-[11.5px] text-black/80">{it.label}</span>
+              </button>
+            ))}
+          </div>
+          {/* 页点（两页指示） */}
+          <div className="mt-1.5 flex justify-center gap-1">
+            <span className="h-[3.5px] w-[9px] rounded-full bg-[#FF5000]" />
+            <span className="h-[3.5px] w-[9px] rounded-full bg-black/15" />
+          </div>
           {/* 运营位双卡：领券中心 / 百亿补贴（第九轮需求：删淘宝直播，领券中心移到原淘宝直播位；百亿补贴进频道页） */}
           <div className="grid grid-cols-2 gap-2 px-2 pt-2.5">
             <button type="button" onClick={onOpenCouponCenter} className="flex flex-col rounded-2xl bg-white p-2.5 text-left active:opacity-80">
@@ -1156,21 +1159,6 @@ function HomePage({
         )}
       </div>
 
-      {/* 底部消费券浮条（截图1：¥ 4张共88元消费券待使用,剩 04:37:32 + 去使用 + 关闭；真实券数据，无券不显示） */}
-      {stripOpen && stripCoupons.length > 0 ? (
-        <div className="absolute inset-x-2 bottom-[76px] z-30 flex items-center gap-2 rounded-full bg-gradient-to-r from-[#FFF6F1] to-[#FFE9E2] py-1.5 pl-2 pr-1 shadow-[0_6px_20px_rgba(255,68,0,0.16)] ring-1 ring-[#FFD9CC]">
-          <span className="grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full bg-[#FF3B30]">
-            <span className="text-[12px] font-bold text-[#FFD100]">¥</span>
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-[#FF4400]">
-            {stripCoupons.length}张共{fmtMoney(stripSum)}元消费券待使用,剩 {ccText}
-          </span>
-          <button type="button" onClick={onOpenCouponCenter} className="h-[28px] shrink-0 rounded-full bg-[#FF3B30] px-3 text-[12.5px] font-semibold text-white active:opacity-85">去使用</button>
-          <button type="button" aria-label="关闭" onClick={() => setStripOpen(false)} className="grid h-6 w-6 shrink-0 place-items-center active:opacity-60">
-            <X className="h-3.5 w-3.5 text-black/35" strokeWidth={2.4} />
-          </button>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1246,11 +1234,52 @@ function FollowFeed({ uid, follows, onOpenProduct, onOpenSearch }: { uid: string
 
 /** 视频 tab（截图2 底部第2tab：竖滑短视频流——海报全屏 + 右侧互动栏 + 底部文案 + 播放态 chrome；演示态） */
 function VideoPage({ onOpenProduct, onToast }: { onOpenProduct: (pid: string) => void; onToast: (m: string) => void }) {
-  const vids = useMemo(() => [...TB_PRODUCTS].slice(0, 8).map((p, i) => ({ p, v: i % 4 })), []);
+  // 需求（第十轮）：视频页上滑可以刷新——滑到底部继续上拉换一批视频
+  const [vKey, setVKey] = useState(0);
+  const vids = useMemo(() => {
+    const arr = [...TB_PRODUCTS];
+    const start = (vKey * 3) % arr.length;
+    return Array.from({ length: 8 }, (_, i) => ({ p: arr[(start + i) % arr.length], v: (i + vKey) % 4 }));
+  }, [vKey]);
   const [playing, setPlaying] = useState(true);
+  const [vRefreshing, setVRefreshing] = useState(false);
+  const vScrollerRef = useRef<HTMLDivElement>(null);
+  const vStart = useRef<number | null>(null);
+  const vAcc = useRef(0);
+  const onVTouchStart = (e: React.TouchEvent) => {
+    const el = vScrollerRef.current;
+    if (el && el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
+      vStart.current = e.touches[0].clientY;
+      vAcc.current = 0;
+    } else vStart.current = null;
+  };
+  const onVTouchMove = (e: React.TouchEvent) => {
+    if (vStart.current == null) return;
+    const dy = e.touches[0].clientY - vStart.current;
+    if (dy < 0) vAcc.current = Math.min(140, -dy);
+  };
+  const onVTouchEnd = () => {
+    if (vAcc.current > 60 && !vRefreshing) {
+      setVRefreshing(true);
+      setTimeout(() => {
+        setVKey((k) => k + 1);
+        setVRefreshing(false);
+        vScrollerRef.current?.scrollTo({ top: 0 });
+        onToast('视频已刷新，为你换了新一批');
+      }, 800);
+    }
+    vStart.current = null;
+    vAcc.current = 0;
+  };
   return (
-    <div className="h-full bg-black">
-      <div className="h-full snap-y snap-mandatory overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="relative h-full bg-black">
+      <div
+        ref={vScrollerRef}
+        className="h-full snap-y snap-mandatory overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        onTouchStart={onVTouchStart}
+        onTouchMove={onVTouchMove}
+        onTouchEnd={onVTouchEnd}
+      >
         {vids.map(({ p, v }, i) => (
           <div key={`${p.id}-${i}`} className="relative h-full w-full snap-start overflow-hidden" onClick={() => setPlaying((s) => !s)}>
             <img src={tbImg(p.tag, 720, 1280, v)} alt={p.title} className="h-full w-full object-cover" draggable={false} />
@@ -1305,6 +1334,15 @@ function VideoPage({ onOpenProduct, onToast }: { onOpenProduct: (pid: string) =>
           </div>
         ))}
       </div>
+      {/* 上滑刷新指示器（需求第十轮：到底继续上拉刷新视频流） */}
+      {vRefreshing ? (
+        <div className="pointer-events-none absolute inset-x-0 top-16 z-40 grid place-items-center">
+          <div className="flex h-9 items-center gap-2 rounded-full bg-white/15 px-4 text-[13px] text-white backdrop-blur">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            正在刷新…
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -4647,8 +4685,8 @@ function MePage({
   }, [uid]);
   const orders = tbLoadOrders(uid);
   const count = (st: TbOrderStatus) => orders.filter((o) => o.status === st).length;
+  // 需求（第十轮）：删除「N张共X元消费券待使用」条目；coupons 保留给资产行「优惠券 N张」计数
   const coupons = tbLoadCoupons(uid).filter((c) => !c.usedAt);
-  const couponSum = coupons.reduce((n, c) => n + c.amount, 0);
   const favs = tbLoadFavs(uid);
   const foots = tbLoadFoots(uid);
   const follows = tbLoadShopFollows(uid);
@@ -4675,13 +4713,13 @@ function MePage({
       setTimeout(() => {
         setMenuKey((k) => k + 1);
         setMenuRefreshing(false);
-        onToast('猜你喜欢菜单已更新');
+        onToast('已为你刷新');
       }, 800);
     }
     mePullStart.current = null;
     mePullAcc.current = 0;
   };
-  // 猜你喜欢菜单池（menuKey 参与轮换：上滑更新菜单）
+  // 猜你喜欢菜单池（menuKey 参与轮换：上滑刷新）
   const meMenu = useMemo(() => {
     const arr = [...TB_PRODUCTS];
     const start = (14 + menuKey * 8) % arr.length;
@@ -4770,18 +4808,7 @@ function MePage({
             </button>
           </div>
         </div>
-        {/* 消费券条（截图3：N张共X元消费券待使用 + 去使用 → 领券中心） */}
-        {coupons.length > 0 ? (
-          <button type="button" onClick={onOpenCouponCenter} className="mt-2 flex w-full items-center gap-2 rounded-xl bg-[#FF8A5C]/15 px-3 py-2 ring-1 ring-[#FFB394]/40 active:opacity-80">
-            <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[4px] bg-[#FF3B30]">
-              <span className="text-[11px] font-bold text-[#FFD100]">¥</span>
-            </span>
-            <span className="min-w-0 flex-1 truncate text-left text-[13px] text-black/75">
-              <span className="font-bold text-[#FF4400]">{coupons.length}张共{fmtMoney(couponSum)}元</span>消费券待使用
-            </span>
-            <span className="h-[26px] shrink-0 rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-3 text-[12px] font-semibold leading-[26px] text-white">去使用</span>
-          </button>
-        ) : null}
+        {/* 需求（第十轮）：原「N张共X元消费券待使用」条目已删除 */}
       </div>
       {/* 快捷入口（截图3：细线描边黑色图标，无底色圆） */}
       <div className="mx-2 mt-2 grid grid-cols-4 gap-2 rounded-xl bg-white p-3">
@@ -4889,11 +4916,11 @@ function MePage({
           <span className="text-[14px] text-black/40">我的收藏</span>
           <span className="text-[14px] text-black/40">我的评价</span>
         </div>
-        {/* 上滑更新菜单提示（menuRefreshing 时显示载入行） */}
+        {/* 上滑刷新提示（menuRefreshing 时显示载入行；需求第十轮：上滑可以刷新） */}
         {menuRefreshing ? (
           <div className="flex items-center justify-center gap-2 py-2 text-[12.5px] text-black/45">
             <Loader2 className="h-4 w-4 animate-spin text-[#FF5000]" />
-            正在为你更新菜单…
+            正在刷新…
           </div>
         ) : null}
         <div className="grid grid-cols-2 gap-2">
@@ -4901,7 +4928,7 @@ function MePage({
             <ProductCard key={`${p.id}-${menuKey}`} p={p} v={(i + menuKey) % 4} onOpen={() => onOpenProduct(p.id)} />
           ))}
         </div>
-        <div className="pt-2 text-center text-[11.5px] text-black/30">上滑到底继续拉一拉，可更新菜单</div>
+        <div className="pt-2 text-center text-[11.5px] text-black/30">上滑到底继续拉一拉，可刷新页面</div>
       </div>
     </div>
     {/* 骑手形象选择（需求：淘金币入口改为骑手；底部弹层复用美团 MT_RIDERS 全套形象，
@@ -6173,9 +6200,10 @@ type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 /** 底部导航（首页/消息/购物车/我的淘宝） */
 function BottomTabBar({ active, onTab, cartCount, msgCount }: { active: TbTab; onTab: (t: TbTab) => void; cartCount: number; msgCount: number }) {
   return (
-    <div className="absolute inset-x-0 bottom-0 z-40 flex items-stretch border-t border-black/[0.05] bg-white/95 pb-5 pt-1.5 backdrop-blur-lg">
+    <div className="absolute inset-x-0 bottom-0 z-40 flex items-stretch border-t border-black/[0.05] bg-white/95 pb-3 pt-0.5 backdrop-blur-lg">
+      {/* 需求（第十轮）：底部 tab 上下变窄一点（pt-1.5→pt-0.5、pb-5→pb-3、行距/内边距收紧） */}
       {/* 首页（active：橙色淘 logo 圆，截图1） */}
-      <button type="button" onClick={() => onTab('home')} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
+      <button type="button" onClick={() => onTab('home')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
         {active === 'home' ? (
           <TbLogoMark size={23} />
         ) : (
@@ -6184,12 +6212,12 @@ function BottomTabBar({ active, onTab, cartCount, msgCount }: { active: TbTab; o
         <span className={`text-[10px] ${active === 'home' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>首页</span>
       </button>
       {/* 视频（截图2：圆角方播放） */}
-      <button type="button" onClick={() => onTab('video')} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
+      <button type="button" onClick={() => onTab('video')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
         <TbVideoTabIcon active={active === 'video'} />
         <span className={`text-[10px] ${active === 'video' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>视频</span>
       </button>
       {/* 消息（截图1/2：气泡三点图标；active 橙色填充白点） */}
-      <button type="button" onClick={() => onTab('msgs')} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
+      <button type="button" onClick={() => onTab('msgs')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
         <span className="relative">
           <TbMsgTabIcon active={active === 'msgs'} />
           {msgCount > 0 ? (
@@ -6199,7 +6227,7 @@ function BottomTabBar({ active, onTab, cartCount, msgCount }: { active: TbTab; o
         <span className={`text-[10px] ${active === 'msgs' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>消息</span>
       </button>
       {/* 购物车 */}
-      <button type="button" onClick={() => onTab('cart')} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
+      <button type="button" onClick={() => onTab('cart')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
         <span className="relative">
           <ShoppingCart className={`h-[23px] w-[23px] ${active === 'cart' ? 'text-[#FF5000]' : 'text-black/60'}`} strokeWidth={active === 'cart' ? 2.3 : 1.9} />
           {cartCount > 0 ? (
@@ -6209,7 +6237,7 @@ function BottomTabBar({ active, onTab, cartCount, msgCount }: { active: TbTab; o
         <span className={`text-[10px] ${active === 'cart' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>购物车</span>
       </button>
       {/* 我的淘宝（笑脸，截图2） */}
-      <button type="button" onClick={() => onTab('me')} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
+      <button type="button" onClick={() => onTab('me')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
         <TbMeTabIcon active={active === 'me'} />
         <span className={`text-[10px] ${active === 'me' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>我的淘宝</span>
       </button>
@@ -6579,8 +6607,9 @@ export default function TaobaoApp() {
     // 飞猪旅行（第九轮：首页运营位图标入口；首页→酒店列表内部导航）
     content = <FliggyPage onBack={() => setPage('main')} onToast={showToast} />;
   } else if (page === 'bill') {
-    // 淘宝账单/我的消费明细（第九轮：我的淘宝消费明细卡入口；真实订单数据）
-    content = <BillPage session={session} uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
+    // 淘宝账单/我的消费明细（第九轮：我的淘宝消费明细卡入口；真实订单数据；
+    // 需求（第十轮）：本月消费行点击进对应订单详情页）
+    content = <BillPage session={session} uid={uid} onBack={() => setPage('main')} onToast={showToast} onOpenOrder={(id) => { setSubReturn('me'); setOrderId(id); setPage('orderDetail'); }} />;
   } else if (page === 'favorites') {
     content = <FavoritesPage uid={uid} onBack={() => setPage('main')} onOpenProduct={openProduct} onToast={showToast} />;
   } else if (page === 'foots') {

@@ -1168,12 +1168,13 @@ export function MoviePage({
           <div className="mt-2.5 flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {TB_MOVIES.map((m) => (
               <div key={m.id} className="w-[106px] shrink-0">
-                <MoviePoster m={m} onOpen={() => onToast(`《${m.title}》详情（演示）`)} />
+                <MoviePoster m={m} onOpen={() => { setMovie(m); setDay(0); setSel(new Set()); setView('cinemas'); }} />
                 <div className="mt-1.5 truncate text-[13.5px] text-black/85">{m.title}</div>
                 <button
                   type="button"
                   onClick={() => {
                     setMovie(m);
+                    setDay(0);
                     setSel(new Set());
                     setView('cinemas');
                   }}
@@ -1503,7 +1504,7 @@ export function FliggyPage({ onBack, onToast }: { onBack: () => void; onToast: (
 // ============================== 淘宝账单（我的消费明细） ==============================
 
 /** 淘宝账单（截图10：真实订单数据——省钱统计/10月账单/2026年累计账单/分类） */
-export function BillPage({ session, uid, onBack, onToast }: { session: TbSession; uid: string; onBack: () => void; onToast: (m: string) => void }) {
+export function BillPage({ session, uid, onBack, onToast, onOpenOrder }: { session: TbSession; uid: string; onBack: () => void; onToast: (m: string) => void; onOpenOrder: (id: string) => void }) {
   const orders = tbLoadOrders(uid);
   const paid = orders.filter((o) => o.status !== 'cancelled' && o.paidAt);
   const now = new Date();
@@ -1619,7 +1620,7 @@ export function BillPage({ session, uid, onBack, onToast }: { session: TbSession
           ) : (
             <div className="mt-2 flex flex-col gap-2">
               {monthPaid.slice(0, 3).map((o) => (
-                <button key={o.id} type="button" onClick={() => onToast('账单明细（演示）')} className="flex items-center gap-2.5 rounded-xl bg-black/[0.025] p-2 text-left active:opacity-75">
+                <button key={o.id} type="button" onClick={() => onOpenOrder(o.id)} className="flex items-center gap-2.5 rounded-xl bg-black/[0.025] p-2 text-left active:opacity-75">
                   <img src={o.items[0]?.img} alt={o.items[0]?.title} className="h-11 w-11 shrink-0 rounded-lg object-cover" draggable={false} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13.5px] font-medium text-black/80">{o.items[0]?.title}</span>
