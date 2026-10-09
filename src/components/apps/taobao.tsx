@@ -136,6 +136,7 @@ import {
   type TbSession,
 } from '@/lib/ios/taobao-store';
 import { tbExecutePay, tbListPayChannels, tbRefundToOrigin, type TbPayChannel } from '@/lib/ios/taobao-pay';
+import { BillPage, FliggyPage, MoviePage, SeckillPage, SignInPage, SubsidyPage } from './taobao-channels';
 import { LocalToast, useLocalToast } from './page-toast';
 
 const TB_ORANGE = '#FF5000';
@@ -901,12 +902,14 @@ function HomePage({
   onOpenProduct,
   onToast,
   onOpenCouponCenter,
+  onOpenPage,
 }: {
   uid: string;
   onOpenSearch: (seed?: string) => void;
   onOpenProduct: (pid: string) => void;
   onToast: (m: string) => void;
   onOpenCouponCenter: () => void;
+  onOpenPage: (p: 'signin' | 'seckill' | 'movie' | 'fliggy' | 'subsidy') => void;
 }) {
   const feedTabs: { id: HomeFeedTab; label: string; tag?: string }[] = [
     { id: 'follow', label: '关注' },
@@ -1045,14 +1048,14 @@ function HomePage({
         {/* 运营位图标行（红包签到/淘宝秒杀/领淘金币/阿里拍卖/淘票票/飞猪；彩色 SVG） */}
         <div className="mt-2 grid grid-cols-6 px-2">
           {[
-            { icon: <HongbaoIcon />, label: '红包签到' },
-            { icon: <MiaoshaIcon />, label: '淘宝秒杀' },
-            { icon: <TbCoinIcon />, label: '领淘金币' },
-            { icon: <PaiIcon />, label: '阿里拍卖' },
-            { icon: <TicketPiaoIcon />, label: '淘票票' },
-            { icon: <FliggyIcon />, label: '飞猪' },
+            { icon: <HongbaoIcon />, label: '红包签到', on: () => onOpenPage('signin') },
+            { icon: <MiaoshaIcon />, label: '淘宝秒杀', on: () => onOpenPage('seckill') },
+            { icon: <TbCoinIcon />, label: '领淘金币', on: () => onToast('领淘金币（演示）') },
+            { icon: <PaiIcon />, label: '阿里拍卖', on: () => onToast('阿里拍卖（演示）') },
+            { icon: <TicketPiaoIcon />, label: '淘票票', on: () => onOpenPage('movie') },
+            { icon: <FliggyIcon />, label: '飞猪', on: () => onOpenPage('fliggy') },
           ].map((it) => (
-            <button key={it.label} type="button" onClick={() => onToast(`${it.label}（演示）`)} className="flex flex-col items-center gap-1 py-0.5 active:opacity-70">
+            <button key={it.label} type="button" onClick={it.on} className="flex flex-col items-center gap-1 py-0.5 active:opacity-70">
               {it.icon}
               <span className="text-[11.5px] text-black/80">{it.label}</span>
             </button>
@@ -1075,32 +1078,33 @@ function HomePage({
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
         >
-          {/* 运营位双卡：淘宝直播 / 百亿补贴（截图1：白卡+双图+直播价/补贴价） */}
+          {/* 运营位双卡：领券中心 / 百亿补贴（第九轮需求：删淘宝直播，领券中心移到原淘宝直播位；百亿补贴进频道页） */}
           <div className="grid grid-cols-2 gap-2 px-2 pt-2.5">
-            <button type="button" onClick={() => onToast('淘宝直播（演示）')} className="flex flex-col rounded-2xl bg-white p-2.5 text-left active:opacity-80">
+            <button type="button" onClick={onOpenCouponCenter} className="flex flex-col rounded-2xl bg-white p-2.5 text-left active:opacity-80">
               <div className="flex items-center justify-between">
-                <span className="text-[15px] font-bold text-black/90">淘宝直播</span>
-                <span className="flex items-center gap-0.5 text-[11px] font-semibold text-[#FF2D7E]">
-                  <Zap className="h-3 w-3 fill-[#FF2D7E]" />
-                  直播有好价
-                </span>
+                <span className="text-[15px] font-bold text-black/90">领券中心</span>
+                <span className="text-[11px] font-black italic text-[#FF2600]">超级88</span>
               </div>
               <div className="mt-2 flex gap-1.5">
-                {[0, 1].map((i) => (
-                  <span key={i} className="relative w-1/2">
-                    <img src={tbImg(i === 0 ? 'phone' : 'earbuds', 140, 140, 3)} alt="直播好物" className="h-[72px] w-full rounded-lg object-cover" draggable={false} />
-                    <span className="absolute left-1 top-1 grid h-[14px] w-[14px] place-items-center rounded-[3px] bg-[#FF2D7E]/90">
-                      <span className="text-[8px] font-bold text-white">ivi</span>
+                {[
+                  { v: 88, label: '消费券' },
+                  { v: 50, label: '数码券' },
+                ].map((c) => (
+                  <span key={c.label} className="flex h-[72px] w-1/2 flex-col items-center justify-center rounded-lg bg-gradient-to-b from-[#FF5A45] to-[#F5222D] ring-1 ring-[#FFD9CC]">
+                    <span className="text-[10px] leading-[13px] text-white/85">{c.label}</span>
+                    <span className="text-[22px] font-black leading-[26px] text-[#FFE84D]">
+                      ¥{c.v}
                     </span>
+                    <span className="text-[9px] font-semibold text-white">立即领取</span>
                   </span>
                 ))}
               </div>
-              <div className="mt-1.5 flex justify-between text-[12px] font-bold text-[#FF2D7E]">
-                <span>直播价¥6</span>
-                <span>直播价¥183</span>
+              <div className="mt-1.5 flex justify-between text-[12px] font-bold">
+                <span className="text-[#FF2600]">大额券天天领</span>
+                <span className="text-black/40">已领10.7万</span>
               </div>
             </button>
-            <button type="button" onClick={() => onToast('百亿补贴（演示）')} className="flex flex-col rounded-2xl bg-white p-2.5 text-left active:opacity-80">
+            <button type="button" onClick={() => onOpenPage('subsidy')} className="flex flex-col rounded-2xl bg-white p-2.5 text-left active:opacity-80">
               <div className="flex items-center justify-between">
                 <span className="text-[15px] font-bold text-black/90">百亿补贴</span>
                 <span className="flex items-center gap-0.5 text-[11px] font-bold text-[#00A860]">
@@ -1121,40 +1125,6 @@ function HomePage({
               </div>
             </button>
           </div>
-
-          {/* 超级88 大促卡（截图1：红底 88元消费券券票 + 三商品小卡） */}
-          <button type="button" onClick={onOpenCouponCenter} className="mx-2 mt-2 block w-[calc(100%-16px)] rounded-2xl bg-gradient-to-r from-[#FF4A2A] via-[#FF2600] to-[#EF1500] p-2.5 text-left active:opacity-95">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[20px] font-black italic leading-none tracking-tight text-white">超级88</span>
-              <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" className="shrink-0">
-                <path d="M4 9v6h4l5 4.5v-15L8 9H4Z" fill="#fff" />
-                <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" stroke="#fff" strokeWidth="1.8" fill="none" strokeLinecap="round" />
-              </svg>
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-white/95">叠加大额消费券7.7折起,速抢</span>
-              <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-white/25">
-                <ChevronRight className="h-3 w-3 text-white" strokeWidth={3} />
-              </span>
-            </div>
-            <div className="mt-2 grid grid-cols-4 gap-1.5">
-              <span className="flex flex-col items-center justify-center rounded-lg bg-gradient-to-b from-[#FF7A5C] to-[#F5222D] py-1.5 ring-1 ring-white/50">
-                <span className="text-[9px] leading-[12px] text-white/85">消费券</span>
-                <span className="text-[21px] font-black leading-[24px] text-[#FFE84D]">
-                  88<span className="text-[10px] font-bold">元</span>
-                </span>
-                <span className="text-[9px] leading-[12px] font-semibold text-white">待使用</span>
-              </span>
-              {[
-                { tag: 'earbuds', label: '¥25.9优惠后' },
-                { tag: 'phone', label: '淘工厂' },
-                { tag: TB_PRODUCTS.find((p) => p.cat === 'fashion')?.tag ?? 'earbuds', label: '¥117补贴后' },
-              ].map((it, i) => (
-                <span key={i} className="relative overflow-hidden rounded-lg bg-white">
-                  <img src={tbImg(it.tag, 160, 160, 5)} alt="活动好物" className="h-[52px] w-full object-cover" draggable={false} />
-                  <span className="absolute inset-x-0 bottom-0 truncate bg-[#FF3B30]/92 px-0.5 text-center text-[9px] font-bold leading-[15px] text-white">{it.label}</span>
-                </span>
-              ))}
-            </div>
-          </button>
 
           {/* 推荐商品流（双列瀑布） */}
           {feedTab === 'follow' ? (
@@ -2527,17 +2497,6 @@ function CartPage({
                   </div>
                 );
               })}
-            </div>
-            {/* 管理模式列表尾：换季福利双横幅（截图6 装饰） */}
-            <div className="mt-2 grid grid-cols-2 gap-2 px-2">
-              <button type="button" onClick={() => onToast('秋冬换季福利（演示）')} className="flex h-[104px] flex-col items-start justify-end rounded-xl bg-gradient-to-br from-[#FFD9A8] via-[#FFC28E] to-[#FF9A6A] p-2.5 text-left active:opacity-85">
-                <span className="text-[13px] font-black text-[#8a3d12]">V-GIRL 秋冬换季福利</span>
-                <span className="mt-0.5 text-[11px] font-semibold text-[#a35b2a]">拍套组 · 好礼多选1</span>
-              </button>
-              <button type="button" onClick={() => onToast('视频福利（演示）')} className="flex h-[104px] flex-col items-start justify-end rounded-xl bg-gradient-to-br from-[#3a3f4b] to-[#141821] p-2.5 text-left active:opacity-85">
-                <span className="text-[13px] font-black text-white/95">猜你想看 · 短视频</span>
-                <span className="mt-0.5 text-[11px] text-white/55">边看边买，福利不断</span>
-              </button>
             </div>
           </>
         )}
@@ -4657,6 +4616,7 @@ function MePage({
   onToast,
   onOpenWallet,
   onOpenCouponCenter,
+  onOpenBill,
 }: {
   session: TbSession;
   uid: string;
@@ -4673,6 +4633,7 @@ function MePage({
   onToast: (m: string) => void;
   onOpenWallet: () => void;
   onOpenCouponCenter: () => void;
+  onOpenBill: () => void;
 }) {
   const [, setTick] = useState(0);
   // 骑手形象选择（需求：我的淘宝淘金币入口改为骑手，复用美团 mt-rider 全套形象；
@@ -4757,22 +4718,22 @@ function MePage({
             <span className="text-[10px]">设置</span>
           </button>
         </div>
-        {/* 消费明细白卡（截图3：我的消费明细 + 会员中心/省钱卡） */}
+        {/* 消费明细白卡（第九轮：标题点击进淘宝账单页；会员中心/省钱卡等宽平行；资产行 label/value 统一行高平行） */}
         <div className="mt-3 rounded-2xl bg-white p-3">
           <div className="flex items-center">
-            <button type="button" onClick={() => onToast('消费明细（演示）')} className="flex items-center gap-0.5 active:opacity-70">
+            <button type="button" onClick={onOpenBill} className="flex items-center gap-0.5 active:opacity-70">
               <span className="text-[17px] font-bold text-black/90">我的消费明细</span>
               <ChevronRight className="h-4 w-4 text-black/35" />
             </button>
-            <div className="ml-auto flex items-center gap-3">
-              <button type="button" onClick={onOpenCouponCenter} className="flex flex-col items-start leading-tight active:opacity-70">
+            <div className="ml-auto flex items-center">
+              <button type="button" onClick={onOpenCouponCenter} className="flex w-[86px] flex-col items-start leading-tight active:opacity-70">
                 <span className="text-[13.5px] font-bold text-[#FF4400]">会员中心</span>
-                <span className="text-[10.5px] text-black/40">闪购券50元起 &gt;</span>
+                <span className="mt-0.5 text-[10.5px] text-black/40">闪购券50元起 &gt;</span>
               </button>
-              <span className="h-7 w-px bg-black/[0.07]" />
-              <button type="button" onClick={onOpenCouponCenter} className="flex flex-col items-start leading-tight active:opacity-70">
+              <span className="mx-2.5 h-7 w-px bg-black/[0.07]" />
+              <button type="button" onClick={onOpenCouponCenter} className="flex w-[64px] flex-col items-start leading-tight active:opacity-70">
                 <span className="text-[13.5px] font-bold text-[#FF4400]">省钱卡</span>
-                <span className="text-[10.5px] text-black/40">免费领 &gt;</span>
+                <span className="mt-0.5 text-[10.5px] text-black/40">免费领 &gt;</span>
               </button>
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-[#FF3B30] to-[#FF0036]">
                 <span className="grid h-8 w-8 place-items-center rounded-md border border-white/40 text-center text-[9px] font-bold leading-[10px] text-[#FFD100]">免费
@@ -4780,30 +4741,32 @@ function MePage({
               </span>
             </div>
           </div>
-          {/* 资产行（截图3：label 上 value 下；红包/优惠券/骑手/账户余额/天猫积分） */}
+          {/* 资产行（label 上 value 下；value 统一 h-[18px] 居中保证五列平行） */}
           <div className="mt-1 flex items-center">
             <button type="button" onClick={() => onToast('红包 ¥0.00（演示）')} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
-              <span className="text-[12px] text-black/45">红包</span>
-              <span className="mt-0.5 text-[16px] font-bold leading-none text-black/90">
+              <span className="text-[12px] leading-none text-black/45">红包</span>
+              <span className="mt-1.5 flex h-[18px] items-center justify-center text-[16px] font-bold leading-none text-black/90">
                 <span className="text-[11px] font-semibold">¥</span>0
               </span>
             </button>
             <button type="button" onClick={onOpenCoupons} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
-              <span className="text-[12px] text-black/45">优惠券</span>
-              <span className="mt-0.5 text-[16px] font-bold leading-none text-black/90">{coupons.length}张</span>
+              <span className="text-[12px] leading-none text-black/45">优惠券</span>
+              <span className="mt-1.5 flex h-[18px] items-center justify-center text-[16px] font-bold leading-none text-black/90">{coupons.length}张</span>
             </button>
             {/* 骑手（上轮需求保留：淘金币位显示当前骑手形象，点按弹选择层） */}
             <button type="button" data-testid="my-rider" onClick={() => setRiderOpen(true)} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
-              <span className="text-[12px] text-black/45">骑手</span>
-              <img src={mtRiderSrcOf(riderId)} alt="骑手形象" draggable={false} className="mt-0.5 h-4 w-4 object-contain" />
+              <span className="text-[12px] leading-none text-black/45">骑手</span>
+              <span className="mt-1.5 flex h-[18px] items-center justify-center">
+                <img src={mtRiderSrcOf(riderId)} alt="骑手形象" draggable={false} className="h-[17px] w-[17px] object-contain" />
+              </span>
             </button>
             <button type="button" onClick={onOpenWallet} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
-              <span className="text-[12px] text-black/45">账户余额</span>
-              <span className="mt-0.5 text-[11px] font-semibold leading-[16px] text-black/90">微信/QQ</span>
+              <span className="text-[12px] leading-none text-black/45">账户余额</span>
+              <span className="mt-1.5 flex h-[18px] items-center justify-center text-[13px] font-bold leading-none text-black/90">微信/QQ</span>
             </button>
             <button type="button" onClick={() => onToast('天猫积分 0（演示）')} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
-              <span className="text-[12px] text-black/45">天猫积分</span>
-              <span className="mt-0.5 text-[16px] font-bold leading-none text-black/90">0</span>
+              <span className="text-[12px] leading-none text-black/45">天猫积分</span>
+              <span className="mt-1.5 flex h-[18px] items-center justify-center text-[16px] font-bold leading-none text-black/90">0</span>
             </button>
           </div>
         </div>
@@ -6204,7 +6167,7 @@ function SettingsPage({ session, onBack, onToast, onLogout }: { session: TbSessi
 
 // ---------------- 主入口（tab 框架 + 页面栈） ----------------
 
-type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs';
+type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill';
 type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 
 /** 底部导航（首页/消息/购物车/我的淘宝） */
@@ -6418,6 +6381,7 @@ export default function TaobaoApp() {
             onOpenProduct={openProduct}
             onToast={showToast}
             onOpenCouponCenter={() => setPage('couponCenter')}
+            onOpenPage={(p) => setPage(p)}
           />
         ) : null}
         {tab === 'video' ? <VideoPage onOpenProduct={openProduct} onToast={showToast} /> : null}
@@ -6475,6 +6439,7 @@ export default function TaobaoApp() {
             onToast={showToast}
             onOpenWallet={() => setWalletOpen(true)}
             onOpenCouponCenter={() => setPage('couponCenter')}
+            onOpenBill={() => setPage('bill')}
           />
         ) : null}
         <BottomTabBar
@@ -6598,6 +6563,24 @@ export default function TaobaoApp() {
   } else if (page === 'couponCenter') {
     // 领券中心（首页/消息/我的入口共用；返回回 tab 主页）
     content = <CouponCenterPage uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
+  } else if (page === 'subsidy') {
+    // 百亿补贴（第九轮：首页双卡/频道入口；返回回首页）
+    content = <SubsidyPage uid={uid} onBack={() => setPage('main')} onToast={showToast} onOpenProduct={openProduct} />;
+  } else if (page === 'seckill') {
+    // 淘宝秒杀（第九轮：首页运营位图标入口）
+    content = <SeckillPage uid={uid} onBack={() => setPage('main')} onToast={showToast} onOpenProduct={openProduct} />;
+  } else if (page === 'signin') {
+    // 红包签到·领现金（第九轮：首页运营位图标入口）
+    content = <SignInPage uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
+  } else if (page === 'movie') {
+    // 淘票票（第九轮：首页运营位图标入口；首页→影院→选座内部导航）
+    content = <MoviePage onBack={() => setPage('main')} onToast={showToast} onOpenCouponCenter={() => setPage('couponCenter')} />;
+  } else if (page === 'fliggy') {
+    // 飞猪旅行（第九轮：首页运营位图标入口；首页→酒店列表内部导航）
+    content = <FliggyPage onBack={() => setPage('main')} onToast={showToast} />;
+  } else if (page === 'bill') {
+    // 淘宝账单/我的消费明细（第九轮：我的淘宝消费明细卡入口；真实订单数据）
+    content = <BillPage session={session} uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
   } else if (page === 'favorites') {
     content = <FavoritesPage uid={uid} onBack={() => setPage('main')} onOpenProduct={openProduct} onToast={showToast} />;
   } else if (page === 'foots') {
