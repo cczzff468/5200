@@ -21,11 +21,14 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   CircleCheck,
+  Clock as ClockIcon,
   ClipboardList,
   Copy,
   Crosshair,
   FileText,
+  GripVertical,
   Headphones,
   Heart,
   Home as HomeIcon,
@@ -71,6 +74,7 @@ import {
   type TbProduct,
 } from '@/lib/ios/taobao-data';
 import {
+  TB_CC_SEEDS,
   TB_COUPON_SEEDS,
   TB_PAY_TTL,
   TB_TRACK_NODES,
@@ -96,6 +100,8 @@ import {
   tbLoadShopFollows,
   tbMarkPaid,
   tbMarkRefund,
+  tbMsgUnreadCount,
+  tbPinCartShop,
   tbPushFoot,
   tbPushMsg,
   tbPushSearchHist,
@@ -106,6 +112,7 @@ import {
   tbSaveOrders,
   tbSetCartAllChecked,
   tbSetCurAddr,
+  tbSetMsgsReadAt,
   tbSetSession,
   tbStartOrderWatcher,
   tbStatusText,
@@ -159,6 +166,20 @@ const fmtTime = (ts: number): string => {
 const fmtFullTime = (ts: number): string => {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+};
+
+/** 消息会话时间（截图2口径：今天 HH:MM / 昨天 / 星期X / 更早 YY/MM-DD） */
+const fmtChatTime = (ts: number): string => {
+  const d = new Date(ts);
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const dayMs = 86_400_000;
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (ts >= midnight) return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (ts >= midnight - dayMs) return '昨天';
+  if (ts >= midnight - 6 * dayMs) return ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][d.getDay()];
+  if (d.getFullYear() !== now.getFullYear()) return `${String(d.getFullYear()).slice(2)}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
 };
 
 /** 待付款倒计时 mm:ss */
@@ -238,6 +259,143 @@ function PayRadioRow({ icon, label, active, onClick }: { icon: ReactNode; label:
         {active ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
       </span>
     </button>
+  );
+}
+
+// ---------------- 底部导航图标（截图1/2：气泡三点消息/圆角方播放视频/笑脸我的；选中态橙色填充） ----------------
+
+/** 消息气泡（三个点；active 橙色填充白点，inactive 黑描边） */
+function TbMsgTabIcon({ active, size = 24 }: { active: boolean; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M12 3.2c5.05 0 9 3.32 9 7.6 0 4.28-3.95 7.6-9 7.6-.94 0-1.85-.11-2.7-.33l-3.6 2.1a.55.55 0 0 1-.83-.5l.16-3.1C3.6 15.15 3 12.98 3 10.8c0-4.28 3.95-7.6 9-7.6Z"
+        fill={active ? '#FF5000' : 'none'}
+        stroke={active ? '#FF5000' : '#1a1a1a'}
+        strokeWidth={active ? 0 : 1.9}
+        strokeLinejoin="round"
+      />
+      <circle cx="8.2" cy="10.8" r="1.15" fill={active ? '#fff' : '#1a1a1a'} />
+      <circle cx="12" cy="10.8" r="1.15" fill={active ? '#fff' : '#1a1a1a'} />
+      <circle cx="15.8" cy="10.8" r="1.15" fill={active ? '#fff' : '#1a1a1a'} />
+    </svg>
+  );
+}
+
+/** 视频 tab（圆角方 + 播放三角；active 橙填充） */
+function TbVideoTabIcon({ active, size = 24 }: { active: boolean; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="4.4" width="18" height="15.2" rx="4.4" fill={active ? '#FF5000' : 'none'} stroke={active ? '#FF5000' : '#1a1a1a'} strokeWidth={1.9} />
+      <path d="M10.2 9.1 15 12l-4.8 2.9V9.1Z" fill={active ? '#fff' : '#1a1a1a'} strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 我的淘宝（笑脸；active 橙填充白脸） */
+function TbMeTabIcon({ active, size = 24 }: { active: boolean; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill={active ? '#FF5000' : 'none'} stroke={active ? '#FF5000' : '#1a1a1a'} strokeWidth={1.9} />
+      <circle cx="9" cy="10" r="1.15" fill={active ? '#fff' : '#1a1a1a'} />
+      <circle cx="15" cy="10" r="1.15" fill={active ? '#fff' : '#1a1a1a'} />
+      <path d="M8.3 14.3c1 1.3 2.3 2 3.7 2s2.7-.7 3.7-2" fill="none" stroke={active ? '#fff' : '#1a1a1a'} strokeWidth={1.8} strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** 清除未读小扫帚（内联 SVG） */
+function BroomIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M14.5 3.5 20 9l-4.2 4.2-5.5-5.5 4.2-4.2Z" fill="#8a8a8a" />
+      <path d="m9.6 8.4 5.5 5.5-6.3 6.3c-.4.4-1 .5-1.5.2l-3.6-2a1 1 0 0 1-.2-1.6l6.1-8.4Z" fill="#b9b9b9" />
+      <path d="m5.6 15.2 2.7 2.7" stroke="#fff" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** 通讯录/联系人扫一扫（方括号+人形，消息页右上） */
+function ContactScanIcon({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="#1a1a1a" strokeWidth="1.9" strokeLinecap="round">
+      <path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16" />
+      <circle cx="12" cy="10.2" r="2.5" />
+      <path d="M7.6 16.8c.7-1.9 2.4-3 4.4-3s3.7 1.1 4.4 3" />
+    </svg>
+  );
+}
+
+/** 首页运营位图标（截图1：红包签到/淘宝秒杀/领淘金币/阿里拍卖/淘票票/飞猪；彩色内联 SVG） */
+function HongbaoIcon({ size = 44 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+      <rect x="7" y="5" width="34" height="38" rx="7" fill="#FF3B30" />
+      <path d="M7 12c6 4.5 11 6.6 17 6.6S35 16.5 41 12v-0.4A7 7 0 0 0 34 5H14a7 7 0 0 0-7 7v.4Z" fill="#E62E24" />
+      <circle cx="24" cy="19" r="7.5" fill="#FFD100" />
+      <text x="24" y="23.5" textAnchor="middle" fontSize="11" fontWeight="700" fill="#E62E24" fontFamily="system-ui, sans-serif">¥</text>
+    </svg>
+  );
+}
+
+function MiaoshaIcon({ size = 44 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+      <circle cx="24" cy="26" r="16" fill="#FF3B30" />
+      <circle cx="24" cy="26" r="11.5" fill="#fff" />
+      <path d="M24 17.5v8.5l6 3.6" stroke="#FF3B30" strokeWidth="3" strokeLinecap="round" fill="none" />
+      <path d="M10.5 12.5 15 8M37.5 12.5 33 8" stroke="#FF3B30" strokeWidth="4" strokeLinecap="round" />
+      <path d="M31.5 2.5 24 13h5l-2.5 8 9-11.5h-5l1-7Z" fill="#FFD100" stroke="#E62E24" strokeWidth="1.2" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TbCoinIcon({ size = 44 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+      <circle cx="24" cy="24" r="19" fill="#FFC300" />
+      <circle cx="24" cy="24" r="14" fill="#FFDB4D" />
+      <text x="24" y="30.5" textAnchor="middle" fontSize="17" fontWeight="700" fill="#C77700" fontFamily="system-ui, sans-serif">币</text>
+      <path d="M13 10.5c2-1.8 4.4-3 7-3.6" stroke="#FFE68A" strokeWidth="3" strokeLinecap="round" fill="none" />
+    </svg>
+  );
+}
+
+function PaiIcon({ size = 44 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+      <path d="M10 8h28a4 4 0 0 1 4 4v20a4 4 0 0 1-4 4H26l-8 6v-6h-8a4 4 0 0 1-4-4V12a4 4 0 0 1 4-4Z" fill="#FF4FA0" />
+      <text x="24" y="25.5" textAnchor="middle" fontSize="12" fontWeight="700" fill="#fff" fontFamily="system-ui, sans-serif">捡漏</text>
+      <circle cx="24" cy="40.5" r="2.6" fill="#FF4FA0" />
+    </svg>
+  );
+}
+
+function TicketPiaoIcon({ size = 44 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+      <circle cx="16" cy="24" r="10" fill="#E62E24" />
+      <circle cx="32" cy="24" r="10" fill="#E62E24" />
+      <rect x="16" y="21" width="16" height="6" fill="#E62E24" />
+      <circle cx="16" cy="24" r="4.6" fill="#fff" />
+      <circle cx="32" cy="24" r="4.6" fill="#fff" />
+      <circle cx="16" cy="24" r="2.2" fill="#2B7DE9" />
+      <circle cx="32" cy="24" r="2.2" fill="#2B7DE9" />
+    </svg>
+  );
+}
+
+function FliggyIcon({ size = 44 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+      <circle cx="24" cy="26" r="17" fill="#FFD100" />
+      <path d="M9 15c-2-4-1-7 1-8 2.4-1.2 5 .6 6.6 3.4A17 17 0 0 0 9 15ZM39 15c2-4 1-7-1-8-2.4-1.2-5 .6-6.6 3.4A17 17 0 0 1 39 15Z" fill="#FFD100" />
+      <circle cx="18.5" cy="22" r="2.6" fill="#3b2b00" />
+      <circle cx="29.5" cy="22" r="2.6" fill="#3b2b00" />
+      <ellipse cx="24" cy="29.5" rx="6.4" ry="5" fill="#FFB800" />
+      <circle cx="21.6" cy="29" r="1.2" fill="#8a6300" />
+      <circle cx="26.4" cy="29" r="1.2" fill="#8a6300" />
+    </svg>
   );
 }
 
@@ -735,32 +893,28 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onTo
 
 // ---------------- 首页 ----------------
 
-type HomeFeedTab = 'follow' | 'rec' | 'flash' | 'subsidy' | 'wear';
+type HomeFeedTab = 'follow' | 'rec' | 'flash' | 'subsidy' | 'super88' | 'fliggy' | 'wear';
 
 function HomePage({
-  session,
   uid,
   onOpenSearch,
   onOpenProduct,
-  onOpenMsgs,
-  onOpenCart,
   onToast,
-  cartCount,
+  onOpenCouponCenter,
 }: {
-  session: TbSession;
   uid: string;
   onOpenSearch: (seed?: string) => void;
   onOpenProduct: (pid: string) => void;
-  onOpenMsgs: () => void;
-  onOpenCart: () => void;
   onToast: (m: string) => void;
-  cartCount: number;
+  onOpenCouponCenter: () => void;
 }) {
-  const feedTabs: { id: HomeFeedTab; label: string }[] = [
+  const feedTabs: { id: HomeFeedTab; label: string; tag?: string }[] = [
     { id: 'follow', label: '关注' },
     { id: 'rec', label: '推荐' },
-    { id: 'flash', label: '闪购' },
+    { id: 'flash', label: '闪购', tag: '外卖' },
     { id: 'subsidy', label: '国补' },
+    { id: 'super88', label: '超级88' },
+    { id: 'fliggy', label: '飞猪' },
     { id: 'wear', label: '穿搭' },
   ];
   const [feedTab, setFeedTab] = useState<HomeFeedTab>('rec');
@@ -812,6 +966,8 @@ function HomePage({
     let list = [...TB_PRODUCTS];
     if (feedTab === 'flash') list = list.filter((p) => p.promo === '超级88');
     else if (feedTab === 'subsidy') list = list.filter((p) => p.promo === '百亿补贴' || p.promo === '国补');
+    else if (feedTab === 'super88') list = list.filter((p) => p.promo === '超级88' || p.promo === '超级立减');
+    else if (feedTab === 'fliggy') list = list.filter((p) => p.cat === 'digital' || p.cat === 'fashion');
     else if (feedTab === 'wear') list = list.filter((p) => p.cat === 'fashion');
     // 确定性洗牌（refreshKey 参与：下拉刷新换一批）
     let h = 7 + refreshKey * 131;
@@ -836,52 +992,76 @@ function HomePage({
     return out;
   }, [pool, batch, refreshKey]);
 
+  // 底部消费券浮条（截图1：4张共88元消费券待使用,剩 04:37:32 + 去使用 + 关闭）
+  const stripCoupons = tbLoadCoupons(uid).filter((c) => !c.usedAt && c.expireAt > Date.now());
+  const stripSum = stripCoupons.reduce((n, c) => n + c.amount, 0);
+  const [stripOpen, setStripOpen] = useState(true);
+  const [ccLeft, setCcLeft] = useState(4 * 3600 + 37 * 60 + 32);
+  useEffect(() => {
+    const t = setInterval(() => setCcLeft((n) => (n > 0 ? n - 1 : 0)), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const ccText = `${String(Math.floor(ccLeft / 3600)).padStart(2, '0')}:${String(Math.floor((ccLeft % 3600) / 60)).padStart(2, '0')}:${String(ccLeft % 60).padStart(2, '0')}`;
+
   return (
-    <div className="flex h-full flex-col bg-[#f4f4f4]">
-      {/* 顶部品牌区（固定不随列表滚动：状态栏/顶栏背景始终与本页一致；橙红渐变，含 tab + 搜索框 + 图标宫格背景） */}
-      <div className="relative z-30 shrink-0 bg-gradient-to-b from-[#FF6A1E] via-[#FF6A1E] to-[#FF6A1E]/90 pb-3">
-        {/* 顶部 feed tab */}
-        <div className="flex items-center gap-5 overflow-x-auto px-4 pb-1 pt-[58px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    // 需求（第八轮）：首页整体奶油肉粉色（截图1 口径），不再是橙色渐变
+    <div className="flex h-full flex-col bg-[#FBF0E3]">
+      {/* 顶部品牌区（固定不随列表滚动：奶油底 + 黑字频道 tab + 橙描边搜索框 + 彩色运营位图标） */}
+      <div className="relative z-30 shrink-0 bg-[#FDF2E6] pb-2">
+        {/* 顶部频道 tab（关注/推荐/闪购外卖/国补/超级88/飞猪/穿搭；选中橙字+微笑弧） */}
+        <div className="flex items-center gap-[18px] overflow-x-auto px-4 pt-[56px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {feedTabs.map((t) => (
             <button
               key={t.id}
               type="button"
               onClick={() => setFeedTab(t.id)}
-              className={`relative shrink-0 pb-1.5 text-[19px] font-semibold transition-colors ${feedTab === t.id ? 'text-white' : 'text-white/70'}`}
+              className={`relative shrink-0 pb-2 text-[18px] font-semibold transition-colors ${feedTab === t.id ? 'text-[#FF5000]' : 'text-black/85'}`}
             >
               {t.label}
-              {feedTab === t.id ? <span className="absolute inset-x-1 -bottom-0 h-[3px] rounded-full bg-white" /> : null}
+              {t.tag ? <span className="ml-0.5 inline-block rounded-[4px] bg-[#FF0036] px-1 align-[3px] text-[10px] font-bold leading-[14px] text-white">{t.tag}</span> : null}
+              {/* 微笑弧（截图1 选中 tab 下方弧线） */}
+              {feedTab === t.id ? (
+                <svg viewBox="0 0 26 7" className="absolute bottom-0 left-1/2 h-[6px] w-[26px] -translate-x-1/2" aria-hidden="true">
+                  <path d="M2 1.2 Q13 7.6 24 1.2" stroke="#FF5000" strokeWidth="2.4" fill="none" strokeLinecap="round" />
+                </svg>
+              ) : null}
             </button>
           ))}
         </div>
-        {/* 搜索框（扫码 / 相机 / 搜索按钮）+ 消息入口 */}
-        <div className="flex items-center gap-2 px-3 pt-2">
+        {/* 搜索框（白底橙描边胶囊：扫码/占位/相机/橙搜索钮） */}
+        <div className="px-3 pt-2">
           <button
             type="button"
             onClick={() => onOpenSearch('')}
-            className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full bg-white pl-2.5 pr-1"
+            className="flex h-[42px] w-full items-center rounded-full border-[1.6px] border-[#FF5000] bg-white pl-1.5 pr-1"
           >
-            <ScanLine className="ml-0.5 h-[20px] w-[20px] shrink-0 text-[#FF5000]" strokeWidth={2.2} />
-            <span className="h-4 w-px shrink-0 bg-black/10" />
-            <span className="min-w-0 flex-1 truncate text-left text-[14px] text-black/40">超长续航蓝牙耳机</span>
-            <Camera className="h-[19px] w-[19px] shrink-0 text-black/45" strokeWidth={2} />
-            <span className="grid h-[32px] shrink-0 place-items-center rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-4 text-[14px] font-semibold text-white">搜索</span>
-          </button>
-          <button type="button" aria-label="消息" onClick={onOpenMsgs} className="relative grid h-10 w-9 shrink-0 place-items-center text-white active:opacity-70">
-            <MessageSquare className="h-[21px] w-[21px]" strokeWidth={2.1} />
-            {tbLoadMsgs(uid).length > 0 ? <span className="absolute right-1 top-1.5 h-2 w-2 rounded-full bg-white ring-2 ring-[#FF6A1E]" /> : null}
+            <ScanLine className="ml-1 h-[19px] w-[19px] shrink-0 text-[#FF5000]" strokeWidth={2.2} />
+            <span className="mx-2 h-4 w-px shrink-0 bg-black/10" />
+            <span className="min-w-0 flex-1 truncate text-left text-[14.5px] text-black/85">2026新型蓝牙耳机</span>
+            <Camera className="mr-2 h-[19px] w-[19px] shrink-0 text-black/50" strokeWidth={2} />
+            <span className="grid h-[34px] shrink-0 place-items-center rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-[18px] text-[15px] font-semibold text-white">搜索</span>
           </button>
         </div>
-        {/* 分类宫格（需求：数码/服饰/家居/美妆/食品/图书） */}
-        <div className="mt-3 grid grid-cols-6 px-2">
-          {TB_CATS.map((c) => (
-            <button key={c.id} type="button" onClick={() => onOpenSearch(c.name)} className="flex flex-col items-center gap-1 py-1 active:opacity-70">
-              <span className="grid h-11 w-11 place-items-center overflow-hidden rounded-full bg-white/90 shadow-sm">
-                <img src={tbImg(c.tag, 88, 88, 1)} alt={c.name} className="h-full w-full object-cover" draggable={false} />
-              </span>
-              <span className="text-[11px] font-medium text-white">{c.name}</span>
+        {/* 运营位图标行（红包签到/淘宝秒杀/领淘金币/阿里拍卖/淘票票/飞猪；彩色 SVG） */}
+        <div className="mt-2 grid grid-cols-6 px-2">
+          {[
+            { icon: <HongbaoIcon />, label: '红包签到' },
+            { icon: <MiaoshaIcon />, label: '淘宝秒杀' },
+            { icon: <TbCoinIcon />, label: '领淘金币' },
+            { icon: <PaiIcon />, label: '阿里拍卖' },
+            { icon: <TicketPiaoIcon />, label: '淘票票' },
+            { icon: <FliggyIcon />, label: '飞猪' },
+          ].map((it) => (
+            <button key={it.label} type="button" onClick={() => onToast(`${it.label}（演示）`)} className="flex flex-col items-center gap-1 py-0.5 active:opacity-70">
+              {it.icon}
+              <span className="text-[11.5px] text-black/80">{it.label}</span>
             </button>
           ))}
+        </div>
+        {/* 页点（两页指示） */}
+        <div className="mt-1.5 flex justify-center gap-1">
+          <span className="h-[3.5px] w-[9px] rounded-full bg-[#FF5000]" />
+          <span className="h-[3.5px] w-[9px] rounded-full bg-black/15" />
         </div>
       </div>
 
@@ -895,35 +1075,85 @@ function HomePage({
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
         >
-          {/* 运营位：直播 / 百亿补贴（演示装饰） */}
-          <div className="mt-2 grid grid-cols-2 gap-2 px-2">
-            <button type="button" onClick={() => onToast('淘宝直播（演示）')} className="flex flex-col rounded-xl bg-gradient-to-br from-[#fff1e8] to-[#ffe3d2] p-3 text-left active:opacity-80">
+          {/* 运营位双卡：淘宝直播 / 百亿补贴（截图1：白卡+双图+直播价/补贴价） */}
+          <div className="grid grid-cols-2 gap-2 px-2 pt-2.5">
+            <button type="button" onClick={() => onToast('淘宝直播（演示）')} className="flex flex-col rounded-2xl bg-white p-2.5 text-left active:opacity-80">
               <div className="flex items-center justify-between">
-                <span className="text-[15px] font-bold text-[#7a3b12]">淘宝直播</span>
-                <span className="rounded-full bg-[#FF2D7E] px-1.5 py-0.5 text-[10px] font-bold text-white">直播有好价</span>
+                <span className="text-[15px] font-bold text-black/90">淘宝直播</span>
+                <span className="flex items-center gap-0.5 text-[11px] font-semibold text-[#FF2D7E]">
+                  <Zap className="h-3 w-3 fill-[#FF2D7E]" />
+                  直播有好价
+                </span>
               </div>
               <div className="mt-2 flex gap-1.5">
-                <img src={tbImg('earbuds', 140, 100, 2)} alt="直播好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
-                <img src={tbImg('phone', 140, 100, 2)} alt="直播好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
+                {[0, 1].map((i) => (
+                  <span key={i} className="relative w-1/2">
+                    <img src={tbImg(i === 0 ? 'phone' : 'earbuds', 140, 140, 3)} alt="直播好物" className="h-[72px] w-full rounded-lg object-cover" draggable={false} />
+                    <span className="absolute left-1 top-1 grid h-[14px] w-[14px] place-items-center rounded-[3px] bg-[#FF2D7E]/90">
+                      <span className="text-[8px] font-bold text-white">ivi</span>
+                    </span>
+                  </span>
+                ))}
+              </div>
+              <div className="mt-1.5 flex justify-between text-[12px] font-bold text-[#FF2D7E]">
+                <span>直播价¥6</span>
+                <span>直播价¥183</span>
               </div>
             </button>
-            <button type="button" onClick={() => onToast('百亿补贴（演示）')} className="flex flex-col rounded-xl bg-gradient-to-br from-[#fff4f4] to-[#ffe0e0] p-3 text-left active:opacity-80">
+            <button type="button" onClick={() => onToast('百亿补贴（演示）')} className="flex flex-col rounded-2xl bg-white p-2.5 text-left active:opacity-80">
               <div className="flex items-center justify-between">
-                <span className="text-[15px] font-bold text-[#8a1f1f]">百亿补贴</span>
-                <span className="rounded-full bg-[#FF0036] px-1.5 py-0.5 text-[10px] font-bold text-white">国家补贴</span>
+                <span className="text-[15px] font-bold text-black/90">百亿补贴</span>
+                <span className="flex items-center gap-0.5 text-[11px] font-bold text-[#00A860]">
+                  <span className="grid h-[12px] w-[12px] place-items-center rounded-full bg-[#00A860]">
+                    <Check className="h-2 w-2 text-white" strokeWidth={4} />
+                  </span>
+                  国家补贴
+                </span>
               </div>
               <div className="mt-2 flex gap-1.5">
-                <img src={tbImg('toy', 140, 100, 2)} alt="补贴好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
-                <img src={tbImg('laptop', 140, 100, 2)} alt="补贴好物" className="h-14 w-1/2 rounded-lg object-cover" draggable={false} />
+                {[0, 1].map((i) => (
+                  <img key={i} src={tbImg(i === 0 ? 'phone' : 'earbuds', 140, 140, 4)} alt="补贴好物" className="h-[72px] w-1/2 rounded-lg object-cover" draggable={false} />
+                ))}
+              </div>
+              <div className="mt-1.5 flex justify-between text-[12px] font-bold text-[#FF0036]">
+                <span>补贴价¥3599</span>
+                <span>补贴价¥11</span>
               </div>
             </button>
           </div>
 
-          {/* 超级88 横条（装饰） */}
-          <button type="button" onClick={() => onToast('超级88 领券中心（演示）')} className="mx-2 mt-2 flex w-[calc(100%-16px)] items-center gap-2 rounded-xl bg-gradient-to-r from-[#FF2D2D] to-[#FF5000] px-3 py-2.5 text-left active:opacity-90">
-            <span className="text-[16px] font-black italic text-white">超级88</span>
-            <span className="flex-1 truncate text-[13px] text-white/95">叠加大额消费券 7.7 折起，速抢</span>
-            <span className="rounded-full bg-white px-2.5 py-1 text-[12px] font-bold text-[#FF4400]">去抢购</span>
+          {/* 超级88 大促卡（截图1：红底 88元消费券券票 + 三商品小卡） */}
+          <button type="button" onClick={onOpenCouponCenter} className="mx-2 mt-2 block w-[calc(100%-16px)] rounded-2xl bg-gradient-to-r from-[#FF4A2A] via-[#FF2600] to-[#EF1500] p-2.5 text-left active:opacity-95">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[20px] font-black italic leading-none tracking-tight text-white">超级88</span>
+              <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true" className="shrink-0">
+                <path d="M4 9v6h4l5 4.5v-15L8 9H4Z" fill="#fff" />
+                <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" stroke="#fff" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+              </svg>
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-white/95">叠加大额消费券7.7折起,速抢</span>
+              <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-white/25">
+                <ChevronRight className="h-3 w-3 text-white" strokeWidth={3} />
+              </span>
+            </div>
+            <div className="mt-2 grid grid-cols-4 gap-1.5">
+              <span className="flex flex-col items-center justify-center rounded-lg bg-gradient-to-b from-[#FF7A5C] to-[#F5222D] py-1.5 ring-1 ring-white/50">
+                <span className="text-[9px] leading-[12px] text-white/85">消费券</span>
+                <span className="text-[21px] font-black leading-[24px] text-[#FFE84D]">
+                  88<span className="text-[10px] font-bold">元</span>
+                </span>
+                <span className="text-[9px] leading-[12px] font-semibold text-white">待使用</span>
+              </span>
+              {[
+                { tag: 'earbuds', label: '¥25.9优惠后' },
+                { tag: 'phone', label: '淘工厂' },
+                { tag: TB_PRODUCTS.find((p) => p.cat === 'fashion')?.tag ?? 'earbuds', label: '¥117补贴后' },
+              ].map((it, i) => (
+                <span key={i} className="relative overflow-hidden rounded-lg bg-white">
+                  <img src={tbImg(it.tag, 160, 160, 5)} alt="活动好物" className="h-[52px] w-full object-cover" draggable={false} />
+                  <span className="absolute inset-x-0 bottom-0 truncate bg-[#FF3B30]/92 px-0.5 text-center text-[9px] font-bold leading-[15px] text-white">{it.label}</span>
+                </span>
+              ))}
+            </div>
           </button>
 
           {/* 推荐商品流（双列瀑布） */}
@@ -955,6 +1185,22 @@ function HomePage({
           </div>
         )}
       </div>
+
+      {/* 底部消费券浮条（截图1：¥ 4张共88元消费券待使用,剩 04:37:32 + 去使用 + 关闭；真实券数据，无券不显示） */}
+      {stripOpen && stripCoupons.length > 0 ? (
+        <div className="absolute inset-x-2 bottom-[76px] z-30 flex items-center gap-2 rounded-full bg-gradient-to-r from-[#FFF6F1] to-[#FFE9E2] py-1.5 pl-2 pr-1 shadow-[0_6px_20px_rgba(255,68,0,0.16)] ring-1 ring-[#FFD9CC]">
+          <span className="grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full bg-[#FF3B30]">
+            <span className="text-[12px] font-bold text-[#FFD100]">¥</span>
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-[#FF4400]">
+            {stripCoupons.length}张共{fmtMoney(stripSum)}元消费券待使用,剩 {ccText}
+          </span>
+          <button type="button" onClick={onOpenCouponCenter} className="h-[28px] shrink-0 rounded-full bg-[#FF3B30] px-3 text-[12.5px] font-semibold text-white active:opacity-85">去使用</button>
+          <button type="button" aria-label="关闭" onClick={() => setStripOpen(false)} className="grid h-6 w-6 shrink-0 place-items-center active:opacity-60">
+            <X className="h-3.5 w-3.5 text-black/35" strokeWidth={2.4} />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1023,6 +1269,71 @@ function FollowFeed({ uid, follows, onOpenProduct, onOpenSearch }: { uid: string
             </div>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** 视频 tab（截图2 底部第2tab：竖滑短视频流——海报全屏 + 右侧互动栏 + 底部文案 + 播放态 chrome；演示态） */
+function VideoPage({ onOpenProduct, onToast }: { onOpenProduct: (pid: string) => void; onToast: (m: string) => void }) {
+  const vids = useMemo(() => [...TB_PRODUCTS].slice(0, 8).map((p, i) => ({ p, v: i % 4 })), []);
+  const [playing, setPlaying] = useState(true);
+  return (
+    <div className="h-full bg-black">
+      <div className="h-full snap-y snap-mandatory overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {vids.map(({ p, v }, i) => (
+          <div key={`${p.id}-${i}`} className="relative h-full w-full snap-start overflow-hidden" onClick={() => setPlaying((s) => !s)}>
+            <img src={tbImg(p.tag, 720, 1280, v)} alt={p.title} className="h-full w-full object-cover" draggable={false} />
+            <div className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black/70 to-transparent" />
+            {/* 顶部进度条 */}
+            <div className="absolute inset-x-0 top-0 h-[3px] bg-white/20">
+              <div className="h-full bg-white/85" style={{ width: `${((i + 1) / vids.length) * 100}%` }} />
+            </div>
+            {/* 播放/暂停指示 */}
+            {!playing ? (
+              <span className="absolute left-1/2 top-1/2 grid h-16 w-16 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/35">
+                <svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 6.5 18 12l-9 5.5v-11Z" fill="#fff" />
+                </svg>
+              </span>
+            ) : null}
+            {/* 右侧互动栏 */}
+            <div className="absolute bottom-24 right-3 flex flex-col items-center gap-5">
+              {[
+                { label: '赞', n: '1.2w', d: 'M12 21s-7.5-4.7-9.5-9C1.2 9.3 2.7 6 6 6c2 0 3.2 1 4 2.2C10.8 7 12 6 14 6c3.3 0 4.8 3.3 3.5 6-2 4.3-9.5 9-9.5 9Z' },
+                { label: '收藏', n: '3862', d: 'M12 3.5 14.6 9l6 .7-4.4 4.1 1.2 5.9L12 16.8l-5.4 2.9 1.2-5.9L3.4 9.7l6-.7L12 3.5Z' },
+                { label: '评论', n: '428', d: 'M12 3.5c5 0 9 3.4 9 7.6 0 4.2-4 7.6-9 7.6-.9 0-1.8-.1-2.6-.3L5 20.6l.2-3.3C3.6 16 3 14.1 3 11.1c0-4.2 4-7.6 9-7.6Z' },
+                { label: '分享', n: '256', d: 'M14 5.5 21 12l-7 6.5v-4C8 14.5 5 16.5 3 20c0-6 4-9.8 11-10.4v-4.1Z' },
+              ].map((a) => (
+                <button
+                  key={a.label}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToast(`${a.label}（演示）`);
+                  }}
+                  className="flex flex-col items-center gap-1 active:opacity-70"
+                >
+                  <span className="grid h-11 w-11 place-items-center rounded-full bg-white/15 backdrop-blur">
+                    <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d={a.d} fill="#fff" />
+                    </svg>
+                  </span>
+                  <span className="text-[10.5px] text-white/90">{a.n}</span>
+                </button>
+              ))}
+            </div>
+            {/* 底部文案 */}
+            <div className="absolute inset-x-0 bottom-0 p-4 pb-9" onClick={(e) => e.stopPropagation()}>
+              <button type="button" onClick={() => onOpenProduct(p.id)} className="flex items-center gap-1.5 active:opacity-80">
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-white/20 text-[10px] font-bold text-white">店</span>
+                <span className="text-[13.5px] font-medium text-white/95">{shopById(p.shopId).name}</span>
+                <span className="rounded-full border border-white/60 px-2 py-px text-[11px] text-white">进店</span>
+              </button>
+              <div className="mt-1.5 line-clamp-2 text-[13.5px] leading-5 text-white/95">{p.title}</div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1872,6 +2183,7 @@ function CartPage({
   onCheckout,
   onToast,
   onOpenHome,
+  onCartChange,
 }: {
   uid: string;
   onBack?: () => void;
@@ -1879,12 +2191,20 @@ function CartPage({
   onCheckout: (items: TbOrderItem[]) => void;
   onToast: (m: string) => void;
   onOpenHome: () => void;
+  /** 购物车变化后同步底部 tab 角标 */
+  onCartChange?: () => void;
 }) {
   const [items, setItems] = useState<TbCartItem[]>(() => tbLoadCart(uid));
   const [manage, setManage] = useState(false);
-  /** 数量修改展开（截图4：右上 ×N，点击展开步进器；减到 0 自动移除） */
+  /** 数量修改展开（截图5：右上 ×N，点击展开步进器；减到 0 自动移除） */
   const [qtyEdit, setQtyEdit] = useState<string | null>(null);
-  const reload = () => setItems(tbLoadCart(uid));
+  /** 需求（第八轮）：回到顶部按钮（列表下滑 >300px 出现） */
+  const [showTop, setShowTop] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const reload = () => {
+    setItems(tbLoadCart(uid));
+    onCartChange?.();
+  };
   const checkedItems = items.filter((c) => c.checked);
   const total = checkedItems.reduce((n, c) => {
     const p = productById(c.pid);
@@ -1927,6 +2247,38 @@ function CartPage({
     onCheckout(orderItems);
   };
 
+  /** 管理模式：移入收藏（先收藏再移出购物车） */
+  const moveCheckedToFavs = () => {
+    if (checkedItems.length === 0) {
+      onToast('请先勾选商品');
+      return;
+    }
+    const favsNow = tbLoadFavs(uid);
+    for (const c of checkedItems) {
+      if (!favsNow.includes(c.pid)) tbToggleFav(uid, c.pid);
+    }
+    tbRemoveCartItems(
+      uid,
+      checkedItems.map((c) => ({ pid: c.pid, sig: sigOf(c) }))
+    );
+    reload();
+    onToast('已移入收藏');
+  };
+
+  /** 管理模式：删除所选 */
+  const removeChecked = () => {
+    if (checkedItems.length === 0) {
+      onToast('请先勾选要删除的商品');
+      return;
+    }
+    tbRemoveCartItems(
+      uid,
+      checkedItems.map((c) => ({ pid: c.pid, sig: sigOf(c) }))
+    );
+    reload();
+    onToast('已删除所选商品');
+  };
+
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
       {/* 顶栏（截图4：购物车(N) 左对齐 + 搜索/对比/管理） */}
@@ -1942,19 +2294,45 @@ function CartPage({
             {items.length > 0 ? <span className="ml-1.5 align-[1px] text-[13px] font-normal text-black/40">({items.length})</span> : null}
           </span>
           <div className="ml-auto flex items-center gap-4">
-            <button type="button" aria-label="搜索购物车" onClick={() => onToast('搜索购物车（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
-              <Search className="h-[20px] w-[20px] text-black/80" strokeWidth={2.1} />
-            </button>
-            <button type="button" onClick={() => onToast('商品对比（演示）')} className="text-[15px] text-black/80 active:opacity-60">
-              对比
-            </button>
-            <button type="button" onClick={() => setManage((v) => !v)} className="text-[15px] text-black/80 active:opacity-60">
-              {manage ? '完成' : '管理'}
-            </button>
+            {manage ? (
+              // 管理模式头部（截图6：批量清理 + 退出管理）
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    tbSetCartAllChecked(uid, true);
+                    reload();
+                    onToast('已全选，可批量分享/收藏/删除');
+                  }}
+                  className="text-[15px] text-black/80 active:opacity-60"
+                >
+                  批量清理
+                </button>
+                <button type="button" onClick={() => setManage(false)} className="text-[15px] text-black/80 active:opacity-60">
+                  退出管理
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" aria-label="搜索购物车" onClick={() => onToast('搜索购物车（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+                  <Search className="h-[20px] w-[20px] text-black/80" strokeWidth={2.1} />
+                </button>
+                <button type="button" onClick={() => onToast('商品对比（演示）')} className="text-[15px] text-black/80 active:opacity-60">
+                  对比
+                </button>
+                <button type="button" onClick={() => setManage(true)} className="text-[15px] text-black/80 active:opacity-60">
+                  管理
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto pb-40">
+      <div
+        ref={listRef}
+        className="flex-1 overflow-y-auto pb-40"
+        onScroll={(e) => setShowTop((e.currentTarget as HTMLDivElement).scrollTop > 300)}
+      >
         {items.length === 0 ? (
           <>
             <div className="grid place-items-center bg-white py-16">
@@ -1975,41 +2353,8 @@ function CartPage({
           </>
         ) : (
           <>
-            {/* 权益标签行（截图4：消费券/官方立减/超级立减/降/筛选） */}
-            <div className="flex items-center gap-2 overflow-x-auto px-3 pb-2 pt-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <button type="button" onClick={() => onToast('消费券中心（演示）')} className="flex h-8 shrink-0 items-center gap-1 rounded-lg bg-white px-2.5 text-[13px] font-medium text-black/80 active:opacity-70">
-                <span className="grid h-[15px] w-[15px] place-items-center rounded-[3px] bg-[#FF0036] text-[9px] font-bold text-white">¥</span>
-                消费券
-              </button>
-              <button type="button" onClick={() => onToast('官方立减商品已优先排序')} className="flex h-8 shrink-0 items-center gap-1 rounded-lg bg-white px-2.5 text-[13px] font-medium text-black/80 active:opacity-70">
-                <Zap className="h-3.5 w-3.5 fill-[#FF0036] text-[#FF0036]" />
-                官方立减
-              </button>
-              <button type="button" onClick={() => onToast('超级立减商品已优先排序')} className="flex h-8 shrink-0 items-center gap-1 rounded-lg bg-white px-2.5 text-[13px] font-medium text-black/80 active:opacity-70">
-                <span className="grid h-[15px] w-[15px] place-items-center rounded-[3px] bg-[#FF0036] text-white">
-                  <ChevronDown className="h-3 w-3" strokeWidth={3.4} />
-                </span>
-                超级立减
-              </button>
-              <button type="button" onClick={() => onToast('已按降价幅度排序（演示）')} className="flex h-8 shrink-0 items-center gap-1 rounded-lg bg-white px-2.5 text-[13px] font-medium text-black/80 active:opacity-70">
-                <span className="text-[13px] font-bold text-[#FFB400]">降</span>
-                <ChevronDown className="h-3 w-3 text-[#FFB400]" strokeWidth={3} />
-              </button>
-              <button type="button" onClick={() => onToast('筛选（演示）')} className="ml-auto flex h-8 shrink-0 items-center gap-1 text-[13px] font-medium text-black/80 active:opacity-70">
-                <span className="text-[13px] text-[#FFB400]">▽</span>
-                筛选
-              </button>
-            </div>
-            {/* 优惠券横幅（截图4：粉色条） */}
-            {coupons.length > 0 ? (
-              <button type="button" onClick={() => onToast('去「我的淘宝-领券中心」查看')} className="mx-3 mb-2 flex w-[calc(100%-24px)] items-center gap-2 rounded-lg bg-[#FFE9E4] px-3 py-2 text-left active:opacity-80">
-                <span className="grid h-[16px] w-[16px] shrink-0 place-items-center rounded-[3px] bg-[#FF0036] text-[10px] font-bold text-white">¥</span>
-                <span className="text-[13px] text-black/75">
-                  您有<span className="font-bold text-[#FF0036]">{coupons.length}张共{couponSum}元</span>消费券待使用
-                </span>
-              </button>
-            ) : null}
-            {/* 店铺分组卡（截图4：店铺勾选 + 天猫/淘宝标 + 商品行） */}
+            {/* 需求（第八轮）：购物车按新截图美化——旧权益标签行/粉色券条移除（券入口在首页/我的） */}
+            {/* 店铺分组卡（截图5：店铺圆圈勾选 + 天猫/淘宝标 + 商品行圆圈勾选 + ×N + 明细） */}
             <div className="space-y-2 px-2">
               {groups.map((g) => {
                 const shop = shopById(g.shopId);
@@ -2027,17 +2372,29 @@ function CartPage({
                           for (const c of groupItems) tbUpdateCartItem(uid, c.pid, sigOf(c), { checked: !allChecked });
                           reload();
                         }}
-                        className={`grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full border-2 ${allChecked ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}
+                        className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border-2 ${allChecked ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/15 bg-white'}`}
                       >
-                        {/* 用户反馈：勾选态只留对号，删掉对号外面的圆圈（CircleCheck→Check） */}
-                        {allChecked ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                        {allChecked ? <Check className="h-3 w-3 text-white" strokeWidth={3.6} /> : null}
                       </button>
                       {shop.tmall ? <TmallMark /> : <span className="mr-0.5 inline-block rounded-[3px] bg-[#FF5000] px-1 py-[1px] text-[10px] font-bold leading-none text-white">淘宝</span>}
                       <button type="button" onClick={() => onToast(`进店逛逛（演示）`)} className="flex min-w-0 items-center gap-0.5 active:opacity-70">
-                        <span className="truncate text-[15px] font-semibold text-black/85">{shop.name}</span>
+                        <span className="truncate text-[15.5px] font-semibold text-black/85">{shop.name}</span>
                         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/30" />
                       </button>
-                      {shopCoupons.length > 0 ? (
+                      {manage ? (
+                        // 管理模式（截图6）：店铺行右侧 置顶
+                        <button
+                          type="button"
+                          onClick={() => {
+                            tbPinCartShop(uid, g.shopId, (pid) => productById(pid)?.shopId ?? 'unknown');
+                            reload();
+                            onToast('已置顶该店铺');
+                          }}
+                          className="ml-auto shrink-0 text-[13px] text-black/45 active:opacity-60"
+                        >
+                          置顶
+                        </button>
+                      ) : shopCoupons.length > 0 ? (
                         <button type="button" onClick={() => onToast('已领取店铺优惠券')} className="ml-auto flex shrink-0 items-center text-[13px] text-[#FF6A1E] active:opacity-70">
                           领券
                           <ChevronRight className="h-3.5 w-3.5" />
@@ -2062,10 +2419,9 @@ function CartPage({
                                 tbUpdateCartItem(uid, c.pid, sig, { checked: !c.checked });
                                 reload();
                               }}
-                              className={`mt-7 grid h-[19px] w-[19px] shrink-0 place-items-center self-start rounded-full border-2 ${c.checked ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}
+                              className={`mt-7 grid h-5 w-5 shrink-0 place-items-center self-start rounded-full border-2 ${c.checked ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/15 bg-white'}`}
                             >
-                              {/* 用户反馈：对号外面的圆圈删除，只留对号 */}
-                              {c.checked ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                              {c.checked ? <Check className="h-3 w-3 text-white" strokeWidth={3.6} /> : null}
                             </button>
                             <button type="button" onClick={() => onOpenProduct(c.pid)} className="shrink-0 active:opacity-70">
                               <img src={tbImg(p.tag, 200, 200, 0)} alt={p.title} className="h-[86px] w-[86px] rounded-lg object-cover" draggable={false} />
@@ -2078,42 +2434,44 @@ function CartPage({
                                     {p.title}
                                   </span>
                                 </button>
-                                {/* ×N（点击展开步进器；减到 0 自动移除） */}
-                                {qtyEdit === key ? (
-                                  <div className="flex shrink-0 items-center rounded-md border border-black/15">
-                                    <button
-                                      type="button"
-                                      aria-label="减少数量"
-                                      onClick={() => {
-                                        tbUpdateCartItem(uid, c.pid, sig, { qty: c.qty - 1 });
-                                        reload();
-                                        if (c.qty <= 1) {
-                                          setQtyEdit(null);
-                                          onToast('已从购物车移除');
-                                        }
-                                      }}
-                                      className="grid h-7 w-7 place-items-center border-r border-black/10 text-black/60 active:opacity-60"
-                                    >
-                                      <Minus className="h-3 w-3" strokeWidth={2.6} />
+                                {/* ×N（点击展开步进器；减到 0 自动移除；管理模式隐藏） */}
+                                {!manage ?
+                                  qtyEdit === key ? (
+                                    <div className="flex shrink-0 items-center rounded-md border border-black/15">
+                                      <button
+                                        type="button"
+                                        aria-label="减少数量"
+                                        onClick={() => {
+                                          tbUpdateCartItem(uid, c.pid, sig, { qty: c.qty - 1 });
+                                          reload();
+                                          if (c.qty <= 1) {
+                                            setQtyEdit(null);
+                                            onToast('已从购物车移除');
+                                          }
+                                        }}
+                                        className="grid h-7 w-7 place-items-center border-r border-black/10 text-black/60 active:opacity-60"
+                                      >
+                                        <Minus className="h-3 w-3" strokeWidth={2.6} />
+                                      </button>
+                                      <span className="min-w-[26px] text-center text-[13px] font-medium">{c.qty}</span>
+                                      <button
+                                        type="button"
+                                        aria-label="增加数量"
+                                        onClick={() => {
+                                          tbUpdateCartItem(uid, c.pid, sig, { qty: c.qty + 1 });
+                                          reload();
+                                        }}
+                                        className="grid h-7 w-7 place-items-center border-l border-black/10 text-black/60 active:opacity-60"
+                                      >
+                                        <Plus className="h-3 w-3" strokeWidth={2.6} />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button type="button" onClick={() => setQtyEdit(key)} className="shrink-0 rounded-md bg-black/[0.05] px-1.5 py-0.5 text-[12px] text-black/55 active:opacity-60">
+                                      ×{c.qty}
                                     </button>
-                                    <span className="min-w-[26px] text-center text-[13px] font-medium">{c.qty}</span>
-                                    <button
-                                      type="button"
-                                      aria-label="增加数量"
-                                      onClick={() => {
-                                        tbUpdateCartItem(uid, c.pid, sig, { qty: c.qty + 1 });
-                                        reload();
-                                      }}
-                                      className="grid h-7 w-7 place-items-center border-l border-black/10 text-black/60 active:opacity-60"
-                                    >
-                                      <Plus className="h-3 w-3" strokeWidth={2.6} />
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <button type="button" onClick={() => setQtyEdit(key)} className="shrink-0 rounded-md bg-black/[0.05] px-1.5 py-0.5 text-[12px] text-black/55 active:opacity-60">
-                                    ×{c.qty}
-                                  </button>
-                                )}
+                                  )
+                                : null}
                               </div>
                               <button type="button" onClick={() => onOpenProduct(c.pid)} className="mt-0.5 flex max-w-full items-center text-left active:opacity-70">
                                 <span className="truncate text-[12px] text-black/40">{skuText}</span>
@@ -2136,12 +2494,32 @@ function CartPage({
                                   {fmtMoney(price)}
                                 </span>
                                 {p.originPrice ? <span className="ml-1 text-[11px] leading-[13px] text-black/30 line-through">¥{fmtMoney(p.originPrice)}</span> : null}
-                                <button type="button" onClick={() => onToast('优惠明细：店铺券 + 平台补贴')} className="ml-auto flex shrink-0 items-center text-[12.5px] text-[#FF6A1E] active:opacity-70">
-                                  明细
-                                  <ChevronRight className="h-3.5 w-3.5" />
-                                </button>
+                                {!manage ? (
+                                  <button type="button" onClick={() => onToast('优惠明细：店铺券 + 平台补贴')} className="ml-auto flex shrink-0 items-center text-[12.5px] text-[#FF6A1E] active:opacity-70">
+                                    明细
+                                    <ChevronRight className="h-3.5 w-3.5" />
+                                  </button>
+                                ) : null}
                               </div>
                             </div>
+                            {/* 管理模式右侧（截图6：拖拽柄 + 红色删除） */}
+                            {manage ? (
+                              <div className="flex shrink-0 flex-col items-center justify-between self-stretch py-1">
+                                <GripVertical className="h-5 w-5 text-black/20" />
+                                <button
+                                  type="button"
+                                  aria-label="删除该商品"
+                                  onClick={() => {
+                                    tbRemoveCartItems(uid, [{ pid: c.pid, sig }]);
+                                    reload();
+                                    onToast('已删除该商品');
+                                  }}
+                                  className="grid h-8 w-8 place-items-center active:opacity-60"
+                                >
+                                  <Trash2 className="h-[19px] w-[19px] text-[#FF0036]" strokeWidth={2} />
+                                </button>
+                              </div>
+                            ) : null}
                           </div>
                         );
                       })}
@@ -2150,36 +2528,37 @@ function CartPage({
                 );
               })}
             </div>
-            {/* 管理模式：删除所选 */}
-            {manage ? (
-              <div className="mt-2 flex items-center justify-between rounded-xl bg-white p-3">
-                <span className="text-[14px] text-black/70">勾选 {checkedItems.length} 件商品</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (checkedItems.length === 0) {
-                      onToast('请先勾选要删除的商品');
-                      return;
-                    }
-                    tbRemoveCartItems(
-                      uid,
-                      checkedItems.map((c) => ({ pid: c.pid, sig: sigOf(c) }))
-                    );
-                    reload();
-                    setManage(false);
-                    onToast('已删除所选商品');
-                  }}
-                  className="rounded-lg border border-[#FF5000] px-4 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70"
-                >
-                  删除所选
-                </button>
-              </div>
-            ) : null}
+            {/* 管理模式列表尾：换季福利双横幅（截图6 装饰） */}
+            <div className="mt-2 grid grid-cols-2 gap-2 px-2">
+              <button type="button" onClick={() => onToast('秋冬换季福利（演示）')} className="flex h-[104px] flex-col items-start justify-end rounded-xl bg-gradient-to-br from-[#FFD9A8] via-[#FFC28E] to-[#FF9A6A] p-2.5 text-left active:opacity-85">
+                <span className="text-[13px] font-black text-[#8a3d12]">V-GIRL 秋冬换季福利</span>
+                <span className="mt-0.5 text-[11px] font-semibold text-[#a35b2a]">拍套组 · 好礼多选1</span>
+              </button>
+              <button type="button" onClick={() => onToast('视频福利（演示）')} className="flex h-[104px] flex-col items-start justify-end rounded-xl bg-gradient-to-br from-[#3a3f4b] to-[#141821] p-2.5 text-left active:opacity-85">
+                <span className="text-[13px] font-black text-white/95">猜你想看 · 短视频</span>
+                <span className="mt-0.5 text-[11px] text-white/55">边看边买，福利不断</span>
+              </button>
+            </div>
           </>
         )}
       </div>
 
-      {/* 底部：全选 / 合计+共减 / 领券结算（截图4；tab 模式避开底栏） */}
+      {/* 回到顶部（截图6：右下白色圆钮） */}
+      {showTop && items.length > 0 ? (
+        <button
+          type="button"
+          aria-label="回到顶部"
+          onClick={() => listRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+          className="absolute bottom-[150px] right-3 z-30 grid h-11 w-11 place-items-center rounded-full bg-white/95 shadow-[0_4px_14px_rgba(0,0,0,0.12)] ring-1 ring-black/5 active:opacity-80"
+        >
+          <span className="flex flex-col items-center">
+            <ChevronUp className="h-4 w-4 text-black/60" strokeWidth={2.4} />
+            <span className="text-[9px] leading-[10px] text-black/55">顶部</span>
+          </span>
+        </button>
+      ) : null}
+
+      {/* 底部（截图5/6：普通=全选+合计共减+结算；管理=全选+分享/移入收藏/删除；tab 模式避开底栏） */}
       {items.length > 0 ? (
         <div className={`absolute inset-x-0 z-30 flex items-center gap-2 border-t border-black/[0.06] bg-white/95 px-3 pt-2.5 backdrop-blur-md ${onBack ? 'bottom-0 pb-6' : 'bottom-[68px] pb-3'}`}>
           <button
@@ -2190,30 +2569,46 @@ function CartPage({
             }}
             className="flex items-center gap-1.5"
           >
-            <span className={`grid h-[19px] w-[19px] place-items-center rounded-full border-2 ${checkedItems.length === items.length ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}>
-              {/* 用户反馈：对号外面的圆圈删除，只留对号 */}
-              {checkedItems.length === items.length ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+            <span className={`grid h-5 w-5 place-items-center rounded-full border-2 ${checkedItems.length === items.length ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/15 bg-white'}`}>
+              {checkedItems.length === items.length ? <Check className="h-3 w-3 text-white" strokeWidth={3.6} /> : null}
             </span>
-            <span className="text-[13px] text-black/70">全选</span>
+            <span className="text-[13.5px] text-black/70">全选</span>
           </button>
-          <div className="ml-auto mr-1 text-right leading-tight">
-            <div className="flex items-baseline justify-end gap-1">
-              <span className="text-[13px] text-black/60">合计:</span>
-              <Price value={total} size={20} />
-            </div>
-            {savedTotal > 0 ? (
-              <button type="button" onClick={() => onToast('共减明细：官方立减 + 店铺优惠')} className="text-[11.5px] text-[#FF4400] active:opacity-70">
-                共减 ¥{fmtMoney(savedTotal)} | 查看明细
+          {manage ? (
+            // 管理模式（截图6：分享 / 移入收藏 / 删除）
+            <div className="ml-auto flex items-center gap-2">
+              <button type="button" onClick={() => onToast('分享链接已复制（演示）')} className="h-11 shrink-0 rounded-xl bg-[#FFE9E4] px-5 text-[15px] font-semibold text-[#FF6A1E] active:opacity-80">
+                分享
               </button>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            onClick={checkout}
-            className={`h-11 shrink-0 rounded-xl px-5 text-[15px] font-bold text-white ${checkedItems.length > 0 ? 'bg-gradient-to-r from-[#FF7A21] to-[#FF4400] active:opacity-85' : 'bg-black/20'}`}
-          >
-            领券结算{checkedItems.length > 0 ? `(${checkedItems.length})` : ''}
-          </button>
+              <button type="button" onClick={moveCheckedToFavs} className="h-11 shrink-0 rounded-xl bg-[#FFE9E4] px-4 text-[15px] font-semibold text-[#FF6A1E] active:opacity-80">
+                移入收藏
+              </button>
+              <button type="button" onClick={removeChecked} className="h-11 shrink-0 rounded-xl bg-[#FF0036] px-5 text-[15px] font-semibold text-white active:opacity-85">
+                删除
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="ml-auto mr-1 text-right leading-tight">
+                <div className="flex items-baseline justify-end gap-1">
+                  <span className="text-[13px] text-black/60">合计:</span>
+                  <Price value={total} size={20} />
+                </div>
+                {savedTotal > 0 ? (
+                  <button type="button" onClick={() => onToast('共减明细：官方立减 + 店铺优惠')} className="text-[11.5px] text-[#FF4400] active:opacity-70">
+                    共减 ¥{fmtMoney(savedTotal)} | 查看明细
+                  </button>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={checkout}
+                className={`h-11 shrink-0 rounded-xl px-6 text-[15px] font-bold text-white ${checkedItems.length > 0 ? 'bg-gradient-to-r from-[#FF7A21] to-[#FF4400] active:opacity-85' : 'bg-black/20'}`}
+              >
+                结算{checkedItems.length > 0 ? `(${checkedItems.length})` : ''}
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <div className={`absolute inset-x-0 z-30 border-t border-black/[0.06] bg-white/95 px-3 pt-2 backdrop-blur-md ${onBack ? 'bottom-0 pb-6' : 'bottom-[68px] pb-3'}`}>
@@ -4261,6 +4656,7 @@ function MePage({
   onOpenProduct,
   onToast,
   onOpenWallet,
+  onOpenCouponCenter,
 }: {
   session: TbSession;
   uid: string;
@@ -4276,6 +4672,7 @@ function MePage({
   onOpenProduct: (pid: string) => void;
   onToast: (m: string) => void;
   onOpenWallet: () => void;
+  onOpenCouponCenter: () => void;
 }) {
   const [, setTick] = useState(0);
   // 骑手形象选择（需求：我的淘宝淘金币入口改为骑手，复用美团 mt-rider 全套形象；
@@ -4290,82 +4687,149 @@ function MePage({
   const orders = tbLoadOrders(uid);
   const count = (st: TbOrderStatus) => orders.filter((o) => o.status === st).length;
   const coupons = tbLoadCoupons(uid).filter((c) => !c.usedAt);
+  const couponSum = coupons.reduce((n, c) => n + c.amount, 0);
   const favs = tbLoadFavs(uid);
   const foots = tbLoadFoots(uid);
   const follows = tbLoadShopFollows(uid);
+  // 需求（第八轮）：上滑「我的」界面可以更新菜单——底部上拉刷新「猜你喜欢」菜单内容
+  const [menuKey, setMenuKey] = useState(0);
+  const [menuRefreshing, setMenuRefreshing] = useState(false);
+  const mePullStart = useRef<number | null>(null);
+  const mePullAcc = useRef(0);
+  const onMeTouchStart = (e: React.TouchEvent) => {
+    const el = e.currentTarget as HTMLDivElement;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
+      mePullStart.current = e.touches[0].clientY;
+      mePullAcc.current = 0;
+    } else mePullStart.current = null;
+  };
+  const onMeTouchMove = (e: React.TouchEvent) => {
+    if (mePullStart.current == null) return;
+    const dy = e.touches[0].clientY - mePullStart.current;
+    if (dy < 0) mePullAcc.current = Math.min(120, -dy);
+  };
+  const onMeTouchEnd = () => {
+    if (mePullAcc.current > 50 && !menuRefreshing) {
+      setMenuRefreshing(true);
+      setTimeout(() => {
+        setMenuKey((k) => k + 1);
+        setMenuRefreshing(false);
+        onToast('猜你喜欢菜单已更新');
+      }, 800);
+    }
+    mePullStart.current = null;
+    mePullAcc.current = 0;
+  };
+  // 猜你喜欢菜单池（menuKey 参与轮换：上滑更新菜单）
+  const meMenu = useMemo(() => {
+    const arr = [...TB_PRODUCTS];
+    const start = (14 + menuKey * 8) % arr.length;
+    return Array.from({ length: 8 }, (_, i) => arr[(start + i) % arr.length]);
+  }, [menuKey]);
   return (
     <>
-    <div className="h-full overflow-y-auto bg-[#f4f4f4] pb-24">
-      {/* 头部（橙渐变） */}
-      <div className="bg-gradient-to-b from-[#FF7A21] to-[#FF9A50] px-4 pb-4 pt-[62px]">
+    <div className="h-full overflow-y-auto bg-[#f4f4f4] pb-24" onTouchStart={onMeTouchStart} onTouchMove={onMeTouchMove} onTouchEnd={onMeTouchEnd}>
+      {/* 头部（需求：橙色改肉粉色 + 美化，截图3 口径：奶油粉底 + 黑字 + 白卡） */}
+      <div className="bg-gradient-to-b from-[#FCDBC4] via-[#FDE3D2] to-[#FBEDE2] px-4 pb-4 pt-[62px]">
         <div className="flex items-center gap-3">
           {session.avatar ? (
-            <img src={session.avatar} alt={session.name} className="h-14 w-14 rounded-full border-2 border-white/70 object-cover" draggable={false} />
+            <img src={session.avatar} alt={session.name} className="h-14 w-14 rounded-full border-2 border-[#FF7A2E]/70 object-cover" draggable={false} />
           ) : (
-            <span className="grid h-14 w-14 place-items-center rounded-full border-2 border-white/70 bg-white/25 text-[20px] font-bold text-white">{session.name.slice(0, 1)}</span>
+            <span className="grid h-14 w-14 place-items-center rounded-full border-2 border-[#FF7A2E]/70 bg-white/60 text-[20px] font-bold text-[#B4632A]">{session.name.slice(0, 1)}</span>
           )}
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[18px] font-bold text-white">{session.name}</div>
+            <div className="truncate text-[19px] font-bold text-black/90">{session.name}</div>
             <div className="mt-0.5 flex items-center gap-1.5">
-              <span className="rounded bg-gradient-to-r from-[#7A4310] to-[#9A5A1E] px-1.5 py-[1px] text-[10px] font-bold text-[#FFD9A0]">青铜会员</span>
-              <span className="text-[11px] text-white/75">{follows.length}家关注店铺</span>
+              <span className="rounded bg-gradient-to-r from-[#8A4D16] to-[#A56428] px-1.5 py-[1px] text-[10px] font-bold text-[#FFE3C2]">青铜会员</span>
+              <span className="text-[11px] text-black/55">{follows.length}家关注店铺</span>
             </div>
           </div>
-          <button type="button" onClick={onOpenAddresses} className="flex flex-col items-center gap-0.5 text-white/90">
-            <MapPin className="h-[20px] w-[20px]" strokeWidth={2.1} />
+          <button type="button" onClick={onOpenAddresses} className="flex flex-col items-center gap-0.5 text-black/80">
+            <MapPin className="h-[21px] w-[21px]" strokeWidth={1.9} />
             <span className="text-[10px]">地址</span>
           </button>
-          <button type="button" onClick={() => onToast('官方客服（演示）')} className="flex flex-col items-center gap-0.5 text-white/90">
-            <MessageSquare className="h-[20px] w-[20px]" strokeWidth={2.1} />
-            <span className="text-[10px]">客服</span>
+          <button type="button" onClick={() => onToast('官方客服（演示）')} className="flex flex-col items-center gap-0.5 text-black/80">
+            <Headphones className="h-[21px] w-[21px]" strokeWidth={1.9} />
+            <span className="text-[10px]">官方客服</span>
           </button>
-          <button type="button" onClick={onOpenSettings} className="flex flex-col items-center gap-0.5 text-white/90">
-            <SettingsIcon className="h-[20px] w-[20px]" strokeWidth={2.1} />
+          <button type="button" onClick={onOpenSettings} className="flex flex-col items-center gap-0.5 text-black/80">
+            <SettingsIcon className="h-[21px] w-[21px]" strokeWidth={1.9} />
             <span className="text-[10px]">设置</span>
           </button>
         </div>
-        {/* 资产条（账户余额 + 优惠券入口） */}
-        <div className="mt-3 flex items-center rounded-xl bg-white/95 p-3 backdrop-blur">
-          <button type="button" onClick={onOpenWallet} className="flex flex-1 flex-col items-center">
-            <Wallet className="h-5 w-5 text-[#FF5000]" strokeWidth={2} />
-            <span className="mt-1 text-[12px] font-semibold text-black/80">账户余额</span>
-            <span className="text-[10px] text-black/40">微信 / QQ</span>
-          </button>
-          <span className="h-8 w-px bg-black/[0.06]" />
-          <button type="button" onClick={onOpenCoupons} className="flex flex-1 flex-col items-center">
-            <Ticket className="h-5 w-5 text-[#FF5000]" strokeWidth={2} />
-            <span className="mt-1 text-[12px] font-semibold text-black/80">{coupons.length}张</span>
-            <span className="text-[10px] text-black/40">优惠券</span>
-          </button>
-          <span className="h-8 w-px bg-black/[0.06]" />
-          {/* 需求：淘金币入口换成骑手（显示当前骑手形象，点按弹选择层，形象列表复用美团全套） */}
-          <button type="button" data-testid="my-rider" onClick={() => setRiderOpen(true)} className="flex flex-1 flex-col items-center">
-            <img src={mtRiderSrcOf(riderId)} alt="骑手形象" draggable={false} className="h-5 w-5 object-contain" />
-            <span className="mt-1 text-[12px] font-semibold text-black/80">骑手</span>
-            <span className="text-[10px] text-black/40">{MT_RIDERS.length}位形象</span>
-          </button>
-          <span className="h-8 w-px bg-black/[0.06]" />
-          <button type="button" onClick={() => onToast('红包 ¥0.00（演示）')} className="flex flex-1 flex-col items-center">
-            <span className="grid h-5 w-5 place-items-center rounded bg-[#FF5000]/10">
-              <ShoppingBag className="h-3.5 w-3.5 text-[#FF5000]" strokeWidth={2.2} />
-            </span>
-            <span className="mt-1 text-[12px] font-semibold text-black/80">¥0.00</span>
-            <span className="text-[10px] text-black/40">红包</span>
-          </button>
+        {/* 消费明细白卡（截图3：我的消费明细 + 会员中心/省钱卡） */}
+        <div className="mt-3 rounded-2xl bg-white p-3">
+          <div className="flex items-center">
+            <button type="button" onClick={() => onToast('消费明细（演示）')} className="flex items-center gap-0.5 active:opacity-70">
+              <span className="text-[17px] font-bold text-black/90">我的消费明细</span>
+              <ChevronRight className="h-4 w-4 text-black/35" />
+            </button>
+            <div className="ml-auto flex items-center gap-3">
+              <button type="button" onClick={onOpenCouponCenter} className="flex flex-col items-start leading-tight active:opacity-70">
+                <span className="text-[13.5px] font-bold text-[#FF4400]">会员中心</span>
+                <span className="text-[10.5px] text-black/40">闪购券50元起 &gt;</span>
+              </button>
+              <span className="h-7 w-px bg-black/[0.07]" />
+              <button type="button" onClick={onOpenCouponCenter} className="flex flex-col items-start leading-tight active:opacity-70">
+                <span className="text-[13.5px] font-bold text-[#FF4400]">省钱卡</span>
+                <span className="text-[10.5px] text-black/40">免费领 &gt;</span>
+              </button>
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-[#FF3B30] to-[#FF0036]">
+                <span className="grid h-8 w-8 place-items-center rounded-md border border-white/40 text-center text-[9px] font-bold leading-[10px] text-[#FFD100]">免费
+                  <br />领</span>
+              </span>
+            </div>
+          </div>
+          {/* 资产行（截图3：label 上 value 下；红包/优惠券/骑手/账户余额/天猫积分） */}
+          <div className="mt-1 flex items-center">
+            <button type="button" onClick={() => onToast('红包 ¥0.00（演示）')} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
+              <span className="text-[12px] text-black/45">红包</span>
+              <span className="mt-0.5 text-[16px] font-bold leading-none text-black/90">
+                <span className="text-[11px] font-semibold">¥</span>0
+              </span>
+            </button>
+            <button type="button" onClick={onOpenCoupons} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
+              <span className="text-[12px] text-black/45">优惠券</span>
+              <span className="mt-0.5 text-[16px] font-bold leading-none text-black/90">{coupons.length}张</span>
+            </button>
+            {/* 骑手（上轮需求保留：淘金币位显示当前骑手形象，点按弹选择层） */}
+            <button type="button" data-testid="my-rider" onClick={() => setRiderOpen(true)} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
+              <span className="text-[12px] text-black/45">骑手</span>
+              <img src={mtRiderSrcOf(riderId)} alt="骑手形象" draggable={false} className="mt-0.5 h-4 w-4 object-contain" />
+            </button>
+            <button type="button" onClick={onOpenWallet} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
+              <span className="text-[12px] text-black/45">账户余额</span>
+              <span className="mt-0.5 text-[11px] font-semibold leading-[16px] text-black/90">微信/QQ</span>
+            </button>
+            <button type="button" onClick={() => onToast('天猫积分 0（演示）')} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
+              <span className="text-[12px] text-black/45">天猫积分</span>
+              <span className="mt-0.5 text-[16px] font-bold leading-none text-black/90">0</span>
+            </button>
+          </div>
         </div>
+        {/* 消费券条（截图3：N张共X元消费券待使用 + 去使用 → 领券中心） */}
+        {coupons.length > 0 ? (
+          <button type="button" onClick={onOpenCouponCenter} className="mt-2 flex w-full items-center gap-2 rounded-xl bg-[#FF8A5C]/15 px-3 py-2 ring-1 ring-[#FFB394]/40 active:opacity-80">
+            <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[4px] bg-[#FF3B30]">
+              <span className="text-[11px] font-bold text-[#FFD100]">¥</span>
+            </span>
+            <span className="min-w-0 flex-1 truncate text-left text-[13px] text-black/75">
+              <span className="font-bold text-[#FF4400]">{coupons.length}张共{fmtMoney(couponSum)}元</span>消费券待使用
+            </span>
+            <span className="h-[26px] shrink-0 rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-3 text-[12px] font-semibold leading-[26px] text-white">去使用</span>
+          </button>
+        ) : null}
       </div>
-      {/* 快捷入口 */}
+      {/* 快捷入口（截图3：细线描边黑色图标，无底色圆） */}
       <div className="mx-2 mt-2 grid grid-cols-4 gap-2 rounded-xl bg-white p-3">
         {[
-          { icon: Truck, label: '快递', on: onOpenExpress },
+          { icon: Package, label: '快递', on: onOpenExpress },
           { icon: Star, label: `收藏${favs.length ? `(${favs.length})` : ''}`, on: onOpenFavorites },
-          { icon: Heart, label: '关注店铺', on: onOpenShopFollows },
-          { icon: ScanLine, label: `足迹${foots.length ? `(${foots.length})` : ''}`, on: onOpenFootprints },
+          { icon: Store, label: '关注店铺', on: onOpenShopFollows },
+          { icon: ClockIcon, label: `足迹${foots.length ? `(${foots.length})` : ''}`, on: onOpenFootprints },
         ].map((it) => (
           <button key={it.label} type="button" onClick={it.on} className="flex flex-col items-center gap-1.5 py-1 active:opacity-60">
-            <span className="grid h-11 w-11 place-items-center rounded-full bg-[#FF5000]/[0.07]">
-              <it.icon className="h-[21px] w-[21px] text-[#FF5000]" strokeWidth={2} />
-            </span>
+            <it.icon className="h-[26px] w-[26px] text-black/85" strokeWidth={1.6} />
             <span className="text-[12px] text-black/70">{it.label}</span>
           </button>
         ))}
@@ -4387,11 +4851,10 @@ function MePage({
             { st: 'completed' as TbOrderStatus, label: '待评价', n: orders.filter((o) => o.status === 'completed' && !o.review).length },
             { st: 'cancelled' as TbOrderStatus, label: '退款/售后', n: orders.filter((o) => o.refund).length },
           ].map((it) => (
-            <button key={it.label} type="button" onClick={() => onOpenOrders(it.st)} className="flex flex-col items-center gap-1 py-1 active:opacity-60">
+            <button key={it.label} type="button" onClick={() => onOpenOrders(it.st)} className="flex flex-col items-center gap-1.5 py-1 active:opacity-60">
               <span className="relative">
-                <span className="grid h-9 w-9 place-items-center rounded-full bg-black/[0.04]">
-                  {it.st === 'pendingPay' ? <Wallet className="h-[17px] w-[17px] text-black/65" strokeWidth={2} /> : it.st === 'pendingDeliver' ? <ShoppingBag className="h-[17px] w-[17px] text-black/65" strokeWidth={2} /> : it.st === 'shipped' ? <Truck className="h-[17px] w-[17px] text-black/65" strokeWidth={2} /> : it.st === 'completed' ? <MessageSquare className="h-[17px] w-[17px] text-black/65" strokeWidth={2} /> : <Copy className="h-[17px] w-[17px] text-black/65" strokeWidth={2} />}
-                </span>
+                {/* 截图3：细线描边黑色图标（无底色圆） */}
+                {it.st === 'pendingPay' ? <Wallet className="h-[25px] w-[25px] text-black/85" strokeWidth={1.6} /> : it.st === 'pendingDeliver' ? <ShoppingBag className="h-[25px] w-[25px] text-black/85" strokeWidth={1.6} /> : it.st === 'shipped' ? <Truck className="h-[25px] w-[25px] text-black/85" strokeWidth={1.6} /> : it.st === 'completed' ? <MessageSquare className="h-[25px] w-[25px] text-black/85" strokeWidth={1.6} /> : <CircleCheck className="h-[25px] w-[25px] text-black/85" strokeWidth={1.6} />}
                 {it.n > 0 ? <span className="absolute -right-1 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#FF4400] px-1 text-[10px] font-bold text-white">{it.n}</span> : null}
               </span>
               <span className="text-[11px] text-black/60">{it.label}</span>
@@ -4399,35 +4862,51 @@ function MePage({
           ))}
         </div>
       </div>
-      {/* 领券中心 */}
+      {/* 超级88 领券中心（需求：开发领券中心；入口卡 + 更多> 进领券中心页） */}
       <div className="mx-2 mt-2 rounded-xl bg-white p-3">
-        <div className="flex items-center justify-between">
-          <span className="text-[15px] font-semibold text-black/85">领券中心</span>
-          <span className="text-[12px] text-black/35">更多好券</span>
+        <div className="flex items-center">
+          <button type="button" onClick={onOpenCouponCenter} className="flex items-center gap-1.5 active:opacity-70">
+            <span className="text-[17px] font-black italic leading-none text-[#FF2600]">超级88</span>
+            <span className="text-[15px] font-bold text-black/90">领券中心</span>
+          </button>
+          <button type="button" onClick={onOpenCouponCenter} className="ml-auto flex items-center text-[12.5px] text-black/40 active:opacity-70">
+            更多
+            <ChevronRight className="h-4 w-4" />
+          </button>
         </div>
-        <div className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {TB_COUPON_SEEDS.map((c) => {
-            const claimed = tbLoadCoupons(uid).some((x) => x.name === c.name && !x.usedAt);
+        <div className="mt-2.5 grid grid-cols-4 gap-2">
+          {[
+            { amount: 38, label: '消费券', btn: '去使用', go: true },
+            { amount: 15, label: '母婴加补券', btn: '' },
+            { amount: 20, label: '超市加补券', btn: '' },
+            { amount: 60, label: '店铺优惠券', btn: '' },
+          ].map((t) => {
+            const claimed = t.go ? false : tbLoadCoupons(uid).some((x) => x.name === t.label && !x.usedAt);
             return (
-              <div key={c.name} className="w-[118px] shrink-0 rounded-lg bg-gradient-to-br from-[#fff1e8] to-[#ffe3d2] p-2">
-                <div className="text-center">
-                  <span className="text-[17px] font-bold text-[#FF4400]">¥{c.amount}</span>
+              <div key={t.label} className="rounded-lg bg-gradient-to-b from-[#FFE9EC] to-[#FFDCE2] p-1.5 text-center">
+                <div className="text-[17px] font-bold leading-[22px] text-[#FF1E00]">
+                  <span className="text-[10px]">¥</span>
+                  {t.amount}
                 </div>
-                <div className="mt-0.5 truncate text-center text-[11px] text-[#7a3b12]">{c.name}</div>
+                <div className="truncate text-[10.5px] leading-[14px] text-[#a04046]">{t.label}</div>
                 <button
                   type="button"
                   onClick={() => {
+                    if (t.go) {
+                      onOpenCouponCenter();
+                      return;
+                    }
                     if (claimed) {
                       onToast('已领取过该券');
                       return;
                     }
-                    tbClaimCoupon(uid, c);
+                    tbClaimCoupon(uid, { name: t.label, amount: t.amount, min: 0, pids: [] });
                     setTick((n) => n + 1);
-                    onToast(`领取成功：${c.name} ¥${c.amount}`);
+                    onToast(`领取成功：${t.label} ¥${t.amount}`);
                   }}
-                  className={`mt-1.5 w-full rounded-lg py-1 text-[11px] font-medium ${claimed ? 'bg-black/[0.06] text-black/40' : 'bg-[#FF5000] text-white active:opacity-80'}`}
+                  className={`mt-1 w-full rounded-[5px] py-[3px] text-[11px] font-semibold ${claimed ? 'bg-black/[0.06] text-black/35' : 'bg-gradient-to-r from-[#FF3B30] to-[#FF0036] text-white active:opacity-85'}`}
                 >
-                  {claimed ? '已领取' : '去领取'}
+                  {t.go ? t.btn : claimed ? '已领取' : '去领取'}
                 </button>
               </div>
             );
@@ -4447,11 +4926,19 @@ function MePage({
           <span className="text-[14px] text-black/40">我的收藏</span>
           <span className="text-[14px] text-black/40">我的评价</span>
         </div>
+        {/* 上滑更新菜单提示（menuRefreshing 时显示载入行） */}
+        {menuRefreshing ? (
+          <div className="flex items-center justify-center gap-2 py-2 text-[12.5px] text-black/45">
+            <Loader2 className="h-4 w-4 animate-spin text-[#FF5000]" />
+            正在为你更新菜单…
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-2">
-          {[...TB_PRODUCTS].slice(14, 22).map((p, i) => (
-            <ProductCard key={p.id} p={p} v={i % 4} onOpen={() => onOpenProduct(p.id)} />
+          {meMenu.map((p, i) => (
+            <ProductCard key={`${p.id}-${menuKey}`} p={p} v={(i + menuKey) % 4} onOpen={() => onOpenProduct(p.id)} />
           ))}
         </div>
+        <div className="pt-2 text-center text-[11.5px] text-black/30">上滑到底继续拉一拉，可更新菜单</div>
       </div>
     </div>
     {/* 骑手形象选择（需求：淘金币入口改为骑手；底部弹层复用美团 MT_RIDERS 全套形象，
@@ -4555,51 +5042,170 @@ function WalletSheet({ onClose, onToast }: { onClose: () => void; onToast: (m: s
 
 // ---------------- 消息页（交易物流 / 售后保障） ----------------
 
-function MsgsPage({ uid, onBack, onOpenOrder }: { uid: string; onBack: () => void; onOpenOrder: (id: string) => void }) {
-  const msgs = tbLoadMsgs(uid);
+/** 消息页服务号行通用（截图2：彩色圆角方图标 + 标题 + 副标 + 右侧时间） */
+function MsgServiceRow({ icon, title, sub, time, onClick }: { icon: ReactNode; title: string; sub: string; time?: string; onClick: () => void }) {
   return (
-    <div className="flex h-full flex-col bg-[#f4f4f4]">
-      <TopBar title="消息" onBack={onBack} />
-      <div className="flex-1 overflow-y-auto pb-10">
-        <div className="space-y-2 px-2 pt-2">
-          <div className="flex items-center gap-3 rounded-xl bg-white p-3.5">
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#FF5000]/[0.09]">
-              <Truck className="h-5 w-5 text-[#FF5000]" strokeWidth={2} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-[15px] font-semibold text-black/85">交易物流</div>
-              <div className="mt-0.5 truncate text-[12px] text-black/40">{msgs.filter((m) => m.kind === 'logistics').length > 0 ? msgs.find((m) => m.kind === 'logistics')!.text : '暂无包裹动态更新'}</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 rounded-xl bg-white p-3.5">
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#12B7F5]/[0.09]">
-              <Copy className="h-5 w-5 text-[#12B7F5]" strokeWidth={2} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="text-[15px] font-semibold text-black/85">售后保障</div>
-              <div className="mt-0.5 truncate text-[12px] text-black/40">{msgs.filter((m) => m.kind === 'refund').length > 0 ? msgs.find((m) => m.kind === 'refund')!.text : '暂无新消息'}</div>
-            </div>
+    <button type="button" onClick={onClick} className="flex w-full items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.03]">
+      {icon}
+      <span className="min-w-0 flex-1">
+        <span className="block text-[16.5px] font-bold text-black/90">{title}</span>
+        <span className="mt-0.5 block truncate text-[13.5px] text-black/45">{sub}</span>
+      </span>
+      {time ? <span className="shrink-0 text-[12px] text-black/30">{time}</span> : null}
+    </button>
+  );
+}
+
+/** 消息页（截图2：白色大标题 + 清除未读 + 服务号三行 + 店铺会话列表） */
+function MsgsPage({
+  uid,
+  onOpenOrder,
+  onOpenExpress,
+  onOpenRefundOrders,
+  onOpenCouponCenter,
+  onToast,
+}: {
+  uid: string;
+  onOpenOrder: (id: string) => void;
+  onOpenExpress: () => void;
+  onOpenRefundOrders: () => void;
+  onOpenCouponCenter: () => void;
+  onToast: (m: string) => void;
+}) {
+  const [, setTick] = useState(0);
+  const msgs = tbLoadMsgs(uid);
+  const unread = tbMsgUnreadCount(uid);
+  const lastLogi = msgs.find((m) => m.kind === 'logistics');
+  const lastRefund = msgs.find((m) => m.kind === 'refund');
+  // 店铺会话（按消息关联订单的店铺聚合最新一条；无订单回退消息标题）
+  const orders = tbLoadOrders(uid);
+  const chats = (() => {
+    const map = new Map<string, { key: string; name: string; text: string; at: number; orderId?: string; tag?: string; tmall?: boolean }>();
+    for (const m of msgs) {
+      const order = m.orderId ? orders.find((o) => o.id === m.orderId) : undefined;
+      const shop = order ? shopById(order.shopId) : undefined;
+      const name = shop?.name ?? m.title;
+      const prev = map.get(name);
+      if (!prev || m.at > prev.at) {
+        map.set(name, { key: prev?.key ?? m.id, name, text: m.text, at: m.at, orderId: m.orderId ?? prev?.orderId, tag: shop?.tag, tmall: shop?.tmall });
+      } else if (!prev.orderId && m.orderId) {
+        prev.orderId = m.orderId;
+      }
+    }
+    return [...map.values()].sort((a, b) => b.at - a.at);
+  })();
+  /** 服务号行（模块级 MsgServiceRow） */
+  return (
+    // 需求（第八轮）：消息界面白色简洁风（截图2），消息 tab 根页面无返回键
+    <div className="flex h-full flex-col bg-white">
+      {/* 大标题头（消息 + 清除未读 + 搜索/通讯录/加号） */}
+      <div className="sticky top-0 z-30 bg-white px-4 pb-2 pt-[56px]">
+        <div className="flex items-center gap-2">
+          <span className="text-[27px] font-bold leading-none tracking-tight text-black/92">消息</span>
+          <button
+            type="button"
+            data-testid="clear-unread"
+            onClick={() => {
+              tbSetMsgsReadAt(uid, Date.now());
+              setTick((n) => n + 1);
+              onToast('已清除未读');
+            }}
+            className="ml-1 flex h-[30px] items-center gap-1 rounded-full bg-black/[0.045] px-2.5 text-[12.5px] text-black/60 active:opacity-70"
+          >
+            <BroomIcon />
+            清除未读
+            {unread > 0 ? <span className="text-[#FF4400]">{unread}</span> : null}
+          </button>
+          <div className="ml-auto flex items-center gap-4">
+            <button type="button" aria-label="搜索消息" onClick={() => onToast('搜索消息（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+              <Search className="h-[21px] w-[21px] text-black/85" strokeWidth={2.1} />
+            </button>
+            <button type="button" aria-label="通讯录" onClick={() => onToast('通讯录（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+              <ContactScanIcon />
+            </button>
+            <button type="button" aria-label="发起" onClick={() => onToast('发起聊天（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+              <Plus className="h-[22px] w-[22px] text-black/85" strokeWidth={2.1} />
+            </button>
           </div>
         </div>
-        {msgs.length === 0 ? (
-          <div className="grid place-items-center pt-20">
-            <MessageSquare className="h-14 w-14 text-black/10" strokeWidth={1.5} />
+      </div>
+      <div className="flex-1 overflow-y-auto pb-8">
+        {/* 服务号固定行：交易物流 / 售后保障（截图2） */}
+        <div className="pt-1">
+          <MsgServiceRow
+            icon={
+              <span className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-2xl bg-[#FF7A2E]">
+                <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M2.5 7.5A1.5 1.5 0 0 1 4 6h8.5a1.5 1.5 0 0 1 1.5 1.5V16H4.6L2.5 14V7.5Z" fill="#fff" />
+                  <path d="M14 9h3.2c.5 0 .95.24 1.22.65L20.5 12.6c.2.28.3.6.3.94V15a1 1 0 0 1-1 1h-.6a2.4 2.4 0 0 0-4.7 0H14V9Z" fill="#fff" />
+                  <circle cx="7" cy="17" r="1.9" fill="#fff" stroke="#FF7A2E" strokeWidth="1.2" />
+                  <circle cx="16.8" cy="17" r="1.9" fill="#fff" stroke="#FF7A2E" strokeWidth="1.2" />
+                </svg>
+              </span>
+            }
+            title="交易物流"
+            sub={lastLogi?.text ?? '暂无包裹动态更新'}
+            onClick={onOpenExpress}
+          />
+          <MsgServiceRow
+            icon={
+              <span className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-2xl bg-[#2B7DE9]">
+                <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M11 6H6.5A2.5 2.5 0 0 0 4 8.5v7A2.5 2.5 0 0 0 6.5 18H11V6Z" fill="#fff" opacity="0.55" />
+                  <rect x="11" y="6" width="9" height="12" rx="2.4" fill="#fff" />
+                  <path d="M16.6 9.6 13.8 12l2.8 2.4" stroke="#2B7DE9" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M13.8 12h4" stroke="#2B7DE9" strokeWidth="1.7" strokeLinecap="round" />
+                </svg>
+              </span>
+            }
+            title="售后保障"
+            sub={lastRefund?.text ?? '您的订单已退款成功'}
+            time={lastRefund ? fmtChatTime(lastRefund.at) : '26/02/12'}
+            onClick={onOpenRefundOrders}
+          />
+        </div>
+        {/* 灰色分隔带（截图2 服务区与会话区分隔） */}
+        <div className="h-[7px] bg-[#F5F6F7]" />
+        {/* 活动优惠（服务号） */}
+        <MsgServiceRow
+          icon={
+            <span className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-2xl bg-[#FF3B30]">
+              <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3.5 9.2c0-.7.5-1.3 1.2-1.4C7 7.3 8.4 6 9.3 4.3c.3-.6 1.1-.8 1.7-.4l8 5.2c.6.4.8 1.2.4 1.8-1 1.7-1.3 3.6-.8 5.6.2.7-.3 1.4-1 1.5-2.3.5-3.7 1.8-4.6 3.5-.3.6-1.1.8-1.7.4l-8-5.2a1.3 1.3 0 0 1-.4-1.8c1-1.7 1.3-3.6.8-5.6l-.2-.1Z" fill="#fff" />
+                <text x="12.6" y="13.6" textAnchor="middle" fontSize="8.5" fontWeight="700" fill="#FF3B30" fontFamily="system-ui, sans-serif">¥</text>
+              </svg>
+            </span>
+          }
+          title="活动优惠"
+          sub="免单名额火热派送中！"
+          time="17:07"
+          onClick={onOpenCouponCenter}
+        />
+        {/* 店铺会话列表（截图2：方头像 + 名称 + 预览 + 时间） */}
+        {chats.length === 0 ? (
+          <div className="grid place-items-center pt-16">
+            <TbMsgTabIcon active={false} size={52} />
             <div className="mt-3 text-[15px] text-black/40">还没有消息哦</div>
           </div>
         ) : (
-          <div className="mt-2 space-y-2 px-2">
-            {msgs.map((m) => (
-              <button key={m.id} type="button" onClick={() => m.orderId && onOpenOrder(m.orderId)} className="flex w-full items-start gap-3 rounded-xl bg-white p-3.5 text-left active:opacity-80">
-                <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${m.kind === 'logistics' ? 'bg-[#FF5000]/[0.08]' : 'bg-[#12B7F5]/[0.08]'}`}>
-                  {m.kind === 'logistics' ? <Truck className="h-4 w-4 text-[#FF5000]" /> : <Copy className="h-4 w-4 text-[#12B7F5]" />}
-                </span>
+          <div>
+            {chats.map((c, i) => (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => c.orderId && onOpenOrder(c.orderId)}
+                className={`flex w-full items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.03] ${i < chats.length - 1 ? 'border-b border-black/[0.04]' : ''}`}
+              >
+                {c.tag ? (
+                  <img src={tbImg(c.tag, 120, 120, 3)} alt={c.name} className="h-[46px] w-[46px] shrink-0 rounded-xl object-cover" draggable={false} />
+                ) : (
+                  <span className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-xl bg-[#F2F3F5] text-[17px] font-bold text-black/45">{c.name.slice(0, 1)}</span>
+                )}
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-center">
-                    <span className="text-[14px] font-medium text-black/85">{m.title}</span>
-                    <span className="ml-auto text-[11px] text-black/30">{fmtTime(m.at)}</span>
-                  </span>
-                  <span className="mt-0.5 block text-[13px] leading-5 text-black/55">{m.text}</span>
+                  <span className="block truncate text-[16px] font-bold text-black/90">{c.name}</span>
+                  <span className="mt-0.5 block truncate text-[13.5px] text-black/45">{c.text}</span>
                 </span>
+                <span className="shrink-0 text-[12px] text-black/30">{fmtChatTime(c.at)}</span>
               </button>
             ))}
           </div>
@@ -5246,6 +5852,204 @@ function ShopPage({ shopId, uid, onBack, onOpenProduct, onToast }: { shopId: str
 
 // ---------------- 优惠券 / 快递 / 设置 ----------------
 
+/** 领券中心（需求：开发领券中心，截图4：超级88领好券红色页——三档消费券/加赠/家电数码券/平台加补券/预告券，领取入账 tb-coupons） */
+function CouponCenterPage({ uid, onBack, onToast }: { uid: string; onBack: () => void; onToast: (m: string) => void }) {
+  const [, setTick] = useState(0);
+  const coupons = tbLoadCoupons(uid);
+  const claimedOf = (name: string) => coupons.some((x) => x.name === name && !x.usedAt);
+  const claim = (name: string, amount: number, min: number) => {
+    if (tbClaimCoupon(uid, { name, amount, min, pids: [] })) {
+      setTick((n) => n + 1);
+      onToast(`领取成功：${name} ¥${amount}`);
+    } else onToast('已领取过该券');
+  };
+  // 加赠条倒计时（仅剩 04:32:17 起跳）
+  const [left, setLeft] = useState(4 * 3600 + 32 * 60 + 17);
+  useEffect(() => {
+    const t = setInterval(() => setLeft((n) => (n > 0 ? n - 1 : 0)), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const leftText = `${String(Math.floor(left / 3600)).padStart(2, '0')}:${String(Math.floor((left % 3600) / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
+  const ccTile = (name: string, amount: number, min: number) => {
+    const claimed = claimedOf(name);
+    return (
+      <button
+        key={name}
+        type="button"
+        onClick={() => claim(name, amount, min)}
+        className={`flex flex-col items-center rounded-xl bg-white py-3 active:opacity-85 ${claimed ? 'opacity-60' : ''}`}
+      >
+        <span className="text-[26px] font-black leading-none text-[#FF1E00]">
+          <span className="text-[14px] font-bold">¥</span>
+          {amount}
+        </span>
+        <span className="mt-1.5 text-[13px] font-bold text-black/85">满{min}可用</span>
+        <span className="mt-0.5 text-[10.5px] text-black/35">10.7-10.12有效</span>
+        <span className={`mt-1 rounded-full px-2 py-px text-[10px] font-bold ${claimed ? 'bg-black/[0.06] text-black/35' : 'bg-[#FF3B30] text-white'}`}>{claimed ? '已领取' : '点击领取'}</span>
+      </button>
+    );
+  };
+  const digitalClaimed = TB_CC_SEEDS.digital.every((c) => claimedOf(`家电数码券${c.amount}`));
+  return (
+    <div className="flex h-full flex-col bg-[#EF1500]">
+      {/* 顶栏（红底：返回 + 超级88领好券 + 更多） */}
+      <div className="relative z-30 shrink-0 bg-gradient-to-b from-[#FF4A2A] to-[#F5222D] px-3 pb-2.5 pt-[56px]">
+        <div className="flex items-center gap-2">
+          <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/25 active:opacity-70">
+            <ArrowLeft className="h-[20px] w-[20px] text-white" strokeWidth={2.3} />
+          </button>
+          <span className="text-[20px] font-black italic leading-none text-white">超级88</span>
+          <span className="text-[19px] font-bold text-white">领好券</span>
+          <button type="button" aria-label="更多" onClick={() => onToast('更多（演示）')} className="ml-auto grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/25 active:opacity-70">
+            <MoreHorizontal className="h-[19px] w-[19px] text-white" strokeWidth={2.2} />
+          </button>
+        </div>
+        {/* 领券动态 + 规则 */}
+        <div className="mt-2 flex items-center gap-1.5">
+          <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[4px] bg-[#FFD100] text-[11px] font-bold text-[#E62E24]">¥</span>
+          <span className="min-w-0 flex-1 truncate text-[13px] text-white/95">x**a刚刚领了8.8折超市加补券</span>
+          <button type="button" onClick={() => onToast('规则：消费券可与加补券叠加使用')} className="shrink-0 rounded-md bg-black/25 px-2 py-0.5 text-[12px] text-white active:opacity-70">规则</button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto px-2 pb-8">
+        {/* 超级88消费券 tab卡（三档消费券 + 查看飞猪券包） */}
+        <div className="mt-1 overflow-hidden rounded-2xl">
+          <div className="flex bg-[#FFD5D0]">
+            <div className="flex-1 bg-gradient-to-b from-[#FF5A45] to-[#FF2600] py-2 text-center">
+              <div className="text-[15px] font-bold text-white">超级88</div>
+              <div className="text-[12px] text-white/85">消费券</div>
+            </div>
+            <div className="flex-1 py-2 text-center">
+              <div className="text-[15px] font-bold text-[#93392e]">更多惊喜</div>
+              <div className="text-[12px] text-[#a05a50]">敬请期待</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2 bg-[#FFE3E0] p-2.5">{TB_CC_SEEDS.consume.map((c) => ccTile(`消费券${c.min}`, c.amount, c.min))}</div>
+          <button type="button" onClick={() => onToast('飞猪券包（演示）')} className="w-full bg-[#FFE3E0] pb-2.5 pt-1 text-center text-[13px] font-medium text-[#a04046] active:opacity-70">
+            查看飞猪券包 ⌄
+          </button>
+        </div>
+        {/* 加赠条（¥15 满125可用 仅剩倒计时） */}
+        <button type="button" onClick={() => claim('加赠消费券', TB_CC_SEEDS.bonus.amount, TB_CC_SEEDS.bonus.min)} className={`mt-2 flex w-full items-center gap-2 rounded-2xl bg-white p-3 text-left active:opacity-90 ${claimedOf('加赠消费券') ? 'opacity-60' : ''}`}>
+          <span className="relative shrink-0">
+            <span className="absolute -left-1.5 -top-3 z-10 rotate-[-14deg] rounded-[3px] bg-[#FFD100] px-1 text-[9px] font-bold leading-[13px] text-[#8a4d16]">加赠</span>
+            <span className="text-[25px] font-black leading-none text-[#FF1E00]">¥15</span>
+          </span>
+          <span className="text-[14.5px] font-semibold text-black/85">满125可用</span>
+          <span className="ml-auto text-[12.5px] text-black/45">仅剩{leftText}</span>
+          <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11.5px] font-bold ${claimedOf('加赠消费券') ? 'bg-black/[0.06] text-black/35' : 'bg-[#FF3B30] text-white'}`}>{claimedOf('加赠消费券') ? '已领取' : '领取'}</span>
+        </button>
+        {/* 您有消费券待使用 */}
+        <div className="mt-2 flex items-center gap-2 rounded-xl bg-[#FFD5D0]/75 px-3 py-2">
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-[#1a1a1a]">
+            <span className="text-[9px] font-bold text-white">天猫</span>
+          </span>
+          <span className="text-[13.5px] font-medium text-black/80">您有消费券待使用</span>
+          <button type="button" onClick={() => onToast('规则：下单自动抵扣最优券')} className="ml-auto text-[12.5px] text-black/45 active:opacity-70">规则</button>
+        </div>
+        {/* 家电数码券（三档 + 立即领取） */}
+        <div className="mt-2 rounded-2xl bg-gradient-to-b from-[#FF5A45] to-[#FF2600] p-3">
+          <div className="flex items-center">
+            <span className="text-[19px] font-black text-white">家电数码券</span>
+            <button type="button" onClick={() => onToast('规则：数码家电类目可用')} className="ml-auto rounded-md bg-black/25 px-2 py-0.5 text-[12px] text-white active:opacity-70">规则</button>
+          </div>
+          <div className="mt-2.5 grid grid-cols-3 gap-2">
+            {TB_CC_SEEDS.digital.map((c) => (
+              <div key={c.amount} className="flex flex-col items-center rounded-xl bg-white py-2.5">
+                <span className="text-[24px] font-black leading-none text-[#FF1E00]">
+                  <span className="text-[13px] font-bold">¥</span>
+                  {c.amount}
+                </span>
+                <span className="mt-1 text-[12px] font-bold text-black/85">满{c.min}可用</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-center text-[12.5px] text-white/90">10.7晚8点-10.12有效</div>
+          <button
+            type="button"
+            data-testid="cc-digital-claim"
+            onClick={() => {
+              if (digitalClaimed) {
+                onToast('家电数码券已领取');
+                return;
+              }
+              let got = 0;
+              for (const c of TB_CC_SEEDS.digital) {
+                if (tbClaimCoupon(uid, { name: `家电数码券${c.amount}`, amount: c.amount, min: c.min, pids: [] })) got++;
+              }
+              setTick((n) => n + 1);
+              onToast(got > 0 ? `领取成功：家电数码券${got}张` : '已领取过该券');
+            }}
+            className={`mt-2.5 h-11 w-full rounded-xl text-[16px] font-bold active:opacity-85 ${digitalClaimed ? 'bg-white/60 text-black/35' : 'bg-[#FFE9E2] text-[#FF4400]'}`}
+          >
+            {digitalClaimed ? '已领取' : '立即领取'}
+          </button>
+        </div>
+        {/* 平台加补券（可叠消费券） */}
+        <div className="mt-2 rounded-2xl bg-gradient-to-b from-[#FF5A45] to-[#FF2600] p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[19px] font-black text-white">平台加补券</span>
+            <span className="rounded-[4px] bg-white/20 px-1.5 py-0.5 text-[11px] font-bold text-white">可叠消费券!</span>
+            <button type="button" onClick={() => onToast('攻略：先领加补券，叠消费券下单更省')} className="ml-auto text-[12.5px] text-white/90 active:opacity-70">攻略</button>
+          </div>
+          <div className="mt-2.5 grid grid-cols-2 gap-2">
+            {TB_CC_SEEDS.extra.map((c) => {
+              const claimed = claimedOf(c.name);
+              return (
+                <div key={c.name} className="flex flex-col rounded-xl bg-white p-2.5">
+                  <span className="text-[14.5px] font-bold text-black/90">{c.name}</span>
+                  <span className="mt-0.5 flex items-baseline gap-1">
+                    <span className="text-[21px] font-black leading-none text-[#FF1E00]">
+                      <span className="text-[12px] font-bold">¥</span>
+                      {c.amount}
+                    </span>
+                    <span className="text-[11px] text-black/40">共{c.count}张</span>
+                  </span>
+                  <span className="mt-0.5 truncate text-[10.5px] text-black/40">{c.scope}</span>
+                  <img src={tbImg(c.tag, 160, 100, 5)} alt={c.name} className="mt-1 h-[52px] w-full rounded-md object-cover" draggable={false} />
+                  <button
+                    type="button"
+                    onClick={() => claim(c.name, c.amount, c.min)}
+                    className={`mt-1.5 h-8 w-full rounded-lg text-[13px] font-bold active:opacity-85 ${claimed ? 'bg-black/[0.06] text-black/35' : 'bg-gradient-to-r from-[#FF3B30] to-[#FF0036] text-white'}`}
+                  >
+                    {claimed ? '已领取' : '领取'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {/* 更多大额加补券即将可领（预告） */}
+        <div className="mb-2 mt-2 rounded-2xl bg-gradient-to-b from-[#FF5A45] to-[#FF2600] p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-[18px] font-black text-white">更多大额加补券即将可领!</span>
+            <span className="ml-auto shrink-0 rounded-[4px] bg-[#FFD100] px-1.5 py-0.5 text-[10.5px] font-bold text-[#8a2a20]">每天0点,10点,20点抢</span>
+          </div>
+          <div className="mt-2.5 grid grid-cols-3 gap-2">
+            {TB_CC_SEEDS.upcoming.map((c) => (
+              <div key={c.name} className="flex flex-col rounded-xl bg-white p-2">
+                <span className="truncate text-[13px] font-bold text-black/90">{c.name}</span>
+                <span className="mt-0.5 text-[19px] font-black leading-none text-[#FF1E00]">
+                  <span className="text-[11px] font-bold">¥</span>
+                  {c.amount}
+                </span>
+                <span className="mt-0.5 text-[10.5px] text-black/40">共{c.count}张</span>
+                <button
+                  type="button"
+                  onClick={() => onToast('每天0点、10点、20点开抢，记得回来')}
+                  className="mt-1.5 h-8 w-full rounded-lg bg-[#FFB4A6] text-[12px] font-bold text-white active:opacity-80"
+                >
+                  今天20点领
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CouponsPage({ uid, onBack, onToast }: { uid: string; onBack: () => void; onToast: (m: string) => void }) {
   const [tab, setTab] = useState<'ok' | 'used'>('ok');
   const list = tbLoadCoupons(uid).filter((c) => (tab === 'ok' ? !c.usedAt : !!c.usedAt));
@@ -5400,33 +6204,52 @@ function SettingsPage({ session, onBack, onToast, onLogout }: { session: TbSessi
 
 // ---------------- 主入口（tab 框架 + 页面栈） ----------------
 
-type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs';
-type TbTab = 'home' | 'msgs' | 'cart' | 'me';
+type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs';
+type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 
 /** 底部导航（首页/消息/购物车/我的淘宝） */
 function BottomTabBar({ active, onTab, cartCount, msgCount }: { active: TbTab; onTab: (t: TbTab) => void; cartCount: number; msgCount: number }) {
-  const items: { id: TbTab; label: string; icon: typeof HomeIcon }[] = [
-    { id: 'home', label: '首页', icon: HomeIcon },
-    { id: 'msgs', label: '消息', icon: MessageSquare },
-    { id: 'cart', label: '购物车', icon: ShoppingCart },
-    { id: 'me', label: '我的淘宝', icon: User },
-  ];
   return (
-    <div className="absolute inset-x-0 bottom-0 z-40 flex items-stretch border-t border-black/[0.06] bg-white/92 pb-5 pt-1.5 backdrop-blur-lg">
-      {items.map((it) => {
-        const badge = it.id === 'cart' ? cartCount : it.id === 'msgs' ? msgCount : 0;
-        return (
-          <button key={it.id} type="button" onClick={() => onTab(it.id)} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
-            <span className="relative">
-              <it.icon className={`h-[23px] w-[23px] ${active === it.id ? 'text-[#FF5000]' : 'text-black/55'}`} strokeWidth={active === it.id ? 2.3 : 2} />
-              {badge > 0 ? (
-                <span className="absolute -right-2 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#FF4400] px-1 text-[10px] font-bold text-white">{badge > 99 ? '99+' : badge}</span>
-              ) : null}
-            </span>
-            <span className={`text-[10px] ${active === it.id ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>{it.label}</span>
-          </button>
-        );
-      })}
+    <div className="absolute inset-x-0 bottom-0 z-40 flex items-stretch border-t border-black/[0.05] bg-white/95 pb-5 pt-1.5 backdrop-blur-lg">
+      {/* 首页（active：橙色淘 logo 圆，截图1） */}
+      <button type="button" onClick={() => onTab('home')} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
+        {active === 'home' ? (
+          <TbLogoMark size={23} />
+        ) : (
+          <HomeIcon className="h-[23px] w-[23px] text-black/60" strokeWidth={1.9} />
+        )}
+        <span className={`text-[10px] ${active === 'home' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>首页</span>
+      </button>
+      {/* 视频（截图2：圆角方播放） */}
+      <button type="button" onClick={() => onTab('video')} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
+        <TbVideoTabIcon active={active === 'video'} />
+        <span className={`text-[10px] ${active === 'video' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>视频</span>
+      </button>
+      {/* 消息（截图1/2：气泡三点图标；active 橙色填充白点） */}
+      <button type="button" onClick={() => onTab('msgs')} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
+        <span className="relative">
+          <TbMsgTabIcon active={active === 'msgs'} />
+          {msgCount > 0 ? (
+            <span className="absolute -right-2 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#FF4400] px-1 text-[10px] font-bold text-white">{msgCount > 99 ? '99+' : msgCount}</span>
+          ) : null}
+        </span>
+        <span className={`text-[10px] ${active === 'msgs' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>消息</span>
+      </button>
+      {/* 购物车 */}
+      <button type="button" onClick={() => onTab('cart')} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
+        <span className="relative">
+          <ShoppingCart className={`h-[23px] w-[23px] ${active === 'cart' ? 'text-[#FF5000]' : 'text-black/60'}`} strokeWidth={active === 'cart' ? 2.3 : 1.9} />
+          {cartCount > 0 ? (
+            <span className="absolute -right-2 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#FF4400] px-1 text-[10px] font-bold text-white">{cartCount > 99 ? '99+' : cartCount}</span>
+          ) : null}
+        </span>
+        <span className={`text-[10px] ${active === 'cart' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>购物车</span>
+      </button>
+      {/* 我的淘宝（笑脸，截图2） */}
+      <button type="button" onClick={() => onTab('me')} className="relative flex flex-1 flex-col items-center gap-0.5 py-0.5 active:opacity-60">
+        <TbMeTabIcon active={active === 'me'} />
+        <span className={`text-[10px] ${active === 'me' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>我的淘宝</span>
+      </button>
     </div>
   );
 }
@@ -5567,7 +6390,8 @@ export default function TaobaoApp() {
   }
 
   const uid = tbUidOf(session);
-  const msgCount = tbLoadMsgs(uid).length;
+  // 底部消息角标 = 未读数（消息页「清除未读」后归零）
+  const msgCount = tbMsgUnreadCount(uid);
 
   /** 二级页返回（订单/地址等可能从「我的」或主框架进入） */
   const backToReturn = () => {
@@ -5586,24 +6410,34 @@ export default function TaobaoApp() {
       <>
         {tab === 'home' ? (
           <HomePage
-            session={session}
             uid={uid}
             onOpenSearch={(seed) => {
               setSearchKw(seed ?? '');
               setPage(seed ? 'searchResult' : 'search');
             }}
             onOpenProduct={openProduct}
-            onOpenMsgs={() => {
-              setTab('msgs');
-            }}
-            onOpenCart={() => {
-              setTab('cart');
-            }}
             onToast={showToast}
-            cartCount={cartCount}
+            onOpenCouponCenter={() => setPage('couponCenter')}
           />
         ) : null}
-        {tab === 'msgs' ? <MsgsPage uid={uid} onBack={() => setTab('home')} onOpenOrder={(id) => { setOrderId(id); setPage('orderDetail'); }} /> : null}
+        {tab === 'video' ? <VideoPage onOpenProduct={openProduct} onToast={showToast} /> : null}
+        {tab === 'msgs' ? (
+          <MsgsPage
+            uid={uid}
+            onOpenOrder={(id) => {
+              setOrderId(id);
+              setPage('orderDetail');
+            }}
+            onOpenExpress={() => setPage('express')}
+            onOpenRefundOrders={() => {
+              setOrderTab('cancelled');
+              setSubReturn('me');
+              setPage('orders');
+            }}
+            onOpenCouponCenter={() => setPage('couponCenter')}
+            onToast={showToast}
+          />
+        ) : null}
         {tab === 'cart' ? (
           <CartPage
             uid={uid}
@@ -5614,6 +6448,7 @@ export default function TaobaoApp() {
             }}
             onToast={showToast}
             onOpenHome={() => setTab('home')}
+            onCartChange={refreshCart}
           />
         ) : null}
         {tab === 'me' ? (
@@ -5639,6 +6474,7 @@ export default function TaobaoApp() {
             onOpenProduct={openProduct}
             onToast={showToast}
             onOpenWallet={() => setWalletOpen(true)}
+            onOpenCouponCenter={() => setPage('couponCenter')}
           />
         ) : null}
         <BottomTabBar
@@ -5759,6 +6595,9 @@ export default function TaobaoApp() {
     content = <AddressEditPage uid={uid} editing={editAddr} onBack={() => setPage('addresses')} onToast={showToast} />;
   } else if (page === 'coupons') {
     content = <CouponsPage uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
+  } else if (page === 'couponCenter') {
+    // 领券中心（首页/消息/我的入口共用；返回回 tab 主页）
+    content = <CouponCenterPage uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
   } else if (page === 'favorites') {
     content = <FavoritesPage uid={uid} onBack={() => setPage('main')} onOpenProduct={openProduct} onToast={showToast} />;
   } else if (page === 'foots') {

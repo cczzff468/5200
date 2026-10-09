@@ -17595,3 +17595,24 @@ Stage Summary:
 - 两点全部落地并浏览器实测：订单卡任何位置（标题/图片/规格）点击均进对应状态订单详情页（商品行不再截胡去商品页）；我的淘宝淘金币→骑手（形象选择弹层复用美团全套 22 位，形象与美团/淘宝物流地图三方共用）
 - 范围限定零破坏：美团/微信/QQ/聊天/支付链路零改动；订单点击分流逻辑沿用第五/六轮口径（整卡 onOpen、功能按钮 stopProp 接管不变）
 - 改动文件：src/components/apps/taobao.tsx（OrderCard 商品行冒泡+prop 清理、OrdersPage prop 清理、MePage 骑手入口+选择弹层、mt-rider import 扩展）
+
+---
+Task ID: 33
+Agent: main (Z.ai Code)
+Task: 淘宝第八轮——首页/消息界面/消息图标按截图重做、我的淘宝橙色改肉粉+美化、开发领券中心、购物车再美化、上滑「我的」更新菜单
+
+Work Log:
+- 底部导航 5 tab（截图1/2）：首页(active=橙色淘logo圆)/视频(圆角方播放)/消息(气泡三点,active橙填充白点)/购物车/我的淘宝(笑脸)，新增 TbMsgTabIcon/TbVideoTabIcon/TbMeTabIcon 内联 SVG；TbTab 加 'video'，新增 VideoPage 竖滑短视频流（海报全屏+互动栏+进店+进度条+播放暂停）
+- 首页重设计（截图1）：整体奶油肉粉底(#FBF0E3/#FDF2E6)，频道 tab 关注/推荐/闪购(外卖tag)/国补/超级88/飞猪/穿搭 黑字+选中橙字微笑弧(SVG Q曲线)；搜索框白底橙描边胶囊(扫码/占位2026新型蓝牙耳机/相机/橙搜索钮)；运营位图标行6枚彩色SVG(红包签到/淘宝秒杀/领淘金币/阿里拍卖捡漏/淘票票眼镜/飞猪猪头)+页点；淘宝直播/百亿补贴白卡(直播价/补贴价)；超级88大红促卡(88元券票+三商品小卡,点击进领券中心)；底部消费券浮条(¥ N张共X元待使用,剩 hh:mm:ss 倒计时+去使用+×,真实券数据,无券隐藏)；分类宫格/顶栏消息入口按截图移除（分类经搜索页可达）
+- 消息页重设计（截图2）：白底大标题「消息」+清除未读胶囊(扫帚SVG+未读数)+右上搜索/通讯录扫一扫/加号；服务号三行 交易物流(橙卡车SVG)/售后保障(蓝返回箭头SVG,右侧时间)/活动优惠(红票¥SVG)——分别进我的快递/退款售后tab/领券中心；灰色分隔带+店铺会话列表(消息按关联订单店铺聚合,方头像+名称+预览+fmtChatTime 今天HH:MM/昨天/星期X/YY/MM-DD)；清除未读=tbSetMsgsReadAt 写已读时间戳,底部消息角标改 tbMsgUnreadCount 未读口径
+- 我的淘宝（截图3）：头部橙渐变→肉粉(#FCDBC4→#FBEDE2)黑字；新增「我的消费明细」白卡(会员中心/省钱卡/免费领红票)+资产行5列(红包/优惠券/骑手形象[上轮需求保留]/账户余额/天猫积分, label上value下)；消费券条(N张共X元+去使用→领券中心)；快捷宫格/我的订单改细线描边黑图标(新增 Clock import)；领券中心卡改「超级88领券中心」红券四枚(38去使用/15母婴/20超市/60店铺优惠券,领取入账)；上滑更新菜单：滚动到底继续上拉(touch 事件累计>50px)→转圈800ms→猜你喜欢菜单池轮换(menuKey*8)+toast「猜你喜欢菜单已更新」,底部提示文案
+- 领券中心页开发（截图4）：新增 CouponCenterPage + TbPage 'couponCenter' 路由；红底超级88领好券(返回/更多/领券动态ticker/规则)；三档消费券tab卡(¥3满20/¥20满200/¥50满500+点击领取)+查看飞猪券包；加赠¥15满125条(仅剩倒计时+领取)；您有消费券待使用行；家电数码券(150/300/500+立即领取批量入账)；平台加补券(超市¥926/母婴¥40,可叠消费券chip+攻略,白卡图+领取)；预告区(服饰100/秋装200/饰品165 今天20点领 toast)；全部走 tbClaimCoupon 去重入账,已领取态灰化
+- 购物车再美化（截图5/6）：管理模式重做——头部 搜索/对比/管理 ↔ 批量清理(=全选+toast)/退出管理；店铺行右侧置顶(tbPinCartShop 新store函数,店铺商品稳定前移)；商品行右侧拖拽柄GripVertical+红色Trash2单件删除,×N/明细隐藏；底部栏管理态=全选+分享(toast)/移入收藏(先tbToggleFav收藏再移出购物车)/删除(红色,批量删勾选)；勾选圈统一20px橙实心+白勾(未选灰圈)；领券结算→结算(N)；列表尾双横幅(V-GIRL秋冬换季福利/猜你想看短视频)；右下回到顶部圆钮(下滑>300px出现,ChevronUp+顶部)；CartPage 加 onCartChange 回调同步底部tab角标（修角标不同步）
+- 杂项：store 新增 tbPinCartShop/tbMsgsReadAt/tbSetMsgsReadAt/tbMsgUnreadCount/TB_CC_SEEDS；MsgServiceRow 提模块级（修 eslint create-during-render）；离场清理 HomePage session/onOpenMsgs/onOpenCart props
+- bunx tsc --noEmit 0 错误；bun run lint 0 错误；dev.log 无新增运行时错误
+- agent-browser 全真验证：①首页奶油色+tab微笑弧+图标行+直播/百亿+超级88红卡+底部券条(4张共553元倒计时) ②视频tab竖滑流+互动栏 ③消息白底服务号三行+会话列表+清除未读后角标消失 ④我的淘宝肉粉+消费明细卡+超级88领券中心卡 ⑤领券中心领取(家电数码券3张已领取/消费券20已领取,toast+灰化) ⑥购物车管理模式(批量清理/退出管理/置顶/拖拽柄+红删/分享移入收藏删除,移入收藏后清空+猜你也想要) ⑦我的页合成TouchEvent上拉→菜单更新+toast
+
+Stage Summary:
+- 六项全部落地并浏览器逐项实测：首页/消息/消息图标/底部5tab按截图重做、我的淘宝肉粉+美化、领券中心真实可领、购物车管理模式+移入收藏、上滑更新菜单
+- 范围限定零破坏：美团/微信/QQ/聊天/支付链路零改动；订单点击分流、支付复用、uid 隔离不变
+- 改动文件：src/components/apps/taobao.tsx（BottomTabBar/VideoPage/HomePage/MsgsPage/MePage/CouponCenterPage/CartPage/主入口路由）、src/lib/ios/taobao-store.ts（置顶/已读/未读/领券中心种子）

@@ -198,6 +198,17 @@ export function tbClearCheckedCart(uid: string): void {
   );
 }
 
+/** 店铺置顶（购物车管理模式）：该店铺全部商品移到列表最前（保序稳定） */
+export function tbPinCartShop(uid: string, shopId: string, shopOf: (pid: string) => string): void {
+  const list = tbLoadCart(uid);
+  const head = list.filter((c) => shopOf(c.pid) === shopId);
+  if (head.length === 0 || head.length === list.length) return;
+  save(
+    cartKey(uid),
+    [...head, ...list.filter((c) => shopOf(c.pid) !== shopId)]
+  );
+}
+
 // ---------------- 收藏 / 足迹 ----------------
 
 const favKey = (uid: string) => `tb-favs:${uid}`;
@@ -350,7 +361,7 @@ export function tbUnuseCoupon(uid: string, cid: string): void {
   }
 }
 
-/** 领券中心种子（「我的」页横滑领取） */
+/** 领券中心种子（「我的」页横滑领取 + 领券中心页领取） */
 export const TB_COUPON_SEEDS: { name: string; amount: number; min: number; pids: string[] }[] = [
   { name: '消费券', amount: 10, min: 0, pids: [] },
   { name: '服饰加补券', amount: 15, min: 59, pids: [] },
@@ -358,6 +369,36 @@ export const TB_COUPON_SEEDS: { name: string; amount: number; min: number; pids:
   { name: '美妆加补券', amount: 20, min: 79, pids: [] },
   { name: '食品加补券', amount: 5, min: 0, pids: [] },
 ];
+
+/** 领券中心页种子（超级88领好券：截图口径 三档消费券/家电数码券/平台加补券/预告券） */
+export const TB_CC_SEEDS: {
+  consume: { amount: number; min: number }[];
+  bonus: { amount: number; min: number };
+  digital: { amount: number; min: number }[];
+  extra: { name: string; amount: number; min: number; count: number; scope: string; tag: string }[];
+  upcoming: { name: string; amount: number; min: number; count: number }[];
+} = {
+  consume: [
+    { amount: 3, min: 20 },
+    { amount: 20, min: 200 },
+    { amount: 50, min: 500 },
+  ],
+  bonus: { amount: 15, min: 125 },
+  digital: [
+    { amount: 150, min: 1500 },
+    { amount: 300, min: 3000 },
+    { amount: 500, min: 5000 },
+  ],
+  extra: [
+    { name: '超市加补券', amount: 926, min: 0, count: 10, scope: '限超市部分商品可用', tag: 'grocery' },
+    { name: '母婴加补券', amount: 40, min: 0, count: 2, scope: '限母婴部分商品可用', tag: 'toy' },
+  ],
+  upcoming: [
+    { name: '服饰加补券', amount: 100, min: 0, count: 3 },
+    { name: '秋装加补券', amount: 200, min: 0, count: 4 },
+    { name: '饰品加补券', amount: 165, min: 0, count: 3 },
+  ],
+};
 
 // ---------------- 店铺关注 ----------------
 
@@ -660,6 +701,22 @@ export function tbPushMsg(uid: string, m: Omit<TbMsg, 'id' | 'at'>): void {
   const list = load<TbMsg[]>(msgKey(uid), []);
   list.push({ ...m, id: `tbm${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`, at: Date.now() });
   save(msgKey(uid), list);
+}
+
+/** 未读口径：消息时间晚于已读时间戳即未读（「消息-清除未读」用） */
+const msgReadKey = (uid: string) => `tb-msgs-read:${uid}`;
+
+export function tbMsgsReadAt(uid: string): number {
+  return load<number>(msgReadKey(uid), 0);
+}
+
+export function tbSetMsgsReadAt(uid: string, ts: number): void {
+  save(msgReadKey(uid), ts);
+}
+
+export function tbMsgUnreadCount(uid: string): number {
+  const r = tbMsgsReadAt(uid);
+  return tbLoadMsgs(uid).filter((m) => m.at > r).length;
 }
 
 // ---------------- 全局状态推进 tick ----------------
