@@ -17276,3 +17276,23 @@ Stage Summary:
 - 平台选型口径：HF Spaces 为主推（真 Node 容器无 serverless 冷启动怪癖、官方镜像直用、免费、48h 闲置休眠自动唤醒），Vercel 为备选（快但有冷启动+共享 IP 风控）
 - 改动文件：deploy/ncm-api/{deploy-hf.sh,deploy-vercel.sh,troubleshoot.sh}（新，均带执行位）+ deploy/ncm-api/README.md（顶部代部署章节）
 - 现状澄清：沙箱内 3010 实例此刻就是健康可用的（9/9），预览面板内 App 全功能正常；外部部署仅为「沙箱关闭后仍可用」的场景服务
+
+---
+Task ID: 18
+Agent: Z.ai Code (main)
+Task: 用户提供 token 后执行代部署——实测 Vercel 一条龙上线并双重验收
+
+Work Log:
+- token 归属实测：HuggingFace whoami-v2 无效；Vercel api.vercel.com/v2/user 有效（账号 3024996594-8782，hobby 计划）——确认 vcp_ 前缀为 Vercel 新版 token 格式；顺带确认官方镜像 moefurina/ncm-api 在 Docker Hub 状态 active
+- 后台执行 deploy-vercel.sh：[1/5] token 校验通过、[2/5] fork 克隆成功、[3/5] CLI 推进到 iad1（华盛顿东部）构建、上传 562 文件完成后沙箱会话回收了后台 CLI 进程——关键发现：构建在 Vercel 云端继续执行，CLI 被杀不影响部署结果
+- REST API v13/deployments/get 确认：readyState=READY、buildError 无，生产别名 api-enhanced-ochre-rho.vercel.app（永久）与 api-enhanced-3024996594-8782s-projects.vercel.app；部署 URL 根路径 HTTP 302（0.29s）响应正常
+- check.sh 对生产域名验收：9/9 全过（扫码key/云搜索/热搜/榜单/推荐歌单/每日推荐/歌曲详情/歌词/登录状态）
+- CORS 验证（音乐 App 设置页直连模式前置条件）：OPTIONS 预检 204 + GET 200，access-control-allow-origin 正确回显 Origin、allow-credentials true、methods 含 GET/OPTIONS——浏览器直连可用
+- worklog 提交（token 字符串未写入任何仓库文件，仅作为脚本 argv 传入；/tmp 日志亦不含 token）
+- 本次零应用代码改动，dev server 无需重启
+
+Stage Summary:
+- 交付：用户自己的网易云 API 实例正式上线 https://api-enhanced-ochre-rho.vercel.app（Vercel hobby / 美东 iad1），9 项健康检查 + CORS 双验收全过；「离开沙箱也能用」目标最终达成
+- App 对接：音乐 App 设置 → API 地址填该 URL 即切外部实例；沙箱 3010 内置实例仍为默认且更快，无需改动任何现有配置
+- 经验沉淀：①Vercel CLI 后台进程可能被沙箱会话回收，但上传完成后的云端构建不受影响，用 REST API 查 readyState 即可接续，无需重跑部署 ②vcp_ = Vercel 新版 token 前缀（旧文档均说无前缀，实测为准）
+- 遗留提醒（已告知用户）：Vercel hobby 冷启动首请求 5-15s；数据中心 IP 偶发网易风控（重试/扫码登录缓解）；token 可自留用于后续重部（fork 同步上游后重跑脚本即更新）或自行吊销
