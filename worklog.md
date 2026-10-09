@@ -17577,3 +17577,21 @@ Stage Summary:
 - 四点全部落地并浏览器逐项实测：订单卡点击→对应状态详情页（全状态核查+标题统一「已发货」+我的快递入口统一）、收银台微信/QQ 图标=主界面真实 App 图标、购物车及全 App 勾选态「圆圈套对号」→纯对号、物流页已揽收橙卡上移+路线起点下移骑手完全可见
 - 范围限定零破坏：微信/QQ/美团/音乐/聊天链路零改动；支付仍 100% 复用既有钱包；tb-* kv 仍按 uid 隔离
 - 改动文件：src/components/apps/taobao.tsx（PaySheet 图标+单选、CartPage 勾选、登录同意、AddrPicker 两处、TbExpressMap 气泡/贝塞尔、ExpressPage 路由、CreditCard import 清理）；src/lib/ios/taobao-store.ts（tbStatusText shipped→已发货）
+
+---
+Task ID: 32
+Agent: main (Z.ai Code)
+Task: 淘宝第七轮 2 点——全部订单点击订单任何地方（名字/图片）都进对应状态订单详情页；我的淘宝淘金币入口换成骑手并复制美团全套骑手形象
+
+Work Log:
+- 检查 OrderCard 现状：整卡 onClick={onOpen} 已进状态详情页，但卡内商品行 button 仍 stopPropagation + onOpenProduct 跳商品详情页（名字/图片点击进的是商品页而非订单详情页，即用户指出的「不管名字还是图片都要进对应状态详情页」的缺口）
+- 修复：订单卡商品行去掉自身 onClick（点击冒泡到卡体 onOpen → onOpenOrder → setPage('orderDetail') 按状态分流），名字/图片/规格任意位置点击都进对应状态订单详情页；OrderCard 与 OrdersPage 移除不再使用的 onOpenProduct prop（调用点同步清理）
+- 我的淘宝资产条「淘金币」入口换成「骑手」：显示当前选中骑手形象（mtRiderSrcOf）+「22位形象」副标，点按弹出「选择骑手形象」底部弹层（taobao 风格 quick-in-up 动画 + #FF5000 橙选中态），复用美团 @/lib/ios/mt-rider 全套 MT_RIDERS 22 位形象（圆圆/蹦蹦/呜呜…），mtSetRiderId 与美团共用同一 localStorage——选中形象同时作用于淘宝物流页地图骑手与美团配送地图
+- MePage 返回值包 fragment：滚动根 + 骑手弹层平级（弹层 absolute 定位锚定 app 根 relative 容器，不受滚动影响）
+- bunx tsc --noEmit 0 错误；bun run lint 0 错误；dev.log 无新增运行时错误（仅既有 instrumentation.ts Edge 警告）
+- agent-browser 全真浏览器验证：①我的淘宝资产条显示「骑手 22位形象」入口 ②点开弹层 22 位美团骑手全部渲染、选中态橙圈+对号 ③选「蹦蹦」toast「骑手"蹦蹦"已接单，为你的包裹护航」且入口图标切换 ④全部订单点「已发货」卡商品标题→已发货状态详情页（驿站卡+取件码+四钮底栏）⑤点商品图片→同样进已发货详情页 ⑥点「交易成功」卡图片→交易成功详情页（已签收+售后行+加入购物车/再买一单）
+
+Stage Summary:
+- 两点全部落地并浏览器实测：订单卡任何位置（标题/图片/规格）点击均进对应状态订单详情页（商品行不再截胡去商品页）；我的淘宝淘金币→骑手（形象选择弹层复用美团全套 22 位，形象与美团/淘宝物流地图三方共用）
+- 范围限定零破坏：美团/微信/QQ/聊天/支付链路零改动；订单点击分流逻辑沿用第五/六轮口径（整卡 onOpen、功能按钮 stopProp 接管不变）
+- 改动文件：src/components/apps/taobao.tsx（OrderCard 商品行冒泡+prop 清理、OrdersPage prop 清理、MePage 骑手入口+选择弹层、mt-rider import 扩展）

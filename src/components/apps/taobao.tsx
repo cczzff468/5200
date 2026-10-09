@@ -55,7 +55,7 @@ import {
   Zap,
   Loader2,
 } from 'lucide-react';
-import { mtGetRiderId, mtRiderSrcOf } from '@/lib/ios/mt-rider';
+import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
 import { useUI } from '@/lib/ios/store';
 import {
   TB_CATS,
@@ -2608,7 +2608,6 @@ function OrdersPage({
   onOpenDetail,
   onToast,
   onPayOrder,
-  onOpenProduct,
   onOpenLogistics,
   onRate,
 }: {
@@ -2620,7 +2619,6 @@ function OrdersPage({
   onOpenDetail: (id: string) => void;
   onToast: (m: string) => void;
   onPayOrder: (id: string) => void;
-  onOpenProduct: (pid: string) => void;
   onOpenLogistics: (id: string) => void;
   onRate: (id: string) => void;
 }) {
@@ -2725,7 +2723,7 @@ function OrdersPage({
         ) : (
           <div className="space-y-2 px-2 pt-1">
             {orders.map((o) => (
-              <OrderCard key={o.id} o={o} uid={uid} onOpen={() => onOpenOrder(o.id)} onPay={() => onPayOrder(o.id)} onToast={onToast} onOpenProduct={onOpenProduct} onOpenLogistics={onOpenLogistics} onRate={onRate} onCancel={() => setCancelFor(o.id)} onRefund={() => setRefundFor(o.id)} />
+              <OrderCard key={o.id} o={o} uid={uid} onOpen={() => onOpenOrder(o.id)} onPay={() => onPayOrder(o.id)} onToast={onToast} onOpenLogistics={onOpenLogistics} onRate={onRate} onCancel={() => setCancelFor(o.id)} onRefund={() => setRefundFor(o.id)} />
             ))}
           </div>
         )}
@@ -2782,7 +2780,6 @@ function OrderCard({
   onOpen,
   onPay,
   onToast,
-  onOpenProduct,
   onOpenLogistics,
   onRate,
   onCancel,
@@ -2793,7 +2790,6 @@ function OrderCard({
   onOpen: () => void;
   onPay: () => void;
   onToast: (m: string) => void;
-  onOpenProduct: (pid: string) => void;
   onOpenLogistics: (id: string) => void;
   onRate: (id: string) => void;
   onCancel: () => void;
@@ -2832,8 +2828,10 @@ function OrderCard({
         <span className={`ml-auto shrink-0 text-[13px] ${o.status === 'pendingPay' || o.status === 'shipped' ? 'text-[#FF6A1E]' : o.status === 'cancelled' ? 'text-black/40' : 'text-black/50'}`}>{statusRight}</span>
       </div>
       <div className="mt-2.5 space-y-3">
+        {/* 需求（第六轮澄清）：整卡任何地方（名字/图片/规格等）点击都进对应状态订单详情页——
+            商品行不再跳商品详情，去掉自身 onClick 让点击冒泡到卡体 onOpen */}
         {o.items.map((it, i) => (
-          <button key={i} type="button" onClick={(e) => { e.stopPropagation(); onOpenProduct(it.pid); }} className="flex w-full gap-2.5 text-left">
+          <button key={i} type="button" className="flex w-full gap-2.5 text-left">
             <img src={it.img} alt={it.title} className="h-[74px] w-[74px] shrink-0 rounded-lg object-cover" draggable={false} />
             <div className="min-w-0 flex-1">
               <div className="flex gap-2">
@@ -4280,6 +4278,10 @@ function MePage({
   onOpenWallet: () => void;
 }) {
   const [, setTick] = useState(0);
+  // 骑手形象选择（需求：我的淘宝淘金币入口改为骑手，复用美团 mt-rider 全套形象；
+  // 选中形象同时用于淘宝物流页地图巡航，与美团共用同一 localStorage）
+  const [riderOpen, setRiderOpen] = useState(false);
+  const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
   useEffect(() => {
     tbTickOrders(uid);
     const t = setInterval(() => setTick((n) => n + 1), 5000);
@@ -4292,6 +4294,7 @@ function MePage({
   const foots = tbLoadFoots(uid);
   const follows = tbLoadShopFollows(uid);
   return (
+    <>
     <div className="h-full overflow-y-auto bg-[#f4f4f4] pb-24">
       {/* 头部（橙渐变） */}
       <div className="bg-gradient-to-b from-[#FF7A21] to-[#FF9A50] px-4 pb-4 pt-[62px]">
@@ -4335,10 +4338,11 @@ function MePage({
             <span className="text-[10px] text-black/40">优惠券</span>
           </button>
           <span className="h-8 w-px bg-black/[0.06]" />
-          <button type="button" onClick={() => onToast('淘金币：888（演示）')} className="flex flex-1 flex-col items-center">
-            <Star className="h-5 w-5 text-[#FFA400]" strokeWidth={2} />
-            <span className="mt-1 text-[12px] font-semibold text-black/80">888</span>
-            <span className="text-[10px] text-black/40">淘金币</span>
+          {/* 需求：淘金币入口换成骑手（显示当前骑手形象，点按弹选择层，形象列表复用美团全套） */}
+          <button type="button" data-testid="my-rider" onClick={() => setRiderOpen(true)} className="flex flex-1 flex-col items-center">
+            <img src={mtRiderSrcOf(riderId)} alt="骑手形象" draggable={false} className="h-5 w-5 object-contain" />
+            <span className="mt-1 text-[12px] font-semibold text-black/80">骑手</span>
+            <span className="text-[10px] text-black/40">{MT_RIDERS.length}位形象</span>
           </button>
           <span className="h-8 w-px bg-black/[0.06]" />
           <button type="button" onClick={() => onToast('红包 ¥0.00（演示）')} className="flex flex-1 flex-col items-center">
@@ -4450,6 +4454,50 @@ function MePage({
         </div>
       </div>
     </div>
+    {/* 骑手形象选择（需求：淘金币入口改为骑手；底部弹层复用美团 MT_RIDERS 全套形象，
+        选中后同时用于淘宝物流页地图巡航与美团配送地图，共用同一形象） */}
+    {riderOpen ? (
+      <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={() => setRiderOpen(false)}>
+        <div className="rounded-t-2xl bg-white [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()} data-testid="rider-sheet">
+          <div className="relative flex items-center justify-center pb-3 pt-5">
+            <span className="text-[17px] font-bold text-black/90">选择骑手形象</span>
+            <button type="button" aria-label="关闭" onClick={() => setRiderOpen(false)} className="absolute right-4 top-5 grid h-7 w-7 place-items-center active:opacity-60">
+              <X className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
+            </button>
+          </div>
+          <p className="px-5 pb-3 text-[12px] text-black/40">内置 {MT_RIDERS.length} 位骑手 · 骑手会把你的包裹送到驿站</p>
+          <div className="grid max-h-[52vh] grid-cols-3 gap-3 overflow-y-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {MT_RIDERS.map((r) => {
+              const active = r.id === riderId;
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  data-testid={`rider-${r.id}`}
+                  onClick={() => {
+                    setRiderId(r.id);
+                    mtSetRiderId(r.id);
+                    setRiderOpen(false);
+                    onToast(`骑手「${r.name}」已接单，为你的包裹护航`);
+                  }}
+                  className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${active ? 'bg-[#FFF1E6] ring-2 ring-[#FF5000]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
+                >
+                  {active ? (
+                    <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FF5000]">
+                      <Check className="h-3 w-3 text-white" strokeWidth={3} />
+                    </span>
+                  ) : null}
+                  <img src={r.src} alt={r.name} draggable={false} className="h-20 w-20 object-contain" />
+                  <span className={`mt-1 text-[12px] ${active ? 'font-semibold text-black/85' : 'text-black/60'}`}>{r.name}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="h-7" />
+        </div>
+      </div>
+    ) : null}
+    </>
   );
 }
 
@@ -5665,7 +5713,6 @@ export default function TaobaoApp() {
         }}
         onPayOrder={(id) => setPayOrderId(id)}
         onToast={showToast}
-        onOpenProduct={openProduct}
         onOpenLogistics={(id) => {
           setLogisticsId(id);
           setLogiBack('orders');
