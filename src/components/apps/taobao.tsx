@@ -3388,7 +3388,7 @@ function OrderDetailPage({
         {o.status === 'completed' ? (
           <>
             {o.address ? (
-              <button type="button" onClick={() => onToast('已签收：包裹已送达收货地址')} className="block w-full bg-white px-4 py-4 text-left active:opacity-85">
+              <button type="button" onClick={() => onOpenLogistics(o.id)} className="block w-full bg-white px-4 py-4 text-left active:opacity-85">
                 <div className="flex items-center gap-2">
                   <MapPin className="h-5 w-5 shrink-0 text-black/75" strokeWidth={2.1} />
                   <span className="shrink-0 text-[16px] font-semibold text-[#00B578]">已签收</span>
@@ -5523,11 +5523,11 @@ export default function TaobaoApp() {
         initialTab={orderTab}
         onBack={backToReturn}
         onOpenOrder={(id) => {
-          // 需求：我的订单/全部订单点击订单一律进入物流界面（不是订单详情）；
-          // 无轨迹订单（待付款/待发货/已取消）物流页显示状态头（等待付款/备货中/交易关闭）
-          setLogisticsId(id);
-          setLogiBack('orders');
-          setPage('logistics');
+          // 需求（第四轮澄清）：全部订单/我的订单点击订单进入订单详情页——
+          // 按状态分别显示 待付款/待发货/已发货/交易成功/交易关闭 详情界面（不是物流页）；
+          // 物流页保留「查看物流」入口（订单卡物流条/详情物流头卡/底栏按钮）
+          setOrderId(id);
+          setPage('orderDetail');
         }}
         onOpenDetail={(id) => {
           setOrderId(id);
