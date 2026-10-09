@@ -395,6 +395,33 @@ export async function generateCharacterPhoto(args: GenerateCharacterPhotoArgs): 
   return { src, prompt, usedRef };
 }
 
+/**
+ * 通用单张生图（无角色 / 无锁脸）：美团「我的公益」等非聊天场景用。
+ * 与 generateCharacterPhoto 同一条请求管线（proxy / direct、150s 超时、压缩），
+ * 只是不带参考图与外貌描述；失败抛错（错误文案已友好化）。
+ */
+export async function generateFreePhoto(
+  cfg: ImgGenConfig & { mode?: 'proxy' | 'direct' },
+  desc: string,
+): Promise<string> {
+  const prompt = buildFinalPrompt(cfg, desc, '', false);
+  const mode: 'proxy' | 'direct' = cfg.mode === 'direct' ? 'direct' : 'proxy';
+  const rawSrc = await requestImage({
+    mode,
+    baseUrl: cfg.baseUrl,
+    apiKey: cfg.apiKey,
+    model: cfg.model,
+    prompt,
+    size: cfg.size.trim() || '1024x1024',
+    quality: cfg.quality.trim(),
+    refDataUrl: null,
+  });
+  if (!rawSrc) throw new Error('图片生成失败：接口没有返回图片');
+  const src = await compressImageSrc(rawSrc, 1024, 0.9);
+  if (!src.startsWith('data:image/')) throw new Error('图片生成失败：返回内容不是有效图片');
+  return src;
+}
+
 /** 客户端生图请求超时（150s）：服务端 /api/imggen 自身已有 280s 上限，客户端提前降级避免干等 */
 const REQUEST_TIMEOUT_MS = 150_000;
 /** 超时/中断的统一友好文案 */
