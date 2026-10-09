@@ -23,6 +23,7 @@ import {
   Palette,
   Phone as PhoneGlyph,
   Settings as SettingsIcon,
+  ShoppingBag,
   Store,
   UtensilsCrossed,
   Users as UsersIcon,
@@ -215,32 +216,6 @@ function WeChatGlyph() {
   );
 }
 
-/** 淘宝图标：白色粗线条「购物袋笑脸」（用户提供的参考图标）——圆角矩形袋身 +
- *  顶部两只小耳朵（提手环）+ 袋身居中 U 形微笑弧，与其他 App 图标同规格
- *  （同磨砂/液态底座包装、30px 尺寸、2.2 粗线条） */
-function TaobaoGlyph() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className={GLYPH_CLASS}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={GLYPH_STROKE}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      {/* 顶部两只小耳朵（提手环） */}
-      <path d="M7.7 8.4V6.8a1.85 1.85 0 0 1 3.7 0v1.6" />
-      <path d="M12.6 8.4V6.8a1.85 1.85 0 0 1 3.7 0v1.6" />
-      {/* 袋身（圆角矩形） */}
-      <rect x="3.8" y="8.4" width="16.4" height="12.2" rx="3.1" />
-      {/* 袋身居中微笑弧 */}
-      <path d="M9.2 13.1c0 1.9 1.26 3.1 2.8 3.1s2.8-1.2 2.8-3.1" />
-    </svg>
-  );
-}
-
 /** App 定义表：glyph 为裸线条图（不含磨砂底座）；image 为真实图标图片（public 下
  *  路径，满槽实体图标），两者可并存，icon 生成时优先用 image */
 interface AppDef {
@@ -426,8 +401,10 @@ const APP_DEFS: AppDef[] = [
   {
     id: 'taobao',
     name: '淘宝',
-    // 本轮：线条图换用户提供的「购物袋笑脸」参考图标（磨砂/液态底座由 LineIcon/LiquidIcon 统一包装）
-    glyph: <TaobaoGlyph />,
+    // 真实图标：用户提供的天猫双11版淘宝 App 图标（真实图标样式/卡片底色/Spotlight 生效）
+    image: '/icons/taobao.png',
+    // 备用线条图（毛玻璃/液态样式时展示）：用户指定恢复以前的购物袋线条「以前的那个就好」
+    glyph: <ShoppingBag className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: TaobaoApp,
   },
 ];

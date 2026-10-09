@@ -17677,3 +17677,18 @@ Work Log:
 Stage Summary:
 - 三点全部落地并浏览器逐项实测：购物车底部空隙消除（tab 栏固定 53px+结算栏贴齐）、淘宝图标换用户参考的购物袋笑脸、主题 App 图标样式三选一（真实/毛玻璃/液态透明）全局生效+持久化+预览固定
 - 改动文件：src/lib/ios/store.ts（IconStyle/iconStyle/setIconStyle/load）、src/components/apps/registry.tsx（TaobaoGlyph/LiquidIcon/AppIconById/AppStylePreview、删 ShoppingBag import）、src/components/ios/HomeScreen.tsx（appIconNode→AppIconById）、src/components/ios/AppSwitcher.tsx（卡片图标→AppIconById）、src/components/apps/themes.tsx（图标样式区块）、src/components/apps/taobao.tsx（BottomTabBar h-53px+两处 bottom-[53px]）
+---
+Task ID: 37
+Agent: main (Z.ai Code)
+Task: 淘宝第十二轮 2 点——淘宝线条图标恢复以前的（lucide ShoppingBag），真实淘宝图标换成用户上传的天猫双11版 PNG
+
+Work Log:
+- 用户反馈上一轮自绘的「购物袋笑脸」线条不好看，指定「以前的那个就好」→ registry.tsx 淘宝条目 glyph 从 <TaobaoGlyph/> 恢复为 lucide <ShoppingBag/>（恢复第十二轮前的口径），删除 TaobaoGlyph 函数，重新 import ShoppingBag；毛玻璃/液态透明两种样式下的淘宝线条随之恢复
+- 真实图标补实体图：把用户上传的「淘宝-万能的淘宝！-iOS-1024x1024.png」（橙底白淘字+天猫双11，1024x1024 RGBA）拷入 public/icons/taobao.png，taobao 条目新增 image 字段——「真实图标」样式主屏/Spotlight/文件夹/多任务/卡片底色（AppIconTile）/图标样式固定预览全场景经 RealIconTile 自动生效（此前淘宝无 image，真实样式下回退磨砂线条）
+- bunx tsc --noEmit 0 错误；bun run lint 0 错误（仅既有 BABEL 500KB 三条）；dev.log 无新增运行时错误
+- agent-browser 全真浏览器逐项验证：①主屏第 3 页淘宝图标=双11 版真实 PNG（橙底淘字+底部天猫双11 白条）②主题页选「毛玻璃图标」→ 全部图标磨砂化，淘宝=白粗线 ShoppingBag 购物袋线条（以前的样式）③选「液态透明」→ 淘宝=液态玻璃泡+ShoppingBag 线条 ④切回「真实图标」→ 淘宝恢复双11 PNG，其余 App 恢复彩色实体图 ⑤刷新页面解锁后仍是双11 PNG（iconStyle 持久化不受影响）
+
+Stage Summary:
+- 两点落地并浏览器实测：淘宝线条图标恢复以前的 lucide ShoppingBag（毛玻璃/液态样式生效）；「真实图标」样式接入用户提供的天猫双11版 PNG（public/icons/taobao.png）
+- 范围限定零破坏：美团/微信/QQ/聊天/支付链路零改动；iconStyle 三选一机制、持久化、AppStylePreview 固定预览逻辑未动，仅淘宝条目数据换装
+- 改动文件：src/components/apps/registry.tsx（TaobaoGlyph 删除、ShoppingBag 恢复、taobao 增 image 字段）、新增 public/icons/taobao.png
