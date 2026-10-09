@@ -4,9 +4,10 @@
  * 网易云音乐 API 客户端（音乐 App 专用）
  *
  * 双模式：
- * - 内置默认（baseUrl 为空）：走本机 mini service（mini-services/netease-api，端口 3010，
- *   api-enhanced v4.41.1 vendor 部署），前端相对路径 + ?XTransformPort=3010 经 Caddy 网关
- *   原路径转发（或同源 Next 代理 /api/music/ncm/*），凭证不出本机；
+ * - 内置默认（baseUrl 为空）：同源 Next 代理 /api/music/ncm/*，代理内置多通道自动切换——
+ *   本机 mini service（mini-services/netease-api，端口 3010，api-enhanced v4.41.1 vendor 部署）
+ *   优先，失联时自动降级到用户部署在 Vercel 的云端实例（api-enhanced-ochre-rho.vercel.app），
+ *   凭证不出本机，本机实例挂掉也不中断服务；
  * - 自定义（baseUrl 非空）：直连用户自部署的 NeteaseCloudMusicApi 服务（其 server.js 默认
  *   带 CORS: *），可选 apiKey（header X-API-Key + query apikey 双通道兼容不同部署）。
  *
@@ -181,8 +182,8 @@ function buildUrl(path: string, params: Record<string, string | number | undefin
     const base = cfg.baseUrl.replace(/\/+$/, '');
     return `${base}/${path.replace(/^\/+/, '')}?${qs}`;
   }
-  // 内置默认：同源 Next 代理（/api/music/ncm/* → localhost:3010），
-  // Caddy(:81) 与直连(:3000) 两条通道行为一致，无需 XTransformPort。
+  // 内置默认：同源 Next 代理（/api/music/ncm/* → 多上游切换链：本机 3010 优先，
+  // 失联自动切云端兜底，详见 route.ts 头注释）；Caddy(:81) 与直连(:3000) 两条通道行为一致。
   return `/api/music/ncm/${path}?${qs}`;
 }
 

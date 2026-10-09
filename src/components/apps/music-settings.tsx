@@ -118,7 +118,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
           <input
             value={cfg.baseUrl}
             onChange={(e) => setCfg({ ...cfg, baseUrl: e.target.value })}
-            placeholder="内置默认（本机 mini service）"
+            placeholder="内置默认（本机优先 · 云端兜底）"
             data-testid="music-settings-baseurl"
             className="mb-3 h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[13px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
           />
@@ -151,6 +151,10 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
               {saved ? '已保存 ✓ 立即生效' : '保存配置'}
             </button>
           </div>
+          <p className="mt-3 text-[11px] leading-relaxed text-zinc-400">
+            内置默认已启用双通道：本机实例（3010）优先响应，失联时自动切换你的 Vercel 云端实例
+            （api-enhanced-ochre-rho.vercel.app），全程无需配置；响应头 x-ncm-upstream 可查看当前服务的实例。
+          </p>
         </section>
 
         {/* 关于 */}
