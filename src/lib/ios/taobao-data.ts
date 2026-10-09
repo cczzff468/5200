@@ -186,11 +186,39 @@ export const TB_PRODUCTS: TbProduct[] = [
   ], { promo: '百亿补贴' }),
   P('p-phone-1', 'Apple/苹果 iPhone 13 国行原装正品 全网通5G 双卡双待 手机 99新', 1999, 2999, 8200, 's-keke', 'digital', 'phone', ['假一赔四', '7天无理由', '极速退款'], [
     colorGroup('phone', ['午夜色', '星光色', '蓝色', '红色'], []),
-    { name: '存储容量', options: [{ label: '128G' }, { label: '256G', priceDelta: 300 }] },
+    // 用户指定手机型号规格：4/6+16G，12/16+128G，8/12+256G，12+512G，16+1TB
+    { name: '存储容量', options: [
+      { label: '4GB+16GB' },
+      { label: '6GB+16GB', priceDelta: 100 },
+      { label: '12GB+128GB', priceDelta: 300 },
+      { label: '16GB+128GB', priceDelta: 400 },
+      { label: '8GB+256GB', priceDelta: 500 },
+      { label: '12GB+256GB', priceDelta: 600 },
+      { label: '12GB+512GB', priceDelta: 1000 },
+      { label: '16GB+1TB', priceDelta: 1500 },
+    ] },
+    { name: '网络类型', options: [{ label: '5G全网通' }] },
+    { name: '套餐类型', options: [{ label: '官方标配' }] },
+    { name: '版本类型', options: [{ label: '中国大陆' }] },
+    { name: '发货方式', options: [{ label: '仓库直发' }] },
   ]),
   P('p-phone-2', '旗舰5G智能手机 2亿像素 第二代骁龙8 120Hz高刷屏 5500mAh超长续航', 3999, 4299, 1100, 's-erye', 'digital', 'phone', ['国补15%', '分期免息', '退货宝'], [
     colorGroup('phone', ['曜金黑', '冰晶蓝', '流光银'], []),
-    { name: '版本', options: [{ label: '12G+256G' }, { label: '16G+512G', priceDelta: 500 }] },
+    // 用户指定手机型号规格：4/6+16G，12/16+128G，8/12+256G，12+512G，16+1TB
+    { name: '存储容量', options: [
+      { label: '4GB+16GB' },
+      { label: '6GB+16GB', priceDelta: 100 },
+      { label: '12GB+128GB', priceDelta: 300 },
+      { label: '16GB+128GB', priceDelta: 400 },
+      { label: '8GB+256GB', priceDelta: 500 },
+      { label: '12GB+256GB', priceDelta: 600 },
+      { label: '12GB+512GB', priceDelta: 1000 },
+      { label: '16GB+1TB', priceDelta: 1500 },
+    ] },
+    { name: '网络类型', options: [{ label: '5G全网通' }] },
+    { name: '套餐类型', options: [{ label: '官方标配' }, { label: '套餐一（壳膜+充电器）', priceDelta: 59 }] },
+    { name: '版本类型', options: [{ label: '中国大陆' }] },
+    { name: '发货方式', options: [{ label: '仓库直发' }] },
   ], { promo: '国补' }),
   P('p-laptop-1', '轻薄笔记本电脑 14英寸2.8K 高色域 办公学生学习本 背光键盘 长续航', 4599, 5299, 3400, 's-keke', 'digital', 'laptop', ['退货宝', '全国联保', '分期免息'], [
     colorGroup('laptop', ['银色', '深空灰'], []),

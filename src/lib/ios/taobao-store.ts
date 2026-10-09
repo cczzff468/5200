@@ -591,6 +591,15 @@ export function tbMarkRefund(uid: string, id: string, amount: number, reason: st
   return true;
 }
 
+/** 删除订单（交易关闭/已取消详情「删除订单」按钮）：从订单列表移除 */
+export function tbDeleteOrder(uid: string, id: string): boolean {
+  const list = tbLoadOrders(uid);
+  const next = list.filter((x) => x.id !== id);
+  if (next.length === list.length) return false;
+  tbSaveOrders(uid, next);
+  return true;
+}
+
 /** 提交评价 */
 export function tbSubmitReview(uid: string, id: string, rating: number, content: string, tags: string[]): boolean {
   const list = tbLoadOrders(uid);
