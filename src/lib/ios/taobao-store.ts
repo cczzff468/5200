@@ -543,7 +543,9 @@ export function tbTickOrders(uid: string): boolean {
   return changed;
 }
 
-/** 状态中文（订单卡/详情/消息页统一口径） */
+/** 状态中文（订单卡/详情/消息页统一口径）；
+ *  shipped 详情页标题用「已发货」——与订单卡右上动态状态一致（用户：点「已发货」卡片
+ *  要进入对应状态的已发货详情页，页面标题不能再写「待收货」造成两个界面） */
 export function tbStatusText(o: TbOrder): string {
   switch (o.status) {
     case 'pendingPay':
@@ -551,7 +553,7 @@ export function tbStatusText(o: TbOrder): string {
     case 'pendingDeliver':
       return '待发货';
     case 'shipped':
-      return '待收货';
+      return '已发货';
     case 'completed':
       return '已完成';
     case 'cancelled':

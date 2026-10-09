@@ -25,7 +25,6 @@ import {
   ClipboardList,
   Copy,
   Crosshair,
-  CreditCard,
   FileText,
   Headphones,
   Heart,
@@ -383,13 +382,14 @@ function tbFullAddr(a: TbAddress): string {
 /** 物流阶段（地图形态）：备货（无轨迹）/ 揽收 / 运输 / 派送（骑手巡航）/ 驿站待取件 */
 type TbExpressPhase = 'prepare' | 'pickup' | 'transit' | 'delivering' | 'station';
 
-/** 骑手位置沿路线二次贝塞尔插值（viewBox 500×220，与路径 M 70 150 Q 250 60 430 150 同一条） */
+/** 骑手位置沿路线二次贝塞尔插值（viewBox 500×220，与路径 M 70 182 Q 250 60 430 150 同一条；
+ *  起点降到 y=182：已揽收骑手站在 ETA 气泡下方，不被卡片盖住——用户反馈） */
 function tbBezierPos(prog: number): { x: number; y: number } {
   const p = Math.min(1, Math.max(0, prog));
   const u = 1 - p;
   return {
     x: (u * u * 70 + 2 * u * p * 250 + p * p * 430) / 5,
-    y: (u * u * 150 + 2 * u * p * 60 + p * p * 150) / 2.2,
+    y: (u * u * 182 + 2 * u * p * 60 + p * p * 150) / 2.2,
   };
 }
 
@@ -442,7 +442,7 @@ function TbExpressMap({ phase, etaTitle, etaSub, addrDetail, riderProg }: { phas
       <span className="absolute bottom-[10%] right-[6%] text-[11px] font-medium text-black/45">{community}</span>
       {/* 路线（商家 → 收货地 弧线；备货中不画） */}
       <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 220" preserveAspectRatio="none" fill="none" aria-hidden="true">
-        {!preparing ? <path d="M 70 150 Q 250 60 430 150" stroke="#FF7A21" strokeWidth="3.5" strokeLinecap="round" opacity="0.85" /> : null}
+        {!preparing ? <path d="M 70 182 Q 250 60 430 150" stroke="#FF7A21" strokeWidth="3.5" strokeLinecap="round" opacity="0.85" /> : null}
       </svg>
       {/* 收货标记（橙「收」+ 白胶囊） */}
       <span className="absolute right-[13%] top-[56%] flex items-center gap-1.5">
@@ -472,8 +472,8 @@ function TbExpressMap({ phase, etaTitle, etaSub, addrDetail, riderProg }: { phas
           <img src={riderSrc} alt="快递骑手" draggable={false} className="mt-rider-img h-[52px] w-[52px] select-none object-contain" style={{ filter: 'drop-shadow(0 5px 4px rgba(0,0,0,0.25)) drop-shadow(0 1.5px 2px rgba(0,0,0,0.18))' }} />
         </span>
       ) : null}
-      {/* ETA 气泡（位于顶栏下方，不遮返回按钮） */}
-      <div className="absolute left-4 top-[112px] rounded-2xl bg-[#FF6A00] px-4 py-2.5 text-white shadow-[0_8px_20px_rgba(255,106,0,0.4)]">
+      {/* ETA 气泡（顶栏正下方；用户反馈：已揽收卡片往上提，不得盖住骑手） */}
+      <div className="absolute left-4 top-[96px] rounded-2xl bg-[#FF6A00] px-4 py-2.5 text-white shadow-[0_8px_20px_rgba(255,106,0,0.4)]">
         <div className="text-[17px] font-bold leading-6">{etaTitle}</div>
         <div className="mt-0.5 text-[12px] text-white/85">{etaSub}</div>
       </div>
@@ -693,7 +693,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onTo
       <div className="mt-auto px-8 pb-10">
         <button type="button" onClick={() => setAgree((v) => !v)} className="mx-auto flex max-w-[300px] items-start gap-2 text-left">
           <span className={`mt-[2px] grid h-4 w-4 shrink-0 place-items-center rounded-full border ${agree ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/25'}`}>
-            {agree ? <CircleCheck className="h-3 w-3 text-white" strokeWidth={3} /> : null}
+            {agree ? <Check className="h-3 w-3 text-white" strokeWidth={3} /> : null}
           </span>
           <span className="text-[11px] leading-4 text-black/40">
             已阅读并同意 <span className="text-[#FF5000]">《淘宝用户协议》</span> <span className="text-[#FF5000]">《隐私政策》</span>《支付规则》
@@ -2029,7 +2029,8 @@ function CartPage({
                         }}
                         className={`grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full border-2 ${allChecked ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}
                       >
-                        {allChecked ? <CircleCheck className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                        {/* 用户反馈：勾选态只留对号，删掉对号外面的圆圈（CircleCheck→Check） */}
+                        {allChecked ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
                       </button>
                       {shop.tmall ? <TmallMark /> : <span className="mr-0.5 inline-block rounded-[3px] bg-[#FF5000] px-1 py-[1px] text-[10px] font-bold leading-none text-white">淘宝</span>}
                       <button type="button" onClick={() => onToast(`进店逛逛（演示）`)} className="flex min-w-0 items-center gap-0.5 active:opacity-70">
@@ -2063,7 +2064,8 @@ function CartPage({
                               }}
                               className={`mt-7 grid h-[19px] w-[19px] shrink-0 place-items-center self-start rounded-full border-2 ${c.checked ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}
                             >
-                              {c.checked ? <CircleCheck className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                              {/* 用户反馈：对号外面的圆圈删除，只留对号 */}
+                              {c.checked ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
                             </button>
                             <button type="button" onClick={() => onOpenProduct(c.pid)} className="shrink-0 active:opacity-70">
                               <img src={tbImg(p.tag, 200, 200, 0)} alt={p.title} className="h-[86px] w-[86px] rounded-lg object-cover" draggable={false} />
@@ -2189,7 +2191,8 @@ function CartPage({
             className="flex items-center gap-1.5"
           >
             <span className={`grid h-[19px] w-[19px] place-items-center rounded-full border-2 ${checkedItems.length === items.length ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}>
-              {checkedItems.length === items.length ? <CircleCheck className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+              {/* 用户反馈：对号外面的圆圈删除，只留对号 */}
+              {checkedItems.length === items.length ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
             </span>
             <span className="text-[13px] text-black/70">全选</span>
           </button>
@@ -2547,8 +2550,9 @@ function PaySheet({
                         }}
                         className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-3 text-left transition-colors ${sel === c.key && !c.insufficient ? 'bg-[#FFF3EC]' : ''} ${c.insufficient ? 'opacity-45' : 'active:bg-black/[0.03]'}`}
                       >
-                        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-[10px] text-white shadow-sm ${c.idp === 'wx' ? 'bg-[#07C160]' : 'bg-[#12B7F5]'}`}>
-                          {c.isFc ? <Heart className="h-4 w-4" strokeWidth={2.2} /> : c.methodId === 'balance' ? <Wallet className="h-[17px] w-[17px]" strokeWidth={2.2} /> : <CreditCard className="h-[17px] w-[17px]" strokeWidth={2.2} />}
+                        {/* 用户反馈：微信/QQ 图标换成主界面同款真实 App 图标（wechat.png/qq.png） */}
+                        <span className="relative h-9 w-9 shrink-0 overflow-hidden rounded-[10px] shadow-sm ring-1 ring-black/[0.06]">
+                          <img src={c.idp === 'wx' ? '/icons/wechat.png' : '/icons/qq.png'} alt={c.idp === 'wx' ? '微信支付' : 'QQ支付'} className="h-full w-full select-none object-cover" draggable={false} />
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-[15px] font-medium text-black/85">{c.label}</span>
@@ -2556,7 +2560,7 @@ function PaySheet({
                         </span>
                         {c.insufficient ? <span className="shrink-0 rounded-md bg-black/[0.04] px-1.5 py-0.5 text-[11px] text-red-400">额度不足</span> : null}
                         <span className={`grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full border-2 ${sel === c.key && !c.insufficient ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}>
-                          {sel === c.key && !c.insufficient ? <CircleCheck className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                          {sel === c.key && !c.insufficient ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
                         </span>
                       </button>
                     ))}
@@ -4606,7 +4610,7 @@ function AddressListPage({ uid, onBack, onEdit, onToast, picker }: { uid: string
                   className="flex w-full items-start gap-2.5 text-left"
                 >
                   <span className={`mt-0.5 grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border-2 ${curId === a.id ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}>
-                    {curId === a.id ? <CircleCheck className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                    {curId === a.id ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
@@ -5407,7 +5411,7 @@ function AddrPickerSheet({ uid, onClose, onManage }: { uid: string; onClose: () 
                 className={`flex w-full items-start gap-2.5 rounded-xl border p-3 text-left ${curId === a.id ? 'border-[#FF5000] bg-[#FF5000]/[0.04]' : 'border-black/[0.07]'}`}
               >
                 <span className={`mt-0.5 grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border-2 ${curId === a.id ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}>
-                  {curId === a.id ? <CircleCheck className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                  {curId === a.id ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2">
@@ -5717,7 +5721,8 @@ export default function TaobaoApp() {
   } else if (page === 'shop' && shopId) {
     content = <ShopPage shopId={shopId} uid={uid} onBack={() => setPage('product')} onOpenProduct={openProduct} onToast={showToast} />;
   } else if (page === 'express') {
-    content = <ExpressPage uid={uid} onBack={() => setPage('main')} onOpenOrder={(id) => { setLogisticsId(id); setLogiBack('orders'); setPage('logistics'); }} />;
+    // 用户口径统一：点击订单/包裹一律进对应状态订单详情页（物流页走详情内「查看物流」）
+    content = <ExpressPage uid={uid} onBack={() => setPage('main')} onOpenOrder={(id) => { setOrderId(id); setPage('orderDetail'); }} />;
   } else if (page === 'settings') {
     content = (
       <SettingsPage
