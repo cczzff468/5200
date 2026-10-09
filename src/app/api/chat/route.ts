@@ -459,14 +459,17 @@ async function proxyToUpstream(config: UpstreamConfig, messages: ChatApiMessage[
 
 // ---------------- 内置模型兜底（与 server-llm.ts 同策略） ----------------
 
-/** 服务端内置模型（z-ai-web-dev-sdk）：用户上游故障 / 未配置时把回复救回来，聊天体验不中断 */
-async function sdkChat(messages: ChatApiMessage[]): Promise<string> {
+/** 服务端内置模型（z-ai-web-dev-sdk）：用户上游故障 / 未配置时把回复救回来，聊天体验不中断。
+ *  temperature（可选）：客户端传入时透传给内置模型——Task 20：低温度下同输入得到近乎相同的回复，
+ *  是「一起听」复读体验的根因之一，SDK 兜底同样需要多样性。 */
+async function sdkChat(messages: ChatApiMessage[], temperature?: number): Promise<string> {
   const ZAI = (await import('z-ai-web-dev-sdk')).default;
   const zai = await ZAI.create();
   const completion = await zai.chat.completions.create({
     // z-ai SDK 的 ChatMessage 类型实际接受 system 角色，直接传人设/世界书/记忆 system 块
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
     thinking: { type: 'disabled' },
+    ...(typeof temperature === 'number' && Number.isFinite(temperature) ? { temperature } : {}),
   });
   const text = completion.choices[0]?.message?.content ?? '';
   if (!text.trim()) throw new Error('内置模型返回空内容');
@@ -514,10 +517,13 @@ export async function POST(req: NextRequest) {
       ? allMsgs.slice(0, 1).concat(allMsgs.slice(-39))
       : allMsgs.slice(-40);
 
+  // 可选 temperature（Task 20）：SDK 兜底路径透传，驱动输出多样性；非法/缺省时不传（SDK 用自身默认值）
+  const temperature = typeof root.temperature === 'number' && Number.isFinite(root.temperature) ? root.temperature : undefined;
+
   // forceSdk：前端在代理 + 浏览器直连都失败后的最终兜底请求（直接用内置模型生成）
   if (root.forceSdk === true) {
     try {
-      return textResponse(await sdkChat(messages));
+      return textResponse(await sdkChat(messages, temperature));
     } catch (sdkErr) {
       return sdkErrorResponse(sdkErr, '内置模型生成失败');
     }
@@ -527,7 +533,7 @@ export async function POST(req: NextRequest) {
   if (!config) {
     // 未配置也能聊：直接用服务端内置模型，不再拦截报错
     try {
-      return textResponse(await sdkChat(messages));
+      return textResponse(await sdkChat(messages, temperature));
     } catch (sdkErr) {
       return sdkErrorResponse(
         sdkErr,
@@ -567,7 +573,7 @@ export async function POST(req: NextRequest) {
     if (directOnly) return res;
     // 其余上游失败（连接失败 / 401 / 404 / 空响应 / 5xx）：服务端直接用内置模型兜底，聊天不中断
     try {
-      return textResponse(await sdkChat(messages));
+      return textResponse(await sdkChat(messages, temperature));
     } catch {
       // SDK 也失败：返回原始上游错误，保留真实原因
       return res;

@@ -17296,3 +17296,28 @@ Stage Summary:
 - App 对接：音乐 App 设置 → API 地址填该 URL 即切外部实例；沙箱 3010 内置实例仍为默认且更快，无需改动任何现有配置
 - 经验沉淀：①Vercel CLI 后台进程可能被沙箱会话回收，但上传完成后的云端构建不受影响，用 REST API 查 readyState 即可接续，无需重跑部署 ②vcp_ = Vercel 新版 token 前缀（旧文档均说无前缀，实测为准）
 - 遗留提醒（已告知用户）：Vercel hobby 冷启动首请求 5-15s；数据中心 IP 偶发网易风控（重试/扫码登录缓解）；token 可自留用于后续重部（fork 同步上游后重跑脚本即更新）或自行吊销
+
+---
+Task ID: 20
+Agent: general-purpose (music-chat-context-fix)
+Task: 修复一起听聊天人设/上下文/复读问题
+
+Work Log:
+- src/lib/ios/music-ai.ts:492-542 callLlmTwoTier 重写：签名改为接收完整多轮 messages（LlmTurn[]），不再拆 system+userContent 两段；首试 {config:cfg} 且 cfg 强制带有效 temperature（replyTemperature()：配置无效/缺省时默认 0.9，L502-511）；SDK 兜底重试 {forceSdk:true, temperature} 传同一套多轮 messages（L534-540）
+- src/lib/ios/music-ai.ts:844-857 新增 recentTurns(cid, limit, who)：数据源复用 loadTogetherMsgs（与原 recentChatText 同源），机主消息(role='me')→user、AI 回复(role='peer')→assistant、推荐卡(recs)按 assistant 带「（推荐了歌）」前缀，旧→新、最多 limit 条；原 recentChatText 压平函数删除
+- src/lib/ios/music-ai.ts:859-867 新增 withoutCurrentTurn()：sendTogetherText 先写记录再触发回复，记录尾条即当前消息——从历史轮次剔除，当前消息只在 messages 末尾 user 轮出现一次（修复旧实现同一条消息在 system 压平块+user 消息里出现两次）
+- src/lib/ios/music-ai.ts:869-943 togetherReply 重写：①互斥改 1 槽排队——replying 期间新消息写 pendingReply（覆盖旧的，不丢弃），当前回复结束后在同一把锁内 for(;;) 串行排水继续处理（跨会话/已退出一起听的挂起输入丢弃）；②单次执行抽为 runTogetherReplyOnce：messages = [system(persona+memory+crossApp+music/playingBlock 规则), ...priorTurns(最近12轮), {user: 当前消息原文}]；system 的 playingBlock extra 只留短情境说明（「对方刚发来新消息，请以人设自然回应：先直接接住…」），【聊天记录】压平块全部移除——system 不再含当前用户文本
+- src/lib/ios/music-ai.ts:655-670 personaSystemFor：getContact 失败不再 return musicBlock 裸奔——回退 FALLBACK_PERSONA 最小内联人设（温柔自然/口语化/每次换着说法/1-3 句/不承认是模板）拼在 musicBlock 前
+- src/lib/ios/music-ai.ts:998-1007 新增 startsLikeRecentAiReply()：草稿前 4 字（normDup 归一化）与最近 5 轮记录里 AI(role='peer') 回复开头相同→判复读（抓「同模板换几个词」2-gram 抓不住的复读）
+- src/lib/ios/music-ai.ts:1009-1048 genUniqueReply：最多 3 次尝试；被拒草稿收集进 rejected[]，重试时不加新 system，把「（注意：不要重复类似这些之前说过的表达："草稿1" "草稿2"，换一种完全不同的说法）」回灌到最后一条 user 消息末尾（withLastUserNote，每轮带多样性种子）；复读判定 = isDupOfRecent(12条窗口相似度) || startsLikeRecentAiReply
+- src/lib/ios/music-ai.ts:1070-1096 aiSayOnce（睡前提醒/暂停轻问）：messages = system + recentTurns(12) + 中性 nudge user 轮（「主动发一条消息」+不点评歌曲约束），不再压平历史
+- src/lib/ios/music-ai.ts:1114-1141 togetherRecommend：messages = system + priorTurns(剔除刚写入的推荐请求尾条) + 末尾 user 轮（带请求原文+JSON 格式指令+avoid 清单）；callLlmTwoTier 两处调用点全部改为多轮数组
+- src/lib/ios/music-ai.ts:19-25 文件头注释补 Task 20 升级说明（多轮 messages + temperature + 防复读加强 + 排队 + 人设兜底）
+- src/app/api/chat/route.ts:462-477 sdkChat 增加 temperature 可选参数，zai.chat.completions.create 条件透传（Number.isFinite 才传）；POST 入口 L520-521 解析 body.temperature，三处 SDK 兜底调用（forceSdk 路径 L526、未配置路径 L536、上游失败兜底 L576）全部透传；非流式响应形状与其他路径未动
+- 约束遵守：微信/QQ 聊天链路（proactive-msg/friend-state 各自的 callLlmTwoTier 为独立实现）未改动；未加 emoji、未动样式/UI 文件；对外导出函数签名（togetherReply/sendTogetherText/togetherRecommend 等）全部保持兼容
+
+Stage Summary:
+- 一起听回复链从「system 内嵌压平聊天记录 + 单条 user」改为「system + 最近 12 轮真实 user/assistant 轮次 + 当前消息」，与微信/QQ 聊天同构；当前消息不再出现两次，上游拿到真实对话轮次
+- 多样性三管齐下：两级请求都强制带 temperature（缺省 0.9）+ 3 次防复读尝试 + 被拒草稿回灌/开头 4 字查重；生成中来的新消息 1 槽排队不再丢；联系人库故障时人设兜底不再裸奔
+- bun run lint 0 错误（仅既有 BABEL 500KB 提示 meituan/qq/wechat 三条）；bunx tsc --noEmit 0 错误；未 git commit
+- 改动文件：src/lib/ios/music-ai.ts（+265/-73 主改动）、src/app/api/chat/route.ts（sdkChat temperature 透传）

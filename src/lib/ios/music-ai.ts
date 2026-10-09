@@ -16,6 +16,13 @@
  *    - 第三十五轮反馈：修复「AI 一直在发信息」——暂停久置轻问每段暂停至多一次
  *      （原实现暂停期间反复重排定时器）+ 主动消息全局 15 分钟冷却；
  *      主动消息提示词改为人设/记忆/上下文驱动，明确不点评歌曲。
+ *    - Task 20（修复聊天人设/上下文/复读）：回复链改「真多轮 messages」——
+ *      system（人设/记忆/跨App/音乐情境/规则）+ 最近 12 轮真实历史（机主=user、AI=assistant，旧→新）
+ *      + 当前消息作最后一条 user 轮；不再把聊天记录压平进 system（同一条消息不再出现两次）；
+ *      上游与 SDK 兜底都带 temperature（未配置时默认 0.9）驱动多样性；防复读升级：最多 3 次尝试、
+ *      被拒草稿回灌最后一条 user 轮、草稿开头 4 字与最近 5 轮 AI 回复查重；
+ *      生成中来新消息不再静默丢弃（1 槽排队，只留最新一条，当前回复结束后接着回）；
+ *      联系人库读取失败时回退最小内联人设，不再裸奔音乐块。
  * 2. AI 推荐歌曲：LLM 返回 JSON 歌单 → /search 匹配真实曲库 → 消息内歌曲卡（点击播放）；
  * 3. 听歌记忆：【39 聚合制】一起听的歌/结束不再逐条写记忆——会话内攒批（歌名去重保序），
  *    攒满 5 首、退出一起听或切后台时合并写一条（memAddEventFragment, sourceTag='music-play'），
@@ -489,19 +496,31 @@ async function recentChatCharIds(n: number): Promise<string[]> {
 
 // ---------------- LLM（两级兜底，与 proactive-msg 同款） ----------------
 
-async function callLlmTwoTier(system: string, userContent: string): Promise<string> {
-  const cfg = useSettings.getState().apiConfig;
+/** 与 /api/chat 的 messages 结构一致的多轮消息（system + 真实历史 user/assistant 轮次） */
+type LlmTurn = { role: 'system' | 'user' | 'assistant'; content: string };
+
+/** 回复温度（Task 20）：配置里没有有效温度时默认 0.9——温度是输出多样性的关键，
+ *  低温度下同输入会得到近乎相同的回复，是「复读机」体验的根因之一 */
+const DEFAULT_REPLY_TEMPERATURE = 0.9;
+
+function replyTemperature(): number {
+  const t = useSettings.getState().apiConfig?.temperature;
+  return typeof t === 'number' && Number.isFinite(t) && t >= 0 && t <= 2
+    ? t
+    : DEFAULT_REPLY_TEMPERATURE;
+}
+
+/** 两级 LLM：先走用户上游（config 必带 temperature），失败/空回复再用内置 SDK 兜底。
+ *  Task 20：改为接收完整多轮 messages（system + 真实历史轮次 + 当前消息），
+ *  两级请求传同一套 messages，SDK 兜底同样带温度（内置模型也需要多样性）。 */
+async function callLlmTwoTier(messages: LlmTurn[]): Promise<string> {
+  const temperature = replyTemperature();
+  const cfg = { ...useSettings.getState().apiConfig, temperature };
   const call = async (extra: Record<string, unknown>): Promise<string> => {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: userContent },
-        ],
-        ...extra,
-      }),
+      body: JSON.stringify({ messages, ...extra }),
       signal: AbortSignal.timeout(75_000),
     });
     return res.ok ? await res.text() : '';
@@ -514,7 +533,7 @@ async function callLlmTwoTier(system: string, userContent: string): Promise<stri
   }
   if (!raw.trim()) {
     try {
-      raw = await call({ forceSdk: true });
+      raw = await call({ forceSdk: true, temperature });
     } catch {
       raw = '';
     }
@@ -633,9 +652,22 @@ function playingBlock(extra: string, who: string, cid: string): string {
   return lines.join('\n');
 }
 
+/** 联系人库不可用时的最小内联人设（Task 20）：之前直接丢弃人设只留音乐块，
+ *  AI 立刻变得机械重复——兜底人设保证口语化/多样性/短回复的行为约束仍然生效 */
+const FALLBACK_PERSONA = [
+  '【人设（联系人库暂不可用，使用兜底人设）】你是机主的亲密聊天伙伴，此刻正陪机主一起听歌：',
+  '- 说话温柔自然、口语化，像真实的亲密朋友，不用书面腔；',
+  '- 每次回复都换着说法，绝不重复之前用过的句式和开场白；',
+  '- 一次只说 1~3 句话，短而自然；',
+  '- 不承认自己是模板、程序或助手，不讨论人设本身。',
+].join('\n');
+
 async function personaSystemFor(cid: string, musicBlock: string): Promise<string> {
   const c = await getContact(cid);
-  if (!c) return musicBlock;
+  if (!c) {
+    // Task 20：不再静默丢人设——回退最小内联人设（拼在音乐块前面）
+    return [FALLBACK_PERSONA, musicBlock].filter(Boolean).join('\n\n');
+  }
   const userName = await ownerName();
   let memory = '';
   try {
@@ -798,34 +830,111 @@ async function runTgControls(cid: string, controls: TgControl[], aiText = ''): P
 
 let replying = false;
 
-function recentChatText(cid: string, n: number, who: string): string {
+/** 1 槽排队（Task 20）：回复生成期间用户又发来的消息不再静默丢弃——
+ *  只记最新一条（旧 pending 直接覆盖），当前回复结束后接着处理 */
+interface PendingReply {
+  cid: string;
+  userText: string;
+}
+let pendingReply: PendingReply | null = null;
+
+/** 一起听回复的历史轮次上限（真实多轮 messages，不再压平进 system） */
+const TG_HISTORY_TURNS = 12;
+
+/** 一起听聊天记录 → LLM 多轮轮次（Task 20）：机主的消息=user、AI 自己的回复=assistant（
+ *  推荐卡按 AI 发言处理，正文前带「（推荐了歌）」），旧→新，最多 limit 条。
+ *  who 参数保留旧调用签名便于对照；recentTurns 输出的多轮消息靠 role 区分身份，无需名字前缀。 */
+function recentTurns(cid: string, limit: number, who: string): LlmTurn[] {
+  void who;
   return loadTogetherMsgs(cid)
-    .slice(-n)
-    .map((m) => `${m.role === 'me' ? who : '你'}：${m.role === 'recs' ? `（推荐了歌）${m.text}` : m.text}`)
-    .join('\n');
+    .slice(-Math.max(1, limit))
+    .filter((m) => m.role === 'me' || m.role === 'peer' || m.role === 'recs')
+    .map((m) => ({
+      role: (m.role === 'me' ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: m.role === 'recs' ? `（推荐了歌）${m.text}` : m.text,
+    }))
+    .filter((t) => t.content.trim().length > 0);
 }
 
-/** 用户发消息 → AI 回复 */
+/** 从历史轮次里剔除刚收到的那条当前消息（Task 20 防重复）：sendTogetherText 先把消息写入
+ *  聊天记录再触发回复，记录尾条就是当前消息——它只应出现在 messages 的最后一条 user 轮，
+ *  绝不能同时在 system 压平历史里再出现一次（旧实现的复读诱因之一） */
+function withoutCurrentTurn(turns: LlmTurn[], userText: string): LlmTurn[] {
+  if (!userText) return turns;
+  const last = turns[turns.length - 1];
+  if (last && last.role === 'user' && last.content === userText) return turns.slice(0, -1);
+  return turns;
+}
+
+/** 用户发消息 → AI 回复（生成中有新消息进来时进 1 槽排队，不再丢消息） */
 export async function togetherReply(cid: string, userText: string): Promise<void> {
-  if (replying) return;
+  if (replying) {
+    // 生成中：只记住最新一条待回复输入（覆盖旧的），当前回复结束后在同一把锁内接着处理
+    pendingReply = { cid, userText };
+    return;
+  }
   replying = true;
   useMusic.setState({ tgAiBusy: true }); // 聊天视图显示三个跳动点
   try {
+    // 串行排水：先回当前这条，再取排队中的最新一条继续（循环而非递归，race-free）
+    let current: PendingReply = { cid, userText };
+    for (;;) {
+      await runTogetherReplyOnce(current.cid, current.userText);
+      const next = pendingReply;
+      pendingReply = null;
+      // 只接同会话的排队输入：一起听已退出/已换角色时丢弃（旧角色的挂起输入对新情境无意义）
+      const active = loadActiveTogether();
+      if (!next || !active || active.contactId !== next.cid) break;
+      current = next;
+    }
+  } finally {
+    replying = false;
+    useMusic.setState({ tgAiBusy: false });
+  }
+}
+
+/** Task 21 排队缺口修补：aiSayOnce/togetherRecommend 与 togetherReply 共用同一把 replying 锁，
+ *  但此前结束时只清锁不排水——主动消息/推荐生成期间用户发来的消息会滞留 pendingReply。
+ *  此处按 togetherReply 的串行排水同款逻辑补答：仅在排队的 cid 仍是当前活跃会话时执行，
+ *  单次补答独立 try/finally 保证 replying 一定复位；不递归进 aiSayOnce/togetherRecommend。 */
+async function drainPendingAfterProactive(): Promise<void> {
+  for (;;) {
+    const next = pendingReply;
+    pendingReply = null;
+    // 只接同会话的排队输入：一起听已退出/已换角色时丢弃（与 togetherReply 同口径）
+    const active = loadActiveTogether();
+    if (!next || !active || active.contactId !== next.cid) return;
+    replying = true;
+    useMusic.setState({ tgAiBusy: true });
+    try {
+      await runTogetherReplyOnce(next.cid, next.userText);
+    } finally {
+      replying = false;
+      useMusic.setState({ tgAiBusy: false });
+    }
+  }
+}
+
+/** 单次回复执行（不含排队/互斥）：system（人设+记忆+跨App+音乐情境+规则）+ 最近真实历史轮次
+ *  + 当前消息做最后一条 user 轮；聊天记录不再压平进 system */
+async function runTogetherReplyOnce(cid: string, userText: string): Promise<void> {
+  try {
     const who = await ownerName();
-    const history = recentChatText(cid, 10, who);
-    const system = await personaSystemFor(
-      cid,
-      playingBlock(
-        `【聊天记录】\n${history || '（刚开始聊）'}\n\n对方（${who}）刚发来一条消息，请回复。`,
-        who,
-        cid,
-      ),
-    );
-    // 第二十三轮反馈：用户消息显式引用并要求「先接住」，防音乐情境块把回复带偏
-    const userBase = userText
-      ? `对方（${who}）刚发来一条消息：「${userText}」。先直接回应这条消息本身（接住对方说的内容/情绪/问题），不要无视它、不要转移话题。`
-      : '（对方点了推荐按钮，想让你推荐几首歌）';
-    const { text, controls } = await genUniqueReply(cid, system, userBase);
+    // 情境说明只描述「刚来了一条新消息」，不引用消息原文（原文只出现在最后一条 user 轮，避免出现两次）
+    const situation = userText
+      ? `对方（${who}）刚发来新消息，请以人设自然回应：先直接接住对方说的话（内容/情绪/问题），不要转移话题。`
+      : '现在轮到你说话。';
+    const system = await personaSystemFor(cid, playingBlock(situation, who, cid));
+    const priorTurns = withoutCurrentTurn(
+      recentTurns(cid, TG_HISTORY_TURNS + 1, who),
+      userText,
+    ).slice(-TG_HISTORY_TURNS);
+    const messages: LlmTurn[] = [
+      { role: 'system', content: system },
+      ...priorTurns,
+      { role: 'user', content: userText || '（对方点了推荐按钮，想让你推荐几首歌）' },
+    ];
+    const { text, controls } = await genUniqueReply(cid, messages);
     if (text) {
       appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
     } else {
@@ -839,9 +948,19 @@ export async function togetherReply(cid: string, userText: string): Promise<void
     }
     // AI 的播放控制指令（切歌/暂停/选歌/红心/快进快退）异步真实执行（不阻塞回复 flag；用户随时可手动覆盖）
     void runTgControls(cid, controls, text);
-  } finally {
-    replying = false;
-    useMusic.setState({ tgAiBusy: false });
+  } catch {
+    // 生成链路异常：兜底一条失败消息，保持聊天不卡死（兜底自身失败也静默）
+    try {
+      appendMsg(cid, {
+        id: genMsgId(),
+        role: 'peer',
+        text: '……（信号不太好，没听清）',
+        time: Date.now(),
+        error: true,
+      });
+    } catch {
+      // 静默
+    }
   }
 }
 
@@ -898,25 +1017,54 @@ function isDupOfRecent(cid: string, text: string): boolean {
     .some((m) => similarEnough(n, normDup(m.text)));
 }
 
+/** 开头复读快查（Task 20）：草稿前 4 个字（去标点归一化）若与最近 5 轮聊天里 AI 自己说过的
+ *  某句开头相同 → 判定复读。「同一个模板只换几个词」的句子 2-gram 重合度可能压不到阈值，
+ *  但开头一致这个特征先拦一道。 */
+function startsLikeRecentAiReply(cid: string, text: string): boolean {
+  const head = normDup(text).slice(0, 4);
+  if (head.length < 4) return false;
+  return loadTogetherMsgs(cid)
+    .slice(-5)
+    .some((m) => m.role === 'peer' && normDup(m.text).slice(0, 4) === head);
+}
+
 /**
- * 生成一条不与近期消息重复的对方回复：首次带种子请求；若与最近消息重复，
- * 带明确换角度指令重试一次（最多 2 次），避免「同一句话发 N 遍」。
+ * 生成一条不与近期消息重复的对方回复（Task 20 加强）：
+ * - 输入是完整多轮 messages（system + 历史轮次 + 最后一条 user 轮 = 当前消息）；
+ * - 最多 3 次尝试：与最近 12 条消息相似、或开头 4 字与最近 5 轮 AI 回复相同都算复读；
+ * - 重试不换 system、不加新 system：把被拒草稿回灌进最后一条 user 消息末尾，
+ *   明确告诉模型「这些表达已经说过，换完全不同的说法」；
+ * - 每次尝试带多样性种子，绕开同输入→同输出。
  */
 async function genUniqueReply(
   cid: string,
-  system: string,
-  userBase: string,
+  baseMessages: LlmTurn[],
 ): Promise<{ text: string; controls: TgControl[] }> {
-  const run = async (userContent: string) => {
-    const raw = await callLlmTwoTier(system, userContent);
+  const run = async (messages: LlmTurn[]) => {
+    const raw = await callLlmTwoTier(messages);
     const { text: ctrlText, controls } = extractTgControls(raw);
     return { text: cleanAiText(ctrlText), controls };
   };
-  let out = await run(`${userBase}\n（回复多样性种子：${varietySeed()}）`);
-  if (out.text && isDupOfRecent(cid, out.text)) {
-    out = await run(
-      `${userBase}\n（系统提醒：你刚才的回复和聊天记录里已说过的话重复了，必须换一个完全不同的切入角度重新回复，只输出新消息正文。多样性种子：${varietySeed()}）`,
+  /** 把附加说明拼进最后一条 user 消息末尾（不新增 system、不动历史轮次） */
+  const withLastUserNote = (messages: LlmTurn[], note: string): LlmTurn[] => {
+    const lastIdx = messages.length - 1;
+    const last = messages[lastIdx];
+    if (!last || last.role !== 'user') return messages;
+    return [...messages.slice(0, lastIdx), { role: 'user' as const, content: `${last.content}${note}` }];
+  };
+  const isRepeat = (t: string): boolean => !!t && (isDupOfRecent(cid, t) || startsLikeRecentAiReply(cid, t));
+  const rejected: string[] = [];
+  let messages = withLastUserNote(baseMessages, `（回复多样性种子：${varietySeed()}）`);
+  let out = await run(messages);
+  for (let attempt = 1; attempt < 3 && out.text && isRepeat(out.text); attempt++) {
+    rejected.push(out.text);
+    // 被拒草稿截到 40 字：足够指认表达，又不把 prompt 撑爆
+    const quoted = rejected.map((d) => `"${d.slice(0, 40)}"`).join(' ');
+    messages = withLastUserNote(
+      baseMessages,
+      `（注意：不要重复类似这些之前说过的表达：${quoted}，换一种完全不同的说法。多样性种子：${varietySeed()}）`,
     );
+    out = await run(messages);
   }
   return out;
 }
@@ -939,7 +1087,8 @@ let lastProactiveAt = 0;
 
 /** AI 主动说一句话（仅供 F 睡前提醒/暂停久置轻问使用）。
  *  第三十五轮反馈重写：①全局 15 分钟冷却（不再连续发）；②提示词改为人设/记忆/上下文驱动，
- *  明确不点评正在听的歌（之前「聊聊这首歌的感受」导致 AI 每次都发歌曲评价） */
+ *  明确不点评正在听的歌（之前「聊聊这首歌的感受」导致 AI 每次都发歌曲评价）；
+ *  Task 20：历史改为真实多轮轮次（不再压平进 system），末尾用一条中性「该你主动开口」的 nudge user 轮 */
 async function aiSayOnce(cid: string, hint: string): Promise<void> {
   if (replying) return;
   if (Date.now() - lastProactiveAt < PROACTIVE_COOLDOWN_MS) return; // 冷却期内不再主动开口
@@ -947,18 +1096,16 @@ async function aiSayOnce(cid: string, hint: string): Promise<void> {
   useMusic.setState({ tgAiBusy: true });
   try {
     const who = await ownerName();
-    const history = recentChatText(cid, 6, who);
-    const system = await personaSystemFor(
-      cid,
-      playingBlock(
-        `${hint ? `【情境】${hint}\n` : ''}【聊天记录】\n${history || '（还没聊过）'}\n\n请根据你的人设、性格、心情、你们的关系、共同记忆和最近聊过的内容，主动发一条像平时聊天一样的消息（内容由你按人设和当下情境自然决定，一两句话就好）。`,
-        who,
-        cid,
-      ),
-    );
-    const userBase =
+    const situation = `${hint ? `【情境】${hint}\n` : ''}现在轮到你主动开口：请根据你的人设、性格、心情、你们的关系、共同记忆和最近聊过的内容，主动发一条像平时聊天一样的消息（内容由你按人设和当下情境自然决定，一两句话就好）。`;
+    const system = await personaSystemFor(cid, playingBlock(situation, who, cid));
+    const nudge =
       '（主动发一条消息）。注意：不要点评/评价/感想正在听的这首歌，不要以「这首歌」开头，不要提「这首歌」；就按你的人设和你们平时聊的天，想说什么说什么；不要重复聊天记录里已有的句子。';
-    const { text, controls } = await genUniqueReply(cid, system, userBase);
+    const messages: LlmTurn[] = [
+      { role: 'system', content: system },
+      ...recentTurns(cid, TG_HISTORY_TURNS, who),
+      { role: 'user', content: nudge },
+    ];
+    const { text, controls } = await genUniqueReply(cid, messages);
     if (text) {
       lastProactiveAt = Date.now();
       appendMsg(cid, { id: genMsgId(), role: 'peer', text, time: Date.now() });
@@ -967,6 +1114,8 @@ async function aiSayOnce(cid: string, hint: string): Promise<void> {
   } finally {
     replying = false;
     useMusic.setState({ tgAiBusy: false });
+    // Task 21：生成期间用户发来的消息在此补答（与 togetherReply 同款排水），不再滞留丢答
+    await drainPendingAfterProactive();
   }
 }
 
@@ -987,15 +1136,9 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
       time: Date.now(),
     });
   const who = await ownerName();
-  const history = recentChatText(cid, 8, who);
-  const system = await personaSystemFor(
-    cid,
-    playingBlock(
-      `【聊天记录】\n${history}\n\n对方（${who}）想让你推荐歌曲。结合你们正在听的歌、${who}的听歌历史和你们的聊天，推荐 2~4 首真实存在的歌曲（几首由你按语境定）。`,
-      who,
-      cid,
-    ),
-  );
+  // Task 20：历史改为真实多轮轮次（不再压平进 system）；推荐请求本体已在上面 appendMsg 写入聊天记录
+  const situation = `对方（${who}）想让你推荐歌曲。结合你们正在听的歌、${who}的听歌历史和你们的聊天，推荐 2~4 首真实存在的歌曲（几首由你按语境定）。`;
+  const system = await personaSystemFor(cid, playingBlock(situation, who, cid));
   // 第二十二轮审计⑥（换一批）：最近推荐过的歌不再重复推荐
   const recentNames = [
     ...new Set(
@@ -1006,10 +1149,20 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
     ),
   ];
   const avoid = recentNames.length ? `最近推荐过的这些歌不要再推：${recentNames.join('')}。` : '';
-  const user = `请严格只输出 JSON 数组（不要解释、不要 markdown 代码块），格式：
+  const user = `对方（${who}）刚说：「${wish.trim() || '给我推荐几首歌吧'}」。
+请严格只输出 JSON 数组（不要解释、不要 markdown 代码块），格式：
 [{"title":"歌名","artist":"歌手","reason":"一句话推荐理由（20字内，用你的口吻）"}]
 共 2~4 项（几首由你定）。理由不要和聊天记录里已说过的句子重复。${avoid}多样性种子：${varietySeed()}`;
-  const raw = await callLlmTwoTier(system, user);
+  // 刚写入的那条推荐请求是记录尾条：从历史轮次剔除，只保留在末尾这条 user 轮里
+  const priorTurns = withoutCurrentTurn(
+    recentTurns(cid, TG_HISTORY_TURNS + 1, who),
+    wish.trim() || '给我推荐几首歌吧',
+  ).slice(-TG_HISTORY_TURNS);
+  const raw = await callLlmTwoTier([
+    { role: 'system', content: system },
+    ...priorTurns,
+    { role: 'user', content: user },
+  ]);
   const arr = extractJsonArray(raw);
   if (!arr || !arr.length) {
     appendMsg(cid, {
@@ -1072,6 +1225,8 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
   } finally {
     replying = false;
     useMusic.setState({ tgAiBusy: false });
+    // Task 21：推荐生成期间用户发来的消息在此补答（与 togetherReply 同款排水），不再滞留丢答
+    await drainPendingAfterProactive();
   }
 }
 
