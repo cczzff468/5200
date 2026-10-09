@@ -17692,3 +17692,20 @@ Stage Summary:
 - 两点落地并浏览器实测：淘宝线条图标恢复以前的 lucide ShoppingBag（毛玻璃/液态样式生效）；「真实图标」样式接入用户提供的天猫双11版 PNG（public/icons/taobao.png）
 - 范围限定零破坏：美团/微信/QQ/聊天/支付链路零改动；iconStyle 三选一机制、持久化、AppStylePreview 固定预览逻辑未动，仅淘宝条目数据换装
 - 改动文件：src/components/apps/registry.tsx（TaobaoGlyph 删除、ShoppingBag 恢复、taobao 增 image 字段）、新增 public/icons/taobao.png
+
+---
+Task ID: 38
+Agent: main (Z.ai Code)
+Task: 从 GitHub 拉取仓库部署到沙箱工作目录并验证可运行
+
+Work Log:
+- git clone https://github.com/cczzff468/5200.git（PAT 鉴权）到 /home/z/repo-5200
+- 因 /home/z/my-project/upload 为 ossfs 挂载点不可删除，改为 cp -a 全量覆盖进 /home/z/my-project（upload 挂载点保留，仓库内 upload/ 参考截图一并拷入）
+- bun install 855 包；bun run dev 启动成功（Next.js 16.1.3 Turbopack，Ready in 863ms，ncm-keeper 正常 spawn）
+- agent-browser 实测：锁屏渲染正常→上滑解锁成功→主屏 3 页+小组件+Dock 正常→翻页手势正常→淘宝 App 打开（登录页渲染正常，一键登录依赖微信会话属正常设计）；/api/contacts/migrate 200
+- 已知环境差异：天气外部 API 502（UI 有"稍后自动重试"兜底）；bun run lint 因沙箱 OOM 被 SIGKILL（非代码问题）；bunx tsc --noEmit 0 错误
+- git remote origin 已带 PAT 可直接 push；user.name/email 已配置
+
+Stage Summary:
+- 仓库已完整部署到 /home/z/my-project 并通过浏览器真机验证（锁屏/主屏/翻页/淘宝打开均正常）
+- 等待用户指定要修改或新增的功能
