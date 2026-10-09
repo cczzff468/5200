@@ -17,30 +17,47 @@ import Image from 'next/image';
 import {
   ArrowLeft,
   Bell,
+  Bike,
   Camera,
+  Check,
+  ChevronDown,
   ChevronRight,
   CircleCheck,
+  ClipboardList,
   Copy,
+  Crosshair,
   CreditCard,
+  FileText,
+  Headphones,
   Heart,
   Home as HomeIcon,
+  LayoutGrid,
   MapPin,
   MessageSquare,
   Minus,
+  MoreHorizontal,
+  Package,
+  Pencil,
+  Phone,
   Plus,
   ScanLine,
   Search,
   Settings as SettingsIcon,
+  ShieldCheck,
   ShoppingBag,
   ShoppingCart,
+  Sparkles,
   Star,
+  Store,
   Ticket,
   Trash2,
   Truck,
   User,
   Wallet,
   X,
+  Zap,
 } from 'lucide-react';
+import { mtGetRiderId, mtRiderSrcOf } from '@/lib/ios/mt-rider';
 import { useUI } from '@/lib/ios/store';
 import {
   TB_CATS,
@@ -88,6 +105,7 @@ import {
   tbResolveIdpIdentity,
   tbSaveAddrs,
   tbSaveCart,
+  tbSaveOrders,
   tbSetCartAllChecked,
   tbSetCurAddr,
   tbSetSession,
@@ -159,14 +177,16 @@ function useCountdown(target: number | undefined): string {
 /** 页面顶栏（返回 + 标题 + 右侧槽位） */
 function TopBar({ title, onBack, right, light }: { title: string; onBack?: () => void; right?: ReactNode; light?: boolean }) {
   return (
-    <div className={`sticky top-0 z-30 flex h-12 items-center gap-2 px-3 ${light ? 'bg-[#FF5000] text-white' : 'bg-white text-black/90'}`}>
-      {onBack ? (
-        <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
-          <ArrowLeft className="h-[22px] w-[22px]" strokeWidth={2.2} />
-        </button>
-      ) : null}
-      <span className="flex-1 truncate text-center text-[17px] font-semibold">{title}</span>
-      <div className="flex min-w-[36px] items-center justify-end gap-1">{right}</div>
+    <div className={`sticky top-0 z-30 px-3 pt-[54px] ${light ? 'bg-[#FF5000] text-white' : 'bg-white text-black/90'}`}>
+      <div className="flex h-12 items-center gap-2">
+        {onBack ? (
+          <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+            <ArrowLeft className="h-[22px] w-[22px]" strokeWidth={2.2} />
+          </button>
+        ) : null}
+        <span className="flex-1 truncate text-center text-[17px] font-semibold">{title}</span>
+        <div className="flex min-w-[36px] items-center justify-end gap-1">{right}</div>
+      </div>
     </div>
   );
 }
@@ -184,7 +204,44 @@ function TbLogoMark({ size = 22 }: { size?: number }) {
   );
 }
 
-/** 天猫角标 */
+/** 微信支付小图标（绿色对话气泡，内联 SVG 禁 emoji） */
+function WxPayIcon({ size = 24 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="#09BB07" />
+      <path d="M9.7 5.6c-2.9 0-5.2 1.9-5.2 4.2 0 1.32.76 2.5 1.95 3.27l-.49 1.48 1.72-.86c.6.16 1.24.25 2.02.25.1 0 .2 0 .3-.01a3.6 3.6 0 0 1-.13-.98c0-2.2 2.13-3.98 4.76-3.98.16 0 .32 0 .47.02-.42-1.93-2.6-3.39-5.4-3.39Z" fill="#fff" />
+      <path d="M19.4 12.95c0-1.95-1.95-3.53-4.35-3.53s-4.35 1.58-4.35 3.53 1.95 3.53 4.35 3.53c.52 0 1.02-.07 1.48-.2l1.45.72-.4-1.22c1.1-.64 1.82-1.66 1.82-2.83Z" fill="#fff" />
+      <circle cx="8.4" cy="9.1" r="0.62" fill="#09BB07" />
+      <circle cx="11" cy="9.1" r="0.62" fill="#09BB07" />
+    </svg>
+  );
+}
+
+/** 支付宝小图标（蓝底「支」字，内联 SVG 禁 emoji） */
+function AliPayIcon({ size = 24 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <rect width="24" height="24" rx="6" fill="#1677FF" />
+      <text x="12" y="17" textAnchor="middle" fontSize="14" fontWeight="700" fill="#fff" fontFamily="system-ui, sans-serif">
+        支
+      </text>
+    </svg>
+  );
+}
+
+/** 支付方式单选行（截图7/9：微信支付 / 支付宝，橙勾单选） */
+function PayRadioRow({ icon, label, active, onClick }: { icon: ReactNode; label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} className="flex w-full items-center gap-2.5 py-2.5 text-left active:opacity-75">
+      {icon}
+      <span className="text-[14px] text-black/85">{label}</span>
+      <span className={`ml-auto grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full ${active ? 'bg-[#FF5000]' : 'border border-black/20 bg-white'}`}>
+        {active ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+      </span>
+    </button>
+  );
+}
+
 function TmallMark() {
   return <span className="mr-1 inline-block rounded-[3px] bg-[#FF0036] px-1 py-[1px] align-[2px] text-[10px] font-bold leading-none text-white">天猫</span>;
 }
@@ -203,6 +260,183 @@ function ProductImg({ p, w = 600, h = 600, s = 0, className = '' }: { p: TbProdu
 }
 
 // ---------------- 登录页 ----------------
+
+// ---------------- 物流口径辅助（截图1-5 物流界面：按订单号确定性生成，刷新稳定） ----------------
+
+function tbHash(s: string): number {
+  let h = 7;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+const TB_COURIER_COS = ['中通快递', '圆通速递', '中国邮政', '韵达速递', '申通快递'];
+const TB_COURIER_MEN = ['刘俊溪', '蒋照桃', '王志远', '李天佑', '陈国栋', '周天磊'];
+
+/** 快递公司（订单号散列稳定） */
+function tbCourierCo(orderId: string): string {
+  return TB_COURIER_COS[tbHash(orderId) % TB_COURIER_COS.length];
+}
+/** 快递员姓名 */
+function tbCourierMan(orderId: string): string {
+  return TB_COURIER_MEN[tbHash(`${orderId}m`) % TB_COURIER_MEN.length];
+}
+/** 快递员手机号（11 位确定性） */
+function tbCourierPhone(orderId: string): string {
+  const h = tbHash(`${orderId}p`);
+  return `1${3 + (h % 7)}${h % 10}${String((h >>> 4) % 100000000).padStart(8, '0')}`;
+}
+/** 运单号（14 位确定性） */
+function tbTrackNo(orderId: string): string {
+  const h = tbHash(`${orderId}t`);
+  return `78${String((h >>> 2) % 1000000000000).padStart(12, '0')}`;
+}
+/** 菜鸟驿站取件码（4-2-5008 形态） */
+function tbPickCode(orderId: string): string {
+  const h = tbHash(`${orderId}c`);
+  return `${1 + (h % 9)}-${1 + ((h >>> 4) % 9)}-${1000 + ((h >>> 8) % 9000)}`;
+}
+/** 驿站名（跟收货地址） */
+function tbStationName(addr: TbAddress | undefined): string {
+  if (!addr) return '菜鸟驿站';
+  return `${addr.detail.slice(0, 12)}店`;
+}
+/** 手机号脱敏（86-137****2273） */
+function tbMaskPhone(phone: string): string {
+  return `86-${phone.slice(0, 3)}****${phone.slice(-4)}`;
+}
+
+/** 物流阶段（地图形态）：揽收 / 运输 / 派送（骑手巡航）/ 驿站待取件 */
+type TbExpressPhase = 'pickup' | 'transit' | 'delivering' | 'station';
+
+/** 骑手位置沿路线二次贝塞尔插值（viewBox 500×220，与路径 M 70 150 Q 250 60 430 150 同一条） */
+function tbBezierPos(prog: number): { x: number; y: number } {
+  const p = Math.min(1, Math.max(0, prog));
+  const u = 1 - p;
+  return {
+    x: (u * u * 70 + 2 * u * p * 250 + p * p * 430) / 5,
+    y: (u * u * 150 + 2 * u * p * 60 + p * p * 150) / 2.2,
+  };
+}
+
+/** 菜鸟驿站小楼（截图3：橙色驿站 + 站内快递员，纯 SVG） */
+function TbStationBuilding() {
+  return (
+    <span className="absolute left-[46%] top-[26%] block drop-shadow-[0_5px_6px_rgba(0,0,0,0.18)]" aria-hidden="true">
+      <svg width="104" height="70" viewBox="0 0 104 70" fill="none">
+        <rect x="6" y="20" width="92" height="46" rx="3" fill="#FF8A3C" />
+        <rect x="6" y="20" width="92" height="13" rx="3" fill="#FF5A00" />
+        <rect x="15" y="38" width="30" height="28" rx="2" fill="#FFE9D6" />
+        <rect x="53" y="38" width="15" height="28" rx="2" fill="#FFB27A" />
+        <rect x="74" y="38" width="14" height="15" rx="2" fill="#FFE9D6" />
+        <rect x="76" y="40" width="10" height="3" rx="1.5" fill="#FF5A00" opacity="0.7" />
+      </svg>
+    </span>
+  );
+}
+
+/** 物流地图（截图1/3：浅色高德风路网 + 橙色 ETA 气泡 + 橙路线 + 收货标记；
+ *  骑手形象复用美团 mt-rider（「我的-骑手」所选形象，淘宝共用同一形象）：
+ *  揽收期停在商家侧，派送期沿曲线向收货地行进，到驿站后驿站小楼+站前骑手） */
+function TbExpressMap({ phase, etaTitle, etaSub, addrDetail, riderProg }: { phase: TbExpressPhase; etaTitle: string; etaSub: string; addrDetail?: string; riderProg: number }) {
+  const riderSrc = mtRiderSrcOf(mtGetRiderId());
+  const community = (addrDetail ?? '').trim().split(/\s+/)[0] || '未来科技城';
+  const pos = tbBezierPos(phase === 'delivering' ? riderProg : phase === 'pickup' ? 0.06 : 0.97);
+  const truckPos = tbBezierPos(Math.min(0.85, 0.2 + riderProg * 0.6));
+  return (
+    <div className="relative h-[252px] overflow-hidden bg-[#E9EFF5]" aria-label="物流地图">
+      {/* 水系 / 绿地 */}
+      <div className="absolute -right-8 top-8 h-24 w-40 rounded-[46%] bg-[#C7DFF2]" />
+      <div className="absolute -left-10 bottom-[-30px] h-24 w-44 rounded-[48%] bg-[#C7DFF2]" />
+      <div className="absolute -left-8 top-10 h-20 w-36 rounded-[46%] bg-[#D8EDD3]" />
+      <div className="absolute right-[30%] bottom-[-20px] h-16 w-28 rounded-[45%] bg-[#D8EDD3]" />
+      {/* 建筑块 */}
+      <div className="absolute bottom-[34%] left-[26%] h-5 w-9 rounded-[3px] bg-black/[0.05]" />
+      <div className="absolute left-[60%] top-[16%] h-4 w-7 rounded-[3px] bg-black/[0.05]" />
+      <div className="absolute bottom-[20%] right-[30%] h-4 w-6 rounded-[3px] bg-black/[0.05]" />
+      {/* 路网 */}
+      <div className="absolute left-0 right-0 top-[44%] h-[7px] -rotate-2 bg-white/90" />
+      <div className="absolute bottom-[-4%] left-[30%] top-[-4%] w-[6px] rotate-6 bg-white/90" />
+      <div className="absolute left-[-6%] right-[20%] top-[72%] h-[5px] rotate-3 bg-white/75" />
+      <div className="absolute bottom-[-6%] left-[70%] top-[10%] w-[5px] -rotate-12 bg-white/75" />
+      {/* 地名 */}
+      <span className="absolute left-[6%] top-[20%] text-[11px] text-black/30">文一西路隧道</span>
+      <span className="absolute right-[8%] top-[10%] text-[11px] text-black/30">19号线</span>
+      <span className="absolute left-[36%] top-[58%] -rotate-2 text-[12px] tracking-wide text-black/35">文一西路</span>
+      <span className="absolute bottom-[10%] right-[6%] text-[11px] font-medium text-black/45">{community}</span>
+      {/* 路线（商家 → 收货地 弧线） */}
+      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 220" preserveAspectRatio="none" fill="none" aria-hidden="true">
+        <path d="M 70 150 Q 250 60 430 150" stroke="#FF7A21" strokeWidth="3.5" strokeLinecap="round" opacity="0.85" />
+      </svg>
+      {/* 收货标记（橙「收」+ 白胶囊） */}
+      <span className="absolute right-[13%] top-[56%] flex items-center gap-1.5">
+        <span className="grid h-[22px] w-[22px] place-items-center rounded-md bg-[#FF5000] text-[13px] font-bold text-white shadow-md">收</span>
+        <span className="rounded-full bg-white px-2 py-0.5 text-[12px] font-medium text-black/75 shadow-sm">收货地址</span>
+      </span>
+      {/* 起点：驿站小楼 / 商家标记 */}
+      {phase === 'station' ? (
+        <>
+          <TbStationBuilding />
+          <span className="absolute left-[49%] top-[47%] block">
+            <img src={riderSrc} alt="驿站快递员" draggable={false} className="mt-rider-img h-[38px] w-[38px] select-none object-contain" style={{ filter: 'drop-shadow(0 4px 3px rgba(0,0,0,0.22))' }} />
+          </span>
+        </>
+      ) : (
+        <Store className="absolute left-[10%] top-[62%] h-[22px] w-[22px] text-[#FF8A00] drop-shadow-[0_2px_2px_rgba(0,0,0,0.22)]" strokeWidth={2.2} />
+      )}
+      {/* 运输中：货车沿路线行进 */}
+      {phase === 'transit' ? (
+        <span className="absolute" style={{ left: `calc(${truckPos.x}% - 15px)`, top: `calc(${truckPos.y}% - 15px)` }}>
+          <Truck className="h-[30px] w-[30px] text-[#FF6A00] drop-shadow-[0_3px_3px_rgba(0,0,0,0.25)]" strokeWidth={2} />
+        </span>
+      ) : null}
+      {/* 骑手形象（美团同款：立体投影 + 颠簸动画；驿站阶段由驿站小楼前的快递员替代） */}
+      {phase !== 'transit' && phase !== 'station' ? (
+        <span className="mt-rider absolute block" style={{ left: `calc(${pos.x}% - 26px)`, top: `calc(${pos.y}% - 26px)` }}>
+          <img src={riderSrc} alt="快递骑手" draggable={false} className="mt-rider-img h-[52px] w-[52px] select-none object-contain" style={{ filter: 'drop-shadow(0 5px 4px rgba(0,0,0,0.25)) drop-shadow(0 1.5px 2px rgba(0,0,0,0.18))' }} />
+        </span>
+      ) : null}
+      {/* ETA 气泡（位于顶栏下方，不遮返回按钮） */}
+      <div className="absolute left-4 top-[112px] rounded-2xl bg-[#FF6A00] px-4 py-2.5 text-white shadow-[0_8px_20px_rgba(255,106,0,0.4)]">
+        <div className="text-[17px] font-bold leading-6">{etaTitle}</div>
+        <div className="mt-0.5 text-[12px] text-white/85">{etaSub}</div>
+      </div>
+    </div>
+  );
+}
+
+/** 物流描述文案（节点序号 → 标题 + 描述，含橙色电话高亮） */
+function tbNodeMeta(idx: number, man: string, manPhone: string, station: string): { title: string; desc: string; phone?: string } {
+  switch (idx) {
+    case 0:
+      return { title: '已揽收', desc: '【杭州市】快递员已上门取件，包裹正准备发往杭州转运中心' };
+    case 1:
+      return { title: '运输中', desc: '【杭州市】快件已到达 杭州转运中心，即将发往目的地网点' };
+    case 2:
+      return { title: '派送中', desc: `【杭州市】 杭州未来科技城 的业务员【${man}（勿找商家，有事呼叫我），${manPhone}】正在为您派送`, phone: manPhone };
+    case 3:
+      return { title: '待取件', desc: `您的快件已暂存至${station}，请凭取货码及时领取。如有疑问请联系${manPhone}`, phone: manPhone };
+    default:
+      return { title: '物流更新', desc: '包裹物流信息更新' };
+  }
+}
+
+/** 描述文本渲染（电话号码橙色高亮） */
+function TbDescText({ text, phone }: { text: string; phone?: string }) {
+  if (!phone || !text.includes(phone)) return <span>{text}</span>;
+  const parts = text.split(phone);
+  return (
+    <span>
+      {parts[0]}
+      <span className="text-[#FF5000]">{phone}</span>
+      {parts[1]}
+    </span>
+  );
+}
+
+/** 物流轨迹节点标题（订单卡物流条 / 详情页复用） */
+function tbTrackPhaseText(nodeIdx: number): string {
+  return nodeIdx >= 3 ? '待取件' : nodeIdx === 2 ? '派送中' : nodeIdx === 1 ? '运输中' : '已揽收';
+}
 
 function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onToast: (m: string) => void }) {
   const closeApp = useUI((s) => s.closeApp);
@@ -1003,15 +1237,18 @@ function ProductGallery({ p }: { p: TbProduct }) {
 }
 
 /** SKU 选择弹层（颜色分类 / 尺码等 + 数量 + 确定） */
+/** 购买弹窗（截图9：地址行 + 实付/优惠前 + 颜色缩略图/尺码价格 + 顺手买 + 支付单选 + 立即支付） */
 function SkuSheet({
   p,
+  uid,
   onClose,
   onConfirm,
   mode,
 }: {
   p: TbProduct;
+  uid: string;
   onClose: () => void;
-  onConfirm: (sku: Record<string, string>, qty: number) => void;
+  onConfirm: (sku: Record<string, string>, qty: number, addonPid?: string) => void;
   mode: 'cart' | 'buy';
 }) {
   const [sel, setSel] = useState<Record<string, string>>(() => {
@@ -1023,6 +1260,10 @@ function SkuSheet({
     return init;
   });
   const [qty, setQty] = useState(1);
+  const [addonSel, setAddonSel] = useState(false);
+  const [addonIdx, setAddonIdx] = useState(0);
+  const [payPref, setPayPref] = useState<'wx' | 'ali'>('wx');
+  const [remarkOpen, setRemarkOpen] = useState(false);
   const price = useMemo(() => {
     let v = p.price;
     for (const g of p.skus) {
@@ -1039,81 +1280,220 @@ function SkuSheet({
     return tbImg(p.tag, 200, 200, 0);
   }, [p, sel]);
   const ready = p.skus.every((g) => sel[g.name]);
+  const addr = tbCurAddr(uid);
+  const addonPool = useMemo(() => {
+    const h = tbHash(p.id);
+    const list = TB_PRODUCTS.filter((x) => x.id !== p.id);
+    return [list[h % list.length], list[(h + 7) % list.length], list[(h + 13) % list.length]].filter(Boolean);
+  }, [p.id]);
+  const addon = addonPool.length ? addonPool[addonIdx % addonPool.length] : null;
+  const totalPrice = Math.round((price + (addonSel && addon ? addon.price : 0)) * 100) / 100;
+  const etaDate = (() => {
+    const d = new Date(Date.now() + 3 * 86_400_000);
+    return `预计${d.getMonth() + 1}月${d.getDate()}日送达`;
+  })();
+  const sizeGroup = p.skus.find((g) => g.name === '尺码');
+  const sizeGuide = sizeGroup ? { h: 165 + (tbHash(p.id) % 15), w: 55 + (tbHash(`${p.id}w`) % 25), shoulder: 42 + (tbHash(`${p.id}s`) % 8), chest: 108 + (tbHash(`${p.id}c`) % 16) } : null;
+  const discount = p.originPrice ? Math.round((p.originPrice - price) * 100) / 100 : 0;
   return (
     <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/40" onClick={onClose}>
-      <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white pb-6" onClick={(e) => e.stopPropagation()}>
-        <div className="flex gap-3 p-4">
-          <img src={skuImg} alt={p.title} className="h-[92px] w-[92px] rounded-lg object-cover" draggable={false} />
-          <div className="min-w-0 flex-1 pt-1">
-            <Price value={price} size={22} />
-            {p.originPrice ? <span className="ml-2 text-[12px] text-black/30 line-through">¥{fmtMoney(p.originPrice)}</span> : null}
-            <div className="mt-1 text-[12px] text-black/40">已售{tbSalesText(p.sales)}</div>
-            <div className="mt-1 line-clamp-2 text-[13px] text-black/60">{Object.entries(sel).map(([k, v]) => `${k}：${v}`).join('；') || '请选择规格'}</div>
-          </div>
-          <button type="button" aria-label="关闭" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-full bg-black/[0.04]">
-            <X className="h-4 w-4 text-black/60" strokeWidth={2.4} />
-          </button>
-        </div>
-        {p.skus.map((g) => (
-          <div key={g.name} className="px-4 pb-1 pt-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[15px] font-semibold text-black/85">{g.name}</span>
-              <span className="text-[12px] text-black/35">大图</span>
+      <div className="flex max-h-[82%] flex-col rounded-t-2xl bg-white" onClick={(e) => e.stopPropagation()}>
+        <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+          {/* 地址行（截图9头部） */}
+          <div className="px-4 pb-2 pt-3">
+            <button type="button" onClick={onClose} className="flex w-full items-center gap-1.5 text-left active:opacity-70">
+              <MapPin className="h-4 w-4 shrink-0 text-black/75" strokeWidth={2.1} />
+              <span className="min-w-0 truncate text-[14.5px] font-semibold text-black/85">{addr ? `${addr.name} ${addr.detail}` : '请选择收货地址'}</span>
+              <Pencil className="ml-1 h-3.5 w-3.5 shrink-0 text-black/35" />
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/25" />
+            </button>
+            <div className="mt-1 flex items-center gap-2 pl-5.5 text-[12px]">
+              <span className="text-[#00A860]">{etaDate}</span>
+              <span className="h-3 w-px bg-black/10" />
+              <span className="text-black/55">快递 {p.freight === 0 ? '包邮' : `¥${fmtMoney(p.freight)}`}</span>
+              <span className="h-3 w-px bg-black/10" />
+              <span className="text-black/40">退货宝</span>
             </div>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {g.options.map((o) => {
-                const active = sel[g.name] === o.label;
-                return (
-                  <button
-                    key={o.label}
-                    type="button"
-                    disabled={o.soldOut}
-                    onClick={() => setSel((s) => ({ ...s, [g.name]: o.label }))}
-                    className={`flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-3 text-[13px] ${
-                      o.soldOut
-                        ? 'border-black/[0.06] text-black/25'
-                        : active
-                          ? 'border-[#FF5000] bg-[#FF5000]/[0.06] font-medium text-[#FF5000]'
-                          : 'border-black/10 text-black/70'
-                    }`}
-                  >
-                    {o.img ? <img src={o.img} alt={o.label} className={`h-7 w-7 rounded-full object-cover ${o.soldOut ? 'opacity-40' : ''}`} draggable={false} /> : null}
-                    {o.label}
-                    {o.priceDelta ? <span className="text-[11px] opacity-70">+{o.priceDelta}</span> : null}
-                    {o.soldOut ? <span className="text-[10px]">缺货</span> : null}
+          </div>
+          {/* 商品头：图 + 实付/优惠前 + 步进 */}
+          <div className="flex gap-3 px-4 pb-1 pt-2">
+            <img src={skuImg} alt={p.title} className="h-[88px] w-[88px] shrink-0 rounded-lg object-cover" draggable={false} />
+            <div className="min-w-0 flex-1 pt-0.5">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-[12px] text-black/45">实付</span>
+                <span className="text-[24px] font-bold leading-none text-[#FF4400]">
+                  <span className="text-[14px]">¥</span>
+                  {fmtMoney(price)}
+                </span>
+                {p.originPrice ? <span className="text-[12px] text-black/35">| 优惠前 ¥{fmtMoney(p.originPrice)}</span> : null}
+              </div>
+              {discount > 0 ? (
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <span className="text-[11.5px] text-[#FF4400]">共减 ¥{fmtMoney(discount)} {'>'}</span>
+                  <span className="rounded border border-[#FF6A1E]/40 px-1 py-px text-[10px] text-[#FF6A1E]">官方立减{fmtMoney(discount)}元</span>
+                </div>
+              ) : (
+                <div className="mt-1.5 text-[12px] text-black/40">已售{tbSalesText(p.sales)}</div>
+              )}
+              <div className="mt-2 flex justify-end">
+                <div className="flex items-center rounded-md border border-black/12">
+                  <button type="button" aria-label="减少" onClick={() => setQty((q) => Math.max(1, q - 1))} className="grid h-8 w-9 place-items-center border-r border-black/10 text-black/60 active:opacity-60">
+                    <Minus className="h-3.5 w-3.5" strokeWidth={2.6} />
                   </button>
-                );
-              })}
+                  <span className="min-w-[34px] text-center text-[14px] font-medium">{qty}</span>
+                  <button type="button" aria-label="增加" onClick={() => setQty((q) => Math.min(99, q + 1))} className="grid h-8 w-9 place-items-center border-l border-black/10 text-black/60 active:opacity-60">
+                    <Plus className="h-3.5 w-3.5" strokeWidth={2.6} />
+                  </button>
+                </div>
+              </div>
             </div>
+            <button type="button" aria-label="关闭" onClick={onClose} className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-black/[0.04]">
+              <X className="h-4 w-4 text-black/60" strokeWidth={2.4} />
+            </button>
           </div>
-        ))}
-        <div className="flex items-center justify-between px-4 pb-2 pt-3">
-          <span className="text-[15px] font-semibold text-black/85">购买数量</span>
-          <div className="flex items-center gap-3 rounded-full bg-black/[0.04] px-2 py-1">
-            <button type="button" aria-label="减少" onClick={() => setQty((q) => Math.max(1, q - 1))} className="grid h-7 w-7 place-items-center rounded-full bg-white text-black/70 shadow-sm active:opacity-70">
-              <Minus className="h-4 w-4" strokeWidth={2.4} />
+          {/* 规格组 */}
+          {p.skus.map((g, gi) => (
+            <div key={g.name} className="px-4 pb-1 pt-3">
+              <div className="flex items-center">
+                <span className="text-[15.5px] font-semibold text-black/85">
+                  {g.name}
+                  {g.name === '尺码' ? null : `（${g.options.length}）`}
+                </span>
+                {g.name === '尺码' ? (
+                  <span className="ml-2 text-[12px] text-black/40">
+                    96%买家认为尺码标准 推荐<span className="mx-0.5 font-medium text-[#FF4400]">{sizeGroup?.options[Math.min(2, sizeGroup.options.length - 1)]?.label ?? 'M'}</span>
+                  </span>
+                ) : null}
+                {g.name === '尺码' ? (
+                  <button type="button" onClick={onClose} className="ml-auto text-[12px] text-black/40 active:opacity-60">
+                    创建档案 {'>'}
+                  </button>
+                ) : (
+                  <span className="ml-auto flex items-center gap-1 text-[12px] text-black/40">
+                    <LayoutGrid className="h-3.5 w-3.5" />
+                    大图
+                  </span>
+                )}
+              </div>
+              <div className="mt-2.5 flex flex-wrap gap-2.5">
+                {g.options.map((o) => {
+                  const active = sel[g.name] === o.label;
+                  const optPrice = Math.round((p.price + (o.priceDelta ?? 0)) * 100) / 100;
+                  if (g.name === '尺码') {
+                    return (
+                      <button
+                        key={o.label}
+                        type="button"
+                        disabled={o.soldOut}
+                        onClick={() => setSel((s) => ({ ...s, [g.name]: o.label }))}
+                        className={`min-w-[68px] rounded-lg border px-3 py-2 text-center text-[14px] ${
+                          o.soldOut ? 'border-black/[0.06] text-black/25' : active ? 'border-[#FF5000] font-medium text-[#FF5000]' : 'border-black/[0.12] text-black/75'
+                        }`}
+                      >
+                        {o.label} <span className={`text-[11.5px] ${active ? 'text-[#FF5000]/80' : 'text-black/35'}`}>¥{fmtMoney(optPrice)}</span>
+                      </button>
+                    );
+                  }
+                  return (
+                    <button
+                      key={o.label}
+                      type="button"
+                      disabled={o.soldOut}
+                      onClick={() => setSel((s) => ({ ...s, [g.name]: o.label }))}
+                      className={`relative flex items-center gap-1.5 rounded-lg border py-1 pl-1 pr-3 text-[13px] ${o.soldOut ? 'border-black/[0.06] text-black/25' : active ? 'border-[#FF5000] bg-[#FF5000]/[0.04] font-medium text-[#FF5000]' : 'border-black/[0.12] text-black/75'}`}
+                    >
+                      {o.soldOut ? <span className="absolute -top-2 right-1 rounded bg-black/25 px-1 text-[9px] leading-[14px] text-white">缺货</span> : null}
+                      {o.img ? <img src={o.img} alt={o.label} className={`h-9 w-9 rounded-md object-cover ${o.soldOut ? 'opacity-40 grayscale' : ''}`} draggable={false} /> : null}
+                      <span className="max-w-[150px] truncate">{o.label}</span>
+                      {o.priceDelta ? <span className="text-[11px] opacity-70">+{o.priceDelta}</span> : null}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* 尺码辅助条 */}
+              {g.name === '尺码' && sizeGuide ? (
+                <button type="button" onClick={onClose} className="mt-2.5 flex w-full items-center gap-2 rounded-lg bg-[#EDEEF0] px-3 py-2 text-left active:opacity-80">
+                  <span className="truncate text-[12.5px] text-black/65">
+                    适合身高体重: {sizeGuide.h}cm/{sizeGuide.w}kg&nbsp;&nbsp;肩宽: {sizeGuide.shoulder}cm&nbsp;&nbsp;胸围: {sizeGuide.chest}cm
+                  </span>
+                  <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-black/35" />
+                </button>
+              ) : null}
+            </div>
+          ))}
+          {/* 备注/发票折叠 */}
+          <div className="px-4 pt-3">
+            <button type="button" onClick={() => setRemarkOpen((v) => !v)} className="flex w-full items-center border-t border-black/[0.05] pt-3 text-[13.5px]">
+              <span className="text-black/70">备注 · 发票已折叠</span>
+              <span className="ml-auto flex items-center text-black/40">
+                展开详情
+                <ChevronDown className={`h-4 w-4 transition-transform ${remarkOpen ? 'rotate-180' : ''}`} />
+              </span>
             </button>
-            <span className="min-w-[22px] text-center text-[15px] font-medium">{qty}</span>
-            <button type="button" aria-label="增加" onClick={() => setQty((q) => Math.min(99, q + 1))} className="grid h-7 w-7 place-items-center rounded-full bg-white text-black/70 shadow-sm active:opacity-70">
-              <Plus className="h-4 w-4" strokeWidth={2.4} />
-            </button>
+            {remarkOpen ? (
+              <div className="mt-2 space-y-1.5 rounded-lg bg-black/[0.03] p-3 text-[12.5px] text-black/55">
+                <div>发票抬头：不开发票</div>
+                <div>订单备注：暂无备注</div>
+              </div>
+            ) : null}
+          </div>
+          {/* 顺手买（截图9中部） */}
+          {addon ? (
+            <div className="mt-3 bg-[#F7F8FA] px-4 py-3">
+              <div className="flex items-center">
+                <span className="text-[15px] font-semibold text-black/85">顺手买 · {shopById(addon.shopId).name.slice(0, 6)}</span>
+                <button
+                  type="button"
+                  onClick={() => setAddonIdx((i) => i + 1)}
+                  className="ml-auto flex items-center text-[13px] text-black/45 active:opacity-60"
+                >
+                  换一换
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="mt-2 flex gap-2.5">
+                <img src={tbImg(addon.tag, 200, 200, 0)} alt={addon.title} className="h-16 w-16 shrink-0 rounded-lg object-cover" draggable={false} />
+                <div className="min-w-0 flex-1">
+                  <div className="line-clamp-1 text-[13.5px] font-medium text-black/85">{addon.title}</div>
+                  <div className="mt-0.5 truncate text-[12px] text-black/40">{addon.tags[0] ?? '正品保障'} | 已售{tbSalesText(addon.sales)}</div>
+                  <div className="mt-0.5 flex items-baseline gap-1">
+                    <span className="text-[15px] font-bold text-[#FF4400]">¥{fmtMoney(addon.price)}</span>
+                    {addon.originPrice ? <span className="text-[11px] text-black/30 line-through">¥{fmtMoney(addon.originPrice)}</span> : null}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-label="顺手买勾选"
+                  onClick={() => setAddonSel((v) => !v)}
+                  className={`ml-1 grid h-[20px] w-[20px] shrink-0 self-center place-items-center rounded-full ${addonSel ? 'bg-[#FF5000]' : 'border border-black/20 bg-white'}`}
+                >
+                  {addonSel ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {/* 支付方式（截图9底部单选） */}
+          <div className="mt-2 bg-white px-4 pb-1 pt-1.5">
+            <PayRadioRow icon={<AliPayIcon />} label="支付宝" active={payPref === 'ali'} onClick={() => setPayPref('ali')} />
+            <PayRadioRow icon={<WxPayIcon />} label="微信支付" active={payPref === 'wx'} onClick={() => setPayPref('wx')} />
           </div>
         </div>
-        <div className="px-4 pt-2">
+        {/* 底部按钮 */}
+        <div className="border-t border-black/[0.05] px-4 pb-7 pt-2.5">
+          {mode === 'buy' ? <div className="mb-1 text-right text-[11px] text-[#FF4400]">热卖中，库存充足</div> : null}
           <button
             type="button"
             disabled={!ready}
-            onClick={() => ready && onConfirm(sel, qty)}
+            onClick={() => ready && onConfirm(sel, qty, addonSel && addon ? addon.id : undefined)}
             className="h-12 w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[16px] font-semibold text-white active:opacity-85 disabled:opacity-50"
           >
-            {mode === 'cart' ? '加入购物车' : '立即购买'}
+            {mode === 'cart' ? '加入购物车' : `立即支付 ¥${fmtMoney(totalPrice)}`}
           </button>
         </div>
       </div>
     </div>
   );
 }
-
 /** 评价页（全部评价：种子 + 订单晒单聚合） */
 function ReviewsPage({ p, uid, onBack }: { p: TbProduct; uid: string; onBack: () => void }) {
   const seeds = tbReviewsOf(p.id);
@@ -1187,15 +1567,24 @@ function ProductPage({
     tbPushFoot(uid, p.id);
     setSkuMode(mode);
   };
-  const confirmSku = (sku: Record<string, string>, qty: number) => {
+  const confirmSku = (sku: Record<string, string>, qty: number, addonPid?: string) => {
+    const addonItem = (() => {
+      if (!addonPid) return null;
+      const ap = productById(addonPid);
+      if (!ap) return null;
+      return { pid: ap.id, title: ap.title, img: tbImg(ap.tag, 300, 300, 0), sku: {} as Record<string, string>, price: ap.price, qty: 1 };
+    })();
     if (skuMode === 'cart') {
       tbAddToCart(uid, p.id, sku, qty);
+      if (addonItem) tbAddToCart(uid, addonItem.pid, addonItem.sku, addonItem.qty);
       onCartChanged();
       setSkuMode(null);
       onToast('已加入购物车');
     } else {
       setSkuMode(null);
-      onOpenCheckout([{ pid: p.id, title: p.title, img: tbImg(p.tag, 300, 300, 0), sku, price: skuPriceOf(p, sku), qty }]);
+      const items = [{ pid: p.id, title: p.title, img: tbImg(p.tag, 300, 300, 0), sku, price: skuPriceOf(p, sku), qty }];
+      if (addonItem) items.push(addonItem);
+      onOpenCheckout(items);
     }
   };
   return (
@@ -1353,7 +1742,7 @@ function ProductPage({
         </div>
       </div>
 
-      {skuMode ? <SkuSheet p={p} mode={skuMode} onClose={() => setSkuMode(null)} onConfirm={confirmSku} /> : null}
+      {skuMode ? <SkuSheet p={p} uid={uid} mode={skuMode} onClose={() => setSkuMode(null)} onConfirm={confirmSku} /> : null}
     </div>
   );
 }
@@ -1911,6 +2300,8 @@ function PaySheet({
 
 // ---------------- 订单列表 ----------------
 
+type TbOrderFilter = 'all' | 'pendingPay' | 'pendingDeliver' | 'shipped' | 'refund' | 'completed';
+
 function OrdersPage({
   uid,
   initialTab,
@@ -1919,6 +2310,8 @@ function OrdersPage({
   onToast,
   onPayOrder,
   onOpenProduct,
+  onOpenLogistics,
+  onRate,
 }: {
   uid: string;
   initialTab: TbOrderStatus | 'all';
@@ -1927,8 +2320,12 @@ function OrdersPage({
   onToast: (m: string) => void;
   onPayOrder: (id: string) => void;
   onOpenProduct: (pid: string) => void;
+  onOpenLogistics: (id: string) => void;
+  onRate: (id: string) => void;
 }) {
-  const [tab, setTab] = useState<TbOrderStatus | 'all'>(initialTab);
+  const [filter, setFilter] = useState<TbOrderFilter>(initialTab === 'all' || initialTab === 'cancelled' ? (initialTab === 'cancelled' ? 'refund' : 'all') : initialTab);
+  const [channel, setChannel] = useState<'orders' | 'gou' | 'flash' | 'pig'>('gou');
+  const [kw, setKw] = useState('');
   const [, setTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 5000);
@@ -1938,30 +2335,76 @@ function OrdersPage({
   useEffect(() => {
     tbTickOrders(uid);
   }, [uid]);
-  const orders = tbLoadOrders(uid).filter((o) => (tab === 'all' ? true : o.status === tab));
-  const tabs: { id: TbOrderStatus | 'all'; label: string }[] = [
+  const msgCount = tbLoadMsgs(uid).length;
+  const orders = tbLoadOrders(uid)
+    .filter((o) => (filter === 'all' ? true : filter === 'refund' ? o.status === 'cancelled' : o.status === filter))
+    .filter((o) => {
+      const k = kw.trim();
+      if (!k) return true;
+      return o.shopName.includes(k) || o.items.some((it) => it.title.includes(k));
+    });
+  const filters: { id: TbOrderFilter; label: string }[] = [
     { id: 'all', label: '全部' },
     { id: 'pendingPay', label: '待付款' },
     { id: 'pendingDeliver', label: '待发货' },
     { id: 'shipped', label: '待收货' },
+    { id: 'refund', label: '退款/售后' },
     { id: 'completed', label: '已完成' },
-    { id: 'cancelled', label: '已取消' },
+  ];
+  const channels: { id: 'orders' | 'gou' | 'flash' | 'pig'; label: string; tag?: string }[] = [
+    { id: 'orders', label: '全部订单' },
+    { id: 'gou', label: '购物' },
+    { id: 'flash', label: '闪购', tag: '外卖' },
+    { id: 'pig', label: '飞猪', tag: '旅行' },
   ];
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
-      <div className="sticky top-0 z-30 bg-white pt-[58px]">
-        <div className="flex items-center px-3">
-          <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+      <div className="sticky top-0 z-30 bg-[#f4f4f4] pt-[58px]">
+        <div className="flex items-center gap-2 px-3">
+          <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/5">
             <ArrowLeft className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
           </button>
-          <span className="flex-1 text-center text-[17px] font-semibold text-black/90">我的订单</span>
-          <span className="w-9" />
+          <div className="flex h-9 min-w-0 flex-1 items-center gap-1.5 rounded-full bg-white px-3">
+            <Search className="h-4 w-4 shrink-0 text-black/30" strokeWidth={2.2} />
+            <input value={kw} onChange={(e) => setKw(e.target.value)} placeholder="搜索订单" className="min-w-0 flex-1 bg-transparent text-[14px] text-black/80 outline-none placeholder:text-black/30" />
+          </div>
+          <button type="button" aria-label="工具" onClick={() => onToast('订单工具（演示）')} className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/5">
+            <LayoutGrid className="h-[19px] w-[19px] text-black/75" strokeWidth={2} />
+            {msgCount > 0 ? <span className="absolute -right-0.5 -top-0.5 grid h-[15px] min-w-[15px] place-items-center rounded-full bg-[#FF5000] px-0.5 text-[9px] font-bold text-white">{msgCount > 99 ? '99+' : msgCount}</span> : null}
+          </button>
+          <button type="button" aria-label="更多" onClick={() => onToast('更多（演示）')} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/5">
+            <MoreHorizontal className="h-[20px] w-[20px] text-black/75" strokeWidth={2} />
+          </button>
         </div>
+        {/* 频道 tab（截图6：全部订单/购物/闪购/飞猪） */}
         <div className="mt-1 flex items-center gap-5 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {tabs.map((t) => (
-            <button key={t.id} type="button" onClick={() => setTab(t.id)} className={`relative shrink-0 pb-2 text-[15px] ${tab === t.id ? 'font-semibold text-[#FF5000]' : 'text-black/60'}`}>
-              {t.label}
-              {tab === t.id ? <span className="absolute inset-x-0 bottom-0 h-[3px] rounded-full bg-[#FF5000]" /> : null}
+          {channels.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => {
+                setChannel(c.id);
+                if (c.id === 'flash') onToast('闪购订单已并入外卖频道（演示）');
+                if (c.id === 'pig') onToast('飞猪订单已并入旅行频道（演示）');
+              }}
+              className={`relative shrink-0 pb-2 text-[16px] ${channel === c.id ? 'font-semibold text-black/90' : 'text-black/50'}`}
+            >
+              {c.label}
+              {c.tag ? <span className="ml-0.5 inline-block rounded-[3px] bg-[#FF5000] px-0.5 py-px align-[2px] text-[9px] font-bold leading-none text-white">{c.tag}</span> : null}
+              {channel === c.id ? <span className="absolute inset-x-1 bottom-0 h-[3px] rounded-full bg-[#FF5000]" /> : null}
+            </button>
+          ))}
+        </div>
+        {/* 状态筛选胶囊 */}
+        <div className="flex items-center gap-2 overflow-x-auto px-3 pb-2.5 pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {filters.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setFilter(f.id)}
+              className={`h-8 shrink-0 rounded-full px-3.5 text-[13px] ${filter === f.id ? 'bg-[#FFE8DA] font-medium text-[#FF5000]' : 'bg-white text-black/60'}`}
+            >
+              {f.label}
             </button>
           ))}
         </div>
@@ -1970,12 +2413,12 @@ function OrdersPage({
         {orders.length === 0 ? (
           <div className="grid place-items-center bg-white py-16">
             <ShoppingBag className="h-12 w-12 text-black/10" strokeWidth={1.6} />
-            <div className="mt-3 text-[15px] text-black/45">暂无相关订单</div>
+            <div className="mt-3 text-[15px] text-black/45">{kw.trim() ? '没有找到相关订单' : '暂无相关订单'}</div>
           </div>
         ) : (
-          <div className="space-y-2 px-2 pt-2">
+          <div className="space-y-2 px-2 pt-1">
             {orders.map((o) => (
-              <OrderCard key={o.id} o={o} uid={uid} onOpen={() => onOpenOrder(o.id)} onPay={() => onPayOrder(o.id)} onToast={onToast} onOpenProduct={onOpenProduct} />
+              <OrderCard key={o.id} o={o} uid={uid} onOpen={() => onOpenOrder(o.id)} onPay={() => onPayOrder(o.id)} onToast={onToast} onOpenProduct={onOpenProduct} onOpenLogistics={onOpenLogistics} onRate={onRate} />
             ))}
           </div>
         )}
@@ -1984,48 +2427,107 @@ function OrdersPage({
   );
 }
 
-/** 订单卡（列表项，含状态操作按钮） */
-function OrderCard({ o, uid, onOpen, onPay, onToast, onOpenProduct }: { o: TbOrder; uid: string; onOpen: () => void; onPay: () => void; onToast: (m: string) => void; onOpenProduct: (pid: string) => void }) {
+/** 订单卡（截图6：天猫头 + 服务标签 + 物流条 + 状态按钮组） */
+function OrderCard({
+  o,
+  uid,
+  onOpen,
+  onPay,
+  onToast,
+  onOpenProduct,
+  onOpenLogistics,
+  onRate,
+}: {
+  o: TbOrder;
+  uid: string;
+  onOpen: () => void;
+  onPay: () => void;
+  onToast: (m: string) => void;
+  onOpenProduct: (pid: string) => void;
+  onOpenLogistics: (id: string) => void;
+  onRate: (id: string) => void;
+}) {
   const countdown = useCountdown(o.status === 'pendingPay' ? o.createdAt + TB_PAY_TTL : undefined);
-  const st = tbStatusText(o);
+  const shop = shopById(o.shopId);
+  const nodeIdx = o.track.length - 1;
+  const statusRight = (() => {
+    switch (o.status) {
+      case 'pendingPay':
+        return `待付款 · 剩${countdown}`;
+      case 'pendingDeliver':
+        return '待发货';
+      case 'shipped':
+        return '卖家已发货';
+      case 'completed':
+        return '交易成功';
+      case 'cancelled':
+        return o.refund ? '退款成功' : '交易关闭';
+    }
+  })();
+  const rebuy = () => {
+    for (const it of o.items) tbAddToCart(uid, it.pid, it.sku, it.qty);
+    onToast('已将订单商品加入购物车');
+  };
   return (
-    <div className="rounded-xl bg-white p-3">
-      <button type="button" onClick={onOpen} className="flex w-full items-center gap-2">
-        <span className="truncate text-[14px] font-semibold text-black/85">{o.shopName}</span>
+    <div className="rounded-2xl bg-white px-3.5 py-3">
+      <button type="button" onClick={onOpen} className="flex w-full items-center gap-1.5">
+        {shop.tmall ? <TmallMark /> : <span className="mr-0.5 inline-block rounded-[3px] bg-[#FF5000] px-1 py-[1px] text-[10px] font-bold leading-none text-white">淘宝</span>}
+        <span className="min-w-0 truncate text-[14px] font-semibold text-black/85">{o.shopName}</span>
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/30" />
-        <span className={`ml-auto shrink-0 text-[13px] font-medium ${o.status === 'pendingPay' ? 'text-[#FF5000]' : o.status === 'completed' ? 'text-black/50' : o.status === 'cancelled' ? 'text-black/40' : 'text-[#FF6A1E]'}`}>
-          {o.status === 'pendingPay' ? `${st} · 剩${countdown}` : st}
-        </span>
+        <span className={`ml-auto shrink-0 text-[13px] ${o.status === 'pendingPay' || o.status === 'shipped' ? 'text-[#FF6A1E]' : o.status === 'cancelled' ? 'text-black/40' : 'text-black/50'}`}>{statusRight}</span>
       </button>
-      <div className="mt-2 space-y-2">
+      <div className="mt-2.5 space-y-3">
         {o.items.map((it, i) => (
           <button key={i} type="button" onClick={() => onOpenProduct(it.pid)} className="flex w-full gap-2.5 text-left">
-            <img src={it.img} alt={it.title} className="h-[72px] w-[72px] shrink-0 rounded-lg object-cover" draggable={false} />
+            <img src={it.img} alt={it.title} className="h-[74px] w-[74px] shrink-0 rounded-lg object-cover" draggable={false} />
             <div className="min-w-0 flex-1">
-              <div className="line-clamp-2 text-[13px] leading-[18px] text-black/80">{it.title}</div>
-              <div className="mt-0.5 truncate text-[11px] text-black/35">{Object.entries(it.sku).map(([k, v]) => `${k}：${v}`).join('；')}</div>
-            </div>
-            <div className="shrink-0 text-right">
-              <div className="text-[13px] text-black/70">¥{fmtMoney(it.price)}</div>
-              <div className="mt-0.5 text-[11px] text-black/35">x{it.qty}</div>
+              <div className="flex gap-2">
+                <span className="line-clamp-1 min-w-0 flex-1 text-[13.5px] leading-5 text-black/85">{it.title}</span>
+                <span className="shrink-0 text-[13.5px] leading-5 text-black/70">¥{fmtMoney(it.price)}</span>
+              </div>
+              <div className="mt-0.5 flex items-center">
+                <span className="truncate text-[12px] text-black/40">{Object.entries(it.sku).map(([k, v]) => `${k}：${v}`).join('；')}</span>
+                <span className="ml-auto shrink-0 text-[12px] text-black/40">x{it.qty}</span>
+              </div>
+              <div className="mt-1 flex gap-2.5 text-[11.5px] text-[#FF6A1E]">
+                <span>退货宝</span>
+                <span>假一赔四</span>
+                <span>极速退款</span>
+              </div>
             </div>
           </button>
         ))}
       </div>
-      <div className="mt-2 flex items-center justify-between border-t border-black/[0.05] pt-2">
+      {/* 物流条（运输中/派送中/待取件，点击进物流页） */}
+      {o.status === 'shipped' && nodeIdx >= 0 ? (
+        <button type="button" onClick={() => onOpenLogistics(o.id)} className="mt-2.5 flex w-full items-center gap-2 rounded-xl bg-[#F6F7F8] px-3 py-2.5 text-left active:opacity-80">
+          {nodeIdx >= 3 ? <Package className="h-4 w-4 shrink-0 text-black/70" strokeWidth={2} /> : nodeIdx === 2 ? <Bike className="h-4 w-4 shrink-0 text-black/70" strokeWidth={2} /> : <Truck className="h-4 w-4 shrink-0 text-black/70" strokeWidth={2} />}
+          <span className="shrink-0 text-[13px] font-medium text-black/80">{tbTrackPhaseText(nodeIdx)}</span>
+          <span className="truncate text-[12px] text-black/40">{nodeIdx >= 2 ? '预计今天送达' : '预计明天送达'}</span>
+          <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-black/25" />
+        </button>
+      ) : null}
+      <div className="mt-2.5 flex items-center justify-end">
         <span className="text-[12px] text-black/45">
-          {o.status === 'pendingPay' ? '应付' : '实付'} <span className="text-[15px] font-semibold text-black/85">¥{fmtMoney(o.total)}</span>
-          {o.discount > 0 ? <span className="ml-1 text-[#FF4400]">（共减¥{fmtMoney(o.discount)}）</span> : null}
+          {o.status === 'pendingPay' ? '应付' : '实付款'} <span className="text-[16px] font-semibold text-black/85">¥{fmtMoney(o.total)}</span>
+          {o.discount > 0 ? <span className="ml-1 text-[#FF4400]">共减¥{fmtMoney(o.discount)}</span> : null}
         </span>
-        <div className="flex gap-2">
+      </div>
+      <div className="mt-2.5 flex items-center">
+        {o.status === 'shipped' || o.status === 'completed' ? (
+          <button type="button" onClick={onOpen} className="text-[13px] text-black/50 active:opacity-60">
+            更多
+          </button>
+        ) : (
+          <span />
+        )}
+        <div className="ml-auto flex gap-2">
           {o.status === 'pendingPay' ? (
             <>
               <button
                 type="button"
                 onClick={() => {
-                  if (tbCancelOrder(uid, o.id, '买家主动取消')) {
-                    onToast('订单已取消');
-                  }
+                  if (tbCancelOrder(uid, o.id, '买家主动取消')) onToast('订单已取消');
                 }}
                 className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70"
               >
@@ -2036,34 +2538,55 @@ function OrderCard({ o, uid, onOpen, onPay, onToast, onOpenProduct }: { o: TbOrd
               </button>
             </>
           ) : null}
+          {o.status === 'pendingDeliver' ? (
+            <>
+              <button type="button" onClick={() => onToast('已提醒商家尽快发货')} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                提醒发货
+              </button>
+              <button type="button" onClick={onOpen} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                退款
+              </button>
+            </>
+          ) : null}
           {o.status === 'shipped' ? (
-            <button type="button" onClick={onOpen} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
-              查看物流
-            </button>
+            <>
+              <button type="button" onClick={() => onToast('收货时间已延长 7 天')} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                延长收货
+              </button>
+              <button type="button" onClick={() => onOpenLogistics(o.id)} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                查看物流
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (tbConfirmReceive(uid, o.id)) {
+                    tbPushMsg(uid, { kind: 'logistics', title: '确认收货', text: `订单已确认收货 ¥${fmtMoney(o.total)}，记得评价哦`, orderId: o.id });
+                    onToast('确认收货成功');
+                  }
+                }}
+                className="rounded-full bg-[#FFF1E6] px-3.5 py-1.5 text-[13px] font-semibold text-[#FF5000] active:opacity-80"
+              >
+                确认收货
+              </button>
+            </>
           ) : null}
           {o.status === 'completed' ? (
-            <button
-              type="button"
-              onClick={() => {
-                const cart = o.items.map((it) => ({ pid: it.pid, sku: it.sku, qty: it.qty, checked: true, at: Date.now() }));
-                for (const c of cart) tbAddToCart(uid, c.pid, c.sku, c.qty);
-                onToast('已将订单商品加入购物车');
-              }}
-              className="rounded-full border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70"
-            >
-              再来一单
-            </button>
+            <>
+              {o.review ? (
+                <span className="rounded-full border border-black/[0.08] px-3.5 py-1.5 text-[13px] text-black/30">已评价</span>
+              ) : (
+                <button type="button" onClick={() => onRate(o.id)} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                  评价
+                </button>
+              )}
+              <button type="button" onClick={rebuy} className="rounded-full border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70">
+                再买一单
+              </button>
+            </>
           ) : null}
-          {o.status === 'cancelled' && !o.refund ? (
-            <button
-              type="button"
-              onClick={() => {
-                for (const it of o.items) tbAddToCart(uid, it.pid, it.sku, it.qty);
-                onToast('已将订单商品加入购物车');
-              }}
-              className="rounded-full border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70"
-            >
-              再来一单
+          {o.status === 'cancelled' ? (
+            <button type="button" onClick={rebuy} className="rounded-full border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70">
+              再买一单
             </button>
           ) : null}
         </div>
@@ -2071,8 +2594,30 @@ function OrderCard({ o, uid, onOpen, onPay, onToast, onOpenProduct }: { o: TbOrd
     </div>
   );
 }
-
 // ---------------- 订单详情 ----------------
+/** 订单信息行（详情页通用） */
+function OdInfoRow({ label, value, arrow, copyable, onCopy }: { label: string; value: string; arrow?: boolean; copyable?: boolean; onCopy?: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-[13px]">
+      <span className="shrink-0 text-black/45">{label}</span>
+      <span className="flex min-w-0 items-center gap-1 text-black/70">
+        <span className="truncate">{value}</span>
+        {arrow ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/25" /> : null}
+        {copyable ? (
+          <button type="button" aria-label={`复制${label}`} onClick={onCopy} className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-black/[0.04] active:opacity-60">
+            <Copy className="h-3 w-3 text-black/50" />
+          </button>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+const TB_GUARDS = [
+  { t: '破损包退', d: '破损可退货或退款，商家承担运费' },
+  { t: '假一赔四', d: '收到商品非正品，可获成交金额四倍赔偿' },
+  { t: '极速退款', d: '满足相应条件，极速退款到账' },
+];
 
 function OrderDetailPage({
   uid,
@@ -2082,6 +2627,9 @@ function OrderDetailPage({
   onPayOrder,
   onOpenProduct,
   onRate,
+  onOpenLogistics,
+  onOpenAddrPicker,
+  onOpenShop,
 }: {
   uid: string;
   orderId: string;
@@ -2090,16 +2638,68 @@ function OrderDetailPage({
   onPayOrder: (id: string) => void;
   onOpenProduct: (pid: string) => void;
   onRate: (id: string) => void;
+  onOpenLogistics: (id: string) => void;
+  onOpenAddrPicker: () => void;
+  onOpenShop: (shopId: string) => void;
 }) {
   const [, setTick] = useState(0);
+  const [payPref, setPayPref] = useState<'wx' | 'ali'>('wx');
+  const [priceOpen, setPriceOpen] = useState(true);
   useEffect(() => {
-    const t = setInterval(() => setTick((n) => n + 1), 5000);
+    const t = setInterval(() => setTick((n) => n + 1), 4000);
     return () => clearInterval(t);
   }, []);
   tbTickOrders(uid);
   const o = tbLoadOrders(uid).find((x) => x.id === orderId);
   // 倒计时 hook 无条件调用（hooks 规则：不能在早 return 之后）
   const countdown = useCountdown(o?.status === 'pendingPay' ? o.createdAt + TB_PAY_TTL : undefined);
+  const isPendingPay = o?.status === 'pendingPay';
+  // 待付款订单「修改地址」：AddrPickerSheet 改默认地址后同步到本单
+  useEffect(() => {
+    if (!isPendingPay) return;
+    const t = setInterval(() => {
+      const cur = tbCurAddr(uid);
+      const list = tbLoadOrders(uid);
+      const hit = list.find((x) => x.id === orderId);
+      if (cur && hit && hit.address && cur.id !== hit.address.id) {
+        hit.address = cur;
+        tbSaveOrders(uid, list);
+        setTick((n) => n + 1);
+      }
+    }, 800);
+    return () => clearInterval(t);
+  }, [isPendingPay, uid, orderId]);
+
+  const copyText = (text: string, tip: string) => {
+    try {
+      void navigator.clipboard.writeText(text);
+      onToast(tip);
+    } catch {
+      onToast('复制失败，请手动选择');
+    }
+  };
+  /** 退款（原路退回） */
+  const applyRefund = async () => {
+    if (!o || !o.payIdp || !o.payMethodId) {
+      onToast('退款信息异常，请联系客服');
+      return;
+    }
+    const okPay = await tbRefundToOrigin(o);
+    if (!okPay) {
+      onToast('退款失败，请稍后重试');
+      return;
+    }
+    tbMarkRefund(uid, o.id, o.total, '买家申请退款，已原路退回');
+    tbPushMsg(uid, { kind: 'refund', title: '退款成功', text: `订单退款 ¥${fmtMoney(o.total)} 已原路退回（${o.payChannelLabel ?? '原支付方式'}）`, orderId: o.id });
+    onToast('退款成功，已原路退回');
+    setTick((n) => n + 1);
+  };
+  const addAllToCart = () => {
+    if (!o) return;
+    for (const it of o.items) tbAddToCart(uid, it.pid, it.sku, it.qty);
+    onToast('已将订单商品加入购物车');
+  };
+
   if (!o) {
     return (
       <div className="grid h-full place-items-center bg-white">
@@ -2108,161 +2708,447 @@ function OrderDetailPage({
     );
   }
   const st = tbStatusText(o);
-  const copyOrderId = () => {
-    try {
-      void navigator.clipboard.writeText(o.id);
-      onToast('订单号已复制');
-    } catch {
-      onToast('复制失败，请手动选择');
-    }
-  };
-  /** 退款（原路退回） */
-  const applyRefund = async () => {
-    if (o.status === 'pendingDeliver' || o.status === 'shipped' || o.status === 'completed') {
-      if (!o.payIdp || !o.payMethodId) {
-        onToast('退款信息异常，请联系客服');
-        return;
-      }
-      const okPay = await tbRefundToOrigin(o);
-      if (!okPay) {
-        onToast('退款失败，请稍后重试');
-        return;
-      }
-      tbMarkRefund(uid, o.id, o.total, '买家申请退款，已原路退回');
-      tbPushMsg(uid, { kind: 'refund', title: '退款成功', text: `订单退款 ¥${fmtMoney(o.total)} 已原路退回（${o.payChannelLabel ?? '原支付方式'}）`, orderId: o.id });
-      onToast('退款成功，已原路退回');
-      setTick((n) => n + 1);
-    }
-  };
-  const subCopy = (() => {
-    switch (o.status) {
-      case 'pendingPay':
-        return `请在 ${countdown} 内完成支付，超时订单自动取消`;
-      case 'pendingDeliver':
-        return '商家正在准备发货，请耐心等待';
-      case 'shipped':
-        return o.track.length >= TB_TRACK_NODES.length ? '包裹已到驿站，请及时取件或确认收货' : '包裹运输中，请留意物流更新';
-      case 'completed':
-        return '交易完成，感谢您的购买';
-      case 'cancelled':
-        return o.cancelReason ?? '订单已取消';
-    }
+  const shop = shopById(o.shopId);
+  const man = tbCourierMan(o.id);
+  const manPhone = tbCourierPhone(o.id);
+  const nodeIdx = o.track.length - 1;
+  const qtyAll = o.items.reduce((n, it) => n + it.qty, 0);
+  const coinGold = Math.max(0.01, Math.round(o.total * 0.025 * 100) / 100);
+  const company = `${shop.name.replace(/官方旗舰店|旗舰店|专营店|专卖店|官方/g, '')}有限公司`;
+  const promiseText = (() => {
+    if (!o.paidAt) return '48小时内发货';
+    const d = new Date(o.paidAt + 2 * 86_400_000);
+    return `后天${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}前发货`;
   })();
-  return (
-    <div className="flex h-full flex-col bg-[#f4f4f4]">
-      <TopBar title="订单详情" onBack={onBack} />
-      <div className="flex-1 overflow-y-auto pb-10">
-        {/* 状态头 */}
-        <div className="bg-gradient-to-r from-[#FF6A1E] to-[#FF4400] px-4 py-4 text-white">
-          <div className="text-[19px] font-bold">{o.status === 'cancelled' && o.refund ? '退款成功' : st}</div>
-          <div className="mt-1 text-[13px] text-white/85">{subCopy}</div>
-        </div>
-        {/* 收货地址 */}
-        {o.address ? (
-          <div className="mt-2 flex items-start gap-2.5 bg-white px-4 py-3">
-            <MapPin className="mt-0.5 h-5 w-5 shrink-0 text-[#FF5000]" strokeWidth={2.1} />
+
+  /** 商品行（详情页通用；variant 区分状态口径） */
+  const itemRows = (variant: 'pay' | 'deliver' | 'done') => (
+    <div className="mt-2 space-y-3.5">
+      {o.items.map((it, i) => {
+        const skuText = Object.entries(it.sku).map(([k, v]) => `${k}：${v}`).join('；');
+        const origin = Math.round(it.price * 1.32 * 100) / 100;
+        return (
+          <button key={i} type="button" onClick={() => onOpenProduct(it.pid)} className="flex w-full gap-2.5 text-left">
+            <img src={it.img} alt={it.title} className="h-[78px] w-[78px] shrink-0 rounded-lg object-cover" draggable={false} />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <span className="text-[15px] font-semibold text-black/85">{o.address.name}</span>
-                <span className="text-[13px] text-black/45">{o.address.phone.slice(0, 3)}****{o.address.phone.slice(7)}</span>
+              <div className="flex gap-2">
+                <span className="line-clamp-1 min-w-0 flex-1 text-[14px] leading-5 text-black/85">{it.title}</span>
+                <span className="shrink-0 text-[14px] leading-5 text-black/70">¥{fmtMoney(it.price)}</span>
               </div>
-              <div className="mt-0.5 text-[13px] leading-5 text-black/60">{o.address.region} {o.address.detail}</div>
-            </div>
-          </div>
-        ) : null}
-        {/* 物流信息 */}
-        {o.status === 'shipped' || o.status === 'completed' ? (
-          <div className="mt-2 bg-white px-4 py-3">
-            <div className="flex items-center gap-2">
-              <Truck className="h-4 w-4 text-[#FF5000]" />
-              <span className="text-[14px] font-semibold text-black/85">物流信息</span>
-              <span className="ml-auto text-[11px] text-black/35">圆通速递</span>
-            </div>
-            {o.track.length > 0 ? (
-              <div className="mt-2 space-y-0">
-                {[...o.track].reverse().map((t, i) => (
-                  <div key={i} className="flex gap-2.5">
-                    <div className="flex flex-col items-center">
-                      <span className={`mt-1 h-2 w-2 rounded-full ${i === 0 ? 'bg-[#FF5000]' : 'bg-black/15'}`} />
-                      {i < o.track.length - 1 ? <span className="my-0.5 w-px flex-1 bg-black/10" /> : null}
-                    </div>
-                    <div className="pb-3">
-                      <div className={`text-[13px] ${i === 0 ? 'font-medium text-black/85' : 'text-black/55'}`}>{t.text}</div>
-                      <div className="mt-0.5 text-[11px] text-black/35">{fmtTime(t.at)}</div>
-                    </div>
+              <div className="mt-0.5 flex items-center gap-2">
+                {variant === 'deliver' ? <span className="shrink-0 rounded-[3px] bg-black/[0.06] px-1 py-px text-[10px] text-black/45">可换</span> : null}
+                <span className="truncate text-[12px] text-black/40">{skuText}</span>
+                {variant === 'deliver' && origin > it.price ? <span className="ml-auto shrink-0 text-[12px] text-black/30 line-through">¥{fmtMoney(origin)}</span> : null}
+                <span className="shrink-0 text-[12px] text-black/40">x{it.qty}</span>
+              </div>
+              {variant === 'deliver' ? (
+                <div className="mt-1 flex items-center gap-2 text-[12px] text-[#00A860]">
+                  <span>破损包退</span>
+                  <span>假一赔四</span>
+                  <span>极速退款</span>
+                  <ChevronRight className="h-3 w-3 text-[#00A860]/60" />
+                </div>
+              ) : (
+                <>
+                  <div className="mt-1 flex items-center text-[12px] text-[#00A860]">
+                    <span>极速退款</span>
+                    <span className="ml-1.5">7天无理由退货</span>
+                    <ChevronRight className="h-3 w-3 text-[#00A860]/60" />
                   </div>
+                  <div className="mt-0.5 text-[12px] text-black/60">
+                    实付价 <span className="font-semibold text-black/85">¥{fmtMoney(it.price * it.qty)}</span>
+                    <span className="ml-1.5 text-black/35">价格明细 {'>'}</span>
+                  </div>
+                  {variant === 'done' ? <div className="mt-0.5 truncate text-[11px] text-black/30">{company}</div> : null}
+                </>
+              )}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  return (
+    <div className="relative flex h-full flex-col bg-[#f4f4f4]">
+      <TopBar
+        title={o.status === 'cancelled' && o.refund ? '退款成功' : o.status === 'completed' ? '交易成功' : st}
+        onBack={onBack}
+        right={
+          <button type="button" aria-label="复制订单信息" onClick={() => copyText(o.id, '订单号已复制')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+            <ClipboardList className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
+          </button>
+        }
+      />
+      <div className="flex-1 overflow-y-auto pb-32">
+        {/* ============ 待付款（截图7） ============ */}
+        {o.status === 'pendingPay' ? (
+          <>
+            <div className="bg-white px-4 pb-3.5 pt-4">
+              <div className="flex items-center gap-2">
+                <Truck className="h-5 w-5 text-[#00B578]" strokeWidth={2.1} />
+                <span className="text-[17px] font-semibold text-[#00B578]">48小时内发货</span>
+              </div>
+              <div className="ml-2 my-1 h-6 w-px border-l border-dashed border-black/15" />
+              <div className="flex items-center gap-2">
+                <MapPin className="h-5 w-5 shrink-0 text-black/75" strokeWidth={2.1} />
+                <span className="min-w-0 truncate text-[17px] font-semibold text-black/85">送至 {o.address?.detail ?? '待填写地址'}</span>
+                <button type="button" onClick={onOpenAddrPicker} className="ml-auto flex shrink-0 items-center text-[13px] text-black/45 active:opacity-70">
+                  修改
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {o.address ? (
+                <div className="mt-1 pl-7 text-[13px] text-black/45">
+                  {o.address.name} {tbMaskPhone(o.address.phone)}
+                  <span className="ml-1.5 rounded border border-black/10 px-1 py-px text-[10px] text-black/40">号码保护中</span>
+                </div>
+              ) : null}
+            </div>
+            <div className="mt-2 bg-white px-4 py-3">
+              <div className="flex items-center gap-2.5">
+                <img src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-10 w-10 rounded-lg object-cover" draggable={false} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
+                  <div className="mt-0.5 text-[11px] text-black/35">平均2天退款</div>
+                </div>
+                <button type="button" onClick={() => onOpenShop(shop.id)} className="flex shrink-0 items-center text-[13px] text-black/50 active:opacity-70">
+                  进店逛逛
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {itemRows('pay')}
+              <div className="mt-2.5 flex justify-end">
+                <button type="button" onClick={addAllToCart} className="rounded-full border border-black/12 px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
+                  加入购物车
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 space-y-2.5 bg-white px-4 py-3.5 text-[13.5px]">
+              <div className="flex items-center justify-between">
+                <span className="text-black/55">
+                  商品总价 <span className="text-[12px] text-black/35">共{qtyAll}件</span>
+                </span>
+                <span className="text-black/80">¥{fmtMoney(o.itemTotal)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-black/55">运费</span>
+                <span className="text-black/80">{o.freight === 0 ? '包邮' : `¥${fmtMoney(o.freight)}`}</span>
+              </div>
+              {o.discount > 0 ? (
+                <button type="button" onClick={() => onToast('天降礼金：平台立减优惠')} className="flex w-full items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-black/55">
+                    <span className="grid h-4 w-4 place-items-center rounded-[4px] bg-[#FF0036] text-[9px] font-bold text-white">¥</span>
+                    平台优惠 天降礼金
+                  </span>
+                  <span className="flex items-center text-[#FF4400]">
+                    -¥{fmtMoney(o.discount)}
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </span>
+                </button>
+              ) : null}
+              <div className="flex items-center justify-between border-t border-black/[0.05] pt-2.5">
+                <span className="text-[15px] font-semibold text-black/85">
+                  需付款 {o.discount > 0 ? <span className="text-[13px] font-normal text-[#FF4400]">共减¥{fmtMoney(o.discount)}</span> : null}
+                </span>
+                <Price value={o.total} size={20} />
+              </div>
+            </div>
+            {/* 支付方式（截图7：支付宝 / 微信支付单选） */}
+            <div className="mt-2 bg-white px-4 py-1.5">
+              <PayRadioRow icon={<AliPayIcon />} label="支付宝" active={payPref === 'ali'} onClick={() => setPayPref('ali')} />
+              <PayRadioRow icon={<WxPayIcon />} label="微信支付" active={payPref === 'wx'} onClick={() => setPayPref('wx')} />
+            </div>
+            <div className="mt-2 space-y-2.5 bg-white px-4 py-3.5">
+              <div className="flex items-center text-[13px]">
+                <span className="font-medium text-black/80">订单信息 共2项</span>
+                <ChevronDown className="ml-1 h-4 w-4 text-black/30" />
+                <span className="ml-auto flex min-w-0 items-center gap-1 text-black/65">
+                  <span className="truncate">{o.id}</span>
+                  <span className="mx-0.5 h-3 w-px bg-black/10" />
+                  <button type="button" onClick={() => copyText(o.id, '订单号已复制')} className="text-[12px] text-black/45 active:opacity-60">
+                    复制
+                  </button>
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="text-black/45">订单保障</span>
+                <span className="flex items-center text-black/55">
+                  凭据：今日下单交易快照
+                  <ChevronRight className="h-3.5 w-3.5 text-black/25" />
+                </span>
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {/* ============ 待发货（截图4） ============ */}
+        {o.status === 'pendingDeliver' ? (
+          <>
+            <button type="button" onClick={() => onToast('商家承诺时限内发货')} className="flex w-full items-center gap-2 bg-white px-4 py-4 text-left active:opacity-80">
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#00B578]/10">
+                <Zap className="h-3.5 w-3.5 text-[#00B578]" strokeWidth={2.4} />
+              </span>
+              <span className="text-[15.5px] font-semibold text-black/85">承诺{promiseText}</span>
+              <span className="mx-1 h-3.5 w-px bg-black/10" />
+              <span className="text-[13px] text-black/45">预计明天发货</span>
+              <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-black/25" />
+            </button>
+            <div className="mt-2 bg-white px-4 py-3">
+              <div className="flex items-center gap-1.5">
+                {shop.tmall ? <TmallMark /> : <span className="mr-1 inline-block rounded-[3px] bg-[#FF5000] px-1 py-[1px] text-[10px] font-bold leading-none text-white">淘宝</span>}
+                <span className="truncate text-[14.5px] font-semibold text-black/85">{shop.name}</span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/30" />
+              </div>
+              {itemRows('deliver')}
+              <div className="mt-3 flex justify-end gap-2">
+                <button type="button" onClick={() => onToast('可在商品页重新选择款式')} className="rounded-full bg-[#FFF1E6] px-3.5 py-1.5 text-[13px] text-[#FF6A1E] active:opacity-75">
+                  更换款式
+                </button>
+                <button type="button" onClick={addAllToCart} className="rounded-full bg-black/[0.04] px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
+                  加入购物车
+                </button>
+                <button type="button" onClick={() => void applyRefund()} className="rounded-full bg-black/[0.04] px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
+                  退款
+                </button>
+              </div>
+              <button type="button" onClick={() => setPriceOpen((v) => !v)} className="mt-4 flex w-full items-center">
+                <span className="flex items-center gap-1 text-[14px] text-black/60">
+                  价格明细
+                  <ChevronDown className={`h-4 w-4 text-black/35 transition-transform ${priceOpen ? '' : '-rotate-90'}`} />
+                </span>
+                <span className="ml-auto flex items-baseline gap-0.5">
+                  <span className="text-[12px] text-black/50">实付款</span>
+                  <Price value={o.total} size={19} />
+                </span>
+              </button>
+              {priceOpen ? (
+                <div className="mt-2 space-y-1.5">
+                  <div className="text-right text-[12px] text-[#FF6A1E]">
+                    <span className="mr-1 inline-grid h-3.5 w-3.5 place-items-center rounded-full border border-[#FF6A1E] align-[-2px] text-[9px] font-bold">¥</span>
+                    其中淘金币已抵 ¥{fmtMoney(coinGold)}
+                  </div>
+                  <div className="flex justify-between text-[12.5px]">
+                    <span className="text-black/45">商品总价</span>
+                    <span className="text-black/70">¥{fmtMoney(o.itemTotal)}</span>
+                  </div>
+                  <div className="flex justify-between text-[12.5px]">
+                    <span className="text-black/45">运费</span>
+                    <span className="text-black/70">{o.freight === 0 ? '包邮' : `¥${fmtMoney(o.freight)}`}</span>
+                  </div>
+                  {o.discount > 0 ? (
+                    <div className="flex justify-between text-[12.5px]">
+                      <span className="text-black/45">平台优惠</span>
+                      <span className="text-[#FF4400]">-¥{fmtMoney(o.discount)}</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <div className="mt-2 space-y-3 bg-white px-4 py-3.5">
+              <OdInfoRow label="付款时间" value={fmtFullTime(o.paidAt ?? o.createdAt)} />
+              <OdInfoRow label="创建时间" value={fmtFullTime(o.createdAt)} />
+              <OdInfoRow label="支付宝交易号" value={`2025${o.id.slice(0, 20)}`} copyable onCopy={() => copyText(`2025${o.id.slice(0, 20)}`, '交易号已复制')} />
+              <OdInfoRow label="天猫积分" value={`获得${Math.max(1, Math.floor(o.total))}点积分`} arrow />
+              <OdInfoRow label="交易快照" value="发生交易争议时，可作为判断依据" arrow />
+              <OdInfoRow label="订单信息" value={o.id} copyable onCopy={() => copyText(o.id, '订单号已复制')} />
+            </div>
+            <div className="mt-2 bg-white px-4 py-3.5">
+              <div className="flex items-center">
+                <span className="text-[14.5px] font-semibold text-black/85">服务保障</span>
+                <button type="button" onClick={() => onToast('服务保障说明（演示）')} className="ml-auto flex items-center text-[13px] text-[#FF6A1E]">
+                  查看更多
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="mt-2.5 grid grid-cols-3 gap-2">
+                {TB_GUARDS.map((g) => (
+                  <button key={g.t} type="button" onClick={() => onToast(`${g.t}：${g.d}`)} className="rounded-lg bg-[#F7F8FA] p-2.5 text-left active:opacity-75">
+                    <div className="flex items-center text-[13px] font-semibold text-black/80">
+                      {g.t}
+                      <ChevronRight className="h-3 w-3 text-black/30" />
+                    </div>
+                    <div className="mt-1 text-[10.5px] leading-4 text-black/35">{g.d}</div>
+                  </button>
                 ))}
               </div>
-            ) : (
-              <div className="mt-2 text-[13px] text-black/40">暂无物流信息</div>
-            )}
-          </div>
+            </div>
+          </>
         ) : null}
-        {/* 商品 */}
-        <div className="mt-2 bg-white px-4 py-3">
-          <div className="flex items-center gap-2 pb-2">
-            <span className="text-[14px] font-semibold text-black/85">{o.shopName}</span>
-            <ChevronRight className="h-3.5 w-3.5 text-black/30" />
-            <span className={`ml-auto text-[12px] ${o.status === 'pendingPay' ? 'text-[#FF5000]' : 'text-black/50'}`}>{o.status === 'pendingPay' ? `${st} · 剩${countdown}` : st}</span>
-          </div>
-          {o.items.map((it, i) => (
-            <button key={i} type="button" onClick={() => onOpenProduct(it.pid)} className="flex w-full gap-2.5 py-1.5 text-left">
-              <img src={it.img} alt={it.title} className="h-[72px] w-[72px] shrink-0 rounded-lg object-cover" draggable={false} />
-              <div className="min-w-0 flex-1">
-                <div className="line-clamp-2 text-[13px] leading-[18px] text-black/80">{it.title}</div>
-                <div className="mt-0.5 truncate text-[11px] text-black/35">{Object.entries(it.sku).map(([k, v]) => `${k}：${v}`).join('；')}</div>
-                <div className="mt-1 text-[11px] text-black/40">7天无理由退货</div>
+
+        {/* ============ 待收货 ============ */}
+        {o.status === 'shipped' ? (
+          <>
+            <button type="button" onClick={() => onOpenLogistics(o.id)} className="block w-full bg-white px-4 py-4 text-left active:opacity-85">
+              <div className="flex items-center gap-2">
+                {nodeIdx >= 3 ? <Package className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} /> : nodeIdx === 2 ? <Bike className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} /> : <Truck className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} />}
+                <span className="text-[17px] font-semibold text-[#FF6A1E]">{tbTrackPhaseText(nodeIdx)}</span>
+                <span className="text-[13px] text-black/45">{nodeIdx >= 2 ? '预计今天送达' : '预计明天送达'}</span>
+                <span className="ml-auto flex shrink-0 items-center text-[13px] text-black/45">
+                  查看物流
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </span>
               </div>
-              <div className="shrink-0 text-right">
-                <div className="text-[13px] text-black/70">¥{fmtMoney(it.price)}</div>
-                <div className="mt-0.5 text-[11px] text-black/35">x{it.qty}</div>
+              <div className="mt-1 line-clamp-1 pl-7 text-[12px] text-black/40">
+                {[...o.track].reverse()[0]?.text} · {fmtTime([...o.track].reverse()[0]?.at ?? o.createdAt)}
               </div>
             </button>
-          ))}
-          {/* 价格明细 */}
-          <div className="mt-2 space-y-1.5 border-t border-black/[0.05] pt-2.5 text-[13px]">
-            <div className="flex justify-between">
-              <span className="text-black/50">商品总价</span>
-              <span className="text-black/80">¥{fmtMoney(o.itemTotal)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-black/50">运费</span>
-              <span className="text-black/80">{o.freight === 0 ? '免运费' : `¥${fmtMoney(o.freight)}`}</span>
-            </div>
-            {o.discount > 0 ? (
-              <div className="flex justify-between">
-                <span className="text-black/50">平台优惠</span>
-                <span className="text-[#FF4400]">-¥{fmtMoney(o.discount)}</span>
+            {o.address ? (
+              <div className="mt-2 bg-white px-4 py-3.5">
+                <div className="flex items-center gap-2">
+                  <MapPin className="h-5 w-5 shrink-0 text-black/75" strokeWidth={2.1} />
+                  <span className="min-w-0 truncate text-[15.5px] font-semibold text-black/85">
+                    送至 {o.address.region.replace(/\s+/g, '')} {o.address.detail}
+                  </span>
+                </div>
+                <div className="mt-1 pl-7 text-[13px] text-black/45">
+                  {o.address.name} {tbMaskPhone(o.address.phone)}
+                  <span className="ml-1.5 rounded border border-black/10 px-1 py-px text-[10px] text-black/40">号码保护中</span>
+                </div>
               </div>
             ) : null}
-            <div className="flex justify-between pt-1 text-[15px] font-semibold">
-              <span className="text-black/85">{o.status === 'pendingPay' ? '需付款' : o.status === 'cancelled' && o.refund ? '退款金额' : '实付款'}</span>
-              <Price value={o.total} size={19} />
+            <div className="mt-2 bg-white px-4 py-3">
+              <div className="flex items-center gap-1.5">
+                {shop.tmall ? <TmallMark /> : <span className="mr-1 inline-block rounded-[3px] bg-[#FF5000] px-1 py-[1px] text-[10px] font-bold leading-none text-white">淘宝</span>}
+                <span className="truncate text-[14.5px] font-semibold text-black/85">{shop.name}</span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/30" />
+              </div>
+              {itemRows('done')}
+              <div className="mt-3 space-y-2 border-t border-black/[0.05] pt-2.5 text-[13px]">
+                <div className="flex justify-between">
+                  <span className="text-black/50">商品总价</span>
+                  <span className="text-black/80">¥{fmtMoney(o.itemTotal)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-black/50">运费</span>
+                  <span className="text-black/80">{o.freight === 0 ? '包邮' : `¥${fmtMoney(o.freight)}`}</span>
+                </div>
+                {o.discount > 0 ? (
+                  <div className="flex justify-between">
+                    <span className="text-black/50">平台优惠</span>
+                    <span className="text-[#FF4400]">-¥{fmtMoney(o.discount)}</span>
+                  </div>
+                ) : null}
+                <div className="flex items-center justify-between pt-0.5">
+                  <span className="text-[15px] font-semibold text-black/85">实付款</span>
+                  <Price value={o.total} size={19} />
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        {/* 订单信息 */}
-        <div className="mt-2 space-y-2 bg-white px-4 py-3 text-[13px]">
-          <div className="flex items-center justify-between">
-            <span className="text-black/50">订单编号</span>
-            <span className="flex items-center gap-1 text-black/75">
-              {o.id}
-              <button type="button" aria-label="复制订单号" onClick={copyOrderId} className="grid h-6 w-6 place-items-center rounded-full bg-black/[0.04] active:opacity-60">
-                <Copy className="h-3 w-3 text-black/50" />
+          </>
+        ) : null}
+
+        {/* ============ 交易成功（截图5） ============ */}
+        {o.status === 'completed' ? (
+          <>
+            {o.address ? (
+              <button type="button" onClick={() => onToast('已签收：包裹已送达收货地址')} className="block w-full bg-white px-4 py-4 text-left active:opacity-85">
+                <div className="flex items-center gap-2">
+                  <MapPin className="h-5 w-5 shrink-0 text-black/75" strokeWidth={2.1} />
+                  <span className="shrink-0 text-[16px] font-semibold text-[#00B578]">已签收</span>
+                  <span className="min-w-0 truncate text-[16px] font-semibold text-black/85">{o.address.detail}</span>
+                  <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-black/25" />
+                </div>
+                <div className="mt-1 pl-7 text-[13px] text-black/45">
+                  {o.address.name} {tbMaskPhone(o.address.phone)}
+                </div>
               </button>
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-black/50">下单时间</span>
-            <span className="text-black/75">{fmtFullTime(o.createdAt)}</span>
-          </div>
-          {o.paidAt ? (
-            <div className="flex justify-between">
-              <span className="text-black/50">支付方式</span>
-              <span className="text-black/75">{o.payChannelLabel ?? (o.payIdp === 'wx' ? '微信支付' : 'QQ支付')}{o.payFc ? '（亲属卡）' : ''}</span>
+            ) : null}
+            <div className="mt-2 flex items-center gap-3 bg-white px-4 py-3">
+              <img src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-11 w-11 rounded-lg object-cover" draggable={false} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
+                <div className="mt-0.5 text-[11.5px] text-black/40">88VIP好评率93%，客服平均22秒回复</div>
+              </div>
+              <button type="button" onClick={() => onOpenShop(shop.id)} className="flex shrink-0 items-center text-[13px] text-black/55 active:opacity-70">
+                进店逛逛
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
             </div>
-          ) : null}
-        </div>
+            <div className="mt-2 bg-white px-4 py-3">
+              {itemRows('done')}
+              <button type="button" onClick={() => onToast('去看看搭配好物（演示）')} className="mt-3 flex w-full items-center gap-1.5 rounded-lg bg-[#FFF0F4] px-3 py-2.5 text-left active:opacity-80">
+                <Sparkles className="h-3.5 w-3.5 shrink-0 text-[#FF4D88]" />
+                <span className="truncate text-[13px] text-black/75">配个{Object.values(o.items[0]?.sku ?? {})[0] ?? '同款'}配件更好用</span>
+                <span className="ml-auto shrink-0 text-[13px] text-[#FF4D88]">去看看 {'>'}</span>
+                <span className="h-3 w-px shrink-0 bg-[#FF4D88]/30" />
+                <span className="shrink-0 text-[13px] text-[#FF4D88]">更多</span>
+              </button>
+              <div className="mt-3 flex justify-end gap-2">
+                <button type="button" onClick={() => onToast('已复制商品信息，可去闲鱼转卖')} className="rounded-full bg-black/[0.04] px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
+                  闲鱼转卖
+                </button>
+                <button type="button" onClick={() => void applyRefund()} className="rounded-full bg-black/[0.04] px-3.5 py-1.5 text-[13px] text-black/65 active:opacity-70">
+                  申请售后
+                </button>
+                <button type="button" onClick={addAllToCart} className="rounded-full bg-[#FFF1E6] px-3.5 py-1.5 text-[13px] font-medium text-[#FF6A1E] active:opacity-75">
+                  加入购物车
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 bg-white px-4 py-3.5">
+              <div className="flex items-center">
+                <span className="text-[15px] font-semibold text-black/85">
+                  实付款 {o.discount > 0 ? <span className="text-[13px] font-normal text-[#FF4400]">共减¥{fmtMoney(o.discount)}</span> : null}
+                </span>
+                <span className="ml-auto flex items-center gap-1">
+                  <Price value={o.total} size={19} />
+                  <ChevronDown className="h-4 w-4 text-black/30" />
+                </span>
+              </div>
+              {o.discount > 0 ? (
+                <span className="mt-1.5 inline-flex items-center gap-1 rounded bg-[#FFF1E6] px-1.5 py-0.5 text-[11px] text-[#FF6A1E]">
+                  <span className="inline-grid h-3 w-3 place-items-center rounded-full border border-[#FF6A1E] text-[8px] font-bold">¥</span>
+                  官方限时补贴抵¥{fmtMoney(o.discount)}
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-2 space-y-3 bg-white px-4 py-3.5">
+              <div className="flex items-center text-[13px]">
+                <span className="font-medium text-black/80">订单信息 共7项</span>
+                <ChevronDown className="ml-1 h-4 w-4 text-black/30" />
+                <span className="ml-auto flex min-w-0 items-center gap-1 text-black/65">
+                  <span className="truncate">{o.id}</span>
+                  <span className="mx-0.5 h-3 w-px bg-black/10" />
+                  <button type="button" onClick={() => copyText(o.id, '订单号已复制')} className="text-[12px] text-black/45 active:opacity-60">
+                    复制
+                  </button>
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="text-black/45">
+                  订单保障 <span className="rounded bg-[#FFF1E6] px-1 py-px text-[11px] text-[#FF6A1E]">共2项</span>
+                </span>
+                <span className="flex items-center text-black/55">
+                  凭据：{new Date(o.createdAt).getMonth() + 1}月{new Date(o.createdAt).getDate()}日下单交易快照
+                  <ChevronRight className="h-3.5 w-3.5 text-black/25" />
+                </span>
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {/* ============ 已取消 / 退款成功 ============ */}
+        {o.status === 'cancelled' ? (
+          <>
+            <div className="bg-gradient-to-r from-[#FF6A1E] to-[#FF4400] px-4 py-4 text-white">
+              <div className="text-[19px] font-bold">{o.refund ? '退款成功' : '交易关闭'}</div>
+              <div className="mt-1 text-[13px] text-white/85">{o.cancelReason ?? '订单已取消'}</div>
+              {o.refund ? <div className="mt-1 text-[13px] text-white/85">退款 ¥{fmtMoney(o.refund.amount)} 已原路退回（{o.payChannelLabel ?? '原支付方式'}）</div> : null}
+            </div>
+            <div className="mt-2 bg-white px-4 py-3">
+              {itemRows('done')}
+              <div className="mt-3 flex items-center justify-end border-t border-black/[0.05] pt-2.5">
+                <span className="text-[13px] text-black/50">{o.refund ? '退款金额' : '实付款'}</span>
+                <span className="ml-2">
+                  <Price value={o.total} size={18} />
+                </span>
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {/* 我的评价 */}
         {o.review ? (
           <div className="mt-2 bg-white px-4 py-3">
             <div className="flex items-center gap-2">
@@ -2277,93 +3163,396 @@ function OrderDetailPage({
             {o.review.tags.length ? <div className="mt-1 flex flex-wrap gap-1">{o.review.tags.map((t) => <span key={t} className="rounded-full bg-black/[0.04] px-2 py-0.5 text-[11px] text-black/50">{t}</span>)}</div> : null}
           </div>
         ) : null}
-        {/* 操作按钮区 */}
-        <div className="mt-3 flex flex-wrap justify-end gap-2 px-4">
-          {o.status === 'pendingPay' ? (
-            <>
-              <button
-                type="button"
-                onClick={() => {
-                  if (tbCancelOrder(uid, o.id, '买家主动取消')) {
-                    onToast('订单已取消');
-                    setTick((n) => n + 1);
-                  }
-                }}
-                className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70"
-              >
-                取消订单
-              </button>
-              <button type="button" onClick={() => onPayOrder(o.id)} className="rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-5 py-2 text-[13px] font-semibold text-white active:opacity-85">
-                继续付款
-              </button>
-            </>
-          ) : null}
-          {o.status === 'pendingDeliver' ? (
-            <>
-              <button type="button" onClick={() => onToast('已提醒商家尽快发货')} className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
-                提醒发货
-              </button>
-              <button type="button" onClick={() => void applyRefund()} className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
-                申请退款
-              </button>
-            </>
-          ) : null}
-          {o.status === 'shipped' ? (
-            <>
-              <button type="button" onClick={() => void applyRefund()} className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
-                退款
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (tbConfirmReceive(uid, o.id)) {
-                    tbPushMsg(uid, { kind: 'logistics', title: '确认收货', text: `订单已确认收货 ¥${fmtMoney(o.total)}，记得评价哦`, orderId: o.id });
-                    onToast('确认收货成功');
-                    setTick((n) => n + 1);
-                  }
-                }}
-                className="rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-5 py-2 text-[13px] font-semibold text-white active:opacity-85"
-              >
-                确认收货
-              </button>
-            </>
-          ) : null}
-          {o.status === 'completed' ? (
-            <>
-              <button type="button" onClick={() => void applyRefund()} className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
-                申请退款
-              </button>
-              {!o.review ? (
-                <button type="button" onClick={() => onRate(o.id)} className="rounded-full border border-[#FF5000] px-4 py-2 text-[13px] font-medium text-[#FF5000] active:opacity-70">
-                  评价
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => {
-                  for (const it of o.items) tbAddToCart(uid, it.pid, it.sku, it.qty);
-                  onToast('已将订单商品加入购物车');
-                }}
-                className="rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-5 py-2 text-[13px] font-semibold text-white active:opacity-85"
-              >
-                再来一单
-              </button>
-            </>
-          ) : null}
-          {o.status === 'cancelled' && !o.refund ? (
+      </div>
+
+      {/* ============ 底部操作条 ============ */}
+      {o.status === 'pendingPay' ? (
+        <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
+          <div className="flex gap-4">
+            <button type="button" onClick={() => onToast('客服（演示）')} className="flex w-11 flex-col items-center gap-0.5 active:opacity-60">
+              <Headphones className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
+              <span className="text-[10px] text-black/50">客服</span>
+            </button>
             <button
               type="button"
               onClick={() => {
-                for (const it of o.items) tbAddToCart(uid, it.pid, it.sku, it.qty);
-                onToast('已将订单商品加入购物车');
+                if (tbCancelOrder(uid, o.id, '买家主动取消')) {
+                  onToast('订单已取消');
+                  setTick((n) => n + 1);
+                }
               }}
-              className="rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-5 py-2 text-[13px] font-semibold text-white active:opacity-85"
+              className="flex w-11 flex-col items-center gap-0.5 active:opacity-60"
             >
-              再来一单
+              <X className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
+              <span className="text-[10px] text-black/50">取消</span>
             </button>
-          ) : null}
+          </div>
+          <div className="ml-auto text-right leading-tight">
+            <div className="flex items-baseline justify-end gap-1 text-[13px] text-black/50">
+              共{qtyAll}件 合计:<Price value={o.total} size={17} />
+            </div>
+            {o.discount > 0 ? <div className="text-[11px] text-[#FF4400]">共减 ¥{fmtMoney(o.discount)}</div> : null}
+          </div>
+          <button type="button" onClick={() => onPayOrder(o.id)} className="shrink-0 rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-5 py-2 text-center text-white active:opacity-85">
+            <span className="block text-[14px] font-semibold leading-[18px]">继续付款</span>
+            <span className="block text-[10px] leading-[14px] opacity-85">剩余{countdown}</span>
+          </button>
+        </div>
+      ) : null}
+      {o.status === 'pendingDeliver' ? (
+        <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-4 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
+          <button type="button" onClick={() => onToast('客服（演示）')} className="flex w-11 flex-col items-center gap-0.5 active:opacity-60">
+            <Headphones className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
+            <span className="text-[10px] text-black/50">客服</span>
+          </button>
+          <button type="button" onClick={() => onToast('投诉已记录，将尽快处理')} className="flex w-11 flex-col items-center gap-0.5 active:opacity-60">
+            <FileText className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
+            <span className="text-[10px] text-black/50">投诉</span>
+          </button>
+          <div className="ml-auto flex gap-2">
+            <button type="button" onClick={() => onToast('开票申请已提交')} className="rounded-full bg-black/[0.05] px-4 py-2 text-[13px] text-black/70 active:opacity-70">
+              申请开票
+            </button>
+            <button type="button" onClick={() => onToast('已提醒商家尽快发货')} className="rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-4 py-2 text-[13px] font-semibold text-white active:opacity-85">
+              催发货
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {o.status === 'shipped' ? (
+        <div className="absolute inset-x-0 bottom-0 z-30 flex items-center justify-end gap-2 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
+          <button type="button" onClick={() => void applyRefund()} className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
+            退款
+          </button>
+          <button type="button" onClick={() => onToast('收货时间已延长 7 天')} className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
+            延长收货
+          </button>
+          <button type="button" onClick={() => onOpenLogistics(o.id)} className="rounded-full border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
+            查看物流
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (tbConfirmReceive(uid, o.id)) {
+                tbPushMsg(uid, { kind: 'logistics', title: '确认收货', text: `订单已确认收货 ¥${fmtMoney(o.total)}，记得评价哦`, orderId: o.id });
+                onToast('确认收货成功');
+                setTick((n) => n + 1);
+              }
+            }}
+            className="rounded-full bg-[#FFF1E6] px-4 py-2 text-[13px] font-semibold text-[#FF5000] active:opacity-80"
+          >
+            确认收货
+          </button>
+        </div>
+      ) : null}
+      {o.status === 'completed' ? (
+        <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
+          <button type="button" onClick={() => onToast('更多操作（演示）')} className="flex w-11 shrink-0 flex-col items-center gap-0.5 active:opacity-60">
+            <MoreHorizontal className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
+            <span className="text-[10px] text-black/50">更多</span>
+          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <button type="button" onClick={() => onToast('已复制商品信息，可去闲鱼转卖')} className="rounded-full border border-black/12 px-3.5 py-2 text-[13px] text-black/60 active:opacity-70">
+              闲鱼转卖
+            </button>
+            <button type="button" onClick={addAllToCart} className="rounded-full border border-black/12 px-3.5 py-2 text-[13px] text-black/60 active:opacity-70">
+              加入购物车
+            </button>
+            {!o.review ? (
+              <button type="button" onClick={() => onRate(o.id)} className="rounded-full border border-[#FF5000] px-3.5 py-2 text-[13px] font-medium text-[#FF5000] active:opacity-70">
+                评价
+              </button>
+            ) : null}
+            <button type="button" onClick={addAllToCart} className="rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-4 py-2 text-[13px] font-semibold text-white active:opacity-85">
+              再买一单
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {o.status === 'cancelled' && !o.refund ? (
+        <div className="absolute inset-x-0 bottom-0 z-30 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
+          <button type="button" onClick={addAllToCart} className="h-11 w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
+            再买一单
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------- 物流页（截图1-5：点击订单进入） ----------------
+
+function LogisticsPage({
+  uid,
+  orderId,
+  onBack,
+  onToast,
+  onOpenProduct,
+}: {
+  uid: string;
+  orderId: string;
+  onBack: () => void;
+  onToast: (m: string) => void;
+  onOpenProduct: (pid: string) => void;
+}) {
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [, setTick] = useState(0);
+  // 骑手位移平滑刷新
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 2000);
+    return () => clearInterval(t);
+  }, []);
+  tbTickOrders(uid);
+  const o = tbLoadOrders(uid).find((x) => x.id === orderId);
+  if (!o || o.track.length === 0) {
+    return (
+      <div className="grid h-full place-items-center bg-white">
+        <div className="text-[15px] text-black/40">暂无物流信息</div>
+      </div>
+    );
+  }
+  const co = tbCourierCo(o.id);
+  const man = tbCourierMan(o.id);
+  const manPhone = tbCourierPhone(o.id);
+  const trackNo = tbTrackNo(o.id);
+  const pickCode = tbPickCode(o.id);
+  const station = tbStationName(o.address);
+  const nodeIdx = o.track.length - 1;
+  const phase: TbExpressPhase = nodeIdx >= 3 ? 'station' : nodeIdx === 2 ? 'delivering' : nodeIdx === 1 ? 'transit' : 'pickup';
+  const latest = [...o.track].reverse()[0];
+  // 派送中骑手行进进度（节点时间起 90s 走完，不倒退）
+  const riderProg = Math.min(0.92, Math.max(0.12, (Date.now() - latest.at) / 90_000));
+  const eta = (() => {
+    switch (phase) {
+      case 'delivering':
+        return { title: '预计今天送达', sub: `距收货地${2 + (tbHash(o.id) % 4)}公里` };
+      case 'station':
+        return { title: '已放入菜鸟驿站', sub: `距收货地${(3.5 + (tbHash(`${o.id}s`) % 15) / 10).toFixed(1)}公里` };
+      case 'transit':
+        return { title: '运输中', sub: '预计明天送达' };
+      default:
+        return { title: '已揽收', sub: '商家已把包裹交给快递员' };
+    }
+  })();
+  const copyText = (text: string, tip: string) => {
+    try {
+      void navigator.clipboard.writeText(text);
+      onToast(tip);
+    } catch {
+      onToast('复制失败，请手动选择');
+    }
+  };
+  /** 时间线条目（最新在前） */
+  const entries = o.track
+    .map((t, i) => ({ ...tbNodeMeta(i, man, manPhone, station), at: t.at }))
+    .reverse();
+  /** 详细信息弹层条目（含更早的干线条目） */
+  const detailEntries = [
+    ...entries,
+    { title: '', desc: '【杭州市】快件已由 广东东莞 发出，正在干线运输中', at: o.shipAt! - 50 * 60_000, phone: undefined as string | undefined },
+    { title: '', desc: '【东莞市】商家已通知快递揽收，包裹完成分拣', at: o.shipAt! - 80 * 60_000, phone: undefined as string | undefined },
+  ];
+  const shop = shopById(o.shopId);
+  return (
+    <div className="relative flex h-full flex-col bg-[#f4f4f4]">
+      {/* 悬浮顶栏（白胶囊浮于地图上） */}
+      <div className="absolute inset-x-0 top-0 z-30 flex items-center justify-between px-3 pt-[58px]">
+        <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full bg-white/95 shadow-sm active:opacity-70">
+          <ArrowLeft className="h-[20px] w-[20px] text-black/75" strokeWidth={2.2} />
+        </button>
+        <div className="flex items-center gap-2 rounded-full bg-white/95 px-3.5 py-2 shadow-sm">
+          <button type="button" onClick={() => onToast('客服（演示）')} className="flex items-center gap-1 active:opacity-60">
+            <Headphones className="h-4 w-4 text-black/75" strokeWidth={2} />
+            <span className="text-[13px] text-black/75">客服</span>
+          </button>
+          <span className="h-3.5 w-px bg-black/10" />
+          <button type="button" onClick={() => onToast('更多操作（演示）')} className="active:opacity-60">
+            <MoreHorizontal className="h-4 w-4 text-black/75" strokeWidth={2} />
+          </button>
         </div>
       </div>
+      <div className="flex-1 overflow-y-auto pb-8">
+        <TbExpressMap phase={phase} etaTitle={eta.title} etaSub={eta.sub} addrDetail={o.address?.detail} riderProg={riderProg} />
+        {/* 白卡（压住地图底部圆角） */}
+        <div className="relative z-10 -mt-4 rounded-t-2xl bg-white px-4 pb-3 pt-4">
+          {/* 快递公司行 */}
+          <div className="flex items-center gap-2">
+            <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#1677FF]/10 text-[11px] font-bold text-[#1677FF]">{co.slice(0, 1)}</span>
+            <span className="min-w-0 truncate text-[15px] font-semibold text-black/85">
+              {co} {trackNo}
+            </span>
+            <span className="ml-auto flex shrink-0 items-center text-[13.5px] text-black/60">
+              <button type="button" onClick={() => copyText(trackNo, '运单号已复制')} className="active:opacity-60">
+                复制
+              </button>
+              <span className="mx-2.5 h-3.5 w-px bg-black/10" />
+              <button type="button" onClick={() => onToast(`拨打 ${co} 官方电话`)} className="active:opacity-60">
+                打电话
+              </button>
+            </span>
+          </div>
+          {/* 时间线（前 4 条） */}
+          <div className="mt-4">
+            {entries.slice(0, 4).map((e, i) => (
+              <div key={i} className="flex gap-3">
+                <div className="flex flex-col items-center">
+                  <span className={`mt-[5px] h-2.5 w-2.5 shrink-0 rounded-full ${i === 0 ? 'bg-[#FF5000]' : 'border-2 border-black/15 bg-white'}`} />
+                  {i < Math.min(4, entries.length) - 1 ? <span className="my-1 w-px flex-1 border-l border-dashed border-black/12" /> : null}
+                </div>
+                <div className="min-w-0 flex-1 pb-4">
+                  <div className="flex items-baseline gap-2">
+                    <span className={`text-[15px] ${i === 0 ? 'font-bold text-[#FF5000]' : 'font-medium text-black/80'}`}>{e.title}</span>
+                    <span className={`text-[13px] ${i === 0 ? 'text-[#FF5000]' : 'text-black/40'}`}>{fmtTime(e.at)}</span>
+                  </div>
+                  <div className="mt-1 text-[13.5px] leading-[21px] text-black/70">
+                    <TbDescText text={e.desc} phone={e.phone} />
+                  </div>
+                  {/* 派送中：骑手卡 */}
+                  {i === 0 && phase === 'delivering' ? (
+                    <div className="mt-2.5 flex items-center gap-3 rounded-xl bg-[#F7F8FA] px-3.5 py-3">
+                      <span className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-full bg-[#FF6A00]/10">
+                        <img src={mtRiderSrcOf(mtGetRiderId())} alt={man} className="h-10 w-10 object-contain" draggable={false} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[15px] font-semibold text-black/85">{man}</div>
+                        <div className="mt-0.5 text-[12px] text-black/45">快递员在奋力配送中</div>
+                      </div>
+                      <button type="button" onClick={() => onToast(`拨打快递员 ${manPhone}`)} className="flex shrink-0 flex-col items-center gap-0.5 active:opacity-60">
+                        <span className="grid h-8 w-8 place-items-center rounded-full bg-white shadow-sm">
+                          <Phone className="h-4 w-4 text-black/75" strokeWidth={2} />
+                        </span>
+                        <span className="text-[10px] text-black/50">电话</span>
+                      </button>
+                    </div>
+                  ) : null}
+                  {/* 待取件：驿站卡 */}
+                  {i === 0 && phase === 'station' ? (
+                    <div className="mt-2.5 rounded-xl bg-[#F7F8FA] px-3.5 py-3">
+                      <div className="flex items-start gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[15px] font-semibold text-black/85">{station}</div>
+                          <div className="mt-0.5 truncate text-[12px] text-black/40">{o.address?.region.replace(/\s+/g, '') ?? ''}</div>
+                        </div>
+                        <button type="button" onClick={() => onToast(`拨打驿站电话 ${manPhone}`)} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white shadow-sm active:opacity-60">
+                          <Phone className="h-4 w-4 text-black/75" strokeWidth={2} />
+                        </button>
+                      </div>
+                      <div className="mt-2 flex items-center gap-3">
+                        <span className="shrink-0 text-[13px] text-black/55">取件码</span>
+                        <span className="text-[26px] font-bold tracking-wide text-black/90">{pickCode}</span>
+                        <button type="button" onClick={() => copyText(pickCode, '取件码已复制')} className="text-[13px] text-black/45 active:opacity-60">
+                          复制
+                        </button>
+                      </div>
+                      <div className="mt-1 flex items-center">
+                        <span className="text-[12px] text-[#FF6A1E]">驿站距您较远，有疑问可联系快递员</span>
+                        <button type="button" onClick={() => onToast(`已通知快递员 ${man}`)} className="ml-auto flex items-center text-[13px] text-[#FF6A1E] active:opacity-70">
+                          去联系
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      <div className="mt-2.5 flex gap-2.5">
+                        <button type="button" onClick={() => onToast('已生成帮取码，可分享给亲友')} className="h-9 flex-1 rounded-full border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
+                          找人帮取
+                        </button>
+                        <button type="button" onClick={() => onToast('已向驿站发送取件请求')} className="h-9 flex-1 rounded-full border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
+                          一键取件
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={() => setDetailOpen(true)} className="flex items-center gap-1 pb-1 text-[13px] text-black/45 active:opacity-70">
+            查看更多物流明细
+            <ChevronDown className="h-4 w-4" />
+          </button>
+        </div>
+        {/* 送至地址 */}
+        {o.address ? (
+          <div className="mt-2 bg-white px-4 py-3.5">
+            <div className="flex items-start gap-2">
+              <MapPin className="mt-0.5 h-[18px] w-[18px] shrink-0 text-black/80" strokeWidth={2.1} />
+              <div className="min-w-0 flex-1">
+                <div className="text-[15.5px] font-semibold text-black/85">
+                  送至 {o.address.region.replace(/\s+/g, '')} {o.address.detail}
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[13px] text-black/45">
+                  {o.address.name} {tbMaskPhone(o.address.phone)}
+                  <span className="rounded border border-black/10 px-1 py-px text-[10px] text-black/40">号码保护中</span>
+                  <span className="rounded border border-[#FF6A1E]/40 px-1 py-px text-[10px] text-[#FF6A1E]">取件出示虚拟号 {'>'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {/* 店铺商品 */}
+        <div className="mt-2 bg-white px-4 py-3">
+          <div className="flex items-center gap-1.5">
+            {shop.tmall ? <TmallMark /> : <span className="mr-1 inline-block rounded-[3px] bg-[#FF5000] px-1 py-[1px] text-[10px] font-bold leading-none text-white">淘宝</span>}
+            <span className="truncate text-[14.5px] font-semibold text-black/85">{shop.name}</span>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/30" />
+          </div>
+          {o.items.map((it, i) => (
+            <button key={i} type="button" onClick={() => onOpenProduct(it.pid)} className="mt-2.5 flex w-full gap-2.5 text-left">
+              <img src={it.img} alt={it.title} className="h-[64px] w-[64px] shrink-0 rounded-lg object-cover" draggable={false} />
+              <div className="min-w-0 flex-1">
+                <div className="flex gap-2">
+                  <span className="line-clamp-1 min-w-0 flex-1 text-[13.5px] leading-5 text-black/85">{it.title}</span>
+                  <span className="shrink-0 text-[13.5px] leading-5 text-black/70">¥{fmtMoney(it.price)}</span>
+                </div>
+                <div className="mt-0.5 flex items-center">
+                  <span className="truncate text-[12px] text-black/40">{Object.entries(it.sku).map(([k, v]) => `${k}：${v}`).join('；')}</span>
+                  <span className="ml-auto shrink-0 text-[12px] text-black/40">x{it.qty}</span>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 详细信息弹层（截图2） */}
+      {detailOpen ? (
+        <div className="absolute inset-0 z-50 flex flex-col bg-white">
+          <div className="relative flex items-center justify-center pb-1 pt-[58px]">
+            <span className="text-[17px] font-semibold text-black/90">详细信息</span>
+            <button type="button" aria-label="关闭" onClick={() => setDetailOpen(false)} className="absolute right-3 top-[60px] grid h-9 w-9 place-items-center rounded-full bg-black/[0.04] active:opacity-60">
+              <X className="h-[18px] w-[18px] text-black/70" strokeWidth={2.4} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 pb-10 pt-3">
+            <div className="flex items-center gap-2">
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#FF6A00]/10 text-[11px] font-bold text-[#FF6A00]">菜</span>
+              <span className="text-[15px] font-semibold text-black/85">官方物流</span>
+              <span className="min-w-0 truncate text-[13px] text-black/45">{trackNo}</span>
+              <button type="button" onClick={() => copyText(trackNo, '运单号已复制')} className="ml-auto shrink-0 text-[13.5px] text-black/60 active:opacity-60">
+                复制
+              </button>
+            </div>
+            <div className="mt-4">
+              {detailEntries.map((e, i) => (
+                <div key={i} className="flex gap-3">
+                  <div className="flex flex-col items-center">
+                    <span className={`mt-[5px] h-2.5 w-2.5 shrink-0 rounded-full ${i === 0 ? 'bg-[#FF5000]' : 'border-2 border-black/15 bg-white'}`} />
+                    {i < detailEntries.length - 1 ? <span className="my-1 w-px flex-1 border-l border-dashed border-black/12" /> : null}
+                  </div>
+                  <div className="min-w-0 flex-1 pb-5">
+                    <div className="flex items-baseline gap-2">
+                      {e.title ? <span className={`text-[15px] ${i === 0 ? 'font-bold text-[#FF5000]' : 'font-medium text-black/80'}`}>{e.title}</span> : null}
+                      <span className={`text-[13px] ${i === 0 ? 'text-[#FF5000]' : 'text-black/40'}`}>{fmtTime(e.at)}</span>
+                    </div>
+                    <div className="mt-1 text-[13.5px] leading-[21px] text-black/70">
+                      <TbDescText text={e.desc} phone={e.phone} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2753,7 +3942,23 @@ function AddressListPage({ uid, onBack, onEdit, onToast, picker }: { uid: string
   const curId = tbCurAddrId(uid);
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
-      <TopBar title="收货地址" onBack={onBack} />
+      <TopBar
+        title="收货地址"
+        onBack={onBack}
+        right={
+          <div className="flex items-center gap-3">
+            <button type="button" aria-label="搜索地址" onClick={() => onToast('搜索地址（演示）')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+              <Search className="h-[18px] w-[18px] text-black/75" strokeWidth={2.1} />
+            </button>
+            <button type="button" onClick={() => onToast('长按地址可删除')} className="text-[14px] text-black/70 active:opacity-60">
+              管理
+            </button>
+            <button type="button" onClick={() => onEdit(null)} className="text-[14px] font-medium text-[#FF5000] active:opacity-60">
+              新增地址
+            </button>
+          </div>
+        }
+      />
       <div className="flex-1 overflow-y-auto pb-24">
         {list.length === 0 ? (
           <div className="grid place-items-center bg-white py-16">
@@ -2824,75 +4029,201 @@ function AddressListPage({ uid, onBack, onEdit, onToast, picker }: { uid: string
   );
 }
 
+/** 新增/编辑地址（截图10：地图选址 + 智能粘贴 + 省市区 + 默认地址 + 6 标签） */
+const TB_REGIONS = ['浙江省杭州市西湖区文新街道', '河南省濮阳市濮阳县徐镇镇', '广东省东莞市南城街道', '贵州省贵阳市乌当区'];
+const TB_ADDR_TAGS = ['家', '公司', '学校', '父母', '朋友', '自定义'];
+
 function AddressEditPage({ uid, editing, onBack, onToast }: { uid: string; editing: TbAddress | null; onBack: () => void; onToast: (m: string) => void }) {
   const [name, setName] = useState(editing?.name ?? '');
   const [phone, setPhone] = useState(editing?.phone ?? '');
-  const [region, setRegion] = useState(editing?.region ?? '浙江省 杭州市 西湖区');
+  const [region, setRegion] = useState(editing?.region?.replace(/\s+/g, '') ?? TB_REGIONS[0]);
+  const [regionOpen, setRegionOpen] = useState(false);
   const [detail, setDetail] = useState(editing?.detail ?? '');
-  const [tag, setTag] = useState(editing?.tag ?? '家');
+  const [tag, setTag] = useState(editing?.tag && TB_ADDR_TAGS.includes(editing.tag) ? editing.tag : editing ? '自定义' : '家');
+  const [customTag, setCustomTag] = useState(editing?.tag && !TB_ADDR_TAGS.includes(editing.tag) ? editing.tag : '');
+  const [isDefault, setIsDefault] = useState(() => (editing ? tbCurAddrId(uid) === editing.id : tbLoadAddrs(uid).length === 0));
   const save = () => {
+    if (!detail.trim()) {
+      onToast('请填写详细地址与门牌号');
+      return;
+    }
     if (!name.trim()) {
-      onToast('请填写收货人姓名');
+      onToast('请填写收货人名字');
       return;
     }
     if (!/^1\d{10}$/.test(phone.trim())) {
       onToast('请填写正确的 11 位手机号');
       return;
     }
-    if (!detail.trim()) {
-      onToast('请填写详细地址');
-      return;
-    }
+    const finalTag = tag === '自定义' ? customTag.trim() || '其他' : tag;
     const list = tbLoadAddrs(uid);
     if (editing) {
       const i = list.findIndex((a) => a.id === editing.id);
-      if (i >= 0) list[i] = { ...editing, name: name.trim(), phone: phone.trim(), region: region.trim(), detail: detail.trim(), tag };
+      if (i >= 0) list[i] = { ...editing, name: name.trim(), phone: phone.trim(), region: region.trim(), detail: detail.trim(), tag: finalTag };
       tbSaveAddrs(uid, list);
+      if (isDefault) tbSetCurAddr(uid, editing.id);
       onToast('地址已保存');
     } else {
       const id = `tba${Date.now().toString(36)}`;
-      tbSaveAddrs(uid, [...list, { id, name: name.trim(), phone: phone.trim(), region: region.trim(), detail: detail.trim(), tag }]);
-      // 首个地址自动设为默认
-      if (list.length === 0) tbSetCurAddr(uid, id);
+      tbSaveAddrs(uid, [...list, { id, name: name.trim(), phone: phone.trim(), region: region.trim(), detail: detail.trim(), tag: finalTag }]);
+      // 默认地址勾选 / 首个地址自动设为默认
+      if (isDefault || list.length === 0) tbSetCurAddr(uid, id);
       onToast('地址已添加');
     }
     onBack();
   };
+  const smartPaste = async () => {
+    try {
+      const t = await navigator.clipboard.readText();
+      const text = t.trim().slice(0, 60);
+      if (!text) {
+        onToast('剪贴板为空');
+        return;
+      }
+      setDetail(text);
+      onToast('已智能粘贴地址');
+    } catch {
+      onToast('无法读取剪贴板，请手动填写');
+    }
+  };
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
       <TopBar title={editing ? '编辑地址' : '新增地址'} onBack={onBack} />
-      <div className="flex-1 overflow-y-auto px-3 pt-3">
-        <div className="space-y-2 rounded-xl bg-white p-4">
-          {[
-            { label: '收货人', value: name, set: setName, placeholder: '请填写收货人姓名' },
-            { label: '手机号', value: phone, set: setPhone, placeholder: '请填写 11 位手机号' },
-            { label: '所在地区', value: region, set: setRegion, placeholder: '省 市 区' },
-            { label: '详细地址', value: detail, set: setDetail, placeholder: '街道、门牌号、小区、楼栋号等' },
-          ].map((f) => (
-            <div key={f.label} className="flex items-center gap-3 border-b border-black/[0.04] py-2.5 last:border-0">
-              <span className="w-[64px] shrink-0 text-[14px] text-black/60">{f.label}</span>
-              <input value={f.value} onChange={(e) => f.set(e.target.value)} placeholder={f.placeholder} className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-black/25" />
+      <div className="flex-1 overflow-y-auto pb-32">
+        {/* 所在地区条（地图上方灰条） */}
+        <div className="bg-[#F5F6F7] px-4 py-1.5 text-[12px] text-black/45">{region}</div>
+        {/* 选址地图（高德风，X 关闭/定位回中） */}
+        <div className="relative h-[172px] overflow-hidden bg-[#E9EFF5]">
+          <div className="absolute -left-6 top-8 h-20 w-36 rounded-[46%] bg-[#C7DFF2]" />
+          <div className="absolute -right-8 bottom-[-24px] h-20 w-40 rounded-[48%] bg-[#C7DFF2]" />
+          <div className="absolute right-[22%] top-[-16px] h-16 w-28 rounded-[45%] bg-[#D8EDD3]" />
+          <div className="absolute left-0 right-0 top-[46%] h-[6px] -rotate-2 bg-white/90" />
+          <div className="absolute bottom-[-4%] left-[38%] top-[-4%] w-[5px] rotate-6 bg-white/90" />
+          <div className="absolute left-[-6%] right-[26%] top-[74%] h-[4px] rotate-3 bg-white/75" />
+          <span className="absolute left-[8%] top-[22%] text-[10px] text-black/25">蔡吉村</span>
+          <span className="absolute left-[7%] top-[38%] text-[10px] font-medium text-[#E05A5A]">蔡吉村村民委员会</span>
+          {/* 定位点 */}
+          <svg className="absolute left-1/2 top-[42%] -translate-x-1/2 -translate-y-1/2" width="30" height="38" viewBox="0 0 30 38" aria-hidden="true">
+            <path d="M15 1C7.8 1 2 6.8 2 14c0 9.4 13 23 13 23s13-13.6 13-23C28 6.8 22.2 1 15 1Z" fill="#FF5000" />
+            <circle cx="15" cy="14" r="5" fill="#fff" />
+          </svg>
+          <button type="button" aria-label="关闭选址" onClick={() => onToast('已定位到所选地址')} className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-white shadow-sm active:opacity-70">
+            <X className="h-4 w-4 text-black/65" strokeWidth={2.4} />
+          </button>
+          <button type="button" aria-label="回正定位" onClick={() => onToast('已回到当前位置')} className="absolute bottom-3 right-3 grid h-9 w-9 place-items-center rounded-full bg-white shadow-sm active:opacity-70">
+            <Crosshair className="h-[18px] w-[18px] text-black/70" strokeWidth={2} />
+          </button>
+          <span className="absolute bottom-2 left-3 flex items-center gap-0.5 text-[11px] font-semibold text-[#00A0F0]">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+              <path d="M1 8.5 6 1v4h5L6 11V7H1Z" fill="#00A0F0" />
+            </svg>
+            高德地图
+          </span>
+        </div>
+        {/* 白色表单（截图10下半） */}
+        <div className="relative z-10 -mt-3 rounded-t-2xl bg-white px-4 pb-4 pt-3">
+          <div className="flex items-center gap-2">
+            <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full bg-[#F5F6F7] px-3.5">
+              <Search className="h-4 w-4 shrink-0 text-black/35" strokeWidth={2.2} />
+              <input value={detail} onChange={(e) => setDetail(e.target.value)} placeholder="搜索地址，更快填写" className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-black/30" />
             </div>
-          ))}
-          <div className="flex items-center gap-2 pt-1">
-            <span className="w-[64px] shrink-0 text-[14px] text-black/60">标签</span>
-            {['家', '公司', '学校'].map((t) => (
-              <button key={t} type="button" onClick={() => setTag(t)} className={`rounded-full border px-3 py-1 text-[12px] ${tag === t ? 'border-[#FF5000] bg-[#FF5000]/[0.06] text-[#FF5000]' : 'border-black/10 text-black/55'}`}>
-                {t}
+            <button type="button" onClick={() => void smartPaste()} className="flex w-[52px] shrink-0 flex-col items-center gap-0.5 active:opacity-60">
+              <ClipboardList className="h-5 w-5 text-black/70" strokeWidth={2} />
+              <span className="text-[10px] text-black/55">智能粘贴</span>
+            </button>
+          </div>
+          {/* 所在地区 + 默认地址 */}
+          <div className="mt-1">
+            <div className="flex items-center gap-2 border-b border-black/[0.05] py-3.5">
+              <span className="text-[15px] font-bold text-[#FF5000]">*</span>
+              <button type="button" onClick={() => setRegionOpen((v) => !v)} className="flex min-w-0 items-center gap-1 text-[15px] text-black/85 active:opacity-70">
+                <span className="truncate">{region}</span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-black/35" />
               </button>
-            ))}
+              <button type="button" onClick={() => setIsDefault((v) => !v)} className="ml-auto flex shrink-0 items-center gap-1.5 active:opacity-70">
+                <span className="text-[13px] text-black/55">默认地址</span>
+                <span className={`grid h-[19px] w-[19px] place-items-center rounded-full ${isDefault ? 'bg-[#FF5000]' : 'border border-black/20 bg-white'}`}>
+                  {isDefault ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                </span>
+              </button>
+            </div>
+            {regionOpen ? (
+              <div className="divide-y divide-black/[0.04] border-b border-black/[0.05]">
+                {TB_REGIONS.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => {
+                      setRegion(r);
+                      setRegionOpen(false);
+                    }}
+                    className={`block w-full py-2.5 text-left text-[14px] ${region === r ? 'font-medium text-[#FF5000]' : 'text-black/75'}`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          {/* 详细地址 */}
+          <div className="border-b border-black/[0.05] py-3">
+            <div className="flex items-center gap-2 text-[14px] text-black/45">
+              <span className="text-[15px] font-bold text-[#FF5000]">*</span>
+              详细地址与门牌号
+            </div>
+            <input value={detail} onChange={(e) => setDetail(e.target.value)} placeholder="街道、门牌号、小区、楼栋号等" className="mt-1.5 w-full bg-transparent text-[16px] text-black/90 outline-none placeholder:text-black/25" />
+          </div>
+          {/* 收货人 */}
+          <div className="border-b border-black/[0.05] py-3">
+            <div className="flex items-center gap-2 text-[14px] text-black/45">
+              <span className="text-[15px] font-bold text-[#FF5000]">*</span>
+              收货人名字
+            </div>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="请填写收货人姓名" className="mt-1.5 w-full bg-transparent text-[16px] text-black/90 outline-none placeholder:text-black/25" />
+          </div>
+          {/* 手机号 */}
+          <div className="border-b border-black/[0.05] py-3">
+            <div className="flex items-center gap-2 text-[14px] text-black/45">
+              <span className="text-[15px] font-bold text-[#FF5000]">*</span>
+              手机号
+            </div>
+            <div className="mt-1.5 flex items-center gap-3">
+              <button type="button" onClick={() => onToast('当前仅支持中国大陆手机号')} className="flex shrink-0 items-center gap-0.5 text-[16px] text-black/85 active:opacity-70">
+                +86
+                <ChevronDown className="h-4 w-4 text-black/40" />
+              </button>
+              <input value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))} inputMode="numeric" placeholder="请填写手机号" className="min-w-0 flex-1 bg-transparent text-[16px] text-black/90 outline-none placeholder:text-black/25" />
+            </div>
+          </div>
+          {/* 地址标签 */}
+          <div className="pt-4">
+            <div className="text-[15.5px] font-semibold text-black/85">地址标签</div>
+            <div className="mt-3 flex flex-wrap gap-2.5">
+              {TB_ADDR_TAGS.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTag(t)}
+                  className={`h-10 rounded-lg border px-4 text-[14px] ${tag === t ? 'border-[#FF5000] font-medium text-[#FF5000]' : 'border-black/[0.12] text-black/70'}`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            {tag === '自定义' ? (
+              <input value={customTag} onChange={(e) => setCustomTag(e.target.value)} placeholder="填写自定义标签，如：奶奶家" className="mt-3 h-10 w-full rounded-lg bg-black/[0.03] px-3.5 text-[14px] outline-none placeholder:text-black/25" />
+            ) : null}
           </div>
         </div>
       </div>
-      <div className="absolute inset-x-0 bottom-0 z-30 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
-        <button type="button" onClick={save} className="h-11 w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
-          保存
+      <div className="absolute inset-x-0 bottom-0 z-30 bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
+        <button type="button" onClick={save} className="h-12 w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[16px] font-semibold text-white active:opacity-85">
+          保存地址
         </button>
       </div>
     </div>
   );
 }
-
 // ---------------- 收藏 / 足迹 / 关注店铺 ----------------
 
 function FavoritesPage({ uid, onBack, onOpenProduct, onToast }: { uid: string; onBack: () => void; onOpenProduct: (pid: string) => void; onToast: (m: string) => void }) {
@@ -3262,7 +4593,7 @@ function SettingsPage({ session, onBack, onToast, onLogout }: { session: TbSessi
 
 // ---------------- 主入口（tab 框架 + 页面栈） ----------------
 
-type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'addresses' | 'addressEdit' | 'coupons' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs';
+type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs';
 type TbTab = 'home' | 'msgs' | 'cart' | 'me';
 
 /** 底部导航（首页/消息/购物车/我的淘宝） */
@@ -3372,6 +4703,9 @@ export default function TaobaoApp() {
   const [walletOpen, setWalletOpen] = useState(false);
   const [rateFor, setRateFor] = useState<string | null>(null);
   const [shopId, setShopId] = useState<string | null>(null);
+  /** 物流页订单 + 返回目标（订单列表/详情/快递页均可进） */
+  const [logisticsId, setLogisticsId] = useState<string | null>(null);
+  const [logiBack, setLogiBack] = useState<'orders' | 'orderDetail'>('orders');
   /** 二级页返回目标（订单页可从「我的」或首页进入） */
   const [subReturn, setSubReturn] = useState<TbTab>('me');
   /** 地址页返回目标：'me'（我的页进）/ 'checkout'（下单页地址弹层进） */
@@ -3566,6 +4900,12 @@ export default function TaobaoApp() {
         onPayOrder={(id) => setPayOrderId(id)}
         onToast={showToast}
         onOpenProduct={openProduct}
+        onOpenLogistics={(id) => {
+          setLogisticsId(id);
+          setLogiBack('orders');
+          setPage('logistics');
+        }}
+        onRate={(id) => setRateFor(id)}
       />
     );
   } else if (page === 'orderDetail' && orderId) {
@@ -3578,6 +4918,26 @@ export default function TaobaoApp() {
         onPayOrder={(id) => setPayOrderId(id)}
         onOpenProduct={openProduct}
         onRate={(id) => setRateFor(id)}
+        onOpenLogistics={(id) => {
+          setLogisticsId(id);
+          setLogiBack('orderDetail');
+          setPage('logistics');
+        }}
+        onOpenAddrPicker={() => setAddrPicker(true)}
+        onOpenShop={(sid) => {
+          setShopId(sid);
+          setPage('shop');
+        }}
+      />
+    );
+  } else if (page === 'logistics' && logisticsId) {
+    content = (
+      <LogisticsPage
+        uid={uid}
+        orderId={logisticsId}
+        onBack={() => setPage(logiBack === 'orderDetail' ? 'orderDetail' : 'orders')}
+        onToast={showToast}
+        onOpenProduct={openProduct}
       />
     );
   } else if (page === 'addresses') {
@@ -3595,7 +4955,7 @@ export default function TaobaoApp() {
   } else if (page === 'shop' && shopId) {
     content = <ShopPage shopId={shopId} uid={uid} onBack={() => setPage('product')} onOpenProduct={openProduct} onToast={showToast} />;
   } else if (page === 'express') {
-    content = <ExpressPage uid={uid} onBack={() => setPage('main')} onOpenOrder={(id) => { setOrderId(id); setPage('orderDetail'); }} />;
+    content = <ExpressPage uid={uid} onBack={() => setPage('main')} onOpenOrder={(id) => { setLogisticsId(id); setLogiBack('orders'); setPage('logistics'); }} />;
   } else if (page === 'settings') {
     content = (
       <SettingsPage
