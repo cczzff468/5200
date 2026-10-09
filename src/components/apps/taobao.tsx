@@ -2819,16 +2819,17 @@ function OrderCard({
     onToast('已将订单商品加入购物车');
   };
   return (
-    <div className="rounded-2xl bg-white px-3.5 py-3">
-      <button type="button" onClick={onOpen} className="flex w-full items-center gap-1.5">
+    // 需求（第五轮）：点击整卡进入对应状态订单详情页——卡体整体 onOpen，卡内功能按钮 stopPropagation 自行接管
+    <div onClick={onOpen} className="cursor-pointer rounded-2xl bg-white px-3.5 py-3 active:bg-black/[0.015]">
+      <div className="flex w-full items-center gap-1.5">
         {shop.tmall ? <TmallMark /> : <span className="mr-0.5 inline-block rounded-[3px] bg-[#FF5000] px-1 py-[1px] text-[10px] font-bold leading-none text-white">淘宝</span>}
         <span className="min-w-0 truncate text-[14px] font-semibold text-black/85">{o.shopName}</span>
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/30" />
         <span className={`ml-auto shrink-0 text-[13px] ${o.status === 'pendingPay' || o.status === 'shipped' ? 'text-[#FF6A1E]' : o.status === 'cancelled' ? 'text-black/40' : 'text-black/50'}`}>{statusRight}</span>
-      </button>
+      </div>
       <div className="mt-2.5 space-y-3">
         {o.items.map((it, i) => (
-          <button key={i} type="button" onClick={() => onOpenProduct(it.pid)} className="flex w-full gap-2.5 text-left">
+          <button key={i} type="button" onClick={(e) => { e.stopPropagation(); onOpenProduct(it.pid); }} className="flex w-full gap-2.5 text-left">
             <img src={it.img} alt={it.title} className="h-[74px] w-[74px] shrink-0 rounded-lg object-cover" draggable={false} />
             <div className="min-w-0 flex-1">
               <div className="flex gap-2">
@@ -2850,7 +2851,7 @@ function OrderCard({
       </div>
       {/* 物流条（运输中/派送中/待取件，点击进物流页） */}
       {o.status === 'shipped' && nodeIdx >= 0 ? (
-        <button type="button" onClick={() => onOpenLogistics(o.id)} className="mt-2.5 flex w-full items-center gap-2 rounded-xl bg-[#F6F7F8] px-3 py-2.5 text-left active:opacity-80">
+        <button type="button" onClick={(e) => { e.stopPropagation(); onOpenLogistics(o.id); }} className="mt-2.5 flex w-full items-center gap-2 rounded-xl bg-[#F6F7F8] px-3 py-2.5 text-left active:opacity-80">
           {nodeIdx >= 3 ? <Package className="h-4 w-4 shrink-0 text-black/70" strokeWidth={2} /> : nodeIdx === 2 ? <Bike className="h-4 w-4 shrink-0 text-black/70" strokeWidth={2} /> : <Truck className="h-4 w-4 shrink-0 text-black/70" strokeWidth={2} />}
           <span className="shrink-0 text-[13px] font-medium text-black/80">{tbTrackPhaseText(nodeIdx)}</span>
           <span className="truncate text-[12px] text-black/40">{nodeIdx >= 2 ? '预计今天送达' : '预计明天送达'}</span>
@@ -2865,7 +2866,7 @@ function OrderCard({
       </div>
       <div className="mt-2.5 flex items-center">
         {o.status === 'shipped' || o.status === 'completed' ? (
-          <button type="button" onClick={onOpen} className="text-[13px] text-black/50 active:opacity-60">
+          <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(); }} className="text-[13px] text-black/50 active:opacity-60">
             更多
           </button>
         ) : (
@@ -2874,35 +2875,36 @@ function OrderCard({
         <div className="ml-auto flex gap-2">
           {o.status === 'pendingPay' ? (
             <>
-              <button type="button" onClick={onCancel} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+              <button type="button" onClick={(e) => { e.stopPropagation(); onCancel(); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 取消订单
               </button>
-              <button type="button" onClick={onPay} className="rounded-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-3.5 py-1.5 text-[13px] font-semibold text-white active:opacity-85">
+              <button type="button" onClick={(e) => { e.stopPropagation(); onPay(); }} className="rounded-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-3.5 py-1.5 text-[13px] font-semibold text-white active:opacity-85">
                 继续付款
               </button>
             </>
           ) : null}
           {o.status === 'pendingDeliver' ? (
             <>
-              <button type="button" onClick={() => onToast('已提醒商家尽快发货')} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+              <button type="button" onClick={(e) => { e.stopPropagation(); onToast('已提醒商家尽快发货'); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 提醒发货
               </button>
-              <button type="button" onClick={onRefund} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+              <button type="button" onClick={(e) => { e.stopPropagation(); onRefund(); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 退款
               </button>
             </>
           ) : null}
           {o.status === 'shipped' ? (
             <>
-              <button type="button" onClick={() => onToast('收货时间已延长 7 天')} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+              <button type="button" onClick={(e) => { e.stopPropagation(); onToast('收货时间已延长 7 天'); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 延长收货
               </button>
-              <button type="button" onClick={() => onOpenLogistics(o.id)} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+              <button type="button" onClick={(e) => { e.stopPropagation(); onOpenLogistics(o.id); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                 查看物流
               </button>
               <button
                 type="button"
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   if (tbConfirmReceive(uid, o.id)) {
                     tbPushMsg(uid, { kind: 'logistics', title: '确认收货', text: `订单已确认收货 ¥${fmtMoney(o.total)}，记得评价哦`, orderId: o.id });
                     onToast('确认收货成功');
@@ -2919,17 +2921,17 @@ function OrderCard({
               {o.review ? (
                 <span className="rounded-lg border border-black/[0.08] px-3.5 py-1.5 text-[13px] text-black/30">已评价</span>
               ) : (
-                <button type="button" onClick={() => onRate(o.id)} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                <button type="button" onClick={(e) => { e.stopPropagation(); onRate(o.id); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
                   评价
                 </button>
               )}
-              <button type="button" onClick={rebuy} className="rounded-lg border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70">
+              <button type="button" onClick={(e) => { e.stopPropagation(); rebuy(); }} className="rounded-lg border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70">
                 再买一单
               </button>
             </>
           ) : null}
           {o.status === 'cancelled' ? (
-            <button type="button" onClick={rebuy} className="rounded-lg border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70">
+            <button type="button" onClick={(e) => { e.stopPropagation(); rebuy(); }} className="rounded-lg border border-[#FF5000] px-3.5 py-1.5 text-[13px] font-medium text-[#FF5000] active:opacity-70">
               再买一单
             </button>
           ) : null}
@@ -3066,6 +3068,17 @@ function OrderDetailPage({
     const d = new Date(o.paidAt + 2 * 86_400_000);
     return `后天${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}前发货`;
   })();
+  // 驿站口径（待收货详情「已送达」驿站卡与物流页同源）
+  const station = tbStationName(o.address);
+  const pickCode = tbPickCode(o.id);
+  /** 确认收货（底栏按钮 / 驿站卡「一键取件」同口径：需求「点击一键取件等于点击确认收货」） */
+  const confirmReceive = () => {
+    if (tbConfirmReceive(uid, o.id)) {
+      tbPushMsg(uid, { kind: 'logistics', title: '确认收货', text: `订单已确认收货 ¥${fmtMoney(o.total)}，记得评价哦`, orderId: o.id });
+      onToast('确认收货成功');
+      setTick((n) => n + 1);
+    }
+  };
 
   /** 商品行（详情页通用；variant 区分状态口径） */
   const itemRows = (variant: 'pay' | 'deliver' | 'done') => (
@@ -3325,20 +3338,72 @@ function OrderDetailPage({
         {/* ============ 待收货 ============ */}
         {o.status === 'shipped' ? (
           <>
-            <button type="button" onClick={() => onOpenLogistics(o.id)} className="block w-full bg-white px-4 py-4 text-left active:opacity-85">
-              <div className="flex items-center gap-2">
-                {nodeIdx >= 3 ? <Package className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} /> : nodeIdx === 2 ? <Bike className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} /> : <Truck className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} />}
-                <span className="text-[17px] font-semibold text-[#FF6A1E]">{tbTrackPhaseText(nodeIdx)}</span>
-                <span className="text-[13px] text-black/45">{nodeIdx >= 2 ? '预计今天送达' : '预计明天送达'}</span>
-                <span className="ml-auto flex shrink-0 items-center text-[13px] text-black/45">
-                  查看物流
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </span>
+            {nodeIdx >= 3 ? (
+              /* 需求（第五轮·截图1）：到驿站后头部显示「已送达」，下面显示待取件通知 + 驿站卡（取件码/找人帮取/一键取件） */
+              <div className="bg-white px-4 pb-4 pt-4">
+                <div className="flex items-center gap-2">
+                  <Package className="h-5 w-5 shrink-0 text-[#FF6A1E]" strokeWidth={2.1} />
+                  <span className="text-[17px] font-bold text-[#FF6A1E]">已送达</span>
+                  <span className="text-[13px] text-black/40">{fmtTime(o.track[o.track.length - 1]?.at ?? o.createdAt)}</span>
+                  <button type="button" onClick={() => onOpenLogistics(o.id)} className="ml-auto flex shrink-0 items-center text-[13px] text-black/45 active:opacity-70">
+                    查看物流
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="mt-1.5 text-[13.5px] leading-[22px] text-black/75">
+                  <TbDescText text={`您的快件已暂存至${station}，请凭取货码及时领取。如有疑问请联系${manPhone}`} phone={manPhone} />
+                </div>
+                <div className="mt-3 rounded-2xl bg-[#F7F8FA] px-4 pb-4 pt-4">
+                  <div className="flex items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[17px] font-semibold text-black/90">{station}</div>
+                      <div className="mt-0.5 truncate text-[13px] text-black/40">{o.address?.region.replace(/\s+/g, '') ?? ''}</div>
+                    </div>
+                    <button type="button" aria-label="拨打驿站电话" onClick={() => onToast(`拨打驿站电话 ${manPhone}`)} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-white shadow-[0_2px_10px_rgba(0,0,0,0.08)] active:opacity-60">
+                      <Phone className="h-[18px] w-[18px] text-black/75" strokeWidth={2} />
+                    </button>
+                  </div>
+                  <div className="mt-3.5 flex items-center gap-3">
+                    <span className="shrink-0 text-[14px] text-black/55">取件码</span>
+                    <span className="text-[28px] font-bold leading-none tracking-wide text-black/90">{pickCode}</span>
+                    <button type="button" onClick={() => copyText(pickCode, '取件码已复制')} className="text-[13.5px] text-black/45 active:opacity-60">
+                      复制
+                    </button>
+                  </div>
+                  <div className="mt-3.5 flex items-center">
+                    <span className="min-w-0 flex-1 truncate text-[13px] text-[#FF6A1E]">驿站距您较远，有疑问可联系快递员</span>
+                    <button type="button" onClick={() => onToast(`已通知快递员 ${man}`)} className="ml-auto flex shrink-0 items-center text-[14px] text-[#FF6A1E] active:opacity-70">
+                      去联系
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="mt-4 flex gap-3">
+                    <button type="button" onClick={() => onToast('已生成帮取码，可分享给亲友')} className="h-11 flex-1 rounded-xl border border-black/12 bg-white text-[14px] text-black/75 active:opacity-70">
+                      找人帮取
+                    </button>
+                    {/* 需求：一键取件 = 确认收货 */}
+                    <button type="button" onClick={confirmReceive} className="h-11 flex-1 rounded-xl border border-black/12 bg-white text-[14px] text-black/75 active:opacity-70">
+                      一键取件
+                    </button>
+                  </div>
+                </div>
               </div>
-              <div className="mt-1 line-clamp-1 pl-7 text-[12px] text-black/40">
-                {[...o.track].reverse()[0]?.text} · {fmtTime([...o.track].reverse()[0]?.at ?? o.createdAt)}
-              </div>
-            </button>
+            ) : (
+              <button type="button" onClick={() => onOpenLogistics(o.id)} className="block w-full bg-white px-4 py-4 text-left active:opacity-85">
+                <div className="flex items-center gap-2">
+                  {nodeIdx >= 3 ? <Package className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} /> : nodeIdx === 2 ? <Bike className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} /> : <Truck className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} />}
+                  <span className="text-[17px] font-semibold text-[#FF6A1E]">{tbTrackPhaseText(nodeIdx)}</span>
+                  <span className="text-[13px] text-black/45">{nodeIdx >= 2 ? '预计今天送达' : '预计明天送达'}</span>
+                  <span className="ml-auto flex shrink-0 items-center text-[13px] text-black/45">
+                    查看物流
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </span>
+                </div>
+                <div className="mt-1 line-clamp-1 pl-7 text-[12px] text-black/40">
+                  {[...o.track].reverse()[0]?.text} · {fmtTime([...o.track].reverse()[0]?.at ?? o.createdAt)}
+                </div>
+              </button>
+            )}
             {o.address ? (
               <div className="mt-2 bg-white px-4 py-3.5">
                 <div className="flex items-center gap-2">
@@ -3474,14 +3539,66 @@ function OrderDetailPage({
           </>
         ) : null}
 
-        {/* ============ 已取消 / 退款成功（截图1：交易关闭页） ============ */}
+        {/* ============ 已取消 / 退款成功 ============ */}
         {o.status === 'cancelled' ? (
           <>
-            <div className="bg-gradient-to-r from-[#FF6A1E] to-[#FF4400] px-4 py-4 text-white">
-              <div className="text-[19px] font-bold">{o.refund ? '退款成功' : '交易关闭'}</div>
-              <div className="mt-1 text-[13px] text-white/85">{o.cancelReason ?? '订单已取消'}</div>
-              {o.refund ? <div className="mt-1 text-[13px] text-white/85">退款 ¥{fmtMoney(o.refund.amount)} 已原路退回（{o.payChannelLabel ?? '原支付方式'}）</div> : null}
-            </div>
+            {o.refund ? (
+              /* 需求（第五轮）：退款售后详情页美化——退款成功 hero（金额+到账渠道）+ 退款进度 + 退款信息卡 */
+              <>
+                <div className="bg-white px-4 pb-5 pt-5">
+                  <div className="flex items-center gap-3">
+                    <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#00B578]/10">
+                      <Check className="h-6 w-6 text-[#00B578]" strokeWidth={2.6} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[19px] font-bold text-black/90">退款成功</div>
+                      <div className="mt-0.5 truncate text-[12.5px] text-black/45">已原路退回至{o.payChannelLabel ?? '原支付方式'}</div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-[11.5px] text-black/40">退款金额</div>
+                      <div className="mt-1 flex items-baseline justify-end text-[#FF4400]">
+                        <span className="text-[15px] font-semibold">¥</span>
+                        <span className="text-[26px] font-bold leading-none">{fmtMoney(o.refund.amount)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  {/* 退款进度：申请退款 → 商家退款 → 已到账 */}
+                  <div className="relative mt-6">
+                    <div className="absolute left-[16.5%] right-[16.5%] top-[8px] h-[2px] rounded bg-[#00B578]/30" />
+                    <div className="relative flex">
+                      {[
+                        { t: '申请退款', at: o.refund.at - 120_000, last: false },
+                        { t: '商家退款', at: o.refund.at - 60_000, last: false },
+                        { t: '已到账', at: o.refund.at, last: true },
+                      ].map((s) => (
+                        <div key={s.t} className="flex flex-1 flex-col items-center">
+                          <span className={`grid h-[18px] w-[18px] place-items-center rounded-full ${s.last ? 'bg-[#00B578] shadow-[0_0_0_4px_rgba(0,181,120,0.14)]' : 'border-[3px] border-[#00B578] bg-white'}`}>
+                            {s.last ? <Check className="h-2.5 w-2.5 text-white" strokeWidth={3.4} /> : null}
+                          </span>
+                          <div className={`mt-1.5 text-[12.5px] ${s.last ? 'font-semibold text-black/85' : 'font-medium text-black/65'}`}>{s.t}</div>
+                          <div className="mt-0.5 text-[10.5px] text-black/35">{fmtTime(s.at)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-4 rounded-xl bg-[#F7F8FA] px-3.5 py-2.5 text-[12.5px] leading-[20px] text-black/50">退款已按支付方式原路退回，到账后会以消息通知您，请留意{o.payChannelLabel ?? '原支付方式'}账单变化。如有疑问可联系客服处理。</div>
+                </div>
+                {/* 退款信息卡 */}
+                <div className="mt-2 space-y-2.5 bg-white px-4 py-3.5">
+                  <div className="text-[14.5px] font-semibold text-black/85">退款信息</div>
+                  <OdInfoRow label="退款编号" value={`TK${o.id.slice(0, 18)}`} copyable onCopy={() => copyText(`TK${o.id.slice(0, 18)}`, '退款编号已复制')} />
+                  <OdInfoRow label="退款原因" value={o.refund.reason} />
+                  <OdInfoRow label="退款方式" value={`原路退回（${o.payChannelLabel ?? '原支付方式'}）`} />
+                  <OdInfoRow label="申请时间" value={fmtFullTime(o.refund.at - 120_000)} />
+                  <OdInfoRow label="到账时间" value={fmtFullTime(o.refund.at)} />
+                </div>
+              </>
+            ) : (
+              <div className="bg-gradient-to-r from-[#FF6A1E] to-[#FF4400] px-4 py-4 text-white">
+                <div className="text-[19px] font-bold">交易关闭</div>
+                <div className="mt-1 text-[13px] text-white/85">{o.cancelReason ?? '订单已取消'}</div>
+              </div>
+            )}
             {/* 地址卡（截图1：定位标 + 姓名 + 脱敏手机 + 号码保护中） */}
             {o.address ? (
               <div className="mt-2 flex items-start gap-2.5 bg-white px-4 py-3.5">
@@ -3628,27 +3745,18 @@ function OrderDetailPage({
         </div>
       ) : null}
       {o.status === 'shipped' ? (
-        <div className="absolute inset-x-0 bottom-0 z-30 flex items-center justify-end gap-2 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
-          <button type="button" onClick={() => void applyRefund()} className="rounded-lg border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
+        // 需求（第五轮·截图2）：底部按钮改平行等宽（退款/延长收货/查看物流/确认收货）
+        <div className="absolute inset-x-0 bottom-0 z-30 flex items-stretch gap-2.5 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2.5 backdrop-blur-md">
+          <button type="button" onClick={() => void applyRefund()} className="h-[46px] flex-1 rounded-xl border border-black/12 bg-white text-[13.5px] text-black/70 active:opacity-70">
             退款
           </button>
-          <button type="button" onClick={() => onToast('收货时间已延长 7 天')} className="rounded-lg border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
+          <button type="button" onClick={() => onToast('收货时间已延长 7 天')} className="h-[46px] flex-1 rounded-xl border border-black/12 bg-white text-[13.5px] text-black/70 active:opacity-70">
             延长收货
           </button>
-          <button type="button" onClick={() => onOpenLogistics(o.id)} className="rounded-lg border border-black/12 px-4 py-2 text-[13px] text-black/60 active:opacity-70">
+          <button type="button" onClick={() => onOpenLogistics(o.id)} className="h-[46px] flex-1 rounded-xl border border-black/12 bg-white text-[13.5px] text-black/70 active:opacity-70">
             查看物流
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (tbConfirmReceive(uid, o.id)) {
-                tbPushMsg(uid, { kind: 'logistics', title: '确认收货', text: `订单已确认收货 ¥${fmtMoney(o.total)}，记得评价哦`, orderId: o.id });
-                onToast('确认收货成功');
-                setTick((n) => n + 1);
-              }
-            }}
-            className="rounded-lg bg-[#FFF1E6] px-4 py-2 text-[13px] font-semibold text-[#FF5000] active:opacity-80"
-          >
+          <button type="button" onClick={confirmReceive} className="h-[46px] flex-1 rounded-xl bg-[#FDEEE2] text-[13.5px] font-semibold text-[#FF5000] active:opacity-80">
             确认收货
           </button>
         </div>
@@ -3947,14 +4055,32 @@ function LogisticsPage({
                           <ChevronRight className="h-3.5 w-3.5" />
                         </button>
                       </div>
-                      <div className="mt-2.5 flex gap-2.5">
-                        <button type="button" onClick={() => onToast('已生成帮取码，可分享给亲友')} className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
-                          找人帮取
-                        </button>
-                        <button type="button" onClick={() => onToast('已向驿站发送取件请求')} className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
-                          一键取件
-                        </button>
-                      </div>
+                      {/* 需求（第五轮）：一键取件 = 确认收货（物流页同口径）；已签收后不再显示操作钮 */}
+                      {o.status === 'shipped' ? (
+                        <div className="mt-2.5 flex gap-2.5">
+                          <button type="button" onClick={() => onToast('已生成帮取码，可分享给亲友')} className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
+                            找人帮取
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (o.status === 'shipped' && tbConfirmReceive(uid, o.id)) {
+                                tbPushMsg(uid, { kind: 'logistics', title: '确认收货', text: `订单已确认收货 ¥${fmtMoney(o.total)}，记得评价哦`, orderId: o.id });
+                                onToast('取件成功，已确认收货');
+                                setTick((n) => n + 1);
+                              }
+                            }}
+                            className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70"
+                          >
+                            一键取件
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="mt-2.5 flex items-center gap-1.5 text-[13px] text-[#00B578]">
+                          <Check className="h-4 w-4" strokeWidth={2.4} />
+                          已签收，包裹已从驿站取出
+                        </div>
+                      )}
                     </div>
                   ) : null}
                 </div>

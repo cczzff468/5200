@@ -11,6 +11,7 @@
  * - 支付不在这里：taobao-pay.ts 动态 import 微信/QQ 钱包模块（支付复用现有 QQ、微信逻辑）。
  */
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
+import { accLs, getActiveAccountFor } from './accounts';
 import { productById, shopById, tbImg, tbReviewsOf, type TbProduct } from './taobao-data';
 
 // ---------------- 登录态 ----------------
@@ -65,28 +66,32 @@ export function tbSetSession(s: TbSession | null): void {
   }
 }
 
-/** 一键登录前提：微信/QQ App 在线（与美团 mtIdpLoggedIn 同口径） */
+/** 一键登录前提：微信/QQ App 在线（与美团 mtIdpLoggedIn 同口径：会话键 `wx-session-user-id` / `qq-session-user-id` 账号作用域） */
 export function tbIdpLoggedIn(idp: 'wx' | 'qq'): boolean {
   try {
-    return window.localStorage.getItem(`session-user-id:${idp}`) !== null;
+    return window.localStorage.getItem(accLs(`${idp}-session-user-id`, idp)) !== null;
   } catch {
     return false;
   }
 }
 
-/** 一键登录身份解析（与美团 mtResolveIdpIdentity 同源：取对应 App 当前登录联系人） */
+/** 一键登录身份解析（与美团 mtResolveIdpIdentity 同源：会话指针 → 账号槽位档案 → 虚拟账号兜底） */
 export async function tbResolveIdpIdentity(idp: 'wx' | 'qq'): Promise<{ contactId: string; name: string; avatar: string | null }> {
-  const { getContact } = await import('./contacts-store');
-  const id = window.localStorage.getItem(`session-user-id:${idp}`) ?? '';
-  if (id) {
-    const c = await getContact(id).catch(() => null);
-    if (c) return { contactId: c.id, name: c.name, avatar: c.avatar ?? null };
+  try {
+    const { listContacts } = await import('./contacts-store');
+    const acc = getActiveAccountFor(idp);
+    const all = await listContacts();
+    let me: (typeof all)[number] | undefined;
+    const sid = window.localStorage.getItem(accLs(`${idp}-session-user-id`, idp)) ?? '';
+    if (sid) me = all.find((c) => c.id === sid && c.kind === 'user');
+    if (!me) {
+      me = acc.kind === 'main' ? all.find((c) => c.kind === 'user' && !c.altOf) : all.find((c) => c.altOf === acc.id);
+    }
+    if (me) return { contactId: me.id, name: me.name || (idp === 'wx' ? '微信用户' : 'QQ用户'), avatar: me.avatar ?? null };
+  } catch {
+    /* 联系人库异常 → 走虚拟账号兜底 */
   }
-  // 兜底：取该端第一个 user 档案
-  const { listContacts } = await import('./contacts-store');
-  const list = await listContacts();
-  const u = list.find((c) => c.kind === 'user');
-  return { contactId: u?.id ?? '', name: u?.name ?? (idp === 'wx' ? '微信用户' : 'QQ用户'), avatar: u?.avatar ?? null };
+  return { contactId: '', name: idp === 'wx' ? '微信用户' : 'QQ用户', avatar: null };
 }
 
 // ---------------- kv 基础 ----------------

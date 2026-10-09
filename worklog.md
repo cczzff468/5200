@@ -17537,3 +17537,23 @@ Stage Summary:
 - 点击订单语义最终定版：全部订单/我的订单点订单→按状态进订单详情页（待付款/待发货/已发货/交易成功/交易关闭五视图），物流页退为「查看物流」显式入口
 - 交易成功详情「已签收」地址卡可点进物流页（截图2箭头对齐）
 - 改动文件：src/components/apps/taobao.tsx（父级 onOpenOrder 路由、completed 详情地址卡 onClick）
+
+---
+Task ID: 30
+Agent: main (Z.ai Code)
+Task: 淘宝第五轮 5 点——整卡可点进详情、待收货已送达+驿站卡、底栏按钮平行、一键取件=确认收货、退款详情美化
+
+Work Log:
+- OrderCard 整卡可点：卡体 div onClick=onOpen（进对应状态订单详情页），卡内商品行(stopProp→商品页)、物流条(stopProp→物流页)、更多/取消订单/继续付款/提醒发货/退款/延长收货/查看物流/确认收货/评价/再买一单 全部 stopPropagation 自行接管——点卡体任何非功能区域（如金额行）都进详情，点右上角状态字或卡体空白等效
+- 待收货详情（shipped+track 走到驿站 nodeIdx>=3）按截图1重写头部：📦已送达(橙)+时间+查看物流> ，下行「您的快件已暂存至{驿站}，请凭取货码及时领取。如有疑问请联系{电话}」(电话橙色 TbDescText)，再下驿站卡(bg#F7F8FA rounded-2xl)：驿站名+省市区+白圆电话钮 / 取件码大字+复制 / 橙字驿站距您较远+去联系> / 找人帮取|一键取件 并排钮——与物流页驿站卡同源(tbStationName/tbPickCode)；未到驿站保持原 派送中/运输中 头卡
+- 待收货详情底栏按截图2改平行等宽四钮：退款|延长收货|查看物流|确认收货，flex-1 h-[46px] rounded-xl，前三白底灰边框、确认收货 #FDEEE2 橙字
+- 一键取件=确认收货：详情驿站卡一键取件 onClick=confirmReceive（tbConfirmReceive+tbPushMsg+toast「确认收货成功」+setTick），底栏确认收货同函数；物流页驿站卡一键取件同口径（toast「取件成功，已确认收货」），已签收后驿站卡操作钮隐藏换绿字「✓已签收，包裹已从驿站取出」（取件码仍展示）
+- 退款售后详情美化（cancelled+refund）：原橙色渐变头改为白卡 hero——绿勾圆标+退款成功+「已原路退回至{渠道}」+右侧退款金额大字；三步退款进度（申请退款→商家退款→已到账，绿点绿线+时间）；灰底说明条；新增「退款信息」卡（退款编号可复制/退款原因/退款方式原路退回（渠道）/申请时间/到账时间）；纯交易关闭（未退款）保留原橙渐变头
+- 顺手修真 bug：tbIdpLoggedIn/tbResolveIdpIdentity 读 `session-user-id:wx`（全库无此键的写入方，一键登录必失败）→ 对齐美团 mtIdpLoggedIn 口径改读 accLs(`wx-session-user-id`) + getActiveAccountFor 槽位档案兜底 + 虚拟账号兜底——修复后微信一键登录真实链路（微信App登录→淘宝授权弹窗→同意→进首页）浏览器实测通过
+- 浏览器端到端实测（profile 重置后全真链路）：联系人App建机主(手机号+密码)→微信登录→淘宝一键授权登录→下单×3(微信零钱¥8888播种)→待付款/待发货卡体点击进对应详情（点商品行进商品页）→待收货详情截图1样式核对（已送达/驿站卡/取件码/找人帮取|一键取件）→底栏四平行钮→详情一键取件=确认收货→交易成功→申请售后→退款成功美化页(进度三步+退款信息卡)→退款/售后tab只显示退款单→交易成功详情已签收卡→物流页（已完成单驿站卡显示已签收绿字，取件码保留）→物流页一键取件 toast+DB status=completed
+- bunx tsc --noEmit 0 错误；bun run lint 0 错误；dev.log 仅既有 instrumentation.ts Edge Runtime 告警（网易云 keeper，与本任务无关）
+
+Stage Summary:
+- 五点全部落地并实测：整卡点击、已送达+驿站卡(截图1)、底栏四钮平行(截图2)、一键取件=确认收货（详情+物流页+已签收态收尾）、退款成功详情美化
+- 附带修复淘宝一键登录读错会话键的历史 bug（对齐美团 accLs 口径）
+- 改动文件：src/components/apps/taobao.tsx、src/lib/ios/taobao-store.ts
