@@ -17771,3 +17771,63 @@ Stage Summary:
 - 三问题全落地并浏览器端到端实测：票详情影院地址完整可见、微信账单页对未知 kind 永不崩溃且淘宝购物全链路可视、微信银行卡退款写账单（淘宝+美团同构修复）
 - 范围限定零破坏：聊天/红包/转账账单链路零改动；亲属卡退款口径不动；QQ 侧（用户确认正常）不动；美团侧修复与淘宝共用同一新函数，逻辑同构
 - 改动文件：src/components/apps/wechat-wallet.tsx（类型+图标映射+兜底+文案+筛选+统计）、src/components/apps/wechat.tsx（新增 wxRefundToBankCard）、src/lib/ios/taobao-pay.ts、src/lib/ios/meituan-pay.ts（银行卡退款接入）、src/components/apps/taobao-channels.tsx（-mt-7 移到滚动容器）
+
+---
+Task ID: 42-b
+Agent: general-purpose (tb-msg-chat)
+Task: 新建淘宝客服聊天界面组件 src/components/apps/taobao-msg-chat.tsx（对照真实淘宝旺信截图）
+
+Work Log:
+- 新建 src/components/apps/taobao-msg-chat.tsx（'use client'，唯一改动文件，未动 taobao.tsx 与任何 lib）：
+  导出 TbMsgChatPage({ uid, shopId, pid?, orderId?, onBack, onToast, onOpenProduct, onOpenOrder, userName, userAvatar })，props 类型与任务规格逐字段一致（uid 数据隔离键 / pid 商品页客服进入 / orderId 订单客服进入 / userAvatar null 时首字母圆）
+- 渲染要素清单（全部对照截图落地）：①根 flex h-full flex-col bg-[#F6F6F6]；②白底 header pt-[54px] border-b black/[0.06]：ArrowLeft(h-21px)返回、店铺名 17px 粗体（客服回复等待时变「对方正在输入...」）、第二行 ★★★★★(#FF7A2E 11px)+shop.rating.toFixed(1)+天猫店「天猫」灰字，右侧 Store→onToast('进入店铺（演示）')/MoreHorizontal→onToast('更多（演示）')；③营销拒收 pill（BellOff h-3.5+「拒收本店营销活动消息」12px，bg-black/[0.05] rounded-full h-7 self-start ml-4）→onToast('已拒收营销消息（演示）')；④消息区 flex-1 overflow-y-auto px-3 py-3（[scrollbar-width:none][&::-webkit-scrollbar]:hidden 项目惯例）：时间分割（首条/跨天「YYYY年M月D日 HH:mm」、同天 ≥5 分钟「HH:mm」，text-[11.5px] black/35 居中 my-2）、bot 行=方头像 tbImg(shop.tag,120,120,3) h-9 w-9 rounded-lg+客服昵称(tbSellerName 11.5px black/40)+白气泡(rounded-xl rounded-tl-[4px] px-3 py-2 text-[14.5px] leading-[21px] max-w-[240px] break-words)、用户行=浅橙气泡 bg-[#FFE3C6] rounded-tr-[4px]+右侧头像（url 圆图/无则首字母 bg-[#E4E6EA] 圆）、最后一条用户消息下方「已读」（text-[11px] black/30 mr-11 mb-1 右对齐）、打字中 bot 三点气泡（h-1.5 w-1.5 bg-black/30 animate-bounce delay 0/150/300ms）；⑤商品卡消息 w-[248px] bg-white rounded-2xl p-2.5（tbImg(pid.tag,160,160) 76px 方图+标题 line-clamp-2 12.5px+¥价格 16px bold #FF4400+两钮 h-8 rounded-full flex-1：选择商品规格 #FFF1E4/#FF5000、去购买 #FF5000/白 → 均 onOpenProduct；productById 未命中→「商品已下架」灰卡）；⑥订单卡消息 w-[264px] bg-white rounded-2xl p-3（「你正在咨询的订单」13.5px 粗体+items[0] 52px 图+标题 line-clamp-2 12px+右列 ¥total 橙/共N件商品 11px+订单号/创建时间两列 11.5px black/45+「查看订单」h-9 w-full rounded-xl bg-[#FFF1E4] text-[#FF5000]→onOpenOrder；订单不存在→灰卡）；用户侧 card 同卡渲染 justify-end 无昵称行；⑦快捷行「评价客服」(Smile h-4.5)/「自助服务」(LayoutGrid) 白胶囊 h-9→onToast；⑧输入栏 bg-white border-t：Mic(22px)→语音 toast、h-9 bg-black/[0.045] 圆角输入条（placeholder 说点什么...、Enter 发送、组词回车 isComposing 防误发、SmilePlus 19px→表情 toast）、空态右侧 ShoppingBag（有 pid 发买家侧商品卡，否则 onToast('先从宝贝页进来说说想问的宝贝哦~')）+Plus（更多 toast），非空换「发送」h-9 rounded-full bg-[#FF5000] px-4 13.5px
+- AI 回复链路：sendText 用 sendingRef 防并发 → 历史=发送前 msgs 映射 TbSellerHistoryMsg（bot→'bot'，card 原样透传）→ 用户消息 tbChatAppend 落库（返回全量列表 setState）→ setTyping(true)（头部变对方正在输入+三点气泡）→ Promise.all([tbSellerReply(text, history, ctx), 900ms 打字节奏])，ctx={shop, product: pid?productById:null, order: orderId?tbLoadOrders(uid).find:null, custName: userName} → parseSellerReply 拆 [商品:pid] → bot 文本 +（第一个 productById 命中的 pid）bot 商品卡 append → setTyping(false)；卸载 alive ref 防竞态：setMsgs/setTyping 全部 alive 守卫，但回复仍落库（关页后客服照样回复，重进可见）
+- 挂载 effect [uid, shopId]：tbChatRememberShop + tbChatClearUnread；pid 且最近 6 条无同 pid 商品卡→append bot 商品卡；orderId 且无同单订单卡→append bot 订单卡；空会话→append bot 欢迎语「欢迎光临本店～我是客服{tbSellerName}，很高兴为您服务~」；pid/orderId 经 ref 读最新值（依赖保持 [uid, shopId]，父级重渲染不重复补卡）；msgs/typing 变化后双 rAF scrollTo 底部
+- 细节：金额 fmtMoney（整数不带小数/其余两位，与 taobao.tsx 同口径）；商品不存在灰卡「商品已下架」、订单不存在灰卡「订单不存在」保证卡片布局稳定；所有按钮 active:opacity-70/80、触摸目标 ≥36px（拒收 pill h-7 为规格指定值）
+- 验证：bunx tsc --noEmit 0 错误；bunx eslint（仅本文件）0 问题；未启动 dev server、未 git 操作、未改其他文件（父级 taobao.tsx 接线由后续任务完成）
+
+Stage Summary:
+- 淘宝客服聊天界面组件开发完成：店铺名+橙色星级评分头（等待回复→「对方正在输入...」）、营销拒收 pill、店家白气泡+客服昵称+方头像、买家浅橙气泡+头像+「已读」回执、商品卡（选择规格/去购买）、订单卡（查看订单）、打字三点气泡、评价客服/自助服务快捷行、语音/表情/购物袋/加号/发送输入栏——截图要素全数落地
+- 聊天记录按 tb-chat:<uid>:<shopId> 持久化（tb-ai-store），进店自动补发咨询商品卡/订单卡/欢迎语（最近 6 条去重）；AI 回复走 tbSellerReply（用户配置模型→内置→本地规则兜底）+ [商品:pid] 标记转商品卡，≥900ms 打字节奏
+- 改动文件：仅新增 src/components/apps/taobao-msg-chat.tsx；tsc 0 错误
+
+---
+Task ID: 42-a
+Agent: general-purpose (tb-feed)
+Task: 新建 /api/tb-feed 淘宝信息流 AI 生成路由（六 surface 中文 prompt + 用户配置模型优先/内置模型兜底 + 字段收窄白名单兜底），供淘宝各频道刷新出新增内容
+
+Work Log:
+- 新建 src/app/api/tb-feed/route.ts（唯一改动文件，POST，runtime='nodejs' + dynamic='force-dynamic'，文件头注释与 mt-feed 对齐）：完整复用 mt-feed 的 buildCandidates/upstreamText（400 换参重试 + SSE 文本兜底解析）、sdkText（z-ai-web-dev-sdk 内置模型兜底 + 429 退避重试×3）、extractObjects/parseItems（markdown 剥壳 + 逐对象容错扫描）、num/intOf/strOf/tagOf 收窄工具与 clampN/hashOf 风格，全文件无 any（上游 JSON 一律 unknown + RawRec）
+- 六种 surface 的 system/user prompt（全中文）：home 首页双列瀑布流（HOME_TAB_RULES 七频道 tab：rec/follow 综合推荐不限类目、flash 闪购快消 1~59 元 promo 常带超级88、subsidy 家电数码国补 promo=国补 399~6999、super88 9.9~49 元低价爆款 promo=超级88、fliggy 旅行装备箱包、wear 女装穿搭 tag 锁死 jacket/jeans/dress/shoes/hat/coat）；video 短视频种草口播文案式标题 ≤20 字（禁参数罗列）price 以 9.9~199 为主；subsidy 百亿补贴（promo 强制「百亿补贴」+unit 价格后缀+orig 优惠前+foot 榜单+sub 保障文案）；seckill 秒杀（1~99.9 元、grabbed 已抢 30~90、off 直降N元、foot 已售文案）；fliggy 酒店民宿（title=城市/商圈+自创品牌+后缀+分店、每晚价 69~699、reviews=N+条点评、tag 只能 sofa/bedding/lamp）；movie 淘票票热映（原创虚构片名禁真实大片名、badge=IMAX 2D/2D/3D、actors=导演/主演 ≤20 字、price 38~120、tag=books）
+- user prompt 按任务规定模板拼装：【本次口令】nonce /【生成条数】count /【排除名单（绝不能重复出现）】exclude.slice(0,60)（空则「无」）+ 各 surface 任务规则 + ITEM_SCHEMA 字段示例 + tag 白名单清单 + 「请严格输出 JSON 数组」
+- tag 收窄保证永远落在白名单：TAG_WHITELIST 32 词（phone/earbuds/.../books）+ TAG_ALIASES 近似词映射（如 sweater→coat、boots→shoes、fridge→lamp、book→books 等 100+ 条）+ ≥4 字符前缀模糊匹配 + 兜底 pool[0]（mug/bedding/books/jacket）；fliggy/movie/home-wear 用受限 tag 池
+- 字段收窄与 clamp：title（video≤20/movie≤16/其余≤34，空则按 surface 兜底标题）、price 2 位小数（各 surface 独立区间：home 0.01~99999、video 5~299、subsidy 9.9~29999、seckill 1~99.9、fliggy 69~699、movie 38~120）、origPrice 仅 >price 才输出（movie 不给）、sales 0~1e8（酒店/电影不输出）、tags ≤3 个每个 ≤8 字、promo ≤6 字、grabbed 30~90、foot/sub/unit/reviews/off/badge/actors 各自截断；模型漏给时按标题哈希从稳定兜底池补（SUBSIDY_UNITS/FOOTS/SUBS、SECKILL_FOOTS、MOVIE_BADGES、FLIGGY_REVIEWS），home 的 subsidy/super88/flash tab 漏 promo 按 tab 补「国补/超级88」
+- 兜底链路：POST 解析 body（非法 JSON→400）→ surface 白名单校验（非法→400）→ tab 非法回退 rec → count clamp 3~12 → exclude 收 80 条 → nonce 缺省自动生成 → config 收窄（baseUrl 空视为未配置）→ 用户模型 upstreamText 优先（解析为空/抛错→落 sdkText）→ 全失败 200+{ok:false,error:'AI 生成失败：…'} → 塑形层强制过滤（排除名单 Set + 同批标题去重 + 截断到 count）→ 0 条返回 200+{ok:false,error:'模型未返回有效数据'}（同 mt-feed 风格），成功返回 {ok:true,source:'user'|'sdk',items}
+- 自检：bunx tsc --noEmit 全仓库 0 错误；另用临时脚本直调 POST handler 冒烟（不起 dev server，测完已删）：seckill/movie/fliggy 各 3/3/3 条全部字段合规（grabbed 68~82、badge 三种制式、reviews/含双早 tags、酒店名带分店后缀）、非法 surface→400、伪 baseUrl(127.0.0.1:9) config 上游失败→source=sdk 兜底成功、home/wear 四条 tag 全落女装池（coat/jeans/dress/hat）、super88 三条 promo=超级88 价格 14.9~29.9 且排除名单 4 条未复现
+- 范围限定：未改其他任何文件；未接前端调用方（tb-ai-store.ts 的 tbFetchAiBatch 已存在，返回结构 {ok:true,items:[TbFeedRaw]} 与其解析逻辑完全对齐，供主代理/后续 Task 接线）
+
+Stage Summary:
+- /api/tb-feed 路由落地：六 surface 中文 prompt 差异化生成、用户配置 OpenAI 兼容模型优先 + 内置模型兜底、口令+排除名单保刷新出新、tag 白名单强制收窄（图片与内容一致）、全部字段 unknown 收窄无 any
+- 与 mt-feed 同构（工具函数/兜底链路/错误风格/文件头注释一致），与 tb-ai-store.ts 前端契约（请求体六字段 + TbFeedRaw 响应）严格对齐
+- 验证：tsc 0 错误 + handler 直调冒烟 6 场景全过（含兜底链路 source=sdk、排除名单过滤、非法 surface 400）
+
+---
+Task ID: 42（淘宝第十六轮）
+Agent: main (Z.ai Code)
+Task: ①淘宝所有界面刷新保存原来更新的内容（首页/视频/子界面等，持久化）②更新用设置 App 里配置的 API 模型生成 ③开发淘宝消息界面（AI 客服聊天）+ AI 提示词规则
+
+Work Log:
+- 契约层：taobao-data.ts 新增 AI 商品注册表（AI_PRODUCTS Map + tbRegisterAiProduct(s) + productById AI 优先 + tbSearchPool），商品详情/SKU/购物车/下单链路无感命中；新建 src/lib/ios/tb-ai-store.ts（AI 商品持久化 tb-ai-products:<uid> 上限 160、启动恢复 tbRestoreAiProducts、feed 前插状态 tb-feed:<uid>:<surface>（TbFeedTop pid 引用）、频道页辅助 tb-feed-aux:*、客服聊天存储 tb-chat:<uid>:<shopId> + 未读/会话索引）；新建 src/lib/ios/tb-chat-ai.ts（AI 提示词规则 + tbSellerReply 三级兜底 + parseSellerReply 拆 [商品:pid] 标记 + tbSellerName 稳定客服昵称）
+- AI 提示词规则（tb-chat-ai.ts buildSellerSystemPrompt）：店铺身份（名称/体验分/天猫/简介）+ 买家昵称 + 十一条服务守则（称呼「亲」口语短句 ≤60 字、只聊本店话题、48 小时发货/预售 30 天、售后按店铺口径、不编物流单号、尺码给确定推荐、不虚构折扣、红线（不承诺功效/不引导线下/不索验证码）、推荐商品输出 [商品:ID]、退款安抚+原路退回 1~3 工作日、纯文本简体中文）+ 在售商品目录（种子+AI 注册，本店优先 8 条）+ 正在咨询的商品（价格/标签/规格）+ 买家订单上下文（订单号/状态/实付/商品/下单时间）
+- 子代理 42-a：新建 src/app/api/tb-feed/route.ts（六 surface 中文 prompt：home 七频道/video 短视频文案/subsidy/seckill/fliggy/movie；用户配置 OpenAI 兼容模型优先→z-ai-web-dev-sdk 内置模型兜底→200+ok:false；口令+排除名单保证出新；tag 白名单强制收窄；详见下方 42-a 记录）
+- 子代理 42-b：新建 src/components/apps/taobao-msg-chat.tsx 客服聊天界面（对照旺信截图：店铺名+橙色星级评分头、等待回复→「对方正在输入...」、拒收营销 pill、店家白气泡+客服昵称+方头像、买家浅橙气泡+头像+「已读」、商品卡（选择商品规格/去购买）、订单卡（你正在咨询的订单+查看订单）、打字三点气泡、评价客服/自助服务、语音/表情/购物袋/加号/发送输入栏；详见下方 42-b 记录）
+- taobao.tsx 接线：HomePage 重构（tops 前插状态持久化恢复、切频道先存后取、分页进度随写随存、doHomeRefresh 改 async AI 生成前插/失败本地洗牌兜底/竞态丢弃/排除名单=已展示标题）；VideoPage 同构（uid prop、AI 前插 5 条短视频、持久化恢复）；MsgsPage 会话列表合并客服聊天会话（预览/未读角标/点击进聊天页，纯系统消息保持跳订单）；ProductPage/OrderDetailPage/LogisticsPage 全部「客服」按钮接线 openChat（带 pid/orderId 上下文）；Root 新增 page 'chat' + openChat + 启动 tbRestoreAiProducts + 底部消息角标=系统未读+聊天未读
+- taobao-channels.tsx：新增 useTbChannelFeed 共享 hook（挂载恢复持久化批次+AI 前插、refresh 返回 Promise 供刷新指示器等待、失败本地确定性批次兜底、全量持久化）+ aiToSubsidy/aiToSeckill/aiToHotel 转换器（AI 商品→频道条目，点击经 pid 进商品详情）；SubsidyPage/SeckillPage/FliggyPage 接入（FliggyPage 补 uid prop）；MoviePage 批次持久化 + AI 热映新片（原创片名/制式/评分，渐变海报 MOVIE_PALETTES 按标题确定性取色，aux aiMovies 持久化）
+- tb-pull-refresh.tsx：useTbPullRefresh 支持 onRefresh 返回 Promise（AI 生成期间「正在刷新」不提前消失）
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误（仅仓库自带 instrumentation Edge 警告）
+- agent-browser 全真浏览器逐项验证：①首页下拉刷新（TouchEvent 真手势）→ AI 生成 8 条前插（星云耳机 ¥299/极简手表 ¥399 限时特惠角标）+ 种子宝贝原位保留 ②整页 reload+解锁+重开淘宝 → AI 宝贝原样在顶部（核心需求「刷新保存原来更新的内容」达成）③点 AI 宝贝进详情页全链路可用（SKU 四色/超级88 ¥299 优惠前¥599/官方国货甄选店铺/评价/加购购买栏）④商品页「客服」→ 聊天页：商品卡自动带入+客服「乐乐」欢迎语 ⑤发「什么时候可以发货呀」→ 对方正在输入 → AI 回复「亲，现货48小时内发出，会优先安排的呢~」（提示词规则生效）⑥追问「身高189体重160穿什么码」→ AI 结合上下文回「这款耳机不分码数哦，直接选您喜欢的颜色就好呢~」（多轮+商品上下文注入生效）⑦返回消息页 → 「官方国货甄选」会话显示聊天预览+时间 ⑧视频页滚底上滑 → AI 短视频前插 5 条（首条「救命！这耳机音质也太绝了吧」文案风格）+ 视频商品点进详情可用（¥79.90）⑨百亿补贴下拉 → AI 补贴商品 4 条前插（星云手表/云端超薄笔记本/极光降噪耳机/星河平板）+ 种子保留 ⑩淘票票下拉 → AI 原创电影 3 部前插（星尘传说：暗影觉醒 IMAX 2D 7.3 分/时光裂痕：未来之眼 3D/暗夜追捕：真相边缘 2D，渐变海报+评分）+ 生化危机等旧片保留 ⑪整页 reload 后 IndexedDB 复核：home:rec 8 tops / video 5 tops / subsidy 8 tops / movie aiMovies 3 条 / tb-ai-products 24 条全部持久化 ⑫/ready 前 curl 冒烟 /api/tb-feed（source=sdk 内置模型兜底，字段/tag 全合规）
+
+Stage Summary:
+- 四点需求全落地并浏览器端到端实测：所有界面刷新内容持久化（首页各频道/视频/百亿补贴/秒杀/飞猪/淘票票）、更新统一走「设置 › API 配置」用户配置模型（未配置/失败三级兜底：内置模型→本地确定性批次，永不空白）、淘宝消息界面（AI 客服聊天，对照截图全要素）、AI 提示词规则（人设+服务守则+上下文注入+商品卡标记协议）
+- 持久化语义：AI 批次以 pid 引用存 kv（tb-feed:*），AI 商品本体存 tb-ai-products:<uid>，确定性兜底批次号存 aux——刷新页面/重开 App/换频道往返均原样恢复，旧内容与历史批次永不消失
+- 改动文件：新增 src/app/api/tb-feed/route.ts、src/components/apps/taobao-msg-chat.tsx、src/lib/ios/tb-ai-store.ts、src/lib/ios/tb-chat-ai.ts；修改 src/lib/ios/taobao-data.ts（AI 注册表）、src/components/apps/taobao.tsx、src/components/apps/taobao-channels.tsx、src/components/apps/tb-pull-refresh.tsx

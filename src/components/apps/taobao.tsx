@@ -59,7 +59,20 @@ import {
   Loader2,
 } from 'lucide-react';
 import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
-import { useUI } from '@/lib/ios/store';
+import { useSettings, useUI } from '@/lib/ios/store';
+import {
+  tbChatLast,
+  tbChatShops,
+  tbChatTotalUnread,
+  tbChatUnread,
+  tbFetchAiBatch,
+  tbFeedAuxLoad,
+  tbFeedAuxSave,
+  tbFeedLoad,
+  tbFeedSave,
+  tbRestoreAiProducts,
+  type TbFeedTop,
+} from '@/lib/ios/tb-ai-store';
 import {
   TB_CATS,
   TB_HOT_SEARCHES,
@@ -137,6 +150,7 @@ import {
 } from '@/lib/ios/taobao-store';
 import { tbExecutePay, tbListPayChannels, tbRefundToOrigin, type TbPayChannel } from '@/lib/ios/taobao-pay';
 import { BillPage, FliggyPage, MoviePage, SeckillPage, SignInPage, SubsidyPage, TicketDetailPage } from './taobao-channels';
+import { TbMsgChatPage } from './taobao-msg-chat';
 import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 import { LocalToast, useLocalToast } from './page-toast';
 
@@ -936,27 +950,68 @@ function HomePage({
   ];
   const [feedTab, setFeedTab] = useState<HomeFeedTab>('rec');
   // Task 40：刷新只往顶部前插新批次（refreshKey），旧内容原位保留；batch 追加式分页不回退
+  // Task 41：更新内容用「设置 › API 配置」用户配置的模型生成（/api/tb-feed），AI 批次 + 分页状态
+  // 全部持久化（tb-feed:<uid>:home:<tab>）——刷新页面/重开 App 后原样恢复，旧内容永不消失
   const [refreshKey, setRefreshKey] = useState(0);
   const [batch, setBatch] = useState(1);
+  /** 前插条目（AI 批次 + 本地兜底批次统一存 pid 引用，经 productById 解析含 AI 注册表） */
+  const [tops, setTops] = useState<TbFeedTop[]>([]);
+  const apiConfig = useSettings((s) => s.apiConfig);
+  const apiCfgRef = useRef(apiConfig);
+  apiCfgRef.current = apiConfig;
+  const refreshSeq = useRef(0);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  // 镜像 ref：异步刷新完成回调里读取最新状态，避免闭包过期
+  const topsRef = useRef(tops);
+  topsRef.current = tops;
+  const refreshKeyRef = useRef(refreshKey);
+  refreshKeyRef.current = refreshKey;
+  const batchRef = useRef(batch);
+  batchRef.current = batch;
+  const follows = tbLoadShopFollows(uid);
+  // 当前表面（follow 由 FollowFeed 自渲染，不持久化）
+  const surface = feedTab === 'follow' ? null : `home:${feedTab}`;
+  const surfaceRef = useRef(surface);
+  surfaceRef.current = surface;
   const [pullY, setPullY] = useState(0);
   const [pullUpY, setPullUpY] = useState(0);
   const [refreshingDir, setRefreshingDir] = useState<'down' | 'up' | null>(null);
   const pullStart = useRef<number | null>(null);
   const pullDir = useRef<'down' | 'up'>('down');
   const anchorFrom = useRef(0);
-  const follows = tbLoadShopFollows(uid);
 
-  // 上滑加载更多
+  // 挂载/切 tab：恢复该频道持久化的前插批次与分页（旧内容永不消失）
+  useEffect(() => {
+    if (!surface) return;
+    const s = tbFeedLoad(uid, surface);
+    setTops(s?.tops ?? []);
+    setRefreshKey(s?.refreshKey ?? 0);
+    setBatch(s?.batch && s.batch >= 1 ? s.batch : 1);
+  }, [uid, surface]);
+
+  // 上滑加载更多（分页进度持久化：刷新页面后已加载的页数还在；节流 600ms 防连续触发）
+  const batchSaveTimer = useRef<number | null>(null);
   const onScroll = useCallback(() => {
     const el = scrollerRef.current;
     if (!el) return;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
-      setBatch((b) => Math.min(20, b + 1));
+      if (batchSaveTimer.current != null) return;
+      batchSaveTimer.current = window.setTimeout(() => {
+        batchSaveTimer.current = null;
+      }, 600);
+      setBatch((b) => {
+        const nb = Math.min(20, b + 1);
+        // 分页进度随写随存（保存为幂等操作，重复执行无副作用）
+        if (nb !== b && surfaceRef.current) {
+          tbFeedSave(uid, surfaceRef.current, { tops: topsRef.current, batch: nb, refreshKey: refreshKeyRef.current });
+        }
+        return nb;
+      });
     }
-  }, []);
+  }, [uid]);
 
-  // 双向刷新（Task 40）：顶部下拉、底部上拉都触发；前插新推荐、旧内容保留；up 方向视口锚定不跳屏
+  // 双向刷新（Task 40/41）：顶部下拉、底部上拉都触发；AI 生成新推荐前插（用户配置模型），
+  // 失败回退本地洗牌批次；旧内容与历史批次永远保留；up 方向视口锚定不跳屏
   const doHomeRefresh = (dir: 'down' | 'up') => {
     setRefreshingDir(dir);
     if (dir === 'down') setPullY(46);
@@ -964,8 +1019,41 @@ function HomePage({
       setPullUpY(46);
       if (scrollerRef.current) anchorFrom.current = scrollerRef.current.scrollHeight;
     }
-    setTimeout(() => {
-      setRefreshKey((k) => k + 1); // 仅前插新批次，不重置 batch —— 已加载的旧宝贝全部保留
+    const seq = ++refreshSeq.current;
+    const surf = surfaceRef.current;
+    // 排除名单：当前已展示的宝贝标题（保证出来的是新内容）
+    const exclude = [
+      ...topsRef.current.map((t) => productById(t.pid)?.title ?? ''),
+      ...pool.slice(0, Math.min(pool.length, 12 + batchRef.current * 8)).map((p) => p.title),
+    ].filter((s) => s.length > 0);
+    void (async () => {
+      const ai = await tbFetchAiBatch({
+        uid,
+        surface: 'home',
+        tab: feedTab,
+        exclude,
+        count: 8,
+        config: apiCfgRef.current,
+      });
+      if (refreshSeq.current !== seq) return; // 期间又触发了刷新/切频道：丢弃过期批次
+      let newTops: TbFeedTop[];
+      let newKey = refreshKeyRef.current;
+      if (ai) {
+        const ks = `ai${Date.now().toString(36)}`;
+        newTops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...topsRef.current];
+      } else {
+        // 本地兜底：确定性洗牌前插（与 Task 40 口径一致，同样持久化）
+        newKey = refreshKeyRef.current + 1;
+        const shuffled = tbShufflePool(pool, newKey);
+        const ks = `r${newKey}`;
+        newTops = [
+          ...Array.from({ length: 8 }, (_, i) => ({ pid: shuffled[i % shuffled.length].id, v: newKey % 4, k: `${ks}-${i}` })),
+          ...topsRef.current,
+        ];
+      }
+      setTops(newTops);
+      setRefreshKey(newKey);
+      if (surf) tbFeedSave(uid, surf, { tops: newTops, batch: batchRef.current, refreshKey: newKey });
       setRefreshingDir(null);
       setPullY(0);
       setPullUpY(0);
@@ -978,11 +1066,11 @@ function HomePage({
               if (d > 0) el.scrollTop += d;
             }
             anchorFrom.current = 0;
-          })
+          }),
         );
       }
-      onToast('已为你推荐新的好物，旧内容都还在哦');
-    }, 800);
+      onToast(ai ? '已为你推荐新的好物，旧内容都还在哦' : '已为你换上新推荐，旧内容都还在哦');
+    })();
   };
 
   // 下拉/上拉触摸手势
@@ -1024,6 +1112,12 @@ function HomePage({
   }, [feedTab]);
 
   const feed = useMemo(() => {
+    // 前插批次（Task 41）：AI 批次/本地兜底批次统一存 pid 引用，经 productById 解析（含 AI 注册表），
+    // 持久化后刷新页面原样恢复；旧内容原位保留、不消失
+    const topEntries = tops.flatMap((t) => {
+      const p = productById(t.pid);
+      return p ? [{ p, v: t.v, k: t.k }] : [];
+    });
     // 基底流：固定顺序 + 追加式分页（i 为局部索引 → key/图变体稳定，不因刷新变化）
     const base: { p: TbProduct; v: number; k: string }[] = [];
     const n = Math.min(pool.length * 3, 12 + batch * 8);
@@ -1031,14 +1125,8 @@ function HomePage({
       const p = pool[i % pool.length];
       base.push({ p, v: Math.floor(i / pool.length) % 4, k: `b-${p.id}-${i}` });
     }
-    // 刷新批次（Task 40）：每次刷新往顶部前插一批新推荐（最新批在最上）；旧内容原位保留、不消失
-    const tops: { p: TbProduct; v: number; k: string }[] = [];
-    for (let b = refreshKey; b >= 1; b--) {
-      const shuffled = tbShufflePool(pool, b);
-      for (let i = 0; i < 8; i++) tops.push({ p: shuffled[i % shuffled.length], v: b % 4, k: `r${b}-${i}` });
-    }
-    return [...tops, ...base];
-  }, [pool, batch, refreshKey]);
+    return [...topEntries, ...base];
+  }, [tops, pool, batch]);
 
   // 需求（第十轮）：频道 tab「关注」左侧返回按钮 → 返回手机主屏幕
   const closeApp = useUI((s) => s.closeApp);
@@ -1065,9 +1153,12 @@ function HomePage({
                 key={t.id}
                 type="button"
                 onClick={() => {
+                  if (t.id === feedTab) return;
+                  // 切频道前先保存当前频道的刷新批次（旧内容永不丢失），再恢复目标频道的持久化状态
+                  if (surfaceRef.current) {
+                    tbFeedSave(uid, surfaceRef.current, { tops: topsRef.current, batch: batchRef.current, refreshKey: refreshKeyRef.current });
+                  }
                   setFeedTab(t.id);
-                  setRefreshKey(0);
-                  setBatch(1);
                 }}
                 className={`relative shrink-0 pb-2 text-[18px] font-semibold transition-colors ${feedTab === t.id ? 'text-[#FF5000]' : 'text-black/85'}`}
               >
@@ -1291,14 +1382,36 @@ function FollowFeed({ uid, follows, onOpenProduct, onOpenSearch }: { uid: string
 }
 
 /** 视频 tab（截图2 底部第2tab：竖滑短视频流——海报全屏 + 右侧互动栏 + 底部文案 + 播放态 chrome；演示态） */
-function VideoPage({ onOpenProduct, onToast }: { onOpenProduct: (pid: string) => void; onToast: (m: string) => void }) {
+function VideoPage({ uid, onOpenProduct, onToast }: { uid: string; onOpenProduct: (pid: string) => void; onToast: (m: string) => void }) {
   // 需求（第十轮）：视频页上滑可以刷新——滑到底部继续上拉换一批视频
+  // Task 41：更新用「设置 › API 配置」用户配置的模型生成（/api/tb-feed），批次持久化（刷新页面不丢）
   const [vKey, setVKey] = useState(0);
+  /** AI/本地兜底前插的视频条目（pid 引用，持久化恢复） */
+  const [vTops, setVTops] = useState<TbFeedTop[]>([]);
+  const apiConfig = useSettings((s) => s.apiConfig);
+  const apiCfgRef = useRef(apiConfig);
+  apiCfgRef.current = apiConfig;
+  const vSeq = useRef(0);
+  // 挂载：恢复持久化的视频批次（每次进视频 tab 都恢复原内容，不重置）
+  useEffect(() => {
+    const s = tbFeedLoad(uid, 'video');
+    setVTops(s?.tops ?? []);
+    setVKey(s?.refreshKey ?? 0);
+  }, [uid]);
+  const vTopsRef = useRef(vTops);
+  vTopsRef.current = vTops;
+  const vKeyRef = useRef(vKey);
+  vKeyRef.current = vKey;
   const vids = useMemo(() => {
+    const topEntries = vTops.flatMap((t) => {
+      const p = productById(t.pid);
+      return p ? [{ p, v: t.v }] : [];
+    });
     const arr = [...TB_PRODUCTS];
     const start = (vKey * 3) % arr.length;
-    return Array.from({ length: 8 }, (_, i) => ({ p: arr[(start + i) % arr.length], v: (i + vKey) % 4 }));
-  }, [vKey]);
+    const base = Array.from({ length: 8 }, (_, i) => ({ p: arr[(start + i) % arr.length], v: (i + vKey) % 4 }));
+    return [...topEntries, ...base];
+  }, [vTops, vKey]);
   const [playing, setPlaying] = useState(true);
   const [vRefreshing, setVRefreshing] = useState(false);
   const vScrollerRef = useRef<HTMLDivElement>(null);
@@ -1319,12 +1432,27 @@ function VideoPage({ onOpenProduct, onToast }: { onOpenProduct: (pid: string) =>
   const onVTouchEnd = () => {
     if (vAcc.current > 60 && !vRefreshing) {
       setVRefreshing(true);
-      setTimeout(() => {
-        setVKey((k) => k + 1);
+      const seq = ++vSeq.current;
+      // 排除名单：当前已展示视频的宝贝标题
+      const exclude = vids.map(({ p }) => p.title).filter(Boolean).slice(0, 60);
+      void (async () => {
+        const ai = await tbFetchAiBatch({ uid, surface: 'video', exclude, count: 5, config: apiCfgRef.current });
+        if (vSeq.current !== seq) return;
+        let newTops = vTopsRef.current;
+        let newKey = vKeyRef.current;
+        if (ai) {
+          const ks = `ai${Date.now().toString(36)}`;
+          newTops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...vTopsRef.current];
+        } else {
+          newKey = vKeyRef.current + 1;
+        }
+        setVTops(newTops);
+        setVKey(newKey);
+        tbFeedSave(uid, 'video', { tops: newTops, refreshKey: newKey });
         setVRefreshing(false);
         vScrollerRef.current?.scrollTo({ top: 0 });
-        onToast('视频已刷新，为你换了新一批');
-      }, 800);
+        onToast(ai ? '视频已刷新，为你换了新一批' : '视频已刷新，为你换了新一批');
+      })();
     }
     vStart.current = null;
     vAcc.current = 0;
@@ -2010,6 +2138,7 @@ function ProductPage({
   onOpenShop,
   onOpenCheckout,
   onOpenReviews,
+  onOpenChat,
 }: {
   pid: string;
   uid: string;
@@ -2019,6 +2148,8 @@ function ProductPage({
   onOpenShop: (shopId: string) => void;
   onOpenCheckout: (items: TbOrderItem[]) => void;
   onOpenReviews: () => void;
+  /** 联系客服（Task 41：带商品上下文进 AI 客服聊天） */
+  onOpenChat: (shopId: string, pid: string) => void;
 }) {
   const p = productById(pid);
   const [faved, setFaved] = useState(() => tbLoadFavs(uid).includes(pid));
@@ -2199,7 +2330,7 @@ function ProductPage({
           <ShoppingBag className="h-[20px] w-[20px] text-black/70" strokeWidth={2} />
           <span className="text-[10px] text-black/50">店铺</span>
         </button>
-        <button type="button" onClick={() => onToast('客服（演示）')} className="flex w-[48px] flex-col items-center gap-0.5 active:opacity-60">
+        <button type="button" onClick={() => onOpenChat(shop.id, p.id)} className="flex w-[48px] flex-col items-center gap-0.5 active:opacity-60">
           <MessageSquare className="h-[20px] w-[20px] text-black/70" strokeWidth={2} />
           <span className="text-[10px] text-black/50">客服</span>
         </button>
@@ -3521,6 +3652,7 @@ function OrderDetailPage({
   onOpenLogistics,
   onOpenAddrPicker,
   onOpenShop,
+  onOpenChat,
 }: {
   uid: string;
   orderId: string;
@@ -3532,6 +3664,8 @@ function OrderDetailPage({
   onOpenLogistics: (id: string) => void;
   onOpenAddrPicker: () => void;
   onOpenShop: (shopId: string) => void;
+  /** 联系客服（Task 41：带订单上下文进 AI 客服聊天） */
+  onOpenChat: (shopId: string, orderId: string) => void;
 }) {
   const [, setTick] = useState(0);
   const [payPref, setPayPref] = useState<'wx' | 'ali'>('wx');
@@ -4248,7 +4382,7 @@ function OrderDetailPage({
       {o.status === 'pendingPay' ? (
         <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
           <div className="flex gap-4">
-            <button type="button" onClick={() => onToast('客服（演示）')} className="flex w-11 flex-col items-center gap-0.5 active:opacity-60">
+            <button type="button" onClick={() => onOpenChat(o.shopId, o.id)} className="flex w-11 flex-col items-center gap-0.5 active:opacity-60">
               <Headphones className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
               <span className="text-[10px] text-black/50">客服</span>
             </button>
@@ -4271,7 +4405,7 @@ function OrderDetailPage({
       ) : null}
       {o.status === 'pendingDeliver' ? (
         <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-4 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
-          <button type="button" onClick={() => onToast('客服（演示）')} className="flex w-11 flex-col items-center gap-0.5 active:opacity-60">
+          <button type="button" onClick={() => onOpenChat(o.shopId, o.id)} className="flex w-11 flex-col items-center gap-0.5 active:opacity-60">
             <Headphones className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
             <span className="text-[10px] text-black/50">客服</span>
           </button>
@@ -4324,7 +4458,7 @@ function OrderDetailPage({
       ) : null}
       {o.status === 'cancelled' ? (
         <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
-          <button type="button" onClick={() => onToast('客服（演示）')} className="flex w-11 shrink-0 flex-col items-center gap-0.5 active:opacity-60">
+          <button type="button" onClick={() => onOpenChat(o.shopId, o.id)} className="flex w-11 shrink-0 flex-col items-center gap-0.5 active:opacity-60">
             <Headphones className="h-[19px] w-[19px] text-black/70" strokeWidth={2} />
             <span className="text-[10px] text-black/50">客服</span>
           </button>
@@ -4375,12 +4509,15 @@ function LogisticsPage({
   onBack,
   onToast,
   onOpenProduct,
+  onOpenChat,
 }: {
   uid: string;
   orderId: string;
   onBack: () => void;
   onToast: (m: string) => void;
   onOpenProduct: (pid: string) => void;
+  /** 联系客服（Task 41：带订单上下文进 AI 客服聊天） */
+  onOpenChat: (shopId: string, orderId: string) => void;
 }) {
   const [detailOpen, setDetailOpen] = useState(false);
   const [, setTick] = useState(0);
@@ -4415,7 +4552,7 @@ function LogisticsPage({
             <ArrowLeft className="h-[20px] w-[20px] text-black/75" strokeWidth={2.2} />
           </button>
           <div className="flex items-center gap-2 rounded-full bg-white/95 px-3.5 py-2 shadow-sm">
-            <button type="button" onClick={() => onToast('客服（演示）')} className="flex items-center gap-1 active:opacity-60">
+            <button type="button" onClick={() => onOpenChat(o.shopId, o.id)} className="flex items-center gap-1 active:opacity-60">
               <Headphones className="h-4 w-4 text-black/75" strokeWidth={2} />
               <span className="text-[13px] text-black/75">客服</span>
             </button>
@@ -4510,7 +4647,7 @@ function LogisticsPage({
           <ArrowLeft className="h-[20px] w-[20px] text-black/75" strokeWidth={2.2} />
         </button>
         <div className="flex items-center gap-2 rounded-full bg-white/95 px-3.5 py-2 shadow-sm">
-          <button type="button" onClick={() => onToast('客服（演示）')} className="flex items-center gap-1 active:opacity-60">
+          <button type="button" onClick={() => onOpenChat(o.shopId, o.id)} className="flex items-center gap-1 active:opacity-60">
             <Headphones className="h-4 w-4 text-black/75" strokeWidth={2} />
             <span className="text-[13px] text-black/75">客服</span>
           </button>
@@ -5189,6 +5326,7 @@ function MsgsPage({
   onOpenExpress,
   onOpenRefundOrders,
   onOpenCouponCenter,
+  onOpenChat,
   onToast,
 }: {
   uid: string;
@@ -5196,6 +5334,8 @@ function MsgsPage({
   onOpenExpress: () => void;
   onOpenRefundOrders: () => void;
   onOpenCouponCenter: () => void;
+  /** 进入店铺客服聊天（Task 41：消息页会话点击 → AI 客服聊天） */
+  onOpenChat: (shopId: string) => void;
   onToast: (m: string) => void;
 }) {
   const [, setTick] = useState(0);
@@ -5203,17 +5343,41 @@ function MsgsPage({
   const unread = tbMsgUnreadCount(uid);
   const lastLogi = msgs.find((m) => m.kind === 'logistics');
   const lastRefund = msgs.find((m) => m.kind === 'refund');
-  // 店铺会话（按消息关联订单的店铺聚合最新一条；无订单回退消息标题）
+  // 店铺会话（Task 41 合并两种来源：①客服聊天会话（持久化 tb-chat）②系统消息聚合；聊天有未读角标）
   const orders = tbLoadOrders(uid);
   const chats = (() => {
-    const map = new Map<string, { key: string; name: string; text: string; at: number; orderId?: string; tag?: string; tmall?: boolean }>();
+    type ChatRow = { key: string; name: string; text: string; at: number; orderId?: string; tag?: string; tmall?: boolean; shopId?: string; unread: number };
+    const map = new Map<string, ChatRow>();
+    // ① 客服聊天会话（AI 客服消息持久化；点击进聊天页）
+    for (const cs of tbChatShops(uid)) {
+      const shop = shopById(cs.shopId);
+      const last = tbChatLast(uid, cs.shopId);
+      if (!last) continue;
+      const preview = last.text
+        ? last.text
+        : last.card?.type === 'product'
+          ? `【宝贝】${productById(last.card.pid)?.title ?? '商品卡片'}`
+          : '【订单】你正在咨询的订单';
+      map.set(shop.id, {
+        key: `cs-${shop.id}`,
+        name: shop.name,
+        text: (last.role === 'user' ? '我：' : '') + preview,
+        at: last.at,
+        tag: shop.tag,
+        tmall: shop.tmall,
+        shopId: shop.id,
+        unread: tbChatUnread(uid, shop.id),
+      });
+    }
+    // ② 系统消息聚合（同店铺已有聊天会话时跳过，避免重复行）
     for (const m of msgs) {
       const order = m.orderId ? orders.find((o) => o.id === m.orderId) : undefined;
       const shop = order ? shopById(order.shopId) : undefined;
+      if (shop && map.has(shop.id)) continue;
       const name = shop?.name ?? m.title;
       const prev = map.get(name);
       if (!prev || m.at > prev.at) {
-        map.set(name, { key: prev?.key ?? m.id, name, text: m.text, at: m.at, orderId: m.orderId ?? prev?.orderId, tag: shop?.tag, tmall: shop?.tmall });
+        map.set(name, { key: prev?.key ?? m.id, name, text: m.text, at: m.at, orderId: m.orderId ?? prev?.orderId, tag: shop?.tag, tmall: shop?.tmall, unread: prev?.unread ?? 0 });
       } else if (!prev.orderId && m.orderId) {
         prev.orderId = m.orderId;
       }
@@ -5319,7 +5483,12 @@ function MsgsPage({
               <button
                 key={c.key}
                 type="button"
-                onClick={() => c.orderId && onOpenOrder(c.orderId)}
+                onClick={() => {
+                  // Task 41：客服聊天会话进聊天页；纯系统消息会话保持跳订单详情
+                  if (c.shopId) onOpenChat(c.shopId);
+                  else if (c.orderId) onOpenOrder(c.orderId);
+                  else onToast('会话（演示）');
+                }}
                 className={`flex w-full items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.03] ${i < chats.length - 1 ? 'border-b border-black/[0.04]' : ''}`}
               >
                 {c.tag ? (
@@ -5331,7 +5500,12 @@ function MsgsPage({
                   <span className="block truncate text-[16px] font-bold text-black/90">{c.name}</span>
                   <span className="mt-0.5 block truncate text-[13.5px] text-black/45">{c.text}</span>
                 </span>
-                <span className="shrink-0 text-[12px] text-black/30">{fmtChatTime(c.at)}</span>
+                <span className="flex shrink-0 flex-col items-end gap-1">
+                  <span className="text-[12px] text-black/30">{fmtChatTime(c.at)}</span>
+                  {c.unread > 0 ? (
+                    <span className="grid h-[18px] min-w-[18px] place-items-center rounded-full bg-[#FF4400] px-1 text-[11px] font-bold leading-none text-white">{c.unread > 99 ? '99+' : c.unread}</span>
+                  ) : null}
+                </span>
               </button>
             ))}
           </div>
@@ -6330,7 +6504,7 @@ function SettingsPage({ session, onBack, onToast, onLogout }: { session: TbSessi
 
 // ---------------- 主入口（tab 框架 + 页面栈） ----------------
 
-type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill' | 'ticketDetail';
+type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs' | 'chat' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill' | 'ticketDetail';
 type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 
 /** 底部导航（首页/消息/购物车/我的淘宝） */
@@ -6461,6 +6635,10 @@ export default function TaobaoApp() {
   const [walletOpen, setWalletOpen] = useState(false);
   const [rateFor, setRateFor] = useState<string | null>(null);
   const [shopId, setShopId] = useState<string | null>(null);
+  /** 客服聊天页（Task 41）：店铺 + 上下文（商品/订单） */
+  const [chatShopId, setChatShopId] = useState<string | null>(null);
+  const [chatPid, setChatPid] = useState<string | null>(null);
+  const [chatOrderId, setChatOrderId] = useState<string | null>(null);
   /** 物流页订单 + 返回目标（订单列表/详情/快递页均可进） */
   const [logisticsId, setLogisticsId] = useState<string | null>(null);
   const [logiBack, setLogiBack] = useState<'orders' | 'orderDetail'>('orders');
@@ -6482,6 +6660,11 @@ export default function TaobaoApp() {
       setBooting(false);
     });
   }, []);
+
+  // Task 41：登录后恢复 AI 生成商品的持久化注册表（刷新页面/重开 App 后详情/下单链路可用）
+  useEffect(() => {
+    if (session) tbRestoreAiProducts(tbUidOf(session));
+  }, [session]);
 
   // 登录后刷新购物车角标
   useEffect(() => {
@@ -6522,8 +6705,16 @@ export default function TaobaoApp() {
   }
 
   const uid = tbUidOf(session);
-  // 底部消息角标 = 未读数（消息页「清除未读」后归零）
-  const msgCount = tbMsgUnreadCount(uid);
+  // 底部消息角标 = 系统消息未读 + 客服聊天未读（消息页「清除未读」清系统侧）
+  const msgCount = tbMsgUnreadCount(uid) + tbChatTotalUnread(uid);
+
+  /** 打开客服聊天（Task 41：商品页/订单页/物流页/消息页统一入口） */
+  const openChat = (sid: string, ctx?: { pid?: string | null; orderId?: string | null }) => {
+    setChatShopId(sid);
+    setChatPid(ctx?.pid ?? null);
+    setChatOrderId(ctx?.orderId ?? null);
+    setPage('chat');
+  };
 
   /** 打开订单（票务单 → 电影票详情；普通单 → 对应状态详情页；from 记录返回目标） */
   const openOrderSmart = (id: string, from: 'orders' | 'movie' = 'orders') => {
@@ -6566,7 +6757,7 @@ export default function TaobaoApp() {
             onOpenPage={(p) => setPage(p)}
           />
         ) : null}
-        {tab === 'video' ? <VideoPage onOpenProduct={openProduct} onToast={showToast} /> : null}
+        {tab === 'video' ? <VideoPage uid={uid} onOpenProduct={openProduct} onToast={showToast} /> : null}
         {tab === 'msgs' ? (
           <MsgsPage
             uid={uid}
@@ -6578,6 +6769,7 @@ export default function TaobaoApp() {
               setPage('orders');
             }}
             onOpenCouponCenter={() => setPage('couponCenter')}
+            onOpenChat={(sid) => openChat(sid)}
             onToast={showToast}
           />
         ) : null}
@@ -6650,6 +6842,7 @@ export default function TaobaoApp() {
           setPage('checkout');
         }}
         onOpenReviews={() => setPage('reviews')}
+        onOpenChat={(sid, cpid) => openChat(sid, { pid: cpid })}
       />
     );
   } else if (page === 'reviews' && pid) {
@@ -6716,6 +6909,7 @@ export default function TaobaoApp() {
           setShopId(sid);
           setPage('shop');
         }}
+        onOpenChat={(sid, oid) => openChat(sid, { orderId: oid })}
       />
     );
   } else if (page === 'logistics' && logisticsId) {
@@ -6726,6 +6920,23 @@ export default function TaobaoApp() {
         onBack={() => setPage(logiBack === 'orderDetail' ? 'orderDetail' : 'orders')}
         onToast={showToast}
         onOpenProduct={openProduct}
+        onOpenChat={(sid, oid) => openChat(sid, { orderId: oid })}
+      />
+    );
+  } else if (page === 'chat' && chatShopId) {
+    // 客服聊天（Task 41：AI 客服按提示词规则回复，消息持久化）
+    content = (
+      <TbMsgChatPage
+        uid={uid}
+        shopId={chatShopId}
+        pid={chatPid}
+        orderId={chatOrderId}
+        userName={session.name}
+        userAvatar={session.avatar}
+        onBack={() => setPage('main')}
+        onToast={showToast}
+        onOpenProduct={openProduct}
+        onOpenOrder={(id) => openOrderSmart(id, 'orders')}
       />
     );
   } else if (page === 'addresses') {
@@ -6780,7 +6991,7 @@ export default function TaobaoApp() {
     );
   } else if (page === 'fliggy') {
     // 飞猪旅行（第九轮：首页运营位图标入口；首页→酒店列表内部导航）
-    content = <FliggyPage onBack={() => setPage('main')} onToast={showToast} />;
+    content = <FliggyPage uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
   } else if (page === 'bill') {
     // 淘宝账单/我的消费明细（第九轮：我的淘宝消费明细卡入口；真实订单数据；
     // 需求（第十轮）：本月消费行点击进对应订单详情页）

@@ -352,7 +352,33 @@ export const TB_PRODUCTS: TbProduct[] = [
   ]),
 ];
 
-export const productById = (id: string): TbProduct | undefined => TB_PRODUCTS.find((p) => p.id === id);
+export const productById = (id: string): TbProduct | undefined =>
+  AI_PRODUCTS.get(id) ?? TB_PRODUCTS.find((p) => p.id === id);
+
+// ---------------- AI 生成商品注册表（刷新更新内容动态注入，持久化到 IndexedDB 后启动恢复） ----------------
+// AI 生成的商品在运行时注册进这里：商品详情/SKU/购物车/下单等既有链路通过 productById /
+// tbSearchPool 无感命中，不改任何调用方；注册表内容随 tb-ai-products:<uid> 持久化，刷新页面后恢复。
+const AI_PRODUCTS = new Map<string, TbProduct>();
+
+/** 注册 AI 生成的商品（同 id 覆盖） */
+export function tbRegisterAiProduct(p: TbProduct): void {
+  AI_PRODUCTS.set(p.id, p);
+}
+
+/** 批量注册（启动恢复 / AI 批次落地） */
+export function tbRegisterAiProducts(list: TbProduct[]): void {
+  for (const p of list) AI_PRODUCTS.set(p.id, p);
+}
+
+/** 全部 AI 商品（持久化回写用） */
+export function tbAiProductsAll(): TbProduct[] {
+  return [...AI_PRODUCTS.values()];
+}
+
+/** 搜索池（种子 + AI 动态注册），搜索/猜你喜欢可用 */
+export function tbSearchPool(): TbProduct[] {
+  return [...AI_PRODUCTS.values(), ...TB_PRODUCTS];
+}
 
 // ---------------- 搜索 ----------------
 

@@ -67,13 +67,35 @@ import {
   type TbMerch,
   type TbMovie,
   type TbShow,
+  type TbSubsidyItem,
 } from '@/lib/ios/taobao-channels-data';
-import { tbImg } from '@/lib/ios/taobao-data';
+import { productById, tbImg, tbSalesText, type TbProduct } from '@/lib/ios/taobao-data';
+import { useSettings } from '@/lib/ios/store';
+import { tbFetchAiBatch, tbFeedAuxLoad, tbFeedAuxSave, tbFeedLoad, tbFeedSave, type TbFeedTop } from '@/lib/ios/tb-ai-store';
 import { tbClaimCoupon, tbCreateMerchOrder, tbCreateTicketOrder, tbLoadCoupons, tbLoadOrders, tbMarkRefund, tbPushMsg, tbTickOrders, type TbSession, type TbTicketInfo } from '@/lib/ios/taobao-store';
 import { tbRefundToOrigin } from '@/lib/ios/taobao-pay';
 import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 
 const fmtMoney = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, ''));
+
+/** 字符串稳定哈希（AI 电影渐变色/评分派生用） */
+function tbStrHash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+/** AI 电影海报渐变色板（按标题确定性取色，风格与种子电影一致） */
+const MOVIE_PALETTES: Array<[string, string]> = [
+  ['#33424D', '#8B2F1F'],
+  ['#4E4237', '#2B2B2B'],
+  ['#F5A623', '#E8452C'],
+  ['#8ED3F5', '#F48FB1'],
+  ['#5B4A8A', '#C4456F'],
+  ['#1F5E4B', '#86C232'],
+  ['#3A5FA0', '#7692C4'],
+  ['#6B3FA0', '#C45A9C'],
+];
 
 /** 通用页头圆钮（返回/更多） */
 function HeadBtn({ onClick, label, children, dark }: { onClick: () => void; label: string; children: React.ReactNode; dark?: boolean }) {
@@ -87,6 +109,124 @@ function HeadBtn({ onClick, label, children, dark }: { onClick: () => void; labe
       {children}
     </button>
   );
+}
+
+// ---------------- 频道页 AI 刷新共享逻辑（Task 41） ----------------
+// 「更新用设置 App 里配置的 API 模型」：刷新时调 /api/tb-feed 生成新内容前插（服务端内置模型兜底）；
+// 「刷新保存原来更新的内容」：AI 前插（pid 引用经 productById 解析含 AI 注册表）+ 本地确定性批次
+// 全部持久化（IndexedDB kv，按 uid 隔离）——页面刷新/重开 App 后原样恢复，旧内容与历史批次永不消失。
+
+interface TbChannelFeedState {
+  /** 本地确定性批次（AI 失败兜底，批次号列表，最新在前） */
+  batches: number[];
+  /** 批次号序列（持久化，刷新页面后批次内容仍可确定性重算） */
+  batchSeq: number;
+  /** AI 前插条目（pid 引用，最新批在最前） */
+  aiTops: TbFeedTop[];
+}
+
+/** 频道页 feed 状态（恢复 + 刷新：AI 优先、本地批次兜底、全量持久化） */
+function useTbChannelFeed(
+  uid: string,
+  surface: 'subsidy' | 'seckill' | 'fliggy',
+  maxBatches: number,
+  onToast: (m: string) => void,
+  toastText: string,
+) {
+  const [state, setState] = useState<TbChannelFeedState>({ batches: [], batchSeq: 1, aiTops: [] });
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const apiConfig = useSettings((s) => s.apiConfig);
+  const apiCfgRef = useRef(apiConfig);
+  apiCfgRef.current = apiConfig;
+  const seq = useRef(0);
+
+  // 挂载恢复：持久化的 AI 前插 + 确定性批次（旧内容永不消失）
+  useEffect(() => {
+    const aux = tbFeedAuxLoad<{ list?: unknown; seq?: unknown }>(uid, surface, 'batches');
+    const feed = tbFeedLoad(uid, surface);
+    setState({
+      batches: aux && Array.isArray(aux.list) ? (aux.list as number[]).filter((b) => typeof b === 'number').slice(0, maxBatches) : [],
+      batchSeq: aux && typeof aux.seq === 'number' && aux.seq > 0 ? aux.seq : 1,
+      aiTops: feed?.tops ?? [],
+    });
+  }, [uid, surface, maxBatches]);
+
+  const persist = (s: TbChannelFeedState) => {
+    tbFeedAuxSave(uid, surface, 'batches', { list: s.batches, seq: s.batchSeq });
+    tbFeedSave(uid, surface, { tops: s.aiTops });
+  };
+
+  /** 刷新：AI 生成 count 条新内容前插；失败回退本地确定性批次；返回 Promise 供刷新指示器等待 */
+  const refresh = (count: number): Promise<void> => {
+    const s0 = stateRef.current;
+    const mySeq = ++seq.current;
+    return (async () => {
+      const exclude = s0.aiTops
+        .map((t) => productById(t.pid)?.title ?? '')
+        .filter((x) => x.length > 0)
+        .slice(0, 60);
+      const ai = await tbFetchAiBatch({ uid, surface, exclude, count, config: apiCfgRef.current });
+      if (seq.current !== mySeq) return; // 过期批次丢弃
+      if (ai) {
+        const ks = `ai${Date.now().toString(36)}`;
+        const next: TbChannelFeedState = {
+          ...s0,
+          aiTops: [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...s0.aiTops],
+        };
+        setState(next);
+        persist(next);
+      } else {
+        const next: TbChannelFeedState = { batches: [s0.batchSeq, ...s0.batches].slice(0, maxBatches), batchSeq: s0.batchSeq + 1, aiTops: s0.aiTops };
+        setState(next);
+        persist(next);
+      }
+      onToast(toastText);
+    })();
+  };
+
+  return { state, refresh };
+}
+
+/** AI 商品 → 百亿补贴条目（点击经 pid 进商品详情全链路） */
+function aiToSubsidy(p: TbProduct): TbSubsidyItem {
+  return {
+    id: p.id,
+    title: p.title,
+    price: fmtMoney(p.price),
+    unit: '/补贴价',
+    foot: `已售${tbSalesText(p.sales)}`,
+    sub: p.tags[0] ?? '正品发货 假一赔十',
+    tag: p.tag,
+    pid: p.id,
+  };
+}
+
+/** AI 商品 → 秒杀条目 */
+function aiToSeckill(p: TbProduct): (typeof TB_SECKILL.items)[number] {
+  const h = tbStrHash(p.id);
+  const orig = p.originPrice ?? Math.round(p.price * 1.8 * 100) / 100;
+  return {
+    id: p.id,
+    title: p.title,
+    grab: 30 + (h % 60),
+    sold: `已售${tbSalesText(p.sales)}`,
+    foot: [`直降${fmtMoney(Math.max(1, orig - p.price))}元`, '全网低价'],
+    price: fmtMoney(p.price),
+    orig: fmtMoney(orig),
+    tag: p.tag,
+    pid: p.id,
+  };
+}
+
+/** AI 商品 → 飞猪酒店卡（name/price/reviews/tag） */
+function aiToHotel(p: TbProduct): (typeof TB_FLIGGY.hotels)[number] {
+  return {
+    name: p.title,
+    price: fmtMoney(p.price),
+    reviews: `${300 + (tbStrHash(p.id) % 700)}+条点评`,
+    tag: p.tag,
+  };
 }
 
 // ============================== 百亿补贴 ==============================
@@ -106,21 +246,26 @@ export function SubsidyPage({
   const [, setTick] = useState(0);
   const [tab, setTab] = useState('精选');
   const [packetsOpen, setPacketsOpen] = useState(true);
-  // 双向刷新（Task 40）：批次累积前插新补贴商品，旧内容原位保留、不跳顶
-  const [batches, setBatches] = useState<number[]>([]);
-  const batchSeq = useRef(1);
-  const pull = useTbPullRefresh(() => {
-    setBatches((bs) => [batchSeq.current++, ...bs].slice(0, 3));
-    onToast('已刷新，最新补贴商品已更新到顶部');
-  });
-  const freshItems = useMemo(() => {
-    return batches.flatMap((b) =>
+  // 双向刷新（Task 40/41）：AI 生成新补贴商品前插（用户配置模型，服务端兜底），旧内容原位保留、不跳顶；
+  // 全部持久化 —— 刷新页面/重开 App 后原样恢复（useTbChannelFeed）
+  const { state: feedState, refresh } = useTbChannelFeed(uid, 'subsidy', 3, onToast, '已刷新，最新补贴商品已更新到顶部');
+  const pull = useTbPullRefresh(() => refresh(4));
+  // AI 前插（经 productById 解析含 AI 注册表 → 转补贴条目，点击可进商品详情）+ 本地确定性批次
+  const aiItems = useMemo(() => {
+    return feedState.aiTops.flatMap((t) => {
+      const p = productById(t.pid);
+      return p ? [aiToSubsidy(p)] : [];
+    });
+  }, [feedState.aiTops]);
+  const batchItems = useMemo(() => {
+    return feedState.batches.flatMap((b) =>
       Array.from({ length: 2 }, (_, i) => {
         const src = TB_SUBSIDY.items[(b * 2 + i) % TB_SUBSIDY.items.length];
         return { ...src, id: `${src.id}·r${b}-${i}` };
-      })
+      }),
     );
-  }, [batches]);
+  }, [feedState.batches]);
+  const freshItems = useMemo(() => [...aiItems, ...batchItems], [aiItems, batchItems]);
   const coupons = tbLoadCoupons(uid);
   const claim = (name: string, amount: number, min: number) => {
     if (tbClaimCoupon(uid, { name, amount, min, pids: [] })) {
@@ -336,23 +481,26 @@ export function SeckillPage({
   onToast: (m: string) => void;
   onOpenProduct: (pid: string) => void;
 }) {
-  void uid;
   const [tab, setTab] = useState('精选');
-  // 双向刷新（Task 40）：批次累积前插新秒杀商品，旧内容原位保留、不跳顶
-  const [batches, setBatches] = useState<number[]>([]);
-  const batchSeq = useRef(1);
-  const pull = useTbPullRefresh(() => {
-    setBatches((bs) => [batchSeq.current++, ...bs].slice(0, 3));
-    onToast('已刷新，最新秒杀商品已更新到顶部');
-  });
-  const freshItems = useMemo(() => {
-    return batches.flatMap((b) =>
+  // 双向刷新（Task 40/41）：AI 生成新秒杀商品前插（用户配置模型，服务端兜底），旧内容原位保留、不跳顶；
+  // 全部持久化 —— 刷新页面/重开 App 后原样恢复（useTbChannelFeed）
+  const { state: feedState, refresh } = useTbChannelFeed(uid, 'seckill', 3, onToast, '已刷新，最新秒杀商品已更新到顶部');
+  const pull = useTbPullRefresh(() => refresh(4));
+  const aiItems = useMemo(() => {
+    return feedState.aiTops.flatMap((t) => {
+      const p = productById(t.pid);
+      return p ? [aiToSeckill(p)] : [];
+    });
+  }, [feedState.aiTops]);
+  const batchItems = useMemo(() => {
+    return feedState.batches.flatMap((b) =>
       Array.from({ length: 2 }, (_, i) => {
         const src = TB_SECKILL.items[(b * 2 + i) % TB_SECKILL.items.length];
         return { ...src, id: `${src.id}·r${b}-${i}` };
-      })
+      }),
     );
-  }, [batches]);
+  }, [feedState.batches]);
+  const freshItems = useMemo(() => [...aiItems, ...batchItems], [aiItems, batchItems]);
   // 正在秒杀倒计时（23:54:08.6 起跳，0.1s 步进）
   const [left, setLeft] = useState(23 * 3600 + 54 * 60 + 8.6);
   useEffect(() => {
@@ -827,12 +975,78 @@ export function MoviePage({
   const [buyMerch, setBuyMerch] = useState<TbMerch | null>(null);
   const [mQty, setMQty] = useState(1);
   // 双向刷新（Task 40：顶部下拉、底部上拉都触发）——前插新内容、旧内容原位保留、不回顶；
-  // 批次累积（batches 最新在前）：连续多次刷新时，之前刷新出的新内容也不消失
+  // Task 41：AI 生成热映新片前插（用户配置模型，服务端内置模型兜底）+ 批次全部持久化
+  // （刷新页面/重开 App 后旧内容与历史批次原样恢复）
   const [batches, setBatches] = useState<number[]>([]);
   const batchSeq = useRef(1);
+  const [aiMovies, setAiMovies] = useState<TbMovie[]>([]);
+  const apiConfig = useSettings((s) => s.apiConfig);
+  const apiCfgRef = useRef(apiConfig);
+  apiCfgRef.current = apiConfig;
+  const mSeq = useRef(0);
+  const batchesRef = useRef(batches);
+  batchesRef.current = batches;
+  const aiMoviesRef = useRef(aiMovies);
+  aiMoviesRef.current = aiMovies;
+
+  // 挂载恢复：持久化的批次 + AI 电影（旧内容永不消失）
+  useEffect(() => {
+    const aux = tbFeedAuxLoad<{ list?: unknown; seq?: unknown }>(uid, 'movie', 'batches');
+    if (aux && Array.isArray(aux.list)) {
+      const list = (aux.list as number[]).filter((b) => typeof b === 'number').slice(0, 4);
+      setBatches(list);
+      batchSeq.current = typeof aux.seq === 'number' && aux.seq > 0 ? aux.seq : 1;
+    }
+    const saved = tbFeedAuxLoad<TbMovie[]>(uid, 'movie', 'aiMovies');
+    if (saved && Array.isArray(saved)) {
+      setAiMovies(saved.filter((m) => m && typeof m.id === 'string' && typeof m.title === 'string').slice(0, 12));
+    }
+  }, [uid]);
+
   const pull = useTbPullRefresh((dir) => {
-    setBatches((bs) => [batchSeq.current++, ...bs].slice(0, 4));
-    onToast(dir === 'down' ? '已刷新，最新场次演出已更新到顶部' : '已更新，新内容已插入顶部，原内容保留');
+    const mySeq = ++mSeq.current;
+    const bs0 = batchesRef.current;
+    const seq0 = batchSeq.current;
+    return (async () => {
+      const ai = await tbFetchAiBatch({
+        uid,
+        surface: 'movie',
+        exclude: aiMoviesRef.current.map((m) => m.title).slice(0, 60),
+        count: 3,
+        config: apiCfgRef.current,
+      });
+      if (mSeq.current !== mySeq) return; // 过期批次丢弃
+      const persist = (bs: number[], sq: number, movies: TbMovie[]) => {
+        tbFeedAuxSave(uid, 'movie', 'batches', { list: bs, seq: sq });
+        tbFeedAuxSave(uid, 'movie', 'aiMovies', movies);
+      };
+      if (ai && ai.raws.length > 0) {
+        // AI 新片：标题/制式/主演来自模型，渐变色/评分按标题确定性派生
+        const movies: TbMovie[] = ai.raws.map((r, i) => {
+          const pal = MOVIE_PALETTES[(tbStrHash(r.title) + i) % MOVIE_PALETTES.length];
+          const h = tbStrHash(r.title);
+          return {
+            id: ai!.products[i].id,
+            title: r.title,
+            rating: Math.round(70 + (h % 25)) / 10,
+            want: `${2 + (h % 8)}.${h % 9}万人想看`,
+            badge: typeof r.badge === 'string' && r.badge.trim() ? r.badge.trim().slice(0, 8) : '2D',
+            c1: pal[0],
+            c2: pal[1],
+          };
+        });
+        const next = [...movies, ...aiMoviesRef.current].slice(0, 12);
+        setAiMovies(next);
+        persist(bs0, seq0, next);
+      } else {
+        // 本地兜底：确定性批次前插（同样持久化）
+        const nextB = [seq0, ...bs0].slice(0, 4);
+        batchSeq.current = seq0 + 1;
+        setBatches(nextB);
+        persist(nextB, seq0 + 1, aiMoviesRef.current);
+      }
+      onToast(dir === 'down' ? '已刷新，最新场次演出已更新到顶部' : '已更新，新内容已插入顶部，原内容保留');
+    })();
   });
 
   useEffect(() => {
@@ -1558,7 +1772,7 @@ export function MoviePage({
   }
 
   // ---------- 淘票票主界面（顶部四频道 tab 固定，其余内容全部跟随滚动；顶部下拉/底部上拉双向刷新，前插保旧不跳顶） ----------
-  const movies = [...fresh(TB_MOVIES, 2), ...TB_MOVIES];
+  const movies = [...aiMovies, ...fresh(TB_MOVIES, 2), ...TB_MOVIES];
   const soonMovies = [...fresh(TB_MOVIES_SOON, 2), ...TB_MOVIES_SOON];
   const shows = [...fresh(TB_COMEDY_SHOWS, 1), ...TB_COMEDY_SHOWS];
   const concerts = [...fresh(TB_CONCERTS, 1), ...TB_CONCERTS];
@@ -2249,28 +2463,31 @@ export function TicketDetailPage({
 // ============================== 飞猪旅行 ==============================
 
 /** 飞猪旅行（截图8/9：黄——酒店搜索首页→酒店列表；内部二级导航） */
-export function FliggyPage({ onBack, onToast }: { onBack: () => void; onToast: (m: string) => void }) {
+export function FliggyPage({ uid, onBack, onToast }: { uid: string; onBack: () => void; onToast: (m: string) => void }) {
   const [view, setView] = useState<'home' | 'list'>('home');
   const [tab, setTab] = useState('国内');
-  // 双向刷新（Task 40，列表页）：批次累积前插新酒店，旧内容原位保留、不跳顶
-  const [batches, setBatches] = useState<number[]>([]);
-  const batchSeq = useRef(1);
-  const pull = useTbPullRefresh(() => {
-    setBatches((bs) => [batchSeq.current++, ...bs].slice(0, 3));
-    onToast('已刷新，最新酒店已更新到顶部');
-  });
+  // 双向刷新（Task 40/41，列表页）：AI 生成新酒店前插（用户配置模型，服务端兜底），旧内容原位保留、不跳顶；
+  // 全部持久化 —— 刷新页面/重开 App 后原样恢复（useTbChannelFeed）
+  const { state: feedState, refresh } = useTbChannelFeed(uid, 'fliggy', 3, onToast, '已刷新，最新酒店已更新到顶部');
+  const pull = useTbPullRefresh(() => refresh(4));
   type FliggyHotel = (typeof TB_FLIGGY.hotels)[number] & { _k: string; _v: number };
+  const aiHotels = useMemo<FliggyHotel[]>(() => {
+    return feedState.aiTops.flatMap((t) => {
+      const p = productById(t.pid);
+      return p ? [{ ...aiToHotel(p), _k: t.k, _v: t.v }] : [];
+    });
+  }, [feedState.aiTops]);
   const freshHotels = useMemo<FliggyHotel[]>(() => {
-    return batches.flatMap((b) =>
+    return feedState.batches.flatMap((b) =>
       Array.from({ length: 2 }, (_, i) => {
         const src = TB_FLIGGY.hotels[(b + i) % TB_FLIGGY.hotels.length];
         return { ...src, _k: `r${b}-${i}`, _v: (b * 2 + i) % 4 };
-      })
+      }),
     );
-  }, [batches]);
+  }, [feedState.batches]);
   const hotelCards = useMemo<FliggyHotel[]>(
-    () => [...freshHotels, ...TB_FLIGGY.hotels.slice(0, 2).map((h) => ({ ...h, _k: h.name, _v: -1 }))],
-    [freshHotels]
+    () => [...aiHotels, ...freshHotels, ...TB_FLIGGY.hotels.slice(0, 2).map((h) => ({ ...h, _k: h.name, _v: -1 }))],
+    [aiHotels, freshHotels],
   );
   const goSearch = () => {
     setView('list');

@@ -15,8 +15,8 @@ import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 
 export type TbPullDir = 'down' | 'up';
 
-/** 双向刷新 Hook：bind 展开到滚动容器上，scrollRef 接滚动容器 */
-export function useTbPullRefresh(onRefresh: (dir: TbPullDir) => void, opts?: { downThreshold?: number; upThreshold?: number; delay?: number }) {
+/** 双向刷新 Hook：bind 展开到滚动容器上，scrollRef 接滚动容器；onRefresh 可返回 Promise（等 AI 生成完再收尾） */
+export function useTbPullRefresh(onRefresh: (dir: TbPullDir) => void | Promise<void>, opts?: { downThreshold?: number; upThreshold?: number; delay?: number }) {
   const cb = useRef(onRefresh);
   cb.current = onRefresh;
   const downTH = opts?.downThreshold ?? 44;
@@ -59,20 +59,28 @@ export function useTbPullRefresh(onRefresh: (dir: TbPullDir) => void, opts?: { d
       setGhost(null);
       setRefreshing(dir);
       window.setTimeout(() => {
-        cb.current(dir);
-        // 双 rAF 等 React 提交前插内容后再收尾
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            const el2 = scrollRef.current;
-            if (dir === 'up' && el2 && anchorFrom.current > 0) {
-              const d = el2.scrollHeight - anchorFrom.current;
-              if (d > 0) el2.scrollTop += d;
-            }
-            anchorFrom.current = 0;
-            setRefreshing(null);
-            busy.current = false;
-          })
-        );
+        const finish = () => {
+          // 双 rAF 等 React 提交前插内容后再收尾
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => {
+              const el2 = scrollRef.current;
+              if (dir === 'up' && el2 && anchorFrom.current > 0) {
+                const d = el2.scrollHeight - anchorFrom.current;
+                if (d > 0) el2.scrollTop += d;
+              }
+              anchorFrom.current = 0;
+              setRefreshing(null);
+              busy.current = false;
+            }),
+          );
+        };
+        // Task 41：刷新回调返回 Promise（AI 生成）时等它完成再收尾，「正在刷新」不提前消失
+        const ret = cb.current(dir) as unknown;
+        if (ret && typeof (ret as Promise<void>).then === 'function') {
+          (ret as Promise<void>).then(finish, finish);
+        } else {
+          finish();
+        }
       }, delay);
     } else {
       setGhost(null);
