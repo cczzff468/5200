@@ -104,8 +104,9 @@ import { withAvatarForApp, type ContactRecord } from '@/lib/contacts';
  * - 语音留言：列表只显示联系人/类型/时长（不剧透内容），点行进详情页回看完整谈话内容；
  *   拨号中挂断（对方未接听）自动生成对端留言；已接通挂断自动存档整通对话内容（kind='call'，永久保存），
  *   TTS 播报 / 已读未读 / 删除，未读数红点角标
- * - 通话全屏层：深色渐变 + 大头像/名字居中 + 单句弹幕字幕（同一时刻只显示最新一句对话：AI 白/我方绿气泡、
- *   语音轮次带声波小标，超高内部滚动不会被底部按钮遮挡；完整聊天气泡在挂断后的语音留言存档里回看）
+ * - 通话全屏层：深色渐变 + 大头像/名字居中 + 单句弹幕字幕（纯文字样式无气泡背景，与微信/QQ 通话字幕同款：
+ *   同一时刻只显示 AI 最新一句、我方说话不上屏，超高内部滚动不会被底部按钮遮挡；
+ *   完整聊天气泡在挂断后的语音留言存档/聊天界面里回看）
  *   + 右上角信息按钮（开关通话中文字输入）+ 六宫格控制（静音/键盘/扬声器…，文字聊天时收起）+ 红色挂断
  * - 通话界面名字显示：只有「电话联系人」（机主本人/已加好友，通讯录里会出现的人）显示名字+头像；
  *   没加进电话的联系人一律显示电话号码（陌生号语义，iOS 一致）
@@ -115,7 +116,7 @@ import { withAvatarForApp, type ContactRecord } from '@/lib/contacts';
  *   → /api/phone/tts 合成语音播放；内置识别模型已移除（设置里配置了 OpenAI 兼容 STT 时才走服务端兜底）；
  *   麦克风不可用/识别失败自动切换键盘文字输入
  * - 通话中文字聊天：右上角信息按钮开关——只展开输入条（单句弹幕继续显示最新一句）；开启期间暂停免提聆听；
- *   AI 配置了语音 API → 语音回复（TTS），没配 → 文字回复（弹幕气泡）
+ *   AI 配置了语音 API → 语音回复（TTS），没配 → 文字回复（弹幕字幕）
  * - 音效：呼叫等待回铃音（450Hz 中国铃流节奏）、接通提示音、挂断提示音，全部 WebAudio 合成
  * - 通话方向：turn 请求带 direction（AI 来电接听交接='in' / 用户主动拨打='out'，缺省 'out'），
  *   接通问候语按方向区分主被动视角；挂断续聊 endReason 传真实挂断方
@@ -1961,10 +1962,15 @@ function CallScreen({
   // 才显示名字与头像；没加进电话的联系人一律显示电话号码（陌生号语义，iOS 一致）
   const phoneKnownContact = contact && (contact.kind === 'user' || contact.isFriend) ? contact : null;
   const name = phoneKnownContact?.name || formatNumber(target.number);
-  /** 单句弹幕最新一句：过滤流式中的空气泡后取最后一条（新句出现旧句消失） */
-  const shownBubbles = bubbles.filter((b) => b.text.trim().length > 0);
-  /** 回应中三点动画的显示条件：忙且最后一条是我方/还没有气泡（在等对方开口） */
-  const lastShownBubble = shownBubbles[shownBubbles.length - 1];
+  /** 单句弹幕最新一句：只显示 AI 最新一句（我方说话不上屏，与微信/QQ 通话字幕同款；新句出现旧句消失），
+   *  跳过流式中的空气泡，避免新句刚开始流式时闪烁 */
+  const lastAiBubble = (() => {
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const b = bubbles[i];
+      if (b.role === 'assistant' && b.text.trim().length > 0) return b;
+    }
+    return null;
+  })();
   /** 文字聊天模式：六宫格收起给输入框腾地方，关闭后恢复 */
   const controlsCollapsed = textMode;
   const controlBtn = (icon: React.ReactNode, label: string, active: boolean, onClick: () => void, disabled = false) => (
@@ -2047,41 +2053,31 @@ function CallScreen({
             {error}
           </p>
         )}
-        {/* 单句弹幕：同一时刻只显示最新一句对话（AI 白色气泡在左/我方绿色气泡在右，语音轮次带声波小标；
-            新句出现旧句消失，完整聊天气泡在挂断后的语音留言存档/聊天界面看）；
+        {/* 单句弹幕：纯文字字幕（无气泡背景，用户参考截图样式）——同一时刻只显示 AI 最新一句，
+            我方说话不上屏，新句出现旧句消失；完整聊天气泡在挂断后的语音留言存档/聊天界面看；
             有界滚动超高内部滚底，长句不会被底部按钮遮挡；拨号中隐藏（占位保留布局稳定） */}
         {phase !== 'dialing' ? (
           <div
             ref={textListRef}
-            className="no-scrollbar mt-2 flex w-full min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-1 pb-1"
+            className="no-scrollbar flex w-full min-h-0 flex-1 flex-col items-center overflow-y-auto px-2 pb-1 pt-3"
             aria-label="通话字幕"
+            aria-live="polite"
             data-testid="call-captions"
           >
-            {lastShownBubble && (
-              <div className={`flex ${lastShownBubble.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <p
-                  className={`flex max-w-[82%] items-start gap-1.5 whitespace-pre-wrap break-words px-3.5 py-2 text-[14.5px] leading-snug shadow-[0_1px_3px_rgba(0,0,0,0.3)] ${
-                    lastShownBubble.role === 'user'
-                      ? 'rounded-[16px] rounded-br-[5px] bg-[#34C759] text-white'
-                      : 'rounded-[16px] rounded-bl-[5px] bg-white/15 text-white/95'
-                  }`}
-                >
-                  {lastShownBubble.via !== 'text' && <AudioLines className="mt-[3px] h-3.5 w-3.5 shrink-0 opacity-60" aria-hidden="true" />}
-                  <span className="min-w-0">{lastShownBubble.text}</span>
-                </p>
-              </div>
+            {lastAiBubble && (
+              <p
+                key={lastAiBubble.id}
+                className="animate-call-caption w-full whitespace-pre-wrap break-words text-center text-[17px] leading-[1.6] text-white/60"
+              >
+                {lastAiBubble.text}
+              </p>
             )}
-            {busy && (!lastShownBubble || lastShownBubble.role === 'user') && (
-              <div className="flex justify-start">
-                <p
-                  className="flex items-center gap-1.5 rounded-[16px] rounded-bl-[5px] bg-white/15 px-3.5 py-2.5"
-                  aria-label="对方正在回应"
-                >
-                  {[0, 150, 300].map((d) => (
-                    <span key={d} className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/60" style={{ animationDelay: `${d}ms` }} />
-                  ))}
-                </p>
-              </div>
+            {busy && !lastAiBubble && (
+              <span className="flex items-center gap-1.5 py-2" aria-label="对方正在回应">
+                {[0, 150, 300].map((d) => (
+                  <span key={d} className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50" style={{ animationDelay: `${d}ms` }} />
+                ))}
+              </span>
             )}
           </div>
         ) : (

@@ -18026,3 +18026,19 @@ Work Log:
 Stage Summary:
 - 交付：①内置识别模型（z-ai ASR）全链路移除——通话免提识别/语音消息实时转写全部走 Web Speech（浏览器原生、零服务端、无 429），OpenAI 兼容 STT 保留为可选服务端兜底（长按旧语音转文字/不支持 Web Speech 时）；②通话界面只给「电话联系人」（好友/机主）显示名字头像，未加好友联系人显示号码；③电话与微信/QQ 通话界面还原单句弹幕，聊天气泡只出现在挂断后的聊天界面/语音留言存档；④通话底部按钮上移 8px
 - 改动文件：src/components/apps/phone.tsx、src/components/apps/voice-call-screen.tsx、src/components/apps/settings.tsx、src/components/apps/voice-input.tsx（注释）、src/lib/ios/chat-call.ts、src/lib/ios/stt-client.ts、src/lib/ios/audio-utils.ts、src/lib/ios/store.ts、src/app/api/stt/route.ts、删除 src/app/api/phone/asr/route.ts
+
+---
+Task ID: 56
+Agent: main (Z.ai Code)
+Task: 用户反馈「打电话界面还是显示聊天气泡，应该显示单句弹幕（第二张参考截图那样的纯文字字幕），聊天界面才显示全部聊天记录」——电话 App 通话界面弹幕从气泡样式还原为纯文字字幕
+
+Work Log:
+- 根因确认：Task 55 还原单句弹幕时渲染样式仍沿用了聊天气泡容器（AI 白/我方绿圆角气泡 + 声波小标 + busy 三点也装在气泡里），用户指出弹幕应该是参考截图那种「无气泡背景的纯文字字幕」；而微信/QQ 通话页 CaptionStream 一直是正确样式（CaptionLine 纯文字：无背景、居中、17px、white/60、animate-call-caption）
+- phone.tsx CallScreen 弹幕区重写：①选取逻辑从「最后一条气泡（不分角色）」改为「最后一条 AI（assistant）消息」——我方说话不上屏（与微信/QQ 通话字幕同款，跳过流式空气泡防闪烁）；②渲染从气泡改为纯文字 <p>：animate-call-caption + text-center + text-[17px] leading-[1.6] text-white/60，无背景无圆角无声波小标；③busy 回应中三点改为无气泡的居中小圆点（仅在还没有任何 AI 台词时显示，AI 台词已在屏则保持显示待新句替换，状态行同时有「…」指示）；④保留有界滚动（flex-1 min-h-0 overflow-y-auto + textListRef 自动滚底）——长句内部滚动不被底部按钮遮挡（Task 53 的遮挡修复不回退）；⑤文字模式（右上角信息按钮）下弹幕继续显示最新一句，仅展开输入条
+- 核对未受影响面：微信/QQ 通话页 CaptionStream 纯文字字幕本就正确未动；Task 54「挂断后整通对话落聊天记录」链路完整保留（转写气泡只出现在挂断后的语音留言存档/微信/QQ 聊天界面，不在通话实时界面）；名字/号码显示规则、底部按钮间距、右上角信息按钮、Web Speech 免提链路全部不变
+- E2E（agent-browser 全真浏览器 + mock /api/phone/turn）：①联系人 App 建「小美」13900001111（非好友）→ 电话键盘拨号显示「呼叫 小美」匹配预览 → 拨出接通后通话界面显示号码「139 0000 1111」+ 纯文字弹幕「喂？你怎么不说话呀？我在听呢。」；②计算样式实测：backgroundColor=rgba(0,0,0,0)、borderRadius=0px、textAlign=center（气泡彻底消失）；③连发两条文字消息 → 弹幕只显示 AI 最新一句且新句替换旧句（我方「你好呀小美/再说一句」不上屏）、同屏 caption p 数=1；④挂断 → toast「通话内容已永久保存到语音留言」→ 语音留言详情「这通电话说了什么」以聊天气泡完整回看双方全部轮次（存档视图=聊天气泡的正确归属）；⑤dev.log 无新增运行时错误（仅环境性 z-ai 429）；bunx tsc --noEmit 0 错误
+- 备注：本次 E2E 为全新浏览器 profile（微信/QQ 有登录墙未走微信通话回归；voice-call-screen.tsx 本任务零改动，其纯文字 CaptionStream 样式在 Task 55 已验证）；另发现 agent-browser 会话内执行 `set viewport` 会破坏后续鼠标输入路由（pointer 事件不再派发），重开会话即恢复
+
+Stage Summary:
+- 交付：电话 App 通话界面单句弹幕还原为「纯文字字幕」样式（无气泡背景、居中灰色 17px、只显示 AI 最新一句、新句替换旧句、长句有界滚动防遮挡）——与用户参考截图一致；聊天气泡只出现在挂断后的语音留言存档/微信/QQ 聊天记录界面
+- 改动文件：src/components/apps/phone.tsx（仅 CallScreen 弹幕渲染区 + 文件头注释）
