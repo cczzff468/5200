@@ -71,7 +71,7 @@ import {
 } from '@/lib/ios/taobao-channels-data';
 import { productById, tbImg, tbSalesText, type TbProduct } from '@/lib/ios/taobao-data';
 import { useSettings } from '@/lib/ios/store';
-import { tbFetchAiBatch, tbFeedAuxLoad, tbFeedAuxSave, tbFeedLoad, tbFeedSave, type TbFeedTop } from '@/lib/ios/tb-ai-store';
+import { tbFetchAiBatch, tbFeedAuxLoad, tbFeedAuxSave, tbFeedLoad, tbFeedSave, type TbFeedRaw, type TbFeedTop } from '@/lib/ios/tb-ai-store';
 import { tbClaimCoupon, tbCreateMerchOrder, tbCreateTicketOrder, tbLoadCoupons, tbLoadOrders, tbMarkRefund, tbPushMsg, tbTickOrders, type TbSession, type TbTicketInfo } from '@/lib/ios/taobao-store';
 import { tbRefundToOrigin } from '@/lib/ios/taobao-pay';
 import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
@@ -226,6 +226,117 @@ function aiToHotel(p: TbProduct): (typeof TB_FLIGGY.hotels)[number] {
     price: fmtMoney(p.price),
     reviews: `${300 + (tbStrHash(p.id) % 700)}+条点评`,
     tag: p.tag,
+  };
+}
+
+// ---------------- 淘票票 AI 条目转换（Task 44：喜剧脱口秀/演唱会/周边/即将上映） ----------------
+
+/** 宽松收窄：非空字符串截断，否则 undefined */
+function strField(v: unknown, maxLen: number): string | undefined {
+  return typeof v === 'string' && v.trim() ? v.trim().slice(0, maxLen) : undefined;
+}
+
+/** 喜剧脱口秀暖色渐变（与种子演出橙红调一致） */
+const SHOW_PALETTES: Array<[string, string]> = [
+  ['#FF8A00', '#E84A1F'],
+  ['#FFB03A', '#F0641E'],
+  ['#FF7A3C', '#E8452C'],
+  ['#FFA04A', '#D93A1F'],
+  ['#FF9A3C', '#C9401E'],
+];
+/** 演唱会紫蓝渐变（与种子演唱会一致） */
+const CONCERT_PALETTES: Array<[string, string]> = [
+  ['#7C5CFF', '#3B2A8C'],
+  ['#9F7BFF', '#4A2F9C'],
+  ['#6B4FE0', '#2B1F6E'],
+  ['#8A6CFF', '#5A3AA0'],
+  ['#5C4AD8', '#33267A'],
+];
+/** standup 兜底池（route 已兜底一层，此处防御模型漏字段+旧持久化数据） */
+const SHOW_TAG_POOL = ['脱口秀', '漫才', '开放麦', '舞台剧', '即兴喜剧'];
+const CONCERT_STATUS_LEFT = ['充足', '紧张', '少量余票'];
+
+/** 即将上映：档期按标题哈希派生（未来 3~21 天，周X） */
+function soonDateLabel(seed: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 3 + (seed % 19));
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]}`;
+}
+
+/** AI 原始条目 → 即将上映新片（wantTo 万人想看） */
+function aiToMovieUp(r: TbFeedRaw & { title: string; tag: string }, i: number): TbMovie {
+  const h = tbStrHash(r.title);
+  const pal = MOVIE_PALETTES[(h + i) % MOVIE_PALETTES.length];
+  const want = typeof r.wantTo === 'number' && Number.isFinite(r.wantTo) && r.wantTo > 0 ? r.wantTo : Math.round((30 + (h % 300)) / 3) / 10;
+  return {
+    id: `ai-up-${r.title}`,
+    title: r.title,
+    want: `${want}万人想看`,
+    badge: strField(r.badge, 8) ?? '2D',
+    c1: pal[0],
+    c2: pal[1],
+  };
+}
+
+/** AI 原始条目 → 喜剧脱口秀演出 */
+function aiToShow(r: TbFeedRaw & { title: string; tag: string }, i: number): TbShow {
+  const h = tbStrHash(r.title);
+  const pal = SHOW_PALETTES[(h + i) % SHOW_PALETTES.length];
+  const price = typeof r.price === 'number' && Number.isFinite(r.price) && r.price >= 80 ? Math.round(r.price) : 80 + (h % 200);
+  return {
+    id: `ai-c-${r.title}`,
+    title: r.title,
+    sub: strField(r.sub, 24) ?? '平行喜剧厂牌 · 卡司盲盒',
+    venue: strField(r.venue, 24) ?? '濮阳文化艺术中心小剧场',
+    city: strField(r.city, 8) ?? '濮阳',
+    dateRange: strField(r.dateRange, 28) ?? '11.08 周六 19:30',
+    price: `${price}-${Math.round((price * 2.4) / 10) * 10}`,
+    tag: typeof r.tag === 'string' && SHOW_TAG_POOL.includes(r.tag) ? r.tag : '脱口秀',
+    c1: pal[0],
+    c2: pal[1],
+    hot: strField(r.hot, 12) ?? `已售${300 + (h % 900)}`,
+  };
+}
+
+/** AI 原始条目 → 演唱会（票档由最低价确定性派生：内场VIP/看台A/看台B，末档=起价） */
+function aiToConcert(r: TbFeedRaw & { title: string; tag: string }, i: number): TbConcert {
+  const h = tbStrHash(r.title);
+  const pal = CONCERT_PALETTES[(h + i) % CONCERT_PALETTES.length];
+  const base = typeof r.price === 'number' && Number.isFinite(r.price) && r.price >= 180 ? Math.round(r.price) : 180 + (h % 900);
+  const city = strField(r.city, 8) ?? '郑州';
+  return {
+    id: `ai-cc-${r.title}`,
+    artist: strField(r.artist, 8) ?? '林晚风',
+    tour: strField(r.tour, 20) ?? '星野世界巡回演唱会',
+    city,
+    venue: strField(r.venue, 24) ?? `${city}奥林匹克体育中心`,
+    dateRange: strField(r.dateRange, 28) ?? '11.21-11.22 周五六 19:00',
+    status: h % 4 === 0 ? 'soon' : 'on',
+    c1: pal[0],
+    c2: pal[1],
+    hot: strField(r.hot, 12) ?? '已售1.2万',
+    tiers: [
+      { name: '内场VIP', price: Math.round((base * 2.6) / 10) * 10, left: h % 3 === 0 ? '紧张' : '充足' },
+      { name: '看台A', price: Math.round((base * 1.6) / 10) * 10, left: h % 4 === 0 ? '紧张' : '充足' },
+      { name: '看台B', price: base, left: CONCERT_STATUS_LEFT[h % CONCERT_STATUS_LEFT.length] },
+    ],
+  };
+}
+
+/** AI 原始条目 → 周边商品 */
+function aiToMerch(r: TbFeedRaw & { title: string; tag: string }): TbMerch {
+  const h = tbStrHash(r.title);
+  const price = typeof r.price === 'number' && Number.isFinite(r.price) && r.price >= 19 ? Math.round(r.price) : 39 + (h % 200);
+  const orig = typeof r.origPrice === 'number' && Number.isFinite(r.origPrice) && r.origPrice > price ? Math.round(r.origPrice) : undefined;
+  return {
+    id: `ai-pm-${r.title}`,
+    title: r.title,
+    from: strField(r.from, 30) ?? '《群星闪耀时》官方周边',
+    price,
+    orig,
+    tag: r.tag,
+    hot: strField(r.hot, 12) ?? `已售${500 + (h % 3000)}`,
+    kind: strField(r.kind, 6) ?? '手办',
   };
 }
 
@@ -510,34 +621,36 @@ export function SeckillPage({
   const cd = `${String(Math.floor(left / 3600)).padStart(2, '0')}:${String(Math.floor((left % 3600) / 60)).padStart(2, '0')}:${String(Math.floor(left % 60)).padStart(2, '0')}.${Math.floor((left % 1) * 10)}`;
   const topGroups = [TB_SECKILL.top.slice(0, 2), TB_SECKILL.top.slice(2, 4)];
   return (
-    <div className="flex h-full flex-col bg-[#FF5000]">
-      {/* 顶栏 */}
-      <div className="relative z-30 shrink-0 bg-gradient-to-b from-[#FF6A1E] to-[#FF5000] px-3 pb-3 pt-[56px]">
-        <div className="flex items-center gap-2">
-          <HeadBtn onClick={onBack} label="返回" dark>
-            <ArrowLeft className="h-[20px] w-[20px] text-white" strokeWidth={2.4} />
-          </HeadBtn>
-          <span className="text-[23px] font-black italic leading-none tracking-tight text-[#FFE84D]">淘宝秒杀</span>
-          <div className="ml-auto flex h-[38px] min-w-0 flex-1 max-w-[190px] items-center gap-1.5 rounded-full bg-white/95 pl-3">
-            <Search className="h-[16px] w-[16px] shrink-0 text-black/40" />
-            <span className="min-w-0 flex-1 truncate text-[13.5px] text-black/70">备用手机</span>
-            <span className="grid h-[30px] shrink-0 place-items-center rounded-full bg-[#FF3B30] px-2.5 text-[13px] font-semibold text-white">搜低价</span>
-          </div>
-          <HeadBtn onClick={() => onToast('更多（演示）')} label="更多" dark>
-            <MoreHorizontal className="h-[19px] w-[19px] text-white" strokeWidth={2.2} />
-          </HeadBtn>
-        </div>
-        {/* 超级88换季必备横幅 */}
-        <button type="button" onClick={() => onToast('超级88换季必备（演示）')} className="relative mt-2 flex h-[104px] w-full items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-r from-[#FF7A21] via-[#FF5A10] to-[#FF7A21] active:opacity-90">
-          <span className="text-[40px] font-black italic leading-none tracking-tight text-[#FFE84D] drop-shadow-[0_2px_0_rgba(0,0,0,0.18)]">超级88</span>
-          <img src={tbImg('toy', 120, 120, 3)} alt="换季好物" className="mx-2 h-[76px] w-[76px] rounded-xl object-cover" draggable={false} />
-          <span className="text-[40px] font-black italic leading-none tracking-tight text-white drop-shadow-[0_2px_0_rgba(0,0,0,0.18)]">换季必备</span>
-          <span className="absolute bottom-2 right-2 rounded-md bg-black/30 px-1.5 py-px text-[11px] font-semibold text-white">1/4</span>
-        </button>
-      </div>
-
+    <div className="relative flex h-full flex-col bg-[#FF5000]">
+      {/* 返回悬浮钮（用户需求：顶栏/横幅等全部跟随滚动，仅场次标签吸顶——返回键常驻避免滚走后被困） */}
+      <button type="button" aria-label="返回" onClick={onBack} className="absolute left-2 top-[64px] z-40 grid h-9 w-9 place-items-center rounded-full bg-black/25 backdrop-blur-sm active:opacity-70">
+        <ArrowLeft className="h-[20px] w-[20px] text-white" strokeWidth={2.4} />
+      </button>
+      {/* 状态栏安全区（唯一固定区，仅占高度）——用户需求：除场次标签吸顶外其余全部跟随滚动 */}
+      <div className="relative z-30 h-[56px] shrink-0 bg-[#FF6A1E]" />
       <div className="relative min-h-0 flex-1">
         <div ref={pull.scrollRef} {...pull.bind} className="h-full overflow-y-auto px-2 pb-8">
+        {/* 顶栏（跟随滚动：-mx-2 拉通全宽渐变底；返回键已提为悬浮钮） */}
+        <div className="relative z-30 -mx-2 bg-gradient-to-b from-[#FF6A1E] to-[#FF5000] px-3 pb-3">
+          <div className="flex items-center gap-2 pl-11">
+            <span className="text-[23px] font-black italic leading-none tracking-tight text-[#FFE84D]">淘宝秒杀</span>
+            <div className="ml-auto flex h-[38px] min-w-0 flex-1 max-w-[190px] items-center gap-1.5 rounded-full bg-white/95 pl-3">
+              <Search className="h-[16px] w-[16px] shrink-0 text-black/40" />
+              <span className="min-w-0 flex-1 truncate text-[13.5px] text-black/70">备用手机</span>
+              <span className="grid h-[30px] shrink-0 place-items-center rounded-full bg-[#FF3B30] px-2.5 text-[13px] font-semibold text-white">搜低价</span>
+            </div>
+            <HeadBtn onClick={() => onToast('更多（演示）')} label="更多" dark>
+              <MoreHorizontal className="h-[19px] w-[19px] text-white" strokeWidth={2.2} />
+            </HeadBtn>
+          </div>
+          {/* 超级88换季必备横幅 */}
+          <button type="button" onClick={() => onToast('超级88换季必备（演示）')} className="relative mt-2 flex h-[104px] w-full items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-r from-[#FF7A21] via-[#FF5A10] to-[#FF7A21] active:opacity-90">
+            <span className="text-[40px] font-black italic leading-none tracking-tight text-[#FFE84D] drop-shadow-[0_2px_0_rgba(0,0,0,0.18)]">超级88</span>
+            <img src={tbImg('toy', 120, 120, 3)} alt="换季好物" className="mx-2 h-[76px] w-[76px] rounded-xl object-cover" draggable={false} />
+            <span className="text-[40px] font-black italic leading-none tracking-tight text-white drop-shadow-[0_2px_0_rgba(0,0,0,0.18)]">换季必备</span>
+            <span className="absolute bottom-2 right-2 rounded-md bg-black/30 px-1.5 py-px text-[11px] font-semibold text-white">1/4</span>
+          </button>
+        </div>
         {/* 9块9品牌疯抢 / 0.99产地直发 */}
         <div className="rounded-2xl bg-white p-3">
           <div className="grid grid-cols-2 gap-3">
@@ -961,6 +1074,8 @@ export function MoviePage({
 }) {
   const [tab, setTab] = useState<TpTab>(initialTab);
   const [view, setView] = useState<'tabs' | 'cinemas' | 'seats' | 'comedyVenue' | 'comedySeats' | 'concertBuy'>('tabs');
+  // 电影频道子频道（Task 44：热映影片 / 即将上映 两个独立界面，双向刷新+持久化）
+  const [movieSub, setMovieSub] = useState<'hot' | 'soon'>('hot');
   const [movie, setMovie] = useState<TbMovie>(TB_MOVIES[3]);
   const [day, setDay] = useState(0);
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -980,6 +1095,19 @@ export function MoviePage({
   const [batches, setBatches] = useState<number[]>([]);
   const batchSeq = useRef(1);
   const [aiMovies, setAiMovies] = useState<TbMovie[]>([]);
+  // Task 44：三频道 AI 内容 + 本地兜底批次（前插保旧 + 全量持久化，与热映同构）
+  const [aiSoon, setAiSoon] = useState<TbMovie[]>([]);
+  const [soonBatches, setSoonBatches] = useState<number[]>([]);
+  const soonSeqRef = useRef(1);
+  const [aiShows, setAiShows] = useState<TbShow[]>([]);
+  const [showBatches, setShowBatches] = useState<number[]>([]);
+  const showSeqRef = useRef(1);
+  const [aiConcerts, setAiConcerts] = useState<TbConcert[]>([]);
+  const [concertBatches, setConcertBatches] = useState<number[]>([]);
+  const concertSeqRef = useRef(1);
+  const [aiMerchs, setAiMerchs] = useState<TbMerch[]>([]);
+  const [merchBatches, setMerchBatches] = useState<number[]>([]);
+  const merchSeqRef = useRef(1);
   const apiConfig = useSettings((s) => s.apiConfig);
   const apiCfgRef = useRef(apiConfig);
   apiCfgRef.current = apiConfig;
@@ -988,8 +1116,28 @@ export function MoviePage({
   batchesRef.current = batches;
   const aiMoviesRef = useRef(aiMovies);
   aiMoviesRef.current = aiMovies;
+  const aiSoonRef = useRef(aiSoon);
+  aiSoonRef.current = aiSoon;
+  const soonBatchesRef = useRef(soonBatches);
+  soonBatchesRef.current = soonBatches;
+  const aiShowsRef = useRef(aiShows);
+  aiShowsRef.current = aiShows;
+  const showBatchesRef = useRef(showBatches);
+  showBatchesRef.current = showBatches;
+  const aiConcertsRef = useRef(aiConcerts);
+  aiConcertsRef.current = aiConcerts;
+  const concertBatchesRef = useRef(concertBatches);
+  concertBatchesRef.current = concertBatches;
+  const aiMerchsRef = useRef(aiMerchs);
+  aiMerchsRef.current = aiMerchs;
+  const merchBatchesRef = useRef(merchBatches);
+  merchBatchesRef.current = merchBatches;
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const movieSubRef = useRef(movieSub);
+  movieSubRef.current = movieSub;
 
-  // 挂载恢复：持久化的批次 + AI 电影（旧内容永不消失）
+  // 挂载恢复：持久化的批次 + AI 内容（热映/即将上映/喜剧/演唱会/周边——旧内容永不消失）
   useEffect(() => {
     const aux = tbFeedAuxLoad<{ list?: unknown; seq?: unknown }>(uid, 'movie', 'batches');
     if (aux && Array.isArray(aux.list)) {
@@ -1001,9 +1149,73 @@ export function MoviePage({
     if (saved && Array.isArray(saved)) {
       setAiMovies(saved.filter((m) => m && typeof m.id === 'string' && typeof m.title === 'string').slice(0, 12));
     }
+    // Task 44：即将上映
+    const soonAux = tbFeedAuxLoad<{ list?: unknown; seq?: unknown }>(uid, 'movieUp', 'batches');
+    if (soonAux && Array.isArray(soonAux.list)) {
+      setSoonBatches((soonAux.list as number[]).filter((b) => typeof b === 'number').slice(0, 3));
+      soonSeqRef.current = typeof soonAux.seq === 'number' && soonAux.seq > 0 ? soonAux.seq : 1;
+    }
+    const soonAi = tbFeedAuxLoad<TbMovie[]>(uid, 'movieUp', 'aiMovies');
+    if (soonAi && Array.isArray(soonAi)) {
+      setAiSoon(soonAi.filter((m) => m && typeof m.id === 'string' && typeof m.title === 'string').slice(0, 12));
+    }
+    // 喜剧脱口秀
+    const showAux = tbFeedAuxLoad<{ list?: unknown; seq?: unknown }>(uid, 'comedy', 'batches');
+    if (showAux && Array.isArray(showAux.list)) {
+      setShowBatches((showAux.list as number[]).filter((b) => typeof b === 'number').slice(0, 3));
+      showSeqRef.current = typeof showAux.seq === 'number' && showAux.seq > 0 ? showAux.seq : 1;
+    }
+    const showAi = tbFeedAuxLoad<TbShow[]>(uid, 'comedy', 'aiShows');
+    if (showAi && Array.isArray(showAi)) {
+      setAiShows(showAi.filter((s) => s && typeof s.id === 'string' && typeof s.title === 'string').slice(0, 12));
+    }
+    // 演唱会
+    const concertAux = tbFeedAuxLoad<{ list?: unknown; seq?: unknown }>(uid, 'concert', 'batches');
+    if (concertAux && Array.isArray(concertAux.list)) {
+      setConcertBatches((concertAux.list as number[]).filter((b) => typeof b === 'number').slice(0, 3));
+      concertSeqRef.current = typeof concertAux.seq === 'number' && concertAux.seq > 0 ? concertAux.seq : 1;
+    }
+    const concertAi = tbFeedAuxLoad<TbConcert[]>(uid, 'concert', 'aiConcerts');
+    if (concertAi && Array.isArray(concertAi)) {
+      setAiConcerts(concertAi.filter((c) => c && typeof c.id === 'string' && typeof c.artist === 'string' && Array.isArray(c.tiers)).slice(0, 12));
+    }
+    // 周边商城
+    const merchAux = tbFeedAuxLoad<{ list?: unknown; seq?: unknown }>(uid, 'merch', 'batches');
+    if (merchAux && Array.isArray(merchAux.list)) {
+      setMerchBatches((merchAux.list as number[]).filter((b) => typeof b === 'number').slice(0, 3));
+      merchSeqRef.current = typeof merchAux.seq === 'number' && merchAux.seq > 0 ? merchAux.seq : 1;
+    }
+    const merchAi = tbFeedAuxLoad<TbMerch[]>(uid, 'merch', 'aiMerchs');
+    if (merchAi && Array.isArray(merchAi)) {
+      setAiMerchs(merchAi.filter((m) => m && typeof m.id === 'string' && typeof m.title === 'string').slice(0, 12));
+    }
   }, [uid]);
 
+  /** 通用兜底批次推进（本地确定性批次前插，同构热映逻辑） */
+  const fallbackBatch = (
+    surface: 'movieUp' | 'comedy' | 'concert' | 'merch',
+    seqRef: { current: number },
+    setB: (bs: number[]) => void,
+    bs0: number[],
+  ) => {
+    const nextB = [seqRef.current, ...bs0].slice(0, 3);
+    seqRef.current += 1;
+    setB(nextB);
+    tbFeedAuxSave(uid, surface, 'batches', { list: nextB, seq: seqRef.current });
+  };
+
+  /** 电影频道刷新分流（Task 44）：按当前频道/子频道生成对应内容——
+   *  此前固定生成热映电影，喜剧/演唱会/周边刷新内容不变（用户反馈） */
   const pull = useTbPullRefresh((dir) => {
+    const t = tabRef.current;
+    if (t === 'movie') return movieSubRef.current === 'soon' ? refreshSoon(dir) : refreshHot(dir);
+    if (t === 'comedy') return refreshComedy(dir);
+    if (t === 'concert') return refreshConcert(dir);
+    return refreshMerch(dir);
+  });
+
+  /** 热映：AI 生成新片前插（用户配置模型，服务端内置模型兜底）+ 批次持久化 */
+  const refreshHot = (dir: 'down' | 'up') => {
     const mySeq = ++mSeq.current;
     const bs0 = batchesRef.current;
     const seq0 = batchSeq.current;
@@ -1011,15 +1223,11 @@ export function MoviePage({
       const ai = await tbFetchAiBatch({
         uid,
         surface: 'movie',
-        exclude: aiMoviesRef.current.map((m) => m.title).slice(0, 60),
+        exclude: [...aiMoviesRef.current.map((m) => m.title), ...TB_MOVIES.map((m) => m.title)].slice(0, 60),
         count: 3,
         config: apiCfgRef.current,
       });
       if (mSeq.current !== mySeq) return; // 过期批次丢弃
-      const persist = (bs: number[], sq: number, movies: TbMovie[]) => {
-        tbFeedAuxSave(uid, 'movie', 'batches', { list: bs, seq: sq });
-        tbFeedAuxSave(uid, 'movie', 'aiMovies', movies);
-      };
       if (ai && ai.raws.length > 0) {
         // AI 新片：标题/制式/主演来自模型，渐变色/评分按标题确定性派生
         const movies: TbMovie[] = ai.raws.map((r, i) => {
@@ -1037,17 +1245,127 @@ export function MoviePage({
         });
         const next = [...movies, ...aiMoviesRef.current].slice(0, 12);
         setAiMovies(next);
-        persist(bs0, seq0, next);
+        tbFeedAuxSave(uid, 'movie', 'batches', { list: bs0, seq: seq0 });
+        tbFeedAuxSave(uid, 'movie', 'aiMovies', next);
       } else {
         // 本地兜底：确定性批次前插（同样持久化）
         const nextB = [seq0, ...bs0].slice(0, 4);
         batchSeq.current = seq0 + 1;
         setBatches(nextB);
-        persist(nextB, seq0 + 1, aiMoviesRef.current);
+        tbFeedAuxSave(uid, 'movie', 'batches', { list: nextB, seq: seq0 + 1 });
+        tbFeedAuxSave(uid, 'movie', 'aiMovies', aiMoviesRef.current);
       }
-      onToast(dir === 'down' ? '已刷新，最新场次演出已更新到顶部' : '已更新，新内容已插入顶部，原内容保留');
+      onToast(dir === 'down' ? '已刷新，最新热映影片已更新' : '已更新，新片已插入顶部，原内容保留');
     })();
-  });
+  };
+
+  /** 即将上映：AI 生成待映新片（想看人数）前插 + 批次持久化 */
+  const refreshSoon = (dir: 'down' | 'up') => {
+    const mySeq = ++mSeq.current;
+    const bs0 = soonBatchesRef.current;
+    const seq0 = soonSeqRef.current;
+    return (async () => {
+      const ai = await tbFetchAiBatch({
+        uid,
+        surface: 'movieUp',
+        exclude: [...aiSoonRef.current.map((m) => m.title), ...TB_MOVIES_SOON.map((m) => m.title)].slice(0, 60),
+        count: 3,
+        config: apiCfgRef.current,
+      });
+      if (mSeq.current !== mySeq) return;
+      if (ai && ai.raws.length > 0) {
+        const movies = ai.raws.map((r, i) => aiToMovieUp(r, i));
+        const next = [...movies, ...aiSoonRef.current].slice(0, 12);
+        setAiSoon(next);
+        tbFeedAuxSave(uid, 'movieUp', 'batches', { list: bs0, seq: seq0 });
+        tbFeedAuxSave(uid, 'movieUp', 'aiMovies', next);
+      } else {
+        fallbackBatch('movieUp', soonSeqRef, setSoonBatches, bs0);
+      }
+      onToast(dir === 'down' ? '已刷新，最新待映新片已更新' : '已更新，新片已插入顶部，原内容保留');
+    })();
+  };
+
+  /** 喜剧脱口秀：AI 生成演出前插 + 批次持久化 */
+  const refreshComedy = (dir: 'down' | 'up') => {
+    const mySeq = ++mSeq.current;
+    const bs0 = showBatchesRef.current;
+    const seq0 = showSeqRef.current;
+    return (async () => {
+      const ai = await tbFetchAiBatch({
+        uid,
+        surface: 'standup',
+        exclude: [...aiShowsRef.current.map((s) => s.title), ...TB_COMEDY_SHOWS.map((s) => s.title)].slice(0, 60),
+        count: 3,
+        config: apiCfgRef.current,
+      });
+      if (mSeq.current !== mySeq) return;
+      if (ai && ai.raws.length > 0) {
+        const shows = ai.raws.map((r, i) => aiToShow(r, i));
+        const next = [...shows, ...aiShowsRef.current].slice(0, 12);
+        setAiShows(next);
+        tbFeedAuxSave(uid, 'comedy', 'batches', { list: bs0, seq: seq0 });
+        tbFeedAuxSave(uid, 'comedy', 'aiShows', next);
+      } else {
+        fallbackBatch('comedy', showSeqRef, setShowBatches, bs0);
+      }
+      onToast(dir === 'down' ? '已刷新，最新喜剧演出已更新到顶部' : '已更新，新演出已插入顶部，原内容保留');
+    })();
+  };
+
+  /** 演唱会：AI 生成演出前插 + 批次持久化 */
+  const refreshConcert = (dir: 'down' | 'up') => {
+    const mySeq = ++mSeq.current;
+    const bs0 = concertBatchesRef.current;
+    const seq0 = concertSeqRef.current;
+    return (async () => {
+      const ai = await tbFetchAiBatch({
+        uid,
+        surface: 'concert',
+        exclude: [...aiConcertsRef.current.map((c) => `${c.artist}·${c.tour}`), ...TB_CONCERTS.map((c) => `${c.artist}·${c.tour}`)].slice(0, 60),
+        count: 3,
+        config: apiCfgRef.current,
+      });
+      if (mSeq.current !== mySeq) return;
+      if (ai && ai.raws.length > 0) {
+        const list = ai.raws.map((r, i) => aiToConcert(r, i));
+        const next = [...list, ...aiConcertsRef.current].slice(0, 12);
+        setAiConcerts(next);
+        tbFeedAuxSave(uid, 'concert', 'batches', { list: bs0, seq: seq0 });
+        tbFeedAuxSave(uid, 'concert', 'aiConcerts', next);
+      } else {
+        fallbackBatch('concert', concertSeqRef, setConcertBatches, bs0);
+      }
+      onToast(dir === 'down' ? '已刷新，最新演唱会已更新到顶部' : '已更新，新演出已插入顶部，原内容保留');
+    })();
+  };
+
+  /** 周边商城：AI 生成周边前插 + 批次持久化 */
+  const refreshMerch = (dir: 'down' | 'up') => {
+    const mySeq = ++mSeq.current;
+    const bs0 = merchBatchesRef.current;
+    const seq0 = merchSeqRef.current;
+    return (async () => {
+      const ai = await tbFetchAiBatch({
+        uid,
+        surface: 'merch',
+        exclude: [...aiMerchsRef.current.map((m) => m.title), ...TB_MERCH.map((m) => m.title)].slice(0, 60),
+        count: 4,
+        config: apiCfgRef.current,
+      });
+      if (mSeq.current !== mySeq) return;
+      if (ai && ai.raws.length > 0) {
+        const list = ai.raws.map((r) => aiToMerch(r));
+        const next = [...list, ...aiMerchsRef.current].slice(0, 12);
+        setAiMerchs(next);
+        tbFeedAuxSave(uid, 'merch', 'batches', { list: bs0, seq: seq0 });
+        tbFeedAuxSave(uid, 'merch', 'aiMerchs', next);
+      } else {
+        fallbackBatch('merch', merchSeqRef, setMerchBatches, bs0);
+      }
+      onToast(dir === 'down' ? '已刷新，最新周边已上架' : '已更新，新周边已插入顶部，原内容保留');
+    })();
+  };
 
   useEffect(() => {
     setTab(initialTab);
@@ -1076,9 +1394,10 @@ export function MoviePage({
     []
   );
   /** 刷新批次：往列表顶部插入「新内容」（最新批在最上），旧条目与历史批次原位保留
-   *  （不重排、不清空、不跳顶）；id 加批次后缀避免 key 冲突（字段全量拷贝，点击/出票行为不变） */
-  const fresh = <T extends { id: string }>(arr: T[], n: number): T[] =>
-    batches.flatMap((b) =>
+   *  （不重排、不清空、不跳顶）；id 加批次后缀避免 key 冲突（字段全量拷贝，点击/出票行为不变）；
+   *  Task 44：批次列表按频道传入（热映/即将上映/喜剧/演唱会/周边各自独立持久化） */
+  const fresh = <T extends { id: string }>(arr: T[], n: number, bs: number[] = batches): T[] =>
+    bs.flatMap((b) =>
       Array.from({ length: n }, (_, i) => {
         const src = arr[(b * 2 + i) % arr.length];
         return { ...src, id: `${src.id}·r${b}-${i}` };
@@ -1773,10 +2092,11 @@ export function MoviePage({
 
   // ---------- 淘票票主界面（顶部四频道 tab 固定，其余内容全部跟随滚动；顶部下拉/底部上拉双向刷新，前插保旧不跳顶） ----------
   const movies = [...aiMovies, ...fresh(TB_MOVIES, 2), ...TB_MOVIES];
-  const soonMovies = [...fresh(TB_MOVIES_SOON, 2), ...TB_MOVIES_SOON];
-  const shows = [...fresh(TB_COMEDY_SHOWS, 1), ...TB_COMEDY_SHOWS];
-  const concerts = [...fresh(TB_CONCERTS, 1), ...TB_CONCERTS];
-  const merchs = [...fresh(TB_MERCH, 2), ...TB_MERCH];
+  // Task 44：三频道 + 即将上映均接入 AI 前插与独立兜底批次（刷新内容真正更新且永不消失）
+  const soonMovies = [...aiSoon, ...fresh(TB_MOVIES_SOON, 2, soonBatches), ...TB_MOVIES_SOON];
+  const shows = [...aiShows, ...fresh(TB_COMEDY_SHOWS, 1, showBatches), ...TB_COMEDY_SHOWS];
+  const concerts = [...aiConcerts, ...fresh(TB_CONCERTS, 1, concertBatches), ...TB_CONCERTS];
+  const merchs = [...aiMerchs, ...fresh(TB_MERCH, 2, merchBatches), ...TB_MERCH];
   return (
     <div className="relative flex h-full flex-col bg-[#F4F5F7]">
       {/* 顶栏（粉底）+ 频道 tab（唯一固定区） */}
@@ -1861,57 +2181,97 @@ export function MoviePage({
                 </button>
               </div>
             </div>
-            {/* 热映影片 */}
-            <div className="mx-2 mt-2 rounded-2xl bg-white p-3">
-              <div className="flex items-baseline">
-                <span className="text-[19px] font-black text-black/90">热映影片</span>
-                <span className="ml-3 text-[15px] text-black/35">新热预告</span>
-                <button type="button" onClick={() => onToast('全部热映（演示）')} className="ml-auto flex items-center text-[13px] text-black/45 active:opacity-70">
-                  全部
-                  <ChevronRight className="h-4 w-4" />
+            {/* 热映影片 / 即将上映 子频道（Task 44：独立界面化，子标签吸顶，双向刷新+持久化） */}
+            <div className="sticky top-0 z-20 mx-2 mt-2 flex items-center gap-6 rounded-t-2xl bg-white px-4 pt-3">
+              {([
+                { id: 'hot' as const, label: '热映影片' },
+                { id: 'soon' as const, label: '即将上映' },
+              ]).map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => {
+                    setMovieSub(s.id);
+                    pull.scrollRef.current?.scrollTo({ top: 0 });
+                  }}
+                  className={`relative pb-2 text-[18px] leading-none transition-colors ${movieSub === s.id ? 'font-black text-black/90' : 'font-medium text-black/40'}`}
+                >
+                  {s.label}
+                  {movieSub === s.id ? <span className="absolute inset-x-1 bottom-0 h-[3px] rounded-full bg-[#FF3676]" /> : null}
                 </button>
-              </div>
-              <div className="mt-2.5 flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {movies.map((m) => (
-                  <div key={m.id} className="w-[106px] shrink-0">
-                    <MoviePoster m={m} onOpen={() => { setMovie(m); setDay(0); setSel(new Set()); setView('cinemas'); }} />
-                    <div className="mt-1.5 truncate text-[13.5px] text-black/85">{m.title}</div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMovie(m);
-                        setDay(0);
-                        setSel(new Set());
-                        setView('cinemas');
-                      }}
-                      className="mt-1.5 block w-full rounded-full bg-gradient-to-r from-[#FF5C8A] to-[#FF2D6B] py-1.5 text-center text-[13.5px] font-bold text-white active:opacity-85"
-                    >
-                      购票
-                    </button>
-                    <div className="mt-1 text-center text-[10.5px] text-[#FF3676]">特惠</div>
+              ))}
+              <span className="ml-auto pb-2 text-[12px] text-black/35">{movieSub === 'hot' ? '新热预告' : '新片想看榜'}</span>
+            </div>
+            {movieSub === 'hot' ? (
+              <div className="mx-2 mb-1 rounded-b-2xl bg-white px-3 pb-3">
+                {movies.map((m, mi) => (
+                  <div key={m.id} className={`flex gap-3 py-3 ${mi < movies.length - 1 ? 'border-b border-black/[0.05]' : ''}`}>
+                    <span className="block w-[92px] shrink-0">
+                      <MoviePoster m={m} h={124} onOpen={() => { setMovie(m); setDay(0); setSel(new Set()); setView('cinemas'); }} />
+                    </span>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <div className="truncate text-[16.5px] font-bold text-black/90">{m.title}</div>
+                      <div className="mt-1 flex items-center gap-1.5 text-[13px]">
+                        {m.rating != null ? (
+                          <span className="font-bold text-[#FF9500]">
+                            <span className="text-[10px]">★</span> {m.rating}分
+                          </span>
+                        ) : (
+                          <span className="font-semibold text-[#FF3676]">{m.want}</span>
+                        )}
+                        <span className="rounded-[3px] bg-black/[0.06] px-1 py-px text-[10.5px] text-black/55">{m.badge}</span>
+                      </div>
+                      <div className="mt-0.5 truncate text-[12px] text-black/40">台前县中影时光国际影城 · 今日21:00</div>
+                      <div className="mt-auto flex items-center">
+                        <button
+                          type="button"
+                          onClick={() => { setMovie(m); setDay(0); setSel(new Set()); setView('cinemas'); }}
+                          className="rounded-full bg-gradient-to-r from-[#FF5C8A] to-[#FF2D6B] px-5 py-1.5 text-[13.5px] font-bold text-white active:opacity-85"
+                        >
+                          购票
+                        </button>
+                        <span className="ml-2 text-[11px] font-semibold text-[#FF3676]">特惠</span>
+                        <span className="ml-auto text-[11px] text-black/35">改签/退票</span>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
-            </div>
-            {/* 即将上映 */}
-            <div className="mx-2 mt-2 rounded-2xl bg-white p-3">
-              <div className="flex items-baseline">
-                <span className="text-[19px] font-black text-black/90">即将上映</span>
-                <span className="ml-3 text-[15px] text-black/35">新片想看榜</span>
-                <button type="button" onClick={() => onToast('全部新片（演示）')} className="ml-auto flex items-center text-[13px] text-black/45 active:opacity-70">
-                  全部
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="mt-2.5 flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {soonMovies.map((m) => (
-                  <div key={m.id} className="w-[106px] shrink-0">
-                    <MoviePoster m={m} onOpen={() => onToast(`已预约《${m.title}》上映提醒`)} />
-                    <div className="mt-1.5 truncate text-[13.5px] text-black/85">{m.title}</div>
+            ) : (
+              <div className="mx-2 mb-1 rounded-b-2xl bg-white px-3 pb-3">
+                {soonMovies.map((m, mi) => (
+                  <div key={m.id} className={`flex gap-3 py-3 ${mi < soonMovies.length - 1 ? 'border-b border-black/[0.05]' : ''}`}>
+                    <span className="block w-[92px] shrink-0">
+                      <MoviePoster m={m} h={124} onOpen={() => onToast(`已预约《${m.title}》上映提醒`)} />
+                    </span>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <div className="truncate text-[16.5px] font-bold text-black/90">{m.title}</div>
+                      <div className="mt-1 flex items-center gap-1.5 text-[13px]">
+                        {m.want ? (
+                          <span className="font-semibold text-[#FF3676]">{m.want}</span>
+                        ) : m.rating != null ? (
+                          <span className="font-bold text-[#FF9500]">
+                            <span className="text-[10px]">★</span> {m.rating}分
+                          </span>
+                        ) : null}
+                        <span className="rounded-[3px] bg-black/[0.06] px-1 py-px text-[10.5px] text-black/55">{m.badge}</span>
+                      </div>
+                      <div className="mt-0.5 text-[12px] text-black/40">{soonDateLabel(tbStrHash(m.id))} 上映</div>
+                      <div className="mt-auto flex items-center">
+                        <button
+                          type="button"
+                          onClick={() => onToast(`已预约《${m.title}》上映提醒`)}
+                          className="rounded-full border border-[#FF5C8A] px-5 py-1.5 text-[13.5px] font-bold text-[#FF3676] active:opacity-75"
+                        >
+                          想看
+                        </button>
+                        <span className="ml-2 text-[11px] text-black/35">上映前提醒</span>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
-            </div>
+            )}
           </>
         ) : null}
         {/* ===== 喜剧脱口秀 ===== */}

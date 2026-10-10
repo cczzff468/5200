@@ -121,9 +121,38 @@ export interface TbFeedRaw {
   badge?: unknown;
   /** 电影：主演/导演 */
   actors?: unknown;
+  /** 演出：场馆/城市/档期/已售 */
+  venue?: unknown;
+  city?: unknown;
+  dateRange?: unknown;
+  hot?: unknown;
+  /** 演唱会：艺人/巡演 */
+  artist?: unknown;
+  tour?: unknown;
+  /** 周边所属影片/品类 */
+  from?: unknown;
+  kind?: unknown;
+  /** 即将上映：想看人数（万人） */
+  wantTo?: unknown;
 }
 
-export type TbFeedSurface = 'home' | 'video' | 'subsidy' | 'seckill' | 'fliggy' | 'movie';
+export type TbFeedSurface =
+  | 'home'
+  | 'video'
+  | 'subsidy'
+  | 'seckill'
+  | 'fliggy'
+  | 'movie'
+  /** 我的淘宝·猜你喜欢（Task 44：与首页同构的 AI 前插 + 持久化） */
+  | 'me'
+  /** 淘票票·喜剧脱口秀演出 */
+  | 'standup'
+  /** 淘票票·演唱会 */
+  | 'concert'
+  /** 淘票票·周边商城商品 */
+  | 'merch'
+  /** 淘票票·即将上映新片 */
+  | 'movieUp';
 
 /** tag → 分类（图链品类词与 TB_CATS 对齐） */
 function catOf(tag: string): TbProduct['cat'] {

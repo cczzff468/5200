@@ -8,8 +8,9 @@ export const dynamic = 'force-dynamic';
  * - 优先用「设置 › API 配置」里用户配置好的 OpenAI 兼容模型（config 随请求体传入）；
  * - 未配置 / 上游失败 → 内置模型（z-ai-web-dev-sdk）兜底；
  * - 每次请求注入随机口令 + 排除名单（已展示内容），保证下拉刷新 / 上滑加载出来的都是新内容；
- * - 六种 surface：home 首页瀑布流（rec/flash/subsidy/super88/fliggy/wear/follow 七种频道 tab）、
- *   video 短视频种草、subsidy 百亿补贴、seckill 秒杀、fliggy 飞猪酒店、movie 淘票票热映；
+ * - 十一种 surface：home 首页瀑布流（rec/flash/subsidy/super88/fliggy/wear/follow 七种频道 tab）、
+ *   video 短视频种草、subsidy 百亿补贴、seckill 秒杀、fliggy 飞猪酒店、movie 淘票票热映、
+ *   me 我的淘宝猜你喜欢、standup 喜剧脱口秀演出、concert 演唱会、merch 电影周边、movieUp 即将上映；
  * - tag 强制落在图片服务白名单内（/api/mt-img 按品类词出内容匹配图，图片与内容一致），生成数据仅展示用。
  */
 
@@ -25,9 +26,9 @@ interface FeedConfig {
 
 type RawRec = Record<string, unknown>;
 
-/** 六种信息流表面 */
-type TbSurface = 'home' | 'video' | 'subsidy' | 'seckill' | 'fliggy' | 'movie';
-const SURFACES: TbSurface[] = ['home', 'video', 'subsidy', 'seckill', 'fliggy', 'movie'];
+/** 十一种信息流表面 */
+type TbSurface = 'home' | 'video' | 'subsidy' | 'seckill' | 'fliggy' | 'movie' | 'me' | 'standup' | 'concert' | 'merch' | 'movieUp';
+const SURFACES: TbSurface[] = ['home', 'video', 'subsidy', 'seckill', 'fliggy', 'movie', 'me', 'standup', 'concert', 'merch', 'movieUp'];
 
 interface GenerateArgs {
   surface: TbSurface;
@@ -70,6 +71,24 @@ interface TbFeedItem {
   badge?: string;
   /** 电影：主演/导演 */
   actors?: string;
+  /** 演出：场馆名 */
+  venue?: string;
+  /** 演出：城市 */
+  city?: string;
+  /** 演出：档期文案（11.08 周六 19:30） */
+  dateRange?: string;
+  /** 演出/周边：已售文案 */
+  hot?: string;
+  /** 演唱会：艺人名（虚构） */
+  artist?: string;
+  /** 演唱会：巡演名 */
+  tour?: string;
+  /** 周边所属影片（XX官方周边） */
+  from?: string;
+  /** 周边品类（手办/玩偶/海报…） */
+  kind?: string;
+  /** 即将上映：想看人数（万人，1~60） */
+  wantTo?: number;
 }
 
 // ---------------- 工具 ----------------
@@ -168,16 +187,30 @@ function tagOf(raw: unknown): string | null {
   return t || null;
 }
 
-/** 各表面允许的 tag 池：fliggy 酒店只能家居三件、movie 统一 books、home 频道 wear 只能女装类 */
+/** 各表面允许的 tag 池：fliggy 酒店只能家居三件、movie/movieUp 统一 books、home 频道 wear 只能女装类、
+ *  merch 周边只能可作周边图的品类、standup 用中文类型词（演出海报角标，非图片键） */
 const TAG_POOL_FLIGGY = ['bedding', 'sofa', 'lamp'];
 const TAG_POOL_MOVIE = ['books'];
 const TAG_POOL_WEAR = ['jacket', 'jeans', 'dress', 'shoes', 'hat', 'coat'];
+const TAG_POOL_MERCH = ['toy', 'speaker', 'water-bottle', 'mug', 'lamp', 'backpack', 'hat', 'camera', 'keyboard', 'books'];
+const TAG_POOL_STANDUP = ['脱口秀', '漫才', '开放麦', '舞台剧', '即兴喜剧'];
 
 function tagPoolFor(surface: TbSurface, tab: string): readonly string[] {
   if (surface === 'fliggy') return TAG_POOL_FLIGGY;
-  if (surface === 'movie') return TAG_POOL_MOVIE;
+  if (surface === 'movie' || surface === 'movieUp' || surface === 'concert') return TAG_POOL_MOVIE;
   if (surface === 'home' && tab === 'wear') return TAG_POOL_WEAR;
+  if (surface === 'merch') return TAG_POOL_MERCH;
+  if (surface === 'standup') return TAG_POOL_STANDUP;
   return TAG_WHITELIST;
+}
+
+/** 中文类型词收窄（standup 专用：tag 是演出海报角标文案，不走图片白名单） */
+function tagCnOf(raw: unknown, seed: string): string {
+  if (typeof raw === 'string') {
+    const t = raw.trim().slice(0, 6);
+    if ((TAG_POOL_STANDUP as readonly string[]).includes(t)) return t;
+  }
+  return pickOf(TAG_POOL_STANDUP, seed);
 }
 
 /** tag 收窄：清洗 → 池内精确命中 → 近似词映射 → 前缀模糊 → 兜底（保证永远落在池内） */
@@ -420,6 +453,16 @@ function surfaceTask(a: GenerateArgs): string {
     return '淘宝秒杀频道商品。price 便宜（1~99.9 元）；origPrice 填原价；grabbed 填已抢百分比（30~90 的整数）；off 填「直降N元」（N 为 origPrice−price 的整数）；foot 填已售文案。';
   if (a.surface === 'fliggy')
     return '飞猪酒店/民宿。title 是酒店名——「城市或商圈 + 自创品牌风格名 + 大酒店/民宿/度假酒店等后缀」，可带（XX店/万达广场店）分店后缀，同批城市尽量多样；price 是每晚价（69~699）；reviews 填「200+条点评」这类点评数文案；tag 只能从 sofa、bedding、lamp 中选。';
+  if (a.surface === 'me')
+    return '淘宝「我的」页猜你喜欢瀑布流。综合推荐，类目不限（数码/服饰/家居/美妆/食品/图书皆可），同批类目尽量多样，像真实首页推荐。';
+  if (a.surface === 'standup')
+    return '淘票票喜剧脱口秀频道演出。title 是原创虚构演出名（脱口秀专场/漫才专场/即兴喜剧/小剧场舞台剧/开放麦，严禁任何真实厂牌与演员名，格式参考「脱口秀专场·自创主题名」）；sub 填「自创厂牌名 · 阵容看点」文案；venue 填「城市 + 文化艺术中心/小剧场/大剧院/喜剧中心/Livehouse」；city 填二三线城市；dateRange 填「MM.DD 周X HH:MM」或「MM.DD 周X HH:MM / HH:MM」；price 填最低票价整数（80~380）；hot 填「已售N」销量文案。';
+  if (a.surface === 'concert')
+    return '淘票票演唱会频道演出。artist 填 2~4 字完全虚构的艺人名（严禁真实歌手）；tour 填自创巡演名（如「XX世界巡回演唱会」「XX巡回演唱会」）；city 填省会/二三线城市；venue 填「奥林匹克体育中心/市体育中心体育场/国际会展中心大剧院/文体中心体育馆」这类场馆；dateRange 填「MM.DD-MM.DD 周五六 19:00」或「MM.DD 周六 19:30」；price 填最低票价整数（180~1280）；hot 填「已售N万」文案。';
+  if (a.surface === 'merch')
+    return '淘票票周边商城商品。title 是电影官方周边（手办盲盒/玩偶/海报套装/黑胶唱片/主题水杯/模型，可引用同批自创片名但严禁真实IP）；from 填「《自创片名》官方周边/原声周边」；kind 从 手办/玩偶/海报/音乐/日用/模型/服饰 中选；price 19~599，origPrice 填日常价；hot 填「已售N」文案；tag 决定周边图片，必须从 toy/speaker/water-bottle/mug/lamp/backpack/hat/camera/keyboard 中选最贴切的。';
+  if (a.surface === 'movieUp')
+    return '淘票票即将上映新片。title 是原创虚构片名（严禁真实电影名）；badge 填 IMAX 2D / 2D / 3D / 重映 之一；actors 填「导演：虚构名 主演：虚构名」风格且不超过 20 字；sub 填一句看点文案；wantTo 填想看人数数值（单位万人，1~60 可带一位小数）；price 填预售价（38~120）；tag 统一填 books。';
   return '淘票票热映电影。title 是原创虚构片名（禁止使用任何真实存在的电影名）；badge 填 IMAX 2D / 2D / 3D 之一；actors 填「导演：虚构名 主演：虚构名」风格且不超过 20 字；price 给 38~120；tag 统一填 books。';
 }
 
@@ -431,6 +474,11 @@ const ITEM_SCHEMA: Record<TbSurface, string> = {
   seckill: '{"title":"整箱混装零食大礼包 30包","price":29.9,"origPrice":79,"sales":43000,"tag":"snacks","tags":["退货宝","包邮"],"grabbed":62,"off":"直降49元","foot":"已售7万+"}',
   fliggy: '{"title":"杭州西湖畔·云栖度假酒店（湖滨银泰in77店）","price":388,"origPrice":528,"tag":"bedding","tags":["含双早","免费取消","立即确认"],"reviews":"2000+条点评","sub":"近西湖步行5分钟"}',
   movie: '{"title":"星海迷航：黎明边界","price":58,"tag":"books","badge":"IMAX 2D","actors":"导演：陈未 主演：林远、苏晚","sub":"年度科幻巨制 震撼上映"}',
+  me: '{"title":"极简风保温杯 500ml","price":39.9,"origPrice":69,"sales":12000,"tag":"mug","tags":["退货宝","包邮"],"promo":"官方立减","foot":"已售8000+","sub":"居家办公两相宜"}',
+  standup: '{"title":"脱口秀专场·宇宙笑话指南","price":120,"sub":"平行喜剧厂牌 · 双人卡司盲盒","venue":"濮阳文化艺术中心小剧场","city":"濮阳","dateRange":"11.08 周六 19:30","hot":"已售653","tag":"脱口秀"}',
+  concert: '{"artist":"林晚风","tour":"星野世界巡回演唱会","price":380,"city":"郑州","venue":"郑州奥林匹克体育中心","dateRange":"11.21-11.22 周五六 19:00","hot":"已售1.8万","tag":"books"}',
+  merch: '{"title":"自创片名官方手办盲盒","price":69,"origPrice":99,"from":"《自创片名》官方周边","kind":"手办","hot":"已售1.2万","tag":"toy"}',
+  movieUp: '{"title":"雾海灯塔","price":45,"tag":"books","badge":"IMAX 2D","actors":"导演：陈序 主演：江眠、白鹭","sub":"年度悬疑力作","wantTo":12.6}',
 };
 
 function buildSystem(surface: TbSurface): string {
@@ -439,6 +487,11 @@ function buildSystem(surface: TbSurface): string {
   if (surface === 'subsidy') return `${PROMPT_BASE}当前是淘宝百亿补贴频道，promo 与保障类字段必须完整。`;
   if (surface === 'seckill') return `${PROMPT_BASE}当前是淘宝秒杀频道，价格必须便宜且折扣要自洽。`;
   if (surface === 'fliggy') return `${PROMPT_BASE}当前是飞猪酒店民宿频道，酒店名要像真实OTA在售酒店。`;
+  if (surface === 'me') return `${PROMPT_BASE}当前是淘宝「我的」页猜你喜欢瀑布流。`;
+  if (surface === 'standup') return `${PROMPT_BASE}当前是淘票票喜剧脱口秀频道，演出名/厂牌/艺人必须完全虚构。`;
+  if (surface === 'concert') return `${PROMPT_BASE}当前是淘票票演唱会频道，艺人名与巡演名必须完全虚构，严禁真实歌手。`;
+  if (surface === 'merch') return `${PROMPT_BASE}当前是淘票票周边商城，周边必须挂在自创虚构影片下，严禁真实IP。`;
+  if (surface === 'movieUp') return `${PROMPT_BASE}当前是淘票票即将上映频道，片名与演职人员必须完全虚构。`;
   return `${PROMPT_BASE}当前是淘票票热映电影频道，片名与演职人员必须完全虚构。`;
 }
 
@@ -466,6 +519,11 @@ const PRICE_RANGE: Record<TbSurface, [number, number, number]> = {
   seckill: [1, 99.9, 19.9],
   fliggy: [69, 699, 288],
   movie: [38, 120, 58],
+  me: [0.01, 99999, 59],
+  standup: [80, 380, 120],
+  concert: [180, 1280, 380],
+  merch: [19, 599, 69],
+  movieUp: [38, 120, 45],
 };
 
 /** 各表面标题兜底（模型没给 title 时保证条目仍可用） */
@@ -476,6 +534,11 @@ const DEFAULT_TITLE: Record<TbSurface, string> = {
   seckill: '限时秒杀好物',
   fliggy: '精选度假酒店',
   movie: '热映影片',
+  me: '猜你喜欢好物',
+  standup: '爆笑喜剧专场',
+  concert: '巡回演唱会',
+  merch: '官方授权周边',
+  movieUp: '即将上映新片',
 };
 
 /** 模型漏给字段时的稳定兜底文案池（按标题哈希取值，同条目跨批次稳定） */
@@ -485,6 +548,22 @@ const SUBSIDY_SUBS = ['正品发货 假一赔十', '官方直营 顺丰包邮', 
 const SECKILL_FOOTS = ['已售5000+', '已售9千+', '已售2万+', '已售5万+'] as const;
 const MOVIE_BADGES = ['IMAX 2D', '2D', '3D'] as const;
 const FLIGGY_REVIEWS = ['200+条点评', '500+条点评', '800+条点评', '1500+条点评', '3000+条点评'] as const;
+/** standup 演出兜底池（模型漏给字段时按标题哈希稳定取值） */
+const STANDUP_VENUES = ['濮阳文化艺术中心小剧场', '濮阳市工人文化宫大剧院', '濮阳万达广场喜剧中心', '郑州二七剧场Livehouse', '新乡平原文化艺术中心', '安阳市职工剧院'] as const;
+const STANDUP_CITIES = ['濮阳', '郑州', '新乡', '安阳', '开封'] as const;
+const STANDUP_DATES = ['11.08 周六 19:30', '11.09 周日 15:00 / 19:30', '11.14 周五 20:00', '11.15 周六 19:30', '11.21 周五 19:30 / 21:30', '11.22 周六 20:00'] as const;
+const STANDUP_HOTS = ['已售653', '已售812', '已售1247', '已售2210', '已售986', '已售1534'] as const;
+/** concert 演出兜底池 */
+const CONCERT_ARTISTS = ['林晚风', '陆行舟', '许千帆', '季星野', '闻人夜', '岑月白'] as const;
+const CONCERT_TOURS = ['星野世界巡回演唱会', '共鸣之旅巡回演唱会', '旷野之声巡回演唱会', '夜航西飞巡回演唱会', '夏日终曲巡回演唱会'] as const;
+const CONCERT_CITIES = ['郑州', '洛阳', '武汉', '长沙', '西安', '成都'] as const;
+const CONCERT_VENUES = ['奥林匹克体育中心', '市体育中心体育场', '国际会展中心大剧院', '文体中心体育馆', '城市音乐厅'] as const;
+const CONCERT_DATES = ['11.21-11.22 周五六 19:00', '11.29 周六 19:30', '12.05-12.06 周五六 19:30', '12.12 周五 20:00', '12.19-12.20 周五六 19:00'] as const;
+const CONCERT_HOTS = ['已售1.8万', '已售3.2万', '已售9600', '已售5.6万', '已售2.4万'] as const;
+/** merch 周边兜底池 */
+const MERCH_KINDS = ['手办', '玩偶', '海报', '音乐', '日用', '模型', '服饰'] as const;
+const MERCH_HOTS = ['已售1.2万', '已售6411', '已售890', '已售3.4万', '已售2280'] as const;
+const MERCH_FROMS = ['《群星闪耀时》官方周边', '《生如夏花》原声周边', '《雾海灯塔》电影周边', '《小猪流浪记》官方授权', '《夜航列车》剧集周边'] as const;
 
 /** 可选字符串字段收窄：非空字符串截断，否则 undefined（输出 JSON 不带该键） */
 function optStr(v: unknown, maxLen: number): string | undefined {
@@ -505,7 +584,7 @@ function tagsOf(v: unknown): string[] | undefined {
 /** 原始条目 → 输出条目（字段逐个收窄 + 频道不变量强制兜底） */
 function coerceItem(raw: unknown, surface: TbSurface, tab: string): TbFeedItem {
   const rec: RawRec = typeof raw === 'object' && raw !== null ? (raw as RawRec) : {};
-  const titleMax = surface === 'video' ? 20 : surface === 'movie' ? 16 : 34;
+  const titleMax = surface === 'video' ? 20 : surface === 'movie' || surface === 'movieUp' ? 16 : 34;
   const title = strOf(rec.title, DEFAULT_TITLE[surface], titleMax);
   const [lo, hi, def] = PRICE_RANGE[surface];
   const price = round2(num(rec.price, def, lo, hi));
@@ -517,7 +596,7 @@ function coerceItem(raw: unknown, surface: TbSurface, tab: string): TbFeedItem {
   if (origPrice !== undefined) item.origPrice = origPrice;
 
   // 销量只对商品类表面有意义（酒店看点评、电影看票房文案）
-  if (surface === 'home' || surface === 'video' || surface === 'subsidy' || surface === 'seckill') {
+  if (surface === 'home' || surface === 'video' || surface === 'subsidy' || surface === 'seckill' || surface === 'me') {
     item.sales = intOf(rec.sales, 500 + Math.floor(Math.random() * 20000), 0, 1e8);
   }
   const tags = tagsOf(rec.tags);
@@ -526,7 +605,7 @@ function coerceItem(raw: unknown, surface: TbSurface, tab: string): TbFeedItem {
   const footRaw = optStr(rec.foot, 20);
   const subRaw = optStr(rec.sub, 24);
 
-  if (surface === 'home' || surface === 'video') {
+  if (surface === 'home' || surface === 'video' || surface === 'me') {
     const promo = optStr(rec.promo, 6);
     if (promo) item.promo = promo;
     if (footRaw) item.foot = footRaw;
@@ -553,6 +632,38 @@ function coerceItem(raw: unknown, surface: TbSurface, tab: string): TbFeedItem {
   } else if (surface === 'fliggy') {
     item.reviews = optStr(rec.reviews, 12) ?? pickOf(FLIGGY_REVIEWS, title);
     if (subRaw) item.sub = subRaw;
+  } else if (surface === 'standup') {
+    // 喜剧脱口秀演出：中文类型角标 + 场馆/城市/档期/已售（模型漏给按标题哈希稳定兜底）
+    item.tag = tagCnOf(rec.tag, title);
+    item.venue = optStr(rec.venue, 24) ?? pickOf(STANDUP_VENUES, title);
+    item.city = optStr(rec.city, 8) ?? pickOf(STANDUP_CITIES, title);
+    item.dateRange = optStr(rec.dateRange, 28) ?? pickOf(STANDUP_DATES, title);
+    item.hot = optStr(rec.hot, 12) ?? pickOf(STANDUP_HOTS, title);
+    if (subRaw) item.sub = subRaw;
+  } else if (surface === 'concert') {
+    // 演唱会：艺人/巡演/城市/场馆/档期/最低价；title 缺省用「艺人·巡演」拼装（去重与排除名单都用它）
+    const artist = optStr(rec.artist, 8) ?? pickOf(CONCERT_ARTISTS, title);
+    const tour = optStr(rec.tour, 20) ?? pickOf(CONCERT_TOURS, title);
+    item.artist = artist;
+    item.tour = tour;
+    if (item.title === DEFAULT_TITLE.concert) item.title = `${artist}·${tour}`;
+    item.city = optStr(rec.city, 8) ?? pickOf(CONCERT_CITIES, title);
+    item.venue = optStr(rec.venue, 24) ?? `${item.city}${pickOf(CONCERT_VENUES, title)}`;
+    item.dateRange = optStr(rec.dateRange, 28) ?? pickOf(CONCERT_DATES, title);
+    item.hot = optStr(rec.hot, 12) ?? pickOf(CONCERT_HOTS, title);
+  } else if (surface === 'merch') {
+    // 电影周边：所属影片/品类/已售
+    item.from = optStr(rec.from, 30) ?? pickOf(MERCH_FROMS, title);
+    item.kind = optStr(rec.kind, 6) ?? pickOf(MERCH_KINDS, title);
+    item.hot = optStr(rec.hot, 12) ?? pickOf(MERCH_HOTS, title);
+    if (subRaw) item.sub = subRaw;
+  } else if (surface === 'movieUp') {
+    // 即将上映：制式/演职/看点/想看人数（万人）
+    item.badge = optStr(rec.badge, 10) ?? pickOf(MOVIE_BADGES, title);
+    const actors = optStr(rec.actors, 20);
+    if (actors) item.actors = actors;
+    item.wantTo = round2(num(rec.wantTo, 3 + (hashOf(title) % 400) / 10, 1, 60));
+    if (subRaw) item.sub = subRaw;
   } else {
     // movie
     item.badge = optStr(rec.badge, 10) ?? pickOf(MOVIE_BADGES, title);
@@ -574,11 +685,11 @@ export async function POST(req: NextRequest) {
   }
   const root: RawRec = typeof body === 'object' && body !== null ? (body as RawRec) : {};
 
-  // surface 必须是六种之一
+  // surface 必须是十一种之一
   const surfaceRaw = typeof root.surface === 'string' ? root.surface : '';
   if (!(SURFACES as string[]).includes(surfaceRaw)) {
     return NextResponse.json(
-      { ok: false, error: 'surface 必须是 home/video/subsidy/seckill/fliggy/movie 之一' },
+      { ok: false, error: 'surface 必须是 home/video/subsidy/seckill/fliggy/movie/me/standup/concert/merch/movieUp 之一' },
       { status: 400 },
     );
   }

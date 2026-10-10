@@ -17848,3 +17848,23 @@ Work Log:
 Stage Summary:
 - 三问题全落地并浏览器端到端实测：淘宝消息页所有店铺会话（聊天会话+系统消息聚合会话）点击一律进 AI 客服聊天页（带订单上下文自动补订单卡）；文件夹迷你预览跟随全局图标样式三态实时切换；预览图标水平+垂直双居中、去掉 scale-1.3 后内容完整不裁剪
 - 改动文件：src/components/apps/taobao.tsx（MsgsPage 系统消息行补 shopId+onOpenChat 带 orderId）、src/components/apps/registry.tsx（新增 AppMiniIcon）、src/components/ios/HomeScreen.tsx（folderIconNode justify-center+去 scale+接 AppMiniIcon）
+
+---
+Task ID: 44
+Agent: main (Z.ai Code)
+Task: 淘宝第十七轮——五大界面刷新保旧+持久化补齐（我的淘宝）/秒杀仅标签吸顶/淘票票热映·即将上映双子界面/喜剧·演唱会·周边AI真刷新
+
+Work Log:
+- /api/tb-feed 扩容：六 surface → 十一 surface（新增 me 我的淘宝猜你喜欢 / standup 喜剧脱口秀演出 / concert 演唱会 / merch 电影周边 / movieUp 即将上映），各自中文 prompt+字段规范+价格区间+标题兜底；standup 用中文类型角标池（脱口秀/漫才/开放麦/舞台剧/即兴喜剧，不走图片白名单）；merch tag 锁定可出周边图的品类；新增 venue/city/dateRange/hot/artist/tour/from/kind/wantTo 字段收窄与稳定兜底池（模型漏给按标题哈希取值）；concert title 缺省用「艺人·巡演」拼装保证去重有效；curl 冒烟五 surface 全部字段合规
+- 淘票票 MoviePage 刷新分流修复（用户反馈「喜剧脱口秀/演唱会/周边商城刷新以后内容不变」）：根因是刷新固定调 movie surface 生成电影——喜剧/演唱会/周边三频道只换本地批次（AI 成功时批次根本不动）；重构为按当前频道+子频道分流（refreshHot/refreshSoon/refreshComedy/refreshConcert/refreshMerch），各频道 AI 前插（排除名单含种子标题）+独立本地兜底批次+全量持久化（tb-feed-aux:<uid>:<surface>:aiShows/aiConcerts/aiMerchs/aiMovies + batches）
+- 热映影片/即将上映双子界面（用户需求「开发热映影片界面，即将上映界面」）：电影频道新增子标签吸顶切换（热映影片/即将上映），各自独立竖排列表（海报+评分/想看+制式+影城行+购票/想看按钮）；即将上映含 AI 待映新片（wantTo 万人想看+档期按标题哈希派生未来日期）；双向刷新（上滑下滑都更新、前插保旧、不跳顶）+持久化
+- 我的淘宝（MePage）刷新升级：旧版只本地洗牌且不持久化（刷新页面即丢）→ 与首页同构——AI 生成 8 条前插（surface me）+本地确定性批次兜底+AI 前插与批次全量持久化（tb-feed:me tops + tb-feed-aux:me batches），挂载恢复
+- 秒杀页滚动重构（用户需求「除了上面的标签，其他的都跟随滚动」）：顶栏（标题/搜索/超级88横幅）/9块9面板/正在秒杀倒计时行全部移入滚动容器跟随滚动，仅场次标签 sticky top-0 吸顶；状态栏安全区保留为唯一固定区；返回键提为悬浮毛玻璃钮（防内容滚走后被困页面）
+- 文件夹预览复核：上轮修复（AppMiniIcon+双居中+去裁剪）实时 DOM 几何验证精确居中（迷你图标 top 555..569 vs 容器内容区 537..587，上下留白各 18px），用户看到的可能是旧缓存页面
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误
+- agent-browser 全真浏览器逐项验证：①淘票票热映下拉→3部新AI片前插（幻影迷踪7.8/暗影猎手7.7/星际远征7.8）旧AI片保留 ②切即将上映→种子想看列表+下拉→3部AI新片前插（星尘密码35.7万人想看/暗影迷宫18.3万/时光回响26.9万，档期完整）③喜剧频道下拉→3场AI演出前插（脱口秀专场·城市生存指南¥180-430洛阳/漫才专场·双人吐槽大会宁波/即兴喜剧·观众点题即兴秀苏州）种子保留 ④演唱会频道下拉→3场AI演唱会前插（苏沐辰¥280起成都/林语曦预售武汉/陈星河¥880起杭州）周杰伦等种子保留 ⑤周边下拉→4件AI周边前插（星尘旅人手办¥129/幻影迷踪水杯¥59/时光回响黑胶¥199/梦境编织者玩偶¥89）⑥整页reload→IndexedDB复核 comedy n=3/concert n=3/merch n=4/movie n=6/movieUp n=3 全部持久化，UI恢复原样 ⑦秒杀页滚动→顶栏横幅9块9全部滚走、场次标签吸顶、AI秒杀品前插（木马玩具19.9/暖手宝49.9已抢81%）+悬浮返回钮可退出 ⑧我的淘宝下拉→AI 8条前插（星空投影灯/北欧马克杯/日系四件套/蓝牙耳机…）+reload后me tops=16恢复第一张卡仍AI商品；AI失败时本地批次兜底路径同样持久化（list=[1,0] seq=2）⑨全量持久化终检：home/me/video/seckill/subsidy tops + 五频道AI内容全部在库
+
+Stage Summary:
+- 五点需求全落地并浏览器端到端实测：五大界面（我的淘宝/视频/秒杀/淘票票/飞猪）刷新保旧+持久化与首页逻辑完全一致；秒杀页除场次标签外全部跟随滚动（返回键悬浮常驻）；淘票票热映影片/即将上映双子界面（吸顶切换+双向刷新+AI+持久化）；喜剧脱口秀/演唱会/周边商城刷新内容真正更新（AI 分流修复）
+- 持久化语义统一：AI 批次前插+确定性兜底批次+AI 演出/周边/电影本体全部按 uid 隔离存 IndexedDB，刷新页面/重开 App 原样恢复，旧内容与历史批次永不消失
+- 改动文件：src/app/api/tb-feed/route.ts（十一 surface）、src/lib/ios/tb-ai-store.ts（surface/字段扩展）、src/components/apps/taobao-channels.tsx（MoviePage 分流+双子界面+SeckillPage 滚动重构+悬浮返回）、src/components/apps/taobao.tsx（MePage AI+持久化）

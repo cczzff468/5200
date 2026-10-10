@@ -4978,23 +4978,80 @@ function MePage({
   const favs = tbLoadFavs(uid);
   const foots = tbLoadFoots(uid);
   const follows = tbLoadShopFollows(uid);
-  // 需求（第八轮）+ Task 40：「我的」界面顶部下拉 / 底部上拉都可刷新「猜你喜欢」——
-  // 新一批前插到顶部，旧批次保留（最多留 3 批），不重排、不跳顶
+  // 需求（第八轮）+ Task 40：「我的」界面顶部下拉 / 底部上拉都可刷新「猜你喜欢」；
+  // Task 44：与首页刷新逻辑同构——AI 生成新好物前插（用户配置模型，服务端内置模型兜底、
+  // 本地确定性批次兜底），且 AI 前插/批次全量持久化（IndexedDB kv）：刷新页面/重开 App 后
+  // 原样恢复，旧内容与历史批次永不消失
   const [menuBatches, setMenuBatches] = useState<number[]>([0]);
   const menuSeq = useRef(1);
+  const [meTops, setMeTops] = useState<TbFeedTop[]>([]);
+  const meSeq = useRef(0);
+  const meTopsRef = useRef(meTops);
+  meTopsRef.current = meTops;
+  const menuBatchesRef = useRef(menuBatches);
+  menuBatchesRef.current = menuBatches;
+  const apiConfigMe = useSettings((s) => s.apiConfig);
+  const apiCfgMeRef = useRef(apiConfigMe);
+  apiCfgMeRef.current = apiConfigMe;
+  // 挂载恢复：持久化的 AI 前插 + 确定性批次（旧内容永不消失）
+  useEffect(() => {
+    const s = tbFeedLoad(uid, 'me');
+    if (s && Array.isArray(s.tops)) setMeTops(s.tops);
+    const aux = tbFeedAuxLoad<{ list?: unknown; seq?: unknown }>(uid, 'me', 'batches');
+    if (aux && Array.isArray(aux.list)) {
+      const list = (aux.list as number[]).filter((b) => typeof b === 'number').slice(0, 3);
+      if (list.length > 0) {
+        setMenuBatches(list);
+        menuSeq.current = typeof aux.seq === 'number' && aux.seq > 0 ? aux.seq : Math.max(...list) + 1;
+      }
+    }
+  }, [uid]);
   const mePull = useTbPullRefresh(() => {
-    const seed = menuSeq.current++;
-    setMenuBatches((bs) => [seed, ...bs].slice(0, 3));
-    onToast('已为你换上新的好物，旧推荐都还在哦');
+    const mySeq = ++meSeq.current;
+    return (async () => {
+      // 排除名单：AI 前插 + 本地批次 + 种子池当前展示的标题（保证出新）
+      const arr = [...TB_PRODUCTS];
+      const shownTitles = [
+        ...meTopsRef.current.flatMap((t) => {
+          const p = productById(t.pid);
+          return p ? [p.title] : [];
+        }),
+        ...menuBatchesRef.current.flatMap((k) => {
+          const start = (14 + k * 8) % arr.length;
+          return Array.from({ length: 8 }, (_, i) => arr[(start + i) % arr.length]?.title ?? '');
+        }),
+      ].filter((x) => x.length > 0);
+      const ai = await tbFetchAiBatch({ uid, surface: 'me', exclude: shownTitles, count: 8, config: apiCfgMeRef.current });
+      if (meSeq.current !== mySeq) return; // 过期批次丢弃
+      if (ai && ai.products.length > 0) {
+        const ks = `ai${Date.now().toString(36)}`;
+        const tops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...meTopsRef.current];
+        setMeTops(tops);
+        tbFeedSave(uid, 'me', { tops });
+      } else {
+        const seed = menuSeq.current++;
+        const bs = [seed, ...menuBatchesRef.current].slice(0, 3);
+        setMenuBatches(bs);
+        tbFeedAuxSave(uid, 'me', 'batches', { list: bs, seq: menuSeq.current });
+      }
+      onToast('已为你换上新的好物，旧推荐都还在哦');
+    })();
   });
-  // 猜你喜欢菜单（批次前插：最新批在最上，旧批次原位保留）
+  // 猜你喜欢菜单（AI 前插 + 批次前插：最新批在最上，旧批次原位保留）
   const meMenu = useMemo(() => {
-    const arr = [...TB_PRODUCTS];
-    return menuBatches.flatMap((k) => {
-      const start = (14 + k * 8) % arr.length;
-      return Array.from({ length: 8 }, (_, i) => ({ p: arr[(start + i) % arr.length], k: `${k}-${i}` }));
+    const aiEntries = meTops.flatMap((t) => {
+      const p = productById(t.pid);
+      return p ? [{ p, k: t.k }] : [];
     });
-  }, [menuBatches]);
+    const arr = [...TB_PRODUCTS];
+    return [
+      ...aiEntries,
+      ...menuBatches.flatMap((k) => {
+        const start = (14 + k * 8) % arr.length;
+        return Array.from({ length: 8 }, (_, i) => ({ p: arr[(start + i) % arr.length], k: `${k}-${i}` }));
+      }),
+    ];
+  }, [meTops, menuBatches]);
   return (
     <>
     <div className="relative h-full">
