@@ -726,6 +726,111 @@ const tbBooks = `
   ${face(250, 250, 0.72, 18)}
   ${sparkle(112, 200, 0.85, '#FFD166')}`;
 
+// ---------------- Task 60 补齐品类（帽子/相机/大衣/衬衫/门锁/冰箱/洗衣机/礼盒/终端机/古建） ----------------
+
+const tbHat = `
+  <path d="M150 300 Q150 176 256 176 Q362 176 362 300 L356 318 L156 318 Z" fill="#FF8FAB" ${S}/>
+  <path d="M150 300 Q256 316 362 300 L382 330 Q388 348 366 352 Q256 368 146 352 Q124 348 130 330 Z" fill="#FFA5BC" ${S}/>
+  <path d="M256 176 Q262 220 258 258 M206 190 Q216 226 212 262 M306 190 Q296 226 300 262" fill="none" stroke="${OL}" stroke-width="4.5" opacity="0.3"/>
+  ${face(256, 264, 0.78, 20)}
+  <circle cx="256" cy="182" r="13" fill="#FFD166" ${S}/>
+  ${heart(338, 226, 0.55, '#FFFFFF')}`;
+
+const tbCamera = `
+  <rect x="214" y="150" width="84" height="40" rx="12" fill="#8FA6C4" ${S}/>
+  <rect x="136" y="182" width="240" height="180" rx="34" fill="#A9BFD9" ${S}/>
+  <circle cx="256" cy="274" r="62" fill="#E9EFF6" ${S}/>
+  <circle cx="256" cy="274" r="40" fill="#5C6B7E" stroke="none"/>
+  <circle cx="256" cy="274" r="40" fill="none" stroke="${OL}" stroke-width="7"/>
+  <circle cx="242" cy="260" r="10" fill="#FFFFFF" opacity="0.85"/>
+  ${face(256, 296, 0.42, 12, 'cat')}
+  <rect x="318" y="200" width="34" height="22" rx="8" fill="#FFD166" ${S}/>
+  <circle cx="176" cy="212" r="9" fill="#FF8FAB" ${S}/>
+  ${sparkle(150, 320, 0.8, '#FFD166')}`;
+
+const tbCoat = `
+  <path d="M256 132 L196 150 L160 196 L196 224 L200 388 L312 388 L316 224 L352 196 L316 150 Z" fill="#D9A05B" ${S}/>
+  <path d="M256 132 L226 176 L256 226 L286 176 Z" fill="#E8B374" ${S}/>
+  <path d="M256 226 L256 380" stroke="${OL}" stroke-width="5" opacity="0.5"/>
+  <circle cx="224" cy="330" r="6" fill="#8D5A3A"/><circle cx="288" cy="330" r="6" fill="#8D5A3A"/>
+  <path d="M196 224 L200 388 M316 224 L312 388" stroke="${OL}" stroke-width="5" opacity="0.35"/>
+  ${face(256, 296, 0.72, 19)}
+  <path d="M232 160 L226 196 M280 160 L286 196" stroke="${OL}" stroke-width="5" stroke-linecap="round" opacity="0.5"/>
+  ${sparkle(188, 270, 0.7, '#FFF6E0', 0.9)}`;
+
+const tbShirt = `
+  <path d="M256 138 L208 152 L150 190 L172 250 L198 234 L198 384 L314 384 L314 234 L340 250 L362 190 L304 152 Z" fill="#BFD9EE" ${S}/>
+  <path d="M256 138 L224 178 L256 216 L288 178 Z" fill="#E6F1FA" ${S}/>
+  <path d="M256 216 L256 380" stroke="${OL}" stroke-width="5" opacity="0.5"/>
+  ${face(256, 296, 0.72, 19)}
+  <rect x="286" y="252" width="44" height="52" rx="8" fill="none" stroke="${OL}" stroke-width="5" opacity="0.55"/>
+  <path d="M224 178 L232 196 M288 178 L280 196" stroke="${OL}" stroke-width="5" stroke-linecap="round" opacity="0.5"/>
+  ${sparkle(320, 330, 0.7, '#FFFFFF', 0.9)}`;
+
+const tbLock = `
+  <rect x="196" y="112" width="120" height="288" rx="30" fill="#8FA6C4" ${S}/>
+  <rect x="214" y="140" width="84" height="96" rx="16" fill="#E9EFF6" ${S}/>
+  ${face(256, 186, 0.6, 16, 'cat')}
+  <circle cx="236" cy="266" r="6" fill="#E9EFF6"/><circle cx="256" cy="266" r="6" fill="#E9EFF6"/><circle cx="276" cy="266" r="6" fill="#E9EFF6"/>
+  <circle cx="236" cy="288" r="6" fill="#E9EFF6"/><circle cx="256" cy="288" r="6" fill="#FFD166"/><circle cx="276" cy="288" r="6" fill="#E9EFF6"/>
+  <circle cx="236" cy="310" r="6" fill="#E9EFF6"/><circle cx="256" cy="310" r="6" fill="#E9EFF6"/><circle cx="276" cy="310" r="6" fill="#E9EFF6"/>
+  <circle cx="256" cy="352" r="17" fill="#FFD166" ${S}/>
+  ${sparkle(150, 200, 0.9, '#FFD166')}`;
+
+const tbFridge = `
+  <rect x="172" y="104" width="168" height="304" rx="26" fill="#BEE3DD" ${S}/>
+  <path d="M172 232 L340 232" stroke="${OL}" stroke-width="7"/>
+  <rect x="196" y="136" width="52" height="12" rx="6" fill="${OL}" opacity="0.8"/>
+  <rect x="196" y="256" width="52" height="12" rx="6" fill="${OL}" opacity="0.8"/>
+  ${face(286, 318, 0.72, 18)}
+  <path d="M212 344 L226 356 M240 344 L226 356" stroke="${OL}" stroke-width="5" stroke-linecap="round" opacity="0.5"/>
+  ${sparkle(140, 170, 0.85, '#FFFFFF', 0.9)}
+  ${heart(370, 300, 0.5, '#FF8FAB')}`;
+
+const tbWasher = `
+  <rect x="156" y="120" width="200" height="288" rx="26" fill="#D9E5F2" ${S}/>
+  <rect x="156" y="120" width="200" height="66" rx="26" fill="#A9BFD9" ${S}/>
+  <circle cx="206" cy="153" r="13" fill="#FFD166" ${S}/>
+  <rect x="240" y="144" width="76" height="18" rx="9" fill="#E9EFF6" ${S}/>
+  <circle cx="256" cy="304" r="66" fill="#8FA6C4" ${S}/>
+  <circle cx="256" cy="304" r="46" fill="#E9F2FA" stroke="none"/>
+  <circle cx="256" cy="304" r="46" fill="none" stroke="${OL}" stroke-width="6" opacity="0.55"/>
+  <path d="M226 296 Q256 278 286 296 M224 316 Q256 334 288 314" fill="none" stroke="#8FB6D9" stroke-width="7" stroke-linecap="round"/>
+  ${sparkle(376, 220, 0.8, '#FFD166')}`;
+
+const tbGift = `
+  <path d="M182 136 L330 136 L330 200 L182 200 Z" fill="#FF8FAB" ${S}/>
+  <rect x="160" y="200" width="192" height="196" rx="18" fill="#FFA5BC" ${S}/>
+  <path d="M232 200 L232 396 M280 200 L280 396" stroke="#FFF6E0" stroke-width="18"/>
+  <path d="M232 200 L232 396 M280 200 L280 396" stroke="${OL}" stroke-width="4" opacity="0.25"/>
+  <path d="M256 136 Q216 84 188 108 Q166 128 200 140 M256 136 Q296 84 324 108 Q346 128 312 140" fill="#FFF6E0" ${S}/>
+  ${face(256, 314, 0.72, 42)}
+  ${sparkle(140, 260, 0.85, '#FFD166')}
+  ${sparkle(376, 330, 0.7, '#FFFFFF', 0.9)}`;
+
+const tbKiosk = `
+  <rect x="236" y="356" width="40" height="52" fill="#8FA6C4" ${S}/>
+  <ellipse cx="256" cy="410" rx="66" ry="14" fill="#8FA6C4" ${S}/>
+  <rect x="164" y="120" width="184" height="240" rx="24" fill="#A9BFD9" ${S}/>
+  <rect x="184" y="144" width="144" height="118" rx="14" fill="#E9EFF6" ${S}/>
+  ${face(256, 202, 0.62, 16)}
+  <rect x="196" y="282" width="34" height="26" rx="7" fill="#FFD166" ${S}/>
+  <rect x="239" y="282" width="34" height="26" rx="7" fill="#E9EFF6" ${S}/>
+  <rect x="282" y="282" width="34" height="26" rx="7" fill="#E9EFF6" ${S}/>
+  ${sparkle(140, 176, 0.85, '#FFD166')}
+  ${sparkle(376, 300, 0.7, '#FFFFFF', 0.9)}`;
+
+const tbTemple = `
+  <path d="M96 216 Q166 168 256 164 Q346 168 416 216 Q396 234 372 228 Q346 244 318 232 Q286 248 256 236 Q226 248 194 232 Q166 244 140 228 Q116 234 96 216 Z" fill="#E8695A" ${S}/>
+  <path d="M236 130 L276 130 L268 164 L244 164 Z" fill="#FFD166" ${S}/>
+  <path d="M256 96 L256 130 M238 108 L274 108" stroke="${OL}" stroke-width="7" stroke-linecap="round"/>
+  <rect x="150" y="248" width="212" height="152" rx="10" fill="#FFF1DC" ${S}/>
+  <rect x="172" y="272" width="40" height="128" rx="8" fill="#C9705E" ${S}/>
+  <rect x="300" y="272" width="40" height="128" rx="8" fill="#C9705E" ${S}/>
+  ${face(256, 330, 0.72, 18)}
+  ${sparkle(120, 320, 0.8, '#FFD166')}
+  ${sparkle(396, 180, 0.7, '#FFFFFF', 0.9)}`;
+
 // ---------------- 任务表 ----------------
 
 interface Job {
@@ -807,6 +912,17 @@ const JOBS: Job[] = [
   { name: 'tb-cookies', fill: '#FFF8EA', accent: '#FFE3A9', body: tbCookies },
   { name: 'tb-tea', fill: '#EFF6E9', accent: '#BFE3C0', body: tbTea },
   { name: 'tb-books', fill: '#FFF8EA', accent: '#FFE3A9', body: tbBooks },
+  // Task 60 补齐品类
+  { name: 'tb-hat', fill: '#FDEFF4', accent: '#FFC9D6', body: tbHat },
+  { name: 'tb-camera', fill: '#F1EEE8', accent: '#D8D2C4', body: tbCamera },
+  { name: 'tb-coat', fill: '#FFF4E0', accent: '#FFD98E', body: tbCoat },
+  { name: 'tb-shirt', fill: '#F1EEE8', accent: '#D8D2C4', body: tbShirt },
+  { name: 'tb-lock', fill: '#F1EEE8', accent: '#D8D2C4', body: tbLock },
+  { name: 'tb-fridge', fill: '#EFF6E9', accent: '#BFE3C0', body: tbFridge },
+  { name: 'tb-washer', fill: '#F1EEE8', accent: '#D8D2C4', body: tbWasher },
+  { name: 'tb-gift', fill: '#FDEFF4', accent: '#FFC9D6', body: tbGift },
+  { name: 'tb-kiosk', fill: '#F1EEE8', accent: '#D8D2C4', body: tbKiosk },
+  { name: 'tb-temple', fill: '#FFF4E0', accent: '#FFD98E', body: tbTemple, ground: [420, 190] },
 ];
 
 async function main() {

@@ -3465,7 +3465,7 @@ export function BillPage({ session, uid, onBack, onToast, onOpenOrder }: { sessi
             <div className="mt-2 flex flex-col gap-2">
               {monthPaid.slice(0, 3).map((o) => (
                 <button key={o.id} type="button" onClick={() => onOpenOrder(o.id)} className="flex items-center gap-2.5 rounded-xl bg-black/[0.025] p-2 text-left active:opacity-75">
-                  <img src={o.items[0]?.img} alt={o.items[0]?.title} className="h-11 w-11 shrink-0 rounded-lg object-cover" draggable={false} />
+                  <TbImg src={o.items[0]?.img} alt={o.items[0]?.title} cap={o.items[0]?.title} className="h-11 w-11 shrink-0 rounded-lg object-cover" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13.5px] font-medium text-black/80">{o.items[0]?.title}</span>
                     <span className="mt-0.5 block text-[11.5px] text-black/40">

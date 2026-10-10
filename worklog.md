@@ -18079,3 +18079,23 @@ Stage Summary:
 - 根治「图片加载失败」：67 张本地 kawaii 卡通图全部落盘 public/goods/*.webp（手绘 SVG→sharp webp，452KB），淘宝/美团全站商品图/菜品图/门头图全链有图，E2E 实测两 App 96/96 图片 0 裂图
 - TbImg 补齐 emoji 渐变兜底（按文件名推断品类），与美团 FoodImg 同款极端故障体验，灰块兜底仅剩理论路径
 - 改动文件：scripts/gen-goods-svg.ts（新增）、public/goods/*.webp（67 张新增）、src/components/apps/tb-img.tsx、src/lib/ios/goods-img.ts（注释）
+
+---
+Task ID: 60
+Agent: main (Z.ai Code)
+Task: 用户反馈「还有的订单是不是没有做啊，怎么不显示，把全部类型的订单都做了」（附截图：首页连帽卫衣卡「图片加载失败」，其余卡片卡通图正常）——补齐全品类图片 + 订单链路旧图链全量迁移
+
+Work Log:
+- 现状对账：Task 59 已落盘 67 张本地图且映射基本齐全，用户截图裂图卡属偶发瞬时故障（dev 编译窗口/负缓存）；但盘点发现三类真实缺口：① 直配 tag gift/kiosk/temple（频道页等级礼盒/拍报机/飞猪古建）无映射全错兜底成零食图；② API TAG_WHITELIST 的 camera/coat/shirt/hat/fridge 等经别名错位映射（帽子显背包图、相机显手机图），国补频道提示词让 AI 把冰箱/洗衣机 tag 填 lamp/sofa（标题与图不符=用户眼里的「订单没做图」）；③ 订单列表/详情/结算/购物车/SKU 面板共 8 处裸 <img> 直渲染持久化旧图链（未走 legacyImgUrl 迁移、无兜底、无名字贴片）
+- scripts/gen-goods-svg.ts 新增 10 张 kawaii 插画并落盘 public/goods/：tb-hat 棒球帽/tb-camera 相机/tb-coat 大衣/tb-shirt 衬衫/tb-lock 智能门锁/tb-fridge 冰箱/tb-washer 洗衣机/tb-gift 礼盒/tb-kiosk 自助终端机/tb-temple 古建（断点续跑机制只生成新增，done=10 skipped=67 failed=0），目检 7 张画风与既有 67 张统一（暖棕描边+腮红+粉彩底）
+- goods-img.ts TB_GOODS 直配 camera/lock/fridge/washer/coat/shirt/hat/gift/kiosk/temple 十个新映射；TB_GOODS_ALIAS 清除错位兜底（hat→backpack、camera→phone、coat→jacket、shirt→tshirt 移除）改直配，新增 smartphone/doorlock/smart-lock/refrigerator/washing-machine/present/gift-box/cap/beanie/overcoat/sweater/blouse/handbag/luggage/tv/television/projector/appliance 长尾归并
+- tb-img.tsx 加固：FALLBACK_EMOJI 补 camera📷/lock🔒/fridge🧊/washer🧺/coat🧥/shirt👔/hat🧢/gift🎁/kiosk🏧/temple⛩️；重试从「同帧立即重试」改为「400ms 延迟 + ?r=1 cache-buster」（根治 dev 编译窗口/负缓存下二次 404 直接落灰块——即用户截图卫衣卡场景）
+- /api/tb-feed：TAG_WHITELIST 扩至 40 词（+lock/fridge/washer/hoodie/tshirt/gift/temple）；TAG_ALIASES 修 hoodie 重复键（原 hoodie→jacket 覆盖新值）与 gift 重复键（原 gift→toy）；国补频道提示词改写为「tag 必须与标题品类对位」（冰箱填 fridge、洗衣机填 washer、门锁填 lock…）；女装频道池扩至 10 词并要求品类对位
+- 订单链路 8 处裸 <img> 全部换 TbImg：SKU 面板头图+颜色分类选项缩略图×2、结算页商品图、订单列表脚卡图、订单详情商品图、channels 会员页月度订单卡图——历史订单存的 /api/mt-img 旧链经 legacyImgUrl 自动迁移到本地卡通图，极端故障走 emoji 渐变兜底，订单/结算/订单详情图统一加 cap（图内底部白字名字贴片=「订单叫什么就显示什么」）
+- E2E（agent-browser 全真浏览器全新 profile 全链路）：联系人 App 建 USER 小淘（微信号自动生成 wxid_ufbvqfe2，账密 wxtb123/qqtb123）→淘宝微信账密登录成功（用名称登录会报「账号未注册」，须用自动生成的微信号——已实测踩坑）；首页信息流顶部+深滚动 58 图 0 裂图 0「图片加载失败」占位；商品详情→SKU 面板（头图+选项缩略图）→加购→购物车（图带名字贴片）→领券购买→确认订单（图带名字贴片）→新增收货地址→提交订单→收银台→我的订单待付款角标 1→订单列表（图带名字贴片）→订单详情（图带名字贴片），全链 0 裂图；人为把订单详情图 src 改指 404 实测重试机制自愈回真图；curl 实测新旧图路由全 200
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误（仅仓库固有 instrumentation Edge 警告）；browser console 无新增错误
+- 备注：美团 App 本次零改动（用户口径「美团没有问题」）；首页 AI 信息流为持久化批次，新 tag 品类图（冰箱/洗衣机/门锁）将在下次下拉刷新生成新批次时出现，旧批次仍全部有图
+
+Stage Summary:
+- 交付：全品类图补齐——淘宝商品图从 33→43 直配品类（+帽子/相机/大衣/衬衫/门锁/冰箱/洗衣机/礼盒/终端机/古建），白名单 40 词与磁盘 77 张图全量对齐零错位；订单全链路（购物车/结算/订单列表/订单详情/频道月度订单/SKU 面板）8 处裸 img 换 TbImg：旧图链自动迁移+emoji 兜底+图内订单名贴片；TbImg 重试加固（400ms 延迟+cache-buster）根治偶发「图片加载失败」灰块
+- 改动文件：scripts/gen-goods-svg.ts、public/goods/*.webp（+10 张）、src/lib/ios/goods-img.ts、src/components/apps/tb-img.tsx、src/components/apps/tb-img-style.ts、src/app/api/tb-feed/route.ts、src/components/apps/taobao.tsx、src/components/apps/taobao-channels.tsx

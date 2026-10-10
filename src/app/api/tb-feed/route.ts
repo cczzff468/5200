@@ -130,10 +130,10 @@ function pickOf<T>(arr: readonly T[], seed: string): T {
 // ---------------- tag 白名单（图片服务支持的品类词） ----------------
 
 const TAG_WHITELIST = [
-  'phone', 'earbuds', 'laptop', 'watch', 'tablet', 'camera', 'keyboard', 'powerbank', 'speaker',
-  'jacket', 'jeans', 'dress', 'sneakers', 'backpack', 'coat', 'shoes', 'hat', 'shirt',
+  'phone', 'earbuds', 'laptop', 'watch', 'tablet', 'camera', 'keyboard', 'powerbank', 'speaker', 'lock', 'fridge', 'washer',
+  'jacket', 'jeans', 'dress', 'hoodie', 'tshirt', 'sneakers', 'backpack', 'coat', 'shoes', 'hat', 'shirt',
   'lipstick', 'perfume', 'skincare', 'makeup',
-  'sofa', 'bedding', 'lamp', 'mug', 'toy', 'water-bottle', 'snacks', 'fruit', 'tea', 'books',
+  'sofa', 'bedding', 'lamp', 'mug', 'toy', 'water-bottle', 'snacks', 'fruit', 'tea', 'books', 'gift', 'temple',
 ] as const;
 
 /** 常见近似词 → 白名单词映射（模型自造词/同义词时的收窄路径） */
@@ -149,17 +149,22 @@ const TAG_ALIASES: Record<string, string> = {
   charger: 'powerbank', cable: 'powerbank', battery: 'powerbank',
   audio: 'speaker', 'bluetooth-speaker': 'speaker', soundbar: 'speaker',
   tv: 'tablet', television: 'tablet', projector: 'tablet',
-  fridge: 'lamp', refrigerator: 'lamp', washer: 'lamp', 'washing-machine': 'lamp',
-  'air-conditioner': 'lamp', microwave: 'lamp', 'rice-cooker': 'lamp', vacuum: 'lamp', appliance: 'lamp',
+  fridge: 'fridge', refrigerator: 'fridge',
+  washer: 'washer', 'washing-machine': 'washer', washingmachine: 'washer',
+  lock: 'lock', doorlock: 'lock', 'smart-lock': 'lock', smartlock: 'lock',
+  hoodie: 'hoodie',
+  gift: 'gift', present: 'gift', 'gift-box': 'gift',
+  temple: 'temple',
+  'air-conditioner': 'lamp', microwave: 'lamp', 'rice-cooker': 'lamp', vacuum: 'lamp', appliance: 'fridge',
   // 服饰
-  clothing: 'jacket', hoodie: 'jacket', blazer: 'jacket', sweater: 'coat', outerwear: 'coat',
+  clothing: 'jacket', blazer: 'jacket', sweater: 'coat', outerwear: 'coat',
   trousers: 'jeans', pants: 'jeans', denim: 'jeans',
   skirt: 'dress', gown: 'dress', sundress: 'dress',
   sneaker: 'sneakers', 'running-shoes': 'sneakers',
   boots: 'shoes', sandals: 'shoes', slippers: 'shoes', socks: 'shoes',
   bag: 'backpack', handbag: 'backpack', luggage: 'backpack', suitcase: 'backpack', tote: 'backpack',
   cap: 'hat', beanie: 'hat',
-  tshirt: 'shirt', 't-shirt': 'shirt', blouse: 'shirt', top: 'shirt', underwear: 'shirt',
+  't-shirt': 'tshirt', blouse: 'shirt', top: 'shirt', underwear: 'shirt',
   // 美妆
   cosmetics: 'makeup', foundation: 'makeup', eyeshadow: 'makeup', mascara: 'makeup',
   cream: 'skincare', serum: 'skincare', lotion: 'skincare', sunscreen: 'skincare', 'face-mask': 'skincare',
@@ -175,7 +180,7 @@ const TAG_ALIASES: Record<string, string> = {
   food: 'snacks', snack: 'snacks', nuts: 'snacks', candy: 'snacks', biscuit: 'snacks', cookies: 'snacks', bread: 'snacks', cake: 'snacks',
   grocery: 'fruit', vegetable: 'fruit', vegetables: 'fruit', meat: 'snacks', seafood: 'snacks', egg: 'fruit', rice: 'fruit',
   book: 'books', novel: 'books', textbook: 'books', stationery: 'books',
-  plush: 'toy', doll: 'toy', lego: 'toy', game: 'toy', figurine: 'toy', pet: 'toy', gift: 'toy',
+  plush: 'toy', doll: 'toy', lego: 'toy', game: 'toy', figurine: 'toy', pet: 'toy',
   travel: 'backpack', outdoors: 'backpack', camping: 'backpack', sports: 'sneakers', fitness: 'sneakers',
 };
 
@@ -195,7 +200,7 @@ function tagOf(raw: unknown): string | null {
  *  merch 周边只能可作周边图的品类、standup 用中文类型词（演出海报角标，非图片键） */
 const TAG_POOL_FLIGGY = ['bedding', 'sofa', 'lamp'];
 const TAG_POOL_MOVIE = ['books'];
-const TAG_POOL_WEAR = ['jacket', 'jeans', 'dress', 'shoes', 'hat', 'coat'];
+const TAG_POOL_WEAR = ['jacket', 'jeans', 'dress', 'hoodie', 'tshirt', 'shirt', 'sneakers', 'shoes', 'hat', 'coat'];
 const TAG_POOL_MERCH = ['toy', 'speaker', 'water-bottle', 'mug', 'lamp', 'backpack', 'hat', 'camera', 'keyboard', 'books'];
 const TAG_POOL_STANDUP = ['脱口秀', '漫才', '开放麦', '舞台剧', '即兴喜剧'];
 /** 领券中心：券图品类（常用大促品类，决定券卡配图） */
@@ -442,10 +447,10 @@ const PROMPT_BASE =
 const HOME_TAB_RULES: Record<string, string> = {
   rec: '综合推荐，类目不限（数码/服饰/家居/美妆/食品/图书皆可），同批类目尽量多样。',
   flash: '淘宝闪购频道：只生成零食/水果/饮料/日用百货快消商品，价格 1~59 元、销量偏高，promo 多填「超级88」。',
-  subsidy: '家电数码国补频道：只生成大家电与数码商品（冰箱/洗衣机/空调/电视/手机/笔记本等），promo 固定填「国补」，价格 399~6999；大家电类（冰箱/洗衣机/空调等）tag 填 lamp 或 sofa，电视类 tag 填 tablet。',
+  subsidy: '家电数码国补频道：只生成大家电与数码商品（冰箱/洗衣机/电视/空调/手机/笔记本/平板/相机/智能门锁等），promo 固定填「国补」，价格 399~6999；tag 必须与标题品类对位：冰箱填 fridge、洗衣机填 washer、电视/空调/风扇填 tablet 或 lamp、智能门锁填 lock、手机填 phone、笔记本填 laptop、相机填 camera。',
   super88: '超级88低价爆款频道：只生成 9.9~49 元的零食/日百小件爆款，promo 固定填「超级88」，origPrice 填日常价。',
   fliggy: '旅行装备频道：只生成旅行箱包/户外装备商品，tag 从 backpack、shoes、coat、hat、water-bottle 中选。',
-  wear: '女装穿搭频道：只生成女装/鞋帽商品，tag 只能从 jacket、jeans、dress、shoes、hat、coat 中选。',
+  wear: '女装穿搭频道：只生成女装/鞋帽商品，tag 只能从 jacket、jeans、dress、hoodie、tshirt、shirt、sneakers、shoes、hat、coat 中选，且与标题品类对位（卫衣填 hoodie、T恤填 tshirt、衬衫填 shirt）。',
   follow: '关注频道：综合推荐，类目不限，同批类目尽量多样。',
 };
 

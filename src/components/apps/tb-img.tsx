@@ -16,16 +16,19 @@ import { legacyImgUrl } from '@/lib/ios/goods-img';
 const FALLBACK_EMOJI: Record<string, string> = {
   // 数码
   phone: '📱', earbuds: '🎧', laptop: '💻', tablet: '📱', watch: '⌚', keyboard: '⌨️',
-  speaker: '🔊', powerbank: '🔋',
+  speaker: '🔊', powerbank: '🔋', camera: '📷', lock: '🔒',
+  // 家电
+  fridge: '🧊', washer: '🧺',
   // 服饰
-  tshirt: '👕', jeans: '👖', dress: '👗', jacket: '🧥', hoodie: '🧥', sneakers: '👟', shoes: '👟', backpack: '🎒',
+  tshirt: '👕', jeans: '👖', dress: '👗', jacket: '🧥', hoodie: '🧥', coat: '🧥', shirt: '👔',
+  hat: '🧢', sneakers: '👟', shoes: '👟', backpack: '🎒',
   // 美妆
   lipstick: '💄', perfume: '🌸', skincare: '🧴', makeup: '💅',
   // 家居
   sofa: '🛋️', bedding: '🛏️', lamp: '💡', mug: '☕', vase: '🏺', pillow: '🛏️', desk: '🪑',
   // 其他
   toy: '🧸', umbrella: '☂️', 'water-bottle': '🥤', snacks: '🍿', cookies: '🍪', tea: '🍵',
-  books: '📚', book: '📚', fruit: '🍎', flower: '💐',
+  books: '📚', book: '📚', fruit: '🍎', flower: '💐', gift: '🎁', kiosk: '🏧', temple: '⛩️',
   // 美团菜品（淘宝 AI 商品跨类复用）
   'milk-tea': '🧋', burger: '🍔', 'fried-chicken': '🍗', pizza: '🍕', hotpot: '🍲', noodles: '🍜',
   rice: '🍚', dessert: '🍰', 'ice-cream': '🍦', coffee: '☕', juice: '🧃', milk: '🥛', egg: '🍳',
@@ -70,10 +73,11 @@ function TbImgInner({
   className?: string;
   alt?: string;
 }) {
-  // stage：0=主源首载 1=主源重试 2=占位（本地静态图，占位仅极端故障出现）
+  // stage：0=主源首载 1=主源重试（延迟+cache-buster） 2=占位（本地静态图，占位仅极端故障出现）
   const [stage, setStage] = useState(0);
   const [loaded, setLoaded] = useState(false);
-  const cur = stage <= 1 ? src : undefined;
+  // 重试时追加 r= 查询参数绕过可能的负缓存/半程响应（Task 60：修复偶发单图 404 后同 URL 重试仍 404）
+  const cur = stage === 0 ? src : stage === 1 ? `${src}${src?.includes('?') ? '&' : '?'}r=1` : undefined;
   // 未显式传 emoji 时按图源文件名推断兜底 emoji（与美团 FoodImg 同款暖色渐变兜底）
   const fb = emoji ?? fallbackEmojiOf(cur) ?? fallbackEmojiOf(src);
   if (!cur) {
@@ -109,7 +113,12 @@ function TbImgInner({
         onLoad={() => setLoaded(true)}
         onError={() => {
           setLoaded(false);
-          setStage((s) => s + 1); // 0→1 重试，1→2 占位
+          if (stage === 0) {
+            // 首败延迟重试：避开 dev 编译窗口/瞬时抖动（同帧立即重试会二次 404 直接落灰块）
+            window.setTimeout(() => setStage(1), 400);
+          } else {
+            setStage(2); // 1→2 占位
+          }
         }}
         className={`h-full w-full object-cover transition-opacity duration-200 ${loaded ? 'opacity-100' : 'opacity-0'}`}
       />

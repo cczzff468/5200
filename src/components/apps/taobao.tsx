@@ -10,8 +10,9 @@
  * - 下单：收货地址 + 优惠券/运费 + 支付方式选择；支付复用 QQ/微信钱包（亲属卡支付写 AI 记忆）；
  * - 订单：待付款/待发货/待收货/已完成/已取消 + 物流轨迹 + 确认收货/评价/退款/再来一单；
  * - 我的：订单宫格/收藏/足迹/地址管理/快递/优惠券/账户余额（微信+QQ 只读）/设置；
- * - 图片：商品/店铺图统一本地 kawaii 卡通插画（goods-img.ts 预生成，Task 58；不再请求外部图库），
- *   订单/购物车商品图内底部带商品名白字贴片（TbImg cap）；
+ * - 图片：商品/店铺图统一本地 kawaii 卡通插画（goods-img.ts 预生成，Task 59 落盘 67 张 + Task 60 补齐
+ *   帽子/相机/大衣/衬衫/门锁/冰箱/洗衣机/礼盒/终端机/古建 10 张，不再请求外部图库），
+ *   订单/购物车商品图内底部带商品名白字贴片（TbImg cap），历史订单旧图链经 legacyImgUrl 自动迁移本地卡通图；
  * - 数据：tb-* IndexedDB kv 按 uid 隔离（taobao-store.ts）；UI 图标一律 SVG（禁 emoji）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -1937,7 +1938,7 @@ function SkuSheet({
           </div>
           {/* 商品头：图 + 实付/优惠前 + 步进 */}
           <div className="flex gap-3 px-4 pb-1 pt-2">
-            <img src={skuImg} alt={p.title} className="h-[88px] w-[88px] shrink-0 rounded-lg object-cover" draggable={false} />
+            <TbImg src={skuImg} alt={p.title} className="h-[88px] w-[88px] shrink-0 rounded-lg object-cover" />
             <div className="min-w-0 flex-1 pt-0.5">
               <div className="flex items-baseline gap-1.5">
                 <span className="text-[12px] text-black/45">实付</span>
@@ -2020,7 +2021,7 @@ function SkuSheet({
                       className={`relative flex items-center gap-1.5 rounded-lg border py-1 pl-1 pr-3 text-[13px] ${o.soldOut ? 'border-black/[0.06] text-black/25' : active ? 'border-[#FF5000] bg-[#FF5000]/[0.04] font-medium text-[#FF5000]' : 'border-black/[0.12] text-black/75'}`}
                     >
                       {o.soldOut ? <span className="absolute -top-2 right-1 rounded bg-black/25 px-1 text-[9px] leading-[14px] text-white">缺货</span> : null}
-                      {o.img ? <img src={o.img} alt={o.label} className={`h-9 w-9 rounded-md object-cover ${o.soldOut ? 'opacity-40 grayscale' : ''}`} draggable={false} /> : null}
+                      {o.img ? <TbImg src={o.img} alt={o.label} emoji={o.img.startsWith('data:') ? '🛍️' : undefined} className={`h-9 w-9 shrink-0 rounded-md object-cover ${o.soldOut ? 'opacity-40 grayscale' : ''}`} /> : null}
                       <span className="max-w-[150px] truncate">{o.label}</span>
                       {o.priceDelta ? <span className="text-[11px] opacity-70">+{o.priceDelta}</span> : null}
                     </button>
@@ -2242,7 +2243,7 @@ function ProductPage({
               onClick={() => openSku('cart')}
               className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-1.5 py-1 text-[12px] ${o.soldOut ? 'border-black/[0.06] text-black/25' : i === 0 ? 'border-[#FF5000] bg-[#FF5000]/[0.05] text-black/80' : 'border-black/10 text-black/70'}`}
             >
-              {o.img ? <img src={o.img} alt={o.label} className="h-8 w-8 rounded object-cover" draggable={false} /> : null}
+              {o.img ? <TbImg src={o.img} alt={o.label} emoji={o.img.startsWith('data:') ? '🛍️' : undefined} className="h-8 w-8 shrink-0 rounded object-cover" /> : null}
               <span className="max-w-[96px] truncate">{o.label}</span>
               {o.soldOut ? <span className="text-[10px]">缺货</span> : null}
             </button>
@@ -2915,7 +2916,7 @@ function CheckoutPage({
             const qty = qtyOverride[it.pid + it.img] ?? it.qty;
             return (
               <div key={i} className="flex gap-2.5 py-2 first:pt-0 last:pb-0">
-                <img src={it.img} alt={it.title} className="h-16 w-16 rounded-lg object-cover" draggable={false} />
+                <TbImg src={it.img} alt={it.title} cap={it.title} className="h-16 w-16 shrink-0 rounded-lg object-cover" />
                 <div className="min-w-0 flex-1">
                   <div className="line-clamp-2 text-[13px] leading-[18px] text-black/85">{it.title}</div>
                   <div className="mt-0.5 truncate text-[11px] text-black/35">{Object.entries(it.sku).map(([k, v]) => `${k}：${v}`).join('；')}</div>
@@ -4613,7 +4614,7 @@ function LogisticsPage({
             </div>
             {/* 商品脚卡（点击可进商品） */}
             <button type="button" onClick={() => onOpenProduct(o.items[0]?.pid ?? '')} className="mt-1 flex w-full items-center gap-2.5 rounded-xl bg-[#F7F8FA] p-2.5 text-left active:opacity-80">
-              <img src={o.items[0]?.img} alt={o.items[0]?.title} className="h-12 w-12 shrink-0 rounded-lg object-cover" draggable={false} />
+              <TbImg src={o.items[0]?.img} alt={o.items[0]?.title} cap={o.items[0]?.title} className="h-12 w-12 shrink-0 rounded-lg object-cover" />
               <div className="min-w-0 flex-1">
                 <div className="line-clamp-1 text-[13px] text-black/80">{o.items[0]?.title}</div>
                 <div className="mt-0.5 text-[12px] text-black/40">{shop0.name} · x{o.items[0]?.qty ?? 1}</div>
@@ -4829,7 +4830,7 @@ function LogisticsPage({
           </div>
           {o.items.map((it, i) => (
             <button key={i} type="button" onClick={() => onOpenProduct(it.pid)} className="mt-2.5 flex w-full gap-2.5 text-left">
-              <img src={it.img} alt={it.title} className="h-[64px] w-[64px] shrink-0 rounded-lg object-cover" draggable={false} />
+              <TbImg src={it.img} alt={it.title} cap={it.title} className="h-[64px] w-[64px] shrink-0 rounded-lg object-cover" />
               <div className="min-w-0 flex-1">
                 <div className="flex gap-2">
                   <span className="line-clamp-1 min-w-0 flex-1 text-[13.5px] leading-5 text-black/85">{it.title}</span>
