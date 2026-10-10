@@ -4242,6 +4242,26 @@ export default function PhoneApp() {
     void localDB.put('call-logs', stamped);
   }, []);
 
+  /** 通话结束落一条语音留言：kind='call'（对话内容存档）不弹「发来留言」提示；未接通留言才提示。
+   *  多账号（Task 40-2d）：留言归属电话 App 当前账号（CallScreen 各路径的留言对象统一在这里盖账号戳）。
+   *  声明在 startVideoCall 之前：视频转写存档（Task 54）也走这里 */
+  const handleVoicemail = useCallback(
+    (vm: VoicemailRecord) => {
+      const stamped: VoicemailRecord = { ...vm, account: getActiveAccountIdFor('phone') };
+      setVoicemails((prev) => {
+        const base = prev ?? [];
+        return [stamped, ...base].sort((a, b) => b.createdAt - a.createdAt);
+      });
+      void localDB.put('voicemails', stamped);
+      showToast(
+        vm.kind === 'call'
+          ? `与「${vm.displayName}」的通话内容已永久保存到语音留言`
+          : `「${vm.displayName}」给你发来一条语音留言`
+      );
+    },
+    [showToast]
+  );
+
   /** Task 22 视频通话：联系人详情「视频通话」→ 全局通话层视频页（variant='phone' iOS 黑白灰皮肤）。
    *  与语音 CallScreen 完全独立（语音引擎不动）；引擎为三端共用 useChatCall（media='video'），
    *  接通/字幕/记忆/挂断续聊全部复用；通话记录落 CallLogRecord（media:'video'，记录行显示视频图标） */
@@ -4294,29 +4314,28 @@ export default function PhoneApp() {
             media: 'video',
             createdAt: Date.now(),
           });
+          // 视频通话转写存档（与语音通话同口径）：接通挂断后把整通对话内容存成 kind='call' 语音留言
+          //（永久保存可回看；handleVoicemail 对 kind='call' 有专属提示文案）；挂断续聊不在此内
+          const vmTurns = (r.transcript ?? []).filter((t) => t.content.trim().length > 0);
+          if (resolved?.id && resolved.kind !== 'user' && r.connected && vmTurns.length > 0) {
+            handleVoicemail({
+              id: genId(),
+              number,
+              contactId: resolved.id,
+              displayName: resolved.name,
+              peerKind: resolved.kind as VoicemailRecord['peerKind'],
+              avatar: resolved.avatar ?? null,
+              text: vmTurns.map((t) => `${t.role === 'user' ? '我' : resolved.name}：${t.content}`).join('\n'),
+              duration: r.duration,
+              read: true,
+              createdAt: Date.now(),
+              kind: 'call',
+            });
+          }
         },
       });
     },
-    [callTarget, showToast, handleCallEnd]
-  );
-
-  /** 通话结束落一条语音留言：kind='call'（对话内容存档）不弹「发来留言」提示；未接通留言才提示。
-   *  多账号（Task 40-2d）：留言归属电话 App 当前账号（CallScreen 各路径的留言对象统一在这里盖账号戳） */
-  const handleVoicemail = useCallback(
-    (vm: VoicemailRecord) => {
-      const stamped: VoicemailRecord = { ...vm, account: getActiveAccountIdFor('phone') };
-      setVoicemails((prev) => {
-        const base = prev ?? [];
-        return [stamped, ...base].sort((a, b) => b.createdAt - a.createdAt);
-      });
-      void localDB.put('voicemails', stamped);
-      showToast(
-        vm.kind === 'call'
-          ? `与「${vm.displayName}」的通话内容已永久保存到语音留言`
-          : `「${vm.displayName}」给你发来一条语音留言`
-      );
-    },
-    [showToast]
+    [callTarget, showToast, handleCallEnd, handleVoicemail]
   );
 
   const stopVmAudio = useCallback(() => {

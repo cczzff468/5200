@@ -30,7 +30,8 @@
  *   通话不涉及真实电话网络；挂断/卸载时释放录音流、停止播报、停表。
  *
  * 四、通话结果（onEnd 恰好一次回调）：direction / endReason / connected / duration（接通秒数），
- *   由宿主（微信/QQ 聊天页）生成通话卡片消息并持久化。
+ *   由宿主（微信/QQ 聊天页）生成通话卡片消息并持久化；另回传 transcript=通话全程对话转写
+ *   （语音+文字轮次快照）——宿主把整通对话按普通消息落进聊天记录（用户要求：全部对话显示在聊天界面）。
  *
  * 五、通话记忆（与文字聊天共用同一套记忆系统，同池存储 / 同互通开关 / 按联系人隔离）：
  *   1) 每轮回复后 memorizeTurn：轮次计数（无持久消息数组固定计 2 条）→ 达提取间隔自动从
@@ -99,6 +100,10 @@ export interface ChatCallResult {
   duration: number;
   /** AI 拒接/未接后的解释文字（接听决策产出；宿主稍后以聊天消息/语音留言呈现） */
   afterText?: string;
+  /** 通话全程对话转写（语音轮次 + 文字轮次，挂断时刻快照；空轮次已过滤）——
+   *  宿主据此把整通电话的对话内容落进聊天记录（用户要求：全部对话显示在聊天界面，不光打的字）。
+   *  挂断续聊文字不在此内（宿主经 onFollowup 另行落库，避免重复） */
+  transcript?: ChatCallTextMsg[];
 }
 
 export interface ChatCallTurnMsg {
@@ -734,12 +739,15 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     const connected = secondsRef.current > 0 || phaseWasConnected(endReason);
     // 挂断后 AI 续聊（立刻发）+ 通话结束自动总结：整通转写（含续聊文字）交给记忆管线提取关键信息（异步，不阻塞宿主落卡片）
     followupAndSummarize(endReason);
+    // 全程对话转写快照（空内容过滤）：随 onEnd 交宿主落聊天记录（微信/QQ 聊天页 + 电话存档）
+    const transcript = chatLogRef.current.filter((m) => m.content.trim().length > 0);
     onEndRef.current({
       direction: optsRef.current.app === 'wx' || optsRef.current.app === 'qq' ? direction : 'out',
       endReason,
       connected,
       duration: secondsRef.current,
       ...(afterText ? { afterText } : {}),
+      ...(transcript.length > 0 ? { transcript } : {}),
     });
   }, [direction, stopAutoListenTimers, followupAndSummarize]);
   // #18 finishRef：同步最新 finish，供生命周期 cleanup 调用（effect deps=[] 避免重跑组件初始化）

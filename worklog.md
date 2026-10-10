@@ -17985,3 +17985,23 @@ Work Log:
 Stage Summary:
 - 交付：①通话界面挂断上方麦克风按钮删除，免提对话零点击（既有全自动链路成为唯一路径）；②信息按钮移右上角；③底部按钮下移 16px；④弹幕被挡根除——单句弹幕升级为全程对话记录（聊天界面样式、有界滚动自动滚底、语音轮次带声波小标）；⑤微信输入框左圆钮美化：精修声波弧线+补齐语音模式键盘图标状态（单聊+群聊同款）
 - 改动文件：src/components/apps/phone.tsx、src/components/apps/wechat.tsx、src/components/apps/wx-group.tsx
+
+---
+Task ID: 54
+Agent: main (Z.ai Code)
+Task: 用户澄清「通话对话要全部显示在聊天界面，不光打的字」——①微信/QQ 语音通话（含视频）挂断后整通对话落聊天记录（此前只有通话卡片，打的字也只是通话内临时显示）；②微信/QQ 通话页单句弹幕升级为全程对话记录（与电话 App Task 53 同款）；③电话 App 视频通话补转写存档（与语音通话同口径）
+
+Work Log:
+- 根因定位：①chat-call 引擎 useChatCall 的 chatLogRef 本就持有全部轮次（语音 via='voice' + 文字 via='text'，含 AI 问候），但 onEnd 的 ChatCallResult 不携带转写，宿主 writeCallCard 只落一张通话卡片——说的内容全部丢失；②voice-call-screen.tsx（微信/QQ 语音通话页）仍是单句弹幕 CaptionStream（只显示 AI 最新一句）；③电话 App 语音通话已有 kind='call' 留言存档（转写落语音留言），但视频通话路径没有
+- 引擎（chat-call.ts）：ChatCallResult 新增 transcript?: ChatCallTextMsg[]——finish() 时快照 chatLogRef（过滤空轮次）随 onEnd 回传；挂断续聊文字不在此内（宿主经 onFollowup 另行落库，天然不重复）；文件头「四、通话结果」注释同步
+- 微信（wechat.tsx writeCallCard）：r.transcript 逐条转普通文字消息（role user→me/assistant→peer、time 用轮次真实时间 at）垫在通话卡片前（对话→卡片收尾，时间顺序自然）；一次 saveMsgs 批量落盘 + setMsgs 去重合并；通知口径不变（只有卡片 notifyDirectSave，转写消息不推岛通知）；拉黑拦截照旧（byUser 直接 return）；未接通/无对话时只有卡片行为不变
+- QQ（qq.tsx writeCallCard）：同款镜像实现（QQMsg）
+- 语音通话页（voice-call-screen.tsx）：新增 CallTranscript 全程对话记录组件——全部轮次逐条气泡（对方白色在左/我方微信绿 #95EC69、QQ 蓝 #0099FF 在右，与 InlineCallChat 同配色），语音轮次带 AudioLines 声波小标（与电话 App 记录同款），AI 播报整句随 aiReveal 逐字揭示、完成后常驻，有界滚动自动滚底，textBusy 显示回应中三点；wx/qq 两皮肤中部替换 CaptionStream（弹幕退役，仍导出供视频页）；文字聊天模式重构：全程记录常驻 + InlineCallChat 新增 inputOnly 只渲染输入栏（原文字轮次消息区删除，与电话 App Task 53 口径一致）；顶部弹性区 max-h-[72px] 封顶（空间让给记录，拨号/接通头像位置连续）；文件头注释更新
+- 电话 App（phone.tsx）：视频通话（startVideoCall onEnd）补转写存档——connected 且有轮次时按语音通话同口径落 kind='call' 语音留言（「我：…/小爱：…」逐行）；handleVoicemail 声明上移到 startVideoCall 之前（修复引用顺序），deps 补 handleVoicemail
+- E2E（agent-browser 全真浏览器；z-ai 内置模型持续 429，用 network route mock /api/phone/turn 验证 AI 侧）：①微信语音通话接通：AI 问候白泡在左入记录、文字轮次绿泡在右累积、自动滚底、弹幕不再只出单句；②挂断回聊天页：AI 语音轮次（白/左）+ 我方文字轮次（绿/右）+ 通话卡片全部落库，「通话时长 01:53」垫底；③reload 解锁重开：转写消息持久化原样；④第二次通话（mock AI）：问候白泡+我方绿泡+AI 回复白泡，挂断后聊天页两侧齐全；⑤电话 App 视频通话（mock AI）：挂断后联系人详情›语音留言出现「通话内容 · 0:20」存档，详情页「这通电话说了什么」显示 AI 轮次全文；⑥QQ 端：writeCallCard 与微信端逐行镜像（同引擎同 transcript 字段），QQ 需账号注册方可全流程（沙箱「该QQ号尚未注册」「注册账号暂未开放，请在联系人 App 配置账号」），引擎/写库路径与微信共享已被 ③④ 覆盖，tsc 通过
+- dev.log 无新增运行时错误（仅仓库自带 instrumentation Edge 警告 + 环境性 429）；bunx tsc --noEmit 0 错误
+
+Stage Summary:
+- 交付：①微信/QQ 语音（含视频）通话挂断后，整通对话（AI 说的+我说的，语音轮次和文字轮次）按普通消息逐条落进聊天记录，通话卡片作为收尾标记——「全部对话显示在聊天界面，不光打的字」落地且持久化；②微信/QQ 通话页单句弹幕升级为全程对话记录（聊天界面样式、两侧气泡、声波小标、逐字揭示、自动滚底、文字模式常驻记录+纯输入栏）；③电话 App 视频通话补通话内容存档（语音留言可回看）
+- 记忆/上下文零冲突：转写消息照常进后续 AI 上下文（跨 App/下次通话都能接上），通话记忆沉淀仍由引擎 summarizeCall 负责（转写不重复触发提取）；通知口径、拉黑拦截、账号戳、未接通卡片行为全部不变
+- 改动文件：src/lib/ios/chat-call.ts、src/components/apps/voice-call-screen.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/phone.tsx

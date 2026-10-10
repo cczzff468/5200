@@ -3552,8 +3552,22 @@ function ChatPage({
         kind: 'call' as const,
         call: { state: st, duration: r.duration, direction: r.direction, media: lastCallMediaRef.current },
       };
-      saveMsgs(peer.id, [...loadMsgs(peer.id), card]);
-      setMsgs((prev) => (prev.some((m) => m.id === card.id) ? prev : [...prev, card]));
+      // 通话对话全程落聊天记录（用户要求「全部对话显示在聊天界面，不光打的字」，与微信端同款）：
+      // 引擎 onEnd 回传全程转写（语音轮次+文字轮次），按普通文字消息逐条落库（时间用轮次真实时间），
+      // 通话卡片垫在最后作为收尾标记；挂断续聊文字经 onFollowup 另行落库（转写快照不含续聊，不重复）；
+      // 未接通/无对话时只有卡片，行为不变；消息本身不推通知（只有卡片按原口径通知）
+      const turnMsgs: QQMsg[] = (r.transcript ?? []).map((t) => ({
+        id: uid(),
+        role: t.role === 'user' ? 'me' : 'peer',
+        content: t.content,
+        time: t.at || Date.now(),
+      }));
+      const additions = [...turnMsgs, card];
+      saveMsgs(peer.id, [...loadMsgs(peer.id), ...additions]);
+      setMsgs((prev) => {
+        const fresh = additions.filter((m) => !prev.some((p) => p.id === m.id));
+        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+      });
       notifyDirectSave(card);
       // AI 拒接/未接：过一会儿 AI 主动发一条人设化解释（接听决策产出 afterText）。
       // 聊天页不在场也照常落盘（saveMsgs 直写；回来时 loadMsgs 恢复，消息照常进后续 AI 上下文）

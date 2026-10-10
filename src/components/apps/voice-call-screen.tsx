@@ -14,9 +14,9 @@
  * - 免提「自动对话」模式（VAD）：AI 说完自动开始听 → 用户直接说话（无需点任何按钮）→
  *   说完停顿 1.4s 自动发送 → AI 回复播完自动回到聆听，循环；麦克风按钮点一下=临时静音
  *   （长按亦可）；说话中点麦克风立即发送；状态区「在听你说…/正在听/正在思考…/识别中…」等。
- * - 通话字幕（单句弹幕，实时）：只显示 AI 说的话——TTS 播报的同时按播放进度逐字揭示（柔白字），
- *   我说的话不再上屏（用户反馈）；屏幕同一时刻只显示 AI 最新一句、位于头像名字下方——AI 开新口
- *   上一句立即消失（用户需求：头像名字居中，字幕在其下方，单句呈现、字号加大、居中对齐）。
+ * - 通话全程对话记录（聊天界面样式，替代单句弹幕——用户要求「把全部对话显示在聊天界面，不光打的字」）：
+ *   全部轮次逐条气泡呈现（对方白色在左/我方绿蓝在右，语音轮次带声波小标），AI 播报整句随 TTS 进度
+ *   逐字揭示、完成后常驻；有界滚动自动滚底；文字聊天不再单设消息区（全程记录常驻，信息开关只控输入条）。
  * - 通话中文字聊天：接通后右上角信息图标开关——底部三个按钮上方出现内联输入条（消息区+输入框），
  *   开启期间字幕隐藏（用户需求）；AI 配置了第三方语音 API → 语音回复（TTS），没配 → 文字回复
  *   （消息区气泡）；关闭输入条字幕恢复，通话不断；QQ 电话同样。
@@ -27,6 +27,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  AudioLines,
   BellOff,
   MessageSquare,
   Mic,
@@ -161,7 +162,7 @@ export function statusLine(
   }
 }
 
-// ---------------- 通话字幕（居中单句模式） ----------------
+// ---------------- 通话字幕（居中单句模式；视频通话页仍用，语音页已换全程记录） ----------------
 
 /** 单句字幕（只显示 AI 说的话——我方说话不上屏，用户反馈「不好看」）：
  *  居中对齐、字号加大（17px）、柔白；弹跳入场；无头像无光标竖线 */
@@ -221,6 +222,74 @@ export function CaptionStream({ variant, call }: { variant: 'wx' | 'qq'; call: C
   );
 }
 
+/**
+ * 通话全程对话记录（聊天界面样式；语音通话页的弹幕替代——用户要求「全部对话显示在聊天界面，不光打的字」）：
+ * - 全部轮次逐条渲染：对方白色气泡在左 / 我方绿蓝气泡在右（微信 #95EC69 / QQ #0099FF，与文字条同款）；
+ * - 语音轮次带声波小标（与电话 App 全程记录同款），文字轮次无标；
+ * - AI 正在播报的整句随 TTS 进度逐字揭示（aiReveal），揭示完成整句常驻记录里；
+ * - 有界滚动（max-h-full）自动滚到底；文字回复中显示「对方正在回应」三点。
+ */
+function CallTranscript({ variant, call }: { variant: 'wx' | 'qq'; call: ChatCallApi }) {
+  const { chatLog, aiReveal, textBusy } = call;
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const isWx = variant === 'wx';
+  const shown = chatLog.filter((m) => m.content.trim().length > 0);
+  let lastAsstIdx = -1;
+  for (let i = shown.length - 1; i >= 0; i--) {
+    if (shown[i].role === 'assistant') {
+      lastAsstIdx = i;
+      break;
+    }
+  }
+  // 新轮次/逐字揭示/回应中自动滚到底
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chatLog, aiReveal, textBusy]);
+  return (
+    <div
+      ref={listRef}
+      className="no-scrollbar mx-auto flex max-h-full w-full flex-col gap-1.5 overflow-y-auto py-1"
+      aria-label="通话对话记录"
+      data-testid={`${variant}-call-transcript`}
+    >
+      {shown.map((m, i) => {
+        const revealing = aiReveal !== null && i === lastAsstIdx && aiReveal.text === m.content;
+        const text = revealing ? aiReveal.text.slice(0, aiReveal.shown) : m.content;
+        return (
+          <div key={`${m.at}-${i}`} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <p
+              className={`flex max-w-[82%] items-start gap-1.5 whitespace-pre-wrap break-words px-3.5 py-2 text-[14px] leading-snug shadow-[0_1px_3px_rgba(0,0,0,0.3)] ${
+                m.role === 'user'
+                  ? isWx
+                    ? 'rounded-[10px] bg-[#95EC69] text-black'
+                    : 'rounded-[12px] text-white'
+                  : 'rounded-[10px] bg-white text-[#1F2329]'
+              }`}
+              style={m.role === 'user' && !isWx ? { backgroundColor: '#0099FF' } : undefined}
+            >
+              {m.via !== 'text' && <AudioLines className="mt-[3px] h-3.5 w-3.5 shrink-0 opacity-50" aria-hidden="true" />}
+              <span className="min-w-0">{text}</span>
+            </p>
+          </div>
+        );
+      })}
+      {textBusy && (
+        <div className="flex justify-start">
+          <p
+            className="flex items-center gap-1.5 rounded-[10px] bg-white px-3.5 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.3)]"
+            aria-label="对方正在回应"
+          >
+            {[0, 150, 300].map((d) => (
+              <span key={d} className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/35" style={{ animationDelay: `${d}ms` }} />
+            ))}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------- 通话中文字聊天内联条（右上角信息图标开关；AI 配了语音 API 语音回复，否则文字） ----------------
 
 /**
@@ -248,6 +317,8 @@ export function CallChatHeader({ name, avatar }: { name: string; avatar: string 
  * - Task 28 定稿（用户反馈）：面板不再自带 header——小头像+名字由宿主 CallChatHeader 放到屏幕
  *   顶部时长上方；聊天模式下中央大头像+名字隐藏，「头像名字下面都是文字输入」，底部按钮不消失；
  * - 消息区只显示文字轮次（via='text'）：我发的消息 + AI 的文字回复；语音轮次不在此显示；
+ *   inputOnly=true 时消息区整个不渲染（语音通话页用：全程对话记录 CallTranscript 常驻后，
+ *   输入条开关只负责输入栏，消息区交给全程记录）；
  *   高度 messagesMaxH 内联 style maxHeight（默认 35vh；视频通话传 20vh——消息区过高会向上顶到
  *   互换态全屏「我的头像」，Task 28 追加反馈后视频侧压低消息区+头像上移双管齐下；
  *   用内联样式而非 Tailwind 任意值类——max-h-[20vh] 类在部分构建管线下不生成 CSS）；
@@ -262,6 +333,7 @@ export function InlineCallChat({
   call,
   className = '',
   messagesMaxH = '35vh',
+  inputOnly = false,
 }: {
   variant: 'wx' | 'qq';
   call: ChatCallApi;
@@ -269,6 +341,8 @@ export function InlineCallChat({
   /** 消息区最大高（CSS 值，内联 style maxHeight）：语音默认 35vh（flex 弹性区自适配）；
    *  视频通话传 20vh（聊天模式+互换后给全屏「我的头像」留出净空区，不再被气泡盖住） */
   messagesMaxH?: string;
+  /** 只渲染输入栏（消息区交给外置全程记录 CallTranscript；语音通话页用，视频页缺省关） */
+  inputOnly?: boolean;
 }) {
   const [draft, setDraft] = useState('');
   const { chatLog, textBusy, error } = call;
@@ -292,8 +366,9 @@ export function InlineCallChat({
   return (
     <div className={`shrink-0 ${className}`} data-testid={`${variant}-call-textbar`}>
       {/* 文字轮次消息（最近 8 条，超高滚动；无滚动条；Task 28 定稿：max-h-[35vh]，
-          「头像名字下面都是文字输入」，内部滚动、底部按钮不被顶出屏幕） */}
-      {(textMsgs.length > 0 || textBusy) && (
+          「头像名字下面都是文字输入」，内部滚动、底部按钮不被顶出屏幕；
+          inputOnly 时不渲染——语音页由全程记录 CallTranscript 常驻呈现） */}
+      {!inputOnly && (textMsgs.length > 0 || textBusy) && (
         <div
           ref={listRef}
           style={{ maxHeight: messagesMaxH }}
@@ -443,18 +518,19 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
         </button>
       )}
 
-      {/* 中部：普通模式=头像名字居中（上下对称弹性区），接通后字幕单句在名字下方（用户反馈）；
-          聊天模式（Task 28 定稿）：中央大头像+名字消失，改为消息区+输入栏（底部对齐），
+      {/* 中部：普通模式=头像名字居中（顶部弹性区封顶，把空间让给全程对话记录——与电话 App 同款，
+          拨号中与接通后头像位置连续不跳）；聊天模式：全程记录常驻 + 输入栏（消息区由全程记录承担），
           底部按钮不受影响仍在 */}
       {textChatOpen && phase === 'active' ? (
         <div className="flex min-h-0 flex-1 flex-col px-4 pb-1">
-          <div className="flex min-h-0 w-full flex-1 flex-col justify-end overflow-hidden">
-            <InlineCallChat variant="wx" call={call} className="w-full" />
+          <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden">
+            <CallTranscript variant="wx" call={call} />
           </div>
+          <InlineCallChat variant="wx" call={call} className="w-full" inputOnly />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-9">
-          <div className="min-h-4 flex-1" aria-hidden="true" />
+          <div className="min-h-4 max-h-[72px] flex-1" aria-hidden="true" />
           <div className="relative mt-1">
             {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-[16px] bg-white/10" aria-hidden="true" />}
             <CallAvatar variant="wx" avatar={avatar} size={104} />
@@ -466,11 +542,11 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
           {error && <p className="mt-2 max-w-[280px] text-center text-[12px] text-red-300">{error}</p>}
           {phase === 'active' ? (
             <div
-              className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-1 pt-4"
-              aria-label="通话字幕"
+              className="flex min-h-[44px] w-full flex-1 flex-col overflow-hidden px-1 pt-4"
+              aria-label="通话对话记录"
             >
-              {/* 文字输入条开着时字幕隐藏（用户需求）；占位保留布局稳定 */}
-              {!textChatOpen && <CaptionStream variant="wx" call={call} />}
+              {/* 全程对话记录：语音/文字轮次全部逐条呈现（聊天界面样式），弹幕不再只出单句 */}
+              <CallTranscript variant="wx" call={call} />
             </div>
           ) : (
             <div className="min-h-4 flex-1" aria-hidden="true" />
@@ -639,18 +715,18 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
         </div>
       )}
 
-      {/* 中部：普通模式=头像名字居中（上下对称弹性区），接通后字幕单句在名字下方（与微信皮肤一致）；
-          聊天模式（Task 28 定稿）：中央大头像+名字消失，改为消息区+输入栏（底部对齐），
-          底部按钮不受影响仍在 */}
+      {/* 中部：普通模式=头像名字居中（顶部弹性区封顶——与微信皮肤/电话 App 同款，把空间让给全程记录）；
+          聊天模式：全程记录常驻 + 输入栏，底部按钮不受影响仍在 */}
       {textChatOpen && phase === 'active' ? (
         <div className="flex min-h-0 flex-1 flex-col px-4 pb-1">
-          <div className="flex min-h-0 w-full flex-1 flex-col justify-end overflow-hidden">
-            <InlineCallChat variant="qq" call={call} className="w-full" />
+          <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden">
+            <CallTranscript variant="qq" call={call} />
           </div>
+          <InlineCallChat variant="qq" call={call} className="w-full" inputOnly />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-14 pt-[62px]">
-          <div className="min-h-4 flex-1" aria-hidden="true" />
+          <div className="min-h-4 max-h-[72px] flex-1" aria-hidden="true" />
           <div className="relative">
             {phase === 'dialing' && <span className="absolute inset-0 animate-ping rounded-full bg-white/10" aria-hidden="true" />}
             <CallAvatar variant="qq" avatar={avatar} size={direction === 'in' ? 132 : 168} />
@@ -662,11 +738,11 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
           {error && <p className="mt-2 max-w-[280px] text-center text-[12px] text-red-300">{error}</p>}
           {phase === 'active' ? (
             <div
-              className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-1 pt-4"
-              aria-label="通话字幕"
+              className="flex min-h-[44px] w-full flex-1 flex-col overflow-hidden px-1 pt-4"
+              aria-label="通话对话记录"
             >
-              {/* 文字输入条开着时字幕隐藏（用户需求）；占位保留布局稳定 */}
-              {!textChatOpen && <CaptionStream variant="qq" call={call} />}
+              {/* 全程对话记录：语音/文字轮次全部逐条呈现（聊天界面样式），弹幕不再只出单句 */}
+              <CallTranscript variant="qq" call={call} />
             </div>
           ) : (
             <div className="min-h-4 flex-1" aria-hidden="true" />
