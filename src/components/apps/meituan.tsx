@@ -132,15 +132,18 @@ import {
   mtDishesOf,
   mtImg,
   mtMerchantOf,
+  mtPersistAiRegistry,
   mtRegisterAiDeal,
   mtRegisterAiMerchant,
   mtRegisterMyMerchants,
+  mtRestoreAiRegistry,
   mtUnregisterMyMerchants,
   type MtDeal,
   type MtDealPackage,
   type MtDish,
   type MtMerchant,
 } from '@/lib/ios/meituan-data';
+import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import type { FunDeal, FunHotel, FunMovie, FunRoom, FunVenue } from '@/app/api/mt-fun/route';
 import TravelChannelPage from './meituan-travel';
 import ShangouChannelPage from './meituan-shangou';
@@ -879,6 +882,84 @@ const homeFeedCache: {
   scroll: number;
 } = { ready: false, filter: null, feed: [], listDeals: [], listTitle: null, scroll: 0 };
 
+// ---------------- 信息流持久化（Task 46：美团点开不刷新，缓存上次刷新的内容） ----------------
+// 旧口径：homeFeedCache 仅内存，页面刷新即丢 → 每次进 App 都重新生成。
+// 新口径：feed 存条目引用（m=商家 id / deal=团购 id / list=聚合卡占位），listData 存团购 id，
+// 连同 filter/scroll 写穿 kv；进首页时内存缓存为空则从 kv 恢复（AI 注册表先恢复才能解析 id），
+// 只有用户主动下拉刷新/切分类才重新生成。
+
+const MT_HOME_FEED_KEY = 'mt-home-feed';
+const MT_HOME_SCROLL_KEY = 'mt-home-feed-scroll';
+let homeFeedRestored = false;
+
+/** 从 kv 恢复上次的美团首页信息流（幂等；内存缓存就绪时直接跳过；返回是否恢复成功） */
+function mtRestoreHomeFeed(): boolean {
+  if (homeFeedCache.ready) return true;
+  if (homeFeedRestored) return false;
+  homeFeedRestored = true;
+  try {
+    mtRestoreAiRegistry(); // 信息流引用的 AI 商家/团购必须先回注册表
+    const v = kvGet(MT_HOME_FEED_KEY) as {
+      filter?: unknown;
+      items?: unknown;
+      listDealIds?: unknown;
+      listTitle?: unknown;
+    } | null;
+    if (!v || !Array.isArray(v.items)) return false;
+    const feed: FeedItem[] = [];
+    for (const it of v.items.slice(-80)) {
+      if (!it || typeof it !== 'object') continue;
+      const ref = it as { t?: unknown; id?: unknown };
+      if (ref.t === 'list') feed.push({ t: 'list' });
+      else if (ref.t === 'm' && typeof ref.id === 'string') {
+        const m = mtMerchantOf(ref.id);
+        if (m) feed.push({ t: 'm', m });
+      } else if (ref.t === 'deal' && typeof ref.id === 'string') {
+        const d = mtDealOf(ref.id);
+        if (d) feed.push({ t: 'deal', d });
+      }
+    }
+    if (feed.length === 0) return false;
+    homeFeedCache.feed = feed;
+    homeFeedCache.filter = v.filter === null || typeof v.filter === 'string' ? (v.filter as string | null) : null;
+    homeFeedCache.listDeals = Array.isArray(v.listDealIds)
+      ? (v.listDealIds as unknown[]).map((id) => (typeof id === 'string' ? mtDealOf(id) : undefined)).filter((d): d is MtDeal => !!d)
+      : [];
+    homeFeedCache.listTitle = typeof v.listTitle === 'string' ? v.listTitle : null;
+    const sv = kvGet(MT_HOME_SCROLL_KEY) as unknown;
+    homeFeedCache.scroll = typeof sv === 'number' && sv > 0 ? sv : 0;
+    homeFeedCache.ready = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 当前信息流写穿 kv（feed/filter/listData 变化时调用；scroll 另键节流持久化） */
+function mtPersistHomeFeed(): void {
+  try {
+    kvSet(MT_HOME_FEED_KEY, {
+      filter: homeFeedCache.filter,
+      items: homeFeedCache.feed.slice(-80).map((it) =>
+        it.t === 'list' ? { t: 'list' } : it.t === 'm' ? { t: 'm', id: it.m.id } : { t: 'deal', id: it.d.id },
+      ),
+      listDealIds: homeFeedCache.listDeals.map((d) => d.id),
+      listTitle: homeFeedCache.listTitle,
+    });
+  } catch {
+    /* 存储不可用忽略 */
+  }
+}
+
+/** 浏览位置节流持久化（≤3s 一次；重开 App/刷新后回到离开时的位置） */
+let lastScrollPersist = 0;
+function mtPersistHomeScroll(y: number): void {
+  const now = Date.now();
+  if (now - lastScrollPersist < 3000) return;
+  lastScrollPersist = now;
+  kvSet(MT_HOME_SCROLL_KEY, y);
+}
+
 /** 本地兜底批（AI 不可用时）：种子池洗牌 + 排除已展示名称；池子耗尽 → 分店变体续流 */
 function localBatch(filter: string | null, exclude: string[]): { items: FeedItem[]; listDeals: MtDeal[]; listTitle: string | null } {
   const ex = new Set(exclude);
@@ -962,7 +1043,12 @@ function HomePage({
   const uid = mtUidOf(session);
   const addrs = useMemo(() => mtLoadAddresses(uid), [uid]);
   const cur = addrs.find((a) => a.id === mtCurAddrId(uid)) ?? addrs[0];
-  const [filter, setFilter] = useState<string | null>(homeFeedCache.filter); // null=推荐流 / 'tuangou' / 商家分类id
+  // 首帧初始化：内存缓存为空时先从 kv 恢复上次信息流（Task 46：点开不刷新，缓存上次刷新的）——
+  // 必须在 feed/listData/generating 初始化前执行，lazy initializer 保证顺序
+  const [filter, setFilter] = useState<string | null>(() => {
+    mtRestoreHomeFeed();
+    return homeFeedCache.filter;
+  }); // null=推荐流 / 'tuangou' / 商家分类id
   const [hintIdx, setHintIdx] = useState(0);
   const [gridPage, setGridPage] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -1027,6 +1113,7 @@ function HomePage({
           return d;
         });
         if (merchants.length === 0 && deals.length === 0) throw new Error('空数据');
+        mtPersistAiRegistry(); // AI 商家/团购写穿 kv：刷新/重开 App 后原样恢复（点开不刷新）
         let items: FeedItem[];
         let listDeals: MtDeal[] = [];
         let listTitle: string | null = null;
@@ -1111,13 +1198,14 @@ function HomePage({
     void regenerate();
   }, [filter, regenerate]);
 
-  // 信息流写入缓存：返回首页时原样恢复
+  // 信息流写入缓存：返回首页时原样恢复；同步写穿 kv（Task 46：重开 App/刷新页面也原样恢复）
   useEffect(() => {
     homeFeedCache.ready = !generating && feed.length > 0;
     homeFeedCache.filter = filter;
     homeFeedCache.feed = feed;
     homeFeedCache.listDeals = listData.deals;
     homeFeedCache.listTitle = listData.title;
+    if (homeFeedCache.ready) mtPersistHomeFeed();
   }, [feed, generating, filter, listData]);
 
   // 上滑追加：新内容接在下方，上方已展示内容保持不变（每批 15~20 条）
@@ -1143,6 +1231,7 @@ function HomePage({
     const el = scrollRef.current;
     if (!el) return;
     homeFeedCache.scroll = el.scrollTop; // 随时记录浏览位置（返回/刷新后恢复用）
+    mtPersistHomeScroll(el.scrollTop); // 节流写穿 kv（重开 App 也回到离开时的位置）
     if (generatingRef.current || loadingRef.current) return;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 280) void loadMore();
   }, [loadMore]);
@@ -12046,6 +12135,10 @@ export default function MeituanApp() {
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
+  // AI 商家/团购注册表恢复（Task 46：幂等；详情页/搜索等直访 AI 条目时无感命中）
+  useEffect(() => {
+    mtRestoreAiRegistry();
+  }, []);
 
   // 启动：恢复登录态（资料跟随全局账号）+ 消费灵动岛通知点击跳转（订单详情）
   useEffect(() => {

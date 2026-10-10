@@ -70,6 +70,7 @@ import {
   type TbSubsidyItem,
 } from '@/lib/ios/taobao-channels-data';
 import { productById, tbImg, tbSalesText, type TbProduct } from '@/lib/ios/taobao-data';
+import { TbImg } from './tb-img';
 import { useSettings } from '@/lib/ios/store';
 import { tbFetchAiBatch, tbFeedAuxLoad, tbFeedAuxSave, tbFeedLoad, tbFeedSave, type TbFeedRaw, type TbFeedTop } from '@/lib/ios/tb-ai-store';
 import { tbClaimCoupon, tbCreateMerchOrder, tbCreateTicketOrder, tbLoadCoupons, tbLoadOrders, tbMarkRefund, tbPushMsg, tbTickOrders, type TbSession, type TbTicketInfo } from '@/lib/ios/taobao-store';
@@ -459,7 +460,7 @@ export function SubsidyPage({
         <button type="button" onClick={() => onToast('疯狂加补周（演示）')} className="mt-3 flex w-full items-center justify-between px-1 text-left active:opacity-85">
           <span className="text-[30px] font-black italic leading-none tracking-tight text-white drop-shadow-[0_2px_0_rgba(0,0,0,0.15)]">疯狂加补周</span>
           <span className="flex flex-col items-center">
-            <img src={tbImg('toy', 120, 90, 8)} alt="加补周好物" className="h-[46px] w-[68px] rounded-lg object-cover" draggable={false} />
+            <TbImg src={tbImg('toy', 120, 90, 8)} alt="加补周好物" className="h-[46px] w-[68px] rounded-lg" />
             <span className="mt-0.5 flex items-center rounded-full bg-[#FFD100] px-2 py-px text-[11px] font-bold text-[#C41820]">
               立即抢
               <ChevronRight className="h-3 w-3" strokeWidth={3} />
@@ -475,7 +476,7 @@ export function SubsidyPage({
         <div className="grid grid-cols-4 gap-1.5 rounded-2xl bg-white p-2">
           {TB_SUBSIDY.hero.map((h, i) => (
             <div key={i} className="relative">
-              <img src={tbImg(h.tag, 160, 160, i)} alt={h.label} className="h-[86px] w-full rounded-lg object-cover" draggable={false} />
+              <TbImg src={tbImg(h.tag, 160, 160, i)} alt={h.label} className="h-[86px] w-full rounded-lg" />
               <span className="absolute bottom-1 left-1 rounded-[4px] bg-[#E42323] px-1 py-px text-[9.5px] font-bold leading-[13px] text-white">{h.label}</span>
             </div>
           ))}
@@ -514,7 +515,7 @@ export function SubsidyPage({
                   {g.extra ? <span className="text-[11.5px] font-semibold text-[#FF0036]">{g.extra}</span> : null}
                 </div>
               </div>
-              <img src={tbImg(g.tag, 120, 140, 2)} alt={g.name} className="h-[72px] w-[58px] shrink-0 rounded-lg object-cover" draggable={false} />
+              <TbImg src={tbImg(g.tag, 120, 140, 2)} alt={g.name} className="h-[72px] w-[58px] shrink-0 rounded-lg" />
             </button>
           ))}
         </div>
@@ -572,7 +573,7 @@ export function SubsidyPage({
           {[...freshItems, ...TB_SUBSIDY.items, ...aiTailItems, ...tailBatchItems].map((it) => (
             <div key={it.id} className="flex gap-2.5 rounded-2xl bg-white p-2">
               <div className="relative w-[122px] shrink-0">
-                <img src={tbImg(it.tag, 240, 240, it.id.length)} alt={it.title} className={`h-[122px] w-full rounded-xl object-cover ${it.soldOut ? 'opacity-80' : ''}`} draggable={false} />
+                <TbImg src={tbImg(it.tag, 240, 240, it.id.length)} alt={it.title} className={`h-[122px] w-full rounded-xl ${it.soldOut ? 'opacity-80' : ''}`} />
                 {it.soldOut ? (
                   <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rotate-[-14deg] rounded-lg border-[2.5px] border-[#5c6b80]/80 px-2 py-1 text-center text-[15px] font-black leading-[18px] tracking-[3px] text-[#42506380]">
                     已抢光
@@ -723,7 +724,7 @@ export function SeckillPage({
           {/* 超级88换季必备横幅 */}
           <button type="button" onClick={() => onToast('超级88换季必备（演示）')} className="relative mt-2 flex h-[104px] w-full items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-r from-[#FF7A21] via-[#FF5A10] to-[#FF7A21] active:opacity-90">
             <span className="text-[40px] font-black italic leading-none tracking-tight text-[#FFE84D] drop-shadow-[0_2px_0_rgba(0,0,0,0.18)]">超级88</span>
-            <img src={tbImg('toy', 120, 120, 3)} alt="换季好物" className="mx-2 h-[76px] w-[76px] rounded-xl object-cover" draggable={false} />
+            <TbImg src={tbImg('toy', 120, 120, 3)} alt="换季好物" className="mx-2 h-[76px] w-[76px] rounded-xl" />
             <span className="text-[40px] font-black italic leading-none tracking-tight text-white drop-shadow-[0_2px_0_rgba(0,0,0,0.18)]">换季必备</span>
             <span className="absolute bottom-2 right-2 rounded-md bg-black/30 px-1.5 py-px text-[11px] font-semibold text-white">1/4</span>
           </button>
@@ -741,7 +742,7 @@ export function SeckillPage({
                   {g.map((it, i) => (
                     <button key={i} type="button" onClick={() => onToast('秒杀价已锁定（演示）')} className="text-left active:opacity-80">
                       <div className="relative">
-                        <img src={tbImg(it.tag, 160, 160, i + 4)} alt={it.label} className="h-[84px] w-full rounded-lg object-cover" draggable={false} />
+                        <TbImg src={tbImg(it.tag, 160, 160, i + 4)} alt={it.label} className="h-[84px] w-full rounded-lg" />
                         <span className="absolute bottom-0.5 left-0.5 rounded-[4px] bg-[#FF3B30] px-1 py-px text-[9px] font-bold text-white">{it.label}</span>
                       </div>
                       <div className="mt-1 text-[15px] font-black text-[#FF0036]">
@@ -796,7 +797,7 @@ export function SeckillPage({
         <div className="rounded-b-2xl bg-white px-2 pb-3 pt-1">
           {[...freshItems, ...TB_SECKILL.items, ...aiTailItems, ...tailBatchItems].map((it) => (
             <div key={it.id} className="flex gap-2.5 border-t border-black/[0.05] px-0.5 py-3 first:border-t-0">
-              <img src={tbImg(it.tag, 220, 220, it.id.length + 2)} alt={it.title} className="h-[112px] w-[112px] shrink-0 rounded-xl object-cover" draggable={false} />
+              <TbImg src={tbImg(it.tag, 220, 220, it.id.length + 2)} alt={it.title} className="h-[112px] w-[112px] shrink-0 rounded-xl" />
               <div className="flex min-w-0 flex-1 flex-col">
                 <div className="truncate text-[15.5px] font-bold text-black/90">{it.title}</div>
                 <div className="mt-1.5 flex items-center gap-1.5">
@@ -1062,7 +1063,7 @@ export function SignInPage({ uid, onBack, onToast }: { uid: string; onBack: () =
           <button type="button" onClick={() => onToast('拍报机案例（演示）')} className="rounded-xl bg-white p-2 text-left active:opacity-80">
             <div className="grid grid-cols-2 gap-0.5 overflow-hidden rounded-lg">
               {[0, 1, 2, 3].map((i) => (
-                <img key={i} src={tbImg('kiosk', 160, 120, i)} alt="拍报机案例" className="h-[52px] w-full object-cover" draggable={false} />
+                <TbImg key={i} src={tbImg('kiosk', 160, 120, i)} alt="拍报机案例" className="h-[52px] w-full" />
               ))}
             </div>
             <div className="mt-1.5 line-clamp-2 text-[13px] font-bold leading-[17px] text-black/85">头条拍报机大头贴机器网红打卡</div>
@@ -1076,7 +1077,7 @@ export function SignInPage({ uid, onBack, onToast }: { uid: string; onBack: () =
             </div>
           </button>
           <button type="button" onClick={() => onToast('浮球杯案例（演示）')} className="relative rounded-xl bg-white p-2 text-left active:opacity-80">
-            <img src={tbImg('mug', 320, 240, 6)} alt="卡通动物浮球杯" className="h-[110px] w-full rounded-lg object-cover" draggable={false} />
+            <TbImg src={tbImg('mug', 320, 240, 6)} alt="卡通动物浮球杯" className="h-[110px] w-full rounded-lg" />
             <div className="mt-1.5 flex items-center gap-1">
               <span className="shrink-0 rounded-[3px] bg-[#FF3B30] px-1 py-px text-[9.5px] font-bold text-white">天天特价</span>
               <span className="truncate text-[13px] font-bold text-black/85">2026新款浮球杯</span>
@@ -2563,7 +2564,7 @@ export function MoviePage({
             <div className="mx-2 mt-2 grid grid-cols-2 gap-2 pb-1">
               {merchs.map((m) => (
                 <button key={m.id} type="button" onClick={() => { setBuyMerch(m); setMQty(1); }} className="overflow-hidden rounded-2xl bg-white text-left active:opacity-85">
-                  <img src={tbImg(m.tag, 300, 300)} alt={m.title} className="h-[142px] w-full object-cover" draggable={false} />
+                  <TbImg src={tbImg(m.tag, 300, 300)} alt={m.title} className="h-[142px] w-full" />
                   <div className="p-2.5">
                     <div className="line-clamp-2 text-[13.5px] font-semibold leading-[18px] text-black/85">{m.title}</div>
                     <div className="mt-1 truncate text-[11px] text-black/35">{m.from}</div>
@@ -2590,7 +2591,7 @@ export function MoviePage({
         <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/40" onClick={() => setBuyMerch(null)}>
           <div className="rounded-t-2xl bg-white p-4 pb-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex gap-3">
-              <img src={tbImg(buyMerch.tag, 200, 200)} alt={buyMerch.title} className="h-[84px] w-[84px] shrink-0 rounded-xl object-cover" draggable={false} />
+              <TbImg src={tbImg(buyMerch.tag, 200, 200)} alt={buyMerch.title} className="h-[84px] w-[84px] shrink-0 rounded-xl" />
               <div className="min-w-0 flex-1">
                 <div className="line-clamp-2 text-[15px] font-bold leading-5 text-black/90">{buyMerch.title}</div>
                 <div className="mt-1 truncate text-[12px] text-black/40">{buyMerch.from}</div>
@@ -3119,7 +3120,7 @@ export function FliggyPage({ uid, onBack, onToast }: { uid: string; onBack: () =
                 <span className="truncate text-[14px] font-black text-black/90">特惠酒店</span>
                 <ChevronRight className="ml-auto h-3.5 w-3.5 text-black/25" />
               </div>
-              <img src={tbImg('lamp', 320, 220, 2)} alt="海友酒店" className="mt-2 h-[92px] w-full rounded-lg object-cover" draggable={false} />
+              <TbImg src={tbImg('lamp', 320, 220, 2)} alt="海友酒店" className="mt-2 h-[92px] w-full rounded-lg" />
               <div className="mt-1.5 line-clamp-2 text-[12.5px] font-medium leading-[16px] text-black/80">{TB_FLIGGY.hotels[2].name}</div>
               <div className="mt-1 text-[15px] font-black text-[#FF3B30]">
                 <span className="text-[10px]">¥</span>
@@ -3133,7 +3134,7 @@ export function FliggyPage({ uid, onBack, onToast }: { uid: string; onBack: () =
                 <span className="truncate text-[14px] font-black text-black/90">爆款榜单</span>
               </div>
               <div className="relative mt-2">
-                <img src={tbImg('temple', 320, 220, 1)} alt={TB_FLIGGY.deal.name} className="h-[92px] w-full rounded-lg object-cover" draggable={false} />
+                <TbImg src={tbImg('temple', 320, 220, 1)} alt={TB_FLIGGY.deal.name} className="h-[92px] w-full rounded-lg" />
                 <span className="absolute left-1 top-1 rounded-md bg-[#FFD100] px-1 py-px text-[9.5px] font-black text-black/80">TOP 1</span>
               </div>
               <div className="mt-1.5 truncate text-[12.5px] font-bold text-black/85">{TB_FLIGGY.deal.name}</div>
@@ -3179,7 +3180,7 @@ export function FliggyPage({ uid, onBack, onToast }: { uid: string; onBack: () =
             </button>
             {hotelCards.map((h, i) => (
               <button key={h._k} type="button" onClick={() => onToast(`${h.name}（演示）`)} className="overflow-hidden rounded-xl bg-white text-left active:opacity-80">
-                <img src={tbImg(h.tag, 320, 300, h._v >= 0 ? h._v : i - freshHotels.length)} alt={h.name} className="h-[150px] w-full object-cover" draggable={false} />
+                <TbImg src={tbImg(h.tag, 320, 300, h._v >= 0 ? h._v : i - freshHotels.length)} alt={h.name} className="h-[150px] w-full" />
                 <div className="p-2">
                   <div className="line-clamp-2 text-[13.5px] font-bold leading-[18px] text-black/90">{h.name}</div>
                   <div className="mt-1 flex items-baseline gap-1">
@@ -3194,7 +3195,7 @@ export function FliggyPage({ uid, onBack, onToast }: { uid: string; onBack: () =
               </button>
             ))}
             <button type="button" onClick={() => onToast('海友濮阳体育场京开大道酒店（演示）')} className="overflow-hidden rounded-xl bg-white text-left active:opacity-80">
-              <img src={tbImg('bedding', 320, 300, 5)} alt="海友酒店" className="h-[150px] w-full object-cover" draggable={false} />
+              <TbImg src={tbImg('bedding', 320, 300, 5)} alt="海友酒店" className="h-[150px] w-full" />
               <div className="p-2">
                 <div className="line-clamp-2 text-[13.5px] font-bold leading-[18px] text-black/90">{TB_FLIGGY.hotels[2].name}</div>
                 <div className="mt-1 flex items-baseline gap-1">
@@ -3494,7 +3495,7 @@ export function BillPage({ session, uid, onBack, onToast, onOpenOrder }: { sessi
               <span className="text-[13px] text-black/45">共{yearPaid.length}单</span>
             </div>
             <button type="button" onClick={() => onToast('会员等级：人靠衣装LV.1（演示）')} className="flex items-center gap-1.5 active:opacity-75">
-              <img src={tbImg('gift', 96, 96, 1)} alt="等级礼盒" className="h-9 w-9 rounded-lg object-cover" draggable={false} />
+              <TbImg src={tbImg('gift', 96, 96, 1)} alt="等级礼盒" className="h-9 w-9 rounded-lg" />
               <span className="text-left">
                 <span className="block text-[11.5px] text-black/55">再买5单 升级</span>
                 <span className="block text-[12.5px] font-bold text-black/85">[人靠衣装LV.1] &gt;</span>

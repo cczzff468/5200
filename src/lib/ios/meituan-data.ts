@@ -5,6 +5,8 @@
  * - 商家与菜品 id 稳定（购物车/订单跨重启引用）。
  */
 
+import { kvGet, kvSet } from '@/lib/ios/idb-kv';
+
 /** 内容匹配图地址（/api/mt-img 服务端代理）：
  *  - k=英文品类词（hotpot/pizza/milk-tea…），服务端按分类关键词搜图（Foodiesfeed CC0 优先 → Pixabay/Pexels → 本地默认图）；
  *  - s=变体序号（区分缓存），w/h=尺寸，p=f 菜品图 / c 门头图；
@@ -1483,6 +1485,53 @@ export function mtAllMerchants(): MtMerchant[] {
 /** 按 id 查团购（AI 生成优先，种子数据兜底） */
 export function mtDealOf(id: string): MtDeal | undefined {
   return AI_DEALS.get(id) ?? MT_DEALS.find((d) => d.id === id);
+}
+
+// ---------------- AI 生成内容持久化（Task 46：美团点开不刷新，缓存上次刷新的内容） ----------------
+// 旧口径：AI 商家/团购仅运行时注册表，页面刷新即丢 → 每次进 App 都重新生成骨架。
+// 新口径：注册表全量持久化 kv（全局一份，不含 my-shop-* 自有店铺——那套已有独立持久化），
+// 首页信息流存条目引用（id），恢复时经 mtMerchantOf/mtDealOf 解析，任何既有链路无感命中。
+
+const AI_REGISTRY_KEY = 'mt-ai-registry';
+const AI_REGISTRY_CAP = 60;
+
+let aiRegistryRestored = false;
+
+/** 恢复 AI 商家/团购注册表（幂等；PhoneShell 开机门控后 kvGet 同步可读） */
+export function mtRestoreAiRegistry(): void {
+  if (aiRegistryRestored) return;
+  aiRegistryRestored = true;
+  try {
+    const v = kvGet(AI_REGISTRY_KEY) as { merchants?: unknown; deals?: unknown } | null;
+    if (!v) return;
+    if (Array.isArray(v.merchants)) {
+      for (const m of v.merchants) {
+        if (m && typeof m === 'object' && typeof (m as MtMerchant).id === 'string' && typeof (m as MtMerchant).name === 'string' && Array.isArray((m as MtMerchant).sections)) {
+          AI_MERCHANTS.set((m as MtMerchant).id, m as MtMerchant);
+        }
+      }
+    }
+    if (Array.isArray(v.deals)) {
+      for (const d of v.deals) {
+        if (d && typeof d === 'object' && typeof (d as MtDeal).id === 'string' && typeof (d as MtDeal).title === 'string') {
+          AI_DEALS.set((d as MtDeal).id, d as MtDeal);
+        }
+      }
+    }
+  } catch {
+    /* 坏数据忽略：走重新生成路径 */
+  }
+}
+
+/** 持久化 AI 商家/团购注册表（封顶淘汰最旧；my-shop-* 自有店铺不在此存） */
+export function mtPersistAiRegistry(): void {
+  try {
+    const merchants = [...AI_MERCHANTS.values()].filter((m) => !m.id.startsWith('my-shop-')).slice(-AI_REGISTRY_CAP);
+    const deals = [...AI_DEALS.values()].slice(-AI_REGISTRY_CAP);
+    kvSet(AI_REGISTRY_KEY, { merchants, deals });
+  } catch {
+    /* 存储不可用忽略 */
+  }
 }
 
 /** 菜品全局索引（搜索用；含 AI 注册表 → 商家入驻的菜品也能搜到） */

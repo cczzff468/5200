@@ -12,7 +12,7 @@
  * - 我的：订单宫格/收藏/足迹/地址管理/快递/优惠券/账户余额（微信+QQ 只读）/设置；
  * - 数据：tb-* IndexedDB kv 按 uid 隔离（taobao-store.ts）；UI 图标一律 SVG（禁 emoji）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   ArrowLeft,
   Bell,
@@ -57,6 +57,7 @@ import {
   X,
   Zap,
   Loader2,
+  RefreshCw,
 } from 'lucide-react';
 import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
 import { useSettings, useUI } from '@/lib/ios/store';
@@ -66,11 +67,13 @@ import {
   tbChatTotalUnread,
   tbChatUnread,
   tbFetchAiBatch,
+  tbFetchAiCoupons,
   tbFeedAuxLoad,
   tbFeedAuxSave,
   tbFeedLoad,
   tbFeedSave,
   tbRestoreAiProducts,
+  type TbAiCoupon,
   type TbFeedTop,
 } from '@/lib/ios/tb-ai-store';
 import {
@@ -153,6 +156,19 @@ import { BillPage, FliggyPage, MoviePage, SeckillPage, SignInPage, SubsidyPage, 
 import { TbMsgChatPage } from './taobao-msg-chat';
 import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 import { LocalToast, useLocalToast } from './page-toast';
+import { TbImg } from './tb-img';
+import {
+  subscribeTbAiImg as subscribeAiImg,
+  subscribeTbImgStyle as subscribeImgStyle,
+  tbAiImgVersion,
+  tbClearAiImgs,
+  tbGetAiImg,
+  tbGetImgStyle,
+  tbImgStyleVersion,
+  tbSetImgStyle,
+  type TbImgStyle,
+} from './tb-img-style';
+import { imgGenConfigReady } from '@/lib/imggen';
 
 const TB_ORANGE = '#FF5000';
 const TB_PRICE = '#FF4400';
@@ -492,13 +508,7 @@ function TmallMark() {
 /** 商品图（瀑布流/列表通用，懒加载 + 服务端默认图兜底） */
 function ProductImg({ p, w = 600, h = 600, s = 0, className = '' }: { p: TbProduct; w?: number; h?: number; s?: number; className?: string }) {
   return (
-    <img
-      src={tbImg(p.tag, w, h, s)}
-      alt={p.title}
-      loading="lazy"
-      draggable={false}
-      className={`bg-[#f5f5f5] object-cover ${className}`}
-    />
+    <TbImg src={tbImg(p.tag, w, h, s)} alt={p.title} className={`bg-[#f5f5f5] object-cover ${className}`} />
   );
 }
 
@@ -1273,7 +1283,7 @@ function HomePage({
               </div>
               <div className="mt-2 flex gap-1.5">
                 {[0, 1].map((i) => (
-                  <img key={i} src={tbImg(i === 0 ? 'phone' : 'earbuds', 140, 140, 4)} alt="补贴好物" className="h-[72px] w-1/2 rounded-lg object-cover" draggable={false} />
+                  <TbImg key={i} src={tbImg(i === 0 ? 'phone' : 'earbuds', 140, 140, 4)} alt="补贴好物" className="h-[72px] w-1/2 rounded-lg" />
                 ))}
               </div>
               <div className="mt-1.5 flex justify-between text-[12px] font-bold text-[#FF0036]">
@@ -1376,7 +1386,7 @@ function FollowFeed({ uid, follows, onOpenProduct, onOpenSearch }: { uid: string
         <div className="space-y-3">
           {recShops.map((s) => (
             <div key={s.id} className="flex items-center gap-3">
-              <img src={tbImg(s.tag, 100, 100, 3, 'c')} alt={s.name} className="h-11 w-11 rounded-lg object-cover" draggable={false} />
+              <TbImg src={tbImg(s.tag, 100, 100, 3, 'c')} alt={s.name} className="h-11 w-11 rounded-lg" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1">
                   {s.tmall ? <TmallMark /> : null}
@@ -1496,7 +1506,7 @@ function VideoPage({ uid, onOpenProduct, onToast }: { uid: string; onOpenProduct
       >
         {vids.map(({ p, v }, i) => (
           <div key={`${p.id}-${i}`} className="relative h-full w-full snap-start overflow-hidden" onClick={() => setPlaying((s) => !s)}>
-            <img src={tbImg(p.tag, 720, 1280, v)} alt={p.title} className="h-full w-full object-cover" draggable={false} />
+            <TbImg src={tbImg(p.tag, 720, 1280, v)} alt={p.title} className="h-full w-full" />
             <div className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black/70 to-transparent" />
             {/* 顶部进度条 */}
             <div className="absolute inset-x-0 top-0 h-[3px] bg-white/20">
@@ -1569,7 +1579,7 @@ function ShopRow({ shopId, uid, onOpenProduct }: { shopId: string; uid: string; 
   return (
     <div className="rounded-xl bg-white p-3">
       <div className="flex items-center gap-3">
-        <img src={tbImg(shop.tag, 100, 100, 0, 'c')} alt={shop.name} className="h-12 w-12 rounded-lg object-cover" draggable={false} />
+        <TbImg src={tbImg(shop.tag, 100, 100, 0, 'c')} alt={shop.name} className="h-12 w-12 rounded-lg" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
             {shop.tmall ? <TmallMark /> : null}
@@ -2069,7 +2079,7 @@ function SkuSheet({
                 </button>
               </div>
               <div className="mt-2 flex gap-2.5">
-                <img src={tbImg(addon.tag, 200, 200, 0)} alt={addon.title} className="h-16 w-16 shrink-0 rounded-lg object-cover" draggable={false} />
+                <TbImg src={tbImg(addon.tag, 200, 200, 0)} alt={addon.title} className="h-16 w-16 shrink-0 rounded-lg" />
                 <div className="min-w-0 flex-1">
                   <div className="line-clamp-1 text-[13.5px] font-medium text-black/85">{addon.title}</div>
                   <div className="mt-0.5 truncate text-[12px] text-black/40">{addon.tags[0] ?? '正品保障'} | 已售{tbSalesText(addon.sales)}</div>
@@ -2293,7 +2303,7 @@ function ProductPage({
         </div>
         {/* 店铺卡 */}
         <button type="button" onClick={() => onOpenShop(shop.id)} className="mt-2 flex w-full items-center gap-3 bg-white px-4 py-3 text-left active:opacity-80">
-          <img src={tbImg(shop.tag, 120, 120, 0, 'c')} alt={shop.name} className="h-11 w-11 rounded-lg object-cover" draggable={false} />
+          <TbImg src={tbImg(shop.tag, 120, 120, 0, 'c')} alt={shop.name} className="h-11 w-11 rounded-lg" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1">
               {shop.tmall ? <TmallMark /> : null}
@@ -2334,7 +2344,7 @@ function ProductPage({
           <div className="mb-2 text-center text-[14px] font-semibold text-black/70">—— 商品详情 ——</div>
           <div className="space-y-2">
             {[1, 2, 3].map((i) => (
-              <img key={i} src={tbImg(p.tag, 750, 560, i)} alt={`${p.title} 详情图${i}`} className="w-full rounded-lg object-cover" draggable={false} />
+              <TbImg key={i} src={tbImg(p.tag, 750, 560, i)} alt={`${p.title} 详情图${i}`} className="w-full rounded-lg" />
             ))}
           </div>
           <div className="mt-3 space-y-1.5 text-[12px] leading-5 text-black/45">
@@ -2649,7 +2659,7 @@ function CartPage({
                               {c.checked ? <Check className="h-3 w-3 text-white" strokeWidth={3.6} /> : null}
                             </button>
                             <button type="button" onClick={() => onOpenProduct(c.pid)} className="shrink-0 active:opacity-70">
-                              <img src={tbImg(p.tag, 200, 200, 0)} alt={p.title} className="h-[86px] w-[86px] rounded-lg object-cover" draggable={false} />
+                              <TbImg src={tbImg(p.tag, 200, 200, 0)} alt={p.title} className="h-[86px] w-[86px] rounded-lg" />
                             </button>
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start gap-2">
@@ -3873,7 +3883,7 @@ function OrderDetailPage({
             </div>
             <div className="mt-2 bg-white px-4 py-3">
               <div className="flex items-center gap-2.5">
-                <img src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-10 w-10 rounded-lg object-cover" draggable={false} />
+                <TbImg src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-10 w-10 rounded-lg" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
                   <div className="mt-0.5 text-[11px] text-black/35">平均2天退款</div>
@@ -4173,7 +4183,7 @@ function OrderDetailPage({
               </button>
             ) : null}
             <div className="mt-2 flex items-center gap-3 bg-white px-4 py-3">
-              <img src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-11 w-11 rounded-lg object-cover" draggable={false} />
+              <TbImg src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-11 w-11 rounded-lg" />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
                 <div className="mt-0.5 text-[11.5px] text-black/40">88VIP好评率93%，客服平均22秒回复</div>
@@ -4323,7 +4333,7 @@ function OrderDetailPage({
             {/* 店铺 + 商品卡（截图1：店铺图/平均2天退款/进店逛逛 + 商品行 + 加入购物车） */}
             <div className="mt-2 bg-white px-4 py-3">
               <div className="flex items-center gap-2.5">
-                <img src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-10 w-10 rounded-lg object-cover" draggable={false} />
+                <TbImg src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-10 w-10 rounded-lg" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
                   <div className="mt-0.5 text-[11px] text-black/35">平均2天退款</div>
@@ -4994,6 +5004,12 @@ function MePage({
   // 选中形象同时用于淘宝物流页地图巡航，与美团共用同一 localStorage）
   const [riderOpen, setRiderOpen] = useState(false);
   const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
+  // 图片样式（Task 46，与美团「我的 → 图片样式」同款）：全站图片三选一（真实图库 / AI 生成 /
+  // 默认图片），省钱卡位改造为菜单入口，弹层选择即时全站生效（TbImg 统一消费）；
+  // AI 模式用「设置 → 图像生成」配置的生图 API，未配置给指路拦截
+  const [styleOpen, setStyleOpen] = useState(false);
+  useSyncExternalStore(subscribeImgStyle, tbImgStyleVersion);
+  const curImgStyle = tbGetImgStyle();
   useEffect(() => {
     tbTickOrders(uid);
     const t = setInterval(() => setTick((n) => n + 1), 5000);
@@ -5158,9 +5174,9 @@ function MePage({
                 <span className="mt-0.5 text-[10.5px] text-black/40">闪购券50元起 &gt;</span>
               </button>
               <span className="mx-2.5 h-7 w-px bg-black/[0.07]" />
-              <button type="button" onClick={onOpenCouponCenter} className="flex w-[64px] flex-col items-start leading-tight active:opacity-70">
-                <span className="text-[13.5px] font-bold text-[#FF4400]">省钱卡</span>
-                <span className="mt-0.5 text-[10.5px] text-black/40">免费领 &gt;</span>
+              <button type="button" data-testid="tb-img-style-entry" onClick={() => setStyleOpen(true)} className="flex w-[64px] flex-col items-start leading-tight active:opacity-70">
+                <span className="text-[13.5px] font-bold text-[#FF4400]">图片样式</span>
+                <span className="mt-0.5 text-[10.5px] text-black/40">{curImgStyle === 'real' ? '真实图库' : curImgStyle === 'ai' ? 'AI 生成' : '默认图片'} &gt;</span>
               </button>
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-[#FF3B30] to-[#FF0036]">
                 <span className="grid h-8 w-8 place-items-center rounded-md border border-white/40 text-center text-[9px] font-bold leading-[10px] text-[#FFD100]">免费
@@ -5365,7 +5381,121 @@ function MePage({
         </div>
       </div>
     ) : null}
+    {/* 图片样式弹层（Task 46，与美团同款：真实图片 / AI 生成 / 默认图片 三选一，全站即时生效） */}
+    {styleOpen ? <TbImgStyleSheet onClose={() => setStyleOpen(false)} onToast={onToast} /> : null}
     </>
+  );
+}
+
+/** 图片样式弹层（与美团「我的 → 图片样式」同款交互；商品/店铺门头/领券中心等全站图片三选一） */
+function TbImgStyleSheet({ onClose, onToast }: { onClose: () => void; onToast: (m: string) => void }) {
+  useSyncExternalStore(subscribeImgStyle, tbImgStyleVersion);
+  useSyncExternalStore(subscribeAiImg, tbAiImgVersion);
+  const imgGenCfg = useSettings((s) => s.imgGenConfig);
+  const aiConfigReady = imgGenConfigReady(imgGenCfg);
+  const style = tbGetImgStyle();
+  // AI 卡预览：有缓存的品类 AI 图则实时展示（生成完成广播 → 此处重渲染换图）
+  const aiPreview = tbGetAiImg('phone', 'f');
+  const [err, setErr] = useState('');
+  /** 选择样式（AI 未配置生图 API 时拦截指路；选择即全站生效） */
+  const apply = (st: TbImgStyle) => {
+    if (st === 'ai' && !aiConfigReady) {
+      setErr('尚未配置生图 API：请在手机「设置 → 图像生成」里填好基地址 / API Key / 模型后再选 AI 生成');
+      onToast('请先在「设置 → 图像生成」配置生图 API');
+      return;
+    }
+    tbSetImgStyle(st);
+    setErr('');
+    onToast(st === 'real' ? '已使用真实图片（网络图库）' : st === 'ai' ? '已使用 AI 生成图片' : '已使用默认图片');
+  };
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={onClose}>
+      <div className="rounded-t-2xl bg-white pb-8 [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()} data-testid="tb-img-style-sheet">
+        <div className="relative flex items-center justify-center py-4">
+          <p className="text-[16px] font-bold text-black/85">图片样式</p>
+          <button type="button" aria-label="关闭" data-testid="tb-img-style-sheet-close" onClick={onClose} className="absolute right-3 grid h-8 w-8 place-items-center rounded-full active:bg-black/5">
+            <X className="h-5 w-5 text-black/55" />
+          </button>
+        </div>
+        <p className="px-5 pb-3 text-[12px] text-black/40">商品、店铺门头、领券中心等全站图片统一生效 · 选择即用</p>
+        {/* 三个样式选择卡（选中态同骑手弹层：橙底橙圈 + 右上对勾） */}
+        <div className="grid grid-cols-3 gap-3 px-4 pb-2">
+          {/* ① 真实图片（网络真实图库：Wikimedia Commons 实景池等真实照片，默认） */}
+          <button
+            type="button"
+            data-testid="tb-img-style-real"
+            onClick={() => apply('real')}
+            className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${style === 'real' ? 'bg-[#FFF1E6] ring-2 ring-[#FF5000]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
+          >
+            {style === 'real' ? (
+              <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FF5000]">
+                <Check className="h-3 w-3 text-white" strokeWidth={3} />
+              </span>
+            ) : null}
+            <TbImg src="/api/mt-img?k=phone&w=240&h=160&s=7&p=f&v=12" alt="真实图片预览" className="h-16 w-full rounded-xl" />
+            <span className="mt-1.5 text-[12px] text-black/85">真实图片</span>
+            <span className="text-[10px] text-black/35">网络真实图库</span>
+          </button>
+          {/* ② AI 生成（用「设置→图像生成」配置的生图 API 按品类自动生成；未配置给指路提示） */}
+          <button
+            type="button"
+            data-testid="tb-img-style-ai"
+            onClick={() => apply('ai')}
+            className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${style === 'ai' ? 'bg-[#FFF1E6] ring-2 ring-[#FF5000]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
+          >
+            {style === 'ai' ? (
+              <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FF5000]">
+                <Check className="h-3 w-3 text-white" strokeWidth={3} />
+              </span>
+            ) : null}
+            {aiPreview ? (
+              <img src={aiPreview} alt="AI 生成预览" draggable={false} className="h-16 w-full rounded-xl object-cover" />
+            ) : (
+              <span className="grid h-16 w-full place-items-center rounded-xl bg-white">
+                <Sparkles className="h-6 w-6 text-black/30" strokeWidth={1.8} />
+              </span>
+            )}
+            <span className="mt-1.5 text-[12px] text-black/85">AI 生成</span>
+            <span className="text-[10px] text-black/35">{aiConfigReady ? '生图 API · 已配置' : '需配置生图 API'}</span>
+          </button>
+          {/* ③ 默认图片（内置算法插画：服务端直出，离线秒出） */}
+          <button
+            type="button"
+            data-testid="tb-img-style-default"
+            onClick={() => apply('default')}
+            className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${style === 'default' ? 'bg-[#FFF1E6] ring-2 ring-[#FF5000]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
+          >
+            {style === 'default' ? (
+              <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FF5000]">
+                <Check className="h-3 w-3 text-white" strokeWidth={3} />
+              </span>
+            ) : null}
+            <TbImg src="/api/mt-img?k=phone&w=240&h=160&s=7&p=f&v=12&d=1" alt="默认图片预览" className="h-16 w-full rounded-xl" />
+            <span className="mt-1.5 text-[12px] text-black/85">默认图片</span>
+            <span className="text-[10px] text-black/35">内置插画</span>
+          </button>
+        </div>
+        {err ? <p className="px-5 pb-1 text-[11px] leading-snug text-[#FF3B30]">{err}</p> : null}
+        {/* AI 模式附加操作：清空已生成的品类图，浏览页面时自动重新排队生成 */}
+        {style === 'ai' && aiConfigReady ? (
+          <div className="px-4 pt-1">
+            <button
+              type="button"
+              data-testid="tb-img-style-ai-regen"
+              onClick={() => {
+                tbClearAiImgs();
+                onToast('已清空 AI 图片，浏览页面时会自动重新生成');
+              }}
+              className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#F7F8FA] py-2.5 text-[12px] text-black/60 active:bg-black/[0.06]"
+            >
+              <RefreshCw className="h-3.5 w-3.5" strokeWidth={2} />
+              重新生成全部 AI 图片
+            </button>
+          </div>
+        ) : null}
+        <p className="px-5 pt-2 text-[10px] leading-snug text-black/30">「真实图片」来自网络真实图库；「AI 生成」使用设置 → 图像生成 里配置的生图 API，按品类自动逐张生成（首次浏览需稍候，可重新生成）；「默认图片」为内置插画，离线秒出。</p>
+      </div>
+    </div>
   );
 }
 
@@ -5614,7 +5744,7 @@ function MsgsPage({
                 className={`flex w-full items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.03] ${i < chats.length - 1 ? 'border-b border-black/[0.04]' : ''}`}
               >
                 {c.tag ? (
-                  <img src={tbImg(c.tag, 120, 120, 3)} alt={c.name} className="h-[46px] w-[46px] shrink-0 rounded-xl object-cover" draggable={false} />
+                  <TbImg src={tbImg(c.tag, 120, 120, 3)} alt={c.name} className="h-[46px] w-[46px] shrink-0 rounded-xl" />
                 ) : (
                   <span className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-xl bg-[#F2F3F5] text-[17px] font-bold text-black/45">{c.name.slice(0, 1)}</span>
                 )}
@@ -6183,7 +6313,7 @@ function ShopFollowsPage({ uid, onBack, onOpenProduct, onToast }: { uid: string;
               return (
                 <div key={sid} className="rounded-xl bg-white p-3">
                   <div className="flex items-center gap-3">
-                    <img src={tbImg(shop.tag, 100, 100, 0, 'c')} alt={shop.name} className="h-11 w-11 rounded-lg object-cover" draggable={false} />
+                    <TbImg src={tbImg(shop.tag, 100, 100, 0, 'c')} alt={shop.name} className="h-11 w-11 rounded-lg" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1">
                         {shop.tmall ? <TmallMark /> : null}
@@ -6240,7 +6370,7 @@ function ShopPage({ shopId, uid, onBack, onOpenProduct, onToast }: { shopId: str
           <span className="w-9" />
         </div>
         <div className="mt-3 flex items-center gap-3 px-4">
-          <img src={tbImg(shop.tag, 120, 120, 0, 'c')} alt={shop.name} className="h-14 w-14 rounded-xl border-2 border-white/60 object-cover" draggable={false} />
+          <TbImg src={tbImg(shop.tag, 120, 120, 0, 'c')} alt={shop.name} className="h-14 w-14 rounded-xl border-2 border-white/60" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1">
               {shop.tmall ? <TmallMark /> : null}
@@ -6274,6 +6404,38 @@ function ShopPage({ shopId, uid, onBack, onOpenProduct, onToast }: { shopId: str
 
 // ---------------- 优惠券 / 快递 / 设置 ----------------
 
+/** 领券中心好券流本地兑底池（Task 46：AI 不可用时确定性出券；券名与页面种子券错开） */
+const CC_FEED_POOL: TbAiCoupon[] = [
+  { name: '数码品类加补券', amount: 15, min: 150, scope: '数码类目可用', tag: 'phone' },
+  { name: '服饰穿搭立减券', amount: 20, min: 199, scope: '服饰类目可用', tag: 'jacket' },
+  { name: '美妆神券', amount: 30, min: 299, scope: '美妆类目可用', tag: 'lipstick' },
+  { name: '家居焕新券', amount: 25, min: 259, scope: '家居类目可用', tag: 'sofa' },
+  { name: '零食神券', amount: 8, min: 59, scope: '食品类目可用', tag: 'snacks' },
+  { name: '图书悦读券', amount: 10, min: 69, scope: '图书类目可用', tag: 'books' },
+  { name: '运动户外券', amount: 18, min: 168, scope: '运动类目可用', tag: 'sneakers' },
+  { name: '超市日用券', amount: 12, min: 99, scope: '超市类目可用', tag: 'water-bottle' },
+  { name: '耳机影音券', amount: 16, min: 159, scope: '数码类目可用', tag: 'earbuds' },
+  { name: '护肤加补券', amount: 22, min: 219, scope: '美妆类目可用', tag: 'skincare' },
+  { name: '床品家纺券', amount: 28, min: 269, scope: '家居类目可用', tag: 'bedding' },
+  { name: '玩趣周边券', amount: 9, min: 79, scope: '全品类通用', tag: 'toy' },
+  { name: '鲜果直降券', amount: 6, min: 39, scope: '食品类目可用', tag: 'fruit' },
+  { name: '腕表智能券', amount: 35, min: 329, scope: '数码类目可用', tag: 'watch' },
+  { name: '电脑办公券', amount: 40, min: 399, scope: '数码类目可用', tag: 'laptop' },
+  { name: '水杯茶饮券', amount: 7, min: 49, scope: '全品类通用', tag: 'mug' },
+];
+
+/** 第 batch 批本地兑底券（确定性错位选取，排除已展示券名；池子耗尽允许循环复用旧名） */
+function ccFallbackBatch(batch: number, exclude: string[]): TbAiCoupon[] {
+  const ex = new Set(exclude);
+  const out: TbAiCoupon[] = [];
+  const start = (batch * 5) % CC_FEED_POOL.length;
+  for (let i = 0; i < CC_FEED_POOL.length && out.length < 6; i++) {
+    const c = CC_FEED_POOL[(start + i) % CC_FEED_POOL.length];
+    if (!ex.has(c.name)) out.push({ ...c });
+  }
+  return out;
+}
+
 /** 领券中心（需求：开发领券中心，截图4：超级88领好券红色页——三档消费券/加赠/家电数码券/平台加补券/预告券，领取入账 tb-coupons） */
 function CouponCenterPage({ uid, onBack, onToast }: { uid: string; onBack: () => void; onToast: (m: string) => void }) {
   const [, setTick] = useState(0);
@@ -6292,6 +6454,73 @@ function CouponCenterPage({ uid, onBack, onToast }: { uid: string; onBack: () =>
     return () => clearInterval(t);
   }, []);
   const leftText = `${String(Math.floor(left / 3600)).padStart(2, '0')}:${String(Math.floor((left % 3600) / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
+  // 好券流（Task 46：领券中心也可以刷新也可以无限滚动）——顶部下拉换新券前插、底部拉一拉
+  // 新券追加在下方（上方内容原位不变）；AI 走设置 App 配置的 API 模型（/api/tb-feed surface=coupon），
+  // 失败本地确定性批次兑底；AI 券与兑底券全量持久化（IndexedDB kv 按 uid 隔离），重开原样恢复
+  const [ccTops, setCcTops] = useState<TbAiCoupon[]>([]);
+  const [ccTails, setCcTails] = useState<TbAiCoupon[]>([]);
+  const batchSeq = useRef(1);
+  const ccSeq = useRef(0);
+  const apiCfgCc = useSettings((s) => s.apiConfig);
+  const apiCfgCcRef = useRef(apiCfgCc);
+  apiCfgCcRef.current = apiCfgCc;
+  const ccRef = useRef({ tops: [] as TbAiCoupon[], tails: [] as TbAiCoupon[] });
+  ccRef.current = { tops: ccTops, tails: ccTails };
+  const ccPersist = (tops: TbAiCoupon[], tails: TbAiCoupon[]) => {
+    tbFeedAuxSave(uid, 'coupon', 'aiTops', tops.slice(0, 60));
+    tbFeedAuxSave(uid, 'coupon', 'aiTails', tails.slice(-60));
+  };
+  // 已展示券名（排除名单：页面种子券 + 好券流已有券，保证每次刷新出新）
+  const ccShownNames = () =>
+    [
+      ...TB_CC_SEEDS.consume.map((c) => `消费券${c.min}`),
+      '加赠消费券',
+      ...TB_CC_SEEDS.digital.map((c) => `家电数码券${c.amount}`),
+      ...TB_CC_SEEDS.extra.map((c) => c.name),
+      ...TB_CC_SEEDS.upcoming.map((c) => c.name),
+      ...ccRef.current.tops.map((c) => c.name),
+      ...ccRef.current.tails.map((c) => c.name),
+    ]
+      .filter((x) => x.length > 0)
+      .slice(0, 60);
+  // 挂载恢复：持久化的 AI 前插/底部追加券（旧券永不消失）；首次无存档 → 本地兑底首批展示
+  useEffect(() => {
+    const tops = tbFeedAuxLoad<TbAiCoupon[]>(uid, 'coupon', 'aiTops');
+    const tails = tbFeedAuxLoad<TbAiCoupon[]>(uid, 'coupon', 'aiTails');
+    const okTops = tops && Array.isArray(tops) ? tops.filter((c) => c && typeof c.name === 'string') : [];
+    const okTails = tails && Array.isArray(tails) ? tails.filter((c) => c && typeof c.name === 'string') : [];
+    if (okTops.length > 0 || okTails.length > 0) {
+      setCcTops(okTops);
+      setCcTails(okTails);
+    } else {
+      const first = ccFallbackBatch(0, []);
+      setCcTops(first);
+      ccPersist(first, []);
+    }
+  }, [uid]);
+  const ccPull = useTbPullRefresh((dir) => {
+    const mySeq = ++ccSeq.current;
+    return (async () => {
+      const s0 = ccRef.current;
+      const ai = await tbFetchAiCoupons({ exclude: ccShownNames(), count: 6, config: apiCfgCcRef.current });
+      if (ccSeq.current !== mySeq) return; // 过期批次丢弃
+      if (dir === 'down') {
+        const batch = ai ?? ccFallbackBatch(batchSeq.current, ccShownNames());
+        batchSeq.current += 1;
+        const nextTops = [...batch, ...s0.tops];
+        setCcTops(nextTops);
+        ccPersist(nextTops, s0.tails);
+        onToast(ai ? '已换一批新券在顶部，旧券保留' : '已换一批好券（离线兜底）');
+      } else {
+        const batch = ai ?? ccFallbackBatch(batchSeq.current, ccShownNames());
+        batchSeq.current += 1;
+        const nextTails = [...s0.tails, ...batch];
+        setCcTails(nextTails);
+        ccPersist(s0.tops, nextTails);
+        onToast(ai ? '已加载新券在下方，上方内容不变' : '已加载好券在下方（离线兑底）');
+      }
+    })();
+  });
   const ccTile = (name: string, amount: number, min: number) => {
     const claimed = claimedOf(name);
     return (
@@ -6313,7 +6542,7 @@ function CouponCenterPage({ uid, onBack, onToast }: { uid: string; onBack: () =>
   };
   const digitalClaimed = TB_CC_SEEDS.digital.every((c) => claimedOf(`家电数码券${c.amount}`));
   return (
-    <div className="flex h-full flex-col bg-[#EF1500]">
+    <div className="relative flex h-full flex-col bg-[#EF1500]">
       {/* 顶栏（红底：返回 + 超级88领好券 + 更多） */}
       <div className="relative z-30 shrink-0 bg-gradient-to-b from-[#FF4A2A] to-[#F5222D] px-3 pb-2.5 pt-[56px]">
         <div className="flex items-center gap-2">
@@ -6333,7 +6562,7 @@ function CouponCenterPage({ uid, onBack, onToast }: { uid: string; onBack: () =>
           <button type="button" onClick={() => onToast('规则：消费券可与加补券叠加使用')} className="shrink-0 rounded-md bg-black/25 px-2 py-0.5 text-[12px] text-white active:opacity-70">规则</button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto px-2 pb-8">
+      <div ref={ccPull.scrollRef} {...ccPull.bind} className="flex-1 overflow-y-auto px-2 pb-8">
         {/* 超级88消费券 tab卡（三档消费券 + 查看飞猪券包） */}
         <div className="mt-1 overflow-hidden rounded-2xl">
           <div className="flex bg-[#FFD5D0]">
@@ -6428,7 +6657,7 @@ function CouponCenterPage({ uid, onBack, onToast }: { uid: string; onBack: () =>
                     <span className="text-[11px] text-black/40">共{c.count}张</span>
                   </span>
                   <span className="mt-0.5 truncate text-[10.5px] text-black/40">{c.scope}</span>
-                  <img src={tbImg(c.tag, 160, 100, 5)} alt={c.name} className="mt-1 h-[52px] w-full rounded-md object-cover" draggable={false} />
+                  <TbImg src={tbImg(c.tag, 160, 100, 5)} alt={c.name} className="mt-1 h-[52px] w-full rounded-md" />
                   <button
                     type="button"
                     onClick={() => claim(c.name, c.amount, c.min)}
@@ -6467,7 +6696,44 @@ function CouponCenterPage({ uid, onBack, onToast }: { uid: string; onBack: () =>
             ))}
           </div>
         </div>
+        {/* 更多好券（Task 46：下拉换新券前插在顶部、底部拉一拉追加在下方，旧券原位保留） */}
+        {[...ccTops, ...ccTails].length > 0 ? (
+          <div className="mt-2 rounded-2xl bg-gradient-to-b from-[#FF5A45] to-[#FF2600] p-3" data-testid="cc-feed">
+            <div className="flex items-center gap-2">
+              <span className="text-[19px] font-black text-white">更多好券</span>
+              <span className="rounded-[4px] bg-white/20 px-1.5 py-0.5 text-[11px] font-bold text-white">下拉换新 · 上拉加量</span>
+            </div>
+            <div className="mt-2.5 grid grid-cols-2 gap-2">
+              {[...ccTops, ...ccTails].map((c, i) => {
+                const claimed = claimedOf(c.name);
+                return (
+                  <div key={`${c.name}-${i}`} className={`flex flex-col rounded-xl bg-white p-2.5 ${claimed ? 'opacity-75' : ''}`}>
+                    <span className="truncate text-[14.5px] font-bold text-black/90">{c.name}</span>
+                    <span className="mt-0.5 flex items-baseline gap-1">
+                      <span className="text-[21px] font-black leading-none text-[#FF1E00]">
+                        <span className="text-[12px] font-bold">¥</span>
+                        {c.amount}
+                      </span>
+                      <span className="text-[11px] text-black/40">{c.min > 0 ? `满${c.min}可用` : '无门槛'}</span>
+                    </span>
+                    <span className="mt-0.5 truncate text-[10.5px] text-black/40">{c.scope}</span>
+                    <TbImg src={tbImg(c.tag, 160, 100, 5)} alt={c.name} className="mt-1 h-[52px] w-full rounded-md" />
+                    <button
+                      type="button"
+                      onClick={() => claim(c.name, c.amount, c.min)}
+                      className={`mt-1.5 h-8 w-full rounded-lg text-[13px] font-bold active:opacity-85 ${claimed ? 'bg-black/[0.06] text-black/35' : 'bg-gradient-to-r from-[#FF3B30] to-[#FF0036] text-white'}`}
+                    >
+                      {claimed ? '已领取' : '领取'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-2 text-center text-[12px] text-white/85">顶部下拉换新券 · 滑到底部拉一拉在下方加载更多</div>
+          </div>
+        ) : null}
       </div>
+      <TbPullIndicator h={ccPull} light />
     </div>
   );
 }

@@ -136,6 +136,10 @@ export interface TbFeedRaw {
   kind?: unknown;
   /** 即将上映：想看人数（万人） */
   wantTo?: unknown;
+  /** 领券中心：使用门槛（满 X 元可用，0 = 无门槛） */
+  min?: unknown;
+  /** 领券中心：适用范围 */
+  scope?: unknown;
 }
 
 export type TbFeedSurface =
@@ -154,7 +158,9 @@ export type TbFeedSurface =
   /** 淘票票·周边商城商品 */
   | 'merch'
   /** 淘票票·即将上映新片 */
-  | 'movieUp';
+  | 'movieUp'
+  /** 领券中心好券流（Task 46：下拉换新券前插 / 底部拉一拉追加） */
+  | 'coupon';
 
 /** tag → 分类（图链品类词与 TB_CATS 对齐） */
 function catOf(tag: string): TbProduct['cat'] {
@@ -232,6 +238,62 @@ export interface TbAiBatchResult {
   products: TbProduct[];
   /** 附加原字段（补贴/秒杀/飞猪展示用） */
   raws: Array<TbFeedRaw & { title: string; tag: string }>;
+}
+
+// ---------------- 领券中心 AI 优惠券（Task 46） ----------------
+
+/** AI 生成的优惠券（不走商品注册表：券不是商品，直接对象传递） */
+export interface TbAiCoupon {
+  /** 券名（数码品类加补券） */
+  name: string;
+  /** 券面额（元，整数） */
+  amount: number;
+  /** 使用门槛（满 X 元可用，0 = 无门槛） */
+  min: number;
+  /** 适用范围 */
+  scope: string;
+  /** 券图品类词（决定券卡配图，白名单内） */
+  tag: string;
+}
+
+/** 调 /api/tb-feed（surface=coupon）拿一批 AI 优惠券；失败返回 null（调用方走本地兑底） */
+export async function tbFetchAiCoupons(args: {
+  exclude: string[];
+  count?: number;
+  config: { baseUrl: string; apiKey: string; model: string; temperature: number; maxTokens: number };
+}): Promise<TbAiCoupon[] | null> {
+  try {
+    const res = await fetch('/api/tb-feed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        config: args.config,
+        surface: 'coupon',
+        exclude: args.exclude.slice(0, 80),
+        count: args.count ?? 6,
+        nonce: `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
+      }),
+      signal: AbortSignal.timeout(90_000),
+    });
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; items?: TbFeedRaw[] } | null;
+    if (!res.ok || !data || data.ok !== true || !Array.isArray(data.items) || data.items.length === 0) return null;
+    const out: TbAiCoupon[] = [];
+    const seen = new Set<string>();
+    for (const raw of data.items) {
+      const name = typeof raw.title === 'string' ? raw.title.trim().slice(0, 14) : '';
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      const amount = Math.max(1, Math.min(999, Math.round(typeof raw.price === 'number' && Number.isFinite(raw.price) && raw.price > 0 ? raw.price : 8)));
+      const minRaw = typeof raw.min === 'number' && Number.isFinite(raw.min) ? raw.min : amount * 8;
+      const min = Math.max(0, Math.min(9999, Math.round(minRaw)));
+      const scope = typeof raw.scope === 'string' && raw.scope.trim() ? raw.scope.trim().slice(0, 10) : '全品类通用';
+      const tag = typeof raw.tag === 'string' && /^[a-z][a-z0-9-]{1,20}$/.test(raw.tag) ? raw.tag : 'mug';
+      out.push({ name, amount, min, scope, tag });
+    }
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 调 /api/tb-feed 拿一批 AI 商品：注册 + 持久化；失败返回 null（调用方走本地兜底） */

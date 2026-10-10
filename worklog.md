@@ -17889,3 +17889,23 @@ Work Log:
 Stage Summary:
 - 三点需求全落地并浏览器端到端实测：①所有内容型刷新（首页7频道/视频/我的/补贴/秒杀/飞猪/淘票票5频道）统一走「设置›API 配置」用户模型（占位默认配置不再空等 401），内置模型兜底+空输出防复述重试，排除名单覆盖种子+前插+追加三层，内容每次拉取都不同；②秒杀刷新「看不到变化」根因修复（原 up=前插到顶部+视口锚定=画面纹丝不动），现在下拉前插在场次标签下立即可见、底部拉一拉新商品接在列表最末；③全界面统一「滑到底部拉一拉=底部追加」语义：上方内容（含之前刷新出来的）逐条原位不变、视口不跳、新内容在下方，追加条目全部持久化、reload 原样恢复
 - 改动文件：src/components/apps/tb-pull-refresh.tsx、src/lib/ios/tb-ai-store.ts、src/components/apps/taobao.tsx（Home/Video/Me）、src/components/apps/taobao-channels.tsx（useTbChannelFeed+Subsidy/Seckill/Fliggy+MoviePage 五频道）、src/app/api/tb-feed/route.ts
+
+---
+Task ID: 46
+Agent: main (Z.ai Code)
+Task: 淘宝第十九轮——我的淘宝「省钱卡」位改图片样式三选一（同美团：真实图片/AI生成/默认图片，全站生效）；美团点开不刷新（AI注册表+首页信息流持久化，缓存上次刷新内容）；领券中心下拉刷新+底部拉一拉无限滚动（AI 优惠券）；免费图库调研清单
+
+Work Log:
+- 新建 src/components/apps/tb-img-style.ts：淘宝全站图片样式 store（localStorage 键 tb-img-style，与美团 mt-img-style 独立互不影响）——real=真实图库（/api/mt-img Commons 实景池，URL 原样）/ ai=AI 生成（设置→图像生成配置的生图 API 按品类生成，kv 键 tb-ai-img:<tag>|<kind>，并发 2 队列）/ default=默认插画（&d=1 服务端直出）；TAG_ZH 词典覆盖淘宝全量品类词（phone/earbuds/laptop/jacket/sneakers/sofa/bedding/mug/snacks/fruit/books/toy/gift/kiosk/temple/fridge 等，商品图/门头图两套提示词）
+- 新建 src/components/apps/tb-img.tsx：TbImg 内容匹配图组件（FoodImg 同构）——仅对 /api/mt-img 链做样式改写，useSyncExternalStore 订阅样式/AI 图版本（切换即时全站重渲染），shimmer 加载 + 一次重试 + 失败占位；支持 alt 透传
+- taobao.tsx：我的淘宝白卡「省钱卡」位改造为「图片样式」入口（data-testid=tb-img-style-entry，副标题实时显示当前样式），点击开三选一弹层 TbImgStyleSheet（同美团交互：真实图片/AI 生成/默认图片三卡预览、橙圈选中态+对勾、AI 未配置拦截 toast+红字指路、AI 模式附加「重新生成全部 AI 图片」、底部口径说明）；tbImg 全部 16 处渲染点（首页瀑布 ProductImg/百亿补贴/视频页/店铺门头/购物车/详情图/我的淘宝/领券中心/SKU 相关）切 TbImg
+- taobao-channels.tsx：补贴/秒杀/飞猪/周边/拍报机等 16 处 tbImg 渲染点切 TbImg——图片样式全站（淘宝全部子界面）生效
+- 美团缓存（meituan-data.ts + meituan.tsx）：AI 商家/团购注册表持久化（kv 键 mt-ai-registry，封顶 60/60，my-shop-* 自有店铺除外）+ 首页信息流持久化（kv 键 mt-home-feed，feed 存条目引用 m/deal id + list 占位，listData 存团购 id，连同 filter 写穿；浏览位置另键 mt-home-feed-scroll 节流 3s 持久化）——进首页 lazy initializer 先从 kv 恢复（内存缓存就绪则跳过），首页 feed/filter/listData 变化即写穿；fetchBatch 注册 AI 商家/团购后 mtPersistAiRegistry；MeituanApp 根挂载幂等恢复注册表。点开美团不再出现「AI 正在生成新内容」骨架，只有用户主动下拉刷新/切分类才重新生成
+- 领券中心（taobao.tsx CouponCenterPage + route + tb-ai-store）：/api/tb-feed 新增第十二种 surface=coupon（券名「品类+券种」≤12 字/面额 1~88 整数/门槛 min/适用范围 scope/券图 tag 白名单 16 品类；coerceItem 强制收窄+兜底池 COUPON_SCOPES）；tb-ai-store 新增 TbAiCoupon + tbFetchAiCoupons（券不走商品注册表）；CouponCenterPage 新增「更多好券」区：本地兜底池 CC_FEED_POOL 16 券确定性错位批次，下拉=AI 6 券前插顶部（失败兜底批），底部拉一拉=AI 6 券追加末尾（上方内容原位不变），领取入账 tb-coupons，AI 券全量持久化（tb-feed-aux coupon aiTops/aiTails），首次无存档自动展示首批兜底券；页脚提示「顶部下拉换新券 · 滑到底部拉一拉在下方加载更多」
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误（仅仓库自带 instrumentation Edge 警告）
+- agent-browser 全真浏览器逐项验证：①美团首次进（AI 生成特价团/甜屿·手作甜品/罗马假日/鲜丰水果等）→ 切「我的」再切回首页信息流原样（无重新生成）→ 整页 reload 解锁重进美团 → 内容逐字一致、无骨架（kv 恢复生效）②淘宝「我的」页省钱卡位已是「图片样式/真实图库 >」→ 弹层三卡（真实图片橙圈对勾预览 Commons 照片/AI 生成 sparkle+需配置生图 API/默认图片插画预览）③选默认图片 → toast+入口变「默认图片」→ 首页全部商品图变内置插画（百亿补贴双卡+瀑布流全生效）④reload 后样式持久化（默认图片仍选中）→ 切回真实图片 → 首页恢复 Commons 实拍图 ⑤领券中心券图走真实图库，「更多好券」首批 6 兜底券展示+真实配图 ⑥下拉 → AI 5 张新券（数码立减券/家居品类券/食品加补券/图书立减券/运动品类券）前插顶部、旧 6 券原位保留 ⑦底部拉一拉 → 3 张新券（家居立减券/服饰品类券/运动神券）追加在列表最末（14 张、上方逐条不变、视口不跳）⑧点追加券「领取」→ toast「领取成功：运动神券 ¥66」入账 ⑨reload 重开领券中心 → 14 张券原序全部恢复 ⑩AI 生成卡未配置生图 API → 拦截 toast「请先在设置→图像生成配置生图 API」+红字指路，样式未被误切
+- 免费图库调研（web-search）：Wikimedia Commons（现用，无 key）/ Openverse（8 亿+ CC 图，匿名可用）/ Unsplash / Pexels / Pixabay（后三家 API 需免费 key）/ Lorem Picsum / LoremFlickr / Foodiesfeed（美食向）等候选已整理给用户选择
+
+Stage Summary:
+- 四点需求全落地并浏览器端到端实测：①我的淘宝省钱卡位变「图片样式」入口，真实图片/AI 生成/默认图片三选一弹层与美团同款，选择即时全站生效（商品/门头/领券中心/频道页 32+ 渲染点切 TbImg）、localStorage 持久化、AI 模式未配置拦截指路；②美团点开不再刷新：AI 商家/团购注册表+首页信息流+浏览位置全部持久化，切 tab/reload 重开都原样恢复，仅主动下拉刷新才重新生成；③领券中心支持刷新+无限滚动：AI 换新券前插/拉一拉追加（上方内容不变）、领取入账、全量持久化；④免费网络图库候选清单已整理待用户选择（现用 Commons 实景池，选定后可无缝切换）
+- 改动文件：src/components/apps/tb-img-style.ts、src/components/apps/tb-img.tsx（新增）、src/components/apps/taobao.tsx（图片样式入口+弹层+TbImg 全站+领券中心好券流）、src/components/apps/taobao-channels.tsx（TbImg 全站）、src/lib/ios/meituan-data.ts（AI 注册表持久化）、src/components/apps/meituan.tsx（信息流持久化+恢复）、src/app/api/tb-feed/route.ts（coupon surface）、src/lib/ios/tb-ai-store.ts（TbAiCoupon+tbFetchAiCoupons）
