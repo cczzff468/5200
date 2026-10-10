@@ -4648,11 +4648,17 @@ export default function ChatApp() {
   }, [loadContacts]);
 
   // 换头像跨 App 即时生效（引用式架构）：头像只在联系人资料存一份，渲染端 avatarFor 实时解析；
-  // 其他 App（联系人/微信/QQ/电话）改了头像时刷新本端联系人缓存，打开中的会话/列表立刻显示新头像
+  // 其他 App（联系人/微信/QQ/电话）改了头像时刷新本端联系人缓存，打开中的会话/列表立刻显示新头像。
+  // contact-updated：任意资料字段（名字/手机号/昵称/人设…）变更也刷新——否则编辑联系人不换头像时
+  // 本端一直持旧快照（会话面板/列表显示旧名字等）
   useEffect(() => {
     const fn = () => void loadContacts();
     window.addEventListener('contact-avatar-changed', fn);
-    return () => window.removeEventListener('contact-avatar-changed', fn);
+    window.addEventListener('contact-updated', fn);
+    return () => {
+      window.removeEventListener('contact-avatar-changed', fn);
+      window.removeEventListener('contact-updated', fn);
+    };
   }, [loadContacts]);
 
   /** 添加好友后同步联系人数据（列表/面板/会话即时生效；落库记录带真实名字，展示层统一换成昵称） */

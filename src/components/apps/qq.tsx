@@ -16632,11 +16632,17 @@ export default function QQApp() {
   }, []);
 
   // 换头像跨 App 即时生效（引用式架构）：头像只在联系人资料存一份，渲染端 liveAvatarOf 实时解析；
-  // 其他 App（联系人/微信/信息/电话）改了头像时刷新本端联系人缓存，打开中的空间/聊天页立刻显示新头像
+  // 其他 App（联系人/微信/信息/电话）改了头像时刷新本端联系人缓存，打开中的空间/聊天页立刻显示新头像。
+  // contact-updated：任意资料字段（名字/手机号/昵称/人设…）变更也刷新——编辑联系人不换头像时
+  // QQ 端不再持旧快照（会话列表/资料页/登录解析保持最新）
   useEffect(() => {
     const fn = () => void refreshContacts();
     window.addEventListener('contact-avatar-changed', fn);
-    return () => window.removeEventListener('contact-avatar-changed', fn);
+    window.addEventListener('contact-updated', fn);
+    return () => {
+      window.removeEventListener('contact-avatar-changed', fn);
+      window.removeEventListener('contact-updated', fn);
+    };
   }, [refreshContacts]);
 
   // 小号加好友 AI 决策落盘（2025）：同意 = 好友标记变化 → 刷新联系人（联系人列表即时出现）；

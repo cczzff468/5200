@@ -509,6 +509,19 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
     }
   }
 
+  // 资料变更广播（编辑同步修复）：任何字段（名字/手机号/昵称/人设/关系/好友标记…）落库成功都
+  // 派发 'contact-updated'——此前只有头像变化才广播，改手机号后各 App（电话/微信/QQ/信息/美团/音乐）
+  // 仍持旧快照：拨号按号码解析不到人（播「空号」）、会话面板显示旧名字、美团昵称不同步等。
+  // 各 App 监听本事件重载联系人缓存（与 contact-avatar-changed 同款 handler），保存动作本身低频，
+  // 本地 IndexedDB 全量重读毫秒级，无性能顾虑。
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new CustomEvent('contact-updated', { detail: { contactId: id } }));
+    } catch {
+      // 忽略
+    }
+  }
+
   return next;
 }
 

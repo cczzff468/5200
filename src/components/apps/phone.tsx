@@ -46,6 +46,7 @@ import {
   getActiveAccountIdFor,
   MAIN_ACCOUNT_ID,
   switchAccountFor,
+  updateAccount,
   type PhoneAccount,
 } from '@/lib/ios/accounts';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
@@ -2263,6 +2264,7 @@ function RecentsTab({
   onDelete,
 }: {
   logs: CallLogRecord[] | null;
+  /** 全量联系人池（含未加好友的 CHAR/NPC）：记录回链/按号码回退匹配都用它（编辑同步修复） */
   contacts: ContactRecord[];
   onCall: (number: string, contact: ContactRecord | null) => void;
   onDelete: (log: CallLogRecord) => void;
@@ -2286,6 +2288,12 @@ function RecentsTab({
       return live ?? findContactByNumber(contacts, log.number);
     },
     [contacts]
+  );
+
+  /** 回拨号码：联系人在 → 用当前号码（改号后记录快照是旧号，拨旧号会「空号」）；不在 → 拨快照号 */
+  const callNumber = useCallback(
+    (log: CallLogRecord): string => resolve(log)?.phone || log.number,
+    [resolve]
   );
 
   const shown = useMemo(() => {
@@ -2366,7 +2374,7 @@ function RecentsTab({
                   <div className="flex items-center gap-1.5 pl-3.5 pr-2 transition-colors active:bg-muted/60">
                     <button
                       type="button"
-                      onClick={() => onCall(log.number, live)}
+                      onClick={() => onCall(callNumber(log), live)}
                       onPointerDown={() => {
                         cancelPress();
                         pressTimer.current = window.setTimeout(() => setSheet(log), 480);
@@ -2457,7 +2465,7 @@ function RecentsTab({
                   onSelect: () => {
                     const t = sheet;
                     setSheet(null);
-                    onCall(t.number, resolve(t));
+                    onCall(callNumber(t), resolve(t));
                   },
                 },
                 {
@@ -2719,6 +2727,7 @@ function KeypadTab({
   onOpenAnon,
   onAnonLongPress,
 }: {
+  /** 全量联系人池（含未加好友的 CHAR/NPC）：拨号键盘按号码实时匹配「呼叫 XXX」用（编辑同步修复） */
   contacts: ContactRecord[];
   onCall: (number: string, contact: ContactRecord | null) => void;
   /** 右上角 ⊕：用当前输入的号码（可空）新建联系人（添加好友） */
@@ -3368,7 +3377,7 @@ function ContactDetail({
                       <li key={log.id} className={idx > 0 ? 'border-t border-border/50' : ''}>
                         <button
                           type="button"
-                          onClick={() => onCall(log.number, contact)}
+                          onClick={() => onCall(contact.phone || log.number, contact)}
                           className="flex w-full items-center justify-between px-4 py-2.5 text-left transition-colors active:bg-muted/60"
                           aria-label={`重新呼叫${contact.name}`}
                         >
@@ -3894,20 +3903,32 @@ export default function PhoneApp() {
     return 'keypad';
   });
   const [contacts, setContacts] = useState<ContactRecord[] | null>(null);
+  // 全量联系人池（含未加好友的 CHAR/NPC）：拨号解析/记录回拨用——通讯录列表仍只展示好友+USER
+  //（好友机制产品语义不变），但「联系人 App 里建了人、编辑了手机号」后按号码必须能拨通，
+  // 否则拨号键盘输入该号码会显示「陌生号码」→ 拨出播「空号」
+  const [allContacts, setAllContacts] = useState<ContactRecord[] | null>(null);
   const [logs, setLogs] = useState<CallLogRecord[] | null>(null);
   const [voicemails, setVoicemails] = useState<VoicemailRecord[] | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
-  // 换头像跨 App 即时生效（引用式架构）：头像只在联系人资料存一份，通话记录/通讯录/详情
-  // 渲染端 avatarFor 实时解析；其他 App（联系人/微信/QQ/信息）改了头像时刷新本端联系人缓存
-  useEffect(() => {
-    const fn = () => {
-      void listContactsFor('phone')
-        .then((all) => setContacts(all.filter((c) => c.kind === 'user' || c.isFriend)))
-        .catch(() => {});
-    };
-    window.addEventListener('contact-avatar-changed', fn);
-    return () => window.removeEventListener('contact-avatar-changed', fn);
+  // 换头像/改资料跨 App 即时生效（引用式架构）：头像只在联系人资料存一份，通话记录/通讯录/详情
+  // 渲染端 avatarFor 实时解析；其他 App（联系人/微信/QQ/信息）改了头像或任意资料字段（名字/手机号/
+  // 昵称…）时刷新本端联系人缓存（contact-updated），打开中的页面立刻显示新数据
+  const reloadBoth = useCallback(() => {
+    void listContactsFor('phone')
+      .then((all) => {
+        setAllContacts(all);
+        setContacts(all.filter((c) => c.kind === 'user' || c.isFriend));
+      })
+      .catch(() => {});
   }, []);
+  useEffect(() => {
+    window.addEventListener('contact-avatar-changed', reloadBoth);
+    window.addEventListener('contact-updated', reloadBoth);
+    return () => {
+      window.removeEventListener('contact-avatar-changed', reloadBoth);
+      window.removeEventListener('contact-updated', reloadBoth);
+    };
+  }, [reloadBoth]);
   const [callTarget, setCallTarget] = useState<CallTarget | null>(null);
   // #8 最新通话目标（consumePendingAnswer 判断「通话中收到新来电」用；渲染期同步，同 runTurnRef 模式）
   const callTargetRef = useRef<CallTarget | null>(null);
@@ -4033,13 +4054,18 @@ export default function PhoneApp() {
     void (async () => {
       try {
         // 头像按 App 投影：电话 App（通讯录/拨号/收藏/详情/通话记录渲染共用本 state）读 phone 槽位，
-        // 无槽位回退全局默认头像；联系人 App 里的全局默认头像不受影响
+        // 无槽位回退全局默认头像；联系人 App 里的全局默认头像不受影响。
+        // allContacts 存全量（含未加好友的 CHAR/NPC），供拨号解析/记录回拨按号码匹配（编辑同步修复）
         const all = await listContactsFor('phone');
         if (alive) {
+          setAllContacts(all);
           setContacts(all.filter((c) => c.kind === 'user' || c.isFriend));
         }
       } catch {
-        if (alive) setContacts([]);
+        if (alive) {
+          setAllContacts([]);
+          setContacts([]);
+        }
       }
       try {
         const all = await localDB.getAll('call-logs');
@@ -4136,12 +4162,16 @@ export default function PhoneApp() {
         showToast('有来电正在响铃，请先处理');
         return;
       }
-      // 电话 ↔ 联系人联动：未显式指定联系人时，按「联系人里填的电话」匹配出对应人
-      const resolved = contact ?? findContactByNumber(contacts ?? [], digits);
+      // 电话 ↔ 联系人联动：未显式指定联系人时，按「联系人里填的电话」匹配出对应人。
+      // 用全量池（含未加好友的 CHAR/NPC）：联系人 App 里建的任何人有号码就能拨通；
+      // 解析到人时号码一律以联系人当前号码为准——改号后从记录回拨等入口可能带来旧号
+      // （记录快照是拨号时的号码），拨旧号会播「空号」/打到旧身份
+      const resolved = contact ?? findContactByNumber(allContacts ?? [], digits);
+      const finalDigits = resolved?.phone && stripDigits(resolved.phone) ? stripDigits(resolved.phone) : digits;
       // 自己的号码（user）也允许拨打：接通后对方不说话、说的话不需要回复（见 CallScreen）
-      setCallTarget({ number: digits, contact: resolved });
+      setCallTarget({ number: finalDigits, contact: resolved });
     },
-    [callTarget, contacts, showToast]
+    [allContacts, callTarget, contacts, showToast]
   );
 
   /** 通话结束：写日志 + 刷新列表（多账号 Task 40-2d：记录归属电话 App 当前账号——
@@ -4388,6 +4418,7 @@ export default function PhoneApp() {
         if (!removed) throw new Error('联系人不存在');
         // 本地同步移除：主体 + 被级联删除的 NPC（ownerId 指向被删者）
         setContacts((prev) => (prev ? prev.filter((x) => x.id !== c.id && x.ownerId !== c.id) : prev));
+        setAllContacts((prev) => (prev ? prev.filter((x) => x.id !== c.id && x.ownerId !== c.id) : prev));
         // 从个人收藏里清理
         if (favorites.includes(c.id)) persistFavorites(favorites.filter((f) => f !== c.id));
         setDetailId(null);
@@ -4414,11 +4445,11 @@ export default function PhoneApp() {
     [setPendingChatContact, switchToApp, showToast]
   );
 
-  const detailContact = useMemo(() => contacts?.find((c) => c.id === detailId) ?? null, [contacts, detailId]);
+  const detailContact = useMemo(() => allContacts?.find((c) => c.id === detailId) ?? null, [allContacts, detailId]);
   const vmDetail = useMemo(() => (voicemails ?? []).find((v) => v.id === vmDetailId) ?? null, [voicemails, vmDetailId]);
   const vmDetailContact = useMemo(
-    () => (vmDetail ? contacts?.find((c) => c.id === vmDetail.contactId) ?? null : null),
-    [vmDetail, contacts]
+    () => (vmDetail ? allContacts?.find((c) => c.id === vmDetail.contactId) ?? null : null),
+    [vmDetail, allContacts]
   );
   const loading = contacts === null;
   // 多账号（Task 40-2d）：未读留言数按电话 App 当前账号过滤（state 本身已按账号载入，
@@ -4492,7 +4523,7 @@ export default function PhoneApp() {
           <FavoritesTab contacts={contacts ?? []} favorites={favorites} onCall={startCall} onToggleFavorite={toggleFavorite} />
         )}
         {tab === 'recents' && (
-          <RecentsTab logs={logs} contacts={contacts ?? []} onCall={startCall} onDelete={deleteLog} />
+          <RecentsTab logs={logs} contacts={allContacts ?? []} onCall={startCall} onDelete={deleteLog} />
         )}
         {tab === 'contacts' && (
           <ContactsTab
@@ -4506,7 +4537,7 @@ export default function PhoneApp() {
         )}
         {tab === 'keypad' && (
           <KeypadTab
-            contacts={contacts ?? []}
+            contacts={allContacts ?? []}
             onCall={startCall}
             onNewContact={(phone) => setNewContact({ open: true, phone })}
             anonPhone={anonAcc ? anonAcc.phone : null}
@@ -4524,7 +4555,7 @@ export default function PhoneApp() {
         {tab === 'voicemail' && (
           <VoicemailTab
             voicemails={voicemails}
-            contacts={contacts ?? []}
+            contacts={allContacts ?? []}
             playingId={playingVmId}
             loadingId={loadingVmId}
             onOpen={openVmDetail}
@@ -4621,6 +4652,7 @@ export default function PhoneApp() {
                 const base = prev ?? [];
                 return [c, ...base];
               });
+              setAllContacts((prev) => (prev ? [c, ...prev] : prev));
               setNewContact({ open: false, phone: '' });
               showToast(`已添加「${c.name}」为好友`);
             }}
@@ -4637,6 +4669,17 @@ export default function PhoneApp() {
               // 若该联系人设过 phone 槽位头像，直接回写 state 会让头像闪回全局默认——按 phone 投影后再入列表
               const shown = withAvatarForApp(c, 'phone');
               setContacts((prev) => (prev ? prev.map((x) => (x.id === shown.id ? shown : x)) : prev));
+              setAllContacts((prev) => (prev ? prev.map((x) => (x.id === shown.id ? shown : x)) : prev));
+              // 小号档案在电话 App 里快捷编辑 → 名字/号码同步注册表账号（与联系人 App 编辑同款口径：
+              // 微信/QQ 登录列表、账号页等展示取注册表兑底）
+              if (c.altOf) {
+                updateAccount(c.altOf, {
+                  name: c.name,
+                  phone: c.phone ?? '',
+                  qqId: c.qqId ?? '',
+                  wechatId: c.wechatId ?? '',
+                });
+              }
               setEditSheetOpen(false);
               showToast('已保存');
             }}

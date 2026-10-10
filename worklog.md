@@ -17929,3 +17929,22 @@ Stage Summary:
 - 交付：淘宝全站商品图/门头图/券图/视频封面切「分类精准匹配真实图库直链」——每分类固定英文搜索词按词搜索不随机；刷新换图严格同分类（新图前插缓存+轮换基点推进）；打开淘宝零请求（缓存直渲，仅首次-ever 按需拉取）；图库失败三级兜底（服务端 last-good 池轮换 → 客户端旧缓存 → mt-img 服务端真实图链）；不转存图片（全部直链热链+no-referrer），每图带 作者·许可·图库 版权提示；Pexels 代码就绪（配 PEXELS_KEY 即成第一优先图源，官方允许热链）
 - 图源决策透明：沙箱内 Pexels 免 key 不可用（Cloudflare 拦搜索页+无深链索引）→ 无 key 默认链路=Openverse(Flickr 等)+Commons+Foodiesfeed，全部免费可商用、按需请求、带完整版权元数据；StockSnap/Rawpixel 因 CDN 拒热链被自动过滤
 - 改动文件：src/app/api/tb-img/route.ts（新增）、src/lib/ios/tb-real-img-store.ts（新增）、src/components/apps/tb-img.tsx、src/components/apps/taobao.tsx、src/components/apps/taobao-channels.tsx
+
+---
+Task ID: 51
+Agent: main (Z.ai Code)
+Task: 联系人编辑不同步修复——用户在联系人 App 编辑手机号后，电话 App 拨打显示「空号」；全面排查「编辑后未同步最新数据」类问题并修复（不破坏现有全部功能）
+
+Work Log:
+- 根因定位：①contacts-store.updateContact 落库后只在「头像变化」时广播 contact-avatar-changed，手机号/名字/昵称/人设/关系等任何其他字段变更都静默——6 个监听该事件的 App 缓存（电话/微信/QQ/信息/美团/音乐AI）不刷新；②电话 App 拨号解析（findContactByNumber）只用「好友+USER」过滤列表——联系人 App 里建的 CHAR/NPC 未加好友时，号码根本不参与匹配（拨号键盘输入该号显示「陌生号码」→ 拨出播「空号」）；③最近通话/详情页记录回拨用记录快照号码 log.number——改号后回拨旧号必然空号或打到旧身份；④电话 App QuickEditSheet 编辑小号档案不同步注册表（contacts.tsx 同步了、phone.tsx 漏了）；⑤数据层核实：IndexedDB 本库读写均实时（AppWindow 关闭即卸载、重开重读），拨号解析/空号判定逻辑本身无缓存 bug，问题全在上述消费端口径
+- 修复 ① contacts-store.ts：updateContact 落库成功后无条件广播 'contact-updated'（detail:{contactId}）——任何字段变更都通知各 App 重载缓存（原头像事件保留不变，向后兼容）
+- 修复 ② 五个监听点接入 contact-updated（与原头像事件同 handler）：chat.tsx loadContacts / wechat.tsx reloadContacts / qq.tsx refreshContacts / meituan.tsx mtSyncSessionIdentity（昵称同步）/ music-ai.ts useTogetherLive rev+1 重读——附带收益：微信/QQ/信息内改备注/个签/音色、加好友等此前不广播的操作现在也全端即时同步
+- 修复 ③ 电话 App（phone.tsx）：新增 allContacts 全量池（mount/事件/各变更点同步维护）；startCall 拨号解析改用全量池 + 解析到人时号码一律以联系人当前号码为准（防旧号入口）；拨号键盘 KeypadTab matched、最近通话 RecentsTab resolve 回退、语音留言 VoicemailTab 行回链、详情页 detailContact/vmDetailContact 派生全部改全量池——通讯录列表/收藏 tab 保持「好友+USER」语义不变；最近通话行点击/长按呼叫弹层/详情页记录回拨三处入口改拨联系人最新号（callNumber：resolve(log)?.phone || log.number）；NewContactSheet 保存/deleteContact 删除同步 allContacts；QuickEditSheet 保存同步 allContacts + altOf 小号档案回写注册表（updateAccount name/phone/qqId/wechatId，与联系人 App 编辑同口径）
+- 排查确认无需修复的点：跨 App 跳转 pendingChatContact 只传 id（引用式）；AI 来电/主动来电链路现场 listContacts()（实时）；世界书绑定/跨 App 上下文/记忆召回全部按 contactId 实时读；设置 App profile 与 USER 联系人是两套体系（产品设计非 bug）；通话记录/留言的名字显示本就 live 优先（最新名）
+- E2E 实测（agent-browser 全真浏览器，完整复现用户路径）：①联系人 App 新建 CHAR「小美」（自动号 13233050799 记不住）→ 编辑改号 13900001111 → 电话 App 拨号键盘输入 → 显示「呼叫 小美」（修复前此处显示「陌生号码」）→ 拨打接通 AI 应答（无空号播报）②再改号 13722223333 → 电话 App 最近通话点旧记录（快照仍是 13900001111）回拨 → 拨最新号接通「小美」无空号 ③陌生号 19999999999 → 显示「陌生号码」→ 拨打 → 落「空号·已取消」记录（空号机制未被破坏）④通讯录 tab 仍只显示好友+USER（好友语义不变，小美未加好友不出现）⑤dev.log 无新增运行时错误，/api/phone/followup、/api/memory/extract 等全 200
+- bunx tsc --noEmit 0 错误
+
+Stage Summary:
+- 用户主诉修复：联系人 App 编辑手机号后，电话 App 按号码拨打立即生效——拨号键盘、最近通话回拨、详情页回拨、留言回链全部走「全量联系人池 + 联系人当前号码优先」，改号/建号后不再出现「空号」；陌生号码空号播报、通讯录好友语义、多账号/收藏等既有行为零改动
+- 系统性修复：updateContact 现在是「联系人资料变更」的统一广播点（contact-updated），六端缓存（电话/微信/QQ/信息/美团/音乐AI）实时跟上任何字段编辑，备注/昵称/个签/好友标记等跨 App 同步一并补齐；电话 App 内编辑小号档案现在同步注册表
+- 改动文件：src/lib/ios/contacts-store.ts、src/components/apps/phone.tsx、src/components/apps/chat.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/meituan.tsx、src/lib/ios/music-ai.ts

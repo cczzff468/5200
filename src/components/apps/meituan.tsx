@@ -12187,7 +12187,8 @@ export default function MeituanApp() {
     return () => window.removeEventListener(ISLAND_NAV_EVENT, onNav);
   }, []);
 
-  // 头像/昵称跟随全局账号信息：微信/QQ 内改头像、换装扮后实时同步到美团（contact-avatar-changed）
+  // 头像/昵称跟随全局账号信息：微信/QQ 内改头像、换装扮后实时同步到美团（contact-avatar-changed）；
+  // contact-updated：联系人任意资料字段（含昵称）变更也同步——改昵称不换头像时美团不再持旧名
   useEffect(() => {
     const onAvatarChanged = () => {
       const s = sessionRef.current;
@@ -12201,7 +12202,11 @@ export default function MeituanApp() {
       })();
     };
     window.addEventListener('contact-avatar-changed', onAvatarChanged);
-    return () => window.removeEventListener('contact-avatar-changed', onAvatarChanged);
+    window.addEventListener('contact-updated', onAvatarChanged);
+    return () => {
+      window.removeEventListener('contact-avatar-changed', onAvatarChanged);
+      window.removeEventListener('contact-updated', onAvatarChanged);
+    };
   }, []);
 
   const login = useCallback((s: MtSession) => {

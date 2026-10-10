@@ -1428,9 +1428,14 @@ export function useTogetherLive(): TogetherSession | null {
   const cid = session?.contactId ?? '';
   useEffect(() => {
     if (!cid) return;
+    // contact-avatar-changed + contact-updated：头像或任意资料字段（昵称/名字）变更都强制重读
     const reread = () => setRev((n) => n + 1);
     window.addEventListener('contact-avatar-changed', reread);
-    return () => window.removeEventListener('contact-avatar-changed', reread);
+    window.addEventListener('contact-updated', reread);
+    return () => {
+      window.removeEventListener('contact-avatar-changed', reread);
+      window.removeEventListener('contact-updated', reread);
+    };
   }, [cid]);
   useEffect(() => {
     if (!cid) return;
