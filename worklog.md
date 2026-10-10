@@ -18042,3 +18042,20 @@ Work Log:
 Stage Summary:
 - 交付：电话 App 通话界面单句弹幕还原为「纯文字字幕」样式（无气泡背景、居中灰色 17px、只显示 AI 最新一句、新句替换旧句、长句有界滚动防遮挡）——与用户参考截图一致；聊天气泡只出现在挂断后的语音留言存档/微信/QQ 聊天记录界面
 - 改动文件：src/components/apps/phone.tsx（仅 CallScreen 弹幕渲染区 + 文件头注释）
+
+---
+Task ID: 57
+Agent: main (Z.ai Code)
+Task: 用户需求——「电话界面点右上角信息按钮进入聊天界面，聊天界面显示气泡并把对话记录都显示出来（不光打字，说的话也显示），点击消息按钮就显示、不要挂断以后再显示；电话界面和电话聊天界面不一样，电话界面只显示单句弹幕」
+
+Work Log:
+- 设计定型：电话通话界面拆成两个视图——①电话界面（默认）＝单句弹幕（Task 56 纯文字字幕，AI 最新一句，我方不上屏）；②电话聊天界面（点右上角信息按钮进入）＝全程对话记录以聊天气泡呈现（AI 白色气泡在左/我方绿色气泡在右、语音轮次带声波小标、回应中三点气泡），点开立即可见全部轮次（语音说的+打字的，内存 bubbles 数组现成渲染无需挂断），底部输入条常驻，退出回弹幕并恢复免提自动听
+- phone.tsx 实现：①中部区按 (phase!=='dialing', textMode) 三分支——弹幕视图（data-testid=call-captions，复用 Task 56 纯文字样式+lastAiBubble）/ 聊天视图（data-testid=call-transcript，transcriptBubbles 全量渲染+lastTranscriptBubble busy 三点，恢复 Task 53 的气泡列表结构）/ 拨号占位；②顶部弹性区聊天界面收小为 h-1.5 shrink-0（默认仍 min-h-2 max-h-[72px] flex-1），把垂直空间让给对话记录；③信息按钮 aria-label 改为「查看聊天记录/返回通话界面」（toggleTextMode 原有暂停免提/打断播报/聚焦输入/恢复自动听逻辑不变）；④文件头注释同步两视图说明
+- E2E（agent-browser 全真浏览器 + mock /api/phone/turn + init-script 伪造 getUserMedia 麦克风振荡器流绕过无麦兜底）：①有麦环境拨打小美接通→默认电话界面＝单句弹幕（call-captions 纯文字、无输入条、六宫格在、无麦克风报错）②点「查看聊天记录」→聊天视图（call-transcript）出现 AI 语音问候气泡（左侧白+声波 svg 标）③发文字「你说话呀」→绿色气泡右侧入列、AI 回复气泡左侧跟进（4 气泡齐全）④点「返回通话界面」→弹幕恢复、transcript/输入条卸载、免提自动听恢复（状态「在听…」、无回弹无报错）⑤再次进入聊天界面→历史完整保留（rows=6）⑥挂断→「通话内容已永久保存到语音留言」→留言详情「这通电话说了什么」完整回看（Task 54 存档链路未回归）
+- 无麦环境行为确认（真实用户无麦场景）：免提失败自动切聊天界面（原兜底语义不变——聊天界面现在同时承载「全程记录+文字输入」，兜底体验反而更完整）；沙箱无麦下退出聊天界面会被兜底再次拉回属设计行为
+- bunx tsc --noEmit 0 错误；dev.log 无新增错误（仅仓库固有 instrumentation Edge 警告）；音频/通话流程/语音留言/键盘/弹幕防遮挡全部未破坏
+- 备注：agent-browser 全新 profile 每次重开（IndexedDB 不跨会话）；`set viewport` 会破坏鼠标输入路由（pointer 事件不派发）需避免使用；init-script 须在 open 时以 --init-script 传入
+
+Stage Summary:
+- 交付：电话通话「电话界面 ⇄ 电话聊天界面」双视图——默认界面只显示单句弹幕（纯文字），点右上角信息按钮立即进入聊天界面查看全程对话记录（聊天气泡：语音说的+打字的全部轮次、声波小标、自动滚底），退出即回弹幕并恢复免提；挂断后整通对话落语音留言存档链路保持不变
+- 改动文件：src/components/apps/phone.tsx（CallScreen 中部区三分支渲染+顶部弹性区+信息按钮 aria-label+文件头注释）
