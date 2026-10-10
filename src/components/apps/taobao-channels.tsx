@@ -24,7 +24,6 @@ import {
   Crosshair,
   Flame,
   Info,
-  Loader2,
   MapPin,
   Mic,
   Minus,
@@ -72,6 +71,7 @@ import {
 import { tbImg } from '@/lib/ios/taobao-data';
 import { tbClaimCoupon, tbCreateMerchOrder, tbCreateTicketOrder, tbLoadCoupons, tbLoadOrders, tbMarkRefund, tbPushMsg, tbTickOrders, type TbSession, type TbTicketInfo } from '@/lib/ios/taobao-store';
 import { tbRefundToOrigin } from '@/lib/ios/taobao-pay';
+import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 
 const fmtMoney = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, ''));
 
@@ -106,6 +106,21 @@ export function SubsidyPage({
   const [, setTick] = useState(0);
   const [tab, setTab] = useState('精选');
   const [packetsOpen, setPacketsOpen] = useState(true);
+  // 双向刷新（Task 40）：批次累积前插新补贴商品，旧内容原位保留、不跳顶
+  const [batches, setBatches] = useState<number[]>([]);
+  const batchSeq = useRef(1);
+  const pull = useTbPullRefresh(() => {
+    setBatches((bs) => [batchSeq.current++, ...bs].slice(0, 3));
+    onToast('已刷新，最新补贴商品已更新到顶部');
+  });
+  const freshItems = useMemo(() => {
+    return batches.flatMap((b) =>
+      Array.from({ length: 2 }, (_, i) => {
+        const src = TB_SUBSIDY.items[(b * 2 + i) % TB_SUBSIDY.items.length];
+        return { ...src, id: `${src.id}·r${b}-${i}` };
+      })
+    );
+  }, [batches]);
   const coupons = tbLoadCoupons(uid);
   const claim = (name: string, amount: number, min: number) => {
     if (tbClaimCoupon(uid, { name, amount, min, pids: [] })) {
@@ -145,7 +160,8 @@ export function SubsidyPage({
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-8">
+      <div className="relative min-h-0 flex-1">
+        <div ref={pull.scrollRef} {...pull.bind} className="h-full overflow-y-auto px-2 pb-8">
         {/* 四图横滑卡 */}
         <div className="grid grid-cols-4 gap-1.5 rounded-2xl bg-white p-2">
           {TB_SUBSIDY.hero.map((h, i) => (
@@ -229,22 +245,22 @@ export function SubsidyPage({
             </div>
           ) : null}
         </div>
-        {/* 频道 tab */}
-        <div className="flex items-center gap-5 overflow-x-auto px-1 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {/* 频道 tab（吸顶：滚动时固定，商品流跟随滚动） */}
+        <div className="sticky top-0 z-20 -mx-2 flex items-center gap-5 overflow-x-auto bg-[#E42323] px-3 py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {TB_SUBSIDY.tabs.map((t) => (
             <button
               key={t}
               type="button"
               onClick={() => setTab(t)}
-              className={`shrink-0 text-[17px] font-bold transition-colors ${tab === t ? 'text-white' : t === '补上加补' ? 'text-[#F5C86B]' : t === '苹果专区' ? 'text-[#FFB3B3]' : 'text-white/75'}`}
+              className={`shrink-0 whitespace-nowrap text-[17px] font-bold transition-colors ${tab === t ? 'text-white' : t === '补上加补' ? 'text-[#F5C86B]' : t === '苹果专区' ? 'text-[#FFB3B3]' : 'text-white/75'}`}
             >
               {t}
             </button>
           ))}
         </div>
-        {/* 补贴商品流 */}
+        {/* 补贴商品流（刷新后新商品前插，旧商品原位保留） */}
         <div className="flex flex-col gap-2">
-          {TB_SUBSIDY.items.map((it) => (
+          {[...freshItems, ...TB_SUBSIDY.items].map((it) => (
             <div key={it.id} className="flex gap-2.5 rounded-2xl bg-white p-2">
               <div className="relative w-[122px] shrink-0">
                 <img src={tbImg(it.tag, 240, 240, it.id.length)} alt={it.title} className={`h-[122px] w-full rounded-xl object-cover ${it.soldOut ? 'opacity-80' : ''}`} draggable={false} />
@@ -299,6 +315,8 @@ export function SubsidyPage({
             </div>
           ))}
         </div>
+        </div>
+        <TbPullIndicator h={pull} />
       </div>
     </div>
   );
@@ -320,6 +338,21 @@ export function SeckillPage({
 }) {
   void uid;
   const [tab, setTab] = useState('精选');
+  // 双向刷新（Task 40）：批次累积前插新秒杀商品，旧内容原位保留、不跳顶
+  const [batches, setBatches] = useState<number[]>([]);
+  const batchSeq = useRef(1);
+  const pull = useTbPullRefresh(() => {
+    setBatches((bs) => [batchSeq.current++, ...bs].slice(0, 3));
+    onToast('已刷新，最新秒杀商品已更新到顶部');
+  });
+  const freshItems = useMemo(() => {
+    return batches.flatMap((b) =>
+      Array.from({ length: 2 }, (_, i) => {
+        const src = TB_SECKILL.items[(b * 2 + i) % TB_SECKILL.items.length];
+        return { ...src, id: `${src.id}·r${b}-${i}` };
+      })
+    );
+  }, [batches]);
   // 正在秒杀倒计时（23:54:08.6 起跳，0.1s 步进）
   const [left, setLeft] = useState(23 * 3600 + 54 * 60 + 8.6);
   useEffect(() => {
@@ -355,7 +388,8 @@ export function SeckillPage({
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-8">
+      <div className="relative min-h-0 flex-1">
+        <div ref={pull.scrollRef} {...pull.bind} className="h-full overflow-y-auto px-2 pb-8">
         {/* 9块9品牌疯抢 / 0.99产地直发 */}
         <div className="rounded-2xl bg-white p-3">
           <div className="grid grid-cols-2 gap-3">
@@ -411,18 +445,18 @@ export function SeckillPage({
             <span className="mx-1.5 h-3 w-px bg-black/10" />
             <button type="button" onClick={() => onToast('后天20点场（演示）')} className="text-[14px] font-semibold text-black/60 active:opacity-70">后天20点抢</button>
           </div>
-          {/* 场次 tab */}
-          <div className="mt-3 flex items-center gap-5 overflow-x-auto pb-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {TB_SECKILL.tabs.map((t) => (
-              <button key={t} type="button" onClick={() => setTab(t)} className={`shrink-0 text-[16.5px] font-bold transition-colors ${tab === t ? 'text-[#FF0036]' : 'text-black/65'}`}>
-                {t}
-              </button>
-            ))}
-          </div>
         </div>
-        {/* 秒杀商品流 */}
+        {/* 场次 tab（吸顶：滚动时固定，商品流跟随滚动） */}
+        <div className="sticky top-0 z-20 -mx-2 flex items-center gap-5 overflow-x-auto bg-white px-5 pb-2.5 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {TB_SECKILL.tabs.map((t) => (
+            <button key={t} type="button" onClick={() => setTab(t)} className={`shrink-0 whitespace-nowrap text-[16.5px] font-bold transition-colors ${tab === t ? 'text-[#FF0036]' : 'text-black/65'}`}>
+              {t}
+            </button>
+          ))}
+        </div>
+        {/* 秒杀商品流（刷新后新商品前插，旧商品原位保留） */}
         <div className="rounded-b-2xl bg-white px-2 pb-3 pt-1">
-          {TB_SECKILL.items.map((it) => (
+          {[...freshItems, ...TB_SECKILL.items].map((it) => (
             <div key={it.id} className="flex gap-2.5 border-t border-black/[0.05] px-0.5 py-3 first:border-t-0">
               <img src={tbImg(it.tag, 220, 220, it.id.length + 2)} alt={it.title} className="h-[112px] w-[112px] shrink-0 rounded-xl object-cover" draggable={false} />
               <div className="flex min-w-0 flex-1 flex-col">
@@ -461,6 +495,8 @@ export function SeckillPage({
             </div>
           ))}
         </div>
+        </div>
+        <TbPullIndicator h={pull} />
       </div>
     </div>
   );
@@ -790,11 +826,14 @@ export function MoviePage({
   // 周边商城
   const [buyMerch, setBuyMerch] = useState<TbMerch | null>(null);
   const [mQty, setMQty] = useState(1);
-  // 上拉刷新
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const pullRef = useRef({ startY: 0, active: false, dist: 0 });
+  // 双向刷新（Task 40：顶部下拉、底部上拉都触发）——前插新内容、旧内容原位保留、不回顶；
+  // 批次累积（batches 最新在前）：连续多次刷新时，之前刷新出的新内容也不消失
+  const [batches, setBatches] = useState<number[]>([]);
+  const batchSeq = useRef(1);
+  const pull = useTbPullRefresh((dir) => {
+    setBatches((bs) => [batchSeq.current++, ...bs].slice(0, 4));
+    onToast(dir === 'down' ? '已刷新，最新场次演出已更新到顶部' : '已更新，新内容已插入顶部，原内容保留');
+  });
 
   useEffect(() => {
     setTab(initialTab);
@@ -822,8 +861,15 @@ export function MoviePage({
       }),
     []
   );
-  /** 刷新轮换：列表数据按 refreshKey 旋转，肉眼可见「换了新内容」 */
-  const rot = <T,>(arr: T[]): T[] => (refreshKey === 0 ? arr : arr.map((_, i) => arr[(i + refreshKey * 2) % arr.length]));
+  /** 刷新批次：往列表顶部插入「新内容」（最新批在最上），旧条目与历史批次原位保留
+   *  （不重排、不清空、不跳顶）；id 加批次后缀避免 key 冲突（字段全量拷贝，点击/出票行为不变） */
+  const fresh = <T extends { id: string }>(arr: T[], n: number): T[] =>
+    batches.flatMap((b) =>
+      Array.from({ length: n }, (_, i) => {
+        const src = arr[(b * 2 + i) % arr.length];
+        return { ...src, id: `${src.id}·r${b}-${i}` };
+      })
+    );
 
   const toggleSeat = (r: number, k: number) => {
     const key = `${r}-${k}`;
@@ -929,9 +975,28 @@ export function MoviePage({
   const confirmConcert = () => {
     const tier = concert.tiers[tierIdx];
     if (!tier || tier.left === '已售罄') return;
-    const dm = concert.dateRange.match(/(\d{1,2})\.(\d{1,2})/);
+    // 日期解析修复（票详情问题）：此前「每周三 20:00」等无 MM.DD 格式回退 isoDates[0]（今天），
+    // 晚上购票会立刻被判成「已放映」——现在：每周X → 下一个该星期；完全解析不出 → 一周后
     const y = new Date().getFullYear();
-    const date = dm ? `${y}-${String(Number(dm[1])).padStart(2, '0')}-${String(Number(dm[2])).padStart(2, '0')}` : isoDates[0];
+    const wkMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 };
+    const wm = concert.dateRange.match(/周([一二三四五六日天])/);
+    let date = '';
+    const dm = concert.dateRange.match(/(\d{1,2})\.(\d{1,2})/);
+    if (dm) {
+      date = `${y}-${String(Number(dm[1])).padStart(2, '0')}-${String(Number(dm[2])).padStart(2, '0')}`;
+    } else {
+      const sm0 = concert.dateRange.match(/(\d{1,2}):(\d{2})/);
+      const d = new Date();
+      d.setHours(sm0 ? Number(sm0[1]) : 19, sm0 ? Number(sm0[2]) : 0, 0, 0);
+      if (wm) {
+        const delta = (wkMap[wm[1]] - d.getDay() + 7) % 7;
+        if (delta > 0) d.setDate(d.getDate() + delta);
+        else if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 7);
+      } else {
+        d.setDate(d.getDate() + 7);
+      }
+      date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
     const sm = concert.dateRange.match(/(\d{1,2}:\d{2})/);
     const order = tbCreateTicketOrder(
       uid,
@@ -969,38 +1034,7 @@ export function MoviePage({
     onPayOrder(order.id);
   };
 
-  /** 底部上拉刷新（淘票票主界面）：到底继续上拉 >60px 触发 */
-  const doTpRefresh = () => {
-    if (refreshing) return;
-    setRefreshing(true);
-    window.setTimeout(() => {
-      setRefreshing(false);
-      setRefreshKey((k) => k + 1);
-      onToast('已为你刷新，场次和演出信息已更新');
-      scrollRef.current?.scrollTo({ top: 0 });
-    }, 800);
-  };
-  const onTpTouchStart = (e: React.TouchEvent) => {
-    const el = scrollRef.current;
-    if (!el || refreshing) {
-      pullRef.current.active = false;
-      return;
-    }
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
-      pullRef.current = { startY: e.touches[0].clientY, active: true, dist: 0 };
-    } else {
-      pullRef.current.active = false;
-    }
-  };
-  const onTpTouchMove = (e: React.TouchEvent) => {
-    if (!pullRef.current.active) return;
-    pullRef.current.dist = pullRef.current.startY - e.touches[0].clientY;
-  };
-  const onTpTouchEnd = () => {
-    if (pullRef.current.active && pullRef.current.dist > 60) doTpRefresh();
-    pullRef.current.active = false;
-    pullRef.current.dist = 0;
-  };
+
 
   // ---------- 选座 ----------
   if (view === 'seats') {
@@ -1011,7 +1045,7 @@ export function MoviePage({
           <button type="button" aria-label="返回" onClick={() => setView('cinemas')} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:opacity-60">
             <ArrowLeft className="h-[22px] w-[22px] text-black/85" strokeWidth={2.2} />
           </button>
-          <span className="min-w-0 flex-1 truncate text-center text-[18px] font-bold text-black/90">{movie.id === 'm4' ? '台前县中影时光…' : `${movie.title}·附近影城`}</span>
+          <span className="min-w-0 flex-1 truncate text-center text-[18px] font-bold text-black/90">{movie.id.startsWith('m4') ? '台前县中影时光…' : `${movie.title}·附近影城`}</span>
           <button type="button" aria-label="更多" onClick={() => onToast('更多（演示）')} className="grid h-8 w-[52px] shrink-0 place-items-center rounded-full bg-black/[0.05]">
             <MoreHorizontal className="h-[17px] w-[17px] text-black/70" />
           </button>
@@ -1165,20 +1199,20 @@ export function MoviePage({
               </button>
             ))}
           </div>
-          {/* 筛选行 */}
-          <div className="flex items-center gap-5 px-4 py-2.5 text-[15px] text-black/85">
+          {/* 筛选行（nowrap：窄屏不竖排换行，挤不下时横向滑） */}
+          <div className="flex items-center gap-4 overflow-x-auto px-4 py-2.5 text-[15px] text-black/85 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {['濮阳全域', '筛选', '品牌'].map((f) => (
-              <button key={f} type="button" onClick={() => onToast(`${f}（演示）`)} className="flex items-center gap-0.5 active:opacity-70">
+              <button key={f} type="button" onClick={() => onToast(`${f}（演示）`)} className="flex shrink-0 items-center gap-0.5 whitespace-nowrap active:opacity-70">
                 {f}
-                <ChevronDown className="h-3.5 w-3.5 text-black/40" />
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-black/40" />
               </button>
             ))}
-            <button type="button" onClick={() => onToast('综合排序（演示）')} className="ml-auto flex items-center gap-1 active:opacity-70">
-              <Info className="h-3.5 w-3.5 text-black/35" />
+            <button type="button" onClick={() => onToast('综合排序（演示）')} className="ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap active:opacity-70">
+              <Info className="h-3.5 w-3.5 shrink-0 text-black/35" />
               综合排序
-              <ChevronDown className="h-3.5 w-3.5 text-black/40" />
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-black/40" />
             </button>
-            <Search className="h-[18px] w-[18px] text-black/70" />
+            <Search className="h-[18px] w-[18px] shrink-0 text-black/70" />
           </div>
           {/* 影厅筛选 chips */}
           <div className="flex gap-2 overflow-x-auto px-4 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -1523,12 +1557,12 @@ export function MoviePage({
     );
   }
 
-  // ---------- 淘票票主界面（顶部四频道 tab 固定，其余内容全部跟随滚动；底部上拉刷新） ----------
-  const movies = rot(TB_MOVIES);
-  const soonMovies = rot(TB_MOVIES_SOON);
-  const shows = rot(TB_COMEDY_SHOWS);
-  const concerts = rot(TB_CONCERTS);
-  const merchs = rot(TB_MERCH);
+  // ---------- 淘票票主界面（顶部四频道 tab 固定，其余内容全部跟随滚动；顶部下拉/底部上拉双向刷新，前插保旧不跳顶） ----------
+  const movies = [...fresh(TB_MOVIES, 2), ...TB_MOVIES];
+  const soonMovies = [...fresh(TB_MOVIES_SOON, 2), ...TB_MOVIES_SOON];
+  const shows = [...fresh(TB_COMEDY_SHOWS, 1), ...TB_COMEDY_SHOWS];
+  const concerts = [...fresh(TB_CONCERTS, 1), ...TB_CONCERTS];
+  const merchs = [...fresh(TB_MERCH, 2), ...TB_MERCH];
   return (
     <div className="relative flex h-full flex-col bg-[#F4F5F7]">
       {/* 顶栏（粉底）+ 频道 tab（唯一固定区） */}
@@ -1559,7 +1593,7 @@ export function MoviePage({
               type="button"
               onClick={() => {
                 setTab(t.id);
-                scrollRef.current?.scrollTo({ top: 0 });
+                pull.scrollRef.current?.scrollTo({ top: 0 });
               }}
               className={`relative shrink-0 pb-2 text-[16px] ${tab === t.id ? 'font-bold text-white' : 'text-white/70'}`}
             >
@@ -1568,16 +1602,10 @@ export function MoviePage({
             </button>
           ))}
         </div>
-        {/* 上拉刷新中胶囊 */}
-        {refreshing ? (
-          <div className="absolute left-1/2 top-[104px] z-40 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/55 px-3.5 py-1.5 text-[12.5px] text-white">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            正在刷新…
-          </div>
-        ) : null}
       </div>
-      {/* 内容区（全部跟随滚动） */}
-      <div ref={scrollRef} onTouchStart={onTpTouchStart} onTouchMove={onTpTouchMove} onTouchEnd={onTpTouchEnd} className="min-h-0 flex-1 overflow-y-auto pb-8">
+      {/* 内容区（全部跟随滚动；双向刷新胶囊悬浮于此） */}
+      <div className="relative min-h-0 flex-1">
+        <div ref={pull.scrollRef} {...pull.bind} className="h-full overflow-y-auto pb-8">
         {/* ===== 电影 ===== */}
         {tab === 'movie' ? (
           <>
@@ -1810,6 +1838,8 @@ export function MoviePage({
             <div className="pb-1 pt-4 text-center text-[15px] font-bold text-[#C6CBD4]">淘票票·周边商城</div>
           </>
         ) : null}
+        </div>
+        <TbPullIndicator h={pull} />
       </div>
       {/* 周边购买弹层（数量步进 + 立即购买 → 待付款订单 → 支付面板） */}
       {buyMerch ? (
@@ -1985,7 +2015,7 @@ export function TicketDetailPage({
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:opacity-70">
             <ArrowLeft className="h-[21px] w-[21px] text-white" strokeWidth={2.4} />
           </button>
-          <span className="flex-1 text-center text-[18px] font-bold text-white">电影票详情</span>
+          <span className="flex-1 text-center text-[18px] font-bold text-white">{t.kind === 'movie' ? '电影票详情' : '演出票详情'}</span>
           <span className="h-9 w-9 shrink-0" />
         </div>
         {/* 状态大区 */}
@@ -2000,7 +2030,7 @@ export function TicketDetailPage({
             </>
           ) : screened ? (
             <>
-              <div className="text-[24px] font-black text-white">电影已放映</div>
+              <div className="text-[24px] font-black text-white">{t.kind === 'movie' ? '电影已放映' : '演出已放映'}</div>
               <div className="mt-2.5 flex items-center justify-center gap-3">
                 <button type="button" onClick={doRate} className="rounded-full border border-white/80 px-5 py-1.5 text-[14px] font-medium text-white active:opacity-75">
                   评价影片
@@ -2222,6 +2252,26 @@ export function TicketDetailPage({
 export function FliggyPage({ onBack, onToast }: { onBack: () => void; onToast: (m: string) => void }) {
   const [view, setView] = useState<'home' | 'list'>('home');
   const [tab, setTab] = useState('国内');
+  // 双向刷新（Task 40，列表页）：批次累积前插新酒店，旧内容原位保留、不跳顶
+  const [batches, setBatches] = useState<number[]>([]);
+  const batchSeq = useRef(1);
+  const pull = useTbPullRefresh(() => {
+    setBatches((bs) => [batchSeq.current++, ...bs].slice(0, 3));
+    onToast('已刷新，最新酒店已更新到顶部');
+  });
+  type FliggyHotel = (typeof TB_FLIGGY.hotels)[number] & { _k: string; _v: number };
+  const freshHotels = useMemo<FliggyHotel[]>(() => {
+    return batches.flatMap((b) =>
+      Array.from({ length: 2 }, (_, i) => {
+        const src = TB_FLIGGY.hotels[(b + i) % TB_FLIGGY.hotels.length];
+        return { ...src, _k: `r${b}-${i}`, _v: (b * 2 + i) % 4 };
+      })
+    );
+  }, [batches]);
+  const hotelCards = useMemo<FliggyHotel[]>(
+    () => [...freshHotels, ...TB_FLIGGY.hotels.slice(0, 2).map((h) => ({ ...h, _k: h.name, _v: -1 }))],
+    [freshHotels]
+  );
   const goSearch = () => {
     setView('list');
     setTab('猜你喜欢');
@@ -2255,7 +2305,8 @@ export function FliggyPage({ onBack, onToast }: { onBack: () => void; onToast: (
             ))}
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-8">
+        <div className="relative min-h-0 flex-1">
+          <div ref={pull.scrollRef} {...pull.bind} className="h-full overflow-y-auto px-2 pb-8">
           {/* 三卡横排：机票超低价 / 特惠酒店 / 爆款榜单 */}
           <div className="grid grid-cols-[1fr_1.1fr_0.95fr] gap-2">
             <button type="button" onClick={() => onToast('机票超低价（演示）')} className="rounded-xl bg-white p-2.5 text-left active:opacity-80">
@@ -2317,14 +2368,14 @@ export function FliggyPage({ onBack, onToast }: { onBack: () => void; onToast: (
               </div>
             </button>
           </div>
-          {/* 猜你喜欢 tab */}
-          <div className="mt-3 flex items-center gap-2">
+          {/* 猜你喜欢 tab（吸顶：滚动时固定，酒店瀑布跟随滚动） */}
+          <div className="sticky top-0 z-20 -mx-2 mt-3 flex items-center gap-2 bg-[#F4F5F9] px-2 py-2">
             {['猜你喜欢', '濮阳周边', '机票次卡'].map((t) => (
               <button
                 key={t}
                 type="button"
                 onClick={() => setTab(t)}
-                className={`rounded-full px-4 py-1.5 text-[14px] ${tab === t ? 'bg-gradient-to-r from-[#FFE63E] to-[#FFD100] font-bold text-black/90' : 'bg-white text-black/65'}`}
+                className={`shrink-0 whitespace-nowrap rounded-full px-4 py-1.5 text-[14px] ${tab === t ? 'bg-gradient-to-r from-[#FFE63E] to-[#FFD100] font-bold text-black/90' : 'bg-white text-black/65'}`}
               >
                 {t}
               </button>
@@ -2349,9 +2400,9 @@ export function FliggyPage({ onBack, onToast }: { onBack: () => void; onToast: (
                 </svg>
               </span>
             </button>
-            {TB_FLIGGY.hotels.slice(0, 2).map((h, i) => (
-              <button key={h.name} type="button" onClick={() => onToast(`${h.name}（演示）`)} className="overflow-hidden rounded-xl bg-white text-left active:opacity-80">
-                <img src={tbImg(h.tag, 320, 300, i)} alt={h.name} className="h-[150px] w-full object-cover" draggable={false} />
+            {hotelCards.map((h, i) => (
+              <button key={h._k} type="button" onClick={() => onToast(`${h.name}（演示）`)} className="overflow-hidden rounded-xl bg-white text-left active:opacity-80">
+                <img src={tbImg(h.tag, 320, 300, h._v >= 0 ? h._v : i - freshHotels.length)} alt={h.name} className="h-[150px] w-full object-cover" draggable={false} />
                 <div className="p-2">
                   <div className="line-clamp-2 text-[13.5px] font-bold leading-[18px] text-black/90">{h.name}</div>
                   <div className="mt-1 flex items-baseline gap-1">
@@ -2380,6 +2431,8 @@ export function FliggyPage({ onBack, onToast }: { onBack: () => void; onToast: (
               </div>
             </button>
           </div>
+          </div>
+          <TbPullIndicator h={pull} />
         </div>
       </div>
     );
@@ -2436,9 +2489,9 @@ export function FliggyPage({ onBack, onToast }: { onBack: () => void; onToast: (
         </div>
         {/* 酒店搜索卡 */}
         <div className="mx-2 mt-3 rounded-2xl bg-white p-3.5">
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-4 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {['国内', '国际', '酒店套餐', '民宿', '短租房'].map((t) => (
-              <button key={t} type="button" onClick={() => setTab(t)} className={`relative pb-1.5 text-[17px] ${tab === t ? 'font-bold text-black/90' : 'text-black/50'}`}>
+              <button key={t} type="button" onClick={() => setTab(t)} className={`relative shrink-0 whitespace-nowrap pb-1.5 text-[17px] ${tab === t ? 'font-bold text-black/90' : 'text-black/50'}`}>
                 {t}
                 {tab === t ? <span className="absolute bottom-0 left-1/2 h-[3px] w-[22px] -translate-x-1/2 rounded-full bg-black/85" /> : null}
               </button>
@@ -2460,23 +2513,23 @@ export function FliggyPage({ onBack, onToast }: { onBack: () => void; onToast: (
             <span className="min-w-0 flex-1 truncate text-[13.5px] text-black/70">濮阳县,老街村附近</span>
           </div>
           <div className="flex items-center justify-between border-b border-black/[0.06] py-4">
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-[26px] font-black leading-none text-black/90">10月9日</span>
-              <span className="text-[13px] text-black/40">今天</span>
+            <span className="flex shrink-0 items-baseline gap-1.5 whitespace-nowrap">
+              <span className="whitespace-nowrap text-[24px] font-black leading-none text-black/90">10月9日</span>
+              <span className="whitespace-nowrap text-[13px] text-black/40">今天</span>
             </span>
-            <span className="flex items-center gap-1 rounded-full border border-black/15 px-2.5 py-0.5 text-[12.5px] text-black/75">
+            <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-black/15 px-2.5 py-0.5 text-[12.5px] text-black/75">
               1晚
             </span>
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-[26px] font-black leading-none text-black/90">10月10日</span>
-              <span className="text-[13px] text-black/40">明天</span>
+            <span className="flex shrink-0 items-baseline gap-1.5 whitespace-nowrap">
+              <span className="whitespace-nowrap text-[24px] font-black leading-none text-black/90">10月10日</span>
+              <span className="whitespace-nowrap text-[13px] text-black/40">明天</span>
             </span>
-            <ChevronRight className="h-4.5 w-4.5 text-black/30" />
+            <ChevronRight className="h-4.5 w-4.5 shrink-0 text-black/30" />
           </div>
           <div className="flex items-center border-b border-black/[0.06] py-3.5">
-            <span className="text-[15.5px] font-bold text-black/90">1间房 2成人 0儿童</span>
-            <ChevronDown className="ml-1 h-4 w-4 text-black/50" />
-            <span className="ml-7 text-[15px] text-black/30">价格/星级</span>
+            <span className="shrink-0 whitespace-nowrap text-[15.5px] font-bold text-black/90">1间房 2成人 0儿童</span>
+            <ChevronDown className="ml-1 h-4 w-4 shrink-0 text-black/50" />
+            <span className="ml-7 shrink-0 whitespace-nowrap text-[15px] text-black/30">价格/星级</span>
           </div>
           <div className="mt-3 flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {['首住特惠', '张挥公园', '濮阳县人民医院', '东环小区', '咸城遗址'].map((c, i) => (
@@ -2510,6 +2563,13 @@ export function FliggyPage({ onBack, onToast }: { onBack: () => void; onToast: (
 
 /** 淘宝账单（截图10：真实订单数据——省钱统计/10月账单/2026年累计账单/分类） */
 export function BillPage({ session, uid, onBack, onToast, onOpenOrder }: { session: TbSession; uid: string; onBack: () => void; onToast: (m: string) => void; onOpenOrder: (id: string) => void }) {
+  const [, setTick] = useState(0);
+  // 双向刷新（Task 40）：重读订单推进状态，账单数据原位更新（订单不消失、不跳顶）
+  const pull = useTbPullRefresh(() => {
+    tbTickOrders(uid);
+    setTick((n) => n + 1);
+    onToast('账单已更新');
+  });
   const orders = tbLoadOrders(uid);
   const paid = orders.filter((o) => o.status !== 'cancelled' && o.paidAt);
   const now = new Date();
@@ -2543,7 +2603,8 @@ export function BillPage({ session, uid, onBack, onToast, onOpenOrder }: { sessi
           </button>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto pb-10">
+      <div className="relative min-h-0 flex-1">
+        <div ref={pull.scrollRef} {...pull.bind} className="h-full overflow-y-auto pb-10">
         {/* 头像与省钱 */}
         <div className="flex items-center gap-3 px-4 pt-2">
           <span className="grid h-[58px] w-[58px] shrink-0 place-items-center overflow-hidden rounded-full bg-[#D8DCE3]">
@@ -2684,6 +2745,8 @@ export function BillPage({ session, uid, onBack, onToast, onOpenOrder }: { sessi
             ))}
           </div>
         </div>
+        </div>
+        <TbPullIndicator h={pull} />
       </div>
       {/* 悬浮编辑 */}
       <button type="button" aria-label="编辑" onClick={() => onToast('编辑账单备注（演示）')} className="absolute bottom-9 right-4 z-30 grid h-12 w-12 place-items-center rounded-full bg-white shadow-[0_4px_14px_rgba(0,0,0,0.12)] ring-1 ring-black/5 active:opacity-80">

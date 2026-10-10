@@ -226,6 +226,35 @@
   background: transparent;
 }
 
+/* 全局滚动条「滚动时才显示」（Task 40）：
+   手机内所有 App 滚动区默认滚动条完全透明（视觉隐藏），滚动时浮现 4px 细条，停止 ~0.9s 后隐去。
+   显隐由 PhoneShell 的全局捕获 scroll 监听控制：滚动容器被标记 data-scrolling="true"，
+   停止滚动后回 "false"。.no-scrollbar 与 [scrollbar-width:none] 等显式隐藏规则优先级更高，不受影响。 */
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+[data-scrolling='true']::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.3);
+}
+[data-scrolling='true']::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.45);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+[data-scrolling='true'] {
+  scrollbar-color: rgba(0, 0, 0, 0.3) transparent;
+}
+
 /* 主屏幕编辑模式：App 图标 / 小组件抖动 */
 @keyframes home-jiggle {
   0%,

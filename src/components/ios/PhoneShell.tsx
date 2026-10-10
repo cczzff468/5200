@@ -133,6 +133,29 @@ export default function PhoneShell() {
     void migrateFromServer();
   }, []);
 
+  // 全局滚动条显隐（Task 40）：滚动时给滚动容器打 data-scrolling=true，停止 ~0.9s 后回 false；
+  // 配合 globals.css 的滚动条规则实现「滚动时才显示滚动条」（此前一打开就常驻显丑）。
+  // capture 捕获阶段监听 → 手机壳内任意嵌套滚动容器（各 App 页面/弹层）都能覆盖，组件无需各自接入。
+  useEffect(() => {
+    const timers = new WeakMap<Element, number>();
+    const onScroll = (e: Event) => {
+      const el = e.target;
+      if (!(el instanceof HTMLElement)) return;
+      if (el === document.documentElement || el === document.body) return;
+      el.dataset.scrolling = 'true';
+      const prev = timers.get(el);
+      if (prev) window.clearTimeout(prev);
+      timers.set(
+        el,
+        window.setTimeout(() => {
+          el.dataset.scrolling = 'false';
+        }, 900)
+      );
+    };
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    return () => document.removeEventListener('scroll', onScroll, { capture: true });
+  }, []);
+
   // 主屏空闲预热（刷新后首次打开音乐 App 不再等 chunk 编译/下载数秒）：首帧稳定 ~2.5s 后
   // 后台预载音乐 App chunk + 提前音乐 boot/一起听恢复（preloadHeavyApps 幂等，失败静默）
   useEffect(() => {

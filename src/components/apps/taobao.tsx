@@ -137,6 +137,7 @@ import {
 } from '@/lib/ios/taobao-store';
 import { tbExecutePay, tbListPayChannels, tbRefundToOrigin, type TbPayChannel } from '@/lib/ios/taobao-pay';
 import { BillPage, FliggyPage, MoviePage, SeckillPage, SignInPage, SubsidyPage, TicketDetailPage } from './taobao-channels';
+import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 import { LocalToast, useLocalToast } from './page-toast';
 
 const TB_ORANGE = '#FF5000';
@@ -896,6 +897,19 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onTo
 
 type HomeFeedTab = 'follow' | 'rec' | 'flash' | 'subsidy' | 'super88' | 'fliggy' | 'wear';
 
+/** 商品池确定性洗牌（seed 固定 → 顺序稳定；刷新只前插新批次，不重排旧内容） */
+function tbShufflePool(list: TbProduct[], seed: number): TbProduct[] {
+  let h = 7 + seed * 131;
+  return list
+    .map((p) => {
+      let x = 0;
+      for (let i = 0; i < p.id.length; i++) x = (x * 31 + p.id.charCodeAt(i)) >>> 0;
+      return { p, k: (x + h * 7919) % 100003 };
+    })
+    .sort((a, b) => a.k - b.k)
+    .map((x) => x.p);
+}
+
 function HomePage({
   uid,
   onOpenSearch,
@@ -921,12 +935,16 @@ function HomePage({
     { id: 'wear', label: '穿搭' },
   ];
   const [feedTab, setFeedTab] = useState<HomeFeedTab>('rec');
+  // Task 40：刷新只往顶部前插新批次（refreshKey），旧内容原位保留；batch 追加式分页不回退
   const [refreshKey, setRefreshKey] = useState(0);
   const [batch, setBatch] = useState(1);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [pullY, setPullY] = useState(0);
+  const [pullUpY, setPullUpY] = useState(0);
+  const [refreshingDir, setRefreshingDir] = useState<'down' | 'up' | null>(null);
   const pullStart = useRef<number | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const pullDir = useRef<'down' | 'up'>('down');
+  const anchorFrom = useRef(0);
   const follows = tbLoadShopFollows(uid);
 
   // 上滑加载更多
@@ -938,33 +956,63 @@ function HomePage({
     }
   }, []);
 
-  // 下拉刷新（触摸）
+  // 双向刷新（Task 40）：顶部下拉、底部上拉都触发；前插新推荐、旧内容保留；up 方向视口锚定不跳屏
+  const doHomeRefresh = (dir: 'down' | 'up') => {
+    setRefreshingDir(dir);
+    if (dir === 'down') setPullY(46);
+    else {
+      setPullUpY(46);
+      if (scrollerRef.current) anchorFrom.current = scrollerRef.current.scrollHeight;
+    }
+    setTimeout(() => {
+      setRefreshKey((k) => k + 1); // 仅前插新批次，不重置 batch —— 已加载的旧宝贝全部保留
+      setRefreshingDir(null);
+      setPullY(0);
+      setPullUpY(0);
+      if (dir === 'up') {
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            const el = scrollerRef.current;
+            if (el && anchorFrom.current > 0) {
+              const d = el.scrollHeight - anchorFrom.current;
+              if (d > 0) el.scrollTop += d;
+            }
+            anchorFrom.current = 0;
+          })
+        );
+      }
+      onToast('已为你推荐新的好物，旧内容都还在哦');
+    }, 800);
+  };
+
+  // 下拉/上拉触摸手势
   const onTouchStart = (e: React.TouchEvent) => {
     const el = scrollerRef.current;
-    if (el && el.scrollTop <= 0) pullStart.current = e.touches[0].clientY;
-    else pullStart.current = null;
+    if (!el || refreshingDir) {
+      pullStart.current = null;
+      return;
+    }
+    if (el.scrollTop <= 0) {
+      pullDir.current = 'down';
+      pullStart.current = e.touches[0].clientY;
+    } else if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
+      pullDir.current = 'up';
+      pullStart.current = e.touches[0].clientY;
+    } else pullStart.current = null;
   };
   const onTouchMove = (e: React.TouchEvent) => {
     if (pullStart.current == null) return;
     const dy = e.touches[0].clientY - pullStart.current;
-    if (dy > 0) setPullY(Math.min(90, dy * 0.45));
+    if (pullDir.current === 'down' && dy > 0) setPullY(Math.min(90, dy * 0.45));
+    else if (pullDir.current === 'up' && dy < 0) setPullUpY(Math.min(90, -dy * 0.45));
   };
   const onTouchEnd = () => {
-    if (pullY > 40) {
-      setRefreshing(true);
-      setPullY(46);
-      setTimeout(() => {
-        setRefreshKey((k) => k + 1);
-        setBatch(1);
-        setRefreshing(false);
-        setPullY(0);
-        onToast('已为你推荐新的好物');
-      }, 800);
-    } else setPullY(0);
+    if (pullDir.current === 'down' && pullY > 40) doHomeRefresh('down');
+    else if (pullDir.current === 'up' && pullUpY > 56) doHomeRefresh('up');
     pullStart.current = null;
   };
 
-  // 推荐池：按 tab 过滤 + 分页追加（不同批取不同图变体）
+  // 推荐池：按 tab 过滤 + 固定种子洗牌（刷新不再重排旧内容——旧宝贝永远原位保留）
   const pool = useMemo(() => {
     let list = [...TB_PRODUCTS];
     if (feedTab === 'flash') list = list.filter((p) => p.promo === '超级88');
@@ -972,27 +1020,24 @@ function HomePage({
     else if (feedTab === 'super88') list = list.filter((p) => p.promo === '超级88' || p.promo === '超级立减');
     else if (feedTab === 'fliggy') list = list.filter((p) => p.cat === 'digital' || p.cat === 'fashion');
     else if (feedTab === 'wear') list = list.filter((p) => p.cat === 'fashion');
-    // 确定性洗牌（refreshKey 参与：下拉刷新换一批）
-    let h = 7 + refreshKey * 131;
-    list = list
-      .map((p) => {
-        let x = 0;
-        for (let i = 0; i < p.id.length; i++) x = (x * 31 + p.id.charCodeAt(i)) >>> 0;
-        return { p, k: (x + h * 7919) % 100003 };
-      })
-      .sort((a, b) => a.k - b.k)
-      .map((x) => x.p);
-    return list;
-  }, [feedTab, refreshKey]);
+    return tbShufflePool(list, 0);
+  }, [feedTab]);
 
   const feed = useMemo(() => {
+    // 基底流：固定顺序 + 追加式分页（i 为局部索引 → key/图变体稳定，不因刷新变化）
+    const base: { p: TbProduct; v: number; k: string }[] = [];
     const n = Math.min(pool.length * 3, 12 + batch * 8);
-    const out: { p: TbProduct; v: number }[] = [];
     for (let i = 0; i < n; i++) {
       const p = pool[i % pool.length];
-      out.push({ p, v: (Math.floor(i / pool.length) + refreshKey) % 4 });
+      base.push({ p, v: Math.floor(i / pool.length) % 4, k: `b-${p.id}-${i}` });
     }
-    return out;
+    // 刷新批次（Task 40）：每次刷新往顶部前插一批新推荐（最新批在最上）；旧内容原位保留、不消失
+    const tops: { p: TbProduct; v: number; k: string }[] = [];
+    for (let b = refreshKey; b >= 1; b--) {
+      const shuffled = tbShufflePool(pool, b);
+      for (let i = 0; i < 8; i++) tops.push({ p: shuffled[i % shuffled.length], v: b % 4, k: `r${b}-${i}` });
+    }
+    return [...tops, ...base];
   }, [pool, batch, refreshKey]);
 
   // 需求（第十轮）：频道 tab「关注」左侧返回按钮 → 返回手机主屏幕
@@ -1019,7 +1064,11 @@ function HomePage({
               <button
                 key={t.id}
                 type="button"
-                onClick={() => setFeedTab(t.id)}
+                onClick={() => {
+                  setFeedTab(t.id);
+                  setRefreshKey(0);
+                  setBatch(1);
+                }}
                 className={`relative shrink-0 pb-2 text-[18px] font-semibold transition-colors ${feedTab === t.id ? 'text-[#FF5000]' : 'text-black/85'}`}
               >
                 {t.label}
@@ -1135,13 +1184,13 @@ function HomePage({
           ) : (
             <div className="mt-2 flex items-start gap-2 px-2 pb-24">
               <div className="flex min-w-0 flex-1 flex-col gap-2">
-                {feed.filter((_, i) => i % 2 === 0).map(({ p, v }, i) => (
-                  <ProductCard key={`${p.id}-${v}-${i}`} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
+                {feed.filter((_, i) => i % 2 === 0).map(({ p, v, k }) => (
+                  <ProductCard key={k} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
                 ))}
               </div>
               <div className="flex min-w-0 flex-1 flex-col gap-2">
-                {feed.filter((_, i) => i % 2 === 1).map(({ p, v }, i) => (
-                  <ProductCard key={`${p.id}-${v}-${i}`} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
+                {feed.filter((_, i) => i % 2 === 1).map(({ p, v, k }) => (
+                  <ProductCard key={k} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
                 ))}
               </div>
             </div>
@@ -1149,11 +1198,20 @@ function HomePage({
         </div>
 
         {/* 下拉刷新指示器（悬浮于列表区顶部，不随内容滚动） */}
-        {(pullY > 0 || refreshing) && (
+        {(pullY > 0 || refreshingDir === 'down') && (
           <div className="pointer-events-none absolute inset-x-0 top-2 z-40 grid place-items-center" style={{ transform: `translateY(${pullY - 40}px)` }}>
-            <div className={`flex h-9 items-center gap-2 rounded-full bg-white px-4 text-[13px] text-black/60 shadow-lg ${refreshing ? 'animate-pulse' : ''}`}>
-              <ScanLine className={`h-4 w-4 text-[#FF5000] ${refreshing ? 'animate-spin' : ''}`} />
-              {refreshing ? '正在刷新…' : pullY > 40 ? '松开刷新' : '下拉刷新'}
+            <div className={`flex h-9 items-center gap-2 rounded-full bg-white px-4 text-[13px] text-black/60 shadow-lg ${refreshingDir === 'down' ? 'animate-pulse' : ''}`}>
+              <ScanLine className={`h-4 w-4 text-[#FF5000] ${refreshingDir === 'down' ? 'animate-spin' : ''}`} />
+              {refreshingDir === 'down' ? '正在刷新…' : pullY > 40 ? '松开刷新' : '下拉刷新'}
+            </div>
+          </div>
+        )}
+        {/* 上拉更新指示器（悬浮于列表区底部；Task 40：上滑也更新，前插保旧不跳顶） */}
+        {(pullUpY > 0 || refreshingDir === 'up') && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-6 z-40 grid place-items-center">
+            <div className="flex h-9 items-center gap-2 rounded-full bg-black/55 px-4 text-[13px] text-white shadow-lg">
+              <Loader2 className="h-4 w-4 animate-spin text-white/90" />
+              {refreshingDir === 'up' ? '正在更新…' : pullUpY > 56 ? '松开更新' : '上拉更新'}
             </div>
           </div>
         )}
@@ -3018,6 +3076,12 @@ function OrdersPage({
   const [channel, setChannel] = useState<'orders' | 'gou' | 'flash' | 'pig'>('gou');
   const [kw, setKw] = useState('');
   const [, setTick] = useState(0);
+  // 双向刷新（Task 40）：重读订单推进状态；订单永远原位保留、不消失、不跳顶
+  const pull = useTbPullRefresh(() => {
+    tbTickOrders(uid);
+    setTick((n) => n + 1);
+    onToast('订单已更新');
+  });
   /** 取消订单弹窗（截图2：原因选择） */
   const [cancelFor, setCancelFor] = useState<string | null>(null);
   /** 退款确认弹窗（需求：退款/售后只显示退款订单——订单卡直接可发起退款） */
@@ -3106,7 +3170,8 @@ function OrdersPage({
           ))}
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto pb-10">
+      <div className="relative min-h-0 flex-1">
+        <div ref={pull.scrollRef} {...pull.bind} className="h-full overflow-y-auto pb-10">
         {orders.length === 0 ? (
           <div className="grid place-items-center bg-white py-16">
             <ShoppingBag className="h-12 w-12 text-black/10" strokeWidth={1.6} />
@@ -3119,6 +3184,8 @@ function OrdersPage({
             ))}
           </div>
         )}
+        </div>
+        <TbPullIndicator h={pull} />
       </div>
       {/* 订单取消弹窗（截图2：选择原因 → 确定取消 → 交易关闭） */}
       {cancelFor ? (
@@ -4774,44 +4841,27 @@ function MePage({
   const favs = tbLoadFavs(uid);
   const foots = tbLoadFoots(uid);
   const follows = tbLoadShopFollows(uid);
-  // 需求（第八轮）：上滑「我的」界面可以更新菜单——底部上拉刷新「猜你喜欢」菜单内容
-  const [menuKey, setMenuKey] = useState(0);
-  const [menuRefreshing, setMenuRefreshing] = useState(false);
-  const mePullStart = useRef<number | null>(null);
-  const mePullAcc = useRef(0);
-  const onMeTouchStart = (e: React.TouchEvent) => {
-    const el = e.currentTarget as HTMLDivElement;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
-      mePullStart.current = e.touches[0].clientY;
-      mePullAcc.current = 0;
-    } else mePullStart.current = null;
-  };
-  const onMeTouchMove = (e: React.TouchEvent) => {
-    if (mePullStart.current == null) return;
-    const dy = e.touches[0].clientY - mePullStart.current;
-    if (dy < 0) mePullAcc.current = Math.min(120, -dy);
-  };
-  const onMeTouchEnd = () => {
-    if (mePullAcc.current > 50 && !menuRefreshing) {
-      setMenuRefreshing(true);
-      setTimeout(() => {
-        setMenuKey((k) => k + 1);
-        setMenuRefreshing(false);
-        onToast('已为你刷新');
-      }, 800);
-    }
-    mePullStart.current = null;
-    mePullAcc.current = 0;
-  };
-  // 猜你喜欢菜单池（menuKey 参与轮换：上滑刷新）
+  // 需求（第八轮）+ Task 40：「我的」界面顶部下拉 / 底部上拉都可刷新「猜你喜欢」——
+  // 新一批前插到顶部，旧批次保留（最多留 3 批），不重排、不跳顶
+  const [menuBatches, setMenuBatches] = useState<number[]>([0]);
+  const menuSeq = useRef(1);
+  const mePull = useTbPullRefresh(() => {
+    const seed = menuSeq.current++;
+    setMenuBatches((bs) => [seed, ...bs].slice(0, 3));
+    onToast('已为你换上新的好物，旧推荐都还在哦');
+  });
+  // 猜你喜欢菜单（批次前插：最新批在最上，旧批次原位保留）
   const meMenu = useMemo(() => {
     const arr = [...TB_PRODUCTS];
-    const start = (14 + menuKey * 8) % arr.length;
-    return Array.from({ length: 8 }, (_, i) => arr[(start + i) % arr.length]);
-  }, [menuKey]);
+    return menuBatches.flatMap((k) => {
+      const start = (14 + k * 8) % arr.length;
+      return Array.from({ length: 8 }, (_, i) => ({ p: arr[(start + i) % arr.length], k: `${k}-${i}` }));
+    });
+  }, [menuBatches]);
   return (
     <>
-    <div className="h-full overflow-y-auto bg-[#f4f4f4] pb-24" onTouchStart={onMeTouchStart} onTouchMove={onMeTouchMove} onTouchEnd={onMeTouchEnd}>
+    <div className="relative h-full">
+    <div ref={mePull.scrollRef} {...mePull.bind} className="h-full overflow-y-auto bg-[#f4f4f4] pb-24">
       {/* 头部（需求：橙色改肉粉色 + 美化，截图3 口径：奶油粉底 + 黑字 + 白卡） */}
       <div className="bg-gradient-to-b from-[#FCDBC4] via-[#FDE3D2] to-[#FBEDE2] px-4 pb-4 pt-[62px]">
         <div className="flex items-center gap-3">
@@ -5000,20 +5050,22 @@ function MePage({
           <span className="text-[14px] text-black/40">我的收藏</span>
           <span className="text-[14px] text-black/40">我的评价</span>
         </div>
-        {/* 上滑刷新提示（menuRefreshing 时显示载入行；需求第十轮：上滑可以刷新） */}
-        {menuRefreshing ? (
+        {/* 下拉/上拉刷新提示（Task 40：两方向都可刷新，新推荐前插、旧推荐保留） */}
+        {mePull.refreshing ? (
           <div className="flex items-center justify-center gap-2 py-2 text-[12.5px] text-black/45">
             <Loader2 className="h-4 w-4 animate-spin text-[#FF5000]" />
             正在刷新…
           </div>
         ) : null}
         <div className="grid grid-cols-2 gap-2">
-          {meMenu.map((p, i) => (
-            <ProductCard key={`${p.id}-${menuKey}`} p={p} v={(i + menuKey) % 4} onOpen={() => onOpenProduct(p.id)} />
+          {meMenu.map(({ p, k }, i) => (
+            <ProductCard key={k} p={p} v={i % 4} onOpen={() => onOpenProduct(p.id)} />
           ))}
         </div>
-        <div className="pt-2 text-center text-[11.5px] text-black/30">上滑到底继续拉一拉，可刷新页面</div>
+        <div className="pt-2 text-center text-[11.5px] text-black/30">下拉或滑到底部拉一拉，都可刷新推荐</div>
       </div>
+    </div>
+    <TbPullIndicator h={mePull} />
     </div>
     {/* 骑手形象选择（需求：淘金币入口改为骑手；底部弹层复用美团 MT_RIDERS 全套形象，
         选中后同时用于淘宝物流页地图巡航与美团配送地图，共用同一形象） */}

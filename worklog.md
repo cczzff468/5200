@@ -17732,3 +17732,25 @@ Stage Summary:
 - 六点需求全部落地并浏览器逐项实测：淘票票上滑更新、滚动仅顶部标签固定、电影/喜剧脱口秀/演唱会/周边商城四大频道、购票直接进全部订单待收货（无物流）、电影票详情三态（对照三张截图）
 - 范围限定零破坏：美团/微信/QQ/聊天链路零改动；普通订单状态机不动（票单单独分支）；支付/退款复用 tbRefundToOrigin/tbMarkRefund
 - 改动文件：src/lib/ios/taobao-channels-data.ts（新增四组数据）、src/lib/ios/taobao-store.ts（TbTicketInfo/tbCreateTicketOrder/tbCreateMerchOrder/tick/markRefund 扩展）、src/components/apps/taobao-channels.tsx（MoviePage 重构+三个新视图+TicketDetailPage+tbQrGrid）、src/components/apps/taobao.tsx（OrderCard 票务分支/openOrderSmart 分流/ticketDetail 路由/MoviePage 新 props）
+
+---
+Task ID: 40
+Agent: main (Z.ai Code)
+Task: 淘宝第十四轮——全局双向刷新（前插保旧不跳顶）/吸顶补齐/滚动条滚动才显示/文字平行/票详情修复
+
+Work Log:
+- 新建 src/components/apps/tb-pull-refresh.tsx：useTbPullRefresh 共享 Hook（顶部下拉+底部上拉双向触发、刷新期间忽略新手势、up 方向完成后双 rAF 视口锚定 scrollTop+=ΔscrollHeight 不跳屏）+ TbPullIndicator 悬浮胶囊（down 顶部随手指/up 底部/刷新中转圈）
+- 淘票票 MoviePage：刷新从 rot() 重排改为批次累积前插（batches 最新在前、历史批次保留、id 加 ·rN-i 后缀防 key 冲突）；删除 scrollTo(top:0) 跳顶；电影/喜剧/演唱会/周边四 tab 全部接入双向刷新
+- 首页 HomePage：推荐池改固定种子洗牌（tbShufflePool 抽出），刷新仅前插 8 条新推荐（refreshKey 批次），不再 setBatch(1) 折叠已加载列表；新增底部上拉刷新（pullUpY 指示器 + up 锚定）；切 tab 才重置批次/分页
+- 全部订单 OrdersPage：双向刷新（tbTickOrders+tick），订单永远原位保留；我的 MePage：菜单刷新改批次累积（旧批次保留最多3批）+补顶部下拉方向；百亿补贴/淘宝秒杀/飞猪列表/淘宝账单 全部接入双向刷新（前插新条目）
+- 吸顶补齐：SubsidyPage 频道 tab、SeckillPage 场次 tab（移出面板改独立 sticky 白条）、FliggyPage 猜你喜欢 tab 全部 sticky top-0 z-20 全宽底色；首页/全部订单/淘票票/搜索页原本已固定
+- 滚动条「滚动才显示」：globals.css 全局 4px 滚动条默认透明（*::-webkit-scrollbar-thumb transparent + scrollbar-color transparent），[data-scrolling=true] 时显 rgba(0,0,0,.3)；PhoneShell 挂捕获阶段全局 scroll 监听（WeakMap 计时器，停止 900ms 后清除标记），所有 App 嵌套滚动容器零接入覆盖
+- 文字平行（nowrap）：飞猪首页频道 tabs（gap-6→gap-4+overflow-x-auto+shrink-0 whitespace-nowrap）、日期行（26px→24px+nowrap+shrink-0）、1间房行；影院列表筛选行（濮阳全域/筛选/品牌/综合排序 nowrap+横向滑动）——对照用户两张截图竖排换行全部修复
+- 票详情修复：①标题按类型（电影票详情/演出票详情）②已放映状态文案按类型（电影已放映/演出已放映）③演唱会日期解析修复：「每周X 20:00」取下一个该星期（含今天未开场）、完全解析不出回退+7天——此前回退 isoDates[0]（今天）导致晚间购票立刻「已放映」④m4 影院标题判断改 startsWith 兼容批次后缀 id
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误（Edge Runtime 警告为仓库自带）
+- agent-browser 全真浏览器逐项验证：①滚动条：滚动前 thumb rgba(0,0,0,0)/滚动中 rgba(0,0,0,0.3)/4px、data-scrolling true→900ms 后 false ②首页下拉：新批次前插（百搭小白鞋等8条）、旧内容原位（落地灯 idx4）③首页底部上拉：锚定精确（dTop==dSh==2520）不跳顶 ④淘票票下拉：新片前插原片保留 ⑤淘票票底部上拉：批次累积（b2生化神探+b1什么意思小猪+原4部全在）⑥周边商城上拉：锚定 258 精确+旧周边保留 ⑦全部订单下拉：6单全保留不跳顶 ⑧秒杀场次tab吸顶+双向刷新（锚定274）⑨百亿补贴频道tab吸顶 ⑩飞猪首页文字全单行（对照截图1修复）⑪飞猪列表猜你喜欢吸顶+双向刷新（锚定222）⑫票详情三态：紫态（演出票详情+36天18小时倒计时）/橙态（电影已放映+灰码红章+本单权益）/靛蓝态（已退款+时间戳金额+删除线）⑬购票闭环：喜剧开放麦→选座→出票→详情19小时0分钟倒计时精确
+
+Stage Summary:
+- 六点需求全部落地并浏览器逐项实测：全局双向刷新（上滑下滑都更新）、更新旧内容/历史批次不消失、刷新不跳顶（视口锚定）、四个频道页 tab 吸顶补齐、滚动条默认隐藏滚动时浮现、截图竖排文字全部平行、票详情三态+文案按类型+日期解析修复
+- 刷新语义统一为「前插保旧」：所有列表旧内容原位保留、新内容插顶部、up 方向自动锚定视口
+- 改动文件：src/components/apps/tb-pull-refresh.tsx（新增）、taobao-channels.tsx、taobao.tsx、globals.css、src/components/ios/PhoneShell.tsx
