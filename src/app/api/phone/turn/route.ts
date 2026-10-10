@@ -12,6 +12,8 @@ export const runtime = 'nodejs';
  *        crossAppBlock?: string,             // 跨 App 近况块（其他 App 最近原始消息，前端 cross-app-context 组装）
  *        groupBlock?: string,                // 群聊近况块（共同群最近原始消息，前端组装）
  *        proactiveContext?: string,          // AI 主动来电目的（非空 = 这通电话是 AI 主动拨出，注入来电目的段）
+ *        callerUnknown?: boolean,            // 陌生来电（多账号）：匿名号/未登记分账号关系的小号拨出——
+ *                                            // AI 不知道来电人是谁（人设换陌生来电框架，机主身份/记忆等全部不下发）
  *        worldbookBlock?: string, momentsBlock?: string, timeBlock?: string, locBlock?: string,
  *        config: { baseUrl, apiKey, model, temperature, maxTokens } }
  * 返回 { reply, name } 或 { directOnly: true, messages, name }
@@ -65,16 +67,21 @@ function buildCallSystemPrompt(
   /** 通话媒体（Task 22）：'voice'=语音通话（默认）/ 'video'=视频通话 */
   media: 'voice' | 'video' = 'voice',
   /** 多账号关系感知：当前账号 id（小号通话读 relationByAcc；不传 = 大号口径） */
-  accountId?: string | null
+  accountId?: string | null,
+  /** 陌生来电（多账号）：匿名号/未登记分账号关系的小号拨出——AI 不知道来电人是谁，
+   *  人设换陌生来电框架（【与X的关系】/机主称呼/多端记忆全部不下发） */
+  callerUnknown?: boolean
 ): string {
   const base = buildPersonaSystemPrompt(peer, {
     channel: media === 'video' ? '视频通话' : '语音通话',
-    userName: user?.name ?? null,
-    userRealName: user?.realName ?? null,
-    userNickname: user?.nickname ?? null,
+    userName: callerUnknown ? null : (user?.name ?? null),
+    userRealName: callerUnknown ? null : (user?.realName ?? null),
+    userNickname: callerUnknown ? null : (user?.nickname ?? null),
     ...npcExtra,
-    multiApp,
+    multiApp: callerUnknown ? undefined : multiApp,
     accountId: accountId ?? undefined,
+    // 陌生来电：人设换「陌生号码来电」框架（角色自身人设/背景保留，对面的人完全未知）
+    ...(callerUnknown ? { strangerMode: 'caller' as const } : {}),
     extraRules: [
       `这是实时${media === 'video' ? '视频' : '语音'}通话：用第一人称口语化说话，像真人${media === 'video' ? '视频' : '打'}电话；每次只说 1~5 句——具体句数由你的人设性格和当下情绪决定：健谈外向的人自然多聊几句，高冷话少的人往往只说一两个短句；同一次通话里长短也可以随话题起伏变化，不要每句都一样长；一次只说一两件事；`,
       '禁止任何表情符号、emoji、引号、括号、列表；只输出要说出口的话；',
@@ -159,6 +166,9 @@ export async function POST(req: NextRequest) {
   const peerName = peer.name;
   // 多账号关系感知：前端按当前通话账号传入（activeAccountIdOf）；不传 = 大号口径（零破坏）
   const accountId = typeof root.accountId === 'string' && root.accountId.trim() ? root.accountId.trim().slice(0, 40) : undefined;
+  // 陌生来电（多账号）：匿名号/未登记分账号关系的小号拨出的电话——AI 不知道来电人是谁。
+  // 仅由前端在「用户拨出 + 电话 App」链路传入；AI 主动来电（direction='in'）不适用（AI 打给它认识的联系人）
+  const callerUnknown = root.callerUnknown === true;
 
   const system = buildCallSystemPrompt(
     peer,
@@ -174,16 +184,21 @@ export async function POST(req: NextRequest) {
     root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined,
     Array.isArray(root.extraRules) ? (root.extraRules as unknown[]).filter((x): x is string => typeof x === 'string') : undefined,
     // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
-    (() => {
-      const real = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
-      const nick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
-      if (!real && !nick) return undefined;
-      return { name: real || nick, realName: real || null, nickname: nick || null };
-    })(),
+    //（陌生来电不下发任何机主身份：AI 不知道对面是谁，报真名会直接破功）
+    callerUnknown
+      ? undefined
+      : (() => {
+          const real = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
+          const nick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
+          if (!real && !nick) return undefined;
+          return { name: real || nick, realName: real || null, nickname: nick || null };
+        })(),
     // 通话媒体（Task 22 视频通话）：channel 与场景规则按此分叉
     media,
     // 多账号关系感知：小号通话读分账号关系，不再恒用大号全局 relation
-    accountId
+    accountId,
+    // 陌生来电（多账号）：匿名号/未登记小号拨出——人设换陌生框架、机主身份不下发
+    callerUnknown
   );
   // 记忆库：前端传入的跨 App 记忆块（互通开关范围已由前端过滤），附加在人设之后
   const memoryBlock = typeof root.memoryBlock === 'string' ? root.memoryBlock.trim() : '';
@@ -224,7 +239,12 @@ export async function POST(req: NextRequest) {
   if (greeting && (messages.length === 1 || messages[messages.length - 1].role !== 'user')) {
     messages.push({
       role: 'user',
-      content: direction === 'in' ? '（你拨出的电话对方已接听，请先开口说话）' : '（电话已拨通，请先开口打招呼）',
+      content:
+        direction === 'in'
+          ? '（你拨出的电话对方已接听，请先开口说话）'
+          : callerUnknown
+            ? '（一个陌生号码拨通了你的电话，你不认识对方。请像接到陌生来电一样先开口打招呼）'
+            : '（电话已拨通，请先开口打招呼）',
     });
   } else if (!greeting && messages.length > 1 && messages[messages.length - 1].role === 'assistant') {
     // 兜底：正常轮次历史不该以 assistant 收尾，补一条 user 触发回应

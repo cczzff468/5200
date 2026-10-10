@@ -669,15 +669,23 @@ function purgeChatTracesFor(id: string, survivingContactIds: readonly string[], 
       if (changed) window.localStorage.setItem(mapKey, JSON.stringify(obj));
     }
     // 小号「机主身份披露」标记（memory.ts 披露门控，localStorage 独立键 mem-alt-disc:{app}:{id}）：
-    // 删除联系人时一并清除（跨全部账号后缀变体）——重新添加后 AI 回到纯陌生人
+    // 删除联系人时一并清除（跨全部账号后缀变体；phone 端=电话 App 披露标记，账号关联预写同样覆盖）
+    // ——重新添加后 AI 回到纯陌生人
     try {
-      for (const app of ['wx', 'qq', 'sms'] as const) {
+      for (const app of ['wx', 'qq', 'sms', 'phone'] as const) {
         const base = `mem-alt-disc:${app}:${id}`;
         window.localStorage.removeItem(base);
         for (const acc of getAccounts()) {
           if (acc.id !== MAIN_ACCOUNT_ID) window.localStorage.removeItem(`${base}--${acc.id}`);
         }
       }
+    } catch {
+      // 尽力而为
+    }
+    // 大号侧「账号关联」记忆（memory.ts mem-acc-link:{id}，kv 设备级共享键）：删除联系人时一并清除
+    try {
+      kvDelAllAccounts(`mem-acc-link:${id}`);
+      window.localStorage.removeItem(`mem-acc-link:${id}`);
     } catch {
       // 尽力而为
     }

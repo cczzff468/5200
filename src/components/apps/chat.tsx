@@ -105,7 +105,7 @@ import { deleteContact, getContact, listContactsFor, ownerRealName, contactRealN
 import { listAlbums, getAlbum, addAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 多账号 v2（Task 40-2c）：信息端账号一律走 For('sms')，AI 来电/留言归属电话 App 当前账号（For('phone')）；
 // accLs 每次「现算」账号作用域 localStorage 键（大号原键零迁移），严禁缓存成模块级常量
-import { ACCOUNT_CHANGED_EVENT, accLs, getActiveAccountFor, getActiveAccountIdFor, type AccountApp } from '@/lib/ios/accounts';
+import { ACCOUNT_CHANGED_EVENT, accLs, getAccountById, getActiveAccountFor, getActiveAccountIdFor, type AccountApp } from '@/lib/ios/accounts';
 // 生图（锁脸）：回复文本 [图片:描述]/[照片:描述] 标签 → 自动生图投递（未配置/失败降级文字图片卡片）；
 // 手动入口 = 加号面板「文字图片」——Task 13 起为纯文字卡片，不走生图
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
@@ -501,6 +501,16 @@ function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp
   const addrName = userReal ? addressNameOf({ name: userReal, nickname: userNick ?? null, realName: userReal }, mode) : null;
   // 多账号（用户规则二.2）：小号/匿名号侧不再注入任何大号身份/关系信息（【用户的另一个身份】段已移除）
   const accId = activeAccountIdOf('sms');
+  // 多账号陌生语义（用户规则：换号/匿名号第一次联系 AI，AI 不认识这个身份）：
+  // 非主号账号且与角色没有任何已建立关系（分账号关系 relationByAcc / 本账号好友标记）→ 陌生身份模式：
+  // 人设不再继承大号全局关系（旧逻辑会回退成「朋友」，AI 一开口就认识人）。
+  // 本账号已加过好友/填过分账号关系 → 维持独立关系语义（普通朋友默认）
+  const smsAcc = getAccountById(accId);
+  const strangerText =
+    !!smsAcc &&
+    smsAcc.kind !== 'main' &&
+    !(c.relationByAcc?.[accId] ?? '').trim() &&
+    ![c.friendWxByAcc?.[accId], c.friendQqByAcc?.[accId], c.friendSmsByAcc?.[accId]].some((m) => typeof m === 'boolean');
   return buildPersonaSystemPrompt(c, {
     channel: '短信',
     userName: addrName,
@@ -508,8 +518,9 @@ function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp
     userNickname: userNick ?? null,
     ownerName,
     accountId: accId,
-    // 跨 App 身份感知：互通开关（打开会话时现场读取）
+    // 跨 App 身份感知：互通开关（打开会话时现场读取）；陌生身份模式由人设内部忽略用户称呼/关系/多端段
     multiApp,
+    ...(strangerText ? { strangerMode: 'text' as const } : {}),
     ...npcExtra,
   });
 }
@@ -4578,8 +4589,14 @@ export default function ChatApp() {
   /** 和联系人（CHAR/NPC）聊天：AI 按人设扮演（含配角圈/归属者了解注入） */
   const openContactChat = (c: ContactRecord) => {
     const owner = c.ownerId ? contacts.find((o) => o.id === c.ownerId) : undefined;
-    // 机主卡片（名字/昵称区分）：人设里明确「名字是凡凡，昵称是凑凑」
-    const meCard = contacts.find((x) => x.kind === 'user');
+    // 机主卡片（名字/昵称区分）：人设里明确「名字是凡凡，昵称是凑凑」。
+    // 多账号 v2：取当前信息账号对应的「我」——主号取机主卡片（排除小号/匿名号档案），
+    // 小号/匿名号取本账号档案联系人（此前 find(kind==='user') 可能误命中档案导致身份错位/泄露机主真名）
+    const smsAcc = getAccountById(activeAccountIdOf('sms'));
+    const meCard =
+      smsAcc && smsAcc.kind !== 'main'
+        ? contacts.find((x) => x.altOf === smsAcc.id)
+        : contacts.find((x) => x.kind === 'user' && !x.altOf);
     // 大号关系标签：披露解锁后的「你认出来了」包装段用（memChatRecallBlock altMainRelation）
     activeContactRelation = c.relation?.trim() || '';
     setChatSession({

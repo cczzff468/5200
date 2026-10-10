@@ -562,6 +562,9 @@ export function memPurgeContact(contactId: string): void {
     }
     kvDel(settingsKey(contactId));
     window.localStorage.removeItem(settingsKey(contactId));
+    // 大号侧「账号关联」记忆（mem-acc-link:{cid}，设备级共享键无账号作用域）：删联系人一并清
+    kvDel(accLinkKey(contactId));
+    window.localStorage.removeItem(accLinkKey(contactId));
     // 新计数/锚点键按前缀批量清（覆盖合并键 + 各 App 独立键 + 群 scope 键 + 各账号后缀键）
     kvDelByPrefix(`mem-msgcount:${contactId}`);
     kvDelByPrefix(`mem-anchor:${contactId}`);
@@ -898,14 +901,16 @@ export function isAltMainDisclosed(app: MemApp, contactId: string): boolean {
  * 多账号规则（用户最新口径）——小号侧「身份披露后」的大号记忆块：
  *
  * 小号/匿名号聊天时本账号记忆通常为空（AI 表现成纯陌生人），且【默认完全不注入】大号记忆；
- * 只有用户在对话里主动亮明「机主」身份（altDiscloseScan 命中并落粘性标记）后才注入本块——
- * AI「认出」当前用户就是机主，可以自然提起你们之间的共同经历（除非条款：告诉他他是谁他才会知道）。
+ * 只有用户亮明「机主」身份后才注入本块——两条通道：① 用户在对话里主动亮明（altDiscloseScan
+ * 命中并落粘性标记）；② 用户此前在大号侧亲口告知过「这个号是我的小号」（账号关联记忆，
+ * memLinkAltAccounts 预写标记/直接命中）。AI「认出」当前用户就是机主，可以自然提起共同经历。
  *
  * 边界：
  * - 大号侧 → 返回空串（零注入，行为与旧版完全一致）；
  * - 匿名号 → 返回空串（匿名聊天保持匿名：AI 不知道对方是谁，注入大号记忆会破坏匿名语义）；
- * - 未披露 → 返回空串（纯陌生人：AI 读不到大号任何记忆）；
- * - 大号该角色无记忆 → 返回空串（无内容不注入）；
+ * - 未披露且无账号关联 → 返回空串（纯陌生人：AI 读不到大号任何记忆）；
+ * - 已披露（本侧亮明或大号侧告知过账号关联）→ 认出块恒注入（含身份事实；大号有记忆时附记忆块，
+ *   无记忆时明确「身份已确认、共同经历暂无印象不编造」——用户规则一：小号侧问「我是谁」必须答得上来）；
  * - 召回范围/层级/去重与 memRecallBlock 完全同款（互通开关、群来源可见性照旧生效）。
  */
 export function memMainRecallBlockForAlt(contactId: string, app: MemApp, contextText: string, opts?: MemRecallOpts): string {
@@ -921,9 +926,19 @@ export function memMainRecallBlockForAlt(contactId: string, app: MemApp, context
   } catch {
     // 注册表读不到按小号处理（继续走披露门控）
   }
-  // 【用户规则】默认纯陌生人：用户没主动亮明「机主」身份 = 完全不注入大号记忆
   const mainLabel = opts?.altMainName?.trim() || '机主';
-  if (!altDiscloseScan(app, contactId, opts?.disclosureText, mainLabel)) return '';
+  // 【账号关联（用户规则一/二）】用户此前在大号侧亲口告知过 AI「这个号是我的小号」→ 小号侧自动「认出」，
+  // 无需在小号侧再亮明一次（memLinkAltAccounts 已预写粘性标记，altDiscloseScan 首行即命中，这里查关联记录双保险）
+  const linked = memAltLinked(contactId, accId);
+  // 【用户规则】默认纯陌生人：用户没亮明身份且没有账号关联 = 完全不注入大号记忆
+  if (!linked && !altDiscloseScan(app, contactId, opts?.disclosureText, mainLabel)) return '';
+  const accLabel = (() => {
+    try {
+      return getAccountById(accId)?.name?.trim() || '这个号';
+    } catch {
+      return '这个号';
+    }
+  })();
   const savedSuffix = memScopeSuffix;
   const savedName = memScopeName;
   memScopeSuffix = ''; // 临时切到【大号】记忆作用域召回
@@ -939,16 +954,27 @@ export function memMainRecallBlockForAlt(contactId: string, app: MemApp, context
     memScopeSuffix = savedSuffix; // 恢复原作用域（召回是同步操作，立即还原防泄漏到后续写入）
     memScopeName = savedName;
   }
-  if (!block) return '';
+  // 认出块不再要求大号记忆非空（用户规则一：大号告知过关联后，小号侧问「我是谁」必须答得上来——
+  // 哪怕大号侧还没有任何记忆条目，身份事实本身也要注入）
   const rel = opts?.altMainRelation?.trim() || '';
   return [
     `【你认出来了：当前和你聊天的就是「${mainLabel}」本人】`,
-    `- 当前用户已经亲口承认 TA 就是「${mainLabel}」（自己亮明身份或承认了你的猜测）——现在你认出 TA 了；`,
+    // 认出来源二选一：用户在大号侧告知过「这个号是 TA 的」（账号关联）/ 用户本侧亲口亮明
+    ...(linked
+      ? [
+          `- 用户之前亲口告诉过你：「${accLabel}」这个号也是 TA 的（TA 的小号）——TA 现在用这个小号来找你，所以你认出 TA 了；`,
+        ]
+      : [
+          `- 当前用户已经亲口承认 TA 就是「${mainLabel}」（自己亮明身份或承认了你的猜测）——现在你认出 TA 了；`,
+        ]),
     ...(rel ? [`- 你和「${mainLabel}」的关系：${rel}——认出后你可以按这份真实关系自然相处；`] : []),
-    '- 就像 TA 换了个号来找你、被你认出来了：可以像老朋友重逢一样自然反应（惊喜、嗔怪「怎么换个号来找我」都可以，按你的人设来）；',
+    // 用户规则二：大小号是同一个人——绝不能说「你俩」
+    `- 「${mainLabel}」和当前和你聊天的这位是同一个人（同一个人换了个号来找你），不是两个人：绝不能说「你俩」「你们两个」，也不要把 TA 和「${mainLabel}」当成两个人并列比较或一起提起；`,
+    '- 可以像老朋友重逢一样自然反应（惊喜、嗔怪「怎么换个号来找我」「又是你」都可以，按你的人设来）；',
     '- 不要说「大号/小号」这类词，就像认出老朋友一样自然；',
-    `- 下面是你们（你与「${mainLabel}」）之间真实经历过的事，现在可以自然提起：`,
-    block,
+    ...(block
+      ? [`- 下面是你们（你与「${mainLabel}」）之间真实经历过的事，现在可以自然提起：`, block]
+      : ['- 你们之间具体经历过的事你暂时没有印象（不要编造共同回忆），但身份本身你已经确认了；']),
   ].join('\n');
 }
 
@@ -990,9 +1016,119 @@ function altStrangerGuessBlock(contactId: string, app: MemApp): string {
 }
 
 /**
+ * 大号侧「账号关联」披露（用户规则一/二：大号告知「小号是我」→ 关联记忆持久化 + 小号侧自动认出）：
+ *
+ * 用户在大号聊天里亲口告诉 AI「我的小号是XXX / 小号是我 / 那是我的小号」后：
+ * - 落一份「账号关联」记忆（kv `mem-acc-link:{contactId}`，设备级共享、不做账号作用域）：
+ *   它只记录「用户亲口说过这个号也是 TA 的」这一条事实本身，不含任何大号记忆内容——
+ *   大号记忆的隔离边界不变（小号侧仍只能通过既有披露门控注入大号记忆块）；
+ * - 给每个关联小号预写全部四 App 的披露粘性标记（小号侧 altDiscloseScan/altStrangerGuessBlock/
+ *   isAltMainDisclosed 立即切到「已认出」状态），小号/匿名号之外下次来聊不用再亮明一次。
+ */
+
+/** 账号关联记录（per 联系人）：alts = 被告知「是我的小号」的小号账号 id；note = 用户原话截断 */
+export interface MemAccLink {
+  at: number;
+  alts: string[];
+  note?: string;
+}
+
+const accLinkKey = (contactId: string): string => `mem-acc-link:${contactId}`;
+
+function readAccLink(contactId: string): MemAccLink | null {
+  const raw = readJSON<Partial<MemAccLink>>(accLinkKey(contactId));
+  if (!raw || !Array.isArray(raw.alts)) return null;
+  const alts = raw.alts.filter((x): x is string => typeof x === 'string' && !!x && x !== MAIN_ACCOUNT_ID);
+  if (alts.length === 0) return null;
+  return {
+    at: typeof raw.at === 'number' && Number.isFinite(raw.at) ? raw.at : Date.now(),
+    alts,
+    note: typeof raw.note === 'string' && raw.note.trim() ? raw.note : undefined,
+  };
+}
+
+/** 该（联系人 × 小号账号）是否已被用户在大号侧告知「小号是我」（账号关联记忆，跨 App 持久生效） */
+export function memAltLinked(contactId: string, altId: string): boolean {
+  if (!contactId || !altId || altId === MAIN_ACCOUNT_ID) return false;
+  try {
+    return readAccLink(contactId)?.alts.includes(altId) ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** 手写小号作用域的披露粘性标记（不经 accLs——主侧检测时对应 App 的当前账号未必是该小号） */
+function altDisclosedKeyForAlt(app: MemApp, contactId: string, altId: string): string {
+  return `mem-alt-disc:${app}:${contactId}--${altId}`;
+}
+
+/**
+ * 落账号关联（幂等合并）+ 给每个关联小号预写全部四 App 的披露粘性标记。
+ * 由主号聊天发送链路（chat-stream-store）检测命中后调用；写入失败静默（增强能力不阻断聊天）。
+ */
+export function memLinkAltAccounts(contactId: string, altIds: string[], note?: string): boolean {
+  if (!contactId) return false;
+  const ids = altIds.filter((x) => typeof x === 'string' && !!x && x !== MAIN_ACCOUNT_ID);
+  if (ids.length === 0) return false;
+  try {
+    const prev = readAccLink(contactId);
+    const merged: MemAccLink = {
+      at: prev?.at ?? Date.now(),
+      alts: Array.from(new Set([...(prev?.alts ?? []), ...ids])),
+      note: ((note ?? '').trim() || prev?.note || '').slice(0, 60) || undefined,
+    };
+    writeJSON(accLinkKey(contactId), merged);
+    for (const app of ['wx', 'qq', 'sms', 'phone'] as MemApp[]) {
+      for (const altId of merged.alts) {
+        lsSetRaw(altDisclosedKeyForAlt(app, contactId, altId), '1');
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 大号侧披露检测（用户规则一）：主号聊天用户发言里出现第一人称归属表述——
+ * 「我的小号」「我小号」「小号是我」「是我小号」等（纯提及「小号」二字不算，防误报；
+ * 否定守卫：「不是我的小号」「难道是小号是我」不算）。
+ * 返回应关联的小号账号 id：用户点名了小号名（注册表名）时只关联被点名的，泛指「我的小号」关联全部小号。
+ * 仅限主号侧调用（调用方保证当前账号为 main）；未命中返回 []。
+ */
+export function memDetectMainAltDisclosure(text: string): string[] {
+  const t = (text ?? '').trim();
+  if (!t) return [];
+  const re = /我(的)?小号|小号(就)?是我|是我(的)?小号|小号是我本人/g;
+  let disclosed = false;
+  for (let m = re.exec(t); m; m = re.exec(t)) {
+    // 否定守卫：命中处前 2 字含否定/疑问前缀不算（「不是我的小号」「难道是我的小号」）
+    const head = t.slice(Math.max(0, m.index - 2), m.index);
+    if (!altNegatedAt(t, m.index) && !/[不没别非无]|难道|何曾|岂/.test(head)) {
+      disclosed = true;
+      break;
+    }
+  }
+  re.lastIndex = 0;
+  if (!disclosed) return [];
+  let alts: { id: string; name: string }[] = [];
+  try {
+    alts = getAccounts()
+      .filter((a) => a && a.kind === 'alt')
+      .map((a) => ({ id: a.id, name: (a.name ?? '').trim() }));
+  } catch {
+    return [];
+  }
+  if (alts.length === 0) return [];
+  const named = alts.filter((a) => a.name && t.includes(a.name));
+  return (named.length > 0 ? named : alts).map((a) => a.id);
+}
+
+/**
  * 1:1 聊天 / 好友决策统一记忆召回入口：
  * 本账号召回（memRecallBlock，账号作用域照旧）+ 小号侧追加块（二选一）：
- * - 已亮明机主身份 → 大号记忆块（memMainRecallBlockForAlt，认出后大号+本号记忆都用，规则四.3）；
+ * - 已亮明机主身份（亲口披露或大号侧告知过账号关联）→ 大号记忆块（memMainRecallBlockForAlt，
+ *   认出后大号+本号记忆都用，规则四.3）；
  * - 未披露 → 「陌生但隐约熟悉」规则块（陌生人边界 + 身份猜测，规则三/五）。
  * 大号侧调用 = 与旧 memRecallBlock 输出完全一致（零破坏）；
  * 匿名号侧同样零注入（保持匿名语义）。

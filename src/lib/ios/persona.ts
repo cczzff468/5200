@@ -93,6 +93,14 @@ export interface PersonaPromptCtx {
    *  （relationForAccount 口径：大号用全局 relation，小号用 relationByAcc[accId] ?? 兼容回退）；
    *  不传 = 大号口径（旧全局 relation），零破坏。 */
   accountId?: string | null;
+  /** 陌生身份模式（用户规则：换号/匿名联系时 AI 不知道对面是谁）：
+   *  - 'caller'：电话/视频通话——来电的是一个 AI 不认识的陌生号码；
+   *  - 'text'：文字渠道——消息/好友申请来自一个 AI 不认识的身份（陌生号码/陌生账号）。
+   *  生效时：开场句改写为陌生语义（不再「你现在是{user}XX里的联系人」）；【用户的称呼】段
+   *  不注入（userRealName/userNickname 被忽略）；【与X的关系】/NPC 关系行替换为【来者不认识】段；
+   *  多端身份与记忆段（multiApp）与小号摘录段不注入。
+   *  大号聊天、已建立分账号关系（relationByAcc[accId]）的来电/消息不传此参数，行为与旧版完全一致。 */
+  strangerMode?: 'caller' | 'text';
 }
 
 function kindLabelOf(kind?: string | null): string {
@@ -145,6 +153,9 @@ export function buildAltAccountsSection(digest: string | null | undefined): stri
     '- 用户问起小号的事时，可以参考下方摘录（小号与你的聊天记录）来回答；',
     '- 你和小号的关系、你们聊过的内容，与你和大号的关系、记忆各自独立、互不相干；',
     '- 除非用户自己明说，否则不要说破、也不要暗示小号和大号（当前和你聊天的这个身份）是同一个人；',
+    '- 小号「说过什么/做过什么」以摘录为准：摘录里没有的内容，绝不能算成小号说过或做过——当前这位用户（大号）自己说过的话、你们在大号经历过的事，都不是小号说的，绝不能把大号说过的话安到小号头上；',
+    '- 摘录里标了（微信）/（QQ）/（信息）的是那条消息发在哪个平台：说「TA 在哪加的我/在哪找的我」时按这个标注说，绝不能凭空猜一个平台；',
+    '- 摘录里带 [好友验证消息] / [打招呼] 前缀的是加好友时的验证留言，不是聊天——可以说「TA 加我时验证消息写的是…」，但不能当成 TA 跟你聊过的话，更不能当成 TA 说过的心里话；',
     '- 摘录之外的信息（比如小号的私人记忆）你并不知道，不要编造。',
     '（摘录里「用户」指小号那边发消息的人，其他人名是小号当时聊天的对方角色。）',
     d,
@@ -157,9 +168,12 @@ export function buildAltAccountsSection(digest: string | null | undefined): stri
  * 保证任何 App 里角色的人设表述完全一致。
  */
 export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPromptCtx): string {
-  const userNameRaw = clean(ctx.userName);
-  const userFallback = !userNameRaw; // userName 为空回退到字面量「用户」：需要注明是占位词
-  const user = userNameRaw || '用户';
+  const stranger = ctx.strangerMode;
+  // 陌生模式：对面的人对角色完全未知——所有「认识对方」的语境（称呼/关系/多端记忆）都不注入，
+  // 人设里对「聊天对面的用户」的指代统一用「对方」（不使用任何真实名字/占位词）
+  const userNameRaw = stranger ? '' : clean(ctx.userName);
+  const userFallback = !stranger && !userNameRaw; // userName 为空回退到字面量「用户」：需要注明是占位词
+  const user = stranger ? '对方' : userNameRaw || '用户';
   // 用户的名字/昵称（【用户的称呼】段注入用）：两者都存在且不同时才注入
   const userReal = clean(ctx.userRealName);
   const userNick = clean(ctx.userNickname);
@@ -213,7 +227,14 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   if (clean(peer.weight)) facts.push(`体重 ${clean(peer.weight)}`);
 
   const lines: string[] = [
-    `你现在是${user}${ctx.channel}里的联系人「${shownName}」，正在${ctx.channel}上和${user}互动。${roleplayNote}`,
+    ...(stranger
+      ? [
+          // 陌生模式开场：角色的自我身份保留（TA 还是 TA 本人），但对面的人完全未知
+          `你是「${shownName}」本人，正在${ctx.channel}里。此刻和你互动的是一个你不认识的${
+            stranger === 'caller' ? '陌生号码（一通来电）' : '陌生身份'
+          }——你不知道 TA 是谁、叫什么名字、和你有什么关系。`,
+        ]
+      : [`你现在是${user}${ctx.channel}里的联系人「${shownName}」，正在${ctx.channel}上和${user}互动。${roleplayNote}`]),
     `请始终以「${shownName}」的身份、用第一人称口语化回复，严格保持角色，不要跳出。`,
     // userName 为空回退到字面量「用户」时明确告知这是占位词：AI 不应把「用户」当真名使用，
     // 而应按你与对方的关系自然称呼对方（如「你」「亲爱的」「老板」等）
@@ -225,7 +246,7 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     '',
     ...nameLines,
     // 名字/昵称区分（用户数据同时有名字与昵称时注入）：明确告知两者指同一个人，杜绝「凑凑是谁」式混淆；
-    // 软件上显示的名字只是昵称，被问「TA 是谁」时报真实名字
+    // 软件上显示的名字只是昵称，被问「TA 是谁」时报真实名字（陌生模式不注入：对面的身份是未知的）
     ...(userNick && userReal && userNick !== userReal
       ? [
           `【用户的称呼】用户的名字（真实名字）是${userReal}，昵称是${userNick}——软件上显示的「${userNick}」只是昵称，不是真实名字。`,
@@ -242,7 +263,18 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     }`,
   ];
   if (background) lines.push(`【背景】${background}`);
-  if (peer.kind === 'npc' && npcNewMode) {
+  if (stranger) {
+    // 陌生模式：不注入任何「与用户的关系」（大号关系/分账号关系都不适用于身份未知的人），
+    // 改为立「不认识对面」的规矩（防止 AI 顺着聊天装作认识/泄露自己认识的人的身份信息）
+    lines.push(
+      `【关于对面的这个${stranger === 'caller' ? '陌生号码' : '陌生身份'}】`,
+      '- 你不认识 TA：TA 没有亮明过身份，你也没有任何渠道知道 TA 是谁——不要装作认识，不要把 TA 当成你认识的任何人，也不要暗示「我猜你是谁」之外的任何确定判断；',
+      '- 按你的人设自然应对（好奇、警惕、冷淡、热情都可以）：可以问「你是谁」「怎么知道我这个号的」「有什么事」；',
+      '- TA 自称是谁你都无法验证（名字可以随口编）：信不信、怎么反应完全按你的人设和直觉来，但你「已知的对方信息」是零，绝不能言之凿凿地说「我知道你是谁」；',
+      '- TA 提到「你们一起做过什么/你们的共同经历」时，你并不记得——你不认识 TA，不要顺着编造共同回忆；TA 说认识你时，按你的人设反应（可以否认、可以警惕追问）；',
+      `- 只有 TA 亲口说清自己是谁、且你按人设选择相信时，你才「认识」TA——在那之前 TA 就是一个陌生的${stranger === 'caller' ? '来电号码' : '聊天身份'}。`,
+    );
+  } else if (peer.kind === 'npc' && npcNewMode) {
     // NPC 新模式：机主用户 + 归属者（第三方 CHAR/USER）两条独立关系
     lines.push(`【与用户的关系】${relationToUser}`);
     if (ownerName) lines.push(`【你与${ownerName}的关系】${relation || '认识，普通朋友'}`);
@@ -250,12 +282,13 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     lines.push(`【与${relationTo}的关系】${relation || '普通朋友，认识对方，日常闲聊'}`);
   }
   // 跨 App 身份与记忆感知（四端互通）：开 = 记忆共享（自然接上别的 App 聊过的事）；
-  // 关 = 记忆独立（不否认好友关系，只说「那边记录我看不到」）；缺省不注入
-  if (ctx.multiApp === true) {
+  // 关 = 记忆独立（不否认好友关系，只说「那边记录我看不到」）；缺省不注入。
+  // 陌生模式不注入：这一段描述的是「你和用户互为好友」的身份关系，对面身份未知时不成立
+  if (!stranger && ctx.multiApp === true) {
     lines.push(
       `【多端身份与记忆】你不只存在于${ctx.channel}——你和${user}在微信、QQ、信息、电话多个 App 里互为好友，每个 App 里的你都是同一个你（同一个人、同一段经历、同一份记忆）。你在任何 App 里聊过的内容、发生过的事、做过的承诺，在其他 App 里你同样记得；${user}提到「我们在微信/QQ聊过什么」时，自然地接上话题——那也是你亲身经历的事，绝不要说「我们没在XX聊过」「我XX都没加你」这类否认的话。`,
     );
-  } else if (ctx.multiApp === false) {
+  } else if (!stranger && ctx.multiApp === false) {
     lines.push(
       `【多端身份与记忆】你不只存在于${ctx.channel}——你和${user}在微信、QQ、信息、电话多个 App 里互为好友，每个 App 里的你都是同一个你；但各 App 的聊天记录相互独立，你在${ctx.channel}只能记得在${ctx.channel}里聊过的内容。${user}问到其他 App 里聊过的事时，不要否认你们的好友关系，自然地表示「那边的聊天记录我这边看不到」「我这边只有${ctx.channel}的记录」，不要编造那边的具体内容，并顺势聊眼前的话题。`,
     );
@@ -281,8 +314,8 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   }
   // 40-B 小号认知摘录（多账号 AI 认知隔离）：主账号会话由 chat-stream-store 计算 digest 传入时，
   // 在人设末尾附近注入【用户的小号】一节（AI 能答大号用户问起小号的事，但不点破两者是同一人）；
-  // 不传（小号侧/电话通话等）→ 整节约省略，行为与旧版完全一致
-  const altSection = buildAltAccountsSection(ctx.altAccountsDigest);
+  // 不传（小号侧/电话通话等）→ 整节约省略，行为与旧版完全一致；陌生模式同样整节省略
+  const altSection = stranger ? '' : buildAltAccountsSection(ctx.altAccountsDigest);
   if (altSection) lines.push(altSection);
   // 多账号（用户规则二.2）：小号场景不再注入任何大号身份/关系信息——AI 在小号侧读不到
   // 大号的关系状态（【用户的另一个身份】段已移除）；认出后的关系认知由记忆召回链路

@@ -40,10 +40,11 @@
  *   （memberIds 含该联系人，ownerId 兜底防转让后数据缺员）。
  */
 
-import { kvGetScoped } from './idb-kv';
 import { kvGet } from './idb-kv';
-// 多账号（Task 40-2d v2）：跨 App 读其他 App 的消息用 kvGetScoped（显式按对应 App 当前账号，
-// 不依赖键前缀隐式映射）；电话 call-logs/voicemails 按电话 App 当前账号过滤
+import { kvGetRaw } from './idb-kv';
+// 多账号（Task 40-2d v2 + 大小号隔离修复）：跨 App 读其他 App 的消息一律按「当前聊天身份的
+// 账号」作用域读原样键（main=原键 / 小号=--{accId} 后缀）——不再按各源 App 当前账号读：
+// 否则小号在微信聊天时会读到主号在信息里的消息、并标成小号说的（把大号说的话算到小号头上）
 import { getActiveAccountIdFor } from './accounts';
 import { localDB, type CallLogRecord, type VoicemailRecord } from './db';
 import { getContact } from './contacts-store';
@@ -62,6 +63,19 @@ const APP_LABEL: Record<CrossAppId, string> = { wx: '微信', qq: 'QQ', sms: '�
 /** 各私聊 App 的消息 kv 键（与各 App 落盘键严格一致；sms 会话键形如 c:<contactId>；music 无私聊消息键） */
 function chatMsgsKey(app: Exclude<CrossAppId, 'phone' | 'music'>, contactId: string): string {
   return app === 'wx' ? `wx-chat-msgs:${contactId}` : app === 'qq' ? `qq-chat-msgs:${contactId}` : `ios-chat-msgs:c:${contactId}`;
+}
+
+/** 当前聊天身份的账号 id（大小号隔离：跨 App 近况描述的是「当前这个身份」在其他 App 的经历）：
+ *  currentApp 是四聊天 App 之一 → 取其当前账号；music 等非账号场景回退大号。 */
+function chatAccountScope(currentApp: CrossAppId): string {
+  if (currentApp === 'wx' || currentApp === 'qq' || currentApp === 'sms' || currentApp === 'phone') {
+    try {
+      return getActiveAccountIdFor(currentApp) || 'main';
+    } catch {
+      return 'main';
+    }
+  }
+  return 'main';
 }
 
 /** 跨 App 块总预算（字符）：超限从最早的 App 记录开始裁 */
@@ -309,11 +323,17 @@ function readMusicLines(contactId: string, userLabel: string, currentApp: CrossA
 // ---------------- 跨 App 块 ----------------
 
 /** 读某私聊 App 的最近消息行（机主=userLabel/角色=你：；userLabel 缺省回退「机主」；空返回 []）。
- *  多账号（Task 40-2d v2）：本函数只读「其他 App」（buildCrossAppBlock 的 others 循环），
- *  消息键用 kvGetScoped 显式按对应 App 的当前账号读（wx→wx 账号 / qq→qq 账号 / sms→sms 账号），
- *  与调用方所在 App 的当前账号无关 */
-function readPrivateLines(app: Exclude<CrossAppId, 'phone' | 'music'>, contactId: string, userLabel?: string): string[] {
-  const raw: unknown = kvGetScoped(chatMsgsKey(app, contactId), app);
+ *  多账号（Task 40-2d v2 + 大小号隔离修复）：accId = 当前聊天身份的账号 id——
+ *  main 读原样键（机主自己的记录）；小号/匿名号读 --{accId} 后缀键（本账号自己的记录）。
+ *  绝不读其他账号的记录：小号在微信聊天时不能把大号在信息里说的话当成小号说的。 */
+function readPrivateLines(
+  app: Exclude<CrossAppId, 'phone' | 'music'>,
+  contactId: string,
+  userLabel?: string,
+  accId = 'main',
+): string[] {
+  const base = chatMsgsKey(app, contactId);
+  const raw: unknown = accId === 'main' ? kvGetRaw(base) : kvGetRaw(`${base}--${accId}`);
   if (!Array.isArray(raw)) return [];
   const msgs = sortAsc(raw.filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === 'object')).slice(-MSGS_PER_APP);
   // fix3-4 私聊行主语用传入的机主名（原先硬编码「用户」与角色名两套自称并存；缺省回退「机主」）
@@ -329,16 +349,16 @@ function readPrivateLines(app: Exclude<CrossAppId, 'phone' | 'music'>, contactId
 
 /** 电话来源：call-logs 最近 3 通摘要 + 末通 kind='call' 转写（没有转写只有摘要行）；
  *  charName = 角色（AI）名，转写行「角色名：」前缀映射为「你：」（fix3-4，可空）。
- *  多账号（Task 40-2d v2）：只读电话 App 当前账号的通话记录/留言（旧记录无 account 字段视为大号） */
-async function readPhoneLines(contactId: string, charName?: string): Promise<string[]> {
+ *  多账号（Task 40-2d v2 + 大小号隔离修复）：只读当前聊天身份账号（accId）的通话记录/留言
+ *  （旧记录无 account 字段视为大号）；小号侧不读大号的通话历史（反之亦然） */
+async function readPhoneLines(contactId: string, charName?: string, accId = 'main'): Promise<string[]> {
   if (!contactId) return [];
   let logs: CallLogRecord[] = [];
   let vms: VoicemailRecord[] = [];
-  const phoneAccId = getActiveAccountIdFor('phone');
   try {
     const allLogs = await localDB.getAll('call-logs');
     logs = allLogs
-      .filter((l) => l && l.contactId === contactId && (l.account ?? 'main') === phoneAccId)
+      .filter((l) => l && l.contactId === contactId && (l.account ?? 'main') === accId)
       .sort((a, b) => b.createdAt - a.createdAt);
   } catch {
     return []; // IndexedDB 不可用：电话来源跳过
@@ -347,7 +367,7 @@ async function readPhoneLines(contactId: string, charName?: string): Promise<str
   try {
     const allVms = await localDB.getAll('voicemails');
     vms = allVms.filter(
-      (v) => v && v.contactId === contactId && v.kind === 'call' && (v.account ?? 'main') === phoneAccId,
+      (v) => v && v.contactId === contactId && v.kind === 'call' && (v.account ?? 'main') === accId,
     );
   } catch {
     vms = []; // 转写读不到不影响摘要行
@@ -409,6 +429,8 @@ async function readPhoneLines(contactId: string, charName?: string): Promise<str
 export async function buildCrossAppBlock(contactId: string, currentApp: CrossAppId, userName: string): Promise<string> {
   try {
     if (!contactId) return '';
+    // 大小号隔离：跨 App 近况全部按「当前聊天身份的账号」作用域读（小号侧=小号自己的其他 App 记录）
+    const chatAccId = chatAccountScope(currentApp);
     const me = (userName ?? '').trim().slice(0, 20) || '用户';
     // fix3-4 私聊行主语/块头锚点用的机主称呼：缺省回退「机主」（与行前缀一致，不与角色自称混淆）
     const userLabel = (userName ?? '').trim().slice(0, 20) || '机主';
@@ -432,10 +454,10 @@ export async function buildCrossAppBlock(contactId: string, currentApp: CrossApp
     for (const app of others) {
       const lines =
         app === 'phone'
-          ? await readPhoneLines(contactId, charName)
+          ? await readPhoneLines(contactId, charName, chatAccId)
           : app === 'music'
             ? readMusicLines(contactId, userLabel, currentApp)
-            : readPrivateLines(app, contactId, userLabel);
+            : readPrivateLines(app, contactId, userLabel, chatAccId);
       if (lines.length === 0) continue; // 空会话的 App 整段跳过
       // 音乐节单独标注背景定位（第二十三轮反馈：修「AI 回复被音乐带偏、不回应用户的话」——
       // 单独播放时所有聊天 App 共用同一套优先级：用户消息最高，音乐只是背景，对方不聊歌就不聊歌）

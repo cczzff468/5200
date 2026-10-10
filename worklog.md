@@ -17948,3 +17948,25 @@ Stage Summary:
 - 用户主诉修复：联系人 App 编辑手机号后，电话 App 按号码拨打立即生效——拨号键盘、最近通话回拨、详情页回拨、留言回链全部走「全量联系人池 + 联系人当前号码优先」，改号/建号后不再出现「空号」；陌生号码空号播报、通讯录好友语义、多账号/收藏等既有行为零改动
 - 系统性修复：updateContact 现在是「联系人资料变更」的统一广播点（contact-updated），六端缓存（电话/微信/QQ/信息/美团/音乐AI）实时跟上任何字段编辑，备注/昵称/个签/好友标记等跨 App 同步一并补齐；电话 App 内编辑小号档案现在同步注册表
 - 改动文件：src/lib/ios/contacts-store.ts、src/components/apps/phone.tsx、src/components/apps/chat.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/meituan.tsx、src/lib/ios/music-ai.ts
+
+---
+Task ID: 52
+Agent: main (Z.ai Code)
+Task: 大小号相关六个问题全修复——①大号告知"小号是我"写入账号关联记忆、小号侧自动认出并回答机主名；②AI 把大小号当两个人（说"你俩"）；③小号没说过的话被算到小号头上（记忆归因/跨账号泄漏）；④添加来源（微信/QQ）说错；⑤验证消息被当聊天内容+写入记忆；⑥陌生来电 AI 谎称认识（"你是我朋友啊"）
+
+Work Log:
+- 【问题1+2 账号关联记忆（核心新增）】memory.ts 新增「账号关联」体系：kv `mem-acc-link:{contactId}`（设备级共享、不做账号作用域——只记录"用户亲口说过这个号也是 TA 的"这一条事实，不含大号记忆内容，大号记忆隔离边界不变）；memDetectMainAltDisclosure 主号侧披露检测（第一人称归属表述「我的小号/小号是我/是我小号」+否定守卫+点名小号名只关联该号、泛指关联全部小号）；memLinkAltAccounts 落关联+给每个关联小号预写全部四 App 的披露粘性标记（mem-alt-disc:{app}:{cid}--{altId} 手写后缀，不经 accLs）；memMainRecallBlockForAlt 关联自动"认出"（免小号侧再亮明）+认出块恒注入（大号无记忆时明确"身份已确认、共同经历暂无印象不编造"——用户规则一：小号侧问"我是谁"必须答得上来）+新增同一人规则行"绝不能说「你俩」「你们两个」，也不要并列比较——自然反应「又是你」「换小号来找我」"（问题2）；认出来源二分措辞（账号关联告知 vs 本侧亲口亮明）
+- chat-stream-store.ts runStream 主号发送钩子：主号+私聊（streamContactIdOf 解析 wx:/qq:/sms:c: 会话）用户消息命中披露→memLinkAltAccounts+给当前联系人【主号侧】记忆库写事件碎片"{机主名}亲口告知：「{小号名}」是{机主名}的小号——小号和大号都是{机主名}本人（同一个人）"（sourceTag=acc-link，记忆库可查可持久）；account-switch 中止检查后执行，任何失败不影响聊天
+- friend-state.ts decideCharFriendReq 认出来源区分：linkedByMain（memAltLinked）时现实处境行改"用户之前在大号聊天里亲口告诉过你：这个申请人的号（{小号名}）也是 TA 的"（否则保持"申请人在验证消息里表明"）——好友申请 AI 决策同享账号关联认出
+- 【问题3 记忆归因】persona.ts buildAltAccountsSection 新增两条规则：①"小号说过什么以摘录为准：摘录里没有的内容绝不能算成小号说过——大号自己说过的话绝不是小号说的，绝不能把大号说过的话安到小号头上"；②平台标注说明；cross-app-context.ts 大小号泄漏根因修复：原 kvGetScoped 按各源 App 当前账号读（小号在微信聊天时读到主号在信息里的消息并标成小号说的）→ 改 chatAccountScope（当前聊天身份账号）+ readPrivateLines/readPhoneLines 按该账号读原样键（main=原键/小号=--{accId} 后缀），电话 call-logs/voicemails 同口径过滤——小号侧只看小号自己的其他 App 经历，主号侧只看主号的
+- 【问题4 添加来源】chat-stream-store.ts 摘录逐条带来源平台标注（altSessionAppLabel：wx-chat-msgs:→微信/qq-chat-msgs:→QQ/信息键系→信息；行格式「用户（微信）：xxx」）+ persona 规则"说「TA 在哪加的我/在哪找的我」按标注说，绝不能凭空猜一个平台"；数据层核实：FriendReqEntry.source 本就按 App 正确落（wx=搜索账号添加/qq=QQ号查找，浏览器实测确认）
+- 【问题5 验证消息三端区分】①聊天历史（wechat/qq 文字聊天+通话快照四处）：fr='apply'/'greet' 消息前缀标注「[好友验证消息，不是聊天内容] / [打招呼，不是聊天内容]」进 AI 上下文（区分不再当聊天）；②摘录（chat-stream-store altDigestEntryOf）：apply/greet 同款标注进摘录、fr='added' 丢弃；③记忆：memConvoFromRaw 既有 fr 过滤确认覆盖全部提取路径（Task 39 已做）；persona 规则"验证留言不是聊天——可以说「TA 加我时验证消息写的是…」，但不能当成 TA 跟你聊过的话"
+- 【问题6 陌生来电补漏（承接上轮会话未提交的 strangerMode 全链路）】chatCallExtraRules 关系泄漏修复（本轮新发现）：phone.tsx runTurn / chat-call.ts runTurn 陌生来电不传联系人——此前 extraRules 注入"你们的关系是「朋友」"，AI 直接把来电人当朋友（正是用户截图"你是我朋友啊"的根因之一）；phone.tsx runTurn timeBlock 陌生来电不下发（上次通话间隔属机主历史）；浏览器抓包确认 answer/turn 双请求 callerUnknown:true、无 userRealName/memoryBlock/crossAppBlock/groupBlock/worldbookBlock/momentsBlock/multiApp、extraRules 无关系句；curl directOnly 路径确认服务端人设=陌生号码框架（"绝不能言之凿凿地说「我知道你是谁」"，连直传的 userRealName=凡凡都被服务端剥离）
+- 【清理】contacts-store.ts purgeChatTracesFor：mem-alt-disc 清扫补 phone 端+新增 mem-acc-link:{id} 清理；memory.ts memPurgeContact 同步清 acc-link
+- E2E（agent-browser 全真浏览器+fetch 抓包 prompt 级验证；SDK 全程 429 限流故以请求体/落库为准）：①主号信息发"咳咳，那是我的小号"→kv mem-acc-link:test-chenxu={alts:[test-alt-1],note:原话}+四 App 披露标记+主侧事件碎片全部落盘 ②小号微信（登录态修复后）问"你知道我是谁吗"→抓包 system：含【你认出来了：当前和你聊天的就是「机主」本人】+「小号测试」这个号也是 TA 的+凡凡亲口告知碎片（大号记忆跨账号注入）+绝不能说「你俩」+无陌生猜测块 ③跨 App 修复验证：小号侧 system 不再含主号信息消息（修复前"小号测试：咳咳，那是我的小号"被标成小号说的）④主号侧发"是不是有人加我"→摘录含全部新规则+逐条「用户（微信）：」来源标注 ⑤匿名号拨 13900002222→answer/turn payload 全净+服务端陌生人设（sysHasRelation=false/sysHasUserName=false）⑥主侧记忆召回无回归（acc-link 碎片+共同经历头部+机主 scope 行，无陌生块）⑦dev.log 无新运行时错误（仅 SDK 429）
+- bunx tsc --noEmit 0 错误
+
+Stage Summary:
+- 六个问题全修复：①大号告知"小号是我"→账号关联记忆持久化（kv+事件碎片），小号/电话/好友申请全场景自动认出并知道"你是机主（凡凡）"；②认出块立"同一人"规矩（不说"你俩"，说"又是你/换小号来找我"）；③记忆归因三重防护（摘录为准规则+跨App块按聊天身份账号作用域+主侧记忆不外流），小号没说的话不能算到小号头上；④摘录逐条带（微信/QQ/信息）来源标注+禁止猜平台；⑤验证消息三端区分标注、不入记忆；⑥陌生来电全链路陌生人模式（补上 extraRules 关系句与 timeBlock 两处泄漏——"你是我朋友啊"的直接根因）
+- 受保护功能零回归：主侧记忆召回/聊天/好友申请/电话拨号匹配（Task 51）行为不变；大号侧零注入语义与旧版一致；删除联系人/账号的清理链路补齐新键
+- 改动文件：src/lib/memory.ts、src/lib/chat-stream-store.ts、src/lib/ios/persona.ts、src/lib/ios/friend-state.ts、src/lib/ios/cross-app-context.ts、src/lib/ios/contacts-store.ts、src/lib/ios/chat-call.ts、src/components/apps/phone.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx（+上轮会话遗留的 src/app/api/phone/{answer,turn,followup}/route.ts、src/lib/ios/{call-decision,call-followup}.ts strangerMode 全链路一并提交）

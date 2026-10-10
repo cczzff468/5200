@@ -37,11 +37,11 @@ import { kvGet, kvSet, kvDel } from './idb-kv';
 import { genId } from './db';
 import { getContact, ownerProfileFor, setAppFriendFlag, mainOwnerContact } from './contacts-store';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
-import { getActiveAccountIdFor, MAIN_ACCOUNT_ID } from './accounts';
+import { getAccountById, getActiveAccountIdFor, MAIN_ACCOUNT_ID } from './accounts';
 import { useSettings } from './store';
 import { BLOCK_CHANNEL } from './block-state';
 import { buildPersonaSystemPrompt } from './persona';
-import { getMemSettings, isAltMainDisclosed, memChatRecallBlock } from '@/lib/memory';
+import { getMemSettings, isAltMainDisclosed, memAltLinked, memChatRecallBlock } from '@/lib/memory';
 import { buildTimeAwareBlock } from '@/lib/time-aware';
 import { cleanBubbleText } from '@/lib/chat-rich';
 
@@ -734,14 +734,21 @@ export async function decideCharFriendReq(
   const threadMeText = thread.filter((m) => m.who === 'me').map((m) => m.text).join(' ');
   const memoryBlock = memChatRecallBlock(contact.id, app, '', { disclosureText: threadMeText, altMainName: mainName });
   const disclosed = altActive && isAltMainDisclosed(app, contact.id);
+  // 认出来源区分（用户规则一）：账号关联（用户在大号侧亲口告知过「这个小号是 TA 的」）/ 申请人本侧亮明
+  const linkedByMain = altActive && memAltLinked(contact.id, getActiveAccountIdFor(app));
   let mainIdentityLine = '';
   if (knowsChar) {
     const mainRelation = contact.relation?.trim() || '普通朋友';
     mainIdentityLine = disclosed
-      ? [
-          `- 申请人已经在验证消息里表明自己就是「${mainName}」（你的${mainRelation}）——你认出 TA 了；`,
-          `  可以像老朋友/恋人重逢一样自然反应（比如惊喜「怎么换个号找我」），按你们的真实关系处理这条申请。`,
-        ].join('\n')
+      ? linkedByMain
+        ? [
+            `- 用户之前在大号聊天里亲口告诉过你：这个申请人的号（${getAccountById(getActiveAccountIdFor(app))?.name?.trim() || '小号'}）也是 TA 的——所以你现在认出 TA 了：申请人就是「${mainName}」本人（你的${mainRelation}）；`,
+            `  可以像老朋友/恋人重逢一样自然反应（比如惊喜「怎么换个号找我」），按你们的真实关系处理这条申请。`,
+          ].join('\n')
+        : [
+            `- 申请人已经在验证消息里表明自己就是「${mainName}」（你的${mainRelation}）——你认出 TA 了；`,
+            `  可以像老朋友/恋人重逢一样自然反应（比如惊喜「怎么换个号找我」），按你们的真实关系处理这条申请。`,
+          ].join('\n')
       : [
           // 用户规则二.2/三：不再注入大号关系「现实处境」（小号场景零读取大号关系状态）；
           // 改为验证消息场景的猜测口径：可凭语气/用词/内容隐约联想并自然猜一句，但不能当真
@@ -768,6 +775,18 @@ export async function decideCharFriendReq(
     '- 语气无礼、冒犯：按人设怼回去并拒绝。',
     '同意的时机完全由你决定：第一句验证消息就同意、或追问聊几句再同意，都随你，只要符合你的性格。',
   ];
+  // 多账号陌生语义（用户规则：小号/匿名号加 AI，AI 应该不认识）：发起申请的账号不是主号，
+  // 且与角色没有任何已建立关系（分账号关系/本账号好友标记）→ 陌生身份模式：
+  // 人设不再继承大号全局关系（旧逻辑回退成「朋友」，AI 看到「朋友」就直接认识申请人了）
+  const reqAccId = getActiveAccountIdFor(app);
+  const reqAcc = getAccountById(reqAccId);
+  const strangerReq =
+    !!reqAcc &&
+    reqAcc.kind !== 'main' &&
+    !(contact.relationByAcc?.[reqAccId] ?? '').trim() &&
+    ![contact.friendWxByAcc?.[reqAccId], contact.friendQqByAcc?.[reqAccId], contact.friendSmsByAcc?.[reqAccId]].some(
+      (m) => typeof m === 'boolean'
+    );
   const persona = buildPersonaSystemPrompt(contact, {
     channel,
     userName: userName || null,
@@ -777,6 +796,8 @@ export async function decideCharFriendReq(
     // 多账号关系感知（与上方披露门控配套）：有分账号关系记录时按 relationByAcc[当前小号] 解析，
     // 不再恒用大号全局 relation——小号处出来的独立关系不再被大号关系覆盖
     accountId: getActiveAccountIdFor(app),
+    // 陌生身份模式：AI 按「一个不认识的人发来好友申请」决策（结合人设/验证消息/披露门控猜测规则）
+    ...(strangerReq ? { strangerMode: 'text' as const } : {}),
     extraRules: sceneRules,
   });
   const timeBlock = buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null });

@@ -3632,14 +3632,20 @@ function ChatPage({
           role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
           // 语音取转写/本地原文；位置取完整位置文本（名称/地址/经纬度/发送时间）；图片取识图描述，通话里 AI 同样知道聊过的图片内容
           // 100-e 带描述的图片带消息 ID 进上下文（AI 需要抄写 ID 时能抄到真实的）
+          // 好友验证消息/打招呼标注（用户规则五：验证消息要区分，不能当聊天内容）
           content:
-            m.kind === 'voice'
+            (m.fr === 'apply'
+              ? '[好友验证消息，不是聊天内容] '
+              : m.fr === 'greet'
+                ? '[打招呼，不是聊天内容] '
+                : '') +
+            (m.kind === 'voice'
               ? m.voice?.transcript || m.voice?.localText || '[语音]'
               : m.kind === 'location'
                 ? locationAiText(m.loc, m.time)
                 : m.kind === 'image' && m.img?.desc && !m.content.startsWith('data:')
                   ? `[图片 ID:${m.id}]（图片内容：${m.img.desc}）`
-                  : m.content,
+                  : m.content),
         }));
       const memContext = history.map((h) => h.content).join(' ');
       // 世界书注入通话（与文字聊天同一套 collectWbBlocks：全局常驻 + 局部/专属按触发词命中）：
@@ -4348,8 +4354,15 @@ function ChatPage({
       )
       .slice(-20)
       .map((m) => {
-        // 引用/转发让 AI 感知来源：引用 → 前缀说明引用的是谁说的什么；转发卡片 → 前缀说明来自哪个会话
-        const pre = `${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
+        // 引用/转发让 AI 感知来源：引用 → 前缀说明引用的是谁说的什么；转发卡片 → 前缀说明来自哪个会话；
+        // 好友验证消息/打招呼前缀标注（用户规则五：验证消息要区分，不能当聊天内容，也不入记忆）
+        const pre = `${
+          m.fr === 'apply'
+            ? '[好友验证消息，不是聊天内容] '
+            : m.fr === 'greet'
+              ? '[打招呼，不是聊天内容] '
+              : ''
+        }${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
           m.kind === 'forward' && m.fwd
             ? m.fwd.merged
               ? // 【fix3-d-3】合并转发卡片：标题后拼逐条摘要（名字=原发言人，最多 8 条、每条截 40 字，

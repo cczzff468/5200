@@ -27,7 +27,8 @@ export const runtime = 'nodejs';
  * 硬约束：不复读通话里说过的原话；语气符合人设与情绪；每条像真人随手发的短消息。
  *
  * POST { contact, number?, direction, endReason, connected, duration,
- *        transcript, recentChat, memoryBlock?, crossAppBlock?, groupBlock?, worldbookBlock?, timeBlock?, multiApp?, config? }
+ *        transcript, recentChat, memoryBlock?, crossAppBlock?, groupBlock?, worldbookBlock?, timeBlock?, multiApp?, config?,
+ *        callerUnknown? }
  * 返回 { messages: string[] } 或 { directOnly: true, messages: CallApiMessage[] }（内网 API 浏览器直连）。
  * 任何失败 → { messages: [] }（续聊是体验增强，静默失败，绝不阻塞挂断收尾与记忆总结）。
  */
@@ -98,6 +99,24 @@ const NOT_CONNECTED_RULES: Record<CallOutcome, string[]> = {
 };
 
 /** 未接通场景的硬性禁止（防止 AI 把「被拒接/没接」说成「接通后被挂断」） */
+/** 未接通结局（已拒绝/未接听/已取消）的反应引导：结局硬事实 + 该怎么反应（AI 视角）；'ended' 恒为空（接通场景走另一分支，仅为了让键类型完整）
+ *  陌生来电版（callerUnknown）：你不认识对方——反应口吻保持普通/好奇，不撒娇不带亲近情绪 */
+const NOT_CONNECTED_RULES_STRANGER: Record<CallOutcome, string[]> = {
+  ended: [],
+  rejected: [
+    '这次通话的结局是【已拒绝】：这个陌生号码看到了来电、没有接——你不认识这个号码。',
+    '你这条消息就是对「被拒接」这件事的反应：按你的人设，可以问一句「刚才是你打我电话？」「你是哪位」，也可以不在意；口吻保持普通/好奇，不要用亲近的口吻撒娇或带情绪（你不认识 TA）。',
+  ],
+  missed: [
+    '这次通话的结局是【未接听】：你有个未接来电（陌生号码），响了很久没人接——你不认识这个号码。',
+    '你这条消息就是看到未接来电后的反应：按你的人设问一句「刚才是你找我？」「你是哪位」，也可以不在意；你不认识对方，口吻保持普通。',
+  ],
+  cancelled: [
+    '这次通话的结局是【已取消】：一个陌生号码拨给你，还没等你接就取消了——你不认识这个号码。',
+    '你这条消息就是对这通陌生来电的反应：可以问「刚才是谁打我电话」，也可以不在意；你不认识对方。',
+  ],
+};
+
 const NOT_CONNECTED_BANS = [
   '硬性禁止（这次电话没有接通，必须遵守）：',
   '— 禁止说「怎么挂这么快」「刚挂电话」「都没聊上几句」「打了个寂寞」「怎么不说话就挂了」这类把结局说成「接通后被挂断」的话：电话从没接通，根本不存在「挂」这个动作；',
@@ -120,7 +139,10 @@ function buildFollowupSystemPrompt(
   /** 机主身份（前端直传）：名字/真名/昵称——软件上显示的名字只是昵称，被问是谁报真名 */
   user?: { name: string | null; realName: string | null; nickname: string | null },
   /** 多账号关系感知：当前账号 id（小号续聊读 relationByAcc；不传 = 大号口径） */
-  accountId?: string | null
+  accountId?: string | null,
+  /** 陌生来电（多账号）：匿名号/未登记小号拨出的电话——AI 不知道来电人是谁，
+   *  续聊按「刚接到一通陌生电话」框架（机主身份/关系/多端记忆不下发） */
+  callerUnknown?: boolean
 ): string {
   // 条数语义与主聊回复条数同源：上限 = 聊天设置里该会话的回复条数；上限不是任务，没话可以少
   const countRule =
@@ -147,14 +169,22 @@ function buildFollowupSystemPrompt(
           ];
   return buildPersonaSystemPrompt(peer, {
     channel: '挂断电话后的文字消息',
-    userName: user?.name ?? null,
-    userRealName: user?.realName ?? null,
-    userNickname: user?.nickname ?? null,
-    multiApp,
+    userName: callerUnknown ? null : (user?.name ?? null),
+    userRealName: callerUnknown ? null : (user?.realName ?? null),
+    userNickname: callerUnknown ? null : (user?.nickname ?? null),
+    multiApp: callerUnknown ? undefined : multiApp,
     accountId: accountId ?? undefined,
+    // 陌生来电：人设换「陌生号码来电」框架（角色自身人设保留，来电人身份未知）
+    ...(callerUnknown ? { strangerMode: 'caller' as const } : {}),
     extraRules: [
       `你刚结束一通语音通话（${scene}${ended ? `，通话时长 ${durationLabel}` : ''}）。现在像平时发消息那样，主动给对方发文字，自然衔接这件事：`,
-      ...(ended ? endedRules : [NOT_CONNECTED_RULES[outcome][0], NOT_CONNECTED_RULES[outcome][1], NOT_CONNECTED_BANS]),
+      ...(ended
+        ? endedRules
+        : [
+            (callerUnknown ? NOT_CONNECTED_RULES_STRANGER : NOT_CONNECTED_RULES)[outcome][0],
+            (callerUnknown ? NOT_CONNECTED_RULES_STRANGER : NOT_CONNECTED_RULES)[outcome][1],
+            NOT_CONNECTED_BANS,
+          ]),
       countRule,
       '绝对不要复读通话里已经说过的原话；不要自我介绍；不要说「刚才我们通话了」这类出戏的话——就像平时聊微信/QQ 一样接着说；',
       '语气完全符合你的人设和此刻情绪（聊得开心就热络、对方拒接/没接可以有点小委屈、深夜可以带着困意）；',
@@ -275,14 +305,18 @@ export async function POST(req: NextRequest) {
     maxCount,
     root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined,
     // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
+    //（陌生来电不下发任何机主身份：AI 不知道来电人是谁，报真名会直接破功）
     (() => {
+      if (root.callerUnknown === true) return undefined;
       const real = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
       const nick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
       if (!real && !nick) return undefined;
       return { name: real || nick, realName: real || null, nickname: nick || null };
     })(),
     // 多账号关系感知：小号续聊读分账号关系，不再恒用大号全局 relation
-    accountId
+    accountId,
+    // 陌生来电（多账号）：匿名号/未登记小号拨出——续聊按「刚接到陌生电话」框架
+    root.callerUnknown === true
   );
   // 通话媒体（Task 22 视频通话）：视频通话时补一行媒体说明，AI 的后续文字知道刚才/刚才那通是视频
   const media = root.media === 'video' ? 'video' : 'voice';
@@ -297,10 +331,12 @@ export async function POST(req: NextRequest) {
   const systemFull = [system, worldbookBlock, memoryBlock, crossAppBlock, groupBlock, timeBlock, mediaBlock].filter(Boolean).join('\n\n');
 
   // 触发消息：把「最近聊天 + 通话转写」打包成一段上下文（user/assistant 双方已标注），避免与消息角色混淆
+  // 陌生来电（多账号）：用户侧称谓不再用「机主」（AI 不知道来电人是谁）
+  const userLabel = root.callerUnknown === true ? '对方' : '机主';
   const recap: string[] = [];
   if (recentChat.length > 0) {
     recap.push('【通话前的最近聊天】');
-    recap.push(...recentChat.map((m) => `${m.role === 'user' ? '机主' : '你'}：${m.content}`));
+    recap.push(...recentChat.map((m) => `${m.role === 'user' ? userLabel : '你'}：${m.content}`));
     recap.push('');
   }
   if (!outcomeConnected(outcome)) {
@@ -313,12 +349,12 @@ export async function POST(req: NextRequest) {
     recap.push('【关于这次通话】电话刚接通（甚至还没说上话）就结束了，没有实际通话内容（上面的聊天记录是文字消息，不是通话内容）。');
     if (transcript.length > 0) {
       recap.push('仅有的通话转写（刚接通时说出口的只言片语，不算聊过什么）：');
-      recap.push(...transcript.map((m) => `${m.role === 'user' ? '机主' : '你'}（说出口的话）：${m.content}`));
+      recap.push(...transcript.map((m) => `${m.role === 'user' ? userLabel : '你'}（说出口的话）：${m.content}`));
     }
     recap.push('');
   } else if (transcript.length > 0) {
     recap.push('【这次通话里你们说的话】');
-    recap.push(...transcript.map((m) => `${m.role === 'user' ? '机主' : '你'}（说出口的话）：${m.content}`));
+    recap.push(...transcript.map((m) => `${m.role === 'user' ? userLabel : '你'}（说出口的话）：${m.content}`));
     recap.push('');
   }
   recap.push('（通话已结束，请输出你要发给对方的文字消息 JSON）');

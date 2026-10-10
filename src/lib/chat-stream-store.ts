@@ -41,12 +41,15 @@ import { clearDeliverBoundary, isAiDelivering, scheduleAiDelivery } from '@/lib/
 import { charRequestOnlyOf, loadBlock, type BlockApp } from '@/lib/ios/block-state';
 // 40-B 多账号 AI 认知隔离：主账号（该 App 当前账号为大号）下计算「用户的小号」聊天摘录并合并进人设 system 消息
 import {
+  getAccountById,
   getAccounts,
   getActiveAccountIdFor,
   MAIN_ACCOUNT_ID,
   parseScopedKey,
   type AccountApp,
 } from '@/lib/ios/accounts';
+// 大号侧「小号是我」披露检测（用户规则一/二：账号关联记忆）与主号侧事件记忆碎片
+import { memAddEventFragment, memDetectMainAltDisclosure, memLinkAltAccounts } from '@/lib/memory';
 import { localDB } from '@/lib/ios/db';
 import { buildAltAccountsSection } from '@/lib/ios/persona';
 
@@ -55,6 +58,15 @@ function streamAppOf(sessionKey: string): AccountApp {
   if (sessionKey.startsWith('wx:')) return 'wx';
   if (sessionKey.startsWith('qq:')) return 'qq';
   return 'sms';
+}
+
+/** 会话键 → 私聊联系人 id（wx:<cid> / qq:<cid> / sms:c:<cid>）；群聊（wx:group:* / qq:group:*）、
+ *  小助手（sms:assistant）及其他非联系人会话返回 null——披露检测/记忆只针对与 AI 角色的私聊 */
+function streamContactIdOf(sessionKey: string): string | null {
+  if (sessionKey.startsWith('sms:c:')) return sessionKey.slice('sms:c:'.length);
+  const m = /^(wx|qq):(.+)$/.exec(sessionKey);
+  if (!m) return null;
+  return m[2].startsWith('group:') ? null : m[2];
 }
 
 // ---------------- 公开类型 ----------------
@@ -198,17 +210,19 @@ const ALT_DIGEST_MSG_MAX_CHARS = 80;
 /** digest 总字符上限（多小号兜底，超出截断） */
 const ALT_DIGEST_MAX_CHARS = 2400;
 
-/** 摘录条目（mine=true=小号侧发出；peer=该会话对方角色名；time=消息时间戳） */
+/** 摘录条目（mine=true=小号侧发出；peer=该会话对方角色名；time=消息时间戳；app=来源平台标注） */
 interface AltDigestEntry {
   time: number;
   mine: boolean;
   peer: string;
   text: string;
+  app: string;
 }
 
 /** 单条消息 → 摘录条目；不参与 AI 上下文的消息（撤回/错误/系统行/通知/拉黑卡等）与空消息返回 null。
- *  消息形状三端兼容：role me|user|self=小号侧，其余（peer/assistant/…）=对方；文本取 text|content。 */
-function altDigestEntryOf(raw: unknown, peer: string): AltDigestEntry | null {
+ *  消息形状三端兼容：role me|user|self=小号侧，其余（peer/assistant/…）=对方；文本取 text|content。
+ *  appLabel：会话所在平台（微信/QQ/信息，用户规则四：添加来源要说对，不能猜） */
+function altDigestEntryOf(raw: unknown, peer: string, appLabel: string): AltDigestEntry | null {
   if (!raw || typeof raw !== 'object') return null;
   const m = raw as Record<string, unknown>;
   if (m.recalled === true || m.error === true) return null;
@@ -219,6 +233,12 @@ function altDigestEntryOf(raw: unknown, peer: string): AltDigestEntry | null {
   const time = typeof m.time === 'number' && m.time > 0 ? m.time : 0;
   let text = typeof m.text === 'string' ? m.text : typeof m.content === 'string' ? m.content : '';
   text = text.trim();
+  // 好友验证消息/打招呼不是聊天内容（用户规则五）：加好友过程消息区分标注——加进摘录但绝不当作
+  // 「小号说过的话」（添加成功提示纯系统行直接丢弃）；AI 只能说「TA 加我时验证消息写的是…」
+  const fr = typeof m.fr === 'string' ? m.fr : '';
+  if (fr === 'added') return null;
+  if (fr === 'apply') text = `[好友验证消息] ${text}`;
+  else if (fr === 'greet') text = `[打招呼] ${text}`;
   if (text.startsWith('data:')) text = ''; // QQ 图片消息 content=dataURL：不出原始图，按 kind 出占位
   if (kind === 'image') {
     // 图片消息：有识图描述时带出内容（wx 端 content 恒为「[图片]」占位，desc 才是有效信息）
@@ -251,7 +271,7 @@ function altDigestEntryOf(raw: unknown, peer: string): AltDigestEntry | null {
   text = text.replace(/\s+/g, ' ').trim();
   if (!text) return null;
   if (text.length > ALT_DIGEST_MSG_MAX_CHARS) text = `${text.slice(0, ALT_DIGEST_MSG_MAX_CHARS)}…`;
-  return { time, mine, peer, text };
+  return { time, mine, peer, text, app: appLabel };
 }
 
 /** kv 裸键（base）→ 会话对方角色名；非聊天键返回 null（联系人会话按 contactId 查共享联系人名映射） */
@@ -265,6 +285,16 @@ function altSessionPeerName(key: string, nameById: Map<string, string>): string 
     return p === 'wx-chat-msgs:' ? '微信联系人' : p === 'qq-chat-msgs:' ? 'QQ好友' : '联系人';
   }
   return null;
+}
+
+/** kv 裸键（base）→ 来源平台标注（用户规则四：添加来源/在哪聊的要准，AI 不许猜）：
+ *  微信键系→微信、QQ 键系→QQ、信息键系（含历史 sms-）→信息；其余返回 '' */
+function altSessionAppLabel(key: string): string {
+  if (key.startsWith('wx-chat-msgs:')) return '微信';
+  if (key.startsWith('qq-chat-msgs:')) return 'QQ';
+  if (key.startsWith('ios-chat-msgs:') || key.startsWith('sms-chat-msgs:')) return '信息';
+  if (key === ALT_ASSISTANT_KEY) return '信息';
+  return '';
 }
 
 /** 相对时间（小号摘录标题行用：最近一条消息距今多久） */
@@ -318,9 +348,10 @@ async function computeAltAccountsDigest(app: AccountApp): Promise<string | null>
     if (!scoped || !altIds.has(scoped.accId)) continue; // 大号原键/其他账号数据跳过
     const peer = altSessionPeerName(scoped.base, nameById);
     if (!peer) continue;
+    const appLabel = altSessionAppLabel(scoped.base);
     const list = entriesByAcc.get(scoped.accId) ?? [];
     for (const raw of row.value) {
-      const e = altDigestEntryOf(raw, peer);
+      const e = altDigestEntryOf(raw, peer, appLabel);
       if (e) list.push(e);
     }
     entriesByAcc.set(scoped.accId, list);
@@ -338,7 +369,11 @@ async function computeAltAccountsDigest(app: AccountApp): Promise<string | null>
     const phone = acc.phone ? `（${acc.phone}）` : '';
     const recent = altRelTime(picked[picked.length - 1].time);
     const lines = [`〔${label}〕${phone}与你的最近聊天${recent ? `（最近消息：${recent}）` : ''}：`];
-    for (const e of picked) lines.push(`${e.mine ? '用户' : e.peer}：${e.text}`);
+    for (const e of picked) {
+      // 每条带来源平台标注（微信/QQ/信息；用户规则四：AI 说「在哪加的/在哪聊的」必须准）：
+      // 「用户（微信）：想你」=小号在微信说的；peer 行=你（AI）在那个平台回复的
+      lines.push(`${e.mine ? '用户' : e.peer}${e.app ? `（${e.app}）` : ''}：${e.text}`);
+    }
     blocks.push(lines.join('\n'));
   }
   if (blocks.length === 0) return null;
@@ -544,10 +579,10 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
   // 每轮最多计算一次（IndexedDB 读很快）；非主账号/无小号数据/读取失败 → null，零注入零破坏。
   // 小号/匿名号侧不注入：AI 对小号是陌生人，摘录也绝不反向泄露大号内容。
   let baseMessages = messages;
+  // v2 per-app 账号：由 sessionKey 推导所属 App（wx:/qq:/其余=sms），摘录/披露检测都按该 App 当前账号门控
+  const accApp = streamAppOf(opts.sessionKey);
+  const accBefore = getActiveAccountIdFor(accApp);
   try {
-    // v2 per-app 账号：由 sessionKey 推导所属 App（wx:/qq:/其余=sms），摘录按该 App 当前账号门控
-    const accApp = streamAppOf(opts.sessionKey);
-    const accBefore = getActiveAccountIdFor(accApp);
     const altDigest = await computeAltAccountsDigest(accApp);
     // 摘录读取窗口内该 App 发生换号（v2 切号不刷新页面）：本轮作废，绝不把旧账号上下文
     // 的回复落进新账号的会话。与 abortStreamsByPrefix 同口径清理（finalized 预置跳过落盘、
@@ -568,6 +603,34 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
   }
   // 摘录读取窗口内发生换号中止：本轮作废（与识图等待后的中止检查同口径）
   if (rt.aborted) return;
+
+  // ---- 大号侧「小号是我」披露检测（用户规则一/二：账号关联记忆） ----
+  // 主号私聊里用户发言命中「小号」披露表述 → ① 落账号关联（kv 设备级共享，幂等合并）+
+  // 给每个关联小号预写全部四 App 的披露粘性标记（小号/电话侧下次来聊自动「认出」，免再亮明）；
+  // ② 给当前联系人的【主号侧】记忆库补一条「用户亲口告知小号」事件碎片（持久化，AI 后续能自然提起）。
+  // 仅主号 + 与 AI 角色的私聊；检测/写入任何失败都不影响本轮聊天（增强能力）。
+  try {
+    const linkCid = streamContactIdOf(opts.sessionKey);
+    if (accBefore === MAIN_ACCOUNT_ID && linkCid) {
+      const lastUserText = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+      const hitAltIds = memDetectMainAltDisclosure(lastUserText);
+      if (hitAltIds.length > 0) {
+        memLinkAltAccounts(linkCid, hitAltIds, lastUserText);
+        const ownerLabel = useSettings.getState().profile.name?.trim() || '机主';
+        const altLabels = hitAltIds
+          .map((id) => getAccountById(id)?.name?.trim() || '小号')
+          .join('、');
+        memAddEventFragment(
+          linkCid,
+          accApp,
+          `${ownerLabel}亲口告知：「${altLabels}」是${ownerLabel}的小号——小号和大号都是${ownerLabel}本人（同一个人）`,
+          { sourceTag: 'acc-link' },
+        );
+      }
+    }
+  } catch {
+    // 检测/落盘失败不影响本轮聊天
+  }
 
   /** 本轮实际发送的消息（识图成功后会被替换为「原图消息 + 图片描述」的组合） */
   let workMessages: ChatPayloadMessage[] = baseMessages;

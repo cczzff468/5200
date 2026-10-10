@@ -77,6 +77,9 @@ export interface CallFollowupPayload {
   userNickname?: string;
   /** 多账号关系感知：当前账号 id（小号续聊读分账号关系；不传 = 大号口径） */
   accountId?: string;
+  /** 陌生来电（多账号）：匿名号/未登记分账号关系的小号拨出——AI 不知道来电人是谁，
+   *  续聊按「刚接到一通陌生电话」框架（机主身份/关系/多端记忆不下发） */
+  callerUnknown?: boolean;
 }
 
 /** 条数上限收窄：非法/未传回退 2（旧行为），合法值夹在 [1, 30]（与回复条数选项同范围） */

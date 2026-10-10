@@ -45,7 +45,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ContactRecord } from '@/lib/contacts';
 import { memAfterAiTurn, memConvoFromRaw, memSummarizeCallNow } from '@/lib/memory';
 import { ownerRealNameFor, ownerProfileFor } from './contacts-store';
-import { getActiveAccountIdFor } from './accounts';
+import { getAccountById, getActiveAccountIdFor } from './accounts';
 import { useSettings } from './store';
 import { directChatStream } from './direct-api';
 import { transcribeAudioBlob } from './stt-client';
@@ -235,6 +235,30 @@ function phaseWasConnected(endReason: ChatCallEndReason): boolean {
 }
 
 // ---------------- 引擎 ----------------
+
+/**
+ * 陌生来电判定（多账号语义，仅电话 App 拨出链路）：
+ * 用户拨出（direction='out'）的电话/视频通话，接电话的 AI 能否「认得」来电人——
+ * - 主号：恒认得（机主来电，AI 的联系人就是 TA）；
+ * - 小号：仅当联系人分账号关系（relationByAcc）里登记过该账号才认得（来电显示语义：
+ *   角色存了这个号码才知道是谁打来的），否则视为陌生号码；
+ * - 匿名号：永远不认得（匿名号码语义：AI 不知道来电人是谁）。
+ * 微信/QQ 应用内通话不适用（应用内来电显示 = 好友身份，且匿名号不进微信/QQ）；
+ * AI 主动来电（direction='in'）不适用（AI 打给它认识的联系人）。
+ * 陌生来电时：机主身份/记忆/跨App近况/世界书/朋友圈/多端感知全部不下发。
+ */
+function phoneCallerUnknown(
+  app: 'wx' | 'qq' | 'phone',
+  direction: 'in' | 'out',
+  contact: { relationByAcc?: Record<string, string> | null } | null | undefined
+): boolean {
+  if (app !== 'phone' || direction !== 'out') return false;
+  const acc = getAccountById(getActiveAccountIdFor(app));
+  if (!acc || acc.kind === 'main') return false;
+  if (acc.kind === 'anon') return true;
+  const scoped = contact?.relationByAcc?.[acc.id];
+  return !(typeof scoped === 'string' && scoped.trim());
+}
 
 /** 拉黑状态读取（引擎内统一入口）：仅 wx/qq 有拉黑体系；phone（全局视频通话）与其余端返回 null=不拦 */
 function blockEntryOf(app: 'wx' | 'qq' | 'phone', contactId?: string | null): BlockEntry | null {
@@ -513,8 +537,13 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     const cur = optsRef.current;
     const cid = cur.contact?.id;
     if (!cid || cur.contact?.kind === 'user') return;
+    // 陌生来电（多账号）：记忆写作用「陌生号码」指代来电人（按当前账号作用域隔离，不向机主侧泄露）
+    const stranger = phoneCallerUnknown(cur.app, direction, cur.contact);
     // 多账号 v2：机主名按通话所属 App 的当前账号取「我」（cur.app 'wx'|'qq'|'phone' ⊂ AccountApp）
-    void ownerRealNameFor(cur.app)
+    void (stranger
+      ? Promise.resolve('陌生号码')
+      : ownerRealNameFor(cur.app).catch(() => '')
+    )
       .catch(() => '')
       .then((owner) =>
         memAfterAiTurn(
@@ -539,7 +568,12 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
     if (!cid || cur.contact?.kind === 'user') return;
     const turns = chatLogToConvo();
     if (turns.length < 2) return; // 通话太短没有可沉淀的内容
-    void ownerRealNameFor(cur.app)
+    // 陌生来电（多账号）：记忆总结用「陌生号码」指代来电人（按当前账号作用域隔离）
+    const stranger = phoneCallerUnknown(cur.app, direction, cur.contact);
+    void (stranger
+      ? Promise.resolve('陌生号码')
+      : ownerRealNameFor(cur.app).catch(() => '')
+    )
       .catch(() => '')
       .then((owner) =>
         memSummarizeCallNow(
@@ -592,13 +626,15 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       }
       void (async () => {
         let texts: string[] = [];
+        // 陌生来电（多账号）：匿名号/未登记小号从电话 App 拨出的通话——续聊不下发机主身份/记忆等
+        const callerUnknown = phoneCallerUnknown(optsRef.current.app, direction, peer);
         try {
           const transcript = chatLogRef.current.map((m) => ({ role: m.role, content: m.content }));
           const lastUser = [...transcript].reverse().find((m) => m.role === 'user')?.content ?? null;
-          // 多账号 v2：机主资料按通话所属 App 的当前账号取
-          const owner = await ownerProfileFor(optsRef.current.app).catch(() => null);
-          // 跨 App 近况块 + 群聊近况块（Task 40-b）：通话内已建则复用缓存；从未发过请求的短通话现算一次
-          if (!crossCtxRef.current) {
+          // 多账号 v2：机主资料按通话所属 App 的当前账号取；陌生来电不下发
+          const owner = callerUnknown ? null : await ownerProfileFor(optsRef.current.app).catch(() => null);
+          // 跨 App 近况块 + 群聊近况块（Task 40-b）：通话内已建则复用缓存；从未发过请求的短通话现算一次；陌生来电不下发
+          if (!callerUnknown && !crossCtxRef.current) {
             crossCtxRef.current = peer?.id
               ? await buildCrossContextBlocks(peer.id, optsRef.current.app, owner?.realName || '')
               : { crossAppBlock: '', groupBlock: '' };
@@ -629,22 +665,27 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             duration: secondsRef.current,
             transcript: transcript.slice(-24),
             recentChat: recentChatRef.current.map((m) => ({ role: m.role, content: m.content })),
-            memoryBlock: optsRef.current.memoryBlockFn?.(lastUser) || optsRef.current.memoryBlock || undefined,
-            // 跨 App 近况 + 群聊近况（Task 40-b）：与通话轮次同源同位置（当前 App 记忆之后）
-            crossAppBlock: crossCtxRef.current.crossAppBlock || undefined,
-            groupBlock: crossCtxRef.current.groupBlock || undefined,
-            worldbookBlock: optsRef.current.worldbookBlock || undefined,
+            memoryBlock: callerUnknown
+              ? undefined
+              : (optsRef.current.memoryBlockFn?.(lastUser) || optsRef.current.memoryBlock || undefined),
+            // 跨 App 近况 + 群聊近况（Task 40-b）：与通话轮次同源同位置（当前 App 记忆之后）；陌生来电不下发
+            crossAppBlock: callerUnknown ? undefined : (crossCtxRef.current?.crossAppBlock || undefined),
+            groupBlock: callerUnknown ? undefined : (crossCtxRef.current?.groupBlock || undefined),
+            worldbookBlock: callerUnknown ? undefined : (optsRef.current.worldbookBlock || undefined),
             timeBlock: optsRef.current.timeBlock || undefined,
-            multiApp: optsRef.current.multiApp,
+            // 跨 App 身份感知：互通开关（陌生来电不下发）
+            multiApp: callerUnknown ? undefined : optsRef.current.multiApp,
             // 条数上限 = 该会话聊天设置「回复条数」（wx:<id> / qq:<id>，与文字聊天同一份设置）
             replyCount: getReplyCount(`${optsRef.current.app}:${peer.id}`),
             // 通话媒体（Task 22 视频通话）：视频挂断续聊让 AI 知道刚才那通是视频
             media,
-            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名（陌生来电不下发）
             userRealName: owner?.realName || undefined,
             userNickname: owner?.nickname || undefined,
             // 多账号关系感知：小号续聊读分账号关系（服务端 relationForCtx 同口径）
             accountId: getActiveAccountIdFor(optsRef.current.app),
+            // 陌生来电（多账号）：续聊按「刚接到陌生电话」框架
+            callerUnknown: callerUnknown || undefined,
           });
         } catch {
           texts = []; // 续聊失败静默：不影响记忆总结
@@ -764,14 +805,18 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       proactiveAttempt = 0,
     ): Promise<{ reply: string; error?: string }> => {
       const c = optsRef.current.contact;
-      // 本轮用户刚说的话（greeting/主动开口时不存）：供每轮动态召回相关记忆（主动提起之前聊过的事）
+      // 陌生来电（多账号）：匿名号/未登记小号从电话 App 拨出的视频通话——AI 不知道来电人是谁
+      const callerUnknown = phoneCallerUnknown(optsRef.current.app, direction, c);
+      // 本轮用户刚说的话（greeting/主动开口时不存）：供每轮动态召回相关记忆（主动提起之前聊过的事）；
+      // 陌生来电不下发记忆（记忆属于机主/已建立身份，注入会直接破功）
       const lastUserText = greeting || proactiveAttempt > 0 ? null : (historyBefore[historyBefore.length - 1]?.content ?? null);
-      const recalledBlock =
-        optsRef.current.memoryBlockFn?.(lastUserText) || optsRef.current.memoryBlock || undefined;
-      // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名（v2：按通话所属 App 当前账号）
-      const owner = await ownerProfileFor(optsRef.current.app).catch(() => null);
-      // 跨 App 近况块 + 群聊近况块（Task 40-b）：首次请求时构建并缓存（联系人/机主名现场取）
-      if (!crossCtxRef.current) {
+      const recalledBlock = callerUnknown
+        ? undefined
+        : (optsRef.current.memoryBlockFn?.(lastUserText) || optsRef.current.memoryBlock || undefined);
+      // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名（v2：按通话所属 App 当前账号；陌生来电不下发）
+      const owner = callerUnknown ? null : await ownerProfileFor(optsRef.current.app).catch(() => null);
+      // 跨 App 近况块 + 群聊近况块（Task 40-b）：首次请求时构建并缓存（联系人/机主名现场取）；陌生来电不下发
+      if (!callerUnknown && !crossCtxRef.current) {
         crossCtxRef.current = c?.id
           ? await buildCrossContextBlocks(c.id, optsRef.current.app, owner?.realName || '')
           : { crossAppBlock: '', groupBlock: '' };
@@ -805,21 +850,24 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
                   realName: c.realName ?? null,
                 }
               : undefined,
-            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名（陌生来电不下发）
             userRealName: owner?.realName || undefined,
             userNickname: owner?.nickname || undefined,
+            // 陌生来电（多账号）：服务端人设换陌生框架、机主身份不下发
+            callerUnknown: callerUnknown || undefined,
             greeting,
             proactiveAttempt: proactiveAttempt > 0 ? proactiveAttempt : undefined,
             history: historyBefore.map((m) => ({ role: m.role, content: m.content })),
             memoryBlock: recalledBlock,
-            // 跨 App 近况 + 群聊近况（Task 40-b）：注入在当前 App 记忆之后（服务端同序拼装）
-            crossAppBlock: crossCtxRef.current.crossAppBlock || undefined,
-            groupBlock: crossCtxRef.current.groupBlock || undefined,
-            worldbookBlock: optsRef.current.worldbookBlock || undefined,
-            momentsBlock: optsRef.current.momentsBlock || undefined,
+            // 跨 App 近况 + 群聊近况（Task 40-b）：注入在当前 App 记忆之后（服务端同序拼装）；陌生来电不下发
+            crossAppBlock: callerUnknown ? undefined : (crossCtxRef.current?.crossAppBlock || undefined),
+            groupBlock: callerUnknown ? undefined : (crossCtxRef.current?.groupBlock || undefined),
+            worldbookBlock: callerUnknown ? undefined : (optsRef.current.worldbookBlock || undefined),
+            momentsBlock: callerUnknown ? undefined : (optsRef.current.momentsBlock || undefined),
             timeBlock: optsRef.current.timeBlock || undefined,
             locBlock: optsRef.current.locBlock || undefined,
-            multiApp: optsRef.current.multiApp,
+            // 跨 App 身份感知：互通开关（陌生来电不下发：身份未知时多端好友语义不成立）
+            multiApp: callerUnknown ? undefined : optsRef.current.multiApp,
             // 多账号关系感知：小号通话读分账号关系（与机主资料同账号口径）
             accountId: getActiveAccountIdFor(optsRef.current.app),
             // 通话方向（AI 视角）：out=用户打来的 / in=你打出去的——接通问候语按方向区分主被动
@@ -828,7 +876,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             media,
             // 视频通话：界面层采集的用户画面识图描述（无摄像头/识图未配/还没出结果时为 undefined 不注入）
             visionBlock: optsRef.current.visionBlockFn?.() || undefined,
-            extraRules: chatCallExtraRules(c, media),
+            // 陌生来电不传联系人：chatCallExtraRules 不注入「你们的关系是{大号关系}」
+            //（关系描述属于机主/已建立身份，陌生来电注入会让 AI 把来电人当成「朋友」——谎称认识）
+            extraRules: chatCallExtraRules(callerUnknown ? null : c, media),
             config: useSettings.getState().apiConfig,
           }),
           // #20 通话链路超时看门狗：LLM 轮次 45s 到点必失败（AbortSignal.timeout → DOMException
@@ -1493,13 +1543,14 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         void runTurn(null, true);
       };
       // AI 接听决策：响铃开始就发（人设/关系/当前时间状态/最近聊天 → 接听/拒绝/不接），
-      // 失败或超时兜底 answer（宁可多接，不让用户白等）；机主打给自己（kind='user'）不决策
+      // 失败或超时兜底 answer（宁可多接，不让用户白等）；机主打给自己（kind='user'）不决策。
+      // 陌生来电（多账号）：匿名号/未登记小号从电话 App 拨出——AI 不知道来电人是谁，机主身份不下发
       const peer = optsRef.current.contact;
+      const decisionCallerUnknown = phoneCallerUnknown(optsRef.current.app, direction, peer);
       const decision =
         peer && peer.kind !== 'user'
-          ? ownerProfileFor(optsRef.current.app)
-              .then((owner) =>
-                requestAnswerDecision({
+          ? (decisionCallerUnknown
+              ? requestAnswerDecision({
                   number: peer.phone || '10086',
                   contact: {
                     name: peer.name,
@@ -1522,16 +1573,46 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
                   },
                   recentChat: historyRef.current.map((m) => ({ role: m.role, content: m.content })),
                   timeBlock: optsRef.current.timeBlock || undefined,
-                  // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
-                  userRealName: owner?.realName || undefined,
-                  userNickname: owner?.nickname || undefined,
-                  // 跨 App 身份感知 + 多账号关系感知（与 followup/turn 同口径）
-                  multiApp: optsRef.current.multiApp,
+                  // 陌生来电：机主身份/多端感知不下发，按陌生来电决策
+                  callerUnknown: true,
                   accountId: getActiveAccountIdFor(optsRef.current.app),
                   config: useSettings.getState().apiConfig,
-                }),
-              )
-              .catch(() => ({ decision: 'answer' }) as const)
+                })
+              : ownerProfileFor(optsRef.current.app)
+                  .then((owner) =>
+                    requestAnswerDecision({
+                      number: peer.phone || '10086',
+                      contact: {
+                        name: peer.name,
+                        kind: peer.kind,
+                        gender: peer.gender,
+                        age: peer.age,
+                        height: peer.height,
+                        weight: peer.weight,
+                        occupation: peer.occupation,
+                        company: peer.company,
+                        region: peer.region,
+                        relation: peer.relation,
+                        relationByAcc: peer.relationByAcc ?? null,
+                        relationToUser: peer.relationToUser ?? null,
+                        birthday: peer.birthday ?? null,
+                        persona: peer.persona,
+                        background: peer.background,
+                        nickname: peer.nickname ?? null,
+                        realName: peer.realName ?? null,
+                      },
+                      recentChat: historyRef.current.map((m) => ({ role: m.role, content: m.content })),
+                      timeBlock: optsRef.current.timeBlock || undefined,
+                      // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+                      userRealName: owner?.realName || undefined,
+                      userNickname: owner?.nickname || undefined,
+                      // 跨 App 身份感知 + 多账号关系感知（与 followup/turn 同口径）
+                      multiApp: optsRef.current.multiApp,
+                      accountId: getActiveAccountIdFor(optsRef.current.app),
+                      config: useSettings.getState().apiConfig,
+                    }),
+                  )
+          ).catch(() => ({ decision: 'answer' }) as const)
           : null;
       // 先响铃 1.8~3.2s（决策多半已返回；未返回则等它 settle，最长 ANSWER_DECISION_TIMEOUT_MS 兜底）
       answerTimer = window.setTimeout(() => {

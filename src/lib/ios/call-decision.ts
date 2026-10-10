@@ -43,6 +43,8 @@ export interface AnswerDecisionArgs {
   multiApp?: boolean;
   /** 多账号关系感知：当前账号 id（小号来电读分账号关系；不传 = 大号口径） */
   accountId?: string;
+  /** 陌生来电（多账号）：匿名号/未登记分账号关系的小号拨出——AI 不知道来电人是谁，按陌生来电决策 */
+  callerUnknown?: boolean;
   config: unknown;
 }
 
