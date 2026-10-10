@@ -396,7 +396,7 @@ function fmtGroupTime(ts: number): string {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 }
 
-/** 语音声波图标（聊天输入栏左侧圆钮用，单色细线：一个点 + 三道声波弧；与微信单聊同款样式） */
+/** 语音声波图标（聊天输入栏左侧圆钮用，单色细线：一个点 + 三道渐展声波弧；与微信单聊同款样式） */
 function VoiceWaveGlyph({ size = 19 }: { size?: number }) {
   return (
     <svg
@@ -405,14 +405,29 @@ function VoiceWaveGlyph({ size = 19 }: { size?: number }) {
       height={size}
       fill="none"
       stroke="currentColor"
-      strokeWidth={2}
+      strokeWidth={1.7}
       strokeLinecap="round"
       aria-hidden="true"
     >
-      <circle cx="6.2" cy="12" r="1.25" fill="currentColor" stroke="none" />
-      <path d="M10.3 9.3a5.2 5.2 0 0 1 0 5.4" />
-      <path d="M13.5 7a8.8 8.8 0 0 1 0 10" />
-      <path d="M16.7 4.7a12.6 12.6 0 0 1 0 14.6" />
+      <circle cx="6.2" cy="12" r="1.35" fill="currentColor" stroke="none" />
+      {/* 三道弧 = 以圆点为圆心的同心圆弧段，半径渐增、张角渐收，弧线更流畅对称 */}
+      <path d="M9.03 8.38A4.6 4.6 0 0 1 9.03 15.62" />
+      <path d="M11.69 5.91A8.2 8.2 0 0 1 11.69 18.09" />
+      <path d="M14.68 3.8A11.8 11.8 0 0 1 14.68 20.2" />
+    </svg>
+  );
+}
+
+/** 键盘图标（语音模式圆钮用：六枚圆角键 + 空格条，点按切回键盘输入；与微信单聊同款样式） */
+function KeyboardGlyph({ size = 17 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor" aria-hidden="true">
+      {[0, 1].map((row) =>
+        [0, 1, 2].map((col) => (
+          <rect key={`${row}-${col}`} x={3.4 + col * 6.9} y={4.8 + row * 6.4} width={4.5} height={4.5} rx={1.25} />
+        )),
+      )}
+      <rect x={3.4} y={17.6} width={18.2} height={2.7} rx={1.35} />
     </svg>
   );
 }
@@ -5323,13 +5338,14 @@ export function WxGroupChatPage({
               className="shrink-0 active:opacity-70"
             >
               <span
-                className={`flex h-[35px] w-[35px] items-center justify-center rounded-full border-[1.5px] bg-transparent transition-colors active:bg-black/[0.06] dark:active:bg-white/10 ${
+                className={`flex h-[34px] w-[34px] items-center justify-center rounded-full border-[1.5px] transition-colors active:bg-black/[0.05] dark:active:bg-white/10 ${
                   voiceMode
-                    ? 'border-[#07C160] text-[#07C160]'
-                    : 'border-black/90 text-black/85 dark:border-white/75 dark:text-white/85'
+                    ? 'border-[#07C160]/70 bg-[#07C160]/[0.08] text-[#07C160]'
+                    : 'border-black/80 text-black/85 dark:border-white/70 dark:text-white/90'
                 }`}
               >
-                <VoiceWaveGlyph size={20} />
+                {/* 键盘模式 → 声波图标（点按进语音）；语音模式 → 键盘图标（点按切回键盘） */}
+                {voiceMode ? <KeyboardGlyph size={18} /> : <VoiceWaveGlyph size={21} />}
               </span>
             </button>
             {voiceMode ? (

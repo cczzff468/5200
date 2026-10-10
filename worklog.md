@@ -17970,3 +17970,18 @@ Stage Summary:
 - 六个问题全修复：①大号告知"小号是我"→账号关联记忆持久化（kv+事件碎片），小号/电话/好友申请全场景自动认出并知道"你是机主（凡凡）"；②认出块立"同一人"规矩（不说"你俩"，说"又是你/换小号来找我"）；③记忆归因三重防护（摘录为准规则+跨App块按聊天身份账号作用域+主侧记忆不外流），小号没说的话不能算到小号头上；④摘录逐条带（微信/QQ/信息）来源标注+禁止猜平台；⑤验证消息三端区分标注、不入记忆；⑥陌生来电全链路陌生人模式（补上 extraRules 关系句与 timeBlock 两处泄漏——"你是我朋友啊"的直接根因）
 - 受保护功能零回归：主侧记忆召回/聊天/好友申请/电话拨号匹配（Task 51）行为不变；大号侧零注入语义与旧版一致；删除联系人/账号的清理链路补齐新键
 - 改动文件：src/lib/memory.ts、src/lib/chat-stream-store.ts、src/lib/ios/persona.ts、src/lib/ios/friend-state.ts、src/lib/ios/cross-app-context.ts、src/lib/ios/contacts-store.ts、src/lib/ios/chat-call.ts、src/components/apps/phone.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/chat.tsx（+上轮会话遗留的 src/app/api/phone/{answer,turn,followup}/route.ts、src/lib/ios/{call-decision,call-followup}.ts strangerMode 全链路一并提交）
+
+---
+Task ID: 53
+Agent: main (Z.ai Code)
+Task: 微信输入框左图标美化 + 电话通话界面改版——①删挂断上方麦克风按钮、免提无需点击即可对话；②左下角信息按钮移到右上角；③底部按钮下移；④弹幕文字被底部按钮遮挡修复；⑤通话对话全程显示在聊天界面样式记录区
+
+Work Log:
+- 微信图标（wechat.tsx + wx-group.tsx 群聊同款）：VoiceWaveGlyph 精修为「圆点+三道同心圆弧段」精确圆弧（M9.03 8.38 A4.6…/M11.69 5.91 A8.2…/M14.68 3.8 A11.8…，半径渐增张角渐收，stroke 1.7 round cap）；新增 KeyboardGlyph（2×3 圆角键+空格条，与用户参考截图一致）；圆钮状态语义补齐——键盘模式显示声波图标（点按进语音）、语音模式显示键盘图标（点按切回键盘，此前两态同图标）；圆钮 34px border-[1.5px]，语音模式绿圈浅绿底
+- 电话 CallScreen（phone.tsx）：①删除挂断上方整行（MessageSquare+麦克风 68px 钮+占位）——免提链路本就全自动（接通→AI 问候→speak resume→scheduleAutoListen(250ms)→自动开录→VAD 停顿自动发送，全程零点击），麦克风钮仅剩「说话中点按立即发送」冗余功能；②信息按钮移右上角 absolute right-4 top-[76px] z-20（仅 connected 显示，开关通话中文字输入）；③底部容器 pb-[30px]→pb-[14px]（挂断下移 16px，仍避开 home indicator 7~12px 区）；④单句弹幕字幕区整体替换为「全程对话记录」聊天界面样式——shownBubbles（过滤流式空气泡）全量渲染：对方白色气泡左/我方绿色气泡右（#34C759）、语音轮次带 AudioLines 小标（via!=='text'）、no-scrollbar 自动滚底（textListRef effect 复用）、busy 且最后一条是我方时显示回应中三点；flex-1 min-h-0 overflow-y-auto 有界滚动——长句/长对话不再被六宫格与挂断按钮遮挡（原弹幕 overflow-hidden 裁切根因消除）；⑤textMode 迷你聊天区（只显示文字轮次最近 8 条）删除——全程记录常驻后冗余，textMode 仅展开输入条；⑥顶部弹性区 min-h-2 flex-1 加 max-h-[72px] 封顶（把空间让给对话记录，拨号中与接通后头像位置连续不跳）；文件头注释同步更新
+- E2E（agent-browser 全真浏览器）：①建联系人「小爱」拨打接通——挂断上方无麦克风钮、信息按钮在右上角（active 白底态正确）、挂断明显下移、六宫格/键盘浮层不受影响；②无麦克风权限环境自动兜底链路实测：免提自动听 getUserMedia 失败→错误提示+自动切键盘输入（全程零点击），文字发「喂，小爱你好呀」等 3 条→对话记录区绿色用户气泡右对齐正确累积、自动滚底；③信息按钮点按切换正常（关文字模式→免提自动重试→无麦环境又自动切回，属设计兜底）；④2x retina 视口下微信两态图标逐一放大核对：键盘模式=黑圈声波（与参考截图1同风格更圆润）、语音模式=绿圈键盘+按住说话胶囊（与参考截图2一致）；⑤tsc 0 错误；dev.log 无新运行时错误（仅仓库固有 instrumentation Edge 警告）；AI 回复因 z-ai SDK 持续 429 限流未能出 assistant 气泡（环境限流非代码问题，assistant 分支与用户气泡同一 map 渲染路径）
+- 受保护功能零回归：通话流程（拨打/接通/计时/挂断/记录落库）、六宫格（静音/键盘/扬声器/添加/视频/联系人）、DTMF 键盘、通话中文字输入、空号流程、语音留言均未触碰逻辑仅布局调整；微信/QQ/信息语音开关（Mic 图标系）未动；voice-call-screen.tsx（微信/QQ 语音通话弹幕）未动
+
+Stage Summary:
+- 交付：①通话界面挂断上方麦克风按钮删除，免提对话零点击（既有全自动链路成为唯一路径）；②信息按钮移右上角；③底部按钮下移 16px；④弹幕被挡根除——单句弹幕升级为全程对话记录（聊天界面样式、有界滚动自动滚底、语音轮次带声波小标）；⑤微信输入框左圆钮美化：精修声波弧线+补齐语音模式键盘图标状态（单聊+群聊同款）
+- 改动文件：src/components/apps/phone.tsx、src/components/apps/wechat.tsx、src/components/apps/wx-group.tsx

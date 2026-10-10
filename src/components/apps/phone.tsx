@@ -100,14 +100,15 @@ import { withAvatarForApp, type ContactRecord } from '@/lib/contacts';
  * - 语音留言：列表只显示联系人/类型/时长（不剧透内容），点行进详情页回看完整谈话内容；
  *   拨号中挂断（对方未接听）自动生成对端留言；已接通挂断自动存档整通对话内容（kind='call'，永久保存），
  *   TTS 播报 / 已读未读 / 删除，未读数红点角标
- * - 通话全屏层：深色渐变 + 大头像/名字居中 + 单句弹幕字幕（微信同款：同一时刻只显示最新一句、
- *   位于名字下方，新句出现旧句消失；文字聊天开启时隐藏）+ 六宫格控制（静音/键盘/扬声器…，
- *   文字聊天时收起）+ 红色挂断
- * - AI 语音通话：点按说话 → 录音 → /api/phone/asr 识别 → /api/phone/turn（统一使用设置 App
+ * - 通话全屏层：深色渐变 + 大头像/名字居中 + 全程对话记录（聊天界面样式：对方白色气泡在左/我方绿色气泡在右、
+ *   语音轮次带声波小标，自动滚动到底，长句不再被底部按钮遮挡）+ 右上角信息按钮（开关通话中文字输入）
+ *   + 六宫格控制（静音/键盘/扬声器…，文字聊天时收起）+ 红色挂断
+ * - AI 语音通话：免提全自动——接通后 AI 先开口，说完自动开始聆听（无需点任何按钮），说完停顿自动发送
+ *   → 录音 → /api/phone/asr 识别 → /api/phone/turn（统一使用设置 App
  *   「API 设置」里配置的模型，按联系人人设回应；公网由服务器转发、内网自动浏览器直连，无内置模型）
- *   → /api/phone/tts 合成语音播放；麦克风不可用/识别失败可切换键盘文字输入
- * - 通话中文字聊天：麦克风左侧信息图标开关——输入框出现在说话钮上方（消息区只显示文字轮次，
- *   最近 8 条）；开启期间字幕隐藏；AI 配置了语音 API → 语音回复（TTS），没配 → 文字回复（消息区气泡）
+ *   → /api/phone/tts 合成语音播放；麦克风不可用/识别失败自动切换键盘文字输入
+ * - 通话中文字聊天：右上角信息按钮开关——只展开输入条（全程对话记录常驻显示）；开启期间暂停免提聆听；
+ *   AI 配置了语音 API → 语音回复（TTS），没配 → 文字回复（对话记录气泡）
  * - 音效：呼叫等待回铃音（450Hz 中国铃流节奏）、接通提示音、挂断提示音，全部 WebAudio 合成
  * - 通话方向：turn 请求带 direction（AI 来电接听交接='in' / 用户主动拨打='out'，缺省 'out'），
  *   接通问候语按方向区分主被动视角；挂断续聊 endReason 传真实挂断方
@@ -1689,7 +1690,7 @@ function CallScreen({
     return () => window.clearInterval(timer);
   }, [phase]);
 
-  // 文字聊天消息区自动滚到底
+  // 全程对话记录自动滚到底（新气泡/输入条开合/回应中都跟随）
   useEffect(() => {
     const el = textListRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -1981,17 +1982,11 @@ function CallScreen({
 
   // 陌生号码：标题直接显示拨打的号码（iOS 一致）；空号后状态行提示
   const name = contact?.name || formatNumber(target.number);
-  /** 最新一句字幕（单句弹幕：只显示 AI 最新一句——我方说话不上屏，与微信同款；新句出现旧句消失） */
-  let lastAiBubble: CallBubble | null = null;
-  for (let i = bubbles.length - 1; i >= 0; i--) {
-    if (bubbles[i].role === 'assistant') {
-      lastAiBubble = bubbles[i];
-      break;
-    }
-  }
-  /** 文字聊天消息区：只显示文字轮次（via='text'） */
-  const textMsgs = bubbles.filter((b) => b.via === 'text');
-  /** 文字聊天模式：六宫格收起给消息区+输入框腾地方，关闭后恢复 */
+  /** 全程对话记录（聊天界面样式）：过滤流式中的空气泡；容器经 textListRef effect 自动滚到底 */
+  const shownBubbles = bubbles.filter((b) => b.text.trim().length > 0);
+  /** 回应中三点动画的显示条件：忙且最后一条是我方（在等对方开口）；对方气泡已在流式输出时不再叠三点 */
+  const lastShownBubble = shownBubbles[shownBubbles.length - 1];
+  /** 文字聊天模式：六宫格收起给输入框腾地方，关闭后恢复 */
   const controlsCollapsed = textMode;
   const controlBtn = (icon: React.ReactNode, label: string, active: boolean, onClick: () => void, disabled = false) => (
     <button
@@ -2021,9 +2016,25 @@ function CallScreen({
     >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,255,255,0.08),transparent_55%)]" />
 
-      {/* 中部：头像 + 名字 + 状态居中（上下对称弹性区），单句弹幕字幕在名字下方（微信同款） */}
+      {/* 信息按钮（右上角）：开关通话中文字输入（开启停免提自动听并聚焦输入框，关闭恢复自动听） */}
+      {phase === 'connected' && (
+        <button
+          type="button"
+          onClick={toggleTextMode}
+          aria-label={textMode ? '切换到语音' : '切换到键盘输入'}
+          aria-pressed={textMode}
+          data-testid="call-info-toggle"
+          className={`absolute right-4 top-[76px] z-20 flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-md transition-all active:scale-95 ${
+            textMode ? 'bg-white text-black' : 'bg-white/15 text-white'
+          }`}
+        >
+          <MessageSquare className="h-5 w-5" />
+        </button>
+      )}
+
+      {/* 中部：头像 + 名字 + 状态 + 全程对话记录（聊天界面样式）。顶部弹性区封顶，把空间让给对话记录 */}
       <div className="relative z-10 flex min-h-0 flex-1 flex-col items-center px-6 pb-2 pt-[74px]">
-        <div className="min-h-2 flex-1" aria-hidden="true" />
+        <div className="min-h-2 max-h-[72px] flex-1" aria-hidden="true" />
         <div className="relative">
           {phase === 'dialing' && !emptyNumber && (
             <span className="absolute inset-0 animate-ping rounded-full bg-white/20" aria-hidden="true" />
@@ -2057,20 +2068,40 @@ function CallScreen({
             {error}
           </p>
         )}
-        {/* 字幕区：单句弹幕（只显示 AI 最新一句，新句出现旧句消失）；文字聊天开着时隐藏（占位保留布局稳定） */}
-        {phase !== 'dialing' && !textMode ? (
+        {/* 全程对话记录（聊天界面样式）：对方白色气泡在左、我方绿色气泡在右，语音轮次带声波小标；
+            可滚动自动滚底，长句不会被底部按钮遮挡；拨号中隐藏（占位保留布局稳定） */}
+        {phase !== 'dialing' ? (
           <div
-            className="flex min-h-[44px] w-full flex-1 flex-col items-center overflow-hidden px-2 pt-3"
-            aria-label="通话字幕"
-            data-testid="call-captions"
+            ref={textListRef}
+            className="no-scrollbar mt-2 flex w-full min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-1 pb-1"
+            aria-label="通话对话记录"
+            data-testid="call-transcript"
           >
-            {lastAiBubble && lastAiBubble.text && (
-              <p
-                key={lastAiBubble.id}
-                className="animate-call-caption w-full whitespace-pre-wrap break-words text-center text-[17px] leading-[1.6] text-white/60"
-              >
-                {lastAiBubble.text}
-              </p>
+            {shownBubbles.map((m) => (
+              <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <p
+                  className={`flex max-w-[82%] items-start gap-1.5 whitespace-pre-wrap break-words px-3.5 py-2 text-[14.5px] leading-snug shadow-[0_1px_3px_rgba(0,0,0,0.3)] ${
+                    m.role === 'user'
+                      ? 'rounded-[16px] rounded-br-[5px] bg-[#34C759] text-white'
+                      : 'rounded-[16px] rounded-bl-[5px] bg-white/15 text-white/95'
+                  }`}
+                >
+                  {m.via !== 'text' && <AudioLines className="mt-[3px] h-3.5 w-3.5 shrink-0 opacity-60" aria-hidden="true" />}
+                  <span className="min-w-0">{m.text}</span>
+                </p>
+              </div>
+            ))}
+            {busy && (!lastShownBubble || lastShownBubble.role === 'user') && (
+              <div className="flex justify-start">
+                <p
+                  className="flex items-center gap-1.5 rounded-[16px] rounded-bl-[5px] bg-white/15 px-3.5 py-2.5"
+                  aria-label="对方正在回应"
+                >
+                  {[0, 150, 300].map((d) => (
+                    <span key={d} className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/60" style={{ animationDelay: `${d}ms` }} />
+                  ))}
+                </p>
+              </div>
             )}
           </div>
         ) : (
@@ -2130,100 +2161,33 @@ function CallScreen({
         )}
       </div>
 
-      {/* 说话/文字输入 + 挂断 */}
-      <div className="relative z-10 shrink-0 px-5 pb-[30px] pt-2">
+      {/* 通话中文字输入（右上角信息按钮开关）+ 挂断——免提全自动：无需点任何按钮即可对话 */}
+      <div className="relative z-10 shrink-0 px-5 pb-[14px] pt-2">
         {phase === 'connected' && textMode && (
-          <div className="mb-2.5">
-            {/* 文字聊天消息区：只显示文字轮次（via='text'），最近 8 条，超高滚动；回应中三点动画 */}
-            {(textMsgs.length > 0 || busy) && (
-              <div ref={textListRef} className="no-scrollbar mx-1 mb-2 flex max-h-[132px] flex-col gap-1.5 overflow-y-auto">
-                {textMsgs.slice(-8).map((m) => (
-                  <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <p
-                      className={`max-w-[78%] whitespace-pre-wrap break-words px-3.5 py-2 text-[14.5px] leading-snug shadow-[0_1px_3px_rgba(0,0,0,0.3)] ${
-                        m.role === 'user'
-                          ? 'rounded-[16px] rounded-br-[5px] bg-[#34C759] text-white'
-                          : 'rounded-[16px] rounded-bl-[5px] bg-white/15 text-white/95'
-                      }`}
-                    >
-                      {m.text}
-                    </p>
-                  </div>
-                ))}
-                {busy && (
-                  <div className="flex justify-start">
-                    <p
-                      className="flex items-center gap-1.5 rounded-[16px] rounded-bl-[5px] bg-white/15 px-3.5 py-2.5"
-                      aria-label="对方正在回应"
-                    >
-                      {[0, 150, 300].map((d) => (
-                        <span key={d} className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/60" style={{ animationDelay: `${d}ms` }} />
-                      ))}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="flex items-center gap-2">
-              <input
-                ref={inputRef}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && sendText()}
-                onFocus={() => setInputFocused(true)}
-                onBlur={() => setInputFocused(false)}
-                placeholder="输入要说的话…"
-                maxLength={200}
-                aria-label="输入要说的话"
-                data-testid="call-textbar-input"
-                className="h-[42px] flex-1 rounded-full border border-white/20 bg-white/10 px-4 text-[15px] text-white outline-none placeholder:text-white/40 focus:border-white/45"
-              />
-              <button
-                type="button"
-                onClick={sendText}
-                disabled={!draft.trim() || busy}
-                aria-label="发送"
-                data-testid="call-textbar-send"
-                className="flex h-[42px] w-[42px] items-center justify-center rounded-full bg-white text-black transition-opacity active:opacity-60 disabled:opacity-40"
-              >
-                <ArrowUpRight className="h-5 w-5" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === 'connected' && (
-          <div className="mb-2.5 flex items-center justify-center gap-5">
+          <div className="mb-2.5 flex items-center gap-2">
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && sendText()}
+              onFocus={() => setInputFocused(true)}
+              onBlur={() => setInputFocused(false)}
+              placeholder="输入要说的话…"
+              maxLength={200}
+              aria-label="输入要说的话"
+              data-testid="call-textbar-input"
+              className="h-[42px] flex-1 rounded-full border border-white/20 bg-white/10 px-4 text-[15px] text-white outline-none placeholder:text-white/40 focus:border-white/45"
+            />
             <button
               type="button"
-              onClick={toggleTextMode}
-              aria-label={textMode ? '切换到语音' : '切换到键盘输入'}
-              aria-pressed={textMode}
-              className={`flex h-[44px] w-[44px] items-center justify-center rounded-full backdrop-blur-md transition-colors ${
-                textMode ? 'bg-white text-black' : 'bg-white/15 text-white'
-              }`}
+              onClick={sendText}
+              disabled={!draft.trim() || busy}
+              aria-label="发送"
+              data-testid="call-textbar-send"
+              className="flex h-[42px] w-[42px] items-center justify-center rounded-full bg-white text-black transition-opacity active:opacity-60 disabled:opacity-40"
             >
-              <MessageSquare className="h-[20px] w-[20px]" />
+              <ArrowUpRight className="h-5 w-5" />
             </button>
-            <button
-              type="button"
-              onClick={() => void toggleRecording()}
-              disabled={busy && !recording}
-              aria-label={recording && vadSpeaking ? '立即发送' : '麦克风（免提自动听）'}
-              data-testid="talk-button"
-              className={`flex h-[68px] w-[68px] items-center justify-center rounded-full transition-all active:scale-95 disabled:opacity-50 ${
-                recording && vadSpeaking ? 'animate-pulse bg-[#FF453A] text-white' : 'bg-white/15 text-white backdrop-blur-md'
-              }`}
-            >
-              {busy && !recording ? (
-                <Loader2 className="h-6 w-6 animate-spin" />
-              ) : recording && vadSpeaking ? (
-                <AudioLines className="h-[26px] w-[26px]" />
-              ) : (
-                <Mic className="h-[26px] w-[26px]" />
-              )}
-            </button>
-            <span aria-hidden="true" className="h-[44px] w-[44px]" />
           </div>
         )}
 
