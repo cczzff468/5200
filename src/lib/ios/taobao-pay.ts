@@ -158,7 +158,7 @@ export async function tbExecutePay(
 
 /**
  * 退款原路退回入账（订单退款成功后调用）：
- * - 微信零钱 → 零钱回补 + 零钱明细「淘宝购物」收入；微信银行卡 → 卡余额回补；
+ * - 微信零钱 → 零钱回补 + 零钱明细「淘宝购物」收入；微信银行卡 → 卡余额回补 + 零钱明细「淘宝购物」退款收入；
  * - 微信亲属卡 → 按支付时各卡分摊回补本月可用额度；
  * - QQ余额 → QQ钱包入账 + 账单（kind=refund）；QQ银行卡 → 卡余额回补 + 账单。
  */
@@ -201,11 +201,8 @@ export async function tbRefundToOrigin(order: TbOrder): Promise<boolean> {
       }
       const cards = ww.loadCards();
       if (!cards.some((x) => x.id === methodId)) return false;
-      ww.saveJSON(
-        ww.LS_CARDS,
-        cards.map((x) => (x.id === methodId ? { ...x, balance: Math.round((x.balance + amount) * 100) / 100 } : x))
-      );
-      return true;
+      // 银行卡退款：卡余额回补 + 零钱明细写退款收入（此前只回补卡余额不写账单，与支付侧不对称）
+      return w.wxRefundToBankCard(methodId, amount, '淘宝购物', { peer: '淘宝' });
     }
     const qq = await import('@/components/apps/qq');
     if (methodId === 'balance') {

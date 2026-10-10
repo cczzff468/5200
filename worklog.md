@@ -17754,3 +17754,20 @@ Stage Summary:
 - 六点需求全部落地并浏览器逐项实测：全局双向刷新（上滑下滑都更新）、更新旧内容/历史批次不消失、刷新不跳顶（视口锚定）、四个频道页 tab 吸顶补齐、滚动条默认隐藏滚动时浮现、截图竖排文字全部平行、票详情三态+文案按类型+日期解析修复
 - 刷新语义统一为「前插保旧」：所有列表旧内容原位保留、新内容插顶部、up 方向自动锚定视口
 - 改动文件：src/components/apps/tb-pull-refresh.tsx（新增）、taobao-channels.tsx、taobao.tsx、globals.css、src/components/ios/PhoneShell.tsx
+
+---
+Task ID: 41
+Agent: main (Z.ai Code)
+Task: 淘宝第十五轮——票详情影院地址被挡修复 + 微信账单「淘宝购物」kind 崩溃修复 + 微信银行卡退款不写账单修复（淘宝/美团同构）
+
+Work Log:
+- 票详情地址被挡（用户截图：影院名上半截被紫色头部裁掉）：根因是影院卡 -mt-7 加在 overflow-y-auto 滚动容器内部首元素上，负 margin 超出滚动容器顶部的内容被裁剪且不可滚动；修复为把 -mt-7 移到滚动容器本身（taobao-channels.tsx TicketDetailPage），白色圆角卡整体上提覆盖头部 pb-10 下沿，全局排查其余 -mt-N 用法无同类问题
+- 微信账单页崩溃（用户报 undefined is not iterable at WxBillEntryIcon:1188）：根因是淘宝支付/退款经 wxPushBill 写入 kind='淘宝购物'，但 WxBill 联合类型与 WxBillEntryIcon/BillIcon 两张图标映射表均未收录 → map[b.kind]=undefined 解构崩溃；修复：类型收录 + 两表补淘宝购物条目（橙色 #FF5F00 ShoppingBag）+ 双表 ?? 兜底（未知 kind 回退灰色钱包图标，永不再崩）+ wxBillDisplayTitle 补「淘宝网-商品消费/淘宝网-退款」文案 + 账单筛选「商户消费」收录亲属卡付款/淘宝购物 + 收支统计支出构成补「淘宝」行、退款口径收录淘宝购物收入
+- 微信退款无账单（用户报：美团和淘宝退款钱退回但账单不显示，QQ 正常）：根因是 wxExecutePayment 银行卡支付会写零钱明细（line 1152），但退款侧银行卡分支只回补卡余额不写账单——支出有记录退款无记录；修复：wechat.tsx 新增导出 wxRefundToBankCard(methodId, amount, kind, meta)（卡余额回补 + wxPushBill 退款收入），tbRefundToOrigin / mtRefundToOrigin 银行卡分支同构接入；亲属卡支付/退款双侧均不写零钱明细保持对称（设计口径不动）；零钱退款路径此前已写账单（wxPatchBalance 带 bill）无需改
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误
+- agent-browser 全真浏览器逐项验证：①播种 kind='淘宝购物' 账单进 IndexedDB → 建机主 USER 档案 → 微信登录 → 钱包账单页正常渲染不再崩溃，两条淘宝账单显示橙色购物袋图标+「淘宝网-商品消费 -89.50 / 淘宝网-退款 +25.00」②商户消费筛选只出两条淘宝记录（支出 89.50 收入 25.00）③收支统计「当月支出构成」显示淘宝 ¥89.50 橙色行 ④淘票票购票（什么意思夫妇 今天21:00 1排11座 ¥38）→ 票详情影院行「台前县中影时光国际影城」完整可见+圆角卡正确叠压紫头（对照用户截图修复）⑤退票 → 靛蓝已退款态+红章+「退票成功退款已原路退回」→ 微信账单出现「淘宝网-退款 +38.00」⑥添加招商银行卡 ¥8888.88 → 周边商城海报 ¥35 用银行卡支付成功 → 订单详情退款「已原路退回至招商银行」→ 微信账单出现「淘宝网-退款 +35.00」（修复前该条不存在）+ 招商卡余额回补 ¥8888.88 精确
+
+Stage Summary:
+- 三问题全落地并浏览器端到端实测：票详情影院地址完整可见、微信账单页对未知 kind 永不崩溃且淘宝购物全链路可视、微信银行卡退款写账单（淘宝+美团同构修复）
+- 范围限定零破坏：聊天/红包/转账账单链路零改动；亲属卡退款口径不动；QQ 侧（用户确认正常）不动；美团侧修复与淘宝共用同一新函数，逻辑同构
+- 改动文件：src/components/apps/wechat-wallet.tsx（类型+图标映射+兜底+文案+筛选+统计）、src/components/apps/wechat.tsx（新增 wxRefundToBankCard）、src/lib/ios/taobao-pay.ts、src/lib/ios/meituan-pay.ts（银行卡退款接入）、src/components/apps/taobao-channels.tsx（-mt-7 移到滚动容器）

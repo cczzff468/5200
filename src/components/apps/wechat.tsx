@@ -1153,6 +1153,20 @@ export function wxExecutePayment(methodId: string, amount: number, kind: '红包
   return { ok: true };
 }
 
+/** 退款原路退回到微信银行卡：卡余额回补 + 零钱明细写一条退款收入（与支付侧「银行卡也写零钱明细」同口径对称——
+ *  此前退款只回补卡余额不写账单，用户看到支出有记录、退款无记录，误以为退款丢失）。失败（卡不存在）返回 false */
+export function wxRefundToBankCard(methodId: string, amount: number, kind: '美团外卖' | '淘宝购物', meta?: WxBillMeta): boolean {
+  if (!(amount > 0)) return false;
+  const list = loadCards();
+  if (!list.some((x) => x.id === methodId)) return false;
+  saveJSON(
+    LS_CARDS,
+    list.map((x) => (x.id === methodId ? { ...x, balance: Math.round((x.balance + amount) * 100) / 100 } : x))
+  );
+  wxPushBill(kind, amount, meta);
+  return true;
+}
+
 /** 支付方式展示名（发送页支付方式行 / 支付密码验证浮层副标题用）；单聊/群聊共用 */
 export function wxMethodLabel(methodId: string): string {
   if (methodId === 'balance') return `零钱（可用 ${fmtMoney(wxLoadBalance())} 元）`;

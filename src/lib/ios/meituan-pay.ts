@@ -166,7 +166,7 @@ export async function mtExecutePay(
 /**
  * 退款原路退回入账（退款成功后调用，需求「订单退款的钱按原路返回」）：
  * - 微信零钱 → 零钱回补 + 零钱明细写一条「美团外卖」收入；
- * - 微信银行卡 → 卡余额回补；
+ * - 微信银行卡 → 卡余额回补 + 零钱明细写一条「美团外卖」退款收入（与支付侧写账单对称）；
  * - 微信亲属卡 → 按支付时各卡分摊（payFcParts）回补本月可用额度；
  * - QQ余额 → QQ钱包余额入账 + 账单（kind=refund）；QQ银行卡 → 卡余额回补 + 账单；
  * - 美团支付·余额（payIdp='mt' + methodId='mt-balance'）→ 美团钱包余额入账 + 钱包账单；
@@ -234,11 +234,8 @@ export async function mtRefundToOrigin(order: MtOrder): Promise<boolean> {
       }
       const cards = ww.loadCards();
       if (!cards.some((x) => x.id === methodId)) return false;
-      ww.saveJSON(
-        ww.LS_CARDS,
-        cards.map((x) => (x.id === methodId ? { ...x, balance: Math.round((x.balance + amount) * 100) / 100 } : x))
-      );
-      return true;
+      // 银行卡退款：卡余额回补 + 零钱明细写退款收入（此前只回补卡余额不写账单，与支付侧不对称）
+      return w.wxRefundToBankCard(methodId, amount, '美团外卖', { peer: order.merchantName });
     }
     const qq = await import('@/components/apps/qq');
     if (methodId === 'balance') {
