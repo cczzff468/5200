@@ -63,7 +63,7 @@ export interface WxCard {
 
 interface WxBill {
   id: string;
-  kind: '充值' | '提现' | '转入零钱通' | '零钱通转出' | '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款' | '美团外卖';
+  kind: '充值' | '提现' | '转入零钱通' | '零钱通转出' | '红包' | '转账' | '亲属卡付款' | '红包退款' | '转账退款' | '美团外卖' | '淘宝购物';
   amount: number; // 正 = 零钱增加
   time: number;
   /** 对方名（红包/转账/亲属卡条目标题与头像解析用；旧数据/群场景缺省） */
@@ -1071,8 +1071,10 @@ function BillIcon({ kind }: { kind: WxBill['kind'] }) {
     转账退款: ['#F5A63C', <ArrowLeftRight key="i" className="h-4 w-4" strokeWidth={2.2} />],
     亲属卡付款: ['#F5A63C', <ArrowLeftRight key="i" className="h-4 w-4" strokeWidth={2.2} />],
     美团外卖: ['#FFB800', <ShoppingBag key="i" className="h-4 w-4" strokeWidth={2.2} />],
+    淘宝购物: ['#FF5F00', <ShoppingBag key="i" className="h-4 w-4" strokeWidth={2.2} />],
   };
-  const [color, icon] = map[kind];
+  // 兑底：未知 kind 不崩溃（同 WxBillEntryIcon）
+  const [color, icon] = map[kind] ?? ['#8E8E93', <WalletIcon key="i" className="h-4 w-4" strokeWidth={2.2} />];
   return (
     <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: `${color}1A`, color }} aria-hidden="true">
       {icon}
@@ -1148,6 +1150,8 @@ function wxBillDisplayTitle(b: WxBill): string {
       return `亲属卡-付款给${peer}`;
     case '美团外卖':
       return b.amount >= 0 ? '美团外卖-退款' : `美团外卖-${peer}`;
+    case '淘宝购物':
+      return b.amount >= 0 ? '淘宝网-退款' : '淘宝网-商品消费';
     default:
       return b.kind;
   }
@@ -1184,8 +1188,10 @@ function WxBillEntryIcon({ b }: { b: WxBill }) {
     转账退款: ['#4D9CF8', <ArrowLeftRight key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
     亲属卡付款: ['#F7A500', <Heart key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
     美团外卖: ['#FFB800', <ShoppingBag key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
+    淘宝购物: ['#FF5F00', <ShoppingBag key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />],
   };
-  const [color, icon] = map[b.kind];
+  // 兜底：未知 kind（旧数据/跨版本新 kind 未同步映射）不再解构 undefined 崩账单页，回退灰色钱包图标
+  const [color, icon] = map[b.kind] ?? ['#8E8E93', <WalletIcon key="i" className="h-[18px] w-[18px]" strokeWidth={2.2} />];
   return (
     <span
       className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
@@ -1349,8 +1355,10 @@ function WxBillPage({
         return b.refunded === true || b.kind === '红包退款' || b.kind === '转账退款';
       case '充值提现':
         return b.kind === '充值' || b.kind === '提现' || b.kind === '转入零钱通' || b.kind === '零钱通转出';
+      case '商户消费':
+        return b.kind === '亲属卡付款' || b.kind === '淘宝购物';
       default:
-        return false; // 群收款/二维码收付款/商户消费/信用卡还款：本机无此数据源
+        return false; // 群收款/二维码收付款/信用卡还款：本机无此数据源
     }
   };
   const searchFilter = (b: WxBill): boolean => !searchOpen || !search.trim() || wxBillDisplayTitle(b).includes(search.trim());
@@ -1528,8 +1536,8 @@ function WxBillStatsPage({ bills, onToast, onClose }: { bills: WxBill[]; onToast
 
   const metricFilter = (b: WxBill): boolean => {
     if (metric === '支出') return b.amount < 0;
-    if (metric === '收入') return b.amount > 0 && b.kind !== '红包退款' && b.kind !== '转账退款';
-    return b.amount > 0 && (b.kind === '红包退款' || b.kind === '转账退款'); // 其他 = 退款
+    if (metric === '收入') return b.amount > 0 && b.kind !== '红包退款' && b.kind !== '转账退款' && b.kind !== '淘宝购物';
+    return b.amount > 0 && (b.kind === '红包退款' || b.kind === '转账退款' || b.kind === '淘宝购物'); // 其他 = 退款（含淘宝退款）
   };
 
   /** 头部合计：月账单=选中月；年账单=选中年 */
@@ -1573,6 +1581,7 @@ function WxBillStatsPage({ bills, onToast, onClose }: { bills: WxBill[]; onToast
         { name: '零钱通', kinds: ['转入零钱通', '零钱通转出'], color: '#F7A500', icon: <Gem className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
         { name: '充值', kinds: ['充值'], color: '#07C160', icon: <Plus className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
         { name: '提现', kinds: ['提现'], color: '#4D9CF8', icon: <WalletIcon className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
+        { name: '淘宝', kinds: ['淘宝购物'], color: '#FF5F00', icon: <ShoppingBag className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
       ];
       for (const d of defs) {
         const total_ = sumKind(d.kinds, -1);
@@ -1582,7 +1591,7 @@ function WxBillStatsPage({ bills, onToast, onClose }: { bills: WxBill[]; onToast
       const defs: Array<{ name: string; kinds: WxBill['kind'][]; color: string; icon: React.ReactNode }> = [
         { name: '微信红包', kinds: ['红包'], color: '#F26D3D', icon: <RedPacketGlyph size={30} bg="transparent" fg="#F26D3D" /> },
         { name: '转账', kinds: ['转账'], color: '#07C160', icon: <ArrowLeftRight className="h-[15px] w-[15px]" strokeWidth={2.2} /> },
-        { name: '退款', kinds: ['红包退款', '转账退款'], color: '#F5A623', icon: <RedPacketGlyph size={30} bg="transparent" fg="#F5A623" /> },
+        { name: '退款', kinds: ['红包退款', '转账退款', '淘宝购物'], color: '#F5A623', icon: <RedPacketGlyph size={30} bg="transparent" fg="#F5A623" /> },
       ];
       for (const d of defs) {
         const total_ = sumKind(d.kinds, 1);

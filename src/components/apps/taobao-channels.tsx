@@ -2053,10 +2053,10 @@ export function TicketDetailPage({
           <path d="M0 30 L180 130 L430 50 L430 160 L0 160 Z" fill="#fff" opacity="0.06" />
         </svg>
       </div>
-      {/* 内容卡（上提覆盖头部下沿） */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-8">
+      {/* 内容卡（整体上提覆盖头部下沿：负边距必须加在滚动容器本身，容器内首元素负边距会被 overflow 裁剪） */}
+      <div className="min-h-0 flex-1 -mt-7 overflow-y-auto px-3 pb-8">
         {/* 影院/场馆卡 */}
-        <button type="button" onClick={() => onToast('影院详情（演示）')} className="relative z-10 -mt-7 flex w-full items-center rounded-t-2xl bg-white px-4 py-3.5 text-left active:opacity-85">
+        <button type="button" onClick={() => onToast('影院详情（演示）')} className="relative z-10 flex w-full items-center rounded-t-2xl bg-white px-4 py-3.5 text-left active:opacity-85">
           <span className="min-w-0 flex-1 truncate text-[17px] font-black text-black/90">{t.venue}</span>
           <ChevronRight className="h-4 w-4 shrink-0 text-black/30" />
           <span className="ml-3 flex shrink-0 items-center gap-3">
