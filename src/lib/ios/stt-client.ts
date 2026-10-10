@@ -1,14 +1,16 @@
 /**
- * 语音识别（STT）客户端：语音消息「转文字」共用链路（微信/QQ/信息/群聊）。
+ * 语音识别（STT）客户端：语音消息「转文字」服务端兑底链路（微信/QQ/信息/群聊）。
+ * - 识别主通道是 Web Speech（浏览器原生实时识别，见 web-speech.ts）：录音按住期间内置转文字，
+ *   语音消息发送时直接附带 transcript；内置识别模型（z-ai ASR）已移除；
+ * - 本模块仅在「设置 App 配置了 OpenAI 兼容服务商（/audio/transcriptions）」时启用：
+ *   长按旧语音气泡转文字（无实时识别文本时）/ 实时识别失败的服务端兑底 / 录音文件转写；
  * - 配置来源：设置 App「语音 API › 语音识别 STT」（useSettings.sttConfig），每次调用现场读取
- *   → 保存即生效，无需重启；与 TTS 配置相互独立、互不覆盖
- * - builtin：录音 Blob 先转 16kHz WAV base64（与电话端 ASR 同格式），走 /api/stt 内置识别，免配置
+ *   → 保存即生效，无需重启；与 TTS 配置相互独立、互不覆盖；
  * - openai：原始录音 Blob 以 multipart 交给 /api/stt，由服务端转发到 OpenAI 兼容 /audio/transcriptions
- *   （Key 只随请求体/表单发给本站代理，不进日志、不出现在前端存储之外的任何地方）
+ *   （Key 只随请求体/表单发给本站代理，不进日志、不出现在前端存储之外的任何地方）；
  * - 失败抛错（中文文案），调用方决定提示方式——不影响文字聊天
  */
 
-import { blobToWav16kBase64 } from './audio-utils';
 import { useSettings, type SttConfig } from './store';
 
 export type { SttConfig } from './store';
@@ -31,10 +33,13 @@ async function fetchWithTimeout(input: RequestInfo, init: RequestInit, timeoutMs
   }
 }
 
-/** 语音识别是否开箱可用（builtin 恒可用；openai 需要地址 + Key） */
+/**
+ * 服务端识别是否可用：内置识别模型已移除（builtin 恒为 false）——
+ * 仅在设置 App 配置了 OpenAI 兼容服务商（地址 + Key）时可用；
+ * 未配置时识别一律走 Web Speech（浏览器原生实时识别），录音文件转写不可用。 */
 export function isSttReady(cfg?: SttConfig): boolean {
   const c = cfg ?? useSettings.getState().sttConfig;
-  if (c.provider === 'builtin') return true;
+  if (c.provider !== 'openai') return false;
   return Boolean(c.apiKey.trim() && c.baseUrl.trim());
 }
 
@@ -47,39 +52,15 @@ export async function transcribeAudioBlob(blob: Blob): Promise<string> {
   if (!isSttReady(cfg)) {
     throw new Error('请先配置语音识别（STT）');
   }
-  const configPart =
-    cfg.provider === 'builtin'
-      ? { provider: 'builtin' as const }
-      : { provider: 'openai' as const, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model };
+  const configPart = { provider: 'openai' as const, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model };
 
-  let res: Response;
-  if (cfg.provider === 'builtin') {
-    // 内置识别：先转 16kHz 单声道 WAV（解码失败 = 录音数据损坏）
-    let wavBase64: string;
-    try {
-      wavBase64 = await blobToWav16kBase64(blob);
-    } catch {
-      throw new Error('音频解码失败，无法识别');
-    }
-    // #20 通话链路超时看门狗：识别请求 60s 到点必失败
-    res = await fetchWithTimeout(
-      '/api/stt',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config: configPart, audioBase64: wavBase64 }),
-      },
-      60000,
-    );
-  } else {
-    // OpenAI 兼容：multipart 原样转发（webm/m4a whisper 系直接吃）
-    const fd = new FormData();
-    fd.append('config', JSON.stringify(configPart));
-    const ext = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
-    fd.append('audio', blob, `voice.${ext}`);
-    // #20 通话链路超时看门狗：识别请求 60s 到点必失败
-    res = await fetchWithTimeout('/api/stt', { method: 'POST', body: fd }, 60000);
-  }
+  // OpenAI 兼容：multipart 原样转发（webm/m4a whisper 系直接吃）
+  const fd = new FormData();
+  fd.append('config', JSON.stringify(configPart));
+  const ext = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+  fd.append('audio', blob, `voice.${ext}`);
+  // #20 通话链路超时看门狗：识别请求 60s 到点必失败
+  const res = await fetchWithTimeout('/api/stt', { method: 'POST', body: fd }, 60000);
 
   if (!res.ok) {
     let msg = '转文字失败，请重试';
@@ -97,10 +78,10 @@ export async function transcribeAudioBlob(blob: Blob): Promise<string> {
 
 /**
  * 直发语音的自动转写（AI 感知用，五端共用）：
- * 用户按住说话直接松手发出的语音没有转写文本，AI 历史里只剩「[语音]」占位——
- * 本函数在消息入列后补一次识别（成功 → 回填 transcript，AI 当轮就能读到内容；
- * 失败 / 超时 → 返回空串，AI 按「语音占位」防编造规则回应，绝不假装听过）。
- * 与长按「转文字」共用同一套 STT 配置；不抛错，调用方无需 try/catch。
+ * 录音期间 Web Speech 实时识别已在结果上附带 transcript（发送方优先使用，零服务端）；
+ * 本函数是缺 transcript 时的服务端兑底（仅 OpenAI 兼容 STT 配置后可用；内置识别已移除）：
+ * 成功 → 回填 transcript，AI 当轮就能读到内容；失败 / 超时 / 未配置 → 返回空串，
+ * AI 按「语音占位」防编造规则回应，绝不假装听过。不抛错，调用方无需 try/catch。
  */
 export async function autoTranscribeForAi(blob: Blob | undefined, timeoutMs = 20000): Promise<string> {
   if (!blob || !isSttReady()) return '';

@@ -18005,3 +18005,24 @@ Stage Summary:
 - 交付：①微信/QQ 语音（含视频）通话挂断后，整通对话（AI 说的+我说的，语音轮次和文字轮次）按普通消息逐条落进聊天记录，通话卡片作为收尾标记——「全部对话显示在聊天界面，不光打的字」落地且持久化；②微信/QQ 通话页单句弹幕升级为全程对话记录（聊天界面样式、两侧气泡、声波小标、逐字揭示、自动滚底、文字模式常驻记录+纯输入栏）；③电话 App 视频通话补通话内容存档（语音留言可回看）
 - 记忆/上下文零冲突：转写消息照常进后续 AI 上下文（跨 App/下次通话都能接上），通话记忆沉淀仍由引擎 summarizeCall 负责（转写不重复触发提取）；通知口径、拉黑拦截、账号戳、未接通卡片行为全部不变
 - 改动文件：src/lib/ios/chat-call.ts、src/components/apps/voice-call-screen.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/phone.tsx
+
+---
+Task ID: 55
+Agent: main (Z.ai Code)
+Task: 用户四点需求——①移除内置识别模型（z-ai ASR，一直 429），通话/转写全部改用 Web Speech（浏览器原生实时识别）；②通话界面名字/号码显示规则：没加进电话 App 的联系人显示电话号码，保存在电话联系人里的显示名字；③打电话界面显示单句弹幕，聊天界面才显示聊天气泡（收回 Task 53/54 把全程对话记录放进通话页的改法，保留挂断后对话落聊天记录）；④通话界面底部按钮往上移一点点
+
+Work Log:
+- 【①Web Speech 取代内置识别】phone.tsx CallScreen：录音期间并行 startWebSpeechSession（与 MediaRecorder 共享麦克风，voice-input/chat-call 已验证的并行模式），VAD 停录后 onstop 里 ws.stop() 取整句文本（STT_NOISE_RE 过滤纯符号）作为识别主通道；内置 /api/phone/asr fetch 调用删除、路由文件删除；服务端兜底仅在设置 App 配置了 OpenAI 兼容 STT 时启用（isSttReady 对 builtin 恒 false）；无麦/识别失败仍走原有 STT_FAIL_LIMIT → 自动切键盘输入链路；hangup/卸载补 ws.abort() 防会话泄漏
+- chat-call.ts（微信/QQ 通话引擎）识别优先级反转：Web Speech 为主（stop() 直接取整句），transcribeAudioBlob 降为 openai 已配置时的兜底；错误提示优先透出配置服务端的报错文案
+- stt-client.ts：isSttReady builtin→false（内置识别模型移除）、transcribeAudioBlob 删 builtin 分支（不再转 16k WAV，原始 Blob 直传 multipart）、autoTranscribeForAi 仅 openai 配置后可用（语音消息主通道=录音时 Web Speech 实时转写已附带 transcript，五端 commitVoiceMsg 已优先用）；audio-utils 删 blobToWav16kBase64（仅内置 ASR 用过）；/api/stt 删 builtin JSON 分支（改 400 引导配置）；store.ts SttConfig 注释更新（provider 字段仅为兼容旧存储保留）
+- settings.tsx STT 区块改版：删「内置识别（免配置）/OpenAI 兼容」服务商切换，改为「浏览器实时识别（Web Speech）」主开关（通话免提识别+语音消息转写说明）+「服务端兜底（OpenAI 兼容，可选）」表单（任一字段编辑自动置 provider='openai'，显示已启用/未启用状态）
+- 【②名字/号码规则】CallScreen 新增 phoneKnownContact = contact && (kind==='user' || isFriend)（与电话 App 通讯录 tab 同一口径）——好友/机主显示名字+头像，未加好友联系人显示 formatNumber 号码+通用头像；键盘「呼叫 XXX」匹配预览与通话记录名称显示保持不变（Task 51 行为）
+- 【③单句弹幕收回】phone.tsx CallScreen：全程对话记录区还原为单句弹幕——同屏只渲染最后一条气泡（AI 白/我方绿、语音轮次声波小标），新句出现旧句消失，busy 回应中三点保留，有界滚动+自动滚底长句不被按钮遮挡；voice-call-screen.tsx：wx/qq 两皮肤 CallTranscript 全部换回 CaptionStream（普通模式+文字聊天模式均单句弹幕，文字模式=弹幕+纯输入条），CallTranscript 组件删除、AudioLines 导入清理；**Task 54 的挂断后整通对话落聊天记录（writeCallCard transcript 逐条成气泡+通话卡片收尾）完整保留**——「打电话界面显示单句弹幕，聊天界面才显示聊天气泡」两端同时成立
+- 【④底部按钮上移】通话界面挂断容器 pb-[14px]→pb-[22px]（上移 8px，实测 getBoundingClientRect 底距=22px）
+- E2E（agent-browser）：①mock /api/phone/turn 拨小爱（好友）→通话界面显示「小爱」+单条弹幕气泡（DOM 实测 captionBubbles=1）、发文字后气泡被 AI 新回复替换（单句轮替）；②网络面板 0 个 /api/phone/asr 请求（内置 ASR 调用已消失）；③无麦环境免提失败自动切键盘输入（错误提示+输入条）正常；④挂断 toast「通话内容已永久保存到语音留言」+记录落库正常；⑤非好友陈叙（13900002222）拨出→通话界面显示「139 0000 2222」+通用头像；⑥微信回拨陈叙→通话页单句弹幕、挂断后聊天页出现转写气泡+通话卡片（Task 54 链路未回归）；⑦设置 STT 区块新 UI 渲染正确（无内置识别选项）；⑧挂断底部间距 22px 实测
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误（仅仓库固有 instrumentation Edge 警告+环境性 z-ai SDK 429）；console 无新增错误——另经 git stash 对照确认 4 条 IndexedDB 数据相关启动报错（put in-line keys / getAll.slice）在改动前即存在、与本任务无关（全新 profile 零错误）
+- 受保护功能核对：语音消息按住说话/划到转文字/转文字预览、微信/QQ/信息/群聊发送链路、通话流程（拨打/接通/计时/挂断/记录/留言）、键盘匹配预览、文字聊天、免提自动听、主动开口、拉黑守卫逻辑未动仅识别通道与显示层变化
+
+Stage Summary:
+- 交付：①内置识别模型（z-ai ASR）全链路移除——通话免提识别/语音消息实时转写全部走 Web Speech（浏览器原生、零服务端、无 429），OpenAI 兼容 STT 保留为可选服务端兜底（长按旧语音转文字/不支持 Web Speech 时）；②通话界面只给「电话联系人」（好友/机主）显示名字头像，未加好友联系人显示号码；③电话与微信/QQ 通话界面还原单句弹幕，聊天气泡只出现在挂断后的聊天界面/语音留言存档；④通话底部按钮上移 8px
+- 改动文件：src/components/apps/phone.tsx、src/components/apps/voice-call-screen.tsx、src/components/apps/settings.tsx、src/components/apps/voice-input.tsx（注释）、src/lib/ios/chat-call.ts、src/lib/ios/stt-client.ts、src/lib/ios/audio-utils.ts、src/lib/ios/store.ts、src/app/api/stt/route.ts、删除 src/app/api/phone/asr/route.ts

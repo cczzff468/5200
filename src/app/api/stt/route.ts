@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
- * 语音 API · 语音识别代理（POST /api/stt）——语音消息「转文字」共用后端
- * 两种请求形态（由 config.provider 决定）：
- * ① builtin（JSON）：{ config: { provider: 'builtin' }, audioBase64: string }
- *    16kHz 单声道 WAV base64 → 内置识别（z-ai SDK），免配置开箱即用
- * ② openai（multipart/form-data）：config（JSON 字符串 {provider:'openai', baseUrl, apiKey, model?}）+ audio（录音文件）
- *    转发到 OpenAI 兼容 {baseUrl}/audio/transcriptions（Whisper 等）
+ * 语音 API · 语音识别代理（POST /api/stt）——录音文件转写服务端兑底（Web Speech 为主，见 web-speech.ts）
+ * 请求形态（multipart/form-data）：config（JSON 字符串 {provider:'openai', baseUrl, apiKey, model?}）+ audio（录音文件）
+ * 转发到 OpenAI 兼容 {baseUrl}/audio/transcriptions（Whisper 等）。
+ * 内置识别模型（z-ai ASR）已移除：未配置 OpenAI 兼容服务商时前端不会请求本路由。
  * 返回 { text }；失败返回 { error }（中文文案，绝不回显 API Key）。
  */
 
@@ -47,42 +45,14 @@ function buildMultipartBody(
 export async function POST(req: NextRequest) {
   const contentType = req.headers.get('content-type') ?? '';
 
-  // ---------------- 内置识别（JSON / audioBase64） ----------------
+  // ---------------- OpenAI 兼容（multipart 转发；内置识别已移除，JSON/builtin 请求一律拒绝） ----------------
   if (contentType.includes('application/json')) {
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      return NextResponse.json({ error: '请求体必须是合法的 JSON' }, { status: 400 });
-    }
-    const root = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
-    const cfg = typeof root.config === 'object' && root.config !== null ? (root.config as Record<string, unknown>) : {};
-    if (cfg.provider !== 'builtin') {
-      return NextResponse.json({ error: '不支持的服务商' }, { status: 400 });
-    }
-    const audioBase64 = typeof root.audioBase64 === 'string' ? root.audioBase64.trim() : '';
-    if (!audioBase64) {
-      return NextResponse.json({ error: '缺少音频数据' }, { status: 400 });
-    }
-    // 60 秒 16kHz 16bit 单声道 ≈ 1.9MB ≈ base64 2.5MB，超限直接拒绝
-    if (audioBase64.length > 4_000_000) {
-      return NextResponse.json({ error: '录音太长，请说短一点' }, { status: 413 });
-    }
-    try {
-      const ZAI = (await import('z-ai-web-dev-sdk')).default;
-      const zai = await ZAI.create();
-      const response = await zai.audio.asr.create({ file_base64: audioBase64 });
-      const text = (response?.text ?? '').trim();
-      // 空结果不算错误：调用方（转文字）按「转文字失败，请重试」处理
-      return NextResponse.json({ text });
-    } catch (err) {
-      // 安全：只透出错误文案，绝不打印 config/Key
-      const detail = err instanceof Error && err.message ? err.message : '未知错误';
-      return NextResponse.json({ error: `语音识别失败：${detail}` }, { status: 502 });
-    }
+    return NextResponse.json(
+      { error: '内置识别模型已移除，请在设置 App 配置 OpenAI 兼容语音识别（STT），或使用浏览器实时识别' },
+      { status: 400 },
+    );
   }
 
-  // ---------------- OpenAI 兼容（multipart 转发） ----------------
   if (contentType.includes('multipart/form-data')) {
     let form: FormData;
     try {

@@ -20,11 +20,10 @@
  * 二、音色：speakUserTts 现场解析（角色 voiceId → 全局默认 → 内置默认声线），与语音消息同一套
  *   TTS 配置；AI 回复在 TTS 播报的同时把文字逐字同步到字幕流（aiReveal，onProgress 驱动），
  *   TTS 失败不中断通话——回复文字整句直接显示在字幕流里，通话继续。
- *   用户录音期间并行跑 Web Speech 实时识别（liveHeard 增量更新；不再作为字幕上屏——字幕只显示
- *   AI 说的话，实时文本仅作服务端 STT 失败兑底）；
- *   松手后仍以 transcribeAudioBlob 为准，识别失败时用实时识别结果兑底。
- *   STT 与语音消息转文字共用 transcribeAudioBlob（内置识别 / OpenAI 兼容）；识别失败给出提示，
- *   通话继续、可重试。
+ *   用户录音期间并行跑 Web Speech 实时识别（liveHeard 增量更新；字幕仍只显示 AI 说的话）——
+ *   Web Speech 是识别主通道：说完停顿 VAD 停录后 stop() 直接取整句文本，无需服务端；
+ *   内置识别模型已移除：仅在设置 App 配置了 OpenAI 兼容 STT 时才以 transcribeAudioBlob 走服务端兑底
+ *   （isSttReady 对 builtin 恒为 false）；识别失败给出提示，通话继续、可重试。
  *
  * 三、权限与边界：麦克风首次使用时 getUserMedia 申请；拒绝后界面提示、文字聊天与其他功能不受影响；
  *   通话不涉及真实电话网络；挂断/卸载时释放录音流、停止播报、停表。
@@ -49,7 +48,7 @@ import { ownerRealNameFor, ownerProfileFor } from './contacts-store';
 import { getAccountById, getActiveAccountIdFor } from './accounts';
 import { useSettings } from './store';
 import { directChatStream } from './direct-api';
-import { transcribeAudioBlob } from './stt-client';
+import { isSttReady, transcribeAudioBlob } from './stt-client';
 import { startWebSpeechSession, type WebSpeechSession } from './web-speech';
 import {
   startVad,
@@ -1312,32 +1311,34 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         setStatus('recognizing');
         busyRef.current = true;
         void (async () => {
-          // 服务端 STT 为主；失败/超时时用录音期间 Web Speech 的实时文本兑底
+          // 识别主通道：Web Speech（浏览器原生实时识别，录音期间已并行累计，stop() 取整句）；
+          // 内置识别模型已移除——仅在设置 App 配置了 OpenAI 兼容 STT 时才以 transcribeAudioBlob 走服务端兑底
           let text = '';
-          let sttError: unknown = null;
-          try {
-            text = await transcribeAudioBlob(blob);
-          } catch (e) {
-            sttError = e;
+          let serverError: unknown = null;
+          if (ws) {
+            try {
+              const t = (await ws.stop()).trim();
+              // 过滤 ASR 对静音/噪声的典型无意义输出（纯符号），避免当成有效转写
+              if (t && !/^[#\s*_\-.,!?~。？！，、…—·]+$/.test(t)) text = t;
+            } catch {
+              // 实时识别失败：走下方服务端兑底
+            }
           }
           if (endedRef.current) return;
-          if (!text && ws) {
+          if (!text && isSttReady()) {
             try {
-              const fallback = (await ws.stop()).trim();
-              // 过滤 ASR 对静音/噪声的典型无意义输出（纯符号），避免当成有效转写
-              if (fallback && !/^[#\s*_\-.,!?~。？！，、…—·]+$/.test(fallback)) text = fallback;
-            } catch {
-              // 兑底也失败：走统一错误提示
+              const t = (await transcribeAudioBlob(blob)).trim();
+              if (t && !/^[#\s*_\-.,!?~。？！，、…—·]+$/.test(t)) text = t;
+            } catch (e) {
+              serverError = e;
             }
-          } else {
-            ws?.abort();
           }
           if (endedRef.current) return;
           if (!text) {
             setLiveHeard('');
             setError(
-              sttError instanceof Error && sttError.message
-                ? sttError.message
+              serverError instanceof Error && serverError.message
+                ? serverError.message
                 : '没听清，请再说一次',
             );
             setStatus('listening');
@@ -1365,8 +1366,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
       setRecording(true);
       setStatus('listening'); // 免提待命等你开口（VAD 检测到声音才进入 recording）
       armProactiveTimer(); // 用户若一直不说话（3~5s），AI 主动开口
-      // 并行跑 Web Speech 实时识别（与 MediaRecorder 共享麦克风）：仅作服务端 STT 失败兑底，
-      // 不支持/启动失败返回 null，录音与 VAD 不受影响
+      // 并行跑 Web Speech 实时识别（与 MediaRecorder 共享麦克风）：识别主通道——VAD 停录后
+      // stop() 直接取整句文本；不支持/启动失败返回 null（配了 OpenAI 兼容 STT 时走服务端兑底）
       wsRef.current = startWebSpeechSession({
         onPartial: (t) => {
           if (!endedRef.current) setLiveHeard(t);

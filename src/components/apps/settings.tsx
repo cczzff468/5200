@@ -5445,39 +5445,19 @@ function VoicePage({ onBack }: { onBack: () => void }) {
           </div>
         </section>
 
-        {/* 语音识别 STT（转文字）：与 TTS 配置相互独立、互不覆盖；内置识别免配置 */}
+        {/* 语音识别 STT（转文字）：识别主通道 = Web Speech（浏览器原生实时识别）；内置识别模型已移除，
+            服务端仅作可选兑底（OpenAI 兼容，配置后启用） */}
         <section>
           <SectionLabel icon={MessageSquareText} tone={TONE_GREEN}>语音识别 STT（转文字）</SectionLabel>
           <div className="flex flex-col gap-3 rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
-            <div className="flex gap-1 rounded-[12px] bg-black/[0.04] p-1 ring-1 ring-black/[0.05] backdrop-blur-xl dark:bg-white/[0.06] dark:ring-white/[0.08]">
-              {([
-                { id: 'builtin', label: '内置识别（免配置）' },
-                { id: 'openai', label: 'OpenAI 兼容' },
-              ] as const).map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  data-testid={`stt-provider-${p.id}`}
-                  onClick={() => updateSttConfig({ provider: p.id })}
-                  className={`h-9 flex-1 rounded-[10px] text-[13px] font-medium transition-all ${
-                    sttConfig.provider === p.id
-                      ? 'bg-white/90 text-foreground shadow-sm dark:bg-white/[0.16]'
-                      : 'text-foreground/60 hover:text-foreground dark:text-foreground/60'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-
-            {/* 浏览器实时识别（Web Speech API）：录音按住期间内置转文字，「划到转文字」秒出结果 */}
+            {/* 识别主通道：Web Speech（浏览器原生实时识别）——通话免提语音与语音消息转写都用它 */}
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[14px] font-medium text-foreground">浏览器实时识别（Web Speech）</div>
                 <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground/70">
-                  录音时用浏览器内置引擎实时转文字，「划到转文字」秒出结果、零请求；
-                  关闭或不支持时自动回退上方服务端识别。
-                  {wsSupport === null ? '' : wsSupport ? '当前浏览器：支持。' : '当前浏览器：不支持（将始终走服务端）。'}
+                  识别主通道（免配置、零请求）：通话免提语音识别、语音消息「划到转文字」与直发语音自动转写都用浏览器内置引擎实时完成；
+                  关闭后直发语音只有音频（AI 按语音占位回应，除非配置下方服务端兑底）。
+                  {wsSupport === null ? '' : wsSupport ? '当前浏览器：支持。' : '当前浏览器：不支持。'}
                 </p>
               </div>
               <Switch
@@ -5487,18 +5467,23 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               />
             </div>
 
-            {sttConfig.provider === 'builtin' ? (
-              <p className="text-[12px] leading-relaxed text-muted-foreground">
-                使用内置识别引擎，免配置开箱即用：语音消息「转文字」、录音自动转写都走这里；
-                与上方 TTS（文字转语音）配置相互独立、互不覆盖。
+            {/* 服务端兑底（可选）：长按旧语音气泡转文字 / 实时识别不可用时兑底（内置识别模型已移除） */}
+            <div className="border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
+              <div className="text-[14px] font-medium text-foreground">服务端兑底（OpenAI 兼容，可选）</div>
+              <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground/70">
+                用于：长按旧语音气泡「转文字」（无实时识别文本时）、浏览器不支持 Web Speech 时的自动转写兑底；
+                留空则只用浏览器实时识别。
+                {sttConfig.provider === 'openai' && sttConfig.apiKey.trim() && sttConfig.baseUrl.trim()
+                  ? '当前：已启用。'
+                  : '当前：未启用。'}
               </p>
-            ) : (
-              <>
+            </div>
+            <>
                 <div>
                   <FieldLabel>API 地址</FieldLabel>
                   <Input
                     value={sttConfig.baseUrl}
-                    onChange={(e) => updateSttConfig({ baseUrl: e.target.value })}
+                    onChange={(e) => updateSttConfig({ provider: 'openai', baseUrl: e.target.value })}
                     placeholder="如 https://api.openai.com/v1"
                     className="h-11 rounded-[14px] border-black/[0.05] bg-white/55 text-[14px] shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_3px_10px_rgba(17,24,39,0.05)] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.07] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_3px_10px_rgba(0,0,0,0.2)]"
                   />
@@ -5512,7 +5497,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                     <Input
                       type={showSttKey ? 'text' : 'password'}
                       value={sttConfig.apiKey}
-                      onChange={(e) => updateSttConfig({ apiKey: e.target.value })}
+                      onChange={(e) => updateSttConfig({ provider: 'openai', apiKey: e.target.value })}
                       placeholder="sk-…"
                       className="h-11 rounded-[14px] border-black/[0.05] bg-white/55 pr-16 text-[14px] shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_3px_10px_rgba(17,24,39,0.05)] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.07] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_3px_10px_rgba(0,0,0,0.2)]"
                     />
@@ -5532,7 +5517,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   <FieldLabel>识别模型（选填）</FieldLabel>
                   <Input
                     value={sttConfig.model}
-                    onChange={(e) => updateSttConfig({ model: e.target.value })}
+                    onChange={(e) => updateSttConfig({ provider: 'openai', model: e.target.value })}
                     placeholder="如 whisper-1（留空用默认 whisper-1）"
                     className="h-11 rounded-[14px] border-black/[0.05] bg-white/55 text-[14px] shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_3px_10px_rgba(17,24,39,0.05)] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.07] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_3px_10px_rgba(0,0,0,0.2)]"
                   />
@@ -5541,7 +5526,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                       <button
                         key={m}
                         type="button"
-                        onClick={() => updateSttConfig({ model: m })}
+                        onClick={() => updateSttConfig({ provider: 'openai', model: m })}
                         className={`rounded-full px-2.5 py-1 text-[12px] transition-all active:scale-[0.97] ${
                           sttConfig.model.trim() === m
                             ? 'bg-foreground font-medium text-background shadow-[0_4px_14px_rgba(17,24,39,0.18)]'
@@ -5555,10 +5540,9 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   </div>
                 </div>
                 <p className="text-[12px] leading-relaxed text-muted-foreground">
-                  保存后立即生效（每次转文字现场读取）；识别失败不影响语音消息的发送与播放。
+                  保存后立即生效（每次转文字现场读取）；识别失败不影响语音消息的发送与播放；与上方 TTS（文字转语音）配置相互独立、互不覆盖。
                 </p>
               </>
-            )}
           </div>
         </section>
 

@@ -166,18 +166,19 @@ export const SAFE_VOICE_BY_PROVIDER: Record<TtsConfig['provider'], string> = {
   fishaudio: '',
 };
 
-/** 语音识别（STT）配置：与 TTS 配置相互独立、互不覆盖，用于语音消息「转文字」。
- *  内置识别免配置开箱即用；OpenAI 兼容走 /audio/transcriptions（Whisper 等） */
+/** 语音识别（STT）配置：与 TTS 配置相互独立、互不覆盖。
+ *  识别主通道 = Web Speech（浏览器原生实时识别，webSpeech 开关控制语音消息实时转写）；
+ *  内置识别模型（z-ai ASR）已移除，provider 仅为兼容旧存储保留——服务端兜底只在 'openai' 配置后启用 */
 export interface SttConfig {
-  /** 'builtin' = 内置识别（免配置）；'openai' = OpenAI 兼容服务商 */
+  /** 旧字段（兼容保留）：'builtin' 已不再使用（等同未配置服务端）；'openai' = OpenAI 兼容服务商 */
   provider: 'builtin' | 'openai';
   /** OpenAI 兼容服务商地址（如 https://api.openai.com/v1） */
   baseUrl: string;
   apiKey: string;
   /** 识别模型名（OpenAI 兼容用；空 = 服务端默认 whisper-1） */
   model: string;
-  /** 浏览器实时识别（Web Speech API）：录音按住期间内置转文字，「划到转文字」秒出结果；
-   *  关闭或浏览器不支持时回退服务端识别（builtin/openai） */
+  /** 浏览器实时识别（Web Speech API）：录音按住期间实时转文字，「划到转文字」秒出结果、
+   *  直发语音自动附带文字（AI 能读到语音内容）；关闭或浏览器不支持且未配置服务端兜底时，按语音占位处理 */
   webSpeech: boolean;
 }
 

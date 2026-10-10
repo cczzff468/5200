@@ -1,9 +1,10 @@
 /**
  * 音频共享工具（语音消息 / 电话 / 语音备忘录共用）：
  * - 录音 MIME 选择与扩展名推断（MediaRecorder 能力探测）
- * - 录音 Blob → 16kHz 单声道 WAV base64（内置 ASR 要求的格式，与电话端同源）
  * - 波形处理：实时振幅采样降采样为气泡静态波形；文本哈希生成确定性伪波形（TTS 语音气泡用）
  * - Blob → dataURL（语音消息持久化进聊天记录，重启 App 后仍可播放）
+ * 注：原「录音 Blob → 16kHz WAV base64」工具随内置识别模型（z-ai ASR）移除而删除——
+ * 识别现走 Web Speech（浏览器原生实时识别）+ 可选 OpenAI 兼容服务端兑底（原始 Blob 直传）。
  */
 
 /** MediaRecorder 录音 MIME 依次尝试（webm/opus 优先，Safari 走 mp4） */
@@ -28,72 +29,6 @@ export function recorderExtFromMime(mime: string): string {
   if (m.includes('ogg')) return 'ogg';
   if (m.includes('wav')) return 'wav';
   return 'webm';
-}
-
-/**
- * 任意录音 Blob → 16kHz 单声道 PCM16 WAV 的 base64。
- * 用于内置语音识别（/api/stt builtin 分支）：与电话端 ASR 同一格式要求。
- */
-export async function blobToWav16kBase64(blob: Blob): Promise<string> {
-  const buf = await blob.arrayBuffer();
-  const w = window as Window & { webkitAudioContext?: typeof AudioContext };
-  const Ctx = window.AudioContext ?? w.webkitAudioContext;
-  if (!Ctx) throw new Error('浏览器不支持音频解码');
-  const ctx = new Ctx();
-  let audio: AudioBuffer;
-  try {
-    audio = await ctx.decodeAudioData(buf);
-  } finally {
-    void ctx.close();
-  }
-  const srcRate = audio.sampleRate;
-  const dstRate = 16000;
-  const len = Math.max(1, Math.ceil((audio.length * dstRate) / srcRate));
-  const out = new Float32Array(len);
-  const chans: Float32Array[] = [];
-  for (let i = 0; i < audio.numberOfChannels; i++) chans.push(audio.getChannelData(i));
-  for (let i = 0; i < len; i++) {
-    const srcIdx = (i * srcRate) / dstRate;
-    const i0 = Math.floor(srcIdx);
-    const frac = srcIdx - i0;
-    let s = 0;
-    for (const ch of chans) {
-      const a = ch[i0] ?? 0;
-      const b = ch[i0 + 1] ?? a;
-      s += a + (b - a) * frac;
-    }
-    out[i] = s / chans.length;
-  }
-  const wavBuf = new ArrayBuffer(44 + len * 2);
-  const v = new DataView(wavBuf);
-  const writeStr = (off: number, str: string) => {
-    for (let i = 0; i < str.length; i++) v.setUint8(off + i, str.charCodeAt(i));
-  };
-  writeStr(0, 'RIFF');
-  v.setUint32(4, 36 + len * 2, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
-  v.setUint32(16, 16, true);
-  v.setUint16(20, 1, true);
-  v.setUint16(22, 1, true);
-  v.setUint32(24, dstRate, true);
-  v.setUint32(28, dstRate * 2, true);
-  v.setUint16(32, 2, true);
-  v.setUint16(34, 16, true);
-  writeStr(36, 'data');
-  v.setUint32(40, len * 2, true);
-  let off = 44;
-  for (let i = 0; i < len; i++, off += 2) {
-    const s = Math.max(-1, Math.min(1, out[i]));
-    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-  }
-  const bytes = new Uint8Array(wavBuf);
-  let bin = '';
-  const CH = 0x8000;
-  for (let i = 0; i < bytes.length; i += CH) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + CH));
-  }
-  return btoa(bin);
 }
 
 /** Blob → dataURL（语音消息把音频直接存进聊天记录，IndexedDB 持久化） */

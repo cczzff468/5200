@@ -65,6 +65,10 @@ import { collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { hasCustomTtsApi, isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
+// 通话语音识别：Web Speech（浏览器原生实时识别）为主；transcribeAudioBlob 仅在设置里配置了
+// OpenAI 兼容 STT 时作服务端兜底（内置识别模型已移除，isSttReady 对 builtin 恒为 false）
+import { isSttReady, transcribeAudioBlob } from '@/lib/ios/stt-client';
+import { startWebSpeechSession, type WebSpeechSession } from '@/lib/ios/web-speech';
 import {
   startVad,
   AUTO_MAX_MS,
@@ -100,15 +104,18 @@ import { withAvatarForApp, type ContactRecord } from '@/lib/contacts';
  * - 语音留言：列表只显示联系人/类型/时长（不剧透内容），点行进详情页回看完整谈话内容；
  *   拨号中挂断（对方未接听）自动生成对端留言；已接通挂断自动存档整通对话内容（kind='call'，永久保存），
  *   TTS 播报 / 已读未读 / 删除，未读数红点角标
- * - 通话全屏层：深色渐变 + 大头像/名字居中 + 全程对话记录（聊天界面样式：对方白色气泡在左/我方绿色气泡在右、
- *   语音轮次带声波小标，自动滚动到底，长句不再被底部按钮遮挡）+ 右上角信息按钮（开关通话中文字输入）
- *   + 六宫格控制（静音/键盘/扬声器…，文字聊天时收起）+ 红色挂断
+ * - 通话全屏层：深色渐变 + 大头像/名字居中 + 单句弹幕字幕（同一时刻只显示最新一句对话：AI 白/我方绿气泡、
+ *   语音轮次带声波小标，超高内部滚动不会被底部按钮遮挡；完整聊天气泡在挂断后的语音留言存档里回看）
+ *   + 右上角信息按钮（开关通话中文字输入）+ 六宫格控制（静音/键盘/扬声器…，文字聊天时收起）+ 红色挂断
+ * - 通话界面名字显示：只有「电话联系人」（机主本人/已加好友，通讯录里会出现的人）显示名字+头像；
+ *   没加进电话的联系人一律显示电话号码（陌生号语义，iOS 一致）
  * - AI 语音通话：免提全自动——接通后 AI 先开口，说完自动开始聆听（无需点任何按钮），说完停顿自动发送
- *   → 录音 → /api/phone/asr 识别 → /api/phone/turn（统一使用设置 App
- *   「API 设置」里配置的模型，按联系人人设回应；公网由服务器转发、内网自动浏览器直连，无内置模型）
- *   → /api/phone/tts 合成语音播放；麦克风不可用/识别失败自动切换键盘文字输入
- * - 通话中文字聊天：右上角信息按钮开关——只展开输入条（全程对话记录常驻显示）；开启期间暂停免提聆听；
- *   AI 配置了语音 API → 语音回复（TTS），没配 → 文字回复（对话记录气泡）
+ *   → Web Speech API（浏览器原生实时识别，与录音并行共用麦克风）→ /api/phone/turn（统一使用设置 App
+ *   「API 设置」里配置的模型，按联系人人设回应；公网由服务器转发、内网自动浏览器直连）
+ *   → /api/phone/tts 合成语音播放；内置识别模型已移除（设置里配置了 OpenAI 兼容 STT 时才走服务端兜底）；
+ *   麦克风不可用/识别失败自动切换键盘文字输入
+ * - 通话中文字聊天：右上角信息按钮开关——只展开输入条（单句弹幕继续显示最新一句）；开启期间暂停免提聆听；
+ *   AI 配置了语音 API → 语音回复（TTS），没配 → 文字回复（弹幕气泡）
  * - 音效：呼叫等待回铃音（450Hz 中国铃流节奏）、接通提示音、挂断提示音，全部 WebAudio 合成
  * - 通话方向：turn 请求带 direction（AI 来电接听交接='in' / 用户主动拨打='out'，缺省 'out'），
  *   接通问候语按方向区分主被动视角；挂断续聊 endReason 传真实挂断方
@@ -169,6 +176,9 @@ const FAV_KEY = 'phoneFavorites';
  *  拉黑期（byChar/byUser）免提开录循环/主动开口计时器每 3~7s 空转一次且通话永不结束，
  *  连续静默轮达该阈值自动挂断收尾（落正常结束记录、总结照常）；正常轮清零计数，正常通话不受影响 */
 const BLOCKED_SILENT_TURN_LIMIT = 12;
+
+/** ASR 对静音/噪声的典型无意义输出（纯符号，如 "#"、"…"）——过滤后按「没听清」处理（与 chat-call.ts 同款） */
+const STT_NOISE_RE = /^[#\s*_\-.,!?~。？！，、…—·]+$/;
 
 function stripDigits(s: string): string {
   return s.replace(/\D/g, '');
@@ -490,67 +500,6 @@ function fileToAvatarDataUrl(file: File): Promise<string> {
   });
 }
 
-async function blobToWavBase64(blob: Blob): Promise<string> {
-  const buf = await blob.arrayBuffer();
-  const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctx) throw new Error('浏览器不支持音频解码');
-  const ctx = new Ctx();
-  let audio: AudioBuffer;
-  try {
-    audio = await ctx.decodeAudioData(buf);
-  } finally {
-    void ctx.close();
-  }
-  const srcRate = audio.sampleRate;
-  const dstRate = 16000;
-  const len = Math.max(1, Math.ceil((audio.length * dstRate) / srcRate));
-  const out = new Float32Array(len);
-  const chans: Float32Array[] = [];
-  for (let i = 0; i < audio.numberOfChannels; i++) chans.push(audio.getChannelData(i));
-  for (let i = 0; i < len; i++) {
-    const srcIdx = (i * srcRate) / dstRate;
-    const i0 = Math.floor(srcIdx);
-    const frac = srcIdx - i0;
-    let s = 0;
-    for (const ch of chans) {
-      const a = ch[i0] ?? 0;
-      const b = ch[i0 + 1] ?? a;
-      s += a + (b - a) * frac;
-    }
-    out[i] = s / chans.length;
-  }
-  const wavBuf = new ArrayBuffer(44 + len * 2);
-  const v = new DataView(wavBuf);
-  const writeStr = (off: number, str: string) => {
-    for (let i = 0; i < str.length; i++) v.setUint8(off + i, str.charCodeAt(i));
-  };
-  writeStr(0, 'RIFF');
-  v.setUint32(4, 36 + len * 2, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
-  v.setUint32(16, 16, true);
-  v.setUint16(20, 1, true);
-  v.setUint16(22, 1, true);
-  v.setUint32(24, dstRate, true);
-  v.setUint32(28, dstRate * 2, true);
-  v.setUint16(32, 2, true);
-  v.setUint16(34, 16, true);
-  writeStr(36, 'data');
-  v.setUint32(40, len * 2, true);
-  let off = 44;
-  for (let i = 0; i < len; i++, off += 2) {
-    const s = Math.max(-1, Math.min(1, out[i]));
-    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-  }
-  const bytes = new Uint8Array(wavBuf);
-  let bin = '';
-  const CH = 0x8000;
-  for (let i = 0; i < bytes.length; i += CH) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + CH));
-  }
-  return btoa(bin);
-}
-
 // ---------------- 通话全屏层 ----------------
 
 type CallPhase = 'dialing' | 'connected' | 'ended';
@@ -594,6 +543,8 @@ function CallScreen({
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  /** Web Speech 实时识别会话（录音期间并行；onstop 收尾时 stop() 取整句文本/abort 丢弃） */
+  const wsRef = useRef<WebSpeechSession | null>(null);
   const secondsRef = useRef(0);
   const phaseRef = useRef<CallPhase>('dialing');
   const bubblesRef = useRef<CallBubble[]>([]);
@@ -1157,6 +1108,8 @@ function CallScreen({
     } catch {
       // 已停止
     }
+    wsRef.current?.abort();
+    wsRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     playHangupBlip();
     const phaseAtEnd = phaseRef.current;
@@ -1669,6 +1622,8 @@ function CallScreen({
       window.clearTimeout(peerTimer);
       if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
       stopAutoTimers();
+      wsRef.current?.abort();
+      wsRef.current = null;
       ring.stop();
       stopSpeaking();
       if (audioRef.current) {
@@ -1768,10 +1723,17 @@ function CallScreen({
         vadSpeakingRef.current = false;
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
-        if (endedRef.current) return;
+        // 收 Web Speech 实时识别会话：丢弃/挂断路径直接 abort；发送路径 stop() 取整句文本
+        const ws = wsRef.current;
+        wsRef.current = null;
+        if (endedRef.current) {
+          ws?.abort();
+          return;
+        }
         if (discardRef.current) {
           // 静音/开文字条/超时无人说话：丢弃本轮；未被禁止时自动重新听（免提等待循环）
           discardRef.current = false;
+          ws?.abort();
           chunksRef.current = [];
           // AI 主动开口：用户一直没说，丢弃静默录音后转 AI 独白轮（第 N 次尝试）
           if (proactivePendingRef.current) {
@@ -1791,6 +1753,7 @@ function CallScreen({
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         chunksRef.current = [];
         if (blob.size < 1200) {
+          ws?.abort();
           setError('没听到声音，请再说一次');
           scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS);
           return;
@@ -1799,20 +1762,31 @@ function CallScreen({
         busyRef.current = true;
         setPeerStatus('thinking');
         try {
-          const b64 = await blobToWavBase64(blob);
-          // #20 通话链路超时看门狗：识别请求 60s 到点必失败（AbortSignal.timeout → DOMException
-          // TimeoutError，catch 里映射成「语音识别失败」友好文案后自动重听）
-          const res = await fetch('/api/phone/asr', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ audioBase64: b64 }),
-            signal: AbortSignal.timeout(60000),
-          });
-          const data = (await res.json()) as { text?: string; error?: string };
+          // 识别主通道：Web Speech（浏览器原生实时识别，录音期间已并行累计，stop() 取整句）
+          let text = '';
+          if (ws) {
+            try {
+              const t = (await ws.stop()).trim();
+              if (t && !STT_NOISE_RE.test(t)) text = t;
+            } catch {
+              // 实时识别失败：走下方服务端兜底
+            }
+          }
           if (endedRef.current) return;
-          if (!res.ok || !data.text) {
+          if (!text && isSttReady()) {
+            // 内置识别模型已移除；仅在设置 App 配置了 OpenAI 兼容 STT 时才走服务端兜底
+            // （transcribeAudioBlob 内置 #20 通话链路 60s 超时看门狗，到点必失败）
+            try {
+              const t = (await transcribeAudioBlob(blob)).trim();
+              if (t && !STT_NOISE_RE.test(t)) text = t;
+            } catch {
+              // 兜底也失败：走统一失败提示
+            }
+          }
+          if (endedRef.current) return;
+          if (!text) {
             // 识别失败：提示后自动重听；连续失败达上限切键盘输入（不影响文字聊天）
-            setError(data.error || '没听清，请再说一次');
+            setError('没听清，请再说一次');
             sttFailRef.current += 1;
             setPeerStatus('listening');
             if (sttFailRef.current >= STT_FAIL_LIMIT) {
@@ -1826,7 +1800,7 @@ function CallScreen({
           sttFailRef.current = 0;
           setBusy(false);
           busyRef.current = false;
-          await runTurn(data.text);
+          await runTurn(text);
         } catch {
           if (!endedRef.current) {
             setError('语音识别失败，请再说一次');
@@ -1846,6 +1820,9 @@ function CallScreen({
       };
       recorder.start();
       setRecording(true);
+      // Web Speech 实时识别（浏览器原生，与录音并行共用麦克风）：通话语音识别主通道——
+      // 说完停顿 VAD 停录后 stop() 取整句文本；不支持/启动失败返回 null（走服务端兜底/键盘输入）
+      wsRef.current = startWebSpeechSession({});
       armProactiveTimer(); // 用户若一直不说话（3~5s），AI 主动开口
       // VAD（免提核心）：检测你何时开口、何时说完
       vadRef.current = startVad({
@@ -1980,11 +1957,13 @@ function CallScreen({
     return callDurationText(seconds);
   };
 
-  // 陌生号码：标题直接显示拨打的号码（iOS 一致）；空号后状态行提示
-  const name = contact?.name || formatNumber(target.number);
-  /** 全程对话记录（聊天界面样式）：过滤流式中的空气泡；容器经 textListRef effect 自动滚到底 */
+  // 通话界面名字/号码显示（用户要求）：只有「电话联系人」（机主本人/已加好友，通讯录里会出现的人）
+  // 才显示名字与头像；没加进电话的联系人一律显示电话号码（陌生号语义，iOS 一致）
+  const phoneKnownContact = contact && (contact.kind === 'user' || contact.isFriend) ? contact : null;
+  const name = phoneKnownContact?.name || formatNumber(target.number);
+  /** 单句弹幕最新一句：过滤流式中的空气泡后取最后一条（新句出现旧句消失） */
   const shownBubbles = bubbles.filter((b) => b.text.trim().length > 0);
-  /** 回应中三点动画的显示条件：忙且最后一条是我方（在等对方开口）；对方气泡已在流式输出时不再叠三点 */
+  /** 回应中三点动画的显示条件：忙且最后一条是我方/还没有气泡（在等对方开口） */
   const lastShownBubble = shownBubbles[shownBubbles.length - 1];
   /** 文字聊天模式：六宫格收起给输入框腾地方，关闭后恢复 */
   const controlsCollapsed = textMode;
@@ -2039,7 +2018,7 @@ function CallScreen({
           {phase === 'dialing' && !emptyNumber && (
             <span className="absolute inset-0 animate-ping rounded-full bg-white/20" aria-hidden="true" />
           )}
-          <AvatarBubble contact={contact} size={92} className="relative shadow-2xl ring-2 ring-white/25" />
+          <AvatarBubble contact={phoneKnownContact} size={92} className="relative shadow-2xl ring-2 ring-white/25" />
           {peerStatus === 'speaking' && (
             <span className="absolute -bottom-1 left-1/2 flex -translate-x-1/2 items-end gap-[3px] rounded-full bg-black/50 px-2.5 py-1.5 backdrop-blur-md" aria-hidden="true">
               {[0, 1, 2, 3].map((i) => (
@@ -2068,29 +2047,30 @@ function CallScreen({
             {error}
           </p>
         )}
-        {/* 全程对话记录（聊天界面样式）：对方白色气泡在左、我方绿色气泡在右，语音轮次带声波小标；
-            可滚动自动滚底，长句不会被底部按钮遮挡；拨号中隐藏（占位保留布局稳定） */}
+        {/* 单句弹幕：同一时刻只显示最新一句对话（AI 白色气泡在左/我方绿色气泡在右，语音轮次带声波小标；
+            新句出现旧句消失，完整聊天气泡在挂断后的语音留言存档/聊天界面看）；
+            有界滚动超高内部滚底，长句不会被底部按钮遮挡；拨号中隐藏（占位保留布局稳定） */}
         {phase !== 'dialing' ? (
           <div
             ref={textListRef}
             className="no-scrollbar mt-2 flex w-full min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-1 pb-1"
-            aria-label="通话对话记录"
-            data-testid="call-transcript"
+            aria-label="通话字幕"
+            data-testid="call-captions"
           >
-            {shownBubbles.map((m) => (
-              <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            {lastShownBubble && (
+              <div className={`flex ${lastShownBubble.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <p
                   className={`flex max-w-[82%] items-start gap-1.5 whitespace-pre-wrap break-words px-3.5 py-2 text-[14.5px] leading-snug shadow-[0_1px_3px_rgba(0,0,0,0.3)] ${
-                    m.role === 'user'
+                    lastShownBubble.role === 'user'
                       ? 'rounded-[16px] rounded-br-[5px] bg-[#34C759] text-white'
                       : 'rounded-[16px] rounded-bl-[5px] bg-white/15 text-white/95'
                   }`}
                 >
-                  {m.via !== 'text' && <AudioLines className="mt-[3px] h-3.5 w-3.5 shrink-0 opacity-60" aria-hidden="true" />}
-                  <span className="min-w-0">{m.text}</span>
+                  {lastShownBubble.via !== 'text' && <AudioLines className="mt-[3px] h-3.5 w-3.5 shrink-0 opacity-60" aria-hidden="true" />}
+                  <span className="min-w-0">{lastShownBubble.text}</span>
                 </p>
               </div>
-            ))}
+            )}
             {busy && (!lastShownBubble || lastShownBubble.role === 'user') && (
               <div className="flex justify-start">
                 <p
@@ -2162,7 +2142,7 @@ function CallScreen({
       </div>
 
       {/* 通话中文字输入（右上角信息按钮开关）+ 挂断——免提全自动：无需点任何按钮即可对话 */}
-      <div className="relative z-10 shrink-0 px-5 pb-[14px] pt-2">
+      <div className="relative z-10 shrink-0 px-5 pb-[22px] pt-2">
         {phase === 'connected' && textMode && (
           <div className="mb-2.5 flex items-center gap-2">
             <input
