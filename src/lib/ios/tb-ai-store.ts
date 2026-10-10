@@ -66,8 +66,10 @@ export interface TbFeedTop {
 
 /** 某个信息流表面（首页各 tab/视频/补贴/秒杀/飞猪）的前插状态 */
 export interface TbFeedState {
-  /** 刷新前插的条目（最新批在最前） */
+  /** 刷新前插的条目（最新批在最前，顶部下拉产生） */
   tops: TbFeedTop[];
+  /** 底部追加的条目（最新批在最后，滑到底部拉一拉产生，Task 45） */
+  tails?: TbFeedTop[];
   /** 本地兜底批次数（首页上滑分页恢复用） */
   batch?: number;
   /** 本地兜底刷新 key（首页历史批次恢复用） */
@@ -83,7 +85,7 @@ export function tbFeedLoad(uid: string, surface: string): TbFeedState | null {
 }
 
 export function tbFeedSave(uid: string, surface: string, s: TbFeedState): void {
-  save(feedKey(uid, surface), { ...s, tops: s.tops.slice(0, 120) });
+  save(feedKey(uid, surface), { ...s, tops: s.tops.slice(0, 120), tails: (s.tails ?? []).slice(-80) });
 }
 
 // ---------------- 频道页辅助持久化（确定性批次 / AI 电影等非商品数据） ----------------

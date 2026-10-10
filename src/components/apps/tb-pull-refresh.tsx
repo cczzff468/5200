@@ -1,13 +1,12 @@
 'use client';
 
 /**
- * 淘宝系页面通用「双向刷新」基建（Task 40 需求）：
- * - 顶部下拉、底部上拉，两个方向都触发 onRefresh(dir)；
- * - 刷新语义由调用方实现为「向列表顶部插入新内容」——旧内容一律原位保留、不重排、不清空；
- * - 底部上拉触发时自动做视口锚定：内容前插后按高度差补偿 scrollTop，画面不跳、更不会回顶；
- * - TbPullIndicator 悬浮胶囊：下拉在顶部随手指位移，上拉在底部，刷新中转圈。
- * 旧实现的问题（本轮修复）：淘票票刷新 rot() 重排导致旧内容消失 + scrollTo(top:0) 跳回顶部；
- * 首页刷新重洗牌 + setBatch(1) 折叠已加载列表——全部改为「前插保旧」。
+ * 淘宝系页面通用「双向刷新」基建（Task 40 需求，Task 45 语义升级）：
+ * - 顶部下拉、底部上拉，两个方向都触发 onRefresh(dir)，调用方按方向分流；
+ * - 顶部下拉（down）→ 新内容前插到列表顶部，旧内容一律原位保留、不重排、不清空；
+ * - 底部上拉（up）→ 新内容追加到列表底部（加载更多）：上方内容（含之前刷新出来的）原位不变，
+ *   追加不改变现有内容高度，无需视口锚定，画面完全不跳；
+ * - TbPullIndicator 悬浮胶囊：下拉在顶部随手指位移，上拉在底部（文案「加载」），加载中转圈。
  */
 
 import { useRef, useState } from 'react';
@@ -28,7 +27,6 @@ export function useTbPullRefresh(onRefresh: (dir: TbPullDir) => void | Promise<v
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const st = useRef({ y: 0, dir: 'down' as TbPullDir, active: false, dist: 0 });
   const busy = useRef(false);
-  const anchorFrom = useRef(0);
 
   const onTouchStart = (e: React.TouchEvent) => {
     const el = scrollRef.current;
@@ -53,22 +51,14 @@ export function useTbPullRefresh(onRefresh: (dir: TbPullDir) => void | Promise<v
     if (s.active && !busy.current && s.dist > (s.dir === 'down' ? downTH : upTH)) {
       busy.current = true;
       const dir = s.dir;
-      const el = scrollRef.current;
-      // up 方向：记录刷新前内容高度 → 前插内容后按差值补偿 scrollTop（视口锚定，不跳屏）
-      if (dir === 'up' && el) anchorFrom.current = el.scrollHeight;
       setGhost(null);
       setRefreshing(dir);
       window.setTimeout(() => {
         const finish = () => {
-          // 双 rAF 等 React 提交前插内容后再收尾
+          // up=底部追加：现有内容高度不变、视口自然不动；down=前插：视口在顶部同样不动。
+          // 双 rAF 等 React 提交新内容后再收尾
           requestAnimationFrame(() =>
             requestAnimationFrame(() => {
-              const el2 = scrollRef.current;
-              if (dir === 'up' && el2 && anchorFrom.current > 0) {
-                const d = el2.scrollHeight - anchorFrom.current;
-                if (d > 0) el2.scrollTop += d;
-              }
-              anchorFrom.current = 0;
               setRefreshing(null);
               busy.current = false;
             }),
@@ -107,7 +97,7 @@ export function TbPullIndicator({ h, light }: { h: TbPullRefresh; light?: boolea
     >
       <div className={`flex h-9 items-center gap-2 rounded-full px-4 text-[13px] shadow-lg backdrop-blur ${light ? 'bg-white/25 text-white' : 'bg-black/55 text-white'}`}>
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : down ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-        {busy ? '正在刷新…' : down ? '松开刷新' : '松开更新'}
+        {busy ? (down ? '正在刷新…' : '正在加载…') : down ? '松开刷新' : '松开加载更多'}
       </div>
     </div>
   );

@@ -956,6 +956,8 @@ function HomePage({
   const [batch, setBatch] = useState(1);
   /** 前插条目（AI 批次 + 本地兜底批次统一存 pid 引用，经 productById 解析含 AI 注册表） */
   const [tops, setTops] = useState<TbFeedTop[]>([]);
+  /** 底部追加条目（Task 45：滑到底部拉一拉 → 新内容追加到底部，上方内容原位不变） */
+  const [tails, setTails] = useState<TbFeedTop[]>([]);
   const apiConfig = useSettings((s) => s.apiConfig);
   const apiCfgRef = useRef(apiConfig);
   apiCfgRef.current = apiConfig;
@@ -964,6 +966,8 @@ function HomePage({
   // 镜像 ref：异步刷新完成回调里读取最新状态，避免闭包过期
   const topsRef = useRef(tops);
   topsRef.current = tops;
+  const tailsRef = useRef(tails);
+  tailsRef.current = tails;
   const refreshKeyRef = useRef(refreshKey);
   refreshKeyRef.current = refreshKey;
   const batchRef = useRef(batch);
@@ -978,13 +982,13 @@ function HomePage({
   const [refreshingDir, setRefreshingDir] = useState<'down' | 'up' | null>(null);
   const pullStart = useRef<number | null>(null);
   const pullDir = useRef<'down' | 'up'>('down');
-  const anchorFrom = useRef(0);
 
-  // 挂载/切 tab：恢复该频道持久化的前插批次与分页（旧内容永不消失）
+  // 挂载/切 tab：恢复该频道持久化的前插批次、底部追加与分页（旧内容永不消失）
   useEffect(() => {
     if (!surface) return;
     const s = tbFeedLoad(uid, surface);
     setTops(s?.tops ?? []);
+    setTails(s?.tails ?? []);
     setRefreshKey(s?.refreshKey ?? 0);
     setBatch(s?.batch && s.batch >= 1 ? s.batch : 1);
   }, [uid, surface]);
@@ -1003,27 +1007,27 @@ function HomePage({
         const nb = Math.min(20, b + 1);
         // 分页进度随写随存（保存为幂等操作，重复执行无副作用）
         if (nb !== b && surfaceRef.current) {
-          tbFeedSave(uid, surfaceRef.current, { tops: topsRef.current, batch: nb, refreshKey: refreshKeyRef.current });
+          tbFeedSave(uid, surfaceRef.current, { tops: topsRef.current, tails: tailsRef.current, batch: nb, refreshKey: refreshKeyRef.current });
         }
         return nb;
       });
     }
   }, [uid]);
 
-  // 双向刷新（Task 40/41）：顶部下拉、底部上拉都触发；AI 生成新推荐前插（用户配置模型），
-  // 失败回退本地洗牌批次；旧内容与历史批次永远保留；up 方向视口锚定不跳屏
+  // 双向刷新（Task 40/41/45）：更新内容用「设置 › API 配置」用户配置的模型生成（/api/tb-feed）——
+  // 顶部下拉 → AI 新推荐前插到顶部（上方内容原样保留）；底部上拉 → AI 新推荐追加到底部
+  // （上方内容——含之前刷新出来的——原位不变，画面不跳）。AI 失败回退本地确定性批次
+  // （down 前插批 / up 追加种子好物）；全部持久化（IndexedDB），旧内容与历史批次永不消失
   const doHomeRefresh = (dir: 'down' | 'up') => {
     setRefreshingDir(dir);
     if (dir === 'down') setPullY(46);
-    else {
-      setPullUpY(46);
-      if (scrollerRef.current) anchorFrom.current = scrollerRef.current.scrollHeight;
-    }
+    else setPullUpY(46);
     const seq = ++refreshSeq.current;
     const surf = surfaceRef.current;
-    // 排除名单：当前已展示的宝贝标题（保证出来的是新内容）
+    // 排除名单：当前已展示的宝贝标题（前插 + 底部追加 + 基底流），保证每次出来的都是新内容
     const exclude = [
       ...topsRef.current.map((t) => productById(t.pid)?.title ?? ''),
+      ...tailsRef.current.map((t) => productById(t.pid)?.title ?? ''),
       ...pool.slice(0, Math.min(pool.length, 12 + batchRef.current * 8)).map((p) => p.title),
     ].filter((s) => s.length > 0);
     void (async () => {
@@ -1036,40 +1040,45 @@ function HomePage({
         config: apiCfgRef.current,
       });
       if (refreshSeq.current !== seq) return; // 期间又触发了刷新/切频道：丢弃过期批次
-      let newTops: TbFeedTop[];
-      let newKey = refreshKeyRef.current;
-      if (ai) {
-        const ks = `ai${Date.now().toString(36)}`;
-        newTops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...topsRef.current];
+      const ks = `ai${Date.now().toString(36)}`;
+      if (dir === 'down') {
+        // 顶部前插（原 Task 40/41 口径）
+        let newTops: TbFeedTop[];
+        let newKey = refreshKeyRef.current;
+        if (ai) {
+          newTops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...topsRef.current];
+        } else {
+          // 本地兜底：确定性洗牌前插（同样持久化）
+          newKey = refreshKeyRef.current + 1;
+          const shuffled = tbShufflePool(pool, newKey);
+          const kr = `r${newKey}`;
+          newTops = [
+            ...Array.from({ length: 8 }, (_, i) => ({ pid: shuffled[i % shuffled.length].id, v: newKey % 4, k: `${kr}-${i}` })),
+            ...topsRef.current,
+          ];
+        }
+        setTops(newTops);
+        setRefreshKey(newKey);
+        if (surf) tbFeedSave(uid, surf, { tops: newTops, tails: tailsRef.current, batch: batchRef.current, refreshKey: newKey });
+        onToast(ai ? '已为你推荐新的好物，旧内容都还在哦' : '已为你换上新推荐，旧内容都还在哦');
       } else {
-        // 本地兜底：确定性洗牌前插（与 Task 40 口径一致，同样持久化）
-        newKey = refreshKeyRef.current + 1;
-        const shuffled = tbShufflePool(pool, newKey);
-        const ks = `r${newKey}`;
-        newTops = [
-          ...Array.from({ length: 8 }, (_, i) => ({ pid: shuffled[i % shuffled.length].id, v: newKey % 4, k: `${ks}-${i}` })),
-          ...topsRef.current,
-        ];
+        // 底部追加（Task 45）：AI 好物接在列表最后；AI 失败追加一批种子好物（按已追加量确定性选取，不与上方重复）
+        let appended: TbProduct[];
+        if (ai) {
+          appended = ai.products;
+        } else {
+          const base = topsRef.current.length + tailsRef.current.length;
+          appended = Array.from({ length: 8 }, (_, i) => pool[(base * 3 + 1 + i * 3) % pool.length]);
+        }
+        const start = tailsRef.current.length;
+        const newTails: TbFeedTop[] = [...tailsRef.current, ...appended.map((p, i) => ({ pid: p.id, v: (i + start) % 4, k: `tl${ks}-${start + i}` }))];
+        setTails(newTails);
+        if (surf) tbFeedSave(uid, surf, { tops: topsRef.current, tails: newTails, batch: batchRef.current, refreshKey: refreshKeyRef.current });
+        onToast('已加载新的好物在下方，上方内容不变');
       }
-      setTops(newTops);
-      setRefreshKey(newKey);
-      if (surf) tbFeedSave(uid, surf, { tops: newTops, batch: batchRef.current, refreshKey: newKey });
       setRefreshingDir(null);
       setPullY(0);
       setPullUpY(0);
-      if (dir === 'up') {
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            const el = scrollerRef.current;
-            if (el && anchorFrom.current > 0) {
-              const d = el.scrollHeight - anchorFrom.current;
-              if (d > 0) el.scrollTop += d;
-            }
-            anchorFrom.current = 0;
-          }),
-        );
-      }
-      onToast(ai ? '已为你推荐新的好物，旧内容都还在哦' : '已为你换上新推荐，旧内容都还在哦');
     })();
   };
 
@@ -1125,8 +1134,13 @@ function HomePage({
       const p = pool[i % pool.length];
       base.push({ p, v: Math.floor(i / pool.length) % 4, k: `b-${p.id}-${i}` });
     }
-    return [...topEntries, ...base];
-  }, [tops, pool, batch]);
+    // 底部追加批次（Task 45：滑到底部拉一拉，新内容接在最后，上方内容原位不变）
+    const tailEntries = tails.flatMap((t) => {
+      const p = productById(t.pid);
+      return p ? [{ p, v: t.v, k: t.k }] : [];
+    });
+    return [...topEntries, ...base, ...tailEntries];
+  }, [tops, tails, pool, batch]);
 
   // 需求（第十轮）：频道 tab「关注」左侧返回按钮 → 返回手机主屏幕
   const closeApp = useUI((s) => s.closeApp);
@@ -1154,9 +1168,9 @@ function HomePage({
                 type="button"
                 onClick={() => {
                   if (t.id === feedTab) return;
-                  // 切频道前先保存当前频道的刷新批次（旧内容永不丢失），再恢复目标频道的持久化状态
+                  // 切频道前先保存当前频道的刷新批次（前插+底部追加，旧内容永不丢失），再恢复目标频道的持久化状态
                   if (surfaceRef.current) {
-                    tbFeedSave(uid, surfaceRef.current, { tops: topsRef.current, batch: batchRef.current, refreshKey: refreshKeyRef.current });
+                    tbFeedSave(uid, surfaceRef.current, { tops: topsRef.current, tails: tailsRef.current, batch: batchRef.current, refreshKey: refreshKeyRef.current });
                   }
                   setFeedTab(t.id);
                 }}
@@ -1297,12 +1311,12 @@ function HomePage({
             </div>
           </div>
         )}
-        {/* 上拉更新指示器（悬浮于列表区底部；Task 40：上滑也更新，前插保旧不跳顶） */}
+        {/* 上拉加载指示器（悬浮于列表区底部；Task 45：底部拉一拉=追加新内容，上方内容不变） */}
         {(pullUpY > 0 || refreshingDir === 'up') && (
           <div className="pointer-events-none absolute inset-x-0 bottom-6 z-40 grid place-items-center">
             <div className="flex h-9 items-center gap-2 rounded-full bg-black/55 px-4 text-[13px] text-white shadow-lg">
               <Loader2 className="h-4 w-4 animate-spin text-white/90" />
-              {refreshingDir === 'up' ? '正在更新…' : pullUpY > 56 ? '松开更新' : '上拉更新'}
+              {refreshingDir === 'up' ? '正在加载…' : pullUpY > 56 ? '松开加载更多' : '拉一拉加载更多'}
             </div>
           </div>
         )}
@@ -1383,11 +1397,14 @@ function FollowFeed({ uid, follows, onOpenProduct, onOpenSearch }: { uid: string
 
 /** 视频 tab（截图2 底部第2tab：竖滑短视频流——海报全屏 + 右侧互动栏 + 底部文案 + 播放态 chrome；演示态） */
 function VideoPage({ uid, onOpenProduct, onToast }: { uid: string; onOpenProduct: (pid: string) => void; onToast: (m: string) => void }) {
-  // 需求（第十轮）：视频页上滑可以刷新——滑到底部继续上拉换一批视频
+  // 需求（第十轮）：视频页上滑可以刷新；Task 45 语义升级：滑到底部继续上拉 → 新视频追加到
+  // 列表末尾（接着往后滑即可看到），当前视频与上方内容原位不变、不跳回顶部
   // Task 41：更新用「设置 › API 配置」用户配置的模型生成（/api/tb-feed），批次持久化（刷新页面不丢）
   const [vKey, setVKey] = useState(0);
   /** AI/本地兜底前插的视频条目（pid 引用，持久化恢复） */
   const [vTops, setVTops] = useState<TbFeedTop[]>([]);
+  /** 底部追加的视频条目（Task 45：上拉加载更多，最新批在最后） */
+  const [vTails, setVTails] = useState<TbFeedTop[]>([]);
   const apiConfig = useSettings((s) => s.apiConfig);
   const apiCfgRef = useRef(apiConfig);
   apiCfgRef.current = apiConfig;
@@ -1396,10 +1413,13 @@ function VideoPage({ uid, onOpenProduct, onToast }: { uid: string; onOpenProduct
   useEffect(() => {
     const s = tbFeedLoad(uid, 'video');
     setVTops(s?.tops ?? []);
+    setVTails(s?.tails ?? []);
     setVKey(s?.refreshKey ?? 0);
   }, [uid]);
   const vTopsRef = useRef(vTops);
   vTopsRef.current = vTops;
+  const vTailsRef = useRef(vTails);
+  vTailsRef.current = vTails;
   const vKeyRef = useRef(vKey);
   vKeyRef.current = vKey;
   const vids = useMemo(() => {
@@ -1410,8 +1430,13 @@ function VideoPage({ uid, onOpenProduct, onToast }: { uid: string; onOpenProduct
     const arr = [...TB_PRODUCTS];
     const start = (vKey * 3) % arr.length;
     const base = Array.from({ length: 8 }, (_, i) => ({ p: arr[(start + i) % arr.length], v: (i + vKey) % 4 }));
-    return [...topEntries, ...base];
-  }, [vTops, vKey]);
+    // 底部追加批次（Task 45）：上拉加载的新视频接在最后
+    const tailEntries = vTails.flatMap((t) => {
+      const p = productById(t.pid);
+      return p ? [{ p, v: t.v }] : [];
+    });
+    return [...topEntries, ...base, ...tailEntries];
+  }, [vTops, vTails, vKey]);
   const [playing, setPlaying] = useState(true);
   const [vRefreshing, setVRefreshing] = useState(false);
   const vScrollerRef = useRef<HTMLDivElement>(null);
@@ -1433,25 +1458,28 @@ function VideoPage({ uid, onOpenProduct, onToast }: { uid: string; onOpenProduct
     if (vAcc.current > 60 && !vRefreshing) {
       setVRefreshing(true);
       const seq = ++vSeq.current;
-      // 排除名单：当前已展示视频的宝贝标题
+      // 排除名单：当前已展示视频的宝贝标题（前插+基底+底部追加），保证每次都是新视频
       const exclude = vids.map(({ p }) => p.title).filter(Boolean).slice(0, 60);
       void (async () => {
         const ai = await tbFetchAiBatch({ uid, surface: 'video', exclude, count: 5, config: apiCfgRef.current });
         if (vSeq.current !== seq) return;
-        let newTops = vTopsRef.current;
-        let newKey = vKeyRef.current;
+        const ks = `ai${Date.now().toString(36)}`;
+        // 底部追加（Task 45）：新视频接在列表末尾；AI 失败追加一批种子视频（按已追加量确定性选取）
+        let appended: TbProduct[];
         if (ai) {
-          const ks = `ai${Date.now().toString(36)}`;
-          newTops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...vTopsRef.current];
+          appended = ai.products;
         } else {
-          newKey = vKeyRef.current + 1;
+          const arr = [...TB_PRODUCTS];
+          const base = vTailsRef.current.length;
+          appended = Array.from({ length: 5 }, (_, i) => arr[(base * 5 + 3 + i * 5) % arr.length]);
         }
-        setVTops(newTops);
-        setVKey(newKey);
-        tbFeedSave(uid, 'video', { tops: newTops, refreshKey: newKey });
+        const start = vTailsRef.current.length;
+        const newTails: TbFeedTop[] = [...vTailsRef.current, ...appended.map((p, i) => ({ pid: p.id, v: (i + start) % 4, k: `vt${ks}-${start + i}` }))];
+        setVTails(newTails);
+        tbFeedSave(uid, 'video', { tops: vTopsRef.current, tails: newTails, refreshKey: vKeyRef.current });
         setVRefreshing(false);
-        vScrollerRef.current?.scrollTo({ top: 0 });
-        onToast(ai ? '视频已刷新，为你换了新一批' : '视频已刷新，为你换了新一批');
+        // 不再跳回顶部：当前视频原位不动，新视频在下方继续滑就能看到
+        onToast('已加载新的视频在下方，接着往下滑就能看');
       })();
     }
     vStart.current = null;
@@ -1520,12 +1548,12 @@ function VideoPage({ uid, onOpenProduct, onToast }: { uid: string; onOpenProduct
           </div>
         ))}
       </div>
-      {/* 上滑刷新指示器（需求第十轮：到底继续上拉刷新视频流） */}
+      {/* 上滑加载指示器（Task 45：到底继续上拉 → 新视频追加到末尾，不跳顶） */}
       {vRefreshing ? (
         <div className="pointer-events-none absolute inset-x-0 top-16 z-40 grid place-items-center">
           <div className="flex h-9 items-center gap-2 rounded-full bg-white/15 px-4 text-[13px] text-white backdrop-blur">
             <Loader2 className="h-4 w-4 animate-spin" />
-            正在刷新…
+            正在加载新视频…
           </div>
         </div>
       ) : null}
@@ -4993,7 +5021,9 @@ function MePage({
   const apiConfigMe = useSettings((s) => s.apiConfig);
   const apiCfgMeRef = useRef(apiConfigMe);
   apiCfgMeRef.current = apiConfigMe;
-  // 挂载恢复：持久化的 AI 前插 + 确定性批次（旧内容永不消失）
+  /** 底部追加条目（Task 45：滑到底部拉一拉 → 新好物追加到猜你喜欢最后，上方内容原位不变） */
+  const [meTails, setMeTails] = useState<TbFeedTop[]>([]);
+  // 挂载恢复：持久化的 AI 前插 + 确定性批次 + 底部追加（旧内容永不消失）
   useEffect(() => {
     const s = tbFeedLoad(uid, 'me');
     if (s && Array.isArray(s.tops)) setMeTops(s.tops);
@@ -5005,14 +5035,22 @@ function MePage({
         menuSeq.current = typeof aux.seq === 'number' && aux.seq > 0 ? aux.seq : Math.max(...list) + 1;
       }
     }
+    const tails = tbFeedAuxLoad<TbFeedTop[]>(uid, 'me', 'aiTails');
+    if (tails && Array.isArray(tails)) setMeTails(tails.filter((t) => t && typeof t.pid === 'string'));
   }, [uid]);
-  const mePull = useTbPullRefresh(() => {
+  const meTailsRef = useRef(meTails);
+  meTailsRef.current = meTails;
+  const mePull = useTbPullRefresh((dir) => {
     const mySeq = ++meSeq.current;
     return (async () => {
-      // 排除名单：AI 前插 + 本地批次 + 种子池当前展示的标题（保证出新）
+      // 排除名单：AI 前插 + 底部追加 + 本地批次 + 种子池当前展示的标题（保证每次出新）
       const arr = [...TB_PRODUCTS];
       const shownTitles = [
         ...meTopsRef.current.flatMap((t) => {
+          const p = productById(t.pid);
+          return p ? [p.title] : [];
+        }),
+        ...meTailsRef.current.flatMap((t) => {
           const p = productById(t.pid);
           return p ? [p.title] : [];
         }),
@@ -5023,23 +5061,45 @@ function MePage({
       ].filter((x) => x.length > 0);
       const ai = await tbFetchAiBatch({ uid, surface: 'me', exclude: shownTitles, count: 8, config: apiCfgMeRef.current });
       if (meSeq.current !== mySeq) return; // 过期批次丢弃
-      if (ai && ai.products.length > 0) {
-        const ks = `ai${Date.now().toString(36)}`;
-        const tops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...meTopsRef.current];
-        setMeTops(tops);
-        tbFeedSave(uid, 'me', { tops });
+      if (dir === 'down') {
+        // 顶部下拉：AI 新好物前插（旧推荐原位保留）；AI 失败走本地确定性批次
+        if (ai && ai.products.length > 0) {
+          const ks = `ai${Date.now().toString(36)}`;
+          const tops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...meTopsRef.current];
+          setMeTops(tops);
+          tbFeedSave(uid, 'me', { tops, tails: meTailsRef.current });
+        } else {
+          const seed = menuSeq.current++;
+          const bs = [seed, ...menuBatchesRef.current].slice(0, 3);
+          setMenuBatches(bs);
+          tbFeedAuxSave(uid, 'me', 'batches', { list: bs, seq: menuSeq.current });
+        }
+        onToast('已为你换上新的好物，旧推荐都还在哦');
       } else {
-        const seed = menuSeq.current++;
-        const bs = [seed, ...menuBatchesRef.current].slice(0, 3);
-        setMenuBatches(bs);
-        tbFeedAuxSave(uid, 'me', 'batches', { list: bs, seq: menuSeq.current });
+        // 底部追加（Task 45）：AI 好物接在猜你喜欢最后；AI 失败追加一批种子好物（按已展示量确定性选取）
+        let appended: TbProduct[];
+        if (ai && ai.products.length > 0) {
+          appended = ai.products;
+        } else {
+          const base = meTopsRef.current.length + meTailsRef.current.length;
+          appended = Array.from({ length: 8 }, (_, i) => arr[(base * 3 + 7 + i * 3) % arr.length]);
+        }
+        const start = meTailsRef.current.length;
+        const ks = `ai${Date.now().toString(36)}`;
+        const newTails: TbFeedTop[] = [...meTailsRef.current, ...appended.map((p, i) => ({ pid: p.id, v: (i + start) % 4, k: `mt${ks}-${start + i}` }))];
+        setMeTails(newTails);
+        tbFeedAuxSave(uid, 'me', 'aiTails', newTails);
+        onToast('已加载新的好物在下方，上方内容不变');
       }
-      onToast('已为你换上新的好物，旧推荐都还在哦');
     })();
   });
-  // 猜你喜欢菜单（AI 前插 + 批次前插：最新批在最上，旧批次原位保留）
+  // 猜你喜欢菜单（AI 前插 + 批次前插：最新批在最上；底部追加：最新批在最后，旧内容原位保留）
   const meMenu = useMemo(() => {
     const aiEntries = meTops.flatMap((t) => {
+      const p = productById(t.pid);
+      return p ? [{ p, k: t.k }] : [];
+    });
+    const tailEntries = meTails.flatMap((t) => {
       const p = productById(t.pid);
       return p ? [{ p, k: t.k }] : [];
     });
@@ -5050,8 +5110,9 @@ function MePage({
         const start = (14 + k * 8) % arr.length;
         return Array.from({ length: 8 }, (_, i) => ({ p: arr[(start + i) % arr.length], k: `${k}-${i}` }));
       }),
+      ...tailEntries,
     ];
-  }, [meTops, menuBatches]);
+  }, [meTops, meTails, menuBatches]);
   return (
     <>
     <div className="relative h-full">
@@ -5256,7 +5317,7 @@ function MePage({
             <ProductCard key={k} p={p} v={i % 4} onOpen={() => onOpenProduct(p.id)} />
           ))}
         </div>
-        <div className="pt-2 text-center text-[11.5px] text-black/30">下拉或滑到底部拉一拉，都可刷新推荐</div>
+        <div className="pt-2 text-center text-[11.5px] text-black/30">顶部下拉换新推荐，滑到底部拉一拉在下方加载更多</div>
       </div>
     </div>
     <TbPullIndicator h={mePull} />

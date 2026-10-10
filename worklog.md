@@ -17868,3 +17868,24 @@ Stage Summary:
 - 五点需求全落地并浏览器端到端实测：五大界面（我的淘宝/视频/秒杀/淘票票/飞猪）刷新保旧+持久化与首页逻辑完全一致；秒杀页除场次标签外全部跟随滚动（返回键悬浮常驻）；淘票票热映影片/即将上映双子界面（吸顶切换+双向刷新+AI+持久化）；喜剧脱口秀/演唱会/周边商城刷新内容真正更新（AI 分流修复）
 - 持久化语义统一：AI 批次前插+确定性兜底批次+AI 演出/周边/电影本体全部按 uid 隔离存 IndexedDB，刷新页面/重开 App 原样恢复，旧内容与历史批次永不消失
 - 改动文件：src/app/api/tb-feed/route.ts（十一 surface）、src/lib/ios/tb-ai-store.ts（surface/字段扩展）、src/components/apps/taobao-channels.tsx（MoviePage 分流+双子界面+SeckillPage 滚动重构+悬浮返回）、src/components/apps/taobao.tsx（MePage AI+持久化）
+
+---
+Task ID: 45
+Agent: main (Z.ai Code)
+Task: 淘宝第十八轮——所有界面刷新统一走设置App配置的API模型且内容每次不一样；修复秒杀刷新看不到变化；全界面「滑到底部拉一拉」改为底部追加（上方内容原位不变，新内容在下方）
+
+Work Log:
+- tb-pull-refresh.tsx 语义升级：down=顶部前插（原逻辑保留）；up=底部追加（加载更多）——删除原「up 前插+scrollTop 锚定补偿」实现（那是「拉了但画面没变化」的根因：新内容插到顶部又把视口锚回原处），追加不改变现有内容高度、视口自然不动、无需补偿；上拉指示文案改「松开加载更多/正在加载…」
+- tb-ai-store.ts：TbFeedState 新增 tails（底部追加条目，pid 引用），tbFeedSave 同时封顶持久化（tops≤120、tails≤80）
+- taobao.tsx HomePage：新增 tails 状态（恢复/切tab保存/分页保存全链路带 tails）；doHomeRefresh 按 dir 分流——down 走原 AI 前插+本地洗牌兜底，up=AI 商品追加到 feed 末尾（AI 失败按已展示量确定性追加 8 条种子好物）；排除名单加入 tails 标题；feed=tops+base+tails；指示器/toast 文案更新
+- taobao.tsx VideoPage：上拉从「前插+scrollTo 顶部」改为底部追加（vTails 持久化，AI 失败追加 5 条种子视频）；删除跳顶逻辑——当前视频原位不动，新视频在下方继续滑就能看
+- taobao.tsx MePage：mePull 按 dir 分流——down=原前插逻辑；up=AI 好物追加到猜你喜欢最后（meTails 存 aux me:aiTails，AI 失败追加种子好物）；排除名单含 tails；底部提示文案改「顶部下拉换新推荐，滑到底部拉一拉在下方加载更多」
+- taobao-channels.tsx useTbChannelFeed：refresh(count,dir) 分流——down=AI 前插/批次兜底（原逻辑）；up=AI 追加 aiTails（tbFeedSave tails）+兜底 tailBatches（aux，封顶 6）；排除名单重构为「种子池+AI前插+AI追加」（此前秒杀等频道 exclude 只有 AI tops，常驻种子可能被模型复述）；三个调用页（Subsidy/Seckill/Fliggy）传种子名单+双 toast 文案+尾部渲染（aiTailItems/tailBatchItems 接在种子列表后）
+- taobao-channels.tsx MoviePage 五频道：新增 aiTails 状态（movie/movieUp/comedy/concert/merch 各自独立，aux 持久化，封顶 12）；refreshHot/Soon/Comedy/Concert/Merch 全部 dir 分流（up=AI 追加 appendTails / 兜底 freshTail 种子克隆错位选取）；五列表渲染追加各自 tails；排除名单统一「种子在前+AI tops+AI tails」
+- /api/tb-feed 加固：①内置模型空/坏输出（典型=照抄排除名单被全部过滤）→ 换口令重试一次，重试 prompt 明确「排除名单只是查重黑名单，严禁照抄其中任何名字或近似变体」（浏览器实测修复：热映 up 刷新首拉模型复述排除名单→全过滤→兜底重复；加固后拉出 3 部全新原创片）②用户配置占位默认值（api.openai.com+空 key）视为未配置，省去必然 401 的空等，刷新更快出内容
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误
+- agent-browser 全真浏览器逐项验证（合成 TouchEvent 手势，真实 React onTouch 链路）：①秒杀下拉→AI 4 条新商品前插（旧 AI 保留）②秒杀滑到底拉一拉→AI 4 条追加到列表最末（14→16→20 条全程旧条目逐条位置不变、scrollTop 不跳）③首页两次拉一拉→AI +3/+5 条按列稳定追加（左列右列前缀逐条比对全等）④视频页拉一拉→新视频「天啊这防晒喷雾也太绝了」追加在末尾、不跳顶⑤我的淘宝拉一拉→AI 8 条追加（40→48，前缀全等）⑥淘票票热映拉一拉→AI 3 部全新原创片追加（时光回响：记忆碎片/暗夜守护者/幻境迷宫）；喜剧脱口秀拉一拉→AI 3 场新演出追加⑦整页 reload→IndexedDB 复核 seckill tails=4/home tails=13/video tails=1/me aiTails=8/movie aiTails=6/comedy aiTails=3 全部持久化，重开秒杀页 20 条原样恢复含追加条目⑧AI 商品详情/下单链路无感命中（误触 AI 商品进详情页正常）⑨fetch 钩子核验每次请求 surface/exclude 正确、AI source=sdk、失败自动兜底不空转
+
+Stage Summary:
+- 三点需求全落地并浏览器端到端实测：①所有内容型刷新（首页7频道/视频/我的/补贴/秒杀/飞猪/淘票票5频道）统一走「设置›API 配置」用户模型（占位默认配置不再空等 401），内置模型兜底+空输出防复述重试，排除名单覆盖种子+前插+追加三层，内容每次拉取都不同；②秒杀刷新「看不到变化」根因修复（原 up=前插到顶部+视口锚定=画面纹丝不动），现在下拉前插在场次标签下立即可见、底部拉一拉新商品接在列表最末；③全界面统一「滑到底部拉一拉=底部追加」语义：上方内容（含之前刷新出来的）逐条原位不变、视口不跳、新内容在下方，追加条目全部持久化、reload 原样恢复
+- 改动文件：src/components/apps/tb-pull-refresh.tsx、src/lib/ios/tb-ai-store.ts、src/components/apps/taobao.tsx（Home/Video/Me）、src/components/apps/taobao-channels.tsx（useTbChannelFeed+Subsidy/Seckill/Fliggy+MoviePage 五频道）、src/app/api/tb-feed/route.ts

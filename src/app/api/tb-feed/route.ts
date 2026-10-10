@@ -707,19 +707,24 @@ export async function POST(req: NextRequest) {
       ? root.nonce.trim().slice(0, 64)
       : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
-  // 用户配置（设置 › API 配置）：随请求体传入，不落盘；baseUrl 为空视为未配置
+  // 用户配置（设置 › API 配置）：随请求体传入，不落盘；baseUrl 为空视为未配置；
+  // 内置默认占位（api.openai.com + 空 key）也视为未配置——省去必然 401 的空等，刷新更快出内容
   let userCfg: FeedConfig | null = null;
   const rawCfg = root.config;
   if (typeof rawCfg === 'object' && rawCfg !== null) {
     const c = rawCfg as RawRec;
     if (typeof c.baseUrl === 'string' && c.baseUrl.trim()) {
-      userCfg = {
-        baseUrl: c.baseUrl.trim(),
-        apiKey: typeof c.apiKey === 'string' ? c.apiKey.trim() : '',
-        model: typeof c.model === 'string' && c.model.trim() ? c.model.trim() : 'gpt-4o-mini',
-        temperature: num(c.temperature, 0.9, 0, 2),
-        maxTokens: intOf(c.maxTokens, 8192, 256, 32768),
-      };
+      const baseUrl = c.baseUrl.trim();
+      const apiKey = typeof c.apiKey === 'string' ? c.apiKey.trim() : '';
+      if (!(apiKey === '' && /api\.openai\.com/i.test(baseUrl))) {
+        userCfg = {
+          baseUrl,
+          apiKey,
+          model: typeof c.model === 'string' && c.model.trim() ? c.model.trim() : 'gpt-4o-mini',
+          temperature: num(c.temperature, 0.9, 0, 2),
+          maxTokens: intOf(c.maxTokens, 8192, 256, 32768),
+        };
+      }
     }
   }
 
@@ -744,6 +749,16 @@ export async function POST(req: NextRequest) {
     }
     if (rawItems.length === 0) {
       rawItems = parseItems(await sdkText(system, user));
+      // 内置模型偶发空/坏输出（典型：照抄排除名单里的名字 → 全部被过滤）→
+      // 换口令重试一次，并明确「黑名单只是查重用，禁止照抄其中任何名字」
+      if (rawItems.length === 0) {
+        rawItems = parseItems(
+          await sdkText(
+            system,
+            `${user}\n【重试要求】上一次输出无效（很可能照抄了排除名单里的名字而被全部过滤）。排除名单只是查重黑名单，输出中严禁出现其中任何一个名字或其近似变体；${count} 条必须全部为全新原创，与黑名单完全无关。`,
+          ),
+        );
+      }
     }
   } catch (err) {
     return NextResponse.json(
