@@ -1,18 +1,22 @@
 /**
  * 美团 App 种子数据（商家/菜单/评价/分类入口）：
  * - 纯前端静态数据，对齐真机演示口径（评分/月售/起送/配送费/距离/满减）；
- * - 菜品图/门头图走 /api/mt-img 内容匹配图（按品类关键词生成，图片与内容一致），失败由 UI 逐级兜底；
+ * - 菜品图/门头图统一走本地 kawaii 卡通插画（goods-img.ts，Task 58 预生成本地图，不再请求外部图库）；
  * - 商家与菜品 id 稳定（购物车/订单跨重启引用）。
  */
 
+import { mtGoodsImg } from '@/lib/ios/goods-img';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 
-/** 内容匹配图地址（/api/mt-img 服务端代理）：
- *  - k=英文品类词（hotpot/pizza/milk-tea…），服务端按分类关键词搜图（Foodiesfeed CC0 优先 → Pixabay/Pexels → 本地默认图）；
- *  - s=变体序号（区分缓存），w/h=尺寸，p=f 菜品图 / c 门头图；
- *  - 服务端内存缓存 + 浏览器强缓存 15min：期内秒出，过期自动轮换同分类新图 */
+/** 内容匹配图地址（本地卡通图，Task 58）：
+ *  - k=英文品类词（hotpot/pizza/milk-tea…），goods-img 映射到 public/goods 预生成 kawaii 插画；
+ *  - s=变体序号 / w/h=尺寸参数保留兼容调用方（同 tag 固定同图，变体同图展示）；
+ *  - p=f 菜品图 / c 门头图 */
 export function mtImg(tag: string, w = 480, h = 360, s = 0, kind: 'f' | 'c' = 'f'): string {
-  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}&v=9`;
+  void w;
+  void h;
+  void s;
+  return mtGoodsImg(tag, kind);
 }
 
 /** 中文名 → 英文品类词词典（AI 未返回 tag 时兜底，保证图片与内容匹配） */

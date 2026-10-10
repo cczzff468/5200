@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
  * - 十一种 surface：home 首页瀑布流（rec/flash/subsidy/super88/fliggy/wear/follow 七种频道 tab）、
  *   video 短视频种草、subsidy 百亿补贴、seckill 秒杀、fliggy 飞猪酒店、movie 淘票票热映、
  *   me 我的淘宝猜你喜欢、standup 喜剧脱口秀演出、concert 演唱会、merch 电影周边、movieUp 即将上映；
- * - tag 强制落在图片服务白名单内（/api/mt-img 按品类词出内容匹配图，图片与内容一致），生成数据仅展示用。
+ * - tag 强制落在品类白名单内（本地卡通图按品类词映射，图片与内容一致），生成数据仅展示用。
  */
 
 // ---------------- 类型 ----------------

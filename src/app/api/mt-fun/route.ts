@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
  *   'movie' 影片（正在热映/即将上映，购票下单）；
  * - 优先用户配置模型（设置 › API 配置，config 随请求体传入），失败落内置模型；
  * - 两次生成均失败 → 返回内置种子数据（ok:true seed:true），频道永远可用；
- * - 图片走 /api/mt-img（v7：Commons 真实酒店房间/电玩/KTV 实景；门店团购/房型图与门店同品类）；
+ * - 图片走本地 kawaii 卡通插画（goods-img.ts 按品类映射；门头/房型图与门店同品类）；
  * - 生成数据仅展示用，不影响真实订单和支付。
  */
 

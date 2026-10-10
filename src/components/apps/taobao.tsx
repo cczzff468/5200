@@ -10,6 +10,8 @@
  * - 下单：收货地址 + 优惠券/运费 + 支付方式选择；支付复用 QQ/微信钱包（亲属卡支付写 AI 记忆）；
  * - 订单：待付款/待发货/待收货/已完成/已取消 + 物流轨迹 + 确认收货/评价/退款/再来一单；
  * - 我的：订单宫格/收藏/足迹/地址管理/快递/优惠券/账户余额（微信+QQ 只读）/设置；
+ * - 图片：商品/店铺图统一本地 kawaii 卡通插画（goods-img.ts 预生成，Task 58；不再请求外部图库），
+ *   订单/购物车商品图内底部带商品名白字贴片（TbImg cap）；
  * - 数据：tb-* IndexedDB kv 按 uid 隔离（taobao-store.ts）；UI 图标一律 SVG（禁 emoji）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -157,19 +159,6 @@ import { TbMsgChatPage } from './taobao-msg-chat';
 import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 import { LocalToast, useLocalToast } from './page-toast';
 import { TbImg } from './tb-img';
-import { tbRefreshRealImages } from '@/lib/ios/tb-real-img-store';
-import {
-  subscribeTbAiImg as subscribeAiImg,
-  subscribeTbImgStyle as subscribeImgStyle,
-  tbAiImgVersion,
-  tbClearAiImgs,
-  tbGetAiImg,
-  tbGetImgStyle,
-  tbImgStyleVersion,
-  tbSetImgStyle,
-  type TbImgStyle,
-} from './tb-img-style';
-import { imgGenConfigReady } from '@/lib/imggen';
 
 const TB_ORANGE = '#FF5000';
 const TB_PRICE = '#FF4400';
@@ -1058,7 +1047,6 @@ function HomePage({
         let newKey = refreshKeyRef.current;
         if (ai) {
           newTops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...topsRef.current];
-          void tbRefreshRealImages(ai.products.map((p) => p.tag)); // Task 50：刷新同分类换图（新内容真实图）
         } else {
           // 本地兜底：确定性洗牌前插（同样持久化）
           newKey = refreshKeyRef.current + 1;
@@ -1068,7 +1056,6 @@ function HomePage({
             ...Array.from({ length: 8 }, (_, i) => ({ pid: shuffled[i % shuffled.length].id, v: newKey % 4, k: `${kr}-${i}` })),
             ...topsRef.current,
           ];
-          void tbRefreshRealImages(shuffled.slice(0, 8).map((p) => p.tag));
         }
         setTops(newTops);
         setRefreshKey(newKey);
@@ -1086,7 +1073,6 @@ function HomePage({
         const start = tailsRef.current.length;
         const newTails: TbFeedTop[] = [...tailsRef.current, ...appended.map((p, i) => ({ pid: p.id, v: (i + start) % 4, k: `tl${ks}-${start + i}` }))];
         setTails(newTails);
-        void tbRefreshRealImages(appended.map((p) => p.tag)); // Task 50：底部追加也换图（同分类）
         if (surf) tbFeedSave(uid, surf, { tops: topsRef.current, tails: newTails, batch: batchRef.current, refreshKey: refreshKeyRef.current });
         onToast('已加载新的好物在下方，上方内容不变');
       }
@@ -1491,7 +1477,6 @@ function VideoPage({ uid, onOpenProduct, onToast }: { uid: string; onOpenProduct
         const newTails: TbFeedTop[] = [...vTailsRef.current, ...appended.map((p, i) => ({ pid: p.id, v: (i + start) % 4, k: `vt${ks}-${start + i}` }))];
         setVTails(newTails);
         tbFeedSave(uid, 'video', { tops: vTopsRef.current, tails: newTails, refreshKey: vKeyRef.current });
-        void tbRefreshRealImages(appended.map((p) => p.tag)); // Task 50：新视频封面同分类换图
         setVRefreshing(false);
         // 不再跳回顶部：当前视频原位不动，新视频在下方继续滑就能看到
         onToast('已加载新的视频在下方，接着往下滑就能看');
@@ -2664,7 +2649,7 @@ function CartPage({
                               {c.checked ? <Check className="h-3 w-3 text-white" strokeWidth={3.6} /> : null}
                             </button>
                             <button type="button" onClick={() => onOpenProduct(c.pid)} className="shrink-0 active:opacity-70">
-                              <TbImg src={tbImg(p.tag, 200, 200, 0)} alt={p.title} className="h-[86px] w-[86px] rounded-lg" />
+                              <TbImg src={tbImg(p.tag, 200, 200, 0)} alt={p.title} cap={p.title} className="h-[86px] w-[86px] rounded-lg" />
                             </button>
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start gap-2">
@@ -3549,7 +3534,7 @@ function OrderCard({
             商品行不再跳商品详情，去掉自身 onClick 让点击冒泡到卡体 onOpen */}
         {o.items.map((it, i) => (
           <button key={i} type="button" className="flex w-full gap-2.5 text-left">
-            <img src={it.img} alt={it.title} className="h-[74px] w-[74px] shrink-0 rounded-lg object-cover" draggable={false} />
+            <TbImg src={it.img} alt={it.title} cap={it.title} className="h-[74px] w-[74px] shrink-0 rounded-lg object-cover" />
             <div className="min-w-0 flex-1">
               <div className="flex gap-2">
                 <span className="line-clamp-1 min-w-0 flex-1 text-[13.5px] leading-5 text-black/85">{it.title}</span>
@@ -3810,7 +3795,7 @@ function OrderDetailPage({
         const origin = Math.round(it.price * 1.32 * 100) / 100;
         return (
           <button key={i} type="button" onClick={() => onOpenProduct(it.pid)} className="flex w-full gap-2.5 text-left">
-            <img src={it.img} alt={it.title} className="h-[78px] w-[78px] shrink-0 rounded-lg object-cover" draggable={false} />
+            <TbImg src={it.img} alt={it.title} cap={it.title} className="h-[78px] w-[78px] shrink-0 rounded-lg object-cover" />
             <div className="min-w-0 flex-1">
               <div className="flex gap-2">
                 <span className="line-clamp-1 min-w-0 flex-1 text-[14px] leading-5 text-black/85">{it.title}</span>
@@ -5009,12 +4994,6 @@ function MePage({
   // 选中形象同时用于淘宝物流页地图巡航，与美团共用同一 localStorage）
   const [riderOpen, setRiderOpen] = useState(false);
   const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
-  // 图片样式（Task 46，与美团「我的 → 图片样式」同款）：全站图片三选一（真实图库 / AI 生成 /
-  // 默认图片），省钱卡位改造为菜单入口，弹层选择即时全站生效（TbImg 统一消费）；
-  // AI 模式用「设置 → 图像生成」配置的生图 API，未配置给指路拦截
-  const [styleOpen, setStyleOpen] = useState(false);
-  useSyncExternalStore(subscribeImgStyle, tbImgStyleVersion);
-  const curImgStyle = tbGetImgStyle();
   useEffect(() => {
     tbTickOrders(uid);
     const t = setInterval(() => setTick((n) => n + 1), 5000);
@@ -5089,7 +5068,6 @@ function MePage({
           const tops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...meTopsRef.current];
           setMeTops(tops);
           tbFeedSave(uid, 'me', { tops, tails: meTailsRef.current });
-          void tbRefreshRealImages(ai.products.map((p) => p.tag)); // Task 50：刷新同分类换图
         } else {
           const seed = menuSeq.current++;
           const bs = [seed, ...menuBatchesRef.current].slice(0, 3);
@@ -5097,7 +5075,7 @@ function MePage({
           tbFeedAuxSave(uid, 'me', 'batches', { list: bs, seq: menuSeq.current });
           const arr = [...TB_PRODUCTS];
           const start = (14 + seed * 8) % arr.length;
-          void tbRefreshRealImages(Array.from({ length: 8 }, (_, i) => arr[(start + i) % arr.length]?.tag ?? ''));
+          void start; // 本地卡通图无需拉图，保留原批次偏移计算结构
         }
         onToast('已为你换上新的好物，旧推荐都还在哦');
       } else {
@@ -5114,7 +5092,6 @@ function MePage({
         const newTails: TbFeedTop[] = [...meTailsRef.current, ...appended.map((p, i) => ({ pid: p.id, v: (i + start) % 4, k: `mt${ks}-${start + i}` }))];
         setMeTails(newTails);
         tbFeedAuxSave(uid, 'me', 'aiTails', newTails);
-        void tbRefreshRealImages(appended.map((p) => p.tag)); // Task 50：底部追加同分类换图
         onToast('已加载新的好物在下方，上方内容不变');
       }
     })();
@@ -5184,10 +5161,6 @@ function MePage({
                 <span className="mt-0.5 text-[10.5px] text-black/40">闪购券50元起 &gt;</span>
               </button>
               <span className="mx-2.5 h-7 w-px bg-black/[0.07]" />
-              <button type="button" data-testid="tb-img-style-entry" onClick={() => setStyleOpen(true)} className="flex w-[64px] flex-col items-start leading-tight active:opacity-70">
-                <span className="text-[13.5px] font-bold text-[#FF4400]">图片样式</span>
-                <span className="mt-0.5 text-[10.5px] text-black/40">{curImgStyle === 'real' ? '真实图库' : curImgStyle === 'ai' ? 'AI 生成' : '默认图片'} &gt;</span>
-              </button>
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-[#FF3B30] to-[#FF0036]">
                 <span className="grid h-8 w-8 place-items-center rounded-md border border-white/40 text-center text-[9px] font-bold leading-[10px] text-[#FFD100]">免费
                   <br />领</span>
@@ -5391,122 +5364,7 @@ function MePage({
         </div>
       </div>
     ) : null}
-    {/* 图片样式弹层（Task 46，与美团同款：真实图片 / AI 生成 / 默认图片 三选一，全站即时生效） */}
-    {styleOpen ? <TbImgStyleSheet onClose={() => setStyleOpen(false)} onToast={onToast} /> : null}
     </>
-  );
-}
-
-/** 图片样式弹层（与美团「我的 → 图片样式」同款交互；商品/店铺门头/领券中心等全站图片三选一） */
-function TbImgStyleSheet({ onClose, onToast }: { onClose: () => void; onToast: (m: string) => void }) {
-  useSyncExternalStore(subscribeImgStyle, tbImgStyleVersion);
-  useSyncExternalStore(subscribeAiImg, tbAiImgVersion);
-  const imgGenCfg = useSettings((s) => s.imgGenConfig);
-  const aiConfigReady = imgGenConfigReady(imgGenCfg);
-  const style = tbGetImgStyle();
-  // AI 卡预览：有缓存的品类 AI 图则实时展示（生成完成广播 → 此处重渲染换图）
-  const aiPreview = tbGetAiImg('phone', 'f');
-  const [err, setErr] = useState('');
-  /** 选择样式（AI 未配置生图 API 时拦截指路；选择即全站生效） */
-  const apply = (st: TbImgStyle) => {
-    if (st === 'ai' && !aiConfigReady) {
-      setErr('尚未配置生图 API：请在手机「设置 → 图像生成」里填好基地址 / API Key / 模型后再选 AI 生成');
-      onToast('请先在「设置 → 图像生成」配置生图 API');
-      return;
-    }
-    tbSetImgStyle(st);
-    setErr('');
-    onToast(st === 'real' ? '已使用真实图片（网络图库）' : st === 'ai' ? '已使用 AI 生成图片' : '已使用默认图片');
-  };
-  return (
-    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={onClose}>
-      <div className="rounded-t-2xl bg-white pb-8 [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()} data-testid="tb-img-style-sheet">
-        <div className="relative flex items-center justify-center py-4">
-          <p className="text-[16px] font-bold text-black/85">图片样式</p>
-          <button type="button" aria-label="关闭" data-testid="tb-img-style-sheet-close" onClick={onClose} className="absolute right-3 grid h-8 w-8 place-items-center rounded-full active:bg-black/5">
-            <X className="h-5 w-5 text-black/55" />
-          </button>
-        </div>
-        <p className="px-5 pb-3 text-[12px] text-black/40">商品、店铺门头、领券中心等全站图片统一生效 · 选择即用</p>
-        {/* 三个样式选择卡（选中态同骑手弹层：橙底橙圈 + 右上对勾） */}
-        <div className="grid grid-cols-3 gap-3 px-4 pb-2">
-          {/* ① 真实图片（网络真实图库：Wikimedia Commons 实景池等真实照片，默认） */}
-          <button
-            type="button"
-            data-testid="tb-img-style-real"
-            onClick={() => apply('real')}
-            className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${style === 'real' ? 'bg-[#FFF1E6] ring-2 ring-[#FF5000]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
-          >
-            {style === 'real' ? (
-              <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FF5000]">
-                <Check className="h-3 w-3 text-white" strokeWidth={3} />
-              </span>
-            ) : null}
-            <TbImg src="/api/mt-img?k=phone&w=240&h=160&s=7&p=f&v=12" alt="真实图片预览" className="h-16 w-full rounded-xl" />
-            <span className="mt-1.5 text-[12px] text-black/85">真实图片</span>
-            <span className="text-[10px] text-black/35">真实图库·分类匹配</span>
-          </button>
-          {/* ② AI 生成（用「设置→图像生成」配置的生图 API 按品类自动生成；未配置给指路提示） */}
-          <button
-            type="button"
-            data-testid="tb-img-style-ai"
-            onClick={() => apply('ai')}
-            className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${style === 'ai' ? 'bg-[#FFF1E6] ring-2 ring-[#FF5000]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
-          >
-            {style === 'ai' ? (
-              <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FF5000]">
-                <Check className="h-3 w-3 text-white" strokeWidth={3} />
-              </span>
-            ) : null}
-            {aiPreview ? (
-              <img src={aiPreview} alt="AI 生成预览" draggable={false} className="h-16 w-full rounded-xl object-cover" />
-            ) : (
-              <span className="grid h-16 w-full place-items-center rounded-xl bg-white">
-                <Sparkles className="h-6 w-6 text-black/30" strokeWidth={1.8} />
-              </span>
-            )}
-            <span className="mt-1.5 text-[12px] text-black/85">AI 生成</span>
-            <span className="text-[10px] text-black/35">{aiConfigReady ? '生图 API · 已配置' : '需配置生图 API'}</span>
-          </button>
-          {/* ③ 默认图片（内置算法插画：服务端直出，离线秒出） */}
-          <button
-            type="button"
-            data-testid="tb-img-style-default"
-            onClick={() => apply('default')}
-            className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${style === 'default' ? 'bg-[#FFF1E6] ring-2 ring-[#FF5000]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
-          >
-            {style === 'default' ? (
-              <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FF5000]">
-                <Check className="h-3 w-3 text-white" strokeWidth={3} />
-              </span>
-            ) : null}
-            <TbImg src="/api/mt-img?k=phone&w=240&h=160&s=7&p=f&v=12&d=1" alt="默认图片预览" className="h-16 w-full rounded-xl" />
-            <span className="mt-1.5 text-[12px] text-black/85">默认图片</span>
-            <span className="text-[10px] text-black/35">内置插画</span>
-          </button>
-        </div>
-        {err ? <p className="px-5 pb-1 text-[11px] leading-snug text-[#FF3B30]">{err}</p> : null}
-        {/* AI 模式附加操作：清空已生成的品类图，浏览页面时自动重新排队生成 */}
-        {style === 'ai' && aiConfigReady ? (
-          <div className="px-4 pt-1">
-            <button
-              type="button"
-              data-testid="tb-img-style-ai-regen"
-              onClick={() => {
-                tbClearAiImgs();
-                onToast('已清空 AI 图片，浏览页面时会自动重新生成');
-              }}
-              className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#F7F8FA] py-2.5 text-[12px] text-black/60 active:bg-black/[0.06]"
-            >
-              <RefreshCw className="h-3.5 w-3.5" strokeWidth={2} />
-              重新生成全部 AI 图片
-            </button>
-          </div>
-        ) : null}
-        <p className="px-5 pt-2 text-[10px] leading-snug text-black/30">「真实图片」按分类精准匹配网络真实图库（优先 Pexels 直链，次选 Openverse·StockSnap、Wikimedia Commons，食品可用 Foodiesfeed；不转存，版权信息见图片长按提示）；「AI 生成」使用设置 → 图像生成 里配置的生图 API，按品类自动逐张生成（首次浏览需稍候，可重新生成）；「默认图片」为内置插画，离线秒出。</p>
-        <p className="px-5 pt-1 text-[10px] leading-snug text-black/30">真实图仅作界面展示；刷新后同分类换图，打开淘宝不自动更新；图库请求失败自动用已缓存图片。</p>
-      </div>
-    </div>
   );
 }
 
@@ -6515,7 +6373,6 @@ function CouponCenterPage({ uid, onBack, onToast }: { uid: string; onBack: () =>
       const s0 = ccRef.current;
       const ai = await tbFetchAiCoupons({ exclude: ccShownNames(), count: 6, config: apiCfgCcRef.current });
       if (ccSeq.current !== mySeq) return; // 过期批次丢弃
-      void tbRefreshRealImages((ai ?? []).map((c) => c.tag)); // Task 50：新券配图同分类换图（失败走缓存兜底）
       if (dir === 'down') {
         const batch = ai ?? ccFallbackBatch(batchSeq.current, ccShownNames());
         batchSeq.current += 1;

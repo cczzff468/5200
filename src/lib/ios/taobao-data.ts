@@ -1,14 +1,18 @@
 /**
  * 淘宝 App 种子数据（商品/店铺/分类/评价/热门搜索）：
  * - 与 meituan-data.ts 同架构：纯前端静态数据，商品 id 稳定（购物车/订单/收藏/足迹跨重启引用）；
- * - 商品图走 /api/mt-img 内容匹配图（品类 tag 已在 mt-img v12 注册 Commons 实景池：
- *   数码/服饰/家居/美妆/图书等真实图库直出，失败由服务端默认图兜底永远 200）；
- * - 商品多图用同一 tag 不同 s 变体（轮播多张不同图）；SKU 按类目模板（颜色分类/尺码/版本）。
+ * - 商品图统一走本地 kawaii 卡通插画（goods-img.ts，Task 58 预生成本地图，不再请求外部图库）；
+ * - 商品多图同图展示（s 变体参数保留兼容）；SKU 按类目模板（颜色分类/尺码/版本）。
  */
 
-/** 内容匹配图地址（复用美团图链：k=品类词 w/h=尺寸 s=变体 p=f 商品图 / c 门头图） */
+import { tbGoodsImg } from '@/lib/ios/goods-img';
+
+/** 内容匹配图地址（本地卡通图，Task 58）：k=品类词 w/h=尺寸 s=变体 p=f 商品图 / c 门头图（参数保留兼容） */
 export function tbImg(tag: string, w = 600, h = 600, s = 0, kind: 'f' | 'c' = 'f'): string {
-  return `/api/mt-img?k=${encodeURIComponent(tag)}&w=${Math.round(w)}&h=${Math.round(h)}&s=${s}&p=${kind}&v=12`;
+  void w;
+  void h;
+  void s;
+  return tbGoodsImg(tag, kind);
 }
 
 /** 淘宝主品牌色 */

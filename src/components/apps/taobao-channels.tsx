@@ -71,7 +71,6 @@ import {
 } from '@/lib/ios/taobao-channels-data';
 import { productById, tbImg, tbSalesText, type TbProduct } from '@/lib/ios/taobao-data';
 import { TbImg } from './tb-img';
-import { tbRefreshRealImages } from '@/lib/ios/tb-real-img-store';
 import { useSettings } from '@/lib/ios/store';
 import { tbFetchAiBatch, tbFeedAuxLoad, tbFeedAuxSave, tbFeedLoad, tbFeedSave, type TbFeedRaw, type TbFeedTop } from '@/lib/ios/tb-ai-store';
 import { tbClaimCoupon, tbCreateMerchOrder, tbCreateTicketOrder, tbLoadCoupons, tbLoadOrders, tbMarkRefund, tbPushMsg, tbTickOrders, type TbSession, type TbTicketInfo } from '@/lib/ios/taobao-store';
@@ -186,7 +185,6 @@ function useTbChannelFeed(
         .slice(0, 60);
       const ai = await tbFetchAiBatch({ uid, surface, exclude, count, config: apiCfgRef.current });
       if (seq.current !== mySeq) return; // 过期批次丢弃
-      if (ai) void tbRefreshRealImages(ai.products.map((p) => p.tag)); // Task 50：刷新同分类换图（失败走缓存兜底）
       const ks = `ai${Date.now().toString(36)}`;
       let next: TbChannelFeedState;
       if (dir === 'down') {
@@ -1517,7 +1515,6 @@ export function MoviePage({
       });
       if (mSeq.current !== mySeq) return;
       if (ai && ai.raws.length > 0) {
-        void tbRefreshRealImages(ai.raws.map((r) => r.tag)); // Task 50：新周边配图同分类换图
         const list = ai.raws.map((r) => aiToMerch(r));
         tbFeedAuxSave(uid, 'merch', 'batches', { list: bs0, seq: seq0 });
         if (dir === 'down') {

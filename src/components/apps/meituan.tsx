@@ -21,9 +21,11 @@
  *   取件/收件地址 + 实付款 + 帮助卡，⋮ 面板可取消订单；
  * - 支付：微信/QQ → 零钱/银行卡/亲属卡渠道（meituan-pay.ts 复用现有钱包），失败重试；
  *   亲属卡消费 recordFcSpend(channel='美团') → AI 记忆感知；余额不足灰显拦截；
+ * - 图片：菜品/门头图统一本地 kawaii 卡通插画（goods-img.ts 预生成，Task 58；不再请求外部图库），
+ *   订单/店铺小菜大图内底部带订单名白字贴片（FoodImg cap）；
  * - 全局状态推进与灵动岛通知见 MeituanOrderWatcher。
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -73,7 +75,6 @@ import {
   House,
   Image as ImageIcon,
   ImageOff,
-  Images,
   Languages,
   Laugh,
   LayoutGrid,
@@ -96,7 +97,6 @@ import {
   Search as SearchIcon,
   Settings,
   ShieldCheck,
-  Sparkles,
   ShoppingBag,
   ShoppingCart,
   Star,
@@ -250,16 +250,6 @@ import { PayPwdGate as QqPayPwdGate, loadPayPwd as qqLoadPayPwd } from './qq';
 import { mtCreateProxyRequest, mtGetProxy, mtSyncProxiesForUid } from '@/lib/ios/mt-proxy-pay';
 import { mtCreateOrderShare } from '@/lib/ios/mt-order-share';
 import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
-import {
-  aiFoodVersion,
-  mtClearAiFoods,
-  mtGetAiFood,
-  mtGetFoodStyle,
-  mtSetFoodStyle,
-  subscribeAiFood,
-  type MtFoodStyle,
-} from '@/lib/ios/mt-img-style';
-import { imgGenConfigReady } from '@/lib/imggen';
 import { listContacts, loginQQ, loginWechat } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
@@ -1795,9 +1785,9 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
 
   return (
     <div className="flex h-full flex-col bg-[#F4F5F7]">
-      {/* 头图 + 悬浮搜索条（对齐团购详情页头） */}
+      {/* 头图 + 悬浮搜索条（对齐团购详情页头；头图内底部叠店名贴片） */}
       <div className="relative h-[128px] shrink-0">
-        <FoodImg src={merchant.cover} emoji={merchant.emoji} className="h-full w-full" />
+        <FoodImg src={merchant.cover} emoji={merchant.emoji} cap={merchant.name} className="h-full w-full" />
         <div className="absolute inset-x-0 top-0 flex items-center gap-2 px-3 pt-[54px]">
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/35 text-white active:opacity-75">
             <ChevronLeft className="h-5 w-5" />
@@ -1917,7 +1907,7 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
                 {s.dishes.map((d) => (
                   <div key={d.id} className={`flex gap-2.5 py-2 ${d.soldOut ? 'opacity-55' : ''}`}>
                     <span className="relative shrink-0">
-                      <FoodImg src={d.img} emoji={d.emoji} className="h-[72px] w-[72px] rounded-lg" />
+                      <FoodImg src={d.img} emoji={d.emoji} cap={d.name} className="h-[72px] w-[72px] rounded-lg" />
                       <button
                         type="button"
                         aria-label="收藏菜品"
@@ -5556,7 +5546,7 @@ function DishSpecSheet({
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {/* 头部：图 + 标题 + 关闭 */}
           <div className="flex items-start gap-3">
-            <FoodImg src={dish.img} emoji={dish.emoji} className="h-[88px] w-[88px] shrink-0 rounded-xl" />
+            <FoodImg src={dish.img} emoji={dish.emoji} cap={dish.name} className="h-[88px] w-[88px] shrink-0 rounded-xl" />
             <p className="min-w-0 flex-1 pt-1 text-[17px] font-bold leading-snug text-black/90">{dish.name}</p>
             <button type="button" aria-label="关闭" onClick={onClose} className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-black/[0.05] active:bg-black/10">
               <X className="h-4 w-4 text-black/60" />
@@ -8987,29 +8977,6 @@ function MyPage({
   const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
   const openRiderSheet = () => setRiderOpen(true);
 
-  // 图片样式（原「我的公益」格子按需求改造为菜单入口）：全站图片三选一，作用于订单、店铺门头、
-  // 菜品等全部内容匹配图（FoodImg 统一消费 mt-img-style）；AI 模式用「设置 → 图像生成」配置的生图 API。
-  const imgGenConfig = useSettings((s) => s.imgGenConfig);
-  const [styleOpen, setStyleOpen] = useState(false);
-  const [foodStyle, setFoodStyle] = useState<MtFoodStyle>(() => mtGetFoodStyle());
-  const [styleErr, setStyleErr] = useState('');
-  // AI 卡预览：有缓存的品类 AI 图则实时展示（生成完成广播 → 此处重渲染换图）
-  useSyncExternalStore(subscribeAiFood, aiFoodVersion);
-  const aiFoodPreview = mtGetAiFood('food', 'f');
-  const aiConfigReady = imgGenConfigReady(imgGenConfig);
-  /** 选择样式（AI 未配置生图 API 时拦截指路；选择即全站生效） */
-  const applyFoodStyle = (style: MtFoodStyle) => {
-    if (style === 'ai' && !aiConfigReady) {
-      setStyleErr('尚未配置生图 API：请在手机「设置 → 图像生成」里填好基地址 / API Key / 模型后再选 AI 生成');
-      onToast('请先在「设置 → 图像生成」配置生图 API');
-      return;
-    }
-    setFoodStyle(style);
-    mtSetFoodStyle(style);
-    setStyleErr('');
-    onToast(style === 'real' ? '已使用真实图片（网络图库）' : style === 'ai' ? '已使用 AI 生成图片' : '已使用默认图片');
-  };
-
   const cell = (Icon: LucideIcon, label: string, badge: number | null, onTap: () => void, tint = 'text-black/75') => (
     <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-70">
       <span className="relative">
@@ -9172,12 +9139,11 @@ function MyPage({
         </div>
       </div>
 
-      {/* 服务宫格（地址/开发票为真实页面；图片样式=全站图片三选一菜单；其余演示项） */}
+      {/* 服务宫格（地址/开发票为真实页面；其余演示项） */}
       <div className="grid grid-cols-4 gap-y-4 border-t-[7px] border-[#F7F8FA] px-2 py-3.5">
         {([
           [MapPin, '地址', () => onOpenAddresses(), 'my-svc-address'],
           [Receipt, '开发票', () => onOpenInvoices(), 'my-svc-invoice'],
-          [Images, '图片样式', () => setStyleOpen(true), 'my-svc-imgstyle'],
           [Handshake, '入驻美团', () => onOpenMerchantCenter(), 'my-svc-merchant-center'],
           [Store, '添加商户', () => onOpenMerchantCenter(), 'my-svc-merchant-join'],
           [HardHat, '工作兼职', () => onToast('工作兼职（演示）'), ''],
@@ -9247,113 +9213,6 @@ function MyPage({
                   );
                 })}
               </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* 图片样式：菜单样式弹层（全站图片三选一：真实图库 / 设置生图 API AI 生成 / 内置默认插画；订单/店铺门头/菜品全生效） */}
-      <AnimatePresence>
-        {styleOpen && (
-          <motion.div key="food-style" className="absolute inset-0 z-50" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-            <button type="button" aria-label="关闭图片样式" className="absolute inset-0 bg-black/45" onClick={() => setStyleOpen(false)} />
-            <motion.div
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              exit={{ y: '100%' }}
-              transition={{ type: 'tween', duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
-              className="absolute inset-x-0 bottom-0 rounded-t-2xl bg-white pb-8"
-              data-testid="food-style-sheet"
-            >
-              <div className="relative flex shrink-0 items-center justify-center py-4">
-                <p className="text-[16px] font-bold text-black/85">图片样式</p>
-                <button type="button" aria-label="关闭" data-testid="food-style-sheet-close" onClick={() => setStyleOpen(false)} className="absolute right-3 grid h-8 w-8 place-items-center rounded-full active:bg-black/5">
-                  <X className="h-5 w-5 text-black/55" />
-                </button>
-              </div>
-              <p className="px-5 pb-3 text-[12px] text-black/40">订单、店铺门头、菜品等全站图片统一生效 · 选择即用</p>
-
-              {/* 三个样式选择卡（选中态同骑手弹层：黄底黄圈 + 右上对勾） */}
-              <div className="grid grid-cols-3 gap-3 px-4 pb-2">
-                {/* ① 真实图片（网络真实图库：Foodiesfeed / TheMealDB / Commons 等真实照片，默认） */}
-                <button
-                  type="button"
-                  data-testid="food-style-real"
-                  onClick={() => applyFoodStyle('real')}
-                  className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${foodStyle === 'real' ? 'bg-[#FFF3C4] ring-2 ring-[#FFD100]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
-                >
-                  {foodStyle === 'real' && (
-                    <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FFD100]">
-                      <Check className="h-3 w-3 text-black/80" strokeWidth={3} />
-                    </span>
-                  )}
-                  <img src="/api/mt-img?k=food&w=240&h=160&s=7&p=f&v=9" alt="" draggable={false} className="h-16 w-full rounded-xl object-cover" />
-                  <span className="mt-1.5 text-[12px] text-black/85">真实图片</span>
-                  <span className="text-[10px] text-black/35">网络真实图库</span>
-                </button>
-
-                {/* ② AI 生成（用「设置→图像生成」配置的生图 API 按品类自动生成；未配置给指路提示） */}
-                <button
-                  type="button"
-                  data-testid="food-style-ai"
-                  onClick={() => applyFoodStyle('ai')}
-                  className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${foodStyle === 'ai' ? 'bg-[#FFF3C4] ring-2 ring-[#FFD100]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
-                >
-                  {foodStyle === 'ai' && (
-                    <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FFD100]">
-                      <Check className="h-3 w-3 text-black/80" strokeWidth={3} />
-                    </span>
-                  )}
-                  {aiFoodPreview ? (
-                    <img src={aiFoodPreview} alt="" draggable={false} className="h-16 w-full rounded-xl object-cover" />
-                  ) : (
-                    <span className="grid h-16 w-full place-items-center rounded-xl bg-white">
-                      <Sparkles className="h-6 w-6 text-black/30" strokeWidth={1.8} />
-                    </span>
-                  )}
-                  <span className="mt-1.5 text-[12px] text-black/85">AI 生成</span>
-                  <span className="text-[10px] text-black/35">{aiConfigReady ? '生图 API · 已配置' : '需配置生图 API'}</span>
-                </button>
-
-                {/* ③ 默认图片（内置算法插画：服务端直出，离线秒出） */}
-                <button
-                  type="button"
-                  data-testid="food-style-default"
-                  onClick={() => applyFoodStyle('default')}
-                  className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${foodStyle === 'default' ? 'bg-[#FFF3C4] ring-2 ring-[#FFD100]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
-                >
-                  {foodStyle === 'default' && (
-                    <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FFD100]">
-                      <Check className="h-3 w-3 text-black/80" strokeWidth={3} />
-                    </span>
-                  )}
-                  <img src="/api/mt-img?k=food&w=240&h=160&s=7&p=f&v=9&d=1" alt="" draggable={false} className="h-16 w-full rounded-xl object-cover" />
-                  <span className="mt-1.5 text-[12px] text-black/85">默认图片</span>
-                  <span className="text-[10px] text-black/35">内置插画</span>
-                </button>
-              </div>
-
-              {styleErr && <p className="px-5 pb-1 text-[11px] leading-snug text-[#FF3B30]">{styleErr}</p>}
-
-              {/* AI 模式附加操作：清空已生成的品类图，浏览页面时自动重新排队生成 */}
-              {foodStyle === 'ai' && aiConfigReady && (
-                <div className="px-4 pt-1">
-                  <button
-                    type="button"
-                    data-testid="food-style-ai-regen"
-                    onClick={() => {
-                      mtClearAiFoods();
-                      onToast('已清空 AI 图片，浏览页面时会自动重新生成');
-                    }}
-                    className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#F7F8FA] py-2.5 text-[12px] text-black/60 active:bg-black/[0.06]"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" strokeWidth={2} />
-                    重新生成全部 AI 图片
-                  </button>
-                </div>
-              )}
-
-              <p className="px-5 pt-2 text-[10px] leading-snug text-black/30">「真实图片」来自网络真实图库；「AI 生成」使用设置 → 图像生成 里配置的生图 API，按品类自动逐张生成（首次浏览需稍候，可重新生成）；「默认图片」为内置插画，离线秒出。</p>
             </motion.div>
           </motion.div>
         )}
@@ -10511,7 +10370,7 @@ function HotelChannelPage({ onBack, onOpenPay, onToast }: { onBack: () => void; 
     return (
       <div className="flex h-full flex-col bg-[#F4F5F7]">
         <div className="relative shrink-0">
-          <FoodImg src={sel.img} emoji={sel.emoji} className="h-[210px] w-full rounded-b-none" />
+          <FoodImg src={sel.img} emoji={sel.emoji} cap={sel.name} className="h-[210px] w-full rounded-b-none" />
           <button type="button" aria-label="返回" onClick={() => setSel(null)} className="absolute left-3 top-[52px] grid h-9 w-9 place-items-center rounded-full bg-black/40 text-white active:opacity-75">
             <ChevronLeft className="h-5 w-5" />
           </button>
