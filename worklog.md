@@ -17831,3 +17831,20 @@ Stage Summary:
 - 四点需求全落地并浏览器端到端实测：所有界面刷新内容持久化（首页各频道/视频/百亿补贴/秒杀/飞猪/淘票票）、更新统一走「设置 › API 配置」用户配置模型（未配置/失败三级兜底：内置模型→本地确定性批次，永不空白）、淘宝消息界面（AI 客服聊天，对照截图全要素）、AI 提示词规则（人设+服务守则+上下文注入+商品卡标记协议）
 - 持久化语义：AI 批次以 pid 引用存 kv（tb-feed:*），AI 商品本体存 tb-ai-products:<uid>，确定性兜底批次号存 aux——刷新页面/重开 App/换频道往返均原样恢复，旧内容与历史批次永不消失
 - 改动文件：新增 src/app/api/tb-feed/route.ts、src/components/apps/taobao-msg-chat.tsx、src/lib/ios/tb-ai-store.ts、src/lib/ios/tb-chat-ai.ts；修改 src/lib/ios/taobao-data.ts（AI 注册表）、src/components/apps/taobao.tsx、src/components/apps/taobao-channels.tsx、src/components/apps/tb-pull-refresh.tsx
+
+---
+Task ID: 43
+Agent: main (Z.ai Code)
+Task: 消息页会话点击进聊天修复 + 文件夹预览三连修复（跟随图标样式/居中/去裁剪）
+
+Work Log:
+- 淘宝消息页「点击进入的不是聊天界面」：根因是 MsgsPage 会话列表②系统消息聚合分支产生的店铺会话行不带 shopId（只有纯聊天会话带）——退款/物流等系统消息聚合的会话点击走了 onOpenOrder 进订单详情；修复：能通过 orderId→order→shop 落到店铺的系统消息行同样写入 shopId（新增/合并两路都补），点击一律进客服聊天页；onOpenChat 扩展第二参 orderId 透传给 openChat 作上下文（聊天页挂载自动补「你正在咨询的订单」卡片）；无法落到店铺的孤立消息保持跳订单详情
+- 文件夹预览「换了图标样式预览没换」：根因是 HomeScreen folderIconNode 迷你图标用 customIcons ?? appImage() 直铺实体 PNG，完全无视全局 iconStyle（真实/毛玻璃/液态三选一）；修复：registry.tsx 新增导出 AppMiniIcon（14px 级迷你图标，文件夹预览专用）——custom 上传图标永远最优先；real=直铺实体 PNG（继续绕过 60px 图标壳防多层圆角裁切）；glass/liquid=迷你玻璃底座+线条（不能复用 LineIcon/LiquidIcon——内层 rounded-[15px] 在 14px 下会被钳制成胶囊，按同套明暗口径收成 rounded-[3.5px] 迷你圆角方），glyph 用 cloneElement 缩到 46% + strokeWidth 3.4（视觉≈0.9px，14px 下仍清晰），明暗口径与主屏图标同源（主题明暗×壁纸实测亮度）
+- 文件夹预览「图标从左往右显示不是在中间」：folderIconNode 外层 flex-col 只有 items-center 没有 justify-center——单行图标顶在文件夹上方；补 justify-center 让整块迷你网格水平+垂直双居中（对齐 iOS：1~3 个一行居中、4 个 2×2、5/6 个 3+3 整体居中）
+- 文件夹预览「图标裁剪也有问题」：旧版迷你图标 scale-[1.3] 放大溢出裁切，把 PNG 边缘内容/文字裁掉（淘宝 logo、美团字样切边）；去掉放大，PNG 自带圆角半径≈22% 与容器 rounded-[3.5px] 几乎重合，四角干净内容完整
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误（仅仓库自带 instrumentation Edge 警告）
+- agent-browser 全真浏览器逐项验证：①真实拖拽建夹（美团拖到淘宝）→ 预览双居中+logo 完整无裁剪 ②主题App切「毛玻璃图标」→ 主屏图标变磨砂线条，文件夹预览同步变迷你玻璃底座+购物袋/刀叉线条 ③切「液态透明」→ 预览同步液态玻璃泡 ④恢复「真实图标」→ 预览还原 PNG 直铺 ⑤文件夹展开面板正常（淘宝/美团大图标+改名栏）⑥淘宝消息页点「尔野数码专营店」（退款系统消息聚合会话）→ 正确进客服聊天页（紫头+星级4.9+拒收pill+订单卡「你正在咨询的订单」+欢迎语）⑦发消息「退货的运费谁承担呀」→ AI 回复「亲，退款已原路退回，1-3个工作日到账哦~运费一般由买家承担…」+已读回执 ⑧返回消息页会话列表显示聊天预览置顶 ⑨点「官方国货甄选」（纯聊天会话）→ 聊天页历史记录完整回归通过
+
+Stage Summary:
+- 三问题全落地并浏览器端到端实测：淘宝消息页所有店铺会话（聊天会话+系统消息聚合会话）点击一律进 AI 客服聊天页（带订单上下文自动补订单卡）；文件夹迷你预览跟随全局图标样式三态实时切换；预览图标水平+垂直双居中、去掉 scale-1.3 后内容完整不裁剪
+- 改动文件：src/components/apps/taobao.tsx（MsgsPage 系统消息行补 shopId+onOpenChat 带 orderId）、src/components/apps/registry.tsx（新增 AppMiniIcon）、src/components/ios/HomeScreen.tsx（folderIconNode justify-center+去 scale+接 AppMiniIcon）

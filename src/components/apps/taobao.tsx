@@ -5334,8 +5334,8 @@ function MsgsPage({
   onOpenExpress: () => void;
   onOpenRefundOrders: () => void;
   onOpenCouponCenter: () => void;
-  /** 进入店铺客服聊天（Task 41：消息页会话点击 → AI 客服聊天） */
-  onOpenChat: (shopId: string) => void;
+  /** 进入店铺客服聊天（Task 43：消息页会话点击 → AI 客服聊天；orderId 附带订单上下文，聊天页自动补订单卡） */
+  onOpenChat: (shopId: string, orderId?: string | null) => void;
   onToast: (m: string) => void;
 }) {
   const [, setTick] = useState(0);
@@ -5376,10 +5376,13 @@ function MsgsPage({
       if (shop && map.has(shop.id)) continue;
       const name = shop?.name ?? m.title;
       const prev = map.get(name);
+      // Task 43：能落到店铺的系统消息行也带上 shopId——点击进客服聊天页（此前只有纯聊天会话才带，
+      // 系统消息行点了进订单详情，用户反馈「消息界面点击进入的不是聊天界面」）
       if (!prev || m.at > prev.at) {
-        map.set(name, { key: prev?.key ?? m.id, name, text: m.text, at: m.at, orderId: m.orderId ?? prev?.orderId, tag: shop?.tag, tmall: shop?.tmall, unread: prev?.unread ?? 0 });
-      } else if (!prev.orderId && m.orderId) {
-        prev.orderId = m.orderId;
+        map.set(name, { key: prev?.key ?? m.id, name, text: m.text, at: m.at, orderId: m.orderId ?? prev?.orderId, tag: shop?.tag, tmall: shop?.tmall, shopId: shop?.id ?? prev?.shopId, unread: prev?.unread ?? 0 });
+      } else {
+        if (!prev.orderId && m.orderId) prev.orderId = m.orderId;
+        if (!prev.shopId && shop) prev.shopId = shop.id;
       }
     }
     return [...map.values()].sort((a, b) => b.at - a.at);
@@ -5484,8 +5487,9 @@ function MsgsPage({
                 key={c.key}
                 type="button"
                 onClick={() => {
-                  // Task 41：客服聊天会话进聊天页；纯系统消息会话保持跳订单详情
-                  if (c.shopId) onOpenChat(c.shopId);
+                  // Task 43：店铺会话（聊天会话 + 可落到店铺的系统消息会话）一律进聊天页，
+                  // 附带最近关联订单作上下文；无法落到店铺的孤立消息保持跳订单详情
+                  if (c.shopId) onOpenChat(c.shopId, c.orderId);
                   else if (c.orderId) onOpenOrder(c.orderId);
                   else onToast('会话（演示）');
                 }}
@@ -6769,7 +6773,7 @@ export default function TaobaoApp() {
               setPage('orders');
             }}
             onOpenCouponCenter={() => setPage('couponCenter')}
-            onOpenChat={(sid) => openChat(sid)}
+            onOpenChat={(sid, oid) => openChat(sid, { orderId: oid })}
             onToast={showToast}
           />
         ) : null}

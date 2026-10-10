@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, type ComponentType, type ReactNode } from 'react';
+import { cloneElement, isValidElement, useId, type ComponentType, type ReactElement, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import Image from 'next/image';
 import {
@@ -463,6 +463,59 @@ export function AppStylePreview({ id, style }: { id: AppId; style: IconStyle }) 
   const image = IMAGES[id];
   if (image) return <RealIconTile src={image} />;
   return <LineIcon variant="card">{GLYPHS[id]}</LineIcon>;
+}
+
+/** 文件夹迷你缩略图（HomeScreen folderIconNode 用，14px 级别）——跟随全局「图标样式」三态
+ *  （Task 43：旧版永远直铺实体 PNG，主屏换成毛玻璃/液态后文件夹预览不跟着变，用户实测反馈）：
+ *  ① custom（主题页上传的自定义图标）永远最优先，直铺原图；
+ *  ② real=直铺实体 PNG 原图——继续绕过 60px 图标壳（RealIconTile 的 rounded-[15px]
+ *     缩到 14px 会被钟制成圆形裁切，与外层裁切叠加把四角削成八边形），且不再 scale-1.3
+ *     放大（会把 PNG 边缘内容/文字裁掉，用户实测），PNG 自带圆角半径 ≈22% 与容器
+ *     rounded-[3.5px] 几乎重合，四角干净；
+ *  ③ glass/liquid=迷你玻璃底座 + 粗线条（不能复用 LineIcon/LiquidIcon——它们内层
+ *     rounded-[15px] 在 14px 下会被钟制成胶囊；这里按同套明暗口径收成迷你圆角方），
+ *     glyph 用 cloneElement 缩到 46% 并加粗线宽（视觉 ≈0.9px，14px 下仍清晰）；
+ *  real 无实体图的 App 同样走线条底座（与 AppIconById 口径一致） */
+export function AppMiniIcon({ id, custom }: { id: AppId; custom?: string | null }) {
+  const style = useSettings((s) => s.iconStyle);
+  const themeMode = useSettings((s) => s.theme);
+  const systemDark = useSystemDark();
+  // 壁纸实测亮度（文件夹迷你图标同样画在壁纸上，与主屏图标同源明暗）
+  const lightWallpaper = useHomeWallpaperLight();
+  if (custom) {
+    return <img src={custom} alt="" draggable={false} className="block h-full w-full select-none object-cover" />;
+  }
+  const image = IMAGES[id];
+  if (style === 'real' && image) {
+    return <img src={image} alt="" draggable={false} className="block h-full w-full select-none object-cover" />;
+  }
+  const dark = selectResolvedTheme(themeMode, systemDark) === 'dark';
+  const lightGlass = !dark && lightWallpaper;
+  const raw = GLYPHS[id];
+  const glyph = isValidElement(raw)
+    ? cloneElement(raw as ReactElement<{ className?: string; strokeWidth?: number }>, {
+        className: undefined,
+        strokeWidth: 3.4,
+      })
+    : raw;
+  const tile =
+    style === 'liquid'
+      ? lightGlass
+        ? 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.52),rgba(255,255,255,0.16)_45%,rgba(0,0,0,0.03))] shadow-[inset_0_1px_2px_rgba(255,255,255,0.8),0_1px_3px_rgba(0,0,0,0.06)] ring-black/[0.10] text-[#4b4b53]'
+        : 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.28),rgba(255,255,255,0.06)_45%,rgba(255,255,255,0.13))] shadow-[inset_0_1.5px_2.5px_rgba(255,255,255,0.44),0_1px_4px_rgba(0,0,0,0.09)] ring-white/[0.36] text-[#f8f8fb]'
+      : lightGlass
+        ? 'bg-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] ring-black/[0.06] text-[#48484e]'
+        : dark
+          ? 'bg-black/[0.32] shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] ring-white/[0.14] text-[#f6f6f8]'
+          : 'bg-white/[0.16] shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] ring-white/[0.12] text-[#f6f6f8]';
+  return (
+    <span
+      aria-hidden="true"
+      className={`flex h-full w-full items-center justify-center rounded-[3.5px] ring-1 backdrop-blur-[3px] [&>svg]:h-[46%] [&>svg]:w-[46%] ${tile}`}
+    >
+      {glyph}
+    </span>
+  );
 }
 
 export const APP_MAP: Record<AppId, AppMeta> = Object.fromEntries(APPS.map((a) => [a.id, a])) as Record<AppId, AppMeta>;
