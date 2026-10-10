@@ -157,6 +157,7 @@ import { TbMsgChatPage } from './taobao-msg-chat';
 import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 import { LocalToast, useLocalToast } from './page-toast';
 import { TbImg } from './tb-img';
+import { tbRefreshRealImages } from '@/lib/ios/tb-real-img-store';
 import {
   subscribeTbAiImg as subscribeAiImg,
   subscribeTbImgStyle as subscribeImgStyle,
@@ -1057,6 +1058,7 @@ function HomePage({
         let newKey = refreshKeyRef.current;
         if (ai) {
           newTops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...topsRef.current];
+          void tbRefreshRealImages(ai.products.map((p) => p.tag)); // Task 50：刷新同分类换图（新内容真实图）
         } else {
           // 本地兜底：确定性洗牌前插（同样持久化）
           newKey = refreshKeyRef.current + 1;
@@ -1066,6 +1068,7 @@ function HomePage({
             ...Array.from({ length: 8 }, (_, i) => ({ pid: shuffled[i % shuffled.length].id, v: newKey % 4, k: `${kr}-${i}` })),
             ...topsRef.current,
           ];
+          void tbRefreshRealImages(shuffled.slice(0, 8).map((p) => p.tag));
         }
         setTops(newTops);
         setRefreshKey(newKey);
@@ -1083,6 +1086,7 @@ function HomePage({
         const start = tailsRef.current.length;
         const newTails: TbFeedTop[] = [...tailsRef.current, ...appended.map((p, i) => ({ pid: p.id, v: (i + start) % 4, k: `tl${ks}-${start + i}` }))];
         setTails(newTails);
+        void tbRefreshRealImages(appended.map((p) => p.tag)); // Task 50：底部追加也换图（同分类）
         if (surf) tbFeedSave(uid, surf, { tops: topsRef.current, tails: newTails, batch: batchRef.current, refreshKey: refreshKeyRef.current });
         onToast('已加载新的好物在下方，上方内容不变');
       }
@@ -1487,6 +1491,7 @@ function VideoPage({ uid, onOpenProduct, onToast }: { uid: string; onOpenProduct
         const newTails: TbFeedTop[] = [...vTailsRef.current, ...appended.map((p, i) => ({ pid: p.id, v: (i + start) % 4, k: `vt${ks}-${start + i}` }))];
         setVTails(newTails);
         tbFeedSave(uid, 'video', { tops: vTopsRef.current, tails: newTails, refreshKey: vKeyRef.current });
+        void tbRefreshRealImages(appended.map((p) => p.tag)); // Task 50：新视频封面同分类换图
         setVRefreshing(false);
         // 不再跳回顶部：当前视频原位不动，新视频在下方继续滑就能看到
         onToast('已加载新的视频在下方，接着往下滑就能看');
@@ -5084,11 +5089,15 @@ function MePage({
           const tops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...meTopsRef.current];
           setMeTops(tops);
           tbFeedSave(uid, 'me', { tops, tails: meTailsRef.current });
+          void tbRefreshRealImages(ai.products.map((p) => p.tag)); // Task 50：刷新同分类换图
         } else {
           const seed = menuSeq.current++;
           const bs = [seed, ...menuBatchesRef.current].slice(0, 3);
           setMenuBatches(bs);
           tbFeedAuxSave(uid, 'me', 'batches', { list: bs, seq: menuSeq.current });
+          const arr = [...TB_PRODUCTS];
+          const start = (14 + seed * 8) % arr.length;
+          void tbRefreshRealImages(Array.from({ length: 8 }, (_, i) => arr[(start + i) % arr.length]?.tag ?? ''));
         }
         onToast('已为你换上新的好物，旧推荐都还在哦');
       } else {
@@ -5105,6 +5114,7 @@ function MePage({
         const newTails: TbFeedTop[] = [...meTailsRef.current, ...appended.map((p, i) => ({ pid: p.id, v: (i + start) % 4, k: `mt${ks}-${start + i}` }))];
         setMeTails(newTails);
         tbFeedAuxSave(uid, 'me', 'aiTails', newTails);
+        void tbRefreshRealImages(appended.map((p) => p.tag)); // Task 50：底部追加同分类换图
         onToast('已加载新的好物在下方，上方内容不变');
       }
     })();
@@ -5434,7 +5444,7 @@ function TbImgStyleSheet({ onClose, onToast }: { onClose: () => void; onToast: (
             ) : null}
             <TbImg src="/api/mt-img?k=phone&w=240&h=160&s=7&p=f&v=12" alt="真实图片预览" className="h-16 w-full rounded-xl" />
             <span className="mt-1.5 text-[12px] text-black/85">真实图片</span>
-            <span className="text-[10px] text-black/35">网络真实图库</span>
+            <span className="text-[10px] text-black/35">真实图库·分类匹配</span>
           </button>
           {/* ② AI 生成（用「设置→图像生成」配置的生图 API 按品类自动生成；未配置给指路提示） */}
           <button
@@ -5493,7 +5503,8 @@ function TbImgStyleSheet({ onClose, onToast }: { onClose: () => void; onToast: (
             </button>
           </div>
         ) : null}
-        <p className="px-5 pt-2 text-[10px] leading-snug text-black/30">「真实图片」来自网络真实图库；「AI 生成」使用设置 → 图像生成 里配置的生图 API，按品类自动逐张生成（首次浏览需稍候，可重新生成）；「默认图片」为内置插画，离线秒出。</p>
+        <p className="px-5 pt-2 text-[10px] leading-snug text-black/30">「真实图片」按分类精准匹配网络真实图库（优先 Pexels 直链，次选 Openverse·StockSnap、Wikimedia Commons，食品可用 Foodiesfeed；不转存，版权信息见图片长按提示）；「AI 生成」使用设置 → 图像生成 里配置的生图 API，按品类自动逐张生成（首次浏览需稍候，可重新生成）；「默认图片」为内置插画，离线秒出。</p>
+        <p className="px-5 pt-1 text-[10px] leading-snug text-black/30">真实图仅作界面展示；刷新后同分类换图，打开淘宝不自动更新；图库请求失败自动用已缓存图片。</p>
       </div>
     </div>
   );
@@ -6504,6 +6515,7 @@ function CouponCenterPage({ uid, onBack, onToast }: { uid: string; onBack: () =>
       const s0 = ccRef.current;
       const ai = await tbFetchAiCoupons({ exclude: ccShownNames(), count: 6, config: apiCfgCcRef.current });
       if (ccSeq.current !== mySeq) return; // 过期批次丢弃
+      void tbRefreshRealImages((ai ?? []).map((c) => c.tag)); // Task 50：新券配图同分类换图（失败走缓存兜底）
       if (dir === 'down') {
         const batch = ai ?? ccFallbackBatch(batchSeq.current, ccShownNames());
         batchSeq.current += 1;

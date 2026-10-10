@@ -17909,3 +17909,23 @@ Work Log:
 Stage Summary:
 - 四点需求全落地并浏览器端到端实测：①我的淘宝省钱卡位变「图片样式」入口，真实图片/AI 生成/默认图片三选一弹层与美团同款，选择即时全站生效（商品/门头/领券中心/频道页 32+ 渲染点切 TbImg）、localStorage 持久化、AI 模式未配置拦截指路；②美团点开不再刷新：AI 商家/团购注册表+首页信息流+浏览位置全部持久化，切 tab/reload 重开都原样恢复，仅主动下拉刷新才重新生成；③领券中心支持刷新+无限滚动：AI 换新券前插/拉一拉追加（上方内容不变）、领取入账、全量持久化；④免费网络图库候选清单已整理待用户选择（现用 Commons 实景池，选定后可无缝切换）
 - 改动文件：src/components/apps/tb-img-style.ts、src/components/apps/tb-img.tsx（新增）、src/components/apps/taobao.tsx（图片样式入口+弹层+TbImg 全站+领券中心好券流）、src/components/apps/taobao-channels.tsx（TbImg 全站）、src/lib/ios/meituan-data.ts（AI 注册表持久化）、src/components/apps/meituan.tsx（信息流持久化+恢复）、src/app/api/tb-feed/route.ts（coupon surface）、src/lib/ios/tb-ai-store.ts（TbAiCoupon+tbFetchAiCoupons）
+
+---
+Task ID: 50
+Agent: main (Z.ai Code)
+Task: 淘宝商品图改真实图片——按分类精准匹配（用户五节规格）：图源优先级 Pexels 直链 → Openverse → Wikimedia Commons（食品可用 Foodiesfeed）；每分类固定英文搜索词不随机；刷新换图必须同分类；多人缓存方案（刷新后的图都缓存 / 打开淘宝不自动更新 / API 失败缓存兜底）；合规（不转存用直链 / 保留版权信息 / 不大量抓取按需请求）；不破坏现有全部功能；图片仅展示不影响订单支付
+
+Work Log:
+- 图源可行性实测（关键决策依据）：Pexels 搜索页被 Cloudflare 拦（curl 5KB 挑战页、agent-browser 真实浏览器卡 "Just a moment"、page_reader 空），搜索引擎只返回域名根拿不到照片深链 → 免 key 运行时搜 Pexels 不可行；Openverse 匿名 API ✅（含 creator/license/foreign_landing_url 元数据）；StockSnap/Rawpixel CDN 服务端+真浏览器双 403（热链保护）→ 靠校验器自然过滤；真浏览器热链实测：Flickr ✅ / thumb.wikimedia.org ✅ / r2.dev(Foodiesfeed) ✅
+- 新建 /api/tb-img（nodejs runtime）：① tag→分类+英文搜索词映射表 TB_KEYWORDS（52 词全覆盖：数码手机/耳机/电脑/相机…、服饰衣服/鞋/包/帽子、家居家具/餐具/床品、美妆口红/面膜/香水、食品零食/饮料/水果、图书书/杂志/文具 + kiosk/temple 等，未知 tag 自由词兜底）；② 图源链 Pexels（环境变量 PEXELS_KEY 配置即启用=官方允许热链，pexels.com/api 免费注册，代码就绪）→ Openverse（license_type=commercial，Flickr 等）→ Commons（filetype:bitmap + 标题黑名单 + extmetadata 取 Artist/LicenseShortName）→ Foodiesfeed（仅 food tag，R2 直链）；③ 直链热链校验 curl -sIL 须 200+image/*（防死链/防盗链图），同 host 连续 3 败跳过剩余候选 + 已知废源（stocksnap/rawpixel）沉底交错防吞名额；④ 不转存字节——只返回直链+版权元数据；⑤ 按需请求：每源每词搜索列表缓存 6h + 失败负缓存 60s + 图库并发限流 3 + 同请求去重；⑥ per-tag last-good 池（网络全挂 → 池内轮换返回 cached:true）+ 60s neg 真正生效短路
+- 新建 src/lib/ios/tb-real-img-store.ts（客户端多人缓存）：kv（IndexedDB 写穿+内存同步读）全局一份按 tag 存 {list(≤16), base(轮换基点)}；tbEnsureRealImg 仅缓存为空时按需拉一次（首拉失败 10min 负缓存 localStorage；kv 未注水完成时 300ms 轮询延后重试防时序性重复拉取）；tbRefreshRealImages(tags) 供刷新 handler 调用（并发 2 槽位移交、r=1 前插去重、base+1=同 tag 全部展示位轮换）；失败一律不清缓存不换源
+- tb-img.tsx real 模式重写：解析 s 变体 → 缓存 list[(base+s)%len] 取图；img 带 referrerPolicy=no-referrer + title=「图：作者 · 许可 · 图库（仅作展示）」版权信息；两层兜底（真实直链 onError → /api/mt-img 服务端真实图链 → 占位）；缓存为空先显 mt-img 图不打断页面 + 后台 ensure；default/ai 模式与用户上传 dataURL 原逻辑不动
+- 刷新接线 6 处（全部「新内容 → 对应 tags → 同分类换图」）：首页 doHomeRefresh（down AI 批/本地洗牌、up 追加批）、我的淘宝 mePull（AI 批/本地批/追加）、视频页 onVTouchEnd（追加批）、taobao-channels useTbChannelFeed（补贴/秒杀/飞猪 AI 批双分支）、MoviePage refreshMerch（周边 raws）、领券中心 ccPull（AI 券 tag）；AI 失败走本地批次同样换图
+- 图片样式弹层文案更新：真实图片=「真实图库·分类匹配」，底注说明图源优先级/不转存/版权见图片提示/刷新换图/打开不更新/失败用缓存
+- E2E（agent-browser 全链路）：① /api/tb-img 冒烟 7 tag 全部命中正确品类（smartphone→手机图、lipstick→口红、sofa→沙发、snacks→零食架+Foodiesfeed、fruit→水果+Foodiesfeed…）带作者/许可/来源页；② r=1 三连刷全部返回不同直链（排除已用池）；③ 浏览器登录淘宝 → 首页 50 图中 20 张真实直链（Flickr 11/Commons 6/Foodiesfeed 3）+12 张已加载+22 张带版权 title，截图确认运动鞋/耳机/键盘等品类匹配观感；④ reload→解锁→等注水→重开淘宝：performance entries 证实 **0 个新 tb-img 请求**、22 张图全部缓存直渲（「打开不自动更新」）⑤ 首页两次下拉刷新：r=1 共 16 个请求，IndexedDB 复核 backpack/dress n=5 base=2、earbuds n=8 base=3——每次刷新 +3 张缓存且轮换基点推进（同分类换图 ✓ 缓存 ✓）；⑥ 版权 title 实测「图：Japanexperterna.se · CC BY-SA 2.0 · Wikimedia Commons（仅作展示，点击图片不跳转）」；⑦ 美团 meituan.tsx/mt-img route 零改动（git status 仅淘宝 3 文件 + 2 新文件），mt-img 链路原样服务美团
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误（仅仓库自带 instrumentation Edge 警告）
+
+Stage Summary:
+- 交付：淘宝全站商品图/门头图/券图/视频封面切「分类精准匹配真实图库直链」——每分类固定英文搜索词按词搜索不随机；刷新换图严格同分类（新图前插缓存+轮换基点推进）；打开淘宝零请求（缓存直渲，仅首次-ever 按需拉取）；图库失败三级兜底（服务端 last-good 池轮换 → 客户端旧缓存 → mt-img 服务端真实图链）；不转存图片（全部直链热链+no-referrer），每图带 作者·许可·图库 版权提示；Pexels 代码就绪（配 PEXELS_KEY 即成第一优先图源，官方允许热链）
+- 图源决策透明：沙箱内 Pexels 免 key 不可用（Cloudflare 拦搜索页+无深链索引）→ 无 key 默认链路=Openverse(Flickr 等)+Commons+Foodiesfeed，全部免费可商用、按需请求、带完整版权元数据；StockSnap/Rawpixel 因 CDN 拒热链被自动过滤
+- 改动文件：src/app/api/tb-img/route.ts（新增）、src/lib/ios/tb-real-img-store.ts（新增）、src/components/apps/tb-img.tsx、src/components/apps/taobao.tsx、src/components/apps/taobao-channels.tsx
