@@ -3,7 +3,7 @@
 /**
  * 淘宝内容匹配图组件：taobao.tsx / taobao-channels.tsx 全站共用。
  *
- * 图源为预生成本地 kawaii 卡通插画（Task 58）：src 由 taobao-data.tbImg 产出
+ * 图源为本地 kawaii 卡通插画（Task 59 落盘）：src 由 taobao-data.tbImg 产出
  * /goods/*.webp 本地图（原真实图库直链 /api/tb-img 链路已删除）；用户上传 dataURL
  * 等自定义图原样显示。本地图全链有图，前端仅做一次重试，再失败显示 emoji 兜底/占位；
  * 加载期 shimmer，弱网不再是大灰块。
@@ -11,6 +11,34 @@
 import { useState } from 'react';
 import { ImageOff } from 'lucide-react';
 import { legacyImgUrl } from '@/lib/ios/goods-img';
+
+/** 图挂时的暖色渐变 + emoji 兜底（与美团 FoodImg 同款体验，按图源文件名推断品类） */
+const FALLBACK_EMOJI: Record<string, string> = {
+  // 数码
+  phone: '📱', earbuds: '🎧', laptop: '💻', tablet: '📱', watch: '⌚', keyboard: '⌨️',
+  speaker: '🔊', powerbank: '🔋',
+  // 服饰
+  tshirt: '👕', jeans: '👖', dress: '👗', jacket: '🧥', hoodie: '🧥', sneakers: '👟', shoes: '👟', backpack: '🎒',
+  // 美妆
+  lipstick: '💄', perfume: '🌸', skincare: '🧴', makeup: '💅',
+  // 家居
+  sofa: '🛋️', bedding: '🛏️', lamp: '💡', mug: '☕', vase: '🏺', pillow: '🛏️', desk: '🪑',
+  // 其他
+  toy: '🧸', umbrella: '☂️', 'water-bottle': '🥤', snacks: '🍿', cookies: '🍪', tea: '🍵',
+  books: '📚', book: '📚', fruit: '🍎', flower: '💐',
+  // 美团菜品（淘宝 AI 商品跨类复用）
+  'milk-tea': '🧋', burger: '🍔', 'fried-chicken': '🍗', pizza: '🍕', hotpot: '🍲', noodles: '🍜',
+  rice: '🍚', dessert: '🍰', 'ice-cream': '🍦', coffee: '☕', juice: '🧃', milk: '🥛', egg: '🍳',
+  breakfast: '🍞', dumplings: '🥟', sushi: '🍣', barbecue: '🍢', 'chinese-food': '🥘', seafood: '🦀',
+  beef: '🥩', salad: '🥗', soup: '🥣', cola: '🥤', medicine: '💊', store: '🛍️',
+};
+
+function fallbackEmojiOf(src: string | undefined): string | undefined {
+  const m = src?.match(/\/goods\/([a-z0-9-]+)\.webp/i);
+  if (!m) return undefined;
+  if (m[1].startsWith('shop-')) return '🏪';
+  return FALLBACK_EMOJI[m[1].replace(/^(tb|mt)-/, '')];
+}
 
 export function TbImg({
   src,
@@ -46,15 +74,17 @@ function TbImgInner({
   const [stage, setStage] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const cur = stage <= 1 ? src : undefined;
+  // 未显式传 emoji 时按图源文件名推断兜底 emoji（与美团 FoodImg 同款暖色渐变兜底）
+  const fb = emoji ?? fallbackEmojiOf(cur) ?? fallbackEmojiOf(src);
   if (!cur) {
     // 无图 + 有 emoji：暖色渐变 + emoji 大字兜底，不再是「加载失败」灰块
-    if (emoji) {
+    if (fb) {
       return (
         <div
           className={`flex items-center justify-center bg-gradient-to-br from-[#FFE9B8] via-[#FFDF9E] to-[#FFD100]/70 ${className}`}
           aria-hidden="true"
         >
-          <span className="text-[34px] leading-none drop-shadow-sm">{emoji}</span>
+          <span className="text-[34px] leading-none drop-shadow-sm">{fb}</span>
         </div>
       );
     }

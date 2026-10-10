@@ -1,9 +1,9 @@
 /**
- * 淘宝/美团本地卡通商品图（Task 58）：
+ * 淘宝/美团本地卡通商品图（Task 58 引入链路，Task 59 修复落盘）：
  *
- * - 全站商品图/菜品图/门头图统一改用预生成的 kawaii 卡通插画（public/goods/*.webp，
- *   参考用户上传的可爱奶茶/汉堡/冰淇淋风格批量生成），不再请求外部图库
- *   （原 /api/mt-img Foodiesfeed/Commons 抓图链与 /api/tb-img Pexels/Openverse 直链链路已删除）；
+ * - 全站商品图/菜品图/门头图统一使用本地 kawaii 卡通插画（public/goods/*.webp，
+ *   由 scripts/gen-goods-svg.ts 手绘 SVG 矢量插画经 sharp 栅格化产出，67 张全覆盖；
+ *   风格：暖棕描边 + 腮红 + 粉彩底，零外部图库/外部 API 依赖）；
  * - mtGoodsImg：美团菜品/门头 tag → 本地图（TAG_RULES 命中的全量 tag + 长尾近似归并）；
  *   tbGoodsImg：淘宝商品 tag → 本地图（TB_PRODUCTS 全量 tag）；
  * - 同一 tag 固定同一张图（订单叫什么显示什么图，稳定不闪变）；s 变体参数保留兼容

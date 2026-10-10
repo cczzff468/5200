@@ -18059,3 +18059,23 @@ Work Log:
 Stage Summary:
 - 交付：电话通话「电话界面 ⇄ 电话聊天界面」双视图——默认界面只显示单句弹幕（纯文字），点右上角信息按钮立即进入聊天界面查看全程对话记录（聊天气泡：语音说的+打字的全部轮次、声波小标、自动滚底），退出即回弹幕并恢复免提；挂断后整通对话落语音留言存档链路保持不变
 - 改动文件：src/components/apps/phone.tsx（CallScreen 中部区三分支渲染+顶部弹性区+信息按钮 aria-label+文件头注释）
+
+---
+Task ID: 59
+Agent: main (Z.ai Code)
+Task: 用户反馈「淘宝图片有问题，美团没有问题」（附截图：淘宝首页多处「图片加载失败」灰块）——定位并根治图片加载失败
+
+Work Log:
+- 根因定位：Task 58 代码层已把淘宝/美团全站图源切到 public/goods/*.webp 本地卡通图，但图片文件从未真正落盘（public/goods/ 目录为空），全部请求 404 → TbImg 重试两次后显示「图片加载失败」灰块；美团显示正常纯属侥幸——其 FoodImg 每处调用都传了 emoji，图挂时走暖色渐变+大 emoji 兜底，而淘宝 TbImg 大多未传 emoji，只能落到灰块
+- 方案取舍：z-ai 图片生成 API 实测持续 429 限流（与既往 SDK 一致），等待不可靠；改为纯本地手绘 SVG 矢量插画 → sharp 栅格化转 webp，零外部 API 依赖、风格全局统一、单张仅 4-7KB（67 张共 452KB）
+- scripts/gen-goods-svg.ts 新增：kawaii 风格体系（暖棕描边 #5C4A3D/腮红/粉彩底/四角星/落地椭圆阴影 + 可复用 face()/sparkle()/heart()/steam()/shopBase() 部件），67 张插画全覆盖 goods-img.ts 全部引用：美团菜品 28（奶茶/汉堡/炸鸡/披萨/火锅/面条/米饭/甜品/冰淇淋/咖啡/果汁/西瓜/早餐/饺子/寿司/烧烤/小炒/螃蟹/牛排/沙拉/汤/可乐/煎蛋/牛奶/药/花束/购物袋等）+ 门头 6（药房/早餐店/咖啡店/奶茶店/休闲娱乐/美食店）+ 淘宝商品 33（手机/耳机/笔记本/平板/手表/键盘/音箱/充电宝/T恤/牛仔裤/连衣裙/夹克/卫衣/球鞋/双肩包/口红/香水/护肤/彩妆盘/沙发/床品/台灯/马克杯/花瓶/抱枕/书桌/泰迪熊/雨伞/水壶/薯片/曲奇/茶叶罐/书堆），每张带 kawaii 表情；支持断点续跑（已存在非空文件跳过）
+- TbImg 兜底加固（tb-img.tsx）：新增 FALLBACK_EMOJI 表 + fallbackEmojiOf()（按图源文件名推断品类 emoji），未显式传 emoji 的调用点图挂时也走暖色渐变+emoji 兜底（与美团 FoodImg 同款体验），灰块仅在无 emoji 且无图时出现
+- 文件头注释同步：goods-img.ts / tb-img.tsx 更正为「Task 59 落盘、SVG 矢量绘制」
+- E2E（agent-browser 全真浏览器全链路）：①滑锁解锁→三页主屏→淘宝登录墙（微信账密 tab）→联系人 App 建 USER 账号（小淘/tbtest01，USER 必填 QQ密码 校验提示实测）→淘宝账密登录成功进首页；②淘宝首页信息流 50/50 图片全部加载成功 0 裂图（document.querySelectorAll('img') naturalWidth 校验），百亿补贴区（用户截图灰块位置）显示手机/耳机卡通图，商品卡台灯/书本/沙发/笔记本/马克杯/外套/背包/西瓜等品类齐全；③商品详情页 40/40 图片正常（主图+SKU 颜色分类缩略图+店铺头像）；④美团微信账密登录（同账号）→首页 46/46 图片 0 裂图（门头图+特惠团菜品图）；⑤进尊宝比萨店铺：菜品图带图内菜名贴片（cap：「经典夏威夷比萨 9寸」「香香鸡块 6只」等，满足「图片下面显示订单的名字」）
+- bunx tsc --noEmit 0 错误；dev.log 无新增运行时错误（仅仓库固有 instrumentation Edge 警告）
+- 备注：agent-browser 会话内 `set viewport` 仍会破坏鼠标输入路由（沿用 Task 56 经验未调用）；美团 App 首页骨架期约 2.5s 属 AI 生成文案的正常加载
+
+Stage Summary:
+- 根治「图片加载失败」：67 张本地 kawaii 卡通图全部落盘 public/goods/*.webp（手绘 SVG→sharp webp，452KB），淘宝/美团全站商品图/菜品图/门头图全链有图，E2E 实测两 App 96/96 图片 0 裂图
+- TbImg 补齐 emoji 渐变兜底（按文件名推断品类），与美团 FoodImg 同款极端故障体验，灰块兜底仅剩理论路径
+- 改动文件：scripts/gen-goods-svg.ts（新增）、public/goods/*.webp（67 张新增）、src/components/apps/tb-img.tsx、src/lib/ios/goods-img.ts（注释）
