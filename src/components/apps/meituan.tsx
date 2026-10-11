@@ -68,7 +68,6 @@ import {
   Gem,
   HandCoins,
   Handshake,
-  HardHat,
   Headset,
   Heart,
   Home as HomeIcon,
@@ -9266,19 +9265,36 @@ function MyPage({
         </div>
       </div>
 
-      {/* 服务宫格（地址/开发票为真实页面；其余演示项） */}
+      {/* 服务宫格（地址/开发票为真实页面；其余演示项；
+          工作兼职=商品图片样式卡（第六十五轮）：kawaii 骑手兼职图 + 名字在图下方，
+          跟随设置里商品图三样式（卡通/简笔画/emoji）实时切换） */}
       <div className="grid grid-cols-4 gap-y-4 border-t-[7px] border-[#F7F8FA] px-2 py-3.5">
         {([
           [MapPin, '地址', () => onOpenAddresses(), 'my-svc-address'],
           [Receipt, '开发票', () => onOpenInvoices(), 'my-svc-invoice'],
           [Handshake, '入驻美团', () => onOpenMerchantCenter(), 'my-svc-merchant-center'],
           [Store, '添加商户', () => onOpenMerchantCenter(), 'my-svc-merchant-join'],
-          [HardHat, '工作兼职', () => onToast('工作兼职（演示）'), ''],
+        ] as [LucideIcon, string, () => void, string][]).map(([Icon, l, tap, tid]) => (
+          <button key={l} type="button" data-testid={tid || undefined} onClick={tap} className="flex flex-col items-center gap-1.5 active:opacity-70">
+            <span className="flex h-[46px] items-center justify-center">
+              <Icon className="h-[22px] w-[22px] text-black/75" strokeWidth={1.8} />
+            </span>
+            <span className="text-[11px] text-black/70">{l}</span>
+          </button>
+        ))}
+        {/* 工作兼职：商品图片样式（图上文下名，与商品卡同款排版） */}
+        <button type="button" data-testid="my-svc-job" onClick={() => onToast('工作兼职（演示）')} className="flex flex-col items-center gap-1.5 active:opacity-70">
+          <FoodImg src="/goods/mt-job.webp" emoji="🛵" className="h-[46px] w-[46px] shrink-0 rounded-[12px]" />
+          <span className="text-[11px] text-black/70">工作兼职</span>
+        </button>
+        {([
           [Leaf, '我的碳账户', () => onToast('我的碳账户（演示）'), ''],
           [LayoutGrid, '更多工具', () => onToast('更多工具（演示）'), ''],
         ] as [LucideIcon, string, () => void, string][]).map(([Icon, l, tap, tid]) => (
           <button key={l} type="button" data-testid={tid || undefined} onClick={tap} className="flex flex-col items-center gap-1.5 active:opacity-70">
-            <Icon className="h-[22px] w-[22px] text-black/75" strokeWidth={1.8} />
+            <span className="flex h-[46px] items-center justify-center">
+              <Icon className="h-[22px] w-[22px] text-black/75" strokeWidth={1.8} />
+            </span>
             <span className="text-[11px] text-black/70">{l}</span>
           </button>
         ))}

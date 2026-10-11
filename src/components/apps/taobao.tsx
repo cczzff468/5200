@@ -5353,32 +5353,21 @@ function MePage({
             <span className="text-[10px]">设置</span>
           </button>
         </div>
-        {/* 消费明细白卡（第九轮：标题点击进淘宝账单页；会员中心/省钱卡等宽平行；资产行 label/value 统一行高平行） */}
+        {/* 消费明细白卡（第九轮：标题点击进淘宝账单页；
+            第六十五轮：红包=商品图片样式卡（kawaii 红包图+图下名字，跟随商品图三样式）；
+            会员中心/免费领图标/天猫积分 已按需求删除） */}
         <div className="mt-3 rounded-2xl bg-white p-3">
           <div className="flex items-center">
             <button type="button" onClick={onOpenBill} className="flex items-center gap-0.5 active:opacity-70">
               <span className="text-[17px] font-bold text-black/90">我的消费明细</span>
               <ChevronRight className="h-4 w-4 text-black/35" />
             </button>
-            <div className="ml-auto flex items-center">
-              <button type="button" onClick={onOpenCouponCenter} className="flex w-[86px] flex-col items-start leading-tight active:opacity-70">
-                <span className="text-[13.5px] font-bold text-[#FF4400]">会员中心</span>
-                <span className="mt-0.5 text-[10.5px] text-black/40">闪购券50元起 &gt;</span>
-              </button>
-              <span className="mx-2.5 h-7 w-px bg-black/[0.07]" />
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-[#FF3B30] to-[#FF0036]">
-                <span className="grid h-8 w-8 place-items-center rounded-md border border-white/40 text-center text-[9px] font-bold leading-[10px] text-[#FFD100]">免费
-                  <br />领</span>
-              </span>
-            </div>
           </div>
-          {/* 资产行（label 上 value 下；value 统一 h-[18px] 居中保证五列平行） */}
+          {/* 资产行（红包=商品图片样式卡；优惠券/骑手/账户余额 label 上 value 下；行内 items-center 垂直居中对齐） */}
           <div className="mt-1 flex items-center">
-            <button type="button" onClick={() => onToast('红包 ¥0.00（演示）')} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
-              <span className="text-[12px] leading-none text-black/45">红包</span>
-              <span className="mt-1.5 flex h-[18px] items-center justify-center text-[16px] font-bold leading-none text-black/90">
-                <span className="text-[11px] font-semibold">¥</span>0
-              </span>
+            <button type="button" onClick={() => onToast('红包 ¥0.00（演示）')} className="flex flex-1 flex-col items-center gap-1 py-1 active:opacity-70">
+              <TbImg src="/goods/tb-hongbao.webp" emoji="🧧" className="h-[46px] w-[46px] shrink-0 rounded-[12px]" />
+              <span className="text-[11px] leading-none text-black/45">红包</span>
             </button>
             <button type="button" onClick={onOpenCoupons} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
               <span className="text-[12px] leading-none text-black/45">优惠券</span>
@@ -5394,10 +5383,6 @@ function MePage({
             <button type="button" onClick={onOpenWallet} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
               <span className="text-[12px] leading-none text-black/45">账户余额</span>
               <span className="mt-1.5 flex h-[18px] items-center justify-center text-[13px] font-bold leading-none text-black/90">微信/QQ</span>
-            </button>
-            <button type="button" onClick={() => onToast('天猫积分 0（演示）')} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
-              <span className="text-[12px] leading-none text-black/45">天猫积分</span>
-              <span className="mt-1.5 flex h-[18px] items-center justify-center text-[16px] font-bold leading-none text-black/90">0</span>
             </button>
           </div>
         </div>

@@ -25,7 +25,6 @@ import {
   Menu,
   Pause,
   Play,
-  Sparkles,
 } from 'lucide-react';
 import {
   artistSongs,
@@ -299,10 +298,6 @@ export function MusicHeart({ onSettings }: { onSettings: () => void }) {
         >
           <span className="text-[19px] font-bold text-white">心动</span>
         </button>
-        <span className="ml-auto flex items-center gap-1 text-[11px] text-white/45">
-          <Sparkles className="h-3.5 w-3.5 text-[#FF5A5A]/80" />
-          根据你的口味生成
-        </span>
       </div>
 
       {/* 下拉刷新指示区（深色版） */}

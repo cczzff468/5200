@@ -144,18 +144,35 @@ function LiquidIcon({ children, variant = 'auto' }: { children: ReactNode; varia
 
 /** 图标统一规格：60px 位内 30px 线性图标（与 iOS 线性图标比例一致）；
  *  线条加粗（1.7 → 2.2，用户要求图标「里面的变粗一点」） */
+/** 深色模式实体图标滤镜（第六十五轮「主界面 APP 图标适配深色模式」）：
+ *  智能反色 = invert(1) + hue-rotate(180°) + 轻微降对比提亮：
+ *  - 白/浅底图标（备忘录/照片/设置/相机…）→ 深色图标体，不再在深色壁纸上刺眼；
+ *  - 彩色图标（微信绿/音乐红/淘宝橙…）色相基本保持，白色 glyph 转深色
+ *    ——整体呈现 iOS 深色模式图标观感；
+ *  - 卡片预览场景（主题页/App Store 等固定浅色卡底）不套用，保持原彩色 */
+const DARK_ICON_FILTER = 'invert(1) hue-rotate(180deg) contrast(0.87) brightness(1.05)';
+
 /** 真实 iOS 图标（public/icons 的 PNG：自带彩色圆角底），满槽铺满图标位。
  *  图片自带透明圆角（约 22%），稍微放大 1.07 让自身圆角越过容器边被裁掉，
  *  最终圆角完全由容器 rounded-[15px] 决定，十枚图标圆角绝对一致；
  *  附极淡描边 + 柔和投影——备忘录/照片/文件/提醒事项这类白底图标在白色
  *  壁纸/卡片上也有清晰边界（修之前线条图标在白纸上「隐身」的痛点）。
- *  彩色实体底不随主题/壁纸翻转，任何背景下都醒目 */
-function RealIconTile({ src }: { src: string }) {
+ *  彩色实体底不随壁纸翻转，任何背景下都醒目；
+ *  深色主题下套智能反色滤镜（DARK_ICON_FILTER）+ 白色亮边环 + 深投影适配深色模式；
+ *  variant="card"：卡片底色场景（主题页预览等固定浅色卡底）保持原色不反色 */
+function RealIconTile({ src, variant = 'auto' }: { src: string; variant?: 'auto' | 'card' }) {
+  const themeMode = useSettings((s) => s.theme);
+  const systemDark = useSystemDark();
+  const dark = variant === 'auto' && selectResolvedTheme(themeMode, systemDark) === 'dark';
   return (
     <IconTile>
       <span
         aria-hidden="true"
-        className="relative block h-full w-full overflow-hidden rounded-[15px] shadow-[0_2px_8px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.06]"
+        className={`relative block h-full w-full overflow-hidden rounded-[15px] ${
+          dark
+            ? 'shadow-[0_3px_12px_rgba(0,0,0,0.5)] ring-1 ring-white/[0.14]'
+            : 'shadow-[0_2px_8px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.06]'
+        }`}
       >
         <Image
           src={src}
@@ -165,6 +182,7 @@ function RealIconTile({ src }: { src: string }) {
           loading="eager"
           draggable={false}
           className="scale-[1.07] object-cover"
+          style={dark ? { filter: DARK_ICON_FILTER } : undefined}
         />
       </span>
     </IconTile>
@@ -436,7 +454,7 @@ const GLYPHS = Object.fromEntries(APP_DEFS.map((d) => [d.id, d.glyph])) as Recor
  *  深灰线条」不随壁纸/主题翻转——修复浅色主题 + 深色壁纸时预览一片空白 */
 export function AppIconTile({ id }: { id: AppId }) {
   const image = IMAGES[id];
-  if (image) return <RealIconTile src={image} />;
+  if (image) return <RealIconTile src={image} variant="card" />;
   return <LineIcon variant="card">{GLYPHS[id]}</LineIcon>;
 }
 
@@ -461,7 +479,7 @@ export function AppStylePreview({ id, style }: { id: AppId; style: IconStyle }) 
   if (style === 'liquid') return <LiquidIcon variant="card">{GLYPHS[id]}</LiquidIcon>;
   if (style === 'glass') return <LineIcon variant="card">{GLYPHS[id]}</LineIcon>;
   const image = IMAGES[id];
-  if (image) return <RealIconTile src={image} />;
+  if (image) return <RealIconTile src={image} variant="card" />;
   return <LineIcon variant="card">{GLYPHS[id]}</LineIcon>;
 }
 
@@ -486,10 +504,19 @@ export function AppMiniIcon({ id, custom }: { id: AppId; custom?: string | null 
     return <img src={custom} alt="" draggable={false} className="block h-full w-full select-none object-cover" />;
   }
   const image = IMAGES[id];
-  if (style === 'real' && image) {
-    return <img src={image} alt="" draggable={false} className="block h-full w-full select-none object-cover" />;
-  }
   const dark = selectResolvedTheme(themeMode, systemDark) === 'dark';
+  if (style === 'real' && image) {
+    // 文件夹迷你缩略图同样跟随深色模式反色（与主屏 RealIconTile 同一滤镜）
+    return (
+      <img
+        src={image}
+        alt=""
+        draggable={false}
+        style={dark ? { filter: DARK_ICON_FILTER } : undefined}
+        className="block h-full w-full select-none object-cover"
+      />
+    );
+  }
   const lightGlass = !dark && lightWallpaper;
   const raw = GLYPHS[id];
   const glyph = isValidElement(raw)

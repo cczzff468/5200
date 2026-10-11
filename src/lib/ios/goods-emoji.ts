@@ -41,6 +41,8 @@ export const GOODS_EMOJI: Record<string, string> = {
   beef: '🥩', salad: '🥗', soup: '🥣', cola: '🥤', medicine: '💊', store: '🛍️',
   // 出行/文旅（机票/火车票/酒店/电影演出订单图）
   flight: '✈️', train: '🚄', hotel: '🏨', movie: '🎬', plane: '✈️', cinema: '🎬',
+  // 专属运营位图（第六十五轮：美团工作兼职 / 淘宝红包商品图样式卡）
+  job: '🛵', hongbao: '🧧',
 };
 
 /** 本地商品图路径（/goods/X.webp 或 /goods-sketch/X.webp）→ 品类 emoji；非本地图返回 undefined */
