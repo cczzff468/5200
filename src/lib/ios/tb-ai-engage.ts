@@ -104,6 +104,20 @@ function ownerNameSync(): string {
   }
 }
 
+/** 角色人设 system 段（人设+机主称呼+账号上下文；主动消息/取件道谢等场景共用） */
+async function tbPersonaSystemFor(contact: ContactRecord, app: TbEngageApp): Promise<string> {
+  const meName = ownerNameSync();
+  return buildPersonaSystemPrompt(contact, {
+    channel: app === 'wx' ? '微信' : 'QQ',
+    userName: meName,
+    userRealName: meName,
+    userNickname: null,
+    ownerName: meName,
+    accountId: getActiveAccountIdFor(app as AccountApp),
+    multiApp: getMemSettings(contact.id).share,
+  });
+}
+
 // ---------------- 购物话题扫描（目录/代买教学只在聊到买时注入，平时不占 token） ----------------
 
 const SHOP_TEXT_RE =
@@ -664,6 +678,60 @@ async function tbPickRecentAiChat(): Promise<{ app: TbEngageApp; contact: Contac
   }
 }
 
+/**
+ * 取件报喜/道谢两条消息：LLM 按人设+记忆+上下文现场生成（out=出发取件时 / done=取到之后），
+ * 道谢不套模板——礼物感谢必须结合人设/关系/礼物本身/共同记忆组织语言；模型不可用时回退本地兑底。
+ */
+async function tbPickupLinesViaLlm(
+  contact: ContactRecord,
+  app: TbEngageApp,
+  kind: 'gift' | 'favor',
+  order: TbOrder,
+  meName: string,
+  summary: string,
+): Promise<string[]> {
+  const sessionKey = `${app}:${contact.id}`;
+  const system = [
+    await tbPersonaSystemFor(contact, app),
+    memChatRecallBlock(
+      contact.id,
+      app,
+      kind === 'gift' ? '礼物 惊喜 感谢 喜欢 收到' : '帮忙取快递 取件 顺路 帮忙',
+      {},
+    ),
+    getTimeAware(sessionKey) ? buildTimeAwareBlock({ regionHint: contact.region || null }) : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+  const user =
+    kind === 'gift'
+      ? [
+          `【刚发生的事】${meName}之前在淘宝送了你一件礼物（「${order.shopName}」的${summary}，¥${fmt2(order.total)}），现在包裹到驿站了，你正去取。`,
+          '【任务】生成你要发的两条消息：第一条是出发去取快递时说的（自然随口）；第二条是取到之后说的——收到礼物表达开心/感谢，必须结合你的人设、你们的关系、礼物本身和你们相处的记忆来组织语言，像平时聊天的口吻，禁止套用「我超喜欢，谢谢你XX」这类固定句式，也不要复述「到驿站/取件」流程细节。',
+          '输出 JSON：{"out":"出发时那条","done":"取到后那条"}（各 1 句，像平时聊天）。',
+          '严禁输出 JSON 以外的文字。',
+        ].join('\n\n')
+      : [
+          `【刚发生的事】${meName}的淘宝快递（「${order.shopName}」的${summary}）到驿站了，TA之前请你帮忙取件，你正去取。`,
+          '【任务】生成你要发的两条消息：第一条是出发去取时说的；第二条是取到之后交差的话（按你的人设自然说，比如放哪了/让TA来拿/顺路这些你们之间才会有的说法，禁止套模板，也不要复述流程细节）。',
+          '输出 JSON：{"out":"出发时那条","done":"取到后那条"}（各 1 句，像平时聊天）。',
+          '严禁输出 JSON 以外的文字。',
+        ].join('\n\n');
+  const raw = await callTbLlm(system, user);
+  const parsed = extractJsonObject(raw) as { out?: string; done?: string } | null;
+  const clean = (s?: string): string =>
+    (s ?? '')
+      .trim()
+      .replace(/^[「"'『]+|[」"'』]+$/g, '')
+      .split('\n')
+      .map((t) => t.trim())
+      .filter(Boolean)[0] ?? '';
+  const out = clean(parsed?.out);
+  const done = clean(parsed?.done);
+  if (!out || !done) return [];
+  return [out, done];
+}
+
 /** 取件执行：确认收货 + 清标记 + AI 报喜消息（礼物=道谢 / 帮取=交差）+ 事件记忆 */
 export async function tbRunPickup(uid: string, orderId: string): Promise<void> {
   const order = tbLoadOrders(uid).find((o) => o.id === orderId);
@@ -692,10 +760,21 @@ export async function tbRunPickup(uid: string, orderId: string): Promise<void> {
   const meName = ownerNameSync();
   const summary = order.items.map((i) => `${i.title.slice(0, 12)}${i.qty > 1 ? `x${i.qty}` : ''}`).join('、');
   const now = Date.now();
-  const lines =
-    pick.kind === 'gift'
-      ? [`你的礼物到驿站啦，我这就去取~`, `取到啦！！${summary.slice(0, 16)}我超喜欢，谢谢你${meName}！`]
-      : [`${meName}，你的快递到驿站了，我帮你去取~`, `取回来啦，放你门口了哈`];
+  // 两条消息按人设+记忆+上下文现场生成（道谢不套模板）；模型不可用时退回本地兑底文案
+  let lines: string[] = [];
+  if (contact) {
+    try {
+      lines = await tbPickupLinesViaLlm(contact, app, pick.kind, order, meName, summary);
+    } catch {
+      lines = [];
+    }
+  }
+  if (lines.length < 2) {
+    lines =
+      pick.kind === 'gift'
+        ? [`你的礼物到驿站啦，我这就去取~`, `取到啦！！${summary.slice(0, 16)}我超喜欢，谢谢你${meName}！`]
+        : [`${meName}，你的快递到驿站了，我帮你去取~`, `取回来啦，放你门口了哈`];
+  }
   if (contact) {
     memAddEventFragment(
       pick.contactId,
@@ -781,6 +860,34 @@ async function runProactivePayEngage(uid: string, orderId: string): Promise<void
   }
 }
 
+/** 到货/发货主动问候一句话：LLM 按人设+记忆+上下文生成（不套固定收尾），失败回退本地文案 */
+async function tbArrivalLineViaLlm(
+  contact: ContactRecord,
+  app: TbEngageApp,
+  arrived: boolean,
+  shopName: string,
+  item: string,
+  meName: string,
+): Promise<string> {
+  const sessionKey = `${app}:${contact.id}`;
+  const system = [
+    await tbPersonaSystemFor(contact, app),
+    memChatRecallBlock(contact.id, app, '淘宝 快递 物流 购物', {}),
+    getTimeAware(sessionKey) ? buildTimeAwareBlock({ regionHint: contact.region || null }) : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+  const user = [
+    arrived
+      ? `【你注意到的事】${meName}在淘宝「${shopName}」买的${item}刚放到驿站了（TA还没取）。`
+      : `【你注意到的事】${meName}在淘宝「${shopName}」买的${item}刚发货了，还在路上。`,
+    '【任务】主动关心一句（1 句，像平时聊天）：到驿站就提醒TA去取，在路上就说留意下物流；按你的人设、你们的关系和记忆自然说，禁止每次都用「记得去取呀」这类固定收尾。',
+    '直接输出这句话本身，不要 JSON、不要引号。',
+  ].join('\n\n');
+  const raw = await callTbLlm(system, user);
+  return raw.trim().replace(/^[「"'『]+|[」"'』]+$/g, '').split('\n')[0]?.trim() ?? '';
+}
+
 /** 到货主动问候（四：AI 可以主动问快递）——低频一次性 */
 async function maybeArrivalComment(uid: string, orderId: string): Promise<void> {
   if (globalCoolingDown('tb-comment-cd', ARRIVAL_COMMENT_CD_MS)) return;
@@ -793,9 +900,19 @@ async function maybeArrivalComment(uid: string, orderId: string): Promise<void> 
   if (!order) return;
   const meName = ownerNameSync();
   const item = order.items[0]?.title.slice(0, 16) ?? '快递';
-  const line = tbArrivedAtStation(order)
-    ? `${meName}，你买的${item}到驿站啦，记得去取呀~`
-    : `${meName}，你买的${item}发货啦，留意下物流哦~`;
+  const arrived = tbArrivedAtStation(order);
+  // 人设化问候（LLM 现场生成，不套模板）；失败退回本地兜底文案
+  let line = '';
+  try {
+    line = await tbArrivalLineViaLlm(contact, app, arrived, order.shopName, item, meName);
+  } catch {
+    line = '';
+  }
+  if (!line) {
+    line = arrived
+      ? `${meName}，你买的${item}到驿站啦，记得去取呀~`
+      : `${meName}，你买的${item}发货啦，留意下物流哦~`;
+  }
   try {
     await deliverPeerMsgs(app, contact, [{ id: `tbac-${Date.now().toString(36)}`, role: 'peer', content: line, time: Date.now() }]);
     const notifyApp = app === 'wx' ? ('wechat' as const) : ('qq' as const);

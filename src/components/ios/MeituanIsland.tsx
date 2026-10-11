@@ -26,6 +26,7 @@ import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { useMtIsland } from '@/lib/ios/mt-island-store';
 import { mtCurrentRider } from '@/lib/ios/mt-rider';
 import { mtGetSession, mtLoadOrders, mtUidOf, type MtOrder } from '@/lib/ios/meituan-store';
+import { tbGetSession, tbLoadOrders, tbUidOf } from '@/lib/ios/taobao-store';
 
 /** 小窗胶囊几何 */
 const PILL = { width: 198, height: 33, borderRadius: 16.5 } as const;
@@ -75,6 +76,28 @@ function progressOf(o: MtOrder, now: number): number {
   const end = o.etaAt ?? delAt + 60_000;
   const frac = end > delAt ? Math.min(1, Math.max(0, (now - delAt) / (end - delAt))) : 1;
   return 0.55 + 0.42 * frac;
+}
+
+/** 淘宝进行中快递单的最新事件时刻（0=无单）：灵动岛锚位互斥——两岛都有进行中单时「最新事件方」展示 */
+function tbActiveLatestAt(): number {
+  try {
+    const s = tbGetSession();
+    if (!s) return 0;
+    let latest = 0;
+    for (const o of tbLoadOrders(tbUidOf(s))) {
+      if (o.ticket) continue;
+      if (o.status !== 'pendingDeliver' && o.status !== 'shipped') continue;
+      const t = Math.max(
+        o.paidAt ?? o.createdAt,
+        o.shipAt ?? 0,
+        o.track.length > 0 ? o.track[o.track.length - 1].at : 0,
+      );
+      if (t > latest) latest = t;
+    }
+    return latest;
+  } catch {
+    return 0;
+  }
 }
 
 export default function MeituanIsland() {
@@ -172,7 +195,22 @@ export default function MeituanIsland() {
 
   useEffect(() => () => { clearAuto(); }, []);
 
-  const hidden = !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !active;
+  const hidden =
+    !statusBarVisible ||
+    screenOff ||
+    chatNotifyShowing ||
+    callPresenting ||
+    !active ||
+    // 淘宝快递灵动岛有进行中单且其最新事件更新 → 美团让位（同锚位互斥，平局美团优先）
+    (() => {
+      const tbLatest = tbActiveLatestAt();
+      if (tbLatest <= 0 || !active) return false;
+      const mtLatest = Math.max(
+        active.paidAt ?? active.createdAt,
+        active.statusLog.length > 0 ? active.statusLog[active.statusLog.length - 1].at : 0,
+      );
+      return tbLatest > mtLatest;
+    })();
 
   // 状态签名变化（新单/接单/取餐）→ 自动展开大窗 5 秒；
   // 通知层/来电占位期间隐身时不消费签名，恢复可见（hidden 翻转触发本 effect 重跑）后补放

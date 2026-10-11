@@ -6,6 +6,7 @@ import { useBattery } from '@/lib/ios/battery';
 import { useLightForeground } from '@/lib/ios/foreground';
 import { useMusic } from '@/lib/ios/music-store';
 import { useMtIsland } from '@/lib/ios/mt-island-store';
+import { useTbIsland } from '@/lib/ios/tb-island-store';
 
 function SignalBars() {
   return (
@@ -75,9 +76,10 @@ export default function StatusBar() {
   const lightText = useLightForeground();
   const musicIslandVisible = useMusic((s) => s.islandVisible);
   const mtIslandVisible = useMtIsland((s) => s.visible);
-  // 音乐灵动岛：仅隐藏信号（第二十三轮口径）；美团外卖灵动岛：信号 + WiFi 一起隐藏，仅保留电量（最新反馈）
-  const hideSignal = musicIslandVisible || mtIslandVisible;
-  const hideWifi = mtIslandVisible;
+  const tbIslandVisible = useTbIsland((s) => s.visible);
+  // 音乐灵动岛：仅隐藏信号（第二十三轮口径）；美团/淘宝配送灵动岛：信号 + WiFi 一起隐藏，仅保留电量（最新反馈）
+  const hideSignal = musicIslandVisible || mtIslandVisible || tbIslandVisible;
+  const hideWifi = mtIslandVisible || tbIslandVisible;
 
   const now = clockSecond > 0 ? new Date(clockSecond * 1000) : null;
   const level = battery?.level ?? 100;

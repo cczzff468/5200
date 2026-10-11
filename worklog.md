@@ -18338,3 +18338,22 @@ Stage Summary:
 - 交付：淘宝 AI 五项能力全链路——①AI 主动代付（watcher 感知待付款单→最近聊天 AI 按人设/记忆 LLM 决策→代付+完成卡+回复+记忆）；②AI 让用户代付（[自己买]→direction 'me' 请求卡→详情页立即代付→回执卡）；③AI 帮用户买（购物话题→24 品类目录→[帮你买]→草稿卡机主确认→AI 出钱下单→订单分享卡实时时间线）；④AI 知道快递（每回合注入最近 5 单实时状态+低频主动问候）；⑤代付与订单互相关联（proxy 快照/B4 失效联动/终态记忆）；附加取件体系——一键取件=确认收货（既有）、找人帮取（淘宝驿站卡→AI 分享→人设化答应→到驿站自动取）、聊天 [帮取快递]（到驿站立即取/没到记下来自动取）、礼物语义（说「给你买的」→AI 到驿站自取+道谢，卡片已签收在 AI 取后才显示；AI 代买单机主在卡片上确认收货/让 AI 帮取后才显示已签收）
 - 改动文件：src/lib/ios/tb-ai-engage.ts(+新增 870 行)、src/components/apps/tb-draft-card.tsx(+新增)、src/lib/ios/tb-share-proxy.ts、src/lib/ios/tb-proxy-ai.ts、src/lib/ios/taobao-store.ts、src/lib/chat-rich.ts、src/components/apps/tb-share-cards.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/components/apps/taobao.tsx、src/app/shop-dark.css(再生成)
 - 关键决策：①整套复用美团 mt-ai-engage 的「上下文注入+动作标记+执行器+watcher 接力」架构，代付双方向模型照搬 mt-proxy-pay 的 direction/chatContactId（friend=AI 付、me=机主付），保证两端行为与心智一致；②「AI 主动代付」防噪三层闸——每单 aiAsked 一次性+全局 3min 冷却+¥300 硬顶（¥150 以上 LLM 提示需明确同意），付不付都由 LLM 按人设/记忆判断（不付也聊一句，符合「判断是否给用户代付」）；③礼物/帮取的「到驿站 AI 取件」统一挂订单 aiPickup 由 tbEngageTick 驱动（分享索引不参与扫描，防索引截断丢标记）；④卡片「已签收」严格按 completedAt 出现——礼物单只有 AI 取件（tbConfirmReceive）才写 completedAt，AI 代买单由机主在卡片【确认收货】或让 AI 帮取，与需求逐字对应
+
+---
+Task ID: 71
+Agent: main (Z.ai Code)
+Task: 用户三点反馈——①淘宝 App 添加灵动岛小窗+大窗（和美团灵动岛样式一样）；②道谢不要模板，根据人设/记忆/上下文来；③规则审查：列出问题/待完善/优化项让用户选
+
+Work Log:
+- 【淘宝快递灵动岛】新增 src/components/ios/TaobaoIsland.tsx + src/lib/ios/tb-island-store.ts，逐像素对齐 MeituanIsland 规格：小窗黑胶囊（当前快递员形象+状态文案+橙色剩余分钟+「送达」）常驻于 待发货/已发货 单（票务单不进岛），大窗（商品首图+橙色「预计HH:MM送达」+状态副文案+淘宝logo+发货→运输→送达三节点进度条，快递员骑在进度上随真实时间推进）；状态签名（id|status|track.length）变化自动展开 5 秒、点小窗手动展开常显、点大窗 navigateToChatSession('taobao', orderId) 进订单详情、点别处透明捕获层收回；隐身口径与美团岛一致（通知卡/来电/熄屏/状态栏关闭）
+- 【ETA/进度与物流地图同源】etaOf：待发货=paidAt+tbDeliveryTiming.totalMs、已发货=shipAt+4×trackStepMs（与 tbTickOrders 未来锚点同源）；progressOf 复用物流地图 phaseFrac 算法（揽收 0.22-0.32/运输 0.38-0.6/派送 0.65-0.9/到站 1）——灵动岛进度与快递地图人物位置一致
+- 【锚位互斥·最新事件方展示】两岛都有进行中单时按「订单最新事件时刻」（paid/ship/最新轨迹 vs paid/最新 statusLog）仲裁，平局美团优先（MeituanIsland.hidden 加 tbActiveLatestAt 让位判定）；音乐灵动岛与状态栏同步扩展消费 useTbIsland（MusicIsland 隐身/StatusBar 藏信号+WiFi），PhoneShell 动态挂载 TaobaoIsland
+- 【灵动岛即引擎】TaobaoIsland 挂载即调 tbStartOrderWatcher()（幂等）——未打开过淘宝 App 时订单状态机与 tbEngageTick 联动也全局推进，灵动岛任何界面实时跟单
+- 【道谢去模板化】tb-ai-engage.ts：①tbRunPickup 两条消息（出发/取到）改为 tbPickupLinesViaLlm 现场生成——人设 system（新抽 tbPersonaSystemFor 共用构建器）+memChatRecallBlock 记忆召回（礼物查询词「礼物 惊喜 感谢 喜欢 收到」/帮取「帮忙取快递 取件 顺路 帮忙」）+时间感知，礼物道谢 prompt 明令禁止「我超喜欢，谢谢你XX」固定句式、必须结合人设/关系/礼物本身/共同记忆组织语言，输出 {"out","done"} JSON，模型失败回退旧模板；②maybeArrivalComment 改 tbArrivalLineViaLlm 人设化生成（禁「记得去取呀」固定收尾），失败回退旧文案；③tbSchedulePickupResponse 原本已是 LLM+兜底，不动
+- 【E2E（agent-browser 实机全链路，mock /api/chat）】注入 wx/淘宝双会话+联系人（晴儿）+运输中订单（e2e-island-1，nodeCount=2）+到驿站礼物单（e2e-gift-1，aiPickup gift）：①刷新后 ~10s watcher 自动触发礼物取件→订单 completed+aiPickup 清除+两条 LLM 生成消息按 4s 间隔落库（内容与 mock 完全一致=LLM 路径命中，非模板兜底）+锁屏弹出微信通知 ✓；②灵动岛小窗锁屏/主屏常驻（truck+运输中+72分钟送达橙色）✓；③点小窗展开大窗（预计11:18送达+包裹运输中副文案+三节点进度条+快递员骑线 40%）✓；④点别处收回小窗 ✓；⑤点大窗跨 App 跳淘宝「已发货」详情（物流/真实地址/店铺/金额齐全）✓；⑥倒计时真实走秒（72→71分钟）✓
+- 收尾：bunx tsc --noEmit 0 错误；eslint 改动文件 0 告警（Unused eslint-disable 已清）；dev.log 无编译/运行错误；mock 路由已 unroute、E2E 数据隔离在 headless profile
+
+Stage Summary:
+- 交付：①淘宝快递灵动岛（小窗常驻+大窗展开+点大窗进订单详情+状态变化自动展开 5 秒，样式/交互/层级与美团灵动岛同款，快递员形象沿用「我的淘宝-快递员」所选）；②取件道谢/帮取报喜/到货问候全部改为「人设+记忆召回+时间感知」LLM 现场生成（模板仅作模型不可用兜底）；③规则审查清单已在对话中列出（同意词表「谢谢你」误判/礼物标记误伤/[自己买]无金额上限/冷却执行缺口/主动代付 LLM 失败静默/无候选时到货问候标记浪费等），等用户勾选后实施
+- 改动文件：src/components/ios/TaobaoIsland.tsx(+新增)、src/lib/ios/tb-island-store.ts(+新增)、src/components/ios/MeituanIsland.tsx、src/components/ios/MusicIsland.tsx、src/components/ios/StatusBar.tsx、src/components/ios/PhoneShell.tsx、src/lib/ios/tb-ai-engage.ts
+- 关键决策：①两岛同锚位冲突用「最新事件方展示」而非固定优先级——与 iOS 灵动岛「最新活动置顶」心智一致，且两岛每秒轮询天然自适应切换；②灵动岛挂载即拉起全局订单 watcher——把「状态机只在淘宝 App 内推进」的隐性约束解除，灵动岛成为常驻可观测面（也顺带让 AI 快递感知不依赖打开淘宝）；③道谢生成走独立 JSON 双字段（out/done）而非单文本——出发与取到两条消息可分别落 4s 间隔节奏，与原模板时序一致

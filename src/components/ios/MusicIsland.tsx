@@ -30,6 +30,7 @@ import { useGlobalCall } from '@/lib/ios/global-call';
 import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { useMusic } from '@/lib/ios/music-store';
 import { useMtIsland } from '@/lib/ios/mt-island-store';
+import { useTbIsland } from '@/lib/ios/tb-island-store';
 import { songCover } from '@/lib/ios/music-api';
 import { fmtClock } from '@/components/apps/music-shared';
 
@@ -62,6 +63,7 @@ function isHiddenNow(): boolean {
   if (!useSettings.getState().statusBarVisible) return true;
   if (useUI.getState().screenOff) return true;
   if (useMtIsland.getState().visible) return true; // 美团灵动岛展示中：同一锚位让位给美团配送
+  if (useTbIsland.getState().visible) return true; // 淘宝快递灵动岛展示中：同一锚位让位
   const n = useIslandNotify.getState();
   if (n.current || n.exiting) return true;
   const c = useIncomingCall.getState().call;
@@ -126,8 +128,9 @@ export default function MusicIsland() {
   const screenOff = useUI((s) => s.screenOff);
   const chatNotifyShowing = useIslandNotify((s) => s.current !== null || s.exiting);
   const callPresenting = useIncomingCallPresenting();
-  // 美团外卖灵动岛展示中：同一灵动岛锚位只容一个常驻弹窗，美团配送优先，音乐弹窗隐身
+  // 美团/淘宝配送灵动岛展示中：同一灵动岛锚位只容一个常驻弹窗，配送优先，音乐弹窗隐身
   const mtIslandVisible = useMtIsland((s) => s.visible);
+  const tbIslandVisible = useTbIsland((s) => s.visible);
 
   /** small = 常驻小弹窗；large = 展开大弹窗 */
   const [expanded, setExpanded] = useState(false);
@@ -173,7 +176,7 @@ export default function MusicIsland() {
 
   // 不放音乐（暂停超过 5 秒宽限 / 无歌）时弹窗整体消失（第十八轮反馈 + 第二十轮宽限）
   const hidden =
-    !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || mtIslandVisible || !current || (!playing && !pauseGrace);
+    !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || mtIslandVisible || tbIslandVisible || !current || (!playing && !pauseGrace);
 
   // 弹窗可见性 → music-store.islandVisible（StatusBar 据此隐藏/恢复「移动数据」图标）。
   // 订阅外部派生值（含 pauseGrace 内部态）在回调里 setState，渲染期不碰 store

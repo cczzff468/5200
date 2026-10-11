@@ -59,6 +59,7 @@ const MusicIsland = dynamic(() => import('./MusicIsland'), { ssr: false });
 // 美团外卖灵动岛（用户本轮需求）：有进行中外卖单时常驻小窗（骑手形象+送货中+剩余分钟送达），
 // 状态变化自动展开大窗 5 秒（商家图+预计送达+三节点进度），点小窗展开 / 点大窗进订单详情
 const MeituanIsland = dynamic(() => import('./MeituanIsland'), { ssr: false });
+const TaobaoIsland = dynamic(() => import('./TaobaoIsland'), { ssr: false });
 
 // 全局语音通话层（全屏通话页 + 悬浮小窗）：懒加载，仅在通话会话存在时渲染内容
 const GlobalCallLayer = dynamic(() => import('./GlobalCallLayer'), { ssr: false });
@@ -405,6 +406,10 @@ export default function PhoneShell() {
         {/* 美团外卖灵动岛（z-82：同锚位盖住音乐灵动岛 z-81，低于聊天通知 z-93；
             小窗常驻（骑手+送货中+剩余分钟），状态变化大窗 5 秒，点大窗进订单详情） */}
         <MeituanIsland />
+
+        {/* 淘宝快递灵动岛（z-82：与美团岛同规格同锚位，两者都有进行中单时「最新事件方」展示；
+            小窗常驻（快递员+状态+剩余分钟），状态变化大窗 5 秒，点大窗进淘宝订单详情） */}
+        <TaobaoIsland />
 
         {/* 通知权限友好申请卡（首次使用时展示，应用内说明 → 用户手势内才弹浏览器授权框） */}
         <NotifyPermissionCard />
