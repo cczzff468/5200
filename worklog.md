@@ -18164,3 +18164,32 @@ Work Log:
 Stage Summary:
 - 交付：音乐 App 底部 TabBar 新增「心动」tab（首页右侧）——黑胶头卡心动模式页，推荐引擎=红心3+最近播放2+服务端周榜种子→simiSong/同歌手兜底→交错合并去重30首，下拉刷新轮换种子，理由文案跟种子走；主屏文件夹预览改固定每行 3 个、从左上角依次排序（tile/浮动副本/合并预览三处共用一处改动）
 - 改动文件：src/lib/ios/music-store.ts、src/components/apps/music-shared.tsx、src/components/apps/music.tsx、src/components/apps/music-heart.tsx(+新增)、src/components/ios/HomeScreen.tsx
+
+---
+Task ID: 64
+Agent: main (Z.ai Code)
+Task: ①心动界面再美化（对标用户参考图的网易云心动模式版式）；②淘宝/美团订单图片做成可选样式——现有卡通插画保留为默认样式、新增「简笔画」新样式（按用户发的黑白粗线稿奶茶猫参考图）、新增「Emoji」图片样式，用户可在设置里三选一切换
+
+Work Log:
+- 【心动页全面美化 → 深色沉浸版式】music-heart.tsx 整页改为深色渐变底（#3C3C41→#26262A→#101012，与参考图同款深灰沉浸）：
+  · 黑胶升级：212→224px 大盘 + 盘标 86→116px（参考图 ~52% 大盘标比例，白色衬圈+红环 #C20C0C/80 + 封面）+ 7 圈同心纹路 + 背后径向白色光晕；白色圆润唱针重绘（枢轴白盘圆点+白色粗弯臂+臂管细节线+唱头圆角块落在盘面右上，SVG 128px）
+  · 「心动模式」红徽章（#C20C0C 底白字+红光晕 shadow，Heart 图标）
+  · 歌名区对标参考图：歌名 19→24px 白色粗字带 text-shadow + 歌手 15px white/55 + ChevronRight；播放钮 54→62px 白玻璃圆钮（bg-white/13 + ring-white/15 + backdrop-blur）
+  · 进度条改参考图样式：细白条（white/20 轨 + white/85 已播）+ 9px 白色圆点游标带辉光 + 双端 11px 时间
+  · 引导条/下拉刷新指示/列表全部换深色配色（行 active:bg-white/10、当前播放 #FF6B6B 高亮、VIP 红描边、页码 white/25、播放全部钮白玻璃胶囊）
+  · music.tsx 状态栏 tone 联动：nav.tab==='heart'（tabs 视图无浮层时）切 'light' 白字（心形深色页配白状态栏）
+- 【简笔画图库（+123 张）】新脚本 scripts/gen-sketch-goods.ts：public/goods/*.webp（kawaii 彩色插画）批量转黑白简笔画——sharp 灰度 → 亮度阈值二值化（thr=118：深棕描边~90/珍珠深棕~60 判黑，粉彩底~243/液体~185 判白，实测分离干净）→ 黑像素 4 邻接膨胀 1 轮加粗（手绘粗线稿质感）→ webp(quality 90) 落盘 public/goods-sketch/（与 /goods/ 同名一一对应）；增量模式（输出新于源图跳过）；一次性 123 张全生成；风格实测对标用户参考图（白底黑线稿+局部黑填充：奶茶猫珍珠、手机边框、口红唇釉全部干净利落）
+- 【三样式可选架构】
+  · store.ts：GoodsImgStyle 类型（cartoon/sketch/emoji）+ settings.goodsImgStyle 状态 + setGoodsImgStyle（立即持久化 IndexedDB）+ load 读取（无记录/非法 → cartoon，旧用户行为零变化）
+  · 新 lib/ios/goods-emoji.ts：GOODS_EMOJI 品类→emoji 全量映射（从 tb-img.tsx 兜底表抽出共享，淘宝/美团菜品/出行文旅全品类）+ goodsEmojiOf（/goods/ 或 /goods-sketch/ 路径→emoji，shop-* 门头→🏪）+ SKETCH_IMG_PREFIX + emojiPaletteOf（emoji 哈希→5 种马卡龙渐变底：蜜桃/奶油/抹茶/雾蓝/香芋）
+  · 新 components/apps/goods-emoji-tile.tsx：EmojiTile（马卡龙渐变底+34px 大 emoji 居中+左上柔光+cap 名字条保留——「订单叫什么就显示什么」在 emoji 样式下不丢）
+  · tb-img.tsx 重构：TbImg 读 goodsImgStyle——emoji 样式且本地图→EmojiTile（外链/dataURL 自定义图原样走图片链路）；sketch 样式→/goods/ 前缀替换为 /goods-sketch/ 同名线稿；cartoon 完全走旧链路；图挂重试/缓存击穿/shimmer/cap 全保留；fallbackEmojiOf 正则兼容 sketch 路径
+  · mt-food-img.tsx 同构改造（FoodImg，emoji prop 优先、默认 🍽️）
+  · 全站图位核查：只有 tb-img/mt-food-img 两处引用 /goods/（其余全走组件）→ 一处改全站生效（商品流/详情/SKU/购物车/结算/订单列表/订单详情/频道/美团外卖/闪购/订单）
+- 【设置入口】themes.tsx「商品图样式」三选一区（图标样式区下方，与图标样式同款卡片+勾选交互+震动反馈）：预览缩略图用奶茶图三态（cartoon=彩色 /goods/mt-milk-tea.webp、sketch=黑白线稿 /goods-sketch/、emoji=🧋 马卡龙块）；底部说明「淘宝/美团同步生效，原卡通图保留可随时切回」；data-testid=goods-img-style-{value}
+- E2E（agent-browser 实机）：心动页深色版式渲染 ✓（红徽章/大黑胶/白唱针/白玻璃播放钮/深色列表/白状态栏）；播放验证（盘标旋转/暂停钮/进度条圆点游标 0:04/3:48/灵动岛/列表红高亮/白迷你条+白 TabBar 与参考图底部一致）✓；主题页商品图样式区三态预览渲染 ✓ 点简笔画选中 ✓；淘宝首页信息流切简笔画（台灯/绘本/百亿补贴小电器全黑白线稿）✓、切 Emoji（💡📚📱🎧 马卡龙底色块）✓；美团（注入 via:password 会话——wx 一键会话校验 mtIdpLoggedIn 需微信登录态，账密会话跳过）订单页简笔画（牛奶盒/火锅/电影票根+订单名贴片）✓；browser console 0 错误
+- bunx tsc --noEmit 0 错误；dev.log 无新增错误
+
+Stage Summary:
+- 交付：①心动模式页深色沉浸式美化（大盘黑胶白唱针+红徽章+白玻璃播放钮+圆点进度条+深色列表，状态栏白字联动）；②商品图三样式体系——cartoon（原 kawaii 卡通，默认不变）/sketch（黑白简笔画线稿，123 张全量，gen-sketch-goods 脚本可增量再生）/emoji（马卡龙底+品类 emoji），主题页三选一切换实时生效、淘宝美团全站图位（商品/订单/购物车/结算/SKU/频道）同步跟随，旧卡通图完整保留随时切回
+- 改动文件：scripts/gen-sketch-goods.ts(+新增)、public/goods-sketch/*.webp(+123 张)、src/lib/ios/store.ts、src/lib/ios/goods-emoji.ts(+新增)、src/components/apps/goods-emoji-tile.tsx(+新增)、src/components/apps/tb-img.tsx、src/components/apps/mt-food-img.tsx、src/components/apps/themes.tsx、src/components/apps/music-heart.tsx、src/components/apps/music.tsx

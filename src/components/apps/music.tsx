@@ -58,13 +58,19 @@ export default function MusicApp() {
   const [showSettings, setShowSettings] = useState(false);
 
   // 状态栏前景实时跟随当前界面背景明暗（第三十三轮反馈：背景深→状态栏白，背景白→状态栏黑）：
-  // 播放页（封面模糊深色底）→ 白字；登录/首页/搜索/我的/歌单/设置/评论（浅底）→ 黑字；
-  // 深色主题下浅底页转黑底 → 白字。评论页/设置页盖在其它页上时优先
+  // 播放页（封面模糊深色底）→ 白字；心动 tab（第六十四轮深色沉浸版式）→ 白字；
+  // 登录/首页/搜索/我的/歌单/设置/评论（浅底）→ 黑字；深色主题下浅底页转黑底 → 白字。
+  // 评论页/设置页盖在其它页上时优先
   const theme = useSettings((s) => s.theme);
   const systemDark = useSystemDark();
   const themeDark = theme === 'auto' ? systemDark : theme === 'dark';
+  const heartImmersive = nav.view === 'tabs' && nav.tab === 'heart';
   const tone: StatusBarTone =
-    nav.view === 'player' && !commentSong && !showSettings ? 'light' : themeDark ? 'light' : 'dark';
+    (nav.view === 'player' && !commentSong && !showSettings) || (heartImmersive && !showSettings && !commentSong)
+      ? 'light'
+      : themeDark
+        ? 'light'
+        : 'dark';
   useStatusBarToneEffect(tone);
 
   useEffect(() => {

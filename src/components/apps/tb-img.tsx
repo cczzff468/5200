@@ -7,49 +7,25 @@
  * /goods/*.webp 本地图（原真实图库直链 /api/tb-img 链路已删除）；用户上传 dataURL
  * 等自定义图原样显示。本地图全链有图，前端仅做一次重试，再失败显示 emoji 兜底/占位；
  * 加载期 shimmer，弱网不再是大灰块。
+ *
+ * 商品图样式（第六十四轮，设置›主题›商品图片样式，全局三选一）：
+ * - cartoon：/goods/*.webp 卡通插画（默认，旧版行为不变）
+ * - sketch：/goods-sketch/*.webp 黑白简笔画线稿（同名文件，只换目录前缀）
+ * - emoji：不加载图，按品类渲染马卡龙底 + 大 emoji（保留 cap 名字条）
+ * 用户自定义图（http/dataURL）三种样式下都原样显示。
  */
 import { useState } from 'react';
 import { ImageOff } from 'lucide-react';
 import { legacyImgUrl } from '@/lib/ios/goods-img';
+import { goodsEmojiOf, SKETCH_IMG_PREFIX } from '@/lib/ios/goods-emoji';
+import { useSettings } from '@/lib/ios/store';
+import { EmojiTile } from './goods-emoji-tile';
 
-/** 图挂时的暖色渐变 + emoji 兜底（与美团 FoodImg 同款体验，按图源文件名推断品类） */
-const FALLBACK_EMOJI: Record<string, string> = {
-  // 数码
-  phone: '📱', earbuds: '🎧', laptop: '💻', tablet: '📱', watch: '⌚', keyboard: '⌨️',
-  speaker: '🔊', powerbank: '🔋', camera: '📷', lock: '🔒',
-  'phone-stand': '📱', mouse: '🖱️', monitor: '🖥️', tv: '📺', drone: '🛸', gamepad: '🎮',
-  // 家电
-  fridge: '🧊', washer: '🧺', fan: '🌀', vacuum: '🧹', microwave: '🍲', 'rice-cooker': '🍚',
-  kettle: '🫖', 'air-fryer': '🍟', 'coffee-machine': '☕', humidifier: '💧', shaver: '🪒',
-  toothbrush: '🪥', hairdryer: '💨',
-  // 服饰
-  tshirt: '👕', jeans: '👖', dress: '👗', jacket: '🧥', hoodie: '🧥', coat: '🧥', shirt: '👔',
-  hat: '🧢', sneakers: '👟', shoes: '👟', backpack: '🎒', belt: '🪢', scarf: '🧣', socks: '🧦',
-  shorts: '🩳', suitcase: '🧳', wallet: '👛', sunglasses: '🕶️', slippers: '🩴',
-  // 美妆
-  lipstick: '💄', perfume: '🌸', skincare: '🧴', makeup: '💅', brush: '🖌️', 'face-mask': '🧖',
-  // 家居
-  sofa: '🛋️', bedding: '🛏️', lamp: '💡', mug: '☕', vase: '🏺', pillow: '🛏️', desk: '🪑',
-  curtain: '🪟', towel: '🛁', storage: '📦', carpet: '🧶', lunchbox: '🍱',
-  // 其他
-  toy: '🧸', umbrella: '☂️', 'water-bottle': '🥤', snacks: '🍿', cookies: '🍪', tea: '🍵',
-  books: '📚', book: '📚', fruit: '🍎', flower: '💐', gift: '🎁', kiosk: '🏧', temple: '⛩️',
-  blocks: '🧱', 'toy-car': '🚗', puzzle: '🧩', pen: '🖊️', notebook: '📔', guitar: '🎸',
-  basketball: '🏀', 'yoga-mat': '🧘', dumbbell: '🏋️', pet: '🐾',
-  // 美团菜品（淘宝 AI 商品跨类复用）
-  'milk-tea': '🧋', burger: '🍔', 'fried-chicken': '🍗', pizza: '🍕', hotpot: '🍲', noodles: '🍜',
-  rice: '🍚', dessert: '🍰', 'ice-cream': '🍦', coffee: '☕', juice: '🧃', milk: '🥛', egg: '🍳',
-  breakfast: '🍞', dumplings: '🥟', sushi: '🍣', barbecue: '🍢', 'chinese-food': '🥘', seafood: '🦀',
-  beef: '🥩', salad: '🥗', soup: '🥣', cola: '🥤', medicine: '💊', store: '🛍️',
-  // 出行/文旅（机票/火车票/酒店/电影演出订单图）
-  flight: '✈️', train: '🚄', hotel: '🏨', movie: '🎬', plane: '✈️', cinema: '🎬',
-};
-
+/** 按图源文件名推断品类 emoji（映射表共享在 lib/ios/goods-emoji.ts，emoji 样式/图挂兜底同源） */
 function fallbackEmojiOf(src: string | undefined): string | undefined {
-  const m = src?.match(/\/goods\/([a-z0-9-]+)\.webp/i);
+  const m = src?.match(/\/goods(?:-sketch)?\/[a-z0-9-]+\.webp/i);
   if (!m) return undefined;
-  if (m[1].startsWith('shop-')) return '🏪';
-  return FALLBACK_EMOJI[m[1].replace(/^(tb|mt)-/, '')];
+  return goodsEmojiOf(m[0]);
 }
 
 export function TbImg({
@@ -66,7 +42,28 @@ export function TbImg({
   className?: string;
   alt?: string;
 }) {
-  return <TbImgInner key={src ?? 'none'} src={legacyImgUrl(src, 'tb')} emoji={emoji} cap={cap} className={className} alt={alt} />;
+  const style = useSettings((s) => s.goodsImgStyle);
+  const local = legacyImgUrl(src, 'tb');
+  // emoji 样式：本地 /goods/ 图 → 马卡龙 emoji 块（外链/dataURL 自定义图原样走图片链路）
+  if (style === 'emoji' && local && local.startsWith('/goods/')) {
+    const e = emoji ?? goodsEmojiOf(local) ?? '🛍️';
+    return <EmojiTile emoji={e} cap={cap} className={className} />;
+  }
+  // sketch 样式：本地 /goods/ → /goods-sketch/ 同名线稿（外链/dataURL 原样）
+  const finalSrc =
+    style === 'sketch' && local && local.startsWith('/goods/')
+      ? `${SKETCH_IMG_PREFIX}${local.slice('/goods/'.length)}`
+      : local;
+  return (
+    <TbImgInner
+      key={finalSrc ?? 'none'}
+      src={finalSrc}
+      emoji={emoji}
+      cap={cap}
+      className={className}
+      alt={alt}
+    />
+  );
 }
 
 function TbImgInner({

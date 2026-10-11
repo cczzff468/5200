@@ -23,6 +23,7 @@ import {
   useSystemDark,
   WALLPAPER_PRESETS,
   type AppId,
+  type GoodsImgStyle,
   type IconStyle,
   type ThemeMode,
 } from '@/lib/ios/store';
@@ -44,6 +45,35 @@ const ICON_STYLES: { value: IconStyle; name: string; desc: string }[] = [
   { value: 'glass', name: '毛玻璃图标', desc: '磨砂粗线条' },
   { value: 'liquid', name: '液态透明', desc: '透明玻璃' },
 ];
+
+/** 商品图样式三选一（第六十四轮）：卡通插画=现有 kawaii 彩色图（默认不变）；
+ *  简笔画=黑白粗线稿（用户参考图风格，gen-sketch-goods 产出）；emoji=马卡龙底+品类 emoji。
+ *  预览缩略图统一用奶茶图（与用户参考图同品类，三种样式差异最直观） */
+const GOODS_IMG_STYLES: { value: GoodsImgStyle; name: string; desc: string }[] = [
+  { value: 'cartoon', name: '卡通插画', desc: '彩色 kawaii' },
+  { value: 'sketch', name: '简笔画', desc: '黑白线稿' },
+  { value: 'emoji', name: 'Emoji', desc: '马卡龙色块' },
+];
+
+/** 商品图样式预览缩略图（奶茶三态：彩色图 / 黑白线稿 / emoji 色块） */
+function GoodsImgStylePreview({ style }: { style: GoodsImgStyle }) {
+  if (style === 'emoji') {
+    return (
+      <span className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[#FFF3D6] to-[#FFE6B3">
+        <span className="text-[30px] leading-none">🧋</span>
+      </span>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={style === 'sketch' ? '/goods-sketch/mt-milk-tea.webp' : '/goods/mt-milk-tea.webp'}
+      alt=""
+      draggable={false}
+      className="h-full w-full object-cover"
+    />
+  );
+}
 
 // ---------------- 外观缩略图 ----------------
 
@@ -266,6 +296,9 @@ export default function ThemesApp() {
   /** 全局图标样式（本轮：真实/毛玻璃/液态透明三选一，持久化，主屏/多任务实时跟随） */
   const iconStyle = useSettings((s) => s.iconStyle);
   const setIconStyle = useSettings((s) => s.setIconStyle);
+  /** 商品图样式（第六十四轮：卡通/简笔画/emoji 三选一，淘宝美团全部图位实时跟随） */
+  const goodsImgStyle = useSettings((s) => s.goodsImgStyle);
+  const setGoodsImgStyle = useSettings((s) => s.setGoodsImgStyle);
 
   const systemDark = useSystemDark();
   const resolved = selectResolvedTheme(theme, systemDark);
@@ -388,6 +421,51 @@ export default function ThemesApp() {
               );
             })}
           </div>
+        </div>
+
+        {/* 商品图样式（第六十四轮；图标样式下方新增）：淘宝/美团全部商品/订单/购物车图三选一实时跟随，
+            旧卡通图不删——样式只是切换渲染方式，随时可切回 */}
+        <div className="mb-2 mt-6 px-8 text-[13px] text-muted-foreground">商品图样式</div>
+        <div className="mx-4 overflow-hidden rounded-[20px] bg-white/60 px-4 pb-4 pt-4 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
+          <div className="grid grid-cols-3 gap-2">
+            {GOODS_IMG_STYLES.map((opt) => {
+              const selected = goodsImgStyle === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  data-testid={`goods-img-style-${opt.value}`}
+                  aria-pressed={selected}
+                  aria-label={`商品图样式：${opt.name}`}
+                  onClick={() => {
+                    setGoodsImgStyle(opt.value);
+                    navigator.vibrate?.(6);
+                  }}
+                  className="flex flex-col items-center gap-1.5 transition active:opacity-70"
+                >
+                  <span
+                    className={`relative block h-[56px] w-[56px] overflow-hidden rounded-[14px] bg-muted shadow-[0_2px_6px_rgba(0,0,0,0.25)] transition ${
+                      selected ? 'ring-[1.5px] ring-inset ring-foreground' : 'ring-1 ring-inset ring-border/60'
+                    }`}
+                  >
+                    <GoodsImgStylePreview style={opt.value} />
+                    {selected && (
+                      <span className="absolute right-1 top-1 flex h-[14px] w-[14px] items-center justify-center rounded-full bg-foreground text-background shadow-sm">
+                        <Check className="h-2 w-2" strokeWidth={4} aria-hidden="true" />
+                      </span>
+                    )}
+                  </span>
+                  <span className={`text-[11px] leading-none ${selected ? 'font-medium text-foreground' : 'text-muted-foreground'}`}>
+                    {opt.name}
+                  </span>
+                  <span className="text-[10px] leading-none text-muted-foreground/70">{opt.desc}</span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-3 text-center text-[10px] leading-relaxed text-muted-foreground/70">
+            淘宝 / 美团的商品、订单、购物车图片同步生效，原卡通图保留可随时切回
+          </p>
         </div>
 
         {/* 自定义图标（排在小组件上面；区块可收缩——点标题展开/收起并记忆选择）：

@@ -297,10 +297,18 @@ export const WALLPAPER_PRESETS: WallpaperPreset[] = [
  *  liquid=液态透明（透明液态玻璃 + 高光亮边） */
 export type IconStyle = 'real' | 'glass' | 'liquid';
 
+/** 淘宝/美团商品图样式（第六十四轮）：
+ *  cartoon=kawaii 卡通插画（默认，public/goods）；
+ *  sketch=简笔画线稿（public/goods-sketch，黑白粗线稿，用户参考图风格）；
+ *  emoji=Emoji 大字图（柔和马卡龙底色 + 品类 emoji，无图片请求） */
+export type GoodsImgStyle = 'cartoon' | 'sketch' | 'emoji';
+
 interface SettingsState {
   theme: ThemeMode;
   /** 主屏图标风格（默认 real=真实图标；持久化 settings.iconStyle） */
   iconStyle: IconStyle;
+  /** 淘宝/美团商品图样式（默认 cartoon=卡通插画；持久化 settings.goodsImgStyle，全站订单/商品/购物车图实时跟随） */
+  goodsImgStyle: GoodsImgStyle;
   wallpaperPreset: string;
   /** 自定义壁纸的 ObjectURL（Blob 存 IndexedDB） */
   customWallpaperUrl: string | null;
@@ -345,6 +353,8 @@ interface SettingsState {
 
   /** 设置主屏图标风格（立即持久化；HomeScreen/多任务实时响应） */
   setIconStyle: (s: IconStyle) => void;
+  /** 设置商品图样式（立即持久化；淘宝/美团全部图位实时响应） */
+  setGoodsImgStyle: (s: GoodsImgStyle) => void;
 
   load: () => Promise<void>;
   /** 锁屏总开关：关闭时同时停用密码并立即回到主屏幕 */
@@ -415,12 +425,13 @@ export const useSettings = create<SettingsState>((set, get) => ({
   appFontWeight: 400,
   statusBarVisible: true,
   iconStyle: 'real',
+  goodsImgStyle: 'cartoon',
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -440,12 +451,19 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'appFontWeight'),
         localDB.get('settings', 'statusBarVisible'),
         localDB.get('settings', 'iconStyle'),
+        localDB.get('settings', 'goodsImgStyle'),
       ]);
 
       // 图标风格：无记录/记录非法 → 'real'（真实图标）
       let iconStyle: IconStyle = 'real';
       const savedIconStyle = iconStyleRec?.value;
       if (savedIconStyle === 'glass' || savedIconStyle === 'liquid') iconStyle = savedIconStyle;
+
+      // 商品图样式：无记录/记录非法 → 'cartoon'（kawaii 卡通插画）
+      let goodsImgStyle: GoodsImgStyle = 'cartoon';
+      if (goodsImgStyleRec?.value === 'sketch' || goodsImgStyleRec?.value === 'emoji') {
+        goodsImgStyle = goodsImgStyleRec.value;
+      }
 
       // 自定义 App 图标：{ AppId: Blob } → 为每个 Blob 建 ObjectURL
       let customIcons: Record<string, string> = {};
@@ -728,6 +746,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         // 状态栏开关：无记录 = 显示（默认开）；仅接受布尔值
         statusBarVisible: typeof statusBarRec?.value === 'boolean' ? statusBarRec.value : true,
         iconStyle,
+        goodsImgStyle,
         loaded: true,
       });
       // 锁屏被用户关闭：本次开机直接进主屏幕（跳过锁屏）
@@ -760,6 +779,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setIconStyle: (s) => {
     set({ iconStyle: s });
     void localDB.put('settings', { key: 'iconStyle', value: s });
+  },
+
+  setGoodsImgStyle: (s) => {
+    set({ goodsImgStyle: s });
+    void localDB.put('settings', { key: 'goodsImgStyle', value: s });
   },
 
   setAppFont: (id) => {
