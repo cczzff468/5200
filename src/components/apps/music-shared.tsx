@@ -482,6 +482,7 @@ export function EmptyBlock({ text }: { text: string }) {
 
 const TABS: { key: MusicNav['tab']; label: string }[] = [
   { key: 'home', label: '首页' },
+  { key: 'heart', label: '心动' },
   { key: 'search', label: '搜索' },
   { key: 'mine', label: '我的' },
 ];

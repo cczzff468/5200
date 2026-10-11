@@ -41,6 +41,7 @@ import { useStatusBarToneEffect, type StatusBarTone } from '@/lib/ios/status-bar
 import { bootMusicAi } from '@/lib/ios/music-ai';
 import { MusicTabBar, MiniBar } from './music-shared';
 import { MusicHome } from './music-home';
+import { MusicHeart } from './music-heart';
 import { MusicSearch } from './music-search';
 import { MusicMine } from './music-mine';
 import { MusicPlayer } from './music-player';
@@ -87,6 +88,7 @@ export default function MusicApp() {
             <div className="relative flex h-full flex-col">
               <div className="min-h-0 flex-1 overflow-hidden">
                 {nav.tab === 'home' && <MusicHome onSettings={() => setShowSettings(true)} />}
+                {nav.tab === 'heart' && <MusicHeart onSettings={() => setShowSettings(true)} />}
                 {nav.tab === 'search' && <MusicSearch />}
                 {nav.tab === 'mine' && <MusicMine onSettings={() => setShowSettings(true)} />}
               </div>

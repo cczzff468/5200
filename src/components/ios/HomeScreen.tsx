@@ -2928,18 +2928,16 @@ export default function HomeScreen() {
   /** 文件夹样式的毛玻璃缩略图（迷你图标网格）：文件夹图标与拖拽浮动副本共用；
    *  合并预览阶段目标文件夹保持原样（不混入被拖 App 的缩略图——用户要求被拖 App
    *  不显示在里面）；
-   *  排布对齐 iOS：≤3 个一行、4 个 2×2、5/6 个 3+3，整块在文件夹内水平+垂直双居中
-   *  （旧版只居中水平、单行图标顶在上方——用户实测「图标从左往右显示，不是在中间」）；
-   *  迷你图标走 registry 的 AppMiniIcon：跟随全局图标样式（真实/毛玻璃/液态——旧版
-   *  永远直铺实体 PNG，主屏换样式后预览不跟着变，用户实测），且不再 scale-1.3 放大
-   *  （会把 PNG 边缘内容/文字裁掉，用户实测「图标裁剪也有问题」） */
+   *  排布（第六十三轮反馈）：从左上角开始依次排序、每行固定 3 个（1-3 个第 1 行、
+   *  4-6 个第 1/2 行，行内左对齐——旧版居中排、4 个挤 2×2 与要求不符）；
+   *  迷你图标走 registry 的 AppMiniIcon：跟随全局图标样式（真实/毛玻璃/液态），不放大不裁切 */
   const folderIconNode = (apps: AppId[]) => {
     const list = apps.slice(0, 6);
-    const rows: AppId[][] = list.length <= 3 ? [list] : list.length === 4 ? [list.slice(0, 2), list.slice(2, 4)] : [list.slice(0, 3), list.slice(3, 6)];
+    const rows: AppId[][] = [list.slice(0, 3), list.slice(3, 6)].filter((r) => r.length > 0);
     return (
-      <span className="flex h-full w-full flex-col items-center justify-center gap-[2px]">
+      <span className="flex h-full w-full flex-col items-start justify-start gap-[2px]">
         {rows.map((row, ri) => (
-          <span key={ri} className="flex items-center justify-center gap-[2px]">
+          <span key={ri} className="flex items-center justify-start gap-[2px]">
             {row.map((id) => (
               <span key={id} className="block h-[14px] w-[14px] overflow-hidden rounded-[3.5px] shadow-[0_0.5px_1.5px_rgba(0,0,0,0.25)]">
                 <AppMiniIcon id={id} custom={customIcons[id]} />

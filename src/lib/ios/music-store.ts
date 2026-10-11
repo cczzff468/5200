@@ -199,7 +199,8 @@ export function mediaProxyUrl(raw: string): string {
 
 export interface MusicNav {
   view: 'tabs' | 'player' | 'playlist';
-  tab: 'home' | 'search' | 'mine';
+  /** heart = 心动模式（根据红心/收藏/常听推荐，第六十三轮） */
+  tab: 'home' | 'heart' | 'search' | 'mine';
   /** 歌单详情参数 */
   playlistId: number | null;
   /** 特殊歌单：daily=每日推荐 liked=我的红心（云端） guestLocal=游客本地歌单（id 在 guestPlId） */

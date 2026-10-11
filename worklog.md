@@ -18141,3 +18141,26 @@ Work Log:
 Stage Summary:
 - 交付：①口红质地退出购买弹窗（21色号保留）；②机票/火车票/酒店/电影演出订单专属插画补齐（+4 张 kawaii webp，订单图不再兜底成菜品）；③美团订单页双向无限生成（7 频道池，下拉出新单/上滑加载更早单）；④平板/电脑购买弹窗 4 组规格（网络类型5G全网通/套餐类型官方标配/版本类型中国大陆/发货方式仓库直发，手机同步补齐）；⑤淘宝美团订单+搜索全部走「设置›API配置」用户配置模型（内置模型兜底→本地确定性生成器兜底，三级永不空转）；订单上下重复根治（生成侧去重+存量同 key 清理）
 - 改动文件：scripts/gen-travel-goods.ts(+新增)、public/goods/mt-{flight,train,hotel,movie}.webp(+4张)、src/lib/ios/goods-img.ts、src/lib/ios/tb-img.tsx（emoji）、src/lib/ios/taobao-data.ts、src/lib/ios/tb-product-gen.ts、src/lib/ios/meituan-store.ts、src/lib/ios/taobao-store.ts、src/app/api/mt-orders/route.ts(+新增)、src/app/api/tb-orders/route.ts(+新增)、src/app/api/tb-feed/route.ts、src/lib/ios/tb-ai-store.ts、src/components/apps/taobao.tsx、src/components/apps/meituan.tsx
+
+---
+Task ID: 63
+Agent: main (Z.ai Code)
+Task: ①音乐 App 底部 TabBar「首页」右侧新增「心动」tab——根据平时喜欢听的/收藏的推荐歌曲（用户参考图是顶部 tab 版心动模式，要求放底部 tab）；②主屏文件夹预览改为从左上依次排序、每行只显示 3 个 App（用户截图：购物文件夹 2 个 App 居中排不符合预期）；③审查其它规则有没有问题/需要完善的
+
+Work Log:
+- 【心动 tab 接线】music-store.ts MusicNav.tab 联合类型加 'heart'（全项目仅 music-settings 一处 setTab('mine')，无其它受影响点）；music-shared.tsx TABS 数组 home 后插入 { key:'heart', label:'心动' }（纯文字 TabBar 自动 flex-1 均分四格）；music.tsx nav.tab==='heart' 渲染 MusicHeart（接 onSettings）
+- 【新文件 src/components/apps/music-heart.tsx 心动模式页】
+  · 推荐引擎三级种子：最近红心 3 首（shuffle 轮换，理由「因为你收藏的《X》」）→ 本地最近播放 2 首（「因为你听过《X》」）→ 登录用户服务端 userRecord 周听歌榜补位（「因为你常听《X》」）；每种子并行 simiSong(10)，游客返回空则兜底同歌手热门歌 artistSongs(12)（理由「和你听过/收藏的《X》是同一位歌手」，动词跟种子类型走）；各种子结果交错合并（轮流出歌不扎堆）+ id 去重 + 排除已有红心，上限 30 首；无种子或结果 <8 → personalizedNewSongs 兜底 + 顶部红色引导条「先去听听歌、给喜欢的歌点亮红心，心动模式会更懂你」
+  · 黑胶头卡（对标用户参考图）：190px 黑胶唱片（netease-spin 16s 旋转、同心纹路、盘标=封面、中心孔+白环）+ SVG 唱针（枢轴圆点+弯臂+唱头）；心动队列有歌在播→头卡切当前歌+暂停键+细进度条（fmtClock 双端时间），否则显示队列首首「即将播放」+播放键（开播整个心动队列）；点头卡歌名区进全屏播放页
+  · 「心动歌单 N 首」+ 播放全部按钮；歌曲行=封面+歌名（当前播放红色高亮）+歌手·推荐理由+VIP 角标+序号，点击 playSong(song, 心动队列)
+  · 下拉刷新与首页同款手势（touch+mouse 双通道、64px 阈值、拖拽吞 click 防 400ms 误触、已更新✓ 自动复位），文案「下拉换一批/松开换一批/正在生成心动歌单…」
+  · 口味数据（likedIds/likedSongs/history/loginUid）用 tasteRef 快照：只在进页/下拉刷新取值——若作 useCallback 依赖，播放任一首都会写 history→列表重生成（头卡跳歌、滚动丢失）；已注释说明
+- 【文件夹预览 3/行左上排序】HomeScreen.tsx folderIconNode：行拆分从「≤3 单行/4 个 2×2/5-6 个 3+3、整块双居中」改为 [slice(0,3),slice(3,6)] 固定每行 3 个；容器 items-center justify-center → items-start justify-start、行内 justify-start（从左上角依次填充）；文件夹 tile、拖拽浮动副本、合并预览共用此函数一处改动全覆盖；>6 个仍走数量角标（实测 badge 逻辑未受影响）
+- E2E（agent-browser 全真浏览器全新 profile 实机）：锁屏滑动解锁→App 库开音乐→游客模式进主界面：TabBar 显示「首页/心动/搜索/我的」且心动在首页右侧✓；心动页渲染黑胶头卡+心动歌单 12 首（游客无红心走新歌速递兜底+引导条）✓；点歌播放：灵动岛弹出+迷你条+头卡切当前歌旋转+暂停键+进度条 0:03/2:27+列表行红色高亮✓；下拉刷新出「已更新✓」且新一批推荐理由「因为你听过《全息恋人》」（播放历史种子生效）✓；点心动标题退主屏音乐后台续播✓
+- E2E 文件夹：主屏拖相机→照片悬停出合并预览松手建夹✓；拖计算器/文件入夹（快速松手=换位、悬停静止后松手=入夹，防误触机制正常）；DOM 实测 rows:[3,1] icons:[photos,camera,calculator,files]——第一行 3 个+第二行 1 个从左上依次排列✓；打开文件夹面板 3 列网格✓；IndexedDB homeLayout.folders 数据与 UI 一致✓
+- 规则审查结论：①文件夹规则完备（≤1 App 自动解体、12/页分页+页点、>6 角标、合并预览不混入被拖 App 缩略图）无需改；②音乐 4-tab 后 MiniBar bottom:58 偏移与 showTabBar 判定不受影响；③心动页两处细节已修：口味数据 ref 快照防播放触发列表重生成、同歌手兜底理由动词跟种子类型（旧版写死「收藏的」）
+- bunx tsc --noEmit 0 错误；browser console 0 错误；dev.log 无新增运行时错误（仅仓库固有 netease-api keeper 与 Edge Runtime 警告）
+
+Stage Summary:
+- 交付：音乐 App 底部 TabBar 新增「心动」tab（首页右侧）——黑胶头卡心动模式页，推荐引擎=红心3+最近播放2+服务端周榜种子→simiSong/同歌手兜底→交错合并去重30首，下拉刷新轮换种子，理由文案跟种子走；主屏文件夹预览改固定每行 3 个、从左上角依次排序（tile/浮动副本/合并预览三处共用一处改动）
+- 改动文件：src/lib/ios/music-store.ts、src/components/apps/music-shared.tsx、src/components/apps/music.tsx、src/components/apps/music-heart.tsx(+新增)、src/components/ios/HomeScreen.tsx

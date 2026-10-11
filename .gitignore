@@ -55,3 +55,4 @@ server.log
 tool-results
 .data/
 mini-services/netease-api/dev.log
+upload/
