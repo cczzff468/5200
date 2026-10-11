@@ -147,6 +147,7 @@ import type { FunDeal, FunHotel, FunMovie, FunRoom, FunVenue } from '@/app/api/m
 import TravelChannelPage from './meituan-travel';
 import ShangouChannelPage from './meituan-shangou';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { GoodsStyleSheet, GoodsStyleThumb } from './goods-style-sheet';
 import { mtNotifyShopOrderPaid } from '@/lib/ios/mt-shop-notify';
 import { ScanOverlayWhen, openScan } from './mt-scan';
 import {
@@ -9102,6 +9103,9 @@ function MyPage({
   const [riderOpen, setRiderOpen] = useState(false);
   const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
   const openRiderSheet = () => setRiderOpen(true);
+  // 商品图片样式选择弹层（第六十六轮：从主题 App 迁出，工作兼职位改为选择器入口）
+  const [goodsStyleOpen, setGoodsStyleOpen] = useState(false);
+  const goodsImgStyle = useSettings((s) => s.goodsImgStyle);
 
   const cell = (Icon: LucideIcon, label: string, badge: number | null, onTap: () => void, tint = 'text-black/75') => (
     <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-70">
@@ -9266,8 +9270,8 @@ function MyPage({
       </div>
 
       {/* 服务宫格（地址/开发票为真实页面；其余演示项；
-          工作兼职=商品图片样式卡（第六十五轮）：kawaii 骑手兼职图 + 名字在图下方，
-          跟随设置里商品图三样式（卡通/简笔画/emoji）实时切换） */}
+          工作兼职位 = 商品图片样式选择器入口（第六十六轮从主题 App 迁出）：
+          当前样式缩略图 + 名字，点击弹三选一弹层） */}
       <div className="grid grid-cols-4 gap-y-4 border-t-[7px] border-[#F7F8FA] px-2 py-3.5">
         {([
           [MapPin, '地址', () => onOpenAddresses(), 'my-svc-address'],
@@ -9282,10 +9286,10 @@ function MyPage({
             <span className="text-[11px] text-black/70">{l}</span>
           </button>
         ))}
-        {/* 工作兼职：商品图片样式（图上文下名，与商品卡同款排版） */}
-        <button type="button" data-testid="my-svc-job" onClick={() => onToast('工作兼职（演示）')} className="flex flex-col items-center gap-1.5 active:opacity-70">
-          <FoodImg src="/goods/mt-job.webp" emoji="🛵" className="h-[46px] w-[46px] shrink-0 rounded-[12px]" />
-          <span className="text-[11px] text-black/70">工作兼职</span>
+        {/* 商品图片样式（原工作兼职位）：点击弹三选一弹层（与淘宝红包位共用同一全局样式） */}
+        <button type="button" data-testid="mt-goods-style-entry" onClick={() => setGoodsStyleOpen(true)} className="flex flex-col items-center gap-1.5 active:opacity-70">
+          <GoodsStyleThumb style={goodsImgStyle} className="h-[46px] w-[46px] shrink-0 rounded-[12px]" />
+          <span className="text-[11px] text-black/70">商品图片样式</span>
         </button>
         {([
           [Leaf, '我的碳账户', () => onToast('我的碳账户（演示）'), ''],
@@ -9303,6 +9307,9 @@ function MyPage({
       {/* 账号管理已移至「设置」（收货地址/切换账号/退出登录） */}
       <p className="py-4 text-center text-[10px] text-black/25">美团 v10.18.0 · 数据仅保存在本机 · 按账号隔离 · {idpLabel}</p>
       </div>
+
+      {/* 商品图片样式选择（第六十六轮：从主题 App 迁出的入口弹层；与淘宝共用同一全局样式） */}
+      {goodsStyleOpen ? <GoodsStyleSheet accent="#FF9500" onClose={() => setGoodsStyleOpen(false)} /> : null}
 
       {/* 骑手形象选择（底部弹层；选中形象用于配送地图巡航） */}
       <AnimatePresence>

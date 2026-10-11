@@ -64,6 +64,7 @@ import {
 } from 'lucide-react';
 import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { GoodsStyleSheet, GoodsStyleThumb } from './goods-style-sheet';
 import {
   tbChatLast,
   tbChatShops,
@@ -5191,6 +5192,9 @@ function MePage({
   // 选中形象同时用于淘宝物流页地图巡航，与美团共用同一 localStorage）
   const [riderOpen, setRiderOpen] = useState(false);
   const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
+  // 商品图片样式选择弹层（第六十六轮：从主题 App 迁出，红包位改为选择器入口）
+  const [goodsStyleOpen, setGoodsStyleOpen] = useState(false);
+  const goodsImgStyle = useSettings((s) => s.goodsImgStyle);
   useEffect(() => {
     tbTickOrders(uid);
     const t = setInterval(() => setTick((n) => n + 1), 5000);
@@ -5354,7 +5358,7 @@ function MePage({
           </button>
         </div>
         {/* 消费明细白卡（第九轮：标题点击进淘宝账单页；
-            第六十五轮：红包=商品图片样式卡（kawaii 红包图+图下名字，跟随商品图三样式）；
+            第六十六轮：红包位 = 商品图片样式选择器入口（从主题 App 迁出）；
             会员中心/免费领图标/天猫积分 已按需求删除） */}
         <div className="mt-3 rounded-2xl bg-white p-3">
           <div className="flex items-center">
@@ -5363,11 +5367,12 @@ function MePage({
               <ChevronRight className="h-4 w-4 text-black/35" />
             </button>
           </div>
-          {/* 资产行（红包=商品图片样式卡；优惠券/骑手/账户余额 label 上 value 下；行内 items-center 垂直居中对齐） */}
+          {/* 资产行（首位=商品图片样式选择器入口：当前样式缩略图+名字，点击弹三选一弹层；
+              优惠券/骑手/账户余额 label 上 value 下；行内 items-center 垂直居中对齐） */}
           <div className="mt-1 flex items-center">
-            <button type="button" onClick={() => onToast('红包 ¥0.00（演示）')} className="flex flex-1 flex-col items-center gap-1 py-1 active:opacity-70">
-              <TbImg src="/goods/tb-hongbao.webp" emoji="🧧" className="h-[46px] w-[46px] shrink-0 rounded-[12px]" />
-              <span className="text-[11px] leading-none text-black/45">红包</span>
+            <button type="button" data-testid="tb-goods-style-entry" onClick={() => setGoodsStyleOpen(true)} className="flex flex-1 flex-col items-center gap-1 py-1 active:opacity-70">
+              <GoodsStyleThumb style={goodsImgStyle} className="h-[46px] w-[46px] shrink-0 rounded-[12px]" />
+              <span className="text-[11px] leading-none text-black/45">商品图片样式</span>
             </button>
             <button type="button" onClick={onOpenCoupons} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
               <span className="text-[12px] leading-none text-black/45">优惠券</span>
@@ -5554,6 +5559,8 @@ function MePage({
         </div>
       </div>
     ) : null}
+    {/* 商品图片样式选择（第六十六轮：从主题 App 迁出的入口弹层；与美团共用同一全局样式） */}
+    {goodsStyleOpen ? <GoodsStyleSheet accent="#FF5000" onClose={() => setGoodsStyleOpen(false)} /> : null}
     </>
   );
 }

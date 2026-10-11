@@ -116,7 +116,9 @@ function LineIcon({ children, variant = 'auto' }: { children: ReactNode; variant
 /** 液态透明图标（图标样式第三选）：比毛玻璃更透的「液态玻璃泡」——
  *  底座近乎全透明（轻模糊只留一点折射感）+ 上下渐变模拟玻璃顶部高光/底部反光 + 亮边 ring；
  *  与 LineIcon 同一套明暗口径：浅色主题 + 浅色壁纸 → 深灰线保证可见，
- *  深色主题 / 深色壁纸 → 白线 + 白高光；variant="card"：卡片底色场景强制
+ *  深色主题 / 深色壁纸 → 白线 + 白高光；第六十六轮液态透明适配深色模式：
+ *  深色主题专属「烟熏暗玻璃」分支（深色微透底 + 减弱白高光 + 白/18 ring），
+ *  与浅色主题画在深壁纸上的「亮玻璃白线」区分开；variant="card"：卡片底色场景强制
  *  烟熏玻璃白线不随壁纸翻转（同 LineIcon card 口径，主题页预览用） */
 function LiquidIcon({ children, variant = 'auto' }: { children: ReactNode; variant?: 'auto' | 'card' }) {
   const themeMode = useSettings((s) => s.theme);
@@ -133,7 +135,9 @@ function LiquidIcon({ children, variant = 'auto' }: { children: ReactNode; varia
             ? 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.52),rgba(255,255,255,0.16)_45%,rgba(0,0,0,0.03))] shadow-[inset_0_1px_2px_rgba(255,255,255,0.8),0_2px_8px_rgba(0,0,0,0.08)] ring-black/[0.10]'
             : variant === 'card'
               ? 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.34),rgba(120,120,128,0.18)_45%,rgba(60,60,67,0.30))] shadow-[inset_0_1.5px_2.5px_rgba(255,255,255,0.40),0_2px_8px_rgba(0,0,0,0.14)] ring-white/[0.35]'
-              : 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.28),rgba(255,255,255,0.06)_45%,rgba(255,255,255,0.13))] shadow-[inset_0_1.5px_2.5px_rgba(255,255,255,0.44),0_2px_10px_rgba(0,0,0,0.11)] ring-white/[0.36]'
+              : dark
+                ? 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.14),rgba(255,255,255,0.03)_45%,rgba(0,0,0,0.22))] shadow-[inset_0_1.5px_2.5px_rgba(255,255,255,0.22),0_2px_10px_rgba(0,0,0,0.38)] ring-white/[0.20]'
+                : 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.28),rgba(255,255,255,0.06)_45%,rgba(255,255,255,0.13))] shadow-[inset_0_1.5px_2.5px_rgba(255,255,255,0.44),0_2px_10px_rgba(0,0,0,0.11)] ring-white/[0.36]'
         }`}
       >
         {children}
@@ -142,24 +146,19 @@ function LiquidIcon({ children, variant = 'auto' }: { children: ReactNode; varia
   );
 }
 
-/** 图标统一规格：60px 位内 30px 线性图标（与 iOS 线性图标比例一致）；
- *  线条加粗（1.7 → 2.2，用户要求图标「里面的变粗一点」） */
-/** 深色模式实体图标滤镜（第六十五轮「主界面 APP 图标适配深色模式」）：
- *  智能反色 = invert(1) + hue-rotate(180°) + 轻微降对比提亮：
- *  - 白/浅底图标（备忘录/照片/设置/相机…）→ 深色图标体，不再在深色壁纸上刺眼；
- *  - 彩色图标（微信绿/音乐红/淘宝橙…）色相基本保持，白色 glyph 转深色
- *    ——整体呈现 iOS 深色模式图标观感；
- *  - 卡片预览场景（主题页/App Store 等固定浅色卡底）不套用，保持原彩色 */
-const DARK_ICON_FILTER = 'invert(1) hue-rotate(180deg) contrast(0.87) brightness(1.05)';
-
 /** 真实 iOS 图标（public/icons 的 PNG：自带彩色圆角底），满槽铺满图标位。
  *  图片自带透明圆角（约 22%），稍微放大 1.07 让自身圆角越过容器边被裁掉，
  *  最终圆角完全由容器 rounded-[15px] 决定，十枚图标圆角绝对一致；
  *  附极淡描边 + 柔和投影——备忘录/照片/文件/提醒事项这类白底图标在白色
  *  壁纸/卡片上也有清晰边界（修之前线条图标在白纸上「隐身」的痛点）。
  *  彩色实体底不随壁纸翻转，任何背景下都醒目；
- *  深色主题下套智能反色滤镜（DARK_ICON_FILTER）+ 白色亮边环 + 深投影适配深色模式；
- *  variant="card"：卡片底色场景（主题页预览等固定浅色卡底）保持原色不反色 */
+ *  深色主题下整体切换 public/icons-dark 专属深色变体（第六十六轮：gen-dark-icons.ts
+ *  逐图标定制——浅底换深色瓷砖/字形原色保留/时钟刻度翻白/天气深夜蓝，对齐用户
+ *  真机 iOS 深色观感；微信绿/音乐红等彩色品牌底两套同图）；废弃旧版整图
+ *  invert+hue-rotate 滤镜（彩色发闷、白字被反成深色）；
+ *  variant="card"：卡片底色场景（主题页预览等固定浅色卡底）保持原色不变 */
+const darkSrcOf = (src: string): string => src.replace('/icons/', '/icons-dark/');
+
 function RealIconTile({ src, variant = 'auto' }: { src: string; variant?: 'auto' | 'card' }) {
   const themeMode = useSettings((s) => s.theme);
   const systemDark = useSystemDark();
@@ -175,14 +174,13 @@ function RealIconTile({ src, variant = 'auto' }: { src: string; variant?: 'auto'
         }`}
       >
         <Image
-          src={src}
+          src={dark ? darkSrcOf(src) : src}
           alt=""
           fill
           sizes="60px"
           loading="eager"
           draggable={false}
           className="scale-[1.07] object-cover"
-          style={dark ? { filter: DARK_ICON_FILTER } : undefined}
         />
       </span>
     </IconTile>
@@ -506,16 +504,8 @@ export function AppMiniIcon({ id, custom }: { id: AppId; custom?: string | null 
   const image = IMAGES[id];
   const dark = selectResolvedTheme(themeMode, systemDark) === 'dark';
   if (style === 'real' && image) {
-    // 文件夹迷你缩略图同样跟随深色模式反色（与主屏 RealIconTile 同一滤镜）
-    return (
-      <img
-        src={image}
-        alt=""
-        draggable={false}
-        style={dark ? { filter: DARK_ICON_FILTER } : undefined}
-        className="block h-full w-full select-none object-cover"
-      />
-    );
+    // 文件夹迷你缩略图跟随深色模式：深色主题用 icons-dark 专属变体（与主屏 RealIconTile 同源）
+    return <img src={dark ? darkSrcOf(image) : image} alt="" draggable={false} className="block h-full w-full select-none object-cover" />;
   }
   const lightGlass = !dark && lightWallpaper;
   const raw = GLYPHS[id];
@@ -529,7 +519,9 @@ export function AppMiniIcon({ id, custom }: { id: AppId; custom?: string | null 
     style === 'liquid'
       ? lightGlass
         ? 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.52),rgba(255,255,255,0.16)_45%,rgba(0,0,0,0.03))] shadow-[inset_0_1px_2px_rgba(255,255,255,0.8),0_1px_3px_rgba(0,0,0,0.06)] ring-black/[0.10] text-[#4b4b53]'
-        : 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.28),rgba(255,255,255,0.06)_45%,rgba(255,255,255,0.13))] shadow-[inset_0_1.5px_2.5px_rgba(255,255,255,0.44),0_1px_4px_rgba(0,0,0,0.09)] ring-white/[0.36] text-[#f8f8fb]'
+        : dark
+          ? 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.14),rgba(255,255,255,0.03)_45%,rgba(0,0,0,0.22))] shadow-[inset_0_1.5px_2.5px_rgba(255,255,255,0.22),0_1px_4px_rgba(0,0,0,0.3)] ring-white/[0.20] text-[#f8f8fb]'
+          : 'bg-[linear-gradient(to_bottom,rgba(255,255,255,0.28),rgba(255,255,255,0.06)_45%,rgba(255,255,255,0.13))] shadow-[inset_0_1.5px_2.5px_rgba(255,255,255,0.44),0_1px_4px_rgba(0,0,0,0.09)] ring-white/[0.36] text-[#f8f8fb]'
       : lightGlass
         ? 'bg-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.22)] ring-black/[0.06] text-[#48484e]'
         : dark
