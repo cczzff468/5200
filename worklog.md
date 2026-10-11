@@ -18193,3 +18193,31 @@ Work Log:
 Stage Summary:
 - 交付：①心动模式页深色沉浸式美化（大盘黑胶白唱针+红徽章+白玻璃播放钮+圆点进度条+深色列表，状态栏白字联动）；②商品图三样式体系——cartoon（原 kawaii 卡通，默认不变）/sketch（黑白简笔画线稿，123 张全量，gen-sketch-goods 脚本可增量再生）/emoji（马卡龙底+品类 emoji），主题页三选一切换实时生效、淘宝美团全站图位（商品/订单/购物车/结算/SKU/频道）同步跟随，旧卡通图完整保留随时切回
 - 改动文件：scripts/gen-sketch-goods.ts(+新增)、public/goods-sketch/*.webp(+123 张)、src/lib/ios/store.ts、src/lib/ios/goods-emoji.ts(+新增)、src/components/apps/goods-emoji-tile.tsx(+新增)、src/components/apps/tb-img.tsx、src/components/apps/mt-food-img.tsx、src/components/apps/themes.tsx、src/components/apps/music-heart.tsx、src/components/apps/music.tsx
+
+---
+Task ID: 65
+Agent: main (Z.ai Code)
+Task: 用户四点需求——①APP 真实图标不用适配深色模式了；②液态透明图标深色模式下有问题（用户截图：深色主题+浅色壁纸下白线图标几乎隐形）解决一下；③文件夹也适配深色模式；④美团淘宝也适配深色模式
+
+Work Log:
+- 【根因诊断】LiquidIcon/LineIcon/AppMiniIcon 的浅玻璃分支旧条件 `!dark && lightWallpaper`（要求浅色主题）——深色主题+浅色壁纸时落入「白线+近全透底」分支，白线画在浅壁纸上几乎隐形（用户截图实锤）；玻璃图标画在壁纸上，可见性应由壁纸明暗决定而非主题
+- 【registry.tsx 图标修复】LineIcon/LiquidIcon/AppMiniIcon 三处 lightGlass 统一改为 `lightWallpaper`（去掉 `!dark &&` 前缀，深色主题浅壁纸下走「亮玻璃+深灰线 #4b4b53」保证可见；深壁纸维持 深色烟熏玻璃白线（dark 主题）/亮玻璃白线（浅色主题）口径不变）
+- 【真实图标不再适配深色】RealIconTile 删除 theme/systemDark hooks 与 dark 分支，始终用 /icons/ 原图（/icons-dark/ 变体废弃，darkSrcOf 函数删除）；AppMiniIcon real 分支同步 `src={image}` 原图；两处注释更新「第六十七轮：用户要求真实图标不用适配深色模式」
+- 【文件夹深色适配】HomeScreen.tsx 引入 selectResolvedTheme+useSystemDark：①文件夹 tile 深色 `bg-black/[0.28] ring-white/[0.14]`（浅色维持 bg-white/[0.22] ring-white/25）；②FolderPanel 展开面板深色 `bg-black/55`（浅色维持 bg-black/30），面板内白字/迷你图标（AppMiniIcon 跟壁纸明暗）两个主题都协调
+- 【淘宝/美团深色架构】AppWindow.tsx：全局解析主题为 dark 且 activeApp ∈ {taobao, meituan} 时容器挂 `shop-dark` 作用域类；其余 App 零影响；AppWindow 容器 bg-background 走 shell .dark 变量本身已深
+- 【新生成器 scripts/gen-shop-dark-css.mjs】递归收集 taobao.tsx/meituan.tsx 的本地 import 子组件（43 文件含 qq/wechat-wallet/wechat 支付弹层），提取全部颜色类→HSL 分类→生成 src/app/shop-dark.css（462 行，@import 进 globals.css，未分层规则优先级天然高于 @layer utilities）：
+  · bg-white→#1d1d1f 卡片色；bg-white/80+→深色毛玻璃 rgba(24,24,27,.8~.96)（TabBar/吸顶条）、/40-75→白色 10% 磨砂贴片、/30- 保持（图片压字遮罩）
+  · 中性浅灰（s≤0.14,l≥0.72）：近白页面 #F5F6F7 族→#141416、中灰骨架/输入→#232327；粉彩贴片（s>0.14,l≥0.72）→同色相深贴 hsl(h,s*0.42,16%)（金券/粉标/绿提示条深色化）
+  · text-black/N 19 档→rgba(255,255,255,N*1.05+0.02)；纯 text-black→#f2f2f4；border/ring/divide-black/N→白色同级；bg-black/divide-black ≤0.15 浅芯片→白色芯片（≥0.2 遮罩保持）
+  · 渐变 stops：白/中性→深（#1d1d1f/#141416）、粉彩→深同调；按 Tailwind v4 编译结构精确覆盖 --tw-gradient-from/via/to（stops 变量动态引用即生效）；品牌亮色 stops 保持
+  · 深褐文字提亮 25 个（l<0.45 且 Y<0.16 → 同色相 l=0.75，#5A4200→浅金、#8A6116/#B77900/#C8860D/#0A8F5B 等，深色贴片上可读）
+  · 【黑字保护规则】美团黄 bg-[#FFD100]（52 处 text-black/85~90 同元素）等品牌亮色 CTA 保持亮底——源码实测「亮色表面 200 字符内带 text-black」的 27 个表面生成保护选择器：`.shop-dark :is(PROT) :not([class*='bg-']) .text-black\/N`（后代级，排除带 bg- 的中间层使黄 CTA 内嵌白卡时白卡黑字正常翻白）+ `:is(PROT).text-black\/N`（同元素级），优先级 (0,3,0) 高于翻转 (0,2,0)，黑字/深褐字在亮色 CTA 上恢复原色
+- E2E（agent-browser 实机全链路）：新 profile 解锁→设置›显示与亮度›深色 ✓→主题›图标样式›液态透明：深主题+石墨黑深壁纸=烟熏玻璃白线清晰 ✓；切主屏壁纸银白（浅）=亮玻璃+深灰线全部清晰可见（用户截图问题场景根治）✓；拖相机→照片建夹：编辑模式→完成→文件夹 tile 计算样式 bg=oklab(0 0 0/0.28)+ring white/0.1 ✓；开面板 bg=oklab(0 0 0/0.55)+blur(40px)、白标题、夹内迷你图标协调 ✓
+- E2E 淘宝深色：注入 tb-session（via:password 无 contactId——mtValidateSession/tb 校验联系人存在，新 profile 无联系人故置空走 via!=password 短路）→登录页深色（品牌绿/蓝登录钮保持）→首页全深（页面 #141416/卡片 #1d1d1f/搜索栏深底橙钮/领券中心红黄券保持亮色/底部 TabBar 深毛玻璃/状态栏探针自动白字）→滚动信息流商品卡深色浅字橙价 ✓→商品详情（SKU 深芯片橙选中环、拼团价亮橙横幅、领券购买黄渐变黑字保护生效）✓→我的淘宝（橙头保持白字、红包券亮红、订单宫格深色）→全部订单（筛选芯片/订单卡/确认收货橙钮）✓
+- E2E 美团深色：注入 mt-session→首页黄头保持+搜索黄钮黑字 ✓、分类白图标、AI 骨架深色、商家列表（黄评分保持/月售白字/领券红标）✓、误入药房商家页（黄头+去结算黑字保护 ✓ 菜品列表深色）→我的页（金券贴片深金+浅金字提亮生效/会员中心金钮黑字）→全部订单（永辉/海底捞/麦当劳/万达影城订单卡深色、再来一单橙钮、去逛逛黄钮黑字）✓
+- 浅色回归：切回浅色后主屏（液态浅玻璃深字/文件夹 tile 恢复 white/0.22）✓、淘宝首页完全原样 ✓、shop-dark 类确认缺席 ✓；browser errors 0、console 仅 Fast Refresh 日志；dev.log 仅仓库固有 instrumentation Edge 警告（Ecmascript error 即该已知项）；bunx tsc --noEmit 0 错误
+- 备注：①E2E 后主题/图标样式/壁纸停留状态为「浅色+液态+银白壁纸+相机照片文件夹」——全部在隔离 headless profile，不影响用户浏览器会话；②shop-dark.css 为生成产物（74KB 未压缩、高度重复选择器 gzip 友好），改两个 App 颜色类后需重跑 `bun scripts/gen-shop-dark-css.mjs`；③真实图标 /icons-dark/ 目录与 gen-dark-icons.ts 脚本保留在仓库未删（仅不再被引用，回滚容易）
+
+Stage Summary:
+- 交付：①真实图标深浅主题始终原图（/icons-dark/ 切换废弃）；②液态透明/毛玻璃/文件夹迷你图标明暗分支改为跟随壁纸实测亮度——深色主题+浅色壁纸白线隐形根治；③文件夹 tile+展开面板深色烟熏玻璃适配；④淘宝/美团全面深色模式（shop-dark 作用域 CSS 覆盖层+生成器管线：中性面/黑字翻转、粉彩贴片深色化+深褐字提亮、品牌亮色 CTA 保持+黑字保护选择器、渐变 stops 按 v4 变量精确覆盖），状态栏探针自动跟随，浅色模式零回归
+- 改动文件：src/components/apps/registry.tsx、src/components/ios/HomeScreen.tsx、src/components/ios/AppWindow.tsx、src/app/globals.css、scripts/gen-shop-dark-css.mjs(+新增)、src/app/shop-dark.css(+新增生成产物)

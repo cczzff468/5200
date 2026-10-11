@@ -94,7 +94,7 @@ function LineIcon({ children, variant = 'auto' }: { children: ReactNode; variant
   const lightWallpaper = useHomeWallpaperLight();
   // 卡片场景强制高白磨砂深灰线；壁纸场景：浅色主题 + 浅色壁纸 → 高白磨砂深灰线，
   // 其余（深色主题任意壁纸 / 浅色主题深壁纸）→ 深玻璃白线
-  const lightGlass = variant === 'card' ? true : !dark && lightWallpaper;
+  const lightGlass = variant === 'card' ? true : lightWallpaper;
   return (
     <IconTile className={lightGlass ? 'text-[#48484e]' : 'text-[#f6f6f8]'}>
       <span
@@ -125,7 +125,7 @@ function LiquidIcon({ children, variant = 'auto' }: { children: ReactNode; varia
   const systemDark = useSystemDark();
   const dark = variant === 'card' ? false : selectResolvedTheme(themeMode, systemDark) === 'dark';
   const lightWallpaper = useHomeWallpaperLight();
-  const lightGlass = variant === 'card' ? false : !dark && lightWallpaper;
+  const lightGlass = variant === 'card' ? false : lightWallpaper;
   return (
     <IconTile className={lightGlass ? 'text-[#4b4b53]' : 'text-[#f8f8fb]'}>
       <span
@@ -151,30 +151,19 @@ function LiquidIcon({ children, variant = 'auto' }: { children: ReactNode; varia
  *  最终圆角完全由容器 rounded-[15px] 决定，十枚图标圆角绝对一致；
  *  附极淡描边 + 柔和投影——备忘录/照片/文件/提醒事项这类白底图标在白色
  *  壁纸/卡片上也有清晰边界（修之前线条图标在白纸上「隐身」的痛点）。
- *  彩色实体底不随壁纸翻转，任何背景下都醒目；
- *  深色主题下整体切换 public/icons-dark 专属深色变体（第六十六轮：gen-dark-icons.ts
- *  逐图标定制——浅底换深色瓷砖/字形原色保留/时钟刻度翻白/天气深夜蓝，对齐用户
- *  真机 iOS 深色观感；微信绿/音乐红等彩色品牌底两套同图）；废弃旧版整图
- *  invert+hue-rotate 滤镜（彩色发闷、白字被反成深色）；
- *  variant="card"：卡片底色场景（主题页预览等固定浅色卡底）保持原色不变 */
-const darkSrcOf = (src: string): string => src.replace('/icons/', '/icons-dark/');
+ *  彩色实体底不随壁纸/主题翻转，任何背景下都醒目（第六十七轮：用户要求真实图标
+ *  不用适配深色模式——旧版深色主题切 /icons-dark 专属变体已废弃，始终用原图）；
+ *  variant="card"：卡片底色场景（主题页预览等固定浅色卡底），同一张原图 */
 
-function RealIconTile({ src, variant = 'auto' }: { src: string; variant?: 'auto' | 'card' }) {
-  const themeMode = useSettings((s) => s.theme);
-  const systemDark = useSystemDark();
-  const dark = variant === 'auto' && selectResolvedTheme(themeMode, systemDark) === 'dark';
+function RealIconTile({ src }: { src: string; variant?: 'auto' | 'card' }) {
   return (
     <IconTile>
       <span
         aria-hidden="true"
-        className={`relative block h-full w-full overflow-hidden rounded-[15px] ${
-          dark
-            ? 'shadow-[0_3px_12px_rgba(0,0,0,0.5)] ring-1 ring-white/[0.14]'
-            : 'shadow-[0_2px_8px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.06]'
-        }`}
+        className="relative block h-full w-full overflow-hidden rounded-[15px] shadow-[0_2px_8px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.06]"
       >
         <Image
-          src={dark ? darkSrcOf(src) : src}
+          src={src}
           alt=""
           fill
           sizes="60px"
@@ -504,10 +493,11 @@ export function AppMiniIcon({ id, custom }: { id: AppId; custom?: string | null 
   const image = IMAGES[id];
   const dark = selectResolvedTheme(themeMode, systemDark) === 'dark';
   if (style === 'real' && image) {
-    // 文件夹迷你缩略图跟随深色模式：深色主题用 icons-dark 专属变体（与主屏 RealIconTile 同源）
-    return <img src={dark ? darkSrcOf(image) : image} alt="" draggable={false} className="block h-full w-full select-none object-cover" />;
+    // 真实图标不再适配深色模式（第六十七轮）：始终直铺原图，与主屏 RealIconTile 同源
+    return <img src={image} alt="" draggable={false} className="block h-full w-full select-none object-cover" />;
   }
-  const lightGlass = !dark && lightWallpaper;
+  // 迷你玻璃缩略图同样画在壁纸上：明暗跟壁纸走（第六十七轮，同 LineIcon/LiquidIcon 口径）
+  const lightGlass = lightWallpaper;
   const raw = GLYPHS[id];
   const glyph = isValidElement(raw)
     ? cloneElement(raw as ReactElement<{ className?: string; strokeWidth?: number }>, {

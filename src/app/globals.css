@@ -1,5 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* 淘宝/美团深色模式覆盖层（第六十七轮，scripts/gen-shop-dark-css.mjs 自动生成）：
+   仅在 .shop-dark 作用域（AppWindow 深色时挂给淘宝/美团）内生效 */
+@import "./shop-dark.css";
 
 @custom-variant dark (&:is(.dark *));
 

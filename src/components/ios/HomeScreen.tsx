@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import { Plus, Search, X } from 'lucide-react';
-import { useUI, useSettings, type AppId } from '@/lib/ios/store';
+import { useUI, useSettings, useSystemDark, selectResolvedTheme, type AppId } from '@/lib/ios/store';
 import { shellScale } from '@/lib/ios/shell-scale';
 import { useHomeWallpaperLight } from '@/lib/ios/foreground';
 import { localDB } from '@/lib/ios/db';
@@ -963,6 +963,9 @@ function FolderPanel({
   /** 面板本地编辑态：非编辑态长按面板任意处 420ms 进入（主屏编辑态也能带入，二者取或） */
   const [localEdit, setLocalEdit] = useState(false);
   const eEdit = edit || localEdit;
+  // 深色模式（第六十七轮：文件夹适配深色）——展开面板暗化加深
+  const themeMode = useSettings((s) => s.theme);
+  const dark = selectResolvedTheme(themeMode, useSystemDark()) === 'dark';
   const trackRef = useRef<HTMLDivElement | null>(null);
   const swipeP = useRef<{ x: number; y: number; claimed: boolean; dx: number } | null>(null);
   const pressT = useRef<number | null>(null);
@@ -1056,7 +1059,9 @@ function FolderPanel({
       aria-modal="true"
       aria-label={`文件夹${folder.name}`}
       data-testid="folder-panel"
-      className="folder-fade absolute inset-0 z-40 flex flex-col items-center bg-black/30 pb-[120px] pt-[96px] backdrop-blur-2xl"
+      className={`folder-fade absolute inset-0 z-40 flex flex-col items-center pb-[120px] pt-[96px] backdrop-blur-2xl ${
+        dark ? 'bg-black/55' : 'bg-black/30'
+      }`}
       onPointerDown={(e) => {
         // 面板分页滑动起手（阻断向主屏冒泡，避免误触主屏手势）；
         // 非编辑态长按面板任意处（除按钮/输入框）→ 进入面板本地编辑
@@ -1204,6 +1209,8 @@ export default function HomeScreen() {
   const activeApp = useUI((s) => s.activeApp);
   // 主屏壁纸整体亮度：浅色壁纸（如白图）时图标标签/页点自动改深色，保证可读
   const wallpaperLight = useHomeWallpaperLight();
+  // 深色模式（第六十七轮：文件夹 tile 适配深色——深色烟熏玻璃，与图标深色分支同源）
+  const dark = selectResolvedTheme(useSettings((s) => s.theme), useSystemDark()) === 'dark';
   // 主题页设置的自定义 App 图标（无则用默认 icon）
   const customIcons = useSettings((s) => s.customIcons);
   // 微信/QQ 会话未读总数（与 App 内未读总线实时同步 → 主屏图标红角标）
@@ -3012,9 +3019,9 @@ export default function HomeScreen() {
           style={edit ? { animationDelay: `${(i % 5) * -0.06}s` } : undefined}
         >
           <span
-            className={`relative block h-[60px] w-[60px] rounded-[13px] bg-white/[0.22] p-[5px] shadow-[0_1px_6px_rgba(0,0,0,0.14)] ring-1 ring-white/25 backdrop-blur-md transition-transform duration-200 ${
-              merging ? 'merge-target-pulse' : ''
-            }`}
+            className={`relative block h-[60px] w-[60px] rounded-[13px] p-[5px] shadow-[0_1px_6px_rgba(0,0,0,0.14)] ring-1 backdrop-blur-md transition-transform duration-200 ${
+              dark ? 'bg-black/[0.28] ring-white/[0.14]' : 'bg-white/[0.22] ring-white/25'
+            } ${merging ? 'merge-target-pulse' : ''}`}
           >
             {folderIconNode(apps6)}
             {appCount > 6 && (
