@@ -1,0 +1,618 @@
+'use client';
+
+/**
+ * 淘宝「找人代付 + 订单分享 + 快递」共享 UI（微信/QQ 聊天端与淘宝端共用）：
+ * - TbPayBubble：聊天里的代付卡片气泡（白卡 + 淘宝logo/交易保障 + 标题 + 橙色横幅 +
+ *   倒计时/「好友已代付 ¥x」+ 查看详情钮；req=代付请求卡 / done=代付完成卡；样式对齐美团代付卡，
+ *   品牌色换淘宝橙）；请求卡付款后由 kv 状态驱动变已代付灰化，与红包/转账卡同语义；
+ * - TbProxyDetailPage：点卡片进入的「代付详情」全屏页（对齐美团端结构）：
+ *   待付 = 请求人头像行 + 等待代付 + 付款须知 +（聊天端方向为好友代付时）等待按钮；
+ *   已付 = 代付人头像行 + 支付成功 + 金额 + 渠道 + 付款须知 + 完成 + 订单商品卡；
+ * - TbShareBubble：订单分享动态卡片（订单详情分享/快递面板发出）：淘宝 logo + 订单动态 +
+ *   店铺/金额 + 买的什么（商品行）+ 五段状态时间线（提交订单→付款成功→商家发货→运输中→已签收）；
+ *   状态不落快照：每次渲染按 uid+orderId 实时读订单推导，监听 tb-orders-changed 与逐秒 tick；
+ * - TbExpressPicker：微信/QQ 加号面板「快递」页——列出已确认收货（completed）的淘宝订单，
+ *   一键分享给当前聊天好友（票务单无快递不列）。
+ */
+import { useEffect, useState } from 'react';
+import { Check, ChevronLeft, ChevronRight, CircleCheck, CircleX, Clock as ClockIcon, Loader2, Package, ShieldCheck, Truck } from 'lucide-react';
+import { TbImg } from './tb-img';
+import {
+  TB_PROXY_CARD_EVENT,
+  TB_PROXY_TTL,
+  tbCompletedOrders,
+  tbGetProxy,
+  tbGetShare,
+  tbProxyChannelName,
+  tbShareOrderOf,
+  tbShareStagesOf,
+  type TbOrderShare,
+} from '@/lib/ios/tb-share-proxy';
+import type { TbOrder } from '@/lib/ios/taobao-store';
+
+const fmt2 = (n: number): string => {
+  const s = n.toFixed(2);
+  return s.endsWith('.00') ? String(Math.round(n)) : s;
+};
+
+const fmtHm = (ts: number): string => {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+function fmtFull(ts: number): string {
+  const d = new Date(ts);
+  const p = (v: number): string => String(v).padStart(2, '0');
+  return `${d.getFullYear()}年${p(d.getMonth() + 1)}月${p(d.getDate())}日 ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** 代付请求 30 分钟倒计时（口径同淘宝待付款 TTL） */
+function useProxyCountdown(createdAt: number): string {
+  const calc = (): number => Math.max(0, Math.floor((createdAt + TB_PROXY_TTL - Date.now()) / 1000));
+  const [left, setLeft] = useState(calc);
+  useEffect(() => {
+    const timer = window.setInterval(() => setLeft(calc()), 1000);
+    return () => window.clearInterval(timer);
+  }, [createdAt]);
+  return `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
+}
+
+// ---------------- 聊天气泡（微信/QQ 共用；样式对齐美团代付卡，品牌色淘宝橙） ----------------
+
+export function TbPayBubble({ pid, role, onClick }: { pid: string; role: 'req' | 'done'; onClick: () => void }) {
+  const p = tbGetProxy(pid);
+  const paid = p?.status === 'paid';
+  // 终态（婉拒/失效）→ 卡片褪灰 + 终态文案（同红包/转账领取后语义）
+  const declined = p?.status === 'declined';
+  const expired = p?.status === 'expired';
+  const closed = declined || expired;
+  // 颜色互换（与美团同款）：请求卡恒亮橙（引导好友付款）；完成卡/终态卡整体褪灰
+  const faded = role === 'done' || !!closed;
+  const reqDone = role === 'req' && paid;
+  const countdown = useProxyCountdown(p?.createdAt ?? Date.now());
+  const [bannerOk, setBannerOk] = useState(true);
+  const channel = p?.paidChannel ?? (p ? tbProxyChannelName(p.idp) : '');
+
+  return (
+    <button
+      type="button"
+      data-testid={`tb-pay-bubble-${role}`}
+      onClick={onClick}
+      className="relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 active:brightness-95"
+      style={{
+        // 完成卡（终态）整体褪色：橙横幅/按钮变灰，白底不脏
+        filter: faded ? 'grayscale(0.72) brightness(0.98)' : undefined,
+      }}
+      aria-label={`淘宝代付卡 ¥${fmt2(p?.amount ?? 0)}（${role === 'done' || reqDone ? '已代付' : declined ? '已婉拒' : expired ? '已失效' : '待代付'}）`}
+    >
+      {/* 箭头指向头像侧：请求卡=我发出（右）/ 完成卡=好友发来（左） */}
+      <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${role === 'done' ? '-left-[4px]' : '-right-[4px]'}`} />
+
+      {/* 头部：淘宝 logo + 交易保障 */}
+      <span className="relative flex items-center gap-1.5">
+        <img src="/icons/taobao.png" alt="" className="h-[22px] w-[22px] rounded-full object-cover" />
+        <span className="text-[13px] font-semibold text-black/85">淘宝</span>
+        <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#FF5000]">
+          <ShieldCheck className="h-[13px] w-[13px]" strokeWidth={2.2} />
+          交易保障
+        </span>
+      </span>
+
+      {/* 主标题（对齐美团代付卡文案；终态换对应描述） */}
+      <span className="relative mt-1.5 block truncate text-[15px] font-semibold leading-snug text-black/90">
+        {role === 'done' ? 'Hi~你的订单代付成功啦~' : declined ? '这次没能帮你代付呢~' : expired ? '这笔代付已经失效啦~' : 'Hi~快来帮我支付这笔订单吧~'}
+      </span>
+
+      {/* 橙色横幅 + 白色圆角金额面板：拼接为一个整体圆角块（橙上白下、无缝相连） */}
+      <span className="relative mt-2 block overflow-hidden rounded-[10px] ring-1 ring-black/[0.06]">
+        <span className="relative block h-[88px] overflow-hidden bg-gradient-to-r from-[#FF7A21] to-[#FF4400]">
+          {bannerOk && (
+            <img
+              src={role === 'done' ? '/mt/proxy-banner-done.png' : '/mt/proxy-banner.png'}
+              alt=""
+              onError={() => setBannerOk(false)}
+              className="absolute inset-0 h-full w-full object-cover opacity-90"
+            />
+          )}
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[15px] font-bold text-white drop-shadow-sm">
+            {role === 'done' ? '好友已代付啦~' : declined ? 'TA婉拒了这次代付~' : expired ? '代付已失效~' : '来帮我代付吧~'}
+          </span>
+          <Package className="absolute right-3 top-1/2 h-8 w-8 -translate-y-1/2 text-white/35" strokeWidth={1.6} aria-hidden="true" />
+        </span>
+        {/* 金额区（白色圆角面板，与上方橙色横幅拼接成一块） */}
+        <span className="relative block bg-white px-3 pb-3 pt-2 text-center">
+          {role === 'done' || reqDone ? (
+            <>
+              <span className="mt-0.5 block text-[21px] font-bold leading-tight tracking-tight text-black/90" data-testid={`tb-pay-bubble-${role}-status`}>
+                好友已代付 <span>¥{fmt2(p?.amount ?? 0)}</span>
+              </span>
+              <span className="mt-1 block truncate text-[11.5px] text-black/40">
+                {channel ? (role === 'done' ? `${channel} · 已到账` : channel) : '好友已代付'}
+              </span>
+            </>
+          ) : declined ? (
+            <>
+              <span className="block text-[19px] font-bold leading-tight tracking-tight text-black/70" data-testid={`tb-pay-bubble-${role}-status`}>
+                对方婉拒了
+              </span>
+              <span className="mt-1 block truncate text-[11.5px] text-black/40">可以再沟通，或自己支付这笔订单</span>
+            </>
+          ) : expired ? (
+            <>
+              <span className="block text-[19px] font-bold leading-tight tracking-tight text-black/70" data-testid={`tb-pay-bubble-${role}-status`}>
+                代付已失效
+              </span>
+              <span className="mt-1 block truncate text-[11.5px] text-black/40">{p?.closeReason || '订单未支付，请求已关闭'}</span>
+            </>
+          ) : (
+            <>
+              <span className="block text-[11.5px] text-black/40">剩余支付时间</span>
+              <span className="mt-0.5 block text-[32px] font-bold leading-tight tabular-nums tracking-tight text-black/90" data-testid={`tb-pay-bubble-${role}-status`}>
+                {countdown}
+              </span>
+            </>
+          )}
+          <span className="mt-2.5 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[14px] font-bold text-white">查看详情</span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+// ---------------- 代付详情页（点卡片进入；对齐美团端结构，品牌色淘宝橙） ----------------
+
+export function TbProxyDetailPage({
+  pid,
+  onBack,
+  onToast,
+}: {
+  pid: string;
+  onBack: () => void;
+  onToast: (m: string) => void;
+}) {
+  const [ver, setVer] = useState(0);
+  const p = tbGetProxy(pid);
+
+  // 代付状态被别处更新（订单侧/AI 决策/另一端）→ 重读渲染
+  useEffect(() => {
+    const onCard = () => setVer((v) => v + 1);
+    window.addEventListener(TB_PROXY_CARD_EVENT, onCard);
+    window.addEventListener('tb-orders-changed', onCard);
+    return () => {
+      window.removeEventListener(TB_PROXY_CARD_EVENT, onCard);
+      window.removeEventListener('tb-orders-changed', onCard);
+    };
+  }, []);
+  void ver;
+
+  if (!p) {
+    return (
+      <div className="absolute inset-0 z-50 flex flex-col bg-[#F4F5F9]">
+        <div className="flex shrink-0 items-center bg-[#F4F5F9] px-2 pb-2 pt-[54px]">
+          <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+            <ChevronLeft className="h-6 w-6 text-black/75" />
+          </button>
+          <p className="min-w-0 flex-1 text-center pr-9 text-[17px] font-semibold text-black/90">代付详情</p>
+        </div>
+        <div className="grid flex-1 place-items-center">
+          <p className="text-[13px] text-black/40">代付请求不存在或已过期</p>
+        </div>
+      </div>
+    );
+  }
+
+  const paid = p.status === 'paid';
+  const declined = p.status === 'declined';
+  const expired = p.status === 'expired';
+  const closed = declined || expired;
+  const channel = p.paidChannel ?? tbProxyChannelName(p.idp);
+  const platform = p.idp === 'wx' ? '微信' : 'QQ';
+
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col bg-[#F4F5F9]" data-testid="tb-proxy-detail">
+      {/* 顶栏（背景与页身同色） */}
+      <div className="shrink-0 bg-[#F4F5F9] pt-[54px]">
+        <div className="relative grid h-[48px] place-items-center">
+          <button type="button" aria-label="返回" data-testid="tb-proxy-detail-back" onClick={onBack} className="absolute left-1 grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
+            <ChevronLeft className="h-[24px] w-[24px] text-black/85" strokeWidth={2.2} />
+          </button>
+          <p className="text-[17px] font-semibold text-black/90">代付详情</p>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-6 pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {/* 人物行：已付 = 代付人；待付 = 请求人 */}
+        <div className="flex items-center gap-3 px-1 pb-3.5">
+          {paid ? (
+            <>
+              <AvatarImg src={p.contactAvatar} name={p.contactName} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[17px] font-semibold text-black/90" data-testid="tb-proxy-payer-name">{p.contactName}</p>
+                <p className="mt-0.5 truncate text-[13px] text-black/45">我们友谊的小船更加稳固了～</p>
+              </div>
+            </>
+          ) : (
+            <>
+              <AvatarImg src={p.fromAvatar} name={p.fromName} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[17px] font-semibold text-black/90">{p.fromName}</p>
+                <p className="mt-0.5 truncate text-[13px] text-black/45">
+                  {declined ? 'TA看了订单，婉拒了这次代付' : expired ? `请求已失效（${p.closeReason ?? '订单未支付'}）` : '拍下了订单，快来帮我付一下吧～'}
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* 状态卡 */}
+        <div className="rounded-2xl bg-white p-5">
+          <div className="flex flex-col items-center">
+            <span className="flex items-center gap-2 text-[20px] font-bold text-black/90" data-testid="tb-proxy-state">
+              {paid ? (
+                <>
+                  <span className="grid h-7 w-7 place-items-center rounded-full bg-[#FF5000]">
+                    <CircleCheck className="h-[18px] w-[18px] text-white" strokeWidth={2.4} />
+                  </span>
+                  支付成功
+                </>
+              ) : declined ? (
+                <>
+                  <span className="grid h-7 w-7 place-items-center rounded-full bg-black/25">
+                    <CircleX className="h-[17px] w-[17px] text-white" strokeWidth={2.2} />
+                  </span>
+                  对方已婉拒
+                </>
+              ) : expired ? (
+                <>
+                  <span className="grid h-7 w-7 place-items-center rounded-full bg-black/25">
+                    <CircleX className="h-[17px] w-[17px] text-white" strokeWidth={2.2} />
+                  </span>
+                  代付已失效
+                </>
+              ) : (
+                <>
+                  <span className="grid h-7 w-7 place-items-center rounded-full bg-[#FF5000]">
+                    <ClockIcon className="h-[17px] w-[17px] text-white" strokeWidth={2.2} />
+                  </span>
+                  等待代付
+                </>
+              )}
+            </span>
+            <p className="mt-2.5 text-[42px] font-bold leading-tight tracking-tight text-black/90" data-testid="tb-proxy-amount">
+              <span className="text-[26px]">¥</span>
+              {fmt2(p.amount)}
+            </p>
+            <p className="mt-1 text-[13px] text-black/45" data-testid="tb-proxy-channel">
+              {paid
+                ? channel
+                : declined
+                  ? `对方不想代付（${platform}好友）`
+                  : expired
+                    ? p.closeReason ?? '订单未支付，请求已关闭'
+                    : `等待${p.contactName}代付（${platform}好友）`}
+            </p>
+            {paid && p.paidAt && <p className="mt-0.5 text-[11px] text-black/30">支付时间 {fmtFull(p.paidAt)}</p>}
+          </div>
+
+          {/* 付款须知 */}
+          <div className="mt-4 rounded-xl bg-[#FFF1E6] px-4 py-3">
+            <p className="text-[13px] font-semibold text-[#B35400]">付款须知</p>
+            <p className="mt-1.5 text-[12px] leading-relaxed text-[#C97A3D]">
+              1.代付订单创建成功后30分钟内未付款，订单会自动取消，你可以重新下单。
+            </p>
+            <p className="mt-1 text-[12px] leading-relaxed text-[#C97A3D]">
+              2.当代付订单退款成功后，实付金额将原路退还代付人。
+            </p>
+          </div>
+
+          {/* 主按钮：待付 = 等待好友代付（AI 按人设/记忆自主决策）；终态 = 返回 */}
+          {paid ? (
+            <button
+              type="button"
+              onClick={onBack}
+              data-testid="tb-proxy-done-btn"
+              className="mt-4 h-[46px] w-full rounded-full bg-[#FFE2D2] text-[16px] font-semibold text-[#FF5000] active:opacity-85"
+            >
+              完成
+            </button>
+          ) : closed ? (
+            <button
+              type="button"
+              onClick={onBack}
+              data-testid="tb-proxy-closed-btn"
+              className="mt-4 h-[46px] w-full rounded-full bg-[#FFE2D2] text-[16px] font-semibold text-[#FF5000] active:opacity-85"
+            >
+              {declined ? '知道了' : '好的'}
+            </button>
+          ) : (
+            <div>
+              <button
+                type="button"
+                disabled
+                data-testid="tb-proxy-wait-btn"
+                className="mt-4 flex h-[46px] w-full cursor-not-allowed items-center justify-center gap-2 rounded-full bg-[#F5F6F7] text-[15px] text-black/45"
+              >
+                <Loader2 className="h-4 w-4 animate-spin text-black/35" />
+                等待{p.contactName}代付…
+              </button>
+              <p className="mt-2 text-center text-[11px] leading-relaxed text-black/35">
+                TA会根据自己的意愿决定是否代付，可以去聊天里提醒TA
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* 订单商品卡 */}
+        <div className="mt-3 rounded-2xl bg-white p-4">
+          <p className="truncate text-[15px] font-bold text-black/90" data-testid="tb-proxy-shop">{p.shopName}</p>
+          <div className="mt-3 space-y-3">
+            {p.items.map((it, i) => (
+              <div key={i} className="flex items-center gap-3">
+                <TbImg src={it.img} alt={it.name} cap={it.name} className="h-12 w-12 shrink-0 rounded-lg" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[14px] text-black/85">{it.name}</p>
+                  <p className="mt-0.5 text-[11.5px] text-black/40">×{it.qty}</p>
+                </div>
+                <span className="shrink-0 text-[14px] font-semibold text-black/85">¥{fmt2(it.price * it.qty)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <p className="mt-3 px-2 text-center text-[10.5px] leading-relaxed text-black/30">
+          代付金额与订单一致 · 资金由微信支付/QQ钱包保障
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function AvatarImg({ src, name }: { src: string | null; name: string }) {
+  if (src) return <img src={src} alt={name} className="h-11 w-11 shrink-0 rounded-full object-cover" />;
+  return (
+    <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#FFE2D2] text-[15px] font-bold text-[#FF5000]">
+      {name.slice(0, 1)}
+    </span>
+  );
+}
+
+// ---------------- 订单分享动态卡（微信/QQ 共用；状态时间线实时跟订单走） ----------------
+
+export function TbShareBubble({ sid, side = 'right' }: { sid: string; side?: 'left' | 'right' }) {
+  const share: TbOrderShare | null = tbGetShare(sid);
+  // 动态刷新：逐秒 tick + 订单状态变化事件 → 重读订单推导时间线
+  const [, setVer] = useState(0);
+  useEffect(() => {
+    const iv = window.setInterval(() => setVer((v) => v + 1), 1000);
+    const onChanged = () => setVer((v) => v + 1);
+    window.addEventListener('tb-orders-changed', onChanged);
+    return () => {
+      window.clearInterval(iv);
+      window.removeEventListener('tb-orders-changed', onChanged);
+    };
+  }, []);
+
+  if (!share) {
+    return (
+      <div className="relative w-[252px] rounded-[14px] bg-white p-3 shadow-[0_5px_16px_rgba(0,0,0,0.10)]">
+        <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${side === 'left' ? '-left-[4px]' : '-right-[4px]'}`} />
+        <p className="text-[12px] text-black/35">订单分享已失效</p>
+      </div>
+    );
+  }
+
+  const order = tbShareOrderOf(share);
+  const cancelled = order?.status === 'cancelled';
+  const awaitingPay = !!order && order.status === 'pendingPay';
+
+  /** 点击卡片 → 唤起淘宝 App 打开对应订单详情（灵动岛导航总线；订单已不存在时不跳） */
+  const openOrderDetail = () => {
+    if (!order) return;
+    void import('@/lib/ios/island-notify')
+      .then((m) => m.navigateToChatSession('taobao', order.id))
+      .catch(() => undefined);
+  };
+
+  return (
+    <div
+      data-testid="tb-share-bubble"
+      role={order ? 'button' : undefined}
+      aria-label={`淘宝订单分享 ¥${fmt2(share.amount)}，点击查看订单详情`}
+      onClick={openOrderDetail}
+      className={`relative block w-[252px] rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] ${order ? 'cursor-pointer transition-transform duration-150 active:scale-[0.97]' : ''}`}
+    >
+      {/* 箭头指向头像侧（我发出 → 右；AI 角色发来 → 左） */}
+      <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${side === 'left' ? '-left-[4px]' : '-right-[4px]'}`} />
+
+      {/* 头部：淘宝 logo + 订单动态 */}
+      <span className="relative flex items-center gap-1.5">
+        <img src="/icons/taobao.png" alt="" className="h-[22px] w-[22px] rounded-md object-cover" />
+        <span className="text-[13px] font-semibold text-black/85">淘宝</span>
+        <span className="rounded-full bg-[#FFECE2] px-1.5 py-[2px] text-[10px] font-medium leading-none text-[#FF5000]">订单动态</span>
+        <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#FF5000]">
+          <ShieldCheck className="h-[13px] w-[13px]" strokeWidth={2.2} />
+          官方保障
+        </span>
+      </span>
+
+      {/* 店铺 + 金额 */}
+      <span className="relative mt-1.5 flex items-baseline gap-1.5">
+        <span className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-snug text-black/90">{share.shopName}</span>
+        <span className="shrink-0 text-[16px] font-bold text-black/90">
+          <span className="text-[11px]">¥</span>
+          {fmt2(share.amount)}
+        </span>
+      </span>
+
+      {/* 买的什么（商品行，最多 2 行 + 汇总） */}
+      <span className="relative mt-1.5 flex items-center gap-2 rounded-[10px] bg-[#F8F8F8] px-2 py-2">
+        <TbImg src={share.items[0]?.img} alt={share.items[0]?.name ?? ''} cap={share.items[0]?.name} className="h-9 w-9 shrink-0 rounded-md" />
+        <span className="min-w-0 flex-1">
+          {share.items.slice(0, 2).map((it, i) => (
+            <span key={i} className="block truncate text-[12px] leading-[1.5] text-black/75">
+              {it.name}
+              <span className="text-black/35"> ×{it.qty}</span>
+            </span>
+          ))}
+          {share.items.length > 2 && <span className="block text-[10.5px] text-black/35">等 {share.itemCount} 件商品</span>}
+        </span>
+      </span>
+
+      {/* 动态时间线（共享渲染件） */}
+      <span className="relative mt-2.5 block">
+        <TbShareTimeline order={order} />
+      </span>
+
+      {/* 底注：来源 + 查看详情提示（整卡可点） */}
+      <span className="relative mt-2 flex items-center justify-between border-t border-black/[0.05] pt-1.5 text-[10px] text-black/30">
+        <span>{awaitingPay ? '待支付 · 点去淘宝付款' : '淘宝订单'}</span>
+        {order && !cancelled && (
+          <span className="flex items-center gap-0.5 font-medium text-[#FF5000]">
+            查看详情
+            <ChevronRight className="h-3 w-3" strokeWidth={2.4} />
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/** 五段动态时间线（共享渲染件）：提交订单→付款成功→商家发货→运输中（最新物流摘要）→已签收 */
+export function TbShareTimeline({ order }: { order: TbOrder | null }) {
+  const stages = tbShareStagesOf(order);
+  const reachedCnt = stages.filter((s) => s.at).length;
+  const cancelled = order?.status === 'cancelled';
+  return (
+    <span className="block">
+      {stages.map((st, i) => {
+        const done = !!st.at;
+        const current = done && i === reachedCnt - 1 && !cancelled;
+        const last = i === stages.length - 1;
+        return (
+          <span key={st.key} className="relative flex gap-2" data-testid={`tb-stage-${st.key}`}>
+            {/* 节点列 */}
+            <span className="flex w-4 shrink-0 flex-col items-center">
+              {current ? (
+                <span className="mt-[3px] grid h-[13px] w-[13px] shrink-0 place-items-center rounded-full bg-[#FF5000]">
+                  {st.key === 'received' ? (
+                    <Check className="h-[9px] w-[9px] text-white" strokeWidth={3.4} />
+                  ) : st.key === 'transit' ? (
+                    <Truck className="h-[9px] w-[9px] text-white" strokeWidth={2.8} />
+                  ) : st.key === 'shipped' ? (
+                    <Package className="h-[9px] w-[9px] text-white" strokeWidth={2.8} />
+                  ) : (
+                    <ClockIcon className="h-[9px] w-[9px] text-white" strokeWidth={2.8} />
+                  )}
+                </span>
+              ) : (
+                <span className={`mt-[5px] h-2 w-2 shrink-0 rounded-full ${done ? 'bg-[#FF5000]' : 'bg-black/12'}`} />
+              )}
+              {!last && <span className={`w-px flex-1 ${done ? 'bg-[#FF5000]/70' : 'bg-black/[0.08]'}`} />}
+            </span>
+            {/* 文案列 */}
+            <span className={`min-w-0 flex-1 ${last ? '' : 'pb-2'}`}>
+              <span className="flex items-baseline gap-1.5">
+                <span className={`text-[12px] leading-[1.45] ${current ? 'font-semibold text-black/85' : done ? 'text-black/60' : 'text-black/30'}`}>{st.label}</span>
+                {done && st.at && <span className="shrink-0 text-[10px] leading-[1.45] text-black/30">{fmtHm(st.at)}</span>}
+                {current && <span className="shrink-0 rounded-full bg-[#FFECE2] px-1.5 text-[9.5px] font-medium leading-[1.7] text-[#FF5000]">进行中</span>}
+              </span>
+              {st.key === 'transit' && st.trackText && (done || current) && (
+                <span className="mt-0.5 block text-[10.5px] leading-[1.4] text-black/45">{st.trackText}</span>
+              )}
+            </span>
+          </span>
+        );
+      })}
+      {cancelled && (
+        <span className="mt-1 flex items-center gap-1.5 text-[11px] text-black/40">
+          <CircleCheck className="h-3.5 w-3.5 text-black/25" strokeWidth={2} />
+          该订单已取消
+        </span>
+      )}
+    </span>
+  );
+}
+
+// ---------------- 快递页（微信/QQ 加号面板「快递」：已确认收货订单 → 分享给当前聊天好友） ----------------
+
+export function TbExpressPicker({
+  onBack,
+  onShare,
+}: {
+  onBack: () => void;
+  /** 分享该订单给当前聊天好友（父组件负责调 tbCreateOrderShare + toast + 关页） */
+  onShare: (order: TbOrder) => void;
+}) {
+  const [ver, setVer] = useState(0);
+  useEffect(() => {
+    const onChanged = () => setVer((v) => v + 1);
+    window.addEventListener('tb-orders-changed', onChanged);
+    return () => window.removeEventListener('tb-orders-changed', onChanged);
+  }, []);
+  void ver;
+
+  const orders = tbCompletedOrders();
+
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col bg-[#F4F5F9]" data-testid="tb-express-picker">
+      {/* 顶栏 */}
+      <div className="shrink-0 bg-[#F4F5F9] pt-[54px]">
+        <div className="relative grid h-[48px] place-items-center">
+          <button type="button" aria-label="返回" data-testid="tb-express-back" onClick={onBack} className="absolute left-1 grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
+            <ChevronLeft className="h-[24px] w-[24px] text-black/85" strokeWidth={2.2} />
+          </button>
+          <p className="text-[17px] font-semibold text-black/90">快递</p>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-6 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {orders.length === 0 ? (
+          <div className="grid h-full place-items-center">
+            <div className="flex flex-col items-center gap-2 px-8 text-center">
+              <span className="grid h-14 w-14 place-items-center rounded-full bg-black/[0.05]">
+                <Package className="h-7 w-7 text-black/30" strokeWidth={1.8} />
+              </span>
+              <p className="text-[14px] font-medium text-black/60">暂无已确认收货的快递</p>
+              <p className="text-[11.5px] leading-relaxed text-black/35">去淘宝确认收货后，包裹就会出现在这里，可以分享给好友</p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            <p className="px-1 pb-1 pt-1 text-[11.5px] text-black/35">已确认收货的淘宝订单 · 点「分享」发给好友</p>
+            {orders.map((o) => {
+              const first = o.items[0];
+              return (
+                <div key={o.id} className="rounded-2xl bg-white p-3">
+                  <div className="flex items-center gap-1.5">
+                    <img src="/icons/taobao.png" alt="" className="h-[18px] w-[18px] rounded object-cover" />
+                    <span className="min-w-0 truncate text-[13.5px] font-semibold text-black/85">{o.shopName}</span>
+                    <span className="ml-auto shrink-0 text-[10.5px] text-black/35">{fmtFull(o.completedAt ?? o.createdAt).slice(5, 16)}</span>
+                  </div>
+                  <div className="mt-2.5 flex items-center gap-2.5">
+                    <TbImg src={first?.img} alt={first?.title ?? ''} cap={first?.title} className="h-[52px] w-[52px] shrink-0 rounded-lg" />
+                    <div className="min-w-0 flex-1">
+                      <p className="line-clamp-1 text-[13px] leading-[18px] text-black/80">{first?.title ?? '商品'}</p>
+                      <p className="mt-0.5 text-[11px] text-black/40">{o.items.length > 1 ? `等 ${o.items.reduce((n, i) => n + i.qty, 0)} 件商品` : `共 ${first?.qty ?? 1} 件`}</p>
+                      <p className="mt-1 text-[14px] font-bold text-black/85">
+                        <span className="text-[10px]">¥</span>
+                        {fmt2(o.total)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid={`tb-express-share-${o.id}`}
+                      onClick={() => onShare(o)}
+                      className="shrink-0 rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-4 py-1.5 text-[12.5px] font-semibold text-white active:opacity-85"
+                    >
+                      分享
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -18244,3 +18244,27 @@ Work Log:
 Stage Summary:
 - 交付：①淘宝首页/我的淘宝上拉刷新提示提到 53px TabBar 之上（upOffset 机制）；②送达速度系统——快 30分钟-1小时/正常 1-3小时/慢 3-6小时全真实时钟状态机（在途单切速即跟随、节点时间戳锚定不漂移），历史生成单小时级真实散布；③我的消费明细卡右侧 快/正常/慢 选择器（持久化+toast+ETA 全联动）；④淘宝 tab 安全区适配+html.dark 根同步；⑤美团白隙根因（浅色粗分隔边框 white/10→#141416）+tab 图标内联色改类翻白
 - 改动文件：src/lib/ios/taobao-store.ts、src/components/apps/tb-pull-refresh.tsx、src/components/apps/taobao.tsx、src/components/apps/taobao-channels.tsx（无净变化，sed 已还原）、src/components/apps/meituan.tsx、scripts/gen-shop-dark-css.mjs、src/app/shop-dark.css（再生成）、src/components/ios/PhoneShell.tsx
+
+---
+Task ID: 67
+Agent: main (Z.ai Code)
+Task: 淘宝支付界面「找人代付」（选微信/QQ → AI 代付 → 请求卡变已代付 + 完成卡，样式对齐美团代付卡）+ 交易成功左下角「更多」/已发货右上角「三个点」分享订单给 AI + 微信/QQ 加号面板新增「快递」（已确认收货订单一键分享）
+
+Work Log:
+- 【数据层 src/lib/ios/tb-share-proxy.ts（新增）】对齐美团 mt-proxy-pay/mt-order-share 全套机制：①代付 TbProxyPay（kv tb-proxy:<id> + tb-proxy-index，状态 pending/paid/declined/expired，TTL=淘宝待付款 30min）+ tbCreateProxyRequest（校验好友/平台/防重复 → 订单挂 proxy 快照 → 请求卡 kind='tbpay' role='req' 进 wx/qq 聊天 → 调度 tb-proxy-ai）+ tbProxyPayOrder（tbMarkPaid 落账 payChannelLabel=「好友代付·微信支付（晴儿）」，渠道文案带付款人名供 B4 判定；完成卡 role='done' 回聊天 + 灵动岛通知；deferCard 供 AI 投递管线）+ tbDeclineProxy + tbSyncProxiesForUid（B4：直付/取消/超时 → pending 请求 expired，paid 幂等落定）+ findPendingProxyOfOrder/tbPendingProxiesOfChat；②分享 TbOrderShare（kv tb-share:<id>）+ tbCreateOrderShare（快照 + kind='tbshare' 动态卡）+ tbShareStagesOf（五段时间线：提交订单→付款成功→商家发货→运输中(最新物流摘要)→已签收，全实时读订单推导）+ tbCompletedOrders（快递面板：当前 tb 会话 completed 且非票务单按完成时间倒序）；③AI 历史行 tbProxyHistoryLine/tbShareHistoryLine + stripTbEchoText（防模型照抄卡片序列化行）
+- 【AI 代付决策 src/lib/ios/tb-proxy-ai.ts（新增）】scheduleTbProxyAiDecision：延时 5.2-12s → 人设+记忆+时间感知拼 system → LLM 输出 {"pay":bool,"reply":...}（/api/chat 用户配置模型优先，空回退 forceSdk）→ pay=true 走 tbProxyPayOrder(deferCard) + 记忆沉淀（tb-proxy-pay）；婉拒走 tbDeclineProxy + 记忆（tb-proxy-decline）→ 完成卡/回复经 scheduleAiDelivery 投递（落库+灵动岛+未读角标，与主动消息同管线）
+- 【共享卡片 UI src/components/apps/tb-share-cards.tsx（新增）】①TbPayBubble：白卡+淘宝logo+交易保障+「Hi~快来帮我支付这笔订单吧~」+橙横幅(复用 /mt/proxy-banner 图)+倒计时/好友已代付¥x/婉拒/失效四态+查看详情橙钮——请求卡恒亮橙、完成卡/终态卡 grayscale 褪灰（与美团代付卡同款样式，品牌色淘宝橙）；②TbProxyDetailPage：代付人/请求人头像行+支付成功¥x+渠道+支付时间+付款须知+等待好友代付(禁用+TA会自主决策提示)+订单商品卡（TbImg 带 cap 名字条），监听 TB_PROXY_CARD_EVENT/tb-orders-changed 实时跟随；③TbShareBubble：淘宝logo+订单动态/官方保障+店铺+金额+商品行(最多2行+等N件)+五段动态时间线（当前节点橙色进行中徽标+运输中附最新物流摘要）+整卡点击 navigateToChatSession('taobao', orderId) 跳订单详情；④TbExpressPicker：全屏快递页=顶栏+已确认收货订单列表（店铺+完成时间+首件图/名/件数/金额+橙色分享钮）+空状态引导
+- 【淘宝端 taobao.tsx】①PaySheet 新增「找人代付」区（橙渐变图标+已请X代付徽标+说明行）+ TbContactPickSheet 弹层（选微信/QQ好友→选人→发送代付请求；好友列表按平台 isFriendIn 过滤；loaded-key 派生列表避免 effect 同步 setState 告警）+ sendProxy（成功后 onProxySent 跳待付款详情，结算页同步清购物车）；②OrderDetailPage：已发货 TopBar 右上「⋯」改为打开发分享弹层（其他状态保留复制订单号）+ 交易成功底部栏左下角「更多」打开发分享弹层（原演示 toast 移除）；③TbShareOrderSheet（复用 TbContactPickSheet：分享订单→选平台→选人→tbCreateOrderShare→toast 已分享给X）；④根组件消费 takeNotifyNavigation('taobao')（启动+ISLAND_NAV_EVENT 两路）→ 跳订单详情
+- 【taobao-store.ts】TbOrder 新增 proxy?:{id,name} 快照字段；tbMarkPaid/tbCancelOrder 内动态 import tbSyncProxiesForUid 做 B4 失效联动（防循环依赖）
+- 【微信端 wechat.tsx】WxMsg kind 增 'tbpay'/'tbshare' + 字段；消息渲染两分支（点卡开 TbProxyDetailPage/动态分享卡）；AI 历史序列化接 tbProxyHistoryLine/tbShareHistoryLine；PlusAction 增 'express' + PlusPanel「快递」宫格 + compose='express' 渲染 TbExpressPicker（分享到当前聊天 peer，fromName=me.name）
+- 【QQ 端 qq.tsx】QQMsg kind/字段/渲染分支/历史行同微信；ChatLayer 增 {view:'express'} 与 {view:'tbpay-detail',pid}；plusItems 增「快递」（橙色 Package 图标）
+- 【island-notify】NotifyApp 增 'taobao'（NOTIFY_APP_ICON=taobao.png；IslandNotification APP_NAME 补「淘宝」）——代付完成通知/分享卡点击都跳淘宝订单详情
+- 【shop-dark.css 再生成】生成器扫 44 文件（319 条翻转规则/29 个黑字保护表面），新代付/分享/快递 UI 的 bg-white/text-black/N/橙渐变全部纳入深色覆盖
+- 顺手修复：taobao.tsx:7105 附近 sed 残留语法损坏（ovieTab→[movieTab] 实为工具显示误报，实文件无损；确认无残留）
+- E2E（agent-browser 实机全链路，mock /api/chat 返回 {"pay":true,...}）：①淘宝收银台出现「找人代付」→ 弹层选微信好友→选晴儿→发送 → 跳待付款详情；②wx-chat-msgs:char-e2e 收到 tbpay req 卡 + AI 延时决策 → tbMarkPaid（订单 pendingDeliver，渠道「好友代付·微信支付（晴儿）」）+ tbpay done 卡 + AI 文字回复「好呀，帮你付啦～」三连落库 ✓；③微信聊天渲染：请求卡（已代付态）+ 完成卡（褪灰）+ 迪奥订单 tbshare 动态卡（时间线到「运输中·进行中」）全部正常；④已发货详情右上「⋯」→ 分享订单弹层 → 晴儿 → tbshare 卡落库 ✓；⑤交易成功详情左下「更多」→ 分享 → QQ好友 晴儿 → qq-chat-msgs 落 tbshare 卡 ✓；⑥分享卡点击 → 淘宝打开对应已发货详情（跨 App 导航）✓；⑦微信/QQ 加号面板「快递」→ 已确认收货订单列表（乐高等）→ 分享 → 双端 toast+卡片落库 ✓；⑧tbpay 卡点开代付详情=支付成功态（晴儿/¥128/微信支付/付款须知/订单商品卡）✓；⑨QQ 聊天 tbshare 卡渲染五段时间线 ✓
+- 收尾：bunx tsc --noEmit 0 错误；eslint 新增/改动文件 0 新告警（taobao.tsx 恢复基线 25 条既有告警；新增 setFriends 同步 setState 告警已用 loaded-key 派生消除）；dev.log 无编译/运行错误；测试数据与 mock 路由已清理
+
+Stage Summary:
+- 交付：①淘宝收银台「找人代付」全链路（选微信/QQ→选联系人→AI 按人设/记忆自主代付或婉拒→请求卡实时变已代付+完成卡回聊天，完成卡/请求卡样式与美团代付卡同款、品牌色淘宝橙）；②交易成功左下「更多」/已发货右上「三个点」→ 分享订单给微信/QQ AI 好友（tbshare 动态卡：五段物流时间线实时跟单+点击跳淘宝详情）；③微信/QQ 加号面板「快递」→ 已确认收货订单一键分享当前聊天；④B4 失效联动（直付/取消/超时→请求失效，代付幂等落定）+ AI 记忆沉淀 + 灵动岛通知
+- 改动文件：src/lib/ios/tb-share-proxy.ts(+新增)、src/lib/ios/tb-proxy-ai.ts(+新增)、src/components/apps/tb-share-cards.tsx(+新增)、src/lib/ios/taobao-store.ts、src/lib/ios/island-notify.ts、src/components/ios/IslandNotification.tsx、src/components/apps/taobao.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/app/shop-dark.css（再生成）
+- 关键决策：①完成卡样式直接对齐美团代付卡（同横幅图/同文案/同灰化语义），仅品牌色换淘宝橙、logo 换 taobao.png（用户点名「和美团的卡片样式一样」）；②分享/快递卡复用美团「快照+实时时间线」架构——卡片不落状态快照，订单推进自动跟随；③快递面板直接发当前聊天 peer（加号面板语义即「发给这个人」，无需二次选人），淘宝详情两入口则走选平台→选联系人；④NotifyApp 扩 'taobao' 使分享卡点击/代付通知统一走灵动岛导航总线进订单详情

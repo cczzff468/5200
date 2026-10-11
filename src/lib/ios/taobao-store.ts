@@ -522,6 +522,8 @@ export interface TbOrder {
   review?: { rating: number; content: string; tags: string[]; at: number };
   /** 票务信息（有值 = 票务订单：无物流、无地址，卡/详情走票务渲染） */
   ticket?: TbTicketInfo;
+  /** 找人代付（待支付时发起）：id = 代付请求（tb-proxy:<id>），name = 代付好友 */
+  proxy?: { id: string; name: string };
 }
 
 const orderKey = (uid: string) => `tb-orders:${uid}`;
@@ -802,6 +804,10 @@ export function tbCancelOrder(uid: string, id: string, reason: string): boolean 
   hit.status = 'cancelled';
   hit.cancelReason = reason;
   tbSaveOrders(uid, list);
+  // B4：订单取消 → 挂着的 pending 代付请求同步失效（动态 import 防与 tb-share-proxy 循环依赖）
+  void import('./tb-share-proxy')
+    .then((m) => m.tbSyncProxiesForUid(uid))
+    .catch(() => undefined);
   return true;
 }
 
@@ -853,6 +859,10 @@ export function tbMarkPaid(
   hit.payFc = pay.payFc;
   hit.payFcParts = pay.payFcParts;
   tbSaveOrders(uid, list);
+  // B4：机主直接付掉 → 该单挂着的 pending 代付请求同步失效（动态 import 防循环依赖）
+  void import('./tb-share-proxy')
+    .then((m) => m.tbSyncProxiesForUid(uid))
+    .catch(() => undefined);
   return true;
 }
 

@@ -34,11 +34,11 @@ import { playNotifySound } from './notify-sound';
 
 // ---------------- 类型 ----------------
 
-/** 通知归属 App（AppId 的聊天/生活服务子集；meituan = 订单状态通知） */
-export type NotifyApp = 'wechat' | 'qq' | 'chat' | 'meituan';
+/** 通知归属 App（AppId 的聊天/生活服务子集；meituan = 订单状态通知，taobao = 淘宝订单状态通知） */
+export type NotifyApp = 'wechat' | 'qq' | 'chat' | 'meituan' | 'taobao';
 
 /** 点击跳转目标：单聊给 contactId，群聊给 groupId（群聊宿主在 wechat/qq App 内）；
- *  meituan 订单目标可带 pay=true（目标订单待支付时直达美团收银台，否则进订单详情） */
+ *  meituan/taobao 订单目标 contactId = 订单 id（目标订单待支付时可带 pay=true 直达收银台，否则进订单详情） */
 export interface NotifyTarget {
   app: NotifyApp;
   contactId?: string;
@@ -255,6 +255,7 @@ export const NOTIFY_APP_ICON: Record<NotifyApp, string> = {
   qq: '/icons/qq.png',
   chat: '/icons/chat.png',
   meituan: '/icons/meituan-app.png',
+  taobao: '/icons/taobao.png',
 };
 
 let webPermAsked = false;

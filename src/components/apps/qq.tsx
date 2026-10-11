@@ -104,6 +104,7 @@ import {
   PiggyBank,
   Pin,
   PinOff,
+  Package,
   Plus,
   FolderOutput,
   Hash,
@@ -157,6 +158,8 @@ import { applyMtEngageAction, buildMtEngageCtx, isMtEngageActionKind, mtDraftHis
 import { MtDraftBubble } from './mt-draft-card';
 import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
 import { MtShareBubble } from './mt-share-card';
+import { TbPayBubble, TbProxyDetailPage, TbShareBubble, TbExpressPicker } from './tb-share-cards';
+import { tbCreateOrderShare, tbProxyHistoryLine, tbShareHistoryLine } from '@/lib/ios/tb-share-proxy';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat-media-rules';
@@ -387,8 +390,8 @@ interface QQMsg {
   content: string;
   time: number;
   /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
-   *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；textcard = 文字图片卡片（card 有值，无生图依赖）；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片 */
-  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft';
+   *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；textcard = 文字图片卡片（card 有值，无生图依赖）；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片；tbpay = 淘宝代付卡片（请求/完成）；tbshare = 淘宝订单分享动态卡片 */
+  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare';
   /** 歌曲卡片（kind='song'，Task 68 音乐 × AI）：结构同微信端 */
   song?: { name: string; artist: string; cover?: string; songId?: number; note?: string; autoPlay?: boolean; inviteDone?: boolean; agree?: boolean };
   /** 语音消息数据（kind='voice'；音频 dataURL + 时长 + 波形 + 转写，与微信端共用 VoiceMsgData 结构） */
@@ -435,6 +438,10 @@ interface QQMsg {
   mtpay?: { pid: string; role: 'req' | 'done' };
   /** 美团订单分享动态卡片（kind='mtshare'）：sid = 分享快照（mt-share:<sid>），状态时间线实时跟订单走 */
   mtshare?: { sid: string };
+  /** 淘宝找人代付卡片（kind='tbpay'）：pid = 代付请求（tb-proxy:<pid>），role req=请求卡/done=完成卡 */
+  tbpay?: { pid: string; role: 'req' | 'done' };
+  /** 淘宝订单分享动态卡片（kind='tbshare'）：sid = 分享快照（tb-share:<sid>），状态时间线实时跟订单走 */
+  tbshare?: { sid: string };
   /** 美团 AI 代点外卖草稿卡（kind='mtdraft'）：did = 草稿（mt-draft:<did>）；QQ 端仅历史序列化，卡片渲染在微信端 */
   mtdraft?: { did: string };
 }
@@ -532,7 +539,7 @@ function msgPreview(m: QQMsg | undefined): string {
   return m.content;
 }
 
-/** 聊天内部浮层：发红包/转账页、红包开箱、红包详情、交易详情、收款页、亲属卡详情、发送位置、线下见面、生成照片 */
+/** 聊天内部浮层：发红包/转账页、红包开箱、红包详情、交易详情、收款页、亲属卡详情、发送位置、线下见面、生成照片、快递页、淘宝代付详情 */
 type ChatLayer =
   | null
   | { view: 'redpacket' }
@@ -540,8 +547,10 @@ type ChatLayer =
   | { view: 'location' }
   | { view: 'offline' }
   | { view: 'textcard' }
+  | { view: 'express' }
   | { view: 'rp-open' | 'rp-detail' | 'tr-detail' | 'tr-receive' | 'fam-detail'; msgId: string }
-  | { view: 'mtpay-detail'; pid: string };
+  | { view: 'mtpay-detail'; pid: string }
+  | { view: 'tbpay-detail'; pid: string };
 
 /** QQ 登录态存的是本机联系人 id；读写一律经 accLs(key, 'qq') 现算按账号隔离（大号=原键，旧登录不丢） */
 const LS_SESSION = 'qq-session-user-id';
@@ -4444,7 +4453,11 @@ function ChatPage({
                         ? mtOrderShareHistoryLine(m.mtshare.sid)
                         : m.kind === 'mtdraft' && m.mtdraft
                           ? mtDraftHistoryLine(m.mtdraft.did, peer.name)
-                          : m.content),
+                          : m.kind === 'tbpay' && m.tbpay
+                            ? tbProxyHistoryLine(m.tbpay.pid, m.tbpay.role, m.role === 'me' ? me.name : peer.name)
+                            : m.kind === 'tbshare' && m.tbshare
+                              ? tbShareHistoryLine(m.tbshare.sid)
+                              : m.content),
         };
       });
 
@@ -5834,6 +5847,18 @@ function ChatPage({
         setTgPickOpen(true);
       },
     },
+    {
+      // 快递（第七十一轮）：加号面板「快递」入口——列出已确认收货的淘宝订单，可分享给当前聊天好友
+      key: 'express',
+      label: '快递',
+      color: '#FF6A1E',
+      icon: <Package className="h-[26px] w-[26px]" strokeWidth={1.9} />,
+      onClick: () => {
+        setPlusOpen(false);
+        setStickerOpen(false);
+        setLayer({ view: 'express' });
+      },
+    },
   ];
 
   // 聊天设置：置顶 / 免打扰 / 聊天背景 / 查找聊天记录
@@ -6231,6 +6256,16 @@ function ChatPage({
                   /* 美团订单分享动态卡片（订单详情右上角分享；状态时间线实时跟订单走；AI 请客卡 role peer 箭头指左） */
                   <div {...bubblePress}>
                     <MtShareBubble sid={m.mtshare.sid} side={m.role === 'me' ? 'right' : 'left'} />
+                  </div>
+                ) : m.kind === 'tbpay' && m.tbpay ? (
+                  /* 淘宝找人代付卡片（淘宝收银台发请求卡；好友 AI 代付后完成卡回聊天）；点卡进代付详情 */
+                  <div {...bubblePress}>
+                    <TbPayBubble pid={m.tbpay.pid} role={m.tbpay.role} onClick={() => setLayer({ view: 'tbpay-detail', pid: m.tbpay!.pid })} />
+                  </div>
+                ) : m.kind === 'tbshare' && m.tbshare ? (
+                  /* 淘宝订单分享动态卡片（交易成功/已发货详情分享、快递面板发出；时间线实时跟订单走） */
+                  <div {...bubblePress}>
+                    <TbShareBubble sid={m.tbshare.sid} side={m.role === 'me' ? 'right' : 'left'} />
                   </div>
                 ) : m.kind === 'mtdraft' && m.mtdraft ? (
                   /* 美团 AI 代点外卖草稿卡（动作只在微信端接入；QQ 端兜底渲染同款卡片） */
@@ -6920,6 +6955,25 @@ function ChatPage({
           })()
         : null}
       {layer?.view === 'mtpay-detail' ? <MtProxyDetailPage pid={layer.pid} canPay onBack={() => setLayer(null)} onToast={onToast} /> : null}
+      {layer?.view === 'tbpay-detail' ? <TbProxyDetailPage pid={layer.pid} onBack={() => setLayer(null)} onToast={onToast} /> : null}
+      {/* 快递页（加号面板「快递」入口）：列出已确认收货的淘宝订单 → 分享给当前聊天好友 */}
+      {layer?.view === 'express' ? (
+        <TbExpressPicker
+          onBack={() => setLayer(null)}
+          onShare={(order) => {
+            void tbCreateOrderShare({ order, idp: 'qq', contactId: peer.id, fromName: me.name })
+              .then((res) => {
+                if (res.ok) {
+                  setLayer(null);
+                  onToast(`已把「${order.shopName}」的快递分享给${res.share.contactName}`);
+                } else {
+                  onToast(res.error);
+                }
+              })
+              .catch(() => onToast('分享失败，请重试'));
+          }}
+        />
+      ) : null}
       {layer?.view === 'location' ? (
         <LocationPickerPage
           onClose={() => setLayer(null)}

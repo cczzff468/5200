@@ -30,6 +30,7 @@ import {
   ClipboardList,
   Copy,
   Crosshair,
+  ChevronLeft,
   FileText,
   GripVertical,
   Headphones,
@@ -64,6 +65,10 @@ import {
 } from 'lucide-react';
 import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
 import { useSettings, useUI } from '@/lib/ios/store';
+import { tbCreateOrderShare, tbCreateProxyRequest } from '@/lib/ios/tb-share-proxy';
+import { ISLAND_NAV_EVENT, takeNotifyNavigation } from '@/lib/ios/island-notify';
+import { listContacts } from '@/lib/ios/contacts-store';
+import { isFriendIn, avatarFor, displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { GoodsStyleSheet, GoodsStyleThumb } from './goods-style-sheet';
 import {
   tbChatLast,
@@ -3122,6 +3127,12 @@ function CheckoutPage({
             setPayOpen(false);
             onPaid(oid);
           }}
+          onProxySent={(oid) => {
+            // 代付请求已发出：结算页关闭跳待付款订单详情（显示「已请 TA 代付」）
+            tbClearCheckedCart(uid);
+            setPayOpen(false);
+            onPaid(oid);
+          }}
         />
       ) : null}
       {/* 地址选择弹层挂载在父级（AddrPickerSheet），选完回写 */}
@@ -3149,6 +3160,8 @@ function PaySheet({
   onClose,
   onSuccess,
   onError,
+  /** 发送代付请求成功后回调（关收银台跳对应订单详情，与美团「代付请求已发给好友」同交互） */
+  onProxySent,
 }: {
   uid: string;
   orderId: string;
@@ -3157,12 +3170,22 @@ function PaySheet({
   onClose: () => void;
   onSuccess: (orderId: string) => void;
   onError?: (m: string) => void;
+  onProxySent?: (orderId: string) => void;
 }) {
   const [chans, setChans] = useState<TbPayChannel[] | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState(false);
   const [errMsg, setErrMsg] = useState('');
+  // 找人代付：plat = 选平台 / contact = 选好友；null = 关闭（与美团收银台「帮付」同交互）
+  const [proxyStep, setProxyStep] = useState<'plat' | 'contact' | null>(null);
+  const [proxyPlat, setProxyPlat] = useState<'wx' | 'qq' | null>(null);
+  const [proxyContact, setProxyContact] = useState<string | null>(null);
+  const [proxySending, setProxySending] = useState(false);
+  /** 已发出代付请求的收款好友名（订单挂 proxy 快照后徽标显示「已请 TA 代付」） */
+  const [proxyName, setProxyName] = useState<string | null>(() => tbLoadOrders(uid).find((o) => o.id === orderId)?.proxy?.name ?? null);
+  // 会话身份（请求卡「我」的名字/头像，跟随淘宝登录账号）
+  const session = tbGetSession();
 
   useEffect(() => {
     void (async () => {
@@ -3207,6 +3230,34 @@ function PaySheet({
     } finally {
       setPaying(false);
     }
+  };
+
+  /** 发送代付请求：生成请求 + 卡片进好友聊天 + AI 延时自主决策；成功后跳对应订单详情 */
+  const sendProxy = async () => {
+    if (!proxyPlat || !proxyContact || proxySending) return;
+    const order = tbLoadOrders(uid).find((o) => o.id === orderId);
+    if (!order) {
+      setProxyStep(null);
+      onError?.('订单不存在，代付请求未发送');
+      return;
+    }
+    setProxySending(true);
+    const res = await tbCreateProxyRequest({
+      order,
+      idp: proxyPlat,
+      contactId: proxyContact,
+      fromName: session?.name ?? '我',
+      fromAvatar: session?.avatar ?? null,
+    });
+    setProxySending(false);
+    if (!res.ok) {
+      onError?.(res.error);
+      setProxyStep(null);
+      return;
+    }
+    setProxyName(res.proxy.contactName);
+    setProxyStep(null);
+    onProxySent?.(orderId);
   };
 
   return (
@@ -3290,6 +3341,39 @@ function PaySheet({
             </div>
           )}
           {errMsg && !paid ? <div className="pt-2 text-center text-[12px] text-red-500">{errMsg}</div> : null}
+          {/* 找人代付（发给微信/QQ好友帮付；与美团收银台「帮付」同交互） */}
+          {!paid ? (
+            <div className="mt-3 overflow-hidden rounded-2xl bg-white px-2 py-1 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+              <button
+                type="button"
+                data-testid="tb-pay-proxy-entry"
+                onClick={() => {
+                  setProxyPlat(null);
+                  setProxyContact(null);
+                  setProxyStep('plat');
+                }}
+                className="flex w-full items-center gap-3 rounded-xl px-2.5 py-3 text-left active:bg-black/[0.03]"
+              >
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-gradient-to-br from-[#FF7A21] to-[#FF4400]">
+                  <Wallet className="h-[17px] w-[17px] text-white" strokeWidth={2} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium text-black/85">找人代付</span>
+                  <span className="block truncate text-[12px] text-black/40">发给微信/QQ好友，帮你支付本单</span>
+                </span>
+                {proxyName ? (
+                  <span data-testid="tb-pay-proxy-badge" className="shrink-0 rounded-full bg-[#FFF1E6] px-2 py-1 text-[10px] font-medium text-[#FF5000]">已请{proxyName}代付</span>
+                ) : (
+                  <ChevronRight className="h-4 w-4 shrink-0 text-black/25" />
+                )}
+              </button>
+              {proxyName ? (
+                <p className="border-t border-black/[0.04] px-2.5 py-2 text-[10.5px] leading-relaxed text-black/30">
+                  已向{proxyName}发送代付请求，好友付款后本单自动完成；也可以继续自己支付。
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           {/* 支付按钮（方形圆角 + 支付中转圈） */}
           <div className="pt-4">
             <button
@@ -3310,6 +3394,203 @@ function PaySheet({
             {selChan?.isFc && !paid ? <div className="pt-1.5 text-center text-[11px] text-black/35">使用亲属卡支付后，赠卡人将收到消费通知</div> : null}
             <div className="pt-2.5 text-center text-[11px] text-black/30">由微信支付 / QQ钱包提供安全保障 · 支付即同意《淘宝支付规则》</div>
           </div>
+        </div>
+      </div>
+      {/* 找人代付弹层（选平台 → 选好友 → 发送请求，与美团代付弹层同交互） */}
+      <TbContactPickSheet
+        step={proxyStep}
+        plat={proxyPlat}
+        contactId={proxyContact}
+        sending={proxySending}
+        title="找人代付"
+        platHint="把订单发给好友，TA付款后订单自动完成；30分钟内未付款订单自动取消"
+        contactHint={(p) => `从${p}好友里选一位帮忙支付本单`}
+        sendLabel="发送代付请求"
+        sendTestId="tb-proxy-send"
+        platTestIdPrefix="tb-proxy-plat"
+        contactTestIdPrefix="tb-proxy-contact"
+        onPickPlat={(v) => {
+          setProxyPlat(v);
+          setProxyContact(null);
+          setProxyStep('contact');
+        }}
+        onPickContact={setProxyContact}
+        onBack={() => (proxyStep === 'contact' ? setProxyStep('plat') : setProxyStep(null))}
+        onClose={() => setProxyStep(null)}
+        onSend={() => void sendProxy()}
+      />
+    </div>
+  );
+}
+
+/**
+ * 淘宝「选平台 → 选联系人」弹层（找人代付 / 订单分享共用，与美团 ProxySheet/ShareSheet 同交互）：
+ * 第一步选微信好友/QQ好友，第二步从该平台好友里选人 → 底部发送按钮回调。
+ * 好友列表按 kind!=='user' 且该平台好友标记过滤；组件按 step 重建，进入即为 null。
+ */
+function TbContactPickSheet({
+  step,
+  plat,
+  contactId,
+  sending,
+  title,
+  platHint,
+  contactHint,
+  sendLabel,
+  sendTestId,
+  platTestIdPrefix,
+  contactTestIdPrefix,
+  onPickPlat,
+  onPickContact,
+  onBack,
+  onClose,
+  onSend,
+}: {
+  /** null = 关闭；'plat' = 选平台；'contact' = 选联系人 */
+  step: 'plat' | 'contact' | null;
+  plat: 'wx' | 'qq' | null;
+  contactId: string | null;
+  sending: boolean;
+  /** 第一步标题 */
+  title: string;
+  /** 第一步说明 */
+  platHint: string;
+  /** 第二步说明（入参 = 平台中文名） */
+  contactHint: (platName: string) => string;
+  sendLabel: string;
+  sendTestId: string;
+  platTestIdPrefix: string;
+  contactTestIdPrefix: string;
+  onPickPlat: (v: 'wx' | 'qq') => void;
+  onPickContact: (id: string) => void;
+  onBack: () => void;
+  onClose: () => void;
+  onSend: () => void;
+}) {
+  /** 平台好友列表（第二步加载；kind!=='user' 且该平台好友标记为真）。
+   *  列表与「加载对象键」一起落 state——非对应 step/plat 的旧列表派生为 null（避免 effect 内同步 setState 告警，
+   *  换平台重进联系人步时也不会闪现旧平台好友） */
+  const [loaded, setLoaded] = useState<{ key: string; list: ContactRecord[] | null }>({ key: '', list: null });
+  const friends = loaded.key === `c:${step}:${plat ?? ''}` ? loaded.list : null;
+  useEffect(() => {
+    if (step !== 'contact' || !plat) return;
+    let alive = true;
+    listContacts()
+      .then((all) => {
+        if (alive) setLoaded({ key: `c:${step}:${plat}`, list: all.filter((c) => c.kind !== 'user' && isFriendIn(c, plat)) });
+      })
+      .catch(() => {
+        if (alive) setLoaded({ key: `c:${step}:${plat}`, list: [] });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [step, plat]);
+
+  if (!step) return null;
+  const platName = plat === 'wx' ? '微信' : 'QQ';
+  return (
+    <div className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/60" onClick={onClose} data-testid={step === 'plat' ? `${platTestIdPrefix}-sheet` : undefined}>
+      <div
+        className="max-h-[82%] overflow-hidden rounded-t-2xl bg-white pb-[max(14px,env(safe-area-inset-bottom))] [animation:quick-in-up_.24s_cubic-bezier(0.32,0.72,0,1)_both]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 标题栏 */}
+        <div className="relative grid h-[54px] shrink-0 place-items-center">
+          {step === 'contact' && (
+            <button type="button" aria-label="返回" onClick={onBack} className="absolute left-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+              <ChevronLeft className="h-[22px] w-[22px] text-black/80" />
+            </button>
+          )}
+          <p className="text-[16px] font-bold text-black/90">{step === 'plat' ? title : `选择${platName}好友`}</p>
+          <button type="button" aria-label="关闭" onClick={onClose} className="absolute right-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+            <X className="h-[20px] w-[20px] text-black/55" />
+          </button>
+        </div>
+        <p className="px-5 pb-2.5 text-[11.5px] leading-relaxed text-black/40">{step === 'plat' ? platHint : contactHint(platName)}</p>
+
+        {step === 'plat' ? (
+          <div className="px-4">
+            {([
+              ['wx', '/icons/wechat.png', '微信好友', `发给微信里的好友`],
+              ['qq', '/icons/qq.png', 'QQ好友', '发给QQ里的好友'],
+            ] as ['wx' | 'qq', string, string, string][]).map(([v, img, name, sub]) => (
+              <button
+                key={v}
+                type="button"
+                data-testid={`${platTestIdPrefix}-${v}`}
+                onClick={() => onPickPlat(v)}
+                className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3.5 text-left first:border-t-0 active:opacity-80"
+              >
+                <img src={img} alt="" className="h-[38px] w-[38px] shrink-0 rounded-[9px]" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium text-black/85">{name}</span>
+                  <span className="block text-[11px] text-black/40">{sub}</span>
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-black/25" />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="max-h-[48vh] overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {friends === null ? (
+              <p className="py-8 text-center text-[12px] text-black/35">正在获取好友列表…</p>
+            ) : friends.length === 0 ? (
+              <div className="py-8 text-center">
+                <p className="text-[13px] text-black/45">暂无{platName}好友</p>
+                <p className="mt-1 text-[11px] text-black/30">先去{platName}App添加好友，再回来发送</p>
+              </div>
+            ) : (
+              friends.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`${contactTestIdPrefix}-${c.id}`}
+                  onClick={() => onPickContact(c.id)}
+                  className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3 text-left first:border-t-0 active:opacity-80"
+                >
+                  {avatarFor(c, plat ?? 'wx') ? (
+                    <img src={avatarFor(c, plat ?? 'wx') ?? ''} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#FFF1E6] text-[15px] font-semibold text-black/60">
+                      {displayNameOf(c).slice(0, 1)}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px] text-black/85">{displayNameOf(c)}</span>
+                    {c.relation && <span className="block text-[11px] text-black/40">{c.relation}</span>}
+                  </span>
+                  <span className={`grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full border-2 ${contactId === c.id ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}>
+                    {contactId === c.id ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* 底部按钮 */}
+        <div className="px-4 pt-3">
+          {step === 'plat' ? (
+            <button
+              type="button"
+              disabled={!plat}
+              onClick={() => plat && onPickPlat(plat)}
+              className={`h-[48px] w-full rounded-xl text-[16px] font-semibold ${plat ? 'bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-white active:opacity-85' : 'bg-[#FFE2D2] text-black/40'}`}
+            >
+              下一步
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid={sendTestId}
+              disabled={!contactId || sending}
+              onClick={onSend}
+              className={`h-[48px] w-full rounded-xl text-[16px] font-semibold ${contactId && !sending ? 'bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-white active:opacity-85' : 'bg-[#FFE2D2] text-black/40'}`}
+            >
+              {sending ? '正在发送…' : sendLabel}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -3881,6 +4162,7 @@ function OrderDetailPage({
   onOpenAddrPicker,
   onOpenShop,
   onOpenChat,
+  onShareOrder,
 }: {
   uid: string;
   orderId: string;
@@ -3894,6 +4176,8 @@ function OrderDetailPage({
   onOpenShop: (shopId: string) => void;
   /** 联系客服（Task 41：带订单上下文进 AI 客服聊天） */
   onOpenChat: (shopId: string, orderId: string) => void;
+  /** 分享订单给微信/QQ好友（需求：已发货右上角三个点 / 交易成功左下角更多 → 分享给 AI） */
+  onShareOrder: (id: string) => void;
 }) {
   const [, setTick] = useState(0);
   const [payPref, setPayPref] = useState<'wx' | 'ali'>('wx');
@@ -4041,7 +4325,16 @@ function OrderDetailPage({
         title={o.status === 'cancelled' ? (o.refund ? '退款成功' : '交易关闭') : o.status === 'completed' ? '交易成功' : st}
         onBack={onBack}
         right={
-          <button type="button" aria-label="更多操作" onClick={() => copyText(o.id, '订单号已复制')} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+          <button
+            type="button"
+            aria-label="更多操作"
+            onClick={() => {
+              // 需求：已发货界面右上角三个点 → 分享给微信/QQ好友；其他状态保留复制订单号
+              if (o.status === 'shipped') onShareOrder(o.id);
+              else copyText(o.id, '订单号已复制');
+            }}
+            className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5"
+          >
             <MoreHorizontal className="h-[20px] w-[20px] text-black/75" strokeWidth={2.2} />
           </button>
         }
@@ -4670,7 +4963,8 @@ function OrderDetailPage({
       ) : null}
       {o.status === 'completed' ? (
         <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 border-t border-black/[0.06] bg-white/95 px-4 pb-6 pt-2 backdrop-blur-md">
-          <button type="button" onClick={() => onToast('更多操作（演示）')} className="flex w-11 shrink-0 flex-col items-center gap-0.5 active:opacity-60">
+          {/* 需求：交易成功界面左下角更多 → 分享给微信/QQ好友 */}
+          <button type="button" onClick={() => onShareOrder(o.id)} data-testid="tb-detail-more-share" className="flex w-11 shrink-0 flex-col items-center gap-0.5 active:opacity-60">
             <MoreHorizontal className="h-[20px] w-[20px] rounded-full bg-black/[0.05] p-0.5 text-black/70" strokeWidth={2.2} />
             <span className="text-[10px] text-black/50">更多</span>
           </button>
@@ -7067,12 +7361,68 @@ function AddrPickerSheet({ uid, onClose, onManage }: { uid: string; onClose: () 
 }
 
 /** 待付款订单续付弹层（订单列表/详情「继续付款」） */
-function PayPendingSheet({ uid, orderId, onClose, onPaid, onToast }: { uid: string; orderId: string; onClose: () => void; onPaid: (id: string) => void; onToast: (m: string) => void }) {
+function PayPendingSheet({ uid, orderId, onClose, onPaid, onToast, onProxySent }: { uid: string; orderId: string; onClose: () => void; onPaid: (id: string) => void; onToast: (m: string) => void; onProxySent: (id: string) => void }) {
   const o = tbLoadOrders(uid).find((x) => x.id === orderId);
   if (!o) return null;
   const brief = o.items.length > 1 ? `${o.items[0].title.slice(0, 12)}等${o.items.length}件` : o.items[0]?.title.slice(0, 18) ?? '商品';
   // 支付成功消息由 PaySheet 内部统一推送（避免重复）
-  return <PaySheet uid={uid} orderId={orderId} amount={o.total} goodsBrief={brief} onClose={onClose} onSuccess={(oid) => { onToast('支付成功'); onPaid(oid); }} />;
+  return <PaySheet uid={uid} orderId={orderId} amount={o.total} goodsBrief={brief} onClose={onClose} onSuccess={(oid) => { onToast('支付成功'); onPaid(oid); }} onProxySent={onProxySent} />;
+}
+
+/** 订单分享弹层（交易成功/已发货详情分享入口）：选微信/QQ → 选联系人 → 动态订单卡片进好友聊天 */
+function TbShareOrderSheet({
+  order,
+  fromName,
+  onClose,
+  onToast,
+}: {
+  order: TbOrder;
+  fromName: string;
+  onClose: () => void;
+  onToast: (m: string) => void;
+}) {
+  const [step, setStep] = useState<'plat' | 'contact'>('plat');
+  const [plat, setPlat] = useState<'wx' | 'qq' | null>(null);
+  const [contactId, setContactId] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
+    if (!plat || !contactId || sending) return;
+    setSending(true);
+    const res = await tbCreateOrderShare({ order, idp: plat, contactId, fromName });
+    setSending(false);
+    if (!res.ok) {
+      onToast(res.error);
+      return;
+    }
+    onClose();
+    onToast(`已分享给${res.share.contactName}`);
+  };
+
+  return (
+    <TbContactPickSheet
+      step={step}
+      plat={plat}
+      contactId={contactId}
+      sending={sending}
+      title="分享订单"
+      platHint={`把「${order.shopName}」的订单分享给好友，TA能实时看到物流动态`}
+      contactHint={(p) => `从${p}好友里选一位分享这个订单`}
+      sendLabel="发送"
+      sendTestId="tb-share-send"
+      platTestIdPrefix="tb-share-plat"
+      contactTestIdPrefix="tb-share-contact"
+      onPickPlat={(v) => {
+        setPlat(v);
+        setContactId(null);
+        setStep('contact');
+      }}
+      onPickContact={setContactId}
+      onBack={() => setStep('plat')}
+      onClose={onClose}
+      onSend={() => void send()}
+    />
+  );
 }
 
 export default function TaobaoApp() {
@@ -7107,6 +7457,8 @@ export default function TaobaoApp() {
   const [subReturn, setSubReturn] = useState<TbTab>('me');
   /** 地址页返回目标：'me'（我的页进）/ 'checkout'（下单页地址弹层进） */
   const [addrReturn, setAddrReturn] = useState<'me' | 'checkout'>('me');
+  /** 订单分享弹层（交易成功左下角更多 / 已发货右上角三个点 → 选微信/QQ → 选联系人 → 卡片进聊天） */
+  const [shareOrderId, setShareOrderId] = useState<string | null>(null);
   const [toastMsg, showToast] = useLocalToast();
 
   // 启动：恢复登录态 + 订单状态机 tick（异步包一层，避免 effect 内同步 setState 级联渲染）
@@ -7115,7 +7467,26 @@ export default function TaobaoApp() {
     void Promise.resolve().then(() => {
       setSession(tbGetSession());
       setBooting(false);
+      // 消费灵动岛通知/聊天分享卡点击跳转（淘宝订单详情）
+      const nav = takeNotifyNavigation('taobao');
+      if (nav?.contactId && tbGetSession()) {
+        setOrderId(nav.contactId);
+        setPage('orderDetail');
+      }
     });
+  }, []);
+
+  // 聊天里分享卡/通知在 App 已打开时点击 → 事件驱动跳订单详情
+  useEffect(() => {
+    const onNav = () => {
+      const nav = takeNotifyNavigation('taobao');
+      if (nav?.contactId && tbGetSession()) {
+        setOrderId(nav.contactId);
+        setPage('orderDetail');
+      }
+    };
+    window.addEventListener(ISLAND_NAV_EVENT, onNav);
+    return () => window.removeEventListener(ISLAND_NAV_EVENT, onNav);
   }, []);
 
   // Task 41：登录后恢复 AI 生成商品的持久化注册表（刷新页面/重开 App 后详情/下单链路可用）
@@ -7367,6 +7738,7 @@ export default function TaobaoApp() {
           setPage('shop');
         }}
         onOpenChat={(sid, oid) => openChat(sid, { orderId: oid })}
+        onShareOrder={(id) => setShareOrderId(id)}
       />
     );
   } else if (page === 'logistics' && logisticsId) {
@@ -7509,8 +7881,30 @@ export default function TaobaoApp() {
             setOrderId(oid);
             setPage('orderDetail');
           }}
+          onProxySent={(oid) => {
+            // 代付请求已发出：关收银台跳待付款订单详情
+            setPayOrderId(null);
+            showToast('代付请求已发出，等好友付款');
+            setOrderId(oid);
+            setPage('orderDetail');
+          }}
           onToast={showToast}
         />
+      ) : null}
+      {/* 订单分享弹层（选微信/QQ → 选联系人 → 动态订单卡片进好友聊天） */}
+      {shareOrderId ? (
+        (() => {
+          const so = tbLoadOrders(uid).find((x) => x.id === shareOrderId);
+          if (!so) return null;
+          return (
+            <TbShareOrderSheet
+              order={so}
+              fromName={session?.name ?? '我'}
+              onClose={() => setShareOrderId(null)}
+              onToast={showToast}
+            />
+          );
+        })()
       ) : null}
       {/* 评价弹层 */}
       {rateFor ? (
