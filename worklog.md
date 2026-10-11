@@ -18385,3 +18385,22 @@ Stage Summary:
 - 交付：①微信/QQ 转账凭据卡方向修复（AI 给我转账→我收款→凭据卡「已收款」）；②取件终态持久化（一键取件/帮取后物流页显示「已签收」不再停留待取件）+驿站卡帮取提示；③AI 取件不再重复回复（tbSchedulePickupResponse 幂等）；④礼物道谢/到货问候全面 AI 自主决策（say/lines，模型不说就不发，零模板兜底）；⑤礼物标记改 AI 自主确认 [收礼物:sid]（防误伤）；⑥同意词表机制删除（TB+MT）；⑦金额门槛全取消（150/300/100）；⑧代买草稿多商品（跨店分单）；⑨AI 代付凑一半（[帮付一半]+aiCovered+收银台剩余补付）；⑩冷却硬拦截+主动代付失败兜底+到货问候标记时机修复；⑪旧订单 track/items 数据兜底（修崩溃）
 - 改动文件：src/lib/chat-rich.ts、src/lib/ios/tb-ai-engage.ts、src/lib/ios/tb-share-proxy.ts、src/lib/ios/taobao-store.ts、src/lib/ios/mt-ai-engage.ts、src/components/apps/taobao.tsx、src/components/apps/tb-draft-card.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
 - 关键决策：①礼物判定与同意判定全部交给 LLM（用户哲学：不要词表，人设+记忆+上下文）；②部分垫付挂订单 aiCovered 而非改订单总额——收银台/详情/站内信按「总额-垫付」展示，tbMarkPaid 全额收口不破坏现有支付状态机；③礼物取件消息 0~2 条弹性（AI 可选择完全不说），favor 交差信息保留兜底（取件结果必须可感知）
+
+---
+Task ID: 1
+Agent: Z.ai Code (main)
+Task: 从 GitHub 拉取 cczzff468/5200 仓库，同步到工作目录并运行验证
+
+Work Log:
+- 使用用户提供的 PAT 克隆 https://github.com/cczzff468/5200.git 到 /home/z/repo-5200（2810 文件，main 分支 HEAD=f292d4b）
+- 项目定位：AI Phone 仿 iOS 虚拟手机（微信/QQ/淘宝/美团/音乐/浏览器等 84 个模拟应用 + 43 个 iOS 系统组件，Prisma SQLite，70+ 轮迭代）
+- rsync 同步仓库代码到 /home/z/my-project（排除 .git/node_modules/.next/upload/download 特殊挂载目录）
+- bun install 安装依赖；bun run db:push 推送 Prisma schema（4 个 model）并 generate client
+- 清理端口占用后启动 bun run dev（3000 端口正常监听）
+- agent-browser 实机验证：锁屏渲染 → 上滑解锁 → 主屏幕图标 → 打开微信应用，全链路正常；控制台 0 错误；HTTP 200
+- 用仓库完整 .git 历史替换沙箱初始 .git，remote origin 已配置 PAT，工作区与 origin/main 一致，随时可 commit+push
+
+Stage Summary:
+- 仓库代码已在 /home/z/my-project 完整运行，浏览器验证通过
+- git 环境就绪：origin=cczzff468/5200 (main, f292d4b)，修改后可直接推送
+- 等待用户提出具体功能修改/新增需求
