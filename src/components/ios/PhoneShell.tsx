@@ -275,6 +275,13 @@ export default function PhoneShell() {
 
   const dark = selectResolvedTheme(theme, systemDark) === 'dark';
 
+  // 同步到 html 根节点（第六十八轮）：body 的 bg-background 跟随翻转——
+  // 修移动端浏览器视口比 100svh 高一截时，淘宝/美团底部 tab 下方露出 body 白底的问题
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', dark);
+    return () => document.documentElement.classList.remove('dark');
+  }, [dark]);
+
   // 开机门控：设置从 IndexedDB 读出前只显示纯黑开机屏。
   // 若用户关闭了锁屏，locked 会在 load() 内同步纠正为 false——
   // 先等 loaded 再渲染锁屏/主屏，锁屏就不会“闪现一下再消失”。

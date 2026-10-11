@@ -711,14 +711,15 @@ function BottomTabBar({ active, onTab }: { active: Tab; onTab: (t: Tab) => void 
   const myOn = active === 'my';
   return (
     <div className="relative z-20 flex shrink-0 items-start border-t border-black/[0.06] bg-white pb-[max(18px,env(safe-area-inset-bottom))] pt-[9px]">
-      {/* 首页：房子（选中=黄色） */}
+      {/* 首页：房子（选中=黄色）；未选中用 text-black/90 类而非内联色——深色模式下随 shop-dark 翻白
+          （第六十八轮修复：内联 rgba(0,0,0,0.9) 无法被覆盖，深色下黑图标画在深底上不可见） */}
       <button type="button" onClick={() => onTab('home')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
-        <House className="h-[24px] w-[24px]" style={{ color: homeOn ? '#FFC300' : 'rgba(0,0,0,0.9)' }} strokeWidth={homeOn ? 2.4 : 1.8} />
+        <House className={`h-[24px] w-[24px] ${homeOn ? 'text-[#FFC300]' : 'text-black/90'}`} strokeWidth={homeOn ? 2.4 : 1.8} />
         <span className={labelCls(homeOn, 'text-[#FFA200]')}>首页</span>
       </button>
       {/* 购物车（选中=黄色） */}
       <button type="button" onClick={() => onTab('cart')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
-        <ShoppingCart className="h-[24px] w-[24px]" style={{ color: cartOn ? '#FFC300' : 'rgba(0,0,0,0.9)' }} strokeWidth={cartOn ? 2.4 : 1.8} />
+        <ShoppingCart className={`h-[24px] w-[24px] ${cartOn ? 'text-[#FFC300]' : 'text-black/90'}`} strokeWidth={cartOn ? 2.4 : 1.8} />
         <span className={labelCls(cartOn, 'text-[#FFA200]')}>购物车</span>
       </button>
       {/* 我的：笑脸 + 金皇冠（选中=黑色：黑底黄脸） */}

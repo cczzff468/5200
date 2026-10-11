@@ -84,18 +84,24 @@ export function useTbPullRefresh(onRefresh: (dir: TbPullDir) => void | Promise<v
 
 export type TbPullRefresh = ReturnType<typeof useTbPullRefresh>;
 
-/** 悬浮刷新胶囊：放在滚动区的同一 relative 父级内；down 顶部随手指、up 底部、刷新中转圈 */
-export function TbPullIndicator({ h, light }: { h: TbPullRefresh; light?: boolean }) {
+/** 悬浮刷新胶囊：放在滚动区的同一 relative 父级内；down 顶部随手指、up 底部、刷新中转圈。
+ *  upOffset：up 方式胶囊距滚动区底部的距离（px，默认 20）——
+ *  淘宝首页/我的淘宝/频道页底部有 53px TabBar，需传 66 提到 Tab 之上（第六十八轮：
+ *  用户反馈「下滑刷新提示被底部 tab 挡住」） */
+export function TbPullIndicator({ h, light, upOffset = 20 }: { h: TbPullRefresh; light?: boolean; upOffset?: number }) {
   const cur = h.refreshing ? { dir: h.refreshing, dist: 0 } : h.ghost;
   if (!cur) return null;
   const busy = h.refreshing != null;
   const down = cur.dir === 'down';
   return (
     <div
-      className={`pointer-events-none absolute inset-x-0 z-40 grid place-items-center ${down ? 'top-2' : 'bottom-5'}`}
-      style={down && !busy && cur.dist > 0 ? { transform: `translateY(${cur.dist - 34}px)` } : undefined}
+      className="pointer-events-none absolute inset-x-0 z-40 grid place-items-center"
+      style={down ? { top: 8 } : { bottom: upOffset }}
     >
-      <div className={`flex h-9 items-center gap-2 rounded-full px-4 text-[13px] shadow-lg backdrop-blur ${light ? 'bg-white/25 text-white' : 'bg-black/55 text-white'}`}>
+      <div
+        className={`flex h-9 items-center gap-2 rounded-full px-4 text-[13px] shadow-lg backdrop-blur ${light ? 'bg-white/25 text-white' : 'bg-black/55 text-white'}`}
+        style={down && !busy && cur.dist > 0 ? { transform: `translateY(${cur.dist - 34}px)` } : undefined}
+      >
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : down ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
         {busy ? (down ? '正在刷新…' : '正在加载…') : down ? '松开刷新' : '松开加载更多'}
       </div>

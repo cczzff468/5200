@@ -538,11 +538,57 @@ export function tbOrderById(uid: string, id: string): TbOrder | undefined {
   return tbLoadOrders(uid).find((o) => o.id === id);
 }
 
-// 状态机参数（演示节奏：看得见推进，又不至于秒变）
+// 状态机参数：待付款超时仍用固定 30min；发货/物流节奏改为「送达速度」驱动（下方 tbDeliveryTiming）
 export const TB_PAY_TTL = 30 * 60_000; // 待付款 30min 超时自动取消
-export const TB_SHIP_DELAY = 75_000; // 支付后 75s 自动发货
-export const TB_TRACK_STEP = 40_000; // 物流节点每 40s 推进
 export const TB_TRACK_NODES = ['包裹已由商家揽收', '运输中：包裹已到达【杭州转运中心】', '派送中：快递员正在为您派送', '包裹已放入菜鸟驿站，请凭取件码领取'];
+
+/** 送达速度（第六十八轮：用户要求淘宝所有时间按真实时间走——
+ *  快的 30分钟-1小时送达、正常 1小时-3小时、慢的 3小时-6小时；
+ *  选择器在「我的淘宝 › 我的消费明细」卡右上角，全店订单（新单/在途单/生成历史单）统一跟随） */
+export type TbDeliverySpeed = 'fast' | 'normal' | 'slow';
+export const TB_SPEED_ORDER: TbDeliverySpeed[] = ['fast', 'normal', 'slow'];
+export const TB_SPEED_LABEL: Record<TbDeliverySpeed, string> = { fast: '快', normal: '正常', slow: '慢' };
+export const TB_SPEED_DESC: Record<TbDeliverySpeed, string> = {
+  fast: '30分钟-1小时送达',
+  normal: '1小时-3小时送达',
+  slow: '3小时-6小时送达',
+};
+const speedKey = (uid: string) => `tb-speed:${uid}`;
+
+/** 读送达速度（默认「正常」，旧用户零变化） */
+export function tbGetDeliverySpeed(uid: string): TbDeliverySpeed {
+  const v = load<TbDeliverySpeed | string>(speedKey(uid), 'normal');
+  return v === 'fast' || v === 'normal' || v === 'slow' ? v : 'normal';
+}
+
+export function tbSetDeliverySpeed(uid: string, speed: TbDeliverySpeed): void {
+  save(speedKey(uid), speed);
+}
+
+/** 稳定哈希抖动（同一订单/商品在同一速度下时间可复现，重启不跳变） */
+function speedJitter(seed: string): number {
+  return tbHashStr(seed);
+}
+
+/** 速度 → 时间参数（全真实时钟）：
+ *  total = 付款→送达总时长（在用户指定窗口内按订单哈希抖动）；
+ *  shipDelay = 付款→发货；trackStep = 相邻物流节点间隔（4 节点走完即送达） */
+export function tbDeliveryTiming(
+  uid: string,
+  seed: string,
+  speed: TbDeliverySpeed = tbGetDeliverySpeed(uid)
+): { totalMs: number; shipDelayMs: number; trackStepMs: number } {
+  const j = speedJitter(seed);
+  const totalMs =
+    speed === 'fast'
+      ? (30 + (j % 31)) * 60_000 // 30-60min
+      : speed === 'normal'
+        ? (60 + (j % 121)) * 60_000 // 1-3h
+        : (180 + (j % 181)) * 60_000; // 3-6h
+  const shipDelayMs = speed === 'fast' ? 4 * 60_000 : speed === 'normal' ? 12 * 60_000 : 30 * 60_000;
+  const trackStepMs = Math.max(60_000, Math.round((totalMs - shipDelayMs) / TB_TRACK_NODES.length));
+  return { totalMs, shipDelayMs, trackStepMs };
+}
 
 /** 下单（购物车结算 / 立即购买共用）：创建待付款订单 */
 export function tbCreateOrder(opts: {
@@ -669,7 +715,8 @@ export function tbCreateMerchOrder(uid: string, m: { id: string; title: string; 
   return order;
 }
 
-/** 状态推进 catch-up：全局 tick 与打开 App 时都调用（确定性时间戳，重启不丢进度） */
+/** 状态推进 catch-up：全局 tick 与打开 App 时都调用（确定性时间戳，重启不丢进度）；
+ *  发货/物流节奏跟随「送达速度」设置（真实时钟：快 30min-1h / 正常 1-3h / 慢 3-6h 送达） */
 export function tbTickOrders(uid: string): boolean {
   let changed = false;
   const list = tbLoadOrders(uid);
@@ -691,19 +738,21 @@ export function tbTickOrders(uid: string): boolean {
       changed = true;
       continue;
     }
-    if (o.status === 'pendingDeliver' && o.paidAt && now - o.paidAt > TB_SHIP_DELAY) {
+    // 发货/物流：按当前送达速度重算时间轴（切换速度后在途单自动跟随新节奏）
+    const timing = tbDeliveryTiming(uid, o.id);
+    if (o.status === 'pendingDeliver' && o.paidAt && now - o.paidAt > timing.shipDelayMs) {
       o.status = 'shipped';
-      o.shipAt = now;
-      o.track = [{ text: TB_TRACK_NODES[0], at: now }];
+      o.shipAt = o.paidAt + timing.shipDelayMs;
+      o.track = [{ text: TB_TRACK_NODES[0], at: o.shipAt }];
       changed = true;
       continue;
     }
     if (o.status === 'shipped' && o.shipAt) {
-      // 物流节点逐步推进（全部节点走完即「已到驿站」可确认收货）
+      // 物流节点逐步推进（全部节点走完即「已到驿站」可确认收货）；节点时间锚定发货时间，重启不漂移
       const elapsed = now - o.shipAt;
-      const nodeCount = Math.min(TB_TRACK_NODES.length, 1 + Math.floor(elapsed / TB_TRACK_STEP));
+      const nodeCount = Math.min(TB_TRACK_NODES.length, 1 + Math.floor(elapsed / timing.trackStepMs));
       if (o.track.length < nodeCount) {
-        o.track = TB_TRACK_NODES.slice(0, nodeCount).map((text, i) => ({ text, at: o.shipAt! + (i + 1) * TB_TRACK_STEP }));
+        o.track = TB_TRACK_NODES.slice(0, nodeCount).map((text, i) => ({ text, at: o.shipAt! + (i + 1) * timing.trackStepMs }));
         changed = true;
       }
     }
@@ -837,7 +886,9 @@ export function tbGenOrderKey(o: Pick<TbOrder, 'shopName' | 'items'>): string {
   return `${o.shopName}|${o.items[0]?.title ?? ''}`;
 }
 
-/** AI/本地生成条目 → TbOrder（status 分布：已发货/已完成/待发货 + 少量已取消，createdAt 向过去推 daysAgo 天） */
+/** AI/本地生成条目 → TbOrder：所有时间锚定真实时钟、按送达速度展开——
+ *  待发货单创建于发货倒计时内、已发货单在途若干节点、已完成单已送达（此前过去 N 天改为过去 N×8 小时，
+ *  日期显示与真实推进一致）；daysAgo 仅作确定性散布种子与去重 id 成分，不再代表真实天数 */
 export function tbBuildGenOrder(
   uid: string,
   raw: {
@@ -856,17 +907,42 @@ export function tbBuildGenOrder(
   const qty = Math.max(1, Math.round(raw.qty ?? 1));
   const price = Math.max(0.01, Math.round(raw.price * 100) / 100);
   const now = Date.now();
-  const jitter = ((tbHashStr(raw.itemTitle) % 30) + idx * 2) * 3600_000;
-  const createdAt = now - Math.max(1, raw.daysAgo) * 86_400_000 - jitter;
-  // 店铺：优先同 tag 店铺；AI 给了店名但没有匹配 id 时挂同 tag 店（订单头显示 AI 店名）
   const shop = TB_SHOPS.find((s) => s.tag === raw.tag) ?? TB_SHOPS[tbHashStr(raw.itemTitle) % TB_SHOPS.length];
   const canceled = raw.canceled === true;
   const r = tbRngFrom(tbHashStr(`${raw.itemTitle}|st`));
   const roll = r();
   const status: TbOrderStatus = canceled ? 'cancelled' : roll < 0.42 ? 'shipped' : roll < 0.9 ? 'completed' : 'pendingDeliver';
-  const paidAt = createdAt + 3 * 60_000;
-  const shipAt = status === 'pendingDeliver' || canceled ? undefined : paidAt + 60_000;
-  const completedAt = status === 'completed' ? (shipAt ?? paidAt) + 3 * 86_400_000 : undefined;
+  // 送达速度时间轴（真实时钟）
+  const timing = tbDeliveryTiming(uid, raw.itemTitle);
+  const { shipDelayMs, trackStepMs, totalMs } = timing;
+  // 各状态相对 now 的下单时刻（小时级散布，daysAgo×8h 往前推——老批次更早但仍在真实时间轴上）
+  const back = raw.daysAgo * 8 * 3_600_000;
+  let createdAt: number;
+  let paidAt: number | undefined;
+  let shipAt: number | undefined;
+  let completedAt: number | undefined;
+  let track: { text: string; at: number }[] = [];
+  if (canceled) {
+    createdAt = now - back - 30 * 60_000;
+  } else if (status === 'pendingDeliver') {
+    // 刚拍下不久：仍在发货倒计时内（时间随速度）
+    createdAt = now - Math.max(60_000, Math.round(shipDelayMs * (0.15 + r() * 0.6)));
+    paidAt = createdAt + Math.min(2 * 60_000, Math.round((now - createdAt) * 0.5));
+  } else if (status === 'shipped') {
+    // 在途：已发 1-3 个节点
+    const nodes = 1 + Math.floor(r() * 2.99);
+    createdAt = now - shipDelayMs - Math.round(nodes * trackStepMs * (0.55 + r() * 0.35));
+    paidAt = createdAt + 2 * 60_000;
+    shipAt = paidAt + shipDelayMs;
+    track = TB_TRACK_NODES.slice(0, nodes).map((text, i) => ({ text, at: shipAt! + (i + 1) * trackStepMs }));
+  } else {
+    // 已完成：整个配送窗走完后再过一段（小时级真实散布）
+    createdAt = now - totalMs - back;
+    paidAt = createdAt + 2 * 60_000;
+    shipAt = paidAt + shipDelayMs;
+    completedAt = shipAt + totalMs - shipDelayMs;
+    track = TB_TRACK_NODES.map((text, i) => ({ text, at: shipAt! + (i + 1) * trackStepMs }));
+  }
   // skuText「颜色分类：曜金黑；存储容量：16GB+512G」→ { 颜色分类: 曜金黑, 存储容量: 16GB+512G }
   const sku: Record<string, string> = {};
   for (const seg of (raw.skuText ?? '').split(/[；;]/)) {
@@ -874,19 +950,6 @@ export function tbBuildGenOrder(
     const v = rest.join('：').trim();
     if (k?.trim() && v) sku[k.trim()] = v;
   }
-  const track =
-    status === 'shipped'
-      ? [
-          { text: '包裹已由商家揽收', at: (shipAt ?? paidAt) + 600_000 },
-          { text: '运输中：包裹已到达【杭州转运中心】', at: (shipAt ?? paidAt) + 1_800_000 },
-        ]
-      : status === 'completed'
-        ? [
-            { text: '包裹已由商家揽收', at: (shipAt ?? paidAt) + 600_000 },
-            { text: '运输中：包裹已到达【杭州转运中心】', at: (shipAt ?? paidAt) + 1_800_000 },
-            { text: '包裹已放入菜鸟驿站，请凭取件码领取', at: (shipAt ?? paidAt) + 3_600_000 },
-          ]
-        : [];
   const total = Math.round(price * qty * 100) / 100;
   return {
     id: `tbg${tbHashStr(`${raw.itemTitle}|${raw.daysAgo}`).toString(36)}${idx}`,
@@ -901,7 +964,7 @@ export function tbBuildGenOrder(
     address: undefined,
     status,
     createdAt,
-    paidAt: canceled ? undefined : paidAt,
+    paidAt,
     shipAt,
     completedAt,
     cancelReason: canceled ? '不想要了/多拍/拍错' : undefined,

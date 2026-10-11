@@ -198,7 +198,11 @@
 .shop-dark .bg-white\/90 { background-color: rgba(24,24,27,0.9); }
 .shop-dark .bg-white\/92 { background-color: rgba(24,24,27,0.92); }
 .shop-dark .bg-white\/95 { background-color: rgba(24,24,27,0.95); }
-.shop-dark .border-\[\#F5F6F7\] { border-color: rgba(255,255,255,0.10); }
+.shop-dark .border-\[\#BFE9AC\] { border-color: #141416; }
+.shop-dark .border-\[\#F5F6F7\] { border-color: #141416; }
+.shop-dark .border-\[\#F6DFA2\] { border-color: #141416; }
+.shop-dark .border-\[\#F7F8FA\] { border-color: #141416; }
+.shop-dark .border-\[\#F9DCA8\] { border-color: #141416; }
 .shop-dark .border-black\/10 { border-color: rgba(255,255,255,0.10); }
 .shop-dark .border-black\/12 { border-color: rgba(255,255,255,0.10); }
 .shop-dark .border-black\/15 { border-color: rgba(255,255,255,0.13); }

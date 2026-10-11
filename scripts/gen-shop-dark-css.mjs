@@ -192,11 +192,14 @@ for (const hex of solidTexts) {
     liftedTexts.set(`text-[${hex}]`, { dark: hex, light: lifted });
   }
 }
-// 8) 中性浅灰边框
+// 8) 浅色边框：美团「我的页」等用 border-t-[7px] border-[#F5F6F7/#F7F8FA] 做粗分隔条——
+//    深色下必须翻成页面底色 #141416（第六十八轮修复：旧版翻成 white/10 会渲染成白色空隙）；
+//    判定用亮度阈值（#F7F8FA 饱和度 0.235 属浅粉彩，中性 s≤0.14 口径会漏），
+//    品牌色边框（#FFD100/#FF6000 等 l<0.72 或高饱和中亮色）保持
 for (const hex of solidBorders) {
   const rgb = hexToRgb(hex);
-  const [, s, l] = rgbToHsl(...rgb);
-  if (s <= 0.14 && l >= 0.72) flip.set(`border-[${hex}]`, { prop: 'border-color', value: 'rgba(255,255,255,0.10)' });
+  const [, , l] = rgbToHsl(...rgb);
+  if (l >= 0.72) flip.set(`border-[${hex}]`, { prop: 'border-color', value: NEUTRAL_PAGE });
 }
 // 9) 保护名单：只在「保持亮色 + 源码实测带黑字」的表面上恢复黑字/深褐字
 //    （同元素 200 字符内出现 text-black → 该表面需要保护；避免保护名单膨胀撑爆 CSS）

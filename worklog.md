@@ -18221,3 +18221,26 @@ Work Log:
 Stage Summary:
 - 交付：①真实图标深浅主题始终原图（/icons-dark/ 切换废弃）；②液态透明/毛玻璃/文件夹迷你图标明暗分支改为跟随壁纸实测亮度——深色主题+浅色壁纸白线隐形根治；③文件夹 tile+展开面板深色烟熏玻璃适配；④淘宝/美团全面深色模式（shop-dark 作用域 CSS 覆盖层+生成器管线：中性面/黑字翻转、粉彩贴片深色化+深褐字提亮、品牌亮色 CTA 保持+黑字保护选择器、渐变 stops 按 v4 变量精确覆盖），状态栏探针自动跟随，浅色模式零回归
 - 改动文件：src/components/apps/registry.tsx、src/components/ios/HomeScreen.tsx、src/components/ios/AppWindow.tsx、src/app/globals.css、scripts/gen-shop-dark-css.mjs(+新增)、src/app/shop-dark.css(+新增生成产物)
+
+---
+Task ID: 66
+Agent: main (Z.ai Code)
+Task: 用户五点反馈——①淘宝首页/我的淘宝「下滑刷新提示」被底部 tab 挡住，往上一点；②淘宝所有时间按真实时间走：快的 30分钟-1小时、正常 1小时-3小时、慢的 3小时-6小时；③「我的消费明细」右侧可 选 快/正常/慢；④深色模式淘宝底部 tab 有问题；⑤美团深色模式「我的」页有白色空隙 + 底部 tab 有问题
+
+Work Log:
+- 【刷新提示抬高】①淘宝首页自有上拉指示器 bottom-6→bottom-[66px]（53px TabBar 之上）；②「我的淘宝」页 TbPullIndicator 新增 upOffset prop（默认 20 保持向后兼容）传 66；tb-pull-refresh.tsx 胶囊定位改为 style top/bottom（down 仍顶部 8px 随手指）；OrdersPage/CouponCenter/频道页为无 TabBar 的子页保持默认 20。E2E 实测：首页滚到底 TouchEvent 派发上拉，「拉一拉加载更多」胶囊完整显示在 Tab 之上（截图放大确认）
+- 【送达速度系统】taobao-store.ts 新增 TbDeliverySpeed（fast/normal/slow）+ tbGet/tbSetDeliverySpeed（按 uid 持久化 `tb-speed:{uid}`，默认 normal 旧用户零变化）+ tbDeliveryTiming(uid, seed)：总时长在用户窗口内按订单哈希确定性抖动（快 30-60min/正常 60-180min/慢 180-360min），发货延迟 4/12/30min，trackStep=(total-发货)/4 节点
+- 【全真实时钟状态机】tbTickOrders 重写：发货/物流节点全部锚定 paidAt/shipAt 真实时间戳推进（旧 75s 发货/40s 节点废弃），节点时间锚定发货时刻重启不漂移；切换速度后在途单自动跟随新节奏；TB_PAY_TTL 待付款 30min 保留
+- 【历史订单时间真实化】tbBuildGenOrder 重构：不再「过去 N 天」——待发货单落在发货倒计时内、已发货单在途 1-3 节点（时间戳=发货+节点×trackStep）、已完成单完整走完配送窗再回溯 daysAgo×8 小时（老批次仍在真实时间轴上）；track 节点时间与速度联动；daysAgo 仅作散布种子与去重 id
+- 【速度选择器 UI】我的淘宝「我的消费明细」卡标题行右侧三选一胶囊（快/正常/慢，选中橙底白字，data-testid=tb-speed-{value}）；点击即持久化+toast「已切换为「X」速：付款后30分钟-1小时送达」；E2E 实测选中态切换与 toast 文案 ✓
+- 【ETA 全联动】SkuSheet/商品详情「预计X月X日送达（3天后）」→「预计{TB_SPEED_DESC[speed]}」（快=预计30分钟-1小时送达…）；订单卡/详情「预计明天送达」→「预计今天送达」、「预计明天发货」→「今天内发货」（小时级模型全部当天）；E2E：快速模式下详情+SKU 弹窗均显示「预计30分钟-1小时送达」✓
+- 【深色修复·淘宝 tab】BottomTabBar 去 h-[53px] 改内容高（桌面 ≈52px 不变），pb-3→pb-[max(12px,env(safe-area-inset-bottom))]——移动端安全区设备 tab 深色底延伸到 Home 指示条之下
+- 【深色修复·美团白隙】根因：我的页各分区用 border-t-[7px] border-[#F5F6F7/#F7F8FA] 做粗分隔条，深色覆盖层旧映射成 white/10=白色空隙；生成器边框规则改按亮度判定（#F7F8FA 饱和度 0.235 属浅粉彩，旧中性 s≤0.14 口径漏判）→ #141416 页面底色；重新生成 shop-dark.css（317 条规则）覆盖 5 个浅色边框（#F5F6F7/#F7F8FA/#F6DFA2/#F9DCA8/#BFE9AC），品牌色边框保持
+- 【深色修复·美团 tab 图标】BottomTabBar 首页/购物车图标内联 style rgba(0,0,0,0.9)（CSS 无法覆盖，深底上黑图标不可见）→ text-black/90 类（深色翻白、浅色不变，选中黄保持）
+- 【深色修复·底部白条根因】.dark 类只在壳 div 上、body 的 bg-background 恒浅色——移动端浏览器视口高于 100svh 时淘宝/美团 tab 下方露 body 白底；PhoneShell 新增 effect 把 dark 类同步到 documentElement（body 背景跟随翻转，卸载时清理）；E2E 确认 html.dark 随主题增删
+- E2E（agent-browser 实机）：深色下美团我的页三个白色空隙全部消失（分区条 #141416）、底部 tab 三图标（首页/购物车/我的）全部可见；淘宝首页浅色回归无变化、tab 栏正常；刷新页面后 html.dark 持久；dev.log 仅仓库固有 instrumentation 警告（taobao.tsx:160 报错为 sed 中间态残留，已消除，现编译干净）
+- 备注：①speed 抖动用 tbHashStr(orderId/itemTitle) 确定性——同单同时段跨重启时间不跳变；②生成历史单 times 每次 boot 重锚 now（相对关系不变）；③淘宝下下拉（顶部）提示 top-8 不受本次影响
+
+Stage Summary:
+- 交付：①淘宝首页/我的淘宝上拉刷新提示提到 53px TabBar 之上（upOffset 机制）；②送达速度系统——快 30分钟-1小时/正常 1-3小时/慢 3-6小时全真实时钟状态机（在途单切速即跟随、节点时间戳锚定不漂移），历史生成单小时级真实散布；③我的消费明细卡右侧 快/正常/慢 选择器（持久化+toast+ETA 全联动）；④淘宝 tab 安全区适配+html.dark 根同步；⑤美团白隙根因（浅色粗分隔边框 white/10→#141416）+tab 图标内联色改类翻白
+- 改动文件：src/lib/ios/taobao-store.ts、src/components/apps/tb-pull-refresh.tsx、src/components/apps/taobao.tsx、src/components/apps/taobao-channels.tsx（无净变化，sed 已还原）、src/components/apps/meituan.tsx、scripts/gen-shop-dark-css.mjs、src/app/shop-dark.css（再生成）、src/components/ios/PhoneShell.tsx

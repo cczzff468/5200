@@ -114,6 +114,7 @@ import {
   tbCreateOrder,
   tbExistingOrderTitles,
   tbGenHistoryOrders,
+  tbGetDeliverySpeed,
   tbGetSession,
   tbIdpLoggedIn,
   tbInsertGenOrders,
@@ -140,6 +141,7 @@ import {
   tbSaveOrders,
   tbSetCartAllChecked,
   tbSetCurAddr,
+  tbSetDeliverySpeed,
   tbSetMsgsReadAt,
   tbSetSession,
   tbStartOrderWatcher,
@@ -155,12 +157,16 @@ import {
   tbUpdateCartItem,
   tbUseCoupon,
   tbWipeUid,
+  TB_SPEED_DESC,
+  TB_SPEED_LABEL,
+  TB_SPEED_ORDER,
   type TbAddress,
   type TbCartItem,
   type TbCoupon,
   type TbOrder,
   type TbOrderItem,
   type TbOrderStatus,
+  type TbDeliverySpeed,
   type TbSession,
 } from '@/lib/ios/taobao-store';
 import { tbExecutePay, tbListPayChannels, tbRefundToOrigin, type TbPayChannel } from '@/lib/ios/taobao-pay';
@@ -1364,9 +1370,10 @@ function HomePage({
             </div>
           </div>
         )}
-        {/* 上拉加载指示器（悬浮于列表区底部；Task 45：底部拉一拉=追加新内容，上方内容不变） */}
+        {/* 上拉加载指示器（悬浮于列表区底部；Task 45：底部拉一拉=追加新内容，上方内容不变；
+            第六十八轮：bottom-6→bottom-[66px] 提到 53px 底部 Tab 之上——用户反馈提示被 tab 挡住） */}
         {(pullUpY > 0 || refreshingDir === 'up') && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-6 z-40 grid place-items-center">
+          <div className="pointer-events-none absolute inset-x-0 bottom-[66px] z-40 grid place-items-center">
             <div className="flex h-9 items-center gap-2 rounded-full bg-black/55 px-4 text-[13px] text-white shadow-lg">
               <Loader2 className="h-4 w-4 animate-spin text-white/90" />
               {refreshingDir === 'up' ? '正在加载…' : pullUpY > 56 ? '松开加载更多' : '拉一拉加载更多'}
@@ -2014,10 +2021,8 @@ function SkuSheet({
   }, [p.id]);
   const addon = addonPool.length ? addonPool[addonIdx % addonPool.length] : null;
   const totalPrice = Math.round((price + (addonSel && addon ? addon.price : 0)) * 100) / 100;
-  const etaDate = (() => {
-    const d = new Date(Date.now() + 3 * 86_400_000);
-    return `预计${d.getMonth() + 1}月${d.getDate()}日送达`;
-  })();
+  // 送达时间跟随「送达速度」设置（第六十八轮：快 30分钟-1小时 / 正常 1-3小时 / 慢 3-6小时，真实时钟）
+  const etaText = `预计${TB_SPEED_DESC[tbGetDeliverySpeed(uid)]}`;
   const sizeGroup = p.skus.find((g) => g.name === '尺码');
   const sizeGuide = sizeGroup ? { h: 165 + (tbHash(p.id) % 15), w: 55 + (tbHash(`${p.id}w`) % 25), shoulder: 42 + (tbHash(`${p.id}s`) % 8), chest: 108 + (tbHash(`${p.id}c`) % 16) } : null;
   const discount = p.originPrice ? Math.round((p.originPrice - price) * 100) / 100 : 0;
@@ -2037,7 +2042,7 @@ function SkuSheet({
               <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/25" />
             </button>
             <div className="mt-1 flex items-center gap-2 pl-5.5 text-[12px]">
-              <span className="text-[#00A860]">{etaDate}</span>
+              <span className="text-[#00A860]">{etaText}</span>
               <span className="h-3 w-px bg-black/10" />
               <span className="text-black/55">快递 {p.freight === 0 ? '包邮' : `¥${fmtMoney(p.freight)}`}</span>
               <span className="h-3 w-px bg-black/10" />
@@ -2294,11 +2299,8 @@ function ProductPage({
   const scrollerRef = useRef<HTMLDivElement>(null);
   // 收藏人数（确定性，展示用；收藏后数字橙色高亮）
   const favCount = String(1000 + (tbHash(`${pid}fav`) % 9000));
-  // 预计送达日期（与 SkuSheet 同口径：3 天后）
-  const etaDate = (() => {
-    const d = new Date(Date.now() + 3 * 86_400_000);
-    return `${d.getMonth() + 1}月${d.getDate()}日送达`;
-  })();
+  // 预计送达（与 SkuSheet 同口径：跟随送达速度，真实时钟）
+  const etaText = `预计${TB_SPEED_DESC[tbGetDeliverySpeed(uid)]}`;
   if (!p) {
     return (
       <div className="grid h-full place-items-center bg-white">
@@ -2456,7 +2458,7 @@ function ProductPage({
         {/* 预计送达行（截图1：绿字卡车 + 预计X月X日送达） */}
         <div className="mt-2 flex items-center gap-2 bg-white px-4 py-4">
           <Truck className="h-5 w-5 shrink-0 text-black/80" strokeWidth={2} />
-          <span className="text-[16px] font-semibold text-[#00B578]">预计{etaDate}</span>
+          <span className="text-[16px] font-semibold text-[#00B578]">{etaText}</span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-black/25" />
         </div>
       </div>
@@ -3756,7 +3758,7 @@ function OrderCard({
         <button type="button" onClick={(e) => { e.stopPropagation(); onOpenLogistics(o.id); }} className="mt-2.5 flex w-full items-center gap-2 rounded-xl bg-[#F6F7F8] px-3 py-2.5 text-left active:opacity-80">
           {nodeIdx >= 3 ? <Package className="h-4 w-4 shrink-0 text-black/70" strokeWidth={2} /> : nodeIdx === 2 ? <Bike className="h-4 w-4 shrink-0 text-black/70" strokeWidth={2} /> : <Truck className="h-4 w-4 shrink-0 text-black/70" strokeWidth={2} />}
           <span className="shrink-0 text-[13px] font-medium text-black/80">{tbTrackPhaseText(nodeIdx)}</span>
-          <span className="truncate text-[12px] text-black/40">{nodeIdx >= 2 ? '预计今天送达' : '预计明天送达'}</span>
+          <span className="truncate text-[12px] text-black/40">'预计今天送达'</span>
           <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-black/25" />
         </button>
       ) : null}
@@ -4155,7 +4157,7 @@ function OrderDetailPage({
               </span>
               <span className="text-[15.5px] font-semibold text-black/85">承诺{promiseText}</span>
               <span className="mx-1 h-3.5 w-px bg-black/10" />
-              <span className="text-[13px] text-black/45">预计明天发货</span>
+              <span className="text-[13px] text-black/45">今天内发货</span>
               <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-black/25" />
             </button>
             <div className="mt-2 bg-white px-4 py-3">
@@ -4298,7 +4300,7 @@ function OrderDetailPage({
                 <div className="flex items-center gap-2">
                   {nodeIdx >= 3 ? <Package className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} /> : nodeIdx === 2 ? <Bike className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} /> : <Truck className="h-5 w-5 text-[#FF6A1E]" strokeWidth={2.1} />}
                   <span className="text-[17px] font-semibold text-[#FF6A1E]">{tbTrackPhaseText(nodeIdx)}</span>
-                  <span className="text-[13px] text-black/45">{nodeIdx >= 2 ? '预计今天送达' : '预计明天送达'}</span>
+                  <span className="text-[13px] text-black/45">'预计今天送达'</span>
                   <span className="ml-auto flex shrink-0 items-center text-[13px] text-black/45">
                     查看物流
                     <ChevronRight className="h-3.5 w-3.5" />
@@ -4841,7 +4843,7 @@ function LogisticsPage({
       case 'station':
         return { title: '已放入菜鸟驿站', sub: `距收货地${(3.5 + (tbHash(`${o.id}s`) % 15) / 10).toFixed(1)}公里` };
       case 'transit':
-        return { title: '运输中', sub: '预计明天送达' };
+        return { title: '运输中', sub: '预计今天送达' };
       default:
         return { title: '已揽收', sub: '商家已把包裹交给快递员' };
     }
@@ -5195,6 +5197,8 @@ function MePage({
   // 商品图片样式选择弹层（第六十六轮：从主题 App 迁出，红包位改为选择器入口）
   const [goodsStyleOpen, setGoodsStyleOpen] = useState(false);
   const goodsImgStyle = useSettings((s) => s.goodsImgStyle);
+  // 送达速度（第六十八轮：快/正常/慢 三选一，持久化按账号；切换后在途单/新单时间轴统一跟随）
+  const [speed, setSpeed] = useState<TbDeliverySpeed>(() => tbGetDeliverySpeed(uid));
   useEffect(() => {
     tbTickOrders(uid);
     const t = setInterval(() => setTick((n) => n + 1), 5000);
@@ -5366,6 +5370,30 @@ function MePage({
               <span className="text-[17px] font-bold text-black/90">我的消费明细</span>
               <ChevronRight className="h-4 w-4 text-black/35" />
             </button>
+            {/* 送达速度（第六十八轮：右侧三选一 快/正常/慢；全店订单时间按真实时钟跟随该速度） */}
+            <div className="ml-auto flex items-center gap-[3px]" data-testid="tb-speed-picker">
+              {TB_SPEED_ORDER.map((s) => {
+                const on = speed === s;
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    data-testid={`tb-speed-${s}`}
+                    onClick={() => {
+                      if (speed === s) return;
+                      setSpeed(s);
+                      tbSetDeliverySpeed(uid, s);
+                      onToast(`已切换为「${TB_SPEED_LABEL[s]}」速：付款后${TB_SPEED_DESC[s]}`);
+                    }}
+                    className={`rounded-full px-2.5 py-[3px] text-[11px] leading-none transition-colors active:opacity-75 ${
+                      on ? 'bg-[#FF5000] font-semibold text-white' : 'bg-black/[0.05] text-black/50'
+                    }`}
+                  >
+                    {TB_SPEED_LABEL[s]}
+                  </button>
+                );
+              })}
+            </div>
           </div>
           {/* 资产行（首位=商品图片样式选择器入口：当前样式缩略图+名字，点击弹三选一弹层；
               优惠券/骑手/账户余额 label 上 value 下；行内 items-center 垂直居中对齐） */}
@@ -5514,7 +5542,7 @@ function MePage({
         <div className="pt-2 text-center text-[11.5px] text-black/30">顶部下拉换新推荐，滑到底部拉一拉在下方加载更多</div>
       </div>
     </div>
-    <TbPullIndicator h={mePull} />
+    <TbPullIndicator h={mePull} upOffset={66} />
     </div>
     {/* 骑手形象选择（需求：淘金币入口改为骑手；底部弹层复用美团 MT_RIDERS 全套形象，
         选中后同时用于淘宝物流页地图巡航与美团配送地图，共用同一形象） */}
@@ -6938,9 +6966,10 @@ type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 /** 底部导航（首页/消息/购物车/我的淘宝） */
 function BottomTabBar({ active, onTab, cartCount, msgCount }: { active: TbTab; onTab: (t: TbTab) => void; cartCount: number; msgCount: number }) {
   return (
-    <div className="absolute inset-x-0 bottom-0 z-40 flex h-[53px] items-stretch border-t border-black/[0.05] bg-white/95 pb-3 pt-0.5 backdrop-blur-lg">
+    <div className="absolute inset-x-0 bottom-0 z-40 flex items-stretch border-t border-black/[0.05] bg-white/95 pb-[max(12px,env(safe-area-inset-bottom))] pt-0.5 backdrop-blur-lg">
       {/* 需求（第十轮）：底部 tab 上下变窄一点（pt-1.5→pt-0.5、pb-5→pb-3、行距/内边距收紧）；
-          本轮：固定高 53px（=1px 边线+2+图标 23+文字 15+12），购物车结算栏按此对齐消除底部空隙 */}
+          本轮：固定高 53px（=1px 边线+2+图标 23+文字 15+12），购物车结算栏按此对齐消除底部空隙；
+          第六十八轮：pb-3→max(12px,safe-area)——移动端安全区设备深色 tab 底部延伸到指示条之下 */}
       {/* 首页（active：橙色淘 logo 圆，截图1） */}
       <button type="button" onClick={() => onTab('home')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
         {active === 'home' ? (
