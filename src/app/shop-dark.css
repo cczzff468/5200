@@ -2,7 +2,7 @@
  * 作用域：.shop-dark（AppWindow 在全局深色主题下挂给淘宝/美团两个 App）。
  * 规则：中性白/灰面与黑字翻转成深色/白字；粉彩贴片翻深同调；品牌亮色 CTA（美团黄/淘宝橙等）
  * 保持原样，其上的黑字/深褐字用保护规则恢复；改动两个 App 的颜色类后重跑生成器即可。
- * 覆盖文件：taobao.tsx meituan.tsx goods-style-sheet.tsx taobao-channels.tsx taobao-msg-chat.tsx wechat-wallet.tsx qq.tsx tb-pull-refresh.tsx page-toast.tsx tb-img.tsx mt-food-img.tsx mt-merchant-center.tsx mt-merchant-edit.tsx mt-shop-manage.tsx meituan-travel.tsx meituan-shangou.tsx mt-scan.tsx mt-proxy-detail.tsx wx-icons.tsx wechat.tsx voice-call-screen.tsx mt-draft-card.tsx mt-share-card.tsx tb-share-cards.tsx moments-shared.tsx moments-settings.tsx action-desc-line.tsx song-msg-bubble.tsx together-invite-sheet.tsx chat-settings.tsx proactive-msg-page.tsx bubble-menu.tsx forward-sheet.tsx qq-group.tsx album.tsx vision-log.tsx goods-emoji-tile.tsx mt-merchant-ui.tsx mt-dish-edit.tsx wx-group.tsx photo-stack.tsx default-avatar.tsx music-shared.tsx text-card-bubble.tsx */
+ * 覆盖文件：taobao.tsx meituan.tsx goods-style-sheet.tsx taobao-channels.tsx taobao-msg-chat.tsx wechat-wallet.tsx qq.tsx tb-pull-refresh.tsx page-toast.tsx tb-img.tsx mt-food-img.tsx mt-merchant-center.tsx mt-merchant-edit.tsx mt-shop-manage.tsx meituan-travel.tsx meituan-shangou.tsx mt-scan.tsx mt-proxy-detail.tsx wx-icons.tsx wechat.tsx voice-call-screen.tsx mt-draft-card.tsx mt-share-card.tsx tb-share-cards.tsx tb-draft-card.tsx moments-shared.tsx moments-settings.tsx action-desc-line.tsx song-msg-bubble.tsx together-invite-sheet.tsx chat-settings.tsx proactive-msg-page.tsx bubble-menu.tsx forward-sheet.tsx qq-group.tsx album.tsx vision-log.tsx goods-emoji-tile.tsx mt-merchant-ui.tsx mt-dish-edit.tsx wx-group.tsx photo-stack.tsx default-avatar.tsx music-shared.tsx text-card-bubble.tsx */
 
 .shop-dark { color-scheme: dark; }
 

@@ -88,8 +88,10 @@ import { MT_PROXY_CARD_EVENT } from '@/lib/ios/mt-proxy-pay';
 import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
 import { MtShareBubble } from './mt-share-card';
 import { TbPayBubble, TbProxyDetailPage, TbShareBubble, TbExpressPicker } from './tb-share-cards';
-import { TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT, tbProxyHistoryLine, tbCreateOrderShare } from '@/lib/ios/tb-share-proxy';
+import { TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT, tbProxyHistoryLine, tbProxyMeHistoryLine, tbCreateOrderShare, stripTbEchoText } from '@/lib/ios/tb-share-proxy';
 import { tbShareHistoryLine } from '@/lib/ios/tb-share-proxy';
+import { TbDraftBubble } from './tb-draft-card';
+import { applyTbEngageAction, buildTbEngageCtx, isTbEngageActionKind, tbDraftHistoryLine } from '@/lib/ios/tb-ai-engage';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import {
   abortStreamsByPrefix,
@@ -400,7 +402,7 @@ interface WxMsg {
   time: number;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
    *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片；tbpay = 淘宝代付卡片（请求/完成）；tbshare = 淘宝订单分享动态卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare';
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -453,6 +455,8 @@ interface WxMsg {
   tbshare?: { sid: string };
   /** 美团 AI 代点外卖草稿卡（kind='mtdraft'）：did = 草稿（mt-draft:<did>），确认后创建待支付订单 */
   mtdraft?: { did: string };
+  /** 淘宝 AI 代买草稿卡（kind='tbdraft'）：did = 草稿（tb-draft:<did>），确认后 AI 付款下单 */
+  tbdraft?: { did: string };
 }
 
 /** 朋友圈评论（replyTo = 「回复某人」的名字） */
@@ -5782,6 +5786,26 @@ function ChatPage({
           }
           continue;
         }
+        // 淘宝购物/代付/取件联动动作（[帮付淘宝:订单id]/[帮你买:商品id]/[自己买:商品id]/[帮取快递:订单id]）：
+        // 同步执行（帮付立即生效/草稿卡生成），产出卡片随回复队列投递；异步流（自己买/帮取快递）
+        // fire-and-forget，卡片经 TB_PROXY_CARD_EVENT 实时合并；角色记忆由执行器直写
+        if (isTbEngageActionKind(part.action.kind)) {
+          const tbRes = applyTbEngageAction(part.action, peer, {
+            app: 'wx',
+            meName: addressNameOf(me, useSettings.getState().addressMode),
+            // 大额帮付/代买的「对方已明确同意」判定
+            recentTexts: cur.slice(-8).map((mm) => (typeof mm.content === 'string' ? mm.content : '')),
+          });
+          for (const cm of tbRes.msgs) {
+            out.push(cm as WxMsg);
+            t += 600 + Math.floor(Math.random() * 400);
+          }
+          if (tbRes.sys) {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: tbRes.sys } });
+            t += 1;
+          }
+          continue;
+        }
         const applied = wxApplyAiActions([part.action], cur, peer, t);
         cur = applied.msgs;
         out.push(...applied.notices, ...applied.extras);
@@ -5812,7 +5836,7 @@ function ChatPage({
             // F1 兜底：尾部未闭合的半截照片标签剥掉不投递（后台接力整段直入本管线时防「[图片:黄昏的咖」
             // 半截上屏；流式路径上游已用 splitUnfinishedPhotoTag 提前切走尾段，此处通常为空操作）
             // 美团回显剥除：AI 照抄历史里的卡片序列化行（[美团代付/代点…]（…））当正文时整行剥掉
-            const safePhotoText2 = stripMtEchoText(stripUnfinishedPhotoTag(photoFreeText));
+            const safePhotoText2 = stripTbEchoText(stripMtEchoText(stripUnfinishedPhotoTag(photoFreeText)));
             // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
             // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
             const clean = cleanBubbleText(stickersOn ? safePhotoText2 : stripEmojiText(safePhotoText2.replace(/\[表情包\]|\[表情\]/g, ' ')));
@@ -6017,11 +6041,16 @@ function ChatPage({
                         : m.kind === 'mtdraft' && m.mtdraft
                           ? mtDraftHistoryLine(m.mtdraft.did, peer.name)
                           : m.kind === 'tbpay' && m.tbpay
-                            ? // 淘宝代付卡：AI 读到结构化信息（请求人/店铺/金额/状态），待付请求凭 pid 决策
-                              tbProxyHistoryLine(m.tbpay.pid, m.tbpay.role, m.role === 'me' ? meAddrName : peer.name)
+                            ? // 淘宝代付卡：AI 读到结构化信息（请求人/店铺/金额/状态），待付请求凭 pid 决策；
+                              // direction 'me' 请求卡（AI 请机主代付）用专属句式，防主语伪造
+                              m.tbpay.role === 'req' && m.role === 'peer'
+                                ? tbProxyMeHistoryLine(m.tbpay.pid)
+                                : tbProxyHistoryLine(m.tbpay.pid, m.tbpay.role, m.role === 'me' ? meAddrName : peer.name)
                             : m.kind === 'tbshare' && m.tbshare
                               ? tbShareHistoryLine(m.tbshare.sid)
-                              : m.content),
+                              : m.kind === 'tbdraft' && m.tbdraft
+                                ? tbDraftHistoryLine(m.tbdraft.did)
+                                : m.content),
         };
       });
 
@@ -6091,6 +6120,9 @@ function ChatPage({
     // 美团×AI 联动（外卖/代付）：实时订单动态 + 本聊天的待处理代付请求/待付订单 +
     // 食物话题命中时的商家目录与点外卖动作教学（全同步 kv 读，状态实时）
     const mtEngage = buildMtEngageCtx(peer.id, 'wx', [userMsg?.content, sysEvent, ...base.slice(-6).map(scanTextOf)]);
+    // 淘宝×AI 联动（购物/代付/取件）：机主淘宝订单实时动态 + 待付订单帮付/在途快递帮取/
+    // 礼物自动标记 + 购物话题时的商品目录与代买教学（全同步 kv 读，状态实时）
+    const tbEngage = buildTbEngageCtx(peer.id, 'wx', [userMsg?.content, sysEvent, ...base.slice(-6).map(scanTextOf)]);
     // 时间感知（本会话独立开关，发送时现场读取；关闭时不注入任何时间信息，恢复普通聊天）：
     // 上次聊天间隔 = 该会话上一条消息时间戳（不含本轮刚发的消息）与当前时间的差值，按角色隔离不串台
     const priorMsgs = baseMsgs ?? msgs;
@@ -6150,12 +6182,14 @@ function ChatPage({
       crossCtxRef.current.groupBlock,
       // 美团外卖动态：机主最近订单/配送状态实时注入（AI 知道机主点了什么、哪家店、多少钱、什么时候、现在到哪了）
       mtEngage.block,
+      // 淘宝购物动态：机主最近订单/快递状态实时注入（AI 知道机主买了什么、快递到哪了，可自然提起）
+      tbEngage.block,
       // 音乐实时情境（第三十八轮）：一起听中=一起听块；其余私聊=音乐点播块（播放器此刻歌名/歌手/进度/歌词
       // + 主动放歌引导 + 播控指令说明）（发消息瞬间现场构建，非缓存）
       togetherLiveBlock(peer.id, me.name),
       momentsBlock,
       locBlock,
-      [...actionRules, ...mtEngage.rules].length > 0 ? [...actionRules, ...mtEngage.rules].join('\n\n') : '',
+      [...actionRules, ...mtEngage.rules, ...tbEngage.rules].length > 0 ? [...actionRules, ...mtEngage.rules, ...tbEngage.rules].join('\n\n') : '',
       blkBlock,
       quitCtx?.section ?? '',
       kickSection,
@@ -7922,14 +7956,19 @@ function ChatPage({
                   <MtShareBubble sid={m.mtshare.sid} side={m.role === 'me' ? 'right' : 'left'} />
                 </div>
               ) : m.kind === 'tbpay' && m.tbpay ? (
-                /* 淘宝找人代付卡片（淘宝收银台发请求卡；好友 AI 代付后完成卡回聊天）；点卡进代付详情 */
+                /* 淘宝找人代付卡片（淘宝收银台发请求卡；好友 AI 代付后完成卡回聊天；AI 请机主代付的请求卡箭头指左）；点卡进代付详情 */
                 <div {...bubblePress}>
-                  <TbPayBubble pid={m.tbpay.pid} role={m.tbpay.role} onClick={() => setTbProxyPid(m.tbpay!.pid)} />
+                  <TbPayBubble pid={m.tbpay.pid} role={m.tbpay.role} side={m.role === 'me' ? 'right' : 'left'} onClick={() => setTbProxyPid(m.tbpay!.pid)} />
                 </div>
               ) : m.kind === 'tbshare' && m.tbshare ? (
                 /* 淘宝订单分享动态卡片（交易成功/已发货详情分享、快递面板发出；时间线实时跟订单走） */
                 <div {...bubblePress}>
                   <TbShareBubble sid={m.tbshare.sid} side={m.role === 'me' ? 'right' : 'left'} />
+                </div>
+              ) : m.kind === 'tbdraft' && m.tbdraft ? (
+                /* 淘宝 AI 代买草稿卡（AI [帮你买] 生成；机主确认后 AI 立即付款下单） */
+                <div {...bubblePress}>
+                  <TbDraftBubble did={m.tbdraft.did} onToast={onToast} />
                 </div>
               ) : m.kind === 'mtdraft' && m.mtdraft ? (
                 /* 美团 AI 代点外卖草稿卡（AI [帮点外卖] 生成；机主确认后创建待支付订单并跳收银台） */
@@ -8846,7 +8885,7 @@ function ChatPage({
 
       {/* 美团找人代付详情页（聊天内打开：好友视角可立即代付） */}
       {proxyPid && <MtProxyDetailPage pid={proxyPid} canPay onBack={() => setProxyPid(null)} onToast={onToast} />}
-      {tbProxyPid && <TbProxyDetailPage pid={tbProxyPid} onBack={() => setTbProxyPid(null)} onToast={onToast} />}
+      {tbProxyPid && <TbProxyDetailPage pid={tbProxyPid} canPay onBack={() => setTbProxyPid(null)} onToast={onToast} />}
 
       {/* 亲属卡详情页：我发的 → 管理详情（图③）；对方发的 → 领取页（图②） */}
       {detailMsg?.kind === 'family' && detailMsg.fam && (detailMsg.role === 'me' ? (

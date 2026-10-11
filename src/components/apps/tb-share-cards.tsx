@@ -24,11 +24,12 @@ import {
   tbGetProxy,
   tbGetShare,
   tbProxyChannelName,
+  tbProxyPayOrder,
   tbShareOrderOf,
   tbShareStagesOf,
   type TbOrderShare,
 } from '@/lib/ios/tb-share-proxy';
-import type { TbOrder } from '@/lib/ios/taobao-store';
+import { tbArrivedAtStation, tbConfirmReceive, type TbOrder } from '@/lib/ios/taobao-store';
 
 const fmt2 = (n: number): string => {
   const s = n.toFixed(2);
@@ -59,7 +60,7 @@ function useProxyCountdown(createdAt: number): string {
 
 // ---------------- 聊天气泡（微信/QQ 共用；样式对齐美团代付卡，品牌色淘宝橙） ----------------
 
-export function TbPayBubble({ pid, role, onClick }: { pid: string; role: 'req' | 'done'; onClick: () => void }) {
+export function TbPayBubble({ pid, role, side, onClick }: { pid: string; role: 'req' | 'done'; /** 箭头指向头像侧（消息发送方）；缺省按 role 推导（req=右/done=左） */ side?: 'left' | 'right'; onClick: () => void }) {
   const p = tbGetProxy(pid);
   const paid = p?.status === 'paid';
   // 终态（婉拒/失效）→ 卡片褪灰 + 终态文案（同红包/转账领取后语义）
@@ -86,7 +87,7 @@ export function TbPayBubble({ pid, role, onClick }: { pid: string; role: 'req' |
       aria-label={`淘宝代付卡 ¥${fmt2(p?.amount ?? 0)}（${role === 'done' || reqDone ? '已代付' : declined ? '已婉拒' : expired ? '已失效' : '待代付'}）`}
     >
       {/* 箭头指向头像侧：请求卡=我发出（右）/ 完成卡=好友发来（左） */}
-      <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${role === 'done' ? '-left-[4px]' : '-right-[4px]'}`} />
+      <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${(side ?? (role === 'done' ? 'left' : 'right')) === 'left' ? '-left-[4px]' : '-right-[4px]'}`} />
 
       {/* 头部：淘宝 logo + 交易保障 */}
       <span className="relative flex items-center gap-1.5">
@@ -165,12 +166,16 @@ export function TbProxyDetailPage({
   pid,
   onBack,
   onToast,
+  /** 聊天端打开（direction 'me' 请求卡可代付）；淘宝端入口不传（仅查看） */
+  canPay = false,
 }: {
   pid: string;
   onBack: () => void;
   onToast: (m: string) => void;
+  canPay?: boolean;
 }) {
   const [ver, setVer] = useState(0);
+  const [paying, setPaying] = useState(false);
   const p = tbGetProxy(pid);
 
   // 代付状态被别处更新（订单侧/AI 决策/另一端）→ 重读渲染
@@ -207,6 +212,24 @@ export function TbProxyDetailPage({
   const closed = declined || expired;
   const channel = p.paidChannel ?? tbProxyChannelName(p.idp);
   const platform = p.idp === 'wx' ? '微信' : 'QQ';
+  /** AI 请机主代付的请求卡：机主点开可直接代付（演示语义，渠道随平台） */
+  const canPayNow = canPay && !paid && !closed && p.direction === 'me';
+
+  const payNow = () => {
+    if (paying) return;
+    setPaying(true);
+    try {
+      const res = tbProxyPayOrder(pid);
+      if (!res.ok) {
+        onToast(res.error);
+        return;
+      }
+      onToast(`已帮${p.fromName}代付 ¥${fmt2(p.amount)}`);
+      setVer((v) => v + 1);
+    } finally {
+      setPaying(false);
+    }
+  };
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col bg-[#F4F5F9]" data-testid="tb-proxy-detail">
@@ -305,7 +328,7 @@ export function TbProxyDetailPage({
             </p>
           </div>
 
-          {/* 主按钮：待付 = 等待好友代付（AI 按人设/记忆自主决策）；终态 = 返回 */}
+          {/* 主按钮：direction 'me' 待付 = 机主立即代付；'friend' 待付 = 等待好友代付（AI 自主决策）；终态 = 返回 */}
           {paid ? (
             <button
               type="button"
@@ -324,6 +347,20 @@ export function TbProxyDetailPage({
             >
               {declined ? '知道了' : '好的'}
             </button>
+          ) : canPayNow ? (
+            <div>
+              <button
+                type="button"
+                onClick={payNow}
+                data-testid="tb-proxy-pay-btn"
+                className="mt-4 h-[46px] w-full rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[16px] font-bold text-white active:opacity-85"
+              >
+                {paying ? '支付中…' : `立即代付 ¥${fmt2(p.amount)}`}
+              </button>
+              <p className="mt-2 text-center text-[11px] leading-relaxed text-black/35">
+                {p.fromName}在等你帮忙付款（演示语义，不扣真实余额）
+              </p>
+            </div>
           ) : (
             <div>
               <button
@@ -462,9 +499,31 @@ export function TbShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
         <TbShareTimeline order={order} />
       </span>
 
+      {/* AI 代买的订单到驿站：机主在卡片上直接确认收货（已签收需机主确认或让 AI 帮取后才显示） */}
+      {order && share.paidBy && order.status === 'shipped' && tbArrivedAtStation(order) && (
+        <button
+          type="button"
+          data-testid="tb-share-confirm"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (tbConfirmReceive(share.uid, order.id)) {
+              try {
+                window.dispatchEvent(new CustomEvent('tb-orders-changed'));
+              } catch {
+                /* 忽略 */
+              }
+            }
+          }}
+          className="relative mt-2 flex h-9 w-full items-center justify-center rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[13px] font-bold text-white active:opacity-85"
+        >
+          <Check className="mr-1 h-4 w-4" strokeWidth={2.6} />
+          确认收货
+        </button>
+      )}
+
       {/* 底注：来源 + 查看详情提示（整卡可点） */}
       <span className="relative mt-2 flex items-center justify-between border-t border-black/[0.05] pt-1.5 text-[10px] text-black/30">
-        <span>{awaitingPay ? '待支付 · 点去淘宝付款' : '淘宝订单'}</span>
+        <span>{awaitingPay ? '待支付 · 点去淘宝付款' : share.paidBy ? `${share.paidBy}已买单 · 淘宝订单` : share.gift ? '送TA的礼物 · 淘宝订单' : '淘宝订单'}</span>
         {order && !cancelled && (
           <span className="flex items-center gap-0.5 font-medium text-[#FF5000]">
             查看详情

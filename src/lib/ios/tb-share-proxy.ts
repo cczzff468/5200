@@ -47,6 +47,12 @@ export interface TbOrderShare {
   itemCount: number;
   items: TbShareItem[];
   createdAt: number;
+  /** 已由 AI 代买代付时展示「X已买单」语义（对齐美团 mt-order-share） */
+  paidBy?: string;
+  /** 机主送 TA 的礼物（用户说明「给你买的」后标记）：到驿站后 AI 自主取件 */
+  gift?: boolean;
+  /** 机主请 TA 帮忙取件（淘宝「找人帮取」分享）：到驿站后 AI 取件并回消息 */
+  pickupReq?: boolean;
 }
 
 export interface TbProxyPay {
@@ -76,6 +82,11 @@ export interface TbProxyPay {
   paidChannel?: string;
   /** 终态说明（declined/expired 时展示） */
   closeReason?: string;
+  /** 代付方向（对齐美团 mt-proxy-pay）：'friend' = 机主请 AI 好友代付（缺省，存量数据兼容）；
+   *  'me' = AI 角色下单请机主代付（付款人 = 机主，请求卡落在角色聊天里） */
+  direction?: 'friend' | 'me';
+  /** 卡片所在聊天的联系人 id（direction 'me' 时 = 发起角色 id，与付款人 contactId 不同）；缺省 = contactId */
+  chatContactId?: string;
 }
 
 /** 聊天里的代付卡片消息（微信 WxMsg / QQ QQMsg 同构，kind='tbpay'） */
@@ -160,7 +171,14 @@ export function tbGetProxy(pid: string): TbProxyPay | null {
     paidAt: typeof p.paidAt === 'number' ? p.paidAt : undefined,
     paidChannel: typeof p.paidChannel === 'string' ? p.paidChannel : undefined,
     closeReason: typeof p.closeReason === 'string' && p.closeReason ? p.closeReason : undefined,
+    direction: p.direction === 'me' ? 'me' : 'friend',
+    chatContactId: typeof p.chatContactId === 'string' && p.chatContactId ? p.chatContactId : undefined,
   };
+}
+
+/** 代付卡片所在聊天（direction 'me' = 发起角色聊天；'friend' = 付款人聊天） */
+export function tbProxyChatCid(p: TbProxyPay): string {
+  return p.direction === 'me' ? p.chatContactId || p.contactId : p.contactId;
 }
 
 /** 读取分享快照（容错规范化） */
@@ -184,6 +202,9 @@ export function tbGetShare(sid: string): TbOrderShare | null {
     itemCount: typeof s.itemCount === 'number' ? s.itemCount : 0,
     items: normItems(s.items),
     createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now(),
+    paidBy: typeof s.paidBy === 'string' && s.paidBy ? s.paidBy : undefined,
+    gift: s.gift === true,
+    pickupReq: s.pickupReq === true,
   };
 }
 
@@ -458,11 +479,12 @@ export function tbProxyPayOrder(pid: string, opts?: { deferCard?: boolean }): Tb
 
   const now = Date.now();
   const channel = tbProxyChannelName(p.idp);
+  const meDir = p.direction === 'me';
   // 支付落账：pendingPay → pendingDeliver（渠道文案带付款人名——B4 据此判定代付方）
   const okPaid = tbMarkPaid(p.uid, p.orderId, {
     payIdp: p.idp,
-    payChannelLabel: `好友代付 · ${channel}（${p.contactName}）`,
-    payMethodId: 'proxy',
+    payChannelLabel: meDir ? `代付 · ${channel}（${p.contactName}）` : `好友代付 · ${channel}（${p.contactName}）`,
+    payMethodId: meDir ? 'proxy-me' : 'proxy',
     payFc: false,
   });
   if (!okPaid) return { ok: false, error: '订单状态已变化，代付未完成' };
@@ -470,11 +492,11 @@ export function tbProxyPayOrder(pid: string, opts?: { deferCard?: boolean }): Tb
   const done: TbProxyPay = { ...p, status: 'paid', paidAt: now, paidChannel: channel };
   kvSet(`tb-proxy:${done.id}`, done);
 
-  // 完成卡片（好友发回给我）
+  // 完成卡片（direction 'friend'：好友发回给我；'me'：我付完回执给角色）
   const card: TbProxyCardMsg = {
     id: genId('tbpxm'),
-    role: 'peer',
-    content: `[淘宝代付]已帮你代付¥${fmt2(p.amount)}`,
+    role: meDir ? 'me' : 'peer',
+    content: meDir ? `[淘宝代付]已帮${p.fromName}代付¥${fmt2(p.amount)}` : `[淘宝代付]已帮你代付¥${fmt2(p.amount)}`,
     time: now,
     kind: 'tbpay',
     tbpay: { pid: p.id, role: 'done' },
@@ -484,9 +506,9 @@ export function tbProxyPayOrder(pid: string, opts?: { deferCard?: boolean }): Tb
     window.dispatchEvent(new CustomEvent('tb-orders-changed'));
     return { ok: true, proxy: done, order: { ...cur, status: 'pendingDeliver', paidAt: now }, card };
   }
-  insertCard(p.idp, p.contactId, card, TB_PROXY_CARD_EVENT);
+  insertCard(p.idp, tbProxyChatCid(done), card, TB_PROXY_CARD_EVENT);
   window.dispatchEvent(new CustomEvent('tb-orders-changed'));
-  // 灵动岛通知（淘宝订单 · 好友已代付；点击进淘宝对应订单详情）
+  // 灵动岛通知（淘宝订单 · 代付完成；点击进淘宝对应订单详情）
   void import('./island-notify')
     .then((m) =>
       m.pushChatNotification({
@@ -494,7 +516,7 @@ export function tbProxyPayOrder(pid: string, opts?: { deferCard?: boolean }): Tb
         app: 'taobao',
         title: '淘宝订单',
         avatar: '/icons/taobao.png',
-        body: `好友${p.contactName}已代付¥${fmt2(p.amount)}，订单已支付`,
+        body: meDir ? `你已帮${p.fromName}代付¥${fmt2(p.amount)}，订单已支付` : `好友${p.contactName}已代付¥${fmt2(p.amount)}，订单已支付`,
         target: { app: 'taobao', contactId: p.orderId },
       })
     )
@@ -514,7 +536,15 @@ export function tbProxyHistoryLine(pid: string, cardRole: 'req' | 'done', sender
   return `[淘宝代付回执 id:${p.id}]（${senderName}：已代付淘宝店「${p.shopName}」¥${fmt2(p.amount)}，订单支付完成）`;
 }
 
-/** 订单分享卡 → AI 可读文本（含实时物流状态，AI 能自然接话） */
+/** AI 请机主代付的请求卡 → AI 可读文本（机主未付时可以撒娇提及） */
+export function tbProxyMeHistoryLine(pid: string): string {
+  const p = tbGetProxy(pid);
+  if (!p) return '[淘宝代付卡片]';
+  const stateText = p.status === 'pending' ? '待机主支付' : p.status === 'paid' ? '机主已代付' : p.status === 'declined' ? '机主婉拒了' : `已失效（${p.closeReason ?? ''}）`;
+  return `[你的淘宝代付请求 id:${p.id}]（你在淘宝店「${p.shopName}」拍了 ¥${fmt2(p.amount)}，${p.items.map((i) => `${i.name}x${i.qty}`).join('、')}，请机主代付，状态:${stateText}）`;
+}
+
+/** 订单分享卡 → AI 可读文本（含实时物流状态/礼物/帮取标记，AI 能自然接话与行动） */
 export function tbShareHistoryLine(sid: string): string {
   const s = tbGetShare(sid);
   if (!s) return '[淘宝订单分享卡片]';
@@ -530,11 +560,16 @@ export function tbShareHistoryLine(sid: string): string {
             ? '已签收'
             : '已取消'
     : '未知';
-  return `[淘宝订单分享]（${s.fromName}分享的：淘宝店「${s.shopName}」¥${fmt2(s.amount)}，${s.items.map((i) => `${i.name}x${i.qty}`).join('、')}，当前状态:${status}）`;
+  const flags = [
+    s.gift ? '机主说明这是送你的礼物（到驿站后你要自己去取）' : '',
+    s.pickupReq ? '机主请你帮忙取件（到驿站后帮忙去取）' : '',
+    s.paidBy ? `已由${s.paidBy}代买代付` : '',
+  ].filter(Boolean);
+  return `[淘宝订单分享 id:${s.id} 订单:${s.orderId}]（${s.fromName}分享的：淘宝店「${s.shopName}」¥${fmt2(s.amount)}，${s.items.map((i) => `${i.name}x${i.qty}`).join('、')}，当前状态:${status}${flags.length ? `，${flags.join('，')}` : ''}）`;
 }
 
 /** AI 幻觉回显剥除：模型照抄聊天历史里的卡片序列化行当正文时整行剥除（与美团端同口径） */
-const TB_ECHO_LINE_RE = /^\s*\[淘宝(?:代付|订单分享|快递)[^\]]*\]\s*（.*）\s*$/;
+const TB_ECHO_LINE_RE = /^\s*\[淘宝(?:代付请求|代付回执|代付|订单分享|快递|你的淘宝代付请求|代买)[^\]]*\]\s*（.*）\s*$/;
 export function stripTbEchoText(text: string): string {
   const lines = text.split('\n');
   const kept = lines.filter((l) => !TB_ECHO_LINE_RE.test(l));
@@ -548,12 +583,22 @@ export interface TbCreateShareOpts {
   idp: 'wx' | 'qq';
   contactId: string;
   fromName: string;
+  /** 'me' = 机主发给好友（缺省）；'peer' = AI 角色发给机主（AI 代买请客） */
+  role?: 'me' | 'peer';
+  /** 已由 AI 代买代付时展示「X已买单」 */
+  paidBy?: string;
+  /** 机主送 TA 的礼物（聊天说明「给你买的」时标记） */
+  gift?: boolean;
+  /** 机主请 TA 帮忙取件（淘宝「找人帮取」） */
+  pickupReq?: boolean;
+  /** 自定义卡片前置文案（缺省按 role/意图生成） */
+  content?: string;
 }
 
 export type TbCreateShareResult = { ok: true; share: TbOrderShare } | { ok: false; error: string };
 
 /**
- * 发起订单分享：生成快照 + 动态卡片进好友聊天（我发给好友）。
+ * 发起订单分享：生成快照 + 动态卡片进好友聊天（我发给好友 / AI 发给机主）。
  * 同一订单同一好友 30 秒内防重复连发；好友必须存在且为该平台好友。
  */
 export async function tbCreateOrderShare(opts: TbCreateShareOpts): Promise<TbCreateShareResult> {
@@ -583,19 +628,149 @@ export async function tbCreateOrderShare(opts: TbCreateShareOpts): Promise<TbCre
     itemCount: order.items.reduce((s, i) => s + i.qty, 0),
     items: order.items.map((i) => ({ name: i.title, qty: i.qty, price: i.price, img: i.img })),
     createdAt: Date.now(),
+    ...(opts.paidBy ? { paidBy: opts.paidBy } : {}),
+    ...(opts.gift ? { gift: true } : {}),
+    ...(opts.pickupReq ? { pickupReq: true } : {}),
   };
   kvSet(`tb-share:${share.id}`, share);
   pushIndex('tb-share-index', share.id);
 
+  // 礼物/帮取标记同步写到订单上（AI 取件 watcher 读订单，不扫分享索引）
+  if (opts.gift || opts.pickupReq) {
+    try {
+      const { tbSaveOrders } = await import('./taobao-store');
+      const list = tbLoadOrders(order.uid);
+      const hit = list.find((o) => o.id === order.id);
+      if (hit && hit.status === 'shipped' && !hit.aiPickup) {
+        hit.aiPickup = { contactId, contactName: displayNameOf(contact), app: idp, kind: opts.gift ? 'gift' : 'favor' };
+        tbSaveOrders(order.uid, list);
+        window.dispatchEvent(new CustomEvent('tb-orders-changed'));
+      }
+    } catch {
+      /* 标记失败不阻断分享 */
+    }
+  }
+
+  const defaultContent = opts.gift
+    ? `[淘宝订单分享]送你的礼物已下单，到货你记得取呀`
+    : opts.pickupReq
+      ? `[淘宝订单分享]帮我取一下这个快递`
+      : opts.paidBy
+        ? `[淘宝订单分享]请你吃的「${order.shopName}」已下单，我付好啦`
+        : `[淘宝订单分享]分享一个${order.shopName}的订单`;
   insertCard(idp, contactId, {
     id: genId('tbshm'),
-    role: 'me',
-    content: `[淘宝订单分享]分享一个${order.shopName}的订单`,
+    role: opts.role === 'peer' ? 'peer' : 'me',
+    content: opts.content?.trim() || defaultContent,
     time: Date.now(),
     kind: 'tbshare',
     tbshare: { sid: share.id },
   }, TB_SHARE_CARD_EVENT);
   return { ok: true, share };
+}
+
+// ---------------- AI 帮机主代付（[帮付淘宝]/主动参与执行器用） ----------------
+
+/**
+ * AI 帮机主代付指定待付款订单：建 direction 'friend' 代付记录（付款人 = 该 AI 角色）→
+ * 立即支付（deferCard，完成卡由调用方投递）。对齐美团 mtAiPayPendingOrder。
+ */
+export function tbAiPayPendingOrder(
+  order: TbOrder,
+  char: { id: string; name: string; avatar: string | null },
+  idp: 'wx' | 'qq',
+): TbProxyPayResult & { card?: TbProxyCardMsg } {
+  if (order.status !== 'pendingPay') return { ok: false, error: '订单不是待付款状态' };
+  const proxy: TbProxyPay = {
+    id: genId('tbpx'),
+    uid: order.uid,
+    orderId: order.id,
+    idp,
+    contactId: char.id,
+    contactName: char.name,
+    contactAvatar: char.avatar,
+    fromName: char.name,
+    fromAvatar: char.avatar,
+    shopName: order.shopName,
+    amount: order.total,
+    itemCount: order.items.reduce((s, i) => s + i.qty, 0),
+    items: order.items.map((i) => ({ name: i.title, qty: i.qty, price: i.price, img: i.img })),
+    status: 'pending',
+    createdAt: Date.now(),
+    direction: 'friend',
+  };
+  kvSet(`tb-proxy:${proxy.id}`, proxy);
+  pushIndex('tb-proxy-index', proxy.id);
+  return tbProxyPayOrder(proxy.id, { deferCard: true });
+}
+
+// ---------------- AI 请机主代付（direction 'me'，tb-ai-engage [自己买] 用） ----------------
+
+export interface TbCreateProxyByCharOpts {
+  order: TbOrder;
+  idp: 'wx' | 'qq';
+  /** 发起请求的 AI 角色（卡片落在 TA 的聊天里） */
+  char: { id: string; name: string; avatar: string | null };
+  /** 付款人（机主联系人） */
+  payer: { id: string; name: string; avatar: string | null };
+}
+
+/**
+ * AI 角色请机主代付（direction 'me'）：生成请求 + 请求卡（角色→机主）落在该角色聊天。
+ * 同一订单同一角色防重复；订单非待支付拒绝；不调度 AI 决策（付款人是机主本人）。
+ */
+export async function tbCreateProxyRequestByChar(opts: TbCreateProxyByCharOpts): Promise<TbCreateProxyResult> {
+  const { order, idp, char, payer } = opts;
+  if (order.status !== 'pendingPay') return { ok: false, error: '订单不是待付款状态，无法发起代付' };
+  const dup = findPendingProxyOfOrder(order.uid, order.id).find((p) => p.direction === 'me' && tbProxyChatCid(p) === char.id);
+  if (dup) return { ok: false, error: '已经请机主代付这张订单啦' };
+
+  const proxy: TbProxyPay = {
+    id: genId('tbpx'),
+    uid: order.uid,
+    orderId: order.id,
+    idp,
+    contactId: payer.id,
+    contactName: payer.name,
+    contactAvatar: payer.avatar,
+    fromName: char.name,
+    fromAvatar: char.avatar,
+    shopName: order.shopName,
+    amount: order.total,
+    itemCount: order.items.reduce((s, i) => s + i.qty, 0),
+    items: order.items.map((i) => ({ name: i.title, qty: i.qty, price: i.price, img: i.img })),
+    status: 'pending',
+    createdAt: Date.now(),
+    direction: 'me',
+    chatContactId: char.id,
+  };
+  kvSet(`tb-proxy:${proxy.id}`, proxy);
+  pushIndex('tb-proxy-index', proxy.id);
+
+  // 订单挂 proxy 快照（详情显示「已请机主代付」语义）
+  try {
+    const { tbSaveOrders } = await import('./taobao-store');
+    const list = tbLoadOrders(order.uid);
+    const hit = list.find((o) => o.id === order.id);
+    if (hit) {
+      hit.proxy = { id: proxy.id, name: payer.name };
+      tbSaveOrders(order.uid, list);
+      window.dispatchEvent(new CustomEvent('tb-orders-changed'));
+    }
+  } catch {
+    /* 挂快照失败不阻断 */
+  }
+
+  // 请求卡片进聊天（AI 发给机主）
+  insertCard(idp, char.id, {
+    id: genId('tbpxm'),
+    role: 'peer',
+    content: `[淘宝代付]帮我付一下¥${fmt2(proxy.amount)}的订单`,
+    time: Date.now(),
+    kind: 'tbpay',
+    tbpay: { pid: proxy.id, role: 'req' },
+  }, TB_PROXY_CARD_EVENT);
+  return { ok: true, proxy };
 }
 
 // ---------------- 快递入口（微信/QQ 加号面板「快递」） ----------------
@@ -613,14 +788,14 @@ export function tbCompletedOrders(): TbOrder[] {
   }
 }
 
-/** 某聊天内全部待处理代付请求（请求卡动作规则用；淘宝当前仅好友方向） */
+/** 某聊天内全部待处理代付请求（两个方向都在该聊天内流转；动作规则/等待态用） */
 export function tbPendingProxiesOfChat(chatContactId: string): TbProxyPay[] {
   const out: TbProxyPay[] = [];
   try {
     const ids = kvGet<string[]>('tb-proxy-index') ?? [];
     for (const pid of ids) {
       const p = tbGetProxy(pid);
-      if (p && p.status === 'pending' && p.contactId === chatContactId) out.push(p);
+      if (p && p.status === 'pending' && tbProxyChatCid(p) === chatContactId) out.push(p);
     }
   } catch {
     /* 忽略 */

@@ -56,7 +56,9 @@ function extractJsonObject(raw: string): Record<string, unknown> | null {
   return null;
 }
 
-async function callLlm(system: string, userContent: string): Promise<string> {
+export { extractJsonObject };
+
+export async function callTbLlm(system: string, userContent: string): Promise<string> {
   const apiConfig = useSettings.getState().apiConfig;
   const call = async (extra: Record<string, unknown>): Promise<string> => {
     const res = await fetch('/api/chat', {
@@ -131,7 +133,7 @@ async function runProxyDecision(pid: string): Promise<void> {
     '严禁输出 JSON 以外的文字。',
   ].join('\n\n');
 
-  const raw = await callLlm(system, user);
+  const raw = await callTbLlm(system, user);
   const parsed = extractJsonObject(raw) as Partial<ProxyDecision> | null;
   if (!parsed || typeof parsed.reply !== 'string' || !parsed.reply.trim()) return;
   const reply = parsed.reply.trim().replace(/^[「"'『]+|[」"'』]+$/g, '').split('\n').map((s) => s.trim()).filter(Boolean)[0] ?? '';
@@ -159,8 +161,8 @@ async function runProxyDecision(pid: string): Promise<void> {
   await deliverPeerMsgs(app, contact, outMsgs);
 }
 
-/** 决策消息投递（落库 + 灵动岛通知 + 未读角标；与主动消息同管线） */
-async function deliverPeerMsgs(app: 'wx' | 'qq', contact: ContactRecord, msgs: { id: string; role: 'me' | 'peer'; content: string; time: number; kind?: string; tbpay?: { pid: string; role: 'req' | 'done' } }[]): Promise<void> {
+/** 决策消息投递（落库 + 灵动岛通知 + 未读角标；与主动消息同管线）；tb-ai-engage 复用 */
+export async function deliverPeerMsgs(app: 'wx' | 'qq', contact: ContactRecord, msgs: { id: string; role: 'me' | 'peer'; content: string; time: number; kind?: string; tbpay?: { pid: string; role: 'req' | 'done' } }[]): Promise<void> {
   const cid = contact.id;
   const sessionKey = `${app}:${cid}`;
   const notifyApp = app === 'wx' ? ('wechat' as const) : ('qq' as const);

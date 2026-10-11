@@ -4244,6 +4244,7 @@ function OrderDetailPage({
   onOpenShop,
   onOpenChat,
   onShareOrder,
+  onAskPickup,
 }: {
   uid: string;
   orderId: string;
@@ -4259,6 +4260,8 @@ function OrderDetailPage({
   onOpenChat: (shopId: string, orderId: string) => void;
   /** 分享订单给微信/QQ好友（需求：已发货右上角三个点 / 交易成功左下角更多 → 分享给 AI） */
   onShareOrder: (id: string) => void;
+  /** 找人帮取（驿站卡）：分享快递给 AI 好友帮忙取件（到驿站自动取并回消息） */
+  onAskPickup: (id: string) => void;
 }) {
   const [, setTick] = useState(0);
   const [payPref, setPayPref] = useState<'wx' | 'ali'>('wx');
@@ -4663,7 +4666,7 @@ function OrderDetailPage({
                     </button>
                   </div>
                   <div className="mt-4 flex gap-3">
-                    <button type="button" onClick={() => onToast('已生成帮取码，可分享给亲友')} className="h-11 flex-1 rounded-xl border border-black/12 bg-white text-[14px] text-black/75 active:opacity-70">
+                    <button type="button" onClick={() => onAskPickup(o.id)} data-testid="tb-detail-ask-pickup" className="h-11 flex-1 rounded-xl border border-black/12 bg-white text-[14px] text-black/75 active:opacity-70">
                       找人帮取
                     </button>
                     {/* 需求：一键取件 = 确认收货 */}
@@ -5117,6 +5120,7 @@ function LogisticsPage({
   onToast,
   onOpenProduct,
   onOpenChat,
+  onAskPickup,
 }: {
   uid: string;
   orderId: string;
@@ -5125,6 +5129,8 @@ function LogisticsPage({
   onOpenProduct: (pid: string) => void;
   /** 联系客服（Task 41：带订单上下文进 AI 客服聊天） */
   onOpenChat: (shopId: string, orderId: string) => void;
+  /** 找人帮取（驿站卡）：分享快递给 AI 好友帮忙取件 */
+  onAskPickup: (id: string) => void;
 }) {
   const [detailOpen, setDetailOpen] = useState(false);
   const [, setTick] = useState(0);
@@ -5358,7 +5364,7 @@ function LogisticsPage({
                       {/* 需求（第五轮）：一键取件 = 确认收货（物流页同口径）；已签收后不再显示操作钮 */}
                       {o.status === 'shipped' ? (
                         <div className="mt-2.5 flex gap-2.5">
-                          <button type="button" onClick={() => onToast('已生成帮取码，可分享给亲友')} className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
+                          <button type="button" onClick={() => onAskPickup(o.id)} data-testid="tb-logi-ask-pickup" className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
                             找人帮取
                           </button>
                           <button
@@ -7470,15 +7476,18 @@ function PayPendingSheet({ uid, orderId, onClose, onPaid, onToast, onProxySent }
   return <PaySheet uid={uid} orderId={orderId} amount={o.total} goodsBrief={brief} onClose={onClose} onSuccess={(oid) => { onToast('支付成功'); onPaid(oid); }} onProxySent={onProxySent} />;
 }
 
-/** 订单分享弹层（交易成功/已发货详情分享入口）：选微信/QQ → 选联系人 → 动态订单卡片进好友聊天 */
+/** 订单分享弹层（交易成功/已发货详情分享入口）：选微信/QQ → 选联系人 → 动态订单卡片进好友聊天；
+ *  mode='pickup' =「找人帮取」：分享后 AI 答应取件（到驿站自动取并回消息） */
 function TbShareOrderSheet({
   order,
   fromName,
+  mode = 'share',
   onClose,
   onToast,
 }: {
   order: TbOrder;
   fromName: string;
+  mode?: 'share' | 'pickup';
   onClose: () => void;
   onToast: (m: string) => void;
 }) {
@@ -7486,18 +7495,25 @@ function TbShareOrderSheet({
   const [plat, setPlat] = useState<'wx' | 'qq' | null>(null);
   const [contactId, setContactId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const pickup = mode === 'pickup';
 
   const send = async () => {
     if (!plat || !contactId || sending) return;
     setSending(true);
-    const res = await tbCreateOrderShare({ order, idp: plat, contactId, fromName });
+    const res = await tbCreateOrderShare({ order, idp: plat, contactId, fromName, ...(pickup ? { pickupReq: true } : {}) });
     setSending(false);
     if (!res.ok) {
       onToast(res.error);
       return;
     }
+    if (pickup) {
+      // AI 响应调度：已到驿站 → 立即去取并回消息；没到 → 人设化答应（到驿站后自动取）
+      void import('@/lib/ios/tb-ai-engage')
+        .then((m) => m.tbSchedulePickupResponse(res.share.id))
+        .catch(() => undefined);
+    }
     onClose();
-    onToast(`已分享给${res.share.contactName}`);
+    onToast(pickup ? `已请${res.share.contactName}帮忙取件` : `已分享给${res.share.contactName}`);
   };
 
   return (
@@ -7506,9 +7522,9 @@ function TbShareOrderSheet({
       plat={plat}
       contactId={contactId}
       sending={sending}
-      title="分享订单"
-      platHint={`把「${order.shopName}」的订单分享给好友，TA能实时看到物流动态`}
-      contactHint={(p) => `从${p}好友里选一位分享这个订单`}
+      title={pickup ? '找人帮取' : '分享订单'}
+      platHint={pickup ? `把「${order.shopName}」的快递分享给好友，TA到驿站后帮你取件` : `把「${order.shopName}」的订单分享给好友，TA能实时看到物流动态`}
+      contactHint={(p) => (pickup ? `从${p}好友里选一位帮你取件` : `从${p}好友里选一位分享这个订单`)}
       sendLabel="发送"
       sendTestId="tb-share-send"
       platTestIdPrefix="tb-share-plat"
@@ -7559,6 +7575,8 @@ export default function TaobaoApp() {
   const [addrReturn, setAddrReturn] = useState<'me' | 'checkout'>('me');
   /** 订单分享弹层（交易成功左下角更多 / 已发货右上角三个点 → 选微信/QQ → 选联系人 → 卡片进聊天） */
   const [shareOrderId, setShareOrderId] = useState<string | null>(null);
+  /** 找人帮取弹层（驿站卡「找人帮取」→ 分享给 AI 好友帮忙取件） */
+  const [pickupOrderId, setPickupOrderId] = useState<string | null>(null);
   const [toastMsg, showToast] = useLocalToast();
 
   // 启动：恢复登录态 + 订单状态机 tick（异步包一层，避免 effect 内同步 setState 级联渲染）
@@ -7838,6 +7856,7 @@ export default function TaobaoApp() {
         }}
         onOpenChat={(sid, oid) => openChat(sid, { orderId: oid })}
         onShareOrder={(id) => setShareOrderId(id)}
+        onAskPickup={(id) => setPickupOrderId(id)}
       />
     );
   } else if (page === 'logistics' && logisticsId) {
@@ -7849,6 +7868,7 @@ export default function TaobaoApp() {
         onToast={showToast}
         onOpenProduct={openProduct}
         onOpenChat={(sid, oid) => openChat(sid, { orderId: oid })}
+        onAskPickup={(id) => setPickupOrderId(id)}
       />
     );
   } else if (page === 'chat' && chatShopId) {
@@ -8000,6 +8020,22 @@ export default function TaobaoApp() {
               order={so}
               fromName={session?.name ?? '我'}
               onClose={() => setShareOrderId(null)}
+              onToast={showToast}
+            />
+          );
+        })()
+      ) : null}
+      {/* 找人帮取弹层（驿站卡：分享快递给 AI 好友，TA到驿站后帮取并回消息） */}
+      {pickupOrderId ? (
+        (() => {
+          const so = tbLoadOrders(uid).find((x) => x.id === pickupOrderId);
+          if (!so) return null;
+          return (
+            <TbShareOrderSheet
+              order={so}
+              fromName={session?.name ?? '我'}
+              mode="pickup"
+              onClose={() => setPickupOrderId(null)}
               onToast={showToast}
             />
           );

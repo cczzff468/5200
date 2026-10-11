@@ -524,6 +524,11 @@ export interface TbOrder {
   ticket?: TbTicketInfo;
   /** 找人代付（待支付时发起）：id = 代付请求（tb-proxy:<id>），name = 代付好友 */
   proxy?: { id: string; name: string };
+  /** AI 取件联动（tb-ai-engage）：gift = 机主送的礼物（AI 到驿站自己去取）；
+   *  favor = AI 答应帮机主取（聊天 [帮取快递] / 淘宝「找人帮取」分享）；取完由 watcher 清理 */
+  aiPickup?: { contactId: string; contactName: string; app: 'wx' | 'qq'; kind: 'gift' | 'favor' };
+  /** 主动代付参与标记（tbEngageTick：每单只主动问过一次，防噪） */
+  aiAsked?: boolean;
 }
 
 const orderKey = (uid: string) => `tb-orders:${uid}`;
@@ -558,6 +563,12 @@ export function tbSaveOrders(uid: string, list: TbOrder[]): void {
 
 export function tbOrderById(uid: string, id: string): TbOrder | undefined {
   return tbLoadOrders(uid).find((o) => o.id === id);
+}
+
+/** 包裹是否已到驿站（最后一节点 = 菜鸟驿站）：一键取件/AI 取件/分享卡确认收货的公共判定 */
+export function tbArrivedAtStation(o: TbOrder | null | undefined): boolean {
+  if (!o || o.status !== 'shipped' || o.track.length === 0) return false;
+  return o.track[o.track.length - 1].text.includes('驿站');
 }
 
 // 状态机参数：待付款超时仍用固定 30min；发货/物流节奏改为「送达速度」驱动（下方 tbDeliveryTiming）
@@ -1116,13 +1127,19 @@ export function tbMsgUnreadCount(uid: string): number {
 
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 
-/** 全局订单推进（App 挂载时启动一次）：每 10s catch-up 所有已登录账号 */
+/** 全局订单推进（App 挂载时启动一次）：每 10s catch-up 所有已登录账号；
+ *  推进后接力 tbEngageTick（AI 取件/主动代付等联动，动态 import 防循环依赖） */
 export function tbStartOrderWatcher(): void {
   if (tickTimer || typeof window === 'undefined') return;
   tickTimer = setInterval(() => {
     try {
       const s = tbGetSession();
-      if (s) tbTickOrders(tbUidOf(s));
+      if (!s) return;
+      const uid = tbUidOf(s);
+      tbTickOrders(uid);
+      void import('./tb-ai-engage')
+        .then((m) => m.tbEngageTick(uid))
+        .catch(() => undefined);
     } catch {
       /* 静默 */
     }
