@@ -18268,3 +18268,25 @@ Stage Summary:
 - 交付：①淘宝收银台「找人代付」全链路（选微信/QQ→选联系人→AI 按人设/记忆自主代付或婉拒→请求卡实时变已代付+完成卡回聊天，完成卡/请求卡样式与美团代付卡同款、品牌色淘宝橙）；②交易成功左下「更多」/已发货右上「三个点」→ 分享订单给微信/QQ AI 好友（tbshare 动态卡：五段物流时间线实时跟单+点击跳淘宝详情）；③微信/QQ 加号面板「快递」→ 已确认收货订单一键分享当前聊天；④B4 失效联动（直付/取消/超时→请求失效，代付幂等落定）+ AI 记忆沉淀 + 灵动岛通知
 - 改动文件：src/lib/ios/tb-share-proxy.ts(+新增)、src/lib/ios/tb-proxy-ai.ts(+新增)、src/components/apps/tb-share-cards.tsx(+新增)、src/lib/ios/taobao-store.ts、src/lib/ios/island-notify.ts、src/components/ios/IslandNotification.tsx、src/components/apps/taobao.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/app/shop-dark.css（再生成）
 - 关键决策：①完成卡样式直接对齐美团代付卡（同横幅图/同文案/同灰化语义），仅品牌色换淘宝橙、logo 换 taobao.png（用户点名「和美团的卡片样式一样」）；②分享/快递卡复用美团「快照+实时时间线」架构——卡片不落状态快照，订单推进自动跟随；③快递面板直接发当前聊天 peer（加号面板语义即「发给这个人」，无需二次选人），淘宝详情两入口则走选平台→选联系人；④NotifyApp 扩 'taobao' 使分享卡点击/代付通知统一走灵动岛导航总线进订单详情
+
+---
+Task ID: 68
+Agent: main (Z.ai Code)
+Task: 用户五点反馈——①「承诺xx前发货」也要用真实时间、当天发货、跟随送达速度（快/正常/慢）；②代付详细界面店铺错位（买的是衣服却显示馋嘴零食铺子）；③微信/QQ 设了支付密码后，淘宝买东西也要输密码；④淘宝分享卡确认收货后不再显示物流时间线；⑤美团卡送达后同样不显示物流时间线
+
+Work Log:
+- 【①承诺发货真实化】taobao.tsx OrderDetailPage promiseText 重写：旧「后天HH:MM前发货」（paidAt+2天固定值）改为 paidAt + tbDeliveryTiming(uid, o.id).shipDelayMs（与 tbTickOrders 发货状态机同源同种子）——快 4 分钟/正常 12 分钟/慢 30 分钟内发货，全部当天（跨天边界显示「明天」）；切换送达速度后承诺时间实时联动；待付款单保持「48小时内发货」；显示时下限钳到 now+60s 防止 tick 前隙显示过去时刻
+- 【②店铺错位根因与三层修复】根因：TB_SHOPS 只给 14 个品类配了同 tag 店铺（jacket/snacks/phone…），AI 商品常用 tag（hoodie/dress/tshirt/air-fryer 等 60+ 个）无同名店铺 → 旧逻辑 shopIdOf/tbBuildGenOrder 按哈希随机挂店 → 「韩版宽松连帽卫衣」挂进馋嘴零食铺子：
+  · taobao-data.ts 新增 TB_TAG_SHOP_FALLBACK（74 个品类 tag 全量归类映射：服饰→衣橱日记、鞋包运动→潮步、美妆→花知晓、零食茶饮→馋嘴零食、生鲜→鲜果乐园、图书→博文、玩具→萌趣、数码→尔野/柯柯/慧聪/国货、家纺→暖居、家电杂货→超值严选购）+ 导出 tbShopIdForTag(tag, seed)：同 tag 店铺 → 归类兜底 → 未收录 tag 确定性轮转
+  · tb-ai-store.ts shopIdOf 改走 tbShopIdForTag（AI 商品新挂店永不乱配）；taobao-store.ts tbBuildGenOrder 店铺解析同改 + 新增 namedShop 校验：AI 给的 shopName/shopId 只有指向「同品类」店铺才采纳，错位店名一律弃用（订单卡/详情页/分享卡三处名称从此同源）
+  · 存量自愈：taobao-data.ts productById 读 AI 注册表时发现「店铺 tag ≠ 商品 tag」即就地纠正回写；taobao-store.ts tbLoadOrders 增 healOrderShops（首件商品品类与订单店铺不符 → 纠正 shopId/shopName 并落库一次收敛）——用户已存在的「衣服在零食铺」订单打开订单列表即自动修正
+- 【③淘宝支付密码门】taobao.tsx PaySheet：pay() 拆出 payNow()，点击支付时 selChan.idp==='wx' && wxLoadPayPwd().enabled → 弹 WxPayPwdGate（「向淘宝支付 ¥x」），QQ 渠道同理弹 QqPayPwdGate（三 App 密码相互独立，与美团收银台同交互同复用）；验证通过才执行扣款+tbMarkPaid；浮层挂收银台根节点内（z-60 盖住 z-50 面板）；复用微信/QQ 自绘 6 位键盘 + 5 次失败锁 30s 防暴力试错
+- 【④淘宝卡确认收货折叠】tb-share-cards.tsx TbShareTimeline：order.status==='completed' 时不再渲染五段时间线，压缩为一行「已签收 HH:MM + 交易成功徽标」（橙圆勾），data-testid=tb-stage-received；在途/待发货单时间线保持原样
+- 【⑤美团卡送达折叠】mt-share-card.tsx MtOrderTimeline：order.status==='completed'（外卖送达/团购核销）时压缩为一行「已送达 HH:MM + 订单完成徽标」（美团黄圆勾），data-testid=mt-stage-completed；进行中订单五段线不变；MtDraftBubble 代点卡复用件自动跟随
+- E2E（agent-browser 实机全链路）：①tbShopIdForTag 单测 bun 脚本 17 个 tag 全部归类正确（hoodie→衣橱日记旗舰店，snacks→馋嘴零食铺子）；②淘宝搜「卫衣」结果 8 卡全部「衣橱日记旗舰店」，全部订单生成单店铺品类全匹配（Redmi→尔野数码、兰蔻→花知晓、MatePad→尔野数码）；③注入 wx-pay-pwd(123456)+微信零钱 ¥888 → 收银台点立即支付弹「请输入支付密码/向淘宝支付 ¥159」→ 错误密码显示「密码错误，已失败 1 次」→ 123456 支付成功；④支付后待发货详情「承诺今天06:33前发货 | 今天内发货」（06:21 付款+正常速 12 分钟=06:33，真实时钟当天）✓；⑤已发货详情右上「⋯」→ 分享订单 → QQ好友 → 晴儿 → QQ 聊天 tbshare 卡显示五段线（运输中·进行中）→ 点卡片跨 App 跳淘宝详情 → 确认收货 → 回 QQ 卡片实时折叠为「已签收+交易成功」（stages=[tb-stage-received]）✓；⑥美团注入会话 → 团购单微信支付（密码门为既有联动）→ 完成单分享晴儿 → 美团卡「已送达 22:10+订单完成」无五段线 ✓；两卡同框截图双折叠 ✓
+- 收尾：bunx tsc --noEmit 0 错误；eslint 43 problems 与基线（git stash 对比）完全一致零新增；browser errors 0；dev.log 无新增错误（仅仓库固有 instrumentation 警告）；E2E 数据全部隔离在 headless profile
+
+Stage Summary:
+- 交付：①承诺发货时刻全真实时钟化（=付款+当前速度发货延迟，当天发货、切速联动，与发货状态机同源）；②「买衣服显示零食铺子」三层根治——74 品类 tag→店铺归类映射 + AI 错位店名弃用 + 存量商品/订单读取时自愈；③淘宝收银台微信/QQ 渠道支付密码门（密码独立、错误提示、防锁定，交互与美团一致）；④⑤淘宝/美团聊天分享卡在订单完结（确认收货/已送达）后时间线折叠为单行完结态
+- 改动文件：src/lib/ios/taobao-data.ts、src/lib/ios/taobao-store.ts、src/lib/ios/tb-ai-store.ts、src/lib/ios/tb-product-gen.ts、src/components/apps/taobao.tsx、src/components/apps/tb-share-cards.tsx、src/components/apps/mt-share-card.tsx
+- 关键决策：①承诺文本与 tbTickOrders 用同一 tbDeliveryTiming(uid, o.id)——文本显示的时刻就是包裹真实发出的时刻，不出现「承诺 14:00 实际 13:50 就发了」的错位；②店铺修复选择「归类映射」而非「AI 提示词约束」——提示词只能降低概率，映射保证 100% 收敛，且存量数据靠读取自愈零迁移；③完结卡保留单行完结态而非完全空白——保留「已签收/已送达+时间」信息量同时满足「不显示物流时间线」

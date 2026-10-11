@@ -38,11 +38,27 @@ const stripDealQty = (s: string): string =>
 /**
  * 五段动态时间线（共享渲染件）：提交订单→待商家接单→商家已接单→骑手已接单（骑手名）→已送达。
  * 状态实时跟订单 statusLog 走（父组件负责逐秒 tick / mt-orders-changed 触发重渲）。
+ * 已送达（completed）后不再展示物流时间线——压缩为一行「已送达 + 时间 · 订单完成」（用户反馈）。
  */
 export function MtOrderTimeline({ order }: { order: MtOrder | null }) {
   const stages = mtShareStagesOf(order);
   const reachedCnt = stages.filter((s) => s.at).length;
   const canceled = order?.status === 'canceled';
+  if (order?.status === 'completed') {
+    const at = stages[stages.length - 1]?.at;
+    return (
+      <span className="block" data-testid="mt-stage-completed">
+        <span className="flex items-center gap-2">
+          <span className="grid h-[13px] w-[13px] shrink-0 place-items-center rounded-full bg-[#FFD100]">
+            <Check className="h-[9px] w-[9px] text-black/80" strokeWidth={3.4} />
+          </span>
+          <span className="text-[12px] font-semibold text-black/85">已送达</span>
+          {at ? <span className="shrink-0 text-[10px] text-black/30">{fmtHm(at)}</span> : null}
+          <span className="ml-auto shrink-0 rounded-full bg-black/[0.05] px-1.5 text-[9.5px] font-medium leading-[1.7] text-black/40">订单完成</span>
+        </span>
+      </span>
+    );
+  }
   return (
     <span className="block">
       {stages.map((st, i) => {

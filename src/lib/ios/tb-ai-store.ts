@@ -10,7 +10,7 @@ import { kvGet, kvSet } from './idb-kv';
 import {
   tbRegisterAiProducts,
   tbAiProductsAll,
-  TB_SHOPS,
+  tbShopIdForTag,
   type TbProduct,
 } from './taobao-data';
 import { tbSkuForTag } from './tb-product-gen';
@@ -173,12 +173,10 @@ function catOf(tag: string): TbProduct['cat'] {
   return 'home';
 }
 
-/** tag → 店铺（优先同 tag 店铺，兜底轮转；保证 AI 商品都挂在真实店铺下，店铺页/售后链路可用） */
+/** tag → 店铺（优先同 tag 店铺 → 品类归类兜底；保证 AI 商品都挂在真实且品类相符的店铺下，
+ *  修「买衣服显示零食铺子」：hoodie/dress 等无同名店铺的 tag 不再随机乱挂） */
 function shopIdOf(tag: string, seed: number): string {
-  const hit = TB_SHOPS.find((s) => s.tag === tag);
-  if (hit) return hit.id;
-  const home = TB_SHOPS.find((s) => s.tag === 'sofa');
-  return TB_SHOPS[seed % TB_SHOPS.length]?.id ?? home?.id ?? TB_SHOPS[0].id;
+  return tbShopIdForTag(tag, seed);
 }
 
 /** AI 原始条目 → TbProduct（可进详情/购物车/下单全链路） */

@@ -12,7 +12,7 @@
  */
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { accLs, getActiveAccountFor } from './accounts';
-import { productById, shopById, tbImg, tbReviewsOf, TB_SHOPS, type TbProduct } from './taobao-data';
+import { productById, shopById, tbImg, tbReviewsOf, tbShopIdForTag, TB_SHOPS, type TbProduct } from './taobao-data';
 import { tbGenProducts } from './tb-product-gen';
 
 // ---------------- 登录态 ----------------
@@ -528,8 +528,28 @@ export interface TbOrder {
 
 const orderKey = (uid: string) => `tb-orders:${uid}`;
 
+/** 存量订单店铺自愈（修「买衣服显示零食铺子」）：首件商品品类与订单店铺 tag 不符时，
+ *  纠正为品类归类店铺（AI 商品旧注册表随机挂店的存量单一次性收敛；找不到商品/票务单不动） */
+function healOrderShops(orders: TbOrder[]): { list: TbOrder[]; changed: boolean } {
+  let changed = false;
+  const list = orders.map((o) => {
+    const tag = o.items[0] ? productById(o.items[0].pid)?.tag : undefined;
+    if (!tag) return o;
+    const cur = TB_SHOPS.find((s) => s.id === o.shopId);
+    if (cur?.tag === tag) return o;
+    const shop = shopById(tbShopIdForTag(tag));
+    if (shop.id === o.shopId) return o;
+    changed = true;
+    return { ...o, shopId: shop.id, shopName: shop.name };
+  });
+  return { list, changed };
+}
+
 export function tbLoadOrders(uid: string): TbOrder[] {
-  return load<TbOrder[]>(orderKey(uid), []).sort((a, b) => b.createdAt - a.createdAt);
+  const raw = load<TbOrder[]>(orderKey(uid), []);
+  const { list, changed } = healOrderShops(raw);
+  if (changed) save(orderKey(uid), list);
+  return [...list].sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export function tbSaveOrders(uid: string, list: TbOrder[]): void {
@@ -917,7 +937,15 @@ export function tbBuildGenOrder(
   const qty = Math.max(1, Math.round(raw.qty ?? 1));
   const price = Math.max(0.01, Math.round(raw.price * 100) / 100);
   const now = Date.now();
-  const shop = TB_SHOPS.find((s) => s.tag === raw.tag) ?? TB_SHOPS[tbHashStr(raw.itemTitle) % TB_SHOPS.length];
+  // 店铺按品类就近归类（修「买衣服显示零食铺子」：AI 给的 tag 无同 tag 店铺时不再随机乱挂）
+  const shop = shopById(tbShopIdForTag(raw.tag, tbHashStr(raw.itemTitle)));
+  // 外部给的店铺名/id：仅当其指向的店铺与商品品类同 tag 时才采纳（AI 随手编的错位店名一律弃用）
+  const namedShop = raw.shopId
+    ? shopById(raw.shopId)
+    : raw.shopName && raw.shopName.trim() !== ''
+      ? TB_SHOPS.find((s) => s.name === raw.shopName!.trim().slice(0, 14))
+      : undefined;
+  const useShop = namedShop && namedShop.tag === shop.tag ? namedShop : shop;
   const canceled = raw.canceled === true;
   const r = tbRngFrom(tbHashStr(`${raw.itemTitle}|st`));
   const roll = r();
@@ -964,8 +992,8 @@ export function tbBuildGenOrder(
   return {
     id: `tbg${tbHashStr(`${raw.itemTitle}|${raw.daysAgo}`).toString(36)}${idx}`,
     uid,
-    shopId: raw.shopId && raw.shopId !== '' ? raw.shopId : shop.id,
-    shopName: raw.shopName && raw.shopName !== '' ? raw.shopName.slice(0, 14) : shop.name,
+    shopId: useShop.id,
+    shopName: useShop.name,
     items: [{ pid: `gen-${tbHashStr(raw.itemTitle).toString(36)}`, title: raw.itemTitle, img: tbImg(raw.tag, 300, 300, 0), sku, price, qty }],
     itemTotal: total,
     freight: 0,

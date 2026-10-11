@@ -79,6 +79,46 @@ export const TB_SHOPS: TbShop[] = [
 
 export const shopById = (id: string): TbShop => TB_SHOPS.find((s) => s.id === id) ?? TB_SHOPS[0];
 
+/** 无同 tag 店铺的品类 tag → 归类店铺（修「买衣服显示零食铺子」：
+ *  AI 商品 tag（如 hoodie/dress）没有同名店铺时，旧逻辑按哈希随机挂店 → 卫衣挂进零食铺；
+ *  现按品类就近归类，任何 tag 都不会再挂进毫不相干的店） */
+const TB_TAG_SHOP_FALLBACK: Record<string, string> = {
+  // 服饰/穿戴 → 衣橱日记旗舰店
+  hoodie: 's-yichu', dress: 's-yichu', shirt: 's-yichu', tshirt: 's-yichu', jeans: 's-yichu',
+  coat: 's-yichu', hat: 's-yichu', scarf: 's-yichu', socks: 's-yichu', shorts: 's-yichu', belt: 's-yichu',
+  // 鞋包/运动户外 → 潮步运动户外 / 超值严选购
+  backpack: 's-chaobu', sunglasses: 's-chaobu', 'yoga-mat': 's-chaobu', basketball: 's-chaobu', dumbbell: 's-chaobu',
+  suitcase: 's-yanxuan', wallet: 's-yanxuan', umbrella: 's-yanxuan',
+  // 美妆 → 花知晓美妆
+  perfume: 's-meizhuang', skincare: 's-meizhuang', makeup: 's-meizhuang', brush: 's-meizhuang', 'face-mask': 's-meizhuang',
+  // 食品茶饮 → 馋嘴零食铺子；生鲜鲜花 → 鲜果乐园
+  cookies: 's-lingshi', tea: 's-lingshi', flower: 's-shengxian',
+  // 图书文具 → 博文图书专营店
+  pen: 's-bowen', notebook: 's-bowen',
+  // 母婴玩具 → 萌趣玩具屋
+  'toy-car': 's-muying', blocks: 's-muying', puzzle: 's-muying', gift: 's-muying',
+  // 数码 → 尔野数码 / 柯柯数码 / 慧聪通讯 / 官方国货甄选
+  tablet: 's-erye', powerbank: 's-erye', lock: 's-erye', 'phone-stand': 's-erye', tv: 's-erye',
+  camera: 's-keke', keyboard: 's-keke', mouse: 's-keke', monitor: 's-keke', drone: 's-keke', gamepad: 's-keke',
+  speaker: 's-guohuo',
+  // 家居家纺 → 知意生活馆 / 暖居家居生活 / 超值严选购
+  curtain: 's-jujia', pillow: 's-jujia', towel: 's-jujia', carpet: 's-jujia',
+  vase: 's-zhiyi', storage: 's-yanxuan', lamp: 's-yanxuan', desk: 's-yanxuan', lunchbox: 's-yanxuan', toothbrush: 's-yanxuan',
+  // 家电/杂货 → 超值严选购（百货，卖什么都成立）
+  'air-fryer': 's-yanxuan', 'coffee-machine': 's-yanxuan', fan: 's-yanxuan', hairdryer: 's-yanxuan',
+  humidifier: 's-yanxuan', kettle: 's-yanxuan', microwave: 's-yanxuan', 'rice-cooker': 's-yanxuan',
+  shaver: 's-yanxuan', vacuum: 's-yanxuan', fridge: 's-yanxuan', washer: 's-yanxuan', guitar: 's-yanxuan',
+};
+
+/** tag → 店铺 id：同 tag 店铺优先 → 归类兜底 → 未收录 tag 按种子轮转（确定性，不随机漂移） */
+export function tbShopIdForTag(tag: string, seed = 0): string {
+  const hit = TB_SHOPS.find((s) => s.tag === tag);
+  if (hit) return hit.id;
+  const fb = TB_TAG_SHOP_FALLBACK[tag];
+  if (fb) return fb;
+  return TB_SHOPS[seed % TB_SHOPS.length]?.id ?? TB_SHOPS[0].id;
+}
+
 // ---------------- SKU ----------------
 
 export interface TbSkuGroup {
@@ -372,8 +412,24 @@ export const TB_PRODUCTS: TbProduct[] = [
   ]),
 ];
 
-export const productById = (id: string): TbProduct | undefined =>
-  AI_PRODUCTS.get(id) ?? TB_PRODUCTS.find((p) => p.id === id);
+export const productById = (id: string): TbProduct | undefined => {
+  const ai = AI_PRODUCTS.get(id);
+  if (ai) {
+    // 存量自愈（修「买衣服显示零食铺子」）：旧版 AI 商品 tag 无同 tag 店铺时按哈希随机挂店，
+    // 这里在读取时纠正为品类归类店铺并回写注册表（一次性收敛，无需迁移脚本）
+    const curOk = TB_SHOPS.find((s) => s.id === ai.shopId)?.tag === ai.tag;
+    if (!curOk) {
+      const want = tbShopIdForTag(ai.tag);
+      if (want !== ai.shopId) {
+        const fixed = { ...ai, shopId: want };
+        AI_PRODUCTS.set(id, fixed);
+        return fixed;
+      }
+    }
+    return ai;
+  }
+  return TB_PRODUCTS.find((p) => p.id === id);
+};
 
 // ---------------- AI 生成商品注册表（刷新更新内容动态注入，持久化到 IndexedDB 后启动恢复） ----------------
 // AI 生成的商品在运行时注册进这里：商品详情/SKU/购物车/下单等既有链路通过 productById /

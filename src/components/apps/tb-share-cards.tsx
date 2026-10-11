@@ -477,11 +477,27 @@ export function TbShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
   );
 }
 
-/** 五段动态时间线（共享渲染件）：提交订单→付款成功→商家发货→运输中（最新物流摘要）→已签收 */
+/** 五段动态时间线（共享渲染件）：提交订单→付款成功→商家发货→运输中（最新物流摘要）→已签收；
+ *  确认收货（completed）后不再展示物流时间线——压缩为一行「已签收 + 时间 · 交易成功」（用户反馈） */
 export function TbShareTimeline({ order }: { order: TbOrder | null }) {
   const stages = tbShareStagesOf(order);
   const reachedCnt = stages.filter((s) => s.at).length;
   const cancelled = order?.status === 'cancelled';
+  if (order?.status === 'completed') {
+    const at = order.completedAt ?? stages[stages.length - 1]?.at;
+    return (
+      <span className="block" data-testid="tb-stage-received">
+        <span className="flex items-center gap-2">
+          <span className="grid h-[13px] w-[13px] shrink-0 place-items-center rounded-full bg-[#FF5000]">
+            <Check className="h-[9px] w-[9px] text-white" strokeWidth={3.4} />
+          </span>
+          <span className="text-[12px] font-semibold text-black/85">已签收</span>
+          {at ? <span className="shrink-0 text-[10px] text-black/30">{fmtHm(at)}</span> : null}
+          <span className="ml-auto shrink-0 rounded-full bg-black/[0.05] px-1.5 text-[9.5px] font-medium leading-[1.7] text-black/40">交易成功</span>
+        </span>
+      </span>
+    );
+  }
   return (
     <span className="block">
       {stages.map((st, i) => {

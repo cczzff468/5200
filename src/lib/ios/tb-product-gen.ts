@@ -11,10 +11,10 @@
  * - 关键词 → 品类映射（搜索「手机支架」「口红」「牛仔裤」…直接生成对应品类商品）。
  */
 import {
-  TB_SHOPS,
   TB_LIP_KINDS,
   TB_LIP_COLORS,
   tbImg,
+  tbShopIdForTag,
   type TbCatId,
   type TbProduct,
   type TbSkuGroup,
@@ -138,7 +138,7 @@ interface GenCat {
   price: [number, number];
   /** SKU 组（购买弹窗） */
   sku: (r: () => number) => TbSkuGroup[];
-  /** 挂载店铺 id 候选（空 = 按 tag 匹配 TB_SHOPS，否则全店轮转） */
+  /** 挂载店铺 id 候选（空 = 按 tag 归类匹配店铺，否则全店轮转） */
   shops?: string[];
   /** 补充搜索同义词 */
   extraKws?: RegExp;
@@ -996,7 +996,7 @@ export function tbGenProducts(seed: number, count: number, opts: TbGenOpts = {})
     const [lo, hi] = cat.price;
     const price = round2(lo + r() * (hi - lo));
     const shopHit = cat.shops && cat.shops.length > 0 ? cat.shops[Math.floor(r() * cat.shops.length) % cat.shops.length] : '';
-    const shopId = shopHit || TB_SHOPS.find((s) => s.tag === cat.tag)?.id || TB_SHOPS[Math.floor(r() * TB_SHOPS.length) % TB_SHOPS.length].id;
+    const shopId = shopHit || tbShopIdForTag(cat.tag);
     const product: TbProduct = {
       id: `${prefix}-${i}`,
       title,

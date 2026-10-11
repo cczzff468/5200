@@ -155,6 +155,7 @@ import {
   tbCurAddr,
   tbCurAddrId,
   tbDeleteOrder,
+  tbDeliveryTiming,
   tbTickOrders,
   tbToggleFav,
   tbToggleShopFollow,
@@ -177,6 +178,8 @@ import {
 import { tbExecutePay, tbListPayChannels, tbRefundToOrigin, type TbPayChannel } from '@/lib/ios/taobao-pay';
 import { BillPage, FliggyPage, MoviePage, SeckillPage, SignInPage, SubsidyPage, TicketDetailPage } from './taobao-channels';
 import { TbMsgChatPage } from './taobao-msg-chat';
+import { WxPayPwdGate, wxLoadPayPwd } from './wechat-wallet';
+import { PayPwdGate as QqPayPwdGate, loadPayPwd as qqLoadPayPwd } from './qq';
 import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 import { LocalToast, useLocalToast } from './page-toast';
 import { TbImg } from './tb-img';
@@ -3177,6 +3180,8 @@ function PaySheet({
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState(false);
   const [errMsg, setErrMsg] = useState('');
+  /** 渠道支付密码门：微信/QQ App 里开启了支付密码时，收银台付款前先验对应密码（三者独立，与美团同交互） */
+  const [idpGate, setIdpGate] = useState<'wx' | 'qq' | null>(null);
   // 找人代付：plat = 选平台 / contact = 选好友；null = 关闭（与美团收银台「帮付」同交互）
   const [proxyStep, setProxyStep] = useState<'plat' | 'contact' | null>(null);
   const [proxyPlat, setProxyPlat] = useState<'wx' | 'qq' | null>(null);
@@ -3199,7 +3204,7 @@ function PaySheet({
 
   const selChan = chans?.find((c) => c.key === sel);
 
-  const pay = async () => {
+  const payNow = async () => {
     if (!selChan || paying) return;
     if (selChan.insufficient) {
       setErrMsg('该渠道额度不足，请选择其他支付方式');
@@ -3230,6 +3235,24 @@ function PaySheet({
     } finally {
       setPaying(false);
     }
+  };
+
+  /** 点击支付：微信渠道且微信开了支付密码 → 验微信密码；QQ 渠道同理（密码互不通用，验过才扣款） */
+  const pay = async () => {
+    if (!selChan || paying) return;
+    if (selChan.insufficient) {
+      setErrMsg('该渠道额度不足，请选择其他支付方式');
+      return;
+    }
+    if (selChan.idp === 'wx' && wxLoadPayPwd().enabled) {
+      setIdpGate('wx');
+      return;
+    }
+    if (selChan.idp === 'qq' && qqLoadPayPwd().enabled) {
+      setIdpGate('qq');
+      return;
+    }
+    await payNow();
   };
 
   /** 发送代付请求：生成请求 + 卡片进好友聊天 + AI 延时自主决策；成功后跳对应订单详情 */
@@ -3419,6 +3442,28 @@ function PaySheet({
         onClose={() => setProxyStep(null)}
         onSend={() => void sendProxy()}
       />
+      {/* 微信支付密码验证浮层（微信 App 开了支付密码时：淘宝用微信支付验微信的密码，与美团同交互） */}
+      {idpGate === 'wx' && (
+        <WxPayPwdGate
+          label={`向淘宝支付 ¥${fmtMoney(amount)}`}
+          onOk={() => {
+            setIdpGate(null);
+            void payNow();
+          }}
+          onClose={() => setIdpGate(null)}
+        />
+      )}
+      {/* QQ支付密码验证浮层（QQ App 开了支付密码时：淘宝用QQ支付验QQ的密码，与美团同交互） */}
+      {idpGate === 'qq' && (
+        <QqPayPwdGate
+          label={`向淘宝支付 ¥${fmtMoney(amount)}`}
+          onOk={() => {
+            setIdpGate(null);
+            void payNow();
+          }}
+          onClose={() => setIdpGate(null)}
+        />
+      )}
     </div>
   );
 }
@@ -4256,8 +4301,12 @@ function OrderDetailPage({
   const company = `${shop.name.replace(/官方旗舰店|旗舰店|专营店|专卖店|官方/g, '')}有限公司`;
   const promiseText = (() => {
     if (!o.paidAt) return '48小时内发货';
-    const d = new Date(o.paidAt + 2 * 86_400_000);
-    return `后天${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}前发货`;
+    // 承诺发货时刻 = 付款时间 + 当前送达速度的发货延迟（与 tbTickOrders 发货状态机同源 tbDeliveryTiming，
+    // 真实时钟当天发货：快 4 分钟/正常 12 分钟/慢 30 分钟内发掉；切速度后承诺随之联动）
+    const deadline = Math.max(Date.now() + 60_000, o.paidAt + tbDeliveryTiming(uid, o.id).shipDelayMs);
+    const d = new Date(deadline);
+    const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return `${d.toDateString() === new Date().toDateString() ? '今天' : '明天'}${hm}前发货`;
   })();
   // 驿站口径（待收货详情「已送达」驿站卡与物流页同源）
   const station = tbStationName(o.address);
