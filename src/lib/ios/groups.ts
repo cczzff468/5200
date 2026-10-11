@@ -233,6 +233,9 @@ export interface WxGroupMsg {
     time?: number;
   };
   recalled?: boolean;
+  /** AI 回复失败标记（红色 ! 徽标）：整轮群回复失败（网络/接口错误且无人产出）时打在触发的机主消息上；
+   *  点击徽标重试（runGroupTurn(trigger)），任一成员成功产出后清除。不进 AI 上下文（消息本体照常参与） */
+  replyFail?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
   fwd?: { from: string; merged?: boolean; title?: string; records?: GroupFwdRecord[] };
 }

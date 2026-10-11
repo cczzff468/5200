@@ -147,8 +147,12 @@ interface ChatMsg {
   img?: { src: string; desc: string; fromCard?: boolean; prevSrc?: string };
   /** 文字图片卡片数据（kind==='textcard' 时有效）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
   card?: { text: string };
-  /** 请求失败的消息（不参与上下文、红字显示） */
+  /** 错误占位消息（历史遗留数据：旧版流失败/空回复落库的错误文案）：新版失败不再落占位消息，
+   *  改为在触发的用户消息上打 replyFail 红色 ! 徽标；渲染层直接跳过 error 消息（不参与上下文口径不变） */
   error?: boolean;
+  /** AI 回复失败标记（红色 ! 徽标）：流失败/空回复且本轮无任何产出时打在触发的我的消息上；
+   *  点击徽标重试（startAiTurn），成功后 finalize 清除，仍失败可再点。不进 AI 上下文（消息本体照常参与） */
+  replyFail?: boolean;
   /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
   quote?: { name: string; content: string };
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
@@ -1610,7 +1614,8 @@ function ChatView({
     // 拉黑期（byUser）用户消息照常进记录上屏、AI 不回（回合静默取消）。此前守卫在前会把文字消息一并吞掉
     // （send 与 sttPreview 两条文字路都把落库委托给本函数；语音路 commitVoiceMsg 已先入列不受累，
     // 此处入列的 userMsg 只来自这两条文字路，无双入列）。入列后经 msgs 持久化 effect 自动落盘。
-    if (userMsg) setMsgs((prev) => [...prev, userMsg]);
+    // 红色 ! 徽标重试（retryReply）也会带已入列的消息进来：按 id 判重，不重复入列（对齐微信/QQ 同款守卫）
+    if (userMsg) setMsgs((prev) => (prev.some((m) => m.id === userMsg.id) ? prev : [...prev, userMsg]));
     // 40-a 拉黑拦截（第一层）：用户拉黑角色（byUser）后，本 App 内 AI 不能发任何消息——回合静默取消。
     // 唯一例外=「解除拉黑申请卡片」仍可发起（charRequestOnlyOf 放行模式：回合照常请求，但回复中
     // 除申请卡片/系统行外的正文由 buildReplyMsgs 丢弃）；申请同意后的回应回合因 byUser 已清自然放行。
@@ -1856,29 +1861,38 @@ function ChatView({
         : {}),
       // 边接收边逐条显示：分段器每凑齐一条完整消息立刻排队投递（多条模式）
       onSegment: deliverSegment,
-      finalize: ({ content, error, startedAt, tail }) => {
+      finalize: ({ content, error, tail }) => {
         // F1 流收尾：残留 carry 与收尾文本（多条 = 分段器剩余 tail；单条 = 完整 content）合并后再解析，
         // 跨段/收尾边界切开的照片标签在此闭合还原；流已结束，合并后尾部仍未闭合的标签起始直接丢弃
         //（不投递残留文本，防半截标签上屏），carry 清空不影响下一回合（流错误中断同样在此清空）
         const endMerged = photoCarryRef.current + (replyCount > 1 ? tail : content);
         photoCarryRef.current = '';
         const endText = splitUnfinishedPhotoTag(endMerged).send;
+        // 失败标记触发的我的消息（userMsg 为 null 时取 base 里最后一条我的消息）：
+        // 新版失败不再落错误占位消息——在本条消息气泡前打红色 ! 徽标（点击重试），成功后在下方清除
+        const failTargetId = userMsg?.id ?? [...base].reverse().find((m) => m.role === 'user' && !m.recalled)?.id ?? null;
+        /** 落库 + 同步 state：给触发消息打/清 replyFail 标记（红色 ! 徽标） */
+        const setReplyFail = (fail: boolean) => {
+          if (!failTargetId) return;
+          const cur = loadMsgs(storageKey) ?? [];
+          if (!cur.some((m) => m.id === failTargetId)) return;
+          const changed = cur.map((m) => (m.id === failTargetId && Boolean(m.replyFail) !== fail ? { ...m, replyFail: fail || undefined } : m));
+          saveMsgs(storageKey, changed);
+          setMsgs((prev) => prev.map((m) => (m.id === failTargetId && Boolean(m.replyFail) !== fail ? { ...m, replyFail: fail || undefined } : m)));
+        };
         if (error) {
-          // A-3：流中已投递出分段时不再落错误消息——分段首条 id 恰为 aiId，再以 aiId 落盘会顶替
-          // 第一条已上屏回复并造成存储双 id（刷新后重复渲染）；投递队列无取消路径，已排队分段
-          // 必然逐条落盘，此刻静默收尾即可。仍需落盘（未投递出任何分段）时用全新 id，避免与
-          // 已存在/将来同序列的消息冲突
+          // A-3：流中已投递出分段时不再打失败徽标——分段已作为真实回复逐条上屏（本轮并非无回应）；
+          // 投递队列无取消路径，已排队分段必然逐条落盘，此刻静默收尾即可。
+          // 仍未投递出任何分段（完全无回应）→ 触发消息打 replyFail 红色 ! 徽标，不再落错误占位文案
           if (deliveredAny) return;
-          saveMsgs(storageKey, [
-            ...(loadMsgs(storageKey) ?? []),
-            { id: `${aiId}-err`, role: 'assistant', content: error, time: startedAt, error: true },
-          ]);
+          setReplyFail(true);
           return;
         }
         // 多条模式：流中分段已通过 onSegment 逐条排队投递上屏（边接收边逐条显示），
         // 这里只处理剩余的最后一条（N 条上限的第 N 条）；单条模式：整条回复在此按旧管线落盘
         const { msgs: built } = buildReplyMsgs(endText, replyCount <= 1, Date.now(), aiId, msgIdx);
-        // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
+        // 剩余为空且流中也没有任何分段/动作产出时不算有效回复 → 触发消息打红色 ! 徽标（不再落兜底占位文案）；
+        // requestOnly（拉黑放行模式）正文已被丢弃，静默收尾不打标
         const finalBatch: ChatMsg[] =
           built.length > 0
             ? built
@@ -1886,7 +1900,9 @@ function ChatView({
               ? []
               : requestOnly
                 ? []
-                : [{ id: aiId, role: 'assistant', content: '（AI 暂时没有返回内容，稍后再试一次吧）', time: startedAt, error: true }];
+                : (setReplyFail(true), []);
+        // 有任何产出（分段投递/本轮落盘消息）：清除触发消息上的失败徽标（重试成功场景）
+        if (built.length > 0 || deliveredAny) setReplyFail(false);
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -1978,6 +1994,13 @@ function ChatView({
   useEffect(() => {
     startAiTurnRef.current = startAiTurn;
   });
+
+  /** 红色 ! 徽标重试：AI 回复失败的消息点击后重发同一回合（流/投递占用时静默，徽标保留可再点；
+   *  消息本体已在 state 与存储里，startAiTurn 入列按既有逻辑去重；成功在 finalize 清除标记） */
+  const retryReply = (m: ChatMsg) => {
+    if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) return;
+    startAiTurnRef.current?.(m);
+  };
 
   // ---------------- 退出网页接力（bg-turn）：服务端代跑的回复拉取 + 原管线投递 ----------------
 
@@ -2229,6 +2252,20 @@ function ChatView({
     if (!side) return null;
     return blockIconSpan(side, side === 'me' ? 'sms-block-icon-me' : 'sms-block-icon-peer');
   };
+
+  /** AI 回复失败徽标（红色 !，点击重试）：优先于拉黑图标（新版失败表达方式，替代旧版错误占位行） */
+  const failBadgeOf = (m: ChatMsg) => (
+    <button
+      type="button"
+      data-testid={`sms-replyfail-${m.id}`}
+      aria-label="AI 回复失败，点击重试"
+      title="AI 回复失败，点击重试"
+      onClick={() => retryReply(m)}
+      className="flex h-[20px] w-[20px] shrink-0 cursor-pointer self-center items-center justify-center rounded-full bg-[#FA5151] text-[13px] font-bold leading-none text-white transition-opacity active:opacity-70"
+    >
+      !
+    </button>
+  );
 
   /** 「消息已发出，但被对方拒收了。」状态行：仅「对方拉黑我」区间内我的消息后面跟随（与图标判定解耦：
    *  用户拉黑 AI 后自己的气泡也有图标，但不显示拒收文案），
@@ -2979,7 +3016,7 @@ function ChatView({
         aria-live="polite"
         className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-3 pb-2 pt-1"
       >
-        {msgs.length === 0 && (
+        {!msgs.some((m) => !m.error) && (
           <div className="flex h-full flex-col items-center justify-center gap-2.5 pb-10">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/5 dark:bg-white/10">
               <MessageCircle className="h-7 w-7 text-muted-foreground" strokeWidth={1.5} aria-hidden="true" />
@@ -2988,6 +3025,8 @@ function ChatView({
           </div>
         )}
         {msgs.map((m, i) => {
+          // 错误占位消息（旧版失败落库文案）：新版失败改由触发消息上的红色 ! 徽标表达，不再渲染占位文字行
+          if (m.error) return null;
           const prev = i > 0 ? msgs[i - 1] : undefined;
           const next = i < msgs.length - 1 ? msgs[i + 1] : undefined;
           const newDay = prev === undefined || dayKey(prev.time) !== dayKey(m.time);
@@ -3105,7 +3144,7 @@ function ChatView({
                       {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
                     </span>
                   )}
-                  {mine && blockedIconOf(m)}
+                  {mine && (m.replyFail ? failBadgeOf(m) : blockedIconOf(m))}
                   <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div {...bubblePress}>
                       <VoiceMsgBubble
@@ -3154,7 +3193,7 @@ function ChatView({
                       {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
                     </span>
                   )}
-                  {mine && blockedIconOf(m)}
+                  {mine && (m.replyFail ? failBadgeOf(m) : blockedIconOf(m))}
                   <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div {...bubblePress}>
                       <button
@@ -3211,7 +3250,7 @@ function ChatView({
                       {selectedIds.includes(m.id) && <CircleCheck className="h-[14px] w-[14px]" strokeWidth={2.2} />}
                     </span>
                   )}
-                  {mine && blockedIconOf(m)}
+                  {mine && (m.replyFail ? failBadgeOf(m) : blockedIconOf(m))}
                   <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div {...bubblePress}>
                       <TextCardBubble
@@ -3260,7 +3299,7 @@ function ChatView({
                   </span>
                 )}
                 {/* 拉黑图标（红色 !）：我的消息在气泡左侧 */}
-                {mine && blockedIconOf(m)}
+                {mine && (m.replyFail ? failBadgeOf(m) : blockedIconOf(m))}
                 {/* 内层收缩为气泡宽度（上限76%），让「已送达」能对齐气泡左缘 */}
                 <div className={`flex max-w-[76%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                   {/* 引用块（与微信/QQ 同款：气泡上方独立的半透明圆角胶囊，小圆角 + 细黑边框） */}
@@ -4307,7 +4346,8 @@ function scanContactSessions(contacts: ContactRecord[]): ContactSessionPreview[]
     if (c.kind === 'user' || !isFriendIn(c, 'sms')) continue;
     const msgs = loadMsgs(`c:${c.id}`);
     if (!msgs || msgs.length === 0) continue;
-    const last = msgs[msgs.length - 1];
+    // 错误占位消息（旧版失败落库文案）不作会话预览，回退到最后一条实质消息
+    const last = [...msgs].reverse().find((m) => m.error !== true) ?? msgs[msgs.length - 1];
     // 语音消息预览统一显示 [语音]、图片消息显示 [图片]、文字图片卡片显示 [文字图片]（与微信会话列表同口径；语音 content 为空串，不透出转写原文）
     const lastText =
       last?.kind === 'voice'

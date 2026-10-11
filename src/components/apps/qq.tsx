@@ -427,9 +427,13 @@ interface QQMsg {
   quote?: { name: string; content: string; id?: string; time?: number };
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
   recalled?: boolean;
-  /** 错误占位消息（「〔消息发送失败：…〕」「〔对方暂时没有回复…〕」）：气泡红字提示 + 记忆提取时排除
-   *  （memConvoFromRaw 按 error===true 滤除，防止错误文案混进 AI 发言素材——与 chat.tsx 同口径） */
+  /** 错误占位消息（历史遗留数据：旧版流失败/空回复落库的错误文案）：新版失败不再落占位消息，
+   *  改为在触发的用户消息上打 replyFail 红色 ! 徽标；渲染层直接跳过 error 消息，
+   *  记忆提取（memConvoFromRaw）仍按 error===true 滤除（防错误文案混进 AI 发言素材） */
   error?: boolean;
+  /** AI 回复失败标记（红色 ! 徽标）：流失败/空回复且本轮无任何产出时打在触发的我的消息上；
+   *  点击徽标重试（runAiTurn），成功后 finalize 清除，仍失败可再点。不进 AI 上下文（消息本体照常参与） */
+  replyFail?: boolean;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
   /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
@@ -4775,7 +4779,7 @@ function ChatPage({
         : {}),
       // 边接收边逐条显示：分段器每凑齐一条完整消息立刻解析投递（多条模式）
       onSegment: deliverSegment,
-      finalize: ({ content, error, startedAt, tail }) => {
+      finalize: ({ content, error, tail }) => {
         // F1 收尾：先把跨段 carry 取走并清空——流已结束，残留的半截照片标签不再单独投递
         //（拼回最后一段一起走管线，闭合则正常生图/降级，仍闭合不上则由 buildReplyMsgs 兜底剥除不投递）
         const carry = photoCarryRef.current;
@@ -4783,17 +4787,24 @@ function ChatPage({
         // 一起听遥控：收尾把留存的半截播控指令拼回（流已结束，不再留；未闭合的残留括号由 buildReplyMsgs 原文透传不执行）
         const musicHold = musicHoldRef.current;
         musicHoldRef.current = '';
+        // 失败标记触发的我的消息（userMsg 为 null 时取 base 里最后一条我的消息）：
+        // 新版失败不再落错误占位消息——在本条消息气泡前打红色 ! 徽标（点击重试），成功后在下方清除
+        const failTargetId = userMsg?.id ?? [...base].reverse().find((m) => m.role === 'me' && !m.recalled)?.id ?? null;
+        /** 落库 + 同步 state：给触发消息打/清 replyFail 标记（红色 ! 徽标） */
+        const setReplyFail = (fail: boolean) => {
+          if (!failTargetId) return;
+          const cur = loadMsgs(peer.id);
+          if (!cur.some((m) => m.id === failTargetId)) return;
+          const changed = cur.map((m) => (m.id === failTargetId && Boolean(m.replyFail) !== fail ? { ...m, replyFail: fail || undefined } : m));
+          saveMsgs(peer.id, changed);
+          setMsgs((prev) => prev.map((m) => (m.id === failTargetId && Boolean(m.replyFail) !== fail ? { ...m, replyFail: fail || undefined } : m)));
+        };
         if (error) {
-          // A-3：流中已投递出分段时不再落错误消息——分段首条 id 恰为 aiId，再以 aiId 落盘会顶替
-          // 第一条已上屏回复并造成存储双 id（刷新后重复渲染）；投递队列无取消路径，已排队分段
-          // 必然逐条落盘，此刻静默收尾即可。仍未投递出任何分段时才落盘，且用全新 id 防冲突
+          // A-3：流中已投递出分段时不再打失败徽标——分段已作为真实回复逐条上屏（本轮并非无回应）；
+          // 投递队列无取消路径，已排队分段必然逐条落盘，此刻静默收尾即可。
+          // 仍未投递出任何分段（完全无回应）→ 触发消息打 replyFail 红色 ! 徽标，不再落错误占位文案
           if (deliveredAny) return;
-          saveMsgs(peer.id, [
-            ...loadMsgs(peer.id),
-            // A-修复：错误占位带 error 标记——记忆提取（memConvoFromRaw 按 error===true 滤除）不再把
-            // 错误文案当 AI 发言沉淀成脏碎片；气泡同步红字提示（与 chat.tsx 同口径）
-            { id: `${aiId}-err`, role: 'peer', content: `〔消息发送失败：${error}〕`, time: startedAt, error: true },
-          ]);
+          setReplyFail(true);
           return;
         }
         // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
@@ -4801,8 +4812,8 @@ function ChatPage({
         // 单条模式：整条回复在此按旧管线（&&& 标记切分）落盘 —— 两种模式都不重放已投递的分段
         const { msgs: built, cur, dirty } = buildReplyMsgs(musicHold + carry + (replyCount > 1 ? tail : content), replyCount <= 1, Date.now(), aiId, msgIdx);
         if (dirty) saveMsgs(peer.id, cur);
-        // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给兜底文案
-        //（40-a：仅申请卡模式不落兜底占位——正文已被丢弃，静默收尾）
+        // 剩余为空且流中也没有任何分段/动作产出时不算有效回复 → 触发消息打红色 ! 徽标（不再落兜底占位文案）；
+        //（40-a：仅申请卡模式正文已被丢弃，静默收尾不打标）
         const finalBatch: QQMsg[] =
           built.length > 0
             ? built
@@ -4810,7 +4821,9 @@ function ChatPage({
               ? []
               : requestOnly
                 ? []
-                : [{ id: aiId, role: 'peer', content: '〔对方暂时没有回复，请稍后再试〕', time: startedAt, error: true }];
+                : (setReplyFail(true), []);
+        // 有任何产出（分段投递/动作/本轮落盘消息）：清除触发消息上的失败徽标（重试成功场景）
+        if (built.length > 0 || deliveredAny || musicActedRef.current) setReplyFail(false);
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，密友值/记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -4873,6 +4886,16 @@ function ChatPage({
   );
   // 发红包/转账时通过 ref 触发（runAiTurn 定义在 sendRedPacket 之后，见 runAiTurnRef 注释）
   runAiTurnRef.current = runAiTurn;
+
+  /** 红色 ! 徽标重试：AI 回复失败的消息点击后重发同一回合（流/投递占用时静默，徽标保留可再点；
+   *  消息本体已在 state 与存储里，runAiTurn 按 id 去重不会重复入列；成功在 finalize 清除标记） */
+  const retryReply = useCallback(
+    (m: QQMsg) => {
+      if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) return;
+      runAiTurnRef.current?.(m);
+    },
+    [sessionKey]
+  );
 
   // ---------------- 退出网页接力（bg-turn）：服务端代跑的回复拉取 + 原管线投递 ----------------
 
@@ -6102,6 +6125,8 @@ function ChatPage({
         style={{ touchAction: 'pan-y' }}
       >
         {msgs.map((m, i) => {
+          // 错误占位消息（旧版失败落库文案）：新版失败改由触发消息上的红色 ! 徽标表达，不再渲染占位文字行
+          if (m.error) return null;
           const showTime = i === 0 || m.time - msgs[i - 1].time > 5 * 60_000;
           const mine = m.role === 'me';
           // #38 拼手气红包（count>1）未领完不算结算：领完/退回/拒收/过期才收起「開」入口（与 cardIsFinal 同口径）
@@ -6238,8 +6263,21 @@ function ChatPage({
                     <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
                   </button>
                 )}
-                {/* 拉黑图标（红色 ! 圆点）：我的消息在气泡左侧 */}
-                {mine && blockedIconOf(m)}
+                {/* 拉黑图标（红色 ! 圆点）：我的消息在气泡左侧；AI 回复失败徽标（点击重试）优先于拉黑图标 */}
+                {mine && m.replyFail ? (
+                  <button
+                    type="button"
+                    data-testid={`qq-replyfail-${m.id}`}
+                    aria-label="AI 回复失败，点击重试"
+                    title="AI 回复失败，点击重试"
+                    onClick={() => retryReply(m)}
+                    className="flex h-[20px] w-[20px] shrink-0 cursor-pointer self-center items-center justify-center rounded-full bg-[#FA5151] text-[13px] font-bold leading-none text-white transition-opacity active:opacity-70"
+                  >
+                    !
+                  </button>
+                ) : (
+                  blockedIconOf(m)
+                )}
                 {m.kind === 'call' && m.call ? (
                   /* 通话卡片（语音/视频，Task 22 按 media 分叉图标与文案；通话结束后插入聊天记录）：整卡可点回拨（已取消（点击重拨）/ 对方未接听 / 已拒绝 / 未接听 / 通话时长）。
                      宽度约束挂在本包装层（卡片内 max-w-full）：挂卡片自身会相对本层（随内容收缩）解析成循环约束，气泡被压窄文字溢出 */
@@ -10187,8 +10225,8 @@ function MessagesPage({
       )
       .map((c) => {
         const msgs = loadMsgs(c.id);
-        // 通知行/系统提示行/申请卡片不作为会话预览，回退到最后一条实质消息
-        const last = [...msgs].reverse().find((m) => m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq');
+        // 通知行/系统提示行/申请卡片/错误占位（旧版失败落库文案）不作为会话预览，回退到最后一条实质消息
+        const last = [...msgs].reverse().find((m) => m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq' && m.error !== true);
         return { key: c.id, name: c.name, contact: c, group: null, text: msgPreview(last), time: last?.time ?? 0 };
       });
     // 群会话行（群聊与私聊是两类会话，各自独立显示；隐藏后不再出现，可从联系人 › 群聊 再进）

@@ -18404,3 +18404,23 @@ Stage Summary:
 - 仓库代码已在 /home/z/my-project 完整运行，浏览器验证通过
 - git 环境就绪：origin=cczzff468/5200 (main, f292d4b)，修改后可直接推送
 - 等待用户提出具体功能修改/新增需求
+
+---
+Task ID: 2
+Agent: Z.ai Code (main)
+Task: AI 回复失败全面改红色"!"徽标——零模板/占位文字，点击重试
+
+Work Log:
+- 检查确认该功能此前未实现（旧版失败仍落 〔错误文案〕/〔对方暂时没有回复…〕/（AI 暂时没有返回内容…） 占位消息：wechat.tsx:6303/6321/5884、qq.tsx:4795/4813、chat.tsx:1874/1889、群聊（…）/（网络开小差了…））
+- 类型层：WxMsg/QQMsg/ChatMsg 新增 replyFail?: boolean；groups.ts WxGroupMsg 同步新增；两处 patchGroupMsg Pick 白名单加 'replyFail'
+- 微信/QQ/信息 finalize：error 且未投递出分段 → 触发消息（userMsg ?? base 最后一条 me）打 replyFail（saveMsgs+setMsgs 双写）；空回复兜底占位改为 setReplyFail(true)；成功且有产出 → setReplyFail(false) 清除
+- 群聊 wx-group/qq-group：runCharTurn「（…）」占位改为 built 空且无分段时 resolve('skip')（与 [SKIP] 同语义静默）；runGroupTurn 整轮 error 收口不再落系统提示行，改 patchGroupMsg(trigger, {replyFail:true})，有 'ok' 即清除
+- 徽标 UI：红色 ! 圆点按钮（bg-[#FA5151] 20px，与拉黑图标同位同款；me 行 flex-row-reverse 下位于气泡左侧）；点击 retryReply → isChatStreaming/isAiDelivering 占用守卫 → runAiTurnRef.current(m)/startAiTurnRef(m)/runGroupTurn(m)
+- 渲染层：三私聊 App msgs.map 顶部 if (m.error) return null（历史占位不再渲染）；群聊过滤「（…）」与「（网络开小差了…）」notice；会话预览（readPreview/msgPreview/scanContactSessions）跳过 error 消息回退实质消息
+- 修 bug：信息 App startAiTurn 入列补 id 判重（重试带已入列消息进来曾重复上屏，对齐微信/QQ 同款守卫）；接力拉取（deliverBgItems）空段兜底占位移除改静默
+- 验证：bunx tsc --noEmit 0 错误；eslint 改动 6 文件 0 告警；agent-browser 实机 E2E（信息 App 小助手）：network route abort /api/chat → 发消息 → 红色 ! 徽标出现在气泡左侧且零占位文字 → unroute 后点击徽标 → AI 正常回复、徽标消失、消息不重复
+
+Stage Summary:
+- 交付：五聊天面（微信/QQ/信息私聊 + 微信群/QQ 群）失败表达统一为「触发消息红色 ! 徽标」，模板/占位文字全部下线（新失败不落、旧数据不渲染、预览不透出）
+- 改动文件：src/lib/ios/groups.ts、src/components/apps/{wechat,qq,chat,wx-group,qq-group}.tsx
+- 关键决策：①徽标挂在触发消息而非错误行——成功清除语义自然，重试入口即消息本体；②流已有分段投递时（A-3）不打标（本轮并非无回应）；③requestOnly（拉黑放行）不打标不占位；④群聊全体 [SKIP] 自然沉默不打标（是选择不是失败）

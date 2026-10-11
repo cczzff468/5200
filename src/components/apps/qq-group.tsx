@@ -2231,7 +2231,7 @@ export function QqGroupChatPage({
 
   /** 就地更新一条群消息的附加数据（红包/转账状态流转、AI 语音升级用）：读改写存储 + 页面存活时同步 state */
   const patchGroupMsg = useCallback(
-    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'kind' | 'voice' | 'img'>>) => {
+    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'kind' | 'voice' | 'img' | 'replyFail'>>) => {
       const next = loadGroupMsgs(gid).map((m) => (m.id === mid ? { ...m, ...patch } : m));
       saveGroupMsgs(gid, next);
       if (mountedRef.current) setMsgs(next);
@@ -3122,13 +3122,13 @@ export function QqGroupChatPage({
             const mergedTail = photoCarry + (replyCount > 1 ? (result.tail ?? '') : result.content);
             photoCarry = '';
             const built = buildGroupReplyMsgs(stripUnfinishedPhotoTag(mergedTail), replyCount <= 1, Date.now());
-            // 剩余为空且流中也没有任何分段/动作产出时不算有效回复，给「（…）」占位兜底
-            const finalBatch: WxGroupMsg[] =
-              built.length > 0
-                ? built
-                : deliveredAny
-                  ? []
-                  : [{ id: aiMsgId, role: 'peer', senderId: char.id, senderName: charName, content: '（…）', time: result.startedAt }];
+            // 剩余为空且流中也没有任何分段/动作产出 = 该成员本轮无话可说（新版不再落「（…）」占位兜底，
+            // 模板文字从聊天记录消失）：按沉默收尾（不投递、不触发级联），与 [SKIP] 同语义
+            if (built.length === 0 && !deliveredAny) {
+              resolve('skip');
+              return;
+            }
+            const finalBatch: WxGroupMsg[] = built;
             // 逐条投递（模拟真人连发）：每条到达时才落盘上屏 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
             // 模拟打字节奏；空批仅作占位，群记忆提取挂在全部消息投递完之后；
             // 调度器在模块层运行，与群聊页是否存活无关；同会话批次串行排队，不同角色回合不会交错
@@ -3302,20 +3302,15 @@ export function QqGroupChatPage({
           }
           await sleep(420);
         }
-        // #21 整轮没有任何成员成功产出且存在流错误 → 落一条系统提示（notice 消息不进 AI 上下文
-        // 也不进记忆：群历史构建与 memAfterAiTurn 都 filter 了 notice）；部分成员成功时保持静默——
+        // #21 整轮没有任何成员成功产出且存在流错误：新版不再落「（网络开小差了…）」系统提示行——
+        // 改为在触发消息（本轮用户消息）上打 replyFail 红色 ! 徽标（点击可重试整轮）；
+        // 无触发消息（分句批次/红包转账卡片触发）时保持静默。部分成员成功时保持静默——
         // 那几位只是没说话，符合真实群聊，也不给聊天记录添噪音
         if (results.length > 0 && !results.includes('ok') && results.includes('error')) {
-          appendMsg({
-            id: uid(),
-            role: 'me',
-            senderId: 'me',
-            senderName: '',
-            content: '',
-            time: Date.now(),
-            kind: 'notice',
-            noticeText: '（网络开小差了，这条消息没有得到回复）',
-          });
+          if (trigger && loadGroupMsgs(gid).some((x) => x.id === trigger.id)) patchGroupMsg(trigger.id, { replyFail: true });
+        } else if (results.includes('ok')) {
+          // 有任何成员产出：清除触发消息上的失败徽标（重试成功场景）
+          if (trigger?.replyFail) patchGroupMsg(trigger.id, { replyFail: undefined });
         }
         // #27 AI 成员回复 @ 其他成员 → 轻量级联必答：解析本轮最后一条 AI 成功发言里的 @ 提及
         //（parseMentions 只匹配 AI 成员名，天然排除机主与发言者本人），命中且仍在群、未被禁言、
@@ -3388,9 +3383,16 @@ export function QqGroupChatPage({
         }
       }
     },
-    [appendMsg, expireStalePackets, gid, runCharTurn, sKey]
+    [appendMsg, expireStalePackets, gid, runCharTurn, sKey, patchGroupMsg]
   );
   runGroupTurnRef.current = runGroupTurn;
+
+  /** 红色 ! 徽标重试：整轮群回复失败的消息点击后重跑群回合（占用时静默，徽标保留可再点；
+   *  任一成员产出后由 runGroupTurn 收口清除标记） */
+  const retryGroupTurn = (m: WxGroupMsg) => {
+    if (runningRef.current || isChatStreaming(sKey) || isAiDelivering(sKey)) return;
+    void runGroupTurn(m);
+  };
 
   /** 排队补跑统一入口（#35）：500ms 后按最后一条机主消息起一轮补跑回合；撞上占用中的回合
    *  （级联/催促/重新生成等旁路回合，或下一个正常回合）时改回排队标记，由占用回合收尾时的
@@ -4506,6 +4508,19 @@ export function QqGroupChatPage({
             </div>
           )}
           {media}
+          {/* AI 回复失败徽标（红色 !，点击重试整轮）：我的消息行（flex-row-reverse 下位于气泡左侧） */}
+          {mine && m.replyFail ? (
+            <button
+              type="button"
+              data-testid={`qqgrp-replyfail-${m.id}`}
+              aria-label="AI 回复失败，点击重试"
+              title="AI 回复失败，点击重试"
+              onClick={() => retryGroupTurn(m)}
+              className="flex h-[20px] w-[20px] shrink-0 cursor-pointer self-center items-center justify-center rounded-full bg-[#FA5151] text-[13px] font-bold leading-none text-white transition-opacity active:opacity-70"
+            >
+              !
+            </button>
+          ) : null}
         </div>
       </div>
     );
@@ -4578,6 +4593,10 @@ export function QqGroupChatPage({
           </div>
         )}
         {msgs.map((m, i) => {
+          // 旧版失败占位（「（…）」空回复兜底 / 「（网络开小差了…）」整轮失败提示行）：不再渲染，
+          // 失败统一改由触发消息上的红色 ! 徽标表达
+          if (m.role === 'peer' && m.content === '（…）') return null;
+          if (m.kind === 'notice' && m.noticeText === '（网络开小差了，这条消息没有得到回复）') return null;
           const prev = msgs[i - 1];
           const showTime = !prev || m.time - prev.time > 5 * 60_000;
           if (m.kind === 'notice') {
