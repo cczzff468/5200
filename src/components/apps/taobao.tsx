@@ -9,7 +9,7 @@
  * - 购物车：勾选/全选/删除 + 数量加减（减到 0 自动移除）+ 合计结算；
  * - 下单：收货地址 + 优惠券/运费 + 支付方式选择；支付复用 QQ/微信钱包（亲属卡支付写 AI 记忆）；
  * - 订单：待付款/待发货/待收货/已完成/已取消 + 物流轨迹 + 确认收货/评价/退款/再来一单；
- * - 我的：订单宫格/收藏/足迹/地址管理/快递/优惠券/账户余额（微信+QQ 只读）/设置；
+ * - 我的：订单宫格/收藏/足迹/地址管理/快递/优惠券/运输快递员选择（默认运输车）/设置；
  * - 图片：商品/店铺图统一本地 kawaii 卡通插画（goods-img.ts 预生成，Task 59 落盘 67 张 + Task 60 补齐
  *   帽子/相机/大衣/衬衫/门锁/冰箱/洗衣机/礼盒/终端机/古建 10 张，不再请求外部图库），
  *   订单/购物车商品图内底部带商品名白字贴片（TbImg cap），历史订单旧图链经 legacyImgUrl 自动迁移本地卡通图；
@@ -64,6 +64,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
+import { TB_COURIERS, tbCourierNameOf, tbCourierSrcOf, tbGetCourierId, tbSetCourierId } from '@/lib/ios/tb-courier';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { tbCreateOrderShare, tbCreateProxyRequest } from '@/lib/ios/tb-share-proxy';
 import { ISLAND_NAV_EVENT, takeNotifyNavigation } from '@/lib/ios/island-notify';
@@ -580,15 +581,25 @@ function tbFullAddr(a: TbAddress): string {
 /** 物流阶段（地图形态）：备货（无轨迹）/ 揽收 / 运输 / 派送（骑手巡航）/ 驿站待取件 */
 type TbExpressPhase = 'prepare' | 'pickup' | 'transit' | 'delivering' | 'station';
 
-/** 骑手位置沿路线二次贝塞尔插值（viewBox 500×220，与路径 M 70 182 Q 250 60 430 150 同一条；
- *  起点降到 y=182：已揽收骑手站在 ETA 气泡下方，不被卡片盖住——用户反馈） */
+/** 骑手位置沿路线二次贝塞尔插值（viewBox 500×220，与路径 M 96 186 Q 252 78 428 158 同一条；
+ *  运输线位置调整（用户反馈）：起点右移下压（96,186）、拱顶压低（78）——路线不再穿过
+ *  左上 ETA 气泡区，快递员沿新线起步就别在气泡底下 */
 function tbBezierPos(prog: number): { x: number; y: number } {
   const p = Math.min(1, Math.max(0, prog));
   const u = 1 - p;
   return {
-    x: (u * u * 70 + 2 * u * p * 250 + p * p * 430) / 5,
-    y: (u * u * 182 + 2 * u * p * 60 + p * p * 150) / 2.2,
+    x: (u * u * 96 + 2 * u * p * 252 + p * p * 428) / 5,
+    y: (u * u * 186 + 2 * u * p * 78 + p * p * 158) / 2.2,
   };
+}
+
+/** 省市区合并文本 → 城市（“浙江省杭州市西湖区文新街道”→“杭州市”；直辖市同口径） */
+function tbCityOfRegion(region: string | undefined): string {
+  const r = (region ?? '').replace(/\s+/g, '');
+  if (!r) return '';
+  const afterProv = /(省|自治区|特别行政区)/.test(r) ? r.slice(r.search(/(省|自治区|特别行政区)/) + RegExp.lastMatch.length) : r;
+  const m = afterProv.match(/^(.+?)市/);
+  return m ? m[1] + '市' : '';
 }
 
 /** 菜鸟驿站小楼（截图3：橙色驿站 + 站内快递员，纯 SVG） */
@@ -608,15 +619,37 @@ function TbStationBuilding() {
 }
 
 /** 物流地图（截图1/3：浅色高德风路网 + 橙色 ETA 气泡 + 橙路线 + 收货标记；
- *  骑手形象复用美团 mt-rider（「我的-骑手」所选形象，淘宝共用同一形象）：
- *  揽收期停在商家侧，派送期沿曲线向收货地行进，到驿站后驿站小楼+站前骑手） */
-function TbExpressMap({ phase, etaTitle, etaSub, addrDetail, riderProg }: { phase: TbExpressPhase; etaTitle: string; etaSub: string; addrDetail?: string; riderProg: number }) {
-  const riderSrc = mtRiderSrcOf(mtGetRiderId());
-  const community = (addrDetail ?? '').trim().split(/\s+/)[0] || '未来科技城';
-  const pos = tbBezierPos(phase === 'delivering' ? riderProg : phase === 'pickup' ? 0.06 : 0.97);
-  const truckPos = tbBezierPos(Math.min(0.85, 0.2 + riderProg * 0.6));
-  /** 备货中（无轨迹）：不画路线/骑手，仅商家+收货标记 */
+ *  运输快递员用「我的淘宝-快递员」所选形象（默认运输车，独立于美团骑手）：
+ *  揽收期停在商家侧，运输/派送期沿曲线随真实时间慢速巡航，到驿站后驿站小楼+站前快递员；
+ *  地名跟随真实地址：左下发货城市、右下收货城市（用户反馈） */
+function TbExpressMap({ phase, etaTitle, etaSub, addrDetail, originCity, destCity, phaseFrac }: { phase: TbExpressPhase; etaTitle: string; etaSub: string; addrDetail?: string; originCity: string; destCity: string; phaseFrac: number }) {
+  const courierSrc = tbCourierSrcOf(tbGetCourierId());
+  // 巡航进度：跟随阶段真实时间比例（phaseFrac=当前阶段已进行/阶段总长）——
+  // 运输期 28%→90%、派送期 12%→92% 随真实时间慢速爬完，不到场跳变、到了不回退；
+  // 揽收期在商家旁短距离起步（5%→15%）
+  const courierProg = phase === 'delivering'
+    ? 0.12 + 0.8 * phaseFrac
+    : phase === 'transit'
+      ? 0.28 + 0.62 * phaseFrac
+      : phase === 'pickup'
+        ? 0.05 + 0.1 * phaseFrac
+        : 0.97;
+  const pos = tbBezierPos(courierProg);
+  /** 备货中（无轨迹）：不画路线/快递员，仅商家+收货标记 */
   const preparing = phase === 'prepare';
+  const courierImg = (size: number, alt: string) => (
+    <img
+      src={courierSrc}
+      alt={alt}
+      draggable={false}
+      className="mt-rider-img select-none object-contain"
+      style={{
+        width: size,
+        height: size,
+        filter: 'drop-shadow(0 5px 4px rgba(0,0,0,0.25)) drop-shadow(0 1.5px 2px rgba(0,0,0,0.18))',
+      }}
+    />
+  );
   return (
     <div className="relative h-[252px] overflow-hidden bg-[#E9EFF5]" aria-label="物流地图">
       {/* 水系 / 绿地 */}
@@ -633,17 +666,18 @@ function TbExpressMap({ phase, etaTitle, etaSub, addrDetail, riderProg }: { phas
       <div className="absolute bottom-[-4%] left-[30%] top-[-4%] w-[6px] rotate-6 bg-white/90" />
       <div className="absolute left-[-6%] right-[20%] top-[72%] h-[5px] rotate-3 bg-white/75" />
       <div className="absolute bottom-[-6%] left-[70%] top-[10%] w-[5px] -rotate-12 bg-white/75" />
-      {/* 地名 */}
+      {/* 地名（跟随真实地址：右下=收货城市，左下=发货城市） */}
       <span className="absolute left-[6%] top-[20%] text-[11px] text-black/30">文一西路隧道</span>
       <span className="absolute right-[8%] top-[10%] text-[11px] text-black/30">19号线</span>
-      <span className="absolute left-[36%] top-[58%] -rotate-2 text-[12px] tracking-wide text-black/35">文一西路</span>
-      <span className="absolute bottom-[10%] right-[6%] text-[11px] font-medium text-black/45">{community}</span>
-      {/* 路线（商家 → 收货地 弧线；备货中不画） */}
+      <span className="absolute left-[38%] top-[64%] -rotate-2 text-[12px] tracking-wide text-black/35">文一西路</span>
+      <span className="absolute bottom-[20%] right-[6%] text-[11px] font-medium text-black/45">{destCity || '收货地'}</span>
+      <span className="absolute bottom-[16%] left-[21%] text-[11px] font-medium text-black/40">{originCity || '发货地'}</span>
+      {/* 路线（商家 → 收货地 弧线；备货中不画；起点右移下压避开 ETA 气泡） */}
       <svg className="absolute inset-0 h-full w-full" viewBox="0 0 500 220" preserveAspectRatio="none" fill="none" aria-hidden="true">
-        {!preparing ? <path d="M 70 182 Q 250 60 430 150" stroke="#FF7A21" strokeWidth="3.5" strokeLinecap="round" opacity="0.85" /> : null}
+        {!preparing ? <path d="M 96 186 Q 252 78 428 158" stroke="#FF7A21" strokeWidth="3.5" strokeLinecap="round" opacity="0.85" /> : null}
       </svg>
-      {/* 收货标记（橙「收」+ 白胶囊） */}
-      <span className="absolute right-[13%] top-[56%] flex items-center gap-1.5">
+      {/* 收货标记（橙「收」+ 白胶囊；对齐新路线终点上方，避免终点快递员压住） */}
+      <span className="absolute right-[8%] top-[54%] flex items-center gap-1.5">
         <span className="grid h-[22px] w-[22px] place-items-center rounded-md bg-[#FF5000] text-[13px] font-bold text-white shadow-md">收</span>
         <span className="rounded-full bg-white px-2 py-0.5 text-[12px] font-medium text-black/75 shadow-sm">收货地址</span>
       </span>
@@ -652,42 +686,44 @@ function TbExpressMap({ phase, etaTitle, etaSub, addrDetail, riderProg }: { phas
         <>
           <TbStationBuilding />
           <span className="absolute left-[49%] top-[47%] block">
-            <img src={riderSrc} alt="驿站快递员" draggable={false} className="mt-rider-img h-[38px] w-[38px] select-none object-contain" style={{ filter: 'drop-shadow(0 4px 3px rgba(0,0,0,0.22))' }} />
+            {courierImg(38, '驿站快递员')}
           </span>
         </>
       ) : (
-        <Store className="absolute left-[10%] top-[62%] h-[22px] w-[22px] text-[#FF8A00] drop-shadow-[0_2px_2px_rgba(0,0,0,0.22)]" strokeWidth={2.2} />
+        <Store className="absolute left-[16%] top-[76%] h-[22px] w-[22px] text-[#FF8A00] drop-shadow-[0_2px_2px_rgba(0,0,0,0.22)]" strokeWidth={2.2} />
       )}
-      {/* 运输中：货车沿路线行进 */}
-      {phase === 'transit' ? (
-        <span className="absolute" style={{ left: `calc(${truckPos.x}% - 15px)`, top: `calc(${truckPos.y}% - 15px)` }}>
-          <Truck className="h-[30px] w-[30px] text-[#FF6A00] drop-shadow-[0_3px_3px_rgba(0,0,0,0.25)]" strokeWidth={2} />
+      {/* 运输/派送：快递员沿路线随真实时间慢速巡航（底边对齐路径点=脚踩在线上；
+          运输期体型稍大像干线，派送期贴近）；备货中不显示 */}
+      {phase === 'transit' || phase === 'delivering' || phase === 'pickup' ? (
+        <span
+          className="mt-rider absolute block"
+          style={{
+            left: `calc(${pos.x}% - ${phase === 'transit' ? 22 : 26}px)`,
+            top: `calc(${pos.y}% - ${phase === 'transit' ? 36 : 44}px)`,
+          }}
+        >
+          {courierImg(phase === 'transit' ? 44 : 52, '运输快递员')}
         </span>
       ) : null}
-      {/* 骑手形象（美团同款：立体投影 + 颠簸动画；驿站阶段由驿站小楼前的快递员替代；备货中不显示） */}
-      {phase !== 'transit' && phase !== 'station' && phase !== 'prepare' ? (
-        <span className="mt-rider absolute block" style={{ left: `calc(${pos.x}% - 26px)`, top: `calc(${pos.y}% - 26px)` }}>
-          <img src={riderSrc} alt="快递骑手" draggable={false} className="mt-rider-img h-[52px] w-[52px] select-none object-contain" style={{ filter: 'drop-shadow(0 5px 4px rgba(0,0,0,0.25)) drop-shadow(0 1.5px 2px rgba(0,0,0,0.18))' }} />
-        </span>
-      ) : null}
-      {/* ETA 气泡（顶栏正下方；用户反馈：已揽收卡片往上提，不得盖住骑手） */}
-      <div className="absolute left-4 top-[96px] rounded-2xl bg-[#FF6A00] px-4 py-2.5 text-white shadow-[0_8px_20px_rgba(255,106,0,0.4)]">
-        <div className="text-[17px] font-bold leading-6">{etaTitle}</div>
-        <div className="mt-0.5 text-[12px] text-white/85">{etaSub}</div>
+      {/* ETA 气泡（顶栏正下方；用户反馈：整体上提+紧凑化，不再压住运输线起点） */}
+      <div className="absolute left-4 top-[88px] rounded-2xl bg-[#FF6A00] px-3.5 py-2 text-white shadow-[0_8px_20px_rgba(255,106,0,0.4)]">
+        <div className="text-[16px] font-bold leading-[22px]">{etaTitle}</div>
+        <div className="mt-0.5 text-[11.5px] leading-[16px] text-white/85">{etaSub}</div>
       </div>
     </div>
   );
 }
 
-/** 物流描述文案（节点序号 → 标题 + 描述，含橙色电话高亮） */
-function tbNodeMeta(idx: number, man: string, manPhone: string, station: string): { title: string; desc: string; phone?: string } {
+/** 物流描述文案（节点序号 → 标题 + 描述，含橙色电话高亮；派送/到达文案跟随收货城市——地图/时间线跟真实地址） */
+function tbNodeMeta(idx: number, man: string, manPhone: string, station: string, dest = ''): { title: string; desc: string; phone?: string } {
+  const destCity = dest || '杭州市';
   switch (idx) {
     case 0:
       return { title: '已揽收', desc: '【杭州市】快递员已上门取件，包裹正准备发往杭州转运中心' };
     case 1:
-      return { title: '运输中', desc: '【杭州市】快件已到达 杭州转运中心，即将发往目的地网点' };
+      return { title: '运输中', desc: `【杭州市】快件已到达 杭州转运中心，即将发往${destCity}网点` };
     case 2:
-      return { title: '派送中', desc: `【杭州市】 杭州未来科技城 的业务员【${man}（勿找商家，有事呼叫我），${manPhone}】正在为您派送`, phone: manPhone };
+      return { title: '派送中', desc: `【${destCity}】 ${destCity} 的业务员【${man}（勿找商家，有事呼叫我），${manPhone}】正在为您派送`, phone: manPhone };
     case 3:
       return { title: '待取件', desc: `您的快件已暂存至${station}，请凭取货码及时领取。如有疑问请联系${manPhone}`, phone: manPhone };
     default:
@@ -5134,7 +5170,7 @@ function LogisticsPage({
           </div>
         </div>
         <div className="flex-1 overflow-y-auto pb-8">
-          <TbExpressMap phase="prepare" etaTitle={pre.title} etaSub={pre.sub} addrDetail={o.address?.detail} riderProg={0} />
+          <TbExpressMap phase="prepare" etaTitle={pre.title} etaSub={pre.sub} addrDetail={o.address?.detail} originCity="杭州市" destCity={tbCityOfRegion(o.address?.region)} phaseFrac={0} />
           <div className="relative z-10 -mt-4 rounded-t-2xl bg-white px-4 pb-3 pt-4">
             <div className="flex items-center gap-2">
               <Package className="h-5 w-5 shrink-0 text-[#FF6A1E]" strokeWidth={2.1} />
@@ -5177,8 +5213,19 @@ function LogisticsPage({
   const nodeIdx = o.track.length - 1;
   const phase: TbExpressPhase = nodeIdx >= 3 ? 'station' : nodeIdx === 2 ? 'delivering' : nodeIdx === 1 ? 'transit' : 'pickup';
   const latest = [...o.track].reverse()[0];
-  // 派送中骑手行进进度（节点时间起 90s 走完，不倒退）
-  const riderProg = Math.min(0.92, Math.max(0.12, (Date.now() - latest.at) / 90_000));
+  // 地名跟随真实地址（用户反馈）：收货城市从收货地址解析，发货城市取揽收节点【市】；
+  // 无地址时退回默认
+  const destCity = tbCityOfRegion(o.address?.region);
+  const originCity = (() => {
+    const m = /【(.+?)】/.exec(o.track[0]?.text ?? '');
+    return m?.[1] ?? '杭州市';
+  })();
+  // 快递员慢速巡航（用户反馈：运输车/骑手跟随时间慢慢移动）：节点时间戳是「未来锚点」
+  // （at=shipAt+(i+1)*step），直接 now-latest.at 为负会卡在起点——改用「当前阶段已进行时长 /
+  // 阶段总长」算推进比例：阶段开始于上一节点时刻（首节点=发货时刻），阶段内线性前进
+  const stepMs = Math.max(60_000, tbDeliveryTiming(uid, o.id).trackStepMs);
+  const phaseStartAt = nodeIdx >= 1 ? o.track[nodeIdx - 1].at : (o.shipAt ?? latest.at);
+  const phaseFrac = phase === 'station' ? 1 : Math.min(1, Math.max(0, (Date.now() - phaseStartAt) / stepMs));
   const eta = (() => {
     switch (phase) {
       case 'delivering':
@@ -5199,9 +5246,9 @@ function LogisticsPage({
       onToast('复制失败，请手动选择');
     }
   };
-  /** 时间线条目（最新在前） */
+  /** 时间线条目（最新在前；派送/到达文案带收货城市——跟随真实地址） */
   const entries = o.track
-    .map((t, i) => ({ ...tbNodeMeta(i, man, manPhone, station), at: t.at }))
+    .map((t, i) => ({ ...tbNodeMeta(i, man, manPhone, station, destCity), at: t.at }))
     .reverse();
   /** 详细信息弹层条目（含更早的干线条目） */
   const detailEntries = [
@@ -5229,7 +5276,7 @@ function LogisticsPage({
         </div>
       </div>
       <div className="flex-1 overflow-y-auto pb-8">
-        <TbExpressMap phase={phase} etaTitle={eta.title} etaSub={eta.sub} addrDetail={o.address?.detail} riderProg={riderProg} />
+        <TbExpressMap phase={phase} etaTitle={eta.title} etaSub={eta.sub} addrDetail={o.address?.detail} originCity={originCity} destCity={destCity} phaseFrac={phaseFrac} />
         {/* 白卡（压住地图底部圆角） */}
         <div className="relative z-10 -mt-4 rounded-t-2xl bg-white px-4 pb-3 pt-4">
           {/* 快递公司行 */}
@@ -5268,7 +5315,7 @@ function LogisticsPage({
                   {i === 0 && phase === 'delivering' ? (
                     <div className="mt-2.5 flex items-center gap-3 rounded-xl bg-[#F7F8FA] px-3.5 py-3">
                       <span className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-full bg-[#FF6A00]/10">
-                        <img src={mtRiderSrcOf(mtGetRiderId())} alt={man} className="h-10 w-10 object-contain" draggable={false} />
+                        <img src={tbCourierSrcOf(tbGetCourierId())} alt={man} className="h-10 w-10 object-contain" draggable={false} />
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="text-[15px] font-semibold text-black/85">{man}</div>
@@ -5511,7 +5558,6 @@ function MePage({
   onOpenShopFollows,
   onOpenProduct,
   onToast,
-  onOpenWallet,
   onOpenCouponCenter,
   onOpenBill,
 }: {
@@ -5528,7 +5574,6 @@ function MePage({
   onOpenShopFollows: () => void;
   onOpenProduct: (pid: string) => void;
   onToast: (m: string) => void;
-  onOpenWallet: () => void;
   onOpenCouponCenter: () => void;
   onOpenBill: () => void;
 }) {
@@ -5537,6 +5582,15 @@ function MePage({
   // 选中形象同时用于淘宝物流页地图巡航，与美团共用同一 localStorage）
   const [riderOpen, setRiderOpen] = useState(false);
   const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
+  // 运输快递员选择（用户反馈：账户余额位改为快递员；选中的形象用于淘宝物流地图巡航，
+  // 独立于美团骑手；默认运输车）
+  const [courierOpen, setCourierOpen] = useState(false);
+  const [courierId, setCourierId] = useState<string>(() => tbGetCourierId());
+  useEffect(() => {
+    const onCourier = () => setCourierId(tbGetCourierId());
+    window.addEventListener('tb-courier-changed', onCourier);
+    return () => window.removeEventListener('tb-courier-changed', onCourier);
+  }, []);
   // 商品图片样式选择弹层（第六十六轮：从主题 App 迁出，红包位改为选择器入口）
   const [goodsStyleOpen, setGoodsStyleOpen] = useState(false);
   const goodsImgStyle = useSettings((s) => s.goodsImgStyle);
@@ -5739,7 +5793,7 @@ function MePage({
             </div>
           </div>
           {/* 资产行（首位=商品图片样式选择器入口：当前样式缩略图+名字，点击弹三选一弹层；
-              优惠券/骑手/账户余额 label 上 value 下；行内 items-center 垂直居中对齐） */}
+              优惠券/骑手/快递员 label 上 value 下；行内 items-center 垂直居中对齐） */}
           <div className="mt-1 flex items-center">
             <button type="button" data-testid="tb-goods-style-entry" onClick={() => setGoodsStyleOpen(true)} className="flex flex-1 flex-col items-center gap-1 py-1 active:opacity-70">
               <GoodsStyleThumb style={goodsImgStyle} className="h-[46px] w-[46px] shrink-0 rounded-[12px]" />
@@ -5756,9 +5810,13 @@ function MePage({
                 <img src={mtRiderSrcOf(riderId)} alt="骑手形象" draggable={false} className="h-[17px] w-[17px] object-contain" />
               </span>
             </button>
-            <button type="button" onClick={onOpenWallet} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
-              <span className="text-[12px] leading-none text-black/45">账户余额</span>
-              <span className="mt-1.5 flex h-[18px] items-center justify-center text-[13px] font-bold leading-none text-black/90">微信/QQ</span>
+            {/* 快递员（用户反馈：账户余额位改为快递员；显示当前运输快递员形象，点按弹选择层；
+                选中的形象用于淘宝物流地图巡航，默认运输车） */}
+            <button type="button" data-testid="my-courier" onClick={() => setCourierOpen(true)} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
+              <span className="text-[12px] leading-none text-black/45">快递员</span>
+              <span className="mt-1 flex h-[22px] items-center justify-center">
+                <img src={tbCourierSrcOf(courierId)} alt={tbCourierNameOf(courierId)} draggable={false} className="h-[22px] w-[22px] object-contain" style={{ filter: 'drop-shadow(0 1.5px 1.5px rgba(0,0,0,0.18))' }} />
+              </span>
             </button>
           </div>
         </div>
@@ -5932,59 +5990,53 @@ function MePage({
     ) : null}
     {/* 商品图片样式选择（第六十六轮：从主题 App 迁出的入口弹层；与美团共用同一全局样式） */}
     {goodsStyleOpen ? <GoodsStyleSheet accent="#FF5000" onClose={() => setGoodsStyleOpen(false)} /> : null}
-    </>
-  );
-}
-
-/** 账户余额弹层（微信零钱 + QQ 钱包只读展示） */
-function WalletSheet({ onClose, onToast }: { onClose: () => void; onToast: (m: string) => void }) {
-  const [wxBal, setWxBal] = useState<number | null>(null);
-  const [qqBal, setQqBal] = useState<number | null>(null);
-  useEffect(() => {
-    void (async () => {
-      try {
-        const ww = await import('./wechat-wallet');
-        setWxBal(ww.loadJSON<{ balance?: number }>(ww.LS_WALLET, {}).balance ?? 0);
-      } catch {
-        setWxBal(0);
-      }
-      try {
-        const qq = await import('./qq');
-        setQqBal(qq.loadWallet().balance);
-      } catch {
-        setQqBal(0);
-      }
-    })();
-  }, []);
-  return (
-    <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={onClose}>
-      <div className="rounded-t-2xl bg-white p-4 pb-8" onClick={(e) => e.stopPropagation()}>
-        <div className="text-center text-[16px] font-semibold text-black/85">账户余额</div>
-        <div className="mt-1 text-center text-[12px] text-black/35">购物支付使用微信 / QQ 钱包余额，余额在对应 App 内管理</div>
-        <div className="mt-4 space-y-2">
-          <button type="button" onClick={() => onToast('到微信 App「我→服务→钱包」管理零钱')} className="flex w-full items-center gap-3 rounded-xl bg-black/[0.03] p-3.5 text-left active:opacity-70">
-            <span className="grid h-10 w-10 place-items-center rounded-full bg-[#07C160] text-white">
-              <Wallet className="h-5 w-5" strokeWidth={2.2} />
-            </span>
-            <span className="flex-1">
-              <span className="block text-[15px] font-medium text-black/85">微信零钱</span>
-              <span className="block text-[12px] text-black/40">微信支付时可用</span>
-            </span>
-            <span className="text-[18px] font-bold text-black/85">{wxBal === null ? '…' : `¥${fmtMoney(wxBal)}`}</span>
-          </button>
-          <button type="button" onClick={() => onToast('到 QQ App「头像→我的钱包」管理余额')} className="flex w-full items-center gap-3 rounded-xl bg-black/[0.03] p-3.5 text-left active:opacity-70">
-            <span className="grid h-10 w-10 place-items-center rounded-full bg-[#12B7F5] text-white">
-              <Wallet className="h-5 w-5" strokeWidth={2.2} />
-            </span>
-            <span className="flex-1">
-              <span className="block text-[15px] font-medium text-black/85">QQ钱包余额</span>
-              <span className="block text-[12px] text-black/40">QQ支付时可用</span>
-            </span>
-            <span className="text-[18px] font-bold text-black/85">{qqBal === null ? '…' : `¥${fmtMoney(qqBal)}`}</span>
-          </button>
+    {/* 运输快递员选择（用户反馈：账户余额位改为快递员；底部弹层内置 9 位快递员，
+        选中后用于淘宝物流地图巡航；默认运输车；立体投影展示） */}
+    {courierOpen ? (
+      <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={() => setCourierOpen(false)}>
+        <div className="rounded-t-2xl bg-white [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()} data-testid="courier-sheet">
+          <div className="relative flex items-center justify-center pb-3 pt-5">
+            <span className="text-[17px] font-bold text-black/90">选择运输快递员</span>
+            <button type="button" aria-label="关闭" onClick={() => setCourierOpen(false)} className="absolute right-4 top-5 grid h-7 w-7 place-items-center active:opacity-60">
+              <X className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
+            </button>
+          </div>
+          <p className="px-5 pb-3 text-[12px] text-black/40">内置 {TB_COURIERS.length} 位快递员 · 默认运输车干线运输，TA们会把你的包裹送到驿站</p>
+          <div className="grid max-h-[52vh] grid-cols-3 gap-3 overflow-y-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {TB_COURIERS.map((c) => {
+              const active = c.id === courierId;
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`courier-${c.id}`}
+                  onClick={() => {
+                    setCourierId(c.id);
+                    tbSetCourierId(c.id);
+                    setCourierOpen(false);
+                    onToast(`运输快递员已切换为「${c.name}」，包裹由TA护送`);
+                  }}
+                  className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${active ? 'bg-[#FFF1E6] ring-2 ring-[#FF5000]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
+                >
+                  {active ? (
+                    <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FF5000]">
+                      <Check className="h-3 w-3 text-white" strokeWidth={3} />
+                    </span>
+                  ) : null}
+                  {c.id === 'truck' ? (
+                    <span className="absolute left-1.5 top-1.5 rounded-full bg-[#FF5000]/10 px-1.5 py-[2px] text-[9px] font-medium leading-none text-[#FF5000]">默认</span>
+                  ) : null}
+                  <img src={c.src} alt={c.name} draggable={false} className="mt-rider-img h-20 w-20 object-contain" style={{ filter: 'drop-shadow(0 5px 4px rgba(0,0,0,0.22)) drop-shadow(0 2px 2px rgba(0,0,0,0.14))' }} />
+                  <span className={`mt-1 text-[12px] ${active ? 'font-semibold text-black/85' : 'text-black/60'}`}>{c.name}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="h-7" />
         </div>
       </div>
-    </div>
+    ) : null}
+    </>
   );
 }
 
@@ -7488,7 +7540,6 @@ export default function TaobaoApp() {
   const [addrPicker, setAddrPicker] = useState(false);
   const [editAddr, setEditAddr] = useState<TbAddress | null>(null);
   const [payOrderId, setPayOrderId] = useState<string | null>(null);
-  const [walletOpen, setWalletOpen] = useState(false);
   const [rateFor, setRateFor] = useState<string | null>(null);
   const [shopId, setShopId] = useState<string | null>(null);
   /** 客服聊天页（Task 41）：店铺 + 上下文（商品/订单） */
@@ -7685,7 +7736,6 @@ export default function TaobaoApp() {
             onOpenShopFollows={() => setPage('shopFollows')}
             onOpenProduct={openProduct}
             onToast={showToast}
-            onOpenWallet={() => setWalletOpen(true)}
             onOpenCouponCenter={() => setPage('couponCenter')}
             onOpenBill={() => setPage('bill')}
           />
@@ -7970,8 +8020,6 @@ export default function TaobaoApp() {
           );
         })()
       ) : null}
-      {/* 账户余额（微信/QQ 只读） */}
-      {walletOpen ? <WalletSheet onClose={() => setWalletOpen(false)} onToast={showToast} /> : null}
     </div>
   );
 }

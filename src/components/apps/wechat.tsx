@@ -88,7 +88,7 @@ import { MT_PROXY_CARD_EVENT } from '@/lib/ios/mt-proxy-pay';
 import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
 import { MtShareBubble } from './mt-share-card';
 import { TbPayBubble, TbProxyDetailPage, TbShareBubble, TbExpressPicker } from './tb-share-cards';
-import { TB_PROXY_CARD_EVENT, tbProxyHistoryLine, tbCreateOrderShare } from '@/lib/ios/tb-share-proxy';
+import { TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT, tbProxyHistoryLine, tbCreateOrderShare } from '@/lib/ios/tb-share-proxy';
 import { tbShareHistoryLine } from '@/lib/ios/tb-share-proxy';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import {
@@ -4987,6 +4987,27 @@ function ChatPage({
     };
     window.addEventListener(MT_SHARE_CARD_EVENT, onMtShare);
     return () => window.removeEventListener(MT_SHARE_CARD_EVENT, onMtShare);
+  }, [peer.id]);
+
+  /** 淘宝代付/订单分享卡片落库监听（用户反馈：加号快递里分享订单要退出重进才显示）：
+   *  淘宝收银台代付请求卡/完成卡与订单分享卡直写 kv 后广播 TB_*_CARD_EVENT，
+   *  聊天页在场时实时合并落库消息（新卡片立即上屏 + 请求卡状态刷新），不用重开聊天 */
+  useEffect(() => {
+    const onTbCard = (e: Event) => {
+      const d = (e as CustomEvent<{ cid?: string; app?: string }>).detail;
+      if (!d || d.cid !== peer.id || d.app !== 'wx') return;
+      setMsgs((prev) => {
+        const saved = loadMsgs(peer.id);
+        const ids = new Set(prev.map((m) => m.id));
+        return sortMsgsByTime([...prev, ...saved.filter((m) => !ids.has(m.id))]);
+      });
+    };
+    window.addEventListener(TB_PROXY_CARD_EVENT, onTbCard);
+    window.addEventListener(TB_SHARE_CARD_EVENT, onTbCard);
+    return () => {
+      window.removeEventListener(TB_PROXY_CARD_EVENT, onTbCard);
+      window.removeEventListener(TB_SHARE_CARD_EVENT, onTbCard);
+    };
   }, [peer.id]);
 
   /** 过期清算后的落盘合并（存储为权威）：既有消息以落盘版本覆盖（卡片过期终态），落盘新增的

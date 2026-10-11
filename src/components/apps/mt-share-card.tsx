@@ -2,7 +2,7 @@
 
 /**
  * 美团「订单分享」动态卡片（微信/QQ 聊天端共用）：
- * - 我把美团订单分享给好友的卡片：美团 logo + 订单动态 + 商家/金额 + 买的什么（商品行）+
+ * - 我把美团订单分享给好友的卡片：美团 logo + 商家/金额 + 买的什么（商品行）+
  *   五段状态时间线（提交订单→待商家接单→商家已接单→骑手已接单·骑手名→已送达）；
  * - 状态不落快照：每次渲染按 uid+orderId 实时读订单 statusLog 推导，监听 mt-orders-changed
  *   与逐秒 tick——订单推进时聊天里的卡片自动跟随（真·动态卡片）；
@@ -155,7 +155,7 @@ export function MtShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
       {/* 箭头指向头像侧（我发出 → 右；AI 角色发来 → 左） */}
       <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${side === 'left' ? '-left-[4px]' : '-right-[4px]'}`} />
 
-      {/* 头部：美团 logo + 订单动态 / X已买单 */}
+      {/* 头部：美团 logo（用户反馈：去掉「订单动态」文字徽标；保留 X已买单 徽标与官方保障） */}
       <span className="relative flex items-center gap-1.5">
         <img src="/icons/meituan-app.png?v=2" alt="" className="h-[22px] w-[22px] rounded-md object-cover" />
         <span className="text-[13px] font-semibold text-black/85">美团</span>
@@ -163,9 +163,7 @@ export function MtShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
           <span data-testid="mt-share-paidby" className="rounded-full bg-[#E2F7EC] px-1.5 py-[2px] text-[10px] font-medium leading-none text-[#00A354]">
             {share.paidBy}已买单
           </span>
-        ) : (
-          <span className="rounded-full bg-[#FFF3D1] px-1.5 py-[2px] text-[10px] font-medium leading-none text-[#B77900]">订单动态</span>
-        )}
+        ) : null}
         <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#00B862]">
           <ShieldCheck className="h-[13px] w-[13px]" strokeWidth={2.2} />
           官方保障

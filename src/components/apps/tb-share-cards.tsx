@@ -8,7 +8,7 @@
  * - TbProxyDetailPage：点卡片进入的「代付详情」全屏页（对齐美团端结构）：
  *   待付 = 请求人头像行 + 等待代付 + 付款须知 +（聊天端方向为好友代付时）等待按钮；
  *   已付 = 代付人头像行 + 支付成功 + 金额 + 渠道 + 付款须知 + 完成 + 订单商品卡；
- * - TbShareBubble：订单分享动态卡片（订单详情分享/快递面板发出）：淘宝 logo + 订单动态 +
+ * - TbShareBubble：订单分享动态卡片（订单详情分享/快递面板发出）：淘宝 logo +
  *   店铺/金额 + 买的什么（商品行）+ 五段状态时间线（提交订单→付款成功→商家发货→运输中→已签收）；
  *   状态不落快照：每次渲染按 uid+orderId 实时读订单推导，监听 tb-orders-changed 与逐秒 tick；
  * - TbExpressPicker：微信/QQ 加号面板「快递」页——列出已确认收货（completed）的淘宝订单，
@@ -424,11 +424,10 @@ export function TbShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
       {/* 箭头指向头像侧（我发出 → 右；AI 角色发来 → 左） */}
       <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${side === 'left' ? '-left-[4px]' : '-right-[4px]'}`} />
 
-      {/* 头部：淘宝 logo + 订单动态 */}
+      {/* 头部：淘宝 logo（用户反馈：去掉「订单动态」文字徽标，保留品牌位+官方保障） */}
       <span className="relative flex items-center gap-1.5">
         <img src="/icons/taobao.png" alt="" className="h-[22px] w-[22px] rounded-md object-cover" />
         <span className="text-[13px] font-semibold text-black/85">淘宝</span>
-        <span className="rounded-full bg-[#FFECE2] px-1.5 py-[2px] text-[10px] font-medium leading-none text-[#FF5000]">订单动态</span>
         <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#FF5000]">
           <ShieldCheck className="h-[13px] w-[13px]" strokeWidth={2.2} />
           官方保障

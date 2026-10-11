@@ -18290,3 +18290,27 @@ Stage Summary:
 - 交付：①承诺发货时刻全真实时钟化（=付款+当前速度发货延迟，当天发货、切速联动，与发货状态机同源）；②「买衣服显示零食铺子」三层根治——74 品类 tag→店铺归类映射 + AI 错位店名弃用 + 存量商品/订单读取时自愈；③淘宝收银台微信/QQ 渠道支付密码门（密码独立、错误提示、防锁定，交互与美团一致）；④⑤淘宝/美团聊天分享卡在订单完结（确认收货/已送达）后时间线折叠为单行完结态
 - 改动文件：src/lib/ios/taobao-data.ts、src/lib/ios/taobao-store.ts、src/lib/ios/tb-ai-store.ts、src/lib/ios/tb-product-gen.ts、src/components/apps/taobao.tsx、src/components/apps/tb-share-cards.tsx、src/components/apps/mt-share-card.tsx
 - 关键决策：①承诺文本与 tbTickOrders 用同一 tbDeliveryTiming(uid, o.id)——文本显示的时刻就是包裹真实发出的时刻，不出现「承诺 14:00 实际 13:50 就发了」的错位；②店铺修复选择「归类映射」而非「AI 提示词约束」——提示词只能降低概率，映射保证 100% 收敛，且存量数据靠读取自愈零迁移；③完结卡保留单行完结态而非完全空白——保留「已签收/已送达+时间」信息量同时满足「不显示物流时间线」
+
+---
+Task ID: 69
+Agent: main (Z.ai Code)
+Task: 用户六点反馈——①淘宝/美团分享卡片「订单动态」文字删除（只删文字徽标不删区块）；②物流界面运输车/骑手跟随时间慢慢移动；③「预计今天送达」气泡往上一点+运输线位置调整；④地图地名跟随真实地址；⑤加号快递里分享订单要退出重进聊天才显示（即时上屏）；⑥我的淘宝「账户余额」变「快递员」+选运输快递员（默认运输车）+内置9位形象（立体去白边）
+
+Work Log:
+- 【①卡片文字删除】tb-share-cards.tsx TbShareBubble 头部删「订单动态」橙底徽标（保留淘宝logo+官方保障，时间线区块原样）；mt-share-card.tsx MtOrderTimeline 头部删「订单动态」黄底徽标（无 paidBy 时头部只留美团logo+官方保障，「X已买单」徽标保留），两条文件头注释同步
+- 【②随时间慢速移动·根因修复】物流节点时间戳是「未来锚点」（tbTickOrders: at=shipAt+(i+1)*trackStep，节点显示前就落库）——旧实现 riderProg=(now-latest.at)/90s 恒为负→人物永远钉死在起点；重写为 phaseFrac=（当前阶段已进行时长/阶段总长）：阶段开始于上一节点时刻（首节点=shipAt），阶段内线性推进， clamp[0,1]；地图内快递员进度=运输期28%→90%、派送期12%→92%、揽收期5%→15%（商家旁短距离起步），阶段比例驱动→每开一次页都在线上的不同位置且持续蠕动；ExpressDetailPage 2s tick + .mt-rider 1s linear 过渡平滑刷新
+- 【E2E 实测移动】agent-browser 同页 30s 两次取 .mt-rider style：74.29%→75.51%（约1.2%沿线推进）✓
+- 【③气泡+运输线】ETA 气泡 top 96→88px + 紧凑化（px-4 py-2.5→px-3.5 py-2、标题17→16px、副标12→11.5px），底部上提约16px；运输线整体重排：M 70 182 Q 250 60 430 150 → M 96 186 Q 252 78 428 158（起点右移下压+拱顶压低，不再穿过气泡区，tbBezierPos 同步新锚点）；商家 Store 图标对齐新起点(16%,76%)；收货地址徽标移到终点上方(右8%,54%)避免终点快递员压住
+- 【④地名跟真实地址】新增 tbCityOfRegion()（省市区合并文本→城市，直辖市同口径）：地图右下=收货城市（addr.region 解析）、左下=发货城市（揽收节点【xx市】解析），无地址退回「收货地/发货地」；tbNodeMeta 加 dest 参数——运输节点「即将发往{收货城市}网点」、派送节点「【收货城市】xx 的业务员…正在为您派送」（旧文案硬编码杭州/未来科技城）；快递公司行下时间线与地图同源
+- 【⑤快递分享即时上屏·根因】tb-share-proxy insertCard 落库后广播 TB_PROXY_CARD_EVENT/TB_SHARE_CARD_EVENT，但 wechat.tsx/qq.tsx 只监听了美团 MT_*_EVENT——淘宝卡从未被实时合并；两端 ChatPage/ChatLayer 各补一个 onTbCard 监听（cid+app 匹配→loadMsgs 按 id 去重合并 sortMsgsByTime），代付请求卡/完成卡/分享卡三条链路全部受益
+- 【E2E 实测】微信+快递面板分享衣橱日记订单→卡片当场上屏（未退出重进）；QQ 同路径分享 RedmiBuds 订单→当场上屏 ✓
+- 【⑥快递员体系】新增 src/lib/ios/tb-courier.ts：TB_COURIERS 9 位（truck 运输车=默认/bunny 橙兔摩托/rainbear 雨天熊熊/polarbear 白熊小哥/duck 鸭鸭三轮/redcat 红帽咪咪/pinkcat 粉车咪咪/bluebear 蓝车熊熊/rabbit 帽帽兔），localStorage tb-courier-id 持久化+tb-courier-changed 广播；我的淘宝资产行「账户余额(微信/QQ)」→「快递员」（当前形象小图+投影），底部弹层 3 列网格（选中橙环+勾+运输车「默认」角标，立体 drop-shadow+mt-rider-bob 颠簸动画）；WalletSheet 及 onOpenWallet/walletOpen 全链路删除；物流地图/派送骑手卡/驿站前快递员全部改用所选快递员形象（替代 mt-rider 引用，淘宝与美团骑手体系解耦）
+- 【图片处理】scripts/process-couriers.py（PIL）：四角取背景中位数→边缘泛洪去底（白底/浅蓝底通吃，保留角色白色头盔衣服与雨滴/尾气/速度线）→1px 邻接半透明柔化白边→bbox 裁切→420px 输出 public/couriers/*.png（9 张全部透明底，corner alpha=0）
+- shop-dark.css 再生成（319 条规则：新快递员弹层/卡片头部变化纳入深色覆盖）
+- E2E 全链路（agent-browser 实机，隔离 profile+注入 tb/wx/qq 会话）：我的淘宝资产行显示快递员✓→弹层 9 位立体无白边✓→切鸭鸭三轮 toast+落盘✓→派送中地图鸭子沿线巡航+30s 位移实测✓→运输中货车（默认）沿线✓→揽收期货车站商家旁✓→ETA 气泡上移紧凑✓→收货地址徽标上移无遮挡✓→发货地/收货地城市标签可见✓→wx/QQ 快递分享双端即时上屏+完结单折叠行（已签收+交易成功）✓；browser errors 0、console 仅 HMR 日志、dev.log 仅仓库固有 instrumentation 警告
+- 收尾：bunx tsc --noEmit 0 错误；eslint 改动文件 25 problems 与 stash 基线完全一致（0 新增）、wechat/qq 0 problems
+
+Stage Summary:
+- 交付：①淘宝/美团分享卡删「订单动态」文字徽标（时间线区块保留）；②物流快递员真实时间巡航（phaseFrac 状态机修「未来时间戳钉死起点」根因）；③ETA 气泡上移紧凑化+运输线右移下压重排+收货徽标避让；④地图发货/收货城市标签+物流文案全部跟随真实地址（tbCityOfRegion+揽收节点城市解析）；⑤微信/QQ 补淘宝卡事件监听——代付/分享/快递三链路卡片全部即时上屏；⑥我的淘宝「账户余额」→「快递员」选择体系（9 位内置形象去白边+立体投影，默认运输车，物流地图全阶段换装）
+- 改动文件：src/lib/ios/tb-courier.ts(+新增)、public/couriers/*.png(+9 张)、scripts/process-couriers.py(+新增)、src/components/apps/taobao.tsx、src/components/apps/tb-share-cards.tsx、src/components/apps/mt-share-card.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx、src/app/shop-dark.css(再生成)
+- 关键决策：①移动进度锚定「阶段已进行/阶段总长」而非固定秒数——与 tbTickOrders 未来锚点时间戳自洽，任意时刻打开都在正确位置且持续移动；②快递员体系独立于美团骑手（tb-courier-id），物流地图/骑手卡/驿站形象三处统一换装，美团侧零影响；③泛洪去底而非全局阈值——角色身上白色（头盔/衣服）与雨滴/尾气等特效完整保留
