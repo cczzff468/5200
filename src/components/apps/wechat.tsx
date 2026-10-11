@@ -7923,9 +7923,13 @@ function ChatPage({
                       : m.tr.status === 'rejected'
                         ? '已拒收'
                         : m.tr.received
-                          ? m.role === 'me'
-                            ? '已转入对方零钱'
-                            : '已收款'
+                          ? m.tr.receiptOf
+                            ? // 收款凭据卡（ receiptOf='peer'=我收对方的款 / 'me'=对方收我的款）：都显示「已收款」——
+                              // 用户反馈：AI 转给我的钱，我收款后的凭据卡不能显示「已转入对方零钱」（方向反了）
+                              '已收款'
+                            : m.role === 'me'
+                              ? '已转入对方零钱'
+                              : '已收款'
                           : m.role === 'me'
                             ? '待对方收款'
                             : '向你转账'

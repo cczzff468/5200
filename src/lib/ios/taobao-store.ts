@@ -529,15 +529,27 @@ export interface TbOrder {
   aiPickup?: { contactId: string; contactName: string; app: 'wx' | 'qq'; kind: 'gift' | 'favor' };
   /** 主动代付参与标记（tbEngageTick：每单只主动问过一次，防噪） */
   aiAsked?: boolean;
+  /** AI 已垫付金额（部分代付「我出一半」：订单保持待付款，机主在收银台补齐剩余；全付走正常 tbMarkPaid） */
+  aiCovered?: number;
 }
 
 const orderKey = (uid: string) => `tb-orders:${uid}`;
 
 /** 存量订单店铺自愈（修「买衣服显示零食铺子」）：首件商品品类与订单店铺 tag 不符时，
- *  纠正为品类归类店铺（AI 商品旧注册表随机挂店的存量单一次性收敛；找不到商品/票务单不动） */
+ *  纠正为品类归类店铺（AI 商品旧注册表随机挂店的存量单一次性收敛；找不到商品/票务单不动）
+ *  + 旧数据字段兜底（track/items 缺失时补空数组——pendingPay 旧单可能没有 track，防 OrderCard/物流页读 length 崩溃） */
 function healOrderShops(orders: TbOrder[]): { list: TbOrder[]; changed: boolean } {
   let changed = false;
-  const list = orders.map((o) => {
+  const list = orders.map((raw) => {
+    let o = raw;
+    if (!Array.isArray(o.track)) {
+      o = { ...o, track: [] };
+      changed = true;
+    }
+    if (!Array.isArray(o.items)) {
+      o = { ...o, items: [] };
+      changed = true;
+    }
     const tag = o.items[0] ? productById(o.items[0].pid)?.tag : undefined;
     if (!tag) return o;
     const cur = TB_SHOPS.find((s) => s.id === o.shopId);

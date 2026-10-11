@@ -3,14 +3,19 @@
 /**
  * 淘宝 AI 联动引擎（对齐美团 mt-ai-engage 同一套交互口径）：
  * - 上下文注入 buildTbEngageCtx：机主淘宝订单实时动态（AI 知道买了什么/哪家店/多少钱/快递状态）
- *   + 待付订单 [帮付淘宝]（AI 按人设/记忆/关系主动代付）+ 在途快递 [帮取快递]（帮机主取件）
- *   + 聊到购物时的商品目录与 [帮你买]（AI 代买草稿，机主确认后 AI 出钱下单）
+ *   + 待付订单 [帮付淘宝]（AI 按人设/记忆/关系主动代付，支持垫一半）+ 在途快递 [帮取快递]（帮机主取件）
+ *   + 聊到购物时的商品目录与 [帮你买]（AI 代买草稿，支持多商品，机主确认后 AI 出钱下单）
  *   与 [自己买]（AI 自己想要，下单后请机主代付）教学；
- * - 动作执行 applyTbEngageAction：帮付/代买草稿/自己买/帮取快递四类标记落地；
- * - 礼物链路：机主分享订单后说「给你买的」→ 自动标记礼物（AI 上下文可感知），包裹到驿站后
- *   AI 自主取件（tbEngageTick）+ 道谢记忆——卡片上的「已签收」在 AI 取完才出现；
+ * - 动作执行 applyTbEngageAction：帮付/代买草稿/自己买/帮取快递/收礼物确认五类标记落地；
+ * - 礼物链路：机主分享订单后说「给你买的」→ AI 结合人设/记忆/上下文自主确认（输出 [收礼物:sid]，
+ *   「买给你妹妹/送你个表情包」这类话不误标）→ 包裹到驿站后 AI 自主取件（tbEngageTick）；
+ *   取到后要不要主动说、说什么全部由 LLM 按人设/记忆/上下文现场决策（不发模板道谢，也可以不说）；
  * - 主动参与：tbEngageTick 发现机主有待付款订单时，最近聊天的 AI 角色按人设/记忆决定要不要
- *   主动帮忙付掉（每单只问一次 + 全局冷却 + 金额上限，不刷屏）；到货/发货还会低频主动问一句；
+ *   主动帮忙付掉（可全付/垫一半；每单只问一次 + 全局冷却，不刷屏）；LLM 失败时本地兑底直接帮付
+ *   + 一句兑底话术（不再静默：用户要求机主一定能看到一次参与）；到货/发货主动问候由 AI 自主
+ *   决定发不发（没聊天对象不消耗机会，不发模板）；
+ * - 金额无硬门槛（用户要求全部取消）：帮付/代买/请客都不设金额上限，超过与否由 AI 按人设/关系/
+ *   上下文自然拿捉（不再用同意词表，判断全部交给 LLM）；
  * - 全部动作写事件记忆（memAddEventFragment），代付/订单互相关联（订单挂 proxy 快照）。
  */
 import { kvGet, kvSet } from './idb-kv';
@@ -52,10 +57,6 @@ import type { RichAction } from '@/lib/chat-rich';
 
 export type TbEngageApp = 'wx' | 'qq';
 
-/** 主动参与金额上限（¥）：超过需机主明确同意才帮付/代买（对齐美团口径，淘宝物价略高） */
-export const TB_ENGAGE_AMOUNT_CAP = 150;
-/** 硬顶：超过直接不参与（LLM 都不用问） */
-export const TB_ENGAGE_AMOUNT_HARD = 300;
 /** 主动参与冷却（同一角色 5 分钟内只主动一次） */
 export const TB_ENGAGE_COOLDOWN_MS = 5 * 60_000;
 /** 全局主动代付冷却（防多单连发打扰） */
@@ -155,13 +156,10 @@ function catalogBlock(): string {
   }
 }
 
-// ---------------- AI 代买草稿（kind='tbdraft'，机主确认后 AI 出钱下单） ----------------
+// ---------------- AI 代买草稿（kind='tbdraft'，机主确认后 AI 出钱下单；支持多商品，跨店分组下单） ----------------
 
-export interface TbAiDraft {
-  id: string;
-  /** 淘宝账号 uid（订单归属） */
-  uid: string;
-  /** 商品（taobao-data 商品库，含 AI 注册表） */
+/** 草稿商品条目 */
+export interface TbDraftItem {
   pid: string;
   title: string;
   img?: string;
@@ -169,15 +167,31 @@ export interface TbAiDraft {
   qty: number;
   shopId: string;
   shopName: string;
+}
+
+export interface TbAiDraft {
+  id: string;
+  /** 淘宝账号 uid（订单归属） */
+  uid: string;
+  /** 商品清单（1~5 件；旧数据单商品在读取时回填为单元素数组） */
+  items: TbDraftItem[];
   /** 发起的 AI 角色 */
   charId: string;
   charName: string;
   app: TbEngageApp;
   status: 'pending' | 'confirmed' | 'declined';
   createdAt: number;
+  /** 首单订单 id（跨店多单时 = 第一单；旧数据/单店场景与 orderId 相同） */
   orderId?: string;
-  /** 实付金额（确认下单后回填） */
+  /** 全部订单 id（跨店分组后可能多单） */
+  orderIds?: string[];
+  /** 实付金额（确认下单后回填，多单合计） */
   total?: number;
+}
+
+/** 草稿预估合计（未下单时展示） */
+export function tbDraftEstimate(d: Pick<TbAiDraft, 'items'>): number {
+  return Math.round(d.items.reduce((s, i) => s + i.price * i.qty, 0) * 100) / 100;
 }
 
 export const TB_DRAFT_EVENT = 'tb-draft-changed';
@@ -205,53 +219,70 @@ function fireDraftEvent(): void {
 
 export function tbGetDraft(did: string): TbAiDraft | null {
   if (!did) return null;
-  const d = kvGet<Partial<TbAiDraft>>(`tb-draft:${did}`);
-  if (!d || typeof d !== 'object' || typeof d.id !== 'string' || typeof d.pid !== 'string') return null;
+  const d = kvGet<Partial<TbAiDraft> & { pid?: string; title?: string; price?: number; qty?: number; shopId?: string; shopName?: string; img?: string }>(`tb-draft:${did}`);
+  if (!d || typeof d !== 'object' || (typeof d.pid !== 'string' && !Array.isArray(d.items))) return null;
+  // 旧数据（单商品字段）回填为 items 单元素数组；新数据 items 必为非空数组
+  const items: TbDraftItem[] = Array.isArray(d.items) && d.items.length > 0
+    ? d.items.map((it) => ({
+        pid: typeof it?.pid === 'string' ? it.pid : '',
+        title: typeof it?.title === 'string' ? it.title : '淘宝商品',
+        img: typeof it?.img === 'string' && it.img ? it.img : undefined,
+        price: typeof it?.price === 'number' ? it.price : 0,
+        qty: typeof it?.qty === 'number' && it.qty > 0 ? it.qty : 1,
+        shopId: typeof it?.shopId === 'string' ? it.shopId : '',
+        shopName: typeof it?.shopName === 'string' ? it.shopName : '淘宝好店',
+      })).filter((it) => it.pid)
+    : [
+        {
+          pid: typeof d.pid === 'string' ? d.pid : '',
+          title: typeof d.title === 'string' ? d.title : '淘宝商品',
+          img: typeof d.img === 'string' && d.img ? d.img : undefined,
+          price: typeof d.price === 'number' ? d.price : 0,
+          qty: typeof d.qty === 'number' && d.qty > 0 ? d.qty : 1,
+          shopId: typeof d.shopId === 'string' ? d.shopId : '',
+          shopName: typeof d.shopName === 'string' ? d.shopName : '淘宝好店',
+        },
+      ];
+  if (items.length === 0) return null;
   return {
     ...d,
-    id: d.id,
+    id: typeof d.id === 'string' && d.id ? d.id : did,
     uid: typeof d.uid === 'string' ? d.uid : '',
-    pid: d.pid,
-    title: typeof d.title === 'string' ? d.title : '淘宝商品',
-    img: typeof d.img === 'string' && d.img ? d.img : undefined,
-    price: typeof d.price === 'number' ? d.price : 0,
-    qty: typeof d.qty === 'number' && d.qty > 0 ? d.qty : 1,
-    shopId: typeof d.shopId === 'string' ? d.shopId : '',
-    shopName: typeof d.shopName === 'string' ? d.shopName : '淘宝好店',
+    items,
     charId: typeof d.charId === 'string' ? d.charId : '',
     charName: typeof d.charName === 'string' ? d.charName : '好友',
     app: d.app === 'qq' ? 'qq' : 'wx',
     status: d.status === 'confirmed' ? 'confirmed' : d.status === 'declined' ? 'declined' : 'pending',
     createdAt: typeof d.createdAt === 'number' ? d.createdAt : Date.now(),
     orderId: typeof d.orderId === 'string' ? d.orderId : undefined,
+    orderIds: Array.isArray(d.orderIds) ? d.orderIds.filter((x): x is string => typeof x === 'string') : undefined,
     total: typeof d.total === 'number' ? d.total : undefined,
   };
 }
 
 export type TbCreateDraftResult = { ok: true; draft: TbAiDraft } | { ok: false; error: string };
 
-/** 创建 AI 代买草稿（商品必须存在于商品库；金额按商品价 × 数量预估） */
+/** 创建 AI 代买草稿（商品必须存在于商品库；1~5 件，跨店也可；金额按商品价 × 数量预估） */
 export function tbCreateAiDraft(opts: {
   uid: string;
-  pid: string;
-  qty?: number;
+  items: { pid: string; qty?: number }[];
   charId: string;
   charName: string;
   app: TbEngageApp;
 }): TbCreateDraftResult {
-  const p = productById(opts.pid);
-  if (!p) return { ok: false, error: '没有找到这个商品，换一个推荐吧' };
-  const qty = Math.max(1, Math.min(5, Math.round(opts.qty ?? 1)));
+  const items: TbDraftItem[] = [];
+  for (const raw of opts.items.slice(0, 5)) {
+    const p = productById(raw.pid);
+    if (!p) return { ok: false, error: '没有找到这个商品，换一个推荐吧' };
+    const qty = Math.max(1, Math.min(5, Math.round(raw.qty ?? 1)));
+    if (items.some((it) => it.pid === p.id)) continue; // 同商品去重
+    items.push({ pid: p.id, title: p.title, img: tbMainImg(p), price: p.price, qty, shopId: p.shopId, shopName: shopById(p.shopId).name });
+  }
+  if (items.length === 0) return { ok: false, error: '没有找到这个商品，换一个推荐吧' };
   const draft: TbAiDraft = {
     id: genDid(),
     uid: opts.uid,
-    pid: p.id,
-    title: p.title,
-    img: tbMainImg(p),
-    price: p.price,
-    qty,
-    shopId: p.shopId,
-    shopName: shopById(p.shopId).name,
+    items,
     charId: opts.charId,
     charName: opts.charName,
     app: opts.app,
@@ -275,57 +306,78 @@ export function tbDeclineAiDraft(did: string): boolean {
 export type TbConfirmDraftResult = { ok: true; orderId: string; total: number } | { ok: false; error: string };
 
 /**
- * 机主确认 AI 代买：创建待付款订单（地址用当前收货地址）→ AI 立即付款（演示语义）
- * → 订单分享卡（role peer，「X已买单」）回聊天 + 角色记忆。商品下架时拒绝。
+ * 机主确认 AI 代买：商品按店铺分组建待付款订单（地址用当前收货地址）→ AI 逐单立即付款（演示语义）
+ * → 每单一张订单分享卡（role peer，「X已买单」）回聊天 + 角色记忆。商品下架时拒绝。
  */
 export function tbConfirmAiDraft(did: string): TbConfirmDraftResult {
   const d = tbGetDraft(did);
   if (!d) return { ok: false, error: '代买请求不存在或已过期' };
   if (d.status !== 'pending') return { ok: false, error: '这张代买请求已经处理过了' };
-  const p = productById(d.pid);
-  if (!p) return { ok: false, error: '商品已下架，没法下单啦' };
-  const item: TbOrderItem = { pid: p.id, title: p.title, img: tbMainImg(p), sku: {}, price: p.price, qty: d.qty };
-  const order = tbCreateOrder({ uid: d.uid, items: [item], address: tbCurAddr(d.uid) ?? undefined });
-  // 先落确认态防重复点击（金额以订单为准）
-  kvSet(`tb-draft:${did}`, { ...d, status: 'confirmed', orderId: order.id, total: order.total });
+  // 全部商品仍在售才下单（任一下架拒绝，防跨店多商品漏买）
+  for (const it of d.items) {
+    if (!productById(it.pid)) return { ok: false, error: '有商品已下架，没法下单啦' };
+  }
+  // 按店铺分组建单（跨店多包裹）
+  const groups = new Map<string, TbDraftItem[]>();
+  for (const it of d.items) {
+    const arr = groups.get(it.shopId);
+    if (arr) arr.push(it);
+    else groups.set(it.shopId, [it]);
+  }
+  const orders: TbOrder[] = [];
+  for (const its of groups.values()) {
+    const items: TbOrderItem[] = its.map((it) => ({ pid: it.pid, title: it.title, img: it.img ?? '', sku: {}, price: it.price, qty: it.qty }));
+    const order = tbCreateOrder({ uid: d.uid, items, address: tbCurAddr(d.uid) ?? undefined });
+    orders.push(order);
+  }
+  // 先落确认态防重复点击（金额以订单合计为准）
+  const total = Math.round(orders.reduce((s, o) => s + o.total, 0) * 100) / 100;
+  kvSet(`tb-draft:${did}`, { ...d, status: 'confirmed', orderId: orders[0].id, orderIds: orders.map((o) => o.id), total });
   fireDraftEvent();
   try {
     window.dispatchEvent(new CustomEvent('tb-orders-changed'));
   } catch {
     /* 忽略 */
   }
-  // AI 出钱：建 friend 方向代付记录并立即支付（完成回执卡丢弃，用订单分享卡替代）
-  void Promise.resolve()
-    .then(() =>
-      tbAiPayPendingOrder(order, { id: d.charId, name: d.charName, avatar: null }, d.app),
-    )
-    .catch(() => undefined);
-  // 订单分享卡（AI 发给机主，「X已买单」+ 实时状态时间线）+ 记忆
+  // AI 出钱：逐单建 friend 方向代付记录并立即支付（完成回执卡丢弃，用订单分享卡替代）
+  for (const order of orders) {
+    void Promise.resolve()
+      .then(() =>
+        tbAiPayPendingOrder(order, { id: d.charId, name: d.charName, avatar: null }, d.app),
+      )
+      .catch(() => undefined);
+  }
+  // 订单分享卡（AI 发给机主，「X已买单」+ 实时状态时间线；跨店多单每单一张）+ 记忆
   void (async () => {
     try {
       const { tbCreateOrderShare } = await import('./tb-share-proxy');
-      const fresh = tbLoadOrders(d.uid).find((o) => o.id === order.id) ?? order;
-      await tbCreateOrderShare({
-        order: fresh,
-        idp: d.app,
-        contactId: d.charId,
-        fromName: d.charName,
-        role: 'peer',
-        paidBy: d.charName,
-        content: `[淘宝订单分享]帮你在「${fresh.shopName}」下单啦，我付好了~`,
-      });
+      const all = tbLoadOrders(d.uid);
+      for (const first of orders) {
+        const fresh = all.find((o) => o.id === first.id) ?? first;
+        await tbCreateOrderShare({
+          order: fresh,
+          idp: d.app,
+          contactId: d.charId,
+          fromName: d.charName,
+          role: 'peer',
+          paidBy: d.charName,
+          content: `[淘宝订单分享]帮你在「${fresh.shopName}」下单啦，我付好了~`,
+        });
+      }
     } catch {
       /* 分享卡失败不影响下单 */
     }
     const meName = ownerNameSync();
+    const brief = d.items.map((i) => `「${i.title}」x${i.qty}`).join('、');
+    const shops = [...new Set(d.items.map((i) => i.shopName))].join('、');
     memAddEventFragment(
       d.charId,
       d.app,
-      `你帮机主${meName}在淘宝「${d.shopName}」下单了「${d.title}」（¥${fmt2(order.total)}），已由你付款`,
+      `你帮机主${meName}在淘宝（${shops}）下单了${brief}（共¥${fmt2(total)}），已由你付款${orders.length > 1 ? `，分${orders.length}个包裹发货` : ''}`,
       { eventTime: Date.now(), sourceTag: 'tb-buy-for' },
     );
   })();
-  return { ok: true, orderId: order.id, total: order.total };
+  return { ok: true, orderId: orders[0].id, total };
 }
 
 // ---------------- 上下文注入（wechat/qq 私聊每回合构建） ----------------
@@ -343,9 +395,10 @@ function orderBrief(o: TbOrder): string {
 }
 
 /**
- * 每回合现场构建（全同步 kv 读 + 礼物标记副作用）。
- * 礼物扫描：机主本轮/最近几句话说「给你买的」→ 自动给本聊天最近的未标记分享卡标记 gift
- * （同时把 aiPickup 写到订单上，到驿站后由 watcher 触发 AI 自主取件），并下发规则让 AI 本轮自然回应。
+ * 每回合现场构建（全同步 kv 读，无副作用）。
+ * 礼物候选：机主本轮/最近几句话说「给你买的」→ 不再直接标记（词表会误伤「买给你妹妹」「送你个表情包」），
+ * 改为注入「礼物确认」规则让 AI 结合人设/记忆/上下文自主判断是不是真的送 AI 的礼物，
+ * 是则输出 [收礼物:分享id]（执行器 tb-gift 落地礼物标记 + AI 取件安排 + 记忆）。
  */
 export function buildTbEngageCtx(
   chatContactId: string,
@@ -365,45 +418,30 @@ export function buildTbEngageCtx(
   const orders = tbLoadOrders(uid);
   const rules: string[] = [];
 
-  // —— 礼物自动标记（幂等）：说「给你买的」+ 本聊天 2h 内未标记的分享卡 → gift
+  // —— 礼物候选（判断全交给 AI）：说「给你买的」类话 + 本聊天 2h 内未标记的分享卡 → 让 AI 自主确认
   const giftHit = GIFT_TEXT_RE.test(recentTexts.filter((t): t is string => typeof t === 'string').join(' '));
   if (giftHit) {
     try {
       const ids = kvGet<string[]>('tb-share-index') ?? [];
-      const candidates = ids
+      const target = ids
         .map((sid) => tbGetShare(sid))
         .filter((s): s is NonNullable<typeof s> => !!s)
         .filter((s) => s.idp === app && s.contactId === chatContactId && !s.gift && !s.paidBy && Date.now() - s.createdAt < GIFT_WINDOW_MS)
-        .sort((a, b) => b.createdAt - a.createdAt);
-      const target = candidates[0];
+        .sort((a, b) => b.createdAt - a.createdAt)[0];
       if (target) {
-        kvSet(`tb-share:${target.id}`, { ...target, gift: true });
         const order = tbShareOrderOf(target);
-        if (order && !order.aiPickup && order.status !== 'completed' && order.status !== 'cancelled' && !order.ticket) {
-          const list = tbLoadOrders(uid);
-          const hit = list.find((o) => o.id === order.id);
-          if (hit && !hit.aiPickup) {
-            hit.aiPickup = { contactId: chatContactId, contactName: target.contactName, app, kind: 'gift' };
-            tbSaveOrders(uid, list);
-            try {
-              window.dispatchEvent(new CustomEvent('tb-orders-changed'));
-            } catch {
-              /* 忽略 */
-            }
-          }
-        }
-        memAddEventFragment(
-          chatContactId,
-          app,
-          `机主${owner}把淘宝「${target.shopName}」的订单（${target.items.map((i) => `${i.name}x${i.qty}`).join('、')}，¥${fmt2(target.amount)}）送给你了，说这是给你买的——包裹到驿站后你要自己去取`,
-          { eventTime: Date.now(), sourceTag: 'tb-gift' },
-        );
+        const takable = !!order && order.status !== 'completed' && order.status !== 'cancelled' && !order.ticket;
         rules.push(
-          `【机主送你的礼物】机主刚说明淘宝「${target.shopName}」的订单（${target.items.map((i) => `${i.name}x${i.qty}`).join('、')}）是送你的礼物。按你的人设自然回应（开心/感谢/惊喜都可以），包裹到驿站后系统会提醒你去取，不用现在承诺什么。`,
+          `【礼物确认（由你判断）】机主最近的话里提到「给你买的」这类说法，而本聊天里有一张机主分享的淘宝订单（id:${target.id}，淘宝店「${target.shopName}」的${target.items.map((i) => `${i.name}x${i.qty}`).join('、')}，¥${fmt2(target.amount)}）。` +
+            `结合你们正在聊的内容和你对这段关系的记忆判断：机主是不是说这张订单是送你的礼物？` +
+            (takable
+              ? `如果是 → 本轮回复里输出标记 [收礼物:${target.id}]（id 原样抄写；系统会记下这份礼物，包裹到驿站后你自己去取），正文同时按人设自然回应；`
+              : `这张订单已不能代取（已签收/取消），不用输出标记，按人设自然聊就好；`) +
+            `如果机主说的是买给别人（TA的家人朋友）、送表情包之类虚拟物、或只是随口一提不是礼物 → 不要输出标记，正常聊天。`,
         );
       }
     } catch {
-      /* 礼物标记失败不影响聊天 */
+      /* 礼物候选扫描失败不影响聊天 */
     }
   }
 
@@ -436,8 +474,8 @@ export function buildTbEngageCtx(
     const lines = helpable.slice(0, 4).map((o) => `· 订单id=${o.id} 淘宝店「${o.shopName}」 ${o.items.map((i) => `${i.title.slice(0, 14)}${i.qty > 1 ? `x${i.qty}` : ''}`).join('、')} ¥${fmt2(o.total)}`);
     rules.push(
       `【${owner}的待付款淘宝订单】\n${lines.join('\n')}\n` +
-        `如果符合你的人设、你们的关系和上面的记忆（说好要送TA、想宠TA、TA正好缺这个、金额不大等），可以主动帮TA付掉：输出标记 [帮付淘宝:订单id]（id 必须原样抄写，系统会立即支付并回执）。` +
-        `单笔超过 ¥${TB_ENGAGE_AMOUNT_CAP} 时先在正文提议「我帮你付了吧」，对方明确同意（说「好呀」「帮我付」等）后再发标记；金额不大也别每次都抢着付。`,
+        `如果符合你的人设、你们的关系和上面的记忆（说好要送TA、想宠TA、TA正好缺这个等），可以主动帮TA付掉：输出标记 [帮付淘宝:订单id]（id 必须原样抄写，系统会立即支付并回执）。` +
+        `要不要直接付、还是只垫一半（输出 [帮付一半:订单id]，剩下的让TA自己补）、还是先在正文里提一句看TA反应，都由你按人设/关系/上下文自然拿捉（没有金额限制，也别每次都抢着付）。`,
     );
   }
 
@@ -451,13 +489,13 @@ export function buildTbEngageCtx(
     );
   }
 
-  // —— 购物话题 → 商品目录 + [帮你买]（代买草稿）/ [自己买]（自己买请机主付）
+  // —— 购物话题 → 商品目录 + [帮你买]（代买草稿，支持多商品）/ [自己买]（自己买请机主付）
   if (tbScanShopText(recentTexts)) {
     const cat = catalogBlock();
     if (cat) {
       rules.push(
         `${cat}\n\n` +
-          `【帮机主买淘宝商品（你出钱）】聊到想买什么/缺什么/让你推荐时，结合你记得的偏好、当前季节节日、机主买过的东西先聊几句或直接推荐；机主同意后输出标记 [帮你买:商品id|数量?]（id 原样抄目录，数量可省略默认 1）。系统会生成一张代买卡片，机主确认后你立即付款下单，TA会收到一张已支付的订单卡片（实时显示快递状态）。注意：单笔超过 ¥${TB_ENGAGE_AMOUNT_CAP} 要机主明确同意后才发标记；别频繁送。\n` +
+          `【帮机主买淘宝商品（你出钱）】聊到想买什么/缺什么/让你推荐时，结合你记得的偏好、当前季节节日、机主买过的东西先聊几句或直接推荐；机主同意后输出标记 [帮你买:商品id|数量?,商品id|数量?]（id 原样抄目录，数量可省略默认 1；多个商品用英文逗号分隔，最多 5 件）。系统会生成一张代买卡片（跨店会分多个包裹），机主确认后你立即付款下单，TA会收到已支付的订单卡片（实时显示快递状态）。金额没有上限，买多少钱由你按人设/关系/上下文自然拿捉；别频繁送。\n` +
           `【你自己想买（机主出钱）】你自己种草了什么/缺什么的时候（按人设判断，别频繁），输出标记 [自己买:商品id|数量?]——系统会生成待付款订单并请机主帮你代付，记得用正文说一句让TA帮你付。`,
       );
     }
@@ -465,7 +503,7 @@ export function buildTbEngageCtx(
 
   if (tbEngageCoolingDown(app, chatContactId)) {
     rules.push(
-      '【参与节流】你刚刚（5分钟内）已经主动帮付/代买/取件过一次了（冷却中）：这一轮不要再输出 [帮付淘宝]/[帮你买]/[自己买] 标记（发了系统也不会执行），用正文正常聊就好。',
+      '【参与节流】你刚刚（5分钟内）已经主动帮付/代买/取件过一次了（冷却中）：这一轮不要再输出 [帮付淘宝]/[帮付一半]/[帮你买]/[自己买] 标记（系统会硬拦截不执行），用正文正常聊就好。',
     );
   }
   return { block, rules };
@@ -473,10 +511,10 @@ export function buildTbEngageCtx(
 
 // ---------------- 动作执行（wechat/qq buildReplyMsgs 分流调用） ----------------
 
-export type TbEngageActionKind = 'tb-pay-for' | 'tb-order-draft' | 'tb-order-self' | 'tb-pickup';
+export type TbEngageActionKind = 'tb-pay-for' | 'tb-pay-half' | 'tb-order-draft' | 'tb-order-self' | 'tb-pickup' | 'tb-gift';
 
 export function isTbEngageActionKind(kind: string): kind is TbEngageActionKind {
-  return kind === 'tb-pay-for' || kind === 'tb-order-draft' || kind === 'tb-order-self' || kind === 'tb-pickup';
+  return kind === 'tb-pay-for' || kind === 'tb-pay-half' || kind === 'tb-order-draft' || kind === 'tb-order-self' || kind === 'tb-pickup' || kind === 'tb-gift';
 }
 
 /** 执行器产出的卡片消息（微信 WxMsg / QQ QQMsg 结构子集，直接 push 进回复队列） */
@@ -533,12 +571,6 @@ export async function tbOwnerContactFor(app: TbEngageApp): Promise<{ id: string;
   }
 }
 
-/** [帮付淘宝/自己买/帮你买] 的「机主已明确同意」判定（与美团 mtEngageConsented 同词表） */
-const TB_CONSENT_RE = /(好呀|好啊|好吧|可以呀|可以的|同意|请吧|请我|帮我付|帮我买单|帮我取|买吧|下单吧|交给你了|麻烦你啦|谢谢你|那就拜托|安排上)/;
-function tbConsented(texts: (string | undefined | null)[]): boolean {
-  return texts.some((t) => typeof t === 'string' && t && TB_CONSENT_RE.test(t));
-}
-
 export function applyTbEngageAction(
   action: RichAction,
   peer: ContactRecord,
@@ -549,42 +581,81 @@ export function applyTbEngageAction(
   const meName = opts.meName?.trim() || ownerNameSync() || '机主';
   const uidInfo = tbEngageSessionUid();
 
-  if (kind === 'tb-pay-for') {
-    // [帮付淘宝:订单id]：AI 主动为机主的待付款订单代付（立即建代付记录并支付，完成卡异步投递）
+  if (kind === 'tb-gift') {
+    // [收礼物:分享id]：AI 结合人设/记忆/上下文自主确认「机主说的是送我的礼物」后才落地
+    //（词表粗筛会误伤「买给你妹妹」「送你个表情包」，判断权全在 AI）
+    const sid = action.targetId.trim();
+    const share = sid ? tbGetShare(sid) : null;
+    if (!share || share.idp !== opts.app || share.contactId !== peer.id) return { msgs: [] };
+    if (share.gift) return { msgs: [] }; // 已标记过（幂等）
+    const order = tbShareOrderOf(share);
+    kvSet(`tb-share:${share.id}`, { ...share, gift: true });
+    if (order && !order.aiPickup && order.status !== 'completed' && order.status !== 'cancelled' && !order.ticket) {
+      const list = tbLoadOrders(order.uid);
+      const hit = list.find((o) => o.id === order.id);
+      if (hit && !hit.aiPickup) {
+        hit.aiPickup = { contactId: peer.id, contactName: peer.name, app: opts.app, kind: 'gift' };
+        tbSaveOrders(order.uid, list);
+        try {
+          window.dispatchEvent(new CustomEvent('tb-orders-changed'));
+        } catch {
+          /* 忽略 */
+        }
+      }
+    }
+    memAddEventFragment(
+      peer.id,
+      opts.app,
+      `机主${meName}把淘宝「${share.shopName}」的订单（${share.items.map((i) => `${i.name}x${i.qty}`).join('、')}，¥${fmt2(share.amount)}）送给你了——包裹到驿站后你要自己去取`,
+      { eventTime: now, sourceTag: 'tb-gift' },
+    );
+    return { msgs: [] };
+  }
+
+  if (kind === 'tb-pay-for' || kind === 'tb-pay-half') {
+    // [帮付淘宝/帮付一半:订单id]：AI 主动为机主的待付款订单代付（可全付/垫一半；无金额门槛，
+    // 要不要付/付多少由 AI 按人设/记忆/上下文自主拿捉——词表判定已按用户要求移除）
     if (!uidInfo) return { msgs: [], sys: '（淘宝尚未登录，无法帮付）' };
     const order = tbLoadOrders(uidInfo.uid).find((o) => o.id === action.targetId.trim());
     if (!order || order.status !== 'pendingPay') return { msgs: [], sys: '（订单不存在或已支付）' };
     if (tbEngageCoolingDown(opts.app, peer.id)) {
       return { msgs: [], sys: '（刚刚才帮付/代买过一次，先歇一歇，这次先不帮付啦）' };
     }
-    if (order.total > TB_ENGAGE_AMOUNT_CAP && !tbConsented(opts.recentTexts ?? [])) {
-      return { msgs: [], sys: `（这笔¥${fmt2(order.total)}有点大，先在正文里问一句对方同不同意，同意后再帮付吧）` };
-    }
-    const res = tbAiPayPendingOrder(order, { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) }, opts.app);
+    const half = kind === 'tb-pay-half' ? Math.max(0.01, Math.round((order.total / 2) * 100) / 100) : undefined;
+    const res = tbAiPayPendingOrder(order, { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) }, opts.app, half && half < order.total ? { cover: half } : undefined);
     if (!res.ok) return { msgs: [], sys: `（帮付未成功：${res.error}）` };
     tbMarkEngage(opts.app, peer.id);
     const summary = order.items.map((i) => `${i.title.slice(0, 14)}${i.qty > 1 ? `x${i.qty}` : ''}`).join('、');
-    memAddEventFragment(peer.id, opts.app, `你主动帮机主${meName}付了淘宝「${order.shopName}」¥${fmt2(order.total)}的订单（${summary}）`, { eventTime: now, sourceTag: 'tb-help-pay' });
+    memAddEventFragment(
+      peer.id,
+      opts.app,
+      half && half < order.total
+        ? `你主动帮机主${meName}垫付了淘宝「${order.shopName}」¥${fmt2(order.total)}订单的一半（¥${fmt2(half)}，${summary}），剩下的等TA自己付`
+        : `你主动帮机主${meName}付了淘宝「${order.shopName}」¥${fmt2(order.total)}的订单（${summary}）`,
+      { eventTime: now, sourceTag: 'tb-help-pay' },
+    );
     return { msgs: res.card ? [res.card as TbEngageCard] : [] };
   }
 
   if (kind === 'tb-order-draft') {
-    // [帮你买:商品id|数量?]：生成 AI 代买草稿卡（机主确认后 AI 出钱下单）
+    // [帮你买:商品id|数量?,...]：生成 AI 代买草稿卡（支持多商品；机主确认后 AI 出钱下单）
     if (!uidInfo) return { msgs: [], sys: '（淘宝尚未登录，无法代买）' };
+    // 冷却硬拦截（用户反馈：冷却只写在提示里不够，模型不听话仍会生成草稿卡——执行器同步拦）
+    if (tbEngageCoolingDown(opts.app, peer.id)) {
+      return { msgs: [], sys: '（刚刚才帮付/代买过一次，先歇一歇，这次先不代买啦）' };
+    }
     const body = parseTbBuyBody(action.targetId);
     if (!body) return { msgs: [], sys: '（代买格式有误，未能下单）' };
-    const p = productById(body.pid);
-    if (!p) return { msgs: [], sys: '（没有找到这个商品，没法代买）' };
-    if (p.price * body.qty > TB_ENGAGE_AMOUNT_HARD && !tbConsented(opts.recentTexts ?? [])) {
-      return { msgs: [], sys: `（这件要¥${fmt2(p.price * body.qty)}，先在正文里问一句，机主同意后再发标记才能下单）` };
-    }
-    const res = tbCreateAiDraft({ uid: uidInfo.uid, pid: body.pid, qty: body.qty, charId: peer.id, charName: peer.name, app: opts.app });
+    const res = tbCreateAiDraft({ uid: uidInfo.uid, items: body.items, charId: peer.id, charName: peer.name, app: opts.app });
     if (!res.ok) return { msgs: [], sys: `（代买失败：${res.error}）` };
+    const brief = res.draft.items.length > 1
+      ? `${res.draft.items.length}件宝贝（${res.draft.items.map((i) => i.title.slice(0, 10)).join('、')}）`
+      : `「${res.draft.items[0].title.slice(0, 18)}」`;
     return {
       msgs: [{
         id: `tbdm-${res.draft.id}`,
         role: 'peer',
-        content: `[淘宝代买]帮你看好了「${res.draft.title.slice(0, 18)}」，确认后就下单`,
+        content: `[淘宝代买]帮你看好了${brief}，确认后就下单`,
         time: now,
         kind: 'tbdraft',
         tbdraft: { did: res.draft.id },
@@ -593,16 +664,17 @@ export function applyTbEngageAction(
   }
 
   if (kind === 'tb-order-self') {
-    // [自己买:商品id|数量?]：异步流——建待付款订单 + 请机主代付（direction 'me' 请求卡）
+    // [自己买:商品id|数量?]：异步流——建待付款订单 + 请机主代付（direction 'me' 请求卡；取首个商品）
     if (!uidInfo) return { msgs: [], sys: '（淘宝尚未登录，无法下单）' };
     const body = parseTbBuyBody(action.targetId);
     if (!body) return { msgs: [], sys: '（下单格式有误）' };
     if (tbEngageCoolingDown(opts.app, peer.id)) {
       return { msgs: [], sys: '（刚刚才帮付/代买/点过一次，先歇一歇，这次先不买啦）' };
     }
-    const p = productById(body.pid);
+    const first = body.items[0];
+    const p = productById(first.pid);
     if (!p) return { msgs: [], sys: '（没有找到这个商品，没法下单）' };
-    void tbSelfOrderFlow(body, peer, opts).catch(() => undefined);
+    void tbSelfOrderFlow({ pid: first.pid, qty: first.qty }, peer, opts).catch(() => undefined);
     return { msgs: [] };
   }
 
@@ -679,8 +751,11 @@ async function tbPickRecentAiChat(): Promise<{ app: TbEngageApp; contact: Contac
 }
 
 /**
- * 取件报喜/道谢两条消息：LLM 按人设+记忆+上下文现场生成（out=出发取件时 / done=取到之后），
- * 道谢不套模板——礼物感谢必须结合人设/关系/礼物本身/共同记忆组织语言；模型不可用时回退本地兑底。
+ * 取件消息：LLM 按人设+记忆+上下文现场生成，发不发/说由 AI 自主决策——
+ * - gift（机主送的礼物）：输出 {"say":bool,"lines":[...]}；say=false 或模型失败 → 不发消息
+ *   （用户要求：不要礼物道谢信息，让 AI 根据人设/记忆/上下文自己决定要不要说、说什么，
+ *   可以只说取到了也可以不说话；禁止「谢谢你XX」式客套道谢）；
+ * - favor（帮机主取件）：交差信息（出发/取到两条）还是要说的，失败返回空由调用方兑底。
  */
 async function tbPickupLinesViaLlm(
   contact: ContactRecord,
@@ -706,9 +781,11 @@ async function tbPickupLinesViaLlm(
   const user =
     kind === 'gift'
       ? [
-          `【刚发生的事】${meName}之前在淘宝送了你一件礼物（「${order.shopName}」的${summary}，¥${fmt2(order.total)}），现在包裹到驿站了，你正去取。`,
-          '【任务】生成你要发的两条消息：第一条是出发去取快递时说的（自然随口）；第二条是取到之后说的——收到礼物表达开心/感谢，必须结合你的人设、你们的关系、礼物本身和你们相处的记忆来组织语言，像平时聊天的口吻，禁止套用「我超喜欢，谢谢你XX」这类固定句式，也不要复述「到驿站/取件」流程细节。',
-          '输出 JSON：{"out":"出发时那条","done":"取到后那条"}（各 1 句，像平时聊天）。',
+          `【刚发生的事】${meName}之前在淘宝送了你一件礼物（「${order.shopName}」的${summary}，¥${fmt2(order.total)}），现在包裹到驿站了，你把它取回来了。`,
+          '【任务】要不要主动给TA发消息，由你结合人设、你们的关系、当前时间（比如大半夜可以不说）和你们相处的记忆自己决定：',
+          '想说的话发 1~2 条，像平时聊天——可以说包裹取到了、聊聊礼物本身、开个玩笑都行；禁止「我超喜欢，谢谢你XX」这类客套道谢句式，也不要复述「到驿站/取件」流程细节；',
+          '觉得没必要主动说/不想打扰 → say 填 false（这单就不说话了，之后TA聊起来再自然回应）。',
+          '输出 JSON：{"say":true或false,"lines":["要说的话（每句一条，最多2条，say=false时给空数组）"]}',
           '严禁输出 JSON 以外的文字。',
         ].join('\n\n')
       : [
@@ -718,7 +795,6 @@ async function tbPickupLinesViaLlm(
           '严禁输出 JSON 以外的文字。',
         ].join('\n\n');
   const raw = await callTbLlm(system, user);
-  const parsed = extractJsonObject(raw) as { out?: string; done?: string } | null;
   const clean = (s?: string): string =>
     (s ?? '')
       .trim()
@@ -726,6 +802,14 @@ async function tbPickupLinesViaLlm(
       .split('\n')
       .map((t) => t.trim())
       .filter(Boolean)[0] ?? '';
+  if (kind === 'gift') {
+    const parsed = extractJsonObject(raw) as { say?: boolean; lines?: unknown } | null;
+    if (parsed?.say !== true) return [];
+    const arr = Array.isArray(parsed.lines) ? parsed.lines : [];
+    const lines = arr.map((x) => clean(typeof x === 'string' ? x : '')).filter(Boolean).slice(0, 2);
+    return lines;
+  }
+  const parsed = extractJsonObject(raw) as { out?: string; done?: string } | null;
   const out = clean(parsed?.out);
   const done = clean(parsed?.done);
   if (!out || !done) return [];
@@ -760,7 +844,8 @@ export async function tbRunPickup(uid: string, orderId: string): Promise<void> {
   const meName = ownerNameSync();
   const summary = order.items.map((i) => `${i.title.slice(0, 12)}${i.qty > 1 ? `x${i.qty}` : ''}`).join('、');
   const now = Date.now();
-  // 两条消息按人设+记忆+上下文现场生成（道谢不套模板）；模型不可用时退回本地兑底文案
+  // 消息按人设+记忆+上下文现场生成：gift 场景 AI 自主决定发不发/说什么（不发模板道谢，可以不说）；
+  // favor 场景交差信息要说到，模型不可用时才退回本地兑底文案
   let lines: string[] = [];
   if (contact) {
     try {
@@ -769,22 +854,25 @@ export async function tbRunPickup(uid: string, orderId: string): Promise<void> {
       lines = [];
     }
   }
-  if (lines.length < 2) {
-    lines =
-      pick.kind === 'gift'
-        ? [`你的礼物到驿站啦，我这就去取~`, `取到啦！！${summary.slice(0, 16)}我超喜欢，谢谢你${meName}！`]
-        : [`${meName}，你的快递到驿站了，我帮你去取~`, `取回来啦，放你门口了哈`];
+  if (pick.kind === 'gift') {
+    // gift：0~2 条都接受（AI 自主决定说几条/不说），不兑底模板（用户要求不要礼物道谢信息）
+    if (lines.length > 2) lines = lines.slice(0, 2);
+  } else if (lines.length < 2) {
+    // favor：交差信息要说到，模型不可用时才退回本地兑底文案
+    lines = [`${meName}，你的快递到驿站了，我帮你去取~`, `取回来啦，放你门口了哈`];
   }
   if (contact) {
     memAddEventFragment(
       pick.contactId,
       app,
       pick.kind === 'gift'
-        ? `机主${meName}送你的淘宝礼物（${summary}，¥${fmt2(order.total)}）到驿站后你自己去取回来了，很喜欢`
+        ? `机主${meName}送你的淘宝礼物（${summary}，¥${fmt2(order.total)}）到驿站后你自己去取回来了`
         : `你帮机主${meName}取了淘宝「${order.shopName}」的快递（${summary}），已确认收货`,
       { eventTime: now, sourceTag: pick.kind === 'gift' ? 'tb-gift-pickup' : 'tb-favor-pickup' },
     );
-    await deliverPeerMsgs(app, contact, lines.map((content, i) => ({ id: `tbpick-${now.toString(36)}-${i}`, role: 'peer' as const, content, time: now + i * 4000 })));
+    if (lines.length > 0) {
+      await deliverPeerMsgs(app, contact, lines.map((content, i) => ({ id: `tbpick-${now.toString(36)}-${i}`, role: 'peer' as const, content, time: now + i * 4000 })));
+    }
   }
 }
 
@@ -813,15 +901,16 @@ async function runProactivePayEngage(uid: string, orderId: string): Promise<void
   const system = [persona, memoryBlock, timeBlock].filter(Boolean).join('\n\n');
   const user = [
     `【你看到的一件事】${meName}刚在淘宝「${order.shopName}」下单还没付款：${summary}，共 ¥${fmt2(order.total)}（30 分钟内不付会自动取消）。`,
-    '【任务】结合你的人设、你们的关系、上面的记忆和金额，决定要不要主动帮TA把这笔付了（演示语义，不会真花钱）。',
-    '关系亲近/金额不大/人设大方/正好想宠TA → 可以直接付（输出 {"pay":true,...}）；人设节俭/关系一般/金额偏大/刚闹过矛盾 → 不付，就用正文自然提一嘴（调侃/关心/催TA去买单都行）。两种选择都自然，没有标准答案。',
-    '输出 JSON：{"pay":true或false,"reply":"给对方发的一句话（像平时聊天，1~2句；付了说已付+人设话，没付就自然聊）"}',
+    '【任务】结合你的人设、你们的关系、上面的记忆和金额，决定怎么参与（演示语义，不会真花钱）：',
+    '- 直接全付：输出 {"pay":"all"}；只垫一半（剩下的让TA自己付）：输出 {"pay":"half"}；不想付：输出 {"pay":false}，用正文自然提一嘴（调侃/关心/催TA去买单都行）。',
+    '关系亲近/人设大方/正好想宠TA → 可以付（全付或垫一半）；人设节俭/关系一般/刚闹过矛盾 → 不付。怎么选都自然，没有标准答案。',
+    '输出 JSON：{"pay":"all"或"half"或false,"reply":"给对方发的一句话（像平时聊天，1~2句；付了说已付/垫了+人设话，没付就自然聊）"}',
     '严禁输出 JSON 以外的文字。',
   ].join('\n\n');
-  let parsed: { pay?: boolean; reply?: string } | null = null;
+  let parsed: { pay?: boolean | string; reply?: string } | null = null;
   try {
     const raw = await callTbLlm(system, user);
-    parsed = extractJsonObject(raw) as { pay?: boolean; reply?: string } | null;
+    parsed = extractJsonObject(raw) as { pay?: boolean | string; reply?: string } | null;
   } catch {
     parsed = null;
   }
@@ -829,16 +918,36 @@ async function runProactivePayEngage(uid: string, orderId: string): Promise<void
   // 决策落定前复查（机主可能已自己付款/取消）
   const cur = tbLoadOrders(uid).find((o) => o.id === orderId);
   if (!cur || cur.status !== 'pendingPay') return;
+  const payer = { id: contact.id, name: contact.name, avatar: avatarFor(contact, app) };
   const outMsgs: { id: string; role: 'me' | 'peer'; content: string; time: number; kind?: string; tbpay?: { pid: string; role: 'req' | 'done' } }[] = [];
-  if (parsed?.pay === true) {
-    const res = tbAiPayPendingOrder(cur, { id: contact.id, name: contact.name, avatar: avatarFor(contact, app) }, app);
+  const decision = parsed?.pay;
+  if (parsed && (decision === true || decision === 'all' || decision === 'half')) {
+    // LLM 决策：全付/垫一半（垫一半在订单上挂 aiCovered，机主收银台补齐剩余）
+    const half = decision === 'half' ? Math.max(0.01, Math.round((cur.total / 2) * 100) / 100) : undefined;
+    const res = tbAiPayPendingOrder(cur, payer, app, half && half < cur.total ? { cover: half } : undefined);
+    if (res.ok && res.card) {
+      outMsgs.push(res.card);
+      memAddEventFragment(
+        contact.id,
+        app,
+        half && half < cur.total
+          ? `你看到机主${meName}在淘宝「${cur.shopName}」有待付款订单（¥${fmt2(cur.total)}，${summary}），主动帮TA垫了一半（¥${fmt2(half)}），剩下的等TA自己付`
+          : `你看到机主${meName}在淘宝「${cur.shopName}」有待付款订单（¥${fmt2(cur.total)}，${summary}），主动帮TA付了`,
+        { eventTime: Date.now(), sourceTag: 'tb-proactive-pay' },
+      );
+    }
+  }
+  if (reply) outMsgs.push({ id: `tbpp-${Date.now().toString(36)}`, role: 'peer', content: reply, time: Date.now() + 1 });
+  if (outMsgs.length === 0) {
+    // 兑底（用户反馈：LLM 失败不再静默——订单被标「问过一次」后用户什么都看不到）：
+    // 模型不可用/没给出任何产出 → 本地直接帮付 + 一句兑底话术，保证机主一定能看到这次参与
+    const res = tbAiPayPendingOrder(cur, payer, app);
     if (res.ok && res.card) {
       outMsgs.push(res.card);
       memAddEventFragment(contact.id, app, `你看到机主${meName}在淘宝「${cur.shopName}」有待付款订单（¥${fmt2(cur.total)}，${summary}），主动帮TA付了`, { eventTime: Date.now(), sourceTag: 'tb-proactive-pay' });
     }
+    outMsgs.push({ id: `tbpp-${Date.now().toString(36)}`, role: 'peer', content: `看到你在淘宝拍了东西还没付款，我先帮你付啦，别跟我客气~`, time: Date.now() + 2 });
   }
-  if (reply) outMsgs.push({ id: `tbpp-${Date.now().toString(36)}`, role: 'peer', content: reply, time: Date.now() + 1 });
-  if (outMsgs.length === 0) return;
   try {
     const { isProactiveChatActive } = await import('./proactive-msg');
     const notifyApp = app === 'wx' ? ('wechat' as const) : ('qq' as const);
@@ -881,38 +990,41 @@ async function tbArrivalLineViaLlm(
     arrived
       ? `【你注意到的事】${meName}在淘宝「${shopName}」买的${item}刚放到驿站了（TA还没取）。`
       : `【你注意到的事】${meName}在淘宝「${shopName}」买的${item}刚发货了，还在路上。`,
-    '【任务】主动关心一句（1 句，像平时聊天）：到驿站就提醒TA去取，在路上就说留意下物流；按你的人设、你们的关系和记忆自然说，禁止每次都用「记得去取呀」这类固定收尾。',
-    '直接输出这句话本身，不要 JSON、不要引号。',
+    '【任务】要不要主动提这件事，由你结合人设、你们的关系、当前时间和你们相处的记忆自己决定：',
+    '想说：输出那句话本身（1 句，像平时聊天，到驿站就提醒TA去取/在路上就说留意下物流；禁止每次都用「记得去取呀」这类固定收尾）；',
+    '觉得没必要说/不想打扰/刚聊过这个话题：直接输出空（什么都不用说，之后TA聊起来再自然回应）。',
+    '直接输出句子本身或空字符串，不要 JSON、不要引号。',
   ].join('\n\n');
   const raw = await callTbLlm(system, user);
   return raw.trim().replace(/^[「"'『]+|[」"'』]+$/g, '').split('\n')[0]?.trim() ?? '';
 }
 
-/** 到货主动问候（四：AI 可以主动问快递）——低频一次性 */
-async function maybeArrivalComment(uid: string, orderId: string): Promise<void> {
-  if (globalCoolingDown('tb-comment-cd', ARRIVAL_COMMENT_CD_MS)) return;
-  if (Math.random() > 0.3) return;
+/**
+ * 到货主动问候（四：AI 可以主动问快递，说不说由 AI 自己决定）：
+ * 返回 true=这单已处理完（发了或 AI 决定不说），false=暂不处理（冷却中/没聊天对象——
+ * 用户反馈：标记不能在找候选前就打，否则没对象时这单永远不会再问候）。
+ */
+async function maybeArrivalComment(uid: string, orderId: string): Promise<boolean> {
+  if (globalCoolingDown('tb-comment-cd', ARRIVAL_COMMENT_CD_MS)) return false;
   const picked = await tbPickRecentAiChat();
-  if (!picked) return;
-  markGlobal('tb-comment-cd');
+  if (!picked) return false; // 没聊天对象：不打标记，这单以后仍可问候
   const { app, contact } = picked;
   const order = tbLoadOrders(uid).find((o) => o.id === orderId);
-  if (!order) return;
+  if (!order) return true;
   const meName = ownerNameSync();
   const item = order.items[0]?.title.slice(0, 16) ?? '快递';
   const arrived = tbArrivedAtStation(order);
-  // 人设化问候（LLM 现场生成，不套模板）；失败退回本地兜底文案
+  // 人设化问候：LLM 现场生成 + 自主决定说不说（用户要求：可以选择问也可以不选择问候，不套模板，失败不兑底）
   let line = '';
   try {
     line = await tbArrivalLineViaLlm(contact, app, arrived, order.shopName, item, meName);
   } catch {
     line = '';
   }
-  if (!line) {
-    line = arrived
-      ? `${meName}，你买的${item}到驿站啦，记得去取呀~`
-      : `${meName}，你买的${item}发货啦，留意下物流哦~`;
-  }
+  // 处理完这单（发了或决定不说都算），防每 tick 重试 LLM
+  kvSet(`tb-commented:${orderId}`, true);
+  markGlobal('tb-comment-cd');
+  if (!line) return true; // AI 决定不说：安静
   try {
     await deliverPeerMsgs(app, contact, [{ id: `tbac-${Date.now().toString(36)}`, role: 'peer', content: line, time: Date.now() }]);
     const notifyApp = app === 'wx' ? ('wechat' as const) : ('qq' as const);
@@ -932,6 +1044,7 @@ async function maybeArrivalComment(uid: string, orderId: string): Promise<void> 
   } catch {
     /* 静默 */
   }
+  return true;
 }
 
 /** 订单状态机 tick 接力（taobao-store watcher 每 10s 调用）：取件/主动代付/到货问候/终态记忆 */
@@ -956,7 +1069,7 @@ export async function tbEngageTick(uid: string): Promise<void> {
     }
     const now = Date.now();
     const target = orders.find(
-      (o) => o.status === 'pendingPay' && !o.aiAsked && !proxyOrderIds.has(o.id) && now - o.createdAt > 20_000 && o.total <= TB_ENGAGE_AMOUNT_HARD,
+      (o) => o.status === 'pendingPay' && !o.aiAsked && !proxyOrderIds.has(o.id) && now - o.createdAt > 20_000,
     );
     if (target && !globalCoolingDown('tb-proactive-cd', PROACTIVE_PAY_CD_MS)) {
       const list = tbLoadOrders(uid);
@@ -969,10 +1082,10 @@ export async function tbEngageTick(uid: string): Promise<void> {
         return; // 一轮只做一件主动事
       }
     }
-    // (c) 到货主动问候：新有物流的单，低频提一嘴（有礼物/帮取安排的由取件流程说话，不重复）
+    // (c) 到货主动问候：新有物流的单，低频提一嘴（有礼物/帮取安排的由取件流程说话，不重复）；
+    // 标记在「确定处理完」后才打（发了或 AI 决定不说），没聊天对象不消耗机会（用户反馈修复）
     const commented = orders.find((o) => o.status === 'shipped' && !o.aiPickup && !kvGet<boolean>(`tb-commented:${o.id}`) && o.track.length > 0);
     if (commented) {
-      kvSet(`tb-commented:${commented.id}`, true);
       await maybeArrivalComment(uid, commented.id);
       return;
     }
@@ -1019,8 +1132,11 @@ export function tbSchedulePickupResponse(sid: string): void {
       const uid = share.uid;
       const order = tbLoadOrders(uid).find((o) => o.id === share.orderId);
       if (!order || order.status === 'cancelled') return;
-      // 标记帮取（分享时可能因状态没写上，这里补）
-      if (!order.aiPickup && order.status !== 'completed') {
+      // 幂等防双响应（用户反馈「找ai取件回复两遍」）：取件已完成或另一路径（聊天 [帮取快递] 标记/watcher）
+      // 已在帮取流程中 → 不再重复答应/取件
+      if (order.status === 'completed' || order.aiPickup) return;
+      // 标记帮取（分享时可能因状态没写上，这里补；completed 已在上面的幂等检查里排除）
+      if (!order.aiPickup) {
         const list = tbLoadOrders(uid);
         const hit = list.find((o) => o.id === order.id);
         if (hit && !hit.aiPickup) {
@@ -1067,23 +1183,32 @@ export function tbSchedulePickupResponse(sid: string): void {
 
 // ---------------- 标记体解析（[帮你买/自己买:商品id|数量?]） ----------------
 
-export function parseTbBuyBody(raw: string): { pid: string; qty: number } | null {
-  const segs = raw.split('|').map((s) => s.trim());
-  const pid = segs[0] ?? '';
-  if (!pid) return null;
-  let qty = 1;
-  const q = segs[1];
-  if (q) {
-    const n = Number.parseInt(q, 10);
-    if (Number.isFinite(n) && n > 0) qty = Math.min(5, n);
+export function parseTbBuyBody(raw: string): { items: { pid: string; qty: number }[] } | null {
+  // 多商品格式：[帮你买:商品id1|数量,商品id2|数量,...]（兼容单商品旧格式「商品id|数量」；最多 5 件）
+  const segs = raw.split('，').join(',').split(',').map((s) => s.trim()).filter(Boolean);
+  const items: { pid: string; qty: number }[] = [];
+  for (const seg of segs) {
+    const parts = seg.split('|').map((x) => x.trim());
+    const pid = parts[0] ?? '';
+    if (!pid) continue;
+    let qty = 1;
+    const q = parts[1];
+    if (q) {
+      const n = Number.parseInt(q, 10);
+      if (Number.isFinite(n) && n > 0) qty = Math.min(5, n);
+    }
+    if (!items.some((it) => it.pid === pid)) items.push({ pid, qty });
+    if (items.length >= 5) break;
   }
-  return { pid, qty };
+  return items.length > 0 ? { items } : null;
 }
 
-/** AI 代买草稿卡 → AI 可读文本（确认/取消状态可回看） */
+/** AI 代买草稿卡 → AI 可读文本（确认/取消状态可回看；多商品全列） */
 export function tbDraftHistoryLine(did: string): string {
   const d = tbGetDraft(did);
   if (!d) return '[淘宝代买卡片]';
-  const status = d.status === 'pending' ? '待机主确认' : d.status === 'confirmed' ? `已下单（订单${d.orderId ?? ''}，你已付款）` : '机主已取消';
-  return `[淘宝代买 id:${d.id}]（${d.charName}帮机主买的：淘宝店「${d.shopName}」的「${d.title}」x${d.qty}，约¥${fmt2(d.total ?? d.price * d.qty)}，状态:${status}）`;
+  const status = d.status === 'pending' ? '待机主确认' : d.status === 'confirmed' ? `已下单（订单${(d.orderIds ?? [d.orderId]).filter(Boolean).join('、')}，你已付款）` : '机主已取消';
+  const shops = [...new Set(d.items.map((i) => i.shopName))].join('、');
+  const goods = d.items.map((i) => `「${i.title}」x${i.qty}`).join('、');
+  return `[淘宝代买 id:${d.id}]（${d.charName}帮机主买的：淘宝店「${shops}」的${goods}，约¥${fmt2(d.total ?? tbDraftEstimate(d))}，状态:${status}）`;
 }

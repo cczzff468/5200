@@ -18357,3 +18357,31 @@ Stage Summary:
 - 交付：①淘宝快递灵动岛（小窗常驻+大窗展开+点大窗进订单详情+状态变化自动展开 5 秒，样式/交互/层级与美团灵动岛同款，快递员形象沿用「我的淘宝-快递员」所选）；②取件道谢/帮取报喜/到货问候全部改为「人设+记忆召回+时间感知」LLM 现场生成（模板仅作模型不可用兜底）；③规则审查清单已在对话中列出（同意词表「谢谢你」误判/礼物标记误伤/[自己买]无金额上限/冷却执行缺口/主动代付 LLM 失败静默/无候选时到货问候标记浪费等），等用户勾选后实施
 - 改动文件：src/components/ios/TaobaoIsland.tsx(+新增)、src/lib/ios/tb-island-store.ts(+新增)、src/components/ios/MeituanIsland.tsx、src/components/ios/MusicIsland.tsx、src/components/ios/StatusBar.tsx、src/components/ios/PhoneShell.tsx、src/lib/ios/tb-ai-engage.ts
 - 关键决策：①两岛同锚位冲突用「最新事件方展示」而非固定优先级——与 iOS 灵动岛「最新活动置顶」心智一致，且两岛每秒轮询天然自适应切换；②灵动岛挂载即拉起全局订单 watcher——把「状态机只在淘宝 App 内推进」的隐性约束解除，灵动岛成为常驻可观测面（也顺带让 AI 快递感知不依赖打开淘宝）；③道谢生成走独立 JSON 双字段（out/done）而非单文本——出发与取到两条消息可分别落 4s 间隔节奏，与原模板时序一致
+
+---
+Task ID: 57
+Agent: Z.ai Code (main)
+Task: 用户实机反馈 12 项修复——转账卡片方向、取件状态持久化、AI 取件重复回复、礼物道谢去模板化、同意词表删除、代买多商品、代付凑一半、礼物误伤、冷却硬拦截、主动代付兜底、到货问候 AI 自主、金额门槛全取消
+
+Work Log:
+- 【转账卡片方向（微信+QQ）】wechat.tsx TrBubble 状态文案：凭据卡（tr.receiptOf 有值）一律显示「已收款」——修复「AI 转给我的钱，我收款后的凭据卡显示『已转入对方零钱』」（role='me'+received 时原逻辑未区分凭据卡/原卡）；qq.tsx TransferBubble 同口径（packet.receiptOf →「已收款」，修复「已转入好友余额」）；群聊转账（wx-group groupTrStatusText）自带 toId 模型无此问题，未动
+- 【一键取件/找人帮取后退出再进还是待取件（根因）】taobao.tsx LogisticsPage：①ETA 气泡 completed 时显示「包裹已签收·已从驿站取出」；②时间线头部补「已签收」终态节点（completedAt 时刻，含驿站名+售后提示）；驿站卡原有「已签收」分支保留——completed 后物流页不再永远停在「待取件」形态
+- 【驿站卡帮取提示】详情页+物流页驿站卡：o.aiPickup 存在时按钮区换「已请{contactName}帮取这件包裹，取到后会自动确认收货并通知你」橙底提示条（防重复指派，找黄牛/帮取状态可见化）
+- 【AI 取件回复两遍（根因）】tb-ai-engage.ts tbSchedulePickupResponse：开头幂等检查 `order.status === 'completed' || order.aiPickup → return`——用户在聊天里说「帮我取」（[帮取快递] 标记路径已写 aiPickup 并 tbRunPickup）后，淘宝「找人帮取」分享的延时响应器到点不再走「在路上答应」分支重复发第三条消息
+- 【礼物道谢去模板化】tbPickupLinesViaLlm gift 分支改 LLM 自主决策：输出 {"say":bool,"lines":[...]}——要不要发、发几条、说什么全由 AI 按人设/关系/时间/记忆决定（可以说取到了/聊礼物/开玩笑，禁止「谢谢你XX」客套句式，深夜可 say=false 不发）；say=false 或模型失败 → 不发任何消息（删除「我超喜欢谢谢你XX」本地兜底）；favor（帮取交差）保留两条+失败兜底
+- 【礼物标记误伤修复】buildTbEngageCtx 礼物段从「词表命中即同步标记」改为「注入礼物确认规则」：AI 结合上下文自主判断机主是不是说这张订单送自己（「买给你妹妹」「送你个表情包」不再误标），是则输出 [收礼物:分享id]（chat-rich.ts 新增 tb-gift kind + 收礼物/收下礼物动词），执行器落地 gift+aiPickup+记忆；候选不可代取（已签收/取消）时提示 AI 不发标记
+- 【同意词表删除】tb-ai-engage.ts 删 TB_CONSENT_RE/tbConsented；mt-ai-engage.ts 删 MT_ENGAGE_CONSENT_RE/mtEngageConsented——「听你的/你做主/好呀」类词表判定机制整体移除，机主是否同意全由 AI 按人设/记忆/上下文自然判断
+- 【金额门槛全取消】删 TB_ENGAGE_AMOUNT_CAP(150)/TB_ENGAGE_AMOUNT_HARD(300)/MT_ENGAGE_AMOUNT_CAP(100)；tbEngageTick 主动代付候选删金额上限条件；帮付/代买/请客规则文本全部改「金额没有上限，付不付/付多少由你按人设/关系/上下文自然拿捉」
+- 【代买草稿多商品】TbAiDraft 改 items: TbDraftItem[]（1~5 件，旧单商品数据读取时回填兼容）；标记格式扩展 [帮你买:商品id|数量?,商品id|数量?]（parseTbBuyBody 逗号分段+同商品去重）；tbConfirmAiDraft 按店铺分组建单（跨店多包裹）→ AI 逐单付款 → 每店一张订单分享卡；tbDraftHistoryLine 多商品全列；tb-draft-card.tsx 多商品列表渲染（店铺行「等N家店铺·共N件」+多店分开发货提示+多单跟首单时间线）
+- 【AI 代付凑部分金额】tb-share-proxy.ts TbProxyPay 加 partial 字段；tbAiPayPendingOrder 加 opts.cover（0<cover<total 时部分垫付：proxy 直接置 paid+订单挂 aiCovered 保持 pendingPay 等机主补齐+完成卡文案「已帮你垫付¥X，剩下的你自己付哦」）；chat-rich 新增 [帮付一半:订单id]（tb-pay-half）；runProactivePayEngage LLM 决策改 {"pay":"all"|"half"|false}；订单侧：详情「需付款」显示剩余+「好友已帮你垫付¥X，还需支付¥Y」提示条；收银台 PaySheet 内读 aiCovered——大数字/渠道额度/实际扣款均按剩余 due，金额卡下垫付提示条，支付成功站内信含垫付构成
+- 【主动代付 LLM 失败兜底】runProactivePayEngage：outMsgs 为空时（模型不可用/没产出）本地直接 tbAiPayPendingOrder 全付 + 兜底话术「看到你在淘宝拍了东西还没付款，我先帮你付啦，别跟我客气~」——订单不再被标「问过一次」后静默（用户要求机主一定能看到一次参与）
+- 【到货问候 AI 自主】maybeArrivalComment 返回 bool：没聊天对象不打标记（这单以后仍可问候——修复「标记在找候选前就打了导致永不再问候」）；tbArrivalLineViaLlm 改「想说输出句子/不想说输出空」，LLM 空或失败不兑底模板（删除「记得去取呀」兜底）；tb-commented 标记移到处理完后打（发了或决定不说都算），防每 tick 重试 LLM；删 Math.random()>0.3 随机丢弃
+- 【冷却硬拦截】applyTbEngageAction tb-order-draft 分支加 tbEngageCoolingDown 硬拦截（此前冷却只写在提示词里，模型不听话仍会生成草稿卡）——[帮你买] 执行器同步拦
+- 【顺带修】taobao-store.ts healOrderShops 加旧数据兜底：track/items 非数组补空数组（pendingPay 旧单无 track 时 OrderCard `o.track.length` 崩溃——E2E 实机踩到并修复）
+- 【E2E（agent-browser 实机）】注入 tb-session+联系人（机主/晴儿）+3 订单（到驿站/帮取/待付款带 aiCovered）：①一键取件→详情切「交易成功·已签收」→物流页 ETA「包裹已签收」+时间线头部「已签收」节点+驿站卡「已签收，包裹已从驿站取出」✓；②收银台「¥1499+好友已帮你垫付¥500提示条+立即支付¥1499」✓；③mock /api/chat 纯文本流 [转账:520.00:备注]→AI 转账卡→收款→凭据卡显示「已收款」（原卡+凭据卡双绿勾）✓；④[帮你买:p-earbuds-1|1,p-phone-1|2]→多商品草稿卡（2店铺3件¥4127·多店分开发货）→确认→跨店两单分享卡+AI 付款成功时间线✓；⑤aiPickup 单到站被 watcher 自动取件（列表变交易成功）✓；⑥灵动岛识别订单正常✓
+- 收尾：bunx tsc --noEmit 0 错误；eslint 改动文件 0 告警；dev.log 无错误；mock 路由已 unroute
+
+Stage Summary:
+- 交付：①微信/QQ 转账凭据卡方向修复（AI 给我转账→我收款→凭据卡「已收款」）；②取件终态持久化（一键取件/帮取后物流页显示「已签收」不再停留待取件）+驿站卡帮取提示；③AI 取件不再重复回复（tbSchedulePickupResponse 幂等）；④礼物道谢/到货问候全面 AI 自主决策（say/lines，模型不说就不发，零模板兜底）；⑤礼物标记改 AI 自主确认 [收礼物:sid]（防误伤）；⑥同意词表机制删除（TB+MT）；⑦金额门槛全取消（150/300/100）；⑧代买草稿多商品（跨店分单）；⑨AI 代付凑一半（[帮付一半]+aiCovered+收银台剩余补付）；⑩冷却硬拦截+主动代付失败兜底+到货问候标记时机修复；⑪旧订单 track/items 数据兜底（修崩溃）
+- 改动文件：src/lib/chat-rich.ts、src/lib/ios/tb-ai-engage.ts、src/lib/ios/tb-share-proxy.ts、src/lib/ios/taobao-store.ts、src/lib/ios/mt-ai-engage.ts、src/components/apps/taobao.tsx、src/components/apps/tb-draft-card.tsx、src/components/apps/wechat.tsx、src/components/apps/qq.tsx
+- 关键决策：①礼物判定与同意判定全部交给 LLM（用户哲学：不要词表，人设+记忆+上下文）；②部分垫付挂订单 aiCovered 而非改订单总额——收银台/详情/站内信按「总额-垫付」展示，tbMarkPaid 全额收口不破坏现有支付状态机；③礼物取件消息 0~2 条弹性（AI 可选择完全不说），favor 交差信息保留兜底（取件结果必须可感知）

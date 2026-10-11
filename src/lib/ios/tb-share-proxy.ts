@@ -15,7 +15,7 @@
 import { kvGet, kvSet } from './idb-kv';
 import { getContact } from './contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '../contacts';
-import { tbGetSession, tbLoadOrders, tbMarkPaid, tbUidOf, TB_PAY_TTL, type TbOrder } from './taobao-store';
+import { tbGetSession, tbLoadOrders, tbMarkPaid, tbSaveOrders, tbUidOf, TB_PAY_TTL, type TbOrder } from './taobao-store';
 
 // ---------------- 数据模型 ----------------
 
@@ -87,6 +87,8 @@ export interface TbProxyPay {
   direction?: 'friend' | 'me';
   /** 卡片所在聊天的联系人 id（direction 'me' 时 = 发起角色 id，与付款人 contactId 不同）；缺省 = contactId */
   chatContactId?: string;
+  /** 部分垫付（AI「我出一半」）：true = 本记录只垫了 amount（<订单总额），订单保持待付款等机主补齐 */
+  partial?: boolean;
 }
 
 /** 聊天里的代付卡片消息（微信 WxMsg / QQ QQMsg 同构，kind='tbpay'） */
@@ -531,9 +533,9 @@ export function tbProxyHistoryLine(pid: string, cardRole: 'req' | 'done', sender
   if (!p) return '[淘宝代付卡片]';
   if (cardRole === 'req') {
     const stateText = p.status === 'pending' ? '待代付' : p.status === 'paid' ? '已代付' : p.status === 'declined' ? '已婉拒' : `已失效（${p.closeReason ?? '订单未支付'}）`;
-    return `[淘宝代付请求 id:${p.id}]（${senderName}发的：淘宝店「${p.shopName}」¥${fmt2(p.amount)}，${p.items.map((i) => `${i.name}x${i.qty}`).join('、')}${p.note ? `，备注:${p.note}` : ''}，状态:${stateText}）`;
+    return `[淘宝代付请求 id:${p.id}]（${senderName}发的：淘宝店「${p.shopName}」¥${fmt2(p.amount)}${p.partial ? `，只垫付了其中一部分` : ''}，${p.items.map((i) => `${i.name}x${i.qty}`).join('、')}${p.note ? `，备注:${p.note}` : ''}，状态:${stateText}）`;
   }
-  return `[淘宝代付回执 id:${p.id}]（${senderName}：已代付淘宝店「${p.shopName}」¥${fmt2(p.amount)}，订单支付完成）`;
+  return `[淘宝代付回执 id:${p.id}]（${senderName}：${p.partial ? `垫付了淘宝店「${p.shopName}」订单的 ¥${fmt2(p.amount)}（部分），剩余待机主支付` : `已代付淘宝店「${p.shopName}」¥${fmt2(p.amount)}，订单支付完成`}）`;
 }
 
 /** AI 请机主代付的请求卡 → AI 可读文本（机主未付时可以撒娇提及） */
@@ -674,13 +676,18 @@ export async function tbCreateOrderShare(opts: TbCreateShareOpts): Promise<TbCre
 /**
  * AI 帮机主代付指定待付款订单：建 direction 'friend' 代付记录（付款人 = 该 AI 角色）→
  * 立即支付（deferCard，完成卡由调用方投递）。对齐美团 mtAiPayPendingOrder。
+ * opts.cover：部分垫付（AI「我出一半」）——0 < cover < total 时只垫这部分：代付记录直接置 paid、
+ * 订单挂 aiCovered 保持待付款（机主收银台补齐剩余；30min 超时取消则订单作废，演示语义不追款）。
  */
 export function tbAiPayPendingOrder(
   order: TbOrder,
   char: { id: string; name: string; avatar: string | null },
   idp: 'wx' | 'qq',
+  opts?: { cover?: number },
 ): TbProxyPayResult & { card?: TbProxyCardMsg } {
   if (order.status !== 'pendingPay') return { ok: false, error: '订单不是待付款状态' };
+  const cover = opts?.cover && opts.cover > 0 ? Math.min(order.total, Math.round(opts.cover * 100) / 100) : order.total;
+  const partial = cover < order.total;
   const proxy: TbProxyPay = {
     id: genId('tbpx'),
     uid: order.uid,
@@ -692,15 +699,41 @@ export function tbAiPayPendingOrder(
     fromName: char.name,
     fromAvatar: char.avatar,
     shopName: order.shopName,
-    amount: order.total,
+    amount: cover,
     itemCount: order.items.reduce((s, i) => s + i.qty, 0),
     items: order.items.map((i) => ({ name: i.title, qty: i.qty, price: i.price, img: i.img })),
     status: 'pending',
     createdAt: Date.now(),
     direction: 'friend',
+    partial: partial || undefined,
   };
   kvSet(`tb-proxy:${proxy.id}`, proxy);
   pushIndex('tb-proxy-index', proxy.id);
+  if (partial) {
+    // 部分垫付：代付记录直接置 paid（这部分是真付了）+ 订单挂 aiCovered（保持 pendingPay 等机主补齐）
+    const done: TbProxyPay = { ...proxy, status: 'paid', paidAt: Date.now(), paidChannel: tbProxyChannelName(idp) };
+    kvSet(`tb-proxy:${done.id}`, done);
+    try {
+      const list = tbLoadOrders(order.uid);
+      const hit = list.find((o) => o.id === order.id);
+      if (hit) {
+        hit.aiCovered = Math.round(((hit.aiCovered ?? 0) + cover) * 100) / 100;
+        tbSaveOrders(order.uid, list);
+      }
+    } catch {
+      /* 挂账失败不影响垫付记录 */
+    }
+    window.dispatchEvent(new CustomEvent('tb-orders-changed'));
+    const card: TbProxyCardMsg = {
+      id: genId('tbpxm'),
+      role: 'peer',
+      content: `[淘宝代付]已帮你垫付¥${fmt2(cover)}，剩下的你自己付哦`,
+      time: Date.now(),
+      kind: 'tbpay',
+      tbpay: { pid: done.id, role: 'done' },
+    };
+    return { ok: true, proxy: done, order: { ...order, aiCovered: Math.round(((order.aiCovered ?? 0) + cover) * 100) / 100 }, card };
+  }
   return tbProxyPayOrder(proxy.id, { deferCard: true });
 }
 

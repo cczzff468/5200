@@ -3216,6 +3216,16 @@ function PaySheet({
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState(false);
   const [errMsg, setErrMsg] = useState('');
+  /** AI 部分垫付（「我出一半」）：订单挂 aiCovered 时收银台只需支付剩余部分（全付路径不走这里） */
+  const covered = (() => {
+    try {
+      const o = tbLoadOrders(uid).find((x) => x.id === orderId);
+      return o?.status === 'pendingPay' && o.aiCovered && o.aiCovered > 0 ? Math.min(o.aiCovered, amount) : 0;
+    } catch {
+      return 0;
+    }
+  })();
+  const due = Math.max(0.01, Math.round((amount - covered) * 100) / 100);
   /** 渠道支付密码门：微信/QQ App 里开启了支付密码时，收银台付款前先验对应密码（三者独立，与美团同交互） */
   const [idpGate, setIdpGate] = useState<'wx' | 'qq' | null>(null);
   // 找人代付：plat = 选平台 / contact = 选好友；null = 关闭（与美团收银台「帮付」同交互）
@@ -3230,13 +3240,13 @@ function PaySheet({
 
   useEffect(() => {
     void (async () => {
-      const [wx, qq] = await Promise.all([tbListPayChannels('wx', amount).catch(() => [] as TbPayChannel[]), tbListPayChannels('qq', amount).catch(() => [] as TbPayChannel[])]);
+      const [wx, qq] = await Promise.all([tbListPayChannels('wx', due).catch(() => [] as TbPayChannel[]), tbListPayChannels('qq', due).catch(() => [] as TbPayChannel[])]);
       const all = [...wx, ...qq];
       setChans(all);
       const firstOk = all.find((c) => !c.insufficient);
       setSel(firstOk?.key ?? null);
     })();
-  }, [amount]);
+  }, [due]);
 
   const selChan = chans?.find((c) => c.key === sel);
 
@@ -3249,7 +3259,7 @@ function PaySheet({
     setPaying(true);
     setErrMsg('');
     try {
-      const res = await tbExecutePay(selChan.idp, selChan, amount, goodsBrief);
+      const res = await tbExecutePay(selChan.idp, selChan, due, goodsBrief);
       if (!res.ok) {
         setErrMsg(res.error ?? '支付失败，请重试');
         onError?.(res.error ?? '支付失败');
@@ -3263,8 +3273,8 @@ function PaySheet({
         payFc: selChan.isFc,
         payFcParts: res.fc?.parts.map((p) => ({ cardInId: p.cardInId, amount: p.amount })),
       });
-      // 站内消息：支付成功（交易物流）
-      tbPushMsg(uid, { kind: 'logistics', title: '支付成功', text: `订单已支付 ¥${fmtMoney(amount)}（${selChan.isFc ? selChan.label : labelMap[selChan.methodId] ?? selChan.label}），商家将尽快发货`, orderId });
+      // 站内消息：支付成功（交易物流；含好友垫付时文案说明总额构成）
+      tbPushMsg(uid, { kind: 'logistics', title: '支付成功', text: `订单已支付 ¥${fmtMoney(amount)}${covered > 0 ? `（含好友垫付 ¥${fmtMoney(covered)}，你补付 ¥${fmtMoney(due)}）` : ''}（${selChan.isFc ? selChan.label : labelMap[selChan.methodId] ?? selChan.label}），商家将尽快发货`, orderId });
       // 成功态：绿色对勾短展示后跳转订单详情
       setPaid(true);
       window.setTimeout(() => onSuccess(orderId), 750);
@@ -3347,9 +3357,14 @@ function PaySheet({
               <>
                 <div className="truncate text-[12px] text-black/40">{goodsBrief}</div>
                 <div className="mt-1.5 flex items-baseline justify-center gap-1.5">
-                  <Price value={amount} size={40} />
+                  <Price value={due} size={40} />
                 </div>
                 <div className="mt-1 text-[11px] text-black/30">订单号 {orderId} · 淘宝</div>
+                {covered > 0 ? (
+                  <div className="mx-auto mt-2 w-fit rounded-full bg-[#FFF3E8] px-3 py-1 text-[11px] text-[#C24E00]">
+                    好友已帮你垫付 ¥{fmtMoney(covered)}，本单还需支付 ¥{fmtMoney(due)}
+                  </div>
+                ) : null}
               </>
             )}
           </div>
@@ -4498,8 +4513,13 @@ function OrderDetailPage({
                 <span className="text-[15px] font-semibold text-black/85">
                   需付款 {o.discount > 0 ? <span className="text-[13px] font-normal text-[#FF4400]">共减¥{fmtMoney(o.discount)}</span> : null}
                 </span>
-                <Price value={o.total} size={20} />
+                <Price value={Math.max(0.01, Math.round((o.total - (o.aiCovered ?? 0)) * 100) / 100)} size={20} />
               </div>
+              {o.aiCovered && o.aiCovered > 0 ? (
+                <div className="rounded-lg bg-[#FFF3E8] px-3 py-2 text-[12px] leading-5 text-[#C24E00]">
+                  好友已帮你垫付 ¥{fmtMoney(o.aiCovered)}，还需支付 ¥{fmtMoney(Math.max(0.01, Math.round((o.total - o.aiCovered) * 100) / 100))}（30 分钟内未付会自动取消）
+                </div>
+              ) : null}
             </div>
             {/* 支付方式（截图7：支付宝 / 微信支付单选） */}
             <div className="mt-2 bg-white px-4 py-1.5">
@@ -4666,13 +4686,21 @@ function OrderDetailPage({
                     </button>
                   </div>
                   <div className="mt-4 flex gap-3">
-                    <button type="button" onClick={() => onAskPickup(o.id)} data-testid="tb-detail-ask-pickup" className="h-11 flex-1 rounded-xl border border-black/12 bg-white text-[14px] text-black/75 active:opacity-70">
-                      找人帮取
-                    </button>
-                    {/* 需求：一键取件 = 确认收货 */}
-                    <button type="button" onClick={confirmReceive} className="h-11 flex-1 rounded-xl border border-black/12 bg-white text-[14px] text-black/75 active:opacity-70">
-                      一键取件
-                    </button>
+                    {o.aiPickup && o.status === 'shipped' ? (
+                      <div className="w-full rounded-xl bg-[#FFF3E8] px-3.5 py-2.5 text-[13px] leading-5 text-[#C24E00]">
+                        已请{o.aiPickup.contactName}帮取这件包裹，取到后会自动确认收货并通知你
+                      </div>
+                    ) : (
+                      <>
+                        <button type="button" onClick={() => onAskPickup(o.id)} data-testid="tb-detail-ask-pickup" className="h-11 flex-1 rounded-xl border border-black/12 bg-white text-[14px] text-black/75 active:opacity-70">
+                          找人帮取
+                        </button>
+                        {/* 需求：一键取件 = 确认收货 */}
+                        <button type="button" onClick={confirmReceive} className="h-11 flex-1 rounded-xl border border-black/12 bg-white text-[14px] text-black/75 active:opacity-70">
+                          一键取件
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -5233,6 +5261,7 @@ function LogisticsPage({
   const phaseStartAt = nodeIdx >= 1 ? o.track[nodeIdx - 1].at : (o.shipAt ?? latest.at);
   const phaseFrac = phase === 'station' ? 1 : Math.min(1, Math.max(0, (Date.now() - phaseStartAt) / stepMs));
   const eta = (() => {
+    if (o.status === 'completed') return { title: '包裹已签收', sub: `已从${station}取出，期待再次光顾` };
     switch (phase) {
       case 'delivering':
         return { title: '预计今天送达', sub: `距收货地${2 + (tbHash(o.id) % 4)}公里` };
@@ -5252,10 +5281,19 @@ function LogisticsPage({
       onToast('复制失败，请手动选择');
     }
   };
-  /** 时间线条目（最新在前；派送/到达文案带收货城市——跟随真实地址） */
+  /** 时间线条目（最新在前；已完成订单头部补「已签收」节点——用户反馈：一键取件/帮取后
+   *  退出再进不能还停在「待取件」，确认收货后物流页必须显示已签收终态） */
   const entries = o.track
     .map((t, i) => ({ ...tbNodeMeta(i, man, manPhone, station, destCity), at: t.at }))
     .reverse();
+  if (o.status === 'completed') {
+    entries.unshift({
+      title: '已签收',
+      desc: `您的包裹已从${station}取出，交易完成。如需售后请联系商家或快递员${manPhone}`,
+      at: o.completedAt ?? Date.now(),
+      phone: manPhone,
+    });
+  }
   /** 详细信息弹层条目（含更早的干线条目） */
   const detailEntries = [
     ...entries,
@@ -5361,26 +5399,33 @@ function LogisticsPage({
                           <ChevronRight className="h-3.5 w-3.5" />
                         </button>
                       </div>
-                      {/* 需求（第五轮）：一键取件 = 确认收货（物流页同口径）；已签收后不再显示操作钮 */}
+                      {/* 需求（第五轮）：一键取件 = 确认收货（物流页同口径）；已签收后不再显示操作钮；
+                          已请 AI 帮取（找人帮取/聊天 [帮取快递]）后按钮区换「帮取中」提示，防重复指派 */}
                       {o.status === 'shipped' ? (
-                        <div className="mt-2.5 flex gap-2.5">
-                          <button type="button" onClick={() => onAskPickup(o.id)} data-testid="tb-logi-ask-pickup" className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
-                            找人帮取
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (o.status === 'shipped' && tbConfirmReceive(uid, o.id)) {
-                                tbPushMsg(uid, { kind: 'logistics', title: '确认收货', text: `订单已确认收货 ¥${fmtMoney(o.total)}，记得评价哦`, orderId: o.id });
-                                onToast('取件成功，已确认收货');
-                                setTick((n) => n + 1);
-                              }
-                            }}
-                            className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70"
-                          >
-                            一键取件
-                          </button>
-                        </div>
+                        o.aiPickup ? (
+                          <div className="mt-2.5 rounded-lg bg-[#FFF3E8] px-3 py-2 text-[12.5px] leading-5 text-[#C24E00]">
+                            已请{o.aiPickup.contactName}帮忙取件，取到后会自动确认收货并通知你
+                          </div>
+                        ) : (
+                          <div className="mt-2.5 flex gap-2.5">
+                            <button type="button" onClick={() => onAskPickup(o.id)} data-testid="tb-logi-ask-pickup" className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70">
+                              找人帮取
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (o.status === 'shipped' && tbConfirmReceive(uid, o.id)) {
+                                  tbPushMsg(uid, { kind: 'logistics', title: '确认收货', text: `订单已确认收货 ¥${fmtMoney(o.total)}，记得评价哦`, orderId: o.id });
+                                  onToast('取件成功，已确认收货');
+                                  setTick((n) => n + 1);
+                                }
+                              }}
+                              className="h-9 flex-1 rounded-lg border border-black/12 bg-white text-[13px] text-black/70 active:opacity-70"
+                            >
+                              一键取件
+                            </button>
+                          </div>
+                        )
                       ) : (
                         <div className="mt-2.5 flex items-center gap-1.5 text-[13px] text-[#00B578]">
                           <Check className="h-4 w-4" strokeWidth={2.4} />

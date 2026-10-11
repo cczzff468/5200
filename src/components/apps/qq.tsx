@@ -7701,6 +7701,8 @@ export function TransferBubble({ packet, mine, received, onClick }: { packet: Ms
   const expired = packet.expired === true;
   // 终态（已收款/已退还/已拒收/已过期）→ 显示原状态文案；待收款中 → 有留言显示留言、没写留言显示状态文案
   const settled = received || Boolean(packet.status) || expired;
+  // 收款凭据卡（packet.receiptOf 有值）一律显示「已收款」——用户反馈：AI 转给我的钱，
+  // 我收款后的凭据卡不能显示「已转入好友余额」（方向反了，微信端同步修）
   const status = expired
     ? '已过期'
     : refunded
@@ -7708,9 +7710,11 @@ export function TransferBubble({ packet, mine, received, onClick }: { packet: Ms
       : packet.status === 'rejected'
         ? '已拒收'
         : received
-          ? mine
-            ? '已转入好友余额'
-            : '已收款'
+          ? packet.receiptOf
+            ? '已收款'
+            : mine
+              ? '已转入好友余额'
+              : '已收款'
           : mine
             ? '待对方收款'
             : '待你收款';

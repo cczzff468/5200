@@ -17,8 +17,8 @@
  *   待处理代付请求，状态实时读 kv）与【美团外卖精选】目录（食物话题命中时，按时段加权 B7）
  *   + 动作教学规则；群聊 scope 只下发目录+帮点外卖（C11，草稿由机主确认自付）；
  *   美团未登录+食物话题时注入「先登录」口径（C10）；
- * - 节流（B6）：同角色 5 分钟最多 1 次主动请客/帮付/自己点（引擎级冷却）；单笔超 ¥100 的
- *   请客/帮付，对方近期明确同意（说「好呀」「请吧」「帮我付」等）才会生效，否则拦截提示先问；
+ * - 节流（B6）：同角色 5 分钟最多 1 次主动请客/帮付/自己点（引擎级冷却）；金额门槛与同意词表
+ *   已按用户要求全部取消——请不请/付不付/付多少全由 AI 按人设/关系/上下文自主拿捉；
  * - 失败反馈（A3）：请客/自己点外卖的商家/菜品/地址问题不再静默——落系统提示行到聊天；
  * - 终态记忆（C9）：订单送达/取消时给参与角色补写事件记忆（买单史/代点史长期可忆）；
  * - 记忆：AI 参与（代付/帮付/代点/请付）的时刻按角色 contactId 直写事件记忆
@@ -66,12 +66,11 @@ import type { RichAction } from '@/lib/chat-rich';
 
 export type MtEngageApp = 'wx' | 'qq';
 
-// ---------------- 主动参与节流（B6）：冷却 + 金额阈值 ----------------
+// ---------------- 主动参与节流（B6）：引擎级冷却（金额门槛/同意词表已按用户要求全部取消——
+// 付不付/请不请/付多少全由 AI 按人设/关系/上下文自主拿捉，不再用词表判定） ----------------
 
 /** 同角色主动请客/帮付/自己点的引擎级冷却（5 分钟内最多 1 次） */
 export const MT_ENGAGE_COOLDOWN_MS = 5 * 60_000;
-/** 单笔金额阈值：请客/帮付超过该值时，需对方近期明确同意才会生效（先征求同意再发标记） */
-export const MT_ENGAGE_AMOUNT_CAP = 100;
 
 const engageCdKey = (app: MtEngageApp, charId: string): string => `mt-engage-cd:${app}:${charId}`;
 
@@ -91,13 +90,6 @@ function mtMarkEngage(app: MtEngageApp, charId: string): void {
   } catch {
     /* 忽略 */
   }
-}
-
-/** 对方近期明确同意/请求的口径（大额请客/帮付的解锁条件；匹配最近几条聊天文本） */
-const MT_ENGAGE_CONSENT_RE = /(好呀|好啊|好吧|可以呀|可以的|同意|请吧|请我|帮我付|帮我买单|帮我点|点吧|来吧|安排上|麻烦你啦|谢谢你请|那就拜托|交给你了|吃你的)/;
-
-export function mtEngageConsented(texts: (string | undefined | null)[]): boolean {
-  return texts.some((t) => typeof t === 'string' && MT_ENGAGE_CONSENT_RE.test(t));
 }
 
 // ---------------- AI 代点外卖草稿 ----------------
@@ -535,8 +527,8 @@ export function buildMtEngageCtx(
       const lines = helpable.slice(0, 4).map((o) => `· 订单id=${o.id} 商家「${o.merchantName}」 ${orderItemSummary(o)} ¥${fmt2(o.total)}`);
       rules.push(
         `【${ownerName}的待支付外卖订单】\n${lines.join('\n')}\n` +
-          `如果符合你的人设和你们的关系（说好请客、想宠TA、金额不大等），可以主动帮TA付：输出标记 [帮付:订单id]（系统立即支付并回执）。` +
-          `单笔超过 ¥100 时先在正文提议「我帮你付吧」，对方明确同意（说「好呀」「帮我付」等）后再发标记才会生效；金额不大也别每次都抢着付。`
+          `如果符合你的人设和你们的关系（说好请客、想宠TA等），可以主动帮TA付：输出标记 [帮付:订单id]（系统立即支付并回执）。` +
+          `金额没有上限，付不付/付多少由你按人设/关系/上下文自然拿捉；也别每次都抢着付。`
       );
     }
     if (mtEngageCoolingDown(app, chatContactId)) {
@@ -560,7 +552,7 @@ export function buildMtEngageCtx(
       rules.push(
         `${buildCatalogBlock()}\n\n` +
           `【帮机主点外卖（机主自己付款）】聊到吃的、机主说饿/懒得动/让你推荐时，你可以先问问口味或结合你记得的偏好、当前时间（早餐/午餐/夜宵）推荐上面的商家和菜品；机主同意后输出标记 [帮点外卖:商家ID|菜名x数量,菜名x数量|备注?]（菜名必须原样抄目录里的名字；备注可省略）。系统会生成一张代点卡片，机主确认后才真正下单并自己付款，你不用再重复确认。\n` +
-          `【请客点外卖（你直接付好）】如果你按人设/你们的关系想直接请TA吃（说好了请客、想宠TA、庆祝纪念等，别频繁），可以输出标记 [请客点外卖:商家ID|菜名x数量,菜名x数量|备注?]——系统会直接下单并由你付款（演示语义，不扣真钱），TA会收到一张已支付的订单卡片（实时显示配送状态），不需要再付款。注意：单笔超过 ¥100 的请客，要对方在聊天里明确同意（说「好呀」「请吧」等）标记才会生效，所以大额请客先在正文问一句「我请你吃吧」，TA答应后再发标记。\n` +
+          `【请客点外卖（你直接付好）】如果你按人设/你们的关系想直接请TA吃（说好了请客、想宠TA、庆祝纪念等，别频繁），可以输出标记 [请客点外卖:商家ID|菜名x数量,菜名x数量|备注?]——系统会直接下单并由你付款（演示语义，不扣真钱），TA会收到一张已支付的订单卡片（实时显示配送状态），不需要再付款。金额没有上限，请不请/请多少由你按人设/关系/上下文自然拿捉。\n` +
           `【给你自己点外卖】你自己想吃/馋了的时候（按人设判断，别频繁），可以输出标记 [自己点外卖:商家ID|菜名x数量,菜名x数量]——系统会生成待支付订单并请机主帮你代付，记得用正文说一句让TA帮你付。`
       );
       const repeat = mtRepeatPickOf(orders);
@@ -625,7 +617,7 @@ export function mtEngageSessionUid(): { uid: string; name: string } | null {
 export function applyMtEngageAction(
   action: RichAction,
   peer: ContactRecord,
-  opts: { app: MtEngageApp; meName?: string; /** 最近几条聊天文本（大额请客/帮付的「对方已同意」判定用） */ recentTexts?: (string | undefined | null)[] },
+  opts: { app: MtEngageApp; meName?: string; /** 保留字段（兼容调用方传参）：同意词表已删，不再消费 */ recentTexts?: (string | undefined | null)[] },
 ): MtEngageExecResult {
   const now = Date.now();
   const kind = action.kind;
@@ -650,12 +642,9 @@ export function applyMtEngageAction(
     if (!uidInfo) return { msgs: [], sys: '（美团尚未登录，无法帮付）' };
     const order = mtLoadOrders(uidInfo.uid).find((o) => o.id === action.targetId.trim());
     if (!order || order.status !== 'pendingPay') return { msgs: [], sys: '（订单不存在或已支付）' };
-    // B6：主动帮付受引擎级冷却约束；大额（>¥100）需对方近期明确同意
+    // B6：主动帮付受引擎级冷却约束（金额门槛/同意词表已取消，付不付由 AI 人设自主拿捉）
     if (mtEngageCoolingDown(opts.app, peer.id)) {
       return { msgs: [], sys: '（刚刚才请客/帮付过一次，先歇一歇，这次先不帮付啦）' };
-    }
-    if (order.total > MT_ENGAGE_AMOUNT_CAP && !mtEngageConsented(opts.recentTexts ?? [])) {
-      return { msgs: [], sys: `（这笔¥${fmt2(order.total)}有点大，先在正文里问一句对方同不同意，同意后再帮付吧）` };
     }
     const res = mtAiPayPendingOrder(order, { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) }, opts.app);
     if (!res.ok) return { msgs: [], sys: `（帮付未成功：${res.error}）` };
@@ -713,15 +702,12 @@ export function applyMtEngageAction(
   if (!uidInfo2) return { msgs: [], sys: '（美团尚未登录，无法点外卖）' };
   const body2 = parseMtOrderBody(action.targetId);
   if (!body2) return { msgs: [], sys: '（请客点外卖格式有误，未能下单）' };
-  // B6：主动请客受引擎级冷却约束；大额（>¥100）需对方近期明确同意
+  // B6：主动请客受引擎级冷却约束（金额门槛/同意词表已取消，请不请由 AI 人设自主拿捉）
   if (mtEngageCoolingDown(opts.app, peer.id)) {
     return { msgs: [], sys: '（刚刚才请客/帮付过一次，先歇一歇，这次先不请啦）' };
   }
   const pre2 = mtValidateParsedOrder(uidInfo2.uid, body2);
   if (!pre2.ok) return { msgs: [], sys: `（请客失败：${pre2.error}）` };
-  if (pre2.total > MT_ENGAGE_AMOUNT_CAP && !mtEngageConsented(opts.recentTexts ?? [])) {
-    return { msgs: [], sys: `（请客的这单要¥${fmt2(pre2.total)}，金额比较大——先在正文里问一句，对方同意后再发标记就能请了）` };
-  }
   void mtTreatOrderFlow(body2, peer, opts).catch(() => undefined);
   return { msgs: [] };
 }

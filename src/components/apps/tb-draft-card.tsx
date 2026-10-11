@@ -2,11 +2,13 @@
 
 /**
  * 淘宝「AI 帮你买」草稿卡（微信/QQ 聊天气泡共用，kind='tbdraft'）：
- * - AI 输出 [帮你买:商品id|数量?] 后生成草稿（tb-draft:<did>），卡片实时读 kv；
- * - pending：商品图 + 标题 + 店铺 + 数量 + 预估合计 +【确认，让TA买】（→ 建单 + AI 立即付款
- *   + 订单分享卡回聊天）与【不了谢谢】（→ 草稿取消）两个按钮；
+ * - AI 输出 [帮你买:商品id|数量?,商品id|数量?,...] 后生成草稿（tb-draft:<did>），卡片实时读 kv；
+ *   支持多商品（最多 5 件，跨店会分包裹）；
+ * - pending：商品列表 + 店铺 + 数量 + 预估合计 +【确认，让TA买】（→ 按店分组建单 + AI 逐单付款
+ *   + 每单一张订单分享卡回聊天）与【不了谢谢】（→ 草稿取消）两个按钮；
  * - confirmed：实时跟订单走——内嵌五段实时状态时间线（与订单分享卡同渲染件，监听
- *   tb-orders-changed + 逐秒 tick，发货/物流/签收自动推进）+【查看订单】（跨 App 进淘宝详情）；
+ *   tb-orders-changed + 逐秒 tick，发货/物流/签收自动推进；多店多单时跟首单+提示分包裹）
+ *   +【查看订单】（跨 App 进淘宝详情）；
  * - declined：整卡灰化「已取消」。
  * 资金说明：确认后由 AI 付款（演示语义，不扣真钱），机主无需支付。
  */
@@ -14,7 +16,7 @@ import { useEffect, useState } from 'react';
 import { ChevronRight, ShieldCheck } from 'lucide-react';
 import { TbImg } from './tb-img';
 import { TbShareTimeline } from './tb-share-cards';
-import { TB_DRAFT_EVENT, tbConfirmAiDraft, tbDeclineAiDraft, tbGetDraft } from '@/lib/ios/tb-ai-engage';
+import { TB_DRAFT_EVENT, tbConfirmAiDraft, tbDeclineAiDraft, tbDraftEstimate, tbGetDraft } from '@/lib/ios/tb-ai-engage';
 import { tbLoadOrders, type TbOrder } from '@/lib/ios/taobao-store';
 import { navigateToChatSession } from '@/lib/ios/island-notify';
 
@@ -56,8 +58,13 @@ export function TbDraftBubble({
     );
   }
 
-  // confirmed 后实时读订单（与订单分享卡同源：状态时间线）
-  const order: TbOrder | null = d.orderId ? (tbLoadOrders(d.uid).find((o) => o.id === d.orderId) ?? null) : null;
+  // confirmed 后实时读订单（与订单分享卡同源：状态时间线；跨店多单跟首单展示）
+  const orderIds = d.orderIds?.length ? d.orderIds : d.orderId ? [d.orderId] : [];
+  const allOrders: TbOrder[] = orderIds.length > 0
+    ? tbLoadOrders(d.uid).filter((o) => orderIds.includes(o.id))
+    : [];
+  const order: TbOrder | null = allOrders[0] ?? null;
+  const multiShop = [...new Set(d.items.map((i) => i.shopName))].length > 1;
 
   const openDetail = () => {
     if (d.orderId) navigateToChatSession('taobao', d.orderId);
@@ -102,20 +109,26 @@ export function TbDraftBubble({
       <p className="mt-1.5 truncate text-[15px] font-semibold leading-snug text-black/90">
         {d.charName}帮你挑的宝贝
       </p>
-      <p className="mt-0.5 truncate text-[12px] text-black/45">{d.shopName}</p>
+      <p className="mt-0.5 truncate text-[12px] text-black/45">
+        {multiShop ? `${d.items[0].shopName} 等${new Set(d.items.map((i) => i.shopName)).size}家店铺 · 共${d.items.reduce((s, i) => s + i.qty, 0)}件` : d.items[0].shopName}
+      </p>
 
-      {/* 商品行 */}
-      <div className="mt-2 flex items-center gap-2 rounded-[10px] bg-[#FAFAFB] p-2">
-        <TbImg src={d.img} alt={d.title} cap={d.title} className="h-10 w-10 shrink-0 rounded-md" />
-        <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 text-[12.5px] leading-[17px] text-black/80">{d.title}</p>
-          <p className="mt-0.5 text-[10.5px] text-black/35">×{d.qty}</p>
-        </div>
-        <span className="shrink-0 text-[12.5px] font-medium text-black/75">¥{fmt2(d.price * d.qty)}</span>
+      {/* 商品行（多商品全列） */}
+      <div className="mt-2 space-y-1.5">
+        {d.items.map((it) => (
+          <div key={it.pid} className="flex items-center gap-2 rounded-[10px] bg-[#FAFAFB] p-2">
+            <TbImg src={it.img} alt={it.title} cap={it.title} className="h-10 w-10 shrink-0 rounded-md" />
+            <div className="min-w-0 flex-1">
+              <p className="line-clamp-2 text-[12.5px] leading-[17px] text-black/80">{it.title}</p>
+              <p className="mt-0.5 text-[10.5px] text-black/35">{multiShop ? `${it.shopName} · ` : ''}×{it.qty}</p>
+            </div>
+            <span className="shrink-0 text-[12.5px] font-medium text-black/75">¥{fmt2(it.price * it.qty)}</span>
+          </div>
+        ))}
       </div>
       <div className="mt-1.5 flex items-center justify-between px-0.5">
-        <span className="text-[11px] text-black/40">{d.status === 'confirmed' && d.total ? '实付' : '预估'}（含运费）</span>
-        <span className="text-[14px] font-bold text-[#FF5000]">¥{fmt2(d.status === 'confirmed' && d.total ? d.total : d.price * d.qty)}</span>
+        <span className="text-[11px] text-black/40">{d.status === 'confirmed' && d.total ? '实付' : '预估'}（含运费）{multiShop ? ' · 多店分开发货' : ''}</span>
+        <span className="text-[14px] font-bold text-[#FF5000]">¥{fmt2(d.status === 'confirmed' && d.total ? d.total : tbDraftEstimate(d))}</span>
       </div>
 
       {/* 操作区：pending 确认/拒绝；confirmed 实时跟订单（AI 已付 → 状态时间线）；declined 已取消 */}
@@ -143,7 +156,10 @@ export function TbDraftBubble({
       ) : d.status === 'confirmed' ? (
         order ? (
           <>
-            {/* 已由 AI 付款：五段实时状态时间线（发货/物流/签收自动推进） */}
+            {/* 已由 AI 付款：五段实时状态时间线（发货/物流/签收自动推进；多店多单跟首单+分包裹提示） */}
+            {allOrders.length > 1 ? (
+              <p className="mt-2 text-[11px] text-[#C24E00]">共{allOrders.length}个包裹分开发货，以下为第一个包裹的物流</p>
+            ) : null}
             <div data-testid="tb-draft-timeline" className="mt-2.5 border-t border-black/[0.05] pt-2">
               <TbShareTimeline order={order} />
             </div>
