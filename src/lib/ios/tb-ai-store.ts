@@ -8,13 +8,12 @@
  */
 import { kvGet, kvSet } from './idb-kv';
 import {
-  tbImg,
   tbRegisterAiProducts,
   tbAiProductsAll,
   TB_SHOPS,
   type TbProduct,
-  type TbSkuGroup,
 } from './taobao-data';
+import { tbSkuForTag } from './tb-product-gen';
 
 // ---------------- kv 基础（与 taobao-store 同策略：内存同步读 + 异步写穿） ----------------
 
@@ -164,11 +163,11 @@ export type TbFeedSurface =
 
 /** tag → 分类（图链品类词与 TB_CATS 对齐） */
 function catOf(tag: string): TbProduct['cat'] {
-  if (['jacket', 'jeans', 'dress', 'sneakers', 'backpack', 'coat', 'shoes', 'hat', 'shirt'].includes(tag)) return 'fashion';
-  if (['lipstick', 'perfume', 'skincare', 'makeup', 'foundation'].includes(tag)) return 'beauty';
-  if (['snacks', 'fruit', 'tea', 'food'].includes(tag)) return 'food';
-  if (['books', 'book'].includes(tag)) return 'book';
-  if (['phone', 'earbuds', 'laptop', 'watch', 'tablet', 'camera', 'keyboard', 'powerbank', 'speaker'].includes(tag)) return 'digital';
+  if (['jacket', 'jeans', 'dress', 'sneakers', 'backpack', 'coat', 'shoes', 'hat', 'shirt', 'belt', 'scarf', 'socks', 'shorts', 'suitcase', 'wallet', 'sunglasses', 'slippers'].includes(tag)) return 'fashion';
+  if (['lipstick', 'perfume', 'skincare', 'makeup', 'foundation', 'brush', 'face-mask'].includes(tag)) return 'beauty';
+  if (['snacks', 'fruit', 'tea', 'food', 'cookies'].includes(tag)) return 'food';
+  if (['books', 'book', 'pen', 'notebook'].includes(tag)) return 'book';
+  if (['phone', 'earbuds', 'laptop', 'watch', 'tablet', 'camera', 'keyboard', 'powerbank', 'speaker', 'lock', 'phone-stand', 'mouse', 'monitor', 'tv', 'drone', 'gamepad'].includes(tag)) return 'digital';
   return 'home';
 }
 
@@ -179,16 +178,6 @@ function shopIdOf(tag: string, seed: number): string {
   const home = TB_SHOPS.find((s) => s.tag === 'sofa');
   return TB_SHOPS[seed % TB_SHOPS.length]?.id ?? home?.id ?? TB_SHOPS[0].id;
 }
-
-/** 颜色组（与 taobao-data colorGroup 同构；AI 商品通用规格） */
-function aiColorGroup(tag: string, names: string[]): TbSkuGroup {
-  return {
-    name: '颜色分类',
-    options: names.map((n, i) => ({ label: n, img: tbImg(tag, 120, 120, i % 4) })),
-  };
-}
-
-const AI_COLOR_NAMES = ['优雅黑', '云雾白', '雾霾蓝', '樱花粉'];
 
 /** AI 原始条目 → TbProduct（可进详情/购物车/下单全链路） */
 export function tbBuildAiProduct(raw: TbFeedRaw, id: string): TbProduct | null {
@@ -216,10 +205,7 @@ export function tbBuildAiProduct(raw: TbFeedRaw, id: string): TbProduct | null {
     tag,
     freight: 0,
     tags: serviceTags.length > 0 ? serviceTags : ['退货宝'],
-    skus: [
-      aiColorGroup(tag, AI_COLOR_NAMES),
-      { name: '规格', options: [{ label: '官方标配' }, { label: '升级款', priceDelta: Math.max(10, Math.round(price * 0.15)) }] },
-    ],
+    skus: tbSkuForTag(tag, price),
     promo,
   };
 }

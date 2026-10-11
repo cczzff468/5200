@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { productById, shopById, tbImg } from '@/lib/ios/taobao-data';
 import { tbLoadOrders } from '@/lib/ios/taobao-store';
+import { TbImg } from './tb-img';
 import {
   tbChatAppend,
   tbChatClearUnread,
@@ -78,12 +79,7 @@ function ProductCardMsg({ pid, onOpenProduct }: { pid: string; onOpenProduct: (p
     <div className="w-[248px] rounded-2xl bg-white p-2.5">
       {/* 上行：商品图 + 标题/价格 */}
       <div className="flex items-center gap-2.5">
-        <img
-          src={tbImg(product.tag, 160, 160, 0)}
-          alt={product.title}
-          className="h-[76px] w-[76px] shrink-0 rounded-lg object-cover"
-          draggable={false}
-        />
+        <TbImg src={tbImg(product.tag, 160, 160, 0)} alt={product.title} className="h-[76px] w-[76px] shrink-0 rounded-lg object-cover" />
         <div className="min-w-0 flex-1">
           <div className="line-clamp-2 text-[12.5px] leading-[17px] text-black/90">{product.title}</div>
           <div className="mt-1.5 text-[16px] font-bold leading-none text-[#FF4400]">¥{fmtMoney(product.price)}</div>
@@ -123,10 +119,10 @@ function OrderCardMsg({ uid, orderId, onOpenOrder }: { uid: string; orderId: str
   return (
     <div className="w-[264px] rounded-2xl bg-white p-3">
       <div className="text-[13.5px] font-bold text-black/90">你正在咨询的订单</div>
-      {/* 商品行：首件商品图 + 标题 + 右列 实付金额/件数 */}
+      {/* 商品行：首件商品图 + 标题 + 右列 实付金额/件数（历史订单可能存空 img → 按商品 tag 兑底，禁止空 src） */}
       {first ? (
         <div className="mt-2.5 flex items-center gap-2.5">
-          <img src={first.img} alt={first.title} className="h-[52px] w-[52px] shrink-0 rounded-lg object-cover" draggable={false} />
+          <TbImg src={first.img || tbImg(productById(first.pid)?.tag ?? 'snacks', 120, 120, 0)} alt={first.title} className="h-[52px] w-[52px] shrink-0 rounded-lg object-cover" />
           <div className="line-clamp-2 min-w-0 flex-1 text-[12px] leading-[16px] text-black/80">{first.title}</div>
           <div className="shrink-0 text-right">
             <div className="text-[15px] font-bold leading-none text-[#FF4400]">¥{fmtMoney(order.total)}</div>

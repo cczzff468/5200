@@ -831,6 +831,388 @@ const tbTemple = `
   ${sparkle(120, 320, 0.8, '#FFD166')}
   ${sparkle(396, 180, 0.7, '#FFFFFF', 0.9)}`;
 
+// ---------------- Task 61 全品类扩展（手机支架/鼠标/显示器/电视/家电/服饰配饰/运动文具…42 张） ----------------
+
+const tbPhoneStand = `
+  <g transform="rotate(-9 266 250)">
+    <rect x="206" y="140" width="120" height="216" rx="18" fill="#8FA6C4" ${S}/>
+    <rect x="222" y="164" width="88" height="152" rx="10" fill="#E9EFF6" stroke="none"/>
+    ${face(266, 240, 0.58, 14)}
+  </g>
+  <path d="M170 356 L342 356 Q360 356 360 338 L360 330 Q360 318 344 318 L168 318 Q152 318 152 330 L152 356 Z" fill="#FFD166" ${S}/>
+  <path d="M186 318 L186 356 M326 318 L326 356" stroke="${OL}" stroke-width="5" opacity="0.35"/>
+  ${sparkle(146, 170, 0.85, '#FFD166')}`;
+
+const tbMouse = `
+  <path d="M256 138 Q348 138 356 246 Q362 336 300 364 Q256 380 212 364 Q150 336 156 246 Q164 138 256 138 Z" fill="#A9BFD9" ${S}/>
+  <path d="M256 138 L256 240" stroke="${OL}" stroke-width="6" opacity="0.5"/>
+  <path d="M166 252 Q256 232 346 252" fill="none" stroke="${OL}" stroke-width="6" opacity="0.35"/>
+  <rect x="242" y="160" width="28" height="48" rx="14" fill="#E9EFF6" ${S}/>
+  ${face(256, 302, 0.78, 20)}
+  ${sparkle(146, 186, 0.8, '#FFD166')}`;
+
+const tbMonitor = `
+  <rect x="236" y="356" width="40" height="34" fill="#8FA6C4" ${S}/>
+  <rect x="178" y="384" width="156" height="20" rx="10" fill="#8FA6C4" ${S}/>
+  <rect x="124" y="136" width="264" height="222" rx="20" fill="#A9BFD9" ${S}/>
+  <rect x="144" y="156" width="224" height="166" rx="10" fill="#E9EFF6" stroke="none"/>
+  ${face(256, 240, 0.72, 18)}
+  <circle cx="344" cy="336" r="8" fill="#FFD166" ${S}/>
+  ${sparkle(104, 180, 0.8, '#FFD166')}`;
+
+const tbTv = `
+  <path d="M216 110 L254 148 M296 110 L258 148" stroke="${OL}" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="212" cy="106" r="9" fill="#FFD166" ${S}/><circle cx="300" cy="106" r="9" fill="#FFD166" ${S}/>
+  <rect x="118" y="148" width="276" height="182" rx="18" fill="#D9A05B" ${S}/>
+  <rect x="138" y="166" width="236" height="132" rx="10" fill="#FFF1DC" stroke="none"/>
+  ${face(256, 232, 0.68, 17)}
+  <rect x="186" y="330" width="20" height="26" fill="#B98A66" ${S}/><rect x="306" y="330" width="20" height="26" fill="#B98A66" ${S}/>
+  ${sparkle(96, 200, 0.8, '#FFD166')}`;
+
+const tbDrone = `
+  <path d="M208 234 L154 192 M304 234 L358 192 M208 292 L154 334 M304 292 L358 334" stroke="${OL}" stroke-width="9" stroke-linecap="round"/>
+  <ellipse cx="150" cy="186" rx="52" ry="12" fill="#E9EFF6" ${S}/>
+  <ellipse cx="362" cy="186" rx="52" ry="12" fill="#E9EFF6" ${S}/>
+  <ellipse cx="150" cy="340" rx="52" ry="12" fill="#E9EFF6" ${S}/>
+  <ellipse cx="362" cy="340" rx="52" ry="12" fill="#E9EFF6" ${S}/>
+  <ellipse cx="256" cy="264" rx="62" ry="44" fill="#8FA6C4" ${S}/>
+  ${face(256, 262, 0.52, 14, 'cat')}
+  <circle cx="256" cy="312" r="12" fill="#FFD166" ${S}/>
+  ${sparkle(112, 268, 0.75, '#FFD166')}`;
+
+const tbGamepad = `
+  <path d="M156 190 Q256 168 356 190 Q394 198 400 240 L410 300 Q414 344 376 348 Q344 350 322 324 L306 308 L206 308 L190 324 Q168 350 136 348 Q98 344 102 300 L112 240 Q118 198 156 190 Z" fill="#A9BFD9" ${S}/>
+  <path d="M188 226 L188 264 M169 245 L207 245" stroke="${OL}" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="338" cy="242" r="24" fill="#E9EFF6" ${S}/>
+  <circle cx="338" cy="230" r="7" fill="#FFD166"/><circle cx="338" cy="254" r="7" fill="#5C6B7E"/>
+  <circle cx="326" cy="242" r="7" fill="#8CC152"/><circle cx="350" cy="242" r="7" fill="#E8695A"/>
+  ${face(256, 250, 0.5, 11)}
+  ${sparkle(128, 174, 0.75, '#FFD166')}`;
+
+const tbFan = `
+  <rect x="244" y="306" width="24" height="82" fill="#8FA6C4" ${S}/>
+  <ellipse cx="256" cy="392" rx="66" ry="16" fill="#8FA6C4" ${S}/>
+  <circle cx="256" cy="216" r="104" fill="#E9F2FA" ${S}/>
+  <circle cx="256" cy="216" r="104" fill="none" stroke="${OL}" stroke-width="4" opacity="0.3"/>
+  <path d="M256 118 L256 314 M164 168 L348 264 M348 168 L164 264" stroke="${OL}" stroke-width="3" opacity="0.3"/>
+  <circle cx="256" cy="216" r="34" fill="#FFD166" ${S}/>
+  ${face(256, 218, 0.42, 10, 'cat')}
+  <path d="M232 186 Q256 176 280 186" fill="none" stroke="#A9BFD9" stroke-width="10" stroke-linecap="round" opacity="0.9"/>`;
+
+const tbMicrowave = `
+  <rect x="108" y="168" width="296" height="184" rx="20" fill="#D9E5F2" ${S}/>
+  <rect x="134" y="194" width="152" height="132" rx="10" fill="#8FA6C4" ${S}/>
+  <rect x="148" y="208" width="124" height="104" rx="6" fill="#E9EFF6" stroke="none"/>
+  ${face(210, 258, 0.5, 12)}
+  <rect x="326" y="194" width="26" height="94" rx="12" fill="#FFD166" ${S}/>
+  <circle cx="366" cy="230" r="16" fill="#E9EFF6" ${S}/><circle cx="366" cy="276" r="16" fill="#E9EFF6" ${S}/>
+  ${sparkle(86, 220, 0.75, '#FFD166')}`;
+
+const tbRiceCooker = `
+  ${steam(238, 116, 0.7)} ${steam(278, 110, 0.85)}
+  <rect x="234" y="122" width="44" height="18" rx="9" fill="#FFD166" ${S}/>
+  <path d="M182 140 L330 140 Q346 140 346 156 L346 178 Q346 192 330 192 L182 192 Q166 192 166 178 L166 156 Q166 140 182 140 Z" fill="#E9EFF6" ${S}/>
+  <path d="M188 192 L324 192 L312 350 Q310 376 284 376 L228 376 Q202 376 200 350 Z" fill="#D9A05B" ${S}/>
+  <rect x="214" y="230" width="84" height="16" rx="8" fill="#FFF6E0" opacity="0.75"/>
+  ${face(256, 302, 0.64, 15)}
+  ${heart(352, 250, 0.5, '#FF8FAB')}`;
+
+const tbVacuum = `
+  <rect x="242" y="112" width="20" height="140" rx="10" fill="#8FA6C4" ${S}/>
+  <rect x="226" y="92" width="52" height="30" rx="14" fill="#E9EFF6" ${S}/>
+  <circle cx="256" cy="278" r="46" fill="#FFD166" ${S}/>
+  ${face(256, 276, 0.52, 11, 'cat')}
+  <path d="M224 324 L288 324 L280 358 Q278 370 264 370 L248 370 Q234 370 232 358 Z" fill="#8FA6C4" ${S}/>
+  <rect x="218" y="362" width="76" height="14" rx="7" fill="#5C6B7E" stroke="none"/>
+  ${sparkle(158, 200, 0.8, '#FFD166')}`;
+
+const tbKettle = `
+  <circle cx="245" cy="168" r="10" fill="#FFD166" ${S}/>
+  <rect x="186" y="176" width="118" height="30" rx="12" fill="#E9EFF6" ${S}/>
+  <rect x="170" y="200" width="150" height="176" rx="24" fill="#BEE3DD" ${S}/>
+  <path d="M320 238 L364 214 L364 246 L320 274 Z" fill="#BEE3DD" ${S}/>
+  <path d="M170 238 Q114 252 128 298 Q138 330 172 332" fill="none" stroke="${OL}" stroke-width="24"/>
+  <path d="M170 238 Q114 252 128 298 Q138 330 172 332" fill="none" stroke="#BEE3DD" stroke-width="12"/>
+  ${face(245, 300, 0.6, 14)}
+  ${steam(356, 196, 0.6, '#FFFFFF')}`;
+
+const tbAirFryer = `
+  <path d="M164 190 L164 164 Q164 132 196 132 L316 132 Q348 132 348 164 L348 190 Z" fill="#E9B374" ${S}/>
+  <circle cx="208" cy="161" r="12" fill="#FFD166" ${S}/>
+  <rect x="248" y="151" width="72" height="20" rx="10" fill="#E9EFF6" ${S}/>
+  <path d="M164 186 L348 186 L348 306 Q348 368 256 368 Q164 368 164 306 Z" fill="#D9A05B" ${S}/>
+  <rect x="196" y="214" width="120" height="84" rx="14" fill="#8D5A3A" stroke="none"/>
+  ${face(256, 256, 0.55, 13)}
+  <rect x="212" y="316" width="88" height="18" rx="9" fill="#FFD166" ${S}/>`;
+
+const tbCoffeeMachine = `
+  <rect x="150" y="118" width="200" height="60" rx="16" fill="#8D5A3A" ${S}/>
+  <rect x="150" y="178" width="200" height="42" rx="10" fill="#A56428" ${S}/>
+  <rect x="166" y="220" width="168" height="148" rx="16" fill="#8D5A3A" ${S}/>
+  <rect x="228" y="178" width="44" height="34" fill="#5C4A3D" stroke="none"/>
+  ${steam(250, 240, 0.65)}
+  <rect x="224" y="252" width="64" height="52" rx="10" fill="#FFF6E0" ${S}/>
+  ${face(198, 296, 0.55, 12)}
+  <rect x="304" y="208" width="22" height="16" rx="7" fill="#FFD166" ${S}/>
+  <circle cx="315" cy="252" r="11" fill="#FF8FAB" ${S}/>`;
+
+const tbHumidifier = `
+  ${steam(234, 152, 0.9)} ${steam(278, 144, 1.05)}
+  <path d="M216 200 Q186 244 192 302 Q198 372 256 372 Q314 372 320 302 Q326 244 296 200 Z" fill="#BEE3DD" ${S}/>
+  <rect x="234" y="168" width="44" height="32" rx="11" fill="#8FA6C4" ${S}/>
+  ${face(256, 296, 0.7, 16)}
+  <circle cx="222" cy="250" r="5" fill="#FFFFFF" opacity="0.75"/><circle cx="292" cy="268" r="4" fill="#FFFFFF" opacity="0.7"/>`;
+
+const tbShaver = `
+  <circle cx="226" cy="150" r="17" fill="#FFD166" ${S}/><circle cx="256" cy="146" r="17" fill="#FFD166" ${S}/><circle cx="286" cy="150" r="17" fill="#FFD166" ${S}/>
+  <path d="M212 150 L300 150 L300 202 L212 202 Z" fill="#E9EFF6" ${S}/>
+  <rect x="228" y="198" width="56" height="178" rx="24" fill="#8FA6C4" ${S}/>
+  ${face(256, 288, 0.5, 11)}
+  <rect x="240" y="240" width="32" height="12" rx="6" fill="#FFD166" stroke="none"/>`;
+
+const tbToothbrush = `
+  <path d="M244 140 L244 122 M256 140 L256 118 M268 140 L268 122" stroke="#8CC152" stroke-width="8" stroke-linecap="round"/>
+  <path d="M236 200 L276 200 L276 150 Q276 138 264 138 L248 138 Q236 138 236 150 Z" fill="#FFF6E0" ${S}/>
+  <rect x="232" y="196" width="48" height="180" rx="22" fill="#FF9EBB" ${S}/>
+  ${face(256, 296, 0.5, 11)}
+  <rect x="244" y="238" width="24" height="10" rx="5" fill="#FFD166" stroke="none"/>
+  ${sparkle(320, 160, 0.75, '#8CC152', 0.8)}`;
+
+const tbHairdryer = `
+  <circle cx="296" cy="222" r="78" fill="#FF8FAB" ${S}/>
+  <rect x="352" y="198" width="72" height="48" rx="12" fill="#FFA5BC" ${S}/>
+  <path d="M366 198 L366 246 M386 198 L386 246 M406 198 L406 246" stroke="${OL}" stroke-width="4" opacity="0.35"/>
+  <rect x="222" y="196" width="42" height="92" rx="18" fill="#FFA5BC" ${S}/>
+  <rect x="232" y="288" width="32" height="94" rx="16" fill="#FF8FAB" ${S}/>
+  ${face(296, 220, 0.5, 12, 'cat')}
+  <circle cx="252" cy="166" r="12" fill="#FFD166" ${S}/>`;
+
+const tbBelt = `
+  <circle cx="256" cy="272" r="96" fill="none" stroke="#8D5A3A" stroke-width="36"/>
+  <circle cx="256" cy="272" r="96" fill="none" stroke="${OL}" stroke-width="6"/>
+  <circle cx="256" cy="272" r="78" fill="none" stroke="${OL}" stroke-width="6" opacity="0.4"/>
+  <rect x="238" y="158" width="36" height="54" rx="10" fill="#FFD166" ${S}/>
+  <circle cx="256" cy="186" r="7" fill="${OL}"/>
+  ${face(256, 300, 0.6, 14)}
+  ${sparkle(146, 178, 0.8, '#FFD166')}`;
+
+const tbScarf = `
+  <path d="M170 140 Q256 108 342 140 L342 168 Q256 142 170 168 Z" fill="#FF9EBB" ${S}/>
+  <path d="M198 162 Q188 244 196 302 L246 302 Q238 244 246 178 Z" fill="#FFB7C9" ${S}/>
+  <path d="M266 178 Q274 244 266 302 L316 302 Q306 244 316 162 Z" fill="#FFB7C9" ${S}/>
+  <path d="M202 302 L202 324 M218 302 L218 324 M234 302 L234 324 M272 302 L272 324 M288 302 L288 324 M304 302 L304 324" stroke="${OL}" stroke-width="5" stroke-linecap="round"/>
+  <path d="M200 216 L244 212 M270 230 L314 226" stroke="${OL}" stroke-width="5" opacity="0.3"/>
+  ${face(291, 262, 0.5, 11)}`;
+
+const tbSocks = `
+  <g transform="rotate(-10 202 240)">
+    <path d="M180 156 L244 156 L244 266 Q244 310 200 310 Q160 310 160 272 Q160 244 180 236 Z" fill="#FFF6E0" ${S}/>
+    <rect x="174" y="140" width="76" height="32" rx="13" fill="#FF9EBB" ${S}/>
+    ${face(212, 244, 0.5, 11)}
+  </g>
+  <g transform="rotate(8 314 258)">
+    <path d="M292 174 L356 174 L356 284 Q356 328 312 328 Q272 328 272 290 Q272 262 292 254 Z" fill="#FFD166" ${S}/>
+    <rect x="286" y="158" width="76" height="32" rx="13" fill="#8CC152" ${S}/>
+    ${heart(316, 258, 0.5, '#FF8FAB')}
+  </g>`;
+
+const tbShorts = `
+  <path d="M162 168 L350 168 L368 324 L276 332 L258 248 L254 248 L236 332 L144 324 Z" fill="#5C6B7E" ${S}/>
+  <rect x="158" y="150" width="196" height="30" rx="10" fill="#8FA6C4" ${S}/>
+  <path d="M246 182 Q256 198 266 182" fill="none" stroke="#FFF6E0" stroke-width="6" stroke-linecap="round"/>
+  ${face(216, 288, 0.5, 11)}
+  ${heart(300, 296, 0.5, '#FFB7C9')}`;
+
+const tbSuitcase = `
+  <path d="M220 140 L220 112 L292 112 L292 140" fill="none" stroke="${OL}" stroke-width="10" stroke-linecap="round"/>
+  <rect x="170" y="140" width="172" height="240" rx="26" fill="#FFD166" ${S}/>
+  <rect x="170" y="140" width="172" height="72" rx="26" fill="#FFE3A9" ${S}/>
+  <path d="M170 226 L342 226" stroke="${OL}" stroke-width="5" opacity="0.35"/>
+  <rect x="194" y="244" width="44" height="54" rx="10" fill="#E9EFF6" ${S}/>
+  ${face(288, 262, 0.55, 12)}
+  <rect x="196" y="352" width="22" height="18" fill="#5C4A3D" ${S}/><rect x="294" y="352" width="22" height="18" fill="#5C4A3D" ${S}/>
+  <circle cx="207" cy="378" r="12" fill="#8FA6C4" ${S}/><circle cx="305" cy="378" r="12" fill="#8FA6C4" ${S}/>`;
+
+const tbWallet = `
+  <rect x="146" y="180" width="220" height="162" rx="22" fill="#8D5A3A" ${S}/>
+  <rect x="146" y="180" width="220" height="54" rx="22" fill="#A56428" ${S}/>
+  <rect x="270" y="242" width="72" height="74" rx="16" fill="#FFD166" ${S}/>
+  <circle cx="306" cy="279" r="10" fill="#FFF6E0" ${S}/>
+  ${face(206, 278, 0.55, 12)}
+  <path d="M146 302 L264 302" stroke="${OL}" stroke-width="5" opacity="0.3"/>`;
+
+const tbSunglasses = `
+  <path d="M134 242 L108 226 M378 242 L404 226" stroke="${OL}" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="186" cy="254" r="52" fill="#5C6B7E" ${S}/>
+  <circle cx="326" cy="254" r="52" fill="#5C6B7E" ${S}/>
+  <circle cx="186" cy="254" r="40" fill="#8FA6C4" stroke="none"/>
+  <circle cx="326" cy="254" r="40" fill="#8FA6C4" stroke="none"/>
+  <circle cx="172" cy="240" r="9" fill="#FFFFFF" opacity="0.85"/><circle cx="312" cy="240" r="9" fill="#FFFFFF" opacity="0.85"/>
+  <path d="M238 246 Q256 234 274 246" fill="none" stroke="${OL}" stroke-width="8" stroke-linecap="round"/>
+  ${face(256, 330, 0.45, 10, 'cat')}
+  ${sparkle(122, 322, 0.75, '#FFD166')}`;
+
+const tbBrush = `
+  <g transform="rotate(-13 226 200)">
+    <rect x="214" y="118" width="22" height="152" rx="11" fill="#E8B287" ${S}/>
+    <ellipse cx="225" cy="112" rx="18" ry="26" fill="#FFF6E0" ${S}/>
+  </g>
+  <rect x="246" y="104" width="22" height="166" rx="11" fill="#E8B287" ${S}/>
+  <ellipse cx="257" cy="98" rx="18" ry="26" fill="#FFF6E0" ${S}/>
+  <g transform="rotate(13 286 200)">
+    <rect x="276" y="118" width="22" height="152" rx="11" fill="#E8B287" ${S}/>
+    <ellipse cx="287" cy="112" rx="18" ry="26" fill="#FFF6E0" ${S}/>
+  </g>
+  <rect x="196" y="268" width="120" height="118" rx="20" fill="#FF9EBB" ${S}/>
+  ${face(256, 330, 0.55, 12)}`;
+
+const tbFaceMask = `
+  <path d="M156 176 Q256 130 356 176 Q388 258 356 342 Q256 388 156 342 Q124 258 156 176 Z" fill="#FFF9F0" ${S}/>
+  <path d="M256 176 L256 342" stroke="${OL}" stroke-width="4" opacity="0.18"/>
+  ${face(256, 258, 0.72, 17)}
+  ${heart(340, 320, 0.5, '#FF9EBB')}
+  ${sparkle(130, 210, 0.75, '#FFD166')}`;
+
+const tbCurtain = `
+  <rect x="196" y="150" width="120" height="182" fill="#BEE3DD" ${S}/>
+  <path d="M196 242 L316 242 M256 150 L256 332" stroke="${OL}" stroke-width="5" opacity="0.5"/>
+  <rect x="180" y="130" width="152" height="22" rx="11" fill="#FFD166" ${S}/>
+  <path d="M164 152 Q150 252 168 354 L216 354 Q200 252 212 152 Z" fill="#FF9EBB" ${S}/>
+  <path d="M348 152 Q362 252 344 354 L296 354 Q312 252 300 152 Z" fill="#FF9EBB" ${S}/>
+  ${face(256, 288, 0.5, 11)}`;
+
+const tbTowel = `
+  <rect x="150" y="198" width="212" height="60" rx="14" fill="#BEE3DD" ${S}/>
+  <path d="M150 226 L362 226" stroke="#FFFFFF" stroke-width="5" opacity="0.55"/>
+  <rect x="162" y="258" width="188" height="56" rx="14" fill="#FFD166" ${S}/>
+  <rect x="150" y="314" width="212" height="58" rx="14" fill="#FF9EBB" ${S}/>
+  ${face(256, 342, 0.5, 11)}
+  ${sparkle(120, 180, 0.8, '#FFD166')}`;
+
+const tbStorage = `
+  <rect x="238" y="148" width="36" height="24" rx="8" fill="#FFD166" ${S}/>
+  <rect x="130" y="164" width="252" height="44" rx="14" fill="#8FA6C4" ${S}/>
+  <rect x="146" y="208" width="220" height="168" rx="18" fill="#BEE3DD" ${S}/>
+  ${face(256, 296, 0.62, 15)}
+  <path d="M146 332 L366 332" stroke="${OL}" stroke-width="5" opacity="0.3"/>
+  ${sparkle(112, 240, 0.8, '#FFD166')}`;
+
+const tbCarpet = `
+  <rect x="112" y="214" width="150" height="108" rx="8" fill="#FF9EBB" ${S}/>
+  <path d="M112 246 L262 246 M112 288 L262 288" stroke="#FFF6E0" stroke-width="5" opacity="0.5"/>
+  <circle cx="300" cy="268" r="62" fill="#FFB7C9" ${S}/>
+  <circle cx="300" cy="268" r="27" fill="#FFE3A9" ${S}/>
+  <path d="M300 241 Q327 268 300 295" fill="none" stroke="${OL}" stroke-width="5"/>
+  ${face(300, 268, 0.38, 9)}
+  ${sparkle(110, 170, 0.8, '#FFD166')}`;
+
+const tbSlippers = `
+  <ellipse cx="196" cy="256" rx="64" ry="112" fill="#FFB7C9" ${S}/>
+  <rect x="164" y="194" width="64" height="28" rx="14" fill="#FF8FAB" ${S}/>
+  ${face(196, 296, 0.5, 11)}
+  <ellipse cx="316" cy="256" rx="64" ry="112" fill="#FFE3A9" ${S}/>
+  <rect x="284" y="194" width="64" height="28" rx="14" fill="#FFD166" ${S}/>
+  ${heart(316, 300, 0.5, '#FF8FAB')}
+  ${sparkle(106, 160, 0.75, '#FFD166')}`;
+
+const tbBlocks = `
+  <rect x="166" y="292" width="180" height="64" rx="10" fill="#FF9EBB" ${S}/>
+  <circle cx="200" cy="292" r="9" fill="#FFB7C9" ${S}/><circle cx="256" cy="292" r="9" fill="#FFB7C9" ${S}/><circle cx="312" cy="292" r="9" fill="#FFB7C9" ${S}/>
+  <rect x="186" y="228" width="120" height="64" rx="10" fill="#8CC152" ${S}/>
+  <circle cx="222" cy="228" r="9" fill="#A8D878" ${S}/><circle cx="270" cy="228" r="9" fill="#A8D878" ${S}/>
+  <rect x="216" y="164" width="80" height="64" rx="10" fill="#FFD166" ${S}/>
+  ${face(256, 196, 0.42, 10)}
+  ${sparkle(136, 200, 0.8, '#FFD166')}`;
+
+const tbToyCar = `
+  <path d="M140 292 Q140 258 176 252 L212 208 Q220 196 238 196 L296 196 Q314 196 322 210 L344 254 Q376 260 376 292 L376 312 Q376 324 364 324 L152 324 Q140 324 140 312 Z" fill="#E8695A" ${S}/>
+  <path d="M226 212 L292 212 Q300 212 304 220 L318 250 L222 250 Z" fill="#BEE3DD" stroke="none"/>
+  ${face(186, 288, 0.48, 11)}
+  <rect x="326" y="222" width="26" height="15" rx="7" fill="#FFD166" stroke="none"/>
+  <circle cx="196" cy="326" r="26" fill="#5C6B7E" ${S}/><circle cx="196" cy="326" r="10" fill="#8FA6C4" stroke="none"/>
+  <circle cx="322" cy="326" r="26" fill="#5C6B7E" ${S}/><circle cx="322" cy="326" r="10" fill="#8FA6C4" stroke="none"/>`;
+
+const tbPuzzle = `
+  <path d="M150 220 L246 220 L246 202 Q246 180 268 180 Q290 180 290 202 L290 220 L382 220 L382 332 L284 332 L284 350 Q284 372 262 372 Q240 372 240 350 L240 332 L150 332 Z" fill="#FFD166" ${S}/>
+  <circle cx="196" cy="258" r="15" fill="#FFF6E0" ${S}/>
+  ${face(292, 276, 0.55, 12)}
+  ${sparkle(122, 182, 0.8, '#FF9EBB')}`;
+
+const tbPen = `
+  <g transform="rotate(34 256 256)">
+    <rect x="234" y="92" width="44" height="210" rx="16" fill="#5C6B7E" ${S}/>
+    ${face(256, 196, 0.52, 11)}
+    <rect x="234" y="296" width="44" height="58" rx="8" fill="#FFD166" ${S}/>
+    <path d="M244 354 L268 354 L262 396 L256 408 L250 396 Z" fill="#8FA6C4" ${S}/>
+    <path d="M256 360 L256 392" stroke="${OL}" stroke-width="4"/>
+  </g>
+  ${sparkle(140, 160, 0.85, '#FFD166')}
+  ${sparkle(390, 340, 0.7, '#FFD166', 0.9)}`;
+
+const tbNotebook = `
+  <rect x="166" y="140" width="180" height="232" rx="18" fill="#FFD166" ${S}/>
+  <rect x="188" y="160" width="138" height="192" rx="8" fill="#FFF9F0" stroke="none"/>
+  <path d="M204 202 L310 202 M204 232 L310 232 M204 262 L310 262" stroke="${OL}" stroke-width="4" opacity="0.22"/>
+  <rect x="298" y="140" width="20" height="232" fill="#E8695A" ${S}/>
+  ${face(242, 292, 0.55, 12)}
+  ${sparkle(130, 170, 0.8, '#FFD166')}`;
+
+const tbGuitar = `
+  <rect x="206" y="70" width="58" height="32" rx="9" fill="#5C6B7E" ${S}/>
+  <rect x="217" y="98" width="36" height="140" rx="8" fill="#8D5A3A" ${S}/>
+  <path d="M226 72 L226 60 M240 72 L240 58 M254 72 L254 60" stroke="${OL}" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="234" cy="308" r="90" fill="#E8B287" ${S}/>
+  <circle cx="234" cy="308" r="57" fill="#D9A05B" stroke="none"/>
+  <circle cx="234" cy="308" r="27" fill="#FFF6E0" ${S}/>
+  <path d="M226 104 L226 288 M244 104 L244 288" stroke="#FFF6E0" stroke-width="3" opacity="0.85"/>
+  <rect x="212" y="336" width="46" height="13" rx="6" fill="#5C6B7E" ${S}/>
+  ${face(234, 372, 0.42, 9, 'cat')}
+  ${sparkle(340, 220, 0.8, '#FFD166')}`;
+
+const tbBasketball = `
+  <circle cx="256" cy="262" r="112" fill="#F2A65A" ${S}/>
+  <path d="M144 262 L368 262 M256 150 L256 374" stroke="#8D5A3A" stroke-width="7" stroke-linecap="round"/>
+  <path d="M172 186 Q256 262 172 338 M340 186 Q256 262 340 338" fill="none" stroke="#8D5A3A" stroke-width="7" stroke-linecap="round"/>
+  ${face(256, 262, 0.62, 15)}
+  ${sparkle(118, 168, 0.8, '#FFD166')}`;
+
+const tbYogaMat = `
+  <circle cx="300" cy="264" r="68" fill="#8CC152" ${S}/>
+  <circle cx="300" cy="264" r="35" fill="#BFE3C0" ${S}/>
+  <path d="M300 238 Q328 264 300 290" fill="none" stroke="${OL}" stroke-width="5"/>
+  <rect x="138" y="212" width="162" height="104" rx="10" fill="#A3CC7A" ${S}/>
+  <rect x="206" y="198" width="26" height="132" rx="12" fill="#FF8FAB" ${S}/>
+  ${face(178, 264, 0.5, 11)}
+  ${sparkle(122, 180, 0.8, '#FFD166')}`;
+
+const tbDumbbell = `
+  <rect x="216" y="248" width="80" height="28" rx="14" fill="#8FA6C4" ${S}/>
+  <rect x="160" y="196" width="56" height="132" rx="18" fill="#5C6B7E" ${S}/>
+  <rect x="296" y="196" width="56" height="132" rx="18" fill="#5C6B7E" ${S}/>
+  <rect x="134" y="216" width="30" height="92" rx="12" fill="#8FA6C4" ${S}/>
+  <rect x="348" y="216" width="30" height="92" rx="12" fill="#8FA6C4" ${S}/>
+  ${face(188, 262, 0.45, 10)}
+  ${sparkle(340, 170, 0.8, '#FFD166')}`;
+
+const tbLunchbox = `
+  ${steam(226, 170, 0.6)} ${steam(288, 166, 0.72)}
+  <path d="M212 196 Q256 166 300 196" fill="none" stroke="${OL}" stroke-width="9" stroke-linecap="round"/>
+  <rect x="166" y="194" width="180" height="72" rx="14" fill="#FF9EBB" ${S}/>
+  <rect x="146" y="220" width="24" height="20" rx="7" fill="#FFD166" ${S}/>
+  <rect x="342" y="220" width="24" height="20" rx="7" fill="#FFD166" ${S}/>
+  <rect x="166" y="266" width="180" height="72" rx="14" fill="#FFB7C9" ${S}/>
+  ${face(256, 236, 0.55, 12)}
+  ${sparkle(120, 176, 0.75, '#FFD166')}`;
+
+const tbPet = `
+  <ellipse cx="256" cy="296" rx="132" ry="72" fill="#FF8FAB" ${S}/>
+  <ellipse cx="256" cy="280" rx="98" ry="46" fill="#FFE3A9" ${S}/>
+  <circle cx="214" cy="272" r="11" fill="#8D5A3A"/><circle cx="256" cy="284" r="12" fill="#8D5A3A"/><circle cx="298" cy="270" r="11" fill="#8D5A3A"/>
+  <circle cx="236" cy="262" r="9" fill="#A56428"/><circle cx="278" cy="264" r="9" fill="#A56428"/>
+  ${face(256, 330, 0.55, 12)}
+  ${heart(374, 232, 0.55, '#FFD166')}
+  ${sparkle(120, 210, 0.75, '#FFD166')}`;
+
 // ---------------- 任务表 ----------------
 
 interface Job {
@@ -923,6 +1305,49 @@ const JOBS: Job[] = [
   { name: 'tb-gift', fill: '#FDEFF4', accent: '#FFC9D6', body: tbGift },
   { name: 'tb-kiosk', fill: '#F1EEE8', accent: '#D8D2C4', body: tbKiosk },
   { name: 'tb-temple', fill: '#FFF4E0', accent: '#FFD98E', body: tbTemple, ground: [420, 190] },
+  // Task 61 全品类扩展
+  { name: 'tb-phone-stand', fill: '#F1EEE8', accent: '#D8D2C4', body: tbPhoneStand },
+  { name: 'tb-mouse', fill: '#F1EEE8', accent: '#D8D2C4', body: tbMouse },
+  { name: 'tb-monitor', fill: '#F1EEE8', accent: '#D8D2C4', body: tbMonitor },
+  { name: 'tb-tv', fill: '#F1EEE8', accent: '#D8D2C4', body: tbTv },
+  { name: 'tb-drone', fill: '#F1EEE8', accent: '#D8D2C4', body: tbDrone },
+  { name: 'tb-gamepad', fill: '#F1EEE8', accent: '#D8D2C4', body: tbGamepad },
+  { name: 'tb-fan', fill: '#EFF6E9', accent: '#BFE3C0', body: tbFan },
+  { name: 'tb-microwave', fill: '#F1EEE8', accent: '#D8D2C4', body: tbMicrowave },
+  { name: 'tb-rice-cooker', fill: '#FFF4E0', accent: '#FFD98E', body: tbRiceCooker },
+  { name: 'tb-vacuum', fill: '#EFF6E9', accent: '#BFE3C0', body: tbVacuum },
+  { name: 'tb-kettle', fill: '#EFF6E9', accent: '#BFE3C0', body: tbKettle },
+  { name: 'tb-air-fryer', fill: '#FFF4E0', accent: '#FFD98E', body: tbAirFryer },
+  { name: 'tb-coffee-machine', fill: '#F4EFE6', accent: '#E3D7C2', body: tbCoffeeMachine },
+  { name: 'tb-humidifier', fill: '#EFF6E9', accent: '#BFE3C0', body: tbHumidifier },
+  { name: 'tb-shaver', fill: '#F1EEE8', accent: '#D8D2C4', body: tbShaver },
+  { name: 'tb-toothbrush', fill: '#EFF6E9', accent: '#BFE3C0', body: tbToothbrush },
+  { name: 'tb-hairdryer', fill: '#FDEFF4', accent: '#FFC9D6', body: tbHairdryer },
+  { name: 'tb-belt', fill: '#F4EFE6', accent: '#E3D7C2', body: tbBelt },
+  { name: 'tb-scarf', fill: '#FDEFF4', accent: '#FFC9D6', body: tbScarf },
+  { name: 'tb-socks', fill: '#FDEFF4', accent: '#FFC9D6', body: tbSocks },
+  { name: 'tb-shorts', fill: '#F1EEE8', accent: '#D8D2C4', body: tbShorts },
+  { name: 'tb-suitcase', fill: '#FFF4E0', accent: '#FFD98E', body: tbSuitcase },
+  { name: 'tb-wallet', fill: '#F4EFE6', accent: '#E3D7C2', body: tbWallet },
+  { name: 'tb-sunglasses', fill: '#F1EEE8', accent: '#D8D2C4', body: tbSunglasses },
+  { name: 'tb-brush', fill: '#FAEDF3', accent: '#F3C4DC', body: tbBrush },
+  { name: 'tb-face-mask', fill: '#FAEDF3', accent: '#F3C4DC', body: tbFaceMask },
+  { name: 'tb-curtain', fill: '#F4EFE6', accent: '#E3D7C2', body: tbCurtain },
+  { name: 'tb-towel', fill: '#EFF6E9', accent: '#BFE3C0', body: tbTowel },
+  { name: 'tb-storage', fill: '#EFF6E9', accent: '#BFE3C0', body: tbStorage },
+  { name: 'tb-carpet', fill: '#F4EFE6', accent: '#E3D7C2', body: tbCarpet },
+  { name: 'tb-slippers', fill: '#FDEFF4', accent: '#FFC9D6', body: tbSlippers },
+  { name: 'tb-blocks', fill: '#FDF3E7', accent: '#F2D3AE', body: tbBlocks },
+  { name: 'tb-toy-car', fill: '#FDF3E7', accent: '#F2D3AE', body: tbToyCar },
+  { name: 'tb-puzzle', fill: '#FDF3E7', accent: '#F2D3AE', body: tbPuzzle },
+  { name: 'tb-pen', fill: '#FFF8EA', accent: '#FFE3A9', body: tbPen },
+  { name: 'tb-notebook', fill: '#FFF8EA', accent: '#FFE3A9', body: tbNotebook },
+  { name: 'tb-guitar', fill: '#F4EFE6', accent: '#E3D7C2', body: tbGuitar },
+  { name: 'tb-basketball', fill: '#FFF4E0', accent: '#FFD98E', body: tbBasketball },
+  { name: 'tb-yoga-mat', fill: '#EFF6E9', accent: '#BFE3C0', body: tbYogaMat },
+  { name: 'tb-dumbbell', fill: '#F1EEE8', accent: '#D8D2C4', body: tbDumbbell },
+  { name: 'tb-lunchbox', fill: '#FDEFF4', accent: '#FFC9D6', body: tbLunchbox },
+  { name: 'tb-pet', fill: '#FDEFF4', accent: '#FFC9D6', body: tbPet },
 ];
 
 async function main() {

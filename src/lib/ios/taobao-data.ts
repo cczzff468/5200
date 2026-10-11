@@ -15,6 +15,13 @@ export function tbImg(tag: string, w = 600, h = 600, s = 0, kind: 'f' | 'c' = 'f
   return tbGoodsImg(tag, kind);
 }
 
+/** 口红质地 × 色号（用户指定，购买弹窗可选；tb-product-gen 生成器共用） */
+export const TB_LIP_KINDS = ['唇釉', '口红', '唇泥', '唇膏', '唇蜜'];
+export const TB_LIP_COLORS = [
+  '蜜桃粉', '樱桃粉', '玫瑰粉', '粉杏色', '裸粉色', '南瓜色', '胡萝卜色', '脏橘色', '肉桂奶茶', '烂番茄', '草莓红',
+  '火龙果色', '玫红色', '浅紫色', '浆果梅子色', '奶咖色', '枫叶红', '红棕色', '山楂红', '红茶色', '枣泥红',
+];
+
 /** 淘宝主品牌色 */
 export const TB_ORANGE = '#FF5000';
 
@@ -306,7 +313,8 @@ export const TB_PRODUCTS: TbProduct[] = [
 
   // ---- 美妆 ----
   P('p-lipstick-1', '口红套装正品大牌丝绒雾面哑光小众品牌 持久不脱色 送礼盒生日礼物', 79, 129, 27000, 's-meizhuang', 'beauty', 'lipstick', ['退货宝', '专柜同款', '破损包赔'], [
-    colorGroup('lipstick', ['正红色', '豆沙色', '枫叶红', '蜜桃色'], []),
+    { name: '质地', options: TB_LIP_KINDS.map((k) => ({ label: k })) },
+    { name: '色号', options: TB_LIP_COLORS.map((c, i) => ({ label: c, img: tbImg('lipstick', 120, 120, i % 4) })) },
     { name: '规格', options: [{ label: '单支装' }, { label: '三支礼盒', priceDelta: 89 }] },
   ], { promo: '百亿补贴' }),
   P('p-perfume-1', '香水女士持久淡香清新自然 网红小众香氛 学生党口袋香水50ml', 59, 99, 41000, 's-meizhuang', 'beauty', 'perfume', ['退货宝', '官方正品'], [

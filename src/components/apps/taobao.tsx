@@ -75,10 +75,12 @@ import {
   tbFeedAuxSave,
   tbFeedLoad,
   tbFeedSave,
+  tbPersistAiProducts,
   tbRestoreAiProducts,
   type TbAiCoupon,
   type TbFeedTop,
 } from '@/lib/ios/tb-ai-store';
+import { tbGenCoupons, tbGenProducts, tbKwTagOf } from '@/lib/ios/tb-product-gen';
 import {
   TB_CATS,
   TB_HOT_SEARCHES,
@@ -86,8 +88,10 @@ import {
   productById,
   shopById,
   tbImg,
+  tbRegisterAiProducts,
   tbReviewsOf,
   tbSalesText,
+  tbSearchPool,
   tbSearchScore,
   type TbCatId,
   type TbProduct,
@@ -925,6 +929,17 @@ function tbShufflePool(list: TbProduct[], seed: number): TbProduct[] {
     .map((x) => x.p);
 }
 
+/** 各频道的生成器配置（本地兜底/分页溢出用；限定品类 + 活动角标与 AI 频道规则对位） */
+const GEN_TAB_CFG: Record<string, { tags?: string[]; promo?: string }> = {
+  rec: {},
+  follow: {},
+  flash: { tags: ['snacks', 'fruit', 'water-bottle', 'mug', 'cookies', 'towel', 'socks', 'lunchbox'], promo: '超级88' },
+  subsidy: { tags: ['fridge', 'washer', 'tv', 'monitor', 'phone', 'laptop', 'tablet', 'camera', 'lock', 'fan', 'vacuum', 'microwave', 'rice-cooker', 'air-fryer', 'coffee-machine', 'kettle', 'humidifier'], promo: '国补' },
+  super88: { tags: ['snacks', 'mug', 'water-bottle', 'cookies', 'towel', 'socks', 'slippers', 'storage', 'lunchbox', 'pen', 'umbrella'], promo: '超级88' },
+  fliggy: { tags: ['suitcase', 'backpack', 'shoes', 'coat', 'hat', 'water-bottle', 'sunglasses'] },
+  wear: { tags: ['jacket', 'jeans', 'dress', 'hoodie', 'tshirt', 'shirt', 'sneakers', 'shoes', 'hat', 'coat'] },
+};
+
 function HomePage({
   uid,
   onOpenSearch,
@@ -1049,27 +1064,46 @@ function HomePage({
         if (ai) {
           newTops = [...ai.products.map((p, i) => ({ pid: p.id, v: i % 4, k: `${ks}-${i}` })), ...topsRef.current];
         } else {
-          // 本地兜底：确定性洗牌前插（同样持久化）
+          // 本地兜底：生成器产出 8 个全新商品前插（不再重复种子池 → 上下永不重样），同样持久化
           newKey = refreshKeyRef.current + 1;
-          const shuffled = tbShufflePool(pool, newKey);
+          const cfg = GEN_TAB_CFG[feedTab] ?? {};
+          const gen = tbGenProducts(newKey * 977 + 31, 8, {
+            idPrefix: `gen-home-${feedTab}-${newKey}`,
+            tags: cfg.tags,
+            promo: cfg.promo,
+            excludeTitles: [
+              ...topsRef.current.map((t) => productById(t.pid)?.title ?? ''),
+              ...tailsRef.current.map((t) => productById(t.pid)?.title ?? ''),
+              ...pool.map((p) => p.title),
+            ].filter((s) => s.length > 0),
+          });
+          tbPersistAiProducts(uid, gen);
           const kr = `r${newKey}`;
-          newTops = [
-            ...Array.from({ length: 8 }, (_, i) => ({ pid: shuffled[i % shuffled.length].id, v: newKey % 4, k: `${kr}-${i}` })),
-            ...topsRef.current,
-          ];
+          newTops = [...gen.map((p, i) => ({ pid: p.id, v: newKey % 4, k: `${kr}-${i}` })), ...topsRef.current];
         }
         setTops(newTops);
         setRefreshKey(newKey);
         if (surf) tbFeedSave(uid, surf, { tops: newTops, tails: tailsRef.current, batch: batchRef.current, refreshKey: newKey });
         onToast(ai ? '已为你推荐新的好物，旧内容都还在哦' : '已为你换上新推荐，旧内容都还在哦');
       } else {
-        // 底部追加（Task 45）：AI 好物接在列表最后；AI 失败追加一批种子好物（按已追加量确定性选取，不与上方重复）
+        // 底部追加（Task 45）：AI 好物接在列表最后；AI 失败用生成器产 8 个全新商品（与上方不重样，持久化）
         let appended: TbProduct[];
         if (ai) {
           appended = ai.products;
         } else {
-          const base = topsRef.current.length + tailsRef.current.length;
-          appended = Array.from({ length: 8 }, (_, i) => pool[(base * 3 + 1 + i * 3) % pool.length]);
+          const cfg = GEN_TAB_CFG[feedTab] ?? {};
+          const ts = Date.now().toString(36);
+          appended = tbGenProducts(Date.now() % 1000003, 8, {
+            idPrefix: `gen-tl-${feedTab}-${ts}`,
+            tags: cfg.tags,
+            promo: cfg.promo,
+            excludeTitles: [
+              ...topsRef.current.map((t) => productById(t.pid)?.title ?? ''),
+              ...tailsRef.current.map((t) => productById(t.pid)?.title ?? ''),
+              ...pool.map((p) => p.title),
+            ].filter((s) => s.length > 0),
+          });
+          tbPersistAiProducts(uid, appended);
         }
         const start = tailsRef.current.length;
         const newTails: TbFeedTop[] = [...tailsRef.current, ...appended.map((p, i) => ({ pid: p.id, v: (i + start) % 4, k: `tl${ks}-${start + i}` }))];
@@ -1128,12 +1162,25 @@ function HomePage({
       const p = productById(t.pid);
       return p ? [{ p, v: t.v, k: t.k }] : [];
     });
-    // 基底流：固定顺序 + 追加式分页（i 为局部索引 → key/图变体稳定，不因刷新变化）
+    // 基底流（Task 61 去重）：种子池只展示一轮不再取模重复（用户反馈「上面和下面的有的一样」根因），
+    // 溢出分页由生成器补全新商品（确定性 id 随 refreshKey 变化，跨重启可复现）
     const base: { p: TbProduct; v: number; k: string }[] = [];
-    const n = Math.min(pool.length * 3, 12 + batch * 8);
-    for (let i = 0; i < n; i++) {
-      const p = pool[i % pool.length];
-      base.push({ p, v: Math.floor(i / pool.length) % 4, k: `b-${p.id}-${i}` });
+    const shown = Math.min(12 + batch * 8, 200);
+    for (let i = 0; i < Math.min(shown, pool.length); i++) {
+      const p = pool[i];
+      base.push({ p, v: i % 4, k: `b-${p.id}-${i}` });
+    }
+    const overflowN = Math.max(0, shown - pool.length);
+    if (overflowN > 0) {
+      const cfg = GEN_TAB_CFG[feedTab] ?? {};
+      const gen = tbGenProducts(refreshKey * 977 + 31, overflowN, {
+        idPrefix: `gb-${feedTab}-${refreshKey}`,
+        tags: cfg.tags,
+        promo: cfg.promo,
+        excludeTitles: pool.map((p) => p.title),
+      });
+      tbRegisterAiProducts(gen);
+      gen.forEach((p, j) => base.push({ p, v: j % 4, k: `gb-${feedTab}-${refreshKey}-${j}` }));
     }
     // 底部追加批次（Task 45：滑到底部拉一拉，新内容接在最后，上方内容原位不变）
     const tailEntries = tails.flatMap((t) => {
@@ -1141,7 +1188,7 @@ function HomePage({
       return p ? [{ p, v: t.v, k: t.k }] : [];
     });
     return [...topEntries, ...base, ...tailEntries];
-  }, [tops, tails, pool, batch]);
+  }, [tops, tails, pool, batch, feedTab, refreshKey]);
 
   // 需求（第十轮）：频道 tab「关注」左侧返回按钮 → 返回手机主屏幕
   const closeApp = useUI((s) => s.closeApp);
@@ -1696,16 +1743,19 @@ function SearchPage({ uid, onBack, onSearch }: { uid: string; onBack: () => void
 
 type SortMode = 'rec' | 'sales' | 'priceAsc' | 'priceDesc';
 
-function SearchResultPage({ kw, onBack, onOpenProduct, onSearchSeed }: { kw: string; onBack: () => void; onOpenProduct: (pid: string) => void; onSearchSeed: (kw: string) => void }) {
+function SearchResultPage({ uid, kw, onBack, onOpenProduct, onSearchSeed }: { uid: string; kw: string; onBack: () => void; onOpenProduct: (pid: string) => void; onSearchSeed: (kw: string) => void }) {
   const [input, setInput] = useState(kw);
   const [sort, setSort] = useState<SortMode>('rec');
   const [onlyFree, setOnlyFree] = useState(false);
   const [onlyTmall, setOnlyTmall] = useState(false);
   const [batch, setBatch] = useState(1);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  /** 生成批次数上限（滑到底仍持续出新，40 批 ≈ 320 条生成商品后真正到底） */
+  const MAX_GEN_BATCH = 40;
 
-  const hits = useMemo(() => {
-    let list = TB_PRODUCTS.map((p) => ({ p, s: tbSearchScore(p, kw) })).filter((x) => x.s > 0);
+  // 命中池：种子 + 已注册 AI 商品全量打分（此前只搜种子池 → 「只显示那几个」的根因之一）
+  const seedHits = useMemo(() => {
+    let list = tbSearchPool().map((p) => ({ p, s: tbSearchScore(p, kw) })).filter((x) => x.s > 0);
     if (onlyFree) list = list.filter((x) => x.p.freight === 0);
     if (onlyTmall) list = list.filter((x) => shopById(x.p.shopId).tmall);
     if (sort === 'sales') list.sort((a, b) => b.p.sales - a.p.sales);
@@ -1715,6 +1765,33 @@ function SearchResultPage({ kw, onBack, onOpenProduct, onSearchSeed }: { kw: str
     return list.map((x) => x.p);
   }, [kw, sort, onlyFree, onlyTmall]);
 
+  // 生成池（Task 61：搜索无限下滑刷新生成）：关键词命中品类 → 本地生成器按批次持续产出
+  // 品牌型号商品（手机/笔记本/口红…）；未命中品类走通用模式（标题带关键词）。批次确定性
+  // （id 稳定跨重启可复现），注册 + 持久化 → 下单/购物车链路可用，旧批次不消失
+  const genHits = useMemo(() => {
+    const visible = 10 + batch * 8;
+    const need = Math.max(0, visible - seedHits.length);
+    if (need <= 0) return [];
+    const kwTag = tbKwTagOf(kw);
+    const h = tbHash(kw) >>> 0;
+    const h36 = h.toString(36);
+    const ex = new Set(seedHits.map((p) => p.title));
+    const out: TbProduct[] = [];
+    for (let b = 0; b * 8 < need; b++) {
+      const items = tbGenProducts(h + b * 7919, 8, { idPrefix: `gs-${h36}-${b}`, tags: kwTag ? [kwTag] : undefined, excludeTitles: [...ex] });
+      items.forEach((p) => ex.add(p.title));
+      out.push(...items);
+    }
+    tbRegisterAiProducts(out);
+    tbPersistAiProducts(uid, out);
+    if (kwTag) return out;
+    // 未命中品类的搜索词：标题冠以关键词（图走礼盒/通用兜底）
+    const suffixes = [' 官方正品', ' 特惠装', ' 精选好物', ' 限时直降'];
+    return out.map((p, i) => ({ ...p, title: `${kw}${suffixes[i % suffixes.length]}` }));
+  }, [kw, batch, seedHits, uid]);
+
+  const hits = useMemo(() => [...seedHits, ...genHits], [seedHits, genHits]);
+
   const shown = useMemo(() => {
     const n = Math.min(hits.length, 10 + batch * 8);
     return hits.slice(0, n);
@@ -1722,7 +1799,8 @@ function SearchResultPage({ kw, onBack, onOpenProduct, onSearchSeed }: { kw: str
 
   const onScroll = useCallback(() => {
     const el = scrollerRef.current;
-    if (el && el.scrollTop + el.clientHeight >= el.scrollHeight - 400) setBatch((b) => (b < 20 ? b + 1 : b));
+    if (el && el.scrollTop + el.clientHeight >= el.scrollHeight - 400) setBatch((b) => (b < MAX_GEN_BATCH ? b + 1 : b));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const sortBtn = (id: SortMode, label: string, arrow?: 'up' | 'down') => (
@@ -5080,13 +5158,20 @@ function MePage({
         }
         onToast('已为你换上新的好物，旧推荐都还在哦');
       } else {
-        // 底部追加（Task 45）：AI 好物接在猜你喜欢最后；AI 失败追加一批种子好物（按已展示量确定性选取）
+        // 底部追加（Task 45）：AI 好物接在猜你喜欢最后；AI 失败用生成器产 8 个全新商品（不重样，持久化）
         let appended: TbProduct[];
         if (ai && ai.products.length > 0) {
           appended = ai.products;
         } else {
-          const base = meTopsRef.current.length + meTailsRef.current.length;
-          appended = Array.from({ length: 8 }, (_, i) => arr[(base * 3 + 7 + i * 3) % arr.length]);
+          appended = tbGenProducts(Date.now() % 1000003, 8, {
+            idPrefix: `gme-tl-${Date.now().toString(36)}`,
+            excludeTitles: [
+              ...meTopsRef.current.map((t) => productById(t.pid)?.title ?? ''),
+              ...meTailsRef.current.map((t) => productById(t.pid)?.title ?? ''),
+              ...TB_PRODUCTS.map((p) => p.title),
+            ].filter((x) => x.length > 0),
+          });
+          tbPersistAiProducts(uid, appended);
         }
         const start = meTailsRef.current.length;
         const ks = `ai${Date.now().toString(36)}`;
@@ -5098,6 +5183,7 @@ function MePage({
     })();
   });
   // 猜你喜欢菜单（AI 前插 + 批次前插：最新批在最上；底部追加：最新批在最后，旧内容原位保留）
+  // Task 61：批次改用生成器（每批 8 个全新商品，不再轮转种子池 → 上下永不重样；批次 seed 持久化 → 跨重启可复现）
   const meMenu = useMemo(() => {
     const aiEntries = meTops.flatMap((t) => {
       const p = productById(t.pid);
@@ -5107,12 +5193,12 @@ function MePage({
       const p = productById(t.pid);
       return p ? [{ p, k: t.k }] : [];
     });
-    const arr = [...TB_PRODUCTS];
     return [
       ...aiEntries,
       ...menuBatches.flatMap((k) => {
-        const start = (14 + k * 8) % arr.length;
-        return Array.from({ length: 8 }, (_, i) => ({ p: arr[(start + i) % arr.length], k: `${k}-${i}` }));
+        const gen = tbGenProducts(k * 131 + 7, 8, { idPrefix: `gme-${k}`, excludeTitles: TB_PRODUCTS.map((p) => p.title) });
+        tbRegisterAiProducts(gen);
+        return gen.map((p, j) => ({ p, k: `gme-${k}-${j}` }));
       }),
       ...tailEntries,
     ];
@@ -6274,36 +6360,10 @@ function ShopPage({ shopId, uid, onBack, onOpenProduct, onToast }: { shopId: str
 
 // ---------------- 优惠券 / 快递 / 设置 ----------------
 
-/** 领券中心好券流本地兑底池（Task 46：AI 不可用时确定性出券；券名与页面种子券错开） */
-const CC_FEED_POOL: TbAiCoupon[] = [
-  { name: '数码品类加补券', amount: 15, min: 150, scope: '数码类目可用', tag: 'phone' },
-  { name: '服饰穿搭立减券', amount: 20, min: 199, scope: '服饰类目可用', tag: 'jacket' },
-  { name: '美妆神券', amount: 30, min: 299, scope: '美妆类目可用', tag: 'lipstick' },
-  { name: '家居焕新券', amount: 25, min: 259, scope: '家居类目可用', tag: 'sofa' },
-  { name: '零食神券', amount: 8, min: 59, scope: '食品类目可用', tag: 'snacks' },
-  { name: '图书悦读券', amount: 10, min: 69, scope: '图书类目可用', tag: 'books' },
-  { name: '运动户外券', amount: 18, min: 168, scope: '运动类目可用', tag: 'sneakers' },
-  { name: '超市日用券', amount: 12, min: 99, scope: '超市类目可用', tag: 'water-bottle' },
-  { name: '耳机影音券', amount: 16, min: 159, scope: '数码类目可用', tag: 'earbuds' },
-  { name: '护肤加补券', amount: 22, min: 219, scope: '美妆类目可用', tag: 'skincare' },
-  { name: '床品家纺券', amount: 28, min: 269, scope: '家居类目可用', tag: 'bedding' },
-  { name: '玩趣周边券', amount: 9, min: 79, scope: '全品类通用', tag: 'toy' },
-  { name: '鲜果直降券', amount: 6, min: 39, scope: '食品类目可用', tag: 'fruit' },
-  { name: '腕表智能券', amount: 35, min: 329, scope: '数码类目可用', tag: 'watch' },
-  { name: '电脑办公券', amount: 40, min: 399, scope: '数码类目可用', tag: 'laptop' },
-  { name: '水杯茶饮券', amount: 7, min: 49, scope: '全品类通用', tag: 'mug' },
-];
-
-/** 第 batch 批本地兑底券（确定性错位选取，排除已展示券名；池子耗尽允许循环复用旧名） */
+/** 第 batch 批本地兑底券（Task 61：组合式无限出券「品类×券种×面额」——
+ *  旧固定 16 张循环池刷新几次就重名（用户反馈「刷新还是一样的」根因），现在每批都是不同券） */
 function ccFallbackBatch(batch: number, exclude: string[]): TbAiCoupon[] {
-  const ex = new Set(exclude);
-  const out: TbAiCoupon[] = [];
-  const start = (batch * 5) % CC_FEED_POOL.length;
-  for (let i = 0; i < CC_FEED_POOL.length && out.length < 6; i++) {
-    const c = CC_FEED_POOL[(start + i) % CC_FEED_POOL.length];
-    if (!ex.has(c.name)) out.push({ ...c });
-  }
-  return out;
+  return tbGenCoupons(batch, exclude);
 }
 
 /** 领券中心（需求：开发领券中心，截图4：超级88领好券红色页——三档消费券/加赠/家电数码券/平台加补券/预告券，领取入账 tb-coupons） */
@@ -7082,7 +7142,7 @@ export default function TaobaoApp() {
   } else if (page === 'search') {
     content = <SearchPage uid={uid} onBack={() => setPage('main')} onSearch={(kw) => { setSearchKw(kw); setPage('searchResult'); }} />;
   } else if (page === 'searchResult') {
-    content = <SearchResultPage kw={searchKw} onBack={() => setPage('main')} onOpenProduct={openProduct} onSearchSeed={(kw) => setSearchKw(kw)} />;
+    content = <SearchResultPage uid={uid} kw={searchKw} onBack={() => setPage('main')} onOpenProduct={openProduct} onSearchSeed={(kw) => setSearchKw(kw)} />;
   } else if (page === 'product' && pid) {
     content = (
       <ProductPage

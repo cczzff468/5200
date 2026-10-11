@@ -18099,3 +18099,20 @@ Work Log:
 Stage Summary:
 - 交付：全品类图补齐——淘宝商品图从 33→43 直配品类（+帽子/相机/大衣/衬衫/门锁/冰箱/洗衣机/礼盒/终端机/古建），白名单 40 词与磁盘 77 张图全量对齐零错位；订单全链路（购物车/结算/订单列表/订单详情/频道月度订单/SKU 面板）8 处裸 img 换 TbImg：旧图链自动迁移+emoji 兜底+图内订单名贴片；TbImg 重试加固（400ms 延迟+cache-buster）根治偶发「图片加载失败」灰块
 - 改动文件：scripts/gen-goods-svg.ts、public/goods/*.webp（+10 张）、src/lib/ios/goods-img.ts、src/components/apps/tb-img.tsx、src/components/apps/tb-img-style.ts、src/app/api/tb-feed/route.ts、src/components/apps/taobao.tsx、src/components/apps/taobao-channels.tsx
+
+---
+Task ID: 61
+Agent: main (Z.ai Code)
+Task: 用户五点需求——①手机支架等全部类型都要单独图片，「把全部东西的图片都做出来」；②3C 按品牌+型号生成（华为/小米/苹果/三星/vivo/iQOO Z9 Z10/苹果12 17…），口红带品牌（迪奥/卡姿兰/兰蔻…）×质地（唇釉/口红/唇泥/唇膏/唇蜜）×21 色号（蜜桃粉~枣泥红，放进购买弹窗）；③淘宝「上面和下面的有的一样」去重；④搜索只显示那几个→没有的生成、下滑无限刷新；⑤领券中心刷新还是一样→刷新生成别的；另修 taobao-msg-chat OrderCardMsg img src 空字符串 console 报错
+
+Work Log:
+- 【新文件 src/lib/ios/tb-product-gen.ts 本地商品生成器】60 个品类目录与卡通图 1:1（生成器只产出有专属图的品类=「全部东西都有图」的数据侧保障）；确定性 mulberry32（同 seed 同结果，跨重启可复现）；3C 真实品牌型号库：手机 10 品牌 40+ 型号（iPhone 12~17/17 Pro、华为 Mate 60/70、小米15/Ultra、Redmi K80、三星 S25/S24/Z Flip6、vivo X200/X100s、iQOO Z9/Z10/13/Neo10、OPPO Reno13/Find X8、一加 Ace5、真我 GT7 Pro、荣耀 Magic7…）；笔记本 7 品牌（联想小新/拯救者/ThinkBook、MateBook、MacBook Air/Pro、华硕天选、戴尔、惠普）；平板 6 品牌（iPad 10/Air/Pro、MatePad、小米平板7、荣耀、vivo Pad3、iQOO Pad2）；口红品牌 12（迪奥/卡姿兰/兰蔻/圣罗兰/纪梵希/香奈儿/阿玛尼/花知晓/完美日记/花西子/橘朵/毛戈平）×质地 5×色号 21（色号/质地常量下沉 taobao-data 与种子商品共用）；每品类专属 SKU 模板（手机存储 8 档按用户指定、口红质地+色号、服饰尺码、鞋码、家电容量/门数…）；tbKwTagOf 关键词→品类映射（手机支架/口红/牛仔裤/冰箱/数据线/纸巾…60+ 词，含 (?!支架)(?!桌)(?!车) 防抢位）；tbGenCoupons 组合式无限出券（40 品类×10 券种×14 面额≈5600 组合，跨批不重名）；tbSkuForTag 按 tag 出 SKU
+- 【42 张新 kawaii 插画】scripts/gen-goods-svg.ts 新增手绘 SVG 42 张并落盘 public/goods/*.webp（手机支架/鼠标/显示器/电视/无人机/游戏手柄/风扇/微波炉/电饭煲/吸尘器/水壶/空气炸锅/咖啡机/加湿器/剃须刀/牙刷/吹风机/腰带/围巾/袜子/短裤/行李箱/钱包/墨镜/化妆刷/面膜/窗帘/毛巾/收纳箱/地毯/拖鞋/积木/玩具车/拼图/钢笔/笔记本册/吉他/篮球/瑜伽垫/哑铃/饭盒/宠物碗，77→119 张）
+- 【图链全量对齐】goods-img.ts TB_GOODS +42 直配、TB_GOODS_ALIAS 重排（luggage→suitcase、tv/monitor/projector 直配、lego→blocks、stationery→pen…）；tb-img.tsx FALLBACK_EMOJI +38 词；/api/tb-feed TAG_WHITELIST 40→86 词、TAG_ALIASES 重排（air-conditioner→fan、rice→rice-cooker、mask→face-mask、yoga→yoga-mat…）、国补/推荐频道提示词改写（允许真实品牌型号、tag 与标题品类对位）、MERCH/COUPON 池扩充
+- 【③去重根因修复】首页基底流原来 pool[i % pool.length] 取模重复最多 3 轮（用户「上面和下面的有的一样」根因）→ 改为种子池只展示一轮、溢出分页由生成器补全新商品（id=gb-<tab>-<refreshKey>-*，随 refreshKey 变化跨重启可复现，运行时注册）；下拉/上拉本地兜底从「洗牌重复种子池」改为生成器产 8 个全新商品（tbPersistAiProducts 持久化）；我的淘宝菜单批次从「种子池轮转偏移」改为每批生成器 8 个新商品（批次 seed 持久化）；E2E 实测：滚动到底连翻 10 页单帧快照 96 个标题 0 重复（旧版每标题重复 3 次）
+- 【④搜索无限生成】SearchResultPage 命中池从仅种子 TB_PRODUCTS 扩为 tbSearchPool()（种子+AI 注册表）；新增 genHits：tbKwTagOf(kw) 命中品类→生成器按批次产出品牌型号商品（id=gs-<kwhash>-<batch>-*，逐批累积 exclude 跨批不重名，注册+持久化→下单链路可用）；未命中关键词走通用模式（标题冠关键词）；下滑 batch 上限 20→40（≈330 条后才「到底」）；E2E 实测：搜「手机支架」16 个支架商品全带 tb-phone-stand.webp 专属图、搜「口红」出圣罗兰唇膏玫红色/阿玛尼唇泥蜜桃粉等、搜 iPhone 出 iQOO Z10/小米15 Ultra/一加 Ace5/真我 GT7 Pro，滚动 23→39 条持续出新 0 裂图
+- 【②购买弹窗】AI 商品 tbBuildAiProduct 的 SKU 从固定 4 色通用组改为 tbSkuForTag(tag)（口红=质地5+色号21、手机=颜色6+存储8+套餐…）；种子 p-lipstick-1 同步换质地/色号组；E2E 实测：详情页 SKU 快选条显示「选择：质地 / 色号」、购买弹窗质地(5)+色号(21)全量渲染（含缩略图）、确认订单 SKU 文案「质地：唇釉，色号：蜜桃粉」随单携带
+- 【⑤领券中心】固定 16 张循环池（刷新几次必重名根因）删除，ccFallbackBatch 改接 tbGenCoupons 组合式生成；E2E 实测三次下拉刷新：批0（家电立减券/宠物满减券/玩具满减券/运动消费券/超市神券/玩具品类券）→批1（美妆立减券/图书神券/家居品类券/食品加补券/运动立减券/数码品类券）→批2（数码立减券/美妆神券/图书品类券）三批全不同、旧券原位保留
+- 【img 空串报错】taobao-msg-chat.tsx OrderCardMsg 裸 <img src={first.img}>（历史订单 img 可为空串=console 报错根因）换 TbImg + 空值按 productById(pid).tag 兜底；ProductCardMsg 同步换 TbImg（带 shimmer）
+- E2E（agent-browser 全真浏览器全新 profile 全链路）：联系人 App 建 USER 小淘（wxid_nu9dv3yt/wxtb123）→淘宝微信账密登录成功→首页信息流 46 图 0 裂图（6 个 naturalWidth=0 均为懒加载未入屏，文件 curl 全 200）→商品详情/购买弹窗/确认订单全链正常；bunx tsc --noEmit 0 错误；browser console 0 新错误（空 src 报错消失）；dev.log 无新增运行时错误（仅仓库固有 instrumentation Edge 警告）；/api/tb-feed 实测 z-ai 内置模型已恢复可用（source=sdk 正常出新品类数据），AI 失败时本地生成器兜底双保险
+- 备注：①鼠标滚轮/拖拽不能滚动 App 内 overflow 容器（E2E 用 scrollTop 直设 + TouchEvent 派发做下拉刷新）；②淘宝「返回」在商品详情根态会直接退出 App（既有行为非本次引入）；③美团 App 本次零改动

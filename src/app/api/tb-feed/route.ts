@@ -131,9 +131,11 @@ function pickOf<T>(arr: readonly T[], seed: string): T {
 
 const TAG_WHITELIST = [
   'phone', 'earbuds', 'laptop', 'watch', 'tablet', 'camera', 'keyboard', 'powerbank', 'speaker', 'lock', 'fridge', 'washer',
-  'jacket', 'jeans', 'dress', 'hoodie', 'tshirt', 'sneakers', 'backpack', 'coat', 'shoes', 'hat', 'shirt',
-  'lipstick', 'perfume', 'skincare', 'makeup',
-  'sofa', 'bedding', 'lamp', 'mug', 'toy', 'water-bottle', 'snacks', 'fruit', 'tea', 'books', 'gift', 'temple',
+  'phone-stand', 'mouse', 'monitor', 'tv', 'drone', 'gamepad', 'fan', 'vacuum', 'microwave', 'rice-cooker', 'kettle', 'air-fryer', 'coffee-machine', 'humidifier', 'shaver', 'toothbrush', 'hairdryer',
+  'jacket', 'jeans', 'dress', 'hoodie', 'tshirt', 'sneakers', 'backpack', 'coat', 'shoes', 'hat', 'shirt', 'belt', 'scarf', 'socks', 'shorts', 'suitcase', 'wallet', 'sunglasses', 'slippers',
+  'lipstick', 'perfume', 'skincare', 'makeup', 'brush', 'face-mask',
+  'sofa', 'bedding', 'lamp', 'mug', 'vase', 'pillow', 'desk', 'curtain', 'towel', 'storage', 'carpet', 'lunchbox', 'umbrella', 'water-bottle',
+  'snacks', 'fruit', 'tea', 'cookies', 'books', 'pen', 'notebook', 'toy', 'blocks', 'toy-car', 'puzzle', 'guitar', 'basketball', 'yoga-mat', 'dumbbell', 'pet', 'gift', 'temple',
 ] as const;
 
 /** 常见近似词 → 白名单词映射（模型自造词/同义词时的收窄路径） */
@@ -145,43 +147,45 @@ const TAG_ALIASES: Record<string, string> = {
   smartwatch: 'watch', 'smart-watch': 'watch', band: 'watch', bracelet: 'watch',
   pad: 'tablet', ipad: 'tablet', ereader: 'tablet', 'e-reader': 'tablet',
   dslr: 'camera', lens: 'camera', webcam: 'camera',
-  mouse: 'keyboard', mousepad: 'keyboard',
-  charger: 'powerbank', cable: 'powerbank', battery: 'powerbank',
+  mousepad: 'keyboard', charger: 'powerbank', cable: 'powerbank', battery: 'powerbank',
   audio: 'speaker', 'bluetooth-speaker': 'speaker', soundbar: 'speaker',
-  tv: 'tablet', television: 'tablet', projector: 'tablet',
+  tripod: 'phone-stand', 'selfie-stick': 'phone-stand', 'car-holder': 'phone-stand',
   fridge: 'fridge', refrigerator: 'fridge',
   washer: 'washer', 'washing-machine': 'washer', washingmachine: 'washer',
   lock: 'lock', doorlock: 'lock', 'smart-lock': 'lock', smartlock: 'lock',
   hoodie: 'hoodie',
   gift: 'gift', present: 'gift', 'gift-box': 'gift',
   temple: 'temple',
-  'air-conditioner': 'lamp', microwave: 'lamp', 'rice-cooker': 'lamp', vacuum: 'lamp', appliance: 'fridge',
+  'air-conditioner': 'fan', blender: 'kettle', 'juicer': 'air-fryer', appliance: 'fridge',
+  earbuds2: 'earbuds', earphone: 'earbuds',
   // 服饰
   clothing: 'jacket', blazer: 'jacket', sweater: 'coat', outerwear: 'coat',
   trousers: 'jeans', pants: 'jeans', denim: 'jeans',
   skirt: 'dress', gown: 'dress', sundress: 'dress',
   sneaker: 'sneakers', 'running-shoes': 'sneakers',
-  boots: 'shoes', sandals: 'shoes', slippers: 'shoes', socks: 'shoes',
-  bag: 'backpack', handbag: 'backpack', luggage: 'backpack', suitcase: 'backpack', tote: 'backpack',
+  boots: 'shoes', sandals: 'shoes', slippers: 'slippers', sock: 'socks', stockings: 'socks',
+  bag: 'backpack', handbag: 'backpack', luggage: 'suitcase', suitcase: 'suitcase', tote: 'backpack',
   cap: 'hat', beanie: 'hat',
-  't-shirt': 'tshirt', blouse: 'shirt', top: 'shirt', underwear: 'shirt',
+  't-shirt': 'tshirt', blouse: 'shirt', top: 'shirt', underwear: 'shirt', glasses: 'sunglasses', eyeglasses: 'sunglasses',
   // 美妆
   cosmetics: 'makeup', foundation: 'makeup', eyeshadow: 'makeup', mascara: 'makeup',
-  cream: 'skincare', serum: 'skincare', lotion: 'skincare', sunscreen: 'skincare', 'face-mask': 'skincare',
+  cream: 'skincare', serum: 'skincare', lotion: 'skincare', sunscreen: 'skincare', 'sunscreen-spray': 'skincare',
   fragrance: 'perfume', cologne: 'perfume', jewelry: 'perfume',
-  lipstick: 'lipstick', lipgloss: 'lipstick',
+  lipstick: 'lipstick', lipgloss: 'lipstick', 'lip-glaze': 'lipstick',
+  mask: 'face-mask', 'facial-mask': 'face-mask',
   // 家居
-  furniture: 'sofa', chair: 'sofa', table: 'sofa', desk: 'sofa', shelf: 'sofa',
-  bed: 'bedding', blanket: 'bedding', quilt: 'bedding', pillow: 'bedding', towel: 'bedding', towels: 'bedding', hotel: 'bedding',
+  furniture: 'sofa', chair: 'sofa', table: 'sofa', shelf: 'sofa',
+  bed: 'bedding', blanket: 'bedding', quilt: 'bedding', pillow: 'pillow', towels: 'towel', hotel: 'bedding',
   light: 'lamp', chandelier: 'lamp', lightbulb: 'lamp',
-  cup: 'mug', cups: 'mug', kettle: 'mug', teapot: 'mug', coffee: 'mug', 'milk-tea': 'mug',
+  cup: 'mug', cups: 'mug', teapot: 'mug', 'milk-tea': 'mug',
   bottle: 'water-bottle', thermos: 'water-bottle', flask: 'water-bottle', drink: 'water-bottle', beverage: 'water-bottle', juice: 'water-bottle', milk: 'water-bottle',
+  'storage-box': 'storage', organizer: 'storage', bin: 'storage',
   // 食品/其他
-  food: 'snacks', snack: 'snacks', nuts: 'snacks', candy: 'snacks', biscuit: 'snacks', cookies: 'snacks', bread: 'snacks', cake: 'snacks',
-  grocery: 'fruit', vegetable: 'fruit', vegetables: 'fruit', meat: 'snacks', seafood: 'snacks', egg: 'fruit', rice: 'fruit',
-  book: 'books', novel: 'books', textbook: 'books', stationery: 'books',
-  plush: 'toy', doll: 'toy', lego: 'toy', game: 'toy', figurine: 'toy', pet: 'toy',
-  travel: 'backpack', outdoors: 'backpack', camping: 'backpack', sports: 'sneakers', fitness: 'sneakers',
+  food: 'snacks', snack: 'snacks', nuts: 'snacks', candy: 'snacks', biscuit: 'cookies', cookies: 'cookies', bread: 'snacks', cake: 'cookies',
+  grocery: 'fruit', vegetable: 'fruit', vegetables: 'fruit', meat: 'snacks', seafood: 'snacks', egg: 'fruit', rice: 'rice-cooker',
+  book: 'books', novel: 'books', textbook: 'books', stationery: 'pen', journal: 'notebook',
+  plush: 'toy', doll: 'toy', figurine: 'toy', game: 'gamepad', lego: 'blocks', buildingblocks: 'blocks', 'rc-car': 'toy-car', pet: 'pet', 'pet-food': 'pet',
+  travel: 'suitcase', outdoors: 'backpack', camping: 'backpack', sports: 'sneakers', fitness: 'dumbbell', yoga: 'yoga-mat',
 };
 
 /** tag 清洗（模型可能返回任意字符串）：小写、仅留 a-z0-9- */
@@ -201,10 +205,10 @@ function tagOf(raw: unknown): string | null {
 const TAG_POOL_FLIGGY = ['bedding', 'sofa', 'lamp'];
 const TAG_POOL_MOVIE = ['books'];
 const TAG_POOL_WEAR = ['jacket', 'jeans', 'dress', 'hoodie', 'tshirt', 'shirt', 'sneakers', 'shoes', 'hat', 'coat'];
-const TAG_POOL_MERCH = ['toy', 'speaker', 'water-bottle', 'mug', 'lamp', 'backpack', 'hat', 'camera', 'keyboard', 'books'];
+const TAG_POOL_MERCH = ['toy', 'blocks', 'toy-car', 'puzzle', 'speaker', 'water-bottle', 'mug', 'lamp', 'backpack', 'hat', 'camera', 'keyboard', 'books', 'guitar'];
 const TAG_POOL_STANDUP = ['脱口秀', '漫才', '开放麦', '舞台剧', '即兴喜剧'];
 /** 领券中心：券图品类（常用大促品类，决定券卡配图） */
-const TAG_POOL_COUPON = ['phone', 'earbuds', 'laptop', 'jacket', 'sneakers', 'sofa', 'bedding', 'mug', 'snacks', 'fruit', 'lipstick', 'skincare', 'books', 'toy', 'water-bottle', 'watch'];
+const TAG_POOL_COUPON = ['phone', 'earbuds', 'laptop', 'jacket', 'sneakers', 'sofa', 'bedding', 'mug', 'snacks', 'fruit', 'lipstick', 'skincare', 'books', 'toy', 'water-bottle', 'watch', 'tablet', 'suitcase', 'fridge', 'basketball'];
 
 function tagPoolFor(surface: TbSurface, tab: string): readonly string[] {
   if (surface === 'fliggy') return TAG_POOL_FLIGGY;
@@ -445,9 +449,9 @@ const PROMPT_BASE =
 
 /** home 各频道 tab 的生成规则（tab 缺省/未知按综合推荐处理） */
 const HOME_TAB_RULES: Record<string, string> = {
-  rec: '综合推荐，类目不限（数码/服饰/家居/美妆/食品/图书皆可），同批类目尽量多样。',
+  rec: '综合推荐，类目不限（数码/服饰/家居/美妆/食品/图书皆可），同批类目尽量多样；3C 数码可用常见品牌与型号（如 iPhone 17、华为 Mate 70、小米15、三星 S25、iQOO Z9/Z10、vivo X200；口红可用迪奥/卡姿兰/兰蔻等品牌与唇釉/唇泥等质地）。',
   flash: '淘宝闪购频道：只生成零食/水果/饮料/日用百货快消商品，价格 1~59 元、销量偏高，promo 多填「超级88」。',
-  subsidy: '家电数码国补频道：只生成大家电与数码商品（冰箱/洗衣机/电视/空调/手机/笔记本/平板/相机/智能门锁等），promo 固定填「国补」，价格 399~6999；tag 必须与标题品类对位：冰箱填 fridge、洗衣机填 washer、电视/空调/风扇填 tablet 或 lamp、智能门锁填 lock、手机填 phone、笔记本填 laptop、相机填 camera。',
+  subsidy: '家电数码国补频道：只生成大家电与数码商品（冰箱/洗衣机/电视/空调/手机/笔记本/平板/相机/智能门锁/显示器/风扇/吸尘器/微波炉/电饭煲等），promo 固定填「国补」，价格 399~6999；tag 必须与标题品类对位：冰箱填 fridge、洗衣机填 washer、电视填 tv、显示器填 monitor、风扇填 fan、吸尘器填 vacuum、微波炉填 microwave、电饭煲填 rice-cooker、空气炸锅填 air-fryer、咖啡机填 coffee-machine、智能门锁填 lock、手机填 phone、笔记本填 laptop、相机填 camera；3C 类可用常见品牌与型号（如 iPhone 17、华为 Mate 70、小米15、iQOO Z9、vivo X200 等）。',
   super88: '超级88低价爆款频道：只生成 9.9~49 元的零食/日百小件爆款，promo 固定填「超级88」，origPrice 填日常价。',
   fliggy: '旅行装备频道：只生成旅行箱包/户外装备商品，tag 从 backpack、shoes、coat、hat、water-bottle 中选。',
   wear: '女装穿搭频道：只生成女装/鞋帽商品，tag 只能从 jacket、jeans、dress、hoodie、tshirt、shirt、sneakers、shoes、hat、coat 中选，且与标题品类对位（卫衣填 hoodie、T恤填 tshirt、衬衫填 shirt）。',

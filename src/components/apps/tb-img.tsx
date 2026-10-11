@@ -17,18 +17,25 @@ const FALLBACK_EMOJI: Record<string, string> = {
   // 数码
   phone: '📱', earbuds: '🎧', laptop: '💻', tablet: '📱', watch: '⌚', keyboard: '⌨️',
   speaker: '🔊', powerbank: '🔋', camera: '📷', lock: '🔒',
+  'phone-stand': '📱', mouse: '🖱️', monitor: '🖥️', tv: '📺', drone: '🛸', gamepad: '🎮',
   // 家电
-  fridge: '🧊', washer: '🧺',
+  fridge: '🧊', washer: '🧺', fan: '🌀', vacuum: '🧹', microwave: '🍲', 'rice-cooker': '🍚',
+  kettle: '🫖', 'air-fryer': '🍟', 'coffee-machine': '☕', humidifier: '💧', shaver: '🪒',
+  toothbrush: '🪥', hairdryer: '💨',
   // 服饰
   tshirt: '👕', jeans: '👖', dress: '👗', jacket: '🧥', hoodie: '🧥', coat: '🧥', shirt: '👔',
-  hat: '🧢', sneakers: '👟', shoes: '👟', backpack: '🎒',
+  hat: '🧢', sneakers: '👟', shoes: '👟', backpack: '🎒', belt: '🪢', scarf: '🧣', socks: '🧦',
+  shorts: '🩳', suitcase: '🧳', wallet: '👛', sunglasses: '🕶️', slippers: '🩴',
   // 美妆
-  lipstick: '💄', perfume: '🌸', skincare: '🧴', makeup: '💅',
+  lipstick: '💄', perfume: '🌸', skincare: '🧴', makeup: '💅', brush: '🖌️', 'face-mask': '🧖',
   // 家居
   sofa: '🛋️', bedding: '🛏️', lamp: '💡', mug: '☕', vase: '🏺', pillow: '🛏️', desk: '🪑',
+  curtain: '🪟', towel: '🛁', storage: '📦', carpet: '🧶', lunchbox: '🍱',
   // 其他
   toy: '🧸', umbrella: '☂️', 'water-bottle': '🥤', snacks: '🍿', cookies: '🍪', tea: '🍵',
   books: '📚', book: '📚', fruit: '🍎', flower: '💐', gift: '🎁', kiosk: '🏧', temple: '⛩️',
+  blocks: '🧱', 'toy-car': '🚗', puzzle: '🧩', pen: '🖊️', notebook: '📔', guitar: '🎸',
+  basketball: '🏀', 'yoga-mat': '🧘', dumbbell: '🏋️', pet: '🐾',
   // 美团菜品（淘宝 AI 商品跨类复用）
   'milk-tea': '🧋', burger: '🍔', 'fried-chicken': '🍗', pizza: '🍕', hotpot: '🍲', noodles: '🍜',
   rice: '🍚', dessert: '🍰', 'ice-cream': '🍦', coffee: '☕', juice: '🧃', milk: '🥛', egg: '🍳',
