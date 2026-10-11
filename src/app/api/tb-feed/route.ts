@@ -26,9 +26,9 @@ interface FeedConfig {
 
 type RawRec = Record<string, unknown>;
 
-/** 十二种信息流表面（coupon = 领券中心好券流，Task 46） */
-type TbSurface = 'home' | 'video' | 'subsidy' | 'seckill' | 'fliggy' | 'movie' | 'me' | 'standup' | 'concert' | 'merch' | 'movieUp' | 'coupon';
-const SURFACES: TbSurface[] = ['home', 'video', 'subsidy', 'seckill', 'fliggy', 'movie', 'me', 'standup', 'concert', 'merch', 'movieUp', 'coupon'];
+/** 信息流表面（search = 搜索结果页无限下滑 AI 生成） */
+type TbSurface = 'home' | 'video' | 'subsidy' | 'seckill' | 'fliggy' | 'movie' | 'me' | 'standup' | 'concert' | 'merch' | 'movieUp' | 'coupon' | 'search';
+const SURFACES: TbSurface[] = ['home', 'video', 'subsidy', 'seckill', 'fliggy', 'movie', 'me', 'standup', 'concert', 'merch', 'movieUp', 'coupon', 'search'];
 
 interface GenerateArgs {
   surface: TbSurface;
@@ -481,6 +481,8 @@ function surfaceTask(a: GenerateArgs): string {
     return '淘票票即将上映新片。title 是原创虚构片名（严禁真实电影名）；badge 填 IMAX 2D / 2D / 3D / 重映 之一；actors 填「导演：虚构名 主演：虚构名」风格且不超过 20 字；sub 填一句看点文案；wantTo 填想看人数数值（单位万人，1~60 可带一位小数）；price 填预售价（38~120）；tag 统一填 books。';
   if (a.surface === 'coupon')
     return '淘宝领券中心优惠券（超级88领好券）。title 是券名——「品类/场景 + 券种」结构（券种从 加补券/消费券/立减券/神券/品类券 中选，品类从 数码/服饰/美妆/家居/食品/图书/超市/运动 等选，如「数码品类加补券」「超市神券」），不超过 12 字，同一批互不重复；price 是券面额（整数元，1~88，大额券可以 66/88）；min 是使用门槛（满 X 元可用，整数，一般是面额的 5~10 倍，无门槛填 0）；scope 填适用范围（不超过 10 字，如「数码类目可用」「全品类通用」）；tag 从白名单选券图品类。';
+  if (a.surface === 'search')
+    return `淘宝搜索结果页商品（用户搜索词：${a.tab}）。全部商品必须与搜索词品类强相关：手机/笔记本/平板要带品牌与型号（华为/小米/苹果/三星/vivo/iQOO Z9/Z10/iPhone 12~17 等），口红要带品牌（迪奥/卡姿兰/兰蔻等）+质地（唇釉/口红/唇泥/唇膏/唇蜜）+色号；价格与销量符合品类行情；同批商品互不重复且与排除名单不重复。`;
   return '淘票票热映电影。title 是原创虚构片名（禁止使用任何真实存在的电影名）；badge 填 IMAX 2D / 2D / 3D 之一；actors 填「导演：虚构名 主演：虚构名」风格且不超过 20 字；price 给 38~120；tag 统一填 books。';
 }
 
@@ -498,6 +500,7 @@ const ITEM_SCHEMA: Record<TbSurface, string> = {
   merch: '{"title":"自创片名官方手办盲盒","price":69,"origPrice":99,"from":"《自创片名》官方周边","kind":"手办","hot":"已售1.2万","tag":"toy"}',
   movieUp: '{"title":"雾海灯塔","price":45,"tag":"books","badge":"IMAX 2D","actors":"导演：陈序 主演：江眠、白鹭","sub":"年度悬疑力作","wantTo":12.6}',
   coupon: '{"title":"数码品类加补券","price":15,"min":150,"scope":"数码类目可用","tag":"phone"}',
+  search: '{"title":"华为 Mate 70 Pro 5G手机 曜金黑 16G+512G 全网通","price":6499,"origPrice":7999,"sales":12000,"tag":"phone","tags":["国补15%","分期免息","退货宝"],"promo":"国补","foot":"已售1万+","sub":"官方旗舰 品质保障"}',
 };
 
 function buildSystem(surface: TbSurface): string {
@@ -512,6 +515,7 @@ function buildSystem(surface: TbSurface): string {
   if (surface === 'merch') return `${PROMPT_BASE}当前是淘票票周边商城，周边必须挂在自创虚构影片下，严禁真实IP。`;
   if (surface === 'movieUp') return `${PROMPT_BASE}当前是淘票票即将上映频道，片名与演职人员必须完全虚构。`;
   if (surface === 'coupon') return `${PROMPT_BASE}当前是淘宝领券中心，券名必须像真实大促优惠券且同一批互不重复。`;
+  if (surface === 'search') return `${PROMPT_BASE}当前是淘宝搜索结果页，商品必须与搜索词品类强相关且带品牌/型号/规格。`;
   return `${PROMPT_BASE}当前是淘票票热映电影频道，片名与演职人员必须完全虚构。`;
 }
 
@@ -545,6 +549,7 @@ const PRICE_RANGE: Record<TbSurface, [number, number, number]> = {
   merch: [19, 599, 69],
   movieUp: [38, 120, 45],
   coupon: [1, 88, 15],
+  search: [0.01, 99999, 59],
 };
 
 /** 各表面标题兜底（模型没给 title 时保证条目仍可用） */
@@ -561,6 +566,7 @@ const DEFAULT_TITLE: Record<TbSurface, string> = {
   merch: '官方授权周边',
   movieUp: '即将上映新片',
   coupon: '品类加补券',
+  search: '搜索相关好物',
 };
 
 /** 模型漏给字段时的稳定兜底文案池（按标题哈希取值，同条目跨批次稳定） */
@@ -620,7 +626,7 @@ function coerceItem(raw: unknown, surface: TbSurface, tab: string): TbFeedItem {
   if (origPrice !== undefined) item.origPrice = origPrice;
 
   // 销量只对商品类表面有意义（酒店看点评、电影看票房文案）
-  if (surface === 'home' || surface === 'video' || surface === 'subsidy' || surface === 'seckill' || surface === 'me') {
+  if (surface === 'home' || surface === 'video' || surface === 'subsidy' || surface === 'seckill' || surface === 'me' || surface === 'search') {
     item.sales = intOf(rec.sales, 500 + Math.floor(Math.random() * 20000), 0, 1e8);
   }
   const tags = tagsOf(rec.tags);
@@ -629,7 +635,7 @@ function coerceItem(raw: unknown, surface: TbSurface, tab: string): TbFeedItem {
   const footRaw = optStr(rec.foot, 20);
   const subRaw = optStr(rec.sub, 24);
 
-  if (surface === 'home' || surface === 'video' || surface === 'me') {
+  if (surface === 'home' || surface === 'video' || surface === 'me' || surface === 'search') {
     const promo = optStr(rec.promo, 6);
     if (promo) item.promo = promo;
     if (footRaw) item.foot = footRaw;

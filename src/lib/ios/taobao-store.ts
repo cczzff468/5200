@@ -12,7 +12,8 @@
  */
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { accLs, getActiveAccountFor } from './accounts';
-import { productById, shopById, tbImg, tbReviewsOf, type TbProduct } from './taobao-data';
+import { productById, shopById, tbImg, tbReviewsOf, TB_SHOPS, type TbProduct } from './taobao-data';
+import { tbGenProducts } from './tb-product-gen';
 
 // ---------------- 登录态 ----------------
 
@@ -804,6 +805,169 @@ export function tbMarkPaid(
   hit.payFcParts = pay.payFcParts;
   tbSaveOrders(uid, list);
   return true;
+}
+
+// ---------------- 历史订单无限生成（需求「淘宝订单上滑/下滑刷新生成」） ----------------
+//
+// - 下拉刷新出「最近的新单」、上滑到底加载「更早的历史单」，本地确定性生成（同批次同结果）；
+// - 商品经 tbGenProducts 全品类生成器产出（品牌/型号/类型多样化，图片与商品一致必有图）；
+// - 生成订单直接写入真实订单存储（按 createdAt 归位排序），详情/评价/退款/再买一单全链路复用；
+// - 首件标题去重：跨批、与存量订单绝不重复（需求「订单上面和下面有一样的」根治）。
+
+/** mulberry32：seed → 确定性伪随机序列（与 tb-product-gen 同款） */
+function tbRngFrom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function tbHashStr(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h >>> 0;
+}
+
+/** 订单去重 key（店铺名|首件标题） */
+export function tbGenOrderKey(o: Pick<TbOrder, 'shopName' | 'items'>): string {
+  return `${o.shopName}|${o.items[0]?.title ?? ''}`;
+}
+
+/** AI/本地生成条目 → TbOrder（status 分布：已发货/已完成/待发货 + 少量已取消，createdAt 向过去推 daysAgo 天） */
+export function tbBuildGenOrder(
+  uid: string,
+  raw: {
+    shopName?: string;
+    shopId?: string;
+    itemTitle: string;
+    tag: string;
+    skuText?: string;
+    price: number;
+    qty?: number;
+    daysAgo: number;
+    canceled?: boolean;
+  },
+  idx = 0
+): TbOrder {
+  const qty = Math.max(1, Math.round(raw.qty ?? 1));
+  const price = Math.max(0.01, Math.round(raw.price * 100) / 100);
+  const now = Date.now();
+  const jitter = ((tbHashStr(raw.itemTitle) % 30) + idx * 2) * 3600_000;
+  const createdAt = now - Math.max(1, raw.daysAgo) * 86_400_000 - jitter;
+  // 店铺：优先同 tag 店铺；AI 给了店名但没有匹配 id 时挂同 tag 店（订单头显示 AI 店名）
+  const shop = TB_SHOPS.find((s) => s.tag === raw.tag) ?? TB_SHOPS[tbHashStr(raw.itemTitle) % TB_SHOPS.length];
+  const canceled = raw.canceled === true;
+  const r = tbRngFrom(tbHashStr(`${raw.itemTitle}|st`));
+  const roll = r();
+  const status: TbOrderStatus = canceled ? 'cancelled' : roll < 0.42 ? 'shipped' : roll < 0.9 ? 'completed' : 'pendingDeliver';
+  const paidAt = createdAt + 3 * 60_000;
+  const shipAt = status === 'pendingDeliver' || canceled ? undefined : paidAt + 60_000;
+  const completedAt = status === 'completed' ? (shipAt ?? paidAt) + 3 * 86_400_000 : undefined;
+  // skuText「颜色分类：曜金黑；存储容量：16GB+512G」→ { 颜色分类: 曜金黑, 存储容量: 16GB+512G }
+  const sku: Record<string, string> = {};
+  for (const seg of (raw.skuText ?? '').split(/[；;]/)) {
+    const [k, ...rest] = seg.split('：');
+    const v = rest.join('：').trim();
+    if (k?.trim() && v) sku[k.trim()] = v;
+  }
+  const track =
+    status === 'shipped'
+      ? [
+          { text: '包裹已由商家揽收', at: (shipAt ?? paidAt) + 600_000 },
+          { text: '运输中：包裹已到达【杭州转运中心】', at: (shipAt ?? paidAt) + 1_800_000 },
+        ]
+      : status === 'completed'
+        ? [
+            { text: '包裹已由商家揽收', at: (shipAt ?? paidAt) + 600_000 },
+            { text: '运输中：包裹已到达【杭州转运中心】', at: (shipAt ?? paidAt) + 1_800_000 },
+            { text: '包裹已放入菜鸟驿站，请凭取件码领取', at: (shipAt ?? paidAt) + 3_600_000 },
+          ]
+        : [];
+  const total = Math.round(price * qty * 100) / 100;
+  return {
+    id: `tbg${tbHashStr(`${raw.itemTitle}|${raw.daysAgo}`).toString(36)}${idx}`,
+    uid,
+    shopId: raw.shopId && raw.shopId !== '' ? raw.shopId : shop.id,
+    shopName: raw.shopName && raw.shopName !== '' ? raw.shopName.slice(0, 14) : shop.name,
+    items: [{ pid: `gen-${tbHashStr(raw.itemTitle).toString(36)}`, title: raw.itemTitle, img: tbImg(raw.tag, 300, 300, 0), sku, price, qty }],
+    itemTotal: total,
+    freight: 0,
+    discount: 0,
+    total,
+    address: undefined,
+    status,
+    createdAt,
+    paidAt: canceled ? undefined : paidAt,
+    shipAt,
+    completedAt,
+    cancelReason: canceled ? '不想要了/多拍/拍错' : undefined,
+    track,
+  };
+}
+
+/** 第 batch 批本地历史订单（tbGenProducts 全品类产出，一批 2 条，跨批去重） */
+export function tbGenHistoryOrders(uid: string, batch: number, excludeTitles: string[]): TbOrder[] {
+  const seed = (tbHashStr('tb-gen-orders') ^ Math.imul(batch + 1, 2654435761)) >>> 0;
+  const products = tbGenProducts(seed, 2, { idPrefix: `tbg-${batch}`, excludeTitles });
+  const ex = new Set(excludeTitles);
+  const out: TbOrder[] = [];
+  products.forEach((p, i) => {
+    if (ex.has(p.title)) return;
+    ex.add(p.title);
+    const sku: Record<string, string> = {};
+    for (const g of p.skus) {
+      if (g.options.length > 0 && !g.options[0].soldOut) sku[g.name] = g.options[0].label;
+    }
+    const r = tbRngFrom(seed + i * 97);
+    out.push(
+      tbBuildGenOrder(
+        uid,
+        {
+          shopId: p.shopId,
+          itemTitle: p.title,
+          tag: p.tag,
+          skuText: Object.entries(sku)
+            .map(([k, v]) => `${k}：${v}`)
+            .join('；'),
+          price: p.price,
+          qty: 1,
+          daysAgo: 2 + batch * 4 + Math.floor(r() * 3),
+          canceled: r() < 0.08,
+        },
+        i
+      )
+    );
+  });
+  return out;
+}
+
+/** 生成订单入库（按 createdAt 归位去重，不覆盖用户真实订单；返回实际新增条数）
+ *  同时对存量做同 key 去重（保留最新一条）——根治「订单上面和下面有的一样」 */
+export function tbInsertGenOrders(uid: string, batch: TbOrder[]): number {
+  const list = tbLoadOrders(uid);
+  const exKeys = new Set(list.map(tbGenOrderKey));
+  const exIds = new Set(list.map((o) => o.id));
+  const fresh = batch.filter((o) => !exIds.has(o.id) && !exKeys.has(tbGenOrderKey(o)));
+  if (fresh.length === 0) return 0;
+  // 存量+新单合并去重（list 已按时间倒序，同 key 保留第一条即最新），根治「订单上下重复」
+  const seen = new Set<string>();
+  const deduped = [...fresh, ...list].filter((o) => {
+    const k = tbGenOrderKey(o);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  tbSaveOrders(uid, deduped.sort((a, b) => b.createdAt - a.createdAt));
+  return fresh.length;
+}
+
+/** 现有订单去重素材（生成前传入防重复） */
+export function tbExistingOrderTitles(uid: string): string[] {
+  return tbLoadOrders(uid).map((o) => o.items[0]?.title ?? '').filter(Boolean);
 }
 
 // ---------------- 站内消息（交易物流 / 售后保障） ----------------

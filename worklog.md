@@ -18116,3 +18116,28 @@ Work Log:
 - 【img 空串报错】taobao-msg-chat.tsx OrderCardMsg 裸 <img src={first.img}>（历史订单 img 可为空串=console 报错根因）换 TbImg + 空值按 productById(pid).tag 兜底；ProductCardMsg 同步换 TbImg（带 shimmer）
 - E2E（agent-browser 全真浏览器全新 profile 全链路）：联系人 App 建 USER 小淘（wxid_nu9dv3yt/wxtb123）→淘宝微信账密登录成功→首页信息流 46 图 0 裂图（6 个 naturalWidth=0 均为懒加载未入屏，文件 curl 全 200）→商品详情/购买弹窗/确认订单全链正常；bunx tsc --noEmit 0 错误；browser console 0 新错误（空 src 报错消失）；dev.log 无新增运行时错误（仅仓库固有 instrumentation Edge 警告）；/api/tb-feed 实测 z-ai 内置模型已恢复可用（source=sdk 正常出新品类数据），AI 失败时本地生成器兜底双保险
 - 备注：①鼠标滚轮/拖拽不能滚动 App 内 overflow 容器（E2E 用 scrollTop 直设 + TouchEvent 派发做下拉刷新）；②淘宝「返回」在商品详情根态会直接退出 App（既有行为非本次引入）；③美团 App 本次零改动
+
+---
+Task ID: 62
+Agent: main (Z.ai Code)
+Task: 用户五点新需求——①口红质地移出购买弹窗（质地是口红类型本身，体现在标题）；②检查全部订单图片缺口补完（机票/火车票/酒店/电影订单图缺失）；③美团机票火车票/闪购/电影演出/酒店旅行等全部有订单的页面支持上滑刷新生成+下滑无限生成；④平板电脑购买弹窗加网络类型(5G全网通)/套餐类型(官方标配)/版本类型(中国大陆)/发货方式(仓库直发)；⑤淘宝美团全部界面刷新生成统一走设置里用户配置的 API 模型
+
+Work Log:
+- 图片缺口实锤排查：美团 travel 频道下单 mtImg('flight'/'train') 在 goods-img 图库无映射→机票/火车票订单兜底显示一盘菜（mt-chinese-food）；酒店/电影无专属图。新增 scripts/gen-travel-goods.ts（与 gen-goods-svg 同款 kawaii 风格：暖棕描边+腮红+粉彩底+闪光）手绘 4 张 SVG 经 sharp 落盘 public/goods/：mt-flight 小客机（云朵舷窗+侧翼+云带）/mt-train 高铁车头（子弹头+车窗+轨道，首版蓝窗溢出轮廓已重画收敛）/mt-hotel 小楼酒店（遮阳篷+星级旗+月亮）/mt-movie 电影票根+爆米花桶（kawaii 脸）
+- goods-img.ts：MT_FOOD 直配 flight/train/hotel/movie 四 tag；MT_FOOD_ALIAS 加 plane/airplane/jipiao→flight、highspeed/rail/huochepiao→train、homestay/minsu/jiudian→hotel、cinema/dianying/show/ticket→movie；MT_STOREFRONT 的 hotel/movie 门头改用新插画（shop-fun 泛图退役）
+- tb-img.tsx FALLBACK_EMOJI 补 flight✈️/train🚄/hotel🏨/movie🎬/plane/cinema
+- 口红质地移出购买弹窗：taobao-data.ts p-lipstick-1 SKU 删「质地」组（保留色号21+规格）；tb-product-gen.ts lipstick 品类 SKU 同步删质地组（标题仍带质地 pick(LIP_KINDS)——质地是商品类型本身）
+- 平板/电脑购买弹窗 4 组规格（用户指定原文）：taobao-data.ts p-tablet-1/p-laptop-1 各加 网络类型[5G全网通]/套餐类型[官方标配]/版本类型[中国大陆]/发货方式[仓库直发]；tb-product-gen.ts phone 补齐版本类型+发货方式（原有网络/套餐）、laptop 加全 4 组、tablet 网络类型从 WiFi版/插卡版 改为 5G全网通 单选+加全 4 组
+- 美团订单生成器（meituan-store.ts）：mtGenHistoryOrders 确定性生成（mulberry32，同批次同结果可复现）+ mtBuildGenOrder（completed/canceled 终态历史单，createdAt 向过去推 daysAgo 天）+ mtInsertGenOrders（写入真实订单存储按时间归位+存量同 key 去重）+ mtExistingOrderKeys/mtGenOrderKey 去重素材；7 频道轮转池：真实外卖商家(MT_MERCHANTS)/闪购超市便利(永辉/物美/711/百果园/药房/花加)/美食团购(MT_DEALS)/机票(南航东航国航吉祥川航 CZ·MU·CA·HO·3U)/酒店(亚朵全季汉庭希尔顿欢朋)/电影演出(万达IMAX/CGV/横店+KTV密室)/火车票(G101·G39·D2281·G87·K599)；图走对应品类插画（flight/train/hotel/movie/store/菜品真实图）；kind 复用现有四枚举（酒店/电影/玩乐=tuangou、闪购=waimai）零状态机改动；MAX_ORDERS 60→200
+- 淘宝订单生成器（taobao-store.ts）：tbGenHistoryOrders 复用 tbGenProducts 全品类生成器（品牌/型号/类型多样化）构建历史单（status 分布 shipped 42%/completed 48%/pendingDeliver 5%/cancelled 5%，shipped/completed 带 track 物流轨迹）+ tbBuildGenOrder（AI 数据落地，skuText「颜色分类：X；存储容量：Y」解析成 sku 对象）+ tbInsertGenOrders（存量同 key 去重根治「订单上下重复」）
+- 新 API /api/mt-orders 与 /api/tb-orders：extractUpstreamConfig→completeWithFallback（用户配置模型优先→z-ai-web-dev-sdk 内置兜底）→parseLooseJSON 容错解析→逐字段收窄（channel/kind 白名单、价格钳位、排除名单去重）；两级都失败返回 ok:false，前端走本地生成器永不空转
+- 美团 OrdersPage：接 useTbPullRefresh（通用双向刷新）——下拉=生成 3 条新单前插+toast「已刷新出 N 条新订单」、上滑距底 500px=生成 3 条更早历史单、不足一屏自动补一批（否则无法滚动触发上滑）；footer「正在生成更多订单…/上滑加载更多订单」；AI 数据 channelArtOf 映射图片（hotel→mt-hotel、movie→mt-movie、flight→mt-flight、train→mt-train、shangou/fun→store、默认 chinese-food）
+- 淘宝 OrdersPage：useTbPullRefresh 回调升级 async——下拉=tbTickOrders+生成 2 条新单+toast；上滑+不足一屏自动补货同构；genBusyRef 防并发
+- 淘宝搜索页 AI 化：/api/tb-feed surface 枚举+SURFACES+surfaceTask+ITEM_SCHEMA+buildSystem+PRICE_RANGE+DEFAULT_TITLE+coerceItem 全链新增 'search'（提示词要求品牌/型号/质地/色号与搜索词强相关）；TbFeedSurface 类型加 search；SearchResultPage 滚动到底时 pullAiRef 调 tbFetchAiBatch(surface=search,tab=kw,exclude=已显示标题) 静默注入商品池（aiTick 触发 seedHits 重算），AI 失败本地生成器兜底
+- E2E（agent-browser 实机全链路）：锁屏滑动解锁→App库→淘宝：搜索「手机」出 华为Mate70/小米15Ultra/三星S25/OPPO Reno13/一加Ace5/vivo Y300/真我Neo7/iPhone 品牌型号多样化，无限下滑 42 商品 0 重复；订单页 AI 自动补货（华为Mate60Pro ¥6999 已发货、小米15 ¥4299、AirPods Pro2、Redmi Buds5Pro）连滚 29 单 0 重复；口红详情 SKU 弹窗=「色号(21)」无质地组✓；平板 SKU 弹窗=颜色分类(2)+版本(2)+网络类型(1)5G全网通+套餐类型(1)官方标配+版本类型(1)中国大陆+发货方式(1)仓库直发✓
+- E2E 美团（localStorage 注入 wx 登录态+美团微信会话，与淘宝同 contactId）：订单页 AI 自动补货出 海底捞双人套餐¥168/万达影城复仇者联盟4¥178（新电影票插画）/永辉超市水果礼盒/盒马鲜生牛排礼盒/美团机票东航MU5101 ¥680（新飞机插画）/全季酒店豪华大床房¥328（新酒店插画）+东航MU5137/国航CA1234/G101·G103·G123次（新高铁插画）；机票订单详情「行程已结束·感谢乘坐」+出票状态/退改规则全链路无崩溃；订单图盘点 mt-train/mt-flight/mt-hotel/mt-movie 全部在列；browser console 0 错误（img 空 src 已根治）
+- bunx tsc --noEmit 0 错误；dev.log 无新增错误（仅仓库固有 instrumentation Edge 警告）
+
+Stage Summary:
+- 交付：①口红质地退出购买弹窗（21色号保留）；②机票/火车票/酒店/电影演出订单专属插画补齐（+4 张 kawaii webp，订单图不再兜底成菜品）；③美团订单页双向无限生成（7 频道池，下拉出新单/上滑加载更早单）；④平板/电脑购买弹窗 4 组规格（网络类型5G全网通/套餐类型官方标配/版本类型中国大陆/发货方式仓库直发，手机同步补齐）；⑤淘宝美团订单+搜索全部走「设置›API配置」用户配置模型（内置模型兜底→本地确定性生成器兜底，三级永不空转）；订单上下重复根治（生成侧去重+存量同 key 清理）
+- 改动文件：scripts/gen-travel-goods.ts(+新增)、public/goods/mt-{flight,train,hotel,movie}.webp(+4张)、src/lib/ios/goods-img.ts、src/lib/ios/tb-img.tsx（emoji）、src/lib/ios/taobao-data.ts、src/lib/ios/tb-product-gen.ts、src/lib/ios/meituan-store.ts、src/lib/ios/taobao-store.ts、src/app/api/mt-orders/route.ts(+新增)、src/app/api/tb-orders/route.ts(+新增)、src/app/api/tb-feed/route.ts、src/lib/ios/tb-ai-store.ts、src/components/apps/taobao.tsx、src/components/apps/meituan.tsx

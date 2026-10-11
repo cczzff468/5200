@@ -156,6 +156,7 @@ import {
   mtActivateDrugFund,
   mtApplyCardQuota,
   mtApplyRefund,
+  mtBuildGenOrder,
   mtCanRefund,
   mtCardQuotaAvailable,
   mtCardQuotaUsed,
@@ -169,12 +170,15 @@ import {
   mtCouponTypeLabel,
   mtCurAddrId,
   mtDeliveryMinutesOf,
+  mtExistingOrderKeys,
+  mtGenHistoryOrders,
   mtGetOrder,
   mtGetSearchHist,
   mtGetSession,
   mtApplyLoanCredit,
   mtBorrow,
   mtIdpLoggedIn,
+  mtInsertGenOrders,
   mtListUsableCoupons,
   mtLoanAvailable,
   mtLoanAprOf,
@@ -245,6 +249,7 @@ import {
   type MtWalletBill,
 } from '@/lib/ios/meituan-store';
 import { mtExecutePay, mtListPayChannels, type MtPayChannel } from '@/lib/ios/meituan-pay';
+import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 import { WxPayPwdGate, wxLoadPayPwd } from './wechat-wallet';
 import { PayPwdGate as QqPayPwdGate, loadPayPwd as qqLoadPayPwd } from './qq';
 import { mtCreateProxyRequest, mtGetProxy, mtSyncProxiesForUid } from '@/lib/ios/mt-proxy-pay';
@@ -3499,6 +3504,114 @@ function OrdersPage({
   useOrdersTick();
   const orders = mtLoadOrders(uid);
   const cur = ORDER_TABS.find((t) => t.key === tab) ?? ORDER_TABS[0];
+  // 历史订单无限生成（需求「只要有订单的地方就能上滑刷新生成，下滑无限生成」）：
+  // 外卖/闪购/团购/机票/火车票/酒店/电影演出频道池轮转；AI（设置里用户配置模型）优先，
+  // 失败本地确定性生成器兑底；新单入库按时间归位，商家+商品去重绝不与已有订单重复
+  const apiConfigMt = useSettings((s) => s.apiConfig);
+  const apiCfgMtRef = useRef(apiConfigMt);
+  apiCfgMtRef.current = apiConfigMt;
+  const genBatchRef = useRef(0);
+  const genBusyRef = useRef(false);
+  const [genLoading, setGenLoading] = useState(false);
+  const [, setTickOrders] = useState(0);
+
+  /** AI 频道 → 图片 tag / emoji（本地卡通插画与内容一致） */
+  const channelArtOf = (channel: string): { img: string; emoji: string } => {
+    switch (channel) {
+      case 'hotel':
+        return { img: mtImg('hotel', 240, 240, 0, 'f'), emoji: '🏨' };
+      case 'movie':
+        return { img: mtImg('movie', 240, 240, 0, 'f'), emoji: '🎬' };
+      case 'flight':
+        return { img: mtImg('flight', 240, 240, 0, 'f'), emoji: '✈️' };
+      case 'train':
+        return { img: mtImg('train', 240, 240, 0, 'f'), emoji: '🚄' };
+      case 'shangou':
+        return { img: mtImg('store', 240, 240, 1, 'f'), emoji: '🛒' };
+      case 'fun':
+        return { img: mtImg('store', 240, 240, 0, 'f'), emoji: '🎡' };
+      default:
+        return { img: mtImg('chinese-food', 240, 240, 0, 'f'), emoji: '🍜' };
+    }
+  };
+
+  /** 生成一批历史订单：/api/mt-orders（用户配置模型 → 内置模型）失败 → 本地生成器；返回新增条数 */
+  const genMoreOrders = async (count: number): Promise<number> => {
+    if (genBusyRef.current) return 0;
+    genBusyRef.current = true;
+    setGenLoading(true);
+    try {
+      const exclude = mtExistingOrderKeys(uid);
+      let batch: MtOrder[] | null = null;
+      try {
+        const res = await fetch('/api/mt-orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            config: apiCfgMtRef.current,
+            exclude: exclude.slice(0, 80),
+            count,
+            nonce: `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
+          }),
+          signal: AbortSignal.timeout(45_000),
+        });
+        const data = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          items?: Array<{ merchantName?: string; kind?: string; channel?: string; itemName?: string; price?: number; qty?: number; total?: number; spec?: string; daysAgo?: number; canceled?: boolean }>;
+        } | null;
+        if (res.ok && data && data.ok === true && Array.isArray(data.items) && data.items.length > 0) {
+          batch = data.items
+            .filter((raw) => typeof raw.merchantName === 'string' && raw.merchantName.trim() && typeof raw.itemName === 'string' && raw.itemName.trim() && typeof raw.price === 'number')
+            .map((raw, i) => {
+              const channel = typeof raw.channel === 'string' ? raw.channel : 'waimai';
+              const art = channelArtOf(channel);
+              const kind = raw.kind === 'tuangou' || raw.kind === 'flight' || raw.kind === 'train' ? raw.kind : 'waimai';
+              return mtBuildGenOrder(
+                uid,
+                {
+                  merchantName: String(raw.merchantName).trim(),
+                  kind,
+                  channel,
+                  itemName: String(raw.itemName).trim(),
+                  price: Number(raw.price),
+                  qty: typeof raw.qty === 'number' ? raw.qty : 1,
+                  total: typeof raw.total === 'number' ? raw.total : undefined,
+                  spec: typeof raw.spec === 'string' ? raw.spec : undefined,
+                  emoji: art.emoji,
+                  img: art.img,
+                  daysAgo: typeof raw.daysAgo === 'number' ? raw.daysAgo : 3,
+                  canceled: raw.canceled === true,
+                },
+                i
+              );
+            });
+          if (batch.length === 0) batch = null;
+        }
+      } catch {
+        batch = null;
+      }
+      if (!batch) batch = mtGenHistoryOrders(uid, genBatchRef.current++, exclude);
+      return mtInsertGenOrders(uid, batch);
+    } finally {
+      genBusyRef.current = false;
+      setGenLoading(false);
+    }
+  };
+
+  // 下拉刷新：推进状态 + 生成最近新单前插（对齐真机下拉出现新订单）
+  const pull = useTbPullRefresh(async () => {
+    const n = await genMoreOrders(3);
+    onToast(n > 0 ? `已刷新出 ${n} 条新订单` : '订单已更新');
+  });
+  // 订单不足一屏时自动补一批（用户无法滚动时上滑加载永远不触发）
+  useEffect(() => {
+    const el = pull.scrollRef.current;
+    if (!el || genBusyRef.current) return;
+    if (el.scrollHeight <= el.clientHeight + 60) {
+      void genMoreOrders(3).then(() => setTickOrders((x) => x + 1));
+    }
+  });
+
   // 搜索（商家/菜品/订单号）+ 状态筛选（与页签叠加）
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState<OrderFilterKey>('all');
@@ -3580,7 +3693,18 @@ function OrdersPage({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={pull.scrollRef}
+          {...pull.bind}
+          className="h-full overflow-y-auto pb-4"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            if (el.scrollTop + el.clientHeight >= el.scrollHeight - 500 && !genBusyRef.current) {
+              void genMoreOrders(3).then(() => setTickOrders((x) => x + 1));
+            }
+          }}
+        >
         {list.length === 0 && (
           <div className="mt-24 text-center">
             <p className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-black/[0.05]">
@@ -3752,7 +3876,10 @@ function OrdersPage({
               </div>
             );
           })}
+          <div className="py-3 text-center text-[12px] text-black/35">{genLoading ? '正在生成更多订单…' : '上滑加载更多订单'}</div>
         </div>
+        </div>
+        <TbPullIndicator h={pull} />
       </div>
 
       {/* 筛选弹层（状态细分，与页签叠加） */}

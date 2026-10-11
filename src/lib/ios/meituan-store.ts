@@ -13,7 +13,7 @@ import { accLs, getActiveAccountFor, isForceLoginWallActive } from '@/lib/ios/ac
 import { getContact, listContacts } from '@/lib/ios/contacts-store';
 import type { ContactRecord } from '@/lib/contacts';
 import { avatarFor } from '@/lib/contacts';
-import { MT_COUPON_SEED, MT_COUPON_TYPE_LABEL, MT_GOD_CLAIMS, MT_DEALS, MT_MERCHANTS, mtDishesOf, type MtCouponSeed, type MtCouponType, type MtMerchant, type MtShopCouponDef } from './meituan-data';
+import { MT_COUPON_SEED, MT_COUPON_TYPE_LABEL, MT_GOD_CLAIMS, MT_DEALS, MT_MERCHANTS, mtDishesOf, mtImg, type MtCouponSeed, type MtCouponType, type MtMerchant, type MtShopCouponDef } from './meituan-data';
 
 // ---------------- 登录态 ----------------
 
@@ -499,7 +499,7 @@ export interface MtOrderReview {
 }
 
 const ordersKey = (uid: string) => `mt-orders:${uid}`;
-const MAX_ORDERS = 60;
+const MAX_ORDERS = 200;
 
 export function mtLoadOrders(uid: string): MtOrder[] {
   const list = kvGet<Partial<MtOrder>[]>(ordersKey(uid));
@@ -1691,4 +1691,217 @@ export function mtAddInvoice(uid: string, inv: Omit<MtInvoice, 'id' | 'at' | 'st
   const full: MtInvoice = { ...inv, id: `inv${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, status: '已开票', at: Date.now() };
   mtSaveInvoices(uid, [full, ...mtLoadInvoices(uid)]);
   return full;
+}
+
+// ---------------- 历史订单无限生成（需求「只要有订单的地方就能上滑刷新生成，下滑无限生成」） ----------------
+//
+// - 频道池覆盖 外卖/闪购/团购/机票/火车票/酒店/电影演出/休闲玩乐（商家名+商品名体现频道，图走对应品类插画）；
+// - 确定性生成（同批次号同结果），跨批去重（商家名|商品名 组合），绝不与已有订单重复；
+// - 生成订单直接写入真实订单存储（unshift 前插保持时间序），详情/评价/退款/券码全链路复用；
+// - 下拉刷新出「最近的新单」，上滑到底加载「更早的历史单」（createdAt 随批次向过去递增）。
+
+/** mulberry32：seed → 确定性伪随机序列（与 tb-product-gen 同款） */
+function mtRngFrom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function mtHashStr(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h >>> 0;
+}
+
+const round2Mt = (n: number) => Math.round(n * 100) / 100;
+
+/** 闪购/超市便利池：[商家名， [商品名， 价， 图tag], ...] */
+const GEN_SHANGOU: Array<[string, Array<[string, number, string]>]> = [
+  ['永辉超市（万达广场店）', [['海南香蕉 1把（约1kg）', 6.9, 'fruit'], ['农夫山泉饮用天然水 550ml×12瓶', 25.9, 'store'], ['乐事薯片经典原味 70g', 5.5, 'snacks']]],
+  ['物美超市（新华路店）', [['红富士苹果 4个装', 12.9, 'fruit'], ['蒙牛纯牛奶 250ml×16盒', 49.9, 'milk'], ['心相印抽纸 3层100抽×6包', 29.9, 'store']]],
+  ['711便利店（建设路店）', [['饭团（金枪鱼味）', 7.8, 'rice'], ['关东煮（3串组合）', 12.5, 'hotpot'], ['冰镇可乐 500ml', 3.5, 'cola']]],
+  ['百果园（朝阳门店）', [['智利车厘子 JJ级 500g', 39.9, 'fruit'], ['泰国金枕榴莲肉 300g盒装', 29.9, 'fruit'], ['当季混装水果切盒', 15.9, 'fruit']]],
+  ['康佰馨大药房（文化路店）', [['999感冒灵颗粒 10袋', 15.5, 'medicine'], ['医用外科口罩 50只装', 19.9, 'medicine'], ['维生素C咀嚼片 60片', 29.9, 'medicine']]],
+  ['花加生活馆（万象城店）', [['碎冰蓝玫瑰花束 9朵', 99, 'flower'], ['向日葵单支鲜花', 12.9, 'flower'], ['康乃馨混合花束 19朵', 138, 'flower']]],
+];
+
+/** 酒店旅行池 */
+const GEN_HOTEL: Array<[string, Array<[string, number]>]> = [
+  ['亚朵酒店（市中心店）', [['高级大床房 1间1晚', 329], ['豪华双床房 1间1晚（含双早）', 399], ['智能景观大床房 1间1晚', 419]]],
+  ['全季酒店（高铁站店）', [['标准大床房 1间1晚', 259], ['商务双床房 1间1晚', 289], ['全季甄选套房 1间1晚', 529]]],
+  ['汉庭酒店（步行街店）', [['汉庭优享大床房 1间1晚', 189], ['家庭双床房 1间1晚', 229]]],
+  ['希尔顿欢朋（会展中心店）', [['欢朋套房 1间1晚（含双早）', 468], ['高级标间 1间1晚', 358]]],
+];
+
+/** 电影演出/休闲玩乐池 */
+const GEN_FUN: Array<[string, string, Array<[string, number]>]> = [
+  ['万达影城（IMAX万象店）', 'movie', [['热映通兑票 2D/3D通用 1张', 39.9], ['IMAX 2D兑换券 1张', 59.9], ['双人情侣套票（2张+中爆1份）', 99]]],
+  ['CGV影城（银泰城店）', 'movie', [['4DX动感影票 1张', 79.9], ['黄金场通兑票 1张', 45]]],
+  ['横店影视电影城（高新店）', 'movie', [['2D通兑票 1张', 35.9]]],
+  ['纯K party（朝阳店）', 'fun', [['欢唱3小时小包套餐（含果盘）', 128], ['周末欢唱下午场 4小时', 168]]],
+  ['万达宝贝王（儿童乐园）', 'fun', [['一大一小畅玩票 全天通用', 88]]],
+  ['天空之城密室逃脱', 'fun', [['恐怖主题《回声》单人票', 98], ['古风实景《长安乱》双人票', 188]]],
+];
+
+/** 机票/火车票池 */
+const GEN_TRIP: Array<[string, 'flight' | 'train', string, number]> = [
+  ['美团机票', 'flight', '南航CZ6789 北京→上海 经济舱', 720],
+  ['美团机票', 'flight', '东航MU5137 北京→成都 经济舱', 860],
+  ['美团机票', 'flight', '国航CA1515 杭州→广州 经济舱', 780],
+  ['美团机票', 'flight', '吉祥HO1251 上海→三亚 经济舱', 940],
+  ['美团机票', 'flight', '川航3U8882 成都→深圳 经济舱', 810],
+  ['美团火车票', 'train', 'G101次 北京南→上海虹桥 二等座', 553],
+  ['美团火车票', 'train', 'G39次 北京西→西安北 二等座', 515.5],
+  ['美团火车票', 'train', 'D2281次 上海→武汉 二等座', 264],
+  ['美团火车票', 'train', 'G87次 北京西→长沙南 一等座', 926],
+  ['美团火车票', 'train', 'K599次 郑州→广州 硬卧', 288.5],
+];
+
+/** 团购到店池（美食团购：从 MT_DEALS 取真实套餐，图价全对） */
+const GEN_TUANGOU_SHOPS = ['上岛咖啡（旗舰店）', '海底捞火锅（万达店）', '西贝莜面村（购物中心店）'];
+
+/** 订单去重 key（商家名|首件商品名）：跨批/与存量订单绝不重复 */
+export function mtGenOrderKey(o: Pick<MtOrder, 'merchantName' | 'items'>): string {
+  return `${o.merchantName}|${o.items[0]?.name ?? ''}`;
+}
+
+/** AI/本地生成条目 → MtOrder（completed/canceled 终态历史单，createdAt 向过去推 daysAgo 天） */
+export function mtBuildGenOrder(
+  uid: string,
+  raw: {
+    merchantName: string;
+    kind: MtOrderKind;
+    /** 频道 tag（决定图标 emoji 与展示）：waimai/shangou/hotel/movie/fun/flight/train/tuangou */
+    channel?: string;
+    itemName: string;
+    price: number;
+    qty?: number;
+    total?: number;
+    spec?: string;
+    emoji?: string;
+    img?: string;
+    daysAgo: number;
+    canceled?: boolean;
+  },
+  idx = 0
+): MtOrder {
+  const qty = Math.max(1, Math.round(raw.qty ?? 1));
+  const price = Math.max(0.01, round2Mt(raw.price));
+  const total = Math.max(0.01, round2Mt(raw.total ?? price * qty));
+  const now = Date.now();
+  const jitter = ((mtHashStr(raw.merchantName + raw.itemName) % 40) + idx * 3) * 3600_000;
+  const createdAt = now - Math.max(1, raw.daysAgo) * 86_400_000 - jitter;
+  const channel = raw.channel ?? raw.kind;
+  const emoji = raw.emoji ?? (channel === 'hotel' ? '🏨' : channel === 'movie' ? '🎬' : channel === 'flight' ? '✈️' : channel === 'train' ? '🚄' : channel === 'shangou' ? '🛒' : channel === 'fun' ? '🎡' : '🍜');
+  const canceled = raw.canceled === true;
+  const paidAt = createdAt + 2 * 60_000;
+  return {
+    id: `mtg${mtHashStr(`${raw.merchantName}|${raw.itemName}|${raw.daysAgo}`).toString(36)}${idx}`,
+    uid,
+    merchantId: channel === 'hotel' ? `fun-hotel-${mtHashStr(raw.merchantName)}` : channel === 'movie' || channel === 'fun' ? `fun-${channel}-${mtHashStr(raw.merchantName)}` : `gen-${mtHashStr(raw.merchantName).toString(36)}`,
+    merchantName: raw.merchantName,
+    merchantEmoji: emoji,
+    merchantImg: raw.img,
+    kind: raw.kind,
+    items: [{ dishId: `gen-${mtHashStr(raw.itemName).toString(36)}`, name: raw.itemName, price, qty, emoji, img: raw.img, spec: raw.spec }],
+    itemTotal: total,
+    deliveryFee: raw.kind === 'waimai' ? (channel === 'shangou' ? 3 : 0) : 0,
+    discount: 0,
+    total,
+    status: canceled ? 'canceled' : 'completed',
+    createdAt,
+    paidAt: canceled ? undefined : paidAt,
+    cancelReason: canceled ? '多拍/拍错，主动取消' : undefined,
+    consumedAt: !canceled && raw.kind === 'tuangou' ? paidAt + 3600_000 : undefined,
+    statusLog: canceled
+      ? [{ status: 'pendingPay' as const, at: createdAt }, { status: 'canceled' as const, at: createdAt + 600_000 }]
+      : [{ status: 'pendingPay' as const, at: createdAt }, { status: 'pendingAccept' as const, at: paidAt }, { status: 'completed' as const, at: paidAt + 30 * 60_000 }],
+  };
+}
+
+/** 第 batch 批本地历史订单（频道轮转，一批 3 条，确定性可复现，跨批去重） */
+export function mtGenHistoryOrders(uid: string, batch: number, excludeKeys: string[]): MtOrder[] {
+  const r = mtRngFrom((mtHashStr('mt-gen-orders') ^ Math.imul(batch + 1, 2654435761)) >>> 0);
+  const ex = new Set(excludeKeys);
+  const out: MtOrder[] = [];
+  const baseDays = 2 + batch * 4;
+  const pick2 = <T,>(arr: T[]): T => arr[Math.floor(r() * arr.length) % arr.length];
+  let tries = 0;
+  while (out.length < 3 && tries < 24) {
+    tries += 1;
+    const slot = (batch * 3 + tries) % 7;
+    let raw: Parameters<typeof mtBuildGenOrder>[1] | null = null;
+    if (slot === 0) {
+      // 真实外卖商家（MT_MERCHANTS 取店取菜）
+      const m = MT_MERCHANTS[Math.floor(r() * MT_MERCHANTS.length) % MT_MERCHANTS.length];
+      const dishes = mtDishesOf(m);
+      const d = dishes[Math.floor(r() * dishes.length) % dishes.length];
+      if (!d) continue;
+      raw = { merchantName: m.name, kind: 'waimai', channel: 'waimai', itemName: d.name, price: d.price, qty: 1 + (Math.floor(r() * 2) % 2), emoji: d.emoji, img: d.img ?? m.cover, daysAgo: baseDays + Math.floor(r() * 3), canceled: r() < 0.08 };
+    } else if (slot === 1) {
+      // 闪购/超市便利
+      const [shop, items] = pick2(GEN_SHANGOU);
+      const [name, price, tag] = pick2(items);
+      raw = { merchantName: shop, kind: 'waimai', channel: 'shangou', itemName: name, price, qty: 1, emoji: '🛒', img: mtImg(tag, 240, 240, 1, 'f'), spec: '极速送 · 30分钟达', daysAgo: baseDays + Math.floor(r() * 3), canceled: r() < 0.08 };
+    } else if (slot === 2) {
+      // 美食团购到店
+      const deals = MT_DEALS.slice(0, 40);
+      const d = deals[Math.floor(r() * deals.length) % deals.length];
+      raw = { merchantName: d.merchantId ? MT_MERCHANTS.find((m) => m.id === d.merchantId)?.name ?? pick2(GEN_TUANGOU_SHOPS) : pick2(GEN_TUANGOU_SHOPS), kind: 'tuangou', channel: 'tuangou', itemName: d.title, price: d.price, qty: 1, emoji: d.emoji, img: d.img, spec: d.usable, daysAgo: baseDays + Math.floor(r() * 3), canceled: r() < 0.08 };
+    } else if (slot === 3) {
+      // 机票
+      const [shop, , item, price] = pick2(GEN_TRIP.filter((x) => x[1] === 'flight'));
+      raw = { merchantName: shop, kind: 'flight', channel: 'flight', itemName: item, price, qty: 1, emoji: '✈️', img: mtImg('flight', 240, 240, 0, 'f'), spec: `${baseDays % 28 + 1}日出行的已出行订单 · 经济舱`, daysAgo: baseDays + Math.floor(r() * 3), canceled: r() < 0.05 };
+    } else if (slot === 4) {
+      // 酒店
+      const [shop, items] = pick2(GEN_HOTEL);
+      const [name, price] = pick2(items);
+      raw = { merchantName: shop, kind: 'tuangou', channel: 'hotel', itemName: name, price, qty: 1, emoji: '🏨', img: mtImg('hotel', 240, 240, 0, 'f'), spec: '已离店 · 在线选房', daysAgo: baseDays + Math.floor(r() * 3), canceled: r() < 0.08 };
+    } else if (slot === 5) {
+      // 电影演出/休闲玩乐
+      const [shop, ch, items] = pick2(GEN_FUN);
+      const [name, price] = pick2(items);
+      raw = { merchantName: shop, kind: 'tuangou', channel: ch === 'movie' ? 'movie' : 'fun', itemName: name, price, qty: ch === 'movie' ? 2 : 1, emoji: ch === 'movie' ? '🎬' : '🎡', img: mtImg(ch === 'movie' ? 'movie' : 'store', 240, 240, 0, 'f'), spec: ch === 'movie' ? '已过场次 · 凭码入场' : '已消费 · 到店出示', daysAgo: baseDays + Math.floor(r() * 3), canceled: r() < 0.08 };
+    } else {
+      // 火车票
+      const [shop, , item, price] = pick2(GEN_TRIP.filter((x) => x[1] === 'train'));
+      raw = { merchantName: shop, kind: 'train', channel: 'train', itemName: item, price, qty: 1, emoji: '🚄', img: mtImg('train', 240, 240, 0, 'f'), spec: '已出行 · 凭身份证检票', daysAgo: baseDays + Math.floor(r() * 3), canceled: r() < 0.05 };
+    }
+    if (!raw) continue;
+    const order = mtBuildGenOrder(uid, raw, tries);
+    const key = mtGenOrderKey(order);
+    if (ex.has(key)) continue;
+    ex.add(key);
+    out.push(order);
+  }
+  return out;
+}
+
+/** 生成订单入库（前插去重，不覆盖用户真实订单；返回实际新增条数）
+ *  同时对存量做同 key 去重（保留最新一条）——防止历史遗留重复订单反复出现 */
+export function mtInsertGenOrders(uid: string, batch: MtOrder[]): number {
+  const list = mtLoadOrders(uid);
+  const ex = new Set(list.map(mtGenOrderKey));
+  const fresh = batch.filter((o) => !ex.has(mtGenOrderKey(o)) && !list.some((x) => x.id === o.id));
+  if (fresh.length === 0) return 0;
+  // 存量+新单合并去重（list 已按时间倒序，同 key 保留第一条即最新）
+  const seen = new Set<string>();
+  const deduped = [...fresh, ...list].filter((o) => {
+    const k = mtGenOrderKey(o);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  mtSaveOrders(uid, deduped.sort((a, b) => b.createdAt - a.createdAt).slice(0, MAX_ORDERS));
+  return fresh.length;
+}
+
+/** 现有订单全部去重 key（下拉/上滑生成前传入防重复） */
+export function mtExistingOrderKeys(uid: string): string[] {
+  return mtLoadOrders(uid).map(mtGenOrderKey);
 }

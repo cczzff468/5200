@@ -41,6 +41,8 @@ const FALLBACK_EMOJI: Record<string, string> = {
   rice: '🍚', dessert: '🍰', 'ice-cream': '🍦', coffee: '☕', juice: '🧃', milk: '🥛', egg: '🍳',
   breakfast: '🍞', dumplings: '🥟', sushi: '🍣', barbecue: '🍢', 'chinese-food': '🥘', seafood: '🦀',
   beef: '🥩', salad: '🥗', soup: '🥣', cola: '🥤', medicine: '💊', store: '🛍️',
+  // 出行/文旅（机票/火车票/酒店/电影演出订单图）
+  flight: '✈️', train: '🚄', hotel: '🏨', movie: '🎬', plane: '✈️', cinema: '🎬',
 };
 
 function fallbackEmojiOf(src: string | undefined): string | undefined {

@@ -159,7 +159,9 @@ export type TbFeedSurface =
   /** 淘票票·即将上映新片 */
   | 'movieUp'
   /** 领券中心好券流（Task 46：下拉换新券前插 / 底部拉一拉追加） */
-  | 'coupon';
+  | 'coupon'
+  /** 搜索结果页无限下滑 AI 生成（与搜索词品类强相关的品牌/型号商品） */
+  | 'search';
 
 /** tag → 分类（图链品类词与 TB_CATS 对齐） */
 function catOf(tag: string): TbProduct['cat'] {

@@ -46,10 +46,29 @@ const MT_FOOD: Record<string, string> = {
   medicine: g('mt-medicine'),
   flower: g('mt-flower'),
   store: g('mt-store'),
+  // 出行/文旅订单（机票/火车票/酒店/电影演出——订单图不再兑成菜品）
+  flight: g('mt-flight'),
+  train: g('mt-train'),
+  hotel: g('mt-hotel'),
+  movie: g('mt-movie'),
 };
 
 /** 美团长尾 tag 归并（TAG_RULES 兜底词 / AI 动态菜 → 近似品类图） */
 const MT_FOOD_ALIAS: Record<string, string> = {
+  // 出行/文旅长尾
+  plane: 'flight',
+  airplane: 'flight',
+  jipiao: 'flight',
+  highspeed: 'train',
+  rail: 'train',
+  huochepiao: 'train',
+  homestay: 'hotel',
+  minsu: 'hotel',
+  jiudian: 'hotel',
+  cinema: 'movie',
+  dianying: 'movie',
+  show: 'movie',
+  ticket: 'movie',
   // 饮品
   milkshake: 'milk-tea',
   suanmeitang: 'juice',
@@ -111,9 +130,11 @@ const MT_STOREFRONT: Record<string, string> = {
   dessert: g('shop-milktea'),
   'ice-cream': g('shop-milktea'),
   // 酒店/电影/休闲/未知频道门头
-  hotel: g('shop-fun'),
-  movie: g('shop-fun'),
-  dianying: g('shop-fun'),
+  hotel: g('mt-hotel'),
+  movie: g('mt-movie'),
+  dianying: g('mt-movie'),
+  flight: g('mt-flight'),
+  train: g('mt-train'),
   yiliao: g('shop-pharmacy'),
   maiyao: g('shop-pharmacy'),
 };

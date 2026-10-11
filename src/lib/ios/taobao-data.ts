@@ -234,6 +234,10 @@ export const TB_PRODUCTS: TbProduct[] = [
   P('p-laptop-1', '轻薄笔记本电脑 14英寸2.8K 高色域 办公学生学习本 背光键盘 长续航', 4599, 5299, 3400, 's-keke', 'digital', 'laptop', ['退货宝', '全国联保', '分期免息'], [
     colorGroup('laptop', ['银色', '深空灰'], []),
     { name: '配置', options: [{ label: '16G+512G' }, { label: '32G+1T', priceDelta: 600 }] },
+    { name: '网络类型', options: [{ label: '5G全网通' }] },
+    { name: '套餐类型', options: [{ label: '官方标配' }] },
+    { name: '版本类型', options: [{ label: '中国大陆' }] },
+    { name: '发货方式', options: [{ label: '仓库直发' }] },
   ]),
   P('p-watch-1', '智能手表 运动血氧心率监测 语音蓝牙通话 超长续航 适用多机型', 299, 399, 15000, 's-digital2', 'digital', 'watch', ['退货宝', '一年换新'], [
     colorGroup('watch', ['曜石黑', '流沙金', '樱花粉'], []),
@@ -252,6 +256,10 @@ export const TB_PRODUCTS: TbProduct[] = [
   P('p-tablet-1', '平板电脑 11英寸2.5K 120Hz 学习办公娱乐 影音大屏 8扬声器', 1899, 2199, 4200, 's-erye', 'digital', 'tablet', ['退货宝', '分期免息'], [
     colorGroup('tablet', ['深空灰', '银色'], []),
     { name: '版本', options: [{ label: '8G+128G' }, { label: '8G+256G', priceDelta: 200 }] },
+    { name: '网络类型', options: [{ label: '5G全网通' }] },
+    { name: '套餐类型', options: [{ label: '官方标配' }] },
+    { name: '版本类型', options: [{ label: '中国大陆' }] },
+    { name: '发货方式', options: [{ label: '仓库直发' }] },
   ]),
 
   // ---- 服饰 ----
@@ -313,7 +321,7 @@ export const TB_PRODUCTS: TbProduct[] = [
 
   // ---- 美妆 ----
   P('p-lipstick-1', '口红套装正品大牌丝绒雾面哑光小众品牌 持久不脱色 送礼盒生日礼物', 79, 129, 27000, 's-meizhuang', 'beauty', 'lipstick', ['退货宝', '专柜同款', '破损包赔'], [
-    { name: '质地', options: TB_LIP_KINDS.map((k) => ({ label: k })) },
+    // 质地是口红类型本身（标题已带：唇釉/口红/唇泥/唇膏/唇蜜），不进购买弹窗；弹窗只选色号/规格
     { name: '色号', options: TB_LIP_COLORS.map((c, i) => ({ label: c, img: tbImg('lipstick', 120, 120, i % 4) })) },
     { name: '规格', options: [{ label: '单支装' }, { label: '三支礼盒', priceDelta: 89 }] },
   ], { promo: '百亿补贴' }),

@@ -103,6 +103,7 @@ import {
   TB_TRACK_NODES,
   tbAddToCart,
   tbBestCoupon,
+  tbBuildGenOrder,
   tbCancelOrder,
   tbCartQty,
   tbClaimCoupon,
@@ -110,8 +111,11 @@ import {
   tbClearSearchHist,
   tbConfirmReceive,
   tbCreateOrder,
+  tbExistingOrderTitles,
+  tbGenHistoryOrders,
   tbGetSession,
   tbIdpLoggedIn,
+  tbInsertGenOrders,
   tbLoadAddrs,
   tbLoadCart,
   tbLoadCoupons,
@@ -1753,6 +1757,26 @@ function SearchResultPage({ uid, kw, onBack, onOpenProduct, onSearchSeed }: { ui
   /** 生成批次数上限（滑到底仍持续出新，40 批 ≈ 320 条生成商品后真正到底） */
   const MAX_GEN_BATCH = 40;
 
+  // AI 无限生成（需求「全部界面刷新生成使用设置里用户配置的 API 模型」）：
+  // 滚动到底时调 /api/tb-feed surface=search（用户配置模型 → 内置模型兑底），结果注册进商品池
+  // 后 seedHits/genHits 自动命中；AI 失败静默走本地生成器，绝不出空
+  const apiConfigSearch = useSettings((s) => s.apiConfig);
+  const apiCfgSearchRef = useRef(apiConfigSearch);
+  apiCfgSearchRef.current = apiConfigSearch;
+  const aiBusyRef = useRef(false);
+  const [aiTick, setAiTick] = useState(0);
+  const pullAiRef = useCallback(async () => {
+    if (aiBusyRef.current) return;
+    aiBusyRef.current = true;
+    try {
+      const shownTitles = tbSearchPool().filter((p) => tbSearchScore(p, kw) > 0).map((p) => p.title).slice(0, 80);
+      await tbFetchAiBatch({ uid, surface: 'search', tab: kw, exclude: shownTitles, count: 8, config: apiCfgSearchRef.current });
+      setAiTick((n) => n + 1);
+    } finally {
+      aiBusyRef.current = false;
+    }
+  }, [uid, kw]);
+
   // 命中池：种子 + 已注册 AI 商品全量打分（此前只搜种子池 → 「只显示那几个」的根因之一）
   const seedHits = useMemo(() => {
     let list = tbSearchPool().map((p) => ({ p, s: tbSearchScore(p, kw) })).filter((x) => x.s > 0);
@@ -1763,7 +1787,8 @@ function SearchResultPage({ uid, kw, onBack, onOpenProduct, onSearchSeed }: { ui
     else if (sort === 'priceDesc') list.sort((a, b) => b.p.price - a.p.price);
     else list.sort((a, b) => b.s - a.s || b.p.sales - a.p.sales);
     return list.map((x) => x.p);
-  }, [kw, sort, onlyFree, onlyTmall]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kw, sort, onlyFree, onlyTmall, aiTick]);
 
   // 生成池（Task 61：搜索无限下滑刷新生成）：关键词命中品类 → 本地生成器按批次持续产出
   // 品牌型号商品（手机/笔记本/口红…）；未命中品类走通用模式（标题带关键词）。批次确定性
@@ -1799,9 +1824,13 @@ function SearchResultPage({ uid, kw, onBack, onOpenProduct, onSearchSeed }: { ui
 
   const onScroll = useCallback(() => {
     const el = scrollerRef.current;
-    if (el && el.scrollTop + el.clientHeight >= el.scrollHeight - 400) setBatch((b) => (b < MAX_GEN_BATCH ? b + 1 : b));
+    if (el && el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
+      setBatch((b) => (b < MAX_GEN_BATCH ? b + 1 : b));
+      // 滚动到底同时拉一批 AI 商品（用户配置模型；静默失败走本地生成器）
+      void pullAiRef();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [pullAiRef]);
 
   const sortBtn = (id: SortMode, label: string, arrow?: 'up' | 'down') => (
     <button
@@ -3314,11 +3343,87 @@ function OrdersPage({
   const [channel, setChannel] = useState<'orders' | 'gou' | 'flash' | 'pig'>('gou');
   const [kw, setKw] = useState('');
   const [, setTick] = useState(0);
-  // 双向刷新（Task 40）：重读订单推进状态；订单永远原位保留、不消失、不跳顶
-  const pull = useTbPullRefresh(() => {
+  // 历史订单无限生成（需求「上滑/下滑刷新生成」）：AI（设置里用户配置模型）优先，失败本地确定性生成器兑底；
+  // 新单直接入库（按时间归位），去重保证同店同商品绝不重复出现
+  const apiConfigOrders = useSettings((s) => s.apiConfig);
+  const apiCfgOrdersRef = useRef(apiConfigOrders);
+  apiCfgOrdersRef.current = apiConfigOrders;
+  const genBatchRef = useRef(0);
+  const genBusyRef = useRef(false);
+  const [genLoading, setGenLoading] = useState(false);
+
+  /** 生成一批历史订单：/api/tb-orders（用户配置模型 → 内置模型）失败 → 本地生成器；返回新增条数 */
+  const genMoreOrders = async (count: number): Promise<number> => {
+    if (genBusyRef.current) return 0;
+    genBusyRef.current = true;
+    setGenLoading(true);
+    try {
+      const exclude = tbExistingOrderTitles(uid);
+      let batch: TbOrder[] | null = null;
+      try {
+        const res = await fetch('/api/tb-orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            config: apiCfgOrdersRef.current,
+            exclude: exclude.slice(0, 80),
+            count,
+            nonce: `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
+          }),
+          signal: AbortSignal.timeout(45_000),
+        });
+        const data = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          items?: Array<{ shopName?: string; itemTitle?: string; tag?: string; skuText?: string; price?: number; qty?: number; daysAgo?: number; canceled?: boolean }>;
+        } | null;
+        if (res.ok && data && data.ok === true && Array.isArray(data.items) && data.items.length > 0) {
+          batch = data.items
+            .filter((raw) => typeof raw.itemTitle === 'string' && raw.itemTitle.trim() && typeof raw.price === 'number')
+            .map((raw, i) =>
+              tbBuildGenOrder(
+                uid,
+                {
+                  shopName: typeof raw.shopName === 'string' ? raw.shopName : undefined,
+                  itemTitle: String(raw.itemTitle).trim(),
+                  tag: typeof raw.tag === 'string' && raw.tag ? raw.tag : 'gift',
+                  skuText: typeof raw.skuText === 'string' ? raw.skuText : undefined,
+                  price: Number(raw.price),
+                  qty: typeof raw.qty === 'number' ? raw.qty : 1,
+                  daysAgo: typeof raw.daysAgo === 'number' ? raw.daysAgo : 3,
+                  canceled: raw.canceled === true,
+                },
+                i
+              )
+            );
+          if (batch.length === 0) batch = null;
+        }
+      } catch {
+        batch = null;
+      }
+      if (!batch) batch = tbGenHistoryOrders(uid, genBatchRef.current++, exclude);
+      return tbInsertGenOrders(uid, batch);
+    } finally {
+      genBusyRef.current = false;
+      setGenLoading(false);
+    }
+  };
+
+  // 双向刷新（Task 40 + 本轮升级）：下拉 = 推进状态 + 生成新订单前插；订单永远原位保留、不消失、不跳顶
+  const pull = useTbPullRefresh(async () => {
     tbTickOrders(uid);
-    setTick((n) => n + 1);
-    onToast('订单已更新');
+    const n = await genMoreOrders(2);
+    setTick((x) => x + 1);
+    onToast(n > 0 ? `已刷新出 ${n} 条新订单` : '订单已更新');
+  });
+  // 订单不足一屏时自动补一批（用户无法滚动时上滑加载永远不触发）
+  useEffect(() => {
+    const el = pull.scrollRef.current;
+    if (!el || genBusyRef.current) return;
+    if (el.scrollHeight <= el.clientHeight + 60) {
+      void genMoreOrders(2).then((n) => {
+        if (n > 0) setTick((x) => x + 1);
+      });
+    }
   });
   /** 取消订单弹窗（截图2：原因选择） */
   const [cancelFor, setCancelFor] = useState<string | null>(null);
@@ -3409,7 +3514,19 @@ function OrdersPage({
         </div>
       </div>
       <div className="relative min-h-0 flex-1">
-        <div ref={pull.scrollRef} {...pull.bind} className="h-full overflow-y-auto pb-10">
+        <div
+          ref={pull.scrollRef}
+          {...pull.bind}
+          className="h-full overflow-y-auto pb-10"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            if (el.scrollTop + el.clientHeight >= el.scrollHeight - 500 && !genBusyRef.current) {
+              void genMoreOrders(2).then((n) => {
+                if (n > 0) setTick((x) => x + 1);
+              });
+            }
+          }}
+        >
         {orders.length === 0 ? (
           <div className="grid place-items-center bg-white py-16">
             <ShoppingBag className="h-12 w-12 text-black/10" strokeWidth={1.6} />
@@ -3420,6 +3537,7 @@ function OrdersPage({
             {orders.map((o) => (
               <OrderCard key={o.id} o={o} uid={uid} onOpen={() => onOpenOrder(o.id)} onPay={() => onPayOrder(o.id)} onToast={onToast} onOpenLogistics={onOpenLogistics} onRate={onRate} onCancel={() => setCancelFor(o.id)} onRefund={() => setRefundFor(o.id)} />
             ))}
+            <div className="py-3 text-center text-[12px] text-black/35">{genLoading ? '正在生成更多订单…' : '上滑加载更多订单'}</div>
           </div>
         )}
         </div>

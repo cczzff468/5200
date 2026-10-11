@@ -63,7 +63,7 @@ function colorGroup(tag: string, names: string[]): TbSkuGroup {
   return { name: '颜色分类', options: names.map((n, i) => ({ label: n, img: tbImg(tag, 120, 120, i % 4) })) };
 }
 
-// ---------------- 口红：品牌 × 质地 × 21 色号（质地/色号定义在 taobao-data 供购买弹窗共用） ----------------
+// ---------------- 口红：品牌 × 质地 × 21 色号（质地是商品类型进标题；弹窗只选色号） ----------------
 
 export const LIP_BRANDS = ['迪奥', '卡姿兰', '兰蔻', '圣罗兰', '纪梵希', '香奈儿', '阿玛尼', '花知晓', '完美日记', '花西子', '橘朵', '毛戈平'];
 const LIP_KINDS = TB_LIP_KINDS;
@@ -166,6 +166,8 @@ const GEN_CATS: GenCat[] = [
       { name: '存储容量', options: PHONE_STORAGE.map(([label, delta]) => ({ label, priceDelta: delta || undefined })) },
       { name: '网络类型', options: [{ label: '5G全网通' }] },
       { name: '套餐类型', options: [{ label: '官方标配' }, { label: '套餐一（壳膜+充电器）', priceDelta: 59 }] },
+      { name: '版本类型', options: [{ label: '中国大陆' }] },
+      { name: '发货方式', options: [{ label: '仓库直发' }] },
     ),
     shops: ['s-erye', 's-keke', 's-digital2', 's-guohuo'],
   },
@@ -183,6 +185,10 @@ const GEN_CATS: GenCat[] = [
     sku: () => skuOf(
       colorGroup('laptop', ['银色', '深空灰', '星光色']),
       { name: '配置', options: [{ label: '16G+512G' }, { label: '32G+1T', priceDelta: 600 }] },
+      { name: '网络类型', options: [{ label: '5G全网通' }] },
+      { name: '套餐类型', options: [{ label: '官方标配' }] },
+      { name: '版本类型', options: [{ label: '中国大陆' }] },
+      { name: '发货方式', options: [{ label: '仓库直发' }] },
     ),
     shops: ['s-keke', 's-erye'],
   },
@@ -199,7 +205,10 @@ const GEN_CATS: GenCat[] = [
     sku: () => skuOf(
       colorGroup('tablet', ['深空灰', '银色', '星光色']),
       { name: '版本', options: [{ label: '8G+128G' }, { label: '8G+256G', priceDelta: 200 }] },
-      { name: '网络类型', options: [{ label: 'WiFi版' }, { label: '插卡版', priceDelta: 300 }] },
+      { name: '网络类型', options: [{ label: '5G全网通' }] },
+      { name: '套餐类型', options: [{ label: '官方标配' }] },
+      { name: '版本类型', options: [{ label: '中国大陆' }] },
+      { name: '发货方式', options: [{ label: '仓库直发' }] },
     ),
     shops: ['s-erye', 's-keke'],
   },
@@ -617,9 +626,10 @@ const GEN_CATS: GenCat[] = [
     kws: /口红|唇釉|唇泥|唇膏|唇蜜/i,
     title: (r) => `${pick(LIP_BRANDS, r)} ${pick(LIP_KINDS, r)} ${pick(LIP_COLORS, r)} ${pick(['丝绒雾面哑光', '镜面水光', '滋润不拔干'], r)} ${pick(['持久不易脱色', '小众大牌平替', '送礼礼盒装'], r)}`,
     price: [39, 499],
-    sku: () => skuOf(
-      { name: '质地', options: LIP_KINDS.map((k) => ({ label: k })) },
+    sku: (r) => skuOf(
+      // 质地是口红类型本身（标题已带唇釉/口红/唇泥/唇膏/唇蜜），不进购买弹窗；弹窗只选色号
       { name: '色号', options: LIP_COLORS.map((c, i) => ({ label: c, img: tbImg('lipstick', 120, 120, i % 4) })) },
+      { name: '规格', options: [{ label: '单支装' }, { label: '三支礼盒', priceDelta: 89 }] },
     ),
     shops: ['s-meizhuang'],
   },
