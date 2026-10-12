@@ -63,7 +63,6 @@ import {
   Loader2,
   RefreshCw,
 } from 'lucide-react';
-import { MT_RIDERS, mtGetRiderId, mtRiderSrcOf, mtSetRiderId } from '@/lib/ios/mt-rider';
 import { TB_COURIERS, tbCourierNameOf, tbCourierSrcOf, tbGetCourierId, tbSetCourierId } from '@/lib/ios/tb-courier';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { tbCreateOrderShare, tbCreateProxyRequest } from '@/lib/ios/tb-share-proxy';
@@ -5539,10 +5538,6 @@ function MePage({
   onOpenBill: () => void;
 }) {
   const [, setTick] = useState(0);
-  // 骑手形象选择（需求：我的淘宝淘金币入口改为骑手，复用美团 mt-rider 全套形象；
-  // 选中形象同时用于淘宝物流页地图巡航，与美团共用同一 localStorage）
-  const [riderOpen, setRiderOpen] = useState(false);
-  const [riderId, setRiderId] = useState<string>(() => mtGetRiderId());
   // 运输快递员选择（用户反馈：账户余额位改为快递员；选中的形象用于淘宝物流地图巡航，
   // 独立于美团骑手；默认运输车）
   const [courierOpen, setCourierOpen] = useState(false);
@@ -5728,33 +5723,9 @@ function MePage({
               <span className="text-[17px] font-bold text-black/90">我的消费明细</span>
               <ChevronRight className="h-4 w-4 text-black/35" />
             </button>
-            {/* 送达速度（第六十八轮：右侧三选一 快/正常/慢；全店订单时间按真实时钟跟随该速度） */}
-            <div className="ml-auto flex items-center gap-[3px]" data-testid="tb-speed-picker">
-              {TB_SPEED_ORDER.map((s) => {
-                const on = speed === s;
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    data-testid={`tb-speed-${s}`}
-                    onClick={() => {
-                      if (speed === s) return;
-                      setSpeed(s);
-                      tbSetDeliverySpeed(uid, s);
-                      onToast(`已切换为「${TB_SPEED_LABEL[s]}」速：付款后${TB_SPEED_DESC[s]}`);
-                    }}
-                    className={`rounded-full px-2.5 py-[3px] text-[11px] leading-none transition-colors active:opacity-75 ${
-                      on ? 'bg-[#FF5000] font-semibold text-white' : 'bg-black/[0.05] text-black/50'
-                    }`}
-                  >
-                    {TB_SPEED_LABEL[s]}
-                  </button>
-                );
-              })}
-            </div>
           </div>
           {/* 资产行（首位=商品图片样式选择器入口：当前样式缩略图+名字，点击弹三选一弹层；
-              优惠券/骑手/快递员 label 上 value 下；行内 items-center 垂直居中对齐） */}
+              优惠券/送达速度/快递员 label 上 value 下；行内 items-center 垂直居中对齐） */}
           <div className="mt-1 flex items-center">
             <button type="button" data-testid="tb-goods-style-entry" onClick={() => setGoodsStyleOpen(true)} className="flex flex-1 flex-col items-center gap-1 py-1 active:opacity-70">
               <GoodsStyleThumb style={goodsImgStyle} className="h-[46px] w-[46px] shrink-0 rounded-[12px]" />
@@ -5764,13 +5735,34 @@ function MePage({
               <span className="text-[12px] leading-none text-black/45">优惠券</span>
               <span className="mt-1.5 flex h-[18px] items-center justify-center text-[16px] font-bold leading-none text-black/90">{coupons.length}张</span>
             </button>
-            {/* 骑手（上轮需求保留：淘金币位显示当前骑手形象，点按弹选择层） */}
-            <button type="button" data-testid="my-rider" onClick={() => setRiderOpen(true)} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
-              <span className="text-[12px] leading-none text-black/45">骑手</span>
-              <span className="mt-1.5 flex h-[18px] items-center justify-center">
-                <img src={mtRiderSrcOf(riderId)} alt="骑手形象" draggable={false} className="h-[17px] w-[17px] object-contain" />
-              </span>
-            </button>
+            {/* 送达速度（用户需求：原骑手位改为送货时间快慢选择；快/正常/慢 三选一，
+                全店订单时间按真实时钟跟随该速度） */}
+            <div className="flex flex-1 flex-col items-center py-1.5">
+              <span className="text-[12px] leading-none text-black/45">送达速度</span>
+              <div className="mt-1.5 flex h-[18px] items-center justify-center gap-[2px]" data-testid="tb-speed-picker">
+                {TB_SPEED_ORDER.map((s) => {
+                  const on = speed === s;
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      data-testid={`tb-speed-${s}`}
+                      onClick={() => {
+                        if (speed === s) return;
+                        setSpeed(s);
+                        tbSetDeliverySpeed(uid, s);
+                        onToast(`已切换为「${TB_SPEED_LABEL[s]}」速：付款后${TB_SPEED_DESC[s]}`);
+                      }}
+                      className={`rounded-full px-1.5 py-[3px] text-[10px] leading-none transition-colors active:opacity-75 ${
+                        on ? 'bg-[#FF5000] font-semibold text-white' : 'bg-black/[0.05] text-black/50'
+                      }`}
+                    >
+                      {TB_SPEED_LABEL[s]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             {/* 快递员（用户反馈：账户余额位改为快递员；显示当前运输快递员形象，点按弹选择层；
                 选中的形象用于淘宝物流地图巡航，默认运输车） */}
             <button type="button" data-testid="my-courier" onClick={() => setCourierOpen(true)} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
@@ -5906,49 +5898,6 @@ function MePage({
     </div>
     <TbPullIndicator h={mePull} upOffset={66} />
     </div>
-    {/* 骑手形象选择（需求：淘金币入口改为骑手；底部弹层复用美团 MT_RIDERS 全套形象，
-        选中后同时用于淘宝物流页地图巡航与美团配送地图，共用同一形象） */}
-    {riderOpen ? (
-      <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={() => setRiderOpen(false)}>
-        <div className="rounded-t-2xl bg-white [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()} data-testid="rider-sheet">
-          <div className="relative flex items-center justify-center pb-3 pt-5">
-            <span className="text-[17px] font-bold text-black/90">选择骑手形象</span>
-            <button type="button" aria-label="关闭" onClick={() => setRiderOpen(false)} className="absolute right-4 top-5 grid h-7 w-7 place-items-center active:opacity-60">
-              <X className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
-            </button>
-          </div>
-          <p className="px-5 pb-3 text-[12px] text-black/40">内置 {MT_RIDERS.length} 位骑手 · 骑手会把你的包裹送到驿站</p>
-          <div className="grid max-h-[52vh] grid-cols-3 gap-3 overflow-y-auto px-4 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {MT_RIDERS.map((r) => {
-              const active = r.id === riderId;
-              return (
-                <button
-                  key={r.id}
-                  type="button"
-                  data-testid={`rider-${r.id}`}
-                  onClick={() => {
-                    setRiderId(r.id);
-                    mtSetRiderId(r.id);
-                    setRiderOpen(false);
-                    onToast(`骑手「${r.name}」已接单，为你的包裹护航`);
-                  }}
-                  className={`relative flex flex-col items-center rounded-2xl px-2 pb-2.5 pt-3 transition-all active:scale-[0.97] ${active ? 'bg-[#FFF1E6] ring-2 ring-[#FF5000]' : 'bg-[#F7F8FA] ring-1 ring-black/[0.04]'}`}
-                >
-                  {active ? (
-                    <span className="absolute right-1.5 top-1.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#FF5000]">
-                      <Check className="h-3 w-3 text-white" strokeWidth={3} />
-                    </span>
-                  ) : null}
-                  <img src={r.src} alt={r.name} draggable={false} className="h-20 w-20 object-contain" />
-                  <span className={`mt-1 text-[12px] ${active ? 'font-semibold text-black/85' : 'text-black/60'}`}>{r.name}</span>
-                </button>
-              );
-            })}
-          </div>
-          <div className="h-7" />
-        </div>
-      </div>
-    ) : null}
     {/* 商品图片样式选择（第六十六轮：从主题 App 迁出的入口弹层；与美团共用同一全局样式） */}
     {goodsStyleOpen ? <GoodsStyleSheet accent="#FF5000" onClose={() => setGoodsStyleOpen(false)} /> : null}
     {/* 运输快递员选择（用户反馈：账户余额位改为快递员；底部弹层内置 9 位快递员，

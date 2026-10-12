@@ -3,6 +3,8 @@
 /**
  * 淘宝运输快递员形象（我的淘宝-快递员可选；物流地图巡航用，独立于美团骑手体系）：
  * public/couriers 已去白边/浅蓝底透明 PNG（scripts/process-couriers.py 处理），
+ * 并按用户需求水平翻转统一朝右（bunny/polarbear/duck/redcat/pinkcat/bluebear/rabbit
+ * 原 PNG 朝左已镜像；truck/rainbear 原生朝右未动）——物流地图巡航方向左→右，朝右更自然。
  * 立体感由展示侧 drop-shadow + 颠簸动画提供。默认「运输车」。
  */
 

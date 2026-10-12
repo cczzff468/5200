@@ -5,7 +5,7 @@
 """
 import os
 from collections import deque
-from PIL import Image
+from PIL import Image, ImageOps
 import numpy as np
 
 SRC = '/home/z/my-project/upload'
@@ -14,16 +14,19 @@ os.makedirs(OUT, exist_ok=True)
 
 # id -> 上传文件名
 COURIERS = {
-    'truck':     '1791698774590.png',  # 小熊货车（默认运输车）
-    'bunny':     '1791698742368.png',  # 橙兔摩托
-    'rainbear':  '1791698768847.png',  # 雨天小熊
-    'polarbear': '1791698792961.png',  # 白熊小哥
-    'duck':      '1791698944055.png',  # 鸭鸭三轮
-    'redcat':    '1791698986961.png',  # 红帽咪咪
-    'pinkcat':   '1791699001644.png',  # 粉车咪咪
-    'bluebear':  '1791699006325.png',  # 蓝车熊熊
-    'rabbit':    '1791698737419.png',  # 帽帽兔
+    'truck':     '1791698774590.png',  # 小熊货车（默认运输车；原生朝右）
+    'bunny':     '1791698742368.png',  # 橙兔摩托（朝左→镜像朝右）
+    'rainbear':  '1791698768847.png',  # 雨天小熊（原生朝右）
+    'polarbear': '1791698792961.png',  # 白熊小哥（朝左→镜像朝右）
+    'duck':      '1791698944055.png',  # 鸭鸭三轮（朝左→镜像朝右）
+    'redcat':    '1791698986961.png',  # 红帽咪咪（朝左→镜像朝右）
+    'pinkcat':   '1791699001644.png',  # 粉车咪咪（朝左→镜像朝右）
+    'bluebear':  '1791699006325.png',  # 蓝车熊熊（朝左→镜像朝右）
+    'rabbit':    '1791698737419.png',  # 帽帽兔（朝左→镜像朝右）
 }
+
+# 用户需求：快递员统一朝右（物流地图巡航方向左→右）；原生朝右的 truck/rainbear 不翻转
+FLIP_TO_RIGHT = {'bunny', 'polarbear', 'duck', 'redcat', 'pinkcat', 'bluebear', 'rabbit'}
 
 TOL = 42          # 与背景色的最大色距（0-441）
 ALPHA_EDGE = 210  # 距离超过此值的边缘邻接像素半透明化，柔化白边
@@ -95,6 +98,9 @@ def process(name: str, fname: str):
     if cleaned.width > 420:
         nh = round(cleaned.height * 420 / cleaned.width)
         cleaned = cleaned.resize((420, nh), Image.LANCZOS)
+    # 朝向统一：朝左的角色水平镜像成朝右（用户需求）
+    if name in FLIP_TO_RIGHT:
+        cleaned = ImageOps.mirror(cleaned)
     dst = os.path.join(OUT, f'{name}.png')
     cleaned.save(dst, optimize=True)
     print(f'{name}: {fname} -> {dst} {cleaned.size}')
