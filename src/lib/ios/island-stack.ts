@@ -2,10 +2,15 @@
 
 /**
  * 灵动岛堆叠协调（用户需求：播放音乐时淘宝/美团灵动岛出现 → 音乐岛在左侧加歌曲封面小圆圈，
- * 右侧显示当前配送小窗；点小圆圈展开音乐大窗；大窗可堆叠——多个大窗同时显示，点大窗进对应界面）：
+ * 右侧显示当前配送小窗；点小圆圈展开音乐大窗；大窗可堆叠——多个大窗同时显示，点大窗进对应界面；
+ * 二轮修订：①堆叠时音乐大窗永远在最上（按 TOP_PRIORITY 排序而非展开先后）；
+ * ②点左侧圆圈只出音乐大窗（配送岛整体隐身，不在下方显示）；
+ * ③点配送小窗所有大窗一起出现（音乐大窗同时展开、圆圈消失）；
+ * ④组合形态整体收窄（237→195px）不挡状态栏时间/电量）：
  * - order：当前展开的大窗 id（按展开先后排序）；heights：各大窗实测高度（ResizeObserver 回写）；
  * - expand/collapse/collapseAll：三个岛组件（音乐/淘宝/美团）共同读写；
- * - islandTopOf(id)：某大窗的垂直锚位 = 顶部锚位 + 在它之前展开的大窗高度之和 + 间隔；
+ * - islandTopOf(id)：某大窗的垂直锚位 = 顶部锚位 + 排在它前面的大窗高度之和 + 间隔；
+ *   排序按 TOP_PRIORITY（音乐永远第一），与展开先后无关；
  * - islandNextSlotTop()：下一个空闲槽位顶部——对方大窗展开时，小圆圈/配送小窗让位到这。
  * 音乐岛在组合模式只渲染左侧封面圆圈（配送小窗由淘宝/美团岛渲染在右侧），
  * 各自按本 store 计算的锚位绝对定位，互不重叠、随高度实测值平滑跟随。
@@ -19,6 +24,16 @@ export type IslandId = 'music' | 'tb' | 'mt';
 export const ISLAND_TOP = 11;
 /** 堆叠项之间的间隔 */
 export const ISLAND_GAP = 8;
+
+/** 大窗垂直优先级：音乐大窗永远在最上（用户需求），淘宝/美团按展开先后依次排在音乐之下 */
+const TOP_PRIORITY: IslandId[] = ['music', 'tb', 'mt'];
+
+/** 堆叠展示顺序：音乐永远最上，其余按展开先后（稳定）排在音乐之下 */
+export function islandStackSorted(order: IslandId[]): IslandId[] {
+  return TOP_PRIORITY.filter((id) => order.includes(id)).concat(
+    order.filter((id) => !TOP_PRIORITY.includes(id)),
+  );
+}
 
 interface IslandStackState {
   /** 当前展开的大窗（展开先后序）；空 = 都收着（小窗/圆圈形态） */
@@ -47,14 +62,14 @@ export const useIslandStack = create<IslandStackState>((set) => ({
     set((s) => (s.heights[id] === h ? s : { heights: { ...s.heights, [id]: h } })),
 }));
 
-/** 某大窗的垂直锚位：顶部锚位 + 排在它前面的展开大窗高度 + 间隔 */
+/** 某大窗的垂直锚位：顶部锚位 + 排在它前面的展开大窗高度 + 间隔（音乐永远最上） */
 export function islandTopOf(
   order: IslandId[],
   heights: Partial<Record<IslandId, number>>,
   id: IslandId,
 ): number {
   let top = ISLAND_TOP;
-  for (const x of order) {
+  for (const x of islandStackSorted(order)) {
     if (x === id) break;
     top += (heights[x] ?? 0) + ISLAND_GAP;
   }

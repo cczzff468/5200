@@ -15,7 +15,11 @@
  * - 剩余分钟按真实时钟每秒推算（tbDeliveryTiming：快 30-60min/正常 1-3h/慢 3-6h）。
  *
  * 【灵动岛堆叠】音乐在播（音乐岛可见）时不让位：小窗整体右移，左侧留给音乐封面小圆圈
- * （组合形态：左圆圈 + 右配送小窗）；音乐大窗展开时小窗让位到堆叠下一槽位；
+ * （组合形态：左圆圈 + 右配送小窗；二轮修订：组合总宽收窄 237→195px——胶囊 198→156 +
+ * 短状态文案，不挡状态栏时间/电量）；
+ * 二轮修订交互：①点左侧圆圈只出音乐大窗——音乐大窗展开而本窗未展开时本岛整体隐身，
+ * 不在音乐大窗下方显示小窗/大窗；②点本小窗 → 所有灵动岛大窗一起出现（音乐大窗同时展开、
+ * 圆圈消失），堆叠时音乐大窗永远在最上（island-stack TOP_PRIORITY）。
  * 大窗按展开先后垂直堆叠、可同时显示（island-stack 协调），点大窗进对应界面。
  *
  * 锚位互斥（与美团灵动岛同锚的小窗互斥保留）：两者都有进行中单时「最新事件的一方」展示（另一让位）。
@@ -32,11 +36,7 @@ import { useGlobalCall } from '@/lib/ios/global-call';
 import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { useMusic } from '@/lib/ios/music-store';
 import { useTbIsland } from '@/lib/ios/tb-island-store';
-import {
-  islandNextSlotTop,
-  islandTopOf,
-  useIslandStack,
-} from '@/lib/ios/island-stack';
+import { islandTopOf, useIslandStack } from '@/lib/ios/island-stack';
 import { tbCurrentCourier, TB_COURIER_CHANGED } from '@/lib/ios/tb-courier';
 import {
   TB_TRACK_NODES,
@@ -49,8 +49,10 @@ import {
 } from '@/lib/ios/taobao-store';
 import { mtGetSession, mtLoadOrders, mtUidOf } from '@/lib/ios/meituan-store';
 
-/** 小窗胶囊几何（与美团灵动岛一致） */
+/** 小窗胶囊几何（与美团灵动岛一致；独占模式用） */
 const PILL = { width: 198, height: 33, borderRadius: 16.5 } as const;
+/** 组合模式胶囊几何（二轮修订：收窄 198→156，左侧留给音乐封面圆圈后总宽 195 不挡状态栏时间/电量） */
+const COMBO_PILL = { width: 156, height: 33, borderRadius: 16.5 } as const;
 /** 大窗展开姿态 */
 const EXPANDED = { width: 348, height: 'auto', borderRadius: 26 } as const;
 const SPRING: Transition = { type: 'spring', stiffness: 380, damping: 32, mass: 0.9 };
@@ -58,8 +60,8 @@ const SPRING: Transition = { type: 'spring', stiffness: 380, damping: 32, mass: 
 const AUTO_COLLAPSE_MS = 5000;
 /** 胶囊/展开态的垂直锚位（与静态灵动岛同位） */
 const PILL_TOP = 11;
-/** 组合形态：配送小窗右移后的左缘（组合总宽 237=圆圈33+间距6+小窗198，整体居中） */
-const COMBO_PILL_LEFT = 'calc(50% - 79.5px)';
+/** 组合形态：配送小窗右移后的左缘（组合总宽 195=圆圈33+间距6+胶囊156，整体居中：左缘 97.5、胶囊左缘 136.5） */
+const COMBO_PILL_LEFT = 'calc(50% - 58.5px)';
 
 /** 来电展示中（与 IslandNotificationLayer 同口径） */
 function useIncomingCallPresenting(): boolean {
@@ -133,6 +135,18 @@ function pillLabelOf(o: TbOrder): string {
   }
 }
 
+/** 组合模式短状态文案（胶囊收窄到 156 后改用三字文案，保证 状态+HH:MM+送达 完整放下不溢出） */
+function pillLabelComboOf(o: TbOrder): string {
+  switch (phaseOf(o)) {
+    case 'wait':
+      return '待发货';
+    case 'station':
+      return '到驿站';
+    default:
+      return pillLabelOf(o);
+  }
+}
+
 /** 大窗副文案 */
 function subLabelOf(o: TbOrder): string {
   switch (phaseOf(o)) {
@@ -195,6 +209,9 @@ export default function TaobaoIsland() {
 
   /** 展开态来自堆叠 store（与音乐/美团大窗统一排序堆叠） */
   const expanded = stackOrder.includes('tb');
+  // 灵动岛堆叠二轮：音乐大窗已展开而本窗未展开（用户点了左侧封面圆圈）→ 本岛整体隐身，
+  // 不在音乐大窗下方显示小窗/大窗（用户要求「点圆圈只出音乐大窗」）；音乐大窗收起后本岛自动回归
+  const musicExpandedAlone = stackOrder.includes('music') && !expanded;
   const autoExpandRef = useRef(false);
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 已消费的状态签名（订单id|状态|节点数）：变化即自动展开大窗 5 秒 */
@@ -240,11 +257,15 @@ export default function TaobaoIsland() {
     }, AUTO_COLLAPSE_MS);
   };
 
-  /** 手动展开（点小窗）：一直显示 */
+  /** 手动展开（点小窗）：一直显示。
+   *  二轮修订：点配送小窗 → 所有灵动岛大窗一起出现——音乐岛可见时同时展开音乐大窗
+   *  （圆圈随音乐大窗展开而消失，堆叠时音乐永远在最上）；音乐岛不可见（没在放歌/被通知遮挡）不强展 */
   const expandManually = () => {
     autoExpandRef.current = false;
     clearAuto();
-    useIslandStack.getState().expand('tb');
+    const st = useIslandStack.getState();
+    st.expand('tb');
+    if (useMusic.getState().islandVisible) st.expand('music');
   };
 
   const collapse = () => {
@@ -290,7 +311,8 @@ export default function TaobaoIsland() {
   const mtWins = mtLatest > 0 && (active === null || mtLatest >= tbLatest);
 
   const hidden =
-    !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !active || mtWins;
+    !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !active || mtWins ||
+    musicExpandedAlone;
 
   // 状态签名变化（新单/发货/揽收/派送/到站）→ 自动展开大窗 5 秒；
   // 通知层/来电占位期间隐身时不消费签名，恢复可见后补放
@@ -346,8 +368,8 @@ export default function TaobaoIsland() {
   const firstImg = active.items[0]?.img ?? '';
   const firstTitle = active.items[0]?.title ?? active.shopName;
 
-  /** 小窗内容（独占/组合两形态共用） */
-  const pillContent = (
+  /** 小窗内容（combo=true 组合形态：短状态文案 + 收窄胶囊专用；combo=false 独占 198 胶囊） */
+  const pillContent = (combo: boolean) => (
     <div className="absolute inset-x-0 top-0 flex items-center gap-1.5 pl-[3px] pr-3" style={{ height: PILL.height }}>
       <img
         src={courierSrc}
@@ -356,7 +378,9 @@ export default function TaobaoIsland() {
         className="h-[27px] w-[27px] shrink-0 select-none object-contain"
         style={{ filter: 'drop-shadow(0 1.5px 2px rgba(0,0,0,0.35))' }}
       />
-      <span className="min-w-0 shrink-0 text-[12px] font-medium leading-none text-white/90">{pillLabelOf(active)}</span>
+      <span className="min-w-0 shrink-0 text-[12px] font-medium leading-none text-white/90">
+        {combo ? pillLabelComboOf(active) : pillLabelOf(active)}
+      </span>
       <span className="min-w-0 flex-1" />
       <span className="shrink-0 whitespace-nowrap text-[12px] leading-none">
         <span className="font-bold text-[#FF6A00]" data-testid="tb-island-left">
@@ -367,15 +391,15 @@ export default function TaobaoIsland() {
     </div>
   );
 
-  // ---------- 组合形态（音乐岛可见 + 本窗未展开）：小窗右移，左侧留给音乐封面小圆圈 ----------
+  // ---------- 组合形态（音乐岛可见 + 本窗未展开）：小窗右移收窄，左侧留给音乐封面小圆圈 ----------
+  // （音乐大窗展开时本岛已整体隐身（musicExpandedAlone → hidden），能走到这里音乐大窗必未展开，
+  //   所以小窗固定在灵动岛原位，不再让位到堆叠下一槽位）
   if (musicIslandVisible && !expanded) {
-    const musicExpanded = stackOrder.includes('music');
-    const top = musicExpanded ? islandNextSlotTop(stackOrder, stackHeights) : PILL_TOP;
     return (
       <motion.div
         className="pointer-events-none absolute z-[82]"
         initial={false}
-        animate={{ top }}
+        animate={{ top: PILL_TOP }}
         transition={SPRING}
         style={{ left: COMBO_PILL_LEFT }}
         data-testid="tb-island-combo"
@@ -385,12 +409,12 @@ export default function TaobaoIsland() {
           role="button"
           aria-label="淘宝快递弹窗：展开快递进度"
           initial={false}
-          animate={{ width: PILL.width, height: PILL.height, borderRadius: PILL.borderRadius }}
+          animate={{ width: COMBO_PILL.width, height: COMBO_PILL.height, borderRadius: COMBO_PILL.borderRadius }}
           transition={SPRING}
           onClick={expandManually}
           className="pointer-events-auto relative cursor-pointer overflow-hidden bg-black text-white shadow-[0_10px_30px_-8px_rgba(0,0,0,0.5)] outline-none"
         >
-          {pillContent}
+          {pillContent(true)}
         </motion.div>
       </motion.div>
     );
@@ -446,7 +470,7 @@ export default function TaobaoIsland() {
             animate={{ opacity: expanded ? 0 : 1 }}
             transition={{ duration: 0.14 }}
           >
-            {pillContent}
+            {pillContent(false)}
           </motion.div>
 
           {/* ---------- 大窗内容（宽度形变基本完成后错峰淡入） ---------- */}

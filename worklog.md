@@ -18553,3 +18553,25 @@ Stage Summary:
 - 交付：①淘宝/美团会话头像+昵称全程跟随联系人资料（实时事件+打开对齐双通道）；②音乐首页=返回键+居中标题+方形圆角每日推荐卡（首歌封面背景），心动页=居中标题无三条杠，我的页保留三条杠，标题点击退出行为全部移除；③灵动岛堆叠系统：音乐×淘宝/美团组合小窗（左歌曲封面圆圈+右配送小窗）、圆圈点开音乐大窗、大窗按展开先后垂直堆叠可同时显示、点大窗收起堆叠并进入对应界面、点别处全部收回，独占模式行为与原来完全一致
 - 改动文件：src/lib/ios/{island-stack(新),taobao-store}.ts、src/components/ios/{MusicIsland,TaobaoIsland,MeituanIsland}.tsx、src/components/apps/{music-home,music-heart,music,taobao,meituan}.tsx
 - 关键决策：①堆叠协调用独立 zustand store（三岛共同读写 order/heights，ResizeObserver 实测大窗高度驱动让位锚位，避免写死高度）；②组合形态几何=圆圈33+间距6+小窗198 居中（圆圈 left calc(50%-118.5px)、小窗 left calc(50%-79.5px)）；③音乐自动展开限定独占模式（组合形态不抢屏，手动点圆圈仍可展开）；④淘宝/美团小窗互斥保留（组合只涉及音乐×一个配送岛）；⑤点大窗统一 collapseAll+导航（与原单岛行为语义一致）；⑥avatarFor 按 idp 投影同步（与微信/QQ 显示一致），phone 登录会话无联系人跳过同步
+
+---
+Task ID: 24-b
+Agent: 主协调者 (Z.ai Code)
+Task: 灵动岛堆叠二轮修订（用户四点新需求）：①堆叠时音乐大窗永远在最上；②点左侧封面圆圈只出音乐大窗（下方不显示别的灵动岛）；③点配送小窗出现所有大窗且左侧圆圈消失；④组合形态（有音乐圆圈时）灵动岛收窄，不挡状态栏时间和电量
+
+Work Log:
+- island-stack.ts：新增 TOP_PRIORITY=['music','tb','mt'] 与 islandStackSorted()（音乐永远第一、其余按展开先后稳定跟随），islandTopOf() 改按优先序累加高度 → 无论展开先后，音乐大窗锚位恒为 top=11（需求①）
+- MusicIsland.tsx：expandManually（点小弹窗/组合模式点圆圈共用）改为先 collapse('tb')/collapse('mt') 再 expand('music') → 点圆圈只出音乐大窗（需求②）；组合圆圈 left 收窄 calc(50%-118.5px)→calc(50%-97.5px)；组合分支注释更新
+- TaobaoIsland.tsx / MeituanIsland.tsx 同款四处改造：
+  ①新增 hidden 条件 musicExpandedAlone = stackOrder 含 music 且自身未展开 → 音乐大窗展开期间配送岛整体隐身（小窗/大窗都不出现在音乐大窗下方，收起后自动回归；隐身期间状态签名不消费，恢复后补放自动展开）
+  ②expandManually（点配送小窗）在 useMusic.islandVisible 时同时 expand('music') → 所有大窗一起出现、圆圈随音乐展开而消失（需求③）；音乐岛不可见（没放歌/被通知遮挡）不强展
+  ③组合胶囊几何收窄：PILL 198→COMBO_PILL 156、COMBO_PILL_LEFT calc(50%-79.5px)→calc(50%-58.5px)，组合总宽 237→195px；390 屏占 97.5..292.5，状态栏时间文字止于 ~72、电量起于 ~315（信号/WiFi 已隐藏），完全不遮挡（需求④）
+  ④新增 pillLabelComboOf 短状态文案（淘宝 等待发货→待发货/已到驿站→到驿站；美团 商家接单中→接单中/商家备餐中→备餐中），pillContent 改为 (combo:boolean) 工厂：组合胶囊用短文案保证 状态+HH:MM+送达 完整放下不溢出；独占模式仍用原文案+198 胶囊
+  ⑤组合分支不再让位到堆叠下一槽位（音乐大窗展开时本岛已隐身，能走到组合分支音乐必未展开 → 小窗固定 PILL_TOP），删除 islandNextSlotTop 引用
+- MusicIsland 组合圆圈分支保留「配送大窗自动展开时圆圈让位到下一槽位」（自动展开仅配送方展开，音乐未展开，不违背需求②）
+- agent-browser 实机验证（seed 淘宝/美团进行中订单 + 游客模式播放音乐）：组合形态几何 circle x=112.5 w=33 + 胶囊 x=151.5 w=156（420 宽屏）✓；点圆圈→音乐大窗独占 y=11、配送岛隐身 ✓；点配送小窗→音乐 y=11/配送 y=170(=11+151+8) 精确堆叠、圆圈消失 ✓；且 order=['tb','music']（淘宝先展开）音乐仍置顶=优先级排序生效 ✓；点配送大窗→收起+跳订单详情 ✓；点别处→收起回组合 ✓；音乐暂停 5 秒宽限后配送岛回独占 198px ✓；淘宝/美团互斥正常 ✓；状态栏时间/电量全程可见 ✓
+- 测试数据（seed 订单/session/kv）已清理，回归确认无残留
+
+Stage Summary:
+- 需求①②③④全部落地并浏览器实测通过；改动文件：src/lib/ios/island-stack.ts、src/components/ios/{MusicIsland,TaobaoIsland,MeituanIsland}.tsx
+- 关键决策：①置顶用「锚位计算排序」而非改写 order 数组（order 仍记展开先后，优先级只在 islandTopOf 生效，store 语义不变）；②「点圆圈只出音乐大窗」= 圆圈点击收起其他大窗 + 配送岛在音乐展开期间整体隐身（音乐岛随之回到独占模式渲染，无需新增形态）；③「点小窗出全部大窗」以 useMusic.islandVisible 为门槛（音乐没在播不强展开空大窗，避免 0 高度占位把配送大窗顶下去）；④组合收窄同时把长状态文案换三字短文案（不删「HH:MM 送达」语义，与早期需求⑤兼容）

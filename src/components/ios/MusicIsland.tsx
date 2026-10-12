@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * 音乐灵动岛（第十六轮反馈，第十八轮修订；本轮新增「灵动岛堆叠」）：
+ * 音乐灵动岛（第十六轮反馈，第十八轮修订；灵动岛堆叠二轮修订）：
  * - 小弹窗：黑色胶囊（封面 + 歌名 + 红色波形动画），常驻显示（主屏幕/所有 App/锁屏都显示）；
  * - 大弹窗：展开的播放卡（封面 + 歌名 + 当前歌词行 + 进度条 + 上/暂停/下 + 红心），
  *   自动展开时显示 5 秒后收回小弹窗；开始播放/切歌时自动展开一次（仅独占模式）；
@@ -13,8 +13,10 @@
  *   来电响铃/熄屏期间同样隐身；设置里关闭状态栏（灵动岛）时一并隐藏。
  * - 【灵动岛堆叠】播放音乐时淘宝/美团配送灵动岛出现 → 不再整体隐身（原让位逻辑撤销）：
  *   在配送小窗左侧渲染一个歌曲封面小圆圈（组合形态：左圆圈 + 右配送小窗），
- *   点小圆圈 → 音乐大窗展开；大窗按展开先后垂直堆叠、可同时显示（island-stack 协调）；
- *   配送大窗展开时小圆圈让位到堆叠下一槽位。自动展开只在独占模式进行（组合模式不抢屏）。
+ *   点小圆圈 → 【只展开音乐大窗】（二轮修订：先把已展开的淘宝/美团大窗全部收起，
+ *   配送岛在音乐大窗展开期间整体隐身，不在下方显示）；
+ *   点配送小窗 → 所有灵动岛大窗一起出现（音乐大窗同时展开、圆圈消失，堆叠时音乐永远在最上）。
+ *   自动展开只在独占模式进行（组合模式不抢屏）。
  * - 大弹窗不下沉（第二十三轮反馈：恢复原位 top=11）；
  * - 弹窗可见时状态栏只隐藏「移动数据」（信号）图标，WiFi/电量保留（真实 iPhone 灵动岛同语义），
  *   弹窗消失后图标恢复——可见性由本组件写入 music-store.islandVisible，StatusBar 只读。
@@ -51,8 +53,10 @@ const SPRING: Transition = { type: 'spring', stiffness: 380, damping: 32, mass: 
 const AUTO_COLLAPSE_MS = 5000;
 /** 暂停/关闭音乐后弹窗延迟消失时长（第二十轮反馈：不立马消失，显示 5 秒再收起） */
 const PAUSE_GRACE_MS = 5000;
-/** 组合形态几何：组合总宽 = 封面圆圈 33 + 间距 6 + 配送小窗 198，整体居中于灵动岛锚位 */
-const COMBO_CIRCLE_LEFT = 'calc(50% - 118.5px)';
+/** 组合形态几何（二轮修订：整体收窄不挡状态栏时间/电量）：
+ *  组合总宽 = 封面圆圈 33 + 间距 6 + 配送小窗 156 = 195，整体居中于灵动岛锚位。
+ *  390 屏上占 97.5..292.5：状态栏时间文字止于 ~72、电量起于 ~315（信号/WiFi 已隐藏），完全不遮挡 */
+const COMBO_CIRCLE_LEFT = 'calc(50% - 97.5px)';
 
 /** 来电展示中（与 IslandNotificationLayer 同口径，只读两个通话 store） */
 function useIncomingCallPresenting(): boolean {
@@ -254,11 +258,16 @@ export default function MusicIsland() {
 
   useEffect(() => clearAuto, []);
 
-  /** 手动展开：一直显示（不自动收回） */
+  /** 手动展开（点小弹窗/组合模式点左侧封面圆圈）：一直显示（不自动收回）。
+   *  二轮修订：点圆圈 → 【只展开音乐大窗】——先把已展开的淘宝/美团大窗全部收起，
+   *  配送岛会因「音乐大窗展开而自身未展开」整体隐身，不在音乐大窗下方显示别的灵动岛 */
   const expandManually = () => {
     expandedAutoRef.current = false;
     clearAuto();
-    useIslandStack.getState().expand('music');
+    const st = useIslandStack.getState();
+    if (st.order.includes('tb')) st.collapse('tb');
+    if (st.order.includes('mt')) st.collapse('mt');
+    st.expand('music');
   };
 
   const collapse = () => {
@@ -305,6 +314,7 @@ export default function MusicIsland() {
   const deliveryExpanded = stackOrder.includes('tb') || stackOrder.includes('mt');
 
   // ---------- 组合形态（音乐在播 + 配送岛在显）且音乐大窗未展开：只渲染左侧封面小圆圈 ----------
+  // （二轮修订：配送大窗自动展开时圆圈仍让位到堆叠下一槽位；点圆圈 = expandManually → 只出音乐大窗）
   if (combo && !expanded) {
     const top = deliveryExpanded ? islandNextSlotTop(stackOrder, stackHeights) : ISLAND_TOP;
     return (
