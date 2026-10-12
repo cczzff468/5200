@@ -18595,3 +18595,20 @@ Stage Summary:
 - 交互保留：点圆圈只出音乐大窗（配送岛隐身）；点配送小窗全部大窗同显+圆圈消失；点大窗进对应界面；小窗仍只显示最新事件方
 - 改动文件：src/lib/ios/island-stack.ts、src/components/ios/{TaobaoIsland,MeituanIsland,MusicIsland}.tsx
 - 关键决策：①「早的」锚定下单时刻（paidAt??createdAt）而非最新事件时刻（订单推进不改变排序，稳定可预期）；②大窗展开入口统一 expandAll 语义（点任一配送小窗=三大窗全展开），自动展开（5 秒收起的状态通知）保持仅自岛展开不抢屏；③音乐大窗展开期间未展开的配送岛仍隐身（musicExpandedAlone 保留），保证「点圆圈只出音乐大窗」与堆叠开放期间新事件不突入两层需求并存
+---
+Task ID: 6
+Agent: 主协调者 (Z.ai Code)
+Task: 用户两组需求——①我的淘宝：删除顶部「骑手」入口，把送货时间快慢（送达速度 快/正常/慢）移到骑手原位；②快递员橙兔摩托/白熊小哥/鸭鸭三轮/红帽咪咪/粉车咪咪/蓝车熊熊/帽帽兔 水平翻转朝右；③（追加）美团骑手 懒懒/一二/布布/兔兔/咻咻/哭哭/咪咪 同样翻转朝右；④（追加）美团灵动岛小窗+大窗时间从「HH:MM 送达」改为「还有X分钟送达」（不跟淘宝一样显示几点几分）
+
+Work Log:
+- 【我的淘宝】taobao.tsx：①删除资产行「骑手」按钮（mtRiderSrcOf 形象展示+选择层入口）与「选择骑手形象」底部弹层（MT_RIDERS 22 宫格）、riderOpen/riderId state、mt-rider 整条 import（美团 App 内骑手选择不受影响）；②原骑手位（优惠券与快递员之间）改为「送达速度」入口：label 上「送达速度」、value 下 快/正常/慢 三粒小胶囊（px-1.5 text-[10px] gap-[2px] 适配 flex-1 槽宽），点击逻辑/持久化/Toast 原样保留（tbSetDeliverySpeed 按账号持久化，全店订单时间轴跟随）；③顶部「我的消费明细」行右侧的旧送达速度三选一移除，标题行回归纯标题
+- 【淘宝快递员翻转】public/couriers：bunny/polarbear/duck/redcat/pinkcat/bluebear/rabbit 7 张 PIL ImageOps.mirror 水平镜像（原朝左→朝右；truck/rainbear 原生朝右未动）——我的淘宝快递员位/选择弹层/物流地图巡航（路径 M96,186→Q252,78→428,158 左→右，朝右与巡航方向一致更自然）/TaobaoIsland 全部生效；tb-courier.ts 头注释记录翻转口径；scripts/process-couriers.py 加 FLIP_TO_RIGHT 翻转步骤（重跑不回退）
+- 【美团骑手翻转】public/mt/riders：r11懒懒/r15一二/r16布布/r17兔兔/r19咻咻/r20哭哭/r21咪咪 7 张镜像朝右（其余 15 位原生朝向未动）；mt-rider.ts 头注释记录；scripts/cut_riders.py（管 r10-r17）加 FLIP_TO_RIGHT 镜像步骤、scripts/add-riders.mjs（管 r18-r22）加 .flop() 步骤（重跑不回退）
+- 【美团灵动岛时间格式】MeituanIsland.tsx：新增 minutesLeftOf（leftMs<60s →「即将」，否则「还有{ceil(min)}分钟」）；小窗右侧 = 黄色「还有X分钟」+ 白/75「送达」（<1 分钟黄色「即将送达」），大窗 ETA 行 =「还有X分钟送达」/「即将送达」（保留 #FFC300 黄色加粗）；fmtHM 与 etaText 删除；头注释同步更新。淘宝岛仍显示 HH:MM（用户明确「不要跟淘宝一样」）
+- 【E2E（agent-browser 实机）】seed user 联系人（IDB contacts）→ 微信手机号登录（首次登录即写密码）→ 淘宝微信一键授权登录 → 我的淘宝：骑手位消失、送达速度三胶囊在原骑手槽（优惠券|送达速度|快递员）、顶部标题行无胶囊 ✓；seed 美团 wx 会话 + delivering 单（eta=now+18min，IDB kv 数组直存）+ mt-rider-avatar=r15 → 锁屏/主屏小窗：骑手朝右 + 送货中 + 黄「还有18分钟」+「送达」；点小窗 → 大窗「还有18分钟送达」黄字 + 进度条骑手朝右骑线上；倒计时真实时钟走秒（18→17→16）✓；美团我的-骑手弹层：懒懒（KFC 袋换边）/一二/布布/兔兔/咻咻/哭哭/咪咪 全部朝右 ✓；测试数据（IDB 联系人+订单 kv、localStorage mt-session/mt-rider-avatar/wx-session-user-id）清理回归无残留 ✓
+- 验证：bunx tsc --noEmit 0 错误；改动文件 eslint 0 新增问题（taobao.tsx 28 problems 与 HEAD 基线完全一致；全仓 lint 因沙箱 4G 内存 SIGKILL，改用单文件口径）；dev.log 仅既有 instrumentation Edge Runtime 警告
+
+Stage Summary:
+- 交付：①我的淘宝「骑手」入口+选择弹层整体删除，送达速度（快/正常/慢）原位顶替，顶部行纯标题；②淘宝 7 位快递员/美团 7 位骑手源 PNG 水平镜像统一朝右（列表/弹层/物流地图/灵动岛全场景生效），两个图处理脚本补翻转步骤防回退；③美团灵动岛小窗+大窗时间改「还有X分钟送达」倒计时（<1 分钟「即将送达」），秒级刷新、催单后即时变小，淘宝岛保持 HH:MM 不变
+- 改动文件：src/components/apps/taobao.tsx、src/components/ios/MeituanIsland.tsx、src/lib/ios/{tb-courier,mt-rider}.ts、public/couriers/{bunny,polarbear,duck,redcat,pinkcat,bluebear,rabbit}.png、public/mt/riders/{r11,r15,r16,r17,r19,r20,r21}.png、scripts/{process-couriers.py,cut_riders.py,add-riders.mjs}
+- 关键决策：①翻转直接改源 PNG（而非 CSS scaleX(-1)）——所有展示点（选择弹层/资产行/地图巡航/灵动岛）一次性生效且无需逐处加样式；②美团 kv 订单值是数组直存（tb 才是 JSON 字符串），seed 口径不同注意区分；③「还有X分钟」用 Math.ceil 保证 >0 分钟恒 ≥1，<60s 收敛为「即将送达」避免「还有0分钟」；④大窗去掉「预计」前缀（倒计时语义下冗余），黄字样式与原 HH:MM 保持一致

@@ -3,8 +3,9 @@
 /**
  * 美团外卖灵动岛（对齐真机「美团外卖 × iOS 灵动岛」体验，用户规格）：
  * - 小窗（黑色胶囊）：有进行中的外卖单时常驻显示（所有界面：主屏/各 App/锁屏）——
- *   左侧当前骑手形象 + 状态文案（商家接单中/商家备餐中/送货中），右侧剩余时间「HH:MM」黄色 + 「送达」；
- * - 大窗（展开卡）：商家图 + 黄色「预计HH:MM送达」+ 状态副文案 + 美团袋鼠标 +
+ *   左侧当前骑手形象 + 状态文案（商家接单中/商家备餐中/送货中），右侧剩余时间「还有X分钟」黄色 + 「送达」
+ *   （用户需求：美团岛不显示几点几分，改剩余分钟倒计时；<1分钟 → 即将送达）；
+ * - 大窗（展开卡）：商家图 + 黄色「还有X分钟送达」+ 状态副文案 + 美团袋鼠标 +
  *   接单→取餐→送达 三节点进度条（骑手形象骑在进度上，随时间推进）；
  *   状态变化（支付成功/商家接单/骑手取餐）时自动展开一次，显示 5 秒收回小窗；
  * - 点小窗 → 展开大窗（一直显示，不自动收回）；
@@ -81,7 +82,7 @@ function pillLabelOf(o: MtOrder): string {
   return '送货中';
 }
 
-/** 组合模式短状态文案（胶囊收窄到 156 后改用三字文案，保证 状态+HH:MM+送达 完整放下不溢出） */
+/** 组合模式短状态文案（胶囊收窄到 156 后改用三字文案，保证 状态+还有X分钟+送达 完整放下不溢出） */
 function pillLabelComboOf(o: MtOrder): string {
   if (o.status === 'pendingAccept') return '接单中';
   if (o.status === 'accepted') return '备餐中';
@@ -93,6 +94,12 @@ function subLabelOf(o: MtOrder): string {
   if (o.status === 'pendingAccept') return '订单已支付，等待商家接单';
   if (o.status === 'accepted') return '商家已接单，商品备餐中';
   return '商家已出餐，骑手正赶往商家';
+}
+
+/** 剩余时间文案（用户需求：美团岛不显示几点几分，改「还有X分钟送达」；<1分钟 → 即将） */
+function minutesLeftOf(leftMs: number): string {
+  if (leftMs < 60_000) return '即将';
+  return `还有${Math.max(1, Math.ceil(leftMs / 60_000))}分钟`;
 }
 
 /** 三节点进度（0~1）：接单前起步、备餐中到取餐节点前、配送段按真实时间在 取餐→送达 间推进 */
@@ -298,10 +305,9 @@ export default function MeituanIsland() {
 
   if (hidden || !active) return null;
 
-  // 预计送达时刻（绝对时间，秒级刷新；催单后立刻变小）
+  // 预计送达剩余时间（秒级刷新；催单后立刻变小；显示「还有X分钟」而非几点几分）
   const leftMs = Math.max(0, (active.etaAt ?? 0) - nowTs);
-  const leftText = leftMs < 60_000 ? '即将送达' : fmtHM(active.etaAt ?? 0);
-  const etaText = active.etaAt ? fmtHM(active.etaAt) : '--:--';
+  const leftText = minutesLeftOf(leftMs);
 
   const p = progressOf(active, nowTs);
   const stageDone = (k: 0 | 1 | 2) => {
@@ -433,7 +439,7 @@ export default function MeituanIsland() {
               )}
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[17px] font-bold leading-[22px] text-[#FFC300]" data-testid="mt-island-eta">
-                  预计{etaText}送达
+                  {leftMs >= 60_000 ? `${leftText}送达` : '即将送达'}
                 </p>
                 <p className="mt-0.5 truncate text-[12px] leading-[16px] text-white/85" data-testid="mt-island-sub">
                   {subLabelOf(active)}
@@ -486,10 +492,4 @@ export default function MeituanIsland() {
       </motion.div>
     </>
   );
-}
-
-/** HH:MM（预计送达时刻） */
-function fmtHM(ts: number): string {
-  const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }

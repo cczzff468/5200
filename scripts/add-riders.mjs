@@ -29,6 +29,8 @@ const FILES = [
 ];
 
 const W = 360;
+// 用户需求：咻咻r19/哭哭r20/咪咪r21 朝左 → 水平镜像成朝右
+const FLIP_TO_RIGHT = new Set(['r19', 'r20', 'r21']);
 const isLight = (r, g, b) => Math.min(r, g, b) >= 198 && Math.max(r, g, b) - Math.min(r, g, b) <= 46;
 // r20/r21 奶油黄底（#F7EDCB 类，饱和度略高）：放宽阈值才能认成背景；角色白脸有黑描边包围，不受影响
 const LOOSE = new Set(['r20', 'r21']);
@@ -142,6 +144,7 @@ async function processOne(file, name, crop) {
   maxX = Math.min(w - 1, maxX + pad); maxY = Math.min(h - 1, maxY + pad);
   await sharp(px, { raw: { width: w, height: h, channels: 4 } })
     .extract({ left: minX, top: minY, width: maxX - minX + 1, height: maxY - minY + 1 })
+    .flop(FLIP_TO_RIGHT.has(name))
     .resize(256, 256, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .png()
     .toFile(path.join(OUT, `${name}.png`));

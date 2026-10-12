@@ -4,7 +4,7 @@ import sys
 from collections import deque
 from pathlib import Path
 
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageOps
 
 UP = Path('/home/z/my-project/upload')
 OUT = Path('/home/z/my-project/public/mt/riders')
@@ -21,6 +21,9 @@ JOBS = [
 ]
 
 TOL = 46  # 与背景色的最大色距
+
+# 用户需求：懒懒r11/一二r15/布布r16/兔兔r17 朝左 → 镜像成朝右
+FLIP_TO_RIGHT = {'r11', 'r15', 'r16', 'r17'}
 
 
 def process(src: Path, dst: Path) -> None:
@@ -117,6 +120,8 @@ def process(src: Path, dst: Path) -> None:
     if max(rgba.size) > 420:
         r = 420 / max(rgba.size)
         rgba = rgba.resize((round(rgba.width * r), round(rgba.height * r)), Image.LANCZOS)
+    if dst.stem in FLIP_TO_RIGHT:
+        rgba = ImageOps.mirror(rgba)
     rgba.save(dst, 'PNG')
     print(f'{dst.name}: {rgba.size} bg={bg}')
 
