@@ -356,7 +356,8 @@ export function ProactiveMsgPage({
   const applyCustomInterval = (): void => {
     const n = Number(customVal);
     if (!Number.isFinite(n) || n <= 0) return;
-    const ms = Math.max(15_000, Math.round(customUnit === 's' ? n * 1000 : customUnit === 'm' ? n * 60_000 : n * 3600_000));
+    // 下限 3s（用户反馈：写 5 秒不能被强顶成 15 秒——写多少存多少，极端小值才收敛到 3s）
+    const ms = Math.max(3_000, Math.round(customUnit === 's' ? n * 1000 : customUnit === 'm' ? n * 60_000 : n * 3600_000));
     update({ timerMs: Math.min(ms, 7 * 24 * 3600_000), timerMode: 'interval' });
     setCustomOpen(false);
   };
@@ -828,7 +829,7 @@ export function ProactiveMsgPage({
           <div className="mt-4 flex items-center gap-2.5">
             <input
               type="number"
-              min="0.1"
+              min="3"
               step="any"
               value={customVal}
               onChange={(e) => setCustomVal(e.target.value)}

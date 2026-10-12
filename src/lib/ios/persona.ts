@@ -250,7 +250,8 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
     ...(userNick && userReal && userNick !== userReal
       ? [
           `【用户的称呼】用户的名字（真实名字）是${userReal}，昵称是${userNick}——软件上显示的「${userNick}」只是昵称，不是真实名字。`,
-          `「${userNick}」只是 TA 的昵称，不是另一个人，也不是什么正式名字——「${userReal}」和「${userNick}」指的都是同一位用户；有人问「${userReal}」是谁、或问这位用户叫什么名字时，回答真实名字「${userReal}」；绝不能把「${userNick}」当成一个新出现的人，也不能把「${userNick}」当成正式名字。平时称呼这位用户用「${user}」${user === userNick ? '（TA 选择用昵称称呼）' : ''}。`,
+          `「${userNick}」只是 TA 的昵称，不是另一个人，也不是什么正式名字——「${userReal}」和「${userNick}」指的都是同一位用户；有人问「${userReal}」是谁、或问这位用户叫什么名字时，回答真实名字「${userReal}」；绝不能把「${userNick}」当成一个新出现的人，也不能把「${userNick}」当成正式名字。`,
+          `平时称呼这位用户要用 TA 的真实名字「${userReal}」，不要用昵称「${userNick}」称呼 TA——昵称只是软件里的显示用名，你叫 TA 时用真名「${userReal}」（用户明确要求过）。`,
         ]
       : []),
     `【身份】${identity.join('，')}`,

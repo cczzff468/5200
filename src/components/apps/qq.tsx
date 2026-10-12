@@ -2870,7 +2870,8 @@ function ChatPage({
   const crossCtxRef = useRef<{ crossAppBlock: string; groupBlock: string }>({ crossAppBlock: '', groupBlock: '' });
   useEffect(() => {
     let alive = true;
-    buildCrossContextBlocks(peer.id, 'qq', me.name)
+    // AI 视角统一真名指代用户（跨 App 块里的「{me}：」行标签/环境行）；展示名只用于 UI 显示
+    buildCrossContextBlocks(peer.id, 'qq', me.realName || me.name)
       .then((b) => {
         if (alive) crossCtxRef.current = b;
       })
@@ -2878,7 +2879,7 @@ function ChatPage({
     return () => {
       alive = false;
     };
-  }, [peer.id, me.name]);
+  }, [peer.id, me.name, me.realName]);
   // 46-f：相册缓存——runAiTurn 开回合时刷新本联系人相册（listAlbums），buildReplyMsgs
   // 同步查 pick-album-* 目标（getAlbum 是 async 不能在同步循环里 await，改预取缓存）。挂载时
   // 也预热一次，避免接力回复（bgEnqueueBatch 路径，未走 runAiTurn）发生时缓存为空导致查不到
@@ -3749,13 +3750,13 @@ function ChatPage({
           }) || undefined,
         memoryBlockFn,
         worldbookBlock,
-        momentsBlock: buildMomentsChatBlock({ contactId: peer.id, app: 'qq', userName: me.name, peer }) || undefined,
+        momentsBlock: buildMomentsChatBlock({ contactId: peer.id, app: 'qq', userName: me.name, userRealName: me.realName || me.name, peer }) || undefined,
         timeBlock: getTimeAware(sessionKey)
           ? buildTimeAwareBlock({ lastMsgTime: base.length > 0 ? base[base.length - 1].time : null, regionHint: peer.region || null })
           : '',
         // 位置块与文字聊天同一套 buildLocationBlock：通话里 AI 同样知道“用户在哪”；
         // 【fix3-d-5】补传 peerLabel：对方（AI 角色）发的位置会标为「TA 本人发的自己的位置」，不再被说成「对方=用户的位置」
-        locBlock: buildLocationBlock(base, { userLabel: me.name, peerLabel: `「${peer.name}」` }) || undefined,
+        locBlock: buildLocationBlock(base, { userLabel: me.realName || me.name, peerLabel: `「${peer.name}」` }) || undefined,
         multiApp: getMemSettings(peer.id).share,
         onEnd: writeCallCard,
         onFollowup: sendCallFollowup,
@@ -4389,7 +4390,7 @@ function ChatPage({
     const blkEntry = loadBlock('qq', peer.id);
     if (blkEntry.byUser && !charRequestOnlyOf(blkEntry)) return;
     // 40-b：跨 App/群聊近况刷新（fire-and-forget，供下一轮使用；本轮用预热缓存）
-    void buildCrossContextBlocks(peer.id, 'qq', me.name)
+    void buildCrossContextBlocks(peer.id, 'qq', me.realName || me.name)
       .then((b) => {
         crossCtxRef.current = b;
       })
@@ -4571,7 +4572,8 @@ function ChatPage({
     });
     // QQ动态感知（四）：把「最近的动态 + 相关互动」注入 system（互通开关关闭时只看 QQ 平台的动态），
     // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）
-    const momentsBlock = buildMomentsChatBlock({ contactId: peer.id, app: 'qq', userName: me.name, peer });
+    // userName=展示名（动态存储检索口径）；userRealName=真名（标签/归属说明用真名称呼用户）
+    const momentsBlock = buildMomentsChatBlock({ contactId: peer.id, app: 'qq', userName: me.name, userRealName: me.realName || me.name, peer });
     // 美团×AI 联动（外卖/代付）：实时订单动态 + 本聊天的待处理代付请求/待付订单 +
     // 食物话题命中时的商家目录与点外卖动作教学（全同步 kv 读，状态实时）——
     // A1：QQ 私聊同微信同构接入（此前仅卡片渲染/历史序列化接了，AI 本体不参与外卖/代付）
@@ -4594,7 +4596,7 @@ function ChatPage({
     // 图片消息以 [图片] 占位、语音消息以转写文本参与，防 dataURL 进入触发词扫描）
     // 100-e 世界书锚点对齐微信（主聊同款 collectWbBlocks 第三参 labels）：锚点块头注标注
     // 「文中的『你』指{角色名}、『机主/用户』指{机主名}」，消除世界书消歧「文中的你指谁」漂移
-    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map(scanTextOf)]), { charName: peer.name, userName: me.name });
+    const wbBlocks = collectWbBlocks(peer.id, wbScanText([userMsg?.content, sysEvent, ...base.slice(-8).map(scanTextOf)]), { charName: peer.name, userName: meAddrName });
     // 位置感知：用户最近发过的位置消息（名称/地址/经纬度/发送时间）注入 system——
     // AI 被问“我在哪/你知道我在哪吗”时直接说出地点名；解析失败时诚实说无法识别，不编造；
     // 【fix3-d-5】补传 peerLabel：AI 角色自己发的位置在注入块里标明「AI角色本人，就是你自己」，
@@ -4602,7 +4604,7 @@ function ChatPage({
     const locBlock = buildLocationBlock(base, { userLabel: meAddrName, peerLabel: `「${peer.name}」` });
     // 双向拉黑感知：当前会话的拉黑关系注入 system（无拉黑状态时为空串；40-a 重构后拉黑会拦截本 App
     // 内的消息发送——byUser 时本回合早已被入口守卫取消；能走到这里的被拉黑回合=仅申请卡放行模式）
-    const blkBlock = buildBlockPromptBlock('qq', peer.id, me.name);
+    const blkBlock = buildBlockPromptBlock('qq', peer.id, meAddrName);
     // 占位防编造（AI 感知审计修复）：最近消息里有听不到内容的语音 / 看不到内容的图片时注入——
     // AI 不得假装听过/看过并编造细节（本轮正在识图的图片排除：描述随后作为独立消息追加）
     const turnImageIds = new Set<string>();
@@ -4651,7 +4653,7 @@ function ChatPage({
       tbEngage.block,
       // 音乐实时情境（第三十八轮）：一起听中=一起听块；其余私聊=音乐点播块（播放器此刻歌名/歌手/进度/歌词
       // + 主动放歌引导 + 播控指令说明）（发消息瞬间现场构建，非缓存）
-      togetherLiveBlock(peer.id, me.name),
+      togetherLiveBlock(peer.id, meAddrName),
       momentsBlock,
       locBlock,
       [...actionRules, ...mtEngage.rules, ...tbEngage.rules].length > 0 ? [...actionRules, ...mtEngage.rules, ...tbEngage.rules].join('\n\n') : '',

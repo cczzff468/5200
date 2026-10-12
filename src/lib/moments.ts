@@ -2703,9 +2703,13 @@ export function buildMomentsChatBlock(args: {
   app: MemApp;
   /** 机主展示名（动态作者匹配用；读操作不改写平台机主名） */
   userName: string;
+  /** 机主真实名字（可选）：注入标签/归属说明用它指代用户——AI 视角统一真名（用户反馈：
+   *  AI 一直用昵称呼叫用户），展示名只用于动态存储检索；缺省回退 userName */
+  userRealName?: string;
   peer: Pick<ContactRecord, 'id' | 'name' | 'nickname'>;
 }): string {
   const { contactId, app, userName, peer } = args;
+  const userLabel = args.userRealName?.trim() || userName;
   if (!contactId || !peer?.id) return '';
   let allowed: MomentPlatform[] = [];
   try {
@@ -2736,7 +2740,7 @@ export function buildMomentsChatBlock(args: {
     `【最近的社交动态（${appLabels}；这些是动态广场内容，不是你们私聊的消息）】`,
   ];
   for (const p of picked) {
-    const who = p.author === 'user' ? userName : p.authorName ?? '';
+    const who = p.author === 'user' ? userLabel : p.authorName ?? '';
     // 归属标注铁律：每条动态必须一眼看出是谁发的——「AI角色本人，就是你自己」= 读到这段的 AI 自己，
     // 「用户本人」= 机主用户，其余 = 其他 AI 角色；杜绝 AI 把自己发的动态当成用户发的（反之亦然）。
     // fix3-b：判定统一走 isPostByPeer（peerId 优先，legacy 无 peerId 的旧数据按展示名/真名兜底命中）——
@@ -2750,7 +2754,7 @@ export function buildMomentsChatBlock(args: {
     // 相关互动：该角色的点赞 + 最近的评论（最多 3 条，多轮回复按顺序）
     if (p.likes.some((l) => isInteractionByPeer(l, peer))) lines.push('  （你赞过这条动态）');
     for (const c of p.comments.slice(-3)) {
-      const cWho = c.author === 'user' ? userName : c.authorName;
+      const cWho = c.author === 'user' ? userLabel : c.authorName;
       // fix3-b：AI 评论同样用 isInteractionByPeer 判定是否「本人」（peerId 优先、名字兜底）
       const cTag = c.author === 'user' ? '用户本人' : isInteractionByPeer(c, peer) ? 'AI角色本人，就是你自己' : 'AI角色';
       const arrow = c.replyToName ? ` 回复 ${c.replyToName}` : '';
@@ -2759,7 +2763,7 @@ export function buildMomentsChatBlock(args: {
   }
   lines.push(
     `（这些是你们在${appLabels}里的公开动态与互动，聊天时可以像真人一样自然提起（关心、调侃、接着聊都行），但不要把它们当成私聊内容，也不要生硬复述。` +
-      `归属标注必须看清：标了「AI角色本人，就是你自己」的动态是你自己发的，标了「用户本人」的是${userName}发的——绝不能把自己发的动态说成${userName}发的，也不能把${userName}发的说成自己发的。）`
+      `归属标注必须看清：标了「AI角色本人，就是你自己」的动态是你自己发的，标了「用户本人」的是${userLabel}发的——绝不能把自己发的动态说成${userLabel}发的，也不能把${userLabel}发的说成自己发的。）`
   );
 
   // 懒写入记忆：这次「被看到」的用户广播动态写进该角色记忆（去重：已入过库的动态跳过）。
@@ -2773,7 +2777,7 @@ export function buildMomentsChatBlock(args: {
       post: p,
       comment: null,
       contact: { id: contactId, name: peer.name, nickname: peer.nickname },
-      userName,
+      userName: userLabel,
     });
   }
 

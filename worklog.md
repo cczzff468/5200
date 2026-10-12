@@ -18649,3 +18649,21 @@ Stage Summary:
 - 交付：①30 秒定时到点必发（人设门槛移除 + AI 消息不再自我压制 + LLM 失败重试后兜底 + 拉黑解除即恢复）；②拉黑期间定时暂停在设置页有明确提示（不再无解释静默）；③拉黑情境全部开口（跨 App 消息/来电开场/未接留言）100% LLM 情境化，固定模板兜底整体删除，生成失败退避重试×3；④来电 5~30 秒错峰（12s+0~18s 抖动）且「消息没人理才打」（用户已回话/拉黑已解除都不打）
 - 改动文件：src/lib/ios/{proactive-msg,cross-app-reach,proactive-call}.ts、src/components/apps/proactive-msg-page.tsx
 - 关键决策：①「到点必发」与「不要模板」分层满足——用户明确约定的 timer/event/reminder 保留本地兜底文案作最后保底（先重试再兜底），拉黑情境开场零容忍模板（失败即放弃单 App）；②拉黑守卫保留（拉黑=停发是正确语义），补的是可感知性而非改变语义；③convActive 只看用户消息——AI 连续主动消息不再互相压制，30s 级短间隔才有意义；④重试窗口末复核拉黑跃迁双向状态（刚拉黑不发、已解除不发），避免过期情境穿帮
+---
+Task ID: 9
+Agent: 主协调者 (Z.ai Code)
+Task: 用户四点验收反馈——①主动发信息要根据人设记忆上下文来发；②主动发消息间隔自定义写 5 秒被变成 15 秒；③AI 把自己发的动态说成用户发的（"我刚看到你发的QQ动态"）；④AI 一直用昵称呼叫用户（真实名字写的是凡凡）
+
+Work Log:
+- 【5秒变15秒根因修复】两处 15s 硬下限夹逼：proactive-msg.ts sanitizeCfg Math.max(15_000→3_000)（写多少存多少，极端小值才收敛 3s）+ proactive-msg-page.tsx applyCustomInterval 同步放开（input min 0.1→3）；PROACTIVE_MSG_TICK_MS 10s→5s（秒级间隔真实生效，5s 设定误差 ≤5s，tick 逐联系人读 kv 内存缓存开销可控）；parseReminderInstruction 自然语言提醒同步放开秒级（下限 0.5 分钟→5 秒，REMINDER_PARSE_SYSTEM 文案同步，intervalMs clamp 30s→5s）
+- 【主动消息接入人设记忆上下文】generateProactiveText/decideAutonomous 双路径注入：buildMomentsChatBlock（朋友圈/QQ空间动态，每条带归属标注）+ buildCrossAppBlock（其他 App 最近对话/听歌近况，AI 视角真名）；user prompt 新增【你最近主动发过的消息】近 3 条历史（proactiveHistory，短间隔连发时压住换皮重发）；genRules/autoRules 新增「内容必须有来处，绝不能编造记录里没有的细节」+「社交动态归属红线」
+- 【动态归属张冠李戴修复】moments.ts buildMomentsChatBlock 新增 userRealName 参数——标签/归属说明统一真名指代用户（userName 保持展示名仅用于动态存储检索，writeMomentMemory fallback 同步）；proactive-msg 生成侧同样带归属红线规则（标「AI角色本人，就是你自己」的动态绝不能说成对方发的，看不清归属就不提）
+- 【真名称呼统一（凡凡）】四处昵称泄漏路径全改真名优先：cross-app-reach.ts reachOne userName=userNickname||userRealName→userRealName||userNickname + armBlockCall 同口径（拉黑跨App触达/来电开场此前一直昵称优先）；qq.tsx/wechat.tsx buildCrossContextBlocks（跨App块「{me}：」行标签/环境行）me.name→me.realName||me.name（4 处）、buildMomentsChatBlock 补传 userRealName（4 处）、collectWbBlocks 世界书锚点/buildBlockPromptBlock 拉黑块/togetherLiveBlock 音乐块/通话 locBlock 全部改 meAddrName 或 realName；persona.ts【用户的称呼】段强化：平时称呼必须用真实名字，不要用昵称（用户明确要求过）
+- 【兜底文案真名化】fallbackProactiveText 新增 userName 参数——LLM 失败本地兜底的通用句也带「凡凡，」前缀（短间隔高频限流时兜底占比上升，无称呼通用句显得假）；fireProactive 统一取 ownerProfileFor 真名传入三处兜底调用点
+- 【E2E（agent-browser 实机）】seed 凡凡（user，昵称甜甜）+ 小澜（char，昵称澜澜，情侣人设）→ 微信登录 → 主动发消息设置页：定时开→自定义面板填 5 秒保存 →「当前：每隔5秒」正确显示（未被顶成 15 秒）→ 40 秒内连发 8+ 条主动消息（5s 档真实生效）；全部消息以「凡凡，」开头（真名称呼 ✓，此前昵称优先路径已断）；「我要拉黑你」→「你已拉黑「澜澜」」系统消息（方向正确）→ 信息 App 10:02 到达跨App触达消息「凡凡，你怎么突然把我拉黑了？我做错什么吗…」（真名+LLM 情境化非模板）→ ~20s 后 iOS 全屏来电（12s+18s 抖动档）→ 超时未接 → 语音留言 tab 角标 1 + 留言 0:09 落库 ✓；测试数据（ios-phone-db + localStorage）清理回归
+- 验证：bunx tsc --noEmit 0 错误；改动 7 文件 eslint 0 问题（qq/wechat 仅 BABEL 500KB 提示）；dev.log 仅既有 instrumentation Edge Runtime 警告（期间 429 为 5s 高频压测触发上游限流，兜底链路按设计工作）
+
+Stage Summary:
+- 交付：①自定义间隔写多少是多少（5s 生效，UI/落库/tick/自然语言提醒四层口径统一，下限 3s）；②主动消息完整接入人设+记忆+社交动态+跨App近况+近期主动消息历史（与三端聊天同源模块，含归属红线与内容有来处约束）；③动态归属标注进主动消息上下文+提示词红线——AI 自己发的动态不再说成用户发的；④AI 称呼统一真实名字：跨App触达/来电开场/跨App块/动态块/世界书锚点/拉黑块/音乐块/通话位置块/兜底文案九处泄漏点全改真名优先，persona 红线「不要用昵称呼叫」
+- 改动文件：src/lib/ios/{proactive-msg,cross-app-reach,persona}.ts、src/lib/moments.ts、src/components/apps/{proactive-msg-page,qq,wechat}.tsx
+- 关键决策：①tick 5s 而非 3s（3s 间隔允许 ≤10s 实际误差，避免无谓翻倍轮询开销）；②buildMomentsChatBlock 拆「检索名（展示名）/标签名（真名）」双参数而非改检索名——动态存储按发布时展示名键入，改检索名会丢历史动态；③跨App块/动态块标签直接换 realName（纯 prompt 面，无存储耦合）；④qq/wechat 通话入参 momentsBlock/locBlock 同步补真名（chat-call 引擎用 ownerProfileFor 已是真名，块内标签曾残留展示名）

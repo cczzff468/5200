@@ -29,6 +29,8 @@ import { buildPersonaSystemPrompt } from './persona';
 import { buildNpcPromptExtra } from './npc-bond';
 import { loadBlock } from './block-state';
 import { getMemSettings, memChatRecallBlock, memAfterAiTurn, memConvoFromRaw } from '@/lib/memory';
+import { buildMomentsChatBlock } from '../moments';
+import { buildCrossAppBlock } from './cross-app-context';
 import { buildTimeAwareBlock, getTimeAware } from '@/lib/time-aware';
 import { scheduleAiDelivery } from './ai-delivery';
 import { pushChatNotification } from './island-notify';
@@ -61,7 +63,7 @@ export interface ProactiveMsgConfig {
   timerOn: boolean;
   /** 定时模式：按间隔（默认）| 每天定时（对齐钟表时刻；Task 51 B3） */
   timerMode?: 'interval' | 'daily';
-  /** 定时间隔（毫秒；最小 15s，UI 档位 30s~24h+自定义） */
+  /** 定时间隔（毫秒；最小 3s——用户自定义秒级要真实生效（用户反馈：写 5 秒不能被改成 15 秒），UI 档位 30s~24h+自定义） */
   timerMs: number;
   /** timerMode=daily 时的每天发送时刻 'HH:mm' */
   timerDailyTime?: string;
@@ -104,8 +106,9 @@ const HIST_KEY_PREFIX = 'proactive-msg-hist:';
 /** 全局总开关（设备级，Task 51 B2）：true = 所有角色暂停主动发消息（一键全停） */
 const MASTER_OFF_KEY = 'proactive-msg-master-off';
 
-/** tick 周期（事件/提醒按分钟判定，10s 轮询足够；定时最细 30s 档误差 ≤10s 可接受） */
-export const PROACTIVE_MSG_TICK_MS = 10_000;
+/** tick 周期：自定义间隔已放开到秒级（最短 3s），5s 轮询保证 5s 级短间隔真实生效（误差 ≤5s；
+ *  索引内联系人逐个读 kv 内存缓存 + 消息数组解析，开销可控） */
+export const PROACTIVE_MSG_TICK_MS = 5_000;
 /** 到期触发宽限：定时/事件错过 tick（浏览器休眠等）在宽限窗口内仍补发一次 */
 const FIRE_GRACE_MS = 90_000;
 /** 每日类触发（事件/daily 提醒/每天定时刻）宽限：错过精确分钟（页面没开/休眠）在 N 分钟内仍补发一次（Task 51 A1） */
@@ -165,7 +168,8 @@ function sanitizeCfg(raw: unknown): ProactiveMsgConfig {
         }))
         .slice(0, 20)
     : [];
-  const timerMs = typeof r.timerMs === 'number' && Number.isFinite(r.timerMs) ? Math.max(15_000, Math.min(r.timerMs, 7 * 24 * 3600_000)) : DEFAULT_CFG.timerMs;
+  // 用户反馈：自定义 5 秒被强顶成 15 秒——下限降到 3s（低于 3s 的极端值才收敛），写多少就是多少
+  const timerMs = typeof r.timerMs === 'number' && Number.isFinite(r.timerMs) ? Math.max(3_000, Math.min(r.timerMs, 7 * 24 * 3600_000)) : DEFAULT_CFG.timerMs;
   const autoFreqMin = typeof r.autoFreqMin === 'number' && Number.isFinite(r.autoFreqMin) ? Math.max(2, Math.min(Math.round(r.autoFreqMin), 120)) : 5;
   return {
     timerOn: r.timerOn === true,
@@ -379,7 +383,7 @@ const REMINDER_PARSE_SYSTEM = `你是一个定时任务解析器。用户正在�
 1. match=false：不是定时发消息指令（普通聊天、问句、没有明确的时间意图）。
 2. kind=once：一次性的（"3分钟后给我发消息"、"晚上8点提醒我……"、"20分钟以后叫我"）。minutesLater=从当前时间算起的分钟数：能精确到今天某时刻就换算成分钟差；如果那个时刻今天已经过了（如现在 21 点说"晚上8点提醒我"），按明天同一时刻换算（加 1440 分钟）；必须为正数，不允许负数或零。
 3. kind=daily：每天重复（"以后每天早上8点给我发消息"、"每天晚上10点说晚安"）。dailyTime="HH:mm"（24小时制，"早上8点"="08:00"，"晚上10点"="22:00"，"中午12点半"="12:30"）。
-4. kind=interval：按间隔循环（"每隔1小时给我发个消息"、"每30分钟发一次消息"、"每隔30秒发一句"）。intervalMinutes=分钟数（可以是小数：30 秒=0.5、90 秒=1.5；最小 0.5）。
+4. kind=interval：按间隔循环（"每隔1小时给我发个消息"、"每30分钟发一次消息"、"每隔30秒发一句"）。intervalMinutes=分钟数（可以是小数：30 秒=0.5、90 秒=1.5；最小约 0.08，即 5 秒）。
 5. note=用户想让消息带的内容/目的摘要（如"提醒我喝水""说晚安"）；没有具体目的就写"主动找我聊聊"。
 6. 只依据对话里给到的时间信息换算，不要编造；表达含糊缺时间信息时 match=false。
 7. 严禁输出 JSON 以外的任何文字。`;
@@ -415,9 +419,9 @@ export async function parseReminderInstruction(app: ProactiveApp, cid: string, t
       task = { id: genId(), app, cid, kind: 'daily', dailyTime: hm, note: (parsed.note ?? '').slice(0, 80) || '按约定主动发消息', createdAt: now };
     } else {
       const mins = Number(parsed.intervalMinutes);
-      // 30 秒级短间隔放行（用户实测口径）：下限 0.5 分钟（30s），落库按毫秒存，与设置页自定义间隔同档
-      if (!Number.isFinite(mins) || mins < 0.5 || mins > 60 * 24 * 7) return null;
-      task = { id: genId(), app, cid, kind: 'interval', intervalMs: Math.max(30_000, Math.round(mins * 60_000)), note: (parsed.note ?? '').slice(0, 80) || '按约定主动发消息', createdAt: now };
+      // 秒级短间隔放行（与设置页自定义口径一致，用户写 5 秒就是 5 秒）：下限 5 秒，落库按毫秒存
+      if (!Number.isFinite(mins) || mins < 5 / 60 || mins > 60 * 24 * 7) return null;
+      task = { id: genId(), app, cid, kind: 'interval', intervalMs: Math.max(5_000, Math.round(mins * 60_000)), note: (parsed.note ?? '').slice(0, 80) || '按约定主动发消息', createdAt: now };
     }
     addReminder(app, task);
     return `${reminderLabel(task)}｜${task.note}`;
@@ -645,8 +649,10 @@ function genRules(trigger: FireTrigger, timeAware: boolean): string[] {
     '像平时聊天一样自然口语化，一到两句就好（一般不超过 50 字），禁止标题、解释、括号说明、JSON、markdown，禁止用引号把整条消息包起来。',
     `触发情境：${triggerDesc(trigger)}`,
     '结合你们的关系、人设和最近聊过的内容：可以延续上次话题、分享你「刚发生/刚想到」的近况、问候、调侃、吐槽，像真人想到什么发什么。',
+    '下面注入的记忆、跨 App 近况、社交动态都是你亲身经历的事：可以自然接着聊，但内容必须有来处——绝不能编造记录里没有的细节（没发生的约会、没看过的动态都不算数）。',
+    '【社交动态归属红线】朋友圈/QQ空间动态都带归属标注：标「用户本人」的才是对方发的动态，标「AI角色本人，就是你自己」的是你自己发的——绝不能把自己发的动态说成对方发的（反之亦然）；归属看不清就不要提动态。',
     '绝对不要重复你最近已经说过的话（尤其是你上一条主动消息和最近聊天里的内容），也不要复述对方的话。',
-    '不要每次都用同一种开头（「在吗」「在干什么」不要连着用），内容要有新信息量。',
+    '不要每次都用同一种开头（「在吗」「在干什么」不要连着用），也不要连续几条都围着同一个由头（比如连着三条都提喝茶），内容要有新信息量。',
   ];
   if (timeAware) rules.push('内容必须符合当前真实时间（深夜别元气满满问吃了吗、早上适合问早、饭点可以聊吃的；节日节气可以自然提到）。');
   if (trigger.kind === 'reminder' && trigger.note) rules.push(`消息要贴合对方的请求「${trigger.note}」（该提醒就提醒、该说晚安就说晚安），用你自己的口吻说。`);
@@ -710,14 +716,34 @@ async function generateProactiveText(app: ProactiveApp, contact: ContactRecord, 
     altMainRelation: contact.relation?.trim() || '',
   });
 
-  const system = [persona, memoryBlock, timeBlock].filter(Boolean).join('\n\n');
+  // 社交动态感知（与三端聊天同口径）：最近的朋友圈/QQ空间动态（每条带归属标注）——
+  // 主动消息也能自然提起动态话题；userName 传展示名（与动态存储/作者匹配口径一致），
+  // userRealName 传真实名字（标签与归属说明用真名称呼用户）
+  const ownerDisplay = owner?.nickname?.trim() || owner?.realName || '用户';
+  const momentsBlock = buildMomentsChatBlock({
+    contactId: contact.id,
+    app,
+    userName: ownerDisplay,
+    userRealName: owner?.realName || undefined,
+    peer: contact,
+  });
+  // 跨 App 近况（与三端聊天同口径）：其他 App 最近聊过什么/用户在听什么——主动消息能接上别处的话题
+  const crossAppBlock = await buildCrossAppBlock(contact.id, app, userName);
+
+  const system = [persona, memoryBlock, crossAppBlock, momentsBlock, timeBlock].filter(Boolean).join('\n\n');
 
   // user prompt：情境 + 最近对话 + 防重复
   const recent = convoLines(norm, 12, contact.name, userName);
   const parts: string[] = [];
   if (recent.trim()) parts.push(`【最近聊天】\n${recent}`);
   else parts.push('【最近聊天】\n（最近没有聊天记录，你们有一阵子没说话了）');
-  if (last.lastSentText) parts.push(`【你最近一次主动发的消息（严禁重复类似内容）】\n${last.lastSentText}`);
+  // 近期主动消息历史（最近 3 条，新的在前）：短间隔连续发时让模型看见「刚发过什么」，压住换皮重发
+  const histLines = proactiveHistory(app, contact.id)
+    .slice(0, 3)
+    .map((h) => `- ${h.text}`)
+    .join('\n');
+  if (histLines) parts.push(`【你最近主动发过的消息（严禁重复或换汤不换药地重发类似内容）】\n${histLines}`);
+  else if (last.lastSentText) parts.push(`【你最近一次主动发的消息（严禁重复类似内容）】\n${last.lastSentText}`);
   parts.push('【现在】\n请直接输出你要发给对方的消息正文（只有正文，一行，不要任何前后缀）。');
   const user = parts.join('\n\n');
 
@@ -750,6 +776,8 @@ function autoRules(): string[] {
     '【自主发消息决策】你正在决定要不要此刻主动给对方发一条消息。这不是必须发的任务——发不发完全由你根据人设、心情、你们的关系和当前时间自然决定。',
     '考虑因素：人设性格（高冷/慢热的人主动频率低）、你们的记忆和最近聊过什么、当前时间（深夜/清晨/工作时间的分寸）、距上次聊天过了多久（刚聊完没必要马上又发）。',
     '一般来说：有好玩的想分享、惦记对方、有正当由头（饭点/天气/对方提过的事）→ 可以发；刚聊完没多久、深夜、没什么想说的、对方可能不方便 → 选 wait。',
+    '下面注入的记忆、跨 App 近况、社交动态都是你亲身经历的事：send 的内容要有来处，绝不能编造记录里没有的细节。',
+    '【社交动态归属红线】朋友圈/QQ空间动态带归属标注：标「AI角色本人，就是你自己」的是你自己发的动态，绝不能当成对方发的；标「用户本人」的才是对方发的。',
     '输出 JSON：{"action":"send"或"wait","message":"action=send 时要发的消息正文（一行，像平时聊天，1~2 句）","delayMinutes":数字（action=wait 时建议多久后再考虑，5~120）,"reason":"一句话理由"}',
     '严禁输出 JSON 以外的文字。send 的消息必须是有内容量的（不要空洞的「在吗」）。',
   ];
@@ -779,6 +807,16 @@ async function decideAutonomous(app: ProactiveApp, contact: ContactRecord, npcEx
     altMainName: cachedOwnerName(),
     altMainRelation: contact.relation?.trim() || '',
   });
+  // 社交动态 + 跨 App 近况（与三端聊天同口径）：自主决策同样要基于人设/记忆/动态/跨 App 上下文
+  const ownerDisplay = owner?.nickname?.trim() || owner?.realName || '用户';
+  const momentsBlock = buildMomentsChatBlock({
+    contactId: contact.id,
+    app,
+    userName: ownerDisplay,
+    userRealName: owner?.realName || undefined,
+    peer: contact,
+  });
+  const crossAppBlock = await buildCrossAppBlock(contact.id, app, userName);
   const timeBlock = buildTimeAwareBlock({ lastMsgTime: norm.length > 0 ? norm[norm.length - 1].time : null, regionHint: contact.region || null });
   // Task 51 C1：启用中的事件（含未设时间的纯情境事件）作为自主决策的情境参考
   let eventsBlock = '';
@@ -790,7 +828,7 @@ async function decideAutonomous(app: ProactiveApp, contact: ContactRecord, npcEx
   } catch {
     /* 忽略 */
   }
-  const system = [persona, memoryBlock, timeBlock, eventsBlock].filter(Boolean).join('\n\n');
+  const system = [persona, memoryBlock, crossAppBlock, momentsBlock, timeBlock, eventsBlock].filter(Boolean).join('\n\n');
 
   const recent = convoLines(norm, 10, contact.name, userName);
   const gapDesc = (() => {
@@ -1099,8 +1137,15 @@ const generating = new Set<string>();
 /**
  * 生成失败本地兑底文案（用户验收点：设置了自动发消息，到点一定能收到一条）——
  * timer/event/reminder 是用户明确约定的「必须发」，LLM 挂了也不能沉默；
- * 文案像真人随手发的（不暴露「系统兜底」痕迹）。 */
-function fallbackProactiveText(trigger: FireTrigger): string {
+ * 文案像真人随手发的（不暴露「系统兜底」痕迹）；带用户真名（短间隔高频下上游限流时
+ * 兑底消息占比上升，无称呼的通用句会显得假——统一用真实名字称呼，与主链路口径一致）。
+ * userName 传空时保持原句（跨端兼容）。 */
+function fallbackProactiveText(trigger: FireTrigger, userName?: string | null): string {
+  const me = (userName ?? '').trim();
+  const pick = (arr: string[]): string => {
+    const base = arr[Math.floor(Math.random() * arr.length)];
+    return me ? `${me}，${base}` : base;
+  };
   if (trigger.kind === 'reminder') {
     const note = (trigger.note ?? '').trim();
     if (note) return `你之前让我到点提醒你「${note}」——时间到啦！`;
@@ -1111,14 +1156,13 @@ function fallbackProactiveText(trigger: FireTrigger): string {
     if (name) return `「${name}」的时间到了，特地来跟你说一声~`;
     return '到点了，来跟你说一声~';
   }
-  const pool = [
+  return pick([
     '在干嘛呢？突然想起你了',
     '忙完了没？来跟你聊两句',
     '咻——冒个泡，今天过得怎么样？',
     '刚看到个东西第一反应是想发给你，你最近咋样？',
     '好一阵没说话了，有点想你了',
-  ];
-  return pool[Math.floor(Math.random() * pool.length)];
+  ]);
 }
 
 /**
@@ -1132,6 +1176,9 @@ async function fireProactive(app: ProactiveApp, contact: ContactRecord, trigger:
   if (generating.has(key)) return;
   generating.add(key);
   let usedFallback = false;
+  // 兑底文案用的真名（LLM 失败时本地文案也用真实名字称呼用户）；取不到回退 null
+  const ownerForFallback = await ownerProfileFor(app as AccountApp).catch(() => null);
+  const fallbackName = ownerForFallback?.realName || null;
   try {
     let text: string;
     if (trigger.kind === 'auto') {
@@ -1143,7 +1190,7 @@ async function fireProactive(app: ProactiveApp, contact: ContactRecord, trigger:
       }
       if (decision.action === 'fail') {
         // API/生成失败 ≠ AI 决定不发：本地兑底一条保底消息（到点一定收得到）
-        text = fallbackProactiveText(trigger);
+        text = fallbackProactiveText(trigger, fallbackName);
         usedFallback = true;
       } else if (decision.action !== 'send' || !decision.message) {
         // wait：把下次决策推迟到建议时间（autoAt 后移，min 5min；基准用当前配置的决策节奏）
@@ -1171,7 +1218,7 @@ async function fireProactive(app: ProactiveApp, contact: ContactRecord, trigger:
         }
       }
       if (!text) {
-        text = fallbackProactiveText(trigger); // 两轮都失败：本地兑底（到点一定发）
+        text = fallbackProactiveText(trigger, fallbackName); // 两轮都失败：本地兑底（到点一定发）
         usedFallback = true;
       }
     }
@@ -1186,7 +1233,7 @@ async function fireProactive(app: ProactiveApp, contact: ContactRecord, trigger:
     if (recent.includes(text)) {
       // 兑底也撞上重复（罕见）：换一条再试一次，仍重复才放弃
       if (!usedFallback) return;
-      text = fallbackProactiveText(trigger);
+      text = fallbackProactiveText(trigger, fallbackName);
       if (recent.includes(text)) return;
     }
     await deliverProactiveMsg(app, contact, text, trigger);

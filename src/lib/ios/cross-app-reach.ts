@@ -181,7 +181,8 @@ async function reachOne(
   }
   const userRealName = owner?.realName?.trim() || null;
   const userNickname = owner?.nickname?.trim() || null;
-  const userName = userNickname || userRealName || '用户';
+  // 用户反馈：AI 一直用昵称呼叫用户——统一真名优先（昵称只是软件显示名，不作为对用户的称呼）
+  const userName = userRealName || userNickname || '用户';
 
   const system = await buildReachSystem(targetApp, contact, userName, userRealName, userNickname);
   const userContent =
@@ -320,7 +321,8 @@ function armBlockCall(blockedApp: BlockApp, contactId: string, direction: ReachD
       let me: string | null = null;
       try {
         const o = await ownerProfileFor(blockedApp);
-        me = o?.nickname?.trim() || o?.realName?.trim() || null;
+        // 真名优先（与 reachOne 同口径：昵称只是软件显示名，不作为对用户的称呼）
+        me = o?.realName?.trim() || o?.nickname?.trim() || null;
       } catch {
         me = null;
       }
