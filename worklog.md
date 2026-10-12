@@ -18762,3 +18762,22 @@ Stage Summary:
 - 交付：设置 › 存储 ›「备份与恢复」——一键把全部数据（18 个 IDB store 含聊天/联系人/记忆/照片/录音/音乐/铃声/相册/设置 + localStorage 小数据）下载成单个 JSON 文件；一键用备份文件整库恢复（覆盖语义+二次确认），跨设备/跨浏览器/清数据前备份全场景可用；Blob 媒体全深度保真往返，API Key 解密入包（UI 明示保管责任）+ 导入后自动回加密
 - 改动文件：src/lib/ios/backup.ts（新增）、src/lib/ios/db.ts（DB_NAME 导出）、src/components/apps/settings.tsx（存储页备份区+handlers+Download 图标）
 - 关键决策：①深度递归 Blob 转换而非字段白名单——语音消息 blob 嵌在 kv 消息数组第三层、锁屏壁纸在 settings.value 二层，白名单必漏；包装标签还原避免把合法 dataURL 字符串（联系人头像/相册图）误转 Blob；②恢复用「clear+重写」快照语义而非合并——备份是完整快照，合并会残留脏数据；③导出时解密 API 配置信封为明文是跨设备可恢复的唯一解（非可提取密钥无法随包导出），UI 文案同步提示文件保管责任；④180 条分块事务 + 动态 store 清单（未来新增 store 自动被备份覆盖）
+
+---
+Task ID: 15
+Agent: 主协调者 (Z.ai Code)
+Task: 用户要求——QQ 个人详细界面点击头像可换头像、微信个人资料界面可换头像、设置个人卡片可换头像；三个入口换的头像互相隔离（不进全局），未换过的跟随全局头像
+
+Work Log:
+- 【现状盘点】微信个人资料页头像行原是「头像暂不支持修改」toast、QQ 个人资料页头像不可点（「编辑资料」跳联系人 App=改全局）、设置个人信息页换头经 owner-profile-sync 双向镜像进机主联系人（=污染全局）——即三个入口要么不能换、要么一换全端变。基础设施侧已有 avatars 按 App 槽位机制（contacts.avatars{wx/qq/sms/phone} + avatarFor 槽位优先回退全局 + listContactsFor 投影 + updateContact avatars 合并写入），微信/QQ/信息端读取全部已走投影
+- 【三入口隔离落地】①微信 ProfilePage：头像行可点 → fileToAvatarDataUrl 压缩 → updateContact(me.id,{avatars:{wx:data}})（仅微信槽位，contact-updated → toWxUser 重派生 → 微信全端即时生效）；②QQ ProfilePage：QqAvatar 包成可点按钮（data-testid=qq-profile-avatar）→ 同款管线写 avatars.qq（QQ 全端即时生效）；③设置个人信息页：维持 setProfile({avatar})（useSettings.profile 即设置侧独立存储），头像从 owner-profile-sync 摘除
+- 【同步层改造】owner-profile-sync.ts：双向镜像去掉 avatar 只留 name（contact→profile / profile→contact / initialReconcile 三处），防止「设置换头像污染全局 / 联系人换头像覆盖设置」；新增一次性迁移 migrateAvatarIsolation（flag owner-avatar-isolation-v1）：历史镜像值 profile.avatar===机主全局头像 → 清空 profile.avatar 回归「跟随全局」，不一致视为用户自选设置头像保留
+- 【跟随全局回退】设置个人卡片（RootPage）与个人信息页头像显示改 profile.avatar || ownerAvatar（新增 useOwnerAvatar hook：mainOwnerContact + contact-updated/contact-avatar-changed 实时刷新）——设置侧未自选头像时实时跟随联系人全局头像；微信/QQ 端由 avatarFor 槽位回退语义天然满足；信息 App 走 sms 槽位（未设→全局）不受影响
+- 【共享管线】新增 src/lib/ios/avatar-upload.ts fileToAvatarDataUrl（256px 居中裁剪 JPEG 0.85，产出恒过 normalizeAvatar 校验），settings 本地同名函数删除改用共享版；设置页说明文案更新（三入口各自独立互不影响）
+- 【E2E（agent-browser 实机，393×852）】种机主 e2e-owner（红 PNG 全局头像）+ wx/qq 会话种子 → ①微信我页/资料页头像=红（未换跟随全局 ✓）→ 资料页点头像上传绿图 → avatars.wx=jpeg 落槽、全局仍红、微信我页/资料页即时变绿；②QQ（联系人tab→抽屉→资料页）头像=红（QQ 未换仍跟随全局 ✓，与微信绿隔离）→ 点头像上传蓝图 → avatars.qq=jpeg、QQ 顶栏+消息列表+资料页全变蓝、微信仍绿；③设置卡片=红（未换跟随全局 ✓，与微信绿/QQ 蓝双重隔离）→ 个人信息上传紫图 → 卡片与个人信息页变紫；④最终矩阵：wx槽=绿jpeg / qq槽=蓝jpeg / 全局=红png / 设置profile=紫jpeg 四路互不影响；⑤刷新后四路全部持久；console/page errors 零报错；测试数据（联系人/profile/会话/迁移flag）清理回归无残留
+- 验证：bunx tsc --noEmit 0 错误；eslint 改动 5 文件 0 问题（wechat/qq 仅既有 BABEL 500KB 提示）；dev.log 仅既有 weather 502 与 instrumentation Edge 警告
+
+Stage Summary:
+- 交付：①微信个人资料页、QQ 个人资料页（点头像）新增换头像能力（此前微信是「暂不支持修改」、QQ 头像不可点）；②三个换头像入口（微信/QQ/设置个人卡片）完全隔离——各自换的只在本端生效，互不影响也不写全局；③未换过的入口实时跟随全局头像（联系人 App 机主头像），全局头像改动即时反映到所有未自选的入口；④存量用户一次性迁移：历史上被镜像成与全局一致的头像自动回归「跟随全局」，用户自选过的保留
+- 改动文件：src/lib/ios/avatar-upload.ts（新增）、src/lib/ios/owner-profile-sync.ts（头像摘出镜像+迁移）、src/components/apps/{settings,wechat,qq}.tsx
+- 关键决策：①复用既有 avatars 槽位机制而非新造存储——微信/QQ 端读取投影早已就位，只补用户侧写入入口，改动面最小且与 AI [换头像] 的按 App 隔离语义同源；②设置侧用 useSettings.profile 自持（它本就是设置卡片的显示源），同步层摘 avatar 而非加 settings 槽位——避免动 Profile 类型及其 8+ 消费点；③「跟随全局」用回退实现（槽位空→avatar / profile.avatar 空→ownerAvatar）而非复制——全局后续改动无需任何同步就实时生效；④QQ 抽屉导航注意：消息 tab 左上头像=closeApp（既有设计），抽屉从联系人 tab 进

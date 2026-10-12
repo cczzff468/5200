@@ -85,6 +85,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { exportBackupToDownload, restoreBackup } from '@/lib/ios/backup';
+import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
 import {
   compressImageSrc,
   extractImgGenError,
@@ -357,6 +358,30 @@ function GrayCard({ children, className = '' }: { children: ReactNode; className
 
 // ---------------- 主列表 ----------------
 
+/** 全局头像（联系人 App 机主）：设置侧头像为空时跟随它；contact-updated 实时刷新 */
+function useOwnerAvatar(): string | null {
+  const [ownerAvatar, setOwnerAvatar] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      void mainOwnerContact()
+        .then((o) => {
+          if (alive) setOwnerAvatar(o?.avatar ?? null);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    window.addEventListener('contact-updated', load);
+    window.addEventListener('contact-avatar-changed', load);
+    return () => {
+      alive = false;
+      window.removeEventListener('contact-updated', load);
+      window.removeEventListener('contact-avatar-changed', load);
+    };
+  }, []);
+  return ownerAvatar;
+}
+
 function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
   const theme = useSettings((s) => s.theme);
   const wallpaperPreset = useSettings((s) => s.wallpaperPreset);
@@ -373,6 +398,7 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
   const imgGenConfig = useSettings((s) => s.imgGenConfig);
   const imgGenReady = imgGenConfigReady(imgGenConfig);
   const profile = useSettings((s) => s.profile);
+  const ownerAvatar = useOwnerAvatar();
   const appFontId = useSettings((s) => s.appFontId);
   // 状态栏显示开关（Task 36）：控制顶部时间/信号/电量状态栏是否显示
   const statusBarVisible = useSettings((s) => s.statusBarVisible);
@@ -454,9 +480,9 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
             onClick={() => onOpen('profile')}
             className="flex w-full items-center gap-4 p-4 text-left transition-colors active:bg-muted/50"
           >
-            {profile.avatar ? (
+            {(profile.avatar || ownerAvatar) ? (
               <img
-                src={profile.avatar}
+                src={profile.avatar || ownerAvatar || ''}
                 alt="头像"
                 className="h-[56px] w-[56px] shrink-0 rounded-full object-cover"
               />
@@ -4304,42 +4330,11 @@ function AboutRow({ label, value }: { label: string; value: string }) {
 
 // ---------------- 个人信息 ----------------
 
-/** 读取图片文件 → 居中裁剪缩放为 256px 头像 data URL（控住 IndexedDB 体积） */
-function fileToAvatarDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      try {
-        const size = 256;
-        const canvas = document.createElement('canvas');
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('canvas 不可用');
-        const scale = Math.max(size / img.width, size / img.height);
-        const w = img.width * scale;
-        const h = img.height * scale;
-        ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
-        URL.revokeObjectURL(url);
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
-      } catch (err) {
-        URL.revokeObjectURL(url);
-        reject(err instanceof Error ? err : new Error('图片处理失败'));
-      }
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('图片读取失败'));
-    };
-    img.src = url;
-  });
-}
-
-/** 个人信息页：从手机上传头像、修改名字与标签（即改即存，锁屏「×××的iPhone」同步） */
+/** 个人信息页：从手机上传头像（设置侧独立头像，不写入微信/QQ/联系人全局）、修改名字与标签（即改即存） */
 function ProfilePage({ onBack }: { onBack: () => void }) {
   const profile = useSettings((s) => s.profile);
   const setProfile = useSettings((s) => s.setProfile);
+  const ownerAvatar = useOwnerAvatar();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const onPickFile = (e: ChangeEvent<HTMLInputElement>) => {
@@ -4361,8 +4356,12 @@ function ProfilePage({ onBack }: { onBack: () => void }) {
           aria-label="更换头像"
           className="relative rounded-full transition-transform active:scale-95"
         >
-          {profile.avatar ? (
-            <img src={profile.avatar} alt="头像" className="h-[88px] w-[88px] rounded-full object-cover" />
+          {(profile.avatar || ownerAvatar) ? (
+            <img
+              src={profile.avatar || ownerAvatar || ''}
+              alt="头像"
+              className="h-[88px] w-[88px] rounded-full object-cover"
+            />
           ) : (
             <span className="flex h-[88px] w-[88px] items-center justify-center rounded-full bg-gradient-to-b from-[#D8D8DD] to-[#AEB0B8]">
               <User className="h-11 w-11 text-[#7C7C84]" strokeWidth={1.8} />
@@ -4372,7 +4371,7 @@ function ProfilePage({ onBack }: { onBack: () => void }) {
             <Camera className="h-[15px] w-[15px] text-foreground" strokeWidth={2.2} />
           </span>
         </button>
-        <p className="mt-2.5 text-[12px] text-muted-foreground">轻点头像，从手机相册选择照片</p>
+        <p className="mt-2.5 text-[12px] text-muted-foreground">轻点头像，从手机相册选择照片（未设置时跟随联系人资料头像）</p>
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPickFile} />
       </div>
 
@@ -4403,7 +4402,7 @@ function ProfilePage({ onBack }: { onBack: () => void }) {
           </div>
         </GroupCard>
         <p className="mt-2 px-1 text-[12px] leading-relaxed text-muted-foreground">
-          名字将显示在锁屏「×××的iPhone」小组件上；头像、名字与标签自动保存。
+          名字将显示在锁屏「×××的iPhone」小组件上；头像、名字与标签自动保存。此头像仅用于设置侧（与微信/QQ 各自独立、互不影响）；微信/QQ 请在各自 App 的个人资料页更换。
         </p>
       </div>
     </DetailShell>

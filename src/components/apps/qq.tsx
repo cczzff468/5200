@@ -227,6 +227,7 @@ import { kvGet, kvSet, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv'
 import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, clearForceLoginWall, getAccounts, getActiveAccountFor, getActiveAccountIdFor, isForceLoginWallActive, markAccountLoginHistory, parseScopedKey, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
 import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
+import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：照片标签（[图片:描述]/[照片:描述]）提取/生成/规则构建（与微信端共用同一逻辑层，未配置/失败降级文字图片卡片）；
 // 手动「文字图片」为卡片版（autoCardText），不走生图
@@ -11041,6 +11042,21 @@ function ProfilePage({
   const [signDraft, setSignDraft] = useState(me.persona ?? '');
   const [bgUrl, setBgUrl] = useState<string | null>(null);
   const bgFileRef = useRef<HTMLInputElement | null>(null);
+  // 头像按 App 隔离：QQ 个人资料页点头像换头像只写机主的 avatars.qq 槽位（合并语义），
+  // 不影响微信/信息/电话/联系人全局头像；未设置过则 avatarFor 投影自动回退全局头像
+  const avatarFileRef = useRef<HTMLInputElement | null>(null);
+  const onAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    void fileToAvatarDataUrl(f)
+      .then((data) => updateContact(me.id, { avatars: { qq: data } }))
+      .then((rec) => {
+        if (rec) onToast('头像已更新');
+        else onToast('头像保存失败');
+      })
+      .catch(() => onToast('头像保存失败'));
+  };
   // 跨 App 跳转：点「资料完成度/编辑资料」→ 打开联系人 App 后直接进入机主（user）的编辑页
   const switchToApp = useUI((s) => s.switchToApp);
   const setPendingContactEdit = useUI((s) => s.setPendingContactEdit);
@@ -11151,9 +11167,18 @@ function ProfilePage({
 
       {/* 白色圆角主卡（与背景图叠压：卡顶 215px，露出 215px 背景，叠压 105px） */}
       <div className="relative z-10 mt-[125px] flex-1 overflow-y-auto rounded-t-[22px] bg-white px-5 pb-4 pt-6 dark:bg-[#1B1C1F]">
-        {/* 头像 + 昵称/状态 + QQ号 + 点赞 */}
+        {/* 头像 + 昵称/状态 + QQ号 + 点赞（点头像换头像：写 avatars.qq 槽位，仅 QQ 生效） */}
         <div className="flex items-start gap-4">
-          <QqAvatar src={me.avatar} alt={me.name} size={84} />
+          <button
+            type="button"
+            aria-label="更换头像"
+            data-testid="qq-profile-avatar"
+            onClick={() => avatarFileRef.current?.click()}
+            className="shrink-0 rounded-full transition-transform active:scale-95"
+          >
+            <QqAvatar src={me.avatar} alt={me.name} size={84} />
+          </button>
+          <input ref={avatarFileRef} type="file" accept="image/*" className="hidden" tabIndex={-1} aria-hidden="true" onChange={onAvatarFile} />
           <div className="min-w-0 flex-1 pt-1">
             <div className="flex items-center gap-2">
               <span className="max-w-[130px] truncate text-[20px] font-bold leading-tight">{me.name}</span>

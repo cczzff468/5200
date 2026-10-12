@@ -212,6 +212,7 @@ import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
 import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, clearForceLoginWall, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, isForceLoginWallActive, markAccountLoginHistory, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 import { loginAltSlot, loginWechat, listContacts, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
+import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
@@ -11543,6 +11544,21 @@ function ProfilePage({
   onBack: () => void;
   onToast: (m: string) => void;
 }) {
+  // 头像按 App 隔离：微信个人资料页换头像只写机主的 avatars.wx 槽位（合并语义），
+  // 不影响 QQ/信息/电话/联系人全局头像；未设置过则 avatarFor 投影自动回退全局头像
+  const avatarFileRef = useRef<HTMLInputElement | null>(null);
+  const onAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    void fileToAvatarDataUrl(f)
+      .then((data) => updateContact(me.id, { avatars: { wx: data } }))
+      .then((rec) => {
+        if (rec) onToast('头像已更新');
+        else onToast('头像保存失败');
+      })
+      .catch(() => onToast('头像保存失败'));
+  };
   const rows: Array<{ key: string; label: string; value: React.ReactNode; toast: string }> = [
     { key: 'name', label: '名字', value: <span className="block max-w-[190px] truncate">{me.name}</span>, toast: '名字暂不支持修改' },
     { key: 'gender', label: '性别', value: record?.gender || '未设置', toast: '性别暂不支持修改' },
@@ -11570,17 +11586,19 @@ function ProfilePage({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto pb-6">
         <div className="bg-white dark:bg-[#1A1A1A]">
-          {/* 头像行 */}
+          {/* 头像行：点击换头像（写 avatars.wx 槽位，仅微信生效；未设置时跟随全局头像） */}
           <button
             type="button"
             data-testid="wx-profile-avatar"
-            onClick={() => onToast('头像暂不支持修改')}
+            aria-label="更换头像"
+            onClick={() => avatarFileRef.current?.click()}
             className="flex w-full items-center px-4 py-[9px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
           >
             <span className="min-w-0 flex-1 text-[17px]">头像</span>
             <WxAvatar src={me.avatar} alt={me.name} size={60} />
             <ChevronRight className="ml-2 h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
           </button>
+          <input ref={avatarFileRef} type="file" accept="image/*" className="hidden" tabIndex={-1} aria-hidden="true" onChange={onAvatarFile} />
           {/* 资料 / 二维码 / 拍一拍行 */}
           {rows.map((r, i) => (
             <button
