@@ -18575,3 +18575,23 @@ Work Log:
 Stage Summary:
 - 需求①②③④全部落地并浏览器实测通过；改动文件：src/lib/ios/island-stack.ts、src/components/ios/{MusicIsland,TaobaoIsland,MeituanIsland}.tsx
 - 关键决策：①置顶用「锚位计算排序」而非改写 order 数组（order 仍记展开先后，优先级只在 islandTopOf 生效，store 语义不变）；②「点圆圈只出音乐大窗」= 圆圈点击收起其他大窗 + 配送岛在音乐展开期间整体隐身（音乐岛随之回到独占模式渲染，无需新增形态）；③「点小窗出全部大窗」以 useMusic.islandVisible 为门槛（音乐没在播不强展开空大窗，避免 0 高度占位把配送大窗顶下去）；④组合收窄同时把长状态文案换三字短文案（不删「HH:MM 送达」语义，与早期需求⑤兼容）
+
+---
+Task ID: 24-c
+Agent: 主协调者 (Z.ai Code)
+Task: 灵动岛三轮修订（用户新反馈）：①淘宝/美团/音乐三大窗同显——修复「美团大窗显示后淘宝大窗不显示（反之亦然）」；②音乐大窗恒在最上，淘宝/美团大窗按下单时刻依次排序、早的下单沉底；③小窗互斥保留（只显示最新事件方）；④音乐左侧封面圆圈美化：黑色圆形边框
+
+Work Log:
+- island-stack.ts：新增 appearedAt（各岛当前活动/进行中订单的出现时刻）+ markAppeared（同值幂等）；islandStackSorted(order, appearedAt) 改为「音乐永远第一 + 其余按 appearedAt 新→旧（早的沉底，稳定排序平局兜底）」；islandTopOf 增加 appearedAt 参数按新序累加锚位
+- TaobaoIsland.tsx：①hidden 互斥项 mtWins 改 (mtWins && !expanded)——互斥只作用小窗，本岛大窗展开时不让位（修复美团大窗显示后淘宝大窗消失的根因：原互斥把整岛连同大窗一起隐藏）；②expandManually（点小窗）增加「对方配送岛有进行中单也一起展开」（mtActiveLatestAt()>0 → expand('mt')）——点任一配送小窗淘宝+美团+音乐大窗全部同显；③新增 markAppeared effect（active 变化时回写 paidAt??createdAt）；④islandTopOf 传 appearedAt
+- MeituanIsland.tsx：对称四处改造（tbWinsSmall && !expanded、expand('tb') 联动、markAppeared、islandTopOf 传参）
+- MusicIsland.tsx：组合圆圈由 ring-1 ring-white/25（白细边）改为 border-2 border-black + shadow-[0_3px_10px_rgba(0,0,0,0.5)]（黑色圆形边框+柔和投影）；islandTopOf 传 appearedAt
+- agent-browser 实机验证（IDB seed 淘宝 shipped + 美团 delivering 双单 + wx 会话 + 游客模式播放真实歌曲）：①组合形态=左封面圆圈+右最新事件小窗（淘宝/美团互斥保留）；②点美团小窗 → 三大窗同显 music top=46/mt top=143/tb top=226（晚单紧贴音乐、早单沉底）、圆圈消失；③点空白收起回组合；④点圆圈只出音乐大窗（配送岛隐身，二轮需求不回退）；⑤翻转 seed（淘宝=晚单/美团=早单）重验：点淘宝小窗 → music 46/tb 143/mt 226——排序随下单时刻动态翻转 ✓；⑥点美团大窗收起堆叠并跳美团订单详情；⑦圆圈 4x 放大特写确认黑色圆环边框；⑧测试数据（IDB 订单/localStorage 会话）清理回归无残留
+- 验证：bunx tsc --noEmit 0 错误；bun run lint 49 problems 与基线一致（0 新增）；dev.log 仅既有 instrumentation Edge Runtime 警告
+
+Stage Summary:
+- 修复：淘宝/美团大窗互斥 bug——互斥语义收窄为「只作用小窗」，大窗层完全共存（用户报告的「美团大窗显示后淘宝大窗不显示，反之亦然」根除）
+- 排序：大窗堆叠=音乐恒顶 + 淘宝/美团按下单时刻新→旧（早的在下面），appearedAt 驱动、随订单数据动态翻转
+- 交互保留：点圆圈只出音乐大窗（配送岛隐身）；点配送小窗全部大窗同显+圆圈消失；点大窗进对应界面；小窗仍只显示最新事件方
+- 改动文件：src/lib/ios/island-stack.ts、src/components/ios/{TaobaoIsland,MeituanIsland,MusicIsland}.tsx
+- 关键决策：①「早的」锚定下单时刻（paidAt??createdAt）而非最新事件时刻（订单推进不改变排序，稳定可预期）；②大窗展开入口统一 expandAll 语义（点任一配送小窗=三大窗全展开），自动展开（5 秒收起的状态通知）保持仅自岛展开不抢屏；③音乐大窗展开期间未展开的配送岛仍隐身（musicExpandedAlone 保留），保证「点圆圈只出音乐大窗」与堆叠开放期间新事件不突入两层需求并存

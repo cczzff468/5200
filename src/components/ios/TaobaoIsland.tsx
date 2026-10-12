@@ -20,9 +20,13 @@
  * 二轮修订交互：①点左侧圆圈只出音乐大窗——音乐大窗展开而本窗未展开时本岛整体隐身，
  * 不在音乐大窗下方显示小窗/大窗；②点本小窗 → 所有灵动岛大窗一起出现（音乐大窗同时展开、
  * 圆圈消失），堆叠时音乐大窗永远在最上（island-stack TOP_PRIORITY）。
- * 大窗按展开先后垂直堆叠、可同时显示（island-stack 协调），点大窗进对应界面。
+ * 三轮修订：③【大窗不互斥】原「淘宝/美团互斥」只作用于小窗——本岛大窗展开时不再让位，
+ * 点任一配送小窗 → 淘宝+美团+音乐大窗全部同显（对方有进行中单也一起展开）；
+ * ④堆叠排序：音乐大窗恒在最上，淘宝/美团按「下单时刻」依次排（早下单的沉底，早的在下面）。
+ * 大窗垂直堆叠、可同时显示（island-stack 协调），点大窗进对应界面。
  *
- * 锚位互斥（与美团灵动岛同锚的小窗互斥保留）：两者都有进行中单时「最新事件的一方」展示（另一让位）。
+ * 小窗互斥保留（用户三轮确认「小窗就显示最近的那个」）：两者都有进行中单时
+ * 「最新事件的一方」展示小窗（另一让位），但不再隐藏已展开的大窗。
  *
  * 层级：小窗/大窗 z-[82]（与音乐岛同层，堆叠布局互不重叠），低于聊天通知卡（z-93）。
  * 大窗的「点击别处」捕获层 z-[80]。
@@ -194,9 +198,10 @@ export default function TaobaoIsland() {
   const callPresenting = useIncomingCallPresenting();
   // 音乐岛可见（播放中/暂停宽限期）→ 组合形态：小窗右移，左侧留给音乐封面小圆圈
   const musicIslandVisible = useMusic((s) => s.islandVisible);
-  // 堆叠协调：展开中的大窗序 + 实测高度（决定各大窗/小窗的锚位）
+  // 堆叠协调：展开中的大窗序 + 实测高度 + 各岛出现时刻（决定各大窗/小窗的锚位与排序）
   const stackOrder = useIslandStack((s) => s.order);
   const stackHeights = useIslandStack((s) => s.heights);
+  const stackAppearedAt = useIslandStack((s) => s.appearedAt);
 
   /** active = 当前进行中的快递单（每秒重读 kv；null = 无单隐身） */
   const [active, setActive] = useState<TbOrder | null>(null);
@@ -259,12 +264,14 @@ export default function TaobaoIsland() {
 
   /** 手动展开（点小窗）：一直显示。
    *  二轮修订：点配送小窗 → 所有灵动岛大窗一起出现——音乐岛可见时同时展开音乐大窗
-   *  （圆圈随音乐大窗展开而消失，堆叠时音乐永远在最上）；音乐岛不可见（没在放歌/被通知遮挡）不强展 */
+   *  （圆圈随音乐大窗展开而消失，堆叠时音乐永远在最上）；音乐岛不可见（没在放歌/被通知遮挡）不强展。
+   *  三轮修订：对方配送岛（美团）有进行中单也一起展开——大窗不互斥，三大窗同显（早的下单沉底） */
   const expandManually = () => {
     autoExpandRef.current = false;
     clearAuto();
     const st = useIslandStack.getState();
     st.expand('tb');
+    if (mtActiveLatestAt() > 0) st.expand('mt');
     if (useMusic.getState().islandVisible) st.expand('music');
   };
 
@@ -305,14 +312,22 @@ export default function TaobaoIsland() {
 
   useEffect(() => () => { clearAuto(); }, []);
 
-  // 锚位互斥：美团灵动岛有进行中单且其最新事件不早于淘宝 → 淘宝让位（同为进行中时「最新事件方」展示）
+  // 小窗互斥（只作用小窗，三轮修订）：美团灵动岛有进行中单且其最新事件不早于淘宝 →
+  // 淘宝小窗让位（同为进行中时「最新事件方」展示）；本岛大窗已展开时不让位（大窗同显）
   const mtLatest = mtActiveLatestAt();
   const tbLatest = active ? latestEventAt(active) : 0;
   const mtWins = mtLatest > 0 && (active === null || mtLatest >= tbLatest);
 
   const hidden =
-    !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !active || mtWins ||
+    !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !active ||
+    (mtWins && !expanded) ||
     musicExpandedAlone;
+
+  // 记录本岛当前订单的下单时刻（堆叠排序「早的在下面」用；同值幂等）
+  useEffect(() => {
+    if (!active) return;
+    useIslandStack.getState().markAppeared('tb', active.paidAt ?? active.createdAt);
+  }, [active]);
 
   // 状态签名变化（新单/发货/揽收/派送/到站）→ 自动展开大窗 5 秒；
   // 通知层/来电占位期间隐身时不消费签名，恢复可见后补放
@@ -420,8 +435,9 @@ export default function TaobaoIsland() {
     );
   }
 
-  // 展开大窗的垂直锚位按堆叠序计算（独占模式 order=['tb'] → 原位 top=11）
-  const top = expanded ? islandTopOf(stackOrder, stackHeights, 'tb') : PILL_TOP;
+  // 展开大窗的垂直锚位按堆叠序计算（独占模式 order=['tb'] → 原位 top=11；
+  // 淘宝/美团同显时按下单时刻新→旧排，早下单的沉底）
+  const top = expanded ? islandTopOf(stackOrder, stackHeights, 'tb', stackAppearedAt) : PILL_TOP;
 
   return (
     <>

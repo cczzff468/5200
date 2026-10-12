@@ -16,6 +16,9 @@
  *   点小圆圈 → 【只展开音乐大窗】（二轮修订：先把已展开的淘宝/美团大窗全部收起，
  *   配送岛在音乐大窗展开期间整体隐身，不在下方显示）；
  *   点配送小窗 → 所有灵动岛大窗一起出现（音乐大窗同时展开、圆圈消失，堆叠时音乐永远在最上）。
+ *   三轮修订：淘宝/美团/音乐三大窗同显（大窗不互斥，互斥只作用小窗：小窗仍只显示最新事件一方）；
+ *   淘宝/美团大窗按「下单时刻」依次排在音乐大窗之下（早下单的沉底，早的在下面）；
+ *   左侧封面小圆圈美化：黑色圆形边框（border-2 border-black）+ 柔和投影。
  *   自动展开只在独占模式进行（组合模式不抢屏）。
  * - 大弹窗不下沉（第二十三轮反馈：恢复原位 top=11）；
  * - 弹窗可见时状态栏只隐藏「移动数据」（信号）图标，WiFi/电量保留（真实 iPhone 灵动岛同语义），
@@ -141,9 +144,10 @@ export default function MusicIsland() {
   // 淘宝/美团配送灵动岛展示中 → 组合形态（左侧封面小圆圈 + 右侧配送小窗），音乐岛不再整体隐身
   const mtIslandVisible = useMtIsland((s) => s.visible);
   const tbIslandVisible = useTbIsland((s) => s.visible);
-  // 堆叠协调：展开中的大窗序 + 实测高度（决定各大窗/圆圈的垂直锚位）
+  // 堆叠协调：展开中的大窗序 + 实测高度 + 各岛出现时刻（决定各大窗/圆圈的垂直锚位与排序）
   const stackOrder = useIslandStack((s) => s.order);
   const stackHeights = useIslandStack((s) => s.heights);
+  const stackAppearedAt = useIslandStack((s) => s.appearedAt);
 
   /** 展开态来自堆叠 store（与淘宝/美团大窗统一排序堆叠） */
   const expanded = stackOrder.includes('music');
@@ -331,7 +335,7 @@ export default function MusicIsland() {
           aria-label="展开音乐播放控制"
           data-testid="music-island-circle"
           onClick={expandManually}
-          className="pointer-events-auto block h-[33px] w-[33px] cursor-pointer overflow-hidden rounded-full bg-black shadow-[0_4px_12px_rgba(0,0,0,0.45)] ring-1 ring-white/25 outline-none active:scale-95"
+          className="pointer-events-auto block h-[33px] w-[33px] cursor-pointer overflow-hidden rounded-full border-2 border-black bg-black shadow-[0_3px_10px_rgba(0,0,0,0.5)] outline-none active:scale-95"
         >
           <img
             src={songCover(current!)}
@@ -346,8 +350,9 @@ export default function MusicIsland() {
 
   const dur = duration || (current?.dt ?? 0) / 1000 || 0;
   const pct = dur > 0 ? Math.min(100, (position / dur) * 100) : 0;
-  // 展开大窗的垂直锚位按堆叠序计算（独占模式 order=['music'] → 原位 top=11）
-  const top = expanded ? islandTopOf(stackOrder, stackHeights, 'music') : ISLAND_TOP;
+  // 展开大窗的垂直锚位按堆叠序计算（独占模式 order=['music'] → 原位 top=11；
+  // 三大窗同显时音乐恒在最上，淘宝/美团按下单时刻新→旧排在下方）
+  const top = expanded ? islandTopOf(stackOrder, stackHeights, 'music', stackAppearedAt) : ISLAND_TOP;
 
   return (
     <>
