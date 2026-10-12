@@ -237,10 +237,9 @@ export default function MeituanIsland() {
 
   if (hidden || !active) return null;
 
-  // 剩余送达时间（真实时钟推算，秒级刷新；催单后立刻变小）
+  // 预计送达时刻（绝对时间，秒级刷新；催单后立刻变小）
   const leftMs = Math.max(0, (active.etaAt ?? 0) - nowTs);
-  const leftMin = Math.max(1, Math.ceil(leftMs / 60_000));
-  const leftText = leftMs < 60_000 ? '即将送达' : `${leftMin}分钟`;
+  const leftText = leftMs < 60_000 ? '即将送达' : fmtHM(active.etaAt ?? 0);
   const etaText = active.etaAt ? fmtHM(active.etaAt) : '--:--';
 
   const p = progressOf(active, nowTs);

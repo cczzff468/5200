@@ -860,6 +860,12 @@ export interface MtUrgeResult {
   etaAt?: number;
 }
 
+/** 时:分（24h，补零） */
+function fmtHM(ts: number): string {
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 /**
  * 催一下：把预计送达时间（etaAt）提前——
  * - 剩余 > 5 分钟：直接提前 5 分钟；
@@ -886,11 +892,10 @@ export function mtUrgeOrder(uid: string, orderId: string): MtUrgeResult {
   orders[idx] = { ...o, etaAt };
   mtSaveOrders(uid, orders);
   window.dispatchEvent(new CustomEvent('mt-orders-changed'));
-  const leftMin = Math.ceil((etaAt - now) / 60_000);
   const msg =
     savedSec >= 60
       ? `已催单，骑手正在加急，预计提前${Math.floor(savedSec / 60)}分钟送达`
-      : `已催单，骑手正在加急，预计提前${savedSec}秒送达（约${leftMin}分钟后送达）`;
+      : `已催单，骑手正在加急，预计提前${savedSec}秒送达（预计${fmtHM(etaAt)}送达）`;
   return { ok: true, msg, etaAt };
 }
 

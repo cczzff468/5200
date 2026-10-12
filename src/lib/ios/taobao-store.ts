@@ -529,8 +529,6 @@ export interface TbOrder {
   aiPickup?: { contactId: string; contactName: string; app: 'wx' | 'qq'; kind: 'gift' | 'favor' };
   /** 主动代付参与标记（tbEngageTick：每单只主动问过一次，防噪） */
   aiAsked?: boolean;
-  /** AI 已垫付金额（部分代付「我出一半」：订单保持待付款，机主在收银台补齐剩余；全付走正常 tbMarkPaid） */
-  aiCovered?: number;
 }
 
 const orderKey = (uid: string) => `tb-orders:${uid}`;

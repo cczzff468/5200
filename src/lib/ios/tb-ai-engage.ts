@@ -3,7 +3,7 @@
 /**
  * 淘宝 AI 联动引擎（对齐美团 mt-ai-engage 同一套交互口径）：
  * - 上下文注入 buildTbEngageCtx：机主淘宝订单实时动态（AI 知道买了什么/哪家店/多少钱/快递状态）
- *   + 待付订单 [帮付淘宝]（AI 按人设/记忆/关系主动代付，支持垫一半）+ 在途快递 [帮取快递]（帮机主取件）
+ *   + 待付订单 [帮付淘宝]（AI 按人设/记忆/关系主动代付）+ 在途快递 [帮取快递]（帮机主取件）
  *   + 聊到购物时的商品目录与 [帮你买]（AI 代买草稿，支持多商品，机主确认后 AI 出钱下单）
  *   与 [自己买]（AI 自己想要，下单后请机主代付）教学；
  * - 动作执行 applyTbEngageAction：帮付/代买草稿/自己买/帮取快递/收礼物确认五类标记落地；
@@ -11,7 +11,7 @@
  *   「买给你妹妹/送你个表情包」这类话不误标）→ 包裹到驿站后 AI 自主取件（tbEngageTick）；
  *   取到后要不要主动说、说什么全部由 LLM 按人设/记忆/上下文现场决策（不发模板道谢，也可以不说）；
  * - 主动参与：tbEngageTick 发现机主有待付款订单时，最近聊天的 AI 角色按人设/记忆决定要不要
- *   主动帮忙付掉（可全付/垫一半；每单只问一次 + 全局冷却，不刷屏）；LLM 失败时本地兑底直接帮付
+ *   主动帮忙付掉（全付；每单只问一次 + 全局冷却，不刷屏）；LLM 失败时本地兑底直接帮付
  *   + 一句兑底话术（不再静默：用户要求机主一定能看到一次参与）；到货/发货主动问候由 AI 自主
  *   决定发不发（没聊天对象不消耗机会，不发模板）；
  * - 金额无硬门槛（用户要求全部取消）：帮付/代买/请客都不设金额上限，超过与否由 AI 按人设/关系/
@@ -475,7 +475,7 @@ export function buildTbEngageCtx(
     rules.push(
       `【${owner}的待付款淘宝订单】\n${lines.join('\n')}\n` +
         `如果符合你的人设、你们的关系和上面的记忆（说好要送TA、想宠TA、TA正好缺这个等），可以主动帮TA付掉：输出标记 [帮付淘宝:订单id]（id 必须原样抄写，系统会立即支付并回执）。` +
-        `要不要直接付、还是只垫一半（输出 [帮付一半:订单id]，剩下的让TA自己补）、还是先在正文里提一句看TA反应，都由你按人设/关系/上下文自然拿捉（没有金额限制，也别每次都抢着付）。`,
+        `要不要直接付、还是先在正文里提一句看TA反应，都由你按人设/关系/上下文自然拿捉（没有金额限制，也别每次都抢着付）。`,
     );
   }
 
@@ -503,7 +503,7 @@ export function buildTbEngageCtx(
 
   if (tbEngageCoolingDown(app, chatContactId)) {
     rules.push(
-      '【参与节流】你刚刚（5分钟内）已经主动帮付/代买/取件过一次了（冷却中）：这一轮不要再输出 [帮付淘宝]/[帮付一半]/[帮你买]/[自己买] 标记（系统会硬拦截不执行），用正文正常聊就好。',
+      '【参与节流】你刚刚（5分钟内）已经主动帮付/代买/取件过一次了（冷却中）：这一轮不要再输出 [帮付淘宝]/[帮你买]/[自己买] 标记（系统会硬拦截不执行），用正文正常聊就好。',
     );
   }
   return { block, rules };
@@ -511,10 +511,10 @@ export function buildTbEngageCtx(
 
 // ---------------- 动作执行（wechat/qq buildReplyMsgs 分流调用） ----------------
 
-export type TbEngageActionKind = 'tb-pay-for' | 'tb-pay-half' | 'tb-order-draft' | 'tb-order-self' | 'tb-pickup' | 'tb-gift';
+export type TbEngageActionKind = 'tb-pay-for' | 'tb-order-draft' | 'tb-order-self' | 'tb-pickup' | 'tb-gift';
 
 export function isTbEngageActionKind(kind: string): kind is TbEngageActionKind {
-  return kind === 'tb-pay-for' || kind === 'tb-pay-half' || kind === 'tb-order-draft' || kind === 'tb-order-self' || kind === 'tb-pickup' || kind === 'tb-gift';
+  return kind === 'tb-pay-for' || kind === 'tb-order-draft' || kind === 'tb-order-self' || kind === 'tb-pickup' || kind === 'tb-gift';
 }
 
 /** 执行器产出的卡片消息（微信 WxMsg / QQ QQMsg 结构子集，直接 push 进回复队列） */
@@ -612,26 +612,23 @@ export function applyTbEngageAction(
     return { msgs: [] };
   }
 
-  if (kind === 'tb-pay-for' || kind === 'tb-pay-half') {
-    // [帮付淘宝/帮付一半:订单id]：AI 主动为机主的待付款订单代付（可全付/垫一半；无金额门槛，
-    // 要不要付/付多少由 AI 按人设/记忆/上下文自主拿捉——词表判定已按用户要求移除）
+  if (kind === 'tb-pay-for') {
+    // [帮付淘宝:订单id]：AI 主动为机主的待付款订单代付（无金额门槛，
+    // 要不要付由 AI 按人设/记忆/上下文自主拿捉——词表判定已按用户要求移除）
     if (!uidInfo) return { msgs: [], sys: '（淘宝尚未登录，无法帮付）' };
     const order = tbLoadOrders(uidInfo.uid).find((o) => o.id === action.targetId.trim());
     if (!order || order.status !== 'pendingPay') return { msgs: [], sys: '（订单不存在或已支付）' };
     if (tbEngageCoolingDown(opts.app, peer.id)) {
       return { msgs: [], sys: '（刚刚才帮付/代买过一次，先歇一歇，这次先不帮付啦）' };
     }
-    const half = kind === 'tb-pay-half' ? Math.max(0.01, Math.round((order.total / 2) * 100) / 100) : undefined;
-    const res = tbAiPayPendingOrder(order, { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) }, opts.app, half && half < order.total ? { cover: half } : undefined);
+    const res = tbAiPayPendingOrder(order, { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) }, opts.app);
     if (!res.ok) return { msgs: [], sys: `（帮付未成功：${res.error}）` };
     tbMarkEngage(opts.app, peer.id);
     const summary = order.items.map((i) => `${i.title.slice(0, 14)}${i.qty > 1 ? `x${i.qty}` : ''}`).join('、');
     memAddEventFragment(
       peer.id,
       opts.app,
-      half && half < order.total
-        ? `你主动帮机主${meName}垫付了淘宝「${order.shopName}」¥${fmt2(order.total)}订单的一半（¥${fmt2(half)}，${summary}），剩下的等TA自己付`
-        : `你主动帮机主${meName}付了淘宝「${order.shopName}」¥${fmt2(order.total)}的订单（${summary}）`,
+      `你主动帮机主${meName}付了淘宝「${order.shopName}」¥${fmt2(order.total)}的订单（${summary}）`,
       { eventTime: now, sourceTag: 'tb-help-pay' },
     );
     return { msgs: res.card ? [res.card as TbEngageCard] : [] };
@@ -902,9 +899,9 @@ async function runProactivePayEngage(uid: string, orderId: string): Promise<void
   const user = [
     `【你看到的一件事】${meName}刚在淘宝「${order.shopName}」下单还没付款：${summary}，共 ¥${fmt2(order.total)}（30 分钟内不付会自动取消）。`,
     '【任务】结合你的人设、你们的关系、上面的记忆和金额，决定怎么参与（演示语义，不会真花钱）：',
-    '- 直接全付：输出 {"pay":"all"}；只垫一半（剩下的让TA自己付）：输出 {"pay":"half"}；不想付：输出 {"pay":false}，用正文自然提一嘴（调侃/关心/催TA去买单都行）。',
-    '关系亲近/人设大方/正好想宠TA → 可以付（全付或垫一半）；人设节俭/关系一般/刚闹过矛盾 → 不付。怎么选都自然，没有标准答案。',
-    '输出 JSON：{"pay":"all"或"half"或false,"reply":"给对方发的一句话（像平时聊天，1~2句；付了说已付/垫了+人设话，没付就自然聊）"}',
+    '- 直接全付：输出 {"pay":"all"}；不想付：输出 {"pay":false}，用正文自然提一嘴（调侃/关心/催TA去买单都行）。',
+    '关系亲近/人设大方/正好想宠TA → 可以付（全付）；人设节俭/关系一般/刚闹过矛盾 → 不付。怎么选都自然，没有标准答案。',
+    '输出 JSON：{"pay":"all"或false,"reply":"给对方发的一句话（像平时聊天，1~2句；付了说已付+人设话，没付就自然聊）"}',
     '严禁输出 JSON 以外的文字。',
   ].join('\n\n');
   let parsed: { pay?: boolean | string; reply?: string } | null = null;
@@ -921,18 +918,15 @@ async function runProactivePayEngage(uid: string, orderId: string): Promise<void
   const payer = { id: contact.id, name: contact.name, avatar: avatarFor(contact, app) };
   const outMsgs: { id: string; role: 'me' | 'peer'; content: string; time: number; kind?: string; tbpay?: { pid: string; role: 'req' | 'done' } }[] = [];
   const decision = parsed?.pay;
-  if (parsed && (decision === true || decision === 'all' || decision === 'half')) {
-    // LLM 决策：全付/垫一半（垫一半在订单上挂 aiCovered，机主收银台补齐剩余）
-    const half = decision === 'half' ? Math.max(0.01, Math.round((cur.total / 2) * 100) / 100) : undefined;
-    const res = tbAiPayPendingOrder(cur, payer, app, half && half < cur.total ? { cover: half } : undefined);
+  if (parsed && (decision === true || decision === 'all')) {
+    // LLM 决策：全付
+    const res = tbAiPayPendingOrder(cur, payer, app);
     if (res.ok && res.card) {
       outMsgs.push(res.card);
       memAddEventFragment(
         contact.id,
         app,
-        half && half < cur.total
-          ? `你看到机主${meName}在淘宝「${cur.shopName}」有待付款订单（¥${fmt2(cur.total)}，${summary}），主动帮TA垫了一半（¥${fmt2(half)}），剩下的等TA自己付`
-          : `你看到机主${meName}在淘宝「${cur.shopName}」有待付款订单（¥${fmt2(cur.total)}，${summary}），主动帮TA付了`,
+        `你看到机主${meName}在淘宝「${cur.shopName}」有待付款订单（¥${fmt2(cur.total)}，${summary}），主动帮TA付了`,
         { eventTime: Date.now(), sourceTag: 'tb-proactive-pay' },
       );
     }

@@ -131,7 +131,7 @@ function subLabelOf(o: TbOrder): string {
     case 'transit':
       return '包裹运输中，正发往收货城市';
     case 'delivering':
-      return '快递员正在派送，请留意来电';
+      return '快递员正在派送';
     default:
       return '包裹已放入驿站，记得取件哦';
   }
@@ -303,12 +303,11 @@ export default function TaobaoIsland() {
 
   if (hidden || !active) return null;
 
-  // 剩余送达时间（真实时钟推算，秒级刷新）；已到驿站 → 待取件
+  // 预计送达时刻（绝对时间，秒级刷新）；已到驿站 → 待取件
   const atStation = phaseOf(active) === 'station';
   const etaAt = etaOf(active, uid);
   const leftMs = Math.max(0, etaAt - nowTs);
-  const leftMin = Math.max(1, Math.ceil(leftMs / 60_000));
-  const leftText = atStation ? '待取件' : leftMs < 60_000 ? '即将送达' : `${leftMin}分钟`;
+  const leftText = atStation ? '待取件' : leftMs < 60_000 ? '即将送达' : fmtHM(etaAt);
   const etaText = atStation ? '' : fmtHM(etaAt);
 
   const p = progressOf(active, nowTs, uid);

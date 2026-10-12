@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Clock3, Minus, Plus, Zap } from 'lucide-react';
 import { FoodImg } from './mt-food-img';
 import { mtImg, mtRegisterAiMerchant, type MtDish, type MtMerchant } from '@/lib/ios/meituan-data';
+import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import {
   mtCurAddrId,
   mtLoadAddresses,
@@ -105,6 +106,9 @@ const SEED_SHOPS: MtMerchant[] = [
 
 const SG_CATS = ['全部', '超市便利', '水果', '鲜花', '药品', '零食饮料', '日用百货'];
 
+/** AI 闪购商家缓存（kv 持久化）：首次进入生成一次，之后进入直接用缓存，不再每次重新生成（需求「不该刷新生成的不要变」） */
+const SG_AI_SHOPS_KEY = 'mt-shangou-ai-shops';
+
 function catMatch(c: string, m: MtMerchant): boolean {
   if (c === '全部') return true;
   const kw: Record<string, string[]> = {
@@ -143,6 +147,15 @@ export default function ShangouChannelPage({
   useEffect(() => {
     let alive = true;
     void (async () => {
+      // 先读持久缓存：有则直接用（进入页面不再重新生成，商家列表稳定）
+      const cached = kvGet<MtMerchant[]>(SG_AI_SHOPS_KEY);
+      if (Array.isArray(cached) && cached.length > 0) {
+        cached.forEach((m) => mtRegisterAiMerchant(m));
+        if (!alive) return;
+        setAiShops(cached);
+        setLoading(false);
+        return;
+      }
       try {
         const res = await fetch('/api/mt-feed', {
           method: 'POST',
@@ -153,6 +166,7 @@ export default function ShangouChannelPage({
         if (!alive) return;
         if (j.ok && Array.isArray(j.merchants) && j.merchants.length > 0) {
           j.merchants.forEach((m) => mtRegisterAiMerchant(m));
+          kvSet(SG_AI_SHOPS_KEY, j.merchants);
           setAiShops(j.merchants);
         }
       } catch {
@@ -164,7 +178,7 @@ export default function ShangouChannelPage({
     return () => {
       alive = false;
     };
-  }, [apiConfig]);
+  }, []);
 
   const shops = useMemo(() => {
     const merged = [...aiShops, ...SEED_SHOPS.filter((s) => !aiShops.some((a) => a.name === s.name))];

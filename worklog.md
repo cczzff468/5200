@@ -18424,3 +18424,24 @@ Stage Summary:
 - 交付：五聊天面（微信/QQ/信息私聊 + 微信群/QQ 群）失败表达统一为「触发消息红色 ! 徽标」，模板/占位文字全部下线（新失败不落、旧数据不渲染、预览不透出）
 - 改动文件：src/lib/ios/groups.ts、src/components/apps/{wechat,qq,chat,wx-group,qq-group}.tsx
 - 关键决策：①徽标挂在触发消息而非错误行——成功清除语义自然，重试入口即消息本体；②流已有分段投递时（A-3）不打标（本轮并非无回应）；③requestOnly（拉黑放行）不打标不占位；④群聊全体 [SKIP] 自然沉默不打标（是选择不是失败）
+
+---
+Task ID: 3
+Agent: Z.ai Code (main)
+Task: 用户六项需求——订单页禁止刷新生成/闪购缓存/朋友圈配图随机化/灵动岛文案与时间/删除凑一半/模板回答清单（只列不改）
+
+Work Log:
+- 派出 3 个 Explore agent 全库排查：①淘宝/美团订单生成链路（taobao-store.ts tbGenHistoryOrders/tbInsertGenOrders 写真实库 + OrdersPage 三触发点：下拉、进入不足一屏自动补批 useEffect、上滑到底 onScroll；meituan-store.ts 同构 mtGen 系列）②灵动岛文案/时间/凑一半全链路（TaobaoIsland.tsx:134、小窗 leftText 相对分钟、tb-pay-half 6 文件）③朋友圈配图 prompt（api/moments/generate/route.ts post 分支每次必教配图标签）+ 全项目模板回答清单
+- 订单修复（保留数据、删除全部生成触发）：taobao.tsx OrdersPage 删 genMoreOrders/apiConfigOrders/genBatchRef/genBusyRef/genLoading 与自动补批 useEffect，下拉只 tbTickOrders+重读+「订单已更新」，onScroll 移除，删「上滑加载更多订单」footer，imports 清理 4 项；meituan.tsx OrdersPage 同构处理（另删 channelArtOf/setTickOrders，footer 改「—— 到底啦 ——」）；现有生成订单原地冻结不动（tbInsertGenOrders 等存储函数保留但无人调用），真实下单（tbCreateOrder/mtSaveOrders）持久化不受影响
+- 美团闪购频道（meituan-shangou.tsx）：AI 商家列表改为 kv 持久缓存（SG_AI_SHOPS_KEY='mt-shangou-ai-shops'），首次进入生成并缓存，之后进入直接读缓存+重注册 mtRegisterAiMerchant，不再每次进入重新生成
+- 朋友圈/QQ 空间配图多样化（api/moments/generate/route.ts post 分支）：Math.random()<0.4 才开放 [图片:…] 标签协议，其余 60% 明令「本次动态不配图，不要输出任何图片标签」；正文行「配图协议标签除外」改为条件描述——纯文字动态成为常态，解决「每发一条就带文字图片」
+- 淘宝灵动岛（TaobaoIsland.tsx）：大窗 delivering 文案「快递员正在派送，请留意来电」→「快递员正在派送」；小窗 leftText 由「N分钟」改 fmtHM(etaAt) 绝对时刻（「HH:MM 送达」，待取件/即将送达特判保留），删 leftMin
+- 美团灵动岛（MeituanIsland.tsx）：小窗 leftText 同改 fmtHM(active.etaAt)；meituan-store.ts 催单 toast「约X分钟后送达」→「预计HH:MM送达」（新增 fmtHM 助手）
+- 删除 AI 代付凑一半全链路（6 文件）：chat-rich.ts 删 'tb-pay-half' kind/词表映射/两个正则的「帮付一半|」；tb-ai-engage.ts 删类型+isTbEngageActionKind+prompt 教学两处（[帮付一半] 标记与 {"pay":"half"} 决策）+applyTbEngageAction half 分支+runProactivePayEngage half 决策；tb-share-proxy.ts tbAiPayPendingOrder 删 opts.cover/partial 分支/TbProxyPay.partial 字段/历史行 partial 文案，函数退化为纯全额；taobao.tsx 收银台删 covered/due 计算（due=amount）、垫付提示条、支付消息垫付拼接、待付款卡 aiCovered 显示恢复 o.total；taobao-store.ts 删 TbOrder.aiCovered 字段
+- 验证：bun run lint（净增 6 个 react-hooks/refs 全部为 meituan OrdersPage 被编译器重新分析后暴露的既有 pull-refresh 模式，与基线 38 处同款，非新模式）；agent-browser 实机 E2E：注入 phone 会话登录淘宝 → 空订单页显示「暂无相关订单」且 7 秒后仍稳定（旧版会自动补批生成）→ 真实下单（落地灯 ¥159 待付款）→ 订单页仅显示 1 条真实订单，滚动+7 秒不新增任何假订单 → 收银台只显示全额 ¥159、无「好友垫付」提示条；dev.log 无新增运行时错误；美团订单页改动与淘宝逐行对称（E2E 受阻于模拟器 QQ 注册流程，靠对称性+lint 保证）
+- 模板回答清单（按用户要求只列出未修改）：见最终回复
+
+Stage Summary:
+- 交付：淘宝/美团订单页「下拉/进入/上滑」三个生成触发点全部移除，订单只在真实购买后新增并持久保存；闪购商家列表进入不变；朋友圈/动态约 6 成纯文字；灵动岛删「请留意来电」+ 小窗显示 HH:MM 送达；AI 代付凑一半（垫一半/partial/aiCovered/half 决策）全链路删除
+- 改动文件：src/components/apps/{taobao,meituan,meituan-shangou}.tsx、src/components/ios/{TaobaoIsland,MeituanIsland}.tsx、src/lib/chat-rich.ts、src/lib/ios/{tb-ai-engage,tb-share-proxy,taobao-store,meituan-store}.ts、src/app/api/moments/generate/route.ts
+- 关键决策：①不迁移分库，冻结存量生成订单（零数据风险，用户只要求删行为）②朋友圈配图用服务端掷点而非口头节制（模型看不到协议就不会输出标签，可靠）③凑一半删除保留「提前X分钟送达」类时长文案（语义正确）④美团/淘宝其余列表（收藏/足迹/购物车/优惠券/首页 feed）核实均为持久化或用户主动触发，不改

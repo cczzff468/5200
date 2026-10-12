@@ -110,7 +110,6 @@ import {
   TB_TRACK_NODES,
   tbAddToCart,
   tbBestCoupon,
-  tbBuildGenOrder,
   tbCancelOrder,
   tbCartQty,
   tbClaimCoupon,
@@ -118,12 +117,9 @@ import {
   tbClearSearchHist,
   tbConfirmReceive,
   tbCreateOrder,
-  tbExistingOrderTitles,
-  tbGenHistoryOrders,
   tbGetDeliverySpeed,
   tbGetSession,
   tbIdpLoggedIn,
-  tbInsertGenOrders,
   tbLoadAddrs,
   tbLoadCart,
   tbLoadCoupons,
@@ -3216,16 +3212,8 @@ function PaySheet({
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState(false);
   const [errMsg, setErrMsg] = useState('');
-  /** AI 部分垫付（「我出一半」）：订单挂 aiCovered 时收银台只需支付剩余部分（全付路径不走这里） */
-  const covered = (() => {
-    try {
-      const o = tbLoadOrders(uid).find((x) => x.id === orderId);
-      return o?.status === 'pendingPay' && o.aiCovered && o.aiCovered > 0 ? Math.min(o.aiCovered, amount) : 0;
-    } catch {
-      return 0;
-    }
-  })();
-  const due = Math.max(0.01, Math.round((amount - covered) * 100) / 100);
+  /** 应付金额（凑一半功能已删除，收银台始终支付订单全额） */
+  const due = amount;
   /** 渠道支付密码门：微信/QQ App 里开启了支付密码时，收银台付款前先验对应密码（三者独立，与美团同交互） */
   const [idpGate, setIdpGate] = useState<'wx' | 'qq' | null>(null);
   // 找人代付：plat = 选平台 / contact = 选好友；null = 关闭（与美团收银台「帮付」同交互）
@@ -3273,8 +3261,8 @@ function PaySheet({
         payFc: selChan.isFc,
         payFcParts: res.fc?.parts.map((p) => ({ cardInId: p.cardInId, amount: p.amount })),
       });
-      // 站内消息：支付成功（交易物流；含好友垫付时文案说明总额构成）
-      tbPushMsg(uid, { kind: 'logistics', title: '支付成功', text: `订单已支付 ¥${fmtMoney(amount)}${covered > 0 ? `（含好友垫付 ¥${fmtMoney(covered)}，你补付 ¥${fmtMoney(due)}）` : ''}（${selChan.isFc ? selChan.label : labelMap[selChan.methodId] ?? selChan.label}），商家将尽快发货`, orderId });
+      // 站内消息：支付成功（交易物流）
+      tbPushMsg(uid, { kind: 'logistics', title: '支付成功', text: `订单已支付 ¥${fmtMoney(amount)}（${selChan.isFc ? selChan.label : labelMap[selChan.methodId] ?? selChan.label}），商家将尽快发货`, orderId });
       // 成功态：绿色对勾短展示后跳转订单详情
       setPaid(true);
       window.setTimeout(() => onSuccess(orderId), 750);
@@ -3360,11 +3348,6 @@ function PaySheet({
                   <Price value={due} size={40} />
                 </div>
                 <div className="mt-1 text-[11px] text-black/30">订单号 {orderId} · 淘宝</div>
-                {covered > 0 ? (
-                  <div className="mx-auto mt-2 w-fit rounded-full bg-[#FFF3E8] px-3 py-1 text-[11px] text-[#C24E00]">
-                    好友已帮你垫付 ¥{fmtMoney(covered)}，本单还需支付 ¥{fmtMoney(due)}
-                  </div>
-                ) : null}
               </>
             )}
           </div>
@@ -3723,87 +3706,12 @@ function OrdersPage({
   const [channel, setChannel] = useState<'orders' | 'gou' | 'flash' | 'pig'>('gou');
   const [kw, setKw] = useState('');
   const [, setTick] = useState(0);
-  // 历史订单无限生成（需求「上滑/下滑刷新生成」）：AI（设置里用户配置模型）优先，失败本地确定性生成器兑底；
-  // 新单直接入库（按时间归位），去重保证同店同商品绝不重复出现
-  const apiConfigOrders = useSettings((s) => s.apiConfig);
-  const apiCfgOrdersRef = useRef(apiConfigOrders);
-  apiCfgOrdersRef.current = apiConfigOrders;
-  const genBatchRef = useRef(0);
-  const genBusyRef = useRef(false);
-  const [genLoading, setGenLoading] = useState(false);
 
-  /** 生成一批历史订单：/api/tb-orders（用户配置模型 → 内置模型）失败 → 本地生成器；返回新增条数 */
-  const genMoreOrders = async (count: number): Promise<number> => {
-    if (genBusyRef.current) return 0;
-    genBusyRef.current = true;
-    setGenLoading(true);
-    try {
-      const exclude = tbExistingOrderTitles(uid);
-      let batch: TbOrder[] | null = null;
-      try {
-        const res = await fetch('/api/tb-orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            config: apiCfgOrdersRef.current,
-            exclude: exclude.slice(0, 80),
-            count,
-            nonce: `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
-          }),
-          signal: AbortSignal.timeout(45_000),
-        });
-        const data = (await res.json().catch(() => null)) as {
-          ok?: boolean;
-          items?: Array<{ shopName?: string; itemTitle?: string; tag?: string; skuText?: string; price?: number; qty?: number; daysAgo?: number; canceled?: boolean }>;
-        } | null;
-        if (res.ok && data && data.ok === true && Array.isArray(data.items) && data.items.length > 0) {
-          batch = data.items
-            .filter((raw) => typeof raw.itemTitle === 'string' && raw.itemTitle.trim() && typeof raw.price === 'number')
-            .map((raw, i) =>
-              tbBuildGenOrder(
-                uid,
-                {
-                  shopName: typeof raw.shopName === 'string' ? raw.shopName : undefined,
-                  itemTitle: String(raw.itemTitle).trim(),
-                  tag: typeof raw.tag === 'string' && raw.tag ? raw.tag : 'gift',
-                  skuText: typeof raw.skuText === 'string' ? raw.skuText : undefined,
-                  price: Number(raw.price),
-                  qty: typeof raw.qty === 'number' ? raw.qty : 1,
-                  daysAgo: typeof raw.daysAgo === 'number' ? raw.daysAgo : 3,
-                  canceled: raw.canceled === true,
-                },
-                i
-              )
-            );
-          if (batch.length === 0) batch = null;
-        }
-      } catch {
-        batch = null;
-      }
-      if (!batch) batch = tbGenHistoryOrders(uid, genBatchRef.current++, exclude);
-      return tbInsertGenOrders(uid, batch);
-    } finally {
-      genBusyRef.current = false;
-      setGenLoading(false);
-    }
-  };
-
-  // 双向刷新（Task 40 + 本轮升级）：下拉 = 推进状态 + 生成新订单前插；订单永远原位保留、不消失、不跳顶
+  // 下拉刷新：只推进订单状态机 + 重读列表（历史订单无限生成已按需求移除——订单只在真实购买后新增，持久保存）
   const pull = useTbPullRefresh(async () => {
     tbTickOrders(uid);
-    const n = await genMoreOrders(2);
     setTick((x) => x + 1);
-    onToast(n > 0 ? `已刷新出 ${n} 条新订单` : '订单已更新');
-  });
-  // 订单不足一屏时自动补一批（用户无法滚动时上滑加载永远不触发）
-  useEffect(() => {
-    const el = pull.scrollRef.current;
-    if (!el || genBusyRef.current) return;
-    if (el.scrollHeight <= el.clientHeight + 60) {
-      void genMoreOrders(2).then((n) => {
-        if (n > 0) setTick((x) => x + 1);
-      });
-    }
+    onToast('订单已更新');
   });
   /** 取消订单弹窗（截图2：原因选择） */
   const [cancelFor, setCancelFor] = useState<string | null>(null);
@@ -3898,14 +3806,6 @@ function OrdersPage({
           ref={pull.scrollRef}
           {...pull.bind}
           className="h-full overflow-y-auto pb-10"
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            if (el.scrollTop + el.clientHeight >= el.scrollHeight - 500 && !genBusyRef.current) {
-              void genMoreOrders(2).then((n) => {
-                if (n > 0) setTick((x) => x + 1);
-              });
-            }
-          }}
         >
         {orders.length === 0 ? (
           <div className="grid place-items-center bg-white py-16">
@@ -3917,7 +3817,6 @@ function OrdersPage({
             {orders.map((o) => (
               <OrderCard key={o.id} o={o} uid={uid} onOpen={() => onOpenOrder(o.id)} onPay={() => onPayOrder(o.id)} onToast={onToast} onOpenLogistics={onOpenLogistics} onRate={onRate} onCancel={() => setCancelFor(o.id)} onRefund={() => setRefundFor(o.id)} />
             ))}
-            <div className="py-3 text-center text-[12px] text-black/35">{genLoading ? '正在生成更多订单…' : '上滑加载更多订单'}</div>
           </div>
         )}
         </div>
@@ -4513,13 +4412,8 @@ function OrderDetailPage({
                 <span className="text-[15px] font-semibold text-black/85">
                   需付款 {o.discount > 0 ? <span className="text-[13px] font-normal text-[#FF4400]">共减¥{fmtMoney(o.discount)}</span> : null}
                 </span>
-                <Price value={Math.max(0.01, Math.round((o.total - (o.aiCovered ?? 0)) * 100) / 100)} size={20} />
+                <Price value={o.total} size={20} />
               </div>
-              {o.aiCovered && o.aiCovered > 0 ? (
-                <div className="rounded-lg bg-[#FFF3E8] px-3 py-2 text-[12px] leading-5 text-[#C24E00]">
-                  好友已帮你垫付 ¥{fmtMoney(o.aiCovered)}，还需支付 ¥{fmtMoney(Math.max(0.01, Math.round((o.total - o.aiCovered) * 100) / 100))}（30 分钟内未付会自动取消）
-                </div>
-              ) : null}
             </div>
             {/* 支付方式（截图7：支付宝 / 微信支付单选） */}
             <div className="mt-2 bg-white px-4 py-1.5">
