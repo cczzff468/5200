@@ -8,7 +8,7 @@
  * ② 深夜硬闸（本地时间 0~8 点不打；23 点后的晚间分寸交给决策 API 按人设判断）；
  * ③ 已有来电响铃（useIncomingCall.call）或全局通话进行中（useGlobalCall.session）→ 返回；
  *    页面切后台（document.hidden）不拦——真实手机来电不看屏幕（本模块不做可见性检查）；
- * ④ 候选筛选：有「人设」的联系人（persona 非空；USER/无名排除）中，取 48h 内有互动且
+ * ④ 候选筛选：AI 联系人（USER/无名排除）中，取 48h 内有互动且
  *    距上次互动 ≥2h（刚聊完不马上打）、且不在冷却期（call/wait 冷却 6h、skip 冷却 24h）
  *    的联系人里「最久没聊」的一位；
  * ⑤ 组三端最近聊天摘要（微信/QQ/信息各取最近 4 条文本/转写，单条截 60 字）POST
@@ -550,7 +550,9 @@ async function tickInner(): Promise<void> {
   // #34 闹钟响铃中不主动拨出：闹钟铃声与通话音频重叠体验差，等闹钟被处理后再考虑
   if (useUI.getState().alarmRinging) return;
 
-  // ④ 候选：有人设的联系人（persona 非空；USER/无名排除；G-2 口径修正——来电走电话通道，
+  // ④ 候选：AI 联系人（USER/无名排除；人设非空不再要求——与主动消息/普通聊天同口径，
+  // persona.ts 对空人设有自然兑底；用户反馈「设置了定时到点不发」同源静默跳过问题）；
+  // G-2 口径修正——来电走电话通道，
   // 电话只受「信息」App 拉黑影响（与 phone.tsx 通话守卫同款读 sms 键）：微信/QQ 被拉黑
   // 不再排除主动来电——那正是「被拉黑后去别的 App 找用户」的来电路径（G-1 的电话版）；
   // sms byUser 仍排除：来电会被 #17 守卫拦留言+通话静默成死寂；sms byChar 同款排除
@@ -561,7 +563,6 @@ async function tickInner(): Promise<void> {
     (c) =>
       c.kind !== 'user' &&
       !!c.name?.trim() &&
-      !!c.persona?.trim() &&
       !loadBlock('sms', c.id).byUser &&
       !loadBlock('sms', c.id).byChar
   );

@@ -379,7 +379,7 @@ const REMINDER_PARSE_SYSTEM = `你是一个定时任务解析器。用户正在�
 1. match=false：不是定时发消息指令（普通聊天、问句、没有明确的时间意图）。
 2. kind=once：一次性的（"3分钟后给我发消息"、"晚上8点提醒我……"、"20分钟以后叫我"）。minutesLater=从当前时间算起的分钟数：能精确到今天某时刻就换算成分钟差；如果那个时刻今天已经过了（如现在 21 点说"晚上8点提醒我"），按明天同一时刻换算（加 1440 分钟）；必须为正数，不允许负数或零。
 3. kind=daily：每天重复（"以后每天早上8点给我发消息"、"每天晚上10点说晚安"）。dailyTime="HH:mm"（24小时制，"早上8点"="08:00"，"晚上10点"="22:00"，"中午12点半"="12:30"）。
-4. kind=interval：按间隔循环（"每隔1小时给我发个消息"、"每30分钟发一次消息"）。intervalMinutes=分钟数。
+4. kind=interval：按间隔循环（"每隔1小时给我发个消息"、"每30分钟发一次消息"、"每隔30秒发一句"）。intervalMinutes=分钟数（可以是小数：30 秒=0.5、90 秒=1.5；最小 0.5）。
 5. note=用户想让消息带的内容/目的摘要（如"提醒我喝水""说晚安"）；没有具体目的就写"主动找我聊聊"。
 6. 只依据对话里给到的时间信息换算，不要编造；表达含糊缺时间信息时 match=false。
 7. 严禁输出 JSON 以外的任何文字。`;
@@ -415,8 +415,9 @@ export async function parseReminderInstruction(app: ProactiveApp, cid: string, t
       task = { id: genId(), app, cid, kind: 'daily', dailyTime: hm, note: (parsed.note ?? '').slice(0, 80) || '按约定主动发消息', createdAt: now };
     } else {
       const mins = Number(parsed.intervalMinutes);
-      if (!Number.isFinite(mins) || mins < 1 || mins > 60 * 24 * 7) return null;
-      task = { id: genId(), app, cid, kind: 'interval', intervalMs: Math.round(mins * 60_000), note: (parsed.note ?? '').slice(0, 80) || '按约定主动发消息', createdAt: now };
+      // 30 秒级短间隔放行（用户实测口径）：下限 0.5 分钟（30s），落库按毫秒存，与设置页自定义间隔同档
+      if (!Number.isFinite(mins) || mins < 0.5 || mins > 60 * 24 * 7) return null;
+      task = { id: genId(), app, cid, kind: 'interval', intervalMs: Math.max(30_000, Math.round(mins * 60_000)), note: (parsed.note ?? '').slice(0, 80) || '按约定主动发消息', createdAt: now };
     }
     addReminder(app, task);
     return `${reminderLabel(task)}｜${task.note}`;
@@ -1008,17 +1009,25 @@ async function tickInner(): Promise<void> {
     // 账号隔离：配置/执行记录/提醒都按对应 App 当前账号读；其他账号的配置自然不可见
     const cfg = getProactiveCfg(app, cid);
     const contact = allContacts.find((c) => c.id === cid);
-    if (!contact || contact.kind === 'user' || !contact.name?.trim() || !contact.persona?.trim()) continue;
+    // 人设非空不再要求（用户反馈「设置了定时发消息到点不发」）：普通聊天对空人设照常回复
+    //（persona.ts 对空人设有自然兑底），主动消息同口径；USER/无名仍排除
+    if (!contact || contact.kind === 'user' || !contact.name?.trim()) continue;
     // 拉黑守卫：用户拉黑角色 / 角色拉黑用户 → 都不主动发
     const blk = loadBlock(app, cid);
     if (blk.byUser || blk.byChar) continue;
 
-    // 对话活跃守卫（Task 51 B1）：最近 2 分钟内有消息往来时跳过定时/自主触发（不打断正在进行的聊天；
+    // 对话活跃守卫（Task 51 B1）：最近 2 分钟内**用户**发过消息时跳过定时/自主触发（不打断正在进行的聊天；
     // 事件/提醒是用户明确约定，不受此限）。10s tick 稍后再试。
+    // 修复（用户反馈 30s 间隔实际 ≥2.5 分钟才来一条）：旧口径取「最后一条消息」——AI 自己的主动
+    // 消息也算活跃，每发一条就把后续定时压住 2 分钟；改只看用户侧最后一条消息。
     let convActive = false;
     try {
       const norm = readNormMsgs(app, cid);
-      convActive = norm.length > 0 && nowMs - norm[norm.length - 1].time < CONVO_ACTIVE_MS;
+      const lastUserAt = (() => {
+        for (let i = norm.length - 1; i >= 0; i--) if (norm[i].role === 'user') return norm[i].time;
+        return 0;
+      })();
+      convActive = lastUserAt > 0 && nowMs - lastUserAt < CONVO_ACTIVE_MS;
     } catch {
       convActive = false;
     }
@@ -1115,8 +1124,8 @@ function fallbackProactiveText(trigger: FireTrigger): string {
 /**
  * 生成并投递一条主动消息（auto 触发先走决策；任何失败静默）。
  * 生成后与最近 AI 发言去重（完全相同 → 丢弃），避免「间隔 < 生成耗时」时的重复消息。
- * 加固（用户反馈「到时间没收到主动消息」）：LLM 生成失败不再静默——timer/event/reminder
- * 是用户明确约定的「必须发」，改用本地兑底文案保底投递；auto 决策 API 失败同样兑底（wait 才是 AI 真决定不发）。
+ * 加固（用户反馈「到时间没收到主动消息」）：LLM 生成失败不再静默——先退避重试一轮，
+ * 仍失败才用本地兑底文案保底投递；auto 决策 API 失败同样兑底（wait 才是 AI 真决定不发）。
  */
 async function fireProactive(app: ProactiveApp, contact: ContactRecord, trigger: FireTrigger, npcExtra: Record<string, unknown> | null): Promise<void> {
   const key = `${app}:${contact.id}`;
@@ -1151,8 +1160,18 @@ async function fireProactive(app: ProactiveApp, contact: ContactRecord, trigger:
       } catch {
         text = '';
       }
+      // 第一轮全失败（用户配置+内置模型都没出字）：退避 6s 再重试一轮——LLM 抖动很常见，
+      // 多一次重试能大幅减少落到兑底文案的概率（兑底仅作为最后保底，保证到点必有产出）
       if (!text) {
-        text = fallbackProactiveText(trigger); // timer/event/reminder 生成失败：本地兑底（到点一定发）
+        await new Promise<void>((r) => window.setTimeout(r, 6_000));
+        try {
+          text = await generateProactiveText(app, contact, trigger, npcExtra);
+        } catch {
+          text = '';
+        }
+      }
+      if (!text) {
+        text = fallbackProactiveText(trigger); // 两轮都失败：本地兑底（到点一定发）
         usedFallback = true;
       }
     }
@@ -1232,7 +1251,8 @@ export async function manuallyFireEvent(app: ProactiveApp, cid: string, eventId:
     if (!evt) return false;
     const all = await listContacts().catch(() => [] as ContactRecord[]);
     const contact = all.find((c) => c.id === cid);
-    if (!contact || contact.kind === 'user' || !contact.name?.trim() || !contact.persona?.trim()) return false;
+    // 人设非空不再要求（与 tickInner 同口径）
+    if (!contact || contact.kind === 'user' || !contact.name?.trim()) return false;
     const blk = loadBlock(app, cid);
     if (blk.byUser || blk.byChar) return false;
     // 配角圈注入不再限 NPC（与上方 generateProactiveText 同口径；CHAR 也有配角圈/背景近况）

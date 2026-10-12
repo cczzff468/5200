@@ -16,8 +16,9 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { BellRing, CalendarClock, Check, ChevronLeft, History, Plus, Send, Sparkles, Timer, Trash2, Zap } from 'lucide-react';
+import { BellOff, BellRing, CalendarClock, Check, ChevronLeft, History, Plus, Send, Sparkles, Timer, Trash2, Zap } from 'lucide-react';
 import { ChatToggle } from './chat-settings';
+import { loadBlock } from '@/lib/ios/block-state';
 import {
   getProactiveCfg,
   setProactiveCfg,
@@ -285,6 +286,19 @@ export function ProactiveMsgPage({
       return false;
     }
   });
+  // 拉黑状态（用户反馈「设了定时到点不发」没有可感知原因）：拉黑期间引擎不发主动消息，
+  // 这里同步给出提示，解除拉黑后自动恢复（随下方 4s 轻轮询刷新）
+  const readBlockHint = (): 'byUser' | 'byChar' | null => {
+    try {
+      const blk = loadBlock(app, contactId);
+      if (blk.byUser) return 'byUser';
+      if (blk.byChar) return 'byChar';
+      return null;
+    } catch {
+      return null;
+    }
+  };
+  const [blockedDir, setBlockedDir] = useState<'byUser' | 'byChar' | null>(readBlockHint);
 
   /** 提醒/历史清单/总开关轻轮询（NL 解析可能在本页打开时于聊天里创建任务；4s 刷新足够） */
   useEffect(() => {
@@ -292,6 +306,7 @@ export function ProactiveMsgPage({
       setReminders(remindersFor(app, contactId));
       setHist(proactiveHistory(app, contactId));
       setMasterOff(isProactiveMasterOff());
+      setBlockedDir(readBlockHint());
     }, 4_000);
     return () => window.clearInterval(t);
   }, [app, contactId]);
@@ -452,6 +467,18 @@ export function ProactiveMsgPage({
             </button>
           )}
         </div>
+
+        {/* 拉黑提示条：拉黑期间引擎静默不发任何主动消息（定时/事件/自主/提醒全停），解除拉黑自动恢复 */}
+        {blockedDir && (
+          <div data-testid={`${testPrefix}-proactive-blocked`} className="mb-3 flex items-center gap-2.5 rounded-[16px] bg-[#FF9500]/[0.1] px-4 py-2.5">
+            <BellOff className="h-4 w-4 shrink-0 text-[#FF9500]" strokeWidth={2.2} />
+            <span className="text-[12.5px] leading-relaxed text-[#9A6700] dark:text-[#FFC776]">
+              {blockedDir === 'byUser'
+                ? `你已拉黑「${contactName}」：拉黑期间 TA 的所有主动消息（定时/事件/自主/提醒）都会暂停，解除拉黑后自动恢复。`
+                : `「${contactName}」已拉黑你：拉黑期间 TA 不会主动发消息，解除拉黑后自动恢复。`}
+            </span>
+          </div>
+        )}
 
         {/* 分区容器：总开关关闭时整体置灰（仍可编辑，仅视觉提示） */}
         <div className={`transition-opacity duration-300 ${masterOff ? 'opacity-40' : 'opacity-100'}`}>

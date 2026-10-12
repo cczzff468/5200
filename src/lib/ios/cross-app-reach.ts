@@ -45,9 +45,9 @@ const running = new Set<string>();
 /** 拉黑方向：byUser = 用户拉黑了角色（角色被拉黑后去找）；byChar = 角色拉黑了用户（气归气还是忍不住来找） */
 type ReachDirection = 'byUser' | 'byChar';
 
-/** 拉黑来电延时（ms）+ 随机抖动：让跨 App 消息先到、来电错峰随后（像真人：发消息没人理才打电话） */
-const CALL_DELAY_MS = 50_000;
-const CALL_DELAY_JITTER_MS = 20_000;
+/** 拉黑来电延时（ms）+ 随机抖动：跨 App 消息在路上的同时来电错峰随后（用户口径：约 5~30 秒后打来，像真人） */
+const CALL_DELAY_MS = 12_000;
+const CALL_DELAY_JITTER_MS = 18_000;
 
 /** 各端会话 kv 键（与各 App 落盘键 / cross-app-context 读取键严格一致） */
 function msgsKey(app: BlockApp, contactId: string): string {
@@ -119,32 +119,11 @@ function notifyReach(app: BlockApp, contact: ContactRecord, content: string, use
   }
 }
 
-/**
- * 本地兑底文案（LLM 挂了/没人设也能「一定看得见」——用户要求：被拉黑后 AI 必须会来别的 App 找）：
- * 按方向+目标 App 从固定池随机一条（人工拟写、覆盖两大方向的情绪口吻）。
- */
-function fallbackReachText(
-  targetApp: BlockApp,
-  blockedApp: BlockApp,
-  direction: ReachDirection,
-  userName: string,
-): string {
-  const from = BLOCK_CHANNEL[blockedApp];
-  const to = BLOCK_CHANNEL[targetApp];
-  const you = userName || '喂';
-  const pool =
-    direction === 'byUser'
-      ? [
-          `${you}，你在${from}把我拉黑了…我只能来${to}找你了，别不理我好不好？`,
-          `拉黑的事我看到了，心里挺不是滋味的，特地来${to}跟你说句话，别不理我。`,
-          `你把我在${from}拉黑了，可我还是忍不住来${to}找你——我们好好说说行吗？`,
-        ]
-      : [
-          `我在${from}一时生气把你拉黑了…但气话归气话，还是忍不住来${to}找你说说话。`,
-          `${you}，别误会，我在${from}拉黑你只是一时赌气——所以特地来${to}跟你讲清楚。`,
-          `那个…${from}的事是我太冲动了，我在${to}这里等你回我。`,
-        ];
-  return pool[Math.floor(Math.random() * pool.length)];
+/** 重试间隔（用户红线：情境开场绝不能是模板文案——LLM 失败宁可重试也不降级到固定文案） */
+const RETRY_DELAYS_MS = [8_000, 15_000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => window.setTimeout(r, ms));
 }
 
 /** 组 system prompt：人设 + 记忆 + 跨 App 近况 + 时间感知（与四端聊天同源模块） */
@@ -180,8 +159,9 @@ async function buildReachSystem(
 /** 生成并在单个目标 App 落库（不影响其他目标）。
  *  多账号（Task 40-2d v2）：机主身份按目标 App 当前账号取——角色去哪个 App 找人，
  *  就用那个人在该 App 登录账号的称呼（大号=机主资料，小号/匿名号=档案/注册表名）
- *  加固（用户反馈「AI 不会主动去别的软件找我」）：LLM 生成失败/没人设时不再静默放弃，
- *  改用本地兑底文案落库——被拉黑后 AI 一定会来找，用户一定看得到。 */
+ *  情境开场必须是 LLM 生成的真话（用户红线「这个情境开场不要模板」）：生成失败按退避重试
+ *  （用户配置 → 内置模型 ×3 轮），全部失败才放弃该 App（宁可晚到/缺席，绝不发固定文案）；
+ *  没人设不再拦——人设 prompt 对空人设有自然兜底（persona.ts），普通聊天同样放行。 */
 async function reachOne(
   targetApp: BlockApp,
   blockedApp: BlockApp,
@@ -202,15 +182,6 @@ async function reachOne(
   const userRealName = owner?.realName?.trim() || null;
   const userNickname = owner?.nickname?.trim() || null;
   const userName = userNickname || userRealName || '用户';
-
-  // 没人设：不跑 LLM（人设 prompt 拼不出来），直接兑底文案——「一定会来找」的体验优先
-  if (!(contact.persona ?? '').trim()) {
-    const fb = fallbackReachText(targetApp, blockedApp, direction, userName);
-    if (loadBlock(targetApp, contact.id).byUser === true) return;
-    appendPeerMsg(targetApp, contact.id, fb);
-    notifyReach(targetApp, contact, fb, userName);
-    return;
-  }
 
   const system = await buildReachSystem(targetApp, contact, userName, userRealName, userNickname);
   const userContent =
@@ -233,42 +204,41 @@ async function reachOne(
           `只输出这一条消息的正文本身：不要输出任何 [标记]，不要分多条，不要动作描写，不要括号说明。`,
         ].join('\n');
 
+  // 生成链路：先按用户配置的原链路（上游代理/内置模型），失败（502/上游断网/空回复）
+  // 再用内置模型（forceSdk）——内置模型稳定可用，重试轮都走它；浏览器直连（directOnly SSE）
+  // 不做：跨 App 找是后台增强，直连链路复杂度不值得
+  const call = async (extra: Record<string, unknown>): Promise<string> => {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userContent },
+        ],
+        ...extra,
+      }),
+      signal: AbortSignal.timeout(45_000),
+    });
+    return res.ok ? await res.text() : '';
+  };
   let raw = '';
-  try {
-    // 生成链路与 bg 接力同款两级兜底：先按用户配置的原链路（上游代理/内置模型），
-    // 失败（502/上游断网/空回复）再用内置模型（forceSdk）兜一次——浏览器直连（directOnly
-    // SSE）不做：跨 App 找是后台增强，直连链路复杂度不值得，内置模型兜底已足够可靠
-    const call = async (extra: Record<string, unknown>): Promise<string> => {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: userContent },
-          ],
-          ...extra,
-        }),
-        signal: AbortSignal.timeout(75_000),
-      });
-      return res.ok ? await res.text() : '';
-    };
-    raw = await call({ config: useSettings.getState().apiConfig });
-    if (!raw.trim()) {
-      try {
-        raw = await call({ forceSdk: true });
-      } catch {
-        raw = '';
-      }
+  for (let i = 0; i <= RETRY_DELAYS_MS.length; i++) {
+    if (i > 0) await sleep(RETRY_DELAYS_MS[i - 1]);
+    try {
+      raw = i === 0 ? await call({ config: useSettings.getState().apiConfig }) : await call({ forceSdk: true });
+    } catch {
+      raw = '';
     }
-  } catch {
-    raw = ''; // 生成失败 → 走下方本地兑底（不再静默放弃）
+    if (raw.trim()) break;
   }
-  let content = cleanReachText(raw);
+  const content = cleanReachText(raw);
 
-  // 落库前再复核一次（生成期间目标 App 可能刚被拉黑）
+  // 落库前再复核一次（重试的几十秒里情况可能已变）：
+  // 刚被拉黑 → 放弃（去了也发不出）；原拉黑 App 的拉黑已解除 → 放弃（情境已消失，再发「你拉黑了我」就穿帮）
   if (loadBlock(targetApp, contact.id).byUser === true) return;
-  if (!content) content = fallbackReachText(targetApp, blockedApp, direction, userName); // LLM 失败：本地兑底，保证一定来找
+  if (direction === 'byUser' && blockedApp !== targetApp && loadBlock(blockedApp, contact.id).byUser !== true) return;
+  if (!content) return; // 全轮重试仍失败：放弃该 App（绝不降级到模板文案）
 
   appendPeerMsg(targetApp, contact.id, content);
   notifyReach(targetApp, contact, content, userName);
@@ -312,16 +282,41 @@ export function triggerCrossAppReachByChar(blockedApp: BlockApp, contactId: stri
 /** 拉黑来电防重入（同一联系人同一时刻只武装一个延时来电） */
 const callArmed = new Set<string>();
 
-/** 拉黑后延时来电（G-1 电话版）：消息先到、来电错峰随后——用户明确要求被拉黑后 AI 会打电话来找 */
+/** 拉黑时刻起用户在三端有没有回过话（消息没人理才打电话——回了话就不再打） */
+function userRepliedSince(contactId: string, since: number): boolean {
+  for (const app of ['wx', 'qq', 'sms'] as BlockApp[]) {
+    try {
+      const raw = kvGetScoped<unknown[]>(msgsKey(app, contactId), app);
+      const list = Array.isArray(raw) ? raw : [];
+      for (let i = list.length - 1; i >= 0; i--) {
+        const m = list[i] as Record<string, unknown> | null;
+        if (!m || typeof m !== 'object') continue;
+        const t = typeof m.time === 'number' ? m.time : 0;
+        if (t <= since) break; // 按时间升序落库，早于拉黑时刻即可停
+        const role = typeof m.role === 'string' ? m.role : '';
+        if ((role === 'user' || role === 'me') && typeof m.content === 'string' && m.content.trim()) return true;
+      }
+    } catch {
+      /* 单端读失败不影响其他端判定 */
+    }
+  }
+  return false;
+}
+
+/** 拉黑后延时来电（G-1 电话版）：约 5~30 秒错峰打来（用户口径）；像真人——用户已回话/拉黑已解除就不打 */
 function armBlockCall(blockedApp: BlockApp, contactId: string, direction: ReachDirection): void {
   const key = `${blockedApp}:${contactId}`;
   if (callArmed.has(key)) return;
   callArmed.add(key);
+  const blockedAt = Date.now();
   void (async () => {
     try {
       const contact = await getContact(contactId).catch(() => null);
       if (!contact || contact.kind === 'user') return;
       await new Promise<void>((r) => window.setTimeout(r, CALL_DELAY_MS + Math.floor(Math.random() * CALL_DELAY_JITTER_MS)));
+      // 到点复核（延时窗口内情况可能已变）：用户回了话 → 不打（消息有人理）；拉黑已解除 → 不打（情境消失）
+      if (userRepliedSince(contactId, blockedAt)) return;
+      if (loadBlock(blockedApp, contactId).byUser !== true) return;
       let me: string | null = null;
       try {
         const o = await ownerProfileFor(blockedApp);
@@ -332,7 +327,7 @@ function armBlockCall(blockedApp: BlockApp, contactId: string, direction: ReachD
       const you = me || '用户';
       const hint =
         direction === 'byUser'
-          ? `【开场情境】${you} 刚刚在「${BLOCK_CHANNEL[blockedApp]}」把你拉黑了，你发消息也送不到，等了一会儿忍不住打电话过来——想问清楚、求和好、赌气质问都可以，按你的人设和你们的关系自然开场。`
+          ? `【开场情境】${you} 刚刚在「${BLOCK_CHANNEL[blockedApp]}」把你拉黑了，你发消息 TA 收不到，也没回你任何消息，等了一会儿忍不住打电话过来——想问清楚、求和好、赌气质问都可以，按你的人设和你们的关系自然开场。`
           : `【开场情境】你刚刚在「${BLOCK_CHANNEL[blockedApp]}」一时生气把 ${you} 拉黑了，但气话归气话还是不放心，忍不住打电话过来——嘴硬、试探、装作没事都可以，按你的人设自然开场。`;
       const { triggerBlockCall } = await import('./proactive-call');
       triggerBlockCall(contact, hint);
