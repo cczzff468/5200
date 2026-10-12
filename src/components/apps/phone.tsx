@@ -90,7 +90,7 @@ import { startGlobalCall, useGlobalCall } from '@/lib/ios/global-call';
 import { PENDING_PHONE_ANSWER_EVENT, takePendingPhoneAnswer, useIncomingCall } from '@/lib/ios/incoming-call';
 import { loadBlock } from '@/lib/ios/block-state';
 import { getReplyCount } from '@/lib/reply-count';
-import { withAvatarForApp, type ContactRecord } from '@/lib/contacts';
+import { isFriendIn, withAvatarForApp, type ContactRecord } from '@/lib/contacts';
 
 /**
  * 电话 App（iOS 电话风格）：
@@ -1965,9 +1965,20 @@ function CallScreen({
     return callDurationText(seconds);
   };
 
-  // 通话界面名字/号码显示（用户要求）：只有「电话联系人」（机主本人/已加好友，通讯录里会出现的人）
-  // 才显示名字与头像；没加进电话的联系人一律显示电话号码（陌生号语义，iOS 一致）
-  const phoneKnownContact = contact && (contact.kind === 'user' || contact.isFriend) ? contact : null;
+  // 通话界面名字/号码显示（用户要求）：「电话认识的联系人」才显示名字与头像，
+  // 通讯录里查无此人的号码才走陌生号语义（iOS 一致，只显示号码+通用头像）。
+  // 「电话认识」口径（头像编辑同步修复）：机主本人、电话好友（isFriend），
+  // 或在微信/QQ/信息任一 App 加过好友的联系人——在联系人 App 建了人、改了头像，
+  // 打电话界面就应该认识 TA（只建了人、哪都没加好友的仍按陌生号显示号码）
+  const phoneKnownContact =
+    contact &&
+    (contact.kind === 'user' ||
+      contact.isFriend ||
+      isFriendIn(contact, 'sms') ||
+      isFriendIn(contact, 'wx') ||
+      isFriendIn(contact, 'qq'))
+      ? contact
+      : null;
   const name = phoneKnownContact?.name || formatNumber(target.number);
   /** 单句弹幕最新一句：只显示 AI 最新一句（我方说话不上屏，与微信/QQ 通话字幕同款；新句出现旧句消失），
    *  跳过流式中的空气泡，避免新句刚开始流式时闪烁 */
@@ -4318,8 +4329,12 @@ export default function PhoneApp() {
         media: 'video',
         name: resolved?.name ?? number,
         avatar: resolved?.avatar ?? null,
-        // Task 27：用户（机主）头像——视频通话关摄像头时显示它；电话 App 用系统设置里的机主头像
-        myAvatar: useSettings.getState().profile.avatar,
+        // Task 27：用户（机主）头像——视频通话关摄像头时显示它；
+        // 同步修复：优先机主联系人头像（联系人 App 改了自己头像即生效，allContacts 已按 phone 投影），
+        // 设置›个人信息头像作兑底（两者双向同步，见 PhoneShell）
+        myAvatar:
+          allContacts?.find((c) => c.kind === 'user' && !c.altOf)?.avatar ||
+          useSettings.getState().profile.avatar,
         contact: resolved,
         direction: 'out',
         initialHistory: [],
@@ -4361,7 +4376,7 @@ export default function PhoneApp() {
         },
       });
     },
-    [callTarget, showToast, handleCallEnd, handleVoicemail]
+    [callTarget, showToast, handleCallEnd, handleVoicemail, allContacts]
   );
 
   const stopVmAudio = useCallback(() => {

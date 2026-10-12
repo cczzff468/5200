@@ -52,6 +52,7 @@ import {
 import { memAddEventFragment, memDetectMainAltDisclosure, memLinkAltAccounts } from '@/lib/memory';
 import { localDB } from '@/lib/ios/db';
 import { buildAltAccountsSection } from '@/lib/ios/persona';
+import { cachedOwnerName } from '@/lib/ios/contacts-store';
 
 /** 会话键 → 账号所属 App（v2 per-app 账号）：wx:* → 微信、qq:* → QQ、其余（sms 开头与 assistant 等历史键）→ 信息 */
 function streamAppOf(sessionKey: string): AccountApp {
@@ -616,7 +617,8 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
       const hitAltIds = memDetectMainAltDisclosure(lastUserText);
       if (hitAltIds.length > 0) {
         memLinkAltAccounts(linkCid, hitAltIds, lastUserText);
-        const ownerLabel = useSettings.getState().profile.name?.trim() || '机主';
+        // 机主称谓：联系人 App 机主真名优先（编辑自己后按最新），设置 profile 名仅兑底
+        const ownerLabel = cachedOwnerName() || useSettings.getState().profile.name?.trim() || '机主';
         const altLabels = hitAltIds
           .map((id) => getAccountById(id)?.name?.trim() || '小号')
           .join('、');

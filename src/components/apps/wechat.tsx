@@ -482,6 +482,8 @@ interface WxMoment {
   id: string;
   authorName: string;
   avatar: string | null;
+  /** 动态引擎写入的作者类型（'user' 自己 / 'char' 角色；legacy 数据缺省，读时按 peerId 归因） */
+  author?: 'user' | 'char';
   text: string;
   /** AI 双语译文（中文译文；空串 = 无译文）；48-6 渲染折叠块 */
   contentZh?: string;
@@ -4487,7 +4489,7 @@ function ChatPage({
   onToast?: (m: string) => void;
   /** 47-b 联系人刷新回调（宿主 reloadContacts）：buildReplyMsgs 的 change-avatar/pick-album-avatar
    *  IIFE 调 updateContact 落库后，调用此回调刷新 MainScreen 的 contacts state，让顶栏/会话列表头像即时更新 */
-  onContactsChanged?: () => Promise<void>;
+  onContactsChanged?: () => Promise<unknown>;
   /** 聊天设置「删除联系人」→ 宿主弹二次确认（确认后关聊天 + 删除好友关系）；不传/自己会话不显示 */
   onDeleteContact?: () => void;
   /** Task 28-b 详情页通话桥：联系人详情页「音视频通话」ActionSheet 选语音/视频后，宿主关详情页并打开
@@ -12541,7 +12543,7 @@ function MainScreen({
   myRealName: string;
   /** NPC 归属者名字查询（按聊天对端计算，供人设 prompt 使用） */
   ownerName: (peer: ContactRecord) => string | null;
-  reloadContacts: () => Promise<void>;
+  reloadContacts: () => Promise<ContactRecord[]>;
   onLogout: () => void;
   onExit: () => void;
   /** 切换账号页「登录小号」自由登录成功 → 根组件 handleLogin（Task 41） */
@@ -12600,11 +12602,19 @@ function MainScreen({
     [contacts]
   );
   const momentsLive = useMemo(
-    () =>
-      moments
+    () => {
+      // 自己发的动态（author='user'，peerId=null 仅名字归因）：改名/换头像后按机主联系人实时解析
+      // 名字与头像——避免改名后旧帖回退到落库时的旧快照（机主身份随联系人最新资料展示）
+      const owner = contacts.find((c) => c.kind === 'user' && !c.altOf) ?? null;
+      return moments
         .filter((p) => !isAuthorHidden({ peerId: p.peerId, name: p.authorName }))
-        .map((p) => ({ ...p, avatar: liveWxAvatar(p.avatar, { peerId: p.peerId, name: p.authorName }) })),
-    [moments, liveWxAvatar, isAuthorHidden]
+        .map((p) =>
+          p.author === 'user' && owner
+            ? { ...p, authorName: displayNameOf(owner) || p.authorName, avatar: owner.avatar ?? p.avatar }
+            : { ...p, avatar: liveWxAvatar(p.avatar, { peerId: p.peerId, name: p.authorName }) }
+        );
+    },
+    [moments, liveWxAvatar, isAuthorHidden, contacts]
   );
   /** 用户 API 配置（让 AI 发动态时按人设生成内容用） */
   const apiConfig = useSettings((s) => s.apiConfig);
@@ -14417,25 +14427,35 @@ export default function WeChatApp() {
     return withDisplayNames(raw);
   }, []);
 
-  /** 重新拉取联系人（添加好友后调用，列表即时生效） */
-  const reloadContacts = useCallback(async () => {
+  /** 重新拉取联系人（添加好友后调用，列表即时生效）；返回新列表供「我」快照同步复用 */
+  const reloadContacts = useCallback(async (): Promise<ContactRecord[]> => {
     const list = await loadContacts().catch(() => [] as ContactRecord[]);
     setContacts(list);
+    return list;
   }, [loadContacts]);
 
   // 换头像跨 App 即时生效（引用式架构）：头像只在联系人资料存一份，渲染端 liveAvatarOf 实时解析；
   // 其他 App（联系人/信息/电话/QQ）改了头像时刷新本端联系人缓存，打开中的朋友圈/聊天页立刻显示新头像。
   // contact-updated：任意资料字段（名字/手机号/昵称/人设…）变更也刷新——编辑联系人不换头像时
-  // 微信端不再持旧快照（会话列表/资料页/登录解析保持最新）
+  // 微信端不再持旧快照（会话列表/资料页/登录解析保持最新）。
+  // 「我」快照同步（编辑自己修复）：user 是开机/登录时 from 联系人的快照——机主在联系人 App
+  // 改了自己头像/名字后，朋友圈发帖署名、聊天气泡我的头像等仍持旧值；这里随重载按最新联系人重派生
   useEffect(() => {
-    const fn = () => void reloadContacts();
+    const fn = () =>
+      void reloadContacts().then((list) => {
+        setUser((prev) => {
+          if (!prev) return prev;
+          const hit = list.find((c) => c.id === prev.id && c.kind === 'user');
+          return hit ? toWxUser(hit) : prev;
+        });
+      });
     window.addEventListener('contact-avatar-changed', fn);
     window.addEventListener('contact-updated', fn);
     return () => {
       window.removeEventListener('contact-avatar-changed', fn);
       window.removeEventListener('contact-updated', fn);
     };
-  }, [reloadContacts]);
+  }, [reloadContacts, toWxUser]);
 
   // 小号加好友 AI 决策落盘（2025）：同意 = 好友标记变化 → 刷新联系人（通讯录/会话列表即时出现）；
   // 拒绝/先回复不改变好友标记，刷新无副作用

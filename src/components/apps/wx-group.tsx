@@ -727,7 +727,7 @@ export function WxGroupCreatePage({
       .map(memberNameOf);
     if (names.length === 0) return '';
     // 默认群名 = 我的名字 + 成员名字（真实微信同款「谁和谁的群聊」语义；人多时截断）
-    const meRec = contacts.find((c) => c.kind === 'user');
+    const meRec = contacts.find((c) => c.kind === 'user' && !c.altOf);
     const all = meRec ? [memberNameOf(meRec), ...names] : names;
     return all.length <= 4 ? all.join('、') : `${all.slice(0, 3).join('、')}等${all.length}人群聊`;
   }, [selected, contacts]);
@@ -745,7 +745,7 @@ export function WxGroupCreatePage({
     });
 
   const create = () => {
-    const me = contacts.find((c) => c.kind === 'user');
+    const me = contacts.find((c) => c.kind === 'user' && !c.altOf);
     if (!me || selected.length === 0) {
       toast('至少选择一名成员');
       return;
@@ -955,7 +955,7 @@ export function WxGroupInfoPage({
   );
 
   // ---- 群角色 / 权限（六.权限规则）：群主全部权限；管理员可禁言/踢人（仅普通成员）；普通成员不能管理他人 ----
-  const meRec = useMemo(() => contacts.find((c) => c.kind === 'user') ?? null, [contacts]);
+  const meRec = useMemo(() => contacts.find((c) => c.kind === 'user' && !c.altOf) ?? null, [contacts]);
   // 称呼方式（全局设置）：机主瓦片显示「凡凡（凑凑）」或「凑凑」
   const addressMode = useSettings((s) => s.addressMode);
   // 机主身份（兼容双键）：挽留流程旧版曾以字面量 'me' 写入 adminIds/ownerId，联系人 ID 查不到时回退 'me' 查一次

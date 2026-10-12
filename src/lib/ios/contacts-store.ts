@@ -415,6 +415,22 @@ export async function createContact(payload: ContactPayload): Promise<ContactRec
     createdAt: new Date().toISOString(),
   };
   await localDB.put('contacts', rec);
+
+  // 新建联系人广播（与 updateContact 的 contact-updated 同款口径）：新建的联系人（尤其机主 USER 档案）
+  // 各 App（电话/微信/QQ/信息等）与机主身份双向同步（owner-profile-sync）都需要感知——
+  // 建了人之后打开中的页面/监听方立刻按最新名单刷新，不再等下次任意编辑才补上
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('contact-updated', {
+          detail: { contactId: rec.id, changed: Object.keys(rec), created: true },
+        }),
+      );
+    } catch {
+      // 忽略
+    }
+  }
+
   return rec;
 }
 
@@ -514,9 +530,14 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   // 仍持旧快照：拨号按号码解析不到人（播「空号」）、会话面板显示旧名字、美团昵称不同步等。
   // 各 App 监听本事件重载联系人缓存（与 contact-avatar-changed 同款 handler），保存动作本身低频，
   // 本地 IndexedDB 全量重读毫秒级，无性能顾虑。
+  // detail.changed = 本次实际发生值变化的字段名（diff next/existing）——机主身份双向同步
+  // （owner-profile-sync）只镜像名字/头像，靠它避免「编辑无关字段也覆盖设置侧头像」的误同步
+  const changedFields = (Object.keys(next) as (keyof ContactRecord)[]).filter(
+    (k) => JSON.stringify((next as ContactRecord)[k] ?? null) !== JSON.stringify((existing as ContactRecord)[k] ?? null)
+  );
   if (typeof window !== 'undefined') {
     try {
-      window.dispatchEvent(new CustomEvent('contact-updated', { detail: { contactId: id } }));
+      window.dispatchEvent(new CustomEvent('contact-updated', { detail: { contactId: id, changed: changedFields } }));
     } catch {
       // 忽略
     }

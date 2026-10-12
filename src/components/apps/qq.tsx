@@ -931,6 +931,8 @@ interface ZonePost {
   id: string;
   authorName: string;
   avatar: string | null;
+  /** 动态引擎写入的作者类型（'user' 自己 / 'char' 角色；legacy 数据缺省，读时按 peerId 归因） */
+  author?: 'user' | 'char';
   /** 角色发的动态 = 该角色联系人 id（引擎写入；用户帖/legacy 缺省）——头像实时解析的身份引用 */
   peerId?: string | null;
   content: string;
@@ -2848,7 +2850,7 @@ function ChatPage({
   /** 群聊卡片「接受邀请」后进入群聊（宿主刷新群列表并打开群页） */
   onOpenGroup?: (gid: string) => void;
   /** 47-c #108：AI 自主换头像后即时刷新 contacts state，让聊天页 peer.avatar 反应式同步 */
-  refreshContacts: () => Promise<void>;
+  refreshContacts: () => Promise<ContactRecord[]>;
   /** App 根部 toast（在聊天分支不渲染，页内用 useLocalToast 自带 toast） */
   onToast?: (m: string) => void;
   /** 聊天设置「删除联系人」→ 宿主弹二次确认（确认后关聊天 + 删除好友关系）；不传/自己会话不显示 */
@@ -12600,7 +12602,14 @@ function ZonePage({
             const hit = contactByRef({ peerId: p.peerId, name: p.authorName }, contacts);
             return !(hit && hit.kind !== 'user' && isFriendDeleted('qq', hit.id));
           });
-    return scoped.map((p) => ({ ...p, avatar: liveAvatarOf(p.avatar, { peerId: p.peerId, name: p.authorName }, contacts, 'qq') }));
+    // 自己发的动态（author='user'，peerId=null 仅名字归因）：改名/换头像后按机主联系人实时解析
+    // 名字与头像——避免改名后旧帖回退到落库时的旧快照（与微信朋友圈同口径）
+    const meOwner = contacts.find((c) => c.kind === 'user' && !c.altOf) ?? null;
+    return scoped.map((p) =>
+      p.author === 'user' && meOwner
+        ? { ...p, authorName: displayNameOf(meOwner) || p.authorName, avatar: meOwner.avatar ?? p.avatar }
+        : { ...p, avatar: liveAvatarOf(p.avatar, { peerId: p.peerId, name: p.authorName }, contacts, 'qq') }
+    );
   }, [userPosts, owner, mineOnly, me.name, contacts]);
 
   /** 空间页头展示的用户（TA 的空间换头像/名字） */
@@ -15766,7 +15775,7 @@ function MainScreen({
   contacts: ContactRecord[];
   onLogout: () => void;
   onPatchUser: (patch: Partial<QQUser>) => void;
-  refreshContacts: () => Promise<void>;
+  refreshContacts: () => Promise<ContactRecord[]>;
   /** 账号与安全页「登录小号」自由登录成功 → 根组件 handleLogin（Task 41） */
   onLoginAccount: (u: QQUser) => void;
 }) {
@@ -16912,18 +16921,30 @@ export default function QQApp() {
     switchAccountFor('qq', MAIN_ACCOUNT_ID);
   }, []);
 
-  // 添加好友后刷新联系人列表（同步换成昵称展示名；头像按 App 隔离读 qq 槽位投影）
-  const refreshContacts = useCallback(async () => {
+  // 添加好友后刷新联系人列表（同步换成昵称展示名；头像按 App 隔离读 qq 槽位投影）；返回投影列表供「我」快照同步复用
+  const refreshContacts = useCallback(async (): Promise<ContactRecord[]> => {
     const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
     setContacts(withDisplayNames(raw));
+    return raw;
   }, []);
 
   // 换头像跨 App 即时生效（引用式架构）：头像只在联系人资料存一份，渲染端 liveAvatarOf 实时解析；
   // 其他 App（联系人/微信/信息/电话）改了头像时刷新本端联系人缓存，打开中的空间/聊天页立刻显示新头像。
   // contact-updated：任意资料字段（名字/手机号/昵称/人设…）变更也刷新——编辑联系人不换头像时
-  // QQ 端不再持旧快照（会话列表/资料页/登录解析保持最新）
+  // QQ 端不再持旧快照（会话列表/资料页/登录解析保持最新）。
+  // 「我」快照同步（编辑自己修复）：user 是开机/登录时 from 联系人的快照——机主在联系人 App
+  // 改了自己头像/名字后，聊天/空间等处的「我」仍持旧值；这里随重载按最新联系人重派生
   useEffect(() => {
-    const fn = () => void refreshContacts();
+    const fn = () =>
+      void refreshContacts().then((raw) => {
+        setUser((prev) => {
+          if (!prev) return prev;
+          const u = raw.find((c) => c.id === prev.id && c.kind === 'user');
+          return u
+            ? { id: u.id, name: displayNameOf(u), realName: u.name, nickname: u.nickname ?? null, avatar: u.avatar, qqId: u.qqId, phone: u.phone, persona: u.persona, altOf: u.altOf ?? null }
+            : prev;
+        });
+      });
     window.addEventListener('contact-avatar-changed', fn);
     window.addEventListener('contact-updated', fn);
     return () => {

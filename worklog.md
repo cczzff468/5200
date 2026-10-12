@@ -18703,3 +18703,25 @@ Stage Summary:
 - 交付：①一起听音乐视图聊天气泡不再限 3 条/侧——10 秒窗口内当前回复的每一条都显示；②全端聊天记录（微信/QQ/信息单聊、双端群聊、一起听、淘宝客服、跨App触达、好友申请、各类分享卡片直插）全部去封顶，持久化层统一 IndexedDB kv 写穿——旧记录不会再被任何一次写入挤掉
 - 改动文件：src/components/apps/{music-player,wechat,qq,chat,wx-group,qq-group,wechat-wallet}.tsx、src/lib/ios/{music-ai,groups,cross-app-reach,friend-state,together-flow,tb-share-proxy,mt-proxy-pay,mt-order-share,tb-proxy-ai,mt-ai-engage,tb-ai-store}.ts
 - 关键决策：①去封顶只动存储层，AI 上下文/记忆召回的窗口截断保留（上下文工程需要窗口，丢历史发生在「存储」才是 bug）；②卡片直插类 helper（slice(-100) 原样追加）全部改为纯 append——这些函数此前按「整个数组是我的」处理，实际共享主聊天键，是丢历史的第二大根因；③E2E 用未来时间戳保活气泡（绕开 10s TTL 与操作耗时的竞态），既验证条数上限解除又不污染真实到期逻辑；④气泡无上限后极端情况（TTL 内十多条）悬浮在唱片上方属预期表现，10 秒内逐条消失，不加滚动容器保持网易云原生观感
+---
+Task ID: 12
+Agent: 主协调者 (Z.ai Code)
+Task: 用户四点——①联系人 App 编辑 AI 联系人换头像后打电话界面不显示（排查+修）；②排查其他「字段编辑保存后没按最新来」的地方；③用户编辑自己后头像/字段是否全局按最新（没解决则修）；④列出所有用 localStorage 的地方（只列出）
+
+Work Log:
+- 【①根因定位】打电话界面 phoneKnownContact 口径过窄：CallScreen 只认 kind='user' || isFriend（全局电话好友标记），而 isFriend 只在「电话 App 新建联系人」时写入；用户在联系人 App 建的 AI（CHAR）、经信息/微信/QQ 加过好友的（friendSms/friendWx/friendQq），打电话界面一律按陌生号显示「号码+通用头像」——换不换头像都不显示，用户感知为「换了头像打电话界面不显示」。E2E 先复现：isFriend=true 直改 IDB → 通话界面头像正常，排除渲染/缓存链路问题
+- 【①修复】phone.tsx CallScreen：phoneKnownContact 扩为「机主本人 / 电话好友 isFriend / 任一 App（wx/qq/sms）加过好友（isFriendIn 按 app 现行账号口径）」即显示名字+头像；完全没加过好友的联系人维持 Task 51 陌生号语义（号码+通用头像），两个历史需求都保住
+- 【②全库快照审计（子代理 Explore）】逐条核对 222 处 localStorage 与全部联系人身份消费点：微信/QQ「我」快照（开机/登录时 from 联系人，事件只刷 contacts 不重派生 me）、电话视频通话 myAvatar 读设置 profile（与联系人身份线分裂）、chat-stream-store ownerLabel 读设置 profile 名、朋友圈自己发的动态（author='user'，peerId=null 仅名字归因——改名后 liveAvatarOf 名字兜底失配回退旧快照）、wx-group/qq-group 三处 me 解析 contacts.find(kind==='user') 未排除小号档案（altOf）、通话记录/留言/来电层/主动触达等均为实时解析或秒级快照（无问题）
+- 【②修复·微信/QQ「我」】wechat.tsx reloadContacts 改返回列表 + contact-updated/contact-avatar-changed handler 里按最新联系人重派生 user（toWxUser）；qq.tsx 同构（refreshContacts 返回 raw 投影列表重派生 QQUser，含 altOf 透传）；MainScreen prop 类型同步放宽
+- 【②修复·朋友圈旧帖】wechat.tsx momentsLive / qq.tsx posts：author==='user' 的动态直接按机主联系人（kind='user'&&!altOf）实时解析 authorName（displayNameOf）与头像，不再依赖落库时的名字归因；WxMoment/ZonePost 补 author?: 'user'|'char' 类型（legacy 缺省按 peerId 归因不受影响）
+- 【②修复·群 me 解析】wx-group.tsx / qq-group.tsx 三处 contacts.find(c=>c.kind==='user') 全部补 && !c.altOf（≥2 条 user 记录时不再可能把小号档案当机主）
+- 【②修复·AI 侧称谓】chat-stream-store.ts ownerLabel 改 cachedOwnerName()（联系人机主真名，listContacts 时刷新）优先、设置 profile 名兜底；新增 createContact 落库后广播 contact-updated（detail.changed=全字段+created:true）——新建联系人（尤其机主档案）各 App 与身份同步立即感知
+- 【③双向同步】新建 src/lib/ios/owner-profile-sync.ts（PhoneShell 开机 load() 后 startOwnerProfileSync 常驻）：联系人↔设置›个人信息（useSettings.profile）双向镜像名字/头像——①contact-updated 且 changed 含 name/avatar 且目标机主本人 → setProfile；②useSettings.subscribe 名字/头像变化 → updateContact 机主（自动广播全端刷新）；双向 diff 后才写（回声 diff 为空自然收敛无死循环）；设置头像须过 normalizeAvatar（格式/400KB）才写联系人；开机 initialReconcile 只补空不清差异化旧值；updateContact 的 contact-updated detail 新增 changed 字段（diff next/existing 实变键）——只镜像实变字段，改手机号不会误覆盖设置侧头像
+- 【③修复·视频通话自画像】phone.tsx startVideoCall myAvatar 优先机主联系人头像（allContacts 已按 phone 投影），设置 profile 兜底（双向同步后两者恒一致）；deps 补 allContacts
+- 【验证】bunx tsc --noEmit 0 错误；eslint 改动 9 文件 0 问题（wechat/qq 仅既有 BABEL 500KB 提示）；agent-browser E2E 实机全链路：A.小美 friendSms=true&isFriend=false（只在信息加过好友）→ 拨号键盘拨打 → 通话界面显示「小美」+头像（修复前：号码+通用头像）；B.联系人 App 编辑小美头像 B绿→C紫 → 电话拨打 → 通话界面显示 C紫新头像；C.建机主 USER「凡凡」→ 设置›个人信息自动变「凡凡 F 头像」→ 设置里改名「凡凡酱」→ 联系人 USER 名字自动变「凡凡酱」（IDB 实读验证）→ 锁屏组件「凡凡酱的iPhone」；回归.删光好友标记再拨 → 仍显示号码+通用头像（Task 51 语义不变）；console/page errors 零报错（仅沙箱 AI API 429 与既有 instrumentation Edge 警告）
+- 【④localStorage 清单】子代理全库盘点 222 处调用点（419 处提及含注释），按域分组交付给用户（账号系统/微信/QQ/信息/电话/音乐/淘宝/美团/桌面小组件/天气/提醒/浏览器/记忆/共享 lib 映射），含每个键的 file:line+用途；只列出未做任何改动；顺带发现 tb-foots-wipe 无消费方、qq-pay-pwd-lock 加锁/清理作用域不一致、wx-videocall-last 前缀无切号清理三条观察项（未改）
+
+Stage Summary:
+- 交付：①打电话界面识别口径修复——在联系人 App 建了人、任一 App 加过好友的联系人，通话界面显示名字+头像（换头像立即生效），完全未加好友的保持陌生号语义；②「编辑保存后全按最新的来」八处修复：微信/QQ「我」快照随联系人事件重派生、朋友圈/QQ 空间自己旧帖名字头像实时解析、群聊 me 解析排除小号档案、AI 记忆称谓用联系人真名、createContact 广播补齐、视频通话自画像改联系人源；③机主身份双向同步（联系人↔设置›个人信息）：任一侧改名字/头像，锁屏/设置/微信/QQ/信息/通话界面/AI 称谓全端即时一致；④localStorage 全量清单已列出（222 处/50 文件，未改动）
+- 改动文件：src/components/apps/{phone,wechat,qq,wx-group,qq-group}.tsx、src/lib/ios/{contacts-store,owner-profile-sync(新增)}.ts、src/lib/chat-stream-store.ts、src/components/ios/PhoneShell.tsx
+- 关键决策：①电话「认识联系人」口径=union(isFriend, friendWx/Qq/Sms 按现行账号)——同时满足 Task 51 陌生号语义与本轮「编辑过的 AI 要显示」；②身份同步只在「字段实变」时镜像+双向 diff 收敛，不做全量对拷（保留两侧既有差异直到下一次编辑，避免开机静默改用户数据）；③设置侧头像写联系人前过 normalizeAvatar 校验，防止大图写库被静默清空
