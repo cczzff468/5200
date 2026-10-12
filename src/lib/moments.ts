@@ -2204,6 +2204,10 @@ export async function aiCommentOnMoment(args: {
   // 生成后校验：与最近发言完全一致/高度雷同 → 带禁令重试一次；仍重复 → 抛错（队列按原策略处理）
   let banned = '';
   for (let attempt = 0; attempt < 2; attempt++) {
+    // 称呼素材（用户实测：AI 回复评论自造「姐姐」称呼）：回复用户评论时把机主真实名字一并传给
+    // 服务端——prompt 里「要叫就叫真实名字」用真名兜底，展示名（如昵称「财」）只是评论区显示用。
+    // 解析失败（多账号/无档案）回退空串，服务端按展示名处理，行为与旧版一致。
+    const userRealName = parentComment ? (await ownerRealNameFor(platformApp(platform)).catch(() => '')) || '' : '';
     const { content, contentZh } = await callGenerateApi(apiConfig, {
       kind: parentComment ? 'reply' : 'comment',
       platform,
@@ -2213,9 +2217,15 @@ export async function aiCommentOnMoment(args: {
       // #18：转发动态 content 为统一口径（转发@原作者：原文摘要｜理由：转发理由）
       post: { authorName: post.authorName, author: post.author, content: postContent.slice(0, 200), imagesOnly },
       thread,
-      // #41d：只把「真实存在的用户评论」作为回复目标传给服务端（parentAuthor 供服务端同口径校验）
+      // #41d：只把「真实存在的用户评论」作为回复目标传给服务端（parentAuthor 供服务端同口径校验）；
+      // realName=机主真实名字：称呼红线（禁自造「姐姐/哥哥」类称谓）用真名兜底
       replyTo: parentComment
-        ? { authorName: parentComment.authorName, content: parentComment.content, parentAuthor: 'user' as const }
+        ? {
+            authorName: parentComment.authorName,
+            content: parentComment.content,
+            realName: userRealName || undefined,
+            parentAuthor: 'user' as const,
+          }
         : null,
       memories: memorySnippets(peer.id, platformApp(platform)),
       avoid: attempt === 0 ? avoid : [...avoid, banned].filter(Boolean),

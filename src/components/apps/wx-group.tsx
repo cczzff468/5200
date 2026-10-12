@@ -464,7 +464,8 @@ function loadWxSingleMsgs(contactId: string): WxSingleMsgShape[] {
 /** 写目标单聊消息库（与 wechat.tsx saveMsgs 同键同封顶；顺带恢复被隐藏的会话行） */
 function saveWxSingleMsgs(contactId: string, msgs: WxSingleMsgShape[]): void {
   try {
-    kvSet(wxSingleMsgsKey(contactId), msgs.slice(-100));
+    // 封顶 1000 与 wechat.tsx saveMsgs 同口径（用户实测：以前限 100，旧聊天记录被截断丢失）
+    kvSet(wxSingleMsgsKey(contactId), msgs.slice(-1000));
   } catch {
     // 存储失败不中断
   }
@@ -5060,6 +5061,32 @@ export function WxGroupChatPage({
                   }}
                   onExpand={() => setExpandedStacks((ps) => new Set(ps).add(m.id))}
                 />
+              ) : m.kind === 'image' && m.img && stackItems && expandedStacks.has(m.id) ? (
+                /* 照片堆叠展开态的头图（第一张）：左侧「收起」胶囊（点回堆叠折叠态）+ 原图，与单聊同口径 */
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    data-testid="wx-grp-photo-stack-collapse"
+                    aria-label="收起照片堆叠"
+                    onClick={() =>
+                      setExpandedStacks((ps) => {
+                        const next = new Set(ps);
+                        next.delete(m.id);
+                        return next;
+                      })
+                    }
+                    className="shrink-0 rounded-full bg-black/[0.055] px-3 py-[7px] text-[13.5px] leading-none text-black/55 backdrop-blur-sm transition-opacity active:opacity-60 dark:bg-white/[0.12] dark:text-white/65"
+                  >
+                    收起
+                  </button>
+                  <ImageMsgBubble
+                    src={m.img.src}
+                    onClick={() => {
+                      // 展开态头图点击大图：带整组图片（可左右滑动切换），与折叠态堆叠卡点击行为一致
+                      if (stackItems) setViewer({ urls: stackItems.map((p) => p.src), index: 0 });
+                    }}
+                  />
+                </div>
               ) : m.kind === 'image' && m.img ? (
                 renderMsgRow(
                   m,

@@ -282,7 +282,9 @@ function loadMsgs(sessionKey: string): ChatMsg[] | null {
         ((m as ChatMsg).role === 'user' || (m as ChatMsg).role === 'assistant')
     );
     if (!ok) return null;
-    const msgs = (parsed as ChatMsg[]).slice(-100);
+    // 保留上限 1000（用户实测：以前限 100，聊多了旧聊天记录被截断丢失；1000 条纯文本很小，
+    // 图片消息占比低时存储可控）——与微信/QQ 端同口径提高
+    const msgs = (parsed as ChatMsg[]).slice(-1000);
     // 语音消息规范化（旧记录/损坏记录兼容：既无音频 url 也无 localText 的语音降级为文本占位；
     // 文字转语音的本地仿真消息 url 为空串但带 localText —— 原样保留，重启后仍可静音重播）
     for (let i = 0; i < msgs.length; i++) {
@@ -321,7 +323,8 @@ function loadMsgs(sessionKey: string): ChatMsg[] | null {
 
 function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
   // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
-  kvSet(lsMsgsKey(sessionKey), msgs.slice(-100));
+  // 保留上限 1000（用户实测：以前限 100，旧聊天记录被截断丢失；与微信/QQ 端同口径提高）
+  kvSet(lsMsgsKey(sessionKey), msgs.slice(-1000));
 }
 
 /** 会话内最后一条 assistant 消息（小助手未读水位键）：返回 id+时间，无 assistant 消息返回 null。

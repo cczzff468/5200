@@ -754,7 +754,9 @@ function loadMsgs(contactId: string): WxMsg[] {
 
 function saveMsgs(contactId: string, msgs: WxMsg[]): void {
   // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
-  kvSet(lsMsgsKey(contactId), msgs.slice(-100));
+  // 保留上限 1000（用户实测：以前限 100，聊多了「以前的聊天记录都没有了」；1000 条纯文本很小，
+  // 图片为压缩 dataURL 占比可控；与信息/QQ 端同口径提高）
+  kvSet(lsMsgsKey(contactId), msgs.slice(-1000));
   // 新消息自动恢复被「删除/不显示」的会话（真微信行为）
   try {
     const hid = loadStrList(LS_CHAT_HIDDEN);
@@ -5672,10 +5674,28 @@ function ChatPage({
         // save-to-album 落盘后刷新 albumCacheRef，下一轮 pick-album-* 才能命中新加入的图。
         const vKind = part.action.kind;
         if (vKind === 'change-avatar' || vKind === 'change-moments-bg' || vKind === 'save-to-album') {
-          // 找图片消息：targetId 非空按 id 找；空则兜底取当回合最后一条「我」发的图片消息
+          // 找图片消息：targetId 非空按 id 找；「第N张」按编号映射（AI 把「第2张」原样写进标记时，
+          // 第N张 = 会话内我发的第 N 张图片，与历史序列化「我发的第N张图」同口径，防换错图）；
+          // 都没命中兜底取会话里最后一条「我」发的图片消息（当轮有新图=新发的图；没有=上一张发过的图，
+          // 正是用户口径「以我新发的图为准；没有新发图片就以我上一次发的图片为准」）
           let imgMsg: WxMsg | null = null;
           if (part.action.targetId) {
             imgMsg = cur.find((m) => m.id === part.action.targetId && m.kind === 'image') ?? null;
+            if (!imgMsg) {
+              const mSeq = /^(?:第)?(\d{1,3})\s*(?:张|张图|图片|张照片)?$/.exec(part.action.targetId.trim());
+              if (mSeq) {
+                const n = Math.max(1, parseInt(mSeq[1], 10));
+                let k = 0;
+                for (const m of cur) {
+                  if (!m.recalled && m.role === 'me' && m.kind === 'image' && m.img?.src) {
+                    if (++k === n) {
+                      imgMsg = m;
+                      break;
+                    }
+                  }
+                }
+              }
+            }
           }
           if (!imgMsg) {
             for (let i = cur.length - 1; i >= 0; i--) {
@@ -5982,6 +6002,17 @@ function ChatPage({
       }
       return `[转账凭据：一笔转账已${tr.status === 'returned' ? '退回' : '收款'}]`;
     };
+    // 图片编号（用户要求：发多张图让 AI 换头像时可以说「第几张图片」，也能按样子/内容指定）：
+    // 用户（me）发的图片消息在会话内按时间先后编号（第1张=最早发的），编号随历史序列化进上下文，
+    // AI 说「第N张」时直接对照编号取图片消息 ID；在 slice(-20) 之前的完整 base 上计数，
+    // 保证编号与会话全量一致（不随上下文窗口滑动漂移）；撤回的图片不计数（用户感知里它已不存在）。
+    const userImgSeq = new Map<string, number>();
+    {
+      let seq = 0;
+      for (const m of base) {
+        if (!m.recalled && m.role === 'me' && m.kind === 'image' && m.img) userImgSeq.set(m.id, ++seq);
+      }
+    }
     const history = base
       .filter(
         (m) =>
@@ -6015,12 +6046,15 @@ function ChatPage({
           (m.kind === 'forward' && m.fwd?.merged
             ? `[聊天记录：${(m.fwd.records ?? []).slice(-8).map((r) => `${r.name}：${r.text}`).join(' ／ ')}]`
             : m.kind === 'image'
-            ? // 图片消息：有识图描述时 AI 读到内容（历史可回看）；无描述时占位（防编造规则由 system 注入）
-              // 100-e 带描述的图片带消息 ID 进上下文：视觉自主决策规则要求 AI 原样抄写图片消息 ID
-              // 来 [换头像:ID]/[换背景:ID]/[存入相册:ID]，上下文里没有 ID 它只能编造；无描述仍「[图片]」
-              m.img?.desc
-              ? `[图片 ID:${m.id}]（图片内容：${m.img.desc}）`
-              : '[图片]'
+            ? // 图片消息：全部带消息 ID 进上下文（视觉自主决策规则要求 AI 原样抄写图片消息 ID 来
+              // [换头像:ID]/[换背景:ID]/[存入相册:ID]——此前无描述的图片不带 ID，AI 只能编造或换错图）。
+              // 我发的图带会话内编号（用户说「第N张」时对照编号）；有识图描述附内容，无描述标「未识图」
+              //（防编造规则由 system 注入：无描述的图不许编内容）
+              m.role === 'me' && userImgSeq.has(m.id)
+              ? `[图片 ID:${m.id}]（我发的第${userImgSeq.get(m.id)}张图${m.img?.desc ? `；图片内容：${m.img.desc}）` : '；未识图，暂无内容描述）'}`
+              : m.img?.desc
+                ? `[图片 ID:${m.id}]（图片内容：${m.img.desc}）`
+                : `[图片 ID:${m.id}]（未识图，暂无内容描述）`
             : m.kind === 'song' && m.song
             ? // 歌曲卡片（Task 68）：AI 发的回写成示范格式（自己知道发过什么歌）；我发的用占位描述
               m.role === 'me'
@@ -6262,6 +6296,19 @@ function ChatPage({
       if (m.kind === 'image' && m.img?.src) {
         turnImages.unshift(m.img.src);
         turnImageMsgIds.unshift(m.id);
+      }
+    }
+    // 回看兜底（用户实测：发图让 AI 看，AI 第一次没看懂，再让它看第二遍时不应要求重新发图）：
+    // 本轮没有新图时，若用户最新消息带「看图」意图（看/图/照片/识别…），回退取会话里最近的「我」发的
+    // 图片（最多 3 张，可跨过 AI 的回复取到）——AI 自己就能看到之前发的图，识图描述回写后历史永久可读。
+    // 全会话扫描而非仅当轮：用户发图 → AI 回复 → 用户「你再看看」的场景（中间隔了 AI 消息）也要能取到图。
+    if (turnImages.length === 0 && /看|图|照片|识/.test(userMsg?.content ?? '')) {
+      for (let i = base.length - 1; i >= 0 && turnImages.length < 3; i--) {
+        const m = base[i];
+        if (m.role === 'me' && m.kind === 'image' && m.img?.src) {
+          turnImages.unshift(m.img.src);
+          turnImageMsgIds.unshift(m.id);
+        }
       }
     }
 
@@ -8079,6 +8126,36 @@ function ChatPage({
                   }}
                   onExpand={() => setExpandedStacks((prev) => new Set(prev).add(m.id))}
                 />
+              ) : m.kind === 'image' && m.img && stackHead.has(i) && expandedStacks.has(m.id) ? (
+                /* 照片堆叠展开态的头图（第一张）：左侧「收起」胶囊（点回堆叠折叠态）+ 原图（保留长按菜单与大图）。
+                   与折叠态的「展开 N」同位（图左侧垂直居中），展开/收起互换不跳版 */
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    data-testid="wx-photo-stack-collapse"
+                    aria-label="收起照片堆叠"
+                    onClick={() =>
+                      setExpandedStacks((prev) => {
+                        const next = new Set(prev);
+                        next.delete(m.id);
+                        return next;
+                      })
+                    }
+                    className="shrink-0 rounded-full bg-black/[0.055] px-3 py-[7px] text-[13.5px] leading-none text-black/55 backdrop-blur-sm transition-opacity active:opacity-60 dark:bg-white/[0.12] dark:text-white/65"
+                  >
+                    收起
+                  </button>
+                  <div {...bubblePress}>
+                    <ImageMsgBubble
+                      src={m.img.src}
+                      onClick={() => {
+                        // 展开态头图点击大图：带整组图片（可左右滑动切换），与折叠态堆叠卡点击行为一致
+                        const items = stackHead.get(i);
+                        if (items) setViewer({ urls: items.map((p) => p.src), index: 0 });
+                      }}
+                    />
+                  </div>
+                </div>
               ) : m.kind === 'image' && m.img ? (
                 <div {...bubblePress}>
                   <ImageMsgBubble src={m.img.src} onClick={() => {

@@ -1196,7 +1196,8 @@ function loadMsgs(contactId: string): QQMsg[] {
 
 function saveMsgs(contactId: string, msgs: QQMsg[]): void {
   // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
-  kvSet(lsMsgsKey(contactId), msgs.slice(-200));
+  // 保留上限 1000（用户实测：以前限 200，旧聊天记录被截断丢失；与微信/信息端同口径提高）
+  kvSet(lsMsgsKey(contactId), msgs.slice(-1000));
 }
 
 // ---------------- 转发感知：目标会话的 AI 事件队列 ----------------
@@ -4236,6 +4237,24 @@ function ChatPage({
             let imgMsg: QQMsg | null = null;
             if (targetId) {
               imgMsg = cur.find((m) => m.id === targetId && m.kind === 'image') ?? null;
+              // 「第N张」容错（用户口径）：AI 把「第2张/2」原样写进标记（[换头像:第2张]）时按编号映射——
+              // 第N张 = 会话内我发的第 N 张图片（与历史序列化「我发的第N张图」同口径），
+              // 避免整标失效掉到兜底逻辑换错图（用户实测：第一次没换对的那张）
+              if (!imgMsg) {
+                const mSeq = /^(?:第)?(\d{1,3})\s*(?:张|张图|图片|张照片)?$/.exec(targetId.trim());
+                if (mSeq) {
+                  const n = Math.max(1, parseInt(mSeq[1], 10));
+                  let k = 0;
+                  for (const m of cur) {
+                    if (!m.recalled && m.role === 'me' && m.kind === 'image' && typeof m.content === 'string' && m.content.startsWith('data:image/')) {
+                      if (++k === n) {
+                        imgMsg = m;
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
             }
             if (!imgMsg) {
               for (let i = cur.length - 1; i >= 0; i--) {
@@ -4436,6 +4455,16 @@ function ChatPage({
       .sort((a, b) => a.time - b.time);
     // 上下文：卡片消息（红包/转账/亲属卡）按类型生成可读摘要（含 AI 可引用的 ID 与当前状态），让 AI 知道发过什么、好做处理决策；
     // 图片消息以 [图片] 占位、位置以完整位置文本进入历史（本轮图片的实际内容由识图模型描述追加在末尾）
+    // 图片编号（用户要求：发多张图让 AI 换头像时可以说「第几张图片」；与微信同口径）：
+    // 我发的图片消息在会话内按时间先后编号（第1张=最早发的），编号随历史序列化进上下文；
+    // 在 slice(-20) 之前的完整 base 上计数，撤回的图片不计数（用户感知里它已不存在）。
+    const userImgSeq = new Map<string, number>();
+    {
+      let seq = 0;
+      for (const m of base) {
+        if (!m.recalled && m.role === 'me' && m.kind === 'image') userImgSeq.set(m.id, ++seq);
+      }
+    }
     const history = base
       .filter(
         (m) =>
@@ -4479,12 +4508,14 @@ function ChatPage({
                 // 旧文案「[发送了表情：XX]」落在 assistant 槽位像是对用户动作的转述
                 : `[你发送了表情：${m.stk.meaning || '无描述'}]`
             : m.kind === 'image'
-            ? // 图片消息：有识图描述时 AI 读到内容（历史可回看）；无描述时占位（防编造规则由 system 注入）
-              // 100-e 带描述的图片带消息 ID 进上下文：视觉自主决策规则要求 AI 原样抄写图片消息 ID
-              // 来 [换头像:ID]/[换背景:ID]/[存入相册:ID]，上下文里没有 ID 它只能编造；无描述仍「[图片]」
-              m.img?.desc
-              ? `[图片 ID:${m.id}]（图片内容：${m.img.desc}）`
-              : '[图片]'
+            ? // 图片消息：全部带消息 ID 进上下文（视觉自主决策规则要求 AI 原样抄写图片消息 ID 来
+              // [换头像:ID]/[换背景:ID]/[存入相册:ID]——此前无描述的图片不带 ID，AI 只能编造或换错图）；
+              // 我发的图带会话内编号（用户说「第N张」时对照编号）；有描述附内容，无描述标「未识图」
+              m.role === 'me' && userImgSeq.has(m.id)
+              ? `[图片 ID:${m.id}]（我发的第${userImgSeq.get(m.id)}张图${m.img?.desc ? `；图片内容：${m.img.desc}）` : '；未识图，暂无内容描述）'}`
+              : m.img?.desc
+                ? `[图片 ID:${m.id}]（图片内容：${m.img.desc}）`
+                : `[图片 ID:${m.id}]（未识图，暂无内容描述）`
             : m.kind === 'textcard' && m.card
             ? // 文字图片卡片：AI 知道发过什么卡片（历史可回看，避免接不上话题）
               `[文字图片]（卡片上写着：${m.card.text}）`
@@ -4720,6 +4751,18 @@ function ChatPage({
       if (m.kind === 'image' && typeof m.content === 'string' && m.content.startsWith('data:image/')) {
         turnImages.unshift(m.content);
         turnImageMsgIds.unshift(m.id);
+      }
+    }
+    // 回看兜底（用户实测：发图让 AI 看，AI 第一次没看懂，再让它看第二遍时不应要求重新发图；与微信同口径）：
+    // 本轮没有新图时，若用户最新消息带「看图」意图（看/图/照片/识别…），回退取会话里最近的「我」发的
+    // 图片（最多 3 张，可跨过 AI 的回复取到）——AI 自己就能看到之前发的图，识图描述回写后历史永久可读。
+    if (turnImages.length === 0 && /看|图|照片|识/.test(userMsg?.content ?? '')) {
+      for (let i = base.length - 1; i >= 0 && turnImages.length < 3; i--) {
+        const m = base[i];
+        if (m.role === 'me' && m.kind === 'image' && typeof m.content === 'string' && m.content.startsWith('data:image/')) {
+          turnImages.unshift(m.content);
+          turnImageMsgIds.unshift(m.id);
+        }
       }
     }
 
