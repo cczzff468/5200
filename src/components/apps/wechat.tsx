@@ -124,6 +124,7 @@ import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegment
 import {
   buildRichRules,
   buildActionRules,
+  buildMomentPostRule,
   buildVisionRules,
   cleanBubbleText,
   extractRichActionParts,
@@ -191,6 +192,7 @@ import {
   buildMomentsChatBlock,
   deleteMomentComment,
   deleteMomentPost,
+  emitMomentsChanged,
   enqueuePostInteractions,
   isPostByPeer,
   listMomentNotices,
@@ -5813,6 +5815,23 @@ function ChatPage({
           }
           continue;
         }
+        // AI 发朋友圈动作（[发朋友圈:正文]，用户实测「AI 说发了但没发」根除）：
+        // addCharMomentPost 真实落库（写角色记忆「你发了一条动态」，后续轮次 AI 自己也知道发过）
+        // + emitMomentsChanged 广播动态页实时刷新；sys 通知行随回复队列投递；空正文丢弃
+        if (part.action.kind === 'post-moment') {
+          const momentText = part.action.targetId.trim().slice(0, 500);
+          if (momentText) {
+            try {
+              addCharMomentPost('wx', { peer, userName: me.name, content: momentText });
+              emitMomentsChanged('wx');
+            } catch {
+              // 落盘失败静默：AI 正文照常上屏，不阻塞聊天
+            }
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」发布了一条朋友圈` } });
+            t += 1;
+          }
+          continue;
+        }
         const applied = wxApplyAiActions([part.action], cur, peer, t);
         cur = applied.msgs;
         out.push(...applied.notices, ...applied.extras);
@@ -6181,6 +6200,10 @@ function ChatPage({
     const visionRules = base.some((m) => m.kind === 'image') ? buildVisionRules(albumSummary) : [];
     // 发图片能力常开：注入照片标签规则（配置完整时发真图；未配置/生成失败自动降级为文字图片卡片，AI 无需关心）
     const photoRule = buildPhotoTagRule(peer.name);
+    // AI 发朋友圈能力（用户要求「你去发个朋友圈」或自主想分享时真发）：[发朋友圈:正文] 标记 →
+    // buildReplyMsgs 执行器 addCharMomentPost 真实落库；教学规则恒注入（单聊都有朋友圈，不等动态块非空）；
+    // requestOnly（仅申请卡模式）下 AI 只能输出拉黑类动作，与 actionRules 同口径不下发
+    const momentPostRule = requestOnly ? '' : buildMomentPostRule('wx');
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
@@ -6207,6 +6230,9 @@ function ChatPage({
       ...(visionRules.length > 0 ? [visionRules.join('\n\n')] : []),
       // 生图（锁脸）：照片标签规则（自动生图开启时；AI 输出 [照片:描述] 系统自动生图并以图片消息投递）
       ...(photoRule ? [photoRule] : []),
+      // AI 发朋友圈能力（[发朋友圈:正文] 真实发布；在照片规则后：先把「图片描述」的用法钉死再教发动态标记，
+      // 防 AI 用 [图片:朋友圈编辑页面] 假装发了）
+      momentPostRule,
       '【语音通话能力】如果你此刻非常想和对方马上说话（想TA了、有急事、聊到特别开心等自然原因），可以在回复的最开头单独加上标记 [语音通话] 发起一次语音通话邀请，对方手机会弹出你的来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。',
       '【视频通话能力】如果你此刻很想看看对方（想TA了、有值得分享的时刻、对方说想见你/想看看你等自然原因），可以在回复的最开头单独加上标记 [视频通话] 发起一次视频通话邀请，对方手机会弹出你的视频来电邀请；平时聊天不要加这个标记，最多偶尔一次，连续使用会很烦人。注意：标记必须是单独四个字 [视频通话]，严禁模仿聊天记录里「[视频通话：时长/内容摘要]」这类卡片描述文字的格式（那是系统卡片不是标记），不要输出带冒号的 [视频通话：……]。',
       timeBlock,

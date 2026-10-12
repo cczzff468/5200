@@ -195,6 +195,7 @@ import {
   buildMomentsChatBlock,
   deleteMomentComment,
   deleteMomentPost,
+  emitMomentsChanged,
   enqueuePostInteractions,
   listMomentNotices,
   // 【fix3-d-4】引擎统一动态视图：转发弹层用显式 author 判定原作者（不再按名字猜）
@@ -279,6 +280,7 @@ import type { Sticker, StickerGroup } from '@/lib/ios/stickers';
 import {
   buildRichRules,
   buildActionRules,
+  buildMomentPostRule,
   buildVisionRules,
   cleanBubbleText,
   extractRichActionParts,
@@ -4335,6 +4337,23 @@ function ChatPage({
             }
             continue;
           }
+          // AI 发说说动作（[发说说:正文]/[发动态:正文]，用户实测「AI 说发了但没发」根除）：
+          // addCharMomentPost 真实落库到 QQ空间（写角色记忆「你发了一条动态」）+ emitMomentsChanged
+          // 广播空间页实时刷新；sys 通知行随回复队列投递；空正文丢弃
+          if (part.action.kind === 'post-moment') {
+            const momentText = part.action.targetId.trim().slice(0, 500);
+            if (momentText) {
+              try {
+                addCharMomentPost('qq', { peer, userName: me.name, content: momentText });
+                emitMomentsChanged('qq');
+              } catch {
+                // 落盘失败静默：AI 正文照常上屏，不阻塞聊天
+              }
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」发布了一条说说` } });
+              t += 1;
+            }
+            continue;
+          }
           const applied = applyAiActions([part.action], cur, peer, t);
           cur = applied.msgs;
           out.push(...applied.notices, ...applied.extras);
@@ -4378,7 +4397,7 @@ function ChatPage({
       }
       return { msgs: out, cur, dirty: cur !== latest, nextIdx: msgIdx };
     },
-    [peer, sessionKey, settleUserBlockReq, refreshContacts],
+    [peer, sessionKey, settleUserBlockReq, refreshContacts, me],
   );
 
   const runAiTurn = useCallback(
@@ -4640,6 +4659,10 @@ function ChatPage({
     const visionRules = base.some((m) => m.kind === 'image') ? buildVisionRules(albumSummary, 'qq') : [];
     // 发图片能力常开：注入照片标签规则（配置完整时发真图；未配置/生成失败自动降级为文字图片卡片，AI 无需关心）
     const photoRule = buildPhotoTagRule(peer.name);
+    // AI 发说说能力（用户要求「发条说说」或自主想分享时真发）：[发说说:正文] 标记 →
+    // buildReplyMsgs 执行器 addCharMomentPost 真实落库；教学规则恒注入（单聊都有空间，不等动态块非空）；
+    // requestOnly（仅申请卡模式）下 AI 只能输出拉黑类动作，与 actionRules 同口径不下发
+    const momentPostRule = requestOnly ? '' : buildMomentPostRule('qq');
     const systemFull = [
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
@@ -4668,6 +4691,9 @@ function ChatPage({
       ...(visionRules.length > 0 ? [visionRules.join('\n\n')] : []),
       // 生图（锁脸）：照片标签规则（自动生图开启时；AI 输出 [照片:描述] 系统自动生图并以图片消息投递）
       ...(photoRule ? [photoRule] : []),
+      // AI 发说说能力（[发说说:正文] 真实发布；在照片规则后：先把「图片描述」的用法钉死再教发动态标记，
+      // 防 AI 用 [图片:空间编辑页面] 假装发了）
+      momentPostRule,
       wbBlocks.afterSystem,
       wbRulesBlock(wbBlocks),
     ]

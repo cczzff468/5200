@@ -774,14 +774,20 @@ function CallScreen({
       // 请求前先召回该联系人（互通开关范围）的记忆注入 system（服务端拼到人设后）；
       // 陌生来电不下发记忆（记忆属于机主/已建立身份，对面身份未知时注入会直接破功）
       const memoryBlock = !callerUnknown && contact?.id ? memRecallBlock(contact.id, 'phone', userText ?? '') : undefined;
+      // 机主真实名字（动态块/世界书锚点共用一次解析）：动态块用它指代用户（AI 视角统一真名），
+      // 取不到真名回退展示名（buildMomentsChatBlock 内部还有一层回退）
+      const ownerRealForCall =
+        !callerUnknown && contact?.id ? (await ownerRealNameFor('phone').catch(() => '')) || '' : '';
       // 社交动态感知（四）：互通开关打开时把朋友圈/QQ动态注入 system（电话无自有平台，关闭时不注入）；
-      // 用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）；陌生来电不下发（同上）
+      // 用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）；陌生来电不下发（同上）；
+      // userRealName=机主真名（标签/归属说明用真名称呼用户，与三端聊天同口径）
       const momentsBlock =
         !callerUnknown && contact?.id
           ? buildMomentsChatBlock({
               contactId: contact.id,
               app: 'phone',
               userName: profileName,
+              userRealName: ownerRealForCall || undefined,
               peer: { id: contact.id, name: contact.name, nickname: contact.nickname ?? null },
             })
           : '';
@@ -810,8 +816,7 @@ function CallScreen({
       // 陌生来电不下发（块的「你指谁」锚点与条目内容面向机主，会向陌生来电人泄露机主信息）
       // fix3-9 「你指谁」锚点：charName=角色名、userName=机主真名（回退 profileName），
       // 让每本书包裹块头部标明「文中的你/机主各指谁」（拿不到时不传，库内自动省略锚点行）
-      const wbUserName =
-        !callerUnknown && contact?.id ? (await ownerRealNameFor('phone').catch(() => '')) || profileName : '';
+      const wbUserName = ownerRealForCall || profileName;
       const callWb =
         !callerUnknown && contact?.id
           ? collectWbBlocks(

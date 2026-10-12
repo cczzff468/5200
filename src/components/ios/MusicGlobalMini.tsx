@@ -191,9 +191,18 @@ function GlobalMiniBar({ layerRef }: { layerRef: React.RefObject<HTMLDivElement 
     >
       {live ? (
         <span className="flex shrink-0 items-center">
-          <img src={live.avatar} alt={live.name} className="h-[34px] w-[34px] rounded-full bg-muted object-cover" draggable={false} />
+          {/* live.avatar 可能为空串（联系人没头像/快照缺失）：空串 src 会触发浏览器整页重下载
+              （React「An empty string was passed to the src attribute」控制台报错）——
+              空时渲染首字占位圆，保持 34px 布局不跳动 */}
+          {live.avatar ? (
+            <img src={live.avatar} alt={live.name} className="h-[34px] w-[34px] rounded-full bg-muted object-cover" draggable={false} />
+          ) : (
+            <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full bg-muted text-[13px] font-semibold text-muted-foreground" aria-hidden="true">
+              {(live.name || '听').slice(0, 1)}
+            </span>
+          )}
           <img
-            src={loginUid ? loginAvatar : getGuestAvatar()}
+            src={loginUid ? loginAvatar || getGuestAvatar() : getGuestAvatar()}
             alt="我"
             className="-ml-2.5 h-[34px] w-[34px] rounded-full object-cover ring-2 ring-white dark:ring-zinc-800"
             draggable={false}

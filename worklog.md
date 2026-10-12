@@ -18667,3 +18667,19 @@ Stage Summary:
 - 交付：①自定义间隔写多少是多少（5s 生效，UI/落库/tick/自然语言提醒四层口径统一，下限 3s）；②主动消息完整接入人设+记忆+社交动态+跨App近况+近期主动消息历史（与三端聊天同源模块，含归属红线与内容有来处约束）；③动态归属标注进主动消息上下文+提示词红线——AI 自己发的动态不再说成用户发的；④AI 称呼统一真实名字：跨App触达/来电开场/跨App块/动态块/世界书锚点/拉黑块/音乐块/通话位置块/兜底文案九处泄漏点全改真名优先，persona 红线「不要用昵称呼叫」
 - 改动文件：src/lib/ios/{proactive-msg,cross-app-reach,persona}.ts、src/lib/moments.ts、src/components/apps/{proactive-msg-page,qq,wechat}.tsx
 - 关键决策：①tick 5s 而非 3s（3s 间隔允许 ≤10s 实际误差，避免无谓翻倍轮询开销）；②buildMomentsChatBlock 拆「检索名（展示名）/标签名（真名）」双参数而非改检索名——动态存储按发布时展示名键入，改检索名会丢历史动态；③跨App块/动态块标签直接换 realName（纯 prompt 面，无存储耦合）；④qq/wechat 通话入参 momentsBlock/locBlock 同步补真名（chat-call 引擎用 ownerProfileFor 已是真名，块内标签曾残留展示名）
+
+---
+Task ID: 10
+Agent: 主协调者 (Z.ai Code)
+Task: 用户三条新反馈——①语音电话里 AI 把自己发的朋友圈当成对方发的（「刚刚朋友圈看到你说…」）；②让 AI 发朋友圈，它嘴上说发了实际没发（用户实测只回了一张描述「朋友圈编辑页面」的文字图片卡片）；③MusicGlobalMini 空串 src 控制台报错（React「An empty string was passed to the src attribute」）
+
+Work Log:
+- 【根因定位】①电话开场归属：通话动态信息有两条来源——社交动态块（buildMomentsChatBlock，五轮审计已带归属标注+尾注）与记忆碎片（char-post 句式带「（AI角色本人）」标注），两条链路标注本身都对，但通话 system 里没有独立归属红线，模型在开场白最容易看反；且 phone.tsx 通话的 momentsBlock 漏传 userRealName（三端聊天都传了，电话端漏了，用户被昵称呼叫+归属说明用展示名）；②「说发了没发」：AI 根本没有「发朋友圈」动作能力——被要求发时只会用 [图片:…] 照片标签描述「手机屏幕显示朋友圈编辑页面」（生图未配置降级成文字图片卡片），没有执行器、没有教学规则；③live.avatar 可为空串（联系人无头像时 override.avatar || session.avatar 双空）
+- 【①电话归属红线】api/phone/turn/route.ts：systemFull 新增 momentsRule——【社交动态归属红线】system 级硬规则（callerUnknown 时省略），明确「（AI角色本人）」= 你自己发的、就算内容提到对方也是你发的，绝不能说「在朋友圈看到你发了/你说」；拼装顺序 动态块 → 归属红线 → 时间块。phone.tsx runTurn：momentsBlock 补传 userRealName（新增 ownerRealForCall 一次 await ownerRealNameFor('phone')，世界书锚点 wbUserName 复用同一份解析，消除重复 await）
+- 【②AI 真正发朋友圈】chat-rich.ts：RichActionKind 新增 'post-moment'；ACTION_LABELS 发朋友圈/发说说/发动态 三叫法同映射；ACTION_RE/ACTION_TAIL_RE 同步扩词；extractRichActionParts 新增 post-moment 分支（正文整段透传不按冒号截断、空正文丢弃）；新增导出 buildMomentPostRule(app)——教学规则（对方让你发或自主想分享 → 输出 [发朋友圈:正文]/[发说说:正文]，没有标记=没有发布，严禁嘴上说发了、严禁 [图片:…] 假装发过）。wechat.tsx：buildReplyMsgs 动作循环新增 post-moment 执行器（addCharMomentPost('wx') 真实落库+写角色记忆 char-post 碎片 → emitMomentsChanged('wx') 广播动态页 → sys 行「「xx」发布了一条朋友圈」随回复队列投递）；systemFull 注入 momentPostRule（photoRule 之后：先把图片标签用法钉死再教发动态标记；requestOnly 拉黑申请卡模式不下发，与 actionRules 同口径）。qq.tsx 对称同构（'qq' 平台、sys 行「发布了一条说说」、buildReplyMsgs deps 补 me）
+- 【③空 src 修复】MusicGlobalMini.tsx GlobalMiniBar：live.avatar 空串时改渲染首字占位圆（34px 布局不变），登录头像 loginAvatar 空串兜底 getGuestAvatar()
+- 【验证】bunx tsc --noEmit 0 错误；eslint 改动 6 文件 0 问题（wechat/qq 仅既有 BABEL 500KB 提示）；bun scripts/test-post-moment.ts 14/14 通过（整段正文/冒号标点/变体/空正文/段尾未闭合/与代付淘宝·换朋友圈背景不串台）；agent-browser E2E 实机全链路：seed 机主凡凡+AI 小澜 → 微信登录 → 聊天发「你去发一个朋友圈，说我最喜欢凡凡老婆啦」→ AI 回复输出标记 → 聊天页出现「「小澜」发布了一条朋友圈」系统行 → 朋友圈页实时出现小澜动态「我最喜欢凡凡老婆啦 · 刚刚」→ 控制台/page errors 零报错；测试数据已清理
+Stage Summary:
+- 交付：①语音/视频通话 system 级社交动态归属红线（双来源兜底，陌生来电不下发）+ 电话端 momentsBlock 真名补传；②AI 被要求发朋友圈/说说时真实发布（[发朋友圈:正文]/[发说说:正文] 动作标记 → addCharMomentPost 落库+记忆+广播，sys 行可感知，空正文/未输出标记不再「空口说发了」），微信/QQ 双端同构，requestOnly 不注入；③灵动岛音乐迷你条空头像首字占位，空串 src 控制台报错根除
+- 改动文件：src/app/api/phone/turn/route.ts、src/components/apps/{phone,wechat,qq}.tsx、src/lib/chat-rich.ts、src/components/ios/MusicGlobalMini.tsx、scripts/test-post-moment.ts（新增回归脚本）
+- 关键决策：①归属红线放服务端 /api/phone/turn 拼装层——语音（chat-call）/电话（phone）/视频（video-call）三条通话链路共用该端点，一处注入全端生效；②「发朋友圈」教学规则恒注入单聊（不等动态块非空——动态块为空时更可能被要求发）；③执行器复用 addCharMomentPost（写入侧单一事实源 expectedMomentMemoryOf：AI 发完自己记忆里就有「你发了一条动态」，后续轮次/电话开场都能正确提起）；④任务 9 的 worklog 条目上次被截断于「两处 15s 硬下限夹逼」半行，其工作已完整落盘于提交 408d968（5s 间隔生效/人设记忆动态跨App上下文/归属红线/真名凡凡），此处补记

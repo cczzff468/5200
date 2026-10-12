@@ -216,6 +216,13 @@ export async function POST(req: NextRequest) {
   const worldbookBlock = typeof root.worldbookBlock === 'string' ? root.worldbookBlock.trim() : '';
   // 社交动态块：前端按互通开关现场构建的「最近朋友圈/QQ动态 + 相关互动」（动态与聊天记忆双向打通）
   const momentsBlock = typeof root.momentsBlock === 'string' ? root.momentsBlock.trim() : '';
+  // 归属红线（用户实测：语音通话里 AI 把自己发的朋友圈当成对方发的，「朋友圈看到你说…」）：
+  // 通话场景的动态信息有两个来源——社交动态块（自带归属标注+尾注）与记忆碎片（char-post 句式带
+  // 「（AI角色本人）」标注），两者模型都可能看反；system 级规则无条件再压一次（陌生来电不下发身份，
+  // 规则一并省略）。措辞覆盖「动态内容里提到对方」这种最易看反的形态
+  const momentsRule = callerUnknown
+    ? ''
+    : '【社交动态归属红线】你的记忆和社交动态里提到的朋友圈/QQ空间动态都带归属标注：「（AI角色本人）」= 你自己发的，就算动态内容里提到了对方，发动态的人也是你自己，绝不能说成「在朋友圈看到你发了/你说」；「（用户本人）」的才是对方发的。开口提任何动态前先确认归属，看不清就不提。';
   // 时间感知块：前端按联系人开关现场构建（当前时间/季节/节日/事件时长/上次聊天间隔），附加在记忆之后
   const timeBlock = typeof root.timeBlock === 'string' ? root.timeBlock.trim() : '';
   // 位置感知块：前端与文字聊天同一套 buildLocationBlock（用户最近发过的位置：名称/地址/经纬度/时间）
@@ -227,8 +234,8 @@ export async function POST(req: NextRequest) {
     ? `【用户画面（视频通话实时识图）】这是对方摄像头此刻拍到的画面（每隔几秒刷新，可能略有延迟）：${visionBlock}`
     : '';
   // 拼装顺序（Task 40-b 注入约定）：人设 → 世界书 → 当前 App 记忆 → 跨 App 近况 → 群聊近况 →
-  // 来电目的（主动电话）→ 动态 → 时间 → 位置 → 用户画面（视频识图，离对话最近放最后）；空串/缺字段自动跳过
-  const systemFull = [system, worldbookBlock, memoryBlock, crossAppBlock, groupBlock, proactiveBlock, momentsBlock, timeBlock, locBlock, visionBlockFull]
+  // 来电目的（主动电话）→ 动态 → 归属红线 → 时间 → 位置 → 用户画面（视频识图，离对话最近放最后）；空串/缺字段自动跳过
+  const systemFull = [system, worldbookBlock, memoryBlock, crossAppBlock, groupBlock, proactiveBlock, momentsBlock, momentsRule, timeBlock, locBlock, visionBlockFull]
     .filter(Boolean)
     .join('\n\n');
 
