@@ -164,7 +164,7 @@ function insertShareCard(idp: 'wx' | 'qq', contactId: string, msg: MtShareCardMs
   const key = `${idp === 'wx' ? 'wx' : 'qq'}-chat-msgs:${contactId}`;
   try {
     const cur = kvGet<unknown[]>(key) ?? [];
-    kvSet(key, [...cur, msg].slice(-100));
+    kvSet(key, [...cur, msg]); // 聊天记录不封顶（此前截 100 条会把旧记录挤丢）
   } catch {
     /* 落库失败静默 */
   }

@@ -75,7 +75,7 @@ function kvInsertCard(cid: string, app: 'wx' | 'qq', msg: TgCardMsg): void {
   const key = app === 'wx' ? `wx-chat-msgs:${cid}` : `qq-chat-msgs:${cid}`;
   try {
     const cur = kvGet<unknown[]>(key) ?? [];
-    kvSet(key, [...cur, msg].slice(-100));
+    kvSet(key, [...cur, msg]); // 聊天记录不封顶（此前截 100 条会把旧记录挤丢）
     try {
       window.dispatchEvent(new CustomEvent(TG_CARD_INSERTED_EVENT, { detail: { cid, app } }));
     } catch {

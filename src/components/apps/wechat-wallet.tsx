@@ -257,7 +257,7 @@ export function appendWxChatMsg(contactId: string, msg: Record<string, unknown>)
     }
     if (!Array.isArray(parsed)) return;
     parsed.push(msg);
-    kvSet(key, parsed.slice(-100));
+    kvSet(key, parsed); // 聊天记录不封顶（此前截 100 条会把旧记录挤丢）
   } catch {
     // 读写失败忽略
   }

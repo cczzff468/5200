@@ -427,7 +427,7 @@ export async function maybeCharReAddReq(app: FriendDelApp, contactId: string): P
     const existing = kvGet<unknown[]>(chatKey);
     const list = Array.isArray(existing) ? [...existing] : [];
     list.push({ id: genId(), role: 'peer', content: message, time: Date.now(), kind: 'text', fr: 'greet' });
-    kvSet(chatKey, list.slice(app === 'wx' ? -100 : -200));
+    kvSet(chatKey, list); // 聊天记录不封顶（此前截 100/200 条会把该会话旧记录整体挤丢）
   } catch {
     // 忽略：聊天记录不可写时申请仍有效
   }
@@ -888,7 +888,7 @@ export async function processAltFriendReq(app: FriendDelApp, reqId: string, cont
       if (decision.message.trim()) {
         list.push({ id: genId(), role: 'peer', content: decision.message, time: now + 1, kind: 'text' });
       }
-      kvSet(chatKey, list.slice(app === 'wx' ? -100 : -200));
+      kvSet(chatKey, list); // 聊天记录不封顶（同上）
     } catch {
       // 聊天记录写入失败不影响好友状态
     }

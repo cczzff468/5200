@@ -1553,8 +1553,7 @@ function fakeHotCount(id: number): number {
 
 /** 气泡展示时长（毫秒）：Task 21 改为 10 秒，逐条各自到期（不同时消失） */
 const BUBBLE_TTL = 10_000;
-/** 每侧最多同时显示几条（Task 21：最新在上，依次排序） */
-const BUBBLE_MAX_PER_SIDE = 3;
+/** 用户反馈：气泡不再限制每侧 3 条——10 秒 TTL 内的全部消息（含 AI 回复拆出的所有短气泡）都显示 */
 
 function TogetherHead({
   session,
@@ -1562,13 +1561,13 @@ function TogetherHead({
   showBubbles = false,
 }: {
   session: TogetherSessionLike;
-  /** 一起听消息（音乐视图下取双方最近各 3 条，头像下堆叠气泡，每条 10 秒后各自消失） */
+  /** 一起听消息（音乐视图下取 TTL 内双方全部消息，头像下堆叠气泡，每条 10 秒后各自消失） */
   msgs?: TogetherMsgLike[];
   showBubbles?: boolean;
 }) {
   const loginUid = useMusic((s) => s.loginUid);
   const loginAvatar = useMusic((s) => s.loginAvatar);
-  // 双方最近消息堆（Task 21：每侧最多 3 条，最新在最上）
+  // 双方消息堆（Task 21 引入、后按用户需求取消每侧 3 条上限：TTL 内全部显示，最新在最上）
   const [, tickNow] = useState(0);
   const nowMs = Date.now();
   const mineStack: TogetherMsgLike[] = [];
@@ -1579,11 +1578,10 @@ function TogetherHead({
       const m = msgs[i];
       if (nowMs - m.time >= BUBBLE_TTL) break;
       if (m.role === 'me') {
-        if (mineStack.length < BUBBLE_MAX_PER_SIDE) mineStack.push(m);
+        mineStack.push(m);
       } else if (m.role === 'peer' || m.role === 'recs') {
-        if (peerStack.length < BUBBLE_MAX_PER_SIDE) peerStack.push(m);
+        peerStack.push(m);
       }
-      if (mineStack.length >= BUBBLE_MAX_PER_SIDE && peerStack.length >= BUBBLE_MAX_PER_SIDE) break;
     }
   }
   // 逐条错峰消失：在「最早到期的那条」时刻触发一次重渲染抹掉它，剩下的继续各自计时
@@ -1693,7 +1691,8 @@ function TogetherHead({
         公里 · 一起听了 {durText}
       </p>
       {/* 头像下气泡（音乐视图）：绝对定位悬浮在唱片上方，不挤动任何布局——
-          Task 21：每侧最多 3 条堆叠，最新在最上依次排序，每条 10 秒后各自消失（不同时消失）；
+          TTL 内双方全部消息都堆叠显示（用户反馈：不要只显示 3 条，当前回复的全部显示），
+          最新在最上依次排序，每条 10 秒后各自消失（不同时消失）；
           双头像交叠居中（对方在左/我在右，交叠 10px，各自圆心距中线 ±27px）：
           对方气泡右缘锚在对方头像圆心 +8px（尾巴在气泡右上，指向对方头像）；
           我的气泡左缘锚在我头像圆心 -8px（尾巴在气泡左上，指向我头像）——
@@ -2676,7 +2675,7 @@ function ShareToChatSheet({
     const key = target === 'wx' ? `wx-chat-msgs:${c.id}` : `qq-chat-msgs:${c.id}`;
     try {
       const cur = kvGet<unknown[]>(key) ?? [];
-      kvSet(key, [...cur, msg].slice(-100));
+      kvSet(key, [...cur, msg]); // 聊天记录不封顶（用户反馈：以前截到 100 条会把旧记录挤丢）
     } catch {
       onToast('分享失败，稍后再试');
       return;

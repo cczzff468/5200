@@ -412,10 +412,10 @@ function loadQqSingleMsgs(contactId: string): QqSingleMsgShape[] {
   }
 }
 
-/** 写目标单聊消息库（与 qq.tsx saveMsgs 同键同封顶） */
+/** 写目标单聊消息库（与 qq.tsx saveMsgs 同键；聊天记录不封顶） */
 function saveQqSingleMsgs(contactId: string, msgs: QqSingleMsgShape[]): void {
   try {
-    kvSet(qqSingleMsgsKey(contactId), msgs.slice(-200));
+    kvSet(qqSingleMsgsKey(contactId), msgs);
   } catch {
     // 存储失败不中断
   }

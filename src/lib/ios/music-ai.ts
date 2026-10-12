@@ -207,8 +207,9 @@ export function loadTogetherMsgs(cid: string): TgMsg[] {
   return kvGet<TgMsg[]>(msgsKey(cid)) ?? [];
 }
 
+/** 聊天记录不封顶（用户反馈：以前只留最近 100 条，聊多了旧的一起听聊天记录被挤丢；kv 已在 IndexedDB，容量够用） */
 function saveTogetherMsgs(cid: string, msgs: TgMsg[]): void {
-  kvSet(msgsKey(cid), msgs.slice(-100));
+  kvSet(msgsKey(cid), msgs);
 }
 
 function appendMsg(cid: string, m: TgMsg): void {

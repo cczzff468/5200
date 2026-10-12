@@ -208,7 +208,7 @@ export async function deliverPeerMsgs(app: 'wx' | 'qq', contact: ContactRecord, 
         const key = `${app}-chat-msgs:${cid}`;
         const rawList = kvGet<unknown[]>(key);
         const list = Array.isArray(rawList) ? rawList : [];
-        kvSet(key, [...list, m].slice(-200));
+        kvSet(key, [...list, m]); // 聊天记录不封顶（此前截 200 条会把旧记录挤丢）
       } catch {
         /* 落库失败静默 */
       }

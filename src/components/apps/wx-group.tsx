@@ -461,11 +461,11 @@ function loadWxSingleMsgs(contactId: string): WxSingleMsgShape[] {
   }
 }
 
-/** 写目标单聊消息库（与 wechat.tsx saveMsgs 同键同封顶；顺带恢复被隐藏的会话行） */
+/** 写目标单聊消息库（与 wechat.tsx saveMsgs 同键；聊天记录不封顶；顺带恢复被隐藏的会话行） */
 function saveWxSingleMsgs(contactId: string, msgs: WxSingleMsgShape[]): void {
   try {
-    // 封顶 1000 与 wechat.tsx saveMsgs 同口径（用户实测：以前限 100，旧聊天记录被截断丢失）
-    kvSet(wxSingleMsgsKey(contactId), msgs.slice(-1000));
+    // 不封顶：与 wechat.tsx saveMsgs 同口径（用户反馈：聊天记录不要有上限）
+    kvSet(wxSingleMsgsKey(contactId), msgs);
   } catch {
     // 存储失败不中断
   }

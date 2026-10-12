@@ -244,7 +244,7 @@ export interface WxGroupMsg {
 
 /** 两个宿主各自的群池（微信群沿用历史键，QQ 独立新键） */
 const POOLS: Record<GroupApp, string> = { wx: 'wx-chat-groups', qq: 'qq-chat-groups' };
-const MSGS_CAP = 200;
+// 群消息不再封顶（用户反馈：聊天记录不要有上限，以前截 200 条会挤丢旧群聊记录）
 
 /** 会话级 localStorage map 键（未读/标志/隐藏）：按宿主区分，解散群时同构清理 */
 const LS_MAPS: Record<GroupApp, { unreads: string; flags: string; hidden: string }> = {
@@ -606,7 +606,7 @@ export function pushGroupEvent(groupId: string, text: string, evt: GroupEventDet
     const key = groupMsgsKey(g.app, groupId);
     const cur = readJSON<WxGroupMsg[]>(key);
     const list = Array.isArray(cur) ? cur : [];
-    writeJSON(key, [...list, msg].slice(-MSGS_CAP));
+    writeJSON(key, [...list, msg]);
   } catch {
     return null;
   }
@@ -1057,7 +1057,7 @@ export function restoreQuitGroup(
         // 按时间归位合并：恢复前若残留了个别新消息（如踢出后 AI 回合尾部落盘的孤儿消息），
         // 与快照历史按时间重排，避免渲染顺序错乱
         const merged = [...list, ...msgs].sort((a, b) => a.time - b.time);
-        writeJSON(key, merged.slice(-MSGS_CAP));
+        writeJSON(key, merged);
       } catch {
         // 消息恢复失败不阻塞拉群
       }
@@ -1249,7 +1249,7 @@ export function loadGroupMsgs(groupId: string): WxGroupMsg[] {
 }
 
 /**
- * 落盘（保留最后 200 条，与私聊同量级）。
+ * 落盘（不封顶：用户反馈聊天记录不要有上限，以前截 200 条会挤丢旧群聊记录）。
  * B-5：群已不存在（群回合进行中解散/退群，投递尾巴随后完成落盘等）跳过写盘——
  * 原实现回退 app='wx' 会把 QQ 群尾巴写进 wx-group-msgs:<id> 孤儿键（不可见也不清理）；
  * 消息随群消失是合理语义（解散路径 dissolveGroup 已删真实键），与 pushGroupEvent 的群空判同口径。
@@ -1257,7 +1257,7 @@ export function loadGroupMsgs(groupId: string): WxGroupMsg[] {
 export function saveGroupMsgs(groupId: string, msgs: WxGroupMsg[]): void {
   const g = getGroup(groupId);
   if (!g) return;
-  writeJSON(groupMsgsKey(g.app, groupId), msgs.slice(-MSGS_CAP));
+  writeJSON(groupMsgsKey(g.app, groupId), msgs);
 }
 
 /** 该群最后一条非通知消息（会话列表预览用）；群里只有系统事件时回退显示最近事件文案（预览不空白） */

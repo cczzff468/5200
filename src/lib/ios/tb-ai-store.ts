@@ -340,7 +340,7 @@ export function tbChatLoad(uid: string, shopId: string): TbCsMsg[] {
 }
 
 export function tbChatSave(uid: string, shopId: string, msgs: TbCsMsg[]): void {
-  save(chatKey(uid, shopId), msgs.slice(-200));
+  save(chatKey(uid, shopId), msgs); // 客服聊天记录不封顶（用户反馈：聊天记录不要有上限）
 }
 
 /** 追加消息（时间戳自增保证顺序） */

@@ -754,9 +754,8 @@ function loadMsgs(contactId: string): WxMsg[] {
 
 function saveMsgs(contactId: string, msgs: WxMsg[]): void {
   // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
-  // 保留上限 1000（用户实测：以前限 100，聊多了「以前的聊天记录都没有了」；1000 条纯文本很小，
-  // 图片为压缩 dataURL 占比可控；与信息/QQ 端同口径提高）
-  kvSet(lsMsgsKey(contactId), msgs.slice(-1000));
+  // 聊天记录不封顶（用户反馈：以前截 1000 条会挤丢旧聊天记录；kv 在 IndexedDB，纯文本容量可控）
+  kvSet(lsMsgsKey(contactId), msgs);
   // 新消息自动恢复被「删除/不显示」的会话（真微信行为）
   try {
     const hid = loadStrList(LS_CHAT_HIDDEN);

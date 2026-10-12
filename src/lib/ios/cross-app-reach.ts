@@ -86,7 +86,7 @@ function cleanReachText(raw: string): string {
   return t.slice(0, 400);
 }
 
-/** 落库一条角色消息（结构与各端 loadMsgs 校验器一致；wx/qq role='peer'、sms role='assistant'，封顶 100 条同口径）。
+/** 落库一条角色消息（结构与各端 loadMsgs 校验器一致；wx/qq role='peer'、sms role='assistant'；聊天记录不封顶）。
  *  多账号（Task 40-2d v2）：跨 App 触达落的是「目标 App 当前账号」的会话——读写都用 kvGetScoped/
  *  kvSetScoped 显式按目标 App 作用域（该 App 当前登着哪个账号，消息就落在哪个账号名下） */
 function appendPeerMsg(app: BlockApp, contactId: string, content: string): void {
@@ -98,7 +98,7 @@ function appendPeerMsg(app: BlockApp, contactId: string, content: string): void 
       ? { id: genId(), role: 'assistant', content, time: Date.now() }
       : { id: genId(), role: 'peer', content, time: Date.now() },
   );
-  kvSetScoped(key, list.slice(-100), app);
+  kvSetScoped(key, list, app); // 聊天记录不封顶（此前截 100 条会把该会话旧记录整体挤丢）
   // wx/qq：新消息自动恢复被「删除/不显示」的会话行（与各端 saveMsgs 的真微信行为一致）
   if (app !== 'sms') removeStrListItem(CHAT_HIDDEN_KEY[app], contactId);
 }

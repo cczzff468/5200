@@ -1196,8 +1196,8 @@ function loadMsgs(contactId: string): QQMsg[] {
 
 function saveMsgs(contactId: string, msgs: QQMsg[]): void {
   // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
-  // 保留上限 1000（用户实测：以前限 200，旧聊天记录被截断丢失；与微信/信息端同口径提高）
-  kvSet(lsMsgsKey(contactId), msgs.slice(-1000));
+  // 聊天记录不封顶（用户反馈：以前截 1000 条会挤丢旧聊天记录；kv 在 IndexedDB，纯文本容量可控）
+  kvSet(lsMsgsKey(contactId), msgs);
 }
 
 // ---------------- 转发感知：目标会话的 AI 事件队列 ----------------
