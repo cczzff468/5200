@@ -178,6 +178,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
+import { autoResizeTextarea } from '@/lib/ios/use-auto-textarea';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, isAiDelivering, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -2424,6 +2425,10 @@ export function WxGroupChatPage({
     return () => window.removeEventListener('group-msgs:updated', fn);
   }, [gid]);
   const [draft, setDraft] = useState('');
+  // 多行输入自适应增高：内容变化时重算 textarea 高度（封顶约 6 行后框内滚动，清空回落单行）
+  useEffect(() => {
+    autoResizeTextarea(inputRef.current);
+  }, [draft]);
   // 语音输入模式：输入框替换为「按住 说话」胶囊（左侧圆钮切换，与微信单聊同款）
   const [voiceMode, setVoiceMode] = useState(false);
   // 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用）
@@ -2463,7 +2468,7 @@ export function WxGroupChatPage({
   const groupQueuedRef = useRef(false);
   const mountedRef = useRef(true);
   const listRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const contactsRef = useRef(contacts);
@@ -5351,7 +5356,7 @@ export function WxGroupChatPage({
           </div>
         )}
         <div className="px-2.5 pb-[18px] pt-2">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-end gap-2.5">
             <button
               type="button"
               aria-label="提及成员"
@@ -5399,8 +5404,9 @@ export function WxGroupChatPage({
               <VoiceHoldBar rec={rec} testId="wxg-voice-hold" />
             ) : (
               <div className="relative min-w-0 flex-1">
-                <input
+                <textarea
                   ref={inputRef}
+                  rows={1}
                   value={draft}
                   onChange={(e) => {
                     const v = e.target.value;
@@ -5413,14 +5419,15 @@ export function WxGroupChatPage({
                     }
                   }}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
+                    // 多行输入：Enter 发送 / Shift+Enter 换行；中文输入法选词回车（isComposing）不发送
+                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                       e.preventDefault();
                       send();
                     }
                   }}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
                   data-testid="wx-groupchat-input"
-                  className="h-[36px] w-full rounded-[5px] bg-white pl-3 pr-9 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
+                  className="max-h-[132px] min-h-[36px] w-full resize-none overflow-y-auto rounded-[5px] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
                 />
                 {/* 文字转语音开关（声波图标收进输入框内部右侧，与单聊同款）：
                     开启后输入文字发送为语音气泡（本地仿真，无需配置语音 API，点击不出声） */}
@@ -5434,59 +5441,56 @@ export function WxGroupChatPage({
                     setTtsSend(nv);
                     onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
                   }}
-                  className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
+                  className={`absolute bottom-1 right-1.5 flex h-7 w-7 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
                 >
                   <AudioLines className="h-[17px] w-[17px]" strokeWidth={ttsSend ? 2.2 : 1.8} />
                 </button>
               </div>
             )}
+            {/* 表情按钮常驻（真机微信同款排版）：有内容时排在发送键左侧，不再被发送键替换/遮挡 */}
+            <button
+              type="button"
+              aria-label="表情"
+              data-testid="wx-groupchat-sticker"
+              aria-expanded={stickerOpen}
+              onClick={() => {
+                setPlusOpen(false);
+                setAtOpen(false);
+                setStickerOpen((v) => !v);
+              }}
+              className={`shrink-0 active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
+            >
+              <Smile className="h-[25px] w-[25px]" strokeWidth={1.7} />
+            </button>
             {draft.trim() || canDispatch || pendingImgs.length > 0 ? (
-              <>
-                <button
-                  type="button"
-                  aria-label={ttsSend && draft.trim() ? '发送（转语音）' : pendingImgs.length > 0 ? (draft.trim() ? `发送文字和 ${pendingImgs.length} 张图片` : `发送 ${pendingImgs.length} 张图片`) : draft.trim() ? '发送' : '发送（让成员回复）'}
-                  data-testid="wx-groupchat-send"
-                  disabled={streaming || runningRef.current}
-                  onClick={() => {
-                    // 有文字或待发图 → send()（内部处理组合/纯文字/纯图）；否则分句批次兜底
-                    if (draft.trim() || pendingImgs.length) send();
-                    else dispatchBatch();
-                  }}
-                  className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
-                >
-                  发送
-                </button>
-              </>
+              <button
+                type="button"
+                aria-label={ttsSend && draft.trim() ? '发送（转语音）' : pendingImgs.length > 0 ? (draft.trim() ? `发送文字和 ${pendingImgs.length} 张图片` : `发送 ${pendingImgs.length} 张图片`) : draft.trim() ? '发送' : '发送（让成员回复）'}
+                data-testid="wx-groupchat-send"
+                disabled={streaming || runningRef.current}
+                onClick={() => {
+                  // 有文字或待发图 → send()（内部处理组合/纯文字/纯图）；否则分句批次兜底
+                  if (draft.trim() || pendingImgs.length) send();
+                  else dispatchBatch();
+                }}
+                className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
+              >
+                发送
+              </button>
             ) : (
-              <div className="flex shrink-0 items-center gap-4 text-black/80 dark:text-white/80">
-                <button
-                  type="button"
-                  aria-label="表情"
-                  data-testid="wx-groupchat-sticker"
-                  aria-expanded={stickerOpen}
-                  onClick={() => {
-                    setPlusOpen(false);
-                    setAtOpen(false);
-                    setStickerOpen((v) => !v);
-                  }}
-                  className={`active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
-                >
-                  <Smile className="h-[25px] w-[25px]" strokeWidth={1.7} />
-                </button>
-                <button
-                  type="button"
-                  aria-label="更多功能"
-                  data-testid="wx-groupchat-plus"
-                  onClick={() => {
-                    setStickerOpen(false);
-                    setAtOpen(false);
-                    setPlusOpen((v) => !v);
-                  }}
-                  className="active:opacity-60"
-                >
-                  <CirclePlus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.5} />
-                </button>
-              </div>
+              <button
+                type="button"
+                aria-label="更多功能"
+                data-testid="wx-groupchat-plus"
+                onClick={() => {
+                  setStickerOpen(false);
+                  setAtOpen(false);
+                  setPlusOpen((v) => !v);
+                }}
+                className="ml-1 shrink-0 active:opacity-60"
+              >
+                <CirclePlus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.5} />
+              </button>
             )}
           </div>
           {/* 发图预览条（需求2）：选图后先列在输入行下方（62px 缩略图 + 右上角 × 移除），点主发送按钮才真正发出

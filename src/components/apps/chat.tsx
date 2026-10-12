@@ -123,6 +123,7 @@ import { buildVoicePlaceholderRule } from '@/lib/chat-media-rules';
 import { stopSpeaking } from '@/lib/ios/tts-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
+import { useAutoTextareaRef } from '@/lib/ios/use-auto-textarea';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
 import { decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
@@ -1022,6 +1023,8 @@ function ChatView({
   onOpenPeerStatus?: () => void;
 }) {
   const [input, setInput] = useState('');
+  /** 多行输入自适应增高：内容变化时重算高度（iMessage 胶囊随内容长高，清空回落单行） */
+  const smsTaRef = useAutoTextareaRef(input, 110);
   // 挂载时读本地记录；无记录（或被清空）则回落 initialMsgs
   const [msgs, setMsgs] = useState<ChatMsg[]>(() => {
     const saved = loadMsgs(storageKey);
@@ -3535,18 +3538,27 @@ function ChatView({
         >
           <Plus className={`h-[19px] w-[19px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={2} aria-hidden="true" />
         </button>
-        <div className="flex h-[36px] min-w-0 flex-1 items-center rounded-full bg-white/60 pl-3.5 pr-1.5 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
+        <div className="flex min-h-[36px] min-w-0 flex-1 items-center rounded-[18px] bg-white/60 pl-3.5 pr-1.5 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
           {voiceMode ? (
             /* 语音输入模式：按住说话（上滑/左滑取消，右滑转文字，松开发送） */
             <VoiceHoldBar rec={rec} testId="sms-voice-hold" />
           ) : (
-            <div className="relative min-w-0 flex-1 self-stretch">
-              <input
+            <div className="relative min-w-0 flex-1">
+              <textarea
+                ref={smsTaRef}
+                rows={1}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  // 多行输入：Enter 发送（requestSubmit 与发送键走同一条 form 分流）/ Shift+Enter 换行；输入法选词回车不发送
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    e.currentTarget.form?.requestSubmit();
+                  }
+                }}
                 placeholder={ttsSend ? '输入文字，发送后转为语音' : 'iMessage信息'}
                 aria-label="消息输入框"
-                className="h-full w-full bg-transparent pr-10 text-[15px] outline-none placeholder:text-muted-foreground/50"
+                className="max-h-[110px] min-h-[22px] w-full resize-none overflow-y-auto bg-transparent py-[7px] pr-10 text-[15px] leading-[22px] outline-none placeholder:text-muted-foreground/50"
               />
               {/* 文字转语音开关（声波图标在输入框内右侧）：开启后输入文字发送为语音气泡
                   （本地仿真，无需配置语音 API，点击不出声）；切到「按住说话」模式时随输入框一起隐藏 */}

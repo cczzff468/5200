@@ -171,6 +171,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
+import { autoResizeTextarea } from '@/lib/ios/use-auto-textarea';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, isAiDelivering, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -2074,6 +2075,10 @@ export function QqGroupChatPage({
     return () => window.removeEventListener('group-msgs:updated', fn);
   }, [gid]);
   const [draft, setDraft] = useState('');
+  // 多行输入自适应增高：内容变化时重算 textarea 高度（封顶约 6 行后框内滚动，清空回落单行）
+  useEffect(() => {
+    autoResizeTextarea(inputRef.current);
+  }, [draft]);
   const [quote, setQuote] = useState<{ name: string; content: string; id?: string; time?: number } | null>(null);
   const [atOpen, setAtOpen] = useState(false);
   const [stickerOpen, setStickerOpen] = useState(false);
@@ -2112,7 +2117,7 @@ export function QqGroupChatPage({
   const sendTextAsVoiceRef = useRef<(t: string) => void>(() => undefined);
   const mountedRef = useRef(true);
   const listRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const contactsRef = useRef(contacts);
@@ -4963,10 +4968,11 @@ export function QqGroupChatPage({
             </button>
           </div>
         )}
-        <div className="flex items-center gap-2 px-3 pb-1 pt-3">
+        <div className="flex items-end gap-2 px-3 pb-1 pt-3">
           <div className="relative min-w-0 flex-1">
-            <input
+            <textarea
               ref={inputRef}
+              rows={1}
               value={draft}
               onChange={(e) => {
                 const v = e.target.value;
@@ -4979,7 +4985,8 @@ export function QqGroupChatPage({
                 }
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                // 多行输入：Enter 发送 / Shift+Enter 换行；中文输入法选词回车（isComposing）不发送
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   send();
                 }
@@ -4987,7 +4994,7 @@ export function QqGroupChatPage({
               placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
               aria-label="发送群聊消息"
               data-testid="qq-groupchat-input"
-              className="h-[40px] w-full rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] pl-3.5 pr-9 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
+              className="max-h-[132px] min-h-[40px] w-full resize-none overflow-y-auto rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] py-[9px] pl-3.5 pr-9 text-[15px] leading-[22px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
             />
             {/* 文字转语音开关（声波图标收进输入框内部右侧）：开启后输入框文字发送为语音气泡 */}
             <button
@@ -5000,7 +5007,7 @@ export function QqGroupChatPage({
                 setTtsSend(nv);
                 onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
               }}
-              className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#0099FF]' : 'text-black/40 dark:text-white/40'}`}
+              className={`absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#0099FF]' : 'text-black/40 dark:text-white/40'}`}
             >
               <AudioLines className="h-[17px] w-[17px]" strokeWidth={ttsSend ? 2.2 : 1.8} />
             </button>

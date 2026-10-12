@@ -18781,3 +18781,24 @@ Stage Summary:
 - 交付：①微信个人资料页、QQ 个人资料页（点头像）新增换头像能力（此前微信是「暂不支持修改」、QQ 头像不可点）；②三个换头像入口（微信/QQ/设置个人卡片）完全隔离——各自换的只在本端生效，互不影响也不写全局；③未换过的入口实时跟随全局头像（联系人 App 机主头像），全局头像改动即时反映到所有未自选的入口；④存量用户一次性迁移：历史上被镜像成与全局一致的头像自动回归「跟随全局」，用户自选过的保留
 - 改动文件：src/lib/ios/avatar-upload.ts（新增）、src/lib/ios/owner-profile-sync.ts（头像摘出镜像+迁移）、src/components/apps/{settings,wechat,qq}.tsx
 - 关键决策：①复用既有 avatars 槽位机制而非新造存储——微信/QQ 端读取投影早已就位，只补用户侧写入入口，改动面最小且与 AI [换头像] 的按 App 隔离语义同源；②设置侧用 useSettings.profile 自持（它本就是设置卡片的显示源），同步层摘 avatar 而非加 settings 槽位——避免动 Profile 类型及其 8+ 消费点；③「跟随全局」用回退实现（槽位空→avatar / profile.avatar 空→ownerAvatar）而非复制——全局后续改动无需任何同步就实时生效；④QQ 抽屉导航注意：消息 tab 左上头像=closeApp（既有设计），抽屉从联系人 tab 进
+
+---
+Task ID: 16
+Agent: 主协调者 (Z.ai Code)
+Task: 用户需求——微信/QQ/信息三个 App 的聊天输入框支持多行输入；微信发送键不要挡住表情图标（附目标状态截图：多行文本 + 表情与发送键并存）
+
+Work Log:
+- 【现状盘点】5 个聊天输入栏全部是单行 <input>：微信单聊(wx-chat-input)/微信群聊(wx-groupchat-input)/QQ单聊(qq-chat-input)/QQ群聊(qq-groupchat-input)/信息App(iMessage 胶囊内 input)；粘贴多行文本换行符被 input 静默丢弃。微信单聊/群聊有内容时发送键整个【替换】表情+加号（用户截图痛点：发送键挡住表情）。气泡渲染侧 whitespace-pre-wrap 已全端就位（多行消息上屏无需改）
+- 【共享自适应层】新增 src/lib/ios/use-auto-textarea.ts：useAutoTextareaRef(value, maxPx=132)（value 变化重算 height=scrollHeight，封顶 132px≈6 行后框内滚动，清空回落单行）+ autoResizeTextarea 供已有 ref 的组件复用
+- 【5 端改造】①微信单聊/群聊：input→textarea（rows=1 + min-h-[36px] + py-[7px] leading-[22px] 单行等高；max-h-[132px] overflow-y-auto）；群聊 inputRef 类型 HTMLInputElement→HTMLTextAreaElement（.focus() 兼容）+ effect(autoResizeTextarea(inputRef.current), [draft])；②QQ 单聊/群聊：同款（min-h-[40px] py-[9px]，保留圆角边框原样式）；③信息 App：iMessage 胶囊 h-[36px]→min-h-[36px] + rounded-full→rounded-[18px]（单行视觉不变，多行时圆角封顶对齐 iOS iMessage），textarea max-h-[110px]
+- 【Enter 语义统一】全部 5 端：Enter=发送（preventDefault）/ Shift+Enter=换行 / 中文输入法选词回车（isComposing）不发送——微信单聊/QQ 单聊原有 isComposing 守卫保留并补 shiftKey，微信群/QQ 群原有 shiftKey 补 isComposing；信息 App 走 e.currentTarget.form?.requestSubmit()（与发送键同一条 form 分流：文字→send/纯图→sendPendingImages/空→dispatchBatch）
+- 【发送键不再遮挡表情（微信双端）】表情按钮从「空态组」提出为常驻元素：排版恒为 [语音][输入框][表情][发送|加号]——有内容时 [表情][发送] 并存（真机微信同款，发送键只替换加号），空态 [表情][加号]（加号补 ml-1 保持原 16px 间距）；aria/testid（wx-chat-sticker/wx-chat-plus/wx-chat-send）不变
+- 【多行增高后的对齐与图标锚定】微信/QQ 输入行 items-center→items-end（增高后语音钮/表情/发送贴底，真机同款）；输入框内 TTS 声波开关从垂直居中(top-1/2)改锚定右下角(bottom-1/bottom-1.5)（单行位置不变，多行不悬空）；信息 App 保持 items-center（iOS iMessage 图标居中语义）
+- 【E2E（agent-browser 实机 393×852）】种数据（机主 13800000001/好友小美 friendWx+friendQq+friendSms/三端会话消息/微信群老友群/QQ群游戏开黑群）→ ①微信单聊：textarea ✓，36→132px（5 行封顶）✓，表情(右缘313)与发送(左缘323)并存无重叠 ✓ 截图确认，发送后气泡 whitespace-pre-wrap 多行渲染(132px) ✓ 输入框清空回落 36px ✓ 表情/加号恢复 ✓；②信息 App：胶囊 36→109px（rounded-[18px]）✓ 蓝色↑发送键可见 ✓ 发送回落(36/43) ✓ 多行气泡 103px ✓；③QQ 单聊：40→106px ✓ 发送/清空/回落 40px ✓ 气泡 114px ✓；④微信群聊：36→132px ✓ 表情+发送共存 noOverlap=true ✓；⑤QQ 群聊：3 行=84px（40+2×22 精确）✓ 发送/清空/回落 ✓；⑥console/page errors 零新增（仅既有 weather 502 与无 key 上游 429 噪音）
+- 【测试数据清理回归】contacts e2e-* 0、kv e2e-* 0（含首轮误种孤儿键 sms-chat-msgs:c:* / qq-bond / moments-auto-attempt）、wx-chat-groups/qq-chat-groups 池还原为空、wx/qq-session-user-id 登录态清除 → 微信重启回登录墙、会话列表无美美/老友群残留
+- 验证：bunx tsc --noEmit 0 错误；eslint 6 个改动文件 0 问题（仅既有 BABEL 500KB 提示）
+
+Stage Summary:
+- 交付：①微信/QQ（单聊+群聊）与信息 App 共 5 个聊天输入框全部支持多行输入——粘贴多行文本结构不丢，输入框随内容自动增高（约 6 行封顶后框内滚动），发送/清空后自动回落单行；②微信单聊/群聊发送键出现时表情图标不再被遮挡（[表情][发送] 并存，真机微信排版）；③Enter 发送 / Shift+Enter 换行 / 输入法选词回车不发送在五端统一
+- 改动文件：src/lib/ios/use-auto-textarea.ts（新增）、src/components/apps/{wechat,wx-group,qq,qq-group,chat}.tsx
+- 关键决策：①共享 hook + 既有 ref 组件用 autoResizeTextarea 副作用版（wx-group/qq-group 的 inputRef 承担 @ 选人/发送后聚焦，不能换 ref）；②多行增高用 value-effect 驱动而非 onInput——发送后 setInput('') 程序性清空也能触发回落；③微信表情常驻采用「提出条件渲染」而非复制 JSX——空态/有态共用同一按钮元素，testid 稳定；④信息 App 胶囊 rounded-[18px] 而非保持 rounded-full——单行 36px 时视觉等价（36/2=18），多行时避免胶囊变成巨大圆角；⑤items-end 只用于微信/QQ（真机贴底语义），信息 App 保持居中（iOS iMessage 语义）

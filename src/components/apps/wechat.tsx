@@ -182,6 +182,7 @@ import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, A
 import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+import { useAutoTextareaRef } from '@/lib/ios/use-auto-textarea';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters } from '@/lib/memory';
 import {
@@ -4545,6 +4546,8 @@ function ChatPage({
   const [userReqOpen, setUserReqOpen] = useState(false);
   const [userReqText, setUserReqText] = useState('');
   const [input, setInput] = useState('');
+  /** 多行输入自适应增高：内容变化时重算高度（封顶约 6 行后框内滚动，清空回落单行） */
+  const chatTaRef = useAutoTextareaRef(input);
   /** 语音输入模式：输入框替换为「按住 说话」胶囊（左侧圆钮切换） */
   const [voiceMode, setVoiceMode] = useState(false);
   /** 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用） */
@@ -8478,7 +8481,7 @@ function ChatPage({
           </div>
         )}
         <div className="px-2.5 pb-[18px] pt-2">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-end gap-2.5">
             <button
               type="button"
               aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
@@ -8507,7 +8510,9 @@ function ChatPage({
               <VoiceHoldBar rec={rec} testId="wx-voice-hold" />
             ) : (
               <div className="relative min-w-0 flex-1">
-                <input
+                <textarea
+                  ref={chatTaRef}
+                  rows={1}
                   data-testid="wx-chat-input"
                   value={input}
                   onChange={(e) => {
@@ -8521,13 +8526,17 @@ function ChatPage({
                     }
                   }}
                   onKeyDown={(e) => {
-                    // A-6：中文输入法选词回车（isComposing）不发送，避免半截拼音被当消息发出
-                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) void send();
+                    // A-6：中文输入法选词回车（isComposing）不发送，避免半截拼音被当消息发出；
+                    // 多行输入：Enter 发送 / Shift+Enter 换行（粘贴多行文本结构不丢）
+                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      void send();
+                    }
                   }}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-                  className="h-[36px] w-full rounded-[5px] bg-white pl-3 pr-9 text-[16px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
+                  className="max-h-[132px] min-h-[36px] w-full resize-none overflow-y-auto rounded-[5px] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
                 />
-                {/* 文字转语音开关（声波图标在输入框内右侧）：开启后输入文字发送为语音气泡
+                {/* 文字转语音开关（声波图标在输入框内右下角）：开启后输入文字发送为语音气泡
                     （本地仿真，无需配置语音 API）；切到「按住说话」模式时随输入框一起隐藏 */}
                 <button
                   type="button"
@@ -8539,57 +8548,54 @@ function ChatPage({
                     setTtsSend(nv);
                     onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
                   }}
-                  className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
+                  className={`absolute bottom-1 right-1.5 flex h-7 w-7 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
                 >
                   <AudioLines className="h-[17px] w-[17px]" strokeWidth={ttsSend ? 2.2 : 1.8} />
                 </button>
               </div>
             )}
+            {/* 表情按钮常驻（真机微信同款排版）：有内容时排在发送键左侧，不再被发送键替换/遮挡 */}
+            <button
+              type="button"
+              aria-label="表情"
+              data-testid="wx-chat-sticker"
+              aria-expanded={stickerOpen}
+              onClick={() => {
+                setPlusOpen(false);
+                setStickerOpen((v) => !v);
+              }}
+              className={`shrink-0 active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
+            >
+              <Smile className="h-[25px] w-[25px]" strokeWidth={1.7} />
+            </button>
             {(input.trim() || canDispatch || pendingImgs.length > 0) ? (
-              <>
-                <button
-                  type="button"
-                  aria-label={ttsSend && input.trim() ? '发送（转语音）' : pendingImgs.length > 0 ? (input.trim() ? `发送文字和 ${pendingImgs.length} 张图片` : `发送 ${pendingImgs.length} 张图片`) : input.trim() ? '发送' : '发送（让对方回复）'}
-                  data-testid="wx-chat-send"
-                  onClick={() => {
-                    // 有文字或待发图 → send()（内部处理组合/纯文字/纯图）；否则分句批次兜底。
-                    // 37-a：去掉 disabled={streaming}——AI 回复中点击走 send() 内部的排队补跑分支（与 chat.tsx 口径一致），不再死按无反馈
-                    if (input.trim() || pendingImgs.length) void send();
-                    else dispatchBatch();
-                  }}
-                  className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
-                >
-                  发送
-                </button>
-              </>
+              <button
+                type="button"
+                aria-label={ttsSend && input.trim() ? '发送（转语音）' : pendingImgs.length > 0 ? (input.trim() ? `发送文字和 ${pendingImgs.length} 张图片` : `发送 ${pendingImgs.length} 张图片`) : input.trim() ? '发送' : '发送（让对方回复）'}
+                data-testid="wx-chat-send"
+                onClick={() => {
+                  // 有文字或待发图 → send()（内部处理组合/纯文字/纯图）；否则分句批次兜底。
+                  // 37-a：去掉 disabled={streaming}——AI 回复中点击走 send() 内部的排队补跑分支（与 chat.tsx 口径一致），不再死按无反馈
+                  if (input.trim() || pendingImgs.length) void send();
+                  else dispatchBatch();
+                }}
+                className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
+              >
+                发送
+              </button>
             ) : (
-              <div className="flex shrink-0 items-center gap-4 text-black/80 dark:text-white/80">
-                <button
-                  type="button"
-                  aria-label="表情"
-                  data-testid="wx-chat-sticker"
-                  aria-expanded={stickerOpen}
-                  onClick={() => {
-                    setPlusOpen(false);
-                    setStickerOpen((v) => !v);
-                  }}
-                  className={`active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
-                >
-                  <Smile className="h-[25px] w-[25px]" strokeWidth={1.7} />
-                </button>
-                <button
-                  type="button"
-                  aria-label="更多功能"
-                  data-testid="wx-chat-plus"
-                  onClick={() => {
-                    setStickerOpen(false);
-                    setPlusOpen((v) => !v);
-                  }}
-                  className="active:opacity-60"
-                >
-                  <CirclePlus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.5} />
-                </button>
-              </div>
+              <button
+                type="button"
+                aria-label="更多功能"
+                data-testid="wx-chat-plus"
+                onClick={() => {
+                  setStickerOpen(false);
+                  setPlusOpen((v) => !v);
+                }}
+                className="ml-1 shrink-0 active:opacity-60"
+              >
+                <CirclePlus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.5} />
+              </button>
             )}
           </div>
           {/* 待发送图片预览条（需求2：选图后先显示在输入框下面，点主发送按钮才真正发出；面板展开时隐藏避免遮挡） */}

@@ -168,6 +168,7 @@ import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat
 import { splitVisionDesc } from '@/lib/vision-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
+import { useAutoTextareaRef } from '@/lib/ios/use-auto-textarea';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
 import {
   abortStreamsByPrefix,
@@ -2905,6 +2906,8 @@ function ChatPage({
   const [userReqOpen, setUserReqOpen] = useState(false);
   const [userReqText, setUserReqText] = useState('');
   const [input, setInput] = useState('');
+  /** 多行输入自适应增高：内容变化时重算高度（封顶约 6 行后框内滚动，清空回落单行） */
+  const chatTaRef = useAutoTextareaRef(input);
   /** 语音输入模式：输入框替换为「按住 说话」胶囊（工具栏麦克风钮切换） */
   const [voiceMode, setVoiceMode] = useState(false);
   /** 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用） */
@@ -6799,9 +6802,11 @@ function ChatPage({
             </div>
           </div>
         )}
-        <div className="flex items-center gap-2 px-3 pb-1 pt-3">
+        <div className="flex items-end gap-2 px-3 pb-1 pt-3">
           <div className="relative min-w-0 flex-1">
-            <input
+            <textarea
+              ref={chatTaRef}
+              rows={1}
               data-testid="qq-chat-input"
               value={input}
               onChange={(e) => {
@@ -6815,12 +6820,15 @@ function ChatPage({
                 }
               }}
               onKeyDown={(e) => {
-                // A-6：中文输入法选词回车（isComposing）不发送，避免半截拼音被当消息发出
-                if (e.key === 'Enter' && !e.nativeEvent.isComposing) void send();
+                // A-6：中文输入法选词回车（isComposing）不发送；多行输入：Enter 发送 / Shift+Enter 换行
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  void send();
+                }
               }}
               placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
               aria-label={`发送消息给${peer.name}`}
-              className="h-[40px] w-full rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] pl-3.5 pr-10 text-[15px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
+              className="max-h-[132px] min-h-[40px] w-full resize-none overflow-y-auto rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] py-[9px] pl-3.5 pr-10 text-[15px] leading-[22px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
             />
             {/* 文字转语音开关（声波图标在输入框内右侧）：开启后输入框文字发送为语音气泡 */}
             <button
@@ -6833,7 +6841,7 @@ function ChatPage({
                 setTtsSend(nv);
                 onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
               }}
-              className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#0099FF]' : 'text-black/40 dark:text-white/40'}`}
+              className={`absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#0099FF]' : 'text-black/40 dark:text-white/40'}`}
             >
               <AudioLines className="h-[18px] w-[18px]" strokeWidth={ttsSend ? 2.2 : 1.8} />
             </button>
