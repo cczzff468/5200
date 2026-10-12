@@ -94,7 +94,7 @@ export default function MusicApp() {
             <div className="relative flex h-full flex-col">
               <div className="min-h-0 flex-1 overflow-hidden">
                 {nav.tab === 'home' && <MusicHome onSettings={() => setShowSettings(true)} />}
-                {nav.tab === 'heart' && <MusicHeart onSettings={() => setShowSettings(true)} />}
+                {nav.tab === 'heart' && <MusicHeart />}
                 {nav.tab === 'search' && <MusicSearch />}
                 {nav.tab === 'mine' && <MusicMine onSettings={() => setShowSettings(true)} />}
               </div>

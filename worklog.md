@@ -18536,3 +18536,20 @@ Stage Summary:
 - 交付：①AI 发货通知删除（保留到驿站提醒）；②淘宝客服=用户 API 模型+1~10 条连发+失败红色感叹号点击重试+3 次自动重试，模板兜底全删；③淘票票全链路=收银台支付流程（不再点击直接出票）+真实时间场次+扫码入场核销+详情分享+快递区支持票务+分享卡票务渲染；④代付再次分享（详情页按钮两步选人+聊天长按活卡转发，微信/QQ 都可）；⑤AI 二次代付（[代付淘宝:请求id]，婉拒可改主意，5min 冷却豁免）；⑥AI 买票（[帮你买票:演出id] 真实场次自动配座+代付+分享卡）；⑦后台 LLM 决策自动重试（runProxyDecision 3 次+本地兜底防死锁）；⑧音乐一起听失败改红色感叹号（删「信号不太好」「我想想……」模板）
 - 改动文件：src/lib/ios/{tb-ai-engage,tb-chat-ai,tb-ai-store,tb-share-proxy,tb-proxy-ai,taobao-store,taobao-channels-data,music-ai,music-store}.ts、src/lib/chat-rich.ts、src/components/apps/{taobao-msg-chat,taobao-channels,taobao,tb-share-cards,wechat,qq,music-together}.tsx
 - 关键决策：①票务支付复用现有 PaySheet/tbMarkPaid 状态机（票务特判直达 shipped），零新支付通道；②代付防重键改「订单+联系人+平台」，同键 pending 语义化为「催一催」重发而非报错；③AI 二次代付用独立标记 [代付淘宝:pid]（与美团 [代付:pid] 词表隔离零串台），declined 请求允许 AI 改主意（复活→支付→失败回滚）；④发货通知只删发货情境保留到驿站提醒（提醒取件有实际价值）；⑤所有失败表达统一「触发消息红色感叹号」，无入口的后台链路自动重试+兜底
+
+---
+Task ID: 5
+Agent: Z.ai Code (main)
+Task: 用户三组需求——①淘宝/美团头像跟随联系人改动实时同步；②音乐App UI（每日推荐方形圆角+首歌封面背景/首页标题居中不可点/三条杠→返回键/心动页标题居中删三条杠/我的页保留三条杠）；③灵动岛堆叠（音乐+淘宝/美团组合小窗：左封面圆圈+右配送小窗，圆圈点开音乐大窗，大窗按展开序垂直堆叠同时显示，点大窗进对应界面）
+
+Work Log:
+- 【头像同步】taobao-store.ts 新增 tbSyncSessionIdentity（与 mtSyncSessionIdentity 同款：按会话 contactId 实时读「我」联系人，avatarFor 按 idp 投影、昵称取 nickname||name，变化才返回新会话）；taobao.tsx 挂 contact-avatar-changed/contact-updated 双监听 + 打开 App 时先对齐一次（修复原 bug：头像快照存 localStorage 后再不更新）；meituan.tsx 既有监听补「打开时先对齐一次」（boot 流程本身已有 mtSyncSessionIdentity，双保险）
+- 【音乐UI】music-home.tsx 顶栏改三列 grid（左 ArrowLeft 返回键=exitForegroundApp、中「音乐」纯 span 不可点、右头像），删设置三条杠（设置入口保留在头像面板「账号与设置」与我的页）；每日推荐卡由毛玻璃胶囊改 h-[108px] rounded-2xl 方形圆角大卡，背景=今日每日推荐第一首歌封面(songCover(daily[0]))+黑渐变压字，无数据时深色渐变兜底；music-heart.tsx 删 onSettings prop+三条杠，标题「心动」居中不可点；music.tsx 调用点同步；music-mine.tsx 三条杠按要求保留未动
+- 【灵动岛堆叠】新建 src/lib/ios/island-stack.ts（zustand）：order=已展开大窗序、heights=ResizeObserver 实测高度、islandTopOf/islandNextSlotTop 锚位计算；MusicIsland 撤销「配送岛出现即整体隐身」（isHiddenNow/hidden 删 mt/tb 项），组合形态渲染左侧 33px 封面小圆圈（left calc(50%-118.5px)，top=配送大窗展开时让位到下一槽位），expanded 状态迁移到 stack store（expand/collapse/collapseAll），大窗点击=collapseAll+openPlayerFromIsland，切歌自动展开仅独占模式（组合形态不抢屏）；TaobaoIsland/MeituanIsland 对称改造：音乐岛可见时小窗右移（left calc(50%-79.5px)）留位给圆圈、音乐大窗展开时让位下一槽位、展开态入栈、高度实测回写、点大窗=collapseAll+navigateToChatSession；小窗互斥（淘宝/美团最新事件方展示）保留；三层 z 统一 [82]、捕获层 [80]
+- 【E2E（agent-browser 实机）】头像同步：注入 user 联系人+wx 会话 → 我的淘宝显示头像A → App 开着改联系人头像+派发双事件 → 会话与页面头像实时变B → 重启浏览器重开淘宝仍B（boot 对齐）✓；灵动岛堆叠：注入 shipped 淘宝订单（kv 值须 JSON 字符串——save() 走 JSON.stringify，首注数组踩坑）→ 独占胶囊（等待发货 HH:MM 送达）→ 放歌 → 组合形态（左封面圆圈+右配送小窗）→ 点圆圈音乐大窗展开+配送小窗自动下移 → 点配送小窗双大窗堆叠同显 → 反序（先配送后音乐）堆叠同样成立 → 点淘宝大窗收起堆叠并进订单详情 → 点音乐大窗进播放页 → 点别处捕获层全部收回组合小窗 ✓；独占模式（清空订单）：切歌自动展开 5 秒收回、胶囊居中、状态栏恢复 WiFi 仅隐信号 ✓；音乐UI：首页返回键退出 App、标题居中、心动页居中无三条杠、我的页三条杠保留、组合/独占时状态栏信号/WiFi 语义正确；每日推荐新卡（rounded-2xl+首歌封面背景）需真实网易云登录，agent-browser 无账号，代码级验证（结构镜像旧卡+背景图层）
+- 验证：bunx tsc --noEmit 0 错误；bun run lint 49 problems 与 HEAD 基线完全一致（0 新增；music-heart 曾因删 prop 暴露潜在 refs/set-state 告警，恢复原 eslint-disable 指令回到基线口径）；dev.log 仅既有 instrumentation.ts Edge Runtime 警告
+
+Stage Summary:
+- 交付：①淘宝/美团会话头像+昵称全程跟随联系人资料（实时事件+打开对齐双通道）；②音乐首页=返回键+居中标题+方形圆角每日推荐卡（首歌封面背景），心动页=居中标题无三条杠，我的页保留三条杠，标题点击退出行为全部移除；③灵动岛堆叠系统：音乐×淘宝/美团组合小窗（左歌曲封面圆圈+右配送小窗）、圆圈点开音乐大窗、大窗按展开先后垂直堆叠可同时显示、点大窗收起堆叠并进入对应界面、点别处全部收回，独占模式行为与原来完全一致
+- 改动文件：src/lib/ios/{island-stack(新),taobao-store}.ts、src/components/ios/{MusicIsland,TaobaoIsland,MeituanIsland}.tsx、src/components/apps/{music-home,music-heart,music,taobao,meituan}.tsx
+- 关键决策：①堆叠协调用独立 zustand store（三岛共同读写 order/heights，ResizeObserver 实测大窗高度驱动让位锚位，避免写死高度）；②组合形态几何=圆圈33+间距6+小窗198 居中（圆圈 left calc(50%-118.5px)、小窗 left calc(50%-79.5px)）；③音乐自动展开限定独占模式（组合形态不抢屏，手动点圆圈仍可展开）；④淘宝/美团小窗互斥保留（组合只涉及音乐×一个配送岛）；⑤点大窗统一 collapseAll+导航（与原单岛行为语义一致）；⑥avatarFor 按 idp 投影同步（与微信/QQ 显示一致），phone 登录会话无联系人跳过同步

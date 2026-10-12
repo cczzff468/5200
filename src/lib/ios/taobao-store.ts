@@ -95,6 +95,29 @@ export async function tbResolveIdpIdentity(idp: 'wx' | 'qq'): Promise<{ contactI
   return { contactId: '', name: idp === 'wx' ? '微信用户' : 'QQ用户', avatar: null };
 }
 
+/**
+ * 会话资料跟随全局账号信息（与美团 mtSyncSessionIdentity 同款）：
+ * 按会话绑定的联系人实时读取「我」的最新昵称/头像（avatarFor 按 App 投影，与微信/QQ 显示一致），
+ * 变化则返回新会话（uid 不变，数据隔离不受影响）；联系人缺失/异常时原样返回。
+ * 配合 contact-avatar-changed / contact-updated 事件可实时同步——
+ * 在联系人 App（或微信/QQ 资料页）改头像/昵称后，淘宝不再持旧快照。
+ */
+export async function tbSyncSessionIdentity(s: TbSession): Promise<TbSession> {
+  if (s.idp === 'phone' || !s.contactId) return s;
+  try {
+    const { getContact } = await import('./contacts-store');
+    const { avatarFor } = await import('@/lib/contacts');
+    const c = await getContact(s.contactId);
+    if (!c || c.kind !== 'user') return s;
+    const name = (c.nickname?.trim() || c.name || '').trim() || s.name;
+    const avatar = avatarFor(c, s.idp);
+    if (name === s.name && avatar === s.avatar) return s;
+    return { ...s, name, avatar };
+  } catch {
+    return s;
+  }
+}
+
 // ---------------- kv 基础 ----------------
 
 function load<T>(key: string, def: T): T {

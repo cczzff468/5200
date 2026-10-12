@@ -3,18 +3,24 @@
 /**
  * 美团外卖灵动岛（对齐真机「美团外卖 × iOS 灵动岛」体验，用户规格）：
  * - 小窗（黑色胶囊）：有进行中的外卖单时常驻显示（所有界面：主屏/各 App/锁屏）——
- *   左侧当前骑手形象 + 状态文案（商家接单中/商家备餐中/送货中），右侧剩余时间「N分钟」黄色 + 「送达」；
+ *   左侧当前骑手形象 + 状态文案（商家接单中/商家备餐中/送货中），右侧剩余时间「HH:MM」黄色 + 「送达」；
  * - 大窗（展开卡）：商家图 + 黄色「预计HH:MM送达」+ 状态副文案 + 美团袋鼠标 +
  *   接单→取餐→送达 三节点进度条（骑手形象骑在进度上，随时间推进）；
  *   状态变化（支付成功/商家接单/骑手取餐）时自动展开一次，显示 5 秒收回小窗；
  * - 点小窗 → 展开大窗（一直显示，不自动收回）；
- * - 点大窗 → 进入美团订单详情（复用灵动岛导航总线：switchToApp('meituan') + 订单详情）；
- * - 点大窗以外的地方 → 收回小窗（透明捕获层，iOS 灵动岛同语义）；
+ * - 点大窗 → 收起堆叠并进入美团订单详情（复用灵动岛导航总线：switchToApp('meituan') + 订单详情）；
+ * - 点大窗以外的地方 → 收回大窗（透明捕获层，iOS 灵动岛同语义）；
  * - 聊天消息灵动岛通知展示期间/来电响铃/熄屏/关闭状态栏时整层隐身，恢复后小窗回归；
  * - 剩余分钟按真实时钟每秒推算（etaAt），催单（催一下）提前 eta 后小窗/大窗数字即时变小。
  *
- * 层级 z-[82]：盖住音乐灵动岛（z-81，美团配送优先展示；音乐在播时由 mt-island-store 让音乐弹窗隐身），
- * 低于聊天通知卡（z-93）。大窗的「点击别处」捕获层 z-[81]。
+ * 【灵动岛堆叠】音乐在播（音乐岛可见）时不让位：小窗整体右移，左侧留给音乐封面小圆圈
+ * （组合形态：左圆圈 + 右配送小窗）；音乐大窗展开时小窗让位到堆叠下一槽位；
+ * 大窗按展开先后垂直堆叠、可同时显示（island-stack 协调），点大窗进对应界面。
+ *
+ * 淘宝/美团小窗互斥保留：两者都有进行中单时「最新事件的一方」展示（另一让位）。
+ *
+ * 层级：小窗/大窗 z-[82]（与音乐岛同层，堆叠布局互不重叠），
+ * 低于聊天通知卡（z-93）。大窗的「点击别处」捕获层 z-[80]。
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -23,7 +29,9 @@ import { useSettings, useUI } from '@/lib/ios/store';
 import { useIslandNotify, navigateToChatSession } from '@/lib/ios/island-notify';
 import { useGlobalCall } from '@/lib/ios/global-call';
 import { useIncomingCall } from '@/lib/ios/incoming-call';
+import { useMusic } from '@/lib/ios/music-store';
 import { useMtIsland } from '@/lib/ios/mt-island-store';
+import { islandNextSlotTop, islandTopOf, useIslandStack } from '@/lib/ios/island-stack';
 import { mtCurrentRider } from '@/lib/ios/mt-rider';
 import { mtGetSession, mtLoadOrders, mtUidOf, type MtOrder } from '@/lib/ios/meituan-store';
 import { tbGetSession, tbLoadOrders, tbUidOf } from '@/lib/ios/taobao-store';
@@ -37,6 +45,8 @@ const SPRING: Transition = { type: 'spring', stiffness: 380, damping: 32, mass: 
 const AUTO_COLLAPSE_MS = 5000;
 /** 胶囊/展开态的垂直锚位（与静态灵动岛同位） */
 const PILL_TOP = 11;
+/** 组合形态：配送小窗右移后的左缘（组合总宽 237=圆圈33+间距6+小窗198，整体居中） */
+const COMBO_PILL_LEFT = 'calc(50% - 79.5px)';
 
 /** 来电展示中（与 IslandNotificationLayer 同口径，只读两个通话 store） */
 function useIncomingCallPresenting(): boolean {
@@ -78,7 +88,7 @@ function progressOf(o: MtOrder, now: number): number {
   return 0.55 + 0.42 * frac;
 }
 
-/** 淘宝进行中快递单的最新事件时刻（0=无单）：灵动岛锚位互斥——两岛都有进行中单时「最新事件方」展示 */
+/** 淘宝进行中快递单的最新事件时刻（0=无单）：灵动岛小窗互斥——两岛都有进行中单时「最新事件方」展示 */
 function tbActiveLatestAt(): number {
   try {
     const s = tbGetSession();
@@ -105,19 +115,25 @@ export default function MeituanIsland() {
   const screenOff = useUI((s) => s.screenOff);
   const chatNotifyShowing = useIslandNotify((s) => s.current !== null || s.exiting);
   const callPresenting = useIncomingCallPresenting();
+  // 音乐岛可见（播放中/暂停宽限期）→ 组合形态：小窗右移，左侧留给音乐封面小圆圈
+  const musicIslandVisible = useMusic((s) => s.islandVisible);
+  // 堆叠协调：展开中的大窗序 + 实测高度（决定各大窗/小窗的锚位）
+  const stackOrder = useIslandStack((s) => s.order);
+  const stackHeights = useIslandStack((s) => s.heights);
 
   /** active = 当前进行中的外卖单（每秒重读 kv；null = 无单隐身） */
   const [active, setActive] = useState<MtOrder | null>(null);
-  /** 小窗形态；expanded = 大窗 */
-  const [expanded, setExpanded] = useState(false);
   /** 每秒刷新的时钟（剩余分钟/进度推进） */
   const [nowTs, setNowTs] = useState(() => Date.now());
 
-  const expandedRef = useRef(false);
+  /** 展开态来自堆叠 store（与音乐/淘宝大窗统一排序堆叠） */
+  const expanded = stackOrder.includes('mt');
   const autoExpandRef = useRef(false);
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 已消费的状态签名（订单id|状态）：变化即自动展开大窗 5 秒（含通知层让位后的补放） */
   const seenSigRef = useRef<string>('');
+  /** 大窗内容测量（高度回写堆叠 store，供后续槽位定位） */
+  const largeRef = useRef<HTMLDivElement | null>(null);
 
   const readActive = () => {
     try {
@@ -135,10 +151,6 @@ export default function MeituanIsland() {
     }
   };
 
-  useEffect(() => {
-    expandedRef.current = expanded;
-  }, [expanded]);
-
   const clearAuto = () => {
     if (autoTimer.current) {
       clearTimeout(autoTimer.current);
@@ -148,13 +160,13 @@ export default function MeituanIsland() {
 
   /** 自动展开大窗 5 秒（仅小窗形态时） */
   const autoExpand = () => {
-    if (expandedRef.current) return;
+    if (useIslandStack.getState().order.includes('mt')) return;
     autoExpandRef.current = true;
-    setExpanded(true);
+    useIslandStack.getState().expand('mt');
     if (autoTimer.current) clearTimeout(autoTimer.current);
     autoTimer.current = setTimeout(() => {
       autoTimer.current = null;
-      if (autoExpandRef.current) setExpanded(false);
+      if (autoExpandRef.current) useIslandStack.getState().collapse('mt');
     }, AUTO_COLLAPSE_MS);
   };
 
@@ -162,13 +174,13 @@ export default function MeituanIsland() {
   const expandManually = () => {
     autoExpandRef.current = false;
     clearAuto();
-    setExpanded(true);
+    useIslandStack.getState().expand('mt');
   };
 
   const collapse = () => {
     autoExpandRef.current = false;
     clearAuto();
-    setExpanded(false);
+    useIslandStack.getState().collapse('mt');
   };
 
   // 数据源：每秒轮询（kv 无订阅总线）+ 订单变化事件即时刷新 + 时钟推进
@@ -201,7 +213,7 @@ export default function MeituanIsland() {
     chatNotifyShowing ||
     callPresenting ||
     !active ||
-    // 淘宝快递灵动岛有进行中单且其最新事件更新 → 美团让位（同锚位互斥，平局美团优先）
+    // 淘宝快递灵动岛有进行中单且其最新事件更新 → 美团让位（小窗互斥，平局美团优先）
     (() => {
       const tbLatest = tbActiveLatestAt();
       if (tbLatest <= 0 || !active) return false;
@@ -227,13 +239,25 @@ export default function MeituanIsland() {
     Promise.resolve().then(() => autoExpand());
   }, [active, hidden]);
 
-  // 可见性写入共享 store（音乐灵动岛/状态栏消费）+ 隐身时收回展开态（微任务里 setState）
+  // 可见性写入共享 store（音乐岛组合判定/状态栏消费）+ 隐身时收回展开态（微任务里 setState）
   useEffect(() => {
     useMtIsland.getState().setVisible(!hidden);
-    if (hidden && expandedRef.current) {
-      Promise.resolve().then(() => collapse());
+    if (hidden && useIslandStack.getState().order.includes('mt')) {
+      Promise.resolve().then(() => useIslandStack.getState().collapse('mt'));
     }
   }, [hidden]);
+
+  // 大窗高度实测 → 回写堆叠 store（后续槽位/让位锚位据此计算）
+  useEffect(() => {
+    if (!expanded) return;
+    const el = largeRef.current;
+    if (!el) return;
+    const write = () => useIslandStack.getState().setHeight('mt', el.offsetHeight);
+    Promise.resolve().then(write);
+    const ro = new ResizeObserver(write);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [expanded]);
 
   if (hidden || !active) return null;
 
@@ -250,14 +274,78 @@ export default function MeituanIsland() {
   };
   const riderSrc = mtCurrentRider().src;
 
+  /** 小窗内容（独占/组合两形态共用） */
+  const pillContent = (
+    <div className="absolute inset-x-0 top-0 flex items-center gap-1.5 pl-[3px] pr-3" style={{ height: PILL.height }}>
+      <img
+        src={riderSrc}
+        alt=""
+        draggable={false}
+        className="h-[27px] w-[27px] shrink-0 select-none object-contain"
+        style={{ filter: 'drop-shadow(0 1.5px 2px rgba(0,0,0,0.35))' }}
+      />
+      <span className="min-w-0 shrink-0 text-[12px] font-medium leading-none text-white/90">{pillLabelOf(active)}</span>
+      <span className="min-w-0 flex-1" />
+      <span className="shrink-0 whitespace-nowrap text-[12px] leading-none">
+        <span className="font-bold text-[#FFC300]" data-testid="mt-island-left">
+          {leftText}
+        </span>
+        {leftMs >= 60_000 && <span className="ml-[3px] text-white/75">送达</span>}
+      </span>
+    </div>
+  );
+
+  // ---------- 组合形态（音乐岛可见 + 本窗未展开）：小窗右移，左侧留给音乐封面小圆圈 ----------
+  if (musicIslandVisible && !expanded) {
+    const musicExpanded = stackOrder.includes('music');
+    const top = musicExpanded ? islandNextSlotTop(stackOrder, stackHeights) : PILL_TOP;
+    return (
+      <motion.div
+        className="pointer-events-none absolute z-[82]"
+        initial={false}
+        animate={{ top }}
+        transition={SPRING}
+        style={{ left: COMBO_PILL_LEFT }}
+        data-testid="mt-island-combo"
+      >
+        <motion.div
+          data-testid="mt-island"
+          role="button"
+          aria-label="美团配送弹窗：展开配送进度"
+          initial={false}
+          animate={{ width: PILL.width, height: PILL.height, borderRadius: PILL.borderRadius }}
+          transition={SPRING}
+          onClick={expandManually}
+          className="pointer-events-auto relative cursor-pointer overflow-hidden bg-black text-white shadow-[0_10px_30px_-8px_rgba(0,0,0,0.5)] outline-none"
+        >
+          {pillContent}
+        </motion.div>
+      </motion.div>
+    );
+  }
+
+  // 展开大窗的垂直锚位按堆叠序计算（独占模式 order=['mt'] → 原位 top=11）
+  const top = expanded ? islandTopOf(stackOrder, stackHeights, 'mt') : PILL_TOP;
+
   return (
     <>
-      {/* 大窗展开期间：点击别处收回小窗（透明捕获层，iOS 灵动岛同语义） */}
+      {/* 大窗展开期间：点击别处收回全部堆叠大窗（透明捕获层，iOS 灵动岛同语义） */}
       {expanded && (
-        <div className="absolute inset-0 z-[81]" onClick={collapse} aria-label="收起美团配送弹窗" data-testid="mt-island-catcher" />
+        <div
+          className="absolute inset-0 z-[80]"
+          onClick={() => useIslandStack.getState().collapseAll()}
+          aria-label="收起美团配送弹窗"
+          data-testid="mt-island-catcher"
+        />
       )}
-      <div className="pointer-events-none absolute inset-x-0 z-[82] flex flex-col items-center" style={{ top: PILL_TOP }}>
+      <motion.div
+        className="pointer-events-none absolute inset-x-0 z-[82] flex flex-col items-center"
+        initial={false}
+        animate={{ top }}
+        transition={SPRING}
+      >
         <motion.div
+          ref={largeRef}
           data-testid="mt-island"
           role="button"
           aria-label={expanded ? '美团配送弹窗：打开订单详情' : '美团配送弹窗：展开配送进度'}
@@ -272,8 +360,9 @@ export default function MeituanIsland() {
             if (!expanded) {
               expandManually();
             } else {
-              // 点大窗 → 进订单详情（锁屏/熄屏时 navigateToChatSession 内部守卫不跳转）
-              collapse();
+              // 点大窗 → 收起堆叠并进订单详情（灵动岛堆叠：点大窗进对应界面；
+              // 锁屏/熄屏时 navigateToChatSession 内部守卫不跳转）
+              useIslandStack.getState().collapseAll();
               navigateToChatSession('meituan', active.id);
             }
           }}
@@ -284,24 +373,8 @@ export default function MeituanIsland() {
             initial={false}
             animate={{ opacity: expanded ? 0 : 1 }}
             transition={{ duration: 0.14 }}
-            className="absolute inset-x-0 top-0 flex items-center gap-1.5 pl-[3px] pr-3"
-            style={{ height: PILL.height }}
           >
-            <img
-              src={riderSrc}
-              alt=""
-              draggable={false}
-              className="h-[27px] w-[27px] shrink-0 select-none object-contain"
-              style={{ filter: 'drop-shadow(0 1.5px 2px rgba(0,0,0,0.35))' }}
-            />
-            <span className="min-w-0 shrink-0 text-[12px] font-medium leading-none text-white/90">{pillLabelOf(active)}</span>
-            <span className="min-w-0 flex-1" />
-            <span className="shrink-0 whitespace-nowrap text-[12px] leading-none">
-              <span className="font-bold text-[#FFC300]" data-testid="mt-island-left">
-                {leftText}
-              </span>
-              {leftMs >= 60_000 && <span className="ml-[3px] text-white/75">送达</span>}
-            </span>
+            {pillContent}
           </motion.div>
 
           {/* ---------- 大窗内容（宽度形变基本完成后错峰淡入，避免形变中内容被裁切的观感） ---------- */}
@@ -370,7 +443,7 @@ export default function MeituanIsland() {
             <div className="h-1.5" />
           </motion.div>
         </motion.div>
-      </div>
+      </motion.div>
     </>
   );
 }

@@ -22,7 +22,6 @@ import {
   ChevronsDown,
   Heart,
   Loader2,
-  Menu,
   Pause,
   Play,
 } from 'lucide-react';
@@ -36,7 +35,6 @@ import {
   type NcmSong,
 } from '@/lib/ios/music-api';
 import { useMusic } from '@/lib/ios/music-store';
-import { useUI } from '@/lib/ios/store';
 import { CoverImg, EmptyBlock, fmtClock } from './music-shared';
 
 /** 推荐结果项：歌 + 推荐理由（跟种子走） */
@@ -55,7 +53,7 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-export function MusicHeart({ onSettings }: { onSettings: () => void }) {
+export function MusicHeart() {
   const loginUid = useMusic((s) => s.loginUid);
   const likedIds = useMusic((s) => s.likedIds);
   const likedSongs = useMusic((s) => s.likedSongs);
@@ -278,26 +276,11 @@ export function MusicHeart({ onSettings }: { onSettings: () => void }) {
         if (e.pointerType === 'mouse') endPull();
       }}
     >
-      {/* 顶栏（深色版：白字白图标，透明融进深色背景） */}
-      <div className="sticky top-0 z-20 flex items-center gap-3 px-4 pb-2 pt-[60px]">
-        <button
-          type="button"
-          onClick={onSettings}
-          data-testid="music-heart-settings"
-          className="text-white/85 active:scale-95"
-          aria-label="设置"
-        >
-          <Menu className="h-[22px] w-[22px]" />
-        </button>
-        <button
-          type="button"
-          onClick={() => useUI.getState().exitForegroundApp()}
-          data-testid="music-heart-title"
-          aria-label="返回主界面"
-          className="active:scale-95"
-        >
-          <span className="text-[19px] font-bold text-white">心动</span>
-        </button>
+      {/* 顶栏（深色版：白字居中标题；用户反馈：三条杠删除、标题居中且不可点退出） */}
+      <div className="sticky top-0 z-20 flex items-center justify-center px-4 pb-2 pt-[60px]">
+        <span data-testid="music-heart-title" className="text-[19px] font-bold text-white">
+          心动
+        </span>
       </div>
 
       {/* 下拉刷新指示区（深色版） */}

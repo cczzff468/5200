@@ -138,6 +138,7 @@ import {
   tbPushSearchHist,
   tbRemoveCartItems,
   tbResolveIdpIdentity,
+  tbSyncSessionIdentity,
   tbSaveAddrs,
   tbSaveCart,
   tbSaveOrders,
@@ -7573,6 +7574,30 @@ export default function TaobaoApp() {
     };
     window.addEventListener(ISLAND_NAV_EVENT, onNav);
     return () => window.removeEventListener(ISLAND_NAV_EVENT, onNav);
+  }, []);
+
+  // 头像/昵称跟随全局账号信息（与美团同款）：联系人 App / 微信 / QQ 里改头像、改昵称保存后，
+  // 淘宝会话实时同步（contact-avatar-changed / contact-updated）；打开 App 时先对齐一次——
+  // 改头像时淘宝没开着，下次打开也能刷新（原 bug：头像快照存进 localStorage 后再不更新）。
+  useEffect(() => {
+    const syncIdentity = () => {
+      void (async () => {
+        const s = tbGetSession();
+        if (!s) return;
+        const synced = await tbSyncSessionIdentity(s);
+        if (synced !== s) {
+          tbSetSession(synced);
+          setSession(synced);
+        }
+      })();
+    };
+    syncIdentity();
+    window.addEventListener('contact-avatar-changed', syncIdentity);
+    window.addEventListener('contact-updated', syncIdentity);
+    return () => {
+      window.removeEventListener('contact-avatar-changed', syncIdentity);
+      window.removeEventListener('contact-updated', syncIdentity);
+    };
   }, []);
 
   // Task 41：登录后恢复 AI 生成商品的持久化注册表（刷新页面/重开 App 后详情/下单链路可用）

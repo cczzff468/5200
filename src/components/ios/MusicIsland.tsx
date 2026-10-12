@@ -1,24 +1,26 @@
 'use client';
 
 /**
- * 音乐灵动岛（第十六轮反馈，第十八轮修订）：音乐在播时占据灵动岛锚位的常驻音乐弹窗，所有界面都显示。
- *
- * 形态与交互（按用户规格）：
+ * 音乐灵动岛（第十六轮反馈，第十八轮修订；本轮新增「灵动岛堆叠」）：
  * - 小弹窗：黑色胶囊（封面 + 歌名 + 红色波形动画），常驻显示（主屏幕/所有 App/锁屏都显示）；
- * - 大弹窗：展开的播放卡（封面 + 歌名 + 当前歌词行 + 进度条 + 上/暂停/下 + 红心，参考网易云通知播放卡），
- *   自动展开时显示 5 秒后收回小弹窗；开始播放/切歌时自动展开一次；
+ * - 大弹窗：展开的播放卡（封面 + 歌名 + 当前歌词行 + 进度条 + 上/暂停/下 + 红心），
+ *   自动展开时显示 5 秒后收回小弹窗；开始播放/切歌时自动展开一次（仅独占模式）；
  * - 点小弹窗 → 展开为大弹窗并一直显示（不自动收回）；
- * - 点大弹窗 → 跳转到音乐 App 听歌界面（锁屏/熄屏时只展开收起不跳转）；
+ * - 点大弹窗 → 收起堆叠并跳转到音乐 App 听歌界面（锁屏/熄屏时只展开收起不跳转）；
  * - 点大弹窗以外的地方 → 收回小弹窗（透明捕获层，仅展开期间存在）；
- * - 不放音乐（无歌/暂停）时弹窗整体消失（第十八轮反馈），恢复播放后小弹窗回归；
- * - 聊天消息灵动岛通知展示期间 → 音乐弹窗整体消失（通知收起后音乐弹窗恢复）；
+ * - 不放音乐（无歌/暂停）时弹窗整体消失，恢复播放后小弹窗回归；
+ * - 聊天消息灵动岛通知展示期间 → 音乐弹窗整体消失（通知收起后恢复）；
  *   来电响铃/熄屏期间同样隐身；设置里关闭状态栏（灵动岛）时一并隐藏。
- * - 大弹窗不下沉（第二十三轮反馈：撤销第二十二轮的下沉方案，恢复原位 top=11）；
+ * - 【灵动岛堆叠】播放音乐时淘宝/美团配送灵动岛出现 → 不再整体隐身（原让位逻辑撤销）：
+ *   在配送小窗左侧渲染一个歌曲封面小圆圈（组合形态：左圆圈 + 右配送小窗），
+ *   点小圆圈 → 音乐大窗展开；大窗按展开先后垂直堆叠、可同时显示（island-stack 协调）；
+ *   配送大窗展开时小圆圈让位到堆叠下一槽位。自动展开只在独占模式进行（组合模式不抢屏）。
+ * - 大弹窗不下沉（第二十三轮反馈：恢复原位 top=11）；
  * - 弹窗可见时状态栏只隐藏「移动数据」（信号）图标，WiFi/电量保留（真实 iPhone 灵动岛同语义），
  *   弹窗消失后图标恢复——可见性由本组件写入 music-store.islandVisible，StatusBar 只读。
  *
- * 层级 z-[81]：盖住静态灵动岛（z-80 同位同色无缝接管），低于聊天通知卡（z-93）。
- * 大弹窗的「点击别处」捕获层 z-[80]（展开期间拦截一次点击用于收起，iOS 灵动岛同语义）。
+ * 层级：小弹窗/圆圈/大弹窗 z-[82]（与淘宝/美团岛同层，堆叠布局互不重叠），
+ * 低于聊天通知卡（z-93）；「点击别处」捕获层 z-[80]。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -31,6 +33,12 @@ import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { useMusic } from '@/lib/ios/music-store';
 import { useMtIsland } from '@/lib/ios/mt-island-store';
 import { useTbIsland } from '@/lib/ios/tb-island-store';
+import {
+  ISLAND_TOP,
+  islandNextSlotTop,
+  islandTopOf,
+  useIslandStack,
+} from '@/lib/ios/island-stack';
 import { songCover } from '@/lib/ios/music-api';
 import { fmtClock } from '@/components/apps/music-shared';
 
@@ -43,8 +51,8 @@ const SPRING: Transition = { type: 'spring', stiffness: 380, damping: 32, mass: 
 const AUTO_COLLAPSE_MS = 5000;
 /** 暂停/关闭音乐后弹窗延迟消失时长（第二十轮反馈：不立马消失，显示 5 秒再收起） */
 const PAUSE_GRACE_MS = 5000;
-/** 胶囊/展开态的垂直锚位（第二十三轮反馈：撤销下沉，大弹窗恢复原位与胶囊同锚） */
-const PILL_TOP = 11;
+/** 组合形态几何：组合总宽 = 封面圆圈 33 + 间距 6 + 配送小窗 198，整体居中于灵动岛锚位 */
+const COMBO_CIRCLE_LEFT = 'calc(50% - 118.5px)';
 
 /** 来电展示中（与 IslandNotificationLayer 同口径，只读两个通话 store） */
 function useIncomingCallPresenting(): boolean {
@@ -62,8 +70,7 @@ function isHiddenNow(): boolean {
   if (!m.current || !m.playing) return true; // 第十八轮反馈：不放音乐（无歌/暂停）时弹窗消失
   if (!useSettings.getState().statusBarVisible) return true;
   if (useUI.getState().screenOff) return true;
-  if (useMtIsland.getState().visible) return true; // 美团灵动岛展示中：同一锚位让位给美团配送
-  if (useTbIsland.getState().visible) return true; // 淘宝快递灵动岛展示中：同一锚位让位
+  // 灵动岛堆叠：淘宝/美团配送岛出现时音乐岛不再隐身（改为左侧封面小圆圈组合形态）
   const n = useIslandNotify.getState();
   if (n.current || n.exiting) return true;
   const c = useIncomingCall.getState().call;
@@ -124,21 +131,24 @@ export default function MusicIsland() {
   const lyricLines = useMusic((s) => s.lyricLines);
   const lyricFor = useMusic((s) => s.lyricFor);
   const statusBarVisible = useSettings((s) => s.statusBarVisible);
-  const locked = useUI((s) => s.locked);
   const screenOff = useUI((s) => s.screenOff);
   const chatNotifyShowing = useIslandNotify((s) => s.current !== null || s.exiting);
   const callPresenting = useIncomingCallPresenting();
-  // 美团/淘宝配送灵动岛展示中：同一灵动岛锚位只容一个常驻弹窗，配送优先，音乐弹窗隐身
+  // 淘宝/美团配送灵动岛展示中 → 组合形态（左侧封面小圆圈 + 右侧配送小窗），音乐岛不再整体隐身
   const mtIslandVisible = useMtIsland((s) => s.visible);
   const tbIslandVisible = useTbIsland((s) => s.visible);
+  // 堆叠协调：展开中的大窗序 + 实测高度（决定各大窗/圆圈的垂直锚位）
+  const stackOrder = useIslandStack((s) => s.order);
+  const stackHeights = useIslandStack((s) => s.heights);
 
-  /** small = 常驻小弹窗；large = 展开大弹窗 */
-  const [expanded, setExpanded] = useState(false);
+  /** 展开态来自堆叠 store（与淘宝/美团大窗统一排序堆叠） */
+  const expanded = stackOrder.includes('music');
   /** 自动展开（5 秒收回）还是手动展开（一直显示） */
   const expandedAutoRef = useRef(false);
   const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const expandedRef = useRef(false);
   const lastPlayIdRef = useRef<number | null>(null);
+  /** 大窗内容测量（高度回写堆叠 store，供后续槽位定位） */
+  const largeRef = useRef<HTMLDivElement | null>(null);
 
   // 第二十轮反馈：暂停/关闭音乐后弹窗不立即消失，显示 5 秒再收起（宽限期内恢复播放则继续显示）。
   // 只在「播放中 → 暂停」的跳变时进入宽限；冷启动（本来就暂停）不显示弹窗。
@@ -176,7 +186,7 @@ export default function MusicIsland() {
 
   // 不放音乐（暂停超过 5 秒宽限 / 无歌）时弹窗整体消失（第十八轮反馈 + 第二十轮宽限）
   const hidden =
-    !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || mtIslandVisible || tbIslandVisible || !current || (!playing && !pauseGrace);
+    !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !current || (!playing && !pauseGrace);
 
   // 弹窗可见性 → music-store.islandVisible（StatusBar 据此隐藏/恢复「移动数据」图标）。
   // 订阅外部派生值（含 pauseGrace 内部态）在回调里 setState，渲染期不碰 store
@@ -185,10 +195,6 @@ export default function MusicIsland() {
       useMusic.setState({ islandVisible: !hidden });
     }
   }, [hidden]);
-
-  useEffect(() => {
-    expandedRef.current = expanded;
-  }, [expanded]);
 
   const clearAuto = () => {
     if (autoTimer.current) {
@@ -207,7 +213,7 @@ export default function MusicIsland() {
         autoTimer.current = null;
       }
       expandedAutoRef.current = false;
-      setExpanded(false);
+      useIslandStack.getState().collapse('music');
     };
     maybeReset();
     const unsubs = [
@@ -221,7 +227,7 @@ export default function MusicIsland() {
     return () => unsubs.forEach((u) => u());
   }, []);
 
-  /** 换歌/开始播放：自动展开大弹窗 5 秒（小窗状态下；已被用户展开或整层隐身时不抢）。
+  /** 换歌/开始播放：自动展开大弹窗 5 秒（仅独占模式；组合形态/已展开/整层隐身时不抢）。
    *  订阅外部系统（zustand 播放引擎）在回调里 setState —— 响应的是真正的播放事件而非渲染派生 */
   useEffect(() => {
     return useMusic.subscribe((s) => {
@@ -229,17 +235,19 @@ export default function MusicIsland() {
       if (!s.playing || !song) return;
       if (lastPlayIdRef.current === song.id) return;
       lastPlayIdRef.current = song.id;
-      if (expandedRef.current) return;
+      if (useIslandStack.getState().order.includes('music')) return;
+      // 灵动岛堆叠：配送岛（淘宝/美团）展示中不自动抢屏，保持组合形态（左圆圈 + 右配送小窗）
+      if (useMtIsland.getState().visible || useTbIsland.getState().visible) return;
       // 整层隐身期间（消息通知/来电/熄屏/关闭状态栏）不抢展开，恢复后从小弹窗开始
       if (!useSettings.getState().statusBarVisible || useUI.getState().screenOff) return;
       if (useIslandNotify.getState().current || useIslandNotify.getState().exiting) return;
       if (useIncomingCall.getState().call) return;
       expandedAutoRef.current = true;
-      setExpanded(true);
+      useIslandStack.getState().expand('music');
       if (autoTimer.current) clearTimeout(autoTimer.current);
       autoTimer.current = setTimeout(() => {
         autoTimer.current = null;
-        if (expandedAutoRef.current) setExpanded(false); // 只有自动展开才 5 秒收回
+        if (expandedAutoRef.current) useIslandStack.getState().collapse('music'); // 只有自动展开才 5 秒收回
       }, AUTO_COLLAPSE_MS);
     });
   }, []);
@@ -250,13 +258,13 @@ export default function MusicIsland() {
   const expandManually = () => {
     expandedAutoRef.current = false;
     clearAuto();
-    setExpanded(true);
+    useIslandStack.getState().expand('music');
   };
 
   const collapse = () => {
     expandedAutoRef.current = false;
     clearAuto();
-    setExpanded(false);
+    useIslandStack.getState().collapse('music');
   };
 
   // 大弹窗展开时补拉歌词（歌词行随进度联动）
@@ -264,6 +272,18 @@ export default function MusicIsland() {
     if (!expanded || !current || lyricFor === current.id) return;
     void useMusic.getState().loadLyric(current.id);
   }, [expanded, current, lyricFor]);
+
+  // 大窗高度实测 → 回写堆叠 store（后续槽位/让位锚位据此计算）
+  useEffect(() => {
+    if (!expanded) return;
+    const el = largeRef.current;
+    if (!el) return;
+    const write = () => useIslandStack.getState().setHeight('music', el.offsetHeight);
+    Promise.resolve().then(write);
+    const ro = new ResizeObserver(write);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [expanded]);
 
   /** 当前歌词行（无歌词/未加载时显示歌手占位） */
   const lyricText = useMemo(() => {
@@ -281,25 +301,63 @@ export default function MusicIsland() {
 
   if (hidden) return null;
 
+  const combo = mtIslandVisible || tbIslandVisible;
+  const deliveryExpanded = stackOrder.includes('tb') || stackOrder.includes('mt');
+
+  // ---------- 组合形态（音乐在播 + 配送岛在显）且音乐大窗未展开：只渲染左侧封面小圆圈 ----------
+  if (combo && !expanded) {
+    const top = deliveryExpanded ? islandNextSlotTop(stackOrder, stackHeights) : ISLAND_TOP;
+    return (
+      <motion.div
+        className="pointer-events-none absolute z-[82]"
+        initial={false}
+        animate={{ top }}
+        transition={SPRING}
+        style={{ left: COMBO_CIRCLE_LEFT }}
+        data-testid="music-island-combo"
+      >
+        <button
+          type="button"
+          aria-label="展开音乐播放控制"
+          data-testid="music-island-circle"
+          onClick={expandManually}
+          className="pointer-events-auto block h-[33px] w-[33px] cursor-pointer overflow-hidden rounded-full bg-black shadow-[0_4px_12px_rgba(0,0,0,0.45)] ring-1 ring-white/25 outline-none active:scale-95"
+        >
+          <img
+            src={songCover(current!)}
+            alt=""
+            draggable={false}
+            className="h-full w-full rounded-full object-cover"
+          />
+        </button>
+      </motion.div>
+    );
+  }
+
   const dur = duration || (current?.dt ?? 0) / 1000 || 0;
   const pct = dur > 0 ? Math.min(100, (position / dur) * 100) : 0;
+  // 展开大窗的垂直锚位按堆叠序计算（独占模式 order=['music'] → 原位 top=11）
+  const top = expanded ? islandTopOf(stackOrder, stackHeights, 'music') : ISLAND_TOP;
 
   return (
     <>
-      {/* 大弹窗展开期间：点击别处收回小弹窗（透明捕获层，iOS 灵动岛同语义；锁屏时同样可收起） */}
+      {/* 大弹窗展开期间：点击别处收回全部堆叠大窗（透明捕获层，iOS 灵动岛同语义；锁屏时同样可收起） */}
       {expanded && (
         <div
           className="absolute inset-0 z-[80]"
-          onClick={collapse}
+          onClick={() => useIslandStack.getState().collapseAll()}
           data-testid="music-island-catcher"
           aria-label="收起音乐弹窗"
         />
       )}
-      <div
-        className="pointer-events-none absolute inset-x-0 z-[81] flex flex-col items-center"
-        style={{ top: PILL_TOP }}
+      <motion.div
+        className="pointer-events-none absolute inset-x-0 z-[82] flex flex-col items-center"
+        initial={false}
+        animate={{ top }}
+        transition={SPRING}
       >
         <motion.div
+          ref={largeRef}
           data-testid="music-island"
           role="button"
           aria-label={expanded ? '音乐弹窗：打开听歌界面' : '音乐弹窗：展开播放控制'}
@@ -310,6 +368,8 @@ export default function MusicIsland() {
             if (!expanded) {
               expandManually();
             } else {
+              // 点大弹窗 → 收起堆叠并进入听歌界面（灵动岛堆叠：点大窗进对应界面）
+              useIslandStack.getState().collapseAll();
               openPlayerFromIsland();
             }
           }}
@@ -438,7 +498,7 @@ export default function MusicIsland() {
             </div>
           </motion.div>
         </motion.div>
-      </div>
+      </motion.div>
     </>
   );
 }

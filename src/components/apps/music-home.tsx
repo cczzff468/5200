@@ -9,12 +9,12 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   CalendarDays,
   ChevronRight,
   ChevronsDown,
   Heart,
   Loader2,
-  Menu,
   Play,
   Signal,
   TrendingUp,
@@ -25,6 +25,7 @@ import {
   personalizedNewSongs,
   personalizedPlaylists,
   simiSong,
+  songCover,
   toplist,
   type NcmPlaylist,
   type NcmSong,
@@ -250,32 +251,29 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
         if (e.pointerType === 'mouse') endPull();
       }}
     >
-      {/* 顶栏：设置 + 标题 + 右上角头像（游客/登录都可点） */}
-      <div className="sticky top-0 z-20 flex items-center gap-3 bg-[#F8F8F8]/90 px-4 pb-2 pt-[60px] backdrop-blur-xl dark:bg-black/90">
-        <button
-          type="button"
-          onClick={onSettings}
-          data-testid="music-home-settings"
-          className="text-zinc-600 active:scale-95 dark:text-zinc-300"
-          aria-label="设置"
-        >
-          <Menu className="h-[22px] w-[22px]" />
-        </button>
-        {/* 点「音乐」两字退出到手机主界面（第十四轮反馈） */}
+      {/* 顶栏：左返回键（退出到手机主界面）+ 居中标题 + 右上角头像（游客/登录都可点）；
+          标题不再可点（用户反馈：不要一点标题就退回主界面），退出职责移交左侧返回键 */}
+      <div className="sticky top-0 z-20 grid grid-cols-[44px_1fr_44px] items-center bg-[#F8F8F8]/90 px-4 pb-2 pt-[60px] backdrop-blur-xl dark:bg-black/90">
         <button
           type="button"
           onClick={() => useUI.getState().exitForegroundApp()}
-          data-testid="music-home-title"
+          data-testid="music-home-back"
           aria-label="返回主界面"
-          className="active:scale-95"
+          className="-ml-2 justify-self-start text-zinc-600 active:scale-95 dark:text-zinc-300"
         >
-          <span className="text-[19px] font-bold text-zinc-900 dark:text-zinc-100">音乐</span>
+          <ArrowLeft className="h-[22px] w-[22px]" />
         </button>
+        <span
+          data-testid="music-home-title"
+          className="text-center text-[19px] font-bold text-zinc-900 dark:text-zinc-100"
+        >
+          音乐
+        </span>
         <button
           type="button"
           onClick={() => setAvatarSheet(true)}
           data-testid="music-home-avatar"
-          className="ml-auto flex items-center gap-2 active:scale-95"
+          className="justify-self-end active:scale-95"
           aria-label="账号"
         >
           <CoverImg src={headAvatar} className="h-8 w-8" rounded="rounded-full" alt={headName} />
@@ -358,28 +356,34 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
           type="button"
           onClick={() => openPlaylist(0, 'daily')}
           data-testid="music-home-daily"
-          className="relative mx-4 mt-1 flex w-[calc(100%-32px)] items-center gap-3 overflow-hidden rounded-full py-2.5 pl-3 pr-3 text-left active:scale-[0.99]"
+          className="relative mx-4 mt-1 flex h-[108px] w-[calc(100%-32px)] items-center gap-3 overflow-hidden rounded-2xl pl-4 pr-3 text-left active:scale-[0.99]"
         >
-          {/* 毛玻璃胶囊风格（第二十八轮；第二十九轮反馈「模糊一点」）：
-              全圆角胶囊 + 强磨砂（blur-3xl 64px + 饱和度提升）+ 低透明度白底透出下层内容 */}
-          <span aria-hidden="true" className="absolute inset-0 bg-white/40 backdrop-blur-3xl backdrop-saturate-150 dark:bg-zinc-800/50" />
-          <span
-            aria-hidden="true"
-            className="absolute inset-0 rounded-full ring-1 ring-white/80 ring-inset dark:ring-white/10"
-          />
-          <span className="relative flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-full bg-white/70 ring-1 ring-black/5 dark:bg-white/10 dark:ring-white/10">
-            <CalendarDays className="h-[18px] w-[18px] text-zinc-800 dark:text-zinc-100" />
-            <span className="text-[9px] leading-none text-zinc-600 dark:text-zinc-300">
+          {/* 方形圆角大卡（用户反馈：胶囊改方形圆角）；背景=今日每日推荐第一首歌的封面，
+              深色渐变压底保证白字可读；无每日数据时深色渐变兜底 */}
+          {daily && daily.length > 0 ? (
+            <img
+              src={songCover(daily[0])}
+              alt=""
+              draggable={false}
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : (
+            <span aria-hidden="true" className="absolute inset-0 bg-gradient-to-r from-zinc-700 to-zinc-900" />
+          )}
+          <span aria-hidden="true" className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/45 to-black/15" />
+          <span className="relative flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-full bg-white/20 ring-1 ring-white/40 backdrop-blur-md">
+            <CalendarDays className="h-[18px] w-[18px] text-white" />
+            <span className="text-[9px] leading-none text-white/85">
               {today.getMonth() + 1}.{today.getDate()}
             </span>
           </span>
           <span className="relative min-w-0 flex-1">
-            <span className="block text-[15px] font-bold leading-tight text-zinc-900 dark:text-white">每日推荐</span>
-            <span className="mt-0.5 block truncate text-[11px] text-zinc-600 dark:text-zinc-300">
+            <span className="block text-[15px] font-bold leading-tight text-white [text-shadow:0_1px_3px_rgba(0,0,0,0.45)]">每日推荐</span>
+            <span className="mt-0.5 block truncate text-[11px] text-white/85">
               {daily ? `今日限定好歌推荐 · ${daily.length} 首` : '根据你的口味生成个性化歌单'}
             </span>
           </span>
-          <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-900/85 text-white dark:bg-white dark:text-zinc-900">
+          <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/90 text-zinc-900">
             <Play className="h-4 w-4" fill="currentColor" strokeWidth={0} />
           </span>
         </button>
