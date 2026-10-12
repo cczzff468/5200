@@ -18725,3 +18725,22 @@ Stage Summary:
 - 交付：①打电话界面识别口径修复——在联系人 App 建了人、任一 App 加过好友的联系人，通话界面显示名字+头像（换头像立即生效），完全未加好友的保持陌生号语义；②「编辑保存后全按最新的来」八处修复：微信/QQ「我」快照随联系人事件重派生、朋友圈/QQ 空间自己旧帖名字头像实时解析、群聊 me 解析排除小号档案、AI 记忆称谓用联系人真名、createContact 广播补齐、视频通话自画像改联系人源；③机主身份双向同步（联系人↔设置›个人信息）：任一侧改名字/头像，锁屏/设置/微信/QQ/信息/通话界面/AI 称谓全端即时一致；④localStorage 全量清单已列出（222 处/50 文件，未改动）
 - 改动文件：src/components/apps/{phone,wechat,qq,wx-group,qq-group}.tsx、src/lib/ios/{contacts-store,owner-profile-sync(新增)}.ts、src/lib/chat-stream-store.ts、src/components/ios/PhoneShell.tsx
 - 关键决策：①电话「认识联系人」口径=union(isFriend, friendWx/Qq/Sms 按现行账号)——同时满足 Task 51 陌生号语义与本轮「编辑过的 AI 要显示」；②身份同步只在「字段实变」时镜像+双向 diff 收敛，不做全量对拷（保留两侧既有差异直到下一次编辑，避免开机静默改用户数据）；③设置侧头像写联系人前过 normalizeAvatar 校验，防止大图写库被静默清空
+
+---
+Task ID: 13
+Agent: 主协调者 (Z.ai Code)
+Task: 用户两条——①把占内存大的 localStorage 存储改成 IndexedDB（不需要改的保留）；②API 设置里全部填对但「测试连接」一直失败，排查修复
+
+Work Log:
+- 【测试失败根因定位】settings.tsx:2081 调 fetch('/api/settings/test')，但该 API 路由从未创建（src/app/api/settings/ 下只有 models/）——公网地址必 404 → res.json() 失败 data=null → 落到兜底文案「测试失败，请稍后重试」。私网地址反而因 isPrivateApiUrl 走浏览器直连兜底所以"能用"。深层原因：.gitignore:49 的 `test` 模式会吞掉任何名为 test 的目录（此前即使有人建过该路由也提交不上去）
+- 【修复】新建 src/app/api/settings/test-connection/route.ts（避开 gitignore `test` 地雷命名）：服务端代理测连，口径与 /api/settings/models、/api/chat、directTest 全对齐——buildChatCandidates 三形态端点归一化（完整端点/v1 结尾/裸域名，自动修 /v1/v1）；私网地址→502+directOnly:true；403 地区限制→directOnly；全候选网络不可达→502+directOnly（三种情况客户端都自动转浏览器直连）；401/404/400/429/5xx→透传上游错误原文+connected:true（客户端黄条「接口本身可达，问题出在配置」）；400 参数兼容重试（max_completion_tokens→去温度）同款三连；200 响应结构校验（防反代错误页误判成功）；settings.tsx:2081 fetch URL 同步改 test-connection
+- 【实测验证（curl）】用户同款 API api.agnes-ai.cn/v1 + agnes-2.5-flash：假 key→真实回传「API Key 无效或未授权（401）」（沙箱可直达该上游，用户填真 key 即通）；192.168.x.x→directOnly；不可达域名→directOnly
+- 【localStorage 大户清点（全库 83 处 setItem 逐条审计）】大模块（聊天/记忆/表情包/朋友圈/钱包/收藏/翻译缓存/主题/壁纸/API配置/预设/相册）此前已全部走 idb-kv 或 IDB settings，本轮确认无需重复处理；session/搜索历史/开关/计数/时间戳类为小数据同步首帧读，按用户「不需要改的就不改」保留。唯一剩余 dataURL 大户=7 张主屏小组件卡片：home.profileCard.v1（头像+背景）/bubbleCard（双头像）/diaryCard（头像）/listenCard（双头像）/dialogCard（双头像）/icityCard（头像）/polaroidCard（3 张 480px 照片，单卡可达数百 KB）
+- 【卡片迁移到 IDB】idb-kv.ts MIGRATE_EXACT 追加 7 个 home.*Card.v1 键（启动幂等自动迁移：写入→读回校验→才删旧键，用户存量数据无损搬家）；7 张卡片 load*Card 的 localStorage.getItem 改 kvGet（开机门控后内存命中零延迟）；HomeScreen 7 个 save* 的 localStorage.setItem(JSON.stringify(d)) 改 kvSet 写穿 IDB；过期注释同步更正
+- 【E2E（agent-browser 实机，393×852）】①迁移：localStorage 预置 polaroid 旧数据 → 刷新 → LS 键被删 + IDB kv 有同值 + 种子照片渲染进 DOM（layout 解锁第 4 页验证）；②保存：编辑器点保存 → kvSet 写穿 IDB ✓ 且 localStorage 无新键；③API 测试连接：设置→API 配置→填用户同款地址/模型+假 key → 点测试连接 → 显示「⚠️ API Key 无效或未授权（401）」（真实上游错误+黄色可达提示），「测试失败，请稍后重试」不再出现；console/page errors 零报错；④测试数据（种子 homeLayout/apiConfig/polaroid kv）清理回归无残留
+- 验证：bunx tsc --noEmit 0 错误；eslint 改动 11 文件 0 问题；dev.log 仅既有 instrumentation Edge Runtime 警告
+
+Stage Summary:
+- 交付：①「测试连接」修复——/api/settings/test 路由从缺位+gitignore 吞目录双根因拔除，新建 test-connection 路由（端点归一化/参数兼容重试/真实错误透传/私网与不可达自动转浏览器直连三兜底），公网 API 填对即测通、填错提示具体原因（401/404/429/参数）；②localStorage 大户迁 IDB——7 张主屏小组件卡片（约 10 个头像/照片 dataURL）读写全走 idb-kv（自动迁移存量/写穿/降级保命），其余 83 处逐一审计后按「小数据不动」原则保留
+- 改动文件：src/app/api/settings/test-connection/route.ts（新增）、src/components/apps/settings.tsx、src/lib/ios/idb-kv.ts、src/components/ios/{HomeScreen,ProfileCard,BubbleCard,DiaryCard,ListenCard,DialogCard,ICityCard,PolaroidCard}.tsx
+- 关键决策：①路由命名 test-connection 而非给 .gitignore 加反白名单——`test` 模式对任何目录同名都会吞，改名一劳永逸；②卡片迁移复用 MIGRATE_EXACT 幂等迁移（读回校验后才删旧键）而非一次性脚本，用户真机数据下次打开自动无损搬家；③测连 max_tokens 固定 16（省用户额度）+ 200 结构校验（防反代 200 错误页假成功）；④mt-recent-users/tb/mt-session（单条 ≤60KB、登录关键路径同步读）与天气缓存等按用户口径保留 localStorage

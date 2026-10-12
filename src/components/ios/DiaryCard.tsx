@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { kvGet } from '@/lib/ios/idb-kv';
 import { Clock, Ellipsis, Heart, ImageDown, StickyNote } from 'lucide-react';
 import { selectResolvedTheme, useSettings, useSystemDark } from '@/lib/ios/store';
 import { fileToScaledDataURL, PROFILE_AVATAR_DEFAULT } from './ProfileCard';
@@ -41,9 +42,8 @@ export const DEFAULT_DIARY_CARD: DiaryCardData = {
 /** 读取持久化的日记数据（损坏/缺失时回退默认值） */
 export function loadDiaryCard(): DiaryCardData {
   try {
-    const raw = localStorage.getItem(DIARY_CARD_KEY);
-    if (!raw) return DEFAULT_DIARY_CARD;
-    const p = JSON.parse(raw) as Partial<DiaryCardData>;
+    const p = kvGet<Partial<DiaryCardData>>(DIARY_CARD_KEY);
+    if (!p) return DEFAULT_DIARY_CARD;
     const str = (v: unknown, fb: string) => (typeof v === 'string' ? v : fb);
     return {
       name: str(p.name, DEFAULT_DIARY_CARD.name),

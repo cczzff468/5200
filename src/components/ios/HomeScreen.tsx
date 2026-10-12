@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { kvSet } from '@/lib/ios/idb-kv';
 import dynamic from 'next/dynamic';
 import { Plus, Search, X } from 'lucide-react';
 import { useUI, useSettings, useSystemDark, selectResolvedTheme, type AppId } from '@/lib/ios/store';
@@ -88,7 +89,7 @@ const WeatherWidget = dynamic(() => import('@/components/apps/weather').then((m)
  *   迁移时放行上屏）；旧数据缺小组件时按默认位置补回：时钟补到第 1 页头、天气补到时钟旁、
  *   信息卡片补到第 2 页头、气泡补到信息卡片后；收起的八枚不自动复活）；
  * - 信息卡片/气泡/日记/一起听小组件：点击弹出编辑器（换头像/换背景图/改文字 / 换头像改气泡文字 /
- *   改日记头像与文字 / 换头像改气泡与歌曲文案），数据存 localStorage；
+ *   改日记头像与文字 / 换头像改气泡与歌曲文案），数据经 idb-kv 写穿 IndexedDB（本地持久化）；
  * - 指示器互换（同一位置交叉淡入淡出）：静止时显示「搜索」胶囊，滑动中/翻页后短暂显示
  *   页点（点页点可跳页）；编辑模式页点常显；
  * - 添加界面的方式：编辑模式把 App 拖到屏幕左右边缘停留 ~320ms 翻到相邻页（可连续翻）；
@@ -1291,7 +1292,7 @@ export default function HomeScreen() {
   const saveProfileCard = (d: ProfileCardData) => {
     setProfileCard(d);
     try {
-      localStorage.setItem(PROFILE_CARD_KEY, JSON.stringify(d));
+      kvSet(PROFILE_CARD_KEY, d);
     } catch {
       /* 存储满时忽略 */
     }
@@ -1299,7 +1300,7 @@ export default function HomeScreen() {
   const saveBubbleCard = (d: BubbleCardData) => {
     setBubbleCard(d);
     try {
-      localStorage.setItem(BUBBLE_CARD_KEY, JSON.stringify(d));
+      kvSet(BUBBLE_CARD_KEY, d);
     } catch {
       /* 存储满时忽略 */
     }
@@ -1307,7 +1308,7 @@ export default function HomeScreen() {
   const saveDiaryCard = (d: DiaryCardData) => {
     setDiaryCard(d);
     try {
-      localStorage.setItem(DIARY_CARD_KEY, JSON.stringify(d));
+      kvSet(DIARY_CARD_KEY, d);
     } catch {
       /* 存储满时忽略 */
     }
@@ -1315,7 +1316,7 @@ export default function HomeScreen() {
   const saveListenCard = (d: ListenCardData) => {
     setListenCard(d);
     try {
-      localStorage.setItem(LISTEN_CARD_KEY, JSON.stringify(d));
+      kvSet(LISTEN_CARD_KEY, d);
     } catch {
       /* 存储满时忽略 */
     }
@@ -1323,7 +1324,7 @@ export default function HomeScreen() {
   const saveDialogCard = (d: DialogCardData) => {
     setDialogCard(d);
     try {
-      localStorage.setItem(DIALOG_CARD_KEY, JSON.stringify(d));
+      kvSet(DIALOG_CARD_KEY, d);
     } catch {
       /* 存储满时忽略 */
     }
@@ -1331,7 +1332,7 @@ export default function HomeScreen() {
   const saveIcityCard = (d: ICityCardData) => {
     setIcityCard(d);
     try {
-      localStorage.setItem(ICITY_CARD_KEY, JSON.stringify(d));
+      kvSet(ICITY_CARD_KEY, d);
     } catch {
       /* 存储满时忽略 */
     }
@@ -1339,7 +1340,7 @@ export default function HomeScreen() {
   const savePolaroidCard = (d: PolaroidCardData) => {
     setPolaroidCard(d);
     try {
-      localStorage.setItem(POLAROID_CARD_KEY, JSON.stringify(d));
+      kvSet(POLAROID_CARD_KEY, d);
     } catch {
       /* 存储满时忽略 */
     }

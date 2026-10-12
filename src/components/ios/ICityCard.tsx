@@ -4,10 +4,11 @@
  * iCity 风格小组件（col-span-2 方格 ≈159×168）：半透明深灰圆角卡片——
  * 左上 = 名字（编辑器可改名，默认 icity）；下方 = 「MM月DD日 星期X」；
  * 底部 = 胶囊条（圆头像 + 一句话，头像/文字均可在编辑器修改——用户参考图）。
- * 点击（主屏）打开编辑弹层；数据存 localStorage，图片经 canvas 压缩控制体积。
+ * 点击（主屏）打开编辑弹层；数据经 idb-kv 写穿 IndexedDB（本地持久化），图片经 canvas 压缩控制体积。
  * 深色半透明实体底不随主题/壁纸翻转（任何壁纸上都清晰，与 iOS 实体图标同理）。
  */
 import { useRef, useState, useEffect } from 'react';
+import { kvGet } from '@/lib/ios/idb-kv';
 import { fileToScaledDataURL } from './ProfileCard';
 
 /** iCity 小组件数据 */
@@ -29,9 +30,8 @@ export const DEFAULT_ICITY_CARD: ICityCardData = { name: 'icity', note: '写点�
 /** 读取持久化数据（损坏/缺失时回退默认值） */
 export function loadICityCard(): ICityCardData {
   try {
-    const raw = localStorage.getItem(ICITY_CARD_KEY);
-    if (!raw) return DEFAULT_ICITY_CARD;
-    const p = JSON.parse(raw) as Partial<ICityCardData>;
+    const p = kvGet<Partial<ICityCardData>>(ICITY_CARD_KEY);
+    if (!p) return DEFAULT_ICITY_CARD;
     const str = (v: unknown, fb: string) => (typeof v === 'string' ? v : fb);
     return {
       name: str(p.name, DEFAULT_ICITY_CARD.name),

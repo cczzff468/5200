@@ -3,10 +3,11 @@
 /**
  * 拍立得照片小组件（col-span-4 整行 2 行高 ≈342×168）：三张白框拍立得微微
  * 斜排、顶部各压一截米色胶带（用户参考图），照片可在编辑器逐张更换/恢复默认。
- * 点击（主屏）打开编辑弹层；数据存 localStorage，图片经 canvas 压缩控制体积。
+ * 点击（主屏）打开编辑弹层；数据经 idb-kv 写穿 IndexedDB（本地持久化），图片经 canvas 压缩控制体积。
  * 照片主体透明无底卡——直接浮在壁纸上（与参考图一致）。
  */
 import { useLayoutEffect, useRef, useState } from 'react';
+import { kvGet } from '@/lib/ios/idb-kv';
 import { fileToScaledDataURL } from './ProfileCard';
 
 /** 拍立得小组件数据：三张照片 dataURL；null = 用内置默认图 */
@@ -29,9 +30,8 @@ export const DEFAULT_POLAROID_CARD: PolaroidCardData = { photos: [null, null, nu
 /** 读取持久化数据（损坏/缺失时回退默认值；长度恒补齐 3） */
 export function loadPolaroidCard(): PolaroidCardData {
   try {
-    const raw = localStorage.getItem(POLAROID_CARD_KEY);
-    if (!raw) return DEFAULT_POLAROID_CARD;
-    const p = JSON.parse(raw) as Partial<PolaroidCardData>;
+    const p = kvGet<Partial<PolaroidCardData>>(POLAROID_CARD_KEY);
+    if (!p) return DEFAULT_POLAROID_CARD;
     const arr = Array.isArray(p.photos) ? p.photos : [];
     return {
       photos: [0, 1, 2].map((i) => (typeof arr[i] === 'string' ? (arr[i] as string) : null)) as PolaroidCardData['photos'],

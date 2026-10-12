@@ -58,6 +58,14 @@ const MIGRATE_EXACT = new Set<string>([
   'ios-chat-assistant-msgs',
   // 翻译译文缓存（可达数百 KB）
   'chat-translate-cache',
+  // 主屏小组件卡片（头像/照片 dataURL，单卡可达数百 KB）
+  'home.profileCard.v1',
+  'home.bubbleCard.v1',
+  'home.diaryCard.v1',
+  'home.listenCard.v1',
+  'home.dialogCard.v1',
+  'home.icityCard.v1',
+  'home.polaroidCard.v1',
 ]);
 
 /** 前缀模式（按联系人/会话隔离的多份数据） */

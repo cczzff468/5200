@@ -1,13 +1,14 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { kvGet } from '@/lib/ios/idb-kv';
 import { fileToScaledDataURL } from './ProfileCard';
 
 /**
  * 气泡小组件（第二页 2×2 方格）：两个头像并排，每个头像头顶各有一个聊天气泡
  * （尾巴朝下指向头像）。用户要求去掉小组件外面的边框——现在不带卡片底/描边，
  * 白色气泡 + 圆头像直接浮在壁纸上（与第三页一起听小组件同款浮动风格）。
- * 头像与气泡文字都可在编辑器里分别修改；数据存 localStorage。
+ * 头像与气泡文字都可在编辑器里分别修改；数据经 idb-kv 写穿 IndexedDB（本地持久化）。
  */
 
 /** 气泡小组件数据：左右两个气泡文字 + 左右两个头像（null = 用内置默认图） */
@@ -40,9 +41,8 @@ export const DEFAULT_BUBBLE_CARD: BubbleCardData = {
 /** 读取持久化的气泡数据（损坏/缺失时回退默认值） */
 export function loadBubbleCard(): BubbleCardData {
   try {
-    const raw = localStorage.getItem(BUBBLE_CARD_KEY);
-    if (!raw) return DEFAULT_BUBBLE_CARD;
-    const p = JSON.parse(raw) as Partial<BubbleCardData>;
+    const p = kvGet<Partial<BubbleCardData>>(BUBBLE_CARD_KEY);
+    if (!p) return DEFAULT_BUBBLE_CARD;
     const str = (v: unknown, fb: string) => (typeof v === 'string' ? v : fb);
     return {
       left: str(p.left, DEFAULT_BUBBLE_CARD.left),

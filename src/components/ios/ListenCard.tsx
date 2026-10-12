@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { kvGet } from '@/lib/ios/idb-kv';
 import { Airplay, FastForward, Pause, Rewind, Star } from 'lucide-react';
 import { selectResolvedTheme, useSettings, useSystemDark } from '@/lib/ios/store';
 import { fileToScaledDataURL } from './ProfileCard';
@@ -10,7 +11,7 @@ import { fileToScaledDataURL } from './ProfileCard';
  * 双头像各自头顶聊天气泡（可改字），耳机线从两侧耳塞沿头像外侧向下汇聚、
  * 插入下方迷你播放器（歌名/歌词/进度条/时间/控制键），中间一行「相距/一起听」文案。
  * 整体无边框无卡片底无投影：白色气泡与浅灰播放器直接浮在壁纸上。
- * 头像/气泡/歌名/歌词/状态文案均可在编辑器里修改；数据存 localStorage。
+ * 头像/气泡/歌名/歌词/状态文案均可在编辑器里修改；数据经 idb-kv 写穿 IndexedDB（本地持久化）。
  */
 
 /** 一起听小组件数据 */
@@ -57,9 +58,8 @@ export const DEFAULT_LISTEN_CARD: ListenCardData = {
 /** 读取持久化的一起听数据（损坏/缺失时回退默认值） */
 export function loadListenCard(): ListenCardData {
   try {
-    const raw = localStorage.getItem(LISTEN_CARD_KEY);
-    if (!raw) return DEFAULT_LISTEN_CARD;
-    const p = JSON.parse(raw) as Partial<ListenCardData>;
+    const p = kvGet<Partial<ListenCardData>>(LISTEN_CARD_KEY);
+    if (!p) return DEFAULT_LISTEN_CARD;
     const str = (v: unknown, fb: string) => (typeof v === 'string' ? v : fb);
     const num = (v: unknown, fb: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fb);
     return {

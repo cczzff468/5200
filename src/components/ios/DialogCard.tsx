@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { kvGet } from '@/lib/ios/idb-kv';
 import { selectResolvedTheme, useSettings, useSystemDark } from '@/lib/ios/store';
 import { fileToScaledDataURL } from './ProfileCard';
 
@@ -8,7 +9,7 @@ import { fileToScaledDataURL } from './ProfileCard';
  * 对话气泡小组件（第四页 4×2 通栏，用户参考图样式）：
  * 左右两张白圈圆头像，中间两个交错的半透明描边聊天气泡（右上一句 / 左下一句，
  * 形成一问一答的对话感）——透明底直接浮在壁纸上，无边框无投影（与其它小组件一致）。
- * 头像与两句气泡文字均可在编辑器里修改；数据存 localStorage。
+ * 头像与两句气泡文字均可在编辑器里修改；数据经 idb-kv 写穿 IndexedDB（本地持久化）。
  */
 
 /** 对话气泡小组件数据 */
@@ -41,9 +42,8 @@ export const DEFAULT_DIALOG_CARD: DialogCardData = {
 /** 读取持久化的对话气泡数据（损坏/缺失时回退默认值） */
 export function loadDialogCard(): DialogCardData {
   try {
-    const raw = localStorage.getItem(DIALOG_CARD_KEY);
-    if (!raw) return DEFAULT_DIALOG_CARD;
-    const p = JSON.parse(raw) as Partial<DialogCardData>;
+    const p = kvGet<Partial<DialogCardData>>(DIALOG_CARD_KEY);
+    if (!p) return DEFAULT_DIALOG_CARD;
     const str = (v: unknown, fb: string) => (typeof v === 'string' ? v : fb);
     return {
       text1: str(p.text1, DEFAULT_DIALOG_CARD.text1),

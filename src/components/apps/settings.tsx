@@ -2078,7 +2078,7 @@ function ApiPage({ onBack }: { onBack: () => void }) {
     setTestLoading(true);
     clearTestResult();
     try {
-      const res = await fetch('/api/settings/test', {
+      const res = await fetch('/api/settings/test-connection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

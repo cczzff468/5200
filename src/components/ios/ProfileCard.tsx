@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import { kvGet } from '@/lib/ios/idb-kv';
 import { MapPin } from 'lucide-react';
 import { selectResolvedTheme, useSettings, useSystemDark } from '@/lib/ios/store';
 
@@ -38,9 +39,8 @@ export const DEFAULT_PROFILE_CARD: ProfileCardData = {
 /** 读取持久化的信息卡片数据（损坏/缺失时回退默认值） */
 export function loadProfileCard(): ProfileCardData {
   try {
-    const raw = localStorage.getItem(PROFILE_CARD_KEY);
-    if (!raw) return DEFAULT_PROFILE_CARD;
-    const p = JSON.parse(raw) as Partial<ProfileCardData>;
+    const p = kvGet<Partial<ProfileCardData>>(PROFILE_CARD_KEY);
+    if (!p) return DEFAULT_PROFILE_CARD;
     const str = (v: unknown, fb: string) => (typeof v === 'string' ? v : fb);
     return {
       name: str(p.name, DEFAULT_PROFILE_CARD.name),
