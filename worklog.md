@@ -18744,3 +18744,21 @@ Stage Summary:
 - 交付：①「测试连接」修复——/api/settings/test 路由从缺位+gitignore 吞目录双根因拔除，新建 test-connection 路由（端点归一化/参数兼容重试/真实错误透传/私网与不可达自动转浏览器直连三兜底），公网 API 填对即测通、填错提示具体原因（401/404/429/参数）；②localStorage 大户迁 IDB——7 张主屏小组件卡片（约 10 个头像/照片 dataURL）读写全走 idb-kv（自动迁移存量/写穿/降级保命），其余 83 处逐一审计后按「小数据不动」原则保留
 - 改动文件：src/app/api/settings/test-connection/route.ts（新增）、src/components/apps/settings.tsx、src/lib/ios/idb-kv.ts、src/components/ios/{HomeScreen,ProfileCard,BubbleCard,DiaryCard,ListenCard,DialogCard,ICityCard,PolaroidCard}.tsx
 - 关键决策：①路由命名 test-connection 而非给 .gitignore 加反白名单——`test` 模式对任何目录同名都会吞，改名一劳永逸；②卡片迁移复用 MIGRATE_EXACT 幂等迁移（读回校验后才删旧键）而非一次性脚本，用户真机数据下次打开自动无损搬家；③测连 max_tokens 固定 16（省用户额度）+ 200 结构校验（防反代 200 错误页假成功）；④mt-recent-users/tb/mt-session（单条 ≤60KB、登录关键路径同步读）与天气缓存等按用户口径保留 localStorage
+
+---
+Task ID: 14
+Agent: 主协调者 (Z.ai Code)
+Task: 用户问「存储方法不一样了（IndexedDB），想把里面的数据全部下载下来会不会有影响」——解答差异并落地一键全量备份/恢复能力
+
+Work Log:
+- 【差异解答（回复口径）】localStorage 与 IndexedDB 同为浏览器本机同源存储，迁移只是换了"柜子"，数据没有丢、也都不会跟账号走云同步；换浏览器/换设备/清浏览器数据两种存储一样都会丢；区别仅在手动从 DevTools 拷贝的难度（IndexedDB 更难手动导出）——因此给用户做一键导出/导入，比 localStorage 时代更方便
+- 【全量备份库】新增 src/lib/ios/backup.ts：①collectBackup 遍历 ios-phone-db 全部 18 个 store（动态读 objectStoreNames，未来加 store 自动纳入）+ localStorage 全量快照，manifest 带 app/schema/version/counts/skipped/lsKeys；②Blob 深度转换——照片/录音/音乐/铃声本体、语音消息 blob（嵌 kv 数组深层）、锁屏壁纸 customBlob（settings.value 二层）都是 Blob，JSON 序列化会静默变 {}，导出全深度递归（上限 12 层）转 {__aiPhoneBlob,dataUrl} 包装，导入对称还原 Blob；③settings.cryptoKey（AES-GCM 非可提取密钥）遇 CryptoKey 跳过整条记录（密钥不可序列化且绑设备）；④settings 密文信封导出时 decryptValue 解为明文——否则换设备后新密钥解不开旧密文导致 API 配置丢失，导入后 store.ts load 流程对含 apiKey 的明文自动重新加密回写（既有静默升级语义），跨设备闭环；⑤exportBackupToDownload 生成 AI手机备份-YYYYMMDD-HHmmss.json 下载（objectURL 延迟 30s 回收防 Safari 取消）
+- 【整库恢复】restoreBackup：manifest 校验（app/schema，更新版本备份给出明确提示）→ 逐 store clear + 150 条分块事务写入（防大事务中断）→ 备份含当前库没有的 store 记入 skippedStores → settings.cryptoKey 防御性跳过（保留本机密钥）→ localStorage.clear 全量还原；完成后由 UI 延时刷新页面（kv 内存注水层/各 zustand store 全部重建）
+- 【UI】设置 › 存储 › 新增「备份与恢复」卡片（导出全部数据/导入备份两行 + 说明文案）；导入选文件后先出黄色确认条（明确「覆盖当前全部数据」语义+确认/取消）再执行；成功绿色消息（条数/模块数/大小/文件名），失败红色具体原因；data-testid 三件套（settings-backup-export/import-confirm/msg）
+- 【E2E（agent-browser 实机，393×852）】种数据：联系人 bk-user + 照片 bk-photo-1（真 Blob 74B PNG）+ kv wx-chat-msgs:bk-test（消息数组内嵌语音 blob [9,9,9,7]）+ localStorage bk-flag → ①导出：UI 点击 → 下载 JSON（5 记录/18 模块），文件核验：照片/语音 Blob 均 __aiPhoneBlob 包装（音频字节 CQkJBw===[9,9,9,7] 保真）、cryptoKey 已跳过、bk-flag 在快照；②破坏性测试：deleteDatabase + localStorage.clear → 重启后全空；③导入：UI 选文件 → 黄色确认条 → 确认 → 自动重启 → 逐字段比对：联系人名/照片 Blob instanceof Blob 且 74 字节/嵌套语音 Blob instanceof Blob 且字节 [9,9,9,7] 原样/bk-flag 还原——全通过；④console/page errors 零报错；测试数据清理回归无残留
+- 验证：bunx tsc --noEmit 0 错误；eslint 改动 3 文件 0 问题；dev.log 仅既有 weather 502（沙箱外网天气源不可达，与本功能无关）与 instrumentation Edge 警告
+
+Stage Summary:
+- 交付：设置 › 存储 ›「备份与恢复」——一键把全部数据（18 个 IDB store 含聊天/联系人/记忆/照片/录音/音乐/铃声/相册/设置 + localStorage 小数据）下载成单个 JSON 文件；一键用备份文件整库恢复（覆盖语义+二次确认），跨设备/跨浏览器/清数据前备份全场景可用；Blob 媒体全深度保真往返，API Key 解密入包（UI 明示保管责任）+ 导入后自动回加密
+- 改动文件：src/lib/ios/backup.ts（新增）、src/lib/ios/db.ts（DB_NAME 导出）、src/components/apps/settings.tsx（存储页备份区+handlers+Download 图标）
+- 关键决策：①深度递归 Blob 转换而非字段白名单——语音消息 blob 嵌在 kv 消息数组第三层、锁屏壁纸在 settings.value 二层，白名单必漏；包装标签还原避免把合法 dataURL 字符串（联系人头像/相册图）误转 Blob；②恢复用「clear+重写」快照语义而非合并——备份是完整快照，合并会残留脏数据；③导出时解密 API 配置信封为明文是跨设备可恢复的唯一解（非可提取密钥无法随包导出），UI 文案同步提示文件保管责任；④180 条分块事务 + 动态 store 清单（未来新增 store 自动被备份覆盖）

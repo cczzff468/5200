@@ -289,7 +289,7 @@ const DB_VERSION = 8;
  * 库名恒定（Task 40 v2）：单库 + 键作用域的多账号模型——所有账号共用 ios-phone-db，
  * 微信/QQ/信息/电话的数据在 kv 层与记录字段按账号隔离（accounts.ts / idb-kv.ts）。
  */
-const DB_NAME = 'ios-phone-db';
+export const DB_NAME = 'ios-phone-db';
 
 let dbPromise: Promise<IDBPDatabase<IOSDB>> | null = null;
 

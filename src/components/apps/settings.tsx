@@ -16,6 +16,7 @@ import {
   ChevronRight,
   ChevronsUpDown,
   Database,
+  Download,
   Eye,
   EyeOff,
   Heart,
@@ -83,6 +84,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { directFetchModels, directTest, isPrivateApiUrl } from '@/lib/ios/direct-api';
+import { exportBackupToDownload, restoreBackup } from '@/lib/ios/backup';
 import {
   compressImageSrc,
   extractImgGenError,
@@ -1672,6 +1674,12 @@ function StoragePage({ onBack }: { onBack: () => void }) {
   const [sortDesc, setSortDesc] = useState(true);
   const [cleaning, setCleaning] = useState(false);
   const [cleanMsg, setCleanMsg] = useState('');
+  // 备份与恢复（Task 14：全量下载/整库恢复）
+  const [backupBusy, setBackupBusy] = useState<'export' | 'import' | null>(null);
+  const [backupMsg, setBackupMsg] = useState('');
+  const [backupMsgOk, setBackupMsgOk] = useState(false);
+  const [pendingRestore, setPendingRestore] = useState<{ name: string; file: File } | null>(null);
+  const restoreInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadStats = useCallback(async () => {
     const est = await readStorageEstimate();
@@ -1725,6 +1733,43 @@ function StoragePage({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     void loadStats();
   }, [loadStats]);
+
+  const handleExportBackup = async () => {
+    if (backupBusy) return;
+    setBackupBusy('export');
+    setBackupMsg('');
+    try {
+      const r = await exportBackupToDownload();
+      setBackupMsgOk(true);
+      setBackupMsg(
+        `已导出 ${r.records} 条记录（${r.stores} 个模块 · ${(r.bytes / 1024 / 1024).toFixed(2)} MB）—「${r.filename}」已开始下载`,
+      );
+    } catch (err) {
+      setBackupMsgOk(false);
+      setBackupMsg(err instanceof Error ? `导出失败：${err.message}` : '导出失败，请稍后重试');
+    } finally {
+      setBackupBusy(null);
+    }
+  };
+
+  const handleRestoreFile = async (file: File) => {
+    if (backupBusy) return;
+    setBackupBusy('import');
+    setBackupMsg('');
+    try {
+      const r = await restoreBackup(file);
+      setBackupMsgOk(true);
+      const skip = r.skippedStores.length > 0 ? `（跳过 ${r.skippedStores.length} 个未知模块）` : '';
+      setBackupMsg(`恢复完成：${r.records} 条记录 · ${r.stores} 个模块 · ${r.lsKeys} 项本地设置${skip} — 正在重启…`);
+      setTimeout(() => window.location.reload(), 1400);
+    } catch (err) {
+      setBackupMsgOk(false);
+      setBackupMsg(err instanceof Error ? err.message : '恢复失败，请重试');
+    } finally {
+      setBackupBusy(null);
+      setPendingRestore(null);
+    }
+  };
 
   const handleClean = async () => {
     if (cleaning) return;
@@ -1848,6 +1893,114 @@ function StoragePage({ onBack }: { onBack: () => void }) {
             ))
           )}
         </GroupCard>
+      </div>
+
+      {/* 备份与恢复（全量下载 / 整库恢复） */}
+      <div className="mt-4">
+        <GroupCard>
+          <button
+            type="button"
+            data-testid="settings-backup-export"
+            onClick={() => void handleExportBackup()}
+            disabled={backupBusy !== null}
+            className="flex min-h-[52px] w-full items-center gap-3 px-4 py-2 text-left transition-colors active:bg-muted/50 disabled:opacity-50"
+          >
+            {backupBusy === 'export' ? (
+              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-muted-foreground" />
+            ) : (
+              <Download className="h-5 w-5 shrink-0" style={{ color: TONE_GREEN }} />
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block text-[16px] leading-tight">
+                {backupBusy === 'export' ? '正在导出…' : '导出全部数据'}
+              </span>
+              <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">
+                聊天 · 联系人 · 记忆 · 照片录音 · 设置 → 下载一个 JSON 备份文件
+              </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            data-testid="settings-backup-import"
+            onClick={() => restoreInputRef.current?.click()}
+            disabled={backupBusy !== null}
+            className="flex min-h-[52px] w-full items-center gap-3 px-4 py-2 text-left transition-colors active:bg-muted/50 disabled:opacity-50"
+          >
+            {backupBusy === 'import' ? (
+              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-muted-foreground" />
+            ) : (
+              <Upload className="h-5 w-5 shrink-0" style={{ color: TONE_ORANGE }} />
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="block text-[16px] leading-tight">
+                {backupBusy === 'import' ? '正在恢复…' : '导入备份'}
+              </span>
+              <span className="mt-0.5 block truncate text-[12px] text-muted-foreground">
+                用备份文件整库恢复（覆盖当前数据），可跨设备 / 浏览器搬家
+              </span>
+            </span>
+          </button>
+        </GroupCard>
+        <p className="mt-2.5 px-1 text-[12px] leading-relaxed text-muted-foreground">
+          备份含全部数据（API Key 会解密写入备份文件，请妥善保管）。清除浏览器数据、换浏览器或换设备前，先导出备份即可原样搬回。
+        </p>
+
+        {pendingRestore && (
+          <div
+            data-testid="settings-backup-confirm"
+            className="mt-2.5 rounded-[16px] border px-4 py-3"
+            style={{ borderColor: 'rgba(245,158,11,0.35)', backgroundColor: 'rgba(245,158,11,0.1)' }}
+          >
+            <p className="text-[13px] leading-relaxed" style={{ color: '#B45309' }}>
+              将用「{pendingRestore.name}」覆盖当前全部数据（聊天/照片/设置等先清空再恢复），确定吗？
+            </p>
+            <div className="mt-2.5 flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => void handleRestoreFile(pendingRestore.file)}
+                disabled={backupBusy !== null}
+                className="h-9 flex-1 rounded-full text-[14px] font-medium text-white transition-all active:scale-[0.97] disabled:opacity-50"
+                style={{ backgroundColor: IOS_RED }}
+              >
+                确认恢复
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingRestore(null)}
+                disabled={backupBusy !== null}
+                className="h-9 flex-1 rounded-full bg-white/70 text-[14px] font-medium ring-1 ring-white/80 backdrop-blur-xl transition-all active:scale-[0.97] disabled:opacity-50 dark:bg-white/[0.1] dark:ring-white/[0.12]"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        )}
+
+        {backupMsg && (
+          <p
+            data-testid="settings-backup-msg"
+            className={`mt-2.5 px-1 text-[13px] leading-relaxed ${
+              backupMsgOk ? 'text-emerald-600 dark:text-emerald-400' : ''
+            }`}
+            style={backupMsgOk ? undefined : { color: IOS_RED }}
+          >
+            {backupMsgOk ? '✅ ' : '❌ '}
+            {backupMsg}
+          </p>
+        )}
+
+        <input
+          ref={restoreInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (!f) return;
+            setPendingRestore({ name: f.name, file: f });
+          }}
+        />
       </div>
 
       <div className="mt-4">
