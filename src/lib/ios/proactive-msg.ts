@@ -733,7 +733,7 @@ async function generateProactiveText(app: ProactiveApp, contact: ContactRecord, 
 // ---------------- 自主决策（三、自主触发） ----------------
 
 interface AutoDecision {
-  action: 'send' | 'wait';
+  action: 'send' | 'wait' | 'fail';
   message?: string;
   delayMinutes?: number;
 }
@@ -806,7 +806,10 @@ async function decideAutonomous(app: ProactiveApp, contact: ContactRecord, npcEx
   if (last.lastSentText) parts.push(`【你最近一次主动发的消息（若决定 send，不要再发类似内容）】\n${last.lastSentText}`);
   parts.push('【任务】输出决策 JSON。');
 
-  const raw = await callLlmTwoTier(system, parts.join('\n\n'), useSettings.getState().apiConfig);
+  const raw = await callLlmTwoTier(system, parts.join('\n\n'), useSettings.getState().apiConfig).catch(() => '');
+  // API/生成失败（空回复）：与「AI 决策 wait」区分开——fail 会让上层用本地兑底消息保底发送
+  //（用户反馈：设置了自动发消息到点却收不到——之前 API 挂了会静默 wait，看起来像「到点没发」）
+  if (!raw.trim()) return { action: 'fail' };
   const parsed = extractJsonObjectSafely(raw) as Partial<AutoDecision> & { reason?: unknown } | null;
   if (!parsed) return { action: 'wait', delayMinutes: AUTO_WAIT_MIN_MINUTES };
   if (parsed.action === 'send' && typeof parsed.message === 'string' && parsed.message.trim()) {
@@ -1085,34 +1088,88 @@ async function tickInner(): Promise<void> {
 const generating = new Set<string>();
 
 /**
+ * 生成失败本地兑底文案（用户验收点：设置了自动发消息，到点一定能收到一条）——
+ * timer/event/reminder 是用户明确约定的「必须发」，LLM 挂了也不能沉默；
+ * 文案像真人随手发的（不暴露「系统兜底」痕迹）。 */
+function fallbackProactiveText(trigger: FireTrigger): string {
+  if (trigger.kind === 'reminder') {
+    const note = (trigger.note ?? '').trim();
+    if (note) return `你之前让我到点提醒你「${note}」——时间到啦！`;
+    return '叮咚——你交代的提醒时间到啦！';
+  }
+  if (trigger.kind === 'event') {
+    const name = (trigger.eventName ?? '').trim();
+    if (name) return `「${name}」的时间到了，特地来跟你说一声~`;
+    return '到点了，来跟你说一声~';
+  }
+  const pool = [
+    '在干嘛呢？突然想起你了',
+    '忙完了没？来跟你聊两句',
+    '咻——冒个泡，今天过得怎么样？',
+    '刚看到个东西第一反应是想发给你，你最近咋样？',
+    '好一阵没说话了，有点想你了',
+  ];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+/**
  * 生成并投递一条主动消息（auto 触发先走决策；任何失败静默）。
  * 生成后与最近 AI 发言去重（完全相同 → 丢弃），避免「间隔 < 生成耗时」时的重复消息。
+ * 加固（用户反馈「到时间没收到主动消息」）：LLM 生成失败不再静默——timer/event/reminder
+ * 是用户明确约定的「必须发」，改用本地兑底文案保底投递；auto 决策 API 失败同样兑底（wait 才是 AI 真决定不发）。
  */
 async function fireProactive(app: ProactiveApp, contact: ContactRecord, trigger: FireTrigger, npcExtra: Record<string, unknown> | null): Promise<void> {
   const key = `${app}:${contact.id}`;
   if (generating.has(key)) return;
   generating.add(key);
+  let usedFallback = false;
   try {
     let text: string;
     if (trigger.kind === 'auto') {
-      const decision = await decideAutonomous(app, contact, npcExtra);
-      if (decision.action !== 'send' || !decision.message) {
+      let decision: AutoDecision;
+      try {
+        decision = await decideAutonomous(app, contact, npcExtra);
+      } catch {
+        decision = { action: 'fail' };
+      }
+      if (decision.action === 'fail') {
+        // API/生成失败 ≠ AI 决定不发：本地兑底一条保底消息（到点一定收得到）
+        text = fallbackProactiveText(trigger);
+        usedFallback = true;
+      } else if (decision.action !== 'send' || !decision.message) {
         // wait：把下次决策推迟到建议时间（autoAt 后移，min 5min；基准用当前配置的决策节奏）
         const delayMs = (decision.delayMinutes ?? AUTO_WAIT_MIN_MINUTES) * 60_000;
         const baseMs = Math.max(2, getProactiveCfg(app, contact.id).autoFreqMin ?? AUTO_DECIDE_BASE_MS / 60_000) * 60_000;
         setLast(app, contact.id, { autoAt: Date.now() + Math.max(0, delayMs - baseMs) });
         return;
+      } else {
+        text = decision.message;
       }
-      text = decision.message;
     } else {
-      text = await generateProactiveText(app, contact, trigger, npcExtra);
+      try {
+        text = await generateProactiveText(app, contact, trigger, npcExtra);
+      } catch {
+        text = '';
+      }
+      if (!text) {
+        text = fallbackProactiveText(trigger); // timer/event/reminder 生成失败：本地兑底（到点一定发）
+        usedFallback = true;
+      }
     }
     if (!text) return;
-    // 去重：与最近 6 条 AI 发言/上次主动消息完全相同 → 不投（LLM 在上下文未变时可能复述同一条）
+    // 去重：与最近 6 条 AI 发言/上次主动消息完全相同 → 不投（LLM 在上下文未变时可能复述同一条）；
+    // 兑底文案跳过 lastSentText 对比（兑底池有限，连续命中同一句时也要保底发出）
     const recent = readNormMsgs(app, contact.id).slice(-6).filter((m) => m.role === 'assistant').map((m) => m.text.trim());
-    const lastSent = getLast(app, contact.id).lastSentText?.trim();
-    if (lastSent) recent.push(lastSent);
-    if (recent.includes(text)) return;
+    if (!usedFallback) {
+      const lastSent = getLast(app, contact.id).lastSentText?.trim();
+      if (lastSent) recent.push(lastSent);
+    }
+    if (recent.includes(text)) {
+      // 兑底也撞上重复（罕见）：换一条再试一次，仍重复才放弃
+      if (!usedFallback) return;
+      text = fallbackProactiveText(trigger);
+      if (recent.includes(text)) return;
+    }
     await deliverProactiveMsg(app, contact, text, trigger);
   } catch {
     /* 静默 */

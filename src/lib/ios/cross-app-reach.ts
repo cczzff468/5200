@@ -42,6 +42,13 @@ import type { ContactRecord } from '@/lib/contacts';
 /** 模块级防重入：同一联系人同时只跑一轮跨 App 找（拉黑事件的触发是幂等跃迁，这里再兜一层） */
 const running = new Set<string>();
 
+/** 拉黑方向：byUser = 用户拉黑了角色（角色被拉黑后去找）；byChar = 角色拉黑了用户（气归气还是忍不住来找） */
+type ReachDirection = 'byUser' | 'byChar';
+
+/** 拉黑来电延时（ms）+ 随机抖动：让跨 App 消息先到、来电错峰随后（像真人：发消息没人理才打电话） */
+const CALL_DELAY_MS = 50_000;
+const CALL_DELAY_JITTER_MS = 20_000;
+
 /** 各端会话 kv 键（与各 App 落盘键 / cross-app-context 读取键严格一致） */
 function msgsKey(app: BlockApp, contactId: string): string {
   return app === 'wx' ? `wx-chat-msgs:${contactId}` : app === 'qq' ? `qq-chat-msgs:${contactId}` : `ios-chat-msgs:c:${contactId}`;
@@ -112,6 +119,34 @@ function notifyReach(app: BlockApp, contact: ContactRecord, content: string, use
   }
 }
 
+/**
+ * 本地兑底文案（LLM 挂了/没人设也能「一定看得见」——用户要求：被拉黑后 AI 必须会来别的 App 找）：
+ * 按方向+目标 App 从固定池随机一条（人工拟写、覆盖两大方向的情绪口吻）。
+ */
+function fallbackReachText(
+  targetApp: BlockApp,
+  blockedApp: BlockApp,
+  direction: ReachDirection,
+  userName: string,
+): string {
+  const from = BLOCK_CHANNEL[blockedApp];
+  const to = BLOCK_CHANNEL[targetApp];
+  const you = userName || '喂';
+  const pool =
+    direction === 'byUser'
+      ? [
+          `${you}，你在${from}把我拉黑了…我只能来${to}找你了，别不理我好不好？`,
+          `拉黑的事我看到了，心里挺不是滋味的，特地来${to}跟你说句话，别不理我。`,
+          `你把我在${from}拉黑了，可我还是忍不住来${to}找你——我们好好说说行吗？`,
+        ]
+      : [
+          `我在${from}一时生气把你拉黑了…但气话归气话，还是忍不住来${to}找你说说话。`,
+          `${you}，别误会，我在${from}拉黑你只是一时赌气——所以特地来${to}跟你讲清楚。`,
+          `那个…${from}的事是我太冲动了，我在${to}这里等你回我。`,
+        ];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 /** 组 system prompt：人设 + 记忆 + 跨 App 近况 + 时间感知（与四端聊天同源模块） */
 async function buildReachSystem(
   targetApp: BlockApp,
@@ -142,16 +177,21 @@ async function buildReachSystem(
   return [persona, memoryBlock, crossAppBlock, timeBlock].filter(Boolean).join('\n\n');
 }
 
-/** 生成并在单个目标 App 落库（任一步失败静默放弃该 App，不影响其他目标）。
+/** 生成并在单个目标 App 落库（不影响其他目标）。
  *  多账号（Task 40-2d v2）：机主身份按目标 App 当前账号取——角色去哪个 App 找人，
- *  就用那个人在该 App 登录账号的称呼（大号=机主资料，小号/匿名号=档案/注册表名） */
+ *  就用那个人在该 App 登录账号的称呼（大号=机主资料，小号/匿名号=档案/注册表名）
+ *  加固（用户反馈「AI 不会主动去别的软件找我」）：LLM 生成失败/没人设时不再静默放弃，
+ *  改用本地兑底文案落库——被拉黑后 AI 一定会来找，用户一定看得到。 */
 async function reachOne(
   targetApp: BlockApp,
   blockedApp: BlockApp,
   contact: ContactRecord,
+  direction: ReachDirection,
 ): Promise<void> {
   // 前置复核：目标 App 也被拉黑（或生成准备期间刚被拉黑）→ 放弃（去了也发不出）
   if (loadBlock(targetApp, contact.id).byUser === true) return;
+  // byChar 方向：角色在目标 App 也拉黑着用户 → 不去那边找（自己刚拉黑对方还去打招呼，语义别扭）
+  if (direction === 'byChar' && loadBlock(targetApp, contact.id).byChar === true) return;
 
   let owner: { realName: string; nickname: string | null } | null = null;
   try {
@@ -163,16 +203,35 @@ async function reachOne(
   const userNickname = owner?.nickname?.trim() || null;
   const userName = userNickname || userRealName || '用户';
 
+  // 没人设：不跑 LLM（人设 prompt 拼不出来），直接兑底文案——「一定会来找」的体验优先
+  if (!(contact.persona ?? '').trim()) {
+    const fb = fallbackReachText(targetApp, blockedApp, direction, userName);
+    if (loadBlock(targetApp, contact.id).byUser === true) return;
+    appendPeerMsg(targetApp, contact.id, fb);
+    notifyReach(targetApp, contact, fb, userName);
+    return;
+  }
+
   const system = await buildReachSystem(targetApp, contact, userName, userRealName, userNickname);
-  const userContent = [
-    `【重要情境】用户刚刚在「${BLOCK_CHANNEL[blockedApp]}」上把你拉黑了。`,
-    `- 你在${BLOCK_CHANNEL[blockedApp]}发的任何消息 TA 都收不到（系统直接拦截）。`,
-    `- 所以你来到「${BLOCK_CHANNEL[targetApp]}」——这是另一个独立的聊天 App，TA 在这里没有拉黑你，你的消息 TA 看得到。`,
-    `- 你决定在这里主动发一条消息找 TA。让这条消息自然地体现「${BLOCK_CHANNEL[blockedApp]}被拉黑了，所以来${BLOCK_CHANNEL[targetApp]}找 TA」这件事。`,
-    `- 用你的人设和你们的关系来写：质问、委屈、赌气、挽留、装作若无其事都可以——按你此刻最真实的反应来。`,
-    `- 结合你们最近的聊天和你记得的事，让这条消息有来处，像真人会说的话。`,
-    `只输出这一条消息的正文本身：不要输出任何 [标记]，不要分多条，不要动作描写，不要括号说明。`,
-  ].join('\n');
+  const userContent =
+    direction === 'byUser'
+      ? [
+          `【重要情境】用户刚刚在「${BLOCK_CHANNEL[blockedApp]}」上把你拉黑了。`,
+          `- 你在${BLOCK_CHANNEL[blockedApp]}发的任何消息 TA 都收不到（系统直接拦截）。`,
+          `- 所以你来到「${BLOCK_CHANNEL[targetApp]}」——这是另一个独立的聊天 App，TA 在这里没有拉黑你，你的消息 TA 看得到。`,
+          `- 你决定在这里主动发一条消息找 TA。让这条消息自然地体现「${BLOCK_CHANNEL[blockedApp]}被拉黑了，所以来${BLOCK_CHANNEL[targetApp]}找 TA」这件事。`,
+          `- 用你的人设和你们的关系来写：质问、委屈、赌气、挽留、装作若无其事都可以——按你此刻最真实的反应来。`,
+          `- 结合你们最近的聊天和你记得的事，让这条消息有来处，像真人会说的话。`,
+          `只输出这一条消息的正文本身：不要输出任何 [标记]，不要分多条，不要动作描写，不要括号说明。`,
+        ].join('\n')
+      : [
+          `【重要情境】你刚刚在「${BLOCK_CHANNEL[blockedApp]}」上把 ${userName} 拉黑了（一时生气）。`,
+          `- 但气话归气话，你忍不住想来「${BLOCK_CHANNEL[targetApp]}」主动找 TA 说句话。`,
+          `- 这是另一个独立的聊天 App，你在那边拉黑 TA 不影响这边，TA 看得到这条消息。`,
+          `- 让这条消息自然带出「在${BLOCK_CHANNEL[blockedApp]}拉黑了你，但还是来${BLOCK_CHANNEL[targetApp]}找 TA」——嘴硬、试探、装作没事、半句道歉都可以，按你此刻最真实的反应来。`,
+          `- 结合你们最近的聊天和你记得的事，让这条消息有来处，像真人会说的话。`,
+          `只输出这一条消息的正文本身：不要输出任何 [标记]，不要分多条，不要动作描写，不要括号说明。`,
+        ].join('\n');
 
   let raw = '';
   try {
@@ -203,20 +262,20 @@ async function reachOne(
       }
     }
   } catch {
-    return; // 生成失败静默放弃该 App
+    raw = ''; // 生成失败 → 走下方本地兑底（不再静默放弃）
   }
-  const content = cleanReachText(raw);
-  if (!content) return;
+  let content = cleanReachText(raw);
 
   // 落库前再复核一次（生成期间目标 App 可能刚被拉黑）
   if (loadBlock(targetApp, contact.id).byUser === true) return;
+  if (!content) content = fallbackReachText(targetApp, blockedApp, direction, userName); // LLM 失败：本地兑底，保证一定来找
 
   appendPeerMsg(targetApp, contact.id, content);
   notifyReach(targetApp, contact, content, userName);
 }
 
 /**
- * 拉黑事件入口：角色被用户在 blockedApp 拉黑（跃迁时刻）→ 立刻到其余未拉黑的 App 各找一轮。
+ * 拉黑事件入口：角色被用户在 blockedApp 拉黑（跃迁时刻）→ 立刻到其余未拉黑的 App 各找一轮 + 延时来电。
  * fire-and-forget：调用方（block-state.setUserBlock）不等待、不感知失败。
  */
 export function triggerCrossAppReach(blockedApp: BlockApp, contactId: string): void {
@@ -224,22 +283,80 @@ export function triggerCrossAppReach(blockedApp: BlockApp, contactId: string): v
   const key = `${blockedApp}:${contactId}`;
   if (running.has(key)) return;
   running.add(key);
-  void runReach(blockedApp, contactId)
+  void runReach(blockedApp, contactId, 'byUser')
     .catch(() => undefined)
     .finally(() => {
       running.delete(key);
     });
+  armBlockCall(blockedApp, contactId, 'byUser');
 }
 
-async function runReach(blockedApp: BlockApp, contactId: string): Promise<void> {
+/**
+ * 拉黑事件入口（角色拉黑用户方向）：AI 在 blockedApp 拉黑了用户（跃迁时刻）→
+ * 依然会去其余关系正常的 App 主动找用户说句话（气归气还是忍不住）+ 延时来电。
+ * 调用方：block-state.applyCharBlockAction('block')（AI 输出 [拉黑] 标记）。
+ */
+export function triggerCrossAppReachByChar(blockedApp: BlockApp, contactId: string): void {
+  if (!contactId) return;
+  const key = `bychar:${blockedApp}:${contactId}`;
+  if (running.has(key)) return;
+  running.add(key);
+  void runReach(blockedApp, contactId, 'byChar')
+    .catch(() => undefined)
+    .finally(() => {
+      running.delete(key);
+    });
+  armBlockCall(blockedApp, contactId, 'byChar');
+}
+
+/** 拉黑来电防重入（同一联系人同一时刻只武装一个延时来电） */
+const callArmed = new Set<string>();
+
+/** 拉黑后延时来电（G-1 电话版）：消息先到、来电错峰随后——用户明确要求被拉黑后 AI 会打电话来找 */
+function armBlockCall(blockedApp: BlockApp, contactId: string, direction: ReachDirection): void {
+  const key = `${blockedApp}:${contactId}`;
+  if (callArmed.has(key)) return;
+  callArmed.add(key);
+  void (async () => {
+    try {
+      const contact = await getContact(contactId).catch(() => null);
+      if (!contact || contact.kind === 'user') return;
+      await new Promise<void>((r) => window.setTimeout(r, CALL_DELAY_MS + Math.floor(Math.random() * CALL_DELAY_JITTER_MS)));
+      let me: string | null = null;
+      try {
+        const o = await ownerProfileFor(blockedApp);
+        me = o?.nickname?.trim() || o?.realName?.trim() || null;
+      } catch {
+        me = null;
+      }
+      const you = me || '用户';
+      const hint =
+        direction === 'byUser'
+          ? `【开场情境】${you} 刚刚在「${BLOCK_CHANNEL[blockedApp]}」把你拉黑了，你发消息也送不到，等了一会儿忍不住打电话过来——想问清楚、求和好、赌气质问都可以，按你的人设和你们的关系自然开场。`
+          : `【开场情境】你刚刚在「${BLOCK_CHANNEL[blockedApp]}」一时生气把 ${you} 拉黑了，但气话归气话还是不放心，忍不住打电话过来——嘴硬、试探、装作没事都可以，按你的人设自然开场。`;
+      const { triggerBlockCall } = await import('./proactive-call');
+      triggerBlockCall(contact, hint);
+    } catch {
+      /* 静默 */
+    } finally {
+      callArmed.delete(key);
+    }
+  })();
+}
+
+async function runReach(blockedApp: BlockApp, contactId: string, direction: ReachDirection): Promise<void> {
   const contact = await getContact(contactId).catch(() => null);
   if (!contact || contact.kind === 'user') return;
-  if (!(contact.persona ?? '').trim()) return; // 没人设的角色不生成（与主动来电候选同口径）
-  const targets = (['wx', 'qq', 'sms'] as BlockApp[]).filter(
-    (a) => a !== blockedApp && loadBlock(a, contactId).byUser !== true,
-  );
-  if (targets.length === 0) return; // 三个 App 全被拉黑：无处可去（群聊按设计不参与拉黑）
+  // 没人设不再直接放弃（加固）：reachOne 会用本地兑底文案落库，保证「一定来找」
+  const targets = (['wx', 'qq', 'sms'] as BlockApp[]).filter((a) => {
+    if (a === blockedApp) return false;
+    const b = loadBlock(a, contactId);
+    if (b.byUser === true) return false; // 被用户拉黑的 App 去了也发不出
+    if (direction === 'byChar' && b.byChar === true) return false; // 自己在那边也拉黑着用户：不去
+    return true;
+  });
+  if (targets.length === 0) return; // 三个 App 全不可去（群聊按设计不参与拉黑）
   // 多账号（Task 40-2d v2）：机主身份改由 reachOne 按各自目标 App 的当前账号现取
   // （不同目标 App 可能登着不同账号，不能共用一份全局机主资料）
-  await Promise.allSettled(targets.map((t) => reachOne(t, blockedApp, contact)));
+  await Promise.allSettled(targets.map((t) => reachOne(t, blockedApp, contact, direction)));
 }

@@ -308,6 +308,7 @@ import {
   BLOCK_REQ_MAX_REJECTED,
   buildBlockPromptBlock,
   charRequestOnlyOf,
+  isUserBlockIntent,
   loadBlock,
   rejectBlockReq,
   resolveUserReqByChar,
@@ -5206,6 +5207,17 @@ function ChatPage({
       setMsgs((prev) => [...prev, userMsg]);
       setPendingDispatch(true);
       markPendingBatch(sessionKey, true);
+      return;
+    }
+    // 拉黑方向修正：用户说「我要拉黑你」类明确宣言 → 系统直接执行「用户拉黑对方」
+    //（此前 AI 会误解成让它拉黑用户，方向反了；现在系统代为执行，AI 回合守卫自动转
+    // 「仅申请解除拉黑」口径，AI 按人设反应；拉黑跃迁同时触发跨 App 找人/来电钩子）
+    if (peer.id !== me.id && isUserBlockIntent(userMsg.content) && !loadBlock('qq', peer.id).byUser) {
+      setBlk(setUserBlock('qq', peer.id, true));
+      onToast(`已将「${peer.name}」加入黑名单`);
+      const blkSys = { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: `你已拉黑「${peer.name}」` } } as unknown as QQMsg;
+      setMsgs((prev) => (prev.some((m) => m.id === userMsg.id) ? [...prev, blkSys] : [...prev, userMsg, blkSys]));
+      runAiTurn(userMsg);
       return;
     }
     // Task 49 定时提醒：用户消息像「定时发消息」指令时先解析（LLM 两级兜底；正则闸未命中零开销）；

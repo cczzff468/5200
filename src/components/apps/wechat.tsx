@@ -153,6 +153,7 @@ import {
   BLOCK_REQ_MAX_REJECTED,
   buildBlockPromptBlock,
   charRequestOnlyOf,
+  isUserBlockIntent,
   loadBlock,
   rejectBlockReq,
   resolveUserReqByChar,
@@ -6614,6 +6615,14 @@ function ChatPage({
       : null;
     const created: WxMsg[] = pendingImgs.map((p) => ({ id: uid(), role: 'me', content: '', time: Date.now(), kind: 'image' as const, img: { src: p.src } }));
     const batch = [...(userMsg ? [userMsg] : []), ...created];
+    // 拉黑方向修正：用户说「我要拉黑你」类明确宣言 → 系统直接执行「用户拉黑对方」
+    //（此前 AI 会误解成让它拉黑用户，方向反了；现在系统代为执行，AI 回合守卫自动转
+    // 「仅申请解除拉黑」口径，AI 按人设反应；拉黑跃迁同时触发跨 App 找人/来电钩子）
+    if (userMsg && peer.id !== me.id && isUserBlockIntent(userMsg.content) && !loadBlock('wx', peer.id).byUser) {
+      setBlk(setUserBlock('wx', peer.id, true));
+      onToast(`已将「${peer.name}」加入黑名单`);
+      batch.push({ id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'sys', sys: { text: `你已拉黑「${peer.name}」` } });
+    }
     const clearComposer = () => {
       setInput('');
       setQuote(null);

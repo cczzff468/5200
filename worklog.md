@@ -18612,3 +18612,21 @@ Stage Summary:
 - 交付：①我的淘宝「骑手」入口+选择弹层整体删除，送达速度（快/正常/慢）原位顶替，顶部行纯标题；②淘宝 7 位快递员/美团 7 位骑手源 PNG 水平镜像统一朝右（列表/弹层/物流地图/灵动岛全场景生效），两个图处理脚本补翻转步骤防回退；③美团灵动岛小窗+大窗时间改「还有X分钟送达」倒计时（<1 分钟「即将送达」），秒级刷新、催单后即时变小，淘宝岛保持 HH:MM 不变
 - 改动文件：src/components/apps/taobao.tsx、src/components/ios/MeituanIsland.tsx、src/lib/ios/{tb-courier,mt-rider}.ts、public/couriers/{bunny,polarbear,duck,redcat,pinkcat,bluebear,rabbit}.png、public/mt/riders/{r11,r15,r16,r17,r19,r20,r21}.png、scripts/{process-couriers.py,cut_riders.py,add-riders.mjs}
 - 关键决策：①翻转直接改源 PNG（而非 CSS scaleX(-1)）——所有展示点（选择弹层/资产行/地图巡航/灵动岛）一次性生效且无需逐处加样式；②美团 kv 订单值是数组直存（tb 才是 JSON 字符串），seed 口径不同注意区分；③「还有X分钟」用 Math.ceil 保证 >0 分钟恒 ≥1，<60s 收敛为「即将送达」避免「还有0分钟」；④大窗去掉「预计」前缀（倒计时语义下冗余），黄字样式与原 HH:MM 保持一致
+---
+Task ID: 7
+Agent: 主协调者 (Z.ai Code)
+Task: 用户四组需求——①快递到驿站后 AI 还发提醒消息，删除该提醒；②「我说拉黑你，应该是我把 AI 拉黑，但 AI 把我拉黑了」——拉黑方向修正；③用户拉黑 AI 后 AI 要主动去别的软件找（QQ/信息/打电话）；④设置了自动发信息到点 AI 没发 + 排查同类静默失败问题
+
+Work Log:
+- 【删到驿站提醒】tb-ai-engage.ts：删除 tbArrivalLineViaLlm（到驿站问候 LLM 生成）+ maybeArrivalComment（到货问候编排，含 tb-commented 标记/tb-comment-cd 冷却/投递+灵动岛通知）+ tbEngageTick (c) 段（shipped&&!aiPickup&&到驿站 → 问候）+ ARRIVAL_COMMENT_CD_MS 常量；礼物/帮取件流程的取件交差消息保留（那是 AI 自己取完件的报喜，不是到站提醒）；刚发货「留意物流」提醒此前已删；grep 确认 mt-ai-engage.ts 无同类到货问候
+- 【拉黑方向修正】block-state.ts：①新增导出 isUserBlockIntent(text)——保守识别「我要拉黑你/拉黑你/把你拉黑」类短宣言（≤16 字、含否定词不算、含「把我拉黑/拉黑我/被拉黑」不算——那是要求被拉黑，方向相反，仍走 AI 自主 [拉黑] 链路）；②buildBlockPromptBlock 无拉黑声明加「方向红线」：用户说「我要拉黑你」= TA 要拉黑你（系统自动执行），严禁输出 [拉黑] 反向拉黑；三端 wechat/qq/chat.tsx 用户发送链接入检测：命中 → setUserBlock(app,cid,true)（同步、在 AI 回合前生效）+ 「你已拉黑「xx」」系统消息（跟用户消息同批上屏，顺序正确）+ toast；AI 回合照常跑，回合守卫自动转「仅申请解除拉黑」口径（charRequestOnlyOf），AI 按人设反应；微信端 sys 消息并入 batch（覆盖 streaming/分句/组合发送分支），QQ/信息端主路径落库+上屏
+- 【跨 App 找人加固】cross-app-reach.ts：①新增 ReachDirection（byUser=用户拉黑 AI；byChar=AI 拉黑用户气归气还是来找）双向支持，byChar 的 prompt/目标过滤（byChar!==true 的 App 才去）独立成文；②LLM 生成失败不再静默——reachOne 兜底 fallbackReachText（按方向×目标 App 固定池随机，人工拟写口吻）；③没人设不再直接 return——直接兜底落库；④新增 triggerCrossAppReachByChar 导出（block-state.applyCharBlockAction('block') 跃迁钩子调用）；⑤新增 armBlockCall 延时来电：拉黑跃迁后 50s+随机20s 错峰触发 AI 主动来电（消息先到、电话随后，像真人），proactive-call.ts 新增导出 triggerBlockCall(contact, contextHint)——复用主动来电整套链路（iOS 全屏来电/接听交接 setPendingPhoneAnswer/proactiveContext 开场情境/拒接超时 recordMissedPhoneCall 未接+AI 语音留言），守卫（来电/通话/闹钟/sms 双向拉黑都不打）+落 call 冷却防 tick 重复拨打；setUserBlock 的既有 byUser 钩子补上来电
+- 【自动发消息到点不发修复】proactive-msg.ts：根因=LLM 生成失败全静默且 timerAt 已被提前写（daily 模式当天不再重试）——①AutoDecision 加 'fail'（decideAutonomous API 失败/空回复时返回，与「AI 决策 wait」区分）；②fireProactive 全面兜底：timer/event/reminder 生成失败或抛异常 → fallbackProactiveText 本地兜底文案（reminder 带 note、event 带事件名、timer/auto 用随手聊池随机）保底投递；auto 决策 fail 同样兜底（wait 才是 AI 真决定不发）；③兜底消息跳过 lastSentText 去重（撞重复时换一条再试，保证一定发出）
+- 【同类静默失败排查】proactive-call.ts：决策 API 失败（null）原来按 wait 落 6h 冷却——API 不稳时段 AI「从不主动打来」同源问题，改落 5min 短冷却（防 90s 重试轰炸，API 恢复后尽快打来）；tb-ai-engage 主动代付已有兜底、mt 侧无到货问候、红!徽标机制已覆盖普通聊天回合
+- 【E2E（agent-browser 实机）】seed AI 联系人「小澜」（persona/情侣/三端好友）→ 微信登录 → 聊天发「我要拉黑你」→ ①「你已拉黑「小澜」」系统消息出现在用户消息之后（方向正确，用户拉黑 AI）；②灵动岛立即弹出 AI 从 QQ 发来的消息通知（cross-app-reach 生成成功，dev.log POST /api/chat 200 佐证）；③~60s 后 AI 全屏来电（armBlockCall 生效）→ 接听 → AI 开场「喂小明？是我，小澜。你怎么突然把我拉黑了啊？我发消息都送不到，心里好难受的...」（proactiveContext 拉黑情境传递正确）→ 挂断 → 灵动岛「小澜给你发来一条语音留言」（recordMissedPhoneCall 链路 ✓）；④信息 App 会话列表出现小澜 07:33「拉黑的事我看到了，心里挺不是滋味的，特地来...」——该条正是 fallbackReachText 兜底文案（dev.log 该请求 502，兜底机制实证：LLM 挂了用户也一定收到）；信息图标未读角标 +1 ✓；console 无运行时错误（4 Issues 均为既有 Edge Runtime 警告）
+- 验证：bunx tsc --noEmit 0 错误；改动 8 文件 eslint 0 问题（wechat/qq/chat 大文件仅 BABEL 500KB 提示非错误）
+
+Stage Summary:
+- 交付：①快递到驿站 AI 不再主动发任何提醒消息（取件交差消息保留）；②「我要拉黑你」类宣言由系统直接执行用户拉黑 AI（方向不再反），提示词加方向红线防 AI 反向拉黑；③用户拉黑 AI（含 AI 拉黑用户方向）后 AI 必然主动跨 App 找人：QQ/信息各一条（LLM 失败走本地兜底文案）+ 50~70s 后主动打来电话（接听按拉黑情境开场、挂断落未接+AI 语音留言）；④自动发消息到点必有产出：LLM 失败本地兜底投递（timer/event/reminder/auto-fail 全覆盖），主动来电决策失败冷却 6h→5min
+- 改动文件：src/lib/ios/{tb-ai-engage,block-state,cross-app-reach,proactive-call,proactive-msg}.ts、src/components/apps/{wechat,qq,chat}.tsx
+- 关键决策：①拉黑意图识别刻意保守（≤16 字短宣言+否定词/反向语义排除），长句威胁（「别逼我拉黑你」）不执行，避免误伤；②「把我拉黑吧」仍归 AI 自主决定（既有 [拉黑] 链路），只有「我拉黑你」方向由系统代执行——两条路互不干扰；③跨 App 兜底文案不暴露系统痕迹（按方向拟人化口吻），兜底也走完整投递管线（通知/角标/记忆）；④拉黑来电延时 50s+20s 抖动错峰（消息先到电话随后），sms 双向拉黑时来电放弃（电话引擎会拦成死寂）；⑤到点兜底消息跳过 lastSentText 去重但保留近 6 条对比（防重复又不牺牲「一定发出」）

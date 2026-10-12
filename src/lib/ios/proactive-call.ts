@@ -658,9 +658,11 @@ async function tickInner(): Promise<void> {
     accountId: getActiveAccountIdFor('phone'),
   });
 
-  // 决策失败（null）：按 wait 口径落 6h 冷却，防止 90s 重试上游轰炸
+  // 决策失败（null）：不再按 wait 落 6h 冷却——API 挂了 ≠ AI 决定不打，6h 冷却会让 AI 在
+  // API 不稳的时段「从不主动打来」（与主动消息到点不发的静默失败同源，用户反馈排查项）；
+  // 落 5min 短冷却（防 90s 连续重试浪费决策 API，API 恢复后能尽快打来）
   if (!decision) {
-    setCooldown(contact.id, nowMs, 'wait');
+    setShortCooldown(contact.id, nowMs);
     return;
   }
   // wait/skip：落对应冷却（6h/24h），不发起来电
@@ -713,4 +715,50 @@ async function tickInner(): Promise<void> {
       void recordMissedPhoneCall(contact, number, name, reason);
     },
   });
+}
+
+// ---------------- 拉黑事件直拨（G-1 电话版入口，cross-app-reach 延时调用） ----------------
+
+/**
+ * 拉黑后 AI「立刻打来」的一次性直拨（用户验收点：被拉黑后 AI 会打电话来找我）：
+ * 复用主动来电的整套链路（iOS 全屏来电 UI / 接听交接电话 App / 拒接超时落未接+AI 语音留言），
+ * 但绕过 tick 候选筛选与决策 API——拉黑跃迁是明确预期来电的时刻，proactiveContext 由调用方给
+ * （含「谁拉黑了谁」的情境，接听后通话引擎按人设自然开场）。
+ * 全链路容错：任何守卫不满足/异常都静默放弃（消息版 cross-app-reach 已保证「一定看得到」）。
+ * @returns 是否真正发起来电
+ */
+export function triggerBlockCall(contact: ContactRecord, contextHint: string): boolean {
+  try {
+    // 守卫：已有来电响铃/通话进行中/闹钟响铃时不叠加（与 runProactiveCallTick ③ 同口径）
+    if (useIncomingCall.getState().call) return false;
+    if (useGlobalCall.getState().session) return false;
+    if (useUI.getState().callActive) return false;
+    if (useUI.getState().alarmRinging) return false;
+    // 「信息」App 双向拉黑都不打：用户拉黑 → 来电会被 #17 守卫拦成死寂；
+    // 角色拉黑用户 → 撞上电话引擎 #40 守变「来电即被拦+静默挂断」的怪链路（与 tick 候选口径一致）
+    const blk = loadBlock('sms', contact.id);
+    if (blk.byUser || blk.byChar) return false;
+    // 落 call 冷却：防直拨后 tick 又在短窗口内把同一人选出来重复拨打
+    setCooldown(contact.id, Date.now(), 'call');
+    const number = contact.phone || derivePlaceholderNumber(contact.id);
+    const name = contact.name;
+    triggerIncomingCall({
+      source: 'phone',
+      bannerStage: 'pill',
+      name,
+      avatar: avatarFor(contact, 'phone'),
+      number,
+      contact,
+      onAnswer: () => {
+        setPendingPhoneAnswer({ contact, number, name, proactiveContext: contextHint });
+        useUI.getState().switchToApp('phone');
+      },
+      onMissed: (reason) => {
+        void recordMissedPhoneCall(contact, number, name, reason);
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }

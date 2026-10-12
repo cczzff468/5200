@@ -76,8 +76,6 @@ export type TbEngageApp = 'wx' | 'qq';
 export const TB_ENGAGE_COOLDOWN_MS = 5 * 60_000;
 /** 全局主动代付冷却（防多单连发打扰） */
 const PROACTIVE_PAY_CD_MS = 3 * 60_000;
-/** 到货主动问候冷却 */
-const ARRIVAL_COMMENT_CD_MS = 10 * 60_000;
 /** 礼物说明的追溯窗口（分享后 2 小时内说「给你买的」都算） */
 const GIFT_WINDOW_MS = 2 * 60 * 60_000;
 
@@ -1190,80 +1188,6 @@ async function runProactivePayEngage(uid: string, orderId: string): Promise<void
   }
 }
 
-/** 包裹到驿站主动问候一句话：LLM 按人设+记忆+上下文生成（不套固定收尾）；刚发货时的「留意物流」提醒已按用户要求删除，不再主动发 */
-async function tbArrivalLineViaLlm(
-  contact: ContactRecord,
-  app: TbEngageApp,
-  shopName: string,
-  item: string,
-  meName: string,
-): Promise<string> {
-  const sessionKey = `${app}:${contact.id}`;
-  const system = [
-    await tbPersonaSystemFor(contact, app),
-    memChatRecallBlock(contact.id, app, '淘宝 快递 物流 购物', {}),
-    getTimeAware(sessionKey) ? buildTimeAwareBlock({ regionHint: contact.region || null }) : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-  const user = [
-    `【你注意到的事】${meName}在淘宝「${shopName}」买的${item}刚放到驿站了（TA还没取）。`,
-    '【任务】要不要主动提这件事，由你结合人设、你们的关系、当前时间和你们相处的记忆自己决定：',
-    '想说：输出那句话本身（1 句，像平时聊天，提醒TA去取；禁止每次都用「记得去取呀」这类固定收尾）；',
-    '觉得没必要说/不想打扰/刚聊过这个话题：直接输出空（什么都不用说，之后TA聊起来再自然回应）。',
-    '直接输出句子本身或空字符串，不要 JSON、不要引号。',
-  ].join('\n\n');
-  const raw = await callTbLlm(system, user);
-  return raw.trim().replace(/^[「"'『]+|[」"'』]+$/g, '').split('\n')[0]?.trim() ?? '';
-}
-
-/**
- * 到货主动问候（四：AI 可以主动问快递，说不说由 AI 自己决定）：
- * 返回 true=这单已处理完（发了或 AI 决定不说），false=暂不处理（冷却中/没聊天对象——
- * 用户反馈：标记不能在找候选前就打，否则没对象时这单永远不会再问候）。
- */
-async function maybeArrivalComment(uid: string, orderId: string): Promise<boolean> {
-  if (globalCoolingDown('tb-comment-cd', ARRIVAL_COMMENT_CD_MS)) return false;
-  const picked = await tbPickRecentAiChat();
-  if (!picked) return false; // 没聊天对象：不打标记，这单以后仍可问候
-  const { app, contact } = picked;
-  const order = tbLoadOrders(uid).find((o) => o.id === orderId);
-  if (!order) return true;
-  const meName = ownerNameSync();
-  const item = order.items[0]?.title.slice(0, 16) ?? '快递';
-  // 人设化问候：LLM 现场生成 + 自主决定说不说（用户要求：可以选择问也可以不选择问候，不套模板，失败不兑底）
-  let line = '';
-  try {
-    line = await tbArrivalLineViaLlm(contact, app, order.shopName, item, meName);
-  } catch {
-    line = '';
-  }
-  // 处理完这单（发了或决定不说都算），防每 tick 重试 LLM
-  kvSet(`tb-commented:${orderId}`, true);
-  markGlobal('tb-comment-cd');
-  if (!line) return true; // AI 决定不说：安静
-  try {
-    await deliverPeerMsgs(app, contact, [{ id: `tbac-${Date.now().toString(36)}`, role: 'peer', content: line, time: Date.now() }]);
-    const notifyApp = app === 'wx' ? ('wechat' as const) : ('qq' as const);
-    void pushChatNotification({
-      sessionKey: `${app}:${contact.id}`,
-      app: notifyApp,
-      title: contact.name,
-      avatar: avatarFor(contact, app),
-      body: line,
-      target: { app: notifyApp, contactId: contact.id },
-    });
-    const { isProactiveChatActive } = await import('./proactive-msg');
-    if (!isProactiveChatActive(app, contact.id)) {
-      if (app === 'wx') wxUnreads.bump(contact.id, 1);
-      else qqUnreads.bump(contact.id, 1);
-    }
-  } catch {
-    /* 静默 */
-  }
-  return true;
-}
-
 /** 订单状态机 tick 接力（taobao-store watcher 每 10s 调用）：取件/主动代付/到货问候/终态记忆 */
 export async function tbEngageTick(uid: string): Promise<void> {
   try {
@@ -1299,15 +1223,8 @@ export async function tbEngageTick(uid: string): Promise<void> {
         return; // 一轮只做一件主动事
       }
     }
-    // (c) 到驿站主动问候：只提醒「到驿站待取件」——刚发货时的「留意物流」类问候已按用户要求删除；
-    // 有礼物/帮取安排的由取件流程说话，不重复；标记在「确定处理完」后才打（发了或 AI 决定不说），没聊天对象不消耗机会
-    const commented = orders.find(
-      (o) => o.status === 'shipped' && !o.aiPickup && !kvGet<boolean>(`tb-commented:${o.id}`) && o.track.length > 0 && tbArrivedAtStation(o),
-    );
-    if (commented) {
-      await maybeArrivalComment(uid, commented.id);
-      return;
-    }
+    // (c) 到驿站不再发任何主动问候（用户明确要求：快递到了不要 AI 发提醒消息）；
+    // 有礼物/帮取安排的仍由取件流程说话（取件交差，不属于到站提醒）
     // (d) 终态记忆：AI 参与代付的单签收后给角色补一条（幂等 kv 标记）
     for (const o of orders) {
       if (o.status !== 'completed' || !o.proxy || kvGet<boolean>(`tb-memo-done:${o.id}`)) continue;

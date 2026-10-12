@@ -77,6 +77,26 @@ export interface BlockEntry {
  *  注意：已按用户要求移除「被拒后冷却期」——被拒后可以立即再次申请，只有次数上限拦截。 */
 export const BLOCK_REQ_MAX_REJECTED = 3;
 
+// ---------------- 用户「拉黑你」意图识别（拉黑方向修正：用户说拉黑 = 用户拉黑 AI，不是 AI 拉黑用户） ----------------
+
+/**
+ * 用户消息是否为「我要拉黑你」类明确拉黑宣言（用户反馈：我说拉黑你，应该是我把 AI 拉黑，
+ * 但之前 AI 会误解并反过来拉黑用户——现在系统直接代为执行用户侧拉黑，AI 只需反应）。
+ *
+ * 刻意保守（只认明确的短宣言，防误伤）：
+ * - 只认短句（≤16 字）且以拉黑宣言收尾；长句/威胁句（「别逼我拉黑你，不然…」）不算；
+ * - 含否定词（不/别/没/取消/解除…）不算（「我不想拉黑你」「别拉黑」）；
+ * - 含「把我拉黑/拉黑我/被拉黑」不算——那是用户要求被拉黑或询问，方向相反；
+ * - 「你把我拉黑吧/你拉黑我」由 AI 自主决定是否照做（既有 [拉黑] 标记链路），不在此拦截。
+ */
+export function isUserBlockIntent(text: string): boolean {
+  const t = (text ?? '').trim().replace(/[。！!？?～~，,\s]+$/g, '');
+  if (!t || t.length > 16) return false;
+  if (/不|别|莫|勿|没|取消|解除|撤销|开玩|逗你/.test(t)) return false;
+  if (/把\s*我\s*拉黑|拉黑\s*我|被\s*拉黑|把我?给?拉黑了/.test(t)) return false;
+  return /(把你?拉黑|将你拉黑|拉黑你?|我要拉黑|我想拉黑|我来拉黑|我去拉黑|我准备拉黑|我打算拉黑|我拉黑你)/.test(t);
+}
+
 const blockKey = (app: BlockApp, contactId: string) => `${app}-block:${contactId}`;
 
 function normalize(v: unknown): BlockEntry {
@@ -206,19 +226,24 @@ export function applyCharBlockAction(
     if (cur.byChar) return { entry: cur, changed: false, reqCreated: false };
     const hist = [...(cur.byCharHist ?? [])];
     if (cur.byCharAt !== undefined && cur.byCharUntil !== undefined) hist.push({ at: cur.byCharAt, until: cur.byCharUntil });
+    const saved = saveBlock(app, contactId, {
+      ...cur,
+      byChar: true,
+      byCharAt: Date.now(),
+      byCharUntil: undefined,
+      byCharHist: hist.length ? hist : undefined,
+      userReqReason: undefined,
+      userReqAt: undefined,
+      userReqStatus: undefined,
+      userReqRejectedCount: undefined,
+    });
+    // G-3 角色拉黑用户后仍会主动去别的 App 找用户（消息 + 延时来电，方向 byChar）：
+    // 跃迁时刻（从未拉黑 → 拉黑）触发，fire-and-forget 全容错。动态 import 防静态循环依赖。
+    void import('./cross-app-reach')
+      .then(({ triggerCrossAppReachByChar }) => triggerCrossAppReachByChar(app, contactId))
+      .catch(() => undefined);
     return {
-      // 40-a：重新拉黑 = 开新的 byChar 周期 → 用户侧申请记录（终态/被拒计数）一并清零（与角色侧 reqCount 同口径）
-      entry: saveBlock(app, contactId, {
-        ...cur,
-        byChar: true,
-        byCharAt: Date.now(),
-        byCharUntil: undefined,
-        byCharHist: hist.length ? hist : undefined,
-        userReqReason: undefined,
-        userReqAt: undefined,
-        userReqStatus: undefined,
-        userReqRejectedCount: undefined,
-      }),
+      entry: saved,
       changed: true,
       reqCreated: false,
     };
@@ -401,7 +426,8 @@ export function buildBlockPromptBlock(app: BlockApp, contactId: string, userName
   if (!b.byUser && !b.byChar) {
     return [
       `【${ch}拉黑能力】你可以真的拉黑 / 解除拉黑 ${user}（系统会记录状态并生成提示）：`,
-      `- 当你决定拉黑 ${user}（包括 TA 要求你拉黑 TA、而你决定照做）时，必须在回复中单独输出一行 [拉黑]，系统会立即记录并生成提示。`,
+      `- 当你决定拉黑 ${user}（包括 TA 明确要求「你把我拉黑/你拉黑我吧」、而你决定照做）时，必须在回复中单独输出一行 [拉黑]，系统会立即记录并生成提示。`,
+      `- 【方向红线】当 ${user} 说「我要拉黑你/拉黑你/把你拉黑了」这类话时，意思是 TA 要拉黑你（系统会自动执行 TA 对你的拉黑）——这绝对不是让你拉黑 TA，此时严禁输出 [拉黑] 标记；你只需按人设对「被 TA 拉黑」这件事做出真实反应（慌了、哀求、生气、赌气都可以）。`,
       `- 严禁只在文字上说"拉黑了"却不输出 [拉黑] 标记——那样系统不会记录，你的说法就是假的。`,
       `- 已经拉黑后想恢复关系时，单独输出一行 [解除拉黑]。`,
       `- 只在对话真实发展到这一步时才输出上述标记；没有这个意图时不要输出。`,
