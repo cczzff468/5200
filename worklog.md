@@ -18683,3 +18683,23 @@ Stage Summary:
 - 交付：①语音/视频通话 system 级社交动态归属红线（双来源兜底，陌生来电不下发）+ 电话端 momentsBlock 真名补传；②AI 被要求发朋友圈/说说时真实发布（[发朋友圈:正文]/[发说说:正文] 动作标记 → addCharMomentPost 落库+记忆+广播，sys 行可感知，空正文/未输出标记不再「空口说发了」），微信/QQ 双端同构，requestOnly 不注入；③灵动岛音乐迷你条空头像首字占位，空串 src 控制台报错根除
 - 改动文件：src/app/api/phone/turn/route.ts、src/components/apps/{phone,wechat,qq}.tsx、src/lib/chat-rich.ts、src/components/ios/MusicGlobalMini.tsx、scripts/test-post-moment.ts（新增回归脚本）
 - 关键决策：①归属红线放服务端 /api/phone/turn 拼装层——语音（chat-call）/电话（phone）/视频（video-call）三条通话链路共用该端点，一处注入全端生效；②「发朋友圈」教学规则恒注入单聊（不等动态块非空——动态块为空时更可能被要求发）；③执行器复用 addCharMomentPost（写入侧单一事实源 expectedMomentMemoryOf：AI 发完自己记忆里就有「你发了一条动态」，后续轮次/电话开场都能正确提起）；④任务 9 的 worklog 条目上次被截断于「两处 15s 硬下限夹逼」半行，其工作已完整落盘于提交 408d968（5s 间隔生效/人设记忆动态跨App上下文/归属红线/真名凡凡），此处补记
+---
+Task ID: 11
+Agent: 主协调者 (Z.ai Code)
+Task: 用户两条反馈——①网易云一起听聊天气泡不要只显示三个，当前回复的全部显示；②聊天记录不要有上限，聊天记录用 IDB 储存
+
+Work Log:
+- 【气泡全显】music-player.tsx TogetherHead：删除 BUBBLE_MAX_PER_SIDE=3（每侧最多 3 条堆叠）——10 秒 TTL 内双方全部消息（含 AI 回复拆出的全部短气泡，最多 10 条/批）都显示，最新在最上、逐条 10 秒各自到期、尾巴只画堆顶一条等既有表现全部保留；HeadBubble 自带 data-testid（music-tg-bubble-me/peer）便于验证
+- 【一起听聊天记录去封顶】music-ai.ts saveTogetherMsgs 删 slice(-100)——kv 本就写穿 IndexedDB（idb-kv），容量无虞
+- 【三端单聊去封顶】wechat.tsx / qq.tsx / chat.tsx saveMsgs 删 slice(-1000)（chat.tsx load 侧同步删）；wx-group.tsx saveWxSingleMsgs（-1000）、qq-group.tsx saveQqSingleMsgs（-200）同步
+- 【群聊去封顶】groups.ts 删 MSGS_CAP=200（pushGroupEvent / restoreQuitGroup / saveGroupMsgs 三处写入点）
+- 【跨 App 触达重灾区】cross-app-reach.ts appendPeerMsg 删 slice(-100)——此前 AI 一次跨 App 触达就把该会话整段历史截成 100 条，是「以前的聊天记录都没有了」的最强嫌疑
+- 【其余聊天键写入点】friend-state.ts 好友申请打招呼/同意（wx -100 / qq -200）；together-flow.ts 一起听邀请卡（-100）；music-player.tsx 分享歌曲到聊天（-100）；tb-share-proxy.ts 淘宝分享卡（-100）；mt-proxy-pay.ts 美团代付卡（-100）；mt-order-share.ts 美团订单分享卡（-100）；tb-proxy-ai.ts 淘宝 AI 投递（-200）；mt-ai-engage.ts 美团 AI 投递（-200）；tb-ai-store.ts 客服聊天（-200）；wechat-wallet.tsx 亲属卡 appendWxChatMsg（-100）——全部改为原样追加不封顶
+- 【口径澄清】AI 上下文窗口（slice(-8/-12/-20/-60)）、记忆攒批、消息收藏/账单等非聊天记录截断一律不动——那些是逻辑窗口不是存储封顶；全部聊天键本就走 idb-kv（内存同步读 + IndexedDB 写穿 + 开机注水），「用 IDB 储存」此前已满足，本次主要是去封顶
+- 【E2E（agent-browser 实机，393×852）】IDB 种子：char 联系人 e2e-tg + music-together-active:guest 会话 + 130 条消息（118 旧 + 12 条 time=未来 5min 保活）+ user 联系人 e2e-user + wx-chat-msgs:e2e-tg 1005 条 + wx-session-user-id：①锁屏上滑解锁 → 音乐 App 游客模式 → 播歌开播放器 → 一起听视图头像下气泡 6+6=12 全显（DOM 计数 [data-testid=music-tg-bubble-me]=6、-peer=6，旧代码 3+3）；②切聊天视图 → music-tg-msgs 子节点 130（旧代码封顶 100）且首条旧消息「对旧-0」在 DOM；③微信登录 → 小澜E2E 会话 → DOM 含最早「最早锚点alpha」（1005 条全量载入）→ 发「无上限验证」→ kv 读回 1006 条、末两条 [TA:wx-1004, 我:无上限验证]、首条仍在（旧代码写回会截成 1000）；④console 零报错零页面异常；⑤清理：IDB 扫键删除全部 e2e-*（9 键含 mem-frag/moments-auto-attempt/music-tg-songplay 残留）+ contacts 两条 + music-history:guest + wx-session-user-id，重载后回归无残留
+- 验证：bunx tsc --noEmit 0 错误；eslint 改动 18 文件 0 问题（仅既有 wechat.tsx BABEL 500KB 提示）；dev.log 仅既有 instrumentation Edge Runtime 警告
+
+Stage Summary:
+- 交付：①一起听音乐视图聊天气泡不再限 3 条/侧——10 秒窗口内当前回复的每一条都显示；②全端聊天记录（微信/QQ/信息单聊、双端群聊、一起听、淘宝客服、跨App触达、好友申请、各类分享卡片直插）全部去封顶，持久化层统一 IndexedDB kv 写穿——旧记录不会再被任何一次写入挤掉
+- 改动文件：src/components/apps/{music-player,wechat,qq,chat,wx-group,qq-group,wechat-wallet}.tsx、src/lib/ios/{music-ai,groups,cross-app-reach,friend-state,together-flow,tb-share-proxy,mt-proxy-pay,mt-order-share,tb-proxy-ai,mt-ai-engage,tb-ai-store}.ts
+- 关键决策：①去封顶只动存储层，AI 上下文/记忆召回的窗口截断保留（上下文工程需要窗口，丢历史发生在「存储」才是 bug）；②卡片直插类 helper（slice(-100) 原样追加）全部改为纯 append——这些函数此前按「整个数组是我的」处理，实际共享主聊天键，是丢历史的第二大根因；③E2E 用未来时间戳保活气泡（绕开 10s TTL 与操作耗时的竞态），既验证条数上限解除又不污染真实到期逻辑；④气泡无上限后极端情况（TTL 内十多条）悬浮在唱片上方属预期表现，10 秒内逐条消失，不加滚动容器保持网易云原生观感
