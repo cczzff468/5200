@@ -3261,8 +3261,13 @@ function PaySheet({
         payFc: selChan.isFc,
         payFcParts: res.fc?.parts.map((p) => ({ cardInId: p.cardInId, amount: p.amount })),
       });
-      // 站内消息：支付成功（交易物流）
-      tbPushMsg(uid, { kind: 'logistics', title: '支付成功', text: `订单已支付 ¥${fmtMoney(amount)}（${selChan.isFc ? selChan.label : labelMap[selChan.methodId] ?? selChan.label}），商家将尽快发货`, orderId });
+      // 站内消息：票务单付款即出票（推送出票成功+取票号）；普通单推支付成功
+      const paidOrder = tbLoadOrders(uid).find((x) => x.id === orderId);
+      if (paidOrder?.ticket) {
+        tbPushMsg(uid, { kind: 'logistics', title: '出票成功', text: `《${paidOrder.ticket.title}》已出票，取票号 ${paidOrder.ticket.ticketNo}，开场凭码入场`, orderId });
+      } else {
+        tbPushMsg(uid, { kind: 'logistics', title: '支付成功', text: `订单已支付 ¥${fmtMoney(amount)}（${selChan.isFc ? selChan.label : labelMap[selChan.methodId] ?? selChan.label}），商家将尽快发货`, orderId });
+      }
       // 成功态：绿色对勾短展示后跳转订单详情
       setPaid(true);
       window.setTimeout(() => onSuccess(orderId), 750);
@@ -3891,10 +3896,10 @@ function OrderCard({
   onRefund: () => void;
 }) {
   const countdown = useCountdown(o.status === 'pendingPay' ? o.createdAt + TB_PAY_TTL : undefined);
-  // 票务订单卡（第十三轮淘票票：电影/喜剧脱口秀/演唱会——无物流不发货，直接「待收货」，点击进电影票详情）
+  // 票务订单卡（第十三轮淘票票：电影/喜剧脱口秀/演唱会——无物流不发货；Task 2-b：待付款态可支付/取消）
   if (o.ticket) {
     const t = o.ticket;
-    const stText = o.status === 'cancelled' ? (o.refund ? '退款成功' : '交易关闭') : o.status === 'completed' ? '交易成功' : '待收货';
+    const stText = o.status === 'pendingPay' ? `待付款 · 剩${countdown}` : o.status === 'cancelled' ? (o.refund ? '退款成功' : '交易关闭') : o.status === 'completed' ? '交易成功' : '待收货';
     return (
       <div onClick={onOpen} className="cursor-pointer rounded-2xl bg-white px-3.5 py-3 active:bg-black/[0.015]">
         <div className="flex w-full items-center gap-1.5">
@@ -3929,7 +3934,7 @@ function OrderCard({
         </div>
         <div className="mt-2.5 flex items-center justify-end">
           <span className="text-[12px] text-black/45">
-            实付款 <span className="text-[16px] font-semibold text-black/85">¥{fmtMoney(o.total)}</span>
+            {o.status === 'pendingPay' ? '应付' : '实付款'} <span className="text-[16px] font-semibold text-black/85">¥{fmtMoney(o.total)}</span>
           </span>
         </div>
         <div className="mt-2.5 flex items-center">
@@ -3941,6 +3946,16 @@ function OrderCard({
             <span />
           )}
           <div className="ml-auto flex gap-2">
+            {o.status === 'pendingPay' ? (
+              <>
+                <button type="button" onClick={(e) => { e.stopPropagation(); onCancel(); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
+                  取消订单
+                </button>
+                <button type="button" data-testid={`tb-ticket-pay-${o.id}`} onClick={(e) => { e.stopPropagation(); onPay(); }} className="rounded-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-3.5 py-1.5 text-[13px] font-semibold text-white active:opacity-85">
+                  去支付
+                </button>
+              </>
+            ) : null}
             {o.status === 'shipped' ? (
               <>
                 <button type="button" onClick={(e) => { e.stopPropagation(); onRefund(); }} className="rounded-lg border border-black/12 px-3.5 py-1.5 text-[13px] text-black/60 active:opacity-70">
@@ -7411,8 +7426,8 @@ function PayPendingSheet({ uid, orderId, onClose, onPaid, onToast, onProxySent }
   const o = tbLoadOrders(uid).find((x) => x.id === orderId);
   if (!o) return null;
   const brief = o.items.length > 1 ? `${o.items[0].title.slice(0, 12)}等${o.items.length}件` : o.items[0]?.title.slice(0, 18) ?? '商品';
-  // 支付成功消息由 PaySheet 内部统一推送（避免重复）
-  return <PaySheet uid={uid} orderId={orderId} amount={o.total} goodsBrief={brief} onClose={onClose} onSuccess={(oid) => { onToast('支付成功'); onPaid(oid); }} onProxySent={onProxySent} />;
+  // 支付成功消息由 PaySheet 内部统一推送（避免重复）；票务单支付即出票
+  return <PaySheet uid={uid} orderId={orderId} amount={o.total} goodsBrief={brief} onClose={onClose} onSuccess={(oid) => { onToast(o.ticket ? '出票成功' : '支付成功'); onPaid(oid); }} onProxySent={onProxySent} />;
 }
 
 /** 订单分享弹层（交易成功/已发货详情分享入口）：选微信/QQ → 选联系人 → 动态订单卡片进好友聊天；
@@ -7462,7 +7477,7 @@ function TbShareOrderSheet({
       contactId={contactId}
       sending={sending}
       title={pickup ? '找人帮取' : '分享订单'}
-      platHint={pickup ? `把「${order.shopName}」的快递分享给好友，TA到驿站后帮你取件` : `把「${order.shopName}」的订单分享给好友，TA能实时看到物流动态`}
+      platHint={pickup ? `把「${order.shopName}」的快递分享给好友，TA到驿站后帮你取件` : order.ticket ? `把「${order.shopName}」的演出票分享给好友，TA能看到演出信息` : `把「${order.shopName}」的订单分享给好友，TA能实时看到物流动态`}
       contactHint={(p) => (pickup ? `从${p}好友里选一位帮你取件` : `从${p}好友里选一位分享这个订单`)}
       sendLabel="发送"
       sendTestId="tb-share-send"
@@ -7518,18 +7533,35 @@ export default function TaobaoApp() {
   const [pickupOrderId, setPickupOrderId] = useState<string | null>(null);
   const [toastMsg, showToast] = useLocalToast();
 
+  /** 分享卡/灵动岛通知点击进单（票务单 → 票详情；待付款票务单 → 收银台；普通单 → 订单详情）。
+   *  置于早退返回之前：启动 effect 消费导航时（booting 渲染）也可安全调用 */
+  const navOpenOrder = (id: string) => {
+    const s = tbGetSession();
+    if (!s) return;
+    const o = tbLoadOrders(tbUidOf(s)).find((x) => x.id === id);
+    if (o?.ticket && o.status === 'pendingPay') {
+      setPayOrderId(id);
+      return;
+    }
+    if (o?.ticket) {
+      setTicketId(id);
+      setTicketReturn('orders');
+      setPage('ticketDetail');
+      return;
+    }
+    setOrderId(id);
+    setPage('orderDetail');
+  };
+
   // 启动：恢复登录态 + 订单状态机 tick（异步包一层，避免 effect 内同步 setState 级联渲染）
   useEffect(() => {
     tbStartOrderWatcher();
     void Promise.resolve().then(() => {
       setSession(tbGetSession());
       setBooting(false);
-      // 消费灵动岛通知/聊天分享卡点击跳转（淘宝订单详情）
+      // 消费灵动岛通知/聊天分享卡点击跳转（淘宝订单详情；票务单 → 票详情）
       const nav = takeNotifyNavigation('taobao');
-      if (nav?.contactId && tbGetSession()) {
-        setOrderId(nav.contactId);
-        setPage('orderDetail');
-      }
+      if (nav?.contactId && tbGetSession()) navOpenOrder(nav.contactId);
     });
   }, []);
 
@@ -7537,10 +7569,7 @@ export default function TaobaoApp() {
   useEffect(() => {
     const onNav = () => {
       const nav = takeNotifyNavigation('taobao');
-      if (nav?.contactId && tbGetSession()) {
-        setOrderId(nav.contactId);
-        setPage('orderDetail');
-      }
+      if (nav?.contactId && tbGetSession()) navOpenOrder(nav.contactId);
     };
     window.addEventListener(ISLAND_NAV_EVENT, onNav);
     return () => window.removeEventListener(ISLAND_NAV_EVENT, onNav);
@@ -7601,10 +7630,15 @@ export default function TaobaoApp() {
     setPage('chat');
   };
 
-  /** 打开订单（票务单 → 电影票详情；普通单 → 对应状态详情页；from 记录返回目标） */
+  /** 打开订单（票务单 → 电影票详情；待付款票务单 → 直接拉收银台；普通单 → 对应状态详情页；from 记录返回目标） */
   const openOrderSmart = (id: string, from: 'orders' | 'movie' = 'orders') => {
     const o = tbLoadOrders(uid).find((x) => x.id === id);
     if (o?.ticket) {
+      if (o.status === 'pendingPay') {
+        // 待付款票务单：点卡直达收银台（用户点支付才扣款出票）
+        setPayOrderId(id);
+        return;
+      }
       setTicketId(id);
       setTicketReturn(from);
       setPage('ticketDetail');
@@ -7845,7 +7879,7 @@ export default function TaobaoApp() {
     // 红包签到·领现金（第九轮：首页运营位图标入口）
     content = <SignInPage uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
   } else if (page === 'movie') {
-    // 淘票票（第十三轮重构：四大频道 tab；出票→票详情；周边下单→支付面板）
+    // 淘票票（第十三轮重构：四大频道 tab；确认选座/选票 → 待付款订单 → 收银台支付后出票跳票详情；周边下单 → 支付面板）
     content = (
       <MoviePage
         uid={uid}
@@ -7853,16 +7887,11 @@ export default function TaobaoApp() {
         onBack={() => setPage('main')}
         onToast={showToast}
         onOpenCouponCenter={() => setPage('couponCenter')}
-        onIssued={(id) => {
-          setTicketId(id);
-          setTicketReturn('movie');
-          setPage('ticketDetail');
-        }}
         onPayOrder={(id) => setPayOrderId(id)}
       />
     );
   } else if (page === 'ticketDetail' && ticketId) {
-    // 电影票详情（待开场/已放映/已退款 三态）
+    // 电影票详情（待开场/已放映/已退款/已入场 四态 + 扫码入场 + 分享）
     content = (
       <TicketDetailPage
         uid={uid}
@@ -7874,6 +7903,8 @@ export default function TaobaoApp() {
           setMovieTab('merch');
           setPage('movie');
         }}
+        onShare={(id) => setShareOrderId(id)}
+        onPayOrder={(id) => setPayOrderId(id)}
       />
     );
   } else if (page === 'fliggy') {
@@ -7928,7 +7959,7 @@ export default function TaobaoApp() {
           }}
         />
       ) : null}
-      {/* 待付款订单续付（订单列表/详情） */}
+      {/* 待付款订单续付（订单列表/详情/淘票票下单后）：支付成功 → 票务单跳票详情，普通单跳订单详情 */}
       {payOrderId ? (
         <PayPendingSheet
           uid={uid}
@@ -7936,15 +7967,29 @@ export default function TaobaoApp() {
           onClose={() => setPayOrderId(null)}
           onPaid={(oid) => {
             setPayOrderId(null);
-            setOrderId(oid);
-            setPage('orderDetail');
+            const po = tbLoadOrders(uid).find((x) => x.id === oid);
+            if (po?.ticket) {
+              setTicketId(oid);
+              setTicketReturn('orders');
+              setPage('ticketDetail');
+            } else {
+              setOrderId(oid);
+              setPage('orderDetail');
+            }
           }}
           onProxySent={(oid) => {
-            // 代付请求已发出：关收银台跳待付款订单详情
+            // 代付请求已发出：关收银台跳对应详情（票务单 → 票详情待付款态，普通单 → 订单详情）
             setPayOrderId(null);
             showToast('代付请求已发出，等好友付款');
-            setOrderId(oid);
-            setPage('orderDetail');
+            const po = tbLoadOrders(uid).find((x) => x.id === oid);
+            if (po?.ticket) {
+              setTicketId(oid);
+              setTicketReturn('orders');
+              setPage('ticketDetail');
+            } else {
+              setOrderId(oid);
+              setPage('orderDetail');
+            }
           }}
           onToast={showToast}
         />

@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AudioLines, Loader2, Music4, RefreshCw, SendHorizonal, Smile } from 'lucide-react';
 import { useMusic, getGuestAvatar } from '@/lib/ios/music-store';
-import { sendTogetherText, togetherRecommend, useTogetherLive } from '@/lib/ios/music-ai';
+import { retryTogetherReply, sendTogetherText, togetherRecommend, useTogetherLive } from '@/lib/ios/music-ai';
 import { CoverImg } from './music-shared';
 
 export function TogetherChat() {
@@ -50,6 +50,8 @@ export function TogetherChat() {
         </p>
       )}
       {msgs.map((m) => {
+        // 旧版失败占位气泡（「……（信号不太好，没听清）」）不再渲染（用户需求：失败改红色 ! 徽标）
+        if (m.role === 'peer' && m.error) return null;
         const mine = m.role === 'me';
         return (
           <div key={m.id} className={`flex items-end gap-2.5 ${mine ? 'flex-row-reverse' : ''}`}>
@@ -58,6 +60,17 @@ export function TogetherChat() {
             ) : (
               <CoverImg src={together.avatar} className="h-9 w-9 shrink-0" rounded="rounded-full" alt={together.name} />
             )}
+            {mine && m.replyFail ? (
+              <button
+                type="button"
+                aria-label="重新生成"
+                data-testid={`music-tg-replyfail-${m.id}`}
+                onClick={() => retryTogetherReply(cid, m.id)}
+                className="mt-1 grid h-5 w-5 shrink-0 place-items-center self-center rounded-full bg-[#FA5151] text-[12px] font-bold leading-none text-white active:opacity-80"
+              >
+                !
+              </button>
+            ) : null}
             <div className={`flex max-w-[72%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
               {m.role === 'recs' && m.songs ? (
                 <div className="w-[240px] rounded-2xl rounded-bl-md bg-white/12 p-2.5">
@@ -102,7 +115,7 @@ export function TogetherChat() {
                 <p
                   className={`whitespace-pre-wrap break-words rounded-2xl bg-white/12 px-3.5 py-2.5 text-[14px] leading-relaxed text-white/95 ${
                     mine ? 'rounded-br-md' : 'rounded-bl-md'
-                  } ${m.error ? 'opacity-60' : ''}`}
+                  }`}
                 >
                   {m.text}
                 </p>

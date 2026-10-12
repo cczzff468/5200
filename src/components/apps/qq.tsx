@@ -159,7 +159,7 @@ import { MtDraftBubble } from './mt-draft-card';
 import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
 import { MtShareBubble } from './mt-share-card';
 import { TbPayBubble, TbProxyDetailPage, TbShareBubble, TbExpressPicker } from './tb-share-cards';
-import { tbCreateOrderShare, tbProxyHistoryLine, tbProxyMeHistoryLine, tbShareHistoryLine, stripTbEchoText, TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT } from '@/lib/ios/tb-share-proxy';
+import { tbCreateOrderShare, tbGetProxy, tbProxyHistoryLine, tbProxyMeHistoryLine, tbReshareProxy, tbShareHistoryLine, stripTbEchoText, TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT } from '@/lib/ios/tb-share-proxy';
 import { TbDraftBubble } from './tb-draft-card';
 import { applyTbEngageAction, buildTbEngageCtx, isTbEngageActionKind, tbDraftHistoryLine } from '@/lib/ios/tb-ai-engage';
 import { QqVoicePanel, SttPreviewOverlay, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
@@ -5481,7 +5481,9 @@ function ChatPage({
   };
 
   /** 转发克隆：文本 → 转发卡片；表情/图片/位置 → 同类型消息（新 id、role=me、保留引用）；
-   *  合并卡片原样保留记录；红包/转账等卡片消息 → 占位文本卡片（不克隆活卡，不动资金） */
+   *  合并卡片原样保留记录；红包/转账等卡片消息 → 占位文本卡片（不克隆活卡，不动资金）；
+   *  淘宝订单分享卡（tbshare）→ 活卡克隆（渲染按 sid 实时读订单状态）；
+   *  淘宝代付请求卡（tbpay）→ 走 forwardTbPayClone 异步转活卡（新建/复用代付请求），终态/转发给自己时回退占位文案 */
   const forwardClone = (m: QQMsg): QQMsg => {
     const id = uid();
     if (m.fwd?.merged) return { id, role: 'me', content: m.content, time: Date.now(), kind: 'forward', fwd: { from: m.fwd.from, merged: true, title: m.fwd.title, records: m.fwd.records } };
@@ -5492,8 +5494,25 @@ function ChatPage({
     if (m.kind === 'song' && m.song) return { id, role: 'me', content: `[歌曲]《${m.song.name}》${m.song.artist}`, time: Date.now(), kind: 'song', song: { name: m.song.name, artist: m.song.artist, cover: m.song.cover, songId: m.song.songId } };
     // 语音消息整条克隆（含音频 dataURL），目标会话里照常可播放
     if (m.kind === 'voice' && m.voice) return { id, role: 'me', content: '', time: Date.now(), kind: 'voice', voice: { ...m.voice } };
-    const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'textcard';
+    // 淘宝订单分享卡：活卡克隆（同 sid 新 id，状态时间线在目标会话里照常实时跟订单走）
+    if (m.kind === 'tbshare' && m.tbshare) return { id, role: 'me', content: m.content, time: Date.now(), kind: 'tbshare', tbshare: { sid: m.tbshare.sid } };
+    const isCard = m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'textcard' || m.kind === 'tbpay';
     return { id, role: 'me', content: isCard ? quoteContentOf(m) : m.content, time: Date.now(), kind: 'forward', fwd: { from: peer.name }, quote: m.quote };
+  };
+
+  /** 淘宝代付请求卡转发（活卡）：tbReshareProxy 为目标好友新建/复用代付请求（投递请求卡 + 调度 AI 决策），
+   *  deferCard 模式把新卡随转发批次落盘（防 insertCard 与 saveMsgs 重复投递）。
+   *  返回 null = 非待付请求卡/请求已终态/目标是自己 → 回退 forwardClone 占位文案卡 */
+  const forwardTbPayClone = async (m: QQMsg, target: FwdSheetTarget): Promise<QQMsg | null> => {
+    const p = m.tbpay ? tbGetProxy(m.tbpay.pid) : null;
+    if (!m.tbpay || m.tbpay.role !== 'req' || !p || p.direction === 'me' || p.status !== 'pending' || target.self) return null;
+    try {
+      const res = await tbReshareProxy(p.id, 'qq', target.id, undefined, undefined, me.name, me.avatar, { deferCard: true });
+      if (!res.ok) return null;
+      return { id: uid(), role: 'me', content: res.card.content, time: Date.now(), kind: 'tbpay', tbpay: { pid: res.pid, role: 'req' } };
+    } catch {
+      return null;
+    }
   };
 
   /** 转发目标：QQ 好友（排除当前会话）+ 自己 */
@@ -5504,14 +5523,20 @@ function ChatPage({
   }, [contacts, peer.id, me.id]);
 
 
-  /** 执行转发（逐条/合并）：写入目标会话存储 + 未读角标 + 给目标 AI 排感知事件（打开会话即触发 AI 回应） */
-  const doForward = (mode: FwdMode, ids: string[], target: FwdSheetTarget) => {
+  /** 执行转发（逐条/合并）：写入目标会话存储 + 未读角标 + 给目标 AI 排感知事件（打开会话即触发 AI 回应）；
+   *  淘宝代付请求卡逐条转发时异步转活卡（tbReshareProxy），其余消息同步克隆 */
+  const doForward = async (mode: FwdMode, ids: string[], target: FwdSheetTarget): Promise<void> => {
     const list = msgs.filter((m) => ids.includes(m.id));
     if (list.length === 0 || target.id === peer.id) return;
     const nameOf = (m: QQMsg) => (m.role === 'me' ? me.name : peer.name);
     if (mode === 'each') {
-      // 逐条转发：按时间顺序每条克隆成独立消息
-      saveMsgs(target.id, [...loadMsgs(target.id), ...list.map(forwardClone)]);
+      // 逐条转发：按时间顺序每条克隆成独立消息（tbpay 请求卡走活卡转发，失败回退占位文案）
+      const clones: QQMsg[] = [];
+      for (const m of list) {
+        const live = m.kind === 'tbpay' && m.tbpay ? await forwardTbPayClone(m, target) : null;
+        clones.push(live ?? forwardClone(m));
+      }
+      saveMsgs(target.id, [...loadMsgs(target.id), ...clones]);
     } else {
       // 合并转发：合成一张「聊天记录」卡片（标题 = 我与对方，内嵌逐条对话，点击可看全文）
       const title = fwdRecordTitle(me.name, peer.name);

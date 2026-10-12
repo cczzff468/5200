@@ -171,6 +171,45 @@ export const TB_MOVIE_SESSIONS = [
   { start: '14:30', end: '16:08' },
 ];
 
+// ---------------- 场次真实时间工具（Task 2-b：演出场次基于真实时钟动态生成） ----------------
+
+/** 两位数字补零 */
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/** 真实日期（偏移天数 d：0=今天/1=明天/2=后天，跨月跨年由 Date 推算）：
+ *  isoDate = 出票写库的 YYYY-MM-DD；md = MM-DD；label = 今天/明天/后天（>2 显示 M月d日）；long = M月d日 */
+export function tbRealDate(d: number): { isoDate: string; md: string; label: string; long: string } {
+  const dt = new Date();
+  dt.setDate(dt.getDate() + d);
+  const isoDate = `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+  const md = `${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+  const long = `${dt.getMonth() + 1}月${dt.getDate()}日`;
+  const label = d <= 0 ? '今天' : d === 1 ? '明天' : d === 2 ? '后天' : long;
+  return { isoDate, md, label, long };
+}
+
+/** 场次真实时间：偏移天数 + 开场时刻 HH:MM → 出票用完整场次（end 缺省按演出 2 小时推算，跨零点自动进位） */
+export function tbSessionTime(
+  d: number,
+  start: string,
+  opts?: { end?: string; hours?: number }
+): { isoDate: string; md: string; label: string; long: string; dateLabel: string; start: string; end: string } {
+  const base = tbRealDate(d);
+  const [h, m] = start.split(':').map(Number);
+  const e = new Date();
+  e.setDate(e.getDate() + d);
+  e.setHours(h || 0, m || 0, 0, 0);
+  e.setMinutes(e.getMinutes() + Math.round((opts?.hours ?? 2) * 60));
+  const end = opts?.end ?? `${pad2(e.getHours())}:${pad2(e.getMinutes())}`;
+  return { ...base, dateLabel: `${base.label} ${base.md}`, start, end };
+}
+
+/** 场次是否已过开场时刻（真实时钟；今天场次已开演 → 列表禁选「已开演」） */
+export function tbSessionStarted(isoDate: string, start: string): boolean {
+  const at = new Date(`${isoDate}T${start}:00`).getTime();
+  return Number.isFinite(at) && Date.now() >= at;
+}
+
 /** 淘票票·喜剧脱口秀频道 */
 
 export interface TbShow {

@@ -1,12 +1,15 @@
 /**
- * 淘宝客服 AI（第十六轮「开发淘宝消息界面 + AI 提示词规则」）：
+ * 淘宝客服 AI（第十六轮「开发淘宝消息界面 + AI 提示词规则」+ 多条连发改造）：
  * - 每个店铺一位专属客服（昵称稳定派生），回复走 /api/chat：
- *   「设置 › API 配置」用户配置的 OpenAI 兼容模型优先 → 内置模型兜底 → 本地规则兜底；
+ *   「设置 › API 配置」用户配置的 OpenAI 兼容模型优先 → 内置模型（forceSdk）兜底；
+ * - 单次请求失败自动重试：总共最多 3 次尝试（初次 + 2 次重试，间隔 1.2s），全部失败返回 null
+ *   —— 不再有本地规则兜底/占位文字，由聊天页在触发消息上打红色 ! 徽标（点击重新生成）；
  * - 提示词规则：亲切淘宝客服人设 + 店铺资料 + 在售商品目录 + 买家订单上下文 +
- *   十一条服务守则（称呼/发货/售后/物流/尺码/优惠/红线/推荐标记 [商品:ID]）；
- * - 回复里的 [商品:pid] 标记由聊天界面转成商品卡片消息。
+ *   服务守则（称呼/连发多条短消息 1~10 条/发货/售后/物流/尺码/优惠/红线/推荐标记 [商品:ID]）；
+ * - 回复按行拆成多条短消息（parseSellerReply → lines），[商品:pid] 标记提取出来由聊天页转成商品卡片。
  */
 import { useSettings } from './store';
+import { splitReplySegments } from '@/lib/reply-count';
 import { tbSearchPool, productById, type TbProduct, type TbShop } from './taobao-data';
 import { tbLoadOrders, type TbOrder } from './taobao-store';
 
@@ -64,9 +67,10 @@ function productLine(p: TbProduct): string {
 /**
  * AI 提示词规则（客服人设 + 服务守则 + 上下文）。
  * 规则要点（对照真实淘宝客服话术）：
- * 1 称呼「亲」、口语短句 1~3 句 ≤60 字；2 只聊本店商品/订单/售后；3 发货 48h（预售 30 天）；
- * 4 售后按店铺口径；5 不编物流单号；6 尺码给确定建议；7 不虚构折扣；8 红线（不承诺功效/
- * 不引导线下/不索验证码）；9 推荐商品输出 [商品:ID]；10 退款安抚+原路退回口径；11 纯文本简体中文。
+ * 1 称呼「亲」+ 连发多条短消息（1~10 条、一行一条、每条 ≤25 字左右）；2 只聊本店商品/订单/售后；
+ * 3 发货 48h（预售 30 天）；4 售后按店铺口径；5 不编物流单号；6 尺码给确定建议；7 不虚构折扣；
+ * 8 红线（不承诺功效/不引导线下/不索验证码）；9 推荐商品输出 [商品:ID]（可放在某行末尾）；
+ * 10 退款安抚+原路退回口径；11 纯文本简体中文（多行即多条消息）。
  */
 export function buildSellerSystemPrompt(ctx: TbSellerCtx): string {
   const { shop, product, order, custName } = ctx;
@@ -79,7 +83,7 @@ export function buildSellerSystemPrompt(ctx: TbSellerCtx): string {
     `你正在和买家「${custName}」用淘宝旺信聊天。`,
     '',
     '【沟通规则（必须遵守）】',
-    '1. 称呼买家「亲」，语气亲切热情、口语化；单次回复 1~3 句话、总共不超过 60 字，可用「哦/呢/呀/~」但不能刷屏。',
+    '1. 称呼买家「亲」，语气亲切热情、口语化；你会连发多条淘宝客服短消息：最少 1 条、最多 10 条，按问题复杂度自然决定条数；每条独立成行（一行一条），每条不超过 25 字左右，语气像真实客服打字（亲~口吻保留）。',
     '2. 只聊与本店商品、订单、售后、物流有关的话题；无关话题礼貌拉回：「亲，咱们聊聊宝贝和订单的事哦~」。',
     '3. 发货时间：现货 48 小时内发出；预售/定制款 30 天内发货；买家催发货就安抚并说会优先安排。',
     '4. 售后：本店支持质量问题包退换；7 天无理由、退货宝等以商品服务标签为准，不夸大承诺。',
@@ -87,9 +91,9 @@ export function buildSellerSystemPrompt(ctx: TbSellerCtx): string {
     '6. 尺码/规格咨询：买家给身高体重时要给出确定的推荐（衣服给码数 S/M/L，鞋子给码数，家具给尺寸），语气笃定不模棱两可。',
     '7. 价格优惠：不虚构折扣；可以提示「领店铺券」「满减活动」引导下单。',
     '8. 红线：不承诺任何医疗/保健功效；不引导线下交易或加联系方式；不索要密码、验证码。',
-    '9. 推荐商品时：在回复最后单独一行输出标记 [商品:商品ID]，只能推荐下方「在售商品目录」里给出的 ID，一次最多 1 个。',
+    '9. 推荐商品时：[商品:商品ID] 标记可放在合适的某一行末尾，系统会把标记行转成商品卡片；只能推荐下方「在售商品目录」里给出的 ID，一次最多 1 个。',
     '10. 退款/售后诉求：先安抚（亲别着急~），说明退款原路退回、1~3 个工作日到账，并引导在订单页申请。',
-    '11. 全程简体中文纯文本：不用 markdown、不用表情符号代码、不用换行（标记行除外）。',
+    '11. 全程简体中文纯文本：不用 markdown、不用表情符号代码；多条消息就是多行文本，一行一条。',
     '',
     '【在售商品目录】（推荐时输出 [商品:ID]，仅限以下 ID）',
     catalog,
@@ -137,43 +141,32 @@ function historyToApiMessages(history: TbSellerHistoryMsg[]): Array<{ role: 'use
   return out;
 }
 
-/** 本地规则兜底（模型全挂时保证客服仍会说话） */
-function localRuleReply(text: string, ctx: TbSellerCtx): string {
-  const t = text.trim();
-  const agent = tbSellerName(ctx.shop.id);
-  const has = (...kw: string[]) => kw.some((k) => t.includes(k));
-  if (!t) return `在的亲~有什么可以帮您？`;
-  if (has('发货', '多久', '什么时候', '几号')) return '亲，现货 48 小时内发出哦，付款后会优先给您安排呢~';
-  if (has('退款', '退钱', '退货')) return '亲别着急~支持售后哦，退款原路退回 1~3 个工作日到账，订单页申请就行呢。';
-  if (has('尺码', '身高', '体重', '多大', '大小', '尺寸')) return '亲，报一下身高体重，我帮您推荐合适的尺码哦~';
-  if (has('弹性', '弹力', ' stretch')) return '亲，这款有一定弹力的，日常穿着完全够用哦~';
-  if (has('正品', '真假', '正版')) return '亲放心，本店正品保证，支持专柜验货，假一赔十哦~';
-  if (has('便宜', '优惠', '券', '折扣')) return '亲可以领一下店铺券再下单，更划算呢~';
-  if (has('物流', '快递', '到货', '几天')) return '亲，点订单里的「查看物流」就能看到最新轨迹哦，到了会有电话呢~';
-  if (has('你好', '在吗', '在么', 'hello')) return `在的在的亲~我是${ctx.shop.name}客服${agent}，请问有什么可以帮您？`;
-  if (has('质量', '怎么样', '好用吗', '评价')) return '亲这款回购率很高的，质量您可以放心，不满意还能退哦~';
-  return '在的亲~您想了解宝贝的什么问题呢？我这边为您解答哦~';
-}
-
-/** 从回复中拆出 [商品:pid] 标记 */
-export function parseSellerReply(text: string): { text: string; pids: string[] } {
+/**
+ * 从回复中拆出 [商品:pid] 标记，并把正文切成多条短消息：
+ * - 标记剥除（最多收录 2 个真实存在的 pid），标记本身不进气泡；
+ * - 正文不再折叠换行：用 splitReplySegments 多条模式稳定切分（换行 + 句末标点为界，
+ *   AI 把多句挤进一行时也能按句切开；连续重复段去重），最多取 10 条（提示词约定 1~10 条）；
+ * - 返回 { lines, pids }：文本多条由调用方逐条落库，商品卡按 pids 追加在文本之后。
+ */
+export function parseSellerReply(text: string): { lines: string[]; pids: string[] } {
   const pids: string[] = [];
-  const cleaned = text
-    .replace(/\s*\[商品[:：]\s*([a-zA-Z0-9-]+)\s*\]/g, (_m, pid: string) => {
-      if (pids.length < 2 && productById(pid)) pids.push(pid);
-      return '';
-    })
-    .replace(/\n+/g, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-  return { text: cleaned, pids };
+  const cleaned = text.replace(/\s*\[商品[:：]\s*([a-zA-Z0-9-]+)\s*\]/g, (_m, pid: string) => {
+    if (pids.length < 2 && productById(pid)) pids.push(pid);
+    return '';
+  });
+  const lines = splitReplySegments(cleaned, true)
+    .filter((s) => s.length > 0)
+    .slice(0, 10);
+  return { lines, pids };
 }
 
 /**
- * 客服回复：用户配置模型 → forceSdk（内置模型）→ 本地规则。
+ * 客服回复：单次尝试 = 用户配置模型 → 失败/空回复再试内置模型（forceSdk）；
+ * 失败（fetch 失败/非 ok/空文本）自动重试：总共最多 3 次尝试（初次 + 2 次重试，间隔 1.2s），
+ * 全部失败返回 null —— 不落任何模板兜底，由聊天页给触发消息打红色 ! 徽标（点击重新生成）。
  * /api/chat 非流式文本返回（与 friend-state/cross-app-reach 同模式）。
  */
-export async function tbSellerReply(userText: string, history: TbSellerHistoryMsg[], ctx: TbSellerCtx): Promise<string> {
+export async function tbSellerReply(userText: string, history: TbSellerHistoryMsg[], ctx: TbSellerCtx): Promise<string | null> {
   const apiMsgs = [
     { role: 'system' as const, content: buildSellerSystemPrompt(ctx) },
     ...historyToApiMessages(history),
@@ -188,19 +181,28 @@ export async function tbSellerReply(userText: string, history: TbSellerHistoryMs
     });
     return res.ok ? await res.text() : '';
   };
-  let raw = '';
-  try {
-    raw = await call({ config: useSettings.getState().apiConfig });
-    if (!raw.trim()) raw = await call({ forceSdk: true });
-  } catch {
+  // 单次尝试：用户配置模型 → 空回复/异常再试内置模型（forceSdk）
+  const attempt = async (): Promise<string> => {
     try {
-      raw = await call({ forceSdk: true });
+      const raw = await call({ config: useSettings.getState().apiConfig });
+      if (raw.trim()) return raw;
     } catch {
-      raw = '';
+      // 用户配置模型失败 → 落到内置模型重试
     }
+    try {
+      return await call({ forceSdk: true });
+    } catch {
+      return '';
+    }
+  };
+  const MAX_ATTEMPTS = 3; // 初次 + 2 次重试
+  const RETRY_DELAY_MS = 1_200;
+  let raw = '';
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    raw = await attempt();
+    if (raw.trim()) break;
+    if (i < MAX_ATTEMPTS - 1) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
   }
   const cleaned = raw.replace(/^"|"$/g, '').trim();
-  return cleaned || localRuleReply(userText, ctx);
+  return cleaned || null;
 }
-
-export { localRuleReply };

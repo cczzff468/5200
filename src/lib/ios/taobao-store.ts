@@ -474,6 +474,8 @@ export interface TbTicketInfo {
   unitPrice: number;
   /** 退款信息（票详情已退款态判定优先于时间） */
   refunded?: { amount: number; at: number };
+  /** 核销入场时间（详情页「扫码入场」= 确认收货后写入；区分「已入场」与散场自动完成） */
+  enteredAt?: number;
 }
 
 export interface TbOrderItem {
@@ -688,8 +690,10 @@ function ticketNoOf(id: string): string {
   return digits.join('').replace(/(\d{4})(?=\d)/g, '$1 ');
 }
 
-/** 票务出票（淘票票电影/喜剧脱口秀/演唱会共用）：
- *  需求——买了票直接进「全部订单」待收货（status=shipped），不需要发货/物流 */
+/** 票务下单（淘票票电影/喜剧脱口秀/演唱会共用）：
+ *  需求——确认选座/选票不再直接出票，先创建 pendingPay 待付款订单（票务信息照挂），
+ *  由根组件拉起淘宝收银台，用户点支付后才扣款出票（tbMarkPaid 对票务单直接 shipped）。
+ *  待付款票务单可取消（tbCancelOrder）/超时自动取消（tbTickOrders），无物流不写 track */
 export function tbCreateTicketOrder(
   uid: string,
   t: Omit<TbTicketInfo, 'ticketNo'>,
@@ -715,12 +719,8 @@ export function tbCreateTicketOrder(
     freight: 0,
     discount: 0,
     total,
-    status: 'shipped',
+    status: 'pendingPay',
     createdAt: Date.now(),
-    paidAt: Date.now(),
-    payIdp: 'wx',
-    payChannelLabel: '微信零钱',
-    payMethodId: 'balance',
     track: [],
     ticket: { ...t, ticketNo: '' },
   };
@@ -762,6 +762,7 @@ export function tbCreateMerchOrder(uid: string, m: { id: string; title: string; 
  *  发货/物流节奏跟随「送达速度」设置（真实时钟：快 30min-1h / 正常 1-3h / 慢 3-6h 送达） */
 export function tbTickOrders(uid: string): boolean {
   let changed = false;
+  let ttlCancelled = false;
   const list = tbLoadOrders(uid);
   const now = Date.now();
   for (const o of list) {
@@ -779,6 +780,7 @@ export function tbTickOrders(uid: string): boolean {
       o.status = 'cancelled';
       o.cancelReason = '超时未付款，订单自动取消';
       changed = true;
+      ttlCancelled = true;
       continue;
     }
     // 发货/物流：按当前送达速度重算时间轴（切换速度后在途单自动跟随新节奏）
@@ -801,6 +803,13 @@ export function tbTickOrders(uid: string): boolean {
     }
   }
   if (changed) tbSaveOrders(uid, list);
+  if (ttlCancelled) {
+    // B4 联动：待付款超时自动取消 → 挂着的 pending 代付请求同步置 expired
+    //（防残留 pending 请求继续占用 proxyOrderIds；动态 import 防循环依赖，与 tbCancelOrder 同口径）
+    void import('./tb-share-proxy')
+      .then((m) => m.tbSyncProxiesForUid(uid))
+      .catch(() => undefined);
+  }
   return changed;
 }
 
@@ -831,6 +840,8 @@ export function tbConfirmReceive(uid: string, id: string): boolean {
   if (!hit) return false;
   hit.status = 'completed';
   hit.completedAt = Date.now();
+  // 票务单：确认收货 = 扫码入场核销（写 enteredAt，票详情/分享卡区分「已入场」与散场自动完成）
+  if (hit.ticket && !hit.ticket.enteredAt) hit.ticket.enteredAt = hit.completedAt;
   tbSaveOrders(uid, list);
   return true;
 }
@@ -883,7 +894,8 @@ export function tbSubmitReview(uid: string, id: string, rating: number, content:
   return true;
 }
 
-/** 支付成功落账：pendingPay → pendingDeliver（payInfo 由 taobao-pay 写入） */
+/** 支付成功落账：pendingPay → pendingDeliver（payInfo 由 taobao-pay 写入）；
+ *  票务单例外：付款即出票，直接 pendingPay → shipped（已出票待入场，无发货/物流环节） */
 export function tbMarkPaid(
   uid: string,
   id: string,
@@ -892,8 +904,9 @@ export function tbMarkPaid(
   const list = tbLoadOrders(uid);
   const hit = list.find((x) => x.id === id);
   if (!hit || hit.status !== 'pendingPay') return false;
-  hit.status = 'pendingDeliver';
+  hit.status = hit.ticket ? 'shipped' : 'pendingDeliver';
   hit.paidAt = Date.now();
+  if (hit.ticket) hit.shipAt = hit.paidAt; // 票务单出票时刻（不产 track，仅作时间线锚点）
   hit.payIdp = pay.payIdp;
   hit.payChannelLabel = pay.payChannelLabel;
   hit.payMethodId = pay.payMethodId;

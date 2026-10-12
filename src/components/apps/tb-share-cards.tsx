@@ -6,16 +6,19 @@
  *   倒计时/「好友已代付 ¥x」+ 查看详情钮；req=代付请求卡 / done=代付完成卡；样式对齐美团代付卡，
  *   品牌色换淘宝橙）；请求卡付款后由 kv 状态驱动变已代付灰化，与红包/转账卡同语义；
  * - TbProxyDetailPage：点卡片进入的「代付详情」全屏页（对齐美团端结构）：
- *   待付 = 请求人头像行 + 等待代付 + 付款须知 +（聊天端方向为好友代付时）等待按钮；
+ *   待付 = 请求人头像行 + 等待代付 + 付款须知 +（聊天端方向为好友代付时）等待按钮
+ *   +「再次分享」按钮（TbResharePickSheet 两步选人 → tbReshareProxy：同会话催一催/换好友重新发起）；
  *   已付 = 代付人头像行 + 支付成功 + 金额 + 渠道 + 付款须知 + 完成 + 订单商品卡；
  * - TbShareBubble：订单分享动态卡片（订单详情分享/快递面板发出）：淘宝 logo +
  *   店铺/金额 + 买的什么（商品行）+ 五段状态时间线（提交订单→付款成功→商家发货→运输中→已签收）；
+ *   票务单（order.ticket）改为票务信息卡：演出名/场馆/日期场次/座位/取票号 + 状态徽标
+ *   （待入场/已入场/已放映/已退款/已关闭），点击同样跳淘宝票详情；
  *   状态不落快照：每次渲染按 uid+orderId 实时读订单推导，监听 tb-orders-changed 与逐秒 tick；
- * - TbExpressPicker：微信/QQ 加号面板「快递」页——列出已确认收货（completed）的淘宝订单，
- *   一键分享给当前聊天好友（票务单无快递不列）。
+ * - TbExpressPicker：微信/QQ 加号面板「快递」页——列出已确认收货（completed）的淘宝订单
+ *   （含核销入场的演出票，票务条目展示场次信息），一键分享给当前聊天好友。
  */
 import { useEffect, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, CircleCheck, CircleX, Clock as ClockIcon, Loader2, Package, ShieldCheck, Truck } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, CircleCheck, CircleX, Clock as ClockIcon, Loader2, Package, Share2, ShieldCheck, Truck, X } from 'lucide-react';
 import { TbImg } from './tb-img';
 import {
   TB_PROXY_CARD_EVENT,
@@ -25,10 +28,13 @@ import {
   tbGetShare,
   tbProxyChannelName,
   tbProxyPayOrder,
+  tbReshareProxy,
   tbShareOrderOf,
   tbShareStagesOf,
   type TbOrderShare,
 } from '@/lib/ios/tb-share-proxy';
+import { listContacts } from '@/lib/ios/contacts-store';
+import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { tbArrivedAtStation, tbConfirmReceive, type TbOrder } from '@/lib/ios/taobao-store';
 
 const fmt2 = (n: number): string => {
@@ -176,6 +182,11 @@ export function TbProxyDetailPage({
 }) {
   const [ver, setVer] = useState(0);
   const [paying, setPaying] = useState(false);
+  // 再次分享（direction 'friend' 待付）：两步选人弹层（选微信/QQ → 选好友）→ tbReshareProxy
+  const [reshareStep, setReshareStep] = useState<'plat' | 'contact' | null>(null);
+  const [resharePlat, setResharePlat] = useState<'wx' | 'qq' | null>(null);
+  const [reshareContact, setReshareContact] = useState<ContactRecord | null>(null);
+  const [resharing, setResharing] = useState(false);
   const p = tbGetProxy(pid);
 
   // 代付状态被别处更新（订单侧/AI 决策/另一端）→ 重读渲染
@@ -229,6 +240,24 @@ export function TbProxyDetailPage({
     } finally {
       setPaying(false);
     }
+  };
+
+  /** 再次分享发送：同会话=复用同 pid 重发卡「催一催」；换好友/换平台=新建请求并调度 AI 决策 */
+  const sendReshare = () => {
+    if (!p || !resharePlat || !reshareContact || resharing) return;
+    setResharing(true);
+    tbReshareProxy(pid, resharePlat, reshareContact.id)
+      .then((res) => {
+        if (res.ok) {
+          onToast(res.resent ? `已催${displayNameOf(reshareContact)}再看看代付请求` : `已再次分享给${displayNameOf(reshareContact)}`);
+          setReshareStep(null);
+          setVer((v) => v + 1);
+        } else {
+          onToast(res.error);
+        }
+      })
+      .catch(() => onToast('发送失败，请重试'))
+      .finally(() => setResharing(false));
   };
 
   return (
@@ -375,6 +404,21 @@ export function TbProxyDetailPage({
               <p className="mt-2 text-center text-[11px] leading-relaxed text-black/35">
                 TA会根据自己的意愿决定是否代付，可以去聊天里提醒TA
               </p>
+              {p.direction === 'friend' && (
+                <button
+                  type="button"
+                  data-testid="tb-proxy-reshare-btn"
+                  onClick={() => {
+                    setResharePlat(null);
+                    setReshareContact(null);
+                    setReshareStep('plat');
+                  }}
+                  className="mt-2.5 flex h-[44px] w-full items-center justify-center gap-1.5 rounded-full border border-[#FF5000]/40 bg-[#FFF6F0] text-[15px] font-semibold text-[#FF5000] active:opacity-85"
+                >
+                  <Share2 className="h-4 w-4" strokeWidth={2.2} />
+                  再次分享给其他好友
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -399,6 +443,176 @@ export function TbProxyDetailPage({
         <p className="mt-3 px-2 text-center text-[10.5px] leading-relaxed text-black/30">
           代付金额与订单一致 · 资金由微信支付/QQ钱包保障
         </p>
+      </div>
+
+      {/* 再次分享两步选人弹层（选平台 → 选好友 → 发送） */}
+      <TbResharePickSheet
+        step={reshareStep}
+        plat={resharePlat}
+        contactId={reshareContact?.id ?? null}
+        sending={resharing}
+        onPickPlat={(v) => {
+          setResharePlat(v);
+          setReshareContact(null);
+          setReshareStep('contact');
+        }}
+        onPickContact={setReshareContact}
+        onBack={() => (reshareStep === 'contact' ? setReshareStep('plat') : setReshareStep(null))}
+        onClose={() => setReshareStep(null)}
+        onSend={sendReshare}
+      />
+    </div>
+  );
+}
+
+/** 「再次分享」两步选人弹层（选微信/QQ → 选好友）：与淘宝收银台 TbContactPickSheet 同交互的轻量内联版 */
+function TbResharePickSheet({
+  step,
+  plat,
+  contactId,
+  sending,
+  onPickPlat,
+  onPickContact,
+  onBack,
+  onClose,
+  onSend,
+}: {
+  /** null = 关闭；'plat' = 选平台；'contact' = 选联系人 */
+  step: 'plat' | 'contact' | null;
+  plat: 'wx' | 'qq' | null;
+  contactId: string | null;
+  sending: boolean;
+  onPickPlat: (v: 'wx' | 'qq') => void;
+  onPickContact: (c: ContactRecord) => void;
+  onBack: () => void;
+  onClose: () => void;
+  onSend: () => void;
+}) {
+  /** 平台好友列表（第二步加载；kind!=='user' 且该平台好友标记为真；与加载键一起落 state 防旧列表闪现） */
+  const [loaded, setLoaded] = useState<{ key: string; list: ContactRecord[] | null }>({ key: '', list: null });
+  const friends = loaded.key === `c:${step}:${plat ?? ''}` ? loaded.list : null;
+  useEffect(() => {
+    if (step !== 'contact' || !plat) return;
+    let alive = true;
+    listContacts()
+      .then((all) => {
+        if (alive) setLoaded({ key: `c:${step}:${plat}`, list: all.filter((c) => c.kind !== 'user' && isFriendIn(c, plat)) });
+      })
+      .catch(() => {
+        if (alive) setLoaded({ key: `c:${step}:${plat}`, list: [] });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [step, plat]);
+
+  if (!step) return null;
+  const platName = plat === 'wx' ? '微信' : 'QQ';
+  return (
+    <div className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/60" onClick={onClose} data-testid={step === 'plat' ? 'tb-reshare-plat-sheet' : undefined}>
+      <div
+        className="max-h-[82%] overflow-hidden rounded-t-2xl bg-white pb-[max(14px,env(safe-area-inset-bottom))] [animation:quick-in-up_.24s_cubic-bezier(0.32,0.72,0,1)_both]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 标题栏 */}
+        <div className="relative grid h-[54px] shrink-0 place-items-center">
+          {step === 'contact' && (
+            <button type="button" aria-label="返回" onClick={onBack} className="absolute left-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+              <ChevronLeft className="h-[22px] w-[22px] text-black/80" />
+            </button>
+          )}
+          <p className="text-[16px] font-bold text-black/90">{step === 'plat' ? '再次分享代付请求' : `选择${platName}好友`}</p>
+          <button type="button" aria-label="关闭" onClick={onClose} className="absolute right-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
+            <X className="h-[20px] w-[20px] text-black/55" />
+          </button>
+        </div>
+        <p className="px-5 pb-2.5 text-[11.5px] leading-relaxed text-black/40">
+          {step === 'plat' ? '把代付请求再发给一位好友：TA付款后订单自动完成；发给同一位好友就是催一催' : `从${platName}好友里选一位，把代付请求发给TA`}
+        </p>
+
+        {step === 'plat' ? (
+          <div className="px-4">
+            {([
+              ['wx', '/icons/wechat.png', '微信好友', '发给微信里的好友'],
+              ['qq', '/icons/qq.png', 'QQ好友', '发给QQ里的好友'],
+            ] as ['wx' | 'qq', string, string, string][]).map(([v, img, name, sub]) => (
+              <button
+                key={v}
+                type="button"
+                data-testid={`tb-reshare-plat-${v}`}
+                onClick={() => onPickPlat(v)}
+                className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3.5 text-left first:border-t-0 active:opacity-80"
+              >
+                <img src={img} alt="" className="h-[38px] w-[38px] shrink-0 rounded-[9px]" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-medium text-black/85">{name}</span>
+                  <span className="block text-[11px] text-black/40">{sub}</span>
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-black/25" />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="max-h-[48vh] overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {friends === null ? (
+              <p className="py-8 text-center text-[12px] text-black/35">正在获取好友列表…</p>
+            ) : friends.length === 0 ? (
+              <div className="py-8 text-center">
+                <p className="text-[13px] text-black/45">暂无{platName}好友</p>
+                <p className="mt-1 text-[11px] text-black/30">先去{platName}App添加好友，再回来发送</p>
+              </div>
+            ) : (
+              friends.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-testid={`tb-reshare-contact-${c.id}`}
+                  onClick={() => onPickContact(c)}
+                  className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3 text-left first:border-t-0 active:opacity-80"
+                >
+                  {avatarFor(c, plat ?? 'wx') ? (
+                    <img src={avatarFor(c, plat ?? 'wx') ?? ''} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#FFF1E6] text-[15px] font-semibold text-black/60">
+                      {displayNameOf(c).slice(0, 1)}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[15px] text-black/85">{displayNameOf(c)}</span>
+                    {c.relation && <span className="block text-[11px] text-black/40">{c.relation}</span>}
+                  </span>
+                  <span className={`grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full border-2 ${contactId === c.id ? 'border-[#FF5000] bg-[#FF5000]' : 'border-black/20'}`}>
+                    {contactId === c.id ? <Check className="h-3 w-3 text-white" strokeWidth={3.4} /> : null}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* 底部按钮 */}
+        <div className="px-4 pt-3">
+          {step === 'plat' ? (
+            <button
+              type="button"
+              disabled={!plat}
+              onClick={() => plat && onPickPlat(plat)}
+              className={`h-[48px] w-full rounded-xl text-[16px] font-semibold ${plat ? 'bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-white active:opacity-85' : 'bg-[#FFE2D2] text-black/40'}`}
+            >
+              下一步
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid="tb-reshare-send"
+              disabled={!contactId || sending}
+              onClick={onSend}
+              className={`h-[48px] w-full rounded-xl text-[16px] font-semibold ${contactId && !sending ? 'bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-white active:opacity-85' : 'bg-[#FFE2D2] text-black/40'}`}
+            >
+              {sending ? '正在发送…' : '再次分享'}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -441,6 +655,18 @@ export function TbShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
   const order = tbShareOrderOf(share);
   const cancelled = order?.status === 'cancelled';
   const awaitingPay = !!order && order.status === 'pendingPay';
+  const ticket = order?.ticket;
+
+  /** 票务状态徽标（待入场/已入场/已放映/已退款/已关闭） */
+  const ticketBadge = (() => {
+    if (!order || !ticket) return null;
+    if (ticket.refunded) return { text: '已退款', cls: 'bg-black/[0.06] text-black/40' };
+    if (order.status === 'cancelled') return { text: '已关闭', cls: 'bg-black/[0.06] text-black/40' };
+    if (ticket.enteredAt) return { text: '已入场', cls: 'bg-[#E8F7F0] text-[#0B8F5C]' };
+    const startAt = new Date(`${ticket.date}T${ticket.start}:00`).getTime();
+    if (Number.isFinite(startAt) && Date.now() >= startAt) return { text: '已放映', cls: 'bg-[#FFF1E6] text-[#FF5000]' };
+    return { text: '待入场', cls: 'bg-[#FFF1E6] text-[#FF5000]' };
+  })();
 
   /** 点击卡片 → 唤起淘宝 App 打开对应订单详情（灵动岛导航总线；订单已不存在时不跳） */
   const openOrderDetail = () => {
@@ -480,24 +706,42 @@ export function TbShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
         </span>
       </span>
 
-      {/* 买的什么（商品行，最多 2 行 + 汇总） */}
-      <span className="relative mt-1.5 flex items-center gap-2 rounded-[10px] bg-[#F8F8F8] px-2 py-2">
-        <TbImg src={share.items[0]?.img} alt={share.items[0]?.name ?? ''} cap={share.items[0]?.name} className="h-9 w-9 shrink-0 rounded-md" />
-        <span className="min-w-0 flex-1">
-          {share.items.slice(0, 2).map((it, i) => (
-            <span key={i} className="block truncate text-[12px] leading-[1.5] text-black/75">
-              {it.name}
-              <span className="text-black/35"> ×{it.qty}</span>
+      {/* 买的什么：票务单 → 票务信息卡（演出名+场馆+日期场次+座位+票号+状态徽标）；普通单 → 商品行 */}
+      {ticket && order ? (
+        <span className="relative mt-1.5 flex items-center gap-2 rounded-[10px] bg-[#F8F8F8] px-2 py-2">
+          <span className="relative h-10 w-10 shrink-0 overflow-hidden rounded-md" style={{ background: `linear-gradient(160deg, ${ticket.posterC1}, ${ticket.posterC2})` }}>
+            <span className="absolute inset-x-0.5 top-1 line-clamp-3 text-[7.5px] font-black leading-[10px] text-white/95">{ticket.title}</span>
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-1">
+              <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-black/80">{ticket.title}</span>
+              {ticketBadge ? <span className={`shrink-0 rounded-full px-1.5 text-[9px] font-semibold leading-[1.7] ${ticketBadge.cls}`}>{ticketBadge.text}</span> : null}
             </span>
-          ))}
-          {share.items.length > 2 && <span className="block text-[10.5px] text-black/35">等 {share.itemCount} 件商品</span>}
+            <span className="mt-0.5 block truncate text-[10.5px] leading-[1.5] text-black/45">{ticket.dateLabel} {ticket.start} · {ticket.venue}</span>
+            <span className="block truncate text-[10.5px] leading-[1.5] text-black/45">{ticket.seats.join(' ')} · 取票号 {ticket.ticketNo}</span>
+          </span>
         </span>
-      </span>
+      ) : (
+        <span className="relative mt-1.5 flex items-center gap-2 rounded-[10px] bg-[#F8F8F8] px-2 py-2">
+          <TbImg src={share.items[0]?.img} alt={share.items[0]?.name ?? ''} cap={share.items[0]?.name} className="h-9 w-9 shrink-0 rounded-md" />
+          <span className="min-w-0 flex-1">
+            {share.items.slice(0, 2).map((it, i) => (
+              <span key={i} className="block truncate text-[12px] leading-[1.5] text-black/75">
+                {it.name}
+                <span className="text-black/35"> ×{it.qty}</span>
+              </span>
+            ))}
+            {share.items.length > 2 && <span className="block text-[10.5px] text-black/35">等 {share.itemCount} 件商品</span>}
+          </span>
+        </span>
+      )}
 
-      {/* 动态时间线（共享渲染件） */}
-      <span className="relative mt-2.5 block">
-        <TbShareTimeline order={order} />
-      </span>
+      {/* 动态时间线（共享渲染件；票务单无物流 → 票务卡已含状态，不重复铺时间线） */}
+      {!ticket ? (
+        <span className="relative mt-2.5 block">
+          <TbShareTimeline order={order} />
+        </span>
+      ) : null}
 
       {/* AI 代买的订单到驿站：机主在卡片上直接确认收货（已签收需机主确认或让 AI 帮取后才显示） */}
       {order && share.paidBy && order.status === 'shipped' && tbArrivedAtStation(order) && (
@@ -523,7 +767,7 @@ export function TbShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
 
       {/* 底注：来源 + 查看详情提示（整卡可点） */}
       <span className="relative mt-2 flex items-center justify-between border-t border-black/[0.05] pt-1.5 text-[10px] text-black/30">
-        <span>{awaitingPay ? '待支付 · 点去淘宝付款' : share.paidBy ? `${share.paidBy}已买单 · 淘宝订单` : share.gift ? '送TA的礼物 · 淘宝订单' : '淘宝订单'}</span>
+        <span>{awaitingPay ? '待支付 · 点去淘宝付款' : ticket ? '演出票 · 淘票票' : share.paidBy ? `${share.paidBy}已买单 · 淘宝订单` : share.gift ? '送TA的礼物 · 淘宝订单' : '淘宝订单'}</span>
         {order && !cancelled && (
           <span className="flex items-center gap-0.5 font-medium text-[#FF5000]">
             查看详情
@@ -652,9 +896,10 @@ export function TbExpressPicker({
           </div>
         ) : (
           <div className="space-y-2.5">
-            <p className="px-1 pb-1 pt-1 text-[11.5px] text-black/35">已确认收货的淘宝订单 · 点「分享」发给好友</p>
+            <p className="px-1 pb-1 pt-1 text-[11.5px] text-black/35">已确认收货/已核销入场的淘宝订单 · 点「分享」发给好友</p>
             {orders.map((o) => {
               const first = o.items[0];
+              const tk = o.ticket;
               return (
                 <div key={o.id} className="rounded-2xl bg-white p-3">
                   <div className="flex items-center gap-1.5">
@@ -663,10 +908,18 @@ export function TbExpressPicker({
                     <span className="ml-auto shrink-0 text-[10.5px] text-black/35">{fmtFull(o.completedAt ?? o.createdAt).slice(5, 16)}</span>
                   </div>
                   <div className="mt-2.5 flex items-center gap-2.5">
-                    <TbImg src={first?.img} alt={first?.title ?? ''} cap={first?.title} className="h-[52px] w-[52px] shrink-0 rounded-lg" />
+                    {tk ? (
+                      <span className="relative h-[52px] w-[52px] shrink-0 overflow-hidden rounded-lg" style={{ background: `linear-gradient(160deg, ${tk.posterC1}, ${tk.posterC2})` }}>
+                        <span className="absolute inset-x-1 top-1.5 line-clamp-3 text-[8.5px] font-black leading-[11px] text-white/95">{tk.title}</span>
+                      </span>
+                    ) : (
+                      <TbImg src={first?.img} alt={first?.title ?? ''} cap={first?.title} className="h-[52px] w-[52px] shrink-0 rounded-lg" />
+                    )}
                     <div className="min-w-0 flex-1">
                       <p className="line-clamp-1 text-[13px] leading-[18px] text-black/80">{first?.title ?? '商品'}</p>
-                      <p className="mt-0.5 text-[11px] text-black/40">{o.items.length > 1 ? `等 ${o.items.reduce((n, i) => n + i.qty, 0)} 件商品` : `共 ${first?.qty ?? 1} 件`}</p>
+                      <p className="mt-0.5 truncate text-[11px] text-black/40">
+                        {tk ? `${tk.dateLabel} ${tk.start} · ${tk.venue} · ${tk.qty}张` : o.items.length > 1 ? `等 ${o.items.reduce((n, i) => n + i.qty, 0)} 件商品` : `共 ${first?.qty ?? 1} 件`}
+                      </p>
                       <p className="mt-1 text-[14px] font-bold text-black/85">
                         <span className="text-[10px]">¥</span>
                         {fmt2(o.total)}

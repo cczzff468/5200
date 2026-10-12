@@ -6,6 +6,8 @@
  * LLM 结合人设/记忆/金额输出 {"pay":bool,"reply":"..."}；付了 → tbProxyPayOrder（deferCard，
  * 完成卡随回复投递）+ 记忆；婉拒 → tbDeclineProxy + 记忆；最后把完成卡/婉拒回复按
  * 主动消息管线投递（落库 + 灵动岛 + 未读角标）。
+ * 可靠性：LLM 失败/空回自动重试（共 3 次尝试，间隔 1.5s），3 次全失败走本地兜底——
+ * 直接帮付 + 兜底话术 + 记忆，保证代付请求不会永久 pending 无响应。
  */
 import { kvGet, kvSet } from './idb-kv';
 import { getContact, ownerProfileFor } from './contacts-store';
@@ -133,15 +135,46 @@ async function runProxyDecision(pid: string): Promise<void> {
     '严禁输出 JSON 以外的文字。',
   ].join('\n\n');
 
-  const raw = await callTbLlm(system, user);
-  const parsed = extractJsonObject(raw) as Partial<ProxyDecision> | null;
-  if (!parsed || typeof parsed.reply !== 'string' || !parsed.reply.trim()) return;
-  const reply = parsed.reply.trim().replace(/^[「"'『]+|[」"'』]+$/g, '').split('\n').map((s) => s.trim()).filter(Boolean)[0] ?? '';
-  if (!reply) return;
+  // LLM 决策（后台链路自动重试：共 3 次尝试、间隔 1.5s）——解析成功且 reply 非空才落定；
+  // 3 次全失败走本地兜底（直接帮付 + 兜底话术），保证请求不会永久 pending 无响应
+  let parsed: Partial<ProxyDecision> | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let raw = '';
+    try {
+      raw = await callTbLlm(system, user);
+    } catch {
+      raw = '';
+    }
+    const j = extractJsonObject(raw) as Partial<ProxyDecision> | null;
+    if (j && typeof j.reply === 'string' && j.reply.trim()) {
+      parsed = j;
+      break;
+    }
+    if (attempt < 2) await new Promise((r) => window.setTimeout(r, 1500));
+  }
+  const reply = (parsed?.reply ?? '').trim().replace(/^[「"'『]+|[」"'』]+$/g, '').split('\n').map((s) => s.trim()).filter(Boolean)[0] ?? '';
 
   // 决策落定前复查状态（机主可能已取消/自己付了）
   const cur = tbGetProxy(pid);
   if (!cur || cur.status !== 'pending') return;
+
+  if (!parsed || !reply) {
+    // 兜底（对齐 runProactivePayEngage 的失败兜底模式）：LLM 3 次尝试全失败——本地直接帮付
+    // + 一句兜底话术 + 记忆，机主一定能看到这次参与（这句兜底话术是后台链路最后的可靠性保障）
+    const res = tbProxyPayOrder(pid, { deferCard: true });
+    if (!res.ok || !res.card) return; // 订单已变化（取消/自付）→ B4 同步会把请求收敛为终态
+    memAddEventFragment(
+      contact.id,
+      app,
+      `机主${meName}在淘宝请你代付「${cur.shopName}」的订单（¥${fmt2(cur.amount)}，${cur.items.map((i) => `${i.name}x${i.qty}`).join('、')}），你用${tbProxyChannelName(app)}帮TA付了`,
+      { eventTime: Date.now(), sourceTag: 'tb-proxy-pay' },
+    );
+    await deliverPeerMsgs(app, contact, [
+      res.card,
+      { id: `tbpxr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`, role: 'peer', content: '看到你的代付请求了，我先帮你付上啦~', time: Date.now() + 1 },
+    ]);
+    return;
+  }
 
   const now = Date.now();
   const outMsgs: { id: string; role: 'me' | 'peer'; content: string; time: number; kind?: 'tbpay'; tbpay?: { pid: string; role: 'req' | 'done' } }[] = [];

@@ -329,8 +329,9 @@ export async function tbCreateProxyRequest(opts: TbCreateProxyOpts): Promise<TbC
   }
   if (!contact || contact.kind === 'user') return { ok: false, error: '代付好友不存在或已删除' };
   if (!isFriendIn(contact, idp)) return { ok: false, error: `该好友不是${idp === 'wx' ? '微信' : 'QQ'}好友` };
-  // 防重复：同订单同好友已有待处理请求
-  const dup = findPendingProxyOfOrder(order.uid, order.id).find((p) => p.contactId === contactId);
+  // 防重复放宽（同联系人可走不同平台/会话再次发起）：同订单 + 同联系人 + 同 idp 的 pending 请求才算重复
+  //（重复时不报错——调用方可改走 tbReshareProxy 复用同 pid 重发卡「催一催」）
+  const dup = findPendingProxyOfOrder(order.uid, order.id).find((p) => p.contactId === contactId && p.idp === idp && p.direction !== 'me');
   if (dup) return { ok: false, error: `已向${displayNameOf(contact)}发送过代付请求，等待TA付款` };
 
   const proxy: TbProxyPay = {
@@ -381,6 +382,113 @@ export async function tbCreateProxyRequest(opts: TbCreateProxyOpts): Promise<TbC
     .then((m) => m.scheduleTbProxyAiDecision(proxy.id))
     .catch(() => undefined);
   return { ok: true, proxy };
+}
+
+// ---------------- 再次分享代付请求（详情页「再次分享」按钮 / 聊天内转发活卡共用） ----------------
+
+export type TbReshareResult = { ok: true; pid: string; resent: boolean; card: TbProxyCardMsg } | { ok: false; error: string };
+
+/**
+ * 再次分享代付请求：对同订单再次发起/重发代付请求（详情页按钮选微信/QQ好友、聊天长按转发共用）。
+ * - 同订单 + 同联系人 + 同 idp 已有 pending 请求（direction 'friend'）→ 复用同 pid 重新发一张请求卡
+ *   到该会话「催一催」（resent=true，并再次调度 AI 决策——冷却中的决策会被防重入守卫忽略）；
+ * - 否则复制订单快照新建 proxy → 挂订单 o.proxy 快照 → 请求卡进聊天 → 调度 AI 决策。
+ * deferCard：转发路径用——不直接落库卡片，把请求卡消息返回给调用方随转发批次落盘
+ * （防 insertCard 与 saveMsgs 批量写重复投递）；不传 = 立即落库+广播。
+ */
+export async function tbReshareProxy(
+  pid: string,
+  idp: 'wx' | 'qq',
+  contactId: string,
+  contactName?: string,
+  contactAvatar?: string | null,
+  fromName?: string,
+  fromAvatar?: string | null,
+  opts?: { deferCard?: boolean },
+): Promise<TbReshareResult> {
+  const src = tbGetProxy(pid);
+  if (!src) return { ok: false, error: '代付请求不存在或已被清理' };
+  if (src.direction === 'me') return { ok: false, error: '这张请求是别人发给你的，不能转发' };
+  if (!contactId) return { ok: false, error: '请先选择好友' };
+  // 订单仍是待付款才能再次发起（已支付/已取消 → 提示失效，B4 同步会把旧请求收敛为终态）
+  const orders = tbLoadOrders(src.uid);
+  const order = orders.find((o) => o.id === src.orderId);
+  if (!order || order.status !== 'pendingPay') {
+    return { ok: false, error: order?.status === 'cancelled' ? '订单已取消，代付请求失效' : '订单已支付或已关闭，无需再代付' };
+  }
+  let contact: ContactRecord | null = null;
+  try {
+    contact = await getContact(contactId);
+  } catch {
+    contact = null;
+  }
+  if (!contact || contact.kind === 'user') return { ok: false, error: '好友不存在或已删除' };
+  if (!isFriendIn(contact, idp)) return { ok: false, error: `该好友不是${idp === 'wx' ? '微信' : 'QQ'}好友` };
+
+  const buildCard = (proxyId: string, amount: number): TbProxyCardMsg => ({
+    id: genId('tbpxm'),
+    role: 'me',
+    content: `[淘宝代付]帮我付一下¥${fmt2(amount)}的订单`,
+    time: Date.now(),
+    kind: 'tbpay',
+    tbpay: { pid: proxyId, role: 'req' },
+  });
+
+  // 复用：同订单 + 同联系人 + 同 idp 的 pending 'friend' 请求 → 同 pid 重发卡「催一催」
+  const dup = findPendingProxyOfOrder(src.uid, src.orderId).find((p) => p.contactId === contactId && p.idp === idp && p.direction !== 'me');
+  if (dup) {
+    const card = buildCard(dup.id, dup.amount);
+    if (!opts?.deferCard) insertCard(idp, contactId, card, TB_PROXY_CARD_EVENT);
+    // 再催一次 AI 决策（决策进行中/已终态时由守卫与状态复查自然兜住）
+    void import('./tb-proxy-ai')
+      .then((m) => m.scheduleTbProxyAiDecision(dup.id))
+      .catch(() => undefined);
+    return { ok: true, pid: dup.id, resent: true, card };
+  }
+
+  // 新建：复制订单快照（金额/商品以订单实时数据为准）
+  const proxy: TbProxyPay = {
+    id: genId('tbpx'),
+    uid: src.uid,
+    orderId: src.orderId,
+    idp,
+    contactId,
+    contactName: contactName ?? displayNameOf(contact),
+    contactAvatar: contactAvatar ?? avatarFor(contact, idp),
+    fromName: fromName ?? src.fromName,
+    fromAvatar: fromAvatar ?? src.fromAvatar ?? null,
+    shopName: order.shopName,
+    amount: order.total,
+    itemCount: order.items.reduce((s, i) => s + i.qty, 0),
+    items: order.items.map((i) => ({ name: i.title, qty: i.qty, price: i.price, img: i.img })),
+    note: src.note,
+    status: 'pending',
+    createdAt: Date.now(),
+    direction: 'friend',
+  };
+  kvSet(`tb-proxy:${proxy.id}`, proxy);
+  pushIndex('tb-proxy-index', proxy.id);
+
+  // 订单挂 proxy 快照（收银台/详情显示「已请 TA 代付」跟随最新请求）
+  try {
+    const { tbSaveOrders } = await import('./taobao-store');
+    const list = tbLoadOrders(src.uid);
+    const hit = list.find((o) => o.id === src.orderId);
+    if (hit) {
+      hit.proxy = { id: proxy.id, name: proxy.contactName };
+      tbSaveOrders(src.uid, list);
+      window.dispatchEvent(new CustomEvent('tb-orders-changed'));
+    }
+  } catch {
+    /* 挂快照失败不阻断 */
+  }
+
+  const card = buildCard(proxy.id, proxy.amount);
+  if (!opts?.deferCard) insertCard(idp, contactId, card, TB_PROXY_CARD_EVENT);
+  void import('./tb-proxy-ai')
+    .then((m) => m.scheduleTbProxyAiDecision(proxy.id))
+    .catch(() => undefined);
+  return { ok: true, pid: proxy.id, resent: false, card };
 }
 
 // ---------------- B4 失效联动 ----------------
@@ -775,13 +883,14 @@ export async function tbCreateProxyRequestByChar(opts: TbCreateProxyByCharOpts):
 
 // ---------------- 快递入口（微信/QQ 加号面板「快递」） ----------------
 
-/** 已确认收货的淘宝订单（快递面板列表；票务单无快递不在列；未登录淘宝 → 空列表） */
+/** 已确认收货的淘宝订单（快递面板列表；Task 2-b 放开票务单：演出票核销入场（completed）也可分享；
+ *  未登录淘宝 → 空列表） */
 export function tbCompletedOrders(): TbOrder[] {
   try {
     const s = tbGetSession();
     if (!s) return [];
     return tbLoadOrders(tbUidOf(s))
-      .filter((o) => o.status === 'completed' && !o.ticket)
+      .filter((o) => o.status === 'completed')
       .sort((a, b) => (b.completedAt ?? b.createdAt) - (a.completedAt ?? a.createdAt));
   } catch {
     return [];

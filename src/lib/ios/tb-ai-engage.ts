@@ -5,8 +5,10 @@
  * - 上下文注入 buildTbEngageCtx：机主淘宝订单实时动态（AI 知道买了什么/哪家店/多少钱/快递状态）
  *   + 待付订单 [帮付淘宝]（AI 按人设/记忆/关系主动代付）+ 在途快递 [帮取快递]（帮机主取件）
  *   + 聊到购物时的商品目录与 [帮你买]（AI 代买草稿，支持多商品，机主确认后 AI 出钱下单）
- *   与 [自己买]（AI 自己想要，下单后请机主代付）教学；
- * - 动作执行 applyTbEngageAction：帮付/代买草稿/自己买/帮取快递/收礼物确认五类标记落地；
+ *   与 [自己买]（AI 自己想要，下单后请机主代付）教学；聊到演出/买票时的近期演出清单与
+ *   [帮你买票]（AI 按人设自主帮机主买喜剧脱口秀/演唱会票）；聊天内 pending 的代付请求
+ *   [代付淘宝:请求id]（机主再次开口时 AI 真正执行代付）；
+ * - 动作执行 applyTbEngageAction：帮付/代付请求支付/代买草稿/自己买/帮取快递/收礼物确认/帮买演出票等标记落地；
  * - 礼物链路：机主分享订单后说「给你买的」→ AI 结合人设/记忆/上下文自主确认（输出 [收礼物:sid]，
  *   「买给你妹妹/送你个表情包」这类话不误标）→ 包裹到驿站后 AI 自主取件（tbEngageTick）；
  *   取到后要不要主动说、说什么全部由 LLM 按人设/记忆/上下文现场决策（不发模板道谢，也可以不说）；
@@ -33,6 +35,7 @@ import {
   tbArrivedAtStation,
   tbConfirmReceive,
   tbCreateOrder,
+  tbCreateTicketOrder,
   tbCurAddr,
   tbGetSession,
   tbLoadOrders,
@@ -44,12 +47,24 @@ import {
   type TbOrderItem,
 } from './taobao-store';
 import {
+  TB_BEST_ZONE,
+  TB_COMEDY_SHOWS,
+  TB_CONCERTS,
+  TB_SEAT_LAYOUT,
+  tbRealDate,
+  tbSeatSold,
+  tbSessionStarted,
+  tbSessionTime,
+} from './taobao-channels-data';
+import {
   TB_PROXY_CARD_EVENT,
   tbAiPayPendingOrder,
   tbCreateProxyRequestByChar,
   tbGetProxy,
   tbGetShare,
   tbPendingProxiesOfChat,
+  tbProxyChatCid,
+  tbProxyPayOrder,
   tbShareOrderOf,
 } from './tb-share-proxy';
 import { callTbLlm, extractJsonObject, deliverPeerMsgs } from './tb-proxy-ai';
@@ -133,6 +148,111 @@ export function tbScanShopText(texts: (string | undefined | null)[]): boolean {
 
 /** 机主说明「订单是给 AI 买的」的表达（礼物链路自动标记用） */
 const GIFT_TEXT_RE = /(给你买|买给你|送给你|送你的|买给你的|给你的礼物|给你带|给你准备的)/;
+
+// ---------------- AI 买演出票（[帮你买票:演出id]，喜剧脱口秀/演唱会；Task 3） ----------------
+
+/** 演出/票务话题扫描（与商品目录同模式：聊到才注入演出清单，平时不占 token） */
+const TICKET_TEXT_RE = /(买票|订票|购票|门票|演出|脱口秀|演唱会|相声|喜剧|话剧|舞台剧|漫才|音乐节|看演出)/;
+
+/** 喜剧脱口秀固定场次时刻（对齐 taobao-channels 的 COMEDY_SESSION_TIMES，索引 = 偏移天数） */
+const TB_AI_COMEDY_SESSIONS = [
+  { start: '19:30', end: '21:30', price: 120 },
+  { start: '19:30', end: '21:40', price: 120 },
+  { start: '14:30', end: '16:40', price: 100 },
+];
+
+/** 喜剧小剧场自动配座（AI 买票）：随机挑 N 连座（最佳观影区优先，全区扫兑底） */
+function tbAiPickComedySeats(qty: number): string[] {
+  const runs: { r: number; c: number }[] = [];
+  for (let r = 0; r < TB_SEAT_LAYOUT.length; r++) {
+    const row = TB_SEAT_LAYOUT[r] ?? [];
+    for (let c = 0; c + qty <= row.length; c++) {
+      let ok = true;
+      for (let k = 0; k < qty; k++) {
+        if (!row[c + k] || tbSeatSold(r, c + k)) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) runs.push({ r, c });
+    }
+  }
+  const best = runs.filter((x) => x.r >= TB_BEST_ZONE.r1 && x.r <= TB_BEST_ZONE.r2);
+  const pool = best.length > 0 ? best : runs;
+  const pick = pool.length > 0 ? pool[Math.floor(Math.random() * pool.length)] : { r: 0, c: 0 };
+  return Array.from({ length: qty }, (_, k) => `${pick.r + 1}排${pick.c + k + 1}座`);
+}
+
+export type TbAiTicketBuildResult =
+  | { ok: true; order: TbOrder; desc: string }
+  | { ok: false; error: string };
+
+/**
+ * 按演出 id（TB_COMEDY_SHOWS 喜剧脱口秀 / TB_CONCERTS 演唱会）生成真实场次并创建待付款票务订单
+ * （喜剧=2 连座自动配座；演唱会=最低价可用票档×2；已开演/未开售/找不到 → 报错文案）。
+ * 付款由调用方接 tbAiPayPendingOrder（AI 代付 → tbMarkPaid 票务特判直接出票 shipped）。
+ */
+export function tbAiBuildTicketOrder(uid: string, showId: string): TbAiTicketBuildResult {
+  const sid = showId.trim();
+  if (!sid) return { ok: false, error: '没有找到这场演出，买不了票' };
+  const show = TB_COMEDY_SHOWS.find((s) => s.id === sid);
+  if (show) {
+    const day = [0, 1, 2].find((i) => !tbSessionStarted(tbRealDate(i).isoDate, TB_AI_COMEDY_SESSIONS[i].start));
+    if (day === undefined) return { ok: false, error: '近期场次都已开演，买不了票' };
+    const sess = TB_AI_COMEDY_SESSIONS[day];
+    const real = tbRealDate(day);
+    const seats = tbAiPickComedySeats(2);
+    const order = tbCreateTicketOrder(uid, {
+      kind: 'comedy',
+      title: show.title,
+      posterC1: show.c1,
+      posterC2: show.c2,
+      badge: show.tag,
+      qty: 2,
+      venue: show.venue,
+      hall: '小剧场',
+      date: real.isoDate,
+      dateLabel: `${real.label} ${real.md}`,
+      start: sess.start,
+      end: sess.end,
+      seats,
+      unitPrice: sess.price,
+    });
+    return { ok: true, order, desc: `「${show.title}」的脱口秀门票（${seats.join('、')}）` };
+  }
+  const concert = TB_CONCERTS.find((c) => c.id === sid);
+  if (!concert) return { ok: false, error: '没有找到这场演出，买不了票' };
+  if (concert.status !== 'on') return { ok: false, error: `「${concert.artist}」的演唱会还没正式开售` };
+  const tier = concert.tiers.filter((t) => t.left !== '已售罄').sort((a, b) => a.price - b.price)[0];
+  if (!tier) return { ok: false, error: '这场演唱会的票都售罄了' };
+  const sm = concert.dateRange.match(/(\d{1,2}:\d{2})/);
+  const start = sm ? sm[1] : '19:00';
+  const day = [0, 1, 2].find((i) => !tbSessionStarted(tbRealDate(i).isoDate, start));
+  if (day === undefined) return { ok: false, error: '近期场次都已开演，买不了票' };
+  const sess = tbSessionTime(day, start, { hours: 3 });
+  const qty = 2;
+  const order = tbCreateTicketOrder(
+    uid,
+    {
+      kind: 'concert',
+      title: `${concert.artist}「${concert.tour}」`,
+      posterC1: concert.c1,
+      posterC2: concert.c2,
+      badge: '演唱会',
+      qty,
+      venue: concert.venue,
+      hall: tier.name,
+      date: sess.isoDate,
+      dateLabel: `${sess.label} ${sess.md}`,
+      start: sess.start,
+      end: sess.end,
+      seats: [`${tier.name}×${qty}`],
+      unitPrice: tier.price,
+    },
+    { total: Math.round(tier.price * qty * 100) / 100 },
+  );
+  return { ok: true, order, desc: `${concert.artist}「${concert.tour}」的演唱会门票（${tier.name}×${qty}）` };
+}
 
 // ---------------- 商品目录（AI 推荐口径：多品类抽样，id 原样输出用） ----------------
 
@@ -451,6 +571,41 @@ export function buildTbEngageCtx(
     ? `【${owner}的淘宝动态】（实时状态，可以自然提起、主动关心快递进度）\n${recent.map(orderBrief).join('\n')}`
     : '';
 
+  // —— 聊天内的代付请求（direction 'friend'：机主发给该 AI 的；待付 + 已婉拒可改主意）→ [代付淘宝:请求id]
+  //（机主再次开口说「帮我代付/付一下」时，AI 用这个标记真正执行支付——修「AI 只能嘴上说再发一次」的死锁）
+  const friendPending = tbPendingProxiesOfChat(chatContactId).filter((p) => p.direction === 'friend');
+  const friendDeclined = (() => {
+    try {
+      return (kvGet<string[]>('tb-proxy-index') ?? [])
+        .map((pid) => tbGetProxy(pid))
+        .filter((p): p is NonNullable<typeof p> => !!p)
+        .filter((p) => p.direction === 'friend' && p.status === 'declined' && tbProxyChatCid(p) === chatContactId)
+        // 订单仍是待付款才教「可以改主意帮付」（已支付/取消的单支付必失败，不占上下文）
+        .filter((p) => {
+          try {
+            const o = tbLoadOrders(p.uid).find((x) => x.id === p.orderId);
+            return !!o && o.status === 'pendingPay';
+          } catch {
+            return false;
+          }
+        })
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, 2);
+    } catch {
+      return [];
+    }
+  })();
+  if (friendPending.length > 0 || friendDeclined.length > 0) {
+    const lines = [
+      ...friendPending.map((p) => `· id=${p.id} 淘宝店「${p.shopName}」 ¥${fmt2(p.amount)}（${p.items.map((i) => `${i.name}x${i.qty}`).join('、')}）${p.note ? ` 备注:${p.note}` : ''} · 请求人:${p.fromName} · 待代付`),
+      ...friendDeclined.map((p) => `· id=${p.id} 淘宝店「${p.shopName}」 ¥${fmt2(p.amount)}（${p.items.map((i) => `${i.name}x${i.qty}`).join('、')}） · 请求人:${p.fromName} · 你之前婉拒了（订单还在待付款，机主又开口的话可以改主意）`),
+    ];
+    rules.push(
+      `【待你处理的淘宝代付请求】\n${lines.join('\n')}\n` +
+        `机主希望你帮忙支付上面的订单（订单仍是待付款状态才能代付）。是否代付完全由你按人设、你们的关系、记忆和金额自主决定：愿意就先说一句，再单独输出标记 [代付淘宝:请求id]（系统会立即支付并发出回执卡片，id 必须原样抄写；之前婉拒过的也可以改主意帮TA付，系统会把请求卡改成已代付）；不想付或觉得不合适就用正文自然婉拒（可以调侃、可以撒娇说下次），不要输出标记——婉拒后这张请求卡会显示「对方婉拒了」，TA还可以自己支付或再找别人。30 分钟内不付款订单会自动取消。`,
+    );
+  }
+
   // —— AI 自己发出去的代付请求（等机主付）
   const mePending = tbPendingProxiesOfChat(chatContactId).filter((p) => p.direction === 'me');
   if (mePending.length > 0) {
@@ -501,9 +656,22 @@ export function buildTbEngageCtx(
     }
   }
 
+  // —— 演出/票务话题 → 近期演出清单 + [帮你买票]（AI 自主决定帮机主买喜剧脱口秀/演唱会票）
+  if (tbScanShopText(recentTexts) || TICKET_TEXT_RE.test(recentTexts.filter((t): t is string => typeof t === 'string').join(' '))) {
+    const showLines = TB_COMEDY_SHOWS.slice(0, 4).map((s) => `· 喜剧脱口秀 id=${s.id} 「${s.title}」 ${s.venue} · ${s.dateRange} · ¥${s.price}`);
+    const concertLines = TB_CONCERTS.slice(0, 4).map((c) => {
+      const ps = c.tiers.map((t) => t.price);
+      return `· 演唱会 id=${c.id} 「${c.artist}《${c.tour}》」 ${c.venue} · ${c.dateRange} · ¥${Math.min(...ps)}-${Math.max(...ps)}${c.status === 'soon' ? '（预售未开售）' : ''}`;
+    });
+    rules.push(
+      `【近期演出（帮机主买票只能从这个清单选，id 必须原样抄写）】\n${[...showLines, ...concertLines].join('\n')}\n` +
+        `机主想让你帮买票/订票时，结合你的人设、关系和金额自主决定买不买、买哪场：愿意就输出标记 [帮你买票:演出id]（系统会自动选场次下单、由你付款出票，并把订单分享到聊天）；不想买或觉得不合适就正常聊天婉拒。金额没有上限，但别每次都抢着买。`,
+    );
+  }
+
   if (tbEngageCoolingDown(app, chatContactId)) {
     rules.push(
-      '【参与节流】你刚刚（5分钟内）已经主动帮付/代买/取件过一次了（冷却中）：这一轮不要再输出 [帮付淘宝]/[帮你买]/[自己买] 标记（系统会硬拦截不执行），用正文正常聊就好。',
+      '【参与节流】你刚刚（5分钟内）已经主动帮付/代买/取件过一次了（冷却中）：这一轮不要再输出 [帮付淘宝]/[帮你买]/[帮你买票]/[自己买] 标记（系统会硬拦截不执行），用正文正常聊就好。',
     );
   }
   return { block, rules };
@@ -511,10 +679,10 @@ export function buildTbEngageCtx(
 
 // ---------------- 动作执行（wechat/qq buildReplyMsgs 分流调用） ----------------
 
-export type TbEngageActionKind = 'tb-pay-for' | 'tb-order-draft' | 'tb-order-self' | 'tb-pickup' | 'tb-gift';
+export type TbEngageActionKind = 'tb-pay-for' | 'tb-order-draft' | 'tb-order-self' | 'tb-pickup' | 'tb-gift' | 'tb-proxy-pay' | 'tb-buy-ticket';
 
 export function isTbEngageActionKind(kind: string): kind is TbEngageActionKind {
-  return kind === 'tb-pay-for' || kind === 'tb-order-draft' || kind === 'tb-order-self' || kind === 'tb-pickup' || kind === 'tb-gift';
+  return kind === 'tb-pay-for' || kind === 'tb-order-draft' || kind === 'tb-order-self' || kind === 'tb-pickup' || kind === 'tb-gift' || kind === 'tb-proxy-pay' || kind === 'tb-buy-ticket';
 }
 
 /** 执行器产出的卡片消息（微信 WxMsg / QQ QQMsg 结构子集，直接 push 进回复队列） */
@@ -632,6 +800,65 @@ export function applyTbEngageAction(
       { eventTime: now, sourceTag: 'tb-help-pay' },
     );
     return { msgs: res.card ? [res.card as TbEngageCard] : [] };
+  }
+
+  if (kind === 'tb-proxy-pay') {
+    // [代付淘宝:请求id]：AI 支付机主发来的代付请求（仅 direction 'friend' 且落在自己聊天）。
+    // 这是用户明确再次开口的代付执行路径（机主发了请求卡后 AI 第一次没付/婉拒，TA 在聊天里
+    // 再说「帮我代付/付一下」）——不挂 5min 主动参与冷却（冷却只限 AI 主动抢付），仅校验状态防重复；
+    // 之前婉拒的请求也允许改主意帮付（先复活为待付再走支付，请求卡随回执卡一起变已代付）
+    const pid = action.targetId.trim();
+    const p = tbGetProxy(pid);
+    if (!p || (p.status !== 'pending' && p.status !== 'declined') || p.direction !== 'friend' || tbProxyChatCid(p) !== peer.id) {
+      return { msgs: [], sys: '（代付请求不存在或已处理）' };
+    }
+    if (p.status === 'declined') kvSet(`tb-proxy:${p.id}`, { ...p, status: 'pending' });
+    const res = tbProxyPayOrder(pid, { deferCard: true });
+    if (!res.ok) {
+      // 支付失败（订单已支付/取消）：婉拒复活的请求回滚为婉拒，避免残留 pending 死锁
+      if (p.status === 'declined') kvSet(`tb-proxy:${p.id}`, { ...p, status: 'declined', closeReason: '对方婉拒了这次代付' });
+      return { msgs: [], sys: `（代付未成功：${res.error}）` };
+    }
+    if (!res.card) return { msgs: [], sys: '（代付未完成，请稍后再试）' };
+    const summary = p.items.map((i) => `${i.name}x${i.qty}`).join('、');
+    memAddEventFragment(peer.id, opts.app, `机主${meName}在淘宝请你代付「${p.shopName}」的订单（¥${fmt2(p.amount)}，${summary}），你同意并已支付`, { eventTime: now, sourceTag: 'tb-proxy-pay' });
+    return { msgs: [res.card as TbEngageCard] };
+  }
+
+  if (kind === 'tb-buy-ticket') {
+    // [帮你买票:演出id]：AI 按人设自主帮机主买演出票（喜剧脱口秀/演唱会）——
+    // 真实场次生成 pendingPay 票务订单 → AI 代付（tbMarkPaid 票务特判直接出票 shipped）→ 订单分享卡回聊天
+    if (!uidInfo) return { msgs: [], sys: '（淘宝尚未登录，无法买票）' };
+    if (tbEngageCoolingDown(opts.app, peer.id)) {
+      return { msgs: [], sys: '（刚刚才帮付/代买过一次，先歇一歇，这次先不买票啦）' };
+    }
+    const built = tbAiBuildTicketOrder(uidInfo.uid, action.targetId);
+    if (!built.ok) return { msgs: [], sys: `（${built.error}）` };
+    const payRes = tbAiPayPendingOrder(built.order, { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) }, opts.app);
+    if (!payRes.ok) return { msgs: [], sys: `（买票未成功：${payRes.error}）` };
+    tbMarkEngage(opts.app, peer.id);
+    // 异步收尾：订单分享卡（AI 发给机主「X已买单」；票务单渲染演出票卡）+ 角色记忆（完成回执卡用分享卡替代）
+    const appSnapshot = opts.app;
+    const meNameSnapshot = meName;
+    void (async () => {
+      try {
+        const { tbCreateOrderShare } = await import('./tb-share-proxy');
+        const fresh = tbLoadOrders(uidInfo.uid).find((o) => o.id === built.order.id) ?? built.order;
+        await tbCreateOrderShare({
+          order: fresh,
+          idp: appSnapshot,
+          contactId: peer.id,
+          fromName: peer.name,
+          role: 'peer',
+          paidBy: peer.name,
+          content: `[淘宝订单分享]帮你在「${fresh.shopName}」买好票啦，我付好了~`,
+        });
+      } catch {
+        /* 分享卡失败不影响出票 */
+      }
+      memAddEventFragment(peer.id, appSnapshot, `你帮机主${meNameSnapshot}买了${built.desc}（¥${fmt2(built.order.total)}），已由你付款出票`, { eventTime: Date.now(), sourceTag: 'tb-buy-ticket' });
+    })();
+    return { msgs: [] };
   }
 
   if (kind === 'tb-order-draft') {
@@ -963,11 +1190,10 @@ async function runProactivePayEngage(uid: string, orderId: string): Promise<void
   }
 }
 
-/** 到货/发货主动问候一句话：LLM 按人设+记忆+上下文生成（不套固定收尾），失败回退本地文案 */
+/** 包裹到驿站主动问候一句话：LLM 按人设+记忆+上下文生成（不套固定收尾）；刚发货时的「留意物流」提醒已按用户要求删除，不再主动发 */
 async function tbArrivalLineViaLlm(
   contact: ContactRecord,
   app: TbEngageApp,
-  arrived: boolean,
   shopName: string,
   item: string,
   meName: string,
@@ -981,11 +1207,9 @@ async function tbArrivalLineViaLlm(
     .filter(Boolean)
     .join('\n\n');
   const user = [
-    arrived
-      ? `【你注意到的事】${meName}在淘宝「${shopName}」买的${item}刚放到驿站了（TA还没取）。`
-      : `【你注意到的事】${meName}在淘宝「${shopName}」买的${item}刚发货了，还在路上。`,
+    `【你注意到的事】${meName}在淘宝「${shopName}」买的${item}刚放到驿站了（TA还没取）。`,
     '【任务】要不要主动提这件事，由你结合人设、你们的关系、当前时间和你们相处的记忆自己决定：',
-    '想说：输出那句话本身（1 句，像平时聊天，到驿站就提醒TA去取/在路上就说留意下物流；禁止每次都用「记得去取呀」这类固定收尾）；',
+    '想说：输出那句话本身（1 句，像平时聊天，提醒TA去取；禁止每次都用「记得去取呀」这类固定收尾）；',
     '觉得没必要说/不想打扰/刚聊过这个话题：直接输出空（什么都不用说，之后TA聊起来再自然回应）。',
     '直接输出句子本身或空字符串，不要 JSON、不要引号。',
   ].join('\n\n');
@@ -1007,11 +1231,10 @@ async function maybeArrivalComment(uid: string, orderId: string): Promise<boolea
   if (!order) return true;
   const meName = ownerNameSync();
   const item = order.items[0]?.title.slice(0, 16) ?? '快递';
-  const arrived = tbArrivedAtStation(order);
   // 人设化问候：LLM 现场生成 + 自主决定说不说（用户要求：可以选择问也可以不选择问候，不套模板，失败不兑底）
   let line = '';
   try {
-    line = await tbArrivalLineViaLlm(contact, app, arrived, order.shopName, item, meName);
+    line = await tbArrivalLineViaLlm(contact, app, order.shopName, item, meName);
   } catch {
     line = '';
   }
@@ -1076,9 +1299,11 @@ export async function tbEngageTick(uid: string): Promise<void> {
         return; // 一轮只做一件主动事
       }
     }
-    // (c) 到货主动问候：新有物流的单，低频提一嘴（有礼物/帮取安排的由取件流程说话，不重复）；
-    // 标记在「确定处理完」后才打（发了或 AI 决定不说），没聊天对象不消耗机会（用户反馈修复）
-    const commented = orders.find((o) => o.status === 'shipped' && !o.aiPickup && !kvGet<boolean>(`tb-commented:${o.id}`) && o.track.length > 0);
+    // (c) 到驿站主动问候：只提醒「到驿站待取件」——刚发货时的「留意物流」类问候已按用户要求删除；
+    // 有礼物/帮取安排的由取件流程说话，不重复；标记在「确定处理完」后才打（发了或 AI 决定不说），没聊天对象不消耗机会
+    const commented = orders.find(
+      (o) => o.status === 'shipped' && !o.aiPickup && !kvGet<boolean>(`tb-commented:${o.id}`) && o.track.length > 0 && tbArrivedAtStation(o),
+    );
     if (commented) {
       await maybeArrivalComment(uid, commented.id);
       return;

@@ -64,8 +64,12 @@ export interface TgMsg {
   time: number;
   /** role=recs 时携带 */
   songs?: TgRecSong[];
-  /** 消息生成失败标记 */
+  /** 消息生成失败标记（旧数据兼容字段；新失败改打在触发消息的 replyFail 上，不再落占位气泡） */
   error?: boolean;
+  /** 这条「我」的消息触发的一轮 AI 回复失败：气泡旁红色 ! 徽标，点击重新生成 */
+  replyFail?: boolean;
+  /** 重试类型：chat=重新生成回复 / recs=重新推荐歌曲（缺省 chat） */
+  retryKind?: 'chat' | 'recs';
 }
 
 export interface TogetherSession {
@@ -217,6 +221,17 @@ function appendMsg(cid: string, m: TgMsg): void {
   }
   // 一起听聊天记忆（第二十四轮）：双方消息都记入会话日志，攒够一批写进角色记忆
   if (m.role === 'me' || m.role === 'peer') logTgChatLine(cid, m.role, m.text);
+}
+
+/** 单条消息 patch（读→改→写，setState 同步）：replyFail 徽标打标/清标用 */
+function patchTgMsg(cid: string, msgId: string, patch: Partial<TgMsg>): void {
+  const cur = useMusic.getState();
+  const list = cur.together?.contactId === cid ? cur.togetherMsgs : loadTogetherMsgs(cid);
+  const next = list.map((m) => (m.id === msgId ? { ...m, ...patch } : m));
+  saveTogetherMsgs(cid, next);
+  if (cur.together?.contactId === cid) {
+    useMusic.setState({ togetherMsgs: next });
+  }
 }
 
 // ---------------- 一起听聊天记忆（第二十四轮：听的什么歌、聊的什么都记在记忆里） ----------------
@@ -843,6 +858,8 @@ let replying = false;
 interface PendingReply {
   cid: string;
   userText: string;
+  /** 触发本轮的用户消息 id（失败时在其气泡旁打 replyFail 徽标） */
+  triggerMsgId?: string;
 }
 let pendingReply: PendingReply | null = null;
 
@@ -875,19 +892,19 @@ function withoutCurrentTurn(turns: LlmTurn[], userText: string): LlmTurn[] {
 }
 
 /** 用户发消息 → AI 回复（生成中有新消息进来时进 1 槽排队，不再丢消息） */
-export async function togetherReply(cid: string, userText: string): Promise<void> {
+export async function togetherReply(cid: string, userText: string, triggerMsgId?: string): Promise<void> {
   if (replying) {
     // 生成中：只记住最新一条待回复输入（覆盖旧的），当前回复结束后在同一把锁内接着处理
-    pendingReply = { cid, userText };
+    pendingReply = { cid, userText, triggerMsgId };
     return;
   }
   replying = true;
   useMusic.setState({ tgAiBusy: true }); // 聊天视图显示三个跳动点
   try {
     // 串行排水：先回当前这条，再取排队中的最新一条继续（循环而非递归，race-free）
-    let current: PendingReply = { cid, userText };
+    let current: PendingReply = { cid, userText, triggerMsgId };
     for (;;) {
-      await runTogetherReplyOnce(current.cid, current.userText);
+      await runTogetherReplyOnce(current.cid, current.userText, current.triggerMsgId);
       const next = pendingReply;
       pendingReply = null;
       // 只接同会话的排队输入：一起听已退出/已换角色时丢弃（旧角色的挂起输入对新情境无意义）
@@ -915,7 +932,7 @@ async function drainPendingAfterProactive(): Promise<void> {
     replying = true;
     useMusic.setState({ tgAiBusy: true });
     try {
-      await runTogetherReplyOnce(next.cid, next.userText);
+      await runTogetherReplyOnce(next.cid, next.userText, next.triggerMsgId);
     } finally {
       replying = false;
       useMusic.setState({ tgAiBusy: false });
@@ -926,8 +943,10 @@ async function drainPendingAfterProactive(): Promise<void> {
 /** 单次回复执行（不含排队/互斥）：system（人设+记忆+跨App+音乐情境+规则）+ 最近真实历史轮次
  *  + 当前消息做最后一条 user 轮；聊天记录不再压平进 system。
  *  Task 21：回复拆成 3~10 条短消息，锁内逐条错峰投递（650~1200ms/条），
- *  生成下一条排队输入继续回复时投递已全部落盘，不会交错乱序 */
-async function runTogetherReplyOnce(cid: string, userText: string): Promise<void> {
+ *  生成下一条排队输入继续回复时投递已全部落盘，不会交错乱序。
+ *  失败表达（用户需求）：不落任何占位文字，改为触发消息（triggerMsgId）旁红色 ! 徽标，点击重试；
+ *  无触发消息的主动场景失败静默 */
+async function runTogetherReplyOnce(cid: string, userText: string, triggerMsgId?: string): Promise<void> {
   try {
     const who = await ownerName();
     // 情境说明只描述「刚来了一条新消息」，不引用消息原文（原文只出现在最后一条 user 轮，避免出现两次）
@@ -947,29 +966,20 @@ async function runTogetherReplyOnce(cid: string, userText: string): Promise<void
     const { segments, controls } = await genUniqueReply(cid, messages, { minSegments: TG_SEGMENTS_MIN });
     if (segments.length) {
       await deliverPeerSegments(cid, segments);
-    } else {
-      appendMsg(cid, {
-        id: genMsgId(),
-        role: 'peer',
-        text: '……（信号不太好，没听清）',
-        time: Date.now(),
-        error: true,
-      });
+      if (triggerMsgId) patchTgMsg(cid, triggerMsgId, { replyFail: false }); // 成功清标（重试成功场景）
+    } else if (triggerMsgId) {
+      patchTgMsg(cid, triggerMsgId, { replyFail: true, retryKind: 'chat' });
     }
     // AI 的播放控制指令（切歌/暂停/选歌/红心/快进快退）异步真实执行（不阻塞回复 flag；用户随时可手动覆盖）
     void runTgControls(cid, controls, segments.join(' '));
   } catch {
-    // 生成链路异常：兜底一条失败消息，保持聊天不卡死（兜底自身失败也静默）
-    try {
-      appendMsg(cid, {
-        id: genMsgId(),
-        role: 'peer',
-        text: '……（信号不太好，没听清）',
-        time: Date.now(),
-        error: true,
-      });
-    } catch {
-      // 静默
+    // 生成链路异常：无占位文字——触发消息打红徽标（点击重试），无触发消息则静默
+    if (triggerMsgId) {
+      try {
+        patchTgMsg(cid, triggerMsgId, { replyFail: true, retryKind: 'chat' });
+      } catch {
+        // 静默
+      }
     }
   }
 }
@@ -1186,8 +1196,21 @@ async function genUniqueReply(
 export function sendTogetherText(text: string): void {
   const t = loadActiveTogether();
   if (!t || !text.trim()) return;
-  appendMsg(t.contactId, { id: genMsgId(), role: 'me', text: text.trim(), time: Date.now() });
-  void togetherReply(t.contactId, text.trim());
+  const msg: TgMsg = { id: genMsgId(), role: 'me', text: text.trim(), time: Date.now() };
+  appendMsg(t.contactId, msg);
+  void togetherReply(t.contactId, text.trim(), msg.id);
+}
+
+/** 红色 ! 徽标重试入口：按 retryKind 分流——recs 重新推荐歌曲 / chat 重新生成回复
+ *  （成功后由 runTogetherReplyOnce/togetherRecommend 清标）。返回 false=忙（正在生成）或消息不可重试 */
+export function retryTogetherReply(cid: string, msgId: string): boolean {
+  if (replying) return false;
+  const m = loadTogetherMsgs(cid).find((x) => x.id === msgId);
+  if (!m || m.role !== 'me') return false;
+  patchTgMsg(cid, msgId, { replyFail: false });
+  if (m.retryKind === 'recs') void togetherRecommend(cid, m.text);
+  else void togetherReply(cid, m.text, msgId);
+  return true;
 }
 
 // ---------------- AI 主动说话（F 睡前提醒 + 暂停久置轻问） ----------------
@@ -1242,12 +1265,13 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
   replying = true;
   useMusic.setState({ tgAiBusy: true });
   try {
-    appendMsg(cid, {
+    const reqMsg: TgMsg = {
       id: genMsgId(),
       role: 'me',
       text: wish.trim() || '给我推荐几首歌吧',
       time: Date.now(),
-    });
+    };
+    appendMsg(cid, reqMsg);
   const who = await ownerName();
   // Task 20：历史改为真实多轮轮次（不再压平进 system）；推荐请求本体已在上面 appendMsg 写入聊天记录
   const situation = `对方（${who}）想让你推荐歌曲。结合你们正在听的歌、${who}的听歌历史和你们的聊天，推荐 2~4 首真实存在的歌曲（几首由你按语境定）。`;
@@ -1278,12 +1302,8 @@ export async function togetherRecommend(cid: string, wish: string): Promise<void
   ]);
   const arr = extractJsonArray(raw);
   if (!arr || !arr.length) {
-    appendMsg(cid, {
-      id: genMsgId(),
-      role: 'peer',
-      text: '我想想……一时想不起来，你先放你的歌单？',
-      time: Date.now(),
-    });
+    // 生成失败：不落模板占位，改为推荐请求消息打红色 ! 徽标（点击重试，retryKind=recs）
+    patchTgMsg(cid, reqMsg.id, { replyFail: true, retryKind: 'recs' });
     return;
   }
   const songs: TgRecSong[] = [];

@@ -33,7 +33,9 @@ import {
   Plane,
   Play,
   Plus,
+  ScanLine,
   Search,
+  Share2,
   ShoppingBag,
   ShoppingCart,
   Stamp,
@@ -60,8 +62,11 @@ import {
   TB_SIGN_SLOTS,
   TB_SUBSIDY,
   tbLoadSign,
+  tbRealDate,
   tbSaveSign,
   tbSeatSold,
+  tbSessionStarted,
+  tbSessionTime,
   tbSignToday,
   type TbConcert,
   type TbMerch,
@@ -73,7 +78,7 @@ import { productById, tbImg, tbSalesText, type TbProduct } from '@/lib/ios/taoba
 import { TbImg } from './tb-img';
 import { useSettings } from '@/lib/ios/store';
 import { tbFetchAiBatch, tbFeedAuxLoad, tbFeedAuxSave, tbFeedLoad, tbFeedSave, type TbFeedRaw, type TbFeedTop } from '@/lib/ios/tb-ai-store';
-import { tbClaimCoupon, tbCreateMerchOrder, tbCreateTicketOrder, tbLoadCoupons, tbLoadOrders, tbMarkRefund, tbPushMsg, tbTickOrders, type TbSession, type TbTicketInfo } from '@/lib/ios/taobao-store';
+import { tbClaimCoupon, tbConfirmReceive, tbCreateMerchOrder, tbCreateTicketOrder, tbLoadCoupons, tbLoadOrders, tbMarkRefund, tbPushMsg, tbTickOrders, type TbSession, type TbTicketInfo } from '@/lib/ios/taobao-store';
 import { tbRefundToOrigin } from '@/lib/ios/taobao-pay';
 import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 
@@ -1131,13 +1136,19 @@ const TP_TABS: { id: TpTab; label: string }[] = [
   { id: 'merch', label: '周边商城' },
 ];
 
+/** 喜剧脱口秀固定场次时刻（Task 2-b：与今天/明天/后天真实日期绑定，索引 = 场次偏移天数） */
+const COMEDY_SESSION_TIMES = [
+  { start: '19:30', end: '21:30', price: 120 },
+  { start: '19:30', end: '21:40', price: 120 },
+  { start: '14:30', end: '16:40', price: 100 },
+];
+
 export function MoviePage({
   uid,
   initialTab = 'movie',
   onBack,
   onToast,
   onOpenCouponCenter,
-  onIssued,
   onPayOrder,
 }: {
   uid: string;
@@ -1145,9 +1156,7 @@ export function MoviePage({
   onBack: () => void;
   onToast: (m: string) => void;
   onOpenCouponCenter: () => void;
-  /** 出票成功 → 根组件跳电影票详情（票已进全部订单·待收货） */
-  onIssued: (orderId: string) => void;
-  /** 周边下单（待付款）→ 根组件唤起支付面板 */
+  /** 周边下单/票务下单（待付款）→ 根组件唤起收银台（用户点支付才扣款出票） */
   onPayOrder: (orderId: string) => void;
 }) {
   const [tab, setTab] = useState<TpTab>(initialTab);
@@ -1164,6 +1173,8 @@ export function MoviePage({
   const [concert, setConcert] = useState<TbConcert>(TB_CONCERTS[0]);
   const [tierIdx, setTierIdx] = useState(0);
   const [cQty, setCQty] = useState(2);
+  /** 演唱会所选场次（0=今天/1=明天/2=后天，真实日期场次） */
+  const [concertDay, setConcertDay] = useState(0);
   // 周边商城
   const [buyMerch, setBuyMerch] = useState<TbMerch | null>(null);
   const [mQty, setMQty] = useState(1);
@@ -1549,10 +1560,6 @@ export function MoviePage({
       return { label: l, date: fmt(d) };
     });
   }, []);
-  const fmtLong = useMemo(() => {
-    const d = new Date();
-    return `${d.getMonth() + 1}月${d.getDate()}日`;
-  }, []);
   /** 未来三天 ISO 日期（出票写真实日期 → 票详情倒计时/已放映判定） */
   const isoDates = useMemo(
     () =>
@@ -1563,6 +1570,32 @@ export function MoviePage({
       }),
     []
   );
+  /** 演唱会真实场次（未来 3 天，开场时刻取 dateRange 文案里的 HH:MM，缺省 19:00，演出约 3 小时） */
+  const concertSessions = useMemo(() => {
+    const sm = concert.dateRange.match(/(\d{1,2}:\d{2})/);
+    const start = sm ? sm[1] : '19:00';
+    return [0, 1, 2].map((i) => {
+      const s = tbSessionTime(i, start, { hours: 3 });
+      return { ...s, started: tbSessionStarted(s.isoDate, start) };
+    });
+  }, [concert]);
+  /** 打开演唱会购票页时默认选中第一个未开演的场次 */
+  const openConcertBuy = (cc: TbConcert) => {
+    const sm = cc.dateRange.match(/(\d{1,2}:\d{2})/);
+    const start = sm ? sm[1] : '19:00';
+    let first = 2;
+    for (let i = 0; i < 3; i++) {
+      if (!tbSessionStarted(tbRealDate(i).isoDate, start)) {
+        first = i;
+        break;
+      }
+    }
+    setConcert(cc);
+    setTierIdx(0);
+    setCQty(2);
+    setConcertDay(first);
+    setView('concertBuy');
+  };
   /** 刷新批次：往列表顶部插入「新内容」（最新批在最上），旧条目与历史批次原位保留
    *  （不重排、不清空、不跳顶）；id 加批次后缀避免 key 冲突（字段全量拷贝，点击/出票行为不变）；
    *  Task 44：批次列表按频道传入（热映/即将上映/喜剧/演唱会/周边各自独立持久化） */
@@ -1616,10 +1649,14 @@ export function MoviePage({
       return `${r + 1}排${c + 1}座`;
     });
 
-  /** 电影出票：直接写票务订单（全部订单·待收货），跳电影票详情 */
+  /** 电影选座确认：创建待付款票务订单 → 拉起收银台（用户点支付才扣款出票）；今天场次已开场时拦截 */
   const confirmSeats = () => {
     if (sel.size === 0) return;
     const sess = TB_MOVIE_SESSIONS[day];
+    if (tbSessionStarted(isoDates[day], sess.start)) {
+      onToast('该场次已开场，请选择明后天的场次');
+      return;
+    }
     const order = tbCreateTicketOrder(uid, {
       kind: 'movie',
       title: movie.title,
@@ -1636,21 +1673,21 @@ export function MoviePage({
       seats: seatTexts(sel),
       unitPrice: 38,
     });
-    tbPushMsg(uid, { kind: 'logistics', title: '出票成功', text: `《${movie.title}》已出票，取票号 ${order.ticket?.ticketNo ?? ''}，开场凭码取票入场`, orderId: order.id });
-    onToast(`出票成功：${sel.size}张 共¥${sel.size * 38}`);
+    onToast('已提交订单，请完成支付');
     setSel(new Set());
     setView('tabs');
-    onIssued(order.id);
+    onPayOrder(order.id);
   };
 
-  /** 喜剧脱口秀出票（小剧场选座） */
+  /** 喜剧脱口秀选座确认：场次绑定真实今天/明天/后天（已开演拦截）→ 待付款订单 → 收银台 */
   const confirmComedy = () => {
     if (sel.size === 0) return;
-    const sess = [
-      { start: '19:30', end: '21:30' },
-      { start: '19:30', end: '21:40' },
-      { start: '14:30', end: '16:40' },
-    ][showDay];
+    const sess = COMEDY_SESSION_TIMES[showDay];
+    const real = tbRealDate(showDay);
+    if (tbSessionStarted(real.isoDate, sess.start)) {
+      onToast('该场次已开演，请选择其他场次');
+      return;
+    }
     const order = tbCreateTicketOrder(uid, {
       kind: 'comedy',
       title: show.title,
@@ -1660,47 +1697,29 @@ export function MoviePage({
       qty: sel.size,
       venue: show.venue,
       hall: '小剧场',
-      date: isoDates[showDay],
-      dateLabel: `${dateLabels[showDay].label} ${dateLabels[showDay].date}`,
+      date: real.isoDate,
+      dateLabel: `${real.label} ${real.md}`,
       start: sess.start,
       end: sess.end,
       seats: seatTexts(sel),
-      unitPrice: 120,
+      unitPrice: sess.price,
     });
-    tbPushMsg(uid, { kind: 'logistics', title: '出票成功', text: `《${show.title}》已出票，取票号 ${order.ticket?.ticketNo ?? ''}，演出当天凭码入场`, orderId: order.id });
-    onToast(`出票成功：${sel.size}张 共¥${sel.size * 120}`);
+    onToast('已提交订单，请完成支付');
     setSel(new Set());
     setView('tabs');
-    onIssued(order.id);
+    onPayOrder(order.id);
   };
 
-  /** 演唱会出票（票档 + 数量，无座位图） */
+  /** 演唱会选票确认：出真实未来 3 天场次（dateRange 文案仅作展示，修写死年份日期已过的 bug）
+   *  → 待付款订单 → 收银台 */
   const confirmConcert = () => {
     const tier = concert.tiers[tierIdx];
     if (!tier || tier.left === '已售罄') return;
-    // 日期解析修复（票详情问题）：此前「每周三 20:00」等无 MM.DD 格式回退 isoDates[0]（今天），
-    // 晚上购票会立刻被判成「已放映」——现在：每周X → 下一个该星期；完全解析不出 → 一周后
-    const y = new Date().getFullYear();
-    const wkMap: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 };
-    const wm = concert.dateRange.match(/周([一二三四五六日天])/);
-    let date = '';
-    const dm = concert.dateRange.match(/(\d{1,2})\.(\d{1,2})/);
-    if (dm) {
-      date = `${y}-${String(Number(dm[1])).padStart(2, '0')}-${String(Number(dm[2])).padStart(2, '0')}`;
-    } else {
-      const sm0 = concert.dateRange.match(/(\d{1,2}):(\d{2})/);
-      const d = new Date();
-      d.setHours(sm0 ? Number(sm0[1]) : 19, sm0 ? Number(sm0[2]) : 0, 0, 0);
-      if (wm) {
-        const delta = (wkMap[wm[1]] - d.getDay() + 7) % 7;
-        if (delta > 0) d.setDate(d.getDate() + delta);
-        else if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 7);
-      } else {
-        d.setDate(d.getDate() + 7);
-      }
-      date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const sess = concertSessions[concertDay];
+    if (!sess || sess.started) {
+      onToast('该场次已开演，请选择其他场次');
+      return;
     }
-    const sm = concert.dateRange.match(/(\d{1,2}:\d{2})/);
     const order = tbCreateTicketOrder(
       uid,
       {
@@ -1712,19 +1731,18 @@ export function MoviePage({
         qty: cQty,
         venue: concert.venue,
         hall: tier.name,
-        date,
-        dateLabel: concert.dateRange,
-        start: sm ? sm[1] : '19:00',
-        end: '22:00',
+        date: sess.isoDate,
+        dateLabel: `${sess.label} ${sess.md}`,
+        start: sess.start,
+        end: sess.end,
         seats: [`${tier.name}×${cQty}`],
         unitPrice: tier.price,
       },
       { total: Math.round(tier.price * cQty * 100) / 100 }
     );
-    tbPushMsg(uid, { kind: 'logistics', title: '出票成功', text: `${concert.artist}演唱会已锁定 ${cQty} 张${tier.name}，取票号 ${order.ticket?.ticketNo ?? ''}`, orderId: order.id });
-    onToast(`购票成功：${tier.name}×${cQty} 共¥${fmtMoney(tier.price * cQty)}`);
+    onToast('已提交订单，请完成支付');
     setView('tabs');
-    onIssued(order.id);
+    onPayOrder(order.id);
   };
 
   /** 周边下单：待付款订单 → 根组件唤起支付（支付后走正常发货/物流链路） */
@@ -1831,7 +1849,7 @@ export function MoviePage({
               <button type="button" onClick={() => setView('cinemas')} className="ml-auto shrink-0 text-[13.5px] font-medium text-[#3B82F6] active:opacity-70">切换场次</button>
             </div>
             <div className="mt-0.5 text-[13.5px] text-black/75">
-              <span className="font-semibold text-[#FF3676]">{dateLabels[day].label}</span> {fmtLong} {TB_MOVIE_SESSIONS[day].start}-{TB_MOVIE_SESSIONS[day].end} 国语 2D
+              <span className="font-semibold text-[#FF3676]">{dateLabels[day].label}</span> {tbRealDate(day).long} {TB_MOVIE_SESSIONS[day].start}-{TB_MOVIE_SESSIONS[day].end} 国语 2D
             </div>
             <span className="mt-2 inline-block rounded-lg border-[1.5px] border-[#FF3676] bg-[#FFF0F5] px-3 py-1.5">
               <span className="text-[13.5px] font-bold text-black/90">{TB_MOVIE_SESSIONS[day].start}</span>
@@ -1993,11 +2011,12 @@ export function MoviePage({
 
   // ---------- 喜剧脱口秀·剧场场次列表 ----------
   if (view === 'comedyVenue' && show) {
-    const cSess = [
-      { start: '19:30', end: '21:30', price: 120 },
-      { start: '19:30', end: '21:40', price: 120 },
-      { start: '14:30', end: '16:40', price: 100 },
-    ];
+    // 场次真实化：固定时刻绑定今天/明天/后天真实日期；今天场次已过开场时刻 → 「已开演」禁选
+    const cSess = COMEDY_SESSION_TIMES.map((s, i) => ({
+      ...s,
+      real: tbRealDate(i),
+      started: tbSessionStarted(tbRealDate(i).isoDate, s.start),
+    }));
     return (
       <div className="flex h-full flex-col bg-[#F4F5F7]">
         <div className="shrink-0 bg-white">
@@ -2035,21 +2054,33 @@ export function MoviePage({
           </div>
           <div className="px-2 pb-1 pt-4 text-[15px] text-black/40">近期场次</div>
           {cSess.map((s, i) => (
-            <button key={i} type="button" onClick={() => { setShowDay(i); setSel(new Set()); setView('comedySeats'); }} className="mt-2 flex w-full items-center rounded-2xl bg-white p-3.5 text-left active:opacity-80">
+            <button
+              key={i}
+              type="button"
+              disabled={s.started}
+              onClick={() => { setShowDay(i); setSel(new Set()); setView('comedySeats'); }}
+              className={`mt-2 flex w-full items-center rounded-2xl bg-white p-3.5 text-left active:opacity-80 ${s.started ? 'opacity-55' : ''}`}
+            >
               <div className="min-w-0 flex-1">
                 <div className="text-[16px] font-bold text-black/90">
-                  {dateLabels[i].label} {dateLabels[i].date} {s.start}
+                  {s.real.label} {s.real.md} {s.start}
                 </div>
                 <div className="mt-0.5 text-[13px] text-black/45">
                   {show.venue} · 小剧场 {s.start}-{s.end}
                 </div>
               </div>
-              <div className="mr-3 shrink-0 text-[#FF7A00]">
-                <span className="text-[11px]">¥</span>
-                <span className="text-[17px] font-black">{s.price}</span>
-                <span className="text-[11px] text-black/40">起</span>
-              </div>
-              <span className="shrink-0 rounded-full bg-gradient-to-r from-[#FFB03A] to-[#FF7A00] px-4 py-1.5 text-[13px] font-bold text-white">选座购票</span>
+              {!s.started ? (
+                <div className="mr-3 shrink-0 text-[#FF7A00]">
+                  <span className="text-[11px]">¥</span>
+                  <span className="text-[17px] font-black">{s.price}</span>
+                  <span className="text-[11px] text-black/40">起</span>
+                </div>
+              ) : null}
+              {s.started ? (
+                <span className="shrink-0 rounded-full bg-black/[0.06] px-4 py-1.5 text-[13px] font-bold text-black/35">已开演</span>
+              ) : (
+                <span className="shrink-0 rounded-full bg-gradient-to-r from-[#FFB03A] to-[#FF7A00] px-4 py-1.5 text-[13px] font-bold text-white">选座购票</span>
+              )}
             </button>
           ))}
         </div>
@@ -2059,11 +2090,8 @@ export function MoviePage({
 
   // ---------- 喜剧脱口秀·选座（橙主题） ----------
   if (view === 'comedySeats' && show) {
-    const cSess = [
-      { start: '19:30', end: '21:30' },
-      { start: '19:30', end: '21:40' },
-      { start: '14:30', end: '16:40' },
-    ][showDay];
+    const cSess = COMEDY_SESSION_TIMES[showDay];
+    const cReal = tbRealDate(showDay);
     return (
       <div className="flex h-full flex-col bg-white">
         <div className="flex shrink-0 items-center gap-2 px-3 pb-2 pt-[56px]">
@@ -2142,7 +2170,7 @@ export function MoviePage({
               <button type="button" onClick={() => setView('comedyVenue')} className="ml-auto shrink-0 text-[13.5px] font-medium text-[#3B82F6] active:opacity-70">切换场次</button>
             </div>
             <div className="mt-0.5 text-[13.5px] text-black/75">
-              <span className="font-semibold text-[#FF7A00]">{dateLabels[showDay].label}</span> {fmtLong} {cSess.start}-{cSess.end} {show.tag}
+              <span className="font-semibold text-[#FF7A00]">{cReal.label}</span> {cReal.long} {cSess.start}-{cSess.end} {show.tag}
             </div>
             <div className="mt-3 flex items-center gap-2">
               <span className="text-[13px] text-black/55">推荐座位</span>
@@ -2204,6 +2232,30 @@ export function MoviePage({
           {concert.hot ? <div className="mt-2 inline-block rounded-full bg-white/20 px-2.5 py-0.5 text-[11.5px] font-semibold text-white">{concert.hot}</div> : null}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+          {/* 近期场次（Task 2-b：未来 3 天真实日期 × 固定时刻；dateRange 文案仅作展示） */}
+          <div className="mt-2 rounded-2xl bg-white p-3">
+            <div className="text-[17px] font-black text-black/90">选择场次</div>
+            <div className="mt-2.5 space-y-2">
+              {concertSessions.map((s, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  disabled={s.started}
+                  onClick={() => setConcertDay(i)}
+                  className={`flex w-full items-center rounded-xl border px-3.5 py-3 text-left ${s.started ? 'border-black/[0.06] bg-black/[0.02] opacity-55' : i === concertDay ? 'border-[#7C5CFF] bg-[#F4F0FF]' : 'border-black/[0.08] bg-white'}`}
+                >
+                  <span className={`grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border-2 ${!s.started && i === concertDay ? 'border-[#7C5CFF]' : 'border-black/20'}`}>
+                    {!s.started && i === concertDay ? <span className="h-2 w-2 rounded-full bg-[#7C5CFF]" /> : null}
+                  </span>
+                  <span className="ml-3 min-w-0 flex-1">
+                    <span className="block text-[15px] font-bold text-black/90">{s.label} {s.md} {s.start}</span>
+                    <span className="mt-0.5 block truncate text-[12px] text-black/40">{concert.venue} · {s.start}-{s.end}</span>
+                  </span>
+                  <span className={`shrink-0 text-[12px] font-medium ${s.started ? 'text-black/35' : 'text-[#12B76A]'}`}>{s.started ? '已开演' : '可购'}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="mt-2 rounded-2xl bg-white p-3">
             <div className="text-[17px] font-black text-black/90">选择票档</div>
             <div className="mt-2.5 space-y-2">
@@ -2231,6 +2283,7 @@ export function MoviePage({
           </div>
         </div>
         <div className="shrink-0 bg-white px-3 pb-5 pt-2.5">
+          <div className="pb-1 text-[12px] text-black/45">场次：{concertSessions[concertDay]?.label} {concertSessions[concertDay]?.md} {concertSessions[concertDay]?.start} · {concert.venue}</div>
           <div className="flex items-center gap-3">
             <span className="text-[14px] text-black/70">数量</span>
             <div className="flex items-center gap-3 rounded-full bg-black/[0.04] px-2 py-1">
@@ -2516,7 +2569,7 @@ export function MoviePage({
                 <button
                   key={cc.id}
                   type="button"
-                  onClick={() => { setConcert(cc); setTierIdx(0); setCQty(2); setView('concertBuy'); }}
+                  onClick={() => openConcertBuy(cc)}
                   className="block w-full overflow-hidden rounded-2xl text-left active:opacity-90"
                   style={{ background: `linear-gradient(140deg, ${cc.c1}, ${cc.c2})` }}
                 >
@@ -2665,7 +2718,9 @@ function tbQrGrid(seed: string): boolean[][] {
 /** 电影票详情（截图1/2/3 三态：
  *  待开场=紫底倒计时「N小时N分钟后开场」+黑色取票码+退改签(支持改签)；
  *  已放映=橙底「电影已放映」+评价影片/影院+灰码已放映章+本单权益+周边推广；
- *  已退款=靛蓝底「已退款」+退款时间金额+灰码已退款章+退改签(已退款)） */
+ *  已退款=靛蓝底「已退款」+退款时间金额+灰码已退款章+退改签(已退款)；
+ *  Task 2-b 新增：已入场（扫码核销=确认收货）/交易关闭（待付款取消）态 +
+ *  「扫码入场」主按钮（点击=核销）+ 头部「分享」按钮 */
 export function TicketDetailPage({
   uid,
   orderId,
@@ -2673,6 +2728,8 @@ export function TicketDetailPage({
   onToast,
   onRate,
   onOpenMerch,
+  onShare,
+  onPayOrder,
 }: {
   uid: string;
   orderId: string;
@@ -2682,6 +2739,10 @@ export function TicketDetailPage({
   onRate: (id: string) => void;
   /** 去周边商城（已放映态推广卡） */
   onOpenMerch: () => void;
+  /** 分享（头部按钮）：打开 TbShareOrderSheet 分享给微信/QQ 好友 */
+  onShare: (id: string) => void;
+  /** 待付款（代付请求已发出等场景）打开收银台 */
+  onPayOrder: (id: string) => void;
 }) {
   const [, setTick] = useState(0);
   const [qrTab, setQrTab] = useState<'pick' | 'scan'>('pick');
@@ -2708,15 +2769,27 @@ export function TicketDetailPage({
   const startAt = new Date(`${t.date}T${t.start}:00`).getTime();
   const now = Date.now();
   const refunded = !!t.refunded;
-  const screened = !refunded && Number.isFinite(startAt) && now >= startAt;
+  /** 交易关闭（待付款取消/超时，非退款） */
+  const closed = o.status === 'cancelled' && !refunded;
+  /** 待付款（确认选座/选票后未支付；代付请求已发出也会停留在此态） */
+  const unpaid = o.status === 'pendingPay';
+  /** 已入场（扫码核销=确认收货；优先于已放映） */
+  const entered = !refunded && !closed && !!t.enteredAt;
+  const screened = !refunded && !closed && !entered && Number.isFinite(startAt) && now >= startAt;
   const theme = refunded
     ? { from: '#3D4785', to: '#5A64A8' }
-    : screened
-      ? { from: '#FF6A3C', to: '#FF9E75' }
-      : { from: '#4A3A9C', to: '#6C5BD4' };
+    : closed
+      ? { from: '#5B6470', to: '#8A94A3' }
+      : entered
+        ? { from: '#0B8F5C', to: '#3BC46A' }
+        : unpaid
+          ? { from: '#FF5C3C', to: '#FF8A6B' }
+          : screened
+            ? { from: '#FF6A3C', to: '#FF9E75' }
+            : { from: '#4A3A9C', to: '#6C5BD4' };
   // 开场倒计时（截图1口径：21小时48分钟后开场；跨天>N天N小时后开场）
   const countdown = (() => {
-    if (refunded || screened) return null;
+    if (refunded || closed || unpaid || entered || screened) return null;
     const diff = Math.max(0, startAt - now);
     const h = Math.floor(diff / 3_600_000);
     const m = Math.floor((diff % 3_600_000) / 60_000);
@@ -2730,12 +2803,26 @@ export function TicketDetailPage({
     ? `${new Date(t.refunded.at).getFullYear()}-${String(new Date(t.refunded.at).getMonth() + 1).padStart(2, '0')}-${String(new Date(t.refunded.at).getDate()).padStart(2, '0')} ${String(new Date(t.refunded.at).getHours()).padStart(2, '0')}:${String(new Date(t.refunded.at).getMinutes()).padStart(2, '0')}:${String(new Date(t.refunded.at).getSeconds()).padStart(2, '0')}`
     : '';
   const qrCells = tbQrGrid(t.ticketNo);
-  const qrDead = refunded || screened;
+  const qrDead = refunded || closed || screened || entered;
+  const qrStamp = refunded ? '已退款' : closed ? '已关闭' : entered ? '已入场' : '已放映';
   const pickLabel = t.kind === 'movie' ? '取电影票' : '取演出票';
   const canRate = o.status === 'completed' && !o.review;
   const doRate = () => {
     if (canRate) onRate(o.id);
     else onToast('散场后开放评价（演示）');
+  };
+  const fmtEnteredAt = t.enteredAt
+    ? `${new Date(t.enteredAt).getMonth() + 1}月${new Date(t.enteredAt).getDate()}日 ${String(new Date(t.enteredAt).getHours()).padStart(2, '0')}:${String(new Date(t.enteredAt).getMinutes()).padStart(2, '0')}`
+    : '';
+  /** 扫码入场：核销 = 确认收货（shipped → completed + 写 enteredAt）；已开演未散场也可核销 */
+  const doScanEnter = () => {
+    if (!tbConfirmReceive(uid, o.id)) {
+      onToast('当前状态不支持核销入场');
+      return;
+    }
+    tbPushMsg(uid, { kind: 'logistics', title: '已入场', text: `《${t.title}》已核销，扫码入场成功，祝观演愉快`, orderId: o.id });
+    setTick((n) => n + 1);
+    onToast('核销成功，已入场');
   };
   /** 申请退款：原路退回 → 订单退款成功 → 详情切「已退款」态 */
   const doRefund = async () => {
@@ -2761,7 +2848,9 @@ export function TicketDetailPage({
             <ArrowLeft className="h-[21px] w-[21px] text-white" strokeWidth={2.4} />
           </button>
           <span className="flex-1 text-center text-[18px] font-bold text-white">{t.kind === 'movie' ? '电影票详情' : '演出票详情'}</span>
-          <span className="h-9 w-9 shrink-0" />
+          <button type="button" aria-label="分享" onClick={() => onShare(o.id)} className="grid h-9 w-9 place-items-center rounded-full active:opacity-70">
+            <Share2 className="h-[19px] w-[19px] text-white" strokeWidth={2.2} />
+          </button>
         </div>
         {/* 状态大区 */}
         <div className="relative z-10 pb-1 pt-3 text-center">
@@ -2772,6 +2861,24 @@ export function TicketDetailPage({
               <button type="button" onClick={() => onToast('退款明细（演示）：已原路退回')} className="mt-2.5 rounded-full border border-white/80 px-5 py-1.5 text-[14px] font-medium text-white active:opacity-75">
                 查看退款
               </button>
+            </>
+          ) : closed ? (
+            <>
+              <div className="text-[24px] font-black text-white">交易关闭</div>
+              <div className="mt-1.5 text-[13px] text-white/85">{o.cancelReason ?? '订单已取消，未扣款'}</div>
+            </>
+          ) : unpaid ? (
+            <>
+              <div className="text-[24px] font-black text-white">待付款</div>
+              <div className="mt-1.5 text-[13px] text-white/85">应付 ¥{fmtMoney(o.total)} · 支付后自动出票（30分钟内未付自动取消）</div>
+              <button type="button" onClick={() => onPayOrder(o.id)} className="mt-2.5 rounded-full bg-white px-7 py-1.5 text-[14px] font-bold text-[#FF5000] active:opacity-80">
+                去支付
+              </button>
+            </>
+          ) : entered ? (
+            <>
+              <div className="text-[24px] font-black text-white">已入场</div>
+              <div className="mt-1.5 text-[13px] text-white/85">{fmtEnteredAt} 已核销入场，祝观演愉快</div>
             </>
           ) : screened ? (
             <>
@@ -2837,7 +2944,8 @@ export function TicketDetailPage({
             </div>
           </div>
         </div>
-        {/* 取电影票卡（tab + 二维码 + 取票号） */}
+        {/* 取电影票卡（tab + 二维码 + 取票号；待付款不展示取票码） */}
+        {!unpaid ? (
         <div className="mt-2.5 rounded-2xl bg-white p-4">
           <div className="flex items-center">
             <button type="button" onClick={() => setQrTab('pick')} className={`relative pb-2 text-[17px] font-bold ${qrTab === 'pick' ? 'text-black/90' : 'text-black/35'}`}>
@@ -2864,10 +2972,10 @@ export function TicketDetailPage({
                 ))
               )}
             </div>
-            {/* 已放映/已退款 圆形红章 */}
+            {/* 已放映/已退款/已入场 圆形红章 */}
             {qrDead ? (
               <span className={`absolute left-1/2 top-1/2 grid h-[92px] w-[92px] -translate-x-1/2 -translate-y-1/2 rotate-[-14deg] place-items-center rounded-full border-[3px] ${refunded ? 'border-[#E4237A] text-[#E4237A]' : 'border-[#E42323] text-[#E42323]'}`}>
-                <span className="text-[19px] font-black tracking-widest">{refunded ? '已退款' : '已放映'}</span>
+                <span className="text-[19px] font-black tracking-widest">{qrStamp}</span>
                 <span className="absolute inset-[6px] rounded-full border border-current opacity-70" />
               </span>
             ) : null}
@@ -2877,7 +2985,29 @@ export function TicketDetailPage({
             <span className={`text-[14px] ${qrDead ? 'text-black/35' : 'text-black/55'}`}>取票号：</span>
             <span className={`text-[17px] font-black tracking-wide ${qrDead ? 'text-black/30 line-through' : 'text-black/90'}`}>{t.ticketNo}</span>
           </div>
+          {/* 扫码入场（Task 2-b）：点击 = 核销 = 确认收货；核销后变已入场禁用态；已退款/已关闭不显示 */}
+          {qrTab === 'scan' && !refunded && !closed ? (
+            o.status === 'shipped' && !entered ? (
+              <button
+                type="button"
+                data-testid="tb-ticket-scan-enter"
+                onClick={doScanEnter}
+                className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF5000] text-[16px] font-bold text-white shadow-[0_6px_16px_rgba(255,80,0,0.28)] active:opacity-85"
+              >
+                <ScanLine className="h-5 w-5" strokeWidth={2.2} />
+                扫码入场
+              </button>
+            ) : entered ? (
+              <div className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-full bg-[#E8F7F0] text-[15px] font-semibold text-[#0B8F5C]">
+                <Check className="h-4.5 w-4.5" strokeWidth={2.6} />
+                已入场
+              </div>
+            ) : (
+              <div className="mt-4 flex h-12 w-full items-center justify-center rounded-full bg-black/[0.05] text-[15px] text-black/35">已散场</div>
+            )
+          ) : null}
         </div>
+        ) : null}
         {/* 已放映：本单权益 + 周边推广 */}
         {screened ? (
           <>
@@ -2921,7 +3051,8 @@ export function TicketDetailPage({
             </button>
           </>
         ) : null}
-        {/* 退改签卡 */}
+        {/* 退改签卡（待付款不展示） */}
+        {!unpaid ? (
         <div className="mt-2.5 rounded-2xl bg-white p-4">
           <div className="text-[16px] font-bold text-black/90">退改签</div>
           {refunded ? (
@@ -2937,6 +3068,16 @@ export function TicketDetailPage({
               </span>
               <ChevronRight className="h-4 w-4 shrink-0 text-black/25" />
             </button>
+          ) : closed ? (
+            <div className="mt-3 flex w-full items-center rounded-xl bg-[#F6F7F8] px-3 py-3">
+              <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-black/25">
+                <X className="h-3 w-3 text-white" strokeWidth={3} />
+              </span>
+              <span className="ml-2.5 min-w-0 flex-1">
+                <span className="block text-[14.5px] font-bold text-black/85">交易关闭</span>
+                <span className="mt-0.5 block text-[12.5px] text-black/45">{o.cancelReason ?? '订单已取消，未扣款'}</span>
+              </span>
+            </div>
           ) : (
             <>
               <div className="mt-3 flex w-full items-center rounded-xl bg-[#F6F7F8] px-3 py-3">
@@ -2965,6 +3106,7 @@ export function TicketDetailPage({
             </>
           )}
         </div>
+        ) : null}
       </div>
       {/* 退票确认弹层 */}
       {refundOpen ? (

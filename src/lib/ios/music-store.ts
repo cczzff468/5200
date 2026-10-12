@@ -227,6 +227,10 @@ export interface TogetherMsgLike {
   time: number;
   songs?: { id: number; name: string; artist: string; picUrl?: string }[];
   error?: boolean;
+  /** 这条「我」的消息触发的一轮 AI 回复失败：气泡旁红色 ! 徽标，点击重新生成 */
+  replyFail?: boolean;
+  /** 重试类型：chat=重新生成回复 / recs=重新推荐歌曲（缺省 chat） */
+  retryKind?: 'chat' | 'recs';
 }
 
 interface MusicState {

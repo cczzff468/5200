@@ -328,6 +328,8 @@ export interface TbCsMsg {
   text?: string;
   /** 商品卡 / 订单卡（聊天里的宝贝与订单卡片消息） */
   card?: { type: 'product'; pid: string } | { type: 'order'; orderId: string };
+  /** 本轮 AI 回复生成失败标记（打在触发的用户消息上，红色 ! 徽标点击重新生成；成功后清除） */
+  replyFail?: boolean;
   at: number;
 }
 
@@ -351,6 +353,16 @@ export function tbChatAppend(uid: string, shopId: string, msgs: Array<Omit<TbCsM
     list.push(full);
     at += 1;
   }
+  tbChatSave(uid, shopId, list);
+  return list;
+}
+
+/** 局部修改一条消息（打/清 replyFail 徽标等；读→改→写，返回更新后的全量列表供 setState 双写） */
+export function tbChatPatch(uid: string, shopId: string, msgId: string, patch: Partial<TbCsMsg>): TbCsMsg[] {
+  const list = tbChatLoad(uid, shopId);
+  const idx = list.findIndex((m) => m.id === msgId);
+  if (idx < 0) return list;
+  list[idx] = { ...list[idx], ...patch };
   tbChatSave(uid, shopId, list);
   return list;
 }

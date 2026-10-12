@@ -9,8 +9,11 @@
  * - 数据：聊天记录经 tb-ai-store 按 uid+shopId 隔离持久化（IndexedDB kv 内存同步读 + 写穿），
  *   挂载时记住店铺 / 清未读，并按需补发 咨询商品卡 / 咨询订单卡 / 欢迎语（防重：最近 6 条去重）；
  * - AI 回复链路：append 用户消息 → 「对方正在输入...」 → tbSellerReply（/api/chat：
- *   用户配置模型 → 内置模型 → 本地规则兜底，与 ≥900ms 打字节奏并行）→ parseSellerReply
- *   拆 [商品:pid] 标记 → 追加 bot 文本 + 命中的商品卡；卸载后不 setState（alive ref 防竞态）。
+ *   用户配置模型 → 内置模型兜底，内部共 3 次尝试，与 ≥900ms 打字节奏并行；全失败返回 null）→
+ *   parseSellerReply 拆成 1~10 条文本 + [商品:pid] 标记 → 逐条落库、错峰上屏（第一条立即，
+ *   后续每条 +600ms，商品卡追加在最后）；卸载后仍落库、只跳过 setState（alive ref 防竞态）；
+ * - 失败不落任何占位回复：触发消息打红色 ! 徽标（tbChatPatch 落库 + setState 双写，参照微信/QQ），
+ *   点击重新生成整轮（sendingRef 防并发）；重新生成成功后清除徽标。
  */
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -32,6 +35,7 @@ import {
   tbChatAppend,
   tbChatClearUnread,
   tbChatLoad,
+  tbChatPatch,
   tbChatRememberShop,
   type TbCsMsg,
 } from '@/lib/ios/tb-ai-store';
@@ -195,13 +199,11 @@ export function TbMsgChatPage({
   // 入口参数经 ref 读最新值：挂载 effect 依赖保持 [uid, shopId]（规格口径），父级重渲染不重复补卡
   const pidRef = useRef(pid);
   const orderIdRef = useRef(orderId);
-  const msgsRef = useRef(msgs); // 发送时取最新 msgs 组装历史（避免闭包旧值）
 
-  // 每次渲染后同步最新入口参数 / 消息列表
+  // 每次渲染后同步最新入口参数（历史/落库统一以 tb-ai-store 为准，不经 msgs ref）
   useEffect(() => {
     pidRef.current = pid;
     orderIdRef.current = orderId;
-    msgsRef.current = msgs;
   });
 
   // 挂载（uid/shopId 变化）：记住店铺 + 清未读 + 按需补发 咨询商品卡/订单卡/欢迎语
@@ -244,42 +246,102 @@ export function TbMsgChatPage({
     };
   }, [msgs, typing]);
 
-  /** 发送文本：append 用户消息 → 「对方正在输入」 → AI 回复 → bot 文本 + 命中商品卡 */
+  /** 给触发消息打/清 replyFail 徽标（tbChatPatch 落库 + setState 双写，参照微信/QQ setReplyFail） */
+  const setReplyFail = (msgId: string | null, fail: boolean) => {
+    if (!msgId) return;
+    const list = tbChatPatch(uid, shopId, msgId, { replyFail: fail || undefined });
+    if (aliveRef.current) setMsgs(list);
+  };
+
+  /**
+   * 生成一轮客服回复（sendText 与失败徽标「重新生成」共用）：
+   * ctx 组装 → tbSellerReply（内部共 3 次尝试，全失败返回 null，不再有本地规则兜底）→
+   * parseSellerReply 拆成 1~10 条文本 + [商品:pid] → 逐条落库+错峰上屏（第一条立即，
+   * 后续每条 +600ms；卸载后仍落库、只跳过 setState）→ 成功清除触发消息上的失败徽标。
+   * 失败/空回复 → 对触发消息打红色 ! 徽标（点击可重新生成整轮），绝不落占位文字。
+   * @param triggerMsgId 本轮触发的用户消息 id（sendText 现场刚落库 / 徽标重试为失败消息）
+   * @param userText      买家本轮输入（sendText 现场传入；徽标重试省略 → 用触发消息自己的文本）
+   */
+  const runSellerTurn = async (triggerMsgId: string | null, userText?: string) => {
+    // 历史与买家输入统一从落库记录组装：截到触发消息为止（sendText 时它是刚落的最后一条，
+    // 徽标重试时可能在更早位置），两种入口都取到「本轮用户消息之前」的完整历史
+    const base = tbChatLoad(uid, shopId);
+    const cut = triggerMsgId ? base.findIndex((m) => m.id === triggerMsgId) : base.length;
+    const history: TbSellerHistoryMsg[] = base
+      .slice(0, cut < 0 ? base.length : cut)
+      .map((m) => ({ role: m.role, text: m.text, card: m.card }));
+    const text = userText ?? (triggerMsgId ? (base.find((m) => m.id === triggerMsgId)?.text ?? '') : '');
+    // 上下文：店铺 + 正在咨询的商品/订单 + 买家昵称
+    const ctx = {
+      shop,
+      product: pidRef.current ? (productById(pidRef.current) ?? null) : null,
+      order: orderIdRef.current ? (tbLoadOrders(uid).find((o) => o.id === orderIdRef.current) ?? null) : null,
+      custName: userName,
+    };
+    // AI 回复与 ≥900ms 最短打字节奏并行
+    const [reply] = await Promise.all([tbSellerReply(text, history, ctx), new Promise<void>((r) => setTimeout(r, 900))]);
+    // 3 次尝试全失败：本轮不落任何 bot 消息，触发消息打红色 ! 徽标（点击重新生成）
+    if (reply == null) {
+      setReplyFail(triggerMsgId, true);
+      return;
+    }
+    const { lines, pids } = parseSellerReply(reply);
+    // [商品:pid] 标记 → 真实命中的商品转商品卡消息，追加在文本之后
+    const hits = [...new Set(pids)].filter((p) => productById(p));
+    if (lines.length === 0 && hits.length === 0) {
+      // 回复解析后无任何内容（无文本无卡片）≈ 无有效回复：同样打徽标，不落占位
+      setReplyFail(triggerMsgId, true);
+      return;
+    }
+    const burst: Array<Omit<TbCsMsg, 'id' | 'at'>> = [
+      ...lines.map((t) => ({ role: 'bot' as const, text: t })),
+      ...hits.map((p) => ({ role: 'bot' as const, card: { type: 'product' as const, pid: p } })),
+    ];
+    // 逐条落库+错峰上屏：第一条立即，后续每条间隔 600ms（500~900ms 区间内）；
+    // 卸载后仍落库（关页后客服仍会回复），只跳过 setState（aliveRef 防卸载后更新）
+    for (let i = 0; i < burst.length; i++) {
+      if (i > 0) await new Promise<void>((r) => setTimeout(r, 600));
+      const list = tbChatAppend(uid, shopId, [burst[i]]);
+      if (aliveRef.current) setMsgs(list);
+    }
+    // 本轮成功：清除触发消息及历史遗留的 replyFail 徽标（客服已恢复响应，旧失败标记一并清掉）
+    const stale = tbChatLoad(uid, shopId).filter((m) => m.replyFail);
+    let cleared: TbCsMsg[] | null = null;
+    for (const m of stale) cleared = tbChatPatch(uid, shopId, m.id, { replyFail: undefined });
+    if (stale.length > 0 && cleared && aliveRef.current) setMsgs(cleared);
+  };
+
+  /** 发送文本：落库用户消息 → 「对方正在输入」 → runSellerTurn 生成多条回复（失败打 ! 徽标） */
   const sendText = async (raw: string) => {
     const text = raw.trim();
     if (!text || sendingRef.current) return;
     sendingRef.current = true;
     setInput('');
-    // 历史 = 发送前的当前 msgs（用户本次消息经 userText 单独传，不进历史防重复）
-    const history: TbSellerHistoryMsg[] = msgsRef.current.map((m) => ({ role: m.role, text: m.text, card: m.card }));
     // 用户消息落库（tbChatAppend 返回含新消息的全量列表，以它为准 setState）
-    setMsgs(tbChatAppend(uid, shopId, [{ role: 'user', text }]));
+    const list = tbChatAppend(uid, shopId, [{ role: 'user', text }]);
+    setMsgs(list);
     if (aliveRef.current) setTyping(true);
     try {
-      // 上下文：店铺 + 正在咨询的商品/订单 + 买家昵称
-      const ctx = {
-        shop,
-        product: pidRef.current ? (productById(pidRef.current) ?? null) : null,
-        order: orderIdRef.current ? (tbLoadOrders(uid).find((o) => o.id === orderIdRef.current) ?? null) : null,
-        custName: userName,
-      };
-      // AI 回复与 ≥900ms 最短打字节奏并行
-      const [reply] = await Promise.all([tbSellerReply(text, history, ctx), new Promise<void>((r) => setTimeout(r, 900))]);
-      const { text: clean, pids } = parseSellerReply(reply);
-      const appends: Array<Omit<TbCsMsg, 'id' | 'at'>> = [];
-      if (clean) appends.push({ role: 'bot', text: clean });
-      // 回复里的 [商品:pid] 标记 → 第一个真实命中的商品转商品卡消息
-      const hit = pids.find((p) => productById(p));
-      if (hit) appends.push({ role: 'bot', card: { type: 'product', pid: hit } });
-      if (appends.length > 0) {
-        // 落库始终执行（关页后客服仍会回复）；setState 仅在未卸载时
-        const list = tbChatAppend(uid, shopId, appends);
-        if (aliveRef.current) setMsgs(list);
-      }
+      await runSellerTurn(list[list.length - 1]?.id ?? null, text);
     } finally {
       if (aliveRef.current) setTyping(false);
       sendingRef.current = false;
     }
+  };
+
+  /** 失败徽标点击：对该条用户消息重跑整轮（正在生成/上屏时忽略，防并发） */
+  const retryReply = (triggerMsgId: string) => {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    if (aliveRef.current) setTyping(true);
+    void (async () => {
+      try {
+        await runSellerTurn(triggerMsgId);
+      } finally {
+        if (aliveRef.current) setTyping(false);
+        sendingRef.current = false;
+      }
+    })();
   };
 
   /** 购物袋按钮：有咨询商品 → 发送买家侧商品卡；否则提示从宝贝页进入 */
@@ -390,8 +452,21 @@ export function TbMsgChatPage({
                   </div>
                 </div>
               ) : (
-                // 买家侧（右）：浅橙气泡 / 卡片 + 头像（无昵称行）
+                // 买家侧（右）：浅橙气泡 / 卡片 + 头像（无昵称行）；
+                // 回复失败徽标（红色 !）在气泡左侧：LLM 三次尝试全失败时打在触发消息上，点击重新生成整轮
                 <div className="mb-2.5 flex items-start justify-end gap-2">
+                  {m.replyFail ? (
+                    <button
+                      type="button"
+                      data-testid={`tb-replyfail-${m.id}`}
+                      aria-label="重新生成"
+                      title="重新生成"
+                      onClick={() => retryReply(m.id)}
+                      className="flex h-5 w-5 shrink-0 cursor-pointer self-center items-center justify-center rounded-full bg-[#FA5151] text-[13px] font-bold leading-none text-white transition-opacity active:opacity-70"
+                    >
+                      !
+                    </button>
+                  ) : null}
                   <div className="min-w-0">
                     {m.text ? (
                       <div className="ml-auto max-w-[240px] whitespace-pre-wrap break-words rounded-xl rounded-tr-[4px] bg-[#FFE3C6] px-3 py-2 text-[14.5px] leading-[21px] text-black/90">

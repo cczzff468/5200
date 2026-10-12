@@ -18445,3 +18445,94 @@ Stage Summary:
 - 交付：淘宝/美团订单页「下拉/进入/上滑」三个生成触发点全部移除，订单只在真实购买后新增并持久保存；闪购商家列表进入不变；朋友圈/动态约 6 成纯文字；灵动岛删「请留意来电」+ 小窗显示 HH:MM 送达；AI 代付凑一半（垫一半/partial/aiCovered/half 决策）全链路删除
 - 改动文件：src/components/apps/{taobao,meituan,meituan-shangou}.tsx、src/components/ios/{TaobaoIsland,MeituanIsland}.tsx、src/lib/chat-rich.ts、src/lib/ios/{tb-ai-engage,tb-share-proxy,taobao-store,meituan-store}.ts、src/app/api/moments/generate/route.ts
 - 关键决策：①不迁移分库，冻结存量生成订单（零数据风险，用户只要求删行为）②朋友圈配图用服务端掷点而非口头节制（模型看不到协议就不会输出标签，可靠）③凑一半删除保留「提前X分钟送达」类时长文案（语义正确）④美团/淘宝其余列表（收藏/足迹/购物车/优惠券/首页 feed）核实均为持久化或用户主动触发，不改
+
+---
+
+Task ID: 2-a
+Agent: taobao-cs-multi-reply (Z.ai Code subagent)
+Task: 淘宝 App 店铺客服聊天全面改造：①回复改用用户配置 API 模型生成并支持多条连发（1~10 条按内容自然决定）；②彻底删除模板/规则兜底——LLM 失败不落占位文字，改为用户消息旁红色「!」徽标点击重新生成；③LLM 调用失败自动重试（共 3 次尝试）后才判失败
+
+Work Log:
+- tb-chat-ai.ts：
+  - buildSellerSystemPrompt 删「单次回复 1~3 句 ≤60 字」硬约束，规则 1 改为连发多条短消息语义（最少 1 条、最多 10 条，按问题复杂度自然决定条数；每条独立成行一行一条、每条 ≤25 字左右、亲~口吻保留）；规则 9 的 [商品:ID] 标记协议保留、改为「可放在合适的某一行末尾，系统转商品卡」；规则 11 去掉「不用换行」改为「多行即多条消息」
+  - 整体删除 localRuleReply 关键词模板兜底及其导出/调用（全仓 grep 确认无其他引用方）
+  - parseSellerReply 重写：保留 [商品:pid] 提取（≤2 个真实 pid），不再折叠换行——改用 splitReplySegments（@/lib/reply-count，multi 模式：换行+句末标点边界+连续重复去重）按行切成 lines，防模型失控 slice(0,10)；返回 { lines, pids }，商品卡由调用方按 pids 追加在文本后
+  - tbSellerReply 签名改 Promise<string | null>：单次尝试=用户配置模型→失败/空文本再试 forceSdk 内置模型；失败自动重试共 3 次尝试（初次+2 次重试，间隔 1.2s），全失败返回 null，绝不落模板
+- tb-ai-store.ts：TbCsMsg 加 replyFail?: boolean；新增 tbChatPatch(uid, shopId, msgId, patch)（读→改→写，返回更新后全量列表供 setState 双写，落库模式与 tbChatAppend 同源）
+- taobao-msg-chat.tsx：
+  - sendText 拆分：抽公共 runSellerTurn(triggerMsgId, userText?)——历史/触发文本统一从 tb-ai-store 落库记录组装（截到触发消息为止），sendText 现场与徽标重试两种入口共用；ctx 组装、tbSellerReply 与 ≥900ms 打字节奏并行不变
+  - 失败路径：reply==null 或解析后 lines/hits 全空 → setReplyFail(triggerMsgId, true)（tbChatPatch 落库 + setMsgs 双写）→ return，本轮不落任何 bot 消息
+  - 成功路径：lines 逐条落库+错峰上屏（第一条立即，后续每条 await 600ms setTimeout，卸载后仍落库只跳过 setState——选「逐条 append+setTimeout」方案：每步重读 store，无切片过期竞态，无需给 sendProductCard 加锁）；[商品:pid] 卡片追加在最后；成功后清除触发消息及历史遗留 replyFail（循环 tbChatPatch + setMsgs）
+  - retryReply：sendingRef 占用守卫（生成/上屏中忽略）→ setTyping(true) → runSellerTurn(失败消息 id)（userText 省略，用触发消息自己的文本）→ finally 复位；卸载安全（aliveRef）
+  - 渲染层：用户消息分支气泡左侧新增红色 ! 圆钮（20px h-5 w-5、bg-[#FA5151]、白 !、self-center、aria-label="重新生成"、data-testid=tb-replyfail-{id}，样式对齐 qq.tsx L6267 参照）；历史数据 replyFail 为 undefined 自然不显示，无需迁移
+  - 移除不再使用的 msgsRef 及其同步；欢迎语模板/自动补发商品卡订单卡/快捷行/已读回执/打字三点气泡全部不动
+- 验证：bunx tsc --noEmit 0 错误；bunx eslint（taobao-msg-chat.tsx/tb-chat-ai.ts/tb-ai-store.ts）0 告警；dev server GET / 200、dev.log 尾部无编译错误（仅既有 instrumentation.ts Edge Runtime 警告，与本次无关）
+
+Stage Summary:
+- 淘宝客服回复全链路改造完成：用户配置模型生成（forceSdk 内置兜底）+ 1~10 条自然连发（一行一条，[商品:ID] 标记行转商品卡置尾）+ 错峰上屏（首条立即、后续 +600ms）
+- 模板兜底彻底移除：失败（3 次尝试后）零占位文字，改为触发用户消息旁红色 ! 徽标（持久化 replyFail），点击重跑整轮、成功清标、可反复重试，交互与微信/QQ 已上线同款对齐
+- 改动文件：src/lib/ios/tb-chat-ai.ts、src/lib/ios/tb-ai-store.ts、src/components/apps/taobao-msg-chat.tsx
+- 设计取舍：错峰上屏选逐条 append+setTimeout（每步重读 store 天然免竞态、卸载后照常落库）；runSellerTurn 历史以 tb-ai-store 落库记录为唯一事实源（替代 msgsRef，重试老消息时截取位置也正确）；「解析后全空」也按失败打徽标，杜绝任何形式的无声无回复
+
+---
+Task ID: 2-b
+Agent: ticket-payment-flow (Z.ai Code subagent, 超时由主线程审查补记)
+Task: 淘票票票务四项改造：①购票接入收银台 PaySheet（不再点击直接出票）②场次时间真实化③详情页「扫码入场」按钮（点击=核销=确认收货）④详情页「分享」按钮+票务单进微信/QQ 快递区+分享卡票务渲染
+
+Work Log:
+- taobao-store.ts：tbCreateTicketOrder 改创建 pendingPay 订单（删硬编码 shipped+paidAt+payIdp，不写 track）；tbMarkPaid 票务特判 pendingPay→shipped（付款即出票，shipAt=paidAt 作时间线锚点）；TbTicketInfo 加 enteredAt?（核销入场时间）
+- taobao-channels-data.ts：新增 tbRealDate(d)（偏移天数→真实 isoDate/MM-DD/今天明天后天label）+ tbRealSession（偏移+HH:MM→完整场次，end 缺省按演出 2 小时、跨零点进位）
+- taobao-channels.tsx：confirmSeats/confirmComedy/confirmConcert 全改「创建 pendingPay 订单→onPayOrder(order.id) 回调拉起收银台」；喜剧场次/演唱会场次改真实时间生成（concertSessions，已开演场次禁选 toast）；confirmConcert 删 dateRange 文案 MM.DD+写死年份解析（年份过bug根除）；TicketDetailPage 加「扫码入场」主按钮（=tbConfirmReceive 核销，shipped→completed+写 enteredAt，已开演未散场也可核销，核销后显示已入场圆章+禁用）+ 头部「分享」按钮（onShare→TbShareOrderSheet）+ 待付款票务单「去支付」按钮；OrderCard/详情页支持待付款票务态
+- taobao.tsx：TicketDetailPage 挂载接线 onShare=(id)=>setShareOrderId(id)、onPayOrder=(id)=>setPayOrderId(id)（复用现有 PaySheet/TbShareOrderSheet）
+- tb-share-proxy.ts：tbCompletedOrders 放开 !o.ticket 排除——票务单进微信/QQ 加号面板快递分享列表
+- tb-share-cards.tsx：TbShareBubble 票务渲染分支（演出名渐变海报块+日期场次+场馆+座位+取票号+状态徽标[已退款/待入场/已入场/已放映]），非票务走原物流五段
+- 验证：bunx tsc --noEmit 0 错误；eslint 6 改动文件 42 problems 与 HEAD 基线完全一致（0 新增，均为既有 react-hooks/refs pull-refresh 模式）
+
+Stage Summary:
+- 票务支付状态机：确认选座/选票→pendingPay 待付款（可取消/超时自动取消）→PaySheet 收银台→tbMarkPaid→shipped（已出票待入场）→扫码入场核销或散场自动→completed；已退款单不可核销
+- 场次全部真实时钟（今天/明天/后天+固定时刻，已开演禁选），出票 ticket.date 为真实 ISO 日期
+- 改动文件：src/lib/ios/{taobao-store,taobao-channels-data,tb-share-proxy}.ts、src/components/apps/{taobao-channels,taobao,tb-share-cards}.tsx
+
+---
+Task ID: 3
+Agent: tb-proxy-reshare-ticket (Z.ai Code subagent)
+Task: 代付再分享+AI二次代付+AI买票+后台LLM决策链路自动重试（四项）
+
+Work Log:
+- 通读 worklog.md（Task 57/2-a/2-b）与 tb-share-proxy.ts / tb-share-cards.tsx / tb-ai-engage.ts / tb-proxy-ai.ts / chat-rich.ts / taobao-store.ts / taobao-channels-data.ts / wechat.tsx / qq.tsx / mt-ai-engage.ts（[代付:pid] 先例），确认代付/票务/转发现状后动手
+- 【①代付请求卡可再次分享】
+  - tb-share-proxy.ts：tbCreateProxyRequest 防重放宽——同订单+同联系人+同idp（且 direction!=='me'）的 pending 才算重复（原同联系人跨平台也被拦）；新增 tbReshareProxy(pid, idp, contactId, contactName?, contactAvatar?, fromName?, fromAvatar?, opts?)：订单仍 pendingPay 才可发；同订单+同联系人+同idp 已有 pending 'friend' 请求 → 复用同 pid 重新 insertCard 一张请求卡「催一催」（resent=true，并再次调度 AI 决策，防重入守卫兜底）；否则复制订单快照新建 proxy（金额/商品以订单实时数据为准、继承 note/fromName）→ kvSet+pushIndex → 订单挂 o.proxy 快照 → 请求卡进聊天 → 动态 import scheduleTbProxyAiDecision；opts.deferCard 供转发路径把卡片返回给调用方随批次落盘（防 insertCard 与 saveMsgs 双写重复）；返回 {ok, pid, resent, card} 供 UI toast
+  - tb-share-cards.tsx：TbProxyDetailPage direction 'friend' 且 pending 时「等待XX代付…」按钮下新增「再次分享给其他好友」按钮（h-44px 淘宝橙描边，data-testid=tb-proxy-reshare-btn）→ 新增 TbResharePickSheet 轻量两步选人弹层（选微信/QQ → listContacts 过滤 kind!=='user'+isFriendIn 选好友，样式对齐淘宝收银台 TbContactPickSheet，复用 globals.css 的 quick-in-up 动画；z-[70]）→ sendReshare 调 tbReshareProxy → toast「已再次分享给XX」/「已催XX再看看代付请求」(resent)，失败 toast error
+  - wechat.tsx/qq.tsx：forwardClone 新增 tbshare 活卡克隆分支（同 sid 新 id，渲染按 kv 实时读订单）+ tbpay 归入 isCard 占位文案路径；新增 forwardTbPayClone(m, target)——仅 direction 'friend' 且 pending 的 req 卡生效，调 tbReshareProxy(idp 随所在 App、fromName/fromAvatar 取 me) deferCard 模式拿新 pid 组 {kind:'tbpay', tbpay:{pid, role:'req'}} 活卡克隆（终态/转发给自己 target.self → 返回 null 回退 forwardClone 占位文案）；doForward 改 async，逐条转发时 tbpay 卡走 forwardTbPayClone（保持批次内时间顺序），合并转发维持原文本快照；mtpay/mtshare 未动（mt 端无 reshare 基建，避免回归）
+- 【②AI 二次代付】
+  - chat-rich.ts：RichActionKind + 'tb-proxy-pay' | 'tb-buy-ticket'；ACTION_LABELS 新增 代付淘宝订单/代付淘宝→'tb-proxy-pay'、帮你买演出票/帮你买票/帮买票→'tb-buy-ticket'（长词在前；与美团 代付→mt-proxy-pay、淘宝 帮你买→tb-order-draft 靠最长匹配+回溯不串台，bun 脚本实测 [代付:mt-px-9] 仍落 mt、[帮你买:p-1|2] 仍落 tb-order-draft）；ACTION_RE/ACTION_TAIL_RE 同步加词；extractRichActionParts 新增 tb-proxy-pay/tb-buy-ticket 整段透传分支
+  - tb-ai-engage.ts buildTbEngageCtx：新增【待你处理的淘宝代付请求】块——本聊天内 direction 'friend' 的 pending 请求（id/店铺/金额/商品/备注/请求人）+ 同聊天内 declined 但订单仍 pendingPay 的请求（最近 2 条，标注「你之前婉拒了，可以改主意」），教学输出 [代付淘宝:请求id]；direction 'me' 催付逻辑原样不动
+  - applyTbEngageAction 新增 'tb-proxy-pay' 分支：tbGetProxy 校验 direction 'friend' + tbProxyChatCid(p)===peer.id + status pending/declined → declined 先复活为 pending（kvSet）→ tbProxyPayOrder(deferCard) → 记忆 tb-proxy-pay → 回执卡随回复队列投递；支付失败时婉拒复活的请求回滚为 declined 防死锁；不挂 5min 主动参与冷却（用户明确再次开口的执行路径），仅状态校验防重复
+- 【③AI 买演出票】
+  - tb-ai-engage.ts：新增 TICKET_TEXT_RE（买票/订票/演出/脱口秀/演唱会…）+ buildTbEngageCtx 在聊到购物或票务话题时注入【近期演出】块（TB_COMEDY_SHOWS 前 4 + TB_CONCERTS 前 4：id/名称/场馆/dateRange/票价区间，预售标注），教学 [帮你买票:演出id]（买不买/买哪场 AI 按人设关系金额自主决定，金额无上限）；新增 tbAiBuildTicketOrder(uid, showId)：喜剧脱口秀=tbRealDate(0~2)+固定场次时刻（对齐 channels 的 COMEDY_SESSION_TIMES）+tbAiPickComedySeats 自动配 2 连座（最佳观影区优先随机，TB_SEAT_LAYOUT+tbSeatSold 扫连座）；演唱会=仅 status 'on'，最低价未售罄票档×2，场次取 dateRange HH:MM+tbSessionTime(3h)；已开演/未开售/售罄/找不到 → 中文 error；applyTbEngageAction 新增 'tb-buy-ticket' 分支（保留 5min 冷却硬拦，对齐 [帮你买]）：tbAiBuildTicketOrder → tbCreateTicketOrder(pendingPay) → tbAiPayPendingOrder（AI 代付，tbMarkPaid 票务特判直接 shipped 出票）→ 异步 tbCreateOrderShare（role peer「帮你买好票啦」+paidBy，票务单渲染演出票卡）+ 记忆 tb-buy-ticket；tb-pay-for 的 if (!order || order.ticket) 守卫保持不动
+- 【④后台 LLM 决策链路自动重试】tb-proxy-ai.ts runProxyDecision：LLM 调用改循环 3 次尝试（间隔 1.5s，extractJsonObject 解析成功且 reply 非空才落定）；3 次全失败走本地兜底（对齐 runProactivePayEngage L935-944 模式）——直接 tbProxyPayOrder 帮付 + 兜底话术「看到你的代付请求了，我先帮你付上啦~」+ 记忆（sourceTag tb-proxy-pay），proxy 不再永久 pending 无响应；支付失败（订单已被取消/自付）静默返回由 B4 同步收敛；文件头注释同步
+- 【顺带修】taobao-store.ts tbTickOrders：pendingPay 超时自动取消路径补 ttlCancelled 标记 → 循环后动态 import tbSyncProxiesForUid（订单取消后挂着的 pending 代付请求卡同步置 expired，防残留占用 proxyOrderIds；与 tbCancelOrder 同口径）
+- 验证：bunx tsc --noEmit 0 错误；eslint 改动 8 文件 0 problem（git stash 对比 HEAD 基线同为 0，0 新增）；bun 脚本实测新标记解析 6 例（含与美团/代买词表不串台）；dev.log 尾部无编译错误（仅固有 instrumentation 提示）；未起 dev server、未 commit、未动 2-a/2-b 的客服聊天与收银台/扫码入场区域
+Stage Summary:
+- 交付：①代付请求卡「再次分享」——详情页按钮（两步选人弹层）+ 聊天内长按转发活卡（tbpay req 卡经 tbReshareProxy 新建/复用代付请求并调度 AI 决策，tbshare 卡直接活卡克隆），防重放宽为 同订单+同联系人+同idp，重复走「催一催」重发；②AI 二次代付——[代付淘宝:请求id] 动作（chat-rich 词表+tb-ai-engage 执行），ctx 注入本聊天待付/已婉拒可改主意的请求，婉拒后机主再开口 AI 真正付款（复活→支付→回执卡），后台 runProxyDecision 重试 3 次+本地兜底帮付彻底解除死锁；③AI 买票——[帮你买票:演出id] 动作，喜剧 2 连座/演唱会最低价票档×2 真实场次 → pendingPay → AI 代付出票 → 订单分享卡回聊天+记忆；④tbTickOrders TTL 取消联动 tbSyncProxiesForUid
+- 改动文件：src/lib/chat-rich.ts、src/lib/ios/{tb-share-proxy,tb-proxy-ai,tb-ai-engage,taobao-store}.ts、src/components/apps/{tb-share-cards,wechat,qq}.tsx
+- 关键决策：①淘宝版动词选「代付淘宝/帮你买票」独立词表而非共用「代付」（与美团 mt-proxy-pay、淘宝帮付 tb-pay-for 最长匹配回溯验证不串台，最小侵入）；②tb-proxy-pay 不挂 5min 冷却（用户明确再次开口的执行路径，冷却只限 AI 主动抢付），tb-buy-ticket 保留冷却硬拦（同 [帮你买] 哲学）；③婉拒的请求允许 AI 改主意帮付（复活→支付，失败回滚 declined），ctx 只教订单仍 pendingPay 的 declined 请求；④转发 tbpay 卡走 deferCard 随转发批次落盘，防 insertCard 与 saveMsgs 双写重复投递；⑤mtpay/mtshare 转发未顺手支持（mt 端无 reshare 基建，避免引入回归）
+
+---
+Task ID: 4
+Agent: Z.ai Code (main)
+Task: 用户 10 项需求——淘宝客服 LLM 多条回复+红色感叹号重试、淘票票扫码入场/支付流程/真实场次/分享、代付再次分享、AI 二次代付、AI 买票、后台决策自动重试、删除发货通知
+
+Work Log:
+- 【删除发货通知】tb-ai-engage.ts：tbArrivalLineViaLlm 删 arrived 参数固定到驿站情境；tbEngageTick (c) 段加 tbArrivedAtStation(o) 条件——刚发货的「留意物流」类问候彻底删除，保留到驿站提醒取件
+- 【Task 2-a 淘宝客服】tb-chat-ai.ts 删 localRuleReply 模板兜底、tbSellerReply 3 次尝试（config→forceSdk 单次+2 重试 1.2s）失败返回 null、parseSellerReply 改 {lines,pids}（splitReplySegments multi 切分）、system prompt 改 1~10 条连发语义；tb-ai-store.ts TbCsMsg.replyFail + tbChatPatch；taobao-msg-chat.tsx runSellerTurn 复用（发送/重试共入口）、失败零占位打徽标、成功逐条落库 600ms 错峰上屏、渲染红色 ! 圆钮（bg-[#FA5151]）+retryReply
+- 【Task 2-b 票务】taobao-store.ts tbCreateTicketOrder 改 pendingPay、tbMarkPaid 票务特判 pendingPay→shipped（shipAt 出票锚点）、TbTicketInfo.enteredAt；taobao-channels-data.ts tbRealDate/tbRealSession 真实时间工具；taobao-channels.tsx 三 confirm 改 onPayOrder 回调拉收银台、喜剧/演唱会真实场次（已开演禁选）、TicketDetailPage「扫码入场」主按钮（=tbConfirmReceive 核销+enteredAt+已入场圆章）+头部「分享」按钮+待付款去支付；taobao.tsx 接线 onShare/onPayOrder；tb-share-proxy.ts tbCompletedOrders 放开票务单进快递区；tb-share-cards.tsx TbShareBubble 票务信息卡分支（海报+场次+座位+票号+状态徽标）
+- 【Task 3 代付】tb-share-proxy.ts 防重放宽（同订单+同联系人+同 idp 才拦，重复走催一催重发）、tbReshareProxy（pending 复用重发/新建 proxy/deferCard 转发模式）；tb-share-cards.tsx TbProxyDetailPage「再次分享给其他好友」+TbResharePickSheet 两步选人；wechat.tsx/qq.tsx forwardClone tbpay 活卡转发（forwardTbPayClone 异步）+tbshare 同 sid 克隆；chat-rich.ts 新增 'tb-proxy-pay'（[代付淘宝:请求id]）与 'tb-buy-ticket'（[帮你买票:演出id]）；tb-ai-engage.ts buildTbEngageCtx 注入【待你处理的淘宝代付请求】（direction friend pending/可改主意 declined）与【近期演出】块、applyTbEngageAction 新增 tb-proxy-pay（declined 复活→tbProxyPayOrder→失败回滚，不挂 5min 冷却）与 tb-buy-ticket（真实场次+自动配座→tbCreateTicketOrder→tbAiPayPendingOrder→tbCreateOrderShare 分享卡）分支；tb-proxy-ai.ts runProxyDecision 3 次尝试全失败走本地兜底（直接帮付+兜底话术+记忆），死锁根除；taobao-store.ts tbTickOrders TTL 取消补 tbSyncProxiesForUid
+- 【音乐一起听（主线程补）】music-ai.ts：TgMsg.replyFail/retryKind、patchTgMsg、togetherReply/ PendingReply 带 triggerMsgId、runTogetherReplyOnce 失败不落「信号不太好」占位改打徽标、retryTogetherReply 按 retryKind 分流（chat 重生成/recs 重新推荐）；togetherRecommend JSON 失败改打徽标（删「我想想……」模板）；music-together.tsx 旧 peer error 占位不渲染+mine replyFail 红色徽标；music-store.ts TogetherMsgLike 加字段
+- 【E2E（agent-browser 实机，真实 LLM 环境内置 SDK + mock /api/chat 双路）】①淘票票喜剧票→收银台（收银台弹出¥120）→微信零钱支付→出票跳详情（16小时44分钟后开场真实倒计时）→「扫码入场」→核销成功（绿头+已入场圆章+按钮禁用）→头部分享→分享面板（微信/QQ）；②演唱会真实场次（今天10-12/明天/后天）+票档+数量调整；③淘宝客服 mock 4 行文本→4 条独立气泡；mock abort→红色!徽标（零占位）→恢复 mock 点徽标→2 条回复+徽标消失；④真实 LLM 代付决策：演唱会 ¥1717 发起代付→AI 5-12s 自动帮付（proxy paid）+完成卡「好友已代付¥1717」+人设回复「哇，薛之谦的票啊！我帮你付了」；⑤mock pay:false 婉拒→proxy declined+婉拒回复→用户微信再开口→mock [代付淘宝:pid]→declined 复活→paid→完成卡「Hi~你的订单代付成功啦~」——二次代付闭环 ✓；⑥代付详情 pending 态「再次分享给其他好友」→两步选人（微信/QQ→好友）→同好友催一催 toast「已催晴儿再看看代付请求」✓、订单已付时正确拦截「订单已支付或已关闭，无法再代付」✓；⑦票务单 pendingPay 详情页（待付款+去支付）✓
+- 验证：bunx tsc --noEmit 0 错误；bun run lint 49 problems 与 HEAD 基线完全一致（0 新增）；dev.log 无编译/运行错误
+
+Stage Summary:
+- 交付：①AI 发货通知删除（保留到驿站提醒）；②淘宝客服=用户 API 模型+1~10 条连发+失败红色感叹号点击重试+3 次自动重试，模板兜底全删；③淘票票全链路=收银台支付流程（不再点击直接出票）+真实时间场次+扫码入场核销+详情分享+快递区支持票务+分享卡票务渲染；④代付再次分享（详情页按钮两步选人+聊天长按活卡转发，微信/QQ 都可）；⑤AI 二次代付（[代付淘宝:请求id]，婉拒可改主意，5min 冷却豁免）；⑥AI 买票（[帮你买票:演出id] 真实场次自动配座+代付+分享卡）；⑦后台 LLM 决策自动重试（runProxyDecision 3 次+本地兜底防死锁）；⑧音乐一起听失败改红色感叹号（删「信号不太好」「我想想……」模板）
+- 改动文件：src/lib/ios/{tb-ai-engage,tb-chat-ai,tb-ai-store,tb-share-proxy,tb-proxy-ai,taobao-store,taobao-channels-data,music-ai,music-store}.ts、src/lib/chat-rich.ts、src/components/apps/{taobao-msg-chat,taobao-channels,taobao,tb-share-cards,wechat,qq,music-together}.tsx
+- 关键决策：①票务支付复用现有 PaySheet/tbMarkPaid 状态机（票务特判直达 shipped），零新支付通道；②代付防重键改「订单+联系人+平台」，同键 pending 语义化为「催一催」重发而非报错；③AI 二次代付用独立标记 [代付淘宝:pid]（与美团 [代付:pid] 词表隔离零串台），declined 请求允许 AI 改主意（复活→支付→失败回滚）；④发货通知只删发货情境保留到驿站提醒（提醒取件有实际价值）；⑤所有失败表达统一「触发消息红色感叹号」，无入口的后台链路自动重试+兜底
