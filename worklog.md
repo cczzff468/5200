@@ -18842,3 +18842,23 @@ Stage Summary:
 - 推送链路：origin 已带 PAT，改动可直接 git add/commit/push 回 main（注意：本环境无快照守护进程，历史不会被外部改写）
 - 项目结构速查：src/components/apps/*（各 App）、src/components/ios/*（壳/锁屏/主屏/灵动岛）、src/lib/ios/*（store/contacts-store 等状态层，IndexedDB 为主）、src/app/api/*（chat/tts/stt/imggen/weather 等后端）、mini-services/netease-api（3010）
 - 待办：等用户提出具体「修改或添加功能」需求后进入开发
+
+---
+Task ID: 19
+Agent: 主协调者 (Z.ai Code)
+Task: 微信/QQ 表情面板内置官方经典表情——用户指定源：微信 xxk8/wechat-emojis（GitHub）；QQ 需自行调研（找到 fritx/qqface 0.1.x）
+
+Work Log:
+- 【资源下载】微信：jsDelivr 拉取 xxk8/wechat-emojis 109 张 PNG → public/wechat-emojis/{face75,gesture10,animal4,blessing7,other13}（1MB）；QQ：npm tarball qqface@0.1.1 解压 122 张 GIF（0-121.gif，576KB）→ public/qq-emojis，中文名取自 0.2.0 index.js smartQQ textMaps（程序化提取前 122 个）
+- 【常量层】新增 src/lib/ios/builtin-stickers.ts：BUILTIN_WX_STICKERS（109 项，按微信官方 EmojiName 顺序：微笑→撇嘴→色…，脚本从 wechatEmoji.ts 提取官方排序）+ BUILTIN_QQ_STICKERS（122 项，索引序）；id 规则 wxb-中文名/qqb-中文名（AI 输出 [表情包:wxb-微笑] 可读性最好）；数组顺序=AI 清单精选优先级
+- 【数据层】stickers.ts：Sticker/StickerGroup 加 builtin? 标志；loadStickers 自动合并内置（用户表情在前+防旧数据重复去重）；saveStickers 过滤 !builtin（内置永不入库）；loadStickerGroups 动态插入内置分组（第二位，微信「微信表情」/QQ「QQ表情」）；saveStickerGroups 过滤 builtin——对全部调用方透明（面板/AI注入/消息回写自动生效）
+- 【AI 清单】chat-rich.ts buildRichRules + 群聊版：清单改为「用户收藏前20 + 内置精选前20」（原 slice(0,30) 会因内置 200+ 项挤掉用户表情）；内置数组官方顺序保证前 20=经典高频
+- 【UI 防护（双端面板+管理页共 10 处）】①编辑模式删除角标 !s.builtin 才显示；②内置分组下隐藏「添加」按钮（空占位保对齐）；③meaning 标签 builtin 不可点（不可改意思）；④长按预览卡 builtin 显示「内置表情 · 不可删除」替代删除按钮；⑤「管理」按钮内置分组下隐藏；⑥管理页（我→表情）内置项点击无操作+删除模式无角标；⑦StickerGroupManageSheet 内置分组带「内置」徽标不可删/改名（isDef 同款逻辑）
+- 【E2E（agent-browser 实机）】种 e2e 联系人 → 微信登录 → 小晴聊天 → 表情面板「微信表情」分组 109 张渲染（broken=0）、点击发送微笑成功（气泡 img=wechat-emojis/face/微笑.png）；QQ 登录 → 面板「QQ表情」分组 122 张 GIF 渲染（loaded=60 lazy 其余）、发送 0.gif 微笑成功；长按预览显示「内置表情 · 不可删除」且无删除按钮；IndexedDB qq-stickers/wx-stickers=undefined（内置零持久化）；console/page errors 零新增；中途 agent-browser 会话半死（点击不派发事件）重启后恢复
+- 【推送】git add 7 个代码文件+public 双目录（231 张图）→ commit → push origin main
+
+Stage Summary:
+- 交付：微信表情面板新增「微信表情」内置分组（109 张官方经典表情，静态资源随项目走、离线可用）；QQ 面板新增「QQ表情」分组（122 张经典 QQ 动图 GIF）；点击即发送（消息气泡/转发/AI 上下文回写全链路复用既有 sticker 机制）；AI 可发内置表情（[表情包:wxb-微笑]，清单含用户表情20+内置精选20）；内置表情不可删除/改意思/添加，分组不可删改名，永不写入 IndexedDB
+- 改动文件：src/lib/ios/builtin-stickers.ts（新增 247 行）、src/lib/ios/stickers.ts、src/lib/chat-rich.ts、src/components/apps/{sticker-batch,wechat,qq}.tsx；public/wechat-emojis/（109 PNG）+ public/qq-emojis/（122 GIF）新增
+- 关键决策：①数据层合并而非 UI 层渲染两套——loadStickers 透明合并使面板/AI/消息回写零改动自动生效；②内置 id 用中文（wxb-微笑）而非随机串——AI 输出可读、用户输入 [表情包:wxb-微笑] 也能手动触发；③AI 清单用户优先+内置精选而非全量——防 231 项污染 prompt；④QQ 用 0.1.1 tarball GIF 动图（0.2.x 已移除图片）——经典 QQ 表情是动画，比 PNG 更真实
+- 资源源：微信 https://github.com/xxk8/wechat-emojis（109 PNG）；QQ https://github.com/fritx/qqface 0.1.x（122 GIF + smartQQ textMaps 中文名）
