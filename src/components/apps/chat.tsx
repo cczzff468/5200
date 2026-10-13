@@ -85,6 +85,7 @@ import {
   type BlockEntry,
 } from '@/lib/ios/block-state';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { kvDel, kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
@@ -1102,6 +1103,8 @@ function ChatView({
   }, [sessionKey]);
   // 动作描写开关（渲染订阅版）：设置页切换后经事件即时刷新，历史消息显示同步生效
   const actionDescOn = useActionDescOn(sessionKey);
+  // 「回车键发送消息」开关（信息 App 级、按账号隔离；默认开启=回车发送，关闭=回车换行）
+  const enterSend = useEnterSend('sms');
   /** 语音输入模式：输入框替换为「按住 说话」胶囊（右侧 Mic 钮切换，原装饰图标位置） */
   const [voiceMode, setVoiceMode] = useState(false);
   /** 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用） */
@@ -3550,12 +3553,11 @@ function ChatView({
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
-                  // 多行输入：Enter 发送（requestSubmit 与发送键走同一条 form 分流）/ Shift+Enter 换行；输入法选词回车不发送
-                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                    e.preventDefault();
-                    e.currentTarget.form?.requestSubmit();
-                  }
+                  // 多行输入：「回车键发送消息」开关统一口径（五端共用 guardEnterToSend）——
+                  // 开启=Enter 发送（requestSubmit 与发送键走同一条 form 分流）/ Shift+Enter 换行；关闭=回车一律换行；输入法选词回车永不发送
+                  guardEnterToSend(e, enterSend, () => e.currentTarget.form?.requestSubmit());
                 }}
+                enterKeyHint={enterSend ? 'send' : undefined}
                 placeholder={ttsSend ? '输入文字，发送后转为语音' : 'iMessage信息'}
                 aria-label="消息输入框"
                 className="max-h-[110px] min-h-[22px] w-full resize-none overflow-y-auto bg-transparent py-[7px] pr-10 text-[15px] leading-[22px] outline-none placeholder:text-muted-foreground/50"
@@ -3765,6 +3767,8 @@ function ChatView({
             setTimeAware(sessionKey, v);
             setTimeAwareState(v);
           }}
+          enterSend={enterSend}
+          onToggleEnterSend={(v) => setEnterSend('sms', v)}
           onOpenWorldBooks={wbContactId ? () => setWbOpen(true) : undefined}
           voiceSummary={describeVoiceId(contactVoiceId, myVoicesForSummary)}
           onOpenVoice={wbContactId ? () => setVoiceOpen(true) : undefined}

@@ -175,6 +175,7 @@ import { fmtMoney, wxLoadPayPwd, WxPayPwdGate, loadCards, resetFamilyCardsInMont
 import { wxUnreads } from '@/lib/unread-store';
 import { getMemSettings, memAfterAiTurn, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
@@ -944,6 +945,8 @@ export function WxGroupInfoPage({
   const [timeAwareOn, setTimeAwareOn] = useState(() => getTimeAware(sessionKeyOf(gid)));
   // 动作描写开关（渲染订阅版：切换后经事件即时刷新聊天页渲染）
   const actionDescOn = useActionDescOn(sessionKeyOf(gid));
+  // 「回车键发送消息」开关（微信 App 级、按账号隔离，群聊与单聊共用；默认开启）
+  const enterSend = useEnterSend('wx');
   const fileRef = useRef<HTMLInputElement>(null);
 
   const members = useMemo(
@@ -1350,6 +1353,12 @@ export function WxGroupInfoPage({
             }
           }}
           testId="wx-groupinfo-sentence"
+        />
+        <SwitchRow
+          label="回车键发送消息"
+          checked={enterSend}
+          onChange={(v) => setEnterSend('wx', v)}
+          testId="wx-groupinfo-enter-send"
         />
         <SwitchRow
           label="时间感知"
@@ -2407,6 +2416,8 @@ export function WxGroupChatPage({
   const sKey = sessionKeyOf(gid);
   // 动作描写开关（渲染订阅版：群设置页切换后经事件即时刷新渲染）
   const actionDescOn = useActionDescOn(sKey);
+  // 「回车键发送消息」开关（微信 App 级、按账号隔离，群聊与单聊共用；默认开启=回车发送，关闭=回车换行）
+  const enterSend = useEnterSend('wx');
   // 退出群聊页/切群：停止语音播放与 TTS 朗读并释放播放器（单例，防跨群串音）
   useEffect(() => () => {
     stopSpeaking();
@@ -5370,8 +5381,8 @@ export function WxGroupChatPage({
               }}
               className={`shrink-0 active:opacity-70 ${atOpen ? 'text-[#07C160]' : ''}`}
             >
-              <span className="flex h-[35px] w-[35px] items-center justify-center rounded-full border-[1.5px] border-black/90 text-black/85 transition-colors active:bg-black/[0.06] dark:border-white/75 dark:text-white/85 dark:active:bg-white/10">
-                <AtSign className="h-[19px] w-[19px]" strokeWidth={2} />
+              <span className="flex h-9 w-9 items-center justify-center rounded-full border-[1.5px] border-black/90 text-black/85 transition-colors active:bg-black/[0.06] dark:border-white/75 dark:text-white/85 dark:active:bg-white/10">
+                <AtSign className="h-5 w-5" strokeWidth={2} />
               </span>
             </button>
             {/* 语音输入切换（@ 旁边，与微信单聊同款声波圆钮）：语音模式下输入框替换为「按住 说话」胶囊 */}
@@ -5389,14 +5400,14 @@ export function WxGroupChatPage({
               className="shrink-0 active:opacity-70"
             >
               <span
-                className={`flex h-[34px] w-[34px] items-center justify-center rounded-full border-[1.5px] transition-colors active:bg-black/[0.05] dark:active:bg-white/10 ${
+                className={`flex h-9 w-9 items-center justify-center rounded-full border-[1.5px] transition-colors active:bg-black/[0.05] dark:active:bg-white/10 ${
                   voiceMode
                     ? 'border-[#07C160]/70 bg-[#07C160]/[0.08] text-[#07C160]'
                     : 'border-black/80 text-black/85 dark:border-white/70 dark:text-white/90'
                 }`}
               >
                 {/* 键盘模式 → 声波图标（点按进语音）；语音模式 → 键盘图标（点按切回键盘） */}
-                {voiceMode ? <KeyboardGlyph size={18} /> : <VoiceWaveGlyph size={21} />}
+                {voiceMode ? <KeyboardGlyph size={19} /> : <VoiceWaveGlyph size={22} />}
               </span>
             </button>
             {voiceMode ? (
@@ -5419,15 +5430,14 @@ export function WxGroupChatPage({
                     }
                   }}
                   onKeyDown={(e) => {
-                    // 多行输入：Enter 发送 / Shift+Enter 换行；中文输入法选词回车（isComposing）不发送
-                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                      e.preventDefault();
-                      send();
-                    }
+                    // 多行输入：「回车键发送消息」开关统一口径（五端共用 guardEnterToSend）——
+                    // 开启=Enter 发送 / Shift+Enter 换行；关闭=回车一律换行、点「发送」按钮才发送；中文输入法选词回车（isComposing）不发送
+                    guardEnterToSend(e, enterSend, () => send());
                   }}
+                  enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
                   data-testid="wx-groupchat-input"
-                  className="max-h-[132px] min-h-[36px] w-full resize-none overflow-y-auto rounded-[5px] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
+                  className="block max-h-[132px] min-h-[36px] w-full resize-none overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 placeholder:text-black/30 focus-visible:border-[#07C160]/40 focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.13),0_5px_16px_rgba(0,0,0,0.05)] dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none dark:placeholder:text-white/30 dark:focus-visible:border-[#07C160]/45 dark:focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.17)]"
                 />
                 {/* 文字转语音开关（声波图标收进输入框内部右侧，与单聊同款）：
                     开启后输入文字发送为语音气泡（本地仿真，无需配置语音 API，点击不出声） */}
@@ -5441,9 +5451,9 @@ export function WxGroupChatPage({
                     setTtsSend(nv);
                     onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
                   }}
-                  className={`absolute bottom-1 right-1.5 flex h-7 w-7 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
+                  className={`absolute bottom-[2px] right-1 flex h-8 w-8 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
                 >
-                  <AudioLines className="h-[17px] w-[17px]" strokeWidth={ttsSend ? 2.2 : 1.8} />
+                  <AudioLines className="h-5 w-5" strokeWidth={ttsSend ? 2.2 : 1.8} />
                 </button>
               </div>
             )}
@@ -5458,9 +5468,9 @@ export function WxGroupChatPage({
                 setAtOpen(false);
                 setStickerOpen((v) => !v);
               }}
-              className={`shrink-0 active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
             >
-              <Smile className="h-[25px] w-[25px]" strokeWidth={1.7} />
+              <Smile className="h-[26px] w-[26px]" strokeWidth={1.7} />
             </button>
             {draft.trim() || canDispatch || pendingImgs.length > 0 ? (
               <button
@@ -5473,7 +5483,7 @@ export function WxGroupChatPage({
                   if (draft.trim() || pendingImgs.length) send();
                   else dispatchBatch();
                 }}
-                className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
+                className="flex h-9 shrink-0 items-center justify-center rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
               >
                 发送
               </button>
@@ -5487,7 +5497,7 @@ export function WxGroupChatPage({
                   setAtOpen(false);
                   setPlusOpen((v) => !v);
                 }}
-                className="ml-1 shrink-0 active:opacity-60"
+                className="ml-1 flex h-9 w-9 shrink-0 items-center justify-center active:opacity-60"
               >
                 <CirclePlus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.5} />
               </button>

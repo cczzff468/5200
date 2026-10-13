@@ -161,6 +161,10 @@ export function ChatSettingsPage({
   onToggleStickers,
   actionDescOn,
   onToggleActionDesc,
+  /** 「回车键发送消息」开关状态（App 级、按账号隔离，单聊+群聊共用；默认开启=回车发送） */
+  enterSend,
+  /** 回车键发送开关切换（宿主调 setEnterSend(app, v) 持久化+即时广播） */
+  onToggleEnterSend,
   onOpenWorldBooks,
   onOpenSearch,
   onOpenBg,
@@ -226,6 +230,10 @@ export function ChatSettingsPage({
   onToggleStickers: (v: boolean) => void;
   /** 动作描写开关切换（宿主负责持久化，见 @/lib/action-desc） */
   onToggleActionDesc: (v: boolean) => void;
+  /** 「回车键发送消息」开关状态（App 级、按账号隔离；开启=回车/移动端「发送」键直接发送；关闭=回车换行） */
+  enterSend: boolean;
+  /** 回车键发送开关切换（即时生效，无需重启） */
+  onToggleEnterSend: (v: boolean) => void;
   onOpenWorldBooks: () => void;
   onOpenSearch: () => void;
   onOpenBg: () => void;
@@ -468,6 +476,22 @@ export function ChatSettingsPage({
               accent={accent}
               testId={`${testPrefix}-settings-sentence`}
               label="分句发送"
+            />
+          </div>
+        </div>
+
+        {/* 回车键发送消息：App 级开关（按账号隔离，单聊+群聊共用）——
+            开启=桌面回车/移动端键盘「发送」键直接发消息（与点「发送」按钮一致）；
+            关闭=回车一律换行（多行内容正确显示），点「发送」按钮才发送；切换即时生效 */}
+        <div className={`${cardCls} mt-3 overflow-hidden`}>
+          <div className={`flex items-center justify-between ${rowCls}`}>
+            <span>回车键发送消息</span>
+            <ChatToggle
+              on={enterSend}
+              onChange={onToggleEnterSend}
+              accent={accent}
+              testId={`${testPrefix}-settings-enter-send`}
+              label="回车键发送消息"
             />
           </div>
         </div>
@@ -1432,6 +1456,10 @@ export function SmsChatSettingsPage({
   onOpenReplyCount,
   onToggleSentenceSend,
   onToggleTimeAware,
+  /** 「回车键发送消息」开关状态（信息 App 级、按账号隔离；默认开启=回车发送） */
+  enterSend,
+  /** 回车键发送开关切换（宿主调 setEnterSend('sms', v) 持久化+即时广播） */
+  onToggleEnterSend,
   actionDescOn,
   onToggleActionDesc,
   onOpenWorldBooks,
@@ -1475,6 +1503,10 @@ export function SmsChatSettingsPage({
   onOpenReplyCount: () => void;
   onToggleSentenceSend: (v: boolean) => void;
   onToggleTimeAware: (v: boolean) => void;
+  /** 「回车键发送消息」开关状态（信息 App 级、按账号隔离；开启=回车/移动端「发送」键直接发送；关闭=回车换行） */
+  enterSend: boolean;
+  /** 回车键发送开关切换（即时生效，无需重启） */
+  onToggleEnterSend: (v: boolean) => void;
   /** 动作描写开关切换（宿主负责持久化，见 @/lib/action-desc） */
   onToggleActionDesc: (v: boolean) => void;
   /** 打开世界书挂载页；AI 助手会话（无联系人角色）不传 → 隐藏该入口行 */
@@ -1620,6 +1652,22 @@ export function SmsChatSettingsPage({
               accent="#34C759"
               testId="sms-settings-sentence"
               label="分句发送"
+            />
+          </div>
+        </div>
+
+        {/* 回车键发送消息：信息 App 级开关（按账号隔离）——
+            开启=桌面回车/移动端键盘「发送」键直接发消息（与点「发送」按钮一致）；
+            关闭=回车一律换行（多行内容正确显示），点「发送」按钮才发送；切换即时生效 */}
+        <div className={`${t.cardCls} mt-3`}>
+          <div className={`flex items-center justify-between ${t.rowCls}`}>
+            <span>回车键发送消息</span>
+            <ChatToggle
+              on={enterSend}
+              onChange={onToggleEnterSend}
+              accent="#34C759"
+              testId="sms-settings-enter-send"
+              label="回车键发送消息"
             />
           </div>
         </div>

@@ -182,6 +182,7 @@ import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, A
 import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { useAutoTextareaRef } from '@/lib/ios/use-auto-textarea';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters } from '@/lib/memory';
@@ -4754,6 +4755,8 @@ function ChatPage({
   }, [sessionKey]);
   // 动作描写开关（渲染订阅版）：设置页切换后经事件即时刷新，历史消息显示同步生效
   const actionDescOn = useActionDescOn(sessionKey);
+  // 「回车键发送消息」开关（微信 App 级、按账号隔离，单聊+群聊共用；默认开启=回车发送，关闭=回车换行）
+  const enterSend = useEnterSend('wx');
   /** 世界书挂载页（设置页「世界书」进入）：为联系人勾选挂载的书籍（见 @/lib/ios/worldbook） */
   const [wbOpen, setWbOpen] = useState(false);
   /** 主动发消息设置页（聊天设置二级页：定时/事件/自主/提醒四类触发） */
@@ -8495,14 +8498,14 @@ function ChatPage({
               className="shrink-0 active:opacity-70"
             >
               <span
-                className={`flex h-[34px] w-[34px] items-center justify-center rounded-full border-[1.5px] transition-colors active:bg-black/[0.05] dark:active:bg-white/10 ${
+                className={`flex h-9 w-9 items-center justify-center rounded-full border-[1.5px] transition-colors active:bg-black/[0.05] dark:active:bg-white/10 ${
                   voiceMode
                     ? 'border-[#07C160]/70 bg-[#07C160]/[0.08] text-[#07C160]'
                     : 'border-black/80 text-black/85 dark:border-white/70 dark:text-white/90'
                 }`}
               >
                 {/* 键盘模式 → 声波图标（点按进语音）；语音模式 → 键盘图标（点按切回键盘） */}
-                {voiceMode ? <KeyboardGlyph size={18} /> : <VoiceWaveGlyph size={21} />}
+                {voiceMode ? <KeyboardGlyph size={19} /> : <VoiceWaveGlyph size={22} />}
               </span>
             </button>
             {voiceMode ? (
@@ -8527,14 +8530,12 @@ function ChatPage({
                   }}
                   onKeyDown={(e) => {
                     // A-6：中文输入法选词回车（isComposing）不发送，避免半截拼音被当消息发出；
-                    // 多行输入：Enter 发送 / Shift+Enter 换行（粘贴多行文本结构不丢）
-                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                      e.preventDefault();
-                      void send();
-                    }
+                    // 「回车键发送消息」开关统一口径（guardEnterToSend）：开启=Enter 发送（Shift+Enter 仍换行），关闭=回车一律换行、点「发送」按钮才发送
+                    guardEnterToSend(e, enterSend, () => void send());
                   }}
+                  enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-                  className="max-h-[132px] min-h-[36px] w-full resize-none overflow-y-auto rounded-[5px] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] outline-none ring-black/[0.06] transition-shadow focus-visible:ring-1 dark:bg-[#232323] dark:focus-visible:ring-white/[0.08]"
+                  className="block max-h-[132px] min-h-[36px] w-full resize-none overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 placeholder:text-black/30 focus-visible:border-[#07C160]/40 focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.13),0_5px_16px_rgba(0,0,0,0.05)] dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none dark:placeholder:text-white/30 dark:focus-visible:border-[#07C160]/45 dark:focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.17)]"
                 />
                 {/* 文字转语音开关（声波图标在输入框内右下角）：开启后输入文字发送为语音气泡
                     （本地仿真，无需配置语音 API）；切到「按住说话」模式时随输入框一起隐藏 */}
@@ -8548,9 +8549,9 @@ function ChatPage({
                     setTtsSend(nv);
                     onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
                   }}
-                  className={`absolute bottom-1 right-1.5 flex h-7 w-7 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
+                  className={`absolute bottom-[2px] right-1 flex h-8 w-8 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
                 >
-                  <AudioLines className="h-[17px] w-[17px]" strokeWidth={ttsSend ? 2.2 : 1.8} />
+                  <AudioLines className="h-5 w-5" strokeWidth={ttsSend ? 2.2 : 1.8} />
                 </button>
               </div>
             )}
@@ -8564,9 +8565,9 @@ function ChatPage({
                 setPlusOpen(false);
                 setStickerOpen((v) => !v);
               }}
-              className={`shrink-0 active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
+              className={`flex h-9 w-9 shrink-0 items-center justify-center active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
             >
-              <Smile className="h-[25px] w-[25px]" strokeWidth={1.7} />
+              <Smile className="h-[26px] w-[26px]" strokeWidth={1.7} />
             </button>
             {(input.trim() || canDispatch || pendingImgs.length > 0) ? (
               <button
@@ -8579,7 +8580,7 @@ function ChatPage({
                   if (input.trim() || pendingImgs.length) void send();
                   else dispatchBatch();
                 }}
-                className="h-8 shrink-0 rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
+                className="flex h-9 shrink-0 items-center justify-center rounded-[4px] bg-[#07C160] px-4 text-[14px] font-medium text-white active:bg-[#06AD56] disabled:opacity-50"
               >
                 发送
               </button>
@@ -8592,7 +8593,7 @@ function ChatPage({
                   setStickerOpen(false);
                   setPlusOpen((v) => !v);
                 }}
-                className="ml-1 shrink-0 active:opacity-60"
+                className="ml-1 flex h-9 w-9 shrink-0 items-center justify-center active:opacity-60"
               >
                 <CirclePlus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.5} />
               </button>
@@ -8841,6 +8842,8 @@ function ChatPage({
           timeAware={timeAware}
           stickersOn={stickersOn}
           actionDescOn={actionDescOn}
+          enterSend={enterSend}
+          onToggleEnterSend={(v) => setEnterSend('wx', v)}
           onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}
           voiceSummary={describeVoiceId(peer.voiceId, myVoicesForSummary)}
           onOpenVoice={() => setVoiceOpen(true)}

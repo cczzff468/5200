@@ -168,6 +168,7 @@ import {
 import { qqUnreads } from '@/lib/unread-store';
 import { getMemSettings, memAfterAiTurn, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
@@ -852,6 +853,8 @@ export function QqGroupInfoPage({
   const [timeAwareOn, setTimeAwareOn] = useState(() => getTimeAware(sessionKeyOf(gid)));
   // 动作描写开关（渲染订阅版：切换后经事件即时刷新聊天页渲染）
   const actionDescOn = useActionDescOn(sessionKeyOf(gid));
+  // 「回车键发送消息」开关（QQ App 级、按账号隔离，群聊与单聊共用；默认开启）
+  const enterSend = useEnterSend('qq');
   const fileRef = useRef<HTMLInputElement>(null);
   const [bgOpen, setBgOpen] = useState(false);
 
@@ -1252,6 +1255,12 @@ export function QqGroupInfoPage({
             }
           }}
           testId="qq-groupinfo-sentence"
+        />
+        <SwitchRow
+          label="回车键发送消息"
+          checked={enterSend}
+          onChange={(v) => setEnterSend('qq', v)}
+          testId="qq-groupinfo-enter-send"
         />
         <SwitchRow
           label="时间感知"
@@ -2058,6 +2067,8 @@ export function QqGroupChatPage({
   const sKey = sessionKeyOf(gid);
   // 动作描写开关（渲染订阅版：群设置页切换后经事件即时刷新渲染）
   const actionDescOn = useActionDescOn(sKey);
+  // 「回车键发送消息」开关（QQ App 级、按账号隔离，群聊与单聊共用；默认开启=回车发送，关闭=回车换行）
+  const enterSend = useEnterSend('qq');
   // 退出群聊页/切群：停止 TTS 朗读与语音气泡播放并释放播放器（单例，防跨群串音）
   useEffect(() => () => {
     stopSpeaking();
@@ -4985,12 +4996,11 @@ export function QqGroupChatPage({
                 }
               }}
               onKeyDown={(e) => {
-                // 多行输入：Enter 发送 / Shift+Enter 换行；中文输入法选词回车（isComposing）不发送
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault();
-                  send();
-                }
+                // 多行输入：「回车键发送消息」开关统一口径（五端共用 guardEnterToSend）——
+                // 开启=Enter 发送 / Shift+Enter 换行；关闭=回车一律换行、点「发送」按钮才发送；中文输入法选词回车（isComposing）不发送
+                guardEnterToSend(e, enterSend, () => send());
               }}
+              enterKeyHint={enterSend ? 'send' : undefined}
               placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
               aria-label="发送群聊消息"
               data-testid="qq-groupchat-input"

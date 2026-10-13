@@ -221,6 +221,7 @@ import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, A
 import { ActionDescLine } from './action-desc-line';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
+import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 // 多账号 v2（Task 40-2b）：kv 裸键自动按 qq 当前账号作用域；purge 限账号用 kvKeysByPrefix+kvDelRaw
 import { kvGet, kvSet, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv';
 // 多账号（Task 40 v2）：注册表/切换/创建走 per-app accounts API；QQ 登录态等 LS 键每次经 accLs(key,'qq')
@@ -2996,6 +2997,8 @@ function ChatPage({
   }, [sessionKey]);
   // 动作描写开关（渲染订阅版）：设置页切换后经事件即时刷新，历史消息显示同步生效（见 @/lib/action-desc）
   const actionDescOn = useActionDescOn(sessionKey);
+  // 「回车键发送消息」开关（QQ App 级、按账号隔离，单聊+群聊共用；默认开启=回车发送，关闭=回车换行）
+  const enterSend = useEnterSend('qq');
   /** 世界书挂载页（设置页「世界书」进入）：为联系人勾选挂载的书籍（见 @/lib/ios/worldbook） */
   const [wbOpen, setWbOpen] = useState(false);
   /** 主动发消息设置页（聊天设置二级页：定时/事件/自主/提醒四类触发） */
@@ -6820,12 +6823,11 @@ function ChatPage({
                 }
               }}
               onKeyDown={(e) => {
-                // A-6：中文输入法选词回车（isComposing）不发送；多行输入：Enter 发送 / Shift+Enter 换行
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault();
-                  void send();
-                }
+                // A-6：中文输入法选词回车（isComposing）不发送；「回车键发送消息」开关统一口径（guardEnterToSend）：
+                // 开启=Enter 发送（Shift+Enter 仍换行），关闭=回车一律换行、点「发送」按钮才发送
+                guardEnterToSend(e, enterSend, () => void send());
               }}
+              enterKeyHint={enterSend ? 'send' : undefined}
               placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
               aria-label={`发送消息给${peer.name}`}
               className="max-h-[132px] min-h-[40px] w-full resize-none overflow-y-auto rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] py-[9px] pl-3.5 pr-10 text-[15px] leading-[22px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
@@ -7350,6 +7352,8 @@ function ChatPage({
           timeAware={timeAware}
           stickersOn={stickersOn}
           actionDescOn={actionDescOn}
+          enterSend={enterSend}
+          onToggleEnterSend={(v) => setEnterSend('qq', v)}
           onToggleActionDesc={(v) => saveActionDescOn(sessionKey, v)}
           onBack={() => setSettingsOpen(false)}
           onTogglePinned={(v) => qqChatFlagsStore.update(peer.id, { pinned: v })}
