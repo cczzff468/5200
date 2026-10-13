@@ -4,18 +4,17 @@
  * - 进度 0~1 每 100ms 广播，气泡波形按进度填充
  * - 三通道：普通语音 = 音频文件（dataURL，真实出声）；文字转语音消息（带 localText）=
  *   **静音模拟播放**——不出声、不需要语音 API，点击只按估算时长推进波形进度动画；
- *   AI 语音消息（synth='builtin'，内置引擎）= **实时朗读**——点击时用浏览器引擎按角色
- *   音色把 localText 真实读出来（进度按估算推进，真实播完自动收尾，引擎失败降级静音模拟）。
- *   注意：synth='builtin'（浏览器实时朗读）自 2024 改版后仅存在于历史存量 AI 语音消息；
- *   新版内置通道的 AI 语音消息不带 synth 标记，点击走 toggleSim 静音模拟（不出声）
+ *   AI 语音消息（带 contactId 或历史存量 synth='builtin'）= **实时朗读**——点击时用当前
+ *   角色音色把 localText 真实读出来（Task 33：只要配置了声音——内置语音免配置恒可用，
+ *   配了第三方语音 API 则用 API 音色——AI 的静音语音条/文字语音也能点播放出声；
+ *   进度按估算推进，真实播完自动收尾，引擎失败降级静音模拟）
  * - 与 TTS 朗读（电话等）互斥：播放前 stopOtherAudio 停掉对方
  * - stopVoicePlayback() 供聊天页卸载/切换会话/开录前释放（同时会停掉 AI 语音的实时朗读）
  */
 
 import { create } from 'zustand';
 import { registerAudioSource, stopOtherAudio } from './audio-focus';
-import { BUILTIN_DEFAULT_FEMALE, BUILTIN_DEFAULT_MALE, speakBuiltin, stopBuiltinSpeech } from './builtin-voices';
-import { resolveVoiceForContact } from './tts-client';
+import { speakUserTts, stopSpeaking } from './tts-client';
 import { estimateSpeakDuration } from './voice-send';
 
 interface VoicePlayStore {
@@ -37,8 +36,8 @@ let audio: HTMLAudioElement | null = null;
 let currentId: string | null = null;
 let currentUrl: string | null = null;
 let timer: number | null = null;
-/** 当前在播的语音是否走内置引擎实时朗读（stopVoicePlayback 时要同步停掉语音引擎） */
-let activeBuiltinTts = false;
+/** 当前在播的语音是否走「角色音色实时朗读」（stopVoicePlayback 时要同步停掉 TTS 引擎） */
+let activeContactTts = false;
 
 /** 静音模拟播放状态（文字转语音消息 / AI 语音进度动画）：进度 = offset + 本次起点以来经过的时间 */
 interface SimState {
@@ -60,9 +59,10 @@ function clearTimer(): void {
 
 function teardown(): void {
   clearTimer();
-  if (activeBuiltinTts) {
-    activeBuiltinTts = false;
-    stopBuiltinSpeech();
+  if (activeContactTts) {
+    activeContactTts = false;
+    // 停掉实时朗读：API 音频与内置朗读引擎一并立刻截断（stopSpeaking 内部已含 stopBuiltinSpeech）
+    stopSpeaking();
   }
   if (audio) {
     audio.onended = null;
@@ -164,14 +164,16 @@ function startPlay(id: string, src: string, fromPause: boolean): void {
 }
 
 /**
- * AI 语音消息（内置引擎通道）：点击 → 用角色音色把 localText 实时朗读出来（真实出声）。
+ * AI 语音消息：点击 → 用当前角色音色把 localText 实时朗读出来（真实出声）。
+ * 覆盖两类气泡：新版内置通道的静音语音条（url=''、无 synth 标记、带 contactId）与
+ * 历史存量 synth='builtin' 消息——只要配置了声音（内置语音免配置恒可用；配了第三方
+ * 语音 API 则用 API 音色）点击播放都能出声（Task 33）。
  * - 再次点击 = 停止（TTS 无法真暂停，再次点击从头播）；
  * - 进度按估算时长推进（hold：到点悬在 98% 等真实播完收尾）；
  * - 引擎不可用/播放失败 → simState 保留，进度动画按静音模拟继续走完（不打断 UI）；
- * - synth='builtin'（浏览器实时朗读）自 2024 改版后仅存在于历史存量 AI 语音消息；新版内置通道
- *   的 AI 语音消息不带 synth 标记，点击走 toggleSim 静音模拟（不出声），不再进入本函数。
+ * - speakUserTts 传 keepOthers：互斥已由本播放器 stopOtherAudio 完成，播放状态留给气泡 UI。
  */
-function toggleBuiltinTts(id: string, text: string, contactId: string | null): void {
+function toggleContactTts(id: string, text: string, contactId: string | null): void {
   const st = useVoicePlayback.getState();
   if (st.activeId === id) {
     // 播放中/暂停挂起 → 停止（含语音引擎）
@@ -181,50 +183,45 @@ function toggleBuiltinTts(id: string, text: string, contactId: string | null): v
   // 新播放：停掉其它音频（电话 TTS / 录音气泡 / 其它模拟播放）
   stopOtherAudio('voice-msg');
   stopVoicePlayback();
-  activeBuiltinTts = true;
+  activeContactTts = true;
   simState = { id, dur: estimateSpeakDuration(text), offset: 0, startedAt: performance.now(), hold: true };
   useVoicePlayback.setState({ activeId: id, playing: true, progress: 0 });
   startSimTimer(id);
   void (async () => {
     try {
-      // 每次点击现场重读角色音色：切音色/改配置后对历史语音气泡也立即生效
-      const rv = await resolveVoiceForContact(contactId);
-      let voiceId = rv.voiceId;
-      if (rv.source === 'builtin' && rv.gender) {
-        voiceId = rv.gender === 'male' ? BUILTIN_DEFAULT_MALE : BUILTIN_DEFAULT_FEMALE;
-      }
-      await speakBuiltin({
+      // 每次点击现场解析角色音色（角色独立音色 → 全局默认 → 内置默认声线；配了 API 用 API 合成），
+      // 切音色/改配置后对历史语音气泡也立即生效
+      await speakUserTts({
         text,
-        voiceId,
+        contactId,
         keepOthers: true, // 播放状态归本播放器管，不能被互斥逻辑清掉
         onEnd: () => stopVoicePlayback(),
-        onError: () => {
-          // 播放失败：进度动画按静音模拟继续走完（simState 仍在，无需处理）
-        },
       });
     } catch {
-      // 引擎不可用：保留已启动的进度动画（静音模拟兜底）
+      // 引擎不可用/合成失败：保留已启动的进度动画（静音模拟兜底）
     }
   })();
 }
 
 /** 点击语音气泡的额外信息（AI 语音消息用） */
 export interface VoiceToggleOptions {
-  /** 'builtin' = 内置引擎实时朗读通道（AI 语音消息） */
+  /** 'builtin' = 内置引擎实时朗读通道（历史存量 AI 语音消息） */
   synth?: 'builtin' | 'api';
-  /** 发送该语音的联系人 id（实时朗读时解析角色音色用） */
+  /** 发送该语音的联系人 id：非空 = AI 语音消息，点击用角色音色实时朗读（配置了声音即出声） */
   contactId?: string | null;
 }
 
 export const voicePlayer = {
   /** 点击语音气泡：空闲 → 播放；播放中 → 暂停；暂停中 → 继续。
-   *  - localText 非空（文字转语音消息）→ 静音模拟播放：不出声、无需语音 API，只走进度动画；
-   *  - synth==='builtin'（AI 语音消息）→ 内置引擎实时朗读：按角色音色真实出声 */
+   *  - 有音频文件（url 非空）→ 真实播放；
+   *  - localText 非空且无音频（文字转语音消息/AI 静音语音条）→
+   *    AI 消息（带 contactId 或 synth='builtin'）按角色音色实时朗读（真实出声）；
+   *    我方的文字转语音消息（无 contactId）维持静音模拟：不出声、只走进度动画 */
   toggle(id: string, src: string, localText?: string | null, opts?: VoiceToggleOptions): void {
     if (localText && localText.trim() && !src) {
       const text = localText.trim();
-      if (opts?.synth === 'builtin') {
-        toggleBuiltinTts(id, text, opts.contactId ?? null);
+      if (opts?.synth === 'builtin' || opts?.contactId) {
+        toggleContactTts(id, text, opts.contactId ?? null);
         return;
       }
       toggleSim(id, estimateSpeakDuration(text));

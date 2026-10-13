@@ -25,12 +25,13 @@ export interface VoiceMsgData {
   duration: number;
   /** 静态波形（0~1，约 20 根；录音时真实振幅采样） */
   wave: number[];
-  /** 仿真朗读原文（文字转语音消息；点击气泡只走静音进度动画，无需语音 API、不出声）；
-   *  AI 语音消息（新版内置通道不带 synth 标记）同样只走静音进度动画；仅历史存量 synth='builtin'
-   *  旧消息点击时用浏览器引擎按此原文实时朗读（真实出声） */
+  /** 仿真朗读原文（文字转语音消息/AI 静音语音条）。点击气泡：我方消息（无 contactId）走静音
+   *  进度动画；AI 语音消息（带 contactId）按角色音色实时朗读真实出声（Task 33）；仅历史存量
+   *  synth='builtin' 旧消息同样实时朗读 */
   localText?: string;
   /** AI 语音消息合成通道：'api' = 已存真实音频 dataURL；'builtin' = 内置引擎实时朗读，
-   *  仅存在于历史存量旧消息（新版内置通道不发该标记，留空 = 静音语音条，点击只走静音进度动画） */
+   *  仅存在于历史存量旧消息（新版内置通道不发该标记，留空 = 静音语音条，点击由
+   *  voice-player 按 contactId 走角色音色实时朗读，配置了声音即出声） */
   synth?: 'builtin' | 'api';
   /** 发送该语音的联系人 id（AI 语音消息实时朗读时解析角色音色用） */
   contactId?: string;

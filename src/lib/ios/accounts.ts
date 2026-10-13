@@ -29,6 +29,13 @@ export interface PhoneAccount {
   /** 稳定 id：大号恒为 'main'，其余为创建时生成的 a{ts}{rand} */
   id: string;
   kind: AccountKind;
+  /**
+   * 小号/匿名号账号的档位（kind='main' 的机主主账号无此字段）：
+   * 'alt' = 小号（默认；历史数据无此键等同 'alt'）；
+   * 'main' = 大号档（完整身份主账号，在切换账号列表带「大号」标记展示）。
+   * 微信/QQ 切换账号页「添加账号」可新建大号档账号；功能与数据隔离同普通小号。
+   */
+  grade?: 'main' | 'alt';
   /** 显示名：小号默认「小号N」，匿名号默认「匿名账号」；大号留空（各页面优先用本机资料/登录态实时显示） */
   name: string;
   /** 手机号（大号留空用本机资料；小号/匿名号均为 1 开头 11 位虚拟号，与普通手机号同格式） */
@@ -390,11 +397,13 @@ export function clearForceLoginWall(app: AccountApp): void {
 export function createAccount(
   kind: 'alt' | 'anon',
   name?: string,
-  opts?: { ownerContactId?: string },
+  opts?: { ownerContactId?: string; grade?: 'main' | 'alt' },
 ): PhoneAccount {
   const id = `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   const list = getAccounts();
   const seq = list.filter((a) => a.kind === 'alt').length + 1;
+  /** 大号档（grade='main'）与小号同池编号，默认名区分大号/小号 */
+  const grade = opts?.grade === 'main' ? 'main' : 'alt';
   const acc: PhoneAccount =
     kind === 'anon'
       ? {
@@ -411,7 +420,8 @@ export function createAccount(
       : {
           id,
           kind: 'alt',
-          name: (name ?? '').trim() || `小号${seq}`,
+          grade,
+          name: (name ?? '').trim() || (grade === 'main' ? `大号${seq}` : `小号${seq}`),
           phone: genDigits('1', 11),
           qqId: genDigits('3', 10),
           wechatId: genWechatId(),

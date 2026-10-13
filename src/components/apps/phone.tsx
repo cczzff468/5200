@@ -64,7 +64,7 @@ import { getMemSettings, memAddEventFragment, memAfterAiTurn, memConvoFromRaw, m
 import { collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
-import { hasCustomTtsApi, isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
+import { isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
 // 通话语音识别：Web Speech（浏览器原生实时识别）为主；transcribeAudioBlob 仅在设置里配置了
 // OpenAI 兼容 STT 时作服务端兜底（内置识别模型已移除，isSttReady 对 builtin 恒为 false）
 import { isSttReady, transcribeAudioBlob } from '@/lib/ios/stt-client';
@@ -118,7 +118,8 @@ import { isFriendIn, withAvatarForApp, type ContactRecord } from '@/lib/contacts
  *   → /api/phone/tts 合成语音播放；内置识别模型已移除（设置里配置了 OpenAI 兼容 STT 时才走服务端兜底）；
  *   麦克风不可用/识别失败自动切换键盘文字输入
  * - 通话中文字聊天：右上角信息按钮开关——进入/退出电话聊天界面（全程对话记录气泡+输入条，弹幕暂停）；
- *   开启期间暂停免提聆听；AI 配置了语音 API → 语音回复（TTS），没配 → 文字回复（气泡）
+ *   AI 回复文字进消息区同时用角色音色播报（Task 33：配置了声音——内置语音恒可用——打字回复也出声）
+ *   开启期间暂停免提聆听
  * - 音效：呼叫等待回铃音（450Hz 中国铃流节奏）、接通提示音、挂断提示音，全部 WebAudio 合成
  * - 通话方向：turn 请求带 direction（AI 来电接听交接='in' / 用户主动拨打='out'，缺省 'out'），
  *   接通问候语按方向区分主被动视角；挂断续聊 endReason 传真实挂断方
@@ -539,7 +540,7 @@ function CallScreen({
 
   const endedRef = useRef(false);
   const emptyRef = useRef(false);
-  /** 文字聊天模式（信息图标开关）：回复形态判定用 ref（回调内读最新值，与微信 useChatCall 一致） */
+  /** 文字聊天模式（信息图标开关）：回复标记用 ref（回调内读最新值，文字轮次标 via='text' 且同时照常播报） */
   const textModeRef = useRef(false);
   const ringRef = useRef<RingbackTone | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -1000,22 +1001,12 @@ function CallScreen({
               scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
               return;
             }
-            // 回复形态：文字聊天开着且没配语音 API → 文字回复；其余（语音轮次 / 配了语音 API）都播报
-            const asText = textModeRef.current && !hasCustomTtsApi();
-            setBubbles((b) => b.map((x) => (x.id === bubbleId ? { ...x, text: reply, via: asText ? ('text' as const) : x.via } : x)));
+            // 回复一律播报（speak 内置引擎兜底，配了 API 用 API）；文字条开着时轮次标为 text
+            //（消息区呈现文字，同时照常出声——配置了声音打字回复也要出声）
+            setBubbles((b) => b.map((x) => (x.id === bubbleId ? { ...x, text: reply, via: textModeRef.current ? ('text' as const) : x.via } : x)));
             memorizeTurn(reply);
-            if (asText) {
-              // 没配语音 API 的文字聊天轮次：不出声，文字留在消息区
-              if (wantHangup) {
-                finishByAiHangup();
-                return;
-              }
-              setPeerStatus('listening');
-              scheduleAutoListenRef.current(); // 文字回复呈现完继续免提听（文字条开着时被拦截）
-            } else {
-              if (wantHangup) pendingHangupRef.current = true; // 播完告别自动挂断（speak resume 检查）
-              await speak(reply); // speak 内部播完自动续听
-            }
+            if (wantHangup) pendingHangupRef.current = true; // 播完告别自动挂断（speak resume 检查）
+            await speak(reply); // speak 内部播完自动续听（文字条开着时续听被拦截）
           } catch (err) {
             if (endedRef.current) return;
             setBubbles((b) => b.filter((x) => x.id !== bubbleId));
@@ -1052,26 +1043,15 @@ function CallScreen({
           scheduleAutoListenRef.current(AUTO_RETRY_DELAY_MS); // 免提续听
           return;
         }
-        // 回复形态：文字聊天开着且没配语音 API → 文字回复；其余（语音轮次 / 配了语音 API）都播报
-        const asText = textModeRef.current && !hasCustomTtsApi();
+        // 回复一律播报（speak 内置引擎兜底，配了 API 用 API）；文字条开着时轮次标为 text
+        //（消息区呈现文字，同时照常出声——配置了声音打字回复也要出声）
         setBubbles((b) => [
           ...b,
-          { id: genId(), role: 'assistant' as const, text: reply, t: Date.now(), ...(asText ? { via: 'text' as const } : {}) },
+          { id: genId(), role: 'assistant' as const, text: reply, t: Date.now(), ...(textModeRef.current ? { via: 'text' as const } : {}) },
         ]);
         memorizeTurn(reply);
-        if (asText) {
-          // 没配语音 API 的文字聊天轮次：不出声，文字留在消息区；
-          // 延迟续听：同步调度会被自身 runTurn 的 busyRef 拦截（finally 尚未执行）
-          if (wantHangup) {
-            finishByAiHangup();
-            return;
-          }
-          setPeerStatus('listening');
-          scheduleAutoListenRef.current(250);
-        } else {
-          if (wantHangup) pendingHangupRef.current = true; // 播完告别自动挂断（speak resume 检查）
-          await speak(reply); // speak 内部播完自动续听
-        }
+        if (wantHangup) pendingHangupRef.current = true; // 播完告别自动挂断（speak resume 检查）
+        await speak(reply); // speak 内部播完自动续听（文字条开着时续听被拦截）
       } catch (err) {
         if (!endedRef.current) {
           const msg = err instanceof Error && err.message ? err.message : '';

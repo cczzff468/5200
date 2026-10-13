@@ -24,7 +24,8 @@ import { scopedConvKey } from './accounts';
  *
  * 三、语音合成 synthesizeAiVoice（用当前角色的音色）：
  *   - 文本清洗（剥离舞台动作/表情标记等不可朗读内容）后为空 → null（保持文字）；
- *   - 内置引擎 / 未配置语音 API → 静音语音条：不出音频文件、点击只走静音进度动画（不出声），
+ *   - 内置引擎 / 未配置语音 API → 静音语音条：不出音频文件、点击由 voice-player 按 contactId
+ *     用角色音色实时朗读（Task 33：配置了声音——内置语音恒可用——点击播放即出声），
  *     长按「转文字」仍可看原文；新版内置通道不再产出 synth 标记（synth='builtin' 仅历史存量）；
  *   - MiniMax / OpenAI 兼容 → 调 /api/tts 合成真实音频 → dataURL 存进消息（synth='api'，
  *     重启后仍可播放）；时长读音频元数据，读不到按字数估算；
@@ -162,7 +163,8 @@ export function decideAiVoiceMessage(freqKey: string, counterKey: string = freqK
 
 /** AI 语音消息数据（落库时展开进消息的 voice 字段） */
 export interface AiVoiceClip {
-  /** 音频 dataURL（服务商 TTS）；内置引擎/未配置 API 通道为空串（静音语音条，点击只走静音进度动画） */
+  /** 音频 dataURL（服务商 TTS）；内置引擎/未配置 API 通道为空串（静音语音条，点击由
+   *  voice-player 按 contactId 用角色音色实时朗读，配置了声音即出声） */
   url: string;
   /** 秒（≥1） */
   duration: number;
@@ -244,9 +246,9 @@ export async function synthesizeAiVoice(text: string, contactId: string | null |
   const useBuiltinEngine = cfg.provider === 'builtin' || !isTtsConfigured(cfg);
   const wave = hashWaveBars(cleaned, 22);
 
-  // ① 内置引擎 / 未配置语音 API：静音语音条——不出音频文件、点击只走静音进度动画
-  //    （voice-player 对无 synth 标记的 localText 气泡走 toggleSim 静音模拟，不出声），
-  //    长按「转文字」仍可看原文；真实发声需要用户配置 MiniMax / OpenAI 语音 API
+  // ① 内置引擎 / 未配置语音 API：静音语音条——不出音频文件；点击由 voice-player 按 contactId
+  //    走角色音色实时朗读（speakUserTts：内置引擎兜底出声，配了 API 用 API 音色），
+  //    长按「转文字」仍可看原文
   if (useBuiltinEngine) {
     return { url: '', duration: estimateDuration(cleaned), wave, localText: cleaned };
   }

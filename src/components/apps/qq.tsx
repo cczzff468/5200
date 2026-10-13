@@ -226,11 +226,12 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 // 多账号 v2（Task 40-2b）：kv 裸键自动按 qq 当前账号作用域；purge 限账号用 kvKeysByPrefix+kvDelRaw
 import { kvGet, kvSet, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv';
+import { AccountAddSheet } from './account-add-sheet';
 // 多账号（Task 40 v2）：注册表/切换/创建走 per-app accounts API；QQ 登录态等 LS 键每次经 accLs(key,'qq')
 // 现算（大号原键，小号 --{id} 后缀）；切换账号不刷新网页，根组件监听 ACCOUNT_CHANGED_EVENT 重读
-import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, clearForceLoginWall, getAccounts, getActiveAccountFor, getActiveAccountIdFor, isForceLoginWallActive, markAccountLoginHistory, parseScopedKey, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, clearForceLoginWall, createAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, isForceLoginWallActive, markAccountLoginHistory, parseScopedKey, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
-import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
+import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, createContact, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 // 生图（锁脸）：照片标签（[图片:描述]/[照片:描述]）提取/生成/规则构建（与微信端共用同一逻辑层，未配置/失败降级文字图片卡片）；
@@ -243,7 +244,7 @@ import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card
 import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
 import type { AlbumRecord } from '@/lib/ios/db';
 import { genId } from '@/lib/ios/db';
-import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount } from '@/lib/contacts';
+import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount, socialNameOf } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import {
   addFriendReq,
@@ -1739,7 +1740,7 @@ function LoginScreen({ onLogin, slot, onBack }: { onLogin: (u: QQUser) => void; 
       const profile = all.find(
         (c) => c.kind === 'user' && (c.altOf === slot.id || c.id === slot.ownerContactId),
       );
-      if (profile && displayNameOf(profile).trim()) setSlotNameShown(displayNameOf(profile).trim());
+      if (profile && socialNameOf(profile).trim()) setSlotNameShown(socialNameOf(profile).trim());
       const id = profile?.qqId?.trim() || profile?.phone?.trim() || profile?.wechatId?.trim() || '';
       if (alive && id) {
         setSlotIdShown(id);
@@ -13975,6 +13976,8 @@ function readQqSwitchableAccounts(activeId: string): PhoneAccount[] {
 function QqDrawerAccountCard({ onPick, onClose }: { onPick: (id: string) => void; onClose: () => void }) {
   const [accounts, setAccounts] = useState<PhoneAccount[]>(() => readQqSwitchableAccounts(getActiveAccountIdFor('qq')));
   const [activeId, setActiveId] = useState<string>(() => getActiveAccountIdFor('qq'));
+  /** 「添加账号」弹层：新建大号/小号，创建后直接登录进入 */
+  const [addOpen, setAddOpen] = useState(false);
   useEffect(() => {
     const refresh = (e: Event) => {
       const detail = (e as CustomEvent<{ app?: string }>).detail;
@@ -14012,10 +14015,10 @@ function QqDrawerAccountCard({ onPick, onClose }: { onPick: (id: string) => void
   const accNameOf = (acc: PhoneAccount): string => {
     if (acc.id === MAIN_ACCOUNT_ID) {
       const mainProfile = profiles.find((c) => c.kind === 'user' && !c.altOf) ?? null;
-      return (mainProfile ? displayNameOf(mainProfile) : '') || mainOwner?.name || '机主';
+      return (mainProfile ? socialNameOf(mainProfile) : '') || mainOwner?.name || '机主';
     }
     const profile = profileOf(acc);
-    return (profile ? displayNameOf(profile) : '') || acc.name;
+    return (profile ? socialNameOf(profile) : '') || acc.name;
   };
   const accNoOf = (acc: PhoneAccount): string =>
     acc.id === MAIN_ACCOUNT_ID ? mainOwner?.qqId || acc.qqId || '' : acc.qqId;
@@ -14049,14 +14052,53 @@ function QqDrawerAccountCard({ onPick, onClose }: { onPick: (id: string) => void
                   <QqAccountBubble name={name} kind="alt" size={44} />
                 )}
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[16px] font-medium leading-tight">{name}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="block truncate text-[16px] font-medium leading-tight">{name}</span>
+                    {acc.grade === 'main' && (
+                      <span className="shrink-0 rounded-[4px] bg-[#1E6FFF]/10 px-1 py-px text-[10.5px] leading-[1.5] text-[#1E6FFF] dark:text-[#4AA3FF]" data-testid={`qq-account-tag-${acc.id}`}>
+                        大号
+                      </span>
+                    )}
+                  </span>
                   <span className="mt-0.5 block truncate text-[13px] text-black/35 dark:text-white/35">{accNoOf(acc)}</span>
                 </span>
                 {isCurrent && <Check className="h-5 w-5 shrink-0 text-[#1E6FFF] dark:text-[#4AA3FF]" aria-hidden="true" />}
               </button>
             );
           })}
+          {/* 添加账号：新建大号/小号（弹层见下），创建后自动登录并出现在列表 */}
+          <button
+            type="button"
+            data-testid="qq-drawer-acc-add"
+            onClick={() => setAddOpen(true)}
+            className={`flex h-[56px] w-full items-center justify-center gap-1.5 text-[14px] text-black/60 active:bg-black/[0.04] dark:text-white/60 dark:active:bg-white/[0.06] ${
+              accounts.length > 0 ? 'border-t border-black/[0.05] dark:border-white/[0.06]' : ''
+            }`}
+          >
+            <span className="grid h-4.5 w-4.5 place-items-center rounded-full bg-[#1E6FFF] text-[12px] leading-none text-white dark:bg-[#4AA3FF]" aria-hidden="true">＋</span>
+            添加账号
+          </button>
         </div>
+
+        {/* 添加账号弹层：创建成功 → 写 QQ 登录态（会话 + 登录历史）→ 切到新账号（根组件事件驱动重读登录态，全程不刷新） */}
+        {addOpen && (
+          <AccountAddSheet
+            onClose={() => setAddOpen(false)}
+            onCreated={(acc, rec) => {
+              setAddOpen(false);
+              try {
+                markAccountLoginHistory('qq', acc.id);
+                clearForceLoginWall('qq');
+                // 先切作用域再写会话：accLs 按当前账号现算，切换后写入的是新账号作用域的会话键
+                switchAccountFor('qq', acc.id);
+                window.localStorage.setItem(accLs(LS_SESSION, 'qq'), rec.id);
+              } catch {
+                // 存储异常忽略
+              }
+              onPick(acc.id);
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -14123,10 +14165,10 @@ function SecurityPage({
   const accNameOf = (acc: PhoneAccount): string => {
     if (acc.id === MAIN_ACCOUNT_ID) {
       const mainProfile = profiles.find((c) => c.kind === 'user' && !c.altOf) ?? null;
-      return (mainProfile ? displayNameOf(mainProfile) : '') || mainOwner?.name || '机主';
+      return (mainProfile ? socialNameOf(mainProfile) : '') || mainOwner?.name || '机主';
     }
     const profile = profileOf(acc);
-    return (profile ? displayNameOf(profile) : '') || acc.name;
+    return (profile ? socialNameOf(profile) : '') || acc.name;
   };
   const accNoOf = (acc: PhoneAccount): string =>
     acc.id === MAIN_ACCOUNT_ID

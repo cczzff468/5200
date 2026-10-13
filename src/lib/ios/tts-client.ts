@@ -33,8 +33,9 @@ export function isTtsConfigured(cfg?: TtsConfig): boolean {
 
 /**
  * 用户是否「配置了语音 API」（设置 App「语音 API」里选了服务商并填了 Key+地址）。
- * 与 isTtsConfigured 的区别：内置语音引擎免配置恒可用（isTtsConfigured 恒 true），
- * 而通话文字聊天用它判定「AI 是否设置语音 API」——配了第三方 API 才语音回复，没配则文字回复。
+ * 与 isTtsConfigured 的区别：内置语音引擎免配置恒可用（isTtsConfigured 恒 true）。
+ * 注意：自 Task 33 起通话中文字聊天不再用本函数决定「AI 是否语音回复」——
+ * 只要配置了声音（内置语音恒可用）通话内文字回复一律同时播报。
  */
 export function hasCustomTtsApi(cfg?: TtsConfig): boolean {
   const c = cfg ?? useSettings.getState().ttsConfig;
@@ -197,6 +198,12 @@ export interface SpeakOptions {
   onProgress?: (ratio: number) => void;
   /** 播放自然结束后的回调（被 stopSpeaking 打断时不触发）；失败仍会抛错不走这里 */
   onEnd?: () => void;
+  /**
+   * 跳过「停掉其它音频源」的互斥（默认 false；仅 API 合成通道需要）。
+   * 语音消息气泡的实时朗读自己已经停过其它音频、且要把播放状态留给气泡 UI，
+   * 传 true 避免把语音气泡自身的播放状态清掉；其它调用方保持默认互斥行为。
+   */
+  keepOthers?: boolean;
 }
 
 /**
@@ -269,6 +276,7 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
       voiceId,
       volume: opts.volume,
       speed: opts.speed,
+      keepOthers: opts.keepOthers,
       onStart: wrapped.onStart,
       onEnd: wrapped.onEnd,
       onProgress: wrapped.onProgress,
@@ -292,7 +300,8 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
 
   stopSpeaking();
   // 与语音消息气泡播放互斥：开始 TTS 朗读前停掉在播的语音气泡
-  stopOtherAudio('tts');
+  //（语音气泡的实时朗读通道传 keepOthers 自己管互斥，避免把自身播放状态清掉）
+  if (!opts.keepOthers) stopOtherAudio('tts');
   const myToken = playToken;
 
   let res: Response;

@@ -215,7 +215,8 @@ import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
-import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, clearForceLoginWall, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, isForceLoginWallActive, markAccountLoginHistory, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
+import { AccountAddSheet } from './account-add-sheet';
+import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, clearForceLoginWall, createAccount, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, isForceLoginWallActive, markAccountLoginHistory, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 import { loginAltSlot, loginWechat, listContacts, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
@@ -227,7 +228,7 @@ import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
 import OfflineMeetingPage from '@/components/apps/offline-meeting';
 import type { OfflineOnlineMsg } from '@/lib/offline-meet';
-import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount } from '@/lib/contacts';
+import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount, socialNameOf } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import {
   addFriendReq,
@@ -2016,7 +2017,7 @@ function LoginScreen({ onLogin, slot, onBack }: { onLogin: (u: WxUser) => void; 
       const profile = all.find(
         (c) => c.kind === 'user' && (c.altOf === slot.id || c.id === slot.ownerContactId),
       );
-      if (profile && displayNameOf(profile).trim()) setSlotNameShown(displayNameOf(profile).trim());
+      if (profile && socialNameOf(profile).trim()) setSlotNameShown(socialNameOf(profile).trim());
       const id = profile?.phone?.trim() || profile?.wechatId?.trim() || profile?.qqId?.trim() || '';
       if (alive && id) {
         setSlotIdShown(id);
@@ -12229,6 +12230,8 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
   }, []);
   /** 「登录小号」自由登录墙（覆盖全页；slot=null 不绑定槽位，用任意小号账密登录） */
   const [loginOpen, setLoginOpen] = useState(false);
+  /** 「添加账号」弹层（新建大号/小号，创建后直接登录进入） */
+  const [addOpen, setAddOpen] = useState(false);
   /** 大号机主资料（跨账号直读大号库；不能用 me——小号视角下 me 是小号身份，Task 40-F 修正） */
   const [mainOwner, setMainOwner] = useState<{ name: string; wechatId: string; avatar: string | null } | null>(null);
   useEffect(() => {
@@ -12322,8 +12325,8 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
             // 显示名与登录后一致（Task 40-S）：大号=机主联系人展示名（昵称优先），小号=档案展示名，回退注册表
             const mainProfile = profiles.find((c) => c.kind === 'user' && !c.altOf) ?? null;
             const name = isMain
-              ? (mainProfile ? displayNameOf(mainProfile) : '') || mainOwner?.name || '机主'
-              : (profileOf(acc) ? displayNameOf(profileOf(acc)!) : '') || acc.name;
+              ? (mainProfile ? socialNameOf(mainProfile) : '') || mainOwner?.name || '机主'
+              : (profileOf(acc) ? socialNameOf(profileOf(acc)!) : '') || acc.name;
             const wxid = isMain ? mainOwner?.wechatId || acc.wechatId : acc.kind === 'anon' ? acc.phone : acc.wechatId;
             const showDelete = managing && !isCurrent && !isMain;
             return (
@@ -12357,7 +12360,14 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
                     <WxAccountBubble name={name} kind={acc.kind === 'anon' ? 'anon' : 'alt'} size={52} />
                   )}
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[16.5px] font-medium">{name}</span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="block truncate text-[16.5px] font-medium">{name}</span>
+                      {acc.grade === 'main' && (
+                        <span className="shrink-0 rounded-[4px] bg-[#07C160]/10 px-1 py-px text-[10.5px] leading-[1.5] text-[#07C160]" data-testid={`wx-account-tag-${acc.id}`}>
+                          大号
+                        </span>
+                      )}
+                    </span>
                     <span className="mt-0.5 block truncate text-[12.5px] text-black/40 dark:text-white/40">微信号：{wxid || '未设置'}</span>
                   </span>
                   {isCurrent && (
@@ -12370,6 +12380,17 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
               </div>
             );
           })}
+
+          {/* 添加账号（新建大号/小号，创建后直接登录进入；弹层见下） */}
+          <button
+            type="button"
+            data-testid="wx-account-add"
+            onClick={() => setAddOpen(true)}
+            className="flex h-[64px] w-full items-center justify-center gap-1.5 rounded-[14px] bg-white text-[14.5px] text-black/70 active:bg-black/[0.03] dark:bg-[#1A1A1A] dark:text-white/70 dark:active:bg-white/[0.06]"
+          >
+            <span className="grid h-5 w-5 place-items-center rounded-full bg-[#07C160] text-[13px] leading-none text-white" aria-hidden="true">＋</span>
+            添加账号
+          </button>
 
           {/* 登录小号入口（Task 41）：小号统一在联系人 App 「小号」tab 创建；创建后不直接出现在列表，
               在这里用小号账密登录成功后才出现（登录历史），登录过的小号切换不再需要登录 */}
@@ -12384,6 +12405,28 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
           </button>
         </div>
       </div>
+
+      {/* 添加账号：新建大号/小号（注册表账号 + 档案联系人由弹层创建）→
+          组装 WxUser 走 onLoginOther（根组件 handleLogin：切作用域 + 会话 + 登录历史 + 回主界面） */}
+      {addOpen && (
+        <AccountAddSheet
+          onClose={() => setAddOpen(false)}
+          onCreated={(acc, rec) => {
+            setAddOpen(false);
+            onLoginOther({
+              id: rec.id,
+              name: displayNameOf(rec),
+              realName: rec.name,
+              nickname: rec.nickname ?? null,
+              avatar: rec.avatar,
+              wechatId: rec.wechatId,
+              phone: rec.phone,
+              qqId: rec.qqId,
+              altOf: acc.id,
+            });
+          }}
+        />
+      )}
 
       {/* 登录小号：自由登录墙覆盖层（slot=null 不绑定槽位；返回关闭不退出微信） */}
       {loginOpen && (

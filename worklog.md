@@ -19127,3 +19127,24 @@ Stage Summary:
 - 交付：①联系人 APP 昵称字段回归（机主/小号都可填，placeholder 注明用途与 AI 不可见）——昵称即 QQ/微信/美团/淘宝里显示的名字：微信/QQ 登录名、会话恢复、资料页、群聊气泡、朋友圈署名全部显示昵称；美团/淘宝会话身份同步本就昵称优先，填了昵称即生效；信息/电话/联系人 APP 仍显示真名；微信资料页改名=改昵称即时生效；存量昵称清空迁移已删除，昵称持久化；②AI 永远不知道机主昵称：社交显示副本 realName 存真名，AI 全链路（人设 ctx/群聊模式行/历史行/引用块/拉黑事件/招呼语/世界书/分享卡/淘宝客服）只传真名——修复 Task 31 漏掉的 wx-group/qq-group「昵称也是 TA」注入与 qq 历史行 me.name 直用；③聊天长按表情包「添加/已添加」：未收藏显示添加（点击入「我的表情」默认分组+toast+面板即时同步），已收藏显示已添加（点击仅提示、不重复入库），微信/QQ 双端
 - 改动文件：src/lib/contacts.ts、src/lib/ios/{contacts-store,mt-ai-engage,tb-share-proxy}.ts、src/components/apps/{bubble-menu,wechat,qq,wx-group,qq-group,contacts,taobao-msg-chat}.tsx
 - 关键决策：social 命名空间隔离——displayNameOf/cachedOwnerName/ownerProfileFor 保持 Task 31 真名口径（AI 邻接层），socialNameOf/withDisplayNames(social) 是唯一昵称入口（纯展示层）；昵称数据不再迁移清除，靠「AI 链路只读 realName/name」的纪律隔离
+---
+Task ID: 33
+Agent: 主协调者 (Z.ai Code)
+Task: ①微信/QQ 切换账号支持「添加账号」——能添加大号也能添加小号（创建即登录）②语音气泡点播放按钮：只要配置了声音，AI 发的静音语音条/文字语音/真语音都能出声 ③语音/视频/电话通话中：配置了声音后，AI 不管是说话还是回复通话内文字消息都有声音（打字发给 AI，AI 回复文字同时开口说出来）
+
+Work Log:
+- 【账号档位·accounts.ts】PhoneAccount 新增 grade 字段（'main'=大号档 / 'alt'=小号档，缺省 alt 兼容存量）；createAccount 增 opts.grade，大号档默认名「大号N」/小号档「小号N」，虚拟手机号/微信号/QQ号生成同小号
+- 【添加账号弹层·account-add-sheet.tsx（新组件）】两步式：选档位（大号=完整身份主账号/小号=小马甲）→ 资料表单（名字必填 + 昵称选填，placeholder 注明「QQ/微信里显示的名字（AI 不可见）」）→ 确认后 createAccount('alt', name, {grade}) + createContact(kind:'user', altOf 关联) + 号码回写注册表 + onCreated 回调（登录动作由宿主完成）；弹层不切账号不写登录态
+- 【微信接入·wechat.tsx】切换账号页账号卡下方新增「添加账号」白卡按钮（保留原「登录小号」）；onCreated 组装 WxUser（name=displayNameOf、realName、nickname、altOf）走 onLoginOther → 根组件 handleLogin 全链路（switchAccountFor 切作用域 + 会话落新账号键 + markAccountLoginHistory + clearForceLoginWall + 回主界面）；账号卡 grade='main' 显示绿色「大号」标记；登录墙槽位名/切换卡片名 displayNameOf → socialNameOf（昵称优先，与登录后 App 内口径一致——修复「切换页显示真名、登录后显示昵称」的不一致）
+- 【QQ 接入·qq.tsx】抽屉「切换账号」弹出卡底部新增「＋添加账号」行；onCreated：markAccountLoginHistory + clearForceLoginWall + switchAccountFor 先切作用域 + 会话写入新账号作用域键（accLs 现算）→ onPick（根组件事件驱动重读登录态，全程不刷新）；卡片行 grade='main' 显示蓝色「大号」标记；卡片名/SecurityPage 名/登录槽位名同样切 socialNameOf
+- 【语音气泡真实发声·tts-client.ts + voice-player.ts】speakUserTts 新增 keepOthers 选项（内置引擎透传 speakBuiltin；API 合成通道跳过 stopOtherAudio——互斥已由语音播放器自己完成，避免把气泡自身播放状态清掉）；voicePlayer.toggle 分流条件从 synth==='builtin' 扩为 synth==='builtin' || contactId（AI 语音消息全走实时朗读）：新版内置通道静音语音条（url=''、带 contactId）点击即用角色音色真实出声（内置引擎免配置恒可用；配了第三方语音 API 用 API 音色），历史存量 synth='builtin' 照旧；toggleBuiltinTts 泛化为 toggleContactTts（speakUserTts 统一链路 + onEnd 收尾），teardown 时 stopSpeaking 一并截断 API 音频与内置引擎；我方文字转语音消息（无 contactId）维持静音模拟不变；voice-bubble.tsx / ai-voice.ts 注释同步
+- 【通话内文字回复播报·chat-call.ts（微信/QQ 语音+视频通话共用引擎）】runTurn：删除 asText（文字条开着且没配 API → 静默文字）分支——回复一律 speakReply TTS 播报，文字条开着时轮次标 via='text'（消息区呈现文字，同时照常出声）；sendText：删除 hasCustomTtsApi 分流——回复恒 via='text' 进消息区 + speakReply 同时播报（TTS 失败文字已在，直接收尾不再 demote）；hasCustomTtsApi 导入移除
+- 【电话 App 同口径·phone.tsx】CallScreen runTurn 流式/非流式两分支同样删除 asText 静默分支：回复一律 await speak(reply)（speak 内置引擎兜底），文字条开着时 via='text'；hasCustomTtsApi 导入移除
+- 【tsc+lint】bunx tsc --noEmit 0 错误；全部改动文件定向 eslint 0 新问题（仅 chat-call.ts memorizeTurn 存量 preserve-manual-memoization，HEAD 既有）
+- 【E2E（agent-browser 393×852，speechSynthesis.speak 拦截记录法）】①语音气泡：播种 AI 静音语音条（url=''+contactId）+ 我方文字转语音（无 contactId）→ 点 AI 气泡 → __ttsSpoke 捕获「你好呀我是小柚呀，想我了吗」+ 气泡 active ✓；点我方气泡 → 无朗读、仅静音进度动画 ✓；②微信语音通话：拨通 → 问候语发声（「喂凡凡呀，在干嘛呢？」）→ 点右上角信息图标开输入条 → 打字发送 → AI 回复「嗯嗯我听得见呀，你说吧～」同时 __ttsSpoke 捕获 + 文字进消息区（截图核对）✓；③微信添加账号：设置 → 切换账号 →「添加账号」→ 大号档 → 凡凡二号/二号昵称 → 创建并登录 → 我页显示「二号昵称」（昵称口径）→ IndexedDB 档案（name=凡凡二号/nickname=二号昵称/altOf）+ 会话落新账号键 + 登录历史 ✓ → 切换页双卡（机主 + 凡凡二号带「大号」标记·当前使用）→ 点机主卡切回，聊天记录独立隔离 ✓；④QQ：登录 20001234 → 抽屉切换卡「＋添加账号」→ 小号档 → 轻轻/轻轻酱 → 创建即登录（会话+历史+切作用域）→ 头部「轻轻酱」→ 卡片行显示昵称+QQ号 → 切回机主消息列表恢复 ✓；⑤电话 App：拨 13900005678 接通问候发声 → call-info-toggle 开文字界面 → 打字发送 → 回复「嗯嗯～我听得见你说什么呀…」同时发声 + 全程对话气泡（语音轮带声波标/我打字绿色/AI 回复白色，截图核对）✓；agent-browser errors 空、dev.log 仅存量 instrumentation Edge 警告
+- 【坑】①主屏三页横向排布，page-dot click 翻页后图标坐标要重测（微信在第 3 页）；②电话 App 通话浮层下点发送，eval 全局找 aria-label 含「发送」会命中背景联系人详情的「发送信息」按钮直接退出通话——必须用 data-testid 精确锚定（call-textbar-send）；③history.back() 会把整个 SPA 退到 about:blank，单页应用内导航要用应用内返回按钮
+
+Stage Summary:
+- 交付：①微信/QQ 切换账号新增「添加账号」——弹层两步选大号/小号档、填名字+昵称（AI 不可见）即创建注册表账号+档案联系人并自动登录（大号档带标记，切换/会话/历史/删除全兼容既有账号体系）；②语音气泡播放全通：AI 发的任何语音（真音频/静音语音条/文字语音）点击播放按钮都按角色音色真实出声（内置语音免配置恒可用，配了第三方 API 用 API 音色），我方文字转语音保持静音模拟；③通话声音全通：微信/QQ 语音/视频通话 + 电话 App 里，AI 免提说话的回复照常有声，通话中点右上角信息图标打字发给 AI，AI 回复文字进消息区/对话记录的同时用角色音色开口说出来（不再要求第三方语音 API，内置语音即出声）
+- 改动文件：src/lib/ios/{accounts,tts-client,voice-player,ai-voice,chat-call}.ts、src/components/apps/{account-add-sheet(新),voice-bubble,wechat,qq,phone,voice-call-screen}.tsx
+- 关键决策：账号 grade 只是展示层档位（大号档功能/数据隔离与普通小号一致，单 main 架构不变）；切换账号列表显示名统一 socialNameOf（昵称优先）与登录后口径对齐；通话内文字回复「文字+声音」双通道是产品语义（via='text' 保证消息区可见，speakReply 保证出声），hasCustomTtsApi 从此不再是通话回复形态的闸门
