@@ -114,9 +114,8 @@ export interface OfflineMeetingPageProps {
   contactId: string;
   /** 用户称呼（addressNameOf 解析结果；空 = 回退「我」） */
   userName: string;
-  /** 机主真实姓名 / 昵称（人设【用户的称呼】段用） */
+  /** 机主真实姓名（人设称呼用；用户规则：昵称不再传入，AI 永远不知道机主昵称） */
   userRealName?: string | null;
-  userNickname?: string | null;
   /** 机主头像（用户消息头显示用；微信/QQ 传 me.avatar，信息端传资料头像） */
   userAvatar?: string | null;
   /** 读取最近 n 条线上聊天（宿主按各 App 消息结构映射） */
@@ -1105,7 +1104,7 @@ function OfflineSettingsPanel({ initial, presets, styles, tpl, meetActive, avail
 
 // ---------------- 主页面 ----------------
 
-export default function OfflineMeetingPage({ app, channel, contactId, userName, userRealName, userNickname, userAvatar, loadRecentMsgs, onBack, onToast }: OfflineMeetingPageProps) {
+export default function OfflineMeetingPage({ app, channel, contactId, userName, userRealName, userAvatar, loadRecentMsgs, onBack, onToast }: OfflineMeetingPageProps) {
   const [contact, setContact] = useState<ContactRecord | null>(null);
   const [contactsAll, setContactsAll] = useState<ContactRecord[]>([]);
   const [loadErr, setLoadErr] = useState('');
@@ -1207,8 +1206,6 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       const persona = buildPersonaSystemPrompt(contact as PersonaSource, {
         channel,
         userName: userNameEff,
-        userRealName: userRealName ?? null,
-        userNickname: userNickname ?? null,
         multiApp: getMemSettings(contactId).share,
         ...(npcExtra ?? {}),
       });
@@ -1235,7 +1232,7 @@ export default function OfflineMeetingPage({ app, channel, contactId, userName, 
       });
       return [persona, wbText, wbRulesBlock(wb), mem, time, directive].filter((s) => s && s.trim()).join('\n\n');
     },
-    [contact, contactsAll, channel, userNameEff, userRealName, userNickname, contactId, app, shownName, charPersonEff],
+    [contact, contactsAll, channel, userNameEff, userRealName, contactId, app, shownName, charPersonEff],
   );
 
   /** 世界背景：世界书分析缓存 → LLM 分析 → 角色资料推断 */

@@ -1154,8 +1154,6 @@ async function runProxyDecision(pid: string): Promise<void> {
   const persona = buildPersonaSystemPrompt(contact, {
     channel: app === 'wx' ? '微信' : 'QQ',
     userName: owner?.realName || null,
-    userRealName: owner?.realName || null,
-    userNickname: owner?.nickname || null,
     ownerName: owner?.realName || null,
     accountId: getActiveAccountIdFor(app as AccountApp),
     // 跨 App 身份与记忆感知（与 proactive-msg/friend-state 等代际调用点同口径；按每联系人互通开关）

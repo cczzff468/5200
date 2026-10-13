@@ -131,17 +131,23 @@ function randInt(min: number, max: number): number {
 /**
  * 展示名：备注 > 昵称 > 真实名字。
  * QQ/微信等社交 App 的联系人显示统一走这里（备注/昵称不是真实名字）。
+ * 用户规则：机主本人（kind='user'）恒显示真实名字——昵称对机主不生效（AI 也不知道机主昵称），
+ * 保证微信个人资料页改名字后显示层立刻生效（不会被存量昵称顶住）。
  */
-export function displayNameOf(c: Pick<ContactRecord, 'name' | 'nickname'> & { remark?: string | null }): string {
+export function displayNameOf(
+  c: Pick<ContactRecord, 'name' | 'nickname'> & { remark?: string | null; kind?: string | null }
+): string {
+  if (c.kind === 'user') return c.name;
   const rk = c.remark?.trim();
   if (rk) return rk;
   const nick = c.nickname?.trim();
   return nick ? nick : c.name;
 }
 
-/** 把一组联系人的 name 替换成展示名（备注/昵称优先，仅供 QQ/微信/信息等 App 内部显示用，真实名字不变） */
+/** 把一组联系人的 name 替换成展示名（备注/昵称优先，仅供 QQ/微信/信息等 App 内部显示用，真实名字不变）；
+ *  机主本人（kind='user'）跳过——恒显示真实名字（用户规则：AI 不知道机主昵称，展示层同步废除） */
 export function withDisplayNames(list: ContactRecord[]): ContactRecord[] {
-  return list.map((c) => (c.remark?.trim() || c.nickname?.trim() ? { ...c, name: displayNameOf(c), realName: c.realName ?? c.name } : c));
+  return list.map((c) => (c.kind === 'user' || !(c.remark?.trim() || c.nickname?.trim()) ? c : { ...c, name: displayNameOf(c), realName: c.realName ?? c.name }));
 }
 
 // ---------------- 名字 / 昵称区分（AI 称呼与成员解析共用） ----------------
@@ -153,15 +159,12 @@ export function withDisplayNames(list: ContactRecord[]): ContactRecord[] {
 export type AddressMode = 'name' | 'nickname';
 
 /**
- * AI 称呼名：按称呼方式取「名字」或「昵称」。
+ * AI 称呼名：恒用「真实名字」（旧「用昵称呼叫」设置已废除，mode 仅保留兼容旧存储）。
  * 名字/昵称混淆修复的核心取值函数——原始记录（name=真名）与展示副本（name=昵称、realName=原真名）
- * 两种形状都能正确取到目标称呼：
- * - mode 'name'：真实姓名优先（副本 realName / 原始 name），无真名回退 name；
- * - mode 'nickname'：昵称存在时用昵称，否则回退真名。
+ * 两种形状都能正确取到真名：副本 realName / 原始 name，无真名回退 name；昵称永不返回。
  */
-export function addressNameOf(c: { name: string; nickname?: string | null; realName?: string | null }, mode: AddressMode): string {
-  const nick = c.nickname?.trim() ?? '';
-  if (mode === 'nickname' && nick) return nick;
+export function addressNameOf(c: { name: string; nickname?: string | null; realName?: string | null; kind?: string | null }, _mode?: AddressMode): string {
+  void _mode;
   const real = c.realName?.trim() ?? '';
   return real || c.name;
 }
@@ -196,14 +199,11 @@ export function nameVariantHit(variants: string[], n: string): boolean {
 }
 
 /**
- * 成员格点显示名（群聊设置页成员瓦片用）：有昵称时按用户设置显示
- * 「凡凡（凑凑）」（用名字模式，名字昵称都能对上号）或「凑凑」（用昵称模式）；无昵称显示名字。
+ * 成员格点显示名（群聊设置页成员瓦片用）：机主瓦片恒显示真名（机主昵称已废除——AI 不知道、展示层也不再强调）。
  */
-export function meTileLabel(c: { name: string; nickname?: string | null; realName?: string | null }, mode: AddressMode): string {
-  const shown = addressNameOf(c, mode);
-  const nick = c.nickname?.trim() ?? '';
-  if (mode === 'name' && nick && nick !== shown) return `${shown}（${nick}）`;
-  return shown;
+export function meTileLabel(c: { name: string; nickname?: string | null; realName?: string | null; kind?: string | null }, _mode?: AddressMode): string {
+  void _mode;
+  return addressNameOf(c);
 }
 
 /** 拥有独立好友状态的社交 App（QQ / 微信 / 信息：一个 App 添加好友不影响其他 App） */

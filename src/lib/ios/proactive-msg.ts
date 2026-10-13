@@ -702,8 +702,6 @@ async function generateProactiveText(app: ProactiveApp, contact: ContactRecord, 
   const persona = buildPersonaSystemPrompt(contact, {
     channel: app === 'wx' ? '微信' : app === 'qq' ? 'QQ' : '短信',
     userName: owner?.realName || null,
-    userRealName: owner?.realName || null,
-    userNickname: owner?.nickname || null,
     ownerName: owner?.realName || null,
     multiApp: getMemSettings(contact.id).share,
     accountId: getActiveAccountIdFor(app as AccountApp),
@@ -719,7 +717,8 @@ async function generateProactiveText(app: ProactiveApp, contact: ContactRecord, 
   // 社交动态感知（与三端聊天同口径）：最近的朋友圈/QQ空间动态（每条带归属标注）——
   // 主动消息也能自然提起动态话题；userName 传展示名（与动态存储/作者匹配口径一致），
   // userRealName 传真实名字（标签与归属说明用真名称呼用户）
-  const ownerDisplay = owner?.nickname?.trim() || owner?.realName || '用户';
+  // 用户规则：机主昵称已废除（AI 不知道、展示层也不再用）——动态匹配/称呼恒用真名
+  const ownerDisplay = owner?.realName || '用户';
   const momentsBlock = buildMomentsChatBlock({
     contactId: contact.id,
     app,
@@ -793,8 +792,6 @@ async function decideAutonomous(app: ProactiveApp, contact: ContactRecord, npcEx
   const persona = buildPersonaSystemPrompt(contact, {
     channel: app === 'wx' ? '微信' : app === 'qq' ? 'QQ' : '短信',
     userName: owner?.realName || null,
-    userRealName: owner?.realName || null,
-    userNickname: owner?.nickname || null,
     ownerName: owner?.realName || null,
     multiApp: getMemSettings(contact.id).share,
     accountId: getActiveAccountIdFor(app as AccountApp),
@@ -808,7 +805,8 @@ async function decideAutonomous(app: ProactiveApp, contact: ContactRecord, npcEx
     altMainRelation: contact.relation?.trim() || '',
   });
   // 社交动态 + 跨 App 近况（与三端聊天同口径）：自主决策同样要基于人设/记忆/动态/跨 App 上下文
-  const ownerDisplay = owner?.nickname?.trim() || owner?.realName || '用户';
+  // 用户规则：机主昵称已废除（AI 不知道、展示层也不再用）——动态匹配/称呼恒用真名
+  const ownerDisplay = owner?.realName || '用户';
   const momentsBlock = buildMomentsChatBlock({
     contactId: contact.id,
     app,

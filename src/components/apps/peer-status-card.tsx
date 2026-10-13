@@ -129,9 +129,9 @@ export default function PeerStatusCard({
         listContacts().catch(() => [] as ContactRecord[]),
       ]);
       if (seq !== seqRef.current) return;
-      const realName = op?.realName || op?.nickname || '';
-      const nickname = op?.nickname || '';
-      const userName = addressNameOf({ name: realName, nickname, realName }, st.addressMode);
+      // 机主称呼：恒真名（用户规则：AI 永远不知道机主昵称，userNickname 不再下传）
+      const realName = op?.realName || '';
+      const userName = addressNameOf({ name: realName, realName }, st.addressMode);
       // 最近聊天（kv 快照实时；wx/qq 私聊为空时记忆库自带群聊兜底）
       const convo = memRecentConvo(contact.id, app).slice(-10);
       const recentChats = convo.map((t) => ({ role: t.role === 'me' ? ('user' as const) : ('assistant' as const), text: t.text }));
@@ -169,7 +169,6 @@ export default function PeerStatusCard({
           now: fmtDate(new Date()),
           userName: userName || null,
           userRealName: realName || null,
-          userNickname: nickname || null,
           multiApp: getMemSettings(contact.id).share,
           // 多账号关系感知：小号下生成状态卡读分账号关系（与机主身份同账号口径）
           accountId: getActiveAccountIdFor(app),

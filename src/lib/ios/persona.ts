@@ -56,13 +56,10 @@ export interface NpcCircleEntry {
 }
 
 export interface PersonaPromptCtx {
-  /** 聊天对面的用户称呼名（已按用户「称呼方式」设置解析：默认名字「凡凡」，选了用昵称才是「凑凑」）；
-   *  未知（如陌生来电）传 null → 文案用「用户」 */
+  /** 聊天对面的用户称呼名（恒为用户真实名字；旧「用昵称呼叫」设置已废除）；
+   *  未知（如陌生来电）传 null → 文案用「用户」。
+   *  用户规则：AI 永远不知道用户的昵称——人设不注入任何昵称信息，请勿在此添加昵称字段 */
   userName?: string | null;
-  /** 用户真实姓名（如「凡凡」）：与昵称同时存在时注入【用户的称呼】段，AI 不能把两者当成两个人 */
-  userRealName?: string | null;
-  /** 用户昵称（如「凑凑」）：只是昵称，不是正式名字，更不是另一个人 */
-  userNickname?: string | null;
   /** NPC 场景：聊天中用户扮演的归属角色名 */
   ownerName?: string | null;
   /** 场景渠道名，如 微信 / QQ / 短信 / 语音通话 */
@@ -96,8 +93,8 @@ export interface PersonaPromptCtx {
   /** 陌生身份模式（用户规则：换号/匿名联系时 AI 不知道对面是谁）：
    *  - 'caller'：电话/视频通话——来电的是一个 AI 不认识的陌生号码；
    *  - 'text'：文字渠道——消息/好友申请来自一个 AI 不认识的身份（陌生号码/陌生账号）。
-   *  生效时：开场句改写为陌生语义（不再「你现在是{user}XX里的联系人」）；【用户的称呼】段
-   *  不注入（userRealName/userNickname 被忽略）；【与X的关系】/NPC 关系行替换为【来者不认识】段；
+   *  生效时：开场句改写为陌生语义（不再「你现在是{user}XX里的联系人」）；用户称呼/关系
+   *  段不注入；【与X的关系】/NPC 关系行替换为【来者不认识】段；
    *  多端身份与记忆段（multiApp）与小号摘录段不注入。
    *  大号聊天、已建立分账号关系（relationByAcc[accId]）的来电/消息不传此参数，行为与旧版完全一致。 */
   strangerMode?: 'caller' | 'text';
@@ -174,14 +171,12 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
   const userNameRaw = stranger ? '' : clean(ctx.userName);
   const userFallback = !stranger && !userNameRaw; // userName 为空回退到字面量「用户」：需要注明是占位词
   const user = stranger ? '对方' : userNameRaw || '用户';
-  // 用户的名字/昵称（【用户的称呼】段注入用）：两者都存在且不同时才注入
-  const userReal = clean(ctx.userRealName);
-  const userNick = clean(ctx.userNickname);
   const name = clean(peer.name) || '对方';
   // 真名/昵称关系：展示层用昵称替换了 name 时（副本 realName 存原 name），或原始数据里
   // name≠nickname 时，角色除了「平时被叫的名字」还有一个大名——必须告知，否则别人用
-  // 真名叫 TA 时角色会说「哪来的XX」（不承认自己的真名）
-  const nick = clean(peer.nickname);
+  // 真名叫 TA 时角色会说「哪来的XX」（不承认自己的真名）。
+  // 用户规则：USER（机主本人）的人设永远不注入昵称——AI 不知道机主的昵称
+  const nick = peer.kind === 'user' ? '' : clean(peer.nickname);
   const realName =
     clean(peer.realName) || (nick && nick !== name ? clean(peer.name) : '');
   const shownName = nick || name;
@@ -245,15 +240,6 @@ export function buildPersonaSystemPrompt(peer: PersonaSource, ctx: PersonaPrompt
       : []),
     '',
     ...nameLines,
-    // 名字/昵称区分（用户数据同时有名字与昵称时注入）：明确告知两者指同一个人，杜绝「凑凑是谁」式混淆；
-    // 软件上显示的名字只是昵称，被问「TA 是谁」时报真实名字（陌生模式不注入：对面的身份是未知的）
-    ...(userNick && userReal && userNick !== userReal
-      ? [
-          `【用户的称呼】用户的名字（真实名字）是${userReal}，昵称是${userNick}——软件上显示的「${userNick}」只是昵称，不是真实名字。`,
-          `「${userNick}」只是 TA 的昵称，不是另一个人，也不是什么正式名字——「${userReal}」和「${userNick}」指的都是同一位用户；有人问「${userReal}」是谁、或问这位用户叫什么名字时，回答真实名字「${userReal}」；绝不能把「${userNick}」当成一个新出现的人，也不能把「${userNick}」当成正式名字。`,
-          `平时称呼这位用户要用 TA 的真实名字「${userReal}」，不要用昵称「${userNick}」称呼 TA——昵称只是软件里的显示用名，你叫 TA 时用真名「${userReal}」（用户明确要求过）。`,
-        ]
-      : []),
     `【身份】${identity.join('，')}`,
     ...(facts.length ? [`【基础资料】${facts.join('；')}`] : []),
     `【性格】${persona || '按资料自然呈现，像一个有血有肉的真实的人'}`,

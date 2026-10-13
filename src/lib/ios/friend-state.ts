@@ -438,8 +438,6 @@ async function buildReqSystem(
   app: FriendDelApp,
   contact: ContactRecord,
   userName: string,
-  userRealName: string | null,
-  userNickname: string | null,
   scene: 'apply' | 'reply' | 'welcome' = 'apply',
 ): Promise<string> {
   const sceneRules: Record<'apply' | 'reply' | 'welcome', string[]> = {
@@ -450,8 +448,6 @@ async function buildReqSystem(
   const persona = buildPersonaSystemPrompt(contact, {
     channel: BLOCK_CHANNEL[app],
     userName: userName || null,
-    userRealName,
-    userNickname,
     multiApp: getMemSettings(contact.id).share,
     // 多账号关系感知：小号侧申请/回复/欢迎读 relationByAcc 分账号关系，不再恒用大号全局 relation
     // （本模块的删除/申请状态本就按账号作用域，同口径）
@@ -508,13 +504,12 @@ async function callLlmTwoTier(system: string, userContent: string): Promise<stri
 /** 按人设 + 记忆生成一条「被删好友想加回来」的验证留言 */
 async function genCharReqMessage(app: FriendDelApp, contact: ContactRecord): Promise<string | null> {
   // 多账号 v2：机主资料按删除事件所属 App（wx/qq）的当前账号取
+  // 用户规则：AI（好友申请决策）永远不知道机主昵称——机主身份只取真名
   const owner = await ownerProfileFor(app).catch(() => null);
-  const userRealName = owner?.realName?.trim() || null;
-  const userNickname = owner?.nickname?.trim() || null;
-  const userName = userNickname || userRealName || '用户';
+  const userName = owner?.realName?.trim() || '用户';
   const channel = BLOCK_CHANNEL[app];
 
-  const system = await buildReqSystem(app, contact, userName, userRealName, userNickname);
+  const system = await buildReqSystem(app, contact, userName);
   const userContent = [
     `【重要情境】你发现你被「${userName}」删除了好友（${channel}上你们已经不是好友了）。`,
     `- 你很难过/意外/生气（按你的人设和你们的关系来），你决定发一条好友申请把 TA 加回来。`,
@@ -527,15 +522,12 @@ async function genCharReqMessage(app: FriendDelApp, contact: ContactRecord): Pro
   return text || null;
 }
 
-/** 取机主称呼三元组（线程回复生成共用；v2 多账号：按所属 App 当前账号取「我」的资料） */
-async function ownerTriplet(
-  app: FriendDelApp,
-): Promise<{ userName: string; userRealName: string | null; userNickname: string | null }> {
+/** 取机主称呼名（线程回复生成共用；v2 多账号：按所属 App 当前账号取「我」的资料）。
+ *  用户规则：AI（好友申请决策）永远不知道机主昵称——恒返回真名 */
+async function ownerTriplet(app: FriendDelApp): Promise<{ userName: string }> {
   const owner = await ownerProfileFor(app).catch(() => null);
-  const userRealName = owner?.realName?.trim() || null;
-  const userNickname = owner?.nickname?.trim() || null;
-  const userName = userNickname || userRealName || '用户';
-  return { userName, userRealName, userNickname };
+  const userName = owner?.realName?.trim() || '用户';
+  return { userName };
 }
 
 /**
@@ -551,8 +543,8 @@ export async function genCharThreadReply(
   scene: 'reply' | 'welcome',
 ): Promise<string | null> {
   if (!(contact.persona ?? '').trim()) return null;
-  const { userName, userRealName, userNickname } = await ownerTriplet(app);
-  const system = await buildReqSystem(app, contact, userName, userRealName, userNickname, scene);
+  const { userName } = await ownerTriplet(app);
+  const system = await buildReqSystem(app, contact, userName, scene);
   const lines = thread.slice(-8).map((m) => `${m.who === 'me' ? userName : contactRealNameSafe(contact)}：${m.text}`);
   const ask =
     scene === 'reply'
@@ -719,7 +711,7 @@ export async function decideCharFriendReq(
   thread: FriendReqThreadMsg[],
 ): Promise<FriendDecision | null> {
   if (!(contact.persona ?? '').trim()) return null;
-  const { userName, userRealName, userNickname } = await ownerTriplet(app);
+  const { userName } = await ownerTriplet(app);
   const channel = BLOCK_CHANNEL[app];
   // 【披露门控（用户最新规则）】默认纯陌生人（零大号记忆/零大号关系读取）；
   // 申请人在验证消息里亮明身份（或承认猜测）→ AI「认出 TA」，切认出口径 + 解锁大号记忆
@@ -790,8 +782,6 @@ export async function decideCharFriendReq(
   const persona = buildPersonaSystemPrompt(contact, {
     channel,
     userName: userName || null,
-    userRealName,
-    userNickname,
     multiApp: getMemSettings(contact.id).share,
     // 多账号关系感知（与上方披露门控配套）：有分账号关系记录时按 relationByAcc[当前小号] 解析，
     // 不再恒用大号全局 relation——小号处出来的独立关系不再被大号关系覆盖

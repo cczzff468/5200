@@ -72,9 +72,8 @@ export interface CallFollowupPayload {
   replyCount?: number;
   /** 通话媒体（Task 22 视频通话）：video=视频通话——服务端补媒体说明，AI 续聊文字按视频口径；缺省语音 */
   media?: 'voice' | 'video';
-  /** 机主身份（真实名字 + 昵称）：AI 知道软件上显示的名字只是昵称，被问是谁报真名 */
+  /** 机主称呼（真实名字；用户规则：AI 永远不知道机主昵称，userNickname 不再下传） */
   userRealName?: string;
-  userNickname?: string;
   /** 多账号关系感知：当前账号 id（小号续聊读分账号关系；不传 = 大号口径） */
   accountId?: string;
   /** 陌生来电（多账号）：匿名号/未登记分账号关系的小号拨出——AI 不知道来电人是谁，

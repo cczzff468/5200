@@ -131,14 +131,10 @@ async function buildReachSystem(
   targetApp: BlockApp,
   contact: ContactRecord,
   userName: string,
-  userRealName: string | null,
-  userNickname: string | null,
 ): Promise<string> {
   const persona = buildPersonaSystemPrompt(contact, {
     channel: BLOCK_CHANNEL[targetApp],
     userName: userName || null,
-    userRealName,
-    userNickname,
     multiApp: getMemSettings(contact.id).share,
     // 多账号关系感知：跨 App 找人落在目标 App 当前账号名下（与下方 kv 作用域同账号），
     // 分账号关系按该账号解析，不再恒用大号全局 relation
@@ -173,18 +169,16 @@ async function reachOne(
   // byChar 方向：角色在目标 App 也拉黑着用户 → 不去那边找（自己刚拉黑对方还去打招呼，语义别扭）
   if (direction === 'byChar' && loadBlock(targetApp, contact.id).byChar === true) return;
 
-  let owner: { realName: string; nickname: string | null } | null = null;
+  let owner: { realName: string } | null = null;
   try {
     owner = await ownerProfileFor(targetApp);
   } catch {
     owner = null;
   }
-  const userRealName = owner?.realName?.trim() || null;
-  const userNickname = owner?.nickname?.trim() || null;
-  // 用户反馈：AI 一直用昵称呼叫用户——统一真名优先（昵称只是软件显示名，不作为对用户的称呼）
-  const userName = userRealName || userNickname || '用户';
+  // 用户规则：AI 永远不知道机主的昵称——机主身份只取真名
+  const userName = owner?.realName?.trim() || '用户';
 
-  const system = await buildReachSystem(targetApp, contact, userName, userRealName, userNickname);
+  const system = await buildReachSystem(targetApp, contact, userName);
   const userContent =
     direction === 'byUser'
       ? [
@@ -321,8 +315,8 @@ function armBlockCall(blockedApp: BlockApp, contactId: string, direction: ReachD
       let me: string | null = null;
       try {
         const o = await ownerProfileFor(blockedApp);
-        // 真名优先（与 reachOne 同口径：昵称只是软件显示名，不作为对用户的称呼）
-        me = o?.realName?.trim() || o?.nickname?.trim() || null;
+        // 用户规则：AI 永远不知道机主昵称——机主身份恒真名
+        me = o?.realName?.trim() || null;
       } catch {
         me = null;
       }

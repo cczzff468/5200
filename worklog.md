@@ -19081,3 +19081,23 @@ Stage Summary:
 - 交付：引用全面开放——文字/图片/表情/语音/文字图片/位置/歌曲都能长按引用，引用块按源类型显示迷你缩略图/语音图标（微信胶囊+QQ 引用卡两套样式，对照用户截图的「Z：[图]」形态）；AI 学会引用（消息门牌号 [M数字]+[引用:编号] 标记→引用块）与拍一拍（[拍一拍:文案] 文案按人设/记忆/上下文自主决定）；双击聊天两侧头像拍一拍（拍对方/拍自己，系统行带我在个人资料/设置里配的文案）并即时触发 AI 回合——AI 知道被拍、知道文案、能按人设反应甚至拍回来；拍一拍事件双向按真名进 AI 上下文；微信个人资料除头像/拍一拍外（名字/性别/地区/手机号/微信号）全部全局写回联系人档案跨 App 生效，QQ 设置新增「头像双击动作」编辑拍一拍文案（两 App 文案按账号隔离互不影响）
 - 改动文件：src/lib/chat-rich.ts（quote/pat 标记+规则+stripMsgHandleText）、src/components/apps/wechat.tsx（编号映射/引用挂载/拍一拍/头像双击/资料页编辑/引用块缩略图）、src/components/apps/qq.tsx（同能力移植+设置页头像双击动作+QQ 引用卡预览）
 - 已知边界：AI 引用/拍一拍为提示词引导行为（模型偶尔不规范输出由门牌号剥除+标记解析双兜底）；群聊引擎（wx-group/qq-group）不含引用/拍一拍教学；后台接力投递的 [引用:编号] 按落盘记录重算映射，会话中途删消息才可能编号漂移
+
+---
+Task ID: 31
+Agent: 主协调者 (Z.ai Code)
+Task: ①修复微信个人资料界面修改没反应 ②AI 规则/决策里 user（用户）人设的「昵称」字段全部删除——AI 永远不知道机主的昵称（含联系人添加好友决策链路）
+
+Work Log:
+- 【根因诊断·资料页没反应】机主 USER 联系人设了昵称时，withDisplayNames/displayNameOf（备注>昵称>名字）把 name 替换成昵称——微信 loadContacts 出的 me.name=昵称，个人资料页改名字保存成功（updateContact 落库+contact-updated 广播都正常）但 reloadContacts 后显示层又回退昵称，用户看到「改了没反应」
+- 【展示层修复·contacts.ts】displayNameOf 加 kind 参数：kind='user' 恒返回真实名字（备注/昵称对机主不再生效，改名字立即生效）；withDisplayNames 跳过 user（不再写 realName 副本）；addressNameOf 恒返回真名（旧「用昵称呼叫」mode 参数保留兼容但忽略）；meTileLabel 机主瓦片恒真名
+- 【人设层封死·persona.ts】PersonaPromptCtx 删除 userRealName/userNickname 字段；【用户的称呼】段（昵称科普三行）整体删除——AI 只通过 ctx.userName（恒真名）知道用户；buildPersonaSystemPrompt 内 USER peer 忽略 nickname（kind==='user' 时 nick=''，双保险防上游漏改）；strangerMode 注释同步
+- 【AI 决策链全清理·29 文件】所有把机主昵称传给 AI 的点位删净：微信/qq buildPersonaPrompt、wx-group/qq-group 群回合、chat.tsx（信息 buildPersonaPrompt+未接来电留言 body）、phone.tsx（通话决策/续聊 3 处）、chat-call.ts（answer/turn/followup body 3 处）、offline-meeting.tsx（Props+ctx）、peer-status-card.tsx（状态卡 body）、proactive-call.ts（留言+主动来电决策）、proactive-msg.ts（主动消息 2 处+动态 ownerDisplay 恒真名）、cross-app-reach.ts（拉黑后跨 App 找人：buildReachSystem 签名收敛+userName 恒真名）、friend-state.ts（好友申请决策 buildReqSystem/ownerTriplet/genCharReqMessage——「添加好友」链路 AI 不再知道昵称，userName 恒真名）、group-social/quit-flow（建群开场白/退群挽留私信）、mt-ai-engage/tb-ai-engage/tb-proxy-ai/music-ai（代付/淘宝/一起听）；4 个 API route（phone answer/turn/followup/proactive）+character-status：user 参数类型收敛为 {name}，body 里 userNickname 解析删除（服务端直接忽略）
+- 【数据层收敛·contacts-store.ts】ownerProfileFor 返回类型删 nickname 字段（杜绝后续误用）；新增一次性迁移 owner-nickname-purge-v1（listContacts 惰性触发）：清空所有 kind='user' 联系人的存量昵称，全部 put 成功后才写 localStorage 标记（失败可重试，避免空库首跑漏清——实测抓出并修复该时序 bug）；清理后广播 contact-updated
+- 【联系人 App 表单·contacts.tsx】USER 编辑/新建表单删除「昵称」输入框（仅 CHAR/NPC 可填昵称）；USER 详情页隐藏「昵称」行；名字 placeholder「你的昵称」→「你的名字」；保存时 USER 强制 nickname:null（编辑存量档案也会清掉）；asAlt 小号档案同口径
+- 【E2E（agent-browser 393×852）】播种机主（name=凡凡 + 故意带存量昵称=凑凑）+ AI 小柚 → reload → IndexedDB 实测 nickname=null（迁移自动清空）→ 微信手机号登录 → 个人资料页名字行显示「凡凡」（非昵称）→ 点名字行改「凡凡测试」保存 → 行立即变「名字凡凡测试」+ IndexedDB name=凡凡测试（核心修复验证）→ 改回「凡凡」✓ → 联系人 App USER 编辑表单：无「昵称」字段、placeholder「你的名字」✓ → 小柚会话发「我的昵称是什么」→ AI 语音回复 → 再问「我叫什么名字？听说过我有什么昵称吗」→ AI 文字回「你叫凡凡呀～」（知道真名、不知昵称）✓；测试档案已清、浏览器已关
+- 【既有问题】chat-call.ts:540 memorizeTurn 的 react-hooks/preserve-manual-memoization lint 错误在 HEAD 上就存在（stash 验证），非本次引入，未处理；bun run lint 全量跑内存超限 SIGKILL（老问题），改用定向 eslint
+
+Stage Summary:
+- 交付：①微信个人资料页改名/改资料即时生效（根因=机主昵称顶住显示层：展示层对 USER 跳过昵称+存量昵称一次性清空迁移）；②AI 永远不知道机主昵称——人设注入（persona ctx 字段删除+USER peer 忽略）、29 个 AI 决策/engagement 调用点（好友申请决策/来电决策/状态卡/主动消息/拉黑找人/群聊/挽留/代付/淘宝/一起听）、4 个 API 路由的 userNickname 全部删净，联系人 App USER 表单删除昵称字段、保存时强制清空，存量数据迁移清空
+- 改动文件：src/lib/contacts.ts、src/lib/ios/{persona,contacts-store,friend-state,cross-app-reach,proactive-msg,proactive-call,chat-call,quit-flow,group-social,mt-ai-engage,music-ai,tb-ai-engage,tb-proxy-ai,call-followup,call-decision}.ts、src/components/apps/{contacts,chat,phone,peer-status-card,offline-meeting,wechat,qq,wx-group,qq-group}.tsx、src/app/api/{character-status,phone/answer,phone/turn,phone/followup,phone/proactive}/route.ts
+- 关键决策：昵称字段保留在 ContactRecord 类型（CHAR/NPC 还在用），机主（USER）从展示/人设/数据三层全面跳过；ctx.userName 恒真名（addressMode 设置此前已废除）

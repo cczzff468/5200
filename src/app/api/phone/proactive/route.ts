@@ -72,7 +72,8 @@ function parseRecentChats(raw: unknown): RecentChatItem[] {
 function buildProactiveSystemPrompt(
   peer: Parameters<typeof buildPersonaSystemPrompt>[0],
   hasChat: boolean,
-  user?: { name: string | null; realName: string | null; nickname: string | null },
+  /** 机主称呼（前端直传真名；用户规则：AI 永远不知道机主昵称，body 里的 userNickname 忽略） */
+  user?: { name: string | null },
   /** 配角圈/归属者资料/背景近况（客户端已随 contact 发送，此前被服务端丢弃；现接入与 turn 路由同口径） */
   npcExtra?: { ownerLabel?: string; npcCircle?: Parameters<typeof buildPersonaSystemPrompt>[1]['npcCircle']; ownerCard?: string[]; backgroundNotes?: string[] },
   /** 多账号关系感知：当前账号 id（不传 = 大号口径） */
@@ -81,8 +82,6 @@ function buildProactiveSystemPrompt(
   return buildPersonaSystemPrompt(peer, {
     channel: '决定此刻要不要主动给机主打一通电话',
     userName: user?.name ?? null,
-    userRealName: user?.realName ?? null,
-    userNickname: user?.nickname ?? null,
     ...npcExtra,
     accountId: accountId ?? undefined,
     extraRules: [
@@ -162,15 +161,14 @@ export async function POST(req: NextRequest) {
   //「这次来电可能是被拉黑后来电话找机主」，call 时 reason 带上这层动机作为接通开场
   const crossBlockedIn = typeof root.crossBlockedIn === 'string' ? root.crossBlockedIn.trim().slice(0, 20) : '';
 
-  // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
+  // 机主称呼：前端直传真名（用户规则：AI 永远不知道机主昵称——body 里的 userNickname 直接忽略）
   const userReal = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
-  const userNick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
   // 多账号关系感知 + 配角圈注入（客户端已发送的数据此前在服务端被丢弃）
   const accountId = typeof root.accountId === 'string' && root.accountId.trim() ? root.accountId.trim().slice(0, 40) : undefined;
   const system = buildProactiveSystemPrompt(
     peer,
     recentChats.length > 0,
-    userReal || userNick ? { name: userReal || userNick, realName: userReal || null, nickname: userNick || null } : undefined,
+    userReal ? { name: userReal } : undefined,
     {
       ownerLabel: inline?.ownerLabel,
       npcCircle: inline?.npcCircle,

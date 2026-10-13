@@ -115,7 +115,7 @@ function normalizeStatus(raw: unknown): CharacterStatusCard | null {
  *  accountId：多账号关系感知（小号读 relationByAcc 分账号关系；不传 = 大号口径） */
 function buildStatusSystemPrompt(
   peer: Parameters<typeof buildPersonaSystemPrompt>[0],
-  user?: { name: string | null; realName: string | null; nickname: string | null },
+  user?: { name: string | null },
   channel = '微信',
   multiApp?: boolean,
   npcExtra?: { ownerLabel?: string; npcCircle?: Parameters<typeof buildPersonaSystemPrompt>[1]['npcCircle']; ownerCard?: string[]; backgroundNotes?: string[] },
@@ -124,8 +124,6 @@ function buildStatusSystemPrompt(
   return buildPersonaSystemPrompt(peer, {
     channel,
     userName: user?.name ?? null,
-    userRealName: user?.realName ?? null,
-    userNickname: user?.nickname ?? null,
     multiApp,
     accountId: accountId ?? undefined,
     ...npcExtra,
@@ -184,14 +182,13 @@ export async function POST(req: NextRequest) {
   const seed = typeof body.seed === 'string' || typeof body.seed === 'number' ? String(body.seed).slice(0, 24) : '';
   const multiApp = typeof body.multiApp === 'boolean' ? body.multiApp : undefined;
 
-  // 机主身份：前端直传（称呼名 + 真名 + 昵称），与聊天人设口径一致
+  // 机主称呼：前端直传真名（用户规则：AI 永远不知道机主昵称——body 里的 userNickname 直接忽略）
   const userName = typeof body.userName === 'string' ? body.userName.trim().slice(0, 30) : '';
   const userRealName = typeof body.userRealName === 'string' ? body.userRealName.trim().slice(0, 30) : '';
-  const userNickname = typeof body.userNickname === 'string' ? body.userNickname.trim().slice(0, 30) : '';
 
   const system = buildStatusSystemPrompt(
     peer,
-    userRealName || userNickname ? { name: userName || userRealName || userNickname, realName: userRealName || null, nickname: userNickname || null } : undefined,
+    userName || userRealName ? { name: userName || userRealName } : undefined,
     APP_CHANNEL[app],
     multiApp,
     // 配角圈/归属者资料/背景近况：客户端已随 contact 发送（此前在服务端被丢弃），现接入

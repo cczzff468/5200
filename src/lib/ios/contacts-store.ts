@@ -143,8 +143,37 @@ function sortDesc(list: ContactRecord[]): ContactRecord[] {
 /** 机主显示名缓存（listContacts 每次刷新；仅客户端联系人加载后非空） */
 let ownerNameCache = '';
 
+/**
+ * 一次性迁移（owner-nickname-purge-v1，用户规则「AI 不知道我的昵称」）：
+ * 机主（USER）昵称全面废除——展示层/人设层已跳过，这里把存量 USER 联系人的昵称一并清空，
+ * 让数据层彻底收敛（昵称字段从此只有 CHAR/NPC 在用）。幂等（localStorage 标记）。
+ */
+const OWNER_NICKNAME_PURGE_FLAG = 'owner-nickname-purge-v1';
+let ownerNicknamePurgeDone = false;
+async function purgeOwnerNicknames(): Promise<void> {
+  if (ownerNicknamePurgeDone) return;
+  ownerNicknamePurgeDone = true;
+  try {
+    if (typeof window === 'undefined' || window.localStorage.getItem(OWNER_NICKNAME_PURGE_FLAG)) return;
+    const all = await localDB.getAll('contacts');
+    const dirty = all.filter((c) => c.kind === 'user' && !!c.nickname?.trim());
+    for (const c of dirty) {
+      await localDB.put('contacts', { ...c, nickname: null });
+    }
+    // 全部清理成功后才写标记（失败可重试；标记先写会在首跑空库/中途失败时漏清存量数据）
+    window.localStorage.setItem(OWNER_NICKNAME_PURGE_FLAG, '1');
+    if (dirty.length > 0) {
+      // 广播刷新（各 App 持旧快照的界面重读联系人；changed 不含 name → 不触发设置侧名字镜像）
+      window.dispatchEvent(new CustomEvent('contact-updated', { detail: { changed: ['nickname'] } }));
+    }
+  } catch {
+    ownerNicknamePurgeDone = false; // 失败允许下次重试
+  }
+}
+
 /** 全量联系人（createdAt 倒序，与旧服务端 GET 顺序一致） */
 export async function listContacts(): Promise<ContactRecord[]> {
+  await purgeOwnerNicknames();
   const all = await localDB.getAll('contacts');
   const out = sortDesc(all as ContactRecord[]);
   // 机主显示名缓存（同步读取口 cachedOwnerName 用；人设构建「发送现场」需要同步拿到大号身份名）
@@ -229,17 +258,18 @@ export async function ownerProfile(): Promise<{ realName: string; nickname: stri
 
 /**
  * 指定 App 当前账号的「我」的资料（多账号 v2）：大号 = 机主；小号/匿名号 = 档案联系人
- * （无档案回退注册表名，昵称恒 null）。通话/记忆等链路按各自 App 的账号取身份。
+ * （无档案回退注册表名）。通话/记忆等链路按各自 App 的账号取身份。
+ * 用户规则：机主昵称已全面废除（AI 决策/人设永远不知道机主昵称）——本函数不再返回 nickname。
  */
 export async function ownerProfileFor(
   app: AccountApp,
-): Promise<{ realName: string; nickname: string | null } | null> {
+): Promise<{ realName: string } | null> {
   try {
     const acc = getActiveAccountFor(app);
     const me = pickOwnerContact(acc, await listContacts());
     const realName = me?.name?.trim() || (acc.kind !== 'main' ? acc.name?.trim() || '' : '');
     if (!realName) return null;
-    return { realName, nickname: me?.nickname?.trim() || null };
+    return { realName };
   } catch {
     return null;
   }

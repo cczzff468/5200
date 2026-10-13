@@ -469,8 +469,8 @@ async function recordMissedPhoneCall(
       // 留言条数 = 该联系人在信息聊天设置页选定的回复条数
       // （未设置默认 5 条，与微信端默认口径一致）。
       replyCount: getReplyCount(`sms:c:${contact.id}`),
+      // 机主称呼：只传真名（用户规则：AI 永远不知道机主昵称，userNickname 不再下传）
       userRealName: owner?.realName || undefined,
-      userNickname: owner?.nickname || undefined,
       // 多账号关系感知：留言归属当前信息账号，分账号关系同口径
       accountId: getActiveAccountIdFor('sms'),
     });
@@ -498,16 +498,16 @@ async function recordMissedPhoneCall(
 
 /** 由联系人资料拼 AI 扮演人设（system prompt）：七要素结构化人设由全 App 共用模块组装；NPC 的归属者即聊天中用户扮演的对象；
  *  npcExtra：配角圈注入（CHAR=认识的配角/背景近况，NPC=归属者资料卡/背景近况），由 npc-bond 组装；
- *  userReal/userNick：机主真实姓名/昵称（【用户的称呼】段注入用，名字/昵称不混淆） */
+ *  userReal：机主真实姓名（AI 称呼用；用户规则：昵称不再下传，AI 永远不知道机主昵称） */
 /**
  * 当前联系人会话的大号关系标签（openContactChat 打开会话时写入；AI 助手会话复位为空）：
  * 信息端聊天发送流的 peer 只是显示对象，不带 relation——记忆召回的披露解锁包装段
  *（memMainRecallBlockForAlt 的 altMainRelation）从这里取。
  */
 let activeContactRelation = '';
-function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp: boolean, npcExtra?: NpcPromptExtra | null, userReal?: string | null, userNick?: string | null): string {
+function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp: boolean, npcExtra?: NpcPromptExtra | null, userReal?: string | null): string {
   const mode = useSettings.getState().addressMode;
-  const addrName = userReal ? addressNameOf({ name: userReal, nickname: userNick ?? null, realName: userReal }, mode) : null;
+  const addrName = userReal ? addressNameOf({ name: userReal, realName: userReal }, mode) : null;
   // 多账号（用户规则二.2）：小号/匿名号侧不再注入任何大号身份/关系信息（【用户的另一个身份】段已移除）
   const accId = activeAccountIdOf('sms');
   // 多账号陌生语义（用户规则：换号/匿名号第一次联系 AI，AI 不认识这个身份）：
@@ -523,8 +523,6 @@ function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp
   return buildPersonaSystemPrompt(c, {
     channel: '短信',
     userName: addrName,
-    userRealName: userReal ?? null,
-    userNickname: userNick ?? null,
     ownerName,
     accountId: accId,
     // 跨 App 身份感知：互通开关（打开会话时现场读取）；陌生身份模式由人设内部忽略用户称呼/关系/多端段
@@ -4679,10 +4677,9 @@ export default function ChatApp() {
         owner?.name ?? null,
         getMemSettings(c.id).share,
         buildNpcPromptExtra(c, contacts),
-        // 与微信/QQ 端同口径双重兜底：展示副本没写 realName（机主卡无昵称/备注）时回退真名本身，
+        // 与微信/QQ 端同口径双重兜底：展示副本没写 realName（机主卡无备注）时回退真名本身，
         // 避免人设回退「用户只是占位词」段落（明明有真名却没用）
-        meCard?.realName ?? meCard?.name ?? null,
-        meCard?.nickname ?? null
+        meCard?.realName ?? meCard?.name ?? null
       ),
     });
     setView('chat');

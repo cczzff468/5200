@@ -39,8 +39,8 @@ export interface AnswerDecision {
 function buildDecisionSystemPrompt(
   peer: Parameters<typeof buildPersonaSystemPrompt>[0],
   hasChat: boolean,
-  /** 机主身份（前端直传）：名字/真名/昵称——软件上显示的名字只是昵称，被问是谁报真名 */
-  user?: { name: string | null; realName: string | null; nickname: string | null },
+  /** 机主称呼（前端直传真名；用户规则：AI 永远不知道机主昵称，body 里的 userNickname 忽略） */
+  user?: { name: string | null },
   /** 跨 App 身份感知（与 followup 同口径；undefined=不注入） */
   multiApp?: boolean,
   /** 多账号关系感知：当前账号 id（小号来电读 relationByAcc；不传 = 大号口径） */
@@ -78,8 +78,6 @@ function buildDecisionSystemPrompt(
   return buildPersonaSystemPrompt(peer, {
     channel: '决定是否接听一通来电',
     userName: callerUnknown ? null : (user?.name ?? null),
-    userRealName: callerUnknown ? null : (user?.realName ?? null),
-    userNickname: callerUnknown ? null : (user?.nickname ?? null),
     multiApp: callerUnknown ? undefined : multiApp,
     accountId: accountId ?? undefined,
     // 陌生来电：人设换「陌生号码来电」框架（角色自身人设保留，来电人身份未知）
@@ -143,9 +141,8 @@ export async function POST(req: NextRequest) {
     realName: inline.realName ?? null,
   };
 
-  // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
+  // 机主身份：前端直传真名（用户规则：AI 永远不知道机主昵称——body 里的 userNickname 直接忽略）
   const userReal = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
-  const userNick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
   const multiApp = root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined;
   const accountId = typeof root.accountId === 'string' && root.accountId.trim() ? root.accountId.trim().slice(0, 40) : undefined;
   // 陌生来电（多账号）：匿名号/未登记小号拨出——决策换陌生框架，机主身份不下发
@@ -153,11 +150,7 @@ export async function POST(req: NextRequest) {
   const system = buildDecisionSystemPrompt(
     peer,
     recentChat.length > 0,
-    callerUnknown
-      ? undefined
-      : userReal || userNick
-        ? { name: userReal || userNick, realName: userReal || null, nickname: userNick || null }
-        : undefined,
+    callerUnknown ? undefined : userReal ? { name: userReal } : undefined,
     multiApp,
     accountId,
     callerUnknown

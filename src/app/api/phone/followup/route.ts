@@ -136,8 +136,8 @@ function buildFollowupSystemPrompt(
   hasChat: boolean,
   maxCount: number,
   multiApp?: boolean,
-  /** 机主身份（前端直传）：名字/真名/昵称——软件上显示的名字只是昵称，被问是谁报真名 */
-  user?: { name: string | null; realName: string | null; nickname: string | null },
+  /** 机主称呼（前端直传真名；用户规则：AI 永远不知道机主昵称，body 里的 userNickname 忽略） */
+  user?: { name: string | null },
   /** 多账号关系感知：当前账号 id（小号续聊读 relationByAcc；不传 = 大号口径） */
   accountId?: string | null,
   /** 陌生来电（多账号）：匿名号/未登记小号拨出的电话——AI 不知道来电人是谁，
@@ -170,8 +170,6 @@ function buildFollowupSystemPrompt(
   return buildPersonaSystemPrompt(peer, {
     channel: '挂断电话后的文字消息',
     userName: callerUnknown ? null : (user?.name ?? null),
-    userRealName: callerUnknown ? null : (user?.realName ?? null),
-    userNickname: callerUnknown ? null : (user?.nickname ?? null),
     multiApp: callerUnknown ? undefined : multiApp,
     accountId: accountId ?? undefined,
     // 陌生来电：人设换「陌生号码来电」框架（角色自身人设保留，来电人身份未知）
@@ -304,14 +302,11 @@ export async function POST(req: NextRequest) {
     recentChat.length > 0,
     maxCount,
     root.multiApp === true || root.multiApp === false ? (root.multiApp as boolean) : undefined,
-    // 机主身份：前端直传（真实名字 + 昵称），AI 知道软件上显示的名字只是昵称、被问是谁报真名
-    //（陌生来电不下发任何机主身份：AI 不知道来电人是谁，报真名会直接破功）
+    // 机主称呼：前端直传真名（用户规则：AI 永远不知道机主昵称——body 里的 userNickname 直接忽略）
     (() => {
       if (root.callerUnknown === true) return undefined;
       const real = typeof root.userRealName === 'string' ? root.userRealName.trim() : '';
-      const nick = typeof root.userNickname === 'string' ? root.userNickname.trim() : '';
-      if (!real && !nick) return undefined;
-      return { name: real || nick, realName: real || null, nickname: nick || null };
+      return real ? { name: real } : undefined;
     })(),
     // 多账号关系感知：小号续聊读分账号关系，不再恒用大号全局 relation
     accountId,

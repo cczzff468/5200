@@ -923,9 +923,8 @@ function CallScreen({
                   ...(npcExtra ?? {}),
                 }
               : undefined,
-            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名（陌生来电不下发）
+            // 机主称呼：只传真名（用户规则：AI 永远不知道机主昵称，userNickname 不再下传；陌生来电不下发）
             userRealName: meUser?.name?.trim() || undefined,
-            userNickname: meUser?.nickname?.trim() || undefined,
             // 多账号关系感知：小号通话读分账号关系（与机主资料同账号口径）
             accountId: getActiveAccountIdFor('phone'),
             // 陌生来电（多账号）：匿名号/未登记小号拨出——服务端人设换陌生框架、机主身份不下发
@@ -1227,9 +1226,8 @@ function CallScreen({
               // 条数上限 = 该联系人「信息」会话聊天设置里的回复条数（sms:c:<id>，与信息 App 同一份数据，
               // 未设置走全局 DEFAULT_REPLY_COUNT=5）；上限不是任务，没话可以少发
               replyCount: getReplyCount(`sms:c:${peerContact.id}`),
-              // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名（陌生来电不下发）
+              // 机主称呼：只传真名（用户规则：AI 永远不知道机主昵称，userNickname 不再下传）
               userRealName: owner?.realName || undefined,
-              userNickname: owner?.nickname || undefined,
               // 陌生来电（多账号）：续聊按「刚接到陌生电话」框架
               callerUnknown: callerUnknown || undefined,
             });
@@ -1576,9 +1574,8 @@ function CallScreen({
                     timeBlock: contact.id && getTimeAware(`phone:${contact.id}`)
                       ? buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null })
                       : '',
-                    // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+                    // 机主称呼：只传真名（用户规则：AI 永远不知道机主昵称，userNickname 不再下传）
                     userRealName: owner?.realName || undefined,
-                    userNickname: owner?.nickname || undefined,
                     // 多账号关系感知：小号来电读分账号关系（与通话轮次同账号口径）
                     accountId: getActiveAccountIdFor('phone'),
                     config: apiConfig,

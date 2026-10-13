@@ -717,8 +717,6 @@ async function personaSystemFor(cid: string, musicBlock: string): Promise<string
   const persona = buildPersonaSystemPrompt(c as unknown as PersonaSource, {
     channel: '一起听（音乐 App）',
     userName,
-    userRealName: userName,
-    userNickname: null,
     ownerName: userName,
     multiApp: share,
     accountId: 'main',

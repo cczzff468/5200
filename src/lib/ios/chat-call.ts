@@ -683,9 +683,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             replyCount: getReplyCount(`${optsRef.current.app}:${peer.id}`),
             // 通话媒体（Task 22 视频通话）：视频挂断续聊让 AI 知道刚才那通是视频
             media,
-            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名（陌生来电不下发）
+            // 机主称呼：只传真名（用户规则：AI 永远不知道机主昵称，userNickname 不再下传）
             userRealName: owner?.realName || undefined,
-            userNickname: owner?.nickname || undefined,
             // 多账号关系感知：小号续聊读分账号关系（服务端 relationForCtx 同口径）
             accountId: getActiveAccountIdFor(optsRef.current.app),
             // 陌生来电（多账号）：续聊按「刚接到陌生电话」框架
@@ -857,9 +856,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
                   realName: c.realName ?? null,
                 }
               : undefined,
-            // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名（陌生来电不下发）
+            // 机主称呼：只传真名（用户规则：AI 永远不知道机主昵称，userNickname 不再下传）
             userRealName: owner?.realName || undefined,
-            userNickname: owner?.nickname || undefined,
             // 陌生来电（多账号）：服务端人设换陌生框架、机主身份不下发
             callerUnknown: callerUnknown || undefined,
             greeting,
@@ -1612,9 +1610,8 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
                       },
                       recentChat: historyRef.current.map((m) => ({ role: m.role, content: m.content })),
                       timeBlock: optsRef.current.timeBlock || undefined,
-                      // 机主身份：AI 知道软件上显示的名字只是昵称，被问是谁报真名
+                      // 机主称呼：只传真名（用户规则：AI 永远不知道机主昵称，userNickname 不再下传）
                       userRealName: owner?.realName || undefined,
-                      userNickname: owner?.nickname || undefined,
                       // 跨 App 身份感知 + 多账号关系感知（与 followup/turn 同口径）
                       multiApp: optsRef.current.multiApp,
                       accountId: getActiveAccountIdFor(optsRef.current.app),

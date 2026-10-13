@@ -539,13 +539,9 @@ async function sendQuitDm(st: QuitFlowState, contacts: ContactRecord[]): Promise
     '这是你主动发起的一轮：没有对方刚发来的消息需要回应，不要自我介绍式的突兀开场，像平时给 TA 发消息一样自然。',
     '不要提及「系统」「通知」「标记」等幕后词汇，输出的正文就是私信本身。',
   ];
-  const meRec = contacts.find((c) => c.id === meContactId(app) && c.kind === 'user');
   const system = buildPersonaSystemPrompt(contact, {
     channel,
     userName: meName,
-    // 名字/昵称区分：挽留私信同样注入【用户的称呼】段
-    userRealName: meRec?.realName ?? meRec?.name ?? null,
-    userNickname: meRec?.nickname ?? null,
     ownerName: npcExtra?.ownerLabel ?? null,
     multiApp: share,
     ...npcExtra,

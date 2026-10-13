@@ -124,8 +124,6 @@ async function tbPersonaSystemFor(contact: ContactRecord, app: TbEngageApp): Pro
   return buildPersonaSystemPrompt(contact, {
     channel: app === 'wx' ? '微信' : 'QQ',
     userName: meName,
-    userRealName: meName,
-    userNickname: null,
     ownerName: meName,
     accountId: getActiveAccountIdFor(app as AccountApp),
     multiApp: getMemSettings(contact.id).share,
@@ -1111,8 +1109,6 @@ async function runProactivePayEngage(uid: string, orderId: string): Promise<void
   const persona = buildPersonaSystemPrompt(contact, {
     channel: app === 'wx' ? '微信' : 'QQ',
     userName: meName,
-    userRealName: meName,
-    userNickname: owner?.nickname || null,
     ownerName: meName,
     accountId: getActiveAccountIdFor(app as AccountApp),
     multiApp: getMemSettings(contact.id).share,
@@ -1290,8 +1286,6 @@ export function tbSchedulePickupResponse(sid: string): void {
       const persona = buildPersonaSystemPrompt(contact, {
         channel: app === 'wx' ? '微信' : 'QQ',
         userName: meName,
-        userRealName: meName,
-        userNickname: null,
         ownerName: meName,
         accountId: getActiveAccountIdFor(app as AccountApp),
         multiApp: getMemSettings(contact.id).share,

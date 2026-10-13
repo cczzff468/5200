@@ -3188,9 +3188,6 @@ export function WxGroupChatPage({
           // （先看清最后一条是谁说的，不把其他成员的话当成机主对你说的）
           groupTurn: true,
           userName: meName,
-          // 名字/昵称区分：群聊同样注入【用户的称呼】段（名字是凡凡，昵称是凑凑）
-          userRealName: me.realName ?? me.name,
-          userNickname: me.nickname ?? null,
           ownerName: ownerLabelOf(char),
           // 跨 App 身份感知：互通开关（每联系人设置，发送时现场读取；群聊同样告知多端身份）
           multiApp: getMemSettings(char.id).share,

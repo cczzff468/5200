@@ -1521,15 +1521,13 @@ const AI_VOICE_DELIVERY_RULE =
  *  aiVoiceOn：AI 语音频率开关（100-e，开启时告知「文字消息可能以语音条送达」，见 AI_VOICE_DELIVERY_RULE） */
 function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string | null, stickers: Sticker[], stickersOn: boolean, actionDescOn: boolean, npcExtra?: NpcPromptExtra | null, aiVoiceOn?: boolean): string {
   // 名字/昵称区分：AI 称呼用户按全局设置（默认用名字「凡凡」，用户选「用昵称称呼」才用「凑凑」）；
-  // 同时把真实姓名/昵称注入【用户的称呼】段，AI 不能把昵称当成另一个人或正式名字
+  // 用户规则：AI 永远不知道机主的昵称——人设只注入真称呼名（真名），不注入任何昵称信息
   const mode = useSettings.getState().addressMode;
   // 多账号（用户规则二.2）：小号/匿名号侧不再注入任何大号身份/关系信息（【用户的另一个身份】段已移除）
   const accId = activeAccountIdOf('qq');
   return buildPersonaSystemPrompt(peer, {
     channel: 'QQ',
     userName: addressNameOf(me, mode),
-    userRealName: me.realName ?? me.name,
-    userNickname: me.nickname ?? null,
     ownerName,
     accountId: accId,
     // 跨 App 身份感知：互通开关（每联系人设置，发送时现场读取）
@@ -7481,7 +7479,6 @@ function ChatPage({
           contactId={peer.id}
           userName={addressNameOf(me, useSettings.getState().addressMode)}
           userRealName={me.realName ?? me.name}
-          userNickname={me.nickname ?? null}
           userAvatar={me.avatar}
           loadRecentMsgs={(n: number): OfflineOnlineMsg[] =>
             msgs

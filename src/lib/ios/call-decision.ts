@@ -36,9 +36,8 @@ export interface AnswerDecisionArgs {
   recentChat: { role: 'user' | 'assistant'; content: string }[];
   /** 时间感知块（有开关时传；决策需要知道现在几点） */
   timeBlock?: string;
-  /** 机主身份（真实名字 + 昵称）：AI 知道软件上显示的名字只是昵称，被问是谁报真名 */
+  /** 机主称呼（真实名字；用户规则：AI 永远不知道机主昵称，userNickname 不再下传） */
   userRealName?: string;
-  userNickname?: string;
   /** 跨 App 身份感知（人设【多端身份与记忆】段；undefined=不注入） */
   multiApp?: boolean;
   /** 多账号关系感知：当前账号 id（小号来电读分账号关系；不传 = 大号口径） */

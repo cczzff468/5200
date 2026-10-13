@@ -346,9 +346,8 @@ async function requestProactiveDecision(args: {
   // G-2 跨 App 拉黑情境：wx/qq 被用户拉黑（来电路径不受影响）→ 决策端要知道
   //「这次来电可能是被拉黑后来电话找机主」，call 时 reason 会带上这层动机作为接通开场
   crossBlockedIn?: string;
-  // 机主身份（真实名字 + 昵称）：服务端人设【用户的称呼】段用；缺省回退「用户」占位词
+  // 机主称呼（真实名字；用户规则：AI 永远不知道机主昵称，userNickname 不再下传）；缺省回退「用户」占位词
   userRealName?: string;
-  userNickname?: string;
   // 多账号关系感知：当前电话账号 id（小号读分账号关系；不传 = 大号口径）
   accountId?: string;
 }): Promise<ProactiveDecision | null> {
@@ -448,8 +447,8 @@ async function recordMissedPhoneCall(
       multiApp: getMemSettings(contact.id).share,
       // 留言条数 = 该联系人在信息聊天设置页选定的回复条数（与信息 App 来电留言同口径）
       replyCount: getReplyCount(`sms:c:${contact.id}`),
+      // 机主称呼：只传真名（用户规则：AI 永远不知道机主昵称，userNickname 不再下传）
       userRealName: owner?.realName || undefined,
-      userNickname: owner?.nickname || undefined,
       // 多账号关系感知：留言归属当前电话账号，分账号关系同口径（与 call-logs/owner 同一账号）
       accountId: getActiveAccountIdFor('phone'),
     });
@@ -649,11 +648,10 @@ async function tickInner(): Promise<void> {
     lastInteractionLabel: gapLabel(nowMs - best.lastInteractionAt),
     now: fmtNow(nowMs),
     ...(crossBlockedIn ? { crossBlockedIn } : {}),
-    // 机主身份 + 多账号关系感知：服务端人设不再回退「用户」占位词，小号读分账号关系
+    // 机主称呼 + 多账号关系感知：只传真名（用户规则：AI 永远不知道机主昵称）
     ...(await ownerProfileFor('phone')
       .then((o) => ({
         userRealName: o?.realName || undefined,
-        userNickname: o?.nickname || undefined,
       }))
       .catch(() => ({}))),
     accountId: getActiveAccountIdFor('phone'),
