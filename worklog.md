@@ -18882,3 +18882,24 @@ Stage Summary:
 - 改动文件：src/lib/ios/builtin-stickers.ts（QQ 段重生成 105 项）、src/components/apps/{wechat,wx-group,qq}.tsx
 - 关键决策：①QQ 资源源选 koishijs/QFace（腾讯官方 dump、QDes 元数据全、3D 风格匹配用户截图）弃 fritx/qqface（2D 老 GIF）；②内置判定用 url 前缀 startsWith('/wechat-emojis/') 而非新增消息字段——存量消息自动获得气泡样式；③老 GIF 文件恢复并存——历史消息零裂图；④QQ 不加气泡（用户原话"其他的不要有"）
 - 遗留：QQ 侧表情消息无气泡、超级表情（动图 APNG）未做——等用户反馈再定
+
+---
+Task ID: 21
+Agent: 主协调者 (Z.ai Code)
+Task: 用户再次要求从 https://github.com/cczzff468/5200.git 拉取项目，准备修改/添加功能（新会话环境重建）
+
+Work Log:
+- git clone 仓库到 /home/z/5200-repo（3174 个文件，HEAD=276bacb QQ内置表情换QFace 3D风格…，比上次快照新 4 个提交）
+- 停掉模板 dev server，清空 /home/z/my-project 模板代码（保留 node_modules、.env、upload 挂载目录）
+- tar 全量同步仓库内容进 /home/z/my-project（排除 node_modules/.next/db/custom.db/upload；.git 完整历史随迁）
+- git 配置 user.name=cczzff468 + origin remote 带 PAT，可直接 commit+push 回 GitHub main
+- bun install（补 5 包）→ prisma db push + generate（SQLite）
+- 重启 dev server 3000 端口，instrumentation 自动拉起 ncm-keeper → netease-api 常驻
+- Agent Browser E2E：393×852 → 锁屏渲染完整（时间/日期/天气/电量/手电筒/相机）→ mouse down+move 序列上滑解锁成功 → 主屏渲染（天气小组件 19°C、天气/主题/浏览器/备忘录/相机/照片/文件/计算器 图标、搜索条、Dock 四图标）✓；console/page errors 零
+- git checkout -- upload/ 还原 tar 排除导致的 upload 文件删除，工作区仅剩 db/custom.db 运行时差异（预期内）
+
+Stage Summary:
+- 环境：仓库最新提交 276bacb 完整落地 /home/z/my-project，dev server 3000 + netease-api 常驻，锁屏/解锁/主屏实测通过，可预览可交互
+- 推送链路：origin 已带 PAT（user=cczzff468），改动可 git add/commit/push 回 main
+- 注意：db/custom.db 是运行时数据库，提交时不要 add 它；upload/ 是挂载目录（git 内有历史图片，已还原）
+- 待办：等用户提出具体「修改或添加功能」需求后进入开发
