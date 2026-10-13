@@ -18821,3 +18821,24 @@ Stage Summary:
 - 改动文件：src/components/apps/{chat-settings,qq-group,wx-group,wechat}.tsx（本次）；推送内容另含上会话未推的 src/lib/enter-send.ts、src/components/apps/{chat,qq}.tsx（enter-send 功能本体）
 - 关键决策：①单聊/群聊同步改保持共用设计语言；②对齐修复选 textarea display:block 而非改容器 items-center——既修单行对齐又保留多行时图标贴底的真机行为；③推送采用「基于 origin/main 重建功能文件」而非强推/合并快照历史——远端保持线性历史且不带入 db/.env 等运行时文件
 - 环境注意：本机有守护进程周期性把 HEAD 拉回 main 并以会话 UUID 自动快照提交；后续推送须在单条命令内完成 checkout sync-enter-send → 取文件 → commit → push origin sync-enter-send:main
+
+---
+Task ID: 18
+Agent: 主协调者 (Z.ai Code)
+Task: 用户要求从 https://github.com/cczzff468/5200.git 拉取项目到本环境，准备修改/添加功能（含配置回推权限）
+
+Work Log:
+- git clone 仓库到 /home/z/repo-5200（2837 个文件，HEAD=960c1eb「微信输入框去绿边框+文字左移…」）
+- 停掉环境自带模板 dev server（/home/z/my-project），清空模板代码（保留 node_modules、upload 挂载目录、.env）
+- 将仓库全部内容同步进 /home/z/my-project（含 .git 完整历史与 origin remote；upload/314 张图片合并进挂载目录；补齐首轮遗漏的 tests/ 与 .gitignore；git checkout 还原 .gitignore 与 db/custom.db 至提交态 → 工作区 clean）
+- 配置推送凭证：git remote set-url origin 带 PAT（cczzff468:github_pat_…@github.com/cczzff468/5200.git），user.name=cczzff468；后续可直接 commit+push 回 GitHub
+- bun install（补 idb/jsmediatags/web-push 等 5 包）；prisma generate + db push（SQLite 同步，49KB 与仓库一致）
+- 重启 dev server（3000 端口）；instrumentation.ts 自动拉起 ncm-keeper → netease-api 常驻 3010（HTTP 200）
+- Agent Browser E2E：锁屏→PointerEvent 上滑解锁 ✓ → 主屏 3 页滑动翻页 ✓ → P3 打开微信（登录墙：手机号+密码，需先在联系人建 USER 账号）✓ → 关闭→打开联系人（CHAR/USER/NPC/小号 四 Tab + 导入/添加）✓ → 返回主屏 ✓；console/page errors 零；天气 API 200
+- lint 在本环境因内存被 SIGKILL（meituan.tsx>500KB 触发 BABEL 弃优化，代码量巨大），dev 编译运行本身无错误
+
+Stage Summary:
+- 环境：仓库 960c1eb 完整落地 /home/z/my-project，dev server 3000 + netease-api 3010 常驻，页面可预览可交互
+- 推送链路：origin 已带 PAT，改动可直接 git add/commit/push 回 main（注意：本环境无快照守护进程，历史不会被外部改写）
+- 项目结构速查：src/components/apps/*（各 App）、src/components/ios/*（壳/锁屏/主屏/灵动岛）、src/lib/ios/*（store/contacts-store 等状态层，IndexedDB 为主）、src/app/api/*（chat/tts/stt/imggen/weather 等后端）、mini-services/netease-api（3010）
+- 待办：等用户提出具体「修改或添加功能」需求后进入开发
