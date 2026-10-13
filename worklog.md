@@ -18926,3 +18926,22 @@ Stage Summary:
 - 改动文件：src/lib/ios/builtin-stickers.ts（QQ 段重写 198 项）、public/qq-emojis/apng/（新增 198 张 APNG 23.5MB）
 - 资源源：https://github.com/vikiboss/face（wa.qq.com 官方资源镜像，metadata.json 含官方 ID/名称/APNG 三格式）
 - 已知边界：新版 QQ 已移除的 17 个最老表情（闪电/炸弹/足球等）按官方面板行为不再出现（文件仍在，历史消息正常）
+
+---
+Task ID: 23
+Agent: 主协调者 (Z.ai Code)
+Task: 新会话环境恢复：从 GitHub 仓库(5200.git)重新拉取代码到 /home/z/my-project，恢复运行环境，等待用户提出新的修改/新增功能需求
+
+Work Log:
+- git clone https://github.com/cczzff468/5200.git → /home/z/5200-repo（含完整历史，HEAD=39a7385 Task 22）
+- 用仓库 .git 替换工作区 .git（保留完整提交历史以便直接 push 回 main），rsync 工作文件（排除 .git/node_modules/dev.log；upload/ chgrp I/O 警告为挂载目录属性问题，内容已同步）
+- git remote add origin（带 PAT，user=cczzff468）+ branch main，git status 与 origin/main 完全一致（干净）
+- bun install（29 包，复用全局缓存）；启动 next dev:3000 + netease-api(bun app.js):3001
+- E2E（agent-browser 393×852）：锁屏渲染 → 上滑解锁 → 主屏（天气小组件 20°晴 北京、图标网格、Dock）→ 点开信息 App（小助手会话正常）✓
+- API 验证：/api/weather 200（北京 20° 晴 hourly/daily 正常）、netease 经网关 ?XTransformPort=3001 200；dev.log 仅 Edge Runtime getBuiltinModule 警告（instrumentation.ts 启动 keeper 脚本，非致命，之前会话已存在）
+
+Stage Summary:
+- 环境：仓库最新提交 39a7385 完整落地，dev server 3000 + netease-api 3001 常驻，锁屏/解锁/主屏/信息 App 实测通过，可预览可交互
+- 推送链路：origin 已带 PAT，改动可 git add/commit/push 回 main
+- 注意（延续 Task 21 记录）：db/custom.db 运行时数据库勿提交；upload/ 为挂载目录
+- 待办：等用户提出具体「修改或添加功能」需求后进入开发
