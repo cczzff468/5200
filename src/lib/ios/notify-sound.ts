@@ -508,17 +508,49 @@ function playBuiltinTone(toneId: string, volume: number): void {
 
 // ---------------- 自定义铃声播放（HTMLAudioElement） ----------------
 
+// ObjectURL LRU（性能：每条自定义铃声 Blob ≤8MB，原先只增不减——播放过的铃声全部
+// 常驻内存直到删除铃声；改为上限 6 条，超出淘汰最旧并 revoke 释放 Blob）
 const customUrlCache = new Map<string, string>();
+const CUSTOM_URL_CACHE_MAX = 6;
 
-/** 自定义铃声 Blob → ObjectURL（按 id 缓存；记录不存在返回 null） */
-export async function customRingtoneUrl(id: string): Promise<string | null> {
+async function customRingtoneUrlCached(id: string): Promise<string | null> {
   const cached = customUrlCache.get(id);
-  if (cached) return cached;
+  if (cached) {
+    // 命中刷新 LRU 位置（Map 迭代序 = 插入序，删了重插即移到最新）
+    customUrlCache.delete(id);
+    customUrlCache.set(id, cached);
+    return cached;
+  }
+  return null;
+}
+
+function customRingtoneUrlStore(id: string, url: string): void {
+  if (customUrlCache.size >= CUSTOM_URL_CACHE_MAX) {
+    const oldest = customUrlCache.keys().next().value as string | undefined;
+    if (oldest != null) {
+      const oldUrl = customUrlCache.get(oldest);
+      customUrlCache.delete(oldest);
+      if (oldUrl) {
+        try {
+          URL.revokeObjectURL(oldUrl);
+        } catch {
+          // 忽略
+        }
+      }
+    }
+  }
+  customUrlCache.set(id, url);
+}
+
+/** 自定义铃声 Blob → ObjectURL（按 id LRU 缓存；记录不存在返回 null） */
+export async function customRingtoneUrl(id: string): Promise<string | null> {
+  const hit = await customRingtoneUrlCached(id);
+  if (hit) return hit;
   try {
     const rec = await localDB.get('ringtones', id);
     if (!rec || !(rec.blob instanceof Blob)) return null;
     const url = URL.createObjectURL(rec.blob);
-    customUrlCache.set(id, url);
+    customRingtoneUrlStore(id, url);
     return url;
   } catch {
     return null;

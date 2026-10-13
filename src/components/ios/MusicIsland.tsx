@@ -36,6 +36,7 @@ import { useIslandNotify } from '@/lib/ios/island-notify';
 import { useGlobalCall } from '@/lib/ios/global-call';
 import { useIncomingCall } from '@/lib/ios/incoming-call';
 import { useMusic } from '@/lib/ios/music-store';
+import { setMusicIslandVisible } from '@/lib/ios/music-island-flag';
 import { useMtIsland } from '@/lib/ios/mt-island-store';
 import { useTbIsland } from '@/lib/ios/tb-island-store';
 import {
@@ -202,6 +203,7 @@ export default function MusicIsland() {
     if (useMusic.getState().islandVisible !== !hidden) {
       useMusic.setState({ islandVisible: !hidden });
     }
+    setMusicIslandVisible(!hidden);
   }, [hidden]);
 
   const clearAuto = () => {

@@ -4750,6 +4750,18 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  /** 试听 ObjectURL 回收（内存：原先每次试听都 new Audio(URL.createObjectURL(blob))
+   *  且从不 revoke——听一次泄漏一个 blob URL；改从 audio.src 取回统一回收） */
+  const revokePreviewSrc = (audio: HTMLAudioElement | null): void => {
+    const src = audio?.src;
+    if (src && src.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(src);
+      } catch {
+        /* 忽略 */
+      }
+    }
+  };
 
   const isMinimax = ttsConfig.provider === 'minimax';
   const isFish = ttsConfig.provider === 'fishaudio';
@@ -4789,6 +4801,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
     () => () => {
       if (previewAudioRef.current) {
         previewAudioRef.current.pause();
+        revokePreviewSrc(previewAudioRef.current);
         previewAudioRef.current = null;
       }
       stopBuiltinSpeech();
@@ -4912,6 +4925,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
     }
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
+      revokePreviewSrc(previewAudioRef.current);
       previewAudioRef.current = null;
     }
     try {
@@ -4927,12 +4941,15 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         return;
       }
       const blob = await res.blob();
-      const audio = new Audio(URL.createObjectURL(blob));
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
       previewAudioRef.current = audio;
       audio.onended = () => {
+        revokePreviewSrc(audio);
         if (previewAudioRef.current === audio) previewAudioRef.current = null;
       };
       await audio.play().catch(() => {
+        revokePreviewSrc(audio);
         if (previewAudioRef.current === audio) previewAudioRef.current = null;
       });
     } catch {
@@ -4973,11 +4990,14 @@ function VoicePage({ onBack }: { onBack: () => void }) {
       setProviderTestOk(true);
       if (previewAudioRef.current) {
         previewAudioRef.current.pause();
+        revokePreviewSrc(previewAudioRef.current);
         previewAudioRef.current = null;
       }
-      const audio = new Audio(URL.createObjectURL(blob));
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
       previewAudioRef.current = audio;
       audio.onended = () => {
+        revokePreviewSrc(audio);
         if (previewAudioRef.current === audio) previewAudioRef.current = null;
       };
       await audio.play().catch(() => {});
@@ -5044,13 +5064,18 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         return;
       }
       const blob = await res.blob();
-      const audio = new Audio(URL.createObjectURL(blob));
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
       previewAudioRef.current = audio;
       audio.onended = () => {
+        revokePreviewSrc(audio);
         if (previewAudioRef.current === audio) previewAudioRef.current = null;
         setPreviewingMyId(null);
       };
-      audio.onerror = () => setPreviewingMyId(null);
+      audio.onerror = () => {
+        revokePreviewSrc(audio);
+        setPreviewingMyId(null);
+      };
       await audio.play().catch(() => setPreviewingMyId(null));
     } catch {
       setPreviewingMyId(null);

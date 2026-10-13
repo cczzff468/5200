@@ -19148,3 +19148,31 @@ Stage Summary:
 - 交付：①微信/QQ 切换账号新增「添加账号」——弹层两步选大号/小号档、填名字+昵称（AI 不可见）即创建注册表账号+档案联系人并自动登录（大号档带标记，切换/会话/历史/删除全兼容既有账号体系）；②语音气泡播放全通：AI 发的任何语音（真音频/静音语音条/文字语音）点击播放按钮都按角色音色真实出声（内置语音免配置恒可用，配了第三方 API 用 API 音色），我方文字转语音保持静音模拟；③通话声音全通：微信/QQ 语音/视频通话 + 电话 App 里，AI 免提说话的回复照常有声，通话中点右上角信息图标打字发给 AI，AI 回复文字进消息区/对话记录的同时用角色音色开口说出来（不再要求第三方语音 API，内置语音即出声）
 - 改动文件：src/lib/ios/{accounts,tts-client,voice-player,ai-voice,chat-call}.ts、src/components/apps/{account-add-sheet(新),voice-bubble,wechat,qq,phone,voice-call-screen}.tsx
 - 关键决策：账号 grade 只是展示层档位（大号档功能/数据隔离与普通小号一致，单 main 架构不变）；切换账号列表显示名统一 socialNameOf（昵称优先）与登录后口径对齐；通话内文字回复「文字+声音」双通道是产品语义（via='text' 保证消息区可见，speakReply 保证出声），hasCustomTtsApi 从此不再是通话回复形态的闸门
+---
+Task ID: 34
+Agent: 主协调者 (Z.ai Code)
+Task: 全项目性能检查与优化（启动/渲染/内存/存储/网络/AI token 六维勘察+实施+验证）
+
+Work Log:
+- 【五路并行勘察】Explore agent 分头勘察启动链/渲染/内存/存储网络/AI token，产出带文件行号证据的问题清单；关键结论：22 App 已 dynamic 懒加载✅、定时器/事件监听 100% 成对清理✅、防抖节流（sticker/weather/translate）已做好✅、壁纸预载+亮度缓存✅——大方向健康，瓶颈集中在：①开机门控串行链 ②聊天记录整数组全量重写 ③会话列表全量克隆 ④恒注入规则段 token
+- 【启动优化·store.ts】load() 的 20 个设置读取 Promise.all 保持，themeDefaultLight 并入首批；8 个密文字段（api/apiPresets/vision/visionPresets/tts/stt/imgGen/imgGenPresets）从逐个 await 串行解密（≈16 次异步，每次重读 CryptoKey）改为 Promise.all 并行（secure-store getKey 并发单飞，密钥只读一次 IDB）；壁纸预载超时 1500ms→600ms（亮度实测+解码通常百毫秒级，慢网宁可首帧稍晚铺图也不多黑屏近一秒）
+- 【启动优化·idb-kv.ts】migrateLsToKv 从逐键串行（get→put→get回读→JSON.stringify×2 对比→removeItem）改为 Promise.all 并行 + 去掉读回 stringify 对比（IndexedDB put resolve=事务提交成功，结构化克隆无静默损坏场景；失败 catch 保留旧键下次重试语义不变）——首次启动迁移提速显著；**新增 kvSetDebounced 写合并通道**：内存同步更新（kvGet 语义不变）+ IndexedDB 按键 400ms 防抖合并，kvSetRaw/kvDelRaw 遇同键 pending 先取消防乱序，pagehide+visibilitychange 自动 flushKvWrites() 兜底
+- 【启动优化·PhoneShell】ensureAccountOwnerContacts()（只读写 contacts/kv）与 load()（只读 settings）无依赖改 Promise.all 并行；ensureAppFontApplied 从门控 await 改 void（默认系统字体纯 CSS 零开销，少一拍黑屏）；migrateLegacyAccounts 保持串行在 ensureKvReady 前（后缀键必须先进同一份内存，注释已说明）
+- 【启动优化·bundle 解耦】新建 src/lib/ios/voice-hold-flag.ts（PhoneShell 只为查一个布尔曾静态拖入 991 行录音组件——标志实现抽微模块，voice-input 转发 re-export 保持兼容）；新建 src/lib/ios/music-island-flag.ts（StatusBar 为读 islandVisible 布尔曾静态拖入 music-store 1039 行+music-api 841 行——微型订阅 store，MusicIsland 写 music-store 时双写同步，StatusBar 只订阅 flag）；music-store 模块级「同步恢复」块删除（因静态 import 在 kv 注水前执行恒 no-op 的死代码；guestMode 恢复逻辑挪进 boot()，登录态/快照/历史/时长 boot 本就覆盖）；registry RealIconTile 去掉 loading="eager"（主屏 3 页 DOM 全挂载曾让 22 枚图标 ~6MB 首帧全并发请求；默认 lazy 视口内首帧照常立即加载）
+- 【渲染优化·滚底】微信/QQ/信息三端滚底守卫升级：仅当用户距底 ≤160px 或首次进入时才跟随新消息滚底（上翻历史阅读时 AI 分段投递不再把视口拽走——顺带修了体验）；滚动放 requestAnimationFrame，scrollHeight 读取（长会话数千节点强制 layout）不再随每条分段同步发生
+- 【渲染优化·会话预览轻量化】微信 readPreview / QQ baseConversations / groups groupPreview 从「loadMsgs 全量规范化克隆 + [...msgs].reverse().find() 再克隆」（QQ 每联系人还跑 2 次）改为 kvGetRaw 直读内存原始数组从尾部扫描最后一条实质消息——会话列表每次 msgTick 重算从 O(总消息×联系人×2 克隆) 降为 O(联系人)；预览只用 kind/role/time/content/recalled 等原始记录固有字段，规范化缺失不影响
+- 【内存·淘宝】tbSaveOrders 加 200 单上限（对齐美团 MAX_ORDERS）、tbPushMsg 加 500 条上限；tbStartOrderWatcher 10s tick 加 document.hidden 跳过（后台标签页不再每 10s 全量序列化订单表抢主线程；订单按时间戳 catch-up，回前台一拍补齐）
+- 【内存·ObjectURL 泄漏×2】notify-sound customUrlCache 改 LRU 上限 6 条（每条铃声 Blob ≤8MB，原先只增不减，超出淘汰最旧并 revoke）；settings.tsx 三处试听 + chat-settings.tsx 一处试听「new Audio(URL.createObjectURL(blob))」从不 revoke 的泄漏修复（revokePreviewSrc 从 audio.src 取回统一回收，试听前替换/结束/出错/卸载全路径回收）
+- 【存储·防抖落盘】微信/qq/chat 三端 saveMsgs 从 kvSet 改 kvSetDebounced——AI 连发 5 条分段回复原先触发 ~10 次同键全量 IndexedDB put（显式 saveMsgs + msgs effect 双写 × 条数），现在 400ms 内合并为 1-2 次；长会话写放大从 O(条数×全量) 降到 O(1)，pagehide 自动冲刷保数据
+- 【网络·勘察后跳过】tb-feed 缓存方案否决——调用全部是用户主动下拉/上拉触发且带 exclude 保证新内容，缓存会破坏「下拉出新内容」产品语义；流式 AbortController 保持设计（聊天流刻意与页面生命周期解耦，关页有服务端接力去重）
+- 【AI token·主动来电 off 档修复】proactive-call tickInner 加档位闸：off 原先只是冷却参数归零，tick 仍每 60s 空转并对合格候选发决策 API（烧 token）且决策 call 会真拨出——现在直接短路不轮询不决策不拨出，决策等待窗口内切 off 也再拦截
+- 【AI token·恒注入段精简】time-aware 删月份天数表+日期运算规则两段（模型常识，当前日期已注入，每轮省 ~300 字符）；block-state 未拉黑能力声明 7 行压缩为 3 行（~470→~300 字符，[拉黑]/方向红线/假拉黑禁止/[解除拉黑] 全语义保留）；reply-count「能自然拆开就往多了拆」→「按内容自然拆分，不必凑数」（输出 token 收敛）；worldbook 新增 WB_ENTRY_MAX_CHARS=4000 单条截断（一条超长 global 条目曾可吃满 2 万预算的 1/5）；记忆提取窗口 60→30 轮（单次 prompt 峰值 24k→12k 字符）；npc-bond bondNotesFor 过滤 consumedAt/supersededAt 碎片（与召回同口径，消除重复/陈旧注入）
+- 【顺手修复·真 bug】MusicIsland.tsx:207 useEffect 依赖数组 `}, idden]);`（hidden 拼写错误，Task 33 提交时引入）——SWC 转译不查类型所以 dev 能跑，tsc 会报 Cannot find name；修复为 [hidden] 并加 flag 双写
+- 【验证】bunx tsc --noEmit 全量 0 错误；25 个改动文件定向 eslint 0 问题（lint 全量跑内存 SIGKILL 老问题沿用定向）；agent-browser E2E（393×852）：DCL 605ms/load 1.0s 锁屏主屏正常 → 播种机主+AI+60 条消息 → 解锁 → 会话列表预览显示「测试消息第59条」（尾部扫描✓）→ 打开聊天 60 条渲染+首进滚底到底 ✓ → 发消息 → AI 分段回复 2 条 → IndexedDB 实测 60→63 条全量落盘（防抖后数据完整不丢）✓ → 返回列表预览实时更新为「最近怎么样呀？」15:01 ✓ → errors 空、console 干净、dev.log 仅存量 instrumentation 警告；测试档案已清、浏览器已关
+- 【坑】本沙箱文件系统读后有写聚合延迟：Edit 工具报「No replacement」但实际已写入（worldbook 常量重复插入 4 次、MusicIsland 修复延迟可见），且 bash sed -n 与工具 Read 可能读到不同版本页——按行号 sed 删除有误删风险（voice-input 常量曾被误删后补回）；处理：用 Edit/Python 字节级操作+操作后立即重新全量读取确认+以 tsc 为最终裁决
+
+Stage Summary:
+- 交付：六维性能优化 17 项落地——启动（kv 迁移并行化+去冗余校验、8 字段并行解密、壁纸预载 600ms、门控并行、首屏 bundle 解耦 voice-input/music-store、图标 lazy）渲染（三端滚底 rAF+近底跟随、wx/qq/groups 会话预览尾部扫描轻量化、内容图 lazy）内存（淘宝订单/消息上限+hidden 跳过、铃声 ObjectURL LRU、试听 URL 泄漏×4 修复）存储（三端 saveMsgs 防抖合并，AI 连发写盘次数 ~10→1-2）AI token（off 档来电决策烧钱 bug 修复、时间感知/拉黑声明压缩、世界书单条 4000 上限、提取窗口减半、npc-bond 去重、回复条数措辞收敛）；顺手修复 MusicIsland idden 编译错误
+- 改动文件：src/lib/ios/{idb-kv,store,music-store,taobao-store,notify-sound,proactive-call,npc-bond,worldbook,block-state,groups}.ts、src/lib/{time-aware,reply-count}.ts、src/lib/ios/{voice-hold-flag,music-island-flag}.ts（新）、src/components/ios/{PhoneShell,StatusBar,MusicIsland}.tsx、src/components/apps/{voice-input,registry,wechat,qq,chat,settings,chat-settings}.tsx、src/app/api/memory/extract/route.ts
+- 量化预期：开机黑屏串行链从「迁移+注水+8 串行解密+1.5s 壁纸」收敛为「迁移(并行)+注水+1 批并行解密+0.6s 壁纸」；AI 连发 5 条写盘 10 次→2 次；会话列表重算 O(总消息×2 克隆)→O(联系人)；off 档省 ~60 次决策 API/小时；恒注入 prompt 每轮省 ~800-1000 字符（拉黑 170+时间感知 300+提取峰值减半等）
+- 已知边界：memStore 全量注水架构保留（同步 kvGet 是全项目读路径地基，改懒加载属大手术需另立项）；AppSwitcher 真实渲染 6 个 App 树（快照方案大手术未动）；聊天无虚拟滚动（msgs.map 全量渲染保留——虚拟化需动态高度库且与「历史不封顶」共存，需另立项评估）；聊天流无 AbortController（架构决策：与页面生命周期解耦+服务端接力去重）

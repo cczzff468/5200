@@ -162,12 +162,14 @@ function RealIconTile({ src }: { src: string; variant?: 'auto' | 'card' }) {
         aria-hidden="true"
         className="relative block h-full w-full overflow-hidden rounded-[15px] shadow-[0_2px_8px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.06]"
       >
+        {/* 性能：去掉 loading="eager"——主屏 3 页 DOM 全量挂载，eager 会让 ~22 枚图标
+            （源图共 ~6MB）首帧全部并发请求；默认 lazy 下视口内图标首帧立即加载（观感不变），
+            非当前页的图标推迟到滑动接近时再拉 */}
         <Image
           src={src}
           alt=""
           fill
           sizes="60px"
-          loading="eager"
           draggable={false}
           className="scale-[1.07] object-cover"
         />

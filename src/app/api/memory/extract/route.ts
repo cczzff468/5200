@@ -259,7 +259,9 @@ export async function POST(req: NextRequest) {
     knownSpeakers.some((n: string) => text.startsWith(`${n}：`) || text.startsWith(`${n}:`));
 
   const convoText = convo
-    .slice(-60)
+    // token 精简：提取窗口 60 轮 → 30 轮（每 10 条消息触发一次提取，30 轮已覆盖两次提取间
+    // 的全部新对话；原 60 轮×400 字单次 prompt 可达 24k 字符，减半后峰值 12k）
+    .slice(-30)
     .map((t) => {
       // 超长截断在返回前统一做，两条路径口径一致
       const clip = t.text.slice(0, 400);

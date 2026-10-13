@@ -6,7 +6,8 @@
  *   60 秒上限自动结束；结束回调 onResult(result, zone) —— result 为 null 表示太短/已取消
  * - 按住标志（多任务误触修复）：beginVoiceHold/endVoiceHold 维护模块级计数，PhoneShell 底部
  *   边缘上滑手势读到 isVoiceHoldActive() 即中止 —— 「按住 说话」胶囊就在边缘带内，录音时
- *   上滑取消不再把多任务卡片拉起来
+ *   上滑取消不再把多任务卡片拉起来（实现抽到 lib/ios/voice-hold-flag 微模块：
+ *   PhoneShell 只引那几行，不再把整个录音组件拖进首屏 bundle）
  * - VoiceHoldBar：微信/信息输入区「按住 说话」胶囊。按住开录，setPointerCapture + touch-none
  *   保证手指划出仍持续跟踪、不被浏览器滚动认领；分区判定（所见即所得优先）：
  *   滑到浮层「取消 / 滑到这里 转文字」视觉目标上直接命中（data-voice-target），
@@ -28,6 +29,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Mic } from 'lucide-react';
+// 按住录音标志实现抽到微模块（性能：PhoneShell 只引微模块，不把整个录音组件拖进首屏包）；
+// 本组件转发这些 API 保持既有调用点兼容
+import { beginVoiceHold, endVoiceHold } from '@/lib/ios/voice-hold-flag';
 import { downsampleWave, pickRecorderMime } from '@/lib/ios/audio-utils';
 import { transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
@@ -103,22 +107,7 @@ const MIN_SEC = 0.7;
 
 /* ───────────────────────── 按住录音标志（供 PhoneShell 屏蔽多任务手势） ───────────────────────── */
 
-let holdCount = 0;
-
-/** 按住录音开始（计数 +1）：PhoneShell 底部边缘上滑手势在读到 true 期间不再打开多任务卡片 */
-export function beginVoiceHold(): void {
-  holdCount += 1;
-}
-
-/** 按住录音结束（计数 -1） */
-export function endVoiceHold(): void {
-  holdCount = Math.max(0, holdCount - 1);
-}
-
-/** PhoneShell 查询：当前是否处于「按住说话」手势中 */
-export function isVoiceHoldActive(): boolean {
-  return holdCount > 0;
-}
+export { isVoiceHoldActive } from '@/lib/ios/voice-hold-flag';
 
 /** 按住标志接线：down 时 begin，up/cancel/卸载时 end（防重复、防泄漏） */
 function useHoldFlag() {

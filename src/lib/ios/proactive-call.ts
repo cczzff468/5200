@@ -538,6 +538,11 @@ async function tickInner(): Promise<void> {
   // ① 总开关
   if (!isProactiveCallEnabled()) return;
 
+  // ①-b 档位闸（性能+行为修复）：off = 关闭主动来电——原先 off 档只是冷却参数归零，
+  // tick 仍每 60s 空转并对合格候选发决策 API（烧 token），决策为 call 时还会真的拨出。
+  // 现在直接短路：不轮询、不决策、不拨出
+  if (getProactiveLevel() === 'off') return;
+
   // ② 深夜硬闸：本地时间 [0, 8) 不打（23 点后的晚间分寸交给决策 API 按人设/时间判断）
   if (new Date(nowMs).getHours() < preset().nightEndHour) return;
 
@@ -671,6 +676,11 @@ async function tickInner(): Promise<void> {
   }
 
   // ⑥ 发起真来电（决策期间可能刚出现通话/来电，触发前再守卫一次）
+  // 档位再拦截：决策等待窗口内用户切到 off → 不再拨出（决策已花掉的 token 无法追回，但不拨出）
+  if (getProactiveLevel() === 'off') {
+    setShortCooldown(contact.id, nowMs);
+    return;
+  }
   // #52 修复：决策为 call 但触发前发现已有通话/闹钟 → 联系人未被真拨打，不应被记 6h 冷却。
   //   落 5min 短冷却（避免 90s 重试又命中同一联系人浪费一次决策 API；足够下一 tick 选到其他候选）。
   //   真拨打才落 6h call 冷却。

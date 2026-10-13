@@ -187,7 +187,7 @@ import { ChatRichInput, type ChatRichInputHandle } from './chat-rich-input';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
-import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
+import { kvGet, kvGetRaw, kvSet, kvSetDebounced, kvDel } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters } from '@/lib/memory';
 import {
   addCharMomentPost,
@@ -788,9 +788,10 @@ function loadMsgs(contactId: string): WxMsg[] {
 }
 
 function saveMsgs(contactId: string, msgs: WxMsg[]): void {
-  // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
+  // 持久化写穿到 IndexedDB（内存同步；落盘防抖合并——AI 连发分段/双写路径下同一键
+  // 400ms 内只落盘一次，长会话写放大从 O(条数×全量) 降到 O(1)；pagehide 自动冲刷）
   // 聊天记录不封顶（用户反馈：以前截 1000 条会挤丢旧聊天记录；kv 在 IndexedDB，纯文本容量可控）
-  kvSet(lsMsgsKey(contactId), msgs);
+  kvSetDebounced(lsMsgsKey(contactId), msgs);
   // 新消息自动恢复被「删除/不显示」的会话（真微信行为）
   try {
     const hid = loadStrList(LS_CHAT_HIDDEN);
@@ -1065,9 +1066,19 @@ function meAsContact(me: WxUser): ContactRecord {
 
 /** 会话列表预览（最后一条非通知/系统提示消息 + 时间）；撤回的消息显示「你/对方撤回一条消息」 */
 function readPreview(contactId: string): { text: string; time: number } {
-  const msgs = loadMsgs(contactId);
-  // 错误占位消息（旧版失败落库文案）不作会话预览，回退到最后一条实质消息
-  const last = [...msgs].reverse().find((m) => m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq' && m.error !== true);
+  // 性能：会话列表每次重算对每个联系人各调一次——直接从 kv 内存缓存读原始数组尾部扫描，
+  // 不再走 loadMsgs 的全量规范化克隆 + reverse 再克隆（长会话 O(N)×2 是列表卡顿主因；
+  // 预览只用 kind/role/time/content/recalled/call/fwd 等原始记录就有的字段）
+  const raw = kvGetRaw<WxMsg[]>(lsMsgsKey(contactId));
+  const msgs = Array.isArray(raw) ? raw : [];
+  let last: WxMsg | undefined;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m && m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq' && m.error !== true) {
+      last = m;
+      break;
+    }
+  }
   if (!last) return { text: '', time: 0 };
   if (last.recalled) return { text: last.role === 'me' ? '你撤回一条消息' : '对方撤回一条消息', time: last.time };
   if (last.kind === 'redpacket') return { text: '[微信红包]', time: last.time };
@@ -5033,13 +5044,21 @@ function ChatPage({
 
   // 滚底签名守卫：仅结构性变化（条数/末条 id/流式内容）才滚底；
   // 转文字等原地更新（msgs 引用变但结构不变）不触发滚动，避免转写面板出现时气泡被拽上移
+  // 性能+体验：仅当用户本就停在底部附近（距底 ≤160px）或首次进入时才跟随滚底——
+  // 上翻历史阅读时 AI 分段投递不再把视口拽走；滚动放入 rAF，scrollHeight 读取
+  // （强制 layout，长会话数千节点）不再随每条分段同步发生，同帧多次触发也合并成一次
   const scrollSigRef = useRef('');
   useEffect(() => {
     const sig = `${msgs.length}:${msgs[msgs.length - 1]?.id ?? ''}:${stream?.content ?? ''}`;
     if (sig === scrollSigRef.current) return;
+    const first = scrollSigRef.current === '';
     scrollSigRef.current = sig;
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+      if (first || nearBottom) el.scrollTop = el.scrollHeight;
+    });
   }, [msgs, stream]);
 
   // 翻译：开启后把文字消息（最近 60 条，排除错误/兑底文案）按检测到的语言双向翻译成另一侧
@@ -9943,6 +9962,8 @@ function MomentRow({
                 key={i}
                 src={src}
                 alt={`配图${i + 1}`}
+                loading="lazy"
+                decoding="async"
                 className="aspect-square w-full rounded-[3px] object-cover"
               />
             ))}

@@ -431,7 +431,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -452,6 +452,20 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'statusBarVisible'),
         localDB.get('settings', 'iconStyle'),
         localDB.get('settings', 'goodsImgStyle'),
+        localDB.get('settings', 'themeDefaultLight'),
+      ]);
+
+      // 性能：八个含密文信封的字段并行解密（getKey 并发单飞，密钥只读一次 IDB）——
+      // 原先逐个 await 串行 ≈ 16 次异步（读 key + 解密 ×8），开机黑屏期的固定开销
+      const [apiDec, presetsDec, visionDec, visionPresetsDec, ttsDec, sttDec, imgGenDec, imgGenPresetsDec] = await Promise.all([
+        decryptValue<Partial<ApiConfig>>(apiRec?.value),
+        decryptValue<ApiPreset[]>(presetsRec?.value),
+        decryptValue<Partial<VisionConfig>>(visionRec?.value),
+        decryptValue<VisionPreset[]>(visionPresetsRec?.value),
+        decryptValue<Partial<TtsConfig>>(ttsRec?.value),
+        decryptValue<Partial<SttConfig>>(sttRec?.value),
+        decryptValue<Partial<ImgGenConfig>>(imgGenRec?.value),
+        decryptValue<ImgGenPreset[]>(imgGenPresetsRec?.value),
       ]);
 
       // 图标风格：无记录/记录非法 → 'real'（真实图标）
@@ -503,7 +517,6 @@ export const useSettings = create<SettingsState>((set, get) => ({
       if (themeRec && (themeRec.value === 'light' || themeRec.value === 'dark' || themeRec.value === 'auto')) {
         theme = themeRec.value;
       }
-      const themeResetRec = await localDB.get('settings', 'themeDefaultLight');
       const themeReset = !themeResetRec;
       if (themeReset && theme === 'dark') {
         theme = 'light';
@@ -538,7 +551,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       let apiConfig: ApiConfig = { ...DEFAULT_API_CONFIG };
       if (apiRec && typeof apiRec.value === 'object' && apiRec.value !== null) {
         // 兼容：旧版明文记录 / 新版密文信封都从这里解出
-        const v = ((await decryptValue<Partial<ApiConfig>>(apiRec.value)) ?? apiRec.value) as Partial<ApiConfig>;
+        const v = (apiDec ?? apiRec.value) as Partial<ApiConfig>;
         apiConfig = {
           baseUrl: typeof v.baseUrl === 'string' && v.baseUrl ? v.baseUrl : DEFAULT_API_CONFIG.baseUrl,
           apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
@@ -561,7 +574,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       let apiPresets: ApiPreset[] = [];
       if (presetsRec && presetsRec.value) {
         // 兼容：旧版明文数组 / 新版密文信封
-        const pv = (await decryptValue<ApiPreset[]>(presetsRec.value)) ?? presetsRec.value;
+        const pv = presetsDec ?? presetsRec.value;
         if (Array.isArray(pv)) {
           apiPresets = pv.filter(
             (p): p is ApiPreset =>
@@ -584,7 +597,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       // 识图模型配置（含 apiKey，密文信封，与 apiConfig 同策略；未配置 = baseUrl 空）
       let visionConfig: VisionConfig = { ...DEFAULT_VISION_CONFIG };
       if (visionRec && typeof visionRec.value === 'object' && visionRec.value !== null) {
-        const v = ((await decryptValue<Partial<VisionConfig>>(visionRec.value)) ?? visionRec.value) as Partial<VisionConfig>;
+        const v = (visionDec ?? visionRec.value) as Partial<VisionConfig>;
         visionConfig = {
           baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : '',
           apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
@@ -600,7 +613,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
 
       let visionPresets: VisionPreset[] = [];
       if (visionPresetsRec && visionPresetsRec.value) {
-        const vv = (await decryptValue<VisionPreset[]>(visionPresetsRec.value)) ?? visionPresetsRec.value;
+        const vv = visionPresetsDec ?? visionPresetsRec.value;
         if (Array.isArray(vv)) {
           visionPresets = vv.filter(
             (p): p is VisionPreset =>
@@ -622,7 +635,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       // 语音 API 配置（含 apiKey，密文信封，与 apiConfig 同策略）
       let ttsConfig: TtsConfig = { ...DEFAULT_TTS_CONFIG };
       if (ttsRec && typeof ttsRec.value === 'object' && ttsRec.value !== null) {
-        const v = ((await decryptValue<Partial<TtsConfig>>(ttsRec.value)) ?? ttsRec.value) as Partial<TtsConfig>;
+        const v = (ttsDec ?? ttsRec.value) as Partial<TtsConfig>;
         ttsConfig = {
           provider: v.provider === 'builtin' || v.provider === 'openai' || v.provider === 'fishaudio' ? v.provider : 'minimax',
           baseUrl: typeof v.baseUrl === 'string' ? v.baseUrl : DEFAULT_TTS_CONFIG.baseUrl,
@@ -645,7 +658,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       // 语音识别（STT）配置（含 apiKey，密文信封，与 TTS 同策略；provider 缺省 builtin）
       let sttConfig: SttConfig = { ...DEFAULT_STT_CONFIG };
       if (sttRec && typeof sttRec.value === 'object' && sttRec.value !== null) {
-        const v = ((await decryptValue<Partial<SttConfig>>(sttRec.value)) ?? sttRec.value) as Partial<SttConfig>;
+        const v = (sttDec ?? sttRec.value) as Partial<SttConfig>;
         sttConfig = {
           provider: v.provider === 'openai' ? 'openai' : 'builtin',
           baseUrl: typeof v.baseUrl === 'string' && v.baseUrl ? v.baseUrl : DEFAULT_STT_CONFIG.baseUrl,
@@ -665,7 +678,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
       // 生图配置（含 apiKey，密文信封，与 visionConfig 同策略）
       let imgGenConfig: ImgGenConfig = { ...DEFAULT_IMGGEN_CONFIG };
       if (imgGenRec && typeof imgGenRec.value === 'object' && imgGenRec.value !== null) {
-        const v = ((await decryptValue<Partial<ImgGenConfig>>(imgGenRec.value)) ?? imgGenRec.value) as Partial<ImgGenConfig>;
+        const v = (imgGenDec ?? imgGenRec.value) as Partial<ImgGenConfig>;
         imgGenConfig = {
           enabled: v.enabled === true,
           mode: v.mode === 'direct' ? 'direct' : 'proxy',
@@ -686,7 +699,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
 
       let imgGenPresets: ImgGenPreset[] = [];
       if (imgGenPresetsRec && imgGenPresetsRec.value) {
-        const gv = (await decryptValue<ImgGenPreset[]>(imgGenPresetsRec.value)) ?? imgGenPresetsRec.value;
+        const gv = imgGenPresetsDec ?? imgGenPresetsRec.value;
         if (Array.isArray(gv)) {
           imgGenPresets = gv.filter(
             (p): p is ImgGenPreset =>
@@ -705,14 +718,15 @@ export const useSettings = create<SettingsState>((set, get) => ({
         }
       }
 
-      // 开机门控收尾前预载主屏/锁屏壁纸（最多等 1.5s 兜底）：
+      // 开机门控收尾前预载主屏/锁屏壁纸（最多等 600ms 兜底，原 1500ms——亮度实测+解码通常
+      // 百毫秒级完成，慢网大图场景宁可首帧稍晚铺图也不再多黑屏近一秒）:
       // 锁屏/主屏挂载首帧即完整壁纸 + 正确前景色，修复刚打开网页时锁屏壁纸「闪一下」
       const bootUrls: (string | null | undefined)[] = [customWallpaperUrl, lockCustomWallpaperUrl];
       for (const pid of [wallpaperPreset, lockWallpaperPreset]) {
         const bg = resolveWallpaperStyle(pid, null).backgroundImage;
         if (bg) bootUrls.push(bgImageUrlOf(bg));
       }
-      await preloadWallpapersForBoot(bootUrls);
+      await preloadWallpapersForBoot(bootUrls, 600);
 
       set({
         theme,

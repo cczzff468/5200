@@ -86,7 +86,7 @@ import {
 } from '@/lib/ios/block-state';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
-import { kvDel, kvGet, kvSet } from '@/lib/ios/idb-kv';
+import { kvDel, kvGet, kvSet, kvSetDebounced } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
@@ -323,9 +323,9 @@ function loadMsgs(sessionKey: string): ChatMsg[] | null {
 }
 
 function saveMsgs(sessionKey: string, msgs: ChatMsg[]): void {
-  // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
+  // 持久化写穿到 IndexedDB（内存同步；落盘防抖合并，同微信/QQ 端）；旧 localStorage 键已由迁移器删除
   // 聊天记录不封顶（用户反馈：以前截 1000 条会挤丢旧聊天记录；kv 在 IndexedDB，纯文本容量可控）
-  kvSet(lsMsgsKey(sessionKey), msgs);
+  kvSetDebounced(lsMsgsKey(sessionKey), msgs);
 }
 
 /** 会话内最后一条 assistant 消息（小助手未读水位键）：返回 id+时间，无 assistant 消息返回 null。
@@ -1209,13 +1209,19 @@ function ChatView({
   // 新消息/流式输出时自动滚到底部
   // 滚底签名守卫：仅结构性变化（条数/末条 id/流式内容）才滚底；
   // 转文字等原地更新（msgs 引用变但结构不变）不触发滚动，避免转写面板出现时气泡被拽上移
+  // 性能+体验：仅当用户本就停在底部附近（距底 ≤160px）或首次进入时才跟随滚底，滚动放 rAF（同微信端注释）
   const scrollSigRef = useRef('');
   useEffect(() => {
     const sig = `${msgs.length}:${msgs[msgs.length - 1]?.id ?? ''}:${stream?.content ?? ''}`;
     if (sig === scrollSigRef.current) return;
+    const first = scrollSigRef.current === '';
     scrollSigRef.current = sig;
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+      if (first || nearBottom) el.scrollTop = el.scrollHeight;
+    });
   }, [msgs, stream]);
 
   // 翻译：开启后把文字消息（最近 60 条，排除错误/兑底文案）按检测到的语言双向翻译成另一侧

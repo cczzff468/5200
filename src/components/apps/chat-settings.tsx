@@ -2273,6 +2273,17 @@ export function ChatVoicePage({
   /** 我的音色试听状态（在播的记录 id；内置引擎与 API 音频两路共用） */
   const [previewingMyId, setPreviewingMyId] = useState<string | null>(null);
   const myPreviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  /** 试听 ObjectURL 回收（内存：原先每次试听泄漏一个 blob: URL，关页才释放） */
+  const revokePreviewSrc = (audio: HTMLAudioElement | null): void => {
+    const src = audio?.src;
+    if (src && src.startsWith('blob:')) {
+      try {
+        URL.revokeObjectURL(src);
+      } catch {
+        /* 忽略 */
+      }
+    }
+  };
   // 本页只在客户端渲染：直接惰性初始化（避免 effect 内 setState 的水合/告警问题）
   const [builtinSupport] = useState<boolean | null>(() => (typeof window === 'undefined' ? null : isBuiltinVoiceSupported()));
 
@@ -2363,13 +2374,18 @@ export function ChatVoicePage({
           return;
         }
         const blob = await res.blob();
-        const audio = new Audio(URL.createObjectURL(blob));
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
         myPreviewAudioRef.current = audio;
         audio.onended = () => {
+          revokePreviewSrc(audio);
           if (myPreviewAudioRef.current === audio) myPreviewAudioRef.current = null;
           reset();
         };
-        audio.onerror = reset;
+        audio.onerror = () => {
+          revokePreviewSrc(audio);
+          reset();
+        };
         await audio.play().catch(reset);
       } catch {
         reset();

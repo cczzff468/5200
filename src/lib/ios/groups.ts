@@ -1262,11 +1262,30 @@ export function saveGroupMsgs(groupId: string, msgs: WxGroupMsg[]): void {
 
 /** 该群最后一条非通知消息（会话列表预览用）；群里只有系统事件时回退显示最近事件文案（预览不空白） */
 export function groupPreview(groupId: string): { text: string; time: number } {
-  const msgs = loadGroupMsgs(groupId);
-  const last = [...msgs].reverse().find((m) => m.kind !== 'notice');
+  // 性能：会话列表每次重算对每个群各调一次——直接从 kv 内存缓存读原始数组尾部扫描，
+  // 不再走 loadGroupMsgs 的全量 normalize 克隆 + reverse 再克隆（群消息多时这是
+  // 会话列表卡顿的主因之一；预览只用 kind/recalled/senderName/content 等原始记录就有的字段）
+  const g = getGroup(groupId);
+  const raw = g ? readJSON<WxGroupMsg[]>(groupMsgsKey(g.app, groupId)) : null;
+  const msgs = Array.isArray(raw) ? raw : [];
+  let last: WxGroupMsg | undefined;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m && m.kind !== 'notice') {
+      last = m;
+      break;
+    }
+  }
   if (!last) {
     // 全是事件通知（如刚建群/刚拉回、开场白未落盘）：用最近一条事件文案当预览，避免会话行空白
-    const evt = [...msgs].reverse().find((m) => typeof m.noticeText === 'string' && m.noticeText);
+    let evt: WxGroupMsg | undefined;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m && typeof m.noticeText === 'string' && m.noticeText) {
+        evt = m;
+        break;
+      }
+    }
     return { text: evt?.noticeText ?? '', time: evt?.time ?? 0 };
   }
   if (last.recalled) return { text: `${last.role === 'me' ? '你' : last.senderName || '有人'}撤回了一条消息`, time: last.time };

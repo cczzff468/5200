@@ -593,7 +593,10 @@ export function tbLoadOrders(uid: string): TbOrder[] {
 }
 
 export function tbSaveOrders(uid: string, list: TbOrder[]): void {
-  save(orderKey(uid), list);
+  // 内存/存储上限（对齐美团 MAX_ORDERS=200）：订单是滚动窗口数据，保存时裁剪旧单
+  // 防止长期使用后无界增长（每 10s tick 全量序列化写盘，数组越大写放大越重）
+  const capped = list.length > 200 ? [...list].sort((a, b) => b.createdAt - a.createdAt).slice(0, 200) : list;
+  save(orderKey(uid), capped);
 }
 
 export function tbOrderById(uid: string, id: string): TbOrder | undefined {
@@ -1150,7 +1153,8 @@ export function tbLoadMsgs(uid: string): TbMsg[] {
 export function tbPushMsg(uid: string, m: Omit<TbMsg, 'id' | 'at'>): void {
   const list = load<TbMsg[]>(msgKey(uid), []);
   list.push({ ...m, id: `tbm${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`, at: Date.now() });
-  save(msgKey(uid), list);
+  // 上限 500 条（客服消息滚动窗口）：防止长期对话无界增长
+  save(msgKey(uid), list.length > 500 ? list.slice(-500) : list);
 }
 
 /** 未读口径：消息时间晚于已读时间戳即未读（「消息-清除未读」用） */
@@ -1174,11 +1178,14 @@ export function tbMsgUnreadCount(uid: string): number {
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 
 /** 全局订单推进（App 挂载时启动一次）：每 10s catch-up 所有已登录账号；
- *  推进后接力 tbEngageTick（AI 取件/主动代付等联动，动态 import 防循环依赖） */
+ *  推进后接力 tbEngageTick（AI 取件/主动代付等联动，动态 import 防循环依赖）。
+ *  性能：页面不可见时跳过（订单按时间戳 catch-up，回前台一拍即补齐；避免后台标签页
+ *  每 10s 白白全量序列化订单表抢主线程） */
 export function tbStartOrderWatcher(): void {
   if (tickTimer || typeof window === 'undefined') return;
   tickTimer = setInterval(() => {
     try {
+      if (document.hidden) return;
       const s = tbGetSession();
       if (!s) return;
       const uid = tbUidOf(s);

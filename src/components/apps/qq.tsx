@@ -225,7 +225,7 @@ import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 // 多账号 v2（Task 40-2b）：kv 裸键自动按 qq 当前账号作用域；purge 限账号用 kvKeysByPrefix+kvDelRaw
-import { kvGet, kvSet, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv';
+import { kvGet, kvGetRaw, kvSet, kvSetDebounced, kvDel, kvDelRaw, kvKeysByPrefix } from '@/lib/ios/idb-kv';
 import { AccountAddSheet } from './account-add-sheet';
 // 多账号（Task 40 v2）：注册表/切换/创建走 per-app accounts API；QQ 登录态等 LS 键每次经 accLs(key,'qq')
 // 现算（大号原键，小号 --{id} 后缀）；切换账号不刷新网页，根组件监听 ACCOUNT_CHANGED_EVENT 重读
@@ -1238,9 +1238,9 @@ function loadMsgs(contactId: string): QQMsg[] {
 }
 
 function saveMsgs(contactId: string, msgs: QQMsg[]): void {
-  // 持久化写穿到 IndexedDB（内存同步，异步落盘）；旧 localStorage 键已由迁移器删除
+  // 持久化写穿到 IndexedDB（内存同步；落盘防抖合并，同微信端）；旧 localStorage 键已由迁移器删除
   // 聊天记录不封顶（用户反馈：以前截 1000 条会挤丢旧聊天记录；kv 在 IndexedDB，纯文本容量可控）
-  kvSet(lsMsgsKey(contactId), msgs);
+  kvSetDebounced(lsMsgsKey(contactId), msgs);
 }
 
 // ---------------- 转发感知：目标会话的 AI 事件队列 ----------------
@@ -2107,6 +2107,8 @@ export function QqImageBubble({ src, testId }: { src: string; testId?: string })
       src={src}
       alt="图片消息"
       data-testid={testId}
+      loading="lazy"
+      decoding="async"
       className="max-h-[210px] w-auto max-w-[160px] rounded-[10px] object-cover"
     />
   );
@@ -3474,13 +3476,21 @@ function ChatPage({
 
   // 滚底签名守卫：仅结构性变化（条数/末条 id/流式内容）才滚底；
   // 转文字等原地更新（msgs 引用变但结构不变）不触发滚动，避免转写面板出现时气泡被拽上移
+  // 性能+体验：仅当用户本就停在底部附近（距底 ≤160px）或首次进入时才跟随滚底——
+  // 上翻历史阅读时 AI 分段投递不再把视口拽走；滚动放入 rAF，scrollHeight 读取
+  // （强制 layout，长会话数千节点）不再随每条分段同步发生，同帧多次触发也合并成一次
   const scrollSigRef = useRef('');
   useEffect(() => {
     const sig = `${msgs.length}:${msgs[msgs.length - 1]?.id ?? ''}:${stream?.content ?? ''}`;
     if (sig === scrollSigRef.current) return;
+    const first = scrollSigRef.current === '';
     scrollSigRef.current = sig;
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+      if (first || nearBottom) el.scrollTop = el.scrollHeight;
+    });
   }, [msgs, stream]);
 
   // 翻译：开启后把文字消息（最近 60 条，排除错误/兑底文案）按检测到的语言双向翻译成另一侧
@@ -10646,14 +10656,29 @@ function MessagesPage({
   }, [groupsTick]);
   /** 全量会话（未套搜索过滤）：幽灵未读清理必须以全量列表为准，否则搜索时会把列表外会话的未读误删 */
   const baseConversations = useMemo<SessionRow[]>(() => {
+    // 性能：原实现对每个联系人调 2 次 loadMsgs（filter 判空 + map 取预览），每次全量克隆
+    // + reverse 再克隆；改为 kv 内存缓存直读原始数组：判空只看 length，预览从尾部扫描
+    // 最后一条实质消息（预览只用 kind/recalled/notice/call/fwd/content 等原始记录就有的字段）
+    const rawCountOf = (id: string): number => {
+      const r = kvGetRaw<QQMsg[]>(lsMsgsKey(id));
+      return Array.isArray(r) ? r.length : 0;
+    };
+    const lastRealMsgOf = (id: string): QQMsg | undefined => {
+      const r = kvGetRaw<QQMsg[]>(lsMsgsKey(id));
+      if (!Array.isArray(r)) return undefined;
+      for (let i = r.length - 1; i >= 0; i--) {
+        const m = r[i];
+        if (m && m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq' && m.error !== true) return m;
+      }
+      return undefined;
+    };
     const rows: SessionRow[] = contacts
       .filter(
-        (c) => ((isFriendIn(c, 'qq') && c.kind !== 'user') || c.id === me.id) && !(hiddenSet.has(c.id) && loadMsgs(c.id).length === 0)
+        (c) => ((isFriendIn(c, 'qq') && c.kind !== 'user') || c.id === me.id) && !(hiddenSet.has(c.id) && rawCountOf(c.id) === 0)
       )
       .map((c) => {
-        const msgs = loadMsgs(c.id);
         // 通知行/系统提示行/申请卡片/错误占位（旧版失败落库文案）不作为会话预览，回退到最后一条实质消息
-        const last = [...msgs].reverse().find((m) => m.kind !== 'notice' && m.kind !== 'sys' && m.kind !== 'blockreq' && m.error !== true);
+        const last = lastRealMsgOf(c.id);
         return { key: c.id, name: c.name, contact: c, group: null, text: msgPreview(last), time: last?.time ?? 0 };
       });
     // 群会话行（群聊与私聊是两类会话，各自独立显示；隐藏后不再出现，可从联系人 › 群聊 再进）
@@ -13150,7 +13175,7 @@ function ZonePage({
                       {p.repostOf.images.length > 0 && (
                         <div className="mt-2 flex gap-1.5">
                           {p.repostOf.images.slice(0, 3).map((src, i) => (
-                            <img key={i} src={src} alt="转发配图" className="h-16 w-16 rounded-[6px] object-cover" />
+                            <img key={i} src={src} alt="转发配图" loading="lazy" decoding="async" className="h-16 w-16 rounded-[6px] object-cover" />
                           ))}
                         </div>
                       )}
@@ -13179,6 +13204,8 @@ function ZonePage({
                           key={i}
                           src={src}
                           alt="动态配图"
+                          loading="lazy"
+                          decoding="async"
                           className="aspect-square w-full rounded-[8px] object-cover"
                           {...(p.textCardUpgraded === true
                             ? {

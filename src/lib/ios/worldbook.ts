@@ -460,6 +460,12 @@ export const WB_WRAP_CLOSE = '【世界设定结束】';
  */
 export const WB_INJECT_BUDGET = 20000;
 
+/**
+ * 单条条目内容上限（字符）：一条超长 global 条目即可吃满 2 万总预算的 1/5，
+ * 且超长世界设定通常是导入脏数据（正常条目几百字内）——注入侧截断护住预算。
+ */
+export const WB_ENTRY_MAX_CHARS = 4000;
+
 /** 截断提示（拼在最后一个仍保留内容的位置块末尾，仅 system 可见） */
 export const WB_TRUNCATE_NOTICE = '（世界设定过长：超出预算的条目已按注入顺序与优先级截断）';
 
@@ -638,7 +644,11 @@ function collectWbBlocksInner(contactId: string | null, scanText: string, labels
       if (!entry.enabled) continue;
       if (!entry.content.trim()) continue; // 空内容条目不注入（历史/导入脏数据兜底）
       if (!alwaysInject && !wbEntryMatches(entry, scanText)) continue;
-      (inBook[entry.position] ??= []).push(entry);
+      // 单条长度护栏（性能/预算保护，见 WB_ENTRY_MAX_CHARS 注释）
+      const clipped = entry.content.length > WB_ENTRY_MAX_CHARS
+        ? `${entry.content.slice(0, WB_ENTRY_MAX_CHARS)}…（本条世界设定超长，已截断）`
+        : entry.content;
+      (inBook[entry.position] ??= []).push(clipped === entry.content ? entry : { ...entry, content: clipped });
     }
     for (const pos of WB_POSITIONS) {
       const list = inBook[pos];

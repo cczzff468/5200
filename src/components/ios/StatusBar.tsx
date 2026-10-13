@@ -4,7 +4,9 @@ import { useSyncExternalStore } from 'react';
 import { formatIOSTime } from '@/lib/ios/clock';
 import { useBattery } from '@/lib/ios/battery';
 import { useLightForeground } from '@/lib/ios/foreground';
-import { useMusic } from '@/lib/ios/music-store';
+// 性能：音乐岛可见性走微型 flag store（StatusBar 是首屏静态组件，不把 music-store+music-api
+// 千行级模块拖进首屏 bundle；MusicIsland 写入时双写同步）
+import { useMusicIslandVisible } from '@/lib/ios/music-island-flag';
 import { useMtIsland } from '@/lib/ios/mt-island-store';
 import { useTbIsland } from '@/lib/ios/tb-island-store';
 
@@ -60,8 +62,8 @@ function BatteryIcon({ level, charging, low }: { level: number; charging: boolea
  * WiFi/电量保留（真机 iOS 灵动岛同语义）；弹窗消失后图标恢复。
  * 最新反馈：美团外卖配送小窗可见期间，WiFi 图标也要跟着隐藏（对齐真机灵动岛占位后的
  * 状态栏收紧效果），信号/WiFi 同时消失，仅保留电量；小窗消失后两个图标一同恢复。
- * 可见性由 MusicIsland 写入 music-store.islandVisible、美团灵动岛写入 mt-island-store
- * （本组件只读两者任一，不重复维护口径）。
+ * 可见性由 MusicIsland 写入 music-store.islandVisible（美团/淘宝岛同读）+ music-island-flag
+ * 微型 store（本组件只读后者），不重复维护口径。
  */
 export default function StatusBar() {
   const clockSecond = useSyncExternalStore(
@@ -74,7 +76,7 @@ export default function StatusBar() {
   );
   const battery = useBattery();
   const lightText = useLightForeground();
-  const musicIslandVisible = useMusic((s) => s.islandVisible);
+  const musicIslandVisible = useMusicIslandVisible();
   const mtIslandVisible = useMtIsland((s) => s.visible);
   const tbIslandVisible = useTbIsland((s) => s.visible);
   // 音乐灵动岛：仅隐藏信号（第二十三轮口径）；美团/淘宝配送灵动岛：信号 + WiFi 一起隐藏，仅保留电量（最新反馈）

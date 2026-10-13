@@ -6,7 +6,7 @@ import { AnimatePresence } from 'framer-motion';
 import { selectResolvedTheme, useSettings, useSystemDark, useUI, useWallpaperStyle } from '@/lib/ios/store';
 import { useIslandNotify } from '@/lib/ios/island-notify';
 import { useIncomingCall } from '@/lib/ios/incoming-call';
-import { isVoiceHoldActive } from '@/components/apps/voice-input';
+import { isVoiceHoldActive } from '@/lib/ios/voice-hold-flag';
 import { useLightForeground } from '@/lib/ios/foreground';
 import { ensureAccountOwnerContacts, migrateFromServer } from '@/lib/ios/contacts-store';
 import { startOwnerProfileSync } from '@/lib/ios/owner-profile-sync';
@@ -262,9 +262,9 @@ export default function PhoneShell() {
       // 必须在 ensureKvReady 注水之前——迁移产生的后缀键要进同一份内存
       await migrateLegacyAccounts();
       await ensureKvReady();
-      // 多账号（Task 40）：为缺档案联系人的小号/匿名号自动建 user 档案（altOf 关联）
-      await ensureAccountOwnerContacts();
-      await load();
+      // 多账号（Task 40）：为缺档案联系人的小号/匿名号自动建 user 档案（altOf 关联）——
+      // 只读写 contacts store 与 kv，与 load()（只读 settings store）无依赖，并行省黑屏时间
+      await Promise.all([ensureAccountOwnerContacts(), load()]);
       // 机主身份双向同步（联系人↔设置›个人信息）：设置读出后再启动，
       // 名字/头像任一侧编辑全端即时同步（锁屏/通话/微信/QQ/信息等）
       startOwnerProfileSync();
@@ -273,8 +273,10 @@ export default function PhoneShell() {
       if (openParam && !useUI.getState().locked) {
         useUI.getState().openApp(openParam as never);
       }
-      // 全局字体恢复（Task 33-d）：读持久化的 appFontId 写入 CSS 变量；内部全兜底，失败不阻塞开机
-      await ensureAppFontApplied();
+      // 全局字体恢复（Task 33-d）：读持久化的 appFontId 写入 CSS 变量；内部全兜底，失败不阻塞开机。
+      // 性能：不 await——默认系统字体是纯 CSS 零开销，自定义字体（FontFace 注册）极少数用户才有，
+      // 少一拍黑屏；字体晚一瞬挂上只是首帧字体微闪，可接受
+      void ensureAppFontApplied();
     })();
   }, [load]);
 

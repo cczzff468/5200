@@ -24,12 +24,11 @@ import {
   lyricOf,
   buildLyricLines,
   musicUid,
-  getMusicLogin,
   normalizeSong,
   type NcmSong,
   type NcmLyric,
 } from './music-api';
-import { kvGet, kvSet, kvDel, isKvReady } from './idb-kv';
+import { kvGet, kvSet, kvDel } from './idb-kv';
 import { registerAudioSource, stopOtherAudio } from './audio-focus';
 import { useSettings } from './store';
 
@@ -462,6 +461,10 @@ export const useMusic = create<MusicState>((set, get) => ({
     useMusic.setState({ listenSec: readListenSec() });
     // 恢复播放器自定义背景与版式（按账号隔离）
     useMusic.setState({ playerBg: readPlayerBg(), playerStyle: readPlayerStyle() });
+    // 游客模式持久化：上次选过「游客模式」，刷新后直接进入游客态（不再弹登录页）。
+    // （原先写在模块加载即执行的恢复块里——但本模块曾被 StatusBar 静态引入时该块在 kv
+    // 注水前执行恒为空转；性能优化解耦后本模块只在 boot 时动态加载，恢复统一收拢到这里）
+    if (kvGet<boolean>(GUEST_MODE_KEY)) set({ guestMode: true });
     // 登录态（异步校验）
     void get().refreshLoginUi();
   },
@@ -1007,33 +1010,3 @@ export function guestPlaylistRename(pid: string, name: string): void {
   saveGuestPlaylists(list);
 }
 
-// ---------------- 模块加载即同步恢复 ----------------
-// App 组件首帧渲染前 kv 已注水（PhoneShell 开机门控），这里同步读内存缓存即可
-// 恢复登录态/播放快照/历史，避免首帧闪登录页；音频引擎等首次交互再惰性建。
-
-if (typeof window !== 'undefined' && isKvReady()) {
-  const l = getMusicLogin();
-  if (l) {
-    useMusic.setState({
-      loginUid: l.profile.userId,
-      loginNickname: l.profile.nickname,
-      loginAvatar: l.profile.avatarUrl,
-    });
-  } else if (kvGet<boolean>(GUEST_MODE_KEY)) {
-    // 游客模式持久化：上次选过「游客模式」，刷新后直接进入游客态（不再弹登录页）
-    useMusic.setState({ guestMode: true });
-  }
-  const snap = readPlayerSnapshot();
-  if (snap && Array.isArray(snap.queue) && snap.queue.length) {
-    const idx = Math.min(Math.max(0, snap.qIndex ?? 0), snap.queue.length - 1);
-    useMusic.setState({
-      queue: snap.queue,
-      qIndex: idx,
-      current: snap.queue[idx] ?? null,
-      mode: snap.mode ?? 'order',
-      volume: typeof snap.volume === 'number' ? snap.volume : 1,
-    });
-  }
-  useMusic.setState({ listenSec: readListenSec() });
-  loadHistoryFor();
-}

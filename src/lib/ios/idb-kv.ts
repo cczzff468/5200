@@ -146,6 +146,7 @@ export function kvGetRaw<T = unknown>(key: string): T | null {
 /** 原样键写（写穿 IndexedDB 同键） */
 export function kvSetRaw(key: string, value: unknown): void {
   memStore.set(key, value);
+  cancelPendingKvWrite(key); // 立即写穿前取消同键的防抖写入，防旧值乱序覆盖新值
   if (!idbAvailable) {
     try {
       window.localStorage.setItem(key, JSON.stringify(value));
@@ -157,9 +158,66 @@ export function kvSetRaw(key: string, value: unknown): void {
   void localDB.put('kv', { key, value }).catch(() => {});
 }
 
+// ---------------- 防抖写穿（高频大值合并写入） ----------------
+// 聊天记录这类「整会话一个键」的数据每次追加都全量重写：AI 连发 5 条分段回复
+// 会触发 ~10 次同一键的全量 IndexedDB put（显式落盘 + msgs effect 双写 × 条数）。
+// kvSetDebounced 内存同步更新（kvGet 语义不变），IndexedDB 写入按键合并到
+// 静默期一次；pagehide / flushKvWrites() 立即冲刷，数据不丢。
+
+const KV_WRITE_DEBOUNCE_MS = 400;
+/** 防抖中的写入：key → { value, timer }（timer 到期一次性 put 最新值） */
+const pendingWrites = new Map<string, { value: unknown; timer: number }>();
+
+function cancelPendingKvWrite(key: string): void {
+  const p = pendingWrites.get(key);
+  if (p) {
+    window.clearTimeout(p.timer);
+    pendingWrites.delete(key);
+  }
+}
+
+/** 内存同步 + IndexedDB 防抖写穿：同键高频写自动合并，读路径零变化 */
+export function kvSetDebounced(key: string, value: unknown): void {
+  memStore.set(key, value);
+  if (!idbAvailable) {
+    // 降级模式（localStorage 兜底）写入代价低，直接立即写，语义与 kvSetRaw 一致
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // 忽略
+    }
+    return;
+  }
+  cancelPendingKvWrite(key);
+  const timer = window.setTimeout(() => {
+    pendingWrites.delete(key);
+    void localDB.put('kv', { key, value }).catch(() => {});
+  }, KV_WRITE_DEBOUNCE_MS);
+  pendingWrites.set(key, { value, timer });
+}
+
+/** 立即冲刷全部防抖中的写入（关页前保数据、E2E 验证用） */
+export function flushKvWrites(): void {
+  if (pendingWrites.size === 0 || !idbAvailable) return;
+  for (const [key, p] of pendingWrites) {
+    window.clearTimeout(p.timer);
+    void localDB.put('kv', { key, value: p.value }).catch(() => {});
+  }
+  pendingWrites.clear();
+}
+
+// 页面隐藏/关闭前冲刷防抖写入（模块级注册一次；pagehide 在刷新/关闭/跳转时必发）
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', flushKvWrites);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushKvWrites();
+  });
+}
+
 /** 原样键删 */
 export function kvDelRaw(key: string): void {
   memStore.delete(key);
+  cancelPendingKvWrite(key); // 删键同时取消同键防抖写入，防删后旧值又写回
   if (!idbAvailable) {
     try {
       window.localStorage.removeItem(key);
@@ -218,7 +276,8 @@ export function kvDelByPrefix(prefix: string): void {
 
 /**
  * 把 localStorage 命中清单的键迁移到 kv（幂等）：
- * 写入 → 读回校验（JSON 序列化对比）→ 一致才删旧键；失败保留旧键下次重试。
+ * 并行写入（IndexedDB 单连接多事务安全）；put 成功即成功（事务性保证，不再读回
+ * JSON.stringify 对比——大对象双序列化是首次启动的显著开销；失败保留旧键下次重试）。
  * 返回迁移的键数（用于日志/验证）。
  */
 async function migrateLsToKv(): Promise<number> {
@@ -228,37 +287,34 @@ async function migrateLsToKv(): Promise<number> {
     const k = window.localStorage.key(i);
     if (k && isMigratableKey(k)) keys.push(k);
   }
+  if (keys.length === 0) return 0;
   let migrated = 0;
-  for (const key of keys) {
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (raw == null) continue;
-      let value: unknown;
+  await Promise.all(
+    keys.map(async (key) => {
       try {
-        value = JSON.parse(raw);
+        const raw = window.localStorage.getItem(key);
+        if (raw == null) return;
+        let value: unknown;
+        try {
+          value = JSON.parse(raw);
+        } catch {
+          value = raw; // 非 JSON 字符串原样存
+        }
+        // 已有键则不覆盖：说明上次迁移 put 已成功（可能后续运行期已被 kvSet 更新过）。
+        // 防止极端窗口（put 成功后、删旧键前页面被杀）下，下次启动用 localStorage
+        // 旧值覆盖运行期新值。kv 存的是 JSON.parse 结果（可结构化克隆），不存在
+        // 「上次写坏」需要 LS 修复的场景，直接以 kv 为准并清掉 LS 旧键。
+        const existing = await localDB.get('kv', key);
+        if (existing == null) {
+          await localDB.put('kv', { key, value }); // put resolve = 事务提交成功
+        }
+        window.localStorage.removeItem(key);
+        migrated++;
       } catch {
-        value = raw; // 非 JSON 字符串原样存
+        // 单键失败不阻塞其余迁移（保留旧键，下次启动重试）
       }
-      // 已有键则不覆盖：说明上次迁移 put 已成功（可能后续运行期已被 kvSet 更新过）。
-      // 防止极端窗口（put 成功后、删旧键前页面被杀）下，下次启动用 localStorage
-      // 旧值覆盖运行期新值。kv 存的是 JSON.parse 结果（可结构化克隆），不存在
-      // 「上次写坏」需要 LS 修复的场景，直接以 kv 为准并清掉 LS 旧键。
-      const existing = await localDB.get('kv', key);
-      if (existing == null) {
-        await localDB.put('kv', { key, value });
-        // 校验：读回并对比序列化结果，一致才算迁移成功
-        const back = await localDB.get('kv', key);
-        const ok =
-          back != null &&
-          JSON.stringify(back.value) === JSON.stringify(value);
-        if (!ok) continue; // 保留旧键，下次启动重试
-      }
-      window.localStorage.removeItem(key);
-      migrated++;
-    } catch {
-      // 单键失败不阻塞其余迁移
-    }
-  }
+    })
+  );
   return migrated;
 }
 

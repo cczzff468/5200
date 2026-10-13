@@ -81,6 +81,9 @@ export function bondNotesFor(contactId: string, keywords: string[], limit = 3): 
     });
   if (words.length === 0) return [];
   const frags = listFragments(contactId).filter((f) => {
+    // 已入核心记忆（consumedAt）/被更新取代（supersededAt）的碎片不再作为「最近发生的事」
+    // 注入——与 memChatRecallBlock 同口径（避免重复注入与陈旧注入）
+    if (f.consumedAt || f.supersededAt) return false;
     const content = f.content ?? '';
     return words.some((w) => content.includes(w));
   });
