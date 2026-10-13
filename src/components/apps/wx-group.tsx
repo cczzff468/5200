@@ -5129,6 +5129,7 @@ export function WxGroupChatPage({
                   <StickerMsgBubble
                     src={m.stk.url}
                     meaning={m.stk.meaning}
+                    me={m.role === 'me'}
                     onClick={() => {
                       const url = m.stk?.url;
                       if (url) setViewer({ urls: [url], index: 0 });

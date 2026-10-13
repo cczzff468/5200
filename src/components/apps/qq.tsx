@@ -2337,19 +2337,21 @@ export function QqStickerPanel({
                   onPointerUp={clearStickerPress}
                   onPointerCancel={clearStickerPress}
                   onPointerLeave={clearStickerPress}
-                  className="aspect-square w-full overflow-hidden rounded-[10px] p-1.5 active:bg-black/[0.06]"
+                  className={`aspect-square w-full overflow-hidden rounded-[10px] active:bg-black/[0.06] ${st.builtin ? 'p-0.5' : 'p-1.5'}`}
                   title={st.meaning || '表情'}
                 >
                   <img src={st.url} alt={st.meaning || '表情'} className="h-full w-full object-contain" loading="lazy" />
                 </button>
-                <button
-                  type="button"
-                  data-testid={`qq-sticker-meaning-${i}`}
-                  onClick={() => !st.builtin && setMeaningFor(st)}
-                  className={`mt-0.5 block h-4 w-full truncate text-center text-[10px] leading-4 text-black/40 dark:text-white/40 ${st.builtin ? '' : 'active:opacity-60'}`}
-                >
-                  {st.meaning || '＋意思'}
-                </button>
+                {!st.builtin && (
+                  <button
+                    type="button"
+                    data-testid={`qq-sticker-meaning-${i}`}
+                    onClick={() => setMeaningFor(st)}
+                    className="mt-0.5 block h-4 w-full truncate text-center text-[10px] leading-4 text-black/40 active:opacity-60 dark:text-white/40"
+                  >
+                    {st.meaning || '＋意思'}
+                  </button>
+                )}
                 {editMode && !st.builtin && (
                   <button
                     type="button"

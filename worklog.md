@@ -18862,3 +18862,23 @@ Stage Summary:
 - 改动文件：src/lib/ios/builtin-stickers.ts（新增 247 行）、src/lib/ios/stickers.ts、src/lib/chat-rich.ts、src/components/apps/{sticker-batch,wechat,qq}.tsx；public/wechat-emojis/（109 PNG）+ public/qq-emojis/（122 GIF）新增
 - 关键决策：①数据层合并而非 UI 层渲染两套——loadStickers 透明合并使面板/AI/消息回写零改动自动生效；②内置 id 用中文（wxb-微笑）而非随机串——AI 输出可读、用户输入 [表情包:wxb-微笑] 也能手动触发；③AI 清单用户优先+内置精选而非全量——防 231 项污染 prompt；④QQ 用 0.1.1 tarball GIF 动图（0.2.x 已移除图片）——经典 QQ 表情是动画，比 PNG 更真实
 - 资源源：微信 https://github.com/xxk8/wechat-emojis（109 PNG）；QQ https://github.com/fritx/qqface 0.1.x（122 GIF + smartQQ textMaps 中文名）
+
+---
+Task ID: 20
+Agent: 主协调者 (Z.ai Code)
+Task: 用户反馈三项修复——①QQ 内置表情换真实新版 3D 风格（fritx/qqface 老 2D GIF 不对）；②微信表情面板图标变大；③微信内置表情消息带颜色气泡（其他表情包不带）
+
+Work Log:
+- 【截图诊断】VLM 分析用户 5 张截图：第一张（真实 QQ 面板）表情是 3D 立体渲染风格（类 Apple Emoji）；第三张（真实微信面板）图标大且无名字标签；102947（真实微信消息）内置"发呆"表情在绿色气泡里显示——确定三项需求
+- 【QQ 换源】调研替代源 → koishijs/QFace（腾讯官方资源 dump，275 个表情含 data.json 元数据 QDes 中文名）：clone 仓库验证风格（VLM 抽查 1撇嘴/2色/3发呆/4得意/5大哭/49摊手/101喜 全部 3D 立体）→ 提取 static/s{QSid}.png 前 134 号经典 105 张（128px、共 1.7MB）替换 public/qq-emojis；builtin-stickers.ts QQ 段重生成（105 项，QSid 官方序 0=惊讶…qqb-{新中文名}）
+- 【旧消息兼容】删除老 GIF 会裂历史消息 → git checkout 910d697 恢复 122 张老 GIF 与新 PNG 并存（2.2MB）——旧消息引用 .gif 新消息走 .png，实测两者均 loaded=true
+- 【面板图标变大】微信/QQ 面板：内置表情不再渲染 meaning 名字标签（真微信/真 QQ 面板无名字）+ 格子 padding p-1.5→p-0.5（仅内置），图标显著变大；用户收藏表情保留标签（点标签设意思的功能入口）
+- 【微信内置表情气泡】StickerMsgBubble 组件重构：src 以 /wechat-emojis/ 开头（内置判定）→ 颜色气泡样式（我方 bg-[#95EC69] 绿/对方白，rounded-[8px] px-2 py-1.5）内含 52px 表情；否则保持原全宽无气泡大图（max-h-110px）。单聊+群聊（wx-group）调用处传 me={m.role==='me'}；QQ 侧不动（用户明确只要微信有气泡）
+- 【E2E 实测】微信：面板 109 张、meaningLabels=0（标签已去）、点击发送微笑 → 气泡 bg=rgb(149,236,105)=#95EC69、img 32px(壳缩放后)；QQ：面板 105 张 3D PNG（broken=0、labels=0、首张 0.png 惊讶）、发送走无气泡大图样式；旧 0.gif 消息+新 0.png 消息并存均正常加载；tsc/lint/console 全零错误
+- 【agent-browser 坑】主屏 App 图标是 div[role=button] 非 button 标签（querySelectorAll('button') 查不到）；点击间歇不派发事件时用 dispatchEvent(new MouseEvent) 兜底
+
+Stage Summary:
+- 交付：①QQ 内置表情从老 2D GIF 换成新版 3D 立体风格（koishijs/QFace 腾讯官方资源，105 张经典）；②微信/QQ 面板内置表情图标变大（去名字标签+收窄内边距）；③微信内置经典表情消息带颜色气泡（我方绿/对方白、52px），用户收藏大表情包保持无气泡全宽样式，QQ 表情消息无气泡
+- 改动文件：src/lib/ios/builtin-stickers.ts（QQ 段重生成 105 项）、src/components/apps/{wechat,wx-group,qq}.tsx
+- 关键决策：①QQ 资源源选 koishijs/QFace（腾讯官方 dump、QDes 元数据全、3D 风格匹配用户截图）弃 fritx/qqface（2D 老 GIF）；②内置判定用 url 前缀 startsWith('/wechat-emojis/') 而非新增消息字段——存量消息自动获得气泡样式；③老 GIF 文件恢复并存——历史消息零裂图；④QQ 不加气泡（用户原话"其他的不要有"）
+- 遗留：QQ 侧表情消息无气泡、超级表情（动图 APNG）未做——等用户反馈再定

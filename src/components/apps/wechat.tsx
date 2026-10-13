@@ -2378,8 +2378,43 @@ export function LocViewLayer({ name, address, onClose }: { name: string; address
   );
 }
 
-/** 表情消息气泡（点开全屏预览 + 意思提示；群聊复用同一套组件） */
-export function StickerMsgBubble({ src, meaning, onClick }: { src: string; meaning: string; onClick: () => void }) {
+/** 表情消息气泡（点开全屏预览 + 意思提示；群聊复用同一套组件）。
+ *  builtinWx：微信内置经典表情（/wechat-emojis/ 资源）——真微信同款：表情包在颜色气泡里（我方绿/对方白），
+ *  尺寸与文字行高接近；用户收藏的大表情包保持原全宽无气泡样式 */
+export function StickerMsgBubble({
+  src,
+  meaning,
+  onClick,
+  me,
+}: {
+  src: string;
+  meaning: string;
+  onClick: () => void;
+  /** 消息角色：内置表情气泡配色（true=绿 #95EC69 / false=白） */
+  me?: boolean;
+}) {
+  const builtin = src.startsWith('/wechat-emojis/');
+  if (builtin) {
+    return (
+      <button
+        type="button"
+        data-testid="wx-sticker-bubble"
+        onClick={onClick}
+        className={
+          'flex items-center justify-center rounded-[8px] px-2 py-1.5 active:opacity-80 ' +
+          (me === false ? 'bg-white shadow-[0_1px_2px_rgba(0,0,0,0.1)] dark:bg-[#1E1E1E]' : 'bg-[#95EC69] dark:bg-[#3EB575]')
+        }
+        title={meaning || '表情'}
+      >
+        <img
+          src={src}
+          alt={meaning ? `表情：${meaning}` : '表情'}
+          className="h-[52px] w-[52px] object-contain"
+          loading="lazy"
+        />
+      </button>
+    );
+  }
   return (
     <button type="button" data-testid="wx-sticker-bubble" onClick={onClick} className="block active:opacity-80" title={meaning || '表情'}>
       <img
@@ -2629,19 +2664,21 @@ export function WxStickerPanel({
                   onPointerUp={clearStickerPress}
                   onPointerCancel={clearStickerPress}
                   onPointerLeave={clearStickerPress}
-                  className="aspect-square w-full overflow-hidden rounded-[10px] p-1.5 active:bg-black/[0.05]"
+                  className={`aspect-square w-full overflow-hidden rounded-[10px] active:bg-black/[0.05] ${s.builtin ? 'p-0.5' : 'p-1.5'}`}
                   title={s.meaning || '表情'}
                 >
                   <img src={s.url} alt={s.meaning || '表情'} className="h-full w-full object-contain" loading="lazy" />
                 </button>
-                <button
-                  type="button"
-                  data-testid={`wx-sticker-meaning-${i}`}
-                  onClick={() => !s.builtin && setMeaningFor(s)}
-                  className={`mt-0.5 block h-4 w-full truncate text-center text-[10px] leading-4 text-black/40 dark:text-white/40 ${s.builtin ? '' : 'active:opacity-60'}`}
-                >
-                  {s.meaning || '＋意思'}
-                </button>
+                {!s.builtin && (
+                  <button
+                    type="button"
+                    data-testid={`wx-sticker-meaning-${i}`}
+                    onClick={() => setMeaningFor(s)}
+                    className="mt-0.5 block h-4 w-full truncate text-center text-[10px] leading-4 text-black/40 active:opacity-60 dark:text-white/40"
+                  >
+                    {s.meaning || '＋意思'}
+                  </button>
+                )}
                 {editMode && !s.builtin && (
                   <button
                     type="button"
@@ -8221,6 +8258,7 @@ function ChatPage({
                   <StickerMsgBubble
                     src={m.stk.url}
                     meaning={m.stk.meaning}
+                    me={m.role === 'me'}
                     onClick={() => {
                       const url = m.stk?.url;
                       if (url) setViewer({ urls: [url], index: 0 }); // 空串保护：无 url 不打开
