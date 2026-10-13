@@ -1,6 +1,6 @@
 /**
  * 内置表情常量（静态资源，不进 IndexedDB）：
- * - 微信：xxk8/wechat-emojis 109 张 PNG（/public/wechat-emojis/），按微信官方表情面板顺序排列（微笑/撇嘴/色…），文件名即意思
+ * - 微信：xxk8/wechat-emojis 109 张 PNG（/public/wechat-emojis/），按真实微信 8.x 最新表情面板顺序排列（微笑→撇嘴→色→…→裂开→嘴唇/爱心/心碎→手势→猪头/便便/日月→庆祝→跳跳/发抖/转圈→啤酒/咖啡/蛋糕/玫瑰/凋谢/菜刀/炸弹），文件名即意思
  * - QQ：wa.qq.com 官方资源 dump（via github.com/vikiboss/face，QQ NT 最新面板）198 张 APNG 动图（/public/qq-emojis/apng/{官方ID}.png），
  *   官方 ID 序=真机面板序（惊讶→撇嘴→色…，含 doge/笑哭/吃瓜/裂开/666 等全部新表情）；旧版 122 GIF（/qq-emojis/*.gif）与
  *   QFace 105 静态 PNG（/qq-emojis/*.png）保留在磁盘上仅用于历史消息兼容，不再进面板
@@ -72,6 +72,7 @@ export const BUILTIN_WX_STICKERS: Sticker[] = [
   { id: 'wxb-无语', url: '/wechat-emojis/face/无语.png', meaning: '无语', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-嘿哈', url: '/wechat-emojis/face/嘿哈.png', meaning: '嘿哈', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-捂脸', url: '/wechat-emojis/face/捂脸.png', meaning: '捂脸', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-奸笑', url: '/wechat-emojis/face/奸笑.png', meaning: '奸笑', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-机智', url: '/wechat-emojis/face/机智.png', meaning: '机智', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-皱眉', url: '/wechat-emojis/face/皱眉.png', meaning: '皱眉', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-耶', url: '/wechat-emojis/face/耶.png', meaning: '耶', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
@@ -91,7 +92,12 @@ export const BUILTIN_WX_STICKERS: Sticker[] = [
   { id: 'wxb-叹气', url: '/wechat-emojis/face/叹气.png', meaning: '叹气', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-苦涩', url: '/wechat-emojis/face/苦涩.png', meaning: '苦涩', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-裂开', url: '/wechat-emojis/face/裂开.png', meaning: '裂开', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-奸笑', url: '/wechat-emojis/face/奸笑.png', meaning: '奸笑', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-嘴唇', url: '/wechat-emojis/other/嘴唇.png', meaning: '嘴唇', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-爱心', url: '/wechat-emojis/other/爱心.png', meaning: '爱心', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-心碎', url: '/wechat-emojis/other/心碎.png', meaning: '心碎', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-拥抱', url: '/wechat-emojis/gesture/拥抱.png', meaning: '拥抱', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-强', url: '/wechat-emojis/gesture/强.png', meaning: '强', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-弱', url: '/wechat-emojis/gesture/弱.png', meaning: '弱', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-握手', url: '/wechat-emojis/gesture/握手.png', meaning: '握手', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-胜利', url: '/wechat-emojis/gesture/胜利.png', meaning: '胜利', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-抱拳', url: '/wechat-emojis/gesture/抱拳.png', meaning: '抱拳', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
@@ -99,33 +105,27 @@ export const BUILTIN_WX_STICKERS: Sticker[] = [
   { id: 'wxb-拳头', url: '/wechat-emojis/gesture/拳头.png', meaning: '拳头', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-OK', url: '/wechat-emojis/gesture/OK.png', meaning: 'OK', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-合十', url: '/wechat-emojis/gesture/合十.png', meaning: '合十', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-强', url: '/wechat-emojis/gesture/强.png', meaning: '强', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-拥抱', url: '/wechat-emojis/gesture/拥抱.png', meaning: '拥抱', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-弱', url: '/wechat-emojis/gesture/弱.png', meaning: '弱', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-猪头', url: '/wechat-emojis/animal/猪头.png', meaning: '猪头', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-跳跳', url: '/wechat-emojis/animal/跳跳.png', meaning: '跳跳', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-发抖', url: '/wechat-emojis/animal/发抖.png', meaning: '发抖', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-转圈', url: '/wechat-emojis/animal/转圈.png', meaning: '转圈', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-便便', url: '/wechat-emojis/other/便便.png', meaning: '便便', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-月亮', url: '/wechat-emojis/other/月亮.png', meaning: '月亮', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-太阳', url: '/wechat-emojis/other/太阳.png', meaning: '太阳', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-庆祝', url: '/wechat-emojis/blessing/庆祝.png', meaning: '庆祝', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-礼物', url: '/wechat-emojis/blessing/礼物.png', meaning: '礼物', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-红包', url: '/wechat-emojis/blessing/红包.png', meaning: '红包', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-發', url: '/wechat-emojis/blessing/發.png', meaning: '發', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-福', url: '/wechat-emojis/blessing/福.png', meaning: '福', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-烟花', url: '/wechat-emojis/blessing/烟花.png', meaning: '烟花', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-爆竹', url: '/wechat-emojis/blessing/爆竹.png', meaning: '爆竹', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-嘴唇', url: '/wechat-emojis/other/嘴唇.png', meaning: '嘴唇', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-爱心', url: '/wechat-emojis/other/爱心.png', meaning: '爱心', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-心碎', url: '/wechat-emojis/other/心碎.png', meaning: '心碎', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-礼物', url: '/wechat-emojis/blessing/礼物.png', meaning: '礼物', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-跳跳', url: '/wechat-emojis/animal/跳跳.png', meaning: '跳跳', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-发抖', url: '/wechat-emojis/animal/发抖.png', meaning: '发抖', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-转圈', url: '/wechat-emojis/animal/转圈.png', meaning: '转圈', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-啤酒', url: '/wechat-emojis/other/啤酒.png', meaning: '啤酒', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-咖啡', url: '/wechat-emojis/other/咖啡.png', meaning: '咖啡', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-蛋糕', url: '/wechat-emojis/other/蛋糕.png', meaning: '蛋糕', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
+  { id: 'wxb-玫瑰', url: '/wechat-emojis/other/玫瑰.png', meaning: '玫瑰', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-凋谢', url: '/wechat-emojis/other/凋谢.png', meaning: '凋谢', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-菜刀', url: '/wechat-emojis/other/菜刀.png', meaning: '菜刀', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
   { id: 'wxb-炸弹', url: '/wechat-emojis/other/炸弹.png', meaning: '炸弹', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-便便', url: '/wechat-emojis/other/便便.png', meaning: '便便', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-太阳', url: '/wechat-emojis/other/太阳.png', meaning: '太阳', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-月亮', url: '/wechat-emojis/other/月亮.png', meaning: '月亮', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
-  { id: 'wxb-玫瑰', url: '/wechat-emojis/other/玫瑰.png', meaning: '玫瑰', groupId: BUILTIN_STICKER_GROUP_ID, builtin: true, createdAt: 0 },
 ];
 
 /** 官方小黄脸面板（wa.qq.com 官方资源 dump，APNG 动图 198 张，官方 ID 序=面板序） */
@@ -332,3 +332,10 @@ export const BUILTIN_QQ_STICKERS: Sticker[] = [
 
 /** 取某 App 的内置表情 */
 export const builtinStickersOf = (app: 'wx' | 'qq'): Sticker[] => (app === 'wx' ? BUILTIN_WX_STICKERS : BUILTIN_QQ_STICKERS);
+
+/** 分组栏「内置分组」胶囊图标：取官方面板第一位经典笑脸（微信=微笑，QQ=官方序首位的惊讶；兜底清单首项） */
+export const builtinTabIconUrl = (app: 'wx' | 'qq'): string => {
+  const list = builtinStickersOf(app);
+  const icon = (app === 'wx' ? list.find((s) => s.meaning === '微笑') : undefined) ?? list[0];
+  return icon?.url ?? '';
+};

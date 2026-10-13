@@ -130,6 +130,8 @@ import {
 } from '@/lib/ios/groups';
 import { loadStickers, type Sticker } from '@/lib/ios/stickers';
 import { getStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
+import { insertEmojiCode, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
+import { InlineEmojiText } from './inline-emoji';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
 import { TextCardBubble } from './text-card-bubble';
@@ -2436,6 +2438,10 @@ export function WxGroupChatPage({
     return () => window.removeEventListener('group-msgs:updated', fn);
   }, [gid]);
   const [draft, setDraft] = useState('');
+  /** 内置表情插入输入框（不直接发送）：[微笑] 代码插到光标处，可与文字混排一起发送（真机微信交互） */
+  const insertBuiltinEmoji = (s: Sticker) => {
+    insertEmojiCode(inputRef, draft, `[${s.meaning}]`, setDraft);
+  };
   // 多行输入自适应增高：内容变化时重算 textarea 高度（封顶约 6 行后框内滚动，清空回落单行）
   useEffect(() => {
     autoResizeTextarea(inputRef.current);
@@ -3068,6 +3074,8 @@ export function WxGroupChatPage({
           '群里的红包、转账都是真实卡片：谁发了什么、谁领了/收了，以卡片和系统通知为准；没有对应卡片或通知时，绝不凭空说自己发过或收到过钱。',
           // 特殊消息标记（群聊格式：红包带个数、转账带收款对象；表情包清单按本群表情开关下发）
           ...buildGroupRichRules(stickersOn ? stickers : []),
+          // 内置小表情 [微笑] 代码约定（开关开启才注入；群里点内置表情同样进输入框混排发送）
+          ...(stickersOn ? [EMOJI_CODE_RULE] : []),
           ...(stickersOn ? [] : [STICKER_OFF_RULE]),
           // 动作描写：开启下发 *...* 格式约定（灰色小字居中显示），关闭下发显式禁令（渲染层另有硬剥离兜底）
           actionDescOn ? ACTION_DESC_RULE : ACTION_DESC_OFF_RULE,
@@ -5263,7 +5271,10 @@ export function WxGroupChatPage({
                           mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
                         }`}
                       />
-                      <span className="whitespace-pre-wrap break-words">{cleanBubbleText(actBody ?? m.content)}</span>
+                      <span className="whitespace-pre-wrap break-words">
+                        {/* 内置表情代码 [微笑] 还原为内联小图（混排小图/纯表情大图，真机同款） */}
+                        <InlineEmojiText app="wx" text={cleanBubbleText(actBody ?? m.content)} />
+                      </span>
                     </div>
                   </>,
                 )
@@ -5528,7 +5539,7 @@ export function WxGroupChatPage({
           )}
         </div>
         {/* 表情面板 / 加号面板（与单聊共用同一套组件与布局） */}
-        {stickerOpen && <WxStickerPanel onPick={sendSticker} onClose={() => setStickerOpen(false)} onToast={onToast} />}
+        {stickerOpen && <WxStickerPanel onPick={sendSticker} onPickBuiltin={insertBuiltinEmoji} onClose={() => setStickerOpen(false)} onToast={onToast} />}
         {plusOpen && <WxGroupPlusPanel onAction={handlePlusAction} />}
         {/* @ 成员浮层：锚定输入区容器上方（含面板与引用条也不遮挡） */}
         {atOpen && (

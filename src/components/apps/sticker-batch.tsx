@@ -11,6 +11,10 @@
 import { useState } from 'react';
 import { Trash2, X } from 'lucide-react';
 import {
+  BUILTIN_STICKER_GROUP_ID,
+  builtinTabIconUrl,
+} from '@/lib/ios/builtin-stickers';
+import {
   DEFAULT_STICKER_GROUP_ID,
   extractMeaningFromUrl,
   isImageUrl,
@@ -19,6 +23,13 @@ import {
   type Sticker,
   type StickerGroup,
 } from '@/lib/ios/stickers';
+
+/** 分组栏展示顺序：内置分组（表情图标胶囊）永远最前，其余按传入顺序 */
+function orderedGroups(groups: StickerGroup[]): StickerGroup[] {
+  const builtin = groups.filter((g) => g.id === BUILTIN_STICKER_GROUP_ID);
+  const rest = groups.filter((g) => g.id !== BUILTIN_STICKER_GROUP_ID);
+  return [...builtin, ...rest];
+}
 
 export interface BatchDraftItem {
   key: string;
@@ -433,21 +444,31 @@ export function StickerGroupBar({
         </div>
       ) : (
         <div className="flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {groups.map((g) => {
+          {orderedGroups(groups).map((g) => {
             const on = g.id === activeId;
+            const builtin = g.id === BUILTIN_STICKER_GROUP_ID;
             return (
               <button
                 key={g.id}
                 type="button"
+                aria-label={builtin ? `${g.name}分组` : undefined}
+                title={builtin ? g.name : undefined}
                 data-testid={`${t('pill')}-${g.id === DEFAULT_STICKER_GROUP_ID ? 'my' : g.id}`}
                 onClick={() => onSelect(g.id)}
-                className={`h-7 shrink-0 whitespace-nowrap rounded-full border px-3 text-[12.5px] backdrop-blur-md transition-colors active:opacity-80 ${
+                className={`h-7 shrink-0 whitespace-nowrap rounded-full border backdrop-blur-md transition-colors active:opacity-80 ${
+                  builtin ? 'flex w-9 items-center justify-center px-0' : 'px-3 text-[12.5px]'
+                } ${
                   on
                     ? 'border-black/10 bg-white/85 font-medium text-black shadow-[0_1px_5px_rgba(0,0,0,0.08)] dark:border-white/25 dark:bg-white/30 dark:text-white'
                     : 'border-black/[0.07] bg-white/45 text-black/50 dark:border-white/10 dark:bg-white/[0.08] dark:text-white/50'
                 }`}
               >
-                {g.name}
+                {builtin ? (
+                  /* 内置分组：官方面板首位笑脸图标代替「微信表情/QQ表情」文字标签（真机同款），永远排在分组栏最前 */
+                  <img src={builtinTabIconUrl(testPrefix === 'wx' ? 'wx' : 'qq')} alt={g.name} className="h-[19px] w-[19px] object-contain" draggable={false} />
+                ) : (
+                  g.name
+                )}
               </button>
             );
           })}

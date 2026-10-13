@@ -180,6 +180,8 @@ import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } 
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
+import { insertEmojiCode, stripEmojiCodes, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
+import { InlineEmojiText } from './inline-emoji';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
@@ -1424,6 +1426,8 @@ function buildPersonaPrompt(peer: ContactRecord, me: WxUser, ownerName: string |
     extraRules: [
       // fix3-c #3：规则限定主语——只解释「对方（用户）消息里」出现的标记；AI 自己发的表情另有 [表情包:ID]/[你发送了表情：XX] 序列化，不与规则冲突
       '出现在对方（用户）消息里的「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
+      // 内置小表情 [微笑] 代码约定（开关开启才注入；用户点面板内置表情即以此格式入历史，AI 也可同格式回复）
+      ...(stickersOn ? [EMOJI_CODE_RULE] : []),
       ...buildRichRules(stickersOn ? stickers : []),
       ...(stickersOn ? [] : [STICKER_OFF_RULE]),
       ...(actionDescOn ? [ACTION_DESC_RULE] : [ACTION_DESC_OFF_RULE]),
@@ -2524,13 +2528,18 @@ function StickerAddForm({
   );
 }
 
-/** 聊天表情面板（表情按钮弹出：网格点选发送 + 内嵌添加[手机图片/URL+意思] + 管理删除） */
+/** 聊天表情面板（表情按钮弹出：网格点选 + 内嵌添加[手机图片/URL+意思] + 管理删除）。
+ *  内置表情（微信表情分组）点选不直接发送：走 onPickBuiltin 把 [微笑] 文字代码插入输入框，可与文字混排一起发
+ *  （对照真实微信交互，用户截图参考）；用户收藏的大表情贴纸仍点选直发（onPick） */
 export function WxStickerPanel({
   onPick,
+  onPickBuiltin,
   onClose,
   onToast,
 }: {
   onPick: (s: Sticker) => void;
+  /** 内置表情点选回调（插入输入框；面板保持展开可连续点选） */
+  onPickBuiltin?: (s: Sticker) => void;
   onClose: () => void;
   onToast: (m: string) => void;
 }) {
@@ -2646,7 +2655,8 @@ export function WxStickerPanel({
       <StickerGroupBar testPrefix="wx" groups={groups} activeId={activeGroupId} onSelect={setActiveGroupId} onCreate={createGroup} />
       {mode === 'grid' ? (
         <div className="h-[280px] overflow-y-auto px-3 pb-4 pt-1">
-          <div className="grid grid-cols-4 gap-2">
+          {/* 内置表情=真机同款小表情（8列小尺寸）；用户收藏贴纸=大瓦片（4列） */}
+          <div className={`grid ${activeGroupId === 'builtin' ? 'grid-cols-8 gap-1' : 'grid-cols-4 gap-2'}`}>
             {visible.map((s, i) => (
               <div key={s.id} className="relative">
                 <button
@@ -2657,14 +2667,20 @@ export function WxStickerPanel({
                       suppressPickRef.current = false;
                       return;
                     }
-                    if (!editMode) onPick(s);
+                    if (editMode) return;
+                    if (s.builtin) onPickBuiltin?.(s);
+                    else onPick(s);
                   }}
                   onPointerDown={onStickerPointerDown(s)}
                   onPointerMove={onStickerPointerMove}
                   onPointerUp={clearStickerPress}
                   onPointerCancel={clearStickerPress}
                   onPointerLeave={clearStickerPress}
-                  className={`aspect-square w-full overflow-hidden rounded-[10px] active:bg-black/[0.05] ${s.builtin ? 'p-0.5' : 'p-1.5'}`}
+                  className={
+                    s.builtin
+                      ? `flex h-10 w-full items-center justify-center overflow-hidden rounded-[8px] p-[3px] active:bg-black/[0.05]`
+                      : `aspect-square w-full overflow-hidden rounded-[10px] active:bg-black/[0.05] p-1.5`
+                  }
                   title={s.meaning || '表情'}
                 >
                   <img src={s.url} alt={s.meaning || '表情'} className="h-full w-full object-contain" loading="lazy" />
@@ -2694,7 +2710,7 @@ export function WxStickerPanel({
             ))}
             {/* 内置分组不可添加（静态常量）；空占位保持网格末尾对齐 */}
             {activeGroupId === 'builtin' ? (
-              <span aria-hidden="true" className="aspect-square w-full" />
+              <span aria-hidden="true" className="h-10 w-full" />
             ) : (
               <button
                 type="button"
@@ -5938,9 +5954,9 @@ function ChatPage({
             // 半截上屏；流式路径上游已用 splitUnfinishedPhotoTag 提前切走尾段，此处通常为空操作）
             // 美团回显剥除：AI 照抄历史里的卡片序列化行（[美团代付/代点…]（…））当正文时整行剥掉
             const safePhotoText2 = stripTbEchoText(stripMtEchoText(stripUnfinishedPhotoTag(photoFreeText)));
-            // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
+            // 表情包开关关闭：文字里的 emoji 与内置表情代码硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
             // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-            const clean = cleanBubbleText(stickersOn ? safePhotoText2 : stripEmojiText(safePhotoText2.replace(/\[表情包\]|\[表情\]/g, ' ')));
+            const clean = cleanBubbleText(stickersOn ? safePhotoText2 : stripEmojiCodes('wx', stripEmojiText(safePhotoText2.replace(/\[表情包\]|\[表情\]/g, ' '))));
             if (!clean) continue;
             out.push({ id, role: 'peer', content: clean, time: t });
           }
@@ -7625,6 +7641,11 @@ function ChatPage({
     void runAiTurn(msg);
   };
 
+  /** 内置表情插入输入框（不直接发送）：[微笑] 代码插到光标处，可与文字混排一起发送（真机微信交互） */
+  const insertBuiltinEmoji = (s: Sticker) => {
+    insertEmojiCode(chatTaRef, input, `[${s.meaning}]`, setInput);
+  };
+
   /** 打开亲属卡详情（我发的卡由 AI 用动作标记决定收下/拒收，这里只看详情） */
   const openFamilyDetail = (id: string) => {
     setDetailId(id);
@@ -8336,7 +8357,8 @@ function ChatPage({
                       }`}
                     />
                     {bubbleContent ? (
-                      cleanBubbleText(bubbleContent) || bubbleContent
+                      /* 文字消息：内置表情代码 [微笑] 还原为内联小图（混排小图/纯表情大图，真机同款） */
+                      <InlineEmojiText app="wx" text={cleanBubbleText(bubbleContent) || bubbleContent} />
                     ) : (
                       <span className="flex h-[23px] items-center gap-1" aria-label="对方正在输入">
                         <span className="h-[6px] w-[6px] animate-bounce rounded-full bg-black/25 dark:bg-white/35" />
@@ -8663,7 +8685,7 @@ function ChatPage({
             </div>
           )}
         </div>
-        {stickerOpen && <WxStickerPanel onPick={sendSticker} onClose={() => setStickerOpen(false)} onToast={onToast} />}
+        {stickerOpen && <WxStickerPanel onPick={sendSticker} onPickBuiltin={insertBuiltinEmoji} onClose={() => setStickerOpen(false)} onToast={onToast} />}
         {plusOpen && <PlusPanel onAction={handlePlusAction} />}
         {/* @ 浮层（单聊）：锚定输入区上方，点选后把草稿末尾的 @ 替换为「@名字 」 */}
         {atOpen && !selfChat && (

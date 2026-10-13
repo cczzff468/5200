@@ -18945,3 +18945,24 @@ Stage Summary:
 - 推送链路：origin 已带 PAT，改动可 git add/commit/push 回 main
 - 注意（延续 Task 21 记录）：db/custom.db 运行时数据库勿提交；upload/ 为挂载目录
 - 待办：等用户提出具体「修改或添加功能」需求后进入开发
+
+---
+Task ID: 24
+Agent: 主协调者 (Z.ai Code)
+Task: 微信/QQ 表情包五项改造（对照用户 3 张真机截图）：①微信也上最新表情包 ②两端内置表情显示变小 ③点表情不直接发送→插入输入框可与文字混排同发 ④「QQ表情/微信表情」文字标签变表情图标并移到最前 ⑤QQ 表情面板分组栏移到网格下方（微信布局不动）
+
+Work Log:
+- 读 worklog（Task 22 QQ 表情升级记录）+ 定位表情体系：lib/ios/stickers.ts（数据层）、lib/ios/builtin-stickers.ts（内置常量 WX109/QQ198）、sticker-batch.tsx（分组栏）、wechat/qq/wx-group/qq-group 四端面板与气泡；查看用户 3 张截图（upload/IMG_20261013_*）确认真机交互：微信内置表情在绿色气泡内与文字混排、QQ 面板小表情 7-8 列
+- ①微信最新表情包：web 检索确认官方最新全集=109（xxk8 源已含 8.0 全部新表情 吃瓜/旺柴/裂开/666/让我看看等）；逐名比对官方面板序发现仅「奸笑」错位（原排在裂开后）→ 重写 BUILTIN_WX_STICKERS 为真实微信 8.x 面板序（微笑→…→裂开→嘴唇/爱心/心碎→手势→猪头/便便/日月→庆祝→跳跳/发抖/转圈→啤酒/…/炸弹），109→109 零文件增删；头注释同步
+- ②内置表情变小：两端聊天面板 grid 按 activeGroupId 动态切换——builtin 分组 grid-cols-8 gap-1 + h-10 小贴片（真机同款 ~40px），用户收藏贴纸维持 4 列大瓦片
+- ③插入输入框：新建 lib/ios/emoji-codes.ts（代码↔表情映射 splitEmojiCodes/isPureEmojiCodes/stripEmojiCodes/insertEmojiCode/EMOJI_CODE_RULE）；面板新增 onPickBuiltin 回调（内置点击→[微笑] 代码插入输入框光标处，面板保持展开可连点、不抢焦点；用户贴纸仍直发）；四端 ChatPage/群聊接线 insertBuiltinEmoji（insertEmojiCode(chatTaRef/inputRef, input/draft, …)）；新增组件 inline-emoji.tsx（InlineEmojiText）：气泡文本按代码切分渲染——混排=内联 22px 小图、纯表情=32px 大图（对照截图1 惊讶大图），四端文本气泡（wechat 8357/qq 6645/wx-group 5272/qq-group 4894）统一接入；消息持久化即纯文本，会话列表预览显示 [微笑] 原文（真机同款）
+- ④分组栏改造：StickerGroupBar 内置分组 pill 渲染官方面板首位笑脸图标（builtinTabIconUrl：wx=微笑，QQ=官方序首位惊讶）代替「微信表情/QQ表情」文字，且永远排最前（orderedGroups 面板+管理页共用，4 处自动生效）；testid 不变（wx/qq-sticker-group-pill-builtin）
+- ⑤QQ 面板布局：QqStickerPanel 分组栏移到网格/添加表单之后（真机 QQ 同款「标签在下」）；微信面板保持分组栏在上网格下不动
+- AI 侧：EMOJI_CODE_RULE 注入 buildPersonaPrompt（wx/qq 单聊 + wx-group/qq-group 群聊，表情包开关开启才下发）——教 AI 识别对方消息里的 [微笑] 代码并可用同格式回复（名字取自表情包清单内置项意思）；表情开关关闭时 finalize 对 AI 输出 stripEmojiCodes 硬剥除（与 stripEmojiText 同链双保险）；旧 kind=sticker 气泡渲染保持兼容
+- 验证：bunx tsc --noEmit（仅 4 个先前已存在的 contacts/migrate Prisma 报错，与本次无关）；eslint 8 个改动文件 0 错误；E2E（agent-browser 393×852，播种 凡凡 user + 小柚/晚晴宝 char + 双会话消息）：解锁→微信→小柚聊天→面板：内置笑脸图标 pill 在最前 ✓ →点图标 pill 切换 8 列小表情（官方序 微笑/撇嘴/色…）✓ →连点 3 个表情输入框累计 [微笑][好的][微笑] 且面板保持展开 ✓ →追加文字发送→绿气泡「😊😊😊 今天也是元气满满的一天」内联渲染 ✓ →发纯 [呲牙][呲牙]→32px 大图气泡（对照截图1）✓ →AI 正常触发回复（好开心看到你这么有活力！）✓ →QQ→晚晴宝：分组栏在网格下方 ✓→内置 pill 图标首位 ✓→8 列 APNG 动图小表情 ✓→点惊讶+[惊讶]笑死我了发送→蓝气泡动图+文字混排 ✓；微信我→表情管理页分组栏同样笑脸图标最前 ✓；errors 空、console 无错误、dev.log 无应用错误
+- browser 用完即关（临时 seed 脚本/截图已清理）
+
+Stage Summary:
+- 微信表情面板对齐真机 8.x：109 官方全集+官方面板序；两端内置表情 8 列小贴片；点内置表情=[微笑] 代码进输入框可混排同发（用户贴纸直发不变）；气泡内联渲染代码为表情图（混排小图/纯表情大图）；分组栏内置项=笑脸图标+永远最前（面板+管理页）；QQ 面板标签移至网格下方、微信不动
+- 新文件：src/lib/ios/emoji-codes.ts、src/components/apps/inline-emoji.tsx；改动：builtin-stickers.ts（WX 序重排+TabIcon）、sticker-batch.tsx（分组栏）、wechat.tsx / qq.tsx / wx-group.tsx / qq-group.tsx（面板 props、插入接线、气泡渲染、prompt 规则、剥除）
+- AI 全链路感知：用户发的代码随文本进历史+规则注入，AI 可用 [意思] 同格式发表情；表情开关关闭时规则不下发且输出硬剥除

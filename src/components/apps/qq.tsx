@@ -219,6 +219,8 @@ import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } 
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
+import { insertEmojiCode, stripEmojiCodes, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
+import { InlineEmojiText } from './inline-emoji';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
@@ -1503,6 +1505,8 @@ function buildPersonaPrompt(peer: ContactRecord, me: QQUser, ownerName: string |
       // 「[表情包:ID]」/「[你发送了表情：XX]」写法区分开，防止 AI 把兜底标记当成自己的输出格式
       // 100-e 与微信端文案逐字一致（此前两端手工复制引号风格漂移『』vs「」）
       '出现在对方（用户）消息里的「[发送了表情：XX]」表示对方发来一张含义为「XX」的表情包，你要理解并自然回应表情的含义（可以调侃或接住情绪），不要字面复述括号内容。',
+      // 内置小表情 [微笑] 代码约定（开关开启才注入；用户点面板内置表情即以此格式入历史，AI 也可同格式回复）
+      ...(stickersOn ? [EMOJI_CODE_RULE] : []),
       // 100-e QQ 没有亲属卡功能：亲属卡教学不下发（opts.familyCard=false，与微信区分）
       ...buildRichRules(stickersOn ? stickers : [], { familyCard: false }),
       ...(stickersOn ? [] : [STICKER_OFF_RULE]),
@@ -2195,13 +2199,18 @@ function QqTextCardSheet({
   );
 }
 
-/** QQ 聊天表情面板（点选发送 + 内嵌添加 + 管理删除；数据 qq-stickers；单聊/群聊共用同一套） */
+/** QQ 聊天表情面板（点选 + 内嵌添加 + 管理删除；数据 qq-stickers；单聊/群聊共用同一套）。
+ *  分组栏移到网格下方（对照真机 QQ：面板标签在下）；内置表情（QQ表情分组）点选不直接发送：
+ *  走 onPickBuiltin 把 [微笑] 文字代码插入输入框，可与文字混排一起发；用户收藏贴纸仍点选直发 */
 export function QqStickerPanel({
   onPick,
+  onPickBuiltin,
   onClose,
   onToast,
 }: {
   onPick: (s: Sticker) => void;
+  /** 内置表情点选回调（插入输入框；面板保持展开可连续点选） */
+  onPickBuiltin?: (s: Sticker) => void;
   onClose: () => void;
   onToast: (m: string) => void;
 }) {
@@ -2315,11 +2324,10 @@ export function QqStickerPanel({
           </button>
         </div>
       </div>
-      {/* 分组栏：毛玻璃胶囊分组名字（点选切换下方网格）+「＋」新建分组 */}
-      <StickerGroupBar testPrefix="qq" groups={groups} activeId={activeGroupId} onSelect={setActiveGroupId} onCreate={createGroup} />
       {mode === 'grid' ? (
-        <div className="h-[280px] overflow-y-auto px-3 pb-4 pt-1">
-          <div className="grid grid-cols-4 gap-2">
+        <div className="h-[280px] overflow-y-auto px-3 pb-3 pt-1">
+          {/* 内置表情=真机同款小表情（8列小尺寸）；用户收藏贴纸=大瓦片（4列） */}
+          <div className={`grid ${activeGroupId === 'builtin' ? 'grid-cols-8 gap-1' : 'grid-cols-4 gap-2'}`}>
             {visible.map((st, i) => (
               <div key={st.id} className="relative">
                 <button
@@ -2330,14 +2338,20 @@ export function QqStickerPanel({
                       suppressPickRef.current = false;
                       return;
                     }
-                    if (!editMode) onPick(st);
+                    if (editMode) return;
+                    if (st.builtin) onPickBuiltin?.(st);
+                    else onPick(st);
                   }}
                   onPointerDown={onStickerPointerDown(st)}
                   onPointerMove={onStickerPointerMove}
                   onPointerUp={clearStickerPress}
                   onPointerCancel={clearStickerPress}
                   onPointerLeave={clearStickerPress}
-                  className={`aspect-square w-full overflow-hidden rounded-[10px] active:bg-black/[0.06] ${st.builtin ? 'p-0.5' : 'p-1.5'}`}
+                  className={
+                    st.builtin
+                      ? `flex h-10 w-full items-center justify-center overflow-hidden rounded-[8px] p-[3px] active:bg-black/[0.06]`
+                      : `aspect-square w-full overflow-hidden rounded-[10px] active:bg-black/[0.06] p-1.5`
+                  }
                   title={st.meaning || '表情'}
                 >
                   <img src={st.url} alt={st.meaning || '表情'} className="h-full w-full object-contain" loading="lazy" />
@@ -2367,7 +2381,7 @@ export function QqStickerPanel({
             ))}
             {/* 内置分组不可添加（静态常量）；空占位保持网格末尾对齐 */}
             {activeGroupId === 'builtin' ? (
-              <span aria-hidden="true" className="aspect-square w-full" />
+              <span aria-hidden="true" className="h-10 w-full" />
             ) : (
               <button
                 type="button"
@@ -2388,7 +2402,7 @@ export function QqStickerPanel({
           )}
         </div>
       ) : (
-        <div className="px-4 pb-4 pt-1">
+        <div className="px-4 pb-3 pt-1">
           <QqStickerAddForm
             tab={tab}
             onTab={setTab}
@@ -2407,6 +2421,8 @@ export function QqStickerPanel({
           />
         </div>
       )}
+      {/* 分组栏（真机 QQ 同款：面板标签在网格下方）：毛玻璃胶囊分组名字 +「＋」新建分组 */}
+      <StickerGroupBar testPrefix="qq" groups={groups} activeId={activeGroupId} onSelect={setActiveGroupId} onCreate={createGroup} />
 
       {/* 意思选择 UI（预设胶囊 + 自定义 + 不设置） */}
       {meaningFor && (
@@ -4426,7 +4442,7 @@ function ChatPage({
               const safePhotoText = stripTbEchoText(stripMtEchoText(stripUnfinishedPhotoTag(photoFreeText)));
               // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
               // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-              const clean = cleanBubbleText(stickersOnNow ? safePhotoText : stripEmojiText(safePhotoText.replace(/\[表情包\]|\[表情\]/g, ' ')));
+              const clean = cleanBubbleText(stickersOnNow ? safePhotoText : stripEmojiCodes('qq', stripEmojiText(safePhotoText.replace(/\[表情包\]|\[表情\]/g, ' '))));
               if (!clean) continue;
               out.push({ id, role: 'peer', content: clean, time: t });
             }
@@ -5969,6 +5985,11 @@ function ChatPage({
     [me.id, peer.id, runAiTurn, sessionKey, onToast]
   );
 
+  /** 内置表情插入输入框（不直接发送）：[微笑] 代码插到光标处，可与文字混排一起发送（真机 QQ 交互） */
+  const insertBuiltinEmoji = (s: Sticker) => {
+    insertEmojiCode(chatTaRef, input, `[${s.meaning}]`, setInput);
+  };
+
   // 加号面板宫格（语音通话/视频通话/红包/转账/位置/文字图片；图片入口已移除）
   const plusItems: Array<{ key: string; label: string; color: string; icon: React.ReactNode; onClick: () => void }> = [
     {
@@ -6622,7 +6643,8 @@ function ChatPage({
                         );
                       })()}
                       {bubbleContent ? (
-                        cleanBubbleText(bubbleContent) || bubbleContent
+                        /* 文字消息：内置表情代码 [微笑] 还原为内联小图（混排小图/纯表情大图，真机同款） */
+                        <InlineEmojiText app="qq" text={cleanBubbleText(bubbleContent) || bubbleContent} />
                       ) : (
                         <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">
                           {[0, 1, 2].map((d) => (
@@ -6977,6 +6999,7 @@ function ChatPage({
         {stickerOpen ? (
           <QqStickerPanel
             onPick={sendSticker}
+            onPickBuiltin={insertBuiltinEmoji}
             onClose={() => setStickerOpen(false)}
             onToast={onToast}
           />
