@@ -2616,6 +2616,15 @@ export function WxStickerPanel({
     setList(next);
     saveStickers('wx', next);
   };
+  // Task 32：聊天页长按表情「添加到表情」后面板同步刷新（面板开着也能立即看到新表情）
+  useEffect(() => {
+    const syncStickers = () => {
+      setList(loadStickers('wx'));
+      setGroups(loadStickerGroups('wx'));
+    };
+    window.addEventListener('wx-stickers-changed', syncStickers);
+    return () => window.removeEventListener('wx-stickers-changed', syncStickers);
+  }, []);
   /** 当前分组下的表情（groupId 缺失/指向已删分组 → 归默认分组，防孤儿不可见） */
   const groupIds = useMemo(() => new Set(groups.map((g) => g.id)), [groups]);
   const visible = useMemo(() => list.filter((s) => stickerGroupOf(s, groupIds) === activeGroupId), [list, groupIds, activeGroupId]);
@@ -5413,7 +5422,7 @@ function ChatPage({
       // 世界书注入通话（与文字聊天同一套 collectWbBlocks：全局常驻 + 局部/专属按触发词命中）：
       // 六个位置块 + 使用规则拼成一个块随人设注入（优先级：人设/世界设定 > 记忆）
       // fix3-c #7：世界书锚点——labels 契约已合并（collectWbBlocks 尾参 WbLabels）：锚点块头注标注「文中的『你』指{角色名}」
-      const callWb = collectWbBlocks(peer.id, wbScanText([memContext]), { charName: peer.name, userName: me.name });
+      const callWb = collectWbBlocks(peer.id, wbScanText([memContext]), { charName: peer.name, userName: me.realName || me.name });
       const worldbookBlock =
         [
           callWb.beforeSystem,
@@ -6246,13 +6255,15 @@ function ChatPage({
         // 引用/转发让 AI 感知来源：引用 → 前缀说明引用的是谁说的什么；转发卡片 → 前缀说明来自哪个会话；
         // 合并转发的「聊天记录」卡片 → 完整注入逐条对话（说话人：内容），被分享的 AI 知道转发了什么；
         // 好友验证消息/打招呼前缀标注（用户规则五：验证消息要区分，不能当聊天内容，也不入记忆）
+        // 引用块名字防泄漏：展示层存的 quote.name 可能是机主昵称（社交显示名），进 AI 历史一律替换回真名
+        const meReal = me.realName || me.name;
         const pre = `${
           m.fr === 'apply'
             ? '[好友验证消息，不是聊天内容] '
             : m.fr === 'greet'
               ? '[打招呼，不是聊天内容] '
               : ''
-        }${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
+        }${m.quote ? `（引用 ${m.quote.name === me.name ? meReal : m.quote.name}：「${m.quote.content}」）` : ''}${
           m.kind === 'forward' && m.fwd
             ? m.fwd.merged
               ? `[合并转发的聊天记录「${m.fwd.title ?? '聊天记录'}」] `
@@ -6801,9 +6812,11 @@ function ChatPage({
       setMsgs((prev) =>
         prev.map((x) => (x.id === m.id && x.blkreq ? { ...x, blkreq: { ...x.blkreq, status: accept ? ('accepted' as const) : ('rejected' as const) } } : x))
       );
+      // AI 邻接事件文案：机主恒真名（me 是展示副本，社交模式下 name=昵称——AI 永不知道昵称）
+      const meReal = me.realName || me.name;
       const ev = accept
-        ? `（系统事件：${me.name}同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`
-        : `（系统事件：${me.name}拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`;
+        ? `（系统事件：${meReal}同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`
+        : `（系统事件：${meReal}拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`;
       if (accept) {
         setBlk(acceptBlockReq('wx', peer.id));
         pushSysMsg(`你同意了「${peer.name}」的解除拉黑申请`);
@@ -6817,7 +6830,7 @@ function ChatPage({
       }
       runAiTurnRef.current?.(null, [], ev);
     },
-    [peer.id, peer.name, me.name, pushSysMsg, sessionKey]
+    [peer.id, peer.name, me.name, me.realName, pushSysMsg, sessionKey]
   );
 
   /**
@@ -6836,7 +6849,8 @@ function ChatPage({
       ...prev,
       { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'blockreq' as const, blkreq: { reason: res.entry.userReqReason ?? '', status: 'pending' as const, from: 'user' as const } },
     ]);
-    const ev = `（系统事件：你之前把${me.name}拉黑了，现在${me.name}给你发来一条解除拉黑申请，理由：「${res.entry.userReqReason ?? ''}」。如果你愿意解除拉黑给对方一个机会，请在回复的最开头单独加上标记 [同意解除拉黑]；如果决定拒绝，请在回复的最开头单独加上标记 [拒绝解除拉黑]。先用你的方式自然回应这件事）`;
+    const meReal = me.realName || me.name;
+    const ev = `（系统事件：你之前把${meReal}拉黑了，现在${meReal}给你发来一条解除拉黑申请，理由：「${res.entry.userReqReason ?? ''}」。如果你愿意解除拉黑给对方一个机会，请在回复的最开头单独加上标记 [同意解除拉黑]；如果决定拒绝，请在回复的最开头单独加上标记 [拒绝解除拉黑]。先用你的方式自然回应这件事）`;
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       wxQueueAdd(peer.id, ev);
       return;
@@ -7155,6 +7169,12 @@ function ChatPage({
     // 语音消息首项「转文字」/「取消转文字」（toggle：已转写→取消收起；未转写→识别；失败可重试）
     if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
+    // Task 32 表情包收藏：长按表情气泡 →「添加」（收藏进「我的表情」默认分组）；
+    // 同图已在收藏里 → 显示「已添加」置灰态（filled，点了只提示不重复入库）
+    if (m.kind === 'sticker' && m.stk?.url) {
+      const saved = loadStickers('wx').some((s) => s.url === m.stk!.url);
+      items.push({ key: 'addsticker', label: saved ? '已添加' : '添加', icon: B.addsticker, filled: saved });
+    }
     // 图片消息：保存到设备（dataURL 直接下载）
     if (isImage && m.img?.src) items.push({ key: 'saveimg', label: '保存', icon: B.save });
     // G2 恢复上一张：重新生成前的旧图还留着（prevSrc），长按可换回（再操作一次又换回新图，来回切换）
@@ -7426,6 +7446,23 @@ function ChatPage({
       case 'copy':
         copyTextWithToast(quoteContentOf(m), onToast);
         break;
+      case 'addsticker': {
+        // Task 32 长按表情包 → 添加到「我的表情」（默认分组）：同图已收藏只提示不重复入库；
+        // 入库后广播 wx-stickers-changed（表情面板若开着立即刷新，关着下次打开现读）
+        if (m.kind !== 'sticker' || !m.stk?.url) break;
+        const cur = loadStickers('wx');
+        if (cur.some((s) => s.url === m.stk!.url)) {
+          onToast('已在「我的表情」');
+          break;
+        }
+        saveStickers('wx', [
+          ...cur,
+          { id: newStickerId(), url: m.stk.url, meaning: m.stk.meaning ?? '', groupId: DEFAULT_STICKER_GROUP_ID, createdAt: Date.now() },
+        ]);
+        window.dispatchEvent(new CustomEvent('wx-stickers-changed'));
+        onToast('已添加到我的表情');
+        break;
+      }
       case 'del': {
         // A-4：投递进行中同样拒绝——投递 tick 的 loadMsgs 读旧存储会把被删消息合并回来落盘（消息复活）
         if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
@@ -11098,10 +11135,11 @@ function ApplyFriendPage({
   const [greeting, setGreeting] = useState(() => {
     try {
       // 多账号 v2（Task 40-2a）：常用招呼语按微信当前账号作用域（调用时现算）
+      // 招呼语会进对方 AI 的上下文：恒用真名（用户规则：AI 永不知道机主昵称）
       const saved = window.localStorage.getItem(accLs(WX_COMMON_GREETING_KEY, 'wx'));
-      return saved?.trim() || `我是${me.name}`;
+      return saved?.trim() || `我是${me.realName || me.name}`;
     } catch {
-      return `我是${me.name}`;
+      return `我是${me.realName || me.name}`;
     }
   });
   const [image, setImage] = useState<string | null>(null);
@@ -11339,7 +11377,7 @@ function ApplyFriendPage({
             if (busy) return;
             setBusy(true);
             onSend({
-              greeting: greeting.trim() || `我是${me.name}`,
+              greeting: greeting.trim() || `我是${me.realName || me.name}`,
               extras: { image, remark: remark.trim() || null, tags, memo: memo.trim() || null, photos, permChat, permMoments, permExercise, hideMine, hideTheirs },
             });
           }}
@@ -11901,9 +11939,12 @@ function ProfilePage({
       return;
     }
     // 全局写回：updateContact 触发 contact-updated 广播，微信 me 快照/联系人 App/设置个人信息同步刷新
+    // 名字行 = 微信昵称（Task 32）：社交 App 里我显示的名字就是联系人 App 的「昵称」字段
+    //（展示层 socialNameOf：昵称 ?? 真名；改这里立即生效）；真名在联系人 App 里改；
+    // 昵称永不进 AI（人设/决策链路只传真名）。清空昵称 = 回退显示真实名字（normalizeText 空串 → null）
     const patch: Partial<ContactRecord> | null =
       row.key === 'name'
-        ? { name: t }
+        ? { nickname: t }
         : row.key === 'gender'
           ? { gender: t }
           : row.key === 'region'
@@ -14861,11 +14902,12 @@ export default function WeChatApp() {
   }, [contacts]);
 
   const loadContacts = useCallback(async (): Promise<ContactRecord[]> => {
-    // 微信内显示昵称（昵称优先于真实名字）；真实名字另存映射供钱包持卡人使用。
+    // 微信内显示昵称（昵称优先于真实名字，机主本人同规则——社交展示名 socialNameOf；副本 realName 存真名，
+    // AI 链路统一走 addressNameOf/ownerRealNameFor 取真名，永不接触机主昵称）。
     // 头像按 App 隔离：读 wx 投影（App 槽位优先、回退全局 avatar），微信里看到的头像独立于 QQ/信息/电话
     const raw = await listContactsFor('wx');
     setRealNameById(Object.fromEntries(raw.map((c) => [c.id, c.name])));
-    return withDisplayNames(raw);
+    return withDisplayNames(raw, { social: true });
   }, []);
 
   /** 重新拉取联系人（添加好友后调用，列表即时生效）；返回新列表供「我」快照同步复用 */

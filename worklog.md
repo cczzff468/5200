@@ -19101,3 +19101,29 @@ Stage Summary:
 - 交付：①微信个人资料页改名/改资料即时生效（根因=机主昵称顶住显示层：展示层对 USER 跳过昵称+存量昵称一次性清空迁移）；②AI 永远不知道机主昵称——人设注入（persona ctx 字段删除+USER peer 忽略）、29 个 AI 决策/engagement 调用点（好友申请决策/来电决策/状态卡/主动消息/拉黑找人/群聊/挽留/代付/淘宝/一起听）、4 个 API 路由的 userNickname 全部删净，联系人 App USER 表单删除昵称字段、保存时强制清空，存量数据迁移清空
 - 改动文件：src/lib/contacts.ts、src/lib/ios/{persona,contacts-store,friend-state,cross-app-reach,proactive-msg,proactive-call,chat-call,quit-flow,group-social,mt-ai-engage,music-ai,tb-ai-engage,tb-proxy-ai,call-followup,call-decision}.ts、src/components/apps/{contacts,chat,phone,peer-status-card,offline-meeting,wechat,qq,wx-group,qq-group}.tsx、src/app/api/{character-status,phone/answer,phone/turn,phone/followup,phone/proactive}/route.ts
 - 关键决策：昵称字段保留在 ContactRecord 类型（CHAR/NPC 还在用），机主（USER）从展示/人设/数据三层全面跳过；ctx.userName 恒真名（addressMode 设置此前已废除）
+
+---
+Task ID: 32
+Agent: 主协调者 (Z.ai Code)
+Task: ①联系人 APP 恢复「昵称」字段——只用于 QQ/微信/美团/淘宝的显示名，AI 永远不知道（Task 31 方向修正：昵称回归展示层，AI 链路继续封死）②聊天界面长按表情包弹「添加」按钮，已收藏的显示「已添加」
+
+Work Log:
+- 【方向修正】Task 31 把机主昵称从展示层+数据层全面废除（含清空迁移）；本轮用户改为「昵称只在联系人 APP 填、用于 QQ/微信/美团/淘宝显示、AI 不知道」——昵称回归展示层，AI 链路维持 Task 31 的真名纪律
+- 【显示层·contacts.ts】新增 socialNameOf（机主 → 昵称??真名；其他联系人同 displayNameOf）；withDisplayNames 增加 opts.social 参数（social=true 时机主也替换 name，副本 realName 存真名；缺省保持 Task 31 口径——信息/电话/联系人 APP/AI 邻接调用机主恒真名）；meTileLabel 机主瓦片改昵称优先（群聊气泡我的名字显示昵称；纯显示位）
+- 【社交显示接线】wechat.tsx loadContacts / qq.tsx 三处 loadContacts+refreshContacts → withDisplayNames(raw, { social: true })；chat.tsx（信息端）保持不传 social（用户规则：昵称只用于 QQ/微信/美团/淘宝）
+- 【登录名·contacts-store.ts】loginWechat/loginQQ/loginAltSlot 返回 user.name 从 displayNameOf 改 socialNameOf（登录后 App 内「我」直接显示昵称）；槽位名 slotName 同口径；ownerProfileFor/cachedOwnerName 维持真名（AI 安全）
+- 【清空迁移移除】contacts-store.ts 删除 owner-nickname-purge-v1（purgeOwnerNicknames+标记+listContacts 调用）——昵称从此持久保留；ownerProfile 注释改「仅展示/同步链路用」
+- 【资料页改昵称·wechat.tsx】ProfilePage 名字行保存目标从 { name } 改 { nickname }（微信名字=联系人 APP 的昵称字段，改了立即生效；清空回退真名显示；真名只在联系人 APP 改）；设置侧 owner-profile-sync 镜像不受影响（changed 不含 name）
+- 【AI 泄漏审计·社交显示下的新漏洞】me 是展示副本后 me.name=昵称，逐点修复直接吃 me.name 的 AI 链路：①wx-group/qq-group【群聊模式】行删除「昵称「XX」也是 TA」科普（Task 31 漏网，已进 prompt！）②qq.tsx AI 历史行 4 处（transferReceiptAiText/mtProxyHistoryLine/tbProxyHistoryLine/qqPatHistoryLine）me.name→me.realName||me.name（微信端本就走 meAddrName）③两 App 解除拉黑系统事件 4 处→真名 ④加好友招呼语「我是XX」6 处→真名（招呼语进对方 AI 上下文）⑤collectWbBlocks userName 2 处→真名 ⑥AI 历史引用块名字防泄漏：m.quote.name===机主显示名时替换真名（微信 6255/QQ 4658，双向覆盖「我引用自己」与「AI 引用我」）
+- 【分享卡历史行·真名缓存】contacts-store 新增 cachedContactRealName（listContacts 全量重建的同步真名 Map）；mtOrderShareHistoryLine/tbShareHistoryLine 的 fromName（落库时是社交展示名）→ contactId 能解析就替换真名
+- 【淘宝客服 AI】taobao-msg-chat runSellerTurn 的 custName 原样传 session.name（=昵称）→ 进客服 prompt 前按 uid 解析联系人真名（mt/tb 会话身份同步本就昵称优先，显示不变）
+- 【长按表情收藏·微信】bubble-menu BUBBLE_MENU_ICONS 新增 addsticker（Lucide Sticker 图标）；buildMsgMenuItems 表情消息首排插「添加/已添加」（loadStickers('wx').some url 匹配，已收藏 filled 填色态）；handleMenuAction case 'addsticker'：未收藏 → newStickerId 入「我的表情」默认分组（meaning 随消息）+ toast 已添加到我的表情 + 广播 wx-stickers-changed；已收藏 → toast 已在「我的表情」不重复入库；WxStickerPanel 监听广播即时重读（面板开着也能看到新表情）
+- 【长按表情收藏·QQ】同款移植（qq-stickers-changed + loadStickers('qq')），QQ 聊天页菜单/分发/面板监听三件套
+- 【tsc+lint】bunx tsc --noEmit 0 错误；11 个改动文件定向 eslint 0 新问题
+- 【E2E（agent-browser 393×852）】播种机主（凡凡+昵称凑凑）+小柚（昵称小柚柚）+wx/qq 表情消息 → reload 后 IndexedDB 实测 nickname=凑凑 保留（迁移已除）✓ → 微信手机号登录 → 我页/资料页名字行显示「凑凑」（登录 socialNameOf+会话恢复双路径）→ 资料页改名「凑凑二号」保存 → 行即时变 + IndexedDB name=凡凡/nickname=凑凑二号（真名不动）✓ → 小柚会话长按表情 → 菜单「添加」（截图核对）→ 点击 → toast 已添加到我的表情 + wx-stickers 入库 1 条（meaning 随消息）→ 再长按 → 「已添加」→ 点击 → toast 已在「我的表情」+ 库仍 1 条不重复 ✓ → 表情面板「我的表情」分组显示该表情（挂载现读+事件同步双保险）✓ → 问 AI「我叫什么名字？听说过我的昵称吗」→ 语音回「你叫凡凡呀，我当然知道你的名字啦～」（知真名不知昵称）✓ → AI 引用我的表情 → 引用块显示「凑凑二号：[表情]…」（展示层昵称）而 AI 历史侧 quote.name 已替换真名 ✓ → QQ 20001234 登录 → 消息页头部「凑凑二号」✓ → 长按表情 → 添加 → toast+入库 → 再长按「已添加」✓ → 联系人 APP：CHAR 列表真名、USER 列表真名、凡凡详情页有「昵称：凑凑二号」行、编辑表单「昵称」输入框值=凑凑二号 + 名字=凡凡 ✓；测试档案已清、浏览器已关
+- 【坑】①主屏翻页：page-dot 按钮 .click() 可靠（data-testid=page-dot-N），滑动/长按手势均不稳定；App 图标是 div[aria-label] 需 elementFromPoint 命中后派发 ②底部 Dock 微信标签被 Next.js dev tools N 徽标遮挡→点不到，绕道通讯录 ③输入区按钮（表情/加号）对合成 PointerEvent 免疫，必须用 agent-browser 真实 CDP 鼠标（mouse move/down/up）④QQ 协议圆圈位置要按 DOM 实测（96,523），截图估坐标会 miss；勾选后登录按钮同 tick 仍读旧 disabled，需 wait 后重取 ref ⑤聊天长按直接对气泡内 img 派发 pointerdown+750ms 后 pointerup（1×1 表情图也要打在 img 上）
+
+Stage Summary:
+- 交付：①联系人 APP 昵称字段回归（机主/小号都可填，placeholder 注明用途与 AI 不可见）——昵称即 QQ/微信/美团/淘宝里显示的名字：微信/QQ 登录名、会话恢复、资料页、群聊气泡、朋友圈署名全部显示昵称；美团/淘宝会话身份同步本就昵称优先，填了昵称即生效；信息/电话/联系人 APP 仍显示真名；微信资料页改名=改昵称即时生效；存量昵称清空迁移已删除，昵称持久化；②AI 永远不知道机主昵称：社交显示副本 realName 存真名，AI 全链路（人设 ctx/群聊模式行/历史行/引用块/拉黑事件/招呼语/世界书/分享卡/淘宝客服）只传真名——修复 Task 31 漏掉的 wx-group/qq-group「昵称也是 TA」注入与 qq 历史行 me.name 直用；③聊天长按表情包「添加/已添加」：未收藏显示添加（点击入「我的表情」默认分组+toast+面板即时同步），已收藏显示已添加（点击仅提示、不重复入库），微信/QQ 双端
+- 改动文件：src/lib/contacts.ts、src/lib/ios/{contacts-store,mt-ai-engage,tb-share-proxy}.ts、src/components/apps/{bubble-menu,wechat,qq,wx-group,qq-group,contacts,taobao-msg-chat}.tsx
+- 关键决策：social 命名空间隔离——displayNameOf/cachedOwnerName/ownerProfileFor 保持 Task 31 真名口径（AI 邻接层），socialNameOf/withDisplayNames(social) 是唯一昵称入口（纯展示层）；昵称数据不再迁移清除，靠「AI 链路只读 realName/name」的纪律隔离

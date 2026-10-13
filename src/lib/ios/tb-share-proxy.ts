@@ -13,7 +13,7 @@
  *   tb-proxy-index/tb-share-index 供防重与扫单；订单挂 proxy 快照显示「已请 TA 代付」。
  */
 import { kvGet, kvSet } from './idb-kv';
-import { getContact } from './contacts-store';
+import { getContact, cachedContactRealName } from './contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '../contacts';
 import { tbGetSession, tbLoadOrders, tbMarkPaid, tbSaveOrders, tbUidOf, TB_PAY_TTL, type TbOrder } from './taobao-store';
 
@@ -652,7 +652,8 @@ export function tbProxyMeHistoryLine(pid: string): string {
   return `[你的淘宝代付请求 id:${p.id}]（你在淘宝店「${p.shopName}」拍了 ¥${fmt2(p.amount)}，${p.items.map((i) => `${i.name}x${i.qty}`).join('、')}，请机主代付，状态:${stateText}）`;
 }
 
-/** 订单分享卡 → AI 可读文本（含实时物流状态/礼物/帮取标记，AI 能自然接话与行动） */
+/** 订单分享卡 → AI 可读文本（含实时物流状态/礼物/帮取标记，AI 能自然接话与行动）。
+ *  fromName 是社交展示名（可能是机主昵称）：contactId 能解析到真名就替换（用户规则：AI 永不知道机主昵称） */
 export function tbShareHistoryLine(sid: string): string {
   const s = tbGetShare(sid);
   if (!s) return '[淘宝订单分享卡片]';
@@ -673,7 +674,8 @@ export function tbShareHistoryLine(sid: string): string {
     s.pickupReq ? '机主请你帮忙取件（到驿站后帮忙去取）' : '',
     s.paidBy ? `已由${s.paidBy}代买代付` : '',
   ].filter(Boolean);
-  return `[淘宝订单分享 id:${s.id} 订单:${s.orderId}]（${s.fromName}分享的：淘宝店「${s.shopName}」¥${fmt2(s.amount)}，${s.items.map((i) => `${i.name}x${i.qty}`).join('、')}，当前状态:${status}${flags.length ? `，${flags.join('，')}` : ''}）`;
+  const realFrom = s.contactId ? cachedContactRealName(s.contactId) : '';
+  return `[淘宝订单分享 id:${s.id} 订单:${s.orderId}]（${realFrom || s.fromName}分享的：淘宝店「${s.shopName}」¥${fmt2(s.amount)}，${s.items.map((i) => `${i.name}x${i.qty}`).join('、')}，当前状态:${status}${flags.length ? `，${flags.join('，')}` : ''}）`;
 }
 
 /** AI 幻觉回显剥除：模型照抄聊天历史里的卡片序列化行当正文时整行剥除（与美团端同口径） */

@@ -901,8 +901,8 @@ async function expireStaleSingleCards(): Promise<boolean> {
       return false;
     }
     let changed = false;
-    // 展示名与聊天页一致（昵称优先），提示行里的名字才能对得上气泡头像旁的称呼
-    for (const c of withDisplayNames(raw)) {
+    // 展示名与聊天页一致（昵称优先，机主本人同规则——社交展示名），提示行里的名字才能对得上气泡头像旁的称呼
+    for (const c of withDisplayNames(raw, { social: true })) {
       const msgs = loadMsgs(c.id);
       if (msgs.length === 0) continue;
       let next = msgs;
@@ -2288,6 +2288,15 @@ export function QqStickerPanel({
     setList(next);
     saveStickers('qq', next);
   };
+  // Task 32：聊天页长按表情「添加到表情」后面板同步刷新（面板开着也能立即看到新表情）
+  useEffect(() => {
+    const syncStickers = () => {
+      setList(loadStickers('qq'));
+      setGroups(loadStickerGroups('qq'));
+    };
+    window.addEventListener('qq-stickers-changed', syncStickers);
+    return () => window.removeEventListener('qq-stickers-changed', syncStickers);
+  }, []);
   /** 当前分组下的表情（groupId 缺失/指向已删分组 → 归默认分组，防孤儿不可见） */
   const groupIds = useMemo(() => new Set(groups.map((g) => g.id)), [groups]);
   const visible = useMemo(() => list.filter((s) => stickerGroupOf(s, groupIds) === activeGroupId), [list, groupIds, activeGroupId]);
@@ -3831,7 +3840,7 @@ function ChatPage({
       // 世界书注入通话（与文字聊天同一套 collectWbBlocks：全局常驻 + 局部/专属按触发词命中）：
       // 六个位置块 + 使用规则拼成一个块随人设注入（优先级：人设/世界设定 > 记忆）
       // 100-e 世界书锚点对齐微信通话同款第三参 labels（「文中的『你』指谁」消歧）
-      const callWb = collectWbBlocks(peer.id, wbScanText([memContext]), { charName: peer.name, userName: me.name });
+      const callWb = collectWbBlocks(peer.id, wbScanText([memContext]), { charName: peer.name, userName: me.realName || me.name });
       const worldbookBlock =
         [
           callWb.beforeSystem,
@@ -4649,13 +4658,15 @@ function ChatPage({
       .map((m) => {
         // 引用/转发让 AI 感知来源：引用 → 前缀说明引用的是谁说的什么；转发卡片 → 前缀说明来自哪个会话；
         // 好友验证消息/打招呼前缀标注（用户规则五：验证消息要区分，不能当聊天内容，也不入记忆）
+        // 引用块名字防泄漏：展示层存的 quote.name 可能是机主昵称（社交显示名），进 AI 历史一律替换回真名
+        const meReal = me.realName || me.name;
         const pre = `${
           m.fr === 'apply'
             ? '[好友验证消息，不是聊天内容] '
             : m.fr === 'greet'
               ? '[打招呼，不是聊天内容] '
               : ''
-        }${m.quote ? `（引用 ${m.quote.name}：「${m.quote.content}」）` : ''}${
+        }${m.quote ? `（引用 ${m.quote.name === me.name ? meReal : m.quote.name}：「${m.quote.content}」）` : ''}${
           m.kind === 'forward' && m.fwd
             ? m.fwd.merged
               ? // 【fix3-d-3】合并转发卡片：标题后拼逐条摘要（名字=原发言人，最多 8 条、每条截 40 字，
@@ -4711,7 +4722,7 @@ function ChatPage({
             : m.kind === 'transfer' && m.packet && isTransferReceiptMsg(m)
             ? // 【fix3-d-1】转账凭据卡（收款凭据/退还凭据）带显式主语进历史，
               // 不再伪装成持卡人又发了一笔转账（资金方向不再被伪造）
-              transferReceiptAiText(m, me.name, peer.name)
+              transferReceiptAiText(m, me.realName || me.name, peer.name)
             : m.kind === 'redpacket' && m.packet
               ? `[红包 ID:${m.packet.cid ?? m.id} ¥${m.packet.amount} "${m.packet.note}"，${cardStateLabel(m)}]`
               : m.kind === 'transfer' && m.packet
@@ -4721,7 +4732,7 @@ function ChatPage({
                   : m.kind === 'groupcard' && m.gcard
                     ? `[群聊邀请卡片：${m.gcard.name}（${m.gcard.inviterName || '群友'}邀请${m.gcard.memberNames?.length ? `，成员：${m.gcard.memberNames.join('、')}` : ''}），${m.gcard.status === 'pending' ? '待处理' : m.gcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
                     : m.kind === 'mtpay' && m.mtpay
-                      ? mtProxyHistoryLine(m.mtpay.pid, m.mtpay.role, m.role === 'me' ? me.name : peer.name)
+                      ? mtProxyHistoryLine(m.mtpay.pid, m.mtpay.role, m.role === 'me' ? me.realName || me.name : peer.name)
                       : m.kind === 'mtshare' && m.mtshare
                         ? mtOrderShareHistoryLine(m.mtshare.sid)
                         : m.kind === 'mtdraft' && m.mtdraft
@@ -4730,14 +4741,14 @@ function ChatPage({
                             ? // 淘宝代付卡：AI 读到结构化信息；direction 'me' 请求卡（AI 请机主代付）用专属句式
                               m.tbpay.role === 'req' && m.role === 'peer'
                                 ? tbProxyMeHistoryLine(m.tbpay.pid)
-                                : tbProxyHistoryLine(m.tbpay.pid, m.tbpay.role, m.role === 'me' ? me.name : peer.name)
+                                : tbProxyHistoryLine(m.tbpay.pid, m.tbpay.role, m.role === 'me' ? me.realName || me.name : peer.name)
                             : m.kind === 'tbshare' && m.tbshare
                               ? tbShareHistoryLine(m.tbshare.sid)
                               : m.kind === 'tbdraft' && m.tbdraft
                                 ? tbDraftHistoryLine(m.tbdraft.did)
                                 // 拍一拍系统行（Task 30）：按双方名字显式序列化（文案后缀原样拼接），AI 无主语歧义
                                 : m.kind === 'sys' && m.sys?.pat
-                                  ? qqPatHistoryLine(m.sys.pat, me.name, peer.name)
+                                  ? qqPatHistoryLine(m.sys.pat, me.realName || me.name, peer.name)
                                   : m.content),
         };
       });
@@ -5292,9 +5303,11 @@ function ChatPage({
       setMsgs((prev) =>
         prev.map((x) => (x.id === m.id && x.blkreq ? { ...x, blkreq: { ...x.blkreq, status: accept ? ('accepted' as const) : ('rejected' as const) } } : x))
       );
+      // AI 邻接事件文案：机主恒真名（me 是展示副本，社交模式下 name=昵称——AI 永不知道昵称）
+      const meReal = me.realName || me.name;
       const ev = accept
-        ? `（系统事件：${me.name}同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`
-        : `（系统事件：${me.name}拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`;
+        ? `（系统事件：${meReal}同意了你的解除拉黑申请，现在已经解除拉黑、恢复正常关系。请用符合人设的一两句话自然回应这件事。）`
+        : `（系统事件：${meReal}拒绝了你的解除拉黑申请，拉黑仍然生效。请用符合人设的一两句话自然回应这件事，不要假装已经解除。）`;
       if (accept) {
         setBlk(acceptBlockReq('qq', peer.id));
         pushSysMsg(`你同意了「${peer.name}」的解除拉黑申请`);
@@ -5308,7 +5321,7 @@ function ChatPage({
       }
       runAiTurnRef.current?.(null, [], ev);
     },
-    [peer.id, peer.name, me.name, pushSysMsg, sessionKey]
+    [peer.id, peer.name, me.name, me.realName, pushSysMsg, sessionKey]
   );
 
   /**
@@ -5327,7 +5340,8 @@ function ChatPage({
       ...prev,
       { id: uid(), role: 'me', content: '', time: Date.now(), kind: 'blockreq' as const, blkreq: { reason: res.entry.userReqReason ?? '', status: 'pending' as const, from: 'user' as const } },
     ]);
-    const ev = `（系统事件：你之前把${me.name}拉黑了，现在${me.name}给你发来一条解除拉黑申请，理由：「${res.entry.userReqReason ?? ''}」。如果你愿意解除拉黑给对方一个机会，请在回复的最开头单独加上标记 [同意解除拉黑]；如果决定拒绝，请在回复的最开头单独加上标记 [拒绝解除拉黑]。先用你的方式自然回应这件事）`;
+    const meReal = me.realName || me.name;
+    const ev = `（系统事件：你之前把${meReal}拉黑了，现在${meReal}给你发来一条解除拉黑申请，理由：「${res.entry.userReqReason ?? ''}」。如果你愿意解除拉黑给对方一个机会，请在回复的最开头单独加上标记 [同意解除拉黑]；如果决定拒绝，请在回复的最开头单独加上标记 [拒绝解除拉黑]。先用你的方式自然回应这件事）`;
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       qqQueueAdd(peer.id, ev);
       return;
@@ -5675,6 +5689,12 @@ function ChatPage({
     // 语音消息首项「转文字」/「取消转文字」（toggle：已转写→取消收起；未转写→识别；失败可重试）
     if (isVoice) items.push({ key: 'stt', label: m.voice?.stt === 'done' && m.voice.transcript ? '取消转文字' : '转文字', icon: B.stt });
     items.push({ key: 'copy', label: '复制', icon: B.copy });
+    // Task 32 表情包收藏：长按表情气泡 →「添加」（收藏进「我的表情」默认分组）；
+    // 同图已在收藏里 → 显示「已添加」（filled 填色态，点击只提示不重复入库）
+    if (m.kind === 'sticker' && m.stk?.url) {
+      const saved = loadStickers('qq').some((s) => s.url === m.stk!.url);
+      items.push({ key: 'addsticker', label: saved ? '已添加' : '添加', icon: B.addsticker, filled: saved });
+    }
     // 图片消息：保存到设备（dataURL 直接下载；QQ 图片 dataURL 存 content）
     if (isImage && m.content) items.push({ key: 'saveimg', label: '保存', icon: B.save });
     if (!isFrLocked) items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
@@ -5941,6 +5961,23 @@ function ChatPage({
       case 'copy':
         copyTextWithToast(quoteContentOf(m), onToast);
         break;
+      case 'addsticker': {
+        // Task 32 长按表情包 → 添加到「我的表情」（默认分组）：同图已收藏只提示不重复入库；
+        // 入库后广播 qq-stickers-changed（表情面板若开着立即刷新，关着下次打开现读）
+        if (m.kind !== 'sticker' || !m.stk?.url) break;
+        const cur = loadStickers('qq');
+        if (cur.some((s) => s.url === m.stk!.url)) {
+          onToast('已在「我的表情」');
+          break;
+        }
+        saveStickers('qq', [
+          ...cur,
+          { id: newStickerId(), url: m.stk.url, meaning: m.stk.meaning ?? '', groupId: DEFAULT_STICKER_GROUP_ID, createdAt: Date.now() },
+        ]);
+        window.dispatchEvent(new CustomEvent('qq-stickers-changed'));
+        onToast('已添加到我的表情');
+        break;
+      }
       case 'del': {
         // A-4：投递进行中同样拒绝——投递 tick 的 loadMsgs 读旧存储会把被删消息合并回来落盘（消息复活）
         if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
@@ -12149,7 +12186,8 @@ function ApplyFriendPage({
   onSend: (payload: { greeting: string; extras: FriendReqExtras }) => void;
   onToast: (m: string) => void;
 }) {
-  const [greeting, setGreeting] = useState(`我是${me.name}`);
+  // 招呼语会进对方 AI 的上下文：恒用真名（用户规则：AI 永不知道机主昵称）
+  const [greeting, setGreeting] = useState(`我是${me.realName || me.name}`);
   const [remark, setRemark] = useState('');
   const [hideMine, setHideMine] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -12216,7 +12254,7 @@ function ApplyFriendPage({
             if (busy) return;
             setBusy(true);
             onSend({
-              greeting: greeting.trim() || `我是${me.name}`,
+              greeting: greeting.trim() || `我是${me.realName || me.name}`,
               extras: { remark: remark.trim() || null, hideMine },
             });
           }}
@@ -17195,7 +17233,7 @@ export default function QQApp() {
       // 头像按 App 隔离：加载读 qq 槽位投影（登录恢复/账号信息展示均用该头像）
       const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
       if (!alive) return;
-      const list = withDisplayNames(raw);
+      const list = withDisplayNames(raw, { social: true });
       setContacts(list);
       try {
         const savedId = window.localStorage.getItem(accLs(LS_SESSION, 'qq'));
@@ -17282,10 +17320,10 @@ export default function QQApp() {
     switchAccountFor('qq', MAIN_ACCOUNT_ID);
   }, []);
 
-  // 添加好友后刷新联系人列表（同步换成昵称展示名；头像按 App 隔离读 qq 槽位投影）；返回投影列表供「我」快照同步复用
+  // 添加好友后刷新联系人列表（同步换成昵称展示名——机主同规则 socialNameOf；头像按 App 隔离读 qq 槽位投影）；返回投影列表供「我」快照同步复用
   const refreshContacts = useCallback(async (): Promise<ContactRecord[]> => {
     const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
-    setContacts(withDisplayNames(raw));
+    setContacts(withDisplayNames(raw, { social: true }));
     return raw;
   }, []);
 

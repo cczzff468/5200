@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { productById, shopById, tbImg } from '@/lib/ios/taobao-data';
 import { tbLoadOrders } from '@/lib/ios/taobao-store';
+import { getContact } from '@/lib/ios/contacts-store';
 import { TbImg } from './tb-img';
 import {
   tbChatAppend,
@@ -271,12 +272,23 @@ export function TbMsgChatPage({
       .slice(0, cut < 0 ? base.length : cut)
       .map((m) => ({ role: m.role, text: m.text, card: m.card }));
     const text = userText ?? (triggerMsgId ? (base.find((m) => m.id === triggerMsgId)?.text ?? '') : '');
-    // 上下文：店铺 + 正在咨询的商品/订单 + 买家昵称
+    // 上下文：店铺 + 正在咨询的商品/订单 + 买家名字
+    // 用户规则（Task 32）：AI 永远不知道机主昵称——客服 AI 上下文恒用真实名字
+    //（userName 是社交/电商展示名，可能是昵称；只用于气泡显示，不进 prompt）
+    let aiCustName = userName;
+    if (uid.startsWith('wx:') || uid.startsWith('qq:')) {
+      try {
+        const c = await getContact(uid.slice(3));
+        if (c?.kind === 'user' && c.name?.trim()) aiCustName = c.name.trim();
+      } catch {
+        /* 联系人库异常 → 回退展示名 */
+      }
+    }
     const ctx = {
       shop,
       product: pidRef.current ? (productById(pidRef.current) ?? null) : null,
       order: orderIdRef.current ? (tbLoadOrders(uid).find((o) => o.id === orderIdRef.current) ?? null) : null,
-      custName: userName,
+      custName: aiCustName,
     };
     // AI 回复与 ≥900ms 最短打字节奏并行
     const [reply] = await Promise.all([tbSellerReply(text, history, ctx), new Promise<void>((r) => setTimeout(r, 900))]);

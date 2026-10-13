@@ -20,6 +20,7 @@ import {
   Pencil,
   RefreshCw,
   Reply,
+  Sticker,
   Star,
   Trash2,
   Undo2,
@@ -51,6 +52,8 @@ export const BUBBLE_MENU_ICONS = {
   save: Download,
   regenimg: Wand2,
   stt: FileText,
+  /** 表情包消息长按「添加到表情」（Task 32；已添加显示已添加置灰态 filled） */
+  addsticker: Sticker,
 } as const;
 
 export interface BubbleMenuPos {

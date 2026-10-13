@@ -188,11 +188,18 @@ function GenderPills({ value, onChange }: { value: string; onChange: (v: string)
   );
 }
 
-/** 名字输入框提示语（按 tab 类型区分）：机主昵称已废除（用户规则：AI 不知道我的昵称），USER 恒填真实名字 */
+/** 名字输入框提示语（按 tab 类型区分）：USER 的名字=真实姓名（昵称另填在「昵称」字段，只用于 QQ/微信/美团/淘宝显示，AI 不知道） */
 const NAME_PLACEHOLDERS: Record<ContactKind, string> = {
   char: '给 AI 角色起个名字',
   user: '你的名字',
   npc: '配角的名字',
+};
+
+/** 昵称输入框提示语（按 tab 类型区分）：机主/小号=QQ/微信/美团/淘宝里显示的名字（AI 不可见） */
+const NICKNAME_PLACEHOLDERS: Record<ContactKind, string> = {
+  char: 'QQ/微信里显示的名字（选填）',
+  user: 'QQ/微信/美团/淘宝里显示的名字（选填，AI 不知道）',
+  npc: '社交 App 里显示的名字（选填）',
 };
 
 /** 带生成按钮的长方形输入框（骰子按钮内嵌右侧） */
@@ -1205,8 +1212,7 @@ function ContactFormView({
             avatar,
             altOf: acc.id,
             ...form,
-            // 用户规则：机主（USER）昵称已废除——新档案恒无昵称
-            nickname: null,
+            // 昵称（Task 32）：机主/小号都可设——只用于 QQ/微信/美团/淘宝显示，AI 永远不知道
             wechatPassword,
             qqPassword,
           });
@@ -1222,8 +1228,7 @@ function ContactFormView({
         const saved = editing
           ? await updateContact(initial!.id, {
               ...form,
-              // 用户规则：机主（USER）昵称已废除——保存时强制清空存量昵称（AI 与展示层都不再使用）
-              ...(kind === 'user' ? { nickname: null } : {}),
+              // 昵称（Task 32）：机主/小号都可设——只用于 QQ/微信/美团/淘宝显示，AI 永远不知道
               wechatPassword,
               qqPassword,
               ownerId: isNpc ? ownerId : null,
@@ -1234,7 +1239,6 @@ function ContactFormView({
               ownerId: isNpc ? ownerId : null,
               avatar,
               ...form,
-              ...(kind === 'user' ? { nickname: null } : {}),
               wechatPassword,
               qqPassword,
             });
@@ -1395,20 +1399,19 @@ function ContactFormView({
           </>
         )}
 
-        {/* 基础信息：昵称在名字上方（QQ/微信显示名，仅 CHAR/NPC 可填——机主 USER 昵称已废除），短字段两列平行，关系整行 */}
+        {/* 基础信息：昵称在名字上方（Task 32：机主也可填——QQ/微信/美团/淘宝里显示的名字，
+            展示层专用、AI 永不知道；CHAR/NPC 昵称同旧口径），短字段两列平行，关系整行 */}
         <SectionTitle>基础信息</SectionTitle>
         <div className="flex flex-col gap-3.5">
-          {kind !== 'user' && (
-            <BoxField label="昵称">
-              <input
-                value={form.nickname}
-                onChange={(e) => set('nickname')(e.target.value)}
-                placeholder="QQ/微信里显示的名字（选填）"
-                aria-label="昵称"
-                className={boxInputCls}
-              />
-            </BoxField>
-          )}
+          <BoxField label="昵称">
+            <input
+              value={form.nickname}
+              onChange={(e) => set('nickname')(e.target.value)}
+              placeholder={NICKNAME_PLACEHOLDERS[kind]}
+              aria-label="昵称"
+              className={boxInputCls}
+            />
+          </BoxField>
           <BoxField label="名字">
             <input
               value={form.name}
@@ -1741,7 +1744,7 @@ function DetailView({
           title="基本信息"
           icon={<UserRound className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />}
         >
-          {contact.kind !== 'user' && contact.nickname?.trim() && <DetailRow label="昵称" value={contact.nickname.trim()} />}
+          {contact.nickname?.trim() && <DetailRow label="昵称" value={contact.nickname.trim()} />}
           {contact.gender && <DetailRow label="性别" value={contact.gender} />}
           {contact.age && <DetailRow label="年龄" value={contact.age} />}
           {contact.height && <DetailRow label="身高" value={contact.height} />}

@@ -2644,12 +2644,13 @@ export function QqGroupChatPage({
           .filter((c): c is ContactRecord => !!c)
           .filter((c) => c.id !== char.id);
         const groupRules = [
-          // 名字/昵称区分（群聊版）：参与成员里机主用称呼名，并明确昵称只是同一个人的另一个叫法。
+          // 名字规则（群聊版，Task 32 用户规则收敛）：参与成员里机主用称呼名（真名）；
+          // 机主昵称绝不注入 AI（旧版「昵称「XX」也是 TA」科普行已删——AI 永远不知道机主昵称）。
           // 名单收敛（防双份注入）：完整成员枚举原与下方【群成员速览】（名字+关系+人设摘要，信息更全）
           // 重复列两遍，大群每回合双倍 token——速览会注入时（注入条件=others.length>0，与下方 memberLines
           // 同源，两处必须同步）名单只保留机主身份行 + 人数总览 + 指向速览的指引；速览不注入时
           // （群内只有机主+当前角色，名单是机主名字的唯一来源）保持原样。速览不含机主，故机主行始终保留。
-          `【群聊模式】当前是群聊「${g.name}」，不是一对一私聊。参与成员：${meName}（机主用户${me.nickname?.trim() && me.nickname.trim() !== meName ? `，昵称「${me.nickname.trim()}」也是 TA` : ''}）${
+          `【群聊模式】当前是群聊「${g.name}」，不是一对一私聊。参与成员：${meName}（机主用户）${
             others.length > 0
               ? `等共 ${others.length + 2} 名成员（你 + 其他 ${others.length + 1} 人），其余成员的名字、身份和与你的关系见下方【群成员速览】`
               : ''

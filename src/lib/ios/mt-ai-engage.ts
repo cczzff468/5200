@@ -26,7 +26,7 @@
  * - 隔离：草稿按美团 uid + 角色双写；记忆按角色 contactId（既有机制）；不涉及真实资金。
  */
 import { kvGet, kvSet } from './idb-kv';
-import { getContact, listContacts, ownerProfileFor, cachedOwnerName } from './contacts-store';
+import { getContact, listContacts, ownerProfileFor, cachedOwnerName, cachedContactRealName } from './contacts-store';
 import { avatarFor, type ContactRecord } from '../contacts';
 import { getMemSettings } from '@/lib/memory';
 import { getActiveAccountFor, getActiveAccountIdFor, type AccountApp } from './accounts';
@@ -1046,13 +1046,15 @@ export function mtDraftHistoryLine(did: string, senderName: string): string {
   return `[美团代点 id:${d.id}]（${senderName}帮机主点的：商家「${d.merchantName}」，${d.items.map((i) => `${i.name}x${i.qty}`).join('、')}，约¥${fmt2(d.total ?? d.estimate)}，状态:${status}）`;
 }
 
-/** 订单分享卡 → AI 可读文本（含实时配送状态与付款人，AI 能自然接话） */
+/** 订单分享卡 → AI 可读文本（含实时配送状态与付款人，AI 能自然接话）。
+ *  fromName 是社交展示名（可能是机主昵称）：contactId 能解析到真名就替换（用户规则：AI 永不知道机主昵称） */
 export function mtOrderShareHistoryLine(sid: string): string {
   const s = mtGetShare(sid);
   if (!s) return '[美团订单分享卡片]';
   const order = mtLoadOrders(s.uid).find((o) => o.id === s.orderId);
   const status = order ? MT_STATUS_LABEL[order.status] : '未知';
-  const who = s.paidBy ? `${s.paidBy}请客已付的（机主无需付款）` : `${s.fromName}分享的`;
+  const realFrom = s.contactId ? cachedContactRealName(s.contactId) : '';
+  const who = s.paidBy ? `${s.paidBy}请客已付的（机主无需付款）` : `${realFrom || s.fromName}分享的`;
   return `[美团订单分享]（${who}：「${s.merchantName}」¥${fmt2(s.amount)}，${s.items.map((i) => `${i.name}x${i.qty}`).join('、')}，当前状态:${status}）`;
 }
 

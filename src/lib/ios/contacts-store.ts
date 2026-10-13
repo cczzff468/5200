@@ -28,6 +28,7 @@ import { wsHeaders } from './workspace';
 import {
   avatarFor,
   displayNameOf,
+  socialNameOf,
   genPhone,
   genQQ,
   genWechatId,
@@ -140,42 +141,21 @@ function sortDesc(list: ContactRecord[]): ContactRecord[] {
   return [...list].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
 }
 
-/** 机主显示名缓存（listContacts 每次刷新；仅客户端联系人加载后非空） */
+/** 机主显示名缓存（listContacts 每次刷新；仅客户端联系人加载后非空；
+ *  注意：displayNameOf 对机主恒真名（socialNameOf 才用昵称）→ 本缓存是 AI 安全的真名，
+ *  供 mt-ai-engage/chat-stream-store/altMainName 等 AI 邻接链路消费，勿改回展示名口径） */
 let ownerNameCache = '';
-
-/**
- * 一次性迁移（owner-nickname-purge-v1，用户规则「AI 不知道我的昵称」）：
- * 机主（USER）昵称全面废除——展示层/人设层已跳过，这里把存量 USER 联系人的昵称一并清空，
- * 让数据层彻底收敛（昵称字段从此只有 CHAR/NPC 在用）。幂等（localStorage 标记）。
- */
-const OWNER_NICKNAME_PURGE_FLAG = 'owner-nickname-purge-v1';
-let ownerNicknamePurgeDone = false;
-async function purgeOwnerNicknames(): Promise<void> {
-  if (ownerNicknamePurgeDone) return;
-  ownerNicknamePurgeDone = true;
-  try {
-    if (typeof window === 'undefined' || window.localStorage.getItem(OWNER_NICKNAME_PURGE_FLAG)) return;
-    const all = await localDB.getAll('contacts');
-    const dirty = all.filter((c) => c.kind === 'user' && !!c.nickname?.trim());
-    for (const c of dirty) {
-      await localDB.put('contacts', { ...c, nickname: null });
-    }
-    // 全部清理成功后才写标记（失败可重试；标记先写会在首跑空库/中途失败时漏清存量数据）
-    window.localStorage.setItem(OWNER_NICKNAME_PURGE_FLAG, '1');
-    if (dirty.length > 0) {
-      // 广播刷新（各 App 持旧快照的界面重读联系人；changed 不含 name → 不触发设置侧名字镜像）
-      window.dispatchEvent(new CustomEvent('contact-updated', { detail: { changed: ['nickname'] } }));
-    }
-  } catch {
-    ownerNicknamePurgeDone = false; // 失败允许下次重试
-  }
-}
 
 /** 全量联系人（createdAt 倒序，与旧服务端 GET 顺序一致） */
 export async function listContacts(): Promise<ContactRecord[]> {
-  await purgeOwnerNicknames();
   const all = await localDB.getAll('contacts');
   const out = sortDesc(all as ContactRecord[]);
+  // 真名同步缓存重建（cachedContactRealName 消费；展示名替换不影响原始记录）
+  contactRealNameCache.clear();
+  for (const c of out) {
+    const nm = c.name?.trim();
+    if (nm) contactRealNameCache.set(c.id, nm);
+  }
   // 机主显示名缓存（同步读取口 cachedOwnerName 用；人设构建「发送现场」需要同步拿到大号身份名）
   const owner = out.find((c) => c.kind === 'user' && !c.altOf);
   ownerNameCache = owner ? displayNameOf(owner) || owner.name || '' : '';
@@ -186,6 +166,17 @@ export async function listContacts(): Promise<ContactRecord[]> {
  *  尚未加载过联系人时返回空串（调用方自行回退「机主」） */
 export function cachedOwnerName(): string {
   return ownerNameCache;
+}
+
+/**
+ * 联系人真名同步缓存（listContacts 每次刷新全量重建）：
+ * 美团/淘宝订单分享卡等「落库存的是社交展示名（可能是机主昵称）」的数据，
+ * 序列化进 AI 历史时用它把展示名换回真名（用户规则：AI 永不知道机主昵称）。
+ * 未加载过（SSR/极端时序）返回空串，调用方回退原展示名。
+ */
+const contactRealNameCache = new Map<string, string>();
+export function cachedContactRealName(id: string): string {
+  return contactRealNameCache.get(id) ?? '';
 }
 
 /**
@@ -243,8 +234,9 @@ export async function ownerRealNameFor(app: AccountApp): Promise<string> {
 }
 
 /**
- * 机主资料（真实名字 + 昵称）：通话链路注入【用户的称呼】段用（AI 知道「软件上显示的名字只是昵称，
- * 真实名字才是真名；被问是谁就报真名」）。无 user 联系人或名字为空返回 null（调用方自行回退）。
+ * 机主资料（真实名字 + 昵称）：仅用于展示/同步链路（美团/淘宝 mtSyncSessionIdentity 口径同源：
+ * 社交/电商 App 里我显示昵称）。AI 链路一律只取 realName（用户规则：AI 永远不知道机主昵称）。
+ * 无 user 联系人或名字为空返回 null（调用方自行回退）。
  */
 export async function ownerProfile(): Promise<{ realName: string; nickname: string | null } | null> {
   try {
@@ -1040,7 +1032,9 @@ export async function loginWechat(mode: 'phone' | 'wechat' | 'qq', rawAccount: s
     ok: true,
     user: {
       id: hit.id,
-      name: displayNameOf(hit),
+      // 微信/QQ 登录返回的显示名用社交展示名（昵称 ?? 真名，Task 32）：登录后 App 内「我」
+      // 显示的就是联系人 App 里填的昵称；realName 另带真名供 AI 链路使用
+      name: socialNameOf(hit),
       realName: hit.name,
       nickname: hit.nickname ?? null,
       avatar: avatarFor(hit, 'wx'),
@@ -1097,8 +1091,8 @@ export async function loginAltSlot(
     (c) => c.kind === 'user' && (c.altOf === slot.id || c.id === slot.ownerContactId),
   );
   if (!profile) return { ok: false, error: `「${slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号')}」还没有身份资料，请重启应用后再试` };
-  // 槽位名与登录后 App 内显示同口径（Task 40-S）：档案展示名（备注>昵称>名字）优先，注册表名兼底
-  const slotName = displayNameOf(profile).trim() || slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号');
+  // 槽位名与登录后 App 内显示同口径（Task 40-S；Task 32 改社交展示名：档案昵称优先）
+  const slotName = socialNameOf(profile).trim() || slot.name?.trim() || (slot.kind === 'anon' ? '匿名账号' : '小号');
 
   // 账号标识匹配：手机号归一化比较；微信号/QQ号精确比较
   const accNorm = normalizePhoneKey(account);
@@ -1127,7 +1121,7 @@ export async function loginAltSlot(
 
   const user = {
     id: profile.id,
-    name: displayNameOf(profile),
+    name: socialNameOf(profile),
     realName: profile.name,
     nickname: profile.nickname ?? null,
     avatar: avatarFor(profile, app),
@@ -1203,7 +1197,8 @@ export async function loginQQ(mode: 'phone' | 'account', rawAccount: string, pas
     ok: true,
     user: {
       id: hit.id,
-      name: displayNameOf(hit),
+      // QQ 登录显示名同微信：社交展示名（昵称 ?? 真名，Task 32）
+      name: socialNameOf(hit),
       realName: hit.name,
       nickname: hit.nickname ?? null,
       avatar: avatarFor(hit, 'qq'),

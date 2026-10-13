@@ -131,8 +131,9 @@ function randInt(min: number, max: number): number {
 /**
  * 展示名：备注 > 昵称 > 真实名字。
  * QQ/微信等社交 App 的联系人显示统一走这里（备注/昵称不是真实名字）。
- * 用户规则：机主本人（kind='user'）恒显示真实名字——昵称对机主不生效（AI 也不知道机主昵称），
- * 保证微信个人资料页改名字后显示层立刻生效（不会被存量昵称顶住）。
+ * 用户规则：机主本人（kind='user'）在此恒返回真实名字——本函数同时被 AI 邻接链路
+ * （cachedOwnerName/群成员解析等）消费，绝不能把机主昵称漏进 AI；
+ * 社交 App 展示层要用机主昵称时走 socialNameOf / withDisplayNames({ social: true })。
  */
 export function displayNameOf(
   c: Pick<ContactRecord, 'name' | 'nickname'> & { remark?: string | null; kind?: string | null }
@@ -144,10 +145,38 @@ export function displayNameOf(
   return nick ? nick : c.name;
 }
 
-/** 把一组联系人的 name 替换成展示名（备注/昵称优先，仅供 QQ/微信/信息等 App 内部显示用，真实名字不变）；
- *  机主本人（kind='user'）跳过——恒显示真实名字（用户规则：AI 不知道机主昵称，展示层同步废除） */
-export function withDisplayNames(list: ContactRecord[]): ContactRecord[] {
-  return list.map((c) => (c.kind === 'user' || !(c.remark?.trim() || c.nickname?.trim()) ? c : { ...c, name: displayNameOf(c), realName: c.realName ?? c.name }));
+/**
+ * 社交展示名（仅 QQ/微信/美团/淘宝等 App 的显示层用；Task 32）：
+ * 机主（kind='user'）→ 昵称 ?? 真名（联系人 App 里填的昵称就是这些 App 里显示的名字；
+ * AI 永远不知道昵称——本函数只允许进纯显示链路，禁止喂给任何人设/决策 prompt）；
+ * 其他联系人同 displayNameOf（备注 > 昵称 > 真名）。
+ */
+export function socialNameOf(
+  c: Pick<ContactRecord, 'name' | 'nickname' | 'kind'> & { remark?: string | null }
+): string {
+  if (c.kind === 'user') {
+    const nick = c.nickname?.trim();
+    return nick ? nick : c.name;
+  }
+  return displayNameOf(c);
+}
+
+/**
+ * 把一组联系人的 name 替换成展示名（备注/昵称优先，仅供 QQ/微信/信息等 App 内部显示用，真实名字不变）。
+ * opts.social = true：机主本人也按 socialNameOf 替换（QQ/微信/美团/淘宝里我显示昵称，
+ * 副本 realName 存真名——addressNameOf/meTileLabel 按 realName 优先，AI 链路不受污染）；
+ * 缺省（信息/电话/联系人 App/AI 邻接调用）机主跳过，恒真名（Task 31 口径不变）。
+ */
+export function withDisplayNames(list: ContactRecord[], opts?: { social?: boolean }): ContactRecord[] {
+  const social = opts?.social === true;
+  return list.map((c) => {
+    if (c.kind === 'user') {
+      if (!social) return c;
+      const sn = socialNameOf(c);
+      return sn && sn !== c.name ? { ...c, name: sn, realName: c.realName ?? c.name } : c;
+    }
+    return !(c.remark?.trim() || c.nickname?.trim()) ? c : { ...c, name: displayNameOf(c), realName: c.realName ?? c.name };
+  });
 }
 
 // ---------------- 名字 / 昵称区分（AI 称呼与成员解析共用） ----------------
@@ -199,10 +228,18 @@ export function nameVariantHit(variants: string[], n: string): boolean {
 }
 
 /**
- * 成员格点显示名（群聊设置页成员瓦片用）：机主瓦片恒显示真名（机主昵称已废除——AI 不知道、展示层也不再强调）。
+ * 成员格点显示名（群聊设置页/群聊气泡里「我」的名字标签用）：
+ * 机主 → 昵称 ?? 真名（Task 32：社交 App 里我的名字=昵称，没填昵称才回退真名；纯显示位，不进 AI）；
+ * 其他联系人 → 称呼名（真名优先）。
  */
 export function meTileLabel(c: { name: string; nickname?: string | null; realName?: string | null; kind?: string | null }, _mode?: AddressMode): string {
   void _mode;
+  if (c.kind === 'user') {
+    const nick = c.nickname?.trim();
+    if (nick) return nick;
+    const real = c.realName?.trim() ?? '';
+    return real || c.name;
+  }
   return addressNameOf(c);
 }
 
