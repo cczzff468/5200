@@ -1549,9 +1549,67 @@ export function mtFindDish(id: string): { merchant: MtMerchant; dish: MtDish } |
   return undefined;
 }
 
-/** 菜单所有菜（购物车金额计算用） */
+/** 菜单所有菜（购物车金额计算用；含 AI 自主补的菜） */
 export function mtDishesOf(m: MtMerchant): MtDish[] {
-  return m.sections.flatMap((s) => s.dishes);
+  return [...m.sections.flatMap((s) => s.dishes), ...mtAiDishesOf(m.id)];
+}
+
+// ---------------- AI 自主补菜注册表（Task 26：AI 代点/请客/自己点时菜单没有的菜自动创建） ----------------
+// 与 AI 商家注册表同款：Map + kv 持久化（'mt-ai-dish-registry'，{ merchantId: dishes[] }）；
+// 消费方 mtDishesOf 合并返回（代点解析/购物车金额计算/AI 推荐自动看见 AI 补的菜，下单链路零改动）。
+
+const AI_DISH_REGISTRY_KEY = 'mt-ai-dish-registry';
+const AI_DISH_PER_MERCHANT_CAP = 80;
+const AI_DISH_MERCHANT_CAP = 40;
+
+let aiDishRegistry: Map<string, MtDish[]> | null = null;
+
+/** 惰性恢复（幂等）：kvGet 开机门控后同步可读，聊天里 AI 代点不经过美团 App 也能拿到 */
+function ensureAiDishRegistry(): Map<string, MtDish[]> {
+  if (aiDishRegistry) return aiDishRegistry;
+  aiDishRegistry = new Map();
+  try {
+    const v = kvGet(AI_DISH_REGISTRY_KEY) as Record<string, unknown> | null;
+    if (v && typeof v === 'object') {
+      for (const [mid, dishes] of Object.entries(v)) {
+        if (!Array.isArray(dishes)) continue;
+        const ok = (dishes as unknown[]).filter(
+          (d): d is MtDish => Boolean(d) && typeof (d as MtDish).id === 'string' && typeof (d as MtDish).name === 'string' && typeof (d as MtDish).price === 'number',
+        );
+        if (ok.length > 0) aiDishRegistry.set(mid, ok);
+      }
+    }
+  } catch {
+    /* 坏数据忽略 */
+  }
+  return aiDishRegistry;
+}
+
+/** 注册 AI 补的菜（同名幂等；持久化；商家数封顶 LRU 淘汰最旧） */
+export function mtRegisterAiDish(merchantId: string, dish: MtDish): void {
+  const reg = ensureAiDishRegistry();
+  const arr = reg.get(merchantId) ?? [];
+  if (arr.some((d) => d.name === dish.name)) return;
+  arr.push(dish);
+  reg.delete(merchantId); // 重插尾部 = LRU
+  reg.set(merchantId, arr);
+  while (reg.size > AI_DISH_MERCHANT_CAP) {
+    const oldest = reg.keys().next().value;
+    if (oldest === undefined) break;
+    reg.delete(oldest);
+  }
+  try {
+    const obj: Record<string, MtDish[]> = {};
+    for (const [k, v] of reg) obj[k] = v.slice(-AI_DISH_PER_MERCHANT_CAP);
+    kvSet(AI_DISH_REGISTRY_KEY, obj);
+  } catch {
+    /* 存储不可用忽略 */
+  }
+}
+
+/** AI 补的菜（商家维度） */
+export function mtAiDishesOf(merchantId: string): MtDish[] {
+  return ensureAiDishRegistry().get(merchantId) ?? [];
 }
 
 // ================================ 优惠券（我的券）种子数据 ================================

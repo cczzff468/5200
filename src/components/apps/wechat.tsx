@@ -290,6 +290,7 @@ import { ProactiveMsgPage, ProactiveMasterRow } from './proactive-msg-page';
 import { proactiveCfgSummary, parseReminderInstruction, reminderHintHit, reminderSysHint, buildReminderSysMsg, setActiveProactiveChat } from '@/lib/ios/proactive-msg';
 import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { BatchStickerSheet, makeStickerGroup, StickerGroupBar, StickerGroupManageSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
+import { StickerSearchSheet } from './sticker-search-sheet';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import {
   WxServices,
@@ -2547,6 +2548,8 @@ export function WxStickerPanel({
   const [groups, setGroups] = useState<StickerGroup[]>(() => loadStickerGroups('wx'));
   const [activeGroupId, setActiveGroupId] = useState<string>(DEFAULT_STICKER_GROUP_ID);
   const [mode, setMode] = useState<'grid' | 'add'>('grid');
+  /** 网上表情搜索弹窗（Task 26：面板右上角搜索图标打开） */
+  const [searchOpen, setSearchOpen] = useState(false);
   const [tab, setTab] = useState<'file' | 'url'>('file');
   const [editMode, setEditMode] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
@@ -2636,6 +2639,17 @@ export function WxStickerPanel({
       <div className="flex items-center justify-between px-4 pb-1 pt-2.5">
         <p className="text-[15px] font-medium">表情</p>
         <div className="flex items-center gap-4">
+          {mode === 'grid' && (
+            <button
+              type="button"
+              aria-label="搜索表情"
+              data-testid="wx-sticker-panel-search"
+              onClick={() => setSearchOpen(true)}
+              className="text-black/45 active:opacity-60 dark:text-white/45"
+            >
+              <Search className="h-[18px] w-[18px]" strokeWidth={2} />
+            </button>
+          )}
           {mode === 'grid' && activeGroupId !== 'builtin' && list.some((s) => !s.builtin) && (
             <button
               type="button"
@@ -2651,6 +2665,8 @@ export function WxStickerPanel({
           </button>
         </div>
       </div>
+      {/* 网上表情搜索弹窗（真机同款：从面板上方滑出盖住消息区；点结果直发，sendSticker 自带面板收起） */}
+      <StickerSearchSheet app="wx" open={searchOpen} onClose={() => setSearchOpen(false)} onSend={onPick} />
       {/* 分组栏：毛玻璃胶囊分组名字（点选切换下方网格）+「＋」新建分组 */}
       <StickerGroupBar testPrefix="wx" groups={groups} activeId={activeGroupId} onSelect={setActiveGroupId} onCreate={createGroup} />
       {mode === 'grid' ? (

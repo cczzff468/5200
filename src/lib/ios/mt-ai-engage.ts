@@ -42,7 +42,7 @@ import {
   MT_STATUS_LABEL,
   type MtOrder,
 } from './meituan-store';
-import { mtAllMerchants, mtMerchantOf, mtDishesOf, type MtDish, type MtMerchant } from './meituan-data';
+import { mtAllMerchants, mtMerchantOf, mtDishesOf, mtRegisterAiDish, type MtDish, type MtMerchant } from './meituan-data';
 import {
   mtGetProxy,
   mtProxyChatCid,
@@ -206,6 +206,67 @@ function resolveDish(merchant: MtMerchant, name: string): MtDish | null {
   return all.find((d) => d.name === clean) ?? all.find((d) => d.name.includes(clean) || clean.includes(d.name)) ?? null;
 }
 
+// ---------------- AI 自主补菜（Task 26：菜单没有的菜自动创建，不再「代点失败」） ----------------
+
+/** 菜名 → 价格启发式（元）：甜品/蛋糕类偏高，饮品中等，主食/小吃平价，默认 22 */
+function guessDishPrice(name: string): number {
+  const n = name.toLowerCase();
+  if (/蛋糕|慕斯|千层|提拉米苏|舒芙蕾/.test(n)) return 28;
+  if (/奶茶|咖啡|果茶|柠檬茶|气泡水|奶昔|圣代/.test(n)) return 16;
+  if (/小龙虾|螃蟹|海鲜|和牛|烤鱼/.test(n)) return 58;
+  if (/汉堡|炸鸡|披萨|牛排|猪脚饭|烧鹅饭/.test(n)) return 25;
+  if (/饭|面|粉|粥|馄饨|饺子|包|麻辣烫|冒菜|螺蛳粉/.test(n)) return 18;
+  if (/串|烤|卤味|小龙|凉菜|沙拉|小食|薯条|鸡翅/.test(n)) return 15;
+  if (/可乐|雪碧|矿泉水|豆奶|酸奶/.test(n)) return 5;
+  return 22;
+}
+
+/** 菜名 → emoji 启发式 */
+function guessDishEmoji(name: string): string {
+  if (/蛋糕|慕斯|千层|提拉米苏|甜点|舒芙蕾/.test(name)) return '🍰';
+  if (/奶茶|奶昔/.test(name)) return '🧋';
+  if (/咖啡/.test(name)) return '☕';
+  if (/汉堡/.test(name)) return '🍔';
+  if (/披萨/.test(name)) return '🍕';
+  if (/炸鸡|鸡翅|鸡腿/.test(name)) return '🍗';
+  if (/面|粉/.test(name)) return '🍜';
+  if (/饭|煲/.test(name)) return '🍛';
+  if (/粥/.test(name)) return '🥣';
+  if (/串|烤/.test(name)) return '🍢';
+  if (/火锅|麻辣烫|冒菜|麻辣香锅/.test(name)) return '🍲';
+  if (/虾/.test(name)) return '🦐';
+  if (/蟹/.test(name)) return '🦀';
+  if (/鱼/.test(name)) return '🐟';
+  if (/可乐|雪碧|汽水|气泡水/.test(name)) return '🥤';
+  if (/果|茶/.test(name)) return '🍹';
+  if (/冰淇淋|圣代/.test(name)) return '🍨';
+  if (/包|饺|馄饨/.test(name)) return '🥟';
+  if (/沙拉/.test(name)) return '🥗';
+  if (/薯条/.test(name)) return '🍟';
+  return '🍱';
+}
+
+/**
+ * 菜名 → 菜品（永不失败）：菜单里没有时 AI 自主创建并注册（价格/emoji 按菜名启发式），
+ * 下次点同名菜直接命中；菜品随 AI 菜品注册表持久化（kv 'mt-ai-dish-registry'）。
+ * 用户诉求：AI 买东西菜单没有时自己添加，而不是报「代点失败」。
+ */
+function ensureDish(merchant: MtMerchant, name: string): MtDish {
+  const found = resolveDish(merchant, name);
+  if (found) return found;
+  const clean = name.trim().slice(0, 40);
+  const dish: MtDish = {
+    id: `aidish-${merchant.id.slice(-8)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    name: clean,
+    price: guessDishPrice(clean),
+    emoji: guessDishEmoji(clean),
+    desc: '店家现做，AI 替你加上架的菜',
+    monthSale: 12 + Math.floor(Math.random() * 87),
+  };
+  mtRegisterAiDish(merchant.id, dish);
+  return dish;
+}
+
 /** 商家可下单校验（存在 + 未打烊；AI 代点/请客/自己点共用） */
 function checkMerchantOrderable(merchant: MtMerchant | undefined): string | null {
   if (!merchant) return null; // 不存在时由调用方各自报错（文案带商家 ID）
@@ -231,8 +292,7 @@ export function mtCreateAiDraft(opts: {
   if (closedErr) return { ok: false, error: closedErr };
   const items: MtDraftItem[] = [];
   for (const it of opts.items) {
-    const dish = resolveDish(merchant, it.name);
-    if (!dish) return { ok: false, error: `「${it.name}」不在「${merchant.name}」的菜单里` };
+    const dish = ensureDish(merchant, it.name); // 菜单没有 → AI 自主补菜（Task 26）
     if (dish.soldOut) return { ok: false, error: `「${dish.name}」已售罄，换点别的吧` };
     items.push({ dishId: dish.id, name: dish.name, qty: it.qty, price: dish.price, emoji: dish.emoji, img: dish.img });
   }
@@ -545,13 +605,13 @@ export function buildMtEngageCtx(
       rules.push(
         `${buildCatalogBlock()}\n\n` +
           `【帮机主点外卖（群里）】聊到吃的、有人说饿/懒得动/想点外卖时，你可以结合当前时段（早餐/午餐/夜宵）和大家的口味推荐上面的商家和菜品；` +
-          `有人想要你帮忙点时输出标记 [帮点外卖:商家ID|菜名x数量,菜名x数量|备注?]（菜名必须原样抄目录里的名字；备注可省略）。` +
+          `有人想要你帮忙点时输出标记 [帮点外卖:商家ID|菜名x数量,菜名x数量|备注?]（菜名优先原样抄目录里的名字，目录里实在没有的也可以直接写——系统会自动帮你上架；备注可省略）。` +
           `系统会生成一张代点卡片，机主确认后才真正下单并自己付款。别频繁发，一次就好；只帮机主点，不要帮其他成员下单。`
       );
     } else {
       rules.push(
         `${buildCatalogBlock()}\n\n` +
-          `【帮机主点外卖（机主自己付款）】聊到吃的、机主说饿/懒得动/让你推荐时，你可以先问问口味或结合你记得的偏好、当前时间（早餐/午餐/夜宵）推荐上面的商家和菜品；机主同意后输出标记 [帮点外卖:商家ID|菜名x数量,菜名x数量|备注?]（菜名必须原样抄目录里的名字；备注可省略）。系统会生成一张代点卡片，机主确认后才真正下单并自己付款，你不用再重复确认。\n` +
+          `【帮机主点外卖（机主自己付款）】聊到吃的、机主说饿/懒得动/让你推荐时，你可以先问问口味或结合你记得的偏好、当前时间（早餐/午餐/夜宵）推荐上面的商家和菜品；机主同意后输出标记 [帮点外卖:商家ID|菜名x数量,菜名x数量|备注?]（菜名优先原样抄目录里的名字，目录里实在没有的也可以直接写——系统会自动帮你上架；备注可省略）。系统会生成一张代点卡片，机主确认后才真正下单并自己付款，你不用再重复确认。\n` +
           `【请客点外卖（你直接付好）】如果你按人设/你们的关系想直接请TA吃（说好了请客、想宠TA、庆祝纪念等，别频繁），可以输出标记 [请客点外卖:商家ID|菜名x数量,菜名x数量|备注?]——系统会直接下单并由你付款（演示语义，不扣真钱），TA会收到一张已支付的订单卡片（实时显示配送状态），不需要再付款。金额没有上限，请不请/请多少由你按人设/关系/上下文自然拿捉。\n` +
           `【给你自己点外卖】你自己想吃/馋了的时候（按人设判断，别频繁），可以输出标记 [自己点外卖:商家ID|菜名x数量,菜名x数量]——系统会生成待支付订单并请机主帮你代付，记得用正文说一句让TA帮你付。`
       );
@@ -726,8 +786,7 @@ function mtValidateParsedOrder(
   if (closedErr) return { ok: false, error: closedErr };
   const items: { dishId: string; name: string; qty: number; price: number; emoji?: string; img?: string }[] = [];
   for (const it of body.items) {
-    const dish = resolveDish(merchant, it.name);
-    if (!dish) return { ok: false, error: `「${it.name}」不在「${merchant.name}」的菜单里` };
+    const dish = ensureDish(merchant, it.name); // 菜单没有 → AI 自主补菜（Task 26）
     if (dish.soldOut) return { ok: false, error: `「${dish.name}」已售罄，换点别的吧` };
     items.push({ dishId: dish.id, name: dish.name, qty: it.qty, price: dish.price, emoji: dish.emoji, img: dish.img });
   }
@@ -748,8 +807,7 @@ function mtBuildParsedOrder(
   if (!merchant) return { ok: false, error: `没有找到这家店（${body.merchantId}）` };
   const items: { dishId: string; name: string; qty: number; price: number; emoji?: string; img?: string }[] = [];
   for (const it of body.items) {
-    const dish = resolveDish(merchant, it.name);
-    if (!dish) return { ok: false, error: `「${it.name}」不在「${merchant.name}」的菜单里` };
+    const dish = ensureDish(merchant, it.name); // 菜单没有 → AI 自主补菜（Task 26）
     items.push({ dishId: dish.id, name: dish.name, qty: it.qty, price: dish.price, emoji: dish.emoji, img: dish.img });
   }
   const calc = mtCheckoutCalc(uid, merchant, { merchantId: merchant.id, items: items.map((i) => ({ dishId: i.dishId, qty: i.qty })) });

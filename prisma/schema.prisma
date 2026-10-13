@@ -38,6 +38,16 @@ model WxBackground {
   updatedAt DateTime @updatedAt
 }
 
+/// 网上表情包搜索缓存（关键词 → 结果 JSON；24h 过期，命中免出站爬取）
+model StickerSearchCache {
+  keyword   String   @id
+  /// 结果条目 JSON 数组（[{thumb, image, source}]）
+  items     String
+  /// 命中的数据源（fabiaoqing / bing / both）
+  source    String   @default("")
+  updatedAt DateTime @updatedAt
+}
+
 /// 联系人 App：CHAR（AI 角色）/ USER（用户自己的人设）/ NPC（配角，归属某个 CHAR 或 USER）
 model Contact {
   id             String   @id @default(cuid())

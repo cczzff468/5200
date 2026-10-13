@@ -333,6 +333,7 @@ import {
   type GroupCardData,
 } from '@/lib/ios/group-social';
 import { BatchStickerSheet, makeStickerGroup, StickerGroupBar, StickerGroupManageSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
+import { StickerSearchSheet } from './sticker-search-sheet';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import { useUnreadMap, qqUnreads as qqUnreadStore } from '@/lib/unread-store';
 import { useChatFlags, NO_FLAGS, qqChatFlags as qqChatFlagsStore } from '@/lib/chat-flags';
@@ -2218,6 +2219,8 @@ export function QqStickerPanel({
   const [groups, setGroups] = useState<StickerGroup[]>(() => loadStickerGroups('qq'));
   const [activeGroupId, setActiveGroupId] = useState<string>(DEFAULT_STICKER_GROUP_ID);
   const [mode, setMode] = useState<'grid' | 'add'>('grid');
+  /** 网上表情搜索弹窗（Task 26：面板右上角搜索图标打开） */
+  const [searchOpen, setSearchOpen] = useState(false);
   const [tab, setTab] = useState<'file' | 'url'>('file');
   const [editMode, setEditMode] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
@@ -2308,6 +2311,17 @@ export function QqStickerPanel({
       <div className="flex items-center justify-between px-4 pb-1 pt-2.5">
         <p className="text-[15px] font-medium">表情</p>
         <div className="flex items-center gap-4">
+          {mode === 'grid' && (
+            <button
+              type="button"
+              aria-label="搜索表情"
+              data-testid="qq-sticker-panel-search"
+              onClick={() => setSearchOpen(true)}
+              className="text-black/45 active:opacity-60 dark:text-white/45"
+            >
+              <Search className="h-[18px] w-[18px]" strokeWidth={2} />
+            </button>
+          )}
           {mode === 'grid' && activeGroupId !== 'builtin' && list.some((s) => !s.builtin) && (
             <button
               type="button"
@@ -2324,6 +2338,8 @@ export function QqStickerPanel({
           </button>
         </div>
       </div>
+      {/* 网上表情搜索弹窗（真机同款：从面板上方滑出盖住消息区；点结果直发，sendSticker 自带面板收起） */}
+      <StickerSearchSheet app="qq" open={searchOpen} onClose={() => setSearchOpen(false)} onSend={onPick} />
       {mode === 'grid' ? (
         <div className="h-[280px] overflow-y-auto px-3 pb-3 pt-1">
           {/* 内置表情=真机同款小表情（8列小尺寸）；用户收藏贴纸=大瓦片（4列） */}
