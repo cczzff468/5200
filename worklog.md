@@ -18903,3 +18903,26 @@ Stage Summary:
 - 推送链路：origin 已带 PAT（user=cczzff468），改动可 git add/commit/push 回 main
 - 注意：db/custom.db 是运行时数据库，提交时不要 add 它；upload/ 是挂载目录（git 内有历史图片，已还原）
 - 待办：等用户提出具体「修改或添加功能」需求后进入开发
+
+---
+Task ID: 22
+Agent: 主协调者 (Z.ai Code)
+Task: 用户反馈 QQ 内置表情还是与真机不一样 → 调研 GitHub 最新 QQ 表情包资源并替换
+
+Work Log:
+- 【调研】GitHub API 搜索 qq emoji 相关仓库：fraqjs/qq-faces（1★）、koishijs/QFace（当前源）、vikiboss/face（腾讯官方资源静态镜像）、dogxii/face 等 → 锁定 vikiboss/face：数据源自 wa.qq.com/qgif-web-permanent/sysemoji（QQ 官方 CDN，metadata 272 项含 APNG/PNG/Lottie 三格式 + QSid 官方 ID + QDes 官方名）
+- 【对比诊断】静态 PNG 风格与现 QFace 完全一致（同为腾讯官方 dump）→ 真正差异：①现版是静态图，真机 QQ 表情会动（APNG 动图）；②现版 105 张缺 88 个新表情（doge/笑哭/吃瓜/裂开/666/摸鱼/无眼笑/尊嘟假嘟…）；③现版含 17 个新版 QQ 已移除的最老表情（闪电/炸弹/足球/啤酒/瓢虫/爱你/街舞/左太极…新源里已不存在）；④新官方 ID 序（0=惊讶 在前，微笑第 15 位）与真机 NT 面板序一致
+- 【数据定版】metadata panel=normal 198 项=真机默认表情面板全集；名字唯一（QQ黄脸 group 里的蛇年变体重名项不在 normal panel，无冲突）；157 张 APNG 动图 + 41 张官方即静态
+- 【资源落地】下载 198 张 APNG → public/qq-emojis/apng/{官方ID}.png（23.5MB，3 次重试零失败，PNG magic 全验）
+- 【常量重写】builtin-stickers.ts：BUILTIN_QQ_STICKERS 重写为 198 项（id qqb-{官方名}、url /qq-emojis/apng/{id}.png、官方 ID 序），头注释更新；旧 122 GIF + 105 QFace PNG 保留磁盘仅作历史消息兼容
+- 【消费方核查】stickers.ts 合并逻辑按数组透明消费（内置永不入库）；qq.tsx 面板 img loading=lazy（198 张懒加载实测 64 张先载）；QqStickerBubble max-h-110px 兼容 128px APNG（<img> 原生播 APNG）；chat-rich.ts AI 清单 slice(0,20)=官方序前 20（惊讶→偷笑 全高频）
+- 【E2E（agent-browser 实机 393×852）】联系人 App 建 CHAR e2e-小晴(QQ 20005678)+USER e2e-我(QQ 20001234/123456，含「QQ号已用于小晴」冲突确认流) → QQ 登录 → 加好友（找人页可能认识的人→添加→AI 秒同意）→ 打开小晴会话 → 表情面板 QQ表情 分组：total=198、apng=198、first5=apng/0-4.png、懒加载 loaded=64 ✓ → 点击惊讶发送成功，气泡 img=apng/0.png (128x128) 新官方 3D 风格 ✓；旧文件仍 200（0.gif 1764B/14.png 18KB/apng/0.png 124KB/apng/470.png 6.6KB）✓；console/page errors 零
+- 【坑】agent-browser 上滑解锁后主屏分页容器 transform 被带偏（x=-766 空白页→整屏黑），reload+慢速 mouse 序列解锁+左右滑翻页解决；会话行点击用文本+几何定位（div 非标准 role）
+- 【清理】测试浏览器档案 localStorage+IndexedDB(ios-phone-db) 全清恢复出厂
+- 【推送】git add public/qq-emojis/apng(198 文件) + builtin-stickers.ts → commit 570b0c1 → push origin main（276bacb..570b0c1，顺带携带守护进程快照 559cf47：db/worklog）
+
+Stage Summary:
+- 交付：QQ 表情面板从「QFace 105 张静态 PNG」升级为「wa.qq.com 官方最新 NT 面板 198 张 APNG 动图」——表情会动、官方 ID 序=真机面板序、补齐 doge/笑哭/吃瓜/裂开/666 等全部 88+ 新表情；旧 GIF/PNG 文件保留使历史消息零裂图；AI 清单/面板/气泡/管理页全链路自动适配（数据层透明合并设计红利）
+- 改动文件：src/lib/ios/builtin-stickers.ts（QQ 段重写 198 项）、public/qq-emojis/apng/（新增 198 张 APNG 23.5MB）
+- 资源源：https://github.com/vikiboss/face（wa.qq.com 官方资源镜像，metadata.json 含官方 ID/名称/APNG 三格式）
+- 已知边界：新版 QQ 已移除的 17 个最老表情（闪电/炸弹/足球等）按官方面板行为不再出现（文件仍在，历史消息正常）
