@@ -19176,3 +19176,18 @@ Stage Summary:
 - 改动文件：src/lib/ios/{idb-kv,store,music-store,taobao-store,notify-sound,proactive-call,npc-bond,worldbook,block-state,groups}.ts、src/lib/{time-aware,reply-count}.ts、src/lib/ios/{voice-hold-flag,music-island-flag}.ts（新）、src/components/ios/{PhoneShell,StatusBar,MusicIsland}.tsx、src/components/apps/{voice-input,registry,wechat,qq,chat,settings,chat-settings}.tsx、src/app/api/memory/extract/route.ts
 - 量化预期：开机黑屏串行链从「迁移+注水+8 串行解密+1.5s 壁纸」收敛为「迁移(并行)+注水+1 批并行解密+0.6s 壁纸」；AI 连发 5 条写盘 10 次→2 次；会话列表重算 O(总消息×2 克隆)→O(联系人)；off 档省 ~60 次决策 API/小时；恒注入 prompt 每轮省 ~800-1000 字符（拉黑 170+时间感知 300+提取峰值减半等）
 - 已知边界：memStore 全量注水架构保留（同步 kvGet 是全项目读路径地基，改懒加载属大手术需另立项）；AppSwitcher 真实渲染 6 个 App 树（快照方案大手术未动）；聊天无虚拟滚动（msgs.map 全量渲染保留——虚拟化需动态高度库且与「历史不封顶」共存，需另立项评估）；聊天流无 AbortController（架构决策：与页面生命周期解耦+服务端接力去重）
+---
+Task ID: 35
+Agent: 主协调者 (Z.ai Code)
+Task: 全项目 AI 规则冲突检测（拉黑/小号/通话/回复/记忆/主动消息/朋友圈七大域 35 项检查点，只读勘察+冲突分析，不改代码）
+
+Work Log:
+- 【七路并行勘察】Explore agent 分头勘察七大规则域，全部带文件行号证据返回；汇总输出完整冲突检测报告（主对话内），35 项逐条判定：✅自洽 / ⚠️口径冲突 / 🐛真实Bug
+- 【🐛真实 Bug×4】① byChar 拉黑延时来电死代码（cross-app-reach.ts:314 检查 byUser 恒 false，AI 拉黑用户后延时来电从不发生，byChar 开场白成摆设）；② MomentsScheduler 裸键 wx-session-user-id 读会话（小号激活时拿大号名或空：AI 自动评论用大号身份称呼小号用户/小号朋友圈自动互动全停）；③ 主动消息发送冷却缺位（sentAt 写入零读取，定时30s+提醒+事件+自主叠加可 5s 级连发，唯一防线是同文本去重）；④ 电话续聊条数键 phone:<id> 恒默认 5（设置页从未写入该键，sms:c: 设置对电话续聊无效）
+- 【⚠️高优先级口径冲突×8】免打扰三层语义混淆（时段 DND 只静音提示音拦不住 AI 来电/消息，夜间闸三处口径 [0,8)/[1,7)/prompt 承诺23-8 互不一致）；全拉黑四条旁路（群聊/美团/淘宝AI/音乐一起听零拉黑检查，好友申请验证留言直写被拉黑会话）；小号披露判定过宽（altDiscloseHit 非否定出现"大号/小号/机主"即永久解锁大号记忆，与主号侧严格第一人称正则不对称）；主动消息通道间无互斥（同分钟到期背靠背两条，用户通道不抑制自主 autoAt）；拒接无负反馈冷却（无拒接计数，15min/1h 后照打）；语音计数口径与文案偏差（表情包/卡片不消耗计数、*动作*行白吃名额、TTS 失败不回滚周期）；核心/长期记忆无机械仲裁（supersedes 只覆盖碎片层）；跨源重复注入无统一去重（世界书20000+记忆条数闸无字符预算+跨App2600+NPC近况+小号摘录，峰值~50k字符/轮）
+- 【⚠️中低优先级择要】拉黑不切断跨 App 记忆（气话流进其他 App 近况）+ cross-app-reach 无频次冷却可刷；两套来电冷却互不感知（主动来电 1h kv vs 聊天标记 5min localStorage）；聊天路径发动态二等公民（无互动队列/无查重/无限频，runAutoPosts 退避角色还压住同 tick 其他角色）；信息端语音告知规则缺失+语音频率与微信同键串扰；NPC 作用域竞态（首发送轮次可能读大号碎片）；AI 主动来电仅语音无视频维度；once 提醒无迟到上限；off 档 UI 文案「无冷却·60s 轮询」实为直接短路
+- 【✅自洽良好面】回复条数×流式×分条×语音频率四层协同正确（逐条判定/边收边投/标记剥出/防切三重）；小号三层隔离+披露闭环主体严密（键后缀隔离/单向桥/措辞纪律）；记忆碎片层 supersedes/合并/去重管线完整；动态防自评自赞四层防线+记忆级联清理+跨标签页互斥在位；拉黑多层守卫口径一致（回合入口/流兜底/正文丢弃/通话静默/主动消息skip/来电排除/朋友圈停止）
+
+Stage Summary:
+- 交付：七大域 35 项 AI 规则冲突检测报告（主对话完整呈现）——4 个真实 Bug（byChar 延时来电死代码/MomentsScheduler 账号盲区/主动消息发送冷却缺位/phone 续聊条数键失效）+ 8 项高优先级口径冲突 + 10+ 项中低优先级 + 自洽面确认；本轮为只读检测未改任何代码，修复建议已随报告给出（优先修 4 个 Bug 与免打扰/披露过宽两处口径）
+- 关键结论：规则体系整体自洽（多层守卫/门控/防重复体系完整），风险集中在「跨引擎口径」（拉黑×来电×主动消息×记忆四引擎各自为政）与「设置项名不符实」（followCommentDelay/NPC互动延迟/NPC转发概率/off档文案）
