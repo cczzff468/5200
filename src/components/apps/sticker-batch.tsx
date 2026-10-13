@@ -538,6 +538,7 @@ export function StickerGroupManageSheet({
         <div className="mt-3 space-y-2">
           {groups.map((g) => {
             const isDef = g.id === DEFAULT_STICKER_GROUP_ID;
+            const isBuiltin = !!g.builtin;
             return (
               <div
                 key={g.id}
@@ -577,9 +578,14 @@ export function StickerGroupManageSheet({
                           默认
                         </span>
                       )}
+                      {isBuiltin && (
+                        <span className="ml-1.5 inline-block translate-y-[-1px] rounded-full bg-black/[0.05] px-1.5 py-0.5 align-middle text-[10px] leading-none text-black/40 dark:bg-white/10 dark:text-white/40">
+                          内置
+                        </span>
+                      )}
                     </span>
                     <span className="shrink-0 text-[12px] text-black/35 dark:text-white/35">{countOf(g.id)} 张</span>
-                    {!isDef && (
+                    {!isDef && !isBuiltin && (
                       <>
                         <button
                           type="button"

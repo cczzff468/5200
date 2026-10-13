@@ -5,19 +5,24 @@
  * - URL 添加时自动从 URL 中识别中文意思（query 参数或文件名/路径段）
  * - 分组：wx-sticker-groups / qq-sticker-groups，默认分组「我的表情」永远第一且不可删除；
  *   旧数据无 groupId → 全部归属默认分组（零迁移兼容）
+ * - 内置表情（builtin=true）：静态常量（builtin-stickers.ts），不进 IndexedDB 不可删；
+ *   loadStickers 自动合并返回（用户表情在前），saveStickers 自动过滤——对调用方透明
  */
 
 import { kvGet, kvSet } from './idb-kv';
+import { BUILTIN_STICKER_GROUP_ID, builtinGroupName, builtinStickersOf } from './builtin-stickers';
 
 export interface Sticker {
   id: string;
-  /** 图片地址：dataURL（本机上传）或 http(s) URL */
+  /** 图片地址：dataURL（本机上传）或 http(s) URL；内置表情为项目内相对路径（/wechat-emojis/…） */
   url: string;
   /** 表情包的意思（AI 回复依据） */
   meaning: string;
   /** 所属分组 ID（旧数据无此字段 = 默认分组「我的表情」） */
   groupId?: string;
   createdAt: number;
+  /** 内置表情标记：静态常量、不持久化、不可删除/改意思；分组固定为 builtin 分组 */
+  builtin?: true;
 }
 
 /** 表情分组（面板顶部毛玻璃胶囊展示的名字 + 分组下的表情集合） */
@@ -25,6 +30,8 @@ export interface StickerGroup {
   id: string;
   name: string;
   createdAt: number;
+  /** 内置分组标记：虚拟分组（loadStickerGroups 动态插入），不可删除/改名 */
+  builtin?: true;
 }
 
 /** 默认分组：永远存在、永远第一、不可删除不可重命名；未分组/分组被删的表情都归属这里 */
@@ -35,28 +42,33 @@ const LS_KEY = (app: 'wx' | 'qq') => `${app}-stickers`;
 const GROUPS_KEY = (app: 'wx' | 'qq') => `${app}-sticker-groups`;
 
 export function loadStickers(app: 'wx' | 'qq'): Sticker[] {
+  let user: Sticker[] = [];
   try {
     const parsed: unknown = kvGet<Partial<Sticker>[]>(LS_KEY(app));
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((s): s is Partial<Sticker> => Boolean(s) && typeof (s as Partial<Sticker>).url === 'string')
-      .slice(0, 200)
-      .map((s) => ({
-        id: typeof s.id === 'string' ? s.id : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-        url: s.url as string,
-        meaning: typeof s.meaning === 'string' ? s.meaning : '',
-        groupId: typeof s.groupId === 'string' && s.groupId ? s.groupId : DEFAULT_STICKER_GROUP_ID,
-        createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now(),
-      }));
+    if (Array.isArray(parsed)) {
+      user = parsed
+        .filter((s): s is Partial<Sticker> => Boolean(s) && typeof (s as Partial<Sticker>).url === 'string')
+        .slice(0, 200)
+        .map((s) => ({
+          id: typeof s.id === 'string' ? s.id : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          url: s.url as string,
+          meaning: typeof s.meaning === 'string' ? s.meaning : '',
+          groupId: typeof s.groupId === 'string' && s.groupId ? s.groupId : DEFAULT_STICKER_GROUP_ID,
+          createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now(),
+        }));
+    }
   } catch {
-    return [];
+    user = [];
   }
+  // 内置表情自动合并（在用户表情之后）；防旧数据意外持久化了内置项 → 去重
+  const builtin = builtinStickersOf(app).filter((b) => !user.some((u) => u.id === b.id));
+  return [...user, ...builtin];
 }
 
 export function saveStickers(app: 'wx' | 'qq', list: Sticker[]): void {
   try {
-    // 内存同步 + 异步写穿 IndexedDB
-    kvSet(LS_KEY(app), list.slice(0, 200));
+    // 内置表情不持久化（saveStickers 只存用户收藏；commit 传入合并列表也安全）
+    kvSet(LS_KEY(app), list.filter((s) => !s.builtin).slice(0, 200));
   } catch {
     // 持久化失败忽略
   }
@@ -66,14 +78,15 @@ export function newStickerId(): string {
   return `stk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** 读取表情分组列表（默认分组永远第一；损坏/缺失数据时仅返回默认分组） */
+/** 读取表情分组列表（默认分组第一，内置分组第二——动态插入虚拟分组；损坏/缺失数据时返回默认+内置） */
 export function loadStickerGroups(app: 'wx' | 'qq'): StickerGroup[] {
   const def: StickerGroup = { id: DEFAULT_STICKER_GROUP_ID, name: DEFAULT_STICKER_GROUP_NAME, createdAt: 0 };
+  const builtin: StickerGroup = { id: BUILTIN_STICKER_GROUP_ID, name: builtinGroupName(app), builtin: true, createdAt: 0 };
   try {
     const parsed: unknown = kvGet<Partial<StickerGroup>[]>(GROUPS_KEY(app));
-    if (!Array.isArray(parsed)) return [def];
-    const seen = new Set<string>([DEFAULT_STICKER_GROUP_ID]);
-    const out: StickerGroup[] = [def];
+    if (!Array.isArray(parsed)) return [def, builtin];
+    const seen = new Set<string>([DEFAULT_STICKER_GROUP_ID, BUILTIN_STICKER_GROUP_ID]);
+    const out: StickerGroup[] = [def, builtin];
     for (const g of parsed) {
       if (!g || typeof g.id !== 'string' || !g.id || seen.has(g.id)) continue;
       const name = typeof g.name === 'string' ? g.name.trim().slice(0, 16) : '';
@@ -83,18 +96,18 @@ export function loadStickerGroups(app: 'wx' | 'qq'): StickerGroup[] {
     }
     return out;
   } catch {
-    return [def];
+    return [def, builtin];
   }
 }
 
-/** 保存表情分组列表（默认分组强制第一；空名/重复 ID 过滤） */
+/** 保存表情分组列表（默认分组强制第一；内置分组与用户分组一并过滤——内置永不入库；空名/重复 ID 过滤） */
 export function saveStickerGroups(app: 'wx' | 'qq', groups: StickerGroup[]): void {
   try {
     const def: StickerGroup = { id: DEFAULT_STICKER_GROUP_ID, name: DEFAULT_STICKER_GROUP_NAME, createdAt: 0 };
-    const seen = new Set<string>([DEFAULT_STICKER_GROUP_ID]);
+    const seen = new Set<string>([DEFAULT_STICKER_GROUP_ID, BUILTIN_STICKER_GROUP_ID]);
     const rest: StickerGroup[] = [];
     for (const g of groups) {
-      if (!g || g.id === DEFAULT_STICKER_GROUP_ID || seen.has(g.id)) continue;
+      if (!g || g.builtin || g.id === DEFAULT_STICKER_GROUP_ID || seen.has(g.id)) continue;
       const name = typeof g.name === 'string' ? g.name.trim().slice(0, 16) : '';
       if (!name) continue;
       seen.add(g.id);

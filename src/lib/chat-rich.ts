@@ -685,10 +685,14 @@ export function buildRichRules(stickers: Sticker[], opts?: { familyCard?: boolea
       : []),
   ];
   if (stickers.length > 0) {
+    // 内置表情（builtin）常量数组顺序即官方经典顺序 → 前 20 个即高频精选；
+    // 用户收藏表情永远优先（前 20），清单总量 ≤ 40 防提示词过长
+    const user = stickers.filter((s) => !s.builtin);
+    const builtin = stickers.filter((s) => s.builtin);
+    const chosen = [...user.slice(0, 20), ...builtin.slice(0, 20)];
     rules.push(
-      '【表情包清单】（ID:意思）：' +
-        stickers
-          .slice(0, 30)
+      '【表情包清单】（ID:意思，含内置经典表情与收藏表情）：' +
+        chosen
           .map((s) => `${s.id}${s.meaning ? `:${s.meaning}` : ''}`)
           .join('；')
     );
@@ -727,10 +731,14 @@ export function buildGroupRichRules(stickers: Sticker[]): string[] {
       : []),
   ];
   if (stickers.length > 0) {
+    // 内置表情（builtin）常量数组顺序即官方经典顺序 → 前 20 个即高频精选；
+    // 用户收藏表情永远优先（前 20），清单总量 ≤ 40 防提示词过长
+    const user = stickers.filter((s) => !s.builtin);
+    const builtin = stickers.filter((s) => s.builtin);
+    const chosen = [...user.slice(0, 20), ...builtin.slice(0, 20)];
     rules.push(
-      '【表情包清单】（ID:意思）：' +
-        stickers
-          .slice(0, 30)
+      '【表情包清单】（ID:意思，含内置经典表情与收藏表情）：' +
+        chosen
           .map((s) => `${s.id}${s.meaning ? `:${s.meaning}` : ''}`)
           .join('；')
     );

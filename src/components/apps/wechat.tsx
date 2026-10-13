@@ -2592,7 +2592,7 @@ export function WxStickerPanel({
       <div className="flex items-center justify-between px-4 pb-1 pt-2.5">
         <p className="text-[15px] font-medium">表情</p>
         <div className="flex items-center gap-4">
-          {mode === 'grid' && list.length > 0 && (
+          {mode === 'grid' && activeGroupId !== 'builtin' && list.some((s) => !s.builtin) && (
             <button
               type="button"
               data-testid="wx-sticker-panel-manage"
@@ -2637,12 +2637,12 @@ export function WxStickerPanel({
                 <button
                   type="button"
                   data-testid={`wx-sticker-meaning-${i}`}
-                  onClick={() => setMeaningFor(s)}
-                  className="mt-0.5 block h-4 w-full truncate text-center text-[10px] leading-4 text-black/40 active:opacity-60 dark:text-white/40"
+                  onClick={() => !s.builtin && setMeaningFor(s)}
+                  className={`mt-0.5 block h-4 w-full truncate text-center text-[10px] leading-4 text-black/40 dark:text-white/40 ${s.builtin ? '' : 'active:opacity-60'}`}
                 >
                   {s.meaning || '＋意思'}
                 </button>
-                {editMode && (
+                {editMode && !s.builtin && (
                   <button
                     type="button"
                     aria-label="删除表情"
@@ -2655,15 +2655,20 @@ export function WxStickerPanel({
                 )}
               </div>
             ))}
-            <button
-              type="button"
-              data-testid="wx-sticker-panel-add"
-              onClick={() => setMode('add')}
-              className="flex aspect-square w-full flex-col items-center justify-center gap-1 rounded-[10px] border border-dashed border-black/20 text-black/35 active:bg-black/[0.04] dark:border-white/20 dark:text-white/35"
-            >
-              <span className="text-[24px] leading-none">＋</span>
-              <span className="text-[11px]">添加</span>
-            </button>
+            {/* 内置分组不可添加（静态常量）；空占位保持网格末尾对齐 */}
+            {activeGroupId === 'builtin' ? (
+              <span aria-hidden="true" className="aspect-square w-full" />
+            ) : (
+              <button
+                type="button"
+                data-testid="wx-sticker-panel-add"
+                onClick={() => setMode('add')}
+                className="flex aspect-square w-full flex-col items-center justify-center gap-1 rounded-[10px] border border-dashed border-black/20 text-black/35 active:bg-black/[0.04] dark:border-white/20 dark:text-white/35"
+              >
+                <span className="text-[24px] leading-none">＋</span>
+                <span className="text-[11px]">添加</span>
+              </button>
+            )}
             <span aria-hidden="true" className="mt-0.5 h-4" />
           </div>
           {visible.length === 0 && (
@@ -2723,18 +2728,22 @@ export function WxStickerPanel({
               <img src={pressSticker.url} alt={pressSticker.meaning || '表情'} className="max-h-full max-w-full object-contain" />
             </div>
             <p className="pb-2.5 text-center text-[13px] text-black/45 dark:text-white/45">{pressSticker.meaning || '未命名表情'}</p>
-            <button
-              type="button"
-              data-testid="wx-sticker-preview-del"
-              onClick={() => {
-                commit(list.filter((x) => x.id !== pressSticker.id));
-                closeStickerPreview();
-                onToast('已删除表情');
-              }}
-              className="flex h-12 w-full items-center justify-center border-t border-black/[0.06] text-[15px] text-[#FA5151] active:bg-black/[0.04] dark:border-white/[0.08] dark:active:bg-white/[0.06]"
-            >
-              删除
-            </button>
+            {pressSticker.builtin ? (
+              <p className="pb-2.5 text-center text-[11px] text-black/30 dark:text-white/30">内置表情 · 不可删除</p>
+            ) : (
+              <button
+                type="button"
+                data-testid="wx-sticker-preview-del"
+                onClick={() => {
+                  commit(list.filter((x) => x.id !== pressSticker.id));
+                  closeStickerPreview();
+                  onToast('已删除表情');
+                }}
+                className="flex h-12 w-full items-center justify-center border-t border-black/[0.06] text-[15px] text-[#FA5151] active:bg-black/[0.04] dark:border-white/[0.08] dark:active:bg-white/[0.06]"
+              >
+                删除
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -2878,6 +2887,7 @@ function WxStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
                 type="button"
                 data-testid={`wx-stickers-item-${i}`}
                 onClick={() => {
+                  if (s.builtin) return; // 内置表情不可编辑/删除
                   if (delMode) {
                     delSticker(s);
                     return;
@@ -2892,7 +2902,7 @@ function WxStickersPage({ onBack, onToast }: { onBack: () => void; onToast: (m: 
                   <img src={s.url} alt={s.meaning || '表情'} className="h-full w-full object-contain" loading="lazy" />
                 </span>
                 <span className="mt-1.5 block truncate text-[12px] text-black/55 dark:text-white/55">{s.meaning || '点此写意思'}</span>
-                {delMode && (
+                {delMode && !s.builtin && (
                   <span
                     aria-hidden="true"
                     data-testid={`wx-stickers-del-${i}`}
