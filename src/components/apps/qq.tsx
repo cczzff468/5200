@@ -168,7 +168,6 @@ import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat
 import { splitVisionDesc } from '@/lib/vision-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
-import { useAutoTextareaRef } from '@/lib/ios/use-auto-textarea';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
 import {
   abortStreamsByPrefix,
@@ -219,8 +218,9 @@ import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } 
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
-import { insertEmojiCode, stripEmojiCodes, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
+import { stripEmojiCodes, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
 import { InlineEmojiText } from './inline-emoji';
+import { ChatRichInput, type ChatRichInputHandle } from './chat-rich-input';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
@@ -2935,8 +2935,8 @@ function ChatPage({
   const [userReqOpen, setUserReqOpen] = useState(false);
   const [userReqText, setUserReqText] = useState('');
   const [input, setInput] = useState('');
-  /** 多行输入自适应增高：内容变化时重算高度（封顶约 6 行后框内滚动，清空回落单行） */
-  const chatTaRef = useAutoTextareaRef(input);
+  /** 富文本输入框（contentEditable）：内置表情在框内显示真实表情图，发送时序列化回 [微笑] 代码 */
+  const richInputRef = useRef<ChatRichInputHandle | null>(null);
   /** 语音输入模式：输入框替换为「按住 说话」胶囊（工具栏麦克风钮切换） */
   const [voiceMode, setVoiceMode] = useState(false);
   /** 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用） */
@@ -5985,9 +5985,9 @@ function ChatPage({
     [me.id, peer.id, runAiTurn, sessionKey, onToast]
   );
 
-  /** 内置表情插入输入框（不直接发送）：[微笑] 代码插到光标处，可与文字混排一起发送（真机 QQ 交互） */
+  /** 内置表情插入输入框（不直接发送）：真实表情图插到光标处，可与文字混排一起发送（真机 QQ 交互） */
   const insertBuiltinEmoji = (s: Sticker) => {
-    insertEmojiCode(chatTaRef, input, `[${s.meaning}]`, setInput);
+    richInputRef.current?.insertEmoji(s.meaning, s.url);
   };
 
   // 加号面板宫格（语音通话/视频通话/红包/转账/位置/文字图片；图片入口已移除）
@@ -6841,13 +6841,11 @@ function ChatPage({
         )}
         <div className="flex items-end gap-2 px-3 pb-1 pt-3">
           <div className="relative min-w-0 flex-1">
-            <textarea
-              ref={chatTaRef}
-              rows={1}
-              data-testid="qq-chat-input"
+            <ChatRichInput
+              app="qq"
+              ref={richInputRef}
               value={input}
-              onChange={(e) => {
-                const v = e.target.value;
+              onChange={(v) => {
                 setInput(v);
                 // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
                 if (v.endsWith('@')) {
@@ -6863,8 +6861,10 @@ function ChatPage({
               }}
               enterKeyHint={enterSend ? 'send' : undefined}
               placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-              aria-label={`发送消息给${peer.name}`}
-              className="max-h-[132px] min-h-[40px] w-full resize-none overflow-y-auto rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] py-[9px] pl-3.5 pr-10 text-[15px] leading-[22px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
+              placeholderClass="pl-3.5 pt-[9px] text-[15px] leading-[22px] text-black/25 dark:text-white/25"
+              ariaLabel={`发送消息给${peer.name}`}
+              testId="qq-chat-input"
+              className="max-h-[132px] min-h-[40px] w-full overflow-y-auto rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] py-[9px] pl-3.5 pr-10 text-[15px] leading-[22px] outline-none dark:border-white/[0.08] dark:bg-white/[0.07]"
             />
             {/* 文字转语音开关（声波图标在输入框内右侧）：开启后输入框文字发送为语音气泡 */}
             <button

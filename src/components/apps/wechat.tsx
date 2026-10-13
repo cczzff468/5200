@@ -180,12 +180,12 @@ import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } 
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
-import { insertEmojiCode, stripEmojiCodes, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
+import { stripEmojiCodes, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
 import { InlineEmojiText } from './inline-emoji';
+import { ChatRichInput, type ChatRichInputHandle } from './chat-rich-input';
 import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
-import { useAutoTextareaRef } from '@/lib/ios/use-auto-textarea';
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters } from '@/lib/memory';
 import {
@@ -4610,8 +4610,8 @@ function ChatPage({
   const [userReqOpen, setUserReqOpen] = useState(false);
   const [userReqText, setUserReqText] = useState('');
   const [input, setInput] = useState('');
-  /** 多行输入自适应增高：内容变化时重算高度（封顶约 6 行后框内滚动，清空回落单行） */
-  const chatTaRef = useAutoTextareaRef(input);
+  /** 富文本输入框（contentEditable）：内置表情在框内显示真实表情图，发送时序列化回 [微笑] 代码 */
+  const richInputRef = useRef<ChatRichInputHandle | null>(null);
   /** 语音输入模式：输入框替换为「按住 说话」胶囊（左侧圆钮切换） */
   const [voiceMode, setVoiceMode] = useState(false);
   /** 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用） */
@@ -7641,9 +7641,9 @@ function ChatPage({
     void runAiTurn(msg);
   };
 
-  /** 内置表情插入输入框（不直接发送）：[微笑] 代码插到光标处，可与文字混排一起发送（真机微信交互） */
+  /** 内置表情插入输入框（不直接发送）：真实表情图插到光标处，可与文字混排一起发送（真机微信交互） */
   const insertBuiltinEmoji = (s: Sticker) => {
-    insertEmojiCode(chatTaRef, input, `[${s.meaning}]`, setInput);
+    richInputRef.current?.insertEmoji(s.meaning, s.url);
   };
 
   /** 打开亲属卡详情（我发的卡由 AI 用动作标记决定收下/拒收，这里只看详情） */
@@ -8583,13 +8583,11 @@ function ChatPage({
               <VoiceHoldBar rec={rec} testId="wx-voice-hold" />
             ) : (
               <div className="relative min-w-0 flex-1">
-                <textarea
-                  ref={chatTaRef}
-                  rows={1}
-                  data-testid="wx-chat-input"
+                <ChatRichInput
+                  app="wx"
+                  ref={richInputRef}
                   value={input}
-                  onChange={(e) => {
-                    const v = e.target.value;
+                  onChange={(v) => {
                     setInput(v);
                     // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
                     if (!selfChat && v.endsWith('@')) {
@@ -8605,7 +8603,9 @@ function ChatPage({
                   }}
                   enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-                  className="block max-h-[132px] min-h-[36px] w-full resize-none overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-2 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 placeholder:text-black/30 dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none dark:placeholder:text-white/30"
+                  placeholderClass="pl-2 pt-[7px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
+                  testId="wx-chat-input"
+                  className="block max-h-[132px] min-h-[36px] w-full overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-2 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none"
                 />
                 {/* 文字转语音开关（声波图标在输入框内右下角）：开启后输入文字发送为语音气泡
                     （本地仿真，无需配置语音 API）；切到「按住说话」模式时随输入框一起隐藏 */}

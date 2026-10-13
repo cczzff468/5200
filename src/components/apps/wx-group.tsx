@@ -130,8 +130,9 @@ import {
 } from '@/lib/ios/groups';
 import { loadStickers, type Sticker } from '@/lib/ios/stickers';
 import { getStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
-import { insertEmojiCode, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
+import { EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
 import { InlineEmojiText } from './inline-emoji';
+import { ChatRichInput, type ChatRichInputHandle } from './chat-rich-input';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
 import { TextCardBubble } from './text-card-bubble';
@@ -181,7 +182,6 @@ import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
-import { autoResizeTextarea } from '@/lib/ios/use-auto-textarea';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, isAiDelivering, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -2438,14 +2438,10 @@ export function WxGroupChatPage({
     return () => window.removeEventListener('group-msgs:updated', fn);
   }, [gid]);
   const [draft, setDraft] = useState('');
-  /** 内置表情插入输入框（不直接发送）：[微笑] 代码插到光标处，可与文字混排一起发送（真机微信交互） */
+  /** 内置表情插入输入框（不直接发送）：真实表情图插到光标处，可与文字混排一起发送（真机微信交互） */
   const insertBuiltinEmoji = (s: Sticker) => {
-    insertEmojiCode(inputRef, draft, `[${s.meaning}]`, setDraft);
+    inputRef.current?.insertEmoji(s.meaning, s.url);
   };
-  // 多行输入自适应增高：内容变化时重算 textarea 高度（封顶约 6 行后框内滚动，清空回落单行）
-  useEffect(() => {
-    autoResizeTextarea(inputRef.current);
-  }, [draft]);
   // 语音输入模式：输入框替换为「按住 说话」胶囊（左侧圆钮切换，与微信单聊同款）
   const [voiceMode, setVoiceMode] = useState(false);
   // 文字转语音发送：开启后输入框文字发出为语音气泡（不想说话时用）
@@ -2485,7 +2481,7 @@ export function WxGroupChatPage({
   const groupQueuedRef = useRef(false);
   const mountedRef = useRef(true);
   const listRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<ChatRichInputHandle | null>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const contactsRef = useRef(contacts);
@@ -5427,12 +5423,11 @@ export function WxGroupChatPage({
               <VoiceHoldBar rec={rec} testId="wxg-voice-hold" />
             ) : (
               <div className="relative min-w-0 flex-1">
-                <textarea
+                <ChatRichInput
+                  app="wx"
                   ref={inputRef}
-                  rows={1}
                   value={draft}
-                  onChange={(e) => {
-                    const v = e.target.value;
+                  onChange={(v) => {
                     setDraft(v);
                     // 键入 @ 直接唤起成员浮层（微信/QQ 同款：点选后替换该 @ 并插入「@名字 」）
                     if (v.endsWith('@')) {
@@ -5448,8 +5443,9 @@ export function WxGroupChatPage({
                   }}
                   enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-                  data-testid="wx-groupchat-input"
-                  className="block max-h-[132px] min-h-[36px] w-full resize-none overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 placeholder:text-black/30 focus-visible:border-[#07C160]/40 focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.13),0_5px_16px_rgba(0,0,0,0.05)] dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none dark:placeholder:text-white/30 dark:focus-visible:border-[#07C160]/45 dark:focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.17)]"
+                  placeholderClass="pl-3 pt-[7px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
+                  testId="wx-groupchat-input"
+                  className="block max-h-[132px] min-h-[36px] w-full overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 focus-visible:border-[#07C160]/40 focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.13),0_5px_16px_rgba(0,0,0,0.05)] dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none dark:focus-visible:border-[#07C160]/45 dark:focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.17)]"
                 />
                 {/* 文字转语音开关（声波图标收进输入框内部右侧，与单聊同款）：
                     开启后输入文字发送为语音气泡（本地仿真，无需配置语音 API，点击不出声） */}

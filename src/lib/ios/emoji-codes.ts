@@ -1,8 +1,9 @@
 /**
  * 内置表情「文字代码」体系（微信 / QQ 通用）：
- * - 点面板里的内置表情 → 往输入框插入文字代码（微信 [微笑] / QQ [微笑]），可与文字混排一起发送
+ * - 点面板里的内置表情 → 往输入框插入真实表情图（contentEditable 富文本输入框，见 components/apps/chat-rich-input.tsx），
+ *   可与文字混排一起发送；发送时由输入框把表情序列化回文字代码（微信 [微笑] / QQ [微笑]）
  *   （对照真实微信/QQ：内置表情进输入框与文字同发；用户收藏的大表情贴纸仍点选直发）
- * - 消息气泡渲染时把代码还原成表情小图：混排内联小图、纯表情消息放大显示
+ * - 消息气泡渲染时把代码还原成表情小图（components/apps/inline-emoji.tsx，统一 22px 内联尺寸）
  * - AI 上下文天然可读（代码即含义），回复里输出同样格式即可发表情（仅限内置清单内的名字）
  * - 名字严格取自 builtin-stickers.ts 内置清单；匹配不到的 [xx] 一律按普通文字渲染
  */
@@ -87,31 +88,3 @@ export const EMOJI_CODE_RULE =
   '你自己想发这类小表情时，直接在句子里写 [内置表情的意思]（意思必须来自下面表情包清单里的内置表情，写意思不写 ID，' +
   '如清单里有「xx-微笑:微笑」就输出 [微笑]），可与文字混排（如「哈哈[捂脸]」「晚安[月亮]」）；' +
   '写错名字对方只会看到文字；要不要发表情完全自然决定，不要每句都带。';
-
-/**
- * 把内置表情文字代码（如 [微笑]）插入聊天输入框：光标处插入（失焦/无光标时追加末尾）。
- * 不主动抢焦点——真机微信/QQ 点表情不弹键盘、面板保持展开可连续点选；
- * 插入后仅把光标落到代码后面，用户点输入框即可继续编辑。
- */
-export function insertEmojiCode(
-  ref: { current: HTMLTextAreaElement | null } | null,
-  value: string,
-  code: string,
-  setValue: (v: string) => void
-): void {
-  const el = ref?.current;
-  if (!el) {
-    setValue(value + code);
-    return;
-  }
-  const start = el.selectionStart ?? value.length;
-  const end = el.selectionEnd ?? start;
-  setValue(value.slice(0, start) + code + value.slice(end));
-  requestAnimationFrame(() => {
-    try {
-      el.setSelectionRange(start + code.length, start + code.length);
-    } catch {
-      // 忽略
-    }
-  });
-}

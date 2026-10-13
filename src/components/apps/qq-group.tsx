@@ -117,8 +117,9 @@ import { qqChatFlags, useChatFlags, type ChatFlags } from '@/lib/chat-flags';
 import { ChatBgPage, ChatReplyCountPage, ChatToggle, ChatVoiceFreqPage, chatBgLayerStyle, type ChatSettingsBg } from '@/components/apps/chat-settings';
 import { loadStickers, type Sticker } from '@/lib/ios/stickers';
 import { getStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
-import { insertEmojiCode, EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
+import { EMOJI_CODE_RULE } from '@/lib/ios/emoji-codes';
 import { InlineEmojiText } from './inline-emoji';
+import { ChatRichInput, type ChatRichInputHandle } from './chat-rich-input';
 import { getActionDescOn, saveActionDescOn, useActionDescOn, ACTION_DESC_RULE, ACTION_DESC_OFF_RULE, actionDescViewOf } from '@/lib/action-desc';
 import { ActionDescLine } from './action-desc-line';
 import { TextCardBubble } from './text-card-bubble';
@@ -174,7 +175,6 @@ import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildLocationBlock, locationAiText, locFromRich } from '@/lib/ios/chat-location';
 import { useSettings } from '@/lib/ios/store';
-import { autoResizeTextarea } from '@/lib/ios/use-auto-textarea';
 import { pushChatNotification, notifyPreviewText } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, isAiDelivering, markDeliverBoundary, peekPendingMsgs, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -2088,14 +2088,10 @@ export function QqGroupChatPage({
     return () => window.removeEventListener('group-msgs:updated', fn);
   }, [gid]);
   const [draft, setDraft] = useState('');
-  /** 内置表情插入输入框（不直接发送）：[微笑] 代码插到光标处，可与文字混排一起发送（真机 QQ 交互） */
+  /** 内置表情插入输入框（不直接发送）：真实表情图插到光标处，可与文字混排一起发送（真机 QQ 交互） */
   const insertBuiltinEmoji = (s: Sticker) => {
-    insertEmojiCode(inputRef, draft, `[${s.meaning}]`, setDraft);
+    inputRef.current?.insertEmoji(s.meaning, s.url);
   };
-  // 多行输入自适应增高：内容变化时重算 textarea 高度（封顶约 6 行后框内滚动，清空回落单行）
-  useEffect(() => {
-    autoResizeTextarea(inputRef.current);
-  }, [draft]);
   const [quote, setQuote] = useState<{ name: string; content: string; id?: string; time?: number } | null>(null);
   const [atOpen, setAtOpen] = useState(false);
   const [stickerOpen, setStickerOpen] = useState(false);
@@ -2134,7 +2130,7 @@ export function QqGroupChatPage({
   const sendTextAsVoiceRef = useRef<(t: string) => void>(() => undefined);
   const mountedRef = useRef(true);
   const listRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<ChatRichInputHandle | null>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const contactsRef = useRef(contacts);
@@ -4992,12 +4988,11 @@ export function QqGroupChatPage({
         )}
         <div className="flex items-end gap-2 px-3 pb-1 pt-3">
           <div className="relative min-w-0 flex-1">
-            <textarea
+            <ChatRichInput
+              app="qq"
               ref={inputRef}
-              rows={1}
               value={draft}
-              onChange={(e) => {
-                const v = e.target.value;
+              onChange={(v) => {
                 setDraft(v);
                 // 键入 @ 直接唤起成员浮层（QQ/微信同款：点选后替换该 @ 并插入「@名字 」）
                 if (v.endsWith('@')) {
@@ -5013,9 +5008,10 @@ export function QqGroupChatPage({
               }}
               enterKeyHint={enterSend ? 'send' : undefined}
               placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-              aria-label="发送群聊消息"
-              data-testid="qq-groupchat-input"
-              className="max-h-[132px] min-h-[40px] w-full resize-none overflow-y-auto rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] py-[9px] pl-3.5 pr-9 text-[15px] leading-[22px] outline-none placeholder:text-black/25 dark:border-white/[0.08] dark:bg-white/[0.07] dark:placeholder:text-white/25"
+              placeholderClass="pl-3.5 pt-[9px] text-[15px] leading-[22px] text-black/25 dark:text-white/25"
+              ariaLabel="发送群聊消息"
+              testId="qq-groupchat-input"
+              className="max-h-[132px] min-h-[40px] w-full overflow-y-auto rounded-[10px] border border-black/[0.07] bg-[#F6F7F8] py-[9px] pl-3.5 pr-9 text-[15px] leading-[22px] outline-none dark:border-white/[0.08] dark:bg-white/[0.07]"
             />
             {/* 文字转语音开关（声波图标收进输入框内部右侧）：开启后输入框文字发送为语音气泡 */}
             <button

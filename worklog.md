@@ -18966,3 +18966,32 @@ Stage Summary:
 - 微信表情面板对齐真机 8.x：109 官方全集+官方面板序；两端内置表情 8 列小贴片；点内置表情=[微笑] 代码进输入框可混排同发（用户贴纸直发不变）；气泡内联渲染代码为表情图（混排小图/纯表情大图）；分组栏内置项=笑脸图标+永远最前（面板+管理页）；QQ 面板标签移至网格下方、微信不动
 - 新文件：src/lib/ios/emoji-codes.ts、src/components/apps/inline-emoji.tsx；改动：builtin-stickers.ts（WX 序重排+TabIcon）、sticker-batch.tsx（分组栏）、wechat.tsx / qq.tsx / wx-group.tsx / qq-group.tsx（面板 props、插入接线、气泡渲染、prompt 规则、剥除）
 - AI 全链路感知：用户发的代码随文本进历史+规则注入，AI 可用 [意思] 同格式发表情；表情开关关闭时规则不下发且输出硬剥除
+
+---
+Task ID: 25
+Agent: 主协调者 (Z.ai Code)
+Task: 用户三项新需求：①QQ微信内置表情「单独发送」与「带文字发送」大小统一（把单独发送的变成带文字那样的大小）②输入框里不显示 [微笑] 文字代码、直接显示表情图 ③搜索网上表情包功能——只调研免费方案列清单，不做
+
+Work Log:
+- 【需求1 尺寸统一】inline-emoji.tsx 删除纯表情 32px 放大分支，所有内置表情代码统一 22px 内联渲染（气泡内 img 实测 22px：我方纯表情/AI 纯表情/混排三方一致）；isPureEmojiCodes 保留导出备用
+- 【需求2 富文本输入框】新建 src/components/apps/chat-rich-input.tsx（ChatRichInput，contentEditable，四端共用）：
+  - 内置表情以 <img data-code=名字> 真实表情图内联显示在输入框（22px 与气泡同款），Backspace 整枚删除，不显示 [微笑] 文字
+  - 对外仍纯文本协议：输入时 DOM 序列化回文字代码上报 onChange（img[data-code]→[名字]、<br>→\n、块级边界补 \n）——消息存储/AI 上下文/气泡渲染链路零改动
+  - 同步策略 lastSyncedRef：内部序列化值与外部 value 一致时绝不重写 DOM（保护光标与中文输入法合成），仅发送清空/切会话草稿/@ 替换注入等外部变更时重建；重建后若有焦点光标落末尾
+  - ref.insertEmoji(name,url)：光标处插入（无焦点追加末尾不抢焦点，面板连点可连选）；空框先清残留 <br> 防消息带出首行换行
+  - Enter 关闭回车发送时统一 execCommand('insertLineBreak')（序列化可靠）；粘贴只进纯文本（逐行 insertLineBreak 保换行）；onDrop 禁拖放富文本；全空白输入规范化为空串并清 DOM 保证 placeholder 出现
+  - placeholder 改叠层 span（contentEditable 无 ::placeholder），调用方传 placeholderClass 对齐各端 padding/字号
+- 【四端接线】wechat.tsx/qq.tsx（单聊 chatTaRef:useAutoTextareaRef→richInputRef:ChatRichInputHandle）/wx-group.tsx/qq-group.tsx（群聊 inputRef 类型改）——textarea→ChatRichInput，insertBuiltinEmoji 改 ref.insertEmoji(s.meaning,s.url)，删 autoResizeTextarea/useAutoTextareaRef 依赖（div 自然增高 max-h-132 overflow-auto）；lib/ios/emoji-codes.ts 删 textarea 版 insertEmojiCode、头注释更新；lib/enter-send.ts guardEnterToSend 泛化 HTMLTextAreaElement|HTMLDivElement
+- 【E2E（agent-browser 393×852，播种 e2e-我 user + e2e-小柚 char，微信/QQ 双登录+互加好友）】
+  - 微信：内置 pill=笑脸图标无文字 ✓→面板 109 张 8 列 19px 贴片 ✓→点微笑输入框出 img(data-code=微笑,22px) 无文字代码 ✓→+「今天也要开心」发送→绿气泡(149,236,105) 内联 22px+文字 ✓→我方纯表情 22px ✓→AI 回复纯表情也 22px ✓→发送后输入框清空 ✓
+  - QQ：pill=惊讶 APNG 无文字 ✓→分组栏在网格下方(816>543) ✓→198 张 APNG 8 列 36.6px 贴片 ✓→点惊讶输入框出 img(22px) ✓→+「惊讶哈哈哈」发送→气泡内联 img 22px+文字 ✓→纯表情 22px ✓
+  - console/errors 干净；dev.log 仅既有 instrumentation getBuiltinModule 警告（非致命）
+- 【坑】agent-browser 下主屏 App 打不开：locked=true 时 openApp 静默 return（锁屏 UI 检测选择器不对导致误判已解锁）——临时在 store.ts 加 window.__useUI 后门直查状态+unlock()/openApp()，验证后已删；微信登录需 USER 档案（联系人 App 建 user 含手机号+微信密码+QQ密码必填）；QQ 登录需勾选协议按钮；eval 里 execCommand 与 send 同 tick 会竞态（React 批处理致 send 读旧 state），分步 wait 解决；`fn?.() ?? fallback` 模式 onClick 返回 undefined 时会双击（面板 toggle 两次）
+- 【需求3 调研（只列不做）】web 检索+curl 实测存活：斗图啦 doutula 主站 000/API 空数据已死出局；Tenor 旧域名 g.tenor.com 400 但 tenor.googleapis.com v2 活（"API key not valid"=需 Google Cloud 免费 key，网传"Tenor API 关闭"实为旧域名废弃）；GIPHY 200 活（免费开发者 key）；发表情 fabiaoqing 200 活（无官方 API 可爬，搜索页 HTML 解析）；搜狗图片/Bing 图片 200 活（无 key 爬虫方案）；apihz.cn 搜狗表情接口活（免费注册 id/key）；ALAPI 斗图接口活（免费 token+日额度）
+- 【清理】浏览器测试档案 localStorage+IndexedDB(ios-phone-db) 全清恢复出厂，浏览器已关；store.ts 调试后门删除
+
+Stage Summary:
+- 交付：①气泡内内置表情统一 22px（单独发送=带文字发送，废除纯表情 32px 放大）②输入框 contentEditable 化——点面板内置表情直接显示真实表情图（可删可混排），发送时静默序列化回 [微笑] 代码，存储/AI/气泡渲染链路零改动，微信/QQ 单聊+群聊四端生效 ③网上表情包搜索免费方案清单已给出（待用户选定后实施）
+- 新文件：src/components/apps/chat-rich-input.tsx；改动：inline-emoji.tsx（删 32px 分支）、wechat/qq/wx-group/qq-group.tsx（接线）、emoji-codes.ts（删 insertEmojiCode）、enter-send.ts（类型泛化）
+- 关键决策：①contentEditable+命令式 DOM（React 不托管 children）+ lastSyncedRef 差分同步——光标/IME 安全的受控富文本；②对外纯文本协议（序列化回代码）让旧链路零迁移；③placeholder 叠层方案；④E2E 期发现 locked 拦截问题用临时后门诊断并已删除
+- 待办：等用户从搜索方案清单选定数据源（推荐：发表情爬虫+Bing 兜底，或注册 key 用 Tenor/GIPHY），再实现 /api/sticker-search 后端+面板搜索页签（图片走服务端代理防防盗链，结果即点即发不入库）

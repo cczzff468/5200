@@ -97,7 +97,7 @@ export function useEnterSend(app: EnterSendApp): boolean {
  * - Shift+Enter 在开启时仍换行（多行输入习惯保留）；输入法选词回车（isComposing）永不发送。
  */
 export function guardEnterToSend(
-  e: React.KeyboardEvent<HTMLTextAreaElement>,
+  e: React.KeyboardEvent<HTMLTextAreaElement | HTMLDivElement>,
   enterSend: boolean,
   onSend: () => void
 ): void {
