@@ -1,19 +1,23 @@
 'use client';
 
 /**
- * 网上表情包搜索弹窗（微信 / QQ 表情面板共用，Task 26）——对照真机微信「表情搜索」弹窗：
- *  - 表情面板右上角搜索图标打开；从面板上方滑出（absolute bottom-full，盖住消息区，输入区/面板保留）
+ * 网上表情包搜索弹窗（微信 / QQ 表情面板共用，Task 26 / 27 修订）——对照真机微信「表情搜索」弹窗：
+ *  - 表情面板右上角搜索图标打开；弹窗从面板顶起、向上铺满手机壳可视区（盖住消息区+导航栏，
+ *    输入栏/表情面板保留在下方可见——弹窗高度按「面板顶→手机壳顶」实测，不再用 vh：
+ *    手机壳是固定 844px + transform scale 的模拟器，vh 参照的是浏览器视口，两者不相等，
+ *    旧版 66vh 会顶出壳外被 overflow-hidden 裁掉标题和搜索框，focus 拉滚动还会把面板顶出屏幕）
  *  - 顶栏：左收起箭头 + 居中「表情搜索」标题；搜索框「搜索或合成表情」回车或 400ms 防抖实时搜
  *  - 「最近在搜」标签（localStorage 按端隔离，无历史时显示真机预设词组；垃圾桶清空）
  *  - 结果 3 列网格（缩略图），点选即发送（临时 Sticker 不入库，sendSticker 自带面板收起）
  *  - 底部「精选表情 >」：随机热词出图
  *
- * 数据源在后端 /api/sticker-search（发表情爬虫 + Bing 兜底 + 24h 缓存）；图片走 /api/sticker-image 防盗链代理。
+ * 数据源在后端 /api/sticker-search（360 图片 + 发表情兜底 + 24h 缓存）；图片走 /api/sticker-image 防盗链代理。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { DEFAULT_STICKER_GROUP_ID, type Sticker } from '@/lib/ios/stickers';
+import { shellScale } from '@/lib/ios/shell-scale';
 
 /** 真机微信冷启动预设词（无搜索历史时展示） */
 const PRESET_TAGS = ['我自己玩', '哈喽哈喽', '救你了', 'mua', '服侍', '抱抱', 'Q', '哭', '不要'];
@@ -53,18 +57,69 @@ export function StickerSearchSheet({
     }
   });
   const [errText, setErrText] = useState('搜索失败，换个词试试');
+  /** 弹窗高度（壳本地 px）：面板顶 → 手机壳可视顶。0 = 未量出（兜底用 CSS 高度） */
+  const [sheetH, setSheetH] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<number | null>(null);
   const seqRef = useRef(0);
 
-  /** 打开时重置搜索态 + 聚焦输入框 */
+  /**
+   * 弹窗高度实测（Task 27）：手机壳是 844px 固定 + transform: scale(s) 的模拟器，
+   * vh 单位参照浏览器视口而非壳——壳内元素的 CSS 像素是「壳本地坐标」。
+   * 量法：面板顶与壳顶的视口距离 ÷ scale = 本地可用高度；面板/输入栏保留在弹窗下方可见。
+   * useLayoutEffect 在绘制前量完，无闪烁；窗口缩放（resize）时重测。
+   */
+  useLayoutEffect(() => {
+    if (!open) {
+      setSheetH(0);
+      return;
+    }
+    const measure = () => {
+      const root = rootRef.current;
+      const panel = root?.parentElement;
+      if (!root || !panel) return;
+      const shell = root.closest('[data-phone-shell]') as HTMLElement | null;
+      if (!shell) return;
+      const pr = panel.getBoundingClientRect();
+      const sr = shell.getBoundingClientRect();
+      const scale = shellScale.value || 1;
+      const h = Math.round((pr.top - sr.top) / scale);
+      if (h > 120) setSheetH(h);
+    };
+    // 挂载即量（面板布局在本次 commit 内已落定，无闪烁）
+    measure();
+    // resize 时 PhoneShell 会同步写 shellScale 但 transform 要等 React 重渲染才生效——
+    // 立刻量会拿到「旧几何 ÷ 新缩放」的错值：双 rAF 等渲染落定后再量，250ms 再兜底量一次
+    let raf1 = 0;
+    let raf2 = 0;
+    let settle = 0;
+    const schedule = () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      window.clearTimeout(settle);
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(measure);
+      });
+      settle = window.setTimeout(measure, 250);
+    };
+    window.addEventListener('resize', schedule);
+    return () => {
+      window.removeEventListener('resize', schedule);
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      window.clearTimeout(settle);
+    };
+  }, [open]);
+
+  /** 打开时重置搜索态 + 聚焦输入框（preventScroll：绝不因 focus 滚动裁剪容器把面板顶出屏幕） */
   useEffect(() => {
     if (!open) return;
     setQ('');
     setHits([]);
     setPhase('idle');
     setErrText('搜索失败，换个词试试');
-    const t = window.setTimeout(() => inputRef.current?.focus(), 180);
+    const t = window.setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 180);
     return () => window.clearTimeout(t);
   }, [open]);
 
@@ -128,15 +183,27 @@ export function StickerSearchSheet({
   };
 
   const pick = (h: StickerHit) => {
-    const s: Sticker = {
+    onClose();
+    // 原图可能已失效（搜索引擎索引滞后，直链 404）：发送前 2s 探活，失败退回网格缩略图
+    //（360 结果缩略图固定在 qhimgs CDN，稳定在线；动图原图探活成功仍优先原图，保住 GIF 动画）
+    const base = {
       id: `${app}ss-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-      url: h.image,
       meaning: q.trim().slice(0, 30),
       groupId: DEFAULT_STICKER_GROUP_ID,
       createdAt: Date.now(),
     };
-    onSend(s);
-    onClose();
+    const sendFallback = () => onSend({ ...base, url: h.thumb });
+    const probe = new Image();
+    const timer = window.setTimeout(sendFallback, 2000);
+    probe.onload = () => {
+      window.clearTimeout(timer);
+      onSend({ ...base, url: h.image });
+    };
+    probe.onerror = () => {
+      window.clearTimeout(timer);
+      sendFallback();
+    };
+    probe.src = h.image;
   };
 
   const clearHist = () => {
@@ -158,12 +225,18 @@ export function StickerSearchSheet({
 
   return (
     <div
-      className="absolute inset-x-0 bottom-full z-40 flex h-[66vh] flex-col rounded-t-[16px] border border-b-0 border-black/[0.08] bg-[#F7F7F7] shadow-[0_-10px_40px_rgba(0,0,0,0.18)] dark:border-white/[0.08] dark:bg-[#232428]"
-      style={{ animation: 'quick-in-up 0.22s ease-out' }}
+      ref={rootRef}
+      className="absolute inset-x-0 bottom-full z-40 flex flex-col overflow-hidden rounded-t-[16px] border border-b-0 border-black/[0.08] bg-[#F7F7F7] shadow-[0_-10px_40px_rgba(0,0,0,0.18)] dark:border-white/[0.08] dark:bg-[#232428]"
+      style={{
+        height: sheetH > 0 ? sheetH : undefined,
+        minHeight: sheetH > 0 ? undefined : 380,
+        maxHeight: sheetH > 0 ? undefined : '62vh',
+        animation: 'quick-in-up 0.22s ease-out',
+      }}
       data-testid={`${app}-sticker-search-sheet`}
     >
       {/* 顶栏：收起箭头 + 居中标题 */}
-      <div className="relative flex items-center justify-center px-3 pb-1 pt-3.5">
+      <div className="relative flex shrink-0 items-center justify-center px-3 pb-1 pt-3.5">
         <button
           type="button"
           aria-label="收起表情搜索"
@@ -176,7 +249,7 @@ export function StickerSearchSheet({
         <p className="text-[16px] font-medium text-black/90 dark:text-white/90">表情搜索</p>
       </div>
       {/* 搜索框 */}
-      <div className="px-4 pt-2.5">
+      <div className="shrink-0 px-4 pt-2.5">
         <div className="flex h-10 items-center gap-2 rounded-[10px] bg-black/[0.05] px-3 dark:bg-white/10">
           <Search className="h-4 w-4 shrink-0 text-black/35 dark:text-white/40" />
           <input
@@ -198,7 +271,7 @@ export function StickerSearchSheet({
         </div>
       </div>
       {/* 主体：最近在搜 / 结果 */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2 pt-3.5">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-2 pt-3.5">
         {phase === 'idle' && (
           <>
             <div className="flex items-center justify-between">
@@ -261,7 +334,6 @@ export function StickerSearchSheet({
                 onClick={() => pick(h)}
                 className="aspect-square overflow-hidden rounded-[10px] bg-white shadow-[0_1px_4px_rgba(0,0,0,0.06)] active:opacity-60 dark:bg-white/10"
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={h.thumb} alt={`表情 ${i + 1}`} className="h-full w-full object-cover" loading="lazy" />
               </button>
             ))}

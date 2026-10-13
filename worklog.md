@@ -18995,3 +18995,25 @@ Stage Summary:
 - 新文件：src/components/apps/chat-rich-input.tsx；改动：inline-emoji.tsx（删 32px 分支）、wechat/qq/wx-group/qq-group.tsx（接线）、emoji-codes.ts（删 insertEmojiCode）、enter-send.ts（类型泛化）
 - 关键决策：①contentEditable+命令式 DOM（React 不托管 children）+ lastSyncedRef 差分同步——光标/IME 安全的受控富文本；②对外纯文本协议（序列化回代码）让旧链路零迁移；③placeholder 叠层方案；④E2E 期发现 locked 拦截问题用临时后门诊断并已删除
 - 待办：等用户从搜索方案清单选定数据源（推荐：发表情爬虫+Bing 兜底，或注册 key 用 Tenor/GIPHY），再实现 /api/sticker-search 后端+面板搜索页签（图片走服务端代理防防盗链，结果即点即发不入库）
+
+---
+Task ID: 27
+Agent: 主协调者 (Z.ai Code)
+Task: 用户反馈两 bug：①表情搜索弹窗出现后表情面板消失 ②表情搜索一直搜索失败——定位根因并修复
+
+Work Log:
+- 【诊断①面板消失】sticker-search-sheet 弹窗高度用 h-[66vh]：vh 参照浏览器视口，但手机壳是固定 844px + transform:scale(s) 模拟器，壳内 CSS 像素是「壳本地坐标」——66vh 恒大于「面板顶→壳顶」可用空间，弹窗顶部（标题/搜索框/收起箭头）被壳 overflow-hidden 裁掉；且打开时 focus 搜索框可能触发 scrollIntoView 把裁剪容器滚动，整个布局位移，用户看到「面板消失」
+- 【修复①】PhoneShell 主壳/开机壳两处 div 加 data-phone-shell 锚点；sheet 改为 useLayoutEffect 实测高度：（面板 rect.top − 壳 rect.top）÷ shellScale.value = 本地可用高，弹窗精确铺满「面板顶→壳顶」全部区域（真机微信同款：盖住消息区+导航栏，输入栏/表情面板保留在下方）；resize 时 PhoneShell 同步写 shellScale 但 transform 等 React 渲染才生效——立刻量得「旧几何÷新缩放」错值，改双 rAF + 250ms settle 重测；focus 加 preventScroll；量不出时兜底 380px/62vh
+- 【诊断②搜索失败】实测双源全挂：fabiaoqing.com 本环境完全连不上（curl 8s 超时 HTTP 000）；Bing 图片反爬升级——/images/async 返回 200 空体、/images/search 返回 134KB JS 壳（0 个 murl），无 Cookie/JS 渲染拿不到数据
+- 【新源实测】360 image.so.com /j 接口 ✓（JSON 直出 0.6s、74+ 条/页、sn 翻页可用）；搜狗 napi forbid；百度 acjson「Forbid spider access」；dbbqb 空响应；DuckDuckGo vqd 取不到——定 360 为主源
+- 【修复②】sticker-search/route.ts 重写：主源 360（q+「表情包」聚焦斗图内容，_thumb 缩略图/qhimgs 稳定 CDN，4.5s 预算，过滤 svg/ico/小图）+ 副源发表情（1.5s 短预算并发竞速，国内部署它快则合并在前，回不来不拖慢主源）；弃用 Bing；24h SQLite 缓存 + 全挂回过期缓存逻辑保留
+- 【代理配套】sticker-image 域名白名单挡住 360 结果长尾（sohucs/duitang/126.net/wxcha 等全部 403）——改「行为白名单」：内网/危险地址拦截不变 + 响应必须 image/*（或图片扩展名）否则 403 + 防盗链域伪造 Referer 规则扩充（qhimgs/qhimg/qhres/itc/sohucs/sohu/wxcha/duitang/bq233/72qq/5577）
+- 【死链兜底】360 索引含失效原图（如 sohucs 404）：sheet pick() 发送前 new Image() 2s 探活原图，失败自动退回网格缩略图（qhimgs 稳定在线；探活成功仍发原图保住 GIF 动画）
+- 【E2E（agent-browser 393×852 + 1280×800 双视口）】IndexedDB 播种 e2e-我(user, 手机 13800001234/微信 wx-e2e-me/QQ 20001234) + e2e-小柚(char, 双平台好友标记 main 账号) → 合成 PointerEvent 序列解锁锁屏（aria-label=锁屏 dispatch pointerdown/move/up，dy<-110）→ 微信手机号登录 → 小柚会话 → 面板搜索图标 → 弹窗实测 h=499=面板顶 499 ✓ 输入框可见且聚焦 ✓ 面板 499→852 保留可见 ✓ → 搜「熊猫头」36 条 32 图加载 ✓ 截图确认（熊猫头梗图网格+面板共存）→ 点选发送→金馆长气泡正常渲染 ✓ AI 理解表情意思回「这个金馆长表情也太经典了哈哈哈！」+语音+内置表情 ✓ → QQ 20001234 登录（协议勾选）→ 小柚会话搜索「哈基米」36 条 ✓ → 1280×800 缩放 0.872 场景：sheet 本地高 478=面板顶 478、不溢出壳 ✓（复现并修掉 resize 竞态错值）→ 回 393×852 再验证 ✓ → 收起箭头关弹窗面板保留 ✓ → QQ 搜 Loopy 点选发送气泡渲染 ✓ → errors/console 干净、dev.log 无应用错误
+- 【坑】主屏分页只认 React PointerEvent（原生 mouse 拖不动 pages-track，需 dispatchEvent PointerEvent 序列）；锁屏解锁手势同理；QQ 登录协议按钮 aria-pressed 同 tick 读旧值需 sleep 后再提交；主屏图标被 Spotlight/前台 App 遮挡时 elementFromPoint 先探再点
+- browser 测试档案 localStorage+IndexedDB(ios-phone-db) 已全清恢复出厂，浏览器已关
+
+Stage Summary:
+- 交付：表情搜索弹窗几何按手机壳实测（不再 66vh 溢出裁剪，面板永不被挤出屏幕，微信/QQ×移动/桌面缩放四场景验证）；搜索源换 360 图片主源+发表情短预算副源（实测 1.6s 内出 36 条真实表情包），代理改行为白名单兼容任意图床长尾，发送前原图探活兜底
+- 改动文件：src/components/apps/sticker-search-sheet.tsx（测量高度+探活发送）、src/components/ios/PhoneShell.tsx（data-phone-shell 锚点）、src/app/api/sticker-search/route.ts（源重写）、src/app/api/sticker-image/route.ts（行为白名单+Referer 规则扩充）
+- 已知边界：360 个别索引原图失效（探活自动退缩略图，用户无感）；发表情在本环境不可达、国内部署时自动参与合并提升内容质量

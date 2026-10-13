@@ -299,6 +299,7 @@ export default function PhoneShell() {
           style={fit.desktop ? { width: FRAME_W * fit.scale, height: FRAME_H * fit.scale } : undefined}
         >
           <div
+            data-phone-shell=""
             className={`relative h-[100svh] w-full overflow-hidden bg-black sm:h-[844px] sm:w-[390px] sm:rounded-[56px] sm:border-[12px] sm:border-[#151517] sm:shadow-[0_40px_90px_-20px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.08)] ${
               dark ? 'dark' : ''
             }`}
@@ -325,6 +326,7 @@ export default function PhoneShell() {
       >
         <div
           ref={shellRef}
+          data-phone-shell=""
           className={`relative h-[100svh] w-full overflow-hidden bg-black text-foreground sm:h-[844px] sm:w-[390px] sm:rounded-[56px] sm:border-[12px] sm:border-[#151517] sm:shadow-[0_40px_90px_-20px_rgba(0,0,0,0.55),0_0_0_1px_rgba(255,255,255,0.08)] ${
             dark ? 'dark' : ''
           }`}
