@@ -2648,7 +2648,14 @@ export function WxStickerPanel({
     >
       {searchOpen ? (
         /* 网上表情搜索面板（替换式）：整体替换面板本体占面板原位，关闭/选中后恢复原面板 */
-        <StickerSearchSheet app="wx" onClose={() => setSearchOpen(false)} onSend={onPick} />
+        <StickerSearchSheet
+          app="wx"
+          onClose={() => setSearchOpen(false)}
+          onSend={onPick}
+          onAdd={(s) => commit([s, ...list])}
+          isSaved={(url) => list.some((x) => x.url === url)}
+          onToast={onToast}
+        />
       ) : (
         <>
       <div className="flex items-center justify-between px-4 pb-1 pt-2.5">

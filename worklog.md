@@ -19036,3 +19036,24 @@ Stage Summary:
 - 交付：表情搜索弹窗改为「替换式」——打开即删除表情面板本体、搜索面板占面板原位（同宽同高、贴输入栏），关闭恢复；搜索结果上限 36→60 且网格滚动全量展示，缩略图→原图自动降级再自动移除死图，保证展示的全是能正常显示的表情
 - 改动文件：src/components/apps/sticker-search-sheet.tsx（重写）、src/components/apps/wechat.tsx / qq.tsx（面板容器条件渲染+高度实测+openSearch）、src/app/api/sticker-search/route.ts（MAX_ITEMS 60）
 - 数据源链路/缓存/代理/探活兜底沿用 Task 27，零改动
+
+---
+Task ID: 29
+Agent: 主协调者 (Z.ai Code)
+Task: 表情搜索面板三项改造：①删除底部「精选表情 >」入口 ②长按搜索结果新增「添加到表情」功能（保存到我的表情）③保存过的表情长按显示「已保存」
+
+Work Log:
+- 【删精选】sticker-search-sheet.tsx 移除底部「精选表情 >」按钮及 HOT_WORDS 热词池/featured()（Task 26 的随机热词入口），ChevronRight 图标 import 一并清理；主体区底部留白由结果网格自然收尾
+- 【长按添加】HitCell 扩展面板同款长按模式：pointerdown 起 450ms 计时（mouse 仅左键），pointermove 出界 ±12px / up / cancel / leave 全部清计时；长按触发置 suppressSendRef 抑制随后 pointerup 引发的 click 误发送，全部状态内聚在 cell 内
+- 【预览卡】长按 → 真微信同款白卡（absolute inset-0 遮罩 + 220px 卡片）：150px 大图 + 意思（当前搜索词）+「发送」+「添加到表情」（微信绿 #07C160）；点遮罩取消；testid wx/qq-sticker-search-preview{-send,-add,-saved}
+- 【保存链路】sheet 新增 props：onAdd（面板 commit([s,...list]) 入库，groupId=默认分组 my「我的表情」）+ isSaved(url)（list.some url 匹配）+ onToast；保存时原图 probeImage 2s 探活（抽公共 helper，pick 发送同款）——活着存原图保 GIF 动画、死了自动存 qhimgs 缩略图；保存成功 setAdded 即时翻转 + toast「已添加到我的表情」
+- 【已保存判定】预览卡 saved = added[index]（本次会话）|| isSaved(hit.image) || isSaved(hit.thumb)（跨会话，覆盖原图/缩略图两种存储路径）→ 显示灰字「✓ 已保存」（Check 图标）替代添加按钮，不可重复添加；新搜索/清空输入时 added/dead/preview 全量重置
+- 【面板接线】wechat.tsx / qq.tsx 两面板 StickerSearchSheet 传 onAdd/isSaved/onToast（各 1 处）；面板自身网格/分组栏渲染逻辑零改动
+- 【验证】bunx tsc 0 错误；改动文件 eslint 0 错误（全局 49 个问题均为 meituan/taobao-channels 等旧文件既有）；E2E（agent-browser 393×852）：微信登录→搜索熊猫头→长按 item-0→预览卡出现（hasSend/hasAdd=true，click 未误发送）→点添加→卡片翻「✓已保存」+toast ✓→关卡片关面板→「我的表情」分组 tiles=1 首格=保存的表情（原图挂了自动存 qhimgs 缩略图路径验证）✓→重开搜索（组件重挂载状态重置）→最近在搜点熊猫头→长按同项→立即「✓已保存」无添加按钮（isSaved 跨状态生效）✓→QQ 20001234 登录（协议勾选）→搜开心→长按→添加→已保存+toast ✓→我的表情 tiles=1（ibaotu 原图直存路径验证，代理 200）✓；agent-browser errors 空、dev.log 无应用错误
+- 【坑】返回主屏幕按钮仅在会话列表等页渲染（聊天页/搜索面板没有），需先点微信聊天页「返回」到列表再回主屏；QQ 协议按钮 click 后同 tick login.disabled 仍读旧值，sleep 1s 后再点登录
+- 测试浏览器档案 localStorage+IndexedDB(ios-phone-db) 已清，浏览器已关
+
+Stage Summary:
+- 交付：搜索面板去掉「精选表情」入口；长按任意搜索结果弹真微信同款预览卡（发送/添加到表情/已保存），添加即入「我的表情」默认分组（原图探活失败自动退缩略图，toast 反馈）；已保存的表情再长按直接显示「✓已保存」不可重复添加；点选发送行为不变
+- 改动文件：src/components/apps/sticker-search-sheet.tsx（重写：删精选+HitCell 长按+预览卡+probeImage 公共化）、src/components/apps/wechat.tsx / qq.tsx（sheet props 接线各 1 处）
+- 保存的表情与手动添加的表情同构（id/url/meaning/groupId/createdAt），管理页改意思/删除/分组全链路自动兼容
