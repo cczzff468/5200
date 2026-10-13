@@ -1427,15 +1427,18 @@ function ContactFormView({
               <input value={form.birthday} onChange={(e) => set('birthday')(e.target.value)} placeholder="几月几号，如 3月5日 或 6.20" aria-label="生日" className={boxInputCls} />
             </BoxField>
           </FieldGrid>
-          <BoxField label={isNpc ? '你们的关系' : '关系'}>
-            <input
-              value={form.relation}
-              onChange={(e) => set('relation')(e.target.value)}
-              placeholder={isNpc ? '如 同学 / 同事' : '如 朋友 / 家人'}
-              aria-label={isNpc ? '你们的关系' : '关系'}
-              className={boxInputCls}
-            />
-          </BoxField>
+          {/* 关系字段：USER 不显示（用户本人无需关系设定）；NPC 显示「你们的关系」，CHAR 显示「关系」 */}
+          {kind !== 'user' && (
+            <BoxField label={isNpc ? '你们的关系' : '关系'}>
+              <input
+                value={form.relation}
+                onChange={(e) => set('relation')(e.target.value)}
+                placeholder={isNpc ? '如 同学 / 同事' : '如 朋友 / 家人'}
+                aria-label={isNpc ? '你们的关系' : '关系'}
+                className={boxInputCls}
+              />
+            </BoxField>
+          )}
           {isNpc && (
             <BoxField label="与用户的关系">
               <input

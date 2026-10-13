@@ -8535,7 +8535,7 @@ function ChatPage({
                   }}
                   enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-                  className="block max-h-[132px] min-h-[36px] w-full resize-none overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-3 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 placeholder:text-black/30 focus-visible:border-[#07C160]/40 focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.13),0_5px_16px_rgba(0,0,0,0.05)] dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none dark:placeholder:text-white/30 dark:focus-visible:border-[#07C160]/45 dark:focus-visible:shadow-[0_0_0_3.5px_rgba(7,193,96,0.17)]"
+                  className="block max-h-[132px] min-h-[36px] w-full resize-none overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-2 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 placeholder:text-black/30 dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none dark:placeholder:text-white/30"
                 />
                 {/* 文字转语音开关（声波图标在输入框内右下角）：开启后输入文字发送为语音气泡
                     （本地仿真，无需配置语音 API）；切到「按住说话」模式时随输入框一起隐藏 */}
