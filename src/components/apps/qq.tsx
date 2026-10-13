@@ -2219,8 +2219,16 @@ export function QqStickerPanel({
   const [groups, setGroups] = useState<StickerGroup[]>(() => loadStickerGroups('qq'));
   const [activeGroupId, setActiveGroupId] = useState<string>(DEFAULT_STICKER_GROUP_ID);
   const [mode, setMode] = useState<'grid' | 'add'>('grid');
-  /** 网上表情搜索弹窗（Task 26：面板右上角搜索图标打开） */
+  /** 网上表情搜索面板（Task 28 替换式：打开时替换面板本体，占面板原位同高，关闭恢复） */
   const [searchOpen, setSearchOpen] = useState(false);
+  /** 面板容器 ref + 打开搜索瞬间实测的面板高度（offsetHeight 即壳本地 px，transform 不影响它） */
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [searchH, setSearchH] = useState(0);
+  const openSearch = () => {
+    const h = panelRef.current?.offsetHeight ?? 0;
+    if (h > 100) setSearchH(h);
+    setSearchOpen(true);
+  };
   const [tab, setTab] = useState<'file' | 'url'>('file');
   const [editMode, setEditMode] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
@@ -2304,10 +2312,16 @@ export function QqStickerPanel({
 
   return (
     <div
+      ref={panelRef}
       className="relative shrink-0 border-t border-black/[0.05] bg-white dark:border-white/[0.06] dark:bg-[#1B1C1F]"
-      style={{ animation: 'qqPanelIn 0.24s ease-out' }}
+      style={{ animation: 'qqPanelIn 0.24s ease-out', ...(searchOpen ? { height: searchH > 0 ? searchH : 380 } : {}) }}
       data-testid="qq-sticker-panel"
     >
+      {searchOpen ? (
+        /* 网上表情搜索面板（替换式）：整体替换面板本体占面板原位，关闭/选中后恢复原面板 */
+        <StickerSearchSheet app="qq" onClose={() => setSearchOpen(false)} onSend={onPick} />
+      ) : (
+        <>
       <div className="flex items-center justify-between px-4 pb-1 pt-2.5">
         <p className="text-[15px] font-medium">表情</p>
         <div className="flex items-center gap-4">
@@ -2316,7 +2330,7 @@ export function QqStickerPanel({
               type="button"
               aria-label="搜索表情"
               data-testid="qq-sticker-panel-search"
-              onClick={() => setSearchOpen(true)}
+              onClick={openSearch}
               className="text-black/45 active:opacity-60 dark:text-white/45"
             >
               <Search className="h-[18px] w-[18px]" strokeWidth={2} />
@@ -2338,8 +2352,6 @@ export function QqStickerPanel({
           </button>
         </div>
       </div>
-      {/* 网上表情搜索弹窗（真机同款：从面板上方滑出盖住消息区；点结果直发，sendSticker 自带面板收起） */}
-      <StickerSearchSheet app="qq" open={searchOpen} onClose={() => setSearchOpen(false)} onSend={onPick} />
       {mode === 'grid' ? (
         <div className="h-[280px] overflow-y-auto px-3 pb-3 pt-1">
           {/* 内置表情=真机同款小表情（8列小尺寸）；用户收藏贴纸=大瓦片（4列） */}
@@ -2488,6 +2500,8 @@ export function QqStickerPanel({
             )}
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

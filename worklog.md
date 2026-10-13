@@ -19017,3 +19017,22 @@ Stage Summary:
 - 交付：表情搜索弹窗几何按手机壳实测（不再 66vh 溢出裁剪，面板永不被挤出屏幕，微信/QQ×移动/桌面缩放四场景验证）；搜索源换 360 图片主源+发表情短预算副源（实测 1.6s 内出 36 条真实表情包），代理改行为白名单兼容任意图床长尾，发送前原图探活兜底
 - 改动文件：src/components/apps/sticker-search-sheet.tsx（测量高度+探活发送）、src/components/ios/PhoneShell.tsx（data-phone-shell 锚点）、src/app/api/sticker-search/route.ts（源重写）、src/app/api/sticker-image/route.ts（行为白名单+Referer 规则扩充）
 - 已知边界：360 个别索引原图失效（探活自动退缩略图，用户无感）；发表情在本环境不可达、国内部署时自动参与合并提升内容质量
+
+---
+Task ID: 28
+Agent: 主协调者 (Z.ai Code)
+Task: 用户需求调整表情搜索弹窗布局：打开搜索弹窗后删除表情面板，搜索弹窗直接放在表情面板原位置，且搜索到的表情包全部展示
+
+Work Log:
+- 【布局重构「替换式」】sticker-search-sheet.tsx 整体重写：废除 Task 27 的「浮层盖消息区」方案（absolute bottom-full + 实测面板顶→壳顶高度），改为「面板本体替换」——打开时面板容器只渲染搜索面板（原头部/分组栏/网格整体卸载=用户说的「面板删除」），搜索面板 h-full 占面板原位（同宽同高、贴输入栏上方），关闭/点选发送后恢复原面板
+- 【高度实测】微信/QQ 两面板容器加 panelRef + openSearch()：点搜索图标瞬间 offsetHeight 实测面板高（transform:scale 不影响 offsetHeight，直接就是壳本地 px，比 Task 27 的 getBoundingClientRect÷shellScale 更简单可靠），容器在搜索模式下固定该高度，搜索面板 h-full 铺满——严丝合缝零跳动；量不出兜底 380px
+- 【全部展示】①/api/sticker-search MAX_ITEMS 36→60（360 主源 pn 参数同步，实测新词返回 60 条）；②结果网格 flex-1 overflow-y-auto 滚动展示全部结果；③新增 HitCell 死图自愈：缩略图加载失败自动退回原图 src，原图也挂则上报父级从网格移除该格——网格里看到的全是有效图、不留空白格，全挂时显示「结果图片都失效了」+重试
+- 【组件简化】移除 open prop（父级条件渲染即开关）、移除 sheetH/shellScale 测量逻辑、移除浮层圆角/阴影/描边（平铺面板样式）；挂载即聚焦（preventScroll）、防抖卸载清理保留
+- 【E2E（agent-browser 393×852）】播种 e2e-我(user 13800001234/wx-e2e-me/QQ 20001234)+e2e-小柚(char friendWx/friendQq main) → 微信手机号登录→小柚会话→面板（h=354 top=499）→点搜索图标→验证：sheet top=499 h=353 与面板同位同高 samePlace=true、面板网格与分组栏 width=0（本体已卸载）、输入框自动聚焦 ✓ → 搜「熊猫头」36 条（命中 24h 旧缓存）全部加载 0 挂图 → 换新词「委屈的表情包」60 条、滚动到底 atBottom=true、60/60 图全载 0 挂 ✓ → 关闭箭头→面板网格/分组栏恢复、高度回 354 ✓ → 重开点选第 2 项→熊猫头气泡渲染成功、面板整体收起、AI 正常回复 ✓ → QQ 20001234 登录（协议勾选 aria-pressed 同 tick 读旧值坑复现，sleep 后点登录）→小柚会话→面板 h=354→搜索图标→samePlace=true/gridGone=true/groupbarGone=true（QQ 标签在网格下方也一并卸载）→搜「开心」60 条 0 挂图→点选发送气泡渲染 ✓；agent-browser errors 空、console 仅 Fast Refresh 日志、dev.log 无应用错误
+- 【坑】querySelector(...).click() 返回 undefined 会被 || 链误判 not-found（click 实际已生效）；微信会话行/主屏图标均为 div+几何定位点击；QQ 协议按钮需 sleep 后再提交
+- 测试浏览器档案 localStorage+IndexedDB(ios-phone-db) 已清，浏览器已关
+
+Stage Summary:
+- 交付：表情搜索弹窗改为「替换式」——打开即删除表情面板本体、搜索面板占面板原位（同宽同高、贴输入栏），关闭恢复；搜索结果上限 36→60 且网格滚动全量展示，缩略图→原图自动降级再自动移除死图，保证展示的全是能正常显示的表情
+- 改动文件：src/components/apps/sticker-search-sheet.tsx（重写）、src/components/apps/wechat.tsx / qq.tsx（面板容器条件渲染+高度实测+openSearch）、src/app/api/sticker-search/route.ts（MAX_ITEMS 60）
+- 数据源链路/缓存/代理/探活兜底沿用 Task 27，零改动

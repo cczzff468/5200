@@ -24,7 +24,7 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SO_360_TIMEOUT_MS = 4_500;
 /** 发表情海外常态超时：只给短预算，回不来不拖慢响应（国内部署它反而快） */
 const FBQ_TIMEOUT_MS = 1_500;
-const MAX_ITEMS = 36;
+const MAX_ITEMS = 60;
 
 interface StickerHit {
   /** 网格缩略图（可直接 <img> 加载） */

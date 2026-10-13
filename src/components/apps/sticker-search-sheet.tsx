@@ -1,23 +1,23 @@
 'use client';
 
 /**
- * 网上表情包搜索弹窗（微信 / QQ 表情面板共用，Task 26 / 27 修订）——对照真机微信「表情搜索」弹窗：
- *  - 表情面板右上角搜索图标打开；弹窗从面板顶起、向上铺满手机壳可视区（盖住消息区+导航栏，
- *    输入栏/表情面板保留在下方可见——弹窗高度按「面板顶→手机壳顶」实测，不再用 vh：
- *    手机壳是固定 844px + transform scale 的模拟器，vh 参照的是浏览器视口，两者不相等，
- *    旧版 66vh 会顶出壳外被 overflow-hidden 裁掉标题和搜索框，focus 拉滚动还会把面板顶出屏幕）
- *  - 顶栏：左收起箭头 + 居中「表情搜索」标题；搜索框「搜索或合成表情」回车或 400ms 防抖实时搜
+ * 网上表情包搜索面板（微信 / QQ 表情面板共用，Task 28 重构）——「替换式」布局：
+ *  - 打开时整个替换表情面板本体（原面板头部/分组栏/网格卸载），本面板占据面板原位置
+ *    （同宽同高、贴输入栏上方），关闭/选中后恢复原面板；不再是盖在消息区上的浮层
+ *  - 高度由父级容器在打开瞬间实测传入（offsetHeight 即壳本地 px，transform 不影响 offsetHeight），
+ *    本组件 h-full 铺满即可，无需再量壳几何
+ *  - 顶栏：收起箭头 + 居中「表情搜索」标题；搜索框「搜索或合成表情」回车或 400ms 防抖实时搜
  *  - 「最近在搜」标签（localStorage 按端隔离，无历史时显示真机预设词组；垃圾桶清空）
- *  - 结果 3 列网格（缩略图），点选即发送（临时 Sticker 不入库，sendSticker 自带面板收起）
+ *  - 结果网格滚动展示全部搜索结果（缩略图挂了自动退回原图，再挂自动移除该格——
+ *    网格里看到的全是能正常显示的表情，不留空白格）
  *  - 底部「精选表情 >」：随机热词出图
  *
  * 数据源在后端 /api/sticker-search（360 图片 + 发表情兜底 + 24h 缓存）；图片走 /api/sticker-image 防盗链代理。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { DEFAULT_STICKER_GROUP_ID, type Sticker } from '@/lib/ios/stickers';
-import { shellScale } from '@/lib/ios/shell-scale';
 
 /** 真机微信冷启动预设词（无搜索历史时展示） */
 const PRESET_TAGS = ['我自己玩', '哈喽哈喽', '救你了', 'mua', '服侍', '抱抱', 'Q', '哭', '不要'];
@@ -32,20 +32,56 @@ interface StickerHit {
   image: string;
 }
 
+/** 单个结果瓦片：缩略图加载失败自动退回原图，原图也挂则上报父级移除（网格不出现空白格） */
+function HitCell({
+  app,
+  index,
+  hit,
+  onPick,
+  onDead,
+}: {
+  app: 'wx' | 'qq';
+  index: number;
+  hit: StickerHit;
+  onPick: (h: StickerHit) => void;
+  onDead: (i: number) => void;
+}) {
+  const [src, setSrc] = useState(hit.thumb);
+  return (
+    <button
+      type="button"
+      data-testid={`${app}-sticker-search-item-${index}`}
+      onClick={() => onPick(hit)}
+      className="aspect-square overflow-hidden rounded-[10px] bg-white shadow-[0_1px_4px_rgba(0,0,0,0.06)] active:opacity-60 dark:bg-white/10"
+    >
+      <img
+        src={src}
+        alt={`表情 ${index + 1}`}
+        className="h-full w-full object-cover"
+        loading="lazy"
+        onError={() => {
+          if (src !== hit.image) setSrc(hit.image);
+          else onDead(index);
+        }}
+      />
+    </button>
+  );
+}
+
 export function StickerSearchSheet({
   app,
-  open,
   onClose,
   onSend,
 }: {
   app: 'wx' | 'qq';
-  open: boolean;
   onClose: () => void;
   /** 点选结果即发送（临时 Sticker；发送链路自带面板收起） */
   onSend: (s: Sticker) => void;
 }) {
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<StickerHit[]>([]);
+  /** 已确认缩略图/原图都挂掉的结果下标 → 从网格移除，保证展示的全是有效图 */
+  const [dead, setDead] = useState<Record<number, true>>({});
   const [phase, setPhase] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [hist, setHist] = useState<string[]>(() => {
     try {
@@ -57,117 +93,67 @@ export function StickerSearchSheet({
     }
   });
   const [errText, setErrText] = useState('搜索失败，换个词试试');
-  /** 弹窗高度（壳本地 px）：面板顶 → 手机壳可视顶。0 = 未量出（兜底用 CSS 高度） */
-  const [sheetH, setSheetH] = useState(0);
-  const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<number | null>(null);
   const seqRef = useRef(0);
 
-  /**
-   * 弹窗高度实测（Task 27）：手机壳是 844px 固定 + transform: scale(s) 的模拟器，
-   * vh 单位参照浏览器视口而非壳——壳内元素的 CSS 像素是「壳本地坐标」。
-   * 量法：面板顶与壳顶的视口距离 ÷ scale = 本地可用高度；面板/输入栏保留在弹窗下方可见。
-   * useLayoutEffect 在绘制前量完，无闪烁；窗口缩放（resize）时重测。
-   */
-  useLayoutEffect(() => {
-    if (!open) {
-      setSheetH(0);
-      return;
-    }
-    const measure = () => {
-      const root = rootRef.current;
-      const panel = root?.parentElement;
-      if (!root || !panel) return;
-      const shell = root.closest('[data-phone-shell]') as HTMLElement | null;
-      if (!shell) return;
-      const pr = panel.getBoundingClientRect();
-      const sr = shell.getBoundingClientRect();
-      const scale = shellScale.value || 1;
-      const h = Math.round((pr.top - sr.top) / scale);
-      if (h > 120) setSheetH(h);
-    };
-    // 挂载即量（面板布局在本次 commit 内已落定，无闪烁）
-    measure();
-    // resize 时 PhoneShell 会同步写 shellScale 但 transform 要等 React 重渲染才生效——
-    // 立刻量会拿到「旧几何 ÷ 新缩放」的错值：双 rAF 等渲染落定后再量，250ms 再兜底量一次
-    let raf1 = 0;
-    let raf2 = 0;
-    let settle = 0;
-    const schedule = () => {
-      cancelAnimationFrame(raf1);
-      cancelAnimationFrame(raf2);
-      window.clearTimeout(settle);
-      raf1 = requestAnimationFrame(() => {
-        raf2 = requestAnimationFrame(measure);
-      });
-      settle = window.setTimeout(measure, 250);
-    };
-    window.addEventListener('resize', schedule);
-    return () => {
-      window.removeEventListener('resize', schedule);
-      cancelAnimationFrame(raf1);
-      cancelAnimationFrame(raf2);
-      window.clearTimeout(settle);
-    };
-  }, [open]);
-
-  /** 打开时重置搜索态 + 聚焦输入框（preventScroll：绝不因 focus 滚动裁剪容器把面板顶出屏幕） */
+  /** 挂载即聚焦输入框（preventScroll：绝不因 focus 滚动裁剪容器把面板顶出屏幕） */
   useEffect(() => {
-    if (!open) return;
-    setQ('');
-    setHits([]);
-    setPhase('idle');
-    setErrText('搜索失败，换个词试试');
     const t = window.setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 180);
     return () => window.clearTimeout(t);
-  }, [open]);
-
-  /** 卸载/关闭清理防抖 */
-  useEffect(() => {
-    if (open) return;
-    if (debounceRef.current) window.clearTimeout(debounceRef.current);
-  }, [open]);
-  useEffect(() => () => {
-    if (debounceRef.current) window.clearTimeout(debounceRef.current);
   }, []);
 
-  const pushHist = useCallback((word: string) => {
-    setHist((prev) => {
-      const next = [word, ...prev.filter((x) => x !== word)].slice(0, HIST_CAP);
-      try {
-        localStorage.setItem(HIST_KEY(app), JSON.stringify(next));
-      } catch {
-        /* 配额满忽略 */
-      }
-      return next;
-    });
-  }, [app]);
+  /** 卸载清理防抖 */
+  useEffect(
+    () => () => {
+      if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    },
+    [],
+  );
 
-  const runSearch = useCallback(async (word: string) => {
-    const kw = word.trim().slice(0, 30);
-    if (!kw) return;
-    const seq = ++seqRef.current;
-    setPhase('loading');
-    setErrText('搜索失败，换个词试试');
-    try {
-      const res = await fetch(`/api/sticker-search?q=${encodeURIComponent(kw)}`);
-      const data = (await res.json()) as { ok?: boolean; items?: StickerHit[]; error?: string };
-      if (seq !== seqRef.current) return; // 已被更新的搜索取代
-      if (!res.ok || !data.ok || !Array.isArray(data.items) || data.items.length === 0) {
-        setErrText(data.error || '没搜到相关表情，换个词试试');
+  const pushHist = useCallback(
+    (word: string) => {
+      setHist((prev) => {
+        const next = [word, ...prev.filter((x) => x !== word)].slice(0, HIST_CAP);
+        try {
+          localStorage.setItem(HIST_KEY(app), JSON.stringify(next));
+        } catch {
+          /* 配额满忽略 */
+        }
+        return next;
+      });
+    },
+    [app],
+  );
+
+  const runSearch = useCallback(
+    async (word: string) => {
+      const kw = word.trim().slice(0, 30);
+      if (!kw) return;
+      const seq = ++seqRef.current;
+      setPhase('loading');
+      setDead({});
+      setErrText('搜索失败，换个词试试');
+      try {
+        const res = await fetch(`/api/sticker-search?q=${encodeURIComponent(kw)}`);
+        const data = (await res.json()) as { ok?: boolean; items?: StickerHit[]; error?: string };
+        if (seq !== seqRef.current) return; // 已被更新的搜索取代
+        if (!res.ok || !data.ok || !Array.isArray(data.items) || data.items.length === 0) {
+          setErrText(data.error || '没搜到相关表情，换个词试试');
+          setPhase('error');
+          return;
+        }
+        setHits(data.items);
+        setPhase('done');
+        pushHist(kw);
+      } catch {
+        if (seq !== seqRef.current) return;
+        setErrText('网络不佳，搜索失败');
         setPhase('error');
-        return;
       }
-      setHits(data.items);
-      setPhase('done');
-      pushHist(kw);
-    } catch {
-      if (seq !== seqRef.current) return;
-      setErrText('网络不佳，搜索失败');
-      setPhase('error');
-    }
-  }, [pushHist]);
+    },
+    [pushHist],
+  );
 
   /** 输入防抖实时搜（400ms；回车立即搜） */
   const onInput = (v: string) => {
@@ -177,6 +163,7 @@ export function StickerSearchSheet({
     if (!kw) {
       setPhase('idle');
       setHits([]);
+      setDead({});
       return;
     }
     debounceRef.current = window.setTimeout(() => void runSearch(kw), 400);
@@ -221,18 +208,12 @@ export function StickerSearchSheet({
     void runSearch(w);
   };
 
-  if (!open) return null;
+  const alive = hits.filter((_, i) => !dead[i]);
 
   return (
     <div
-      ref={rootRef}
-      className="absolute inset-x-0 bottom-full z-40 flex flex-col overflow-hidden rounded-t-[16px] border border-b-0 border-black/[0.08] bg-[#F7F7F7] shadow-[0_-10px_40px_rgba(0,0,0,0.18)] dark:border-white/[0.08] dark:bg-[#232428]"
-      style={{
-        height: sheetH > 0 ? sheetH : undefined,
-        minHeight: sheetH > 0 ? undefined : 380,
-        maxHeight: sheetH > 0 ? undefined : '62vh',
-        animation: 'quick-in-up 0.22s ease-out',
-      }}
+      className="flex h-full w-full flex-col overflow-hidden bg-[#F7F7F7] dark:bg-[#232428]"
+      style={{ animation: 'quick-in-up 0.22s ease-out' }}
       data-testid={`${app}-sticker-search-sheet`}
     >
       {/* 顶栏：收起箭头 + 居中标题 */}
@@ -270,7 +251,7 @@ export function StickerSearchSheet({
           />
         </div>
       </div>
-      {/* 主体：最近在搜 / 结果 */}
+      {/* 主体：最近在搜 / 结果（滚动展示全部结果） */}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-2 pt-3.5">
         {phase === 'idle' && (
           <>
@@ -324,19 +305,33 @@ export function StickerSearchSheet({
             </button>
           </div>
         )}
-        {phase === 'done' && (
+        {phase === 'done' && alive.length > 0 && (
           <div className="grid grid-cols-3 gap-2">
-            {hits.map((h, i) => (
-              <button
-                key={i}
-                type="button"
-                data-testid={`${app}-sticker-search-item-${i}`}
-                onClick={() => pick(h)}
-                className="aspect-square overflow-hidden rounded-[10px] bg-white shadow-[0_1px_4px_rgba(0,0,0,0.06)] active:opacity-60 dark:bg-white/10"
-              >
-                <img src={h.thumb} alt={`表情 ${i + 1}`} className="h-full w-full object-cover" loading="lazy" />
-              </button>
-            ))}
+            {alive.map((h) => {
+              const i = hits.indexOf(h);
+              return (
+                <HitCell
+                  key={`${h.image}-${i}`}
+                  app={app}
+                  index={i}
+                  hit={h}
+                  onPick={pick}
+                  onDead={(di) => setDead((prev) => ({ ...prev, [di]: true }))}
+                />
+              );
+            })}
+          </div>
+        )}
+        {phase === 'done' && alive.length === 0 && (
+          <div className="flex h-40 flex-col items-center justify-center gap-3">
+            <p className="text-[13px] text-black/45 dark:text-white/45">结果图片都失效了，换个词试试</p>
+            <button
+              type="button"
+              onClick={() => void runSearch(q)}
+              className="flex items-center gap-1.5 rounded-full bg-white px-4 py-1.5 text-[13px] text-black/70 shadow-sm active:opacity-60 dark:bg-white/10 dark:text-white/70"
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> 重试
+            </button>
           </div>
         )}
       </div>
