@@ -18802,3 +18802,22 @@ Stage Summary:
 - 交付：①微信/QQ（单聊+群聊）与信息 App 共 5 个聊天输入框全部支持多行输入——粘贴多行文本结构不丢，输入框随内容自动增高（约 6 行封顶后框内滚动），发送/清空后自动回落单行；②微信单聊/群聊发送键出现时表情图标不再被遮挡（[表情][发送] 并存，真机微信排版）；③Enter 发送 / Shift+Enter 换行 / 输入法选词回车不发送在五端统一
 - 改动文件：src/lib/ios/use-auto-textarea.ts（新增）、src/components/apps/{wechat,wx-group,qq,qq-group,chat}.tsx
 - 关键决策：①共享 hook + 既有 ref 组件用 autoResizeTextarea 副作用版（wx-group/qq-group 的 inputRef 承担 @ 选人/发送后聚焦，不能换 ref）；②多行增高用 value-effect 驱动而非 onInput——发送后 setInput('') 程序性清空也能触发回落；③微信表情常驻采用「提出条件渲染」而非复制 JSX——空态/有态共用同一按钮元素，testid 稳定；④信息 App 胶囊 rounded-[18px] 而非保持 rounded-full——单行 36px 时视觉等价（36/2=18），多行时避免胶囊变成巨大圆角；⑤items-end 只用于微信/QQ（真机贴底语义），信息 App 保持居中（iOS iMessage 语义）
+
+---
+Task ID: 17
+Agent: 主协调者 (Z.ai Code)
+Task: 用户反馈——①微信输入框再美化：圆角太圆、框内图标偏小、输入框与左右图标要对齐；②聊天设置里「回车键发送消息」开关下方的说明文案（开启：键盘回车或手机键盘「发送」键直接发出消息；关闭：回车键改为换行，点「发送」按钮才发出）删除
+
+Work Log:
+- 【文案删除】grep 定位 4 处：chat-settings.tsx（微信/QQ 单聊共用设置页 + 信息 App 设置页各一处 <p> 说明）、qq-group.tsx / wx-group.tsx（SwitchRow caption 属性，caption 为可选 prop 可安全移除）——「回车键发送消息」开关行全部保留，仅删说明
+- 【输入框美化（wechat.tsx + wx-group.tsx 同步改，单聊/群聊共用一套设计）】①圆角 rounded-[9px]→rounded-[5px]（真机微信≈5px，与发送键 rounded-[4px] 协调）；②框内 TTS 声波开关 h-7 w-7→h-8 w-8、AudioLines 17px→20px、位置 bottom-1 right-1.5→bottom-[2px] right-1（单行 36px 输入框内垂直正中：2+32/2=18px）；③【根因修复对齐】实测发现输入框比左右图标高 7px（cy 809 vs 816）——textarea 默认 inline-block 在包裹 div 内产生基线降部空隙，textarea 加 block 类消除；④左右控件统一 36px 高（h-9 w-9）：语音圆钮 34→36px（内图标 18→19/21→22）、表情钮包 36×36 flex 居中（图标 25→26px）、加号钮包 36×36 居中、发送键 h-8→h-9 与输入框等高、微信群聊 @ 钮 35→36px（AtSign 19→20px）——items-end 布局下单行全部中线对齐（cy=816 实测一致），多行增高时图标贴底（真机微信语义）
+- 【E2E（agent-browser 实机 393×852）】种 e2e-机主/e2e-小美 联系人+重置 ios-contacts-migrated 标记重建 IndexedDB → 微信登录 → ①对齐实测：input/voice/smile/plus/tts 全部 cy=816（修复前 input=809）；②多行 3 行文本 80px 增高、底部贴齐保持、发送键与表情并存无遮挡；③设置页「回车键发送消息」开关下方无说明文案；④回归：开关 ON 时 Enter 发送成功（气泡+AI 回复）、OFF 后 enterKeyHint 清空+Enter 换行（2 行保留不发送）+点「发送」按钮成功发出多行消息、整页 reload 后开关仍 OFF（持久化）、信息 App 设置页独立开关=ON（App 级隔离天然互不影响）、其他开关（分句/时间感知/动作描写）完好；console/page errors 零新增
+- 【测试数据清理】e2e 联系人随一次性迁移进浏览器 IndexedDB 后服务端已清（SQLite contacts=0），浏览器 localStorage+IndexedDB 整体清除恢复出厂态
+- 【推送】本地仓库是独立快照历史（与远端 496 提交分叉且远端缺整个「回车键发送消息」功能）→ 新建 sync-enter-send 分支基于 origin/main，取 7 个功能文件（src/lib/enter-send.ts 新增 + 5 个聊天 UI + chat-settings）提交 6caa295 并推送 origin main（780c9e1..6caa295 fast-forward）；排除 db/custom.db（运行时数据）/.env/worklog.md/截图产物
+- 验证：bunx tsc --noEmit 0 错误；eslint 4 个改动文件 0 问题（wechat.tsx 仅既有 BABEL 500KB 提示）；dev.log 编译干净无新错误；本地 HEAD src 与 origin/main 完全一致
+
+Stage Summary:
+- 交付：①微信单聊+群聊输入框——圆角收小至 5px、框内 TTS 图标放大（17→20px 且在单行输入框内垂直居中）、输入框与左右图标精确对齐（根因是 textarea inline-block 基线空隙，加 block 修复；左右控件统一 36px 高实现单行中线对齐、多行贴底）；②「回车键发送消息」开关的说明文案在微信/QQ 单聊、信息、QQ 群、微信群全部设置页删除（开关功能本体不受影响）
+- 改动文件：src/components/apps/{chat-settings,qq-group,wx-group,wechat}.tsx（本次）；推送内容另含上会话未推的 src/lib/enter-send.ts、src/components/apps/{chat,qq}.tsx（enter-send 功能本体）
+- 关键决策：①单聊/群聊同步改保持共用设计语言；②对齐修复选 textarea display:block 而非改容器 items-center——既修单行对齐又保留多行时图标贴底的真机行为；③推送采用「基于 origin/main 重建功能文件」而非强推/合并快照历史——远端保持线性历史且不带入 db/.env 等运行时文件
+- 环境注意：本机有守护进程周期性把 HEAD 拉回 main 并以会话 UUID 自动快照提交；后续推送须在单条命令内完成 checkout sync-enter-send → 取文件 → commit → push origin sync-enter-send:main
