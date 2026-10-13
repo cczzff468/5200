@@ -288,6 +288,7 @@ import {
   buildMomentPostRule,
   buildVisionRules,
   cleanBubbleText,
+  stripMsgHandleText,
   extractRichActionParts,
   actionVerb,
   mergeRichSegments,
@@ -424,8 +425,10 @@ interface QQMsg {
   fam?: QQFamData;
   /** 通知行数据（kind = notice 时有值） */
   notice?: QQNoticeData;
-  /** 系统提示行数据（kind = 'sys' 时有值）：拉黑/解除拉黑等状态变更提示 */
-  sys?: { text: string };
+  /** 系统提示行数据（kind = 'sys' 时有值）：拉黑/解除拉黑等状态变更提示。
+   *  pat = 拍一拍事件（Task 30）：by='me' 我拍对方（self=我拍了自己）/ by='peer' 对方拍我，
+   *  text = 拍一拍文案后缀——带 pat 的系统行进 AI 上下文（按双方真名序列化），让 AI 知道被拍/拍过谁与文案 */
+  sys?: { text: string; pat?: { by: 'me' | 'peer'; self?: boolean; text?: string } };
   /** 申请解除拉黑卡片数据（kind = 'blockreq' 时有值）：status pending=待处理 accepted=已同意 rejected=已拒绝；
    *  40-a 起双向——from 缺省视为 'char'（角色发起，用户点同意/拒绝）；from='user'（用户发起，角色用标记决策） */
   blkreq?: { reason: string; status: 'pending' | 'accepted' | 'rejected'; from?: 'char' | 'user' };
@@ -572,6 +575,37 @@ type ChatLayer =
 /** QQ 登录态存的是本机联系人 id；读写一律经 accLs(key, 'qq') 现算按账号隔离（大号=原键，旧登录不丢） */
 const LS_SESSION = 'qq-session-user-id';
 const lsMsgsKey = (contactId: string) => `qq-chat-msgs:${contactId}`;
+
+// ---------------- 拍一拍文案（Task 30：QQ 设置›头像双击动作里设置，按账号隔离） ----------------
+
+/** 拍一拍文案存储键（accLs 按当前 QQ 账号加作用域后缀：大号无后缀、小号 --{accId}） */
+const qqClapKey = (): string => accLs('qq-clap-text', 'qq');
+
+/** 读取拍一拍文案（未设置返回空串；文案是「拍了拍」的后缀，如「的小脑袋」） */
+function readQqClapText(): string {
+  try {
+    return (window.localStorage.getItem(qqClapKey()) ?? '').trim().slice(0, 30);
+  } catch {
+    return '';
+  }
+}
+
+/** 保存拍一拍文案（空串 = 清除，回退「未设置」） */
+function writeQqClapText(text: string): void {
+  try {
+    window.localStorage.setItem(qqClapKey(), text.trim().slice(0, 30));
+  } catch {
+    // 存储异常静默：拍一拍文案退化为默认展示
+  }
+}
+
+/** 拍一拍系统行的 AI 上下文序列化（Task 30）：按双方名字显式拼接（文案 = 拍一拍后缀，原样拼在句尾），
+ *  不用「你/我」代词——assistant 消息里「你」指 AI 本身，混用会造成主语伪造 */
+function qqPatHistoryLine(pat: NonNullable<QQMsg['sys']>['pat'], meName: string, peerName: string): string {
+  const suffix = pat?.text ?? '';
+  if (pat?.by === 'me') return pat.self ? `[${meName}拍了拍自己${suffix}]` : `[${meName}拍了拍${peerName}${suffix}]`;
+  return `[${peerName}拍了拍${meName}${suffix}]`;
+}
 
 /** AI 特殊消息标记 → QQ 消息记录（红包/转账/亲属卡/位置/表情包；渲染与交互复用用户手动发送的同款卡片）。
  *  content 存可读摘要：进入 AI 上下文让角色知道自己发过什么；卡片渲染按 kind 走，不显示 content */
@@ -1535,6 +1569,23 @@ function QqAvatar({ src, alt, size = 44 }: { src: string | null; alt: string; si
     >
       Q
     </div>
+  );
+}
+
+/** 引用卡迷你缩略图（Task 30）：被引用的图片/表情在 QQ 引用卡里显示 36px 小图——
+ *  加载失败自动隐藏（引用卡退回纯文字行，quote.content 兜底可读） */
+function QqQuoteThumb({ src, mine }: { src: string; mine: boolean }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <img
+      src={src}
+      alt="引用图片"
+      data-testid="qq-quote-thumb"
+      draggable={false}
+      className={`h-9 w-9 shrink-0 rounded-[6px] object-cover ${mine ? 'bg-white/15' : 'bg-black/[0.06] dark:bg-white/10'}`}
+      onError={() => setFailed(true)}
+    />
   );
 }
 
@@ -4133,6 +4184,10 @@ function ChatPage({
   const photoCarryRef = useRef('');
   // 一起听遥控（第三十七轮）：流式分段尾部未闭合的半截播控指令（如「[快进:」），下一段拼回（照片标签 carry 同款机制）
   const musicHoldRef = useRef('');
+  // Task 30 AI 引用：[引用:M编号] 编号暂存（挂到紧随其后的第一条正文消息上；跨流式分段/切分边界接力）
+  // + 编号→源消息映射（runAiTurn 开回合时构建 / 后台接力投递时按落盘记录重算）
+  const quotePendingRef = useRef<string | null>(null);
+  const quoteMapRef = useRef<Map<string, QQMsg> | null>(null);
 
   /**
    * 消费照片任务（微信端同款管线移植）：配置完整时每条先生「正在拍照…」系统行，异步生成成功后落照片消息 +
@@ -4300,6 +4355,27 @@ function ChatPage({
               msgIdx += 1;
               t += 600 + Math.floor(Math.random() * 600);
             }
+            continue;
+          }
+          // Task 30 AI 引用（[引用:M编号]）：编号暂存 ref，挂到紧随其后的第一条正文消息上
+          //（见下方文字分支；标记与正文跨流式分段/切分边界时靠 ref 跨段接力）
+          if (part.action.kind === 'quote') {
+            quotePendingRef.current = part.action.targetId.trim();
+            continue;
+          }
+          // Task 30 AI 拍一拍（[拍一拍:文案]/[拍一拍]）：系统提示行「「角色」拍了拍你+文案」——
+          // 文案由 AI 按人设/记忆/上下文自己决定；拍一拍不是消息，前后正文照常投递
+          if (part.action.kind === 'pat') {
+            const patText = part.action.targetId.trim().slice(0, 30);
+            out.push({
+              id: uid(),
+              role: 'peer',
+              content: '',
+              time: t,
+              kind: 'sys',
+              sys: { text: `「${peer.name}」拍了拍你${patText}`, pat: { by: 'peer', ...(patText ? { text: patText } : {}) } },
+            });
+            t += 1;
             continue;
           }
           // 46-f：视觉自主决策动作——[换头像:图片消息ID] / [换朋友圈背景:图片消息ID] / [存相册:图片消息ID]
@@ -4478,10 +4554,21 @@ function ChatPage({
               // 半截上屏；流式路径上游已用 splitUnfinishedPhotoTag 提前切走尾段，此处通常为空操作）
               const safePhotoText = stripTbEchoText(stripMtEchoText(stripUnfinishedPhotoTag(photoFreeText)));
               // 表情包开关关闭：文字里的 emoji 硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
-              // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-              const clean = cleanBubbleText(stickersOnNow ? safePhotoText : stripEmojiCodes('qq', stripEmojiText(safePhotoText.replace(/\[表情包\]|\[表情\]/g, ' '))));
+              // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙；
+              // 门牌号剥除（Task 30）：模型偶尔裸抄历史行首的 [M数字] 编号进正文，统一剥掉
+              const clean = cleanBubbleText(stripMsgHandleText(stickersOnNow ? safePhotoText : stripEmojiCodes('qq', stripEmojiText(safePhotoText.replace(/\[表情包\]|\[表情\]/g, ' ')))));
               if (!clean) continue;
-              out.push({ id, role: 'peer', content: clean, time: t });
+              // Task 30 AI 引用：此前剥出过 [引用:M编号] → 挂到这第一条正文消息上（QQ 引用卡随气泡展示）；
+              // 编号查不到（跨回合编号漂移/后台接力无映射）→ 静默丢弃引用，正文照常
+              let attachQuote: QQMsg['quote'] | null = null;
+              if (quotePendingRef.current) {
+                const qSrc = quoteMapRef.current?.get(quotePendingRef.current) ?? null;
+                if (qSrc && !qSrc.recalled) {
+                  attachQuote = { name: qSrc.role === 'me' ? me.name : peer.name, content: quoteContentOf(qSrc), id: qSrc.id, time: qSrc.time };
+                }
+                quotePendingRef.current = null;
+              }
+              out.push({ id, role: 'peer', content: clean, time: t, ...(attachQuote ? { quote: attachQuote } : {}) });
             }
             msgIdx += 1;
             t += 600 + Math.floor(Math.random() * 600);
@@ -4539,10 +4626,26 @@ function ChatPage({
         if (!m.recalled && m.role === 'me' && m.kind === 'image') userImgSeq.set(m.id, ++seq);
       }
     }
+    // Task 30 AI 引用编号：会话内每条消息的绝对位置编号（M1..Mn；撤回/错误/通知行/申请卡不占号）——
+    // 历史行前缀 [M数字] 与 [引用:编号] 反查共用同一映射；绝对位置跨回合稳定（后台接力重算一致）
+    const quoteMap = new Map<string, QQMsg>();
+    const quoteIdOf = new Map<string, string>();
+    {
+      let n = 0;
+      for (const m of base) {
+        if (m.recalled || m.error || m.kind === 'notice' || m.kind === 'blockreq') continue;
+        n += 1;
+        quoteMap.set(`M${n}`, m);
+        quoteIdOf.set(m.id, `M${n}`);
+      }
+    }
+    quoteMapRef.current = quoteMap;
+    quotePendingRef.current = null; // 回合开始清引用暂存：跨段残留只可能属于上一回合
     const history = base
       .filter(
         (m) =>
-          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'call' || m.kind === 'location' || m.kind === 'song') && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
+          // 拍一拍系统行（Task 30）也进历史：AI 要知道被拍/拍过谁与文案（按双方名字序列化，无主语歧义）
+          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'call' || m.kind === 'location' || m.kind === 'song' || (m.kind === 'sys' && !!m.sys?.pat)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
       )
       .slice(-20)
       .map((m) => {
@@ -4569,9 +4672,10 @@ function ChatPage({
         }`;
         return {
         role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
-        // 我的表情以 [发送了表情：意思] 进入历史（AI 理解含义）；AI 自己发的表情回写成 [表情包:ID]
-        // 示范正确输出格式（意思靠 system 清单反查），避免它模仿我的记录格式导致发表情变文字
+        // 行首 [M数字] = 消息编号（AI 用 [引用:编号] 引用它）；我的表情以 [发送了表情：意思] 进入历史（AI 理解含义）；
+        // AI 自己发的表情回写成 [表情包:ID] 示范正确输出格式（意思靠 system 清单反查），避免它模仿我的记录格式导致发表情变文字
         content:
+          (quoteIdOf.has(m.id) ? `[${quoteIdOf.get(m.id)}] ` : '') +
           pre +
           (m.kind === 'sticker' && m.stk
             ? m.role === 'me'
@@ -4633,7 +4737,10 @@ function ChatPage({
                               ? tbShareHistoryLine(m.tbshare.sid)
                               : m.kind === 'tbdraft' && m.tbdraft
                                 ? tbDraftHistoryLine(m.tbdraft.did)
-                                : m.content),
+                                // 拍一拍系统行（Task 30）：按双方名字显式序列化（文案后缀原样拼接），AI 无主语歧义
+                                : m.kind === 'sys' && m.sys?.pat
+                                  ? qqPatHistoryLine(m.sys.pat, me.name, peer.name)
+                                  : m.content),
         };
       });
 
@@ -5093,6 +5200,18 @@ function ChatPage({
     (items: BgPendingItem[]) => {
       // 接力 generate 存的是完整回复原文：按该会话自己的回复条数决定解析模式（与 finalize 同语义）
       const bgAsSingle = getReplyCount(sessionKey) <= 1;
+      // Task 30：接力回复同样带消息编号映射——落盘记录按绝对位置重算（与生成侧同口径），
+      // 生成时 AI 看到的 [引用:M编号] 在投递侧能对上同一条消息（中途删消息才可能漂移，罕见可容忍）
+      {
+        let n = 0;
+        const map = new Map<string, QQMsg>();
+        for (const m of loadMsgs(peer.id)) {
+          if (m.recalled || m.error || m.kind === 'notice' || m.kind === 'blockreq') continue;
+          n += 1;
+          map.set(`M${n}`, m);
+        }
+        quoteMapRef.current = map;
+      }
       for (const item of items) {
         if (item.single) {
           const r = buildReplyMsgs(item.texts.join(''), bgAsSingle, Date.now(), uid(), 0);
@@ -5562,7 +5681,10 @@ function ChatPage({
     if (isImage && m.content) items.push({ key: 'saveimg', label: '保存', icon: B.save });
     if (!isFrLocked) items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
     if ((isText || isVoice) && !isFrLocked) items.push({ key: 'edit', label: '编辑', icon: B.edit });
-    if (isText && !isFrLocked) items.push({ key: 'quote', label: '引用', icon: B.quote });
+    // 引用（Task 30 扩展）：文字之外，图片/表情/语音/文字图片/位置/歌曲也能引用——
+    // QQ 引用卡按源消息类型显示迷你缩略图/语音图标（无源时退回文字占位，quoteContentOf 兜底）
+    const isQuotable = isText || isVoice || isImage || m.kind === 'sticker' || m.kind === 'textcard' || m.kind === 'location' || m.kind === 'song';
+    if (isQuotable && !isFrLocked) items.push({ key: 'quote', label: '引用', icon: B.quote });
     items.push({ key: 'multi', label: '多选', icon: B.multi });
     if (!isFrLocked) items.push({ key: 'recall', label: '撤回', icon: B.recall });
     items.push({ key: 'forward', label: '转发', icon: B.forward });
@@ -5589,6 +5711,41 @@ function ChatPage({
     if (items.length === 0) return;
     setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, items.length) });
   }, !selectMode);
+
+  // ---------------- 拍一拍（Task 30：双击聊天里两侧头像触发；AI 侧由 [拍一拍:文案] 标记发起） ----------------
+
+  /** 对方头像单/双击分流计时器（单击开状态卡延迟 260ms 等待可能的双击；双击拍一拍时取消） */
+  const peerAvatarTapRef = useRef<number | null>(null);
+
+  /** 拍一拍：系统行落盘（我拍对方/拍自己，带我在 QQ 设置›头像双击动作里设置的拍一拍文案后缀）+ 触发 AI 回合——
+   *  AI 从上下文得知被拍/我拍了拍自己与文案（人设决定怎么反应，也可以用 [拍一拍:文案] 拍回来）。
+   *  对方正在回复时不触发回合：拍一拍行照常落盘，下一轮上下文自然带上 */
+  const patPeer = (self = false) => {
+    const clap = readQqClapText();
+    const msg: QQMsg = {
+      id: uid(),
+      role: 'me',
+      content: '',
+      time: Date.now(),
+      kind: 'sys',
+      sys: {
+        text: self ? `你拍了拍自己${clap}` : `你拍了拍「${peer.name}」${clap}`,
+        pat: { by: 'me', ...(self ? { self: true } : {}), ...(clap ? { text: clap } : {}) },
+      },
+    };
+    setMsgs((prev) => (prev.some((x) => x.id === msg.id) ? prev : [...prev, msg]));
+    saveMsgs(peer.id, [...loadMsgs(peer.id), msg]); // 立即落盘：AI 回合管线与 finalize 合并都能读到
+    if (!isChatStreaming(sessionKey) && !isAiDelivering(sessionKey)) {
+      window.setTimeout(() => runAiTurnRef.current?.(null, [msg]), 80);
+    }
+  };
+
+  /** 双击头像统一入口：e.detail >= 2 = 拍一拍；返回 true 表示已按双击处理（调用方跳过单击行为） */
+  const onAvatarDoubleTap = (e: { detail: number }, self = false): boolean => {
+    if (e.detail < 2) return false;
+    patPeer(self);
+    return true;
+  };
 
   /** 退出多选模式（同时退出转发流程） */
   const exitSelect = useCallback(() => {
@@ -6439,13 +6596,27 @@ function ChatPage({
                   </span>
                 )}
                 {!mine && (
-                  /* 点击对方头像：弹出角色状态卡（多选模式下点击头像仍走勾选，由行级 onClickCapture 拦截） */
+                  /* 单击对方头像：弹出角色状态卡（延迟 260ms 等待可能的双击）；双击 = 拍一拍（取消状态卡）。
+                     （多选模式下点击头像仍走勾选，由行级 onClickCapture 拦截） */
                   <button
                     type="button"
                     data-testid="qq-peer-avatar"
-                    aria-label={`查看${peer.name}的状态`}
+                    aria-label={`单击查看${peer.name}的状态，双击拍一拍`}
                     className="shrink-0 cursor-pointer transition-opacity active:opacity-70"
-                    onClick={() => setPeerStatusOpen(true)}
+                    onClick={(e) => {
+                      if (onAvatarDoubleTap(e)) {
+                        if (peerAvatarTapRef.current !== null) {
+                          window.clearTimeout(peerAvatarTapRef.current);
+                          peerAvatarTapRef.current = null;
+                        }
+                        return;
+                      }
+                      if (peerAvatarTapRef.current !== null) window.clearTimeout(peerAvatarTapRef.current);
+                      peerAvatarTapRef.current = window.setTimeout(() => {
+                        peerAvatarTapRef.current = null;
+                        setPeerStatusOpen(true);
+                      }, 260);
+                    }}
                   >
                     <QqAvatar src={peer.avatar} alt={peer.name} size={40} />
                   </button>
@@ -6661,6 +6832,11 @@ function ChatPage({
                       {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方） */}
                       {m.quote && (() => {
                         const qTime = m.quote.time ?? (m.quote.id ? msgs.find((x) => x.id === m.quote?.id)?.time : undefined);
+                        // Task 30：引用块按源消息类型加迷你预览——图片/表情=36px 缩略图，语音=图标+时长；
+                        // 源消息已删/撤回或图挂掉时退回纯文字（quote.content 已由删除/撤回联动改写）
+                        const qSrc = m.quote.id ? msgs.find((x) => x.id === m.quote?.id) ?? null : null;
+                        const qThumb = qSrc && !qSrc.recalled ? (qSrc.kind === 'image' ? qSrc.img?.src ?? qSrc.content : qSrc.kind === 'sticker' ? qSrc.stk?.url : null) ?? null : null;
+                        const qVoice = qSrc && !qSrc.recalled && qSrc.kind === 'voice' ? qSrc.voice ?? null : null;
                         return (
                           <div
                             data-testid="qq-quote-block"
@@ -6673,9 +6849,19 @@ function ChatPage({
                               </span>
                               <CornerRightDown className={`h-3.5 w-3.5 shrink-0 ${mine ? 'text-white/70' : 'text-black/35 dark:text-white/40'}`} />
                             </div>
-                            <p className={`mt-0.5 line-clamp-2 whitespace-pre-wrap break-all text-[14.5px] leading-[1.45] ${mine ? 'text-white' : 'text-black/80 dark:text-white/85'}`}>
-                              {m.quote.content}
-                            </p>
+                            <div className="mt-0.5 flex items-center gap-2">
+                              {qThumb && <QqQuoteThumb src={qThumb} mine={mine} />}
+                              <p className={`min-w-0 flex-1 line-clamp-2 whitespace-pre-wrap break-all text-[14.5px] leading-[1.45] ${mine ? 'text-white' : 'text-black/80 dark:text-white/85'}`}>
+                                {qVoice ? (
+                                  <span className="inline-flex items-center gap-1" data-testid="qq-quote-voice-row">
+                                    <AudioLines className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+                                    [语音]{qVoice.duration ? ` ${qVoice.duration}"` : ''}
+                                  </span>
+                                ) : (
+                                  m.quote.content
+                                )}
+                              </p>
+                            </div>
                           </div>
                         );
                       })()}
@@ -6699,7 +6885,18 @@ function ChatPage({
                     {renderTranslations(m.id, m.content)}
                   </div>
                 )}
-                {mine && <QqAvatar src={me.avatar} alt={me.name} size={40} />}
+                {mine && (
+                  /* Task 30 拍一拍：双击自己的头像 = 拍一拍自己（QQ 同款互动）；单击无动作 */
+                  <button
+                    type="button"
+                    data-testid="qq-me-avatar"
+                    aria-label="双击拍一拍自己"
+                    className="shrink-0 cursor-pointer"
+                    onClick={(e) => onAvatarDoubleTap(e, true)}
+                  >
+                    <QqAvatar src={me.avatar} alt={me.name} size={40} />
+                  </button>
+                )}
                 {/* 拉黑图标（红色 ! 圆点）：对方的消息在气泡右侧 */}
                 {!mine && blockedIconOf(m)}
                 {selectMode && isSelectable(m) && mine && (
@@ -13511,10 +13708,27 @@ function SettingsPage({
   onLogout: () => void;
   onToast: (m: string) => void;
 }) {
+  // Task 30 头像双击动作：拍一拍文案编辑（QQ 侧独立于微信；按账号隔离存储）
+  const [clapOpen, setClapOpen] = useState(false);
+  const [clapDraft, setClapDraft] = useState('');
+  const [clapText, setClapText] = useState<string>(() => readQqClapText());
+  const openClap = () => {
+    setClapDraft(clapText);
+    setClapOpen(true);
+  };
+  const saveClap = () => {
+    setClapOpen(false);
+    const t = clapDraft.trim();
+    writeQqClapText(t);
+    setClapText(t);
+    onToast('拍一拍已保存');
+  };
+  const clapShown = clapText ? `拍了拍${clapText}` : '未设置';
   const rows: { icon: React.ReactNode; color: string; label: string; hint?: string; onClick?: () => void; testid?: string }[] = [
     { icon: <Bell className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '消息通知', onClick: () => onToast('消息通知暂未开放') },
     { icon: <SlidersHorizontal className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '模式选择', hint: '普通模式', onClick: () => onToast('模式选择暂未开放') },
     { icon: <Shirt className="h-5 w-5" strokeWidth={1.9} />, color: '#F0479C', label: '个性装扮与特权外显', onClick: () => onToast('个性装扮暂未开放') },
+    { icon: <Sparkles className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '头像双击动作', hint: clapShown, onClick: openClap, testid: 'qq-settings-clap' },
     { icon: <Settings className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '通用', onClick: () => onToast('通用设置暂未开放') },
   ];
   const privacyRows: { icon: React.ReactNode; label: string }[] = [
@@ -13615,6 +13829,47 @@ function SettingsPage({
           <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
         </button>
       </div>
+
+      {/* 头像双击动作设置弹窗（Task 30）：编辑拍一拍文案——好友双击我的头像拍一拍时会显示这个后缀 */}
+      {clapOpen && (
+        <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/40 px-8" data-testid="qq-clap-edit-layer" onClick={() => setClapOpen(false)}>
+          <div
+            className="w-full max-w-[300px] overflow-hidden rounded-[14px] bg-white shadow-2xl dark:bg-[#2A2C31]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="pb-1 pt-4 text-center text-[16px] font-medium">头像双击动作</p>
+            <p className="pb-1 text-center text-[12px] text-black/40 dark:text-white/40">好友双击你的头像拍一拍时会看到「拍了拍+后缀」</p>
+            <div className="px-4 pb-3 pt-1">
+              <input
+                value={clapDraft}
+                onChange={(e) => setClapDraft(e.target.value)}
+                maxLength={30}
+                autoFocus
+                data-testid="qq-clap-edit-input"
+                placeholder="如：的小脑袋（留空清除）"
+                className="w-full rounded-[8px] border border-black/10 bg-black/[0.03] px-2.5 py-2 text-[15px] leading-[1.45] outline-none focus:border-[#0099FF] dark:border-white/15 dark:bg-white/[0.06]"
+              />
+            </div>
+            <div className="flex border-t border-black/10 dark:border-white/10">
+              <button
+                type="button"
+                onClick={() => setClapOpen(false)}
+                className="h-11 flex-1 text-[16px] active:bg-black/5 dark:active:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="qq-clap-edit-save"
+                onClick={saveClap}
+                className="h-11 flex-1 text-[16px] font-medium text-[#0099FF] active:bg-black/5 dark:active:bg-white/10"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

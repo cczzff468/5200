@@ -19057,3 +19057,27 @@ Stage Summary:
 - 交付：搜索面板去掉「精选表情」入口；长按任意搜索结果弹真微信同款预览卡（发送/添加到表情/已保存），添加即入「我的表情」默认分组（原图探活失败自动退缩略图，toast 反馈）；已保存的表情再长按直接显示「✓已保存」不可重复添加；点选发送行为不变
 - 改动文件：src/components/apps/sticker-search-sheet.tsx（重写：删精选+HitCell 长按+预览卡+probeImage 公共化）、src/components/apps/wechat.tsx / qq.tsx（sheet props 接线各 1 处）
 - 保存的表情与手动添加的表情同构（id/url/meaning/groupId/createdAt），管理页改意思/删除/分组全链路自动兼容
+
+---
+Task ID: 30
+Agent: 主协调者 (Z.ai Code)
+Task: ①图片/表情/语音也可引用+AI 也能引用 ②双击聊天两侧头像拍一拍 ③微信个人资料可改拍一拍文案 ④QQ 设置加「头像双击动作」可改拍一拍文案 ⑤AI 也会拍一拍（文案按人设/记忆/上下文自主决定）⑥拍一拍事件与文案进 AI 上下文（我拍TA/AI拍我双向感知）⑦微信个人资料除头像/拍一拍外全部全局写回
+
+Work Log:
+- 【标记层 chat-rich.ts】新增动作 kind 'quote'（[引用:消息编号]）与 'pat'（[拍一拍:文案]/[拍了拍:文案]，文案整段保留可含冒号标点；[拍一拍] 无文案也认）；ACTION_RE/ACTION_TAIL_RE/OPEN_TAIL_RE 同步扩充；buildRichRules（仅微信/QQ 单聊引擎调用）追加【引用回复】（编号=门牌号铁律：严禁裸抄 [M数字] 进正文+必须用 [引用:编号] 完整格式）与【拍一拍能力】（文案按人设/关系/气氛自主决定，勿每轮拍）两条教学
+- 【AI 引用·编号体系】两 App runAiTurn 按会话绝对位置给每条消息编号 M1..Mn（撤回/错误/notice/blockreq 不占号）——历史行首加 [M数字] 前缀 + 同一映射注入投递上下文（微信走 WxTurnCtx.quoteMap/pendingQuote，QQ 走 quoteMapRef/quotePendingRef，流式分段跨段靠它接力）；buildReplyMsgs 剥出 [引用:编号] 暂存 → 挂到紧随其后的第一条正文消息（quote.name/content/id/time 由源消息反查 quoteContentOf）；退出网页后台接力投递（deliverBgItems）按落盘记录重算同口径映射，编号跨回合稳定；防模仿双保险：stripMsgHandleText 落盘前剥除正文裸 [M数字]
+- 【AI 拍一拍】buildReplyMsgs 动作分支：[拍一拍:文案] → 系统行「「角色」拍了拍你+文案」（sys.pat={by:'peer',text}），前后正文照常投递
+- 【拍一拍上下文】sys 消息新增 pat 字段（by me/self/text）；带 pat 的系统行进 AI 历史（filter 放行 + 按双方真名显式序列化 wxPatHistoryLine/qqPatHistoryLine——「凡凡拍了拍小柚的小脑袋」/「小柚拍了拍凡凡」/「凡凡拍了拍自己」，无你/我代词防主语伪造）
+- 【双击头像拍一拍】两 App 聊天页：双击对方头像=拍一拍（系统行「你拍了拍「TA」+我的拍一拍文案」+80ms 后触发 AI 回合——AI 立刻知道被拍与文案）；双击自己头像=拍一拍自己（「你拍了拍自己+文案」，微信 my 头像新包 button、QQ 沿用行尾头像加 dblclick）；对方头像单击开状态卡延迟 260ms 等待双击（双击时取消）；对方正在回复时只落盘不触发回合（下一轮上下文自然带上）
+- 【拍一拍文案设置】微信：个人资料页「拍一拍」行从 toast 占位改为可编辑弹窗（编辑消息同款样式），存 accLs('wx-clap-text','wx') 按账号隔离，行值实时回显「拍了拍XX」；QQ：设置页功能组新增「头像双击动作」行（Sparkles 图标+hint 显示当前文案）→ 弹窗编辑 accLs('qq-clap-text','qq')
+- 【微信个人资料全局化】ProfilePage 名字/性别/地区/手机号/微信号五行全部可编辑（弹窗预填现值）→ updateContact 写机主联系人档案：contact-updated 全端广播（微信 me 快照/联系人 App/QQ/信息/电话）+ 名字经 owner-profile-sync 镜像设置›个人信息；头像（按 App 槽位）与拍一拍文案（按 App 独立存储）是仅有的两个非全局项，二维码行维持 toast 占位
+- 【引用块升级·对照截图】微信引用胶囊按源消息类型渲染：图片/表情 → 迷你缩略图（WxQuoteThumb 36px 圆角小图，onError 自隐藏退回文字）+「名字：[表情] 意思」；语音 → AudioLines 图标+时长；QQ 引用卡同样加缩略图/语音行；源消息删/撤回或图挂掉退回纯文字（引用联动改写照旧）
+- 【引用入口扩展】两 App 长按菜单「引用」从仅文字放开到 文字/图片/表情/语音/文字图片/位置/歌曲（quoteContentOf 占位快照全类型兜底）
+- 【E2E（agent-browser 393×852）】IndexedDB 播种 e2e-我(user 13800001234/wx-e2e-me/QQ 20001234)+e2e-小柚(char 双平台好友)+kv 播种微信消息（文本/表情[委屈巴巴求抱抱]/图片[识图描述]/语音[转写]4″）→ 微信手机号登录 → 小柚会话：长按表情气泡 → 菜单含「引用」→ 引用条「引用 凡凡：[表情] 委屈巴巴求抱抱」→ 发送 → 引用块带粉色迷你缩略图（wx-quote-thumb）✓ → 让 AI 拍：回复出现系统行「「小柚」拍了拍你的小脸蛋」（文案 AI 自定）✓ → 让 AI 引用「在干嘛呀」：AI 回复挂引用块「凡凡：在干嘛呀」✓（首轮模型裸抄 [M12] 被门牌号剥除兜住，加强规则后规范输出 [引用:M12]）→ 双击对方头像 → 系统行「你拍了拍「小柚」」+ AI 立刻语音回「哎呀，被你拍到了」（落盘 sys.pat={by:'me'} 验证）✓ → 个人资料拍一拍行设「的小脑袋」→ 行显示「拍了拍的小脑袋」→ 双击头像 → 「你拍了拍「小柚」的小脑袋」✓ → 双击自己头像 → 「你拍了拍自己的小脑袋」✓（AI 还吐槽「傻瓜，拍自己干嘛呀[笑哭]」）→ 名字改「凡凡测试」→ 行+IndexedDB 联系人记录同步实变（全局写回）→ 改回「凡凡」✓ → QQ 20001234 登录（协议勾选）→ 设置 › 头像双击动作设「的小脸蛋」→ hint「拍了拍的小脸蛋」✓ → 小柚会话发消息 → AI 主动拍「「小柚」拍了拍你的小脑袋」（自定文案）+ 问「凡凡你突然拍我做什么呀」→ 双击头像 → 「你拍了拍「小柚」的小脸蛋」→ AI 回「嘻嘻，被你拍到啦～」✓ → 长按 AI 的[害羞]表情 → 菜单含「引用」→ 引用条「引用 小柚：[害羞]」→ 发送 → QQ 引用卡「小柚 09:58 [害羞]」随气泡 ✓；agent-browser errors 空、dev.log 仅历史 instrumentation Edge 警告
+- 【坑】微信/QQ 聊天记录持久化在 IndexedDB kv store（{key:'wx-chat-msgs:cid',value}），直接写 localStorage 无效——播种须写 kv 后 reload 让开机注水生效；QQ 消息页头点击头像=closeApp（onAvatar={closeApp}，抽屉要从「联系人」标签页头头像开）；聊天长按要精准派发到气泡内 img（行容器 flex-row-reverse 时空白区无监听）；agent-browser fill 需要 ref（@e79），自绘 contenteditable 用 ClipboardEvent paste 注入
+- 测试浏览器档案 localStorage+IndexedDB(ios-phone-db) 已清恢复出厂，浏览器已关
+
+Stage Summary:
+- 交付：引用全面开放——文字/图片/表情/语音/文字图片/位置/歌曲都能长按引用，引用块按源类型显示迷你缩略图/语音图标（微信胶囊+QQ 引用卡两套样式，对照用户截图的「Z：[图]」形态）；AI 学会引用（消息门牌号 [M数字]+[引用:编号] 标记→引用块）与拍一拍（[拍一拍:文案] 文案按人设/记忆/上下文自主决定）；双击聊天两侧头像拍一拍（拍对方/拍自己，系统行带我在个人资料/设置里配的文案）并即时触发 AI 回合——AI 知道被拍、知道文案、能按人设反应甚至拍回来；拍一拍事件双向按真名进 AI 上下文；微信个人资料除头像/拍一拍外（名字/性别/地区/手机号/微信号）全部全局写回联系人档案跨 App 生效，QQ 设置新增「头像双击动作」编辑拍一拍文案（两 App 文案按账号隔离互不影响）
+- 改动文件：src/lib/chat-rich.ts（quote/pat 标记+规则+stripMsgHandleText）、src/components/apps/wechat.tsx（编号映射/引用挂载/拍一拍/头像双击/资料页编辑/引用块缩略图）、src/components/apps/qq.tsx（同能力移植+设置页头像双击动作+QQ 引用卡预览）
+- 已知边界：AI 引用/拍一拍为提示词引导行为（模型偶尔不规范输出由门牌号剥除+标记解析双兜底）；群聊引擎（wx-group/qq-group）不含引用/拍一拍教学；后台接力投递的 [引用:编号] 按落盘记录重算映射，会话中途删消息才可能编号漂移

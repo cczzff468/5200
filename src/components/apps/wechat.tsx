@@ -127,6 +127,7 @@ import {
   buildMomentPostRule,
   buildVisionRules,
   cleanBubbleText,
+  stripMsgHandleText,
   extractRichActionParts,
   actionVerb,
   mergeRichSegments,
@@ -426,8 +427,10 @@ interface WxMsg {
   /** 文字图片卡片数据（kind='textcard'）：印在卡片上的文字（AI 代笔/用户代写），无生图依赖 */
   card?: { text: string };
   loc?: { name: string; address: string; lat?: number; lng?: number };
-  /** 系统提示行数据（kind = 'sys' 时有值）：拉黑/解除拉黑等状态变更提示 */
-  sys?: { text: string };
+  /** 系统提示行数据（kind = 'sys' 时有值）：拉黑/解除拉黑等状态变更提示。
+   *  pat = 拍一拍事件（Task 30）：by='me' 我拍对方（self=我拍了自己）/ by='peer' 对方拍我，
+   *  text = 拍一拍文案后缀——带 pat 的系统行进 AI 上下文（按双方真名序列化），让 AI 知道被拍/拍过谁与文案 */
+  sys?: { text: string; pat?: { by: 'me' | 'peer'; self?: boolean; text?: string } };
   /** 申请解除拉黑卡片数据（kind = 'blockreq' 时有值）：status pending=待处理 accepted=已同意 rejected=已拒绝；
    *  40-a 起双向——from 缺省视为 'char'（角色发起，用户点同意/拒绝）；from='user'（用户发起，角色用标记决策） */
   blkreq?: { reason: string; status: 'pending' | 'accepted' | 'rejected'; from?: 'char' | 'user' };
@@ -517,6 +520,29 @@ type WxFriendReq = FriendReqEntry;
 const LS_SESSION = 'wx-session-user-id';
 const LS_MOMENTS = 'wx-moments';
 const lsMsgsKey = (contactId: string) => `wx-chat-msgs:${contactId}`;
+
+// ---------------- 拍一拍文案（Task 30：微信个人资料页「拍一拍」行设置，按账号隔离） ----------------
+
+/** 拍一拍文案存储键（accLs 按当前微信账号加作用域后缀：大号无后缀、小号 --{accId}） */
+const wxClapKey = (): string => accLs('wx-clap-text', 'wx');
+
+/** 读取拍一拍文案（未设置返回空串；文案是「拍了拍」的后缀，如「的小脑袋」） */
+function readWxClapText(): string {
+  try {
+    return (window.localStorage.getItem(wxClapKey()) ?? '').trim().slice(0, 30);
+  } catch {
+    return '';
+  }
+}
+
+/** 保存拍一拍文案（空串 = 清除，回退「未设置」） */
+function writeWxClapText(text: string): void {
+  try {
+    window.localStorage.setItem(wxClapKey(), text.trim().slice(0, 30));
+  } catch {
+    // 存储异常静默：拍一拍文案退化为默认展示
+  }
+}
 
 function uid(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -1506,6 +1532,14 @@ function wxCardIsFinal(m: WxMsg): boolean {
   return label !== '待领取' && label !== '待收款';
 }
 
+/** 拍一拍系统行的 AI 上下文序列化（Task 30）：按双方名字显式拼接（文案 = 拍一拍后缀，原样拼在句尾），
+ *  不用「你/我」代词——assistant 消息里「你」指 AI 本身，混用会造成主语伪造 */
+function wxPatHistoryLine(pat: NonNullable<WxMsg['sys']>['pat'], meName: string, peerName: string): string {
+  const suffix = pat?.text ?? '';
+  if (pat?.by === 'me') return pat.self ? `[${meName}拍了拍自己${suffix}]` : `[${meName}拍了拍${peerName}${suffix}]`;
+  return `[${peerName}拍了拍${meName}${suffix}]`;
+}
+
 /** 收集「我发给 AI 的、待处理」的红包/转账/亲属卡（生成 system 待处理清单） */
 function wxCollectPendingCards(msgs: WxMsg[]): PendingCardInfo[] {
   return msgs
@@ -1800,6 +1834,22 @@ export function WxAvatar({ src, alt, size = 44 }: { src: string | null; alt: str
         <path d="M12 14.1c-4.7 0-8.1 2.7-8.1 6.3 0 .9.7 1.6 1.6 1.6h13c.9 0 1.6-.7 1.6-1.6 0-3.6-3.4-6.3-8.1-6.3z" />
       </svg>
     </div>
+  );
+}
+
+/** 引用块迷你缩略图（Task 30）：被引用的图片/表情在引用胶囊里显示 36px 小图——
+ *  加载失败自动隐藏（引用块退回纯文字行，quote.content 兜底可读） */
+function WxQuoteThumb({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <img
+      src={src}
+      alt={alt}
+      data-testid="wx-quote-thumb"
+      className="h-9 w-9 shrink-0 rounded-[3px] bg-black/[0.05] object-cover dark:bg-white/10"
+      onError={() => setFailed(true)}
+    />
   );
 }
 
@@ -4555,6 +4605,12 @@ interface WxTurnCtx {
   wantVideoCallSeen: boolean;
   /** 一起听遥控（第三十七轮）：本轮回复里剥出并执行过播控指令（纯指令回复不再落「暂无回复」兑底） */
   musicActed: boolean;
+  /** Task 30 AI 引用：[引用:M编号] 标记剥出后暂存的编号——挂到紧随其后的第一条正文消息上；
+   *  标记与正文跨流式分段时靠它跨段接力（buildReplyMsgs 各次调用共享同一 ctx） */
+  pendingQuote?: string;
+  /** Task 30 AI 引用：本轮上下文窗口内的消息编号 → 源消息映射（runAiTurn 构建注入）；
+   *  后台接力投递（deliverBgItems）自建 ctx 无映射 → [引用:…] 标记静默丢弃，正文照常 */
+  quoteMap?: Map<string, WxMsg>;
 }
 
 function ChatPage({
@@ -5777,6 +5833,27 @@ function ChatPage({
           }
           continue;
         }
+        // Task 30 AI 引用（[引用:M编号]）：编号暂存 ctx，挂到紧随其后的第一条正文消息上
+        //（见下方文字分支；标记与正文跨流式分段/切分边界时靠 ctx 跨段接力）
+        if (part.action.kind === 'quote') {
+          ctx.pendingQuote = part.action.targetId.trim();
+          continue;
+        }
+        // Task 30 AI 拍一拍（[拍一拍:文案]/[拍一拍]）：系统提示行「「角色」拍了拍你+文案」——
+        // 文案由 AI 按人设/记忆/上下文自己决定；拍一拍不是消息，前后正文照常投递
+        if (part.action.kind === 'pat') {
+          const patText = part.action.targetId.trim().slice(0, 30);
+          out.push({
+            id: uid(),
+            role: 'peer',
+            content: '',
+            time: t,
+            kind: 'sys',
+            sys: { text: `「${peer.name}」拍了拍你${patText}`, pat: { by: 'peer', ...(patText ? { text: patText } : {}) } },
+          });
+          t += 1;
+          continue;
+        }
         // 46-e 视觉自主决策动作（[换头像]/[换朋友圈背景]/[存相册] 取用户当回合发的图；[选图设头像]/
         // [选图设背景]/[选图发送] 从相册缓存挑图）：sys 通知行同步入列（队列投递时按 t 排序），
         // 异步写入（updateContact/setPeerBg/addAlbum + addVisionDecision）fire-and-forget；
@@ -5993,10 +6070,21 @@ function ChatPage({
             // 美团回显剥除：AI 照抄历史里的卡片序列化行（[美团代付/代点…]（…））当正文时整行剥掉
             const safePhotoText2 = stripTbEchoText(stripMtEchoText(stripUnfinishedPhotoTag(photoFreeText)));
             // 表情包开关关闭：文字里的 emoji 与内置表情代码硬性剥除（prompt 禁令之外的双保险），残留的表情占位一并去掉；
-            // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙
-            const clean = cleanBubbleText(stickersOn ? safePhotoText2 : stripEmojiCodes('wx', stripEmojiText(safePhotoText2.replace(/\[表情包\]|\[表情\]/g, ' '))));
+            // 首尾清洗：剥掉零宽/盲文空格等「看不见的占位字符」，避免气泡开头出现空隙；
+            // 门牌号剥除（Task 30）：模型偶尔裸抄历史行首的 [M数字] 编号进正文，统一剥掉
+            const clean = cleanBubbleText(stripMsgHandleText(stickersOn ? safePhotoText2 : stripEmojiCodes('wx', stripEmojiText(safePhotoText2.replace(/\[表情包\]|\[表情\]/g, ' ')))));
             if (!clean) continue;
-            out.push({ id, role: 'peer', content: clean, time: t });
+            // Task 30 AI 引用：此前剥出过 [引用:M编号] → 挂到这第一条正文消息上（引用块随气泡展示）；
+            // 编号查不到（跨回合编号漂移/后台接力无映射）→ 静默丢弃引用，正文照常
+            let attachQuote: WxMsg['quote'] | null = null;
+            if (ctx.pendingQuote) {
+              const qSrc = ctx.quoteMap?.get(ctx.pendingQuote) ?? null;
+              if (qSrc && !qSrc.recalled) {
+                attachQuote = { name: qSrc.role === 'me' ? me.name : peer.name, content: quoteContentOf(qSrc), id: qSrc.id, time: qSrc.time };
+              }
+              ctx.pendingQuote = undefined;
+            }
+            out.push({ id, role: 'peer', content: clean, time: t, ...(attachQuote ? { quote: attachQuote } : {}) });
           }
           ctx.msgIdx += 1;
           t += 600 + Math.floor(Math.random() * 600);
@@ -6013,6 +6101,18 @@ function ChatPage({
   const deliverBgItems = (items: BgPendingItem[]) => {
     if (items.length === 0) return;
     const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false, musicActed: false };
+    // Task 30：接力回复同样带消息编号映射——落盘记录按绝对位置重算（与生成侧同口径），
+    // 生成时 AI 看到的 [引用:M编号] 在投递侧能对上同一条消息（中途删消息才可能漂移，罕见可容忍）
+    {
+      let n = 0;
+      const map = new Map<string, WxMsg>();
+      for (const m of loadMsgs(peer.id)) {
+        if (m.recalled || m.error || m.kind === 'notice' || m.kind === 'blockreq') continue;
+        n += 1;
+        map.set(`M${n}`, m);
+      }
+      ctx.quoteMap = map;
+    }
     let queuedAny = false;
     // 接力 generate 存的是完整回复原文：按该会话自己的回复条数决定解析模式（与页面内
     // finalize 同语义）——单条(N=1)整条解析，多条(N>1)走稳定细切，不把整段挤成一个气泡
@@ -6122,11 +6222,26 @@ function ChatPage({
         if (!m.recalled && m.role === 'me' && m.kind === 'image' && m.img) userImgSeq.set(m.id, ++seq);
       }
     }
+    // Task 30 AI 引用编号：会话内每条消息的绝对位置编号（M1..Mn；撤回/错误/通知行/申请卡不占号）——
+    // 历史行前缀 [M数字] 与 [引用:编号] 反查共用同一映射；绝对位置跨回合稳定（对话增长不漂移，
+    // 后台接力投递按落盘记录重算也能对上同一编号）
+    const quoteMap = new Map<string, WxMsg>();
+    const quoteIdOf = new Map<string, string>();
+    {
+      let n = 0;
+      for (const m of base) {
+        if (m.recalled || m.error || m.kind === 'notice' || m.kind === 'blockreq') continue;
+        n += 1;
+        quoteMap.set(`M${n}`, m);
+        quoteIdOf.set(m.id, `M${n}`);
+      }
+    }
     const history = base
       .filter(
         (m) =>
-          // 图片以 [图片] 占位、语音以转写文本/占位、位置以完整位置文本进入历史（本轮图片实际内容由识图模型描述追加在末尾）
-          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'location' || m.kind === 'song') && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
+          // 图片以 [图片] 占位、语音以转写文本/占位、位置以完整位置文本进入历史（本轮图片实际内容由识图模型描述追加在末尾）；
+          // 拍一拍系统行（Task 30）也进历史：AI 要知道被拍/拍过谁与文案（按双方名字序列化，无主语歧义）
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'location' || m.kind === 'song' || (m.kind === 'sys' && !!m.sys?.pat)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
       .map((m) => {
@@ -6148,9 +6263,10 @@ function ChatPage({
         }`;
         return {
         role: m.role === 'me' ? ('user' as const) : ('assistant' as const),
-        // 我的表情以 [发送了表情：意思] 进入历史（AI 理解含义）；AI 自己发的表情回写成 [表情包:ID]
-        // 示范正确输出格式（意思靠 system 清单反查），避免它模仿我的记录格式导致发表情变文字
+        // 行首 [M数字] = 消息编号（AI 用 [引用:编号] 引用它）；我的表情以 [发送了表情：意思] 进入历史（AI 理解含义）；
+        // AI 自己发的表情回写成 [表情包:ID] 示范正确输出格式（意思靠 system 清单反查），避免它模仿我的记录格式导致发表情变文字
         content:
+          (quoteIdOf.has(m.id) ? `[${quoteIdOf.get(m.id)}] ` : '') +
           pre +
           (m.kind === 'forward' && m.fwd?.merged
             ? `[聊天记录：${(m.fwd.records ?? []).slice(-8).map((r) => `${r.name}：${r.text}`).join(' ／ ')}]`
@@ -6219,12 +6335,16 @@ function ChatPage({
                               ? tbShareHistoryLine(m.tbshare.sid)
                               : m.kind === 'tbdraft' && m.tbdraft
                                 ? tbDraftHistoryLine(m.tbdraft.did)
-                                : m.content),
+                                // 拍一拍系统行（Task 30）：按双方名字显式序列化（文案后缀原样拼接），AI 无主语歧义——
+                                // 「凡凡拍了拍小柚的小脑袋」= 对方拍了你；「小柚拍了拍凡凡的小脸蛋」= 你（AI）拍过对方
+                                : m.kind === 'sys' && m.sys?.pat
+                                  ? wxPatHistoryLine(m.sys.pat, meAddrName, peer.name)
+                                  : m.content),
         };
       });
 
     // 本轮投递上下文（投递管线与接力拉取共用，见组件层 deliverAiMsg/enqueueBatch/buildReplyMsgs）
-    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false, musicActed: false };
+    const ctx: WxTurnCtx = { aiId: uid(), msgIdx: 0, batchStarted: false, wantCallSeen: false, wantVideoCallSeen: false, musicActed: false, quoteMap };
     carryTextRef.current = ''; // F1 回合开始清 carry：跨段残留只可能属于上一回合，不复用
     musicHoldRef.current = ''; // 一起听遥控：同款回合开始清留存（半截播控指令不串回合）
     // 用户消息立即入列（保存 effect 随即落盘）；AI 回复在全局 store 流式接收，
@@ -7043,7 +7163,10 @@ function ChatPage({
     if (isImage && m.img?.prevSrc) items.push({ key: 'restoreimg', label: '恢复上一张', icon: B.recall });
     if (!isFrLocked) items.push({ key: 'del', label: '删除', icon: B.del, danger: true });
     if ((isText || isVoice) && !isFrLocked) items.push({ key: 'edit', label: '编辑', icon: B.edit });
-    if (isText && !isFrLocked) items.push({ key: 'quote', label: '引用', icon: B.quote });
+    // 引用（Task 30 扩展）：文字之外，图片/表情/语音/文字图片/位置/歌曲也能引用——
+    // 引用块按源消息类型显示迷你缩略图/语音图标（无源时退回文字占位，quoteContentOf 兜底）
+    const isQuotable = isText || isVoice || isImage || m.kind === 'sticker' || m.kind === 'textcard' || m.kind === 'location' || m.kind === 'song';
+    if (isQuotable && !isFrLocked) items.push({ key: 'quote', label: '引用', icon: B.quote });
     items.push({ key: 'multi', label: '多选', icon: B.multi });
     if (!isFrLocked) items.push({ key: 'recall', label: '撤回', icon: B.recall });
     items.push({ key: 'forward', label: '转发', icon: B.forward });
@@ -7068,6 +7191,41 @@ function ChatPage({
     if (items.length === 0) return;
     setMsgMenu({ msg, pos: computeBubbleMenuPos(el.getBoundingClientRect(), pageRef.current?.getBoundingClientRect() ?? null, items.length) });
   }, !selectMode);
+
+  // ---------------- 拍一拍（Task 30：双击聊天里两侧头像触发；AI 侧由 [拍一拍:文案] 标记发起） ----------------
+
+  /** 对方头像单/双击分流计时器（单击开状态卡延迟 260ms 等待可能的双击；双击拍一拍时取消） */
+  const peerAvatarTapRef = useRef<number | null>(null);
+
+  /** 拍一拍：系统行落盘（我拍对方/拍自己，带我在个人资料页设置的拍一拍文案后缀）+ 触发 AI 回合——
+   *  AI 从上下文得知被拍/我拍了拍自己与文案（人设决定怎么反应，也可以用 [拍一拍:文案] 拍回来）。
+   *  对方正在回复时不触发回合：拍一拍行照常落盘，下一轮上下文自然带上 */
+  const patPeer = (self = false) => {
+    const clap = readWxClapText();
+    const msg: WxMsg = {
+      id: uid(),
+      role: 'me',
+      content: '',
+      time: Date.now(),
+      kind: 'sys',
+      sys: {
+        text: self ? `你拍了拍自己${clap}` : `你拍了拍「${peer.name}」${clap}`,
+        pat: { by: 'me', ...(self ? { self: true } : {}), ...(clap ? { text: clap } : {}) },
+      },
+    };
+    setMsgs((prev) => (prev.some((x) => x.id === msg.id) ? prev : [...prev, msg]));
+    saveMsgs(peer.id, [...loadMsgs(peer.id), msg]); // 立即落盘：AI 回合管线与 finalize 合并都能读到
+    if (!isChatStreaming(sessionKey) && !isAiDelivering(sessionKey)) {
+      window.setTimeout(() => runAiTurnRef.current?.(null, [msg]), 80);
+    }
+  };
+
+  /** 双击头像统一入口：e.detail >= 2 = 拍一拍；返回 true 表示已按双击处理（调用方跳过单击行为） */
+  const onAvatarDoubleTap = (e: { detail: number }, self = false): boolean => {
+    if (e.detail < 2) return false;
+    patPeer(self);
+    return true;
+  };
 
   /** 退出多选模式（同时退出转发流程） */
   const exitSelect = useCallback(() => {
@@ -8120,15 +8278,38 @@ function ChatPage({
                 </span>
               )}
               {m.role === 'me' ? (
-                <WxAvatar src={me.avatar} alt={me.name} size={38} />
+                /* Task 30 拍一拍：双击自己的头像 = 拍一拍自己（微信同款彩蛋）；单击无动作 */
+                <button
+                  type="button"
+                  data-testid="wx-me-avatar"
+                  aria-label="双击拍一拍自己"
+                  className="shrink-0 cursor-pointer"
+                  onClick={(e) => onAvatarDoubleTap(e, true)}
+                >
+                  <WxAvatar src={me.avatar} alt={me.name} size={38} />
+                </button>
               ) : (
-                /* 点击对方头像：弹出角色状态卡（多选模式下点击头像仍走勾选，由行级 onClickCapture 拦截） */
+                /* 单击对方头像：弹出角色状态卡（延迟 260ms 等待可能的双击）；双击 = 拍一拍（取消状态卡）。
+                   （多选模式下点击头像仍走勾选，由行级 onClickCapture 拦截） */
                 <button
                   type="button"
                   data-testid="wx-peer-avatar"
-                  aria-label={`查看${peer.name}的状态`}
+                  aria-label={`单击查看${peer.name}的状态，双击拍一拍`}
                   className="shrink-0 cursor-pointer transition-opacity active:opacity-70"
-                  onClick={() => setPeerStatusOpen(true)}
+                  onClick={(e) => {
+                    if (onAvatarDoubleTap(e)) {
+                      if (peerAvatarTapRef.current !== null) {
+                        window.clearTimeout(peerAvatarTapRef.current);
+                        peerAvatarTapRef.current = null;
+                      }
+                      return;
+                    }
+                    if (peerAvatarTapRef.current !== null) window.clearTimeout(peerAvatarTapRef.current);
+                    peerAvatarTapRef.current = window.setTimeout(() => {
+                      peerAvatarTapRef.current = null;
+                      setPeerStatusOpen(true);
+                    }, 260);
+                  }}
                 >
                   <WxAvatar src={peer.avatar} alt={peer.name} size={38} />
                 </button>
@@ -8405,15 +8586,34 @@ function ChatPage({
                       </span>
                     )}
                   </div>
-                  {/* 微信引用（截图样式）：独立半透明胶囊挂在气泡下方「名字：内容」（小圆角 + 细黑边框） */}
-                  {m.quote && (
-                    <div
-                      data-testid="wx-quote-block"
-                      className="mt-[3px] max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
-                    >
-                      <p className="line-clamp-2 whitespace-pre-wrap break-all">{m.quote.name}：{m.quote.content}</p>
-                    </div>
-                  )}
+                  {/* 微信引用（截图样式）：独立半透明胶囊挂在气泡下方「名字：内容」（小圆角 + 细黑边框）；
+                      Task 30 扩展——图片/表情源显示迷你缩略图、语音源显示语音图标+时长（还原截图的「Z：[图]」形态），
+                      源消息已被删/撤回或图挂掉时退回纯文字（quote.content 已由删除/撤回联动改写） */}
+                  {m.quote && (() => {
+                    const qSrc = m.quote.id ? msgs.find((x) => x.id === m.quote?.id) ?? null : null;
+                    const qThumb = qSrc && !qSrc.recalled ? (qSrc.kind === 'image' ? qSrc.img?.src : qSrc.kind === 'sticker' ? qSrc.stk?.url : null) ?? null : null;
+                    const qVoice = qSrc && !qSrc.recalled && qSrc.kind === 'voice' ? qSrc.voice ?? null : null;
+                    return (
+                      <div
+                        data-testid="wx-quote-block"
+                        className="mt-[3px] max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
+                      >
+                        {qThumb ? (
+                          <div className="flex items-center gap-2" data-testid="wx-quote-thumb-row">
+                            <span className="min-w-0 flex-1 truncate">{m.quote.name}：{m.quote.content}</span>
+                            <WxQuoteThumb src={qThumb} alt="引用图片" />
+                          </div>
+                        ) : qVoice ? (
+                          <div className="flex items-center gap-1.5" data-testid="wx-quote-voice-row">
+                            <AudioLines className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+                            <span className="min-w-0 flex-1 truncate">{m.quote.name}：[语音]{qVoice.duration ? ` ${qVoice.duration}"` : ''}</span>
+                          </div>
+                        ) : (
+                          <p className="line-clamp-2 whitespace-pre-wrap break-all">{m.quote.name}：{m.quote.content}</p>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {/* 翻译开启时在气泡下方显示所选语言的译文 */}
                   {renderTranslations(m.id, m.content)}
                 </div>
@@ -11676,20 +11876,87 @@ function ProfilePage({
       })
       .catch(() => onToast('头像保存失败'));
   };
-  const rows: Array<{ key: string; label: string; value: React.ReactNode; toast: string }> = [
-    { key: 'name', label: '名字', value: <span className="block max-w-[190px] truncate">{me.name}</span>, toast: '名字暂不支持修改' },
-    { key: 'gender', label: '性别', value: record?.gender || '未设置', toast: '性别暂不支持修改' },
-    { key: 'region', label: '地区', value: <span className="block max-w-[210px] truncate">{record?.region || '美国边远小岛'}</span>, toast: '地区暂不支持修改' },
-    { key: 'phone', label: '手机号', value: maskPhone(me.phone), toast: '手机号暂不支持修改' },
-    { key: 'wechat', label: '微信号', value: <span className="block max-w-[190px] truncate">{me.wechatId || '未设置'}</span>, toast: '微信号暂不支持修改' },
+  // Task 30 资料编辑：名字/性别/地区/手机号/微信号点行弹修改框——统一写回机主联系人档案
+  //（updateContact 全端广播：联系人 App/微信/QQ/信息/电话 + 设置个人信息（名字经 owner-profile-sync 镜像））；
+  // 头像（按 App 槽位）与拍一拍文案（按 App 独立存储）是仅有的两个非全局项
+  const [editRow, setEditRow] = useState<null | { key: string; label: string }>(null);
+  const [editDraft, setEditDraft] = useState('');
+  // 拍一拍文案（微信侧独立于 QQ）：本页挂载时读一次，保存后即时回显
+  const [clapText, setClapText] = useState<string>(() => readWxClapText());
+  const openEdit = (key: string, label: string, initial: string) => {
+    setEditRow({ key, label });
+    setEditDraft(initial);
+  };
+  const saveEdit = () => {
+    const row = editRow;
+    setEditRow(null);
+    if (!row) return;
+    const t = editDraft.trim();
+    if (row.key === 'clap') {
+      // 拍一拍文案：微信本地按账号隔离存储（「拍了拍」后缀，如「的小脑袋」；空 = 清除回退未设置）
+      writeWxClapText(t);
+      setClapText(t);
+      onToast('拍一拍已保存');
+      return;
+    }
+    if (!t) {
+      onToast('内容不能为空');
+      return;
+    }
+    // 全局写回：updateContact 触发 contact-updated 广播，微信 me 快照/联系人 App/设置个人信息同步刷新
+    const patch: Partial<ContactRecord> | null =
+      row.key === 'name'
+        ? { name: t }
+        : row.key === 'gender'
+          ? { gender: t }
+          : row.key === 'region'
+            ? { region: t }
+            : row.key === 'phone'
+              ? { phone: t }
+              : row.key === 'wechat'
+                ? { wechatId: t }
+                : null;
+    if (!patch) return;
+    void updateContact(me.id, patch)
+      .then((rec) => onToast(rec ? '已保存' : '保存失败'))
+      .catch(() => onToast('保存失败'));
+  };
+  const clapShown = clapText ? `拍了拍${clapText}` : '未设置';
+  const rows: Array<{ key: string; label: string; value: React.ReactNode }> = [
+    { key: 'name', label: '名字', value: <span className="block max-w-[190px] truncate">{me.name}</span> },
+    { key: 'gender', label: '性别', value: <span className="block max-w-[190px] truncate">{record?.gender || '未设置'}</span> },
+    { key: 'region', label: '地区', value: <span className="block max-w-[210px] truncate">{record?.region || '美国边远小岛'}</span> },
+    { key: 'phone', label: '手机号', value: <span className="block max-w-[190px] truncate">{maskPhone(me.phone)}</span> },
+    { key: 'wechat', label: '微信号', value: <span className="block max-w-[190px] truncate">{me.wechatId || '未设置'}</span> },
     {
       key: 'qr',
       label: '我的二维码',
       value: <QrCode className="h-[20px] w-[20px] text-black/45 dark:text-white/45" strokeWidth={1.7} />,
-      toast: '我的二维码暂未开放',
     },
-    { key: 'clap', label: '拍一拍', value: <span className="block max-w-[190px] truncate">未设置</span>, toast: '拍一拍暂未开放' },
+    { key: 'clap', label: '拍一拍', value: <span className="block max-w-[190px] truncate">{clapShown}</span> },
   ];
+  /** 行点击 → 弹修改框（二维码行 toast 占位；其余按 key 取当前值预填） */
+  const onRowClick = (key: string, label: string) => {
+    if (key === 'qr') {
+      onToast('我的二维码暂未开放');
+      return;
+    }
+    if (key === 'clap') {
+      openEdit('clap', '拍一拍', clapText);
+      return;
+    }
+    const initial =
+      key === 'name'
+        ? me.name
+        : key === 'gender'
+          ? record?.gender || ''
+          : key === 'region'
+            ? record?.region || ''
+            : key === 'phone'
+              ? me.phone ?? ''
+              : me.wechatId ?? '';
+    openEdit(key, label, initial);
+  };
 
   return (
     <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
@@ -11716,13 +11983,13 @@ function ProfilePage({
             <ChevronRight className="ml-2 h-[18px] w-[18px] shrink-0 text-black/25 dark:text-white/25" strokeWidth={2} />
           </button>
           <input ref={avatarFileRef} type="file" accept="image/*" className="hidden" tabIndex={-1} aria-hidden="true" onChange={onAvatarFile} />
-          {/* 资料 / 二维码 / 拍一拍行 */}
+          {/* 资料 / 二维码 / 拍一拍行（除二维码外点行均可修改：资料项全局写回，拍一拍文案微信独立） */}
           {rows.map((r, i) => (
             <button
               key={r.key}
               type="button"
               data-testid={`wx-profile-${r.key}`}
-              onClick={() => onToast(r.toast)}
+              onClick={() => onRowClick(r.key, r.label)}
               className="relative flex w-full items-center px-4 py-[15px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"
             >
               <span className="absolute left-4 right-0 top-0 h-px bg-black/[0.05] dark:bg-white/[0.08]" aria-hidden="true" />
@@ -11736,6 +12003,48 @@ function ProfilePage({
         </div>
 
       </div>
+      {/* 资料修改弹窗（名字/性别/地区/手机号/微信号/拍一拍文案）：编辑消息弹窗同款样式 */}
+      {editRow && (
+        <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/40 px-8" data-testid="wx-profile-edit-layer" onClick={() => setEditRow(null)}>
+          <div
+            className="w-full max-w-[300px] overflow-hidden rounded-[14px] bg-white shadow-2xl dark:bg-[#2A2A2C]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="pb-1 pt-4 text-center text-[16px] font-medium">修改{editRow.label}</p>
+            <div className="px-4 pb-3 pt-2">
+              <input
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                maxLength={editRow.key === 'clap' ? 30 : 30}
+                autoFocus
+                data-testid="wx-profile-edit-input"
+                placeholder={editRow.key === 'clap' ? '如：的小脑袋（留空清除）' : `输入新的${editRow.label}`}
+                className="w-full rounded-[8px] border border-black/10 bg-black/[0.03] px-2.5 py-2 text-[15px] leading-[1.45] outline-none focus:border-[#07C160] dark:border-white/15 dark:bg-white/[0.06]"
+              />
+              {editRow.key === 'clap' && (
+                <p className="pt-1.5 text-[12px] leading-[1.5] text-black/40 dark:text-white/40">朋友双击你的头像拍一拍时会显示这个后缀</p>
+              )}
+            </div>
+            <div className="flex border-t border-black/10 dark:border-white/10">
+              <button
+                type="button"
+                onClick={() => setEditRow(null)}
+                className="h-11 flex-1 text-[16px] active:bg-black/5 dark:active:bg-white/10"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="wx-profile-edit-save"
+                onClick={saveEdit}
+                className="h-11 flex-1 text-[16px] font-medium text-[#07C160] active:bg-black/5 dark:active:bg-white/10"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
