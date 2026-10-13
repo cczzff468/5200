@@ -259,9 +259,12 @@ export interface ReplySegmentScanner {
   finish: () => string;
 }
 
-/** 段内是否有未闭合的「[」（标记被边界切碎时先不放出，等闭合后再扫） */
+/** 段内是否有未闭合的「[」（标记被边界切碎时先不放出，等闭合后再扫）。
+ *  C11：全角【】同样保护——此前只认半角，【图片：…】被句末标点/流结束切开时半截文本直接上屏 */
 function hasOpenBracket(s: string): boolean {
-  return s.lastIndexOf('[') > s.lastIndexOf(']');
+  const half = s.lastIndexOf('[') > s.lastIndexOf(']');
+  const full = s.lastIndexOf('\u3010') > s.lastIndexOf('\u3011');
+  return half || full;
 }
 
 export function createReplySegmentScanner(onSegment: (segment: string) => void): ReplySegmentScanner {

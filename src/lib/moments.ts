@@ -187,6 +187,16 @@ const AUTO_CFG_KEY = 'moments-auto-cfg';
 /** 自动发布失败退避 */
 const attemptKey = (contactId: string, platform: MomentPlatform) => `moments-auto-attempt:${contactId}:${platform}`;
 
+/** C4：聊天路径 [发朋友圈] 落库后登记尝试标记——调度器 10 分钟内不再为该角色自动发帖
+ *  （聊天路径此前不写标记，调度器可能在几秒后同刻再自动发一条，同屏双帖穿帮） */
+export function markMomentAutoAttempt(platform: MomentPlatform, contactId: string): void {
+  try {
+    kvSet(attemptKey(contactId, platform), Date.now());
+  } catch {
+    /* 静默 */
+  }
+}
+
 /** 动态变更事件：引擎每次落盘后广播，动态页监听刷新（调度器在页面外写数据也能实时同步 UI） */
 export function emitMomentsChanged(platform?: MomentPlatform): void {
   try {
@@ -2572,8 +2582,19 @@ async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
     }
   }
   if (plan.length === 0) return;
+  // C5：挑人前先剔除处于 10 分钟退避期的候选——此前「挑中后才查退避并 return」，
+  // 一个退避中的角色会压住本次 tick，其他已到期的角色这一 tick 也不发（被饿到下一轮）
+  const notBackoff = plan.filter((p) => {
+    try {
+      const lastTry = kvGet<number>(attemptKey(p.peer.id, p.platform)) ?? 0;
+      return now - lastTry >= 10 * 60_000;
+    } catch {
+      return true;
+    }
+  });
+  const pool = notBackoff.length > 0 ? notBackoff : plan; // 全在退避时保持旧行为（等退避结束）
   // 一次只发一条（其余下个 tick 再发）；失败退避 10 分钟
-  const pick = plan[Math.floor(Math.random() * plan.length)];
+  const pick = pool[Math.floor(Math.random() * pool.length)];
   // 四轮审计 M2：发帖前复核 pick.peer 仍在新鲜联系人列表（plan 基于调度器 stale 快照构建）——
   // 已删除则直接跳过（不写退避标记、无副作用；aiPostMoment 入口另有复核兜底）
   if (!(await listContacts().catch(() => [] as ContactRecord[])).some((c) => c.id === pick.peer.id)) return;

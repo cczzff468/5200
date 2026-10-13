@@ -159,10 +159,25 @@ function scoped(base: string): string {
 }
 
 const fragKey = (contactId: string) => scoped(`mem-frag:${contactId}`);
+
+/** B8：人设【最近发生的事】（npc-bond bondNotesFor）本轮选用的碎片 id 注册表——
+ *  记忆召回时排除这些碎片，同一碎片不再出现在记忆块里（跨块去重；每轮 persona 组装时重填） */
+const bondExcludeIds = new Set<string>();
+
+/** npc-bond bondNotesFor 每轮调用：重填本轮已注入人设的碎片 id（记忆召回侧排除用） */
+export function noteBondFragmentIds(ids: readonly string[]): void {
+  bondExcludeIds.clear();
+  for (const id of ids) bondExcludeIds.add(id);
+}
+
+/** B8：记忆召回块总字符预算（超出按 碎片→核心→长期 顺序裁剪） */
+const MEM_RECALL_BUDGET = 6000;
 /** 核心记忆存储键（沿用历史 ltm 键名，语义为核心层，避免旧数据迁移） */
 const coreKey = (contactId: string) => scoped(`mem-ltm:${contactId}`);
 const longKey = (contactId: string) => scoped(`mem-long:${contactId}`);
-const settingsKey = (contactId: string) => `mem-settings:${contactId}`; // 设置跨账号共享（不作用域化）
+// C10：设置随账号作用域化（此前跨账号共享——小号侧改提取频率/互通开关会覆盖大号配置；
+// 主账号 main 无后缀 = 存量键不变，小号首次读取走新键回落默认值）
+const settingsKey = (contactId: string) => scoped(`mem-settings:${contactId}`);
 /** 旧轮次计数键（口径=AI 回复轮数，已废弃）：仅 memPurgeContact 残留清扫用 */
 const roundKey = (contactId: string, app: MemApp) => scoped(`mem-round:${contactId}:${app}`);
 /** 消息条数计数键：scope 非空（群聊）按群独立；私聊互通开 = 按角色合并（无 app 段）、互通关 = 各 App 独立 */
@@ -368,13 +383,14 @@ export function memSweepExpiry(contactId: string): number {
 }
 
 /**
- * 矛盾更新对比用：当前待总结（未消费/未更新/未过期/未淡化）碎片的 id+内容，最近 30 条。
- * 随提取请求发给模型，让它判断新信息是否与已有记忆矛盾（supersedes 只接受这些 id）。
+ * 矛盾更新对比用：待总结（未消费/未更新/未过期/未淡化）碎片的 id+内容（最近 30 条）
+ * + 核心/长期记忆（core:/long: 前缀 id，最近 10 条）——新信息可以更正已总结的旧画像，
+ * 否则「喜欢猫」入长期后，「对猫过敏」的新碎片无法更正它，新旧两层同屏矛盾。
  */
 function existingForConflict(contactId: string): { id: string; content: string }[] {
   const { forget } = getMemSettings(contactId);
   const now = Date.now();
-  return readFragments(contactId)
+  const frags = readFragments(contactId)
     .filter(
       (f) =>
         !f.consumedAt &&
@@ -384,6 +400,15 @@ function existingForConflict(contactId: string): { id: string; content: string }
     )
     .slice(-30)
     .map((f) => ({ id: f.id, content: f.content }));
+  const cores = readCores(contactId)
+    .filter((m) => !m.archivedAt && !m.supersededAt && !isMemExpired(m, now))
+    .slice(-10)
+    .map((m) => ({ id: `core:${m.id}`, content: m.content }));
+  const longs = readLongTerm(contactId)
+    .filter((m) => !m.supersededAt && !isMemExpired(m, now))
+    .slice(-10)
+    .map((m) => ({ id: `long:${m.id}`, content: m.content }));
+  return [...frags, ...cores, ...longs];
 }
 
 /** 未被长期记忆收编且未过期的核心记忆数（长期总结触发判断用；手动设过期的核心不再参与总结） */
@@ -806,16 +831,45 @@ function altNameClaimAt(t: string, nm: string): boolean {
 }
 
 /**
- * 披露信号：用户侧发言里出现「机主/大号/小号」或「我是{机主名}」即视为亮明身份。
- * 否定句守卫：「我不是机主」「我不是陈凡」不触发（修复纯 includes 的否定误命中）。
+ * 披露信号句式表（收紧版）：裸出现「机主/大号/小号」不再解锁大号记忆——
+ * 必须落在第一人称声明/所有格句式里（「我是机主」「我的小号」「小号是我」等）。
+ * 「别人都用小号」「大号好累啊」这类旁观/感叹句不会误解锁（与主号侧第一人称正则口径对齐）。
  */
+const ALT_DISCLOSE_PATTERNS: readonly string[] = [
+  // 机主身份声明
+  '我是机主',
+  '我就是机主',
+  '机主是我',
+  '机主就是我',
+  // 大号所有格 / 声明
+  '我的大号',
+  '我大号',
+  '是我大号',
+  '大号是我',
+  '大号就是我',
+  '这是我大号',
+  '这是我的大号',
+  '大号是我本人',
+  '我就是大号',
+  // 小号所有格 / 声明
+  '我的小号',
+  '我小号',
+  '是我小号',
+  '小号是我',
+  '小号就是我',
+  '这是我小号',
+  '这是我的小号',
+  '小号是我本人',
+  '我就是小号',
+];
+
 function altDiscloseHit(text: string, mainName: string): boolean {
   const t = (text ?? '').trim();
   if (!t) return false;
-  for (const kw of ['机主', '大号', '小号']) {
+  for (const pat of ALT_DISCLOSE_PATTERNS) {
     let from = 0;
     for (;;) {
-      const i = t.indexOf(kw, from);
+      const i = t.indexOf(pat, from);
       if (i === -1) break;
       if (!altNegatedAt(t, i)) return true;
       from = i + 1;
@@ -1186,24 +1240,28 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
     if (f.source === 'group') return f.sourceGroupId === curGroup; // 只读当前群（群间隔离）
     return interopOn(curGroup); // 自己的私聊/朋友圈记忆：互通开启才可见
   };
-  // 长期记忆（顶层画像）：全量注入（安全上限 8 条防失控）；用户手动设置过期的长期不再注入
+  // 长期记忆（顶层画像）：全量注入（安全上限 8 条防失控）；用户手动设置过期的长期不再注入；
+  // 被新记忆更正（supersededAt）的旧画像不再注入（B7：新旧矛盾以新为准）
   const longs = listLongTerm(contactId)
-    .filter((m) => !isMemExpired(m, now) && (share || m.apps.includes(app)))
+    .filter((m) => !m.supersededAt && !isMemExpired(m, now) && (share || m.apps.includes(app)))
     .filter((m) => (isGroupMode ? summaryVisibleInGroup(m) : summaryVisiblePrivate(m)))
     .map((m) => ({ m, s: relevanceScore(m.content, m.createdAt, contextText) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 8);
   // 核心记忆：全量注入（安全上限 12 条）；已被长期收编的不再注入（由长期记忆代表）；
-  // 用户手动设置过期的核心不再注入（默认永不过期不受影响）
+  // 用户手动设置过期的核心不再注入（默认永不过期不受影响）；被更正的旧核心不再注入
   const cores = listCores(contactId)
-    .filter((m) => !m.archivedAt && !isMemExpired(m, now) && (share || m.apps.includes(app)))
+    .filter((m) => !m.archivedAt && !m.supersededAt && !isMemExpired(m, now) && (share || m.apps.includes(app)))
     .filter((m) => (isGroupMode ? summaryVisibleInGroup(m) : summaryVisiblePrivate(m)))
     .map((m) => ({ m, s: relevanceScore(m.content, m.createdAt, contextText) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, 12);
-  // 近期记忆碎片：按相关性取前 5 条；已消费的由核心记忆代表，已更新/已过期的不召回
+  // 近期记忆碎片：按相关性取前 5 条；已消费的由核心记忆代表，已更新/已过期的不召回；
+  // 本轮已被人设【最近发生的事】(bondNotesFor) 选用的碎片不再重复注入（B8 跨块去重）
   const frags = listFragments(contactId)
     .filter((f) => !f.consumedAt && !f.supersededAt && !isMemExpired(f, now) && (share || f.app === app))
+    .filter((f) => !bondExcludeIds.has(f.id)) // 本轮已被人设【最近发生的事】选用的碎片不再重复注入（B8 跨块去重）
+    .filter((f) => !bondExcludeIds.has(f.id))
     .filter((f) => (isGroupMode ? fragVisibleInGroup(f) : fragVisiblePrivate(f)))
     .map((f) => ({ f, ...fragRecallScore(f, forget, contextText, now) }))
     .filter((x) => x.st !== 'faded')
@@ -1262,38 +1320,53 @@ function memRecallBlockInner(contactId: string, app: MemApp, contextText: string
   // 【fix3-a 7】长期/核心注入行带来源标注（碎片早就有，总结层此前没有）：按来源 App 集合拼
   //（单来源「·微信」，多来源「·微信/电话」；旧数据 apps 缺失时回退不带来源的原格式）
   const appsSrcLabel = (apps: MemApp[]): string => (apps.length > 0 ? apps.map((a) => MEM_APP_LABEL[a] ?? a).join('/') : '');
-  if (keepLongs.length > 0) {
-    lines.push('◇ 长期记忆（最稳定的画像；回复时参考这些稳定事实）：');
-    keepLongs.forEach(({ m }, i) => {
-      const src = appsSrcLabel(m.apps ?? []);
-      lines.push(`${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}${src ? `·${src}` : ''}）${m.content}`);
-    });
+  // B8：记忆块总字符预算——条数闸（8/12/5）没有字符上限，手动编辑无截断、单条内容超长时
+  // 记忆块可膨胀到 8k+ 字符；6000 字符是最后一道闸，裁剪顺序 碎片→核心→长期（越稳定越保留）
+  let budget = MEM_RECALL_BUDGET;
+  const takeRows = (rows: string[]): string[] => {
+    const out: string[] = [];
+    for (const r of rows) {
+      if (r.length + 1 > budget) break; // +1 换行
+      budget -= r.length + 1;
+      out.push(r);
+    }
+    return out;
+  };
+  const longRows = keepLongs.map(({ m }, i) => {
+    const src = appsSrcLabel(m.apps ?? []);
+    return `${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}${src ? `·${src}` : ''}）${m.content}`;
+  });
+  const coreRows = keepCores.map(({ m }, i) => {
+    const src = appsSrcLabel(m.apps ?? []);
+    return `${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}${src ? `·${src}` : ''}）${m.content}`;
+  });
+  const fragRows = keepFrags.map(({ f }, i) => {
+    // 事件时间优先（内容所指的时间），否则用来源对话时间；时间与来源并列标注
+    // （【fix3-a 7】eventTime 碎片此前丢了来源——「明天去北京」的碎片无法知道是电话里说的还是微信里说的）
+    const srcLabel =
+      f.source === 'moments'
+        ? f.app === 'wx'
+          ? '朋友圈'
+          : 'QQ动态'
+        : f.source === 'group'
+          ? `群聊·${(f.sourceGroupId && groupLabelOf(f.sourceGroupId)) || '群聊'}`
+          : MEM_APP_LABEL[f.app];
+    const t = `${f.eventTime != null ? memTimeLabel(f.eventTime, now) : memTimeLabel(f.sourceTime, now)}·${srcLabel}`;
+    return `${i + 1}. （${t}）${f.content}`;
+  });
+  const usedLong = takeRows(longRows);
+  const usedCore = takeRows(coreRows);
+  const usedFrag = takeRows(fragRows);
+  if (usedLong.length > 0) {
+    lines.push('◇ 长期记忆（最稳定的画像；回复时参考这些稳定事实）：', ...usedLong);
   }
-  if (keepCores.length > 0) {
-    lines.push('◇ 核心记忆（长期事实；回复时应优先参考这些核心事实，保持前后一致）：');
-    keepCores.forEach(({ m }, i) => {
-      const src = appsSrcLabel(m.apps ?? []);
-      lines.push(`${i + 1}. （${memTimeLabel(memEffectiveTime(m), now)}${src ? `·${src}` : ''}）${m.content}`);
-    });
+  if (usedCore.length > 0) {
+    lines.push('◇ 核心记忆（长期事实；回复时应优先参考这些核心事实，保持前后一致）：', ...usedCore);
   }
-  if (keepFrags.length > 0) {
-    lines.push('◇ 近期记忆碎片：');
-    keepFrags.forEach(({ f }, i) => {
-      // 事件时间优先（内容所指的时间），否则用来源对话时间；时间与来源并列标注
-      // （【fix3-a 7】eventTime 碎片此前丢了来源——「明天去北京」的碎片无法知道是电话里说的还是微信里说的）
-      const srcLabel =
-        f.source === 'moments'
-          ? f.app === 'wx'
-            ? '朋友圈'
-            : 'QQ动态'
-          : f.source === 'group'
-            ? `群聊·${(f.sourceGroupId && groupLabelOf(f.sourceGroupId)) || '群聊'}`
-            : MEM_APP_LABEL[f.app];
-      const t = `${f.eventTime != null ? memTimeLabel(f.eventTime, now) : memTimeLabel(f.sourceTime, now)}·${srcLabel}`;
-      lines.push(`${i + 1}. （${t}）${f.content}`);
-    });
+  if (usedFrag.length > 0) {
+    lines.push('◇ 近期记忆碎片：', ...usedFrag);
   }
-  return lines.join('\n');
+    return lines.join('\n');
 }
 
 /** 召回预览（设置页）：与 memRecallBlock 同一套层级与排序，返回排序后的记忆对象 */
@@ -1735,17 +1808,58 @@ function appendFragments(
     const content = item.text.trim();
     if (!content) continue;
     const key = normText(content);
-    // 0) 矛盾更新：标记被更正的旧记忆为「已更新」，本条直接新增
-    const targets = (item.supersedes ?? [])
+    // 0) 矛盾更新：标记被更正的旧记忆为「已更新」，本条直接新增。
+    // 目标三层都支持：碎片（裸 id）/ 核心（core:前缀）/ 长期（long:前缀）——
+    // 核心/长期被更正后落 supersededAt，召回侧不再注入（B7：旧画像可被新事实更正）
+    const supIds = item.supersedes ?? [];
+    const fragTargets = supIds
       .map((id) => list.find((f) => f.id === id))
       .filter((f): f is MemFragment => f != null && f.supersededAt == null);
-    if (targets.length > 0) {
+    const coreIds = supIds.filter((id) => id.startsWith('core:')).map((id) => id.slice(5));
+    const longIds = supIds.filter((id) => id.startsWith('long:')).map((id) => id.slice(5));
+    let coreChanged = false;
+    let longChanged = false;
+    if (coreIds.length > 0) {
+      const cores = readCores(contactId);
+      for (const m of cores) {
+        if (coreIds.includes(m.id) && m.supersededAt == null) {
+          m.supersededAt = now;
+          m.supersededBy = 'pending';
+          coreChanged = true;
+        }
+      }
+      if (coreChanged) writeJSON(coreKey(contactId), cores);
+    }
+    if (longIds.length > 0) {
+      const longs = readLongTerm(contactId);
+      for (const m of longs) {
+        if (longIds.includes(m.id) && m.supersededAt == null) {
+          m.supersededAt = now;
+          m.supersededBy = 'pending';
+          longChanged = true;
+        }
+      }
+      if (longChanged) writeJSON(longKey(contactId), longs);
+    }
+    const targets = fragTargets;
+    if (targets.length > 0 || coreChanged || longChanged) {
       const newId = uid();
       for (const t of targets) {
         t.supersededAt = now;
         t.supersededBy = newId;
       }
-      superseded += targets.length;
+      // 回填核心/长期的 supersededBy（上面先落 pending 占位，拿到新碎片 id 后指到真身）
+      if (coreChanged) {
+        const cores = readCores(contactId);
+        for (const m of cores) if (m.supersededBy === 'pending') m.supersededBy = newId;
+        writeJSON(coreKey(contactId), cores);
+      }
+      if (longChanged) {
+        const longs = readLongTerm(contactId);
+        for (const m of longs) if (m.supersededBy === 'pending') m.supersededBy = newId;
+        writeJSON(longKey(contactId), longs);
+      }
+      superseded += targets.length + (coreChanged ? 1 : 0) + (longChanged ? 1 : 0);
       seen.add(key);
       added.push(newItem(content, item, newId));
       continue;

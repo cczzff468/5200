@@ -89,6 +89,20 @@ export const BLOCK_REQ_MAX_REJECTED = 3;
  * - 含「把我拉黑/拉黑我/被拉黑」不算——那是用户要求被拉黑或询问，方向相反；
  * - 「你把我拉黑吧/你拉黑我」由 AI 自主决定是否照做（既有 [拉黑] 标记链路），不在此拦截。
  */
+/** B2：用户是否在任一文字 App（wx/qq/sms）拉黑了该联系人——跨域 AI 自发 engage 的
+ *  全局静默闸：单聊拉黑后，AI 通过其他 App 的「自发邀约/自主下单」通道找用户会穿帮
+ *  （聊天回合与标记类动作已被回合入口守卫/白名单拦住，这里补齐调度型自发行为的全域停） */
+export function userBlockedAnywhere(contactId: string): boolean {
+  for (const app of ['wx', 'qq', 'sms'] as BlockApp[]) {
+    try {
+      if (loadBlock(app, contactId).byUser) return true;
+    } catch {
+      /* 单端读失败不影响其他端 */
+    }
+  }
+  return false;
+}
+
 export function isUserBlockIntent(text: string): boolean {
   const t = (text ?? '').trim().replace(/[。！!？?～~，,\s]+$/g, '');
   if (!t || t.length > 16) return false;

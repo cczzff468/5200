@@ -32,6 +32,8 @@ import { useGlobalCall } from './global-call';
 import { useSettings, useUI } from './store';
 import { buildNpcPromptExtra } from './npc-bond';
 import { BLOCK_CHANNEL, loadBlock } from './block-state';
+import { isDndWindowActive } from './notify-sound';
+import { markAiCall, recentAiCallWithin } from './ai-call-guard';
 import { getMemSettings, memRecallBlock } from '@/lib/memory';
 import { buildTimeAwareBlock } from '@/lib/time-aware';
 import { getReplyCount } from '@/lib/reply-count';
@@ -150,10 +152,18 @@ export function getProactiveTickParams(): { firstDelay: number; interval: number
 interface ProactiveDecision {
   action: 'call' | 'wait' | 'skip';
   reason: string;
+  /** C14 主动来电媒体：决策端可选 video（仅当关系亲密/常视频时）；缺省 voice */
+  media?: 'voice' | 'video';
 }
 // ---------------- 开关（settings.tsx 共用） ----------------
 
 /** AI 主动来电总开关（kv 'proactive-call-enabled'，无记录/非法值=默认开） */
+/** C3：主动来电档位是否 off（聊天标记来电入口用：用户关闭「AI 主动来电」时，
+ *  [语音通话]/[视频通话] 标记也不再真的拨出——off = 关闭 AI 自发的全部来电通道） */
+export function isProactiveCallOff(): boolean {
+  return getProactiveLevel() === 'off';
+}
+
 export function isProactiveCallEnabled(): boolean {
   const v = kvGet<{ value?: unknown }>(ENABLED_KEY);
   return typeof v?.value === 'boolean' ? v.value : true;
@@ -333,6 +343,41 @@ function setShortCooldown(contactId: string, at: number): void {
   kvSet(cooldownKey(contactId), { at, action: 'wait', window: preset().shortCooldownMs });
 }
 
+// ---------------- B5 拒接负反馈冷却（此前拒接/未接不累计惩罚，反复拒接 N 次行为不变） ----------------
+
+const REJECT_STREAK_KEY = (contactId: string) => `proactive-call-reject:${contactId}`;
+/** 单次惩罚倍率：连续拒接 0/1/2/≥3 次时，下次 call 冷却 ×1/×2/×4/×6，封顶 24h */
+const REJECT_FACTOR_MAX = 6;
+const REJECT_PENALTY_CAP_MS = 24 * 60 * 60_000;
+/** 计数时效：超过 48h 无新的拒接则从零计（旧账不无限累积） */
+const REJECT_STREAK_TTL_MS = 48 * 60 * 60_000;
+
+function rejectStreakOf(contactId: string, nowMs: number): number {
+  const r = kvGet<{ count?: unknown; at?: unknown }>(REJECT_STREAK_KEY(contactId));
+  if (!r || typeof r.count !== 'number' || r.count <= 0) return 0;
+  if (typeof r.at !== 'number' || nowMs - r.at > REJECT_STREAK_TTL_MS) return 0;
+  return r.count;
+}
+
+/** 拒接/未接一通 AI 主动来电：计数 +1（recordMissedPhoneCall 调用） */
+function bumpRejectStreak(contactId: string, nowMs: number): void {
+  const prev = rejectStreakOf(contactId, nowMs);
+  kvSet(REJECT_STREAK_KEY(contactId), { count: prev + 1, at: nowMs });
+}
+
+/** 用户接听了 AI 来电：负反馈清零（关系正常，冷却回基准档） */
+function clearRejectStreak(contactId: string): void {
+  kvSet(REJECT_STREAK_KEY(contactId), { count: 0, at: Date.now() });
+}
+
+/** 真拨出 AI 主动来电时落冷却：按连续拒接次数乘惩罚倍率（B5），封顶 24h */
+function setCallCooldownWithPenalty(contactId: string, at: number): void {
+  const streak = rejectStreakOf(contactId, at);
+  const factor = Math.min(1 + streak, REJECT_FACTOR_MAX);
+  const window = Math.min(preset().cooldownActiveMs * factor, REJECT_PENALTY_CAP_MS);
+  kvSet(cooldownKey(contactId), { at, action: 'call', window });
+}
+
 // ---------------- 决策请求 ----------------
 
 /** 决策失败（网络/超时/非 200）返回 null，由调用方按 wait 口径落冷却 */
@@ -360,7 +405,7 @@ async function requestProactiveDecision(args: {
       signal: AbortSignal.timeout(75_000),
     });
     if (!res.ok) return null;
-    const data = (await res.json()) as { action?: unknown; reason?: unknown };
+    const data = (await res.json()) as { action?: unknown; reason?: unknown; media?: unknown };
     const action =
       data.action === 'call' || data.action === 'wait' || data.action === 'skip' ? data.action : 'skip';
     const reason = typeof data.reason === 'string' && data.reason.trim() ? data.reason.trim().slice(0, 120) : '';
@@ -384,6 +429,8 @@ async function recordMissedPhoneCall(
   // #17 拉黑守卫：用户在「信息」App 拉黑了该角色 → 仍落 call-logs 留历史记录，但 voicemails（AI 留言）不写
   // （避免「我已把你拉黑，你却还在给我语音留言」的体验断裂；call-logs 保留以便用户回看未接来电历史）
   const blockedByUser = loadBlock('sms', contactId).byUser === true;
+  // B5 拒接负反馈：被拒/超时计数 +1（下次主动来电冷却乘惩罚倍率；接通时清零）
+  bumpRejectStreak(contactId, Date.now());
   try {
     await localDB.put('call-logs', {
       id: genId(),
@@ -543,8 +590,13 @@ async function tickInner(): Promise<void> {
   // 现在直接短路：不轮询、不决策、不拨出
   if (getProactiveLevel() === 'off') return;
 
-  // ② 深夜硬闸：本地时间 [0, 8) 不打（23 点后的晚间分寸交给决策 API 按人设/时间判断）
-  if (new Date(nowMs).getHours() < preset().nightEndHour) return;
+  // ② 深夜硬闸：本地时间 [23, 8) 不打（B1 统一口径——与主动消息自主档静默窗口和决策 prompt
+  // 「23 点到早 8 点不打」一致；此前 [0,8) 让 23-24 点全靠 LLM 自觉、无硬闸兜底）
+  const hourNow = new Date(nowMs).getHours();
+  if (hourNow >= 23 || hourNow < preset().nightEndHour) return;
+  // ②-b 系统免打扰时段（设置›通知的全局 DND）不打：用户配置「22:00-08:00 免打扰」后，
+  // AI 不得在该时段主动来电叫醒（B1：此前 DND 只静音提示音，拦不住全屏来电+响铃）
+  if (isDndWindowActive(new Date(nowMs))) return;
 
   // ③ 交互中守卫：已有来电响铃或通话进行中不发起（页面后台 document.hidden 照常——真实手机行为）
   if (useIncomingCall.getState().call) return;
@@ -684,6 +736,11 @@ async function tickInner(): Promise<void> {
   // #52 修复：决策为 call 但触发前发现已有通话/闹钟 → 联系人未被真拨打，不应被记 6h 冷却。
   //   落 5min 短冷却（避免 90s 重试又命中同一联系人浪费一次决策 API；足够下一 tick 选到其他候选）。
   //   真拨打才落 6h call 冷却。
+  // C3 统一来电守卫：距上次任意通道 AI 来电不足 3 分钟不再拨（防「标记来电刚打完主动来电又来」贴脸）
+  if (recentAiCallWithin(contact.id, undefined, nowMs)) {
+    setShortCooldown(contact.id, nowMs);
+    return;
+  }
   if (useIncomingCall.getState().call) {
     setShortCooldown(contact.id, nowMs);
     return;
@@ -702,10 +759,13 @@ async function tickInner(): Promise<void> {
     setShortCooldown(contact.id, nowMs);
     return;
   }
-  // 真拨打：落 6h 冷却（call action）
-  setCooldown(contact.id, nowMs, 'call');
+  // 真拨打：落 call 冷却（B5：按连续拒接次数乘惩罚倍率，封顶 24h；接通清零回基准档）
+  setCallCooldownWithPenalty(contact.id, nowMs);
   const number = contact.phone || derivePlaceholderNumber(contact.id);
   const name = contact.name;
+  // C3 统一来电守卫：登记本次 AI 来电（聊天标记来电通道拨出前会互查，防贴脸连打）
+  markAiCall(contact.id, nowMs);
+  const callMedia = decision.media === 'video' ? ('video' as const) : ('voice' as const);
   triggerIncomingCall({
     source: 'phone',
     bannerStage: 'pill',
@@ -713,10 +773,14 @@ async function tickInner(): Promise<void> {
     avatar: avatarFor(contact, 'phone'),
     number,
     contact,
+    // C14：决策选 video 时来电快照带 media（来电 UI 显示视频标签）；接听后电话 App 进视频通话
+    ...(callMedia === 'video' ? { media: callMedia } : {}),
     // 接听：写 pending（带 proactiveContext=决策 reason 作为开场情境，电话 App 消费端透传通话引擎）
     // + 切到电话 App 进「来电方向」通话界面（照抄 chat.tsx onAnswer；接听交接兜底由 IncomingCallLayer 承担）
     onAnswer: () => {
-      setPendingPhoneAnswer({ contact, number, name, proactiveContext: decision.reason });
+      // 接听了 AI 的电话：拒接负反馈清零（B5）
+      clearRejectStreak(contact.id);
+      setPendingPhoneAnswer({ contact, number, name, proactiveContext: decision.reason, ...(callMedia === 'video' ? { media: callMedia } : {}) });
       useUI.getState().switchToApp('phone');
     },
     // 拒绝 / 响铃 25 秒超时：落未接记录 + AI 语音留言（人设化解释，照抄 chat.tsx 同款链路）
@@ -749,6 +813,8 @@ export function triggerBlockCall(contact: ContactRecord, contextHint: string): b
     if (blk.byUser || blk.byChar) return false;
     // 落 call 冷却：防直拨后 tick 又在短窗口内把同一人选出来重复拨打
     setCooldown(contact.id, Date.now(), 'call');
+    // C3 统一来电守卫：叙事直拨同样登记（防与聊天标记来电贴脸连打）
+    markAiCall(contact.id);
     const number = contact.phone || derivePlaceholderNumber(contact.id);
     const name = contact.name;
     triggerIncomingCall({

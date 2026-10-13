@@ -33,6 +33,8 @@ export interface ProactiveDecision {
   action: 'call' | 'wait' | 'skip';
   /** call = 拨打目的/想聊什么（接通后的开场情境）；wait/skip = 简述为什么不打 */
   reason: string;
+  /** C14 来电媒体：决策端关系亲密/常视频时可选 video；缺省 voice（skip/wait 响应可缺省） */
+  media?: 'voice' | 'video';
 }
 
 /** 客户端拼好的最近聊天摘要条目（三端各取最近几条文本/转写） */
@@ -93,8 +95,9 @@ function buildProactiveSystemPrompt(
       '④ 距上次互动的时长——刚聊完没多久（不到 2 小时）通常没必要再打；',
       hasChat ? '下方给出了你们在各 App 的最近聊天摘要与距上次互动的时长。' : '没有最近聊天摘要时，只按人设与时间判断。',
       '大多数情况应该返回 wait（有由头但此刻不合适，再等等）或 skip（没有理由打）；只有真的有打电话的理由（想念、担心、有事要说、约定、节日问候）才返回 call。',
+      '媒体选择（C14）：默认语音电话；只有当你们平时常打视频、关系亲密到「想看着 TA 说」时才在 call 时选视频——绝大多数情况保持 voice。',
       '严格输出一个 JSON 对象，不要输出任何其他文字：',
-      '{"action":"call或wait或skip","reason":"..."}',
+      '{"action":"call或wait或skip","media":"voice或video","reason":"..."}',
       'reason 是中文一句话：call 时写「你打电话来的目的/想聊什么」（如「想问问你今天面试顺不顺利」），接通后你会以它为开场；wait/skip 时简述为什么不打。',
     ],
   });
@@ -106,6 +109,8 @@ function normalizeProactiveDecision(raw: string): ProactiveDecision {
   if (!obj) return { action: 'skip', reason: 'decide-failed' };
   const a = typeof obj.action === 'string' ? obj.action.trim().toLowerCase() : '';
   const action: ProactiveDecision['action'] = a === 'call' || a === 'wait' ? a : 'skip';
+  const mv = typeof obj.media === 'string' ? obj.media.trim().toLowerCase() : '';
+  const media: ProactiveDecision['media'] = action === 'call' && mv === 'video' ? 'video' : 'voice';
   const reason = (typeof obj.reason === 'string' ? obj.reason : '')
     .replace(/[*_`#>~[\]]/g, '')
     .replace(/^["'「『]+|["'」』]+$/g, '')
@@ -113,6 +118,7 @@ function normalizeProactiveDecision(raw: string): ProactiveDecision {
     .slice(0, 120);
   return {
     action,
+    media,
     reason:
       reason ||
       (action === 'call' ? '就是想你了，想听听你的声音' : action === 'wait' ? '此刻还不太合适' : '没特别的理由'),

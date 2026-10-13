@@ -48,6 +48,7 @@ import { kvGetRaw } from './idb-kv';
 import { getActiveAccountIdFor } from './accounts';
 import { localDB, type CallLogRecord, type VoicemailRecord } from './db';
 import { getContact } from './contacts-store';
+import { loadBlock, type BlockApp } from './block-state';
 import { getMemSettings } from '@/lib/memory';
 import { listGroups, loadGroupMsgs, type WxGroupMsg } from './groups';
 import { musicUid } from './music-api';
@@ -461,10 +462,23 @@ export async function buildCrossAppBlock(contactId: string, currentApp: CrossApp
       if (lines.length === 0) continue; // 空会话的 App 整段跳过
       // 音乐节单独标注背景定位（第二十三轮反馈：修「AI 回复被音乐带偏、不回应用户的话」——
       // 单独播放时所有聊天 App 共用同一套优先级：用户消息最高，音乐只是背景，对方不聊歌就不聊歌）
+      // C2 拉黑感知标注：拉黑不切断跨 App 近况（cross-app-reach 依赖 AI「记得」别处的事），
+      // 但 AI 必须知道拉黑事实本身——否则拉黑期间用户单方面发的气话会像正常历史一样被接话穿帮
+      const blockedNote = (() => {
+        if (app !== 'wx' && app !== 'qq' && app !== 'sms') return '';
+        try {
+          const blk = loadBlock(app as BlockApp, contactId);
+          if (blk.byUser) return `（注意：${me} 已经在这个 App 把你拉黑了——你在那边发的消息 TA 收不到，下面的记录只是历史）`;
+          if (blk.byChar) return `（你在这个 App 把 ${me} 拉黑了，TA 在那边发不出消息给你）`;
+        } catch {
+          /* 读不到按无拉黑 */
+        }
+        return '';
+      })();
       const header =
         app === 'music'
           ? `▶ 音乐 听歌动态（只是背景信息：知道${me}在听什么即可，${me}不主动提歌就不要聊歌，回复永远以${me}刚说的话为先）：`
-          : `▶ ${APP_LABEL[app]} 最近${app === 'phone' ? '通话' : '对话'}：`;
+          : `▶ ${APP_LABEL[app]} 最近${app === 'phone' ? '通话' : '对话'}：${blockedNote}`;
       sections.push({ header, lines });
     }
     if (sections.length === 0) return envLine; // 全部其他 App 都无记录：只保留当前环境行
@@ -511,6 +525,11 @@ function groupMsgLines(msgs: WxGroupMsg[]): string[] {
  * - 群级：群记录的 memoryInterop 开关（对照 memory.ts 的群 interop 门控，语义同「默认关闭 =
  *   群与私聊隔离」）未开启的群不参与注入——群内容流向私聊 AI 上下文比总结记忆更原始，
  *   用户关掉群记忆互通时原始消息同样不应外流。
+ */
+/**
+ * C17 隔离依赖说明：群聊块的账号隔离完全依赖 loadGroupMsgs 的 kvGet 自动作用域
+ * （wx-group-msgs:<gid> 命中 wx- 前缀 → effKey 加当前账号后缀）。若未来群消息键改风格
+ * （脱离 wx-/qq- 前缀命名），这里会静默失去账号隔离——改动键名前必须同步审查本函数。
  */
 export async function buildGroupRecentBlock(contactId: string, userName: string): Promise<string> {
   try {

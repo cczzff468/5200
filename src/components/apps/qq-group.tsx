@@ -169,7 +169,7 @@ import {
   type RichAction,
 } from '@/lib/chat-rich';
 import { qqUnreads } from '@/lib/unread-store';
-import { getMemSettings, memAfterAiTurn, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memPurgeMessageSources, memRecallBlock, setMemScopeForApp } from '@/lib/memory';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { applyWbUserBlocks, collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
@@ -2781,6 +2781,8 @@ export function QqGroupChatPage({
         if (mtEngage.block) groupRules.push(mtEngage.block);
         if (mtEngage.rules.length > 0) groupRules.push(...mtEngage.rules);
 
+        // B8 作用域竞态修复：人设组装读碎片前先落位QQ作用域（群键本身随前缀作用域，碎片库依赖模块级状态）
+        setMemScopeForApp('qq');
         const npcExtra = buildNpcPromptExtra(char, contactsRef.current);
         const system = buildPersonaSystemPrompt(char, {
           channel: 'QQ',

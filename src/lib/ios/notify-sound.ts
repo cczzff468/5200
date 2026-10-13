@@ -628,6 +628,17 @@ export function inDndWindow(from: string, to: string, now?: Date): boolean {
 
 // ---------------- 提示音触发入口 ----------------
 
+/** B1：系统免打扰时段（设置›通知的全局 DND）当前是否生效——AI 主动行为闸（主动来电/自主消息）用：
+ *  用户配置「22:00-08:00 免打扰」后，AI 不得在该时段主动来电/自主发消息打扰（用户明确配置的定时/事件/提醒照发） */
+export function isDndWindowActive(now?: Date): boolean {
+  try {
+    const st = useNotifySound.getState().settings;
+    return inDndWindow(st.dndFrom, st.dndTo, now);
+  } catch {
+    return false;
+  }
+}
+
 /** 该类当前是否静音（总开关 / 分类开关 / 全局免打扰 / 分类免打扰 任一命中 = 静音） */
 export function isNotifySoundSilent(cat: NotifySoundCategory, now?: Date): boolean {
   const s = useNotifySound.getState().settings;

@@ -109,6 +109,10 @@ export interface MemCore {
   /** 【fix3-a 8】来源碎片任一带角色归属标注（或总结结果自带标注）时为 true：
    *  总结可能把「（AI角色本人）/（用户本人）」标注磨掉，靠此标记在召回侧兜底展示归属说明行 */
   hasRoleTag?: boolean;
+  /** 被新提取的记忆更正（supersedes 指向 core:前缀 id）：标记后召回侧不再注入（新旧矛盾以新为准） */
+  supersededAt?: number;
+  /** 更正本条的新记忆碎片 id */
+  supersededBy?: string;
 }
 
 /** 长期记忆：K 条核心记忆自动总结出的最稳定画像（记忆层级的顶层） */
@@ -136,6 +140,10 @@ export interface MemLongTerm {
   privateSource?: boolean;
   /** 【fix3-a 8】来源核心任一带角色归属标注（或总结结果自带标注）时为 true（同 MemCore.hasRoleTag） */
   hasRoleTag?: boolean;
+  /** 被新提取的记忆更正（supersedes 指向 long:前缀 id）：标记后召回侧不再注入（新旧矛盾以新为准） */
+  supersededAt?: number;
+  /** 更正本条的新记忆碎片 id */
+  supersededBy?: string;
 }
 
 /** 每联系人记忆设置 */

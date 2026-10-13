@@ -10,7 +10,7 @@
  * ④ 定时提醒：用户在聊天里说「几分钟后给我发消息」「每天 8 点给我发消息」「每隔 1 小时发一次」，
  *    AI 解析成定时任务（reminder），到点执行（生成消息时以任务内容为指令上下文）。
  *
- * 调度引擎：ProactiveMsgWatcher（PhoneShell 挂载）每 10s 调 runProactiveMsgTick()：
+ * 调度引擎：ProactiveMsgWatcher（PhoneShell 挂载）每 5s 调 runProactiveMsgTick()：
  * 守卫（来电/通话/闹钟互斥）→ 枚举索引（配置过的 app×联系人）→ 逐条判定四类触发 → 生成 → 投递。
  *
  * 投递：复用 ai-delivery 管线（scheduleAiDelivery 逐条节奏）+ pushChatNotification（灵动岛/横幅/系统通知）
@@ -28,6 +28,7 @@ import { avatarFor, type ContactRecord } from '@/lib/contacts';
 import { buildPersonaSystemPrompt } from './persona';
 import { buildNpcPromptExtra } from './npc-bond';
 import { loadBlock } from './block-state';
+import { isDndWindowActive } from './notify-sound';
 import { getMemSettings, memChatRecallBlock, memAfterAiTurn, memConvoFromRaw } from '@/lib/memory';
 import { buildMomentsChatBlock } from '../moments';
 import { buildCrossAppBlock } from './cross-app-context';
@@ -117,9 +118,16 @@ const SCHEDULED_GRACE_MIN = 5;
 const CONVO_ACTIVE_MS = 120_000;
 /** 自主决策间隔基准：每个开启自主模式的角色约每 5 分钟做一次「要不要主动发」决策（可经 autoFreqMin 调整） */
 const AUTO_DECIDE_BASE_MS = 5 * 60_000;
-/** 自主模式深夜静默：本地时间 [1, 7) 不自主发起（定时/事件/提醒是用户明确意图，不受此限） */
-const AUTO_QUIET_START_HOUR = 1;
-const AUTO_QUIET_END_HOUR = 7;
+/** 自主模式夜间静默：本地时间 23:00–次日 8:00 不自主发起（B1 统一口径——与主动来电硬闸
+ *  [23,8) 和来电决策 prompt「23 点到早 8 点不打」完全一致；定时/事件/提醒是用户明确意图，不受此限；
+ *  系统免打扰时段（设置›通知的 DND）另行拦住自主触发，见 tickInner ④） */
+const AUTO_QUIET_START_HOUR = 23;
+const AUTO_QUIET_END_HOUR = 8;
+/** A3：同角色任意主动消息最小发送间隔——此前 sentAt 落库但零读取，「定时30s+提醒+事件+自主」
+ *  各通道独立到期可在相邻 tick（5s）背靠背连发；45s 是防轰炸下限（用户配 30s 定时实际约 45-50s 一条） */
+const MIN_SEND_GAP_MS = 45_000;
+/** C7：once 提醒迟到补发上限——页面长时间没开后，超过该时长的过期提醒静默丢弃（「3 天后的喝水提醒」是噪声） */
+const REMINDER_LATE_MAX_MS = 24 * 60 * 60_000;
 /** 自主 wait 建议的下次决策延迟上下限（分钟） */
 const AUTO_WAIT_MIN_MINUTES = 5;
 const AUTO_WAIT_MAX_MINUTES = 120;
@@ -424,7 +432,16 @@ export async function parseReminderInstruction(app: ProactiveApp, cid: string, t
       task = { id: genId(), app, cid, kind: 'interval', intervalMs: Math.max(5_000, Math.round(mins * 60_000)), note: (parsed.note ?? '').slice(0, 80) || '按约定主动发消息', createdAt: now };
     }
     addReminder(app, task);
-    return `${reminderLabel(task)}｜${task.note}`;
+    // C13：拉黑期间引擎对该联系人全停（tickInner byUser 守卫），创建成功的提醒不会送达——
+    // 系统行当场说明，避免 UI 承诺与实际行为脱节（解除拉黑后照常恢复）
+    const blockedNow = (() => {
+      try {
+        return loadBlock(app, cid).byUser;
+      } catch {
+        return false;
+      }
+    })();
+    return `${reminderLabel(task)}｜${task.note}${blockedNow ? '（拉黑期间提醒不会送达）' : ''}`;
   } catch {
     return null;
   }
@@ -766,7 +783,10 @@ interface AutoDecision {
 
 function isAutoQuietHour(now: number): boolean {
   const h = new Date(now).getHours();
-  return h >= AUTO_QUIET_START_HOUR && h < AUTO_QUIET_END_HOUR;
+  // 起止跨夜（23→8）用或逻辑；普通区间用与逻辑
+  return AUTO_QUIET_START_HOUR > AUTO_QUIET_END_HOUR
+    ? h >= AUTO_QUIET_START_HOUR || h < AUTO_QUIET_END_HOUR
+    : h >= AUTO_QUIET_START_HOUR && h < AUTO_QUIET_END_HOUR;
 }
 
 /** 自主模式决策 prompt 规则 */
@@ -906,7 +926,9 @@ async function deliverProactiveMsg(app: ProactiveApp, contact: ContactRecord, te
     { initialDelay: 0 },
   );
 
-  setLast(app, cid, { lastSentText: text, sentAt: now });
+  // B4：实际发出一条主动消息后同步刷新 autoAt（把自主决策点推迟一个节奏周期）——
+  // 此前用户通道（定时/事件/提醒）发完后 autoAt 不动，自主在 2 分钟无发言时会紧跟再发一条
+  setLast(app, cid, { lastSentText: text, sentAt: now, autoAt: now });
   // 最近主动消息历史（Task 51 C2：设置页回看，每角色最近 20 条）
   pushHist(app, cid, { text, at: now, kind: trigger.kind, late: trigger.late });
 
@@ -947,7 +969,7 @@ export function getProactiveMsgTickParams(): { interval: number } {
 }
 
 /**
- * 调度 tick（ProactiveMsgWatcher 每 10s 调用；任何失败静默——后台增强能力）。
+ * 调度 tick（ProactiveMsgWatcher 每 5s 调用；任何失败静默——后台增强能力）。
  * 优先级：定时 > 事件 > 提醒 > 自主（同一角色一个 tick 最多发一条）。
  */
 export async function runProactiveMsgTick(): Promise<void> {
@@ -1005,7 +1027,14 @@ function dueReminderOf(app: ProactiveApp, cid: string, now: number): { r: Proact
   const cm = d.getHours() * 60 + d.getMinutes();
   for (const r of list) {
     if (r.kind === 'once' && typeof r.at === 'number' && !r.lastFiredAt) {
-      if (r.at <= now) return { r, late: now - r.at > FIRE_GRACE_MS };
+      if (r.at <= now) {
+        // C7：迟到超过 24h 的过期提醒静默丢弃（页面长期没开后回来不再收到荒谬时差的提醒）
+        if (now - r.at > REMINDER_LATE_MAX_MS) {
+          removeReminder(app, r.id);
+          continue;
+        }
+        return { r, late: now - r.at > FIRE_GRACE_MS };
+      }
       continue;
     }
     if (r.kind === 'daily' && r.dailyTime) {
@@ -1048,9 +1077,11 @@ async function tickInner(): Promise<void> {
     // 人设非空不再要求（用户反馈「设置了定时发消息到点不发」）：普通聊天对空人设照常回复
     //（persona.ts 对空人设有自然兑底），主动消息同口径；USER/无名仍排除
     if (!contact || contact.kind === 'user' || !contact.name?.trim()) continue;
-    // 拉黑守卫：用户拉黑角色 / 角色拉黑用户 → 都不主动发
+    // 拉黑守卫：用户拉黑角色（byUser）→ 该 App 主动消息全停（含定时/事件/提醒）；
+    // 角色拉黑用户（byChar）不再拦截主动消息（C8：与 block prompt「你拉黑 TA 后你仍然可以给
+    // TA 发消息」承诺对齐——AI 拉黑后主动找人是被认可的叙事语义，cross-app-reach byChar 同款）
     const blk = loadBlock(app, cid);
-    if (blk.byUser || blk.byChar) continue;
+    if (blk.byUser) continue;
 
     // 对话活跃守卫（Task 51 B1）：最近 2 分钟内**用户**发过消息时跳过定时/自主触发（不打断正在进行的聊天；
     // 事件/提醒是用户明确约定，不受此限）。10s tick 稍后再试。
@@ -1069,12 +1100,15 @@ async function tickInner(): Promise<void> {
     }
 
     const last = getLast(app, cid);
+    // A3 发送间隔闸：距上条主动消息不足 45s 时全部通道本轮延后（到点触发保留，下轮 tick 重试——
+    // daily/事件有 5 分钟宽限、interval 按累计判定、once 保留任务，均不会因延后而丢失）
+    const sendGapBlocked = nowMs - (last.sentAt ?? 0) < MIN_SEND_GAP_MS;
     // 配角圈注入不再限 NPC：CHAR 同样产出认识的配角 + 背景近况（buildNpcPromptExtra 按类型分叉），
     // 与四端聊天主链路的 npcExtra 口径对齐；全空返回 null 不注入，旧行为不变
     const npcExtra = buildNpcPromptExtra(contact, allContacts) as unknown as Record<string, unknown> | null;
 
-    // ① 定时触发（interval=按间隔累计；daily=对齐钟表时刻，按天去重+宽限）
-    if (cfg.timerOn && !convActive) {
+    // ① 定时触发（interval=按间隔累计；daily=对齐钟表时刻，按天去重+宽限；发送间隔闸内延后）
+    if (cfg.timerOn && !convActive && !sendGapBlocked) {
       if (cfg.timerMode === 'daily' && cfg.timerDailyTime) {
         const [hh, mm] = cfg.timerDailyTime.split(':').map(Number);
         const dm = hh * 60 + mm;
@@ -1092,10 +1126,10 @@ async function tickInner(): Promise<void> {
       }
     }
 
-    // ② 事件触发（宽限窗口内错过仍补发；按计划时刻分钟戳去重）
+    // ② 事件触发（宽限窗口内错过仍补发；按计划时刻分钟戳去重；发送间隔闸内延后）
     const firedEvt = last.evtAt ?? {};
     let evtFired = false;
-    for (const e of cfg.events) {
+    for (const e of sendGapBlocked ? [] : cfg.events) {
       const stamp = dueEventOf(e, nowMs, firedEvt);
       if (stamp !== null) {
         setLast(app, cid, { evtAt: { ...firedEvt, [e.id]: stamp } });
@@ -1106,8 +1140,8 @@ async function tickInner(): Promise<void> {
     }
     if (evtFired) continue;
 
-    // ③ 定时提醒（自然语言任务；once 迟到也补发并标注 late）
-    const due = dueReminderOf(app, cid, nowMs);
+    // ③ 定时提醒（自然语言任务；once 迟到补发并标注 late；发送间隔闸内延后——任务保留，下轮再试）
+    const due = sendGapBlocked ? null : dueReminderOf(app, cid, nowMs);
     if (due) {
       const rem = due.r;
       if (rem.kind === 'once') removeReminder(app, rem.id);
@@ -1116,8 +1150,8 @@ async function tickInner(): Promise<void> {
       continue;
     }
 
-    // ④ 自主触发（深夜静默；决策节奏可调 autoFreqMin，wait 决策会推迟下次决策点）
-    if (cfg.autoOn && !convActive && !isAutoQuietHour(nowMs)) {
+    // ④ 自主触发（夜间静默 23-8 + 系统免打扰时段 B1；决策节奏可调 autoFreqMin，wait 决策会推迟下次决策点）
+    if (cfg.autoOn && !convActive && !isAutoQuietHour(nowMs) && !isDndWindowActive() && !sendGapBlocked) {
       const baseMs = Math.max(2, cfg.autoFreqMin ?? 5) * 60_000;
       if (nowMs - (last.autoAt ?? 0) >= baseMs) {
         setLast(app, cid, { autoAt: nowMs });
@@ -1299,7 +1333,7 @@ export async function manuallyFireEvent(app: ProactiveApp, cid: string, eventId:
     // 人设非空不再要求（与 tickInner 同口径）
     if (!contact || contact.kind === 'user' || !contact.name?.trim()) return false;
     const blk = loadBlock(app, cid);
-    if (blk.byUser || blk.byChar) return false;
+    if (blk.byUser) return false; // 与 tickInner 同口径：仅用户拉黑拦截（C8）
     // 配角圈注入不再限 NPC（与上方 generateProactiveText 同口径；CHAR 也有配角圈/背景近况）
     const npcExtra = buildNpcPromptExtra(contact, all) as unknown as Record<string, unknown> | null;
     await fireProactive(app, contact, { kind: 'event', eventName: evt.name }, npcExtra);

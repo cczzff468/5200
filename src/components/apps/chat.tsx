@@ -87,7 +87,7 @@ import {
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { kvDel, kvGet, kvSet, kvSetDebounced } from '@/lib/ios/idb-kv';
-import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memRecallBlock } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memRecallBlock, memSummarizeCallNow, setMemScopeForApp } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import { ProactiveMsgPage } from './proactive-msg-page';
@@ -121,12 +121,12 @@ import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubbl
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
 import { autoTranscribeForAi, transcribeAudioBlob } from '@/lib/ios/stt-client';
 import { buildVoicePlaceholderRule } from '@/lib/chat-media-rules';
-import { stopSpeaking } from '@/lib/ios/tts-client';
+import { cleanTextForTts, stopSpeaking } from '@/lib/ios/tts-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { useAutoTextareaRef } from '@/lib/ios/use-auto-textarea';
 import { stopVoicePlayback } from '@/lib/ios/voice-player';
-import { decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice } from '@/lib/ios/ai-voice';
+import { decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice, undoLastAiVoiceDecision } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 
 // ---------------- 类型与常量 ----------------
@@ -491,6 +491,44 @@ async function recordMissedPhoneCall(
         account: getActiveAccountIdFor('phone'),
       });
     }
+    // C9 信息端来电不再零痕（对齐 wx/qq 的挂断续聊落库口径）：AI 的反应文字同步落到该联系人的
+    // 信息会话（错峰投递模拟打字节奏）——此前信息会话对这通来电无卡片无文字无记忆总结，
+    // AI 下次在信息里完全不知道打过电话；并写通话记忆（'phone' 名下，与留言召回同库）
+    try {
+      const sessionKey = `c:${contact.id}`;
+      const existing = loadMsgs(sessionKey) ?? [];
+      const base = (existing[existing.length - 1]?.time ?? Date.now()) + 1_500;
+      const withFollowup = [...existing];
+      texts.forEach((text, i) => {
+        withFollowup.push({
+          id: genId(),
+          role: 'assistant',
+          content: text,
+          time: base + i * 2_000,
+          kind: 'text',
+        });
+      });
+      saveMsgs(sessionKey, withFollowup);
+      try {
+        window.dispatchEvent(new CustomEvent('sms-msgs-changed', { detail: { cid: contact.id } }));
+      } catch {
+        /* 事件广播失败不影响落库 */
+      }
+      const ownerName = owner?.realName || '用户';
+      memSummarizeCallNow(
+        contact.id,
+        'phone',
+        useSettings.getState().apiConfig,
+        [
+          { role: 'peer' as const, text: '（电话打过去了，但 TA 没有接听）' },
+          ...texts.map((t) => ({ role: 'peer' as const, text: t })),
+        ],
+        { user: ownerName, peer: contact.name },
+        { direction: 'in' },
+      );
+    } catch {
+      // 信息会话落库失败静默（留言已落，不阻塞）
+    }
   } catch {
     // 留言失败静默
   }
@@ -505,6 +543,11 @@ async function recordMissedPhoneCall(
  *（memMainRecallBlockForAlt 的 altMainRelation）从这里取。
  */
 let activeContactRelation = '';
+/** C6：信息端同样告知「文字消息有时会以语音条送达」（与微信/QQ 同款，见 wechat.tsx AI_VOICE_DELIVERY_RULE）——
+ *  此前信息端会升级语音但不告知，AI 可能说「我给你发条语音」而系统并不发（承诺落空穿帮） */
+const SMS_AI_VOICE_DELIVERY_RULE =
+  '（你的文字消息有时会以语音条的形式送达对方——这是正常的送达方式，不用在意；但不要在正文里说「我给你发条语音」这类话，也不要主动承诺发语音，用文字自然聊就好。）';
+
 function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp: boolean, npcExtra?: NpcPromptExtra | null, userReal?: string | null): string {
   const mode = useSettings.getState().addressMode;
   const addrName = userReal ? addressNameOf({ name: userReal, realName: userReal }, mode) : null;
@@ -527,6 +570,8 @@ function buildPersonaPrompt(c: ContactRecord, ownerName: string | null, multiApp
     accountId: accId,
     // 跨 App 身份感知：互通开关（打开会话时现场读取）；陌生身份模式由人设内部忽略用户称呼/关系/多端段
     multiApp,
+    // C6：语音频率非 off 时告知「文字可能以语音条送达」（与微信/QQ 三端同口径）
+    extraRules: getAiVoiceFreq(`sms:${c.id}`) !== 'off' || getAiVoiceFreq(`wx:${c.id}`) !== 'off' ? [SMS_AI_VOICE_DELIVERY_RULE] : [],
     ...(strangerText ? { strangerMode: 'text' as const } : {}),
     ...npcExtra,
   });
@@ -1323,7 +1368,11 @@ function ChatView({
         !m.error && !m.sys && !m.blkreq &&
         (m.kind === undefined || m.kind === 'text') &&
         m.content.trim().length > 0 &&
-        decideAiVoiceMessage(voiceFreqKey);
+        // B6：TTS 清洗后为空的内容（纯 *动作描写* 行等）跳过判定（不白吃语音名额）
+        cleanTextForTts(m.content).trim().length > 0 &&
+        // C6：档位跟随微信设置（voiceFreqKey=wx:<id> 同键），计数器分键 sms:* 独立推进——
+        // 此前与微信共享计数器，微信聊 2 条后来信息端第 1 条就出语音（节奏串扰未在文案披露）
+        decideAiVoiceMessage(voiceFreqKey, `sms:${voiceFreqKey}`);
       const body = voiceTurn
         ? '[语音]'
         : notifyPreviewText({
@@ -1346,7 +1395,10 @@ function ChatView({
         const targetId = m.id;
         void synthesizeAiVoice(m.content, memContactId)
           .then((clip) => {
-            if (!clip) return; // 合成失败 → 保持文字
+            if (!clip) {
+              undoLastAiVoiceDecision(); // B6：合成失败回滚计数
+              return; // 合成失败 → 保持文字
+            }
             const voice: VoiceMsgData = {
               url: clip.url,
               duration: clip.duration,
@@ -4675,6 +4727,8 @@ export default function ChatApp() {
         : contacts.find((x) => x.kind === 'user' && !x.altOf);
     // 大号关系标签：披露解锁后的「你认出来了」包装段用（memChatRecallBlock altMainRelation）
     activeContactRelation = c.relation?.trim() || '';
+    // B8 作用域竞态修复：buildNpcPromptExtra 读碎片依赖模块级账号作用域，提前落位
+    setMemScopeForApp('sms');
     setChatSession({
       key: `c:${c.id}`,
       peer: { title: c.phone || c.name, avatarSrc: c.avatar, name: displayNameOf(c) || c.name, remark: c.remark ?? '' },

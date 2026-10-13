@@ -15,7 +15,8 @@
  */
 
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
-import { listFragments } from '@/lib/memory';
+import { getMemSettings, listFragments, noteBondFragmentIds } from '@/lib/memory';
+import { fadeState, isMemExpired, type FadeInput } from '@/lib/memory-core';
 import type { NpcCircleEntry } from './persona';
 
 /** 摘要截断（prompt 注入保持紧凑，避免人设段膨胀吃 token） */
@@ -80,14 +81,20 @@ export function bondNotesFor(contactId: string, keywords: string[], limit = 3): 
       return hasCJK ? k.length >= 1 : k.length >= 2;
     });
   if (words.length === 0) return [];
+  const now = Date.now();
+  const { forget } = getMemSettings(contactId);
   const frags = listFragments(contactId).filter((f) => {
-    // 已入核心记忆（consumedAt）/被更新取代（supersededAt）的碎片不再作为「最近发生的事」
-    // 注入——与 memChatRecallBlock 同口径（避免重复注入与陈旧注入）
-    if (f.consumedAt || f.supersededAt) return false;
+    // 已入核心记忆（consumedAt）/被更新取代（supersededAt）/已过期/已淡化的碎片不再作为「最近发生的事」
+    // 注入——与 memChatRecallBlock 完全同口径（B8：消除重复注入与陈旧注入）
+    if (f.consumedAt || f.supersededAt || isMemExpired(f, now)) return false;
+    if (fadeState(f as FadeInput, forget, now) === 'faded') return false;
     const content = f.content ?? '';
     return words.some((w) => content.includes(w));
   });
-  return frags.slice(0, limit).map((f) => {
+  const picked = frags.slice(0, limit);
+  // B8：把本轮选用的碎片 id 登记给记忆召回侧（memRecallBlock 排除同一批碎片，跨块去重）
+  noteBondFragmentIds(picked.map((f) => f.id));
+  return picked.map((f) => {
     const d = new Date(f.sourceTime || f.createdAt);
     return `${d.getMonth() + 1}月${d.getDate()}日：${snippet(f.content, 60)}`;
   });

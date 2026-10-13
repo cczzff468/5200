@@ -39,7 +39,7 @@ import { getContact, ownerProfileFor, setAppFriendFlag, mainOwnerContact } from 
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { getAccountById, getActiveAccountIdFor, MAIN_ACCOUNT_ID } from './accounts';
 import { useSettings } from './store';
-import { BLOCK_CHANNEL } from './block-state';
+import { BLOCK_CHANNEL, loadBlock } from './block-state';
 import { buildPersonaSystemPrompt } from './persona';
 import { getMemSettings, isAltMainDisclosed, memAltLinked, memChatRecallBlock } from '@/lib/memory';
 import { buildTimeAwareBlock } from '@/lib/time-aware';
@@ -399,6 +399,14 @@ export async function maybeCharReAddReq(app: FriendDelApp, contactId: string): P
   if (!st) return; // 已重新加回（状态清空）
   if (st.rejected) return; // 用户拒绝过：停止申请
   if (hasPendingReqFor(app, contactId)) return; // 已有待处理申请（同一联系人同时只一条）
+  // B2 拉黑守卫：双向拉黑期间都不发加回申请——用户拉黑（byUser）时申请卡+验证留言直写
+  // 被拉黑会话会绕过「拉黑后 AI 不能发消息」的语义；角色拉黑用户（byChar）时 AI 也不该发申请
+  try {
+    const blk = loadBlock(app, contactId);
+    if (blk.byUser || blk.byChar) return;
+  } catch {
+    /* 读不到按无拉黑 */
+  }
   const contact = await getContact(contactId).catch(() => null);
   if (!contact || contact.kind === 'user') return;
   if (!(contact.persona ?? '').trim()) return; // 没人设的角色不生成（与主动来电候选同口径）
@@ -722,6 +730,19 @@ export async function decideCharFriendReq(
     const owner = await mainOwnerContact().catch(() => null);
     mainName = owner?.name?.trim() || '机主';
   }
+  // B2 拉黑情境进决策（此前两套状态机互不感知：AI 拉黑了 TA 却像陌生人一样决策好友申请）
+  const blockedCtxLine = (() => {
+    try {
+      const blk = loadBlock(app, contact.id);
+      if (blk.byChar)
+        return `- 注意：你之前在${channel}把 TA 拉黑了（还没解除），TA 现在发来好友申请——按你的人设决定是「气消了趁机和解」（同意=重新加好友）还是继续不想理（拒绝/reply 维持拉黑）；`;
+      if (blk.byUser)
+        return `- 注意：TA 之前在${channel}把你拉黑过，现在又主动发来好友申请——按你的人设想想怎么面对（可以惊讶/得意/赌气/心软，也可以借机聊开）；`;
+    } catch {
+      /* 读不到按无拉黑 */
+    }
+    return '';
+  })();
   // 用户侧发言（验证留言 + 线程回复）作为披露检测文本；召回先执行（内部完成扫描+标记落盘）
   const threadMeText = thread.filter((m) => m.who === 'me').map((m) => m.text).join(' ');
   const memoryBlock = memChatRecallBlock(contact.id, app, '', { disclosureText: threadMeText, altMainName: mainName });
@@ -791,7 +812,7 @@ export async function decideCharFriendReq(
     extraRules: sceneRules,
   });
   const timeBlock = buildTimeAwareBlock({ lastMsgTime: null, regionHint: contact.region || null });
-  const system = [persona, memoryBlock, timeBlock, mainIdentityLine].filter(Boolean).join('\n\n');
+  const system = [persona, memoryBlock, timeBlock, mainIdentityLine, blockedCtxLine].filter(Boolean).join('\n\n');
 
   const lines = thread.slice(-8).map((m) => {
     const who = m.who === 'me' ? userName : contactRealNameSafe(contact);

@@ -24,6 +24,7 @@ import { useIncomingCall } from './incoming-call';
 import { useGlobalCall } from './global-call';
 import { useMusic } from './music-store';
 import { getContact, listContacts } from './contacts-store';
+import { userBlockedAnywhere } from './block-state';
 import { loadActiveTogether, startTogether } from './music-ai';
 import { sendAgreeCardForAccept } from './together-flow';
 import { memAddEventFragment } from '../memory';
@@ -247,6 +248,8 @@ export async function runTogetherInviteTick(): Promise<void> {
     // 没有任何听歌数据时 AI 无从邀约（也避免游客刚装就弹）
     const c = await pickContact();
     if (!c) return;
+    // B2：用户拉黑了该联系人（任一文字 App）→ AI 不再自发邀约一起听（拉黑期间的全域自发静默）
+    if (userBlockedAnywhere(c.id)) return;
     if (tickGuarded(c.id)) return;
     const song = pickSong();
     if (!song) return;

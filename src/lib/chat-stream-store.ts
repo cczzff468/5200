@@ -365,8 +365,13 @@ async function computeAltAccountsDigest(app: AccountApp): Promise<string | null>
     entries.sort((a, b) => b.time - a.time);
     const picked = entries.slice(0, ALT_DIGEST_MAX_MSGS);
     picked.sort((a, b) => a.time - b.time);
-    // 标题行用注册表条目（小号名/匿名账号 + 手机号），摘录格式与 v1 完全一致
-    const label = acc.kind === 'anon' ? '匿名账号' : acc.name.trim() || '小号';
+    // 标题行用注册表条目（小号名/匿名账号 + 手机号），摘录格式与 v1 完全一致；
+    // C15：大号档账号（grade='main'，Task 33 引入）此前也被装进【用户的小号】标题下——
+    // 标题补「（大号）」让 AI 知道这是用户的大号马甲（语义上不再是「小号」）
+    const label =
+      acc.kind === 'anon'
+        ? '匿名账号'
+        : (acc.name.trim() || '小号') + (acc.grade === 'main' ? '（大号）' : '');
     const phone = acc.phone ? `（${acc.phone}）` : '';
     const recent = altRelTime(picked[picked.length - 1].time);
     const lines = [`〔${label}〕${phone}与你的最近聊天${recent ? `（最近消息：${recent}）` : ''}：`];

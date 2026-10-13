@@ -60,7 +60,7 @@ import { localDB, genId, formatDuration, type CallLogRecord, type VoicemailRecor
 // ownerRealNameFor/ownerProfileFor：按电话 App 当前账号取「我」的身份（多账号 v2：大号=机主，小号/匿名号=档案）
 import { createContact, deleteContact as deleteContactLocal, listContactsFor, ownerProfileFor, ownerRealNameFor, updateContact } from '@/lib/ios/contacts-store';
 import { buildNpcPromptExtra } from '@/lib/ios/npc-bond';
-import { getMemSettings, memAddEventFragment, memAfterAiTurn, memConvoFromRaw, memRecallBlock, memSummarizeCallNow } from '@/lib/memory';
+import { getMemSettings, memAddEventFragment, memAfterAiTurn, memConvoFromRaw, memRecallBlock, memSummarizeCallNow, setMemScopeForApp } from '@/lib/memory';
 import { collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
@@ -885,6 +885,8 @@ function CallScreen({
         // 配角圈注入（CHAR=认识的配角，NPC=归属者资料卡）+ 机主身份：全部联系人现场查一次（失败回退无注入/无身份）
         // 头像按 App 投影：电话通话链路读 phone 槽位（无槽位回退全局默认头像）
         const all = contact ? await listContactsFor('phone').catch(() => [] as ContactRecord[]) : [];
+        // B8 作用域竞态修复：人设组装读碎片前先落位电话作用域
+        setMemScopeForApp('phone');
         const npcExtra = contact ? buildNpcPromptExtra(contact, all) : null;
         // 本账号「我」的资料（多账号 v2）：主号取机主卡片（排除小号/匿名号档案），小号取本账号档案；
         // 陌生来电（匿名号/未登记小号拨出）不下发任何身份（AI 不知道对面是谁，报真名会直接破功）。
@@ -4018,48 +4020,6 @@ export default function PhoneApp() {
   // ② 监听消费事件——本 App 已在前台时接听，switchToApp 无事发生、挂载消费不会重跑，
   //    来电层派发 PENDING_PHONE_ANSWER_EVENT 让这里立即进通话界面（幽灵来电修复）；
   //    锁屏时接听的 pending 由来电层在解锁后兜底派发，同样走这里。
-  const consumePendingAnswer = useCallback(() => {
-    const pending = takePendingPhoneAnswer();
-    if (!pending) return;
-    // #8 已有通话进行中：新来电不替换正在进行的通话（与 startCall 的防替换口径一致），也不再静默
-    // 丢弃——toast + 落一条「未接来电」记录（与 AI 来电被拒/超时的 recordMissedPhoneCall 落库同
-    // 口径，进最近通话可回看漏了谁；不触发 AI 留言，选最小实现）
-    if (callTargetRef.current) {
-      const missed: CallLogRecord = {
-        id: genId(),
-        number: pending.number,
-        contactId: pending.contact?.id ?? null,
-        displayName: pending.contact?.name ?? pending.name,
-        peerKind: (pending.contact?.kind as CallLogRecord['peerKind']) ?? 'unknown',
-        avatar: pending.contact?.avatar ?? null,
-        direction: 'missed',
-        duration: 0,
-        // 多账号（Task 40-2d）：记录归属电话 App 当前账号
-        account: getActiveAccountIdFor('phone'),
-        createdAt: Date.now(),
-      };
-      setLogs((prev) => [missed, ...(prev ?? [])].sort((a, b) => b.createdAt - a.createdAt));
-      void localDB.put('call-logs', missed);
-      showToast('通话中，已忽略新来电');
-      return;
-    }
-    // AI 主动来电目的（pending.proactiveContext，Task 40-d 写入）：随 CallTarget 透传进
-    // 该通电话所有 turn payload 的 proactiveContext（普通来电/拨出无此字段，不注入）
-    const proactive = pending.proactiveContext;
-    setCallTarget((prev) =>
-      prev ?? {
-        number: pending.number,
-        contact: pending.contact,
-        direction: 'in',
-        ...(proactive ? { proactiveContext: proactive } : {}),
-      },
-    );
-  }, [showToast]);
-  useEffect(() => {
-    consumePendingAnswer();
-    window.addEventListener(PENDING_PHONE_ANSWER_EVENT, consumePendingAnswer);
-    return () => window.removeEventListener(PENDING_PHONE_ANSWER_EVENT, consumePendingAnswer);
-  }, [consumePendingAnswer]);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [editSheetOpen, setEditSheetOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -4077,7 +4037,7 @@ export default function PhoneApp() {
     { value: 'conservative', label: '保守', desc: '2h 间隔·6h 冷却·120s 轮询' },
     { value: 'standard', label: '标准', desc: '30min 间隔·1h 冷却·60s 轮询（推荐）' },
     { value: 'eager', label: '积极', desc: '10min 间隔·15min 冷却·45s 轮询' },
-    { value: 'off', label: '无冷却', desc: '仅 10min 自然间隔·60s 轮询' },
+    { value: 'off', label: '关闭', desc: '完全关闭 AI 主动来电（聊天内标记来电同样不拨出）' },
   ];
   // 多账号（Task 40-2d v2）：电话 App 当前账号身份（匿名号时记住其资料，供拨号键盘脱敏徽标/身份 chip 高亮）。
   // 切号不刷新网页：switchAccountFor 派发 ACCOUNT_CHANGED_EVENT → 下方监听更新本 state + 重读数据
@@ -4275,6 +4235,106 @@ export default function PhoneApp() {
     },
     [showToast]
   );
+
+  const consumePendingAnswer = useCallback(() => {
+    const pending = takePendingPhoneAnswer();
+    if (!pending) return;
+    // #8 已有通话进行中：新来电不替换正在进行的通话（与 startCall 的防替换口径一致），也不再静默
+    // 丢弃——toast + 落一条「未接来电」记录（与 AI 来电被拒/超时的 recordMissedPhoneCall 落库同
+    // 口径，进最近通话可回看漏了谁；不触发 AI 留言，选最小实现）
+    if (callTargetRef.current) {
+      const missed: CallLogRecord = {
+        id: genId(),
+        number: pending.number,
+        contactId: pending.contact?.id ?? null,
+        displayName: pending.contact?.name ?? pending.name,
+        peerKind: (pending.contact?.kind as CallLogRecord['peerKind']) ?? 'unknown',
+        avatar: pending.contact?.avatar ?? null,
+        direction: 'missed',
+        duration: 0,
+        // 多账号（Task 40-2d）：记录归属电话 App 当前账号
+        account: getActiveAccountIdFor('phone'),
+        createdAt: Date.now(),
+      };
+      setLogs((prev) => [missed, ...(prev ?? [])].sort((a, b) => b.createdAt - a.createdAt));
+      void localDB.put('call-logs', missed);
+      showToast('通话中，已忽略新来电');
+      return;
+    }
+    // AI 主动来电目的（pending.proactiveContext，Task 40-d 写入）：随 CallTarget 透传进
+    // 该通电话所有 turn payload 的 proactiveContext（普通来电/拨出无此字段，不注入）
+    const proactive = pending.proactiveContext;
+    // C14 AI 主动视频来电：决策端选 video 时接听直接进全局层视频通话页（不进语音 CallScreen）；
+    // direction='in' 通话记录/存档/续聊全按来电方向落，proactiveContext 透传开场情境
+    if (pending.media === 'video') {
+      const resolved = pending.contact;
+      const number = pending.number;
+      const vAcc = getActiveAccountFor('phone');
+      const vUnknown =
+        vAcc.kind === 'anon' ||
+        (vAcc.kind === 'alt' && !(resolved?.relationByAcc?.[vAcc.id] ?? '').trim());
+      startGlobalCall({
+        variant: 'phone',
+        media: 'video',
+        name: resolved?.name ?? pending.name,
+        avatar: resolved?.avatar ?? null,
+        myAvatar:
+          allContacts?.find((c) => c.kind === 'user' && !c.altOf)?.avatar ||
+          useSettings.getState().profile.avatar,
+        contact: resolved,
+        direction: 'in',
+        initialHistory: [],
+        memoryBlock:
+          resolved?.id && !vUnknown ? (memRecallBlock(resolved.id, 'phone', '') || undefined) : undefined,
+        ...(proactive ? { proactiveContext: proactive } : {}),
+        onEnd: (r) => {
+          handleCallEnd({
+            id: genId(),
+            number,
+            contactId: resolved?.id ?? null,
+            displayName: resolved?.name ?? pending.name,
+            peerKind: resolved ? (resolved.kind as CallLogRecord['peerKind']) : 'unknown',
+            avatar: resolved?.avatar ?? null,
+            direction: 'in',
+            duration: r.duration,
+            endReason: r.endReason,
+            media: 'video',
+            createdAt: Date.now(),
+          });
+          const vmTurns = (r.transcript ?? []).filter((t) => t.content.trim().length > 0);
+          if (resolved?.id && resolved.kind !== 'user' && r.connected && vmTurns.length > 0) {
+            handleVoicemail({
+              id: genId(),
+              number,
+              contactId: resolved.id,
+              displayName: resolved.name,
+              peerKind: resolved.kind as VoicemailRecord['peerKind'],
+              avatar: resolved.avatar ?? null,
+              text: vmTurns.map((t) => `${t.role === 'user' ? '我' : resolved.name}：${t.content}`).join('\n'),
+              duration: r.duration,
+              read: true,
+              createdAt: Date.now(),
+              kind: 'call',
+            });
+          }
+        },
+      });
+      return;
+    }
+    setCallTarget((prev) =>
+      prev ?? {
+        number: pending.number,
+        contact: pending.contact,
+        direction: 'in',
+        ...(proactive ? { proactiveContext: proactive } : {}),
+      },
+    );
+  }, [showToast, allContacts, handleCallEnd, handleVoicemail]);
+  useEffect(() => {
+    consumePendingAnswer();
+    window.addEventListener(PENDING_PHONE_ANSWER_EVENT, consumePendingAnswer);
+    return () => window.removeEventListener(PENDING_PHONE_ANSWER_EVENT, consumePendingAnswer);
+  }, [consumePendingAnswer]);
 
   /** Task 22 视频通话：联系人详情「视频通话」→ 全局通话层视频页（variant='phone' iOS 黑白灰皮肤）。
    *  与语音 CallScreen 完全独立（语音引擎不动）；引擎为三端共用 useChatCall（media='video'），
@@ -4866,7 +4926,7 @@ export default function PhoneApp() {
                   ))}
                 </div>
                 <p className="px-1 pt-3 text-[12px] leading-relaxed text-muted-foreground">
-                  切换档位即时生效，下次调度即用新间隔与冷却。「无冷却」仅保留 10min 自然间隔 + 深夜 0-8 点不打扰。
+                  切换档位即时生效，下次调度即用新间隔与冷却。「关闭」= 完全关闭 AI 主动来电（含聊天内标记来电）；所有档位 23 点-早 8 点与系统免打扰时段均不打扰。
                 </p>
               </div>
             </div>

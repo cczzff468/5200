@@ -12,6 +12,7 @@
 
 import { useEffect } from 'react';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
+import { accLs } from '@/lib/ios/accounts';
 import { listContacts } from '@/lib/ios/contacts-store';
 import { useSettings } from '@/lib/ios/store';
 import { repairLegacyMomentData, repairMomentIdentityData, runMomentsTick, stripMomentAvatarSnapshots, type MomentTickDeps } from '@/lib/moments';
@@ -19,12 +20,13 @@ import { repairLegacyMomentData, repairMomentIdentityData, runMomentsTick, strip
 const TICK_MS = 5000;
 const CONTACTS_REFRESH_MS = 60_000;
 
-const WX_SESSION_KEY = 'wx-session-user-id';
-const QQ_SESSION_KEY = 'qq-session-user-id';
-
-/** 登录会话 → 机主展示名（与微信/QQ App 内 me.name 同源；未登录返回空串跳过该平台） */
-function sessionName(contacts: ContactRecord[], lsKey: string): string {
+/** 登录会话 → 机主展示名（与微信/QQ App 内 me.name 同源；未登录返回空串跳过该平台）。
+ *  A2 账号盲区修复：会话键经 accLs 账号作用域读取（此前裸键 wx-session-user-id 恒存最后一次
+ *  大号会话——小号激活时调度器拿大号名/空：AI 自动评论用大号身份称呼小号用户、小号朋友圈
+ *  自动互动全停；accLs 大号返回原键，存量行为无缝兼容） */
+function sessionName(contacts: ContactRecord[], app: 'wx' | 'qq'): string {
   try {
+    const lsKey = accLs(`${app}-session-user-id`, app);
     const id = window.localStorage.getItem(lsKey);
     if (!id) return '';
     const hit = contacts.find((c) => c.id === id && c.kind === 'user');
@@ -53,8 +55,8 @@ export default function MomentsScheduler() {
         const deps: MomentTickDeps = {
           apiConfig: useSettings.getState().apiConfig,
           contacts,
-          wxUserName: sessionName(contacts, WX_SESSION_KEY),
-          qqUserName: sessionName(contacts, QQ_SESSION_KEY),
+          wxUserName: sessionName(contacts, 'wx'),
+          qqUserName: sessionName(contacts, 'qq'),
         };
         await runMomentsTick(deps);
       } catch {

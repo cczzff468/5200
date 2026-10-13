@@ -9,9 +9,12 @@ import { scopedConvKey } from './accounts';
  *   未设置任何档位时默认 = often 经常——未配置语音 API 也照发语音条（静音展示），用户显式选过「关闭」才不发
  *   off      关闭        —— AI 不发语音，只发文字
  *   always   每条都发语音 —— AI 的每一条消息都是语音
- *   often    经常        —— 每 3 条消息中，有 1 条是语音
- *   sometimes 偶尔       —— 每 7 条消息中，有 1 条是语音
- *   rarely   不经常      —— 每 12 条消息中，有 1 条是语音
+ *   often    经常        —— 文字消息每 3 条出 1 条语音
+ *   sometimes 偶尔       —— 文字消息每 7 条出 1 条语音
+ *   rarely   不经常      —— 文字消息每 12 条出 1 条语音
+ *
+ * 计数口径（B6 披露）：只数「可升级语音的纯文本消息」——红包/转账/表情包/图片等卡片与系统行
+ * 不计入周期；TTS 清洗后为空的纯动作行（*...*）不判定不消耗计数；合成失败自动回滚计数（周期顺延到下一条）
  *
  * 二、计数规则（每个角色独立计数；每个会话独立计数；每条消息独立判定）：
  *   - 计数器按 counterKey 隔离（单聊 = 会话键；群聊 = 「群会话键#角色 id」，群成员互不影响）；
@@ -50,9 +53,9 @@ export interface AiVoiceFreqOption {
 export const AI_VOICE_FREQ_OPTIONS: readonly AiVoiceFreqOption[] = [
   { value: 'off', label: '关闭', desc: 'AI 不发语音，只发文字' },
   { value: 'always', label: '每条都发语音', desc: 'AI 的每条消息都用语音发送' },
-  { value: 'often', label: '经常', desc: '每 3 条消息中，有 1 条是语音' },
-  { value: 'sometimes', label: '偶尔', desc: '每 7 条消息中，有 1 条是语音' },
-  { value: 'rarely', label: '不经常', desc: '每 12 条消息中，有 1 条是语音' },
+  { value: 'often', label: '经常', desc: '文字消息每 3 条出 1 条语音' },
+  { value: 'sometimes', label: '偶尔', desc: '文字消息每 7 条出 1 条语音' },
+  { value: 'rarely', label: '不经常', desc: '文字消息每 12 条出 1 条语音' },
 ];
 
 /** 非关闭/每条档位对应的频率倍数（每 N 条消息中 1 条语音） */
@@ -156,7 +159,22 @@ export function decideAiVoiceMessage(freqKey: string, counterKey: string = freqK
   const speak = n % every === 0;
   map[ck] = speak ? 1 : n + 1;
   saveCounters(map);
+  // B6：记录本次命中（供合成失败回滚）；投递串行执行，单变量记住最近一次命中的键与前值足够
+  lastVoiceDecision = speak ? { ck, prev: n } : null;
   return speak;
+}
+
+/** 最近一次 decideAiVoiceMessage 命中语音的计数器快照（回滚用；投递串行，单槽位足够） */
+let lastVoiceDecision: { ck: string; prev: number } | null = null;
+
+/** B6：语音合成失败时回滚上一次计数器推进——否则一次 TTS 故障会把语音周期永久后移
+ *  （周期本该出现在第 N+1 条的节奏被打乱且不再回来）。仅在「判定命中 → 合成失败」路径调用 */
+export function undoLastAiVoiceDecision(): void {
+  if (!lastVoiceDecision) return;
+  const map = loadCounters();
+  map[lastVoiceDecision.ck] = lastVoiceDecision.prev;
+  saveCounters(map);
+  lastVoiceDecision = null;
 }
 
 // ---------------- AI 语音合成 ----------------

@@ -23,7 +23,7 @@
  * - 全程 fire-and-forget + 全量容错：任何失败静默，绝不影响拉黑主流程与既有聊天功能。
  */
 
-import { kvGetScoped, kvSetScoped } from './idb-kv';
+import { kvGet, kvGetScoped, kvSet, kvSetScoped } from './idb-kv';
 import { genId } from './db';
 // 多账号（Task 40-2d v2）：跨 App 触达的机主身份按「目标 App 当前账号」取（ownerProfileFor）
 import { getContact, ownerProfileFor } from './contacts-store';
@@ -41,6 +41,29 @@ import type { ContactRecord } from '@/lib/contacts';
 
 /** 模块级防重入：同一联系人同时只跑一轮跨 App 找（拉黑事件的触发是幂等跃迁，这里再兜一层） */
 const running = new Set<string>();
+
+// ---------------- C1 频次冷却（此前无冷却：反复「解除→拉黑」可反复触发找人+延时来电） ----------------
+
+/** 两次跨 App 找人（含延时来电）的最小间隔：同一联系人 10 分钟内只触发一轮 */
+const REACH_COOLDOWN_MS = 10 * 60_000;
+const REACH_COOLDOWN_KEY = (contactId: string) => `cross-app-reach-last:${contactId}`;
+
+function reachCooldownActive(contactId: string, nowMs: number): boolean {
+  try {
+    const at = kvGet<number>(REACH_COOLDOWN_KEY(contactId));
+    return typeof at === 'number' && at > 0 && nowMs - at < REACH_COOLDOWN_MS;
+  } catch {
+    return false;
+  }
+}
+
+function markReachFired(contactId: string, nowMs: number): void {
+  try {
+    kvSet(REACH_COOLDOWN_KEY(contactId), nowMs);
+  } catch {
+    /* 静默：冷却失效退化为旧行为（running Set 仍防并发） */
+  }
+}
 
 /** 拉黑方向：byUser = 用户拉黑了角色（角色被拉黑后去找）；byChar = 角色拉黑了用户（气归气还是忍不住来找） */
 type ReachDirection = 'byUser' | 'byChar';
@@ -245,6 +268,10 @@ async function reachOne(
  */
 export function triggerCrossAppReach(blockedApp: BlockApp, contactId: string): void {
   if (!contactId) return;
+  // C1：10 分钟内已触发过一轮（反复解除→拉黑刷找人）则跳过
+  const nowMs = Date.now();
+  if (reachCooldownActive(contactId, nowMs)) return;
+  markReachFired(contactId, nowMs);
   const key = `${blockedApp}:${contactId}`;
   if (running.has(key)) return;
   running.add(key);
@@ -263,6 +290,10 @@ export function triggerCrossAppReach(blockedApp: BlockApp, contactId: string): v
  */
 export function triggerCrossAppReachByChar(blockedApp: BlockApp, contactId: string): void {
   if (!contactId) return;
+  // C1：与 byUser 方向共享同一份冷却（同联系人 10 分钟一轮）
+  const nowMs = Date.now();
+  if (reachCooldownActive(contactId, nowMs)) return;
+  markReachFired(contactId, nowMs);
   const key = `bychar:${blockedApp}:${contactId}`;
   if (running.has(key)) return;
   running.add(key);
@@ -311,7 +342,11 @@ function armBlockCall(blockedApp: BlockApp, contactId: string, direction: ReachD
       await new Promise<void>((r) => window.setTimeout(r, CALL_DELAY_MS + Math.floor(Math.random() * CALL_DELAY_JITTER_MS)));
       // 到点复核（延时窗口内情况可能已变）：用户回了话 → 不打（消息有人理）；拉黑已解除 → 不打（情境消失）
       if (userRepliedSince(contactId, blockedAt)) return;
-      if (loadBlock(blockedApp, contactId).byUser !== true) return;
+      // A1 修复（方向感知复核）：byUser 方向要求「用户拉黑仍在」、byChar 方向要求「角色拉黑仍在」——
+      // 此前恒查 byUser，byChar 方向（角色拉黑用户）时 byUser 恒 false，延时来电从不发生（死代码，
+      // byChar 专属开场白成摆设）
+      const blkNow = loadBlock(blockedApp, contactId);
+      if (direction === 'byUser' ? blkNow.byUser !== true : blkNow.byChar !== true) return;
       let me: string | null = null;
       try {
         const o = await ownerProfileFor(blockedApp);

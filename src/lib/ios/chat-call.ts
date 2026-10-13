@@ -680,8 +680,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
             timeBlock: optsRef.current.timeBlock || undefined,
             // 跨 App 身份感知：互通开关（陌生来电不下发）
             multiApp: callerUnknown ? undefined : optsRef.current.multiApp,
-            // 条数上限 = 该会话聊天设置「回复条数」（wx:<id> / qq:<id>，与文字聊天同一份设置）
-            replyCount: getReplyCount(`${optsRef.current.app}:${peer.id}`),
+            // 条数上限 = 该会话聊天设置「回复条数」（A4 修复：电话通道此前读 phone:<id>——
+            // 该键从未被任何设置页写入，恒回退默认 5；统一读 sms:c:<id>，与未接留言/主动来电留言同口径）
+            replyCount: getReplyCount(optsRef.current.app === 'phone' ? `sms:c:${peer.id}` : `${optsRef.current.app}:${peer.id}`),
             // 通话媒体（Task 22 视频通话）：视频挂断续聊让 AI 知道刚才那通是视频
             media,
             // 机主称呼：只传真名（用户规则：AI 永远不知道机主昵称，userNickname 不再下传）

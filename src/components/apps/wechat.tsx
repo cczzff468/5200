@@ -66,8 +66,8 @@ import { ScanOverlayWhen, openScan } from './mt-scan';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
-import { stopSpeaking } from '@/lib/ios/tts-client';
-import { decideAiVoiceMessage, synthesizeAiVoice, getAiVoiceFreq, saveAiVoiceFreq, aiVoiceFreqLabel } from '@/lib/ios/ai-voice';
+import { cleanTextForTts, stopSpeaking } from '@/lib/ios/tts-client';
+import { decideAiVoiceMessage, synthesizeAiVoice, getAiVoiceFreq, saveAiVoiceFreq, aiVoiceFreqLabel, undoLastAiVoiceDecision } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
 import { RecordOverlayWx, SttPreviewOverlay, VoiceHoldBar, useSttPreview, useVoiceRecorder, type VoiceRecordResult, type VoiceRecordZone } from '@/components/apps/voice-input';
@@ -163,6 +163,8 @@ import {
   userReqActionKindOf,
   type BlockEntry,
 } from '@/lib/ios/block-state';
+import { isProactiveCallOff } from '@/lib/ios/proactive-call';
+import { markAiCall, recentAiCallWithin } from '@/lib/ios/ai-call-guard';
 import { activeQuitFlowFor, applyQuitWinbackAction } from '@/lib/ios/quit-flow';
 import {
   applyGroupCardDecision,
@@ -188,7 +190,7 @@ import { stripEmojiText } from '@/lib/emoji';
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { kvGet, kvGetRaw, kvSet, kvSetDebounced, kvDel } from '@/lib/ios/idb-kv';
-import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters } from '@/lib/memory';
+import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters, setMemScopeForApp } from '@/lib/memory';
 import {
   addCharMomentPost,
   addUserMomentComment,
@@ -210,7 +212,7 @@ import {
   updateMomentPostContent,
   type MomentNotice,
   type MomentRepostRef,
-} from '@/lib/moments';
+  markMomentAutoAttempt } from '@/lib/moments';
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
@@ -5537,6 +5539,9 @@ function ChatPage({
       // 且升级后 voice.localText（=占位原文）会回流进 AI 上下文（与下方历史构建的占位过滤同口径）
       !m.error &&
       !m.content.startsWith('〔') &&
+      // B6：TTS 清洗后为空的内容（纯 *动作描写* 行/纯标记行）跳过判定——此前会命中计数并推进/
+      // 重置周期，但合成必失败保持文字（动作行「白吃」一个语音名额，节奏漂移）
+      cleanTextForTts(m.content).trim().length > 0 &&
       decideAiVoiceMessage(sessionKey);
     const body = voiceTurn
       ? '[语音]'
@@ -5564,7 +5569,10 @@ function ChatPage({
       const targetId = m.id;
       void synthesizeAiVoice(m.content, peer.id)
         .then((clip) => {
-          if (!clip) return; // 合成失败 → 保持文字
+          if (!clip) {
+            undoLastAiVoiceDecision(); // B6：合成失败回滚计数（周期不被 TTS 故障永久后移）
+            return; // 合成失败 → 保持文字
+          }
           const voice: VoiceMsgData = {
             url: clip.url,
             duration: clip.duration,
@@ -5685,10 +5693,15 @@ function ChatPage({
     // 40-a 拉黑拦截（审计破口二）：用户拉黑 AI（byUser）后 [语音通话] 不弹真实来电——
     // request-only 模式下正文都被丢弃，来电邀请更不能送达；入口直接 return（wantCallSeen 处另有双保险）
     if (loadBlock('wx', peer.id).byUser) return;
+    // C3：用户关闭「AI 主动来电」档位（off）时标记来电也不再真的拨出；距上次任意通道 AI 来电
+    // 不足 3 分钟同样让路（防与主动来电/另一标记贴脸连打——两套冷却体系此前互不感知）
+    if (isProactiveCallOff()) return;
+    if (recentAiCallWithin(peer.id)) return;
     try {
       const lastCallAt = Number(window.localStorage.getItem(`wx-vc-last:${peer.id}`) ?? '0');
       if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
         window.localStorage.setItem(`wx-vc-last:${peer.id}`, String(Date.now()));
+        markAiCall(peer.id);
         window.setTimeout(() => {
           // B-1 幂等防御：上一通还没处理完时不再叠加新会话（openVoiceCall 会替换已有全局会话，
           // 旧通话的卡片/记录/续聊/记忆总结全部静默丢失）——来电弹窗还在响或已有全局通话进行中就整跳取消
@@ -5719,10 +5732,14 @@ function ChatPage({
     // 40-a 拉黑拦截：用户拉黑 AI（byUser）后 [视频通话] 不弹真实来电——request-only 模式下正文都被
     // 丢弃，视频邀请更不能送达；入口直接 return（wantVideoCallSeen 处另有双保险）
     if (loadBlock('wx', peer.id).byUser) return;
+    // C3：off 档拦截 + 统一来电守卫互查（同 triggerAiVoiceCall 口径）
+    if (isProactiveCallOff()) return;
+    if (recentAiCallWithin(peer.id)) return;
     try {
       const lastCallAt = Number(window.localStorage.getItem(`wx-videocall-last:${peer.id}`) ?? '0');
       if (Number.isFinite(lastCallAt) && Date.now() - lastCallAt > 5 * 60 * 1000) {
         window.localStorage.setItem(`wx-videocall-last:${peer.id}`, String(Date.now()));
+        markAiCall(peer.id);
         window.setTimeout(() => {
           // B-1 幂等防御：来电弹窗还在响或已有全局通话进行中就整跳取消（openVoiceCall 会替换已有会话，
           // 旧通话的卡片/记录/续聊/记忆总结全部静默丢失）
@@ -6055,8 +6072,16 @@ function ChatPage({
           const momentText = part.action.targetId.trim().slice(0, 500);
           if (momentText) {
             try {
-              addCharMomentPost('wx', { peer, userName: me.name, content: momentText });
+              const posted = addCharMomentPost('wx', { peer, userName: me.name, content: momentText });
               emitMomentsChanged('wx');
+              // C4：聊天路径发动态补齐自动发布同款后续——①好友/NPC 互动队列（此前聊天发的动态
+              // 永远没有点赞评论）；②登记自动发帖尝试标记（10 分钟内调度器不再自动发，防同刻双帖）
+              try {
+                enqueuePostInteractions('wx', posted.id);
+                markMomentAutoAttempt('wx', peer.id);
+              } catch {
+                /* 互动队列失败不影响发帖本身 */
+              }
             } catch {
               // 落盘失败静默：AI 正文照常上屏，不阻塞聊天
             }
@@ -6391,6 +6416,10 @@ function ChatPage({
     const stickersOn = getStickersOn(sessionKey);
     // 动作描写开关（发送时现场读取）：开启注入格式约定、关闭注入显式禁令（见 @/lib/action-desc）
     const actionDescOn = getActionDescOn(sessionKey);
+    // B8 作用域竞态修复：buildNpcPromptExtra→bondNotesFor 读碎片依赖模块级账号作用域，
+    // 而作用域此前在下方 memChatRecallBlock 才设定——人设组装提前显式落位（否则首轮发送
+    // NPC 近况可能沿用上一次聊天的作用域读错账号的记忆库）
+    setMemScopeForApp('wx');
     const system = buildPersonaPrompt(peer, me, ownerName, stickers, stickersOn, actionDescOn, buildNpcPromptExtra(peer, contacts), getAiVoiceFreq(sessionKey) !== 'off');
     // 40-a 拉黑拦截（仅申请卡模式）：待处理卡清单不注入（buildActionRules 空清单返回空数组）——
     // 否则 AI 照提示词输出 [领取红包:ID]/[收款转账:ID] 等标记；动作分支虽已拦截，提示词层面也不该给。
