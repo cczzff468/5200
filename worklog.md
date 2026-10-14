@@ -19367,3 +19367,25 @@ Stage Summary:
 - 仓库已完整落地 /home/z/my-project 并可正常运行（Next.js 16.1.3 + Turbopack，端口 3000）
 - git remote origin 已配好 token 推送权限，后续改动可 commit 后 git push origin main 回传 GitHub
 - 最新提交：21eac54 Task 39 错误提示优化+草稿箱（五端统一）；等待用户提出新的修改/新增功能需求
+
+---
+Task ID: couple-space-app
+Agent: Z.ai Code (主控)
+Task: 新增「情侣空间」App——按用户 5 张参考截图 1:1 复刻（邀请页/首页/发现/相册/我们），配色改为白+浅灰（不用粉红）
+
+Work Log:
+- 生成白灰系素材：App 图标（双心）/首页合影背景（黑白双鼠背影）/灰阶地图/灰阶小家插画（public/icons/couple.png + public/couple-{home-bg,map,house}.png）
+- 新建 src/components/apps/couple-space.tsx（~2400 行）：邀请页（渐变底+装饰圆点+接受邀请+三体验卡）→ 主界面 4 Tab（首页/发现/相册/我们）+ 22 个子页
+- 首页：双头像虚线连接 + 纪念日气泡（设置→已相恋 N 天）+ 合影背景上「每天想你」大圆（打卡涟漪/pop 动效）+ 换背景悬浮钮 + 底部四炭灰渐变功能卡
+- 发现：情侣轨迹/情侣小家两大卡 + 情感升温 12 宫格全可用子页（心情日记/爱情塔罗 12 牌/100 件小事清单/恋爱协议签署/恋爱水平考试/星座缘分/恋爱编年史/三生石/回复挑战/情侣酒店/恋爱状态/情侣印象标签）
+- 相册：4 固定上传卡 + 私密相册（新建/管理删除/照片网格/大图查看/删除，照片 900px JPEG 压缩 dataURL 存 IndexedDB）
+- 我们：蕾丝拱形+装饰字符「我们の恋爱日记」卡（双头像+SVG 像素心+恋爱进度条+N 天）+ 7 行功能列表；小礼堂求婚/结婚证、客服假聊、设置（换背景/解除关系重置）
+- 数据：kv 键 couple-space:state（idb-kv 防抖落盘）；启动预填「我」=信息卡 ProfileCard、「TA」=联系人第一位 char 角色
+- 注册：store.ts AppId 加 'couple'；registry 实体图标 + HeartIcon 备用 glyph；HomeScreen PAGE3 加 couple（不升版走缺失补位）；appstore TAGLINES/CATEGORY 补条目；globals.css 加 couple-sub-in/pop-heart/ripple-out 三组 keyframes
+- 验证：bunx tsc --noEmit 0 错误；eslint 0 问题；E2E（agent-browser）：邀请页渲染→接受邀请→首页（Angelina 预填✓）→每天想你打卡 toast✓→设纪念日 2025-10-01→气泡「已相恋 379 天」✓→发现页大卡+宫格✓→100件小事勾选 3/100✓→塔罗抽牌「恋人」✓→爱情树浇水成长值 4✓→相册上传 2 张（DataTransfer 模拟）→大图删除✓→新建「旅行记忆」相册✓→刷新后状态完整保留（accepted+379天）✓；dev.log 无运行时错误
+- 提交 56a19d7 并推送 GitHub main 成功（网络不稳重试 1 次）
+
+Stage Summary:
+- 交付：情侣空间 App 完整上线（白灰限定配色）——主屏第 3 页可点开，邀请页→4 Tab→22 个子功能页全部可用，数据持久化，图标/背景/插图全部白灰系 AI 生成
+- 改动文件：新增 couple-space.tsx + 4 张图片素材；修改 store.ts/registry.tsx/HomeScreen.tsx/appstore.tsx/globals.css（全部增量插入，零既有语义改动）
+- 坑：①主屏翻页合成 PointerEvent 滑动不可靠，改点 data-testid=page-dot-N 跳页（el.click() 绕过 hit-testing）；②相册上传测试必须选「最后一个 input[type=file]」——AlbumPage 与 AlbumDetail 各有隐藏 input，前者 handler 有 targetAlbum ref 保护（未点「立即上传」则静默跳过），querySelector 默认选中的是前者；③React 合成事件对 input[type=file] 直接 dispatch change 可触发 onChange（date input 需用原生 setter + input/change 双事件）
