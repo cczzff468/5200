@@ -501,11 +501,56 @@
     opacity: 0;
   }
 }
+/* 三生石：星星闪烁 */
+@keyframes couple-twinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.75);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+/* 三生石：水晶光晕呼吸 */
+@keyframes couple-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+/* 名牌/装饰缓慢漂浮 */
+@keyframes couple-float-y {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+/* 爱情小树：云朵漂移 */
+@keyframes couple-cloud-drift {
+  from {
+    transform: translateX(-6%);
+  }
+  to {
+    transform: translateX(6%);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   [animation\:couple-sub-in],
   [animation\:couple-pop-heart],
   [animation\:couple-ripple-out],
-  [animation\:couple-dash-flow] {
+  [animation\:couple-dash-flow],
+  [animation\:couple-twinkle],
+  [animation\:couple-glow-pulse],
+  [animation\:couple-float-y],
+  [animation\:couple-cloud-drift] {
     animation: none;
   }
 }

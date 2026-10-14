@@ -103,6 +103,10 @@ interface CoupleState {
   impressionsMe: string[]; // TA 眼中的我（标签）
   impressionsTa: string[]; // 我眼中的 TA（标签）
   hundred: number[]; // 100 件小事已勾选索引
+  hundredItems: Record<string, { img: string | null; desc: string; date: string; place: string }>; // 100 件小事编辑数据（key=索引）
+  missCards: number; // 想你补签卡数量
+  missMadeUp: string[]; // 已补签的日期 key
+  stoneEngraved: boolean; // 三生石已刻名
   quiz: { id: string; q: string; a: string; at: number }[]; // 甜蜜小问答记录
   examBest: number | null; // 恋爱水平考试最高分
   status: string; // 恋爱状态
@@ -149,6 +153,10 @@ function defaultState(): CoupleState {
     impressionsMe: [],
     impressionsTa: [],
     hundred: [],
+    hundredItems: {},
+    missCards: 0,
+    missMadeUp: [],
+    stoneEngraved: false,
     quiz: [],
     examBest: null,
     status: '',
@@ -208,8 +216,9 @@ const TAROT_DECK = [
   { name: '世界', meaning: '圆满之牌！一个阶段完成了，去庆祝吧。' },
 ];
 
-/** 100 件小事清单 */
+/** 100 件小事清单（前 5 项与参考图一致：用情侣头像/一起看电影/第一次合照的照片/互穿对方衣服拍照/连麦睡觉） */
 const HUNDRED_LIST: string[] = [
+  '用情侣头像', '一起看电影', '第一次合照的照片', '互穿对方衣服拍照', '连麦睡觉',
   '一起看一次日出', '一起看一次日落', '牵手压马路一小时', '雨天共撑一把伞', '一起做一顿晚饭',
   '一起洗一次碗', '互相喂对方吃水果', '一起看电影看到片尾字幕', '一起唱一首歌', '给对方唱一首歌',
   '一起逛街买情侣装', '穿情侣装拍合照', '一起拍大头贴', '互相拍一张最丑的照片', '一起敷面膜',
@@ -859,8 +868,8 @@ function HomePage(props: {
           {avatarCol('ta')}
         </div>
 
-      {/* 每天想你大圆：首次点击打卡后消失，改为头像下方想念天数 */}
-      {missDays == null ? (
+      {/* 每天想你大圆：首次点击打卡后消失，改为头像下方想念天数（记录入口在右侧悬浮心形按钮） */}
+      {missDays == null && (
         <div className="relative mt-3 flex h-[286px] w-full items-start justify-center">
           {/* 引号装饰 */}
           <span aria-hidden="true" className="absolute left-[18%] top-[44px] select-none font-serif text-[44px] font-bold leading-none text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">&ldquo;</span>
@@ -879,17 +888,6 @@ function HomePage(props: {
             <span key={`t${pulse}`} className="relative block text-[20px] font-bold tracking-wide [animation:couple-pop-heart_.45s_ease-out]">
               每天想你
             </span>
-          </button>
-        </div>
-      ) : (
-        <div className="mt-4 flex justify-center">
-          <button
-            type="button"
-            onClick={() => openSub('missyou')}
-            className="flex items-center gap-1.5 rounded-full bg-white/90 py-1.5 pl-3 pr-3.5 text-[12px] font-medium text-[#5a5a62] shadow-[0_4px_14px_rgba(0,0,0,0.08)] backdrop-blur-sm transition-opacity active:opacity-60"
-          >
-            <Heart className="h-3.5 w-3.5 text-[#8e8e97]" fill="#c9c9cf" />
-            已互相想念 {missDays} 天 · 点我看记录
           </button>
         </div>
       )}
@@ -1416,7 +1414,7 @@ function SubRouter(props: {
     case 'tarot':
       return <TarotPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'hundred':
-      return <HundredPage state={state} patch={patch} close={close} />;
+      return <HundredPage state={state} patch={patch} close={close} showToast={showToast} />;
     case 'pact':
       return <PactPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'exam':
@@ -1426,7 +1424,7 @@ function SubRouter(props: {
     case 'chronicle':
       return <ChroniclePage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'stone':
-      return <StonePage state={state} days={days} close={close} />;
+      return <StonePage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'reply':
       return <ReplyPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'hotel':
@@ -1438,7 +1436,7 @@ function SubRouter(props: {
     case 'profile':
       return <ProfilePage state={state} patch={patch} showToast={showToast} close={close} onReset={onReset} />;
     case 'missyou':
-      return <MissYouPage state={state} tapMissYou={tapMissYou} close={close} />;
+      return <MissYouPage state={state} patch={patch} tapMissYou={tapMissYou} showToast={showToast} close={close} />;
     case 'chapel':
       return <ChapelPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'support':
@@ -1705,122 +1703,248 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
   );
 }
 
-/** 爱情小树成长记（游戏场景风）：木牌等级 + 成长进度 + 草地小树 + 左侧奖励 + 底部入口 */
+/** 爱情小树成长记（参考图：全屏游戏场景）——顶部悬挂木牌（等级星+进度+连续浇树）+ 左侧奖励钮 + 草地小树 + 化肥浇水气泡 + 底部木架三入口 */
 function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; waterTree: () => void; close: () => void; showToast: (m: string) => void }) {
   const tree = state.tree;
-  const level = Math.min(5, Math.floor(tree / 20) + (tree >= 100 ? 0 : 1) || 1);
-  const inLevel = tree - (Math.min(5, Math.floor(tree / 20))) * 20 || (tree >= 100 ? 20 : 0);
-  const stageEmoji = ['🌰', '🌱', '🌿', '🪴', '🌳'][Math.min(4, Math.floor(tree / 20))];
+  const level = Math.max(1, Math.min(5, Math.ceil(tree / 20) || 1));
+  const inLevel = tree >= 100 ? 20 : tree - (level - 1) * 20;
+  const stageEmoji = ['🌱', '🌱', '🌿', '🪴', '🌳'][Math.min(4, Math.floor(tree / 20))];
   const streak = state.treeStreak?.n ?? 0;
-  const wateredToday = state.treeStreak?.last === todayKey();
+  const today = todayKey();
+  const yesterday = todayKey(new Date(Date.now() - 86400000));
+  const wateredToday = state.treeStreak?.last === today;
+  const brokeStreak = !wateredToday && state.treeStreak?.last === yesterday; // 昨天浇了今天还没浇 → 断签提醒
+  const [pop, setPop] = useState(0);
 
   const leftBadges = [
     { icon: '🎁', label: '浇水奖励', tip: '连续浇水 7 天有神秘礼物哦' },
     { icon: '🛡️', label: '保护罩', tip: '保护罩已开启，小树不会枯萎' },
-    { icon: '✨', label: '双倍成长', tip: '周五浇水双倍成长值' },
-  ];
-  const bottomEntries = [
-    { icon: '🗺️', label: '小世界', lock: '5级', tip: () => showToast(tree >= 100 ? '小世界已解锁！（演示）' : '成长到 5 级（100 成长值）解锁') },
-    { icon: '🏡', label: '魔法屋', lock: '6级', tip: () => showToast('继续浇水升级，魔法屋敬请期待') },
-    { icon: '📋', label: '任务', lock: null, tip: () => showToast(wateredToday ? '今日任务已完成：浇水 1 次 ✓' : '今日任务：给小树浇一次水吧') },
+    { icon: '✨', label: '会员双倍成长值', tip: '开通会员浇水双倍成长值' },
   ];
 
   return (
-    <SubShell title="爱情小树成长记" onBack={close}>
-      {/* 顶部木牌：等级星 + 本级进度 + 连续浇水 */}
-      <div className="relative mt-3 rounded-2xl border border-[#ddd6c6] bg-[linear-gradient(180deg,#faf7ef,#efe9da)] px-4 py-3 shadow-[0_6px_16px_rgba(120,110,90,0.18)]">
-        <div className="flex items-center gap-3">
-          <span className="relative flex h-10 w-10 shrink-0 items-center justify-center">
-            <Star className="h-10 w-10 text-[#e3c25a]" fill="#f0d878" strokeWidth={1.4} />
-            <b className="absolute text-[15px] font-extrabold text-[#7a6420]">{level}</b>
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="relative h-4 overflow-hidden rounded-full border border-[#d9d0ba] bg-[#e7dfcc]">
-              <div className="h-full rounded-full bg-[linear-gradient(90deg,#b8cf9c,#8fb37a)] transition-all" style={{ width: `${(inLevel / 20) * 100}%` }} />
+    <div className="relative flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,#bfe9fb_0%,#d8f4fd_38%,#eefaf7_62%,#dff0d0_100%)]">
+      {/* ===== 场景层 ===== */}
+      {/* 太阳光晕 */}
+      <span aria-hidden="true" className="absolute -right-10 -top-10 h-44 w-44 rounded-full bg-[radial-gradient(circle,rgba(255,255,255,0.9),rgba(255,255,255,0)_70%)]" />
+      {/* 云朵（漂移动画） */}
+      <div aria-hidden="true" className="absolute left-0 right-0 top-[130px] [animation:couple-cloud-drift_9s_ease-in-out_infinite_alternate]">
+        <span className="absolute left-[6%] h-7 w-24 rounded-full bg-white/90 blur-[1px]" />
+        <span className="absolute left-[10%] top-4 h-6 w-16 rounded-full bg-white/80 blur-[1px]" />
+        <span className="absolute right-[16%] top-10 h-8 w-28 rounded-full bg-white/85 blur-[1px]" />
+        <span className="absolute right-[22%] top-16 h-5 w-14 rounded-full bg-white/75 blur-[1px]" />
+      </div>
+      {/* 海鸥 */}
+      <svg aria-hidden="true" viewBox="0 0 60 24" className="absolute left-[16%] top-[150px] w-9 opacity-80">
+        <path d="M2 16 Q10 4 18 14 Q26 4 34 14" fill="none" stroke="#ffffff" strokeWidth="2.4" strokeLinecap="round" />
+      </svg>
+      <svg aria-hidden="true" viewBox="0 0 60 24" className="absolute right-[24%] top-[210px] w-6 opacity-60">
+        <path d="M2 16 Q10 4 18 14 Q26 4 34 14" fill="none" stroke="#ffffff" strokeWidth="2.4" strokeLinecap="round" />
+      </svg>
+      {/* 远山 */}
+      <span aria-hidden="true" className="absolute -left-16 top-[46%] h-36 w-72 rounded-[50%] bg-[#cfe8c2]/80 blur-[2px]" />
+      <span aria-hidden="true" className="absolute -right-20 top-[48%] h-40 w-80 rounded-[50%] bg-[#c4e2b8]/80 blur-[2px]" />
+      <span aria-hidden="true" className="absolute left-1/4 top-[50%] h-28 w-64 rounded-[50%] bg-[#d8eed0]/70 blur-[2px]" />
+      {/* 草地 */}
+      <span aria-hidden="true" className="absolute -bottom-[26%] left-1/2 h-[62%] w-[150%] -translate-x-1/2 rounded-[50%] bg-[linear-gradient(180deg,#b5e07e,#98d15e_60%,#8cc654)] shadow-[inset_0_14px_28px_rgba(255,255,255,0.35)]" />
+      <span aria-hidden="true" className="absolute -bottom-[30%] left-1/2 h-[58%] w-[120%] -translate-x-1/2 rounded-[50%] bg-[#a3d96c]/70 blur-[6px]" />
+      {/* 草地小花 */}
+      {[
+        ['6%', '82%'], ['14%', '90%'], ['26%', '78%'], ['70%', '80%'], ['84%', '88%'], ['92%', '76%'], ['46%', '94%'],
+      ].map(([l, t], i) => (
+        <span key={i} aria-hidden="true" className="absolute select-none text-[10px]" style={{ left: l, top: t }}>
+          {i % 2 === 0 ? '✿' : '❀'}
+        </span>
+      ))}
+      {/* 右下角石头 LO */}
+      <span aria-hidden="true" className="absolute bottom-[92px] right-3 flex h-9 w-12 rotate-6 items-center justify-center rounded-[45%_55%_50%_50%/55%_50%_50%_45%] bg-[linear-gradient(150deg,#e8e6df,#c9c6bd)] text-[10px] font-bold tracking-wider text-white shadow-[0_3px_8px_rgba(90,90,80,0.25)]">
+        LO
+      </span>
+
+      {/* ===== 顶部：返回 + 悬挂木牌 ===== */}
+      <div className="relative z-20 shrink-0 pt-2">
+        <button
+          type="button"
+          onClick={close}
+          aria-label="返回"
+          className="absolute left-3 top-3 flex h-10 w-10 items-center justify-center rounded-[14px] bg-[linear-gradient(180deg,#ffd94d,#ffb62e)] text-white shadow-[0_4px_10px_rgba(220,150,30,0.45)] transition-transform active:scale-95"
+        >
+          <ArrowLeft className="h-6 w-6" strokeWidth={3} />
+        </button>
+        {/* 悬挂横杆 */}
+        <span aria-hidden="true" className="absolute left-1/2 top-0 h-2.5 w-[240px] -translate-x-1/2 rounded-b-md bg-[linear-gradient(180deg,#9c6b35,#7a4e22)] shadow-sm" />
+        {/* 木牌主体 */}
+        <div className="mx-auto mt-3 w-[236px]">
+          <div className="relative rounded-xl border-[3px] border-[#8a5a2e] bg-[linear-gradient(180deg,#c99a55,#b07f3e)] px-3 py-2 shadow-[0_6px_14px_rgba(120,80,30,0.35)]">
+            {/* 顶部绿果实 */}
+            <span aria-hidden="true" className="absolute -top-2 right-9 h-4 w-4 rounded-full border-2 border-[#5f8f3a] bg-[radial-gradient(circle_at_35%_30%,#b9e877,#7cb84a)] shadow-sm" />
+            <div className="flex items-center gap-2">
+              {/* 等级星 */}
+              <span className="relative flex h-11 w-11 shrink-0 items-center justify-center">
+                <span aria-hidden="true" className="absolute inset-0 bg-[#ffcf3e] [clip-path:polygon(50%_0%,61%_35%,98%_35%,68%_57%,79%_91%,50%_70%,21%_91%,32%_57%,2%_35%,39%_35%)] drop-shadow-[0_2px_2px_rgba(160,110,20,0.5)]" />
+                <b className="relative text-[15px] font-extrabold text-[#7a5200]">{level}</b>
+              </span>
+              {/* 进度条 */}
+              <div className="min-w-0 flex-1">
+                <div className="relative h-4 overflow-hidden rounded-full border-2 border-[#7a4e22] bg-[#6e4520]">
+                  <div className="h-full rounded-full bg-[linear-gradient(180deg,#ffe98a,#ffc93c)] transition-all duration-500" style={{ width: `${(inLevel / 20) * 100}%` }} />
+                </div>
+              </div>
+              <span className="shrink-0 text-[12px] font-bold text-white drop-shadow-[0_1px_1px_rgba(90,60,20,0.6)]">{inLevel}/20</span>
             </div>
           </div>
-          <span className="shrink-0 text-[12px] font-semibold text-[#8a7c5e]">{inLevel}/20</span>
-        </div>
-        <div className="mt-2.5 grid grid-cols-2 gap-1 text-[13px] text-[#6e675a]">
-          <span>
-            他连续浇树 <b className="text-[15px] text-[#4f4a3e]">0</b> 天
-          </span>
-          <span>
-            我连续浇树 <b className="text-[15px] text-[#4f4a3e]">{streak}</b> 天
-          </span>
+          {/* 连续浇树小木牌 */}
+          <div className="relative mx-auto -mt-1 w-[196px] rounded-lg border-[3px] border-[#8a5a2e] bg-[linear-gradient(180deg,#bd8d4a,#a5763a)] px-3 py-1.5 shadow-[0_5px_12px_rgba(120,80,30,0.3)]">
+            <div className="text-[12.5px] font-bold leading-relaxed text-[#5f3d18]">
+              他连续浇树 <b className="mx-1 text-[14px]">0</b> 天
+            </div>
+            <div className="text-[12.5px] font-bold leading-relaxed text-[#5f3d18]">
+              我连续浇树 <b className="mx-1 text-[14px]">{streak}</b> 天
+            </div>
+          </div>
+          {/* 断签提醒 */}
+          {brokeStreak && (
+            <button
+              type="button"
+              onClick={() => showToast('昨天忘浇水啦，今天补上还不断签！')}
+              className="absolute -bottom-14 right-0 flex h-12 w-12 rotate-3 flex-col items-center justify-center rounded-xl bg-white shadow-[0_4px_12px_rgba(0,0,0,0.18)] [animation:couple-float-y_2.4s_ease-in-out_infinite]"
+            >
+              <span className="text-[8.5px] font-bold leading-none text-[#e0483a]">断签</span>
+              <span className="mt-0.5 text-[10px] font-extrabold leading-none text-[#333]">昨天</span>
+              <span className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#e0483a] text-[9px] font-bold text-white">✕</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* 游戏场景：天空 + 云 + 草地 + 小树 */}
-      <div className="relative mt-3 h-[320px] overflow-hidden rounded-2xl bg-[linear-gradient(180deg,#e9f0f4_0%,#f2f6f3_52%,#e7efe2_100%)] shadow-sm">
-        {/* 云朵 */}
-        <span aria-hidden="true" className="absolute left-6 top-8 h-10 w-24 rounded-full bg-white/85 blur-[2px]" />
-        <span aria-hidden="true" className="absolute right-10 top-16 h-8 w-20 rounded-full bg-white/70 blur-[2px]" />
-        <span aria-hidden="true" className="absolute left-1/2 top-24 h-7 w-16 -translate-x-1/2 rounded-full bg-white/55 blur-[2px]" />
-        {/* 远山 */}
-        <span aria-hidden="true" className="absolute -left-10 top-[150px] h-24 w-48 rounded-[50%] bg-[#dde7dc]" />
-        <span aria-hidden="true" className="absolute -right-12 top-[162px] h-20 w-52 rounded-[50%] bg-[#e0e9de]" />
-        {/* 草地 */}
-        <span aria-hidden="true" className="absolute -bottom-14 left-1/2 h-44 w-[135%] -translate-x-1/2 rounded-[50%] bg-[#d4e4c8]" />
-        <span aria-hidden="true" className="absolute bottom-6 left-8 text-[11px] text-[#b8ccb0]">✿</span>
-        <span aria-hidden="true" className="absolute bottom-10 right-12 text-[11px] text-[#b8ccb0]">✿</span>
-        <span aria-hidden="true" className="absolute bottom-3 right-1/3 text-[10px] text-[#c2d4ba]">✿</span>
-        {/* 小树本体 */}
-        <div className="absolute bottom-[64px] left-1/2 -translate-x-1/2 text-center">
-          <span key={tree} className="block leading-none [animation:couple-pop-heart_.5s_ease-out]" style={{ fontSize: 46 + Math.min(4, Math.floor(tree / 20)) * 9 }}>
-            {stageEmoji}
-          </span>
-          <span aria-hidden="true" className="mx-auto mt-1 block h-2.5 w-16 rounded-[50%] bg-[#8a7a5e]/25" />
-        </div>
-        {/* 树旁气泡 */}
-        <div className="absolute bottom-[150px] left-[58%] flex items-center">
-          <span className="rounded-2xl rounded-br-sm bg-white/95 px-3 py-1.5 text-[11px] font-medium text-[#5a5a62] shadow-[0_4px_12px_rgba(0,0,0,0.10)]">
-            {wateredToday ? '今天浇过啦，明天再来 ♡' : '口渴啦，给我浇浇水吧'}
-          </span>
-        </div>
-        {/* 左侧奖励徽标 */}
-        <div className="absolute left-2.5 top-3 flex flex-col gap-2.5">
+      {/* ===== 中部场景 ===== */}
+      <div className="relative z-10 flex-1">
+        {/* 左侧奖励按钮 */}
+        <div className="absolute left-2 top-2 flex flex-col gap-3">
           {leftBadges.map((b) => (
-            <button key={b.label} type="button" onClick={() => showToast(b.tip)} className="flex flex-col items-center transition-transform active:scale-[0.94]">
-              <span className="flex h-10 w-10 items-center justify-center rounded-full border border-[#e4ddca] bg-white/95 text-[19px] shadow-[0_3px_10px_rgba(120,110,90,0.16)]">{b.icon}</span>
-              <span className="mt-0.5 text-[9px] font-medium leading-none text-[#8a8068]">{b.label}</span>
+            <button key={b.label} type="button" onClick={() => showToast(b.tip)} className="flex w-[64px] flex-col items-center transition-transform active:scale-[0.92]">
+              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-[22px] shadow-[0_4px_12px_rgba(90,130,60,0.28)] ring-2 ring-white">{b.icon}</span>
+              <span className="mt-1 rounded-full bg-white/85 px-1.5 py-[1px] text-[9px] font-bold leading-tight text-[#6bb324] shadow-sm [text-shadow:0_1px_0_#fff]">{b.label}</span>
             </button>
           ))}
         </div>
-      </div>
+        {/* 左侧滑动箭头（装饰） */}
+        <button
+          type="button"
+          onClick={() => showToast('左右滑动可以看看小树的成长变化')}
+          aria-label="切换视角"
+          className="absolute left-0 top-[46%] flex h-14 w-8 items-center justify-center rounded-r-2xl bg-black/15 text-white backdrop-blur-[1px] transition-opacity active:opacity-60"
+        >
+          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+            <path d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
 
-      {/* 浇水主按钮 */}
-      <button
-        type="button"
-        onClick={waterTree}
-        disabled={tree >= 100}
-        className="mt-4 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white shadow-[0_8px_20px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.97] disabled:opacity-45"
-      >
-        {tree >= 100 ? '已长大成树 🌳' : '浇水 💧'}
-      </button>
+        {/* 小树 + 泥土堆 */}
+        <div className="absolute bottom-[8px] left-1/2 -translate-x-1/2 text-center">
+          <span key={pop} className="block leading-none [animation:couple-pop-heart_.5s_ease-out]" style={{ fontSize: 58 + Math.min(4, Math.floor(tree / 20)) * 10 }}>
+            {stageEmoji}
+          </span>
+          {/* 泥土堆 */}
+          <span aria-hidden="true" className="mx-auto -mt-2 block h-6 w-[92px] rounded-[50%] bg-[linear-gradient(180deg,#9a6b3d,#7c5227)] shadow-[0_4px_10px_rgba(80,50,20,0.35)]" />
+          <span aria-hidden="true" className="mx-auto -mt-5 block h-3.5 w-[70px] rounded-[50%] bg-[#b07f4a]" />
+        </div>
 
-      {/* 底部三个入口 */}
-      <div className="mt-3 grid grid-cols-3 gap-2.5 pb-2">
-        {bottomEntries.map((b) => (
-          <button
-            key={b.label}
-            type="button"
-            onClick={b.tip}
-            className="relative flex h-[74px] flex-col items-center justify-center gap-1 rounded-2xl border border-[#e2dccd] bg-[#f7f4ec] transition-transform active:scale-[0.96]"
-          >
-            <span className="text-[22px] leading-none">{b.icon}</span>
-            <span className="text-[12px] font-semibold text-[#5f594a]">{b.label}</span>
-            {b.lock && (
-              <span className="absolute -right-1 -top-1.5 flex items-center gap-0.5 rounded-full bg-[#8a8272] px-1.5 py-[2px] text-[9px] font-bold text-white shadow-sm">
-                🔒{b.lock}
+        {/* 化肥浇水气泡 */}
+        <button
+          type="button"
+          onClick={() => {
+            waterTree();
+            setPop((p) => p + 1);
+          }}
+          disabled={tree >= 100}
+          aria-label="给小树浇水"
+          className="absolute bottom-[104px] left-[56%] flex flex-col items-center transition-transform active:scale-[0.94] disabled:opacity-60"
+        >
+          <span className="relative flex h-[74px] w-[74px] items-center justify-center rounded-full bg-white/95 shadow-[0_5px_16px_rgba(90,130,60,0.3)]">
+            {/* 化肥罐 */}
+            <span className="flex h-11 w-12 items-center justify-center rounded-[10px_10px_14px_14px] bg-[linear-gradient(180deg,#c99456,#a26b32)] text-[11px] font-extrabold text-[#5f3d18] shadow-inner ring-2 ring-[#8a5a2e]/40">
+              <span className="relative -mt-1 block">
+                化肥
+                <span aria-hidden="true" className="absolute -top-2.5 left-1/2 h-1.5 w-6 -translate-x-1/2 rounded-t-sm bg-[#7c5227]" />
               </span>
-            )}
-          </button>
-        ))}
+            </span>
+            {/* 视频小角标 */}
+            <span aria-hidden="true" className="absolute bottom-2 right-1.5 flex h-5 w-5 items-center justify-center rounded bg-black/75 text-white">
+              <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+            </span>
+            {/* 气泡尾巴 */}
+            <span aria-hidden="true" className="absolute -bottom-2 left-4 h-4 w-4 rotate-45 rounded-[3px] bg-white/95" />
+          </span>
+        </button>
+        {/* 浇水飘字 */}
+        {wateredToday && (
+          <span aria-hidden="true" className="absolute bottom-[190px] left-[58%] rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-medium text-[#5a8a3c] shadow-sm">
+            今天已经浇过啦 ♡
+          </span>
+        )}
       </div>
 
-      <p className="mt-2 px-2 text-[12px] leading-relaxed text-[#a9a49a]">每浇一次水成长值 +2，每 20 点升 1 级；从种子到参天大树共 5 级，记得每天来看它。</p>
-    </SubShell>
+      {/* ===== 底部木架 + 三个入口 ===== */}
+      <div className="relative z-20 shrink-0 px-3 pb-6">
+        <div className="grid grid-cols-3 gap-4 px-2">
+          {([
+            { label: '小世界', lock: '5级', tip: () => showToast(tree >= 100 ? '小世界已解锁！（演示）' : '成长到 5 级（100 成长值）解锁'), icon: (
+                <span className="relative block h-[52px] w-[58px] overflow-hidden rounded-lg bg-[linear-gradient(160deg,#bfe3ef,#a8d8e8)] shadow-[0_3px_8px_rgba(90,120,60,0.3)] ring-2 ring-white/80">
+                  <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[22px]">🌸</span>
+                  <span className="absolute bottom-0.5 left-1 h-3 w-6 rounded-full bg-[#8fd06a]" />
+                  <span className="absolute right-1 top-1 h-3 w-5 rounded-full bg-white/80" />
+                </span>
+              ) },
+            { label: '魔法屋', lock: '6级', tip: () => showToast('继续浇水升级，魔法屋敬请期待'), icon: (
+                <span className="relative block h-[52px] w-[58px] overflow-hidden rounded-lg bg-[#fce8f1] shadow-[0_3px_8px_rgba(90,120,60,0.3)] ring-2 ring-white/80">
+                  <span aria-hidden="true" className="absolute inset-x-0 top-0 flex h-4">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <span key={i} className={`h-full flex-1 ${i % 2 === 0 ? 'bg-[#f7a8c6]' : 'bg-white'}`} />
+                    ))}
+                  </span>
+                  <span className="absolute bottom-1 left-1/2 h-5 w-7 -translate-x-1/2 rounded-t-md bg-[#f9d9e8]" />
+                  <span className="absolute bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rounded-t-full bg-[#e58ab2]" />
+                </span>
+              ) },
+            { label: '任务', lock: null, tip: () => showToast(wateredToday ? '今日任务已完成：浇水 1 次 ✓' : '今日任务：给小树浇一次水吧'), icon: (
+                <span className="relative block h-[52px] w-[58px] rounded-lg bg-[linear-gradient(180deg,#fbd0e2,#f7b8d4)] shadow-[0_3px_8px_rgba(90,120,60,0.3)] ring-2 ring-white/80">
+                  <span aria-hidden="true" className="absolute -top-1 left-1/2 flex -translate-x-1/2 gap-1.5">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                      <span key={i} className="h-3 w-1 rounded-full bg-[#d989ab]" />
+                    ))}
+                  </span>
+                  <span className="absolute left-2 top-3 space-y-1.5">
+                    {Array.from({ length: 3 }).map((_, i) => (
+                      <span key={i} className="flex items-center gap-1">
+                        <span className="h-1.5 w-4 rounded bg-[#e58ab2]" />
+                        <span className="text-[8px] font-bold text-[#c9628f]">✓</span>
+                      </span>
+                    ))}
+                  </span>
+                </span>
+              ) },
+          ] as const).map((b) => (
+            <button key={b.label} type="button" onClick={b.tip} className="relative flex flex-col items-center transition-transform active:scale-[0.94]">
+              <span className="relative">
+                {b.icon}
+                {b.lock && (
+                  <span className="absolute -right-2 -top-2 flex flex-col items-center rounded-full bg-[#5a4632]/90 px-1 py-[1px] text-white shadow">
+                    <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="currentColor"><path d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 8V7a3 3 0 1 1 6 0v3H9z" /></svg>
+                    <span className="text-[8px] font-extrabold leading-none text-[#ffd94d]">{b.lock}</span>
+                  </span>
+                )}
+              </span>
+              <span className="-mt-1.5 rounded-md bg-[linear-gradient(180deg,#c99a55,#a5763a)] px-3 py-0.5 text-[13px] font-extrabold text-[#ffe9b8] shadow-[0_2px_6px_rgba(120,80,30,0.4)] [text-shadow:0_1px_0_rgba(90,60,20,0.8)]">
+                {b.label}
+              </span>
+            </button>
+          ))}
+        </div>
+        {/* 木架横板 */}
+        <span aria-hidden="true" className="mx-auto mt-1 block h-3.5 w-[96%] rounded-md bg-[linear-gradient(180deg,#a5713d,#7a4e22)] shadow-[0_4px_10px_rgba(90,60,20,0.4)]" />
+      </div>
+    </div>
   );
 }
 
@@ -2659,67 +2783,370 @@ function TarotPage({ state, patch, showToast, close }: { state: CoupleState; pat
 }
 
 /** 100 件小事（手账拼贴风）：标题牌 + 拍立得卡片 + 待完成/已完成邮戳 */
-const HUNDRED_EMOJI = ['🌅', '🌇', '🚶', '☂️', '🍳', '🧼', '🍎', '🎬', '🎤', '🎵', '🛍️', '👕', '📷', '🤳', '🥒', '💨', '💅', '🦶', '🛁', '⛄', '🍦', '🍲', '🍢', '🥣', '🕛', '🎊', '🎆', '🏮', '🌊', '👣', '🐚', '⛰️', '⛺', '🌟', '🌌', '🎡', '🎠', '🎢', '🎟️', '🖼️', '🏛️', '📖', '📚', '🎨', '🎸', '🎭', '🎶', '💃', '🌧️', '❄️', '🪁', '🚲', '🚣', '🎣', '🌸', '🍂', '🪴', '🏷️', '🐾', '🎂', '💌', '✉️', '🎁', '🎉', '🤲', '📏', '🤒', '🤝', '📜', '💰', '✈️', '🗺️', '👶', '📷', '🤫', '📞', '📝', '🎥', '✂️', '🎮', '🧩', '🧱', '🎲', '🔮', '🏃', '🏸', '🎓', '🍜', '🎎', '🎂', '🥂', '📅', '📍', '📸', '💍', '💬', '👴'];
-const HUNDRED_ROT = ['-rotate-[1.2deg]', 'rotate-[0.9deg]', '-rotate-[0.5deg]', 'rotate-[1.4deg]'];
+const HUNDRED_EMOJI = ['💑', '🎬', '📷', '👕', '😴', '🌅', '🌇', '🚶', '☂️', '🍳', '🧼', '🍎', '🎤', '🎵', '🛍️', '💨', '💅', '🦶', '🛁', '⛄', '🍦', '🍲', '🍢', '🥣', '🕛', '🎊', '🎆', '🏮', '🌊', '👣', '🐚', '⛰️', '⛺', '🌟', '🌌', '🎡', '🎠', '🎢', '🎟️', '🖼️', '🏛️', '📖', '📚', '🎨', '🎸', '🎭', '🎶', '💃', '🌧️', '❄️', '🪁', '🚲', '🚣', '🎣', '🌸', '🍂', '🪴', '🏷️', '🐾', '🎂', '💌', '✉️', '🎁', '🎉', '🤲', '📏', '🤒', '🤝', '📜', '💰', '✈️', '🗺️', '👶', '🤫', '📞', '📝', '🎥', '✂️', '🎮', '🧩', '🧱', '🎲', '🔮', '🏃', '🏸', '🎓', '🍜', '🎎', '🥂', '📅', '📍', '📸', '💍', '💬', '👴', '🍵', '🛒', '🏏', '🌙'];
+/** 100 件小事（参考图1/2）：粉色手账拼贴 + 拍立得卡片墙（翻页）+ 待完成印章 + 目录/添加小事 + 编辑详情页 */
+const HUNDRED_ROT = ['-rotate-[1.6deg]', 'rotate-[1.1deg]', '-rotate-[0.6deg]', 'rotate-[1.5deg]'];
 
-function HundredPage({ state, patch, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void }) {
-  const done = state.hundred.length;
-  const toggle = (i: number) => {
-    const has = state.hundred.includes(i);
-    patch({ hundred: has ? state.hundred.filter((x) => x !== i) : [...state.hundred, i] });
-  };
+/** 手账装饰花（SVG 玫瑰） */
+function ScrapFlower({ size = 64, className = '', tone = '#f6c3d0' }: { size?: number; className?: string; tone?: string }) {
   return (
-    <SubShell title="100件小事" onBack={close}>
-      {/* 吸顶标题牌 + 进度（手账风） */}
-      <div className="sticky top-0 z-10 -mx-3.5 bg-[#f6f6f8]/95 px-3.5 pb-2 pt-1 backdrop-blur-sm">
-        <div className="relative mx-auto mt-1 w-fit rotate-[-1.5deg] rounded-lg border border-[#d9d9de] bg-white px-6 py-2 shadow-[0_4px_14px_rgba(0,0,0,0.07)]">
-          <span aria-hidden="true" className="absolute -left-3 -top-2 h-4 w-9 rotate-[-24deg] rounded-[3px] bg-[#dcdce2]/90" />
-          <span aria-hidden="true" className="absolute -right-3 -top-2 h-4 w-9 rotate-[20deg] rounded-[3px] bg-[#dcdce2]/90" />
-          <div className="text-center text-[17px] font-bold tracking-wide text-[#3c3c42]">我们的 100 件小事</div>
-          <div className="text-center text-[8.5px] tracking-[4px] text-[#b9b9c1]">OUR LOVE DIARY</div>
+    <svg viewBox="0 0 64 64" width={size} height={size} className={className} aria-hidden="true">
+      {Array.from({ length: 6 }).map((_, i) => {
+        const a = (i / 6) * Math.PI * 2;
+        return <ellipse key={i} cx={32 + Math.cos(a) * 14} cy={32 + Math.sin(a) * 14} rx="12" ry="13" fill={tone} opacity="0.92" />;
+      })}
+      <circle cx="32" cy="32" r="12" fill={tone} />
+      <circle cx="32" cy="32" r="6.5" fill="#eaa4b6" />
+    </svg>
+  );
+}
+
+const HUNDRED_DRAFT_DEFAULT = { img: null as string | null, desc: '', date: '', place: '' };
+
+function HundredPage({ state, patch, close, showToast }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void; showToast: (m: string) => void }) {
+  const PER_PAGE = 6;
+  const pageCount = Math.ceil(HUNDRED_LIST.length / PER_PAGE);
+  const [page, setPage] = useState(0);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState(HUNDRED_DRAFT_DEFAULT);
+  const [showIndex, setShowIndex] = useState(false);
+  const touchX = useRef<number | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+
+  const items = state.hundredItems || {};
+
+  const openEdit = (i: number) => {
+    setEditing(i);
+    setDraft(items[String(i)] || { ...HUNDRED_DRAFT_DEFAULT });
+  };
+  /** 保存编辑：有内容自动标记完成，全空则取消完成 */
+  const finishEdit = () => {
+    if (editing == null) return;
+    const key = String(editing);
+    const hasContent = !!(draft.img || draft.desc.trim() || draft.date || draft.place.trim());
+    const done = state.hundred.includes(editing);
+    patch({
+      hundredItems: { ...items, [key]: draft },
+      hundred: hasContent && !done ? [...state.hundred, editing] : !hasContent && done ? state.hundred.filter((x) => x !== editing) : state.hundred,
+    });
+    showToast(hasContent ? '已完成这件小事 ♡' : '已保存');
+    setEditing(null);
+  };
+  /** 点击印章切换完成 */
+  const toggleDone = (i: number) => {
+    const done = state.hundred.includes(i);
+    patch({ hundred: done ? state.hundred.filter((x) => x !== i) : [...state.hundred, i] });
+    showToast(done ? '已改回待完成' : '已完成这件小事 ♡');
+  };
+  const onPickImg = async (f: File | null) => {
+    if (!f) return;
+    try {
+      const url = await fileToScaledDataURL(f, 900, 0.72);
+      setDraft((d) => ({ ...d, img: url }));
+    } catch {
+      showToast('图片处理失败，换一张试试');
+    }
+  };
+
+  // ============ 编辑详情页（参考图2） ============
+  if (editing != null) {
+    const title = HUNDRED_LIST[editing] || '';
+    return (
+      <div className="relative flex h-full flex-col bg-[linear-gradient(180deg,#fdf2f5_0%,#fbeaef_100%)]">
+        {/* 顶栏：删除 + 完成 */}
+        <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-[56px]">
+          <button
+            type="button"
+            onClick={() => {
+              setDraft({ ...HUNDRED_DRAFT_DEFAULT });
+              showToast('已清空这件小事的内容');
+            }}
+            aria-label="清空内容"
+            className="text-[#e0708a] transition-opacity active:opacity-50"
+          >
+            <Trash2 className="h-6 w-6" strokeWidth={1.8} />
+          </button>
+          <button
+            type="button"
+            onClick={finishEdit}
+            className="rounded-md bg-[linear-gradient(180deg,#f9b7ca,#f49cb6)] px-6 py-1.5 text-[15px] font-bold text-white shadow-[0_3px_10px_rgba(230,130,160,0.4)] transition-transform active:scale-95"
+          >
+            完成
+          </button>
         </div>
-        <div className="mt-2 flex items-center gap-2 px-1">
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#e9e9ed]">
-            <div className="h-full rounded-full bg-[linear-gradient(90deg,#9e9ea8,#5c5c64)] transition-all" style={{ width: `${done}%` }} />
+
+        <div className="flex-1 overflow-y-auto px-6 pb-8">
+          {/* 拍立得相框 + 胶带 */}
+          <div className="relative mx-auto mt-3 w-full max-w-[300px]">
+            <span aria-hidden="true" className="absolute -left-2 -top-2 z-10 h-5 w-16 rotate-[-32deg] rounded-[3px] bg-[#f6c9d6]/80 shadow-sm" />
+            <span aria-hidden="true" className="absolute -bottom-2 -right-2 z-10 h-5 w-16 rotate-[-32deg] rounded-[3px] bg-[#f6c9d6]/80 shadow-sm" />
+            <div className="rounded-md bg-white p-3 shadow-[0_8px_24px_rgba(210,120,150,0.22)]">
+              <button
+                type="button"
+                onClick={() => fileInput.current?.click()}
+                aria-label="添加图片"
+                className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-sm bg-[#fdf1f4]"
+              >
+                {draft.img ? (
+                  <img src={draft.img} alt="小事照片" className="h-full w-full object-cover" draggable={false} />
+                ) : (
+                  <span className="flex flex-col items-center gap-2">
+                    <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(180deg,#f9b7ca,#f49cb6)] text-[30px] font-light text-white shadow-[0_4px_12px_rgba(230,130,160,0.45)]">+</span>
+                    <span className="text-[13px] font-medium text-[#e88ba4]">添加图片</span>
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
-          <span className="text-[11px] font-semibold text-[#5a5a62]">{done}/100</span>
+          <div className="mt-4 text-center text-[19px] font-semibold tracking-wide text-[#5c4a44]">{title}</div>
+
+          {/* 表单：描述/日期/地点 */}
+          <div className="mt-6 space-y-0">
+            {([
+              { key: 'desc', label: '添加描述', hint: '（可不填）', type: 'text', placeholder: '' },
+              { key: 'date', label: '选择日期', hint: '（可不填）', type: 'date', placeholder: '' },
+              { key: 'place', label: '输入地点', hint: '（可不填）', type: 'text', placeholder: '' },
+            ] as const).map((row) => (
+              <label key={row.key} className="flex items-center gap-2 border-b border-[#e8ccd4] py-3.5">
+                {row.type === 'date' ? (
+                  <>
+                    <span className="text-[15px] text-[#5c4a44]">{draft.date || row.label}</span>
+                    <input
+                      type="date"
+                      value={draft.date}
+                      onChange={(e) => setDraft((d) => ({ ...d, date: e.target.value }))}
+                      aria-label="选择日期"
+                      className={`flex-1 bg-transparent text-right text-[15px] outline-none ${draft.date ? 'text-[#5c4a44]' : 'text-transparent'}`}
+                    />
+                    {!draft.date && <span className="pointer-events-none -ml-24 text-[15px] text-[#c3a8b0]">{row.hint}</span>}
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      value={draft[row.key]}
+                      onChange={(e) => setDraft((d) => ({ ...d, [row.key]: e.target.value }))}
+                      placeholder={row.label}
+                      maxLength={60}
+                      className="h-7 flex-1 bg-transparent text-[15px] text-[#5c4a44] outline-none placeholder:text-[#c3a8b0]"
+                    />
+                    <span className="shrink-0 text-[15px] text-[#c3a8b0]">{row.hint}</span>
+                  </>
+                )}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <input ref={fileInput} type="file" accept="image/*" className="hidden" onChange={(e) => {
+          void onPickImg(e.target.files?.[0] ?? null);
+          e.currentTarget.value = '';
+        }} />
+      </div>
+    );
+  }
+
+  // ============ 手账主页（参考图1） ============
+  const pageItems = HUNDRED_LIST.slice(page * PER_PAGE, page * PER_PAGE + PER_PAGE);
+  const done = state.hundred.length;
+
+  return (
+    <div
+      className="relative flex h-full flex-col overflow-hidden bg-[linear-gradient(160deg,#fdeff3_0%,#fadce4_45%,#f6ccd8_100%)]"
+      onTouchStart={(e) => {
+        touchX.current = e.touches[0].clientX;
+      }}
+      onTouchEnd={(e) => {
+        if (touchX.current == null) return;
+        const dx = e.changedTouches[0].clientX - touchX.current;
+        if (dx < -44) setPage((p) => Math.min(pageCount - 1, p + 1));
+        else if (dx > 44) setPage((p) => Math.max(0, p - 1));
+        touchX.current = null;
+      }}
+    >
+      {/* 背景装饰：柔光斑 + 花朵 + 丝带 + 回形针 + 花瓣 */}
+      <span aria-hidden="true" className="absolute -left-10 top-6 h-40 w-40 rounded-full bg-white/45 blur-xl" />
+      <span aria-hidden="true" className="absolute -right-8 top-24 h-36 w-36 rounded-full bg-white/35 blur-xl" />
+      <ScrapFlower size={78} tone="#f5bccb" className="absolute -left-5 top-[110px] opacity-90" />
+      <ScrapFlower size={56} tone="#f8cfda" className="absolute left-8 top-[170px] opacity-80" />
+      <ScrapFlower size={90} tone="#f3b2c3" className="absolute -right-6 top-[150px] opacity-90" />
+      <ScrapFlower size={60} tone="#f6c3d0" className="absolute right-10 top-[236px] opacity-75" />
+      <ScrapFlower size={70} tone="#f5bccb" className="absolute -left-4 bottom-24 opacity-85" />
+      <ScrapFlower size={52} tone="#f8cfda" className="absolute bottom-40 right-4 opacity-70" />
+      {/* 花瓣 */}
+      {[['12%', '24%', -20], ['30%', '12%', 40], ['70%', '9%', -35], ['86%', '30%', 24], ['8%', '58%', 30], ['90%', '62%', -28], ['22%', '82%', -12], ['64%', '88%', 18]].map(([l, t, r], i) => (
+        <span
+          key={i}
+          aria-hidden="true"
+          className="absolute h-3 w-5 rounded-[50%_50%_50%_50%/60%_60%_40%_40%] bg-[#f4bccb]/80"
+          style={{ left: l as string, top: t as string, transform: `rotate(${r}deg)` }}
+        />
+      ))}
+      {/* 回形针 */}
+      <svg aria-hidden="true" viewBox="0 0 24 48" className="absolute right-8 top-3 h-11 w-6 rotate-12 opacity-80">
+        <path d="M7 14 V36 a5 5 0 0 0 10 0 V10 a7 7 0 0 0 -14 0 v26" fill="none" stroke="#c9909e" strokeWidth="2.6" strokeLinecap="round" />
+      </svg>
+
+      {/* 顶部：返回 + 标题牌 */}
+      <div className="relative z-20 shrink-0 pt-2">
+        <button
+          type="button"
+          onClick={close}
+          aria-label="返回"
+          className="absolute left-3 top-3 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-[linear-gradient(180deg,#f9b7ca,#f29cb6)] text-white shadow-[0_4px_12px_rgba(230,130,160,0.45)] transition-transform active:scale-95"
+        >
+          <ArrowLeft className="h-6 w-6" strokeWidth={2.6} />
+        </button>
+        {/* 标题牌（斜置粉色亚克力牌） */}
+        <div className="relative mx-auto mt-2 w-fit rotate-[-3deg]">
+          <div className="relative rounded-xl border-2 border-white/85 bg-[linear-gradient(135deg,#f8c6d4,#f2a9be_60%,#ee9db4)] px-7 py-2.5 shadow-[0_6px_18px_rgba(210,110,140,0.35)]">
+            <span aria-hidden="true" className="absolute left-2.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-white/85 shadow-inner" />
+            <div className="pl-2 text-center">
+              <div className="text-[19px] font-extrabold tracking-wide text-[#a13a52] drop-shadow-[0_1px_0_rgba(255,255,255,0.6)]">我们的 100 件小事</div>
+              <div className="-mt-0.5 text-right text-[9px] italic tracking-[3px] text-white/95">OurLoveDiary</div>
+            </div>
+          </div>
+          {/* 牌上小花 */}
+          <ScrapFlower size={34} tone="#fce3ea" className="absolute -right-4 -top-3" />
         </div>
       </div>
 
-      {/* 拍立得卡片墙 */}
-      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-4 pb-2">
-        {HUNDRED_LIST.map((item, i) => {
-          const checked = state.hundred.includes(i);
-          return (
-            <button
-              key={i}
-              type="button"
-              onClick={() => toggle(i)}
-              aria-pressed={checked}
-              className={`relative rounded-md bg-white px-2 pb-2 pt-3 shadow-[0_4px_12px_rgba(0,0,0,0.07)] transition-transform active:scale-[0.96] ${HUNDRED_ROT[i % 4]}`}
-            >
-              {/* 胶带 */}
-              <span aria-hidden="true" className="absolute -top-1.5 left-1/2 h-3.5 w-11 -translate-x-1/2 rotate-[-4deg] rounded-[3px] bg-[#dcdce2]/85" />
-              {/* 插画位 */}
-              <span className="flex h-11 items-center justify-center rounded-sm bg-[#f6f6f8] text-[24px]">
-                {HUNDRED_EMOJI[i % HUNDRED_EMOJI.length]}
-              </span>
-              <span className={`mt-1.5 block min-h-[30px] text-center text-[11px] leading-snug ${checked ? 'text-[#a9a9b2] line-through' : 'text-[#3c3c42]'}`}>{item}</span>
-              {/* 序号 */}
-              <span className="absolute bottom-1 left-2 text-[8.5px] font-bold tracking-wider text-[#d0d0d6]">{String(i + 1).padStart(2, '0')}</span>
-              {/* 邮戳 */}
-              <span
-                className={`absolute -right-1.5 -top-2 rotate-[10deg] rounded-full border px-1.5 py-[2px] text-[8.5px] font-bold leading-none ${
-                  checked ? 'border-[#3f3f46] bg-[#3f3f46] text-white shadow-sm' : 'border-[#c9c9cf] bg-white/90 text-[#a9a9b2]'
-                }`}
+      {/* 拍立得卡片墙（当前页 6 张） */}
+      <div className="relative z-10 flex-1 overflow-hidden px-5 pt-3">
+        <div className="grid grid-cols-2 gap-x-4">
+          {pageItems.map((item, i) => {
+            const idx = page * PER_PAGE + i;
+            const checked = state.hundred.includes(idx);
+            const it = items[String(idx)];
+            return (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => openEdit(idx)}
+                aria-pressed={checked}
+                aria-label={`小事：${item}`}
+                className={`relative mb-5 rounded-md bg-white px-2 pb-1.5 pt-2 shadow-[0_6px_16px_rgba(200,110,140,0.22)] transition-transform active:scale-[0.96] ${HUNDRED_ROT[idx % 4]} ${i % 2 === 1 ? 'mt-7' : ''}`}
               >
-                {checked ? '✓ 已完成' : '待完成'}
-              </span>
-            </button>
-          );
-        })}
+                {/* 胶带 */}
+                <span aria-hidden="true" className="absolute -top-2 left-1/2 z-10 h-4 w-12 -translate-x-1/2 rotate-[-5deg] rounded-[3px] bg-[#f6cdd9]/90 shadow-sm" />
+                {/* 插画 */}
+                <span className="flex h-[74px] items-center justify-center overflow-hidden rounded-sm bg-[#fdf3ec]">
+                  {it?.img ? (
+                    <img src={it.img} alt={item} className="h-full w-full object-cover" draggable={false} />
+                  ) : (
+                    <span className="text-[34px] drop-shadow-[0_2px_2px_rgba(220,140,160,0.25)]">{HUNDRED_EMOJI[idx % HUNDRED_EMOJI.length]}</span>
+                  )}
+                </span>
+                <span className={`mt-1 block min-h-[30px] text-center text-[11.5px] leading-snug ${checked ? 'text-[#c3a8b0] line-through' : 'text-[#6b5a52]'}`}>{item}</span>
+                {/* 序号 */}
+                <span className="absolute bottom-0.5 left-2 text-[8px] font-bold tracking-wider text-[#e3ccd3]">{String(idx + 1).padStart(2, '0')}</span>
+                {/* 待完成/已完成 印章（点击切换） */}
+                <span
+                  role="button"
+                  tabIndex={0}
+                  aria-label={checked ? '标记待完成' : '标记完成'}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleDone(idx);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      toggleDone(idx);
+                    }
+                  }}
+                  className={`absolute -right-2 -top-2.5 z-20 rounded-[4px] border px-[3px] py-[3px] text-[9px] font-extrabold leading-[1.1] shadow-sm ${checked ? 'border-[#b09a90] bg-[#b09a90] text-white' : 'border-[#e05a6d] bg-white/90 text-[#e05a6d]'}`}
+                  style={{ writingMode: 'vertical-rl' }}
+                >
+                  {checked ? '已完成' : '待完成'}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
-    </SubShell>
+
+      {/* 右侧固定按钮：目录 + 添加小事 */}
+      <div className="absolute bottom-[86px] right-3 z-30 flex flex-col items-end gap-2.5">
+        <button
+          type="button"
+          onClick={() => setShowIndex(true)}
+          className="flex items-center gap-1.5 rounded-md bg-[linear-gradient(180deg,#b7a6ec,#9d8ade)] px-3.5 py-2 text-[14px] font-bold text-white shadow-[0_4px_12px_rgba(140,120,210,0.4)] transition-transform active:scale-95"
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
+          目录
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const next = HUNDRED_LIST.findIndex((_, i) => !state.hundred.includes(i));
+            openEdit(next >= 0 ? next : 0);
+          }}
+          className="flex items-center gap-1.5 rounded-md bg-[linear-gradient(180deg,#f9a8c0,#f387a7)] px-3.5 py-2 text-[14px] font-bold text-white shadow-[0_4px_12px_rgba(230,120,155,0.45)] transition-transform active:scale-95"
+        >
+          <span className="text-[16px] font-light leading-none">+</span>
+          添加小事
+        </button>
+      </div>
+
+      {/* 底部：左右滑动提示 + 翻页箭头 */}
+      <div className="relative z-20 flex shrink-0 items-center justify-between px-5 pb-4">
+        <span className="flex-1 text-center text-[15px] font-medium text-white drop-shadow-[0_1px_3px_rgba(190,90,120,0.55)]">左右滑动 / 点击翻页</span>
+        <button
+          type="button"
+          onClick={() => setPage((p) => (p + 1) % pageCount)}
+          aria-label="下一页"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 border-white/90 bg-white/45 text-white shadow-[0_3px_10px_rgba(200,110,140,0.35)] backdrop-blur-sm transition-transform active:scale-90"
+        >
+          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+        </button>
+      </div>
+      {/* 页码 */}
+      <span aria-hidden="true" className="absolute bottom-1.5 left-1/2 -translate-x-1/2 text-[9px] font-semibold text-[#d89aab]">
+        {page + 1} / {pageCount} · 已完成 {done}/100
+      </span>
+
+      {/* 目录弹层 */}
+      {showIndex && (
+        <div className="absolute inset-0 z-40 flex items-end bg-black/35" onClick={() => setShowIndex(false)}>
+          <div className="max-h-[76%] w-full overflow-hidden rounded-t-3xl bg-white" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-black/[0.05] px-5 py-3.5">
+              <span className="text-[16px] font-bold text-[#3c3c42]">目录 · 已完成 {done}/100</span>
+              <button type="button" onClick={() => setShowIndex(false)} aria-label="关闭目录" className="text-[13px] font-medium text-[#e88ba4]">
+                收起
+              </button>
+            </div>
+            <div className="max-h-[62vh] overflow-y-auto overscroll-contain px-4 pb-8 pt-2">
+              {Array.from({ length: 10 }).map((_, g) => (
+                <div key={g} className="mb-1">
+                  <div className="px-1 pb-1 pt-2 text-[11px] font-bold text-[#c9a9b2]">{g * 10 + 1}-{g * 10 + 10}</div>
+                  {HUNDRED_LIST.slice(g * 10, g * 10 + 10).map((item, j) => {
+                    const i = g * 10 + j;
+                    const checked = state.hundred.includes(i);
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => {
+                          setPage(Math.floor(i / PER_PAGE));
+                          setShowIndex(false);
+                        }}
+                        className="flex h-10 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors active:bg-[#fdf1f4]"
+                      >
+                        <span className="w-6 shrink-0 text-[11px] font-bold text-[#d8b8c0]">{String(i + 1).padStart(2, '0')}</span>
+                        <span className={`flex-1 truncate text-[13.5px] ${checked ? 'text-[#c3a8b0] line-through' : 'text-[#4a3f3b]'}`}>{item}</span>
+                        {checked && <span className="text-[12px] font-bold text-[#e0708a]">✓</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2953,31 +3380,222 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
   );
 }
 
-/** 三生石 */
-function StonePage({ state, days, close }: { state: CoupleState; days: number | null; close: () => void }) {
+/** 三生石（参考图5）：深蓝星空 + 发光水晶 + 竖排名牌 + 缔结名簿 */
+const STONE_NAMES = ['陈文冲', '陆湘玲', '蔡慧欣', '彭书源', '吴艳婷', '曾予彬', '宋嘉萍', '陈嘉佑', '徐梓馨', '蒋东兴', '刘简清', '肖丰初', '袁欣菲', '饶兴国', '何方珊', '徐溢涵', '黄静璐', '谭鑫磊', '黄新连', '蒙金玉', '王鑫雨', '王巍', '周子涵', '玉玲', '薛名言', '艾海洋', '杨春艳', '蔡一晨', '姜睿磊'];
+
+/** 竖排名字牌 */
+function NameTag({ name, style, hot = false, delay = 0 }: { name: string; style?: React.CSSProperties; hot?: boolean; delay?: number }) {
   return (
-    <SubShell title="三生石" onBack={close}>
-      <div className="mt-6 flex flex-col items-center">
-        {/* 石头造型 */}
-        <div className="relative flex h-[188px] w-[188px] items-center justify-center rounded-[46%_54%_52%_48%/54%_46%_54%_46%] bg-[linear-gradient(150deg,#d8d8dd,#aeaeb8_60%,#9898a2)] shadow-[0_18px_40px_rgba(80,80,92,0.35)]">
-          <div className="text-center">
-            <div className="text-[22px] font-bold tracking-[3px] text-[#4a4a52]">{state.meName || '我'}</div>
-            <div className="my-1 text-[13px] text-[#6e6e78]">♥ 三生三世 ♥</div>
-            <div className="text-[22px] font-bold tracking-[3px] text-[#4a4a52]">{state.taName || 'TA'}</div>
-          </div>
-          <span aria-hidden="true" className="absolute left-8 top-10 h-8 w-12 rounded-full bg-white/35 blur-[6px]" />
+    <span
+      className={`pointer-events-none absolute flex items-center justify-center rounded-[7px] px-[3px] py-2 text-[13px] tracking-[3px] ${
+        hot
+          ? 'z-10 border border-[#ffd9a8]/80 bg-[linear-gradient(180deg,rgba(255,214,150,0.34),rgba(255,170,190,0.22))] text-[#ffe9c8] shadow-[0_0_16px_rgba(255,190,120,0.5)]'
+          : 'border border-white/20 bg-white/[0.08] text-white/85 backdrop-blur-[2px]'
+      } [writing-mode:vertical-rl] [animation:couple-float-y_4s_ease-in-out_infinite]`}
+      style={{ ...style, animationDelay: `${delay}s` }}
+    >
+      {name}
+    </span>
+  );
+}
+
+function StonePage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
+  const [sheet, setSheet] = useState<'none' | 'explain' | 'ours'>('none');
+  const engraved = state.stoneEngraved;
+  const me = state.meName || '我';
+  const ta = state.taName || 'TA';
+  /** 名牌布局：左右两列 + 底部一行（参考图散布） */
+  const tagSpots: { l: string; t: string; d: number }[] = [
+    { l: '4%', t: '17%', d: 0 }, { l: '13%', t: '19%', d: 0.6 },
+    { l: '27%', t: '15%', d: 1.1 }, { l: '36%', t: '18%', d: 0.3 },
+    { l: '60%', t: '15%', d: 0.8 }, { l: '70%', t: '17%', d: 1.4 },
+    { l: '4%', t: '46%', d: 0.5 }, { l: '13%', t: '48%', d: 1.2 },
+    { l: '27%', t: '44%', d: 0.2 }, { l: '36%', t: '47%', d: 0.9 },
+    { l: '60%', t: '44%', d: 1.5 }, { l: '70%', t: '46%', d: 0.4 },
+    { l: '86%', t: '47%', d: 1.0 },
+  ];
+  const bottomSpots = engraved
+    ? [
+        { name: me, hot: true, l: '30%', t: '72%', d: 0.2 },
+        { name: ta, hot: true, l: '42%', t: '73%', d: 0.7 },
+      ]
+    : [
+        { name: STONE_NAMES[24], hot: false, l: '8%', t: '70%', d: 0.3 },
+        { name: STONE_NAMES[25], hot: false, l: '17%', t: '72%', d: 0.8 },
+        { name: STONE_NAMES[26], hot: false, l: '30%', t: '70%', d: 0.2 },
+        { name: STONE_NAMES[27], hot: false, l: '39%', t: '72%', d: 0.6 },
+        { name: STONE_NAMES[28], hot: false, l: '52%', t: '70%', d: 1.1 },
+      ];
+
+  return (
+    <div className="relative flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,#141f3a_0%,#1d3054_34%,#31507e_62%,#5f82ac_86%,#8aa8c8_100%)]">
+      {/* ===== 星空背景 ===== */}
+      {[
+        ['8%', '8%', 2], ['20%', '5%', 1.4], ['38%', '9%', 1.8], ['55%', '4%', 1.2], ['72%', '10%', 2.2], ['88%', '6%', 1.5],
+        ['12%', '30%', 1.3], ['93%', '26%', 1.9], ['6%', '55%', 1.6], ['95%', '62%', 1.4], ['30%', '38%', 1.1], ['66%', '36%', 1.3],
+      ].map(([l, t, s], i) => (
+        <span
+          key={i}
+          aria-hidden="true"
+          className="absolute rounded-full bg-white [animation:couple-twinkle_2.6s_ease-in-out_infinite]"
+          style={{ left: l as string, top: t as string, width: `${s}px`, height: `${s}px`, animationDelay: `${(i % 5) * 0.5}s` }}
+        />
+      ))}
+      {/* 星轨弧线 */}
+      <svg aria-hidden="true" viewBox="0 0 400 700" preserveAspectRatio="xMidYMid slice" className="absolute inset-0 h-full w-full opacity-25">
+        <circle cx="200" cy="300" r="190" fill="none" stroke="#9fc3e8" strokeWidth="0.8" strokeDasharray="3 7" />
+        <circle cx="200" cy="300" r="250" fill="none" stroke="#9fc3e8" strokeWidth="0.6" strokeDasharray="2 9" />
+        <circle cx="200" cy="300" r="130" fill="none" stroke="#b8d4ee" strokeWidth="0.7" strokeDasharray="4 8" />
+      </svg>
+      {/* 底部远山 + 云雾 */}
+      <span aria-hidden="true" className="absolute bottom-[13%] -left-10 h-24 w-72 rounded-[50%] bg-[#243b60]/90 blur-[3px]" />
+      <span aria-hidden="true" className="absolute bottom-[15%] -right-14 h-28 w-80 rounded-[50%] bg-[#2a4568]/90 blur-[3px]" />
+      <span aria-hidden="true" className="absolute bottom-[6%] left-0 right-0 h-24 bg-[linear-gradient(180deg,transparent,rgba(180,205,230,0.35))]" />
+
+      {/* ===== 顶部：返回 + 标题 + 右侧菱形钮 ===== */}
+      <div className="relative z-30 shrink-0 pt-3">
+        <button
+          type="button"
+          onClick={close}
+          aria-label="返回"
+          className="absolute left-3 top-3 flex h-10 w-10 rotate-45 items-center justify-center rounded-[10px] border border-[#9fc3e8]/60 bg-[#2a4a78]/70 shadow-[0_0_12px_rgba(120,180,240,0.35)] transition-transform active:scale-90"
+        >
+          <ArrowLeft className="h-5 w-5 -rotate-45 text-[#d8e8f8]" strokeWidth={2.4} />
+        </button>
+        <div className="pt-10 text-center text-[19px] font-semibold tracking-[2px] text-[#cfe2f5] [text-shadow:0_0_14px_rgba(140,190,240,0.65)]">
+          缔<span className="mx-0.5 text-[#7d9cc4]">/</span>结<span className="mx-0.5 text-[#7d9cc4]">/</span>名<span className="mx-0.5 text-[#7d9cc4]">/</span>簿
+          <span className="mx-3" />
+          缘<span className="mx-0.5 text-[#7d9cc4]">/</span>定<span className="mx-0.5 text-[#7d9cc4]">/</span>三<span className="mx-0.5 text-[#7d9cc4]">/</span>生
         </div>
-        <p className="mt-8 max-w-[280px] text-center text-[15px] leading-loose text-[#6e6e76]">
-          传说三生石刻着有缘人的名字。
-          <br />
-          第一生相遇，第二生相知，
-          <br />
-          第三生相守——此刻正是第 {days == null ? '一' : '三'}生，
-          <br />
-          你们已并肩走过 {days ?? 0} 天。
+        {/* 右侧两个菱形按钮 */}
+        <div className="absolute right-4 top-[86px] flex flex-col items-center gap-6">
+          <button type="button" onClick={() => setSheet('explain')} className="group flex flex-col items-center transition-transform active:scale-90">
+            <span className="flex h-11 w-11 rotate-45 items-center justify-center rounded-[12px] border border-[#9fc3e8]/70 bg-[linear-gradient(135deg,rgba(150,190,235,0.4),rgba(70,110,170,0.4))] shadow-[0_0_14px_rgba(120,180,240,0.45)] backdrop-blur-[2px]">
+              <svg viewBox="0 0 24 24" className="h-5 w-5 -rotate-45 text-[#e8f2fc]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4H6.5A2.5 2.5 0 0 0 4 6.5v13z" />
+                <path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" />
+              </svg>
+            </span>
+            <span className="mt-2 text-[13px] font-medium text-[#dce9f8] [text-shadow:0_0_8px_rgba(140,190,240,0.8)]">说明</span>
+          </button>
+          <button type="button" onClick={() => setSheet('ours')} className="flex flex-col items-center transition-transform active:scale-90">
+            <span className="flex h-11 w-11 rotate-45 items-center justify-center rounded-[12px] border border-[#9fc3e8]/70 bg-[linear-gradient(135deg,rgba(150,190,235,0.4),rgba(70,110,170,0.4))] shadow-[0_0_14px_rgba(120,180,240,0.45)] backdrop-blur-[2px]">
+              <Heart className="h-5 w-5 -rotate-45 text-[#e8f2fc]" strokeWidth={2} fill="rgba(232,242,252,0.85)" />
+            </span>
+            <span className="mt-2 text-[14px] font-medium text-[#e4eefa] [text-shadow:0_0_8px_rgba(140,190,240,0.8)]">我们的名字</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ===== 中部：发光水晶 + 名牌 ===== */}
+      <div className="relative z-10 flex-1">
+        {/* 名牌（水晶两侧，inline style 定位避免动态类名被裁剪） */}
+        {tagSpots.map((s, i) => (
+          <NameTag key={i} name={STONE_NAMES[i % STONE_NAMES.length]} style={{ left: s.l, top: s.t }} delay={s.d} />
+        ))}
+        {bottomSpots.map((s, i) => (
+          <NameTag key={`b${i}`} name={s.name} hot={s.hot} style={{ left: s.l, top: s.t }} delay={s.d} />
+        ))}
+
+        {/* 水晶主体 */}
+        <div className="absolute left-1/2 top-[10%] h-[78%] -translate-x-1/2">
+          {/* 外发光 */}
+          <span aria-hidden="true" className="absolute left-1/2 top-1/2 h-[110%] w-[130%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(closest-side,rgba(120,190,255,0.5),rgba(120,190,255,0.12)_55%,transparent_75%)] [animation:couple-glow-pulse_3.4s_ease-in-out_infinite]" />
+          <svg viewBox="0 0 200 320" className="relative h-full w-auto drop-shadow-[0_0_24px_rgba(110,180,250,0.55)]" aria-hidden="true">
+            <defs>
+              <linearGradient id="cgTop" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#f2fbff" />
+                <stop offset="100%" stopColor="#9cccef" />
+              </linearGradient>
+              <linearGradient id="cgL" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#b5d9f4" />
+                <stop offset="100%" stopColor="#4d84c4" />
+              </linearGradient>
+              <linearGradient id="cgR" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#8fc0ea" />
+                <stop offset="100%" stopColor="#2a5a9a" />
+              </linearGradient>
+              <linearGradient id="cgCore" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#e8f6ff" />
+                <stop offset="50%" stopColor="#7fb3e6" />
+                <stop offset="100%" stopColor="#3a6ca8" />
+              </linearGradient>
+            </defs>
+            <polygon points="100,6 152,84 100,128 48,84" fill="url(#cgTop)" />
+            <polygon points="48,84 100,128 74,238 100,314 100,128" fill="url(#cgL)" opacity="0.95" />
+            <polygon points="152,84 100,128 100,314 128,236" fill="url(#cgR)" />
+            <polygon points="100,128 74,238 100,314" fill="url(#cgCore)" opacity="0.75" />
+            <polygon points="100,128 128,236 100,314" fill="#1d4a80" opacity="0.55" />
+            <polyline points="48,84 100,128 152,84" fill="none" stroke="#ffffff" strokeWidth="1.6" opacity="0.85" />
+            <line x1="100" y1="6" x2="100" y2="314" stroke="#ffffff" strokeWidth="1.1" opacity="0.5" />
+            <line x1="48" y1="84" x2="74" y2="238" stroke="#ffffff" strokeWidth="0.8" opacity="0.4" />
+            <line x1="152" y1="84" x2="128" y2="236" stroke="#ffffff" strokeWidth="0.8" opacity="0.4" />
+            <ellipse cx="78" cy="60" rx="16" ry="9" fill="#ffffff" opacity="0.5" transform="rotate(-30 78 60)" />
+          </svg>
+          {/* 内部闪光粒子 */}
+          {[['40%', '22%', 0], ['58%', '34%', 0.8], ['46%', '52%', 1.6], ['55%', '66%', 0.4]].map(([l, t, d], i) => (
+            <span key={i} aria-hidden="true" className="absolute h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_8px_#bfe0ff] [animation:couple-twinkle_2.2s_ease-in-out_infinite]" style={{ left: l, top: t, animationDelay: `${d}s` }} />
+          ))}
+        </div>
+        {/* 底部倒影光斑 */}
+        <span aria-hidden="true" className="absolute bottom-[4%] left-1/2 h-10 w-56 -translate-x-1/2 rounded-[50%] bg-[radial-gradient(closest-side,rgba(160,210,255,0.4),transparent)]" />
+      </div>
+
+      {/* ===== 底部：刻名按钮 + 说明文字 ===== */}
+      <div className="relative z-20 shrink-0 px-8 pb-7">
+        <button
+          type="button"
+          onClick={() => {
+            if (engraved) {
+              setSheet('ours');
+              return;
+            }
+            patch({ stoneEngraved: true });
+            showToast('名字已刻上三生石，缘定三生 💍');
+          }}
+          className={`relative h-[52px] w-full rounded-xl border text-[19px] font-bold tracking-[6px] backdrop-blur-sm transition-transform active:scale-[0.98] ${
+            engraved
+              ? 'border-[#ffd9a8]/70 bg-[rgba(255,200,130,0.16)] text-[#ffe9c8] shadow-[0_0_18px_rgba(255,190,120,0.35)]'
+              : 'border-[#a8ccf0]/70 bg-[rgba(110,160,220,0.28)] text-white shadow-[0_0_20px_rgba(120,180,240,0.45)]'
+          }`}
+        >
+          {engraved ? '已刻上我们的名字' : '立刻刻上我们的名字'}
+          <span aria-hidden="true" className="absolute -right-1 -bottom-1 text-[13px] text-[#bfe0ff]">✦</span>
+        </button>
+        <p className="mt-3 text-center text-[13.5px] leading-relaxed text-[#b8cde4]">
+          {me} 和 {ta} 使用 <span className="font-semibold text-[#ffd98a]">姻缘笔</span> 缔结名簿 缘定三生
         </p>
       </div>
-    </SubShell>
+
+      {/* 说明 / 我们的名字 弹层 */}
+      {sheet !== 'none' && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50 px-8" onClick={() => setSheet('none')}>
+          <div className="w-full rounded-2xl border border-[#9fc3e8]/40 bg-[#1c2f52] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            {sheet === 'explain' ? (
+              <>
+                <div className="text-[16px] font-bold text-[#dce9f8]">三生石·说明</div>
+                <p className="mt-2 text-[14px] leading-relaxed text-[#a8c0dc]">
+                  相传三生石畔，姻缘笔落，名簿留痕——第一生相遇，第二生相知，第三生相守。把两个人的名字刻在一起，从此生生世世，缘定三生。
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="text-[16px] font-bold text-[#dce9f8]">我们的名字</div>
+                <div className="mt-4 flex items-center justify-center gap-4">
+                  <span className="rounded-lg border border-[#ffd9a8]/60 bg-[rgba(255,200,130,0.14)] px-4 py-2 text-[16px] font-semibold tracking-widest text-[#ffe9c8]">{me}</span>
+                  <Heart className="h-5 w-5 text-[#f0a0b8]" fill="#f0a0b8" />
+                  <span className="rounded-lg border border-[#ffd9a8]/60 bg-[rgba(255,200,130,0.14)] px-4 py-2 text-[16px] font-semibold tracking-widest text-[#ffe9c8]">{ta}</span>
+                </div>
+                <p className="mt-3 text-center text-[12.5px] text-[#8aa4c4]">{engraved ? '三生石上，已刻下你们的名字 ✦' : '还未刻名，点下方按钮刻上你们的名字吧'}</p>
+              </>
+            )}
+            <button type="button" onClick={() => setSheet('none')} className="mt-4 h-11 w-full rounded-full bg-[rgba(150,190,235,0.25)] text-[15px] font-medium text-[#dce9f8]">
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3406,41 +4024,276 @@ function ProfilePage({ state, patch, showToast, close, onReset }: { state: Coupl
   );
 }
 
-/** 每天想你记录页 */
-function MissYouPage({ state, tapMissYou, close }: { state: CoupleState; tapMissYou: () => void; close: () => void }) {
-  const today = state.missYouByDay[todayKey()] || 0;
-  const week = Array.from({ length: 7 }).map((_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    const k = todayKey(d);
-    return { k, n: state.missYouByDay[k] || 0, label: ['日', '一', '二', '三', '四', '五', '六'][d.getDay()] };
-  });
-  const max = Math.max(1, ...week.map((w) => w.n));
+/** 每天想你记录页（参考图4）：大粉心 + 我/他连续天数 + 去提醒他 + 心形月历 + 补签卡 */
+function MissYouPage({ state, patch, tapMissYou, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; tapMissYou: () => void; showToast: (m: string) => void; close: () => void }) {
+  const [monthOff, setMonthOff] = useState(0); // 0=本月，1=上月
+  const [sheet, setSheet] = useState<'none' | 'explain' | 'record'>('none');
+  const today = todayKey();
+  const madeUp = new Set(state.missMadeUp || []);
+  const hit = (k: string) => (state.missYouByDay[k] || 0) > 0 || madeUp.has(k);
+
+  /** 我连续想他：从今天（若今天未打卡则从昨天）往回连续计数 */
+  const myStreak = useMemo(() => {
+    let n = 0;
+    const start = new Date();
+    if (!hit(todayKey(start))) start.setDate(start.getDate() - 1);
+    for (;;) {
+      if (!hit(todayKey(start))) break;
+      n += 1;
+      start.setDate(start.getDate() - 1);
+    }
+    return n;
+     
+  }, [state.missYouByDay, state.missMadeUp]);
+  const taStreak = 0; // TA 还没来过（演示）
+
+  /** 展示月份 */
+  const base = new Date();
+  const view = new Date(base.getFullYear(), base.getMonth() - monthOff, 1);
+  const year = view.getFullYear();
+  const month = view.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstWeekday = new Date(year, month, 1).getDay(); // 0=周日
+  const todayNum = base.getDate();
+  const isThisMonth = monthOff === 0;
+
+  /** 本月是否存在断签（missSince 起始之后、今天之前有未打卡日） */
+  const sinceStart = state.missSince ? new Date(`${state.missSince}T00:00:00`) : null;
+  const hasBreak = useMemo(() => {
+    if (!sinceStart) return false;
+    for (let d = 1; d <= (isThisMonth ? todayNum : daysInMonth); d++) {
+      const dt = new Date(year, month, d);
+      if (dt < sinceStart || dt.getTime() >= new Date(base.getFullYear(), base.getMonth(), base.getDate()).getTime()) continue;
+      if (!hit(todayKey(dt))) return true;
+    }
+    return false;
+     
+  }, [state.missSince, state.missYouByDay, state.missMadeUp, monthOff]);
+
+  /** 补签：消耗一张补签卡 */
+  const makeUp = (key: string) => {
+    if ((state.missCards || 0) <= 0) return;
+    patch({ missCards: (state.missCards || 0) - 1, missMadeUp: [...(state.missMadeUp || []), key] });
+    showToast('补签成功，想念不断签 ♡');
+  };
+  /** 获得补签卡（演示） */
+  const gainCard = () => {
+    patch({ missCards: (state.missCards || 0) + 1 });
+    showToast('获得 1 张想你补签卡 ♡');
+  };
+
   return (
-    <SubShell title="每天想你" onBack={close}>
-      <div className="mt-4 flex flex-col items-center rounded-2xl bg-white py-8 shadow-sm">
-        <button type="button" onClick={tapMissYou} aria-label="想你 +1" className="flex h-[104px] w-[104px] items-center justify-center rounded-full bg-[radial-gradient(circle_at_32%_28%,#cfcfd6,#a9a9b2_70%)] text-white shadow-[0_14px_34px_rgba(70,70,80,0.35)] transition-transform active:scale-[0.94]">
-          <Heart className="h-10 w-10" fill="currentColor" strokeWidth={1.5} />
-        </button>
-        <div className="mt-4 text-[15px] text-[#9a9aa2]">今天已经想了你</div>
-        <div className="text-[34px] font-bold text-[#2c2c30]">{today} 次</div>
-        <div className="text-[13px] text-[#b6b6bd]">累计 {state.missYou} 次</div>
-      </div>
-      {/* 近 7 天柱状 */}
-      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
-        <div className="text-[15px] font-semibold text-[#2c2c30]">近 7 天的心动频率</div>
-        <div className="mt-4 flex h-[90px] items-end justify-between gap-2 px-1">
-          {week.map((w) => (
-            <div key={w.k} className="flex flex-1 flex-col items-center gap-1">
-              <div className="flex h-[64px] w-full items-end">
-                <div className="w-full rounded-t-md bg-[linear-gradient(180deg,#8e8e97,#6a6a73)] transition-all" style={{ height: `${(w.n / max) * 100}%`, minHeight: w.n > 0 ? 6 : 2, opacity: w.n > 0 ? 1 : 0.25 }} />
-              </div>
-              <span className="text-[11px] text-[#9a9aa2]">{w.label}</span>
-            </div>
-          ))}
+    <div className="flex h-full flex-col bg-white">
+      {/* 顶栏 */}
+      <div className="shrink-0 bg-white pt-[54px]">
+        <div className="relative flex h-11 items-center px-1.5">
+          <button type="button" onClick={close} aria-label="返回" className="flex h-9 w-9 items-center justify-center rounded-full text-[#3a3a40] transition-opacity active:opacity-50">
+            <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
+          </button>
+          <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[17px] font-bold">想你记录</div>
         </div>
       </div>
-    </SubShell>
+
+      <div className="flex-1 overflow-y-auto overscroll-contain">
+        {/* 大粉心（点击也能打卡） */}
+        <button type="button" onClick={tapMissYou} aria-label="想你 +1" className="mx-auto mt-2 block transition-transform active:scale-95">
+          <svg viewBox="0 0 100 100" className="h-[104px] w-[112px]" aria-hidden="true">
+            <defs>
+              <linearGradient id="missHeartG" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#ff8fa8" />
+                <stop offset="55%" stopColor="#f85e83" />
+                <stop offset="100%" stopColor="#ef4a70" />
+              </linearGradient>
+            </defs>
+            <path d="M50 88 C22 64 8 46 8 30 A21 21 0 0 1 50 24 A21 21 0 0 1 92 30 C92 46 78 64 50 88Z" fill="url(#missHeartG)" />
+            <ellipse cx="32" cy="30" rx="11" ry="7" fill="#ffffff" opacity="0.45" transform="rotate(-24 32 30)" />
+          </svg>
+        </button>
+
+        {/* 连续天数 */}
+        <div className="mt-1 text-center text-[16px] text-[#3c3c42]">
+          我连续想他 <b className="mx-0.5 align-middle text-[27px] font-extrabold text-[#f0436e]">{myStreak}</b> 天 / 他连续想我{' '}
+          <b className="mx-0.5 align-middle text-[27px] font-extrabold text-[#4a90f2]">{taStreak}</b> 天
+        </div>
+
+        {/* 去提醒他 */}
+        <div className="mt-3 flex flex-col items-center">
+          <button
+            type="button"
+            onClick={() => showToast('已经去提醒他啦，让他快来想你 ♡')}
+            className="h-11 w-[196px] rounded-full bg-[linear-gradient(90deg,#4a9df3,#2f7fe8)] text-[16px] font-semibold text-white shadow-[0_6px_16px_rgba(60,130,230,0.35)] transition-transform active:scale-[0.97]"
+          >
+            去提醒他
+          </button>
+          <span className="mt-2 text-[13px] text-[#b6b6bd]">今天他还没来过哦~</span>
+        </div>
+
+        {/* 有断签 + 月份切换 */}
+        <div className="mt-6 flex items-end justify-between px-4">
+          {hasBreak ? (
+            <span className="relative -mb-1 rounded-full bg-[#ffc93c] px-2.5 py-[3px] text-[11px] font-bold text-[#7a4e00] shadow-sm">
+              ❗有断签
+              <span aria-hidden="true" className="absolute -bottom-1 left-3 h-2 w-2 rotate-45 bg-[#ffc93c]" />
+            </span>
+          ) : (
+            <span />
+          )}
+        </div>
+        <div className="relative flex h-11 items-center justify-center bg-[#fdf0f3]">
+          <button
+            type="button"
+            onClick={() => setMonthOff((o) => o + 1)}
+            aria-label="上一月"
+            className="absolute left-3 flex h-8 w-8 items-center justify-center text-[#8a8a92]"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M15 5l-7 7 7 7" /></svg>
+          </button>
+          <span className="text-[16px] font-semibold text-[#4a4a52]">
+            {year}年{month + 1}月
+          </span>
+          {monthOff > 0 && (
+            <button
+              type="button"
+              onClick={() => setMonthOff((o) => Math.max(0, o - 1))}
+              aria-label="下一月"
+              className="absolute right-3 flex h-8 w-8 items-center justify-center text-[#8a8a92]"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M9 5l7 7-7 7" /></svg>
+            </button>
+          )}
+        </div>
+
+        {/* 心形日历 */}
+        <div className="grid grid-cols-7 gap-y-2 px-3 py-4">
+          {Array.from({ length: firstWeekday }).map((_, i) => (
+            <span key={`b${i}`} />
+          ))}
+          {Array.from({ length: daysInMonth }).map((_, i) => {
+            const d = i + 1;
+            const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            const isToday = isThisMonth && d === todayNum;
+            const isFuture = isThisMonth ? d > todayNum : new Date(year, month, d) > base;
+            const done = hit(key);
+            if (isFuture) {
+              return (
+                <span key={key} className="flex flex-col items-center">
+                  <span className="flex h-[42px] w-[42px] items-center justify-center rounded-2xl bg-[#ececef]">
+                    <svg viewBox="0 0 100 100" className="h-6 w-6 opacity-70">
+                      <path d="M50 88 C22 64 8 46 8 30 A21 21 0 0 1 50 24 A21 21 0 0 1 92 30 C92 46 78 64 50 88Z" fill="#ffffff" />
+                    </svg>
+                  </span>
+                </span>
+              );
+            }
+            if (done) {
+              return (
+                <button key={key} type="button" onClick={tapMissYou} aria-label={`${key} 已想你`} className="flex flex-col items-center transition-transform active:scale-90">
+                  <span className="relative flex h-[42px] w-[46px] items-center justify-center">
+                    <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full">
+                      <defs>
+                        <linearGradient id={`mg${key}`} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#ffaebf" />
+                          <stop offset="100%" stopColor="#f7738f" />
+                        </linearGradient>
+                      </defs>
+                      <path d="M50 88 C22 64 8 46 8 30 A21 21 0 0 1 50 24 A21 21 0 0 1 92 30 C92 46 78 64 50 88Z" fill={`url(#mg${key})`} />
+                    </svg>
+                    {isToday ? (
+                      <span className="relative text-[10px] font-bold text-white">今日</span>
+                    ) : (
+                      <span className="relative text-[13px] font-semibold text-white/95">{d}</span>
+                    )}
+                  </span>
+                </button>
+              );
+            }
+            // 过去未打卡（可补签）
+            const canMakeUp = isThisMonth && (state.missCards || 0) > 0;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => {
+                  if (!canMakeUp) {
+                    showToast('没有补签卡啦，先点下方 + 号获得一张吧');
+                    return;
+                  }
+                  makeUp(key);
+                }}
+                aria-label={`${key} 未打卡，点击补签`}
+                className="flex flex-col items-center transition-transform active:scale-90"
+              >
+                <span className="relative flex h-[42px] w-[46px] items-center justify-center">
+                  <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full">
+                    <path d="M50 88 C22 64 8 46 8 30 A21 21 0 0 1 50 24 A21 21 0 0 1 92 30 C92 46 78 64 50 88Z" fill="#ffffff" stroke="#f0a9ba" strokeWidth="5" />
+                  </svg>
+                  <span className="relative text-[13px] font-semibold text-[#8a5560]">{d}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 补签卡 */}
+        <div className="mt-2 flex items-center justify-center gap-1.5 pb-2 text-[15px] text-[#3c3c42]">
+          你们有 <b className="mx-0.5 text-[19px] font-extrabold text-[#f0436e]">{state.missCards || 0}</b>
+          <button
+            type="button"
+            onClick={gainCard}
+            aria-label="获得补签卡"
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-[linear-gradient(180deg,#f9a8c0,#f387a7)] text-[15px] font-bold leading-none text-white shadow-sm"
+          >
+            +
+          </button>
+          张想你补签卡
+        </div>
+
+        {/* 说明/记录链接 */}
+        <div className="flex items-center justify-center gap-10 pb-8 pt-2">
+          <button type="button" onClick={() => setSheet('explain')} className="flex items-center gap-1 text-[14px] font-medium text-[#f0436e] underline underline-offset-4">
+            <HelpCircle className="h-4 w-4" /> 补签卡说明
+          </button>
+          <button type="button" onClick={() => setSheet('record')} className="flex items-center gap-1 text-[14px] font-medium text-[#f0436e] underline underline-offset-4">
+            <Heart className="h-4 w-4" /> 补签卡记录
+          </button>
+        </div>
+      </div>
+
+      {/* 说明 / 记录弹层 */}
+      {sheet !== 'none' && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/40 px-8" onClick={() => setSheet('none')}>
+          <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            {sheet === 'explain' ? (
+              <>
+                <div className="text-[16px] font-bold text-[#2c2c30]">补签卡说明</div>
+                <p className="mt-2 text-[14px] leading-relaxed text-[#5a5a62]">
+                  每天回来点一次「想你」即为当天打卡；断签的日子可以用补签卡补上，连续天数就不会断啦。点击日历上空心的日子即可补签，点下方 + 号可获得补签卡（演示）。
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="text-[16px] font-bold text-[#2c2c30]">补签卡记录</div>
+                <div className="mt-3 max-h-[46vh] space-y-2 overflow-y-auto">
+                  {(state.missMadeUp || []).length === 0 ? (
+                    <div className="py-8 text-center text-[14px] text-[#b6b6bd]">还没有补签过哦~</div>
+                  ) : (
+                    (state.missMadeUp || []).map((k) => (
+                      <div key={k} className="flex items-center justify-between rounded-xl bg-[#fdf0f3] px-4 py-2.5 text-[14px] text-[#5a5a62]">
+                        <span>{fmtDateCn(k)}</span>
+                        <span className="text-[12px] font-semibold text-[#f0436e]">已补签 ♡</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+            <button type="button" onClick={() => setSheet('none')} className="mt-4 h-11 w-full rounded-full bg-[#f3f3f5] text-[15px] font-medium text-[#5a5a62]">
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
