@@ -27,7 +27,7 @@
  * - 回复条数（按群独立连发多条）与分句发送（连发不触发回复，空输入点发送统一触发）与单聊同套逻辑。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   AudioLines,
@@ -153,7 +153,11 @@ import { buildImagePlaceholderRule, buildVoicePlaceholderRule, type MediaRuleMsg
 import { extractPhotoTags, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag } from '@/lib/imggen';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
-import { stopVoicePlayback } from '@/lib/ios/voice-player';
+import { stopVoicePlayback, VOICE_PLAY_ERROR_EVENT } from '@/lib/ios/voice-player';
+// Task 40「错误提示优化」：错误分类/连续失败冷却 + 失败灰字提示行 + 草稿箱（详见各模块注释）
+import { CHAT_UNKNOWN_FAIL_TEXT, classifyChatError, cooldownRemainText, lastChatErrorDetail, recordChatFail, recordChatSuccess } from '@/lib/chat-errors';
+import { CHAT_DRAFT_MAX, clearChatDraft, getChatDraft, saveChatDraft } from '@/lib/ios/chat-drafts';
+import { ChatErrorLine } from './chat-error-line';
 import { getSentenceSend, hasPendingBatch, markPendingBatch, saveSentenceSend } from '@/lib/sentence-send';
 import {
   actionVerb,
@@ -2076,6 +2080,14 @@ export function QqGroupChatPage({
     stopSpeaking();
     stopVoicePlayback();
   }, [gid]);
+  // Task 40：语音气泡播放失败 → toast（voice-player 无 UI，经全局事件解耦；onToast 走 ref 保持监听器稳定）
+  const onToastRef = useRef(onToast);
+  onToastRef.current = onToast;
+  useEffect(() => {
+    const fn = (e: Event) => onToastRef.current((e as CustomEvent<string>).detail || '语音播放失败，请稍后重试');
+    window.addEventListener(VOICE_PLAY_ERROR_EVENT, fn);
+    return () => window.removeEventListener(VOICE_PLAY_ERROR_EVENT, fn);
+  }, []);
   const [msgs, setMsgs] = useState<WxGroupMsg[]>(() => loadGroupMsgs(gid));
   // 存储侧追加（后台落盘的事件/开场白）→ 广播后即时重读（与微信同构）
   useEffect(() => {
@@ -2087,7 +2099,10 @@ export function QqGroupChatPage({
     window.addEventListener('group-msgs:updated', fn);
     return () => window.removeEventListener('group-msgs:updated', fn);
   }, [gid]);
-  const [draft, setDraft] = useState('');
+  // Task 40 草稿箱：输入框草稿按群持久化（惰性恢复历史草稿；输入即存、发送清空；超长截断提示节流）
+  const [draft, setDraft] = useState(() => getChatDraft('qq-group', gid));
+  /** 草稿超长截断 toast 的节流时间戳（同一串超长输入不连环弹） */
+  const draftTruncAtRef = useRef(0);
   /** 内置表情插入输入框（不直接发送）：真实表情图插到光标处，可与文字混排一起发送（真机 QQ 交互） */
   const insertBuiltinEmoji = (s: Sticker) => {
     inputRef.current?.insertEmoji(s.meaning, s.url);
@@ -2124,6 +2139,11 @@ export function QqGroupChatPage({
   const runningRef = useRef(false);
   /** 排队回复标记：回合进行中用户又发了消息 → 本回合结束后自动再起一轮 */
   const groupQueuedRef = useRef(false);
+  // Task 40「错误提示优化」：失败提示行「隐藏这条提示」的内存态（重挂载/刷新后恢复显示）
+  const [hiddenFails, setHiddenFails] = useState<Set<string>>(() => new Set());
+  // Task 40：成员回合流失败的原始错误中转（runCharTurn finalize 写入 → runGroupTurn 收口分类/记录；
+  // 不改 resolve('error') 的取值语义，regenerate/级联等既有消费点零扰动）
+  const lastTurnErrRef = useRef('');
   /** 群回合触发器（语音消息转写完成后的补跑用：经 ref 调最新回合，避免闭包旧状态/旧配置） */
   const runGroupTurnRef = useRef<(trigger?: WxGroupMsg) => void>(() => undefined);
   /** 文字转语音发送（定义在下方；send 在前引用 → 同 runGroupTurnRef 的 ref 模式） */
@@ -2249,7 +2269,7 @@ export function QqGroupChatPage({
 
   /** 就地更新一条群消息的附加数据（红包/转账状态流转、AI 语音升级用）：读改写存储 + 页面存活时同步 state */
   const patchGroupMsg = useCallback(
-    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'kind' | 'voice' | 'img' | 'replyFail'>>) => {
+    (mid: string, patch: Partial<Pick<WxGroupMsg, 'rp' | 'tr' | 'recalled' | 'content' | 'kind' | 'voice' | 'img' | 'replyFail' | 'failReason'>>) => {
       const next = loadGroupMsgs(gid).map((m) => (m.id === mid ? { ...m, ...patch } : m));
       saveGroupMsgs(gid, next);
       if (mountedRef.current) setMsgs(next);
@@ -2299,13 +2319,14 @@ export function QqGroupChatPage({
     [appendMsg]
   );
 
-  /** @ 某成员：插入「@名字 」到草稿（输入框以 @ 结尾时替换该 @，与键入 @ 唤起浮层无缝衔接） */
+  /** @ 某成员：插入「@名字 」到草稿（输入框以 @ 结尾时替换该 @，与键入 @ 唤起浮层无缝衔接）；
+   *  Task 40 草稿箱：直接改草稿的路径同样落草稿（与 onChange 同一持久化入口） */
   const insertMention = (c: ContactRecord) => {
     setAtOpen(false);
-    setDraft((d) => {
-      const base = d.endsWith('@') ? d.slice(0, -1) : d;
-      return `${base}${base && !base.endsWith(' ') ? ' ' : ''}@${memberNameOf(c)} `;
-    });
+    const base = draft.endsWith('@') ? draft.slice(0, -1) : draft;
+    const nv = `${base}${base && !base.endsWith(' ') ? ' ' : ''}@${memberNameOf(c)} `;
+    setDraft(nv);
+    saveChatDraft('qq-group', gid, nv);
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
@@ -3126,6 +3147,9 @@ export function QqGroupChatPage({
             // 避免 N 个成员挨个发假消息污染聊天历史和记忆），结果标记为 'error' 交给
             // runGroupTurn 统一收口——整轮无人成功时才落一条系统提示
             if (result.error) {
+              // Task 40：把流失败的原始错误带出（ref 中转 → runGroupTurn 收口分类/记录）；
+              // resolve('error') 的取值语义不变，regenerate/级联等消费点零扰动
+              lastTurnErrRef.current = result.error;
               resolve('error');
               return;
             }
@@ -3297,6 +3321,7 @@ export function QqGroupChatPage({
         }
         // 收集每个成员的回合结果（#21）：'ok'=有产出 / 'skip'=自判沉默等 / 'error'=流失败
         const results: ('ok' | 'skip' | 'error')[] = [];
+        lastTurnErrRef.current = ''; // Task 40：清上一轮错误中转，防旧错误串轮
         // #27 级联素材：本轮最后一条 AI 成功发言（发言人 id + 消息文本），供回合结束后解析 @ 提及
         let lastOkMsg: { senderId: string; text: string } | null = null;
         for (const char of ordered) {
@@ -3327,10 +3352,17 @@ export function QqGroupChatPage({
         // 无触发消息（分句批次/红包转账卡片触发）时保持静默。部分成员成功时保持静默——
         // 那几位只是没说话，符合真实群聊，也不给聊天记录添噪音
         if (results.length > 0 && !results.includes('ok') && results.includes('error')) {
-          if (trigger && loadGroupMsgs(gid).some((x) => x.id === trigger.id)) patchGroupMsg(trigger.id, { replyFail: true });
+          if (trigger && loadGroupMsgs(gid).some((x) => x.id === trigger.id)) {
+            // Task 40「错误提示优化」：错误分类为友好文案（failReason 随徽标/灰字行渲染）+
+            // 记录失败（连续失败进入重试冷却；原始错误仅存内存供「复制错误详情」，不落库）
+            const rawErr = lastTurnErrRef.current;
+            patchGroupMsg(trigger.id, { replyFail: true, failReason: classifyChatError(rawErr).text });
+            recordChatFail(sKey, rawErr);
+          }
         } else if (results.includes('ok')) {
-          // 有任何成员产出：清除触发消息上的失败徽标（重试成功场景）
-          if (trigger?.replyFail) patchGroupMsg(trigger.id, { replyFail: undefined });
+          // 有任何成员产出：清除触发消息上的失败徽标（重试成功场景）；Task 40：同步清失败计数/冷却与错误详情
+          recordChatSuccess(sKey);
+          if (trigger?.replyFail) patchGroupMsg(trigger.id, { replyFail: undefined, failReason: undefined });
         }
         // #27 AI 成员回复 @ 其他成员 → 轻量级联必答：解析本轮最后一条 AI 成功发言里的 @ 提及
         //（parseMentions 只匹配 AI 成员名，天然排除机主与发言者本人），命中且仍在群、未被禁言、
@@ -3407,10 +3439,16 @@ export function QqGroupChatPage({
   );
   runGroupTurnRef.current = runGroupTurn;
 
-  /** 红色 ! 徽标重试：整轮群回复失败的消息点击后重跑群回合（占用时静默，徽标保留可再点；
-   *  任一成员产出后由 runGroupTurn 收口清除标记） */
+  /** 红色 ! 徽标/失败灰字行重试：整轮群回复失败的消息点击后重跑群回合（占用时静默，徽标保留可再点；
+   *  任一成员产出后由 runGroupTurn 收口清除标记）。Task 40 冷却拦截：连续失败进入冷却后不再立刻
+   *  发请求（toast 剩余秒数；用户发新消息不受限） */
   const retryGroupTurn = (m: WxGroupMsg) => {
     if (runningRef.current || isChatStreaming(sKey) || isAiDelivering(sKey)) return;
+    const cd = cooldownRemainText(sKey);
+    if (cd) {
+      onToast(cd);
+      return;
+    }
     void runGroupTurn(m);
   };
 
@@ -3561,6 +3599,7 @@ export function QqGroupChatPage({
       }));
       setPendingImgs([]);
       setDraft('');
+      clearChatDraft('qq-group', gid); // Task 40 草稿箱：发送即清草稿（发送失败时草稿仍在，重进不丢）
       setQuote(null);
       for (const m of [textMsg, ...created]) appendMsg(m);
       if (runningRef.current || isChatStreaming(sKey)) {
@@ -3593,6 +3632,7 @@ export function QqGroupChatPage({
       quote: quote ?? undefined,
     };
     setDraft('');
+    clearChatDraft('qq-group', gid); // Task 40 草稿箱：与文字发送同口径清草稿
     setQuote(null);
     if (runningRef.current || isChatStreaming(sKey)) {
       // 成员们还在回复：消息照常发出并排队，本回合结束后自动再起一轮（不再拦截后让用户重发）
@@ -3712,12 +3752,13 @@ export function QqGroupChatPage({
   const sendTextAsVoice = useCallback(
     (text: string) => {
       setDraft('');
+      clearChatDraft('qq-group', gid); // Task 40 草稿箱：与文字发送同口径清草稿
       setQuote(null);
       void synthesizeSelfVoice(text)
         .then((clip) => commitVoiceMsg(clip, text))
         .catch((e: unknown) => onToast(e instanceof Error && e.message ? e.message : '语音生成失败，请重试'));
     },
-    [commitVoiceMsg, onToast],
+    [commitVoiceMsg, gid, onToast],
   );
   sendTextAsVoiceRef.current = sendTextAsVoice;
 
@@ -4651,8 +4692,9 @@ export function QqGroupChatPage({
             m.role === 'peer' && !m.recalled && (!m.kind || m.kind === 'text') && !cleanBubbleText(actBody ?? m.content);
           const lineOnly = (actView && !actView.text) || bubbleBlank;
           return (
+            // Task 40：外包 Fragment 携带 key（行后可能追加失败灰字提示行，兄弟节点不能共用 key）
+            <Fragment key={m.id}>
             <div
-              key={m.id}
               data-mid={m.id}
               onClickCapture={
                 selectMode && isSelectable(m)
@@ -4903,6 +4945,20 @@ export function QqGroupChatPage({
                 </>
               )}
             </div>
+            {/* Task 40「错误提示优化」：整轮失败灰字提示行（只挂在带 replyFail 的触发消息行后，
+                居中灰字不进气泡不落库；单击重试、长按菜单：重试/复制错误详情/隐藏这条提示）。
+                成员级失败不落任何消息，不渲染行（保持既有语义） */}
+            {mine && m.replyFail && !hiddenFails.has(m.id) ? (
+              <ChatErrorLine
+                testId={`qqgrp-errline-${m.id}`}
+                text={m.failReason || CHAT_UNKNOWN_FAIL_TEXT}
+                detail={lastChatErrorDetail(sKey)}
+                cooldownText={cooldownRemainText(sKey)}
+                onRetry={() => retryGroupTurn(m)}
+                onHide={() => setHiddenFails((ps) => new Set(ps).add(m.id))}
+              />
+            ) : null}
+            </Fragment>
           );
         })}
         {/* 流式气泡（当前发言角色）：回复条数>1 时按边界实时切成多个气泡，下一句没打完时显示打字中 */}
@@ -4994,6 +5050,11 @@ export function QqGroupChatPage({
               value={draft}
               onChange={(v) => {
                 setDraft(v);
+                // Task 40 草稿箱：输入即持久化（防抖落库，切群/刷新不丢）；超长截断时节流提示一次
+                if (saveChatDraft('qq-group', gid, v) && Date.now() - draftTruncAtRef.current > 5000) {
+                  draftTruncAtRef.current = Date.now();
+                  onToast(`草稿过长，仅保留前 ${CHAT_DRAFT_MAX} 字`);
+                }
                 // 键入 @ 直接唤起成员浮层（QQ/微信同款：点选后替换该 @ 并插入「@名字 」）
                 if (v.endsWith('@')) {
                   setStickerOpen(false);

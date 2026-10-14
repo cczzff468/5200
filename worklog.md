@@ -19266,3 +19266,85 @@ Stage Summary:
 - 交付：分支出生静默期（来电/发帖/互动三引擎隔离+首聊解除）、朋友圈双认领修复、同源互斥、6 类会话设置+2 类背景图继承、跨App找人分支禁用
 - 改动文件：src/lib/ios/branch-meta.ts（新）/branch.ts/moments.ts/proactive-call.ts/cross-app-reach.ts
 - 7A/8A/9A（朋友圈互评允许/允许入群/主动消息不继承）为保持现状决策，无代码改动
+
+---
+Task ID: 39-e1
+Agent: wechat-integrator (Task 39/40 实施代理)
+Task: 微信单聊（wechat.tsx）接入「错误提示优化」+「草稿箱」——只做接线，不改既有交互语义
+
+Work Log:
+- 读 worklog.md 近期 Stage Summary（Task 37/38 分支、38-b 规则修复），确认增量插入原则与中文注释风格（Task 40 标注）
+- 勘察 wechat.tsx 全部接入点（行号按内容定位，与任务书 ±20 行内一致）：WxMsg 接口 :459 replyFail、finalize setReplyFail/error/空回复/成功清除 :6716-6762、retryReply :6815、消息渲染循环 :8322-8834、input state :4766、onChange :9007、clearComposer :7061、排队分支 :7071（复用 clearComposer）、sendTextAsVoice :7232、@ 选人插入 :9126
+- 【A 消息类型】WxMsg 加 failReason?: string（:460-463，注释：失败分类友好文案，非原始报错，渲染居中灰字行用）
+- 【B finalize】setReplyFail 改 (fail: boolean, reason?: string)：patchOf 统一算补丁，fail 时写 failReason（reason ?? 原值 ?? CHAT_UNKNOWN_FAIL_TEXT），清标时与 replyFail 一并置 undefined；幂等条件扩为 replyFail+failReason 双比较（原「无变化不落库」语义保留）；error 分支 deliveredAny 时 recordChatFail(sessionKey, error) 静默、否则 setReplyFail(true, classifyChatError(error).text)+recordChatFail；空回复分支加 CHAT_PARSE_FAIL_TEXT+recordChatFail('空回复')；成功清除 if 内追加 recordChatSuccess——【有意偏差】spec 原文写在 if 行之后无条件调用，但空回复分支在两行前刚 recordChatFail，无条件调用会把刚记的冷却清零（自相矛盾），故放进同一 if（与 setReplyFail(false) 同口径，requestOnly 中性回合不碰计数）
+- 【C retryReply】入口加 cooldownRemainText 拦截，冷却中 onToast(cd) 直接 return；deps 加 onToast（useLocalToast 的 show 为 useCallback([]) 稳定引用）；ChatPage 本就有 useLocalToast（:4696 chatToast/onToast），直接复用未新挂 LocalToast
+- 【D 灰字行】消息 map 返回改 <Fragment key={m.id}> 包裹（key 从消息行 div 移到 Fragment，div 的 data-mid/onClickCapture/highlight 等全部不动；Fragment 不产生 DOM，滚动定位/照片堆叠不受影响），消息行 </div> 之后条件渲染 <ChatErrorLine text={m.failReason || CHAT_UNKNOWN_FAIL_TEXT} detail={lastChatErrorDetail(sessionKey)} cooldownText={cooldownRemainText(sessionKey)} onRetry={() => retryReply(m)} onHide={() => setHiddenFail(...)} testId={`wx-errline-${m.id}`}/>；ChatPage 加 hiddenFail state（:4800）+ draftTruncTipAt ref；`if (m.error) return null` 遗留跳过、照片堆叠成员行跳过、红色 ! 徽标（wx-replyfail-*）全部原样保留
+- 【E 草稿箱】input 改惰性初始化 useState(() => getChatDraft('wx', peer.id))；onChange 加 saveChatDraft('wx', peer.id, v)，截断返回 true 时按 draftTruncTipAt 5 秒节流 toast「草稿过长，仅保留前 2000 字」（用 CHAT_DRAFT_MAX 模板）；clearComposer 加 clearChatDraft（排队补跑分支走 clearComposer 自动覆盖）；sendTextAsVoice 清空处同样加；@ 选人插入（setInput updater）补 saveChatDraft 同步草稿（幂等防抖写）
+- 【F 语音播放失败 toast】ChatPage 挂载期 useEffect 监听 VOICE_PLAY_ERROR_EVENT（voice-player 新导出），detail 文案走 onToast；onToast 稳定引用，依赖数组 [onToast] 无重挂载
+- 验证：bunx tsc --noEmit 全量 0 错误（两次确认）；bunx eslint src/components/apps/wechat.tsx 0 报错（仅 babel >500KB 体积提示）；setReplyFail 全部调用点均带分类文案；git diff 核对 18 处改动均为增量插入
+Stage Summary:
+- 交付：微信单聊错误提示优化 + 草稿箱接入完成——①流失败打标时同步写分类友好文案（网络不稳定/API Key 无效/请求太频繁/服务暂时不可用/请求超时/回复解析失败/兜底未送达），消息行下方居中灰字行（点击重试、长按菜单重发/复制错误详情/隐藏，冷却中文案随行尾展示）；②连续失败冷却拦截重试（1 次立即可试、2 次 10s、3+ 30s，成功清零，不拦新消息）；③空回复按解析失败计数；④输入草稿按账号+联系人隔离持久化（惰性恢复/输入即存/超 2000 字截断+节流提示/发送及转语音即清）；⑤语音播放失败页内 toast
+- 改动文件：仅 src/components/apps/wechat.tsx（18 处增量编辑，+109/-13 行左右）；未动 chat-errors.ts/chat-drafts.ts/chat-error-line.tsx/voice-player.ts 等基础模块
+- 坑：①spec 的 recordChatSuccess 位置若按字面无条件执行会清掉空回复分支刚记的失败计数，已改为与 setReplyFail(false) 同 if（requestOnly 中性回合不动计数）；②git diff 终端输出曾显示丢 [m 字样的假象，实为 Bash 输出管道吃字符，grep 实测文件内容完好；③排队补跑分支 :7071 复用 clearComposer，无需重复插入清草稿代码
+
+---
+Task ID: 39-e2
+Agent: qq-sms-integrator (Task 39/40 实施代理)
+Task: QQ 单聊（qq.tsx）与信息 App（chat.tsx）接入「错误提示优化」+「草稿箱」——只做接线，不改既有交互语义
+
+Work Log:
+- 读 worklog.md 近期 Stage Summary（Task 37/38 分支、38-b 规则修复、34 性能底座 kvSetDebounced）与基础模块源码（chat-errors.ts/chat-drafts.ts/chat-error-line.tsx/voice-player.ts 的 VOICE_PLAY_ERROR_EVENT），确认 API 契约与账号作用域（qq-draft:/ios-chat-draft: 前缀自动 --{accountId} 后缀隔离，小助手 assistant 与联系人 c:<id> 天然分键）
+- 勘察 qq.tsx（17503 行）全部接入点：QQMsg.replyFail :456、finalize setReplyFail/error/空回复/成功清除 :5099-5147、retryReply :5219、消息渲染循环 m.error 跳过 :6577 + 徽标 qq-replyfail-* :6735、input state :3044、onChange(ChatRichInput) :7203、send 清空三处 :5501/:5537/:5547 + sendTextAsVoice 第四处 :5716、ChatPage 自带 useLocalToast :3002
+- 【QQ·A 类型】QQMsg 加 failReason?: string（:457-458，Task 40 注释：失败分类文案，不落原始报错，详情走「复制错误详情」）
+- 【QQ·B finalize】setReplyFail 改 (fail, reason?)：patch 统一算补丁（幂等条件 replyFail+failReason 双比较，语义同原「无变化不落库」），fail 写 failReason、清标连 failReason 一并抹掉；error 分支先 recordChatFail(sessionKey, error) 再 deliveredAny 早退（早退前也计数，spec 明确要求），完全无回应时 setReplyFail(true, classifyChatError(error).text)；空回复分支 (setReplyFail(true, CHAT_PARSE_FAIL_TEXT), recordChatFail(sessionKey, '空回复'), [])；成功清除 recordChatSuccess 与 setReplyFail(false) 同 if（requestOnly/纯动作中性回合不碰计数——与 39-e1 微信侧同款有意偏差，防自相矛盾清零）
+- 【QQ·C retryReply】入口加 cooldownRemainText 拦截 + onToast(剩余秒数)（ChatErrorLine 冷却中自身不可点，徽标路径靠此闸）；deps 加 onToast（useLocalToast show 为稳定引用）
+- 【QQ·D 灰字行】消息 map 返回改 <Fragment key={m.id}>（key 从行 div 移到 Fragment，data-mid/onClickCapture/highlight 全不动），行 div 后条件渲染 <ChatErrorLine text={m.failReason || CHAT_UNKNOWN_FAIL_TEXT} detail={lastChatErrorDetail(sessionKey)} cooldownText onRetry={()=>retryReply(m)} onHide setHiddenFail testId={`qq-errline-${m.id}`}/>；hiddenFail state（:3044-3045，内存态，ChatPage 按 peer.id keyed 重挂载自然复位）；遗留 error 跳过与红色 ! 徽标原样保留
+- 【QQ·E 草稿箱】input 惰性初始化 useState(() => getChatDraft('qq', peer.id))（ChatRichInput 哨兵首挂必渲染，恢复即显）；onChange 加 saveChatDraft('qq', peer.id, v)，截断时 5 秒节流（draftWarnRef）onToast「草稿过长，仅保留前 2000 字」（CHAT_DRAFT_MAX 模板）；send 三处清空 + sendTextAsVoice 清空（spec 三处外的第四处 setInput('')，不同步清会回显旧草稿）各加 clearChatDraft('qq', peer.id)
+- 【QQ·F 语音失败 toast】ChatPage 挂载期 useEffect 监听 VOICE_PLAY_ERROR_EVENT → onToast(detail)，依赖 [onToast] 稳定，挂载/卸载成对
+- 勘察 chat.tsx（5181 行）接入点：ChatMsg.replyFail :164、finalize :1953-1999、retryReply :2095、自绘 showToast :2490、failBadgeOf 四类气泡分支（voice/image/textcard/text，:3225/:3274/:3331/:3380 原样保留）、input :1077、textarea onChange :3671、send 清空 :2428/:2436 + sendTextAsVoice :2792
+- 【信息·A-F 全量同构】ChatMsg 加 failReason；finalize setReplyFail(fail, reason?) + recordChatFail(sessionKey, error)（deliveredAny 早退前计数）+ 空回复 CHAT_PARSE_FAIL_TEXT + 成功 recordChatSuccess 同 if；retryReply 冷却拦截 + showToast；消息行 <Fragment key={m.id}> 包裹后统一在行容器后渲染 ChatErrorLine（一条判定覆盖四类气泡分支，无需逐分支插入；testId={`sms-errline-${m.id}`}）；草稿惰性初始化 getChatDraft('sms', storageKey)（chatSession.key 即 storageKey，'assistant' 与 'c:<id>' 键隔离）+ onChange 防抖保存/截断节流 toast + send 排队/正常/转语音三处 clearChatDraft；VOICE_PLAY_ERROR_EVENT → showToast
+- 【deps 补全】两端 sendTextAsVoice 的 useCallback deps 补 peer.id / storageKey（新增闭包引用，keyed 重挂载下本无陈旧闭包风险，补全为求严谨）
+- 验证：bunx tsc --noEmit 全量 0 错误（三轮：QQ 后/chat 后/最终，含并行 39-e1 wechat.tsx 改动共存）；bunx eslint qq.tsx + chat.tsx 定向 0 问题（仅 babel >500KB 体积提示）；python 字节级复核两端 12 类 hook 计数全中（failReason/recordChatFail×2/recordChatSuccess/classify/cooldown×2/draft init+save+clear×3+1/voice listener×2/testid）
+Stage Summary:
+- 交付：QQ 单聊与信息 App 全量接入错误提示优化 + 草稿箱——①失败打标同步分类文案（网络不稳定/API Key 无效/请求太频繁/服务暂时不可用/请求超时/回复解析失败/兜底未送达），失败消息行下方居中灰字行（点击重试、长按菜单：重发/复制错误详情/隐藏，冷却秒数随行尾展示，隐藏为本会话内存态）；②连续失败冷却拦截重试入口（1 次立即可试、2 次 10s、3+ 30s，成功清零，发新消息永不拦）；③空回复按解析失败计数；④草稿按 App+会话+账号隔离持久化（惰性恢复、输入即存防抖落盘、超 2000 字截断+5 秒节流提示、发送/排队/转语音即清，QQ 富文本表情代码原样进出）；⑤语音气泡播放失败经 VOICE_PLAY_ERROR_EVENT 弹两端各自 toast
+- 改动文件：仅 src/components/apps/qq.tsx（17 处增量编辑）与 src/components/apps/chat.tsx（14 处增量编辑）；基础模块（chat-errors/chat-drafts/chat-error-line/voice-player）与微信侧（39-e1）零触碰；既有功能全保持（徽标重试/regen/语音/排队补跑 sms-queued-turns/AI 小助手会话/多账号隔离）
+- 坑：①git diff 终端输出存在吞字符假象（[m、[h 开头的属性名显示残缺，如「const sgs, setMsgs]」「hiddenFail.id]」），python 字节级复核+tsc 确认文件实际内容完好，与 39-e1 记录的同款现象互相印证；②QQ 端 setInput('') 实为四处（sendTextAsVoice 也清输入），草稿清空须同步四处否则重进会回显旧草稿；③chat.tsx failBadgeOf 挂在四类气泡分支内，ChatErrorLine 不逐分支插而是统一挂在行外层容器之后（Fragment 包 key），一处判定全覆盖
+
+---
+Task ID: 39-e3
+Agent: wx-qq-group-integrator (Task 39/40 实施代理)
+Task: 微信群聊（wx-group.tsx）与 QQ 群聊（qq-group.tsx）接入「错误提示优化」+「草稿箱」——只做接线，不改既有交互语义
+
+Work Log:
+- 读 worklog.md 近期 Stage Summary（39-e1 微信单聊 / 39-e2 QQ+信息单聊）与基础模块源码（chat-errors.ts / chat-drafts.ts / chat-error-line.tsx / voice-player.ts 的 VOICE_PLAY_ERROR_EVENT），确认 API 契约与 39-e1/e2 同款取舍（recordChatSuccess 与清徽标同分支、截断提示 5 秒节流）
+- 勘察两文件全部接入点（行号实测）：sessionKeyOf wx:317=`wx:group:${gid}` / qq:249=`qq:group:${gid}`；runCharTurn finalize resolve('error') wx:3532 / qq:3129；整轮收口 wx:3733-3738 / qq:3329-3334；retryGroupTurn wx:3816 / qq:3412；draft state wx:2440 / qq:2090；insertMention wx:2874 / qq:2305；send 清空 wx:3894+4022 / qq:3563+3595+3714；红色 ! 徽标 wx:4886-4897 / qq:4532-4543；输入 onChange wx:5431 / qq:4996
+- 【A 类型】src/lib/ios/groups.ts WxGroupMsg 加 failReason?: string（:239-242，Task 40 注释：失败分类友好文案）。与 replyFail 同为运行时态不落库（normalizeMsg 本就不透传 replyFail，刷新即清，现状口径一致）；QQ 群组件类型为 Omit<WxGroupMsgBase,'kind'> 扩展，自动覆盖，textcard 编解码透传不受影响
+- 【B 收口】错误原文传递选 ref 中转方案（组件级 lastTurnErrRef，resolve('error') 取值语义不变）：finalize error 分支写 lastTurnErrRef.current=result.error → regenerate（两端直调 runCharTurn 后按 'skip'/'error' 判断回滚）与级联回合等全部消费点零改动；runGroupTurn 成员循环前清空 ref 防旧错误串轮；整轮失败收口改为 patchGroupMsg(trigger,{replyFail:true,failReason:classifyChatError(rawErr).text}) + recordChatFail(sKey,rawErr)；「任一成员产出」分支加 recordChatSuccess(sKey) 且清徽标时连 failReason 一起 patch undefined；两端 patchGroupMsg 的 Pick 白名单补 'failReason'
+- 【C 重试拦截】retryGroupTurn 入口加 cooldownRemainText(sKey) 非空即 onToast(剩余秒数) 并 return（红色徽标直点路径的闸；灰字行冷却中自身已不可点）；发新消息路径不受影响
+- 【D 灰字行】msgs.map 主 return 外包 Fragment key=m.id（key 从行 div 移到 Fragment；data-mid/长按 closest 反查/scrollTop 滚动逻辑不受兄弟节点影响），行 div 后条件渲染 ChatErrorLine：testId=wxgrp-errline-{id} / qqgrp-errline-{id}，text=m.failReason||CHAT_UNKNOWN_FAIL_TEXT，detail=lastChatErrorDetail(sKey)，cooldownText=cooldownRemainText(sKey)，onRetry=retryGroupTurn(m)，onHide=setHiddenFails 加 id；hiddenFails state（Set 内存态，重挂载/刷新复位）；notice 分支早退与成员级失败不渲染行均保持现状
+- 【E 草稿箱】draft 惰性初始化 getChatDraft('wx-group'/'qq-group', gid)；onChange 加 saveChatDraft（截断返回 true 时 draftTruncAtRef 5 秒节流 toast「草稿过长，仅保留前 2000 字」CHAT_DRAFT_MAX 模板）；insertMention 从 setDraft updater 改为显式计算+setDraft+saveChatDraft（幂等同口径）；发送清空全路径加 clearChatDraft（wx：clearComposer+sendTextAsVoice；qq：组合发送/纯文字/sendTextAsVoice 三处）；sendTextAsVoice 的 useCallback deps 补 gid
+- 【F 语音失败 toast】wx 复用页内 useLocalToast 的 onToast（useEffect deps [onToast]）；qq 的 onToast 为 props 引用不稳 → onToastRef 转发保持监听器稳定（deps 空）；detail 空时 fallback「语音播放失败，请稍后重试」
+- 验证：bunx tsc --noEmit 全量 0 错误（退出码确认，含 39-e1/e2 并行改动共存）；bunx eslint 两文件 0 问题；python 字节级复核 hiddenFails 声明/ChatErrorLine 渲染/收口补丁在两文件各恰 1 处
+Stage Summary:
+- 交付：微信群聊与 QQ 群聊全量接入错误提示优化 + 草稿箱——①整轮流失败在触发消息上打 replyFail + 分类友好文案（网络不稳定/API Key 无效/请求太频繁/服务暂时不可用/请求超时/兜底未送达），红色 ! 徽标保留，行后新增居中灰字行（点击重试、长按菜单：重发/复制错误详情/隐藏，冷却秒数随行尾展示，隐藏为本会话内存态）；②连续失败冷却拦截重试入口（1 次立即可试、2 次 10s、3+ 30s，成功清零，发新消息永不拦）；③错误原文 ref 中转仅存内存（「复制错误详情」用，不落库不进上下文/记忆）；④草稿按 App+群隔离持久化（惰性恢复、输入即存防抖落盘、超 2000 字截断+节流提示、@插入同步、发送/转语音即清，发送失败草稿保留重进不丢）；⑤语音气泡播放失败经 VOICE_PLAY_ERROR_EVENT 弹两端各自 toast
+- 改动文件：src/lib/ios/groups.ts（+4 行 failReason 字段）、src/components/apps/wx-group.tsx（16 处增量编辑）、src/components/apps/qq-group.tsx（16 处增量编辑）；基础模块与单聊侧（39-e1/e2 的 wechat/qq/chat.tsx）零触碰；成员级静默收尾语义、群 regen 回滚+toast、群管理、@提及、群记忆、排队补跑全部保持
+- 坑：①Bash 工具的输入/输出管道会吞「左方括号+小写h」两字符序列（全角或大写不受影响，与 39-e1/e2 记录的吞字假象同源）——本次曾误判 hiddenFails 声明被写坏，python 字节级比对确认文件内容完好，排查与写入该序列须用字符串拼接构造；②QQ 群输入清空点实为三处（组合发送/纯文字/sendTextAsVoice），草稿清空须同步全部否则重进回显旧草稿；③recordChatSuccess 放在 results 含 ok 分支（含无触发消息的分句批次场景），语义为「任一成员产出即恢复并清冷却」
+
+---
+Task ID: 39-c/e/f/g
+Agent: Z.ai Code (主控) + 3 并行实施代理
+Task: 错误提示优化 + 草稿箱（用户规格：五端统一逻辑、分类文案、居中灰字、长按菜单、失败冷却、草稿持久化按账号+角色+App隔离）
+
+Work Log:
+- 新建 src/lib/chat-errors.ts：classifyChatError 七类映射（网络不稳定/API Key 无效/请求太频繁/服务暂时不可用/请求超时/回复解析失败/默认未送达）+「还没有配置 API Key」内建引导文案透传（防误判为 Key 无效）+ 会话级连续失败冷却（1次立即可重试/2次10s/3+次30s，成功清零，内存态）+ lastChatErrorDetail（原始错误仅内存保存供复制）
+- 新建 src/lib/ios/chat-drafts.ts：草稿键复用 idb-kv 账号作用域（wx-draft:/qq-draft:/wx-group-draft:/qq-group-draft:/ios-chat-draft: 自动加 --{accId}）+ kvSetDebounced 400ms 防抖 + pagehide 冲刷 + CHAT_DRAFT_MAX=2000 截断
+- 新建 src/components/apps/chat-error-line.tsx：居中灰字行（点击重试/长按480ms菜单：重新发送+复制错误详情+隐藏这条提示）；修复长按释放的合成 click 落遮罩导致菜单打开即闪退（menuOpenedAt 400ms 守卫）
+- voice-player.ts：三处静默失败点（audio.onerror/play().catch/speakUserTts catch）→ VOICE_PLAY_ERROR_EVENT 事件（3s 节流），五端聊天页监听转 toast
+- 五端接入（3 并行代理）：wechat.tsx/qq.tsx/chat.tsx/wx-group.tsx/qq-group.tsx——消息类型加 failReason 字段（分类友好文案落库，非原始报错，不进上下文/记忆）；finalize error/空回复分支写 failReason+recordChatFail、成功 recordChatSuccess（与 setReplyFail(false) 同 if 防误清零）；消息行 Fragment 包 key 后渲染 ChatErrorLine；retryReply/retryGroupTurn 入口冷却拦截+toast；输入框惰性初始化 getChatDraft+onChange saveChatDraft（截断 5s 节流提示）+全部清空路径 clearChatDraft（send/clearComposer/sendTextAsVoice/insertMention/排队分支）
+- 主控补点：music-search.tsx 五处静默 catch 接 classifyChatError toast（热搜/搜索/歌手/专辑）；phone.tsx 通话内置 TTS 兜底也失败时 setError('语音合成不可用，对方暂时无法出声')；红包/转账确认纯本地模拟无网络请求无需接入；moments 后台调度静默退避保持（不打扰语义）
+- 验证：bunx tsc --noEmit 零错误；lint 新文件零问题（49 存量全在旧文件）；E2E（agent-browser）：USER 阿哲+CHAR 小柚重建环境→微信登录加好友→①草稿：输入落库 wx-draft:<cid>→切走恢复✓→刷新恢复✓→发送清空✓→信息端 ios-chat-draft:assistant 隔离✓；②错误：offline 发送→灰字行居中渲染分类文案✓→红色!徽标共存✓→错误不当台词不进气泡✓；③长按菜单：弹出✓/冷却中「重新发送」禁用态✓/复制错误详情按钮变已复制✓/隐藏这条提示行消失且徽标保留✓；④冷却：灰字行显示「失败次数较多；请 10 秒后再试」✓；⑤重试成功：徽标+灰字行清除+AI 回复正常✓；dev.log 无运行时错误
+
+Stage Summary:
+- 交付：五端统一错误提示（分类文案+居中灰字+长按菜单+失败冷却+不落聊天记录/不进记忆）与草稿箱（IndexedDB 持久化+账号+App+会话隔离+发送清空+2000字截断）
+- 改动文件：新增 chat-errors.ts/chat-drafts.ts/chat-error-line.tsx；改 voice-player.ts/wechat.tsx/qq.tsx/chat.tsx/wx-group.tsx/qq-group.tsx/groups.ts/music-search.tsx/phone.tsx
+- 范围确认：现有单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频/查手机/音乐/桌面/淘宝/美团/支付宝/角色分支全部零语义改动（纯增量插入）

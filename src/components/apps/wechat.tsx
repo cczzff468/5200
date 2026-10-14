@@ -9,7 +9,7 @@
  * - char / npc 账号暂不支持登录（本地校验拦截）
  */
 
-import { useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   AtSign,
@@ -76,13 +76,17 @@ import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat
 import { splitVisionDesc } from '@/lib/vision-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
-import { stopVoicePlayback } from '@/lib/ios/voice-player';
+import { stopVoicePlayback, VOICE_PLAY_ERROR_EVENT } from '@/lib/ios/voice-player';
 import { groupPreview, getGroup, listGroups, loadGroupMsgs, updateGroup as updateGroupRecord, dissolveGroup as dissolveGroupRecord, quitGroup as quitGroupRecord, effectiveInterop, type ChatGroup } from '@/lib/ios/groups';
 import { WxGroupChatPage, WxGroupCreatePage, WxGroupInfoPage, WxGroupListPage, GroupAvatar, groupRowId } from './wx-group';
 import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { WxPhotoStack, WxPhotoViewer, findPhotoStackSpans, type PhotoStackItem } from './photo-stack';
 import { LocalToast, useLocalToast } from './page-toast';
+// Task 40 错误提示优化 + 草稿箱：错误分类与连续失败冷却、会话草稿持久化、失败灰字提示行组件
+import { CHAT_PARSE_FAIL_TEXT, CHAT_UNKNOWN_FAIL_TEXT, classifyChatError, cooldownRemainText, lastChatErrorDetail, recordChatFail, recordChatSuccess } from '@/lib/chat-errors';
+import { CHAT_DRAFT_MAX, clearChatDraft, getChatDraft, saveChatDraft } from '@/lib/ios/chat-drafts';
+import { ChatErrorLine } from './chat-error-line';
 import { MtPayBubble, MtProxyDetailPage } from './mt-proxy-detail';
 import { MT_PROXY_CARD_EVENT } from '@/lib/ios/mt-proxy-pay';
 import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
@@ -453,6 +457,10 @@ interface WxMsg {
   /** AI 回复失败标记（红色 ! 徽标）：流失败/空回复且本轮无任何产出时打在触发的我的消息上；
    *  点击徽标重试（runAiTurn），成功后 finalize 清除，仍失败可再点。不进 AI 上下文（消息本体照常参与） */
   replyFail?: boolean;
+  /** Task 40 失败分类的友好文案（与 replyFail 同时打/清；渲染消息行下方居中灰字提示行用）：
+   *  分类归一后的文案（网络不稳定/API Key 无效/请求太频繁/服务暂时不可用/请求超时/回复解析失败），
+   *  非原始报错——原始错误只留内存供「复制错误详情」，不落库不进上下文/记忆 */
+  failReason?: string;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
   /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
@@ -4691,6 +4699,16 @@ function ChatPage({
     stopSpeaking();
     stopVoicePlayback();
   }, [peer.id]);
+  // Task 40：语音播放失败 → 页内 toast（voice-player 播放出错统一派发事件，本端监听展示；
+  // onToast 为 useLocalToast 的稳定引用，effect 只挂载/卸载各一次）
+  useEffect(() => {
+    const onErr = (e: Event) => {
+      const m = (e as CustomEvent<string>).detail;
+      if (m) onToast(m);
+    };
+    window.addEventListener(VOICE_PLAY_ERROR_EVENT, onErr);
+    return () => window.removeEventListener(VOICE_PLAY_ERROR_EVENT, onErr);
+  }, [onToast]);
   const apiConfig = useSettings((s) => s.apiConfig);
   const [msgs, setMsgs] = useState<WxMsg[]>(() => loadMsgs(peer.id));
   // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
@@ -4743,7 +4761,9 @@ function ChatPage({
   // 40-a：用户发起「解除拉黑申请」的展开面板与理由输入（仅被角色拉黑时显示；ChatPage 按 peer.id keyed 重挂载，会话切换自然复位）
   const [userReqOpen, setUserReqOpen] = useState(false);
   const [userReqText, setUserReqText] = useState('');
-  const [input, setInput] = useState('');
+  // Task 40 草稿箱：输入框惰性初始化为该会话草稿（wx 前缀键自动按账号隔离；ChatPage 按 peer.id keyed
+  // 重挂载，切会话自然重读）；发送/清空由 clearChatDraft 显式清除，输入过程 onChange 即时存
+  const [input, setInput] = useState(() => getChatDraft('wx', peer.id));
   /** 富文本输入框（contentEditable）：内置表情在框内显示真实表情图，发送时序列化回 [微笑] 代码 */
   const richInputRef = useRef<ChatRichInputHandle | null>(null);
   /** 语音输入模式：输入框替换为「按住 说话」胶囊（左侧圆钮切换） */
@@ -4776,6 +4796,10 @@ function ChatPage({
   const [regenImgError, setRegenImgError] = useState('');
   // Task 37 角色分支：待创建分支的分支点消息（长按菜单「分支」打开弹层；preview 用 quoteContentOf 摘要）
   const [branchDlg, setBranchDlg] = useState<null | { msg: WxMsg; preview: string }>(null);
+  // Task 40：失败灰字行「隐藏这条提示」的内存态（仅本会话挂载期间生效，重挂载/刷新后恢复显示）
+  const [hiddenFail, setHiddenFail] = useState<Record<string, boolean>>({});
+  /** Task 40：草稿超长截断提示节流（上次提示时间戳，5 秒内最多提示一次） */
+  const draftTruncTipAt = useRef(0);
 
   /**
    * 手动触发「文字图片」（Task 14 起方向反转）：文字图片是「我」发给 TA 的卡片——
@@ -6686,21 +6710,33 @@ function ChatPage({
         // 失败标记触发的我的消息（userMsg 为 null 时取 base 里最后一条我的消息；批次触发的消息早已入列）：
         // 新版失败不再落错误占位消息——在本条消息气泡前打红色 ! 徽标（点击重试），成功后在下方清除
         const failTargetId = userMsg?.id ?? [...base].reverse().find((m) => m.role === 'me' && !m.recalled)?.id ?? null;
-        /** 落库 + 同步 state：给触发消息打/清 replyFail 标记（红色 ! 徽标） */
-        const setReplyFail = (fail: boolean) => {
+        /** 落库 + 同步 state：给触发消息打/清 replyFail 标记（红色 ! 徽标）；
+         *  Task 40：同步写/清 failReason（失败分类的友好文案，非原始报错——渲染消息行下方居中灰字行用；
+         *  打标时缺省带兜底文案，清标时与 replyFail 一并移除；loadMsgs/saveMsgs/setMsgs 三处同步模式不变） */
+        const setReplyFail = (fail: boolean, reason?: string) => {
           if (!failTargetId) return;
           const cur = loadMsgs(peer.id);
           if (!cur.some((m) => m.id === failTargetId)) return;
-          const changed = cur.map((m) => (m.id === failTargetId && Boolean(m.replyFail) !== fail ? { ...m, replyFail: fail || undefined } : m));
-          saveMsgs(peer.id, changed);
-          setMsgs((prev) => prev.map((m) => (m.id === failTargetId && Boolean(m.replyFail) !== fail ? { ...m, replyFail: fail || undefined } : m)));
+          const patchOf = (m: WxMsg) => {
+            const nextReason = fail ? reason ?? m.failReason ?? CHAT_UNKNOWN_FAIL_TEXT : undefined;
+            if (Boolean(m.replyFail) === fail && (m.failReason ?? undefined) === nextReason) return m;
+            return { ...m, replyFail: fail || undefined, failReason: nextReason };
+          };
+          saveMsgs(peer.id, cur.map((m) => (m.id === failTargetId ? patchOf(m) : m)));
+          setMsgs((prev) => prev.map((m) => (m.id === failTargetId ? patchOf(m) : m)));
         };
         if (error) {
           // A-3：流中已投递出分段时不再打失败徽标——分段已作为真实回复逐条上屏（本轮并非无回应）；
           // 投递队列无取消路径，已排队分段必然逐条落盘，此刻静默收尾即可。
-          // 仍未投递出任何分段（完全无回应）→ 触发消息打 replyFail 红色 ! 徽标，不再落错误占位文案
-          if (deliveredAny) return;
-          setReplyFail(true);
+          // Task 40：不打徽标但仍记一次失败（连续失败冷却计数 + 原始错误留作「复制错误详情」素材）
+          if (deliveredAny) {
+            recordChatFail(sessionKey, error);
+            return;
+          }
+          // 仍未投递出任何分段（完全无回应）→ 触发消息打 replyFail 红色 ! 徽标，不再落错误占位文案；
+          // Task 40：同步写入分类后的友好文案（网络/鉴权/限频/服务/超时…），渲染为消息行下方居中灰字行
+          setReplyFail(true, classifyChatError(error).text);
+          recordChatFail(sessionKey, error);
           return;
         }
         // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
@@ -6717,9 +6753,13 @@ function ChatPage({
               ? []
               : requestOnly
                 ? []
-                : (setReplyFail(true), []);
-        // 有任何产出（分段投递/动作/本轮落盘消息）：清除触发消息上的失败徽标（重试成功场景）
-        if (built.length > 0 || deliveredAny || ctx.musicActed) setReplyFail(false);
+                : (setReplyFail(true, CHAT_PARSE_FAIL_TEXT), recordChatFail(sessionKey, '空回复'), []);
+        // 有任何产出（分段投递/动作/本轮落盘消息）：清除触发消息上的失败徽标（重试成功场景）；
+        // Task 40：本轮有产出 = 成功 → 连续失败冷却计数清零（空回复失败分支不进这里，刚记的失败不会被误清）
+        if (built.length > 0 || deliveredAny || ctx.musicActed) {
+          setReplyFail(false);
+          recordChatSuccess(sessionKey);
+        }
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -6774,10 +6814,17 @@ function ChatPage({
    *  消息本体已在 state 与存储里，runAiTurn 按 id 去重不会重复入列；成功在 finalize 清除标记） */
   const retryReply = useCallback(
     (m: WxMsg) => {
+      // Task 40：连续失败冷却拦截——冷却中只 toast 提示不重发（红色徽标/灰字行重试都走这里）；
+      // 冷却只拦「重试」，用户新消息发送入口不经过 retryReply，不受影响
+      const cd = cooldownRemainText(sessionKey);
+      if (cd) {
+        onToast(cd);
+        return;
+      }
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) return;
       runAiTurnRef.current?.(m);
     },
-    [sessionKey]
+    [sessionKey, onToast]
   );
   // 发红包/转账时通过 ref 触发（runAiTurn 定义在 execRedPacket 之后，见 runAiTurnRef 注释）
   runAiTurnRef.current = runAiTurn;
@@ -7013,6 +7060,8 @@ function ChatPage({
     }
     const clearComposer = () => {
       setInput('');
+      // Task 40：发送（排队补跑分支同样先走这里）即清草稿；clearChatDraft 内建取消防抖写，防旧值写回
+      clearChatDraft('wx', peer.id);
       setQuote(null);
       setPendingImgs([]);
     };
@@ -7181,6 +7230,8 @@ function ChatPage({
   const sendTextAsVoice = useCallback(
     (text: string) => {
       setInput('');
+      // Task 40：转语音发送与文字发送同口径——发出即清草稿（发送失败保留草稿，重进不丢）
+      clearChatDraft('wx', peer.id);
       setQuote(null);
       void synthesizeSelfVoice(text)
         .then((clip) => commitVoiceMsg(clip, text))
@@ -8280,8 +8331,10 @@ function ChatPage({
             m.role === 'peer' && !m.recalled && (!m.kind || m.kind === 'text') && !cleanBubbleText(bubbleContent);
           const lineOnly = (actView && !actView.text) || bubbleBlank;
           return (
+          // Task 40：key 从消息行移到 Fragment——消息行之后可条件渲染失败灰字提示行（Fragment 不产生 DOM，
+          // 滚动定位/highlight 等依赖 data-mid 的逻辑不受影响）
+          <Fragment key={m.id}>
           <div
-            key={m.id}
             data-mid={m.id}
             onClickCapture={
               selectMode && isSelectable(m)
@@ -8764,6 +8817,19 @@ function ChatPage({
               </div>
             ) : null}
           </div>
+          {/* Task 40：失败消息下方居中灰字提示行（点击重试；长按菜单：重新发送/复制错误详情/隐藏这条提示）；
+              不进气泡不写聊天记录，隐藏为会话内存态；detail 取会话最近一次失败的原始错误（仅复制用，界面不展示） */}
+          {m.replyFail && !hiddenFail[m.id] && (
+            <ChatErrorLine
+              text={m.failReason || CHAT_UNKNOWN_FAIL_TEXT}
+              detail={lastChatErrorDetail(sessionKey)}
+              cooldownText={cooldownRemainText(sessionKey)}
+              onRetry={() => retryReply(m)}
+              onHide={() => setHiddenFail((p) => ({ ...p, [m.id]: true }))}
+              testId={`wx-errline-${m.id}`}
+            />
+          )}
+          </Fragment>
           );
         })}
         {/* 正在输入指示（流式接收 + 逐条投递期间显示）：AI 回复为「边接收边逐条显示」——
@@ -8940,6 +9006,12 @@ function ChatPage({
                   value={input}
                   onChange={(v) => {
                     setInput(v);
+                    // Task 40 草稿箱：输入即存（400ms 防抖落库内建，刷新/切会话/重进不丢）；
+                    // 超长截断保存时返回 true → 节流提示一次（5 秒内只提示，输入框本身不限长不受干扰）
+                    if (saveChatDraft('wx', peer.id, v) && Date.now() - draftTruncTipAt.current > 5000) {
+                      draftTruncTipAt.current = Date.now();
+                      onToast(`草稿过长，仅保留前 ${CHAT_DRAFT_MAX} 字`);
+                    }
                     // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
                     if (!selfChat && v.endsWith('@')) {
                       setPlusOpen(false);
@@ -9053,7 +9125,10 @@ function ChatPage({
                   setAtOpen(false);
                   setInput((v) => {
                     const base = v.endsWith('@') ? v.slice(0, -1) : v;
-                    return `${base}${base && !base.endsWith(' ') ? ' ' : ''}@${peer.name} `;
+                    const next = `${base}${base && !base.endsWith(' ') ? ' ' : ''}@${peer.name} `;
+                    // Task 40：@ 选人插入同样同步进草稿（与 onChange 同源，防抖落库幂等）
+                    saveChatDraft('wx', peer.id, next);
+                    return next;
                   });
                 }}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left active:bg-black/[0.04] dark:active:bg-white/[0.06]"

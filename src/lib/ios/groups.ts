@@ -236,6 +236,10 @@ export interface WxGroupMsg {
   /** AI 回复失败标记（红色 ! 徽标）：整轮群回复失败（网络/接口错误且无人产出）时打在触发的机主消息上；
    *  点击徽标重试（runGroupTurn(trigger)），任一成员成功产出后清除。不进 AI 上下文（消息本体照常参与） */
   replyFail?: boolean;
+  /** 失败分类友好文案（Task 40「错误提示优化」）：整轮失败收口时由 classifyChatError 生成，
+   *  与 replyFail 同生命周期（运行时态：重试成功/刷新后清除），渲染在触发消息行后的灰色提示行上；
+   *  旧数据/无值时 UI 回退 CHAT_UNKNOWN_FAIL_TEXT。不进 AI 上下文 */
+  failReason?: string;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
   fwd?: { from: string; merged?: boolean; title?: string; records?: GroupFwdRecord[] };
 }

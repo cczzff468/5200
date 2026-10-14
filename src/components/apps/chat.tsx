@@ -1,6 +1,6 @@
 'use client';
 
-import { useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react';
+import { Fragment, useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react';
 import { motion } from 'framer-motion';
 import {
   ArrowUp,
@@ -125,7 +125,13 @@ import { cleanTextForTts, stopSpeaking } from '@/lib/ios/tts-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
 import { useAutoTextareaRef } from '@/lib/ios/use-auto-textarea';
-import { stopVoicePlayback } from '@/lib/ios/voice-player';
+import { stopVoicePlayback, VOICE_PLAY_ERROR_EVENT } from '@/lib/ios/voice-player';
+// Task 40 错误提示优化：错误分类文案 + 连续失败冷却 + 错误详情（居中灰字提示行用，原始报错不直接展示）
+import { CHAT_PARSE_FAIL_TEXT, CHAT_UNKNOWN_FAIL_TEXT, classifyChatError, cooldownRemainText, lastChatErrorDetail, recordChatFail, recordChatSuccess } from '@/lib/chat-errors';
+// Task 40 草稿箱：输入框文本按会话隔离持久化（小助手 assistant 与联系人会话键各自隔离，发送成功清空）
+import { CHAT_DRAFT_MAX, clearChatDraft, getChatDraft, saveChatDraft } from '@/lib/ios/chat-drafts';
+// Task 40 错误提示行：失败消息位置渲染的居中灰字（点击重试/长按菜单）
+import { ChatErrorLine } from './chat-error-line';
 import { decideAiVoiceMessage, getAiVoiceFreq, saveAiVoiceFreq, synthesizeAiVoice, undoLastAiVoiceDecision } from '@/lib/ios/ai-voice';
 import { describeVoiceId, useMyVoices } from '@/lib/ios/my-voices';
 
@@ -156,6 +162,8 @@ interface ChatMsg {
   /** AI 回复失败标记（红色 ! 徽标）：流失败/空回复且本轮无任何产出时打在触发的我的消息上；
    *  点击徽标重试（startAiTurn），成功后 finalize 清除，仍失败可再点。不进 AI 上下文（消息本体照常参与） */
   replyFail?: boolean;
+  /** Task 40 错误提示优化：失败分类文案（气泡下方居中灰字提示行显示；不落原始报错，详情走「复制错误详情」） */
+  failReason?: string;
   /** 引用回复（长按菜单「引用」后发送时带上；气泡内嵌小引用块；AI 上下文带引用前缀） */
   quote?: { name: string; content: string };
   /** 已撤回（渲染为居中灰字「你撤回一条消息 / 对方撤回一条消息」，不再参与上下文） */
@@ -1066,7 +1074,11 @@ function ChatView({
   /** 打开角色状态卡（仅联系人会话传入；小助手会话不传 → 顶栏头像不可点） */
   onOpenPeerStatus?: () => void;
 }) {
-  const [input, setInput] = useState('');
+  // Task 40 草稿箱：惰性初始化恢复本会话未发送草稿（ChatView 按 storageKey keyed 重挂载，
+  // 小助手 assistant 与各联系人会话键天然隔离互不干扰）
+  const [input, setInput] = useState(() => getChatDraft('sms', storageKey));
+  /** Task 40 草稿箱：超长截断提示的 5 秒节流（连续键入超长文本只提示一次） */
+  const draftWarnRef = useRef(0);
   /** 多行输入自适应增高：内容变化时重算高度（iMessage 胶囊随内容长高，清空回落单行） */
   const smsTaRef = useAutoTextareaRef(input, 110);
   // 挂载时读本地记录；无记录（或被清空）则回落 initialMsgs
@@ -1076,6 +1088,8 @@ function ChatView({
   });
   /** 全局流式回复状态（请求由 chat-stream-store 发起并接收，退出聊天页/退出 App 不中断） */
   const sessionKey = `sms:${storageKey}`;
+  /** Task 40 错误提示优化：用户点「隐藏这条提示」的失败提示行（内存态，重挂载/刷新后恢复显示） */
+  const [hiddenFail, setHiddenFail] = useState<Record<string, boolean>>({});
   const stream = useChatStream(sessionKey);
   const streaming = stream?.status === 'streaming';
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1936,21 +1950,31 @@ function ChatView({
         // 失败标记触发的我的消息（userMsg 为 null 时取 base 里最后一条我的消息）：
         // 新版失败不再落错误占位消息——在本条消息气泡前打红色 ! 徽标（点击重试），成功后在下方清除
         const failTargetId = userMsg?.id ?? [...base].reverse().find((m) => m.role === 'user' && !m.recalled)?.id ?? null;
-        /** 落库 + 同步 state：给触发消息打/清 replyFail 标记（红色 ! 徽标） */
-        const setReplyFail = (fail: boolean) => {
+        /** 落库 + 同步 state：给触发消息打/清 replyFail 标记（红色 ! 徽标）；
+         *  Task 40 错误提示优化：失败时同步写入分类文案 failReason（居中灰字提示行用），清除时一并抹掉 */
+        const setReplyFail = (fail: boolean, reason?: string) => {
           if (!failTargetId) return;
           const cur = loadMsgs(storageKey) ?? [];
           if (!cur.some((m) => m.id === failTargetId)) return;
-          const changed = cur.map((m) => (m.id === failTargetId && Boolean(m.replyFail) !== fail ? { ...m, replyFail: fail || undefined } : m));
+          const patch = (m: ChatMsg): ChatMsg => {
+            if (m.id !== failTargetId) return m;
+            // 标记与文案都无变化时跳过（防无意义的全量落库）；成功清除（fail=false）连 failReason 一起抹掉
+            if (Boolean(m.replyFail) === fail && (!fail || m.failReason === reason)) return m;
+            return { ...m, replyFail: fail || undefined, failReason: fail ? reason : undefined };
+          };
+          const changed = cur.map(patch);
           saveMsgs(storageKey, changed);
-          setMsgs((prev) => prev.map((m) => (m.id === failTargetId && Boolean(m.replyFail) !== fail ? { ...m, replyFail: fail || undefined } : m)));
+          setMsgs((prev) => prev.map(patch));
         };
         if (error) {
+          // Task 40 错误提示优化：先记失败计数（同会话连续失败 2 次起重试进入冷却）；
+          // 原始报错仅存内存供「复制错误详情」，界面只显示分类后的友好文案
+          recordChatFail(sessionKey, error);
           // A-3：流中已投递出分段时不再打失败徽标——分段已作为真实回复逐条上屏（本轮并非无回应）；
-          // 投递队列无取消路径，已排队分段必然逐条落盘，此刻静默收尾即可。
-          // 仍未投递出任何分段（完全无回应）→ 触发消息打 replyFail 红色 ! 徽标，不再落错误占位文案
+          // 投递队列无取消路径，已排队分段必然逐条落盘，此刻静默收尾即可（冷却计数仍生效，见上）。
+          // 仍未投递出任何分段（完全无回应）→ 触发消息打 replyFail 红色 ! 徽标 + 分类文案，不再落错误占位文案
           if (deliveredAny) return;
-          setReplyFail(true);
+          setReplyFail(true, classifyChatError(error).text);
           return;
         }
         // 多条模式：流中分段已通过 onSegment 逐条排队投递上屏（边接收边逐条显示），
@@ -1965,9 +1989,14 @@ function ChatView({
               ? []
               : requestOnly
                 ? []
-                : (setReplyFail(true), []);
+                // Task 40 错误提示优化：空回复/解析失败按解析类文案打标 + 记失败计数
+                : (setReplyFail(true, CHAT_PARSE_FAIL_TEXT), recordChatFail(sessionKey, '空回复'), []);
         // 有任何产出（分段投递/本轮落盘消息）：清除触发消息上的失败徽标（重试成功场景）
-        if (built.length > 0 || deliveredAny) setReplyFail(false);
+        if (built.length > 0 || deliveredAny) {
+          setReplyFail(false);
+          // Task 40：成功即清零失败计数与冷却（重试成功/正常回复场景）
+          recordChatSuccess(sessionKey);
+        }
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -2061,9 +2090,15 @@ function ChatView({
   });
 
   /** 红色 ! 徽标重试：AI 回复失败的消息点击后重发同一回合（流/投递占用时静默，徽标保留可再点；
-   *  消息本体已在 state 与存储里，startAiTurn 入列按既有逻辑去重；成功在 finalize 清除标记） */
+   *  消息本体已在 state 与存储里，startAiTurn 入列按既有逻辑去重；成功在 finalize 清除标记）。
+   *  Task 40 错误提示优化：入口加连续失败冷却拦截——重试动作受冷却约束（发新消息不受影响），拦截时 toast 提示剩余秒数 */
   const retryReply = (m: ChatMsg) => {
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) return;
+    const cd = cooldownRemainText(sessionKey);
+    if (cd) {
+      showToast(cd);
+      return;
+    }
     startAiTurnRef.current?.(m);
   };
 
@@ -2391,6 +2426,7 @@ function ChatView({
     // #35：标记投递插入边界——上一轮还在队列里的回复落库时插到这条新消息之前（时序归属上一轮）
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       setInput('');
+      clearChatDraft('sms', storageKey); // Task 40 草稿箱：消息已入列即清草稿（重进不回显）
       setQuote(null);
       setMsgs((prev) => [...prev, userMsg]);
       markDeliverBoundary(sessionKey, userMsg.id);
@@ -2398,6 +2434,7 @@ function ChatView({
       return;
     }
     setInput('');
+    clearChatDraft('sms', storageKey); // Task 40 草稿箱：发送成功清空草稿
     setQuote(null);
     // 分句发送开启：只入列不触发回复，等输入框为空再点一次「发送」统一触发（真人把几句话拆开发完）
     if (sentenceSend) {
@@ -2466,6 +2503,15 @@ function ChatView({
     },
     []
   );
+  // Task 40：语音气泡播放失败 → 本端自绘 toast（播放器本体无 UI，经全局事件解耦；showToast 为稳定引用，挂载/卸载成对）
+  useEffect(() => {
+    const onVoicePlayError = (e: Event) => {
+      const msg = (e as CustomEvent<string>).detail;
+      showToast(typeof msg === 'string' && msg ? msg : '语音播放失败，请稍后重试');
+    };
+    window.addEventListener(VOICE_PLAY_ERROR_EVENT, onVoicePlayError);
+    return () => window.removeEventListener(VOICE_PLAY_ERROR_EVENT, onVoicePlayError);
+  }, [showToast]);
 
   // ---------------- 加号面板：相机 / 图片 / 文字图片 ----------------
 
@@ -2744,12 +2790,13 @@ function ChatView({
   const sendTextAsVoice = useCallback(
     (text: string) => {
       setInput('');
+      clearChatDraft('sms', storageKey); // Task 40 草稿箱：转语音发送同样清空草稿
       setQuote(null);
       void synthesizeSelfVoice(text)
         .then((clip) => commitVoiceMsg(clip, text))
         .catch((e: unknown) => showToast(e instanceof Error && e.message ? e.message : '语音生成失败，请重试'));
     },
-    [commitVoiceMsg, showToast],
+    [commitVoiceMsg, showToast, storageKey],
   );
   // ref 更新入 effect（react-hooks/refs：不在渲染期写 ref）；send 前引用经此拿到最新实现
   useEffect(() => {
@@ -3122,9 +3169,10 @@ function ChatView({
           const bubbleBlank =
             !mine && !m.recalled && !m.sys && !m.blkreq && !m.error && !m.kind && !cleanBubbleText(bubbleContent);
           const lineOnly = (actView && !actView.text) || bubbleBlank;
+          // Task 40 错误提示优化：Fragment 包 key——消息行后可能追加失败提示行（ChatErrorLine）
           return (
+            <Fragment key={m.id}>
             <div
-              key={m.id}
               data-mid={m.id}
               onClickCapture={
                 selectMode && !m.recalled && !m.sys && !m.blkreq
@@ -3445,6 +3493,19 @@ function ChatView({
               {/* 拒收状态行：仅「对方拉黑我」时跟在我的消息后面，居中半透明胶囊；我拉黑对方不显示 */}
               {blockedLineOf(m)}
             </div>
+            {/* Task 40 错误提示优化：失败消息行后居中灰字提示（语音/图片/文字卡/文本各类气泡统一在行容器后追加，
+                点击重试/长按菜单）；「隐藏这条提示」后本会话不再显示 */}
+            {mine && m.replyFail && !hiddenFail[m.id] && (
+              <ChatErrorLine
+                text={m.failReason || CHAT_UNKNOWN_FAIL_TEXT}
+                detail={lastChatErrorDetail(sessionKey)}
+                cooldownText={cooldownRemainText(sessionKey)}
+                onRetry={() => retryReply(m)}
+                onHide={() => setHiddenFail((prev) => ({ ...prev, [m.id]: true }))}
+                testId={`sms-errline-${m.id}`}
+              />
+            )}
+            </Fragment>
           );
         })}
         {/* 正在输入指示（流式接收 + 逐条投递期间显示）：AI 回复为「边接收边逐条显示」——
@@ -3607,7 +3668,14 @@ function ChatView({
                 ref={smsTaRef}
                 rows={1}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  // Task 40 草稿箱：随输入持久化草稿（防抖合幵落库）；超长截断保存并 5 秒节流提示一次
+                  if (saveChatDraft('sms', storageKey, e.target.value) && draftWarnRef.current <= Date.now() - 5000) {
+                    draftWarnRef.current = Date.now();
+                    showToast(`草稿过长，仅保留前 ${CHAT_DRAFT_MAX} 字`);
+                  }
+                }}
                 onKeyDown={(e) => {
                   // 多行输入：「回车键发送消息」开关统一口径（五端共用 guardEnterToSend）——
                   // 开启=Enter 发送（requestSubmit 与发送键走同一条 form 分流）/ Shift+Enter 换行；关闭=回车一律换行；输入法选词回车永不发送

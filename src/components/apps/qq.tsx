@@ -40,7 +40,7 @@
  * - 会话、空间帖子、评论、密友值、登录态 localStorage 持久化
  */
 
-import { useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   AudioLines,
@@ -168,7 +168,13 @@ import { buildImagePlaceholderRule, buildVoicePlaceholderRule } from '@/lib/chat
 import { splitVisionDesc } from '@/lib/vision-client';
 import { synthesizeSelfVoice } from '@/lib/ios/voice-send';
 import { blobToDataUrl } from '@/lib/ios/audio-utils';
-import { stopVoicePlayback } from '@/lib/ios/voice-player';
+import { stopVoicePlayback, VOICE_PLAY_ERROR_EVENT } from '@/lib/ios/voice-player';
+// Task 40 错误提示优化：错误分类文案 + 连续失败冷却 + 错误详情（居中灰字提示行用，原始报错不直接展示）
+import { CHAT_PARSE_FAIL_TEXT, CHAT_UNKNOWN_FAIL_TEXT, classifyChatError, cooldownRemainText, lastChatErrorDetail, recordChatFail, recordChatSuccess } from '@/lib/chat-errors';
+// Task 40 草稿箱：输入框文本按会话隔离持久化（刷新/切会话回来不丢，发送成功清空；不进 AI 上下文）
+import { CHAT_DRAFT_MAX, clearChatDraft, getChatDraft, saveChatDraft } from '@/lib/ios/chat-drafts';
+// Task 40 错误提示行：失败消息位置渲染的居中灰字（点击重试/长按菜单）
+import { ChatErrorLine } from './chat-error-line';
 import {
   abortStreamsByPrefix,
   beginChatStream,
@@ -448,6 +454,8 @@ interface QQMsg {
   /** AI 回复失败标记（红色 ! 徽标）：流失败/空回复且本轮无任何产出时打在触发的我的消息上；
    *  点击徽标重试（runAiTurn），成功后 finalize 清除，仍失败可再点。不进 AI 上下文（消息本体照常参与） */
   replyFail?: boolean;
+  /** Task 40 错误提示优化：失败分类文案（气泡下方居中灰字提示行显示；不落原始报错，详情走「复制错误详情」） */
+  failReason?: string;
   /** 转发卡片（kind='forward'；fwd.from = 来源会话联系人名；merged=true 为合并转发的「聊天记录」卡片，records 存原始对话） */
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
   /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
@@ -2998,6 +3006,15 @@ function ChatPage({
     stopSpeaking();
     stopVoicePlayback();
   }, [peer.id]);
+  // Task 40：语音气泡播放失败 → 页内 toast（播放器本体无 UI，经全局事件解耦；onToast 为稳定引用，挂载/卸载成对）
+  useEffect(() => {
+    const onVoicePlayError = (e: Event) => {
+      const msg = (e as CustomEvent<string>).detail;
+      onToast(typeof msg === 'string' && msg ? msg : '语音播放失败，请稍后重试');
+    };
+    window.addEventListener(VOICE_PLAY_ERROR_EVENT, onVoicePlayError);
+    return () => window.removeEventListener(VOICE_PLAY_ERROR_EVENT, onVoicePlayError);
+  }, [onToast]);
   const apiConfig = useSettings((s) => s.apiConfig);
   const [msgs, setMsgs] = useState<QQMsg[]>(() => loadMsgs(peer.id));
   // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
@@ -3033,7 +3050,12 @@ function ChatPage({
   // 40-a：用户发起「解除拉黑申请」的展开面板与理由输入（仅被角色拉黑时显示；ChatPage 按 peer.id keyed 重挂载，会话切换自然复位）
   const [userReqOpen, setUserReqOpen] = useState(false);
   const [userReqText, setUserReqText] = useState('');
-  const [input, setInput] = useState('');
+  /** Task 40 错误提示优化：用户点「隐藏这条提示」的失败提示行（内存态，重挂载/刷新后恢复显示） */
+  const [hiddenFail, setHiddenFail] = useState<Record<string, boolean>>({});
+  // Task 40 草稿箱：惰性初始化恢复本会话未发送草稿（ChatPage 按 peer.id keyed 重挂载，切换会话各读各的）
+  const [input, setInput] = useState(() => getChatDraft('qq', peer.id));
+  /** Task 40 草稿箱：超长截断提示的 5 秒节流（连续键入超长文本只提示一次） */
+  const draftWarnRef = useRef(0);
   /** 富文本输入框（contentEditable）：内置表情在框内显示真实表情图，发送时序列化回 [微笑] 代码 */
   const richInputRef = useRef<ChatRichInputHandle | null>(null);
   /** 语音输入模式：输入框替换为「按住 说话」胶囊（工具栏麦克风钮切换） */
@@ -5088,21 +5110,31 @@ function ChatPage({
         // 失败标记触发的我的消息（userMsg 为 null 时取 base 里最后一条我的消息）：
         // 新版失败不再落错误占位消息——在本条消息气泡前打红色 ! 徽标（点击重试），成功后在下方清除
         const failTargetId = userMsg?.id ?? [...base].reverse().find((m) => m.role === 'me' && !m.recalled)?.id ?? null;
-        /** 落库 + 同步 state：给触发消息打/清 replyFail 标记（红色 ! 徽标） */
-        const setReplyFail = (fail: boolean) => {
+        /** 落库 + 同步 state：给触发消息打/清 replyFail 标记（红色 ! 徽标）；
+         *  Task 40 错误提示优化：失败时同步写入分类文案 failReason（居中灰字提示行用），清除时一并抹掉 */
+        const setReplyFail = (fail: boolean, reason?: string) => {
           if (!failTargetId) return;
           const cur = loadMsgs(peer.id);
           if (!cur.some((m) => m.id === failTargetId)) return;
-          const changed = cur.map((m) => (m.id === failTargetId && Boolean(m.replyFail) !== fail ? { ...m, replyFail: fail || undefined } : m));
+          const patch = (m: QQMsg): QQMsg => {
+            if (m.id !== failTargetId) return m;
+            // 标记与文案都无变化时跳过（防无意义的全量落库）；成功清除（fail=false）连 failReason 一起抹掉
+            if (Boolean(m.replyFail) === fail && (!fail || m.failReason === reason)) return m;
+            return { ...m, replyFail: fail || undefined, failReason: fail ? reason : undefined };
+          };
+          const changed = cur.map(patch);
           saveMsgs(peer.id, changed);
-          setMsgs((prev) => prev.map((m) => (m.id === failTargetId && Boolean(m.replyFail) !== fail ? { ...m, replyFail: fail || undefined } : m)));
+          setMsgs((prev) => prev.map(patch));
         };
         if (error) {
+          // Task 40 错误提示优化：先记失败计数（同会话连续失败 2 次起重试进入冷却）；
+          // 原始报错仅存内存供「复制错误详情」，界面只显示分类后的友好文案
+          recordChatFail(sessionKey, error);
           // A-3：流中已投递出分段时不再打失败徽标——分段已作为真实回复逐条上屏（本轮并非无回应）；
-          // 投递队列无取消路径，已排队分段必然逐条落盘，此刻静默收尾即可。
-          // 仍未投递出任何分段（完全无回应）→ 触发消息打 replyFail 红色 ! 徽标，不再落错误占位文案
+          // 投递队列无取消路径，已排队分段必然逐条落盘，此刻静默收尾即可（冷却计数仍生效，见上）。
+          // 仍未投递出任何分段（完全无回应）→ 触发消息打 replyFail 红色 ! 徽标 + 分类文案，不再落错误占位文案
           if (deliveredAny) return;
-          setReplyFail(true);
+          setReplyFail(true, classifyChatError(error).text);
           return;
         }
         // 多条模式：流中分段已通过 onSegment 逐条解析投递上屏（边接收边逐条显示），
@@ -5119,9 +5151,14 @@ function ChatPage({
               ? []
               : requestOnly
                 ? []
-                : (setReplyFail(true), []);
+                // Task 40 错误提示优化：空回复/解析失败按解析类文案打标 + 记失败计数
+                : (setReplyFail(true, CHAT_PARSE_FAIL_TEXT), recordChatFail(sessionKey, '空回复'), []);
         // 有任何产出（分段投递/动作/本轮落盘消息）：清除触发消息上的失败徽标（重试成功场景）
-        if (built.length > 0 || deliveredAny || musicActedRef.current) setReplyFail(false);
+        if (built.length > 0 || deliveredAny || musicActedRef.current) {
+          setReplyFail(false);
+          // Task 40：成功即清零失败计数与冷却（重试成功/正常回复场景）
+          recordChatSuccess(sessionKey);
+        }
         // 排队投递（模拟真人连发）：每条到达时才落盘 + 弹灵动岛通知 + 判定语音频率，停顿按内容长度
         // 模拟打字节奏；空批仅作占位，密友值/记忆库等「一轮结束」动作挂在全部消息投递完之后；
         // 调度器在模块层运行，与聊天页是否存活无关（退出页面后继续接收/投递）
@@ -5186,13 +5223,19 @@ function ChatPage({
   runAiTurnRef.current = runAiTurn;
 
   /** 红色 ! 徽标重试：AI 回复失败的消息点击后重发同一回合（流/投递占用时静默，徽标保留可再点；
-   *  消息本体已在 state 与存储里，runAiTurn 按 id 去重不会重复入列；成功在 finalize 清除标记） */
+   *  消息本体已在 state 与存储里，runAiTurn 按 id 去重不会重复入列；成功在 finalize 清除标记）。
+   *  Task 40 错误提示优化：入口加连续失败冷却拦截——重试动作受冷却约束（发新消息不受影响），拦截时 toast 提示剩余秒数 */
   const retryReply = useCallback(
     (m: QQMsg) => {
       if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) return;
+      const cd = cooldownRemainText(sessionKey);
+      if (cd) {
+        onToast(cd);
+        return;
+      }
       runAiTurnRef.current?.(m);
     },
-    [sessionKey]
+    [onToast, sessionKey]
   );
 
   // ---------------- 退出网页接力（bg-turn）：服务端代跑的回复拉取 + 原管线投递 ----------------
@@ -5465,6 +5508,7 @@ function ChatPage({
       pendingImgsRef.current = [];
       setPendingImgs([]);
       setInput('');
+      clearChatDraft('qq', peer.id); // Task 40 草稿箱：发送成功清空草稿
       setQuote(null);
       for (const msg of [textMsg, ...created]) setMsgs((prev) => [...prev, msg]);
       // 给自己发消息：只记录，不触发 AI 回复，也不计密友值
@@ -5499,6 +5543,7 @@ function ChatPage({
     // #35：标记投递插入边界——上一轮还在队列里的回复落库时插到这条新消息之前（时序归属上一轮）
     if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
       setInput('');
+      clearChatDraft('qq', peer.id); // Task 40 草稿箱：消息已入列即清草稿（重进不回显）
       setQuote(null);
       setMsgs((prev) => [...prev, userMsg]);
       markDeliverBoundary(sessionKey, userMsg.id);
@@ -5508,6 +5553,7 @@ function ChatPage({
       return;
     }
     setInput('');
+    clearChatDraft('qq', peer.id); // Task 40 草稿箱：发送成功清空草稿
     setQuote(null);
     // 给自己发消息：只记录，不触发 AI 回复，也不计密友值
     if (peer.id === me.id) {
@@ -5668,12 +5714,13 @@ function ChatPage({
   const sendTextAsVoice = useCallback(
     (text: string) => {
       setInput('');
+      clearChatDraft('qq', peer.id); // Task 40 草稿箱：转语音发送同样清空草稿
       setQuote(null);
       void synthesizeSelfVoice(text)
         .then((clip) => commitVoiceMsg(clip, text))
         .catch((e: unknown) => onToast(e instanceof Error && e.message ? e.message : '语音生成失败，请重试'));
     },
-    [commitVoiceMsg, onToast],
+    [commitVoiceMsg, onToast, peer.id],
   );
   sendTextAsVoiceRef.current = sendTextAsVoice;
 
@@ -6558,9 +6605,10 @@ function ChatPage({
           const bubbleBlank =
             m.role === 'peer' && !m.recalled && (!m.kind || m.kind === 'text') && !cleanBubbleText(bubbleContent);
           const lineOnly = (actView && !actView.text) || bubbleBlank;
+          // Task 40 错误提示优化：Fragment 包 key——消息行后可能追加失败提示行（ChatErrorLine）
           return (
+            <Fragment key={m.id}>
             <div
-              key={m.id}
               data-mid={m.id}
               onClickCapture={
                 selectMode && isSelectable(m)
@@ -7002,6 +7050,18 @@ function ChatPage({
               </div>
             ) : null}
             </div>
+            {/* Task 40 错误提示优化：失败消息行后居中灰字提示（点击重试/长按菜单）；「隐藏这条提示」后本会话不再显示 */}
+            {mine && m.replyFail && !hiddenFail[m.id] && (
+              <ChatErrorLine
+                text={m.failReason || CHAT_UNKNOWN_FAIL_TEXT}
+                detail={lastChatErrorDetail(sessionKey)}
+                cooldownText={cooldownRemainText(sessionKey)}
+                onRetry={() => retryReply(m)}
+                onHide={() => setHiddenFail((prev) => ({ ...prev, [m.id]: true }))}
+                testId={`qq-errline-${m.id}`}
+              />
+            )}
+            </Fragment>
           );
         })}
         {/* 正在输入指示（流式接收 + 逐条投递期间显示）：AI 回复为「边接收边逐条显示」——
@@ -7152,6 +7212,11 @@ function ChatPage({
               value={input}
               onChange={(v) => {
                 setInput(v);
+                // Task 40 草稿箱：随输入持久化草稿（防抖合幵落库）；超长截断保存并 5 秒节流提示一次
+                if (saveChatDraft('qq', peer.id, v) && draftWarnRef.current <= Date.now() - 5000) {
+                  draftWarnRef.current = Date.now();
+                  onToast(`草稿过长，仅保留前 ${CHAT_DRAFT_MAX} 字`);
+                }
                 // 键入 @ 直接唤起 @ 浮层（与群聊同款：点选后替换该 @ 并插入「@名字 」）
                 if (v.endsWith('@')) {
                   setPlusOpen(false);

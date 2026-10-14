@@ -694,6 +694,8 @@ function CallScreen({
         });
       } catch {
         resume();
+        // Task 40：内置兜底合成也失败 → 通话界面字幕区提示（不再完全静默；电话通道有声才重要）
+        setError('语音合成不可用，对方暂时无法出声');
       }
     },
     [contact?.id, gender, speaker]

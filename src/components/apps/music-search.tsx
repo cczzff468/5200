@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { classifyChatError } from '@/lib/chat-errors';
 import {
   ArrowUp,
   AudioLines,
@@ -106,13 +107,19 @@ export function MusicSearch() {
     setTimeout(() => setToast(''), 1400);
   };
 
+  // Task 40：网络类失败的统一友好文案（不发原始报错）
+  const netFailToast = (err: unknown) => {
+    showToast(classifyChatError(err instanceof Error && err.message ? err.message : String(err ?? '')).text);
+  };
+
   // 首屏数据：热搜 + 热歌榜
   useEffect(() => {
     void (async () => {
       try {
         setHot((await hotSearch()).slice(0, 10));
-      } catch {
+      } catch (err) {
         setHot([]);
+        netFailToast(err); // Task 40：热搜拉取失败不再静默置空
       }
       // 热歌榜：/toplist 的 tracks 已被网易置空（恒 null）→ 拿到榜单后用 playlist/detail+song/detail 补曲目；
       // toplist 整体失败时也直接走兜底通道拉热歌榜（3778678）
@@ -162,8 +169,9 @@ export function MusicSearch() {
       const conf = TABS.find((x) => x.key === t)!;
       const r = await search(kw, conf.type, 30);
       setResults({ songs: r.songs, artists: r.artists, playlists: r.playlists, albums: r.albums });
-    } catch {
+    } catch (err) {
       setResults({ songs: [], artists: [], playlists: [], albums: [] });
+      netFailToast(err); // Task 40：搜索失败不再静默置空
     } finally {
       setLoading(false);
     }
@@ -187,8 +195,9 @@ export function MusicSearch() {
     try {
       const r = await artistSongs(a.id);
       setSheet({ kind: 'artist', artist: r.artist, songs: r.songs, subed: false });
-    } catch {
+    } catch (err) {
       setSheet((s) => (s && s.kind === 'artist' ? { ...s, songs: [] } : s));
+      netFailToast(err); // Task 40：歌手热门歌曲加载失败提示
     }
   };
 
@@ -197,8 +206,9 @@ export function MusicSearch() {
     try {
       const r = await albumDetail(a.id);
       setSheet({ kind: 'album', album: r.album, songs: r.songs, subed: false });
-    } catch {
+    } catch (err) {
       setSheet((s) => (s && s.kind === 'album' ? { ...s, songs: [] } : s));
+      netFailToast(err); // Task 40：专辑详情加载失败提示
     }
   };
 

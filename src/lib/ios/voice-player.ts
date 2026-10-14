@@ -136,6 +136,21 @@ function toggleSim(id: string, dur: number): void {
   startSimTimer(id);
 }
 
+/** 语音气泡播放失败事件（Task 40）：宿主（微信/QQ/信息页）监听后用各自 toast 提示，
+ *  播放器本体无 UI，保持解耦；同一失败不重复弹（3s 节流） */
+export const VOICE_PLAY_ERROR_EVENT = 'chat-voice-play-error';
+let lastVoiceErrAt = 0;
+function emitVoicePlayError(message: string): void {
+  try {
+    const now = Date.now();
+    if (now - lastVoiceErrAt < 3000) return; // 3s 节流，防连续点击连环弹
+    lastVoiceErrAt = now;
+    window.dispatchEvent(new CustomEvent(VOICE_PLAY_ERROR_EVENT, { detail: message }));
+  } catch {
+    // 忽略
+  }
+}
+
 /** 开始/继续播放。src 为 dataURL（消息里持久化的音频） */
 function startPlay(id: string, src: string, fromPause: boolean): void {
   const sameInstance = fromPause && audio !== null && currentId === id;
@@ -153,14 +168,22 @@ function startPlay(id: string, src: string, fromPause: boolean): void {
   if (!audio) return;
   const a: HTMLAudioElement = audio;
   a.onended = () => stopVoicePlayback();
-  a.onerror = () => stopVoicePlayback();
+  a.onerror = () => {
+    stopVoicePlayback();
+    // Task 40：音频加载失败不再静默（进度动画无声走完是既往空洞）
+    emitVoicePlayError('语音播放失败，请稍后重试');
+  };
   clearTimer();
   timer = window.setInterval(() => {
     if (!audio || audio.paused || audio.ended) return;
     const d = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
     useVoicePlayback.setState({ progress: d > 0 ? Math.min(1, audio.currentTime / d) : 0 });
   }, 100);
-  void a.play().catch(() => stopVoicePlayback());
+  void a.play().catch(() => {
+    stopVoicePlayback();
+    // Task 40：浏览器拦截/播放器异常时给出反馈
+    emitVoicePlayError('语音播放失败，请稍后重试');
+  });
 }
 
 /**
@@ -197,10 +220,20 @@ function toggleContactTts(id: string, text: string, contactId: string | null): v
         keepOthers: true, // 播放状态归本播放器管，不能被互斥逻辑清掉
         onEnd: () => stopVoicePlayback(),
       });
-    } catch {
-      // 引擎不可用/合成失败：保留已启动的进度动画（静音模拟兜底）
+    } catch (err) {
+      // 引擎不可用/合成失败：保留已启动的进度动画（静音模拟兜底）+ 提示原因（Task 40）
+      const msg = err instanceof Error && err.message ? err.message : '';
+      emitVoicePlayError(voiceTtsFailText(msg));
     }
   })();
+}
+
+/** TTS 播放失败文案：从 speakUserTts 抛出的错误里取服务端友好文案，取不到用通用提示 */
+function voiceTtsFailText(raw: string): string {
+  const msg = String(raw || '');
+  if (!msg.trim() || /^failed to fetch|networkerror|load failed/i.test(msg)) return '网络不稳定，语音播放失败';
+  if (/timeout|超时/i.test(msg)) return '请求超时，语音播放失败';
+  return msg.slice(0, 40);
 }
 
 /** 点击语音气泡的额外信息（AI 语音消息用） */
