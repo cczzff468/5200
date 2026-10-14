@@ -17,6 +17,7 @@ import {
   Download,
   FileText,
   Forward,
+  GitBranch,
   Pencil,
   RefreshCw,
   Reply,
@@ -54,6 +55,8 @@ export const BUBBLE_MENU_ICONS = {
   stt: FileText,
   /** 表情包消息长按「添加到表情」（Task 32；已添加显示已添加置灰态 filled） */
   addsticker: Sticker,
+  /** 角色分支（Task 37）：以该消息为分支点克隆出独立平行联系人 */
+  branch: GitBranch,
 } as const;
 
 export interface BubbleMenuPos {

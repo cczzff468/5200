@@ -293,6 +293,8 @@ import {
 import { ProactiveMsgPage, ProactiveMasterRow } from './proactive-msg-page';
 import { proactiveCfgSummary, parseReminderInstruction, reminderHintHit, reminderSysHint, buildReminderSysMsg, setActiveProactiveChat } from '@/lib/ios/proactive-msg';
 import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
+import { buildBranchPromptBlock, deleteCharacterBranch, formatBranchDate, getBranchMeta } from '@/lib/ios/branch';
+import { BranchDeleteConfirmDialog, BranchDialog } from './branch-dialog';
 import { BatchStickerSheet, makeStickerGroup, StickerGroupBar, StickerGroupManageSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
 import { StickerSearchSheet } from './sticker-search-sheet';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
@@ -4649,6 +4651,7 @@ function ChatPage({
   onDeleteContact,
   pendingCall,
   onConsumePendingCall,
+  onSwitchChat,
 }: {
   me: WxUser;
   peer: ContactRecord;
@@ -4678,6 +4681,8 @@ function ChatPage({
   pendingCall?: { contactId: string; media: 'voice' | 'video' } | null;
   /** 消费完 pendingCall 通知宿主清空（防同一次下发被重复消费） */
   onConsumePendingCall?: () => void;
+  /** Task 37 角色分支：分支创建成功 → 宿主切换进分支聊天页（setChatPeer + toast） */
+  onSwitchChat?: (c: ContactRecord) => void;
 }) {
   // 聊天页自带 toast（App 根 toast 在聊天分支提前 return 不渲染——收藏成功等提示靠它显示）
   const [chatToast, onToast] = useLocalToast();
@@ -4713,6 +4718,20 @@ function ChatPage({
     void listAlbums(peer.id)
       .then((list) => {
         if (alive) albumCacheRef.current = list;
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [peer.id]);
+  // Task 37 角色分支：平行分支认知块预热（分支侧/本体侧互提提示；挂载/切换会话时构建一次，
+  // runAiTurn 同步拼装 systemFull 时直接读 ref，与 crossCtxRef 同款模式）
+  const branchBlockRef = useRef('');
+  useEffect(() => {
+    let alive = true;
+    void buildBranchPromptBlock(peer.id)
+      .then((b) => {
+        if (alive) branchBlockRef.current = b;
       })
       .catch(() => {});
     return () => {
@@ -4755,6 +4774,8 @@ function ChatPage({
   const [regenImgDesc, setRegenImgDesc] = useState('');
   const [regenImgBusy, setRegenImgBusy] = useState(false);
   const [regenImgError, setRegenImgError] = useState('');
+  // Task 37 角色分支：待创建分支的分支点消息（长按菜单「分支」打开弹层；preview 用 quoteContentOf 摘要）
+  const [branchDlg, setBranchDlg] = useState<null | { msg: WxMsg; preview: string }>(null);
 
   /**
    * 手动触发「文字图片」（Task 14 起方向反转）：文字图片是「我」发给 TA 的卡片——
@@ -6546,6 +6567,8 @@ function ChatPage({
       quitCtx?.section ?? '',
       kickSection,
       socialRules,
+      // Task 37 角色分支：平行分支认知（分支侧身份说明/本体侧分支清单；无分支关系为空串不注入）
+      branchBlockRef.current,
       ...(mediaRules.length > 0 ? [mediaRules.join('\n\n')] : []),
       // 46-e 视觉自主决策规则（在语音通话能力之前；让 AI 看图后可自主换头像/换背景/存相册/挑相册发聊天）
       ...(visionRules.length > 0 ? [visionRules.join('\n\n')] : []),
@@ -7238,6 +7261,8 @@ function ChatPage({
     if (!isFrLocked) items.push({ key: 'recall', label: '撤回', icon: B.recall });
     items.push({ key: 'forward', label: '转发', icon: B.forward });
     items.push({ key: 'fav', label: isMsgFavorited('wx', m.id) ? '已收藏' : '收藏', icon: B.fav, filled: isMsgFavorited('wx', m.id) });
+    // 角色分支（Task 37）：以这条消息为分支点，把该角色克隆成独立平行联系人（自己会话/好友验证行不显示）
+    if (peer.kind !== 'user' && !isFrLocked) items.push({ key: 'branch', label: '分支', icon: B.branch });
     if (m.role === 'peer' && !isFrLocked) {
       // AI 图片：重新生成图片（自填描述，原地替换）替代整轮重答；文字气泡保留原「重新生成」
       if (isImage) items.push({ key: 'regenimg', label: '重新生成', icon: B.regenimg });
@@ -7574,6 +7599,10 @@ function ChatPage({
         }
         addFavorite('wx', favOf(m));
         onToast('收藏成功');
+        break;
+      case 'branch':
+        // Task 37 角色分支：打开创建弹层（分支点 = 长按的这条消息；复制在弹层确认后全量执行）
+        setBranchDlg({ msg: m, preview: quoteContentOf(m) });
         break;
       case 'regen':
         regenerate(m);
@@ -9728,6 +9757,20 @@ function ChatPage({
         />
       )}
 
+      {/* Task 37 角色分支创建弹层：以长按的消息为分支点克隆平行联系人，成功后宿主切进分支聊天 */}
+      {branchDlg && (
+        <BranchDialog
+          sourceId={peer.id}
+          sourceName={peer.name}
+          point={{ id: branchDlg.msg.id, role: branchDlg.msg.role, preview: branchDlg.preview, time: branchDlg.msg.time }}
+          onCancel={() => setBranchDlg(null)}
+          onCreated={(c) => {
+            setBranchDlg(null);
+            onSwitchChat?.(c);
+          }}
+        />
+      )}
+
       {/* 录音浮层（按住说话期间：计时 + 实时波形 + 取消/转文字手势区） */}
       {rec.phase !== 'idle' && <RecordOverlayWx rec={rec} />}
       {sttPreview.state && (
@@ -11735,6 +11778,8 @@ function FriendDetailPage({
   onCall,
   onToast,
   onDeleteContact,
+  branchInfo,
+  onDeleteBranch,
 }: {
   friend: ContactRecord;
   onBack: () => void;
@@ -11745,6 +11790,10 @@ function FriendDetailPage({
   onToast: (m: string) => void;
   /** 删除联系人（删除好友关系）：宿主弹二次确认；不传 = 隐藏（自己资料页） */
   onDeleteContact?: () => void;
+  /** Task 37 角色分支：分支身份信息（仅分支角色传入；展示「X 的平行分支」说明） */
+  branchInfo?: { parentName: string; createdAt: number } | null;
+  /** Task 37 角色分支：删除该分支（宿主弹二次确认后真删）；不传 = 隐藏 */
+  onDeleteBranch?: () => void;
 }) {
   // 跨 App 跳转：点「朋友资料」→ 打开联系人 App 后直接进入该联系人的编辑页
   const switchToApp = useUI((s) => s.switchToApp);
@@ -11820,6 +11869,19 @@ function FriendDetailPage({
           </button>
         </div>
 
+        {/* Task 37 分支身份说明（仅分支角色可见） */}
+        {branchInfo && (
+          <div className="mt-2 bg-white px-4 py-3.5 dark:bg-[#1A1A1A]">
+            <p className="flex items-center gap-1.5 text-[15px] font-medium">
+              分支角色
+              <span className="rounded-[3px] bg-[#07C160]/10 px-[5px] py-px text-[10px] font-normal leading-[14px] text-[#07C160]">分支</span>
+            </p>
+            <p className="mt-1 text-[13px] leading-[1.65] text-black/45 dark:text-white/45">
+              「{branchInfo.parentName}」的平行分支 · {formatBranchDate(branchInfo.createdAt)}创建。与原角色从分支点起各自独立发展，聊天、记忆、朋友圈互不同步。
+            </p>
+          </div>
+        )}
+
         {/* 朋友圈 / 视频号 */}
         <div className="mt-2 bg-white dark:bg-[#1A1A1A]">
           <WxMenuRow
@@ -11860,6 +11922,20 @@ function FriendDetailPage({
             </button>
           </div>
         </div>
+
+        {/* Task 37 删除该分支（真删：聊天/记忆/朋友圈一并清空且不可恢复；二次确认在宿主层） */}
+        {onDeleteBranch && (
+          <div className="mt-2 bg-white dark:bg-[#1A1A1A]">
+            <button
+              type="button"
+              data-testid="wx-fdetail-delbranch"
+              onClick={onDeleteBranch}
+              className="flex w-full items-center justify-center py-[15px] text-[16px] text-red-500 active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+            >
+              删除该分支
+            </button>
+          </div>
+        )}
 
         {/* 删除联系人（删除好友关系；二次确认弹窗在宿主层，确认后从列表移除并关闭详情） */}
         {onDeleteContact && (
@@ -13147,6 +13223,8 @@ function MainScreen({
   /** Task 28-b 详情页通话桥：详情页「音视频通话」ActionSheet 选语音/视频后暂存待拨通话——
    *  宿主关详情页并打开对应聊天页时下发，ChatPage 挂载后消费拨号（openVoiceCall 全链路） */
   const [pendingCall, setPendingCall] = useState<{ contactId: string; media: 'voice' | 'video' } | null>(null);
+  /** Task 37 角色分支：待确认删除的分支角色（详情页「删除该分支」→ 二次确认 → 真删） */
+  const [branchDelTarget, setBranchDelTarget] = useState<ContactRecord | null>(null);
   /** 正在浏览其朋友圈的好友（page = 'friendMoments'） */
   const [friendMoments, setFriendMoments] = useState<ContactRecord | null>(null);
   const [page, setPage] = useState<Page>('main');
@@ -13677,6 +13755,29 @@ function MainScreen({
     setDelTarget({ contact: c, after });
   }, []);
 
+  /** Task 37 确认删除分支角色：真删（聊天/记忆/朋友圈副本经 deleteContact 级联清空），原角色不受影响 */
+  const confirmDeleteBranch = async () => {
+    const target = branchDelTarget;
+    if (!target) return;
+    const label = displayNameOf(target);
+    setBranchDelTarget(null);
+    try {
+      const ok = await deleteCharacterBranch(target.id);
+      if (!ok) {
+        showToast('删除失败：该联系人不是分支角色');
+        return;
+      }
+      setDetail(null);
+      setChatPeer(null);
+      setHidden(loadStrList(LS_CHAT_HIDDEN));
+      setPage('main');
+      await reloadContacts();
+      showToast(`已删除分支「${label}」`);
+    } catch {
+      showToast('删除失败，请重试');
+    }
+  };
+
   /** 确认删除联系人：删除好友关系（记录/记忆/朋友圈/通话保留不可见，AI 稍后可能申请加回） */
   const confirmRemoveFriend = useCallback(async () => {
     if (!delTarget) return;
@@ -13825,10 +13926,15 @@ function MainScreen({
   }, []);
 
   if (page === 'friendDetail' && detail) {
+    // Task 37 角色分支：详情页展示分支身份 + 提供删除入口（仅分支角色可见）
+    const branchMeta = getBranchMeta(detail.id);
+    const branchParentName = branchMeta ? contacts.find((c) => c.id === branchMeta.parentId)?.name ?? '' : '';
     return (
       <>
         <FriendDetailPage
           friend={detail}
+          branchInfo={branchMeta && branchParentName ? { parentName: branchParentName, createdAt: branchMeta.createdAt } : null}
+          onDeleteBranch={branchMeta ? () => setBranchDelTarget(detail) : undefined}
           onBack={() => {
             // 从聊天设置进入：chatPeer 仍保留，回到聊天页；否则回主列表
             setDetail(null);
@@ -13875,6 +13981,14 @@ function MainScreen({
             peerName={displayNameOf(delTarget.contact)}
             onCancel={() => setDelTarget(null)}
             onConfirm={() => void confirmRemoveFriend()}
+          />
+        )}
+        {/* Task 37 分支删除二次确认（真删：聊天/记忆/朋友圈一并清空，原角色不受影响） */}
+        {branchDelTarget && (
+          <BranchDeleteConfirmDialog
+            branchName={displayNameOf(branchDelTarget)}
+            onCancel={() => setBranchDelTarget(null)}
+            onConfirm={() => void confirmDeleteBranch()}
           />
         )}
       </>
@@ -14138,6 +14252,11 @@ function MainScreen({
           // Task 28-b 详情页通话桥：详情页发起的语音/视频通话经此下发到聊天页拨号
           pendingCall={pendingCall}
           onConsumePendingCall={() => setPendingCall(null)}
+          onSwitchChat={(c) => {
+            // Task 37 角色分支：创建成功直接切进分支聊天（contacts 稍后经 contact-updated 事件刷新，peer 兜底传入）
+            setChatPeer(c);
+            showToast(`已创建分支「${displayNameOf(c)}」，与原角色记忆独立`);
+          }}
         />
         {/* 删除确认弹窗在聊天页之上（分支提前 return，根部的弹窗不渲染） */}
         {delTarget && (
@@ -14521,7 +14640,14 @@ function MainScreen({
                     </span>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-2">
-                        <span className="truncate text-[16px]">{contact.name}</span>
+                        <span className="truncate text-[16px]">
+                          {contact.name}
+                          {getBranchMeta(contact.id) && (
+                            <span className="ml-1.5 inline-block translate-y-[-1px] rounded-[3px] bg-black/[0.06] px-[4px] py-px align-middle text-[10px] font-normal leading-[14px] text-black/40 dark:bg-white/10 dark:text-white/40">
+                              分支
+                            </span>
+                          )}
+                        </span>
                         <span className="flex shrink-0 items-center gap-1">
                           {flagsMap[contact.id]?.muted === true && (
                             <BellOff className="h-3.5 w-3.5 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
@@ -14629,7 +14755,14 @@ function MainScreen({
                           className="flex w-full items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5"
                         >
                           <WxAvatar src={c.avatar} alt={c.name} size={40} />
-                          <span className="flex-1 truncate text-[16px]">{c.name}</span>
+                          <span className="flex-1 truncate text-[16px]">
+                            {c.name}
+                            {getBranchMeta(c.id) && (
+                              <span className="ml-1.5 inline-block translate-y-[-1px] rounded-[3px] bg-black/[0.06] px-[4px] py-px align-middle text-[10px] font-normal leading-[14px] text-black/40 dark:bg-white/10 dark:text-white/40">
+                                分支
+                              </span>
+                            )}
+                          </span>
                         </button>
                       ))}
                     </div>

@@ -494,39 +494,44 @@ export function listMomentPosts(
   }
 }
 
+/** 视图 → 微信原始形状映射（persistMomentPosts / appendCopiedWxMomentPosts 共用，无损往返） */
+function wxViewToRawPost(p: MomentPostView) {
+  return {
+    id: p.id,
+    authorName: p.authorName,
+    avatar: p.avatar,
+    text: p.content,
+    contentZh: p.contentZh || undefined,
+    images: p.images,
+    textCard: p.textCard || undefined,
+    textCardUpgraded: p.textCardUpgraded || undefined,
+    textCardDesc: p.textCardDesc || undefined,
+    time: p.createdAt,
+    author: p.author,
+    peerId: p.peerId ?? undefined,
+    location: p.location || undefined,
+    repostOf: p.repostOf ?? undefined,
+    likes: p.likes.map((l) => l.name),
+    comments: p.comments.map((c) => ({
+      id: c.id,
+      author: c.authorName,
+      text: c.content,
+      contentZh: c.contentZh || undefined,
+      time: c.createdAt,
+      replyTo: c.replyToName,
+      authorKind: c.author,
+      peerId: c.peerId ?? undefined,
+      parentId: c.parentId ?? undefined,
+      createdAt: c.createdAt,
+    })),
+  };
+}
+
 /** 写回某平台全部动态（旧形状 + 引擎扩展字段，无损往返） */
 function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): void {
   try {
     if (platform === 'wx') {
-      const raw = posts.slice(0, 200).map((p) => ({
-        id: p.id,
-        authorName: p.authorName,
-        avatar: p.avatar,
-        text: p.content,
-        contentZh: p.contentZh || undefined,
-        images: p.images,
-        textCard: p.textCard || undefined,
-        textCardUpgraded: p.textCardUpgraded || undefined,
-        textCardDesc: p.textCardDesc || undefined,
-        time: p.createdAt,
-        author: p.author,
-        peerId: p.peerId ?? undefined,
-        location: p.location || undefined,
-        repostOf: p.repostOf ?? undefined,
-        likes: p.likes.map((l) => l.name),
-        comments: p.comments.map((c) => ({
-          id: c.id,
-          author: c.authorName,
-          text: c.content,
-          contentZh: c.contentZh || undefined,
-          time: c.createdAt,
-          replyTo: c.replyToName,
-          authorKind: c.author,
-          peerId: c.peerId ?? undefined,
-          parentId: c.parentId ?? undefined,
-          createdAt: c.createdAt,
-        })),
-      }));
+      const raw = posts.slice(0, 200).map(wxViewToRawPost);
       kvSet(WX_MOMENTS_KEY, raw);
     } else {
       const cmap: Record<string, unknown[]> = {};
@@ -568,6 +573,23 @@ function persistMomentPosts(platform: MomentPlatform, posts: MomentPostView[]): 
     emitMomentsChanged(platform);
   } catch {
     // 存储失败静默（动态是增强能力）
+  }
+}
+
+/**
+ * 角色分支（branch.ts）专用：把分支点之前该角色的动态副本追加进微信朋友圈数组。
+ * 只在原始数组尾部追加、原帖字节不动（不做全量往返）——其余动态/评论 id 保持稳定，
+ * 其它角色的记忆 sourcePostId/sourceCommentId 引用不被扰动；超 200 条滚动窗口与既有口径一致。
+ */
+export function appendCopiedWxMomentPosts(posts: MomentPostView[]): void {
+  if (!Array.isArray(posts) || posts.length === 0) return;
+  try {
+    const raw = kvGet<WxRawPost[]>(WX_MOMENTS_KEY);
+    const list = Array.isArray(raw) ? raw : [];
+    kvSet(WX_MOMENTS_KEY, [...list, ...posts.map(wxViewToRawPost)].slice(-200));
+    emitMomentsChanged('wx');
+  } catch {
+    // 静默
   }
 }
 
