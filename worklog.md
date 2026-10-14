@@ -19640,3 +19640,18 @@ Work Log:
 Stage Summary:
 - 图标零改动达成：仓库内 couple.png 已与用户上传图完全一致；远程 cczzff468/5200 的 main 已同步至 b23220a（第十轮完整功能 + 粉色双心图标），本地 main 已跟踪 origin/main
 - 环境备忘：沙箱→GitHub 直连间歇性阻断（DNS 正常、TLS 偶发中断），遇到时重试 push 即可成功
+---
+Task ID: couple-icon-verify
+Agent: Z.ai Code (main)
+Task: 用户重申「把上传的粉色双心图变成恋人空间图标」——全链路排查图标渲染路径并浏览器实证
+
+Work Log:
+- 复核：upload/恋人空间_...1024x1024.png 与 public/icons/couple.png MD5 仍一致（400c00e0d131902ab3b9ebf8410673b4）
+- 全量引用排查：/icons/couple.png 仅 registry.tsx（主屏/Spotlight/主题预览）与 couple-rel-bubble.tsx（关系气泡）两处；App Store 条目走 AppIconTile 同源；couple-space.tsx 内部只有功能配图（home-bg/map/house）与 lucide 线性导航图标，无独立 App 图标
+- agent-browser 实证（关键修正：此前滑动失败因起手点 x=770 超出手机壳右缘 759；壳内起手 742 即可）：原生 PointerEvent 翻页 → 主屏第 3 页恋人空间 tile → img=/_next/image?url=%2Ficons%2Fcouple.png&w=64 imgComplete=true，放大截图粉色渐变底白双心，像素采样平均 RGB(248,141,164)=粉色 ✓；Spotlight 搜索列表同图 ✓
+- 发现潜在「用户侧旧图」路径：HomeScreen appIconNode 优先渲染 customIcons[id]（主题页上传的自定义图标，Blob 存用户浏览器本地）——若用户曾给恋人空间传过自定义图标，会覆盖官方图；代码与资源侧无此数据，无法远程清除
+- 关闭 agent-browser；dev.log 无新错误
+
+Stage Summary:
+- 代码/资源/线上三方证据一致：恋人空间图标（主屏第3页、Spotlight、App Store、关系气泡）即用户上传的粉色双心官方图，GitHub 已同步
+- 用户若仍见旧图，两条自查路径：①预览面板强制刷新（缓存）②主题 App→图标→恋人空间→恢复默认（清除浏览器本地自定义图标覆盖）；iconStyle 若为毛玻璃/液态则显示线条心（默认「真实」才显示 PNG 原图）
