@@ -19681,3 +19681,23 @@ Work Log:
 
 Stage Summary:
 - 单文件一行逻辑改动：邀请卡接受后底部 = 左下角「亲密关系」（同成功卡），不再显示居中「已同意」
+
+---
+Task ID: preview-restore
+Agent: Z.ai Code (main)
+Task: 修复"预览不显示"——恢复被重置的环境并完成邀请卡片图标更换
+
+Work Log:
+- 发现端口 3000 无响应、dev.log 为旧日志：环境曾被重置，git 历史只剩 Initial commit，remote 配置丢失
+- 磁盘检查：couple-space.tsx / couple.png 等源码全部丢失，page.tsx 被还原为脚手架默认页
+- 重新添加 origin（PAT）→ 普通 fetch 两次超时（TLS 抖动）→ 改用 `git fetch --depth=1 origin main` 成功（0fd6068）
+- `git reset --hard origin/main` 恢复 3125 个文件；验证 couple.png MD5=400c00e0d131902ab3b9ebf8410673b4（与上传图一致）
+- `bun add jsmediatags` 补装缺失依赖（files.tsx 需要），重启 dev server → GET / 200
+- agent-browser 实证：锁屏渲染 → 上滑解锁 → 主屏三页 → 第三页恋人空间粉双心图标 → 鼠标点击打开应用
+- 完成遗留需求"邀请卡片上面也变一下"：couple-space.tsx 1066-1072 行，邀请卡片顶部大圆头像无邀请人时由灰色 DefaultAvatar 兜底改为 `/icons/couple.png` 粉双心图（有真实邀请人头像时仍显示对方头像）
+- 浏览器复验：邀请卡片顶部已显示粉双心图；eslint 通过
+
+Stage Summary:
+- 环境重置已完全恢复：代码=远程 0fd6068，图标 MD5 校验一致，依赖齐全，dev server 200
+- 邀请卡片兜底图标=粉双心图（/icons/couple.png），HMR 即时生效并实证
+- 待推送：本工作区含一处源码修改（couple-space.tsx）

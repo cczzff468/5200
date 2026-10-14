@@ -1062,12 +1062,12 @@ export default function CoupleSpaceApp() {
           >
             <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
           </button>
-          {/* 恋人头像 + 名字（recv 时为邀请人） */}
+          {/* 恋人头像 + 名字（recv 时为邀请人）；无头像时兜底为恋人空间粉双心图 */}
           <div className="h-[118px] w-[118px] overflow-hidden rounded-full bg-[#ececef] ring-[6px] ring-white/80 shadow-[0_10px_30px_rgba(0,0,0,0.10)]">
             {invAvatar ? (
               <img src={invAvatar} alt={invName || '恋人'} className="h-full w-full object-cover" draggable={false} />
             ) : (
-              <DefaultAvatar size={118} />
+              <img src="/icons/couple.png" alt="恋人空间" className="h-full w-full object-cover" draggable={false} />
             )}
           </div>
           <div className="mt-8 text-[30px] font-bold leading-none">{invName || '恋人'}</div>
