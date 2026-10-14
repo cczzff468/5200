@@ -69,6 +69,7 @@ import { useUI } from '@/lib/ios/store';
 import { listContacts } from '@/lib/ios/contacts-store';
 import {
   COUPLE_STATE_EVENT,
+  channelIdentityOf,
   emptyInviteMeta,
   readInviteMeta,
   sendMyInvite,
@@ -79,6 +80,8 @@ import {
 } from '@/lib/ios/couple-invite';
 import { displayNameOf, isFriendIn } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { DefaultAvatar } from './default-avatar';
 import { LocalToast, useLocalToast } from './page-toast';
 
@@ -90,6 +93,26 @@ interface CoupleAlbum {
   name: string;
   desc: string;
   photos: string[]; // dataURL
+}
+
+/** 真实地理位置（情侣轨迹）：open-meteo 地理编码返回的地名 + WGS84 坐标 */
+interface CouplePlace {
+  name: string; // 展示名（如「北京市」）
+  lat: number;
+  lng: number;
+}
+
+/** 已保存的恋爱协议书（签署生效后自动存档；可多份，可点击回看） */
+interface CouplePactRecord {
+  id: string;
+  title: string;
+  preamble: string;
+  clauses: string[];
+  signMe: string | null;
+  signTa: string | null;
+  meAt: number | null;
+  taAt: number | null;
+  at: number; // 生效时间（双方签完）
 }
 
 interface CoupleState {
@@ -139,6 +162,11 @@ interface CoupleState {
   married: boolean; // 小礼堂：是否已婚
   marriedAt: number | null;
   meetPlace: string; // 情侣轨迹：相遇地点
+  myLoc: CouplePlace | null; // 情侣轨迹：我的真实位置（第八轮）
+  taLoc: CouplePlace | null; // 情侣轨迹：TA 的真实位置（第八轮）
+  meetLoc: CouplePlace | null; // 情侣轨迹：相遇地点定位（第八轮）
+  chronicleMonths: { ym: string; status: string }[]; // 恋爱编年史：关键月份状态（ym='YYYY-MM'；第八轮重做）
+  pacts: CouplePactRecord[]; // 已保存的协议书（第八轮：可多份/可回看）
   replies: { id: string; prompt: string; reply: string; at: number }[]; // 回复挑战（旧版自由回复存档）
   replyBest: number | null; // 回复挑战历史最佳（到达关数，12=通关；第七轮玩法）
   treeStreak: { last: string | null; n: number }; // 爱情树：我连续浇树（last=最近浇水日）
@@ -207,6 +235,11 @@ function defaultState(): CoupleState {
     married: false,
     marriedAt: null,
     meetPlace: '',
+    myLoc: null,
+    taLoc: null,
+    meetLoc: null,
+    chronicleMonths: [],
+    pacts: [],
     replies: [],
     replyBest: null,
     treeStreak: { last: null, n: 0 },
@@ -754,42 +787,36 @@ export default function CoupleSpaceApp() {
     return () => window.removeEventListener(COUPLE_STATE_EVENT, sync);
   }, []);
 
-  /** 全局头像/名字同步（用户要求「所有信息按照全局来」）：
-   *  我 ← 机主全局资料（联系人 App kind=user）；TA ← 绑定的恋人联系人。
-   *  挂载时 + 全局状态事件时同步，联系人在别处改名/换头像后情侣界面自动跟随 */
+  /** 全局头像/名字同步（用户要求：用微信邀请→双方身份跟随微信；QQ 邀请→跟随 QQ）：
+   *  渠道 = 关系建立渠道（partnerApp）；我 = 该渠道当前账号档案（社交名 + 分 App 头像槽位），
+   *  TA = 绑定恋人联系人（展示名 + 分 App 头像槽位）。
+   *  挂载时 + 全局状态事件时同步，联系人改名/换头像后打开 App 自动跟随 */
   useEffect(() => {
     let alive = true;
     const syncFromGlobal = async () => {
       try {
         const meta = readInviteMeta();
-        const list = await listContacts();
+        const ch: CoupleChannel = meta.partnerApp ?? 'wx';
+        const idn = await channelIdentityOf(ch, meta.partnerContactId);
         if (!alive) return;
-        const owner = list.find((c) => c.kind === 'user' && !c.altOf);
-        const partner = meta.partnerContactId ? list.find((c) => c.id === meta.partnerContactId) : null;
         setState((prev) => {
           const next: CoupleState = { ...prev };
           let changed = false;
-          const on = owner?.name?.trim() || '';
-          if (on && on !== prev.meName) {
-            next.meName = on;
+          if (idn.meName && idn.meName !== prev.meName) {
+            next.meName = idn.meName;
             changed = true;
           }
-          const oa = owner?.avatar ?? null;
-          if (oa && oa !== prev.meAvatar) {
-            next.meAvatar = oa;
+          if (idn.meAvatar && idn.meAvatar !== prev.meAvatar) {
+            next.meAvatar = idn.meAvatar;
             changed = true;
           }
-          if (partner) {
-            const pn = displayNameOf(partner);
-            if (pn && pn !== prev.taName) {
-              next.taName = pn;
-              changed = true;
-            }
-            const pa = partner.avatar ?? null;
-            if (pa && pa !== prev.taAvatar) {
-              next.taAvatar = pa;
-              changed = true;
-            }
+          if (idn.taName && idn.taName !== prev.taName) {
+            next.taName = idn.taName;
+            changed = true;
+          }
+          if (idn.taAvatar && idn.taAvatar !== prev.taAvatar) {
+            next.taAvatar = idn.taAvatar;
+            changed = true;
           }
           if (!changed) return prev;
           kvSetDebounced(STATE_KEY, next);
@@ -856,10 +883,11 @@ export default function CoupleSpaceApp() {
     showToast(r.ok ? '欢迎来到你们的小天地 ♡' : r.error);
   }, [invMeta.pendingInvite, showToast]);
 
-  /** 状态更新 + 防抖落盘 */
-  const patch = useCallback((p: Partial<CoupleState>) => {
+  /** 状态更新 + 防抖落盘（支持对象或函数式 updater，供快速连点场景原子更新） */
+  const patch = useCallback((pOrFn: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => {
     setState((prev) => {
-      const next = { ...prev, ...p };
+      const inc = typeof pOrFn === 'function' ? pOrFn(prev) : pOrFn;
+      const next = { ...prev, ...inc };
       kvSetDebounced(STATE_KEY, next);
       return next;
     });
@@ -2442,103 +2470,282 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
   );
 }
 
-/** 手绘风装饰地图（情侣轨迹专用，白灰系：路网/河流/公园/街区 + 流动虚线路线） */
-function DecoMap() {
-  const road = '#ffffff';
-  const casing = '#e2e5e8';
+// ---------------- 情侣轨迹：真实地图（高德瓦片代理 + WGS84→GCJ02 纠偏 + 真实距离） ----------------
+
+const GCJ_A = 6378245;
+const GCJ_EE = 0.00669342162296594323;
+
+function gcjTransformLat(x: number, y: number): number {
+  let ret = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+  ret += ((20 * Math.sin(6 * x * Math.PI) + 20 * Math.sin(2 * x * Math.PI)) * 2) / 3;
+  ret += ((20 * Math.sin(y * Math.PI) + 40 * Math.sin((y / 3) * Math.PI)) * 2) / 3;
+  ret += ((160 * Math.sin((y / 12) * Math.PI) + 320 * Math.sin((y * Math.PI) / 30)) * 2) / 3;
+  return ret;
+}
+
+function gcjTransformLng(x: number, y: number): number {
+  let ret = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+  ret += ((20 * Math.sin(6 * x * Math.PI) + 20 * Math.sin(2 * x * Math.PI)) * 2) / 3;
+  ret += ((20 * Math.sin(x * Math.PI) + 40 * Math.sin((x / 3) * Math.PI)) * 2) / 3;
+  ret += ((150 * Math.sin((x / 12) * Math.PI) + 300 * Math.sin((x / 30) * Math.PI)) * 2) / 3;
+  return ret;
+}
+
+/** WGS84 → GCJ02（高德瓦片按 GCJ02 索引，marker 必须纠偏后才能落在正确位置；境外点原样返回） */
+function wgs84ToGcj02(lat: number, lng: number): [number, number] {
+  if (lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271) return [lat, lng];
+  let dLat = gcjTransformLat(lng - 105, lat - 35);
+  let dLng = gcjTransformLng(lng - 105, lat - 35);
+  const radLat = (lat / 180) * Math.PI;
+  let magic = Math.sin(radLat);
+  magic = 1 - GCJ_EE * magic * magic;
+  const sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180) / (((GCJ_A * (1 - GCJ_EE)) / (magic * sqrtMagic)) * Math.PI);
+  dLng = (dLng * 180) / ((GCJ_A / sqrtMagic) * Math.cos(radLat) * Math.PI);
+  return [lat + dLat, lng + dLng];
+}
+
+/** 球面距离 km（Haversine，WGS84 语义下的真实距离） */
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
+function fmtKm(km: number): string {
+  if (km < 1) return `${Math.round(km * 1000)} m`;
+  if (km < 100) return `${km.toFixed(1)} km`;
+  return `${Math.round(km).toLocaleString('en-US')} km`;
+}
+
+function escHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** 真实地图（情侣轨迹专用）：高德街道瓦片经 /api/map-tile 代理渲染，可拖动/滚轮/双指缩放；
+ *  双方真实位置头像 marker + 相遇地点 📍 + 虚线连线与真实距离标签 */
+function RealCoupleMap(props: {
+  me: CouplePlace | null;
+  ta: CouplePlace | null;
+  meet: CouplePlace | null;
+  meAvatar: string | null;
+  taAvatar: string | null;
+  meName: string;
+  taName: string;
+  fitSignal: number;
+}) {
+  const { me, ta, meet, meAvatar, taAvatar, meName, taName, fitSignal } = props;
+  const holderRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const lgRef = useRef<L.LayerGroup | null>(null);
+  const viewKeyRef = useRef('');
+  const dataRef = useRef(props);
+  useEffect(() => {
+    dataRef.current = props;
+  });
+
+  // 初始化（可拖动/缩放的真实地图）
+  useEffect(() => {
+    if (!holderRef.current || mapRef.current) return;
+    const map = L.map(holderRef.current, {
+      center: [36.2, 105.8],
+      zoom: 4,
+      minZoom: 3,
+      maxZoom: 17,
+      zoomControl: false,
+      attributionControl: false,
+    });
+    L.tileLayer('/api/map-tile?z={z}&x={x}&y={y}', { minZoom: 3, maxZoom: 17 }).addTo(map);
+    lgRef.current = L.layerGroup().addTo(map);
+    mapRef.current = map;
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      lgRef.current = null;
+      viewKeyRef.current = '';
+    };
+  }, []);
+
+  // marker/连线/距离标签重绘（位置、头像、名字任一变化）
+  useEffect(() => {
+    const map = mapRef.current;
+    const lg = lgRef.current;
+    if (!map || !lg) return;
+    lg.clearLayers();
+
+    const gcjOf = (p: CouplePlace): [number, number] => wgs84ToGcj02(p.lat, p.lng);
+
+    const avatarIcon = (avatar: string | null, name: string, tag: string) =>
+      L.divIcon({
+        className: '',
+        iconSize: [46, 46],
+        iconAnchor: [23, 40],
+        html: `<div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+          <div style="width:44px;height:44px;border-radius:14px;overflow:hidden;background:#fff;border:3px solid #fff;box-shadow:0 6px 16px rgba(0,0,0,0.28)">${avatar ? `<img src="${avatar}" style="width:100%;height:100%;object-fit:cover" draggable="false"/>` : ''}</div>
+          <span style="max-width:96px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,0.96);border-radius:999px;padding:1px 8px;font-size:10px;font-weight:600;color:#3a3a40;box-shadow:0 2px 8px rgba(0,0,0,0.2)">${escHtml(name || '我')}·${tag}</span>
+        </div>`,
+      });
+
+    const gMe = me ? gcjOf(me) : null;
+    const gTa = ta ? gcjOf(ta) : null;
+
+    if (gMe) L.marker(gMe, { icon: avatarIcon(meAvatar, meName, '我'), keyboard: false, zIndexOffset: 200 }).addTo(lg);
+    if (gTa) L.marker(gTa, { icon: avatarIcon(taAvatar, taName, 'TA'), keyboard: false, zIndexOffset: 200 }).addTo(lg);
+
+    if (gMe && gTa && me && ta) {
+      L.polyline([gMe, gTa], { color: '#3f3f46', weight: 2.4, opacity: 0.85, dashArray: '7 8' }).addTo(lg);
+      const km = haversineKm(me.lat, me.lng, ta.lat, ta.lng);
+      const mid: [number, number] = [(gMe[0] + gTa[0]) / 2, (gMe[1] + gTa[1]) / 2];
+      L.marker(mid, {
+        keyboard: false,
+        icon: L.divIcon({
+          className: '',
+          iconSize: [10, 10],
+          html: `<div style="transform:translate(-50%,-50%);white-space:nowrap;background:#3f3f46;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;box-shadow:0 4px 12px rgba(0,0,0,0.3)">相距 ${fmtKm(km)}</div>`,
+        }),
+      }).addTo(lg);
+    }
+
+    if (meet) {
+      L.marker(gcjOf(meet), {
+        keyboard: false,
+        zIndexOffset: 400,
+        icon: L.divIcon({
+          className: '',
+          iconSize: [30, 30],
+          iconAnchor: [15, 30],
+          html: `<div style="display:flex;flex-direction:column;align-items:center">
+            <div style="font-size:26px;line-height:1;filter:drop-shadow(0 3px 6px rgba(0,0,0,0.3))">📍</div>
+            <span style="margin-top:1px;max-width:110px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,0.96);border-radius:999px;padding:1px 8px;font-size:10px;font-weight:600;color:#3a3a40;box-shadow:0 2px 8px rgba(0,0,0,0.2)">相遇·${escHtml(meet.name)}</span>
+          </div>`,
+        }),
+      }).addTo(lg);
+    }
+
+    // 视角自适应：坐标集合变化才移动（拖动/缩放不被打扰）
+    const key = `${gMe?.join(',') ?? '-'}#${gTa?.join(',') ?? '-'}#${meet ? gcjOf(meet).join(',') : '-'}`;
+    if (key !== viewKeyRef.current) {
+      viewKeyRef.current = key;
+      const pts = [gMe, gTa].filter(Boolean) as [number, number][];
+      if (pts.length === 2) map.fitBounds(L.latLngBounds(pts).pad(0.3), { animate: true, maxZoom: 13 });
+      else if (pts.length === 1) map.setView(pts[0], Math.max(map.getZoom(), 9), { animate: true });
+      else if (meet) map.setView(gcjOf(meet), Math.max(map.getZoom(), 10), { animate: true });
+    }
+  }, [me, ta, meet, meAvatar, taAvatar, meName, taName]);
+
+  // 十字准星：回到两人中间（或单点/相遇地）
+  useEffect(() => {
+    if (!fitSignal) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const { me: m, ta: t, meet: mt } = dataRef.current;
+    const pts = [m, t].filter(Boolean).map((p) => wgs84ToGcj02(p!.lat, p!.lng)) as [number, number][];
+    if (pts.length === 2) map.fitBounds(L.latLngBounds(pts).pad(0.3), { animate: true, maxZoom: 13 });
+    else if (pts.length === 1) map.setView(pts[0], Math.max(map.getZoom(), 9), { animate: true });
+    else if (mt) map.setView(wgs84ToGcj02(mt.lat, mt.lng), Math.max(map.getZoom(), 10), { animate: true });
+  }, [fitSignal]);
+
   return (
-    <svg viewBox="0 0 400 760" preserveAspectRatio="xMidYMid slice" className="absolute inset-0 h-full w-full" aria-hidden="true">
-      <rect x="0" y="0" width="400" height="760" fill="#eef0f2" />
-      {/* 河流 */}
-      <path d="M-20 96 C80 60 150 150 240 120 C310 96 360 140 420 118 L420 168 C350 190 300 150 232 172 C150 198 70 108 -20 148 Z" fill="#dfe8ec" />
-      <path d="M-20 122 C70 84 150 172 240 146 C310 124 366 162 420 142" stroke="#cfdbe2" strokeWidth="2" fill="none" opacity="0.7" />
-      {/* 公园 */}
-      <ellipse cx="86" cy="330" rx="78" ry="64" fill="#e2ebdf" />
-      <ellipse cx="318" cy="560" rx="66" ry="52" fill="#e2ebdf" />
-      {[
-        [58, 306], [102, 318], [76, 352], [122, 344], [298, 542], [336, 556], [312, 582],
-      ].map(([x, y], i) => (
-        <g key={i}>
-          <circle cx={x} cy={y} r="9" fill="#c8d9c2" />
-          <circle cx={x + 3} cy={y - 3} r="5.5" fill="#d6e4d0" />
-        </g>
-      ))}
-      {/* 街区 */}
-      {[
-        [196, 218, 76, 54], [288, 214, 62, 46], [190, 300, 58, 66], [268, 300, 84, 56],
-        [196, 396, 92, 58], [196, 486, 60, 62], [276, 486, 76, 52], [58, 436, 82, 54],
-        [48, 540, 70, 62], [148, 590, 88, 58], [258, 636, 84, 56], [58, 648, 72, 56],
-      ].map(([x, y, w, h], i) => (
-        <rect key={i} x={x} y={y} width={w} height={h} rx="7" fill="#e7e9eb" stroke="#dee1e4" strokeWidth="1.6" />
-      ))}
-      {/* 道路：先描边后路面 */}
-      <g stroke={casing} strokeWidth="19" fill="none" strokeLinecap="round">
-        <path d="M0 268 C110 268 160 262 400 268" />
-        <path d="M170 0 L170 760" />
-        <path d="M0 570 C130 566 280 574 400 570" />
-        <path d="M0 668 C150 660 300 676 400 668" />
-      </g>
-      <g stroke={road} strokeWidth="14" fill="none" strokeLinecap="round">
-        <path d="M0 268 C110 268 160 262 400 268" />
-        <path d="M170 0 L170 760" />
-        <path d="M0 570 C130 566 280 574 400 570" />
-        <path d="M0 668 C150 660 300 676 400 668" />
-      </g>
-      <g stroke={casing} strokeWidth="11" fill="none" strokeLinecap="round">
-        <path d="M64 268 L64 760" />
-        <path d="M282 268 L282 570" />
-        <path d="M0 392 L400 392" />
-        <path d="M252 668 L252 760" />
-      </g>
-      <g stroke={road} strokeWidth="7.5" fill="none" strokeLinecap="round">
-        <path d="M64 268 L64 760" />
-        <path d="M282 268 L282 570" />
-        <path d="M0 392 L400 392" />
-        <path d="M252 668 L252 760" />
-      </g>
-      {/* 道路中线虚线 */}
-      <g stroke="#d5d8db" strokeWidth="1.6" strokeDasharray="8 9" fill="none">
-        <path d="M170 0 L170 760" />
-        <path d="M0 268 C110 268 160 262 400 268" />
-        <path d="M0 570 C130 566 280 574 400 570" />
-      </g>
-      {/* 我们的路线（流动虚线） */}
-      <path
-        d="M74 622 C120 560 96 500 148 452 C196 408 262 420 288 356 C310 300 296 220 330 158"
-        fill="none"
-        stroke="#8e97a0"
-        strokeWidth="3.6"
-        strokeLinecap="round"
-        strokeDasharray="10 9"
-        className="[animation:couple-dash-flow_3.2s_linear_infinite]"
-      />
-      {/* POI 小圆点 */}
-      {[[226, 246], [318, 244], [232, 334], [316, 336], [246, 428], [104, 464], [92, 572], [196, 620], [302, 664]].map(([x, y], i) => (
-        <circle key={i} cx={x} cy={y} r="3.2" fill="#c3c8cd" />
-      ))}
-      {/* 我的位置（路线起点） */}
-      <g transform="translate(74 640)">
-        <ellipse cx="0" cy="16" rx="13" ry="4.5" fill="#00000014" />
-        <path d="M0 14 C-11 2 -15 -4 -15 -12 A15 15 0 1 1 15 -12 C15 -4 11 2 0 14 Z" fill="#ffffff" stroke="#b3b9c0" strokeWidth="2.4" />
-        <circle cx="0" cy="-11" r="6.4" fill="#8e97a0" />
-      </g>
-      {/* TA的位置（路线终点） */}
-      <g transform="translate(330 140)">
-        <ellipse cx="0" cy="16" rx="13" ry="4.5" fill="#00000014" />
-        <path d="M0 14 C-11 2 -15 -4 -15 -12 A15 15 0 1 1 15 -12 C15 -4 11 2 0 14 Z" fill="#ffffff" stroke="#b3b9c0" strokeWidth="2.4" />
-        <path d="M0 -5.5 c2.6-4.6 9.2-3.2 9.2 1.4 c0 3.6-5 6.6-9.2 10 c-4.2-3.4-9.2-6.4-9.2-10 c0-4.6 6.6-6 9.2-1.4 Z" transform="translate(0 -12) scale(0.72) translate(0 5)" fill="#8e97a0" />
-      </g>
-    </svg>
+    <div className="absolute inset-0 z-0">
+      <div ref={holderRef} className="h-full w-full" style={{ background: '#e8eaed' }} />
+    </div>
   );
 }
 
-/** 情侣轨迹（参考图4）：全屏地图 + 双人悬浮卡 + 照片标记 + 历史轨迹弹层 */
-function TrackPage({ state, patch, days, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; days: number | null; showToast: (m: string) => void; close: () => void }) {
-  const [place, setPlace] = useState(state.meetPlace);
-  const [sheet, setSheet] = useState(false);
+/** 位置搜索行（轨迹设置弹层用）：/api/geocode 搜索 → 点选写入真实位置 */
+function PlaceSearchRow({ label, current, onPick, onClear, showToast }: { label: string; current: CouplePlace | null; onPick: (p: CouplePlace) => void; onClear: () => void; showToast: (m: string) => void }) {
+  const [q, setQ] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<{ name: string; lat: number; lng: number; label: string }[] | null>(null);
 
-  // 取相册里前两张照片作地图标记
-  const markers = state.albums.flatMap((a) => a.photos).slice(0, 2);
+  const doSearch = async () => {
+    const t = q.trim();
+    if (!t || loading) return;
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/geocode?q=${encodeURIComponent(t)}`);
+      const d = (await r.json()) as { results?: { name: string; lat: number; lng: number; label: string }[] };
+      const list = Array.isArray(d?.results) ? d.results : [];
+      setResults(list);
+      if (list.length === 0) showToast('没找到这个地方，换个说法试试');
+    } catch {
+      showToast('搜索失败，稍后再试');
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="mt-3 rounded-2xl bg-[#f7f7f9] p-3.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[13px] font-semibold text-[#4a4a52]">{label}</span>
+        {current ? (
+          <button
+            type="button"
+            onClick={() => {
+              onClear();
+              setResults(null);
+            }}
+            className="flex max-w-[70%] items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[11.5px] text-[#6e6e76] shadow-sm"
+          >
+            <MapPin className="h-3 w-3 shrink-0 text-[#8e8e96]" />
+            <span className="truncate">{current.name}</span>
+            <span className="shrink-0 text-[#b6b6bd]">✕</span>
+          </button>
+        ) : (
+          <span className="text-[11.5px] text-[#b6b6bd]">未设置</span>
+        )}
+      </div>
+      <div className="mt-2 flex gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void doSearch();
+          }}
+          placeholder="搜索城市或地址，如「上海」"
+          maxLength={30}
+          className="h-10 flex-1 rounded-xl bg-white px-3.5 text-[14px] shadow-sm outline-none placeholder:text-[#b6b6bd]"
+        />
+        <button
+          type="button"
+          onClick={() => void doSearch()}
+          className="flex h-10 w-[64px] items-center justify-center rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[13.5px] font-semibold text-white"
+        >
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : '搜索'}
+        </button>
+      </div>
+      {results != null && results.length > 0 && (
+        <div className="mt-2 max-h-40 overflow-y-auto rounded-xl bg-white p-1 shadow-sm">
+          {results.map((it, i) => (
+            <button
+              key={`${it.name}-${i}`}
+              type="button"
+              onClick={() => {
+                onPick({ name: it.name, lat: it.lat, lng: it.lng });
+                setResults(null);
+                setQ('');
+              }}
+              className="block w-full rounded-lg px-3 py-2 text-left active:bg-[#f3f3f5]"
+            >
+              <span className="block text-[13.5px] text-[#2c2c30]">{it.name}</span>
+              {it.label !== it.name && <span className="block truncate text-[11px] text-[#9a9aa2]">{it.label}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 情侣轨迹（第八轮重做）：真实地图（高德瓦片/可拖动缩放）+ 双方真实位置头像 marker + 真实距离 + 位置设置弹层 */
+function TrackPage({ state, patch, days, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; days: number | null; showToast: (m: string) => void; close: () => void }) {
+  const [sheet, setSheet] = useState(false);
+  const [fitSignal, setFitSignal] = useState(0);
+
+  // 真实距离：双方都设置了真实位置才有
+  const distKm = state.myLoc && state.taLoc ? haversineKm(state.myLoc.lat, state.myLoc.lng, state.taLoc.lat, state.taLoc.lng) : null;
 
   const toolBtn = 'flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#6e6e76] shadow-[0_3px_10px_rgba(0,0,0,0.10)] transition-opacity active:opacity-60';
 
@@ -2554,19 +2761,28 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
         </div>
       </div>
 
-      {/* 全屏地图 */}
+      {/* 全屏真实地图（可拖动/缩放） */}
       <div className="relative flex-1 overflow-hidden">
-        <DecoMap />
+        <RealCoupleMap
+          me={state.myLoc}
+          ta={state.taLoc}
+          meet={state.meetLoc}
+          meAvatar={state.meAvatar}
+          taAvatar={state.taAvatar}
+          meName={state.meName}
+          taName={state.taName}
+          fitSignal={fitSignal}
+        />
         {/* 柔光遮罩，让悬浮卡更突出 */}
-        <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.55),transparent)]" />
+        <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.55),transparent)]" />
 
-        {/* 顶部悬浮卡：双头像 + 心形天数 + 虚线 */}
-        <div className="absolute inset-x-3 top-3 rounded-2xl bg-white/88 p-3 shadow-[0_8px_24px_rgba(0,0,0,0.10)] backdrop-blur-md">
+        {/* 顶部悬浮卡：双头像 + 心形天数 + 真实距离 */}
+        <div className="absolute inset-x-3 top-3 z-10 rounded-2xl bg-white/88 p-3 shadow-[0_8px_24px_rgba(0,0,0,0.10)] backdrop-blur-md">
           <div className="flex items-start justify-between">
             <div className="flex w-[86px] flex-col items-center gap-1">
               <span className="flex max-w-full items-center gap-0.5 text-[10px] text-[#8e8e96]">
                 <MapPin className="h-3 w-3 shrink-0" />
-                <span className="truncate">{state.meetPlace || '相遇的地方'}</span>
+                <span className="truncate">{state.myLoc?.name || (state.meetPlace ? '' : '设置我的位置')}</span>
               </span>
               <div className="h-12 w-12 overflow-hidden rounded-2xl bg-[#ececef] shadow-[0_0_0_3px_rgba(255,255,255,0.9),0_4px_12px_rgba(0,0,0,0.12)]">
                 {state.meAvatar ? <img src={state.meAvatar} alt={state.meName} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={48} />}
@@ -2588,7 +2804,13 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                   <path d="M8 10 C 50 -4, 150 24, 192 10" fill="none" stroke="#c7c7ce" strokeWidth="2.2" strokeDasharray="5 5" strokeLinecap="round" />
                 </svg>
                 <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-white px-2.5 py-[3px] text-[10px] text-[#6e6e76] shadow-sm ring-1 ring-[#e9e9ee]">
-                  {days != null ? 'TA 就在你身边' : '设置纪念日开启轨迹'}
+                  {distKm != null
+                    ? `相距 ${fmtKm(distKm)}`
+                    : state.myLoc || state.taLoc
+                      ? '等 TA 也设置真实位置'
+                      : days != null
+                        ? '去 ⚙ 设置你们的真实位置'
+                        : '设置纪念日开启轨迹'}
                 </span>
               </div>
             </div>
@@ -2596,7 +2818,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
             <div className="flex w-[86px] flex-col items-center gap-1">
               <span className="flex max-w-full items-center gap-0.5 text-[10px] text-[#8e8e96]">
                 <MapPin className="h-3 w-3 shrink-0" />
-                <span className="truncate">{state.meetPlace || '相遇的地方'}</span>
+                <span className="truncate">{state.taLoc?.name || (state.meetPlace ? '' : '设置TA的位置')}</span>
               </span>
               <div className="h-12 w-12 overflow-hidden rounded-2xl bg-[#ececef] shadow-[0_0_0_3px_rgba(255,255,255,0.9),0_4px_12px_rgba(0,0,0,0.12)]">
                 {state.taAvatar ? <img src={state.taAvatar} alt={state.taName} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={48} />}
@@ -2606,23 +2828,8 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
           </div>
         </div>
 
-        {/* 地图照片标记 + 虚线连接 */}
-        {markers.length >= 2 && (
-          <>
-            <svg className="pointer-events-none absolute left-[30%] top-[56%] h-24 w-[36%]" viewBox="0 0 120 96" aria-hidden="true">
-              <path d="M6 88 L114 8" fill="none" stroke="#b9b9c1" strokeWidth="4" strokeDasharray="10 8" strokeLinecap="round" />
-            </svg>
-            <div className="absolute left-[30%] top-[62%] h-11 w-11 rotate-[-4deg] overflow-hidden rounded-md bg-white p-0.5 shadow-[0_4px_12px_rgba(0,0,0,0.18)]">
-              <img src={markers[0]} alt="轨迹照片1" className="h-full w-full rounded object-cover" draggable={false} />
-            </div>
-            <div className="absolute left-[56%] top-[42%] h-11 w-11 rotate-[3deg] overflow-hidden rounded-md bg-white p-0.5 shadow-[0_4px_12px_rgba(0,0,0,0.18)]">
-              <img src={markers[1]} alt="轨迹照片2" className="h-full w-full rounded object-cover" draggable={false} />
-            </div>
-          </>
-        )}
-
-        {/* 右侧工具按钮（装饰 + 定位回到顶部卡） */}
-        <div className="absolute bottom-5 right-3 flex flex-col gap-2">
+        {/* 右侧工具按钮（装饰 + 设置 + 回到两人中间） */}
+        <div className="absolute bottom-5 right-3 z-10 flex flex-col gap-2">
           <span className={`${toolBtn} text-[#c9a24b]`}>
             <Crown className="h-4 w-4" />
           </span>
@@ -2632,12 +2839,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
           <button type="button" onClick={() => setSheet(true)} aria-label="轨迹设置" className={toolBtn}>
             <SettingsIcon className="h-4 w-4" />
           </button>
-          <button
-            type="button"
-            onClick={() => showToast(state.meetPlace ? `相遇地点：${state.meetPlace}` : '先在历史轨迹里写下相遇地点吧')}
-            aria-label="定位相遇地点"
-            className={toolBtn}
-          >
+          <button type="button" onClick={() => setFitSignal((s) => s + 1)} aria-label="回到两人中间" className={toolBtn}>
             <Crosshair className="h-4 w-4" />
           </button>
         </div>
@@ -2646,43 +2848,57 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
         <button
           type="button"
           onClick={() => setSheet(true)}
-          className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-6 py-2.5 text-[14px] font-semibold text-white shadow-[0_10px_26px_rgba(60,60,68,0.4)] transition-transform active:scale-[0.97]"
+          className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-6 py-2.5 text-[14px] font-semibold text-white shadow-[0_10px_26px_rgba(60,60,68,0.4)] transition-transform active:scale-[0.97]"
         >
           <MapPin className="h-4 w-4" fill="rgba(255,255,255,0.25)" />
-          历史轨迹
+          位置与轨迹
         </button>
 
-        <span className="pointer-events-none absolute bottom-1.5 right-2 text-[9px] text-[#b6b6bd]">恋人地图 · 白灰限定</span>
+        <span className="pointer-events-none absolute bottom-1.5 right-2 z-10 text-[9px] text-[#8a8f95]">恋人地图 · 真实位置</span>
       </div>
 
-      {/* 历史轨迹弹层 */}
+      {/* 位置与轨迹弹层 */}
       {sheet && (
         <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/35" onClick={() => setSheet(false)}>
-          <div className="max-h-[72%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-7 pt-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="max-h-[76%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-7 pt-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
             <div className="mt-3 text-[16px] font-bold text-[#2c2c30]">我们的轨迹</div>
-            <div className="mt-1 text-[12px] text-[#9a9aa2]">已经一起走过 {days ?? '--'} 天 · 双向奔赴的路上</div>
-
-            <div className="mt-4 text-[13px] font-semibold text-[#4a4a52]">相遇地点</div>
-            <div className="mt-2 flex gap-2">
-              <input
-                value={place}
-                onChange={(e) => setPlace(e.target.value)}
-                placeholder="比如：学校门口的奶茶店"
-                maxLength={20}
-                className="h-10 flex-1 rounded-xl bg-[#f3f3f5] px-3.5 text-[14px] outline-none placeholder:text-[#b6b6bd]"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  patch({ meetPlace: place.trim() });
-                  showToast('相遇地点已记录 ♡');
-                }}
-                className="h-10 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-4 text-[13.5px] font-semibold text-white"
-              >
-                保存
-              </button>
+            <div className="mt-1 text-[12px] text-[#9a9aa2]">
+              已经一起走过 {days ?? '--'} 天{state.meetLoc?.name ? ` · 相遇在${state.meetLoc.name}` : state.meetPlace ? ` · 相遇在${state.meetPlace}` : ''}
+              {distKm != null ? ` · 现在相距 ${fmtKm(distKm)}` : ''}
             </div>
+
+            {/* 真实位置搜索（第八轮：地址 → 真实经纬度 → 真实地图 marker + 真实距离） */}
+            <PlaceSearchRow
+              label="我的位置"
+              current={state.myLoc}
+              onPick={(p) => {
+                patch({ myLoc: p });
+                showToast('我的位置已更新 ♡');
+              }}
+              onClear={() => patch({ myLoc: null })}
+              showToast={showToast}
+            />
+            <PlaceSearchRow
+              label="TA 的位置"
+              current={state.taLoc}
+              onPick={(p) => {
+                patch({ taLoc: p });
+                showToast('TA 的位置已更新 ♡');
+              }}
+              onClear={() => patch({ taLoc: null })}
+              showToast={showToast}
+            />
+            <PlaceSearchRow
+              label="相遇地点"
+              current={state.meetLoc}
+              onPick={(p) => {
+                patch({ meetLoc: p, meetPlace: p.name });
+                showToast('相遇地点已记录 ♡');
+              }}
+              onClear={() => patch({ meetLoc: null })}
+              showToast={showToast}
+            />
 
             <div className="mt-5 text-[13px] font-semibold text-[#4a4a52]">走过的大事记</div>
             {state.chronicle.length === 0 ? (
@@ -5014,29 +5230,41 @@ function PactStamp() {
   );
 }
 
-/** 恋爱协议纸（预览/签署共用）：标题 + 声明 + 条款 + 双签名 + 日期（签署后盖红章） */
-function PactPaper({ state }: { state: CoupleState }) {
-  const signed = state.pactAt != null;
+/** 协议纸数据（当前草稿 / 已保存协议通用形状） */
+interface PactPaperData {
+  title: string;
+  preamble: string;
+  clauses: string[];
+  signMe: string | null;
+  signTa: string | null;
+  meAt: number | null;
+  taAt: number | null;
+  at: number | null;
+}
+
+/** 恋爱协议纸（预览/签署/回看共用）：标题 + 声明 + 条款 + 双签名 + 日期（签署后盖红章） */
+function PactPaper({ data, meName, taName }: { data: PactPaperData; meName: string; taName: string }) {
+  const signed = data.at != null;
   const kai = { fontFamily: "'Kaiti SC','STKaiti','KaiTi','SimKai',cursive" } as const;
   const sig = (side: 'me' | 'ta') => {
-    const name = side === 'me' ? state.pactSignMe ?? (signed ? state.meName || null : null) : state.pactSignTa ?? (signed ? state.taName || null : null);
-    const at = side === 'me' ? state.pactMeAt ?? state.pactAt : state.pactTaAt ?? state.pactAt;
+    const name = side === 'me' ? data.signMe ?? (signed ? meName || null : null) : data.signTa ?? (signed ? taName || null : null);
+    const at = side === 'me' ? data.meAt ?? data.at : data.taAt ?? data.at;
     return { name, at };
   };
   return (
     <div className="relative overflow-hidden rounded-lg border border-[#e9e9ee] bg-white px-5 pb-6 pt-6 shadow-[0_4px_18px_rgba(0,0,0,0.05)]">
-      <div className="text-center text-[21px] font-bold tracking-[2px] text-[#26262b]">{state.pactTitle || '恋爱协议书'}</div>
+      <div className="text-center text-[21px] font-bold tracking-[2px] text-[#26262b]">{data.title || '恋爱协议书'}</div>
       <div className="mt-4 h-[2px] bg-[#2c2c30]" />
-      <p className="mt-4 text-justify text-[13.5px] leading-[1.9] text-[#4a4a52]">{state.pactPreamble}</p>
+      <p className="mt-4 text-justify text-[13.5px] leading-[1.9] text-[#4a4a52]">{data.preamble}</p>
       <div className="my-4 border-t border-dashed border-[#dcdce1]" />
       <ol className="space-y-1.5 px-1" data-testid="pact-paper-clauses">
-        {state.pactClauses.map((c, i) => (
+        {data.clauses.map((c, i) => (
           <li key={i} className="flex gap-1.5 text-[13px] leading-relaxed text-[#4a4a52]">
             <span className="shrink-0">{i + 1}.</span>
             <span>{c}</span>
           </li>
         ))}
-        {state.pactClauses.length === 0 && <li className="text-[12.5px] text-[#c9c9cf]">还没有条款，去添加第一条约定吧</li>}
+        {data.clauses.length === 0 && <li className="text-[12.5px] text-[#c9c9cf]">还没有条款，去添加第一条约定吧</li>}
       </ol>
       <div className="my-4 border-t border-dashed border-[#dcdce1]" />
       <div className="grid grid-cols-2">
@@ -5064,12 +5292,32 @@ function PactPaper({ state }: { state: CoupleState }) {
 
 /** 恋爱协议（第七轮重做，参考图3/4/5）：预览主页 → 编辑协议 → 签署协议（双方签名后盖章生效） */
 function PactPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
-  const [view, setView] = useState<'home' | 'edit' | 'sign'>('home');
+  const [view, setView] = useState<'home' | 'edit' | 'sign' | 'view'>('home');
   const [signFrom, setSignFrom] = useState<'home' | 'edit'>('home');
   const [taPending, setTaPending] = useState(false);
+  const [viewPact, setViewPact] = useState<CouplePactRecord | null>(null);
   const [dlg, setDlg] = useState<null | { type: 'title' | 'preamble' | 'custom' | 'template' } | { type: 'clause'; idx: number }>(null);
   const [draft, setDraft] = useState('');
   const clauses = state.pactClauses;
+  const curPaper: PactPaperData = {
+    title: state.pactTitle || '恋爱协议书',
+    preamble: state.pactPreamble,
+    clauses: state.pactClauses,
+    signMe: state.pactSignMe,
+    signTa: state.pactSignTa,
+    meAt: state.pactMeAt,
+    taAt: state.pactTaAt,
+    at: state.pactAt,
+  };
+
+  /** 再添加一份协议：重置草稿为默认模板 → 进编辑（已保存的协议书不受影响） */
+  const startNewPact = () => {
+    const d = defaultState();
+    patch({ pactTitle: d.pactTitle, pactPreamble: d.pactPreamble, pactClauses: [...d.pactClauses], pactSignMe: null, pactMeAt: null, pactSignTa: null, pactTaAt: null, pactAt: null });
+    setSignFrom('edit');
+    setView('edit');
+    showToast('新的一份协议，开始编辑吧 ♡');
+  };
 
   // 条款拖拽排序（指针事件：按手柄 → 移动高亮目标行 → 松手落位）
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -5193,8 +5441,20 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
     showToast(`已发送给${state.taName || 'TA'}签名，等 TA 一会儿…`);
     window.setTimeout(() => {
       setTaPending(false);
-      patch({ pactSignTa: state.taName || 'TA', pactTaAt: Date.now(), pactAt: Date.now() });
-      showToast('TA 已签名，恋爱协议正式生效 ♡');
+      // TA 签完生效，同时自动存档一份（第八轮：可多份保存/回看）
+      const rec: CouplePactRecord = {
+        id: uid(),
+        title: state.pactTitle || '恋爱协议书',
+        preamble: state.pactPreamble,
+        clauses: [...state.pactClauses],
+        signMe: state.pactSignMe || state.meName || '我',
+        signTa: state.taName || 'TA',
+        meAt: state.pactMeAt,
+        taAt: Date.now(),
+        at: Date.now(),
+      };
+      patch({ pactSignTa: rec.signTa, pactTaAt: rec.taAt, pactAt: rec.at, pacts: [rec, ...(state.pacts ?? [])] });
+      showToast('TA 已签名，恋爱协议正式生效并已保存 ♡');
     }, 2600 + Math.random() * 2400);
   };
 
@@ -5241,8 +5501,47 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <span className="text-[11px] text-[#f2536a]">♥</span>
           </div>
           <div className="mt-3">
-            <PactPaper state={state} />
+            <PactPaper data={curPaper} meName={state.meName} taName={state.taName} />
           </div>
+
+          {/* 已保存的协议书（第八轮：生效自动存档，可多份/可回看） */}
+          {state.pacts.length > 0 && (
+            <div className="mt-6">
+              <div className="flex items-center justify-between px-1">
+                <div className="text-[15px] font-bold text-[#26262b]">
+                  已保存的协议书 <span className="text-[#f2536a]">{state.pacts.length}</span>
+                </div>
+                <button type="button" data-testid="pact-add-another" onClick={startNewPact} className="text-[13px] font-medium text-[#f2536a] active:opacity-60">
+                  + 添加另一份
+                </button>
+              </div>
+              <div className="mt-2.5 space-y-2">
+                {state.pacts.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    data-testid="pact-saved-item"
+                    onClick={() => {
+                      setViewPact(p);
+                      setView('view');
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl border border-[#f2dfe3] bg-white px-4 py-3 text-left active:bg-[#fff5f7]"
+                  >
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
+                      <Scale className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.9} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[14px] font-semibold text-[#26262b]">{p.title}</span>
+                      <span className="block text-[11.5px] text-[#9a9aa2]">
+                        {p.clauses.length} 条条款 · {fmtDateCn(fmtDate(p.at))} 生效 · 双方已签名
+                      </span>
+                    </span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* 模板导入 + 创建按钮 */}
           <div className="mt-4 text-center text-[13px] text-[#9a9aa2]">
@@ -5378,7 +5677,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
       {view === 'sign' && (
         <SubShell title="签署协议" onBack={() => setView(signFrom)}>
           <div className="mt-1">
-            <PactPaper state={state} />
+            <PactPaper data={curPaper} meName={state.meName} taName={state.taName} />
           </div>
 
           {/* 双签名区（参考图5）：先我签 → 再发 TA 签 */}
@@ -5442,6 +5741,39 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           ) : (
             <p className="mb-2 mt-5 text-center text-[12.5px] leading-relaxed text-[#b6b6bd]">双方都签名后，协议书自动生成并盖上恋人空间公证章</p>
           )}
+        </SubShell>
+      )}
+
+      {view === 'view' && viewPact && (
+        <SubShell title="协议书" onBack={() => setView('home')}>
+          <div className="mt-1" data-testid="pact-saved-view">
+            <PactPaper
+              data={{ title: viewPact.title, preamble: viewPact.preamble, clauses: viewPact.clauses, signMe: viewPact.signMe, signTa: viewPact.signTa, meAt: viewPact.meAt, taAt: viewPact.taAt, at: viewPact.at }}
+              meName={state.meName}
+              taName={state.taName}
+            />
+          </div>
+          <div className="mt-4 rounded-xl bg-[#fdeef2] py-3 text-center text-[13px] font-semibold text-[#f2536a]">
+            {fmtDateCn(fmtDate(viewPact.at))} 生效 · 双方已签名 ♡
+          </div>
+          <div className="mb-2 mt-4 flex gap-2.5">
+            <button
+              type="button"
+              data-testid="pact-saved-delete"
+              onClick={() => {
+                patch({ pacts: state.pacts.filter((x) => x.id !== viewPact.id) });
+                setViewPact(null);
+                setView('home');
+                showToast('已删除该份协议书');
+              }}
+              className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]"
+            >
+              删除这份协议
+            </button>
+            <button type="button" onClick={() => setView('home')} className="h-11 flex-1 rounded-full bg-[#f2536a] text-[15px] font-semibold text-white active:opacity-85">
+              返回
+            </button>
+          </div>
         </SubShell>
       )}
 
@@ -5632,50 +5964,311 @@ function ZodiacPage({ state, patch, close }: { state: CoupleState; patch: (p: Pa
   );
 }
 
-/** 恋爱编年史：时间线 + 添加大事记 */
+/** 恋爱编年史状态色（参考图2：暗恋/暧昧/恋爱/分手/复合/结婚 多彩淡色块） */
+const CHRON_STATUSES: { key: string; bg: string; fg: string }[] = [
+  { key: '暗恋', bg: '#fff3d6', fg: '#c08a1f' },
+  { key: '暧昧', bg: '#ffe1e9', fg: '#e0607e' },
+  { key: '恋爱', bg: '#ffe6df', fg: '#e06a4a' },
+  { key: '分手', bg: '#eae6fb', fg: '#8071cf' },
+  { key: '复合', bg: '#ffedd4', fg: '#d68f2c' },
+  { key: '结婚', bg: '#e0f2df', fg: '#3f9e54' },
+];
+
+/** 恋爱编年史（第八轮重做，参考图2/3）：年×月状态表格 + 关键月份编辑器（自动补全年内月份）+ 恋爱大事记 */
 function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
+  const now = new Date();
+  const [editing, setEditing] = useState(false);
   const [text, setText] = useState('');
-  return (
-    <SubShell title="恋爱编年史" onBack={close}>
-      <div className="mt-4 flex gap-2">
-        <input
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="记录一件值得记住的小事…"
-          maxLength={40}
-          className="h-11 flex-1 rounded-xl bg-white px-3.5 text-[15px] shadow-sm outline-none placeholder:text-[#b6b6bd]"
-        />
-        <button
-          type="button"
-          onClick={() => {
-            const t = text.trim();
-            if (!t) return;
-            patch({ chronicle: [{ id: uid(), text: t, at: Date.now() }, ...state.chronicle] });
-            setText('');
-            showToast('已写入编年史 ✍️');
-          }}
-          className="h-11 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-5 text-[15px] font-semibold text-white"
-        >
-          记录
-        </button>
-      </div>
-      {state.chronicle.length === 0 ? (
-        <div className="mt-16 text-center text-[14px] text-[#b6b6bd]">时间线还是空的，从今天开始记录吧</div>
-      ) : (
-        <div className="mt-5 space-y-0">
-          {state.chronicle.map((c, i) => (
-            <div key={c.id} className="relative flex gap-4 pb-6">
-              {/* 时间线竖线与节点 */}
-              {i < state.chronicle.length - 1 && <span aria-hidden="true" className="absolute left-[7px] top-5 h-full w-[2px] bg-[#e3e3e8]" />}
-              <span className="relative z-10 mt-1.5 h-4 w-4 shrink-0 rounded-full border-[3px] border-[#8e8e97] bg-white" />
-              <div className="flex-1 rounded-2xl bg-white p-4 shadow-sm">
-                <div className="text-[13px] text-[#9a9aa2]">{fmtDate(c.at)}</div>
-                <div className="mt-1 text-[15px] leading-relaxed text-[#2c2c30]">{c.text}</div>
+  const [draft, setDraft] = useState<{ y: number; m: number; status: string }[]>(() => [
+    { y: now.getFullYear(), m: now.getMonth() + 1, status: '暗恋' },
+  ]);
+
+  /** 已保存的关键月份（按时间升序） */
+  const months = useMemo(() => [...state.chronicleMonths].sort((a, b) => a.ym.localeCompare(b.ym)), [state.chronicleMonths]);
+
+  /** 年份列：出现过的年份 + 当前年（参考图2 起止由用户选择决定） */
+  const years = useMemo(() => {
+    const set = new Set<number>(months.map((m) => Number(m.ym.slice(0, 4))));
+    set.add(now.getFullYear());
+    return [...set].sort((a, b) => a - b);
+  }, [months]);
+
+  /** 补全规则：某年某月显示「≤ 该月的最近一次关键选择」的状态；之前没有任何选择 → —（跨年同样延续） */
+  const statusAt = (y: number, mi: number): string | null => {
+    const target = y * 12 + (mi + 1);
+    let cur: string | null = null;
+    for (const it of months) {
+      const k = Number(it.ym.slice(0, 4)) * 12 + Number(it.ym.slice(5, 7));
+      if (k <= target) cur = it.status;
+    }
+    return cur;
+  };
+
+  /** 编辑器：年份候选（2018 ~ 当前年+1） */
+  const yearOpts = useMemo(() => {
+    const arr: number[] = [];
+    for (let y = 2018; y <= now.getFullYear() + 1; y++) arr.push(y);
+    return arr;
+  }, []);
+
+  const statusMeta = (s: string) => CHRON_STATUSES.find((x) => x.key === s) ?? CHRON_STATUSES[0];
+
+  const saveDraft = () => {
+    const seen = new Set<string>();
+    const list = [...draft]
+      .sort((a, b) => a.y * 12 + a.m - (b.y * 12 + b.m))
+      .map((it) => ({ ym: `${it.y}-${String(it.m).padStart(2, '0')}`, status: it.status }))
+      .filter((it) => {
+        if (seen.has(it.ym)) return false;
+        seen.add(it.ym);
+        return true;
+      });
+    if (list.length === 0) {
+      showToast('先选择至少一个月份');
+      return;
+    }
+    patch({ chronicleMonths: list });
+    setEditing(false);
+    showToast('恋爱编年史已生成 ♡');
+  };
+
+  // ---------------- 编辑视图（参考图3） ----------------
+  if (editing) {
+    return (
+      <SubShell title="恋爱编年史" onBack={() => setEditing(false)}>
+        <div className="mt-5 text-center">
+          <div className="text-[21px] font-extrabold text-[#26262b]">选择几个感情变化的月份</div>
+          <div className="mt-1.5 text-[12.5px] text-[#9a9aa2]">系统会自动补全年内月份</div>
+        </div>
+
+        <div className="mt-5 rounded-2xl border border-[#f6e3e7] bg-white/70 p-3.5" data-testid="chronicle-edit">
+          {draft.map((it, i) => (
+            <div key={i} className="flex items-center gap-2.5 py-2">
+              <span className="h-3.5 w-3.5 shrink-0 rounded-full border-[3px] border-[#f2536a] bg-white" />
+              <div className="flex flex-1 items-center gap-1 rounded-xl border border-[#f3d9df] bg-white px-2.5 py-2">
+                <select
+                  value={it.y}
+                  onChange={(e) => setDraft((d) => d.map((x, j) => (j === i ? { ...x, y: Number(e.target.value) } : x)))}
+                  className="bg-transparent text-[15px] font-semibold text-[#26262b] outline-none"
+                  aria-label="年份"
+                >
+                  {yearOpts.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-[#9a9aa2]">.</span>
+                <select
+                  value={it.m}
+                  onChange={(e) => setDraft((d) => d.map((x, j) => (j === i ? { ...x, m: Number(e.target.value) } : x)))}
+                  className="bg-transparent text-[15px] font-semibold text-[#26262b] outline-none"
+                  aria-label="月份"
+                >
+                  {Array.from({ length: 12 }, (_, mi) => (
+                    <option key={mi + 1} value={mi + 1}>
+                      {String(mi + 1).padStart(2, '0')}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={it.status}
+                  onChange={(e) => setDraft((d) => d.map((x, j) => (j === i ? { ...x, status: e.target.value } : x)))}
+                  className="ml-auto rounded-full px-2.5 py-1 text-[12.5px] font-semibold outline-none"
+                  style={{ background: statusMeta(it.status).bg, color: statusMeta(it.status).fg }}
+                  aria-label="状态"
+                >
+                  {CHRON_STATUSES.map((s) => (
+                    <option key={s.key} value={s.key}>
+                      {s.key}
+                    </option>
+                  ))}
+                </select>
               </div>
+              <button
+                type="button"
+                aria-label={`删除第${i + 1}条`}
+                data-testid="chronicle-remove-row"
+                onClick={() => setDraft((d) => d.filter((_, j) => j !== i))}
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[#fdeef2] text-[15px] font-bold text-[#f2536a] active:opacity-60"
+              >
+                −
+              </button>
             </div>
           ))}
+          <div className="py-2 pl-6">
+            <button
+              type="button"
+              data-testid="chronicle-add-row"
+              onClick={() => setDraft((d) => [...d, { y: now.getFullYear(), m: now.getMonth() + 1, status: '暗恋' }])}
+              className="w-full rounded-xl border-2 border-dashed border-[#f2536a] bg-[#fff5f7] py-2.5 text-[14px] font-medium text-[#f2536a] active:bg-[#ffeef2]"
+            >
+              ＋ 继续添加月份（可选）
+            </button>
+          </div>
         </div>
-      )}
+
+        <button
+          type="button"
+          data-testid="chronicle-generate"
+          onClick={saveDraft}
+          className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-full bg-[#f2536a] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98]"
+        >
+          生成我的编年史
+        </button>
+      </SubShell>
+    );
+  }
+
+  // ---------------- 结果视图（参考图2） ----------------
+  return (
+    <SubShell title="恋爱编年史" onBack={close}>
+      {/* 头部 */}
+      <div className="mt-3 px-1">
+        <div className="flex items-start gap-2.5">
+          <span className="mt-1 shrink-0">
+            <PixelHeart size={30} />
+          </span>
+          <h2 className="text-[21px] font-extrabold leading-snug text-[#26262b]">
+            记录几个关键月份，
+            <br />
+            生成你的<span className="text-[#f2536a]">恋爱编年史</span>
+          </h2>
+        </div>
+        <p className="mt-2 pl-[42px] text-[13px] text-[#9a9aa2]">用一张表，记录感情里的重要时刻</p>
+      </div>
+
+      {/* 结果表格 */}
+      <div className="mt-4 rounded-2xl bg-white p-4 shadow-sm" data-testid="chronicle-table-card">
+        <div className="text-[14.5px] font-bold text-[#26262b]">
+          我的恋爱编年史 <span className="text-[12px]">💗</span>
+        </div>
+        <div className="mt-3 overflow-x-auto pb-1" data-testid="chronicle-table">
+          <table className="border-separate border-spacing-0 text-center" style={{ minWidth: years.length > 3 ? 96 * Math.min(years.length + 1, 7) : 300 }}>
+            <thead>
+              <tr>
+                <th className="sticky left-0 z-10 bg-white px-1.5 py-1.5 text-[12px] font-semibold text-[#8e8e96]">月份</th>
+                {years.map((y) => (
+                  <th key={y} className="px-1.5 py-1.5 text-[12.5px] font-bold text-[#26262b]">
+                    {y}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: 12 }, (_, mi) => (
+                <tr key={mi}>
+                  <td className="sticky left-0 z-10 bg-white px-1.5 py-[2.5px] text-[11.5px] text-[#8e8e96]">{mi + 1}月</td>
+                  {years.map((y) => {
+                    const st = statusAt(y, mi);
+                    const meta = st ? CHRON_STATUSES.find((s) => s.key === st) : undefined;
+                    return (
+                      <td key={y} className="px-[2px] py-[2.5px]">
+                        <span
+                          className="block whitespace-nowrap rounded-md px-1.5 py-[3px] text-[11px]"
+                          style={meta ? { background: meta.bg, color: meta.fg } : { color: '#c9c9cf' }}
+                        >
+                          {meta ? meta.key : '—'}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {months.length === 0 && <div className="mt-2 text-center text-[12px] text-[#b6b6bd]">还没有关键月份，点下方「开始制作」记录第一段感情线吧</div>}
+      </div>
+
+      {/* 怎么玩 */}
+      <div className="mt-7 text-center text-[17px] font-bold text-[#f2536a]">✦ 怎么玩？ ✦</div>
+      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
+        {[
+          { n: '1', icon: <CalendarDays className="h-6 w-6" strokeWidth={1.8} />, bg: '#ffe1e9', fg: '#e0607e', label: '选择关键月份', desc: '记录感情里发生变化的时间点' },
+          { n: '2', icon: <Heart className="h-6 w-6" strokeWidth={1.8} />, bg: '#eae6fb', fg: '#8071cf', label: '选择对应状态', desc: '比如暗恋、暧昧、恋爱、分手、复合' },
+          { n: '3', icon: <Sparkles className="h-6 w-6" strokeWidth={1.8} />, bg: '#e0f2df', fg: '#3f9e54', label: '生成结果表', desc: '系统自动补全年内月份，一目了然' },
+        ].map((s, i) => (
+          <div key={s.n} className={`flex items-center gap-3.5 py-3 ${i > 0 ? 'border-t border-dashed border-[#f0e3e5]' : ''}`}>
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl" style={{ background: s.bg, color: s.fg }}>
+              {s.icon}
+            </span>
+            <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-[#f2536a] text-[10.5px] font-bold text-white">{s.n}</span>
+            <span className="min-w-0">
+              <span className="block text-[14.5px] font-semibold text-[#26262b]">{s.label}</span>
+              <span className="block text-[11.5px] text-[#b6b6bd]">{s.desc}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        data-testid="chronicle-start"
+        onClick={() => {
+          setDraft(
+            months.length > 0
+              ? months.map((it) => ({ y: Number(it.ym.slice(0, 4)), m: Number(it.ym.slice(5, 7)), status: it.status }))
+              : [{ y: now.getFullYear(), m: now.getMonth() + 1, status: '暗恋' }],
+          );
+          setEditing(true);
+        }}
+        className="mb-1 mt-5 flex h-[54px] w-full items-center justify-center rounded-full bg-[#f2536a] text-[18px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98]"
+      >
+        开始制作 ✨
+      </button>
+
+      {/* 恋爱大事记（原编年史事件：情侣轨迹弹层同步引用） */}
+      <div className="mt-9">
+        <div className="text-[16px] font-bold text-[#26262b]">恋爱大事记</div>
+        <div className="text-[12px] text-[#9a9aa2]">值得记住的时刻，也一条条留在这里</div>
+        <div className="mt-3 flex gap-2">
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && text.trim()) {
+                patch({ chronicle: [{ id: uid(), text: text.trim(), at: Date.now() }, ...state.chronicle] });
+                setText('');
+                showToast('已写入大事记 ✍️');
+              }
+            }}
+            placeholder="记录一件值得记住的小事…"
+            maxLength={40}
+            className="h-11 flex-1 rounded-xl bg-white px-3.5 text-[15px] shadow-sm outline-none placeholder:text-[#b6b6bd]"
+          />
+          <button
+            type="button"
+            data-testid="chronicle-add-event"
+            onClick={() => {
+              const t = text.trim();
+              if (!t) return;
+              patch({ chronicle: [{ id: uid(), text: t, at: Date.now() }, ...state.chronicle] });
+              setText('');
+              showToast('已写入大事记 ✍️');
+            }}
+            className="h-11 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-5 text-[15px] font-semibold text-white"
+          >
+            记录
+          </button>
+        </div>
+        {state.chronicle.length === 0 ? (
+          <div className="mt-8 text-center text-[14px] text-[#b6b6bd]">时间线还是空的，从今天开始记录吧</div>
+        ) : (
+          <div className="mt-5 space-y-0">
+            {state.chronicle.map((c, i) => (
+              <div key={c.id} className="relative flex gap-4 pb-6">
+                {i < state.chronicle.length - 1 && <span aria-hidden="true" className="absolute left-[7px] top-5 h-full w-[2px] bg-[#e3e3e8]" />}
+                <span className="relative z-10 mt-1.5 h-4 w-4 shrink-0 rounded-full border-[3px] border-[#8e8e97] bg-white" />
+                <div className="flex-1 rounded-2xl bg-white p-4 shadow-sm">
+                  <div className="text-[13px] text-[#9a9aa2]">{fmtDate(c.at)}</div>
+                  <div className="mt-1 text-[15px] leading-relaxed text-[#2c2c30]">{c.text}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </SubShell>
   );
 }
@@ -6256,76 +6849,194 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
   );
 }
 
-/** 情侣印象：互相贴标签 */
+/** 情侣印象词库（参考图4 风格，换一批轮换） */
+const IMPRESSION_POOL = [
+  '教科书式的恋爱',
+  '男友力max',
+  '一生幸福',
+  '笔芯',
+  '甜蜜暴击',
+  '默默吞下这碗狗粮',
+  '颜王cp',
+  '坐等喝喜酒',
+  '国民夫妇',
+  '天生一对',
+  '双向奔赴',
+  '甜甜的恋爱',
+  '模范情侣',
+  '灵魂伴侣',
+  '心动信号站',
+  '撒糖机',
+  '吵架不过夜',
+  '永远的神',
+  '每日亲亲',
+  '牵手散步',
+  '甜到冒泡',
+  '惹人羡慕',
+  '稳稳的幸福',
+  '小两口的快乐',
+];
+
+/** 情侣印象（第八轮重做，参考图4）：粉渐变横幅 + 双头像选贴的对象 + 词库点选贴标签（每人最多5个）+ 自定义 + 换一批 + 提交 */
 function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
-  const [tagMe, setTagMe] = useState('');
-  const [tagTa, setTagTa] = useState('');
-  const section = (title: string, tags: string[], onAdd: () => void, input: string, setInput: (v: string) => void, onRemove: (t: string) => void) => (
-    <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
-      <div className="text-[16px] font-semibold text-[#2c2c30]">{title}</div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        {tags.length === 0 && <span className="text-[13.5px] text-[#b6b6bd]">还没有标签，来贴第一张吧</span>}
-        {tags.map((t) => (
-          <span key={t} className="flex items-center gap-1 rounded-full bg-[#f0f0f3] px-3.5 py-1.5 text-[14px] text-[#3c3c42]">
-            {t}
-            <button type="button" onClick={() => onRemove(t)} aria-label={`删除标签${t}`} className="text-[#b6b6bd]">
-              ✕
-            </button>
-          </span>
-        ))}
-      </div>
-      <div className="mt-3 flex gap-2">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="加一个标签，比如「睡觉不老实」"
-          maxLength={10}
-          className="h-11 flex-1 rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] outline-none placeholder:text-[#b6b6bd]"
-        />
-        <button type="button" onClick={onAdd} className="h-11 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-5 text-[15px] font-semibold text-white">
-          添加
-        </button>
-      </div>
-    </div>
-  );
+  // 主 App 传入的 patch 实际支持函数式 updater（运行时是宽化函数），此处取函数式形态用于原子更新
+  const patchFn = patch as unknown as (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void;
+  const [target, setTarget] = useState<'me' | 'ta'>('ta');
+  const [custom, setCustom] = useState('');
+  const [batch, setBatch] = useState<string[]>(() => IMPRESSION_POOL.slice(0, 9));
+
+  const tags = target === 'me' ? state.impressionsMe : state.impressionsTa;
+  const otherTags = target === 'me' ? state.impressionsTa : state.impressionsMe;
+
+  const addTag = (raw: string) => {
+    const t = raw.trim();
+    if (!t) return;
+    if (tags.includes(t)) {
+      showToast('这个标签已经贴过啦');
+      return;
+    }
+    if (tags.length >= 5) {
+      showToast('最多贴 5 个词，先提交吧');
+      return;
+    }
+    // 函数式更新：快速连点也逐条生效（读 prev 而非 render 快照）
+    patchFn((prev) => {
+      const cur = target === 'me' ? prev.impressionsMe : prev.impressionsTa;
+      if (cur.includes(t) || cur.length >= 5) return {};
+      return target === 'me' ? { impressionsMe: [...cur, t] } : { impressionsTa: [...cur, t] };
+    });
+    showToast('标签已贴上 ♡');
+  };
+
+  const removeTag = (t: string) =>
+    patchFn((prev) =>
+      target === 'me' ? { impressionsMe: prev.impressionsMe.filter((x) => x !== t) } : { impressionsTa: prev.impressionsTa.filter((x) => x !== t) },
+    );
+
+  const shuffle = () => {
+    const used = new Set([...tags, ...otherTags]);
+    const src = IMPRESSION_POOL.filter((w) => !used.has(w));
+    const pool = src.length >= 9 ? src : [...src, ...IMPRESSION_POOL.filter((w) => !tags.includes(w))];
+    const out = [...new Set(pool)];
+    // 洗牌取前 9
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [out[i], out[j]] = [out[j], out[i]];
+    }
+    setBatch(out.slice(0, 9));
+  };
+
+  const avatarBlock = (side: 'me' | 'ta') => {
+    const active = target === side;
+    const name = side === 'me' ? state.meName || '我' : state.taName || 'TA';
+    const avatar = side === 'me' ? state.meAvatar : state.taAvatar;
+    return (
+      <button
+        type="button"
+        data-testid={`impress-target-${side}`}
+        onClick={() => setTarget(side)}
+        className="flex w-[76px] flex-col items-center gap-1.5"
+        aria-label={`贴给${side === 'me' ? '我' : 'TA'}`}
+      >
+        <span className={`relative h-[64px] w-[64px] overflow-hidden rounded-full bg-[#ececef] transition-shadow ${active ? 'shadow-[0_0_0_3px_#fff,0_0_0_6px_#f2536a]' : 'shadow-[0_0_0_3px_#fff,0_4px_12px_rgba(0,0,0,0.10)]'}`}>
+          {avatar ? <img src={avatar} alt={name} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={64} />}
+          {active && (
+            <span className="absolute -right-0.5 -top-0.5 grid h-5 w-5 place-items-center rounded-full bg-[#f2536a] text-[10px] font-bold text-white shadow">✓</span>
+          )}
+        </span>
+        <span className={`max-w-full truncate text-[12.5px] ${active ? 'font-bold text-[#f2536a]' : 'text-[#6e6e76]'}`}>{name}</span>
+      </button>
+    );
+  };
+
   return (
     <SubShell title="情侣印象" onBack={close}>
-      {section(
-        `TA 眼中的你（${state.impressionsMe.length}）`,
-        state.impressionsMe,
-        () => {
-          const t = tagMe.trim();
-          if (!t) return;
-          if (state.impressionsMe.includes(t)) {
-            showToast('这个标签已经有了');
-            return;
-          }
-          patch({ impressionsMe: [...state.impressionsMe, t] });
-          setTagMe('');
-          showToast('标签已贴上 ♡');
-        },
-        tagMe,
-        setTagMe,
-        (t) => patch({ impressionsMe: state.impressionsMe.filter((x) => x !== t) }),
-      )}
-      {section(
-        `你眼中的 TA（${state.impressionsTa.length}）`,
-        state.impressionsTa,
-        () => {
-          const t = tagTa.trim();
-          if (!t) return;
-          if (state.impressionsTa.includes(t)) {
-            showToast('这个标签已经有了');
-            return;
-          }
-          patch({ impressionsTa: [...state.impressionsTa, t] });
-          setTagTa('');
-          showToast('标签已贴上 ♡');
-        },
-        tagTa,
-        setTagTa,
-        (t) => patch({ impressionsTa: state.impressionsTa.filter((x) => x !== t) }),
-      )}
+      {/* 粉渐变横幅（参考图4） */}
+      <div className="-mx-3.5 -mt-0 select-none bg-[linear-gradient(120deg,#f789a4_0%,#f2536a_58%,#ee4b62_100%)] px-5 pb-12 pt-5 text-center">
+        <div className="flex items-center justify-center gap-1.5 text-[24px] font-extrabold leading-tight text-white">
+          先选
+          <span className="grid h-[34px] w-[34px] place-items-center rounded-full bg-white text-[21px] font-extrabold text-[#f2536a] shadow-[0_3px_10px_rgba(0,0,0,0.12)]">5</span>
+          个词自评一下你们吧
+        </div>
+      </div>
+
+      {/* 双头像卡（压在横幅上） */}
+      <div className="-mt-9 rounded-2xl bg-white px-4 pb-5 pt-5 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
+        <div className="flex items-start justify-center gap-9">{avatarBlock('me')}{avatarBlock('ta')}</div>
+        <div className="mt-4 border-t border-dashed border-[#e9e9ee] pt-3 text-center">
+          <div className="text-[12.5px] text-[#9a9aa2]">
+            {target === 'me' ? 'TA 眼中的你' : '你眼中的 TA'} · 已贴 {tags.length}/5
+          </div>
+          {tags.length === 0 ? (
+            <div className="mt-3 rounded-lg border-x-0 border-dashed border-[#f0e3e5] py-3 text-[14px] text-[#c58f9c]" data-testid="impress-empty">
+              还没有人贴过印象哦
+            </div>
+          ) : (
+            <div className="mt-3 flex flex-wrap justify-center gap-2" data-testid="impress-current-tags">
+              {tags.map((t) => (
+                <span key={t} className="flex items-center gap-1 rounded-full bg-[#fff0f4] px-3 py-1.5 text-[13px] text-[#e0607e]">
+                  {t}
+                  <button type="button" onClick={() => removeTag(t)} aria-label={`删除标签${t}`} className="text-[#e5a0b0] active:opacity-60">
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 词库标签墙 */}
+      <div className="mt-5 flex flex-wrap gap-2.5" data-testid="impress-pool">
+        {batch.map((w) => (
+          <button
+            key={w}
+            type="button"
+            onClick={() => addTag(w)}
+            className="rounded-lg border border-[#f7dbe2] bg-white px-3.5 py-2 text-[13.5px] text-[#3c3c42] shadow-[0_2px_8px_rgba(242,83,106,0.10)] transition-transform active:scale-95"
+          >
+            {w}
+          </button>
+        ))}
+      </div>
+
+      {/* 自定义 + 换一批 */}
+      <div className="mt-4 flex items-center gap-2.5">
+        <input
+          value={custom}
+          onChange={(e) => setCustom(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && custom.trim()) {
+              addTag(custom);
+              setCustom('');
+            }
+          }}
+          placeholder="自定义…"
+          maxLength={10}
+          className="h-11 flex-1 rounded-xl border-2 border-dashed border-[#f0dfe3] bg-white/70 px-3.5 text-[14px] outline-none placeholder:text-[#c9c9cf]"
+        />
+        <button
+          type="button"
+          onClick={shuffle}
+          data-testid="impress-shuffle"
+          className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-[14px] font-medium text-[#f2536a] active:opacity-60"
+        >
+          <RefreshCcw className="h-4 w-4" />
+          换一批
+        </button>
+      </div>
+
+      {/* 底部提交（吸底） */}
+      <div className="sticky bottom-0 -mx-3.5 mt-6 bg-[linear-gradient(180deg,rgba(255,255,255,0),#fff_38%)] px-3.5 pb-6 pt-4">
+        <button
+          type="button"
+          data-testid="impress-submit"
+          onClick={() => showToast(tags.length > 0 ? '印象已提交，甜甜的恋爱值 +1 ♡' : '先选几个词再提交吧')}
+          className="h-[50px] w-full rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
+        >
+          提 交
+        </button>
+      </div>
     </SubShell>
   );
 }

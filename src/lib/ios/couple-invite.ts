@@ -24,7 +24,8 @@
 import { kvGet, kvSet, kvGetScoped, kvSetScoped } from './idb-kv';
 import { genId } from './db';
 import { getContact, listContacts, ownerProfileFor } from './contacts-store';
-import { avatarFor, displayNameOf, type ContactRecord } from '@/lib/contacts';
+import { getActiveAccountFor } from './accounts';
+import { avatarFor, displayNameOf, socialNameOf, type ContactRecord } from '@/lib/contacts';
 import { pushChatNotification } from './island-notify';
 import { wxUnreads, qqUnreads } from '@/lib/unread-store';
 import { isProactiveChatActive } from './proactive-msg';
@@ -42,6 +43,54 @@ export interface CoupleRelCardData {
   toName: string; // 接收方名字
   app: CoupleChannel; // 渠道（副文案「让微信帮我们记录每日点滴」）
   contactId: string; // 卡片所在会话的联系人 id
+}
+
+/** 渠道身份：指定渠道（微信/QQ）下的「我」与「TA」的名字/头像 */
+export interface CoupleChannelIdentity {
+  meName: string;
+  meAvatar: string | null;
+  taName: string;
+  taAvatar: string | null;
+}
+
+/** 指定渠道当前账号对应的「我」的联系人档案（main=机主；小号/匿名号=档案联系人；与 contacts-store.pickOwnerContact 同规则） */
+async function channelOwnerContact(channel: CoupleChannel): Promise<ContactRecord | undefined> {
+  try {
+    const acc = getActiveAccountFor(channel);
+    const list = await listContacts();
+    if (acc.kind === 'main') return list.find((c) => c.kind === 'user' && !c.altOf);
+    const byAlt = list.find((c) => c.altOf === acc.id);
+    if (byAlt) return byAlt;
+    if (acc.ownerContactId) return list.find((c) => c.id === acc.ownerContactId);
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 渠道身份（用户要求：用微信邀请 → 双方名字头像跟随微信；QQ 邀请 → 跟随 QQ）：
+ * 我 = 该渠道当前账号档案的社交名（昵称??真名）+ 分 App 头像槽位；TA = 展示名 + 分 App 头像槽位。
+ */
+export async function channelIdentityOf(channel: CoupleChannel, partnerContactId: string | null): Promise<CoupleChannelIdentity> {
+  const out: CoupleChannelIdentity = { meName: '', meAvatar: null, taName: '', taAvatar: null };
+  const me = await channelOwnerContact(channel);
+  if (me) {
+    out.meName = socialNameOf(me);
+    out.meAvatar = avatarFor(me, channel);
+  }
+  if (partnerContactId) {
+    try {
+      const ta = await getContact(partnerContactId);
+      if (ta) {
+        out.taName = displayNameOf(ta);
+        out.taAvatar = avatarFor(ta, channel);
+      }
+    } catch {
+      /* 联系人读取失败静默，保留空值 */
+    }
+  }
+  return out;
 }
 
 /** 待处理邀请（全局唯一：同一时间最多一个） */
@@ -245,32 +294,14 @@ function todayKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** 建立关系：写全局 couple-space:state（accepted/partner/纪念日/恋人资料/我的机主资料）+ 清 pendingInvite */
+/** 建立关系：写全局 couple-space:state（accepted/partner/纪念日/恋人资料/双方渠道身份）+ 清 pendingInvite */
 async function establishRelation(channel: CoupleChannel, contactId: string): Promise<void> {
-  let taName = '';
-  let taAvatar: string | null = null;
-  try {
-    const c = await getContact(contactId);
-    if (c) {
-      taName = displayNameOf(c);
-      taAvatar = c.avatar ?? null;
-    }
-  } catch {
-    /* 联系人读取失败静默 */
-  }
-  // 我的信息按全局机主资料（联系人 App kind=user）回填，保证情侣界面头像/名字与全局一致
-  let meName = '';
-  let meAvatar: string | null = null;
-  try {
-    const list = await listContacts();
-    const me = list.find((c) => c.kind === 'user' && !c.altOf);
-    if (me) {
-      meName = me.name?.trim() || '';
-      meAvatar = me.avatar ?? null;
-    }
-  } catch {
-    /* 机主资料读取失败静默 */
-  }
+  // 双方名字/头像跟随邀请渠道（微信邀请→微信身份；QQ 邀请→QQ 身份，含多账号与分 App 头像槽位）
+  const idn = await channelIdentityOf(channel, contactId);
+  const taName = idn.taName;
+  const taAvatar = idn.taAvatar;
+  const meName = idn.meName;
+  const meAvatar = idn.meAvatar;
   try {
     const s = kvGet<Record<string, unknown>>(STATE_KEY) ?? {};
     kvSet(STATE_KEY, {

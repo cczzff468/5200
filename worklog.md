@@ -19554,3 +19554,25 @@ Stage Summary:
 - 数据模型新增 replyBest/pactTitle/pactPreamble/pactClauses/pactSignMe/pactSignTa/pactMeAt/pactTaAt（默认值合并，旧数据零迁移）
 - 关键决策：①全局信息以联系人 App 为准（我=kind=user 机主，TA=绑定联系人），打开 App 即同步②回复挑战 12 关存活率扣到 0 判负，replyBest 记最深关数③协议签署先我后 TA，TA 签完自动 pactAt 生效盖红章④邀请卡点击用 switchToApp 支持应用内直切（openApp 有 activeApp 守卫）
 - 已 commit 并推送 origin main
+
+---
+Task ID: couple-round8
+Agent: Z.ai Code (main)
+Task: 第八轮——恋人空间身份跟随邀请渠道（微信→微信身份/QQ→QQ身份）、恋爱协议多份保存+回看、图标换用户提供的粉色双心图、情侣轨迹真实地图（高德瓦片+真实位置+真实距离+可拖动缩放）、恋爱编年史/情侣印象按参考截图重做美化
+
+Work Log:
+- 图标：用户上传的「恋人空间 iOS 1024x1024」粉色双心图覆盖 public/icons/couple.png（registry 不变，AppIconTile/Spotlight 自动生效）
+- 渠道身份：couple-invite.ts 新增 channelIdentityOf(channel, partnerContactId)——我 = 该渠道当前账号档案（getActiveAccountFor + 大号机主/小号 altOf 档案，与 pickOwnerContact 同规则）的 socialNameOf（昵称??真名）+ avatarFor(分App头像槽位)；TA = displayNameOf + avatarFor(channel)；establishRelation 改用它写入 meName/meAvatar/taName/taAvatar；couple-space.tsx 全局同步 effect 改为按 invite.partnerApp 渠道同步（联系人在微信/QQ 换头像/改名后打开 App 自动跟随）
+- 恋爱协议多份：CoupleState 新增 pacts: CouplePactRecord[]（id/title/preamble/clauses/双签名/双日期/at 生效时间）；TA 签完自动存档（sendToTa 内 rec 组装）；主页新增「已保存的协议书 N」列表（条目=标题+条款数+生效日期，点击进只读查看视图）+「+ 添加另一份」（重置草稿为默认模板进编辑，已存档不受影响）；查看视图带生效横幅+删除该份+返回；PactPaper 重构为 PactPaperData 通用数据入参（预览/签署/回看三处共用）
+- 情侣轨迹真实地图：安装 leaflet@1.9.4；新增 /api/map-tile（高德 webrd 街道瓦片服务端代理——OSM/carto 在沙箱不可达、高德可达，内存 LRU 320 张）+ /api/geocode（Open-Meteo Geocoding 代理，中文城市名，4 次退避重试+5min 缓存——上游偶发空结果）；TrackPage 重做：RealCoupleMap（Leaflet 可拖动/滚轮缩放/双击缩放，瓦片走代理）+ wgs84ToGcj02 纠偏（高德瓦片 GCJ02 索引，marker 纠偏后才落准）+ haversineKm 真实距离 + 双方头像 divIcon marker（名字·我/TA 标签）+ 虚线连线 + 中点「相距 X km」标签 + 相遇地点📍marker + 十字准星回中 + fitBounds 自适应；弹层改 3 个 PlaceSearchRow（我的位置/TA的位置/相遇地点，搜索→点选写入真实经纬度）+ 大事记保留；状态新增 myLoc/taLoc/meetLoc: CouplePlace|null
+- 恋爱编年史重做（参考图2/3）：CHRON_STATUSES 六状态色（暗恋黄/暧昧粉/恋爱橙红/分手紫/复合橙/结婚绿）；结果视图=头部（PixelHeart+粉字标题）+ 年×月表格（年份列=出现过的年份+当前年，月份行 sticky，补全规则=「≤该月的最近一次关键选择」跨年延续，空档「—」）+「怎么玩？」三步卡+开始制作；编辑视图=时间轴行（年/月/状态三个原生 select，状态彩色 chip）+ 继续添加月份 + − 删除 + 生成（排序+按 ym 去重）；原编年史事件保留为「恋爱大事记」区（情侣轨迹弹层引用不断）；状态新增 chronicleMonths: {ym,status}[]
+- 情侣印象重做（参考图4）：24 词词库；粉渐变横幅「先选⑤个词自评一下你们吧」（白圆5徽章）；双头像卡压横幅（点击选贴给谁，选中粉环+✓，名字取全局 meName/taName）；已贴区（TA眼中的你/你眼中的TA·已贴 N/5，空态「还没有人贴过印象哦」，标签可删）；词库标签墙点选贴（每人限5，函数式 patch updater 防快速连点丢更新——主 patch 签名宽化支持函数式）+ 自定义输入 + 换一批（排除已贴洗牌取9）+ 吸底提交（粉渐变，sticky bottom）
+- E2E（agent-browser）：种子联系人（机主林深/昵称凑凑，分渠道头像 wx=#3f444e「凑」qq=#26292f「深」；小雪 wx好友；晚晚 qq好友）→ 微信邀请小雪：主页显示 凑凑+微信头像/小雪+微信头像 ✓ → 标题点击回主屏 ✓ → 设置解除关系 → QQ让晚晚邀请：按钮变「接受邀请」→ 接受后 凑凑+「深」QQ头像/晚晚+QQ头像 ✓（小雪在QQ列表置灰「已邀请过」）→ 轨迹页：高德地图渲染 ✓ → 搜北京/上海选点 → 地图双头像 marker+虚线+「相距 1,068 km」（北京-上海真实大圆距离）✓ → 拖动/滚轮缩放 ✓ → 十字准星回中 ✓ → 恋爱协议：创建→我签「凑凑」→TA签「晚晚」→生效红章+自动存档 → 主页「已保存的协议书 1」→ 点击查看（只读协议书+生效横幅+删除）✓ → +添加另一份（草稿重置，存档保留 1 份）✓ → 编年史：开始制作→3 行（2024.08暗恋/2025.02恋爱/2025.10结婚）→生成→表格 2024.8-12暗恋、2025.1暗恋（跨年延续）、2025.2-9恋爱、2025.10-2026.12结婚（DOM 数据验证）✓ → 情侣印象：连点4词全贴上（函数式更新生效）→ 换一批（排除已贴）→ 切「贴给我」贴「天生一对」→ 提交 toast ✓；主屏图标 next/image 渲染新粉色双心图 ✓
+- tsc 0 错误；eslint 改动文件 0 问题（修复 RealCoupleMap render 期 dataRef 赋值→useEffect，删除2个未使用 eslint-disable）
+- 稳定性：open-meteo 偶发空结果 → geocode 路由 4 次退避重试+缓存后 5/5 稳定；dev 一次 OOM 重启（会话数据 IndexedDB 持久不受影响）
+
+Stage Summary:
+- 三文件改动：couple-space.tsx（+约600 行）、couple-invite.ts（渠道身份）、新增 api/map-tile + api/geocode；leaflet 依赖
+- 数据模型新增 myLoc/taLoc/meetLoc/chronicleMonths/pacts（loadCoupleState 默认值合并，旧数据零迁移）
+- 关键决策：①渠道身份取「该渠道当前账号档案」而非固定机主（小号登录微信时跟随小号身份）②地图走服务端瓦片代理保证沙箱/预览可达（海外瓦片全被墙）③geocode 用 Open-Meteo（Nominatim/Photon 不可达）+重试抗抖动④协议生效自动存档而非手动保存（用户「弄完以后保存下来」）⑤编年史补全规则「最近一次≤该月的状态」跨年延续，与参考图行为一致
+- 已 commit 并推送 origin main
