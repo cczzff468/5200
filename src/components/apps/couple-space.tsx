@@ -78,7 +78,7 @@ import {
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
-import { coupleMemoryDiff, runCoupleAiTick } from '@/lib/ios/couple-ai';
+import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiTickTrail, coupleMemoryDiff, runCoupleAiTick, scheduleAiReply, syncLocFromContacts } from '@/lib/ios/couple-ai';
 import { displayNameOf, isFriendIn } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
 import L from 'leaflet';
@@ -174,7 +174,7 @@ interface CoupleState {
   taMissYou: number; // TA（AI）想你累计（第九轮：AI 每天想你）
   taMissYouByDay: Record<string, number>; // TA 每日想你
   taTreeStreak: { last: string | null; n: number }; // TA 连续浇树
-  quizTa: { q: string; a: string; at: number }[]; // AI 的问答回答（每题保留最近一次）
+  quizTa: { q: string; a: string; at: number; withMe?: boolean }[]; // AI 的问答回答（每题保留最近一次；withMe=和我一起答的）
   aiImpressions: string[]; // AI 贴给我的印象标签
   aiImpressAt: number | null; // AI 上次贴印象时间
   aiAnnivKeys: string[]; // AI 添加的纪念日 key
@@ -182,6 +182,10 @@ interface CoupleState {
   aiPact: { title: string; preamble: string; clauses: string[]; at: number } | null; // AI 拟的协议草稿（等我签）
   aiLog: { id: string; text: string; at: number }[]; // AI 行为日志
   invite: CoupleInviteMeta; // 邀请元数据（全局唯一：恋人绑定/待处理邀请/每联系人限一次历史）
+  comments: { id: string; key: string; from: 'me' | 'ta'; text: string; at: number }[]; // 通用留言线程（第十轮）：相册照片/日记/印象/挑战讨论下的双向留言
+  taTrail: { dateKey: string; items: { t: string; place: string; note: string }[]; at: number } | null; // TA 今天去过的地方（人设记忆生成，灰色字展示）
+  replyTa: { active: boolean; picks: Record<string, { pick: number; say: string; at: number }>; mePicks: Record<string, { pick: number; text: string }>; startedAt: number; endedAt: number | null } | null; // 回复挑战双人闯关（TA 同时作答）
+  locFollow: { me?: string | null; ta?: string | null }; // 轨迹位置跟随联系人 APP：上次同步的 region 文本
 }
 
 const STATE_KEY = 'couple-space:state';
@@ -265,6 +269,10 @@ function defaultState(): CoupleState {
     aiPact: null,
     aiLog: [],
     invite: emptyInviteMeta(),
+    comments: [],
+    taTrail: null,
+    replyTa: null,
+    locFollow: {},
   };
 }
 
@@ -1909,6 +1917,96 @@ function SubShell(props: { title: string; onBack: () => void; children: React.Re
 
 // ---------------- 子页路由 ----------------
 
+/** 主组件 patch 的宽化签名（支持函数式 updater；运行时总是宽化的） */
+type PatchFn = (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void;
+
+/**
+ * 通用留言线程（第十轮）：相册照片/心情日记/情侣印象/回复挑战讨论区共用。
+ * 我发消息（粉色右侧）→ AI（TA）根据人设记忆自动回复（蓝色左侧，可多轮往返）；
+ * 每一条都进恋人（AI）的记忆（coupleMemoryDiff 统一钩子）。
+ */
+function CommentThread({
+  state,
+  patch,
+  threadKey,
+  hint,
+  dark = false,
+  testId,
+}: {
+  state: CoupleState;
+  patch: PatchFn;
+  threadKey: string;
+  hint?: string;
+  dark?: boolean; // 深色背景（相册大图查看）适配
+  testId?: string;
+}) {
+  const list = useMemo(() => (state.comments ?? []).filter((c) => c.key === threadKey), [state.comments, threadKey]);
+  const [text, setText] = useState('');
+  const me = state.meName || '我';
+  const ta = state.taName || 'TA';
+  const send = () => {
+    const t = text.trim();
+    if (!t) return;
+    const c = { id: uid(), key: threadKey, from: 'me' as const, text: t, at: Date.now() };
+    patch((prev) => ({ comments: [...(prev.comments ?? []), c] }));
+    setText('');
+    scheduleAiReply(threadKey); // AI（TA）延时回复（fire-and-forget）
+  };
+  const inputCls = dark
+    ? 'h-10 flex-1 rounded-full bg-white/10 px-4 text-[13.5px] text-white outline-none placeholder:text-white/35'
+    : 'h-10 flex-1 rounded-full bg-[#f3f3f5] px-4 text-[13.5px] text-[#2c2c30] outline-none placeholder:text-[#b6b6bd]';
+  return (
+    <div data-testid={testId} className={dark ? 'rounded-2xl bg-white/[0.06] p-3.5 ring-1 ring-white/10' : 'rounded-2xl bg-[#f7f7f9] p-3.5'}>
+      <div className={dark ? 'text-[12.5px] font-semibold text-white/60' : 'text-[12.5px] font-semibold text-[#6e6e76]'}>
+        {hint || `和 ${ta} 聊聊`}
+        {list.length > 0 && <span className="ml-1.5 font-normal opacity-60">· {list.length} 条留言</span>}
+      </div>
+      {list.length > 0 && (
+        <div className={`mt-2.5 space-y-2 overflow-y-auto ${dark ? 'max-h-36' : 'max-h-44'}`} style={{ scrollbarWidth: 'thin' }}>
+          {list.map((c) =>
+            c.from === 'ta' ? (
+              <div key={c.id} className="flex items-end gap-1.5">
+                <span className={`max-w-[82%] rounded-2xl rounded-bl-sm px-3 py-2 text-[13px] leading-relaxed ${dark ? 'bg-[#7f96e0]/25 text-[#c3cff5]' : 'bg-[#eef2fd] text-[#5a74c4]'}`}>
+                  <span className={`mr-1.5 text-[10.5px] font-semibold ${dark ? 'text-[#8fa4ef]' : 'text-[#7f96e0]'}`}>{ta}</span>
+                  {c.text}
+                </span>
+              </div>
+            ) : (
+              <div key={c.id} className="flex items-end justify-end gap-1.5">
+                <span className={`max-w-[82%] rounded-2xl rounded-br-sm px-3 py-2 text-[13px] leading-relaxed ${dark ? 'bg-[#f9a8d4]/25 text-[#f9c9da]' : 'bg-[#fdeef3] text-[#d4547a]'}`}>
+                  <span className={`mr-1.5 text-[10.5px] font-semibold ${dark ? 'text-[#f9a8d4]' : 'text-[#e0607e]'}`}>{me}</span>
+                  {c.text}
+                </span>
+              </div>
+            ),
+          )}
+        </div>
+      )}
+      <div className="mt-2.5 flex items-center gap-2">
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') send();
+          }}
+          placeholder={`想对 ${ta} 说什么…`}
+          maxLength={80}
+          className={inputCls}
+        />
+        <button
+          type="button"
+          onClick={send}
+          disabled={!text.trim()}
+          aria-label="发送留言"
+          className={`flex h-10 shrink-0 items-center gap-1 rounded-full px-4 text-[13px] font-semibold text-white transition-opacity disabled:opacity-40 ${dark ? 'bg-[linear-gradient(135deg,#f9a8d4,#f06e96)]' : 'bg-[linear-gradient(135deg,#5c5c64,#3f3f46)]'}`}
+        >
+          发送
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SubRouter(props: {
   sub: SubPage;
   state: CoupleState;
@@ -2806,8 +2904,30 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
   const [sheet, setSheet] = useState(false);
   const [fitSignal, setFitSignal] = useState(0);
 
+  // 第十轮：①位置跟随联系人 APP（TA/机主联系人的「地区」变化时重新 geocode 同步）
+  // ②TA 今日行踪（人设记忆生成：今天去了哪里/什么位置/什么店铺，灰色字展示，每日一次）
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (syncedRef.current) return;
+    syncedRef.current = true;
+    void (async () => {
+      try {
+        const msgs = await syncLocFromContacts();
+        if (msgs.length > 0) showToast(msgs[0]);
+      } catch {
+        /* 静默 */
+      }
+      try {
+        aiTickTrail();
+      } catch {
+        /* 静默 */
+      }
+    })();
+  }, [showToast]);
+
   // 真实距离：双方都设置了真实位置才有
   const distKm = state.myLoc && state.taLoc ? haversineKm(state.myLoc.lat, state.myLoc.lng, state.taLoc.lat, state.taLoc.lng) : null;
+  const trailToday = state.taTrail && state.taTrail.dateKey === todayKey() ? state.taTrail : null;
 
   const toolBtn = 'flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#6e6e76] shadow-[0_3px_10px_rgba(0,0,0,0.10)] transition-opacity active:opacity-60';
 
@@ -2906,6 +3026,24 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
           </button>
         </div>
 
+        {/* TA 今天去了哪里（人设记忆生成，灰色字）：半透明卡叠在地图底部 */}
+        {trailToday && trailToday.items.length > 0 && (
+          <div className="absolute inset-x-3 bottom-[72px] z-10 rounded-2xl bg-white/85 p-3 shadow-[0_6px_18px_rgba(0,0,0,0.08)] backdrop-blur-md" data-testid="trail-card">
+            <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-[#8e8e96]">
+              <MapPin className="h-3 w-3" />
+              {state.taName || 'TA'} 今天去了哪里
+            </div>
+            <div className="mt-1 space-y-0.5">
+              {trailToday.items.map((i, k) => (
+                <div key={`${i.t}-${k}`} className="text-[11.5px] leading-relaxed text-[#9a9aa2]" data-testid="trail-item">
+                  {i.t} {i.place}
+                  {i.note ? ` · ${i.note}` : ''}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* 底部历史轨迹按钮 */}
         <button
           type="button"
@@ -2929,6 +3067,24 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
               已经一起走过 {days ?? '--'} 天{state.meetLoc?.name ? ` · 相遇在${state.meetLoc.name}` : state.meetPlace ? ` · 相遇在${state.meetPlace}` : ''}
               {distKm != null ? ` · 现在相距 ${fmtKm(distKm)}` : ''}
             </div>
+            <div className="mt-1.5 rounded-xl bg-[#f7f7f9] px-3 py-2 text-[11.5px] leading-relaxed text-[#9a9aa2]">
+              双方位置跟随联系人 App 里填写的地区：联系人资料里改了位置，这里的定位会自动跟着变；也可以在下面搜索手动微调。
+            </div>
+
+            {/* TA 今天的行踪（人设记忆生成，灰色字） */}
+            {trailToday && trailToday.items.length > 0 && (
+              <div className="mt-3 rounded-2xl bg-[#f7f7f9] p-3.5" data-testid="trail-sheet">
+                <div className="text-[12.5px] font-semibold text-[#8e8e96]">{state.taName || 'TA'} 今天去了哪里</div>
+                <div className="mt-1.5 space-y-1">
+                  {trailToday.items.map((i, k) => (
+                    <div key={`${i.t}-${k}`} className="text-[12px] leading-relaxed text-[#9a9aa2]">
+                      {i.t} {i.place}
+                      {i.note ? ` · ${i.note}` : ''}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* 真实位置搜索（第八轮：地址 → 真实经纬度 → 真实地图 marker + 真实距离） */}
             <PlaceSearchRow
@@ -3010,10 +3166,10 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
     for (const r of state.quiz) if (!map[r.q] || map[r.q].at < r.at) map[r.q] = { a: r.a, at: r.at };
     return map;
   }, [state.quiz]);
-  /** TA（AI）的回答（第九轮：AI 会主动回答，每题取最近一次） */
+  /** TA（AI）的回答（第九轮主动答 + 第十轮和我一起答，每题取最近一次） */
   const taByQ = useMemo(() => {
-    const map: Record<string, { a: string; at: number }> = {};
-    for (const r of state.quizTa ?? []) if (!map[r.q] || map[r.q].at < r.at) map[r.q] = { a: r.a, at: r.at };
+    const map: Record<string, { a: string; at: number; withMe?: boolean }> = {};
+    for (const r of state.quizTa ?? []) if (!map[r.q] || map[r.q].at < r.at) map[r.q] = { a: r.a, at: r.at, withMe: r.withMe };
     return map;
   }, [state.quizTa]);
 
@@ -3035,7 +3191,9 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
     const text = answer.trim();
     if (!text) return;
     patch({ quiz: [{ id: uid(), q, a: text, at: Date.now() }, ...state.quiz.filter((r) => r.q !== q)] });
-    showToast('回答已记录 ♡');
+    // 第十轮：TA 和我一起作答（延时出现，呼应我的回答；即使 TA 答过也会重新呼应我的新答案；记忆写入在 aiAnswerWithMe 内）
+    aiAnswerWithMe(q, text);
+    showToast('回答已记录，TA 也在写 TA 的答案…');
     setView('detail');
   };
   const addCustom = () => {
@@ -3153,7 +3311,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
       {view === 'detail' && (
         <div className="flex-1 overflow-y-auto overscroll-contain px-6 pb-28 pt-3">
           {QuestionHead}
-          {/* TA 的回答（第九轮：AI 会主动回答，并知道我答了什么） */}
+          {/* TA 的回答（第九轮主动答 + 第十轮和我一起答） */}
           <div className="mt-6">
             <div className="text-[15px] font-medium text-[#8f9fe8]">{ta}（TA）</div>
             {taByQ[q] ? (
@@ -3161,7 +3319,9 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
                 <div className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-[#4a4a52]" data-testid="quiz-ta-answer">
                   {taByQ[q].a}
                 </div>
-                <div className="mt-1.5 text-[12px] text-[#c9c9d0]">{fmtDate(taByQ[q].at)} · TA 自己主动写的</div>
+                <div className="mt-1.5 text-[12px] text-[#c9c9d0]" data-testid="quiz-ta-stamp">
+                  {fmtDate(taByQ[q].at)} · {taByQ[q].withMe ? '和你一起答的' : 'TA 自己主动写的'}
+                </div>
               </>
             ) : (
               <div className="mt-2 text-[15px] leading-relaxed text-[#b9b9c0]">还没有回答问题哦</div>
@@ -4138,15 +4298,27 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
               {state.moods
                 .filter((m) => (m.dateKey || fmtDate(m.at)) === daySheet)
                 .map((m) => (
-                  <div key={m.id} className="flex items-start gap-3 rounded-2xl bg-[#f7f7f9] p-3.5">
-                    <span className="shrink-0"><MoodFace mood={m.emoji} size={34} /></span>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[13.5px] leading-relaxed text-[#2c2c30]">{m.text || '（没说话，就是心情不好不坏）'}</div>
-                      {m.photo && <img src={m.photo} alt="心情照片" className="mt-2 max-h-40 w-full rounded-xl object-cover" draggable={false} />}
+                  <div key={m.id} className="rounded-2xl bg-[#f7f7f9] p-3.5">
+                    <div className="flex items-start gap-3">
+                      <span className="shrink-0"><MoodFace mood={m.emoji} size={34} /></span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[13.5px] leading-relaxed text-[#2c2c30]">{m.text || '（没说话，就是心情不好不坏）'}</div>
+                        {m.photo && <img src={m.photo} alt="心情照片" className="mt-2 max-h-40 w-full rounded-xl object-cover" draggable={false} />}
+                      </div>
+                      {m.from === 'ta' && (
+                        <span className="shrink-0 rounded-full bg-[#eef2fd] px-2 py-0.5 text-[10px] font-bold text-[#7f96e0]">TA 写的</span>
+                      )}
                     </div>
-                    {m.from === 'ta' && (
-                      <span className="shrink-0 rounded-full bg-[#eef2fd] px-2 py-0.5 text-[10px] font-bold text-[#7f96e0]">TA 写的</span>
-                    )}
+                    {/* 第十轮：日记下面的双向留言（TA 的日记我也能留言，TA 会回复；全部进记忆） */}
+                    <div className="mt-3 border-t border-dashed border-[#e6e6eb] pt-3">
+                      <CommentThread
+                        state={state}
+                        patch={patch as unknown as PatchFn}
+                        threadKey={`mood:${m.id}`}
+                        hint={m.from === 'ta' ? `在 ${state.taName || 'TA'} 的日记下留言` : '这篇日记的留言'}
+                        testId={`mood-comment-${m.id}`}
+                      />
+                    </div>
                   </div>
                 ))}
             </div>
@@ -6660,11 +6832,16 @@ function StonePage({ state, patch, showToast, close }: { state: CoupleState; pat
 
 /** 回复挑战（第七轮重做，参考图1/2）：黑底粉强调；挑战首页 + 12 关高危回复玩法 */
 function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
+  // 第十轮双人模式：我发起挑战时 TA（AI）同时开始，每关双方的选择彼此可见（我=粉框 / TA=蓝框），
+  // TA 选完在他的选择下面说看法，看法下面的讨论区可以反驳 TA（会进 TA 的记忆）
+  const patchFn = patch as unknown as (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void;
   const [view, setView] = useState<'home' | 'play' | 'dead' | 'clear'>('home');
   const [lv, setLv] = useState(0);
   const [stats, setStats] = useState({ tm: 72, jc: 42, af: 48, sc: 78 });
   const [picked, setPicked] = useState<number | null>(null);
   const [players, setPlayers] = useState(791662);
+  const [settled, setSettled] = useState(false); // 数值已结算（等 TA 的选择/看法看完后手动下一关）
+  const [outcome, setOutcome] = useState<null | 'next' | 'dead' | 'clear'>(null);
 
   /** 全网挑战人数：每 2.4s 微涨，模拟全网实时在玩 */
   useEffect(() => {
@@ -6676,34 +6853,64 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
     setLv(0);
     setStats({ tm: 72, jc: 42, af: 48, sc: 78 });
     setPicked(null);
+    setSettled(false);
+    setOutcome(null);
+    // 双人模式：TA 同时开始挑战（coupleMemoryDiff 检测 active false→true 自动写进 TA 的记忆）
+    patch({ replyTa: { active: true, picks: {}, mePicks: {}, startedAt: Date.now(), endedAt: null } });
     setView('play');
   };
 
   const clamp = (n: number) => Math.max(0, Math.min(100, n));
 
-  /** 选一个反应：先亮出点评，1.6s 后结算数值 → 下一关 / 死亡 / 通关 */
+  /** 挑战结束：存纪录 + 双人战况归档（endedAt） */
+  const finish = (kind: 'dead' | 'clear', bestLv: number) => {
+    patchFn((prev) => ({
+      replyBest: Math.max(prev.replyBest ?? 0, bestLv),
+      replyTa: prev.replyTa ? { ...prev.replyTa, active: false, endedAt: Date.now() } : prev.replyTa,
+    }));
+    setView(kind);
+  };
+
+  /** 看完 TA 的选择和看法后手动进下一关（死亡/通关则去结算页） */
+  const goNext = () => {
+    if (outcome === 'dead') {
+      finish('dead', lv + 1);
+    } else if (outcome === 'clear') {
+      finish('clear', REPLY_LEVELS.length);
+    } else {
+      setLv(lv + 1);
+      setPicked(null);
+      setSettled(false);
+      setOutcome(null);
+    }
+  };
+
+  /** 选一个反应：亮出点评 → 1.6s 后结算数值；TA 同时作答（0.9~2.4s 后出蓝色选择+看法） */
   const pick = (i: number) => {
     if (picked != null) return;
     setPicked(i);
-    const d = REPLY_LEVELS[lv].opts[i].d;
+    const level = REPLY_LEVELS[lv];
+    // 记录我的选择（TA 能看到），并让 TA 同步作答（写 replyTa.picks[lv] + 看法 + 记忆）
+    patchFn((prev) =>
+      prev.replyTa
+        ? { replyTa: { ...prev.replyTa, active: true, mePicks: { ...prev.replyTa.mePicks, [String(lv)]: { pick: i, text: level.opts[i].t } } } }
+        : {},
+    );
+    aiReplyPickForLevel(lv, level.scene, level.quote, level.opts.map((o) => o.t), i, level.opts[i].t);
     window.setTimeout(() => {
+      const d = level.opts[i].d;
       const ns = { tm: clamp(stats.tm + d[0]), jc: clamp(stats.jc + d[1]), af: clamp(stats.af + d[2]), sc: stats.sc + d[3] };
       setStats(ns);
-      if (ns.sc <= 0) {
-        patch({ replyBest: Math.max(state.replyBest ?? 0, lv + 1) });
-        setView('dead');
-      } else if (lv >= REPLY_LEVELS.length - 1) {
-        patch({ replyBest: Math.max(state.replyBest ?? 0, REPLY_LEVELS.length) });
-        setView('clear');
-      } else {
-        setLv(lv + 1);
-        setPicked(null);
-      }
+      setOutcome(ns.sc <= 0 ? 'dead' : lv >= REPLY_LEVELS.length - 1 ? 'clear' : 'next');
+      setSettled(true);
     }, 1600);
   };
 
   const level = REPLY_LEVELS[Math.min(lv, REPLY_LEVELS.length - 1)];
   const best = state.replyBest ?? null;
+  const taPick = state.replyTa?.picks?.[String(lv)] ?? null;
+  const taName = state.taName || 'TA';
+  const meName = state.meName || '我';
 
   /** 深色顶栏（SubShell 是浅色底，这里自绘以贴合黑金参考图） */
   const darkHeader = (onBack: () => void) => (
@@ -6786,6 +6993,9 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
             开始挑战
           </button>
           <p className="mt-5 text-center text-[12.5px] text-white/30">本挑战专治：自以为讲清楚了，实际上把火烧旺了。</p>
+          <p className="mt-1.5 text-center text-[12.5px] text-[#8fa4ef]/80" data-testid="reply-duo-hint">
+            双人模式：{state.taName || 'TA'} 会和你同时作答，你们互相都能看到彼此的选择
+          </p>
 
           {/* 旧版高情商回复存档 */}
           {state.replies.length > 0 && (
@@ -6808,8 +7018,13 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
       {view === 'play' && (
         <div className="flex-1 overflow-y-auto overscroll-contain pb-10">
           <div className="px-5 pt-3">
-            <div className="text-[13px] font-bold text-[#f9a8d4]">
-              第 {lv + 1}/{REPLY_LEVELS.length} 关
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[13px] font-bold text-[#f9a8d4]">第 {lv + 1}/{REPLY_LEVELS.length} 关</span>
+              {state.replyTa?.active && (
+                <span className="rounded-full bg-[#7f96e0]/20 px-2.5 py-1 text-[10.5px] font-bold text-[#8fa4ef]" data-testid="reply-duo-badge">
+                  双人挑战 · {taName} 也在作答
+                </span>
+              )}
             </div>
             <h2 className="mt-1 text-[28px] font-extrabold leading-tight text-white">{level.name}</h2>
           </div>
@@ -6830,7 +7045,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
 
           <div className="mt-5 flex items-center justify-between px-5">
             <span className="text-[14px] font-bold text-[#f9a8d4]">你会怎么做</span>
-            <span className="text-[12px] text-white/30">{picked == null ? '选择一个反应' : 'TA 正在等你…'}</span>
+            <span className="text-[12px] text-white/30">{picked == null ? '选择一个反应' : settled ? '看看 TA 怎么选的' : `${taName} 正在等你…`}</span>
           </div>
 
           <div className="mt-3 space-y-2.5 px-4">
@@ -6860,6 +7075,56 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
               );
             })}
           </div>
+
+          {/* TA 的同步挑战区（第十轮双人模式）：蓝框选择 + 看法 + 反驳聊天 */}
+          {picked != null && (
+            <div className="mt-4 px-4">
+              <div className="rounded-2xl border border-[#7f96e0]/40 bg-[#7f96e0]/[0.07] p-4" data-testid="reply-ta-zone">
+                <div className="flex items-center gap-2">
+                  {state.taAvatar ? (
+                    <img src={state.taAvatar} alt={taName} className="h-8 w-8 rounded-full object-cover" draggable={false} />
+                  ) : (
+                    <span className="grid h-8 w-8 place-items-center rounded-full bg-[#7f96e0]/25 text-[11px] font-bold text-[#8fa4ef]">{taName.slice(0, 1)}</span>
+                  )}
+                  <span className="text-[13px] font-bold text-[#8fa4ef]">{taName} 的选择</span>
+                  {!taPick && <span className="ml-auto flex items-center gap-1 text-[11.5px] text-white/40"><Loader2 className="h-3 w-3 animate-spin" /> 正在作答…</span>}
+                </div>
+                {taPick && (
+                  <>
+                    <div
+                      className="mt-3 rounded-xl border-2 border-[#7f96e0]/80 bg-[#7f96e0]/[0.10] p-3 text-[14.5px] font-medium leading-snug text-white"
+                      data-testid="reply-ta-pick"
+                    >
+                      {['A', 'B', 'C', 'D'][taPick.pick]}. {level.opts[taPick.pick]?.t}
+                    </div>
+                    <div className="mt-2.5 rounded-2xl rounded-bl-sm bg-white/[0.07] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-white/85" data-testid="reply-ta-say">
+                      <span className="mr-1.5 text-[11px] font-semibold text-[#8fa4ef]">{taName} 的看法</span>
+                      {taPick.say}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 看法下面的讨论区：可以反驳 TA（TA 会回，全进记忆） */}
+          {taPick && (
+            <div className="mt-3 px-4">
+              <CommentThread state={state} patch={patchFn} threadKey={`reply:${lv}`} hint="不服？在下面反驳 TA" testId={`reply-discuss-${lv}`} dark />
+            </div>
+          )}
+
+          {/* 看完 TA 的选择/看法后手动继续（死亡/通关去结算） */}
+          {settled && (
+            <button
+              type="button"
+              data-testid="reply-next"
+              onClick={goNext}
+              className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center rounded-full bg-[linear-gradient(90deg,#f6a6ce_0%,#fbe3e9_100%)] text-[18px] font-bold text-black shadow-[0_10px_30px_rgba(246,166,206,0.25)] transition-transform active:scale-[0.98]"
+            >
+              {outcome === 'dead' ? '查看结算' : outcome === 'clear' ? '查看通关结算' : '下一关 →'}
+            </button>
+          )}
         </div>
       )}
 
@@ -7165,6 +7430,21 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
           <RefreshCcw className="h-4 w-4" />
           换一批
         </button>
+      </div>
+
+      {/* 第十轮：印象下的聊天（TA 根据人设记忆回复；可聊标签、反驳、拌嘴） */}
+      <div className="mt-5">
+        <div className="mb-2 flex items-center gap-1.5 text-[13px] font-bold text-[#4a4a52]">
+          <MessageCircleHeart className="h-4 w-4 text-[#f2536a]" />
+          聊聊这些印象
+        </div>
+        <CommentThread
+          state={state}
+          patch={patchFn}
+          threadKey="impress"
+          hint={`和 ${state.taName || 'TA'} 聊聊你们眼里的彼此`}
+          testId="impress-chat"
+        />
       </div>
 
       {/* 底部提交（吸底） */}
@@ -7942,6 +8222,8 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
       return;
     }
     patch({ albums: state.albums.map((a) => (a.id === album.id ? { ...a, photos: [...a.photos, ...urls] } : a)) });
+    // 第十轮：TA 知道我传了照片，延时去相册留言（记忆写入在 aiCommentOnPhoto 内）
+    aiCommentOnPhoto(album.id, album.name, state.albums.find((a) => a.id === album.id)?.photos.length ?? 0);
     showToast(`已上传 ${urls.length} 张 ♡`);
   };
   const removePhoto = (idx: number) => {
@@ -7978,7 +8260,7 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
           ))}
         </div>
       )}
-      {/* 大图查看 + 删除 */}
+      {/* 大图查看 + 删除 + 照片留言区（第十轮：TA 会来留言，我可以回复，多轮往返） */}
       {view != null && (
         <div className="absolute inset-0 z-40 flex flex-col bg-black/90" onClick={() => setView(null)}>
           <div className="flex h-[54px] items-center justify-end px-4 pt-[54px]">
@@ -7994,9 +8276,11 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
               <Trash2 className="h-5 w-5" />
             </button>
           </div>
-          <div className="flex flex-1 items-center justify-center px-6 pb-16">
-            { }
+          <div className="flex min-h-0 flex-1 items-center justify-center px-6 pb-3">
             <img src={album.photos[view]} alt="查看照片" className="max-h-full max-w-full object-contain" draggable={false} onClick={(e) => e.stopPropagation()} />
+          </div>
+          <div className="max-h-[38%] shrink-0 overflow-y-auto px-3 pb-6" onClick={(e) => e.stopPropagation()}>
+            <CommentThread state={state} patch={patch as unknown as PatchFn} threadKey={`album:${album.id}:${view}`} hint={`和 ${state.taName || 'TA'} 聊聊这张照片`} dark testId={`album-comment-${view}`} />
           </div>
         </div>
       )}

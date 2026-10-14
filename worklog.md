@@ -19595,3 +19595,34 @@ Stage Summary:
 - 四文件：新增 couple-ai.ts（~700行）、couple-space.tsx（状态+UI+patch钩子）、wechat.tsx/qq.tsx（coupleBlock 注入各1处）
 - 关键决策：①AI 知道=每轮聊天现场同步读 kv（永远最新）而非缓存注入②记忆写入统一走 memAddEventFragment sourceTag='couple'（去重/合并/强化管线复用）③AI 行为打开 App 触发+每日去重（会话内错峰 6s~128s，更像"真人自己做的"）④LLM 全部走 forceSdk 内置模型（用户未配置 API 也能用）+模板兜底⑤AI 自己的行为（日记/协议/印象）带 from/byTa/aiImpressions 标记，UI 上区分「TA 写的」
 - 已 commit 并推送 origin main
+---
+Task ID: couple-round10
+Agent: Z.ai Code (main)
+Task: 第十轮——AI 双向互动 9 组需求：标签双向识别/相册照片留言多轮/甜蜜小问答同答/心情日记双向多轮留言/情侣印象聊天/回复挑战双人对战（粉蓝边框+AI观点+反驳聊天）/轨迹位置跟随联系人 APP/AI 生成今日轨迹（灰色字）/全部写进记忆
+
+Work Log:
+- couple-ai.ts（+约 350 行，第十轮链路二点五）：
+  ① scheduleAiReply(threadKey)：用户在任意留言线程（相册照片/日记/印象/挑战讨论）发消息后延时 2.6~6.5s AI 回复——同线程连发重置计时、TA 已回过最新一条不重复回；LLM 用「人设+共享记忆+threadContext 场景」（相册名+照片序号/日记全文+作者/双方印象标签/挑战关卡），失败本地 TPL_REPLY 兜底；写 comments+写记忆
+  ② aiCommentOnPhoto(albumId,albumName,photoIdx)：上传照片后延时 3~7s TA 翻相册留言（防重：同线程已有 TA 消息跳过），写记忆+aiLog
+  ③ aiAnswerWithMe(q,myA)：我答完题 TA 同时作答（延时 1.8~4.5s），呼应我的最新回答（答过也重新呼应），写 quizTa（withMe:true）+记忆
+  ④ aiReplyPickForLevel(lv,scene,quote,opts,myPick,myPickText)：TA 每关同步作答（0.9~2.4s），LLM 按 TA 性格选选项+一句话看法（JSON），读我历史选择，失败本地兜底；写 replyTa.picks[lv]+记忆+aiLog
+  ⑤ aiTickTrail()：TA 今日行踪每日一次（今天去了哪里/什么位置/什么店铺，城市约束=taLoc），LLM 失败 TPL_TRAIL 兜底；写 taTrail+记忆+aiLog
+  ⑥ syncLocFromContacts()：TA 位置=绑定恋人联系人 region、我=机主联系人 region；locFollow 记录上次同步 region 文本（region 变了才重新 geocode 覆盖，手改不被反复覆盖）；geocodeOne 3 次重试抗 open-meteo 抖动；写 taLoc/myLoc+locFollow+记忆
+  ⑦ coupleChatBlock 补「回复挑战双人战况」注入（TA 知道我每关选了什么+自己的选择/看法）；coupleMemoryDiff 补「我发起了双人挑战」记忆；quizTa 加 withMe、CoupleSnap 加 locFollow
+- couple-space.tsx：
+  ① CoupleState 加 comments/taTrail/replyTa/locFollow（defaultState 兜底零迁移）
+  ② 新增 CommentThread 通用留言组件（我=粉色右侧气泡/TA=蓝色左侧气泡，max-h 滚动，Enter/按钮发送→scheduleAiReply；dark 深色适配版）
+  ③ AlbumDetail：upload 成功后调 aiCommentOnPhoto；大图查看底部嵌 CommentThread（key=album:id:照片索引）
+  ④ QuizPage：saveAnswer 总是调 aiAnswerWithMe；TA 回答时间戳显示「和你一起答的/TA 自己主动写的」
+  ⑤ MoodPage：某天弹层每篇日记（我的+TA 的）下方嵌 CommentThread（key=mood:日记id，TA 的日记 hint「在 XX 的日记下留言」）
+  ⑥ ImpressPage：词库下方「聊聊这些印象」CommentThread（key=impress）
+  ⑦ ReplyPage 重做双人对战：start 写 replyTa（触发记忆）+顶徽标「双人挑战 · TA 也在作答」；我选后写 mePicks[lv]+调 aiReplyPickForLevel，1.6s 结算后**不自动跳关**——等 TA 蓝框选择+看法出现，看法下嵌反驳讨论区（key=reply:lv），看完点「下一关→/查看结算」手动继续；dead/clear 时 finish() 存 replyBest+replyTa.endedAt
+  ⑧ TrackPage：挂载时 syncLocFromContacts（toast 提示跟随结果）+aiTickTrail；地图底部半透明灰字卡「TA 今天去了哪里：HH:MM 地点 · note」（全部灰字）；弹层加跟随联系人说明+完整行踪列表
+- E2E（agent-browser）：种子联系人（机主沈林深·北京/AI小雪·上海·微信好友）→ 微信邀请小雪建立关系 → 轨迹页：我=北京/TA=上海 marker+相距 1,068 km+灰色字轨迹卡（星巴克徐家汇店「给他点了喜欢的拿铁~」等 4 条，LLM 生成贴合人设）✓；回复挑战：开始→双人徽标→我选 A（粉框）→小雪 0.9~2.4s 后蓝框选 B+看法「选B最贴心，林深好温柔~下次早点告诉我嘛」→讨论区反驳「哼，我才没有让你干等」→小雪拌嘴回「才没有呢…要补偿我奶茶嘛🥺」→下一关 ✓；甜蜜小问答：我答「像小猫一样软软的」→TA 延时出答「第一次见你就想rua你的脸呢！(≧▽≦)」+标注「和你一起答的」✓；相册：照片大图下留言→TA 回「当然喜欢呀，像你说的，我们就像小猫一样软软的~」（呼应记忆）✓；心情日记：我的日记+TA 的日记下方留言均获 TA 回复（TA 日记回复「抱抱你~林深说我像小猫…」）✓；印象聊天：「你给我贴的标签我都很喜欢」→TA 回「那你喜欢被说成小迷糊嘛～」（知道标签内容）✓；微信问标签双向：贴 5+2 标签后问「你给我贴了什么标签」→小雪精确答「我给你贴的是"奶茶控、爱撒娇、小迷糊"」（正确区分自己贴的 3 个 vs 我自贴的「一生幸福/笔芯」）→问「我给你贴的」→认出「教科书式的恋爱」✓；记忆验证：mem-frag:seed-xiaoxue 中 sourceTag=couple 碎片含「沈林深在回复挑战里和小雪开启了双人挑战」「回复挑战双人闯关第1关：小雪选了…并说…（TA 看到了沈林深的选择…）」「沈林深在回复挑战第1关讨论区里对小雪说…」等 17+ 条 ✓；console 无错误
+- 修复：QuizPage saveAnswer 守卫去掉（TA 答过也重新呼应我的新答案）；geocodeOne 加 3 次重试（open-meteo 偶发空结果导致首次 TA 位置同步失败）
+- tsc 0 错误；eslint 改动文件 0 问题
+
+Stage Summary:
+- 三文件：couple-ai.ts（AI 行为 6 个新函数+注入/记忆补充）、couple-space.tsx（数据模型+CommentThread+六页改造）、无新依赖
+- 关键决策：①留言线程统一 comments 表（key=场景:ID）+scheduleAiReply 通用回复（场景上下文 threadContext 按线程类型组装）②回复挑战改「我选→TA 选+看法→反驳聊天→手动下一关」节奏（原 1.6s 自动跳关取消）③轨迹位置跟随联系人 region（locFollow 只在 region 变化时覆盖，手改保留）④TA 行踪每日一次+城市约束（taLoc）⑤AI 双向互动全部走「writeSnap+coupleRemember+aiLog」三写（状态/记忆/日志）
+- 已验证 9 组需求全部生效；已 commit 并推送 origin main

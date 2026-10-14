@@ -47,7 +47,9 @@ interface CoupleSnap {
   treeStreak?: { last: string | null; n: number };
   taTreeStreak?: { last: string | null; n: number };
   quiz?: { id: string; q: string; a: string; at: number }[];
-  quizTa?: { q: string; a: string; at: number }[];
+  quizTa?: { q: string; a: string; at: number; withMe?: boolean }[];
+  /** 轨迹位置跟随联系人 APP：上次同步时用的联系人地区文本（region 变了才重新 geocode 覆盖） */
+  locFollow?: { me?: string | null; ta?: string | null };
   moods?: { id: string; emoji: string; text: string; at: number; dateKey?: string; from?: string }[];
   chronicle?: { id: string; text: string; at: number }[];
   chronicleMonths?: { ym: string; status: string }[];
@@ -243,6 +245,21 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
     lines.push(`- ${ta}今天的行踪（TA 自己的日程，真实发生）：${trail.items.map((i) => `${i.t}${i.place}`).join('、')}。${me}问起今天去哪儿了要按这个答。`);
   }
 
+  // 回复挑战双人战况（TA 知道我每关选了什么 + 自己的选择/看法）
+  const rt = snap.replyTa;
+  if (rt && (rt.active || rt.endedAt != null)) {
+    const meLv = Object.entries(rt.mePicks ?? {}).sort(([a], [b]) => Number(a) - Number(b)).slice(-2);
+    const taLv = Object.entries(rt.picks ?? {}).sort(([a], [b]) => Number(a) - Number(b)).slice(-2);
+    const parts: string[] = [];
+    for (const [k, v] of meLv) parts.push(`${me}第${Number(k) + 1}关选了「${cut(v.text, 20)}」`);
+    for (const [k, v] of taLv) parts.push(`${ta}第${Number(k) + 1}关选了「${cut(v.say, 30)}」`);
+    if (parts.length > 0) {
+      lines.push(
+        `- 回复挑战双人闯关${rt.active ? '进行中' : '已结束'}：${parts.join('；')}。这是你们俩在挑战里真实的对战记录，${ta}记得自己每一关的选择和当时的看法。`,
+      );
+    }
+  }
+
   // 情侣轨迹
   if (snap.myLoc || snap.taLoc) {
     const dist =
@@ -267,6 +284,360 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
     ...lines,
     `- 这些是你们的共同记忆：聊天中自然记得、可以自然提起；${userName || me}问起其中任何一项都要能如实回答；但不要一次全部罗列出来。`,
   ].join('\n');
+}
+
+// ---------------- 链路二点五（第十轮）：AI 双向互动行为 ----------------
+
+const TPL_REPLY = ['哼，算你会说话。', '知道就好，我才没有很想你。', '好啦好啦，听你的。', '你要是早点说这句就不一样了。', '再想想，我等你的答案。', '那你要说到做到哦。'];
+const TPL_PHOTO = ['这张也太好看了，我存下来了。', '拍得真好，下次带我一起拍。', '看到这张照片嘴角就没下来过。', '下次站在你旁边一起入镜好不好？'];
+const TPL_TRAIL = [
+  { t: '09:30', place: '楼下的拾光咖啡馆', note: '点了你上次说好喝的拿铁' },
+  { t: '12:10', place: '公司附近的面馆', note: '味道一般，想你做的那碗' },
+  { t: '16:40', place: '西西弗书店', note: '翻到一本想读给你听的书' },
+  { t: '19:00', place: '地铁站口的煎饼摊', note: '多加了两个蛋，替你也加了一份' },
+];
+
+/** 当前恋人绑定目标（页面组件触发 AI 行为用；未建立关系返回 null） */
+function aiTarget(): { contactId: string; channel: CoupleChannel } | null {
+  const meta = readInviteMeta();
+  if (!meta.partnerContactId) return null;
+  return { contactId: meta.partnerContactId, channel: meta.partnerApp ?? 'wx' };
+}
+
+/** 留言线程的场景上下文（给 LLM 的一句背景；与 sceneOfKey 同源但更详细） */
+function threadContext(key: string, snap: CoupleSnap, me: string, ta: string): string {
+  if (key.startsWith('album:')) {
+    const seg = key.split(':');
+    const album = (snap.albums ?? []).find((a) => a.id === seg[1]);
+    const idx = Number(seg[2] ?? 0) + 1;
+    return `这些留言写在相册「${album?.name ?? ''}」的第 ${idx} 张照片下面（照片是${me}上传的）。`;
+  }
+  if (key.startsWith('mood:')) {
+    const m = (snap.moods ?? []).find((x) => x.id === key.slice(5));
+    if (m) {
+      const who = m.from === 'ta' ? ta : me;
+      return `这是${who}写的心情日记（${m.dateKey || shortDate(m.at)}）：「${cut(m.text || m.emoji, 60)}」。留言就写在这篇日记下面。`;
+    }
+    return '留言写在一篇心情日记下面。';
+  }
+  if (key === 'impress') {
+    const mine = (snap.impressionsTa ?? []).slice(0, 5).join('、');
+    const onMe = (snap.impressionsMe ?? []).slice(0, 5).join('、');
+    return `这里是情侣印象的留言区（${me}贴给${ta}的标签：${mine || '无'}；贴在${me}身上的标签：${onMe || '无'}），你们在聊对这些印象标签的看法。`;
+  }
+  if (key.startsWith('reply:')) {
+    const lv = Number(key.split(':')[1] ?? 0) + 1;
+    return `这是回复挑战双人闯关第 ${lv} 关的讨论区，${me}可以对${ta}刚刚的选择和看法发表意见、反驳、拌嘴。`;
+  }
+  return '留言写在恋人空间里。';
+}
+
+const replyTimers = new Map<string, number>();
+
+/**
+ * 用户在某个留言线程发消息后，调度 AI（TA）根据人设 + 共享记忆回复（多轮可往返）。
+ * 同线程连发会重置计时（合并到最后一条再回）；TA 已回复过最新一条则不重复回。
+ */
+export function scheduleAiReply(key: string, delayMin = 2600, delayMax = 6500): void {
+  const target = aiTarget();
+  if (!target || !key) return;
+  const old = replyTimers.get(key);
+  if (old) window.clearTimeout(old);
+  const t = window.setTimeout(() => {
+    replyTimers.delete(key);
+    void (async () => {
+      try {
+        const snap = readSnap();
+        if (!snap) return;
+        const me = (snap.meName || '').trim() || '我';
+        const ta = (snap.taName || '').trim() || 'TA';
+        const list = (snap.comments ?? []).filter((c) => c.key === key);
+        const lastMine = [...list].reverse().find((c) => c.from !== 'ta');
+        if (!lastMine) return;
+        const lastTa = [...list].reverse().find((c) => c.from === 'ta');
+        if (lastTa && lastTa.at > lastMine.at) return; // TA 已经回过最新一条
+        const p = await taPersonaOf(target.contactId);
+        if (!p) return;
+        currentPartnerId = target.contactId;
+        currentChannel = target.channel;
+        const convo = list.slice(-6).map((c) => `${c.from === 'ta' ? ta : me}：${cut(c.text, 60)}`).join('\n');
+        let text = '';
+        try {
+          text = await coupleLLM(
+            `${llmSystem(p, me, snap)}\n场景：你们正在恋人空间 App 的${sceneOfKey(key, snap)}里互相留言。${threadContext(key, snap, me, ta)}`,
+            `最近的留言：\n${convo}\n\n请以「${ta}」的口吻回复${me}的最新留言：30 字内，口语、贴合人设与你们的真实记忆；如果${me}在反驳你，可以撒娇、讲道理或不服气地拌嘴，像真情侣聊天。只输出回复内容。`,
+          );
+        } catch {
+          /* 兜底 */
+        }
+        if (!text || text.length < 2) text = TPL_REPLY[Math.floor(Math.random() * TPL_REPLY.length)];
+        text = cut(text, 90);
+        const c = { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key, from: 'ta', text, at: Date.now() };
+        writeSnap((s) => ({ ...s, comments: [...((s.comments as CoupleSnap['comments']) ?? []), c] }));
+        coupleRemember(target.contactId, target.channel, `${ta}在${sceneOfKey(key, snap)}里回复${me}：${cut(text, 40)}`);
+      } catch {
+        /* AI 回复失败静默 */
+      }
+    })();
+  }, delayMin + Math.random() * (delayMax - delayMin));
+  replyTimers.set(key, t);
+}
+
+/**
+ * 上传照片后：TA 根据人设记忆在照片下主动留言（延时 3~7s，像真的去翻相册看到）。
+ * 失败本地模板兜底；每次上传都触发一次（防重：同一线程已有 TA 消息则跳过）。
+ */
+export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: number): void {
+  const target = aiTarget();
+  if (!target) return;
+  const threadKey = `album:${albumId}:${photoIdx}`;
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        const snap = readSnap();
+        if (!snap) return;
+        if ((snap.comments ?? []).some((c) => c.key === threadKey && c.from === 'ta')) return; // 已经留过言
+        const me = (snap.meName || '').trim() || '我';
+        const ta = (snap.taName || '').trim() || 'TA';
+        const p = await taPersonaOf(target.contactId);
+        if (!p) return;
+        currentPartnerId = target.contactId;
+        currentChannel = target.channel;
+        let text = '';
+        try {
+          text = await coupleLLM(
+            `${llmSystem(p, me, snap)}\n场景：${me}刚在恋人空间的相册「${albumName}」里上传了一张新照片，你去翻相册看到了，想在照片下面留一条言。${threadContext(threadKey, snap, me, ta)}`,
+            `请以「${ta}」的口吻给这张照片留言：25 字内，口语、贴合人设与你们的记忆（可以是夸、撒娇、想TA、约定下次一起拍）。只输出留言内容。`,
+          );
+        } catch {
+          /* 兜底 */
+        }
+        if (!text || text.length < 2) text = TPL_PHOTO[Math.floor(Math.random() * TPL_PHOTO.length)];
+        text = cut(text, 80);
+        const c = { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: threadKey, from: 'ta', text, at: Date.now() };
+        writeSnap((s) => ({ ...s, comments: [...((s.comments as CoupleSnap['comments']) ?? []), c] }));
+        coupleRemember(target.contactId, target.channel, `${ta}在相册「${albumName}」的照片下面给${me}留言：${cut(text, 40)}`);
+        logAi(`${ta}在相册「${albumName}」的照片下留了言`);
+      } catch {
+        /* 静默 */
+      }
+    })();
+  }, 3000 + Math.random() * 4000);
+}
+
+/**
+ * 甜蜜小问答：我答完题，TA 和我一起作答（延时 1.8~4.5s 出现，像同时提交）。
+ * 回答会呼应我的答案；写 quizTa（withMe 标记）+ 写记忆。
+ */
+export function aiAnswerWithMe(q: string, myA: string): void {
+  const target = aiTarget();
+  if (!target || !q) return;
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        const snap = readSnap();
+        if (!snap) return;
+        const me = (snap.meName || '').trim() || '我';
+        const ta = (snap.taName || '').trim() || 'TA';
+        const p = await taPersonaOf(target.contactId);
+        if (!p) return;
+        currentPartnerId = target.contactId;
+        currentChannel = target.channel;
+        let a = '';
+        try {
+          const prev = (snap.quizTa ?? []).find((x) => x.q === q)?.a ?? '';
+          a = await coupleLLM(
+            llmSystem(p, me, snap),
+            `你们在玩情侣小问答，${me}刚回答了问题「${cut(q, 40)}」：「${cut(myA, 60)}」。请以「${ta}」的口吻回答同一个问题（50 字内），要呼应${me}的答案（可以甜蜜、可以小抬杠）${prev ? `；你之前答过一次「${cut(prev, 40)}」，这次可以补充或换个小说法，别完全重复` : ''}。只输出回答。`,
+          );
+        } catch {
+          /* 兜底 */
+        }
+        if (!a || a.length < 4) a = AI_QUIZ_TPL[Math.floor(Math.random() * AI_QUIZ_TPL.length)];
+        a = cut(a, 90);
+        writeSnap((s) => ({
+          ...s,
+          quizTa: [{ q, a, at: Date.now(), withMe: true }, ...((s.quizTa as CoupleSnap['quizTa']) ?? []).filter((x) => x.q !== q)],
+        }));
+        coupleRemember(target.contactId, target.channel, `${ta}和${me}一起回答了甜蜜小问答「${cut(q, 24)}」：${cut(a, 48)}（${ta}看过并呼应了${me}的回答「${cut(myA, 30)}」）`);
+        logAi(`${ta}和你一起回答了甜蜜小问答`);
+      } catch {
+        /* 静默 */
+      }
+    })();
+  }, 1800 + Math.random() * 2700);
+}
+
+/**
+ * 回复挑战：TA 在第 lv 关的同步选择 + 看法（延时 0.9~2.4s，像同时作答）。
+ * 会读我的历史选择；LLM 失败本地兜底；写 replyTa.picks[lv] + 写记忆。
+ */
+export function aiReplyPickForLevel(
+  lv: number,
+  scene: string,
+  quote: string,
+  opts: string[],
+  myPick: number,
+  myPickText: string,
+): void {
+  const target = aiTarget();
+  if (!target) return;
+  const lvKey = String(lv);
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        const snap = readSnap();
+        if (!snap) return;
+        if (snap.replyTa?.picks?.[lvKey]) return; // 已选过
+        const me = (snap.meName || '').trim() || '我';
+        const ta = (snap.taName || '').trim() || 'TA';
+        const p = await taPersonaOf(target.contactId);
+        if (!p) return;
+        currentPartnerId = target.contactId;
+        currentChannel = target.channel;
+        const mePast = Object.entries(snap.replyTa?.mePicks ?? {})
+          .filter(([k]) => Number(k) < lv)
+          .sort(([a], [b]) => Number(a) - Number(b))
+          .map(([k, v]) => `第${Number(k) + 1}关选「${cut(v.text, 18)}」`)
+          .join('、');
+        let picked: { pick: number; say: string } | null = null;
+        try {
+          const raw = await coupleLLM(
+            `${llmSystem(p, me, snap)}\n你们在玩「恋爱高危回复挑战」双人闯关：每人独立作答，选完互相都能看到对方的选择和看法。`,
+            `第${lv + 1}关场景：${cut(scene, 90)}\n题里的恋人（不是你）说：「${cut(quote, 24)}」\n选项：${opts.map((o, i) => `${['A', 'B', 'C', 'D'][i]}.${cut(o, 20)}`).join(' ')}\n你的恋人${me}刚选了「${cut(myPickText, 26)}」。${mePast ? `\n${me}之前的关卡：${mePast}。` : ''}\n请以「${ta}」的身份：1）从四个选项里选一个你会选的（按你的性格来，可以和${me}一样也可以不同）；2）用一句话说出你对这道题或对${me}选择的看法（可以赞同、吐槽、撒娇、反驳，≤36字口语）。\n输出 JSON：{"pick":0,"say":"你的看法"}。pick 是选项序号 0-3。只输出 JSON。`,
+          );
+          const j = extractJson<{ pick: number; say: string }>(raw);
+          if (j && Number.isInteger(j.pick) && j.pick >= 0 && j.pick < opts.length && j.say) {
+            picked = { pick: j.pick, say: cut(String(j.say).replace(/[「」"]/g, ''), 60) };
+          }
+        } catch {
+          /* 兜底 */
+        }
+        if (!picked) {
+          const pool = [0, 1, 2].filter((x) => x !== myPick || Math.random() < 0.3);
+          picked = { pick: pool[Math.floor(Math.random() * pool.length)], say: TPL_REPLY[Math.floor(Math.random() * TPL_REPLY.length)] };
+        }
+        writeSnap((s) => {
+          const rt = (s.replyTa as CoupleSnap['replyTa']) ?? { active: true, picks: {}, mePicks: {}, startedAt: Date.now(), endedAt: null };
+          return { ...s, replyTa: { ...rt, active: true, picks: { ...rt.picks, [lvKey]: { pick: picked!.pick, say: picked!.say, at: Date.now() } } } };
+        });
+        coupleRemember(target.contactId, target.channel, `回复挑战双人闯关第${lv + 1}关：${ta}选了「${cut(opts[picked.pick] ?? '', 22)}」，并说「${cut(picked.say, 36)}」（TA 看到了${me}的选择「${cut(myPickText, 22)}」）`);
+        logAi(`${ta}在回复挑战第${lv + 1}关做出了选择`);
+      } catch {
+        /* 静默 */
+      }
+    })();
+  }, 900 + Math.random() * 1500);
+}
+
+/**
+ * TA 今天的行踪（人设记忆生成：今天去了哪里/什么位置/什么店铺）：每日一次去重。
+ * LLM 失败本地模板兜底；写 taTrail + 写记忆 + aiLog。
+ */
+export function aiTickTrail(): void {
+  const snap = readSnap();
+  if (!snap) return;
+  const today = todayKey();
+  if (snap.taTrail && snap.taTrail.dateKey === today) return;
+  const target = aiTarget();
+  if (!target) return;
+  void (async () => {
+    try {
+      const me = (snap.meName || '').trim() || '我';
+      const ta = (snap.taName || '').trim() || 'TA';
+      const p = await taPersonaOf(target.contactId);
+      if (!p) return;
+      currentPartnerId = target.contactId;
+      currentChannel = target.channel;
+      const cur2 = readSnap() ?? snap;
+      const city = cur2.taLoc?.name ? `（${ta}现在在${cur2.taLoc.name}，行程要在这个城市里）` : '';
+      let items: { t: string; place: string; note: string }[] | null = null;
+      try {
+        const raw = await coupleLLM(
+          `${llmSystem(p, me, cur2)}${city ? `\n${city}` : ''}`,
+          `请以「${ta}」的身份编一份今天真实的行程（3~4 条，按时间顺序）：去了哪里、什么位置、什么店铺，要贴合你的人设、职业和你们的记忆（可以有一条和你有关的小心思）。\n输出 JSON：{"items":[{"t":"HH:MM","place":"地点/店铺名（≤14字）","note":"一句话（≤16字，你的小心思）"}]}。只输出 JSON。`,
+        );
+        const j = extractJson<{ items: { t: string; place: string; note: string }[] }>(raw);
+        if (j && Array.isArray(j.items)) {
+          items = j.items
+            .filter((x) => x && x.place)
+            .slice(0, 4)
+            .map((x) => ({
+              t: /^\d{1,2}:\d{2}$/.test(String(x.t)) ? String(x.t) : '12:00',
+              place: cut(String(x.place).replace(/[「」"]/g, ''), 16),
+              note: cut(String(x.note ?? '').replace(/[「」"]/g, ''), 18),
+            }));
+        }
+      } catch {
+        /* 兜底 */
+      }
+      if (!items || items.length === 0) items = TPL_TRAIL.slice(0, 3);
+      writeSnap((s) => ({ ...s, taTrail: { dateKey: today, items, at: Date.now() } }));
+      coupleRemember(target.contactId, target.channel, `${ta}今天的行踪：${items.map((i) => `${i.t}${i.place}`).join('、')}（TA 自己的日程，可以自然聊起）`);
+      logAi(`${ta}更新了今天的行踪`);
+    } catch {
+      /* 静默 */
+    }
+  })();
+}
+
+async function geocodeOne(q: string): Promise<{ name: string; lat: number; lng: number } | null> {
+  // open-meteo 偶发空结果/5xx：重试 2 次（加上游路由内部重试，抗抖动）
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
+      const d = (await r.json()) as { results?: { name: string; lat: number; lng: number }[] };
+      const first = Array.isArray(d?.results) ? d.results[0] : undefined;
+      if (first) return { name: first.name, lat: first.lat, lng: first.lng };
+    } catch {
+      /* 重试 */
+    }
+    if (i < 2) await new Promise((r) => setTimeout(r, 900 + i * 800));
+  }
+  return null;
+}
+
+/**
+ * 情侣轨迹位置跟随联系人 APP（第十轮）：
+ * TA 的位置 = 绑定恋人联系人的「地区(region)」；我的位置 = 机主联系人的 region。
+ * 用 locFollow 记录上次同步的 region 文本——只有联系人资料里的位置发生变化才重新 geocode 覆盖
+ * （用户手动微调过的位置不会被反复覆盖）。返回给 UI 的提示文案。
+ */
+export async function syncLocFromContacts(): Promise<string[]> {
+  const out: string[] = [];
+  const snap = readSnap();
+  if (!snap) return out;
+  const meta = readInviteMeta();
+  const pid = meta.partnerContactId;
+  if (!pid) return out;
+  const me = (snap.meName || '').trim() || '机主';
+  const ta = (snap.taName || '').trim() || 'TA';
+  try {
+    const [taC, all] = await Promise.all([getContact(pid), listContacts()]);
+    const meC = all.find((c) => c.kind === 'user' && !c.altOf);
+    const follow = snap.locFollow ?? {};
+    const taRegion = (taC?.region ?? '').trim();
+    if (taRegion && follow.ta !== taRegion) {
+      const g = await geocodeOne(taRegion);
+      if (g) {
+        writeSnap((s) => ({ ...s, taLoc: { name: g.name, lat: g.lat, lng: g.lng }, locFollow: { ...((s.locFollow as CoupleSnap['locFollow']) ?? {}), ta: taRegion } }));
+        out.push(`${ta} 的位置已跟随联系人：${g.name}`);
+        coupleRemember(pid, meta.partnerApp ?? 'wx', `${ta}在情侣轨迹里的位置同步为联系人资料里填写的「${taRegion}」（定位到${g.name}）`);
+      }
+    }
+    const meRegion = (meC?.region ?? '').trim();
+    if (meRegion && follow.me !== meRegion) {
+      const g = await geocodeOne(meRegion);
+      if (g) {
+        writeSnap((s) => ({ ...s, myLoc: { name: g.name, lat: g.lat, lng: g.lng }, locFollow: { ...((s.locFollow as CoupleSnap['locFollow']) ?? {}), me: meRegion } }));
+        out.push(`我的位置已跟随联系人：${g.name}`);
+        coupleRemember(pid, meta.partnerApp ?? 'wx', `${me}在情侣轨迹里的位置同步为联系人资料里填写的「${meRegion}」（定位到${g.name}）`);
+      }
+    }
+  } catch {
+    /* 同步失败静默 */
+  }
+  return out;
 }
 
 // ---------------- 链路二：事件 → 记忆（所有东西写进记忆） ----------------
@@ -351,6 +722,10 @@ export function coupleMemoryDiff(prev: CoupleSnap, next: CoupleSnap, contactId: 
   const newCmt = (next.comments ?? []).filter((c) => c.from === 'me' && !(prev.comments ?? []).some((p) => p.id === c.id));
   for (const c of newCmt.slice(0, 2)) {
     lines.push(`${me}在${sceneOfKey(c.key, next)}里对${ta}说：${cut(c.text, 40)}`);
+  }
+  // 回复挑战（我发起了双人挑战）
+  if (next.replyTa?.active && !prev.replyTa?.active) {
+    lines.push(`${me}在回复挑战里和${ta}开启了双人挑战（${ta}也在同一时间一关一关作答）`);
   }
   // 轨迹位置
   if (next.myLoc && next.myLoc.name !== prev.myLoc?.name) lines.push(`${me}在情侣轨迹里设置了自己的真实位置：${next.myLoc.name}`);
