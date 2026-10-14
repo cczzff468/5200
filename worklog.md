@@ -19626,3 +19626,17 @@ Stage Summary:
 - 三文件：couple-ai.ts（AI 行为 6 个新函数+注入/记忆补充）、couple-space.tsx（数据模型+CommentThread+六页改造）、无新依赖
 - 关键决策：①留言线程统一 comments 表（key=场景:ID）+scheduleAiReply 通用回复（场景上下文 threadContext 按线程类型组装）②回复挑战改「我选→TA 选+看法→反驳聊天→手动下一关」节奏（原 1.6s 自动跳关取消）③轨迹位置跟随联系人 region（locFollow 只在 region 变化时覆盖，手改保留）④TA 行踪每日一次+城市约束（taLoc）⑤AI 双向互动全部走「writeSnap+coupleRemember+aiLog」三写（状态/记忆/日志）
 - 已验证 9 组需求全部生效；已 commit 并推送 origin main
+---
+Task ID: couple-icon-push
+Agent: Z.ai Code (main)
+Task: 更换恋人空间图标为用户上传的粉色双心官方图（1024x1024）并推送到 GitHub（cczzff468/5200）
+
+Work Log:
+- 核实 public/icons/couple.png 与上传文件「恋人空间_...-iOS-1024x1024.png」MD5 一致（400c00e0d131902ab3b9ebf8410673b4）——仓库内图标与用户上传图字节级相同（第八轮「图标换粉色双心官方图」即此图，已随第十轮提交在库），cp 覆盖后字节不变，registry.tsx / couple-rel-bubble.tsx 的 /icons/couple.png 引用无需改动
+- git remote set-url origin → 用户本次提供的 PAT（https://github.com/cczzff468/5200.git）；期间沙箱到 GitHub 直连间歇不稳（curl 无响应 / GnuTLS -110 / ls-remote 超时，DNS 解析正常），git push -u origin main 重试后成功——返回 "Everything up-to-date"，远程 main 已=本地 HEAD（b23220a，含第十轮 AI 双向互动与本图标）
+- 启动 dev server（低内存模式 NODE_OPTIONS=1536）供预览面板使用
+- 追加本 worklog 记录并随本次提交推送
+
+Stage Summary:
+- 图标零改动达成：仓库内 couple.png 已与用户上传图完全一致；远程 cczzff468/5200 的 main 已同步至 b23220a（第十轮完整功能 + 粉色双心图标），本地 main 已跟踪 origin/main
+- 环境备忘：沙箱→GitHub 直连间歇性阻断（DNS 正常、TLS 偶发中断），遇到时重试 push 即可成功
