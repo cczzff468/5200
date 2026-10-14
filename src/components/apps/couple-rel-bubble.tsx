@@ -8,10 +8,10 @@
  * - 邀请卡 pending 且对方发来 → 底部「拒绝 / 接受邀请」双按钮（仿群聊邀请卡交互）
  * - 我发的邀请卡 pending → 「等待对方接受」状态行；终态显示「已同意 / 已拒绝」
  * - 成功卡 → 标题「我们已经成功建立情侣关系」+「我已经同意了你的邀请，现在我们是情侣啦」
- * - 全站白/浅灰配色（不用粉色），图标用白灰双心 couple.png
+ * - 图标用粉色双心官方图 couple.png（与主屏/App Store 同源原图）；用原生 <img> 直出——
+ *   不走 next/image 优化端点（dev 下 w=44 不在允许宽度列表会 400，且优化缓存可能返回旧图）
  */
 
-import Image from 'next/image';
 import type { CoupleRelCardData } from '@/lib/ios/couple-invite';
 import { useUI } from '@/lib/ios/store';
 
@@ -80,9 +80,9 @@ export default function CoupleRelBubble({ data, mine, onAccept, onDecline, testi
           <span className="block text-[15.5px] font-semibold leading-[1.35] text-black dark:text-white">{title}</span>
           <span className="mt-1 block text-[13px] leading-[1.45] text-black/45 dark:text-white/45">{desc}</span>
         </span>
-        {/* 恋人空间图标（白灰双心真实图标，圆角方块） */}
+        {/* 恋人空间图标（粉色双心官方原图，圆角方块；原生 img 直出不经优化端点） */}
         <span aria-hidden="true" className="h-11 w-11 shrink-0 overflow-hidden rounded-[9px] shadow-[0_2px_6px_rgba(0,0,0,0.10)]">
-          <Image src="/icons/couple.png" alt="恋人空间" width={44} height={44} className="h-full w-full object-cover" draggable={false} />
+          <img src="/icons/couple.png" alt="恋人空间" className="h-full w-full object-cover" draggable={false} />
         </span>
       </button>
 

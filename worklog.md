@@ -19655,3 +19655,17 @@ Work Log:
 Stage Summary:
 - 代码/资源/线上三方证据一致：恋人空间图标（主屏第3页、Spotlight、App Store、关系气泡）即用户上传的粉色双心官方图，GitHub 已同步
 - 用户若仍见旧图，两条自查路径：①预览面板强制刷新（缓存）②主题 App→图标→恋人空间→恢复默认（清除浏览器本地自定义图标覆盖）；iconStyle 若为毛玻璃/液态则显示线条心（默认「真实」才显示 PNG 原图）
+---
+Task ID: couple-invite-card-icon
+Agent: Z.ai Code (main)
+Task: 用户要求「邀请卡片上面也变一下」——微信/QQ 亲密关系卡片（恋人空间邀请卡/成功卡）图标确保为粉色双心官方图
+
+Work Log:
+- 排查：CoupleRelBubble（couple-rel-bubble.tsx，微信/QQ relcard 共用组件）图标原为 next/image width=44 引 /icons/couple.png；实测 /_next/image?...&w=44 被 dev 优化端点拒绝（"w parameter of 44 is not allowed"，44 不在允许宽度列表），且优化端点有历史缓存旧图风险——邀请卡图标显示不可靠
+- 修复：next/image → 原生 <img src="/icons/couple.png">直出原图（44px 圆角方块，object-cover），不再经过优化端点；同步更新文件头过时注释（白灰双心→粉色双心官方图）
+- 验证：tsc 0 错误；eslint 改动文件 0 问题（其余 lint 错误均为 meituan/taobao-channels 等历史遗留）；等价渲染实证——浏览器注入与邀请卡同结构 DOM（原生 img 直出 /icons/couple.png 44px 圆角）截图放大：粉色渐变底白色双心官方图清晰显示 ✓；微信完整邀请流（登录页提示"手机号尚未注册"，新会话无种子）未走通，但组件改动仅 img 标签替换、src 路径与主屏同源（已浏览器实证为粉色双心图）
+- 期间 dev server 被低内存挤掉一次，低内存模式重启恢复
+
+Stage Summary:
+- couple-rel-bubble.tsx 单文件小改：邀请卡/成功卡图标改原生 img 直出官方原图，双端（微信+QQ）生效
+- 结论：邀请卡与主屏/App Store/Spotlight 全部统一为用户上传的粉色双心官方图；next/image 优化端点宽度限制是历史隐患，卡片类小图标今后一律原生 img
