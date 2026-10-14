@@ -19389,3 +19389,26 @@ Stage Summary:
 - 交付：情侣空间 App 完整上线（白灰限定配色）——主屏第 3 页可点开，邀请页→4 Tab→22 个子功能页全部可用，数据持久化，图标/背景/插图全部白灰系 AI 生成
 - 改动文件：新增 couple-space.tsx + 4 张图片素材；修改 store.ts/registry.tsx/HomeScreen.tsx/appstore.tsx/globals.css（全部增量插入，零既有语义改动）
 - 坑：①主屏翻页合成 PointerEvent 滑动不可靠，改点 data-testid=page-dot-N 跳页（el.click() 绕过 hit-testing）；②相册上传测试必须选「最后一个 input[type=file]」——AlbumPage 与 AlbumDetail 各有隐藏 input，前者 handler 有 targetAlbum ref 保护（未点「立即上传」则静默跳过），querySelector 默认选中的是前者；③React 合成事件对 input[type=file] 直接 dispatch change 可触发 onChange（date input 需用原生 setter + input/change 双事件）
+
+---
+
+Task ID: couple-space-refine
+Agent: 主协调者 (Z.ai Code)
+Task: 情侣空间 App 第二轮优化：整体缩小、全局背景、每天想你打卡改造、四个子页按参考图重做
+
+Work Log:
+- 数据模型扩展：新增 missSince（首次想念打卡日）/gender/coupleNo/logins/annivExtra 字段，moods 增加 photo+dateKey；新增工具函数 genCoupleNo/fmtDateCn/daysToNextMonthDay
+- 主框架：合影背景改为全局背景层（四 Tab 共用 + 白纱渐变）；底部 Tab 缩小（h42/图标19/文字10）且子页打开时隐藏；子页 overlay 提升到根级覆盖 Tab 栏；全部界面尺寸收缩（标题 32→24、头像 64→52、大圆 188→150、功能卡 104→86 等）
+- 首页：每天想你首次点击后大圆消失 → 我的头像下「想他N天」、TA头像下「想我N天」徽标（可点进想念记录），中间「已互相想念N天」入口
+- 我们页：新增 LaceBow/LaceArches 组件（灰阶蝴蝶结+圆点拱边）+ 方格纸底纹 + 左右角结饰
+- 恋爱资料页按参考图2重做：iOS 分组列表（头像/昵称/性别/情侣号可复制/恋人证书/登录记录/解除关系💔灰度/对方/我们的签名）+ 7 种弹层编辑
+- 设置纪念日页按参考图3重做：双头像英雄卡（我们已经在一起N天+起始日期周X）+ 纪念日列表（生日还有N天/其余已经N天/+占位）+ 编辑/删除/添加纪念日弹层
+- 情侣轨迹页按参考图4重做：全屏灰阶地图 + 双人悬浮卡（位置/心形天数DAY/虚线/TA就在你身边）+ 相册照片地图标记 + 右侧工具钮 + 历史轨迹底部弹层（相遇地点编辑+大事记）
+- 相册页：四张固定卡整卡点击进入独立相册详情页（对应上传图片都在里面，含上传/查看/删除）
+- 心情日记页按参考图5重做：月历视图（月份切换/周一起始/心情气泡/今天标记/Hi问候）+ 写日记编辑页（大表情/8心情圈/文字/照片tile/位置行/完成）+ 单日弹层 + 最近心情列表
+- 验证：bunx tsc --noEmit 全绿、eslint couple-space 零告警；两轮 agent-browser E2E（解锁→进App→打卡想念→四Tab→五类子页→弹层→保存回写）全部通过，console 零错误
+- 提交 6b940e0 并推送 origin main 成功
+
+Stage Summary:
+- 交付：仅改动 src/components/apps/couple-space.tsx（约2700行）；git push 已同步 GitHub
+- 关键决策：①想他/想我天数同源于 missSince（同一天开始互相想念）②情侣号首次进入自动生成（s+9位）③登录记录每次会话去重记一条留20条④心情旧数据无 dateKey 时从 at 推导兼容⑤纪念日列表统一存 annivExtra（key 区分预设 kiss/hug/travel/wedding/myBd/taBd 与自建）
