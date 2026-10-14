@@ -542,6 +542,41 @@
     transform: translateX(6%);
   }
 }
+/* 三生石：流星划过 */
+@keyframes couple-shoot {
+  0% {
+    transform: translate(0, 0) rotate(24deg);
+    opacity: 0;
+  }
+  4% {
+    opacity: 0.95;
+  }
+  16% {
+    transform: translate(150px, 66px) rotate(24deg);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(150px, 66px) rotate(24deg);
+    opacity: 0;
+  }
+}
+/* 三生石：星尘飘落 */
+@keyframes couple-fall {
+  0% {
+    transform: translateY(-10px);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.85;
+  }
+  82% {
+    opacity: 0.5;
+  }
+  100% {
+    transform: translateY(320px);
+    opacity: 0;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   [animation\:couple-sub-in],
   [animation\:couple-pop-heart],
@@ -550,7 +585,9 @@
   [animation\:couple-twinkle],
   [animation\:couple-glow-pulse],
   [animation\:couple-float-y],
-  [animation\:couple-cloud-drift] {
+  [animation\:couple-cloud-drift],
+  [animation\:couple-shoot],
+  [animation\:couple-fall] {
     animation: none;
   }
 }

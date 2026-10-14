@@ -44,6 +44,7 @@ import {
   IdCard,
   Image as ImageIcon,
   ImagePlus,
+  Info,
   Landmark,
   Loader2,
   MapPin,
@@ -108,6 +109,7 @@ interface CoupleState {
   missMadeUp: string[]; // 已补签的日期 key
   stoneEngraved: boolean; // 三生石已刻名
   quiz: { id: string; q: string; a: string; at: number }[]; // 甜蜜小问答记录
+  quizCustom: string[]; // 甜蜜小问答自定义问题
   examBest: number | null; // 恋爱水平考试最高分
   status: string; // 恋爱状态
   pactAt: number | null; // 恋爱协议签署时间
@@ -158,6 +160,7 @@ function defaultState(): CoupleState {
     missMadeUp: [],
     stoneEngraved: false,
     quiz: [],
+    quizCustom: [],
     examBest: null,
     status: '',
     pactAt: null,
@@ -1404,7 +1407,7 @@ function SubRouter(props: {
     case 'track':
       return <TrackPage state={state} patch={patch} days={days} close={close} showToast={showToast} />;
     case 'quiz':
-      return <QuizPage state={state} patch={patch} close={close} showToast={showToast} />;
+      return <QuizPage state={state} patch={patch} days={days} close={close} showToast={showToast} />;
     case 'letters':
       return <LettersPage state={state} patch={patch} close={close} showToast={showToast} />;
     case 'house':
@@ -1703,24 +1706,109 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
   );
 }
 
-/** 爱情小树成长记（参考图：全屏游戏场景）——顶部悬挂木牌（等级星+进度+连续浇树）+ 左侧奖励钮 + 草地小树 + 化肥浇水气泡 + 底部木架三入口 */
+/** 爱情小树（SVG 手绘风，随成长值 stage 0-4 变化：嫩芽→壮苗→树苗→小树→繁花大树），替代 emoji 图标 */
+const LOVE_HEART_PATH = 'M0 2.2 C0 0.6 1.6 -0.6 3 0.4 L4.5 1.5 L6 0.4 C7.4 -0.6 9 0.6 9 2.2 C9 4.6 4.5 7.5 4.5 7.5 C4.5 7.5 0 4.6 0 2.2 Z';
+function LoveHeartDot({ x, y, s = 1, fill = '#ff8fae' }: { x: number; y: number; s?: number; fill?: string }) {
+  return <path d={LOVE_HEART_PATH} transform={`translate(${x} ${y}) scale(${s}) translate(-4.5 -3.5)`} fill={fill} />;
+}
+
+function LoveTree({ stage }: { stage: number }) {
+  const s = Math.max(0, Math.min(4, stage));
+  return (
+    <svg viewBox="0 0 200 240" className="h-full w-full" aria-hidden="true">
+      <defs>
+        <linearGradient id="ltLeaf" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#a8e063" />
+          <stop offset="100%" stopColor="#56ab2f" />
+        </linearGradient>
+        <linearGradient id="ltLeaf2" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#c7ee8f" />
+          <stop offset="100%" stopColor="#7cc95c" />
+        </linearGradient>
+        <linearGradient id="ltTrunk" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#a5713d" />
+          <stop offset="55%" stopColor="#8a5a2e" />
+          <stop offset="100%" stopColor="#6e4520" />
+        </linearGradient>
+        <radialGradient id="ltGlow" cx="50%" cy="45%" r="55%">
+          <stop offset="0%" stopColor="rgba(255,255,255,0.55)" />
+          <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+        </radialGradient>
+      </defs>
+      {s >= 3 && <ellipse cx="100" cy="120" rx="86" ry="80" fill="url(#ltGlow)" />}
+      <ellipse cx="100" cy="228" rx={40 + s * 5} ry="8" fill="rgba(90,120,50,0.16)" />
+
+      {s === 0 && (
+        <g>
+          <path d="M100 226 C100 214 99 204 100 192" stroke="#5ea732" strokeWidth="5" fill="none" strokeLinecap="round" />
+          <path d="M100 198 C84 194 74 182 76 166 C92 168 102 180 100 198 Z" fill="url(#ltLeaf)" />
+          <path d="M100 192 C116 188 126 176 124 160 C108 162 98 174 100 192 Z" fill="url(#ltLeaf2)" />
+        </g>
+      )}
+      {s === 1 && (
+        <g>
+          <path d="M100 226 C100 208 99 192 100 174" stroke="#5ea732" strokeWidth="6" fill="none" strokeLinecap="round" />
+          <path d="M100 202 C82 198 70 184 72 166 C90 170 102 184 100 202 Z" fill="url(#ltLeaf)" />
+          <path d="M100 194 C118 190 130 176 128 158 C110 162 98 176 100 194 Z" fill="url(#ltLeaf2)" />
+          <path d="M100 180 C88 170 86 156 92 144 C104 152 108 168 100 180 Z" fill="url(#ltLeaf2)" />
+          <LoveHeartDot x={116} y={158} s={0.9} fill="#ffb3c6" />
+        </g>
+      )}
+      {s === 2 && (
+        <g>
+          <path d="M95 226 L96 196 Q97 184 99 176 L103 176 Q104 186 105 196 L106 226 Z" fill="url(#ltTrunk)" />
+          <circle cx="100" cy="154" r="27" fill="url(#ltLeaf2)" />
+          <circle cx="80" cy="168" r="19" fill="url(#ltLeaf)" />
+          <circle cx="121" cy="166" r="18" fill="url(#ltLeaf)" />
+          <circle cx="93" cy="143" r="15" fill="#c7ee8f" opacity="0.92" />
+          <LoveHeartDot x={112} y={150} s={1} />
+        </g>
+      )}
+      {s === 3 && (
+        <g>
+          <path d="M93 226 L94 196 Q95 178 90 164 L100 154 L110 164 Q105 178 106 196 L107 226 Z" fill="url(#ltTrunk)" />
+          <circle cx="100" cy="128" r="35" fill="url(#ltLeaf2)" />
+          <circle cx="68" cy="150" r="25" fill="url(#ltLeaf)" />
+          <circle cx="132" cy="148" r="26" fill="url(#ltLeaf)" />
+          <circle cx="100" cy="106" r="21" fill="#c7ee8f" />
+          <LoveHeartDot x={82} y={140} s={1.3} />
+          <LoveHeartDot x={120} y={122} s={1.1} fill="#ffb3c6" />
+          <LoveHeartDot x={100} y={158} s={0.9} fill="#ff8fae" />
+        </g>
+      )}
+      {s === 4 && (
+        <g>
+          <path d="M88 226 L90 190 Q90 168 76 150 L92 136 L100 128 L108 136 L124 150 Q110 168 110 190 L112 226 Z" fill="url(#ltTrunk)" />
+          <circle cx="100" cy="100" r="42" fill="url(#ltLeaf2)" />
+          <circle cx="58" cy="128" r="31" fill="url(#ltLeaf)" />
+          <circle cx="142" cy="126" r="32" fill="url(#ltLeaf)" />
+          <circle cx="100" cy="140" r="30" fill="url(#ltLeaf)" opacity="0.95" />
+          <circle cx="90" cy="80" r="19" fill="#c7ee8f" />
+          <LoveHeartDot x={70} y={104} s={1.5} />
+          <LoveHeartDot x={130} y={92} s={1.3} fill="#ffb3c6" />
+          <LoveHeartDot x={112} y={148} s={1.2} />
+          <LoveHeartDot x={86} y={62} s={1} fill="#ff8fae" />
+          <circle cx="64" cy="76" r="2" fill="#fff" opacity="0.9" />
+          <circle cx="146" cy="66" r="1.6" fill="#fff" opacity="0.9" />
+          <circle cx="156" cy="104" r="1.8" fill="#ffe9a8" opacity="0.95" />
+        </g>
+      )}
+    </svg>
+  );
+}
+
+/** 爱情小树成长记（参考图：全屏游戏场景）——顶部悬挂木牌（等级星+进度+连续浇树）+ 草地小树（SVG 成长）+ 化肥浇水气泡 */
 function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; waterTree: () => void; close: () => void; showToast: (m: string) => void }) {
   const tree = state.tree;
   const level = Math.max(1, Math.min(5, Math.ceil(tree / 20) || 1));
   const inLevel = tree >= 100 ? 20 : tree - (level - 1) * 20;
-  const stageEmoji = ['🌱', '🌱', '🌿', '🪴', '🌳'][Math.min(4, Math.floor(tree / 20))];
+  const stage = Math.min(4, Math.floor(tree / 20));
   const streak = state.treeStreak?.n ?? 0;
   const today = todayKey();
   const yesterday = todayKey(new Date(Date.now() - 86400000));
   const wateredToday = state.treeStreak?.last === today;
   const brokeStreak = !wateredToday && state.treeStreak?.last === yesterday; // 昨天浇了今天还没浇 → 断签提醒
   const [pop, setPop] = useState(0);
-
-  const leftBadges = [
-    { icon: '🎁', label: '浇水奖励', tip: '连续浇水 7 天有神秘礼物哦' },
-    { icon: '🛡️', label: '保护罩', tip: '保护罩已开启，小树不会枯萎' },
-    { icon: '✨', label: '会员双倍成长值', tip: '开通会员浇水双倍成长值' },
-  ];
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,#bfe9fb_0%,#d8f4fd_38%,#eefaf7_62%,#dff0d0_100%)]">
@@ -1761,20 +1849,21 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
         LO
       </span>
 
-      {/* ===== 顶部：返回 + 悬挂木牌 ===== */}
-      <div className="relative z-20 shrink-0 pt-2">
+      {/* ===== 顶部：返回 + 悬挂木牌（整体避开状态栏 54px） ===== */}
+      <div className="relative z-20 shrink-0">
         <button
           type="button"
           onClick={close}
           aria-label="返回"
-          className="absolute left-3 top-3 flex h-10 w-10 items-center justify-center rounded-[14px] bg-[linear-gradient(180deg,#ffd94d,#ffb62e)] text-white shadow-[0_4px_10px_rgba(220,150,30,0.45)] transition-transform active:scale-95"
+          className="absolute left-3 top-[62px] z-30 flex h-10 w-10 items-center justify-center rounded-[14px] bg-[linear-gradient(180deg,#ffd94d,#ffb62e)] text-white shadow-[0_4px_10px_rgba(220,150,30,0.45)] transition-transform active:scale-95"
         >
           <ArrowLeft className="h-6 w-6" strokeWidth={3} />
         </button>
         {/* 悬挂横杆 */}
-        <span aria-hidden="true" className="absolute left-1/2 top-0 h-2.5 w-[240px] -translate-x-1/2 rounded-b-md bg-[linear-gradient(180deg,#9c6b35,#7a4e22)] shadow-sm" />
+        <div className="pt-[56px]">
+          <span aria-hidden="true" className="mx-auto block h-2.5 w-[240px] rounded-b-md bg-[linear-gradient(180deg,#9c6b35,#7a4e22)] shadow-sm" />
         {/* 木牌主体 */}
-        <div className="mx-auto mt-3 w-[236px]">
+        <div className="mx-auto mt-1 w-[236px]">
           <div className="relative rounded-xl border-[3px] border-[#8a5a2e] bg-[linear-gradient(180deg,#c99a55,#b07f3e)] px-3 py-2 shadow-[0_6px_14px_rgba(120,80,30,0.35)]">
             {/* 顶部绿果实 */}
             <span aria-hidden="true" className="absolute -top-2 right-9 h-4 w-4 rounded-full border-2 border-[#5f8f3a] bg-[radial-gradient(circle_at_35%_30%,#b9e877,#7cb84a)] shadow-sm" />
@@ -1815,19 +1904,11 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
             </button>
           )}
         </div>
+        </div>
       </div>
 
       {/* ===== 中部场景 ===== */}
       <div className="relative z-10 flex-1">
-        {/* 左侧奖励按钮 */}
-        <div className="absolute left-2 top-2 flex flex-col gap-3">
-          {leftBadges.map((b) => (
-            <button key={b.label} type="button" onClick={() => showToast(b.tip)} className="flex w-[64px] flex-col items-center transition-transform active:scale-[0.92]">
-              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-[22px] shadow-[0_4px_12px_rgba(90,130,60,0.28)] ring-2 ring-white">{b.icon}</span>
-              <span className="mt-1 rounded-full bg-white/85 px-1.5 py-[1px] text-[9px] font-bold leading-tight text-[#6bb324] shadow-sm [text-shadow:0_1px_0_#fff]">{b.label}</span>
-            </button>
-          ))}
-        </div>
         {/* 左侧滑动箭头（装饰） */}
         <button
           type="button"
@@ -1840,13 +1921,13 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
           </svg>
         </button>
 
-        {/* 小树 + 泥土堆 */}
-        <div className="absolute bottom-[8px] left-1/2 -translate-x-1/2 text-center">
-          <span key={pop} className="block leading-none [animation:couple-pop-heart_.5s_ease-out]" style={{ fontSize: 58 + Math.min(4, Math.floor(tree / 20)) * 10 }}>
-            {stageEmoji}
+        {/* 小树 + 泥土堆（SVG 成长树） */}
+        <div className="absolute bottom-[26px] left-1/2 -translate-x-1/2 text-center">
+          <span key={pop} className="mx-auto block h-[218px] w-[200px] [animation:couple-pop-heart_.5s_ease-out]">
+            <LoveTree stage={stage} />
           </span>
           {/* 泥土堆 */}
-          <span aria-hidden="true" className="mx-auto -mt-2 block h-6 w-[92px] rounded-[50%] bg-[linear-gradient(180deg,#9a6b3d,#7c5227)] shadow-[0_4px_10px_rgba(80,50,20,0.35)]" />
+          <span aria-hidden="true" className="mx-auto -mt-6 block h-6 w-[92px] rounded-[50%] bg-[linear-gradient(180deg,#9a6b3d,#7c5227)] shadow-[0_4px_10px_rgba(80,50,20,0.35)]" />
           <span aria-hidden="true" className="mx-auto -mt-5 block h-3.5 w-[70px] rounded-[50%] bg-[#b07f4a]" />
         </div>
 
@@ -1859,7 +1940,7 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
           }}
           disabled={tree >= 100}
           aria-label="给小树浇水"
-          className="absolute bottom-[104px] left-[56%] flex flex-col items-center transition-transform active:scale-[0.94] disabled:opacity-60"
+          className="absolute bottom-[142px] left-[56%] flex flex-col items-center transition-transform active:scale-[0.94] disabled:opacity-60"
         >
           <span className="relative flex h-[74px] w-[74px] items-center justify-center rounded-full bg-white/95 shadow-[0_5px_16px_rgba(90,130,60,0.3)]">
             {/* 化肥罐 */}
@@ -1879,70 +1960,10 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
         </button>
         {/* 浇水飘字 */}
         {wateredToday && (
-          <span aria-hidden="true" className="absolute bottom-[190px] left-[58%] rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-medium text-[#5a8a3c] shadow-sm">
+          <span aria-hidden="true" className="absolute bottom-[240px] left-[58%] rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-medium text-[#5a8a3c] shadow-sm">
             今天已经浇过啦 ♡
           </span>
         )}
-      </div>
-
-      {/* ===== 底部木架 + 三个入口 ===== */}
-      <div className="relative z-20 shrink-0 px-3 pb-6">
-        <div className="grid grid-cols-3 gap-4 px-2">
-          {([
-            { label: '小世界', lock: '5级', tip: () => showToast(tree >= 100 ? '小世界已解锁！（演示）' : '成长到 5 级（100 成长值）解锁'), icon: (
-                <span className="relative block h-[52px] w-[58px] overflow-hidden rounded-lg bg-[linear-gradient(160deg,#bfe3ef,#a8d8e8)] shadow-[0_3px_8px_rgba(90,120,60,0.3)] ring-2 ring-white/80">
-                  <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[22px]">🌸</span>
-                  <span className="absolute bottom-0.5 left-1 h-3 w-6 rounded-full bg-[#8fd06a]" />
-                  <span className="absolute right-1 top-1 h-3 w-5 rounded-full bg-white/80" />
-                </span>
-              ) },
-            { label: '魔法屋', lock: '6级', tip: () => showToast('继续浇水升级，魔法屋敬请期待'), icon: (
-                <span className="relative block h-[52px] w-[58px] overflow-hidden rounded-lg bg-[#fce8f1] shadow-[0_3px_8px_rgba(90,120,60,0.3)] ring-2 ring-white/80">
-                  <span aria-hidden="true" className="absolute inset-x-0 top-0 flex h-4">
-                    {Array.from({ length: 4 }).map((_, i) => (
-                      <span key={i} className={`h-full flex-1 ${i % 2 === 0 ? 'bg-[#f7a8c6]' : 'bg-white'}`} />
-                    ))}
-                  </span>
-                  <span className="absolute bottom-1 left-1/2 h-5 w-7 -translate-x-1/2 rounded-t-md bg-[#f9d9e8]" />
-                  <span className="absolute bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rounded-t-full bg-[#e58ab2]" />
-                </span>
-              ) },
-            { label: '任务', lock: null, tip: () => showToast(wateredToday ? '今日任务已完成：浇水 1 次 ✓' : '今日任务：给小树浇一次水吧'), icon: (
-                <span className="relative block h-[52px] w-[58px] rounded-lg bg-[linear-gradient(180deg,#fbd0e2,#f7b8d4)] shadow-[0_3px_8px_rgba(90,120,60,0.3)] ring-2 ring-white/80">
-                  <span aria-hidden="true" className="absolute -top-1 left-1/2 flex -translate-x-1/2 gap-1.5">
-                    {Array.from({ length: 3 }).map((_, i) => (
-                      <span key={i} className="h-3 w-1 rounded-full bg-[#d989ab]" />
-                    ))}
-                  </span>
-                  <span className="absolute left-2 top-3 space-y-1.5">
-                    {Array.from({ length: 3 }).map((_, i) => (
-                      <span key={i} className="flex items-center gap-1">
-                        <span className="h-1.5 w-4 rounded bg-[#e58ab2]" />
-                        <span className="text-[8px] font-bold text-[#c9628f]">✓</span>
-                      </span>
-                    ))}
-                  </span>
-                </span>
-              ) },
-          ] as const).map((b) => (
-            <button key={b.label} type="button" onClick={b.tip} className="relative flex flex-col items-center transition-transform active:scale-[0.94]">
-              <span className="relative">
-                {b.icon}
-                {b.lock && (
-                  <span className="absolute -right-2 -top-2 flex flex-col items-center rounded-full bg-[#5a4632]/90 px-1 py-[1px] text-white shadow">
-                    <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="currentColor"><path d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 8V7a3 3 0 1 1 6 0v3H9z" /></svg>
-                    <span className="text-[8px] font-extrabold leading-none text-[#ffd94d]">{b.lock}</span>
-                  </span>
-                )}
-              </span>
-              <span className="-mt-1.5 rounded-md bg-[linear-gradient(180deg,#c99a55,#a5763a)] px-3 py-0.5 text-[13px] font-extrabold text-[#ffe9b8] shadow-[0_2px_6px_rgba(120,80,30,0.4)] [text-shadow:0_1px_0_rgba(90,60,20,0.8)]">
-                {b.label}
-              </span>
-            </button>
-          ))}
-        </div>
-        {/* 木架横板 */}
-        <span aria-hidden="true" className="mx-auto mt-1 block h-3.5 w-[96%] rounded-md bg-[linear-gradient(180deg,#a5713d,#7a4e22)] shadow-[0_4px_10px_rgba(90,60,20,0.4)]" />
       </div>
     </div>
   );
@@ -2213,60 +2234,282 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
   );
 }
 
-/** 甜蜜小问答：每日一题 + 回答记录 */
-function QuizPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
-  const dayIdx = Math.floor(Date.now() / 86400000) % QUIZ_POOL.length;
-  const question = QUIZ_POOL[dayIdx];
-  const todayHas = state.quiz.some((q) => q.q === question);
-  const [answer, setAnswer] = useState('');
+/** 甜蜜小问答（参考图3/4/5）：问题列表（粉色序号+圆点状态）→ 题目详情（双栏回答）→ 回答编辑；右下角 + 号自定义问题 */
+function QuizHeartLine({ className = '' }: { className?: string }) {
   return (
-    <SubShell title="甜蜜小问答" onBack={close}>
-      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
-        <div className="text-[13px] text-[#9a9aa2]">今天的问题</div>
-        <div className="mt-2 text-[17px] font-semibold leading-relaxed text-[#2c2c30]">{question}</div>
-        <textarea
-          value={answer}
-          onChange={(e) => setAnswer(e.target.value)}
-          placeholder="写下你的答案…"
-          maxLength={300}
-          rows={3}
-          className="mt-4 w-full resize-none rounded-xl bg-[#f3f3f5] p-3.5 text-[15px] leading-relaxed outline-none placeholder:text-[#b6b6bd]"
-        />
+    <div aria-hidden="true" className={`flex items-center gap-2 ${className}`}>
+      <span className="h-px flex-1 bg-[linear-gradient(90deg,transparent,#f3b7c6)]" />
+      <Heart className="h-3.5 w-3.5 text-[#f8a8bc]" fill="#f8a8bc" strokeWidth={0} />
+      <span className="h-px flex-1 bg-[linear-gradient(90deg,#f3b7c6,transparent)]" />
+    </div>
+  );
+}
+
+function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; days: number | null; showToast: (m: string) => void; close: () => void }) {
+  const [view, setView] = useState<'list' | 'detail' | 'answer'>('list');
+  const [cur, setCur] = useState(0);
+  const [answer, setAnswer] = useState('');
+  const [addSheet, setAddSheet] = useState(false);
+  const [newQ, setNewQ] = useState('');
+
+  const custom = state.quizCustom || [];
+  const questions = useMemo(() => [...custom, ...QUIZ_POOL], [custom]);
+  const latestByQ = useMemo(() => {
+    const map: Record<string, { a: string; at: number }> = {};
+    for (const r of state.quiz) if (!map[r.q] || map[r.q].at < r.at) map[r.q] = { a: r.a, at: r.at };
+    return map;
+  }, [state.quiz]);
+
+  const q = questions[cur] ?? '';
+  const my = latestByQ[q];
+  const isCustom = cur < custom.length;
+  const me = state.meName || '我';
+  const ta = state.taName || 'TA';
+
+  const openDetail = (i: number) => {
+    setCur(i);
+    setView('detail');
+  };
+  const startAnswer = () => {
+    setAnswer(my?.a ?? '');
+    setView('answer');
+  };
+  const saveAnswer = () => {
+    const text = answer.trim();
+    if (!text) return;
+    patch({ quiz: [{ id: uid(), q, a: text, at: Date.now() }, ...state.quiz.filter((r) => r.q !== q)] });
+    showToast('回答已记录 ♡');
+    setView('detail');
+  };
+  const addCustom = () => {
+    const t = newQ.trim();
+    if (!t) return;
+    patch({ quizCustom: [t, ...custom] });
+    setNewQ('');
+    setAddSheet(false);
+    showToast('问题已添加 ♡');
+    setCur(0);
+    setView('detail');
+  };
+  const removeCustom = () => {
+    patch({ quizCustom: custom.filter((x) => x !== q) });
+    showToast('已删除该问题');
+    setView('list');
+  };
+
+  /** 顶栏（列表/详情/回答共用）：back 行为随视图变化 */
+  const TopBar = (
+    <div className="relative flex h-12 shrink-0 items-center px-2">
+      <button
+        type="button"
+        onClick={() => (view === 'list' ? close() : view === 'detail' ? setView('list') : setView('detail'))}
+        aria-label="返回"
+        className="flex h-9 items-center gap-0.5 rounded-full px-1.5 text-[#3a3a40] transition-opacity active:opacity-50"
+      >
+        <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
+        {view === 'detail' && <span className="text-[15px] font-medium">题目列表</span>}
+      </button>
+      <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[17px] font-bold">甜蜜小问答</div>
+    </div>
+  );
+
+  /** 题目头（详情/回答共用）：大标题 + 序号信息行 */
+  const QuestionHead = (
+    <>
+      <div className="text-[21px] font-bold leading-snug text-[#26262b]">{q}</div>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <div className="text-[14px]">
+          <span className="text-[#9a9aa2]"># 第{cur + 1}个问题 </span>
+          <span className="font-medium text-[#f78fb0]">在一起{days ?? 0}天</span>
+        </div>
         <button
           type="button"
-          onClick={() => {
-            const text = answer.trim();
-            if (!text) {
-              return;
-            }
-            patch({ quiz: [{ id: uid(), q: question, a: text, at: Date.now() }, ...state.quiz] });
-            setAnswer('');
-            showToast('答案已记录 ♡');
-          }}
-          disabled={todayHas}
-          className="mt-3 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white disabled:opacity-40"
+          onClick={() => showToast('小问答打印成册（演示）')}
+          className="shrink-0 rounded-full bg-[linear-gradient(90deg,#ffb9cb,#ff9db8)] px-3 py-1.5 text-[12.5px] font-bold text-white shadow-[0_2px_8px_rgba(240,140,170,0.4)] transition-transform active:scale-95"
         >
-          {todayHas ? '今天已回答，明天再来' : '提交答案'}
+          小问答打印成册
         </button>
       </div>
-      {state.quiz.length > 0 && (
+      <QuizHeartLine className="mt-4" />
+    </>
+  );
+
+  return (
+    <div className="relative flex h-full flex-col bg-[#fdfafb]">
+      <div className="shrink-0 bg-[#fdfafb]/95 pt-[54px] backdrop-blur-md">{TopBar}</div>
+
+      {/* ============ 列表视图（参考图3） ============ */}
+      {view === 'list' && (
         <>
-          <h3 className="px-2 pb-2 pt-6 text-[17px] font-bold">往期问答</h3>
-          <div className="max-h-[46vh] space-y-3 overflow-y-auto">
-            {state.quiz.map((q) => (
-              <div key={q.id} className="rounded-2xl bg-white p-4 shadow-sm">
-                <div className="flex items-baseline justify-between gap-2">
-                  <div className="text-[14px] font-medium leading-snug text-[#4a4a52]">{q.q}</div>
-                  <div className="shrink-0 text-[12px] text-[#b6b6bd]">{fmtDate(q.at)}</div>
-                </div>
-                <div className="mt-2 text-[15px] leading-relaxed text-[#2c2c30]">{q.a}</div>
-              </div>
-            ))}
+          <div className="flex shrink-0 items-center px-4 pb-1 pt-1">
+            <button
+              type="button"
+              onClick={() => showToast('小问答打印成册（演示）')}
+              className="rounded-full rounded-l-none bg-[linear-gradient(90deg,#ffb9cb,#ff9db8)] py-2 pl-5 pr-4 text-[14px] font-bold text-white shadow-[0_3px_10px_rgba(240,140,170,0.4)] transition-transform active:scale-95"
+            >
+              打印成册
+            </button>
+            <QuizHeartLine className="mx-3 flex-1" />
+            <button
+              type="button"
+              onClick={() => showToast('每天一题，把答案留给未来的我们 ♡')}
+              aria-label="说明"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#c9c9d0] transition-opacity active:opacity-50"
+            >
+              <Info className="h-[18px] w-[18px]" strokeWidth={1.8} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto overscroll-contain px-5 pb-28 pt-2">
+            {questions.map((item, i) => {
+              const answered = !!latestByQ[item];
+              return (
+                <button
+                  key={`${item}-${i}`}
+                  type="button"
+                  onClick={() => openDetail(i)}
+                  className="flex w-full items-center gap-3 border-b border-[#f5e7eb] py-4 text-left transition-colors active:bg-[#fdf1f4]"
+                >
+                  <span className="w-9 shrink-0 text-[24px] font-light italic leading-none text-[#f5b8c6]" style={{ fontFamily: 'Georgia, serif' }}>
+                    {String(i + 1).padStart(2, '0')}
+                  </span>
+                  <span className="flex-1 text-[16px] font-semibold leading-snug text-[#2c2c30]">{item}</span>
+                  {isCustomIndex(i, custom.length) && (
+                    <span className="shrink-0 rounded-full bg-[#fdeef2] px-1.5 py-0.5 text-[9px] font-bold text-[#e88ba4]">自定义</span>
+                  )}
+                  <span
+                    aria-hidden="true"
+                    className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border-2 ${
+                      answered ? 'border-transparent bg-[linear-gradient(135deg,#ffb9cb,#ff8fae)]' : 'border-[#f3b7c6] bg-transparent'
+                    }`}
+                  >
+                    {answered && <Heart className="h-3 w-3 text-white" fill="#ffffff" strokeWidth={0} />}
+                  </span>
+                </button>
+              );
+            })}
+            <div className="pt-5 text-center text-[12px] text-[#c9b6bc]">— 每天一问 · 把甜蜜记下来 —</div>
           </div>
         </>
       )}
-    </SubShell>
+
+      {/* ============ 详情视图（参考图4） ============ */}
+      {view === 'detail' && (
+        <div className="flex-1 overflow-y-auto overscroll-contain px-6 pb-28 pt-3">
+          {QuestionHead}
+          {/* TA 的回答 */}
+          <div className="mt-6">
+            <div className="text-[15px] font-medium text-[#8f9fe8]">{ta}（TA）</div>
+            <div className="mt-2 text-[15px] leading-relaxed text-[#b9b9c0]">还没有回答问题哦</div>
+          </div>
+          {/* 我的回答 */}
+          <div className="mt-7">
+            <div className="text-[15px] font-medium text-[#f78fb0]">{me}（我）</div>
+            {my ? (
+              <>
+                <div className="mt-2 whitespace-pre-wrap text-[16px] leading-relaxed text-[#2c2c30]">{my.a}</div>
+                <div className="mt-1.5 text-[12px] text-[#c9c9d0]">{fmtDate(my.at)}</div>
+                <button
+                  type="button"
+                  onClick={startAnswer}
+                  className="mt-4 h-11 w-full rounded-full border-2 border-[#f3a0b8] text-[15px] font-semibold text-[#f06e96] transition-colors active:bg-[#fdf1f4]"
+                >
+                  修改我的回答
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={startAnswer}
+                className="mt-4 h-12 w-full rounded-full border-2 border-[#f3a0b8] text-[16px] font-semibold text-[#f06e96] transition-colors active:bg-[#fdf1f4]"
+              >
+                点此回答问题
+              </button>
+            )}
+          </div>
+          {isCustom && (
+            <button type="button" onClick={removeCustom} className="mx-auto mt-8 block text-[13px] text-[#d3a5b1] underline underline-offset-4">
+              删除这个自定义问题
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ============ 回答视图（参考图5） ============ */}
+      {view === 'answer' && (
+        <div className="flex flex-1 flex-col overflow-hidden px-6 pt-3">
+          {QuestionHead}
+          <textarea
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            placeholder="输入你的回答..."
+            maxLength={100}
+            rows={5}
+            autoFocus
+            className="mt-5 w-full flex-1 resize-none bg-transparent text-[16px] leading-relaxed text-[#2c2c30] outline-none placeholder:text-[#c6c6cd]"
+          />
+          <div className="pb-2 text-right text-[13px] text-[#c6c6cd]">{answer.length}/100</div>
+          <button
+            type="button"
+            onClick={saveAnswer}
+            disabled={!answer.trim()}
+            className="mx-auto mb-8 h-[52px] w-[70%] rounded-full bg-[linear-gradient(135deg,#ffc3d4,#ff92b0)] text-[17px] font-bold text-white shadow-[0_4px_14px_rgba(240,140,170,0.45)] transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
+          >
+            完成
+          </button>
+        </div>
+      )}
+
+      {/* 右下角悬浮 + 号：自定义问题 */}
+      {view !== 'answer' && (
+        <button
+          type="button"
+          onClick={() => setAddSheet(true)}
+          aria-label="自定义问题"
+          className="absolute bottom-7 right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(135deg,#ffb9cb,#ff8fae)] text-white shadow-[0_6px_18px_rgba(240,140,170,0.55)] transition-transform active:scale-90"
+        >
+          <Plus className="h-7 w-7" strokeWidth={2.4} />
+        </button>
+      )}
+
+      {/* 自定义问题弹层 */}
+      {addSheet && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/40 px-8" onClick={() => setAddSheet(false)}>
+          <div className="w-full rounded-2xl bg-white p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center text-[17px] font-bold text-[#2c2c30]">自定义问题</div>
+            <QuizHeartLine className="mt-3" />
+            <textarea
+              value={newQ}
+              onChange={(e) => setNewQ(e.target.value)}
+              placeholder="写下你想和 TA 聊的问题…"
+              maxLength={50}
+              rows={3}
+              autoFocus
+              className="mt-4 w-full resize-none rounded-xl bg-[#fdf1f4] p-3.5 text-[15px] leading-relaxed outline-none placeholder:text-[#d8aab6]"
+            />
+            <div className="text-right text-[12px] text-[#c9c9d0]">{newQ.length}/50</div>
+            <div className="mt-3 flex gap-3">
+              <button type="button" onClick={() => setAddSheet(false)} className="h-11 flex-1 rounded-full bg-[#f3f3f5] text-[15px] font-medium text-[#7a7a82]">
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={addCustom}
+                disabled={!newQ.trim()}
+                className="h-11 flex-1 rounded-full bg-[linear-gradient(135deg,#ffb9cb,#ff8fae)] text-[15px] font-bold text-white disabled:opacity-45"
+              >
+                添加
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
+}
+
+/** 判断列表序号是否为自定义问题 */
+function isCustomIndex(i: number, customLen: number) {
+  return i < customLen;
 }
 
 /** 未来情书：写给未来的信，到期才能拆开 */
@@ -2783,9 +3026,219 @@ function TarotPage({ state, patch, showToast, close }: { state: CoupleState; pat
 }
 
 /** 100 件小事（手账拼贴风）：标题牌 + 拍立得卡片 + 待完成/已完成邮戳 */
-const HUNDRED_EMOJI = ['💑', '🎬', '📷', '👕', '😴', '🌅', '🌇', '🚶', '☂️', '🍳', '🧼', '🍎', '🎤', '🎵', '🛍️', '💨', '💅', '🦶', '🛁', '⛄', '🍦', '🍲', '🍢', '🥣', '🕛', '🎊', '🎆', '🏮', '🌊', '👣', '🐚', '⛰️', '⛺', '🌟', '🌌', '🎡', '🎠', '🎢', '🎟️', '🖼️', '🏛️', '📖', '📚', '🎨', '🎸', '🎭', '🎶', '💃', '🌧️', '❄️', '🪁', '🚲', '🚣', '🎣', '🌸', '🍂', '🪴', '🏷️', '🐾', '🎂', '💌', '✉️', '🎁', '🎉', '🤲', '📏', '🤒', '🤝', '📜', '💰', '✈️', '🗺️', '👶', '🤫', '📞', '📝', '🎥', '✂️', '🎮', '🧩', '🧱', '🎲', '🔮', '🏃', '🏸', '🎓', '🍜', '🎎', '🥂', '📅', '📍', '📸', '💍', '💬', '👴', '🍵', '🛒', '🏏', '🌙'];
 /** 100 件小事（参考图1/2）：粉色手账拼贴 + 拍立得卡片墙（翻页）+ 待完成印章 + 目录/添加小事 + 编辑详情页 */
 const HUNDRED_ROT = ['-rotate-[1.6deg]', 'rotate-[1.1deg]', '-rotate-[0.6deg]', 'rotate-[1.5deg]'];
+
+/** 卡通表情（豆豆眼 + 小嘴 + 腮红） */
+function KawaiiFace({ x, y, s = 1, tone = '#8a626e' }: { x: number; y: number; s?: number; tone?: string }) {
+  return (
+    <g transform={`translate(${x} ${y}) scale(${s})`}>
+      <circle cx="-3" cy="0" r="1.05" fill={tone} />
+      <circle cx="3" cy="0" r="1.05" fill={tone} />
+      <path d="M-1.3 2.4 Q0 3.8 1.3 2.4" stroke={tone} strokeWidth="0.8" fill="none" strokeLinecap="round" />
+      <ellipse cx="-5.8" cy="1.8" rx="1.5" ry="0.9" fill="#f7b8c4" opacity="0.75" />
+      <ellipse cx="5.8" cy="1.8" rx="1.5" ry="0.9" fill="#f7b8c4" opacity="0.75" />
+    </g>
+  );
+}
+
+/** 手账插画（参考图1风格：软萌 SVG 小插画，替代 emoji；kind 见 HUNDRED_KIND_COUNT） */
+const HUNDRED_KIND_COUNT = 16;
+function ScrapIllus({ kind, className = '' }: { kind: number; className?: string }) {
+  const k = ((kind % HUNDRED_KIND_COUNT) + HUNDRED_KIND_COUNT) % HUNDRED_KIND_COUNT;
+  return (
+    <svg viewBox="0 0 100 70" className={className} aria-hidden="true">
+      {k === 0 && (
+        /* 用情侣头像：两颗带脸的爱心 */
+        <g>
+          <ellipse cx="50" cy="61" rx="36" ry="6" fill="#f3dbe2" opacity="0.7" />
+          <path d={LOVE_HEART_PATH} transform="translate(31 24) scale(4.4) translate(-4.5 -3.5)" fill="#f2a9bc" />
+          <KawaiiFace x={31} y={26} s={1.5} />
+          <path d={LOVE_HEART_PATH} transform="translate(67 28) scale(3.4) translate(-4.5 -3.5)" fill="#f7c3d0" />
+          <KawaiiFace x={67} y={29} s={1.2} />
+          <circle cx="18" cy="16" r="1.6" fill="#f3c8d3" />
+          <circle cx="84" cy="14" r="1.2" fill="#f3c8d3" />
+        </g>
+      )}
+      {k === 1 && (
+        /* 一起看电影：爆米花桶 + 饮料杯 */
+        <g>
+          <g transform="translate(35 32)">
+            <circle cx="-8" cy="-9" r="5" fill="#fbdce4" />
+            <circle cx="0" cy="-12" r="6" fill="#fce8ee" />
+            <circle cx="8" cy="-9" r="5" fill="#fbdce4" />
+            <path d="M-13 -6 L13 -6 L10 26 L-10 26 Z" fill="#fff" stroke="#eec3cf" strokeWidth="1.5" />
+            <path d="M-6 -6 L-4.5 26" stroke="#f2a9bc" strokeWidth="3.2" />
+            <path d="M6 -6 L4.5 26" stroke="#f2a9bc" strokeWidth="3.2" />
+            <KawaiiFace x={0} y={9} s={1.1} />
+          </g>
+          <g transform="translate(68 34)">
+            <rect x="-2.6" y="-19" width="2.6" height="14" rx="1.3" fill="#e8988a" transform="rotate(14 -1 -12)" />
+            <path d="M-10 -7 L10 -7 L7.6 25 L-7.6 25 Z" fill="#f9c8a8" stroke="#efb08c" strokeWidth="1.2" />
+            <ellipse cx="0" cy="-7" rx="10" ry="2.6" fill="#f4b28a" />
+            <KawaiiFace x={0} y={7} s={1} />
+          </g>
+        </g>
+      )}
+      {k === 2 && (
+        /* 第一次合照的照片：拍立得相框 + 双心 */
+        <g transform="rotate(-4 50 35)">
+          <rect x="22" y="11" width="54" height="46" rx="3" fill="#fdf6ee" stroke="#e8cdb2" strokeWidth="2.4" />
+          <rect x="29" y="18" width="40" height="31" rx="2" fill="#fbe3e9" />
+          <path d={LOVE_HEART_PATH} transform="translate(44 33) scale(2.4) translate(-4.5 -3.5)" fill="#f2a9bc" />
+          <path d={LOVE_HEART_PATH} transform="translate(57 36) scale(1.7) translate(-4.5 -3.5)" fill="#f7c3d0" />
+          <circle cx="72" cy="13" r="2.6" fill="#f2a9bc" opacity="0.85" />
+        </g>
+      )}
+      {k === 3 && (
+        /* 互穿对方衣服拍照：两件小衣服 */
+        <g>
+          <g transform="translate(32 38)">
+            <path d="M-12 -10 L-5 -14 L0 -10.5 L5 -14 L12 -10 L15 -2 L10 -0.5 L10 14 L-10 14 L-10 -0.5 L-15 -2 Z" fill="#fdf3e3" stroke="#ecd9b8" strokeWidth="1.5" />
+            <path d="M-5 -14 L0 -10.5 L5 -14" fill="none" stroke="#e8c9a0" strokeWidth="1.2" />
+            <KawaiiFace x={0} y={2} s={1} />
+          </g>
+          <g transform="translate(68 40)">
+            <path d="M-8 -13 L8 -13 L10 -7 L7 -7 L11 12 L-11 12 L-7 -7 L-10 -7 Z" fill="#fdeff3" stroke="#f3c6d3" strokeWidth="1.5" />
+            <path d="M-8 -13 L8 -13" stroke="#f3c6d3" strokeWidth="3.4" strokeLinecap="round" />
+            <KawaiiFace x={0} y={-1} s={0.95} />
+          </g>
+        </g>
+      )}
+      {k === 4 && (
+        /* 连麦睡觉：小床 + 枕头 + 心 */
+        <g>
+          <rect x="14" y="30" width="9" height="22" rx="3" fill="#e8cdb2" />
+          <rect x="20" y="36" width="62" height="15" rx="4" fill="#fdf0e2" stroke="#ecd5bc" strokeWidth="1.4" />
+          <ellipse cx="37" cy="34.5" rx="9" ry="4.6" fill="#fff" stroke="#e8d5c8" strokeWidth="1" />
+          <path d="M24 44 Q52 50 80 42 L80 51 L24 51 Z" fill="#f6cdd9" opacity="0.9" />
+          <path d={LOVE_HEART_PATH} transform="translate(64 28) scale(1.8) translate(-4.5 -3.5)" fill="#f2a9bc" />
+          <text x="74" y="18" fontSize="9" fontWeight="bold" fill="#c9a9b2">z z</text>
+        </g>
+      )}
+      {k === 5 && (
+        /* 一起看日出：山间朝阳 */
+        <g>
+          <circle cx="50" cy="34" r="13" fill="#ffd98a" />
+          <path d="M50 21 A13 13 0 0 1 50 47 Z" fill="#ffca6e" opacity="0.7" />
+          <path d="M12 47 Q30 34 50 46 Q72 34 88 47 L88 56 L12 56 Z" fill="#f3b8c8" opacity="0.8" />
+          <path d="M22 47 L26 42 M50 44 L54 40 M72 46 L76 42" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" opacity="0.8" />
+        </g>
+      )}
+      {k === 6 && (
+        /* 牵手压马路：脚印与爱心路 */
+        <g>
+          <path d="M10 52 Q35 40 50 48 Q70 58 88 40" stroke="#eec3cf" strokeWidth="3" strokeDasharray="5 5" fill="none" strokeLinecap="round" />
+          <ellipse cx="34" cy="26" rx="4.5" ry="6" fill="#f2a9bc" transform="rotate(-14 34 26)" />
+          <circle cx="30.5" cy="34" r="1.8" fill="#f2a9bc" />
+          <ellipse cx="56" cy="20" rx="4.5" ry="6" fill="#f7c3d0" transform="rotate(12 56 20)" />
+          <circle cx="59.5" cy="28" r="1.8" fill="#f7c3d0" />
+          <path d={LOVE_HEART_PATH} transform="translate(70 30) scale(1.6) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 7 && (
+        /* 雨天共撑一把伞 */
+        <g>
+          <path d="M22 32 Q50 8 78 32 Z" fill="#f2a9bc" />
+          <path d="M36 32 Q50 12 50 12 M64 32 Q50 12 50 12" stroke="#fff" strokeWidth="1.4" opacity="0.6" fill="none" />
+          <path d="M50 32 L50 50 Q50 56 44 55" stroke="#d9899d" strokeWidth="2.4" fill="none" strokeLinecap="round" />
+          <path d="M20 44 l-2.4 5 M32 48 l-2.4 5 M74 44 l-2.4 5 M84 50 l-2.4 5" stroke="#a8c8e8" strokeWidth="2" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 8 && (
+        /* 一起做一顿晚饭：平底锅 + 爱心蛋 */
+        <g>
+          <ellipse cx="52" cy="40" rx="30" ry="14" fill="#5f5f66" />
+          <ellipse cx="52" cy="38" rx="24" ry="10" fill="#4a4a50" />
+          <ellipse cx="52" cy="38" rx="13" ry="7" fill="#fff" />
+          <path d={LOVE_HEART_PATH} transform="translate(52 37) scale(1.3) translate(-4.5 -3.5)" fill="#ffd98a" />
+          <path d="M82 38 L96 34" stroke="#5f5f66" strokeWidth="5" strokeLinecap="round" />
+          <circle cx="24" cy="20" r="1.6" fill="#f3c8d3" />
+        </g>
+      )}
+      {k === 9 && (
+        /* 一起唱一首歌：音符与小心心 */
+        <g>
+          <circle cx="32" cy="50" r="6" fill="#f2a9bc" />
+          <rect x="36.4" y="22" width="2.6" height="28" fill="#e88ba4" />
+          <path d="M39 22 Q50 24 50 32 Q46 26 39 27 Z" fill="#e88ba4" />
+          <circle cx="66" cy="44" r="5" fill="#f7c3d0" />
+          <rect x="69.6" y="20" width="2.4" height="24" fill="#efb0c4" />
+          <path d={LOVE_HEART_PATH} transform="translate(84 26) scale(1.4) translate(-4.5 -3.5)" fill="#f2a9bc" />
+          <path d="M14 22 Q18 18 22 22" stroke="#f3c8d3" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 10 && (
+        /* 互送礼物：礼物盒 */
+        <g>
+          <rect x="28" y="28" width="44" height="30" rx="3" fill="#fbdce4" stroke="#f2a9bc" strokeWidth="1.6" />
+          <rect x="24" y="20" width="52" height="11" rx="3" fill="#f2a9bc" />
+          <rect x="47" y="20" width="6" height="38" fill="#fff" opacity="0.85" />
+          <path d="M50 20 C42 8 30 12 36 19 C40 23 46 21 50 20 Z" fill="none" stroke="#e88ba4" strokeWidth="2" />
+          <path d="M50 20 C58 8 70 12 64 19 C60 23 54 21 50 20 Z" fill="none" stroke="#e88ba4" strokeWidth="2" />
+        </g>
+      )}
+      {k === 11 && (
+        /* 一起去看海：海浪小帆船 */
+        <g>
+          <circle cx="76" cy="18" r="7" fill="#ffd98a" />
+          <path d="M44 14 L44 34 L62 34 Z" fill="#fff" stroke="#e8cdb2" strokeWidth="1.2" />
+          <path d="M42 14 L42 34" stroke="#d9899d" strokeWidth="2" />
+          <path d="M36 36 L52 36 L48 42 L40 42 Z" fill="#f2a9bc" />
+          <path d="M8 48 Q20 42 32 48 Q44 54 56 48 Q68 42 80 48 Q88 52 94 49" stroke="#8fc3e8" strokeWidth="3" fill="none" strokeLinecap="round" />
+          <path d="M12 56 Q26 51 40 56 Q56 61 70 56 Q82 52 92 56" stroke="#b3d9f2" strokeWidth="2.6" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 12 && (
+        /* 数流星许愿：月亮星星 */
+        <g>
+          <path d="M62 12 A17 17 0 1 0 78 38 A13.5 13.5 0 0 1 62 12 Z" fill="#ffd98a" />
+          <path d="M20 16 L23 24 L31 26 L23 29 L20 37 L17 29 L9 26 L17 24 Z" fill="#f7c3d0" />
+          <path d="M38 40 L40 45 L45 46.5 L40 48 L38 53 L36 48 L31 46.5 L36 45 Z" fill="#f2a9bc" />
+          <path d="M14 52 l6 -3" stroke="#f3c8d3" strokeWidth="1.8" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 13 && (
+        /* 奶茶约会：两杯奶茶 */
+        <g>
+          <g transform="translate(36 34)">
+            <path d="M-11 -10 L11 -10 L8.5 24 L-8.5 24 Z" fill="#fdf0e2" stroke="#ecd5bc" strokeWidth="1.4" />
+            <path d="M-11 -10 L11 -10 L10.4 -2 L-10.4 -2 Z" fill="#f2d8b8" />
+            <circle cx="-3" cy="18" r="2.2" fill="#c99a6a" />
+            <circle cx="3" cy="21" r="2.2" fill="#c99a6a" />
+            <KawaiiFace x={0} y={8} s={0.95} />
+          </g>
+          <g transform="translate(66 37)">
+            <path d="M-9 -8 L9 -8 L7 20 L-7 20 Z" fill="#fdeff3" stroke="#f3c6d3" strokeWidth="1.4" />
+            <ellipse cx="0" cy="-8" rx="9" ry="2.2" fill="#f3c6d3" />
+            <KawaiiFace x={0} y={5} s={0.85} />
+          </g>
+        </g>
+      )}
+      {k === 14 && (
+        /* 一起挑戏指环 */
+        <g>
+          <circle cx="50" cy="42" r="16" fill="none" stroke="#ffd98a" strokeWidth="5" />
+          <circle cx="50" cy="42" r="16" fill="none" stroke="#f2c14e" strokeWidth="1.6" opacity="0.7" />
+          <path d={LOVE_HEART_PATH} transform="translate(50 20) scale(1.9) translate(-4.5 -3.5)" fill="#f2a9bc" />
+          <circle cx="43" cy="16" r="1.4" fill="#f3c8d3" />
+          <circle cx="59" cy="14" r="1" fill="#f3c8d3" />
+        </g>
+      )}
+      {k === 15 && (
+        /* 一起种一盆植物：小花盆 */
+        <g>
+          <path d="M34 40 L66 40 L62 58 L38 58 Z" fill="#f2a9bc" />
+          <rect x="32" y="36" width="36" height="7" rx="2.5" fill="#e88ba4" />
+          <path d="M50 36 L50 18" stroke="#5ea732" strokeWidth="2.6" strokeLinecap="round" />
+          <path d="M50 24 C42 22 38 16 40 10 C48 12 52 18 50 24 Z" fill="#8ed86e" />
+          <path d="M50 20 C58 18 62 12 60 6 C52 8 48 14 50 20 Z" fill="#a8e063" />
+          <path d={LOVE_HEART_PATH} transform="translate(76 22) scale(1.3) translate(-4.5 -3.5)" fill="#f7c3d0" />
+        </g>
+      )}
+    </svg>
+  );
+}
 
 /** 手账装饰花（SVG 玫瑰） */
 function ScrapFlower({ size = 64, className = '', tone = '#f6c3d0' }: { size?: number; className?: string; tone?: string }) {
@@ -2853,19 +3306,29 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
     const title = HUNDRED_LIST[editing] || '';
     return (
       <div className="relative flex h-full flex-col bg-[linear-gradient(180deg,#fdf2f5_0%,#fbeaef_100%)]">
-        {/* 顶栏：删除 + 完成 */}
+        {/* 顶栏：返回 + 清空 + 完成 */}
         <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-[56px]">
-          <button
-            type="button"
-            onClick={() => {
-              setDraft({ ...HUNDRED_DRAFT_DEFAULT });
-              showToast('已清空这件小事的内容');
-            }}
-            aria-label="清空内容"
-            className="text-[#e0708a] transition-opacity active:opacity-50"
-          >
-            <Trash2 className="h-6 w-6" strokeWidth={1.8} />
-          </button>
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => setEditing(null)}
+              aria-label="返回"
+              className="text-[#8a6a74] transition-opacity active:opacity-50"
+            >
+              <ArrowLeft className="h-6 w-6" strokeWidth={2.2} />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraft({ ...HUNDRED_DRAFT_DEFAULT });
+                showToast('已清空这件小事的内容');
+              }}
+              aria-label="清空内容"
+              className="text-[#e0708a] transition-opacity active:opacity-50"
+            >
+              <Trash2 className="h-6 w-6" strokeWidth={1.8} />
+            </button>
+          </div>
           <button
             type="button"
             onClick={finishEdit}
@@ -2987,18 +3450,18 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
         <path d="M7 14 V36 a5 5 0 0 0 10 0 V10 a7 7 0 0 0 -14 0 v26" fill="none" stroke="#c9909e" strokeWidth="2.6" strokeLinecap="round" />
       </svg>
 
-      {/* 顶部：返回 + 标题牌 */}
-      <div className="relative z-20 shrink-0 pt-2">
+      {/* 顶部：返回 + 标题牌（避开状态栏） */}
+      <div className="relative z-20 shrink-0 pt-[56px]">
         <button
           type="button"
           onClick={close}
           aria-label="返回"
-          className="absolute left-3 top-3 z-30 flex h-10 w-10 items-center justify-center rounded-full bg-[linear-gradient(180deg,#f9b7ca,#f29cb6)] text-white shadow-[0_4px_12px_rgba(230,130,160,0.45)] transition-transform active:scale-95"
+          className="absolute left-3 top-[62px] z-30 flex h-10 w-10 items-center justify-center rounded-full bg-[linear-gradient(180deg,#f9b7ca,#f29cb6)] text-white shadow-[0_4px_12px_rgba(230,130,160,0.45)] transition-transform active:scale-95"
         >
           <ArrowLeft className="h-6 w-6" strokeWidth={2.6} />
         </button>
         {/* 标题牌（斜置粉色亚克力牌） */}
-        <div className="relative mx-auto mt-2 w-fit rotate-[-3deg]">
+        <div className="relative mx-auto w-fit rotate-[-3deg]">
           <div className="relative rounded-xl border-2 border-white/85 bg-[linear-gradient(135deg,#f8c6d4,#f2a9be_60%,#ee9db4)] px-7 py-2.5 shadow-[0_6px_18px_rgba(210,110,140,0.35)]">
             <span aria-hidden="true" className="absolute left-2.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-white/85 shadow-inner" />
             <div className="pl-2 text-center">
@@ -3029,18 +3492,18 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
               >
                 {/* 胶带 */}
                 <span aria-hidden="true" className="absolute -top-2 left-1/2 z-10 h-4 w-12 -translate-x-1/2 rotate-[-5deg] rounded-[3px] bg-[#f6cdd9]/90 shadow-sm" />
-                {/* 插画 */}
+                {/* 插画（SVG 手绘风，非 emoji） */}
                 <span className="flex h-[74px] items-center justify-center overflow-hidden rounded-sm bg-[#fdf3ec]">
                   {it?.img ? (
                     <img src={it.img} alt={item} className="h-full w-full object-cover" draggable={false} />
                   ) : (
-                    <span className="text-[34px] drop-shadow-[0_2px_2px_rgba(220,140,160,0.25)]">{HUNDRED_EMOJI[idx % HUNDRED_EMOJI.length]}</span>
+                    <ScrapIllus kind={idx < 5 ? idx : 5 + ((idx - 5) % 11)} className="h-full w-full p-1.5" />
                   )}
                 </span>
                 <span className={`mt-1 block min-h-[30px] text-center text-[11.5px] leading-snug ${checked ? 'text-[#c3a8b0] line-through' : 'text-[#6b5a52]'}`}>{item}</span>
                 {/* 序号 */}
                 <span className="absolute bottom-0.5 left-2 text-[8px] font-bold tracking-wider text-[#e3ccd3]">{String(idx + 1).padStart(2, '0')}</span>
-                {/* 待完成/已完成 印章（点击切换） */}
+                {/* 待完成/已完成 印章（点击切换，参考图位于左上角） */}
                 <span
                   role="button"
                   tabIndex={0}
@@ -3056,7 +3519,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
                       toggleDone(idx);
                     }
                   }}
-                  className={`absolute -right-2 -top-2.5 z-20 rounded-[4px] border px-[3px] py-[3px] text-[9px] font-extrabold leading-[1.1] shadow-sm ${checked ? 'border-[#b09a90] bg-[#b09a90] text-white' : 'border-[#e05a6d] bg-white/90 text-[#e05a6d]'}`}
+                  className={`absolute -left-1.5 -top-2 z-20 rounded-[4px] border px-[3px] py-[3px] text-[9px] font-extrabold leading-[1.1] shadow-sm ${checked ? 'border-[#b09a90] bg-[#b09a90] text-white' : 'border-[#e05a6d] bg-white/90 text-[#e05a6d]'}`}
                   style={{ writingMode: 'vertical-rl' }}
                 >
                   {checked ? '已完成' : '待完成'}
@@ -3447,28 +3910,42 @@ function StonePage({ state, patch, showToast, close }: { state: CoupleState; pat
         <circle cx="200" cy="300" r="250" fill="none" stroke="#9fc3e8" strokeWidth="0.6" strokeDasharray="2 9" />
         <circle cx="200" cy="300" r="130" fill="none" stroke="#b8d4ee" strokeWidth="0.7" strokeDasharray="4 8" />
       </svg>
+      {/* 流星（周期性划过） */}
+      <span aria-hidden="true" className="absolute left-[6%] top-[14%] h-[2px] w-20 rounded-full bg-[linear-gradient(90deg,transparent,#cfe8ff,#fff)] opacity-0 shadow-[0_0_8px_rgba(190,225,255,0.9)] [animation:couple-shoot_6s_ease-in_1.2s_infinite]" />
+      <span aria-hidden="true" className="absolute left-[52%] top-[8%] h-[2px] w-14 rounded-full bg-[linear-gradient(90deg,transparent,#ffe9c8,#fff)] opacity-0 shadow-[0_0_8px_rgba(255,225,180,0.9)] [animation:couple-shoot_8s_ease-in_4.5s_infinite]" />
+      {/* 星尘飘落 */}
+      {[
+        ['16%', 0], ['30%', 1.4], ['55%', 2.6], ['70%', 0.8], ['84%', 2], ['44%', 3.4],
+      ].map(([l, d], i) => (
+        <span
+          key={`dust${i}`}
+          aria-hidden="true"
+          className="absolute top-0 h-1 w-1 rounded-full bg-[#cfe8ff] shadow-[0_0_6px_rgba(170,215,255,0.9)] [animation:couple-fall_9s_linear_infinite]"
+          style={{ left: l as string, animationDelay: `${d}s` }}
+        />
+      ))}
       {/* 底部远山 + 云雾 */}
       <span aria-hidden="true" className="absolute bottom-[13%] -left-10 h-24 w-72 rounded-[50%] bg-[#243b60]/90 blur-[3px]" />
       <span aria-hidden="true" className="absolute bottom-[15%] -right-14 h-28 w-80 rounded-[50%] bg-[#2a4568]/90 blur-[3px]" />
       <span aria-hidden="true" className="absolute bottom-[6%] left-0 right-0 h-24 bg-[linear-gradient(180deg,transparent,rgba(180,205,230,0.35))]" />
 
-      {/* ===== 顶部：返回 + 标题 + 右侧菱形钮 ===== */}
-      <div className="relative z-30 shrink-0 pt-3">
+      {/* ===== 顶部：返回 + 标题 + 右侧菱形钮（整体避开状态栏） ===== */}
+      <div className="relative z-30 shrink-0 pt-[58px]">
         <button
           type="button"
           onClick={close}
           aria-label="返回"
-          className="absolute left-3 top-3 flex h-10 w-10 rotate-45 items-center justify-center rounded-[10px] border border-[#9fc3e8]/60 bg-[#2a4a78]/70 shadow-[0_0_12px_rgba(120,180,240,0.35)] transition-transform active:scale-90"
+          className="absolute left-3 top-[64px] flex h-10 w-10 rotate-45 items-center justify-center rounded-[10px] border border-[#9fc3e8]/60 bg-[#2a4a78]/70 shadow-[0_0_12px_rgba(120,180,240,0.35)] transition-transform active:scale-90"
         >
           <ArrowLeft className="h-5 w-5 -rotate-45 text-[#d8e8f8]" strokeWidth={2.4} />
         </button>
-        <div className="pt-10 text-center text-[19px] font-semibold tracking-[2px] text-[#cfe2f5] [text-shadow:0_0_14px_rgba(140,190,240,0.65)]">
+        <div className="text-center text-[19px] font-semibold tracking-[2px] text-[#cfe2f5] [text-shadow:0_0_14px_rgba(140,190,240,0.65)]">
           缔<span className="mx-0.5 text-[#7d9cc4]">/</span>结<span className="mx-0.5 text-[#7d9cc4]">/</span>名<span className="mx-0.5 text-[#7d9cc4]">/</span>簿
           <span className="mx-3" />
           缘<span className="mx-0.5 text-[#7d9cc4]">/</span>定<span className="mx-0.5 text-[#7d9cc4]">/</span>三<span className="mx-0.5 text-[#7d9cc4]">/</span>生
         </div>
         {/* 右侧两个菱形按钮 */}
-        <div className="absolute right-4 top-[86px] flex flex-col items-center gap-6">
+        <div className="absolute right-4 top-[128px] flex flex-col items-center gap-6">
           <button type="button" onClick={() => setSheet('explain')} className="group flex flex-col items-center transition-transform active:scale-90">
             <span className="flex h-11 w-11 rotate-45 items-center justify-center rounded-[12px] border border-[#9fc3e8]/70 bg-[linear-gradient(135deg,rgba(150,190,235,0.4),rgba(70,110,170,0.4))] shadow-[0_0_14px_rgba(120,180,240,0.45)] backdrop-blur-[2px]">
               <svg viewBox="0 0 24 24" className="h-5 w-5 -rotate-45 text-[#e8f2fc]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -3537,6 +4014,20 @@ function StonePage({ state, patch, showToast, close }: { state: CoupleState; pat
             <span key={i} aria-hidden="true" className="absolute h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_8px_#bfe0ff] [animation:couple-twinkle_2.2s_ease-in-out_infinite]" style={{ left: l, top: t, animationDelay: `${d}s` }} />
           ))}
         </div>
+        {/* 刻名后：名字浮现于水晶之上（暖光竖排） */}
+        {engraved && (
+          <div className="absolute left-1/2 top-[34%] z-10 flex -translate-x-1/2 items-start gap-5">
+            <span className="rounded-md border border-[#ffd9a8]/60 bg-[rgba(255,200,130,0.18)] px-1.5 py-2 text-[15px] font-semibold tracking-[3px] text-[#ffe9c8] shadow-[0_0_14px_rgba(255,190,120,0.4)] backdrop-blur-[1px] [animation:couple-float-y_4s_ease-in-out_infinite] [writing-mode:vertical-rl]">
+              {me}
+            </span>
+            <span aria-hidden="true" className="mt-4 text-[13px] text-[#ffd98a] [animation:couple-twinkle_2.4s_ease-in-out_infinite]">
+              ✦
+            </span>
+            <span className="rounded-md border border-[#ffd9a8]/60 bg-[rgba(255,200,130,0.18)] px-1.5 py-2 text-[15px] font-semibold tracking-[3px] text-[#ffe9c8] shadow-[0_0_14px_rgba(255,190,120,0.4)] backdrop-blur-[1px] [animation:couple-float-y_4s_ease-in-out_infinite_0.8s] [writing-mode:vertical-rl]">
+              {ta}
+            </span>
+          </div>
+        )}
         {/* 底部倒影光斑 */}
         <span aria-hidden="true" className="absolute bottom-[4%] left-1/2 h-10 w-56 -translate-x-1/2 rounded-[50%] bg-[radial-gradient(closest-side,rgba(160,210,255,0.4),transparent)]" />
       </div>
