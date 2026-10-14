@@ -7,6 +7,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# 本机内存仅 4GB：限制 Node/Turbopack 堆，防止编译期 OOM 击杀 dev server
+export NODE_OPTIONS="--max-old-space-size=1408"
+
 log_step_start() {
 	local step_name="$1"
 	echo "=========================================="
