@@ -17,6 +17,7 @@ import {
   FileText,
   Folder,
   Ghost,
+  Heart as HeartIcon,
   Image as ImageIcon,
   MessageCircle,
   Music2,
@@ -58,6 +59,7 @@ const MemoryBankApp = dynamic(() => import('./memory-bank'), { ssr: false });
 const WorldBookApp = dynamic(() => import('./worldbook'), { ssr: false });
 const MeituanApp = dynamic(() => import('./meituan'), { ssr: false });
 const TaobaoApp = dynamic(() => import('./taobao'), { ssr: false });
+const CoupleSpaceApp = dynamic(() => import('./couple-space'), { ssr: false });
 
 export interface AppMeta {
   id: AppId;
@@ -413,6 +415,15 @@ const APP_DEFS: AppDef[] = [
     // 备用线条图（毛玻璃/液态样式时展示）：用户指定恢复以前的购物袋线条「以前的那个就好」
     glyph: <ShoppingBag className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: TaobaoApp,
+  },
+  {
+    id: 'couple',
+    name: '情侣空间',
+    // 真实图标：白灰双心定制版（用户指定白/浅灰配色，不用粉红）
+    image: '/icons/couple.png',
+    // 备用线条图（毛玻璃/液态样式时展示）：双心轮廓
+    glyph: <HeartIcon className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
+    component: CoupleSpaceApp,
   },
 ];
 

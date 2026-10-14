@@ -459,3 +459,46 @@
     animation: none;
   }
 }
+
+/* ---------------- 情侣空间 App（couple-space）动效 ---------------- */
+/* 子页滑入（App 内全屏覆盖层） */
+@keyframes couple-sub-in {
+  from {
+    transform: translateX(36px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+/* 「每天想你」点击回弹 */
+@keyframes couple-pop-heart {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+/* 「每天想你」点击涟漪扩散 */
+@keyframes couple-ripple-out {
+  from {
+    transform: scale(0.9);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [animation\:couple-sub-in],
+  [animation\:couple-pop-heart],
+  [animation\:couple-ripple-out] {
+    animation: none;
+  }
+}

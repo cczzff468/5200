@@ -1361,7 +1361,8 @@ export type AppId =
   | 'appstore'
   | 'memory'
   | 'worldbook'
-  | 'meituan';
+  | 'meituan'
+  | 'couple';
 
 export type AppPhase = 'closed' | 'opening' | 'open' | 'closing';
 
