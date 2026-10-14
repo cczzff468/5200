@@ -599,6 +599,8 @@ export function notifyPreviewText(m: NotifyMsgInfo): string | null {
       return m.mergedFwd ? '[聊天记录]' : m.content?.trim() || '[转发]';
     case 'groupcard':
       return '[群聊邀请]';
+    case 'relcard':
+      return '[亲密关系]';
     default:
       return m.content?.trim() || null;
   }

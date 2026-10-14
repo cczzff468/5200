@@ -65,6 +65,17 @@ import {
 } from 'lucide-react';
 import { kvGet, kvSet, kvSetDebounced } from '@/lib/ios/idb-kv';
 import { listContacts } from '@/lib/ios/contacts-store';
+import {
+  COUPLE_STATE_EVENT,
+  emptyInviteMeta,
+  readInviteMeta,
+  sendMyInvite,
+  aiInvitesMe,
+  acceptIncomingInvite,
+  type CoupleChannel,
+  type CoupleInviteMeta,
+} from '@/lib/ios/couple-invite';
+import { displayNameOf, isFriendIn } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
 import { DefaultAvatar } from './default-avatar';
 import { LocalToast, useLocalToast } from './page-toast';
@@ -121,6 +132,7 @@ interface CoupleState {
   meetPlace: string; // 情侣轨迹：相遇地点
   replies: { id: string; prompt: string; reply: string; at: number }[]; // 回复挑战
   treeStreak: { last: string | null; n: number }; // 爱情树：我连续浇树（last=最近浇水日）
+  invite: CoupleInviteMeta; // 邀请元数据（全局唯一：恋人绑定/待处理邀请/每联系人限一次历史）
 }
 
 const STATE_KEY = 'couple-space:state';
@@ -173,6 +185,7 @@ function defaultState(): CoupleState {
     meetPlace: '',
     replies: [],
     treeStreak: { last: null, n: 0 },
+    invite: emptyInviteMeta(),
   };
 }
 
@@ -181,7 +194,13 @@ function loadCoupleState(): CoupleState {
   try {
     const raw = kvGet<Partial<CoupleState>>(STATE_KEY);
     if (!raw) return defaultState();
-    return { ...defaultState(), ...raw, v: 1 };
+    return {
+      ...defaultState(),
+      ...raw,
+      // invite 子对象深合并（旧数据无 invite 键 → 默认；存在但缺字段 → 逐字段兜底）
+      invite: { ...emptyInviteMeta(), ...(raw.invite ?? {}) },
+      v: 1,
+    };
   } catch {
     return defaultState();
   }
@@ -526,6 +545,71 @@ export default function CoupleSpaceApp() {
   const [sub, setSub] = useState<SubPage | null>(null);
   const [albumId, setAlbumId] = useState<string | null>(null); // 打开的私密相册
   const bootFilled = useRef(false);
+  // 邀请流（第六轮）：全局邀请元数据同步 + 选人弹层（模式 send=我邀TA / recv=TA邀我）+ 渠道选择
+  const [invMeta, setInvMeta] = useState<CoupleInviteMeta>(() => readInviteMeta());
+  const [pickSheet, setPickSheet] = useState<'send' | 'recv' | null>(null);
+  const [pickChannel, setPickChannel] = useState<CoupleChannel>('wx');
+  const [friends, setFriends] = useState<{ id: string; name: string; avatar: string | null }[]>([]);
+
+  /** 全局邀请状态事件同步：couple-invite（AI 接受/关系建立/收到邀请）直写 kv 后广播，
+   *  本组件重读全局 kv 刷新（邀请页按钮状态切换 + 关系建立后自动进入主界面） */
+  useEffect(() => {
+    const sync = () => {
+      setInvMeta(readInviteMeta());
+      setState(loadCoupleState()); // kv 内存缓存同步权威，读到的总是最新合并值
+    };
+    window.addEventListener(COUPLE_STATE_EVENT, sync);
+    return () => window.removeEventListener(COUPLE_STATE_EVENT, sync);
+  }, []);
+
+  /** 选人弹层打开/切换渠道时拉取该渠道 AI 好友列表（char/npc，排除机主小号） */
+  useEffect(() => {
+    if (!pickSheet) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const list = await listContacts();
+        if (!alive) return;
+        setFriends(
+          list
+            .filter((c) => c.kind !== 'user' && isFriendIn(c, pickChannel))
+            .map((c) => ({ id: c.id, name: displayNameOf(c), avatar: c.avatar ?? null })),
+        );
+      } catch {
+        if (alive) setFriends([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [pickSheet, pickChannel]);
+
+  /** 选人确认：send=我邀请TA（选微信/QQ + AI 联系人）→ 邀请卡进会话 + AI 延时接受；
+   *  recv=让 TA 来邀请你 → AI 延时发邀请卡（邀请页变「接受邀请」） */
+  const onPickFriend = useCallback(
+    async (contactId: string) => {
+      if (!pickSheet) return;
+      const mode = pickSheet;
+      const ch = pickChannel;
+      const r = mode === 'send' ? await sendMyInvite(ch, contactId) : await aiInvitesMe(ch, contactId);
+      if (r.ok) {
+        setPickSheet(null);
+        showToast(mode === 'send' ? `邀请已发送到${ch === 'wx' ? '微信' : 'QQ'}，等 TA 同意 ♡` : '好，TA 稍后会向你发起邀请 ♡');
+      } else {
+        showToast(r.error);
+      }
+    },
+    [pickSheet, pickChannel, showToast],
+  );
+
+  /** 接受邀请（邀请页大按钮；聊天卡片按钮走 couple-invite 同一入口）：
+   *  AI 的邀请卡转已同意 → 我回成功卡 → sys 提示行 → 建立关系（全局）→ 事件同步进主界面 */
+  const doAcceptInvite = useCallback(async () => {
+    const inv = invMeta.pendingInvite;
+    if (!inv) return;
+    const r = await acceptIncomingInvite(inv.contactId);
+    showToast(r.ok ? '欢迎来到你们的小天地 ♡' : r.error);
+  }, [invMeta.pendingInvite, showToast]);
 
   /** 状态更新 + 防抖落盘 */
   const patch = useCallback((p: Partial<CoupleState>) => {
@@ -625,8 +709,14 @@ export default function CoupleSpaceApp() {
     showToast('浇好水啦，小树茁壮成长 🌱');
   }, [showToast]);
 
-  // ---------- 邀请页（图1） ----------
+  // ---------- 邀请页（图1；第六轮：按钮按邀请状态切换 + 邀请流） ----------
   if (!state.accepted) {
+    const pend = invMeta.pendingInvite;
+    const recvInvite = pend?.dir === 'recv' ? pend : null; // 有人邀请我 → 接受邀请
+    const sendPend = pend?.dir === 'send' ? pend : null; // 我已发出邀请，等对方同意
+    // 头像/名字：TA 邀请我 → 显示邀请人；否则显示预填恋人（兜底）
+    const invAvatar = recvInvite?.fromAvatar ?? state.taAvatar;
+    const invName = recvInvite?.fromName || state.taName;
     return (
       <div className="relative flex h-full w-full flex-col overflow-hidden bg-[linear-gradient(165deg,#fbfbfc_0%,#f1f1f3_45%,#e3e3e7_100%)] text-[#2c2c30]">
         {/* 装饰大圆（白灰层叠） */}
@@ -641,29 +731,64 @@ export default function CoupleSpaceApp() {
         <div aria-hidden="true" className="pointer-events-none absolute left-[13%] top-[57%] h-2.5 w-2.5 rounded-full bg-[#bfbfc7]" />
 
         <div className="relative flex flex-1 flex-col items-center px-8 pt-[150px]">
-          {/* 恋人头像 + 名字 */}
+          {/* 恋人头像 + 名字（recv 时为邀请人） */}
           <div className="h-[118px] w-[118px] overflow-hidden rounded-full bg-[#ececef] ring-[6px] ring-white/80 shadow-[0_10px_30px_rgba(0,0,0,0.10)]">
-            {state.taAvatar ? (
-               
-              <img src={state.taAvatar} alt={state.taName} className="h-full w-full object-cover" draggable={false} />
+            {invAvatar ? (
+              <img src={invAvatar} alt={invName || '恋人'} className="h-full w-full object-cover" draggable={false} />
             ) : (
               <DefaultAvatar size={118} />
             )}
           </div>
-          <div className="mt-8 text-[30px] font-bold leading-none">{state.taName || '恋人'}</div>
+          <div className="mt-8 text-[30px] font-bold leading-none">{invName || '恋人'}</div>
           <div className="mt-7 text-[30px] font-bold leading-tight text-[#3c3c42]">邀请你开通恋人空间</div>
           <div className="mt-2 self-center pl-24 text-[16px] text-[#8e8e96]">（原情侣空间）</div>
 
-          <button
-            type="button"
-            onClick={() => {
-              patch({ accepted: true });
-              showToast('欢迎来到你们的小天地 ♡');
-            }}
-            className="mt-10 h-[64px] w-full rounded-full bg-[linear-gradient(135deg,#6a6a72,#45454c)] text-[22px] font-semibold text-white shadow-[0_12px_28px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.98]"
-          >
-            接受邀请
-          </button>
+          {/* 按钮区：有人邀请我 → 接受邀请；我已发出 → 等待对方；没人邀请 → 立即邀请我的另一半 */}
+          {recvInvite ? (
+            <>
+              <div className="mt-5 text-[14px] text-[#6e6e76]">「{recvInvite.fromName}」想和你建立情侣关系</div>
+              <button
+                type="button"
+                data-testid="couple-accept-btn"
+                onClick={() => void doAcceptInvite()}
+                className="mt-4 h-[64px] w-full rounded-full bg-[linear-gradient(135deg,#6a6a72,#45454c)] text-[22px] font-semibold text-white shadow-[0_12px_28px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.98]"
+              >
+                接受邀请
+              </button>
+            </>
+          ) : sendPend ? (
+            <>
+              <div className="mt-5 text-[14px] text-[#6e6e76]">
+                已向「{sendPend.toName}」发出{sendPend.app === 'wx' ? '微信' : 'QQ'}邀请
+              </div>
+              <button
+                type="button"
+                disabled
+                className="mt-4 h-[64px] w-full rounded-full bg-[linear-gradient(135deg,#b6b6bd,#9a9aa2)] text-[22px] font-semibold text-white shadow-[0_12px_28px_rgba(60,60,68,0.18)]"
+              >
+                等待对方接受…
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                data-testid="couple-invite-btn"
+                onClick={() => setPickSheet('send')}
+                className="mt-10 h-[64px] w-full rounded-full bg-[linear-gradient(135deg,#6a6a72,#45454c)] text-[22px] font-semibold text-white shadow-[0_12px_28px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.98]"
+              >
+                立即邀请我的另一半
+              </button>
+              <button
+                type="button"
+                data-testid="couple-recv-btn"
+                onClick={() => setPickSheet('recv')}
+                className="mt-4 text-[14px] text-[#8e8e96] underline-offset-4 transition-opacity active:opacity-60"
+              >
+                让 TA 来邀请你
+              </button>
+            </>
+          )}
         </div>
 
         <div className="relative px-6 pb-12">
@@ -681,6 +806,69 @@ export default function CoupleSpaceApp() {
             ))}
           </div>
         </div>
+
+        {/* 邀请选人弹层：渠道（微信/QQ）+ AI 好友列表（每联系人限一次，已邀请过置灰） */}
+        {pickSheet && (
+          <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/35" onClick={() => setPickSheet(null)}>
+            <div className="max-h-[74%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-9 pt-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
+              <div className="mt-3 text-[17px] font-bold text-[#2c2c30]">{pickSheet === 'send' ? '邀请你的另一半' : '让 TA 来邀请你'}</div>
+              <div className="mt-1 text-[12.5px] leading-relaxed text-[#9a9aa2]">
+                {pickSheet === 'send' ? '选择渠道和要邀请的 AI 好友，TA 会稍后同意你的邀请' : '选择渠道和 AI 好友，TA 会稍后向你发起邀请'}
+              </div>
+
+              {/* 渠道分段选择（用户邀请 AI 可选微信还是 QQ） */}
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {(['wx', 'qq'] as CoupleChannel[]).map((ch) => (
+                  <button
+                    key={ch}
+                    type="button"
+                    data-testid={`couple-channel-${ch}`}
+                    onClick={() => setPickChannel(ch)}
+                    className={`h-11 rounded-xl text-[14px] font-medium transition-colors ${
+                      pickChannel === ch
+                        ? 'bg-[linear-gradient(135deg,#6a6a72,#45454c)] text-white shadow-[0_4px_12px_rgba(60,60,68,0.25)]'
+                        : 'bg-[#f3f3f5] text-[#4a4a52] active:bg-[#ececef]'
+                    }`}
+                  >
+                    {ch === 'wx' ? '通过微信邀请' : '通过QQ邀请'}
+                  </button>
+                ))}
+              </div>
+
+              {/* 该渠道 AI 好友列表 */}
+              <div className="mt-4 max-h-72 space-y-1 overflow-y-auto" data-testid="couple-friend-list">
+                {friends.length === 0 ? (
+                  <div className="py-8 text-center text-[13px] text-[#b6b6bd]">该渠道还没有 AI 好友</div>
+                ) : (
+                  friends.map((f) => {
+                    const invited = invMeta.invitedOnce.some((x) => x.contactId === f.id);
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        disabled={invited}
+                        data-testid={`couple-friend-${f.id}`}
+                        onClick={() => void onPickFriend(f.id)}
+                        className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors active:bg-[#f3f3f5] disabled:opacity-40"
+                      >
+                        <span className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-[#ececef]">
+                          {f.avatar ? (
+                            <img src={f.avatar} alt={f.name} className="h-full w-full object-cover" draggable={false} />
+                          ) : (
+                            <DefaultAvatar size={40} />
+                          )}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[14.5px] text-[#2c2c30]">{f.name}</span>
+                        {invited && <span className="shrink-0 text-[12px] text-[#b6b6bd]">已邀请过</span>}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

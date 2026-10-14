@@ -19512,3 +19512,24 @@ Stage Summary:
 - 预览已恢复，根因是会话切换后 dev 进程被回收，非代码问题
 - 前序所有界面优化（round4/round5）均已 commit 并推送（73dfc6e/39432b0），git 工作区干净
 - 无代码改动，无需 commit
+
+---
+Task ID: couple-round6
+Agent: Z.ai Code (main)
+Task: 恋人空间邀请流改造——原情侣空间更名删除、接受邀请/立即邀请按钮切换、微信QQ邀请卡片流（AI双向）、全局状态+每联系人限一次
+
+Work Log:
+- 新增 src/lib/ios/couple-invite.ts：全局邀请元数据（couple-space:state.invite，无 wx-/qq- 前缀天然全局不随账号切换）；sendMyInvite（我邀AI，选渠道→邀请卡进会话→AI延时4.2~11s接受→AI回成功卡→建立关系）/ aiInvitesMe（让TA邀我，先占pendingInvite→AI延时2.6~8s发邀请卡+通知）/ acceptIncomingInvite（我接受：AI卡转已同意→我回成功卡→sys行→建立关系）/ declineIncomingInvite / decideCoupleCard（聊天卡片按钮统一入口，按msgId防重复处理）/ invitedOnce 每联系人限一次（跨渠道）
+- 新增 src/components/apps/couple-rel-bubble.tsx：微信/QQ共用亲密关系卡片气泡（仿QQ亲密关系卡：标题+副文案"让微信/QQ帮我们记录每日点滴"+couple.png图标+"亲密关系"脚注；对方邀请pending出拒绝/接受邀请双按钮；我的邀请pending显示"等待对方接受"；终态"已同意/已拒绝"；成功卡"我们已经成功建立情侣关系"）
+- wechat.tsx/qq.tsx 各9处：WxMsg/QQMsg kind 加 'relcard'+relcard字段、readPreview/msgPreview 加'[亲密关系]'、渲染分支（groupcard后）、decideCoupleCard回调、COUPLE_CARD_EVENT落库监听（合并刷新：同id覆盖+新消息追加+时序排序）、AI上下文过滤+序列化（AI知道关系状态如"[亲密关系卡片：…已接受]"）
+- island-notify.ts notifyPreviewText 加 relcard→'[亲密关系]'；通知/未读角标/隐藏会话恢复按 mt-proxy 模式处理
+- couple-space.tsx：CoupleState 加 invite 字段（loadCoupleState 深合并兼容旧数据）；邀请页按钮三态（有人邀请→接受邀请+「XX」想和你建立情侣关系 / 我已发出→等待对方接受…禁用 / 没人邀请→立即邀请我的另一半+让TA来邀请你）；选人弹层（渠道分段"通过微信邀请/通过QQ邀请"+该渠道AI好友列表+已邀请过置灰）；COUPLE_STATE_EVENT 监听同步全局（AI接受/关系建立后自动进主界面）
+- registry.tsx：APP 名"情侣空间"→"恋人空间"（原情侣空间）
+- E2E（agent-browser）：先 eval 写入测试联系人（机主林深+AI小雪/晚晚，微信QQ好友标记）+登录微信/QQ；流程A：邀请页→立即邀请我的另一半→微信渠道→小雪→邀请页"等待对方接受"→微信聊天邀请卡（等待对方接受）→AI接受后卡片"已同意"+AI成功卡+sys行"你们已成为情侣并获得情侣标识"→恋人空间自动进主界面（已相恋1天+小雪）；流程B：设置解除关系→让TA来邀请你→QQ渠道（小雪跨渠道显示"已邀请过"置灰=每联系人限一次）→晚晚→邀请页立即变"接受邀请"→QQ收到邀请卡（拒绝/接受邀请按钮）→聊天点接受→卡片"已同意"+我发成功卡+toast+sys行；kv直读全局状态（accepted/晚晚/qq/invitedOnce记录）全部正确；会话预览'[亲密关系]'；console 无错误
+- tsc 0 错误；eslint 无新增问题（45 errors 均为项目既有）
+
+Stage Summary:
+- 两条邀请流（我邀AI/AI邀我）× 两渠道（微信/QQ）全链路浏览器验证通过
+- 卡片流与用户参考截图1（QQ亲密关系卡）一致：邀请卡→接受→成功卡→sys提示行
+- 全局状态按用户要求不随微信/QQ账号切换；每联系人限一次跨渠道生效
+- 解除关系（设置页）清空全部数据含邀请历史，关系周期内每联系人限一次

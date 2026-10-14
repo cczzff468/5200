@@ -263,6 +263,12 @@ import {
   type FriendReqThreadMsg,
 } from '@/lib/ios/friend-state';
 import PeerStatusCard from '@/components/apps/peer-status-card';
+import CoupleRelBubble from '@/components/apps/couple-rel-bubble';
+import {
+  COUPLE_CARD_EVENT,
+  decideCoupleCard as decideCoupleCardAction,
+  type CoupleRelCardData,
+} from '@/lib/ios/couple-invite';
 import {
   DEFAULT_STICKER_GROUP_ID,
   extractMeaningFromUrl,
@@ -419,9 +425,9 @@ interface WxMsg {
   role: 'me' | 'peer';
   content: string;
   time: number;
-  /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；
+  /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；relcard = 亲密关系卡片（恋人空间邀请卡/成功卡）；
    *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片；tbpay = 淘宝代付卡片（请求/完成）；tbshare = 淘宝订单分享动态卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft';
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -465,6 +471,8 @@ interface WxMsg {
   fwd?: { from: string; merged?: boolean; title?: string; records?: { name: string; role: 'me' | 'peer'; text: string; quote?: string; time: number; avatar?: string | null; kind?: 'text' | 'sticker' | 'image'; imgSrc?: string; stkMeaning?: string }[] };
   /** 群聊邀请卡片（kind='groupcard'；AI 主动建群/拉人时发出，用户可接受/拒绝） */
   gcard?: GroupCardData;
+  /** 亲密关系卡片（kind='relcard'；恋人空间邀请卡/成功卡，AI 邀我或我邀 AI 时由 couple-invite 落库，可接受/拒绝） */
+  relcard?: CoupleRelCardData;
   /** 语音消息（kind='voice'）：音频 dataURL 持久化在聊天记录里，重启后仍可播放 */
   voice?: VoiceMsgData;
   /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打）；
@@ -1105,6 +1113,7 @@ function readPreview(contactId: string): { text: string; time: number } {
   if (last.kind === 'sticker') return { text: '[表情]', time: last.time };
   if (last.kind === 'forward') return { text: last.fwd?.merged ? '[聊天记录]' : last.content, time: last.time };
   if (last.kind === 'groupcard') return { text: '[群聊邀请]', time: last.time };
+  if (last.kind === 'relcard') return { text: '[亲密关系]', time: last.time };
   return { text: last.content, time: last.time };
 }
 
@@ -5062,6 +5071,18 @@ function ChatPage({
     [peer.id, onOpenGroup, onToast],
   );
 
+  /** 亲密关系卡片：接受/拒绝（恋人空间邀请卡；状态变更/成功卡/sys 行均由 couple-invite 落库，
+   *  本地经 COUPLE_CARD_EVENT 合并刷新；content 为空、不进多选/长按菜单） */
+  const decideCoupleCard = useCallback(
+    (m: WxMsg, accept: boolean) => {
+      if (!m.relcard || m.relcard.status !== 'pending') return;
+      void decideCoupleCardAction(peer.id, m.id, accept).then((r) => {
+        onToast(r.ok ? (accept ? '已同意，你们现在是情侣啦' : '已拒绝邀请') : r.error);
+      });
+    },
+    [peer.id, onToast],
+  );
+
   // 转发感知：其他会话转发消息给本会话时写入事件队列；进入聊天时 drain 并触发一次 AI 回合（AI 知道收到了什么）。
   // 37-a：drain 改为「读全部 + 内存登记已消费 + 延迟清除」，回合定时器不随卸载取消——
   // dev StrictMode 双挂载时：首跑消费的事件在重挂载第二次 drain 中被登记过滤（不双跑），
@@ -5262,6 +5283,25 @@ function ChatPage({
       window.removeEventListener(TB_PROXY_CARD_EVENT, onTbCard);
       window.removeEventListener(TB_SHARE_CARD_EVENT, onTbCard);
     };
+  }, [peer.id]);
+
+  /** 恋人空间亲密关系卡片落库监听：邀请卡/成功卡/sys 行由 couple-invite 直写 kv 后广播
+   *  COUPLE_CARD_EVENT，聊天页在场时实时合并落库消息（新卡片上屏 + 邀请卡状态刷新），不用重开聊天 */
+  useEffect(() => {
+    const onCoupleCard = (e: Event) => {
+      const d = (e as CustomEvent<{ cid?: string; app?: string }>).detail;
+      if (!d || d.cid !== peer.id || d.app !== 'wx') return;
+      setMsgs((prev) => {
+        const saved = loadMsgs(peer.id);
+        const savedMap = new Map(saved.map((m) => [m.id, m]));
+        return sortMsgsByTime([
+          ...prev.map((m) => savedMap.get(m.id) ?? m),
+          ...saved.filter((m) => !prev.some((p) => p.id === m.id)),
+        ]);
+      });
+    };
+    window.addEventListener(COUPLE_CARD_EVENT, onCoupleCard);
+    return () => window.removeEventListener(COUPLE_CARD_EVENT, onCoupleCard);
   }, [peer.id]);
 
   /** 过期清算后的落盘合并（存储为权威）：既有消息以落盘版本覆盖（卡片过期终态），落盘新增的
@@ -6338,7 +6378,7 @@ function ChatPage({
         (m) =>
           // 图片以 [图片] 占位、语音以转写文本/占位、位置以完整位置文本进入历史（本轮图片实际内容由识图模型描述追加在末尾）；
           // 拍一拍系统行（Task 30）也进历史：AI 要知道被拍/拍过谁与文案（按双方名字序列化，无主语歧义）
-          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'location' || m.kind === 'song' || (m.kind === 'sys' && !!m.sys?.pat)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'relcard' || m.kind === 'location' || m.kind === 'song' || (m.kind === 'sys' && !!m.sys?.pat)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
       .map((m) => {
@@ -6434,6 +6474,8 @@ function ChatPage({
                               ? tbShareHistoryLine(m.tbshare.sid)
                               : m.kind === 'tbdraft' && m.tbdraft
                                 ? tbDraftHistoryLine(m.tbdraft.did)
+                                : m.kind === 'relcard' && m.relcard
+                                  ? `[亲密关系卡片：${m.relcard.stage === 'invite' ? `${m.relcard.fromName}邀请${m.relcard.toName}建立情侣关系` : `${m.relcard.fromName}已同意，双方成功建立情侣关系`}，${m.relcard.status === 'pending' ? '待处理' : m.relcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
                                 // 拍一拍系统行（Task 30）：按双方名字显式序列化（文案后缀原样拼接），AI 无主语歧义——
                                 // 「凡凡拍了拍小柚的小脑袋」= 对方拍了你；「小柚拍了拍凡凡的小脸蛋」= 你（AI）拍过对方
                                 : m.kind === 'sys' && m.sys?.pat
@@ -8720,6 +8762,17 @@ function ChatPage({
                     card={m.gcard}
                     onAccept={() => decideGroupCard(m, true)}
                     onReject={() => decideGroupCard(m, false)}
+                  />
+                </div>
+              ) : m.kind === 'relcard' && m.relcard ? (
+                /* 亲密关系卡片（恋人空间邀请卡/成功卡）：对方邀请 pending 出接受/拒绝；卡片本体不可点 */
+                <div {...bubblePress}>
+                  <CoupleRelBubble
+                    data={m.relcard}
+                    mine={m.role === 'me'}
+                    testidPrefix="wx"
+                    onAccept={() => decideCoupleCard(m, true)}
+                    onDecline={() => decideCoupleCard(m, false)}
                   />
                 </div>
               ) : (
