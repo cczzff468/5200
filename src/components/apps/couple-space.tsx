@@ -7,8 +7,8 @@
  * 全站配色不用粉色/红色，改用白色 + 浅灰（主强调色为炭灰渐变，深灰白字保证对比）。
  *
  * 页面结构（对应参考图）：
- * - 邀请页（图1）：全屏渐变底 + 装饰圆与浮点 + 恋人头像/昵称 + 「邀请你开通恋人空间（原情侣空间）」
- *   + 「接受邀请」大按钮 + 底部「在恋人空间你们可以体验这些」三体验卡（情侣相册/爱情树/纪念日）
+ * - 邀请页（图1）：全屏渐变底 + 装饰圆与浮点 + 恋人头像/昵称 + 「邀请你开通恋人空间」
+ *   + 左上角返回键 + 「接受邀请」大按钮 + 底部「在恋人空间你们可以体验这些」三体验卡（情侣相册/爱情树/纪念日）
  * - 首页（图2）：恋人空间大标题 + 双头像虚线连接 + 中间纪念日气泡（点击设置→已相恋 N 天）
  *   + 背景合影图上叠「每天想你」大圆（可点击打卡，两侧引号装饰）+ 右侧悬浮心形/换背景按钮
  *   + 底部四功能卡（爱情小树成长记/情侣轨迹/甜蜜小问答/未来情书）
@@ -38,6 +38,7 @@ import {
   Crown,
   Gem,
   Gift,
+  GripVertical,
   Heart,
   Headphones,
   HelpCircle,
@@ -64,6 +65,7 @@ import {
   Users,
 } from 'lucide-react';
 import { kvGet, kvSet, kvSetDebounced } from '@/lib/ios/idb-kv';
+import { useUI } from '@/lib/ios/store';
 import { listContacts } from '@/lib/ios/contacts-store';
 import {
   COUPLE_STATE_EVENT,
@@ -124,13 +126,21 @@ interface CoupleState {
   quizCustom: string[]; // 甜蜜小问答自定义问题
   examBest: number | null; // 恋爱水平考试最高分
   status: string; // 恋爱状态
-  pactAt: number | null; // 恋爱协议签署时间
+  pactAt: number | null; // 恋爱协议签署时间（双方签完生效）
+  pactTitle: string; // 协议名称（可编辑）
+  pactPreamble: string; // 协议声明（可编辑）
+  pactClauses: string[]; // 协议条款（可编辑/排序/增删）
+  pactSignMe: string | null; // 我的签名
+  pactSignTa: string | null; // TA 的签名
+  pactMeAt: number | null; // 我签名时间
+  pactTaAt: number | null; // TA 签名时间
   zodiac: { me: string; ta: string } | null; // 星座缘分选择
   tarotHistory: { id: string; name: string; at: number }[]; // 塔罗抽牌历史（存最近一张）
   married: boolean; // 小礼堂：是否已婚
   marriedAt: number | null;
   meetPlace: string; // 情侣轨迹：相遇地点
-  replies: { id: string; prompt: string; reply: string; at: number }[]; // 回复挑战
+  replies: { id: string; prompt: string; reply: string; at: number }[]; // 回复挑战（旧版自由回复存档）
+  replyBest: number | null; // 回复挑战历史最佳（到达关数，12=通关；第七轮玩法）
   treeStreak: { last: string | null; n: number }; // 爱情树：我连续浇树（last=最近浇水日）
   invite: CoupleInviteMeta; // 邀请元数据（全局唯一：恋人绑定/待处理邀请/每联系人限一次历史）
 }
@@ -178,12 +188,27 @@ function defaultState(): CoupleState {
     examBest: null,
     status: '',
     pactAt: null,
+    pactTitle: '恋爱协议书',
+    pactPreamble: '为维护双方的感情与信任，促进彼此理解与成长，建立健康、稳定、真诚的亲密关系，双方经友好协商，达成如下协议，共同遵守：',
+    pactClauses: [
+      '做错事情要认真道歉，并用实际行动改正',
+      '即使意见不同，也要尊重对方的选择和感受',
+      '每天睡前都要通电话或者视频',
+      '爱屋及乌，尊重并融入对方的圈子',
+      '不能轻易说分手',
+      '少喝碳酸饮料少吃垃圾食品按时吃饭睡觉',
+    ],
+    pactSignMe: null,
+    pactSignTa: null,
+    pactMeAt: null,
+    pactTaAt: null,
     zodiac: null,
     tarotHistory: [],
     married: false,
     marriedAt: null,
     meetPlace: '',
     replies: [],
+    replyBest: null,
     treeStreak: { last: null, n: 0 },
     invite: emptyInviteMeta(),
   };
@@ -301,16 +326,145 @@ function zodiacScore(a: string, b: string): number {
 /** 恋爱状态选项 */
 const STATUS_LIST = ['热恋中 🔥', '稳定陪伴 🫶', '异地思念 ✈️', '老夫老妻 🏡', '暧昧升温 🌡️', '和好如初 🌈'];
 
-/** 回复挑战题面 */
-const REPLY_PROMPTS = [
-  'TA 说：「我今天好累啊……」',
-  'TA 说：「你是不是不爱我了？」',
-  'TA 发来一张自拍问：「好看吗？」',
-  'TA 说：「我们以后会一直在一起吗？」',
-  'TA 半夜发消息：「睡不着」',
-  'TA 说：「给你一个机会夸我」',
-  'TA 说：「我想吃火锅了」',
-  'TA 说：「我好像胖了」',
+/** 回复挑战（第七轮重做，参考图1/2）：12 关高危回复关卡；d=[体面值,觉察值,安抚值,存活率] 增量 */
+const REPLY_LEVELS: {
+  name: string;
+  scene: string;
+  quote: string;
+  opts: { t: string; d: [number, number, number, number]; v: string }[];
+}[] = [
+  {
+    name: '没事陷阱',
+    scene: '你临时忙起来，忘了提前报备。TA 等到情绪已经降温，才回你一句很轻的话。最危险的是：这句话听起来不吵不闹。',
+    quote: '没事，你忙吧。',
+    opts: [
+      { t: '我忙完马上找你，先别难过', d: [2, 2, 4, 2], v: '及格但不满分：TA 要的不是「等」，是「被优先」。' },
+      { t: '我刚没交代清楚，让你干等了', d: [5, 6, 6, 5], v: '高情商：先认账再补救，TA 的委屈被看见了。' },
+      { t: '我不是不想陪你，只是刚好忙', d: [-3, -2, -2, -4], v: '解释型回复：听起来像辩解，TA 只听到「你不如忙」。' },
+      { t: '你先睡，明天我认真补给你', d: [-5, -4, -6, -8], v: '危险发言：「补」字一出，TA 觉得自己在被排期。' },
+    ],
+  },
+  {
+    name: '随便考验',
+    scene: '你问 TA 晚上吃什么，TA 盯着手机没抬头，轻轻吐出两个字。这两个字是送命题的入口。',
+    quote: '随便你。',
+    opts: [
+      { t: '不随便了，我订你最爱的那家', d: [6, 4, 6, 6], v: '直接给答案，绕过送命题，满分操作。' },
+      { t: '那我说了哦：你最想吃的那家', d: [4, 5, 5, 4], v: '「随便」的潜台词是「你猜中我想要的」。' },
+      { t: '行，那就随便吃点', d: [-6, -3, -5, -9], v: '把「随便」当真的人，今晚可能要自己吃了。' },
+      { t: '你怎么老说随便，烦不烦', d: [-8, -6, -8, -12], v: '把情绪问题升级成人身攻击，火力全开直通败局。' },
+    ],
+  },
+  {
+    name: '已读深渊',
+    scene: '你发了一长段分享，对话框顶端跳出「已读」。十分钟后，TA 回了一个字。',
+    quote: '哦。',
+    opts: [
+      { t: '看来你今天不太想聊天，晚上我陪你补上', d: [6, 7, 6, 6], v: '给台阶也给自己台阶，晚上的约定让 TA 有盼头。' },
+      { t: '发个表情包把气氛拉回来', d: [3, 2, 4, 3], v: '轻处理是对的，但别每次都用表情包躲问题。' },
+      { t: '怎么回一个哦，我说的不好笑吗', d: [-2, -1, -2, -4], v: '质问会让 TA 关闭分享欲，下条「哦」已经在路上了。' },
+      { t: '（也不回了，开始冷战）', d: [-8, -4, -8, -14], v: '以冷制冷，两败俱伤，存活率直接腰斩。' },
+    ],
+  },
+  {
+    name: '在吗迷雾',
+    scene: 'TA 发来「在吗」，你回了「在」，然后对方开始打字、停止、又打字。三分钟后什么都没发过来。',
+    quote: '在吗？',
+    opts: [
+      { t: '怎么啦？慢慢说，我都在', d: [5, 4, 6, 5], v: '「我都在」是给安全感的教科书句式。' },
+      { t: '在，咋了你说', d: [1, 0, 1, 0], v: '太干了，TA 的欲言又止需要一点推动力。' },
+      { t: '有事直接说，别老发在吗', d: [-6, -5, -6, -9], v: '「在吗恐惧症」背后是怕麻烦，但说出来就是刀。' },
+      { t: '（假装没看见）', d: [-4, -2, -5, -10], v: '已读不回是会记账的，TA 记性好得很。' },
+    ],
+  },
+  {
+    name: '你开心就好',
+    scene: '你们为一个周末安排争执了几句，TA 突然不争了，语气平静得可怕。',
+    quote: '嗯，你开心就好。',
+    opts: [
+      { t: '我们先停十分钟，抱一下再慢慢说', d: [6, 6, 7, 6], v: '暂停 + 肢体接触，冲突降温最快的一招。' },
+      { t: '我不开心，我想让你也开心', d: [5, 5, 6, 5], v: '接住了潜台词：TA 不是让你开心，是委屈。' },
+      { t: '你又来了，至于吗', d: [-7, -6, -7, -11], v: '「至于吗」三个字是冷战助燃剂。' },
+      { t: '好，那按我说的来', d: [-9, -5, -8, -15], v: '听不出反话的直球发言，当场暴毙。' },
+    ],
+  },
+  {
+    name: '别人家对象',
+    scene: 'TA 刷到别人的对象送了限定礼物，语气酸酸地看了你一眼。',
+    quote: '你怎么不学学人家对象？',
+    opts: [
+      { t: '是我疏忽了，下个月给你准备更大的惊喜', d: [7, 5, 7, 7], v: '承认 + 行动方案，把酸味变成期待。' },
+      { t: '学不来，我只会对你一个人好', d: [4, 4, 5, 4], v: '油但有效，嫉妒需要一句甜话中和。' },
+      { t: '那都是摆拍，有什么好在意的', d: [-3, -2, -3, -6], v: '否定 TA 的感受，酸味会发酵成怨气。' },
+      { t: '人家对象好你去找人家啊', d: [-10, -6, -9, -16], v: '送命题标准错误答案，直接原地去世。' },
+    ],
+  },
+  {
+    name: '凌晨两点',
+    scene: '凌晨两点，TA 突然发来消息，字里行间全是不安。',
+    quote: '我是不是特别麻烦？',
+    opts: [
+      { t: '不麻烦，我就是你的树洞，说说怎么了', d: [7, 6, 7, 7], v: '倾听比解决更重要，TA 需要的是出口。' },
+      { t: '麻烦，但我乐意，谁让我喜欢你', d: [6, 5, 7, 6], v: '先接住「麻烦」，再把负担变成宠爱。' },
+      { t: '你想多了，早点睡吧', d: [-5, -4, -6, -9], v: '「你想多了」是否定感受四件套之首。' },
+      { t: '还行吧，比一般人麻烦点', d: [-8, -5, -8, -13], v: '深夜玩梗等于玩火，玩笑也救不了场。' },
+    ],
+  },
+  {
+    name: '翻旧账预警',
+    scene: '这次迟到让 TA 想起了上上次、上上上次。旧账本哗啦啦翻开。',
+    quote: '你上次也是这么说的。',
+    opts: [
+      { t: '对不起，这次真的记住了，你看我做的', d: [6, 6, 6, 6], v: '旧账的本质是「信用破产」，用行动续费。' },
+      { t: '这次和上次不一样，你听我解释', d: [-2, -1, -3, -5], v: '「你听我解释」是偶像剧里误会加深的开始。' },
+      { t: '那我以后都不说了行吧', d: [-6, -4, -6, -10], v: '赌气式承诺，TA 听到的是「你无理取闹」。' },
+      { t: '你怎么老翻旧账，累不累', d: [-9, -6, -9, -14], v: '指责翻旧账只会让 TA 更委屈，账本更厚。' },
+    ],
+  },
+  {
+    name: '算了吧陷阱',
+    scene: '大吵一架后，TA 红着眼说出那四个字。但 TA 的手还紧紧攥着你们的合照。',
+    quote: '要不……我们算了吧。',
+    opts: [
+      { t: '我不算，我们之间不能算', d: [7, 6, 7, 7], v: '假性分手要的是挽留，态度比道理重要。' },
+      { t: '我们先都冷静，但我不会放弃我们', d: [5, 5, 6, 6], v: '给空间但不放手，进可攻退可守。' },
+      { t: '你又来这套，烦不烦', d: [-8, -5, -8, -13], v: '把求救当威胁，TA 会真的死心。' },
+      { t: '算就算了吧', d: [-12, -8, -12, -20], v: '顺着接就是真分手，存活率清零。' },
+    ],
+  },
+  {
+    name: '醋意试探',
+    scene: 'TA 提到你最近和异性同事走得很近，语气轻描淡写，眼神却在打探。',
+    quote: '那个谁对你挺好的呀。',
+    opts: [
+      { t: '我会注意分寸，也会把界限说清楚', d: [7, 7, 6, 7], v: '给足安全感，行动承诺最有力。' },
+      { t: '好是好，但都没你好，你才最特别', d: [5, 4, 6, 5], v: '醋需要甜来化，先哄再划界限。' },
+      { t: '你吃醋了？哈哈哈', d: [-4, -2, -3, -7], v: '嘲笑 TA 的醋意，下次 TA 会藏得更深。' },
+      { t: '你能不能别疑神疑鬼', d: [-7, -5, -7, -12], v: '「疑神疑鬼」否定了 TA 的不安。' },
+    ],
+  },
+  {
+    name: '玩笑收刀',
+    scene: 'TA 刚才开了个有点过分的玩笑，你脸都黑了，TA 立刻补了一句。',
+    quote: '逗你的，你怎么还当真了。',
+    opts: [
+      { t: '我知道是玩笑，但这个玩笑我不喜欢', d: [7, 7, 6, 7], v: '温和而坚定地划界，玩笑也要有边界。' },
+      { t: '你这玩笑一点都不好笑', d: [-2, -1, -2, -5], v: '对，但太硬，可以再加半句感受。' },
+      { t: '（憋着，不说话）', d: [-3, -2, -4, -8], v: '憋住的委屈不会消失，只会过期变质。' },
+      { t: '那你继续逗，看你能逗到什么时候', d: [-5, -4, -5, -9], v: '阴阳怪气回击，战火升级。' },
+    ],
+  },
+  {
+    name: '终极沉默',
+    scene: 'TA 把你的消息全部已读，一个字都没有回。这是最危险的一关：无题可解，只能用心。',
+    quote: '（TA 已读不回）',
+    opts: [
+      { t: '打个电话过去：我想听你说说', d: [8, 7, 8, 8], v: '沉默降级不了矛盾，声音可以。主动破冰是王者操作。' },
+      { t: '发一段真诚的长文道歉', d: [5, 6, 5, 5], v: '真诚永远有效，但记得之后当面聊。' },
+      { t: '连发十条消息追问怎么了', d: [-6, -2, -5, -10], v: '追问会让 TA 觉得被压迫，沉默更深。' },
+      { t: 'TA 不回我也不回，看谁熬得过谁', d: [-9, -6, -9, -16], v: '沉默对决，输的都是感情。' },
+    ],
+  },
 ];
 
 /** 情侣酒店房型（玩梗向） */
@@ -319,6 +473,44 @@ const HOTEL_ROOMS = [
   { name: '星空圆床房', desc: '屋顶天窗，躺着数星星' },
   { name: '温泉私汤房', desc: '独立汤池，冬夜首选' },
   { name: '海边木屋', desc: '推门就是沙滩和日出' },
+];
+
+/** 恋爱协议随机条款池（随机新增一条；第七轮参考图3/4/5 重做） */
+const PACT_RANDOM_POOL = [
+  '吵架时先抱十秒再讲道理',
+  '每周至少一次正式约会',
+  '出门前和回家后都要打招呼',
+  '对方说话时不玩手机',
+  '好吃的先让对方尝第一口',
+  '生病时要第一时间关心',
+  '购物车里的心愿偶尔悄悄清空',
+  '每天至少夸对方一次',
+  '合照时认真配合不敷衍',
+  '每月一起解锁一件新事情',
+];
+
+/** 恋爱协议标准模板（导入模板编码加载，20 条，参考图3） */
+const PACT_TEMPLATE_CLAUSES = [
+  '绝不和异性搞暧昧',
+  '绝不失联半天找不到人',
+  '吵架不能隔夜，要当天解决',
+  '吵架不说伤人的话，不骂人',
+  '绝不在有异性的情况下过夜',
+  '吵架不能不接电话、挂电话',
+  '吵完架冷静后要反省和改正',
+  '要记得每个纪念日和节日',
+  '每天都要问候对方早晚安',
+  '不能隐瞒和欺骗对方',
+  '信息可以不秒回，但看到了一定要回',
+  '遇到开心或难过的事要彼此分享',
+  '可以吵架，不能冷战冷暴力',
+  '不能轻易说分手',
+  '外出或者行事提前互相报备',
+  '少喝碳酸饮料少吃垃圾食品按时吃饭睡觉',
+  '放下过往旧事不翻旧账一起向前看',
+  '分手后不能诋毁不能把对方黑料报出去',
+  '要相互包容相互理解这样爱情才长久',
+  '有不满要直接告诉对方，不要在心里偷偷扣分',
 ];
 
 /** 心情选项（含手绘风表情配色：c=脸色 d=描边/细节） */
@@ -562,6 +754,59 @@ export default function CoupleSpaceApp() {
     return () => window.removeEventListener(COUPLE_STATE_EVENT, sync);
   }, []);
 
+  /** 全局头像/名字同步（用户要求「所有信息按照全局来」）：
+   *  我 ← 机主全局资料（联系人 App kind=user）；TA ← 绑定的恋人联系人。
+   *  挂载时 + 全局状态事件时同步，联系人在别处改名/换头像后情侣界面自动跟随 */
+  useEffect(() => {
+    let alive = true;
+    const syncFromGlobal = async () => {
+      try {
+        const meta = readInviteMeta();
+        const list = await listContacts();
+        if (!alive) return;
+        const owner = list.find((c) => c.kind === 'user' && !c.altOf);
+        const partner = meta.partnerContactId ? list.find((c) => c.id === meta.partnerContactId) : null;
+        setState((prev) => {
+          const next: CoupleState = { ...prev };
+          let changed = false;
+          const on = owner?.name?.trim() || '';
+          if (on && on !== prev.meName) {
+            next.meName = on;
+            changed = true;
+          }
+          const oa = owner?.avatar ?? null;
+          if (oa && oa !== prev.meAvatar) {
+            next.meAvatar = oa;
+            changed = true;
+          }
+          if (partner) {
+            const pn = displayNameOf(partner);
+            if (pn && pn !== prev.taName) {
+              next.taName = pn;
+              changed = true;
+            }
+            const pa = partner.avatar ?? null;
+            if (pa && pa !== prev.taAvatar) {
+              next.taAvatar = pa;
+              changed = true;
+            }
+          }
+          if (!changed) return prev;
+          kvSetDebounced(STATE_KEY, next);
+          return next;
+        });
+      } catch {
+        /* 同步失败静默（保留本地值） */
+      }
+    };
+    void syncFromGlobal();
+    window.addEventListener(COUPLE_STATE_EVENT, syncFromGlobal);
+    return () => {
+      alive = false;
+      window.removeEventListener(COUPLE_STATE_EVENT, syncFromGlobal);
+    };
+  }, []);
+
   /** 选人弹层打开/切换渠道时拉取该渠道 AI 好友列表（char/npc，排除机主小号） */
   useEffect(() => {
     if (!pickSheet) return;
@@ -730,7 +975,17 @@ export default function CoupleSpaceApp() {
         <div aria-hidden="true" className="pointer-events-none absolute right-[7%] top-[54%] h-2.5 w-2.5 rounded-full bg-[#d6d6db]" />
         <div aria-hidden="true" className="pointer-events-none absolute left-[13%] top-[57%] h-2.5 w-2.5 rounded-full bg-[#bfbfc7]" />
 
-        <div className="relative flex flex-1 flex-col items-center px-8 pt-[150px]">
+        <div className="relative flex flex-1 flex-col items-center px-8 pt-[104px]">
+          {/* 左上角返回键（第七轮）：回到手机主界面 */}
+          <button
+            type="button"
+            data-testid="couple-invite-back"
+            onClick={() => useUI.getState().closeApp()}
+            aria-label="返回主界面"
+            className="absolute left-3 top-[58px] flex h-10 w-10 items-center justify-center rounded-full bg-white/80 text-[#3a3a40] shadow-[0_2px_10px_rgba(0,0,0,0.08)] backdrop-blur-sm transition-opacity active:opacity-50"
+          >
+            <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
+          </button>
           {/* 恋人头像 + 名字（recv 时为邀请人） */}
           <div className="h-[118px] w-[118px] overflow-hidden rounded-full bg-[#ececef] ring-[6px] ring-white/80 shadow-[0_10px_30px_rgba(0,0,0,0.10)]">
             {invAvatar ? (
@@ -741,7 +996,6 @@ export default function CoupleSpaceApp() {
           </div>
           <div className="mt-8 text-[30px] font-bold leading-none">{invName || '恋人'}</div>
           <div className="mt-7 text-[30px] font-bold leading-tight text-[#3c3c42]">邀请你开通恋人空间</div>
-          <div className="mt-2 self-center pl-24 text-[16px] text-[#8e8e96]">（原情侣空间）</div>
 
           {/* 按钮区：有人邀请我 → 接受邀请；我已发出 → 等待对方；没人邀请 → 立即邀请我的另一半 */}
           {recvInvite ? (
@@ -902,6 +1156,7 @@ export default function CoupleSpaceApp() {
             missDays={missDays}
             tapMissYou={tapMissYou}
             openSub={openSub}
+            onClose={() => useUI.getState().closeApp()}
             onPickBg={async (f) => {
               if (!f) return;
               try {
@@ -998,8 +1253,9 @@ function HomePage(props: {
   tapMissYou: () => void;
   openSub: (s: SubPage) => void;
   onPickBg: (f: File | null) => void;
+  onClose: () => void;
 }) {
-  const { state, days, missDays, tapMissYou, openSub, onPickBg } = props;
+  const { state, days, missDays, tapMissYou, openSub, onPickBg, onClose } = props;
   const bgInput = useRef<HTMLInputElement | null>(null);
   const [pulse, setPulse] = useState(0);
 
@@ -1027,7 +1283,16 @@ function HomePage(props: {
       {/* 可滚动内容区 */}
       <div className="relative flex-1 overflow-y-auto overscroll-contain">
         <div className="px-5 pt-[60px]">
-          <h1 className="text-[24px] font-bold leading-tight tracking-tight">恋人空间</h1>
+          {/* 点击标题返回手机主界面（第七轮用户要求） */}
+          <button
+            type="button"
+            data-testid="couple-home-title"
+            onClick={onClose}
+            aria-label="返回主界面"
+            className="text-left text-[24px] font-bold leading-tight tracking-tight transition-opacity active:opacity-40"
+          >
+            恋人空间
+          </button>
         </div>
 
       {/* 双头像 + 纪念日气泡 + 想念天数 */}
@@ -4730,45 +4995,500 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
   );
 }
 
-/** 恋爱协议 */
-function PactPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
-  const signed = state.pactAt != null;
+/** 恋爱协议红章（参考图3：恋人空间公证 LOVE SPACE 圆形印章） */
+function PactStamp() {
   return (
-    <SubShell title="恋爱协议" onBack={close}>
-      <div className="mt-3 rounded-2xl bg-white p-5 shadow-sm">
-        <div className="text-center text-[20px] font-bold tracking-[6px] text-[#2c2c30]">恋 爱 协 议</div>
-        <div className="mt-1 text-center text-[12px] text-[#b6b6bd]">COUPLE AGREEMENT</div>
-        <div className="mt-5 space-y-3 rounded-xl bg-[#f7f7f9] p-4 text-[14px] leading-relaxed text-[#4a4a52]">
-          <p>第一条：吵架不过夜，谁的错谁先哄，哄不好就抱一下再哄。</p>
-          <p>第二条：忙碌时提前报备，不让对方对着「正在输入」发呆。</p>
-          <p>第三条：纪念日、生日、在一起的每一天都要认真对待。</p>
-          <p>第四条：开心的事第一时间分享，难过的事一起扛。</p>
-          <p>第五条：永远不说分手，把「我们」放在第一位。</p>
-        </div>
-        <div className="mt-5 flex items-center justify-between text-[15px]">
-          <div>
-            <div className="text-[12px] text-[#9a9aa2]">甲方</div>
-            <div className="font-semibold text-[#2c2c30]">{state.meName || '我'}</div>
-          </div>
-          <Heart className="h-5 w-5 text-[#a9a9b2]" fill="#d9d9de" />
-          <div className="text-right">
-            <div className="text-[12px] text-[#9a9aa2]">乙方</div>
-            <div className="font-semibold text-[#2c2c30]">{state.taName || 'TA'}</div>
-          </div>
-        </div>
-        <button
-          type="button"
-          disabled={signed}
-          onClick={() => {
-            patch({ pactAt: Date.now() });
-            showToast('协议签署成功，好好爱 ♡');
-          }}
-          className="mt-5 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white disabled:opacity-40"
-        >
-          {signed ? `已于 ${fmtDate(state.pactAt as number)} 签署` : '签署协议'}
-        </button>
+    <svg viewBox="0 0 120 120" className="h-[98px] w-[98px] -rotate-[14deg] opacity-90" aria-hidden="true">
+      <defs>
+        <path id="pact-stamp-circ" d="M60 60 m -42 0 a 42 42 0 1 1 84 0 a 42 42 0 1 1 -84 0" fill="none" />
+      </defs>
+      <circle cx="60" cy="60" r="54" fill="rgba(229,70,76,0.05)" stroke="#e5464c" strokeWidth="3.5" />
+      <circle cx="60" cy="60" r="29" fill="none" stroke="#e5464c" strokeWidth="1.8" />
+      <text fill="#e5464c" fontSize="12.5" fontWeight="700" letterSpacing="2.2">
+        <textPath href="#pact-stamp-circ" startOffset="1%">LOVE SPACE · 恋人空间公证</textPath>
+      </text>
+      <text x="60" y="54" textAnchor="middle" fontSize="14" fontWeight="800" fill="#e5464c">恋人空间</text>
+      <text x="60" y="72" textAnchor="middle" fontSize="12" fontWeight="800" fill="#e5464c" letterSpacing="6">公证</text>
+      <path d="M60 77 c -3.2 -4.2 -9.5 -3 -9.5 2 c 0 4 5.2 6.8 9.5 9.8 c 4.3 -3 9.5 -5.8 9.5 -9.8 c 0 -5 -6.3 -6.2 -9.5 -2 Z" fill="#e5464c" />
+    </svg>
+  );
+}
+
+/** 恋爱协议纸（预览/签署共用）：标题 + 声明 + 条款 + 双签名 + 日期（签署后盖红章） */
+function PactPaper({ state }: { state: CoupleState }) {
+  const signed = state.pactAt != null;
+  const kai = { fontFamily: "'Kaiti SC','STKaiti','KaiTi','SimKai',cursive" } as const;
+  const sig = (side: 'me' | 'ta') => {
+    const name = side === 'me' ? state.pactSignMe ?? (signed ? state.meName || null : null) : state.pactSignTa ?? (signed ? state.taName || null : null);
+    const at = side === 'me' ? state.pactMeAt ?? state.pactAt : state.pactTaAt ?? state.pactAt;
+    return { name, at };
+  };
+  return (
+    <div className="relative overflow-hidden rounded-lg border border-[#e9e9ee] bg-white px-5 pb-6 pt-6 shadow-[0_4px_18px_rgba(0,0,0,0.05)]">
+      <div className="text-center text-[21px] font-bold tracking-[2px] text-[#26262b]">{state.pactTitle || '恋爱协议书'}</div>
+      <div className="mt-4 h-[2px] bg-[#2c2c30]" />
+      <p className="mt-4 text-justify text-[13.5px] leading-[1.9] text-[#4a4a52]">{state.pactPreamble}</p>
+      <div className="my-4 border-t border-dashed border-[#dcdce1]" />
+      <ol className="space-y-1.5 px-1" data-testid="pact-paper-clauses">
+        {state.pactClauses.map((c, i) => (
+          <li key={i} className="flex gap-1.5 text-[13px] leading-relaxed text-[#4a4a52]">
+            <span className="shrink-0">{i + 1}.</span>
+            <span>{c}</span>
+          </li>
+        ))}
+        {state.pactClauses.length === 0 && <li className="text-[12.5px] text-[#c9c9cf]">还没有条款，去添加第一条约定吧</li>}
+      </ol>
+      <div className="my-4 border-t border-dashed border-[#dcdce1]" />
+      <div className="grid grid-cols-2">
+        {(['me', 'ta'] as const).map((side) => {
+          const { name, at } = sig(side);
+          return (
+            <div key={side} className={side === 'me' ? 'border-r border-[#e9e9ee] pr-4' : 'pl-4'}>
+              <div className="text-[12px] text-[#6e6e76]">{side === 'me' ? '你的签名' : '他的签名'}</div>
+              <div className="mt-1.5 min-h-[36px] text-[23px] leading-[36px] text-[#26262b]" style={kai}>
+                {name || <span className="text-[14px] tracking-[2px] text-[#c9c9cf]">＿＿＿＿＿</span>}
+              </div>
+              <div className="mt-1 text-[11.5px] text-[#9a9aa2]">日期：{at ? fmtDateCn(fmtDate(at)) : '＿＿＿年＿＿月＿＿日'}</div>
+            </div>
+          );
+        })}
       </div>
-    </SubShell>
+      {signed && (
+        <div className="pointer-events-none absolute -right-1 bottom-20">
+          <PactStamp />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 恋爱协议（第七轮重做，参考图3/4/5）：预览主页 → 编辑协议 → 签署协议（双方签名后盖章生效） */
+function PactPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
+  const [view, setView] = useState<'home' | 'edit' | 'sign'>('home');
+  const [signFrom, setSignFrom] = useState<'home' | 'edit'>('home');
+  const [taPending, setTaPending] = useState(false);
+  const [dlg, setDlg] = useState<null | { type: 'title' | 'preamble' | 'custom' | 'template' } | { type: 'clause'; idx: number }>(null);
+  const [draft, setDraft] = useState('');
+  const clauses = state.pactClauses;
+
+  // 条款拖拽排序（指针事件：按手柄 → 移动高亮目标行 → 松手落位）
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const dragFrom = useRef<number | null>(null);
+  const dragToRef = useRef<number | null>(null);
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [dragTo, setDragTo] = useState<number | null>(null);
+
+  const startDrag = (i: number, e: React.PointerEvent) => {
+    e.preventDefault();
+    dragFrom.current = i;
+    dragToRef.current = i;
+    setDragging(i);
+    setDragTo(i);
+    const onMove = (ev: PointerEvent) => {
+      let target: number | null = null;
+      rowRefs.current.forEach((el, j) => {
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        if (ev.clientY >= r.top && ev.clientY <= r.bottom) target = j;
+      });
+      if (target != null) {
+        dragToRef.current = target;
+        setDragTo(target);
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      const from = dragFrom.current;
+      const to = dragToRef.current;
+      dragFrom.current = null;
+      dragToRef.current = null;
+      setDragging(null);
+      setDragTo(null);
+      if (from == null || to == null || from === to) return;
+      const arr = [...clauses];
+      const [m] = arr.splice(from, 1);
+      arr.splice(to, 0, m);
+      patch({ pactClauses: arr });
+      showToast('条款顺序已调整');
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
+  const openDlg = (d: NonNullable<typeof dlg>, initial = '') => {
+    setDraft(initial);
+    setDlg(d);
+  };
+
+  const submitDlg = () => {
+    if (!dlg) return;
+    const t = draft.trim();
+    if (dlg.type === 'title') {
+      if (!t) {
+        showToast('协议名称不能为空');
+        return;
+      }
+      patch({ pactTitle: t });
+      showToast('协议名称已更新 ♡');
+    } else if (dlg.type === 'preamble') {
+      if (!t) {
+        showToast('协议声明不能为空');
+        return;
+      }
+      patch({ pactPreamble: t });
+      showToast('协议声明已更新 ♡');
+    } else if (dlg.type === 'clause') {
+      if (!t) {
+        showToast('条款内容不能为空');
+        return;
+      }
+      const arr = [...clauses];
+      arr[dlg.idx] = t;
+      patch({ pactClauses: arr });
+      showToast('条款已更新 ♡');
+    } else if (dlg.type === 'custom') {
+      if (!t) {
+        showToast('先写下你们的约定吧');
+        return;
+      }
+      patch({ pactClauses: [...clauses, t] });
+      showToast('已添加一条自定义条款 ♡');
+    } else if (dlg.type === 'template') {
+      if (!t) {
+        showToast('请输入模板编码');
+        return;
+      }
+      patch({ pactClauses: [...PACT_TEMPLATE_CLAUSES], pactTitle: '恋爱协议书' });
+      showToast('标准模板导入成功，共 20 条 ♡');
+    }
+    setDlg(null);
+    setDraft('');
+  };
+
+  const addRandom = () => {
+    const pool = PACT_RANDOM_POOL.filter((p) => !clauses.includes(p));
+    if (pool.length === 0) {
+      showToast('随机条款库都被你用完啦');
+      return;
+    }
+    patch({ pactClauses: [...clauses, pool[Math.floor(Math.random() * pool.length)]] });
+    showToast('已随机新增一条 ♡');
+  };
+
+  const removeClause = (idx: number) => {
+    patch({ pactClauses: clauses.filter((_, i) => i !== idx) });
+    showToast('已删除该条款');
+  };
+
+  const signMe = () => {
+    if (state.pactSignMe) return;
+    patch({ pactSignMe: state.meName || '我', pactMeAt: Date.now() });
+    showToast('签名成功 ♡ 现在可以发给 TA 签名了');
+  };
+
+  const sendToTa = () => {
+    if (!state.pactSignMe || state.pactSignTa || taPending) return;
+    setTaPending(true);
+    showToast(`已发送给${state.taName || 'TA'}签名，等 TA 一会儿…`);
+    window.setTimeout(() => {
+      setTaPending(false);
+      patch({ pactSignTa: state.taName || 'TA', pactTaAt: Date.now(), pactAt: Date.now() });
+      showToast('TA 已签名，恋爱协议正式生效 ♡');
+    }, 2600 + Math.random() * 2400);
+  };
+
+  const dlgTitle = dlg ? (dlg.type === 'title' ? '编辑协议名称' : dlg.type === 'preamble' ? '编辑协议声明' : dlg.type === 'clause' ? '编辑条款' : dlg.type === 'custom' ? '自定义一条' : '导入模板') : '';
+
+  return (
+    <div className="relative h-full">
+      {view === 'home' && (
+        <SubShell title="恋爱协议" onBack={close}>
+          {/* 主标题（参考图3）：一起写一份 / 专属恋爱协议 */}
+          <div className="px-1 pt-2">
+            <h2 className="text-[27px] font-extrabold leading-[1.3] text-[#26262b]">
+              一起写一份
+              <br />
+              <span className="text-[#f2536a]">专属</span> 恋爱协议
+            </h2>
+            <p className="mt-2.5 text-[13.5px] leading-relaxed text-[#9a9aa2]">写下你们的约定，一起签名，生成协议书留作纪念，让爱有据可依。</p>
+          </div>
+
+          {/* 三步流程卡 */}
+          <div className="mt-4 rounded-2xl border border-[#f2dfe3] bg-white p-4 shadow-sm">
+            <div className="flex items-start">
+              {[
+                { n: '1', icon: NotebookPen, label: '写下约定', desc: '填写你们的相处约定和美好承诺' },
+                { n: '2', icon: Users, label: '双方签名', desc: '你们分别签名确认彼此的约定' },
+                { n: '3', icon: BadgeCheck, label: '生成保存', desc: '生成专属协议书可保存或分享' },
+              ].map((s, i) => (
+                <div key={s.n} className={`flex flex-1 flex-col items-center text-center ${i > 0 ? 'border-l border-dashed border-[#f0e3e5]' : ''}`}>
+                  <div className="relative">
+                    <span className="absolute -right-2 -top-2 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#f2536a] text-[10.5px] font-bold text-white">{s.n}</span>
+                    <s.icon className="h-9 w-9 text-[#f2536a]" strokeWidth={1.7} />
+                  </div>
+                  <div className="mt-2 text-[14px] font-semibold text-[#26262b]">{s.label}</div>
+                  <div className="mt-1 px-1 text-[10.5px] leading-snug text-[#b6b6bd]">{s.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 协议预览 */}
+          <div className="mt-6 flex items-center justify-center gap-2">
+            <span className="text-[11px] text-[#f2536a]">♥</span>
+            <span className="text-[16px] font-bold text-[#26262b]">协议预览</span>
+            <span className="text-[11px] text-[#f2536a]">♥</span>
+          </div>
+          <div className="mt-3">
+            <PactPaper state={state} />
+          </div>
+
+          {/* 模板导入 + 创建按钮 */}
+          <div className="mt-4 text-center text-[13px] text-[#9a9aa2]">
+            已有模板编码？
+            <button type="button" data-testid="pact-import-btn" onClick={() => openDlg({ type: 'template' })} className="ml-1 font-medium text-[#f2536a] underline underline-offset-2 active:opacity-60">
+              导入模板
+            </button>
+          </div>
+          <button
+            type="button"
+            data-testid="pact-create-btn"
+            onClick={() => {
+              setSignFrom('edit');
+              setView('edit');
+            }}
+            className="mt-3 flex h-[52px] w-full items-center justify-center rounded-full bg-[#f2536a] text-[17px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98]"
+          >
+            {state.pactAt != null ? '重新编辑协议 ✦' : '创建恋爱协议 ✦'}
+          </button>
+          {state.pactAt != null && (
+            <button
+              type="button"
+              onClick={() => {
+                setSignFrom('home');
+                setView('sign');
+              }}
+              className="mt-3 w-full text-center text-[13.5px] text-[#9a9aa2] underline-offset-2 active:opacity-60"
+            >
+              查看已签署的协议书 →
+            </button>
+          )}
+        </SubShell>
+      )}
+
+      {view === 'edit' && (
+        <SubShell title="编辑协议" onBack={() => setView('home')}>
+          {/* 协议名称 */}
+          <div className="mt-1 text-[16px] font-bold text-[#26262b]">协议名称</div>
+          <button
+            type="button"
+            onClick={() => openDlg({ type: 'title' }, state.pactTitle)}
+            className="mt-2.5 flex min-h-[52px] w-full items-center justify-between gap-3 rounded-xl border border-[#e4e4e9] bg-white px-4 py-3 text-left active:bg-[#fafafa]"
+          >
+            <span className="flex-1 truncate text-[15.5px] text-[#26262b]">{state.pactTitle || '恋爱协议书'}</span>
+            <span className="flex shrink-0 items-center gap-1 text-[13px] text-[#26262b]">
+              <Pencil className="h-3.5 w-3.5" strokeWidth={2} /> 编辑
+            </span>
+          </button>
+
+          {/* 协议声明 */}
+          <div className="mt-5 text-[16px] font-bold text-[#26262b]">协议声明</div>
+          <button
+            type="button"
+            onClick={() => openDlg({ type: 'preamble' }, state.pactPreamble)}
+            className="mt-2.5 flex w-full items-start justify-between gap-3 rounded-xl border border-[#e4e4e9] bg-white p-4 text-left active:bg-[#fafafa]"
+          >
+            <span className="flex-1 text-[13.5px] leading-[1.8] text-[#4a4a52]">{state.pactPreamble}</span>
+            <span className="mt-0.5 flex shrink-0 items-center gap-1 text-[13px] text-[#26262b]">
+              <Pencil className="h-3.5 w-3.5" strokeWidth={2} /> 编辑
+            </span>
+          </button>
+
+          {/* 协议条款 */}
+          <div className="mt-5 flex items-baseline justify-between">
+            <div className="text-[16px] font-bold text-[#26262b]">协议条款</div>
+            <div className="text-[11.5px] text-[#c9c9cf]">按住右侧手柄排序</div>
+          </div>
+          <div className="mt-1" data-testid="pact-clause-list">
+            {clauses.map((c, i) => (
+              <div
+                key={i}
+                ref={(el) => {
+                  rowRefs.current[i] = el;
+                }}
+                className={`flex items-center gap-1.5 py-3.5 ${
+                  dragging === i
+                    ? 'rounded-lg bg-white px-2 shadow-[0_8px_22px_rgba(0,0,0,0.14)]'
+                    : dragTo === i && dragging != null && dragTo !== dragging
+                      ? 'border-t-2 border-[#f2536a]'
+                      : 'border-b border-dashed border-[#e4e4e9]'
+                }`}
+              >
+                <span className="w-6 shrink-0 text-[15px] font-semibold text-[#26262b]">{i + 1}</span>
+                <span className="min-w-0 flex-1 text-[14px] leading-snug text-[#26262b]">{c}</span>
+                <button
+                  type="button"
+                  aria-label={`编辑条款${i + 1}`}
+                  onClick={() => openDlg({ type: 'clause', idx: i }, c)}
+                  className="flex shrink-0 items-center gap-1 px-1 text-[12.5px] text-[#4a4a52] active:opacity-60"
+                >
+                  <Pencil className="h-3.5 w-3.5" strokeWidth={2} /> 编辑
+                </button>
+                <button
+                  type="button"
+                  aria-label={`删除条款${i + 1}`}
+                  onClick={() => removeClause(i)}
+                  className="flex shrink-0 items-center gap-1 px-1 text-[12.5px] text-[#4a4a52] active:opacity-60"
+                >
+                  <Trash2 className="h-3.5 w-3.5" strokeWidth={2} /> 删除
+                </button>
+                <button type="button" aria-label="拖动排序" onPointerDown={(e) => startDrag(i, e)} className="shrink-0 cursor-grab touch-none px-0.5 text-[#c9c9cf] active:text-[#9a9aa2]">
+                  <GripVertical className="h-4.5 w-4.5" strokeWidth={2} />
+                </button>
+              </div>
+            ))}
+            {clauses.length === 0 && <div className="py-8 text-center text-[13px] text-[#c9c9cf]">还没有条款，从下面新增一条吧</div>}
+          </div>
+
+          {/* 新增 */}
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <button type="button" data-testid="pact-random-btn" onClick={addRandom} className="h-12 rounded-xl border-2 border-[#f8a0b4] text-[14.5px] font-medium text-[#f2536a] active:bg-[#fff5f7]">
+              + 随机新增一条
+            </button>
+            <button type="button" data-testid="pact-custom-btn" onClick={() => openDlg({ type: 'custom' })} className="h-12 rounded-xl border border-[#d9d9de] bg-white text-[14.5px] font-medium text-[#4a4a52] active:bg-[#f7f7f9]">
+              + 自定义一条
+            </button>
+          </div>
+
+          <button
+            type="button"
+            data-testid="pact-to-sign-btn"
+            onClick={() => {
+              setSignFrom('edit');
+              setView('sign');
+            }}
+            className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-full bg-[#f2536a] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98]"
+          >
+            下一步：预览协议
+          </button>
+        </SubShell>
+      )}
+
+      {view === 'sign' && (
+        <SubShell title="签署协议" onBack={() => setView(signFrom)}>
+          <div className="mt-1">
+            <PactPaper state={state} />
+          </div>
+
+          {/* 双签名区（参考图5）：先我签 → 再发 TA 签 */}
+          <div className="mt-5 grid grid-cols-2 gap-4">
+            <div>
+              <div className="text-[14px] font-semibold text-[#26262b]">你的签名</div>
+              <button
+                type="button"
+                data-testid="pact-sign-me"
+                disabled={!!state.pactSignMe}
+                onClick={signMe}
+                className={`mt-2 flex h-[92px] w-full items-center justify-center rounded-md border-2 border-dashed transition-colors ${
+                  state.pactSignMe ? 'border-[#f8a0b4] bg-white' : 'border-[#f8a0b4] bg-[#fff5f7] active:bg-[#ffeef2]'
+                }`}
+              >
+                {state.pactSignMe ? (
+                  <span className="text-[26px] text-[#26262b]" style={{ fontFamily: "'Kaiti SC','STKaiti','KaiTi','SimKai',cursive" }}>
+                    {state.pactSignMe}
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1.5 text-[14px] text-[#f2536a]">
+                    <Pencil className="h-4 w-4" strokeWidth={2} /> 点击签名
+                  </span>
+                )}
+              </button>
+              {!state.pactSignMe && <div className="mt-2 rounded-md border border-[#f2536a] px-2 py-1 text-center text-[11px] leading-snug text-[#f2536a]">请先签名，完成后即可生成协议书</div>}
+              <div className="mt-2.5 text-[12px] text-[#9a9aa2]">日期：{state.pactMeAt ? fmtDateCn(fmtDate(state.pactMeAt)) : '＿＿＿年＿＿月＿＿日'}</div>
+            </div>
+            <div>
+              <div className="text-[14px] font-semibold text-[#26262b]">他的签名</div>
+              <button
+                type="button"
+                data-testid="pact-sign-ta"
+                disabled={!state.pactSignMe || !!state.pactSignTa || taPending}
+                onClick={sendToTa}
+                className={`mt-2 flex h-[92px] w-full items-center justify-center rounded-md border-2 border-dashed border-[#d9d9de] transition-colors ${
+                  !state.pactSignMe || state.pactSignTa ? 'bg-[#fafafa]' : 'bg-[#fafafa] active:bg-[#f1f1f4]'
+                }`}
+              >
+                {state.pactSignTa ? (
+                  <span className="text-[26px] text-[#26262b]" style={{ fontFamily: "'Kaiti SC','STKaiti','KaiTi','SimKai',cursive" }}>
+                    {state.pactSignTa}
+                  </span>
+                ) : taPending ? (
+                  <span className="flex items-center gap-1.5 text-[13px] text-[#9a9aa2]">
+                    <Loader2 className="h-4 w-4 animate-spin" /> 等待 TA 签名…
+                  </span>
+                ) : (
+                  <span className={`text-[14px] ${state.pactSignMe ? 'text-[#6e6e76]' : 'text-[#c9c9cf]'}`}>发送给他签名</span>
+                )}
+              </button>
+              <div className="mt-2 text-center text-[11.5px] text-[#c9c9cf]">{state.pactSignTa ? 'TA 已签名 ♡' : state.pactSignMe ? '完成签名后，可发送给他签名' : '请先完成你的签名'}</div>
+              <div className="mt-2.5 text-[12px] text-[#9a9aa2]">日期：{state.pactTaAt ? fmtDateCn(fmtDate(state.pactTaAt)) : '＿＿＿年＿＿月＿＿日'}</div>
+            </div>
+          </div>
+
+          {state.pactAt != null ? (
+            <div className="mb-2 mt-5 rounded-xl bg-[#fdeef2] py-3.5 text-center text-[14px] font-semibold text-[#f2536a]" data-testid="pact-effective-banner">
+              协议书已生成并生效，好好爱 ♡
+            </div>
+          ) : (
+            <p className="mb-2 mt-5 text-center text-[12.5px] leading-relaxed text-[#b6b6bd]">双方都签名后，协议书自动生成并盖上恋人空间公证章</p>
+          )}
+        </SubShell>
+      )}
+
+      {/* 编辑弹层：名称/声明/条款/自定义/模板编码 */}
+      {dlg && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 px-6" onClick={() => setDlg(null)}>
+          <div className="w-full rounded-2xl bg-white p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="text-[16.5px] font-bold text-[#26262b]">{dlgTitle}</div>
+            {dlg.type === 'template' ? (
+              <input
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="输入模板编码，如 LOVE2026"
+                autoFocus
+                className="mt-3.5 h-12 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] text-[#26262b] outline-none placeholder:text-[#b6b6bd]"
+              />
+            ) : dlg.type === 'preamble' ? (
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                rows={5}
+                autoFocus
+                maxLength={200}
+                className="mt-3.5 w-full resize-none rounded-xl bg-[#f3f3f5] p-3.5 text-[14.5px] leading-relaxed text-[#26262b] outline-none placeholder:text-[#b6b6bd]"
+              />
+            ) : (
+              <input
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                autoFocus
+                maxLength={dlg.type === 'title' ? 20 : 50}
+                placeholder={dlg.type === 'custom' ? '写一条你们的小约定…' : ''}
+                className="mt-3.5 h-12 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] text-[#26262b] outline-none placeholder:text-[#b6b6bd]"
+              />
+            )}
+            <div className="mt-4 flex gap-2.5">
+              <button type="button" onClick={() => setDlg(null)} className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
+                取消
+              </button>
+              <button type="button" data-testid="pact-dlg-save" onClick={submitDlg} className="h-11 flex-1 rounded-full bg-[#f2536a] text-[15px] font-semibold text-white active:opacity-85">
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -5207,59 +5927,275 @@ function StonePage({ state, patch, showToast, close }: { state: CoupleState; pat
   );
 }
 
-/** 回复挑战 */
-function ReplyPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
-  const [idx, setIdx] = useState(() => Math.floor(Math.random() * REPLY_PROMPTS.length));
-  const [text, setText] = useState('');
+/** 回复挑战（第七轮重做，参考图1/2）：黑底粉强调；挑战首页 + 12 关高危回复玩法 */
+function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
+  const [view, setView] = useState<'home' | 'play' | 'dead' | 'clear'>('home');
+  const [lv, setLv] = useState(0);
+  const [stats, setStats] = useState({ tm: 72, jc: 42, af: 48, sc: 78 });
+  const [picked, setPicked] = useState<number | null>(null);
+  const [players, setPlayers] = useState(791662);
+
+  /** 全网挑战人数：每 2.4s 微涨，模拟全网实时在玩 */
+  useEffect(() => {
+    const t = window.setInterval(() => setPlayers((p) => p + Math.floor(Math.random() * 4)), 2400);
+    return () => window.clearInterval(t);
+  }, []);
+
+  const start = () => {
+    setLv(0);
+    setStats({ tm: 72, jc: 42, af: 48, sc: 78 });
+    setPicked(null);
+    setView('play');
+  };
+
+  const clamp = (n: number) => Math.max(0, Math.min(100, n));
+
+  /** 选一个反应：先亮出点评，1.6s 后结算数值 → 下一关 / 死亡 / 通关 */
+  const pick = (i: number) => {
+    if (picked != null) return;
+    setPicked(i);
+    const d = REPLY_LEVELS[lv].opts[i].d;
+    window.setTimeout(() => {
+      const ns = { tm: clamp(stats.tm + d[0]), jc: clamp(stats.jc + d[1]), af: clamp(stats.af + d[2]), sc: stats.sc + d[3] };
+      setStats(ns);
+      if (ns.sc <= 0) {
+        patch({ replyBest: Math.max(state.replyBest ?? 0, lv + 1) });
+        setView('dead');
+      } else if (lv >= REPLY_LEVELS.length - 1) {
+        patch({ replyBest: Math.max(state.replyBest ?? 0, REPLY_LEVELS.length) });
+        setView('clear');
+      } else {
+        setLv(lv + 1);
+        setPicked(null);
+      }
+    }, 1600);
+  };
+
+  const level = REPLY_LEVELS[Math.min(lv, REPLY_LEVELS.length - 1)];
+  const best = state.replyBest ?? null;
+
+  /** 深色顶栏（SubShell 是浅色底，这里自绘以贴合黑金参考图） */
+  const darkHeader = (onBack: () => void) => (
+    <div className="shrink-0 bg-[#050506] pt-[54px]">
+      <div className="relative flex h-11 items-center px-1.5">
+        <button type="button" onClick={onBack} aria-label="返回" className="flex h-9 w-9 items-center justify-center rounded-full text-white transition-opacity active:opacity-50">
+          <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
+        </button>
+        <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[16px] font-bold text-white">回复挑战</div>
+      </div>
+    </div>
+  );
+
+  /** 数值条（体面值/觉察值/安抚值/存活率） */
+  const statChip = (label: string, v: number) => (
+    <div key={label} className="rounded-xl border border-white/[0.08] bg-white/[0.05] px-2.5 pb-2.5 pt-2">
+      <div className="text-[10.5px] leading-none text-white/40">{label}</div>
+      <div className="mt-1 text-[19px] font-bold leading-none text-white">{v}</div>
+      <div className="mt-2 h-[3px] overflow-hidden rounded-full bg-white/10">
+        <div className="h-full rounded-full bg-[#f9a8d4] transition-[width] duration-700" style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
+      </div>
+    </div>
+  );
+
   return (
-    <SubShell title="回复挑战" onBack={close}>
-      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
-        <div className="text-[13px] text-[#9a9aa2]">如果 TA 这样说——</div>
-        <div className="mt-2 rounded-xl bg-[#f7f7f9] p-4 text-[16px] font-medium leading-relaxed text-[#2c2c30]">{REPLY_PROMPTS[idx]}</div>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="写出你的高情商回复…"
-          maxLength={120}
-          rows={2}
-          className="mt-3 w-full resize-none rounded-xl bg-[#f3f3f5] p-3.5 text-[15px] outline-none placeholder:text-[#b6b6bd]"
-        />
-        <div className="mt-3 flex gap-2">
+    <div className="flex h-full flex-col bg-[#050506] text-white">
+      {darkHeader(view === 'home' ? close : () => setView('home'))}
+
+      {/* 首页（参考图1）：高危氛围 + 全网数据 + 开始挑战 */}
+      {view === 'home' && (
+        <div className="flex-1 overflow-y-auto overscroll-contain pb-10">
+          {/* 开场对话演示：TA 的轻描淡写 vs 我的心虚 */}
+          <div className="space-y-2.5 px-5 pt-4" aria-hidden="true">
+            <div className="flex items-end gap-2">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] bg-[#3a3a40] text-[11px] font-semibold text-white">TA</span>
+              <span className="rounded-[4px] rounded-tl-none bg-white px-3 py-1.5 text-[14px] text-black">没事，你忙吧。</span>
+            </div>
+            <div className="flex items-end justify-end gap-2">
+              <span className="rounded-[4px] rounded-tr-none bg-[#a8e05f] px-3 py-1.5 text-[14px] text-black">那我先不回了?</span>
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] bg-[#a8e05f] text-[11px] font-semibold text-black">我</span>
+            </div>
+            <div className="flex items-end gap-2">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] bg-[#3a3a40] text-[11px] font-semibold text-white">TA</span>
+              <span className="rounded-[4px] rounded-tl-none bg-white px-3 py-1.5 text-[14px] text-black">随便你。</span>
+            </div>
+          </div>
+
+          {/* 标签 + 大标题 */}
+          <div className="px-5 pt-8">
+            <span className="border-b-2 border-[#f9a8d4] pb-0.5 text-[14px] font-semibold text-[#f9a8d4]">情绪高压</span>
+          </div>
+          <h1 className="mt-3 px-5 text-[32px] font-extrabold leading-tight tracking-tight text-white">恋爱高危回复挑战</h1>
+          <p className="mt-2 px-5 text-[15px] leading-relaxed text-white/40">对方说&ldquo;没事&rdquo;的时候，你真的听懂了吗？</p>
+
+          {/* 全网数据卡 */}
+          <div className="mx-5 mt-6 rounded-[22px] border border-white/10 bg-white/[0.04] p-5">
+            <div className="grid grid-cols-3 items-end">
+              <div>
+                <div className="text-[24px] font-extrabold leading-none text-[#f9a8d4] tabular-nums">{players.toLocaleString('en-US')}</div>
+                <div className="mt-1.5 text-[11px] text-white/35">全网挑战人数</div>
+              </div>
+              <div className="text-center">
+                <div className="text-[24px] font-extrabold leading-none text-white">0.8%</div>
+                <div className="mt-1.5 text-[11px] text-white/35">历史通关率</div>
+              </div>
+              <div className="text-right">
+                <div className="text-[24px] font-extrabold leading-none text-[#f9a8d4]">{best == null ? '第4关' : best >= REPLY_LEVELS.length ? '通关🎉' : `第${best}关`}</div>
+                <div className="mt-1.5 text-[11px] text-white/35">你的最深纪录</div>
+              </div>
+            </div>
+          </div>
+
+          {/* 开始挑战 */}
           <button
             type="button"
-            onClick={() => {
-              const t = text.trim();
-              if (!t) {
-                showToast('先写下你的回复吧');
-                return;
-              }
-              patch({ replies: [{ id: uid(), prompt: REPLY_PROMPTS[idx], reply: t, at: Date.now() }, ...state.replies] });
-              setText('');
-              showToast('回复已收录 ♡');
-            }}
-            className="h-12 flex-1 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white"
+            data-testid="reply-start-btn"
+            onClick={start}
+            className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center rounded-full bg-[linear-gradient(90deg,#f6a6ce_0%,#fbe3e9_100%)] text-[20px] font-bold text-black shadow-[0_10px_30px_rgba(246,166,206,0.25)] transition-transform active:scale-[0.98]"
           >
-            提交回复
+            开始挑战
           </button>
-          <button type="button" onClick={() => setIdx((i) => (i + 1) % REPLY_PROMPTS.length)} className="h-12 rounded-full bg-[#f0f0f3] px-5 text-[15px] font-medium text-[#5a5a62]">
-            换一题
-          </button>
+          <p className="mt-5 text-center text-[12.5px] text-white/30">本挑战专治：自以为讲清楚了，实际上把火烧旺了。</p>
+
+          {/* 旧版高情商回复存档 */}
+          {state.replies.length > 0 && (
+            <div className="mx-5 mt-9">
+              <div className="text-[15px] font-bold text-white/85">我的高情商回复</div>
+              <div className="mt-3 space-y-2.5">
+                {state.replies.map((r) => (
+                  <div key={r.id} className="rounded-2xl border border-white/[0.08] bg-white/[0.04] p-4">
+                    <div className="text-[12px] text-white/35">{r.prompt}</div>
+                    <div className="mt-1.5 text-[14.5px] leading-relaxed text-white/85">{r.reply}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      </div>
-      {state.replies.length > 0 && (
-        <>
-          <h3 className="px-2 pb-2 pt-6 text-[17px] font-bold">我的高情商回复</h3>
-          <div className="space-y-3">
-            {state.replies.map((r) => (
-              <div key={r.id} className="rounded-2xl bg-white p-4 shadow-sm">
-                <div className="text-[13px] text-[#9a9aa2]">{r.prompt}</div>
-                <div className="mt-1.5 text-[15px] leading-relaxed text-[#2c2c30]">{r.reply}</div>
+      )}
+
+      {/* 关卡中（参考图2）：第 N/12 关 + 四数值条 + 场景卡 + A/B/C/D */}
+      {view === 'play' && (
+        <div className="flex-1 overflow-y-auto overscroll-contain pb-10">
+          <div className="px-5 pt-3">
+            <div className="text-[13px] font-bold text-[#f9a8d4]">
+              第 {lv + 1}/{REPLY_LEVELS.length} 关
+            </div>
+            <h2 className="mt-1 text-[28px] font-extrabold leading-tight text-white">{level.name}</h2>
+          </div>
+
+          <div className="mt-4 grid grid-cols-4 gap-2 px-4">
+            {statChip('体面值', stats.tm)}
+            {statChip('觉察值', stats.jc)}
+            {statChip('安抚值', stats.af)}
+            {statChip('存活率', stats.sc)}
+          </div>
+
+          <div className="mx-4 mt-4 rounded-2xl border border-white/[0.08] bg-white/[0.05] p-5">
+            <div className="text-[12px] text-white/35">真实恋爱场景</div>
+            <p className="mt-3 text-[14.5px] leading-[1.8] text-white/55">{level.scene}</p>
+            <div className="mt-4 border-t border-white/10" />
+            <p className="mt-4 text-[24px] font-bold leading-snug text-white">{level.quote}</p>
+          </div>
+
+          <div className="mt-5 flex items-center justify-between px-5">
+            <span className="text-[14px] font-bold text-[#f9a8d4]">你会怎么做</span>
+            <span className="text-[12px] text-white/30">{picked == null ? '选择一个反应' : 'TA 正在等你…'}</span>
+          </div>
+
+          <div className="mt-3 space-y-2.5 px-4">
+            {level.opts.map((o, i) => {
+              const isPicked = picked === i;
+              const dim = picked != null && !isPicked;
+              return (
+                <div key={i}>
+                  <button
+                    type="button"
+                    data-testid={`reply-opt-${i}`}
+                    disabled={picked != null}
+                    onClick={() => pick(i)}
+                    className={`flex w-full items-center gap-3 rounded-2xl border p-4 text-left transition-all ${
+                      isPicked ? 'border-[#f9a8d4]/70 bg-[#f9a8d4]/[0.12]' : 'border-white/[0.08] bg-white/[0.05] active:bg-white/[0.09]'
+                    } ${dim ? 'opacity-35' : ''}`}
+                  >
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#f9a8d4]/[0.14] text-[15px] font-bold text-[#f9a8d4]">{['A', 'B', 'C', 'D'][i]}</span>
+                    <span className="flex-1 text-[15px] leading-snug text-white/90">{o.t}</span>
+                  </button>
+                  {isPicked && (
+                    <p className={`mt-2 px-2 text-[12.5px] leading-relaxed ${o.d[3] >= 0 ? 'text-[#f9a8d4]/90' : 'text-white/45'}`} data-testid="reply-verdict">
+                      {o.v}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 挑战失败 */}
+      {view === 'dead' && (
+        <div className="flex flex-1 flex-col items-center justify-center px-8 pb-16">
+          <div className="text-[34px] font-extrabold text-white">挑战失败</div>
+          <div className="mt-2 text-[15px] font-semibold text-[#f9a8d4]">
+            倒在第 {lv + 1} 关 ·「{level.name}」
+          </div>
+          <p className="mt-4 text-center text-[13.5px] leading-relaxed text-white/40">TA 已经不想说话了。这一次的沉默，比吵架更伤人。</p>
+          <div className="mt-6 flex gap-2.5">
+            {[
+              { l: '体面值', v: stats.tm },
+              { l: '觉察值', v: stats.jc },
+              { l: '安抚值', v: stats.af },
+              { l: '存活率', v: Math.max(0, stats.sc) },
+            ].map((s) => (
+              <div key={s.l} className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-center">
+                <div className="text-[10px] text-white/35">{s.l}</div>
+                <div className="mt-0.5 text-[16px] font-bold text-white">{s.v}</div>
               </div>
             ))}
           </div>
-        </>
+          <button type="button" onClick={start} className="mt-9 flex h-14 w-full items-center justify-center rounded-full bg-[linear-gradient(90deg,#f6a6ce,#fbe3e9)] text-[18px] font-bold text-black transition-transform active:scale-[0.98]">
+            再挑战一次
+          </button>
+          <button type="button" onClick={() => setView('home')} className="mt-3 h-12 w-full rounded-full bg-white/[0.08] text-[15px] font-medium text-white/70">
+            回到首页
+          </button>
+        </div>
       )}
-    </SubShell>
+
+      {/* 通关成功 */}
+      {view === 'clear' && (
+        <div className="flex flex-1 flex-col items-center justify-center px-8 pb-16">
+          <div className="text-[40px]" aria-hidden="true">
+            🎉
+          </div>
+          <div className="mt-2 text-[32px] font-extrabold text-[#f9a8d4]">通关成功</div>
+          <p className="mt-3 text-center text-[14.5px] leading-relaxed text-white/55">
+            {REPLY_LEVELS.length} 关全过 · 你已经听懂了
+            <br />
+            那些没说出口的话
+          </p>
+          <div className="mt-6 flex gap-2.5">
+            {[
+              { l: '体面值', v: stats.tm },
+              { l: '觉察值', v: stats.jc },
+              { l: '安抚值', v: stats.af },
+              { l: '存活率', v: Math.max(0, stats.sc) },
+            ].map((s) => (
+              <div key={s.l} className="rounded-xl border border-[#f9a8d4]/25 bg-[#f9a8d4]/[0.08] px-3 py-2 text-center">
+                <div className="text-[10px] text-[#f9a8d4]/70">{s.l}</div>
+                <div className="mt-0.5 text-[16px] font-bold text-white">{s.v}</div>
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={start} className="mt-9 flex h-13 w-full items-center justify-center rounded-full bg-white/[0.08] text-[16px] font-semibold text-white/85 transition-transform active:scale-[0.98]">
+            再挑战一次
+          </button>
+          <button type="button" onClick={() => setView('home')} className="mt-3 h-12 w-full rounded-full bg-white/[0.08] text-[15px] font-medium text-white/70">
+            回到首页
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

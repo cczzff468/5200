@@ -23,7 +23,7 @@
 
 import { kvGet, kvSet, kvGetScoped, kvSetScoped } from './idb-kv';
 import { genId } from './db';
-import { getContact, ownerProfileFor } from './contacts-store';
+import { getContact, listContacts, ownerProfileFor } from './contacts-store';
 import { avatarFor, displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { pushChatNotification } from './island-notify';
 import { wxUnreads, qqUnreads } from '@/lib/unread-store';
@@ -245,7 +245,7 @@ function todayKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** 建立关系：写全局 couple-space:state（accepted/partner/纪念日/恋人资料）+ 清 pendingInvite */
+/** 建立关系：写全局 couple-space:state（accepted/partner/纪念日/恋人资料/我的机主资料）+ 清 pendingInvite */
 async function establishRelation(channel: CoupleChannel, contactId: string): Promise<void> {
   let taName = '';
   let taAvatar: string | null = null;
@@ -258,6 +258,19 @@ async function establishRelation(channel: CoupleChannel, contactId: string): Pro
   } catch {
     /* 联系人读取失败静默 */
   }
+  // 我的信息按全局机主资料（联系人 App kind=user）回填，保证情侣界面头像/名字与全局一致
+  let meName = '';
+  let meAvatar: string | null = null;
+  try {
+    const list = await listContacts();
+    const me = list.find((c) => c.kind === 'user' && !c.altOf);
+    if (me) {
+      meName = me.name?.trim() || '';
+      meAvatar = me.avatar ?? null;
+    }
+  } catch {
+    /* 机主资料读取失败静默 */
+  }
   try {
     const s = kvGet<Record<string, unknown>>(STATE_KEY) ?? {};
     kvSet(STATE_KEY, {
@@ -267,6 +280,8 @@ async function establishRelation(channel: CoupleChannel, contactId: string): Pro
       anniversary: typeof s.anniversary === 'string' && s.anniversary ? s.anniversary : todayKey(),
       taName: taName || (typeof s.taName === 'string' ? s.taName : ''),
       taAvatar: taAvatar ?? (s.taAvatar ?? null),
+      meName: meName || (typeof s.meName === 'string' ? s.meName : ''),
+      meAvatar: meAvatar ?? (s.meAvatar ?? null),
       invite: { ...readInviteMeta(), partnerContactId: contactId, partnerApp: channel, pendingInvite: null },
     });
   } catch {

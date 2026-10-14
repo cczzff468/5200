@@ -19533,3 +19533,24 @@ Stage Summary:
 - 卡片流与用户参考截图1（QQ亲密关系卡）一致：邀请卡→接受→成功卡→sys提示行
 - 全局状态按用户要求不随微信/QQ账号切换；每联系人限一次跨渠道生效
 - 解除关系（设置页）清空全部数据含邀请历史，关系周期内每联系人限一次
+
+---
+Task ID: couple-round7
+Agent: Z.ai Code (main)
+Task: 第七轮——情侣界面头像名字按全局信息显示、邀请页返回键+删「（原情侣空间）」、首页标题点击返回主界面、邀请卡片点击进恋人空间、回复挑战/恋爱协议按参考截图重做美化
+
+Work Log:
+- 全局头像/名字同步：couple-invite.ts establishRelation 建立关系时同步写入机主资料（联系人 kind=user 的 name/avatar）到 couple-space:state 的 meName/meAvatar；couple-space.tsx 新增全局同步 effect（挂载 + COUPLE_STATE_EVENT 时：我←机主联系人、TA←绑定 partnerContactId 联系人，联系人改名/换头像后打开 App 自动跟随）
+- 邀请页：左上角新增返回键（couple-invite-back，closeApp 回主界面）；删除「邀请你开通恋人空间」下方「（原情侣空间）」小字；内容区 pt 150→104 保持构图
+- 首页：左上角「恋人空间」标题改为可点按钮（couple-home-title），点击关闭 App 返回手机主界面
+- 邀请卡片（微信/QQ 亲密关系卡）：卡片本体改为可点按钮（wx/qq-rel-card-body），点击进入恋人空间 APP——在其它 App 内 switchToApp('couple') 直接切换、主屏则 openApp
+- 回复挑战重做（参考图1/2）：黑底粉强调双视图——挑战首页（TA/我对话演示气泡、情绪高压粉标签、32px 大标题、全网数据卡 791662 实时微涨/0.8%/最深纪录、粉渐变开始挑战、专治文案、旧版高情商回复存档区）+ 关卡视图（第 N/12 关+关名、体面值/觉察值/安抚值/存活率四数值条粉色进度、真实恋爱场景卡+大引语、A/B/C/D 选项圆徽、选中亮点评 1.6s 后结算进入下一关）+ 死亡结算（倒在第 N 关+四数值+再挑战/回首页）+ 通关结算；REPLY_LEVELS 12 关×4 选项全部手写（没事陷阱/随便考验/已读深渊/在吗迷雾/你开心就好/别人家对象/凌晨两点/翻旧账预警/算了吧陷阱/醋意试探/玩笑收刀/终极沉默），replyBest 历史最佳入 CoupleState（loadCoupleState 默认值合并兼容旧数据）
+- 恋爱协议重做（参考图3/4/5）：三视图流——预览主页（一起写一份专属恋爱协议、三步流程卡 写下约定/双方签名/生成保存、♥协议预览♥、协议纸、导入模板链接、粉红创建按钮）→ 编辑协议（协议名称/声明弹层编辑、条款列表行内 编辑/删除/手柄拖拽排序（pointer 事件实时高亮落位）、随机新增一条（10 条池去重）/自定义一条、下一步：预览协议）→ 签署协议（协议纸+双签名区：点击签名（楷体手写风+自动日期）→ 发送给他签名 → TA 延时 2.6~5s 签名 → pactAt 生效+横幅）；PactPaper 共用协议纸组件 + PactStamp SVG 红章（恋人空间公证 LOVE SPACE textPath 环形文字+爱心）；pactTitle/pactPreamble/pactClauses/pactSignMe/pactSignTa/pactMeAt/pactTaAt 入 CoupleState；导入模板弹层任意编码载入 20 条标准模板；条款列表文本去 truncate 改自然换行
+- E2E（agent-browser）：邀请页返回键✓无（原情侣空间）✓ → 立即邀请→微信→小雪→等待对方接受→AI 接受自动进主界面✓ → 首页显示 全局机主「林深」+绑定「小雪」✓ → 标题点击回主屏✓ → 微信聊天邀请卡/成功卡/sys 行✓ → 点卡片本体从微信直切恋人空间✓ → 回复挑战首页→开始→第1关选 B 亮点评进第2关→连选最差项倒在第8关→回首页纪录「第8关」✓ → 恋爱协议 预览→创建→自定义+随机新增→拖拽排序（第8条拖到第1）→签署→我签「林深」+日期→TA 签「小雪」→生效横幅→主页协议纸双签名+红章✓ → 导入模板 20 条✓ → 改机主名为沈林深重开 App 自动跟随✓；console 无错误
+- tsc 0 错误；eslint couple 文件 0 新增问题
+
+Stage Summary:
+- 三文件改动：couple-space.tsx（+约700 行重做两页+同步 effect）、couple-rel-bubble.tsx（卡片可点）、couple-invite.ts（establishRelation 补机主资料）
+- 数据模型新增 replyBest/pactTitle/pactPreamble/pactClauses/pactSignMe/pactSignTa/pactMeAt/pactTaAt（默认值合并，旧数据零迁移）
+- 关键决策：①全局信息以联系人 App 为准（我=kind=user 机主，TA=绑定联系人），打开 App 即同步②回复挑战 12 关存活率扣到 0 判负，replyBest 记最深关数③协议签署先我后 TA，TA 签完自动 pactAt 生效盖红章④邀请卡点击用 switchToApp 支持应用内直切（openApp 有 activeApp 守卫）
+- 已 commit 并推送 origin main

@@ -13,6 +13,7 @@
 
 import Image from 'next/image';
 import type { CoupleRelCardData } from '@/lib/ios/couple-invite';
+import { useUI } from '@/lib/ios/store';
 
 export interface CoupleRelBubbleProps {
   data: CoupleRelCardData;
@@ -27,6 +28,14 @@ export default function CoupleRelBubble({ data, mine, onAccept, onDecline, testi
   const channelName = data.app === 'wx' ? '微信' : 'QQ';
   const isInvite = data.stage === 'invite';
   const declined = data.status === 'declined';
+
+  /** 点击卡片本体进入恋人空间 APP（第七轮用户要求）：在其它 App 内直接切换，主屏则打开 */
+  const openCoupleApp = () => {
+    const ui = useUI.getState();
+    if (ui.locked) return;
+    if (ui.activeApp && ui.activeApp !== 'couple') ui.switchToApp('couple');
+    else if (!ui.activeApp && ui.phase === 'closed') ui.openApp('couple');
+  };
 
   // 标题/副文案视角（对照截图1：邀请卡与成功卡两种）
   let title: string;
@@ -57,8 +66,16 @@ export default function CoupleRelBubble({ data, mine, onAccept, onDecline, testi
       data-testid={`${testidPrefix}-rel-card`}
       className={`w-[248px] select-none overflow-hidden rounded-[10px] bg-white shadow-sm dark:bg-[#1E1E1E] ${declined ? 'opacity-60' : ''}`}
     >
-      {/* 卡片本体：标题 + 副文案 + 图标（本体不可点，操作只走按钮） */}
-      <div className="flex w-full items-center gap-2.5 px-3 pb-2.5 pt-3 text-left">
+      {/* 卡片本体：标题 + 副文案 + 图标（点击进入恋人空间 APP；操作按钮仍在下方，不冲突） */}
+      <button
+        type="button"
+        data-testid={`${testidPrefix}-rel-card-body`}
+        onClick={(e) => {
+          e.stopPropagation();
+          openCoupleApp();
+        }}
+        className="flex w-full cursor-pointer items-center gap-2.5 px-3 pb-2.5 pt-3 text-left transition-opacity active:opacity-60"
+      >
         <span className="min-w-0 flex-1">
           <span className="block text-[15.5px] font-semibold leading-[1.35] text-black dark:text-white">{title}</span>
           <span className="mt-1 block text-[13px] leading-[1.45] text-black/45 dark:text-white/45">{desc}</span>
@@ -67,7 +84,7 @@ export default function CoupleRelBubble({ data, mine, onAccept, onDecline, testi
         <span aria-hidden="true" className="h-11 w-11 shrink-0 overflow-hidden rounded-[9px] shadow-[0_2px_6px_rgba(0,0,0,0.10)]">
           <Image src="/icons/couple.png" alt="恋人空间" width={44} height={44} className="h-full w-full object-cover" draggable={false} />
         </span>
-      </div>
+      </button>
 
       {/* 底部：按钮行 / 状态行 / 「亲密关系」标签 */}
       {isInvite && data.status === 'pending' && !mine ? (
