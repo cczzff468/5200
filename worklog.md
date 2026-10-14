@@ -19494,3 +19494,21 @@ Stage Summary:
 - 三个界面全部按用户要求完成并浏览器验证通过
 - 数据模型新增 letterDraft（旧数据自动补默认值）
 - 已知环境问题：本会话工具调用派生的后台进程会被沙箱在调用结束后回收，dev server 无法由代理常驻；已把堆内存上限写入 .zscripts/dev.sh，待平台下次拉起 dev 流程时生效；用户预览若 502 需重新拉起 dev（bun run dev）
+
+---
+Task ID: fix-preview-2
+Agent: Z.ai Code (main)
+Task: 用户报告"预览为什么不显示"，诊断并恢复 dev 服务器
+
+Work Log:
+- ps 确认无 next-server 进程（沙箱回收了上次会话的后台进程），内存充足（3.3GB 可用）
+- setsid + NODE_OPTIONS=--max-old-space-size=1536 重启 start-dev.sh，进程稳定存活
+- curl 确认 GET / 200（21KB 内容，缓存命中快速响应）
+- agent-browser 端到端验证：锁屏完整渲染（时间/日期/天气/电量小组件）→ 鼠标手势上滑解锁成功 → 主屏 APP 网格正常 → 无控制台错误
+- 确认 .zscripts/dev.sh 已含 NODE_OPTIONS=--max-old-space-size=1408（下次平台自动拉起防 OOM）
+- agent-browser 已关闭释放内存
+
+Stage Summary:
+- 预览已恢复，根因是会话切换后 dev 进程被回收，非代码问题
+- 前序所有界面优化（round4/round5）均已 commit 并推送（73dfc6e/39432b0），git 工作区干净
+- 无代码改动，无需 commit
