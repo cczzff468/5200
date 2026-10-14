@@ -20,7 +20,7 @@
  */
 
 import { kvGet, kvSet } from './idb-kv';
-import { memAddEventFragment } from '@/lib/memory';
+import { memAddEventFragment, memRecallBlock } from '@/lib/memory';
 import { pushChatNotification } from './island-notify';
 import { wxUnreads, qqUnreads } from '@/lib/unread-store';
 import { isProactiveChatActive } from './proactive-msg';
@@ -72,6 +72,27 @@ interface CoupleSnap {
   meetLoc?: { name: string; lat: number; lng: number } | null;
   letters?: { id: string; text: string; at: number }[];
   aiLog?: { id: string; text: string; at: number }[];
+  albums?: { id: string; name: string; desc: string; photos: string[] }[];
+  /** 通用留言线程（第十轮）：相册照片/心情日记/问答/印象/回复挑战下的双向留言 */
+  comments?: { id: string; key: string; from: string; text: string; at: number }[];
+  /** TA 今天去过的地方（人设记忆生成，灰色字展示） */
+  taTrail?: { dateKey: string; items: { t: string; place: string; note: string }[]; at: number } | null;
+  /** 回复挑战：TA 与我同时进行的最近一次双人闯关 */
+  replyTa?: { active: boolean; picks: Record<string, { pick: number; say: string; at: number }>; mePicks: Record<string, { pick: number; text: string }>; startedAt: number; endedAt: number | null } | null;
+}
+
+/** 留言线程 key → 场景名（记忆/注入/AI 上下文共用） */
+function sceneOfKey(key: string, snap: CoupleSnap | null): string {
+  if (key.startsWith('album:')) {
+    const albumId = key.split(':')[1] ?? '';
+    const album = (snap?.albums ?? []).find((a) => a.id === albumId);
+    return `相册「${album?.name ?? '照片'}」的照片留言区`;
+  }
+  if (key.startsWith('mood:')) return '心情日记留言区';
+  if (key.startsWith('quiz:')) return '甜蜜小问答的讨论区';
+  if (key === 'impress') return '情侣印象留言区';
+  if (key.startsWith('reply:')) return `回复挑战第${Number(key.split(':')[1] ?? 0) + 1}关讨论区`;
+  return '恋人空间留言区';
 }
 
 /** 同步读恋人空间状态（kv 内存缓存同步权威；未建立关系返回 null） */
@@ -198,11 +219,29 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
     lines.push(`- 恋爱编年史：${me}记下「${cut(c.text, 36)}」（${shortDate(c.at)}）。`);
   }
 
-  // 情侣印象
-  const impMe = (snap.impressionsMe ?? []).slice(0, 4);
-  const impTa = (snap.impressionsTa ?? []).slice(0, 4);
-  if (impMe.length > 0) lines.push(`- 情侣印象：${ta}眼中${me}是「${impMe.join('、')}」（其中一部分是${ta}自己贴的）；`);
-  if (impTa.length > 0) lines.push(`- ${me}眼中${ta}是「${impTa.join('、')}」。`);
+  // 情侣印象（方向绝对不能混：impressionsTa = 「我贴给TA的标签」贴在TA身上；impressionsMe = 「贴在我身上的标签」）
+  const impMe = (snap.impressionsMe ?? []).slice(0, 5);
+  const impTa = (snap.impressionsTa ?? []).slice(0, 5);
+  if (impTa.length > 0) {
+    lines.push(`- 情侣印象·${me}亲手贴给${ta}的标签（形容${ta}本人的，是${me}贴的）：「${impTa.join('、')}」。${me}说「我给你的标签」时指的就是这些。`);
+  }
+  if (impMe.length > 0) {
+    const aiTags = (snap.aiImpressions ?? []).filter((t) => impMe.includes(t));
+    const srcNote = aiTags.length > 0 ? `（其中「${aiTags.slice(0, 4).join('、')}」是${ta}自己亲手贴上去的）` : '';
+    lines.push(`- 情侣印象·贴在${me}身上的标签：「${impMe.join('、')}」${srcNote}。${ta}被问到「你给我贴了什么标签」时指这些，绝不能说成${me}贴给${ta}的那批。`);
+  }
+
+  // 留言区（相册照片/日记/问答/印象/回复挑战下的双向聊天，最近 2 条）
+  for (const c of (snap.comments ?? []).slice(0, 2)) {
+    const who = c.from === 'ta' ? ta : me;
+    lines.push(`- ${sceneOfKey(c.key, snap)}：${who}说「${cut(c.text, 36)}」。`);
+  }
+
+  // TA 今天的轨迹（人设记忆生成）
+  const trail = snap.taTrail;
+  if (trail && trail.dateKey === today && trail.items.length > 0) {
+    lines.push(`- ${ta}今天的行踪（TA 自己的日程，真实发生）：${trail.items.map((i) => `${i.t}${i.place}`).join('、')}。${me}问起今天去哪儿了要按这个答。`);
+  }
 
   // 情侣轨迹
   if (snap.myLoc || snap.taLoc) {
@@ -296,9 +335,23 @@ export function coupleMemoryDiff(prev: CoupleSnap, next: CoupleSnap, contactId: 
   if (next.pactAt != null && prev.pactAt == null) {
     lines.push(`${me}和${ta}在恋人空间签署了恋爱协议《${cut(next.pactTitle, 16)}》（共 ${(next.pactClauses ?? []).length} 条条款，双方签名生效）`);
   }
-  // 印象（我贴给 TA 的）
+  // 印象（我贴给 TA 的：贴在 TA 身上，形容 TA）
   const newImp = (next.impressionsTa ?? []).filter((t) => !(prev.impressionsTa ?? []).includes(t));
-  if (newImp.length > 0) lines.push(`${me}在情侣印象里这样形容${ta}：${newImp.slice(0, 3).join('、')}`);
+  if (newImp.length > 0) lines.push(`${me}亲手给${ta}贴了新标签（贴在${ta}身上、形容${ta}的）：${newImp.slice(0, 3).join('、')}`);
+  // 印象（我记在「TA 眼中的我」里的：贴在我身上）
+  const newImpMe = (next.impressionsMe ?? []).filter((t) => !(prev.impressionsMe ?? []).includes(t));
+  if (newImpMe.length > 0) lines.push(`${me}在「TA 眼中的我」里记下贴在自己身上的标签：${newImpMe.slice(0, 3).join('、')}`);
+  // 相册上传（我传了照片，TA 要知道）
+  for (const a of next.albums ?? []) {
+    const prevA = (prev.albums ?? []).find((x) => x.id === a.id);
+    const added = a.photos.length - (prevA?.photos.length ?? 0);
+    if (added > 0) lines.push(`${me}往恋人空间的相册「${a.name}」上传了 ${added} 张照片`);
+  }
+  // 留言区（我在各处留言区发的消息）
+  const newCmt = (next.comments ?? []).filter((c) => c.from === 'me' && !(prev.comments ?? []).some((p) => p.id === c.id));
+  for (const c of newCmt.slice(0, 2)) {
+    lines.push(`${me}在${sceneOfKey(c.key, next)}里对${ta}说：${cut(c.text, 40)}`);
+  }
   // 轨迹位置
   if (next.myLoc && next.myLoc.name !== prev.myLoc?.name) lines.push(`${me}在情侣轨迹里设置了自己的真实位置：${next.myLoc.name}`);
   if (next.taLoc && next.taLoc.name !== prev.taLoc?.name) lines.push(`${me}把${ta}在情侣轨迹里的位置设为：${next.taLoc.name}`);
@@ -410,7 +463,8 @@ function snapDigest(snap: CoupleSnap, me: string, ta: string): string {
   if (moodMe) parts.push(`${me}最近心情：${cut(moodMe.text, 26)}`);
   const newChron = (snap.chronicle ?? [])[0];
   if (newChron) parts.push(`编年史「${cut(newChron.text, 22)}」`);
-  if ((snap.impressionsTa ?? []).length > 0) parts.push(`${me}眼中的${ta}：${(snap.impressionsTa ?? []).slice(0, 3).join('、')}`);
+  if ((snap.impressionsTa ?? []).length > 0) parts.push(`${me}贴给${ta}的标签：${(snap.impressionsTa ?? []).slice(0, 3).join('、')}`);
+  if ((snap.impressionsMe ?? []).length > 0) parts.push(`贴在${me}身上的标签：${(snap.impressionsMe ?? []).slice(0, 3).join('、')}`);
   if ((snap.pactClauses ?? []).length > 0 && snap.pactAt != null) parts.push(`已有协议《${cut(snap.pactTitle, 12)}》`);
   return parts.join('；');
 }
