@@ -19576,3 +19576,22 @@ Stage Summary:
 - 数据模型新增 myLoc/taLoc/meetLoc/chronicleMonths/pacts（loadCoupleState 默认值合并，旧数据零迁移）
 - 关键决策：①渠道身份取「该渠道当前账号档案」而非固定机主（小号登录微信时跟随小号身份）②地图走服务端瓦片代理保证沙箱/预览可达（海外瓦片全被墙）③geocode 用 Open-Meteo（Nominatim/Photon 不可达）+重试抗抖动④协议生效自动存档而非手动保存（用户「弄完以后保存下来」）⑤编年史补全规则「最近一次≤该月的状态」跨年延续，与参考图行为一致
 - 已 commit 并推送 origin main
+
+---
+Task ID: couple-round9
+Agent: Z.ai Code (main)
+Task: 第九轮——AI 深度参与恋人空间：AI 知道情侣空间的一切（聊天人设注入）+ 所有事件写进记忆 + AI 主动行为（每天想你/浇树/纪念日/问答/心情日记/100件小事/印象/自拟协议）
+
+Work Log:
+- 新增 src/lib/ios/couple-ai.ts（三条链路）：
+  ① coupleChatBlock(contactId, channel, userName)：同步读 couple-space:state（kv 内存缓存）组装【恋人空间·你们的共享小天地】注入段——在一起天数/纪念日/双方想你/小树成长/甜蜜小问答（含我的回答）/双方心情日记/100件小事（含TA发起）/协议内容（生效+AI拟稿）/编年史/印象/轨迹与真实距离；仅当聊天对象=恋人绑定联系人才注入；wechat.tsx 与 qq.tsx 私聊 systemFull 在 momentsBlock 后接入（微信/QQ 每轮发消息 AI 都"知道"一切）
+  ② coupleRemember + coupleMemoryDiff： CoupleSpaceApp 的 patch（含 tapMissYou/waterTree 全部状态变更）diff 前后状态自动把用户事件写进恋人（AI）的记忆库（memAddEventFragment，sourceTag='couple'，归属句式"凑凑想小雪了/凑凑写了心情日记…"）；覆盖想你/浇水/心情日记/问答回答/编年史/纪念日/100件小事勾选/未来情书/协议签署/印象/轨迹位置
+  ③ runCoupleAiTick(channel, contactId)：打开恋人空间（mount + COUPLE_STATE_EVENT）触发 AI 主动行为调度——模块级防重入+每日去重，错峰执行：想你（每日1-2次，taMissYou/taMissYouByDay）→ 浇树（taTreeStreak，tree+2）→ LLM 心情日记（moods 加 from='ta'）→ LLM 问答回答（quizTa，读过并呼应我的回答）→ LML 贴印象（impressionsMe+aiImpressions，冷却3天）→ LLM 发起100件小事（aiHundred+hundredItems.byTa，冷却2天）→ LLM 纪念日（annivExtra ai-*，每自然月一个）→ LLM 自拟协议（aiPact，冷却7天）；LLM 走 /api/chat forceSdk 内置模型（人设+共享记忆 system，JSON 提取，失败本地模板兜底）；每个行为写状态+写记忆+写 aiLog，日记/印象/100件/纪念日/协议发灵动岛通知+未读
+- couple-space.tsx：CoupleState 新增 taMissYou/taMissYouByDay/taTreeStreak/quizTa/aiImpressions/aiImpressAt/aiAnnivKeys/aiHundred/aiPact/aiLog（默认值合并零迁移）；moods 加 from?: 'me'|'ta'、hundredItems 加 byTa；UI——想你页（TA 连续想我天数真实计算+「TA 今天也想了你 N 次」+累计提示）、小树页（他连续浇树 N 天真实值+「💧TA 今天也给小树浇了水」横幅）、问答详情（TA 的回答气泡「TA 自己主动写的」）、心情日记（「TA 写的」徽标）、情侣印象（「TA贴」徽标）、恋爱协议顶部「TA 拟了一份协议《…》[等你签]」卡片（不了谢谢/用 TA 的版本去签→填草稿进签署，AI 侧照常延时签名）、100件小事「TA 想和你一起做：…」横幅、设置页新增「TA 最近在你们的小天地里做的事」日志区（aiLog 最近12条，注明所有事都写进记忆）
+- E2E（agent-browser）：种子（凑凑+小雪 已建立微信关系）→ 打开恋人空间自动触发 tick → 想你页显示 TA 连续想我1天/累计2次/今天也想了你2次 ✓ → 小树页 TA 浇水横幅+他连续浇树1天+成长值6/20 ✓ → 问答详情显示小雪的回答（「第一次见到你的时候，就觉得你眼睛好好看…(*/ω＼*)」+ TA 自己主动写的）✓ → 恋爱协议显示「小雪 拟了一份协议《爱情协议》[等你签]」4条条款 ✓ → 用 TA 的版本去签→我签「凑凑」→TA签「小雪」→生效红章 ✓ → 设置页「小雪 最近在你们的小天地里做的事」8条日志 ✓ → LLM 行为落库验证：quizTa/aiImpressions（想抱抱～/奶茶搭子/永远爱你❤️）/aiHundred（一起看日落）/annivExtra（初雪纪念日（小雪记下的））/aiPact（《爱情协议》4条）/aiMood（💕今天和凑凑一起看了电影…）全部贴合人设 ✓ → 登录微信→小雪会话问"在一起多少天/你今天想我了吗/小树怎么样/你写的协议"→AI 精确回答「我今天已经想了你两次啦，早上和中午都说了我想你哦～」「小树现在成长值6/100，我今天给它浇水木啦～」「恋爱协议我已经写好啦，有四条呢，每天必须说三次我想你哦…」 ✓
+- tsc 0 错误；eslint 改动文件 0 问题
+
+Stage Summary:
+- 四文件：新增 couple-ai.ts（~700行）、couple-space.tsx（状态+UI+patch钩子）、wechat.tsx/qq.tsx（coupleBlock 注入各1处）
+- 关键决策：①AI 知道=每轮聊天现场同步读 kv（永远最新）而非缓存注入②记忆写入统一走 memAddEventFragment sourceTag='couple'（去重/合并/强化管线复用）③AI 行为打开 App 触发+每日去重（会话内错峰 6s~128s，更像"真人自己做的"）④LLM 全部走 forceSdk 内置模型（用户未配置 API 也能用）+模板兜底⑤AI 自己的行为（日记/协议/印象）带 from/byTa/aiImpressions 标记，UI 上区分「TA 写的」
+- 已 commit 并推送 origin main

@@ -78,6 +78,7 @@ import {
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
+import { coupleMemoryDiff, runCoupleAiTick } from '@/lib/ios/couple-ai';
 import { displayNameOf, isFriendIn } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
 import L from 'leaflet';
@@ -136,12 +137,12 @@ interface CoupleState {
   letters: { id: string; text: string; at: number; openAfterDays: number }[]; // 未来情书
   letterDraft: string; // 未来情书草稿（存草稿按钮）
   albums: CoupleAlbum[];
-  moods: { id: string; emoji: string; text: string; at: number; photo?: string | null; dateKey?: string }[]; // 心情日记
+  moods: { id: string; emoji: string; text: string; at: number; photo?: string | null; dateKey?: string; from?: 'me' | 'ta' }[]; // 心情日记（from='ta' = AI 写的）
   chronicle: { id: string; text: string; at: number }[]; // 恋爱编年史
   impressionsMe: string[]; // TA 眼中的我（标签）
   impressionsTa: string[]; // 我眼中的 TA（标签）
   hundred: number[]; // 100 件小事已勾选索引
-  hundredItems: Record<string, { img: string | null; desc: string; date: string; place: string }>; // 100 件小事编辑数据（key=索引）
+  hundredItems: Record<string, { img: string | null; desc: string; date: string; place: string; byTa?: boolean }>; // 100 件小事编辑数据（key=索引；byTa=AI 发起）
   missCards: number; // 想你补签卡数量
   missMadeUp: string[]; // 已补签的日期 key
   stoneEngraved: boolean; // 三生石已刻名
@@ -170,6 +171,16 @@ interface CoupleState {
   replies: { id: string; prompt: string; reply: string; at: number }[]; // 回复挑战（旧版自由回复存档）
   replyBest: number | null; // 回复挑战历史最佳（到达关数，12=通关；第七轮玩法）
   treeStreak: { last: string | null; n: number }; // 爱情树：我连续浇树（last=最近浇水日）
+  taMissYou: number; // TA（AI）想你累计（第九轮：AI 每天想你）
+  taMissYouByDay: Record<string, number>; // TA 每日想你
+  taTreeStreak: { last: string | null; n: number }; // TA 连续浇树
+  quizTa: { q: string; a: string; at: number }[]; // AI 的问答回答（每题保留最近一次）
+  aiImpressions: string[]; // AI 贴给我的印象标签
+  aiImpressAt: number | null; // AI 上次贴印象时间
+  aiAnnivKeys: string[]; // AI 添加的纪念日 key
+  aiHundred: { idx: number; note: string; why: string; at: number }[]; // AI 发起的 100 件小事
+  aiPact: { title: string; preamble: string; clauses: string[]; at: number } | null; // AI 拟的协议草稿（等我签）
+  aiLog: { id: string; text: string; at: number }[]; // AI 行为日志
   invite: CoupleInviteMeta; // 邀请元数据（全局唯一：恋人绑定/待处理邀请/每联系人限一次历史）
 }
 
@@ -243,6 +254,16 @@ function defaultState(): CoupleState {
     replies: [],
     replyBest: null,
     treeStreak: { last: null, n: 0 },
+    taMissYou: 0,
+    taMissYouByDay: {},
+    taTreeStreak: { last: null, n: 0 },
+    quizTa: [],
+    aiImpressions: [],
+    aiImpressAt: null,
+    aiAnnivKeys: [],
+    aiHundred: [],
+    aiPact: null,
+    aiLog: [],
     invite: emptyInviteMeta(),
   };
 }
@@ -777,11 +798,14 @@ export default function CoupleSpaceApp() {
   const [friends, setFriends] = useState<{ id: string; name: string; avatar: string | null }[]>([]);
 
   /** 全局邀请状态事件同步：couple-invite（AI 接受/关系建立/收到邀请）直写 kv 后广播，
-   *  本组件重读全局 kv 刷新（邀请页按钮状态切换 + 关系建立后自动进入主界面） */
+   *  本组件重读全局 kv 刷新（邀请页按钮状态切换 + 关系建立后自动进入主界面）；
+   *  顺带触发 AI 主动行为（建立关系后 AI 开始想你/浇树/写日记…） */
   useEffect(() => {
     const sync = () => {
-      setInvMeta(readInviteMeta());
+      const meta = readInviteMeta();
+      setInvMeta(meta);
       setState(loadCoupleState()); // kv 内存缓存同步权威，读到的总是最新合并值
+      if (meta.partnerContactId) runCoupleAiTick(meta.partnerApp ?? 'wx', meta.partnerContactId);
     };
     window.addEventListener(COUPLE_STATE_EVENT, sync);
     return () => window.removeEventListener(COUPLE_STATE_EVENT, sync);
@@ -883,12 +907,25 @@ export default function CoupleSpaceApp() {
     showToast(r.ok ? '欢迎来到你们的小天地 ♡' : r.error);
   }, [invMeta.pendingInvite, showToast]);
 
-  /** 状态更新 + 防抖落盘（支持对象或函数式 updater，供快速连点场景原子更新） */
+  /** 状态更新 + 防抖落盘（支持对象或函数式 updater，供快速连点场景原子更新）。
+   *  同时：diff 前后状态，把用户新产生的情侣空间事件自动写进恋人（AI）的记忆（第九轮）。 */
+  const invMetaRef = useRef(invMeta);
+  useEffect(() => {
+    invMetaRef.current = invMeta;
+  });
   const patch = useCallback((pOrFn: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => {
     setState((prev) => {
       const inc = typeof pOrFn === 'function' ? pOrFn(prev) : pOrFn;
       const next = { ...prev, ...inc };
       kvSetDebounced(STATE_KEY, next);
+      const meta = invMetaRef.current;
+      if (meta.partnerContactId) {
+        try {
+          coupleMemoryDiff(prev, next, meta.partnerContactId, meta.partnerApp ?? 'wx');
+        } catch {
+          /* 记忆写入失败不阻断界面 */
+        }
+      }
       return next;
     });
   }, []);
@@ -900,8 +937,11 @@ export default function CoupleSpaceApp() {
     setSub(null);
   }, []);
 
-  /** 首次进入：预填「我」的信息卡资料 + 联系人第一位 AI 角色作为恋人；记录登录 + 生成情侣号 */
+  /** 首次进入：预填「我」的信息卡资料 + 联系人第一位 AI 角色作为恋人；记录登录 + 生成情侣号；
+   *  已建立关系时触发 AI 主动行为调度（AI 每天想你/浇树/写日记…，内部按天去重） */
   useEffect(() => {
+    const meta0 = readInviteMeta();
+    if (meta0.partnerContactId) runCoupleAiTick(meta0.partnerApp ?? 'wx', meta0.partnerContactId);
     if (bootFilled.current) return;
     bootFilled.current = true;
     (async () => {
@@ -2291,6 +2331,21 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
   const yesterday = todayKey(new Date(Date.now() - 86400000));
   const wateredToday = state.treeStreak?.last === today;
   const brokeStreak = !wateredToday && state.treeStreak?.last === yesterday; // 昨天浇了今天还没浇 → 断签提醒
+  // TA（AI）连续浇树（第九轮：AI 会主动照顾小树）
+  const taTreeStreak = useMemo(() => {
+    let n = 0;
+    const start = new Date();
+    const hit = (d: Date) => state.taTreeStreak && state.taTreeStreak.n > 0 && state.taTreeStreak.last === todayKey(d);
+    // taTreeStreak 只存最近一次：从今天起往回推（last 匹配即连续，再往前无法追溯，取 last 距今天数+1 逻辑简化）
+    if (state.taTreeStreak?.last === todayKey(start)) {
+      n = state.taTreeStreak.n;
+    } else {
+      start.setDate(start.getDate() - 1);
+      if (state.taTreeStreak?.last === todayKey(start)) n = 0; // TA 昨天浇了今天还没浇
+    }
+    return n;
+  }, [state.taTreeStreak]);
+  const taWateredToday = state.taTreeStreak?.last === today;
   const [pop, setPop] = useState(0);
 
   return (
@@ -2368,7 +2423,7 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
           {/* 连续浇树小木牌 */}
           <div className="relative mx-auto -mt-1 w-[196px] rounded-lg border-[3px] border-[#8a5a2e] bg-[linear-gradient(180deg,#bd8d4a,#a5763a)] px-3 py-1.5 shadow-[0_5px_12px_rgba(120,80,30,0.3)]">
             <div className="text-[12.5px] font-bold leading-relaxed text-[#5f3d18]">
-              他连续浇树 <b className="mx-1 text-[14px]">0</b> 天
+              他连续浇树 <b className="mx-1 text-[14px]">{taTreeStreak}</b> 天
             </div>
             <div className="text-[12.5px] font-bold leading-relaxed text-[#5f3d18]">
               我连续浇树 <b className="mx-1 text-[14px]">{streak}</b> 天
@@ -2389,6 +2444,13 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
         </div>
         </div>
       </div>
+
+      {/* TA 也浇过水提示（第九轮：AI 主动照顾小树） */}
+      {taWateredToday && (
+        <div className="absolute left-1/2 top-[122px] z-20 -translate-x-1/2 whitespace-nowrap rounded-full bg-white/90 px-3.5 py-1.5 text-[11.5px] font-semibold text-[#3f7d4e] shadow-[0_3px_10px_rgba(60,120,70,0.2)] backdrop-blur-sm">
+          💧 TA 今天也给小树浇了水
+        </div>
+      )}
 
       {/* ===== 中部场景 ===== */}
       <div className="relative z-10 flex-1">
@@ -2948,6 +3010,12 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
     for (const r of state.quiz) if (!map[r.q] || map[r.q].at < r.at) map[r.q] = { a: r.a, at: r.at };
     return map;
   }, [state.quiz]);
+  /** TA（AI）的回答（第九轮：AI 会主动回答，每题取最近一次） */
+  const taByQ = useMemo(() => {
+    const map: Record<string, { a: string; at: number }> = {};
+    for (const r of state.quizTa ?? []) if (!map[r.q] || map[r.q].at < r.at) map[r.q] = { a: r.a, at: r.at };
+    return map;
+  }, [state.quizTa]);
 
   const q = questions[cur] ?? '';
   const my = latestByQ[q];
@@ -3085,10 +3153,19 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
       {view === 'detail' && (
         <div className="flex-1 overflow-y-auto overscroll-contain px-6 pb-28 pt-3">
           {QuestionHead}
-          {/* TA 的回答 */}
+          {/* TA 的回答（第九轮：AI 会主动回答，并知道我答了什么） */}
           <div className="mt-6">
             <div className="text-[15px] font-medium text-[#8f9fe8]">{ta}（TA）</div>
-            <div className="mt-2 text-[15px] leading-relaxed text-[#b9b9c0]">还没有回答问题哦</div>
+            {taByQ[q] ? (
+              <>
+                <div className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-[#4a4a52]" data-testid="quiz-ta-answer">
+                  {taByQ[q].a}
+                </div>
+                <div className="mt-1.5 text-[12px] text-[#c9c9d0]">{fmtDate(taByQ[q].at)} · TA 自己主动写的</div>
+              </>
+            ) : (
+              <div className="mt-2 text-[15px] leading-relaxed text-[#b9b9c0]">还没有回答问题哦</div>
+            )}
           </div>
           {/* 我的回答 */}
           <div className="mt-7">
@@ -4067,6 +4144,9 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
                       <div className="text-[13.5px] leading-relaxed text-[#2c2c30]">{m.text || '（没说话，就是心情不好不坏）'}</div>
                       {m.photo && <img src={m.photo} alt="心情照片" className="mt-2 max-h-40 w-full rounded-xl object-cover" draggable={false} />}
                     </div>
+                    {m.from === 'ta' && (
+                      <span className="shrink-0 rounded-full bg-[#eef2fd] px-2 py-0.5 text-[10px] font-bold text-[#7f96e0]">TA 写的</span>
+                    )}
                   </div>
                 ))}
             </div>
@@ -5072,6 +5152,16 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
         </div>
       </div>
 
+      {/* TA 发起的小事（第九轮：AI 会主动添加 100 件小事里的事件） */}
+      {(state.aiHundred ?? []).length > 0 && (
+        <div className="relative z-10 mx-5 mt-1 rounded-xl border border-[#f2cdd8] bg-white/85 px-3.5 py-2.5 backdrop-blur-sm" data-testid="ai-hundred-banner">
+          <div className="text-[12.5px] leading-relaxed text-[#b0506c]">
+            <b>{state.taName || 'TA'}</b> 想和你一起做：<b>{state.aiHundred[0].note}</b>
+            <span className="ml-1 text-[11.5px] text-[#c58ba0]">（{state.aiHundred[0].why}）</span>
+          </div>
+        </div>
+      )}
+
       {/* 拍立得卡片墙（当前页 6 张） */}
       <div className="relative z-10 flex-1 overflow-hidden px-5 pt-3">
         <div className="grid grid-cols-2 gap-x-4">
@@ -5464,6 +5554,54 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
     <div className="relative h-full">
       {view === 'home' && (
         <SubShell title="恋爱协议" onBack={close}>
+          {/* TA 拟的协议（第九轮：AI 会自己拟协议等我签） */}
+          {state.aiPact && (
+            <div className="mt-3 rounded-2xl border-2 border-dashed border-[#f2536a] bg-white p-4" data-testid="ai-pact-card">
+              <div className="flex items-center justify-between">
+                <div className="text-[14.5px] font-bold text-[#26262b]">
+                  {state.taName || 'TA'} 拟了一份协议 <span className="text-[#f2536a]">《{state.aiPact.title}》</span>
+                </div>
+                <span className="shrink-0 rounded-full bg-[#fdeef2] px-2 py-0.5 text-[10.5px] font-bold text-[#f2536a]">等你签</span>
+              </div>
+              <div className="mt-2 space-y-1">
+                {state.aiPact.clauses.slice(0, 3).map((c, i) => (
+                  <div key={i} className="flex gap-1.5 text-[12.5px] leading-relaxed text-[#6e6e76]">
+                    <span className="shrink-0">{i + 1}.</span>
+                    <span className="min-w-0">{c}</span>
+                  </div>
+                ))}
+                {state.aiPact.clauses.length > 3 && <div className="text-[11.5px] text-[#b6b6bd]">…共 {state.aiPact.clauses.length} 条</div>}
+              </div>
+              <div className="mt-3 flex gap-2.5">
+                <button
+                  type="button"
+                  data-testid="ai-pact-dismiss"
+                  onClick={() => {
+                    patch({ aiPact: null });
+                    showToast('已婉拒 TA 的协议草稿');
+                  }}
+                  className="h-10 flex-1 rounded-full bg-[#f0f0f3] text-[14px] font-medium text-[#5a5a62]"
+                >
+                  不了谢谢
+                </button>
+                <button
+                  type="button"
+                  data-testid="ai-pact-adopt"
+                  onClick={() => {
+                    const p = state.aiPact!;
+                    patch({ pactTitle: p.title, pactPreamble: state.pactPreamble, pactClauses: [...p.clauses], pactSignMe: null, pactMeAt: null, pactSignTa: null, pactTaAt: null, pactAt: null, aiPact: null });
+                    setSignFrom('edit');
+                    setView('edit');
+                    showToast(`已换成 ${state.taName || 'TA'} 的版本，改完就能签啦 ♡`);
+                  }}
+                  className="h-10 flex-1 rounded-full bg-[#f2536a] text-[14px] font-semibold text-white active:opacity-85"
+                >
+                  用 TA 的版本去签
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* 主标题（参考图3）：一起写一份 / 专属恋爱协议 */}
           <div className="px-1 pt-2">
             <h2 className="text-[27px] font-extrabold leading-[1.3] text-[#26262b]">
@@ -6976,6 +7114,9 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
               {tags.map((t) => (
                 <span key={t} className="flex items-center gap-1 rounded-full bg-[#fff0f4] px-3 py-1.5 text-[13px] text-[#e0607e]">
                   {t}
+                  {(state.aiImpressions ?? []).includes(t) && target === 'me' && (
+                    <span className="rounded-full bg-[#eef2fd] px-1.5 py-px text-[9px] font-bold text-[#7f96e0]">TA贴</span>
+                  )}
                   <button type="button" onClick={() => removeTag(t)} aria-label={`删除标签${t}`} className="text-[#e5a0b0] active:opacity-60">
                     ✕
                   </button>
@@ -7300,7 +7441,21 @@ function MissYouPage({ state, patch, tapMissYou, showToast, close }: { state: Co
     return n;
      
   }, [state.missYouByDay, state.missMadeUp]);
-  const taStreak = 0; // TA 还没来过（演示）
+  /** TA（AI）连续想我：从今天（若今天未打卡则从昨天）往回连续计数（第九轮：AI 每天想你） */
+  const taHit = (k: string) => (state.taMissYouByDay?.[k] ?? 0) > 0;
+  const taStreak = useMemo(() => {
+    let n = 0;
+    const start = new Date();
+    if (!taHit(todayKey(start))) start.setDate(start.getDate() - 1);
+    for (;;) {
+      if (!taHit(todayKey(start))) break;
+      n += 1;
+      start.setDate(start.getDate() - 1);
+    }
+    return n;
+  }, [state.taMissYouByDay]);
+  const taTodayMiss = state.taMissYouByDay?.[today] ?? 0;
+  const taMissTotal = state.taMissYou ?? 0;
 
   /** 展示月份 */
   const base = new Date();
@@ -7370,6 +7525,9 @@ function MissYouPage({ state, patch, tapMissYou, showToast, close }: { state: Co
           我连续想他 <b className="mx-0.5 align-middle text-[27px] font-extrabold text-[#f0436e]">{myStreak}</b> 天 / 他连续想我{' '}
           <b className="mx-0.5 align-middle text-[27px] font-extrabold text-[#4a90f2]">{taStreak}</b> 天
         </div>
+        {taMissTotal > 0 && (
+          <div className="mt-1 text-center text-[12px] text-[#8fb3e8]">TA 累计想了你 {taMissTotal} 次 · 每天都会想你 ♡</div>
+        )}
 
         {/* 去提醒他 */}
         <div className="mt-3 flex flex-col items-center">
@@ -7380,7 +7538,7 @@ function MissYouPage({ state, patch, tapMissYou, showToast, close }: { state: Co
           >
             去提醒他
           </button>
-          <span className="mt-2 text-[13px] text-[#b6b6bd]">今天他还没来过哦~</span>
+          <span className="mt-2 text-[13px] text-[#b6b6bd]">{taTodayMiss > 0 ? `TA 今天也想了你 ${taTodayMiss} 次 ♡` : '今天他还没来过哦~'}</span>
         </div>
 
         {/* 有断签 + 月份切换 */}
@@ -7686,6 +7844,26 @@ function SettingsPage({ state, patch, showToast, close, onReset }: { state: Coup
           <ChevronRight className="h-5 w-5 text-[#c6c6cd]" />
         </button>
       </div>
+
+      {/* TA 在恋人空间做的事（第九轮：AI 深度参与，全部写进记忆；此处透明展示最近 12 条） */}
+      {(state.aiLog ?? []).length > 0 && (
+        <div className="mt-5 rounded-2xl bg-white p-4 shadow-sm" data-testid="ai-log">
+          <div className="text-[14.5px] font-bold text-[#2c2c30]">
+            {state.taName || 'TA'} 最近在你们的小天地里做的事
+          </div>
+          <div className="mt-2 space-y-1.5">
+            {state.aiLog.slice(0, 12).map((l) => (
+              <div key={l.id} className="flex items-start gap-2 text-[12.5px] leading-relaxed text-[#6e6e76]">
+                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#f2536a]/70" />
+                <span className="min-w-0 flex-1">{l.text}</span>
+                <span className="shrink-0 text-[10.5px] text-[#c9c9cf]">{fmtDate(l.at).slice(5)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-[11px] leading-relaxed text-[#c9c9cf]">TA 做的每一件事、你记录的每一件事，都会写进 TA 的记忆，聊天时都记得。</div>
+        </div>
+      )}
+
       <div className="mt-6 text-center text-[12.5px] leading-relaxed text-[#b6b6bd]">
         恋人空间 v1.0 · 白灰限定版
         <br />

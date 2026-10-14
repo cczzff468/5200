@@ -199,6 +199,7 @@ import PeerStatusCard from '@/components/apps/peer-status-card';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters, setMemScopeForApp } from '@/lib/memory';
+import { coupleChatBlock } from '@/lib/ios/couple-ai';
 import {
   addCharMomentPost,
   addUserMomentComment,
@@ -4914,6 +4915,8 @@ function ChatPage({
     // AI 能像真人一样自然提起；用户广播动态首次被看到时懒写入该角色记忆（动态 → 记忆双向打通）
     // userName=展示名（动态存储检索口径）；userRealName=真名（标签/归属说明用真名称呼用户）
     const momentsBlock = buildMomentsChatBlock({ contactId: peer.id, app: 'qq', userName: me.name, userRealName: me.realName || me.name, peer });
+    // 恋人空间×AI（第九轮）：对方是恋人绑定的联系人时，注入你们在恋人空间里的一切
+    const coupleBlock = coupleChatBlock(peer.id, 'qq', meAddrName);
     // 美团×AI 联动（外卖/代付）：实时订单动态 + 本聊天的待处理代付请求/待付订单 +
     // 食物话题命中时的商家目录与点外卖动作教学（全同步 kv 读，状态实时）——
     // A1：QQ 私聊同微信同构接入（此前仅卡片渲染/历史序列化接了，AI 本体不参与外卖/代付）
@@ -4999,6 +5002,7 @@ function ChatPage({
       // + 主动放歌引导 + 播控指令说明）（发消息瞬间现场构建，非缓存）
       togetherLiveBlock(peer.id, meAddrName),
       momentsBlock,
+      coupleBlock,
       locBlock,
       [...actionRules, ...mtEngage.rules, ...tbEngage.rules].length > 0 ? [...actionRules, ...mtEngage.rules, ...tbEngage.rules].join('\n\n') : '',
       blkBlock,
