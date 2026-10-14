@@ -53,10 +53,11 @@ export default function CoupleRelBubble({ data, mine, onAccept, onDecline, testi
     desc = mine ? '我已经同意了你的邀请，现在我们是情侣啦' : '我已经同意了你的邀请，现在我们是情侣啦';
   }
 
-  // 底部状态行（终态）；pending 时对方邀请卡出双按钮、我的邀请卡出等待文案
+  // 底部状态行（终态）；pending 时对方邀请卡出双按钮、我的邀请卡出等待文案；
+  // 已同意 → 不出 footer，走默认左下角「亲密关系」标签（用户要求：去掉居中「已同意」，与成功卡底部一致）
   let footer: string | null = null;
   if (isInvite) {
-    if (data.status === 'accepted') footer = '已同意';
+    if (data.status === 'accepted') footer = null;
     else if (declined) footer = '已拒绝';
     else if (mine) footer = '等待对方接受';
   }

@@ -19669,3 +19669,15 @@ Work Log:
 Stage Summary:
 - couple-rel-bubble.tsx 单文件小改：邀请卡/成功卡图标改原生 img 直出官方原图，双端（微信+QQ）生效
 - 结论：邀请卡与主屏/App Store/Spotlight 全部统一为用户上传的粉色双心官方图；next/image 优化端点宽度限制是历史隐患，卡片类小图标今后一律原生 img
+---
+Task ID: couple-invite-card-footer
+Agent: Z.ai Code (main)
+Task: 用户要求「邀请卡片上面的已同意变成左下角的亲密关系」——接受邀请后的底部状态行改版
+
+Work Log:
+- couple-rel-bubble.tsx：isInvite && status==='accepted' 时 footer 置 null（原居中灰字「已同意」），渲染落默认分支——底部左对齐「亲密关系」标签，与成功卡底部完全一致；已拒绝/等待对方接受保持原样
+- 验证：tsc 0 错误、eslint 改动文件 0 问题；浏览器注入新旧两版卡片对比截图——新版底部左下角「亲密关系」✓
+- dev server 曾被挤掉一次，低内存模式重启
+
+Stage Summary:
+- 单文件一行逻辑改动：邀请卡接受后底部 = 左下角「亲密关系」（同成功卡），不再显示居中「已同意」
