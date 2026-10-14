@@ -484,6 +484,12 @@
     transform: scale(1);
   }
 }
+/* 情侣轨迹地图虚线流动 */
+@keyframes couple-dash-flow {
+  to {
+    stroke-dashoffset: -64;
+  }
+}
 /* 「每天想你」点击涟漪扩散 */
 @keyframes couple-ripple-out {
   from {
@@ -498,7 +504,8 @@
 @media (prefers-reduced-motion: reduce) {
   [animation\:couple-sub-in],
   [animation\:couple-pop-heart],
-  [animation\:couple-ripple-out] {
+  [animation\:couple-ripple-out],
+  [animation\:couple-dash-flow] {
     animation: none;
   }
 }

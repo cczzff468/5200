@@ -113,6 +113,7 @@ interface CoupleState {
   marriedAt: number | null;
   meetPlace: string; // 情侣轨迹：相遇地点
   replies: { id: string; prompt: string; reply: string; at: number }[]; // 回复挑战
+  treeStreak: { last: string | null; n: number }; // 爱情树：我连续浇树（last=最近浇水日）
 }
 
 const STATE_KEY = 'couple-space:state';
@@ -158,6 +159,7 @@ function defaultState(): CoupleState {
     marriedAt: null,
     meetPlace: '',
     replies: [],
+    treeStreak: { last: null, n: 0 },
   };
 }
 
@@ -286,11 +288,16 @@ const HOTEL_ROOMS = [
   { name: '海边木屋', desc: '推门就是沙滩和日出' },
 ];
 
-/** 心情选项 */
+/** 心情选项（含手绘风表情配色：c=脸色 d=描边/细节） */
 const MOOD_LIST = [
-  { emoji: '😊', label: '开心' }, { emoji: '🥰', label: '甜蜜' }, { emoji: '😴', label: '困困' },
-  { emoji: '😤', label: '生气' }, { emoji: '😢', label: '委屈' }, { emoji: '🤔', label: '思考' },
-  { emoji: '🤩', label: '兴奋' }, { emoji: '🥲', label: '想TA' },
+  { emoji: '😊', label: '开心', c: '#f8d05e', d: '#e2b23c' },
+  { emoji: '🥰', label: '甜蜜', c: '#f6bfcb', d: '#e59cad' },
+  { emoji: '😴', label: '困困', c: '#cdccdb', d: '#a8a7bf' },
+  { emoji: '😤', label: '生气', c: '#f08a78', d: '#d96a58' },
+  { emoji: '😢', label: '委屈', c: '#93bbe9', d: '#709bd2' },
+  { emoji: '🤔', label: '思考', c: '#eac59b', d: '#d2a774' },
+  { emoji: '🤩', label: '兴奋', c: '#f4ab6d', d: '#de8c4c' },
+  { emoji: '🥲', label: '想TA', c: '#c6b0e2', d: '#aa90cb' },
 ];
 
 // ---------------- 小工具 ----------------
@@ -362,6 +369,107 @@ function PixelHeart({ size = 40 }: { size?: number }) {
       {cells.map(([x, y], i) => (
         <rect key={i} x={x * px} y={y * px} width={px * 1.02} height={px * 1.02} rx={px * 0.22} fill={i % 3 === 0 ? '#b9b9c1' : '#8e8e97'} />
       ))}
+    </svg>
+  );
+}
+
+/**
+ * 手绘蜡笔风心情表情（参考截图的圆脸涂鸦风）：
+ * 不规则圆脸 + 各心情专属五官/装饰（口水笑/星星眼/泪滴/怒气线/思考泡/zzz…）
+ */
+function MoodFace({ mood, size = 40, className = '' }: { mood: string; size?: number; className?: string }) {
+  const meta = MOOD_LIST.find((m) => m.emoji === mood);
+  if (!meta) {
+    return (
+      <span className={`flex items-center justify-center rounded-full bg-[#ececef] ${className}`} style={{ width: size, height: size }}>
+        <Smile className="h-1/2 w-1/2 text-[#b6b6bd]" strokeWidth={1.6} />
+      </span>
+    );
+  }
+  const ink = '#4a3d33';
+  return (
+    <svg viewBox="0 0 100 100" width={size} height={size} className={className} aria-hidden="true">
+      {/* 不规则蜡笔圆脸 */}
+      <path
+        d="M50 6 C73 4 94 23 93 49 C92 75 73 94 48 93 C24 92 7 75 7 49 C7 24 27 8 50 6 Z"
+        fill={meta.c}
+        stroke={meta.d}
+        strokeWidth="2.6"
+      />
+      {meta.emoji === '😊' && (
+        <>
+          <circle cx="36" cy="43" r="3.4" fill={ink} />
+          <circle cx="64" cy="43" r="3.4" fill={ink} />
+          <path d="M31 56 Q50 82 69 56 Q50 65 31 56 Z" fill={ink} />
+        </>
+      )}
+      {meta.emoji === '🥰' && (
+        <>
+          <path d="M29 45 Q36 37 43 45" stroke={ink} strokeWidth="3.2" strokeLinecap="round" fill="none" />
+          <path d="M57 45 Q64 37 71 45" stroke={ink} strokeWidth="3.2" strokeLinecap="round" fill="none" />
+          <ellipse cx="27" cy="55" rx="6" ry="3.6" fill="#ffffff" opacity="0.55" />
+          <ellipse cx="73" cy="55" rx="6" ry="3.6" fill="#ffffff" opacity="0.55" />
+          <path d="M40 59 Q50 69 60 59" stroke={ink} strokeWidth="3" strokeLinecap="round" fill="none" />
+          <path d="M22 24 c2-4.5 8.5-3.2 8.5 1.2 c0 3.4-4.6 6.2-8.5 9.4 c-3.9-3.2-8.5-6-8.5-9.4 c0-4.4 6.5-5.7 8.5-1.2 Z" fill={meta.d} opacity="0.9" />
+        </>
+      )}
+      {meta.emoji === '😴' && (
+        <>
+          <path d="M29 44 Q36 50 43 44" stroke={ink} strokeWidth="3.2" strokeLinecap="round" fill="none" />
+          <path d="M57 44 Q64 50 71 44" stroke={ink} strokeWidth="3.2" strokeLinecap="round" fill="none" />
+          <circle cx="50" cy="63" r="3.4" fill={ink} />
+          <text x="68" y="30" fontSize="17" fontWeight="bold" fill={ink} transform="rotate(14 68 30)">z</text>
+          <text x="79" y="19" fontSize="11" fontWeight="bold" fill={ink} transform="rotate(14 79 19)">z</text>
+        </>
+      )}
+      {meta.emoji === '😤' && (
+        <>
+          <path d="M28 35 L42 42" stroke={ink} strokeWidth="3.4" strokeLinecap="round" />
+          <path d="M72 35 L58 42" stroke={ink} strokeWidth="3.4" strokeLinecap="round" />
+          <circle cx="37" cy="49" r="3" fill={ink} />
+          <circle cx="63" cy="49" r="3" fill={ink} />
+          <path d="M40 67 Q50 58 60 67" stroke={ink} strokeWidth="3.2" strokeLinecap="round" fill="none" />
+          <path d="M63 14 l7 7 M74 10 l2.6 10.4 M84 17 l-7.4 5.6" stroke={ink} strokeWidth="2.6" strokeLinecap="round" fill="none" />
+        </>
+      )}
+      {meta.emoji === '😢' && (
+        <>
+          <path d="M29 34 Q36 31 43 35" stroke={ink} strokeWidth="3" strokeLinecap="round" fill="none" />
+          <path d="M71 34 Q64 31 57 35" stroke={ink} strokeWidth="3" strokeLinecap="round" fill="none" />
+          <circle cx="36" cy="45" r="3.2" fill={ink} />
+          <circle cx="64" cy="45" r="3.2" fill={ink} />
+          <path d="M32 53 q-4 9 0 12.5 q4-3.5 0-12.5 Z" fill="#b7d4f4" stroke={meta.d} strokeWidth="1.4" />
+          <path d="M68 53 q-4 9 0 12.5 q4-3.5 0-12.5 Z" fill="#b7d4f4" stroke={meta.d} strokeWidth="1.4" />
+          <path d="M41 68 Q45.5 63.5 50 68 Q54.5 72.5 59 68" stroke={ink} strokeWidth="3" strokeLinecap="round" fill="none" />
+        </>
+      )}
+      {meta.emoji === '🤔' && (
+        <>
+          <path d="M29 32 Q36 28.5 43 33" stroke={ink} strokeWidth="3" strokeLinecap="round" fill="none" />
+          <path d="M57 38 Q64 35.5 71 39" stroke={ink} strokeWidth="3" strokeLinecap="round" fill="none" />
+          <circle cx="36" cy="45" r="3.2" fill={ink} />
+          <circle cx="64" cy="47" r="3.2" fill={ink} />
+          <path d="M43 66 L58 62" stroke={ink} strokeWidth="3.2" strokeLinecap="round" />
+          <circle cx="73" cy="27" r="3.4" fill={ink} opacity="0.85" />
+          <circle cx="81" cy="18" r="2.4" fill={ink} opacity="0.7" />
+          <circle cx="88" cy="11" r="1.6" fill={ink} opacity="0.55" />
+        </>
+      )}
+      {meta.emoji === '🤩' && (
+        <>
+          <path d="M0 -7.5 L2.2 -2.2 7.5 0 2.2 2.2 0 7.5 -2.2 2.2 -7.5 0 -2.2 -2.2 Z" transform="translate(36 43)" fill={ink} />
+          <path d="M0 -7.5 L2.2 -2.2 7.5 0 2.2 2.2 0 7.5 -2.2 2.2 -7.5 0 -2.2 -2.2 Z" transform="translate(64 43)" fill={ink} />
+          <path d="M31 58 Q50 82 69 58 Q50 66 31 58 Z" fill={ink} />
+        </>
+      )}
+      {meta.emoji === '🥲' && (
+        <>
+          <path d="M36 38 c2.6-4.6 9.2-3.2 9.2 1.4 c0 3.6-5 6.6-9.2 10 c-4.2-3.4-9.2-6.4-9.2-10 c0-4.6 6.6-6 9.2-1.4 Z" transform="translate(0 -1) scale(0.62) translate(22 26)" fill={meta.d} />
+          <path d="M64 38 c2.6-4.6 9.2-3.2 9.2 1.4 c0 3.6-5 6.6-9.2 10 c-4.2-3.4-9.2-6.4-9.2-10 c0-4.6 6.6-6 9.2-1.4 Z" transform="translate(0 -1) scale(0.62) translate(41 26)" fill={meta.d} />
+          <path d="M41 62 Q50 70 59 62" stroke={ink} strokeWidth="3" strokeLinecap="round" fill="none" />
+          <path d="M71 52 q-4 9 0 12.5 q4-3.5 0-12.5 Z" fill="#cdbdf0" stroke={meta.d} strokeWidth="1.3" />
+        </>
+      )}
     </svg>
   );
 }
@@ -487,10 +595,16 @@ export default function CoupleSpaceApp() {
     showToast('想 TA 的心意 +1 ♡');
   }, [showToast]);
 
-  /** 浇水（爱情树） */
+  /** 浇水（爱情树）：成长值 +2，并累计连续浇树天数 */
   const waterTree = useCallback(() => {
     setState((prev) => {
-      const next = { ...prev, tree: Math.min(100, prev.tree + 2) };
+      const k = todayKey();
+      const yKey = todayKey(new Date(Date.now() - 86400000));
+      const prevStreak = prev.treeStreak || { last: null, n: 0 };
+      let n = 1;
+      if (prevStreak.last === k) n = Math.max(1, prevStreak.n);
+      else if (prevStreak.last === yKey) n = prevStreak.n + 1;
+      const next: CoupleState = { ...prev, tree: Math.min(100, prev.tree + 2), treeStreak: { last: k, n } };
       kvSetDebounced(STATE_KEY, next);
       return next;
     });
@@ -707,41 +821,43 @@ function HomePage(props: {
   };
 
   return (
-    <div className="relative h-full overflow-y-auto overscroll-contain">
-      <div className="px-5 pt-[60px]">
-        <h1 className="text-[24px] font-bold leading-tight tracking-tight">恋人空间</h1>
-      </div>
+    <div className="relative flex h-full flex-col">
+      {/* 可滚动内容区 */}
+      <div className="relative flex-1 overflow-y-auto overscroll-contain">
+        <div className="px-5 pt-[60px]">
+          <h1 className="text-[24px] font-bold leading-tight tracking-tight">恋人空间</h1>
+        </div>
 
       {/* 双头像 + 纪念日气泡 + 想念天数 */}
-      <div className="mt-3 flex items-start justify-between px-4">
-        {avatarCol('me')}
-        <div className="relative flex-1 px-1.5 pt-1">
-          {/* 虚线连接线 */}
-          <svg viewBox="0 0 200 40" className="absolute left-1 right-1 top-[22px] h-9 w-[calc(100%-8px)]" aria-hidden="true">
-            <path d="M6 14 C 60 -6, 80 40, 100 20 S 150 6, 194 26" fill="none" stroke="#c7c7ce" strokeWidth="2.5" strokeDasharray="6 6" strokeLinecap="round" />
-          </svg>
-          <button
-            type="button"
-            onClick={() => openSub('anniv')}
-            className="relative mx-auto flex min-h-[54px] w-[164px] items-center justify-center rounded-full border-2 border-white bg-white/90 px-3 py-2 text-center shadow-[0_6px_16px_rgba(0,0,0,0.09)] backdrop-blur-sm transition-transform active:scale-[0.97]"
-          >
-            {days == null ? (
-              <span className="text-[12.5px] font-semibold leading-snug text-[#4a4a52]">
-                点击设置你们
-                <br />
-                相恋的纪念日
-              </span>
-            ) : (
-              <span className="text-[12.5px] font-semibold leading-snug text-[#4a4a52]">
-                已相恋
-                <br />
-                {days} 天
-              </span>
-            )}
-          </button>
+        <div className="mt-3 flex items-start justify-between px-4">
+          {avatarCol('me')}
+          <div className="relative flex-1 px-1.5 pt-1">
+            {/* 虚线连接线 */}
+            <svg viewBox="0 0 200 40" className="absolute left-1 right-1 top-[22px] h-9 w-[calc(100%-8px)]" aria-hidden="true">
+              <path d="M6 14 C 60 -6, 80 40, 100 20 S 150 6, 194 26" fill="none" stroke="#c7c7ce" strokeWidth="2.5" strokeDasharray="6 6" strokeLinecap="round" />
+            </svg>
+            <button
+              type="button"
+              onClick={() => openSub('anniv')}
+              className="relative mx-auto flex min-h-[54px] w-[164px] items-center justify-center rounded-full border-2 border-white bg-white/90 px-3 py-2 text-center shadow-[0_6px_16px_rgba(0,0,0,0.09)] backdrop-blur-sm transition-transform active:scale-[0.97]"
+            >
+              {days == null ? (
+                <span className="text-[12.5px] font-semibold leading-snug text-[#4a4a52]">
+                  点击设置你们
+                  <br />
+                  相恋的纪念日
+                </span>
+              ) : (
+                <span className="text-[12.5px] font-semibold leading-snug text-[#4a4a52]">
+                  已相恋
+                  <br />
+                  {days} 天
+                </span>
+              )}
+            </button>
+          </div>
+          {avatarCol('ta')}
         </div>
-        {avatarCol('ta')}
-      </div>
 
       {/* 每天想你大圆：首次点击打卡后消失，改为头像下方想念天数 */}
       {missDays == null ? (
@@ -778,8 +894,20 @@ function HomePage(props: {
         </div>
       )}
 
-      {/* 右侧悬浮操作（想念记录 / 换背景） */}
-      <div className="absolute bottom-4 right-3 flex flex-col gap-2.5">
+        <input
+          ref={bgInput}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            onPickBg(e.target.files?.[0] ?? null);
+            e.currentTarget.value = '';
+          }}
+        />
+      </div>
+
+      {/* 右侧悬浮操作（想念记录 / 换背景）：固定在功能卡上方，不随内容滚动 */}
+      <div className="absolute bottom-[116px] right-3 z-20 flex flex-col gap-2.5">
         <button
           type="button"
           onClick={() => openSub('missyou')}
@@ -797,19 +925,9 @@ function HomePage(props: {
           <ImageIcon className="h-4 w-4" />
         </button>
       </div>
-      <input
-        ref={bgInput}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(e) => {
-          onPickBg(e.target.files?.[0] ?? null);
-          e.currentTarget.value = '';
-        }}
-      />
 
-      {/* 底部四功能卡（炭灰渐变，白灰主题） */}
-      <div className="grid grid-cols-4 gap-2 px-3 pb-5 pt-3">
+      {/* 底部固定四功能卡（不随内容滚动，始终贴在 Tab 栏上方） */}
+      <div className="relative z-10 grid shrink-0 grid-cols-4 gap-2 px-3 pb-3 pt-2">
         {([
           { key: 'tree', label: '爱情小树\n成长记', grad: 'linear-gradient(160deg,#5c5c64,#3f3f46)', icon: <Sprout className="h-6 w-6" strokeWidth={1.9} /> },
           { key: 'track', label: '情侣轨迹', grad: 'linear-gradient(160deg,#7c7c85,#5f5f68)', icon: <Compass className="h-6 w-6" strokeWidth={1.9} /> },
@@ -1208,12 +1326,12 @@ function UsPage({ state, days, openSub }: { state: CoupleState; days: number | n
             <span className="mx-1 text-[#b9b9c1]">+</span>
           </div>
 
-          {/* 双头像 + 像素心 + 进度条 + 天数 */}
+          {/* 双头像 + 浅灰爱心 + 进度条 + 天数 */}
           <div className="relative mt-4 flex items-start justify-between px-5">
             <span aria-hidden="true" className="mt-16 text-[13px] text-[#d9d9de]">♡</span>
             <CoupleAvatar src={state.meAvatar} name={state.meName} size={62} ring={false} />
             <div className="flex flex-col items-center gap-1 pt-1.5">
-              <PixelHeart size={36} />
+              <Heart className="h-9 w-9 text-[#d6d6dc]" fill="#e2e2e7" strokeWidth={1.1} />
               <span className="text-[11px] text-[#8e8e96]">恋爱进度条</span>
               <div className="h-1.5 w-[80px] overflow-hidden rounded-full bg-[#ececef]">
                 <div className="h-full rounded-full bg-[linear-gradient(90deg,#8e8e97,#5c5c64)]" style={{ width: `${Math.min(100, ((days ?? 0) % 365) / 3.65 + 20)}%` }} />
@@ -1284,7 +1402,7 @@ function SubRouter(props: {
 
   switch (sub) {
     case 'tree':
-      return <TreePage state={state} waterTree={waterTree} close={close} />;
+      return <TreePage state={state} waterTree={waterTree} close={close} showToast={showToast} />;
     case 'track':
       return <TrackPage state={state} patch={patch} days={days} close={close} showToast={showToast} />;
     case 'quiz':
@@ -1402,7 +1520,7 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
 
   return (
     <SubShell title="设置纪念日" onBack={close}>
-      {/* 英雄卡：双头像 + 心形徽标 + 在一起天数 */}
+      {/* 英雄卡：双头像 + 在一起天数 */}
       <div className="relative mt-3 overflow-hidden rounded-3xl bg-[linear-gradient(160deg,#ffffff_0%,#f2f2f5_60%,#e7e7eb_100%)] px-5 pb-5 pt-6 text-center shadow-[0_10px_26px_rgba(0,0,0,0.08)]">
         <div aria-hidden="true" className="pointer-events-none absolute -left-8 -top-10 h-28 w-28 rounded-full bg-white/70" />
         <div aria-hidden="true" className="pointer-events-none absolute -right-6 top-8 h-20 w-20 rounded-full bg-white/50" />
@@ -1410,11 +1528,8 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
           <div className="h-12 w-12 overflow-hidden rounded-full bg-[#ececef] ring-2 ring-white shadow-sm">
             {state.meAvatar ? <img src={state.meAvatar} alt={state.meName} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={48} />}
           </div>
-          <div className="relative -ml-2.5 h-12 w-12 overflow-hidden rounded-full bg-[#ececef] ring-2 ring-white shadow-sm">
+          <div className="relative ml-2.5 h-12 w-12 overflow-hidden rounded-full bg-[#ececef] ring-2 ring-white shadow-sm">
             {state.taAvatar ? <img src={state.taAvatar} alt={state.taName} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={48} />}
-            <span className="absolute -left-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full bg-white shadow-sm">
-              <Heart className="h-2.5 w-2.5 text-[#5c5c64]" fill="#5c5c64" />
-            </span>
           </div>
         </div>
         <div className="relative mt-1.5 flex items-center justify-center gap-4 text-[11px] text-[#8e8e96]">
@@ -1590,37 +1705,212 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
   );
 }
 
-/** 爱情小树成长记：成长值 0~100，按阈值换阶段 */
-function TreePage({ state, waterTree, close }: { state: CoupleState; waterTree: () => void; close: () => void }) {
+/** 爱情小树成长记（游戏场景风）：木牌等级 + 成长进度 + 草地小树 + 左侧奖励 + 底部入口 */
+function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; waterTree: () => void; close: () => void; showToast: (m: string) => void }) {
   const tree = state.tree;
-  const stage = tree >= 90 ? 4 : tree >= 60 ? 3 : tree >= 30 ? 2 : tree >= 10 ? 1 : 0;
-  const stageInfo = [
-    { emoji: '🌰', label: '一颗种子', tip: '每天浇浇水，爱情会发芽' },
-    { emoji: '🌱', label: '小芽破土', tip: '它开始听见你们的笑声了' },
-    { emoji: '🌿', label: '枝叶舒展', tip: '认真经营的恋爱都会开花' },
-    { emoji: '🌳', label: '枝繁叶茂', tip: '为你们撑起一片树荫' },
-    { emoji: '🌸🌳', label: '开花的大树', tip: '所有用心都会结果' },
-  ][stage];
+  const level = Math.min(5, Math.floor(tree / 20) + (tree >= 100 ? 0 : 1) || 1);
+  const inLevel = tree - (Math.min(5, Math.floor(tree / 20))) * 20 || (tree >= 100 ? 20 : 0);
+  const stageEmoji = ['🌰', '🌱', '🌿', '🪴', '🌳'][Math.min(4, Math.floor(tree / 20))];
+  const streak = state.treeStreak?.n ?? 0;
+  const wateredToday = state.treeStreak?.last === todayKey();
+
+  const leftBadges = [
+    { icon: '🎁', label: '浇水奖励', tip: '连续浇水 7 天有神秘礼物哦' },
+    { icon: '🛡️', label: '保护罩', tip: '保护罩已开启，小树不会枯萎' },
+    { icon: '✨', label: '双倍成长', tip: '周五浇水双倍成长值' },
+  ];
+  const bottomEntries = [
+    { icon: '🗺️', label: '小世界', lock: '5级', tip: () => showToast(tree >= 100 ? '小世界已解锁！（演示）' : '成长到 5 级（100 成长值）解锁') },
+    { icon: '🏡', label: '魔法屋', lock: '6级', tip: () => showToast('继续浇水升级，魔法屋敬请期待') },
+    { icon: '📋', label: '任务', lock: null, tip: () => showToast(wateredToday ? '今日任务已完成：浇水 1 次 ✓' : '今日任务：给小树浇一次水吧') },
+  ];
+
   return (
     <SubShell title="爱情小树成长记" onBack={close}>
-      <div className="mt-3 flex flex-col items-center rounded-2xl bg-white py-8 shadow-sm">
-        <div className="text-[60px] leading-none [animation:couple-pop-heart_.6s_ease-out]">{stageInfo.emoji}</div>
-        <div className="mt-4 text-[19px] font-bold text-[#2c2c30]">{stageInfo.label}</div>
-        <div className="mt-1.5 text-[14px] text-[#8e8e96]">{stageInfo.tip}</div>
-        <div className="mt-5 h-2.5 w-[70%] overflow-hidden rounded-full bg-[#efeff2]">
-          <div className="h-full rounded-full bg-[linear-gradient(90deg,#9e9ea8,#5c5c64)] transition-all" style={{ width: `${tree}%` }} />
+      {/* 顶部木牌：等级星 + 本级进度 + 连续浇水 */}
+      <div className="relative mt-3 rounded-2xl border border-[#ddd6c6] bg-[linear-gradient(180deg,#faf7ef,#efe9da)] px-4 py-3 shadow-[0_6px_16px_rgba(120,110,90,0.18)]">
+        <div className="flex items-center gap-3">
+          <span className="relative flex h-10 w-10 shrink-0 items-center justify-center">
+            <Star className="h-10 w-10 text-[#e3c25a]" fill="#f0d878" strokeWidth={1.4} />
+            <b className="absolute text-[15px] font-extrabold text-[#7a6420]">{level}</b>
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="relative h-4 overflow-hidden rounded-full border border-[#d9d0ba] bg-[#e7dfcc]">
+              <div className="h-full rounded-full bg-[linear-gradient(90deg,#b8cf9c,#8fb37a)] transition-all" style={{ width: `${(inLevel / 20) * 100}%` }} />
+            </div>
+          </div>
+          <span className="shrink-0 text-[12px] font-semibold text-[#8a7c5e]">{inLevel}/20</span>
         </div>
-        <div className="mt-2 text-[13px] text-[#9a9aa2]">成长值 {tree}/100</div>
-        <button
-          type="button"
-          onClick={waterTree}
-          className="mt-6 h-12 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-12 text-[16px] font-semibold text-white shadow-[0_8px_20px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.97]"
-        >
-          浇水 💧
-        </button>
+        <div className="mt-2.5 grid grid-cols-2 gap-1 text-[13px] text-[#6e675a]">
+          <span>
+            他连续浇树 <b className="text-[15px] text-[#4f4a3e]">0</b> 天
+          </span>
+          <span>
+            我连续浇树 <b className="text-[15px] text-[#4f4a3e]">{streak}</b> 天
+          </span>
+        </div>
       </div>
-      <p className="mt-4 px-2 text-[13px] leading-relaxed text-[#9a9aa2]">每浇一次水成长值 +2；从种子到开花共 5 个阶段，陪它慢慢长大吧。</p>
+
+      {/* 游戏场景：天空 + 云 + 草地 + 小树 */}
+      <div className="relative mt-3 h-[320px] overflow-hidden rounded-2xl bg-[linear-gradient(180deg,#e9f0f4_0%,#f2f6f3_52%,#e7efe2_100%)] shadow-sm">
+        {/* 云朵 */}
+        <span aria-hidden="true" className="absolute left-6 top-8 h-10 w-24 rounded-full bg-white/85 blur-[2px]" />
+        <span aria-hidden="true" className="absolute right-10 top-16 h-8 w-20 rounded-full bg-white/70 blur-[2px]" />
+        <span aria-hidden="true" className="absolute left-1/2 top-24 h-7 w-16 -translate-x-1/2 rounded-full bg-white/55 blur-[2px]" />
+        {/* 远山 */}
+        <span aria-hidden="true" className="absolute -left-10 top-[150px] h-24 w-48 rounded-[50%] bg-[#dde7dc]" />
+        <span aria-hidden="true" className="absolute -right-12 top-[162px] h-20 w-52 rounded-[50%] bg-[#e0e9de]" />
+        {/* 草地 */}
+        <span aria-hidden="true" className="absolute -bottom-14 left-1/2 h-44 w-[135%] -translate-x-1/2 rounded-[50%] bg-[#d4e4c8]" />
+        <span aria-hidden="true" className="absolute bottom-6 left-8 text-[11px] text-[#b8ccb0]">✿</span>
+        <span aria-hidden="true" className="absolute bottom-10 right-12 text-[11px] text-[#b8ccb0]">✿</span>
+        <span aria-hidden="true" className="absolute bottom-3 right-1/3 text-[10px] text-[#c2d4ba]">✿</span>
+        {/* 小树本体 */}
+        <div className="absolute bottom-[64px] left-1/2 -translate-x-1/2 text-center">
+          <span key={tree} className="block leading-none [animation:couple-pop-heart_.5s_ease-out]" style={{ fontSize: 46 + Math.min(4, Math.floor(tree / 20)) * 9 }}>
+            {stageEmoji}
+          </span>
+          <span aria-hidden="true" className="mx-auto mt-1 block h-2.5 w-16 rounded-[50%] bg-[#8a7a5e]/25" />
+        </div>
+        {/* 树旁气泡 */}
+        <div className="absolute bottom-[150px] left-[58%] flex items-center">
+          <span className="rounded-2xl rounded-br-sm bg-white/95 px-3 py-1.5 text-[11px] font-medium text-[#5a5a62] shadow-[0_4px_12px_rgba(0,0,0,0.10)]">
+            {wateredToday ? '今天浇过啦，明天再来 ♡' : '口渴啦，给我浇浇水吧'}
+          </span>
+        </div>
+        {/* 左侧奖励徽标 */}
+        <div className="absolute left-2.5 top-3 flex flex-col gap-2.5">
+          {leftBadges.map((b) => (
+            <button key={b.label} type="button" onClick={() => showToast(b.tip)} className="flex flex-col items-center transition-transform active:scale-[0.94]">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full border border-[#e4ddca] bg-white/95 text-[19px] shadow-[0_3px_10px_rgba(120,110,90,0.16)]">{b.icon}</span>
+              <span className="mt-0.5 text-[9px] font-medium leading-none text-[#8a8068]">{b.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 浇水主按钮 */}
+      <button
+        type="button"
+        onClick={waterTree}
+        disabled={tree >= 100}
+        className="mt-4 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white shadow-[0_8px_20px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.97] disabled:opacity-45"
+      >
+        {tree >= 100 ? '已长大成树 🌳' : '浇水 💧'}
+      </button>
+
+      {/* 底部三个入口 */}
+      <div className="mt-3 grid grid-cols-3 gap-2.5 pb-2">
+        {bottomEntries.map((b) => (
+          <button
+            key={b.label}
+            type="button"
+            onClick={b.tip}
+            className="relative flex h-[74px] flex-col items-center justify-center gap-1 rounded-2xl border border-[#e2dccd] bg-[#f7f4ec] transition-transform active:scale-[0.96]"
+          >
+            <span className="text-[22px] leading-none">{b.icon}</span>
+            <span className="text-[12px] font-semibold text-[#5f594a]">{b.label}</span>
+            {b.lock && (
+              <span className="absolute -right-1 -top-1.5 flex items-center gap-0.5 rounded-full bg-[#8a8272] px-1.5 py-[2px] text-[9px] font-bold text-white shadow-sm">
+                🔒{b.lock}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <p className="mt-2 px-2 text-[12px] leading-relaxed text-[#a9a49a]">每浇一次水成长值 +2，每 20 点升 1 级；从种子到参天大树共 5 级，记得每天来看它。</p>
     </SubShell>
+  );
+}
+
+/** 手绘风装饰地图（情侣轨迹专用，白灰系：路网/河流/公园/街区 + 流动虚线路线） */
+function DecoMap() {
+  const road = '#ffffff';
+  const casing = '#e2e5e8';
+  return (
+    <svg viewBox="0 0 400 760" preserveAspectRatio="xMidYMid slice" className="absolute inset-0 h-full w-full" aria-hidden="true">
+      <rect x="0" y="0" width="400" height="760" fill="#eef0f2" />
+      {/* 河流 */}
+      <path d="M-20 96 C80 60 150 150 240 120 C310 96 360 140 420 118 L420 168 C350 190 300 150 232 172 C150 198 70 108 -20 148 Z" fill="#dfe8ec" />
+      <path d="M-20 122 C70 84 150 172 240 146 C310 124 366 162 420 142" stroke="#cfdbe2" strokeWidth="2" fill="none" opacity="0.7" />
+      {/* 公园 */}
+      <ellipse cx="86" cy="330" rx="78" ry="64" fill="#e2ebdf" />
+      <ellipse cx="318" cy="560" rx="66" ry="52" fill="#e2ebdf" />
+      {[
+        [58, 306], [102, 318], [76, 352], [122, 344], [298, 542], [336, 556], [312, 582],
+      ].map(([x, y], i) => (
+        <g key={i}>
+          <circle cx={x} cy={y} r="9" fill="#c8d9c2" />
+          <circle cx={x + 3} cy={y - 3} r="5.5" fill="#d6e4d0" />
+        </g>
+      ))}
+      {/* 街区 */}
+      {[
+        [196, 218, 76, 54], [288, 214, 62, 46], [190, 300, 58, 66], [268, 300, 84, 56],
+        [196, 396, 92, 58], [196, 486, 60, 62], [276, 486, 76, 52], [58, 436, 82, 54],
+        [48, 540, 70, 62], [148, 590, 88, 58], [258, 636, 84, 56], [58, 648, 72, 56],
+      ].map(([x, y, w, h], i) => (
+        <rect key={i} x={x} y={y} width={w} height={h} rx="7" fill="#e7e9eb" stroke="#dee1e4" strokeWidth="1.6" />
+      ))}
+      {/* 道路：先描边后路面 */}
+      <g stroke={casing} strokeWidth="19" fill="none" strokeLinecap="round">
+        <path d="M0 268 C110 268 160 262 400 268" />
+        <path d="M170 0 L170 760" />
+        <path d="M0 570 C130 566 280 574 400 570" />
+        <path d="M0 668 C150 660 300 676 400 668" />
+      </g>
+      <g stroke={road} strokeWidth="14" fill="none" strokeLinecap="round">
+        <path d="M0 268 C110 268 160 262 400 268" />
+        <path d="M170 0 L170 760" />
+        <path d="M0 570 C130 566 280 574 400 570" />
+        <path d="M0 668 C150 660 300 676 400 668" />
+      </g>
+      <g stroke={casing} strokeWidth="11" fill="none" strokeLinecap="round">
+        <path d="M64 268 L64 760" />
+        <path d="M282 268 L282 570" />
+        <path d="M0 392 L400 392" />
+        <path d="M252 668 L252 760" />
+      </g>
+      <g stroke={road} strokeWidth="7.5" fill="none" strokeLinecap="round">
+        <path d="M64 268 L64 760" />
+        <path d="M282 268 L282 570" />
+        <path d="M0 392 L400 392" />
+        <path d="M252 668 L252 760" />
+      </g>
+      {/* 道路中线虚线 */}
+      <g stroke="#d5d8db" strokeWidth="1.6" strokeDasharray="8 9" fill="none">
+        <path d="M170 0 L170 760" />
+        <path d="M0 268 C110 268 160 262 400 268" />
+        <path d="M0 570 C130 566 280 574 400 570" />
+      </g>
+      {/* 我们的路线（流动虚线） */}
+      <path
+        d="M74 622 C120 560 96 500 148 452 C196 408 262 420 288 356 C310 300 296 220 330 158"
+        fill="none"
+        stroke="#8e97a0"
+        strokeWidth="3.6"
+        strokeLinecap="round"
+        strokeDasharray="10 9"
+        className="[animation:couple-dash-flow_3.2s_linear_infinite]"
+      />
+      {/* POI 小圆点 */}
+      {[[226, 246], [318, 244], [232, 334], [316, 336], [246, 428], [104, 464], [92, 572], [196, 620], [302, 664]].map(([x, y], i) => (
+        <circle key={i} cx={x} cy={y} r="3.2" fill="#c3c8cd" />
+      ))}
+      {/* 我的位置（路线起点） */}
+      <g transform="translate(74 640)">
+        <ellipse cx="0" cy="16" rx="13" ry="4.5" fill="#00000014" />
+        <path d="M0 14 C-11 2 -15 -4 -15 -12 A15 15 0 1 1 15 -12 C15 -4 11 2 0 14 Z" fill="#ffffff" stroke="#b3b9c0" strokeWidth="2.4" />
+        <circle cx="0" cy="-11" r="6.4" fill="#8e97a0" />
+      </g>
+      {/* TA的位置（路线终点） */}
+      <g transform="translate(330 140)">
+        <ellipse cx="0" cy="16" rx="13" ry="4.5" fill="#00000014" />
+        <path d="M0 14 C-11 2 -15 -4 -15 -12 A15 15 0 1 1 15 -12 C15 -4 11 2 0 14 Z" fill="#ffffff" stroke="#b3b9c0" strokeWidth="2.4" />
+        <path d="M0 -5.5 c2.6-4.6 9.2-3.2 9.2 1.4 c0 3.6-5 6.6-9.2 10 c-4.2-3.4-9.2-6.4-9.2-10 c0-4.6 6.6-6 9.2-1.4 Z" transform="translate(0 -12) scale(0.72) translate(0 5)" fill="#8e97a0" />
+      </g>
+    </svg>
   );
 }
 
@@ -1648,7 +1938,9 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
 
       {/* 全屏地图 */}
       <div className="relative flex-1 overflow-hidden">
-        <img src="/couple-map.png" alt="我们的轨迹地图" className="absolute inset-0 h-full w-full object-cover" draggable={false} />
+        <DecoMap />
+        {/* 柔光遮罩，让悬浮卡更突出 */}
+        <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-[linear-gradient(180deg,rgba(255,255,255,0.55),transparent)]" />
 
         {/* 顶部悬浮卡：双头像 + 心形天数 + 虚线 */}
         <div className="absolute inset-x-3 top-3 rounded-2xl bg-white/88 p-3 shadow-[0_8px_24px_rgba(0,0,0,0.10)] backdrop-blur-md">
@@ -2049,59 +2341,60 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
   if (view === 'write') {
     const [sy, sm] = [Number(selDate.slice(0, 4)), Number(selDate.slice(5, 7))];
     const isToday = selDate === todayKey();
+    const selLabel = MOOD_LIST.find((m) => m.emoji === mood)?.label;
     return (
       <SubShell title="心情日记" onBack={() => setView('cal')}>
-        <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
-          <div className="flex items-baseline gap-2">
-            <span className="text-[20px] font-bold text-[#2c2c30]">{isToday ? '今天' : selDate}</span>
+        <div className="mt-3 rounded-2xl bg-white px-4 pb-4 pt-4 shadow-[0_6px_18px_rgba(0,0,0,0.05)]">
+          {/* 日期头 */}
+          <div className="flex items-baseline gap-2 border-b border-black/[0.05] pb-3">
+            <span className="text-[22px] font-bold leading-none text-[#2c2c30]">{isToday ? '今天' : selDate}</span>
             <span className="text-[12px] text-[#9a9aa2]">{sm}月,{sy}</span>
           </div>
 
-          {/* 当前选中心情大表情 */}
-          <div className="mt-3 flex justify-center">
-            <span className={`flex h-[64px] w-[64px] items-center justify-center rounded-full bg-[#f3f3f5] text-[34px] shadow-inner ${mood ? '' : 'opacity-50'}`}>
-              {mood || '🫥'}
-            </span>
+          {/* 当前选中心情大表情（蜡笔涂鸦风） */}
+          <div className="mt-4 flex justify-center">
+            <MoodFace mood={mood} size={78} className={mood ? 'drop-shadow-[0_6px_14px_rgba(0,0,0,0.12)]' : 'opacity-55'} />
           </div>
+          <div className="mt-1.5 text-center text-[11.5px] font-medium text-[#8e8e96]">{mood ? `今天很${selLabel}` : '选一个心情，开始记录今天'}</div>
 
           {/* 心情选择圈 */}
-          <div className="mt-4 grid grid-cols-4 gap-2">
+          <div className="mt-3 grid grid-cols-4 gap-1.5">
             {MOOD_LIST.map((m) => (
               <button
                 key={m.label}
                 type="button"
                 onClick={() => setMood(m.emoji)}
-                className={`flex flex-col items-center gap-1 rounded-2xl py-2 transition-colors ${mood === m.emoji ? 'bg-[#ececF0]' : 'active:bg-[#f6f6f8]'}`}
+                aria-pressed={mood === m.emoji}
+                className={`flex flex-col items-center gap-1 rounded-2xl py-2 transition-all ${mood === m.emoji ? 'bg-[#f1f1f4] shadow-[inset_0_1px_4px_rgba(0,0,0,0.06)]' : 'active:bg-[#f6f6f8]'}`}
               >
-                <span className={`flex h-9 w-9 items-center justify-center rounded-full text-[19px] shadow-sm ${mood === m.emoji ? 'bg-white ring-2 ring-[#5c5c64]' : 'bg-[#f3f3f5]'}`}>{m.emoji}</span>
-                <span className="text-[10px] text-[#8e8e96]">{m.label}</span>
+                <MoodFace mood={m.emoji} size={38} className={mood === m.emoji ? '[animation:couple-pop-heart_.4s_ease-out]' : 'opacity-90'} />
+                <span className={`text-[10px] ${mood === m.emoji ? 'font-semibold text-[#3c3c42]' : 'text-[#8e8e96]'}`}>{m.label}</span>
               </button>
             ))}
           </div>
 
+          {/* 正文（无框直书） */}
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="今天想写些什么"
             maxLength={300}
             rows={4}
-            className="mt-4 w-full resize-none rounded-xl bg-[#f8f8fa] p-3.5 text-[14.5px] leading-relaxed outline-none placeholder:text-[#b6b6bd]"
+            className="mt-3 w-full resize-none bg-transparent px-1 text-[15px] leading-relaxed outline-none placeholder:text-[#c2c2c9]"
           />
 
           {/* 照片 tile */}
-          <div className="mt-3 flex items-center gap-2">
+          <div className="mt-1 flex items-center gap-2.5">
             <button
               type="button"
               onClick={() => (photo ? setPhoto(null) : photoInput.current?.click())}
-              className="relative flex h-[84px] w-[84px] items-center justify-center overflow-hidden rounded-xl bg-[#f3f3f5] text-[#b6b6bd] transition-opacity active:opacity-70"
+              className="relative flex h-[84px] w-[84px] shrink-0 items-center justify-center overflow-hidden rounded-xl bg-[#f3f3f5] text-[#b6b6bd] transition-opacity active:opacity-70"
               aria-label={photo ? '移除照片' : '添加照片'}
             >
               {photo ? (
                 <>
                   <img src={photo} alt="心情照片" className="h-full w-full object-cover" draggable={false} />
-                  <span className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/45 text-white">
-                    ✕
-                  </span>
+                  <span className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/45 text-white">✕</span>
                 </>
               ) : (
                 <ImagePlus className="h-6 w-6" strokeWidth={1.6} />
@@ -2111,17 +2404,31 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
           </div>
 
           {/* 位置行 */}
-          <div className="mt-3 flex items-center gap-2 rounded-xl bg-[#f8f8fa] px-3.5 py-2.5">
+          <div className="mt-3 flex items-center gap-2 rounded-full bg-[#f5f5f7] py-2.5 pl-4 pr-3">
             <MapPin className="h-4 w-4 shrink-0 text-[#8e8e96]" />
             <span className="min-w-0 flex-1 truncate text-[13.5px] text-[#4a4a52]">{state.meetPlace || '还没有相遇地点'}</span>
-            <span className="text-[11px] text-[#c2c2c9]">{state.meetPlace ? '来自情侣轨迹' : '去情侣轨迹设置'}</span>
+            {state.meetPlace && (
+              <button
+                type="button"
+                onClick={() => {
+                  patch({ meetPlace: '' });
+                  showToast('已清除地点，可在情侣轨迹重新设置');
+                }}
+                aria-label="清除地点"
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#dcdce1] text-[11px] leading-none text-white"
+              >
+                ✕
+              </button>
+            )}
+            <ChevronRight className="h-4 w-4 shrink-0 text-[#c2c2c9]" />
           </div>
         </div>
 
+        {/* 吸底完成按钮 */}
         <button
           type="button"
           onClick={saveMood}
-          className="mb-4 mt-5 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[15px] font-semibold text-white shadow-[0_8px_20px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.98]"
+          className="sticky bottom-4 z-10 mb-3 mt-5 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[15px] font-semibold text-white shadow-[0_8px_20px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.98]"
         >
           完成
         </button>
@@ -2143,6 +2450,8 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
   // ---------- 月历视图 ----------
   const todayK = todayKey();
   const recent = state.moods.slice(0, 4);
+  const monthPrefix = `${cursor.y}-${String(cursor.m + 1).padStart(2, '0')}`;
+  const monthCount = state.moods.filter((m) => (m.dateKey || fmtDate(m.at)).startsWith(monthPrefix)).length;
 
   return (
     <SubShell
@@ -2154,67 +2463,79 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
         ) : undefined
       }
     >
-      {/* 月份切换 */}
-      <div className="mt-2 flex items-center justify-center gap-4">
-        <button
-          type="button"
-          aria-label="上个月"
-          onClick={() => setCursor((c) => (c.m === 0 ? { y: c.y - 1, m: 11 } : { ...c, m: c.m - 1 }))}
-          className="flex h-7 w-7 items-center justify-center rounded-full bg-[#e9e9ee] text-[#6e6e76] transition-opacity active:opacity-60"
-        >
-          <ChevronRight className="h-4 w-4 rotate-180" />
-        </button>
-        <span className="text-[17px] font-bold text-[#2c2c30]">
-          {cursor.y}.{String(cursor.m + 1).padStart(2, '0')}
+      {/* 月份切换（胶囊卡） */}
+      <div className="mt-2 flex justify-center">
+        <div className="flex items-center gap-3.5 rounded-full bg-white px-3.5 py-1.5 shadow-[0_4px_14px_rgba(0,0,0,0.06)]">
+          <button
+            type="button"
+            aria-label="上个月"
+            onClick={() => setCursor((c) => (c.m === 0 ? { y: c.y - 1, m: 11 } : { ...c, m: c.m - 1 }))}
+            className="flex h-6.5 w-6.5 items-center justify-center rounded-full bg-[#f0f0f3] p-1 text-[#6e6e76] transition-opacity active:opacity-60"
+          >
+            <ChevronRight className="h-3.5 w-3.5 rotate-180" />
+          </button>
+          <span className="min-w-[88px] text-center text-[16px] font-bold tracking-wide text-[#2c2c30]">
+            {cursor.y}.{String(cursor.m + 1).padStart(2, '0')}
+          </span>
+          <button
+            type="button"
+            aria-label="下个月"
+            onClick={() => setCursor((c) => (c.m === 11 ? { y: c.y + 1, m: 0 } : { ...c, m: c.m + 1 }))}
+            className="flex h-6.5 w-6.5 items-center justify-center rounded-full bg-[#f0f0f3] p-1 text-[#6e6e76] transition-opacity active:opacity-60"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* 本月记录数 */}
+      <div className="mt-2.5 flex justify-center">
+        <span className="rounded-full bg-white/90 px-3 py-1 text-[11px] text-[#8e8e96] shadow-[0_3px_10px_rgba(0,0,0,0.05)]">
+          本月记录 <b className="text-[#3c3c42]">{monthCount}</b> 篇心情
         </span>
-        <button
-          type="button"
-          aria-label="下个月"
-          onClick={() => setCursor((c) => (c.m === 11 ? { y: c.y + 1, m: 0 } : { ...c, m: c.m + 1 }))}
-          className="flex h-7 w-7 items-center justify-center rounded-full bg-[#e9e9ee] text-[#6e6e76] transition-opacity active:opacity-60"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </button>
       </div>
 
-      {/* 星期表头（周一起始） */}
-      <div className="mt-3 grid grid-cols-7 text-center text-[10.5px] text-[#a9a9b2]">
-        {['一', '二', '三', '四', '五', '六', '日'].map((w) => (
-          <span key={w}>{w}</span>
-        ))}
+      {/* 日历卡片 */}
+      <div className="mt-2.5 rounded-2xl bg-white/92 p-3 shadow-[0_6px_18px_rgba(0,0,0,0.05)] backdrop-blur-sm">
+        {/* 星期表头（周一起始） */}
+        <div className="grid grid-cols-7 text-center text-[10.5px] text-[#a9a9b2]">
+          {['一', '二', '三', '四', '五', '六', '日'].map((w) => (
+            <span key={w}>{w}</span>
+          ))}
+        </div>
+
+        {/* 日期格子 */}
+        <div className="mt-2 grid grid-cols-7 gap-y-1.5">
+          {cells.map((cell, i) =>
+            cell == null ? (
+              <span key={`b${i}`} />
+            ) : (
+              <button
+                key={cell.key}
+                type="button"
+                onClick={() => {
+                  const list = byDay[cell.key];
+                  if (list && list.length > 0) setDaySheet(cell.key);
+                  else openWrite(cell.key);
+                }}
+                className="flex h-[60px] flex-col items-center justify-start pt-0.5 transition-transform active:scale-[0.94]"
+              >
+                <span className={`text-[10.5px] leading-none ${cell.key === todayK ? 'font-bold text-[#2c2c30]' : 'text-[#6e6e76]'}`}>{cell.d}</span>
+                {byDay[cell.key] ? (
+                  <span className={`mt-1 flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.12)] ${cell.key === todayK ? 'ring-2 ring-[#5c5c64]' : 'ring-1 ring-[#ececef]'}`}>
+                    <MoodFace mood={byDay[cell.key][byDay[cell.key].length - 1].emoji} size={30} />
+                  </span>
+                ) : (
+                  <span className={`mt-1 h-8 w-8 rounded-full border border-dashed ${cell.key === todayK ? 'border-[#b9b9c1] bg-white/70' : 'border-[#e4e4e9]'}`} />
+                )}
+                {cell.key === todayK && <span className="mt-0.5 text-[8.5px] font-semibold leading-none text-[#8e8e96]">今天</span>}
+              </button>
+            ),
+          )}
+        </div>
       </div>
 
-      {/* 日期格子 */}
-      <div className="mt-1.5 grid grid-cols-7 gap-y-1">
-        {cells.map((cell, i) =>
-          cell == null ? (
-            <span key={`b${i}`} />
-          ) : (
-            <button
-              key={cell.key}
-              type="button"
-              onClick={() => {
-                const list = byDay[cell.key];
-                if (list && list.length > 0) setDaySheet(cell.key);
-                else openWrite(cell.key);
-              }}
-              className="flex h-[62px] flex-col items-center justify-start pt-1 transition-transform active:scale-[0.94]"
-            >
-              <span className={`text-[10.5px] leading-none ${cell.key === todayK ? 'font-bold text-[#2c2c30]' : 'text-[#6e6e76]'}`}>{cell.d}</span>
-              {byDay[cell.key] ? (
-                <span className={`mt-1 flex h-8 w-8 items-center justify-center rounded-full bg-white text-[17px] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ${cell.key === todayK ? 'ring-2 ring-[#5c5c64]' : 'ring-1 ring-[#ececef]'}`}>
-                  {byDay[cell.key][byDay[cell.key].length - 1].emoji}
-                </span>
-              ) : (
-                <span className={`mt-1 h-8 w-8 rounded-full border border-dashed ${cell.key === todayK ? 'border-[#b9b9c1] bg-white/70' : 'border-[#e4e4e9]'}`} />
-              )}
-              {cell.key === todayK && <span className="mt-0.5 text-[8.5px] leading-none text-[#8e8e96]">今天</span>}
-            </button>
-          ),
-        )}
-      </div>
-
-      <div className="mt-1 text-center text-[14px] font-medium text-[#4a4a52]">Hi，你今天的心情怎么样？</div>
+      <div className="mt-3.5 text-center text-[14px] font-medium text-[#4a4a52]">Hi，你今天的心情怎么样？</div>
 
       {/* 浮动写日记按钮 */}
       <button
@@ -2230,15 +2551,15 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
       {recent.length > 0 && (
         <>
           <h3 className="pb-2 pt-5 text-[14px] font-bold text-[#2c2c30]">最近的心情</h3>
-          <div className="space-y-2">
+          <div className="space-y-2 pb-2">
             {recent.map((m) => (
               <button
                 key={m.id}
                 type="button"
                 onClick={() => setDaySheet(m.dateKey || fmtDate(m.at))}
-                className="flex w-full items-start gap-3 rounded-2xl bg-white p-3 text-left shadow-sm"
+                className="flex w-full items-start gap-3 rounded-2xl bg-white p-3 text-left shadow-[0_4px_12px_rgba(0,0,0,0.05)]"
               >
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#f3f3f5] text-[18px]">{m.emoji}</span>
+                <span className="shrink-0"><MoodFace mood={m.emoji} size={38} /></span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13.5px] leading-relaxed text-[#2c2c30]">{m.text || '（没说话，就是心情不好不坏）'}</span>
                   <span className="mt-0.5 block text-[11px] text-[#b6b6bd]">{m.dateKey || fmtDate(m.at)}</span>
@@ -2273,7 +2594,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 .filter((m) => (m.dateKey || fmtDate(m.at)) === daySheet)
                 .map((m) => (
                   <div key={m.id} className="flex items-start gap-3 rounded-2xl bg-[#f7f7f9] p-3.5">
-                    <span className="text-[22px]">{m.emoji}</span>
+                    <span className="shrink-0"><MoodFace mood={m.emoji} size={34} /></span>
                     <div className="min-w-0 flex-1">
                       <div className="text-[13.5px] leading-relaxed text-[#2c2c30]">{m.text || '（没说话，就是心情不好不坏）'}</div>
                       {m.photo && <img src={m.photo} alt="心情照片" className="mt-2 max-h-40 w-full rounded-xl object-cover" draggable={false} />}
@@ -2337,7 +2658,10 @@ function TarotPage({ state, patch, showToast, close }: { state: CoupleState; pat
   );
 }
 
-/** 100 件小事清单 */
+/** 100 件小事（手账拼贴风）：标题牌 + 拍立得卡片 + 待完成/已完成邮戳 */
+const HUNDRED_EMOJI = ['🌅', '🌇', '🚶', '☂️', '🍳', '🧼', '🍎', '🎬', '🎤', '🎵', '🛍️', '👕', '📷', '🤳', '🥒', '💨', '💅', '🦶', '🛁', '⛄', '🍦', '🍲', '🍢', '🥣', '🕛', '🎊', '🎆', '🏮', '🌊', '👣', '🐚', '⛰️', '⛺', '🌟', '🌌', '🎡', '🎠', '🎢', '🎟️', '🖼️', '🏛️', '📖', '📚', '🎨', '🎸', '🎭', '🎶', '💃', '🌧️', '❄️', '🪁', '🚲', '🚣', '🎣', '🌸', '🍂', '🪴', '🏷️', '🐾', '🎂', '💌', '✉️', '🎁', '🎉', '🤲', '📏', '🤒', '🤝', '📜', '💰', '✈️', '🗺️', '👶', '📷', '🤫', '📞', '📝', '🎥', '✂️', '🎮', '🧩', '🧱', '🎲', '🔮', '🏃', '🏸', '🎓', '🍜', '🎎', '🎂', '🥂', '📅', '📍', '📸', '💍', '💬', '👴'];
+const HUNDRED_ROT = ['-rotate-[1.2deg]', 'rotate-[0.9deg]', '-rotate-[0.5deg]', 'rotate-[1.4deg]'];
+
 function HundredPage({ state, patch, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void }) {
   const done = state.hundred.length;
   const toggle = (i: number) => {
@@ -2345,11 +2669,25 @@ function HundredPage({ state, patch, close }: { state: CoupleState; patch: (p: P
     patch({ hundred: has ? state.hundred.filter((x) => x !== i) : [...state.hundred, i] });
   };
   return (
-    <SubShell title="100件小事" onBack={close} right={<span className="text-[14px] font-semibold text-[#5a5a62]">{done}/100</span>}>
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#e9e9ed]">
-        <div className="h-full rounded-full bg-[linear-gradient(90deg,#9e9ea8,#5c5c64)] transition-all" style={{ width: `${done}%` }} />
+    <SubShell title="100件小事" onBack={close}>
+      {/* 吸顶标题牌 + 进度（手账风） */}
+      <div className="sticky top-0 z-10 -mx-3.5 bg-[#f6f6f8]/95 px-3.5 pb-2 pt-1 backdrop-blur-sm">
+        <div className="relative mx-auto mt-1 w-fit rotate-[-1.5deg] rounded-lg border border-[#d9d9de] bg-white px-6 py-2 shadow-[0_4px_14px_rgba(0,0,0,0.07)]">
+          <span aria-hidden="true" className="absolute -left-3 -top-2 h-4 w-9 rotate-[-24deg] rounded-[3px] bg-[#dcdce2]/90" />
+          <span aria-hidden="true" className="absolute -right-3 -top-2 h-4 w-9 rotate-[20deg] rounded-[3px] bg-[#dcdce2]/90" />
+          <div className="text-center text-[17px] font-bold tracking-wide text-[#3c3c42]">我们的 100 件小事</div>
+          <div className="text-center text-[8.5px] tracking-[4px] text-[#b9b9c1]">OUR LOVE DIARY</div>
+        </div>
+        <div className="mt-2 flex items-center gap-2 px-1">
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#e9e9ed]">
+            <div className="h-full rounded-full bg-[linear-gradient(90deg,#9e9ea8,#5c5c64)] transition-all" style={{ width: `${done}%` }} />
+          </div>
+          <span className="text-[11px] font-semibold text-[#5a5a62]">{done}/100</span>
+        </div>
       </div>
-      <div className="mt-4 space-y-1">
+
+      {/* 拍立得卡片墙 */}
+      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-4 pb-2">
         {HUNDRED_LIST.map((item, i) => {
           const checked = state.hundred.includes(i);
           return (
@@ -2357,14 +2695,25 @@ function HundredPage({ state, patch, close }: { state: CoupleState; patch: (p: P
               key={i}
               type="button"
               onClick={() => toggle(i)}
-              className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-left transition-colors ${checked ? 'bg-white' : 'active:bg-white/60'}`}
+              aria-pressed={checked}
+              className={`relative rounded-md bg-white px-2 pb-2 pt-3 shadow-[0_4px_12px_rgba(0,0,0,0.07)] transition-transform active:scale-[0.96] ${HUNDRED_ROT[i % 4]}`}
             >
-              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 ${checked ? 'border-[#3f3f46] bg-[#3f3f46] text-white' : 'border-[#c9c9cf]'}`}>
-                {checked && <Check className="h-3.5 w-3.5" strokeWidth={3} />}
+              {/* 胶带 */}
+              <span aria-hidden="true" className="absolute -top-1.5 left-1/2 h-3.5 w-11 -translate-x-1/2 rotate-[-4deg] rounded-[3px] bg-[#dcdce2]/85" />
+              {/* 插画位 */}
+              <span className="flex h-11 items-center justify-center rounded-sm bg-[#f6f6f8] text-[24px]">
+                {HUNDRED_EMOJI[i % HUNDRED_EMOJI.length]}
               </span>
-              <span className={`text-[15px] ${checked ? 'text-[#9a9aa2] line-through' : 'text-[#3c3c42]'}`}>
-                <span className="mr-1.5 text-[12px] text-[#b6b6bd]">{String(i + 1).padStart(2, '0')}</span>
-                {item}
+              <span className={`mt-1.5 block min-h-[30px] text-center text-[11px] leading-snug ${checked ? 'text-[#a9a9b2] line-through' : 'text-[#3c3c42]'}`}>{item}</span>
+              {/* 序号 */}
+              <span className="absolute bottom-1 left-2 text-[8.5px] font-bold tracking-wider text-[#d0d0d6]">{String(i + 1).padStart(2, '0')}</span>
+              {/* 邮戳 */}
+              <span
+                className={`absolute -right-1.5 -top-2 rotate-[10deg] rounded-full border px-1.5 py-[2px] text-[8.5px] font-bold leading-none ${
+                  checked ? 'border-[#3f3f46] bg-[#3f3f46] text-white shadow-sm' : 'border-[#c9c9cf] bg-white/90 text-[#a9a9b2]'
+                }`}
+              >
+                {checked ? '✓ 已完成' : '待完成'}
               </span>
             </button>
           );
@@ -2819,20 +3168,17 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
   );
 }
 
-/** 恋爱资料（参考图2）：iOS 分组列表（头像/昵称/性别/情侣号/恋人证书/登录记录/解除关系 + 对方） */
+/** 恋爱资料（参考图2）：iOS 分组列表（头像/昵称/性别/情侣号/恋人证书/登录记录/解除关系） */
 function ProfilePage({ state, patch, showToast, close, onReset }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void; onReset: () => void }) {
   const meInput = useRef<HTMLInputElement | null>(null);
-  const taInput = useRef<HTMLInputElement | null>(null);
-  const [dialog, setDialog] = useState<null | 'nickname' | 'gender' | 'cert' | 'logins' | 'ta' | 'signature' | 'reset'>(null);
+  const [dialog, setDialog] = useState<null | 'nickname' | 'gender' | 'cert' | 'logins' | 'reset'>(null);
   const [nickDraft, setNickDraft] = useState('');
-  const [taNameDraft, setTaNameDraft] = useState('');
-  const [sigDraft, setSigDraft] = useState('');
 
-  const pickAvatar = async (f: File | null, side: 'me' | 'ta') => {
+  const pickAvatar = async (f: File | null) => {
     if (!f) return;
     try {
       const url = await fileToScaledDataURL(f, 360, 0.85);
-      patch(side === 'me' ? { meAvatar: url } : { taAvatar: url });
+      patch({ meAvatar: url });
       showToast('头像已更新 ♡');
     } catch {
       showToast('图片处理失败');
@@ -2903,70 +3249,21 @@ function ProfilePage({ state, patch, showToast, close, onReset }: { state: Coupl
           onClick={() => setDialog('reset')}
           className={`${rowCls} border-t border-black/[0.04] text-[#8e8e96]`}
         >
-          <span className="flex items-center gap-1.5 text-[14.5px]">
-            解除关系 <span aria-hidden="true" className="[filter:grayscale(1)_opacity(0.75)]">💔</span>
-          </span>
-          {chev}
-        </button>
-      </div>
-
-      {/* 第二组：对方 */}
-      <div className="mt-3.5 overflow-hidden rounded-2xl bg-white shadow-sm">
-        <button
-          type="button"
-          onClick={() => {
-            setTaNameDraft(state.taName);
-            setDialog('ta');
-          }}
-          className={rowCls}
-        >
-          <span className={labelCls}>对方</span>
-          <span className="flex shrink-0 items-center gap-2.5">
-            <span className="text-[13px] text-[#a9a9b2]">{state.taName || '未设置'}</span>
-            <span className="h-9 w-9 overflow-hidden rounded-full bg-[#ececef]">
-              {state.taAvatar ? <img src={state.taAvatar} alt="对方头像" className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={36} />}
-            </span>
-          </span>
-          {chev}
-        </button>
-      </div>
-
-      {/* 第三组：签名 */}
-      <div className="mt-3.5 overflow-hidden rounded-2xl bg-white shadow-sm">
-        <button
-          type="button"
-          onClick={() => {
-            setSigDraft(state.signature);
-            setDialog('signature');
-          }}
-          className={rowCls}
-        >
-          <span className={labelCls}>我们的签名</span>
-          <span className={valCls}>{state.signature || '写一句属于你们的话'}</span>
+          <span className="text-[14.5px]">解除关系</span>
           {chev}
         </button>
       </div>
 
       <p className="mt-4 px-2 text-[12px] leading-relaxed text-[#b6b6bd]">情侣号是你们的小家门牌号，头像、昵称、性别都可以随时修改。</p>
 
-      {/* 隐藏文件选择（我 / 对方头像） */}
+      {/* 隐藏文件选择（我的头像） */}
       <input
         ref={meInput}
         type="file"
         accept="image/*"
         className="hidden"
         onChange={(e) => {
-          void pickAvatar(e.target.files?.[0] ?? null, 'me');
-          e.currentTarget.value = '';
-        }}
-      />
-      <input
-        ref={taInput}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(e) => {
-          void pickAvatar(e.target.files?.[0] ?? null, 'ta');
+          void pickAvatar(e.target.files?.[0] ?? null);
           e.currentTarget.value = '';
         }}
       />
@@ -3077,74 +3374,6 @@ function ProfilePage({ state, patch, showToast, close, onReset }: { state: Coupl
                 <button type="button" onClick={() => setDialog(null)} className="mt-4 h-10 w-full rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
                   关闭
                 </button>
-              </>
-            )}
-
-            {dialog === 'ta' && (
-              <>
-                <div className="text-[15px] font-semibold text-[#2c2c30]">对方资料</div>
-                <div className="mt-3 flex items-center gap-3">
-                  <button type="button" onClick={() => taInput.current?.click()} className="relative shrink-0" aria-label="更换对方头像">
-                    <span className="block h-12 w-12 overflow-hidden rounded-full bg-[#ececef]">
-                      {state.taAvatar ? <img src={state.taAvatar} alt="" className="h-full w-full object-cover" /> : <DefaultAvatar size={48} />}
-                    </span>
-                    <span className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-[#3f3f46] text-white">
-                      <Camera className="h-2.5 w-2.5" />
-                    </span>
-                  </button>
-                  <input
-                    value={taNameDraft}
-                    onChange={(e) => setTaNameDraft(e.target.value)}
-                    placeholder="TA 的昵称"
-                    maxLength={12}
-                    className="h-11 flex-1 rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] outline-none placeholder:text-[#b6b6bd]"
-                  />
-                </div>
-                <div className="mt-4 flex gap-2.5">
-                  <button type="button" onClick={() => setDialog(null)} className="h-10 flex-1 rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      patch({ taName: taNameDraft.trim() || state.taName });
-                      setDialog(null);
-                      showToast('对方资料已保存 ♡');
-                    }}
-                    className="h-10 flex-1 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[13.5px] font-semibold text-white"
-                  >
-                    保存
-                  </button>
-                </div>
-              </>
-            )}
-
-            {dialog === 'signature' && (
-              <>
-                <div className="text-[15px] font-semibold text-[#2c2c30]">我们的签名</div>
-                <input
-                  value={sigDraft}
-                  onChange={(e) => setSigDraft(e.target.value)}
-                  maxLength={30}
-                  placeholder="写一句属于你们的话"
-                  className="mt-3 h-11 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] outline-none placeholder:text-[#b6b6bd]"
-                />
-                <div className="mt-4 flex gap-2.5">
-                  <button type="button" onClick={() => setDialog(null)} className="h-10 flex-1 rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      patch({ signature: sigDraft.trim() });
-                      setDialog(null);
-                      showToast('签名已保存 ♡');
-                    }}
-                    className="h-10 flex-1 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[13.5px] font-semibold text-white"
-                  >
-                    保存
-                  </button>
-                </div>
               </>
             )}
 

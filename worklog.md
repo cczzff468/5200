@@ -19412,3 +19412,26 @@ Work Log:
 Stage Summary:
 - 交付：仅改动 src/components/apps/couple-space.tsx（约2700行）；git push 已同步 GitHub
 - 关键决策：①想他/想我天数同源于 missSince（同一天开始互相想念）②情侣号首次进入自动生成（s+9位）③登录记录每次会话去重记一条留20条④心情旧数据无 dateKey 时从 at 推导兼容⑤纪念日列表统一存 annivExtra（key 区分预设 kiss/hug/travel/wedding/myBd/taBd 与自建）
+
+---
+Task ID: couple-space-refine2
+Agent: Z.ai Code (主控)
+Task: 情侣空间第三轮优化：心情日记/心情图标/爱情小树/100件小事/情侣轨迹美化 + 首页四卡固定 + 我们页灰心 + 资料页/纪念日页删减
+
+Work Log:
+- 心情图标重做：新增 MoodFace 组件（手绘蜡笔风 SVG 圆脸 8 款：开心黄口水笑/甜蜜粉腮红+浮心/困困灰zzz/生气红怒气线/委屈蓝泪滴/思考棕思考泡/兴奋橙星星眼/想TA紫心形眼），MOOD_LIST 增加配色字段；月历气泡/选择圈/大预览/最近列表/单日弹层全部换用
+- 心情日记美化：写日记视图改为参考图样式（今天+月份分隔头/78px 大表情/无框直书正文/照片tile/圆角胶囊位置行含清除钮/吸底完成按钮）；月历视图改为白色卡片+胶囊月份切换+本月记录统计 chip
+- 首页：四个功能卡从滚动区移出，改为 flex 底部 shrink-0 固定（不随内容滚动，始终贴 Tab 栏上方）；右侧悬浮钮上移至卡片上方（bottom-[116px]）
+- 我们页：双头像中间 PixelHeart 改为浅灰色 Heart 图标（fill #e2e2e7）
+- 恋爱资料页：解除关系行删除 💔 图标；删除「对方」与「我们的签名」两组及对应弹层/状态/taInput（代码同步清理）
+- 设置纪念日页：删除双头像中间的爱心小徽标，头像改为并排小间距
+- 情侣轨迹：/couple-map.png 替换为 DecoMap 全 SVG 手绘地图（路网白路面+灰描边+中线虚线/河流/公园树丛/街区/POI 点/双水滴图钉/流动虚线路线 [animation:couple-dash-flow]），顶部柔光遮罩
+- 100件小事：手账拼贴风重做（吸顶斜置标题牌「我们的 100 件小事 OUR LOVE DIARY」+胶带贴+进度条 / 2列拍立得卡片墙：胶带+emoji 插画+序号+待完成/✓已完成邮戳+交替微旋转）；HUNDRED_EMOJI 100 项插画池
+- 爱情小树：游戏场景风重做（木牌等级卡：金星徽标 Lv+本级进度 x/20+他/我连续浇树天数；场景卡：天空渐变+云+远山+草地+按级放大 emoji 树+气泡提示+左侧浇水奖励/保护罩/双倍成长徽标；浇水主按钮+小世界🔒5级/魔法屋🔒6级/任务 三入口）；数据模型新增 treeStreak{last,n}（waterTree 按日续连击）
+- globals.css：新增 couple-dash-flow keyframes + reduced-motion 兼容
+- 修复过程：TreePage 误用 useLocalToast()（独立实例无渲染载体）→ 改为由 SubRouter 传 showToast
+- 验证：bunx tsc 0 错误；eslint couple-space.tsx 0 问题（仓库其余 49 个 lint 错误为存量）；reload 后 console 0 error；agent-browser E2E：解锁→情侣空间首页（四卡固定✓想他/想我徽标✓）→爱情小树（木牌/场景/浇水 4→6、连续浇树 1 天、气泡变化✓）→情侣轨迹（SVG 地图+图钉+虚线路线✓）→100件小事（标题牌/拍立得/邮戳切换 3→4✓）→心情日记（月历 MoodFace✓写日记 8 款表情选择+保存回写✓想TA 心形眼✓）→我们页（浅灰爱心✓）→恋爱资料（无💔/无对方/无签名✓）→设置纪念日（无爱心徽标✓）→相册详情回归✓
+
+Stage Summary:
+- 仅改动 couple-space.tsx（+541/-305 行）与 globals.css（+9 行）；git 提交并推送 origin main
+- 关键决策：①MoodFace 以 emoji 作状态键（旧数据零迁移）②爱情树每 20 成长值=1 级、本级进度 x/20、5 级封顶 ③连续浇树跨天断签归 1 ④DecoMap 纯 SVG 内联（无新图片资源，路线动画走 CSS dashoffset）
