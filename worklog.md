@@ -19230,3 +19230,18 @@ Work Log:
 Stage Summary:
 - 交付：角色分支全功能——①长按 AI/我的聊天气泡「分支」以该消息为分支点创建平行联系人（人设/聊天记录/三层记忆/关系状态/朋友圈/世界书六类数据复制，时间过滤精确到分支点）；②分支角色独立 ID+独立聊天/记忆/朋友圈/音色，出现在联系人列表（带分支徽标），可单独编辑人设/头像/音色（复用既有编辑链路零改动）；③记忆继承与独立：分支点前记忆继承（碎片/核心/长期全层+supersede 修补+朋友圈碎片重挂），分支后键隔离各自发展互不同步；④A/A' 随时互切（独立会话+列表直达）；⑤双方 prompt 注入平行分支认知可自然互提（实测 AI 正确区分本尊/分支与记忆边界）；⑥嵌套分支（meta 链 parentId/rootId）；⑦分支真删（级联清空+注册表/克隆书清理）不影响原角色，删除后提示块自愈。
 - 改动文件：src/lib/ios/branch.ts（新 401 行）、src/components/apps/branch-dialog.tsx（新 188 行）、src/lib/moments.ts（+appendCopiedWxMomentPosts/wxViewToRawPost）、src/components/apps/{bubble-menu,wechat}.tsx；不破坏范围清单内全部既有功能（回复管线/记忆提取/朋友圈调度/世界书/长按菜单等仅增量插入，无修改既有语义）。
+
+---
+Task ID: 38-a
+Agent: Z.ai Code (主控)
+Task: 对已实现的「角色分支」功能（Task 37）做规则审查，勘察后台引擎对分支角色的作用范围，产出决策清单供用户选择
+
+Work Log:
+- 3 路并行 Explore 勘察：①数据模型与存储 ②UI入口与交互 ③后台规则引擎作用范围
+- 关键事实：数据全在 IndexedDB（contacts store + kv store，键加 --{accId} 账号后缀）；聊天键 wx-chat-msgs:<cid>；朋友圈单池 wx-moments 按 peerId 归属；世界书全局单键 + wb-bind 挂载；deleteContact 已有完整级联清理
+- 分支实现确认：branch.ts:137 createCharacterBranch 已复制 人设/聊天切片/三层记忆/朋友圈副本/世界书克隆/关系状态，只置 wx 好友标记（QQ/信息不可见）
+- 引擎卷入结论：proactive-msg 索引制 opt-in 不卷入；proactive-call 遍历全体→分支复制聊天后立即成为来电候选且无冷却；MomentsScheduler auto-cfg 缺省 enabled:true→分支立即开跑自动发帖+成为互动候选；时间感知 lastMsgTime 取旧消息→首聊显示「N天没聊」
+- 风险确认：isPostByPeer legacy 名字兜底（moments.ts:695-702）在用户改分支名后可双认领旧动态；会话设置（回复条数/时间感知开关/背景/置顶静音/翻译）未复制
+
+Stage Summary:
+- 产出 9 项决策清单（见会话输出）交用户选择；Task 38-b 待用户拍板后施工（编号 38-c）
