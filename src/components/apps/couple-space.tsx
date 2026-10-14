@@ -98,6 +98,7 @@ interface CoupleState {
   annivExtra: { key: string; label: string; date: string }[]; // 纪念日列表（预设 + 自建）
   tree: number; // 爱情树成长值（浇水次数）
   letters: { id: string; text: string; at: number; openAfterDays: number }[]; // 未来情书
+  letterDraft: string; // 未来情书草稿（存草稿按钮）
   albums: CoupleAlbum[];
   moods: { id: string; emoji: string; text: string; at: number; photo?: string | null; dateKey?: string }[]; // 心情日记
   chronicle: { id: string; text: string; at: number }[]; // 恋爱编年史
@@ -144,6 +145,7 @@ function defaultState(): CoupleState {
     annivExtra: [],
     tree: 0,
     letters: [],
+    letterDraft: '',
     albums: [
       { id: 'ta', name: '拍给TA看', desc: '想看看你每天的样子', photos: [] },
       { id: 'chat', name: '聊天记录', desc: '上传好玩的甜蜜聊天记录', photos: [] },
@@ -1931,6 +1933,34 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
           <span aria-hidden="true" className="mx-auto -mt-5 block h-3.5 w-[70px] rounded-[50%] bg-[#b07f4a]" />
         </div>
 
+        {/* 水滴浇水按钮（点击浇水） */}
+        <button
+          type="button"
+          onClick={() => {
+            waterTree();
+            setPop((p) => p + 1);
+          }}
+          disabled={tree >= 100}
+          aria-label="用小水滴给小树浇水"
+          className="absolute bottom-[146px] left-[31%] flex flex-col items-center transition-transform active:scale-[0.94] disabled:opacity-60"
+        >
+          <span className="relative flex h-[62px] w-[62px] items-center justify-center rounded-full bg-white/95 shadow-[0_5px_16px_rgba(90,130,60,0.3)] [animation:couple-float-y_2.6s_ease-in-out_infinite]">
+            <svg viewBox="0 0 24 24" className="h-9 w-9" aria-hidden="true">
+              <path d="M12 2.6 C12 2.6 5.2 10.4 5.2 15 A6.8 6.8 0 0 0 18.8 15 C18.8 10.4 12 2.6 12 2.6 Z" fill="url(#dropg)" stroke="#4f9bd2" strokeWidth="1.2" />
+              <defs>
+                <linearGradient id="dropg" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stopColor="#b5e3fa" />
+                  <stop offset="1" stopColor="#6cb7e8" />
+                </linearGradient>
+              </defs>
+              <path d="M8.8 15.2 A3.2 3.2 0 0 0 10.8 18" stroke="#ffffff" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+              <circle cx="9.4" cy="12.4" r="0.9" fill="#ffffff" opacity="0.9" />
+            </svg>
+            {/* 气泡尾巴 */}
+            <span aria-hidden="true" className="absolute -bottom-2 left-3.5 h-4 w-4 rotate-45 rounded-[3px] bg-white/95" />
+          </span>
+        </button>
+
         {/* 化肥浇水气泡 */}
         <button
           type="button"
@@ -1950,20 +1980,10 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
                 <span aria-hidden="true" className="absolute -top-2.5 left-1/2 h-1.5 w-6 -translate-x-1/2 rounded-t-sm bg-[#7c5227]" />
               </span>
             </span>
-            {/* 视频小角标 */}
-            <span aria-hidden="true" className="absolute bottom-2 right-1.5 flex h-5 w-5 items-center justify-center rounded bg-black/75 text-white">
-              <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
-            </span>
             {/* 气泡尾巴 */}
             <span aria-hidden="true" className="absolute -bottom-2 left-4 h-4 w-4 rotate-45 rounded-[3px] bg-white/95" />
           </span>
         </button>
-        {/* 浇水飘字 */}
-        {wateredToday && (
-          <span aria-hidden="true" className="absolute bottom-[240px] left-[58%] rounded-full bg-white/90 px-2.5 py-1 text-[10px] font-medium text-[#5a8a3c] shadow-sm">
-            今天已经浇过啦 ♡
-          </span>
-        )}
       </div>
     </div>
   );
@@ -2512,77 +2532,489 @@ function isCustomIndex(i: number, customLen: number) {
   return i < customLen;
 }
 
-/** 未来情书：写给未来的信，到期才能拆开 */
+/** 未来情书信纸样式（编辑器可切换） */
+const LETTER_PAPERS = [
+  { key: 'default', name: '默认', bg: 'linear-gradient(180deg,#fdf8ec,#fbf2df)', line: 'rgba(196,164,116,0.55)', dashed: true, text: '#5a4a38', dark: false },
+  { key: 'white', name: '纯白简约', bg: 'linear-gradient(180deg,#ffffff,#fafafb)', line: 'rgba(165,165,175,0.45)', dashed: false, text: '#3a3a40', dark: false },
+  { key: 'gray', name: '浅灰格纹', bg: 'linear-gradient(180deg,#f5f5f7,#ececef)', line: 'rgba(150,150,162,0.4)', dashed: false, text: '#4a4a52', dark: false },
+  { key: 'green', name: '墨绿复古', bg: 'linear-gradient(180deg,#f7f2e3,#efe5cb)', line: 'rgba(122,110,80,0.5)', dashed: true, text: '#4a4232', dark: false },
+  { key: 'pink', name: '柔粉蕾丝', bg: 'linear-gradient(180deg,#fdf1f4,#fae6ec)', line: 'rgba(214,150,170,0.5)', dashed: true, text: '#7a4a58', dark: false },
+  { key: 'night', name: '星夜蓝', bg: 'linear-gradient(180deg,#232633,#191c27)', line: 'rgba(185,195,225,0.32)', dashed: true, text: '#d8deee', dark: true },
+];
+
+/** 未来情书字体（编辑器字体面板） */
+const LETTER_FONTS = [
+  { key: 'default', name: '默认', css: '"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",sans-serif' },
+  { key: 'kai', name: '楷体', css: 'KaiTi,"Kaiti SC",STKaiti,serif' },
+  { key: 'song', name: '宋体', css: 'SimSun,"Songti SC",STSong,serif' },
+  { key: 'fang', name: '仿宋', css: 'FangSong,"Fangsong SC",STFangsong,serif' },
+  { key: 'xing', name: '行楷', css: '"Xingkai SC",STXingkai,KaiTi,cursive' },
+  { key: 'yuan', name: '圆体', css: '"Yuanti SC",YouYuan,"PingFang SC",sans-serif' },
+];
+
+/** 未来情书字色 */
+const LETTER_COLORS = ['#4a4238', '#8a8a94', '#a13a52', '#b8860b', '#3f6b4f', '#4a5a7a', '#8a5a2e', '#5f3d8a'];
+
+/** 星空底（未来情书）：随机星点 + 缓闪 */
+function LetterStars({ count = 44 }: { count?: number }) {
+  const stars = useMemo(
+    () =>
+      Array.from({ length: count }, () => ({
+        left: Math.random() * 100,
+        top: Math.random() * 70,
+        s: Math.random() * 1.8 + 0.6,
+        o: Math.random() * 0.45 + 0.25,
+        d: Math.random() * 4,
+      })),
+    [count],
+  );
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+      {stars.map((st, i) => (
+        <span
+          key={i}
+          className="absolute rounded-full bg-white [animation:couple-twinkle_3.4s_ease-in-out_infinite]"
+          style={{ left: `${st.left}%`, top: `${st.top}%`, width: st.s, height: st.s, opacity: st.o, animationDelay: `${st.d}s` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** 深夜信封（主视图插画：斜置信封 + 火漆心 + 星芒） */
+function NightEnvelope() {
+  return (
+    <svg viewBox="0 0 210 150" className="w-[216px]" aria-hidden="true">
+      <defs>
+        <linearGradient id="envFace" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#3d3d48" />
+          <stop offset="1" stopColor="#232329" />
+        </linearGradient>
+      </defs>
+      {/* 底下压着的信封 */}
+      <rect x="16" y="30" width="168" height="100" rx="8" fill="#191920" transform="rotate(-5 100 80)" />
+      <rect x="22" y="36" width="156" height="88" rx="6" fill="#202027" transform="rotate(-5 100 80)" />
+      {/* 主信封 */}
+      <g transform="rotate(3 105 84)">
+        <rect x="25" y="36" width="160" height="94" rx="7" fill="url(#envFace)" stroke="#4d4d5a" strokeWidth="1.5" />
+        <path d="M25 40 L105 94 L185 40" fill="none" stroke="#4d4d5a" strokeWidth="1.5" />
+        <path d="M25 128 L88 84 M185 128 L122 84" stroke="#3c3c47" strokeWidth="1.2" opacity="0.8" />
+        {/* 火漆印 */}
+        <circle cx="105" cy="94" r="11.5" fill="#141419" stroke="#5d5d6c" strokeWidth="2" />
+        <path d={LOVE_HEART_PATH} transform="translate(105 94) scale(1.15) translate(-4.5 -3.5)" fill="#6e6e7e" />
+      </g>
+      {/* 星芒 */}
+      <g transform="translate(158 24)">
+        <path d="M0 -13 L2.2 -2.2 L13 0 L2.2 2.2 L0 13 L-2.2 2.2 L-13 0 L-2.2 -2.2 Z" fill="#ffffff" />
+        <circle r="2.6" fill="#ffffff" />
+        <path d="M0 0 L34 0 M0 0 L-30 -8 M0 0 L26 -14" stroke="#ffffff" strokeWidth="0.8" opacity="0.55" />
+      </g>
+      <circle cx="34" cy="18" r="1.4" fill="#8a8a96" />
+      <circle cx="196" cy="66" r="1.2" fill="#8a8a96" />
+      <circle cx="12" cy="86" r="1.2" fill="#8a8a96" />
+    </svg>
+  );
+}
+
+/** 订单记录小图标（剪贴板） */
+function OrderIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <rect x="5" y="4" width="14" height="17" rx="2.4" />
+      <rect x="9" y="2.2" width="6" height="3.6" rx="1.2" />
+      <path d="M8.6 9.5h6.8M8.6 13h6.8M8.6 16.5h4.2" />
+    </svg>
+  );
+}
+
+/** 未来情书（参考截图：黑色星空治愈风）—— 主视图（信封）→ 告白页 → 编辑信件（信纸/字体/虚线工具栏）→ 封存 → 订单记录 */
 function LettersPage({ state, patch, close, showToast }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void; showToast: (m: string) => void }) {
-  const [text, setText] = useState('');
+  const [view, setView] = useState<'home' | 'intro' | 'write' | 'seal' | 'box'>('home');
+  const [text, setText] = useState(state.letterDraft || '');
   const [after, setAfter] = useState(30);
+  const [paper, setPaper] = useState(LETTER_PAPERS[0]);
+  const [font, setFont] = useState(LETTER_FONTS[0]);
+  const [fontSize, setFontSize] = useState(14);
+  const [color, setColor] = useState(LETTER_COLORS[0]);
+  const [dashed, setDashed] = useState(true);
+  const [receipt, setReceipt] = useState(true);
+  const [toolsOpen, setToolsOpen] = useState(true);
+  const [sheet, setSheet] = useState<null | 'paper' | 'font'>(null);
   const now = Date.now();
   const arrived = (l: { at: number; openAfterDays: number }) => now >= l.at + l.openAfterDays * 86400000;
-  return (
-    <SubShell title="未来情书" onBack={close}>
-      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
-        <div className="text-[15px] font-semibold text-[#2c2c30]">写一封信，寄给未来的 TA</div>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="亲爱的未来的你…"
-          maxLength={500}
-          rows={4}
-          className="mt-3 w-full resize-none rounded-xl bg-[#f3f3f5] p-3.5 text-[15px] leading-relaxed outline-none placeholder:text-[#b6b6bd]"
-        />
-        <div className="mt-3 flex gap-2">
-          {[7, 30, 100].map((d) => (
-            <button
-              key={d}
-              type="button"
-              onClick={() => setAfter(d)}
-              className={`h-10 flex-1 rounded-full text-[14px] font-medium transition-colors ${after === d ? 'bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-white' : 'bg-[#f0f0f3] text-[#5a5a62]'}`}
-            >
-              {d} 天后开启
-            </button>
-          ))}
-        </div>
+  const arriveDate = new Date(Date.now() + after * 86400000);
+
+  /** 封存信件 */
+  const sealLetter = () => {
+    const t = text.trim();
+    if (!t) return;
+    patch({
+      letters: [{ id: uid(), text: t, at: Date.now(), openAfterDays: after }, ...state.letters],
+      letterDraft: '',
+    });
+    setText('');
+    setView('box');
+    showToast('情书已封存，未来会准时送达 ♡');
+  };
+
+  /** 顶部栏（深色） */
+  const TopBar = ({ title, onBack }: { title: string; onBack: () => void }) => (
+    <div className="relative z-30 shrink-0 pt-[54px]">
+      <div className="flex h-11 items-center px-1.5">
+        <button type="button" onClick={onBack} aria-label="返回" className="flex h-9 w-9 items-center justify-center rounded-full text-white/90 transition-opacity active:opacity-50">
+          <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
+        </button>
+        <div className="pointer-events-none absolute left-1/2 top-[54px] flex h-11 -translate-x-1/2 items-center text-[16px] font-bold text-white">{title}</div>
+      </div>
+    </div>
+  );
+
+  // ============ 主视图：信封 ============
+  if (view === 'home') {
+    return (
+      <div className="relative flex h-full flex-col overflow-hidden bg-[#0a0a0d]">
+        <LetterStars />
+        <TopBar title="未来情书" onBack={close} />
+        {/* 订单记录入口 */}
         <button
           type="button"
-          onClick={() => {
-            const t = text.trim();
-            if (!t) return;
-            patch({ letters: [{ id: uid(), text: t, at: Date.now(), openAfterDays: after }, ...state.letters] });
-            setText('');
-            showToast('情书已封存 ✉️');
-          }}
-          className="mt-4 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white"
+          onClick={() => setView('box')}
+          className="relative z-20 ml-4 mt-2 flex w-14 shrink-0 flex-col items-center gap-1.5 rounded-xl py-1.5 text-white/90 transition-opacity active:opacity-60"
         >
-          封存这封信
+          <OrderIcon className="h-7 w-7" />
+          <span className="text-[11px] font-medium">订单记录</span>
+        </button>
+        {/* 信封 + 文案 */}
+        <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-9 pb-6">
+          <div className="[animation:couple-float-y_5s_ease-in-out_infinite]">
+            <NightEnvelope />
+          </div>
+          <div className="mt-12 w-full text-[20px] font-light leading-[3.4rem] tracking-wide text-[#87878f]">
+            <p>把你想对他说的话</p>
+            <p>写成一封信</p>
+            <p>在未来的某天寄给他吧</p>
+          </div>
+        </div>
+        {/* 底部圆形箭头 */}
+        <button
+          type="button"
+          onClick={() => setView('intro')}
+          aria-label="下一步"
+          className="relative z-20 mx-auto mb-9 flex h-[62px] w-[62px] items-center justify-center rounded-full border border-white/40 transition-transform active:scale-95"
+        >
+          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="#e8e8ee" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 12h15M13 6l6 6-6 6" />
+          </svg>
         </button>
       </div>
+    );
+  }
 
-      {state.letters.length > 0 && <h3 className="px-2 pb-2 pt-6 text-[17px] font-bold">信箱</h3>}
-      <div className="space-y-3">
-        {state.letters.map((l) => {
-          const open = arrived(l);
-          return (
-            <div key={l.id} className="rounded-2xl bg-white p-4 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-[13px] text-[#9a9aa2]">
-                  {fmtDate(l.at)} 寄出 · {l.openAfterDays} 天后开启
-                </span>
-                <span className={`rounded-full px-2.5 py-0.5 text-[12px] ${open ? 'bg-[#3f3f46] text-white' : 'bg-[#f0f0f3] text-[#8e8e96]'}`}>
-                  {open ? '可拆信' : '未到时间'}
-                </span>
-              </div>
-              {open ? (
-                <div className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-[#2c2c30]">{l.text}</div>
-              ) : (
-                <div className="mt-2 text-[14px] italic leading-relaxed text-[#b6b6bd]">
-                  ✉️ 这封信还在路上，还剩 {Math.max(1, Math.ceil((l.at + l.openAfterDays * 86400000 - now) / 86400000))} 天
-                </div>
-              )}
-            </div>
-          );
-        })}
+  // ============ 告白视图：星尘 + 跨越时间的情书 ============
+  if (view === 'intro') {
+    return (
+      <div className="relative flex h-full flex-col overflow-hidden bg-[#0a0a0d]">
+        <LetterStars />
+        {/* 星尘飘落 + 星芒爆点 */}
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+          {[18, 32, 55, 70, 84].map((left, i) => (
+            <span key={i} className="absolute h-1 w-1 rounded-full bg-white [animation:couple-fall_4.6s_linear_infinite]" style={{ left: `${left}%`, top: '4%', animationDelay: `${i * 1.1}s` }} />
+          ))}
+          <svg viewBox="0 0 120 120" className="absolute right-[6%] top-[16%] w-44">
+            <g transform="translate(66 52)">
+              <path d="M0 -17 L3 -3 L17 0 L3 3 L0 17 L-3 3 L-17 0 L-3 -3 Z" fill="#ffffff" />
+              <circle r="3.4" fill="#ffffff" />
+              <path d="M0 0 L44 6 M0 0 L34 -18 M0 0 L40 22" stroke="#ffffff" strokeWidth="0.9" opacity="0.6" />
+              {[[-30, -22], [38, -8], [-24, 26], [30, 30], [10, -30]].map(([x, y], i) => (
+                <circle key={i} cx={x} cy={y} r={i % 2 ? 1.1 : 1.6} fill="#cfcfda" />
+              ))}
+            </g>
+          </svg>
+        </div>
+        <TopBar title="未来情书" onBack={() => setView('home')} />
+        <div className="relative z-10 flex flex-1 flex-col justify-end px-9 pb-14">
+          <div className="text-[20px] font-light leading-[3.4rem] tracking-wide text-[#9c9ca6]">
+            <p>最浪漫的告白是</p>
+            <p>写给他的那封</p>
+            <p>跨越时间的未来情书</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setView('write')}
+            className="mx-auto mt-12 h-[52px] w-[248px] rounded-full border border-white/40 text-[16px] text-white/95 transition-transform active:scale-95"
+          >
+            给他写封未来情书
+          </button>
+          <div className="mt-3.5 text-center text-[12px] text-white/60">(纸质实物情书)</div>
+        </div>
       </div>
-    </SubShell>
+    );
+  }
+
+  // ============ 编辑信件视图：信纸 + 工具栏 ============
+  if (view === 'write') {
+    const lineBg = dashed && paper.dashed !== undefined
+      ? `repeating-linear-gradient(180deg, transparent 0px, transparent 30px, ${paper.line} 30px, ${paper.line} calc(30px + 1px))`
+      : undefined;
+    return (
+      <div className="relative flex h-full flex-col overflow-hidden bg-[#101014]">
+        <TopBar title="编辑信件" onBack={() => setView('home')} />
+        {/* 信纸区 */}
+        <div className="relative flex-1 px-3 pb-2 pt-1.5">
+          <div className="relative h-full overflow-hidden rounded-md shadow-[0_8px_28px_rgba(0,0,0,0.5)]" style={{ background: paper.bg }}>
+            {/* 横线 */}
+            {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: '0 6px' }} />}
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value.slice(0, 800))}
+              placeholder="写下你想说的话…"
+              className="letter-pad absolute inset-0 h-full w-full resize-none bg-transparent px-5 py-4 leading-[30px] tracking-[0.5px] outline-none"
+              style={{ fontFamily: font.css, fontSize, color, caretColor: color }}
+            />
+            {/* 工具开关 chip */}
+            <button
+              type="button"
+              onClick={() => setToolsOpen((v) => !v)}
+              className="absolute right-2 top-2.5 z-10 rounded-md bg-[#21b357] px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm"
+            >
+              工具 {toolsOpen ? '˄' : '˅'}
+            </button>
+            {/* 右侧工具栏（虚线/手写信/字体/回执/信纸） */}
+            {toolsOpen && (
+              <div className="absolute right-2.5 top-12 z-10 flex flex-col gap-2.5">
+                <button type="button" onClick={() => setDashed((v) => !v)} className={`h-[62px] w-9 rounded-lg text-[13px] font-bold leading-[1.15] text-white shadow-md transition-colors ${dashed ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
+                  虚线
+                </button>
+                <button type="button" onClick={() => showToast('手写信誊写功能即将上线 ♡')} className="h-[62px] w-9 rounded-lg bg-[#9a9aa2] text-[13px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
+                  手写信
+                </button>
+                <button type="button" onClick={() => setSheet('font')} className="h-[62px] w-9 rounded-lg bg-[#9a9aa2] text-[13px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
+                  字体
+                </button>
+                <button type="button" onClick={() => { setReceipt((v) => !v); showToast(receipt ? '已关闭回执' : '已开启回执：TA 拆信时会通知你'); }} className={`h-[62px] w-9 rounded-lg text-[13px] font-bold leading-[1.15] text-white shadow-md transition-colors ${receipt ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
+                  回执
+                </button>
+                <button type="button" onClick={() => setSheet('paper')} className="relative h-[62px] w-9 rounded-lg border border-[#e8cdb2] bg-[#fdf8ec] text-[13px] font-bold leading-[1.15] text-[#2f6b3f] shadow-md" style={{ writingMode: 'vertical-rl' }}>
+                  信纸
+                  <span aria-hidden="true" className="absolute -top-1 right-1 h-1.5 w-1.5 rounded-full bg-[#e05a6d]" />
+                </button>
+              </div>
+            )}
+            {/* 底部日期 + 页码 */}
+            <div className="pointer-events-none absolute bottom-2.5 left-4 text-[12.5px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
+              {`${new Date().getFullYear()}/${new Date().getMonth() + 1}/${new Date().getDate()}`}
+            </div>
+            <div className="pointer-events-none absolute bottom-2.5 right-4 text-[12.5px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
+              当前: 第1/1页
+            </div>
+          </div>
+        </div>
+        {/* 底部操作栏 */}
+        <div className="relative z-20 flex shrink-0 items-center gap-3 border-t border-white/8 bg-[#141419] px-4 pb-7 pt-3.5">
+          <button
+            type="button"
+            onClick={() => {
+              patch({ letterDraft: text });
+              showToast(text.trim() ? '草稿已保存' : '已清空草稿');
+            }}
+            className="h-[46px] flex-1 rounded-full border border-white/25 text-[15.5px] font-medium text-white/90 transition-transform active:scale-[0.97]"
+          >
+            存草稿
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!text.trim()) {
+                showToast('先写点什么吧 ♡');
+                return;
+              }
+              patch({ letterDraft: text });
+              setView('seal');
+            }}
+            className="h-[46px] flex-[1.6] rounded-full bg-[#21b357] text-[16px] font-bold text-white shadow-[0_4px_14px_rgba(33,179,87,0.4)] transition-transform active:scale-[0.97]"
+          >
+            下一步
+          </button>
+        </div>
+
+        {/* 信纸选择弹层 */}
+        {sheet === 'paper' && (
+          <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
+            <div className="rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
+              <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
+              <div className="text-center text-[17px] font-bold text-[#2c2c30]">选择信纸</div>
+              <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">‹ 左右滑动切换风格 ›</div>
+              <div className="mt-3 grid max-h-[290px] grid-cols-4 gap-3 overflow-y-auto">
+                {LETTER_PAPERS.map((p) => (
+                  <button key={p.key} type="button" onClick={() => { setPaper(p); setSheet(null); }} className="flex flex-col items-center gap-1.5">
+                    <span
+                      className={`h-[86px] w-full rounded-md border-2 shadow-sm ${paper.key === p.key ? 'border-[#21b357]' : 'border-transparent'}`}
+                      style={{ background: p.bg, backgroundImage: `repeating-linear-gradient(180deg, transparent 0 12px, ${p.line} 12px 13px)` }}
+                    />
+                    <span className="w-full truncate text-[11.5px] text-[#5a5a62]">{p.name}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4 flex gap-3">
+                <button type="button" onClick={() => showToast('更多信纸即将上架 ♡')} className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
+                  更多信纸
+                </button>
+                <button type="button" onClick={() => setSheet(null)} className="h-11 flex-1 rounded-full bg-[#21b357] text-[15px] font-bold text-white">
+                  完成
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 字体弹层（字体/字号/颜色） */}
+        {sheet === 'font' && (
+          <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
+            <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
+              <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
+              <div className="grid grid-cols-3 gap-2.5">
+                {LETTER_FONTS.map((f) => (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => setFont(f)}
+                    className={`rounded-lg border px-2 py-2.5 ${font.key === f.key ? 'border-[#c9a86a] bg-[#fbf5e8]' : 'border-[#e8e8ec] bg-white'}`}
+                  >
+                    <div className="text-[10.5px] text-[#9a9aa2]">{f.name}</div>
+                    <div className="mt-0.5 text-[17px] text-[#3a3a40]" style={{ fontFamily: f.css }}>见字如面</div>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4 flex items-center gap-3">
+                <span className="shrink-0 text-[14px] font-semibold text-[#3a3a40]">字号</span>
+                <span className="text-[12px] text-[#b6b6bd]">A</span>
+                <input type="range" min={12} max={22} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="h-1.5 flex-1 accent-[#21b357]" aria-label="字号" />
+                <span className="text-[18px] font-semibold text-[#3a3a40]">A</span>
+                <span className="w-8 shrink-0 rounded-full bg-[#21b357] py-0.5 text-center text-[12px] font-bold text-white">{fontSize}</span>
+              </div>
+              <div className="mt-4 flex items-start gap-3">
+                <span className="shrink-0 pt-1.5 text-[14px] font-semibold text-[#3a3a40]">颜色</span>
+                <div className="flex flex-wrap gap-2.5">
+                  {LETTER_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      aria-label={`颜色 ${c}`}
+                      onClick={() => setColor(c)}
+                      className={`h-8 w-8 rounded-lg border-2 ${color === c ? 'border-[#2c2c30]' : 'border-transparent'}`}
+                      style={{ background: c }}
+                    />
+                  ))}
+                </div>
+              </div>
+              <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#21b357] text-[15px] font-bold text-white">
+                完成
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ============ 封存视图：选择送达时间 ============
+  if (view === 'seal') {
+    return (
+      <div className="relative flex h-full flex-col overflow-hidden bg-[#0a0a0d]">
+        <LetterStars count={30} />
+        <TopBar title="封存这封信" onBack={() => setView('write')} />
+        <div className="relative z-10 flex flex-1 flex-col items-center px-9 pt-8">
+          <NightEnvelope />
+          <div className="mt-8 text-center text-[16px] font-light leading-relaxed text-[#9c9ca6]">
+            这封信将在
+            <b className="mx-1.5 text-[22px] font-semibold text-white">{after}</b>
+            天后
+            <br />
+            送达 TA 的信箱
+          </div>
+          <div className="mt-3 text-[13px] text-[#6e6e78]">预计 {arriveDate.getFullYear()}年{arriveDate.getMonth() + 1}月{arriveDate.getDate()}日 开启</div>
+          <div className="mt-6 flex w-full gap-2.5">
+            {[7, 30, 100, 365].map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setAfter(d)}
+                className={`h-11 flex-1 rounded-full border text-[14px] transition-colors ${after === d ? 'border-white/70 bg-white/12 font-bold text-white' : 'border-white/18 text-[#8a8a94]'}`}
+              >
+                {d} 天
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={sealLetter}
+            className="mt-9 h-[50px] w-full rounded-full bg-[#21b357] text-[16.5px] font-bold text-white shadow-[0_6px_20px_rgba(33,179,87,0.4)] transition-transform active:scale-[0.97]"
+          >
+            封存这封信
+          </button>
+          <div className="mt-3 text-[12px] text-white/45">封存后不可修改，到时会提醒你拆开 ♡</div>
+        </div>
+      </div>
+    );
+  }
+
+  // ============ 订单记录（信箱） ============
+  return (
+    <div className="relative flex h-full flex-col overflow-hidden bg-[#0a0a0d]">
+      <LetterStars count={30} />
+      <TopBar title="订单记录" onBack={() => setView('home')} />
+      <div className="relative z-10 flex-1 overflow-y-auto px-4 pb-10 pt-2">
+        {state.letters.length === 0 && (
+          <div className="flex h-full flex-col items-center justify-center text-center">
+            <NightEnvelope />
+            <p className="mt-6 text-[15px] text-[#87878f]">还没有寄出的信</p>
+            <p className="mt-1.5 text-[13px] text-[#5d5d66]">去写第一封跨越时间的情书吧</p>
+            <button type="button" onClick={() => setView('write')} className="mt-6 h-11 rounded-full border border-white/35 px-8 text-[14.5px] text-white/90">
+              去写信
+            </button>
+          </div>
+        )}
+        <div className="space-y-4">
+          {state.letters.map((l) => {
+            const open = arrived(l);
+            const remain = Math.max(1, Math.ceil((l.at + l.openAfterDays * 86400000 - now) / 86400000));
+            return (
+              <div key={l.id} className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12.5px] text-[#87878f]">
+                    {fmtDate(l.at)} 寄出 · {l.openAfterDays} 天后开启
+                  </span>
+                  <span className={`rounded-full px-2.5 py-1 text-[11.5px] font-medium ${open ? 'bg-[#21b357] text-white' : 'bg-white/10 text-[#9c9ca6]'}`}>
+                    {open ? '可拆信' : `还剩 ${remain} 天`}
+                  </span>
+                </div>
+                {open ? (
+                  <div className="mt-3 whitespace-pre-wrap rounded-xl bg-[#fdf8ec] p-3.5 text-[15px] leading-relaxed text-[#4a4238]">{l.text}</div>
+                ) : (
+                  <div className="mt-3 flex items-center gap-2.5 text-[13.5px] italic text-[#6e6e78]">
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+                      <rect x="3" y="6" width="18" height="13" rx="2.4" />
+                      <path d="M3.5 7.5 12 13.5 20.5 7.5" />
+                    </svg>
+                    这封信还在时间的路上
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {state.letters.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setView('write')}
+            className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-full border border-white/25 text-[15px] text-white/90"
+          >
+            <Plus className="h-4.5 w-4.5" strokeWidth={2} />
+            再写一封
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -3043,7 +3475,7 @@ function KawaiiFace({ x, y, s = 1, tone = '#8a626e' }: { x: number; y: number; s
 }
 
 /** 手账插画（参考图1风格：软萌 SVG 小插画，替代 emoji；kind 见 HUNDRED_KIND_COUNT） */
-const HUNDRED_KIND_COUNT = 16;
+const HUNDRED_KIND_COUNT = 54;
 function ScrapIllus({ kind, className = '' }: { kind: number; className?: string }) {
   const k = ((kind % HUNDRED_KIND_COUNT) + HUNDRED_KIND_COUNT) % HUNDRED_KIND_COUNT;
   return (
@@ -3236,6 +3668,478 @@ function ScrapIllus({ kind, className = '' }: { kind: number; className?: string
           <path d={LOVE_HEART_PATH} transform="translate(76 22) scale(1.3) translate(-4.5 -3.5)" fill="#f7c3d0" />
         </g>
       )}
+      {k === 16 && (
+        /* 洗碗/泡脚：木桶 + 泡泡 */
+        <g>
+          <path d="M28 30 L72 30 L67 56 Q50 61 33 56 Z" fill="#e8c9a0" stroke="#d3ab7e" strokeWidth="1.6" />
+          <path d="M31 40 L69 40 M33 49 L67 49" stroke="#d3ab7e" strokeWidth="1.4" opacity="0.7" />
+          <rect x="26" y="25" width="48" height="8" rx="3.5" fill="#f2d8b8" stroke="#d3ab7e" strokeWidth="1.4" />
+          <circle cx="34" cy="14" r="4.5" fill="#fff" stroke="#cfe4ef" strokeWidth="1.2" />
+          <circle cx="48" cy="8" r="5.5" fill="#fff" stroke="#cfe4ef" strokeWidth="1.2" />
+          <circle cx="62" cy="13" r="4" fill="#fff" stroke="#cfe4ef" strokeWidth="1.2" />
+          <circle cx="73" cy="20" r="2.6" fill="#fff" stroke="#cfe4ef" strokeWidth="1" />
+          <circle cx="22" cy="21" r="2.4" fill="#fff" stroke="#cfe4ef" strokeWidth="1" />
+          <path d={LOVE_HEART_PATH} transform="translate(50 45) scale(1.4) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 17 && (
+        /* 互相喂对方吃水果：双果 */
+        <g>
+          <circle cx="34" cy="40" r="13" fill="#f2a9bc" />
+          <path d="M34 27 Q33 19 40 17" stroke="#5ea732" strokeWidth="2.2" fill="none" strokeLinecap="round" />
+          <path d="M34 27 C28 21 21 23 21 23 C23 29 30 30 34 27 Z" fill="#8ed86e" />
+          <KawaiiFace x={34} y={40} s={1.1} />
+          <circle cx="66" cy="42" r="11" fill="#ffd98a" />
+          <path d="M66 31 L66 53 M55 42 L77 42 M58 34 L74 50 M74 34 L58 50" stroke="#f2b45c" strokeWidth="1.3" />
+          <circle cx="66" cy="42" r="11" fill="none" stroke="#f2b45c" strokeWidth="1.4" />
+          <path d={LOVE_HEART_PATH} transform="translate(50 16) scale(1.5) translate(-4.5 -3.5)" fill="#f7c3d0" />
+        </g>
+      )}
+      {k === 18 && (
+        /* 唱歌/K歌：麦克风 */
+        <g>
+          <circle cx="46" cy="22" r="12" fill="#c9c9d2" stroke="#9e9ea8" strokeWidth="1.6" />
+          <path d="M38 17 h16 M37 22 h18 M39 27 h14" stroke="#8e8e96" strokeWidth="1.3" />
+          <rect x="40" y="32" width="12" height="22" rx="6" fill="#e88ba4" />
+          <path d="M36 44 Q28 48 30 58 M56 44 Q64 48 62 58" stroke="#f3c8d3" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+          <circle cx="74" cy="30" r="3" fill="#f2a9bc" />
+          <rect x="75.6" y="14" width="2" height="16" fill="#e88ba4" />
+          <path d={LOVE_HEART_PATH} transform="translate(84 14) scale(1.3) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 19 && (
+        /* 一起敷面膜：脸 + 面膜 */
+        <g>
+          <ellipse cx="50" cy="38" rx="19" ry="22" fill="#fce4d4" />
+          <path d="M31 38 Q31 15 50 15 Q69 15 69 38 L63 42 Q57 35 53 41 Q50 45 47 41 Q43 35 37 42 Z" fill="#ffffff" opacity="0.94" stroke="#e3e3ea" strokeWidth="1" />
+          <circle cx="42" cy="33" r="2.2" fill="#5a5a62" />
+          <circle cx="58" cy="33" r="2.2" fill="#5a5a62" />
+          <path d="M46 46 Q50 49 54 46" stroke="#8a626e" strokeWidth="1.2" fill="none" strokeLinecap="round" />
+          <ellipse cx="39" cy="42" rx="2.6" ry="1.5" fill="#f7b8c4" opacity="0.8" />
+          <ellipse cx="61" cy="42" rx="2.6" ry="1.5" fill="#f7b8c4" opacity="0.8" />
+          <path d={LOVE_HEART_PATH} transform="translate(82 20) scale(1.4) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 20 && (
+        /* 帮对方吹头发：吹风机 */
+        <g>
+          <rect x="18" y="22" width="32" height="23" rx="10" fill="#f7c3d0" stroke="#efb0c4" strokeWidth="1.6" />
+          <path d="M50 26 L68 21 L68 46 L50 41 Z" fill="#f2a9bc" stroke="#efb0c4" strokeWidth="1.4" />
+          <circle cx="32" cy="33" r="6.5" fill="#fff" opacity="0.85" />
+          <circle cx="32" cy="33" r="3" fill="#fbdce4" />
+          <path d="M72 24 l9 -3 M74 33 l10 0 M72 42 l9 3" stroke="#a8c8e8" strokeWidth="2" strokeLinecap="round" />
+          <path d="M12 52 h9 M10 58 h11" stroke="#a8c8e8" strokeWidth="1.8" strokeLinecap="round" />
+          <path d={LOVE_HEART_PATH} transform="translate(24 56) scale(1.2) translate(-4.5 -3.5)" fill="#f7c3d0" />
+        </g>
+      )}
+      {k === 21 && (
+        /* 堆雪人/打雪仗：雪人 */
+        <g>
+          <circle cx="46" cy="46" r="15" fill="#fff" stroke="#dfe4ec" strokeWidth="1.6" />
+          <circle cx="48" cy="24" r="11" fill="#fff" stroke="#dfe4ec" strokeWidth="1.6" />
+          <circle cx="44.5" cy="22" r="1.4" fill="#5a5a62" />
+          <circle cx="51.5" cy="22" r="1.4" fill="#5a5a62" />
+          <path d="M45 27 Q48 30 51 27" stroke="#e88ba4" strokeWidth="1.3" fill="none" strokeLinecap="round" />
+          <rect x="41" y="11" width="14" height="3.2" rx="1.6" fill="#5a5a62" />
+          <rect x="44" y="4" width="8" height="8" rx="1.6" fill="#5a5a62" />
+          <path d="M36 42 Q29 44 25 39" stroke="#8a5a2e" strokeWidth="2" fill="none" strokeLinecap="round" />
+          <circle cx="72" cy="16" r="1.6" fill="#dfe4ec" />
+          <circle cx="82" cy="28" r="1.2" fill="#dfe4ec" />
+          <circle cx="70" cy="34" r="1.2" fill="#dfe4ec" />
+          <path d={LOVE_HEART_PATH} transform="translate(78 50) scale(1.4) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 22 && (
+        /* 夏天吃冰淇淋：甜筒 */
+        <g>
+          <path d="M37 30 L63 30 L53 62 Q50 66 47 62 Z" fill="#f2d8b8" stroke="#d3ab7e" strokeWidth="1.4" />
+          <path d="M42 37 L57 46 M42 46 L55 37 M45 52 L55 44" stroke="#e3bd90" strokeWidth="1.2" />
+          <circle cx="41" cy="24" r="9" fill="#f7c3d0" />
+          <circle cx="59" cy="24" r="9" fill="#f2a9bc" />
+          <circle cx="50" cy="17" r="8.5" fill="#fce3ea" />
+          <circle cx="50" cy="7" r="3" fill="#e8647a" />
+          <path d="M50 10 L50 14" stroke="#8a5a2e" strokeWidth="1.2" />
+          <circle cx="78" cy="16" r="1.4" fill="#f3c8d3" />
+        </g>
+      )}
+      {k === 23 && (
+        /* 一起吃火锅：小锅 + 热气 */
+        <g>
+          <path d="M50 16 Q47 10 52 7 M62 20 Q59 14 64 11" stroke="#c9c9d2" strokeWidth="2" fill="none" strokeLinecap="round" opacity="0.85" />
+          <path d="M23 34 L23 48 Q23 53 29 53 L71 53 Q77 53 77 48 L77 34" fill="#e88ba4" />
+          <ellipse cx="50" cy="34" rx="27" ry="10" fill="#e88ba4" />
+          <ellipse cx="50" cy="33" rx="21" ry="7.5" fill="#fdf0e2" />
+          <circle cx="41" cy="32" r="2.8" fill="#8ed86e" />
+          <circle cx="54" cy="35" r="2.4" fill="#f2b45c" />
+          <circle cx="62" cy="31" r="2.2" fill="#f7c3d0" />
+          <path d="M14 58 Q22 54 30 58 Q38 62 46 58" stroke="#8fc3e8" strokeWidth="2" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 24 && (
+        /* 跨年/放烟花：烟花 */
+        <g>
+          <path d="M50 6 L52 20 M26 14 L37 25 M74 14 L63 25 M14 34 L28 36 M86 34 L72 36" stroke="#f2a9bc" strokeWidth="2.4" strokeLinecap="round" />
+          <path d="M34 8 L40 18 M66 8 L60 18 M12 22 L24 28" stroke="#a8c8e8" strokeWidth="1.8" strokeLinecap="round" opacity="0.8" />
+          <circle cx="50" cy="33" r="5.5" fill="#ffd98a" />
+          <circle cx="30" cy="44" r="2.2" fill="#f7c3d0" />
+          <circle cx="70" cy="46" r="2.2" fill="#f7c3d0" />
+          <circle cx="50" cy="56" r="2.4" fill="#a8c8e8" />
+          <path d="M14 60 l5 -2 M86 58 l-5 -2" stroke="#f3c8d3" strokeWidth="1.6" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 25 && (
+        /* 放孔明灯 */
+        <g>
+          <path d="M36 32 Q36 14 50 14 Q64 14 64 32 Q64 42 50 48 Q36 42 36 32 Z" fill="#ffd98a" stroke="#f2b45c" strokeWidth="1.6" />
+          <path d="M42 46 L42 51 M58 46 L58 51 M42 51 Q50 55 58 51" stroke="#e3a04a" strokeWidth="1.6" fill="none" />
+          <circle cx="50" cy="32" r="2.6" fill="#e8647a" />
+          <circle cx="24" cy="20" r="1.6" fill="#f7c3d0" />
+          <circle cx="76" cy="24" r="1.4" fill="#f7c3d0" />
+          <path d="M16 42 Q22 38 26 42" stroke="#f3c8d3" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 26 && (
+        /* 捡贝壳：贝壳 + 海星 */
+        <g>
+          <path d="M28 46 Q28 22 50 22 Q72 22 72 46 Q61 39 50 46 Q39 39 28 46 Z" fill="#fce3ea" stroke="#f2b8c8" strokeWidth="1.6" />
+          <path d="M38 26 Q40 36 45 43 M50 22 L50 45 M62 26 Q60 36 55 43" stroke="#f2b8c8" strokeWidth="1.3" fill="none" />
+          <path d="M78 28 l2.2 5 5.4 0.6 -4 3.6 1.2 5.4 -4.8 -2.8 -4.8 2.8 1.2 -5.4 -4 -3.6 5.4 -0.6 Z" fill="#ffd98a" />
+          <circle cx="18" cy="18" r="1.5" fill="#f3c8d3" />
+          <path d="M12 56 Q18 52 24 56" stroke="#8fc3e8" strokeWidth="2" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 27 && (
+        /* 爬山看云海：山峰 */
+        <g>
+          <path d="M8 56 L34 22 L52 48 L64 30 L90 56 Z" fill="#cfd8e6" />
+          <path d="M34 22 L41 31 L37.5 31 L45 42" stroke="#fff" strokeWidth="2.4" fill="none" strokeLinecap="round" />
+          <path d="M64 30 L70 38 L66 38 L74 49" stroke="#fff" strokeWidth="2" fill="none" strokeLinecap="round" />
+          <ellipse cx="28" cy="54" rx="20" ry="4.6" fill="#fff" opacity="0.92" />
+          <ellipse cx="68" cy="58" rx="24" ry="4.6" fill="#fff" opacity="0.85" />
+          <circle cx="78" cy="14" r="6" fill="#ffd98a" />
+        </g>
+      )}
+      {k === 28 && (
+        /* 露营看星星：帐篷星空 */
+        <g>
+          <path d="M20 56 L46 24 L72 56 Z" fill="#f7c3d0" stroke="#efb0c4" strokeWidth="1.4" />
+          <path d="M39 56 L46 42 L53 56 Z" fill="#e898a8" />
+          <path d="M46 24 L46 42" stroke="#efb0c4" strokeWidth="1.2" />
+          <circle cx="20" cy="13" r="1.8" fill="#ffd98a" />
+          <circle cx="80" cy="11" r="1.5" fill="#ffd98a" />
+          <circle cx="70" cy="22" r="1.2" fill="#ffd98a" />
+          <path d="M78 16 A6 6 0 1 0 85 24 A4.8 4.8 0 0 1 78 16 Z" fill="#ffd98a" />
+          <path d="M12 30 l6 -3" stroke="#f3c8d3" strokeWidth="1.6" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 29 && (
+        /* 坐摩天轮 */
+        <g>
+          <circle cx="50" cy="28" r="19" fill="none" stroke="#c9c9d2" strokeWidth="2" />
+          <path d="M50 9 L50 47 M31 28 L69 28 M37 15 L63 41 M63 15 L37 41" stroke="#c9c9d2" strokeWidth="1.2" />
+          <rect x="34" y="12" width="9" height="7.5" rx="2.4" fill="#f2a9bc" />
+          <rect x="57" y="12" width="9" height="7.5" rx="2.4" fill="#a8c8e8" />
+          <rect x="34" y="37" width="9" height="7.5" rx="2.4" fill="#ffd98a" />
+          <rect x="57" y="37" width="9" height="7.5" rx="2.4" fill="#8ed86e" />
+          <circle cx="50" cy="28" r="3" fill="#9e9ea8" />
+          <path d="M50 31 L38 60 M50 31 L62 60 M34 60 L66 60" stroke="#9e9ea8" strokeWidth="2.4" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 30 && (
+        /* 坐旋转木马 */
+        <g>
+          <path d="M20 26 Q50 10 80 26 Z" fill="#f2a9bc" />
+          <circle cx="50" cy="13" r="2.6" fill="#e88ba4" />
+          <path d="M34 26 L34 54 M66 26 L66 54" stroke="#c9c9d2" strokeWidth="1.6" />
+          <ellipse cx="32" cy="42" rx="9" ry="5.5" fill="#f7c3d0" />
+          <circle cx="40" cy="36" r="4" fill="#f7c3d0" />
+          <path d="M43 34 l4 -2.5" stroke="#8a5a2e" strokeWidth="1.6" strokeLinecap="round" />
+          <ellipse cx="68" cy="44" rx="8" ry="5" fill="#fce3ea" />
+          <circle cx="75" cy="38.5" r="3.6" fill="#fce3ea" />
+          <rect x="18" y="54" width="64" height="4.5" rx="2.2" fill="#f2d8b8" />
+        </g>
+      )}
+      {k === 31 && (
+        /* 游乐园/过山车 */
+        <g>
+          <path d="M10 56 Q30 56 38 34 Q46 13 62 13 Q80 13 86 34" fill="none" stroke="#c9c9d2" strokeWidth="2.6" strokeLinecap="round" />
+          <path d="M38 34 L38 56 M54 20 L54 44 M70 15 L70 40 M86 34 L86 56" stroke="#c9c9d2" strokeWidth="1.2" />
+          <g transform="rotate(-26 47 27)">
+            <rect x="38" y="23" width="19" height="10" rx="3.5" fill="#f2a9bc" />
+            <circle cx="43" cy="33" r="2.2" fill="#5a5a62" />
+            <circle cx="53" cy="33" r="2.2" fill="#5a5a62" />
+            <circle cx="43" cy="27" r="1.6" fill="#fff" opacity="0.85" />
+          </g>
+          <circle cx="20" cy="16" r="1.6" fill="#f3c8d3" />
+        </g>
+      )}
+      {k === 32 && (
+        /* 美术馆/博物馆/展览：画框 + 调色板 */
+        <g>
+          <rect x="16" y="16" width="44" height="36" rx="3" fill="#fff" stroke="#d3cfc8" strokeWidth="1.8" />
+          <path d="M22 46 L34 30 L42 40 L50 26 L54 46 Z" fill="#fbdce4" />
+          <circle cx="27" cy="24" r="2.8" fill="#ffd98a" />
+          <ellipse cx="74" cy="38" rx="14" ry="12" fill="#f2d8b8" stroke="#d3ab7e" strokeWidth="1.4" />
+          <circle cx="68" cy="33" r="2.4" fill="#f2a9bc" />
+          <circle cx="78" cy="32" r="2.4" fill="#a8c8e8" />
+          <circle cx="82" cy="42" r="2.4" fill="#8ed86e" />
+          <circle cx="72" cy="44" r="2.4" fill="#ffd98a" />
+          <path d="M58 54 L70 46" stroke="#8a5a2e" strokeWidth="2.2" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 33 && (
+        /* 图书馆/书店/母校：书本 */
+        <g>
+          <path d="M16 20 Q31 13 46 20 L46 54 Q31 47 16 54 Z" fill="#fbdce4" stroke="#f2b8c8" strokeWidth="1.5" />
+          <path d="M84 20 Q69 13 54 20 L54 54 Q69 47 84 54 Z" fill="#fce8ee" stroke="#f2b8c8" strokeWidth="1.5" />
+          <path d="M50 19 L50 54" stroke="#e8b0be" strokeWidth="2.2" />
+          <path d="M23 28 Q33 24 41 28 M23 36 Q33 32 41 36" stroke="#f2b8c8" strokeWidth="1.2" fill="none" strokeLinecap="round" />
+          <path d="M59 28 Q67 24 77 28 M59 36 Q67 32 77 36" stroke="#f2b8c8" strokeWidth="1.2" fill="none" strokeLinecap="round" />
+          <path d={LOVE_HEART_PATH} transform="translate(50 10) scale(1.4) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 34 && (
+        /* 演唱会/话剧：吉他 */
+        <g>
+          <circle cx="40" cy="46" r="14" fill="#f2d8b8" stroke="#d3ab7e" strokeWidth="1.6" />
+          <circle cx="40" cy="46" r="5" fill="#fdf0e2" stroke="#d3ab7e" strokeWidth="1.2" />
+          <path d="M46 35 Q53 25 61 20 L67 14" stroke="#8a5a2e" strokeWidth="5" strokeLinecap="round" />
+          <path d="M64 10 l8 8" stroke="#8a5a2e" strokeWidth="6.5" strokeLinecap="round" />
+          <path d="M44 43 L62 19" stroke="#5f3d18" strokeWidth="1.1" />
+          <circle cx="62" cy="11" r="1.5" fill="#5f3d18" />
+          <circle cx="69" cy="9" r="1.5" fill="#5f3d18" />
+          <circle cx="20" cy="20" r="3" fill="#e88ba4" />
+          <rect x="21.6" y="6" width="1.8" height="14" fill="#e88ba4" />
+          <path d={LOVE_HEART_PATH} transform="translate(80 36) scale(1.4) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 35 && (
+        /* 放风筝 */
+        <g>
+          <path d="M50 8 L70 28 L50 48 L30 28 Z" fill="#f7c3d0" stroke="#efb0c4" strokeWidth="1.5" />
+          <path d="M50 8 L50 48 M30 28 L70 28" stroke="#fff" strokeWidth="1.4" opacity="0.8" />
+          <path d="M50 48 Q46 56 40 58 Q34 60 32 56" stroke="#e88ba4" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+          <path d="M42 55 l5 -2.4 l0 5 Z" fill="#ffd98a" />
+          <path d="M35 60 l5 -2.4 l0 5 Z" fill="#a8c8e8" />
+          <circle cx="20" cy="12" r="1.6" fill="#f3c8d3" />
+          <path d="M78 16 q4 -4 8 0" stroke="#f3c8d3" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 36 && (
+        /* 双人自行车 */
+        <g>
+          <circle cx="26" cy="48" r="9" fill="none" stroke="#5a5a62" strokeWidth="2" />
+          <circle cx="74" cy="48" r="9" fill="none" stroke="#5a5a62" strokeWidth="2" />
+          <path d="M26 48 L40 32 L62 32 M40 32 L36 48 M40 32 L74 48 M62 32 L74 48 M62 32 L58 48" fill="none" stroke="#e88ba4" strokeWidth="2" strokeLinecap="round" />
+          <path d="M34 29 h9 M56 29 h9" stroke="#5a5a62" strokeWidth="3" strokeLinecap="round" />
+          <path d="M64 29 q6 -4 8 2" stroke="#5a5a62" strokeWidth="2" fill="none" strokeLinecap="round" />
+          <path d="M62 30 L62 16" stroke="#5a5a62" strokeWidth="1.4" />
+          <path d={LOVE_HEART_PATH} transform="translate(62 12) scale(1.4) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 37 && (
+        /* 钓鱼 */
+        <g>
+          <path d="M14 18 Q20 34 34 38" stroke="#8a5a2e" strokeWidth="2.2" fill="none" strokeLinecap="round" />
+          <path d="M34 38 Q36 48 34 56" stroke="#9e9ea8" strokeWidth="1.2" fill="none" strokeDasharray="3 3" />
+          <path d="M34 56 q3 3 5.5 0" stroke="#9e9ea8" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+          <path d="M8 63 Q16 59 24 63 Q32 67 40 63" stroke="#8fc3e8" strokeWidth="2.2" fill="none" strokeLinecap="round" />
+          <ellipse cx="64" cy="32" rx="9" ry="5" fill="#a8c8e8" />
+          <path d="M72 32 L81 27 L81 37 Z" fill="#a8c8e8" />
+          <circle cx="59.5" cy="31" r="1.2" fill="#3a3a40" />
+          <path d="M56 46 l-2 4 M63 48 l0 4 M70 46 l2 4" stroke="#8fc3e8" strokeWidth="1.8" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 38 && (
+        /* 看樱花：花枝 */
+        <g>
+          <path d="M14 60 Q38 48 58 28" stroke="#8a5a2e" strokeWidth="2.6" fill="none" strokeLinecap="round" />
+          <path d="M42 46 Q50 46 56 52" stroke="#8a5a2e" strokeWidth="2" fill="none" strokeLinecap="round" />
+          {[[28, 34, 1], [58, 22, 0.9], [62, 52, 0.75]].map(([x, y, s], i) => (
+            <g key={i} transform={`translate(${x} ${y}) scale(${s})`}>
+              {[0, 72, 144, 216, 288].map((a) => (
+                <ellipse key={a} cx={Math.cos((a * Math.PI) / 180) * 6} cy={Math.sin((a * Math.PI) / 180) * 6} rx="4.6" ry="5.4" fill="#f9cdd8" />
+              ))}
+              <circle r="3" fill="#f2a9bc" />
+            </g>
+          ))}
+          <circle cx="82" cy="36" r="1.4" fill="#f3c8d3" />
+        </g>
+      )}
+      {k === 39 && (
+        /* 踩落叶 */
+        <g>
+          <path d="M28 20 Q37 11 46 20 Q37 31 28 20 Z" fill="#f2b45c" />
+          <path d="M28 20 Q37 23 46 20" stroke="#d99a3e" strokeWidth="1.2" fill="none" />
+          <path d="M37 20 L37 29" stroke="#d99a3e" strokeWidth="1" />
+          <path d="M58 34 Q64 27 70 34 Q64 43 58 34 Z" fill="#e8935c" />
+          <path d="M64 34 L64 43" stroke="#c97a42" strokeWidth="1" />
+          <path d="M34 48 Q40 42 46 48 Q40 56 34 48 Z" fill="#ffd98a" />
+          <circle cx="76" cy="16" r="1.4" fill="#f3c8d3" />
+          <path d="M14 40 q4 -4 8 0" stroke="#f3c8d3" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 40 && (
+        /* 养宠物：爪印 */
+        <g>
+          <ellipse cx="38" cy="46" rx="13" ry="10.5" fill="#f2d8b8" />
+          <circle cx="26.5" cy="32" r="4.6" fill="#f2d8b8" />
+          <circle cx="38" cy="28" r="4.8" fill="#f2d8b8" />
+          <circle cx="49.5" cy="32" r="4.6" fill="#f2d8b8" />
+          <ellipse cx="66" cy="24" rx="7" ry="5.6" fill="#f7c3d0" transform="rotate(-18 66 24)" />
+          <circle cx="60" cy="14.5" r="2.6" fill="#f7c3d0" />
+          <circle cx="66" cy="12" r="2.7" fill="#f7c3d0" />
+          <circle cx="72" cy="14.5" r="2.6" fill="#f7c3d0" />
+          <path d={LOVE_HEART_PATH} transform="translate(80 46) scale(1.5) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 41 && (
+        /* 写信/手写信/纸条：信封 */
+        <g>
+          <rect x="22" y="20" width="56" height="36" rx="3.5" fill="#fdf6ee" stroke="#e8cdb2" strokeWidth="1.8" />
+          <path d="M22 23 L50 43 L78 23" fill="none" stroke="#e8cdb2" strokeWidth="1.8" />
+          <path d={LOVE_HEART_PATH} transform="translate(50 49) scale(1.6) translate(-4.5 -3.5)" fill="#f2a9bc" />
+          <circle cx="15" cy="15" r="1.6" fill="#f3c8d3" />
+          <circle cx="86" cy="30" r="1.3" fill="#f3c8d3" />
+        </g>
+      )}
+      {k === 42 && (
+        /* 生病照顾/剪指甲：护理箱 */
+        <g>
+          <rect x="26" y="24" width="48" height="32" rx="5" fill="#fff" stroke="#d3cfc8" strokeWidth="1.8" />
+          <path d="M42 24 L42 18 Q42 15 45 15 L55 15 Q58 15 58 18 L58 24" fill="none" stroke="#d3cfc8" strokeWidth="1.8" />
+          <rect x="45" y="31" width="10" height="18" rx="2" fill="#f2a9bc" />
+          <rect x="41" y="35" width="18" height="10" rx="2" fill="#f2a9bc" />
+          <circle cx="82" cy="20" r="1.5" fill="#f3c8d3" />
+          <path d="M14 62 h8" stroke="#f3c8d3" strokeWidth="1.6" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 43 && (
+        /* 恋爱条约/真心话：纸笔 */
+        <g>
+          <g transform="rotate(-3 48 37)">
+            <rect x="26" y="16" width="44" height="42" rx="3" fill="#fdf6ee" stroke="#e8cdb2" strokeWidth="1.8" />
+            <path d="M33 26 L61 24 M33 33 L61 31 M33 40 L53 38" stroke="#d8c6a8" strokeWidth="1.6" strokeLinecap="round" />
+          </g>
+          <path d="M62 52 L80 34 L84 38 L66 56 L60 58 Z" fill="#f7c3d0" stroke="#efb0c4" strokeWidth="1.3" />
+          <path d="M60 58 L55.5 62.5" stroke="#8a5a2e" strokeWidth="2" strokeLinecap="round" />
+          <path d={LOVE_HEART_PATH} transform="translate(80 18) scale(1.3) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 44 && (
+        /* 梦想基金：存钱罐 */
+        <g>
+          <circle cx="49" cy="11" r="4.6" fill="#ffd98a" stroke="#f2b45c" strokeWidth="1.2" />
+          <text x="49" y="13.8" fontSize="6.5" fontWeight="bold" fill="#b8860b" textAnchor="middle">¥</text>
+          <rect x="42" y="21" width="15" height="3.4" rx="1.7" fill="#d9899d" />
+          <ellipse cx="49" cy="41" rx="23" ry="16.5" fill="#f7c3d0" />
+          <path d="M62 27 Q69 22 69 29 Q65 31.5 61 29 Z" fill="#f2a9bc" />
+          <ellipse cx="27" cy="41" rx="5.5" ry="4.6" fill="#f2a9bc" />
+          <circle cx="25.4" cy="41" r="1" fill="#c97a8e" />
+          <circle cx="28.6" cy="41" r="1" fill="#c97a8e" />
+          <path d="M37 56 L37 60 M59 56 L59 60" stroke="#f2a9bc" strokeWidth="3.4" strokeLinecap="round" />
+          <path d="M71 54 Q76 56 75 61" stroke="#f2a9bc" strokeWidth="2.4" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 45 && (
+        /* 攒钱旅行/蜜月：行李箱 */
+        <g>
+          <rect x="30" y="22" width="40" height="34" rx="6" fill="#b8d4ea" stroke="#9bbcd8" strokeWidth="1.6" />
+          <path d="M40 22 L40 56 M60 22 L60 56" stroke="#9bbcd8" strokeWidth="2" />
+          <path d="M44 22 L44 15 Q44 13 46 13 L54 13 Q56 13 56 15 L56 22" fill="none" stroke="#9bbcd8" strokeWidth="2.2" />
+          <circle cx="38" cy="59" r="2.6" fill="#5a5a62" />
+          <circle cx="62" cy="59" r="2.6" fill="#5a5a62" />
+          <path d={LOVE_HEART_PATH} transform="translate(50 40) scale(1.7) translate(-4.5 -3.5)" fill="#f2a9bc" />
+          <path d="M14 20 q4 -4 8 0" stroke="#f3c8d3" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 46 && (
+        /* 给爸妈打电话：电话 */
+        <g>
+          <rect x="30" y="16" width="40" height="42" rx="8" fill="#f7c3d0" stroke="#efb0c4" strokeWidth="1.6" />
+          <rect x="36" y="24" width="28" height="21" rx="3" fill="#fff" opacity="0.88" />
+          <path d={LOVE_HEART_PATH} transform="translate(50 34) scale(1.5) translate(-4.5 -3.5)" fill="#f2a9bc" />
+          <circle cx="50" cy="52" r="2.8" fill="#fff" />
+          <path d="M24 26 q-5 8 0 16 M76 26 q5 8 0 16" stroke="#f3c8d3" strokeWidth="1.8" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 47 && (
+        /* 拍vlog/视频：相机 */
+        <g>
+          <rect x="24" y="24" width="52" height="32" rx="6" fill="#c9c9d2" stroke="#9e9ea8" strokeWidth="1.6" />
+          <path d="M40 24 L44 17 L56 17 L60 24 Z" fill="#9e9ea8" />
+          <circle cx="50" cy="40" r="10" fill="#8e8e96" />
+          <circle cx="50" cy="40" r="6.5" fill="#dfe4ec" />
+          <circle cx="47.5" cy="37.5" r="2" fill="#fff" />
+          <circle cx="70" cy="31" r="2.2" fill="#ffd98a" />
+          <path d={LOVE_HEART_PATH} transform="translate(28 17) scale(1.2) translate(-4.5 -3.5)" fill="#f2a9bc" />
+        </g>
+      )}
+      {k === 48 && (
+        /* 双人游戏：手柄 */
+        <g>
+          <path d="M26 26 L74 26 Q85 26 85 41 Q85 54 76 54 Q69 54 65 45 L60 45 L40 45 L35 45 Q31 54 24 54 Q15 54 15 41 Q15 26 26 26 Z" fill="#f7c3d0" stroke="#efb0c4" strokeWidth="1.6" />
+          <path d="M32 35.5 h9 M36.5 31 v9" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
+          <circle cx="62" cy="33" r="2.8" fill="#a8c8e8" />
+          <circle cx="69" cy="39" r="2.8" fill="#8ed86e" />
+          <path d={LOVE_HEART_PATH} transform="translate(50 36) scale(1.3) translate(-4.5 -3.5)" fill="#e88ba4" />
+        </g>
+      )}
+      {k === 49 && (
+        /* 1000片拼图 */
+        <g>
+          <path d="M24 24 L48 24 L48 30 Q42 30 42 37 Q42 44 48 44 L48 52 L24 52 Z" fill="#f7c3d0" stroke="#efb0c4" strokeWidth="1.5" />
+          <path d="M52 24 L76 24 L76 52 L52 52 L52 44 Q58 44 58 37 Q58 30 52 30 Z" fill="#fce8ee" stroke="#f2b8c8" strokeWidth="1.5" />
+          <path d={LOVE_HEART_PATH} transform="translate(64 38) scale(1.6) translate(-4.5 -3.5)" fill="#f2a9bc" />
+          <circle cx="17" cy="17" r="1.5" fill="#f3c8d3" />
+        </g>
+      )}
+      {k === 50 && (
+        /* 搭积木 */
+        <g>
+          <rect x="24" y="38" width="25" height="21" rx="2.5" fill="#a8c8e8" stroke="#9bbcd8" strokeWidth="1.4" />
+          <rect x="51" y="38" width="25" height="21" rx="2.5" fill="#f7c3d0" stroke="#efb0c4" strokeWidth="1.4" />
+          <rect x="37.5" y="17" width="25" height="21" rx="2.5" fill="#ffd98a" stroke="#f2c14e" strokeWidth="1.4" />
+          <circle cx="36.5" cy="48.5" r="4" fill="#fff" opacity="0.85" />
+          <path d="M59.5 44.5 h9 M64 40 v9" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
+          <path d={LOVE_HEART_PATH} transform="translate(50 27.5) scale(1.4) translate(-4.5 -3.5)" fill="#fff" opacity="0.92" />
+        </g>
+      )}
+      {k === 51 && (
+        /* 晨跑/运动/鞋码：运动鞋 */
+        <g>
+          <path d="M22 46 Q22 38 30 36 L38 29 Q42 33.5 48 36 Q58 40 70 42 Q80 44 80 50 L80 53 L22 53 Z" fill="#fff" stroke="#c9c9d2" strokeWidth="1.8" />
+          <path d="M22 53 L80 53 L80 55.5 Q80 58.5 76 58.5 L26 58.5 Q22 58.5 22 55.5 Z" fill="#f2a9bc" />
+          <path d="M36 38 L44 42 M40 34 L48 38" stroke="#c9c9d2" strokeWidth="1.6" strokeLinecap="round" />
+          <path d={LOVE_HEART_PATH} transform="translate(64 47) scale(1.3) translate(-4.5 -3.5)" fill="#f2a9bc" />
+          <path d="M11 40 h9 M9 48 h9" stroke="#dfe4ec" strokeWidth="2" strokeLinecap="round" />
+        </g>
+      )}
+      {k === 52 && (
+        /* 生日快乐/庆祝14号：蛋糕 */
+        <g>
+          <rect x="48.4" y="15" width="3.2" height="13" rx="1.6" fill="#a8c8e8" />
+          <path d="M50 7.5 Q53.2 10.8 50 14.5 Q46.8 10.8 50 7.5 Z" fill="#ffd98a" />
+          <path d="M28 44 L28 32 Q28 28 32 28 L68 28 Q72 28 72 32 L72 44 Q61 49.5 50 44 Q39 49.5 28 44 Z" fill="#fce8ee" />
+          <rect x="28" y="42" width="44" height="15" rx="3" fill="#f7c3d0" />
+          <path d="M28 48 Q39 53.5 50 48 Q61 42.5 72 48" stroke="#f2a9bc" strokeWidth="2" fill="none" />
+          <circle cx="36" cy="31" r="2" fill="#e8647a" />
+          <circle cx="64" cy="31" r="2" fill="#e8647a" />
+        </g>
+      )}
+      {k === 53 && (
+        /* 恋爱日记/年度总结：日记本 */
+        <g>
+          <rect x="27" y="15" width="48" height="43" rx="4.5" fill="#fce8ee" stroke="#f2b8c8" strokeWidth="1.6" />
+          <rect x="27" y="15" width="11" height="43" rx="4.5" fill="#f2a9bc" />
+          {[24, 33, 42].map((y) => (
+            <circle key={y} cx="32.5" cy={y} r="1.7" fill="#fff" opacity="0.9" />
+          ))}
+          <path d={LOVE_HEART_PATH} transform="translate(56 32) scale(2.3) translate(-4.5 -3.5)" fill="#fff" opacity="0.92" />
+          <path d="M45 52 L67 52" stroke="#f2b8c8" strokeWidth="1.6" strokeLinecap="round" />
+          <path d="M49 58 L63 58" stroke="#f2b8c8" strokeWidth="1.4" strokeLinecap="round" />
+        </g>
+      )}
     </svg>
   );
 }
@@ -3255,6 +4159,31 @@ function ScrapFlower({ size = 64, className = '', tone = '#f6c3d0' }: { size?: n
 }
 
 const HUNDRED_DRAFT_DEFAULT = { img: null as string | null, desc: '', date: '', place: '' };
+
+/** 100 件小事：每件事对应的插画 kind（与 HUNDRED_LIST 顺序一一对应，图标匹配事件内容） */
+const HUNDRED_KIND_MAP: number[] = [
+  /* 0-4 */ 0, 1, 2, 3, 4,
+  /* 5-9 用情侣头像~做晚饭 */ 5, 5, 6, 7, 8,
+  /* 10-14 洗碗~给对方唱歌 */ 16, 17, 1, 9, 18,
+  /* 15-19 逛街情侣装~敷面膜 */ 3, 3, 2, 47, 19,
+  /* 20-24 吹头发~堆雪人 */ 20, 42, 16, 21, 21,
+  /* 25-29 冰淇淋~熬夜跨年 */ 22, 23, 13, 8, 24,
+  /* 30-34 倒数~踩浪花 */ 24, 24, 25, 11, 11,
+  /* 35-39 捡贝壳~看极光 */ 26, 27, 28, 12, 12,
+  /* 40-44 摩天轮~逛美术馆 */ 29, 30, 31, 31, 32,
+  /* 45-49 博物馆~演唱会 */ 32, 33, 33, 32, 34,
+  /* 50-54 话剧~打雪仗 */ 34, 18, 9, 7, 21,
+  /* 55-59 风筝~看樱花 */ 35, 36, 11, 37, 38,
+  /* 60-64 踩落叶~宠物生日 */ 39, 15, 15, 40, 40,
+  /* 65-69 写未来信~藏纸条 */ 41, 41, 10, 10, 41,
+  /* 70-74 鞋码~梦想基金 */ 51, 42, 0, 43, 44,
+  /* 75-79 攒钱旅行~童年秘密 */ 45, 45, 2, 0, 41,
+  /* 80-84 回母校~拍vlog */ 33, 0, 46, 53, 47,
+  /* 85-89 剪视频~真心话大冒险 */ 47, 48, 49, 50, 43,
+  /* 90-94 猜心情~学技能 */ 0, 51, 51, 33, 33,
+  /* 95-99 家乡菜~恋爱日记 */ 8, 24, 52, 52, 53,
+  /* 100-104 老地重游~一起白头 */ 6, 2, 14, 0, 12,
+];
 
 function HundredPage({ state, patch, close, showToast }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void; showToast: (m: string) => void }) {
   const PER_PAGE = 6;
@@ -3497,7 +4426,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
                   {it?.img ? (
                     <img src={it.img} alt={item} className="h-full w-full object-cover" draggable={false} />
                   ) : (
-                    <ScrapIllus kind={idx < 5 ? idx : 5 + ((idx - 5) % 11)} className="h-full w-full p-1.5" />
+                    <ScrapIllus kind={HUNDRED_KIND_MAP[idx] ?? idx % 16} className="h-full w-full p-1.5" />
                   )}
                 </span>
                 <span className={`mt-1 block min-h-[30px] text-center text-[11.5px] leading-snug ${checked ? 'text-[#c3a8b0] line-through' : 'text-[#6b5a52]'}`}>{item}</span>

@@ -577,6 +577,11 @@
     opacity: 0;
   }
 }
+/* 未来情书：信纸 textarea 占位符颜色 */
+.letter-pad::placeholder {
+  opacity: 0.42;
+  font-weight: 300;
+}
 @media (prefers-reduced-motion: reduce) {
   [animation\:couple-sub-in],
   [animation\:couple-pop-heart],
