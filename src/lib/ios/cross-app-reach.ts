@@ -28,6 +28,7 @@ import { genId } from './db';
 // 多账号（Task 40-2d v2）：跨 App 触达的机主身份按「目标 App 当前账号」取（ownerProfileFor）
 import { getContact, ownerProfileFor } from './contacts-store';
 import { getActiveAccountIdFor } from './accounts';
+import { getBranchMeta } from './branch-meta';
 import { avatarFor } from '@/lib/contacts';
 import { useSettings } from './store';
 import { BLOCK_CHANNEL, loadBlock, type BlockApp } from './block-state';
@@ -268,6 +269,9 @@ async function reachOne(
  */
 export function triggerCrossAppReach(blockedApp: BlockApp, contactId: string): void {
   if (!contactId) return;
+  // Task 38（5A）：分支角色仅微信语义——QQ/信息侧无其身份，被拉黑后不做跨 App 找人/延时来电，
+  // 防止在 QQ/信息凭空冒出分支会话
+  if (getBranchMeta(contactId)) return;
   // C1：10 分钟内已触发过一轮（反复解除→拉黑刷找人）则跳过
   const nowMs = Date.now();
   if (reachCooldownActive(contactId, nowMs)) return;
@@ -290,6 +294,8 @@ export function triggerCrossAppReach(blockedApp: BlockApp, contactId: string): v
  */
 export function triggerCrossAppReachByChar(blockedApp: BlockApp, contactId: string): void {
   if (!contactId) return;
+  // Task 38（5A）：同上——分支角色仅微信语义，AI 方向拉黑也不跨 App 找人
+  if (getBranchMeta(contactId)) return;
   // C1：与 byUser 方向共享同一份冷却（同联系人 10 分钟一轮）
   const nowMs = Date.now();
   if (reachCooldownActive(contactId, nowMs)) return;

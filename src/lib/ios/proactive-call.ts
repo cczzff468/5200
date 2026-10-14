@@ -37,6 +37,7 @@ import { markAiCall, recentAiCallWithin } from './ai-call-guard';
 import { getMemSettings, memRecallBlock } from '@/lib/memory';
 import { buildTimeAwareBlock } from '@/lib/time-aware';
 import { getReplyCount } from '@/lib/reply-count';
+import { isBranchBirthSilent } from './branch-meta';
 import type { ContactRecord } from '@/lib/contacts';
 
 // ---------------- 常量与档位（调参集中在这里） ----------------
@@ -620,7 +621,10 @@ async function tickInner(): Promise<void> {
       c.kind !== 'user' &&
       !!c.name?.trim() &&
       !loadBlock('sms', c.id).byUser &&
-      !loadBlock('sms', c.id).byChar
+      !loadBlock('sms', c.id).byChar &&
+      // Task 38（1A）：出生静默期的分支角色不主动来电——复制的历史聊天会让它刚出生就带着
+      // 「48h 内有互动」的资格且无冷却保护，时间线停在分支点的角色突然打来电话叙事穿帮
+      !isBranchBirthSilent(c.id)
   );
   if (contacts.length === 0) return;
 

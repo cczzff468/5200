@@ -19245,3 +19245,24 @@ Work Log:
 
 Stage Summary:
 - 产出 9 项决策清单（见会话输出）交用户选择；Task 38-b 待用户拍板后施工（编号 38-c）
+
+---
+Task ID: 38-b
+Agent: Z.ai Code (主控)
+Task: 角色分支规则修复（用户选定全推荐项：1A 出生静默期 / 2A 双认领修复 / 3A 同源互斥 / 4A 会话设置继承 / 5A 仅微信语义+跨App找人禁用 / 6A 时间感知继承 / 7A 8A 9A 保持现状）
+
+Work Log:
+- 新建 src/lib/ios/branch-meta.ts：注册表核心从 branch.ts 拆出（META_PREFIX/INDEX_KEY/CharBranchMeta/getBranchMeta/childBranchIds + 新增 branchRootIdOf/isBranchBirthSilent/BIRTH_SILENCE_MS），供 moments/proactive-call/cross-app-reach 无环引用；branch.ts re-export 保持 wechat.tsx/branch-dialog.tsx 既有 import 路径兼容
+- branch.ts createCharacterBranch 插入 8.5 步骤（4A）：复制 回复条数(chat-reply-counts)/时间感知(chat-time-aware)/翻译(chat-translate-cfg)/置顶静音背景标记(wx-chat-flags)/朋友圈自动发帖配置(moments-auto-cfg，显式配置过才复制) + 聊天背景图本体(chat-bg:wx:) + 联系人专属背景(peer-bg)
+- moments.ts（2A/3A/1A）：isPostByPeer 与 isInteractionByPeer 对分支角色禁用 legacy 名字兜底（只认 peerId，防与本体双认领旧动态）；drainInteractions 候选 eligible 加 !isBranchBirthSilent + picked 按 branchRootIdOf 同源去重（同一分支链一次结算只出场一位）；runAutoPosts 循环跳过静默期分支；新增导出 hasMomentAutoCfgEntry
+- proactive-call.ts（1A）：主动来电候选过滤加 !isBranchBirthSilent（防复制的历史聊天让分支刚出生就成为 48h 内活跃来电候选）
+- cross-app-reach.ts（5A）：triggerCrossAppReach 与 triggerCrossAppReachByChar 入口对分支角色直接 return（分支仅微信语义，防 QQ/信息凭空冒会话）
+- 出生静默期定义：创建后 24h 内、或用户尚未在分支会话主动聊过天（无 time>createdAt 的 me 消息）→ 不主动来电/不自动发帖/不自动互动；用户主动开聊即提前解除
+- 验证：bunx tsc --noEmit 零错误；lint 49 问题全为存量旧文件（与本次 5 个改动文件无关）
+- E2E（agent-browser 393×852）：建 USER 阿哲+CHAR 小柚 → 微信注册登录加好友 → 聊天（AI 正常回复）→ 聊天设置设回复条数3/置顶/时间感知 → 长按我的消息(750ms) → 分支菜单 → 弹窗（分支点/复制清单正确）→ 创建「柚柚·分支」
+- E2E 数据验证全通过：chat-reply-counts/chat-time-aware/wx-chat-flags 三键分支条目与原角色一致；char-branch-meta(parentId/rootId/pointPreview)正确；分支聊天 3 条 vs 原 6 条（精确切到分支点）；mem-frag 复制；通讯录出现「柚柚·分支」带徽标；分支会话发消息 AI 正常回复；发消息后 newMeMsgs=1 → 静默解除数据条件变 false（1A 解除机制验证）；朋友圈原角色新动态与分支副本并存无崩溃；dev.log 干净（仅存量 instrumentation 警告）
+
+Stage Summary:
+- 交付：分支出生静默期（来电/发帖/互动三引擎隔离+首聊解除）、朋友圈双认领修复、同源互斥、6 类会话设置+2 类背景图继承、跨App找人分支禁用
+- 改动文件：src/lib/ios/branch-meta.ts（新）/branch.ts/moments.ts/proactive-call.ts/cross-app-reach.ts
+- 7A/8A/9A（朋友圈互评允许/允许入群/主动消息不继承）为保持现状决策，无代码改动

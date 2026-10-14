@@ -19,56 +19,28 @@
 
 import { kvDel, kvGet, kvGetRaw, kvSet, kvSetRaw } from '@/lib/ios/idb-kv';
 import { getActiveAccountIdFor, MAIN_ACCOUNT_ID } from '@/lib/ios/accounts';
-import { createContact, deleteContact, getContact, listContacts, setAppFriendFlag } from '@/lib/ios/contacts-store';
+import { createContact, deleteContact, getContact, listContacts, setAppFriendFlag, getChatBgImage, setChatBgImage, getPeerBg, setPeerBg } from '@/lib/ios/contacts-store';
+import {
+  branchRootIdOf,
+  childBranchIds,
+  getBranchMeta,
+  INDEX_KEY,
+  META_PREFIX,
+  type CharBranchMeta,
+} from '@/lib/ios/branch-meta';
 import { genId } from '@/lib/ios/db';
-import { appendCopiedWxMomentPosts, listMomentPosts, type MomentPostView } from '@/lib/moments';
+import { appendCopiedWxMomentPosts, getMomentAutoCfg, hasMomentAutoCfgEntry, listMomentPosts, saveMomentAutoCfg, type MomentPostView } from '@/lib/moments';
 import { getBoundBookIds, loadBooks, saveBooks, setBoundBookIds, type WorldBook } from '@/lib/ios/worldbook';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import type { MemCore, MemFragment, MemLongTerm } from '@/lib/memory-core';
+import { getReplyCount, hasReplyCount, saveReplyCount } from '@/lib/reply-count';
+import { getTimeAware, setTimeAware } from '@/lib/time-aware';
+import { getTranslateCfg, saveTranslateCfg } from '@/lib/chat-translate';
+import { wxChatFlags } from '@/lib/chat-flags';
 
-// ---------------- 注册表（设备级键：无 wx-/qq- 前缀 → idb-kv 不加账号后缀） ----------------
-
-const META_PREFIX = 'char-branch-meta:';
-const INDEX_KEY = 'char-branch-index';
-
-export interface CharBranchMeta {
-  /** 直接父角色（分支来源；嵌套分支的父辈也可能是分支） */
-  parentId: string;
-  /** 分支链头（本分支若再被分支，其子分支 rootId 仍指向这里记录的源头） */
-  rootId: string;
-  /** 分支点消息 id（复制聊天记录到该条为止，含该条） */
-  pointMsgId: string;
-  /** 分支点时间（消息 time；记忆/朋友圈按它过滤） */
-  pointTime: number;
-  /** 分支点消息内容摘要（详情页/提示参考） */
-  pointPreview: string;
-  /** 分支创建时间 */
-  createdAt: number;
-  /** 分支时为专属世界书生成的克隆书 id（删除分支时一并清理，原书不动） */
-  clonedBookIds?: string[];
-}
-
-/** 读某联系人的分支元数据（非分支角色返回 null） */
-export function getBranchMeta(contactId: string): CharBranchMeta | null {
-  try {
-    const raw = kvGet<CharBranchMeta>(`${META_PREFIX}${contactId}`);
-    if (raw && typeof raw === 'object' && typeof raw.parentId === 'string' && raw.parentId) return raw;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** 读某角色的直接子分支 id 列表（无分支返回空数组） */
-export function childBranchIds(parentId: string): string[] {
-  try {
-    const index = kvGet<Record<string, string[]>>(INDEX_KEY);
-    const list = index?.[parentId];
-    return Array.isArray(list) ? list.filter((x) => typeof x === 'string') : [];
-  } catch {
-    return [];
-  }
-}
+// 注册表实现拆到 branch-meta.ts（供朋友圈/来电/跨App找人引擎无环引用），这里 re-export 保持既有 import 路径
+export { getBranchMeta, childBranchIds, branchRootIdOf, isBranchBirthSilent } from '@/lib/ios/branch-meta';
+export type { CharBranchMeta } from '@/lib/ios/branch-meta';
 
 /** 分支默认名：「原名·分支」（朋友圈/会话归属按 peerId + 署名，分支必须与原角色不同名防串） */
 export function defaultBranchName(sourceName: string): string {
@@ -341,6 +313,37 @@ export async function createCharacterBranch(opts: CreateBranchOptions): Promise<
       if (newBound.length > 0) setBoundBookIds(newId, newBound);
       if (clones.length > 0) saveBooks([...books, ...clones]);
     }
+  } catch {
+    // 忽略
+  }
+
+  // 8.5 会话级设置继承（Task 38-4A）：分支打开即和原角色同一套聊天体验——
+  // 回复条数 / 时间感知开关 / 翻译配置 / 置顶·免打扰·背景标记 / 朋友圈自动发帖配置
+  // （原角色显式配置过才复制，没配置过两边同走默认）。localStorage 侧任一失败不阻断。
+  try {
+    const srcKey = `wx:${opts.sourceId}`;
+    const newKey = `wx:${newId}`;
+    if (hasReplyCount(srcKey)) saveReplyCount(newKey, getReplyCount(srcKey));
+    setTimeAware(newKey, getTimeAware(srcKey));
+    saveTranslateCfg(newKey, getTranslateCfg(srcKey));
+    const flags = wxChatFlags.get()[opts.sourceId];
+    if (flags) wxChatFlags.update(newId, flags);
+    if (hasMomentAutoCfgEntry(opts.sourceId, 'wx')) {
+      saveMomentAutoCfg(newId, 'wx', getMomentAutoCfg(opts.sourceId, 'wx'));
+    }
+  } catch {
+    // 忽略
+  }
+  // 背景图本体（IndexedDB settings store）：微信聊天背景 + 联系人专属背景（朋友圈/资料页）。失败不阻断。
+  try {
+    const bg = await getChatBgImage('wx', opts.sourceId);
+    if (bg) await setChatBgImage('wx', newId, bg);
+  } catch {
+    // 忽略
+  }
+  try {
+    const peerBg = await getPeerBg('wx', opts.sourceId);
+    if (peerBg) await setPeerBg('wx', newId, peerBg);
   } catch {
     // 忽略
   }

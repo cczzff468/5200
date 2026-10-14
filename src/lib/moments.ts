@@ -30,6 +30,7 @@
 
 import { kvGet, kvSet, kvDel } from '@/lib/ios/idb-kv';
 import { playNotifySound } from '@/lib/ios/notify-sound';
+import { branchRootIdOf, getBranchMeta, isBranchBirthSilent } from '@/lib/ios/branch-meta';
 import { contactByRef, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { useSettings, type ApiConfig } from '@/lib/ios/store';
 import { contactRealName, listContacts, ownerRealName, ownerRealNameFor } from '@/lib/ios/contacts-store';
@@ -698,6 +699,9 @@ export function isPostByPeer(
 ): boolean {
   if (post.author !== 'char') return false;
   if (post.peerId && post.peerId === peer.id) return true;
+  // Task 38（2A）：分支角色只认 peerId 精确归属——legacy 名字兜底会让分支与本体双认领同一条
+  // 旧动态（分支后来改名贴近原名时尤甚），两边同时把同一条动态当成自己发的
+  if (getBranchMeta(peer.id)) return false;
   return post.authorName === displayNameOf(peer) || post.authorName === peer.name;
 }
 
@@ -708,6 +712,8 @@ function isInteractionByPeer(
 ): boolean {
   if (x.author !== 'char') return false;
   if (x.peerId && x.peerId === peer.id) return true;
+  // Task 38（2A）：分支角色同款只认 peerId（防与本体双认领同一条 legacy 点赞/评论）
+  if (getBranchMeta(peer.id)) return false;
   const nm = x.authorName ?? x.name ?? '';
   return nm === displayNameOf(peer) || nm === peer.name;
 }
@@ -1789,6 +1795,16 @@ export function saveMomentAutoCfg(contactId: string, platform: MomentPlatform, p
   return next;
 }
 
+/** 该角色在某平台是否【显式配置过】自动发帖（区分「用户设置过」与「走默认」；分支继承用，Task 38-4A） */
+export function hasMomentAutoCfgEntry(contactId: string, platform: MomentPlatform): boolean {
+  try {
+    const v = loadAutoCfgMap()[cfgKeyOf(contactId, platform)];
+    return !!v && typeof v === 'object';
+  } catch {
+    return false;
+  }
+}
+
 // ---------------- AI 生成（走 /api/moments/generate；用户 API 配置优先，服务端 SDK 兜底） ----------------
 
 function personaOf(peer: ContactRecord): Record<string, string | null> {
@@ -2497,6 +2513,8 @@ async function drainInteractions(
       const post = listMomentPosts(item.platform, userName, freshContacts).find((p) => p.id === item.postId);
       if (!post) continue; // 已删除
       const eligible = (p: ContactRecord): boolean =>
+        // Task 38（1A）：出生静默期的分支角色不参与自动互动（不点赞/不评论/不转发）
+        !isBranchBirthSilent(p.id) &&
         // 发帖人不能给自己的动态点赞/评论（防「AI 自己给自己评论」的核心修复）
         !(post.author === 'char' && isPostByPeer(post, p)) &&
         !post.likes.some((l) => isInteractionByPeer(l, p)) &&
@@ -2517,7 +2535,16 @@ async function drainInteractions(
       }
       // 随机挑 1-2 位（动态像真人刷到一样陆续有互动）
       const shuffled = [...candidates].sort(() => Math.random() - 0.5);
-      const picked = shuffled.slice(0, Math.random() < 0.5 ? 1 : 2);
+      const pickedAll = shuffled.slice(0, Math.random() < 0.5 ? 1 : 2);
+      // Task 38（3A）：同源互斥——同一分支链（rootId 相同）的角色一次结算只出场一位，
+      // 防止本体+分支（同一个人设）前后脚给同一条动态发雷同评论/双点赞
+      const seenRoots = new Set<string>();
+      const picked = pickedAll.filter((p) => {
+        const root = branchRootIdOf(p.id);
+        if (seenRoots.has(root)) return false;
+        seenRoots.add(root);
+        return true;
+      });
       // feat-64：点赞/评论概率按平台独立
       const settings = getMomentsSettings(item.platform);
       let produced = false; // 本轮是否实际产生了互动
@@ -2572,6 +2599,8 @@ async function runAutoPosts(deps: MomentTickDeps, now: number): Promise<void> {
     const userName = platform === 'wx' ? deps.wxUserName : deps.qqUserName;
     if (!userName) continue;
     for (const peer of peersForPlatform(deps.contacts, platform)) {
+      // Task 38（1A）：出生静默期的分支角色暂不自动发帖（创建后 24h 内、或用户尚未主动聊过天）
+      if (isBranchBirthSilent(peer.id)) continue;
       const cfg = getMomentAutoCfg(peer.id, platform);
       if (!cfg.enabled) continue;
       const last = lastCharPostAt(platform, userName, peer);
