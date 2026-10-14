@@ -19435,3 +19435,21 @@ Work Log:
 Stage Summary:
 - 仅改动 couple-space.tsx（+541/-305 行）与 globals.css（+9 行）；git 提交并推送 origin main
 - 关键决策：①MoodFace 以 emoji 作状态键（旧数据零迁移）②爱情树每 20 成长值=1 级、本级进度 x/20、5 级封顶 ③连续浇树跨天断签归 1 ④DecoMap 纯 SVG 内联（无新图片资源，路线动画走 CSS dashoffset）
+
+---
+Task ID: fix-preview
+Agent: Z.ai Code (main)
+Task: 用户报告"预览不显示"，诊断并恢复 dev 服务器
+
+Work Log:
+- 检查 dev.log 发现进程曾 Ready 但已退出；ps 确认无 next dev 进程
+- 多次后台重启均存活数十秒后消失；dmesg 发现根因：OOM killer 反复击杀 next-server（4.1GB 内存机器，编译首页时 RSS 峰值 ~2GB，历史已有 4 次 OOM 击杀记录）
+- pkill 遗留 agent-browser chrome 进程释放 ~600MB 内存
+- rm -rf .next 清缓存 + 限制 NODE_OPTIONS=--max-old-space-size=1536 重启
+- curl 确认 GET / 200（编译 17s，缓存后快速响应）
+- agent-browser 端到端验证：锁屏渲染正常 → 鼠标手势上滑解锁成功 → 主屏 APP 网格正常 → 无控制台错误 → /api/push 200
+
+Stage Summary:
+- 预览已恢复，根因是 OOM 击杀 dev 进程；页面已编译进 .next 缓存
+- 注意事项：本机内存仅 4.1GB，避免同时运行 chrome + 大量编译；若预览再挂按上述流程重启（pkill chrome → rm .next → start-dev.sh）
+- 无代码改动，无需 commit
