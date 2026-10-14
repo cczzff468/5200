@@ -19348,3 +19348,22 @@ Stage Summary:
 - 交付：五端统一错误提示（分类文案+居中灰字+长按菜单+失败冷却+不落聊天记录/不进记忆）与草稿箱（IndexedDB 持久化+账号+App+会话隔离+发送清空+2000字截断）
 - 改动文件：新增 chat-errors.ts/chat-drafts.ts/chat-error-line.tsx；改 voice-player.ts/wechat.tsx/qq.tsx/chat.tsx/wx-group.tsx/qq-group.tsx/groups.ts/music-search.tsx/phone.tsx
 - 范围确认：现有单聊/群聊/记忆/世界书/时间感知/回复条数/朋友圈/识图/红包转账/长按菜单/群管理/拉黑/语音/通话/视频/查手机/音乐/桌面/淘宝/美团/支付宝/角色分支全部零语义改动（纯增量插入）
+
+---
+Task ID: setup-clone
+Agent: Z.ai Code (主控)
+Task: 从 GitHub 拉取 cczzff468/5200 仓库到本地工作环境，配置远程推送，验证项目可运行
+
+Work Log:
+- git clone https://github.com/cczzff468/5200.git 至 /home/z/5200-repo（token 认证，3388 文件，607MB）
+- 将仓库全部内容同步至工作目录 /home/z/my-project（含 .git 历史、db/custom.db、upload/ 素材）
+- git remote set-url origin 指向带 token 的仓库地址（fetch/push 均可用），分支 main 与 origin/main 同步
+- bun install 补装差异依赖（@types/web-push、idb、jsmediatags、remark-gfm、web-push 等 29 包）
+- bunx prisma generate 生成客户端（.env 已含 DATABASE_URL=file:/home/z/my-project/db/custom.db）
+- 启动 dev server（setsid bash start-dev.sh 持久化，避免沙箱回收进程）
+- Agent Browser 验证：锁屏渲染✓→上滑解锁✓→主屏全部 App 与插件✓→/api/weather 200✓；console 无错误
+
+Stage Summary:
+- 仓库已完整落地 /home/z/my-project 并可正常运行（Next.js 16.1.3 + Turbopack，端口 3000）
+- git remote origin 已配好 token 推送权限，后续改动可 commit 后 git push origin main 回传 GitHub
+- 最新提交：21eac54 Task 39 错误提示优化+草稿箱（五端统一）；等待用户提出新的修改/新增功能需求
