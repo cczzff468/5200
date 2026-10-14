@@ -27,22 +27,30 @@ import {
   ArrowLeft,
   BadgeCheck,
   BookHeart,
+  Cake,
   CalendarClock,
   CalendarDays,
   Camera,
   Check,
   ChevronRight,
   Compass,
+  Crosshair,
+  Crown,
   Gem,
+  Gift,
   Heart,
   Headphones,
+  HelpCircle,
   IdCard,
   Image as ImageIcon,
+  ImagePlus,
   Landmark,
   Loader2,
+  MapPin,
   MessageCircleHeart,
   NotebookPen,
   Pencil,
+  Plane,
   Plus,
   RefreshCcw,
   Scale,
@@ -82,10 +90,15 @@ interface CoupleState {
   homeBg: string | null; // 首页合影背景 dataURL；null = 内置默认图
   missYou: number; // 每天想你累计次数
   missYouByDay: Record<string, number>; // 'YYYY-MM-DD' → 当日次数
+  missSince: string | null; // 首次点击「每天想你」的日期；非空后首页大圆消失、头像下显示想念天数
+  gender: string; // 我的性别（恋爱资料页）
+  coupleNo: string; // 情侣号（自动生成）
+  logins: number[]; // 登录记录（时间戳）
+  annivExtra: { key: string; label: string; date: string }[]; // 纪念日列表（预设 + 自建）
   tree: number; // 爱情树成长值（浇水次数）
   letters: { id: string; text: string; at: number; openAfterDays: number }[]; // 未来情书
   albums: CoupleAlbum[];
-  moods: { id: string; emoji: string; text: string; at: number }[]; // 心情日记
+  moods: { id: string; emoji: string; text: string; at: number; photo?: string | null; dateKey?: string }[]; // 心情日记
   chronicle: { id: string; text: string; at: number }[]; // 恋爱编年史
   impressionsMe: string[]; // TA 眼中的我（标签）
   impressionsTa: string[]; // 我眼中的 TA（标签）
@@ -117,6 +130,11 @@ function defaultState(): CoupleState {
     homeBg: null,
     missYou: 0,
     missYouByDay: {},
+    missSince: null,
+    gender: '',
+    coupleNo: '',
+    logins: [],
+    annivExtra: [],
     tree: 0,
     letters: [],
     albums: [
@@ -301,6 +319,33 @@ function uid(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/** 生成情侣号（s + 9 位大小写字母数字，参考图样式如 sTCS9PFVKL） */
+function genCoupleNo(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let s = 's';
+  for (let i = 0; i < 9; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+
+/** 'YYYY-MM-DD' → 中文日期 + 星期（如 2006年6月20日 周二） */
+function fmtDateCn(key: string): string {
+  const d = new Date(`${key}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return key;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 周${['日', '一', '二', '三', '四', '五', '六'][d.getDay()]}`;
+}
+
+/** 距离最近一个生日的天数（ MM-DD 重复出现；当天→0，已过→明年） */
+function daysToNextMonthDay(md: string): number | null {
+  const m = /^\d{4}-(\d{2}-\d{2})$/.exec(md);
+  if (!m) return null;
+  const now = new Date();
+  const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let next = new Date(`${now.getFullYear()}-${m[1]}T00:00:00`);
+  if (Number.isNaN(next.getTime())) return null;
+  if (next.getTime() < base.getTime()) next = new Date(next.getTime() + 365 * 86400000 + 6 * 3600000);
+  return Math.round((next.getTime() - base.getTime()) / 86400000);
+}
+
 /** 像素爱心（参考图「我们」页双头像之间的小像素心，白灰配色） */
 function PixelHeart({ size = 40 }: { size?: number }) {
   const px = size / 7;
@@ -376,7 +421,7 @@ export default function CoupleSpaceApp() {
     setSub(null);
   }, []);
 
-  /** 首次进入：预填「我」的信息卡资料 + 联系人第一位 AI 角色作为恋人 */
+  /** 首次进入：预填「我」的信息卡资料 + 联系人第一位 AI 角色作为恋人；记录登录 + 生成情侣号 */
   useEffect(() => {
     if (bootFilled.current) return;
     bootFilled.current = true;
@@ -386,28 +431,35 @@ export default function CoupleSpaceApp() {
         const cur = loadCoupleState();
         const needMe = !cur.meName;
         const needTa = !cur.taName;
-        if (!needMe && !needTa) return;
-        let taName = '';
-        let taAvatar: string | null = null;
-        if (needTa) {
-          try {
-            const list = await listContacts();
-            const c = list.find((x) => x.kind === 'char');
-            if (c) {
-              taName = c.nickname || c.remark || c.name || '';
-              taAvatar = c.avatar || null;
+        const meta: Partial<CoupleState> = {};
+        if (!cur.coupleNo) meta.coupleNo = genCoupleNo();
+        // 登录记录：每次会话记一条（去重到分钟），只留最近 20 条
+        const last = cur.logins[0];
+        if (!last || Date.now() - last > 60_000) meta.logins = [Date.now(), ...cur.logins].slice(0, 20);
+        if (needMe || needTa || Object.keys(meta).length > 0) {
+          let taName = '';
+          let taAvatar: string | null = null;
+          if (needTa) {
+            try {
+              const list = await listContacts();
+              const c = list.find((x) => x.kind === 'char');
+              if (c) {
+                taName = c.nickname || c.remark || c.name || '';
+                taAvatar = c.avatar || null;
+              }
+            } catch {
+              /* 联系人拉取失败静默，保留空值 */
             }
-          } catch {
-            /* 联系人拉取失败静默，保留空值 */
           }
+          setState((prev) => ({
+            ...prev,
+            ...meta,
+            meName: prev.meName || (needMe ? me.name : prev.meName),
+            meAvatar: prev.meAvatar ?? (needMe ? me.avatar : prev.meAvatar),
+            taName: prev.taName || taName,
+            taAvatar: prev.taAvatar ?? taAvatar,
+          }));
         }
-        setState((prev) => ({
-          ...prev,
-          meName: prev.meName || (needMe ? me.name : prev.meName),
-          meAvatar: prev.meAvatar ?? (needMe ? me.avatar : prev.meAvatar),
-          taName: prev.taName || taName,
-          taAvatar: prev.taAvatar ?? taAvatar,
-        }));
       } catch {
         /* 预填失败静默 */
       }
@@ -416,14 +468,17 @@ export default function CoupleSpaceApp() {
 
   const days = daysSince(state.anniversary);
   const homeBgSrc = state.homeBg || '/couple-home-bg.png';
+  /** 「想他/想我」天数：首次点击每天想那一天起算 */
+  const missDays = state.missSince ? daysSince(state.missSince) : null;
 
-  /** 每天想你 +1 */
+  /** 每天想你 +1（首次点击记录 missSince，之后首页大圆消失改为头像下想念天数） */
   const tapMissYou = useCallback(() => {
     setState((prev) => {
       const k = todayKey();
       const next: CoupleState = {
         ...prev,
         missYou: prev.missYou + 1,
+        missSince: prev.missSince || k,
         missYouByDay: { ...prev.missYouByDay, [k]: (prev.missYouByDay[k] || 0) + 1 },
       };
       kvSetDebounced(STATE_KEY, next);
@@ -513,13 +568,22 @@ export default function CoupleSpaceApp() {
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-[linear-gradient(180deg,#ffffff_0%,#f6f6f8_55%,#ececee_100%)] text-[#2c2c30]">
       <LocalToast msg={toast} />
 
+      {/* 全局背景：合影铺满整个 App，所有 Tab 共用；各 Tab 叠白纱保证可读 */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0">
+        <img src={homeBgSrc} alt="" className="h-full w-full object-cover" draggable={false} />
+        <div className="absolute inset-0 bg-white/70" />
+        {tab === 'home' && (
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.8)_0%,rgba(255,255,255,0.18)_34%,rgba(255,255,255,0.16)_58%,rgba(255,255,255,0.88)_100%)]" />
+        )}
+      </div>
+
       {/* 内容区 */}
-      <div className="relative flex-1 overflow-hidden">
+      <div className="relative z-10 flex-1 overflow-hidden">
         {tab === 'home' && (
           <HomePage
             state={state}
             days={days}
-            homeBgSrc={homeBgSrc}
+            missDays={missDays}
             tapMissYou={tapMissYou}
             openSub={openSub}
             onPickBg={async (f) => {
@@ -547,62 +611,64 @@ export default function CoupleSpaceApp() {
           />
         )}
         {tab === 'us' && <UsPage state={state} days={days} openSub={openSub} />}
-
-        {/* 子页（App 内全屏覆盖，滑入动画） */}
-        {sub && (
-          <div className="absolute inset-0 z-30 bg-[#f6f6f8] [animation:couple-sub-in_.26s_cubic-bezier(0.32,0.72,0,1)_both]">
-            <SubRouter
-              sub={sub}
-              state={state}
-              patch={patch}
-              albumId={albumId}
-              days={days}
-              tapMissYou={tapMissYou}
-              waterTree={waterTree}
-              close={closeSub}
-              showToast={showToast}
-              openSub={openSub}
-              onReset={resetAll}
-            />
-          </div>
-        )}
       </div>
 
-      {/* 底部 Tab 栏 */}
-      <nav aria-label="情侣空间导航" className="relative z-20 shrink-0 border-t border-black/[0.06] bg-white pb-4 pt-1.5">
-        <div className="grid grid-cols-4">
-          {([
-            { key: 'home', label: '首页', icon: Heart },
-            { key: 'discover', label: '发现', icon: Compass },
-            { key: 'album', label: '相册', icon: BookHeart },
-            { key: 'us', label: '我们', icon: Smile },
-          ] as const).map((t) => {
-            const active = tab === t.key;
-            const Icon = t.icon;
-            return (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => {
-                  setTab(t.key);
-                  closeSub();
-                }}
-                aria-label={t.label}
-                aria-current={active ? 'page' : undefined}
-                className="flex h-[56px] flex-col items-center justify-center gap-0.5 transition-opacity active:opacity-60"
-              >
-                <Icon
-                  className="h-[25px] w-[25px]"
-                  strokeWidth={active ? 2.5 : 1.9}
-                  fill={active && t.key === 'home' ? 'currentColor' : 'none'}
-                  color={active ? '#3a3a40' : '#b6b6bd'}
-                />
-                <span className={`text-[11px] ${active ? 'font-semibold text-[#3a3a40]' : 'text-[#b6b6bd]'}`}>{t.label}</span>
-              </button>
-            );
-          })}
+      {/* 底部 Tab 栏（子页打开时隐藏） */}
+      {!sub && (
+        <nav aria-label="情侣空间导航" className="relative z-20 shrink-0 border-t border-black/[0.06] bg-white/90 pb-3 pt-1 backdrop-blur-md">
+          <div className="grid grid-cols-4">
+            {([
+              { key: 'home', label: '首页', icon: Heart },
+              { key: 'discover', label: '发现', icon: Compass },
+              { key: 'album', label: '相册', icon: BookHeart },
+              { key: 'us', label: '我们', icon: Smile },
+            ] as const).map((t) => {
+              const active = tab === t.key;
+              const Icon = t.icon;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => {
+                    setTab(t.key);
+                    closeSub();
+                  }}
+                  aria-label={t.label}
+                  aria-current={active ? 'page' : undefined}
+                  className="flex h-[42px] flex-col items-center justify-center gap-[2px] transition-opacity active:opacity-60"
+                >
+                  <Icon
+                    className="h-[19px] w-[19px]"
+                    strokeWidth={active ? 2.5 : 1.9}
+                    fill={active && t.key === 'home' ? 'currentColor' : 'none'}
+                    color={active ? '#3a3a40' : '#b6b6bd'}
+                  />
+                  <span className={`text-[10px] leading-none ${active ? 'font-semibold text-[#3a3a40]' : 'text-[#b6b6bd]'}`}>{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      )}
+
+      {/* 子页（覆盖整个 App 含 Tab 栏，滑入动画） */}
+      {sub && (
+        <div className="absolute inset-0 z-30 bg-[#f6f6f8] [animation:couple-sub-in_.26s_cubic-bezier(0.32,0.72,0,1)_both]">
+          <SubRouter
+            sub={sub}
+            state={state}
+            patch={patch}
+            albumId={albumId}
+            days={days}
+            tapMissYou={tapMissYou}
+            waterTree={waterTree}
+            close={closeSub}
+            showToast={showToast}
+            openSub={openSub}
+            onReset={resetAll}
+          />
         </div>
-      </nav>
+      )}
     </div>
   );
 }
@@ -612,42 +678,61 @@ export default function CoupleSpaceApp() {
 function HomePage(props: {
   state: CoupleState;
   days: number | null;
-  homeBgSrc: string;
+  missDays: number | null;
   tapMissYou: () => void;
   openSub: (s: SubPage) => void;
   onPickBg: (f: File | null) => void;
 }) {
-  const { state, days, homeBgSrc, tapMissYou, openSub, onPickBg } = props;
+  const { state, days, missDays, tapMissYou, openSub, onPickBg } = props;
   const bgInput = useRef<HTMLInputElement | null>(null);
   const [pulse, setPulse] = useState(0);
 
+  /** 头像 + 下方想念天数徽标（点击「每天想你」后出现） */
+  const avatarCol = (side: 'me' | 'ta') => {
+    const isMe = side === 'me';
+    return (
+      <div className="flex w-[78px] flex-col items-center">
+        <CoupleAvatar src={isMe ? state.meAvatar : state.taAvatar} name={isMe ? state.meName : state.taName} size={52} />
+        {missDays != null && (
+          <button
+            type="button"
+            onClick={() => openSub('missyou')}
+            className="mt-1 rounded-full bg-white/90 px-2 py-[3px] text-[10px] font-medium leading-none text-[#5a5a62] shadow-[0_2px_8px_rgba(0,0,0,0.08)] backdrop-blur-sm transition-opacity active:opacity-60"
+          >
+            {isMe ? '想他' : '想我'} {missDays} 天
+          </button>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div className="h-full overflow-y-auto overscroll-contain">
-      <div className="px-5 pt-[64px]">
-        <h1 className="text-[32px] font-bold leading-tight tracking-tight">恋人空间</h1>
+    <div className="relative h-full overflow-y-auto overscroll-contain">
+      <div className="px-5 pt-[60px]">
+        <h1 className="text-[24px] font-bold leading-tight tracking-tight">恋人空间</h1>
       </div>
 
-      {/* 双头像 + 纪念日气泡 */}
-      <div className="mt-4 flex items-start justify-between px-6">
-        <CoupleAvatar src={state.meAvatar} name={state.meName} size={64} />
-        <div className="relative flex-1 px-2 pt-1">
+      {/* 双头像 + 纪念日气泡 + 想念天数 */}
+      <div className="mt-3 flex items-start justify-between px-4">
+        {avatarCol('me')}
+        <div className="relative flex-1 px-1.5 pt-1">
           {/* 虚线连接线 */}
-          <svg viewBox="0 0 200 40" className="absolute left-1 right-1 top-[26px] h-10 w-[calc(100%-8px)]" aria-hidden="true">
+          <svg viewBox="0 0 200 40" className="absolute left-1 right-1 top-[22px] h-9 w-[calc(100%-8px)]" aria-hidden="true">
             <path d="M6 14 C 60 -6, 80 40, 100 20 S 150 6, 194 26" fill="none" stroke="#c7c7ce" strokeWidth="2.5" strokeDasharray="6 6" strokeLinecap="round" />
           </svg>
           <button
             type="button"
             onClick={() => openSub('anniv')}
-            className="relative mx-auto flex min-h-[64px] w-[190px] items-center justify-center rounded-full border-[3px] border-[#e6e6ea] bg-white px-4 py-2.5 text-center shadow-[0_6px_16px_rgba(0,0,0,0.07)] transition-transform active:scale-[0.97]"
+            className="relative mx-auto flex min-h-[54px] w-[164px] items-center justify-center rounded-full border-2 border-white bg-white/90 px-3 py-2 text-center shadow-[0_6px_16px_rgba(0,0,0,0.09)] backdrop-blur-sm transition-transform active:scale-[0.97]"
           >
             {days == null ? (
-              <span className="text-[15px] font-semibold leading-snug text-[#4a4a52]">
+              <span className="text-[12.5px] font-semibold leading-snug text-[#4a4a52]">
                 点击设置你们
                 <br />
                 相恋的纪念日
               </span>
             ) : (
-              <span className="text-[15px] font-semibold leading-snug text-[#4a4a52]">
+              <span className="text-[12.5px] font-semibold leading-snug text-[#4a4a52]">
                 已相恋
                 <br />
                 {days} 天
@@ -655,93 +740,98 @@ function HomePage(props: {
             )}
           </button>
         </div>
-        <CoupleAvatar src={state.taAvatar} name={state.taName} size={64} />
+        {avatarCol('ta')}
       </div>
 
-      {/* 合影背景 + 每天想你大圆 */}
-      <div className="relative mt-2 h-[430px] w-full overflow-hidden">
-        { }
-        <img src={homeBgSrc} alt="我们的合影背景" className="h-full w-full object-cover" draggable={false} />
-        {/* 顶部渐隐过渡（融入白底） */}
-        <div aria-hidden="true" className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-[#f6f6f8] to-transparent" />
-
-        {/* 引号装饰 */}
-        <span aria-hidden="true" className="absolute left-[20%] top-[64px] select-none font-serif text-[54px] font-bold leading-none text-white/90 drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">“</span>
-        <span aria-hidden="true" className="absolute right-[20%] top-[64px] select-none font-serif text-[54px] font-bold leading-none text-white/90 drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">”</span>
-
-        {/* 每天想你大圆（点击打卡） */}
-        <button
-          type="button"
-          onClick={() => {
-            tapMissYou();
-            setPulse((p) => p + 1);
-          }}
-          aria-label="每天想你，点击打卡"
-          className="absolute left-1/2 top-[150px] h-[188px] w-[188px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle_at_32%_28%,#cfcfd6,#a9a9b2_68%,#96969f)] text-white shadow-[0_16px_44px_rgba(70,70,80,0.38)] transition-transform active:scale-[0.97]"
-        >
-          {/* 外圈光晕 */}
-          <span aria-hidden="true" className="absolute -inset-3 rounded-full bg-white/25" />
-          {/* 点击涟漪 */}
-          <span key={pulse} aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-full bg-white/40 [animation:couple-ripple-out_.7s_ease-out]" />
-          <span key={`t${pulse}`} className="relative block text-[26px] font-bold tracking-wide [animation:couple-pop-heart_.45s_ease-out]">
-            每天想你
-          </span>
-        </button>
-
-        {/* 右侧悬浮操作（每天想念记录 / 换背景） */}
-        <div className="absolute bottom-5 right-3 flex flex-col gap-3">
+      {/* 每天想你大圆：首次点击打卡后消失，改为头像下方想念天数 */}
+      {missDays == null ? (
+        <div className="relative mt-3 flex h-[286px] w-full items-start justify-center">
+          {/* 引号装饰 */}
+          <span aria-hidden="true" className="absolute left-[18%] top-[44px] select-none font-serif text-[44px] font-bold leading-none text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">&ldquo;</span>
+          <span aria-hidden="true" className="absolute right-[18%] top-[44px] select-none font-serif text-[44px] font-bold leading-none text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">&rdquo;</span>
+          <button
+            type="button"
+            onClick={() => {
+              tapMissYou();
+              setPulse((p) => p + 1);
+            }}
+            aria-label="每天想你，点击打卡"
+            className="relative top-[36px] flex h-[150px] w-[150px] items-center justify-center rounded-full bg-[radial-gradient(circle_at_32%_28%,#cfcfd6,#a9a9b2_68%,#96969f)] text-white shadow-[0_16px_40px_rgba(70,70,80,0.38)] transition-transform active:scale-[0.97]"
+          >
+            <span aria-hidden="true" className="absolute -inset-2.5 rounded-full bg-white/30" />
+            <span key={pulse} aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-full bg-white/40 [animation:couple-ripple-out_.7s_ease-out]" />
+            <span key={`t${pulse}`} className="relative block text-[20px] font-bold tracking-wide [animation:couple-pop-heart_.45s_ease-out]">
+              每天想你
+            </span>
+          </button>
+        </div>
+      ) : (
+        <div className="mt-4 flex justify-center">
           <button
             type="button"
             onClick={() => openSub('missyou')}
-            aria-label="每天想你记录"
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm transition-opacity active:opacity-70"
+            className="flex items-center gap-1.5 rounded-full bg-white/90 py-1.5 pl-3 pr-3.5 text-[12px] font-medium text-[#5a5a62] shadow-[0_4px_14px_rgba(0,0,0,0.08)] backdrop-blur-sm transition-opacity active:opacity-60"
           >
-            <Heart className="h-5 w-5" fill="none" />
-          </button>
-          <button
-            type="button"
-            onClick={() => bgInput.current?.click()}
-            aria-label="更换背景"
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm transition-opacity active:opacity-70"
-          >
-            <ImageIcon className="h-5 w-5" />
+            <Heart className="h-3.5 w-3.5 text-[#8e8e97]" fill="#c9c9cf" />
+            已互相想念 {missDays} 天 · 点我看记录
           </button>
         </div>
-        <input
-          ref={bgInput}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => {
-            onPickBg(e.target.files?.[0] ?? null);
-            e.currentTarget.value = '';
-          }}
-        />
-      </div>
+      )}
 
-      {/* 底部四功能卡（原彩色卡改为白灰系由深到浅的炭灰渐变） */}
-      <div className="grid grid-cols-4 gap-2 px-3 pb-6 pt-4">
+      {/* 右侧悬浮操作（想念记录 / 换背景） */}
+      <div className="absolute bottom-4 right-3 flex flex-col gap-2.5">
+        <button
+          type="button"
+          onClick={() => openSub('missyou')}
+          aria-label="每天想你记录"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition-opacity active:opacity-70"
+        >
+          <Heart className="h-4 w-4" fill="none" />
+        </button>
+        <button
+          type="button"
+          onClick={() => bgInput.current?.click()}
+          aria-label="更换背景"
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition-opacity active:opacity-70"
+        >
+          <ImageIcon className="h-4 w-4" />
+        </button>
+      </div>
+      <input
+        ref={bgInput}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          onPickBg(e.target.files?.[0] ?? null);
+          e.currentTarget.value = '';
+        }}
+      />
+
+      {/* 底部四功能卡（炭灰渐变，白灰主题） */}
+      <div className="grid grid-cols-4 gap-2 px-3 pb-5 pt-3">
         {([
-          { key: 'tree', label: '爱情小树\n成长记', grad: 'linear-gradient(160deg,#5c5c64,#3f3f46)', icon: <Sprout className="h-7 w-7" strokeWidth={1.9} /> },
-          { key: 'track', label: '情侣轨迹', grad: 'linear-gradient(160deg,#7c7c85,#5f5f68)', icon: <Compass className="h-7 w-7" strokeWidth={1.9} /> },
-          { key: 'quiz', label: '甜蜜\n小问答', grad: 'linear-gradient(160deg,#9c9ca5,#7f7f89)', icon: <MessageCircleHeart className="h-7 w-7" strokeWidth={1.9} /> },
-          { key: 'letters', label: '未来情书', grad: 'linear-gradient(160deg,#bcbcc4,#9e9ea8)', icon: <BookHeart className="h-7 w-7" strokeWidth={1.9} /> },
+          { key: 'tree', label: '爱情小树\n成长记', grad: 'linear-gradient(160deg,#5c5c64,#3f3f46)', icon: <Sprout className="h-6 w-6" strokeWidth={1.9} /> },
+          { key: 'track', label: '情侣轨迹', grad: 'linear-gradient(160deg,#7c7c85,#5f5f68)', icon: <Compass className="h-6 w-6" strokeWidth={1.9} /> },
+          { key: 'quiz', label: '甜蜜\n小问答', grad: 'linear-gradient(160deg,#9c9ca5,#7f7f89)', icon: <MessageCircleHeart className="h-6 w-6" strokeWidth={1.9} /> },
+          { key: 'letters', label: '未来情书', grad: 'linear-gradient(160deg,#bcbcc4,#9e9ea8)', icon: <BookHeart className="h-6 w-6" strokeWidth={1.9} /> },
         ] as const).map((c) => (
           <button
             key={c.key}
             type="button"
             onClick={() => openSub(c.key as SubPage)}
-            className="flex h-[104px] flex-col items-center justify-center gap-2 rounded-2xl text-white shadow-[0_8px_20px_rgba(60,60,70,0.22)] transition-transform active:scale-[0.96]"
+            className="flex h-[86px] flex-col items-center justify-center gap-1.5 rounded-2xl text-white shadow-[0_8px_20px_rgba(60,60,70,0.22)] transition-transform active:scale-[0.96]"
             style={{ background: c.grad }}
           >
             {c.icon}
-            <span className="whitespace-pre-line text-center text-[12px] font-medium leading-tight">{c.label}</span>
+            <span className="whitespace-pre-line text-center text-[11px] font-medium leading-tight">{c.label}</span>
           </button>
         ))}
       </div>
     </div>
   );
 }
+
 
 // ---------------- 发现页（图3） ----------------
 
@@ -762,22 +852,22 @@ const DISCOVER_GRID: { key: SubPage; label: string; icon: React.ReactNode }[] = 
 
 function DiscoverPage({ openSub }: { openSub: (s: SubPage) => void }) {
   return (
-    <div className="h-full overflow-y-auto overscroll-contain pb-6">
-      <div className="px-5 pt-[64px]">
-        <h1 className="text-[32px] font-bold leading-tight tracking-tight">发现</h1>
-        <p className="mt-1 text-[15px] text-[#8e8e96]">一起玩吧</p>
+    <div className="h-full overflow-y-auto overscroll-contain pb-5">
+      <div className="px-5 pt-[60px]">
+        <h1 className="text-[24px] font-bold leading-tight tracking-tight">发现</h1>
+        <p className="mt-0.5 text-[13px] text-[#8e8e96]">一起玩吧</p>
       </div>
 
       {/* 两张大卡 */}
-      <div className="mt-4 grid grid-cols-2 gap-3 px-4">
+      <div className="mt-3.5 grid grid-cols-2 gap-2.5 px-3">
         <button
           type="button"
           onClick={() => openSub('track')}
           className="overflow-hidden rounded-2xl bg-white shadow-[0_8px_22px_rgba(0,0,0,0.08)] transition-transform active:scale-[0.98]"
         >
           { }
-          <img src="/couple-map.png" alt="情侣轨迹" className="h-[150px] w-full rounded-t-2xl object-cover" draggable={false} />
-          <div className="flex h-[54px] items-center justify-center bg-[linear-gradient(135deg,#56565e,#38383f)] text-[19px] font-semibold text-white">
+          <img src="/couple-map.png" alt="情侣轨迹" className="h-[118px] w-full rounded-t-2xl object-cover" draggable={false} />
+          <div className="flex h-[44px] items-center justify-center bg-[linear-gradient(135deg,#56565e,#38383f)] text-[15px] font-semibold text-white">
             情侣轨迹
           </div>
         </button>
@@ -787,26 +877,26 @@ function DiscoverPage({ openSub }: { openSub: (s: SubPage) => void }) {
           className="overflow-hidden rounded-2xl bg-white shadow-[0_8px_22px_rgba(0,0,0,0.08)] transition-transform active:scale-[0.98]"
         >
           { }
-          <img src="/couple-house.png" alt="情侣小家" className="h-[150px] w-full rounded-t-2xl object-cover" draggable={false} />
-          <div className="flex h-[54px] items-center justify-center bg-[linear-gradient(135deg,#74747d,#55555e)] text-[19px] font-semibold text-white">
+          <img src="/couple-house.png" alt="情侣小家" className="h-[118px] w-full rounded-t-2xl object-cover" draggable={false} />
+          <div className="flex h-[44px] items-center justify-center bg-[linear-gradient(135deg,#74747d,#55555e)] text-[15px] font-semibold text-white">
             情侣小家
           </div>
         </button>
       </div>
 
       {/* 情感升温小技巧 3×4 宫格 */}
-      <h2 className="px-5 pb-3 pt-7 text-[19px] font-bold">情感升温小技巧</h2>
-      <div className="grid grid-cols-3 gap-x-3 gap-y-3 px-4 pb-4">
+      <h2 className="px-4 pb-2.5 pt-5 text-[16px] font-bold">情感升温小技巧</h2>
+      <div className="grid grid-cols-3 gap-x-2.5 gap-y-2.5 px-3 pb-3">
         {DISCOVER_GRID.map((it, i) => (
           <button
             key={it.key + String(i)}
             type="button"
             onClick={() => openSub(it.key)}
-            className="flex h-[104px] flex-col items-center justify-center gap-2.5 rounded-2xl transition-transform active:scale-[0.96]"
+            className="flex h-[86px] flex-col items-center justify-center gap-2 rounded-2xl transition-transform active:scale-[0.96]"
             style={{ background: ['#f7f7f9', '#f1f1f4', '#ebebee'][i % 3] }}
           >
             <span className="text-[#5a5a63]">{it.icon}</span>
-            <span className="px-1 text-center text-[14px] font-medium leading-tight text-[#3c3c42]">{it.label}</span>
+            <span className="px-1 text-center text-[12px] font-medium leading-tight text-[#3c3c42]">{it.label}</span>
           </button>
         ))}
       </div>
@@ -885,42 +975,53 @@ function AlbumPage(props: {
   const custom = state.albums.filter((a) => !['ta', 'chat', 'diary', 'anniv'].includes(a.id));
 
   return (
-    <div className="relative h-full overflow-y-auto overscroll-contain pb-28">
-      <div className="px-5 pt-[64px]">
-        <h1 className="text-[32px] font-bold leading-tight tracking-tight">相册</h1>
+    <div className="relative h-full overflow-y-auto overscroll-contain pb-24">
+      <div className="px-5 pt-[60px]">
+        <h1 className="text-[24px] font-bold leading-tight tracking-tight">相册</h1>
       </div>
 
-      {/* 四张固定上传卡 2×2 */}
-      <div className="mt-4 grid grid-cols-2 gap-3 px-4">
+      {/* 四张固定上传卡 2×2：点击整卡进入独立相册页 */}
+      <div className="mt-3.5 grid grid-cols-2 gap-2.5 px-1">
         {state.albums.slice(0, 4).map((a, i) => (
-          <div key={a.id} className="relative overflow-hidden rounded-2xl p-4 shadow-[0_6px_16px_rgba(0,0,0,0.05)]" style={{ background: ALBUM_TINTS[i] }}>
-            <div className="text-[20px] font-bold text-[#3a3a40]">{a.name}</div>
-            <div className="mt-1 text-[12.5px] leading-snug text-[#9a9aa2]">{a.desc}</div>
-            <button
-              type="button"
-              onClick={() => uploadTo(a.id)}
-              className="mt-3 rounded-full bg-white px-3.5 py-1.5 text-[13px] font-medium text-[#4a4a52] shadow-sm transition-opacity active:opacity-70"
-            >
-              立即上传
-            </button>
-            <button
-              type="button"
-              onClick={() => openAlbum(a.id)}
-              aria-label={`查看${a.name}`}
-              className="absolute bottom-3 right-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/80 text-[#6e6e76] transition-opacity active:opacity-60"
-            >
-              <ChevronRight className="h-4.5 w-4.5" />
-            </button>
-            <span aria-hidden="true" className="pointer-events-none absolute -bottom-2 -right-1 text-[#d9d9de]">
+          <button
+            key={a.id}
+            type="button"
+            onClick={() => openAlbum(a.id)}
+            className="relative overflow-hidden rounded-2xl p-3.5 text-left shadow-[0_6px_16px_rgba(0,0,0,0.05)] transition-transform active:scale-[0.98]"
+            style={{ background: ALBUM_TINTS[i] }}
+          >
+            <div className="text-[16px] font-bold text-[#3a3a40]">{a.name}</div>
+            <div className="mt-0.5 text-[11px] leading-snug text-[#9a9aa2]">{a.desc}</div>
+            <div className="mt-2 flex items-center gap-2">
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  uploadTo(a.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.stopPropagation();
+                    uploadTo(a.id);
+                  }
+                }}
+                className="rounded-full bg-white px-3 py-1 text-[11.5px] font-medium text-[#4a4a52] shadow-sm"
+              >
+                立即上传
+              </span>
+              <span className="text-[11px] text-[#b6b6bd]">{a.photos.length} 张</span>
+            </div>
+            <span aria-hidden="true" className="pointer-events-none absolute -bottom-1.5 -right-1 text-[#d9d9de]">
               {FIXED_ALBUM_ICONS[a.id]}
             </span>
-          </div>
+          </button>
         ))}
       </div>
 
       {/* 情侣私密相册 */}
-      <div className="mt-7 flex items-center justify-between px-5">
-        <h2 className="text-[22px] font-bold">情侣私密相册</h2>
+      <div className="mt-6 flex items-center justify-between px-1.5">
+        <h2 className="text-[17px] font-bold">情侣私密相册</h2>
         <button
           type="button"
           onClick={() => setManage((v) => !v)}
@@ -935,22 +1036,22 @@ function AlbumPage(props: {
         </button>
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-3 px-4">
+      <div className="mt-2.5 grid grid-cols-2 gap-2.5 px-1">
         {/* 新建 tile */}
         <button
           type="button"
           onClick={() => setCreating(true)}
           aria-label="新建相册"
-          className="flex h-[168px] items-center justify-center rounded-xl bg-[#f0f0f3] transition-opacity active:opacity-70"
+          className="flex h-[140px] items-center justify-center rounded-xl bg-[#f0f0f3]/90 transition-opacity active:opacity-70"
         >
-          <Plus className="h-12 w-12 text-[#c2c2c9]" strokeWidth={1.6} />
+          <Plus className="h-10 w-10 text-[#c2c2c9]" strokeWidth={1.6} />
         </button>
         {custom.map((a) => (
           <button
             key={a.id}
             type="button"
             onClick={() => openAlbum(a.id)}
-            className="relative h-[168px] overflow-hidden rounded-xl bg-[#e6e6ea] text-left transition-transform active:scale-[0.98]"
+            className="relative h-[140px] overflow-hidden rounded-xl bg-[#e6e6ea] text-left transition-transform active:scale-[0.98]"
           >
             {a.photos[0] ? (
                
@@ -987,10 +1088,10 @@ function AlbumPage(props: {
       <button
         type="button"
         onClick={() => setCreating(true)}
-        className="fixed bottom-[110px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-6 py-3 text-[17px] font-semibold text-white shadow-[0_10px_26px_rgba(60,60,68,0.35)] transition-transform active:scale-[0.97]"
+        className="fixed bottom-[86px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-5 py-2.5 text-[14px] font-semibold text-white shadow-[0_10px_26px_rgba(60,60,68,0.35)] transition-transform active:scale-[0.97]"
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/25">
-          <Plus className="h-4 w-4" />
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/25">
+          <Plus className="h-3.5 w-3.5" />
         </span>
         新建相册
       </button>
@@ -1036,41 +1137,71 @@ function AlbumPage(props: {
 
 // ---------------- 我们页（图5） ----------------
 
+/** 灰色小蝴蝶结（蕾丝装饰，白灰主题） */
+function LaceBow({ className = '', size = 26 }: { className?: string; size?: number }) {
+  return (
+    <svg width={size} height={size * 0.72} viewBox="0 0 30 22" fill="none" aria-hidden="true" className={className}>
+      <path d="M14 11 L3.5 4.5 C2 3.6 1 4.6 1.4 6.2 L3.6 13.4 C4 14.9 5.4 15.4 6.6 14.5 Z" fill="#e8e8ec" stroke="#c9c9d0" strokeWidth="1.1" strokeLinejoin="round" />
+      <path d="M16 11 L26.5 4.5 C28 3.6 29 4.6 28.6 6.2 L26.4 13.4 C26 14.9 24.6 15.4 23.4 14.5 Z" fill="#e8e8ec" stroke="#c9c9d0" strokeWidth="1.1" strokeLinejoin="round" />
+      <path d="M12.6 12.5 C11.8 15.5 12.4 18.2 13.8 20.2 M17.4 12.5 C18.2 15.5 17.6 18.2 16.2 20.2" stroke="#c9c9d0" strokeWidth="1.1" strokeLinecap="round" />
+      <circle cx="15" cy="10.6" r="3.1" fill="#dcdce1" stroke="#bdbdc5" strokeWidth="1.1" />
+    </svg>
+  );
+}
+
+/** 蕾丝圆点拱边（一排带圆点的半圆拱，参考图样式） */
+function LaceArches({ count = 16 }: { count?: number }) {
+  return (
+    <div aria-hidden="true" className="flex items-end justify-center gap-[5px]">
+      {Array.from({ length: count }).map((_, i) => (
+        <span key={i} className="relative block h-[13px] w-[15px] overflow-hidden rounded-t-full bg-[#f1f1f4] shadow-[inset_0_0_0_1px_#e4e4e9]">
+          <span className="absolute left-1/2 top-[3px] h-[3px] w-[3px] -translate-x-1/2 rounded-full bg-[#d6d6dc]" />
+          <span className="absolute left-[3px] top-[7.5px] h-[2px] w-[2px] rounded-full bg-[#dedee3]" />
+          <span className="absolute right-[3px] top-[7.5px] h-[2px] w-[2px] rounded-full bg-[#dedee3]" />
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function UsPage({ state, days, openSub }: { state: CoupleState; days: number | null; openSub: (s: SubPage) => void }) {
   const rows: { key: SubPage; label: string; icon: React.ReactNode; right?: React.ReactNode }[] = [
-    { key: 'profile', label: '恋爱资料', icon: <IdCard className="h-[22px] w-[22px]" strokeWidth={1.8} /> },
+    { key: 'profile', label: '恋爱资料', icon: <IdCard className="h-[19px] w-[19px]" strokeWidth={1.8} /> },
     {
       key: 'anniv',
       label: '纪念日',
-      icon: <CalendarDays className="h-[22px] w-[22px]" strokeWidth={1.8} />,
-      right: <span className="text-[14px] text-[#b6b6bd]">{state.anniversary ? `${state.anniversary}` : '你还没设置纪念日提醒哦'}</span>,
+      icon: <CalendarDays className="h-[19px] w-[19px]" strokeWidth={1.8} />,
+      right: <span className="max-w-[150px] truncate text-[12px] text-[#b6b6bd]">{state.anniversary ? `${state.anniversary}` : '还没设置纪念日提醒哦'}</span>,
     },
-    { key: 'missyou', label: '每天想你', icon: <Heart className="h-[22px] w-[22px]" strokeWidth={1.8} /> },
-    { key: 'quiz', label: '甜蜜小问答', icon: <MessageCircleHeart className="h-[22px] w-[22px]" strokeWidth={1.8} /> },
-    { key: 'chapel', label: '小礼堂', icon: <Landmark className="h-[22px] w-[22px]" strokeWidth={1.8} /> },
-    { key: 'support', label: '联系客服', icon: <Headphones className="h-[22px] w-[22px]" strokeWidth={1.8} /> },
-    { key: 'settings', label: '设置', icon: <SettingsIcon className="h-[22px] w-[22px]" strokeWidth={1.8} /> },
+    { key: 'missyou', label: '每天想你', icon: <Heart className="h-[19px] w-[19px]" strokeWidth={1.8} /> },
+    { key: 'quiz', label: '甜蜜小问答', icon: <MessageCircleHeart className="h-[19px] w-[19px]" strokeWidth={1.8} /> },
+    { key: 'chapel', label: '小礼堂', icon: <Landmark className="h-[19px] w-[19px]" strokeWidth={1.8} /> },
+    { key: 'support', label: '联系客服', icon: <Headphones className="h-[19px] w-[19px]" strokeWidth={1.8} /> },
+    { key: 'settings', label: '设置', icon: <SettingsIcon className="h-[19px] w-[19px]" strokeWidth={1.8} /> },
   ];
 
   return (
-    <div className="h-full overflow-y-auto overscroll-contain pb-8">
-      <div className="px-3 pt-[68px]">
-        {/* 蕾丝装饰日记卡 */}
-        <div className="rounded-2xl bg-white px-4 pb-5 pt-3 shadow-[0_8px_22px_rgba(0,0,0,0.06)]">
-          {/* 花边：圆点拱形 + 顶部装饰行 */}
-          <div aria-hidden="true" className="mx-[-4px] flex items-end justify-center gap-[6px]">
-            {Array.from({ length: 14 }).map((_, i) => (
-              <span key={i} className="relative block h-[14px] w-[16px] overflow-hidden rounded-t-full bg-[#ececef]">
-                <span className="absolute left-1/2 top-[3px] h-1 w-1 -translate-x-1/2 rounded-full bg-[#d3d3d9]" />
-              </span>
-            ))}
+    <div className="h-full overflow-y-auto overscroll-contain pb-6">
+      <div className="px-3 pt-[62px]">
+        {/* 蕾丝装饰日记卡：蝴蝶结 + 圆点拱边 + 方格纸底纹 + 像素心 */}
+        <div className="relative overflow-hidden rounded-2xl bg-white pb-4 shadow-[0_8px_22px_rgba(0,0,0,0.06)]">
+          {/* 方格纸底纹 */}
+          <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[linear-gradient(#00000007_1px,transparent_1px),linear-gradient(90deg,#00000007_1px,transparent_1px)] bg-[size:14px_14px]" />
+          {/* 左右角小蝴蝶结 */}
+          <LaceBow className="absolute left-1.5 top-1.5 opacity-80" size={22} />
+          <LaceBow className="absolute right-1.5 top-1.5 -scale-x-100 opacity-80" size={22} />
+          {/* 顶部蕾丝拱边 + 中心蝴蝶结 */}
+          <div className="relative mx-1 mt-1">
+            <LaceArches count={16} />
+            <LaceBow className="absolute left-1/2 top-[-3px] -translate-x-1/2 drop-shadow-[0_1px_2px_rgba(0,0,0,0.10)]" size={26} />
           </div>
-          <div className="-mt-2 text-center text-[15px] font-bold tracking-[2px] text-[#4a4a52]">
+
+          <div className="relative -mt-0.5 text-center text-[13px] font-bold tracking-[2px] text-[#4a4a52]">
             <span className="mx-1 text-[#b9b9c1]">+</span>
             <span className="mx-0.5 text-[#b9b9c1]">♡</span>
             <span className="mx-1 text-[#cfcfd6]">---</span>
             <span className="mx-1 text-[#b9b9c1]">✕</span>
-            <span className="mx-2">我们の恋爱日记</span>
+            <span className="mx-1.5">我们の恋爱日记</span>
             <span className="mx-1 text-[#b9b9c1]">✕</span>
             <span className="mx-1 text-[#cfcfd6]">---</span>
             <span className="mx-0.5 text-[#b9b9c1]">♡</span>
@@ -1078,33 +1209,35 @@ function UsPage({ state, days, openSub }: { state: CoupleState; days: number | n
           </div>
 
           {/* 双头像 + 像素心 + 进度条 + 天数 */}
-          <div className="mt-5 flex items-start justify-between px-3">
-            <CoupleAvatar src={state.meAvatar} name={state.meName} size={78} ring={false} />
-            <div className="flex flex-col items-center gap-1.5 pt-2">
-              <PixelHeart size={44} />
-              <span className="text-[13px] text-[#8e8e96]">恋爱进度条</span>
-              <div className="h-1.5 w-[92px] overflow-hidden rounded-full bg-[#ececef]">
+          <div className="relative mt-4 flex items-start justify-between px-5">
+            <span aria-hidden="true" className="mt-16 text-[13px] text-[#d9d9de]">♡</span>
+            <CoupleAvatar src={state.meAvatar} name={state.meName} size={62} ring={false} />
+            <div className="flex flex-col items-center gap-1 pt-1.5">
+              <PixelHeart size={36} />
+              <span className="text-[11px] text-[#8e8e96]">恋爱进度条</span>
+              <div className="h-1.5 w-[80px] overflow-hidden rounded-full bg-[#ececef]">
                 <div className="h-full rounded-full bg-[linear-gradient(90deg,#8e8e97,#5c5c64)]" style={{ width: `${Math.min(100, ((days ?? 0) % 365) / 3.65 + 20)}%` }} />
               </div>
             </div>
-            <CoupleAvatar src={state.taAvatar} name={state.taName} size={78} ring={false} />
+            <CoupleAvatar src={state.taAvatar} name={state.taName} size={62} ring={false} />
+            <span aria-hidden="true" className="mt-16 text-[13px] text-[#d9d9de]">♡</span>
           </div>
-          <div className="mt-3 text-center text-[26px] font-bold text-[#2c2c30]">{days == null ? '未设置纪念日' : `${days} 天`}</div>
+          <div className="relative mt-2.5 text-center text-[21px] font-bold text-[#2c2c30]">{days == null ? '未设置纪念日' : `${days} 天`}</div>
         </div>
 
         {/* 功能列表 */}
-        <div className="mt-4 overflow-hidden rounded-2xl bg-white shadow-[0_8px_22px_rgba(0,0,0,0.05)]">
+        <div className="mt-3 overflow-hidden rounded-2xl bg-white/95 shadow-[0_8px_22px_rgba(0,0,0,0.05)] backdrop-blur-sm">
           {rows.map((r, i) => (
             <button
               key={r.key + r.label}
               type="button"
               onClick={() => openSub(r.key)}
-              className={`flex h-[62px] w-full items-center gap-4 px-5 text-left transition-colors active:bg-[#f6f6f8] ${i > 0 ? 'border-t border-black/[0.04]' : ''}`}
+              className={`flex h-[52px] w-full items-center gap-3.5 px-4 text-left transition-colors active:bg-[#f6f6f8] ${i > 0 ? 'border-t border-black/[0.04]' : ''}`}
             >
               <span className="text-[#5a5a63]">{r.icon}</span>
-              <span className="flex-1 text-[17px] font-medium text-[#2c2c30]">{r.label}</span>
+              <span className="flex-1 text-[15px] font-medium text-[#2c2c30]">{r.label}</span>
               {r.right}
-              <ChevronRight className="h-5 w-5 text-[#c6c6cd]" />
+              <ChevronRight className="h-4 w-4 text-[#c6c6cd]" />
             </button>
           ))}
         </div>
@@ -1118,16 +1251,16 @@ function UsPage({ state, days, openSub }: { state: CoupleState; days: number | n
 function SubShell(props: { title: string; onBack: () => void; children: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 bg-[#f6f6f8]/90 pt-[54px] backdrop-blur-md">
-        <div className="relative flex h-12 items-center px-2">
-          <button type="button" onClick={props.onBack} aria-label="返回" className="flex h-10 w-10 items-center justify-center rounded-full text-[#3a3a40] transition-opacity active:opacity-50">
-            <ArrowLeft className="h-6 w-6" strokeWidth={2.2} />
+      <div className="shrink-0 bg-[#f6f6f8]/92 pt-[54px] backdrop-blur-md">
+        <div className="relative flex h-11 items-center px-1.5">
+          <button type="button" onClick={props.onBack} aria-label="返回" className="flex h-9 w-9 items-center justify-center rounded-full text-[#3a3a40] transition-opacity active:opacity-50">
+            <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
           </button>
-          <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[18px] font-bold">{props.title}</div>
-          <div className="ml-auto flex items-center gap-3 pr-2">{props.right}</div>
+          <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[16px] font-bold">{props.title}</div>
+          <div className="ml-auto flex items-center gap-2.5 pr-1.5">{props.right}</div>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto overscroll-contain px-4 pb-10">{props.children}</div>
+      <div className="flex-1 overflow-y-auto overscroll-contain px-3.5 pb-8">{props.children}</div>
     </div>
   );
 }
@@ -1185,7 +1318,7 @@ function SubRouter(props: {
     case 'impress':
       return <ImpressPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'profile':
-      return <ProfilePage state={state} patch={patch} showToast={showToast} close={close} />;
+      return <ProfilePage state={state} patch={patch} showToast={showToast} close={close} onReset={onReset} />;
     case 'missyou':
       return <MissYouPage state={state} tapMissYou={tapMissYou} close={close} />;
     case 'chapel':
@@ -1204,51 +1337,255 @@ function SubRouter(props: {
 
 // ---------------- 各子页实现 ----------------
 
-/** 纪念日设置（原生日期选择 + 快捷说明） */
+/** 纪念日页（参考图3）：英雄卡 + 纪念日列表 + 添加纪念日 */
+const ANNIV_PRESETS: { key: string; label: string; icon: React.ReactNode; mode: 'since' | 'next' }[] = [
+  { key: 'myBd', label: '我的生日', icon: <Cake className="h-[18px] w-[18px]" strokeWidth={1.9} />, mode: 'next' },
+  { key: 'taBd', label: 'TA的生日', icon: <Gift className="h-[18px] w-[18px]" strokeWidth={1.9} />, mode: 'next' },
+  { key: 'kiss', label: '第一次接吻的日子', icon: <Heart className="h-[18px] w-[18px]" strokeWidth={1.9} />, mode: 'since' },
+  { key: 'hug', label: '第一次拥抱的日子', icon: <Users className="h-[18px] w-[18px]" strokeWidth={1.9} />, mode: 'since' },
+  { key: 'travel', label: '第一次携手旅行的日子', icon: <Plane className="h-[18px] w-[18px]" strokeWidth={1.9} />, mode: 'since' },
+  { key: 'wedding', label: '结婚纪念日', icon: <Landmark className="h-[18px] w-[18px]" strokeWidth={1.9} />, mode: 'since' },
+];
+
 function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; days: number | null; close: () => void; showToast: (m: string) => void }) {
-  const { state, patch, close, showToast } = props;
-  const [val, setVal] = useState(state.anniversary || '');
+  const { state, patch, days, close, showToast } = props;
+  /** 正在编辑的纪念日：love = 在一起纪念日；其余为 annivExtra 键 */
+  const [editing, setEditing] = useState<{ key: string; label: string; date: string } | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newDate, setNewDate] = useState('');
+
+  const extraOf = (key: string) => state.annivExtra.find((e) => e.key === key);
+  const dateOf = (key: string) => extraOf(key)?.date || null;
+
+  const saveEdit = () => {
+    if (!editing) return;
+    if (!editing.date) {
+      showToast('先选一个日期哦');
+      return;
+    }
+    if (editing.key === 'love') {
+      patch({ anniversary: editing.date });
+    } else {
+      const others = state.annivExtra.filter((e) => e.key !== editing.key);
+      patch({ annivExtra: [...others, { key: editing.key, label: editing.label, date: editing.date }] });
+    }
+    showToast('纪念日已保存 ♡');
+    setEditing(null);
+  };
+
+  const removeEdit = () => {
+    if (!editing) return;
+    if (editing.key === 'love') {
+      patch({ anniversary: null });
+    } else {
+      patch({ annivExtra: state.annivExtra.filter((e) => e.key !== editing.key) });
+    }
+    showToast('已清除该纪念日');
+    setEditing(null);
+  };
+
+  const addCustom = () => {
+    const name = newName.trim();
+    if (!name || !newDate) {
+      showToast('填好名称和日期哦');
+      return;
+    }
+    patch({ annivExtra: [...state.annivExtra, { key: uid(), label: name, date: newDate }] });
+    setAdding(false);
+    setNewName('');
+    setNewDate('');
+    showToast('纪念日已添加 ♡');
+  };
+
+  const setReminder = state.annivExtra.length > 0;
+
   return (
     <SubShell title="设置纪念日" onBack={close}>
-      <div className="mt-4 rounded-2xl bg-white p-5 shadow-sm">
-        <div className="text-[15px] text-[#8e8e96]">选择你们在一起的那一天</div>
-        <input
-          type="date"
-          value={val}
-          max={todayKey()}
-          onChange={(e) => setVal(e.target.value)}
-          className="mt-3 h-12 w-full rounded-xl bg-[#f3f3f5] px-4 text-[16px] text-[#2c2c30] outline-none"
-        />
+      {/* 英雄卡：双头像 + 心形徽标 + 在一起天数 */}
+      <div className="relative mt-3 overflow-hidden rounded-3xl bg-[linear-gradient(160deg,#ffffff_0%,#f2f2f5_60%,#e7e7eb_100%)] px-5 pb-5 pt-6 text-center shadow-[0_10px_26px_rgba(0,0,0,0.08)]">
+        <div aria-hidden="true" className="pointer-events-none absolute -left-8 -top-10 h-28 w-28 rounded-full bg-white/70" />
+        <div aria-hidden="true" className="pointer-events-none absolute -right-6 top-8 h-20 w-20 rounded-full bg-white/50" />
+        <div className="relative mx-auto flex w-fit items-center">
+          <div className="h-12 w-12 overflow-hidden rounded-full bg-[#ececef] ring-2 ring-white shadow-sm">
+            {state.meAvatar ? <img src={state.meAvatar} alt={state.meName} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={48} />}
+          </div>
+          <div className="relative -ml-2.5 h-12 w-12 overflow-hidden rounded-full bg-[#ececef] ring-2 ring-white shadow-sm">
+            {state.taAvatar ? <img src={state.taAvatar} alt={state.taName} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={48} />}
+            <span className="absolute -left-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-full bg-white shadow-sm">
+              <Heart className="h-2.5 w-2.5 text-[#5c5c64]" fill="#5c5c64" />
+            </span>
+          </div>
+        </div>
+        <div className="relative mt-1.5 flex items-center justify-center gap-4 text-[11px] text-[#8e8e96]">
+          <span className="max-w-[100px] truncate">{state.meName || '我'}</span>
+          <span className="max-w-[100px] truncate">{state.taName || 'TA'}</span>
+        </div>
+        <div className="relative mt-3 flex items-baseline justify-center gap-1.5 text-[15px] text-[#4a4a52]">
+          我们已经在一起
+          <span className="text-[30px] font-extrabold leading-none text-[#2c2c30]">{days ?? '--'}</span>
+          天
+        </div>
+        {state.anniversary && <div className="relative mt-1.5 text-[11.5px] text-[#9a9aa2]">起始日期 {fmtDateCn(state.anniversary)}</div>}
+      </div>
+
+      {/* 纪念日列表 */}
+      <div className="mt-3.5 overflow-hidden rounded-2xl bg-white shadow-sm">
+        {/* 我们在一起（主纪念日） */}
         <button
           type="button"
-          onClick={() => {
-            if (!val) {
-              showToast('先选一个日期哦');
-              return;
-            }
-            patch({ anniversary: val });
-            showToast('纪念日已设置 ♡');
-          }}
-          className="mt-5 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white"
+          onClick={() => setEditing({ key: 'love', label: '我们在一起', date: state.anniversary || '' })}
+          className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors active:bg-[#f6f6f8]"
         >
-          保存
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f3f3f5] text-[#6e6e76]">
+            <Heart className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[14.5px] font-semibold text-[#2c2c30]">我们在一起</span>
+            <span className="mt-0.5 block text-[11.5px] text-[#9a9aa2]">{state.anniversary ? fmtDateCn(state.anniversary) : '点击设置那一天'}</span>
+          </span>
+          <span className="shrink-0 text-[12px] text-[#8e8e96]">
+            {days != null ? (
+              <>
+                已经 <span className="text-[20px] font-extrabold text-[#3f3f46]">{days}</span> 天
+              </>
+            ) : (
+              <Plus className="h-5 w-5 rounded-full border border-[#d9d9de] p-0.5 text-[#8e8e96]" />
+            )}
+          </span>
         </button>
-        {state.anniversary && (
-          <button
-            type="button"
-            onClick={() => {
-              patch({ anniversary: null });
-              showToast('已清除纪念日');
-            }}
-            className="mt-3 h-11 w-full rounded-full bg-[#f0f0f3] text-[14px] text-[#8e8e96]"
-          >
-            清除纪念日
-          </button>
-        )}
+
+        {ANNIV_PRESETS.map((pr) => {
+          const date = dateOf(pr.key);
+          const extra = extraOf(pr.key);
+          return (
+            <button
+              key={pr.key}
+              type="button"
+              onClick={() => setEditing({ key: pr.key, label: pr.label, date: date || '' })}
+              className="flex w-full items-center gap-3 border-t border-black/[0.04] px-4 py-3 text-left transition-colors active:bg-[#f6f6f8]"
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f3f3f5] text-[#6e6e76]">{pr.icon}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[14.5px] font-medium text-[#2c2c30]">{pr.key === 'myBd' ? `${state.meName || '我'}的生日` : pr.key === 'taBd' ? `${state.taName || 'TA'}的生日` : pr.label}</span>
+                <span className="mt-0.5 block text-[11.5px] text-[#9a9aa2]">{date ? fmtDateCn(date) : '点击设置那一天'}</span>
+              </span>
+              <span className="shrink-0 text-[12px] text-[#8e8e96]">
+                {date ? (
+                  pr.mode === 'next' ? (
+                    <>
+                      还有 <span className="text-[20px] font-extrabold text-[#3f3f46]">{daysToNextMonthDay(date) ?? '--'}</span> 天
+                    </>
+                  ) : (
+                    <>
+                      已经 <span className="text-[20px] font-extrabold text-[#3f3f46]">{daysSince(date) ?? '--'}</span> 天
+                    </>
+                  )
+                ) : (
+                  <Plus className="h-5 w-5 rounded-full border border-[#d9d9de] p-0.5 text-[#8e8e96]" />
+                )}
+              </span>
+              {extra == null && <span className="hidden" />}
+            </button>
+          );
+        })}
+
+        {/* 自建纪念日 */}
+        {state.annivExtra
+          .filter((e) => !ANNIV_PRESETS.some((p) => p.key === e.key))
+          .map((e) => (
+            <button
+              key={e.key}
+              type="button"
+              onClick={() => setEditing({ key: e.key, label: e.label, date: e.date })}
+              className="flex w-full items-center gap-3 border-t border-black/[0.04] px-4 py-3 text-left transition-colors active:bg-[#f6f6f8]"
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f3f3f5] text-[#6e6e76]">
+                <Star className="h-[18px] w-[18px]" strokeWidth={1.9} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[14.5px] font-medium text-[#2c2c30]">{e.label}</span>
+                <span className="mt-0.5 block text-[11.5px] text-[#9a9aa2]">{fmtDateCn(e.date)}</span>
+              </span>
+              <span className="shrink-0 text-[12px] text-[#8e8e96]">
+                已经 <span className="text-[20px] font-extrabold text-[#3f3f46]">{daysSince(e.date) ?? '--'}</span> 天
+              </span>
+            </button>
+          ))}
       </div>
-      <p className="mt-4 px-2 text-[13px] leading-relaxed text-[#9a9aa2]">
-        设置后，首页气泡会显示「已相恋 N 天」，我们页会记录你们 together 的每一天。
-      </p>
+
+      {/* 底部：提醒提示 + 添加纪念日 */}
+      <div className="mt-4 flex items-center justify-center gap-3">
+        <span className={`flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[12px] ${setReminder ? 'border-[#d9d9de] bg-white text-[#8e8e96]' : 'border-[#e6e6ea] bg-[#f7f7f9] text-[#9a9aa2]'}`}>
+          <Sparkles className="h-3.5 w-3.5" />
+          {setReminder ? '纪念日提醒已开启' : '还没设置提醒哦'}
+        </span>
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="flex items-center gap-1 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-4 py-2 text-[12.5px] font-semibold text-white shadow-[0_6px_16px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.97]"
+        >
+          <Plus className="h-3.5 w-3.5" /> 添加纪念日
+        </button>
+      </div>
+
+      {/* 编辑纪念日弹层 */}
+      {editing && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 px-8" onClick={() => setEditing(null)}>
+          <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="text-[15px] font-semibold text-[#2c2c30]">{editing.label}</div>
+            <input
+              type="date"
+              value={editing.date}
+              onChange={(e) => setEditing({ ...editing, date: e.target.value })}
+              className="mt-3 h-11 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] text-[#2c2c30] outline-none"
+            />
+            <div className="mt-4 flex gap-2.5">
+              {editing.key !== 'love' && (
+                <button type="button" onClick={removeEdit} className="h-10 rounded-xl bg-[#f0f0f3] px-4 text-[13.5px] font-medium text-[#8e8e96]">
+                  删除
+                </button>
+              )}
+              <button type="button" onClick={() => setEditing(null)} className="h-10 flex-1 rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
+                取消
+              </button>
+              <button type="button" onClick={saveEdit} className="h-10 flex-1 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[13.5px] font-semibold text-white">
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 添加纪念日弹层 */}
+      {adding && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 px-8" onClick={() => setAdding(false)}>
+          <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="text-[15px] font-semibold text-[#2c2c30]">添加纪念日</div>
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="名称，比如「第一次看演唱会」"
+              maxLength={14}
+              className="mt-3 h-10 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[14px] outline-none placeholder:text-[#b6b6bd]"
+            />
+            <input
+              type="date"
+              value={newDate}
+              onChange={(e) => setNewDate(e.target.value)}
+              className="mt-2.5 h-10 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[14px] text-[#2c2c30] outline-none"
+            />
+            <div className="mt-4 flex gap-2.5">
+              <button type="button" onClick={() => setAdding(false)} className="h-10 flex-1 rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
+                取消
+              </button>
+              <button type="button" onClick={addCustom} className="h-10 flex-1 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[13.5px] font-semibold text-white">
+                添加
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </SubShell>
   );
 }
@@ -1266,8 +1603,8 @@ function TreePage({ state, waterTree, close }: { state: CoupleState; waterTree: 
   ][stage];
   return (
     <SubShell title="爱情小树成长记" onBack={close}>
-      <div className="mt-4 flex flex-col items-center rounded-2xl bg-white py-10 shadow-sm">
-        <div className="text-[76px] leading-none [animation:couple-pop-heart_.6s_ease-out]">{stageInfo.emoji}</div>
+      <div className="mt-3 flex flex-col items-center rounded-2xl bg-white py-8 shadow-sm">
+        <div className="text-[60px] leading-none [animation:couple-pop-heart_.6s_ease-out]">{stageInfo.emoji}</div>
         <div className="mt-4 text-[19px] font-bold text-[#2c2c30]">{stageInfo.label}</div>
         <div className="mt-1.5 text-[14px] text-[#8e8e96]">{stageInfo.tip}</div>
         <div className="mt-5 h-2.5 w-[70%] overflow-hidden rounded-full bg-[#efeff2]">
@@ -1287,49 +1624,176 @@ function TreePage({ state, waterTree, close }: { state: CoupleState; waterTree: 
   );
 }
 
-/** 情侣轨迹：地图 + 在一起天数 + 相遇地点 */
+/** 情侣轨迹（参考图4）：全屏地图 + 双人悬浮卡 + 照片标记 + 历史轨迹弹层 */
 function TrackPage({ state, patch, days, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; days: number | null; showToast: (m: string) => void; close: () => void }) {
   const [place, setPlace] = useState(state.meetPlace);
+  const [sheet, setSheet] = useState(false);
+
+  // 取相册里前两张照片作地图标记
+  const markers = state.albums.flatMap((a) => a.photos).slice(0, 2);
+
+  const toolBtn = 'flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#6e6e76] shadow-[0_3px_10px_rgba(0,0,0,0.10)] transition-opacity active:opacity-60';
+
   return (
-    <SubShell title="情侣轨迹" onBack={close}>
-      <div className="mt-4 overflow-hidden rounded-2xl bg-white shadow-sm">
-        { }
-        <img src="/couple-map.png" alt="轨迹地图" className="h-[210px] w-full object-cover" draggable={false} />
-        <div className="flex items-center justify-between px-5 py-4">
-          <div>
-            <div className="text-[13px] text-[#9a9aa2]">已经一起走过</div>
-            <div className="text-[24px] font-bold text-[#2c2c30]">{days == null ? '--' : days} 天</div>
-          </div>
-          <div className="flex h-11 items-center gap-2 rounded-full bg-[#f3f3f5] px-4 text-[14px] text-[#5a5a62]">
-            <Heart className="h-4 w-4 text-[#8e8e97]" fill="#c9c9cf" />
-            双向奔赴的路上
-          </div>
+    <div className="relative flex h-full flex-col">
+      {/* 顶栏 */}
+      <div className="shrink-0 bg-[#f6f6f8]/92 pt-[54px] backdrop-blur-md">
+        <div className="relative flex h-11 items-center px-1.5">
+          <button type="button" onClick={close} aria-label="返回" className="flex h-9 w-9 items-center justify-center rounded-full text-[#3a3a40] transition-opacity active:opacity-50">
+            <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
+          </button>
+          <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[16px] font-bold">情侣轨迹</div>
         </div>
       </div>
-      <div className="mt-4 rounded-2xl bg-white p-5 shadow-sm">
-        <div className="text-[15px] font-semibold text-[#2c2c30]">我们的相遇地点</div>
-        <div className="mt-3 flex gap-2">
-          <input
-            value={place}
-            onChange={(e) => setPlace(e.target.value)}
-            placeholder="比如：学校门口的奶茶店"
-            maxLength={20}
-            className="h-11 flex-1 rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] outline-none placeholder:text-[#b6b6bd]"
-          />
+
+      {/* 全屏地图 */}
+      <div className="relative flex-1 overflow-hidden">
+        <img src="/couple-map.png" alt="我们的轨迹地图" className="absolute inset-0 h-full w-full object-cover" draggable={false} />
+
+        {/* 顶部悬浮卡：双头像 + 心形天数 + 虚线 */}
+        <div className="absolute inset-x-3 top-3 rounded-2xl bg-white/88 p-3 shadow-[0_8px_24px_rgba(0,0,0,0.10)] backdrop-blur-md">
+          <div className="flex items-start justify-between">
+            <div className="flex w-[86px] flex-col items-center gap-1">
+              <span className="flex max-w-full items-center gap-0.5 text-[10px] text-[#8e8e96]">
+                <MapPin className="h-3 w-3 shrink-0" />
+                <span className="truncate">{state.meetPlace || '相遇的地方'}</span>
+              </span>
+              <div className="h-12 w-12 overflow-hidden rounded-2xl bg-[#ececef] shadow-[0_0_0_3px_rgba(255,255,255,0.9),0_4px_12px_rgba(0,0,0,0.12)]">
+                {state.meAvatar ? <img src={state.meAvatar} alt={state.meName} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={48} />}
+              </div>
+              <span className="max-w-full truncate text-[10px] text-[#6e6e76]">{state.meName || '我'}</span>
+            </div>
+
+            <div className="flex flex-1 flex-col items-center px-1">
+              <div className="relative flex h-[70px] w-[76px] items-center justify-center">
+                <Heart className="absolute h-[70px] w-[70px] text-[#e9e9ee]" fill="#eceff2" strokeWidth={1.2} />
+                <div className="relative -mt-1 text-center">
+                  <div className="text-[9px] leading-none text-[#8e8e96]">在一起</div>
+                  <div className="text-[17px] font-extrabold leading-tight text-[#4a4a52]">{days ?? '--'}</div>
+                  <div className="text-[8px] leading-none tracking-[2px] text-[#a9a9b2]">DAY</div>
+                </div>
+              </div>
+              <div className="relative mt-0.5 h-5 w-full">
+                <svg viewBox="0 0 200 20" className="absolute inset-0 h-full w-full" aria-hidden="true">
+                  <path d="M8 10 C 50 -4, 150 24, 192 10" fill="none" stroke="#c7c7ce" strokeWidth="2.2" strokeDasharray="5 5" strokeLinecap="round" />
+                </svg>
+                <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-white px-2.5 py-[3px] text-[10px] text-[#6e6e76] shadow-sm ring-1 ring-[#e9e9ee]">
+                  {days != null ? 'TA 就在你身边' : '设置纪念日开启轨迹'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex w-[86px] flex-col items-center gap-1">
+              <span className="flex max-w-full items-center gap-0.5 text-[10px] text-[#8e8e96]">
+                <MapPin className="h-3 w-3 shrink-0" />
+                <span className="truncate">{state.meetPlace || '相遇的地方'}</span>
+              </span>
+              <div className="h-12 w-12 overflow-hidden rounded-2xl bg-[#ececef] shadow-[0_0_0_3px_rgba(255,255,255,0.9),0_4px_12px_rgba(0,0,0,0.12)]">
+                {state.taAvatar ? <img src={state.taAvatar} alt={state.taName} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={48} />}
+              </div>
+              <span className="max-w-full truncate text-[10px] text-[#6e6e76]">{state.taName || 'TA'}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 地图照片标记 + 虚线连接 */}
+        {markers.length >= 2 && (
+          <>
+            <svg className="pointer-events-none absolute left-[30%] top-[56%] h-24 w-[36%]" viewBox="0 0 120 96" aria-hidden="true">
+              <path d="M6 88 L114 8" fill="none" stroke="#b9b9c1" strokeWidth="4" strokeDasharray="10 8" strokeLinecap="round" />
+            </svg>
+            <div className="absolute left-[30%] top-[62%] h-11 w-11 rotate-[-4deg] overflow-hidden rounded-md bg-white p-0.5 shadow-[0_4px_12px_rgba(0,0,0,0.18)]">
+              <img src={markers[0]} alt="轨迹照片1" className="h-full w-full rounded object-cover" draggable={false} />
+            </div>
+            <div className="absolute left-[56%] top-[42%] h-11 w-11 rotate-[3deg] overflow-hidden rounded-md bg-white p-0.5 shadow-[0_4px_12px_rgba(0,0,0,0.18)]">
+              <img src={markers[1]} alt="轨迹照片2" className="h-full w-full rounded object-cover" draggable={false} />
+            </div>
+          </>
+        )}
+
+        {/* 右侧工具按钮（装饰 + 定位回到顶部卡） */}
+        <div className="absolute bottom-5 right-3 flex flex-col gap-2">
+          <span className={`${toolBtn} text-[#c9a24b]`}>
+            <Crown className="h-4 w-4" />
+          </span>
+          <span className={toolBtn}>
+            <HelpCircle className="h-4 w-4" />
+          </span>
+          <button type="button" onClick={() => setSheet(true)} aria-label="轨迹设置" className={toolBtn}>
+            <SettingsIcon className="h-4 w-4" />
+          </button>
           <button
             type="button"
-            onClick={() => {
-              patch({ meetPlace: place.trim() });
-              showToast('相遇地点已记录 ♡');
-            }}
-            className="h-11 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-5 text-[15px] font-semibold text-white"
+            onClick={() => showToast(state.meetPlace ? `相遇地点：${state.meetPlace}` : '先在历史轨迹里写下相遇地点吧')}
+            aria-label="定位相遇地点"
+            className={toolBtn}
           >
-            保存
+            <Crosshair className="h-4 w-4" />
           </button>
         </div>
-        {state.meetPlace && <div className="mt-3 text-[14px] text-[#6e6e76]">缘分从这里开始：{state.meetPlace}</div>}
+
+        {/* 底部历史轨迹按钮 */}
+        <button
+          type="button"
+          onClick={() => setSheet(true)}
+          className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-6 py-2.5 text-[14px] font-semibold text-white shadow-[0_10px_26px_rgba(60,60,68,0.4)] transition-transform active:scale-[0.97]"
+        >
+          <MapPin className="h-4 w-4" fill="rgba(255,255,255,0.25)" />
+          历史轨迹
+        </button>
+
+        <span className="pointer-events-none absolute bottom-1.5 right-2 text-[9px] text-[#b6b6bd]">恋人地图 · 白灰限定</span>
       </div>
-    </SubShell>
+
+      {/* 历史轨迹弹层 */}
+      {sheet && (
+        <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/35" onClick={() => setSheet(false)}>
+          <div className="max-h-[72%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-7 pt-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
+            <div className="mt-3 text-[16px] font-bold text-[#2c2c30]">我们的轨迹</div>
+            <div className="mt-1 text-[12px] text-[#9a9aa2]">已经一起走过 {days ?? '--'} 天 · 双向奔赴的路上</div>
+
+            <div className="mt-4 text-[13px] font-semibold text-[#4a4a52]">相遇地点</div>
+            <div className="mt-2 flex gap-2">
+              <input
+                value={place}
+                onChange={(e) => setPlace(e.target.value)}
+                placeholder="比如：学校门口的奶茶店"
+                maxLength={20}
+                className="h-10 flex-1 rounded-xl bg-[#f3f3f5] px-3.5 text-[14px] outline-none placeholder:text-[#b6b6bd]"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  patch({ meetPlace: place.trim() });
+                  showToast('相遇地点已记录 ♡');
+                }}
+                className="h-10 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-4 text-[13.5px] font-semibold text-white"
+              >
+                保存
+              </button>
+            </div>
+
+            <div className="mt-5 text-[13px] font-semibold text-[#4a4a52]">走过的大事记</div>
+            {state.chronicle.length === 0 ? (
+              <div className="py-6 text-center text-[12.5px] text-[#b6b6bd]">还没有记录，去「恋爱编年史」写下第一件小事吧</div>
+            ) : (
+              <div className="mt-2 space-y-2 pb-2">
+                {state.chronicle.slice(0, 10).map((c) => (
+                  <div key={c.id} className="flex items-center gap-3 rounded-xl bg-[#f7f7f9] px-3.5 py-2.5">
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-[#a9a9b2]" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13.5px] text-[#2c2c30]">{c.text}</span>
+                      <span className="text-[11px] text-[#b6b6bd]">{fmtDate(c.at)}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1341,7 +1805,7 @@ function QuizPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const [answer, setAnswer] = useState('');
   return (
     <SubShell title="甜蜜小问答" onBack={close}>
-      <div className="mt-4 rounded-2xl bg-white p-5 shadow-sm">
+      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
         <div className="text-[13px] text-[#9a9aa2]">今天的问题</div>
         <div className="mt-2 text-[17px] font-semibold leading-relaxed text-[#2c2c30]">{question}</div>
         <textarea
@@ -1397,7 +1861,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   const arrived = (l: { at: number; openAfterDays: number }) => now >= l.at + l.openAfterDays * 86400000;
   return (
     <SubShell title="未来情书" onBack={close}>
-      <div className="mt-4 rounded-2xl bg-white p-5 shadow-sm">
+      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
         <div className="text-[15px] font-semibold text-[#2c2c30]">写一封信，寄给未来的 TA</div>
         <textarea
           value={text}
@@ -1496,63 +1960,330 @@ function HousePage({ state, days, close }: { state: CoupleState; days: number | 
   );
 }
 
-/** 心情日记 */
+/** 心情日记（参考图5）：月历气泡视图 + 写日记编辑页（心情/文字/照片/位置） */
 function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
+  const now0 = new Date();
+  const [view, setView] = useState<'cal' | 'write'>('cal');
+  const [cursor, setCursor] = useState({ y: now0.getFullYear(), m: now0.getMonth() });
+  const [selDate, setSelDate] = useState(todayKey());
   const [mood, setMood] = useState('');
   const [text, setText] = useState('');
-  return (
-    <SubShell title="心情日记" onBack={close}>
-      <div className="mt-4 rounded-2xl bg-white p-5 shadow-sm">
-        <div className="text-[15px] font-semibold text-[#2c2c30]">今天的心情</div>
-        <div className="mt-3 grid grid-cols-4 gap-2">
-          {MOOD_LIST.map((m) => (
+  const [photo, setPhoto] = useState<string | null>(null);
+  const [daySheet, setDaySheet] = useState<string | null>(null);
+  const photoInput = useRef<HTMLInputElement | null>(null);
+
+  /** 按日期分组（兼容旧数据：无 dateKey 时从 at 推导） */
+  const byDay = useMemo(() => {
+    const map: Record<string, { emoji: string; label: string; id: string }[]> = {};
+    for (const m of state.moods) {
+      const k = m.dateKey || fmtDate(m.at);
+      const meta = MOOD_LIST.find((x) => x.emoji === m.emoji);
+      (map[k] ||= []).push({ emoji: m.emoji, label: meta?.label || '心情', id: m.id });
+    }
+    return map;
+  }, [state.moods]);
+
+  /** 月历格子（周一起始） */
+  const cells = useMemo(() => {
+    const first = new Date(cursor.y, cursor.m, 1);
+    const lead = (first.getDay() + 6) % 7;
+    const total = new Date(cursor.y, cursor.m + 1, 0).getDate();
+    const arr: ({ d: number; key: string } | null)[] = Array.from({ length: lead }, () => null);
+    for (let d = 1; d <= total; d++) {
+      arr.push({ d, key: `${cursor.y}-${String(cursor.m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}` });
+    }
+    return arr;
+  }, [cursor]);
+
+  const openWrite = (key: string) => {
+    if (key > todayKey()) {
+      showToast('不能写未来的日子哦');
+      return;
+    }
+    setSelDate(key);
+    setMood('');
+    setText('');
+    setPhoto(null);
+    setView('write');
+  };
+
+  const pickPhoto = async (f: File | null) => {
+    if (!f) return;
+    try {
+      setPhoto(await fileToScaledDataURL(f, 900, 0.72));
+    } catch {
+      showToast('图片处理失败');
+    }
+  };
+
+  const saveMood = () => {
+    if (!mood) {
+      showToast('先选一个心情吧');
+      return;
+    }
+    const d = new Date(`${selDate}T12:00:00`);
+    patch({
+      moods: [{ id: uid(), emoji: mood, text: text.trim(), at: d.getTime(), photo, dateKey: selDate }, ...state.moods],
+    });
+    showToast('心情已记录 ♡');
+    setView('cal');
+  };
+
+  const editEntry = (key: string) => {
+    const list = byDay[key] || [];
+    const entry = state.moods.find((m) => (m.dateKey || fmtDate(m.at)) === key);
+    if (entry) {
+      setSelDate(key);
+      setMood(entry.emoji);
+      setText(entry.text);
+      setPhoto(entry.photo ?? null);
+      setView('write');
+    } else {
+      void list;
+      openWrite(key);
+    }
+    setDaySheet(null);
+  };
+
+  // ---------- 写日记视图 ----------
+  if (view === 'write') {
+    const [sy, sm] = [Number(selDate.slice(0, 4)), Number(selDate.slice(5, 7))];
+    const isToday = selDate === todayKey();
+    return (
+      <SubShell title="心情日记" onBack={() => setView('cal')}>
+        <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[20px] font-bold text-[#2c2c30]">{isToday ? '今天' : selDate}</span>
+            <span className="text-[12px] text-[#9a9aa2]">{sm}月,{sy}</span>
+          </div>
+
+          {/* 当前选中心情大表情 */}
+          <div className="mt-3 flex justify-center">
+            <span className={`flex h-[64px] w-[64px] items-center justify-center rounded-full bg-[#f3f3f5] text-[34px] shadow-inner ${mood ? '' : 'opacity-50'}`}>
+              {mood || '🫥'}
+            </span>
+          </div>
+
+          {/* 心情选择圈 */}
+          <div className="mt-4 grid grid-cols-4 gap-2">
+            {MOOD_LIST.map((m) => (
+              <button
+                key={m.label}
+                type="button"
+                onClick={() => setMood(m.emoji)}
+                className={`flex flex-col items-center gap-1 rounded-2xl py-2 transition-colors ${mood === m.emoji ? 'bg-[#ececF0]' : 'active:bg-[#f6f6f8]'}`}
+              >
+                <span className={`flex h-9 w-9 items-center justify-center rounded-full text-[19px] shadow-sm ${mood === m.emoji ? 'bg-white ring-2 ring-[#5c5c64]' : 'bg-[#f3f3f5]'}`}>{m.emoji}</span>
+                <span className="text-[10px] text-[#8e8e96]">{m.label}</span>
+              </button>
+            ))}
+          </div>
+
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="今天想写些什么"
+            maxLength={300}
+            rows={4}
+            className="mt-4 w-full resize-none rounded-xl bg-[#f8f8fa] p-3.5 text-[14.5px] leading-relaxed outline-none placeholder:text-[#b6b6bd]"
+          />
+
+          {/* 照片 tile */}
+          <div className="mt-3 flex items-center gap-2">
             <button
-              key={m.label}
               type="button"
-              onClick={() => setMood(m.emoji)}
-              className={`flex h-16 flex-col items-center justify-center gap-0.5 rounded-xl text-[22px] transition-colors ${mood === m.emoji ? 'bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-white' : 'bg-[#f3f3f5] text-[#9a9aa2]'}`}
+              onClick={() => (photo ? setPhoto(null) : photoInput.current?.click())}
+              className="relative flex h-[84px] w-[84px] items-center justify-center overflow-hidden rounded-xl bg-[#f3f3f5] text-[#b6b6bd] transition-opacity active:opacity-70"
+              aria-label={photo ? '移除照片' : '添加照片'}
             >
-              <span className={mood === m.emoji ? 'grayscale-0' : ''}>{m.emoji}</span>
-              <span className="text-[11px]">{m.label}</span>
+              {photo ? (
+                <>
+                  <img src={photo} alt="心情照片" className="h-full w-full object-cover" draggable={false} />
+                  <span className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/45 text-white">
+                    ✕
+                  </span>
+                </>
+              ) : (
+                <ImagePlus className="h-6 w-6" strokeWidth={1.6} />
+              )}
             </button>
-          ))}
+            <span className="text-[11.5px] leading-relaxed text-[#b6b6bd]">{photo ? '点击照片可移除' : '配一张今天的照片吧'}</span>
+          </div>
+
+          {/* 位置行 */}
+          <div className="mt-3 flex items-center gap-2 rounded-xl bg-[#f8f8fa] px-3.5 py-2.5">
+            <MapPin className="h-4 w-4 shrink-0 text-[#8e8e96]" />
+            <span className="min-w-0 flex-1 truncate text-[13.5px] text-[#4a4a52]">{state.meetPlace || '还没有相遇地点'}</span>
+            <span className="text-[11px] text-[#c2c2c9]">{state.meetPlace ? '来自情侣轨迹' : '去情侣轨迹设置'}</span>
+          </div>
         </div>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="今天想对心情说点什么…"
-          maxLength={200}
-          rows={2}
-          className="mt-3 w-full resize-none rounded-xl bg-[#f3f3f5] p-3.5 text-[15px] outline-none placeholder:text-[#b6b6bd]"
-        />
+
         <button
           type="button"
-          onClick={() => {
-            if (!mood) {
-              showToast('先选一个心情吧');
-              return;
-            }
-            patch({ moods: [{ id: uid(), emoji: mood, text: text.trim(), at: Date.now() }, ...state.moods] });
-            setMood('');
-            setText('');
-            showToast('心情已记录 ♡');
-          }}
-          className="mt-3 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white"
+          onClick={saveMood}
+          className="mb-4 mt-5 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[15px] font-semibold text-white shadow-[0_8px_20px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.98]"
         >
-          记下这条心情
+          完成
+        </button>
+
+        <input
+          ref={photoInput}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            void pickPhoto(e.target.files?.[0] ?? null);
+            e.currentTarget.value = '';
+          }}
+        />
+      </SubShell>
+    );
+  }
+
+  // ---------- 月历视图 ----------
+  const todayK = todayKey();
+  const recent = state.moods.slice(0, 4);
+
+  return (
+    <SubShell
+      title="心情日记"
+      onBack={close}
+      right={
+        recent.length > 0 ? (
+          <span className="text-[11.5px] text-[#8e8e96]">共 {state.moods.length} 篇</span>
+        ) : undefined
+      }
+    >
+      {/* 月份切换 */}
+      <div className="mt-2 flex items-center justify-center gap-4">
+        <button
+          type="button"
+          aria-label="上个月"
+          onClick={() => setCursor((c) => (c.m === 0 ? { y: c.y - 1, m: 11 } : { ...c, m: c.m - 1 }))}
+          className="flex h-7 w-7 items-center justify-center rounded-full bg-[#e9e9ee] text-[#6e6e76] transition-opacity active:opacity-60"
+        >
+          <ChevronRight className="h-4 w-4 rotate-180" />
+        </button>
+        <span className="text-[17px] font-bold text-[#2c2c30]">
+          {cursor.y}.{String(cursor.m + 1).padStart(2, '0')}
+        </span>
+        <button
+          type="button"
+          aria-label="下个月"
+          onClick={() => setCursor((c) => (c.m === 11 ? { y: c.y + 1, m: 0 } : { ...c, m: c.m + 1 }))}
+          className="flex h-7 w-7 items-center justify-center rounded-full bg-[#e9e9ee] text-[#6e6e76] transition-opacity active:opacity-60"
+        >
+          <ChevronRight className="h-4 w-4" />
         </button>
       </div>
-      <div className="mt-4 space-y-3">
-        {state.moods.map((m) => (
-          <div key={m.id} className="flex items-start gap-3 rounded-2xl bg-white p-4 shadow-sm">
-            <span className="text-[24px]">{m.emoji}</span>
-            <div className="flex-1">
-              <div className="text-[15px] leading-relaxed text-[#2c2c30]">{m.text || '（没说话，就是心情不好不坏）'}</div>
-              <div className="mt-1 text-[12px] text-[#b6b6bd]">{fmtDate(m.at)}</div>
-            </div>
-          </div>
+
+      {/* 星期表头（周一起始） */}
+      <div className="mt-3 grid grid-cols-7 text-center text-[10.5px] text-[#a9a9b2]">
+        {['一', '二', '三', '四', '五', '六', '日'].map((w) => (
+          <span key={w}>{w}</span>
         ))}
       </div>
+
+      {/* 日期格子 */}
+      <div className="mt-1.5 grid grid-cols-7 gap-y-1">
+        {cells.map((cell, i) =>
+          cell == null ? (
+            <span key={`b${i}`} />
+          ) : (
+            <button
+              key={cell.key}
+              type="button"
+              onClick={() => {
+                const list = byDay[cell.key];
+                if (list && list.length > 0) setDaySheet(cell.key);
+                else openWrite(cell.key);
+              }}
+              className="flex h-[62px] flex-col items-center justify-start pt-1 transition-transform active:scale-[0.94]"
+            >
+              <span className={`text-[10.5px] leading-none ${cell.key === todayK ? 'font-bold text-[#2c2c30]' : 'text-[#6e6e76]'}`}>{cell.d}</span>
+              {byDay[cell.key] ? (
+                <span className={`mt-1 flex h-8 w-8 items-center justify-center rounded-full bg-white text-[17px] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ${cell.key === todayK ? 'ring-2 ring-[#5c5c64]' : 'ring-1 ring-[#ececef]'}`}>
+                  {byDay[cell.key][byDay[cell.key].length - 1].emoji}
+                </span>
+              ) : (
+                <span className={`mt-1 h-8 w-8 rounded-full border border-dashed ${cell.key === todayK ? 'border-[#b9b9c1] bg-white/70' : 'border-[#e4e4e9]'}`} />
+              )}
+              {cell.key === todayK && <span className="mt-0.5 text-[8.5px] leading-none text-[#8e8e96]">今天</span>}
+            </button>
+          ),
+        )}
+      </div>
+
+      <div className="mt-1 text-center text-[14px] font-medium text-[#4a4a52]">Hi，你今天的心情怎么样？</div>
+
+      {/* 浮动写日记按钮 */}
+      <button
+        type="button"
+        onClick={() => openWrite(todayKey())}
+        className="fixed bottom-16 right-5 z-20 flex items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-4 py-2.5 text-[13px] font-semibold text-white shadow-[0_10px_24px_rgba(60,60,68,0.4)] transition-transform active:scale-[0.96]"
+      >
+        <Pencil className="h-3.5 w-3.5" />
+        写日记
+      </button>
+
+      {/* 最近的心情 */}
+      {recent.length > 0 && (
+        <>
+          <h3 className="pb-2 pt-5 text-[14px] font-bold text-[#2c2c30]">最近的心情</h3>
+          <div className="space-y-2">
+            {recent.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => setDaySheet(m.dateKey || fmtDate(m.at))}
+                className="flex w-full items-start gap-3 rounded-2xl bg-white p-3 text-left shadow-sm"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#f3f3f5] text-[18px]">{m.emoji}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13.5px] leading-relaxed text-[#2c2c30]">{m.text || '（没说话，就是心情不好不坏）'}</span>
+                  <span className="mt-0.5 block text-[11px] text-[#b6b6bd]">{m.dateKey || fmtDate(m.at)}</span>
+                </span>
+                {m.photo && <img src={m.photo} alt="心情照片" className="h-11 w-11 shrink-0 rounded-lg object-cover" draggable={false} />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* 某天的心情弹层 */}
+      {daySheet && (
+        <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/35" onClick={() => setDaySheet(null)}>
+          <div className="max-h-[64%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-7 pt-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
+            <div className="mt-3 flex items-center justify-between">
+              <span className="text-[15px] font-bold text-[#2c2c30]">{daySheet === todayK ? '今天的心情' : daySheet}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  editEntry(daySheet);
+                }}
+                className="rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-3.5 py-1.5 text-[11.5px] font-semibold text-white"
+              >
+                {byDay[daySheet] ? '再写一篇' : '写这篇'}
+              </button>
+            </div>
+            <div className="mt-3 space-y-2">
+              {(byDay[daySheet] || []).length === 0 && <div className="py-4 text-center text-[13px] text-[#b6b6bd]">这一天还没有记录</div>}
+              {state.moods
+                .filter((m) => (m.dateKey || fmtDate(m.at)) === daySheet)
+                .map((m) => (
+                  <div key={m.id} className="flex items-start gap-3 rounded-2xl bg-[#f7f7f9] p-3.5">
+                    <span className="text-[22px]">{m.emoji}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13.5px] leading-relaxed text-[#2c2c30]">{m.text || '（没说话，就是心情不好不坏）'}</div>
+                      {m.photo && <img src={m.photo} alt="心情照片" className="mt-2 max-h-40 w-full rounded-xl object-cover" draggable={false} />}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
     </SubShell>
   );
 }
@@ -1648,7 +2379,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const signed = state.pactAt != null;
   return (
     <SubShell title="恋爱协议" onBack={close}>
-      <div className="mt-4 rounded-2xl bg-white p-6 shadow-sm">
+      <div className="mt-3 rounded-2xl bg-white p-5 shadow-sm">
         <div className="text-center text-[20px] font-bold tracking-[6px] text-[#2c2c30]">恋 爱 协 议</div>
         <div className="mt-1 text-center text-[12px] text-[#b6b6bd]">COUPLE AGREEMENT</div>
         <div className="mt-5 space-y-3 rounded-xl bg-[#f7f7f9] p-4 text-[14px] leading-relaxed text-[#4a4a52]">
@@ -1735,7 +2466,7 @@ function ExamPage({ state, patch, close }: { state: CoupleState; patch: (p: Part
       </div>
       {score != null ? (
         <div className="mt-4 rounded-2xl bg-white p-5 text-center shadow-sm">
-          <div className="text-[32px] font-bold text-[#2c2c30]">{score} 分</div>
+          <div className="text-[28px] font-bold text-[#2c2c30]">{score} 分</div>
           <div className="mt-1 text-[16px] text-[#5a5a62]">{title}</div>
           <button
             type="button"
@@ -1779,7 +2510,7 @@ function ZodiacPage({ state, patch, close }: { state: CoupleState; patch: (p: Pa
   };
   return (
     <SubShell title="星座缘分" onBack={close}>
-      <div className="mt-4 rounded-2xl bg-white p-5 shadow-sm">
+      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
         <div className="grid grid-cols-2 gap-3">
           {[
             { label: '我的星座', v: me, set: setMe },
@@ -1812,7 +2543,7 @@ function ZodiacPage({ state, patch, close }: { state: CoupleState; patch: (p: Pa
         </button>
         {result && (
           <div className="mt-5 text-center">
-            <div className="text-[40px] font-bold text-[#2c2c30]">{result.score}</div>
+            <div className="text-[34px] font-bold text-[#2c2c30]">{result.score}</div>
             <div className="mt-1 text-[15px] leading-relaxed text-[#5a5a62]">
               {me} ♡ {ta}
               <br />
@@ -1879,7 +2610,7 @@ function StonePage({ state, days, close }: { state: CoupleState; days: number | 
     <SubShell title="三生石" onBack={close}>
       <div className="mt-6 flex flex-col items-center">
         {/* 石头造型 */}
-        <div className="relative flex h-[220px] w-[220px] items-center justify-center rounded-[46%_54%_52%_48%/54%_46%_54%_46%] bg-[linear-gradient(150deg,#d8d8dd,#aeaeb8_60%,#9898a2)] shadow-[0_18px_40px_rgba(80,80,92,0.35)]">
+        <div className="relative flex h-[188px] w-[188px] items-center justify-center rounded-[46%_54%_52%_48%/54%_46%_54%_46%] bg-[linear-gradient(150deg,#d8d8dd,#aeaeb8_60%,#9898a2)] shadow-[0_18px_40px_rgba(80,80,92,0.35)]">
           <div className="text-center">
             <div className="text-[22px] font-bold tracking-[3px] text-[#4a4a52]">{state.meName || '我'}</div>
             <div className="my-1 text-[13px] text-[#6e6e78]">♥ 三生三世 ♥</div>
@@ -1907,7 +2638,7 @@ function ReplyPage({ state, patch, showToast, close }: { state: CoupleState; pat
   const [text, setText] = useState('');
   return (
     <SubShell title="回复挑战" onBack={close}>
-      <div className="mt-4 rounded-2xl bg-white p-5 shadow-sm">
+      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
         <div className="text-[13px] text-[#9a9aa2]">如果 TA 这样说——</div>
         <div className="mt-2 rounded-xl bg-[#f7f7f9] p-4 text-[16px] font-medium leading-relaxed text-[#2c2c30]">{REPLY_PROMPTS[idx]}</div>
         <textarea
@@ -2019,7 +2750,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
   const [tagMe, setTagMe] = useState('');
   const [tagTa, setTagTa] = useState('');
   const section = (title: string, tags: string[], onAdd: () => void, input: string, setInput: (v: string) => void, onRemove: (t: string) => void) => (
-    <div className="mt-4 rounded-2xl bg-white p-5 shadow-sm">
+    <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
       <div className="text-[16px] font-semibold text-[#2c2c30]">{title}</div>
       <div className="mt-3 flex flex-wrap gap-2">
         {tags.length === 0 && <span className="text-[13.5px] text-[#b6b6bd]">还没有标签，来贴第一张吧</span>}
@@ -2088,13 +2819,15 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
   );
 }
 
-/** 恋爱资料：编辑双方昵称/头像/签名 */
-function ProfilePage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
-  const [meName, setMeName] = useState(state.meName);
-  const [taName, setTaName] = useState(state.taName);
-  const [signature, setSignature] = useState(state.signature);
+/** 恋爱资料（参考图2）：iOS 分组列表（头像/昵称/性别/情侣号/恋人证书/登录记录/解除关系 + 对方） */
+function ProfilePage({ state, patch, showToast, close, onReset }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void; onReset: () => void }) {
   const meInput = useRef<HTMLInputElement | null>(null);
   const taInput = useRef<HTMLInputElement | null>(null);
+  const [dialog, setDialog] = useState<null | 'nickname' | 'gender' | 'cert' | 'logins' | 'ta' | 'signature' | 'reset'>(null);
+  const [nickDraft, setNickDraft] = useState('');
+  const [taNameDraft, setTaNameDraft] = useState('');
+  const [sigDraft, setSigDraft] = useState('');
+
   const pickAvatar = async (f: File | null, side: 'me' | 'ta') => {
     if (!f) return;
     try {
@@ -2105,69 +2838,341 @@ function ProfilePage({ state, patch, showToast, close }: { state: CoupleState; p
       showToast('图片处理失败');
     }
   };
+
+  const copyNo = async () => {
+    try {
+      await navigator.clipboard.writeText(state.coupleNo || '');
+      showToast('情侣号已复制 ♡');
+    } catch {
+      showToast('复制失败，长按手动复制');
+    }
+  };
+
+  const rowCls = 'flex min-h-[50px] w-full items-center gap-3 px-4 py-2 text-left transition-colors active:bg-[#f6f6f8]';
+  const labelCls = 'min-w-0 flex-1 text-[14.5px] text-[#2c2c30]';
+  const valCls = 'max-w-[170px] truncate text-[13px] text-[#a9a9b2]';
+  const chev = <ChevronRight className="h-4 w-4 shrink-0 text-[#c6c6cd]" />;
+
   return (
-    <SubShell title="恋爱资料" onBack={close}>
-      <div className="mt-4 space-y-3">
-        {([
-          { side: 'me' as const, label: '我', name: meName, setName: setMeName, avatar: state.meAvatar, input: meInput },
-          { side: 'ta' as const, label: 'TA', name: taName, setName: setTaName, avatar: state.taAvatar, input: taInput },
-        ]).map((s) => (
-          <div key={s.side} className="flex items-center gap-4 rounded-2xl bg-white p-4 shadow-sm">
-            <button type="button" onClick={() => s.input.current?.click()} className="relative" aria-label={`更换${s.label}的头像`}>
-              <div className="h-16 w-16 overflow-hidden rounded-full bg-[#ececef]">
-                {s.avatar ? (
-                   
-                  <img src={s.avatar} alt={s.label} className="h-full w-full object-cover" draggable={false} />
-                ) : (
-                  <DefaultAvatar size={64} />
-                )}
-              </div>
-              <span className="absolute -bottom-0.5 -right-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#3f3f46] text-white">
-                <Camera className="h-3 w-3" />
-              </span>
-            </button>
-            <div className="flex-1">
-              <div className="text-[13px] text-[#9a9aa2]">{s.label}的昵称</div>
-              <input
-                value={s.name}
-                onChange={(e) => s.setName(e.target.value)}
-                maxLength={12}
-                className="mt-1 h-10 w-full rounded-lg bg-[#f3f3f5] px-3 text-[15px] outline-none"
-              />
-            </div>
-            <input
-              ref={s.input}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                void pickAvatar(e.target.files?.[0] ?? null, s.side);
-                e.currentTarget.value = '';
-              }}
-            />
-          </div>
-        ))}
-        <div className="rounded-2xl bg-white p-4 shadow-sm">
-          <div className="text-[13px] text-[#9a9aa2]">我们的签名</div>
-          <input
-            value={signature}
-            onChange={(e) => setSignature(e.target.value)}
-            maxLength={30}
-            placeholder="写一句属于你们的话"
-            className="mt-1 h-10 w-full rounded-lg bg-[#f3f3f5] px-3 text-[15px] outline-none placeholder:text-[#b6b6bd]"
-          />
-        </div>
+    <SubShell title="我的恋爱资料" onBack={close}>
+      {/* 第一组：我的资料 */}
+      <div className="mt-3 overflow-hidden rounded-2xl bg-white shadow-sm">
+        <button type="button" onClick={() => meInput.current?.click()} className={rowCls}>
+          <span className={labelCls}>头像</span>
+          <span className="ml-auto mr-1 h-9 w-9 overflow-hidden rounded-full bg-[#ececef]">
+            {state.meAvatar ? <img src={state.meAvatar} alt="我的头像" className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={36} />}
+          </span>
+          {chev}
+        </button>
         <button
           type="button"
           onClick={() => {
-            patch({ meName: meName.trim() || state.meName, taName: taName.trim() || state.taName, signature: signature.trim() });
-            showToast('资料已保存 ♡');
+            setNickDraft(state.meName);
+            setDialog('nickname');
           }}
-          className="h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white"
+          className={`${rowCls} border-t border-black/[0.04]`}
         >
-          保存资料
+          <span className={labelCls}>昵称</span>
+          <span className={valCls}>{state.meName || '未设置'}</span>
+          {chev}
+        </button>
+        <button
+          type="button"
+          onClick={() => setDialog('gender')}
+          className={`${rowCls} border-t border-black/[0.04]`}
+        >
+          <span className={labelCls}>性别</span>
+          <span className={valCls}>{state.gender || '未设置'}</span>
+          {chev}
+        </button>
+        <button type="button" onClick={copyNo} className={`${rowCls} border-t border-black/[0.04]`}>
+          <span className={labelCls}>情侣号</span>
+          <span className={`${valCls} font-medium tracking-wide text-[#6e6e76]`}>{state.coupleNo || '--'}</span>
+          {chev}
+        </button>
+        <button type="button" onClick={() => setDialog('cert')} className={`${rowCls} border-t border-black/[0.04]`}>
+          <span className={labelCls}>恋人证书</span>
+          {chev}
+        </button>
+        <button type="button" onClick={() => setDialog('logins')} className={`${rowCls} border-t border-black/[0.04]`}>
+          <span className={labelCls}>登录记录</span>
+          {chev}
+        </button>
+        <button
+          type="button"
+          onClick={() => setDialog('reset')}
+          className={`${rowCls} border-t border-black/[0.04] text-[#8e8e96]`}
+        >
+          <span className="flex items-center gap-1.5 text-[14.5px]">
+            解除关系 <span aria-hidden="true" className="[filter:grayscale(1)_opacity(0.75)]">💔</span>
+          </span>
+          {chev}
         </button>
       </div>
+
+      {/* 第二组：对方 */}
+      <div className="mt-3.5 overflow-hidden rounded-2xl bg-white shadow-sm">
+        <button
+          type="button"
+          onClick={() => {
+            setTaNameDraft(state.taName);
+            setDialog('ta');
+          }}
+          className={rowCls}
+        >
+          <span className={labelCls}>对方</span>
+          <span className="flex shrink-0 items-center gap-2.5">
+            <span className="text-[13px] text-[#a9a9b2]">{state.taName || '未设置'}</span>
+            <span className="h-9 w-9 overflow-hidden rounded-full bg-[#ececef]">
+              {state.taAvatar ? <img src={state.taAvatar} alt="对方头像" className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={36} />}
+            </span>
+          </span>
+          {chev}
+        </button>
+      </div>
+
+      {/* 第三组：签名 */}
+      <div className="mt-3.5 overflow-hidden rounded-2xl bg-white shadow-sm">
+        <button
+          type="button"
+          onClick={() => {
+            setSigDraft(state.signature);
+            setDialog('signature');
+          }}
+          className={rowCls}
+        >
+          <span className={labelCls}>我们的签名</span>
+          <span className={valCls}>{state.signature || '写一句属于你们的话'}</span>
+          {chev}
+        </button>
+      </div>
+
+      <p className="mt-4 px-2 text-[12px] leading-relaxed text-[#b6b6bd]">情侣号是你们的小家门牌号，头像、昵称、性别都可以随时修改。</p>
+
+      {/* 隐藏文件选择（我 / 对方头像） */}
+      <input
+        ref={meInput}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          void pickAvatar(e.target.files?.[0] ?? null, 'me');
+          e.currentTarget.value = '';
+        }}
+      />
+      <input
+        ref={taInput}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          void pickAvatar(e.target.files?.[0] ?? null, 'ta');
+          e.currentTarget.value = '';
+        }}
+      />
+
+      {/* 弹层们 */}
+      {dialog != null && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 px-8" onClick={() => setDialog(null)}>
+          <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            {dialog === 'nickname' && (
+              <>
+                <div className="text-[15px] font-semibold text-[#2c2c30]">修改昵称</div>
+                <input
+                  value={nickDraft}
+                  onChange={(e) => setNickDraft(e.target.value)}
+                  maxLength={12}
+                  className="mt-3 h-11 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] outline-none"
+                />
+                <div className="mt-4 flex gap-2.5">
+                  <button type="button" onClick={() => setDialog(null)} className="h-10 flex-1 rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      patch({ meName: nickDraft.trim() || state.meName });
+                      setDialog(null);
+                      showToast('昵称已保存 ♡');
+                    }}
+                    className="h-10 flex-1 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[13.5px] font-semibold text-white"
+                  >
+                    保存
+                  </button>
+                </div>
+              </>
+            )}
+
+            {dialog === 'gender' && (
+              <>
+                <div className="text-[15px] font-semibold text-[#2c2c30]">选择性别</div>
+                <div className="mt-3 space-y-2">
+                  {['女', '男', '保密'].map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => {
+                        patch({ gender: g });
+                        setDialog(null);
+                        showToast('性别已保存');
+                      }}
+                      className={`flex h-11 w-full items-center justify-between rounded-xl px-4 text-[14.5px] ${state.gender === g ? 'bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] font-semibold text-white' : 'bg-[#f3f3f5] text-[#3c3c42]'}`}
+                    >
+                      {g}
+                      {state.gender === g && <Check className="h-4 w-4" strokeWidth={2.5} />}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {dialog === 'cert' && (
+              <>
+                <div className="text-center text-[17px] font-bold tracking-[6px] text-[#2c2c30]">恋 人 证 书</div>
+                <div className="mt-1 text-center text-[10px] tracking-[2px] text-[#b6b6bd]">LOVER CERTIFICATE</div>
+                <div className="mt-4 rounded-xl bg-[#f7f7f9] px-4 py-5 text-center">
+                  <div className="flex items-center justify-center gap-2.5">
+                    <span className="h-8 w-8 overflow-hidden rounded-full bg-[#ececef]">
+                      {state.meAvatar ? <img src={state.meAvatar} alt="" className="h-full w-full object-cover" /> : <DefaultAvatar size={32} />}
+                    </span>
+                    <PixelHeart size={22} />
+                    <span className="h-8 w-8 overflow-hidden rounded-full bg-[#ececef]">
+                      {state.taAvatar ? <img src={state.taAvatar} alt="" className="h-full w-full object-cover" /> : <DefaultAvatar size={32} />}
+                    </span>
+                  </div>
+                  <div className="mt-2.5 text-[14px] font-semibold text-[#2c2c30]">
+                    {state.meName || '我'} <span className="mx-1 text-[#a9a9b2]">♡</span> {state.taName || 'TA'}
+                  </div>
+                  <div className="mt-1.5 text-[11.5px] leading-relaxed text-[#8e8e96]">
+                    兹证明二位已缔结恋人关系
+                    <br />
+                    {state.anniversary ? `自 ${fmtDateCn(state.anniversary)} 起` : '纪念日期待你们写下'}
+                    <br />
+                    特此颁发此证，以资纪念。
+                  </div>
+                </div>
+                <button type="button" onClick={() => setDialog(null)} className="mt-4 h-10 w-full rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[13.5px] font-semibold text-white">
+                  收好证书
+                </button>
+              </>
+            )}
+
+            {dialog === 'logins' && (
+              <>
+                <div className="text-[15px] font-semibold text-[#2c2c30]">登录记录</div>
+                <div className="mt-3 max-h-[46vh] space-y-1.5 overflow-y-auto">
+                  {state.logins.length === 0 && <div className="py-4 text-center text-[13px] text-[#b6b6bd]">暂无记录</div>}
+                  {state.logins.map((t, i) => {
+                    const d = new Date(t);
+                    return (
+                      <div key={`${t}-${i}`} className="flex items-center justify-between rounded-xl bg-[#f7f7f9] px-3.5 py-2.5 text-[13px]">
+                        <span className="text-[#2c2c30]">{i === 0 ? '本次登录' : `第 ${state.logins.length - i} 次`}</span>
+                        <span className="text-[#8e8e96]">
+                          {fmtDate(t)} {String(d.getHours()).padStart(2, '0')}:{String(d.getMinutes()).padStart(2, '0')}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <button type="button" onClick={() => setDialog(null)} className="mt-4 h-10 w-full rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
+                  关闭
+                </button>
+              </>
+            )}
+
+            {dialog === 'ta' && (
+              <>
+                <div className="text-[15px] font-semibold text-[#2c2c30]">对方资料</div>
+                <div className="mt-3 flex items-center gap-3">
+                  <button type="button" onClick={() => taInput.current?.click()} className="relative shrink-0" aria-label="更换对方头像">
+                    <span className="block h-12 w-12 overflow-hidden rounded-full bg-[#ececef]">
+                      {state.taAvatar ? <img src={state.taAvatar} alt="" className="h-full w-full object-cover" /> : <DefaultAvatar size={48} />}
+                    </span>
+                    <span className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-[#3f3f46] text-white">
+                      <Camera className="h-2.5 w-2.5" />
+                    </span>
+                  </button>
+                  <input
+                    value={taNameDraft}
+                    onChange={(e) => setTaNameDraft(e.target.value)}
+                    placeholder="TA 的昵称"
+                    maxLength={12}
+                    className="h-11 flex-1 rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] outline-none placeholder:text-[#b6b6bd]"
+                  />
+                </div>
+                <div className="mt-4 flex gap-2.5">
+                  <button type="button" onClick={() => setDialog(null)} className="h-10 flex-1 rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      patch({ taName: taNameDraft.trim() || state.taName });
+                      setDialog(null);
+                      showToast('对方资料已保存 ♡');
+                    }}
+                    className="h-10 flex-1 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[13.5px] font-semibold text-white"
+                  >
+                    保存
+                  </button>
+                </div>
+              </>
+            )}
+
+            {dialog === 'signature' && (
+              <>
+                <div className="text-[15px] font-semibold text-[#2c2c30]">我们的签名</div>
+                <input
+                  value={sigDraft}
+                  onChange={(e) => setSigDraft(e.target.value)}
+                  maxLength={30}
+                  placeholder="写一句属于你们的话"
+                  className="mt-3 h-11 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] outline-none placeholder:text-[#b6b6bd]"
+                />
+                <div className="mt-4 flex gap-2.5">
+                  <button type="button" onClick={() => setDialog(null)} className="h-10 flex-1 rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      patch({ signature: sigDraft.trim() });
+                      setDialog(null);
+                      showToast('签名已保存 ♡');
+                    }}
+                    className="h-10 flex-1 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[13.5px] font-semibold text-white"
+                  >
+                    保存
+                  </button>
+                </div>
+              </>
+            )}
+
+            {dialog === 'reset' && (
+              <>
+                <div className="text-[15px] font-semibold text-[#2c2c30]">确定解除恋人关系吗？</div>
+                <p className="mt-2 text-[13px] leading-relaxed text-[#9a9aa2]">将清空恋人空间的全部数据（相册、日记、情书、成长值……），此操作不可恢复。</p>
+                <div className="mt-4 flex gap-2.5">
+                  <button type="button" onClick={() => setDialog(null)} className="h-10 flex-1 rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
+                    再想想
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDialog(null);
+                      onReset();
+                      showToast('已解除关系，回到邀请页');
+                    }}
+                    className="h-10 flex-1 rounded-xl bg-[#3f3f46] text-[13.5px] font-semibold text-white"
+                  >
+                    确认解除
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </SubShell>
   );
 }
@@ -2185,15 +3190,15 @@ function MissYouPage({ state, tapMissYou, close }: { state: CoupleState; tapMiss
   return (
     <SubShell title="每天想你" onBack={close}>
       <div className="mt-4 flex flex-col items-center rounded-2xl bg-white py-8 shadow-sm">
-        <button type="button" onClick={tapMissYou} aria-label="想你 +1" className="flex h-[120px] w-[120px] items-center justify-center rounded-full bg-[radial-gradient(circle_at_32%_28%,#cfcfd6,#a9a9b2_70%)] text-white shadow-[0_14px_34px_rgba(70,70,80,0.35)] transition-transform active:scale-[0.94]">
-          <Heart className="h-12 w-12" fill="currentColor" strokeWidth={1.5} />
+        <button type="button" onClick={tapMissYou} aria-label="想你 +1" className="flex h-[104px] w-[104px] items-center justify-center rounded-full bg-[radial-gradient(circle_at_32%_28%,#cfcfd6,#a9a9b2_70%)] text-white shadow-[0_14px_34px_rgba(70,70,80,0.35)] transition-transform active:scale-[0.94]">
+          <Heart className="h-10 w-10" fill="currentColor" strokeWidth={1.5} />
         </button>
         <div className="mt-4 text-[15px] text-[#9a9aa2]">今天已经想了你</div>
         <div className="text-[34px] font-bold text-[#2c2c30]">{today} 次</div>
         <div className="text-[13px] text-[#b6b6bd]">累计 {state.missYou} 次</div>
       </div>
       {/* 近 7 天柱状 */}
-      <div className="mt-4 rounded-2xl bg-white p-5 shadow-sm">
+      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
         <div className="text-[15px] font-semibold text-[#2c2c30]">近 7 天的心动频率</div>
         <div className="mt-4 flex h-[90px] items-end justify-between gap-2 px-1">
           {week.map((w) => (
@@ -2216,7 +3221,7 @@ function ChapelPage({ state, patch, showToast, close }: { state: CoupleState; pa
     <SubShell title="小礼堂" onBack={close}>
       {state.married ? (
         <div className="mt-6 rounded-2xl bg-white p-6 text-center shadow-sm">
-          <div className="text-[40px]">💒</div>
+          <div className="text-[34px]">💒</div>
           <div className="mt-2 text-[22px] font-bold tracking-[4px] text-[#2c2c30]">结 婚 证</div>
           <div className="mt-4 space-y-2 text-[16px] text-[#4a4a52]">
             <div>
@@ -2232,7 +3237,7 @@ function ChapelPage({ state, patch, showToast, close }: { state: CoupleState; pa
         </div>
       ) : (
         <div className="mt-6 flex flex-col items-center rounded-2xl bg-white py-10 shadow-sm">
-          <div className="text-[54px]">💍</div>
+          <div className="text-[44px]">💍</div>
           <div className="mt-3 text-[18px] font-bold text-[#2c2c30]">准备一场求婚仪式</div>
           <p className="mt-2 px-8 text-center text-[14px] leading-relaxed text-[#9a9aa2]">在小礼堂，单膝跪地，把余生的每一天都交给对方。</p>
           <button
