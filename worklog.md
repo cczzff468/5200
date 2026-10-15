@@ -19742,3 +19742,18 @@ Stage Summary:
 - AI 想你/浇树彻底解耦：随机自主延时，绝不跟随用户点击
 - 恋爱状态=双人同步测评+双报告（用户 API 模型优先），情侣轨迹弹层瘦身，行踪真实时间，编年史/印象留言按截图重做
 - 修复上轮损坏的 3 处 [m 缺失（很可能就是「心情日记表情不显示」复发的元凶之一）
+
+---
+Task ID: couple-round11-note
+Agent: Z.ai Code (main)
+Task: 补记：环境文件系统分层怪象确认与本轮收尾
+
+Work Log:
+- 实锤环境怪象：本机存在「工具层 / bash 层」双视图，bash 层对字符序列 [m 会吞吃（heredoc、命令行参数均受影响）；上一轮提交进仓库的 3 处源码损坏正是同一机制所致
+- 应对协议：源码修改全部走 Edit/Write 工具层；bash 只做验证与 git 操作；git 提交前用 bash rg 复核关键行
+- 本轮提交 ca1aa34 内的源码（couple-space.tsx / couple-ai.ts）为修复后版本（提交前 bash rg + tsc 双重复核）；仅本文件上文两处 [m 字样在 commit 里被吞（「」两字符被吞 / 3 处 缺失），以本条目为准
+- 已推送 origin/main（3b999b7..ca1aa34）；dev server 3000 正常，agent-browser 已 close 释放内存
+
+Stage Summary:
+- 九项需求全部完成并浏览器实证；仓库最新 commit = ca1aa34（origin/main 已同步）
+- 后续会话注意：禁止用 bash heredoc 写含 [m 字样的内容；源码一律走工具层写入
