@@ -19799,3 +19799,24 @@ Stage Summary:
 - 卡片状态模型：气泡以恋人空间存档为真相自愈（不再依赖消息内嵌状态回写成功），点击导航携带 signed/pactId/title，PactPage/ExamPage 按当前状态分流直达
 - 批改闭环：AI 出卷→用户答→AI 批语（性别纪律）；用户出卷→AI 只作答→用户批改打分写批语→AI 在批语下留言并写入记忆（AI 知晓批改结果）
 - 遗留：微信卡片视觉验证需登录态未做（自愈逻辑为纯读路径已由代码保证）；前五批约 55 项待办仍未动工
+
+---
+Task ID: 19
+Agent: Z.ai Code（主会话）
+Task: 恋人空间第十九轮（第八批 8 项）：情书封存删除+即时/定时发送、编辑信件多页美化、信封去 emoji 全 SVG 重绘、信件写进记忆、星座缘分真实生成+美化、情侣酒店跳美团酒店旅行、头像跟随微信/QQ 登录头像
+
+Work Log:
+- 环境勘察：git log 显示第 1-7 批（第 1-18 轮）已在先前会话完成（HEAD=1996368），本批为第 19 轮全新 8 项
+- 需求 45（信封去 emoji）：重写 couple-letter-bubble.tsx —— 底纹（爪印/星星/爱心/云朵）改 PatternGlyph SVG、火漆贴纸改 SealGlyph SVG（按原 emoji 字符映射爱心/星星/月亮/叶子/云朵）、底部小动物改 PetFace SVG 卡通脸（兔耳/熊耳/猫耳/垂耳狗/鼠/狐+点点眼+腮红+微笑）、新增 LaceTrim 蕾丝扇贝边 + Postmark「恋人邮局 LOVE POST」圆形邮戳；六款信封 key 不变兼容存量数据；聊天信封卡片同套视觉
+- 需求 42/43（封存删除+即时/定时）：LettersPage 的 seal 视图整体替换为「发送设置」视图（对照用户参考截图：信封预览卡带「{我}的来信」标题+邮戳+中间头像+编辑角标+右下日期；信封设置[设置头像/昵称|换信封]、收信效果、背景音乐、拆信设置[定时拆信|即时拆信]）；sendLetter 落库 openAfterDays=now?0:after；信箱列表兼容 0 天信显示「即时寄达/可拆信」
+- 需求 44（编辑页多页+美化）：多页信纸 pages[]（每页 200 字上限、最多 6 页、页满 toast 节流提示）；左右纸边翻页箭头（末页右箭头=加一页）+ 底部 [存草稿|‹ 页码 ›|下一步] 导航；页眉「{我} 的来信」+日期（位置调整：日期上移、底部只留计数/页码）；草稿按 JSON 页数组持久化（兼容旧版单字符串）；三个弹层（信纸/字体/信封）提取 renderSheets 供编辑页与发送页共用
+- 需求 46（信件写记忆）：doShareLetter 恋人分支新增 coupleRemember（我写信给 TA 的内容摘要进 AI 记忆）；couple-letter-share.ts 回信记忆从 40 字增强到 90 字正文；TA 主动写信的记忆先前已有（无需改）
+- 需求 47（星座缘分）：couple-ai.ts 新增 aiZodiacReading（真实占星逻辑 prompt+人设+性别纪律+最近聊天，用户配置 API 模型，JSON 输出 score/text/glow/advice/watch）；CoupleState/CoupleSnap 增加 zodiacReading 持久化；ZodiacPage 重做：星空卡（星点装饰+双星座徽章带占星符号♈-♓与元素色+SVG 评分环渐变）+四分区（缘分总评/最合拍/相处建议/温柔小提醒，lucide 图标无 emoji）+加载骨架+LLM 失败本地兜底（四元素相性打分）并提示可重测
+- 需求 48（情侣酒店→美团）：meituan-store.ts 新增 setMtPendingPage/takeMtPendingPage；meituan.tsx 启动 effect 消费（已登录 setPage('travel')，未登录留主页）；couple-space 新增 openMeituanTravel()（写入待打开页+useUI 切 App）；发现页「情侣酒店」宫格点击直接跳转；sub 路由 hotel case 改 HotelJump 过渡组件（挂载即跳）；删除 HotelPage 与 HOTEL_ROOMS
+- 需求 49（头像跟随）：couple-space 身份同步 effect 补监听 contact-avatar-changed/contact-updated（此前仅挂载+状态事件，微信/QQ 换头像时恋人不实时跟随）；美团/淘宝的同类同步机制经代码核实已存在（mtSyncSessionIdentity/tbSyncSessionIdentity 读分 App 头像槽位+双事件监听+打开对齐一次）
+- 验证：tsc 全量通过（仅历史遗留 API 路由 Prisma 报错，与本次无关）；lint 对改动文件零新增（meituan.tsx:3594 ref 告警经 stash 对照确认为历史遗留）；agent-browser 实机验证：注入测试关系状态后——编辑信件页（页眉/工具栏/计数/页码/双页翻页 2/2）✓、发送设置页（信封预览+邮戳+头像+拆信设置即时/定时切换+天数 chips+预计日期）✓、寄出后信箱「即时寄达/可拆信/两页全文合并」✓、信封缩略图纯 SVG 无 emoji ✓、星座缘分（双徽章+88 分评分环+四分区+兜底提示）✓、点击情侣酒店直跳美团 ✓（未登录安全落在登录页，符合 && v 守卫）
+- 登录链路限制说明：沙箱为全新环境，微信/QQ/美团均无注册账号（提示"该QQ号尚未注册"/"该手机号未绑定"），美团「已登录→直达酒店旅行页」分支无法端到端走通；该分支为 3 行纯代码路径（消费 pending page + setPage('travel')），编译零错误，由代码评审保证；dev.log 无新增错误
+
+Stage Summary:
+- 6 文件改动：couple-space.tsx（+832/-264 主体）、couple-letter-bubble.tsx（信封全 SVG 重绘）、couple-ai.ts（aiZodiacReading+zodiacReading 类型）、couple-letter-share.ts（回信记忆增强）、meituan-store.ts（pending page 机制）、meituan.tsx（启动消费直达 travel）
+- 第八批 8 项全部落地：封存删除→发送设置（即时/定时拆信）、编辑器多页+美化重排、信封零 emoji 全 SVG（蕾丝+邮戳+卡通小动物）、双向信件进 AI 记忆、星座缘分真实生成+星空卡美化+持久化、情侣酒店直达美团酒店旅行、恋人空间头像实时跟随微信/QQ 登录头像

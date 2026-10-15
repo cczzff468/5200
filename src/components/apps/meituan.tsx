@@ -230,6 +230,7 @@ import {
   MT_STATUS_LABEL,
   MT_WALLET_BILL_LABEL,
   PAY_TIMEOUT_MS,
+  takeMtPendingPage,
   type MtAddress,
   type MtBankCard,
   type MtCart,
@@ -12065,6 +12066,10 @@ export default function MeituanApp() {
         } else {
           setPage('orderDetail');
         }
+      }
+      // 恋人空间「情侣酒店」外部直达（第十九轮需求48）：已登录 → 直接进「酒店旅行」频道；未登录留在主页先登录
+      if (takeMtPendingPage() === 'travel' && v) {
+        setPage('travel');
       }
     })();
     const onNav = () => {

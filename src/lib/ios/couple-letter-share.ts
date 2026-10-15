@@ -272,7 +272,8 @@ export function scheduleAiLetterFeedback(opts: { channel: CoupleChannel; contact
           });
           const { coupleRemember } = await import('./couple-ai');
           const snap = kvGet<Record<string, string>>('couple-space:state') ?? {};
-          coupleRemember(opts.contactId, opts.channel, `TA读了${snap.meName || '她'}的情书并回了一封信（回信开头：${cut(reply, 40)}）`);
+          // 第十九轮需求46：TA 的信（回信）写进记忆时带上更多正文，之后的对话能想起信里说了什么
+          coupleRemember(opts.contactId, opts.channel, `TA读了${snap.meName || '她'}的情书并回了一封信（回信内容：${cut(reply, 90)}）`);
         } else if (comment) {
           const { coupleRemember } = await import('./couple-ai');
           coupleRemember(opts.contactId, opts.channel, `TA读了${snapName()}的情书，在信下留言：${cut(comment, 40)}`);

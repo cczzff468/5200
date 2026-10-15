@@ -97,6 +97,8 @@ interface CoupleSnap {
   examTaPaper?: { title: string; questions: { q: string; opts: string[] }[]; at: number; answered?: boolean } | null;
   examTaSheet?: { title: string; picks: Record<string, number>; score?: number; comment?: string; at: number; myScore?: number | null; myComment?: string; taReply?: string } | null;
   examResult?: { title: string; score: number; comment: string; byTa: boolean; at: number } | null;
+  /** 星座缘分解读（第十九轮：用户 API 模型按真实占星生成，TA 也知道咱们的缘分结果） */
+  zodiacReading?: { me: string; ta: string; score: number; text: string; glow: string; advice: string; watch: string; at: number } | null;
 }
 
 /** 留言线程 key → 场景名（记忆/注入/AI 上下文共用） */
@@ -1529,6 +1531,43 @@ export async function aiReadLetter(letterId: string, text: string): Promise<{ co
     };
   } catch {
     return {};
+  }
+}
+
+/**
+ * 星座缘分解读（第十九轮需求47）：真实占星配对知识 + 人设记忆 + 最近聊天，用用户配置的 API 模型生成。
+ * 返回 null 时调用方走本地兜底。
+ */
+export async function aiZodiacReading(meSign: string, taSign: string): Promise<{ score: number; text: string; glow: string; advice: string; watch: string } | null> {
+  const target = aiTarget();
+  if (!target) return null;
+  const snap = readSnap();
+  if (!snap) return null;
+  const me = (snap.meName || '').trim() || '我';
+  const ta = (snap.taName || '').trim() || 'TA';
+  const p = await taPersonaOf(target.contactId);
+  if (!p) return null;
+  currentPartnerId = target.contactId;
+  currentChannel = target.channel;
+  const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+  try {
+    const raw = await coupleLLM(
+      `${llmSystem(p, me, snap)}\n场景：${me}在恋人空间「星座缘分」里查两个人的星座配对（${me}是${meSign}，你是${taSign}）。请按真实占星学的配对逻辑（元素风火水土、模式基本/固定/变动、典型相位关系）给出靠谱的解读，再结合你们的人设与最近聊天气氛落到你们俩身上，不许胡编泛泛而谈。${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`,
+      `输出 JSON（禁止 emoji）：\n{"score":配对指数（整数，58~99，按这对星座真实相处的难易度给分，绝不全给高分）,"text":"缘分总评（60~90字，先讲这对星座真实相处的特点与 famous 的相性结论，再落到你们俩身上，口吻甜一点）","glow":"你们最合拍的一点（18字内，具体到相处场景）","advice":"相处建议（40~70字，给一件可执行的小事，贴合${me}${meSign}×${taSign}）","watch":"需要留意的小提醒（28~50字，语气温柔不吓人）"}。只输出 JSON。`,
+    );
+    const j = extractJson<{ score?: number; text?: string; glow?: string; advice?: string; watch?: string }>(raw);
+    const score = Math.max(50, Math.min(99, Math.round(Number(j?.score) || 0)));
+    const text = stripEmoji(cut(j?.text ?? '', 160));
+    if (!text || !score) return null;
+    return {
+      score,
+      text,
+      glow: stripEmoji(cut(j?.glow ?? '', 40)),
+      advice: stripEmoji(cut(j?.advice ?? '', 120)),
+      watch: stripEmoji(cut(j?.watch ?? '', 90)),
+    };
+  } catch {
+    return null;
   }
 }
 

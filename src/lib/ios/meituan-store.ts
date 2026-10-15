@@ -1910,3 +1910,20 @@ export function mtInsertGenOrders(uid: string, batch: MtOrder[]): number {
 export function mtExistingOrderKeys(uid: string): string[] {
   return mtLoadOrders(uid).map(mtGenOrderKey);
 }
+
+// ---------------- 外部直达页（第十九轮：恋人空间「情侣酒店」→ 美团「酒店旅行」频道） ----------------
+
+/** 待打开的页面（模块级；MeituanApp 挂载时消费） */
+let mtPendingPage: 'travel' | null = null;
+
+/** 外部写入待打开页（恋人空间点击「情侣酒店」时调用） */
+export function setMtPendingPage(p: 'travel'): void {
+  mtPendingPage = p;
+}
+
+/** MeituanApp 挂载时取走待打开页（读后即清） */
+export function takeMtPendingPage(): 'travel' | null {
+  const p = mtPendingPage;
+  mtPendingPage = null;
+  return p;
+}

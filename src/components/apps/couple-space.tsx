@@ -55,6 +55,7 @@ import {
   AlignJustify,
   Info,
   Landmark,
+  Lightbulb,
   Loader2,
   Mail,
   MapPin,
@@ -68,6 +69,7 @@ import {
   BookOpen,
   ClipboardList,
   Medal,
+  ShieldCheck,
   Orbit,
   Phone,
   Plane,
@@ -101,10 +103,11 @@ import {
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
-import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, coupleMemoryDiff, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, type DynReplyLevel } from '@/lib/ios/couple-ai';
+import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, aiZodiacReading, coupleMemoryDiff, coupleRemember, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, type DynReplyLevel } from '@/lib/ios/couple-ai';
 import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, patchPactCardsWhere, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
 import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
 import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
+import { setMtPendingPage } from '@/lib/ios/meituan-store';
 import { EnvelopeArt, LETTER_ENVELOPES, letterEnvelopeOf } from './couple-letter-bubble';
 import { displayNameOf, isFriendIn, avatarFor, type ContactRecord } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
@@ -198,6 +201,7 @@ interface CoupleState {
   pactMeAt: number | null; // 我签名时间
   pactTaAt: number | null; // TA 签名时间
   zodiac: { me: string; ta: string } | null; // 星座缘分选择
+  zodiacReading: { me: string; ta: string; score: number; text: string; glow: string; advice: string; watch: string; at: number } | null; // 星座缘分解读（第十九轮：用户 API 模型按真实占星生成，可重测覆盖）
   tarotHistory: { id: string; name: string; at: number }[]; // 塔罗抽牌历史（存最近一张）
   married: boolean; // 小礼堂：是否已婚
   marriedAt: number | null;
@@ -297,6 +301,7 @@ function defaultState(): CoupleState {
     pactMeAt: null,
     pactTaAt: null,
     zodiac: null,
+    zodiacReading: null,
     tarotHistory: [],
     married: false,
     marriedAt: null,
@@ -705,14 +710,6 @@ const REPLY_LEVELS: {
   },
 ];
 
-/** 情侣酒店房型（玩梗向） */
-const HOTEL_ROOMS = [
-  { name: '云朵大床房', desc: '整面落地窗，适合一起赖床到中午' },
-  { name: '星空圆床房', desc: '屋顶天窗，躺着数星星' },
-  { name: '温泉私汤房', desc: '独立汤池，冬夜首选' },
-  { name: '海边木屋', desc: '推门就是沙滩和日出' },
-];
-
 /** 恋爱协议随机条款池（随机新增一条；第七轮参考图3/4/5 重做） */
 const PACT_RANDOM_POOL = [
   '吵架时先抱十秒再讲道理',
@@ -1075,9 +1072,15 @@ export default function CoupleSpaceApp() {
     };
     void syncFromGlobal();
     window.addEventListener(COUPLE_STATE_EVENT, syncFromGlobal);
+    // 第十九轮需求49：头像/名字实时跟随登录渠道（微信/QQ）——微信/QQ 内换头像、改昵称保存后
+    // contacts-store 会广播 contact-avatar-changed / contact-updated，这里同步刷新 meName/meAvatar 等
+    window.addEventListener('contact-avatar-changed', syncFromGlobal);
+    window.addEventListener('contact-updated', syncFromGlobal);
     return () => {
       alive = false;
       window.removeEventListener(COUPLE_STATE_EVENT, syncFromGlobal);
+      window.removeEventListener('contact-avatar-changed', syncFromGlobal);
+      window.removeEventListener('contact-updated', syncFromGlobal);
     };
   }, []);
 
@@ -1715,6 +1718,15 @@ const DISCOVER_GRID: { key: SubPage; label: string; icon: React.ReactNode }[] = 
   { key: 'impress', label: '情侣印象', icon: <Smile className="h-7 w-7" strokeWidth={1.9} /> },
 ];
 
+/** 情侣酒店 → 美团「酒店旅行」频道（第十九轮需求48）：写入待打开页并切到美团 App */
+function openMeituanTravel(): void {
+  setMtPendingPage('travel');
+  const ui = useUI.getState();
+  if (ui.locked) return;
+  if (ui.activeApp && ui.activeApp !== 'meituan') ui.switchToApp('meituan');
+  else if (!ui.activeApp || ui.phase === 'closed') ui.openApp('meituan');
+}
+
 function DiscoverPage({ openSub }: { openSub: (s: SubPage) => void }) {
   return (
     <div className="h-full overflow-y-auto overscroll-contain pb-5">
@@ -1756,7 +1768,8 @@ function DiscoverPage({ openSub }: { openSub: (s: SubPage) => void }) {
           <button
             key={it.key + String(i)}
             type="button"
-            onClick={() => openSub(it.key)}
+            onClick={() => (it.key === 'hotel' ? openMeituanTravel() : openSub(it.key))}
+            data-testid={it.key === 'hotel' ? 'discover-hotel' : undefined}
             className="flex h-[86px] flex-col items-center justify-center gap-2 rounded-2xl transition-transform active:scale-[0.96]"
             style={{ background: ['#f7f7f9', '#f1f1f4', '#ebebee'][i % 3] }}
           >
@@ -2325,7 +2338,7 @@ function SubRouter(props: {
     case 'reply':
       return <ReplyPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'hotel':
-      return <HotelPage showToast={showToast} close={close} />;
+      return <HotelJump close={close} />;
     case 'status':
       return <StatusPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'impress':
@@ -3996,13 +4009,29 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
   );
 }
 
-/** 情书（原未来情书，参考截图：黑色星空治愈风）—— 主视图（信封）→ 告白页 → 编辑信件（信纸/字体/信封/虚线工具栏）→ 封存 → 信箱（TA 的信 + 我的信 + 信下留言 + 分享给 TA） */
+/** 情书（原未来情书，参考截图：黑色星空治愈风）—— 主视图（信封）→ 告白页 → 编辑信件（信纸/字体/信封/虚线工具栏/多页翻页）→ 发送设置（即时/定时拆信，参照「慢邮邮」截图重做）→ 信箱（TA 的信 + 我的信 + 信下留言 + 分享给 TA） */
+const LETTER_PAGE_CHARS = 200; // 每页信纸字数上限（写满翻下一页）
+const LETTER_MAX_PAGES = 6; // 最多页数
+
 function LettersPage({ state, patch, close, showToast }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void; showToast: (m: string) => void }) {
-  const [view, setView] = useState<'home' | 'intro' | 'write' | 'seal' | 'box'>('home');
-  const [text, setText] = useState(state.letterDraft || '');
+  const [view, setView] = useState<'home' | 'intro' | 'write' | 'send' | 'box'>('home');
+  // 多页信纸（第十九轮需求44：一页不够可以换第二页；草稿按 JSON 页数组持久化，兼容旧版单字符串）
+  const [pages, setPages] = useState<string[]>(() => {
+    const d = state.letterDraft;
+    if (!d) return [''];
+    try {
+      const j = JSON.parse(d) as unknown;
+      if (Array.isArray(j) && j.length > 0 && j.every((x) => typeof x === 'string')) return j as string[];
+    } catch {
+      /* 旧版纯文本草稿 */
+    }
+    return [d];
+  });
+  const [pageIdx, setPageIdx] = useState(0);
   const [envKey, setEnvKey] = useState<string>(state.letterEnv || 'pinkbunny'); // 信封样式（第十八轮需求37）
   const [taOpenId, setTaOpenId] = useState<string | null>(null); // TA 寄给我的信：展开详情的信 id（第十八轮）
   const [shareLetterId, setShareLetterId] = useState<string | null>(null); // 正在分享的信（弹出通用分享选择器）
+  const [sendMode, setSendMode] = useState<'now' | 'timed'>('now'); // 拆信设置（第十九轮需求43：即时拆信 / 定时拆信）
   const [after, setAfter] = useState(30);
   const [paper, setPaper] = useState(LETTER_PAPERS[0]);
   const [font, setFont] = useState(LETTER_FONTS[0]);
@@ -4012,9 +4041,153 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   const [receipt, setReceipt] = useState(true);
   const [toolsOpen, setToolsOpen] = useState(true);
   const [sheet, setSheet] = useState<null | 'paper' | 'font' | 'env'>(null);
+  const fullToastAt = useRef(0); // 页满提示节流
   const now = Date.now();
   const arrived = (l: { at: number; openAfterDays: number }) => now >= l.at + l.openAfterDays * 86400000;
   const arriveDate = new Date(Date.now() + after * 86400000);
+  const curPage = pages[pageIdx] ?? '';
+  const meName0 = state.meName || '我';
+
+  /** 当前页写入（上限截断 + 写满提示节流） */
+  const setPageText = (v: string) => {
+    const capped = v.slice(0, LETTER_PAGE_CHARS);
+    if (v.length > LETTER_PAGE_CHARS && curPage.length >= LETTER_PAGE_CHARS && Date.now() - fullToastAt.current > 2500) {
+      fullToastAt.current = Date.now();
+      showToast('本页写满了，翻到下一页继续写 ♡');
+    }
+    setPages((ps) => ps.map((p, i) => (i === pageIdx ? capped : p)));
+  };
+
+  /** 翻页：向后翻到末页时新增一页（最多 LETTER_MAX_PAGES 页） */
+  const goPage = (delta: number) => {
+    setPageIdx((idx) => {
+      const next = idx + delta;
+      if (next < 0 || next >= LETTER_MAX_PAGES) return idx;
+      if (delta > 0 && next >= pages.length) {
+        setPages((ps) => (ps.length < LETTER_MAX_PAGES ? [...ps, ''] : ps));
+        return next;
+      }
+      return Math.min(next, Math.max(0, Math.min(pages.length - 1, next)));
+    });
+  };
+
+  /** 多页合并成全文（发送/字数统计用） */
+  const fullText = () => pages.map((p) => p.trim()).filter(Boolean).join('\n');
+
+  /** 三个选择弹层（信纸/字体/信封；第十九轮起编辑页与发送设置页共用） */
+  const renderSheets = () => (
+    <>
+      {/* 信纸选择弹层 */}
+      {sheet === 'paper' && (
+        <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
+          <div className="rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
+            <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
+            <div className="text-center text-[17px] font-bold text-[#2c2c30]">选择信纸</div>
+            <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">‹ 左右滑动切换风格 ›</div>
+            <div className="mt-3 grid max-h-[290px] grid-cols-4 gap-3 overflow-y-auto">
+              {LETTER_PAPERS.map((p) => (
+                <button key={p.key} type="button" onClick={() => { setPaper(p); setSheet(null); }} className="flex flex-col items-center gap-1.5">
+                  <span
+                    className={`h-[86px] w-full rounded-md border-2 shadow-sm ${paper.key === p.key ? 'border-[#21b357]' : 'border-transparent'}`}
+                    style={{ background: p.bg, backgroundImage: `repeating-linear-gradient(180deg, transparent 0 12px, ${p.line} 12px 13px)` }}
+                  />
+                  <span className="w-full truncate text-[11.5px] text-[#5a5a62]">{p.name}</span>
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 flex gap-3">
+              <button type="button" onClick={() => showToast('更多信纸即将上架 ♡')} className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
+                更多信纸
+              </button>
+              <button type="button" onClick={() => setSheet(null)} className="h-11 flex-1 rounded-full bg-[#21b357] text-[15px] font-bold text-white">
+                完成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 字体弹层（字体/字号/颜色） */}
+      {sheet === 'font' && (
+        <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
+          <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
+            <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
+            <div className="grid grid-cols-3 gap-2.5">
+              {LETTER_FONTS.map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => setFont(f)}
+                  className={`rounded-lg border px-2 py-2.5 ${font.key === f.key ? 'border-[#c9a86a] bg-[#fbf5e8]' : 'border-[#e8e8ec] bg-white'}`}
+                >
+                  <div className="text-[10.5px] text-[#9a9aa2]">{f.name}</div>
+                  <div className="mt-0.5 text-[17px] text-[#3a3a40]" style={{ fontFamily: f.css }}>见字如面</div>
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 flex items-center gap-3">
+              <span className="shrink-0 text-[14px] font-semibold text-[#3a3a40]">字号</span>
+              <span className="text-[12px] text-[#b6b6bd]">A</span>
+              <input type="range" min={12} max={22} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="h-1.5 flex-1 accent-[#21b357]" aria-label="字号" />
+              <span className="text-[18px] font-semibold text-[#3a3a40]">A</span>
+              <span className="w-8 shrink-0 rounded-full bg-[#21b357] py-0.5 text-center text-[12px] font-bold text-white">{fontSize}</span>
+            </div>
+            <div className="mt-4 flex items-start gap-3">
+              <span className="shrink-0 pt-1.5 text-[14px] font-semibold text-[#3a3a40]">颜色</span>
+              <div className="flex flex-wrap gap-2.5">
+                {LETTER_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    aria-label={`颜色 ${c}`}
+                    onClick={() => setColor(c)}
+                    className={`h-8 w-8 rounded-lg border-2 ${color === c ? 'border-[#2c2c30]' : 'border-transparent'}`}
+                    style={{ background: c }}
+                  />
+                ))}
+              </div>
+            </div>
+            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#21b357] text-[15px] font-bold text-white">
+              完成
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 信封样式选择弹层（第十八轮需求37；第十九轮起发送设置页「换信封」也走这里） */}
+      {sheet === 'env' && (
+        <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
+          <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="env-picker">
+            <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
+            <div className="text-center text-[17px] font-bold text-[#2c2c30]">选择信封</div>
+            <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">挑一个喜欢的信封，把信装进去寄给他</div>
+            <div className="mt-3 grid grid-cols-3 gap-3">
+              {LETTER_ENVELOPES.map((e) => (
+                <button
+                  key={e.key}
+                  type="button"
+                  onClick={() => {
+                    setEnvKey(e.key);
+                    patch({ letterEnv: e.key });
+                    setSheet(null);
+                  }}
+                  className="flex flex-col items-center gap-1.5"
+                >
+                  <span className={`w-full overflow-hidden rounded-lg border-2 shadow-sm ${envKey === e.key ? 'border-[#f2536a]' : 'border-transparent'}`}>
+                    <EnvelopeArt envKey={e.key} className="h-[74px] w-full" />
+                  </span>
+                  <span className={`text-[11.5px] ${envKey === e.key ? 'font-semibold text-[#f2536a]' : 'text-[#5a5a62]'}`}>{e.name}</span>
+                </button>
+              ))}
+            </div>
+            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#21b357] text-[15px] font-bold text-white">
+              完成
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   /** 聊天里的信封卡片点击进来（第十八轮需求40）：直接进信箱并展开对应的信（不进恋人空间主页） */
   useEffect(() => {
@@ -4024,18 +4197,19 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     if (p.from === 'ta') setTaOpenId(p.letterId);
   }, []);
 
-  /** 封存信件（带信封样式） */
-  const sealLetter = () => {
-    const t = text.trim();
+  /** 寄出信件（第十九轮需求42/43：删除「封存」，改为发送设置——即时拆信 / 定时拆信） */
+  const sendLetter = () => {
+    const t = fullText();
     if (!t) return;
     patch({
-      letters: [{ id: uid(), text: t, at: Date.now(), openAfterDays: after, envelope: envKey }, ...state.letters],
+      letters: [{ id: uid(), text: t, at: Date.now(), openAfterDays: sendMode === 'now' ? 0 : after, envelope: envKey }, ...state.letters],
       letterDraft: '',
       letterEnv: envKey,
     });
-    setText('');
+    setPages(['']);
+    setPageIdx(0);
     setView('box');
-    showToast('情书已封存，未来会准时送达 ♡');
+    showToast(sendMode === 'now' ? '信已寄出，TA 现在就能拆 ♡' : `信已寄出，${after} 天后送达 ♡`);
   };
 
   /** 分享给 TA（第十八轮需求38/41）：通用分享选择器选渠道+联系人 → 信封卡片发进会话；恋人才触发 AI 读信留言/回信 */
@@ -4052,6 +4226,8 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         /* 落库失败静默 */
       }
       if (isPartner) {
+        // 第十九轮需求46：我写给 TA 的信也要写进 AI 记忆（TA 读信时和之后的对话都能想起信里的内容）
+        coupleRemember(contactId, channel, `${meName0}写了一封情书寄给我（开头：${l.text.replace(/\s+/g, ' ').trim().slice(0, 42)}…），把信封卡片发到了${channel === 'wx' ? '微信' : 'QQ'}里`);
         scheduleAiLetterFeedback({ channel, contactId, letterId: l.id, text: l.text, envelope: l.envelope ?? envKey });
         showToast('信已寄出，TA 拆信后会在信下留言、还会给你回信 ♡');
       } else {
@@ -4155,11 +4331,14 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     );
   }
 
-  // ============ 编辑信件视图：信纸 + 工具栏 ============
+  // ============ 编辑信件视图：多页信纸 + 工具栏（第十九轮需求44 美化重排） ============
   if (view === 'write') {
     const lineBg = dashed && paper.dashed !== undefined
       ? `repeating-linear-gradient(180deg, transparent 0px, transparent 30px, ${paper.line} 30px, ${paper.line} calc(30px + 1px))`
       : undefined;
+    const pageFull = curPage.length >= LETTER_PAGE_CHARS;
+    const isLastPage = pageIdx >= pages.length - 1;
+    const totalChars = pages.reduce((n, p) => n + p.length, 0);
     return (
       <div className="relative flex h-full flex-col overflow-hidden bg-[#101014]">
         <TopBar title="编辑信件" onBack={() => setView('home')} />
@@ -4168,238 +4347,275 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
           <div className="relative h-full overflow-hidden rounded-md shadow-[0_8px_28px_rgba(0,0,0,0.5)]" style={{ background: paper.bg }}>
             {/* 横线 */}
             {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: '0 6px' }} />}
+            {/* 信纸页眉：来信标题 + 日期（第十九轮重排：日期移到右上角页眉，底部留给页码/计数） */}
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-[5] flex items-center justify-between px-5 pt-3">
+              <span className="text-[12.5px] font-semibold tracking-[1px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.6)' : 'rgba(90,74,56,0.62)' }}>
+                {`${meName0} 的来信`}
+              </span>
+              <span className="text-[11.5px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.5)' : 'rgba(90,74,56,0.5)' }}>
+                {`${new Date().getFullYear()}年${new Date().getMonth() + 1}月${new Date().getDate()}日`}
+              </span>
+            </div>
             <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value.slice(0, 800))}
+              value={curPage}
+              onChange={(e) => setPageText(e.target.value)}
               placeholder="写下你想说的话…"
-              className="letter-pad absolute inset-0 h-full w-full resize-none bg-transparent px-5 py-4 leading-[30px] tracking-[0.5px] outline-none"
+              className="letter-pad absolute inset-0 h-full w-full resize-none bg-transparent px-5 pb-10 pt-9 leading-[30px] tracking-[0.5px] outline-none"
               style={{ fontFamily: font.css, fontSize, color, caretColor: color }}
             />
             {/* 工具开关 chip */}
             <button
               type="button"
               onClick={() => setToolsOpen((v) => !v)}
-              className="absolute right-2 top-2.5 z-10 rounded-md bg-[#21b357] px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm"
+              className="absolute right-2 top-10 z-10 rounded-md bg-[#21b357] px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm"
             >
               工具 {toolsOpen ? '˄' : '˅'}
             </button>
             {/* 右侧工具栏（虚线/手写信/字体/回执/信纸） */}
             {toolsOpen && (
-              <div className="absolute right-2.5 top-12 z-10 flex flex-col gap-2.5">
-                <button type="button" onClick={() => setDashed((v) => !v)} className={`h-[62px] w-9 rounded-lg text-[13px] font-bold leading-[1.15] text-white shadow-md transition-colors ${dashed ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
+              <div className="absolute right-2.5 top-[64px] z-10 flex flex-col gap-2.5">
+                <button type="button" onClick={() => setDashed((v) => !v)} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${dashed ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
                   虚线
                 </button>
-                <button type="button" onClick={() => showToast('手写信誊写功能即将上线 ♡')} className="h-[62px] w-9 rounded-lg bg-[#9a9aa2] text-[13px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
+                <button type="button" onClick={() => showToast('手写信誊写功能即将上线 ♡')} className="h-[54px] w-9 rounded-lg bg-[#9a9aa2] text-[12.5px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
                   手写信
                 </button>
-                <button type="button" onClick={() => setSheet('font')} className="h-[62px] w-9 rounded-lg bg-[#9a9aa2] text-[13px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
+                <button type="button" onClick={() => setSheet('font')} className="h-[54px] w-9 rounded-lg bg-[#9a9aa2] text-[12.5px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
                   字体
                 </button>
-                <button type="button" onClick={() => setSheet('env')} className="relative h-[62px] w-9 overflow-hidden rounded-lg shadow-md" aria-label="选择信封样式">
+                <button type="button" onClick={() => setSheet('env')} className="relative h-[54px] w-9 overflow-hidden rounded-lg shadow-md" aria-label="选择信封样式">
                   <EnvelopeArt envKey={envKey} className="h-full w-full" pets={false} />
                   <span className="absolute inset-x-0 bottom-0 bg-black/35 py-px text-center text-[10.5px] font-bold leading-[1.15] text-white" style={{ writingMode: 'vertical-rl' }}>
                     信封
                   </span>
                 </button>
-                <button type="button" onClick={() => { setReceipt((v) => !v); showToast(receipt ? '已关闭回执' : '已开启回执：TA 拆信时会通知你'); }} className={`h-[62px] w-9 rounded-lg text-[13px] font-bold leading-[1.15] text-white shadow-md transition-colors ${receipt ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
+                <button type="button" onClick={() => { setReceipt((v) => !v); showToast(receipt ? '已关闭回执' : '已开启回执：TA 拆信时会通知你'); }} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${receipt ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
                   回执
                 </button>
-                <button type="button" onClick={() => setSheet('paper')} className="relative h-[62px] w-9 rounded-lg border border-[#e8cdb2] bg-[#fdf8ec] text-[13px] font-bold leading-[1.15] text-[#2f6b3f] shadow-md" style={{ writingMode: 'vertical-rl' }}>
+                <button type="button" onClick={() => setSheet('paper')} className="relative h-[54px] w-9 rounded-lg border border-[#e8cdb2] bg-[#fdf8ec] text-[12.5px] font-bold leading-[1.15] text-[#2f6b3f] shadow-md" style={{ writingMode: 'vertical-rl' }}>
                   信纸
                   <span aria-hidden="true" className="absolute -top-1 right-1 h-1.5 w-1.5 rounded-full bg-[#e05a6d]" />
                 </button>
               </div>
             )}
-            {/* 底部日期 + 页码 */}
-            <div className="pointer-events-none absolute bottom-2.5 left-4 text-[12.5px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
-              {`${new Date().getFullYear()}/${new Date().getMonth() + 1}/${new Date().getDate()}`}
+            {/* 左右翻页箭头（第十九轮：一页不够换第二页；末页右箭头=加一页） */}
+            {pageIdx > 0 && (
+              <button
+                type="button"
+                onClick={() => goPage(-1)}
+                aria-label="上一页"
+                className="absolute left-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/5 transition-transform active:scale-90"
+              >
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="rgba(90,74,56,0.75)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M14.5 6 8.5 12l6 6" />
+                </svg>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => goPage(1)}
+              aria-label={isLastPage ? '加一页' : '下一页'}
+              className="absolute right-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/5 transition-transform active:scale-90"
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="rgba(90,74,56,0.75)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M9.5 6l6 6-6 6" />
+              </svg>
+            </button>
+            {/* 底部：本页计数 + 页码（位置调整：日期上移页眉，这里只留计数/页码） */}
+            <div className="pointer-events-none absolute bottom-2.5 left-4 text-[11.5px]" style={{ color: pageFull ? '#e05a6d' : paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
+              {`${curPage.length}/${LETTER_PAGE_CHARS}`}
             </div>
             <div className="pointer-events-none absolute bottom-2.5 right-4 text-[12.5px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
-              当前: 第1/1页
+              {`第 ${pageIdx + 1}/${Math.max(pages.length, pageIdx + 1)} 页`}
             </div>
           </div>
         </div>
-        {/* 底部操作栏 */}
+        {/* 底部操作栏：存草稿 · 页码导航 · 下一步 */}
         <div className="relative z-20 flex shrink-0 items-center gap-3 border-t border-white/8 bg-[#141419] px-4 pb-7 pt-3.5">
           <button
             type="button"
             onClick={() => {
-              patch({ letterDraft: text });
-              showToast(text.trim() ? '草稿已保存' : '已清空草稿');
+              patch({ letterDraft: JSON.stringify(pages) });
+              showToast(totalChars > 0 ? '草稿已保存' : '已清空草稿');
             }}
             className="h-[46px] flex-1 rounded-full border border-white/25 text-[15.5px] font-medium text-white/90 transition-transform active:scale-[0.97]"
           >
             存草稿
           </button>
+          <div className="flex h-[46px] flex-1 items-center justify-center gap-1 rounded-full border border-white/12 bg-white/[0.04] px-2">
+            <button type="button" onClick={() => goPage(-1)} disabled={pageIdx === 0} aria-label="上一页" className="flex h-8 w-8 items-center justify-center rounded-full text-white/80 disabled:opacity-30">
+              <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M14.5 6 8.5 12l6 6" />
+              </svg>
+            </button>
+            <span className="min-w-[64px] text-center text-[13.5px] font-medium text-white/85">{`${pageIdx + 1} / ${Math.max(pages.length, pageIdx + 1)} 页`}</span>
+            <button type="button" onClick={() => goPage(1)} disabled={pages.length >= LETTER_MAX_PAGES && isLastPage} aria-label="下一页" className="flex h-8 w-8 items-center justify-center rounded-full text-white/80 disabled:opacity-30">
+              <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M9.5 6l6 6-6 6" />
+              </svg>
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => {
-              if (!text.trim()) {
+              if (!fullText()) {
                 showToast('先写点什么吧 ♡');
                 return;
               }
-              patch({ letterDraft: text });
-              setView('seal');
+              patch({ letterDraft: JSON.stringify(pages) });
+              setView('send');
             }}
             className="h-[46px] flex-[1.6] rounded-full bg-[#21b357] text-[16px] font-bold text-white shadow-[0_4px_14px_rgba(33,179,87,0.4)] transition-transform active:scale-[0.97]"
           >
             下一步
           </button>
         </div>
-
-        {/* 信纸选择弹层 */}
-        {sheet === 'paper' && (
-          <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
-            <div className="rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
-              <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
-              <div className="text-center text-[17px] font-bold text-[#2c2c30]">选择信纸</div>
-              <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">‹ 左右滑动切换风格 ›</div>
-              <div className="mt-3 grid max-h-[290px] grid-cols-4 gap-3 overflow-y-auto">
-                {LETTER_PAPERS.map((p) => (
-                  <button key={p.key} type="button" onClick={() => { setPaper(p); setSheet(null); }} className="flex flex-col items-center gap-1.5">
-                    <span
-                      className={`h-[86px] w-full rounded-md border-2 shadow-sm ${paper.key === p.key ? 'border-[#21b357]' : 'border-transparent'}`}
-                      style={{ background: p.bg, backgroundImage: `repeating-linear-gradient(180deg, transparent 0 12px, ${p.line} 12px 13px)` }}
-                    />
-                    <span className="w-full truncate text-[11.5px] text-[#5a5a62]">{p.name}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="mt-4 flex gap-3">
-                <button type="button" onClick={() => showToast('更多信纸即将上架 ♡')} className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
-                  更多信纸
-                </button>
-                <button type="button" onClick={() => setSheet(null)} className="h-11 flex-1 rounded-full bg-[#21b357] text-[15px] font-bold text-white">
-                  完成
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 字体弹层（字体/字号/颜色） */}
-        {sheet === 'font' && (
-          <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
-            <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
-              <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
-              <div className="grid grid-cols-3 gap-2.5">
-                {LETTER_FONTS.map((f) => (
-                  <button
-                    key={f.key}
-                    type="button"
-                    onClick={() => setFont(f)}
-                    className={`rounded-lg border px-2 py-2.5 ${font.key === f.key ? 'border-[#c9a86a] bg-[#fbf5e8]' : 'border-[#e8e8ec] bg-white'}`}
-                  >
-                    <div className="text-[10.5px] text-[#9a9aa2]">{f.name}</div>
-                    <div className="mt-0.5 text-[17px] text-[#3a3a40]" style={{ fontFamily: f.css }}>见字如面</div>
-                  </button>
-                ))}
-              </div>
-              <div className="mt-4 flex items-center gap-3">
-                <span className="shrink-0 text-[14px] font-semibold text-[#3a3a40]">字号</span>
-                <span className="text-[12px] text-[#b6b6bd]">A</span>
-                <input type="range" min={12} max={22} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="h-1.5 flex-1 accent-[#21b357]" aria-label="字号" />
-                <span className="text-[18px] font-semibold text-[#3a3a40]">A</span>
-                <span className="w-8 shrink-0 rounded-full bg-[#21b357] py-0.5 text-center text-[12px] font-bold text-white">{fontSize}</span>
-              </div>
-              <div className="mt-4 flex items-start gap-3">
-                <span className="shrink-0 pt-1.5 text-[14px] font-semibold text-[#3a3a40]">颜色</span>
-                <div className="flex flex-wrap gap-2.5">
-                  {LETTER_COLORS.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      aria-label={`颜色 ${c}`}
-                      onClick={() => setColor(c)}
-                      className={`h-8 w-8 rounded-lg border-2 ${color === c ? 'border-[#2c2c30]' : 'border-transparent'}`}
-                      style={{ background: c }}
-                    />
-                  ))}
-                </div>
-              </div>
-              <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#21b357] text-[15px] font-bold text-white">
-                完成
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* 信封样式选择弹层（第十八轮需求37） */}
-        {sheet === 'env' && (
-          <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
-            <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="env-picker">
-              <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
-              <div className="text-center text-[17px] font-bold text-[#2c2c30]">选择信封</div>
-              <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">挑一个喜欢的信封，把信装进去寄给他</div>
-              <div className="mt-3 grid grid-cols-3 gap-3">
-                {LETTER_ENVELOPES.map((e) => (
-                  <button
-                    key={e.key}
-                    type="button"
-                    onClick={() => {
-                      setEnvKey(e.key);
-                      patch({ letterEnv: e.key });
-                      setSheet(null);
-                    }}
-                    className="flex flex-col items-center gap-1.5"
-                  >
-                    <span className={`w-full overflow-hidden rounded-lg border-2 shadow-sm ${envKey === e.key ? 'border-[#f2536a]' : 'border-transparent'}`}>
-                      <EnvelopeArt envKey={e.key} className="h-[74px] w-full" />
-                    </span>
-                    <span className={`text-[11.5px] ${envKey === e.key ? 'font-semibold text-[#f2536a]' : 'text-[#5a5a62]'}`}>{e.name}</span>
-                  </button>
-                ))}
-              </div>
-              <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#21b357] text-[15px] font-bold text-white">
-                完成
-              </button>
-            </div>
-          </div>
-        )}
+        {renderSheets()}
       </div>
     );
   }
 
-  // ============ 封存视图：选择送达时间 ============
-  if (view === 'seal') {
+  // ============ 发送设置视图（第十九轮需求42/43，参照「慢邮邮」发送设置截图重做）：
+  // 封存功能已删除 —— 信封预览（来信标题/邮戳/头像/日期）+ 信封设置 + 拆信设置（即时拆信/定时拆信）============
+  if (view === 'send') {
+    const timed = sendMode === 'timed';
     return (
       <div className="relative flex h-full flex-col overflow-hidden bg-[#0a0a0d]">
-        <LetterStars count={30} />
-        <TopBar title="封存这封信" onBack={() => setView('write')} />
-        <div className="relative z-10 flex flex-1 flex-col items-center px-9 pt-8">
-          <div className="w-44">
-            <EnvelopeArt envKey={envKey} className="h-28 w-full" />
+        <LetterStars count={26} />
+        <TopBar title="发送设置" onBack={() => setView('write')} />
+        <div className="relative z-10 flex flex-1 flex-col overflow-y-auto px-4 pb-8">
+          {/* 信封预览卡（对应参考图顶部：来信标题 + 邮戳 + 中间头像 + 日期） */}
+          <div className="relative mx-auto mt-2 w-full overflow-hidden rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.45)]">
+            <EnvelopeArt envKey={envKey} className="h-[190px] w-full" />
+            {/* 来信标题（信封盖正中上方） */}
+            <div className="absolute inset-x-0 top-3 z-10 text-center">
+              <span className="rounded-full bg-black/22 px-3.5 py-1 text-[13.5px] font-semibold tracking-[1.5px] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]">
+                {`${meName0}的来信`}
+              </span>
+            </div>
+            {/* 中间头像（贴纸样式 + 编辑角标；对应参考图「设置头像/昵称」的头像位） */}
+            <button
+              type="button"
+              aria-label="设置头像"
+              onClick={() => showToast('头像跟随微信/QQ 账号，可在「我们 · 恋爱资料」里查看 ♡')}
+              className="absolute left-1/2 top-1/2 z-10 h-[74px] w-[74px] -translate-x-1/2 -translate-y-[62%] overflow-hidden rounded-full border-[3px] border-white/90 shadow-[0_4px_14px_rgba(0,0,0,0.28)]"
+            >
+              {state.meAvatar ? (
+                <img src={state.meAvatar} alt={meName0} className="h-full w-full object-cover" draggable={false} />
+              ) : (
+                <img src="/icons/couple.png" alt="恋人空间" className="h-full w-full object-cover" draggable={false} />
+              )}
+            </button>
+            <button
+              type="button"
+              aria-label="编辑头像"
+              onClick={() => showToast('头像跟随微信/QQ 账号，可在「我们 · 恋爱资料」里查看 ♡')}
+              className="absolute left-1/2 top-1/2 z-10 ml-6 mt-3 flex h-7 w-7 -translate-x-1/2 -translate-y-[62%] items-center justify-center rounded-full bg-[#21b357] text-white shadow-md ring-2 ring-white/85"
+            >
+              <Pencil className="h-3.5 w-3.5" strokeWidth={2.4} />
+            </button>
+            {/* 右下日期（邮戳落款） */}
+            <div className="absolute bottom-2.5 right-3.5 z-10 text-[12.5px] font-semibold text-white/95 drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]">
+              {`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`}
+            </div>
           </div>
-          <div className="mt-2 rounded-full bg-white/10 px-3 py-1 text-[11.5px] text-[#b9b9c4]">信封：{letterEnvelopeOf(envKey).name}（可回编辑页换）</div>
-          <div className="mt-6 text-center text-[16px] font-light leading-relaxed text-[#9c9ca6]">
-            这封信将在
-            <b className="mx-1.5 text-[22px] font-semibold text-white">{after}</b>
-            天后
-            <br />
-            送达 TA 的信箱
-          </div>
-          <div className="mt-3 text-[13px] text-[#6e6e78]">预计 {arriveDate.getFullYear()}年{arriveDate.getMonth() + 1}月{arriveDate.getDate()}日 开启</div>
-          <div className="mt-6 flex w-full gap-2.5">
-            {[7, 30, 100, 365].map((d) => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => setAfter(d)}
-                className={`h-11 flex-1 rounded-full border text-[14px] transition-colors ${after === d ? 'border-white/70 bg-white/12 font-bold text-white' : 'border-white/18 text-[#8a8a94]'}`}
-              >
-                {d} 天
+
+          {/* 设置行组（对应参考图：信封设置/收信效果/背景音乐/拆信设置） */}
+          <div className="mt-4 divide-y divide-white/8 rounded-2xl border border-white/10 bg-white/[0.05]">
+            {/* 信封设置 */}
+            <div className="flex items-center gap-3 px-4 py-3.5">
+              <span className="w-[92px] shrink-0 text-[15px] font-semibold text-white">信封设置</span>
+              <div className="flex flex-1 justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => showToast('头像跟随微信/QQ 账号；昵称可在「我们 · 恋爱资料」里改 ♡')}
+                  className="h-9 rounded-lg bg-white/10 px-3.5 text-[13px] font-medium text-[#4ade80]"
+                >
+                  设置头像/昵称
+                </button>
+                <button type="button" onClick={() => setSheet('env')} data-testid="send-set-envelope" className="h-9 rounded-lg bg-white/10 px-4 text-[13px] font-medium text-[#4ade80]">
+                  换信封
+                </button>
+              </div>
+            </div>
+            {/* 收信效果 */}
+            <div className="flex items-center gap-3 px-4 py-3.5">
+              <span className="w-[92px] shrink-0 text-[15px] font-semibold text-white">收信效果</span>
+              <span className="flex-1 text-right text-[13px] text-[#87878f]">飘落 · 音效 · 动画</span>
+              <button type="button" onClick={() => showToast('TA 拆信时：信封飘落 + 星光动画 ♡')} className="h-9 shrink-0 rounded-lg bg-white/10 px-3.5 text-[13px] font-medium text-[#4ade80]">
+                预览设置
               </button>
-            ))}
+            </div>
+            {/* 背景音乐 */}
+            <button type="button" onClick={() => showToast('背景音乐即将上线 ♡')} className="flex w-full items-center gap-3 px-4 py-3.5 text-left">
+              <span className="w-[92px] shrink-0 text-[15px] font-semibold text-white">背景音乐</span>
+              <span className="flex flex-1 items-center justify-end gap-1 text-[13.5px] text-[#87878f]">
+                不使用
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9.5 6l6 6-6 6" />
+                </svg>
+              </span>
+            </button>
+            {/* 拆信设置（核心：即时拆信 / 定时拆信） */}
+            <div className="px-4 py-3.5">
+              <div className="flex items-center gap-3">
+                <span className="w-[92px] shrink-0 text-[15px] font-semibold text-white">拆信设置</span>
+                <div className="flex flex-1 justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSendMode('timed')}
+                    data-testid="send-mode-timed"
+                    className={`h-9 rounded-lg px-4 text-[13.5px] font-semibold transition-colors ${timed ? 'bg-[#21b357] text-white shadow-[0_2px_10px_rgba(33,179,87,0.4)]' : 'bg-white/10 text-[#b9b9c4]'}`}
+                  >
+                    定时拆信
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSendMode('now')}
+                    data-testid="send-mode-now"
+                    className={`h-9 rounded-lg px-4 text-[13.5px] font-semibold transition-colors ${!timed ? 'bg-[#21b357] text-white shadow-[0_2px_10px_rgba(33,179,87,0.4)]' : 'bg-white/10 text-[#b9b9c4]'}`}
+                  >
+                    即时拆信
+                  </button>
+                </div>
+              </div>
+              {timed && (
+                <div className="mt-3.5">
+                  <div className="flex gap-2">
+                    {[7, 30, 100, 365].map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setAfter(d)}
+                        className={`h-10 flex-1 rounded-full border text-[13.5px] transition-colors ${after === d ? 'border-[#21b357] bg-[#21b357]/15 font-bold text-[#4ade80]' : 'border-white/15 text-[#9c9ca6]'}`}
+                      >
+                        {d} 天
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-2.5 text-center text-[12px] text-[#6e6e78]">
+                    {`${meName0}的这封信将在 ${after} 天后送达 · 预计 ${arriveDate.getFullYear()}年${arriveDate.getMonth() + 1}月${arriveDate.getDate()}日 可拆`}
+                  </div>
+                </div>
+              )}
+              {!timed && <div className="mt-2.5 text-right text-[12px] text-[#6e6e78]">寄出后 TA 打开信箱即可立即拆信</div>}
+            </div>
           </div>
+
+          {/* 寄出按钮 */}
           <button
             type="button"
-            onClick={sealLetter}
-            className="mt-9 h-[50px] w-full rounded-full bg-[#21b357] text-[16.5px] font-bold text-white shadow-[0_6px_20px_rgba(33,179,87,0.4)] transition-transform active:scale-[0.97]"
+            onClick={sendLetter}
+            data-testid="send-letter-btn"
+            className="mt-6 h-[50px] w-full shrink-0 rounded-full bg-[#21b357] text-[16.5px] font-bold text-white shadow-[0_6px_20px_rgba(33,179,87,0.4)] transition-transform active:scale-[0.97]"
           >
-            封存这封信
+            {timed ? `定时寄出（${after} 天后送达）` : '立即寄出这封信'}
           </button>
-          <div className="mt-3 text-[12px] text-white/45">封存后不可修改，到时会提醒你拆开 ♡</div>
+          <div className="mt-3 text-center text-[12px] text-white/45">
+            {timed ? '到时会提醒 TA 拆开，信在路上也会想你 ♡' : '信封会带着今天的日期，飞到 TA 的信箱 ♡'}
+          </div>
         </div>
+        {renderSheets()}
       </div>
     );
   }
@@ -4464,6 +4680,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         <div className="space-y-4">
           {state.letters.map((l) => {
             const open = arrived(l);
+            const instant = l.openAfterDays === 0; // 即时拆信（第十九轮）
             const remain = Math.max(1, Math.ceil((l.at + l.openAfterDays * 86400000 - now) / 86400000));
             return (
               <div key={l.id} className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
@@ -4473,7 +4690,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                       <EnvelopeArt envKey={l.envelope ?? envKey} className="h-full w-full" pets={false} />
                     </span>
                     <span className="truncate">
-                      {fmtDate(l.at)} 寄出 · {l.openAfterDays} 天后开启{letterEnvelopeOf(l.envelope ?? envKey).name ? ` · ${letterEnvelopeOf(l.envelope ?? envKey).name}` : ''}
+                      {fmtDate(l.at)} 寄出 · {instant ? '即时寄达' : `${l.openAfterDays} 天后开启`}{letterEnvelopeOf(l.envelope ?? envKey).name ? ` · ${letterEnvelopeOf(l.envelope ?? envKey).name}` : ''}
                     </span>
                   </span>
                   <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11.5px] font-medium ${open ? 'bg-[#21b357] text-white' : 'bg-white/10 text-[#9c9ca6]'}`}>
@@ -7901,61 +8118,208 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
   );
 }
 
-/** 星座缘分 */
+/** 星座符号（占星文字符号，非 emoji）+ 元素色 */
+const ZODIAC_GLYPH: Record<string, string> = { 白羊座: '♈', 金牛座: '♉', 双子座: '♊', 巨蟹座: '♋', 狮子座: '♌', 处女座: '♍', 天秤座: '♎', 天蝎座: '♏', 射手座: '♐', 摩羯座: '♑', 水瓶座: '♒', 双鱼座: '♓' };
+const ZODIAC_ELEM_COLOR: Record<string, string> = { fire: '#f5a58e', earth: '#a9d0a4', air: '#e8c98a', water: '#9fc9c4' };
+const ZODIAC_ELEM_NAME: Record<string, string> = { fire: '火象', earth: '土象', air: '风象', water: '水象' };
+
+/** 星座缘分（第十九轮需求47重做）：用户配置的 API 模型按真实占星 + 人设记忆 + 最近聊天生成解读；星空卡 + 评分环 + 分区展示，结果持久化 */
 function ZodiacPage({ state, patch, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void }) {
   const [me, setMe] = useState(state.zodiac?.me || '');
   const [ta, setTa] = useState(state.zodiac?.ta || '');
-  const [result, setResult] = useState<{ score: number; text: string } | null>(
-    state.zodiac ? { score: zodiacScore(state.zodiac.me, state.zodiac.ta), text: '' } : null,
-  );
-  const calc = () => {
-    if (!me || !ta) return;
-    const s = zodiacScore(me, ta);
-    const text = s >= 85 ? '天生一对，磁场完美契合！' : s >= 75 ? '互补吸引，越处越甜的一对。' : '需要一点磨合，但爱能跨越一切。';
-    setResult({ score: s, text });
+  const [loading, setLoading] = useState(false);
+  const [errTick, setErrTick] = useState(0); // 生成失败重试钥匙
+  const saved = state.zodiacReading;
+  // 已保存的解读只在「星座组合一致」时展示（改了组合必须重新测算）
+  const reading = saved && saved.me === me && saved.ta === ta ? saved : null;
+
+  const calc = async () => {
+    if (!me || !ta || loading) return;
     patch({ zodiac: { me, ta } });
+    setLoading(true);
+    let r: { score: number; text: string; glow: string; advice: string; watch: string } | null = null;
+    try {
+      r = await aiZodiacReading(me, ta);
+    } catch {
+      r = null;
+    }
+    if (!r) {
+      // 本地兜底（LLM 不可用）：四元素相性给分 + 固定文案
+      const s = zodiacScore(me, ta);
+      r = {
+        score: s,
+        text: s >= 85 ? `${me}和${ta}相性极佳，天生一对，磁场完美契合。` : s >= 75 ? '互补吸引的一对，元素相生，越处越甜。' : '需要一点磨合，但爱能跨越一切差异。',
+        glow: '彼此陪伴时的松弛感',
+        advice: '每天留十分钟只聊彼此今天的心情，其它都先放一放。',
+        watch: '别把「算了不说」挂在嘴边，小事也要讲开。',
+      };
+      setErrTick((t) => t + 1);
+    }
+    patch({ zodiacReading: { me, ta, ...r, at: Date.now() } });
+    setLoading(false);
   };
+
+  const score = reading?.score ?? (state.zodiac ? zodiacScore(state.zodiac.me, state.zodiac.ta) : 0);
+  const ringLen = 2 * Math.PI * 44;
+  const elemOf = (z: string) => ZODIAC_ELEM_COLOR[ZODIAC_GROUP[z] ?? 'air'] ?? '#e8c98a';
+
   return (
     <SubShell title="星座缘分" onBack={close}>
-      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-2 gap-3">
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        {[
+          { label: '我的星座', v: me, set: setMe },
+          { label: 'TA 的星座', v: ta, set: setTa },
+        ].map((f) => (
+          <div key={f.label}>
+            <div className="mb-1.5 text-[13px] text-[#9a9aa2]">{f.label}</div>
+            <select
+              value={f.v}
+              onChange={(e) => f.set(e.target.value)}
+              className="h-11 w-full rounded-xl bg-[#f3f3f5] px-3 text-[15px] text-[#2c2c30] outline-none"
+            >
+              <option value="">请选择</option>
+              {ZODIAC_LIST.map((z) => (
+                <option key={z} value={z}>
+                  {z}
+                </option>
+              ))}
+            </select>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={() => void calc()}
+        disabled={!me || !ta || loading}
+        data-testid="zodiac-calc"
+        className="mt-4 h-12 w-full rounded-full bg-[linear-gradient(135deg,#f2536a,#e88ba4)] text-[16px] font-semibold text-white shadow-[0_6px_18px_rgba(242,83,106,0.32)] disabled:opacity-40"
+      >
+        {loading ? '正在为你们测算缘分…' : reading ? '重新测算' : '查看缘分指数'}
+      </button>
+
+      {/* 星空解读卡 */}
+      <div className="relative mt-4 overflow-hidden rounded-3xl bg-[linear-gradient(165deg,#232633,#141722)] p-5 text-white shadow-[0_12px_32px_rgba(0,0,0,0.28)]">
+        {/* 星点装饰 */}
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0">
           {[
-            { label: '我的星座', v: me, set: setMe },
-            { label: 'TA 的星座', v: ta, set: setTa },
-          ].map((f) => (
-            <div key={f.label}>
-              <div className="mb-1.5 text-[13px] text-[#9a9aa2]">{f.label}</div>
-              <select
-                value={f.v}
-                onChange={(e) => f.set(e.target.value)}
-                className="h-11 w-full rounded-xl bg-[#f3f3f5] px-3 text-[15px] text-[#2c2c30] outline-none"
-              >
-                <option value="">请选择</option>
-                {ZODIAC_LIST.map((z) => (
-                  <option key={z} value={z}>
-                    {z}
-                  </option>
-                ))}
-              </select>
-            </div>
+            [12, 18, 1.6],
+            [30, 8, 1.1],
+            [55, 14, 1.4],
+            [78, 6, 1.1],
+            [88, 26, 1.6],
+            [70, 40, 1],
+            [18, 46, 1.1],
+            [42, 30, 1],
+          ].map(([l, t, s], i) => (
+            <span key={i} className="absolute rounded-full bg-white [animation:couple-twinkle_3.4s_ease-in-out_infinite]" style={{ left: `${l}%`, top: `${t}%`, width: s, height: s, opacity: 0.5, animationDelay: `${i * 0.6}s` }} />
           ))}
         </div>
-        <button
-          type="button"
-          onClick={calc}
-          disabled={!me || !ta}
-          className="mt-5 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white disabled:opacity-40"
-        >
-          查看缘分指数
-        </button>
-        {result && (
-          <div className="mt-5 text-center">
-            <div className="text-[34px] font-bold text-[#2c2c30]">{result.score}</div>
-            <div className="mt-1 text-[15px] leading-relaxed text-[#5a5a62]">
-              {me} ♡ {ta}
-              <br />
-              {result.text}
+
+        {/* 头部：双星座徽章 + 评分环 */}
+        <div className="relative flex items-center justify-between gap-2">
+          {[
+            { z: me, label: state.meName || '我' },
+            { z: ta, label: state.taName || 'TA' },
+          ].map((side, i) => (
+            <div key={i} className="flex w-[92px] flex-col items-center gap-1.5">
+              <span
+                className="flex h-[58px] w-[58px] items-center justify-center rounded-full border-2 text-[26px] font-semibold"
+                style={{ borderColor: side.z ? elemOf(side.z) : 'rgba(255,255,255,0.25)', color: side.z ? elemOf(side.z) : 'rgba(255,255,255,0.4)', background: 'rgba(255,255,255,0.06)' }}
+              >
+                {side.z ? ZODIAC_GLYPH[side.z] ?? '☆' : '?'}
+              </span>
+              <span className="text-[12.5px] font-medium text-white/90">{side.label}</span>
+              <span className="text-[11px] text-white/55">{side.z ? `${side.z} · ${ZODIAC_ELEM_NAME[ZODIAC_GROUP[side.z]] ?? ''}` : '未选择'}</span>
             </div>
+          ))}
+          {/* 评分环 */}
+          <div className="relative flex h-[104px] w-[104px] shrink-0 items-center justify-center">
+            <svg viewBox="0 0 100 100" className="absolute inset-0 h-full w-full -rotate-90" aria-hidden="true">
+              <circle cx="50" cy="50" r="44" fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="7" />
+              {score > 0 && (
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="44"
+                  fill="none"
+                  stroke="url(#zodiac-ring)"
+                  strokeWidth="7"
+                  strokeLinecap="round"
+                  strokeDasharray={`${(ringLen * score) / 100} ${ringLen}`}
+                  className="transition-[stroke-dasharray] duration-700"
+                />
+              )}
+              <defs>
+                <linearGradient id="zodiac-ring" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stopColor="#f7b7c5" />
+                  <stop offset="1" stopColor="#f2536a" />
+                </linearGradient>
+              </defs>
+            </svg>
+            <div className="text-center">
+              {loading ? (
+                <div className="h-[26px] w-12 animate-pulse rounded bg-white/15" />
+              ) : (
+                <div className="text-[27px] font-bold leading-none">{score || '--'}</div>
+              )}
+              <div className="mt-1 text-[10.5px] text-white/55">配对指数</div>
+            </div>
+          </div>
+        </div>
+
+        {/* 加载骨架 */}
+        {loading && (
+          <div className="relative mt-5 space-y-2.5" data-testid="zodiac-loading">
+            <div className="h-3.5 w-3/4 animate-pulse rounded bg-white/12" />
+            <div className="h-3.5 w-full animate-pulse rounded bg-white/10" />
+            <div className="h-3.5 w-2/3 animate-pulse rounded bg-white/10" />
+            <div className="pt-1 text-center text-[12px] text-white/50">正在结合真实占星与你们的记忆测算…</div>
+          </div>
+        )}
+
+        {/* 解读正文 */}
+        {reading && !loading && (
+          <div className="relative mt-5 space-y-3.5" data-testid="zodiac-reading">
+            <div>
+              <div className="flex items-center gap-1.5 text-[13px] font-semibold text-[#f7b7c5]">
+                <Heart className="h-4 w-4" strokeWidth={2.2} />
+                缘分总评
+              </div>
+              <p className="mt-1.5 text-[14.5px] leading-relaxed text-white/88">{reading.text}</p>
+            </div>
+            <div className="rounded-2xl bg-white/[0.07] px-4 py-3">
+              <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-[#e8c98a]">
+                <Sparkles className="h-4 w-4" strokeWidth={2.2} />
+                最合拍的一点
+              </div>
+              <p className="mt-1 text-[13.5px] leading-relaxed text-white/85">{reading.glow}</p>
+            </div>
+            <div className="rounded-2xl bg-white/[0.07] px-4 py-3">
+              <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-[#a9d0a4]">
+                <Lightbulb className="h-4 w-4" strokeWidth={2.2} />
+                相处建议
+              </div>
+              <p className="mt-1 text-[13.5px] leading-relaxed text-white/85">{reading.advice}</p>
+            </div>
+            <div className="rounded-2xl bg-white/[0.07] px-4 py-3">
+              <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-[#9fc9c4]">
+                <ShieldCheck className="h-4 w-4" strokeWidth={2.2} />
+                温柔小提醒
+              </div>
+              <p className="mt-1 text-[13.5px] leading-relaxed text-white/85">{reading.watch}</p>
+            </div>
+            {errTick > 0 && reading.at && Date.now() - reading.at < 90_000 && (
+              <div className="text-center text-[11px] text-white/35">刚刚这次用了本地速算，点「重新测算」可获得 AI 解读</div>
+            )}
+          </div>
+        )}
+
+        {/* 未测算占位 */}
+        {!reading && !loading && (
+          <div className="relative mt-5 text-center text-[13px] leading-relaxed text-white/45">
+            选好两个人的星座，看看真实的占星怎么说
+            <br />
+            解读会结合你们的记忆和最近聊过的话题
           </div>
         )}
       </div>
@@ -9033,31 +9397,19 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
   );
 }
 
-/** 情侣酒店（玩梗预约卡） */
-function HotelPage({ showToast, close }: { showToast: (m: string) => void; close: () => void }) {
-  const [booked, setBooked] = useState<string | null>(null);
+/** 情侣酒店（第十九轮需求48）：直达美团「酒店旅行」频道 —— 挂载即跳转，本页仅作过渡占位 */
+function HotelJump({ close }: { close: () => void }) {
+  useEffect(() => {
+    openMeituanTravel();
+  }, []);
   return (
     <SubShell title="情侣酒店" onBack={close}>
-      <p className="mt-4 px-2 text-[13px] text-[#9a9aa2]">纸短情长，先预约一场说走就走的甜蜜（纯属虚构，记得带 TA 真正去一次）。</p>
-      <div className="mt-3 space-y-3">
-        {HOTEL_ROOMS.map((r) => (
-          <div key={r.name} className="flex items-center justify-between rounded-2xl bg-white p-4 shadow-sm">
-            <div>
-              <div className="text-[16px] font-semibold text-[#2c2c30]">{r.name}</div>
-              <div className="mt-0.5 text-[13px] text-[#9a9aa2]">{r.desc}</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setBooked(r.name);
-                showToast(`已预约「${r.name}」♡`);
-              }}
-              className={`h-10 shrink-0 rounded-full px-5 text-[14px] font-semibold ${booked === r.name ? 'bg-[#3f3f46] text-white' : 'bg-[#f0f0f3] text-[#4a4a52]'}`}
-            >
-              {booked === r.name ? '已预约' : '预约'}
-            </button>
-          </div>
-        ))}
+      <div className="mt-16 flex flex-col items-center gap-3">
+        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#fff4d6]">
+          <Users className="h-7 w-7 text-[#e2a03e]" strokeWidth={1.9} />
+        </div>
+        <p className="text-[15px] font-medium text-[#5a5a62]">正在打开美团 · 酒店旅行…</p>
+        <p className="text-[12.5px] text-[#9a9aa2]">为你们挑一间合适的房间</p>
       </div>
     </SubShell>
   );
