@@ -52,6 +52,7 @@ import {
 import { IOSScreen } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
 import { DefaultAvatar } from './default-avatar';
+import WheelDatePicker from './wheel-date-picker';
 import { LocalToast, useLocalToast } from './page-toast';
 import { listContacts, ownerRealNameFor } from '@/lib/ios/contacts-store';
 import { isPersonGoneEverywhere } from '@/lib/ios/friend-state';
@@ -1553,6 +1554,7 @@ function MemoryCard({
   const [confirmDel, setConfirmDel] = useState(false);
   /** 编辑态的时间草稿（datetime-local 字符串；空=无事件时间/永不过期） */
   const [editEvent, setEditEvent] = useState('');
+  const [mbWheel, setMbWheel] = useState(false); // 事件时间滚轮（第二十轮：上下滑式）
   const [editExpire, setEditExpire] = useState('');
 
   const dimCls =
@@ -1652,13 +1654,26 @@ function MemoryCard({
             <div className="mt-2.5 space-y-1.5">
               <div className="flex items-center gap-2">
                 <span className="w-[52px] shrink-0 text-[11.5px] text-black/40 dark:text-white/40">事件时间</span>
-                <input
-                  type="datetime-local"
-                  value={editEvent}
-                  onChange={(e) => setEditEvent(e.target.value)}
+                <button
+                  type="button"
+                  onClick={() => setMbWheel(true)}
                   aria-label="设置事件时间"
                   data-testid={`${testid}-event-time`}
-                  className="h-8 min-w-0 flex-1 rounded-lg bg-black/[0.04] px-2 text-[12.5px] tabular-nums outline-none ring-1 ring-black/[0.08] focus:ring-neutral-900/35 dark:bg-white/[0.06] dark:ring-white/[0.12] dark:focus:ring-white/40"
+                  className={`h-8 min-w-0 flex-1 rounded-lg bg-black/[0.04] px-2 text-left text-[12.5px] tabular-nums outline-none ring-1 ring-black/[0.08] focus:ring-neutral-900/35 dark:bg-white/[0.06] dark:ring-white/[0.12] dark:focus:ring-white/40 ${editEvent ? 'text-foreground' : 'text-black/40 dark:text-white/40'}`}
+                >
+                  {editEvent ? editEvent.replace('T', ' ') : '设置时间'}
+                </button>
+                {/* 事件时间滚轮弹窗（第二十轮：上下滑式，含时分） */}
+                <WheelDatePicker
+                  open={mbWheel}
+                  value={editEvent}
+                  withTime
+                  onConfirm={(v) => {
+                    setEditEvent(v);
+                    setMbWheel(false);
+                  }}
+                  onCancel={() => setMbWheel(false)}
+                  title="事件时间"
                 />
                 {editEvent && (
                   <button

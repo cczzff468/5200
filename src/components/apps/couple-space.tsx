@@ -109,6 +109,7 @@ import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, sch
 import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
 import { setMtPendingPage } from '@/lib/ios/meituan-store';
 import { EnvelopeArt, LETTER_ENVELOPES, letterEnvelopeOf } from './couple-letter-bubble';
+import WheelDatePicker from './wheel-date-picker';
 import { displayNameOf, isFriendIn, avatarFor, type ContactRecord } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
 import L from 'leaflet';
@@ -177,6 +178,8 @@ interface CoupleState {
   letters: { id: string; text: string; at: number; openAfterDays: number; envelope?: string; sharedAt?: number }[]; // 情书（原未来情书；envelope=信封样式；sharedAt=分享给 TA 时间）
   letterDraft: string; // 情书草稿（存草稿按钮）
   letterEnv: string; // 当前选中的信封样式 key（第十八轮）
+  letterSenderName?: string; // 信封自定义署名（第二十轮：设置头像/昵称可自定义；空=跟随微信/QQ 同步的 meName）
+  letterSenderAvatar?: string; // 信封自定义头像 dataURL（第二十轮；空=跟随 meAvatar）
   aiLetters: { id: string; text: string; envelope?: string; replyToId?: string; at: number }[]; // TA 写给我的信（AI 回信/主动写信）
   albums: CoupleAlbum[];
   moods: { id: string; emoji: string; text: string; at: number; photo?: string | null; dateKey?: string; from?: 'me' | 'ta' }[]; // 心情日记（from='ta' = AI 写的）
@@ -264,6 +267,8 @@ function defaultState(): CoupleState {
     letters: [],
     letterDraft: '',
     letterEnv: 'pinkbunny',
+    letterSenderName: '',
+    letterSenderAvatar: '',
     aiLetters: [],
     albums: [
       { id: 'ta', name: '拍给TA看', desc: '想看看你每天的样子', photos: [] },
@@ -2378,6 +2383,7 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
   /** 正在编辑的纪念日：love = 在一起纪念日；其余为 annivExtra 键 */
   const [editing, setEditing] = useState<{ key: string; label: string; date: string } | null>(null);
   const [adding, setAdding] = useState(false);
+  const [dateWheel, setDateWheel] = useState<null | 'edit' | 'add'>(null); // 日期滚轮（第二十轮：所有日期选择改上下滑式）
   const [newName, setNewName] = useState('');
   const [newDate, setNewDate] = useState('');
 
@@ -2557,12 +2563,15 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 px-8" onClick={() => setEditing(null)}>
           <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="text-[15px] font-semibold text-[#2c2c30]">{editing.label}</div>
-            <input
-              type="date"
-              value={editing.date}
-              onChange={(e) => setEditing({ ...editing, date: e.target.value })}
-              className="mt-3 h-11 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] text-[#2c2c30] outline-none"
-            />
+            <button
+              type="button"
+              onClick={() => setDateWheel('edit')}
+              aria-label="选择日期"
+              className="mt-3 flex h-11 w-full items-center justify-between rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] text-[#2c2c30]"
+            >
+              <span>{editing.date || '请选择日期'}</span>
+              <CalendarDays className="h-4.5 w-4.5 text-[#8e8e96]" strokeWidth={1.8} />
+            </button>
             <div className="mt-4 flex gap-2.5">
               {editing.key !== 'love' && (
                 <button type="button" onClick={removeEdit} className="h-10 rounded-xl bg-[#f0f0f3] px-4 text-[13.5px] font-medium text-[#8e8e96]">
@@ -2592,12 +2601,15 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
               maxLength={14}
               className="mt-3 h-10 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[14px] outline-none placeholder:text-[#b6b6bd]"
             />
-            <input
-              type="date"
-              value={newDate}
-              onChange={(e) => setNewDate(e.target.value)}
-              className="mt-2.5 h-10 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[14px] text-[#2c2c30] outline-none"
-            />
+            <button
+              type="button"
+              onClick={() => setDateWheel('add')}
+              aria-label="选择日期"
+              className="mt-2.5 flex h-10 w-full items-center justify-between rounded-xl bg-[#f3f3f5] px-3.5 text-[14px] text-[#2c2c30]"
+            >
+              <span className={newDate ? '' : 'text-[#b6b6bd]'}>{newDate || '请选择日期'}</span>
+              <CalendarDays className="h-4.5 w-4.5 text-[#8e8e96]" strokeWidth={1.8} />
+            </button>
             <div className="mt-4 flex gap-2.5">
               <button type="button" onClick={() => setAdding(false)} className="h-10 flex-1 rounded-xl bg-[#f0f0f3] text-[13.5px] font-medium text-[#5a5a62]">
                 取消
@@ -2609,6 +2621,19 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
           </div>
         </div>
       )}
+
+      {/* 日期滚轮弹窗（第二十轮：上下滑式，编辑/添加共用） */}
+      <WheelDatePicker
+        open={dateWheel !== null}
+        value={dateWheel === 'edit' ? editing?.date || '' : newDate || ''}
+        onConfirm={(v) => {
+          if (dateWheel === 'edit') setEditing((e) => (e ? { ...e, date: v } : e));
+          else setNewDate(v);
+          setDateWheel(null);
+        }}
+        onCancel={() => setDateWheel(null)}
+        title="选择日期"
+      />
     </SubShell>
   );
 }
@@ -4014,8 +4039,8 @@ const LETTER_PAGE_CHARS = 200; // 每页信纸字数上限（写满翻下一页�
 const LETTER_MAX_PAGES = 6; // 最多页数
 
 function LettersPage({ state, patch, close, showToast }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void; showToast: (m: string) => void }) {
-  const [view, setView] = useState<'home' | 'intro' | 'write' | 'send' | 'box'>('home');
-  // 多页信纸（第十九轮需求44：一页不够可以换第二页；草稿按 JSON 页数组持久化，兼容旧版单字符串）
+  const [view, setView] = useState<'home' | 'intro' | 'write' | 'send' | 'box' | 'read'>('home');
+  // 多页信纸（第十九轮需求44；第二十轮改纵向：下滑即添加第二页，不再左右翻页）
   const [pages, setPages] = useState<string[]>(() => {
     const d = state.letterDraft;
     if (!d) return [''];
@@ -4027,11 +4052,13 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     }
     return [d];
   });
-  const [pageIdx, setPageIdx] = useState(0);
+  const [focusPage, setFocusPage] = useState(0); // 当前编辑页（工具栏只浮在这页上）
   const [envKey, setEnvKey] = useState<string>(state.letterEnv || 'pinkbunny'); // 信封样式（第十八轮需求37）
-  const [taOpenId, setTaOpenId] = useState<string | null>(null); // TA 寄给我的信：展开详情的信 id（第十八轮）
+  const [readId, setReadId] = useState<string | null>(null); // 正在阅读的信 id（第二十轮：信箱点进单独阅读界面）
+  const [readFrom, setReadFrom] = useState<'me' | 'ta'>('ta');
+  const [readPage, setReadPage] = useState(0); // 阅读页码（当前：第 x/y 页）
   const [shareLetterId, setShareLetterId] = useState<string | null>(null); // 正在分享的信（弹出通用分享选择器）
-  const [sendMode, setSendMode] = useState<'now' | 'timed'>('now'); // 拆信设置（第十九轮需求43：即时拆信 / 定时拆信）
+  const [sendMode, setSendMode] = useState<'now' | 'timed'>('now'); // 寄出方式（第二十轮改名：即时发出 / 定时发出）
   const [after, setAfter] = useState(30);
   const [paper, setPaper] = useState(LETTER_PAPERS[0]);
   const [font, setFont] = useState(LETTER_FONTS[0]);
@@ -4040,35 +4067,45 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   const [dashed, setDashed] = useState(true);
   const [receipt, setReceipt] = useState(true);
   const [toolsOpen, setToolsOpen] = useState(true);
-  const [sheet, setSheet] = useState<null | 'paper' | 'font' | 'env'>(null);
+  const [sheet, setSheet] = useState<null | 'paper' | 'font' | 'env' | 'sender'>(null);
+  const [senderName, setSenderName] = useState(''); // 署名设置弹层草稿（第二十轮）
+  const [senderAvatarDraft, setSenderAvatarDraft] = useState('');
+  const senderFileRef = useRef<HTMLInputElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null); // 信纸纵向滚动容器
   const fullToastAt = useRef(0); // 页满提示节流
   const now = Date.now();
   const arrived = (l: { at: number; openAfterDays: number }) => now >= l.at + l.openAfterDays * 86400000;
   const arriveDate = new Date(Date.now() + after * 86400000);
-  const curPage = pages[pageIdx] ?? '';
-  const meName0 = state.meName || '我';
+  const meName0 = (state.letterSenderName || '').trim() || state.meName || '我'; // 信封署名：自定义 > 微信/QQ 同步
+  const senderAvatar = state.letterSenderAvatar || state.meAvatar || null; // 信封头像：自定义 > 微信/QQ 同步
 
-  /** 当前页写入（上限截断 + 写满提示节流） */
-  const setPageText = (v: string) => {
+  /** 指定页写入（上限截断 + 写满提示节流 + 写满自动下滑加下一页） */
+  const setPageTextAt = (pi: number, v: string) => {
     const capped = v.slice(0, LETTER_PAGE_CHARS);
-    if (v.length > LETTER_PAGE_CHARS && curPage.length >= LETTER_PAGE_CHARS && Date.now() - fullToastAt.current > 2500) {
-      fullToastAt.current = Date.now();
-      showToast('本页写满了，翻到下一页继续写 ♡');
+    const wasFull = (pages[pi] ?? '').length >= LETTER_PAGE_CHARS;
+    setPages((ps) => ps.map((p, i) => (i === pi ? capped : p)));
+    if (capped.length >= LETTER_PAGE_CHARS && !wasFull && pi === pages.length - 1 && pages.length < LETTER_MAX_PAGES) {
+      setPages((ps) => (ps.length < LETTER_MAX_PAGES ? [...ps, ''] : ps));
+      setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }), 60);
     }
-    setPages((ps) => ps.map((p, i) => (i === pageIdx ? capped : p)));
   };
 
-  /** 翻页：向后翻到末页时新增一页（最多 LETTER_MAX_PAGES 页） */
-  const goPage = (delta: number) => {
-    setPageIdx((idx) => {
-      const next = idx + delta;
-      if (next < 0 || next >= LETTER_MAX_PAGES) return idx;
-      if (delta > 0 && next >= pages.length) {
-        setPages((ps) => (ps.length < LETTER_MAX_PAGES ? [...ps, ''] : ps));
-        return next;
-      }
-      return Math.min(next, Math.max(0, Math.min(pages.length - 1, next)));
-    });
+  /** 手动加一页（下滑到信纸末尾的「再添一页」） */
+  const addPage = () => {
+    if (pages.length >= LETTER_MAX_PAGES) {
+      showToast(`最多写 ${LETTER_MAX_PAGES} 页哦`);
+      return;
+    }
+    setPages((ps) => [...ps, '']);
+    setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }), 60);
+  };
+
+  /** 打开单独阅读界面（第二十轮：信箱点进的是独立界面，里面是信的内容） */
+  const openRead = (id: string, from: 'me' | 'ta') => {
+    setReadId(id);
+    setReadFrom(from);
+    setReadPage(0);
+    setView('read');
   };
 
   /** 多页合并成全文（发送/字数统计用） */
@@ -4189,15 +4226,22 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     </>
   );
 
-  /** 聊天里的信封卡片点击进来（第十八轮需求40）：直接进信箱并展开对应的信（不进恋人空间主页） */
+  /** 聊天里的信封卡片点击进来（第十八轮需求40；第二十轮：直达单独阅读界面） */
   useEffect(() => {
     const p = consumePendingLetterOpen();
     if (!p) return;
-    setView('box');
-    if (p.from === 'ta') setTaOpenId(p.letterId);
+    const exists = p.from === 'ta' ? state.aiLetters.some((x) => x.id === p.letterId) : state.letters.some((x) => x.id === p.letterId);
+    if (!exists) {
+      setView('box');
+      return;
+    }
+    setReadFrom(p.from);
+    setReadId(p.letterId);
+    setReadPage(0);
+    setView('read');
   }, []);
 
-  /** 寄出信件（第十九轮需求42/43：删除「封存」，改为发送设置——即时拆信 / 定时拆信） */
+  /** 寄出信件（第十九轮：删除「封存」；第二十轮：寄出方式改叫定时发出/即时发出，寄出后进信箱） */
   const sendLetter = () => {
     const t = fullText();
     if (!t) return;
@@ -4207,10 +4251,88 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
       letterEnv: envKey,
     });
     setPages(['']);
-    setPageIdx(0);
+    setFocusPage(0);
     setView('box');
     showToast(sendMode === 'now' ? '信已寄出，TA 现在就能拆 ♡' : `信已寄出，${after} 天后送达 ♡`);
   };
+
+  /** 保存信封署名设置（第二十轮：头像/昵称可自定义，留空跟随微信/QQ） */
+  const saveSender = () => {
+    patch({ letterSenderName: senderName.trim(), letterSenderAvatar: senderAvatarDraft });
+    setSheet(null);
+    showToast('信封署名已保存 ♡');
+  };
+
+  /** 署名设置弹层（头像上传 + 昵称自定义 + 恢复默认） */
+  const renderSenderSheet = () =>
+    sheet === 'sender' && (
+      <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
+        <div className="rounded-t-2xl bg-white px-5 pb-9 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="sender-sheet">
+          <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
+          <div className="text-center text-[17px] font-bold text-[#2c2c30]">信封署名</div>
+          <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">自定义信封上的头像与昵称，留空则跟随微信/QQ</div>
+          <div className="mt-5 flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => senderFileRef.current?.click()}
+              aria-label="更换信封头像"
+              className="relative h-[72px] w-[72px] shrink-0 overflow-hidden rounded-full border-[3px] border-[#f6dbe2] shadow-[0_4px_12px_rgba(0,0,0,0.12)]"
+            >
+              <img src={senderAvatarDraft || state.meAvatar || '/icons/couple.png'} alt="信封头像" className="h-full w-full object-cover" draggable={false} />
+              <span className="absolute inset-x-0 bottom-0 bg-black/40 py-0.5 text-center text-[10px] font-medium text-white">更换</span>
+            </button>
+            <div className="min-w-0 flex-1">
+              <label htmlFor="sender-name-input" className="text-[13px] font-semibold text-[#5a5a62]">
+                信封昵称
+              </label>
+              <input
+                id="sender-name-input"
+                value={senderName}
+                onChange={(e) => setSenderName(e.target.value)}
+                maxLength={10}
+                placeholder={state.meName || '跟随微信/QQ 昵称'}
+                className="mt-1.5 h-11 w-full rounded-xl bg-[#f3f3f5] px-3.5 text-[15px] text-[#2c2c30] outline-none placeholder:text-[#b6b6bd]"
+                data-testid="sender-name-input"
+              />
+            </div>
+          </div>
+          <div className="mt-6 flex gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                patch({ letterSenderName: '', letterSenderAvatar: '' });
+                setSenderName('');
+                setSenderAvatarDraft('');
+                setSheet(null);
+                showToast('已恢复跟随微信/QQ ♡');
+              }}
+              className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]"
+            >
+              恢复默认
+            </button>
+            <button type="button" onClick={saveSender} className="h-11 flex-1 rounded-full bg-[#21b357] text-[15px] font-bold text-white">
+              保存
+            </button>
+          </div>
+        </div>
+        <input
+          ref={senderFileRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={async (e) => {
+            const f = e.target.files?.[0] ?? null;
+            e.currentTarget.value = '';
+            if (!f) return;
+            try {
+              setSenderAvatarDraft(await fileToScaledDataURL(f, 600, 0.78));
+            } catch {
+              showToast('图片处理失败');
+            }
+          }}
+        />
+      </div>
+    );
 
   /** 分享给 TA（第十八轮需求38/41）：通用分享选择器选渠道+联系人 → 信封卡片发进会话；恋人才触发 AI 读信留言/回信 */
   const doShareLetter = (channel: CoupleChannel, contactId: string) => {
@@ -4255,14 +4377,14 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
       <div className="relative flex h-full flex-col overflow-hidden bg-[#0a0a0d]">
         <LetterStars />
         <TopBar title="情书" onBack={close} />
-        {/* 订单记录入口（信箱） */}
+        {/* 信箱入口（第二十轮：原「订单记录」改叫「信箱」） */}
         <button
           type="button"
           onClick={() => setView('box')}
           className="relative z-20 ml-4 mt-2 flex w-14 shrink-0 flex-col items-center gap-1.5 rounded-xl py-1.5 text-white/90 transition-opacity active:opacity-60"
         >
           <OrderIcon className="h-7 w-7" />
-          <span className="text-[11px] font-medium">订单记录</span>
+          <span className="text-[11px] font-medium">信箱</span>
         </button>
         {/* 信封 + 文案 */}
         <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-9 pb-6">
@@ -4331,106 +4453,107 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     );
   }
 
-  // ============ 编辑信件视图：多页信纸 + 工具栏（第十九轮需求44 美化重排） ============
+  // ============ 编辑信件视图（第二十轮重做：纵向连续信纸，下滑即加第二页，不再左右翻页；「xx的来信」页眉标签已删除） ============
   if (view === 'write') {
     const lineBg = dashed && paper.dashed !== undefined
       ? `repeating-linear-gradient(180deg, transparent 0px, transparent 30px, ${paper.line} 30px, ${paper.line} calc(30px + 1px))`
       : undefined;
-    const pageFull = curPage.length >= LETTER_PAGE_CHARS;
-    const isLastPage = pageIdx >= pages.length - 1;
     const totalChars = pages.reduce((n, p) => n + p.length, 0);
+    const focusSafe = Math.min(focusPage, pages.length - 1);
     return (
       <div className="relative flex h-full flex-col overflow-hidden bg-[#101014]">
         <TopBar title="编辑信件" onBack={() => setView('home')} />
-        {/* 信纸区 */}
-        <div className="relative flex-1 px-3 pb-2 pt-1.5">
-          <div className="relative h-full overflow-hidden rounded-md shadow-[0_8px_28px_rgba(0,0,0,0.5)]" style={{ background: paper.bg }}>
-            {/* 横线 */}
-            {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: '0 6px' }} />}
-            {/* 信纸页眉：来信标题 + 日期（第十九轮重排：日期移到右上角页眉，底部留给页码/计数） */}
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-[5] flex items-center justify-between px-5 pt-3">
-              <span className="text-[12.5px] font-semibold tracking-[1px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.6)' : 'rgba(90,74,56,0.62)' }}>
-                {`${meName0} 的来信`}
-              </span>
-              <span className="text-[11.5px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.5)' : 'rgba(90,74,56,0.5)' }}>
-                {`${new Date().getFullYear()}年${new Date().getMonth() + 1}月${new Date().getDate()}日`}
-              </span>
-            </div>
-            <textarea
-              value={curPage}
-              onChange={(e) => setPageText(e.target.value)}
-              placeholder="写下你想说的话…"
-              className="letter-pad absolute inset-0 h-full w-full resize-none bg-transparent px-5 pb-10 pt-9 leading-[30px] tracking-[0.5px] outline-none"
-              style={{ fontFamily: font.css, fontSize, color, caretColor: color }}
-            />
-            {/* 工具开关 chip */}
-            <button
-              type="button"
-              onClick={() => setToolsOpen((v) => !v)}
-              className="absolute right-2 top-10 z-10 rounded-md bg-[#21b357] px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm"
-            >
-              工具 {toolsOpen ? '˄' : '˅'}
-            </button>
-            {/* 右侧工具栏（虚线/手写信/字体/回执/信纸） */}
-            {toolsOpen && (
-              <div className="absolute right-2.5 top-[64px] z-10 flex flex-col gap-2.5">
-                <button type="button" onClick={() => setDashed((v) => !v)} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${dashed ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
-                  虚线
-                </button>
-                <button type="button" onClick={() => showToast('手写信誊写功能即将上线 ♡')} className="h-[54px] w-9 rounded-lg bg-[#9a9aa2] text-[12.5px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
-                  手写信
-                </button>
-                <button type="button" onClick={() => setSheet('font')} className="h-[54px] w-9 rounded-lg bg-[#9a9aa2] text-[12.5px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
-                  字体
-                </button>
-                <button type="button" onClick={() => setSheet('env')} className="relative h-[54px] w-9 overflow-hidden rounded-lg shadow-md" aria-label="选择信封样式">
-                  <EnvelopeArt envKey={envKey} className="h-full w-full" pets={false} />
-                  <span className="absolute inset-x-0 bottom-0 bg-black/35 py-px text-center text-[10.5px] font-bold leading-[1.15] text-white" style={{ writingMode: 'vertical-rl' }}>
-                    信封
-                  </span>
-                </button>
-                <button type="button" onClick={() => { setReceipt((v) => !v); showToast(receipt ? '已关闭回执' : '已开启回执：TA 拆信时会通知你'); }} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${receipt ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
-                  回执
-                </button>
-                <button type="button" onClick={() => setSheet('paper')} className="relative h-[54px] w-9 rounded-lg border border-[#e8cdb2] bg-[#fdf8ec] text-[12.5px] font-bold leading-[1.15] text-[#2f6b3f] shadow-md" style={{ writingMode: 'vertical-rl' }}>
-                  信纸
-                  <span aria-hidden="true" className="absolute -top-1 right-1 h-1.5 w-1.5 rounded-full bg-[#e05a6d]" />
-                </button>
-              </div>
-            )}
-            {/* 左右翻页箭头（第十九轮：一页不够换第二页；末页右箭头=加一页） */}
-            {pageIdx > 0 && (
+        {/* 信纸区：纵向排列多页信纸，写满自动下滑加下一页 / 末尾可手动再添一页 */}
+        <div ref={scrollRef} className="relative flex-1 overflow-y-auto px-3 pb-4 pt-1.5" data-testid="letter-scroll">
+          <div className="mx-auto flex w-full max-w-[430px] flex-col gap-3.5">
+            {pages.map((ptext, pi) => {
+              const pageFull = ptext.length >= LETTER_PAGE_CHARS;
+              const isFocus = pi === focusSafe;
+              return (
+                <div
+                  key={pi}
+                  className="relative shrink-0 overflow-hidden rounded-md shadow-[0_8px_28px_rgba(0,0,0,0.5)]"
+                  style={{ background: paper.bg, height: 336 }}
+                  data-testid={`letter-paper-${pi + 1}`}
+                >
+                  {/* 横线 */}
+                  {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: '0 6px' }} />}
+                  {/* 首页右上角日期（第二十轮：「xx的来信」标签删除，仅留日期） */}
+                  {pi === 0 && (
+                    <div className="pointer-events-none absolute right-4 top-2.5 z-[5] text-[11.5px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.5)' : 'rgba(90,74,56,0.5)' }}>
+                      {`${new Date().getFullYear()}年${new Date().getMonth() + 1}月${new Date().getDate()}日`}
+                    </div>
+                  )}
+                  <textarea
+                    value={ptext}
+                    onChange={(e) => setPageTextAt(pi, e.target.value)}
+                    onFocus={() => setFocusPage(pi)}
+                    placeholder={pi === 0 ? '写下你想说的话…' : '这一页接着写…'}
+                    className="letter-pad absolute inset-0 h-full w-full resize-none bg-transparent px-5 pb-10 pt-8 leading-[30px] tracking-[0.5px] outline-none"
+                    style={{ fontFamily: font.css, fontSize, color, caretColor: color }}
+                  />
+                  {/* 工具开关 chip（只在正在编辑的页显示） */}
+                  {isFocus && (
+                    <button
+                      type="button"
+                      onClick={() => setToolsOpen((v) => !v)}
+                      className="absolute right-2 top-10 z-10 rounded-md bg-[#21b357] px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm"
+                    >
+                      工具 {toolsOpen ? '˄' : '˅'}
+                    </button>
+                  )}
+                  {/* 右侧工具栏（虚线/手写信/字体/信封/回执/信纸） */}
+                  {isFocus && toolsOpen && (
+                    <div className="absolute right-2.5 top-[64px] z-10 flex flex-col gap-2.5">
+                      <button type="button" onClick={() => setDashed((v) => !v)} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${dashed ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
+                        虚线
+                      </button>
+                      <button type="button" onClick={() => showToast('手写信誊写功能即将上线 ♡')} className="h-[54px] w-9 rounded-lg bg-[#9a9aa2] text-[12.5px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
+                        手写信
+                      </button>
+                      <button type="button" onClick={() => setSheet('font')} className="h-[54px] w-9 rounded-lg bg-[#9a9aa2] text-[12.5px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
+                        字体
+                      </button>
+                      <button type="button" onClick={() => setSheet('env')} className="relative h-[54px] w-9 overflow-hidden rounded-lg shadow-md" aria-label="选择信封样式">
+                        <EnvelopeArt envKey={envKey} className="h-full w-full" pets={false} />
+                        <span className="absolute inset-x-0 bottom-0 bg-black/35 py-px text-center text-[10.5px] font-bold leading-[1.15] text-white" style={{ writingMode: 'vertical-rl' }}>
+                          信封
+                        </span>
+                      </button>
+                      <button type="button" onClick={() => { setReceipt((v) => !v); showToast(receipt ? '已关闭回执' : '已开启回执：TA 拆信时会通知你'); }} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${receipt ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
+                        回执
+                      </button>
+                      <button type="button" onClick={() => setSheet('paper')} className="relative h-[54px] w-9 rounded-lg border border-[#e8cdb2] bg-[#fdf8ec] text-[12.5px] font-bold leading-[1.15] text-[#2f6b3f] shadow-md" style={{ writingMode: 'vertical-rl' }}>
+                        信纸
+                        <span aria-hidden="true" className="absolute -top-1 right-1 h-1.5 w-1.5 rounded-full bg-[#e05a6d]" />
+                      </button>
+                    </div>
+                  )}
+                  {/* 页脚：本页计数 + 页码 */}
+                  <div className="pointer-events-none absolute bottom-2.5 left-4 text-[11.5px]" style={{ color: pageFull ? '#e05a6d' : paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
+                    {`${ptext.length}/${LETTER_PAGE_CHARS}`}
+                  </div>
+                  <div className="pointer-events-none absolute bottom-2.5 right-4 text-[12px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
+                    {`第 ${pi + 1} 页`}
+                  </div>
+                </div>
+              );
+            })}
+            {/* 信纸末尾：再添一页（下滑到这里加第二页/第N页） */}
+            {pages.length < LETTER_MAX_PAGES && (
               <button
                 type="button"
-                onClick={() => goPage(-1)}
-                aria-label="上一页"
-                className="absolute left-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/5 transition-transform active:scale-90"
+                onClick={addPage}
+                data-testid="letter-add-page"
+                className="mx-auto mb-1 flex h-10 items-center gap-1.5 rounded-full border border-white/20 bg-white/[0.06] px-5 text-[13px] text-white/85 transition-transform active:scale-95"
               >
-                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="rgba(90,74,56,0.75)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M14.5 6 8.5 12l6 6" />
-                </svg>
+                <Plus className="h-4 w-4" strokeWidth={2.2} />
+                再添一页
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => goPage(1)}
-              aria-label={isLastPage ? '加一页' : '下一页'}
-              className="absolute right-1 top-1/2 z-10 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full bg-black/5 transition-transform active:scale-90"
-            >
-              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="rgba(90,74,56,0.75)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M9.5 6l6 6-6 6" />
-              </svg>
-            </button>
-            {/* 底部：本页计数 + 页码（位置调整：日期上移页眉，这里只留计数/页码） */}
-            <div className="pointer-events-none absolute bottom-2.5 left-4 text-[11.5px]" style={{ color: pageFull ? '#e05a6d' : paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
-              {`${curPage.length}/${LETTER_PAGE_CHARS}`}
-            </div>
-            <div className="pointer-events-none absolute bottom-2.5 right-4 text-[12.5px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
-              {`第 ${pageIdx + 1}/${Math.max(pages.length, pageIdx + 1)} 页`}
-            </div>
           </div>
         </div>
-        {/* 底部操作栏：存草稿 · 页码导航 · 下一步 */}
+        {/* 底部操作栏：存草稿 · 下一步（第二十轮：页码导航移除，页码显示在每张信纸上） */}
         <div className="relative z-20 flex shrink-0 items-center gap-3 border-t border-white/8 bg-[#141419] px-4 pb-7 pt-3.5">
           <button
             type="button"
@@ -4442,19 +4565,6 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
           >
             存草稿
           </button>
-          <div className="flex h-[46px] flex-1 items-center justify-center gap-1 rounded-full border border-white/12 bg-white/[0.04] px-2">
-            <button type="button" onClick={() => goPage(-1)} disabled={pageIdx === 0} aria-label="上一页" className="flex h-8 w-8 items-center justify-center rounded-full text-white/80 disabled:opacity-30">
-              <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M14.5 6 8.5 12l6 6" />
-              </svg>
-            </button>
-            <span className="min-w-[64px] text-center text-[13.5px] font-medium text-white/85">{`${pageIdx + 1} / ${Math.max(pages.length, pageIdx + 1)} 页`}</span>
-            <button type="button" onClick={() => goPage(1)} disabled={pages.length >= LETTER_MAX_PAGES && isLastPage} aria-label="下一页" className="flex h-8 w-8 items-center justify-center rounded-full text-white/80 disabled:opacity-30">
-              <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M9.5 6l6 6-6 6" />
-              </svg>
-            </button>
-          </div>
           <button
             type="button"
             onClick={() => {
@@ -4471,12 +4581,12 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
           </button>
         </div>
         {renderSheets()}
+        {renderSenderSheet()}
       </div>
     );
   }
 
-  // ============ 发送设置视图（第十九轮需求42/43，参照「慢邮邮」发送设置截图重做）：
-  // 封存功能已删除 —— 信封预览（来信标题/邮戳/头像/日期）+ 信封设置 + 拆信设置（即时拆信/定时拆信）============
+  // ============ 发送设置视图（第二十轮调整：信封预览=真实信封样式（头像火漆位居中），「拆信设置」改「寄出方式：定时发出/即时发出」，按钮文字同一行，「设置头像/昵称」可自定义） ============
   if (view === 'send') {
     const timed = sendMode === 'timed';
     return (
@@ -4484,71 +4594,55 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         <LetterStars count={26} />
         <TopBar title="发送设置" onBack={() => setView('write')} />
         <div className="relative z-10 flex flex-1 flex-col overflow-y-auto px-4 pb-8">
-          {/* 信封预览卡（对应参考图顶部：来信标题 + 邮戳 + 中间头像 + 日期） */}
-          <div className="relative mx-auto mt-2 w-full overflow-hidden rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.45)]">
-            <EnvelopeArt envKey={envKey} className="h-[190px] w-full" />
-            {/* 来信标题（信封盖正中上方） */}
-            <div className="absolute inset-x-0 top-3 z-10 text-center">
-              <span className="rounded-full bg-black/22 px-3.5 py-1 text-[13.5px] font-semibold tracking-[1.5px] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]">
-                {`${meName0}的来信`}
-              </span>
-            </div>
-            {/* 中间头像（贴纸样式 + 编辑角标；对应参考图「设置头像/昵称」的头像位） */}
-            <button
-              type="button"
-              aria-label="设置头像"
-              onClick={() => showToast('头像跟随微信/QQ 账号，可在「我们 · 恋爱资料」里查看 ♡')}
-              className="absolute left-1/2 top-1/2 z-10 h-[74px] w-[74px] -translate-x-1/2 -translate-y-[62%] overflow-hidden rounded-full border-[3px] border-white/90 shadow-[0_4px_14px_rgba(0,0,0,0.28)]"
-            >
-              {state.meAvatar ? (
-                <img src={state.meAvatar} alt={meName0} className="h-full w-full object-cover" draggable={false} />
-              ) : (
-                <img src="/icons/couple.png" alt="恋人空间" className="h-full w-full object-cover" draggable={false} />
-              )}
-            </button>
-            <button
-              type="button"
-              aria-label="编辑头像"
-              onClick={() => showToast('头像跟随微信/QQ 账号，可在「我们 · 恋爱资料」里查看 ♡')}
-              className="absolute left-1/2 top-1/2 z-10 ml-6 mt-3 flex h-7 w-7 -translate-x-1/2 -translate-y-[62%] items-center justify-center rounded-full bg-[#21b357] text-white shadow-md ring-2 ring-white/85"
-            >
-              <Pencil className="h-3.5 w-3.5" strokeWidth={2.4} />
-            </button>
-            {/* 右下日期（邮戳落款） */}
-            <div className="absolute bottom-2.5 right-3.5 z-10 text-[12.5px] font-semibold text-white/95 drop-shadow-[0_1px_2px_rgba(0,0,0,0.55)]">
-              {`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`}
-            </div>
-          </div>
+          {/* 信封预览卡 = 真实信封本身（头像作为火漆印盖在封口尖角正中；点击可设置头像/昵称） */}
+          <button
+            type="button"
+            onClick={() => {
+              setSenderName((state.letterSenderName || '').trim());
+              setSenderAvatarDraft(state.letterSenderAvatar || '');
+              setSheet('sender');
+            }}
+            aria-label="设置信封头像/昵称"
+            className="relative mx-auto mt-2 block w-full overflow-hidden rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.45)] transition-transform active:scale-[0.99]"
+            data-testid="send-envelope-preview"
+          >
+            <EnvelopeArt envKey={envKey} className="h-[196px] w-full" avatar={senderAvatar} />
+          </button>
 
-          {/* 设置行组（对应参考图：信封设置/收信效果/背景音乐/拆信设置） */}
+          {/* 设置行组（信封设置/收信效果/背景音乐/寄出方式） */}
           <div className="mt-4 divide-y divide-white/8 rounded-2xl border border-white/10 bg-white/[0.05]">
-            {/* 信封设置 */}
-            <div className="flex items-center gap-3 px-4 py-3.5">
-              <span className="w-[92px] shrink-0 text-[15px] font-semibold text-white">信封设置</span>
+            {/* 信封设置（第二十轮：按钮文字不换行，同一行展示） */}
+            <div className="flex items-center gap-2 px-4 py-3.5">
+              <span className="w-[76px] shrink-0 text-[15px] font-semibold text-white">信封设置</span>
               <div className="flex flex-1 justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => showToast('头像跟随微信/QQ 账号；昵称可在「我们 · 恋爱资料」里改 ♡')}
-                  className="h-9 rounded-lg bg-white/10 px-3.5 text-[13px] font-medium text-[#4ade80]"
+                  onClick={() => {
+                    setSenderName((state.letterSenderName || '').trim());
+                    setSenderAvatarDraft(state.letterSenderAvatar || '');
+                    setSheet('sender');
+                  }}
+                  data-testid="sender-open"
+                  className="h-9 whitespace-nowrap rounded-lg bg-white/10 px-3 text-[13px] font-medium text-[#4ade80]"
                 >
                   设置头像/昵称
                 </button>
-                <button type="button" onClick={() => setSheet('env')} data-testid="send-set-envelope" className="h-9 rounded-lg bg-white/10 px-4 text-[13px] font-medium text-[#4ade80]">
+                <button type="button" onClick={() => setSheet('env')} data-testid="send-set-envelope" className="h-9 whitespace-nowrap rounded-lg bg-white/10 px-3.5 text-[13px] font-medium text-[#4ade80]">
                   换信封
                 </button>
               </div>
             </div>
             {/* 收信效果 */}
             <div className="flex items-center gap-3 px-4 py-3.5">
-              <span className="w-[92px] shrink-0 text-[15px] font-semibold text-white">收信效果</span>
+              <span className="w-[76px] shrink-0 text-[15px] font-semibold text-white">收信效果</span>
               <span className="flex-1 text-right text-[13px] text-[#87878f]">飘落 · 音效 · 动画</span>
-              <button type="button" onClick={() => showToast('TA 拆信时：信封飘落 + 星光动画 ♡')} className="h-9 shrink-0 rounded-lg bg-white/10 px-3.5 text-[13px] font-medium text-[#4ade80]">
+              <button type="button" onClick={() => showToast('TA 拆信时：信封飘落 + 星光动画 ♡')} className="h-9 shrink-0 whitespace-nowrap rounded-lg bg-white/10 px-3.5 text-[13px] font-medium text-[#4ade80]">
                 预览设置
               </button>
             </div>
             {/* 背景音乐 */}
             <button type="button" onClick={() => showToast('背景音乐即将上线 ♡')} className="flex w-full items-center gap-3 px-4 py-3.5 text-left">
-              <span className="w-[92px] shrink-0 text-[15px] font-semibold text-white">背景音乐</span>
+              <span className="w-[76px] shrink-0 text-[15px] font-semibold text-white">背景音乐</span>
               <span className="flex flex-1 items-center justify-end gap-1 text-[13.5px] text-[#87878f]">
                 不使用
                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -4556,26 +4650,26 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 </svg>
               </span>
             </button>
-            {/* 拆信设置（核心：即时拆信 / 定时拆信） */}
+            {/* 寄出方式（第二十轮：原「拆信设置」改为「定时发出 / 即时发出」） */}
             <div className="px-4 py-3.5">
-              <div className="flex items-center gap-3">
-                <span className="w-[92px] shrink-0 text-[15px] font-semibold text-white">拆信设置</span>
+              <div className="flex items-center gap-2">
+                <span className="w-[76px] shrink-0 text-[15px] font-semibold text-white">寄出方式</span>
                 <div className="flex flex-1 justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => setSendMode('timed')}
                     data-testid="send-mode-timed"
-                    className={`h-9 rounded-lg px-4 text-[13.5px] font-semibold transition-colors ${timed ? 'bg-[#21b357] text-white shadow-[0_2px_10px_rgba(33,179,87,0.4)]' : 'bg-white/10 text-[#b9b9c4]'}`}
+                    className={`h-9 whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition-colors ${timed ? 'bg-[#21b357] text-white shadow-[0_2px_10px_rgba(33,179,87,0.4)]' : 'bg-white/10 text-[#b9b9c4]'}`}
                   >
-                    定时拆信
+                    定时发出
                   </button>
                   <button
                     type="button"
                     onClick={() => setSendMode('now')}
                     data-testid="send-mode-now"
-                    className={`h-9 rounded-lg px-4 text-[13.5px] font-semibold transition-colors ${!timed ? 'bg-[#21b357] text-white shadow-[0_2px_10px_rgba(33,179,87,0.4)]' : 'bg-white/10 text-[#b9b9c4]'}`}
+                    className={`h-9 whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition-colors ${!timed ? 'bg-[#21b357] text-white shadow-[0_2px_10px_rgba(33,179,87,0.4)]' : 'bg-white/10 text-[#b9b9c4]'}`}
                   >
-                    即时拆信
+                    即时发出
                   </button>
                 </div>
               </div>
@@ -4587,7 +4681,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                         key={d}
                         type="button"
                         onClick={() => setAfter(d)}
-                        className={`h-10 flex-1 rounded-full border text-[13.5px] transition-colors ${after === d ? 'border-[#21b357] bg-[#21b357]/15 font-bold text-[#4ade80]' : 'border-white/15 text-[#9c9ca6]'}`}
+                        className={`h-10 flex-1 whitespace-nowrap rounded-full border text-[13.5px] transition-colors ${after === d ? 'border-[#21b357] bg-[#21b357]/15 font-bold text-[#4ade80]' : 'border-white/15 text-[#9c9ca6]'}`}
                       >
                         {d} 天
                       </button>
@@ -4616,54 +4710,155 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
           </div>
         </div>
         {renderSheets()}
+        {renderSenderSheet()}
       </div>
     );
   }
 
-  // ============ 信箱（原订单记录）：TA 寄给我的信 + 我寄出的信（可分享/信下留言） ============
+  // ============ 单独阅读界面（第二十轮：信箱/聊天卡片点进的是独立界面，里面是信的内容；对照参考图「无忧的来信」阅读页：浅粉背景 + 米色信纸 + 日期/页码 + 去写信/回信） ============
+  if (view === 'read') {
+    const lTa = readFrom === 'ta' ? state.aiLetters.find((x) => x.id === readId) : undefined;
+    const lMe = readFrom === 'me' ? state.letters.find((x) => x.id === readId) : undefined;
+    if (!lTa && !lMe) {
+      return (
+        <div className="relative flex h-full flex-col overflow-hidden bg-[#0a0a0d]">
+          <LetterStars count={30} />
+          <TopBar title="信箱" onBack={() => setView('home')} />
+          <div className="flex flex-1 items-center justify-center text-[14px] text-[#6e6e78]">这封信已经不在信箱里了</div>
+        </div>
+      );
+    }
+    // 归一化（TA 的信没有 openAfterDays/sharedAt：视为即时可拆）
+    const l = lTa
+      ? { id: lTa.id, text: lTa.text, at: lTa.at, envelope: lTa.envelope, openAfterDays: 0, sharedAt: undefined as number | undefined }
+      : { id: lMe!.id, text: lMe!.text, at: lMe!.at, envelope: lMe!.envelope, openAfterDays: lMe!.openAfterDays, sharedAt: lMe!.sharedAt };
+    // 全文按每页 200 字分页（对照参考图「当前：第1/2页」）
+    const readPages: string[] = [];
+    for (let i = 0; i < l.text.length; i += LETTER_PAGE_CHARS) readPages.push(l.text.slice(i, i + LETTER_PAGE_CHARS));
+    const totalPages = Math.max(1, readPages.length);
+    const page = Math.min(readPage, totalPages - 1);
+    const locked = readFrom === 'me' && !arrived(l);
+    const remainR = Math.max(1, Math.ceil((l.at + l.openAfterDays * 86400000 - now) / 86400000));
+    const who = readFrom === 'ta' ? state.taName || 'TA' : meName0;
+    const greet = readFrom === 'ta' ? meName0 : state.taName || 'TA';
+    return (
+      <div className="relative flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,#fbeef1_0%,#f8e3e8_55%,#f5d9e0_100%)]">
+        {/* 顶部栏（浅色版）：返回 + 来信标题 + 分享 */}
+        <div className="relative z-30 shrink-0 pt-[54px]">
+          <div className="flex h-11 items-center px-1.5">
+            <button type="button" onClick={() => setView('box')} aria-label="返回" className="flex h-9 w-9 items-center justify-center rounded-full text-[#5c4a50] transition-opacity active:opacity-50">
+              <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
+            </button>
+            <div className="pointer-events-none absolute left-1/2 top-[54px] flex h-11 -translate-x-1/2 items-center text-[16px] font-bold text-[#4a3a40]">{`${who}的来信`}</div>
+            {readFrom === 'me' && !l.sharedAt && (
+              <button type="button" onClick={() => setShareLetterId(l.id)} className="ml-auto mr-2 flex h-9 items-center gap-1 rounded-full border border-[#e3c8ce] bg-white/70 px-3.5 text-[13px] font-medium text-[#c25868]">
+                <Send className="h-3.5 w-3.5" />
+                分享
+              </button>
+            )}
+          </div>
+          <div className="mt-1 px-5 text-[11.5px] text-[#bb959d]">✉ 一封来信，一份心意</div>
+        </div>
+        {/* 信纸（米色 + 虚线行 + 称呼 + 正文 + 日期/页码） */}
+        <div className="relative z-10 flex-1 overflow-y-auto px-4 pb-4 pt-2">
+          <div className="relative mx-auto max-w-[430px] overflow-hidden rounded-xl bg-[#fdf9ef] shadow-[0_12px_30px_rgba(140,90,100,0.18)]" data-testid="letter-read-paper">
+            <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: 'repeating-linear-gradient(180deg, transparent 0px, transparent 30px, rgba(210,180,140,0.5) 30px, rgba(210,180,140,0.5) calc(30px + 1px))', backgroundPosition: '0 6px' }} />
+            <div className="relative px-5 pb-2 pt-4">
+              <div className="text-[15.5px] font-semibold text-[#4a3f34]">{`亲爱的${greet}`}</div>
+              <div className="mt-1 whitespace-pre-wrap text-[15px] leading-[30px] tracking-[0.5px] text-[#4a4238]" style={{ minHeight: 240 }} data-testid="letter-read-body">
+                {locked ? '' : readPages[page]}
+              </div>
+            </div>
+            {/* 底部：日期 + 页码（对照参考图「当前：第1/2页」） */}
+            <div className="relative flex items-center justify-between px-5 pb-3.5">
+              <span className="text-[11.5px] text-[#a58f76]">{fmtDate(l.at)}</span>
+              <span className="text-[12px] text-[#a58f76]">{`当前：第${page + 1}/${totalPages}页`}</span>
+            </div>
+            {/* 定时信未到期：遮罩 + 提示 */}
+            {locked && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#fdf9ef]/75 backdrop-blur-[3px]" data-testid="read-locked">
+                <EnvelopeArt envKey={l.envelope} className="h-[92px] w-[120px]" pets={false} />
+                <p className="mt-4 text-[14px] font-medium text-[#8a6a58]">这封信还在时间的路上</p>
+                <p className="mt-1 text-[12px] text-[#b09a84]">{`还剩 ${remainR} 天就能拆开了 ♡`}</p>
+              </div>
+            )}
+          </div>
+          {/* 页码切换（多页信） */}
+          {totalPages > 1 && !locked && (
+            <div className="mx-auto mt-3 flex max-w-[430px] items-center justify-center gap-5 rounded-full bg-white/60 py-2">
+              <button type="button" onClick={() => setReadPage((p) => Math.max(0, p - 1))} disabled={page === 0} aria-label="上一页" className="flex h-8 w-8 items-center justify-center rounded-full text-[#7a5a50] disabled:opacity-30">
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M14.5 6 8.5 12l6 6" />
+                </svg>
+              </button>
+              <span className="min-w-[56px] text-center text-[13px] font-medium text-[#7a5a50]">{`${page + 1} / ${totalPages}`}</span>
+              <button type="button" onClick={() => setReadPage((p) => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1} aria-label="下一页" className="flex h-8 w-8 items-center justify-center rounded-full text-[#7a5a50] disabled:opacity-30">
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9.5 6l6 6-6 6" />
+                </svg>
+              </button>
+            </div>
+          )}
+          {/* 信下留言（TA 的信 / 已寄给 TA 的信；全部进 AI 记忆） */}
+          {(readFrom === 'ta' || (readFrom === 'me' && l.sharedAt)) && (
+            <div className="mx-auto mt-3 max-w-[430px] rounded-2xl bg-white/75 p-2.5 shadow-[0_6px_18px_rgba(140,90,100,0.12)]">
+              <CommentThread state={state} patch={(p) => patch(typeof p === 'function' ? p(state) : p)} threadKey={`letter:${l.id}`} hint="给这封信留一句话" testId="letter-read-comments" />
+            </div>
+          )}
+        </div>
+        {/* 底部操作栏（对照参考图：去写信 + 回信） */}
+        <div className="relative z-20 flex shrink-0 items-center gap-3 border-t border-black/[0.06] bg-white/85 px-4 pb-7 pt-3.5 backdrop-blur">
+          <button type="button" onClick={() => setView('write')} className="h-[46px] flex-1 rounded-full border border-black/10 bg-white text-[15.5px] font-medium text-[#4a4238]">
+            去写信
+          </button>
+          {readFrom === 'me' && !l.sharedAt ? (
+            <button type="button" onClick={() => setShareLetterId(l.id)} data-testid="read-share-btn" className="h-[46px] flex-[1.6] rounded-full bg-[linear-gradient(135deg,#f7b7c5,#ef9cb2)] text-[16px] font-bold text-white shadow-[0_4px_14px_rgba(239,156,178,0.4)] transition-transform active:scale-[0.97]">
+              {`分享给${state.taName || 'TA'}`}
+            </button>
+          ) : (
+            <button type="button" onClick={() => setView('write')} data-testid="read-reply-btn" className="h-[46px] flex-[1.6] rounded-full bg-[#21b357] text-[16px] font-bold text-white shadow-[0_4px_14px_rgba(33,179,87,0.4)] transition-transform active:scale-[0.97]">
+              回信
+            </button>
+          )}
+        </div>
+        {shareLetterId && <ShareChannelPicker title="分享这封情书" hint="选择用哪个 App 寄出，再选联系人" onSend={doShareLetter} onClose={() => setShareLetterId(null)} />}
+      </div>
+    );
+  }
+
+  // ============ 信箱（第二十轮改版：列表显示信封样式，点进去是单独的阅读界面） ============
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-[#0a0a0d]">
       <LetterStars count={30} />
       <TopBar title="信箱" onBack={() => setView('home')} />
       <div className="relative z-10 flex-1 overflow-y-auto px-4 pb-10 pt-2">
-        {/* TA 寄给我的信（第十八轮：AI 回信/主动写信，信封样式渲染；点击展开全文 + 信下留言） */}
+        {/* TA 寄给我的信（信封样式卡片；点击进单独阅读界面） */}
         {state.aiLetters.length > 0 && (
           <>
-            <div className="px-1 pb-2 pt-3 text-[13px] font-semibold text-[#9c9ca6]">{state.taName || 'TA'} 寄给我的信</div>
-            <div className="space-y-3.5">
-              {state.aiLetters.map((l) => {
-                const open = taOpenId === l.id;
-                return (
-                  <div key={l.id} className="overflow-hidden rounded-2xl border border-white/10 bg-white/[0.06]">
-                    <button type="button" onClick={() => setTaOpenId(open ? null : l.id)} className="flex w-full items-center gap-3 p-3 text-left">
-                      <span className="w-[74px] shrink-0 overflow-hidden rounded-lg shadow-md">
-                        <EnvelopeArt envKey={l.envelope} className="h-[52px] w-full" pets={false} />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-[13.5px] font-semibold text-white">{state.taName || 'TA'} 的来信</span>
-                        <span className="mt-0.5 block truncate text-[12px] text-[#87878f]">{cutText(l.text, 34)}</span>
-                        <span className="mt-1 block text-[10.5px] text-[#6e6e78]">{fmtDate(l.at)}{l.replyToId ? ' · 回你的信' : ''}</span>
-                      </span>
-                      <span className="shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-[11px] text-[#b9b9c4]">{open ? '收起' : '拆信'}</span>
-                    </button>
-                    {open && (
-                      <div className="px-3 pb-3">
-                        <div className="whitespace-pre-wrap rounded-xl bg-[#fdf8ec] p-3.5 text-[14.5px] leading-relaxed text-[#4a4238]">{l.text}</div>
-                        {/* 信下留言（TA 的留言 + 我可回复；全部进 AI 记忆） */}
-                        <div className="mt-2.5 rounded-xl bg-white/[0.05] p-2.5">
-                          <CommentThread state={state} patch={(p) => patch(typeof p === 'function' ? p(state) : p)} threadKey={`letter:${l.id}`} hint="给这封信留一句话" dark testId="letter-ta-comments" />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+            <div className="px-1 pb-2.5 pt-3 text-[13px] font-semibold text-[#9c9ca6]">{state.taName || 'TA'} 寄给我的信</div>
+            <div className="space-y-4">
+              {state.aiLetters.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => openRead(l.id, 'ta')}
+                  data-testid={`box-ta-${l.id}`}
+                  className="relative block w-full overflow-hidden rounded-2xl text-left shadow-[0_10px_26px_rgba(0,0,0,0.42)] transition-transform active:scale-[0.985]"
+                >
+                  <EnvelopeArt envKey={l.envelope} className="h-[132px] w-full" avatar={state.taAvatar} />
+                  <span className="absolute left-3 top-3 z-10 rounded-full bg-black/32 px-3 py-1 text-[12px] font-semibold tracking-wide text-white backdrop-blur-[2px]">{`${state.taName || 'TA'}的来信`}</span>
+                  <span className="absolute right-3 top-3 z-10 rounded-full bg-[#21b357] px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm">可拆信</span>
+                  <span className="absolute inset-x-0 bottom-0 z-10 block bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">
+                    <span className="block truncate text-[12.5px] text-white/90">{cutText(l.text, 30)}</span>
+                  </span>
+                </button>
+              ))}
             </div>
           </>
         )}
 
-        {/* 我寄出的信 */}
-        <div className="px-1 pb-2 pt-4 text-[13px] font-semibold text-[#9c9ca6]">我寄出的信</div>
+        {/* 我寄出的信（信封样式卡片；未到期显示剩余天数） */}
+        <div className="px-1 pb-2.5 pt-4 text-[13px] font-semibold text-[#9c9ca6]">我寄出的信</div>
         {state.letters.length === 0 && state.aiLetters.length === 0 && (
           <div className="flex flex-col items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] py-10 text-center">
             <NightEnvelope />
@@ -4680,60 +4875,26 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         <div className="space-y-4">
           {state.letters.map((l) => {
             const open = arrived(l);
-            const instant = l.openAfterDays === 0; // 即时拆信（第十九轮）
+            const instant = l.openAfterDays === 0;
             const remain = Math.max(1, Math.ceil((l.at + l.openAfterDays * 86400000 - now) / 86400000));
             return (
-              <div key={l.id} className="rounded-2xl border border-white/10 bg-white/[0.06] p-4">
-                <div className="flex items-center justify-between">
-                  <span className="flex min-w-0 items-center gap-2 text-[12.5px] text-[#87878f]">
-                    <span className="h-6 w-9 shrink-0 overflow-hidden rounded shadow-sm">
-                      <EnvelopeArt envKey={l.envelope ?? envKey} className="h-full w-full" pets={false} />
-                    </span>
-                    <span className="truncate">
-                      {fmtDate(l.at)} 寄出 · {instant ? '即时寄达' : `${l.openAfterDays} 天后开启`}{letterEnvelopeOf(l.envelope ?? envKey).name ? ` · ${letterEnvelopeOf(l.envelope ?? envKey).name}` : ''}
-                    </span>
-                  </span>
-                  <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11.5px] font-medium ${open ? 'bg-[#21b357] text-white' : 'bg-white/10 text-[#9c9ca6]'}`}>
-                    {open ? '可拆信' : `还剩 ${remain} 天`}
-                  </span>
-                </div>
-                {open ? (
-                  <>
-                    <div className="mt-3 whitespace-pre-wrap rounded-xl bg-[#fdf8ec] p-3.5 text-[15px] leading-relaxed text-[#4a4238]">{l.text}</div>
-                    {/* 信下留言（TA 拆信后在这里留言；我也能回复） */}
-                    {l.sharedAt ? (
-                      <div className="mt-2.5 rounded-xl bg-white/[0.05] p-2.5">
-                        <CommentThread state={state} patch={(p) => patch(typeof p === 'function' ? p(state) : p)} threadKey={`letter:${l.id}`} hint="给这封信留一句话" dark testId="letter-my-comments" />
-                      </div>
-                    ) : null}
-                  </>
-                ) : (
-                  <div className="mt-3 flex items-center gap-2.5 text-[13.5px] italic text-[#6e6e78]">
-                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-                      <rect x="3" y="6" width="18" height="13" rx="2.4" />
-                      <path d="M3.5 7.5 12 13.5 20.5 7.5" />
-                    </svg>
-                    这封信还在时间的路上
-                  </div>
-                )}
-                {/* 分享给 TA（第十八轮需求38/41：通用分享选择器 → QQ/微信 → 联系人） */}
-                {l.sharedAt ? (
-                  <div className="mt-3 inline-flex items-center gap-1 rounded-full bg-white/8 px-2.5 py-1 text-[11.5px] text-[#9c9ca6]">
-                    <BadgeCheck className="h-3.5 w-3.5 text-[#21b357]" />
-                    已寄给 {state.taName || 'TA'} ♡
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setShareLetterId(l.id)}
-                    data-testid={`share-letter-${l.id}`}
-                    className="mt-3 flex h-9 items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#f7b7c5,#ef9cb2)] px-4 text-[13px] font-semibold text-white shadow-[0_4px_12px_rgba(239,156,178,0.35)] transition-transform active:scale-95"
-                  >
-                    <Send className="h-3.5 w-3.5" />
-                    分享给 {state.taName || 'TA'}
-                  </button>
-                )}
-              </div>
+              <button
+                key={l.id}
+                type="button"
+                onClick={() => openRead(l.id, 'me')}
+                data-testid={`box-me-${l.id}`}
+                className="relative block w-full overflow-hidden rounded-2xl text-left shadow-[0_10px_26px_rgba(0,0,0,0.42)] transition-transform active:scale-[0.985]"
+              >
+                <EnvelopeArt envKey={l.envelope ?? envKey} className="h-[132px] w-full" avatar={senderAvatar} />
+                <span className="absolute left-3 top-3 z-10 rounded-full bg-black/32 px-3 py-1 text-[12px] font-semibold tracking-wide text-white backdrop-blur-[2px]">{`${meName0}的来信`}</span>
+                <span className={`absolute right-3 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ${open ? 'bg-[#21b357] text-white' : 'bg-black/38 text-white/90'}`}>
+                  {open ? '可拆信' : instant ? '定时中' : `还剩 ${remain} 天`}
+                </span>
+                <span className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-between gap-2 bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">
+                  <span className="truncate text-[12px] text-white/85">{`${fmtDate(l.at)} · ${instant ? '即时寄达' : `${l.openAfterDays} 天后可拆`} · ${letterEnvelopeOf(l.envelope ?? envKey).name}`}</span>
+                  {l.sharedAt && <span className="shrink-0 rounded-full bg-white/15 px-2 py-0.5 text-[10.5px] text-white/90">{`已寄给${state.taName || 'TA'} ♡`}</span>}
+                </span>
+              </button>
             );
           })}
         </div>
@@ -4748,9 +4909,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
       </div>
 
       {/* 通用分享选择器（第十八轮需求41） */}
-      {shareLetterId && (
-        <ShareChannelPicker title="分享这封情书" hint="选择用哪个 App 寄出，再选联系人" onSend={doShareLetter} onClose={() => setShareLetterId(null)} />
-      )}
+      {shareLetterId && <ShareChannelPicker title="分享这封情书" hint="选择用哪个 App 寄出，再选联系人" onSend={doShareLetter} onClose={() => setShareLetterId(null)} />}
     </div>
   );
 }
@@ -6020,6 +6179,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
   const [page, setPage] = useState(0);
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState(HUNDRED_DRAFT_DEFAULT);
+  const [hundredWheel, setHundredWheel] = useState(false); // 日期滚轮（第二十轮：上下滑式）
   const [showIndex, setShowIndex] = useState(false);
   const touchX = useRef<number | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
@@ -6130,17 +6290,16 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
             ] as const).map((row) => (
               <label key={row.key} className="flex items-center gap-2 border-b border-[#e8ccd4] py-3.5">
                 {row.type === 'date' ? (
-                  <>
-                    <span className="text-[15px] text-[#5c4a44]">{draft.date || row.label}</span>
-                    <input
-                      type="date"
-                      value={draft.date}
-                      onChange={(e) => setDraft((d) => ({ ...d, date: e.target.value }))}
-                      aria-label="选择日期"
-                      className={`flex-1 bg-transparent text-right text-[15px] outline-none ${draft.date ? 'text-[#5c4a44]' : 'text-transparent'}`}
-                    />
-                    {!draft.date && <span className="pointer-events-none -ml-24 text-[15px] text-[#c3a8b0]">{row.hint}</span>}
-                  </>
+                  <button
+                    type="button"
+                    onClick={() => setHundredWheel(true)}
+                    aria-label="选择日期"
+                    className="flex flex-1 items-center justify-between"
+                    data-testid="hundred-date-open"
+                  >
+                    <span className={`text-[15px] ${draft.date ? 'text-[#5c4a44]' : 'text-[#c3a8b0]'}`}>{draft.date || row.label}</span>
+                    <span className="text-[13px] text-[#c3a8b0]">{draft.date ? '点击修改' : row.hint}</span>
+                  </button>
                 ) : (
                   <>
                     <input
@@ -6163,6 +6322,17 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
           void onPickImg(e.target.files?.[0] ?? null);
           e.currentTarget.value = '';
         }} />
+        {/* 日期滚轮弹窗（第二十轮：上下滑式） */}
+        <WheelDatePicker
+          open={hundredWheel}
+          value={draft.date}
+          onConfirm={(v) => {
+            setDraft((d) => ({ ...d, date: v }));
+            setHundredWheel(false);
+          }}
+          onCancel={() => setHundredWheel(false)}
+          title="选择日期"
+        />
       </div>
     );
   }

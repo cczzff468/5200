@@ -32,6 +32,7 @@ import {
 } from '@/lib/ios/db';
 import { IOSNavBar, IOSBackButton, IOSTextButton } from '@/components/ios/IOSNavBar';
 import { BackToHome } from '@/components/ios/BackToHome';
+import WheelDatePicker from './wheel-date-picker';
 
 /**
  * 文件 App：
@@ -429,6 +430,7 @@ function FormSheet({
   const [endTime, setEndTime] = useState('');
   const [note, setNote] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [fileWheel, setFileWheel] = useState<null | 'event' | 'reminder'>(null); // 日期滚轮（第二十轮：上下滑式）
   const [dueTime, setDueTime] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -489,6 +491,18 @@ function FormSheet({
         left={<IOSBackButton label="取消" onClick={onCancel} />}
         right={<IOSTextButton onClick={() => void save()}>存储</IOSTextButton>}
       />
+      {/* 日期滚轮弹窗（第二十轮：上下滑式；事件日期 / 提醒截止日期共用） */}
+      <WheelDatePicker
+        open={fileWheel !== null}
+        value={(fileWheel === 'reminder' ? dueDate : date) || ''}
+        onConfirm={(v) => {
+          if (fileWheel === 'reminder') setDueDate(v);
+          else setDate(v);
+          setFileWheel(null);
+        }}
+        onCancel={() => setFileWheel(null)}
+        title="选择日期"
+      />
       <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-[40px] pt-2">
         <div className="divide-y divide-border/60 overflow-hidden rounded-[20px] bg-white/60 shadow-[0_8px_28px_rgba(17,24,39,0.07)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
           <FormRow label="标题">
@@ -516,7 +530,16 @@ function FormSheet({
           {kind === 'event' && (
             <>
               <FormRow label="日期">
-                <input type="date" className={formInputCls} value={date} onChange={(e) => setDate(e.target.value)} />
+                <button
+                  type="button"
+                  onClick={() => setFileWheel('event')}
+                  aria-label="选择日期"
+                  data-testid="files-date-open"
+                  className={`flex h-8 flex-1 items-center justify-between rounded-lg px-2 text-[14px] ${date ? 'text-foreground' : 'text-muted-foreground'}`}
+                >
+                  <span>{date || '请选择日期'}</span>
+                  <span className="text-[12px] opacity-60">点击选择</span>
+                </button>
               </FormRow>
               <FormRow label="开始">
                 <input
@@ -544,12 +567,16 @@ function FormSheet({
           {kind === 'reminder' && (
             <>
               <FormRow label="截止日期">
-                <input
-                  type="date"
-                  className={formInputCls}
-                  value={dueDate}
-                  onChange={(e) => setDueDate(e.target.value)}
-                />
+                <button
+                  type="button"
+                  onClick={() => setFileWheel('reminder')}
+                  aria-label="选择截止日期"
+                  data-testid="files-duedate-open"
+                  className={`flex h-8 flex-1 items-center justify-between rounded-lg px-2 text-[14px] ${dueDate ? 'text-foreground' : 'text-muted-foreground'}`}
+                >
+                  <span>{dueDate || '请选择日期'}</span>
+                  <span className="text-[12px] opacity-60">点击选择</span>
+                </button>
               </FormRow>
               <FormRow label="截止时间">
                 <input

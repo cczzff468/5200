@@ -19820,3 +19820,21 @@ Work Log:
 Stage Summary:
 - 6 文件改动：couple-space.tsx（+832/-264 主体）、couple-letter-bubble.tsx（信封全 SVG 重绘）、couple-ai.ts（aiZodiacReading+zodiacReading 类型）、couple-letter-share.ts（回信记忆增强）、meituan-store.ts（pending page 机制）、meituan.tsx（启动消费直达 travel）
 - 第八批 8 项全部落地：封存删除→发送设置（即时/定时拆信）、编辑器多页+美化重排、信封零 emoji 全 SVG（蕾丝+邮戳+卡通小动物）、双向信件进 AI 记忆、星座缘分真实生成+星空卡美化+持久化、情侣酒店直达美团酒店旅行、恋人空间头像实时跟随微信/QQ 登录头像
+
+---
+Task ID: 20
+Agent: Z.ai Code（主会话）
+Task: 恋人空间第二十轮（用户对第十九轮的反馈 15 项）：信封分享卡片信封化、信封再美化、阅读界面独立化、编辑器纵向下滑加页、删「xx的来信」标签、信箱信封样式+单独阅读页、订单记录→信箱、拆信设置→定时/即时发出、信封预览一致、头像位置+右下角图标删除、头像昵称自定义、按钮文字同行、日期弹窗全部改上下滑滚轮
+
+Work Log:
+- wheel-date-picker.tsx（新组件）：iOS 风格三列滚轮日期弹窗（年/月/日，withTime 加时/分五列），scroll-snap 上下滑吸附+中间选中高亮框+选项随距离淡化；打开重置用 React 渲染期 setState 模式（prevOpen 比较，规避 set-state-in-effect）；日溢出用 dSafe clamp（1月31→2月自动28）；confirm 输出 YYYY-MM-DD / YYYY-MM-DDTHH:mm
+- couple-letter-bubble.tsx：EnvelopeArt 新增 avatar prop（头像作为火漆印章盖在封口尖角正中 top-[44%]，白边+阴影+印章环）；美化（内衬信纸探头+封口盖渐变高光+火漆径向高光+内描边阴影+底部暗角）；CoupleLetterBubble 分享卡片重做成信封本体式（宽幅 EnvelopeArt 全高 128px + 下方「{from}的来信」+回信/来信/情书角标+摘要一行+拆信按钮），样式与信封一致
+- couple-space.tsx LettersPage：①view 加 'read'，taOpenId 展开式删除，openRead(id,from) 进独立阅读界面；聊天卡片消费 effect 直达 read（信不存在回 box）；②write 视图纵向连续信纸（pages.map 渲染多张 336px 信纸+每页页脚 x/200 与「第 N 页」+末尾「再添一页」按钮；写满 200 自动追加下一页并平滑滚动到底；左右翻页箭头与底部页码导航全部移除，底部只留存草稿/下一步；页眉「xx的来信」标签删除仅留首页右上日期）；③send 视图信封预览=真实信封（EnvelopeArt avatar=署名头像，删除「XX的来信」标签叠加与独立头像+铅笔角标，点击预览即开署名弹层）；「拆信设置/定时拆信/即时拆信」→「寄出方式/定时发出/即时发出」；信封设置按钮 whitespace-nowrap 同一行（设置头像/昵称、换信封、预览设置）；④新增「信封署名」弹层（头像上传 fileToScaledDataURL+昵称输入+恢复默认跟随微信/QQ），CoupleState 加 letterSenderName/letterSenderAvatar（空=跟随同步值），meName0/senderAvatar 全局替换（信封预览/信箱署名/阅读称呼/寄出提示/分享记忆全部生效）；⑤box 视图信箱列表改信封样式卡（EnvelopeArt 全宽 132px+左上署名标签+右上状态徽章[可拆信/定时中/还剩N天]+底部摘要与寄达信息+已寄给TA角标），点击进 read；情书主页左上「订单记录」→「信箱」；⑥read 独立阅读界面（对照参考图「无忧的来信」：浅粉渐变背景+居中标题+分享按钮+米色信纸[称呼亲爱的X+虚线行正文+底部日期与「当前：第x/y页」]+200字/页分页切换器+信下留言区[CommentThread 浅色版]+底部「去写信」+「回信/分享给TA」；定时信未到期显示信封遮罩「这封信还在时间的路上，还剩N天」正文不可读）
+- 日期滚轮替换（第二十轮需求：所有日期选择改上下滑式）：couple-space 纪念日编辑/添加弹层（date input→按钮+共用 WheelDatePicker）、100件小事手账日期行；calendar.tsx 事件日期（弹窗挂 Sheet 容器内全屏覆盖）；files.tsx 事件日期/提醒截止日期（共用一实例）；memory-bank.tsx 事件时间（datetime-local→按钮+WheelDatePicker withTime 五列）
+- 中途修复：senderAvatar 草稿重名（→senderAvatarDraft）、read 归一化对象消除联合类型、calendar 弹窗 JSX 层级、memory-bank 替换损坏行恢复、5 处 unused eslint-disable 清理
+- 验证：tsc 全量零错误（仅历史遗留 api/ Prisma）；eslint 改动文件零错误零警告；agent-browser 实机全链路（注入美美/阿澈测试状态+自定义署名"美美酱"）：情书主页信箱入口✓、编辑器（无来信标签+日期+纵向双页+页脚页码+再添一页）✓、发送设置（真实信封预览+寄出方式定时/即时发出+按钮同行+署名弹层保存）✓、即时寄出→信箱信封卡（美美酱的来信）✓、阅读页（我的信：称呼亲爱的阿澈+日期+第1/1页+去写信/分享给阿澈；TA的信：亲爱的美美酱+留言区+回信按钮）✓、定时发出（30天chips+预计日期+寄出后信箱「还剩30天」+阅读页未到期遮罩）✓、纪念日日期滚轮（滚动月→3月日→8日+确定回填 2026-03-08）✓；dev.log 无新增错误
+- 限制说明：微信/QQ 沙箱环境无好友联系人（分享选择器显示「该个 App 里还没有好友」），聊天分享卡片新视觉（宽幅信封式）无法端到端实拍，由代码评审+共用已验证的 EnvelopeArt 保证；小事手账/日历/文件/回忆库的滚轮为同组件复用（组件已实机验证）
+
+Stage Summary:
+- 6 文件改动：wheel-date-picker.tsx（新增 191 行通用滚轮）、couple-letter-bubble.tsx（EnvelopeArt 头像+美化、分享卡片信封化）、couple-space.tsx（LettersPage 五视图重构+署名自定义+信箱/阅读独立界面）、calendar/files/memory-bank.tsx（日期滚轮接入）
+- 15 项反馈全部落地：分享卡片=信封、信封再美化（信纸探头/高光/内描边）、阅读界面美化+独立化、编辑器下滑加页+删标签、信箱信封样式+单独阅读、订单记录→信箱、拆信设置→定时发出/即时发出、信封预览一致、头像居中火漆位、铅笔角标删除、头像昵称可自定义（独立于微信/QQ 同步，可恢复跟随）、按钮文字同一行、全部日期弹窗上下滑滚轮式

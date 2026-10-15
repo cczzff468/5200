@@ -5,6 +5,7 @@ import { CalendarDays, ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import { localDB, genId, type CalendarEventRecord } from '@/lib/ios/db';
 import { BackToHome } from '@/components/ios/BackToHome';
 import { Switch } from '@/components/ui/switch';
+import WheelDatePicker from './wheel-date-picker';
 
 /**
  * 日历 App：月视图（周一为一周开始）+ 选中日事件区 + 底部滑出新建/编辑表单。
@@ -104,6 +105,7 @@ export default function CalendarApp() {
   // 表单 sheet
   const [form, setForm] = useState<EventFormState | null>(null);
   const [formShown, setFormShown] = useState(false);
+  const [calWheel, setCalWheel] = useState(false); // 日期滚轮（第二十轮：所有日期选择改上下滑式）
   const [formError, setFormError] = useState('');
   /** 月网格左右滑动起点 / 切月方向（用于进场动画） */
   const touchX = useRef<number | null>(null);
@@ -522,13 +524,16 @@ export default function CalendarApp() {
             <label htmlFor="ev-date" className="mt-3 block text-[13px] font-medium text-muted-foreground">
               日期
             </label>
-            <input
-              id="ev-date"
-              type="date"
-              value={form.date}
-              onChange={(e) => patchForm({ date: e.target.value })}
-              className={FIELD_CLASS}
-            />
+            <button
+              type="button"
+              onClick={() => setCalWheel(true)}
+              aria-label="选择日期"
+              data-testid="cal-date-open"
+              className={`mt-1 flex h-10 w-full items-center justify-between rounded-[14px] bg-white/60 px-3 text-[15px] ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1] ${form.date ? 'text-foreground' : 'text-muted-foreground'}`}
+            >
+              <span>{form.date || '请选择日期'}</span>
+              <CalendarDays className="h-4.5 w-4.5 opacity-60" strokeWidth={1.8} />
+            </button>
 
             <div className="mt-3 flex items-center justify-between rounded-[14px] bg-white/60 px-3 py-2 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]">
               <span className="text-[15px]">全天</span>
@@ -637,6 +642,17 @@ export default function CalendarApp() {
               )}
             </div>
           </div>
+          {/* 日期滚轮弹窗（第二十轮：上下滑式；挂在 Sheet 容器内，全屏覆盖） */}
+          <WheelDatePicker
+            open={calWheel}
+            value={form?.date || ''}
+            onConfirm={(v) => {
+              patchForm({ date: v });
+              setCalWheel(false);
+            }}
+            onCancel={() => setCalWheel(false)}
+            title="选择日期"
+          />
         </div>
       )}
     </div>

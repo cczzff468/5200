@@ -265,21 +265,35 @@ function EnvelopePattern({ style }: { style: LetterEnvelopeStyle }) {
 }
 
 /**
- * 卡通信封图形（恋人空间情书页与聊天卡片共用；第十九轮重绘：零 emoji 全 SVG）：
- * 信封身 + 底纹 + V 形封口盖 + 顶部蕾丝花边 + 圆形火漆印（SVG 贴纸）
- * + 右上角恋人邮局邮戳 + 底部一排 SVG 小动物。
+ * 卡通信封图形（恋人空间情书页与聊天卡片共用；第十九轮重绘：零 emoji 全 SVG；第二十轮美化 + 头像火漆）：
+ * 信封身 + 底纹 + 内衼信纸探头 + V 形封口盖（渐变高光）+ 顶部蕾丝花边 + 圆形火漆印
+ * （传 avatar 时火漆位改盖发件人头像印章）+ 右上角恋人邮局邮戳 + 底部一排 SVG 小动物 + 内描边。
  */
-export function EnvelopeArt({ envKey, className = '', pets = true }: { envKey?: string; className?: string; pets?: boolean }) {
+export function EnvelopeArt({ envKey, className = '', pets = true, avatar }: { envKey?: string; className?: string; pets?: boolean; avatar?: string | null }) {
   const st = letterEnvelopeOf(envKey);
   const petKinds = Array.from(st.pets).map(petKindOf).filter((k): k is PetKind => k !== null);
   const sealInk = 'rgba(255,255,255,0.92)';
   return (
     <div aria-hidden="true" className={`relative overflow-hidden ${className}`} style={{ background: st.body, borderRadius: 10, containerType: 'inline-size' }}>
       <EnvelopePattern style={st} />
-      {/* V 形封口盖 */}
+      {/* 内衼信纸探头（封口盖后露出一截信纸，更像真的信封） */}
+      <div
+        aria-hidden="true"
+        className="absolute left-1/2 top-[3%] -translate-x-1/2"
+        style={{ width: '44%', height: '13%', background: 'linear-gradient(180deg,#ffffff,#f7f4ea)', borderRadius: '3px 3px 0 0', boxShadow: '0 1px 3px rgba(0,0,0,0.10)' }}
+      >
+        <div style={{ margin: '22% 14% 0', height: '1.5px', background: 'rgba(0,0,0,0.08)', borderRadius: 2 }} />
+        <div style={{ margin: '16% 14% 0', height: '1.5px', background: 'rgba(0,0,0,0.08)', borderRadius: 2 }} />
+      </div>
+      {/* V 形封口盖（叠一层自上而下的微高光） */}
       <div
         className="absolute inset-x-0 top-0"
-        style={{ height: '58%', background: st.flap, clipPath: 'polygon(0 0, 100% 0, 50% 100%)', boxShadow: '0 1px 0 rgba(255,255,255,0.35) inset' }}
+        style={{
+          height: '58%',
+          background: `linear-gradient(180deg, rgba(255,255,255,0.30), rgba(255,255,255,0) 42%), ${st.flap}`,
+          clipPath: 'polygon(0 0, 100% 0, 50% 100%)',
+          boxShadow: '0 1px 0 rgba(255,255,255,0.35) inset',
+        }}
       />
       {/* 封口盖折边描边 */}
       <div aria-hidden="true" className="absolute inset-x-0 top-0" style={{ height: '58%', clipPath: 'polygon(0 0, 100% 0, 50% 100%)', background: 'transparent', boxShadow: '0 -1.5px 0 rgba(255,255,255,0.5) inset' }} />
@@ -287,10 +301,33 @@ export function EnvelopeArt({ envKey, className = '', pets = true }: { envKey?: 
       <LaceTrim color="rgba(255,255,255,0.85)" />
       {/* 右上角邮戳 */}
       <Postmark color={st.accent} />
-      {/* 火漆印（SVG 贴纸） */}
-      <div className="absolute left-1/2 top-1/2 flex h-[34%] w-[22%] -translate-x-1/2 -translate-y-[72%] items-center justify-center rounded-full shadow-[0_2px_6px_rgba(0,0,0,0.18)]" style={{ background: st.seal, border: '2px solid rgba(255,255,255,0.75)' }}>
-        <SealGlyph ch={st.sticker} color={sealInk} />
-      </div>
+      {/* 火漆印 / 发件人头像印章（第二十轮：头像位置调整至封口尖角正中，与参考图一致） */}
+      {avatar ? (
+        <div
+          className="absolute left-1/2 top-[44%] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-full"
+          style={{
+            width: '26%',
+            aspectRatio: '1 / 1',
+            background: st.seal,
+            border: '2.5px solid rgba(255,255,255,0.92)',
+            boxShadow: '0 3px 8px rgba(0,0,0,0.22), 0 0 0 1px rgba(0,0,0,0.05)',
+            padding: '1.5px',
+          }}
+        >
+          <img src={avatar} alt="" draggable={false} className="h-full w-full rounded-full object-cover" />
+        </div>
+      ) : (
+        <div
+          className="absolute left-1/2 top-[44%] flex h-[30%] w-[20%] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full"
+          style={{
+            background: `radial-gradient(circle at 32% 28%, rgba(255,255,255,0.5), rgba(255,255,255,0) 55%), ${st.seal}`,
+            border: '2px solid rgba(255,255,255,0.75)',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.18)',
+          }}
+        >
+          <SealGlyph ch={st.sticker} color={sealInk} />
+        </div>
+      )}
       {/* 底部一排 SVG 小动物 */}
       {pets && petKinds.length > 0 && (
         <div className="absolute inset-x-0 bottom-[3%] flex items-end justify-center" style={{ gap: '4cqw' }}>
@@ -299,6 +336,8 @@ export function EnvelopeArt({ envKey, className = '', pets = true }: { envKey?: 
           ))}
         </div>
       )}
+      {/* 内描边（信封边缘一圈细白线，更有纸质感） */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-[10px]" style={{ boxShadow: 'inset 0 0 0 1.5px rgba(255,255,255,0.35), inset 0 -10px 18px rgba(0,0,0,0.05)' }} />
     </div>
   );
 }
@@ -326,7 +365,7 @@ export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: 
 
   return (
     <div data-testid={`${testidPrefix}-letter-card`} className="w-[248px] select-none overflow-hidden rounded-[10px] bg-white shadow-sm dark:bg-[#1E1E1E]">
-      {/* 卡片本体：信封缩略图 + 标题 + 摘要（点击进信件页面） */}
+      {/* 卡片主体 = 信封本身（第二十轮：分享卡片样式与信封一致，宽幅信封 + 下方署名/摘要） */}
       <button
         type="button"
         data-testid={`${testidPrefix}-letter-card-body`}
@@ -334,15 +373,17 @@ export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: 
           e.stopPropagation();
           openLetter();
         }}
-        className="flex w-full cursor-pointer items-center gap-2.5 px-3 pb-2.5 pt-3 text-left transition-opacity active:opacity-60"
+        className="block w-full cursor-pointer text-left transition-opacity active:opacity-75"
       >
-        <EnvelopeArt envKey={data.envelope} className="h-[64px] w-[52px] shrink-0 [container-type:inline-size]" pets={false} />
-        <span className="min-w-0 flex-1">
-          <span className="block text-[15.5px] font-semibold leading-[1.35] text-black dark:text-white">{data.fromName}的情书</span>
-          <span className="mt-1 block text-[12.5px] font-medium leading-[1.45] text-[#e0607e] dark:text-[#f9a8d4]">
-            {data.from === 'ta' && data.replyToId ? '这是TA给你的回信' : data.from === 'ta' ? 'TA写给你的一封信' : '寄给TA的一封信'}
+        <EnvelopeArt envKey={data.envelope} className="h-[128px] w-full [container-type:inline-size]" pets />
+        <span className="block px-3 pb-2 pt-2.5">
+          <span className="flex items-baseline justify-between gap-2">
+            <span className="truncate text-[15px] font-semibold leading-[1.3] text-black dark:text-white">{data.fromName}的来信</span>
+            <span className="shrink-0 text-[10.5px] font-medium text-[#e0607e] dark:text-[#f9a8d4]">
+              {data.from === 'ta' && data.replyToId ? '回信' : data.from === 'ta' ? '来信' : '情书'}
+            </span>
           </span>
-          <span className="mt-0.5 line-clamp-2 block text-[12px] leading-[1.45] text-black/45 dark:text-white/45">{data.snippet}</span>
+          <span className="mt-0.5 line-clamp-1 block text-[12px] leading-[1.45] text-black/45 dark:text-white/45">{data.snippet}</span>
         </span>
       </button>
 
