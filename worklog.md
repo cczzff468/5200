@@ -19777,3 +19777,25 @@ Stage Summary:
 - 五项需求全部落地并浏览器实证；改动文件：couple-space.tsx / couple-ai.ts / couple-pact-share.ts / couple-pact-bubble.tsx
 - 协议卡片数据模型升级（taSigned+msgId 回写管线）：AI 拟协议→先签名→分享卡片（「xx已签名，等你签署」）→用户签→永久存档+卡片「已签署生效」+记忆闭环
 - 考试闭环升级：TA 交卷自评→用户批分写批语→写进 AI 记忆+聊天注入，AI 可自然聊起
+
+---
+Task ID: 17
+Agent: Z.ai Code (main)
+Task: 用户第六批 8 项：①协议卡片签署后仍显示"去签署"、点击仍显示未签署 → 卡片要动态（已签署显示+点击直达已签署页+AI知晓）；②考试邀请卡片答完点进去还是答题页 → 动态（答完直达结果/答卷页）；③AI 不能给自己评语，由用户批改；④我的批改下面 AI 可以留言；⑤AI 批语性别问题（用户是女生）；⑥AI 出的试卷不应是男友向题目；⑦AI 拟的协议条款问题；⑧回复挑战每题留言要隔离不要全局
+
+Work Log:
+- 定位根因：协议卡片签署后不改的根因 = PactPage 点击已签卡片仍走"重新填草稿进签署页"分支 + signMe 卡片回写匹配面太窄且未命中时不广播；AI 自称"被疼爱的女友"的根因 = genderLine 措辞歧义（"你所有的称呼…必须符合女生身份"被模型理解为给自己贴女生标签）
+- couple-ai.ts：重写 genderLine（明确 AI 永远是男生、禁自称女友/把女生向词用在自己身上）；genExamPaper 注入人设+性别纪律+记忆召回+最近聊天，出给她的卷子以她为中心、禁「男友…你会？」男生向题；aiExamSheet 去掉自评分/评语（只返回 picks）；aiGradeExam 批语 prompt 显式男友口吻；aiReplyVerdict 人称修正（她）；aiTickPact 协议条款 prompt 升级（真实经历+最近聊天+双向条款+性别）；新增 aiExamTaReact（TA 对我批语的留言感想）；sceneOfKey/threadContext 支持带局次的 reply 线程 key 解析
+- couple-exam-share.ts：scheduleAiExamAnswer 改为只交卷不评分（chat 通知/记忆同步更新）+ 考试卡片回写 done；新增 patchExamCardsWhere（卡片状态批量回写）与 scheduleTaReact（批改后延时 TA 留言写 examTaSheet.taReply + 记忆）；navToExam/setPendingExamOpen 增加 title
+- couple-pact-share.ts：PendingPactOpen/navToPact 增加 signed 标记
+- couple-pact-bubble.tsx：气泡自愈（kvGet couple-space:state 的 pacts 按 pactId/同题 signed 存档判定已签署）+ 图标盖"已签署"小红章 + 状态行/按钮动态 + navToPact 带 signed
+- couple-exam-bubble.tsx：气泡自愈（我答完/TA 交卷判定 done）+ "已答完"蓝章 + 底部按钮动态文案
+- couple-space.tsx：PactPage consume 重构（记录 id 优先→已签直达回看页→TA 卡签流程）；signMe 回写带 pactId+同题兜底+未命中广播+我先签名也写 AI 记忆；applyDecision AI 签后同题卡兜底回写；ExamPage consume 按当前状态分流（TA 卷答完→成绩页、我邀的卷 TA 交卷→答卷页）；submit 后回写考试卡片 done；tasheet 视图改版（score 可选：已交卷等待批改态 + 我的批改 + 批语下 TA 留言块含 loading）；submitTaGrade 提交后调度 scheduleTaReact；题库入口文案适配；ReplyPage 留言 thread key 加局次 runKey（reply:<at>:<lv> / reply:final:<at>），judgeFinal 落留言 key 同步
+- 类型：CoupleState/CoupleSnap 的 examTaSheet 对齐（score/comment 可选 + taReply）
+- 验证：tsc 对改动文件零错误；lint 报错均为历史遗留文件；agent-browser 实机验证（注入测试状态）：协议页「签署的恋爱协议」已生效卡、考试页入口「已交卷·我批了92分」、TA 答卷页「已交卷等待批改+我的批改92分+阿澈的留言(loading)」、回复挑战 AI 动态出题+选项结算正常；dev.log 无新增错误
+
+Stage Summary:
+- commit fd3118b 已推送 origin/main（6 文件 +441/-123）
+- 卡片状态模型：气泡以恋人空间存档为真相自愈（不再依赖消息内嵌状态回写成功），点击导航携带 signed/pactId/title，PactPage/ExamPage 按当前状态分流直达
+- 批改闭环：AI 出卷→用户答→AI 批语（性别纪律）；用户出卷→AI 只作答→用户批改打分写批语→AI 在批语下留言并写入记忆（AI 知晓批改结果）
+- 遗留：微信卡片视觉验证需登录态未做（自愈逻辑为纯读路径已由代码保证）；前五批约 55 项待办仍未动工
