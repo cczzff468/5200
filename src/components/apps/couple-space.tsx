@@ -90,7 +90,7 @@ import {
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
 import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, coupleMemoryDiff, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, type DynReplyLevel } from '@/lib/ios/couple-ai';
-import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
+import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, patchPactCardsWhere, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
 import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
 import { displayNameOf, isFriendIn } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
@@ -202,7 +202,7 @@ interface CoupleState {
   aiImpressAt: number | null; // AI 上次贴印象时间
   aiAnnivKeys: string[]; // AI 添加的纪念日 key
   aiHundred: { idx: number; note: string; why: string; at: number }[]; // AI 发起的 100 件小事
-  aiPact: { title: string; preamble: string; clauses: string[]; at: number } | null; // AI 拟的协议草稿（等我签）
+  aiPact: { title: string; preamble: string; clauses: string[]; at: number; signTa?: string | null } | null; // AI 拟的协议草稿（第十六轮起 TA 会先签上自己的名字再分享，等我签）
   aiLog: { id: string; text: string; at: number }[]; // AI 行为日志
   invite: CoupleInviteMeta; // 邀请元数据（全局唯一：恋人绑定/待处理邀请/每联系人限一次历史）
   comments: { id: string; key: string; from: 'me' | 'ta'; text: string; at: number; rt?: string }[]; // 通用留言线程（第十轮）：相册照片/日记/印象/挑战讨论下的双向留言；rt=所回复的 TA 留言 id（第十二轮点击回复）
@@ -214,7 +214,7 @@ interface CoupleState {
   statusExam: { my: Record<string, number>; ta: Record<string, number>; at: number | null; rep?: { me: StatusResult; ta: StatusResult; overall: string } | null } | null; // 恋爱状态测评：双方答题记录 + 生成过的报告（我和 AI 同步答）
   examPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[]; best?: number }[]; source: 'me' | 'ta'; at: number } | null; // 恋爱水平考试：当前激活的试卷（可反复作答；source='ta'=TA 出卷喊我答）
   examTaPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[] }[]; at: number; answered?: boolean } | null; // 恋爱水平考试：TA 出卷喊我答的卷子（点聊天卡片直达答题）
-  examTaSheet: { title: string; picks: Record<string, number>; score: number; comment: string; at: number } | null; // 恋爱水平考试：TA 的答卷（TA 答了我出的卷，自评分 + 想说的话）
+  examTaSheet: { title: string; picks: Record<string, number>; score: number; comment: string; at: number; myScore?: number | null; myComment?: string } | null; // 恋爱水平考试：TA 的答卷（TA 答了我出的卷，自评分 + 想说的话；myScore/myComment=我给 TA 的批改与批语，第十六轮）
   examResult: { title: string; score: number; comment: string; answers: Record<string, number>; byTa: boolean; at: number } | null; // 恋爱水平考试：我最近一次被改卷的成绩（分数下面是 TA 想说的话）
 }
 
@@ -981,7 +981,10 @@ export default function CoupleSpaceApp() {
     const nav = () => {
       if (peekPendingPactOpen()) setSub('pact');
     };
-    if (peekPendingPactOpen()) setSub('pact');
+    // 挂载时也检查一次 pending（异步避免同步 setState 触发级联渲染）
+    queueMicrotask(() => {
+      if (peekPendingPactOpen()) setSub('pact');
+    });
     window.addEventListener(COUPLE_PACT_NAV_EVENT, nav);
     return () => window.removeEventListener(COUPLE_PACT_NAV_EVENT, nav);
   }, []);
@@ -991,7 +994,10 @@ export default function CoupleSpaceApp() {
     const nav = () => {
       if (peekPendingExamOpen()) setSub('exam');
     };
-    if (peekPendingExamOpen()) setSub('exam');
+    // 挂载时也检查一次 pending（异步避免同步 setState 触发级联渲染）
+    queueMicrotask(() => {
+      if (peekPendingExamOpen()) setSub('exam');
+    });
     window.addEventListener(COUPLE_EXAM_NAV_EVENT, nav);
     return () => window.removeEventListener(COUPLE_EXAM_NAV_EVENT, nav);
   }, []);
@@ -5808,6 +5814,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const [draft, setDraft] = useState('');
   const [taProposal, setTaProposal] = useState<{ idx: number; to: string; reason: string } | null>(null); // TA 想改其中一条（他可以不同意或改某一条——用户要求）
   const pendingRecIdRef = useRef<string | null>(null); // 当前待签协议存档 id（TA 改条款后重发复用同一条记录）
+  const pactCardRef = useRef<{ msgId?: string; channel?: CoupleChannel; contactId?: string } | null>(null); // 第十六轮：TA 分享的协议卡片定位（我签完后回写「已签署」）
   const [taDeciding, setTaDeciding] = useState(false); // TA 正在决定签不签
   const clauses = state.pactClauses;
   const curPaper: PactPaperData = {
@@ -5822,10 +5829,13 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
   };
 
   /** 聊天里的协议卡片点击进来（第十五轮加固）：TA 分享的 → 优先用 aiPact，没有就直接拿卡片正文填草稿，永远直达签署界面；
+   *  第十六轮：TA 分享前已先签名（aiPact.signTa / 卡片 taSigned）→ 签署界面直接带着 TA 的签名等我签；
    *  我分享的 pending → 草稿填回签署界面；已签/已拒 → 回看协议书 */
   useEffect(() => {
     const p = consumePendingPactOpen();
     if (!p) return;
+    // 记下卡片定位（第十六轮：我签完后把聊天里的协议卡片回写成「已签署」）
+    pactCardRef.current = p.msgId && p.channel && p.contactId ? { msgId: p.msgId, channel: p.channel, contactId: p.contactId } : null;
     if (p.from === 'ta') {
       const ap = state.aiPact;
       const hasCard = !!p.title && (p.clauses?.length ?? 0) > 0;
@@ -5833,7 +5843,18 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
         const title = ap?.title ?? p.title!;
         const cls = ap ? [...ap.clauses] : [...(p.clauses ?? [])];
         const pre = ap ? state.pactPreamble || defaultState().pactPreamble : p.preamble || defaultState().pactPreamble;
-        patch({ pactTitle: title, pactPreamble: pre, pactClauses: cls, pactSignMe: null, pactMeAt: null, pactSignTa: null, pactTaAt: null, pactAt: null });
+        // TA 已先签上自己的名字（第十六轮）→ 保留 TA 签名与签名时间，签完我的即生效
+        const taSigned = ap?.signTa || (p.taSigned ? state.taName || 'TA' : null);
+        patch({
+          pactTitle: title,
+          pactPreamble: pre,
+          pactClauses: cls,
+          pactSignMe: null,
+          pactMeAt: null,
+          pactSignTa: taSigned ?? null,
+          pactTaAt: taSigned ? ap?.at ?? Date.now() : null,
+          pactAt: null,
+        });
         setSignFrom('edit');
         setView('sign');
       } else {
@@ -5976,10 +5997,52 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
     showToast('已删除该条款');
   };
 
+  /** 我的签名（第十六轮：TA 已先签名时，我签完协议立即生效——永久存档 + 聊天卡片回写「已签署」+ 写进 AI 记忆） */
   const signMe = () => {
     if (state.pactSignMe) return;
-    patch({ pactSignMe: state.meName || '我', pactMeAt: Date.now() });
-    showToast('签名成功 ♡ 现在点「他的签名」发给他签');
+    const taAlready = !!state.pactSignTa; // TA 已先签（AI 分享前自己签了名）
+    patch({ pactSignMe: state.meName || '我', pactMeAt: Date.now(), ...(taAlready ? { pactAt: Date.now() } : {}) });
+    if (!taAlready) {
+      showToast('签名成功 ♡ 现在点「他的签名」发给他签');
+      return;
+    }
+    // 双方签完 → 永久存档到「签署的恋爱协议」第一页
+    const title = state.pactTitle || '恋爱协议书';
+    const rec: CouplePactRecord = {
+      id: uid(),
+      title,
+      preamble: state.pactPreamble,
+      clauses: [...state.pactClauses],
+      signMe: state.meName || '我',
+      signTa: state.pactSignTa || state.taName || 'TA',
+      meAt: Date.now(),
+      taAt: state.pactTaAt ?? Date.now(),
+      at: Date.now(),
+      status: 'signed',
+    };
+    patchFn((prev) => ({ pacts: [rec, ...(prev.pacts ?? [])], aiPact: null }));
+    // 聊天里的协议卡片回写「已签署」（TA 分享的 pending 卡）
+    const meta = readInviteMeta();
+    const card = pactCardRef.current;
+    if (card?.channel && card.contactId) {
+      patchPactCardsWhere(card.channel, card.contactId, (d) => (card.msgId ? d.msgId === card.msgId : false) || (d.from === 'ta' && d.status === 'pending' && d.title === title), { status: 'signed' });
+    } else if (meta.partnerContactId) {
+      patchPactCardsWhere(meta.partnerApp ?? 'wx', meta.partnerContactId, (d) => d.from === 'ta' && d.status === 'pending' && d.title === title, { status: 'signed' });
+    }
+    // 写进 AI 记忆（TA 知道协议正式生效了）
+    if (meta.partnerContactId) {
+      const cid = meta.partnerContactId;
+      const ch = meta.partnerApp ?? 'wx';
+      void (async () => {
+        try {
+          const { coupleRemember } = await import('@/lib/ios/couple-ai');
+          coupleRemember(cid, ch, `恋爱协议《${title}》正式生效：${state.meName || '我'}和${state.taName || 'TA'}都签了名（共 ${state.pactClauses.length} 条条款），已永久存档`);
+        } catch {
+          /* 静默 */
+        }
+      })();
+    }
+    showToast('协议生效，已永久保存 ♡');
   };
 
   /** 点击「他的签名」区 = 把协议分享给他签字（第十五轮用户要求）：
@@ -6014,13 +6077,18 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
       pacts: (prev.pacts ?? []).some((x) => x.id === recId) ? (prev.pacts ?? []).map((x) => (x.id === recId ? rec : x)) : [rec, ...(prev.pacts ?? [])],
     }));
     /** 写回 AI 的决定（签/拒/想改一条），并同步到签署界面 */
-    const applyDecision = (r: { agree: boolean; reason: string; changeIdx?: number; changeTo?: string }) => {
+    let cardMsgIdP: Promise<string | null> | null = null; // 卡片消息 id（无绑定联系人时为 null）
+    const applyDecision = (r: { agree: boolean; reason: string; say?: string; changeIdx?: number; changeTo?: string }) => {
       if (r.agree) {
         patch({ pactSignTa: state.taName || 'TA', pactTaAt: Date.now(), pactAt: Date.now() });
         patchFn((prev) => ({
           pacts: (prev.pacts ?? []).map((x) => (x.id === recId ? { ...x, signTa: state.taName || 'TA', taAt: Date.now(), at: Date.now(), status: 'signed' as const } : x)),
         }));
         pendingRecIdRef.current = null;
+        // 聊天卡片同步「已签署」（第十六轮）
+        void cardMsgIdP?.then((id) => {
+          if (id && cid) patchPactCardsWhere(ch, cid, (d) => d.msgId === id, { status: 'signed' });
+        });
         showToast(`${state.taName || 'TA'} 签好了协议 ♡ 协议正式生效`);
       } else if (typeof r.changeIdx === 'number' && r.changeIdx >= 0 && r.changeIdx < cls.length && r.changeTo) {
         setTaProposal({ idx: r.changeIdx, to: r.changeTo, reason: r.reason });
@@ -6047,12 +6115,12 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
       return;
     }
     showToast(`协议卡片已发给${state.taName || 'TA'}，TA 正在认真看…`);
-    // ① 协议卡片发进 TA 的会话（分享给他）
-    void (async () => {
+    // ① 协议卡片发进 TA 的会话（分享给他；记录卡片消息 id，TA 签完回写「已签署」）
+    cardMsgIdP = (async () => {
       try {
-        await sendPactCard({ channel: ch, contactId: cid, title, preamble: state.pactPreamble, clauses: cls, dir: 'me' });
+        return await sendPactCard({ channel: ch, contactId: cid, title, preamble: state.pactPreamble, clauses: cls, dir: 'me' });
       } catch {
-        /* 卡片发送失败不影响 AI 决策 */
+        return null;
       }
     })();
     // ② TA 延时认真读完 → 决定签/不签/改一条（结果回聊天 + 回签署界面）
@@ -6096,10 +6164,10 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <div className="relative mt-4 rounded-2xl border-2 border-dashed border-[#f2536a] bg-white p-4" data-testid="ai-pact-card">
               <div className="flex items-center justify-between pr-16">
                 <div className="text-[14.5px] font-bold text-[#26262b]">
-                  {state.taName || 'TA'} 拟了一份协议 <span className="text-[#f2536a]">《{state.aiPact.title}》</span>
+                  {state.taName || 'TA'} {state.aiPact.signTa ? '拟好并签好名的协议' : '拟了一份协议'} <span className="text-[#f2536a]">《{state.aiPact.title}》</span>
                 </div>
               </div>
-              <span className="absolute right-3 top-3 shrink-0 rounded-full bg-[#fdeef2] px-2 py-0.5 text-[10.5px] font-bold text-[#f2536a]">等你签</span>
+              <span className="absolute right-3 top-3 shrink-0 rounded-full bg-[#fdeef2] px-2 py-0.5 text-[10.5px] font-bold text-[#f2536a]">{state.aiPact.signTa ? 'TA已签 · 等你签' : '等你签'}</span>
               <div className="mt-2 space-y-1">
                 {state.aiPact.clauses.slice(0, 3).map((c, i) => (
                   <div key={i} className="flex gap-1.5 text-[12.5px] leading-relaxed text-[#6e6e76]">
@@ -6126,10 +6194,10 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                   data-testid="ai-pact-adopt"
                   onClick={() => {
                     const p = state.aiPact!;
-                    patch({ pactTitle: p.title, pactPreamble: state.pactPreamble, pactClauses: [...p.clauses], pactSignMe: null, pactMeAt: null, pactSignTa: null, pactTaAt: null, pactAt: null, aiPact: null });
+                    patch({ pactTitle: p.title, pactPreamble: state.pactPreamble, pactClauses: [...p.clauses], pactSignMe: null, pactMeAt: null, pactSignTa: p.signTa ?? null, pactTaAt: p.signTa ? p.at : null, pactAt: null, aiPact: null });
                     setSignFrom('edit');
                     setView('sign');
-                    showToast(`已换成 ${state.taName || 'TA'} 的版本，签完名发给 TA 确认 ♡`);
+                    showToast(p.signTa ? `TA 已先签好名，签完你的名协议就生效 ♡` : `已换成 ${state.taName || 'TA'} 的版本，签完名发给 TA 确认 ♡`);
                   }}
                   className="h-10 flex-1 rounded-full bg-[#f2536a] text-[14px] font-semibold text-white active:opacity-85"
                 >
@@ -6367,11 +6435,11 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                   </span>
                 ) : (
                   <span className="flex items-center gap-1.5 text-[14px] text-[#f2536a]">
-                    <Pencil className="h-4 w-4" strokeWidth={2} /> 点击签名
+                    <Pencil className="h-4 w-4" strokeWidth={2} /> {state.pactSignTa ? '点击签名（签完即生效）' : '点击签名'}
                   </span>
                 )}
               </button>
-              {!state.pactSignMe && <div className="mt-2 rounded-md border border-[#f2536a] px-2 py-1 text-center text-[11px] leading-snug text-[#f2536a]">请先签名，完成后即可生成协议书</div>}
+              {!state.pactSignMe && <div className="mt-2 rounded-md border border-[#f2536a] px-2 py-1 text-center text-[11px] leading-snug text-[#f2536a]">{state.pactSignTa ? 'TA 已先签好名，你签完协议就生效并永久存档 ♡' : '请先签名，完成后即可生成协议书'}</div>}
               <div className="mt-2.5 text-[12px] text-[#9a9aa2]">日期：{state.pactMeAt ? fmtDateCn(fmtDate(state.pactMeAt)) : '＿＿＿年＿＿月＿＿日'}</div>
             </div>
             <div>
@@ -6395,8 +6463,8 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                   </span>
                 ) : (
                   <span className={`flex flex-col items-center gap-1 ${state.pactSignMe ? 'text-[#6e6e76]' : 'text-[#c9c9cf]'}`}>
-                    <span className="text-[14px]">{state.pactSignMe ? '点这里分享给他签名' : '发送给他签名'}</span>
-                    {state.pactSignMe && <span className="max-w-[120px] text-center text-[10.5px] leading-snug text-[#b6b6bd]">协议卡片会发到 TA 的聊天，TA 看完自己决定签不签</span>}
+                    <span className="text-[14px]">{state.pactSignMe ? '点这里分享给他签名' : state.pactSignTa ? 'TA 已先签好名' : '发送给他签名'}</span>
+                    {state.pactSignMe && !state.pactSignTa && <span className="max-w-[120px] text-center text-[10.5px] leading-snug text-[#b6b6bd]">协议卡片会发到 TA 的聊天，TA 看完自己决定签不签</span>}
                   </span>
                 )}
               </button>
@@ -6662,6 +6730,9 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const [grading, setGrading] = useState(false); // AI 批卷中
   const [importing, setImporting] = useState(false); // AI 出卷中
   const [inviting, setInviting] = useState(false); // 喊 TA 答题中
+  const [taGradeScore, setTaGradeScore] = useState(85); // 我给 TA 答卷打的分（第十六轮：TA 答完由我批改）
+  const [taGradeText, setTaGradeText] = useState(''); // 我给 TA 的批语
+  const [taGrading, setTaGrading] = useState(false); // 提交批改中
   const me = state.meName || '我';
   const ta = state.taName || 'TA';
   const PER_PAGE = 5;
@@ -6789,6 +6860,34 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
 
   const gradeLabel = (s: number) => (s >= 90 ? '满分恋人' : s >= 75 ? '优秀恋人' : s >= 60 ? '合格恋人' : '需要补课的恋人');
 
+  /** 我给 TA 的答卷批改：打分 + 批语，提交后写进恋人记忆（TA 就知道了） */
+  const submitTaGrade = () => {
+    const s = state.examTaSheet;
+    if (!s || taGrading || s.myScore != null) return;
+    const c = taGradeText.trim();
+    if (!c) {
+      showToast('写一句批语再提交吧');
+      return;
+    }
+    setTaGrading(true);
+    patchFn((prev) => (prev.examTaSheet ? { examTaSheet: { ...prev.examTaSheet, myScore: taGradeScore, myComment: c } } : {}));
+    // 写进恋人记忆（TA 知道我批了什么）
+    const meta = readInviteMeta();
+    if (meta.partnerContactId) {
+      const cid = meta.partnerContactId;
+      const ch = meta.partnerApp ?? 'wx';
+      void import('@/lib/ios/couple-ai').then((m) => {
+        try {
+          m.coupleRemember(cid, ch, `${state.meName || '我'}批改了${state.taName || 'TA'}的答卷《${s.title}》：${taGradeScore} 分，批语：「${c}」`);
+        } catch {
+          /* 静默 */
+        }
+      });
+    }
+    setTaGrading(false);
+    showToast('批改完成，TA 已经知道你的批语啦 ♡');
+  };
+
   // ---------- 成绩视图（TA 打的分数 + 分数下面 TA 想说的话 + 逐题回顾） ----------
   if (view === 'result' && state.examResult) {
     const r = state.examResult;
@@ -6878,6 +6977,77 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <div className="mt-1 text-[13.5px] leading-relaxed text-[#4a4a52]">{s.comment}</div>
           </div>
         </div>
+
+        {/* 我的批改（第十六轮：TA 答完卷由我批分写批语，提交后 TA 就知道了） */}
+        {s.myScore == null ? (
+          <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.06)]" data-testid="exam-ta-grade">
+            <div className="text-[14px] font-bold text-[#26262b]">给 {ta} 批卷</div>
+            <div className="mt-1 text-[11.5px] leading-relaxed text-[#9a9aa2]">给TA的答卷打个分、写一句批语，提交后TA就知道了</div>
+            <div className="mt-3 flex items-center gap-3">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={taGradeScore}
+                onChange={(e) => setTaGradeScore(Number(e.target.value))}
+                className="h-1.5 flex-1 accent-[#f2536a]"
+                aria-label="给TA的分数"
+                data-testid="exam-ta-grade-range"
+              />
+              <span className="w-16 text-right text-[20px] font-extrabold leading-none text-[#f2536a]">
+                {taGradeScore}
+                <span className="ml-0.5 text-[11px] font-normal text-[#9a9aa2]">分</span>
+              </span>
+            </div>
+            <div className="mt-2 flex gap-1.5">
+              {[
+                { v: 95, t: '超爱这个答案' },
+                { v: 85, t: '答得不错' },
+                { v: 70, t: '一般般' },
+                { v: 59, t: '不及格重考' },
+              ].map((c) => (
+                <button
+                  key={c.v}
+                  type="button"
+                  onClick={() => setTaGradeScore(c.v)}
+                  className={`flex-1 rounded-full px-1 py-1.5 text-[11px] font-medium transition-colors ${
+                    taGradeScore === c.v ? 'bg-[#f2536a] text-white' : 'bg-[#f7f7f9] text-[#6e6e76] active:bg-[#ffeef2]'
+                  }`}
+                >
+                  {c.t}
+                </button>
+              ))}
+            </div>
+            <textarea
+              value={taGradeText}
+              onChange={(e) => setTaGradeText(e.target.value)}
+              rows={3}
+              maxLength={80}
+              placeholder={`写句批语，比如「第3题答到我心里了」…`}
+              className="mt-3 w-full resize-none rounded-xl bg-[#f7f7f9] p-3 text-[13.5px] leading-relaxed text-[#26262b] outline-none placeholder:text-[#b6b6bd]"
+              data-testid="exam-ta-grade-text"
+            />
+            <button
+              type="button"
+              data-testid="exam-ta-grade-submit"
+              onClick={submitTaGrade}
+              disabled={taGrading}
+              className="mt-3 h-11 w-full rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[14.5px] font-semibold text-white shadow-[0_6px_18px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98] disabled:opacity-50"
+            >
+              提交批改
+            </button>
+          </div>
+        ) : (
+          <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.06)]" data-testid="exam-ta-graded">
+            <div className="text-[12px] font-bold text-[#f2536a]">我的批改</div>
+            <div className="mt-1.5 flex items-end gap-1.5">
+              <span className="text-[34px] font-extrabold leading-none text-[#f2536a]">{s.myScore}</span>
+              <span className="pb-0.5 text-[13px] text-[#9a9aa2]">分 · {gradeLabel(s.myScore)}</span>
+            </div>
+            <div className="mt-2.5 rounded-xl bg-[#fff5f7] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-[#4a4a52]">{s.myComment}</div>
+            <div className="mt-2 text-center text-[11px] text-[#c9c9cf]">{ta} 已经知道你的批语啦</div>
+          </div>
+        )}
         <div className="mt-4 space-y-2.5">
           <div className="px-1 text-[13.5px] font-bold text-[#26262b]">TA 的作答</div>
           {(state.examPaper?.questions ?? []).map((q, i) => {
@@ -7128,7 +7298,10 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <span className="block truncate text-[14px] font-semibold text-[#26262b]">
               {ta} 的答卷 <span className="text-[#576b95]">《{state.examTaSheet.title}》</span>
             </span>
-            <span className="block text-[11.5px] text-[#9a9aa2]">自评 {state.examTaSheet.score} 分 · 点此看 TA 答了什么</span>
+            <span className="block text-[11.5px] text-[#9a9aa2]">
+              自评 {state.examTaSheet.score} 分
+              {state.examTaSheet.myScore != null ? ` · 我批了 ${state.examTaSheet.myScore} 分` : ' · 等我批改'} · 点此看 TA 答了什么
+            </span>
           </span>
           <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
         </button>

@@ -19757,3 +19757,23 @@ Work Log:
 Stage Summary:
 - 九项需求全部完成并浏览器实证；仓库最新 commit = ca1aa34（origin/main 已同步）
 - 后续会话注意：禁止用 bash heredoc 写含 [m 字样的内容；源码一律走工具层写入
+
+---
+Task ID: couple-round16
+Agent: Z.ai Code (main)
+Task: 第五批五项需求——AI 分享协议先签名 / 用户签完永久存档+卡片显示已签署 / 考试批语接入人设记忆+聊天上下文 / TA 答完卷由用户批改批语（AI 知道）/ 协议卡片 AI 回复去模板
+
+Work Log:
+- 需求1（AI 分享先签上字）：couple-ai.aiTickPact 写入 aiPact.signTa=TA 名 + sendPactCard(taSigned:true)；CouplePactCardData/PendingPactOpen 新增 taSigned+msgId 字段；couple-pact-bubble 状态行新增「XX已签名，等你签署」（pending+taSigned），去签署按钮保留；PactPage 消费卡片时保留 TA 签名（aiPact.signTa / 卡片 taSigned → pactSignTa/pactTaAt），签署界面直接带着 TA 的签名等我签；首页 aiPact 卡文案「拟好并签好名的协议」+徽标「TA已签 · 等你签」；浏览器实证：AI 运行时主动拟的新协议卡片 taSigned=true、aiPact.signTa=阿凡 ✓
+- 需求2（签完永久保存+卡片已签署）：PactPage.signMe 重写——TA 已先签时我签完立即生效（pactAt 落值）+ CouplePactRecord 存入 pacts（status=signed，双方签名+日期）+ 清 aiPact + patchPactCardsWhere 把聊天里的 pending 卡回写 status='signed'（气泡显示「已签署生效」）+ coupleRemember 写记忆「恋爱协议《xx》正式生效…」；sendToTa 的 applyDecision agree 分支同样回写我发出去的卡片（cardMsgIdP 捕获消息 id，修 TDZ 隐患：!cid 提前 return 时 const 未初始化）；couple-pact-share 新增 patchPactCardsWhere(按条件批量回写+广播)；sendPactCard 返回消息 id + data.msgId 注入；浏览器实证：签完→存档列表出现《我们的小约定》已生效（凡凡已签·阿凡已签）+微信卡片「已签署生效·恋爱协议」✓
+- 需求3（批语人设记忆+上下文）：aiGradeExam 注入 memChatRecallBlock 记忆召回 + recentChatBlock 最近 12 轮微信/QQ 聊天，批语要求贴人设/共享记忆/最近话题、可提一件具体小事，禁空话套话
+- 需求4（用户批改 AI 答卷）：CoupleState/CoupleSnap.examTaSheet 新增 myScore/myComment；ExamPage tasheet 视图新增「给 TA 批卷」卡（0-100 滑杆+四档快捷 chips+80 字批语+提交），提交后显示「我的批改 xx 分·优秀恋人+批语」；入口徽标显示「等我批改/我批了 xx 分」；提交写 coupleRemember（浏览器实证记忆碎片：「凡凡批改了阿凡的答卷…85 分，批语：「第二题答到我心里了…」」sourceTag=couple）+ snapDigest 注入「xx批改…TA知道xx是怎么批的/还没批这张卷」；AI 聊天时自然知道
+- 需求5（协议回复去模板）：aiDecidePact 输出新增 say 字段（LLM 生成聊天回复原话：35~70字贴人设记忆、禁「协议我看过了」开头、禁机械复述），评估提示词同步注入记忆+聊天上下文；scheduleAiPactDecision 优先用 r.say，兜底改极简短句（不再是长模板）；浏览器实证 AI 实际回复：「宝贝写的每条都说到我心坎里了，特别是睡前视频这条，每天都想听你声音呢~」（贴合第3条条款、零模板）✓
+- 顺手修复：couple-space.tsx 两处历史遗留 react-hooks/set-state-in-effect lint 错误（CoupleSpaceApp 挂载时 peekPendingPact/Exam 同步 setState → queueMicrotask 延迟）；tsc 0 couple 错误（Prisma 报错为历史遗留）、eslint 改动文件 0 问题
+- agent-browser 全链路实证（锁屏→解锁→翻页→恋人空间→协议/考试→微信卡片）：解锁手势、屏外图标直点（React 事件不依赖视口）、边缘上滑→切换器→点空白回主屏等交互全部走通；种子里 AI 答卷/协议卡/关系数据
+- dev.log：POST /api/chat 最终 200（一次 502 为偶发抖动，重试成功）；Edge instrumentation 警告为历史遗留
+
+Stage Summary:
+- 五项需求全部落地并浏览器实证；改动文件：couple-space.tsx / couple-ai.ts / couple-pact-share.ts / couple-pact-bubble.tsx
+- 协议卡片数据模型升级（taSigned+msgId 回写管线）：AI 拟协议→先签名→分享卡片（「xx已签名，等你签署」）→用户签→永久存档+卡片「已签署生效」+记忆闭环
+- 考试闭环升级：TA 交卷自评→用户批分写批语→写进 AI 记忆+聊天注入，AI 可自然聊起

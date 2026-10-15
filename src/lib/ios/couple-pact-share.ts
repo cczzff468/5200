@@ -45,23 +45,30 @@ export interface CouplePactCardData {
   contactId: string; // 卡片所在会话的联系人 id
   pactId?: string; // 关联恋人空间里的协议记录 id（pacts 里）或 'ai'（TA 拟的草稿）
   reason?: string; // declined 时的理由（TA 说的）
+  taSigned?: boolean; // 第十六轮：TA 分享前已先签上自己的名字（等对方签）
+  msgId?: string; // 卡片所在消息 id（签署完成后回写卡片状态用）
   at: number; // 分享时间
 }
 
-/** 点击卡片后的待打开协议（PactPage 消费）；第十五轮起携带卡片正文——TA 分享的 pending 卡无论 aiPact 是否存在都能直达签署界面 */
+/** 点击卡片后的待打开协议（PactPage 消费）；第十五轮起携带卡片正文——TA 分享的 pending 卡无论 aiPact 是否存在都能直达签署界面；
+ *  第十六轮起携带 taSigned（TA 已先签名）与卡片消息定位（签署完成后回写卡片「已签署」） */
 interface PendingPactOpen {
   pactId?: string; // pacts 记录 id
   from: 'me' | 'ta'; // 卡片来源
   title?: string; // 卡片里的协议名
   preamble?: string; // 卡片里的协议声明
   clauses?: string[]; // 卡片里的条款
+  taSigned?: boolean; // TA 是否已先签名
+  msgId?: string; // 卡片消息 id
+  channel?: CoupleChannel; // 卡片所在渠道
+  contactId?: string; // 卡片所在会话
   at: number;
 }
 
 let pendingPactOpen: PendingPactOpen | null = null;
 
 /** 聊天协议卡片点击 → 写待打开目标（切换 App 时带上；同 200ms 内重复点击去重） */
-export function setPendingPactOpen(p: { pactId?: string; from: 'me' | 'ta'; title?: string; preamble?: string; clauses?: string[] }): void {
+export function setPendingPactOpen(p: { pactId?: string; from: 'me' | 'ta'; title?: string; preamble?: string; clauses?: string[]; taSigned?: boolean; msgId?: string; channel?: CoupleChannel; contactId?: string }): void {
   pendingPactOpen = { ...p, at: Date.now() };
 }
 
@@ -118,7 +125,8 @@ async function notifyCard(channel: CoupleChannel, contactId: string, body: strin
 /**
  * 把一份恋爱协议以卡片形式发进微信/QQ 会话。
  * dir='me'：我把协议分享给 TA（消息 role='me'，随后 AI 延时决定签/不签并回话）；
- * dir='ta'：TA（AI）把协议分享给我（消息 role='peer'，点卡片进签署界面）。
+ * dir='ta'：TA（AI）把协议分享给我（消息 role='peer'，点卡片进签署界面；taSigned=true 表示 TA 已先签名）。
+ * 返回卡片消息 id（签署完成后回写状态用；失败返回 null）。
  */
 export async function sendPactCard(opts: {
   channel: CoupleChannel;
@@ -130,9 +138,10 @@ export async function sendPactCard(opts: {
   pactId?: string;
   status?: 'pending' | 'signed' | 'declined';
   reason?: string;
-}): Promise<void> {
+  taSigned?: boolean;
+}): Promise<string | null> {
   const { channel, contactId, title, clauses, dir } = opts;
-  if (!contactId || !title) return;
+  if (!contactId || !title) return null;
   // 双方名字（渠道身份）：我 = 渠道账号社交名；TA = 联系人展示名
   let meName = '我';
   let taName = 'TA';
@@ -163,6 +172,7 @@ export async function sendPactCard(opts: {
     contactId,
     pactId: opts.pactId,
     reason: opts.reason,
+    taSigned: opts.taSigned ?? false,
     at: Date.now(),
   };
   const msg = {
@@ -173,6 +183,7 @@ export async function sendPactCard(opts: {
     kind: 'pactcard',
     pactcard: data,
   };
+  data.msgId = msg.id;
   const key = msgsKey(channel, contactId);
   try {
     const raw = kvGetScoped<unknown[]>(key, channel);
@@ -188,8 +199,14 @@ export async function sendPactCard(opts: {
   } catch {
     /* 广播失败不影响落库 */
   }
-  const preview = dir === 'me' ? `我给你发了一份恋爱协议《${title}》，等你签名哦` : `给你分享了一份恋爱协议《${title}》，点击看看`;
+  const preview =
+    dir === 'ta'
+      ? opts.taSigned
+        ? `我签好名的恋爱协议《${title}》发给你了，就等你签啦`
+        : `给你分享了一份恋爱协议《${title}》，点击看看`
+      : `我给你发了一份恋爱协议《${title}》，等你签名哦`;
   void notifyCard(channel, contactId, preview);
+  return msg.id;
 }
 
 /** 更新某条协议卡片的状态（AI 签/拒后；直写落库，广播让聊天页刷新同 id 消息） */
@@ -217,16 +234,51 @@ export function patchPactCardInMsgs(channel: CoupleChannel, contactId: string, m
 }
 
 /**
+ * 按条件批量更新会话里的协议卡片状态（第十六轮：双方签完 → 卡片回写「已签署」）。
+ * 返回命中的条数；有命中才落库 + 广播刷新。
+ */
+export function patchPactCardsWhere(channel: CoupleChannel, contactId: string, match: (d: CouplePactCardData) => boolean, patch: Partial<CouplePactCardData>): number {
+  const key = msgsKey(channel, contactId);
+  let hit = 0;
+  try {
+    const raw = kvGetScoped<unknown[]>(key, channel);
+    if (!Array.isArray(raw)) return 0;
+    const list = raw.map((m) => {
+      const x = m as { pactcard?: unknown };
+      if (x && x.pactcard && typeof x.pactcard === 'object') {
+        const d = x.pactcard as CouplePactCardData;
+        if (match(d)) {
+          hit++;
+          return { ...x, pactcard: { ...d, ...patch } };
+        }
+      }
+      return m;
+    });
+    if (hit > 0) kvSetScoped(key, list, channel);
+  } catch {
+    /* 落库失败静默 */
+  }
+  if (hit > 0) {
+    try {
+      window.dispatchEvent(new CustomEvent(COUPLE_CARD_EVENT, { detail: { cid: contactId, app: channel } }));
+    } catch {
+      /* 广播失败不影响 */
+    }
+  }
+  return hit;
+}
+
+/**
  * 我把协议分享给 AI 后：AI 延时决定签/不签/改其中一条（第十五轮：他可以不同意或改某一条）。
- * 结果 = { agree, reason, changeIdx?, changeTo? }，由调用方写回协议记录；这里同时回一条 TA 的文字消息到会话。
- * AI 调用失败也兜底回调（agree=true），保证调用方 loading 态一定解除。
+ * 结果 = { agree, reason, say, changeIdx?, changeTo? }，由调用方写回协议记录；聊天回复用 AI 自己生成的 say（第十六轮：不再用模板），
+ * say 失败才回退到最简兜底语。AI 调用失败也兜底回调（agree=true），保证调用方 loading 态一定解除。
  */
 export function scheduleAiPactDecision(opts: {
   channel: CoupleChannel;
   contactId: string;
   title: string;
   clauses: string[];
-  onDone: (r: { agree: boolean; reason: string; changeIdx?: number; changeTo?: string }) => void;
+  onDone: (r: { agree: boolean; reason: string; say?: string; changeIdx?: number; changeTo?: string }) => void;
 }): void {
   const meta = readInviteMeta();
   if (meta.partnerContactId !== opts.contactId) return; // 只对恋人联系人生效
@@ -235,12 +287,15 @@ export function scheduleAiPactDecision(opts: {
       try {
         const { aiDecidePact } = await import('./couple-ai');
         const r = await aiDecidePact(opts.title, opts.clauses);
-        // TA 的回复落到会话（一条普通文字消息，像看完协议后回的话；想改条款时把想改的说清楚）
-        const reply = r.agree
-          ? `协议我看过了，${r.reason} 我签啦，以后一起遵守哦。`
-          : r.changeIdx != null && r.changeTo
-            ? `第 ${r.changeIdx + 1} 条我想改一下：「${cut(String(r.changeTo), 30)}」。${r.reason}，改成这样我就签啦。`
-            : `这份协议我想了想，还是先不签了：${r.reason}。我们要不要再商量商量？`;
+        // TA 的回复落到会话：优先用 AI 自己说的话（像看完协议后回的话，有人设/记忆/聊天上下文），失败才用极简兜底
+        const reply =
+          r.say && r.say.trim().length >= 4
+            ? r.say.trim()
+            : r.agree
+              ? `签好啦，条款我都愿意遵守 ♡`
+              : r.changeIdx != null && r.changeTo
+                ? `第 ${r.changeIdx + 1} 条我想改一下：「${cut(String(r.changeTo), 30)}」，改成这样我就签。`
+                : `这份协议我想了想，还是先不签了：${r.reason}。`;
         const key = msgsKey(opts.channel, opts.contactId);
         try {
           const raw = kvGetScoped<unknown[]>(key, opts.channel);
@@ -278,10 +333,10 @@ export function peekPendingPactOpen(): PendingPactOpen | null {
 export const COUPLE_PACT_NAV_EVENT = 'couple-pact-nav';
 
 /**
- * 聊天里的协议卡片被点击：记下待打开目标（含卡片正文）+ 切进恋人空间 + 广播导航事件。
+ * 聊天里的协议卡片被点击：记下待打开目标（含卡片正文/TA 是否已先签名/卡片消息定位）+ 切进恋人空间 + 广播导航事件。
  * （气泡组件调用；CoupleSpaceApp 收到事件后 openSub('pact')，PactPage 挂载后 consumePendingPactOpen 直达签署界面）
  */
-export function navToPact(p: { pactId?: string; from: 'me' | 'ta'; title?: string; preamble?: string; clauses?: string[] }): void {
+export function navToPact(p: { pactId?: string; from: 'me' | 'ta'; title?: string; preamble?: string; clauses?: string[]; taSigned?: boolean; msgId?: string; channel?: CoupleChannel; contactId?: string }): void {
   setPendingPactOpen(p);
   try {
     window.dispatchEvent(new CustomEvent(COUPLE_PACT_NAV_EVENT, { detail: p }));

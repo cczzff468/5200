@@ -25,21 +25,39 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
   const declined = data.status === 'declined';
   const signed = data.status === 'signed';
 
-  /** 点击卡片 → 进恋人空间签署协议界面（携带卡片正文，保证任何状态都直达对应签署/回看界面） */
+  /** 点击卡片 → 进恋人空间签署协议界面（携带卡片正文/TA 是否已先签名/卡片消息定位，保证任何状态都直达对应签署/回看界面） */
   const openPact = () => {
     const ui = useUI.getState();
     if (ui.locked) return;
-    navToPact({ pactId: data.pactId, from: data.from, title: data.title, preamble: data.preamble, clauses: data.clauses });
+    navToPact({
+      pactId: data.pactId,
+      from: data.from,
+      title: data.title,
+      preamble: data.preamble,
+      clauses: data.clauses,
+      taSigned: data.taSigned,
+      msgId: data.msgId,
+      channel: data.app,
+      contactId: data.contactId,
+    });
     if (ui.activeApp && ui.activeApp !== 'couple') ui.switchToApp('couple');
     else if (!ui.activeApp && ui.phase === 'closed') ui.openApp('couple');
   };
 
-  // 状态行文案
+  // 状态行文案（第十六轮：TA 已先签名的 pending 卡显示「已签名，等你签署」；已签署统一「已签署生效」）
   let statusLine: string;
   if (data.from === 'ta') {
-    statusLine = declined ? (data.reason ? `TA 想了想：${data.reason}` : 'TA 婉拒了这份协议') : signed ? 'TA 已签署生效' : 'TA 想和你签这份协议';
+    statusLine = declined
+      ? data.reason
+        ? `TA 想了想：${data.reason}`
+        : 'TA 婉拒了这份协议'
+      : signed
+        ? '已签署生效'
+        : data.taSigned
+          ? `${data.fromName}已签名，等你签署`
+          : 'TA 想和你签这份协议';
   } else {
-    statusLine = declined ? `对方回复：${data.reason ?? '先不签了'}` : signed ? '对方已签署生效' : `等待${data.toName}签署`;
+    statusLine = declined ? `对方回复：${data.reason ?? '先不签了'}` : signed ? '已签署生效' : `等待${data.toName}签署`;
   }
   void mine;
 

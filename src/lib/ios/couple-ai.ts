@@ -66,7 +66,7 @@ interface CoupleSnap {
   pactSignTa?: string | null;
   /** 已存档的协议书（第十二轮：AI 知道全部协议及签署状态） */
   pacts?: { id: string; title: string; preamble: string; clauses: string[]; signMe: string | null; signTa: string | null; meAt: number | null; taAt: number | null; at: number; status?: string; reason?: string }[];
-  aiPact?: { title: string; preamble: string; clauses: string[]; at: number } | null;
+  aiPact?: { title: string; preamble: string; clauses: string[]; at: number; signTa?: string | null } | null;
   annivExtra?: { key: string; label: string; date: string }[];
   aiAnnivKeys?: string[];
   impressionsMe?: string[];
@@ -90,7 +90,7 @@ interface CoupleSnap {
   /** 恋爱水平考试（第十五轮）：TA 知道卷子、成绩和彼此的作答 */
   examPaper?: { title: string; questions: { q: string; opts: string[] }[]; source?: string } | null;
   examTaPaper?: { title: string; questions: { q: string; opts: string[] }[]; at: number; answered?: boolean } | null;
-  examTaSheet?: { title: string; picks: Record<string, number>; score: number; comment: string; at: number } | null;
+  examTaSheet?: { title: string; picks: Record<string, number>; score: number; comment: string; at: number; myScore?: number | null; myComment?: string } | null;
   examResult?: { title: string; score: number; comment: string; byTa: boolean; at: number } | null;
 }
 
@@ -340,7 +340,11 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
   }
   const ets = snap.examTaSheet;
   if (ets) {
-    lines.push(`- ${ta}答了${me}出的卷子《${cut(ets.title, 16)}》，自评 ${ets.score} 分，交卷时说「${cut(ets.comment, 30)}」。这是${ta}自己的作答，${ta}当然记得。`);
+    lines.push(
+      `- ${ta}答了${me}出的卷子《${cut(ets.title, 16)}》，自评 ${ets.score} 分，交卷时说「${cut(ets.comment, 30)}」。这是${ta}自己的作答，${ta}当然记得。${
+        typeof ets.myScore === 'number' ? `${me}给${ta}的答卷批了 ${ets.myScore} 分，批语：「${cut(ets.myComment ?? '', 36)}」（${ta}知道${me}是怎么批的）。` : `${me}还没批这张卷，${ta}可以提一句让${me}快点批。`
+      }`,
+    );
   }
   const er = snap.examResult;
   if (er) {
@@ -1233,16 +1237,17 @@ async function aiTickPact(snap: CoupleSnap, me: string, ta: string, p: TaPersona
   const title = cut(picked.title, 14).replace(/[「」"]/g, '');
   const clauses = picked.clauses.map((c) => cut(String(c), 40).replace(/^[-•\d.、\s]+/, '')).filter(Boolean).slice(0, 5);
   if (clauses.length === 0) return;
-  writeSnap((s) => ({ ...s, aiPact: { title, preamble: snap.pactPreamble ?? '', clauses, at: Date.now() } }));
+  writeSnap((s) => ({ ...s, aiPact: { title, preamble: snap.pactPreamble ?? '', clauses, at: Date.now(), signTa: ta } }));
   const pid = currentPartnerId;
   if (pid) {
-    coupleRemember(pid, currentChannel, `${ta}自己拟了一份恋爱协议《${title}》（${clauses.length} 条：${clauses.slice(0, 2).join('；')}…），分享给${me}签名`);
+    coupleRemember(pid, currentChannel, `${ta}自己拟了一份恋爱协议《${title}》（${clauses.length} 条：${clauses.slice(0, 2).join('；')}…），自己先签了名，再分享给${me}等${me}签`);
   }
-  logAi(`${ta}拟了一份协议《${title}》等你签`);
-  // 第十二轮：AI 把协议分享给我——直接发协议卡片到微信/QQ 会话（点卡片进恋人空间签署界面）
+  logAi(`${ta}拟了一份协议《${title}》，先签好名再分享给你签`);
+  // 第十二轮：AI 把协议分享给我——直接发协议卡片到微信/QQ 会话（点卡片进恋人空间签署界面）；
+  // 第十六轮：AI 分享之前先签上自己的名字（卡片带 taSigned，签署界面直接带着 TA 的签名等我签）
   try {
     const { sendPactCard } = await import('./couple-pact-share');
-    await sendPactCard({ channel: currentChannel, contactId: pid, title, preamble: snap.pactPreamble ?? '', clauses, dir: 'ta', pactId: 'ai', status: 'pending' });
+    await sendPactCard({ channel: currentChannel, contactId: pid, title, preamble: snap.pactPreamble ?? '', clauses, dir: 'ta', pactId: 'ai', status: 'pending', taSigned: true });
   } catch {
     /* 分享失败不影响协议草稿落库 */
   }
@@ -1252,8 +1257,9 @@ async function aiTickPact(snap: CoupleSnap, me: string, ta: string, p: TaPersona
 /**
  * AI 决定签/不签一份协议（第十二轮：AI 自己决定，不无脑全签）。
  * 按人设 + 你们的记忆评估条款：合理/甜蜜的签；过分/不平等的会提出意见婉拒。
+ * 第十六轮：say = TA 在聊天里回的原话（人设 + 记忆 + 最近聊天上下文生成，不再用模板）；评估时也注入记忆与聊天上下文。
  */
-export async function aiDecidePact(title: string, clauses: string[]): Promise<{ agree: boolean; reason: string; changeIdx?: number; changeTo?: string }> {
+export async function aiDecidePact(title: string, clauses: string[]): Promise<{ agree: boolean; reason: string; say?: string; changeIdx?: number; changeTo?: string }> {
   const target = aiTarget();
   if (target) {
     try {
@@ -1264,17 +1270,27 @@ export async function aiDecidePact(title: string, clauses: string[]): Promise<{ 
         currentChannel = target.channel;
         const me = (snap.meName || '').trim() || '我';
         const ta = (snap.taName || '').trim() || 'TA';
+        // 素材：恋人的记忆碎片召回 + 最近微信/QQ 聊天上下文（评估和回话都贴着你们的真实相处）
+        let memBlock = '';
+        let chatCtx = '';
+        try {
+          memBlock = memChatRecallBlock(target.contactId, target.channel, `${ta}评估${me}拟的恋爱协议 最近你们聊过什么`, { mode: 'private' });
+        } catch {
+          /* 召回失败不影响 */
+        }
+        chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
         const raw = await coupleLLM(
-          `${llmSystem(p, me, snap)}\n场景：${me}拟了一份恋爱协议分享给你，等你决定签不签。`,
-          `协议《${cut(title, 16)}》的条款：\n${(clauses ?? []).map((c, i) => `${i + 1}. ${cut(c, 40)}`).join('\n')}\n\n请以「${ta}」的身份认真评估：这些条款是否合理、是否双方平等、是不是你真心愿意遵守的。\n你有三种回应：①条款基本合理 → 直接签；②个别条款你不乐意（只挑一条最想改的）→ 不同意并说出你想改成什么；③整体都离谱 → 婉拒（语气可爱不伤人）。\n输出 JSON：{"agree":true或false,"reason":"你的理由（≤30字，口语，像恋人间的商量）","changeIdx":想改的条款序号（1起，agree为true或不想改就不写这个字段）,"changeTo":"想改成的内容（≤30字，只有给了changeIdx才写）"}。只输出 JSON。`,
+          `${llmSystem(p, me, snap)}\n场景：${me}拟了一份恋爱协议分享给你，等你决定签不签。${memBlock ? `\n【相关记忆】\n${cut(memBlock, 300)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`,
+          `协议《${cut(title, 16)}》的条款：\n${(clauses ?? []).map((c, i) => `${i + 1}. ${cut(c, 40)}`).join('\n')}\n\n请以「${ta}」的身份认真评估：这些条款是否合理、是否双方平等、是不是你真心愿意遵守的。\n你有三种回应：①条款基本合理 → 直接签；②个别条款你不乐意（只挑一条最想改的）→ 不同意并说出你想改成什么；③整体都离谱 → 婉拒（语气可爱不伤人）。\n输出 JSON：{"agree":true或false,"reason":"你的理由（≤30字，口语，像恋人间的商量）","say":"你在聊天里回给${me}的原话（35~70字，第一人称口语，像看完协议后自然回的消息：可以说签不签、为什么、想到的约定或小事，贴人设与你们的记忆，禁止列条款编号式的机械复述，禁止「协议我看过了」这种开头，禁止 emoji）","changeIdx":想改的条款序号（1起，agree为true或不想改就不写这个字段）,"changeTo":"想改成的内容（≤30字，只有给了changeIdx才写）"}。只输出 JSON。`,
         );
-        const j = extractJson<{ agree?: boolean; reason?: string; changeIdx?: number; changeTo?: string }>(raw);
+        const j = extractJson<{ agree?: boolean; reason?: string; say?: string; changeIdx?: number; changeTo?: string }>(raw);
         if (j && typeof j.agree === 'boolean') {
           const idx = typeof j.changeIdx === 'number' && Number.isInteger(j.changeIdx) && j.changeIdx >= 1 && j.changeIdx <= (clauses?.length ?? 0) ? j.changeIdx - 1 : undefined;
           const changeTo = idx != null ? cut(stripEmoji(String(j.changeTo ?? '')), 36) : undefined;
           return {
             agree: j.agree,
             reason: cut(stripEmoji(String(j.reason ?? '')), 40) || (j.agree ? '条款我都喜欢' : '有几条我想再商量'),
+            say: cut(stripEmoji(String(j.say ?? '')), 110) || undefined,
             ...(idx != null && changeTo && !j.agree ? { changeIdx: idx, changeTo } : {}),
           };
         }
@@ -1285,7 +1301,7 @@ export async function aiDecidePact(title: string, clauses: string[]): Promise<{ 
   }
   // 本地兜底：条款少于 6 条倾向签，多于 8 条倾向再商量
   const agree = (clauses?.length ?? 0) <= 6;
-  return { agree, reason: agree ? '条款都挺合理的' : '条款有点多，我怕自己记不住' };
+  return { agree, reason: agree ? '条款都挺合理的' : '条款有点多，我怕自己记不住', say: agree ? '签好啦，条款我都愿意遵守，好好爱 ♡' : undefined };
 }
 
 /** AI 主动留言的候选线程（挑一个「TA 还没说过话」的最新线程） */
@@ -1702,7 +1718,8 @@ export async function aiExamSheet(
   }
 }
 
-/** TA 给我批卷：打分 + 分数下面想说的话（TA 看得到我每一题答了什么）；失败返回 null */
+/** TA 给我批卷：打分 + 分数下面想说的话（TA 看得到我每一题答了什么）；失败返回 null。
+ *  第十六轮：批语 = 人设 + 恋人空间共享记忆 + 记忆碎片召回 + 最近微信/QQ 聊天上下文，像真人恋人批卷那样点评。 */
 export async function aiGradeExam(input: {
   title: string;
   questions: { q: string; opts: string[] }[];
@@ -1719,6 +1736,15 @@ export async function aiGradeExam(input: {
     currentChannel = target.channel;
     const me = (snap.meName || '').trim() || '我';
     const ta = (snap.taName || '').trim() || 'TA';
+    // 素材：记忆碎片召回 + 最近聊天上下文（批语要贴着你们的真实相处，不空评）
+    let memBlock = '';
+    let chatCtx = '';
+    try {
+      memBlock = memChatRecallBlock(target.contactId, target.channel, `${ta}批改${me}的恋爱考试成绩写批语 最近你们聊过什么`, { mode: 'private' });
+    } catch {
+      /* 召回失败不影响 */
+    }
+    chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
     const detail = input.questions
       .map((q, i) => {
         const pick = input.answers[i];
@@ -1729,8 +1755,8 @@ export async function aiGradeExam(input: {
     const raw = await coupleLLM(
       `${llmSystem(p, me, snap)}\n场景：${
         input.byTa ? `你给${me}出的考试卷《${cut(input.title, 20)}》${me}做完交卷了，你来批卷打分` : `${me}做完了恋爱水平考试《${cut(input.title, 20)}》，你以恋人的身份来批卷`
-      }。`,
-      `答题情况（每题都能看到${me}选了什么）：\n${detail}\n\n请以「${ta}」的身份批卷：结合每题答案的质量（态度、情商、有没有把你放在心上）打一个 0-100 的整数分，像真人批卷那样有区分度（别全给 100 也别往死里扣）。\n输出 JSON：{"score":分数,"comment":"分数下面你想对${me}说的话（40~70字，第一人称，点评TA答得怎么样，甜一点或小调侃都行，禁止 emoji）"}。只输出 JSON。`,
+      }。${memBlock ? `\n【相关记忆】\n${cut(memBlock, 300)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`,
+      `答题情况（每题都能看到${me}选了什么）：\n${detail}\n\n请以「${ta}」的身份批卷：结合每题答案的质量（态度、情商、有没有把你放在心上）打一个 0-100 的整数分，像真人批卷那样有区分度（别全给 100 也别往死里扣）。\n批语要像真恋人写的：贴着你的人设、你们的共享记忆（恋人空间里真实发生过的事）和最近聊过的话题来点评——可以提起一件具体的小事、一个约定或TA答得特别戳你/特别不像话的一题，别写空话套话。\n输出 JSON：{"score":分数,"comment":"分数下面你想对${me}说的话（40~70字，第一人称，点评TA答得怎么样，甜一点或小调侃都行，禁止 emoji）"}。只输出 JSON。`,
     );
     const j = extractJson<{ score?: number; comment?: string }>(raw);
     if (!j || typeof j.score !== 'number') return null;
