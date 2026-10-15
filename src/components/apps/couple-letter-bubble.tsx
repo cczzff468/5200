@@ -18,6 +18,7 @@
 
 import type { CoupleLetterCardData } from '@/lib/ios/couple-letter-share';
 import { navToLetter } from '@/lib/ios/couple-letter-share';
+import { kvGet } from '@/lib/ios/idb-kv';
 import { useUI } from '@/lib/ios/store';
 
 // ---------------- 信封样式库（参考用户两张信封截图：粉色爪印兔子信封 / 黄色星星小狗信封） ----------------
@@ -344,6 +345,12 @@ export function EnvelopeArt({ envKey, className = '', pets = true, avatar }: { e
 
 // ---------------- 聊天气泡 ----------------
 
+/** MM-DD HH:mm（第二十一轮：信封卡片/信箱列表只显示时间，参考截图「10-26 00:17」） */
+function fmtMDHM(t: number): string {
+  const d = new Date(t);
+  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: { data: CoupleLetterCardData; mine: boolean; testidPrefix?: string }) {
   /** 点击卡片 → 进恋人空间信件页面（任何状态都直达信件详情；不进恋人空间主页） */
   const openLetter = () => {
@@ -363,46 +370,41 @@ export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: 
   };
   void mine;
 
-  return (
-    <div data-testid={`${testidPrefix}-letter-card`} className="w-[248px] select-none overflow-hidden rounded-[10px] bg-white shadow-sm dark:bg-[#1E1E1E]">
-      {/* 卡片主体 = 信封本身（第二十轮：分享卡片样式与信封一致，宽幅信封 + 下方署名/摘要） */}
-      <button
-        type="button"
-        data-testid={`${testidPrefix}-letter-card-body`}
-        onClick={(e) => {
-          e.stopPropagation();
-          openLetter();
-        }}
-        className="block w-full cursor-pointer text-left transition-opacity active:opacity-75"
-      >
-        <EnvelopeArt envKey={data.envelope} className="h-[128px] w-full [container-type:inline-size]" pets />
-        <span className="block px-3 pb-2 pt-2.5">
-          <span className="flex items-baseline justify-between gap-2">
-            <span className="truncate text-[15px] font-semibold leading-[1.3] text-black dark:text-white">{data.fromName}的来信</span>
-            <span className="shrink-0 text-[10.5px] font-medium text-[#e0607e] dark:text-[#f9a8d4]">
-              {data.from === 'ta' && data.replyToId ? '回信' : data.from === 'ta' ? '来信' : '情书'}
-            </span>
-          </span>
-          <span className="mt-0.5 line-clamp-1 block text-[12px] leading-[1.45] text-black/45 dark:text-white/45">{data.snippet}</span>
-        </span>
-      </button>
+  // 第二十一轮：分享卡片=信箱里显示的信封样式——不显示信的内容，只显示时间 + 头像（火漆位）；
+  // 头像实时读恋人空间状态（TA 的信→taAvatar；我的信→自定义署名头像>微信/QQ 同步头像），换头像后卡片跟随
+  let avatar: string | null = null;
+  try {
+    const snap = kvGet<Record<string, unknown>>('couple-space:state');
+    if (data.from === 'ta') avatar = (snap?.taAvatar as string | null) ?? null;
+    else avatar = ((snap?.letterSenderAvatar as string) || (snap?.meAvatar as string) || '') || null;
+  } catch {
+    /* 读不到就用纯火漆印 */
+  }
+  const statusText = data.from === 'ta' ? '可拆信' : '已寄出';
 
-      {/* 底部：TA 寄来的出「拆信」按钮；我寄出的出状态行 */}
-      {data.from === 'ta' ? (
-        <button
-          type="button"
-          data-testid={`${testidPrefix}-letter-card-open`}
-          onClick={(e) => {
-            e.stopPropagation();
-            openLetter();
-          }}
-          className="w-full border-t border-black/[0.06] py-2 text-[13.5px] font-medium text-[#e0607e] active:bg-black/[0.04] dark:border-white/[0.08] dark:active:bg-white/[0.06]"
-        >
-          拆信
-        </button>
-      ) : (
-        <div className="border-t border-black/[0.06] px-3 py-1.5 text-[12px] text-black/40 dark:border-white/[0.08] dark:text-white/40">已寄出 · 等 TA 拆信 · 情书</div>
-      )}
-    </div>
+  return (
+    <button
+      type="button"
+      data-testid={`${testidPrefix}-letter-card`}
+      onClick={(e) => {
+        e.stopPropagation();
+        openLetter();
+      }}
+      className="relative block w-[248px] cursor-pointer select-none overflow-hidden rounded-[10px] shadow-sm transition-transform active:scale-[0.985]"
+    >
+      <EnvelopeArt envKey={data.envelope} className="h-[132px] w-full" pets avatar={avatar} />
+      {/* 右上状态徽章（与信箱列表一致） */}
+      <span
+        className={`absolute right-3 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ${
+          data.from === 'ta' ? 'bg-[#21b357] text-white' : 'bg-black/38 text-white/90'
+        }`}
+      >
+        {statusText}
+      </span>
+      {/* 底部：只显示时间（第二十一轮：信的内容不再展示） */}
+      <span className="absolute inset-x-0 bottom-0 z-10 block bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">
+        <span className="block truncate text-[12px] font-medium tabular-nums text-white/90">{fmtMDHM(data.at)}</span>
+      </span>
+    </button>
   );
 }

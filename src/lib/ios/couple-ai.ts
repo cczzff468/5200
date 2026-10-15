@@ -88,6 +88,8 @@ interface CoupleSnap {
   comments?: { id: string; key: string; from: string; text: string; at: number; rt?: string }[];
   /** TA 今天去过的地方 + 我的手机动态（人设记忆生成，第十八轮带图标/完整文案，位置与轨迹独立界面展示） */
   taTrail?: { dateKey: string; items: { t: string; place: string; note: string; icon?: string; who?: 'me' | 'ta'; text?: string }[]; at: number } | null;
+  /** 位置与轨迹·动态记录流（第二十一轮：AI 按人设+记忆+真实时间生成的时间线记录，聊天式界面展示） */
+  trailFeed?: { id: string; dateKey: string; t: string; kind: string; text: string; detail?: string; at: number }[];
   /** 回复挑战：TA 与我同时进行的最近一次双人闯关 */
   replyTa?: { active: boolean; picks: Record<string, { pick: number; say: string; at: number }>; mePicks: Record<string, { pick: number; text: string }>; startedAt: number; endedAt: number | null } | null;
   /** AI 主动留言去重（每天最多一条）：最近一次主动留言的日期 key */
@@ -755,6 +757,108 @@ export function aiTickTrail(): void {
       const taText = (items ?? []).filter((i) => i.who !== 'me');
       coupleRemember(target.contactId, target.channel, `${ta}今天的行踪：${taText.map((i) => `${i.t}${i.place}`).join('、')}（TA 自己的日程，可以自然聊起）`);
       logAi(`${ta}更新了今天的行踪`);
+    } catch {
+      /* 静默 */
+    }
+  })();
+}
+
+// ---------------- 位置与轨迹·动态记录流（第二十一轮：参考情侣定位 App 时间线） ----------------
+
+export interface CoupleTrailRec {
+  id: string;
+  dateKey: string; // 'YYYY-MM-DD'
+  t: string; // 'HH:MM'
+  kind: string; // unlock/screen/app/call/chargeOn/chargeOff/leave/arrive/offcar/walkplay/stay
+  text: string; // 展示文案（固定句式）
+  detail?: string; // 「查看记录」详情
+  at: number; // 生成时间
+}
+
+const TRAIL_KINDS = ['unlock', 'screen', 'app', 'call', 'chargeOn', 'chargeOff', 'leave', 'arrive', 'offcar', 'walkplay', 'stay'];
+
+/**
+ * 生成「位置与轨迹」时间线记录（第二十一轮需求：AI 按人设+记忆+上下文+真实时间生成）：
+ * - mode='day'：为指定日期生成一整天 8~12 条记录（该天已生成过则跳过）；
+ * - mode='now'：生成 1 条「刚刚」的记录（发消息期间/手动刷新时调用）。
+ * 记录句式严格按用户给的模板：手机使用类用「对方…」口径，位置类用「我…」口径。
+ */
+export function aiTrailFeed(opts: { mode: 'day'; dateKey: string; daysAgo?: number } | { mode: 'now' }): void {
+  const snap = readSnap();
+  if (!snap) return;
+  const target = aiTarget();
+  if (!target) return;
+  const mode = opts.mode;
+  const existing = Array.isArray(snap.trailFeed) ? (snap.trailFeed as CoupleTrailRec[]) : [];
+  if (mode === 'day' && existing.some((r) => r.dateKey === opts.dateKey)) return; // 该天已生成
+  void (async () => {
+    try {
+      const me = (snap.meName || '').trim() || '我';
+      const ta = (snap.taName || '').trim() || 'TA';
+      const p = await taPersonaOf(target.contactId);
+      if (!p) return;
+      currentPartnerId = target.contactId;
+      currentChannel = target.channel;
+      const cur2 = readSnap() ?? snap;
+      const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+      const myCity = cur2.myLoc?.name ?? '';
+      const taCity = cur2.taLoc?.name ?? '';
+      const nowD = new Date();
+      const nowHM = `${String(nowD.getHours()).padStart(2, '0')}:${String(nowD.getMinutes()).padStart(2, '0')}`;
+      const rules = `记录句式（必须严格套用这些句式，不许自创口径）：
+- 对方还没入睡，刚刚解锁了手机（kind=unlock，只出现在深夜/凌晨的时段）
+- 对方手机屏幕使用X小时了（kind=screen，X 为 1/2/3/5 这类整数）
+- 对方打开了某AppN次（kind=app，App 用真实常见的：微信/QQ/抖音/小红书/淘宝/美团/网易云/微博/相机/时钟/备忘录）
+- 对方结束了接打电话X分X秒（kind=call，如 27分52秒）
+- 对方手机开始充电了X%（kind=chargeOn，X 为 3~40）
+- 对方手机结束充电了X%（kind=chargeOff，X 要大于开始充电的数值）
+- 我离开了某地点（kind=leave）
+- 我到了某地点（kind=arrive）
+- 我下车了（kind=offcar）
+- 对方正在边走边玩手机（kind=walkplay）
+- 对方在某地点停留（kind=stay）`;
+      let user: string;
+      if (mode === 'day') {
+        const d = new Date(`${opts.dateKey}T12:00:00`);
+        const dow = `周${['日', '一', '二', '三', '四', '五', '六'][d.getDay()]}`;
+        const isToday = (opts.daysAgo ?? 0) === 0;
+        const dayDesc = isToday ? `今天（${opts.dateKey} ${dow}，现在是 ${nowHM}）` : `${opts.dateKey} ${dow}（${opts.daysAgo} 天前）`;
+        user = `请为「位置与轨迹」页面生成${dayDesc}一整天的动态记录时间线，8~12 条、按时间先后（早上→夜里）排列。
+${rules}
+地点要求：我（${me}）的位置动态${myCity ? `都发生在「${myCity}」` : '用真实感的地名'}（小区/公司/学校/商场/餐厅/街道，可以具体到店名）；对方的地点${taCity ? `在「${taCity}」` : ''}贴合 TA 的日常活动范围。
+硬性要求：
+1）${isToday ? `所有时间必须早于等于 ${nowHM}，绝不能出现未来时间；` : '全天时间自然分布（早上/中午/下午/晚上都要有）；'}
+2）记录必须贴合${ta}的人设、职业与作息习惯${chatCtx ? '，可以呼应你们最近聊过的事' : ''}，要合理、像真的；
+3）充电记录要成对出现（先 chargeOn 后 chargeOff，数值递增）；unlock 只出现在 23 点后或 7 点前；
+4）每条写一句 ≤28 字的 detail（点击「查看记录」时看到的场景细节）。
+输出 JSON：{"records":[{"t":"09:30","kind":"app","text":"对方打开了微信23次","detail":"补充细节"}]}。只输出 JSON。`;
+      } else {
+        user = `请为「位置与轨迹」页面生成 1 条「刚刚」发生的动态记录（t 固定为 "${nowHM}"）。
+${rules}
+选当下时间点（${nowHM}）最合理的那类动态，贴合${ta}的人设与作息${chatCtx ? '，可以呼应你们刚聊到的内容' : ''}；detail ≤28 字。
+输出 JSON：{"records":[{"t":"${nowHM}","kind":"…","text":"…","detail":"…"}]}。只输出 JSON。`;
+      }
+      const sys = `${llmSystem(p, me, cur2)}${taCity ? `\n（${ta}现在在${taCity}）` : ''}${myCity ? `\n（${me}现在在${myCity}）` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`;
+      const raw = await llmUserFirst(sys, user, 0.95);
+      const j = extractJson<{ records?: { t?: string; kind?: string; text?: string; detail?: string }[] }>(raw);
+      const recs: CoupleTrailRec[] = (j?.records ?? [])
+        .filter((r) => r && r.text && /^\d{1,2}:\d{2}$/.test(String(r.t ?? '')) && TRAIL_KINDS.includes(String(r.kind)))
+        .map((r, i) => ({
+          id: `tr-${Date.now()}-${i}`,
+          dateKey: mode === 'day' ? opts.dateKey : todayKey(),
+          t: String(r.t),
+          kind: String(r.kind),
+          text: cut(String(r.text).replace(/[「」"]/g, ''), 46),
+          detail: r.detail ? cut(String(r.detail).replace(/[「」"]/g, ''), 60) : '',
+          at: Date.now(),
+        }));
+      if (recs.length === 0) return;
+      writeSnap((s) => {
+        const feed = Array.isArray(s.trailFeed) ? (s.trailFeed as CoupleTrailRec[]) : [];
+        const merged: CoupleTrailRec[] = mode === 'day' ? [...feed.filter((r) => r.dateKey !== opts.dateKey), ...recs] : [...feed, ...recs];
+        return { ...s, trailFeed: merged.slice(-260) };
+      });
+      logAi(mode === 'day' ? `${ta}的轨迹记录更新了` : `轨迹新增一条刚刚的记录`);
     } catch {
       /* 静默 */
     }
@@ -1738,9 +1842,10 @@ export async function aiStatusPick(q: string, opts: string[], myPick: number, my
     currentPartnerId = target.contactId;
     currentChannel = target.channel;
     const me = (snap.meName || '').trim() || '我';
-    const raw = await coupleLLM(
+    const raw = await llmUserFirst(
       llmSystem(p, me, snap),
       `你们在做「恋爱状态测评」（18 题，基于斯滕伯格爱情三角理论），两人各自独立作答。\n题目：「${cut(q, 60)}」\n选项：${opts.map((o, i) => `${['A', 'B', 'C', 'D', 'E'][i]}.${cut(o, 26)}`).join(' ')}\n请以「${taPersonaName(p)}」的身份，完全按照你自己的真实性格和你们相处的实情选一个选项（可以和${me}一样也可以不同），不要刻意迎合。\n输出 JSON：{"pick": 0}，pick 是选项序号。只输出 JSON。`,
+      0.95,
     );
     const j = extractJson<{ pick?: number }>(raw);
     if (j && Number.isInteger(j.pick) && (j.pick as number) >= 0 && (j.pick as number) < opts.length) return j.pick as number;
@@ -1790,6 +1895,7 @@ async function llmUserFirst(sys: string, user: string, temperature = 0.9): Promi
           ],
           config: { baseUrl: c.baseUrl, apiKey: c.apiKey, model: c.model },
           temperature,
+          maxTokens: 8192, // 第二十一轮：AI 卷子可达 30 题，长输出不被 2048 默认值截断
         }),
       });
       if (res.ok) {
@@ -1916,9 +2022,11 @@ export async function genExamPaper(mode: 'ta' | 'import'): Promise<{ title: stri
       /* 静默，走通用出题 */
     }
   }
+  // 第二十一轮：AI 出的卷子题量 10~30 题随机（用户要求「卷子里面的题可以生成10-30题」）
+  const qCount = 10 + Math.floor(Math.random() * 21);
   if (mode === 'ta') {
     sys = `你要给你的恋人出一张「恋爱水平考试」卷子考考她。${personaPart}`;
-    user = `出一张 8 题的考试卷，出给你的恋人${me}答。硬性要求：
+    user = `出一张 ${qCount} 题的考试卷，出给你的恋人${me}答。硬性要求：
 1）${me}是女生（你是她的男朋友）。所有题目必须以${me}为中心、从她的视角出发：考她的心意、她的小情绪、她希望的相处方式和浪漫、你们俩之间的事；题干和选项里的「你」都指${me}自己；
 2）绝对禁止出「男友/男朋友……你会？」这类以男友为主语、让她来应付或讨好男友的题目；也不要出打游戏、球鞋、兄弟聚会这类男生向的题；
 3）至少一半的题目要贴着你们的真实记忆或最近聊过的事（可以提到具体的小事、日期、店铺、约定），不要空泛套路；
@@ -1926,7 +2034,7 @@ export async function genExamPaper(mode: 'ta' | 'import'): Promise<{ title: stri
 输出 JSON：{"title":"试卷标题（12~22字，可以起得有梗，像「2026年恋人空间专属女友心意测试卷」）","notes":["注意事项1","注意事项2","注意事项3","注意事项4"]（每条不超过30字，正经里带点恋爱的霸道条款，像「最终解释权归出卷人所有」）,"questions":[{"q":"题干（18~40字）","opts":["A选项","B选项","C选项","D选项"]}（恰好4个选项）]}。只输出 JSON。${memPart}`;
   } else {
     sys = `你是「恋人空间恋爱水平考试」的官方出题人，为情侣出一张高质量测评卷：题目围绕恋爱中的相处细节、情商与仪式感，四个选项梯度分明（1个明显最佳、2个普通、1个明显不行）。全部中文，禁止 emoji。${personaPart}`;
-    user = `出一张 8 题的考试卷。输出 JSON：{"title":"试卷标题（12~22字，可以起得有梗，像「对象求生欲突击检查卷」）","notes":["注意事项1","注意事项2","注意事项3","注意事项4"]（每条不超过30字，正经里带点恋爱的霸道条款，像「最终解释权归出卷人所有」）,"questions":[{"q":"题干（18~40字）","opts":["A选项","B选项","C选项","D选项"]}（恰好4个选项）]}。只输出 JSON。`;
+    user = `出一张 ${qCount} 题的考试卷（题目数量必须恰好 ${qCount} 题，题与题之间不重复）。输出 JSON：{"title":"试卷标题（12~22字，可以起得有梗，像「对象求生欲突击检查卷」）","notes":["注意事项1","注意事项2","注意事项3","注意事项4"]（每条不超过30字，正经里带点恋爱的霸道条款，像「最终解释权归出卷人所有」）,"questions":[{"q":"题干（18~40字）","opts":["A选项","B选项","C选项","D选项"]}（恰好4个选项）]}。只输出 JSON。`;
   }
   try {
     const raw = await llmUserFirst(sys, user, 0.9);
@@ -2093,3 +2201,37 @@ async function aiTickExam(snap: CoupleSnap, me: string, ta: string, p: TaPersona
 }
 
 
+
+/** 考试陪答（第二十一轮）：我和 TA 同时答题——我每答一题，TA 同时给出 TA 的选择 + 在我答案下方写一句想法（灰色小字）；TA 知道我选了什么 */
+export async function aiExamCompanion(
+  paperTitle: string,
+  q: { q: string; opts: string[] },
+  myPick: number,
+): Promise<{ pick: number; thought: string } | null> {
+  const target = aiTarget();
+  if (!target) return null;
+  try {
+    const p = await taPersonaOf(target.contactId);
+    const snap = readSnap();
+    if (!p || !snap) return null;
+    currentPartnerId = target.contactId;
+    currentChannel = target.channel;
+    const me = (snap.meName || '').trim() || '我';
+    const myText = q.opts[myPick] ?? '';
+    const sys = `${llmSystem(p, me, snap)}\n场景：你们正在一起做一张恋爱水平考试卷《${cut(paperTitle, 24)}》，两个人同时答题：她答一题你跟着答一题，你会在她选的答案下面写一句你的想法。`;
+    const user = `题目：${cut(q.q, 60)}\n选项：${q.opts.map((o, i) => `${'ABCD'[i] ?? i + 1}.${cut(o, 26)}`).join(' ')}\n她刚刚选了：「${cut(myText, 30)}」。\n请你：1）以自己的真实性格选一个你自己的答案（可以和她相同也可以不同，不要刻意迎合）；2）针对她的选择写一句 20 字内的想法：可以认同、调侃、吃醋、得意或撒娇，要贴合你的人设与你们的记忆${''}，禁止 emoji。\n输出 JSON：{"pick":0,"thought":"你的想法"}。pick 是你的选项序号（从 0 开始）。只输出 JSON。`;
+    const raw = await llmUserFirst(sys, user, 0.9);
+    const j = extractJson<{ pick?: number; thought?: string }>(raw);
+    if (j && Number.isInteger(j.pick) && (j.pick as number) >= 0 && (j.pick as number) < q.opts.length) {
+      const thought = cut(String(j.thought ?? '').replace(/[「」"]/g, ''), 42);
+      return { pick: j.pick as number, thought: thought || '他看着你的答案笑了笑，没说话' };
+    }
+  } catch {
+    /* 本地兜底 */
+  }
+  // 本地兜底：大概率不同选择 + 模板想法
+  const pool = q.opts.map((_, i) => i).filter((i) => i !== myPick);
+  const pick = pool.length === 0 ? myPick : Math.random() < 0.35 ? myPick : pool[Math.floor(Math.random() * pool.length)];
+  const fb = ['选这个的你怎么有点可爱', '嗯…我心里选的是另一个哦', '跟我想的一样，默契 +1', '答对了，今晚多想你一会儿', '这题你敢选这个？记下了', '不行，这题你得听我的'];
+  return { pick, thought: fb[Math.floor(Math.random() * fb.length)] };
+}

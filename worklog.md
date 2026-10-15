@@ -19838,3 +19838,22 @@ Work Log:
 Stage Summary:
 - 6 文件改动：wheel-date-picker.tsx（新增 191 行通用滚轮）、couple-letter-bubble.tsx（EnvelopeArt 头像+美化、分享卡片信封化）、couple-space.tsx（LettersPage 五视图重构+署名自定义+信箱/阅读独立界面）、calendar/files/memory-bank.tsx（日期滚轮接入）
 - 15 项反馈全部落地：分享卡片=信封、信封再美化（信纸探头/高光/内描边）、阅读界面美化+独立化、编辑器下滑加页+删标签、信箱信封样式+单独阅读、订单记录→信箱、拆信设置→定时发出/即时发出、信封预览一致、头像居中火漆位、铅笔角标删除、头像昵称可自定义（独立于微信/QQ 同步，可恢复跟随）、按钮文字同一行、全部日期弹窗上下滑滚轮式
+---
+Task ID: 21
+Agent: Z.ai Code（主会话）
+Task: 恋人空间第二十一轮：信箱/分享卡片只显时间删标签、编辑器第一张信纸变大、恋爱状态接用户API模型、考试页（我的卷子+更新图标+AI卷无限生成+每题分数+AI陪答灰色想法）、位置与轨迹重做（参考截图时间线）
+
+Work Log:
+- couple-ai.ts：genExamPaper 出卷题量改 10~30 题随机（两种模式，llmUserFirst maxTokens 提到 8192 防 30 题长输出截断）；aiStatusPick 从 coupleLLM（内置 SDK）改为 llmUserFirst（用户配置 API 模型优先）——恋爱状态测评 TA 作答与报告全链路走用户模型；新增 aiExamCompanion（陪答：我每答一题 TA 给出自己的选择+20 字内想法，注入人设+性别纪律+记忆+上下文，他知道我选了什么，失败本地兜底）；新增 aiTrailFeed（mode='day' 生成某天 8~12 条整点时间线记录 / mode='now' 生成 1 条「刚刚」记录；句式严格按用户模板——手机使用类「对方…」口径、位置类「我…」口径，充电成对、unlock 仅深夜、贴合人设作息+真实时间+地点城市，每条带 ≤28 字 detail；writeSnap 写 trailFeed 持久化，day 模式按 dateKey 去重）
+- couple-letter-bubble.tsx：分享卡片改信箱同款——整卡=宽幅 EnvelopeArt（头像火漆实时读恋人空间状态：TA 的信→taAvatar、我的信→自定义署名头像>meAvatar），右上状态徽章（可拆信/已寄出），底部渐变遮罩内只显示「M-DD HH:mm」时间；删除「xx的来信」标题、类型角标、信内容摘要行、拆信按钮行（点击整卡直达信件）
+- couple-space.tsx 类型：examPaper 增 taLive（陪答选择+想法持久化）、新增 examAiPapers（AI 卷子库）/examHistory（做过的卷子存档带题目快照）/trailFeed（轨迹记录流）+ 默认值 + fmtMDHM + lucide 增补（Folder/MapPinned/PhoneCall/PersonStanding）
+- LettersPage：信箱列表 TA 信/我的信——左上「xx的来信」标签删除、底部只显示时间（信内容/即时寄达/信封名/已寄给TA 全部移除，状态徽章保留）；编辑器第一张信纸 480px（其余 336px）+ 第一页容量 300 字（其余 200），页脚计数与写满自动加页按各页容量判断
+- ExamPage：题库页顶部工具栏（左「我的卷子」带数量徽章 / 右「更新」刷新图标）；「AI 出的卷子」列表（虚线粉框卡：标题+AI 新卷徽章+共N题|满分100|每题X分+使用）——genMore 每次追加 1~2 套进 examAiPapers 永不删除，哨兵 IntersectionObserver 上滑到底自动生成（rootMargin 240px），连续失败 2 次暂停自动并出重试按钮，右上更新=立即重新生成一批；导入模板 AI 卷同样入库；ExamPaperSheet 题头「每题X分」+每题后「（X分）」（100/N 均摊，整数/一位小数）+ 新增陪答 props（taLive/taName/thinking/companionOn）；答题视图新增陪答开关（默认开，TA 的卷不陪答），onPick 触发 aiExamCompanion 并把选择+想法写进 examPaper.taLive（换答案重答会重新生成），想法灰色小字显示在选项下「TA：想法（他选了：X）」+「正在想这题…」加载态；submit 交卷后写入 examHistory（带题目/选项/best 快照）；新增「我的卷子」视图（做过的卷子[分数色阶]+TA 的卷子/答卷入口+AI 出的卷子[未答]）与「试卷详情」视图（分数+称号+批语+逐题回顾带分数与对错着色）
+- TrackPage 位置与轨迹独立界面按参考截图重做：聊天式顶栏（返回+居中 TA 名+「● 在线」+右上刷新=生成 1 条刚刚记录）；时间线记录流（按天分组居中日标题「2026年10月15日 周四」+每条居中时间 chip「10-15 09:12」+类型彩色图标[Moon紫/Smartphone黑/Eye黑/PhoneCall绿/BatteryCharging红绿/Footprints绿/MapPin黄/CarFront绿/PersonStanding橙/MapPinned灰]+固定句式文字+行内绿色「查看记录」）；「查看更早的记录」按钮无限往前生成（trailEarlyRef 递增 daysAgo）；详情弹层（类型名+时间+大字文案+detail+生成说明）；我们的悄悄话聊天移到底部（输入框固定底栏），sendTrail 发送后 60% 概率延时 2.6~6.2s 触发 aiTrailFeed now 模式（发信息期间也会生成）；进入页面自动补生成今天+昨天（trailFeedInitRef 一次）；旧「摘要卡+今天的动态」区块移除（taTrail/aiTickTrail 保留供 AI 记忆）
+- 状态同步：CoupleSnap 增 trailFeed 可选字段；writeSnap→COUPLE_STATE_EVENT→组件自动刷新链路复用
+- 验证：tsc 全量零新增错误（仅历史遗留 api/ Prisma 8 处）；eslint 改动三文件零错误零警告；agent-browser 实机（注入美美/阿澈测试关系）：信箱（无署名标签+时间-only 底栏+徽章保留）✓、编辑器（第一张 480px 实测比例 1.43 + 0/300、第二张 0/200、再添一页）✓、题库（我的卷子+更新图标+AI 卷卡「共12题|满分100|每题8.3分」）✓、答题（每题「（12.5分）」+陪答开关「阿澈 正在和我一起答题」+选 A 后灰色想法「阿澈：…（他选了：…）」）✓、我的卷子（92分/76分两条存档）✓、试卷详情（92分+满分恋人+批语+逐题回顾带分数与对错色）✓、位置与轨迹（两天分组时间线+六类彩色图标+模板句式+查看记录详情弹层[App 使用·10-14 09:55+detail]+查看更早的记录+发消息「今晚想吃什么呀？」粉色气泡+「阿澈 正在输入…」+底部固定输入框）✓；dev.log 无代码错误
+- 限制说明：①沙箱内置 SDK 模型在本轮验证期间持续 429 限流——AI 实时出卷/轨迹实时生成无法端到端实拍，代码路径由失败降级链路（重试按钮/兜底模板/静默）保证，用户配置 API 模型后即走用户模型；②聊天分享卡片新样式需微信/QQ 好友会话，沙箱无好友无法实拍，由组件级复用（EnvelopeArt+信箱同款时间底栏，均已实机验证）保证
+
+Stage Summary:
+- 3 文件改动：couple-space.tsx（+660/-160 主体）、couple-ai.ts（+180：aiTrailFeed/aiExamCompanion/出卷题量/用户模型）、couple-letter-bubble.tsx（卡片信箱化）
+- 第二十一轮全部需求落地：信箱删标签+只显时间（双方）、分享卡片=信箱样式只显时间头像、编辑器第一张信纸上下变大、恋爱状态 TA 作答接用户 API 模型、考试页我的卷子+更新图标+上滑无限生成不消失+10-30 题随机+每题分数+AI 陪答灰色小字想法、位置与轨迹参考截图重做（时间线/天分组/图标/查看记录详情/发消息期间也生成）

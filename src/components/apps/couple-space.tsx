@@ -42,6 +42,7 @@ import {
   Crown,
   Eye,
   EyeOff,
+  Folder,
   Footprints,
   Gem,
   Gift,
@@ -59,6 +60,7 @@ import {
   Loader2,
   Mail,
   MapPin,
+  MapPinned,
   MessageCircleHeart,
   MessageSquare,
   Moon,
@@ -72,6 +74,8 @@ import {
   ShieldCheck,
   Orbit,
   Phone,
+  PhoneCall,
+  PersonStanding,
   Plane,
   Plus,
   RefreshCcw,
@@ -103,12 +107,12 @@ import {
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
-import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, aiZodiacReading, coupleMemoryDiff, coupleRemember, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, type DynReplyLevel } from '@/lib/ios/couple-ai';
+import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, aiTrailFeed, aiZodiacReading, coupleMemoryDiff, coupleRemember, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, type CoupleTrailRec, type DynReplyLevel } from '@/lib/ios/couple-ai';
 import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, patchPactCardsWhere, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
 import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
 import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
 import { setMtPendingPage } from '@/lib/ios/meituan-store';
-import { EnvelopeArt, LETTER_ENVELOPES, letterEnvelopeOf } from './couple-letter-bubble';
+import { EnvelopeArt, LETTER_ENVELOPES } from './couple-letter-bubble';
 import WheelDatePicker from './wheel-date-picker';
 import { displayNameOf, isFriendIn, avatarFor, type ContactRecord } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
@@ -237,10 +241,13 @@ interface CoupleState {
   replyVerdict: { win: boolean; comment: string; msg: string; at: number } | null; // 回复挑战结算：AI 判定的胜负 + 总评 + TA 想说的话
   locFollow: { me?: string | null; ta?: string | null }; // 轨迹位置跟随联系人 APP：上次同步的 region 文本
   statusExam: { my: Record<string, number>; ta: Record<string, number>; at: number | null; rep?: { me: StatusResult; ta: StatusResult; overall: string } | null } | null; // 恋爱状态测评：双方答题记录 + 生成过的报告（我和 AI 同步答）
-  examPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[]; best?: number }[]; source: 'me' | 'ta'; at: number } | null; // 恋爱水平考试：当前激活的试卷（可反复作答；source='ta'=TA 出卷喊我答）
+  examPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[]; best?: number }[]; source: 'me' | 'ta'; at: number; taLive?: { picks: Record<string, number>; thoughts: Record<string, string> } | null } | null; // 恋爱水平考试：当前激活的试卷（可反复作答；source='ta'=TA 出卷喊我答；taLive=第二十一轮陪答：TA 的同步选择与想法）
   examTaPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[] }[]; at: number; answered?: boolean } | null; // 恋爱水平考试：TA 出卷喊我答的卷子（点聊天卡片直达答题）
   examTaSheet: { title: string; picks: Record<string, number>; score?: number; comment?: string; at: number; myScore?: number | null; myComment?: string; taReply?: string } | null; // 恋爱水平考试：TA 的答卷（第十七轮：TA 只作答交卷不自评——打分批语由我来给；myScore/myComment=我给 TA 的批改与批语，taReply=TA 在我批语下的留言）
   examResult: { title: string; score: number; comment: string; answers: Record<string, number>; byTa: boolean; at: number } | null; // 恋爱水平考试：我最近一次被改卷的成绩（分数下面是 TA 想说的话）
+  examAiPapers: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[] }[]; at: number }[]; // 恋爱水平考试：AI 出的卷子库（第二十一轮：上滑无限追加、永不消失；10~30 题）
+  examHistory: { id: string; title: string; score: number; comment: string; answers: Record<string, number>; byTa: boolean; questions: { q: string; opts: string[]; best: number }[]; at: number }[]; // 恋爱水平考试：做过的卷子存档（第二十一轮「我的卷子」；我的+TA 的都进）
+  trailFeed: { id: string; dateKey: string; t: string; kind: string; text: string; detail?: string; at: number }[]; // 位置与轨迹：动态记录流（第二十一轮：AI 按人设+记忆+真实时间生成，按天分组，时间线展示）
 }
 
 const STATE_KEY = 'couple-space:state';
@@ -340,6 +347,9 @@ function defaultState(): CoupleState {
     examTaPaper: null,
     examTaSheet: null,
     examResult: null,
+    examAiPapers: [],
+    examHistory: [],
+    trailFeed: [],
   };
 }
 
@@ -804,6 +814,12 @@ function fmtDateCn(key: string): string {
   const d = new Date(`${key}T00:00:00`);
   if (Number.isNaN(d.getTime())) return key;
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 周${['日', '一', '二', '三', '四', '五', '六'][d.getDay()]}`;
+}
+
+/** 时间戳 → 「M-DD HH:mm」（第二十一轮：信箱/信封卡片只显示时间，参考截图「10-26 00:17」） */
+function fmtMDHM(t: number): string {
+  const d = new Date(t);
+  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 /** 距离最近一个生日的天数（ MM-DD 重复出现；当天→0，已过→明年） */
@@ -3212,7 +3228,35 @@ function PlaceSearchRow({ label, current, onPick, onClear, showToast }: { label:
   );
 }
 
-/** 情侣轨迹（第十八轮美化）：简约地图 + 顶部信息卡可隐藏 + 「位置与轨迹」独立界面（动态流 + 底部聊天写记忆） */
+/** 位置与轨迹·记录类型图标/颜色（第二十一轮，参考截图：按类型区分，lucide 图标零 emoji） */
+const TRAIL_FEED_ICON: Record<string, { icon: React.ReactNode; color: string }> = {
+  unlock: { icon: <Moon className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#8b7cf0' },
+  screen: { icon: <Smartphone className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#3c3c44' },
+  app: { icon: <Eye className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#26262b' },
+  call: { icon: <PhoneCall className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#34a853' },
+  chargeOn: { icon: <BatteryCharging className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#e05a6d' },
+  chargeOff: { icon: <BatteryCharging className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#21b357' },
+  leave: { icon: <Footprints className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#58b368' },
+  arrive: { icon: <MapPin className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#f0a125' },
+  offcar: { icon: <CarFront className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#34a853' },
+  walkplay: { icon: <PersonStanding className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#f08c3a' },
+  stay: { icon: <MapPinned className="h-[18px] w-[18px]" strokeWidth={2} />, color: '#7a8aa0' },
+};
+const TRAIL_KIND_LABEL: Record<string, string> = {
+  unlock: '手机解锁',
+  screen: '屏幕使用',
+  app: 'App 使用',
+  call: '接打电话',
+  chargeOn: '开始充电',
+  chargeOff: '充电完成',
+  leave: '离开某地',
+  arrive: '到达某地',
+  offcar: '下车',
+  walkplay: '边走边玩',
+  stay: '地点停留',
+};
+
+/** 情侣轨迹（第十八轮美化）：简约地图 + 顶部信息卡可隐藏 + 「位置与轨迹」独立界面（第二十一轮重做：聊天式时间线记录 + 查看记录详情 + 底部聊天） */
 function TrackPage({ state, patch, days, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; days: number | null; showToast: (m: string) => void; close: () => void }) {
   const [sheet, setSheet] = useState(false);
   const [trailPage, setTrailPage] = useState(false); // 「位置与轨迹」独立界面（第十八轮：不再是弹层）
@@ -3242,22 +3286,8 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
 
   // 真实距离：双方都设置了真实位置才有
   const distKm = state.myLoc && state.taLoc ? haversineKm(state.myLoc.lat, state.myLoc.lng, state.taLoc.lat, state.taLoc.lng) : null;
-  const trailToday = state.taTrail && state.taTrail.dateKey === todayKey() ? state.taTrail : null;
 
   const toolBtn = 'flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#6e6e76] shadow-[0_3px_10px_rgba(0,0,0,0.10)] transition-opacity active:opacity-60';
-
-  /** 轨迹时间线图标（第十八轮独立界面动态流用） */
-  const trailIcon = (icon?: string) => {
-    const cls = 'h-3.5 w-3.5';
-    if (icon === 'sleep') return <Moon className={cls} />;
-    if (icon === 'phone' || icon === 'app') return <Smartphone className={cls} />;
-    if (icon === 'call') return <Phone className={cls} />;
-    if (icon === 'arrive') return <MapPin className={cls} />;
-    if (icon === 'car') return <CarFront className={cls} />;
-    if (icon === 'charge') return <BatteryCharging className={cls} />;
-    if (icon === 'eat') return <UtensilsCrossed className={cls} />;
-    return <Footprints className={cls} />;
-  };
 
   // —— 位置与轨迹独立界面：聊天区（写进 AI 记忆） ——
   const [trailDraft, setTrailDraft] = useState('');
@@ -3280,7 +3310,39 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
     patch({ comments: [...state.comments, c], trailChatsAt: Date.now() });
     setTrailDraft('');
     scheduleAiReply('trail'); // TA 按人设记忆+上下文回复，并写进 AI 记忆（couple-ai 内部闭环）
+    // 第二十一轮：发信息期间也会继续生成记录（概率延时 1 条「刚刚」的动态）
+    if (Math.random() < 0.6) {
+      window.setTimeout(() => {
+        try {
+          aiTrailFeed({ mode: 'now' });
+        } catch {
+          /* 静默 */
+        }
+      }, 2600 + Math.random() * 3600);
+    }
   };
+
+  // —— 第二十一轮：位置与轨迹时间线（AI 按人设+记忆+真实时间生成；进入页面自动生成今天/昨天，可一直往更早生成） ——
+  const [trailDetail, setTrailDetail] = useState<CoupleTrailRec | null>(null);
+  const trailEarlyRef = useRef(2); // 更早生成起点（今天+昨天已自动生成）
+  const trailFeedInitRef = useRef(false);
+  const trailFeedRecs = useMemo(() => {
+    const recs = [...(state.trailFeed ?? [])];
+    recs.sort((a, b) => (a.dateKey === b.dateKey ? a.t.localeCompare(b.t) : a.dateKey < b.dateKey ? 1 : -1)); // 新日期在前，日内按时间升序
+    return recs;
+  }, [state.trailFeed]);
+  useEffect(() => {
+    if (!trailPage || trailFeedInitRef.current) return;
+    trailFeedInitRef.current = true;
+    const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const now = new Date();
+    try {
+      aiTrailFeed({ mode: 'day', dateKey: key(now), daysAgo: 0 });
+      aiTrailFeed({ mode: 'day', dateKey: key(new Date(now.getTime() - 86400000)), daysAgo: 1 });
+    } catch {
+      /* 静默 */
+    }
+  }, [trailPage]);
 
   return (
     <div className="relative flex h-full flex-col">
@@ -3416,75 +3478,87 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
         <span className="pointer-events-none absolute bottom-1.5 right-2 z-10 text-[9px] text-[#8a8f95]">恋人地图 · 真实位置</span>
       </div>
 
-      {/* 位置与轨迹（第十八轮：独立界面）——摘要卡 + 今天的动态时间线（人设记忆+上下文+真实时间生成）+ 底部聊天（写进记忆） */}
+      {/* 位置与轨迹（第二十一轮重做，参考用户截图：聊天式界面——顶部对方名字+在线状态，时间线记录（AI 按人设+记忆+上下文+真实时间生成）+ 查看记录详情 + 底部聊天，发信息期间也会继续生成记录） */}
       {trailPage && (
         <div className="absolute inset-0 z-40 flex flex-col bg-[#f6f6f8]">
-          {/* 顶栏 */}
+          {/* 顶栏：返回 + 对方名字/在线 + 刷新（生成一条刚刚的记录） */}
           <div className="shrink-0 bg-[#f6f6f8]/95 pt-[54px] backdrop-blur-md">
-            <div className="relative flex h-11 items-center px-1.5">
+            <div className="relative flex h-12 items-center px-1.5">
               <button type="button" onClick={() => setTrailPage(false)} aria-label="返回" className="flex h-9 w-9 items-center justify-center rounded-full text-[#3a3a40] transition-opacity active:opacity-50">
                 <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
               </button>
-              <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[16px] font-bold">位置与轨迹</div>
+              <div className="pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
+                <div className="text-[16px] font-bold text-[#26262b]">{state.taName || 'TA'}</div>
+                <div className="mt-0.5 flex items-center gap-1 text-[10.5px] text-[#9a9aa2]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#3dcc7e]" />
+                  在线
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  aiTrailFeed({ mode: 'now' });
+                  showToast('正在更新最新动态…');
+                }}
+                aria-label="刷新动态"
+                data-testid="trail-refresh"
+                className="ml-auto flex h-9 w-9 items-center justify-center rounded-full text-[#3a3a40] transition-opacity active:opacity-50"
+              >
+                <RefreshCcw className="h-[18px] w-[18px]" strokeWidth={2} />
+              </button>
             </div>
           </div>
 
-          {/* 滚动内容 */}
-          <div className="flex-1 overflow-y-auto px-4 pb-6">
-            {/* 摘要卡 */}
-            <div className="mt-1 rounded-2xl bg-white p-4 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
-              <div className="flex items-end gap-1.5">
-                <span className="text-[26px] font-extrabold leading-none text-[#2c2c30]">{days ?? '--'}</span>
-                <span className="pb-0.5 text-[12px] text-[#8e8e96]">天 · 在一起</span>
-              </div>
-              <div className="mt-1.5 text-[12px] leading-relaxed text-[#9a9aa2]">
-                {state.meetLoc?.name || state.meetPlace ? `相遇在${state.meetLoc?.name || state.meetPlace}` : '还没设置相遇地点'}
-                {distKm != null ? ` · 现在相距 ${fmtKm(distKm)}` : ''}
-              </div>
-              <div className="mt-2 rounded-xl bg-[#f7f7f9] px-3 py-2 text-[11px] leading-relaxed text-[#9a9aa2]">
-                双方位置跟随联系人 App 里填写的地区：联系人资料里改了位置，这里的定位会自动跟着变。
-              </div>
-            </div>
-
-            {/* 今天的动态（时间线：TA 行程 + 我的手机动态，真实时间，按时间排序） */}
-            <div className="mt-3 rounded-2xl bg-white p-4 shadow-[0_2px_12px_rgba(0,0,0,0.04)]" data-testid="trail-sheet">
-              <div className="flex items-center justify-between">
-                <div className="text-[14px] font-bold text-[#2c2c30]">今天的动态</div>
-                {trailToday && trailToday.items.length > 0 && (
-                  <div className="text-[10.5px] text-[#b6b6bd]">更新于 {new Date(trailToday.at).toTimeString().slice(0, 5)}</div>
-                )}
-              </div>
-              {!trailToday || trailToday.items.length === 0 ? (
-                <div className="py-5 text-center text-[12px] text-[#b6b6bd]">正在生成今天的动态…</div>
-              ) : (
-                <div className="mt-3">
-                  {trailToday.items.map((i, k, arr) => (
-                    <div key={`${i.t}-${k}`} className="relative flex gap-3 pb-4 last:pb-0">
-                      {k < arr.length - 1 && <span aria-hidden="true" className="absolute left-[13px] top-7 h-[calc(100%-28px)] w-px bg-[#ececef]" />}
-                      <span className={`z-10 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${i.who === 'me' ? 'bg-[#fdeef1] text-[#e58ba1]' : 'bg-[#eef1f5] text-[#8a97a8]'}`}>
-                        {trailIcon(i.icon)}
-                      </span>
-                      <div className="min-w-0 flex-1 pt-0.5">
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-[12px] font-semibold tabular-nums text-[#6e6e76]">{i.t}</span>
-                          {i.who === 'ta' ? (
-                            <span className="min-w-0 flex-1 truncate text-[13px] text-[#3a3a40]">
-                              {state.taName || 'TA'} 在 {i.place}
-                            </span>
-                          ) : (
-                            <span className="min-w-0 flex-1 truncate text-[13px] text-[#3a3a40]">{i.text || i.place}</span>
-                          )}
-                        </div>
-                        {i.note ? <div className="mt-0.5 truncate text-[11.5px] text-[#9a9aa2]">{i.note}</div> : null}
+          {/* 滚动内容：动态记录时间线（按天分组）+ 我们的悄悄话 */}
+          <div className="flex-1 overflow-y-auto px-4 pb-4">
+            {/* 记录时间线（参考截图：居中时间 + 图标 + 文字 + 查看记录） */}
+            <div className="pt-2" data-testid="trail-feed">
+              {trailFeedRecs.length === 0 && <div className="py-10 text-center text-[12.5px] text-[#b6b6bd]">正在生成你们的位置与轨迹记录…</div>}
+              {trailFeedRecs.map((r, k) => {
+                const meta = TRAIL_FEED_ICON[r.kind] ?? TRAIL_FEED_ICON.stay;
+                const prev = trailFeedRecs[k - 1];
+                const showDay = !prev || prev.dateKey !== r.dateKey;
+                return (
+                  <div key={r.id}>
+                    {showDay && <div className="py-3 text-center text-[12px] font-semibold text-[#8e8e96]">{fmtDateCn(r.dateKey)}</div>}
+                    <div className="pb-4">
+                      <div className="text-center text-[13px] font-bold tabular-nums text-[#4a4a52]">
+                        {r.dateKey.slice(5)} {r.t}
+                      </div>
+                      <div className="mt-1.5 flex items-start gap-2">
+                        <span className="mt-px flex h-5 w-5 shrink-0 items-center justify-center" style={{ color: meta.color }}>
+                          {meta.icon}
+                        </span>
+                        <p className="min-w-0 flex-1 text-[13.5px] leading-[1.65] text-[#2c2c30]">
+                          {r.text}
+                          <button type="button" onClick={() => setTrailDetail(r)} data-testid={`trail-view-${k}`} className="ml-1.5 inline-block font-semibold text-[#3d9a63]">
+                            查看记录
+                          </button>
+                        </p>
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
+                  </div>
+                );
+              })}
+              {/* 更早的记录（一直往前生成，无限回溯） */}
+              <button
+                type="button"
+                onClick={() => {
+                  const d = new Date(Date.now() - trailEarlyRef.current * 86400000);
+                  const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                  aiTrailFeed({ mode: 'day', dateKey: key, daysAgo: trailEarlyRef.current });
+                  trailEarlyRef.current += 1;
+                  showToast('正在生成更早的记录…');
+                }}
+                className="mx-auto mb-2 mt-1 block rounded-full bg-white px-5 py-2 text-[12px] text-[#8e8e96] shadow-sm ring-1 ring-[#ececef]"
+                data-testid="trail-earlier"
+              >
+                查看更早的记录
+              </button>
             </div>
 
-            {/* 我们的悄悄话（聊天区：TA 按人设记忆+上下文回复，全部写进记忆） */}
-            <div className="mt-3 rounded-2xl bg-white p-4 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+            {/* 我们的悄悄话（聊天区：TA 按人设记忆+上下文回复，全部写进记忆；发信息期间也会继续生成新记录） */}
+            <div className="rounded-2xl bg-white p-4 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
               <div className="text-[14px] font-bold text-[#2c2c30]">我们的悄悄话</div>
               <div ref={trailListRef} className="mt-2 max-h-64 space-y-2.5 overflow-y-auto">
                 {trailMsgs.length === 0 ? (
@@ -3492,9 +3566,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                 ) : (
                   trailMsgs.map((m) => (
                     <div key={m.id} className={`flex ${m.from === 'me' ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[78%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${m.from === 'me' ? 'rounded-br-md bg-[linear-gradient(135deg,#f7b7c5,#ef9cb2)] text-white' : 'rounded-bl-md bg-[#f4f4f6] text-[#3a3a40]'}`}>
-                        {m.text}
-                      </div>
+                      <div className={`max-w-[78%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${m.from === 'me' ? 'rounded-br-md bg-[linear-gradient(135deg,#f7b7c5,#ef9cb2)] text-white' : 'rounded-bl-md bg-[#f4f4f6] text-[#3a3a40]'}`}>{m.text}</div>
                     </div>
                   ))
                 )}
@@ -3504,30 +3576,56 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                   </div>
                 )}
               </div>
-              {/* 底部输入框 */}
-              <div className="mt-3 flex items-center gap-2">
-                <input
-                  value={trailDraft}
-                  onChange={(e) => setTrailDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') sendTrail();
-                  }}
-                  placeholder={`和${state.taName || 'TA'}聊聊今天的行程…`}
-                  maxLength={120}
-                  className="h-10 flex-1 rounded-full bg-[#f4f4f6] px-4 text-[13.5px] outline-none placeholder:text-[#b6b6bd]"
-                />
-                <button
-                  type="button"
-                  onClick={sendTrail}
-                  aria-label="发送"
-                  disabled={!trailDraft.trim()}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#f7b7c5,#ef9cb2)] text-white shadow-[0_4px_12px_rgba(239,156,178,0.4)] transition-transform active:scale-95 disabled:opacity-40"
-                >
-                  <Send className="h-4 w-4" />
-                </button>
-              </div>
             </div>
           </div>
+
+          {/* 底部输入框（固定在页面底部，像聊天一样随时发消息） */}
+          <div className="shrink-0 border-t border-[#ececef] bg-[#f6f6f8]/95 px-3 pb-6 pt-2.5 backdrop-blur-md">
+            <div className="flex items-center gap-2">
+              <input
+                value={trailDraft}
+                onChange={(e) => setTrailDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') sendTrail();
+                }}
+                placeholder={`和${state.taName || 'TA'}聊聊今天的行程…`}
+                maxLength={120}
+                className="h-10 flex-1 rounded-full bg-white px-4 text-[13.5px] shadow-[0_2px_8px_rgba(0,0,0,0.05)] outline-none placeholder:text-[#b6b6bd]"
+                data-testid="trail-input"
+              />
+              <button
+                type="button"
+                onClick={sendTrail}
+                aria-label="发送"
+                disabled={!trailDraft.trim()}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#f7b7c5,#ef9cb2)] text-white shadow-[0_4px_12px_rgba(239,156,178,0.4)] transition-transform active:scale-95 disabled:opacity-40"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* 查看记录详情弹层 */}
+          {trailDetail && (
+            <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={() => setTrailDetail(null)}>
+              <div className="rounded-t-2xl bg-white px-5 pb-9 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="trail-detail-sheet">
+                <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
+                <div className="flex items-center gap-2">
+                  <span className="flex h-6 w-6 items-center justify-center" style={{ color: (TRAIL_FEED_ICON[trailDetail.kind] ?? TRAIL_FEED_ICON.stay).color }}>
+                    {(TRAIL_FEED_ICON[trailDetail.kind] ?? TRAIL_FEED_ICON.stay).icon}
+                  </span>
+                  <span className="text-[12px] font-semibold text-[#8e8e96]">
+                    {TRAIL_KIND_LABEL[trailDetail.kind] ?? '动态记录'} · {trailDetail.dateKey.slice(5)} {trailDetail.t}
+                  </span>
+                </div>
+                <div className="mt-3 text-[17px] font-bold leading-relaxed text-[#26262b]">{trailDetail.text}</div>
+                {trailDetail.detail ? (
+                  <div className="mt-2 rounded-xl bg-[#f7f7f9] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-[#4a4a52]">{trailDetail.detail}</div>
+                ) : null}
+                <div className="mt-3 text-center text-[10.5px] text-[#c9c9cf]">基于你们的人设、记忆和真实时间生成</div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -4036,6 +4134,7 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
 
 /** 情书（原未来情书，参考截图：黑色星空治愈风）—— 主视图（信封）→ 告白页 → 编辑信件（信纸/字体/信封/虚线工具栏/多页翻页）→ 发送设置（即时/定时拆信，参照「慢邮邮」截图重做）→ 信箱（TA 的信 + 我的信 + 信下留言 + 分享给 TA） */
 const LETTER_PAGE_CHARS = 200; // 每页信纸字数上限（写满翻下一页）
+const LETTER_PAGE_CHARS_FIRST = 300; // 第一张信纸上下更大（第二十一轮），容纳更多字
 const LETTER_MAX_PAGES = 6; // 最多页数
 
 function LettersPage({ state, patch, close, showToast }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void; showToast: (m: string) => void }) {
@@ -4079,12 +4178,13 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   const meName0 = (state.letterSenderName || '').trim() || state.meName || '我'; // 信封署名：自定义 > 微信/QQ 同步
   const senderAvatar = state.letterSenderAvatar || state.meAvatar || null; // 信封头像：自定义 > 微信/QQ 同步
 
-  /** 指定页写入（上限截断 + 写满提示节流 + 写满自动下滑加下一页） */
+  /** 指定页写入（上限截断 + 写满提示节流 + 写满自动下滑加下一页；第一张信纸更高、容量也更大） */
   const setPageTextAt = (pi: number, v: string) => {
-    const capped = v.slice(0, LETTER_PAGE_CHARS);
-    const wasFull = (pages[pi] ?? '').length >= LETTER_PAGE_CHARS;
+    const cap = pi === 0 ? LETTER_PAGE_CHARS_FIRST : LETTER_PAGE_CHARS;
+    const capped = v.slice(0, cap);
+    const wasFull = (pages[pi] ?? '').length >= cap;
     setPages((ps) => ps.map((p, i) => (i === pi ? capped : p)));
-    if (capped.length >= LETTER_PAGE_CHARS && !wasFull && pi === pages.length - 1 && pages.length < LETTER_MAX_PAGES) {
+    if (capped.length >= cap && !wasFull && pi === pages.length - 1 && pages.length < LETTER_MAX_PAGES) {
       setPages((ps) => (ps.length < LETTER_MAX_PAGES ? [...ps, ''] : ps));
       setTimeout(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }), 60);
     }
@@ -4467,13 +4567,13 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         <div ref={scrollRef} className="relative flex-1 overflow-y-auto px-3 pb-4 pt-1.5" data-testid="letter-scroll">
           <div className="mx-auto flex w-full max-w-[430px] flex-col gap-3.5">
             {pages.map((ptext, pi) => {
-              const pageFull = ptext.length >= LETTER_PAGE_CHARS;
+              const pageFull = ptext.length >= (pi === 0 ? LETTER_PAGE_CHARS_FIRST : LETTER_PAGE_CHARS);
               const isFocus = pi === focusSafe;
               return (
                 <div
                   key={pi}
                   className="relative shrink-0 overflow-hidden rounded-md shadow-[0_8px_28px_rgba(0,0,0,0.5)]"
-                  style={{ background: paper.bg, height: 336 }}
+                  style={{ background: paper.bg, height: pi === 0 ? 480 : 336 }}
                   data-testid={`letter-paper-${pi + 1}`}
                 >
                   {/* 横线 */}
@@ -4529,9 +4629,9 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                       </button>
                     </div>
                   )}
-                  {/* 页脚：本页计数 + 页码 */}
+                  {/* 页脚：本页计数 + 页码（第一张信纸容量更大） */}
                   <div className="pointer-events-none absolute bottom-2.5 left-4 text-[11.5px]" style={{ color: pageFull ? '#e05a6d' : paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
-                    {`${ptext.length}/${LETTER_PAGE_CHARS}`}
+                    {`${ptext.length}/${pi === 0 ? LETTER_PAGE_CHARS_FIRST : LETTER_PAGE_CHARS}`}
                   </div>
                   <div className="pointer-events-none absolute bottom-2.5 right-4 text-[12px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
                     {`第 ${pi + 1} 页`}
@@ -4846,10 +4946,10 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                   className="relative block w-full overflow-hidden rounded-2xl text-left shadow-[0_10px_26px_rgba(0,0,0,0.42)] transition-transform active:scale-[0.985]"
                 >
                   <EnvelopeArt envKey={l.envelope} className="h-[132px] w-full" avatar={state.taAvatar} />
-                  <span className="absolute left-3 top-3 z-10 rounded-full bg-black/32 px-3 py-1 text-[12px] font-semibold tracking-wide text-white backdrop-blur-[2px]">{`${state.taName || 'TA'}的来信`}</span>
+                  {/* 第二十一轮：左上角「xx的来信」标签删除；底部只显示时间（信的内容不再展示） */}
                   <span className="absolute right-3 top-3 z-10 rounded-full bg-[#21b357] px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm">可拆信</span>
                   <span className="absolute inset-x-0 bottom-0 z-10 block bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">
-                    <span className="block truncate text-[12.5px] text-white/90">{cutText(l.text, 30)}</span>
+                    <span className="block truncate text-[12px] font-medium tabular-nums text-white/90">{fmtMDHM(l.at)}</span>
                   </span>
                 </button>
               ))}
@@ -4886,13 +4986,12 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 className="relative block w-full overflow-hidden rounded-2xl text-left shadow-[0_10px_26px_rgba(0,0,0,0.42)] transition-transform active:scale-[0.985]"
               >
                 <EnvelopeArt envKey={l.envelope ?? envKey} className="h-[132px] w-full" avatar={senderAvatar} />
-                <span className="absolute left-3 top-3 z-10 rounded-full bg-black/32 px-3 py-1 text-[12px] font-semibold tracking-wide text-white backdrop-blur-[2px]">{`${meName0}的来信`}</span>
+                {/* 第二十一轮：左上角署名标签删除；底部只显示时间（即时/定时/信封名等其它信息不再展示） */}
                 <span className={`absolute right-3 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ${open ? 'bg-[#21b357] text-white' : 'bg-black/38 text-white/90'}`}>
                   {open ? '可拆信' : instant ? '定时中' : `还剩 ${remain} 天`}
                 </span>
-                <span className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-between gap-2 bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">
-                  <span className="truncate text-[12px] text-white/85">{`${fmtDate(l.at)} · ${instant ? '即时寄达' : `${l.openAfterDays} 天后可拆`} · ${letterEnvelopeOf(l.envelope ?? envKey).name}`}</span>
-                  {l.sharedAt && <span className="shrink-0 rounded-full bg-white/15 px-2 py-0.5 text-[10.5px] text-white/90">{`已寄给${state.taName || 'TA'} ♡`}</span>}
+                <span className="absolute inset-x-0 bottom-0 z-10 block bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">
+                  <span className="block truncate text-[12px] font-medium tabular-nums text-white/90">{fmtMDHM(l.at)}</span>
                 </span>
               </button>
             );
@@ -7483,11 +7582,19 @@ function ExamPaperSheet(props: {
   bestAt?: (qi: number) => number | undefined;
   onPrev?: () => void;
   onNext?: () => void;
+  // 第二十一轮：AI 陪答——每答一题，TA 的选择 + 想法（灰色小字）显示在答案下面
+  taLive?: { picks: Record<string, number>; thoughts: Record<string, string> } | null;
+  taName?: string;
+  thinking?: Record<number, boolean>;
+  companionOn?: boolean;
 }) {
   const per = props.perPage ?? 5;
   const pages = Math.max(1, Math.ceil(props.questions.length / per));
   const pg = Math.min(props.page, pages - 1);
   const slice = props.questions.slice(pg * per, pg * per + per);
+  // 每题分值（满分 100 均摊；第二十一轮：题的后面标上这个题的分数）
+  const perScore = props.questions.length > 0 ? 100 / props.questions.length : 0;
+  const fmtScore = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
   return (
     <div className="overflow-hidden rounded-lg bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
       <div className="flex">
@@ -7525,7 +7632,7 @@ function ExamPaperSheet(props: {
           )}
           <div className="mt-3 flex items-baseline justify-between border-b-2 border-[#3c3c42] pb-1.5">
             <span className="text-[14.5px] font-bold text-[#26262b]">一、单项选择题</span>
-            <span className="shrink-0 pl-2 text-[11.5px] text-[#9a9aa2]">（共{props.questions.length}小题，满分100分）</span>
+            <span className="shrink-0 pl-2 text-[11.5px] text-[#9a9aa2]">（共{props.questions.length}小题，每题{fmtScore(perScore)}分，满分100分）</span>
           </div>
           <div className="mt-1">
             {slice.map((q, si) => {
@@ -7538,6 +7645,8 @@ function ExamPaperSheet(props: {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 text-[14px] font-medium leading-relaxed text-[#26262b]">
                       {qi + 1}、{q.q}
+                      {/* 第二十一轮：题的后面标上这个题的分数 */}
+                      <span className="ml-1 whitespace-nowrap text-[11px] font-normal text-[#9a9aa2]">（{fmtScore(perScore)}分）</span>
                     </div>
                     <Pencil className="mt-1 h-3.5 w-3.5 shrink-0 text-[#f8a0b4]" strokeWidth={2} aria-hidden="true" />
                   </div>
@@ -7572,6 +7681,22 @@ function ExamPaperSheet(props: {
                       );
                     })}
                   </div>
+                  {/* 第二十一轮：AI 陪答——TA 的选择 + 想法（灰色小字，他知道我选了什么） */}
+                  {props.companionOn && props.taName && props.answers?.[qi] != null && (
+                    props.thinking?.[qi] ? (
+                      <div className="mt-1.5 flex items-center gap-1.5 pl-2 text-[11.5px] text-[#9a9aa2]">
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        {props.taName} 正在想这题…
+                      </div>
+                    ) : props.taLive?.thoughts[String(qi)] ? (
+                      <div className="mt-1.5 pl-2 text-[11.5px] leading-relaxed text-[#9a9aa2]" data-testid={`exam-ta-thought-${qi}`}>
+                        {props.taName}：{props.taLive.thoughts[String(qi)]}
+                        {props.taLive?.picks[String(qi)] != null && (
+                          <span className="text-[#b6b6bd]">（他选了：{q.opts[props.taLive.picks[String(qi)]] ?? ''}）</span>
+                        )}
+                      </div>
+                    ) : null
+                  )}
                 </div>
               );
             })}
@@ -7598,7 +7723,7 @@ function ExamPaperSheet(props: {
  *  我可以喊 TA 来答题（聊天卡片）；TA 也会自己出卷喊我来答（卡片直达答题页）；TA 批卷知道我答了什么 */
 function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
   const patchFn = patch as unknown as (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void;
-  const [view, setView] = useState<'bank' | 'preview' | 'answer' | 'result' | 'tasheet'>('bank');
+  const [view, setView] = useState<'bank' | 'preview' | 'answer' | 'result' | 'tasheet' | 'mine' | 'mineDetail'>('bank');
   const [preview, setPreview] = useState<ExamTpl | null>(null);
   const [page, setPage] = useState(0);
   const [answers, setAnswers] = useState<Record<number, number>>({});
@@ -7610,6 +7735,14 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const [taGradeScore, setTaGradeScore] = useState(85); // 我给 TA 答卷打的分（第十六轮：TA 答完由我批改）
   const [taGradeText, setTaGradeText] = useState(''); // 我给 TA 的批语
   const [taGrading, setTaGrading] = useState(false); // 提交批改中
+  // 第二十一轮：AI 陪答（叫 TA 一起同时答题）+ 题库无限生成 + 我的卷子
+  const [companion, setCompanion] = useState(true); // 陪答开关（默认开，每答一题 TA 写下想法）
+  const [compBusy, setCompBusy] = useState<Record<number, boolean>>({}); // 正在生成想法的题
+  const [genBusy, setGenBusy] = useState(false); // 题库 AI 出卷中
+  const [mineSel, setMineSel] = useState<CoupleState['examHistory'][number] | null>(null); // 我的卷子·选中的存档
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const genBusyRef = useRef(false);
+  const genFailRef = useRef(0); // 连续失败计数（防无限重试刷接口）
   const me = state.meName || '我';
   const ta = state.taName || 'TA';
   const PER_PAGE = 5;
@@ -7649,13 +7782,61 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
   /** 生成试卷（预览 → 作答） */
   const makePaper = () => {
     if (!preview) return;
-    patch({ examPaper: { id: `p-${Date.now()}`, title: preview.title, notes: preview.notes, questions: preview.questions, source: 'me', at: Date.now() } });
+    patch({ examPaper: { id: `p-${Date.now()}`, title: preview.title, notes: preview.notes, questions: preview.questions, source: 'me', at: Date.now(), taLive: { picks: {}, thoughts: {} } } });
     setWorkTa(false);
     setAnswers({});
     setPage(0);
     setView('answer');
     showToast('试卷已生成，开始作答吧');
   };
+
+  /** 第二十一轮：题库上滑/点更新 → AI（用户配置的 API 模型）再出 1~2 套新卷；
+   *  追加进 examAiPapers 永不删除——之前生成的卷子不会消失 */
+  const genMore = async () => {
+    if (genBusyRef.current) return;
+    if (genFailRef.current >= 2) return; // 连续失败暂停自动生成（点「更新」或重试按钮可继续）
+    genBusyRef.current = true;
+    setGenBusy(true);
+    try {
+      const { genExamPaper } = await import('@/lib/ios/couple-ai');
+      const papers: NonNullable<CoupleState['examAiPapers']> = [];
+      for (let i = 0; i < 2; i++) {
+        const g = await genExamPaper('import');
+        if (!g) break;
+        papers.push({
+          id: `aip-${Date.now()}-${i}`,
+          title: g.title,
+          notes: g.notes.length > 0 ? g.notes : ['本试卷为 AI 现场出题，满分100分。', '答题态度大于正确率。', '标准答案解释权归出卷人所有。', '本试卷长期有效。'],
+          questions: g.questions,
+          at: Date.now(),
+        });
+      }
+      if (papers.length > 0) {
+        genFailRef.current = 0;
+        patchFn((prev) => ({ examAiPapers: [...(prev.examAiPapers ?? []), ...papers] }));
+      } else {
+        genFailRef.current += 1;
+      }
+    } finally {
+      genBusyRef.current = false;
+      setGenBusy(false);
+    }
+  };
+
+  // 题库上滑到底自动生成更多（哨兵进入视口触发；第二十一轮：上滑无限生成）
+  useEffect(() => {
+    if (view !== 'bank') return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void genMore();
+      },
+      { rootMargin: '240px 0px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [view, state.examAiPapers.length]);
 
   /** 交卷 → TA 批卷（用户配置的 API 模型优先；TA 知道我答了什么）→ 分数下面写 TA 想说的话 */
   const submit = async () => {
@@ -7684,6 +7865,22 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
       examResult: { title: src.title, score, comment, answers: { ...answers } as Record<string, number>, byTa: workTa, at: Date.now() },
       examBest: best,
     });
+    // 第二十一轮：做过的卷子进「我的卷子」存档（带题目快照，之后随时可回看）
+    patchFn((prev) => ({
+      examHistory: [
+        {
+          id: `h-${Date.now()}`,
+          title: src.title,
+          score,
+          comment,
+          answers: { ...answers } as Record<string, number>,
+          byTa: workTa,
+          questions: src.questions.map((q) => ({ q: q.q, opts: q.opts, best: q.best ?? -1 })),
+          at: Date.now(),
+        },
+        ...(prev.examHistory ?? []),
+      ].slice(0, 60),
+    }));
     if (workTa) {
       patchFn((prev) => ({ examTaPaper: prev.examTaPaper ? { ...prev.examTaPaper, answered: true } : null }));
       // 第十七轮：聊天里「TA 出卷喊我答」的卡片回写「已答完」，点卡片直达成绩页
@@ -7752,6 +7949,15 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             questions: g.questions.map((q) => ({ ...q, best: -1 })),
           }
         : fallbackTpl;
+      // 第二十一轮：AI 出的卷子也进卷子库（「我的卷子」里能看到，永不消失）
+      if (g) {
+        patchFn((prev) => ({
+          examAiPapers: [
+            ...(prev.examAiPapers ?? []),
+            { id: tpl.id, title: tpl.title, notes: tpl.notes, questions: tpl.questions.map((q) => ({ q: q.q, opts: q.opts })), at: Date.now() },
+          ],
+        }));
+      }
       setPreview(tpl);
       setPage(0);
       setView('preview');
@@ -8009,9 +8215,10 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
     );
   }
 
-  // ---------- 作答视图（参考图5/6 试卷样式；TA 的卷与我的卷同款） ----------
+  // ---------- 作答视图（参考图5/6 试卷样式；TA 的卷与我的卷同款；第二十一轮：可叫 TA 一起同时答题） ----------
   if (view === 'answer' && working) {
     const answeredN = Object.keys(answers).length;
+    const taLiveNow = !workTa ? state.examPaper?.taLive ?? null : null;
     return (
       <SubShell title={workTa ? `${ta} 的考卷` : '恋爱水平考试'} onBack={() => setView('bank')}>
         <div className="-mx-3 min-h-[420px] bg-[linear-gradient(180deg,#fdeef3,#fbe3ec)] px-3 py-4">
@@ -8023,11 +8230,64 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             page={page}
             perPage={PER_PAGE}
             answers={answers}
-            onPick={(qi, oi) => setAnswers((a) => ({ ...a, [qi]: oi }))}
+            onPick={(qi, oi) => {
+              setAnswers((a) => ({ ...a, [qi]: oi }));
+              // 第二十一轮：AI 陪答——我每答一题，TA 同时给出 TA 的选择 + 想法（他知道我选了什么，想法持久化在试卷里）
+              if (!companion || workTa) return;
+              const q = working.questions[qi];
+              if (!q) return;
+              setCompBusy((b) => ({ ...b, [qi]: true }));
+              void (async () => {
+                try {
+                  const { aiExamCompanion } = await import('@/lib/ios/couple-ai');
+                  const r = await aiExamCompanion(working.title, { q: q.q, opts: q.opts }, oi);
+                  if (r) {
+                    patchFn((prev) =>
+                      prev.examPaper
+                        ? {
+                            examPaper: {
+                              ...prev.examPaper,
+                              taLive: {
+                                picks: { ...(prev.examPaper.taLive?.picks ?? {}), [String(qi)]: r.pick },
+                                thoughts: { ...(prev.examPaper.taLive?.thoughts ?? {}), [String(qi)]: r.thought },
+                              },
+                            },
+                          }
+                        : {},
+                    );
+                  }
+                } catch {
+                  /* 静默 */
+                }
+                setCompBusy((b) => {
+                  const n = { ...b };
+                  delete n[qi];
+                  return n;
+                });
+              })();
+            }}
             onPrev={() => setPage((p) => Math.max(0, p - 1))}
             onNext={() => setPage((p) => Math.min(Math.ceil(working.questions.length / PER_PAGE) - 1, p + 1))}
+            taLive={taLiveNow}
+            taName={ta}
+            thinking={compBusy}
+            companionOn={companion && !workTa}
           />
         </div>
+        {/* 第二十一轮：叫 TA 一起同时答题（默认开；TA 的卷不需要陪答） */}
+        {!workTa && (
+          <button
+            type="button"
+            data-testid="exam-companion-toggle"
+            onClick={() => setCompanion((v) => !v)}
+            className={`mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-full text-[13.5px] font-semibold transition-colors ${
+              companion ? 'bg-[#fdeef3] text-[#e0607e] ring-1 ring-[#f8a0b4]' : 'bg-white text-[#9a9aa2] ring-1 ring-[#e9e9ee]'
+            }`}
+          >
+            <Users className="h-4 w-4" strokeWidth={2} />
+            {companion ? `${ta} 正在和我一起答题 · 每答一题他会写下他的想法` : `叫${ta}和我一起答题`}
+          </button>
+        )}
         {!inviting && (
           <button
             type="button"
@@ -8105,10 +8365,216 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
     );
   }
 
+  // ---------- 我的卷子（第二十一轮：左上角入口；做过的卷子 + AI 的卷子都放进这里） ----------
+  if (view === 'mine') {
+    const hist = state.examHistory ?? [];
+    const aiPapersDesc = [...(state.examAiPapers ?? [])].reverse();
+    return (
+      <SubShell title="我的卷子" onBack={() => setView('bank')}>
+        {/* 做过的卷子（我的 + TA 出的我答的，交卷即存档） */}
+        <div className="mt-3 px-1 text-[14px] font-bold text-[#26262b]">做过的卷子</div>
+        {hist.length === 0 ? (
+          <div className="mt-2 rounded-2xl bg-white py-8 text-center text-[12.5px] text-[#b6b6bd] shadow-sm" data-testid="exam-mine-empty">还没有做过的卷子，去题库挑一套吧</div>
+        ) : (
+          <div className="mt-2 space-y-2.5">
+            {hist.map((h) => (
+              <button
+                key={h.id}
+                type="button"
+                onClick={() => {
+                  setMineSel(h);
+                  setView('mineDetail');
+                }}
+                className="flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#fff5f7]"
+                data-testid={`exam-mine-${h.id}`}
+              >
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fff7e6]">
+                  <Medal className="h-4.5 w-4.5 text-[#e6a23c]" strokeWidth={1.8} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-semibold text-[#26262b]">《{h.title}》</span>
+                  <span className="block text-[11.5px] text-[#9a9aa2]">
+                    {h.byTa ? `${ta} 出的卷 · ` : '我出的卷 · '}
+                    {h.questions.length} 题 · {fmtDate(h.at)}
+                  </span>
+                </span>
+                <span className={`shrink-0 text-[20px] font-extrabold leading-none ${h.score >= 85 ? 'text-[#3d9a63]' : h.score >= 60 ? 'text-[#e6a23c]' : 'text-[#e0607e]'}`}>
+                  {h.score}
+                  <span className="ml-0.5 text-[11px] font-normal text-[#9a9aa2]">分</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* TA 的卷子（出给我的 / TA 的答卷） */}
+        <div className="mt-5 px-1 text-[14px] font-bold text-[#26262b]">{ta} 的卷子</div>
+        <div className="mt-2 space-y-2.5">
+          {taPaper && (
+            <button
+              type="button"
+              onClick={() => {
+                if (taPaper.answered && state.examResult) {
+                  setWorkTa(true);
+                  setView('result');
+                } else if (taPaper.answered) {
+                  showToast('这张卷子你答过啦，等 TA 出新卷');
+                } else {
+                  setWorkTa(true);
+                  setAnswers({});
+                  setPage(0);
+                  setView('answer');
+                }
+              }}
+              className="flex w-full items-center gap-3 rounded-2xl border-2 border-dashed border-[#f2536a]/55 bg-white px-4 py-3.5 text-left active:bg-[#fff5f7]"
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
+                <BookOpen className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.8} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[14px] font-semibold text-[#26262b]">
+                  {ta} 给你出了套卷 <span className="text-[#f2536a]">《{taPaper.title}》</span>
+                </span>
+                <span className="block text-[11.5px] text-[#9a9aa2]">{taPaper.answered ? '已答完 · 点此看成绩' : `${taPaper.questions.length} 题 · 点此去答题`}</span>
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
+            </button>
+          )}
+          {state.examTaSheet && (
+            <button type="button" onClick={() => setView('tasheet')} className="flex w-full items-center gap-3 rounded-2xl border border-[#e4e9f6] bg-[#f8faff] px-4 py-3.5 text-left active:opacity-80">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#e8eefb]">
+                <PencilLine className="h-4.5 w-4.5 text-[#576b95]" strokeWidth={1.8} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[14px] font-semibold text-[#26262b]">
+                  {ta} 的答卷 <span className="text-[#576b95]">《{state.examTaSheet.title}》</span>
+                </span>
+                <span className="block text-[11.5px] text-[#9a9aa2]">{state.examTaSheet.myScore != null ? `我批了 ${state.examTaSheet.myScore} 分` : '等我批改'}</span>
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
+            </button>
+          )}
+          {!taPaper && !state.examTaSheet && <div className="rounded-2xl bg-white py-8 text-center text-[12.5px] text-[#b6b6bd] shadow-sm">{ta} 还没出过卷子</div>}
+        </div>
+
+        {/* AI 出的卷子（未作答的存档；永不消失） */}
+        <div className="mt-5 px-1 text-[14px] font-bold text-[#26262b]">AI 出的卷子</div>
+        {aiPapersDesc.length === 0 ? (
+          <div className="mt-2 rounded-2xl bg-white py-8 text-center text-[12.5px] text-[#b6b6bd] shadow-sm">还没有 AI 出的卷子，回题库上滑生成</div>
+        ) : (
+          <div className="mt-2 space-y-2.5">
+            {aiPapersDesc.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => {
+                  setPreview({ id: t.id, title: t.title, usage: 'AI 新卷', notes: t.notes, questions: t.questions.map((q) => ({ ...q, best: -1 })) });
+                  setPage(0);
+                  setView('preview');
+                }}
+                className="flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#fff5f7]"
+              >
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
+                  <BookOpen className="h-4.5 w-4.5 text-[#e0607e]" strokeWidth={1.8} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[14px] font-semibold text-[#26262b]">《{t.title}》</span>
+                  <span className="block text-[11.5px] text-[#9a9aa2]">{t.questions.length} 题 · {fmtDate(t.at)} · 点此预览作答</span>
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
+              </button>
+            ))}
+          </div>
+        )}
+      </SubShell>
+    );
+  }
+
+  // ---------- 我的卷子·成绩详情（第二十一轮：随时回看做过的卷子） ----------
+  if (view === 'mineDetail' && mineSel) {
+    const h = mineSel;
+    const perScore = h.questions.length > 0 ? 100 / h.questions.length : 0;
+    const fmtScore = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+    return (
+      <SubShell title="试卷详情" onBack={() => setView('mine')}>
+        <div className="mt-3 rounded-2xl bg-white p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]">
+          <div className="text-[13px] font-medium text-[#9a9aa2]">《{h.title}》</div>
+          <div className="mt-2 flex items-end justify-center gap-1.5">
+            <span className="text-[52px] font-extrabold leading-none text-[#f2536a]">{h.score}</span>
+            <span className="pb-1.5 text-[15px] text-[#9a9aa2]">分</span>
+            <Medal className="mb-1.5 h-6 w-6 text-[#f5c33c]" strokeWidth={1.8} aria-hidden="true" />
+          </div>
+          <div className="mt-1 text-[15px] font-semibold text-[#4a4a52]">{gradeLabel(h.score)}</div>
+          <div className="mt-4 rounded-xl bg-[#fff5f7] px-4 py-3 text-left">
+            <div className="text-[12px] font-bold text-[#f2536a]">{ta} 的批语</div>
+            <div className="mt-1 text-[13.5px] leading-relaxed text-[#4a4a52]">{h.comment}</div>
+          </div>
+          <div className="mt-2 text-[11px] text-[#c9c9cf]">{h.byTa ? `${ta} 出的卷 · ` : ''}交卷时间 {fmtDateCn(fmtDate(h.at))}</div>
+        </div>
+        <div className="mt-4 space-y-2.5">
+          <div className="px-1 text-[13.5px] font-bold text-[#26262b]">逐题回顾</div>
+          {h.questions.map((q, i) => {
+            const my = h.answers[String(i)];
+            const best = q.best;
+            return (
+              <div key={i} className="rounded-xl bg-white px-3.5 py-2.5 text-[12.5px] shadow-sm">
+                <div className="font-medium text-[#26262b]">
+                  {i + 1}. {q.q}
+                  <span className="ml-1 text-[11px] font-normal text-[#9a9aa2]">（{fmtScore(perScore)}分）</span>
+                </div>
+                <div className="mt-1 text-[#6e6e76]">
+                  你答：<span className={my === best ? 'font-semibold text-[#3d9a63]' : 'text-[#e0607e]'}>{my != null && q.opts[my] ? q.opts[my] : '（未答）'}</span>
+                </div>
+                {my !== best && <div className="text-[#3d9a63]">更好：{best >= 0 && q.opts[best] ? q.opts[best] : ''}</div>}
+              </div>
+            );
+          })}
+        </div>
+        <div className="mb-2 mt-5 flex gap-2.5">
+          <button type="button" onClick={() => setView('mine')} className="h-12 flex-1 rounded-full bg-white text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80">
+            返回我的卷子
+          </button>
+          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-full bg-[#f2536a] text-[15px] font-semibold text-white active:opacity-85">
+            返回题库
+          </button>
+        </div>
+      </SubShell>
+    );
+  }
+
   // ---------- 题库视图（参考图4：官方推荐题库 + 模板卡 + TA 的邀请/答卷入口） ----------
   return (
     <SubShell title="恋爱水平考试" onBack={close} right={state.examBest != null ? <span className="text-[13px] text-[#9a9aa2]">最高 {state.examBest} 分</span> : undefined}>
       <h1 className="mt-3 px-1 text-center text-[30px] font-black tracking-[0.06em] text-[#26262b]">恋爱水平考试</h1>
+
+      {/* 第二十一轮：左上角「我的卷子」+ 右上角「更新」（重新生成更多 AI 卷） */}
+      <div className="mt-3 flex items-center justify-between" data-testid="exam-bank-toolbar">
+        <button
+          type="button"
+          data-testid="exam-mine"
+          onClick={() => setView('mine')}
+          className="flex h-10 items-center gap-1.5 rounded-full bg-white px-4 text-[13.5px] font-semibold text-[#26262b] shadow-sm ring-1 ring-[#e9e9ee] active:bg-[#f7f7f9]"
+        >
+          <Folder className="h-4 w-4 text-[#e0607e]" strokeWidth={2} />
+          我的卷子
+          {(state.examHistory ?? []).length > 0 && (
+            <span className="rounded-full bg-[#fdeef3] px-1.5 py-px text-[10.5px] font-bold text-[#e0607e]">{(state.examHistory ?? []).length}</span>
+          )}
+        </button>
+        <button
+          type="button"
+          data-testid="exam-refresh"
+          aria-label="更新题库"
+          onClick={() => {
+            genFailRef.current = 0;
+            void genMore();
+          }}
+          disabled={genBusy}
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#6e6e76] shadow-sm ring-1 ring-[#e9e9ee] active:bg-[#f7f7f9] disabled:opacity-50"
+        >
+          {genBusy ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <RefreshCcw className="h-4.5 w-4.5" strokeWidth={2} />}
+        </button>
+      </div>
 
       {/* 题库纸卡（装订圈 + 官方推荐题库 + 模板列表） */}
       <div className="mt-3 overflow-hidden rounded-lg bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
@@ -8164,6 +8630,65 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             </div>
           </div>
         </div>
+      </div>
+
+      {/* AI 出的卷子（第二十一轮：上滑到底自动无限生成，之前生成的永不消失；用户配置的 API 模型出题，10~30 题） */}
+      <div className="mt-4">
+        <div className="flex items-baseline justify-between px-1">
+          <div className="text-[14px] font-bold text-[#26262b]">AI 出的卷子</div>
+          <div className="text-[11px] text-[#9a9aa2]">上滑到底自动生成更多</div>
+        </div>
+        {(state.examAiPapers ?? []).length === 0 && !genBusy && (
+          <div className="mt-2 rounded-2xl border border-dashed border-[#e9d5da] bg-white/60 py-6 text-center text-[12px] text-[#b6b6bd]">上滑或点右上角更新，AI 给你出新卷</div>
+        )}
+        <div className="mt-2.5 space-y-3">
+          {(state.examAiPapers ?? []).map((t, idx) => (
+            <div key={t.id} className="relative rounded-[4px] border-[1.5px] border-dashed border-[#e0607e]/55 bg-white p-3.5" data-testid={`exam-ai-paper-${idx}`}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 text-[15px] font-bold leading-snug text-[#26262b]">{t.title}</div>
+                <span className="shrink-0 rounded-full bg-[#fdeef3] px-2 py-0.5 text-[10.5px] font-semibold text-[#e0607e]">AI 新卷</span>
+              </div>
+              <div className="mt-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-[11.5px] text-[#4a4a52]">
+                  <span>共{t.questions.length}题</span>
+                  <span className="text-[#d9d9de]">|</span>
+                  <span>满分100分</span>
+                  <span className="text-[#d9d9de]">|</span>
+                  <span>每题{t.questions.length > 0 ? (Number.isInteger(100 / t.questions.length) ? 100 / t.questions.length : (100 / t.questions.length).toFixed(1)) : 0}分</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreview({ id: t.id, title: t.title, usage: 'AI 新卷', notes: t.notes, questions: t.questions.map((q) => ({ ...q, best: -1 })) });
+                    setPage(0);
+                    setView('preview');
+                  }}
+                  className="shrink-0 rounded-[3px] border-[1.5px] border-[#3c3c42] px-4 py-1 text-[13.5px] font-bold text-[#26262b] active:bg-[#f7f7f9]"
+                >
+                  使用
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        {genBusy && (
+          <div className="mt-3 flex items-center justify-center gap-2 py-2 text-[12.5px] text-[#9a9aa2]" data-testid="exam-gen-loading">
+            <Loader2 className="h-4 w-4 animate-spin" /> AI 正在出新卷…
+          </div>
+        )}
+        {!genBusy && genFailRef.current >= 2 && (
+          <button
+            type="button"
+            onClick={() => {
+              genFailRef.current = 0;
+              void genMore();
+            }}
+            className="mx-auto mt-3 block rounded-full bg-white px-5 py-2 text-[12.5px] text-[#6e6e76] ring-1 ring-[#e9e9ee]"
+          >
+            生成遇到点小问题，点我再试一次
+          </button>
+        )}
+        <div ref={sentinelRef} aria-hidden="true" className="h-2" />
       </div>
 
       {/* 当前激活试卷（继续作答/重考） */}
