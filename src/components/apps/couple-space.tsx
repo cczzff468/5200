@@ -26,11 +26,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   BadgeCheck,
+  BatteryCharging,
   BookHeart,
   Cake,
   CalendarClock,
   CalendarDays,
   Camera,
+  CarFront,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -38,6 +40,8 @@ import {
   Compass,
   Crosshair,
   Crown,
+  Eye,
+  Footprints,
   Gem,
   Gift,
   GripVertical,
@@ -51,9 +55,11 @@ import {
   Info,
   Landmark,
   Loader2,
+  Mail,
   MapPin,
   MessageCircleHeart,
   MessageSquare,
+  Moon,
   MoreVertical,
   NotebookPen,
   Pencil,
@@ -62,12 +68,15 @@ import {
   ClipboardList,
   Medal,
   Orbit,
+  Phone,
   Plane,
   Plus,
   RefreshCcw,
   Scale,
+  Send,
   Settings as SettingsIcon,
   Share2,
+  Smartphone,
   Smile,
   Sparkles,
   Sprout,
@@ -93,6 +102,8 @@ import {
 import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, coupleMemoryDiff, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, type DynReplyLevel } from '@/lib/ios/couple-ai';
 import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, patchPactCardsWhere, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
 import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
+import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
+import { EnvelopeArt, LETTER_ENVELOPES, letterEnvelopeOf } from './couple-letter-bubble';
 import { displayNameOf, isFriendIn } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
 import L from 'leaflet';
@@ -158,8 +169,10 @@ interface CoupleState {
   logins: number[]; // 登录记录（时间戳）
   annivExtra: { key: string; label: string; date: string }[]; // 纪念日列表（预设 + 自建）
   tree: number; // 爱情树成长值（浇水次数）
-  letters: { id: string; text: string; at: number; openAfterDays: number }[]; // 未来情书
-  letterDraft: string; // 未来情书草稿（存草稿按钮）
+  letters: { id: string; text: string; at: number; openAfterDays: number; envelope?: string; sharedAt?: number }[]; // 情书（原未来情书；envelope=信封样式；sharedAt=分享给 TA 时间）
+  letterDraft: string; // 情书草稿（存草稿按钮）
+  letterEnv: string; // 当前选中的信封样式 key（第十八轮）
+  aiLetters: { id: string; text: string; envelope?: string; replyToId?: string; at: number }[]; // TA 写给我的信（AI 回信/主动写信）
   albums: CoupleAlbum[];
   moods: { id: string; emoji: string; text: string; at: number; photo?: string | null; dateKey?: string; from?: 'me' | 'ta' }[]; // 心情日记（from='ta' = AI 写的）
   chronicle: { id: string; text: string; at: number }[]; // 恋爱编年史
@@ -242,6 +255,8 @@ function defaultState(): CoupleState {
     tree: 0,
     letters: [],
     letterDraft: '',
+    letterEnv: 'pinkbunny',
+    aiLetters: [],
     albums: [
       { id: 'ta', name: '拍给TA看', desc: '想看看你每天的样子', photos: [] },
       { id: 'chat', name: '聊天记录', desc: '上传好玩的甜蜜聊天记录', photos: [] },
@@ -1003,6 +1018,18 @@ export default function CoupleSpaceApp() {
     return () => window.removeEventListener(COUPLE_EXAM_NAV_EVENT, nav);
   }, []);
 
+  /** 聊天里的情书信封卡片点击进来（第十八轮）：切到恋人空间时直接打开信件页（LettersPage 挂载后消费具体目标，不进主页） */
+  useEffect(() => {
+    const nav = () => {
+      if (peekPendingLetterOpen()) setSub('letters');
+    };
+    queueMicrotask(() => {
+      if (peekPendingLetterOpen()) setSub('letters');
+    });
+    window.addEventListener(COUPLE_LETTER_NAV_EVENT, nav);
+    return () => window.removeEventListener(COUPLE_LETTER_NAV_EVENT, nav);
+  }, []);
+
   /** 全局头像/名字同步（用户要求：用微信邀请→双方身份跟随微信；QQ 邀请→跟随 QQ）：
    *  渠道 = 关系建立渠道（partnerApp）；我 = 该渠道当前账号档案（社交名 + 分 App 头像槽位），
    *  TA = 绑定恋人联系人（展示名 + 分 App 头像槽位）。
@@ -1648,7 +1675,7 @@ function HomePage(props: {
           { key: 'tree', label: '爱情小树\n成长记', grad: 'linear-gradient(160deg,#5c5c64,#3f3f46)', icon: <Sprout className="h-6 w-6" strokeWidth={1.9} /> },
           { key: 'track', label: '情侣轨迹', grad: 'linear-gradient(160deg,#7c7c85,#5f5f68)', icon: <Compass className="h-6 w-6" strokeWidth={1.9} /> },
           { key: 'quiz', label: '甜蜜\n小问答', grad: 'linear-gradient(160deg,#9c9ca5,#7f7f89)', icon: <MessageCircleHeart className="h-6 w-6" strokeWidth={1.9} /> },
-          { key: 'letters', label: '未来情书', grad: 'linear-gradient(160deg,#bcbcc4,#9e9ea8)', icon: <BookHeart className="h-6 w-6" strokeWidth={1.9} /> },
+          { key: 'letters', label: '情书', grad: 'linear-gradient(160deg,#bcbcc4,#9e9ea8)', icon: <BookHeart className="h-6 w-6" strokeWidth={1.9} /> },
         ] as const).map((c) => (
           <button
             key={c.key}

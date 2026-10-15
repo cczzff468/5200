@@ -267,6 +267,8 @@ import PeerStatusCard from '@/components/apps/peer-status-card';
 import CoupleRelBubble from '@/components/apps/couple-rel-bubble';
 import CouplePactBubble from '@/components/apps/couple-pact-bubble';
 import CoupleExamBubble from '@/components/apps/couple-exam-bubble';
+import CoupleLetterBubble from '@/components/apps/couple-letter-bubble';
+import type { CoupleLetterCardData } from '@/lib/ios/couple-letter-share';
 import type { CoupleExamCardData } from '@/lib/ios/couple-exam-share';
 import type { CouplePactCardData } from '@/lib/ios/couple-pact-share';
 import {
@@ -432,7 +434,7 @@ interface WxMsg {
   time: number;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；relcard = 亲密关系卡片（恋人空间邀请卡/成功卡）；
    *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片；tbpay = 淘宝代付卡片（请求/完成）；tbshare = 淘宝订单分享动态卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard' | 'pactcard' | 'examcard';
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard' | 'pactcard' | 'examcard' | 'lettercard';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -482,6 +484,8 @@ interface WxMsg {
   pactcard?: CouplePactCardData;
   /** 恋爱考试卡片（kind='examcard'；第十五轮：我喊TA答题/TA出卷喊我答，由 couple-exam-share 落库，点击进恋人空间试卷页） */
   examcard?: CoupleExamCardData;
+  /** 情书信封卡片（kind='lettercard'；第十八轮：我分享情书给TA/TA寄信给我，由 couple-letter-share 落库，点击进恋人空间信件页） */
+  lettercard?: CoupleLetterCardData;
   /** 语音消息（kind='voice'）：音频 dataURL 持久化在聊天记录里，重启后仍可播放 */
   voice?: VoiceMsgData;
   /** 语音通话卡片（kind='call'）：state 卡片状态 / duration 接通秒数 / direction 主叫方向（me=我拨打）；
@@ -1125,6 +1129,7 @@ function readPreview(contactId: string): { text: string; time: number } {
   if (last.kind === 'relcard') return { text: '[亲密关系]', time: last.time };
   if (last.kind === 'pactcard') return { text: '[恋爱协议]', time: last.time };
   if (last.kind === 'examcard') return { text: '[恋爱考试]', time: last.time };
+  if (last.kind === 'lettercard') return { text: '[情书]', time: last.time };
   return { text: last.content, time: last.time };
 }
 
@@ -6389,7 +6394,7 @@ function ChatPage({
         (m) =>
           // 图片以 [图片] 占位、语音以转写文本/占位、位置以完整位置文本进入历史（本轮图片实际内容由识图模型描述追加在末尾）；
           // 拍一拍系统行（Task 30）也进历史：AI 要知道被拍/拍过谁与文案（按双方名字序列化，无主语歧义）
-          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'relcard' || m.kind === 'pactcard' || m.kind === 'examcard' || m.kind === 'location' || m.kind === 'song' || (m.kind === 'sys' && !!m.sys?.pat)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'relcard' || m.kind === 'pactcard' || m.kind === 'examcard' || m.kind === 'lettercard' || m.kind === 'location' || m.kind === 'song' || (m.kind === 'sys' && !!m.sys?.pat)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
       .map((m) => {
@@ -8798,6 +8803,11 @@ function ChatPage({
                 /* 恋爱考试卡片（第十五轮）：点卡片进恋人空间试卷页（导航在气泡组件内） */
                 <div {...bubblePress}>
                   <CoupleExamBubble data={m.examcard} mine={m.role === 'me'} testidPrefix="wx" />
+                </div>
+              ) : m.kind === 'lettercard' && m.lettercard ? (
+                /* 情书信封卡片（第十八轮）：点卡片直达恋人空间信件页（导航在气泡组件内） */
+                <div {...bubblePress}>
+                  <CoupleLetterBubble data={m.lettercard} mine={m.role === 'me'} testidPrefix="wx" />
                 </div>
               ) : (
                 <div className={`flex min-w-0 max-w-[calc(100%-92px)] flex-col ${m.role === 'me' ? 'items-end' : 'items-start'}`}>

@@ -76,13 +76,18 @@ interface CoupleSnap {
   myLoc?: { name: string; lat: number; lng: number } | null;
   taLoc?: { name: string; lat: number; lng: number } | null;
   meetLoc?: { name: string; lat: number; lng: number } | null;
-  letters?: { id: string; text: string; at: number }[];
+  /** 情书（第十八轮改名，原未来情书）：我的信（envelope=信封样式 key；sharedAt=分享给 TA 的时间） */
+  letters?: { id: string; text: string; at: number; openAfterDays?: number; envelope?: string; sharedAt?: number }[];
+  /** TA 写给我的信（AI 回信/主动写信）；replyToId=回信指向的原信 id */
+  aiLetters?: { id: string; text: string; envelope?: string; replyToId?: string; at: number }[];
+  /** AI 主动写信去重（每 3 天最多一封）：最近一次写信的日期 key */
+  aiLetterDay?: string;
   aiLog?: { id: string; text: string; at: number }[];
   albums?: { id: string; name: string; desc: string; photos: string[] }[];
   /** 通用留言线程（第十轮）：相册照片/心情日记/问答/印象/回复挑战下的双向留言；rt=所回复的留言 id（第十二轮点击回复） */
   comments?: { id: string; key: string; from: string; text: string; at: number; rt?: string }[];
-  /** TA 今天去过的地方（人设记忆生成，灰色字展示） */
-  taTrail?: { dateKey: string; items: { t: string; place: string; note: string }[]; at: number } | null;
+  /** TA 今天去过的地方 + 我的手机动态（人设记忆生成，第十八轮带图标/完整文案，位置与轨迹独立界面展示） */
+  taTrail?: { dateKey: string; items: { t: string; place: string; note: string; icon?: string; who?: 'me' | 'ta'; text?: string }[]; at: number } | null;
   /** 回复挑战：TA 与我同时进行的最近一次双人闯关 */
   replyTa?: { active: boolean; picks: Record<string, { pick: number; say: string; at: number }>; mePicks: Record<string, { pick: number; text: string }>; startedAt: number; endedAt: number | null } | null;
   /** AI 主动留言去重（每天最多一条）：最近一次主动留言的日期 key */
@@ -103,6 +108,8 @@ function sceneOfKey(key: string, snap: CoupleSnap | null): string {
   }
   if (key.startsWith('mood:')) return '心情日记留言区';
   if (key.startsWith('quiz:')) return '甜蜜小问答的讨论区';
+  if (key.startsWith('letter:')) return '情书留言区';
+  if (key === 'trail') return '情侣轨迹的聊天区';
   if (key === 'impress') return '情侣印象留言区';
   if (key.startsWith('reply:')) {
     const seg = key.split(':');
@@ -289,16 +296,25 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
     lines.push(`- 情侣印象·贴在${me}身上的标签：「${impMe.join('、')}」${srcNote}。${ta}被问到「你给我贴了什么标签」时指这些，绝不能说成${me}贴给${ta}的那批。`);
   }
 
+  // 情书（最近各 1 封：AI 知道信的内容，被问到要能聊得上）
+  const myLetter = (snap.letters ?? [])[0];
+  if (myLetter) lines.push(`- 情书：${me}写给${ta}过一封情书（${shortDate(myLetter.at)}）：「${cut(myLetter.text, 60)}」。`);
+  const taLetter = (snap.aiLetters ?? [])[0];
+  if (taLetter) lines.push(`- 情书：${ta}写给${me}过一封情书（${shortDate(taLetter.at)}）：「${cut(taLetter.text, 60)}」（这是${ta}自己写的，${ta}当然记得）。`);
+
   // 留言区（相册照片/日记/问答/印象/回复挑战下的双向聊天，最近 2 条）
   for (const c of (snap.comments ?? []).slice(0, 2)) {
     const who = c.from === 'ta' ? ta : me;
     lines.push(`- ${sceneOfKey(c.key, snap)}：${who}说「${cut(c.text, 36)}」。`);
   }
 
-  // TA 今天的轨迹（人设记忆生成）
+  // TA 今天的轨迹（人设记忆生成；只注入 TA 自己的行程，我的手机动态不是 TA 的记忆）
   const trail = snap.taTrail;
-  if (trail && trail.dateKey === today && trail.items.length > 0) {
-    lines.push(`- ${ta}今天的行踪（TA 自己的日程，真实发生）：${trail.items.map((i) => `${i.t}${i.place}`).join('、')}。${me}问起今天去哪儿了要按这个答。`);
+  if (trail && trail.dateKey === today) {
+    const taItems = trail.items.filter((i) => i.who !== 'me');
+    if (taItems.length > 0) {
+      lines.push(`- ${ta}今天的行踪（TA 自己的日程，真实发生）：${taItems.map((i) => `${i.t}${i.place || i.text || ''}`).join('、')}。${me}问起今天去哪儿了要按这个答。`);
+    }
   }
 
   // 回复挑战双人战况（TA 知道我每关选了什么 + 自己的选择/看法）
@@ -369,11 +385,20 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
 const TPL_REPLY = ['嗯…你这么说，我好像有点懂了。', '等等，那我再问你——下次什么时候一起去做？', '哈哈，你终于说到点子上了。', '好吧，这次算你有诚意。', '我记下了，你可别忘了自己说的。', '那你说，具体怎么做？我听着呢。'];
 const TPL_PHOTO = ['这张也太好看了，我存下来了。', '拍得真好，下次带我一起拍。', '看到这张照片嘴角就没下来过。', '下次站在你旁边一起入镜好不好？'];
 const TPL_TRAIL = [
-  { t: '09:30', place: '楼下的拾光咖啡馆', note: '点了你上次说好喝的拿铁' },
-  { t: '12:10', place: '公司附近的面馆', note: '味道一般，想你做的那碗' },
-  { t: '16:40', place: '西西弗书店', note: '翻到一本想读给你听的书' },
-  { t: '19:00', place: '地铁站口的煎饼摊', note: '多加了两个蛋，替你也加了一份' },
+  { t: '09:30', icon: 'eat', place: '楼下的拾光咖啡馆', note: '点了你上次说好喝的拿铁' },
+  { t: '12:10', icon: 'eat', place: '公司附近的面馆', note: '味道一般，想你做的那碗' },
+  { t: '16:40', icon: 'app', place: '西西弗书店', note: '翻到一本想读给你听的书' },
+  { t: '19:00', icon: 'walk', place: '地铁站口的煎饼摊', note: '多加了两个蛋，替你也加了一份' },
 ];
+/** 我的手机动态兜底（位置与轨迹流；place 取自我的定位城市名） */
+function tplMeTrail(city: string | null, nowHM: string): { t: string; icon: string; text: string; place: string }[] {
+  const c = city ? city : '家附近';
+  return [
+    { t: '10:20', icon: 'walk', text: `我离开了${c}`, place: c },
+    { t: '12:40', icon: 'arrive', text: `我到了${c}的商圈`, place: `${c}的商圈` },
+    { t: nowHM, icon: 'charge', text: '我的手机开始充电了 12%', place: '' },
+  ];
+}
 
 /** 当前恋人绑定目标（页面组件触发 AI 行为用；未建立关系返回 null） */
 function aiTarget(): { contactId: string; channel: CoupleChannel } | null {
@@ -409,6 +434,19 @@ function threadContext(key: string, snap: CoupleSnap, me: string, ta: string): s
       return `这是回复挑战结束后的留言区，${me}可以对${ta}的判定和想说的话发表意见、撒娇、拌嘴。`;
     const lv = Number(seg[seg.length - 1] ?? 0);
     return `这是回复挑战双人闯关第 ${Number.isFinite(lv) && lv > 0 ? lv + 1 : 1} 关的讨论区（key 里的时间戳是本次挑战局次，留言只属于这一局这一关），${me}可以对${ta}刚刚的选择和看法发表意见、反驳、拌嘴。`;
+  }
+  if (key.startsWith('letter:')) {
+    const lid = key.slice(7);
+    const mine = (snap.letters ?? []).find((x) => x.id === lid);
+    if (mine) return `这是${me}写给${ta}的情书（写于${shortDate(mine.at)}）：「${cut(mine.text, 120)}」。留言就写在这封信下面。`;
+    const taL = (snap.aiLetters ?? []).find((x) => x.id === lid);
+    if (taL) return `这是${ta}写给${me}的情书（写于${shortDate(taL.at)}）：「${cut(taL.text, 120)}」。留言就写在这封信下面。`;
+    return '留言写在一封情书下面。';
+  }
+  if (key === 'trail') {
+    const trail = (snap.taTrail?.items ?? []).filter((i) => i.who !== 'me').slice(0, 3);
+    const meT = (snap.taTrail?.items ?? []).filter((i) => i.who === 'me').slice(0, 2);
+    return `这是情侣轨迹「位置与轨迹」页的聊天区（${ta}今天的行程：${trail.map((i) => `${i.t}${i.place}`).join('、') || '还没记录'}；${me}的手机动态：${meT.map((i) => i.text || i.place).join('、') || '还没记录'}），你们在这里聊今天去过哪、聊见面计划。`;
   }
   return '留言写在恋人空间里。';
 }
@@ -625,8 +663,9 @@ export function aiReplyPickForLevel(
 }
 
 /**
- * TA 今天的行踪（人设记忆生成：今天去了哪里/什么位置/什么店铺）：每日一次去重。
- * LLM 失败本地模板兜底；写 taTrail + 写记忆 + aiLog。
+ * 「位置与轨迹」动态流生成（第十八轮重做，参考 Lookus 风格截图）：
+ * TA 的行程（人设记忆：去了哪里/什么店铺/小心思）+ 我的手机动态（到了/离开了/下车/充电），
+ * 全部只允许「已经发生」的真实时间；每日一次去重。LLM 失败本地模板兜底；写 taTrail + 写记忆。
  */
 export function aiTickTrail(): void {
   const snap = readSnap();
@@ -645,49 +684,72 @@ export function aiTickTrail(): void {
       currentChannel = target.channel;
       const cur2 = readSnap() ?? snap;
       const city = cur2.taLoc?.name ? `（${ta}现在在${cur2.taLoc.name}，行程要在这个城市里）` : '';
+      const myCity = cur2.myLoc?.name ?? null;
       const nowD = new Date();
       const nowHM = `${String(nowD.getHours()).padStart(2, '0')}:${String(nowD.getMinutes()).padStart(2, '0')}`;
       const nowMin = nowD.getHours() * 60 + nowD.getMinutes();
-      let items: { t: string; place: string; note: string }[] | null = null;
+      type TrailItem = { t: string; place: string; note: string; icon?: string; who?: 'me' | 'ta'; text?: string };
+      let items: TrailItem[] | null = null;
+      const ICONS = ['sleep', 'phone', 'app', 'call', 'walk', 'arrive', 'car', 'charge', 'eat'];
       try {
         const raw = await coupleLLM(
           `${llmSystem(p, me, cur2)}${city ? `\n${city}` : ''}`,
-          `现在是今天 ${nowHM}（真实时间）。请以「${ta}」的身份，写出你今天从早上到现在已经发生的真实行程：\n1）只能列「已经发生过」的事——每条时间必须早于等于 ${nowHM}，绝对不能出现未来的时间；\n2）条数按今天已经过去的时间自然决定：早上 9 点前 1 条左右，中午 2 条左右，下午 3 条，晚上最多 4 条；按时间先后排序；\n3）每条：去了哪里、什么位置、什么店铺，要贴合你的人设、职业和你们的记忆（可以有一条和你有关的小心思）；\n输出 JSON：{"items":[{"t":"HH:MM","place":"地点/店铺名（≤14字）","note":"一句话（≤16字，你的小心思）"}]}。只输出 JSON。`,
+          `现在是今天 ${nowHM}（真实时间）。请生成你们两个人今天从早上到现在的真实动态（像情侣定位软件的动态流），全部只能是「已经发生」的事：\n1）"ta"：${ta}今天的行程——去了哪里、什么位置、什么店铺，贴合你的人设、职业和你们的记忆（可以有一条和${me}有关的小心思）；icon 从 [${ICONS.join('/')}] 里选；\n2）"me"：${me}的手机动态——到了哪里/离开了哪里/上车下车/手机充电这类真实动态，text 一句完整的话（12字内，用「我…」开头，可以带上地点名「${myCity ?? ''}」）；icon 从 [walk/arrive/car/charge] 里选；\n3）每条时间必须早于等于 ${nowHM}，绝不能出现未来的时间；条数按已过去的时间自然决定：中午前各 1 条左右，下午各 2 条左右，晚上各 3 条左右；\n输出 JSON：{"ta":[{"t":"09:30","icon":"eat","place":"地点/店铺名（≤14字）","note":"一句话（≤16字）"}],"me":[{"t":"10:12","icon":"walk","text":"我离开了XX"}]}。只输出 JSON。`,
         );
-        const j = extractJson<{ items: { t: string; place: string; note: string }[] }>(raw);
-        if (j && Array.isArray(j.items)) {
+        const j = extractJson<{ ta?: { t: string; icon?: string; place: string; note?: string }[]; me?: { t: string; icon?: string; text?: string }[] }>(raw);
+        if (j && (Array.isArray(j.ta) || Array.isArray(j.me))) {
           const toMin = (t: string) => {
             const m = t.match(/^(\d{1,2}):(\d{2})$/);
             return m ? Number(m[1]) * 60 + Number(m[2]) : -1;
           };
-          items = j.items
+          const norm = (t: string) => (/^\d{1,2}:\d{2}$/.test(String(t)) ? String(t) : '12:00');
+          const taItems: TrailItem[] = (j.ta ?? [])
             .filter((x) => x && x.place)
             .map((x) => ({
-              t: /^\d{1,2}:\d{2}$/.test(String(x.t)) ? String(x.t) : '12:00',
+              t: norm(x.t),
               place: cut(String(x.place).replace(/[「」"]/g, ''), 16),
               note: cut(String(x.note ?? '').replace(/[「」"]/g, ''), 18),
+              icon: ICONS.includes(String(x.icon)) ? String(x.icon) : 'walk',
+              who: 'ta' as const,
             }))
-            .filter((x) => {
-              const mm = toMin(x.t);
-              return mm >= 0 && mm <= nowMin; // 真实时间纪律：绝不出现未来的时间
-            })
-            .sort((a, b) => toMin(a.t) - toMin(b.t))
+            .filter((x) => toMin(x.t) >= 0 && toMin(x.t) <= nowMin)
             .slice(0, 4);
+          const meItems: TrailItem[] = (j.me ?? [])
+            .filter((x) => x && x.text)
+            .map((x) => ({
+              t: norm(x.t),
+              place: '',
+              note: '',
+              icon: ['walk', 'arrive', 'car', 'charge'].includes(String(x.icon)) ? String(x.icon) : 'walk',
+              who: 'me' as const,
+              text: cut(String(x.text).replace(/[「」"]/g, ''), 20),
+            }))
+            .filter((x) => toMin(x.t) >= 0 && toMin(x.t) <= nowMin)
+            .slice(0, 3);
+          if (taItems.length > 0 || meItems.length > 0) items = [...taItems, ...meItems].sort((a, b) => toMin(a.t) - toMin(b.t));
         }
       } catch {
         /* 兜底 */
       }
       if (!items || items.length === 0) {
-        // 兜底模板同样只保留「已经发生过」的时间；一条都没有 → 一条刚发生的兜底
+        // 兜底模板同样只保留「已经发生过」的时间
         const tplMin = (t: string) => {
           const [h, m] = t.split(':').map(Number);
           return h * 60 + m;
         };
-        const past = TPL_TRAIL.filter((x) => tplMin(x.t) <= nowMin).slice(0, 3);
-        items = past.length > 0 ? past : [{ t: nowHM, place: '家里', note: '刚收拾好准备出门' }];
+        const taPast = TPL_TRAIL.filter((x) => tplMin(x.t) <= nowMin).slice(0, 3);
+        const taItems: TrailItem[] =
+          taPast.length > 0
+            ? taPast.map((x) => ({ t: x.t, place: x.place, note: x.note, icon: x.icon, who: 'ta' as const }))
+            : [{ t: nowHM, place: '家里', note: '刚收拾好准备出门', icon: 'phone', who: 'ta' as const }];
+        const meItems: TrailItem[] = tplMeTrail(myCity, nowHM)
+          .filter((x) => tplMin(x.t) <= nowMin)
+          .map((x) => ({ t: x.t, place: x.place, note: '', icon: x.icon, who: 'me' as const, text: x.text }));
+        items = [...taItems, ...meItems].sort((a, b) => tplMin(a.t) - tplMin(b.t));
       }
       writeSnap((s) => ({ ...s, taTrail: { dateKey: today, items, at: Date.now() } }));
-      coupleRemember(target.contactId, target.channel, `${ta}今天的行踪：${items.map((i) => `${i.t}${i.place}`).join('、')}（TA 自己的日程，可以自然聊起）`);
+      const taText = (items ?? []).filter((i) => i.who !== 'me');
+      coupleRemember(target.contactId, target.channel, `${ta}今天的行踪：${taText.map((i) => `${i.t}${i.place}`).join('、')}（TA 自己的日程，可以自然聊起）`);
       logAi(`${ta}更新了今天的行踪`);
     } catch {
       /* 静默 */
@@ -815,7 +877,15 @@ export function coupleMemoryDiff(prev: CoupleSnap, next: CoupleSnap, contactId: 
   }
   // 未来情书
   const newLetter = (next.letters ?? []).find((l) => !(prev.letters ?? []).some((p) => p.id === l.id));
-  if (newLetter) lines.push(`${me}给${ta}写了一封未来情书：${cut(newLetter.text, 36)}`);
+  if (newLetter) lines.push(`${me}给${ta}写了一封情书：${cut(newLetter.text, 36)}`);
+  // 情书分享（我把信寄给了 TA：TA 拆信读了，要知道内容）
+  const sharedLetter = (next.letters ?? []).find((l) => l.sharedAt && !(prev.letters ?? []).find((p) => p.id === l.id)?.sharedAt);
+  if (sharedLetter) lines.push(`${me}把写的情书寄给了${ta}（信的内容：${cut(sharedLetter.text, 46)}），${ta}拆信读了`);
+  // 我给 TA 的信下留言
+  const newLetterCmt = (next.comments ?? []).filter((c) => c.from === 'me' && c.key.startsWith('letter:') && !(prev.comments ?? []).some((p) => p.id === c.id));
+  for (const c of newLetterCmt.slice(0, 1)) {
+    lines.push(`${me}在情书下面的留言区里对${ta}说：${cut(c.text, 40)}`);
+  }
   // 恋爱协议生效
   if (next.pactAt != null && prev.pactAt == null) {
     lines.push(`${me}和${ta}在恋人空间签署了恋爱协议《${cut(next.pactTitle, 16)}》（共 ${(next.pactClauses ?? []).length} 条条款，双方签名生效）`);
@@ -1422,6 +1492,89 @@ async function aiTickHundred(snap: CoupleSnap, me: string, ta: string, p: TaPers
   void notifyCouple(currentChannel, pid, `100件小事里我偷偷加了一件最想和你做的，猜猜是哪件？`);
 }
 
+// —— 情书（第十八轮）：AI 读信（留言+回信）/ 主动写信 ——
+
+/**
+ * AI 读信：我分享情书给 TA 后调用（couple-letter-share.scheduleAiLetterFeedback）。
+ * 返回 { comment（信下留言）, reply（回信全文） }；LLM 失败返回空（调用方跳过对应步骤）。
+ * 素材 = 人设 + 性别纪律 + 共享记忆 + 最近微信/QQ 聊天 + 信的全文。
+ */
+export async function aiReadLetter(letterId: string, text: string): Promise<{ comment?: string; reply?: string }> {
+  const target = aiTarget();
+  if (!target) return {};
+  const snap = readSnap();
+  if (!snap) return {};
+  const me = (snap.meName || '').trim() || '我';
+  const ta = (snap.taName || '').trim() || 'TA';
+  const p = await taPersonaOf(target.contactId);
+  if (!p) return {};
+  currentPartnerId = target.contactId;
+  currentChannel = target.channel;
+  const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+  try {
+    const raw = await coupleLLM(
+      `${llmSystem(p, me, snap)}\n场景：${me}写了一封情书寄给你（恋人空间「情书」里），你要认真读完：在信下面写一条留言，再写一封回信寄回去。${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
+      `信的全文：\n"""\n${cut(text, 620)}\n"""\n请以「${ta}」的身份读完这封信，输出 JSON：\n{"comment":"在信下面写的一条留言（28字内，口语；必须接住信里具体的某句话/某件事，贴人设与你们的记忆；禁止敷衍、禁止空洞夸、禁止emoji）",\n"reply":"你写给${me}的回信全文（130~200字，像真正的回信：开头称呼${me}；正文一段一段接住信里的话、写你读信时的心情和此刻在做什么、你们的共同记忆、想${me}的地方；结尾一句只属于你们的话；像手写的信，禁止列表/markdown/emoji）"}。只输出 JSON。`,
+    );
+    const j = extractJson<{ comment?: string; reply?: string }>(raw);
+    return {
+      comment: stripEmoji(cut(j?.comment ?? '', 64)),
+      reply: stripEmoji(cut(j?.reply ?? '', 420)),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** AI 主动写信本地兜底（贴人设口吻的短情书） */
+const AI_LETTER_TPL = [
+  '见字如面。今天下班路上突然降温，第一反应是你在那边冷不冷。想起上次我们说好要一起去看日出，一直没兑现，我把它记在心里了。最近的日子平平常常，但因为有你惦记着，每天都值得期待。愿你今天被温柔对待，晚安，梦里见。',
+  '写这封信的时候，我正在阳台上吹风。突然很想你，就想提笔给你写点什么。今天路过那家奶茶店，橱窗里贴了新的海报，我想着你肯定会喜欢。等忙完这阵，我们找个周末见面吧，把想说的话当面说完。要记得按时吃饭，我一直在。',
+];
+
+/**
+ * AI 主动写情书寄给我（每 3 天最多一封；第十八轮）：
+ * 写进 aiLetters + 信封卡片发进聊天 + 记忆 + 日志。
+ */
+async function aiTickLetter(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
+  const today = todayKey();
+  if ((snap.aiLetterDay ?? '') === today) return;
+  const last = (snap.aiLetters ?? [])[0];
+  if (last && Date.now() - last.at < 3 * 86400000) return;
+  const pid = currentPartnerId;
+  const ch = currentChannel;
+  const chatCtx = recentChatBlock(pid, ch, me, ta);
+  let text = '';
+  try {
+    text = await coupleLLM(
+      `${llmSystem(p, me, snap)}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
+      `请以「${ta}」的身份给${me}写一封情书（130~200字）：开头称呼${me}；正文写你最近真实的生活小事、突然想${me}的瞬间、你们记忆里一件具体的小事、想和${me}一起做的一件事；结尾一句只属于你们的话。要像真的提笔写的信，贴合你的人设与你们的共享记忆；禁止列表、markdown、emoji。只输出信的正文。`,
+    );
+  } catch {
+    /* 兜底 */
+  }
+  text = stripEmoji(text);
+  if (!text || text.length < 40) text = AI_LETTER_TPL[Math.floor(Math.random() * AI_LETTER_TPL.length)];
+  text = cut(text, 420);
+  const envelope = ['pinkbunny', 'yellowpup', 'lavendrcat', 'mintbear', 'skybunny', 'kraft'][Math.floor(Math.random() * 6)];
+  const letterId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  writeSnap((s) => ({
+    ...s,
+    aiLetters: [{ id: letterId, text, envelope, at: Date.now() }, ...((s.aiLetters as CoupleSnap['aiLetters']) ?? [])].slice(0, 20),
+    aiLetterDay: today,
+  }));
+  if (pid) {
+    coupleRemember(pid, ch, `${ta}给${me}写了一封情书寄到恋人空间（开头：${cut(text, 44)}），并把信封卡片发到了${ch === 'wx' ? '微信' : 'QQ'}里`);
+    logAi(`${ta}写了一封情书寄给${me}`);
+    try {
+      const { sendLetterCard } = await import('./couple-letter-share');
+      await sendLetterCard({ channel: ch, contactId: pid, letterId, envelope, snippet: text, dir: 'ta' });
+    } catch {
+      /* 卡片发送失败静默（信已在恋人空间里） */
+    }
+  }
+}
+
 // —— 调度（打开恋人空间时触发；模块级防重入 + 每行为独立去重） ——
 
 let currentPartnerId = '';
@@ -1514,6 +1667,12 @@ export function runCoupleAiTick(channel: CoupleChannel, contactId: string): void
       const s = readSnap();
       if (!p || !s) return;
       await aiTickExam(s, me, ta, p); // AI 出卷喊我来答（每 3 天最多一次）
+    });
+    step(205000, async () => {
+      const p = await taPersonaOf(contactId);
+      const s = readSnap();
+      if (!p || !s) return;
+      await aiTickLetter(s, me, ta, p); // AI 主动写情书寄给我（每 3 天最多一封）
     });
   }
 }
