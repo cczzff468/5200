@@ -69,7 +69,6 @@ import {
   Pencil,
   PencilLine,
   BookOpen,
-  ClipboardList,
   Medal,
   ShieldCheck,
   Orbit,
@@ -83,6 +82,7 @@ import {
   Send,
   Settings as SettingsIcon,
   Share2,
+  Signal,
   Smartphone,
   Smile,
   Sparkles,
@@ -231,7 +231,7 @@ interface CoupleState {
   aiImpressAt: number | null; // AI 上次贴印象时间
   aiAnnivKeys: string[]; // AI 添加的纪念日 key
   aiHundred: { idx: number; note: string; why: string; at: number }[]; // AI 发起的 100 件小事
-  aiPact: { title: string; preamble: string; clauses: string[]; at: number; signTa?: string | null } | null; // AI 拟的协议草稿（第十六轮起 TA 会先签上自己的名字再分享，等我签）
+  aiPact: { title: string; preamble: string; clauses: string[]; at: number; signTa?: string | null; declined?: boolean } | null; // AI 拟的协议草稿（第十六轮起 TA 会先签上自己的名字再分享，等我签；declined=我拒绝了，第二十三轮）
   aiLog: { id: string; text: string; at: number }[]; // AI 行为日志
   invite: CoupleInviteMeta; // 邀请元数据（全局唯一：恋人绑定/待处理邀请/每联系人限一次历史）
   comments: { id: string; key: string; from: 'me' | 'ta'; text: string; at: number; rt?: string }[]; // 通用留言线程（第十轮）：相册照片/日记/印象/挑战讨论下的双向留言；rt=所回复的 TA 留言 id（第十二轮点击回复）
@@ -243,7 +243,7 @@ interface CoupleState {
   statusExam: { my: Record<string, number>; ta: Record<string, number>; at: number | null; rep?: { me: StatusResult; ta: StatusResult; overall: string } | null } | null; // 恋爱状态测评：双方答题记录 + 生成过的报告（我和 AI 同步答）
   examPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[]; best?: number }[]; source: 'me' | 'ta'; at: number; taLive?: { picks: Record<string, number>; thoughts: Record<string, string> } | null } | null; // 恋爱水平考试：当前激活的试卷（可反复作答；source='ta'=TA 出卷喊我答；taLive=第二十一轮陪答：TA 的同步选择与想法）
   examTaPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[] }[]; at: number; answered?: boolean } | null; // 恋爱水平考试：TA 出卷喊我答的卷子（点聊天卡片直达答题）
-  examTaSheet: { title: string; picks: Record<string, number>; score?: number; comment?: string; at: number; myScore?: number | null; myComment?: string; taReply?: string } | null; // 恋爱水平考试：TA 的答卷（第十七轮：TA 只作答交卷不自评——打分批语由我来给；myScore/myComment=我给 TA 的批改与批语，taReply=TA 在我批语下的留言）
+  examTaSheet: { title: string; picks: Record<string, number>; score?: number; comment?: string; at: number; myScore?: number | null; myComment?: string; taReply?: string; myMarks?: Record<string, { ok: boolean; score: number }> } | null; // 恋爱水平考试：TA 的答卷（第十七轮：TA 只作答交卷不自评；myScore/myComment=我给 TA 的批改与批语；myMarks=第二十二轮：我给每题打的对错与分数；taReply=TA 在我批语下的留言）
   examResult: { title: string; score: number; comment: string; answers: Record<string, number>; byTa: boolean; at: number } | null; // 恋爱水平考试：我最近一次被改卷的成绩（分数下面是 TA 想说的话）
   examAiPapers: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[] }[]; at: number }[]; // 恋爱水平考试：AI 出的卷子库（第二十一轮：上滑无限追加、永不消失；10~30 题）
   examHistory: { id: string; title: string; score: number; comment: string; answers: Record<string, number>; byTa: boolean; questions: { q: string; opts: string[]; best: number }[]; at: number }[]; // 恋爱水平考试：做过的卷子存档（第二十一轮「我的卷子」；我的+TA 的都进）
@@ -3291,7 +3291,6 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
 
   // —— 位置与轨迹独立界面：聊天区（写进 AI 记忆） ——
   const [trailDraft, setTrailDraft] = useState('');
-  const trailListRef = useRef<HTMLDivElement | null>(null);
   const trailMsgs = useMemo(() => state.comments.filter((c) => c.key === 'trail').sort((a, b) => a.at - b.at), [state.comments]);
   /** 「对方正在输入…」：我发过后 12s 内且 TA 还没回出更新的消息 */
   const lastTrail = trailMsgs[trailMsgs.length - 1];
@@ -3299,10 +3298,6 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
     (state.trailChatsAt ?? 0) > 0 &&
     Date.now() - (state.trailChatsAt ?? 0) < 12000 &&
     !(lastTrail && lastTrail.from === 'ta' && lastTrail.at > (state.trailChatsAt ?? 0));
-  useEffect(() => {
-    const el = trailListRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [trailPage, trailMsgs.length]);
   const sendTrail = () => {
     const t = trailDraft.trim();
     if (!t) return;
@@ -3326,9 +3321,10 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
   const [trailDetail, setTrailDetail] = useState<CoupleTrailRec | null>(null);
   const trailEarlyRef = useRef(2); // 更早生成起点（今天+昨天已自动生成）
   const trailFeedInitRef = useRef(false);
+  const trailScrollRef = useRef<HTMLDivElement | null>(null);
   const trailFeedRecs = useMemo(() => {
     const recs = [...(state.trailFeed ?? [])];
-    recs.sort((a, b) => (a.dateKey === b.dateKey ? a.t.localeCompare(b.t) : a.dateKey < b.dateKey ? 1 : -1)); // 新日期在前，日内按时间升序
+    recs.sort((a, b) => (a.dateKey === b.dateKey ? a.t.localeCompare(b.t) : a.dateKey < b.dateKey ? -1 : 1)); // 升序（老→新，像聊天一样从上往下）
     return recs;
   }, [state.trailFeed]);
   useEffect(() => {
@@ -3343,6 +3339,49 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
       /* 静默 */
     }
   }, [trailPage]);
+
+  // 第二十二轮：记录与聊天消息交织成一条时间线（Lookus 风格，老→新，自动滚到底部）
+  type TrailLine =
+    | { kind: 'day'; key: string; label: string }
+    | { kind: 'rec'; key: string; rec: CoupleTrailRec }
+    | { kind: 'msg'; key: string; msg: { id: string; from: 'me' | 'ta'; text: string; at: number } };
+  const trailLines = useMemo<TrailLine[]>(() => {
+    const items: { sort: number; line: TrailLine }[] = [];
+    for (const r of trailFeedRecs) {
+      const ts = new Date(`${r.dateKey}T${r.t}:00`).getTime();
+      items.push({ sort: Number.isNaN(ts) ? 0 : ts, line: { kind: 'rec', key: r.id, rec: r } });
+    }
+    for (const m of trailMsgs) items.push({ sort: m.at, line: { kind: 'msg', key: m.id, msg: m } });
+    items.sort((a, b) => a.sort - b.sort);
+    const out: TrailLine[] = [];
+    let lastDay = '';
+    for (const it of items) {
+      const d = new Date(it.sort);
+      const dk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (dk !== lastDay) {
+        lastDay = dk;
+        out.push({ kind: 'day', key: `day-${dk}`, label: fmtDateCn(dk) });
+      }
+      out.push(it.line);
+    }
+    return out;
+  }, [trailFeedRecs, trailMsgs]);
+  useEffect(() => {
+    if (!trailPage) return;
+    const el = trailScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [trailPage, trailLines.length]);
+  /** 顶栏状态行：使用中 + 电量（取最近一条充电记录的百分比，没有则 70）+ 移动网络 */
+  const trailBattery = useMemo(() => {
+    let v = 70;
+    for (const r of trailFeedRecs) {
+      if (r.kind === 'chargeOn' || r.kind === 'chargeOff') {
+        const m = r.text.match(/(\d+)%/);
+        if (m) v = Number(m[1]);
+      }
+    }
+    return v;
+  }, [trailFeedRecs]);
 
   return (
     <div className="relative flex h-full flex-col">
@@ -3478,10 +3517,10 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
         <span className="pointer-events-none absolute bottom-1.5 right-2 z-10 text-[9px] text-[#8a8f95]">恋人地图 · 真实位置</span>
       </div>
 
-      {/* 位置与轨迹（第二十一轮重做，参考用户截图：聊天式界面——顶部对方名字+在线状态，时间线记录（AI 按人设+记忆+上下文+真实时间生成）+ 查看记录详情 + 底部聊天，发信息期间也会继续生成记录） */}
+      {/* 位置与轨迹（第二十二轮 Lookus 风格：顶栏名字+使用状态行；记录与聊天消息交织成一条时间线——白底记录条/绿白头像气泡直接在背景上，无白色圆角大面板；发信息期间也会继续生成记录） */}
       {trailPage && (
         <div className="absolute inset-0 z-40 flex flex-col bg-[#f6f6f8]">
-          {/* 顶栏：返回 + 对方名字/在线 + 刷新（生成一条刚刚的记录） */}
+          {/* 顶栏：返回 + 对方名字/使用状态 + 刷新（生成一条刚刚的记录） */}
           <div className="shrink-0 bg-[#f6f6f8]/95 pt-[54px] backdrop-blur-md">
             <div className="relative flex h-12 items-center px-1.5">
               <button type="button" onClick={() => setTrailPage(false)} aria-label="返回" className="flex h-9 w-9 items-center justify-center rounded-full text-[#3a3a40] transition-opacity active:opacity-50">
@@ -3489,9 +3528,19 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
               </button>
               <div className="pointer-events-none absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
                 <div className="text-[16px] font-bold text-[#26262b]">{state.taName || 'TA'}</div>
-                <div className="mt-0.5 flex items-center gap-1 text-[10.5px] text-[#9a9aa2]">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#3dcc7e]" />
-                  在线
+                <div className="mt-0.5 flex items-center gap-2.5 text-[10.5px] text-[#8e8e96]">
+                  <span className="flex items-center gap-0.5">
+                    <Smartphone className="h-3 w-3 text-[#4aa3e8]" />
+                    使用中
+                  </span>
+                  <span className="flex items-center gap-0.5">
+                    <BatteryCharging className="h-3 w-3 text-[#3dcc7e]" />
+                    {trailBattery}%
+                  </span>
+                  <span className="flex items-center gap-0.5">
+                    <Signal className="h-3 w-3 text-[#3dcc7e]" />
+                    移动网络
+                  </span>
                 </div>
               </div>
               <button
@@ -3509,29 +3558,47 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
             </div>
           </div>
 
-          {/* 滚动内容：动态记录时间线（按天分组）+ 我们的悄悄话 */}
-          <div className="flex-1 overflow-y-auto px-4 pb-4">
-            {/* 记录时间线（参考截图：居中时间 + 图标 + 文字 + 查看记录） */}
-            <div className="pt-2" data-testid="trail-feed">
-              {trailFeedRecs.length === 0 && <div className="py-10 text-center text-[12.5px] text-[#b6b6bd]">正在生成你们的位置与轨迹记录…</div>}
-              {trailFeedRecs.map((r, k) => {
-                const meta = TRAIL_FEED_ICON[r.kind] ?? TRAIL_FEED_ICON.stay;
-                const prev = trailFeedRecs[k - 1];
-                const showDay = !prev || prev.dateKey !== r.dateKey;
+          {/* 滚动内容：记录 + 聊天交织时间线（老→新，自动滚到底；无白色面板，记录条/气泡直接在背景上） */}
+          <div ref={trailScrollRef} className="flex-1 overflow-y-auto px-3 pb-3" data-testid="trail-feed">
+            {/* 更早的记录（一直往前生成，无限回溯） */}
+            <button
+              type="button"
+              onClick={() => {
+                const d = new Date(Date.now() - trailEarlyRef.current * 86400000);
+                const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                aiTrailFeed({ mode: 'day', dateKey: key, daysAgo: trailEarlyRef.current });
+                trailEarlyRef.current += 1;
+                showToast('正在生成更早的记录…');
+              }}
+              className="mx-auto mt-2 block rounded-full bg-white px-5 py-1.5 text-[11.5px] text-[#8e8e96] shadow-[0_1px_4px_rgba(0,0,0,0.04)]"
+              data-testid="trail-earlier"
+            >
+              查看更早的记录
+            </button>
+            {trailLines.length === 0 && <div className="py-10 text-center text-[12.5px] text-[#b6b6bd]">正在生成你们的位置与轨迹记录…</div>}
+            {trailLines.map((ln) => {
+              if (ln.kind === 'day') {
                 return (
-                  <div key={r.id}>
-                    {showDay && <div className="py-3 text-center text-[12px] font-semibold text-[#8e8e96]">{fmtDateCn(r.dateKey)}</div>}
-                    <div className="pb-4">
-                      <div className="text-center text-[13px] font-bold tabular-nums text-[#4a4a52]">
-                        {r.dateKey.slice(5)} {r.t}
-                      </div>
-                      <div className="mt-1.5 flex items-start gap-2">
-                        <span className="mt-px flex h-5 w-5 shrink-0 items-center justify-center" style={{ color: meta.color }}>
+                  <div key={ln.key} className="py-3 text-center">
+                    <span className="rounded-full bg-white/90 px-3 py-1 text-[11px] text-[#8e8e96] shadow-[0_1px_4px_rgba(0,0,0,0.04)]">{ln.label}</span>
+                  </div>
+                );
+              }
+              if (ln.kind === 'rec') {
+                const meta = TRAIL_FEED_ICON[ln.rec.kind] ?? TRAIL_FEED_ICON.stay;
+                return (
+                  <div key={ln.key} className="pb-2.5">
+                    <div className="text-center text-[11px] font-semibold tabular-nums text-[#a8a8b2]">
+                      {ln.rec.dateKey.slice(5)} {ln.rec.t}
+                    </div>
+                    <div className="mt-1 flex justify-center">
+                      <div className="flex max-w-[90%] items-start gap-1.5 rounded-2xl bg-white px-3.5 py-2 shadow-[0_1px_4px_rgba(0,0,0,0.05)]">
+                        <span className="mt-0.5 flex h-[17px] w-[17px] shrink-0 items-center justify-center" style={{ color: meta.color }}>
                           {meta.icon}
                         </span>
-                        <p className="min-w-0 flex-1 text-[13.5px] leading-[1.65] text-[#2c2c30]">
-                          {r.text}
-                          <button type="button" onClick={() => setTrailDetail(r)} data-testid={`trail-view-${k}`} className="ml-1.5 inline-block font-semibold text-[#3d9a63]">
+                        <p className="min-w-0 text-[13px] leading-[1.6] text-[#2c2c30]">
+                          {ln.rec.text}
+                          <button type="button" onClick={() => setTrailDetail(ln.rec)} data-testid={`trail-view-${ln.rec.id}`} className="ml-1.5 inline-block whitespace-nowrap font-semibold text-[#3d9a63]">
                             查看记录
                           </button>
                         </p>
@@ -3539,44 +3606,36 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                     </div>
                   </div>
                 );
-              })}
-              {/* 更早的记录（一直往前生成，无限回溯） */}
-              <button
-                type="button"
-                onClick={() => {
-                  const d = new Date(Date.now() - trailEarlyRef.current * 86400000);
-                  const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                  aiTrailFeed({ mode: 'day', dateKey: key, daysAgo: trailEarlyRef.current });
-                  trailEarlyRef.current += 1;
-                  showToast('正在生成更早的记录…');
-                }}
-                className="mx-auto mb-2 mt-1 block rounded-full bg-white px-5 py-2 text-[12px] text-[#8e8e96] shadow-sm ring-1 ring-[#ececef]"
-                data-testid="trail-earlier"
-              >
-                查看更早的记录
-              </button>
-            </div>
-
-            {/* 我们的悄悄话（聊天区：TA 按人设记忆+上下文回复，全部写进记忆；发信息期间也会继续生成新记录） */}
-            <div className="rounded-2xl bg-white p-4 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
-              <div className="text-[14px] font-bold text-[#2c2c30]">我们的悄悄话</div>
-              <div ref={trailListRef} className="mt-2 max-h-64 space-y-2.5 overflow-y-auto">
-                {trailMsgs.length === 0 ? (
-                  <div className="py-3 text-center text-[11.5px] text-[#b6b6bd]">聊聊今天去过哪、什么时候见面吧</div>
+              }
+              const mine = ln.msg.from === 'me';
+              return (
+                <div key={ln.key} className={`mb-2.5 flex items-start gap-2 ${mine ? 'justify-end' : 'justify-start'}`}>
+                  {!mine &&
+                    (state.taAvatar ? (
+                      <img src={state.taAvatar} alt={state.taName || 'TA'} className="h-8 w-8 shrink-0 rounded-full object-cover" draggable={false} />
+                    ) : (
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#eef1f5] text-[11px] font-bold text-[#8a97a8]">{(state.taName || 'TA').slice(0, 1)}</span>
+                    ))}
+                  <div className={`max-w-[70%] rounded-2xl px-3.5 py-2 text-[13.5px] leading-relaxed ${mine ? 'rounded-br-md bg-[#3ec763] text-white' : 'rounded-bl-md bg-white text-[#2c2c30] shadow-[0_1px_4px_rgba(0,0,0,0.05)]'}`}>{ln.msg.text}</div>
+                  {mine &&
+                    (state.meAvatar ? (
+                      <img src={state.meAvatar} alt={state.meName || '我'} className="h-8 w-8 shrink-0 rounded-full object-cover" draggable={false} />
+                    ) : (
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#fdeef1] text-[11px] font-bold text-[#e58ba1]">{(state.meName || '我').slice(0, 1)}</span>
+                    ))}
+                </div>
+              );
+            })}
+            {trailTyping && (
+              <div className="mb-2 flex items-start gap-2">
+                {state.taAvatar ? (
+                  <img src={state.taAvatar} alt={state.taName || 'TA'} className="h-8 w-8 shrink-0 rounded-full object-cover" draggable={false} />
                 ) : (
-                  trailMsgs.map((m) => (
-                    <div key={m.id} className={`flex ${m.from === 'me' ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[78%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${m.from === 'me' ? 'rounded-br-md bg-[linear-gradient(135deg,#f7b7c5,#ef9cb2)] text-white' : 'rounded-bl-md bg-[#f4f4f6] text-[#3a3a40]'}`}>{m.text}</div>
-                    </div>
-                  ))
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#eef1f5] text-[11px] font-bold text-[#8a97a8]">{(state.taName || 'TA').slice(0, 1)}</span>
                 )}
-                {trailTyping && (
-                  <div className="flex justify-start">
-                    <div className="rounded-2xl rounded-bl-md bg-[#f4f4f6] px-3 py-2 text-[12px] text-[#9a9aa2]">{state.taName || 'TA'} 正在输入…</div>
-                  </div>
-                )}
+                <div className="rounded-2xl rounded-bl-md bg-white px-3.5 py-2 text-[12.5px] text-[#9a9aa2] shadow-[0_1px_4px_rgba(0,0,0,0.05)]">正在输入…</div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* 底部输入框（固定在页面底部，像聊天一样随时发消息） */}
@@ -3598,7 +3657,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                 onClick={sendTrail}
                 aria-label="发送"
                 disabled={!trailDraft.trim()}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#f7b7c5,#ef9cb2)] text-white shadow-[0_4px_12px_rgba(239,156,178,0.4)] transition-transform active:scale-95 disabled:opacity-40"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#3ec763] text-white shadow-[0_4px_12px_rgba(62,199,99,0.4)] transition-transform active:scale-95 disabled:opacity-40"
               >
                 <Send className="h-4 w-4" />
               </button>
@@ -7121,15 +7180,20 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <p className="mt-2.5 text-[13.5px] leading-relaxed text-[#9a9aa2]">签一份属于你们的协议，互相分享、互相签名；TA 也会认真看，自己决定签不签。</p>
           </div>
 
-          {/* TA 拟的协议（第九轮：AI 会自己拟协议等我签；点卡片/去签直达签署界面） */}
+          {/* TA 拟的协议（第九轮：AI 会自己拟协议等我签；点卡片/去签直达签署界面；
+           *  第二十三轮：我拒绝后不再消失，卡片显示「已拒绝」，AI 通过记忆知道被拒） */}
           {state.aiPact && (
-            <div className="relative mt-4 rounded-2xl border-2 border-dashed border-[#f2536a] bg-white p-4" data-testid="ai-pact-card">
+            <div className={`relative mt-4 rounded-2xl border-2 border-dashed p-4 ${state.aiPact.declined ? 'border-[#d9d9de] bg-[#fafafa] opacity-80' : 'border-[#f2536a] bg-white'}`} data-testid="ai-pact-card">
               <div className="flex items-center justify-between pr-16">
                 <div className="text-[14.5px] font-bold text-[#26262b]">
                   {state.taName || 'TA'} {state.aiPact.signTa ? '拟好并签好名的协议' : '拟了一份协议'} <span className="text-[#f2536a]">《{state.aiPact.title}》</span>
                 </div>
               </div>
-              <span className="absolute right-3 top-3 shrink-0 rounded-full bg-[#fdeef2] px-2 py-0.5 text-[10.5px] font-bold text-[#f2536a]">{state.aiPact.signTa ? 'TA已签 · 等你签' : '等你签'}</span>
+              {state.aiPact.declined ? (
+                <span className="absolute right-3 top-3 shrink-0 rounded-full bg-[#f0f0f3] px-2 py-0.5 text-[10.5px] font-bold text-[#8e8e96]" data-testid="ai-pact-declined-badge">已拒绝</span>
+              ) : (
+                <span className="absolute right-3 top-3 shrink-0 rounded-full bg-[#fdeef2] px-2 py-0.5 text-[10.5px] font-bold text-[#f2536a]">{state.aiPact.signTa ? 'TA已签 · 等你签' : '等你签'}</span>
+              )}
               <div className="mt-2 space-y-1">
                 {state.aiPact.clauses.slice(0, 3).map((c, i) => (
                   <div key={i} className="flex gap-1.5 text-[12.5px] leading-relaxed text-[#6e6e76]">
@@ -7139,18 +7203,60 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 ))}
                 {state.aiPact.clauses.length > 3 && <div className="text-[11.5px] text-[#b6b6bd]">…共 {state.aiPact.clauses.length} 条</div>}
               </div>
-              <div className="mt-3 flex gap-2.5">
-                <button
-                  type="button"
-                  data-testid="ai-pact-dismiss"
-                  onClick={() => {
-                    patch({ aiPact: null });
-                    showToast('已婉拒 TA 的协议草稿');
-                  }}
-                  className="h-10 flex-1 rounded-full bg-[#f0f0f3] text-[14px] font-medium text-[#5a5a62]"
-                >
-                  不了谢谢
-                </button>
+              {state.aiPact.declined ? (
+                <>
+                  <div className="mt-2.5 text-[12px] leading-relaxed text-[#9a9aa2]" data-testid="ai-pact-declined-tip">你拒绝了这份协议，{state.taName || 'TA'} 已经知道了</div>
+                  <div className="mt-3 flex gap-2.5">
+                    <button
+                      type="button"
+                      data-testid="ai-pact-declined-delete"
+                      onClick={() => {
+                        patch({ aiPact: null });
+                        showToast('已删除这份被拒绝的协议');
+                      }}
+                      className="h-10 flex-1 rounded-full bg-[#f0f0f3] text-[14px] font-medium text-[#5a5a62]"
+                    >
+                      删除
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="ai-pact-declined-reconsider"
+                      onClick={() => {
+                        patchFn((prev) => (prev.aiPact ? { aiPact: { ...prev.aiPact, declined: false } } : {}));
+                        showToast('再看看这份协议，愿意的话随时签名 ♡');
+                      }}
+                      className="h-10 flex-1 rounded-full bg-white text-[14px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80"
+                    >
+                      重新考虑
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="mt-3 flex gap-2.5">
+                  <button
+                    type="button"
+                    data-testid="ai-pact-dismiss"
+                    onClick={() => {
+                      const meta = readInviteMeta();
+                      const ap = state.aiPact!;
+                      patchFn((prev) => (prev.aiPact ? { aiPact: { ...prev.aiPact, declined: true } } : {}));
+                      // 第二十三轮：让 AI 知道我拒绝了（写进恋人记忆）+ 聊天里的协议卡片同步「已拒绝」
+                      if (meta.partnerContactId) {
+                        const cid = meta.partnerContactId;
+                        const ch = meta.partnerApp ?? 'wx';
+                        try {
+                          coupleRemember(cid, ch, `${state.meName || '我'}拒绝了${state.taName || 'TA'}拟的恋爱协议《${ap.title}》，没有签名（${state.taName || 'TA'} 已经知道被拒绝了）`);
+                        } catch {
+                          /* 静默 */
+                        }
+                        patchPactCardsWhere(ch, cid, (d) => d.from === 'ta' && d.status === 'pending' && (d.pactId === 'ai' || d.title === ap.title), { status: 'declined', declinedBy: 'me' });
+                      }
+                      showToast('已拒绝，TA 会知道你的决定');
+                    }}
+                    className="h-10 flex-1 rounded-full bg-[#f0f0f3] text-[14px] font-medium text-[#5a5a62]"
+                  >
+                    不了谢谢
+                  </button>
                 <button
                   type="button"
                   data-testid="ai-pact-adopt"
@@ -7165,7 +7271,8 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 >
                   去签 TA 的协议
                 </button>
-              </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -7596,7 +7703,7 @@ function ExamPaperSheet(props: {
   const perScore = props.questions.length > 0 ? 100 / props.questions.length : 0;
   const fmtScore = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
   return (
-    <div className="overflow-hidden rounded-lg bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+    <div className="bg-white">
       <div className="flex">
         {/* 装订圈 */}
         <div className="flex w-8 shrink-0 flex-col items-center justify-around border-r border-[#e6e6ea] py-6">
@@ -7642,17 +7749,16 @@ function ExamPaperSheet(props: {
               const res = props.resultAnswers;
               return (
                 <div key={qi} className="border-b border-dashed border-[#e9e9ee] py-3 last:border-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 text-[14px] font-medium leading-relaxed text-[#26262b]">
-                      {qi + 1}、{q.q}
-                      {/* 第二十一轮：题的后面标上这个题的分数 */}
-                      <span className="ml-1 whitespace-nowrap text-[11px] font-normal text-[#9a9aa2]">（{fmtScore(perScore)}分）</span>
-                    </div>
-                    <Pencil className="mt-1 h-3.5 w-3.5 shrink-0 text-[#f8a0b4]" strokeWidth={2} aria-hidden="true" />
+                  <div className="min-w-0 text-[14px] font-medium leading-relaxed text-[#26262b]">
+                    {qi + 1}、{q.q}
+                    {/* 第二十一轮：题的后面标上这个题的分数 */}
+                    <span className="ml-1 whitespace-nowrap text-[11px] font-normal text-[#9a9aa2]">（{fmtScore(perScore)}分）</span>
                   </div>
+                  {/* 第二十二轮：他选的选项用蓝色边框框住 */}
                   <div className="mt-1.5 space-y-1">
                     {q.opts.map((o, oi) => {
                       const isPicked = props.onPick ? picked === oi : false;
+                      const taPick = props.companionOn && props.taLive && props.answers?.[qi] != null ? props.taLive.picks[String(qi)] : undefined;
                       const showBest = res != null && bestIdx === oi;
                       const showWrongPick = res != null && res[qi] === oi && bestIdx !== oi;
                       return (
@@ -7666,14 +7772,16 @@ function ExamPaperSheet(props: {
                               ? 'bg-[#eaf7ef] text-[#3d9a63]'
                               : showWrongPick
                                 ? 'bg-[#fdeef2] text-[#e0607e] line-through decoration-[#f8a0b4]'
-                                : isPicked
-                                  ? 'bg-[#fdeef3] font-medium text-[#e0607e]'
-                                  : props.onPick
-                                    ? 'text-[#4a4a52] active:bg-[#f7f7f9]'
-                                    : 'text-[#4a4a52]'
+                                : taPick === oi
+                                  ? 'border-[1.5px] border-[#576b95] bg-[#eef2fb] text-[#576b95]'
+                                  : isPicked
+                                    ? 'bg-[#fdeef3] font-medium text-[#e0607e]'
+                                    : props.onPick
+                                      ? 'text-[#4a4a52] active:bg-[#f7f7f9]'
+                                      : 'text-[#4a4a52]'
                           }`}
                         >
-                          <span className={`mt-px shrink-0 font-bold ${isPicked && !showWrongPick ? 'text-[#e0607e]' : 'text-[#9a9aa2]'}`}>
+                          <span className={`mt-px shrink-0 font-bold ${taPick === oi ? 'text-[#576b95]' : isPicked && !showWrongPick ? 'text-[#e0607e]' : 'text-[#9a9aa2]'}`}>
                             {'ABCD'[oi] ?? oi + 1}.
                           </span>
                           <span className="min-w-0">{o}</span>
@@ -7729,18 +7837,16 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [workTa, setWorkTa] = useState(false); // 正在答的是 TA 出的卷
   const [grading, setGrading] = useState(false); // AI 批卷中
-  const [importing, setImporting] = useState(false); // AI 出卷中
   const [inviting, setInviting] = useState(false); // 喊 TA 答题中
   const [pickerOpen, setPickerOpen] = useState(false); // 通用分享选择器（第十八轮需求41：选 QQ/微信 → 选联系人）
-  const [taGradeScore, setTaGradeScore] = useState(85); // 我给 TA 答卷打的分（第十六轮：TA 答完由我批改）
+  const [taGradeScore, setTaGradeScore] = useState(85); // 我给 TA 答卷打的分（逐题打分时自动合计）
   const [taGradeText, setTaGradeText] = useState(''); // 我给 TA 的批语
   const [taGrading, setTaGrading] = useState(false); // 提交批改中
-  // 第二十一轮：AI 陪答（叫 TA 一起同时答题）+ 题库无限生成 + 我的卷子
-  const [companion, setCompanion] = useState(true); // 陪答开关（默认开，每答一题 TA 写下想法）
+  const [taMarks, setTaMarks] = useState<Record<number, { ok: boolean; score: number }>>({}); // 第二十二轮：我给 TA 每题打的对错与分数
+  // 第二十一轮：AI 陪答（TA 和我同时答题，每答一题 TA 写下想法）；第二十三轮去掉开关，默认永远开启
   const [compBusy, setCompBusy] = useState<Record<number, boolean>>({}); // 正在生成想法的题
   const [genBusy, setGenBusy] = useState(false); // 题库 AI 出卷中
   const [mineSel, setMineSel] = useState<CoupleState['examHistory'][number] | null>(null); // 我的卷子·选中的存档
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const genBusyRef = useRef(false);
   const genFailRef = useRef(0); // 连续失败计数（防无限重试刷接口）
   const me = state.meName || '我';
@@ -7823,20 +7929,26 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
     }
   };
 
-  // 题库上滑到底自动生成更多（哨兵进入视口触发；第二十一轮：上滑无限生成）
+  // 第二十二轮：进入批卷页重置逐题打分草稿（换卷/重进都不残留上一份的标记）
   useEffect(() => {
-    if (view !== 'bank') return;
-    const el = sentinelRef.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) void genMore();
-      },
-      { rootMargin: '240px 0px' },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [view, state.examAiPapers.length]);
+    if (view !== 'tasheet' || state.examTaSheet?.myScore != null) return;
+    setTaMarks({});
+  }, [view, state.examTaSheet?.at]);
+
+  // 第二十二轮：题库滑到底再上滑一下松手才生成（不再一滑到底就自动触发）
+  const pullRef = useRef<{ startY: number; atBottom: boolean }>({ startY: 0, atBottom: false });
+  const onBankTouchStart = (e: React.TouchEvent) => {
+    const sc = (e.currentTarget as HTMLElement).closest('.overflow-y-auto') as HTMLElement | null;
+    pullRef.current = { startY: e.touches[0]?.clientY ?? 0, atBottom: sc ? sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 4 : false };
+  };
+  const onBankTouchEnd = (e: React.TouchEvent) => {
+    if (!pullRef.current.atBottom || genBusyRef.current) return;
+    const endY = e.changedTouches[0]?.clientY ?? 0;
+    if (pullRef.current.startY - endY > 60) {
+      genFailRef.current = 0;
+      void genMore();
+    }
+  };
 
   /** 交卷 → TA 批卷（用户配置的 API 模型优先；TA 知道我答了什么）→ 分数下面写 TA 想说的话 */
   const submit = async () => {
@@ -7932,61 +8044,71 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
     }
   };
 
-  /** 导入模板：AI 现场出一张全新卷 → 预览 */
-  const importTpl = async () => {
-    if (importing) return;
-    setImporting(true);
-    try {
-      const { genExamPaper } = await import('@/lib/ios/couple-ai');
-      const g = await genExamPaper('import');
-      const fallbackTpl = EXAM_TPLS[Math.floor(Math.random() * EXAM_TPLS.length)];
-      const tpl: ExamTpl = g
-        ? {
-            id: `ai-${Date.now()}`,
-            title: g.title,
-            usage: 'AI 新卷',
-            notes: g.notes.length > 0 ? g.notes : ['本试卷为 AI 现场出题，满分100分。', '答题态度大于正确率。', '标准答案解释权归出卷人所有。', '本试卷长期有效。'],
-            questions: g.questions.map((q) => ({ ...q, best: -1 })),
-          }
-        : fallbackTpl;
-      // 第二十一轮：AI 出的卷子也进卷子库（「我的卷子」里能看到，永不消失）
-      if (g) {
-        patchFn((prev) => ({
-          examAiPapers: [
-            ...(prev.examAiPapers ?? []),
-            { id: tpl.id, title: tpl.title, notes: tpl.notes, questions: tpl.questions.map((q) => ({ q: q.q, opts: q.opts })), at: Date.now() },
-          ],
-        }));
-      }
-      setPreview(tpl);
-      setPage(0);
-      setView('preview');
-    } finally {
-      setImporting(false);
-    }
-  };
-
   const gradeLabel = (s: number) => (s >= 90 ? '满分恋人' : s >= 75 ? '优秀恋人' : s >= 60 ? '合格恋人' : '需要补课的恋人');
 
-  /** 我给 TA 的答卷批改：打分 + 批语，提交后写进恋人记忆（TA 就知道了）；TA 之后会在批语下留言 */
+  /** 我答题时的选择处理（第二十三轮从视图里抽出；陪答默认开启不可关）：记录答案 + AI 同时给出他的选择与想法 */
+  const onPickAnswer = (qi: number, oi: number) => {
+    setAnswers((a) => ({ ...a, [qi]: oi }));
+    if (workTa) return;
+    const q = working?.questions[qi];
+    if (!q || !working) return;
+    setCompBusy((b) => ({ ...b, [qi]: true }));
+    void (async () => {
+      try {
+        const { aiExamCompanion } = await import('@/lib/ios/couple-ai');
+        const r = await aiExamCompanion(working.title, { q: q.q, opts: q.opts }, oi);
+        if (r) {
+          patchFn((prev) =>
+            prev.examPaper
+              ? {
+                  examPaper: {
+                    ...prev.examPaper,
+                    taLive: {
+                      picks: { ...(prev.examPaper.taLive?.picks ?? {}), [String(qi)]: r.pick },
+                      thoughts: { ...(prev.examPaper.taLive?.thoughts ?? {}), [String(qi)]: r.thought },
+                    },
+                  },
+                }
+              : {},
+          );
+        }
+      } catch {
+        /* 静默 */
+      }
+      setCompBusy((b) => {
+        const n = { ...b };
+        delete n[qi];
+        return n;
+      });
+    })();
+  };
+
+  /** 我给 TA 的答卷批改（第二十二轮：逐题打对/错+打分，合计为总分；批语放最后灰色小字）：提交后写进恋人记忆（TA 就知道了）；TA 之后会在批语下留言 */
   const submitTaGrade = async () => {
     const s = state.examTaSheet;
+    const qs = state.examPaper?.questions ?? [];
     if (!s || taGrading || s.myScore != null) return;
+    if (qs.length > 0 && Object.keys(taMarks).length < qs.length) {
+      showToast('还有题没打分哦，每题都要打对/错');
+      return;
+    }
     const c = taGradeText.trim();
     if (!c) {
       showToast('写一句批语再提交吧');
       return;
     }
     setTaGrading(true);
-    patchFn((prev) => (prev.examTaSheet ? { examTaSheet: { ...prev.examTaSheet, myScore: taGradeScore, myComment: c } } : {}));
+    const total = qs.length > 0 ? Math.round(Object.values(taMarks).reduce((n, m) => n + (Number(m.score) || 0), 0)) : taGradeScore;
+    patchFn((prev) => (prev.examTaSheet ? { examTaSheet: { ...prev.examTaSheet, myScore: total, myComment: c, myMarks: taMarks } } : {}));
     // 写进恋人记忆（TA 知道我批了什么）
     const meta = readInviteMeta();
     if (meta.partnerContactId) {
       const cid = meta.partnerContactId;
       const ch = meta.partnerApp ?? 'wx';
+      const okN = Object.values(taMarks).filter((m) => m.ok).length;
       void import('@/lib/ios/couple-ai').then((m) => {
         try {
-          m.coupleRemember(cid, ch, `${state.meName || '我'}批改了${state.taName || 'TA'}的答卷《${s.title}》：${taGradeScore} 分，批语：「${c}」`);
+          m.coupleRemember(cid, ch, `${state.meName || '我'}逐题批改了${state.taName || 'TA'}的答卷《${s.title}》：${total} 分（${okN} 对 ${qs.length - okN} 错），批语：「${c}」`);
         } catch {
           /* 静默 */
         }
@@ -7994,7 +8116,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
       // 第十七轮：TA 看完我的批改后，在「我的批改」下面留言感想（人设 + 记忆 + 最近聊天）
       try {
         const { scheduleTaReact } = await import('@/lib/ios/couple-exam-share');
-        scheduleTaReact({ channel: ch, contactId: cid, title: s.title, score: taGradeScore, comment: c });
+        scheduleTaReact({ channel: ch, contactId: cid, title: s.title, score: total, comment: c });
       } catch {
         /* 静默 */
       }
@@ -8079,68 +8201,111 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
   // ---------- TA 的答卷视图（TA 答我出的卷：他的选择 + 我的批改；第十七轮 TA 不再自评——打分批语都由我来给） ----------
   if (view === 'tasheet' && state.examTaSheet) {
     const s = state.examTaSheet;
+    const qs = state.examPaper?.questions ?? [];
+    const perQ = qs.length > 0 ? 100 / qs.length : 0;
+    const fmtScore = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+    const marksTotal = Object.values(taMarks).reduce((n, m) => n + (Number(m.score) || 0), 0);
     return (
       <SubShell title={`${ta} 的答卷`} onBack={() => setView('bank')}>
-        <div className="mt-3 rounded-2xl bg-white p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]" data-testid="exam-ta-sheet">
-          <div className="text-[13px] font-medium text-[#9a9aa2]">《{s.title}》</div>
-          {typeof s.score === 'number' ? (
-            <>
-              <div className="mt-2 flex items-end justify-center gap-1.5">
-                <span className="text-[46px] font-extrabold leading-none text-[#576b95]">{s.score}</span>
-                <span className="pb-1.5 text-[15px] text-[#9a9aa2]">分（自评）</span>
-              </div>
-              <div className="mt-3 rounded-xl bg-[#f5f7fc] px-4 py-3 text-left">
-                <div className="text-[12px] font-bold text-[#576b95]">{ta} 想说的话</div>
-                <div className="mt-1 text-[13.5px] leading-relaxed text-[#4a4a52]">{s.comment}</div>
-              </div>
-            </>
-          ) : (
-            <div className="mt-3 rounded-xl bg-[#f5f7fc] px-4 py-3.5 text-left" data-testid="exam-ta-waiting">
-              <div className="text-[12px] font-bold text-[#576b95]">{ta} 已交卷</div>
-              <div className="mt-1 text-[13px] leading-relaxed text-[#4a4a52]">他答完交卷啦，等你打分写批语——你批的每一分、写的每一句他都能看到</div>
-            </div>
-          )}
+        {/* 标题（第二十二轮：扁平展示，无白色圆角面板） */}
+        <div className="mt-3 text-center text-[13px] font-medium text-[#9a9aa2]" data-testid="exam-ta-sheet">
+          《{s.title}》
+        </div>
+        {typeof s.score === 'number' && (
+          <div className="mt-1 text-center text-[11.5px] text-[#b6b6bd]">
+            {ta} 自评 {s.score} 分{s.comment ? ` · ${s.comment}` : ''}
+          </div>
+        )}
+
+        {/* TA 的作答（他选的选项用蓝色边框框住；下面逐题打对/错+打分） */}
+        <div className="mt-4">
+          <div className="px-1 text-[13.5px] font-bold text-[#26262b]">{ta} 的作答</div>
+          <div className="mt-1">
+            {qs.map((q, i) => {
+              const pick = s.picks[String(i)];
+              const savedMark = s.myMarks?.[String(i)];
+              const myMark = taMarks[i];
+              return (
+                <div key={i} className="border-b border-dashed border-[#e9e9ee] py-3 last:border-0">
+                  <div className="text-[13.5px] font-medium leading-relaxed text-[#26262b]">
+                    {i + 1}、{q.q}
+                    <span className="ml-1 text-[11px] font-normal text-[#9a9aa2]">（{fmtScore(perQ)}分）</span>
+                  </div>
+                  {/* 第二十三轮：题的选项全部显示出来（TA 选中的用蓝色边框框住，与陪答同款） */}
+                  <div className="mt-1.5 space-y-1">
+                    {q.opts.map((o, oi) => {
+                      const isTaPick = pick === oi;
+                      return (
+                        <div
+                          key={oi}
+                          data-testid={isTaPick ? `exam-ta-pick-${i}` : undefined}
+                          className={`flex items-start gap-2 rounded-lg px-2 py-1.5 text-[12.5px] leading-relaxed ${
+                            isTaPick ? 'border-[1.5px] border-[#576b95] bg-[#eef2fb] font-medium text-[#576b95]' : 'text-[#4a4a52]'
+                          }`}
+                        >
+                          <span className={`mt-px shrink-0 font-bold ${isTaPick ? 'text-[#576b95]' : 'text-[#9a9aa2]'}`}>{'ABCD'[oi] ?? oi + 1}.</span>
+                          <span className="min-w-0">{o}</span>
+                        </div>
+                      );
+                    })}
+                    {pick == null && <span className="text-[12.5px] text-[#b6b6bd]">（{ta} 跳过了这题）</span>}
+                  </div>
+                  {/* 未批改：逐题打对/错 + 打几分 */}
+                  {s.myScore == null ? (
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setTaMarks((m) => ({ ...m, [i]: { ok: true, score: Math.round(perQ * 10) / 10 } }))}
+                        data-testid={`exam-mark-ok-${i}`}
+                        className={`rounded-full px-3 py-1 text-[11.5px] font-semibold transition-colors ${
+                          myMark?.ok === true ? 'bg-[#3d9a63] text-white' : 'bg-[#eef7f0] text-[#3d9a63] active:bg-[#ddefe3]'
+                        }`}
+                      >
+                        对
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTaMarks((m) => ({ ...m, [i]: { ok: false, score: 0 } }))}
+                        data-testid={`exam-mark-bad-${i}`}
+                        className={`rounded-full px-3 py-1 text-[11.5px] font-semibold transition-colors ${
+                          myMark && myMark.ok === false ? 'bg-[#e0607e] text-white' : 'bg-[#fdeef2] text-[#e0607e] active:bg-[#fadbe3]'
+                        }`}
+                      >
+                        错
+                      </button>
+                      <input
+                        type="number"
+                        min={0}
+                        max={Math.round(perQ * 10) / 10}
+                        step={0.5}
+                        value={myMark ? myMark.score : ''}
+                        onChange={(e) =>
+                          setTaMarks((m) => ({ ...m, [i]: { ok: m[i]?.ok ?? true, score: Math.max(0, Math.min(perQ, Number(e.target.value) || 0)) } }))
+                        }
+                        aria-label={`第${i + 1}题得分`}
+                        className="h-7 w-14 rounded-lg bg-[#f7f7f9] px-1.5 text-center text-[12px] tabular-nums text-[#26262b] outline-none"
+                      />
+                      <span className="text-[11px] text-[#b6b6bd]">/ {fmtScore(perQ)} 分</span>
+                    </div>
+                  ) : savedMark ? (
+                    <div className="mt-1.5 text-[11.5px] text-[#9a9aa2]">
+                      我的批改：{savedMark.ok ? '答对' : '答错'} · {savedMark.score} 分
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
         </div>
 
-        {/* 我的批改（第十六轮：TA 答完卷由我批分写批语，提交后 TA 就知道了） */}
+        {/* 给他的批语（第二十二轮：放在作答下面；已批改→灰色小字；未批改→输入+提交） */}
         {s.myScore == null ? (
-          <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.06)]" data-testid="exam-ta-grade">
-            <div className="text-[14px] font-bold text-[#26262b]">给 {ta} 批卷</div>
-            <div className="mt-1 text-[11.5px] leading-relaxed text-[#9a9aa2]">给TA的答卷打个分、写一句批语，提交后TA就知道了</div>
-            <div className="mt-3 flex items-center gap-3">
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={taGradeScore}
-                onChange={(e) => setTaGradeScore(Number(e.target.value))}
-                className="h-1.5 flex-1 accent-[#f2536a]"
-                aria-label="给TA的分数"
-                data-testid="exam-ta-grade-range"
-              />
-              <span className="w-16 text-right text-[20px] font-extrabold leading-none text-[#f2536a]">
-                {taGradeScore}
-                <span className="ml-0.5 text-[11px] font-normal text-[#9a9aa2]">分</span>
-              </span>
-            </div>
-            <div className="mt-2 flex gap-1.5">
-              {[
-                { v: 95, t: '超爱这个答案' },
-                { v: 85, t: '答得不错' },
-                { v: 70, t: '一般般' },
-                { v: 59, t: '不及格重考' },
-              ].map((c) => (
-                <button
-                  key={c.v}
-                  type="button"
-                  onClick={() => setTaGradeScore(c.v)}
-                  className={`flex-1 rounded-full px-1 py-1.5 text-[11px] font-medium transition-colors ${
-                    taGradeScore === c.v ? 'bg-[#f2536a] text-white' : 'bg-[#f7f7f9] text-[#6e6e76] active:bg-[#ffeef2]'
-                  }`}
-                >
-                  {c.t}
-                </button>
-              ))}
+          <div className="mt-4" data-testid="exam-ta-grade">
+            <div className="flex items-baseline justify-between px-1">
+              <div className="text-[13.5px] font-bold text-[#26262b]">给他的批语</div>
+              <div className="text-[12px] text-[#9a9aa2]">
+                合计 <span className="text-[17px] font-extrabold text-[#f2536a]">{Math.round(marksTotal)}</span> 分
+              </div>
             </div>
             <textarea
               value={taGradeText}
@@ -8148,7 +8313,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               rows={3}
               maxLength={80}
               placeholder={`写句批语，比如「第3题答到我心里了」…`}
-              className="mt-3 w-full resize-none rounded-xl bg-[#f7f7f9] p-3 text-[13.5px] leading-relaxed text-[#26262b] outline-none placeholder:text-[#b6b6bd]"
+              className="mt-2 w-full resize-none rounded-xl bg-white p-3 text-[13px] leading-relaxed text-[#26262b] shadow-[0_1px_4px_rgba(0,0,0,0.04)] outline-none placeholder:text-[#b6b6bd]"
               data-testid="exam-ta-grade-text"
             />
             <button
@@ -8160,22 +8325,22 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             >
               提交批改
             </button>
+            <div className="mt-2 text-center text-[11px] leading-relaxed text-[#c9c9cf]">每题打完对/错再提交，{ta} 会看到你给的每一分</div>
           </div>
         ) : (
-          <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_6px_20px_rgba(0,0,0,0.06)]" data-testid="exam-ta-graded">
-            <div className="text-[12px] font-bold text-[#f2536a]">我的批改</div>
-            <div className="mt-1.5 flex items-end gap-1.5">
-              <span className="text-[34px] font-extrabold leading-none text-[#f2536a]">{s.myScore}</span>
-              <span className="pb-0.5 text-[13px] text-[#9a9aa2]">分 · {gradeLabel(s.myScore)}</span>
+          <div className="mt-4" data-testid="exam-ta-graded">
+            <div className="px-1 text-[13.5px] font-bold text-[#26262b]">给他的批语</div>
+            <div className="mt-1.5 px-1 text-[11.5px] leading-relaxed text-[#9a9aa2]">
+              {s.myScore} 分 · {gradeLabel(s.myScore)} · {s.myComment}
             </div>
-            <div className="mt-2.5 rounded-xl bg-[#fff5f7] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-[#4a4a52]">{s.myComment}</div>
-            <div className="mt-2 text-center text-[11px] text-[#c9c9cf]">{ta} 已经知道你的批语啦</div>
+            <div className="mt-1 px-1 text-[11px] text-[#c9c9cf]">{ta} 已经知道你的批语啦</div>
           </div>
         )}
-        {/* TA 在我的批改下面留言（第十七轮：看完分数和批语后的感想，人设 + 记忆生成） */}
+
+        {/* TA 在我的批语下面留言（第十七轮：看完分数和批语后的感想，人设 + 记忆生成） */}
         {s.myScore != null && (
-          <div className="mt-2.5 rounded-2xl bg-white px-4 py-3.5 shadow-[0_6px_20px_rgba(0,0,0,0.06)]" data-testid="exam-ta-reply">
-            <div className="text-[12px] font-bold text-[#576b95]">{ta} 的留言</div>
+          <div className="mt-3" data-testid="exam-ta-reply">
+            <div className="px-1 text-[13.5px] font-bold text-[#26262b]">{ta} 的留言</div>
             {s.taReply ? (
               <div className="mt-2 flex items-start gap-2">
                 {state.taAvatar ? (
@@ -8183,121 +8348,83 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 ) : (
                   <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#576b95]/15 text-[11px] font-bold text-[#576b95]">{ta.slice(0, 1)}</span>
                 )}
-                <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-[#f5f7fc] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-[#4a4a52]">{s.taReply}</div>
+                <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-white px-3.5 py-2.5 text-[13.5px] leading-relaxed text-[#4a4a52] shadow-[0_1px_4px_rgba(0,0,0,0.04)]">{s.taReply}</div>
               </div>
             ) : (
-              <div className="mt-2 flex items-center gap-1.5 text-[12px] text-[#9a9aa2]">
+              <div className="mt-2 flex items-center gap-1.5 px-1 text-[12px] text-[#9a9aa2]">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> 正在写下想说的话…
               </div>
             )}
           </div>
         )}
-        <div className="mt-4 space-y-2.5">
-          <div className="px-1 text-[13.5px] font-bold text-[#26262b]">TA 的作答</div>
-          {(state.examPaper?.questions ?? []).map((q, i) => {
-            const pick = s.picks[String(i)];
-            return (
-              <div key={i} className="rounded-xl bg-white px-3.5 py-2.5 text-[12.5px] shadow-sm">
-                <div className="font-medium text-[#26262b]">
-                  {i + 1}. {q.q}
-                </div>
-                <div className="mt-1 text-[#576b95]">
-                  {ta}答：{pick != null && q.opts[pick] ? q.opts[pick] : '（跳过了这题）'}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <button type="button" onClick={() => setView('bank')} className="mb-2 mt-5 h-12 w-full rounded-full bg-[#f2536a] text-[15px] font-semibold text-white active:opacity-85">
+        <button type="button" onClick={() => setView('bank')} className="mx-auto mb-2 mt-6 block rounded-full bg-white px-6 py-2 text-[12.5px] text-[#8e8e96] shadow-[0_1px_4px_rgba(0,0,0,0.05)]">
           返回题库
         </button>
       </SubShell>
     );
   }
 
-  // ---------- 作答视图（参考图5/6 试卷样式；TA 的卷与我的卷同款；第二十一轮：可叫 TA 一起同时答题） ----------
+  // ---------- 作答视图（第二十三轮：和批改答卷页一样扁平简约——无试卷装饰/无陪答开关/无喊TA按钮/无提示语，只有题目和交卷） ----------
   if (view === 'answer' && working) {
     const answeredN = Object.keys(answers).length;
     const taLiveNow = !workTa ? state.examPaper?.taLive ?? null : null;
+    const perScore = working.questions.length > 0 ? 100 / working.questions.length : 0;
+    const fmtScore = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
     return (
       <SubShell title={workTa ? `${ta} 的考卷` : '恋爱水平考试'} onBack={() => setView('bank')}>
-        <div className="-mx-3 min-h-[420px] bg-[linear-gradient(180deg,#fdeef3,#fbe3ec)] px-3 py-4">
-          <ExamPaperSheet
-            title={working.title}
-            notes={workTa ? (taPaper?.notes ?? []) : (paper?.notes ?? [])}
-            questions={working.questions}
-            examiner={workTa ? ta : me}
-            page={page}
-            perPage={PER_PAGE}
-            answers={answers}
-            onPick={(qi, oi) => {
-              setAnswers((a) => ({ ...a, [qi]: oi }));
-              // 第二十一轮：AI 陪答——我每答一题，TA 同时给出 TA 的选择 + 想法（他知道我选了什么，想法持久化在试卷里）
-              if (!companion || workTa) return;
-              const q = working.questions[qi];
-              if (!q) return;
-              setCompBusy((b) => ({ ...b, [qi]: true }));
-              void (async () => {
-                try {
-                  const { aiExamCompanion } = await import('@/lib/ios/couple-ai');
-                  const r = await aiExamCompanion(working.title, { q: q.q, opts: q.opts }, oi);
-                  if (r) {
-                    patchFn((prev) =>
-                      prev.examPaper
-                        ? {
-                            examPaper: {
-                              ...prev.examPaper,
-                              taLive: {
-                                picks: { ...(prev.examPaper.taLive?.picks ?? {}), [String(qi)]: r.pick },
-                                thoughts: { ...(prev.examPaper.taLive?.thoughts ?? {}), [String(qi)]: r.thought },
-                              },
-                            },
-                          }
-                        : {},
-                    );
-                  }
-                } catch {
-                  /* 静默 */
-                }
-                setCompBusy((b) => {
-                  const n = { ...b };
-                  delete n[qi];
-                  return n;
-                });
-              })();
-            }}
-            onPrev={() => setPage((p) => Math.max(0, p - 1))}
-            onNext={() => setPage((p) => Math.min(Math.ceil(working.questions.length / PER_PAGE) - 1, p + 1))}
-            taLive={taLiveNow}
-            taName={ta}
-            thinking={compBusy}
-            companionOn={companion && !workTa}
-          />
+        <div className="mt-3 text-center text-[13px] font-medium text-[#9a9aa2]" data-testid="exam-answer-sheet">
+          《{working.title}》
         </div>
-        {/* 第二十一轮：叫 TA 一起同时答题（默认开；TA 的卷不需要陪答） */}
-        {!workTa && (
-          <button
-            type="button"
-            data-testid="exam-companion-toggle"
-            onClick={() => setCompanion((v) => !v)}
-            className={`mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-full text-[13.5px] font-semibold transition-colors ${
-              companion ? 'bg-[#fdeef3] text-[#e0607e] ring-1 ring-[#f8a0b4]' : 'bg-white text-[#9a9aa2] ring-1 ring-[#e9e9ee]'
-            }`}
-          >
-            <Users className="h-4 w-4" strokeWidth={2} />
-            {companion ? `${ta} 正在和我一起答题 · 每答一题他会写下他的想法` : `叫${ta}和我一起答题`}
-          </button>
-        )}
-        {!inviting && (
-          <button
-            type="button"
-            data-testid="exam-invite-ta"
-            onClick={() => setPickerOpen(true)}
-            className="mt-3 h-11 w-full rounded-full bg-white text-[14px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80"
-          >
-            喊 {ta} 也来答这份卷
-          </button>
-        )}
+        {/* 题目扁平列表（与批改页同款：虚线分隔，无白面板） */}
+        <div className="mt-2">
+          {working.questions.map((q, qi) => {
+            const picked = answers[qi];
+            const taPick = !workTa && picked != null ? taLiveNow?.picks[String(qi)] : undefined;
+            return (
+              <div key={qi} className="border-b border-dashed border-[#e9e9ee] py-3 last:border-0">
+                <div className="text-[13.5px] font-medium leading-relaxed text-[#26262b]">
+                  {qi + 1}、{q.q}
+                  <span className="ml-1 whitespace-nowrap text-[11px] font-normal text-[#9a9aa2]">（{fmtScore(perScore)}分）</span>
+                </div>
+                <div className="mt-1.5 space-y-1">
+                  {q.opts.map((o, oi) => {
+                    const isPicked = picked === oi;
+                    return (
+                      <button
+                        key={oi}
+                        type="button"
+                        onClick={() => onPickAnswer(qi, oi)}
+                        className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] leading-relaxed transition-colors ${
+                          isPicked
+                            ? 'border-[1.5px] border-[#f8a0b4] bg-[#fdeef3] font-medium text-[#e0607e]'
+                            : taPick === oi
+                              ? 'border-[1.5px] border-[#576b95] bg-[#eef2fb] text-[#576b95]'
+                              : 'text-[#4a4a52] active:bg-[#f7f7f9]'
+                        }`}
+                      >
+                        <span className={`mt-px shrink-0 font-bold ${isPicked ? 'text-[#e0607e]' : taPick === oi ? 'text-[#576b95]' : 'text-[#9a9aa2]'}`}>{'ABCD'[oi] ?? oi + 1}.</span>
+                        <span className="min-w-0">{o}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* AI 陪答（第二十一轮功能保留，第二十三轮去掉开关默认开启）：TA 的选择+想法灰色小字 */}
+                {!workTa && picked != null && (
+                  compBusy[qi] ? (
+                    <div className="mt-1.5 flex items-center gap-1.5 pl-2 text-[11.5px] text-[#9a9aa2]">
+                      <Loader2 className="h-3 w-3 animate-spin" /> {ta} 正在想这题…
+                    </div>
+                  ) : taLiveNow?.thoughts[String(qi)] ? (
+                    <div className="mt-1.5 pl-2 text-[11.5px] leading-relaxed text-[#9a9aa2]" data-testid={`exam-ta-thought-${qi}`}>
+                      {ta}：{taLiveNow.thoughts[String(qi)]}
+                      {taLiveNow?.picks[String(qi)] != null && <span className="text-[#b6b6bd]">（他选了：{q.opts[taLiveNow.picks[String(qi)]] ?? ''}）</span>}
+                    </div>
+                  ) : null
+                )}
+              </div>
+            );
+          })}
+        </div>
         <button
           type="button"
           data-testid="exam-submit"
@@ -8315,8 +8442,6 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             '交卷'
           )}
         </button>
-        <div className="text-center text-[11.5px] leading-relaxed text-[#b6b6bd]">交卷后由 {ta} 批卷打分，TA 会看到你每一题的答案</div>
-        {pickerOpen && <ShareChannelPicker title="喊 TA 来答题" hint="选择用哪个 App 发送试卷邀请，再选联系人" onSend={(ch, cid) => { setPickerOpen(false); void inviteTa(ch, cid); }} onClose={() => setPickerOpen(false)} />}
       </SubShell>
     );
   }
@@ -8337,40 +8462,62 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             onNext={() => setPage((p) => Math.min(Math.ceil(preview.questions.length / PER_PAGE) - 1, p + 1))}
           />
         </div>
+        {/* 第二十二轮：「修改试卷」改「和他一起答题」（喊他同时作答）；生成试卷并排 */}
         <div className="mb-2 mt-4 grid grid-cols-2 gap-3">
-          <button type="button" data-testid="exam-back-bank" onClick={() => setView('bank')} className="h-12 rounded-full bg-white text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80">
-            修改试卷
+          <button
+            type="button"
+            data-testid="exam-invite-together"
+            onClick={() => setPickerOpen(true)}
+            disabled={inviting}
+            className="h-12 rounded-full bg-white text-[14.5px] font-semibold text-[#576b95] ring-1 ring-[#b9c7e2] active:opacity-80 disabled:opacity-50"
+          >
+            {inviting ? '发送中…' : '和他一起答题'}
           </button>
           <button
             type="button"
-            data-testid="exam-invite-ta"
-            onClick={() => setPickerOpen(true)}
-            disabled={inviting}
-            className="h-12 rounded-full bg-white text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80 disabled:opacity-50"
+            data-testid="exam-make-paper"
+            onClick={makePaper}
+            className="h-12 rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[15px] font-semibold text-white shadow-[0_6px_18px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98]"
           >
-            {inviting ? '发送中…' : '喊他来答题'}
+            生成试卷
           </button>
         </div>
-        <button
-          type="button"
-          data-testid="exam-make-paper"
-          onClick={makePaper}
-          className="mb-2 h-[52px] w-full rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
-        >
-          生成试卷
-        </button>
-        <div className="text-center text-[11.5px] leading-relaxed text-[#b6b6bd]">生成后你可以自己答，也可以喊 {ta} 来答；交卷后 {ta} 批卷打分</div>
-        {pickerOpen && <ShareChannelPicker title="喊 TA 来答题" hint="选择用哪个 App 发送试卷邀请，再选联系人" onSend={(ch, cid) => { setPickerOpen(false); void inviteTa(ch, cid); }} onClose={() => setPickerOpen(false)} />}
+        <div className="text-center text-[11.5px] leading-relaxed text-[#b6b6bd]">「和他一起答题」把卷子发给他，他和你同时作答；也可以先生成试卷自己答</div>
+        {pickerOpen && <ShareChannelPicker title="和他一起答题" hint="选择用哪个 App 发送试卷邀请，再选联系人" onSend={(ch, cid) => { setPickerOpen(false); void inviteTa(ch, cid); }} onClose={() => setPickerOpen(false)} />}
       </SubShell>
     );
   }
 
-  // ---------- 我的卷子（第二十一轮：左上角入口；做过的卷子 + AI 的卷子都放进这里） ----------
+  // ---------- 我的卷子（第二十一轮：左上角入口；正在答的 + 做过的 + AI 的卷子都放进这里） ----------
   if (view === 'mine') {
     const hist = state.examHistory ?? [];
     const aiPapersDesc = [...(state.examAiPapers ?? [])].reverse();
     return (
       <SubShell title="我的卷子" onBack={() => setView('bank')}>
+        {/* 正在答的卷子（第二十二轮：题库页入口精简后，激活卷从这里继续作答） */}
+        {state.examPaper && (
+          <button
+            type="button"
+            data-testid="exam-mine-active"
+            onClick={() => {
+              setWorkTa(false);
+              setAnswers({});
+              setPage(0);
+              setView('answer');
+            }}
+            className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-[#f2dfe3] bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#fff5f7]"
+          >
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
+              <BookOpen className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.8} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[14px] font-semibold text-[#26262b]">正在答 《{state.examPaper.title}》</span>
+              <span className="block text-[11.5px] text-[#9a9aa2]">{state.examPaper.questions.length} 题 · 点此继续作答</span>
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
+          </button>
+        )}
+
         {/* 做过的卷子（我的 + TA 出的我答的，交卷即存档） */}
         <div className="mt-3 px-1 text-[14px] font-bold text-[#26262b]">做过的卷子</div>
         {hist.length === 0 ? (
@@ -8632,22 +8779,19 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
         </div>
       </div>
 
-      {/* AI 出的卷子（第二十一轮：上滑到底自动无限生成，之前生成的永不消失；用户配置的 API 模型出题，10~30 题） */}
-      <div className="mt-4">
+      {/* AI 出的卷子（第二十二轮：滑到底再上滑一下松手才生成，不再一滑就自动触发；卡片删「AI 新卷」标签；本区块以下内容全部移除） */}
+      <div className="mt-4" onTouchStart={onBankTouchStart} onTouchEnd={onBankTouchEnd}>
         <div className="flex items-baseline justify-between px-1">
           <div className="text-[14px] font-bold text-[#26262b]">AI 出的卷子</div>
-          <div className="text-[11px] text-[#9a9aa2]">上滑到底自动生成更多</div>
+          <div className="text-[11px] text-[#9a9aa2]">滑到底后再上滑一下，松手生成新卷子</div>
         </div>
         {(state.examAiPapers ?? []).length === 0 && !genBusy && (
-          <div className="mt-2 rounded-2xl border border-dashed border-[#e9d5da] bg-white/60 py-6 text-center text-[12px] text-[#b6b6bd]">上滑或点右上角更新，AI 给你出新卷</div>
+          <div className="mt-2 rounded-2xl border border-dashed border-[#e9d5da] bg-white/60 py-6 text-center text-[12px] text-[#b6b6bd]">点右上角更新，或滑到底再上滑一下，AI 给你出新卷</div>
         )}
         <div className="mt-2.5 space-y-3">
           {(state.examAiPapers ?? []).map((t, idx) => (
             <div key={t.id} className="relative rounded-[4px] border-[1.5px] border-dashed border-[#e0607e]/55 bg-white p-3.5" data-testid={`exam-ai-paper-${idx}`}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 text-[15px] font-bold leading-snug text-[#26262b]">{t.title}</div>
-                <span className="shrink-0 rounded-full bg-[#fdeef3] px-2 py-0.5 text-[10.5px] font-semibold text-[#e0607e]">AI 新卷</span>
-              </div>
+              <div className="text-[15px] font-bold leading-snug text-[#26262b]">{t.title}</div>
               <div className="mt-2.5 flex items-center justify-between">
                 <div className="flex items-center gap-1.5 text-[11.5px] text-[#4a4a52]">
                   <span>共{t.questions.length}题</span>
@@ -8676,6 +8820,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <Loader2 className="h-4 w-4 animate-spin" /> AI 正在出新卷…
           </div>
         )}
+        {!genBusy && (state.examAiPapers ?? []).length > 0 && <div className="py-4 text-center text-[11.5px] text-[#b6b6bd]">— 已经到底了 · 上滑一下松手生成新卷子 —</div>}
         {!genBusy && genFailRef.current >= 2 && (
           <button
             type="button"
@@ -8683,132 +8828,12 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               genFailRef.current = 0;
               void genMore();
             }}
-            className="mx-auto mt-3 block rounded-full bg-white px-5 py-2 text-[12.5px] text-[#6e6e76] ring-1 ring-[#e9e9ee]"
+            className="mx-auto mb-2 mt-3 block rounded-full bg-white px-5 py-2 text-[12.5px] text-[#6e6e76] ring-1 ring-[#e9e9ee]"
           >
             生成遇到点小问题，点我再试一次
           </button>
         )}
-        <div ref={sentinelRef} aria-hidden="true" className="h-2" />
       </div>
-
-      {/* 当前激活试卷（继续作答/重考） */}
-      {state.examPaper && (
-        <button
-          type="button"
-          data-testid="exam-active-paper"
-          onClick={() => {
-            setWorkTa(false);
-            setAnswers({});
-            setPage(0);
-            setView('answer');
-          }}
-          className="mt-4 flex w-full items-center gap-3 rounded-2xl border border-[#f2dfe3] bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#fff5f7]"
-        >
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
-            <ClipboardList className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.8} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14px] font-semibold text-[#26262b]">《{state.examPaper.title}》</span>
-            <span className="block text-[11.5px] text-[#9a9aa2]">我的试卷 · {state.examPaper.questions.length} 题 · 点此继续作答</span>
-          </span>
-          <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
-        </button>
-      )}
-
-      {/* TA 出卷喊我来答（聊天卡片之外的入口；已答完显示成绩） */}
-      {taPaper && (
-        <button
-          type="button"
-          data-testid="exam-ta-invite"
-          onClick={() => {
-            if (taPaper.answered && state.examResult) {
-              setWorkTa(true);
-              setView('result');
-            } else if (taPaper.answered) {
-              showToast('这张卷子你答过啦，等 TA 出新卷');
-            } else {
-              setWorkTa(true);
-              setAnswers({});
-              setPage(0);
-              setView('answer');
-            }
-          }}
-          className="mt-2.5 flex w-full items-center gap-3 rounded-2xl border-2 border-dashed border-[#f2536a]/55 bg-white px-4 py-3.5 text-left active:bg-[#fff5f7]"
-        >
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
-            <BookOpen className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.8} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14px] font-semibold text-[#26262b]">
-              {ta} 给你出了套卷 <span className="text-[#f2536a]">《{taPaper.title}》</span>
-            </span>
-            <span className="block text-[11.5px] text-[#9a9aa2]">{taPaper.answered ? '已答完 · 点此看成绩' : `${taPaper.questions.length} 题 · 点此去答题`}</span>
-          </span>
-          <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
-        </button>
-      )}
-
-      {/* TA 的答卷（TA 答了我喊TA答的卷） */}
-      {state.examTaSheet && (
-        <button
-          type="button"
-          data-testid="exam-ta-sheet-entry"
-          onClick={() => setView('tasheet')}
-          className="mt-2.5 flex w-full items-center gap-3 rounded-2xl border border-[#e4e9f6] bg-[#f8faff] px-4 py-3.5 text-left active:opacity-80"
-        >
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#e8eefb]">
-            <PencilLine className="h-4.5 w-4.5 text-[#576b95]" strokeWidth={1.8} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14px] font-semibold text-[#26262b]">
-              {ta} 的答卷 <span className="text-[#576b95]">《{state.examTaSheet.title}》</span>
-            </span>
-            <span className="block text-[11.5px] text-[#9a9aa2]">
-              {state.examTaSheet.score != null ? `自评 ${state.examTaSheet.score} 分` : '已交卷'}
-              {state.examTaSheet.myScore != null ? ` · 我批了 ${state.examTaSheet.myScore} 分` : ' · 等我批改'} · 点此看 TA 答了什么
-            </span>
-          </span>
-          <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
-        </button>
-      )}
-
-      {/* 最近成绩入口 */}
-      {state.examResult && (
-        <button
-          type="button"
-          data-testid="exam-result-entry"
-          onClick={() => {
-            setWorkTa(state.examResult!.byTa);
-            setView('result');
-          }}
-          className="mt-2.5 flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#fff5f7]"
-        >
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fff7e6]">
-            <Medal className="h-4.5 w-4.5 text-[#e6a23c]" strokeWidth={1.8} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14px] font-semibold text-[#26262b]">
-              上次成绩 <span className="text-[#f2536a]">{state.examResult.score} 分</span>
-            </span>
-            <span className="block truncate text-[11.5px] text-[#9a9aa2]">《{state.examResult.title}》· {ta} 的批语在里面</span>
-          </span>
-          <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
-        </button>
-      )}
-
-      {/* 导入模板（AI 现场出一张新卷） */}
-      <button
-        type="button"
-        data-testid="exam-import"
-        onClick={() => void importTpl()}
-        disabled={importing}
-        className="mx-auto mb-2 mt-5 flex h-12 items-center justify-center gap-2 rounded-[4px] border-[1.5px] border-[#3c3c42] bg-white px-8 text-[15px] font-bold text-[#26262b] shadow-[0_3px_0_rgba(60,60,66,0.16)] active:translate-y-px disabled:opacity-50"
-      >
-        {importing ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <BookOpen className="h-4.5 w-4.5" strokeWidth={1.9} />}
-        {importing ? 'AI 正在出卷…' : '导入模板'}
-      </button>
-      <div className="text-center text-[11.5px] leading-relaxed text-[#b6b6bd]">每次导入都是一套全新的卷子；TA 也会自己出卷喊你来答</div>
-      {pickerOpen && <ShareChannelPicker title="喊 TA 来答题" hint="选择用哪个 App 发送试卷邀请，再选联系人" onSend={(ch, cid) => { setPickerOpen(false); void inviteTa(ch, cid); }} onClose={() => setPickerOpen(false)} />}
     </SubShell>
   );
 }

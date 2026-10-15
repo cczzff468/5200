@@ -45,6 +45,7 @@ export interface CouplePactCardData {
   contactId: string; // 卡片所在会话的联系人 id
   pactId?: string; // 关联恋人空间里的协议记录 id（pacts 里）或 'ai'（TA 拟的草稿）
   reason?: string; // declined 时的理由（TA 说的）
+  declinedBy?: 'me' | 'ta'; // 第二十三轮：谁拒绝的（我拒 TA 的协议 / TA 拒我的协议，卡片文案不同）
   taSigned?: boolean; // 第十六轮：TA 分享前已先签上自己的名字（等对方签）
   msgId?: string; // 卡片所在消息 id（签署完成后回写卡片状态用）
   at: number; // 分享时间
@@ -140,6 +141,7 @@ export async function sendPactCard(opts: {
   pactId?: string;
   status?: 'pending' | 'signed' | 'declined';
   reason?: string;
+  declinedBy?: 'me' | 'ta';
   taSigned?: boolean;
 }): Promise<string | null> {
   const { channel, contactId, title, clauses, dir } = opts;
@@ -174,6 +176,7 @@ export async function sendPactCard(opts: {
     contactId,
     pactId: opts.pactId,
     reason: opts.reason,
+    declinedBy: opts.declinedBy,
     taSigned: opts.taSigned ?? false,
     at: Date.now(),
   };

@@ -345,12 +345,6 @@ export function EnvelopeArt({ envKey, className = '', pets = true, avatar }: { e
 
 // ---------------- 聊天气泡 ----------------
 
-/** MM-DD HH:mm（第二十一轮：信封卡片/信箱列表只显示时间，参考截图「10-26 00:17」） */
-function fmtMDHM(t: number): string {
-  const d = new Date(t);
-  return `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
 export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: { data: CoupleLetterCardData; mine: boolean; testidPrefix?: string }) {
   /** 点击卡片 → 进恋人空间信件页面（任何状态都直达信件详情；不进恋人空间主页） */
   const openLetter = () => {
@@ -370,8 +364,8 @@ export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: 
   };
   void mine;
 
-  // 第二十一轮：分享卡片=信箱里显示的信封样式——不显示信的内容，只显示时间 + 头像（火漆位）；
-  // 头像实时读恋人空间状态（TA 的信→taAvatar；我的信→自定义署名头像>微信/QQ 同步头像），换头像后卡片跟随
+  // 第二十三轮（用户反馈）：分享卡片不显示时间、不显示「可拆信」徽章——只有分享卡片不显示（信箱列表照旧），
+  // 整张卡就是一枚纯净的信封（火漆位仍是头像），点卡片直接读信
   let avatar: string | null = null;
   try {
     const snap = kvGet<Record<string, unknown>>('couple-space:state');
@@ -380,7 +374,6 @@ export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: 
   } catch {
     /* 读不到就用纯火漆印 */
   }
-  const statusText = data.from === 'ta' ? '可拆信' : '已寄出';
 
   return (
     <button
@@ -393,18 +386,6 @@ export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: 
       className="relative block w-[248px] cursor-pointer select-none overflow-hidden rounded-[10px] shadow-sm transition-transform active:scale-[0.985]"
     >
       <EnvelopeArt envKey={data.envelope} className="h-[132px] w-full" pets avatar={avatar} />
-      {/* 右上状态徽章（与信箱列表一致） */}
-      <span
-        className={`absolute right-3 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ${
-          data.from === 'ta' ? 'bg-[#21b357] text-white' : 'bg-black/38 text-white/90'
-        }`}
-      >
-        {statusText}
-      </span>
-      {/* 底部：只显示时间（第二十一轮：信的内容不再展示） */}
-      <span className="absolute inset-x-0 bottom-0 z-10 block bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">
-        <span className="block truncate text-[12px] font-medium tabular-nums text-white/90">{fmtMDHM(data.at)}</span>
-      </span>
     </button>
   );
 }

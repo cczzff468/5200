@@ -66,7 +66,7 @@ interface CoupleSnap {
   pactSignTa?: string | null;
   /** 已存档的协议书（第十二轮：AI 知道全部协议及签署状态） */
   pacts?: { id: string; title: string; preamble: string; clauses: string[]; signMe: string | null; signTa: string | null; meAt: number | null; taAt: number | null; at: number; status?: string; reason?: string }[];
-  aiPact?: { title: string; preamble: string; clauses: string[]; at: number; signTa?: string | null } | null;
+  aiPact?: { title: string; preamble: string; clauses: string[]; at: number; signTa?: string | null; declined?: boolean } | null;
   annivExtra?: { key: string; label: string; date: string }[];
   aiAnnivKeys?: string[];
   impressionsMe?: string[];
@@ -97,7 +97,7 @@ interface CoupleSnap {
   /** 恋爱水平考试（第十五轮）：TA 知道卷子、成绩和彼此的作答 */
   examPaper?: { title: string; questions: { q: string; opts: string[] }[]; source?: string } | null;
   examTaPaper?: { title: string; questions: { q: string; opts: string[] }[]; at: number; answered?: boolean } | null;
-  examTaSheet?: { title: string; picks: Record<string, number>; score?: number; comment?: string; at: number; myScore?: number | null; myComment?: string; taReply?: string } | null;
+  examTaSheet?: { title: string; picks: Record<string, number>; score?: number; comment?: string; at: number; myScore?: number | null; myComment?: string; taReply?: string; myMarks?: Record<string, { ok: boolean; score: number }> } | null;
   examResult?: { title: string; score: number; comment: string; byTa: boolean; at: number } | null;
   /** 星座缘分解读（第十九轮：用户 API 模型按真实占星生成，TA 也知道咱们的缘分结果） */
   zodiacReading?: { me: string; ta: string; score: number; text: string; glow: string; advice: string; watch: string; at: number } | null;
@@ -272,7 +272,11 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
 
   // 恋爱协议（AI 知道内容，还要能自己签字/拟协议/被分享后自己决定签不签；第十二轮：知道全部协议及状态）
   if (snap.aiPact) {
-    lines.push(`- ${ta}拟了一份恋爱协议《${cut(snap.aiPact.title, 16)}》等${me}签（条款：${snap.aiPact.clauses.slice(0, 3).map((c) => cut(c, 22)).join('；')}…）。`);
+    lines.push(
+      snap.aiPact.declined
+        ? `- ${ta}曾拟过一份恋爱协议《${cut(snap.aiPact.title, 16)}》，但${me}拒绝了没有签（条款：${snap.aiPact.clauses.slice(0, 3).map((c) => cut(c, 22)).join('；')}…）。${ta}已经知道被拒绝了，别再当成还等着签的事提。`
+        : `- ${ta}拟了一份恋爱协议《${cut(snap.aiPact.title, 16)}》等${me}签（条款：${snap.aiPact.clauses.slice(0, 3).map((c) => cut(c, 22)).join('；')}…）。`,
+    );
   }
   for (const p of (snap.pacts ?? []).slice(0, 3)) {
     const st = p.status ?? (p.signTa ? 'signed' : 'pending');
@@ -448,9 +452,11 @@ function threadContext(key: string, snap: CoupleSnap, me: string, ta: string): s
     return '留言写在一封情书下面。';
   }
   if (key === 'trail') {
+    // 第二十三轮：聊天上下文带上新的动态记录流（trailFeed，AI 自己生成的位置/手机记录），聊天要贴着这些真实动态说
+    const feed = (snap.trailFeed ?? []).slice(-5).map((r) => `${r.dateKey.slice(5)} ${r.t} ${r.text}`);
     const trail = (snap.taTrail?.items ?? []).filter((i) => i.who !== 'me').slice(0, 3);
     const meT = (snap.taTrail?.items ?? []).filter((i) => i.who === 'me').slice(0, 2);
-    return `这是情侣轨迹「位置与轨迹」页的聊天区（${ta}今天的行程：${trail.map((i) => `${i.t}${i.place}`).join('、') || '还没记录'}；${me}的手机动态：${meT.map((i) => i.text || i.place).join('、') || '还没记录'}），你们在这里聊今天去过哪、聊见面计划。`;
+    return `这是情侣轨迹「位置与轨迹」页的聊天区（最近的动态记录：${feed.join('；') || '还没记录'}；${ta}今天的行程：${trail.map((i) => `${i.t}${i.place}`).join('、') || '还没记录'}；${me}的手机动态：${meT.map((i) => i.text || i.place).join('、') || '还没记录'}），你们在这里聊今天去过哪、正在做什么、聊见面计划——回复要接得上上面的动态和你的人设作息。`;
   }
   return '留言写在恋人空间里。';
 }
@@ -495,9 +501,12 @@ export function scheduleAiReply(key: string, delayMin = 2600, delayMax = 6500): 
         }
         // 最近微信/QQ 聊天话题（留言要贴着你们最近聊的事，不悬浮）
         const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+        // 第二十三轮：我的这条留言也写进恋人记忆（TA 之后在别处聊天也知道我说过这句）
+        coupleRemember(target.contactId, target.channel, `${me}在${sceneOfKey(key, snap)}里对${ta}说：${cut(lastMine.text, 50)}`);
         let text = '';
         try {
-          text = await coupleLLM(
+          // 第二十三轮：改走用户配置的 API 模型优先（原内置模型限流时全部落到模板，用户反馈「没根据人设记忆聊天」）
+          text = await llmUserFirst(
             `${llmSystem(p, me, snap)}\n场景：你们正在恋人空间 App 的${sceneOfKey(key, snap)}里互相留言。${threadContext(key, snap, me, ta)}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 360)}` : ''}`,
             `最近的留言：\n${convo}\n${quoteLine}\n\n请以「${ta}」的口吻回复${me}的最新留言：30 字内，口语、贴合人设与你们的真实记忆和最近聊过的话题；\n绝对禁止敷衍应付：像「好啦好啦听你的」「随便你」「都行」「好好好」这类话一个字都不许出现；\n你的回复必须接住${me}留言里的具体内容：回应他说的那件事，给出你真实的想法/感受/追问/小要求，像真情侣拌嘴或撒娇。如果${me}在反驳你，可以不服气地讲道理，也可以撒娇软化。禁止使用任何 emoji/表情符号。只输出回复内容。`,
           );
@@ -1408,7 +1417,7 @@ const AI_PACT_TPL = [
 
 /** AI 自己拟协议让我签（无待签草稿 + 冷却 7 天）；第十二轮：拟完自动把协议卡片分享到微信/QQ 会话 */
 async function aiTickPact(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
-  if (snap.aiPact) return; // 已有一份等我签
+  if (snap.aiPact && !snap.aiPact.declined) return; // 已有一份等我签（第二十三轮：被我拒绝的旧草稿不挡新协议）
   if (snap.pactAt != null && Date.now() - (snap.pactAt ?? 0) < 7 * 86400000) return; // 刚生效过一份，冷却
   let picked: { title: string; clauses: string[] } | null = null;
   try {

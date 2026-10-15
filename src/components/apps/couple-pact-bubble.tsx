@@ -1,13 +1,17 @@
 'use client';
 
 /**
- * 恋爱协议卡片气泡（第十二轮）——微信/QQ 聊天共用。
+ * 恋爱协议卡片气泡（第十二轮；第二十三轮按参考截图整体美化）——微信/QQ 聊天共用。
  *
- * 用户规格：分享协议在聊天界面需要发送一个卡片，点击卡片进入签署协议界面。
- * 仿亲密关系卡（couple-rel-bubble）的白底卡样式：
- * - 标题《协议名》+ 条款前 2 条摘要 + 右侧恋人空间图标 + 底部「恋爱协议」小字标签；
- * - TA 分享且 pending → 底部「去签署」按钮；declined → 显示 TA 的婉拒理由；
- * - 点击卡片本体 → 记 pending + 切进恋人空间 App（PactPage 消费后跳对应界面）。
+ * 第二十三轮卡片视觉（对照用户参考图「恋人空间分享卡 · 恋爱协议书」）：
+ * - 顶部：粉色双心圆 logo +「恋人空间」灰色小字；
+ * - 大标题：「我写的恋爱协议，等你来签名」（我发的）/「{TA}写的恋爱协议，等你来签名」（TA 发的）；
+ * - 文档预览区：白纸 + 居中「恋爱协议书」标题 + 分隔横线 + 前言段落 + 虚线 + 编号条款列表
+ *   （仿真协议书排版）；
+ * - 状态：已签署盖红章「已签署生效」；我拒绝的盖灰章「已拒绝」（第二十三轮 declinedBy）；
+ * - 底部：未签署的 TA 卡出「去签署」按钮；其余出状态行。
+ *
+ * 点击卡片本体 → 记 pending + 切进恋人空间 App（PactPage 消费后跳对应界面）。
  */
 
 import type { CouplePactCardData } from '@/lib/ios/couple-pact-share';
@@ -20,6 +24,11 @@ export interface CouplePactBubbleProps {
   /** 消息是否我发的（msg.role === 'me'） */
   mine: boolean;
   testidPrefix?: string; // 'wx' | 'qq'（E2E 用）
+}
+
+/** 恋人空间圆 logo（粉色双心官方原图裁圆） */
+function AppLogo() {
+  return <img src="/icons/couple.png" alt="" aria-hidden="true" className="h-[26px] w-[26px] rounded-full object-cover shadow-[0_1px_3px_rgba(0,0,0,0.12)]" draggable={false} />;
 }
 
 export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: CouplePactBubbleProps) {
@@ -41,6 +50,7 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
     return { signed: data.status === 'signed', pactId: data.pactId && data.pactId !== 'ai' ? data.pactId : undefined };
   })();
   const declined = data.status === 'declined' && !live.signed;
+  const declinedByMe = declined && data.declinedBy === 'me';
   const signed = live.signed;
 
   /** 点击卡片 → 进恋人空间（携带卡片正文/TA 是否已先签名/是否已签署/卡片消息定位，任何状态都直达对应签署/回看界面） */
@@ -63,9 +73,12 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
     else if (!ui.activeApp && ui.phase === 'closed') ui.openApp('couple');
   };
 
-  // 状态行文案（TA 已先签名的 pending 卡显示「已签名，等你签署」；已签署统一「已签署生效」）
+  // 状态行文案（TA 已先签名的 pending 卡显示「已签名，等你签署」；已签署统一「已签署生效」；
+  // 第二十三轮：我拒绝的显示「你已拒绝这份协议，TA 已经知道了」）
   let statusLine: string;
-  if (data.from === 'ta') {
+  if (declinedByMe) {
+    statusLine = '你已拒绝这份协议 · TA 已经知道了';
+  } else if (data.from === 'ta') {
     statusLine = declined
       ? data.reason
         ? `TA 想了想：${data.reason}`
@@ -83,9 +96,9 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
   return (
     <div
       data-testid={`${testidPrefix}-pact-card`}
-      className={`w-[248px] select-none overflow-hidden rounded-[10px] bg-white shadow-sm dark:bg-[#1E1E1E] ${declined ? 'opacity-75' : ''} ${signed ? 'ring-1 ring-[#f2536a]/25' : ''}`}
+      className={`w-[248px] select-none overflow-hidden rounded-[10px] bg-white shadow-sm dark:bg-[#1E1E1E] ${declined ? 'opacity-80' : ''} ${signed ? 'ring-1 ring-[#f2536a]/25' : ''}`}
     >
-      {/* 卡片本体：标题 + 条款摘要 + 图标（点击进签署/回看界面） */}
+      {/* 卡片本体（点击进签署/回看界面）：logo 头 + 大标题 + 协议书文档预览 */}
       <button
         type="button"
         data-testid={`${testidPrefix}-pact-card-body`}
@@ -93,35 +106,72 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
           e.stopPropagation();
           openPact();
         }}
-        className="flex w-full cursor-pointer items-start gap-2.5 px-3 pb-2.5 pt-3 text-left transition-opacity active:opacity-60"
+        className="relative block w-full cursor-pointer px-3.5 pb-3 pt-3 text-left transition-opacity active:opacity-[0.92]"
       >
-        <span className="min-w-0 flex-1">
-          <span className="block text-[15.5px] font-semibold leading-[1.35] text-black dark:text-white">{data.fromName}的恋爱协议</span>
-          <span className="mt-0.5 block text-[13px] font-medium text-[#f2536a] dark:text-[#f9a8d4]">《{data.title}》</span>
-          <span className="mt-1 block text-[12px] leading-[1.5] text-black/45 dark:text-white/45">
-            {data.clauses.slice(0, 2).map((c, i) => (
-              <span key={i} className="block truncate">
-                {i + 1}. {c}
+        {/* 顶部：App logo + 名称 */}
+        <span className="flex items-center gap-2">
+          <AppLogo />
+          <span className="text-[14px] font-medium text-[#5a5a62]">恋人空间</span>
+        </span>
+        {/* 大标题 */}
+        <span className="mt-2 block text-[17.5px] font-bold leading-[1.4] text-[#111114]">
+          {data.from === 'ta' ? `${data.fromName}写的恋爱协议，等你来签名` : '我写的恋爱协议，等你来签名'}
+        </span>
+
+        {/* —— 协议书文档预览（仿真排版） —— */}
+        <span className={`relative mt-2.5 block border border-[#e4e4e8] bg-white px-3.5 pb-4 pt-3.5 ${declined ? 'bg-[#fafafa]' : ''}`}>
+          <span className="block text-center text-[16.5px] font-extrabold tracking-[2px] text-[#26262b]" style={{ fontFamily: "'Songti SC','STSong','SimSun',serif" }}>
+            恋爱协议书
+          </span>
+          <span aria-hidden="true" className="mt-2 block border-t-[1.5px] border-[#3a3a40]" />
+          <span className="mt-2.5 block text-justify text-[10.5px] leading-[1.8] text-[#3a3a40]">
+            {data.preamble?.trim() || '为维护双方的感情与信任，促进彼此理解与成长，建立健康、稳定、真诚的亲密关系，双方经友好协商，达成如下协议，共同遵守：'}
+          </span>
+          <span aria-hidden="true" className="mt-2.5 block border-t border-dashed border-[#d9d9de]" />
+          <span className="mt-2 block space-y-[5px]">
+            {data.clauses.slice(0, 5).map((c, i) => (
+              <span key={i} className="flex gap-[5px] text-[10.5px] leading-[1.65] text-[#3a3a40]">
+                <span className="w-[14px] shrink-0 text-right tabular-nums">{i + 1}.</span>
+                <span className="min-w-0">{c}</span>
               </span>
             ))}
-            {data.clauses.length > 2 && <span className="block">…共 {data.clauses.length} 条条款</span>}
+            {data.clauses.length > 5 && <span className="block pl-[19px] text-[10px] text-[#9a9aa2]">……共 {data.clauses.length} 条</span>}
           </span>
-        </span>
-        {/* 恋人空间图标（粉色双心官方原图，圆角方块）；已签署时右上角盖小红章 */}
-        <span className="relative h-11 w-11 shrink-0">
-          <span aria-hidden="true" className="block h-11 w-11 overflow-hidden rounded-[9px] shadow-[0_2px_6px_rgba(0,0,0,0.10)]">
-            <img src="/icons/couple.png" alt="恋人空间" className="h-full w-full object-cover" draggable={false} />
-          </span>
+          {/* 签名栏（淡淡的，像还没签的空栏） */}
+          {!signed && !declined && (
+            <span aria-hidden="true" className="mt-3 flex justify-between text-[8.5px] text-[#b6b6bd]">
+              <span>{data.from === 'ta' && data.taSigned ? `签名：${data.fromName}` : '签名：＿＿＿＿＿'}</span>
+              <span>日期：＿＿＿＿年＿＿月＿＿日</span>
+            </span>
+          )}
           {signed && (
-            <span aria-hidden="true" className="absolute -right-1.5 -top-1.5 rotate-12 rounded-[4px] border border-[#e0607e] bg-white/95 px-1 py-px text-[9px] font-bold leading-tight text-[#e0607e] shadow-sm">
-              已签署
+            <span aria-hidden="true" className="mt-3 flex justify-between text-[8.5px] text-[#9a9aa2]">
+              <span>签名：{data.from === 'ta' ? `${data.fromName} · ${data.toName}` : `${data.toName} · ${data.fromName}`}</span>
+              <span className="font-semibold text-[#e0607e]">已生效 ♡</span>
+            </span>
+          )}
+
+          {/* 状态大印章（盖在文档右下） */}
+          {signed && (
+            <span aria-hidden="true" className="absolute bottom-[14px] right-[8px] grid h-[46px] w-[46px] rotate-[-14deg] place-items-center rounded-full border-2 border-[#e0607e]/80 bg-white/70 text-center text-[9px] font-bold leading-[1.25] text-[#e0607e]">
+              恋人空间<br />已签署
+            </span>
+          )}
+          {declinedByMe && (
+            <span aria-hidden="true" className="absolute bottom-[14px] right-[8px] grid h-[46px] w-[46px] rotate-[-14deg] place-items-center rounded-full border-2 border-[#8e8e96]/70 bg-white/70 text-center text-[9px] font-bold leading-[1.25] text-[#8e8e96]">
+              已拒绝
+            </span>
+          )}
+          {declined && !declinedByMe && (
+            <span aria-hidden="true" className="absolute bottom-[14px] right-[8px] grid h-[46px] w-[46px] rotate-[-14deg] place-items-center rounded-full border-2 border-[#8e8e96]/70 bg-white/70 text-center text-[9px] font-bold leading-[1.25] text-[#8e8e96]">
+              已婉拒
             </span>
           )}
         </span>
       </button>
 
-      {/* 底部：未签署的 TA 卡出「去签署」按钮；其余出状态行（已签署动态显示「已签署生效」） */}
-      {data.from === 'ta' && data.status === 'pending' && !signed ? (
+      {/* 底部：未签署的 TA 卡出「去签署」按钮；其余出状态行（保留原 E2E testid） */}
+      {data.from === 'ta' && data.status === 'pending' && !signed && !declined ? (
         <button
           type="button"
           data-testid={`${testidPrefix}-pact-card-sign`}
