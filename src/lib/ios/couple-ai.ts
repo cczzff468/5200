@@ -87,6 +87,11 @@ interface CoupleSnap {
   replyTa?: { active: boolean; picks: Record<string, { pick: number; say: string; at: number }>; mePicks: Record<string, { pick: number; text: string }>; startedAt: number; endedAt: number | null } | null;
   /** AI 主动留言去重（每天最多一条）：最近一次主动留言的日期 key */
   aiCommentDay?: string;
+  /** 恋爱水平考试（第十五轮）：TA 知道卷子、成绩和彼此的作答 */
+  examPaper?: { title: string; questions: { q: string; opts: string[] }[]; source?: string } | null;
+  examTaPaper?: { title: string; questions: { q: string; opts: string[] }[]; at: number; answered?: boolean } | null;
+  examTaSheet?: { title: string; picks: Record<string, number>; score: number; comment: string; at: number } | null;
+  examResult?: { title: string; score: number; comment: string; byTa: boolean; at: number } | null;
 }
 
 /** 留言线程 key → 场景名（记忆/注入/AI 上下文共用） */
@@ -322,6 +327,24 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
     lines.push(
       `- 情侣轨迹：${snap.myLoc ? `${me}在${snap.myLoc.name}` : ''}${snap.myLoc && snap.taLoc ? '，' : ''}${snap.taLoc ? `${ta}在${snap.taLoc.name}` : ''}${dist ? `，两人相距 ${dist}` : ''}${snap.meetLoc ? `；相遇的地方是${snap.meetLoc.name}` : ''}。`,
     );
+  }
+
+  // 恋爱水平考试（TA 知道卷子、成绩和彼此的作答；第十五轮）
+  const ep = snap.examPaper;
+  if (ep && ep.source === 'me') {
+    lines.push(`- 恋爱水平考试：${me}出了张卷子《${cut(ep.title, 18)}》（共 ${ep.questions.length} 题，第一题是「${cut(ep.questions[0]?.q ?? '', 24)}」）。${ta}被问到这张卷子时要能聊得上。`);
+  }
+  const etp = snap.examTaPaper;
+  if (etp) {
+    lines.push(`- 恋爱水平考试：你给${me}出了张卷子《${cut(etp.title, 18)}》（共 ${etp.questions.length} 题）${etp.answered ? `，${me}已经答完了` : `，${me}还没答，可以提醒TA来答`}。`);
+  }
+  const ets = snap.examTaSheet;
+  if (ets) {
+    lines.push(`- ${ta}答了${me}出的卷子《${cut(ets.title, 16)}》，自评 ${ets.score} 分，交卷时说「${cut(ets.comment, 30)}」。这是${ta}自己的作答，${ta}当然记得。`);
+  }
+  const er = snap.examResult;
+  if (er) {
+    lines.push(`- 恋爱水平考试成绩：《${cut(er.title, 16)}》${me}得了 ${er.score} 分，${ta}的批语是「${cut(er.comment, 36)}」${er.byTa ? `（这是${ta}出的卷）` : ''}。`);
   }
 
   if (lines.length === 0) return '';
@@ -1230,7 +1253,7 @@ async function aiTickPact(snap: CoupleSnap, me: string, ta: string, p: TaPersona
  * AI 决定签/不签一份协议（第十二轮：AI 自己决定，不无脑全签）。
  * 按人设 + 你们的记忆评估条款：合理/甜蜜的签；过分/不平等的会提出意见婉拒。
  */
-export async function aiDecidePact(title: string, clauses: string[]): Promise<{ agree: boolean; reason: string }> {
+export async function aiDecidePact(title: string, clauses: string[]): Promise<{ agree: boolean; reason: string; changeIdx?: number; changeTo?: string }> {
   const target = aiTarget();
   if (target) {
     try {
@@ -1243,11 +1266,17 @@ export async function aiDecidePact(title: string, clauses: string[]): Promise<{ 
         const ta = (snap.taName || '').trim() || 'TA';
         const raw = await coupleLLM(
           `${llmSystem(p, me, snap)}\n场景：${me}拟了一份恋爱协议分享给你，等你决定签不签。`,
-          `协议《${cut(title, 16)}》的条款：\n${(clauses ?? []).map((c, i) => `${i + 1}. ${cut(c, 40)}`).join('\n')}\n\n请以「${ta}」的身份认真评估：这些条款是否合理、是否双方平等、是不是你真心愿意遵守的。\n大部分合理就签；如果有明显不平等/离谱的条款，可以婉拒并说出你想改的地方（语气可爱不伤人）。\n输出 JSON：{"agree":true或false,"reason":"你的理由（≤30字，口语，像恋人间的商量）"}。只输出 JSON。`,
+          `协议《${cut(title, 16)}》的条款：\n${(clauses ?? []).map((c, i) => `${i + 1}. ${cut(c, 40)}`).join('\n')}\n\n请以「${ta}」的身份认真评估：这些条款是否合理、是否双方平等、是不是你真心愿意遵守的。\n你有三种回应：①条款基本合理 → 直接签；②个别条款你不乐意（只挑一条最想改的）→ 不同意并说出你想改成什么；③整体都离谱 → 婉拒（语气可爱不伤人）。\n输出 JSON：{"agree":true或false,"reason":"你的理由（≤30字，口语，像恋人间的商量）","changeIdx":想改的条款序号（1起，agree为true或不想改就不写这个字段）,"changeTo":"想改成的内容（≤30字，只有给了changeIdx才写）"}。只输出 JSON。`,
         );
-        const j = extractJson<{ agree?: boolean; reason?: string }>(raw);
+        const j = extractJson<{ agree?: boolean; reason?: string; changeIdx?: number; changeTo?: string }>(raw);
         if (j && typeof j.agree === 'boolean') {
-          return { agree: j.agree, reason: cut(stripEmoji(String(j.reason ?? '')), 40) || (j.agree ? '条款我都喜欢' : '有几条我想再商量') };
+          const idx = typeof j.changeIdx === 'number' && Number.isInteger(j.changeIdx) && j.changeIdx >= 1 && j.changeIdx <= (clauses?.length ?? 0) ? j.changeIdx - 1 : undefined;
+          const changeTo = idx != null ? cut(stripEmoji(String(j.changeTo ?? '')), 36) : undefined;
+          return {
+            agree: j.agree,
+            reason: cut(stripEmoji(String(j.reason ?? '')), 40) || (j.agree ? '条款我都喜欢' : '有几条我想再商量'),
+            ...(idx != null && changeTo && !j.agree ? { changeIdx: idx, changeTo } : {}),
+          };
         }
       }
     } catch {
@@ -1438,6 +1467,12 @@ export function runCoupleAiTick(channel: CoupleChannel, contactId: string): void
       if (!p || !s) return;
       await aiTickComment(s, me, ta, p); // AI 主动去留言区留言（每天最多一条）
     });
+    step(176000, async () => {
+      const p = await taPersonaOf(contactId);
+      const s = readSnap();
+      if (!p || !s) return;
+      await aiTickExam(s, me, ta, p); // AI 出卷喊我来答（每 3 天最多一次）
+    });
   }
 }
 
@@ -1600,6 +1635,143 @@ export async function aiReplyVerdict(input: {
     /* 本地兜底 */
   }
   return fallback();
+}
+
+// ---------------- 恋爱水平考试（第十五轮：官方题库 + 我喊TA答题 + TA出卷喊我答 + AI 打分想说的话） ----------------
+
+/** 出一张全新的恋爱水平考试卷（LLM 失败返回 null；mode='ta'=TA 出卷考恋人 / 'import'=官方风格新模板） */
+export async function genExamPaper(mode: 'ta' | 'import'): Promise<{ title: string; notes: string[]; questions: { q: string; opts: string[] }[] } | null> {
+  const sys =
+    mode === 'ta'
+      ? '你是恋爱里的一方，要给你的恋人出一张「恋爱水平考试」卷子考考TA。题目要贴合你们的关系、日常小事和你的小脾气：可以有一两道送分题、几道态度题和一两道送命题，风格俏皮但别过分刁难。全部中文，禁止 emoji。'
+      : '你是「恋人空间恋爱水平考试」的官方出题人，为情侣出一张高质量测评卷：题目围绕恋爱中的相处细节、情商与求生欲，四个选项梯度分明（1个明显最佳、2个普通、1个明显不行）。全部中文，禁止 emoji。';
+  const user = `出一张 8 题的考试卷。输出 JSON：{"title":"试卷标题（12~22字，可以起得有梗，像「2026年恋人空间普通高等男友统一测试卷」「对象求生欲突击检查卷」）","notes":["注意事项1","注意事项2","注意事项3","注意事项4"]（每条不超过30字，正经里带点恋爱的霸道条款，像「最终解释权归出卷人所有」）,"questions":[{"q":"题干（18~40字）","opts":["A选项","B选项","C选项","D选项"]}（恰好4个选项）]}${
+    mode === 'ta' ? '。考官是你（出卷人），考的是你的恋人，卷子里可以体现你平时在意的事' : ''
+  }。只输出 JSON。`;
+  try {
+    const raw = await llmUserFirst(sys, user, 0.9);
+    const j = extractJson<{ title?: string; notes?: string[]; questions?: { q?: string; opts?: string[] }[] }>(raw);
+    const qs = (j?.questions ?? [])
+      .filter((q) => q?.q && Array.isArray(q.opts) && q.opts.length >= 3)
+      .map((q) => ({ q: cut(String(q.q), 60), opts: q.opts!.slice(0, 4).map((o) => cut(String(o), 30)) }));
+    if (qs.length < 4) return null;
+    return {
+      title: cut(String(j?.title ?? '').trim() || '恋人空间专属测试卷', 30),
+      notes: (j?.notes ?? []).slice(0, 4).map((n) => cut(String(n), 36)),
+      questions: qs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** TA 认真答我出的卷（一次答完 + 自评分 + 交卷时想说的话）；失败返回 null */
+export async function aiExamSheet(
+  title: string,
+  questions: { q: string; opts: string[] }[],
+): Promise<{ picks: Record<string, number>; score: number; comment: string } | null> {
+  const target = aiTarget();
+  if (!target || questions.length === 0) return null;
+  try {
+    const p = await taPersonaOf(target.contactId);
+    const snap = readSnap();
+    if (!p || !snap) return null;
+    currentPartnerId = target.contactId;
+    currentChannel = target.channel;
+    const me = (snap.meName || '').trim() || '我';
+    const ta = (snap.taName || '').trim() || 'TA';
+    const paper = questions.map((q, i) => `${i + 1}. ${cut(q.q, 50)}\n${q.opts.map((o, oi) => `${'ABCD'[oi] ?? oi + 1}. ${cut(o, 26)}`).join('\n')}`).join('\n');
+    const raw = await coupleLLM(
+      `${llmSystem(p, me, snap)}\n场景：${me}给你出了一张恋爱水平考试卷《${cut(title, 20)}》，你要认真作答并给自己估分。`,
+      `试卷题目（每题从选项里选一个）：\n${paper}\n\n请以「${ta}」的身份答题：答案要符合你的人设、你们的关系和你的小聪明，可以调皮、可以撒糖，但不能乱选。\n输出 JSON：{"picks":[每题选择的序号（从0开始）数组，长度=${questions.length}],"score":你自评能得多少分（0-100整数）,"comment":"交卷时想对${me}说的话（30~60字，第一人称，贴合情侣口吻，禁止 emoji）"}。只输出 JSON。`,
+    );
+    const j = extractJson<{ picks?: unknown; score?: number; comment?: string }>(raw);
+    if (!j || !Array.isArray(j.picks)) return null;
+    const picks: Record<string, number> = {};
+    questions.forEach((q, i) => {
+      const v = Number((j.picks as unknown[])[i]);
+      picks[String(i)] = Number.isInteger(v) && v >= 0 && v < q.opts.length ? v : 0;
+    });
+    return {
+      picks,
+      score: typeof j.score === 'number' ? Math.max(0, Math.min(100, Math.round(j.score))) : 75,
+      comment: cut(stripEmoji(String(j.comment ?? '')), 90) || '答完啦，快看看我能得多少分。',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** TA 给我批卷：打分 + 分数下面想说的话（TA 看得到我每一题答了什么）；失败返回 null */
+export async function aiGradeExam(input: {
+  title: string;
+  questions: { q: string; opts: string[] }[];
+  answers: Record<number, number>;
+  byTa: boolean;
+}): Promise<{ score: number; comment: string } | null> {
+  const target = aiTarget();
+  if (!target || input.questions.length === 0) return null;
+  try {
+    const p = await taPersonaOf(target.contactId);
+    const snap = readSnap();
+    if (!p || !snap) return null;
+    currentPartnerId = target.contactId;
+    currentChannel = target.channel;
+    const me = (snap.meName || '').trim() || '我';
+    const ta = (snap.taName || '').trim() || 'TA';
+    const detail = input.questions
+      .map((q, i) => {
+        const pick = input.answers[i];
+        const pickText = pick != null && q.opts[pick] ? `「${'ABCD'[pick] ?? pick + 1}. ${cut(q.opts[pick], 26)}」` : '（没答）';
+        return `${i + 1}. ${cut(q.q, 40)} → ${pickText}`;
+      })
+      .join('\n');
+    const raw = await coupleLLM(
+      `${llmSystem(p, me, snap)}\n场景：${
+        input.byTa ? `你给${me}出的考试卷《${cut(input.title, 20)}》${me}做完交卷了，你来批卷打分` : `${me}做完了恋爱水平考试《${cut(input.title, 20)}》，你以恋人的身份来批卷`
+      }。`,
+      `答题情况（每题都能看到${me}选了什么）：\n${detail}\n\n请以「${ta}」的身份批卷：结合每题答案的质量（态度、情商、有没有把你放在心上）打一个 0-100 的整数分，像真人批卷那样有区分度（别全给 100 也别往死里扣）。\n输出 JSON：{"score":分数,"comment":"分数下面你想对${me}说的话（40~70字，第一人称，点评TA答得怎么样，甜一点或小调侃都行，禁止 emoji）"}。只输出 JSON。`,
+    );
+    const j = extractJson<{ score?: number; comment?: string }>(raw);
+    if (!j || typeof j.score !== 'number') return null;
+    const score = Math.max(0, Math.min(100, Math.round(j.score)));
+    const comment = cut(stripEmoji(String(j.comment ?? '')), 110);
+    if (comment.length >= 8) {
+      // 批卷结果写进恋人记忆（TA 知道我的作答与得分）
+      const brief = input.questions
+        .slice(0, 3)
+        .map((q, i) => `第${i + 1}题${input.answers[i] != null && q.opts[input.answers[i]] ? `选了「${cut(q.opts[input.answers[i]], 14)}」` : '没答'}`)
+        .join('；');
+      coupleRemember(target.contactId, target.channel, `${me}做完了${input.byTa ? `${ta}出的` : ''}考试《${cut(input.title, 16)}》（${me}的作答：${brief}），${ta}批了 ${score} 分并说：「${cut(comment, 40)}」`);
+    }
+    return { score, comment: comment || (score >= 85 ? '答得不错，看来平时有认真把我放在心上。' : '有几题答得不太走心哦，回去重新复习一下怎么爱我。') };
+  } catch {
+    return null;
+  }
+}
+
+/** AI 主动出卷喊我来答（每 3 天最多一次；上一张卷没答完不重复出） */
+async function aiTickExam(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
+  const last = snap.examTaPaper;
+  if (last && !last.answered && Date.now() - last.at < 3 * 86400000) return; // 上一张还没答 / 三天内出过
+  const gen = await genExamPaper('ta');
+  if (!gen || gen.questions.length < 4) return; // 出卷失败静默（下次再试）
+  writeSnap((s) => ({
+    ...s,
+    examTaPaper: { id: `ta-${Date.now()}`, title: gen.title, notes: gen.notes, questions: gen.questions, at: Date.now(), answered: false },
+  }));
+  const pid = currentPartnerId || aiTarget()?.contactId || '';
+  if (pid) {
+    try {
+      const { sendExamCard } = await import('./couple-exam-share');
+      await sendExamCard({ channel: currentChannel, contactId: pid, title: gen.title, count: gen.questions.length, dir: 'ta' });
+    } catch {
+      /* 卡片失败不影响状态 */
+    }
+    coupleRemember(pid, currentChannel, `${ta}给${me}出了一张恋爱水平考试卷《${cut(gen.title, 16)}》（共 ${gen.questions.length} 题），等${me}来答`);
+  }
+  logAi(`${ta}出了一张考卷《${gen.title}》喊你来答`);
+  void notifyCouple(currentChannel, pid, '我给你出了张恋爱水平考试的卷子，敢来答吗？');
 }
 
 

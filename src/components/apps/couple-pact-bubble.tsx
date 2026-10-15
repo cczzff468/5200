@@ -25,11 +25,11 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
   const declined = data.status === 'declined';
   const signed = data.status === 'signed';
 
-  /** 点击卡片 → 进恋人空间协议页（对应签署/回看界面） */
+  /** 点击卡片 → 进恋人空间签署协议界面（携带卡片正文，保证任何状态都直达对应签署/回看界面） */
   const openPact = () => {
     const ui = useUI.getState();
     if (ui.locked) return;
-    navToPact({ pactId: data.pactId, from: data.from });
+    navToPact({ pactId: data.pactId, from: data.from, title: data.title, preamble: data.preamble, clauses: data.clauses });
     if (ui.activeApp && ui.activeApp !== 'couple') ui.switchToApp('couple');
     else if (!ui.activeApp && ui.phase === 'closed') ui.openApp('couple');
   };

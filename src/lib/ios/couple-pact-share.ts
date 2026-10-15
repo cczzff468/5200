@@ -26,6 +26,12 @@ import { COUPLE_CARD_EVENT, readInviteMeta, type CoupleChannel } from './couple-
 
 // ---------------- 类型 ----------------
 
+/** 本地截断（避免为一个小工具引入 couple-ai 的内部依赖） */
+function cut(s: string | undefined | null, max: number): string {
+  const t = (s ?? '').replace(/\s+/g, ' ').trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
 /** 恋爱协议卡片数据（挂在消息 pactcard 字段；微信/QQ 聊天共用） */
 export interface CouplePactCardData {
   title: string; // 协议名
@@ -42,17 +48,20 @@ export interface CouplePactCardData {
   at: number; // 分享时间
 }
 
-/** 点击卡片后的待打开协议（PactPage 消费） */
+/** 点击卡片后的待打开协议（PactPage 消费）；第十五轮起携带卡片正文——TA 分享的 pending 卡无论 aiPact 是否存在都能直达签署界面 */
 interface PendingPactOpen {
   pactId?: string; // pacts 记录 id
   from: 'me' | 'ta'; // 卡片来源
+  title?: string; // 卡片里的协议名
+  preamble?: string; // 卡片里的协议声明
+  clauses?: string[]; // 卡片里的条款
   at: number;
 }
 
 let pendingPactOpen: PendingPactOpen | null = null;
 
 /** 聊天协议卡片点击 → 写待打开目标（切换 App 时带上；同 200ms 内重复点击去重） */
-export function setPendingPactOpen(p: { pactId?: string; from: 'me' | 'ta' }): void {
+export function setPendingPactOpen(p: { pactId?: string; from: 'me' | 'ta'; title?: string; preamble?: string; clauses?: string[] }): void {
   pendingPactOpen = { ...p, at: Date.now() };
 }
 
@@ -208,15 +217,16 @@ export function patchPactCardInMsgs(channel: CoupleChannel, contactId: string, m
 }
 
 /**
- * 我把协议分享给 AI 后：AI 延时决定签/不签（像收到卡片后认真看了一遍）。
- * 结果 = { agree, reason }，由调用方写回协议记录；这里同时回一条 TA 的文字消息到会话。
+ * 我把协议分享给 AI 后：AI 延时决定签/不签/改其中一条（第十五轮：他可以不同意或改某一条）。
+ * 结果 = { agree, reason, changeIdx?, changeTo? }，由调用方写回协议记录；这里同时回一条 TA 的文字消息到会话。
+ * AI 调用失败也兜底回调（agree=true），保证调用方 loading 态一定解除。
  */
 export function scheduleAiPactDecision(opts: {
   channel: CoupleChannel;
   contactId: string;
   title: string;
   clauses: string[];
-  onDone: (r: { agree: boolean; reason: string }) => void;
+  onDone: (r: { agree: boolean; reason: string; changeIdx?: number; changeTo?: string }) => void;
 }): void {
   const meta = readInviteMeta();
   if (meta.partnerContactId !== opts.contactId) return; // 只对恋人联系人生效
@@ -225,7 +235,12 @@ export function scheduleAiPactDecision(opts: {
       try {
         const { aiDecidePact } = await import('./couple-ai');
         const r = await aiDecidePact(opts.title, opts.clauses);
-        // TA 的回复落到会话（一条普通文字消息，像看完协议后回的话）
+        // TA 的回复落到会话（一条普通文字消息，像看完协议后回的话；想改条款时把想改的说清楚）
+        const reply = r.agree
+          ? `协议我看过了，${r.reason} 我签啦，以后一起遵守哦。`
+          : r.changeIdx != null && r.changeTo
+            ? `第 ${r.changeIdx + 1} 条我想改一下：「${cut(String(r.changeTo), 30)}」。${r.reason}，改成这样我就签啦。`
+            : `这份协议我想了想，还是先不签了：${r.reason}。我们要不要再商量商量？`;
         const key = msgsKey(opts.channel, opts.contactId);
         try {
           const raw = kvGetScoped<unknown[]>(key, opts.channel);
@@ -233,7 +248,7 @@ export function scheduleAiPactDecision(opts: {
           list.push({
             id: genId(),
             role: 'peer',
-            content: r.agree ? `协议我看过了，${r.reason} 我签啦，以后一起遵守哦。` : `这份协议我想了想，还是先不签了：${r.reason}。我们要不要再商量商量？`,
+            content: reply,
             time: Date.now(),
           });
           kvSetScoped(key, list, opts.channel);
@@ -245,10 +260,10 @@ export function scheduleAiPactDecision(opts: {
         } catch {
           /* 静默 */
         }
-        void notifyCard(opts.channel, opts.contactId, r.agree ? `你的协议我签好啦` : `关于那份协议，我想跟你说说`);
+        void notifyCard(opts.channel, opts.contactId, r.agree ? `你的协议我签好啦` : `关于那份协议，我想跟你商量一条`);
         opts.onDone(r);
       } catch {
-        /* AI 决定失败静默 */
+        opts.onDone({ agree: true, reason: '条款我都喜欢' }); // 兑底：不让调用方永远转圈
       }
     })();
   }, 5000 + Math.random() * 6000);
@@ -263,10 +278,10 @@ export function peekPendingPactOpen(): PendingPactOpen | null {
 export const COUPLE_PACT_NAV_EVENT = 'couple-pact-nav';
 
 /**
- * 聊天里的协议卡片被点击：记下待打开目标 + 切进恋人空间 + 广播导航事件。
- * （气泡组件调用；CoupleSpaceApp 收到事件后 openSub('pact')，PactPage 挂载后 consumePendingPactOpen 跳对应界面）
+ * 聊天里的协议卡片被点击：记下待打开目标（含卡片正文）+ 切进恋人空间 + 广播导航事件。
+ * （气泡组件调用；CoupleSpaceApp 收到事件后 openSub('pact')，PactPage 挂载后 consumePendingPactOpen 直达签署界面）
  */
-export function navToPact(p: { pactId?: string; from: 'me' | 'ta' }): void {
+export function navToPact(p: { pactId?: string; from: 'me' | 'ta'; title?: string; preamble?: string; clauses?: string[] }): void {
   setPendingPactOpen(p);
   try {
     window.dispatchEvent(new CustomEvent(COUPLE_PACT_NAV_EVENT, { detail: p }));

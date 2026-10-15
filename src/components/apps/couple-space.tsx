@@ -57,6 +57,10 @@ import {
   MoreVertical,
   NotebookPen,
   Pencil,
+  PencilLine,
+  BookOpen,
+  ClipboardList,
+  Medal,
   Orbit,
   Plane,
   Plus,
@@ -87,6 +91,7 @@ import {
 } from '@/lib/ios/couple-invite';
 import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, coupleMemoryDiff, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, type DynReplyLevel } from '@/lib/ios/couple-ai';
 import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
+import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
 import { displayNameOf, isFriendIn } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
 import L from 'leaflet';
@@ -207,6 +212,10 @@ interface CoupleState {
   replyVerdict: { win: boolean; comment: string; msg: string; at: number } | null; // 回复挑战结算：AI 判定的胜负 + 总评 + TA 想说的话
   locFollow: { me?: string | null; ta?: string | null }; // 轨迹位置跟随联系人 APP：上次同步的 region 文本
   statusExam: { my: Record<string, number>; ta: Record<string, number>; at: number | null; rep?: { me: StatusResult; ta: StatusResult; overall: string } | null } | null; // 恋爱状态测评：双方答题记录 + 生成过的报告（我和 AI 同步答）
+  examPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[]; best?: number }[]; source: 'me' | 'ta'; at: number } | null; // 恋爱水平考试：当前激活的试卷（可反复作答；source='ta'=TA 出卷喊我答）
+  examTaPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[] }[]; at: number; answered?: boolean } | null; // 恋爱水平考试：TA 出卷喊我答的卷子（点聊天卡片直达答题）
+  examTaSheet: { title: string; picks: Record<string, number>; score: number; comment: string; at: number } | null; // 恋爱水平考试：TA 的答卷（TA 答了我出的卷，自评分 + 想说的话）
+  examResult: { title: string; score: number; comment: string; answers: Record<string, number>; byTa: boolean; at: number } | null; // 恋爱水平考试：我最近一次被改卷的成绩（分数下面是 TA 想说的话）
 }
 
 const STATE_KEY = 'couple-space:state';
@@ -297,6 +306,10 @@ function defaultState(): CoupleState {
     replyRun: null,
     replyVerdict: null,
     locFollow: {},
+    examPaper: null,
+    examTaPaper: null,
+    examTaSheet: null,
+    examResult: null,
   };
 }
 
@@ -404,14 +417,105 @@ const HUNDRED_LIST: string[] = [
   '在老地方重游一次', '拍十年之约的合照', '一起挑一枚戒指', '说一次正式的「我爱你」', '一起白头（正在完成中）',
 ];
 
-/** 恋爱水平考试题（每题 3 选项，全选最甜蜜项得分） */
-const EXAM_QUESTIONS: { q: string; opts: [string, string, string]; best: number }[] = [
-  { q: 'TA 随口说想吃的东西，你会？', opts: ['嗯一声过去了', '记在备忘录里找机会买', '现在就出门买回来'], best: 2 },
-  { q: '吵架时你的原则是？', opts: ['冷战到底比谁硬', '就事论事不翻旧账', '摔门出去冷静三天'], best: 1 },
-  { q: '纪念日快到了，你会？', opts: ['等 TA 先提', '偷偷准备惊喜', '红包了事'], best: 1 },
-  { q: 'TA 换了新发型，你会？', opts: ['没注意到', '夸一句好看', '开玩笑吐槽'], best: 1 },
-  { q: '你心里的理想约会是？', opts: ['各玩各的手机', '一起做喜欢的小事', '越贵越好'], best: 1 },
-  { q: 'TA 遇到烦心事找你吐槽，你会？', opts: ['讲一堆大道理', '先抱抱再听TA说', '让TA自己消化'], best: 1 },
+/** 恋爱水平考试·官方模板卷（第十五轮重做，参考图4/5/6：官方推荐题库 + 试卷预览 + 喊他来答题） */
+interface ExamTplQ {
+  q: string;
+  opts: string[];
+  best: number; // 标准答案序号（AI 打分优先，本地分兜底）
+}
+interface ExamTpl {
+  id: string;
+  title: string;
+  usage: string; // 使用人数展示
+  notes: string[]; // 注意事项
+  questions: ExamTplQ[];
+}
+
+const EXAM_TPLS: ExamTpl[] = [
+  {
+    id: 'tpl-bf',
+    title: '2026年恋人空间普通高等男友统一测试卷',
+    usage: '18.0W人使用',
+    notes: [
+      '本试卷为专属男友测评卷，满分100分，考试全程禁止敷衍、作弊、讲道理。',
+      '所有标准答案最终解释权归女朋友所有，狡辩一律判零分。',
+      '答题态度大于正确率，敷衍作答直接触发"哄女友惩罚机制"。',
+      '本试卷长期有效，定期抽查复检，不合格者限期整改。',
+    ],
+    questions: [
+      { q: '打游戏关键时刻，女友发消息说"我无聊了"，你会怎么做？', opts: ['打完这局再说，让她自己刷刷视频', '回一句"乖，等我一会"继续挂机对战', '立刻暂停/退出游戏，主动陪聊天、找话题逗她开心', '甩锅游戏："还不是因为你打扰我"'], best: 2 },
+      { q: '异性主动找你深夜聊天求助，你会？', opts: ['热情回复，耐心聊天', '隐瞒女友偷偷回复', '礼貌拒绝、保持距离，主动告知女友', '主动延伸话题闲聊'], best: 2 },
+      { q: '纪念日快到了，你的做法是？', opts: ['等到当天再说节日快乐', '忘记就算了', '提前准备惊喜礼物、仪式感拉满', '让女友自己准备'], best: 2 },
+      { q: '吵架冷战中，女友主动发消息找你，你应该？', opts: ['摆架子，故意晚回消息', '继续掰道理，争论谁对谁错', '立马破冰，主动低头安抚，结束冷战', '冷漠回复"哦，干嘛"'], best: 2 },
+      { q: '下雨天她没带伞等你接，你会？', opts: ['让她打车回来，自己懒得跑', '慢悠悠出门，卡点到达', '带伞过去，全程让她淋雨自己撑伞', '提前赶到等候，把伞全偏向她，自己半边淋雨也无所谓'], best: 3 },
+      { q: '她熬夜追剧不肯睡觉，你的正确做法是？', opts: ['温柔催促休息，陪着她一起早睡', '帮她关灯盖被子，叮嘱少熬夜伤身体', '一起熬夜陪她刷手机', '指责她作息不规律，凶她睡觉'], best: 0 },
+      { q: '女友心情不好、emo难过时，你会？', opts: ['讲道理、说教，指责她矫情', '耐心倾听吐槽，不打断不反驳，先抱抱她', '让她自己静静，别来烦你', '嫌她想太多，约兄弟打游戏去'], best: 1 },
+      { q: '异地恋日常，合格男友需要做到哪些？', opts: ['主动报备行程，不玩消失', '日常分享琐事，事事有回应', '定期规划见面，给足安全感', '以上全部'], best: 3 },
+    ],
+  },
+  {
+    id: 'tpl-gf',
+    title: '2026年恋人空间普通高等女友统一测试卷',
+    usage: '11.2W人使用',
+    notes: [
+      '本试卷为专属女友测评卷，满分100分，考试全程禁止敷衍、作弊、翻旧账。',
+      '所有标准答案最终解释权归男朋友所有，撒娇抵扣不超过10分。',
+      '答题态度大于正确率，敷衍作答直接触发"哄男友惩罚机制"。',
+      '本试卷长期有效，定期抽查复检，不合格者限期整改。',
+    ],
+    questions: [
+      { q: '男友打游戏大杀四方兴奋地跟你语音，你会？', opts: ['敷衍"哦哦真棒"继续追剧', '吐槽"不就是个游戏"', '凑过去看他操作，夸他好厉害让他教我', '嫌他吵直接挂断'], best: 2 },
+      { q: '男友说"兄弟聚会有事晚点回"，你会？', opts: ['连环夺命call查岗', '说好玩完记得报平安，给他空间', '生气并要他半小时内回家', '偷偷跟去"突击检查"'], best: 1 },
+      { q: '男友生日快到了，你会？', opts: ['发个红包意思一下', '提前偷偷准备他念很久的球鞋或礼物', '当天再说，忘了就请他吃饭', '让他自己买'], best: 1 },
+      { q: '男友工作受挫跟你吐槽，你会？', opts: ['数落他不够努力', '讲一堆大道理', '先抱抱他说"辛苦了，你已经很棒了"，再一起想办法', '嫌他小题大做'], best: 2 },
+      { q: '你们吵架后你先消气了，你会？', opts: ['等他来哄，绝不让步', '主动递个台阶："还生气呢？我给你买好吃的了"', '假装什么事都没发生', '趁机翻旧账再吵一轮'], best: 1 },
+      { q: '闺蜜当着你面吐槽你男友，你会？', opts: ['跟着一起吐槽', '面无表情不说话', '维护他："他对我挺好的，谢谢关心"', '回家跟男友告状大吵一架'], best: 2 },
+      { q: '男友给你拍的照片总是很丑，你会？', opts: ['当场发飙删照片', '笑着教他构图："把我拍好看今晚加鸡腿"', '以后再也不让他拍', '发朋友圈公开处刑他'], best: 1 },
+      { q: '异地恋中，合格女友需要做到？', opts: ['每天分享日常，让他放心', '支持他的事业与社交，不无理取闹', '见面之前偷偷打扮给他惊喜', '以上全部'], best: 3 },
+    ],
+  },
+  {
+    id: 'tpl-survive',
+    title: '对象求生欲考试',
+    usage: '6.2W人使用',
+    notes: [
+      '本试卷为对象求生欲专项测试，满分100分，答错一题扣求生欲10点。',
+      '所有标准答案最终解释权归出题人对象所有。',
+      '说"你怎么又问这种问题"直接判零分。',
+      '本试卷长期有效，求生欲低于60分者自动进入重点观察名单。',
+    ],
+    questions: [
+      { q: '对象问"我和你妈同时掉水里你先救谁"，求生欲满分的回答是？', opts: ['理性分析水流和距离', '"我先救你，我妈会游泳"', '"这种问题有意义吗"', '沉默不语'], best: 1 },
+      { q: '对象问"我今天有什么不一样"，你会？', opts: ['"没什么不一样啊"', '认真端详："口红换色了！而且今天特别好看"', '随便猜一个"剪头发了？"', '"你每天不都一样"'], best: 1 },
+      { q: '对象说"你前任比我好看多了"，你会？', opts: ['"确实还好吧"', '"谁是前任？我从出生单身到你出现"', '"你为什么会这么想"', '笑而不语'], best: 1 },
+      { q: '对象问"游戏和我谁重要"，满分答案是？', opts: ['游戏', '你，游戏随时可以删', '看情况', '为什么非要比较'], best: 1 },
+      { q: '对象穿新衣服问"好看吗"，你觉得其实一般，你会？', opts: ['"一般般，别买了"', '"你穿什么都好看，不过我觉得上次那件颜色更衬你"', '沉默', '说"还行吧"然后玩手机'], best: 1 },
+      { q: '纪念日你忘了，对象已经黑脸，你会？', opts: ['装作没发生', '当场道歉+立刻补上惊喜和仪式感，保证下不为例', '怪对方没提醒', '说"节日而已至于吗"'], best: 1 },
+      { q: '对象深夜发"睡了吗"，其实TA想聊天，你会？', opts: ['"睡了"然后不再理', '回"还没，正想你呢，怎么了宝贝"', '明天再回', '发个"？"'], best: 1 },
+      { q: '对象说"我不开心"，你的第一反应？', opts: ['"又怎么了"', '马上问"怎么了？我马上过来，或者打电话给你"', '发个表情包完事', '"你先自己冷静一下"'], best: 1 },
+    ],
+  },
+  {
+    id: 'tpl-know',
+    title: '恋爱了解程度考试',
+    usage: '7.1W人使用',
+    notes: [
+      '本试卷测测你对对象的了解程度，满分100分。',
+      '答错的题请自觉补习：多听、多问、多记。',
+      '糊弄作答会被对象一眼看穿。',
+      '本试卷长期有效，补考次数不限，但爱是有限的。',
+    ],
+    questions: [
+      { q: '对象随口提过想吃的东西，正确的做法是？', opts: ['听过就忘', '记下来，找机会带TA去吃', '说"想吃自己买"', '等TA再说一遍'], best: 1 },
+      { q: '对象的生日、纪念日、喜欢的花，你应该？', opts: ['全靠TA提醒', '都记在心里，日子到了主动安排', '只记得生日', '记在别人手机备忘录里'], best: 1 },
+      { q: '聚会上对象被开玩笑冷落了，你会？', opts: ['跟着起哄', '自然地把话题接给TA，帮TA解围', '玩手机不管', '事后说"你太敏感"'], best: 1 },
+      { q: 'TA生气时说"我没事"，通常的意思是？', opts: ['真的没事', '有事，很严重，需要你哄', '想让你走开', '在考你'], best: 1 },
+      { q: '对象喜欢但你一直没时间陪TA做的事，你会？', opts: ['假装不知道', '这周就把日程空出来，主动安排好', '等TA再提', '认为不重要'], best: 1 },
+      { q: '你们吵架后，谁该先低头？', opts: ['谁错谁先低头，对错很重要', '感情比对错重要，我先哄好TA再讲道理', '永远我低头', '永远TA低头'], best: 1 },
+      { q: '对象换了新发型或买了新衣服，你会？', opts: ['没注意到', '第一时间注意到并真诚夸TA', '觉得也就那样', '吐槽不如以前'], best: 1 },
+      { q: '感情里"事事有回应，件件有着落"的意思是？', opts: ['说每句话都要秒回', '答应的事要做到，做不到提前说，让TA永远安心', '每天必须打够两小时电话', '随便应付一下就行'], best: 1 },
+    ],
+  },
 ];
 
 /** 星座名单 */
@@ -880,6 +984,16 @@ export default function CoupleSpaceApp() {
     if (peekPendingPactOpen()) setSub('pact');
     window.addEventListener(COUPLE_PACT_NAV_EVENT, nav);
     return () => window.removeEventListener(COUPLE_PACT_NAV_EVENT, nav);
+  }, []);
+
+  /** 聊天里的考试卡片点击进来（第十五轮）：切到恋人空间时直接打开考试页（ExamPage 挂载后消费具体目标） */
+  useEffect(() => {
+    const nav = () => {
+      if (peekPendingExamOpen()) setSub('exam');
+    };
+    if (peekPendingExamOpen()) setSub('exam');
+    window.addEventListener(COUPLE_EXAM_NAV_EVENT, nav);
+    return () => window.removeEventListener(COUPLE_EXAM_NAV_EVENT, nav);
   }, []);
 
   /** 全局头像/名字同步（用户要求：用微信邀请→双方身份跟随微信；QQ 邀请→跟随 QQ）：
@@ -2026,10 +2140,10 @@ function CommentThread({
 }) {
   const list = useMemo(() => (state.comments ?? []).filter((c) => c.key === threadKey), [state.comments, threadKey]);
   const [text, setText] = useState('');
-  const [replyTo, setReplyTo] = useState<{ id: string; text: string } | null>(null); // 点击 TA 的留言 → 针对性回复
+  const [replyTo, setReplyTo] = useState<{ id: string; name: string; text: string } | null>(null); // 点击某条留言 → 针对性回复（朋友圈评论区交互）
   const me = state.meName || '我';
   const ta = state.taName || 'TA';
-  /** 历史留言文本里的「名字：」前缀统一剥掉（第十二轮：所有留言删除名字和冒号；旧数据兼容） */
+  /** 历史留言文本里的「名字：」前缀统一剥掉（新版样式自带名字前缀，旧数据兼容防重复） */
   const stripNamePrefix = (t: string) => {
     for (const n of [ta, me, 'TA', '我']) {
       if (n && t.startsWith(`${n}：`)) return t.slice(n.length + 1).trim();
@@ -2047,38 +2161,47 @@ function CommentThread({
   };
   const inputCls = dark
     ? 'h-10 flex-1 rounded-full bg-white/10 px-4 text-[13.5px] text-white outline-none placeholder:text-white/35'
-    : 'h-10 flex-1 rounded-full bg-[#f3f3f5] px-4 text-[13.5px] text-[#2c2c30] outline-none placeholder:text-[#b6b6bd]';
+    : 'h-10 flex-1 rounded-full bg-white px-4 text-[13.5px] text-[#2c2c30] outline-none placeholder:text-[#b6b6bd]';
+  // 名字配色（朋友圈评论区：名字是一个颜色、正文一个颜色）——TA 用微信链蓝、我用主题粉，一眼分清谁说的
+  const taNameCls = dark ? 'text-[#9fb4ef]' : 'text-[#576b95]';
+  const meNameCls = dark ? 'text-[#f9c9da]' : 'text-[#e0607e]';
   return (
-    <div data-testid={testId} className={dark ? 'rounded-2xl bg-white/[0.06] p-3.5 ring-1 ring-white/10' : 'rounded-2xl bg-[#f7f7f9] p-3.5'}>
+    <div data-testid={testId} className={dark ? 'rounded-2xl bg-white/[0.06] p-3.5' : 'rounded-2xl bg-[#f7f7f9] p-3.5'}>
       <div className={dark ? 'text-[12.5px] font-semibold text-white/60' : 'text-[12.5px] font-semibold text-[#6e6e76]'}>
         {hint || `和 ${ta} 聊聊`}
         {list.length > 0 && <span className="ml-1.5 font-normal opacity-60">· {list.length} 条留言</span>}
       </div>
       {list.length > 0 && (
-        <div className={`mt-2.5 space-y-1.5 overflow-y-auto ${dark ? 'max-h-36' : 'max-h-44'}`} style={{ scrollbarWidth: 'thin' }}>
-          {list.map((c) => {
+        <div className={`mt-1 overflow-y-auto ${dark ? 'max-h-36' : 'max-h-44'}`} style={{ scrollbarWidth: 'thin' }}>
+          {list.map((c, i) => {
             const body = stripNamePrefix(c.text);
             const isTa = c.from === 'ta';
+            const name = isTa ? ta : me;
+            const nameCls = isTa ? taNameCls : meNameCls;
+            // 被回复的留言名（朋友圈式「回复XX：」前缀）
+            const rtName = c.rt ? (list.find((x) => x.id === c.rt)?.from === 'me' ? me : ta) : null;
             return (
-              <div key={c.id} className="space-y-0.5">
-                <div className={`flex ${isTa ? 'items-start justify-start' : 'items-start justify-end'}`}>
-                  <button
-                    type="button"
-                    onClick={isTa ? () => setReplyTo({ id: c.id, text: body }) : undefined}
-                    className={`max-w-[82%] rounded-2xl px-3 py-2 text-left text-[13px] leading-relaxed transition-opacity ${
-                      isTa
-                        ? dark
-                          ? 'rounded-bl-sm bg-[#7f96e0]/25 text-[#c3cff5] active:opacity-70'
-                          : 'rounded-bl-sm bg-white text-[#4a4a52] shadow-[0_1px_4px_rgba(0,0,0,0.05)] active:opacity-70'
-                        : dark
-                          ? 'rounded-br-sm bg-[#f9a8d4]/25 text-[#f9c9da]'
-                          : 'rounded-br-sm bg-[#fdeef3] text-[#d4547a]'
-                    } ${isTa ? 'cursor-pointer' : ''}`}
-                  >
-                    {body}
-                  </button>
-                </div>
-                <div className={`px-1 text-[10px] leading-none ${dark ? 'text-white/30' : 'text-[#b6b6bd]'} ${isTa ? 'text-left' : 'text-right'}`}>{fmtCmtTime(c.at)}</div>
+              <div
+                key={c.id}
+                role={isTa ? 'button' : undefined}
+                tabIndex={isTa ? 0 : undefined}
+                onClick={isTa ? () => setReplyTo({ id: c.id, name, text: body }) : undefined}
+                onKeyDown={isTa ? (e) => e.key === 'Enter' && setReplyTo({ id: c.id, name, text: body }) : undefined}
+                className={`flex items-start justify-between gap-3 py-2.5 ${i < list.length - 1 ? (dark ? 'border-b border-white/10' : 'border-b border-black/[0.07]') : ''} ${
+                  isTa ? 'cursor-pointer text-left transition-opacity active:opacity-60' : ''
+                }`}
+              >
+                <span className={`min-w-0 text-[14px] leading-[1.55] ${dark ? 'text-white/90' : 'text-[#2c2c30]'}`}>
+                  {rtName && (
+                    <>
+                      <span className={rtName === ta ? taNameCls : meNameCls}>回复{rtName}</span>
+                      <span>：</span>
+                    </>
+                  )}
+                  <span className={nameCls}>{name}</span>
+                  <span>：{body}</span>
+                </span>
+                <span className={`shrink-0 pt-0.5 text-[12px] leading-none ${dark ? 'text-white/35' : 'text-[#b0b0b8]'}`}>{fmtCmtTime(c.at)}</span>
               </div>
             );
           })}
@@ -2087,7 +2210,7 @@ function CommentThread({
       {replyTo && (
         <div className={`mt-2 flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11.5px] ${dark ? 'bg-white/[0.07] text-white/55' : 'bg-white text-[#8e8e96]'}`}>
           <span className="min-w-0 flex-1 truncate">
-            回复 {ta}：{cutText(replyTo.text, 24)}
+            回复 {replyTo.name}：{cutText(replyTo.text, 24)}
           </span>
           <button type="button" aria-label="取消回复" onClick={() => setReplyTo(null)} className={`shrink-0 text-[13px] leading-none ${dark ? 'text-white/40' : 'text-[#b6b6bd]'}`}>
             ×
@@ -2101,7 +2224,7 @@ function CommentThread({
           onKeyDown={(e) => {
             if (e.key === 'Enter') send();
           }}
-          placeholder={replyTo ? `回复 ${ta}…` : `想对 ${ta} 说什么…`}
+          placeholder={replyTo ? `回复 ${replyTo.name}…` : `想对 ${ta} 说什么…`}
           maxLength={80}
           className={inputCls}
         />
@@ -2154,7 +2277,7 @@ function SubRouter(props: {
     case 'pact':
       return <PactPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'exam':
-      return <ExamPage state={state} patch={patch} close={close} />;
+      return <ExamPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'zodiac':
       return <ZodiacPage state={state} patch={patch} close={close} />;
     case 'chronicle':
@@ -4019,14 +4142,15 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const ta = state.taName || 'TA';
   const todayK = todayKey();
 
-  /** 按日期分组（兼容旧数据：无 dateKey 时从 at 推导） */
+  /** 按日期分组（兼容旧数据：无 dateKey 时从 at 推导）；每天内部我写的排最前（用户要求：我弄了先显示我的，我没弄才显示 TA 的） */
   const byDay = useMemo(() => {
-    const map: Record<string, { emoji: string; label: string; id: string }[]> = {};
+    const map: Record<string, { emoji: string; label: string; id: string; from?: 'me' | 'ta' }[]> = {};
     for (const m of state.moods) {
       const k = m.dateKey || fmtDate(m.at);
       const meta = MOOD_LIST.find((x) => x.emoji === m.emoji);
-      (map[k] ||= []).push({ emoji: m.emoji, label: meta?.label || '心情', id: m.id });
+      (map[k] ||= []).push({ emoji: m.emoji, label: meta?.label || '心情', id: m.id, from: m.from });
     }
+    for (const k of Object.keys(map)) map[k].sort((a, b) => (a.from === 'ta' ? 1 : 0) - (b.from === 'ta' ? 1 : 0));
     return map;
   }, [state.moods]);
 
@@ -4042,10 +4166,16 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
     return arr;
   }, [cursor]);
 
-  /** 当月日记（列表用；state.moods 本身按时间倒序） */
+  /** 当月日记（列表用；同一天我写的排前面——用户要求：我写了先显示我的，我没写才显示 TA 的） */
   const monthMoods = useMemo(() => {
     const prefix = `${cursor.y}-${String(cursor.m + 1).padStart(2, '0')}`;
-    return state.moods.filter((m) => (m.dateKey || fmtDate(m.at)).startsWith(prefix));
+    const arr = state.moods.filter((m) => (m.dateKey || fmtDate(m.at)).startsWith(prefix));
+    return [...arr].sort((a, b) => {
+      const ka = a.dateKey || fmtDate(a.at);
+      const kb = b.dateKey || fmtDate(b.at);
+      if (ka !== kb) return ka < kb ? 1 : -1;
+      return (a.from === 'ta' ? 1 : 0) - (b.from === 'ta' ? 1 : 0);
+    });
   }, [state.moods, cursor]);
 
   /** TA 今天是否已写日记（没写 → 显示「戳一下他」气泡） */
@@ -4267,18 +4397,6 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
             testId={`mood-comment-${detailEntry.id}`}
           />
         </div>
-
-        {/* 会员条（参考截图3 底部样式） */}
-        <div className="sticky bottom-3 mt-5 flex items-center justify-between gap-2 rounded-2xl bg-[linear-gradient(120deg,#fce7f0,#fdeedd)] px-4 py-3 shadow-[0_4px_14px_rgba(0,0,0,0.06)]">
-          <span className="text-[12.5px] font-medium text-[#8a5a3c]">成为会员，查看对方最近的浏览时间</span>
-          <button
-            type="button"
-            onClick={() => showToast('演示版暂未开通会员')}
-            className="shrink-0 rounded-full bg-[linear-gradient(135deg,#ffd257,#ffb43c)] px-3 py-1.5 text-[12px] font-bold text-[#7a4a12] active:opacity-80"
-          >
-            开通会员
-          </button>
-        </div>
       </SubShell>
     );
   }
@@ -4398,17 +4516,17 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
               key={cell.key}
               type="button"
               onClick={() => {
-                const list = byDay[cell.key];
-                if (list && list.length > 0) openDetail(list[list.length - 1].id);
+                const top = byDay[cell.key]?.[0];
+                if (top) openDetail(top.id);
                 else openWrite(cell.key);
               }}
               className="flex h-[72px] flex-col items-center justify-start pt-1 transition-transform active:scale-[0.94]"
             >
               <span className={`text-[10.5px] leading-none ${cell.key === todayK ? 'font-bold text-[#3c3c42]' : 'text-[#8e8e96]'}`}>{cell.key === todayK ? '今天' : cell.d}</span>
-              {byDay[cell.key] ? (
+              {byDay[cell.key]?.[0] ? (
                 <>
-                  <MoodFace mood={byDay[cell.key][byDay[cell.key].length - 1].emoji} size={38} className="mt-1 drop-shadow-[0_3px_8px_rgba(0,0,0,0.10)]" />
-                  <span className="mt-0.5 max-w-full truncate text-[9px] leading-none text-[#6e6e76]">{byDay[cell.key][byDay[cell.key].length - 1].label}</span>
+                  <MoodFace mood={byDay[cell.key][0].emoji} size={38} className="mt-1 drop-shadow-[0_3px_8px_rgba(0,0,0,0.10)]" />
+                  <span className="mt-0.5 max-w-full truncate text-[9px] leading-none text-[#6e6e76]">{byDay[cell.key][0].label}</span>
                 </>
               ) : (
                 <span className={`mt-1 h-[38px] w-[38px] rounded-full border-[1.5px] border-dashed ${cell.key === todayK ? 'border-[#c9c9cf] bg-white/60' : 'border-[#e4e4e9]'}`} />
@@ -4435,12 +4553,12 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
         <button
           type="button"
           onClick={() => openWrite(todayKey())}
-          className="pointer-events-auto mt-0.5 flex items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#c86dd7_0%,#ec6f9d_55%,#f789a4_100%)] px-4 py-2.5 text-[13px] font-semibold text-white shadow-[0_10px_24px_rgba(236,111,157,0.45)] transition-transform active:scale-[0.96]"
+          data-testid="mood-write-btn"
+          className="pointer-events-auto mt-0.5 flex h-[46px] items-center gap-2 rounded-full bg-[linear-gradient(135deg,#ff9db4_0%,#f06e96_52%,#e0559a_100%)] pl-4 pr-5 text-[14px] font-bold tracking-wide text-white shadow-[0_12px_30px_rgba(240,110,150,0.55),inset_0_1px_0_rgba(255,255,255,0.4)] ring-2 ring-white/70 transition-all hover:shadow-[0_14px_34px_rgba(240,110,150,0.65)] active:scale-[0.94]"
         >
-          <span className="inline-block -rotate-12 text-[15px] leading-none" aria-hidden="true">
-            🖍️
-          </span>
+          <PencilLine className="h-4 w-4" strokeWidth={2.4} />
           写日记
+          <Heart className="h-3 w-3 fill-white/85 text-white/85" aria-hidden="true" />
         </button>
       </div>
     </SubShell>
@@ -5685,12 +5803,11 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const patchFn = patch as unknown as (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void;
   const [view, setView] = useState<'home' | 'edit' | 'sign' | 'view'>('home');
   const [signFrom, setSignFrom] = useState<'home' | 'edit'>('home');
-  const [taPending, setTaPending] = useState(false);
   const [viewPact, setViewPact] = useState<CouplePactRecord | null>(null);
   const [dlg, setDlg] = useState<null | { type: 'title' | 'preamble' | 'custom' | 'template' } | { type: 'clause'; idx: number }>(null);
   const [draft, setDraft] = useState('');
-  const [shareSheet, setShareSheet] = useState<null | { step: 'channel' | 'contact'; ch: CoupleChannel; title: string; preamble: string; clauses: string[]; pactId?: string; status: 'pending' | 'signed' }>(null); // 第十二轮：协议分享（选微信/QQ → 选联系人 → 卡片进会话）
-  const [shareFriends, setShareFriends] = useState<{ id: string; name: string; avatar: string | null }[]>([]);
+  const [taProposal, setTaProposal] = useState<{ idx: number; to: string; reason: string } | null>(null); // TA 想改其中一条（他可以不同意或改某一条——用户要求）
+  const pendingRecIdRef = useRef<string | null>(null); // 当前待签协议存档 id（TA 改条款后重发复用同一条记录）
   const [taDeciding, setTaDeciding] = useState(false); // TA 正在决定签不签
   const clauses = state.pactClauses;
   const curPaper: PactPaperData = {
@@ -5704,14 +5821,19 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
     at: state.pactAt,
   };
 
-  /** 聊天里的协议卡片点击进来（第十二轮）：TA 分享的 → 直接进 TA 协议的签署界面；我分享的 → 回看对应协议 */
+  /** 聊天里的协议卡片点击进来（第十五轮加固）：TA 分享的 → 优先用 aiPact，没有就直接拿卡片正文填草稿，永远直达签署界面；
+   *  我分享的 pending → 草稿填回签署界面；已签/已拒 → 回看协议书 */
   useEffect(() => {
     const p = consumePendingPactOpen();
     if (!p) return;
     if (p.from === 'ta') {
-      if (state.aiPact) {
-        const ap = state.aiPact;
-        patch({ pactTitle: ap.title, pactPreamble: state.pactPreamble || defaultState().pactPreamble, pactClauses: [...ap.clauses], pactSignMe: null, pactMeAt: null, pactSignTa: null, pactTaAt: null, pactAt: null });
+      const ap = state.aiPact;
+      const hasCard = !!p.title && (p.clauses?.length ?? 0) > 0;
+      if (ap || hasCard) {
+        const title = ap?.title ?? p.title!;
+        const cls = ap ? [...ap.clauses] : [...(p.clauses ?? [])];
+        const pre = ap ? state.pactPreamble || defaultState().pactPreamble : p.preamble || defaultState().pactPreamble;
+        patch({ pactTitle: title, pactPreamble: pre, pactClauses: cls, pactSignMe: null, pactMeAt: null, pactSignTa: null, pactTaAt: null, pactAt: null });
         setSignFrom('edit');
         setView('sign');
       } else {
@@ -5734,86 +5856,6 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
       }
     }
   }, []);
-
-  /** 分享弹层 → 选联系人列表（该渠道 AI 好友） */
-  useEffect(() => {
-    if (!shareSheet) return;
-    let alive = true;
-    void (async () => {
-      try {
-        const list = await listContacts();
-        if (!alive) return;
-        setShareFriends(
-          list
-            .filter((c) => c.kind !== 'user' && isFriendIn(c, shareSheet.ch))
-            .map((c) => ({ id: c.id, name: displayNameOf(c), avatar: c.avatar ?? null })),
-        );
-      } catch {
-        if (alive) setShareFriends([]);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [shareSheet]);
-
-  /** 发起分享：打开渠道选择弹层（协议来源 = 草稿 / 已存协议 / AI 拟的协议） */
-  const openShare = (src: { title: string; preamble: string; clauses: string[]; pactId?: string; status: 'pending' | 'signed' }) => {
-    if (!state.accepted || !src.clauses.length) {
-      showToast('先把协议写好再分享吧');
-      return;
-    }
-    setShareSheet({ step: 'channel', ch: 'wx', ...src });
-  };
-
-  /** 选定联系人 → 协议卡片发进会话；我分享给 TA 后 TA 会认真看完再决定签不签 */
-  const doShare = async (contactId: string) => {
-    if (!shareSheet) return;
-    const { ch, title, preamble, clauses: cls, pactId, status } = shareSheet;
-    setShareSheet(null);
-    try {
-      await sendPactCard({ channel: ch, contactId, title, preamble, clauses: cls, dir: 'me', pactId, status });
-      showToast(`已把《${title}》分享给 TA ♡`);
-      // 草稿分享：先存档一条 pending 记录（AI 决定后回填状态）
-      let recId = pactId;
-      if (!recId) {
-        const rec: CouplePactRecord = {
-          id: uid(),
-          title,
-          preamble,
-          clauses: [...cls],
-          signMe: state.pactSignMe || state.meName || '我',
-          signTa: null,
-          meAt: state.pactMeAt ?? Date.now(),
-          taAt: null,
-          at: Date.now(),
-          status: 'pending',
-        };
-        recId = rec.id;
-        patchFn({ pacts: [rec, ...(state.pacts ?? [])] });
-      }
-      scheduleAiPactDecision({
-        channel: ch,
-        contactId,
-        title,
-        clauses: cls,
-        onDone: (r) => {
-          patchFn((prev) => ({
-            pacts: (prev.pacts ?? []).map((x) =>
-              x.id === recId
-                ? r.agree
-                  ? { ...x, signTa: state.taName || 'TA', taAt: Date.now(), at: Date.now(), status: 'signed' as const }
-                  : { ...x, status: 'declined' as const, reason: r.reason }
-                : x,
-            ),
-          }));
-          showToast(r.agree ? `${state.taName || 'TA'} 签好了协议 ♡` : `${state.taName || 'TA'} 想再商量一下`);
-        },
-      });
-    } catch {
-      showToast('分享失败，稍后再试试');
-    }
-  };
 
   /** 再添加一份协议：重置草稿为默认模板 → 进编辑（已保存的协议书不受影响） */
   const startNewPact = () => {
@@ -5937,57 +5979,101 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const signMe = () => {
     if (state.pactSignMe) return;
     patch({ pactSignMe: state.meName || '我', pactMeAt: Date.now() });
-    showToast('签名成功 ♡ 现在可以发给 TA 签名了');
+    showToast('签名成功 ♡ 现在点「他的签名」发给他签');
   };
 
+  /** 点击「他的签名」区 = 把协议分享给他签字（第十五轮用户要求）：
+   *  协议卡片发进 TA 的会话 → AI 认真看完决定：签 / 不签 / 想改其中某一条（改成什么样会告诉你） */
   const sendToTa = () => {
     if (!state.pactSignMe || state.pactSignTa || taDeciding) return;
     setTaDeciding(true);
-    showToast(`协议已发给${state.taName || 'TA'}，TA 正在认真看…`);
-    // 第十二轮：TA 不再无脑全签——AI 按人设 + 条款内容自己决定签/不签
+    setTaProposal(null);
+    const title = state.pactTitle || '恋爱协议书';
+    const cls = [...state.pactClauses];
+    const meta = readInviteMeta();
+    const cid = meta.partnerContactId;
+    const ch: CoupleChannel = meta.partnerApp ?? 'wx';
+    // 存档/复用一条待签记录（列表可见「等 TA 签署」；TA 决定后回填状态；改条款重发时复用同一条）
+    const recId = pendingRecIdRef.current && (state.pacts ?? []).some((x) => x.id === pendingRecIdRef.current)
+      ? pendingRecIdRef.current
+      : uid();
+    pendingRecIdRef.current = recId;
+    const rec: CouplePactRecord = {
+      id: recId,
+      title,
+      preamble: state.pactPreamble,
+      clauses: cls,
+      signMe: state.pactSignMe || state.meName || '我',
+      signTa: null,
+      meAt: state.pactMeAt ?? Date.now(),
+      taAt: null,
+      at: Date.now(),
+      status: 'pending',
+    };
+    patchFn((prev) => ({
+      pacts: (prev.pacts ?? []).some((x) => x.id === recId) ? (prev.pacts ?? []).map((x) => (x.id === recId ? rec : x)) : [rec, ...(prev.pacts ?? [])],
+    }));
+    /** 写回 AI 的决定（签/拒/想改一条），并同步到签署界面 */
+    const applyDecision = (r: { agree: boolean; reason: string; changeIdx?: number; changeTo?: string }) => {
+      if (r.agree) {
+        patch({ pactSignTa: state.taName || 'TA', pactTaAt: Date.now(), pactAt: Date.now() });
+        patchFn((prev) => ({
+          pacts: (prev.pacts ?? []).map((x) => (x.id === recId ? { ...x, signTa: state.taName || 'TA', taAt: Date.now(), at: Date.now(), status: 'signed' as const } : x)),
+        }));
+        pendingRecIdRef.current = null;
+        showToast(`${state.taName || 'TA'} 签好了协议 ♡ 协议正式生效`);
+      } else if (typeof r.changeIdx === 'number' && r.changeIdx >= 0 && r.changeIdx < cls.length && r.changeTo) {
+        setTaProposal({ idx: r.changeIdx, to: r.changeTo, reason: r.reason });
+        patchFn((prev) => ({
+          pacts: (prev.pacts ?? []).map((x) => (x.id === recId ? { ...x, status: 'declined' as const, reason: `想改第 ${r.changeIdx! + 1} 条` } : x)),
+        }));
+      } else {
+        patchFn((prev) => ({ pacts: (prev.pacts ?? []).map((x) => (x.id === recId ? { ...x, status: 'declined' as const, reason: r.reason } : x)) }));
+        showToast(`${state.taName || 'TA'} 没签：${cutText(r.reason, 30)}（可以改改条款再发一次）`);
+      }
+      setTaDeciding(false);
+    };
+    if (!cid) {
+      // 没有绑定恋人联系人（未在微信/QQ建立关系）：直接 AI 决定
+      showToast(`协议已发给${state.taName || 'TA'}，TA 正在认真看…`);
+      void (async () => {
+        try {
+          const { aiDecidePact } = await import('@/lib/ios/couple-ai');
+          applyDecision(await aiDecidePact(title, cls));
+        } catch {
+          applyDecision({ agree: true, reason: '条款我都喜欢' });
+        }
+      })();
+      return;
+    }
+    showToast(`协议卡片已发给${state.taName || 'TA'}，TA 正在认真看…`);
+    // ① 协议卡片发进 TA 的会话（分享给他）
     void (async () => {
       try {
-        const { aiDecidePact } = await import('@/lib/ios/couple-ai');
-        const r = await aiDecidePact(state.pactTitle || '恋爱协议书', state.pactClauses);
-        if (r.agree) {
-          const rec: CouplePactRecord = {
-            id: uid(),
-            title: state.pactTitle || '恋爱协议书',
-            preamble: state.pactPreamble,
-            clauses: [...state.pactClauses],
-            signMe: state.pactSignMe || state.meName || '我',
-            signTa: state.taName || 'TA',
-            meAt: state.pactMeAt,
-            taAt: Date.now(),
-            at: Date.now(),
-            status: 'signed',
-          };
-          patch({ pactSignTa: rec.signTa, pactTaAt: rec.taAt, pactAt: rec.at, pacts: [rec, ...(state.pacts ?? [])] });
-          showToast(`TA 说：${r.reason} 协议正式生效并已保存 ♡`);
-        } else {
-          showToast(`TA 没签：${r.reason}（可以改改条款再发一次）`);
-        }
+        await sendPactCard({ channel: ch, contactId: cid, title, preamble: state.pactPreamble, clauses: cls, dir: 'me' });
       } catch {
-        // AI 决定失败兑底：签（与旧行为一致）
-        const rec: CouplePactRecord = {
-          id: uid(),
-          title: state.pactTitle || '恋爱协议书',
-          preamble: state.pactPreamble,
-          clauses: [...state.pactClauses],
-          signMe: state.pactSignMe || state.meName || '我',
-          signTa: state.taName || 'TA',
-          meAt: state.pactMeAt,
-          taAt: Date.now(),
-          at: Date.now(),
-          status: 'signed',
-        };
-        patch({ pactSignTa: rec.signTa, pactTaAt: rec.taAt, pactAt: rec.at, pacts: [rec, ...(state.pacts ?? [])] });
-        showToast('TA 已签名，恋爱协议正式生效并已保存 ♡');
-      } finally {
-        setTaDeciding(false);
-        setTaPending(false);
+        /* 卡片发送失败不影响 AI 决策 */
       }
     })();
+    // ② TA 延时认真读完 → 决定签/不签/改一条（结果回聊天 + 回签署界面）
+    scheduleAiPactDecision({
+      channel: ch,
+      contactId: cid,
+      title,
+      clauses: cls,
+      onDone: applyDecision,
+    });
+  };
+
+  /** 采纳 TA 想改的条款：更新草稿 → 自动重新发给他签 */
+  const adoptTaProposal = () => {
+    if (!taProposal) return;
+    const arr = [...clauses];
+    arr[taProposal.idx] = taProposal.to;
+    patch({ pactClauses: arr });
+    setTaProposal(null);
+    showToast(`第 ${taProposal.idx + 1} 条已按 ${state.taName || 'TA'} 的意思改好，重新发给他…`);
+    window.setTimeout(() => sendToTa(), 700);
   };
 
   const dlgTitle = dlg ? (dlg.type === 'title' ? '编辑协议名称' : dlg.type === 'preamble' ? '编辑协议声明' : dlg.type === 'clause' ? '编辑条款' : dlg.type === 'custom' ? '自定义一条' : '导入模板') : '';
@@ -6005,24 +6091,15 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <p className="mt-2.5 text-[13.5px] leading-relaxed text-[#9a9aa2]">签一份属于你们的协议，互相分享、互相签名；TA 也会认真看，自己决定签不签。</p>
           </div>
 
-          {/* TA 拟的协议（第九轮：AI 会自己拟协议等我签；第十二轮右上角分享按钮） */}
+          {/* TA 拟的协议（第九轮：AI 会自己拟协议等我签；点卡片/去签直达签署界面） */}
           {state.aiPact && (
             <div className="relative mt-4 rounded-2xl border-2 border-dashed border-[#f2536a] bg-white p-4" data-testid="ai-pact-card">
-              <button
-                type="button"
-                aria-label="分享 TA 的协议"
-                data-testid="ai-pact-share"
-                onClick={() => openShare({ title: state.aiPact!.title, preamble: state.pactPreamble, clauses: [...state.aiPact!.clauses], pactId: 'ai', status: 'pending' })}
-                className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-[#fff5f7] px-2.5 py-1 text-[11px] font-medium text-[#f2536a] active:opacity-60"
-              >
-                <Share2 className="h-3 w-3" /> 分享
-              </button>
               <div className="flex items-center justify-between pr-16">
                 <div className="text-[14.5px] font-bold text-[#26262b]">
                   {state.taName || 'TA'} 拟了一份协议 <span className="text-[#f2536a]">《{state.aiPact.title}》</span>
                 </div>
               </div>
-              <span className="absolute right-3 top-10 shrink-0 rounded-full bg-[#fdeef2] px-2 py-0.5 text-[10.5px] font-bold text-[#f2536a]">等你签</span>
+              <span className="absolute right-3 top-3 shrink-0 rounded-full bg-[#fdeef2] px-2 py-0.5 text-[10.5px] font-bold text-[#f2536a]">等你签</span>
               <div className="mt-2 space-y-1">
                 {state.aiPact.clauses.slice(0, 3).map((c, i) => (
                   <div key={i} className="flex gap-1.5 text-[12.5px] leading-relaxed text-[#6e6e76]">
@@ -6075,16 +6152,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                     <div key={p.id} className="relative rounded-2xl border border-[#f2dfe3] bg-white p-4 shadow-[0_2px_10px_rgba(242,83,106,0.05)]" data-testid="pact-saved-item">
                       <button
                         type="button"
-                        aria-label="分享协议"
-                        data-testid="pact-share-btn"
-                        onClick={() => openShare({ title: p.title, preamble: p.preamble, clauses: [...p.clauses], pactId: p.id, status: st === 'signed' ? 'signed' : 'pending' })}
-                        className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-[#fff5f7] px-2.5 py-1 text-[11px] font-medium text-[#f2536a] active:opacity-60"
-                      >
-                        <Share2 className="h-3 w-3" /> 分享
-                      </button>
-                      <button
-                        type="button"
-                        className="block w-full pr-16 text-left"
+                        className="block w-full text-left"
                         onClick={() => {
                           if (st === 'pending' && !p.signTa) {
                             patch({ pactTitle: p.title, pactPreamble: p.preamble, pactClauses: [...p.clauses], pactSignMe: p.signMe, pactMeAt: p.meAt, pactSignTa: null, pactTaAt: null, pactAt: null });
@@ -6311,7 +6379,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
               <button
                 type="button"
                 data-testid="pact-sign-ta"
-                disabled={!state.pactSignMe || !!state.pactSignTa || taPending}
+                disabled={!state.pactSignMe || !!state.pactSignTa || taDeciding}
                 onClick={sendToTa}
                 className={`mt-2 flex h-[92px] w-full items-center justify-center rounded-md border-2 border-dashed border-[#d9d9de] transition-colors ${
                   !state.pactSignMe || state.pactSignTa ? 'bg-[#fafafa]' : 'bg-[#fafafa] active:bg-[#f1f1f4]'
@@ -6321,18 +6389,51 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                   <span className="text-[26px] text-[#26262b]" style={{ fontFamily: "'Kaiti SC','STKaiti','KaiTi','SimKai',cursive" }}>
                     {state.pactSignTa}
                   </span>
-                ) : taPending ? (
+                ) : taDeciding ? (
                   <span className="flex items-center gap-1.5 text-[13px] text-[#9a9aa2]">
                     <Loader2 className="h-4 w-4 animate-spin" /> 等待 TA 签名…
                   </span>
                 ) : (
-                  <span className={`text-[14px] ${state.pactSignMe ? 'text-[#6e6e76]' : 'text-[#c9c9cf]'}`}>发送给他签名</span>
+                  <span className={`flex flex-col items-center gap-1 ${state.pactSignMe ? 'text-[#6e6e76]' : 'text-[#c9c9cf]'}`}>
+                    <span className="text-[14px]">{state.pactSignMe ? '点这里分享给他签名' : '发送给他签名'}</span>
+                    {state.pactSignMe && <span className="max-w-[120px] text-center text-[10.5px] leading-snug text-[#b6b6bd]">协议卡片会发到 TA 的聊天，TA 看完自己决定签不签</span>}
+                  </span>
                 )}
               </button>
-              <div className="mt-2 text-center text-[11.5px] text-[#c9c9cf]">{state.pactSignTa ? 'TA 已签名 ♡' : state.pactSignMe ? '完成签名后，可发送给他签名' : '请先完成你的签名'}</div>
+              <div className="mt-2 text-center text-[11.5px] text-[#c9c9cf]">{state.pactSignTa ? 'TA 已签名 ♡' : state.pactSignMe ? '点一下他的签名格，协议就会分享给他' : '请先完成你的签名'}</div>
               <div className="mt-2.5 text-[12px] text-[#9a9aa2]">日期：{state.pactTaAt ? fmtDateCn(fmtDate(state.pactTaAt)) : '＿＿＿年＿＿月＿＿日'}</div>
             </div>
           </div>
+
+          {/* TA 想改其中一条（第十五轮：他可以不同意或改某一条；采纳后自动重发） */}
+          {taProposal && !state.pactSignTa && (
+            <div className="mt-4 rounded-xl border border-[#f8a0b4] bg-[#fff5f7] p-3.5" data-testid="pact-ta-proposal">
+              <div className="text-[13.5px] font-bold text-[#f2536a]">
+                {state.taName || 'TA'} 想改第 {taProposal.idx + 1} 条
+              </div>
+              <div className="mt-1 text-[12.5px] leading-relaxed text-[#6e6e76]">{taProposal.reason}</div>
+              <div className="mt-2 rounded-lg bg-white px-3 py-2 text-[13px] leading-relaxed text-[#26262b]">
+                <span className="text-[#9a9aa2]">原条款：{cutText(clauses[taProposal.idx] ?? '', 40)}</span>
+                <span className="mt-1 block">改成：{taProposal.to}</span>
+              </div>
+              <div className="mt-2.5 flex gap-2.5">
+                <button
+                  type="button"
+                  data-testid="pact-proposal-reject"
+                  onClick={() => {
+                    setTaProposal(null);
+                    showToast('那就保持原条款，你可以再编辑或重发');
+                  }}
+                  className="h-10 flex-1 rounded-full bg-white text-[13.5px] font-medium text-[#5a5a62]"
+                >
+                  坚持原条款
+                </button>
+                <button type="button" data-testid="pact-proposal-adopt" onClick={adoptTaProposal} className="h-10 flex-1 rounded-full bg-[#f2536a] text-[13.5px] font-semibold text-white active:opacity-85">
+                  采纳修改，发他重签
+                </button>
+              </div>
+            </div>
+          )}
 
           {state.pactAt != null ? (
             <div className="mb-2 mt-5 rounded-xl bg-[#fdeef2] py-3.5 text-center text-[14px] font-semibold text-[#f2536a]" data-testid="pact-effective-banner">
@@ -6420,150 +6521,655 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           </div>
         </div>
       )}
-
-      {/* 协议分享弹层（第十二轮）：选微信/QQ → 选联系人 → 卡片进会话 */}
-      {shareSheet && (
-        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/35" onClick={() => setShareSheet(null)}>
-          <div className="max-h-[72%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-8 pt-4 shadow-2xl" onClick={(e) => e.stopPropagation()} data-testid="pact-share-sheet">
-            <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
-            {shareSheet.step === 'channel' ? (
-              <>
-                <div className="mt-3 text-center text-[16px] font-bold text-[#26262b]">分享《{shareSheet.title}》</div>
-                <div className="mt-1 text-center text-[12px] text-[#9a9aa2]">选择分享到哪里，TA 会收到一张协议卡片</div>
-                <div className="mt-5 grid grid-cols-2 gap-3">
-                  {(
-                    [
-                      { ch: 'wx' as const, name: '微信', bg: '#07C160', label: '微' },
-                      { ch: 'qq' as const, name: 'QQ', bg: '#12B7F5', label: 'Q' },
-                    ]
-                  ).map((c) => (
-                    <button
-                      key={c.ch}
-                      type="button"
-                      data-testid={`pact-share-${c.ch}`}
-                      onClick={() => setShareSheet({ ...shareSheet, step: 'contact', ch: c.ch })}
-                      className="flex flex-col items-center gap-2 rounded-2xl border border-[#f2dfe3] bg-white py-5 active:bg-[#fff5f7]"
-                    >
-                      <span className="grid h-12 w-12 place-items-center rounded-2xl text-[20px] font-bold text-white" style={{ background: c.bg }}>
-                        {c.label}
-                      </span>
-                      <span className="text-[14px] font-semibold text-[#26262b]">分享到{c.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="mt-3 flex items-center justify-between">
-                  <button type="button" aria-label="返回选渠道" onClick={() => setShareSheet({ ...shareSheet, step: 'channel' })} className="text-[13px] font-medium text-[#6e6e76]">
-                    ← {shareSheet.ch === 'wx' ? '微信' : 'QQ'}
-                  </button>
-                  <div className="text-[16px] font-bold text-[#26262b]">选择联系人</div>
-                  <span className="w-10" />
-                </div>
-                <div className="mt-3 space-y-1.5">
-                  {shareFriends.length === 0 && <div className="py-8 text-center text-[13px] text-[#9a9aa2]">{shareSheet.ch === 'wx' ? '微信' : 'QQ'}里还没有好友</div>}
-                  {shareFriends.map((f) => (
-                    <button
-                      key={f.id}
-                      type="button"
-                      data-testid="pact-share-contact"
-                      onClick={() => void doShare(f.id)}
-                      className="flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left active:bg-[#f7f7f9]"
-                    >
-                      {f.avatar ? (
-                        <img src={f.avatar} alt={f.name} className="h-11 w-11 rounded-full object-cover" draggable={false} />
-                      ) : (
-                        <span className="grid h-11 w-11 place-items-center rounded-full bg-[#ececef] text-[15px] font-bold text-[#8e8e96]">{f.name.slice(0, 1)}</span>
-                      )}
-                      <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-[#26262b]">{f.name}</span>
-                      <span className="shrink-0 rounded-full bg-[#fdeef2] px-3 py-1 text-[12px] font-semibold text-[#f2536a]">发送</span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-/** 恋爱水平考试 */
-function ExamPage({ state, patch, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void }) {
-  const [answers, setAnswers] = useState<Record<number, number>>({});
-  const [score, setScore] = useState<number | null>(null);
-  const answeredAll = EXAM_QUESTIONS.every((_, i) => answers[i] != null);
-  const submit = () => {
-    const s = EXAM_QUESTIONS.reduce((n, q, i) => n + (answers[i] === q.best ? 100 / EXAM_QUESTIONS.length : 0), 0);
-    const rounded = Math.round(s);
-    setScore(rounded);
-    if (state.examBest == null || rounded > state.examBest) patch({ examBest: rounded });
-  };
-  const title = score == null ? '' : score >= 90 ? '满分恋人 🏆' : score >= 60 ? '合格恋人 💯' : '需要补课的恋人 📚';
+/** 试卷纸卡（参考图5/6：粉底白纸 + 左侧装订圈 + 大标题 + 考官 + 注意事项 + 分页题干；answer 模式可作答） */
+function ExamPaperSheet(props: {
+  title: string;
+  notes: string[];
+  questions: { q: string; opts: string[] }[];
+  examiner: string;
+  page: number;
+  perPage?: number;
+  answers?: Record<number, number>;
+  onPick?: (qi: number, oi: number) => void;
+  resultAnswers?: Record<string, number> | null;
+  bestAt?: (qi: number) => number | undefined;
+  onPrev?: () => void;
+  onNext?: () => void;
+}) {
+  const per = props.perPage ?? 5;
+  const pages = Math.max(1, Math.ceil(props.questions.length / per));
+  const pg = Math.min(props.page, pages - 1);
+  const slice = props.questions.slice(pg * per, pg * per + per);
   return (
-    <SubShell title="恋爱水平考试" onBack={close} right={state.examBest != null ? <span className="text-[13px] text-[#9a9aa2]">最高 {state.examBest} 分</span> : undefined}>
-      <div className="mt-4 space-y-3">
-        {EXAM_QUESTIONS.map((q, qi) => (
-          <div key={qi} className="rounded-2xl bg-white p-4 shadow-sm">
-            <div className="text-[15px] font-semibold text-[#2c2c30]">
-              {qi + 1}. {q.q}
-            </div>
-            <div className="mt-3 space-y-2">
-              {q.opts.map((o, oi) => {
-                const picked = answers[qi] === oi;
-                const showRight = score != null && oi === q.best;
-                const showWrong = score != null && picked && oi !== q.best;
-                return (
-                  <button
-                    key={oi}
-                    type="button"
-                    onClick={() => score == null && setAnswers((a) => ({ ...a, [qi]: oi }))}
-                    className={`flex h-11 w-full items-center rounded-xl px-3.5 text-left text-[14.5px] transition-colors ${
-                      showRight
-                        ? 'bg-[#3f3f46] font-medium text-white'
-                        : showWrong
-                          ? 'bg-[#ececef] text-[#b6b6bd] line-through'
-                          : picked
-                            ? 'bg-[#e9e9ed] font-medium text-[#2c2c30]'
-                            : 'bg-[#f3f3f5] text-[#4a4a52]'
-                    }`}
-                  >
-                    {o}
-                  </button>
-                );
-              })}
-            </div>
+    <div className="overflow-hidden rounded-lg bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+      <div className="flex">
+        {/* 装订圈 */}
+        <div className="flex w-8 shrink-0 flex-col items-center justify-around border-r border-[#e6e6ea] py-6">
+          {Array.from({ length: 10 }).map((_, i) => (
+            <span key={i} className="h-2.5 w-2.5 rounded-full border-[1.5px] border-[#c9c9cf] bg-[#f7f7f9]" />
+          ))}
+        </div>
+        <div className="min-w-0 flex-1 px-4 pb-5 pt-6">
+          <h2 className="text-center text-[20px] font-extrabold leading-[1.45] text-[#26262b]">{props.title}</h2>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="h-px flex-1 bg-[#e9e9ee]" />
+            <span className="text-[11px] text-[#f2536a]" aria-hidden="true">
+              ♥
+            </span>
+            <span className="h-px flex-1 bg-[#e9e9ee]" />
           </div>
-        ))}
+          <div className="mt-3 text-[13.5px] text-[#4a4a52]">考官：{props.examiner}</div>
+          {props.notes.length > 0 && (
+            <>
+              <div className="mt-3 flex items-center gap-2">
+                <span className="h-px w-8 bg-[#e9e9ee]" />
+                <span className="whitespace-nowrap text-[13.5px] font-bold tracking-widest text-[#26262b]">注意事项</span>
+                <span className="h-px flex-1 bg-[#e9e9ee]" />
+              </div>
+              <ol className="mt-1.5 space-y-1">
+                {props.notes.map((n, i) => (
+                  <li key={i} className="text-[12.5px] leading-relaxed text-[#6e6e76]">
+                    {i + 1}. {n}
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
+          <div className="mt-3 flex items-baseline justify-between border-b-2 border-[#3c3c42] pb-1.5">
+            <span className="text-[14.5px] font-bold text-[#26262b]">一、单项选择题</span>
+            <span className="shrink-0 pl-2 text-[11.5px] text-[#9a9aa2]">（共{props.questions.length}小题，满分100分）</span>
+          </div>
+          <div className="mt-1">
+            {slice.map((q, si) => {
+              const qi = pg * per + si;
+              const picked = props.answers?.[qi];
+              const bestIdx = props.bestAt?.(qi);
+              const res = props.resultAnswers;
+              return (
+                <div key={qi} className="border-b border-dashed border-[#e9e9ee] py-3 last:border-0">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 text-[14px] font-medium leading-relaxed text-[#26262b]">
+                      {qi + 1}、{q.q}
+                    </div>
+                    <Pencil className="mt-1 h-3.5 w-3.5 shrink-0 text-[#f8a0b4]" strokeWidth={2} aria-hidden="true" />
+                  </div>
+                  <div className="mt-1.5 space-y-1">
+                    {q.opts.map((o, oi) => {
+                      const isPicked = props.onPick ? picked === oi : false;
+                      const showBest = res != null && bestIdx === oi;
+                      const showWrongPick = res != null && res[qi] === oi && bestIdx !== oi;
+                      return (
+                        <button
+                          key={oi}
+                          type="button"
+                          disabled={!props.onPick}
+                          onClick={() => props.onPick?.(qi, oi)}
+                          className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] leading-relaxed transition-colors ${
+                            showBest
+                              ? 'bg-[#eaf7ef] text-[#3d9a63]'
+                              : showWrongPick
+                                ? 'bg-[#fdeef2] text-[#e0607e] line-through decoration-[#f8a0b4]'
+                                : isPicked
+                                  ? 'bg-[#fdeef3] font-medium text-[#e0607e]'
+                                  : props.onPick
+                                    ? 'text-[#4a4a52] active:bg-[#f7f7f9]'
+                                    : 'text-[#4a4a52]'
+                          }`}
+                        >
+                          <span className={`mt-px shrink-0 font-bold ${isPicked && !showWrongPick ? 'text-[#e0607e]' : 'text-[#9a9aa2]'}`}>
+                            {'ABCD'[oi] ?? oi + 1}.
+                          </span>
+                          <span className="min-w-0">{o}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {/* 页码 */}
+          <div className="mt-4 flex items-center justify-center gap-5 text-[12.5px] text-[#6e6e76]">
+            <button type="button" aria-label="上一页" onClick={props.onPrev} disabled={pg <= 0} className={`px-2 ${pg > 0 ? 'active:opacity-60' : 'opacity-30'}`}>
+              ‹
+            </button>
+            <span>
+              恋人空间试卷 {pg + 1}/{pages}
+            </span>
+            <button type="button" aria-label="下一页" onClick={props.onNext} disabled={pg >= pages - 1} className={`px-2 ${pg < pages - 1 ? 'active:opacity-60' : 'opacity-30'}`}>
+              ›
+            </button>
+          </div>
+        </div>
       </div>
-      {score != null ? (
-        <div className="mt-4 rounded-2xl bg-white p-5 text-center shadow-sm">
-          <div className="text-[28px] font-bold text-[#2c2c30]">{score} 分</div>
-          <div className="mt-1 text-[16px] text-[#5a5a62]">{title}</div>
+    </div>
+  );
+}
+
+/** 恋爱水平考试（第十五轮重做，参考图4/5/6）：官方推荐题库 → 预览试卷 → 生成试卷作答 → TA 打分+想说的话；
+ *  我可以喊 TA 来答题（聊天卡片）；TA 也会自己出卷喊我来答（卡片直达答题页）；TA 批卷知道我答了什么 */
+function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
+  const patchFn = patch as unknown as (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void;
+  const [view, setView] = useState<'bank' | 'preview' | 'answer' | 'result' | 'tasheet'>('bank');
+  const [preview, setPreview] = useState<ExamTpl | null>(null);
+  const [page, setPage] = useState(0);
+  const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [workTa, setWorkTa] = useState(false); // 正在答的是 TA 出的卷
+  const [grading, setGrading] = useState(false); // AI 批卷中
+  const [importing, setImporting] = useState(false); // AI 出卷中
+  const [inviting, setInviting] = useState(false); // 喊 TA 答题中
+  const me = state.meName || '我';
+  const ta = state.taName || 'TA';
+  const PER_PAGE = 5;
+
+  /** 聊天里的考试卡片点击进来（第十五轮）：TA 的卷直达答题；我的卷继续作答 */
+  useEffect(() => {
+    const p = consumePendingExamOpen();
+    if (!p) return;
+    if (p.from === 'ta' && state.examTaPaper && !state.examTaPaper.answered) {
+      setWorkTa(true);
+      setAnswers({});
+      setPage(0);
+      setView('answer');
+    } else if (p.from === 'me' && state.examPaper) {
+      setWorkTa(false);
+      setAnswers({});
+      setPage(0);
+      setView('answer');
+    }
+  }, []);
+
+  const paper = workTa ? null : state.examPaper;
+  const taPaper = state.examTaPaper;
+  const working: { title: string; notes: string[]; questions: { q: string; opts: string[]; best?: number }[] } | null = workTa ? taPaper : paper;
+
+  /** 生成试卷（预览 → 作答） */
+  const makePaper = () => {
+    if (!preview) return;
+    patch({ examPaper: { id: `p-${Date.now()}`, title: preview.title, notes: preview.notes, questions: preview.questions, source: 'me', at: Date.now() } });
+    setWorkTa(false);
+    setAnswers({});
+    setPage(0);
+    setView('answer');
+    showToast('试卷已生成，开始作答吧');
+  };
+
+  /** 交卷 → TA 批卷（用户配置的 API 模型优先；TA 知道我答了什么）→ 分数下面写 TA 想说的话 */
+  const submit = async () => {
+    const src = working;
+    if (!src || grading) return;
+    const n = src.questions.length;
+    if (Object.keys(answers).length < n) {
+      showToast(`还有 ${n - Object.keys(answers).length} 题没答哦`);
+      return;
+    }
+    setGrading(true);
+    let score = Math.round(src.questions.reduce((acc, q, i) => acc + (typeof q.best === 'number' && q.best >= 0 && q.best === answers[i] ? 100 / n : 0), 0));
+    let comment = score >= 85 ? '答得不错，看来平时有认真把对方放在心上。' : score >= 60 ? '整体及格，但有几题答得有点敷衍哦。' : '这份答卷需要回炉重造，罚你多爱一点。';
+    try {
+      const { aiGradeExam } = await import('@/lib/ios/couple-ai');
+      const r = await aiGradeExam({ title: src.title, questions: src.questions.map((q) => ({ q: q.q, opts: q.opts })), answers, byTa: workTa });
+      if (r) {
+        score = r.score;
+        comment = r.comment;
+      }
+    } catch {
+      /* 本地兜底 */
+    }
+    const best = state.examBest == null || score > state.examBest ? score : state.examBest;
+    patch({
+      examResult: { title: src.title, score, comment, answers: { ...answers } as Record<string, number>, byTa: workTa, at: Date.now() },
+      examBest: best,
+    });
+    if (workTa) patchFn((prev) => ({ examTaPaper: prev.examTaPaper ? { ...prev.examTaPaper, answered: true } : null }));
+    setGrading(false);
+    setPage(0);
+    setView('result');
+  };
+
+  /** 喊 TA 来答题：卡片发进会话，TA 延时认真作答并自评分 */
+  const inviteTa = async () => {
+    if (inviting) return;
+    const src =
+      view === 'preview' && preview
+        ? { title: preview.title, questions: preview.questions.map((q) => ({ q: q.q, opts: q.opts })), notes: preview.notes }
+        : paper
+          ? { title: paper.title, questions: paper.questions.map((q) => ({ q: q.q, opts: q.opts })), notes: paper.notes }
+          : null;
+    if (!src) return;
+    const meta = readInviteMeta();
+    if (!meta.partnerContactId) {
+      showToast('先在微信/QQ 里和 TA 建立关系吧');
+      return;
+    }
+    setInviting(true);
+    try {
+      // 试卷还没生成就一并生成（喊 TA 的同时我也可以答这份卷）
+      if (!paper) {
+        patch({ examPaper: { id: `p-${Date.now()}`, title: src.title, notes: src.notes, questions: preview!.questions, source: 'me', at: Date.now() } });
+      }
+      await sendExamCard({ channel: meta.partnerApp ?? 'wx', contactId: meta.partnerContactId, title: src.title, count: src.questions.length, dir: 'me' });
+      scheduleAiExamAnswer({ channel: meta.partnerApp ?? 'wx', contactId: meta.partnerContactId, title: src.title, questions: src.questions });
+      showToast(`已喊${ta}来答题，TA 答完会告诉你 ♡`);
+    } catch {
+      showToast('邀请发送失败，稍后再试试');
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  /** 导入模板：AI 现场出一张全新卷 → 预览 */
+  const importTpl = async () => {
+    if (importing) return;
+    setImporting(true);
+    try {
+      const { genExamPaper } = await import('@/lib/ios/couple-ai');
+      const g = await genExamPaper('import');
+      const fallbackTpl = EXAM_TPLS[Math.floor(Math.random() * EXAM_TPLS.length)];
+      const tpl: ExamTpl = g
+        ? {
+            id: `ai-${Date.now()}`,
+            title: g.title,
+            usage: 'AI 新卷',
+            notes: g.notes.length > 0 ? g.notes : ['本试卷为 AI 现场出题，满分100分。', '答题态度大于正确率。', '标准答案解释权归出卷人所有。', '本试卷长期有效。'],
+            questions: g.questions.map((q) => ({ ...q, best: -1 })),
+          }
+        : fallbackTpl;
+      setPreview(tpl);
+      setPage(0);
+      setView('preview');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const gradeLabel = (s: number) => (s >= 90 ? '满分恋人' : s >= 75 ? '优秀恋人' : s >= 60 ? '合格恋人' : '需要补课的恋人');
+
+  // ---------- 成绩视图（TA 打的分数 + 分数下面 TA 想说的话 + 逐题回顾） ----------
+  if (view === 'result' && state.examResult) {
+    const r = state.examResult;
+    return (
+      <SubShell title="考试成绩" onBack={() => setView('bank')}>
+        <div className="mt-3 rounded-2xl bg-white p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]">
+          <div className="text-[13px] font-medium text-[#9a9aa2]">《{r.title}》</div>
+          <div className="mt-2 flex items-end justify-center gap-1.5">
+            <span className="text-[52px] font-extrabold leading-none text-[#f2536a]">{r.score}</span>
+            <span className="pb-1.5 text-[15px] text-[#9a9aa2]">分</span>
+            <Medal className="mb-1.5 h-6 w-6 text-[#f5c33c]" strokeWidth={1.8} aria-hidden="true" />
+          </div>
+          <div className="mt-1 text-[15px] font-semibold text-[#4a4a52]">{gradeLabel(r.score)}</div>
+          {/* TA 的批语（分数下面 TA 想说的话——用户要求） */}
+          <div className="mt-4 rounded-xl bg-[#fff5f7] px-4 py-3 text-left" data-testid="exam-ta-comment">
+            <div className="text-[12px] font-bold text-[#f2536a]">{ta} 的批语</div>
+            <div className="mt-1 text-[13.5px] leading-relaxed text-[#4a4a52]">{r.comment}</div>
+          </div>
+          <div className="mt-2 text-[11px] text-[#c9c9cf]">{r.byTa ? `这是 ${ta} 出的卷 · ` : ''}批卷时间 {fmtDateCn(fmtDate(r.at))}</div>
+        </div>
+
+        {/* 逐题回顾（TA 出的卷没有标准答案，AI 批卷口径） */}
+        {r.byTa === false && (
+          <div className="mt-4 space-y-2.5">
+            <div className="px-1 text-[13.5px] font-bold text-[#26262b]">逐题回顾</div>
+            {(state.examPaper ?? EXAM_TPLS[0]).questions.map((q, i) => {
+              const my = r.answers[String(i)];
+              const best = q.best;
+              return (
+                <div key={i} className="rounded-xl bg-white px-3.5 py-2.5 text-[12.5px] shadow-sm">
+                  <div className="font-medium text-[#26262b]">
+                    {i + 1}. {q.q}
+                  </div>
+                  <div className="mt-1 text-[#6e6e76]">
+                    你答：<span className={my === best ? 'font-semibold text-[#3d9a63]' : 'text-[#e0607e]'}>{my != null && q.opts[my] ? q.opts[my] : '（未答）'}</span>
+                  </div>
+                  {my !== best && <div className="text-[#3d9a63]">更好：{best != null && q.opts[best] ? q.opts[best] : ''}</div>}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="mb-2 mt-5 flex gap-2.5">
           <button
             type="button"
             onClick={() => {
-              setScore(null);
-              setAnswers({});
+              if (workTa && state.examTaPaper) {
+                setAnswers({});
+                setPage(0);
+                setView('answer');
+              } else if (state.examPaper) {
+                setWorkTa(false);
+                setAnswers({});
+                setPage(0);
+                setView('answer');
+              } else {
+                setView('bank');
+              }
             }}
-            className="mt-4 h-11 w-full rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]"
+            className="h-12 flex-1 rounded-full bg-white text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80"
           >
-            <RefreshCcw className="mr-1.5 inline h-4 w-4" />
-            重考一次
+            <RefreshCcw className="mr-1 inline h-4 w-4" />
+            再考一次
+          </button>
+          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-full bg-[#f2536a] text-[15px] font-semibold text-white active:opacity-85">
+            返回题库
           </button>
         </div>
-      ) : (
+      </SubShell>
+    );
+  }
+
+  // ---------- TA 的答卷视图（TA 答我出的卷：他的选择 + 自评分 + 想说的话） ----------
+  if (view === 'tasheet' && state.examTaSheet) {
+    const s = state.examTaSheet;
+    return (
+      <SubShell title={`${ta} 的答卷`} onBack={() => setView('bank')}>
+        <div className="mt-3 rounded-2xl bg-white p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]" data-testid="exam-ta-sheet">
+          <div className="text-[13px] font-medium text-[#9a9aa2]">《{s.title}》</div>
+          <div className="mt-2 flex items-end justify-center gap-1.5">
+            <span className="text-[46px] font-extrabold leading-none text-[#576b95]">{s.score}</span>
+            <span className="pb-1.5 text-[15px] text-[#9a9aa2]">分（自评）</span>
+          </div>
+          <div className="mt-3 rounded-xl bg-[#f5f7fc] px-4 py-3 text-left">
+            <div className="text-[12px] font-bold text-[#576b95]">{ta} 想说的话</div>
+            <div className="mt-1 text-[13.5px] leading-relaxed text-[#4a4a52]">{s.comment}</div>
+          </div>
+        </div>
+        <div className="mt-4 space-y-2.5">
+          <div className="px-1 text-[13.5px] font-bold text-[#26262b]">TA 的作答</div>
+          {(state.examPaper?.questions ?? []).map((q, i) => {
+            const pick = s.picks[String(i)];
+            return (
+              <div key={i} className="rounded-xl bg-white px-3.5 py-2.5 text-[12.5px] shadow-sm">
+                <div className="font-medium text-[#26262b]">
+                  {i + 1}. {q.q}
+                </div>
+                <div className="mt-1 text-[#576b95]">
+                  {ta}答：{pick != null && q.opts[pick] ? q.opts[pick] : '（跳过了这题）'}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <button type="button" onClick={() => setView('bank')} className="mb-2 mt-5 h-12 w-full rounded-full bg-[#f2536a] text-[15px] font-semibold text-white active:opacity-85">
+          返回题库
+        </button>
+      </SubShell>
+    );
+  }
+
+  // ---------- 作答视图（参考图5/6 试卷样式；TA 的卷与我的卷同款） ----------
+  if (view === 'answer' && working) {
+    const answeredN = Object.keys(answers).length;
+    return (
+      <SubShell title={workTa ? `${ta} 的考卷` : '恋爱水平考试'} onBack={() => setView('bank')}>
+        <div className="-mx-3 min-h-[420px] bg-[linear-gradient(180deg,#fdeef3,#fbe3ec)] px-3 py-4">
+          <ExamPaperSheet
+            title={working.title}
+            notes={workTa ? (taPaper?.notes ?? []) : (paper?.notes ?? [])}
+            questions={working.questions}
+            examiner={workTa ? ta : me}
+            page={page}
+            perPage={PER_PAGE}
+            answers={answers}
+            onPick={(qi, oi) => setAnswers((a) => ({ ...a, [qi]: oi }))}
+            onPrev={() => setPage((p) => Math.max(0, p - 1))}
+            onNext={() => setPage((p) => Math.min(Math.ceil(working.questions.length / PER_PAGE) - 1, p + 1))}
+          />
+        </div>
+        {!inviting && (
+          <button
+            type="button"
+            data-testid="exam-invite-ta"
+            onClick={() => void inviteTa()}
+            className="mt-3 h-11 w-full rounded-full bg-white text-[14px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80"
+          >
+            喊 {ta} 也来答这份卷
+          </button>
+        )}
         <button
           type="button"
-          onClick={submit}
-          disabled={!answeredAll}
-          className="mt-5 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[16px] font-semibold text-white disabled:opacity-40"
+          data-testid="exam-submit"
+          onClick={() => void submit()}
+          disabled={grading}
+          className="mb-2 mt-4 h-[52px] w-full rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98] disabled:opacity-50"
         >
-          {answeredAll ? '交卷' : `还剩 ${EXAM_QUESTIONS.length - Object.keys(answers).length} 题未答`}
+          {grading ? (
+            <span className="flex items-center justify-center gap-2">
+              <Loader2 className="h-4.5 w-4.5 animate-spin" /> {ta} 正在批卷…
+            </span>
+          ) : answeredN < working.questions.length ? (
+            `交卷（已答 ${answeredN}/${working.questions.length}）`
+          ) : (
+            '交卷'
+          )}
+        </button>
+        <div className="text-center text-[11.5px] leading-relaxed text-[#b6b6bd]">交卷后由 {ta} 批卷打分，TA 会看到你每一题的答案</div>
+      </SubShell>
+    );
+  }
+
+  // ---------- 预览视图（参考图5/6：粉底 + 白纸卷 + 生成试卷/喊他来答题） ----------
+  if (view === 'preview' && preview) {
+    return (
+      <SubShell title="预览试卷" onBack={() => setView('bank')}>
+        <div className="-mx-3 min-h-[420px] bg-[linear-gradient(180deg,#fdeef3,#fbe3ec)] px-3 py-4">
+          <ExamPaperSheet
+            title={preview.title}
+            notes={preview.notes}
+            questions={preview.questions}
+            examiner={me}
+            page={page}
+            perPage={PER_PAGE}
+            onPrev={() => setPage((p) => Math.max(0, p - 1))}
+            onNext={() => setPage((p) => Math.min(Math.ceil(preview.questions.length / PER_PAGE) - 1, p + 1))}
+          />
+        </div>
+        <div className="mb-2 mt-4 grid grid-cols-2 gap-3">
+          <button type="button" data-testid="exam-back-bank" onClick={() => setView('bank')} className="h-12 rounded-full bg-white text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80">
+            修改试卷
+          </button>
+          <button
+            type="button"
+            data-testid="exam-invite-ta"
+            onClick={() => void inviteTa()}
+            disabled={inviting}
+            className="h-12 rounded-full bg-white text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80 disabled:opacity-50"
+          >
+            {inviting ? '发送中…' : '喊他来答题'}
+          </button>
+        </div>
+        <button
+          type="button"
+          data-testid="exam-make-paper"
+          onClick={makePaper}
+          className="mb-2 h-[52px] w-full rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
+        >
+          生成试卷
+        </button>
+        <div className="text-center text-[11.5px] leading-relaxed text-[#b6b6bd]">生成后你可以自己答，也可以喊 {ta} 来答；交卷后 {ta} 批卷打分</div>
+      </SubShell>
+    );
+  }
+
+  // ---------- 题库视图（参考图4：官方推荐题库 + 模板卡 + TA 的邀请/答卷入口） ----------
+  return (
+    <SubShell title="恋爱水平考试" onBack={close} right={state.examBest != null ? <span className="text-[13px] text-[#9a9aa2]">最高 {state.examBest} 分</span> : undefined}>
+      <h1 className="mt-3 px-1 text-center text-[30px] font-black tracking-[0.06em] text-[#26262b]">恋爱水平考试</h1>
+
+      {/* 题库纸卡（装订圈 + 官方推荐题库 + 模板列表） */}
+      <div className="mt-3 overflow-hidden rounded-lg bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+        <div className="flex">
+          <div className="flex w-8 shrink-0 flex-col items-center justify-around border-r border-[#e6e6ea] py-6">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <span key={i} className="h-2.5 w-2.5 rounded-full border-[1.5px] border-[#c9c9cf] bg-[#f7f7f9]" />
+            ))}
+          </div>
+          <div className="min-w-0 flex-1 px-4 pb-5 pt-6">
+            <div className="relative inline-block">
+              <span className="text-[20px] font-black tracking-wide text-[#26262b]">官方推荐题库</span>
+              <span className="absolute -bottom-0.5 left-0 h-[3px] w-[86%] -rotate-1 rounded-full bg-[#e23b3b]/85" aria-hidden="true" />
+              <span className="ml-1.5 align-top text-[13px] text-[#9a9aa2]" aria-hidden="true">
+                ✩
+              </span>
+            </div>
+            <div className="mt-1.5 text-[12.5px] text-[#9a9aa2]">选一套题，考考另一半</div>
+
+            <div className="mt-4 space-y-3.5">
+              {EXAM_TPLS.map((t) => (
+                <div key={t.id} className="relative rounded-[4px] border-[1.5px] border-[#3c3c42] p-3.5">
+                  {/* 四角装饰点 */}
+                  {['-left-1 -top-1', '-right-1 -top-1', '-left-1 -bottom-1', '-right-1 -bottom-1'].map((pos) => (
+                    <span key={pos} className={`absolute ${pos} h-2 w-2 rounded-full bg-white ring-1 ring-[#3c3c42]`} aria-hidden="true" />
+                  ))}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 text-[15.5px] font-bold leading-snug text-[#26262b]">{t.title}</div>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-[11.5px] text-[#4a4a52]">
+                      <span>共{t.questions.length}题</span>
+                      <span className="text-[#d9d9de]">|</span>
+                      <span>满分100分</span>
+                      <span className="text-[#d9d9de]">|</span>
+                      <span>{t.usage}</span>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid={`exam-use-${t.id}`}
+                      onClick={() => {
+                        setPreview(t);
+                        setPage(0);
+                        setView('preview');
+                      }}
+                      className="shrink-0 rounded-[3px] border-[1.5px] border-[#3c3c42] px-4 py-1 text-[13.5px] font-bold text-[#26262b] active:bg-[#f7f7f9]"
+                    >
+                      使用
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 当前激活试卷（继续作答/重考） */}
+      {state.examPaper && (
+        <button
+          type="button"
+          data-testid="exam-active-paper"
+          onClick={() => {
+            setWorkTa(false);
+            setAnswers({});
+            setPage(0);
+            setView('answer');
+          }}
+          className="mt-4 flex w-full items-center gap-3 rounded-2xl border border-[#f2dfe3] bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#fff5f7]"
+        >
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
+            <ClipboardList className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.8} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14px] font-semibold text-[#26262b]">《{state.examPaper.title}》</span>
+            <span className="block text-[11.5px] text-[#9a9aa2]">我的试卷 · {state.examPaper.questions.length} 题 · 点此继续作答</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
         </button>
       )}
+
+      {/* TA 出卷喊我来答（聊天卡片之外的入口；已答完显示成绩） */}
+      {taPaper && (
+        <button
+          type="button"
+          data-testid="exam-ta-invite"
+          onClick={() => {
+            if (taPaper.answered && state.examResult) {
+              setWorkTa(true);
+              setView('result');
+            } else if (taPaper.answered) {
+              showToast('这张卷子你答过啦，等 TA 出新卷');
+            } else {
+              setWorkTa(true);
+              setAnswers({});
+              setPage(0);
+              setView('answer');
+            }
+          }}
+          className="mt-2.5 flex w-full items-center gap-3 rounded-2xl border-2 border-dashed border-[#f2536a]/55 bg-white px-4 py-3.5 text-left active:bg-[#fff5f7]"
+        >
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
+            <BookOpen className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.8} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14px] font-semibold text-[#26262b]">
+              {ta} 给你出了套卷 <span className="text-[#f2536a]">《{taPaper.title}》</span>
+            </span>
+            <span className="block text-[11.5px] text-[#9a9aa2]">{taPaper.answered ? '已答完 · 点此看成绩' : `${taPaper.questions.length} 题 · 点此去答题`}</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
+        </button>
+      )}
+
+      {/* TA 的答卷（TA 答了我喊TA答的卷） */}
+      {state.examTaSheet && (
+        <button
+          type="button"
+          data-testid="exam-ta-sheet-entry"
+          onClick={() => setView('tasheet')}
+          className="mt-2.5 flex w-full items-center gap-3 rounded-2xl border border-[#e4e9f6] bg-[#f8faff] px-4 py-3.5 text-left active:opacity-80"
+        >
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#e8eefb]">
+            <PencilLine className="h-4.5 w-4.5 text-[#576b95]" strokeWidth={1.8} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14px] font-semibold text-[#26262b]">
+              {ta} 的答卷 <span className="text-[#576b95]">《{state.examTaSheet.title}》</span>
+            </span>
+            <span className="block text-[11.5px] text-[#9a9aa2]">自评 {state.examTaSheet.score} 分 · 点此看 TA 答了什么</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
+        </button>
+      )}
+
+      {/* 最近成绩入口 */}
+      {state.examResult && (
+        <button
+          type="button"
+          data-testid="exam-result-entry"
+          onClick={() => {
+            setWorkTa(state.examResult!.byTa);
+            setView('result');
+          }}
+          className="mt-2.5 flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#fff5f7]"
+        >
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fff7e6]">
+            <Medal className="h-4.5 w-4.5 text-[#e6a23c]" strokeWidth={1.8} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14px] font-semibold text-[#26262b]">
+              上次成绩 <span className="text-[#f2536a]">{state.examResult.score} 分</span>
+            </span>
+            <span className="block truncate text-[11.5px] text-[#9a9aa2]">《{state.examResult.title}》· {ta} 的批语在里面</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
+        </button>
+      )}
+
+      {/* 导入模板（AI 现场出一张新卷） */}
+      <button
+        type="button"
+        data-testid="exam-import"
+        onClick={() => void importTpl()}
+        disabled={importing}
+        className="mx-auto mb-2 mt-5 flex h-12 items-center justify-center gap-2 rounded-[4px] border-[1.5px] border-[#3c3c42] bg-white px-8 text-[15px] font-bold text-[#26262b] shadow-[0_3px_0_rgba(60,60,66,0.16)] active:translate-y-px disabled:opacity-50"
+      >
+        {importing ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <BookOpen className="h-4.5 w-4.5" strokeWidth={1.9} />}
+        {importing ? 'AI 正在出卷…' : '导入模板'}
+      </button>
+      <div className="text-center text-[11.5px] leading-relaxed text-[#b6b6bd]">每次导入都是一套全新的卷子；TA 也会自己出卷喊你来答</div>
     </SubShell>
   );
 }

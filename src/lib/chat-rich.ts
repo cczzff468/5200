@@ -455,6 +455,15 @@ const OPEN_TAIL_FULL_RE = /\u3010(?:红包|转账|亲属卡|位置|表情包|分
  */
 const STICKER_LOOSE_RE = /[【\[]\s*(?:发送了表情包|发送了表情|发送表情包|发送表情|表情包|表情)\s*[:：]\s*([^\]】]{1,40})\s*[】\]]/g;
 
+/**
+ * AI 仿写账单摘要格式发转账（第十五轮修复）——聊天历史里转账消息以「[转账 ¥200 "备注"，待收款]」
+ * 式账单摘要进入上下文，AI 被要求转账时经常照葫芦画瓢写成
+ * 「[转账 ID:mv8s8jkl-zmnc9q4 ¥100.00 "给你零花钱，别省着花"]」这类幻觉格式，导致转账以干巴巴的文字气泡上屏。
+ * 这些变体在普通文字段里二次扫描：金额必填（带 ¥/￥ 号才认），匹配到就转成真正的转账卡片；
+ * 标准格式 [转账:金额:备注] 由 RICH_RE 优先处理，此正则带 (?![::：]) 防重入。
+ */
+const TRANSFER_LOOSE_RE = /[【\[]\s*转账\s*(?![::：])[^】\]]*?[¥￥]\s*(\d+(?:\.\d+)?)\s*元?[^】\]]*?(?:["“「『]\s*([^"”」』】\]]{1,40}?)\s*["”」』])?[^】\]]*[】\]]/g;
+
 function parseAmount(v: string | undefined): number {
   const n = Number((v ?? '').trim());
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : NaN;
@@ -603,18 +612,30 @@ function parseMarker(kind: string, inner: string, stickers: Sticker[] | null, gr
 }
 
 /**
- * 普通文字段里的表情标记变体二次扫描（[发送了表情：XX] / [表情：XX] / 【表情包：XX】…）：
- * 按意思匹配到本地表情包 → 转成表情消息；匹配不到 → 保留原文（不当命令处理）。
+ * 普通文字段里的「转账幻觉格式」二次扫描（[转账 ID:xxx ¥100 "备注"] / [转账 ¥520 "备注"，待收款]…）：
+ * 转成真正的转账卡片；表情标记变体（[发送了表情：XX] 等）同样在这一层按出现位置合并扫描，避免互相截断。
  */
-function splitLooseStickers(text: string, stickers: Sticker[] | null): RichPart[] {
+function splitLooseTransfer(text: string, stickers: Sticker[] | null): RichPart[] {
+  type Hit = { start: number; end: number; part: RichPart };
+  const hits: Hit[] = [];
+  for (const m of text.matchAll(TRANSFER_LOOSE_RE)) {
+    const amount = capAmount(parseAmount(m[1]) || fallbackAmount('transfer'), AI_AMOUNT_CAP.transfer);
+    hits.push({ start: m.index, end: m.index + m[0].length, part: { type: 'rich', rich: { kind: 'transfer', amount, note: (m[2] ?? '').trim() } } });
+  }
+  for (const m of text.matchAll(STICKER_LOOSE_RE)) {
+    const s = resolveSticker(m[1], stickers ?? []);
+    hits.push({ start: m.index, end: m.index + m[0].length, part: s ? { type: 'rich', rich: { kind: 'sticker', stickerId: s.id } } : { type: 'text', text: m[0] } });
+  }
+  if (hits.length === 0) return [{ type: 'text', text }];
+  hits.sort((a, b) => a.start - b.start);
   const parts: RichPart[] = [];
   let last = 0;
-  for (const m of text.matchAll(STICKER_LOOSE_RE)) {
-    const before = text.slice(last, m.index).trim();
+  for (const h of hits) {
+    if (h.start < last) continue; // 重叠防护（理论上不发生）
+    const before = text.slice(last, h.start).trim();
     if (before) parts.push({ type: 'text', text: before });
-    const s = resolveSticker(m[1], stickers ?? []);
-    parts.push(s ? { type: 'rich', rich: { kind: 'sticker', stickerId: s.id } } : { type: 'text', text: m[0] });
-    last = m.index + m[0].length;
+    parts.push(h.part);
+    last = h.end;
   }
   const tail = text.slice(last).trim();
   if (tail) parts.push({ type: 'text', text: tail });
@@ -635,7 +656,7 @@ export function parseRichParts(seg: string, stickers: Sticker[] | null, opts?: {
   let last = 0;
   for (const m of seg.matchAll(RICH_RE)) {
     const before = seg.slice(last, m.index).trim();
-    if (before) parts.push(...splitLooseStickers(before, stickers));
+    if (before) parts.push(...splitLooseTransfer(before, stickers));
     const rich = parseMarker(m[1], m[2] ?? '', stickers, group);
     if (!rich) {
       // 格式错误 / 表情 ID 与意思都对不上：表情回退为干净的「[表情包]」，其余回退显示标记原文
@@ -646,7 +667,7 @@ export function parseRichParts(seg: string, stickers: Sticker[] | null, opts?: {
     last = m.index + m[0].length;
   }
   const tail = seg.slice(last).trim();
-  if (tail) parts.push(...splitLooseStickers(tail, stickers));
+  if (tail) parts.push(...splitLooseTransfer(tail, stickers));
   return parts;
 }
 
@@ -674,6 +695,7 @@ export function mergeRichSegments(segs: string[]): string[] {
 export function prettifyRichText(text: string): string {
   return text
     .replace(RICH_RE, (_all, kind: string) => `[${kind}]`)
+    .replace(TRANSFER_LOOSE_RE, '[转账]')
     .replace(STICKER_LOOSE_RE, '[表情包]')
     // 处理动作标记不是消息内容：流式期直接隐藏（落盘时转为状态流转 + 通知行，标记本身不留痕）
     .replace(ACTION_RE, '')
@@ -705,7 +727,9 @@ export function buildRichRules(stickers: Sticker[], opts?: { familyCard?: boolea
       '[邀请一起听:歌名:歌手]（如 [邀请一起听:些许悲悯和痛:妙静鸥]）——发出歌曲卡片并邀请对方和你一起实时听这首歌。' +
       '标记里不要出现方括号；分享语一句话即可。要不要分享、分享什么歌，完全按你的人设、你们的关系和聊到的内容自然决定，不要每轮都发。',
     '【发红包/转账·格式铁律】红包/转账' + (familyCard ? '/亲属卡' : '') + '标记里必须写数字金额，例如 [红包:8.88:拿去买奶茶]、[转账:66:上次饭钱]；' +
-      '只输出 [红包] 或 [转账] 不带金额是无效的，你想发钱就务必带金额，不要用单独的 [红包] 当作表情或代称。',
+      '只输出 [红包] 或 [转账] 不带金额是无效的，你想发钱就务必带金额，不要用单独的 [红包] 当作表情或代称。' +
+      '聊天记录里「[转账 ¥200 "备注"，待收款]」「[转账 ID:xxx ¥100 "备注"]」这类带 ¥ 号/ID/状态字的方括号文字只是系统账单摘要，不是你的输出格式，禁止模仿；' +
+      '你发转账只有一种合法写法：[转账:金额:备注]（如 [转账:100:给你零花钱，别省着花]），写成其它任何变体都发不出去。',
     '【发钱纪律】红包/转账' + (familyCard ? '/亲属卡' : '') + '按你的人设、你们的关系和当下话题自主决定，没有合适的理由就不要发，不是每轮都要发；' +
       '一轮回复最多发一次红包或转账；金额要符合你们的关系与你的经济状况：单个红包不超过 200 元、单笔转账不超过 2000 元' + (familyCard ? '、亲属卡每月额度不超过 1000 元' : '') + '，绝不写夸张的天文数字。',
     ...(stickers.length > 0
