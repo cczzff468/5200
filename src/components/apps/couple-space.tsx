@@ -72,7 +72,7 @@ import {
   Users,
 } from 'lucide-react';
 import { kvGet, kvSet, kvSetDebounced } from '@/lib/ios/idb-kv';
-import { useUI } from '@/lib/ios/store';
+import { useSettings, useUI } from '@/lib/ios/store';
 import { listContacts } from '@/lib/ios/contacts-store';
 import {
   COUPLE_STATE_EVENT,
@@ -85,7 +85,7 @@ import {
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
-import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiTickTrail, coupleMemoryDiff, pokeTaDiary, runCoupleAiTick, scheduleAiReply, syncLocFromContacts } from '@/lib/ios/couple-ai';
+import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiStatusPick, aiTickTrail, coupleMemoryDiff, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts } from '@/lib/ios/couple-ai';
 import { displayNameOf, isFriendIn } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
 import L from 'leaflet';
@@ -94,6 +94,14 @@ import { DefaultAvatar } from './default-avatar';
 import { LocalToast, useLocalToast } from './page-toast';
 
 // ---------------- 数据模型与持久化 ----------------
+
+/** 恋爱状态测评报告（我和 AI 各一份；第十一轮） */
+interface StatusResult {
+  score: number; // 0-100
+  title: string; // 状态称号
+  summary: string; // 总结
+  advice: string[]; // 建议
+}
 
 /** 相册（四个固定卡 + 用户自建的私密相册通用结构） */
 interface CoupleAlbum {
@@ -193,6 +201,7 @@ interface CoupleState {
   taTrail: { dateKey: string; items: { t: string; place: string; note: string }[]; at: number } | null; // TA 今天去过的地方（人设记忆生成，灰色字展示）
   replyTa: { active: boolean; picks: Record<string, { pick: number; say: string; at: number }>; mePicks: Record<string, { pick: number; text: string }>; startedAt: number; endedAt: number | null } | null; // 回复挑战双人闯关（TA 同时作答）
   locFollow: { me?: string | null; ta?: string | null }; // 轨迹位置跟随联系人 APP：上次同步的 region 文本
+  statusExam: { my: Record<string, number>; ta: Record<string, number>; at: number | null; rep?: { me: StatusResult; ta: StatusResult; overall: string } | null } | null; // 恋爱状态测评：双方答题记录 + 生成过的报告（我和 AI 同步答）
 }
 
 const STATE_KEY = 'couple-space:state';
@@ -233,6 +242,7 @@ function defaultState(): CoupleState {
     missCards: 0,
     missMadeUp: [],
     stoneEngraved: false,
+    statusExam: null,
     quiz: [],
     quizCustom: [],
     examBest: null,
@@ -1966,6 +1976,7 @@ function CommentThread({
   threadKey,
   hint,
   dark = false,
+  hideNames = false, // 情侣印象留言：不显示左右两边的名字，也不显示「名字：」前缀（用户要求）
   testId,
 }: {
   state: CoupleState;
@@ -1973,12 +1984,21 @@ function CommentThread({
   threadKey: string;
   hint?: string;
   dark?: boolean; // 深色背景（相册大图查看）适配
+  hideNames?: boolean;
   testId?: string;
 }) {
   const list = useMemo(() => (state.comments ?? []).filter((c) => c.key === threadKey), [state.comments, threadKey]);
   const [text, setText] = useState('');
   const me = state.meName || '我';
   const ta = state.taName || 'TA';
+  /** hideNames 时去掉历史留言文本里的「名字：」前缀（旧数据兼容） */
+  const stripNamePrefix = (t: string) => {
+    if (!hideNames) return t;
+    for (const n of [ta, me, 'TA', '我']) {
+      if (n && t.startsWith(`${n}：`)) return t.slice(n.length + 1).trim();
+    }
+    return t;
+  };
   const send = () => {
     const t = text.trim();
     if (!t) return;
@@ -2002,15 +2022,15 @@ function CommentThread({
             c.from === 'ta' ? (
               <div key={c.id} className="flex items-end gap-1.5">
                 <span className={`max-w-[82%] rounded-2xl rounded-bl-sm px-3 py-2 text-[13px] leading-relaxed ${dark ? 'bg-[#7f96e0]/25 text-[#c3cff5]' : 'bg-[#eef2fd] text-[#5a74c4]'}`}>
-                  <span className={`mr-0.5 text-[10.5px] font-semibold ${dark ? 'text-[#8fa4ef]' : 'text-[#7f96e0]'}`}>{ta}：</span>
-                  {c.text}
+                  {!hideNames && <span className={`mr-0.5 text-[10.5px] font-semibold ${dark ? 'text-[#8fa4ef]' : 'text-[#7f96e0]'}`}>{ta}：</span>}
+                  {stripNamePrefix(c.text)}
                 </span>
               </div>
             ) : (
               <div key={c.id} className="flex items-end justify-end gap-1.5">
                 <span className={`max-w-[82%] rounded-2xl rounded-br-sm px-3 py-2 text-[13px] leading-relaxed ${dark ? 'bg-[#f9a8d4]/25 text-[#f9c9da]' : 'bg-[#fdeef3] text-[#d4547a]'}`}>
-                  {c.text}
-                  <span className={`ml-0.5 text-[10.5px] font-semibold ${dark ? 'text-[#f9a8d4]' : 'text-[#e0607e]'}`}>：{me}</span>
+                  {stripNamePrefix(c.text)}
+                  {!hideNames && <span className={`ml-0.5 text-[10.5px] font-semibold ${dark ? 'text-[#f9a8d4]' : 'text-[#e0607e]'}`}>：{me}</span>}
                 </span>
               </div>
             ),
@@ -3103,7 +3123,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
               {distKm != null ? ` · 现在相距 ${fmtKm(distKm)}` : ''}
             </div>
             <div className="mt-1.5 rounded-xl bg-[#f7f7f9] px-3 py-2 text-[11.5px] leading-relaxed text-[#9a9aa2]">
-              双方位置跟随联系人 App 里填写的地区：联系人资料里改了位置，这里的定位会自动跟着变；也可以在下面搜索手动微调。
+              双方位置跟随联系人 App 里填写的地区：联系人资料里改了位置，这里的定位会自动跟着变。
             </div>
 
             {/* TA 今天的行踪（人设记忆生成，灰色字） */}
@@ -3121,54 +3141,6 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
               </div>
             )}
 
-            {/* 真实位置搜索（第八轮：地址 → 真实经纬度 → 真实地图 marker + 真实距离） */}
-            <PlaceSearchRow
-              label="我的位置"
-              current={state.myLoc}
-              onPick={(p) => {
-                patch({ myLoc: p });
-                showToast('我的位置已更新 ♡');
-              }}
-              onClear={() => patch({ myLoc: null })}
-              showToast={showToast}
-            />
-            <PlaceSearchRow
-              label="TA 的位置"
-              current={state.taLoc}
-              onPick={(p) => {
-                patch({ taLoc: p });
-                showToast('TA 的位置已更新 ♡');
-              }}
-              onClear={() => patch({ taLoc: null })}
-              showToast={showToast}
-            />
-            <PlaceSearchRow
-              label="相遇地点"
-              current={state.meetLoc}
-              onPick={(p) => {
-                patch({ meetLoc: p, meetPlace: p.name });
-                showToast('相遇地点已记录 ♡');
-              }}
-              onClear={() => patch({ meetLoc: null })}
-              showToast={showToast}
-            />
-
-            <div className="mt-5 text-[13px] font-semibold text-[#4a4a52]">走过的大事记</div>
-            {state.chronicle.length === 0 ? (
-              <div className="py-6 text-center text-[12.5px] text-[#b6b6bd]">还没有记录，去「恋爱编年史」写下第一件小事吧</div>
-            ) : (
-              <div className="mt-2 space-y-2 pb-2">
-                {state.chronicle.slice(0, 10).map((c) => (
-                  <div key={c.id} className="flex items-center gap-3 rounded-xl bg-[#f7f7f9] px-3.5 py-2.5">
-                    <span className="h-2 w-2 shrink-0 rounded-full bg-[#a9a9b2]" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13.5px] text-[#2c2c30]">{c.text}</span>
-                      <span className="text-[11px] text-[#b6b6bd]">{fmtDate(c.at)}</span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -6405,6 +6377,7 @@ const CHRON_STATUSES: { key: string; bg: string; fg: string }[] = [
 function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
   const now = new Date();
   const [editing, setEditing] = useState(false);
+  const [showcase, setShowcase] = useState(false); // 生成后的结果展示页（参考图3：保存完整图片/分享给朋友）
   const [text, setText] = useState('');
   const [draft, setDraft] = useState<{ y: number; m: number; status: string }[]>(() => [
     { y: now.getFullYear(), m: now.getMonth() + 1, status: '暗恋' },
@@ -6431,10 +6404,10 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
     return cur;
   };
 
-  /** 编辑器：年份候选（2018 ~ 当前年+1） */
+  /** 编辑器：年份候选（2016 ~ 当前年+1，参考图3 从 2016 起可选） */
   const yearOpts = useMemo(() => {
     const arr: number[] = [];
-    for (let y = 2018; y <= now.getFullYear() + 1; y++) arr.push(y);
+    for (let y = 2016; y <= now.getFullYear() + 1; y++) arr.push(y);
     return arr;
   }, []);
 
@@ -6456,8 +6429,46 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
     }
     patch({ chronicleMonths: list });
     setEditing(false);
+    setShowcase(true);
     showToast('恋爱编年史已生成 ♡');
   };
+
+  /** 年×月状态表格（结果卡与展示页共用；参考图2/3 样式） */
+  const chronTable = (
+    <table className="border-separate border-spacing-0 text-center" style={{ minWidth: years.length > 3 ? 96 * Math.min(years.length + 1, 7) : 320 }}>
+      <thead>
+        <tr>
+          <th className="sticky left-0 z-10 bg-[#fff7f8] px-1.5 py-2 text-[12px] font-semibold text-[#a4889a]">月份</th>
+          {years.map((y) => (
+            <th key={y} className="px-1.5 py-2 text-[13px] font-bold text-[#3c3c42]">
+              {y}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {Array.from({ length: 12 }, (_, mi) => (
+          <tr key={mi} className={mi % 2 === 1 ? 'bg-[#fffafb]' : ''}>
+            <td className="sticky left-0 z-10 bg-inherit px-1.5 py-[3px] text-[11.5px] text-[#a4889a]">{mi + 1}月</td>
+            {years.map((y) => {
+              const st = statusAt(y, mi);
+              const meta = st ? CHRON_STATUSES.find((s) => s.key === st) : undefined;
+              return (
+                <td key={y} className="px-[2px] py-[3px]">
+                  <span
+                    className="mx-auto block w-fit whitespace-nowrap rounded-full px-2 py-[3px] text-[11px] font-medium"
+                    style={meta ? { background: meta.bg, color: meta.fg } : { color: '#cbb8bf' }}
+                  >
+                    {meta ? meta.key : '—'}
+                  </span>
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
 
   // ---------------- 编辑视图（参考图3） ----------------
   if (editing) {
@@ -6547,154 +6558,181 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
     );
   }
 
-  // ---------------- 结果视图（参考图2） ----------------
-  return (
-    <SubShell title="恋爱编年史" onBack={close}>
-      {/* 头部 */}
-      <div className="mt-3 px-1">
-        <div className="flex items-start gap-2.5">
-          <span className="mt-1 shrink-0">
-            <PixelHeart size={30} />
-          </span>
-          <h2 className="text-[21px] font-extrabold leading-snug text-[#26262b]">
-            记录几个关键月份，
-            <br />
-            生成你的<span className="text-[#f2536a]">恋爱编年史</span>
-          </h2>
-        </div>
-        <p className="mt-2 pl-[42px] text-[13px] text-[#9a9aa2]">用一张表，记录感情里的重要时刻</p>
-      </div>
-
-      {/* 结果表格 */}
-      <div className="mt-4 rounded-2xl bg-white p-4 shadow-sm" data-testid="chronicle-table-card">
-        <div className="text-[14.5px] font-bold text-[#26262b]">
-          我的恋爱编年史 <span className="text-[12px]">💗</span>
-        </div>
-        <div className="mt-3 overflow-x-auto pb-1" data-testid="chronicle-table">
-          <table className="border-separate border-spacing-0 text-center" style={{ minWidth: years.length > 3 ? 96 * Math.min(years.length + 1, 7) : 300 }}>
-            <thead>
-              <tr>
-                <th className="sticky left-0 z-10 bg-white px-1.5 py-1.5 text-[12px] font-semibold text-[#8e8e96]">月份</th>
-                {years.map((y) => (
-                  <th key={y} className="px-1.5 py-1.5 text-[12.5px] font-bold text-[#26262b]">
-                    {y}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {Array.from({ length: 12 }, (_, mi) => (
-                <tr key={mi}>
-                  <td className="sticky left-0 z-10 bg-white px-1.5 py-[2.5px] text-[11.5px] text-[#8e8e96]">{mi + 1}月</td>
-                  {years.map((y) => {
-                    const st = statusAt(y, mi);
-                    const meta = st ? CHRON_STATUSES.find((s) => s.key === st) : undefined;
-                    return (
-                      <td key={y} className="px-[2px] py-[2.5px]">
-                        <span
-                          className="block whitespace-nowrap rounded-md px-1.5 py-[3px] text-[11px]"
-                          style={meta ? { background: meta.bg, color: meta.fg } : { color: '#c9c9cf' }}
-                        >
-                          {meta ? meta.key : '—'}
-                        </span>
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {months.length === 0 && <div className="mt-2 text-center text-[12px] text-[#b6b6bd]">还没有关键月份，点下方「开始制作」记录第一段感情线吧</div>}
-      </div>
-
-      {/* 怎么玩 */}
-      <div className="mt-7 text-center text-[17px] font-bold text-[#f2536a]">✦ 怎么玩？ ✦</div>
-      <div className="mt-3 rounded-2xl bg-white p-4 shadow-sm">
-        {[
-          { n: '1', icon: <CalendarDays className="h-6 w-6" strokeWidth={1.8} />, bg: '#ffe1e9', fg: '#e0607e', label: '选择关键月份', desc: '记录感情里发生变化的时间点' },
-          { n: '2', icon: <Heart className="h-6 w-6" strokeWidth={1.8} />, bg: '#eae6fb', fg: '#8071cf', label: '选择对应状态', desc: '比如暗恋、暧昧、恋爱、分手、复合' },
-          { n: '3', icon: <Sparkles className="h-6 w-6" strokeWidth={1.8} />, bg: '#e0f2df', fg: '#3f9e54', label: '生成结果表', desc: '系统自动补全年内月份，一目了然' },
-        ].map((s, i) => (
-          <div key={s.n} className={`flex items-center gap-3.5 py-3 ${i > 0 ? 'border-t border-dashed border-[#f0e3e5]' : ''}`}>
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl" style={{ background: s.bg, color: s.fg }}>
-              {s.icon}
-            </span>
-            <span className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full bg-[#f2536a] text-[10.5px] font-bold text-white">{s.n}</span>
-            <span className="min-w-0">
-              <span className="block text-[14.5px] font-semibold text-[#26262b]">{s.label}</span>
-              <span className="block text-[11.5px] text-[#b6b6bd]">{s.desc}</span>
-            </span>
+  // ---------------- 结果展示页（参考图3：白底居中标题 + 横向滑动表格 + 保存/分享） ----------------
+  if (showcase) {
+    return (
+      <SubShell title="恋爱编年史" onBack={() => setShowcase(false)}>
+        <div className="mt-5 text-center">
+          <div className="text-[22px] font-extrabold tracking-wide text-[#26262b]">我的恋爱编年史</div>
+          <div className="mt-2 text-[13.5px] text-[#9a9aa2]">每一段经历，都是我们共同的记忆</div>
+          <div className="mt-2.5 flex items-center justify-center gap-1 text-[12px] font-medium text-[#f2536a]">
+            <span aria-hidden="true">↔</span> 左右滑动查看完整年份
           </div>
-        ))}
-      </div>
-
-      <button
-        type="button"
-        data-testid="chronicle-start"
-        onClick={() => {
-          setDraft(
-            months.length > 0
-              ? months.map((it) => ({ y: Number(it.ym.slice(0, 4)), m: Number(it.ym.slice(5, 7)), status: it.status }))
-              : [{ y: now.getFullYear(), m: now.getMonth() + 1, status: '暗恋' }],
-          );
-          setEditing(true);
-        }}
-        className="mb-1 mt-5 flex h-[54px] w-full items-center justify-center rounded-full bg-[#f2536a] text-[18px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98]"
-      >
-        开始制作 ✨
-      </button>
-
-      {/* 恋爱大事记（原编年史事件：情侣轨迹弹层同步引用） */}
-      <div className="mt-9">
-        <div className="text-[16px] font-bold text-[#26262b]">恋爱大事记</div>
-        <div className="text-[12px] text-[#9a9aa2]">值得记住的时刻，也一条条留在这里</div>
-        <div className="mt-3 flex gap-2">
-          <input
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && text.trim()) {
-                patch({ chronicle: [{ id: uid(), text: text.trim(), at: Date.now() }, ...state.chronicle] });
-                setText('');
-                showToast('已写入大事记 ✍️');
-              }
-            }}
-            placeholder="记录一件值得记住的小事…"
-            maxLength={40}
-            className="h-11 flex-1 rounded-xl bg-white px-3.5 text-[15px] shadow-sm outline-none placeholder:text-[#b6b6bd]"
-          />
+        </div>
+        <div className="mt-4 overflow-x-auto pb-2" data-testid="chronicle-showcase-table">
+          {chronTable}
+        </div>
+        <div className="mt-5 flex gap-3">
           <button
             type="button"
-            data-testid="chronicle-add-event"
-            onClick={() => {
-              const t = text.trim();
-              if (!t) return;
-              patch({ chronicle: [{ id: uid(), text: t, at: Date.now() }, ...state.chronicle] });
-              setText('');
-              showToast('已写入大事记 ✍️');
-            }}
-            className="h-11 rounded-xl bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-5 text-[15px] font-semibold text-white"
+            data-testid="chronicle-save-img"
+            onClick={() => showToast('结果图已生成，长按表格即可保存 ♡')}
+            className="flex h-[52px] flex-1 items-center justify-center rounded-2xl border-2 border-[#e7dfe2] bg-white text-[15.5px] font-semibold text-[#3c3c42] shadow-sm transition-transform active:scale-[0.98]"
           >
-            记录
+            保存完整图片
+          </button>
+          <button
+            type="button"
+            data-testid="chronicle-share"
+            onClick={() => showToast('已生成分享卡片，发给那个TA吧 ♡')}
+            className="flex h-[52px] flex-1 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#ff7d9c,#f2536a)] text-[15.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
+          >
+            分享给朋友
           </button>
         </div>
-        {state.chronicle.length === 0 ? (
-          <div className="mt-8 text-center text-[14px] text-[#b6b6bd]">时间线还是空的，从今天开始记录吧</div>
-        ) : (
-          <div className="mt-5 space-y-0">
-            {state.chronicle.map((c, i) => (
-              <div key={c.id} className="relative flex gap-4 pb-6">
-                {i < state.chronicle.length - 1 && <span aria-hidden="true" className="absolute left-[7px] top-5 h-full w-[2px] bg-[#e3e3e8]" />}
-                <span className="relative z-10 mt-1.5 h-4 w-4 shrink-0 rounded-full border-[3px] border-[#8e8e97] bg-white" />
-                <div className="flex-1 rounded-2xl bg-white p-4 shadow-sm">
-                  <div className="text-[13px] text-[#9a9aa2]">{fmtDate(c.at)}</div>
-                  <div className="mt-1 text-[15px] leading-relaxed text-[#2c2c30]">{c.text}</div>
-                </div>
-              </div>
-            ))}
+        <div className="mt-6 pb-4 text-center text-[13.5px]">
+          <button type="button" onClick={() => setShowcase(false)} className="text-[#8e8e96] underline underline-offset-4 active:opacity-60">
+            返回修改
+          </button>
+          <span className="mx-4 text-[#e5d3d8]">|</span>
+          <button type="button" onClick={close} className="text-[#f2536a] underline underline-offset-4 active:opacity-60">
+            回到恋人空间
+          </button>
+        </div>
+      </SubShell>
+    );
+  }
+
+  // ---------------- 结果视图（参考图2：粉色主题 + 表格卡 + 怎么玩 + 开始制作） ----------------
+  return (
+    <SubShell title="恋爱编年史" onBack={close}>
+      <div className="-mx-3.5 -mb-8 min-h-full bg-[#fdf0f3] px-3.5 pb-8 pt-3">
+        {/* 头部 */}
+        <div className="mt-2 px-1">
+          <div className="flex items-start gap-2.5">
+            <span className="mt-1 shrink-0">
+              <PixelHeart size={30} />
+            </span>
+            <h2 className="text-[21px] font-extrabold leading-snug text-[#26262b]">
+              记录几个关键月份，
+              <br />
+              生成你的<span className="text-[#f2536a]">恋爱编年史</span>
+            </h2>
           </div>
-        )}
+          <p className="mt-2 pl-[42px] text-[13px] text-[#a4889a]">用一张表，记录感情里的重要时刻</p>
+        </div>
+
+        {/* 结果表格卡 */}
+        <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]" data-testid="chronicle-table-card">
+          <div className="flex items-center justify-between">
+            <div className="text-[14.5px] font-bold text-[#26262b]">
+              我的恋爱编年史 <span className="text-[12px]">💗</span>
+            </div>
+            {months.length > 0 && (
+              <button
+                type="button"
+                data-testid="chronicle-view-showcase"
+                onClick={() => setShowcase(true)}
+                className="text-[12.5px] font-medium text-[#f2536a] active:opacity-60"
+              >
+                查看结果图 ›
+              </button>
+            )}
+          </div>
+          <div className="mt-3 overflow-x-auto pb-1" data-testid="chronicle-table">
+            {chronTable}
+          </div>
+          {months.length === 0 && <div className="mt-2 text-center text-[12px] text-[#c9aeb6]">还没有关键月份，点下方「开始制作」记录第一段感情线吧</div>}
+        </div>
+
+        {/* 怎么玩 */}
+        <div className="mt-7 text-center text-[17px] font-bold text-[#f2536a]">✦ 怎么玩？ ✦</div>
+        <div className="mt-3 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]">
+          {[
+            { n: '1', icon: <CalendarDays className="h-6 w-6" strokeWidth={1.8} />, bg: '#fde7ee', fg: '#f0609a', label: '选择关键月份', desc: '记录感情里发生变化的时间点' },
+            { n: '2', icon: <Heart className="h-6 w-6" strokeWidth={1.8} />, bg: '#ece6fb', fg: '#8071cf', label: '选择对应状态', desc: '比如暗恋、暧昧、恋爱、分手、复合' },
+            { n: '3', icon: <Sparkles className="h-6 w-6" strokeWidth={1.8} />, bg: '#e2f5e2', fg: '#3f9e54', label: '生成结果图', desc: '保存或分享给朋友' },
+          ].map((s, i) => (
+            <div key={s.n} className={`flex items-center gap-3.5 py-3.5 ${i > 0 ? 'border-t border-[#f6e7ea]' : ''}`}>
+              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl" style={{ background: s.bg, color: s.fg }}>
+                {s.icon}
+              </span>
+              <span className="grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full bg-[#f2536a] text-[10.5px] font-bold text-white">{s.n}</span>
+              <span className="min-w-0">
+                <span className="block text-[15px] font-semibold text-[#26262b]">{s.label}</span>
+                <span className="block text-[12px] text-[#c0a3ab]">{s.desc}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          data-testid="chronicle-start"
+          onClick={() => {
+            setDraft(
+              months.length > 0
+                ? months.map((it) => ({ y: Number(it.ym.slice(0, 4)), m: Number(it.ym.slice(5, 7)), status: it.status }))
+                : [{ y: now.getFullYear(), m: now.getMonth() + 1, status: '暗恋' }],
+            );
+            setEditing(true);
+          }}
+          className="mb-1 mt-6 flex h-[56px] w-full items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#ff7d9c,#f2536a)] text-[18px] font-semibold text-white shadow-[0_10px_26px_rgba(242,83,106,0.35)] transition-transform active:scale-[0.98]"
+        >
+          开始制作 ✨
+        </button>
+
+        {/* 恋爱大事记（原编年史事件：情侣轨迹弹层同步引用） */}
+        <div className="mt-9">
+          <div className="text-[16px] font-bold text-[#26262b]">恋爱大事记</div>
+          <div className="text-[12px] text-[#a4889a]">值得记住的时刻，也一条条留在这里</div>
+          <div className="mt-3 flex gap-2">
+            <input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && text.trim()) {
+                  patch({ chronicle: [{ id: uid(), text: text.trim(), at: Date.now() }, ...state.chronicle] });
+                  setText('');
+                  showToast('已写入大事记 ✍️');
+                }
+              }}
+              placeholder="记录一件值得记住的小事…"
+              maxLength={40}
+              className="h-11 flex-1 rounded-xl bg-white px-3.5 text-[15px] shadow-sm outline-none placeholder:text-[#c9aeb6]"
+            />
+            <button
+              type="button"
+              data-testid="chronicle-add-event"
+              onClick={() => {
+                const t = text.trim();
+                if (!t) return;
+                patch({ chronicle: [{ id: uid(), text: t, at: Date.now() }, ...state.chronicle] });
+                setText('');
+                showToast('已写入大事记 ✍️');
+              }}
+              className="h-11 rounded-xl bg-[linear-gradient(135deg,#ff7d9c,#f2536a)] px-5 text-[15px] font-semibold text-white shadow-[0_6px_16px_rgba(242,83,106,0.28)]"
+            >
+              记录
+            </button>
+          </div>
+          {state.chronicle.length === 0 ? (
+            <div className="mt-8 text-center text-[14px] text-[#c9aeb6]">时间线还是空的，从今天开始记录吧</div>
+          ) : (
+            <div className="mt-5 space-y-0">
+              {state.chronicle.map((c, i) => (
+                <div key={c.id} className="relative flex gap-4 pb-6">
+                  {i < state.chronicle.length - 1 && <span aria-hidden="true" className="absolute left-[7px] top-5 h-full w-[2px] bg-[#f0dce1]" />}
+                  <span className="relative z-10 mt-1.5 h-4 w-4 shrink-0 rounded-full border-[3px] border-[#eba7b6] bg-white" />
+                  <div className="flex-1 rounded-2xl bg-white p-4 shadow-[0_6px_18px_rgba(242,83,106,0.08)]">
+                    <div className="text-[13px] text-[#a4889a]">{fmtDate(c.at)}</div>
+                    <div className="mt-1 text-[15px] leading-relaxed text-[#2c2c30]">{c.text}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </SubShell>
   );
@@ -7342,28 +7380,556 @@ function HotelPage({ showToast, close }: { showToast: (m: string) => void; close
   );
 }
 
-/** 恋爱状态 */
+/** 恋爱状态分析 · 18 题题库（斯滕伯格爱情三角理论 + SVR 理论：亲密 7 / 激情 6 / 承诺 5；选项分值 4→0） */
+const STATUS_EXAM: { dim: '亲密' | '激情' | '承诺'; q: string; opts: string[] }[] = [
+  { dim: '亲密', q: '你们在日常生活中是否愿意分享彼此的内心感受？', opts: ['总是，我们无话不谈', '经常，大部分重要的事情都会分享', '有时，只分享部分内容', '很少，我们更倾向于独立思考', '几乎不，我们很少深入交流'] },
+  { dim: '亲密', q: '对方情绪低落时，你能第一时间察觉吗？', opts: ['几乎总能，一眼就能看出来', '经常能，多数时候有感应', '有时能，看当时的状态', '很少，TA 不说我不知道', '几乎不能，总是后知后觉'] },
+  { dim: '亲密', q: '你们多久会有一次深入的谈心？', opts: ['几乎每天都会聊聊心里话', '每周固定有那么几次', '偶尔遇到事情才聊', '很少，聊的都是日常琐碎', '几乎从不深聊'] },
+  { dim: '亲密', q: '你需要 TA 的时候，TA 通常会出现吗？', opts: ['一直在，随叫随到', '大部分时候都会赶来', '看情况，有时忙顾不上', '经常缺席，让我失望', '几乎指望不上'] },
+  { dim: '亲密', q: '你们会互相分享生活的琐碎日常吗？', opts: ['随时分享，秒回彼此', '每天都会聊聊今天的事', '想起来才分享', '很少，各过各的', '几乎没有分享'] },
+  { dim: '亲密', q: '吵架之后你们能好好把话说开吗？', opts: ['一定说开，吵架不过夜', '大多能和好并复盘', '拖几天才慢慢缓和', '经常冷战不了了之', '从不沟通，硬扛到底'] },
+  { dim: '亲密', q: 'TA 了解你现阶段最大的压力来源吗？', opts: ['非常了解，还常开导我', '比较了解，会安慰我', '大概知道一些', '不太清楚', '完全不了解'] },
+  { dim: '激情', q: '见到 TA 或者收到 TA 消息时，你还会心动吗？', opts: ['每次都心动，像刚在一起', '经常心动', '偶尔心动', '很少心动了', '几乎没有感觉'] },
+  { dim: '激情', q: '你们之间还有专属的小暧昧和浪漫吗？', opts: ['很多，天天都在撒糖', '偶尔会有小浪漫', '节日才会有', '很少了', '已经完全没有'] },
+  { dim: '激情', q: '你想和 TA 有更多独处的时间吗？', opts: ['非常想，一刻都不想分开', '比较想，周末尽量一起', '一般，顺其自然', '不太想，更想自己待着', '完全不想'] },
+  { dim: '激情', q: '你们最近一次牵手或拥抱是什么时候？', opts: ['今天或昨天', '最近一周内', '最近一个月内', '记不清了', '已经很久了'] },
+  { dim: '激情', q: '拥抱、牵手这些亲密接触让你们感到安心吗？', opts: ['非常安心，像彼此充电', '比较安心', '还好，没什么特别感觉', '有点尴尬', '会刻意回避'] },
+  { dim: '激情', q: '你们还会为对方精心打扮或准备惊喜吗？', opts: ['经常，很享受这个过程', '偶尔会准备', '节日才有', '几乎不会了', '从来没有'] },
+  { dim: '承诺', q: '你们对未来的长期规划有过认真讨论吗？', opts: ['经常聊，计划很具体', '聊过，有大致共识', '提过但没细聊', '很少提及', '从来不敢聊'] },
+  { dim: '承诺', q: '你们相信无论发生什么都会一起面对吗？', opts: ['深信不疑', '比较相信', '说不好', '有点怀疑', '很难相信'] },
+  { dim: '承诺', q: '面对外面的诱惑，你们对彼此的忠诚有信心吗？', opts: ['非常有信心', '比较有信心', '一般', '有点担心', '很没有安全感'] },
+  { dim: '承诺', q: '你们愿意为这段关系做出让步和改变吗？', opts: ['都非常愿意', '我愿意，TA 也在努力', '偶尔愿意', '都不太想改变', '已经放弃改变'] },
+  { dim: '承诺', q: '如果再来一次，你还会选择和 TA 在一起吗？', opts: ['一定会，答案永远是TA', '大概率会', '说不好', '可能会犹豫', '不会了'] },
+];
+
+/** 维度得分（0-100）：该维度题目选项分值（4→0）求和 / 满分 */
+function statusDimScore(picks: Record<string, number>, dim: string): number {
+  const items = STATUS_EXAM.map((it, i) => ({ it, i })).filter((x) => x.it.dim === dim);
+  let got = 0;
+  let full = 0;
+  for (const { it, i } of items) {
+    const p = picks[String(i)];
+    full += 4;
+    if (p != null) got += Math.max(0, Math.min(4, 4 - p));
+  }
+  if (full === 0) return 0;
+  return Math.round((got / full) * 100);
+}
+
+/** 本地兜底称号（LLM 不可用时） */
+function statusTierTitle(score: number): string {
+  if (score >= 88) return '灵魂共振型恋人';
+  if (score >= 76) return '热恋进行时';
+  if (score >= 62) return '稳定升温期';
+  if (score >= 48) return '平稳陪伴期';
+  if (score >= 34) return '需要用心的时期';
+  return '亟待修复的信号';
+}
+
+/** 从 LLM 文本里提取 JSON（容忍代码块包裹） */
+function statusExtractJson(text: string): { me?: Partial<StatusResult>; ta?: Partial<StatusResult>; overall?: string } | null {
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[0]) as { me?: Partial<StatusResult>; ta?: Partial<StatusResult>; overall?: string };
+  } catch {
+    return null;
+  }
+}
+
+/** 本地兜底报告：按维度分直接生成（不依赖 LLM） */
+function statusLocalReport(myPicks: Record<string, number>, taPicks: Record<string, number>, me: string, ta: string): { me: StatusResult; ta: StatusResult; overall: string } {
+  const one = (picks: Record<string, number>, name: string): StatusResult => {
+    const score = Math.round((statusDimScore(picks, '亲密') + statusDimScore(picks, '激情') + statusDimScore(picks, '承诺')) / 3);
+    const title = statusTierTitle(score);
+    const low = (['亲密', '激情', '承诺'] as const).map((d) => ({ d, v: statusDimScore(picks, d) })).sort((a, b) => a.v - b.v)[0];
+    const advice =
+      score >= 76
+        ? ['保持现在的相处节奏，把甜蜜延续下去', '定期给彼此制造一点小惊喜', '继续认真回应对方的每一次分享']
+        : [`多花点心思在「${low.d}」上，这是你们目前最需要滋养的部分`, '每周留一段只属于两个人的谈心时间', '把「想对方」说出口，别只放在心里'];
+    return { score, title, summary: `${name}在这段关系里的投入度约为 ${score} 分，当前处于「${title}」阶段，${low.d}维度相对薄弱。`, advice };
+  };
+  const meR = one(myPicks, me);
+  const taR = one(taPicks, ta);
+  const overall = `你们一个 ${meR.score} 分、一个 ${taR.score} 分，${Math.abs(meR.score - taR.score) <= 8 ? '对这段感情的感受高度一致，节奏很合拍' : '感受有些温差，多聊聊彼此的期待会更甜'}。`;
+  return { me: meR, ta: taR, overall };
+}
+
+/** 恋爱状态分析（第十一轮重做，参考图4/5）：粉渐变落地页 + 18 题双人对答（我粉勾/TA蓝勾）+ 双报告（用户配置 API 模型生成） */
 function StatusPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
-  return (
-    <SubShell title="恋爱状态" onBack={close}>
-      <div className="mt-4 space-y-3">
-        {STATUS_LIST.map((s) => {
-          const picked = state.status === s;
-          return (
+  const patchFn = patch as unknown as (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void;
+  const me = state.meName || '我';
+  const ta = state.taName || 'TA';
+  const exam = state.statusExam;
+  const myPicks = exam?.my ?? {};
+  const taPicks = exam?.ta ?? {};
+  const done = exam?.at != null && STATUS_EXAM.every((_, i) => myPicks[String(i)] != null && taPicks[String(i)] != null);
+
+  const [view, setView] = useState<'intro' | 'quiz' | 'result'>(done ? 'result' : 'intro');
+  const [qi, setQi] = useState(0);
+  const [aiPick, setAiPick] = useState<number | null>(taPicks[String(qi)] ?? null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [report, setReport] = useState<{ me: StatusResult; ta: StatusResult; overall: string } | null>(exam?.rep ?? null);
+  const [genLoading, setGenLoading] = useState(false);
+  const genRef = useRef(false);
+
+  const q = STATUS_EXAM[qi];
+  const myCur = myPicks[String(qi)];
+  const answeredCount = STATUS_EXAM.filter((_, i) => myPicks[String(i)] != null).length;
+
+  /** 我选一个选项：粉勾立即出现；AI 同时作答（蓝勾延时出现） */
+  const pick = (i: number) => {
+    if (myCur != null || aiBusy) return;
+    patchFn((prev) => ({
+      statusExam: { my: { ...(prev.statusExam?.my ?? {}), [String(qi)]: i }, ta: prev.statusExam?.ta ?? {}, at: prev.statusExam?.at ?? null, rep: prev.statusExam?.rep ?? null },
+    }));
+    setAiBusy(true);
+    setAiPick(null);
+    void (async () => {
+      const p = await aiStatusPick(q.q, q.opts, i, q.opts[i]);
+      // 稍作停顿，像 TA 认真想了一下才落下选择
+      window.setTimeout(() => {
+        const idx = p >= 0 ? p : Math.random() < 0.3 ? i : [0, 1, 2, 3, 4].filter((x) => x !== i)[Math.floor(Math.random() * 4)];
+        setAiPick(idx);
+        setAiBusy(false);
+        // TA 的选择也要持久化（结果页双方维度条 / 重考回显都要用）
+        patchFn((prev) => ({
+          statusExam: {
+            my: prev.statusExam?.my ?? {},
+            ta: { ...(prev.statusExam?.ta ?? {}), [String(qi)]: idx },
+            at: prev.statusExam?.at ?? null,
+            rep: prev.statusExam?.rep ?? null,
+          },
+        }));
+      }, 700 + Math.random() * 1400);
+    })();
+  };
+
+  /** 下一题 / 完成 */
+  const nextQ = () => {
+    if (myCur == null || aiPick == null) return;
+    if (qi >= STATUS_EXAM.length - 1) {
+      setView('result');
+      void genReport(true);
+    } else {
+      const nqi = qi + 1;
+      setQi(nqi);
+      setAiPick(null);
+      setAiBusy(false);
+      // TA 可能已经在之前答过这题（重考场景）
+      const prev = state.statusExam?.ta?.[String(nqi)];
+      if (prev != null) setAiPick(prev);
+    }
+  };
+
+  /** 结果生成：① 用户配置的 API 模型 ② 内置模型兜底 ③ 本地计算兜底；AI 知道自己的结果（写记忆） */
+  const genReport = async (auto = false) => {
+    if (genRef.current) return;
+    genRef.current = true;
+    setGenLoading(true);
+    try {
+      const local = statusLocalReport(myPicks, taPicks, me, ta);
+      const dims = (picks: Record<string, number>) => `亲密${statusDimScore(picks, '亲密')}/激情${statusDimScore(picks, '激情')}/承诺${statusDimScore(picks, '承诺')}`;
+      const detail = STATUS_EXAM.map((it, i) => `${i + 1}.【${it.dim}】${it.q}\n   ${me}：「${it.opts[myPicks[String(i)] ?? 2]}」\n   ${ta}：「${it.opts[taPicks[String(i)] ?? 2]}」`).join('\n');
+      const sys = `你是一位懂斯滕伯格爱情三角理论与 SVR 理论的恋爱测评分析师。你们的服务对象是一对恋人：${me}（${state.gender === '女' ? '女生' : state.gender === '男' ? '男生' : '用户'}）和${ta}（${state.gender === '女' ? '男生，是她的男朋友' : state.gender === '男' ? '女生，是他的女朋友' : '恋人'}）。他们刚刚各自独立完成了同一份 18 题恋爱状态测评。`;
+      const user = `双方作答明细（选项即真实选择）：\n${detail}\n\n本地维度得分——${me}：${dims(myPicks)}；${ta}：${dims(taPicks)}。\n请分别为两人生成测评报告：要紧扣两人的实际选择内容（引用他们选的选项说话），口吻专业又温柔；${me}的报告面向${me}本人，${ta}的报告面向${ta}本人；各配 3 条具体可执行的建议。\n输出 JSON：{"me":{"score":0-100整数,"title":"状态称号（6字内）","summary":"总结（80字内）","advice":["建议1","建议2","建议3"]},"ta":{"score":0-100整数,"title":"状态称号（6字内）","summary":"总结（80字内）","advice":["建议1","建议2","建议3"]},"overall":"一句话点评你们两人的整体状态（60字内，像分析师写给这对恋人的话）"}。只输出 JSON。`;
+      let rep: { me: StatusResult; ta: StatusResult; overall: string } | null = null;
+      const normalize = (j: { me?: Partial<StatusResult>; ta?: Partial<StatusResult>; overall?: string } | null) => {
+        if (!j?.me || !j?.ta) return null;
+        const normOne = (o: Partial<StatusResult>, fb: StatusResult): StatusResult => ({
+          score: typeof o.score === 'number' && o.score >= 0 && o.score <= 100 ? Math.round(o.score) : fb.score,
+          title: typeof o.title === 'string' && o.title.trim() ? o.title.trim().slice(0, 12) : fb.title,
+          summary: typeof o.summary === 'string' && o.summary.trim() ? o.summary.trim().slice(0, 140) : fb.summary,
+          advice: Array.isArray(o.advice) && o.advice.length > 0 ? o.advice.filter((x) => typeof x === 'string').slice(0, 3) : fb.advice,
+        });
+        return { me: normOne(j.me, local.me), ta: normOne(j.ta, local.ta), overall: typeof j.overall === 'string' && j.overall.trim() ? j.overall.trim().slice(0, 100) : local.overall };
+      };
+      // ① 用户配置的 API 模型（优先）
+      try {
+        const c = useSettings.getState().apiConfig;
+        if (c && c.baseUrl) {
+          const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messages: [
+                { role: 'system', content: sys },
+                { role: 'user', content: user },
+              ],
+              config: { baseUrl: c.baseUrl, apiKey: c.apiKey, model: c.model },
+              temperature: 0.7,
+            }),
+          });
+          if (res.ok) rep = normalize(statusExtractJson(await res.text()));
+        }
+      } catch {
+        /* 走兜底 */
+      }
+      // ② 内置模型兜底
+      if (!rep) {
+        try {
+          const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messages: [
+                { role: 'system', content: sys },
+                { role: 'user', content: user },
+              ],
+              forceSdk: true,
+              temperature: 0.7,
+            }),
+          });
+          if (res.ok) rep = normalize(statusExtractJson(await res.text()));
+        } catch {
+          /* 走本地兜底 */
+        }
+      }
+      if (!rep) rep = local;
+      setReport(rep);
+      patchFn((prev) => ({
+        statusExam: { my: prev.statusExam?.my ?? {}, ta: prev.statusExam?.ta ?? {}, at: Date.now(), rep },
+      }));
+      rememberStatusExam(`恋爱状态测评完成：${me}得分${rep.me.score}（${rep.me.title}），${ta}得分${rep.ta.score}（${rep.ta.title}）。分析师点评：${rep.overall}（TA 知道自己的测评结果）`);
+      if (!auto) showToast('报告已生成 ♡');
+    } finally {
+      setGenLoading(false);
+      genRef.current = false;
+    }
+  };
+
+  /** 重新测试 */
+  const restart = () => {
+    patchFn({ statusExam: { my: {}, ta: {}, at: null, rep: null } });
+    setQi(0);
+    setAiPick(null);
+    setAiBusy(false);
+    setReport(null);
+    setView('quiz');
+  };
+
+  // ---------------- 落地页（参考图4） ----------------
+  if (view === 'intro') {
+    return (
+      <SubShell title="恋爱状态" onBack={close}>
+        <div className="-mx-3.5 -mb-8 min-h-full bg-[#fdf0f3] px-3.5 pb-8 pt-3">
+          {/* 粉渐变主视觉横幅 */}
+          <div className="relative overflow-hidden rounded-3xl bg-[linear-gradient(125deg,#ffd3e0_0%,#fb9ab4_46%,#f2536a_100%)] px-5 pb-5 pt-4 shadow-[0_14px_34px_rgba(242,83,106,0.28)]">
+            <span aria-hidden="true" className="pointer-events-none absolute -right-6 -top-8 h-28 w-28 rounded-full bg-white/25" />
+            <span aria-hidden="true" className="pointer-events-none absolute -left-7 top-10 h-16 w-16 rounded-full bg-white/20" />
+            <span aria-hidden="true" className="pointer-events-none absolute bottom-3 right-10 h-9 w-9 rounded-full bg-white/20" />
+            <div className="relative flex items-center gap-1.5">
+              <PixelHeart size={16} />
+              <span className="text-[12.5px] font-bold text-white/95">恋人空间</span>
+            </div>
+            <div className="relative mt-2 select-none text-[30px] font-extrabold leading-[1.18] text-white drop-shadow-[0_3px_8px_rgba(200,60,90,0.35)]">
+              恋爱
+              <br />
+              状态分析
+            </div>
+            <span aria-hidden="true" className="pointer-events-none absolute -bottom-2 right-4 rotate-12 text-[44px] drop-shadow-[0_4px_10px_rgba(200,60,90,0.3)]">💝</span>
+          </div>
+          <div className="mt-3 text-center text-[13px] font-medium text-[#a4889a]">·18道精选问题 · 多维度专业解析</div>
+
+          {/* 理论说明卡 */}
+          <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]">
+            <p className="text-[14.5px] leading-[1.9] text-[#4a4a52]">
+              你们的恋爱正处于怎样的阶段？
+              <br />
+              关系中的<b className="text-[#f2536a]">亲密</b>、<b className="text-[#f2536a]">激情</b>、<b className="text-[#f2536a]">承诺</b>是否均衡？
+              <br />
+              本测评基于<b className="text-[#f2536a]">斯滕伯格爱情三角理论</b>与<b className="text-[#f2536a]">SVR理论</b>，科学剖析你们的恋爱现状，帮助你们看清<b className="text-[#f2536a]">情感结构</b>与<b className="text-[#f2536a]">成长空间</b>。
+              <br />
+              运用人工智能进行深度分析，以数据和洞察，助你们更好地理解彼此，迈向更稳固、更幸福的<b className="text-[#f2536a]">亲密关系</b>。
+            </p>
+            <div className="mt-3 border-t border-[#f6e7ea] pt-3">
+              <div className="flex flex-wrap gap-2">
+                {['关系现状', '成长建议', '情感结构', '科学洞察'].map((t) => (
+                  <span key={t} className="rounded-full bg-[#fdeef2] px-3 py-1.5 text-[12px] font-medium text-[#e0607e]">
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 测评亮点 */}
+          <div className="mt-6 px-1">
+            <div className="flex items-center gap-2">
+              <span className="h-4 w-[3px] rounded-full bg-[#f2536a]" />
+              <span className="text-[16.5px] font-extrabold text-[#f2536a]">测评亮点</span>
+            </div>
+            <div className="mt-3 space-y-2.5">
+              {[
+                { t: '关系健康度量化', d: '多维度量化你们的亲密、激情、承诺，全面呈现关系健康状况。', bg: '#fdeef2' },
+                { t: '情感沟通画像', d: '剖析你们的沟通模式与互动风格，发现潜在优势与改进空间。', bg: '#fdf3f6' },
+                { t: '双人同步测评', d: `${ta}也会在同一时间独立作答，两份报告对比着看，甜度翻倍。`, bg: '#fdeef2' },
+              ].map((c) => (
+                <div key={c.t} className="rounded-2xl p-3.5" style={{ background: c.bg }}>
+                  <div className="text-[14.5px] font-bold text-[#e0607e]">{c.t}</div>
+                  <div className="mt-1 text-[12.5px] leading-relaxed text-[#b58a97]">{c.d}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 开始测试（吸底） */}
+          <div className="sticky bottom-0 -mx-3.5 mt-7 bg-[linear-gradient(180deg,rgba(253,240,243,0),#fdf0f3_42%)] px-3.5 pb-6 pt-4">
             <button
-              key={s}
               type="button"
+              data-testid="status-exam-start"
               onClick={() => {
-                patch({ status: s });
-                showToast(`状态已更新为「${s}」`);
+                if (done) {
+                  setView('result');
+                } else {
+                  // 续答：跳到第一道还没答的题；TA 已答过的题回显蓝勾
+                  const idx = Math.max(0, STATUS_EXAM.findIndex((_, i2) => myPicks[String(i2)] == null));
+                  setQi(idx);
+                  setAiPick(taPicks[String(idx)] ?? null);
+                  setAiBusy(false);
+                  setView('quiz');
+                }
               }}
-              className={`flex h-14 w-full items-center justify-between rounded-2xl px-5 text-[16px] font-medium transition-colors ${picked ? 'bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-white' : 'bg-white text-[#3c3c42] shadow-sm'}`}
+              className="flex h-[54px] w-full items-center justify-center rounded-full bg-[linear-gradient(135deg,#ffc3d4,#f8a0b8,#f2536a)] text-[17.5px] font-bold text-white shadow-[0_10px_26px_rgba(242,83,106,0.38)] transition-transform active:scale-[0.98]"
             >
-              {s}
-              {picked && <Check className="h-5 w-5" strokeWidth={2.4} />}
+              {done ? '查看我们的测评报告' : answeredCount > 0 ? '继续测试' : '开始测试'}
             </button>
-          );
-        })}
+          </div>
+
+          {/* 恋爱状态快选（保留原有功能） */}
+          <div className="mt-2 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]">
+            <div className="text-[14px] font-bold text-[#3c3c42]">现在的恋爱状态</div>
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              {STATUS_LIST.map((s) => {
+                const picked = state.status === s;
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => {
+                      patch({ status: s });
+                      showToast(`状态已更新为「${s}」`);
+                    }}
+                    className={`rounded-full px-3.5 py-2 text-[13px] font-medium transition-colors ${picked ? 'bg-[#f2536a] text-white shadow-[0_4px_12px_rgba(242,83,106,0.3)]' : 'bg-[#f7f7f9] text-[#4a4a52] active:bg-[#fdeef2]'}`}
+                  >
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </SubShell>
+    );
+  }
+
+  // ---------------- 答题页（参考图5：我粉勾 / TA 蓝勾同步作答） ----------------
+  if (view === 'quiz') {
+    return (
+      <SubShell title="恋爱状态分析" onBack={close}>
+        <div className="-mx-3.5 -mb-8 min-h-full bg-[#fdf0f3] px-3.5 pb-8">
+          <div className="pt-1 text-center text-[13px] text-[#a4889a]" data-testid="status-exam-progress">
+            {qi + 1}/{STATUS_EXAM.length}
+          </div>
+          <div className="mx-auto mt-1.5 h-1 w-[120px] overflow-hidden rounded-full bg-white/80">
+            <span className="block h-full rounded-full bg-[linear-gradient(90deg,#ffb9cb,#f2536a)] transition-all" style={{ width: `${((qi + 1) / STATUS_EXAM.length) * 100}%` }} />
+          </div>
+
+          {/* 题目卡 */}
+          <div className="mt-4 rounded-3xl bg-white p-5 shadow-[0_10px_30px_rgba(242,83,106,0.10)]" data-testid="status-exam-card">
+            <div className="flex gap-2">
+              <span className="shrink-0 text-[17px] font-extrabold text-[#f2536a]">Q{qi + 1}</span>
+              <span className="text-[16.5px] font-bold leading-relaxed text-[#26262b]">{q.q}</span>
+            </div>
+            <div className="mt-4 space-y-2.5">
+              {q.opts.map((o, i) => {
+                const mine = myCur === i;
+                const taHere = aiPick === i;
+                const both = mine && taHere;
+                return (
+                  <button
+                    key={o}
+                    type="button"
+                    data-testid={`status-opt-${i}`}
+                    onClick={() => pick(i)}
+                    className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-3 text-left transition-colors ${
+                      both
+                        ? 'bg-[#fdeef2] ring-2 ring-[#7f96e0]'
+                        : mine
+                          ? 'bg-[#fdeef2] ring-2 ring-[#f2536a]'
+                          : taHere
+                            ? 'bg-[#eef2fd] ring-2 ring-[#7f96e0]'
+                            : 'bg-[#f7f7f9] active:bg-[#fdeef2]'
+                    }`}
+                  >
+                    <span className="relative shrink-0">
+                      <span
+                        className={`grid h-[22px] w-[22px] place-items-center rounded-full border-2 ${
+                          mine ? 'border-[#f2536a] bg-[#f2536a]' : taHere ? 'border-[#7f96e0] bg-[#7f96e0]' : 'border-[#d9d9df] bg-white'
+                        }`}
+                      >
+                        {(mine || taHere) && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
+                      </span>
+                      {both && (
+                        <span className="absolute -right-1.5 -top-1.5 grid h-3.5 w-3.5 place-items-center rounded-full bg-[#7f96e0] ring-2 ring-white">
+                          <Check className="h-2 w-2 text-white" strokeWidth={4} />
+                        </span>
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1 text-[14px] leading-snug text-[#2c2c30]">{o}</span>
+                    {both && <span className="shrink-0 text-[11px] font-bold text-[#7f96e0]">你们选了同一个</span>}
+                    {mine && !taHere && <span className="shrink-0 text-[11px] font-bold text-[#f2536a]">我的选择</span>}
+                    {taHere && !mine && <span className="shrink-0 text-[11px] font-bold text-[#7f96e0]">TA 的选择</span>}
+                  </button>
+                );
+              })}
+            </div>
+            {/* 双方作答状态行 */}
+            <div className="mt-3.5 flex items-center justify-between border-t border-[#f6e7ea] pt-3 text-[12px]">
+              <span className={`flex items-center gap-1 font-semibold ${myCur != null ? 'text-[#f2536a]' : 'text-[#c9c9cf]'}`}>
+                <span className={`grid h-4 w-4 place-items-center rounded-full ${myCur != null ? 'bg-[#f2536a]' : 'bg-[#e5e5ea]'}`}>
+                  {myCur != null && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3.5} />}
+                </span>
+                {me}
+              </span>
+              <span className={`flex items-center gap-1 font-semibold ${aiBusy ? 'text-[#8fa4ef]' : aiPick != null ? 'text-[#7f96e0]' : 'text-[#c9c9cf]'}`} data-testid="status-ai-state">
+                <span className={`grid h-4 w-4 place-items-center rounded-full ${aiBusy ? 'bg-[#aebdf0] [animation:couple-float-y_1s_ease-in-out_infinite]' : aiPick != null ? 'bg-[#7f96e0]' : 'bg-[#e5e5ea]'}`}>
+                  {aiPick != null && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3.5} />}
+                </span>
+                {ta}
+                {aiBusy && <span className="font-normal text-[#8fa4ef]">正在作答…</span>}
+              </span>
+            </div>
+          </div>
+
+          {/* 下一题 */}
+          <div className="mt-6 pb-4 text-center">
+            <button
+              type="button"
+              data-testid="status-exam-next"
+              onClick={nextQ}
+              disabled={myCur == null || aiPick == null}
+              className="mx-auto flex h-[52px] w-[64%] items-center justify-center rounded-full bg-[linear-gradient(135deg,#ffc3d4,#f8a0b8,#f2536a)] text-[16.5px] font-bold text-white shadow-[0_10px_26px_rgba(242,83,106,0.35)] transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
+            >
+              {qi >= STATUS_EXAM.length - 1 ? '查看我们的结果' : '下一题'}
+            </button>
+            <div className="mt-2 text-[11.5px] text-[#c9aeb6]">你们俩在同一时间各自作答 · 选项互通可见</div>
+          </div>
+        </div>
+      </SubShell>
+    );
+  }
+
+  // ---------------- 结果页：双方报告（我 = 粉，TA = 蓝） ----------------
+  const rep = report ?? (done ? statusLocalReport(myPicks, taPicks, me, ta) : null);
+  const dimBars = (picks: Record<string, number>, color: string) => (
+    <div className="mt-3 space-y-2">
+      {(['亲密', '激情', '承诺'] as const).map((d) => {
+        const v = statusDimScore(picks, d);
+        return (
+          <div key={d} className="flex items-center gap-2">
+            <span className="w-8 shrink-0 text-[11.5px] text-[#8e8e96]">{d}</span>
+            <span className="h-[7px] flex-1 overflow-hidden rounded-full bg-[#f0f0f3]">
+              <span className="block h-full rounded-full transition-all" style={{ width: `${v}%`, background: color }} />
+            </span>
+            <span className="w-8 shrink-0 text-right text-[11.5px] font-semibold text-[#4a4a52]">{v}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+  return (
+    <SubShell title="恋爱状态分析" onBack={close}>
+      <div className="-mx-3.5 -mb-8 min-h-full bg-[#fdf0f3] px-3.5 pb-8 pt-3">
+        {genLoading && (
+          <div className="mt-2 flex items-center justify-center gap-2 rounded-2xl bg-white/85 py-3 text-[13px] font-medium text-[#e0607e] shadow-sm" data-testid="status-report-loading">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#f8b6c6] border-t-[#f2536a]" />
+            正在用你配置的 API 模型生成双方报告…
+          </div>
+        )}
+        {rep && (
+          <>
+            <div className="mt-2 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]">
+              <div className="text-[15px] font-bold text-[#26262b]">分析师点评</div>
+              <div className="mt-1.5 text-[13.5px] leading-relaxed text-[#6e6e76]">{rep.overall}</div>
+            </div>
+
+            {/* 我的报告（粉色） */}
+            <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]" data-testid="status-report-me">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="grid h-6 w-6 place-items-center rounded-full bg-[#f2536a] text-[11px] font-bold text-white">{me.slice(0, 1)}</span>
+                  <span className="text-[15px] font-bold text-[#f2536a]">{me} 的报告</span>
+                </div>
+                <span className="rounded-full bg-[#fdeef2] px-2.5 py-1 text-[11px] font-bold text-[#e0607e]">{rep.me.title}</span>
+              </div>
+              <div className="mt-3 flex items-end gap-1">
+                <span className="text-[40px] font-extrabold leading-none text-[#f2536a]">{rep.me.score}</span>
+                <span className="pb-1 text-[13px] text-[#c9aeb6]">分 / 100</span>
+              </div>
+              {dimBars(myPicks, 'linear-gradient(90deg,#ffb9cb,#f2536a)')}
+              <div className="mt-3 text-[13.5px] leading-relaxed text-[#4a4a52]">{rep.me.summary}</div>
+              <div className="mt-3 space-y-1.5 border-t border-[#f6e7ea] pt-3">
+                {rep.me.advice.map((a, i) => (
+                  <div key={i} className="flex gap-2 text-[13px] leading-relaxed text-[#6e6e76]">
+                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#f2536a]" />
+                    {a}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* TA 的报告（蓝色） */}
+            <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(127,150,224,0.14)]" data-testid="status-report-ta">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="grid h-6 w-6 place-items-center rounded-full bg-[#7f96e0] text-[11px] font-bold text-white">{ta.slice(0, 1)}</span>
+                  <span className="text-[15px] font-bold text-[#7f96e0]">{ta} 的报告</span>
+                </div>
+                <span className="rounded-full bg-[#eef2fd] px-2.5 py-1 text-[11px] font-bold text-[#7f96e0]">{rep.ta.title}</span>
+              </div>
+              <div className="mt-3 flex items-end gap-1">
+                <span className="text-[40px] font-extrabold leading-none text-[#7f96e0]">{rep.ta.score}</span>
+                <span className="pb-1 text-[13px] text-[#b6b9d4]">分 / 100</span>
+              </div>
+              {dimBars(taPicks, 'linear-gradient(90deg,#b9c6f2,#7f96e0)')}
+              <div className="mt-3 text-[13.5px] leading-relaxed text-[#4a4a52]">{rep.ta.summary}</div>
+              <div className="mt-3 space-y-1.5 border-t border-[#e9edfa] pt-3">
+                {rep.ta.advice.map((a, i) => (
+                  <div key={i} className="flex gap-2 text-[13px] leading-relaxed text-[#6e6e76]">
+                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#7f96e0]" />
+                    {a}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* 操作 */}
+        <div className="mt-5 flex gap-3">
+          <button
+            type="button"
+            data-testid="status-exam-again"
+            onClick={restart}
+            className="flex h-[50px] flex-1 items-center justify-center rounded-full border-2 border-[#f3a0b8] text-[15px] font-semibold text-[#f06e96] transition-colors active:bg-[#fdeef2]"
+          >
+            重新测试
+          </button>
+          <button
+            type="button"
+            data-testid="status-exam-regen"
+            onClick={() => void genReport(false)}
+            disabled={genLoading}
+            className="flex h-[50px] flex-1 items-center justify-center rounded-full bg-[linear-gradient(135deg,#ff7d9c,#f2536a)] text-[15px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98] disabled:opacity-50"
+          >
+            {report ? 'AI 重新分析' : 'AI 深度分析'}
+          </button>
+        </div>
+        <button type="button" onClick={close} className="mx-auto mt-4 block text-[13px] text-[#8e8e96] underline underline-offset-4 active:opacity-60">
+          回到恋人空间
+        </button>
+        <div className="mt-3 pb-2 text-center text-[11px] text-[#c9aeb6]">已答 {answeredCount}/{STATUS_EXAM.length} 题 · 报告由 {useSettings.getState().apiConfig?.baseUrl ? '你配置的 API 模型' : '内置模型'}生成</div>
       </div>
     </SubShell>
   );
@@ -7571,6 +8137,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
           patch={patchFn}
           threadKey="impress"
           hint={`和 ${state.taName || 'TA'} 聊聊你们眼里的彼此`}
+          hideNames
           testId="impress-chat"
         />
       </div>

@@ -154,11 +154,13 @@ function stripEmoji(s: string): string {
     .trim();
 }
 
-/** 性别纪律行（用户是女生 → AI 称呼/标签/夸奖全部符合女生身份，绝不出现「男友」类词） */
+/** 性别纪律行（用户是女生 → AI 称呼/标签/夸奖全部符合女生身份，绝不出现「男友」类词；同时明确 TA 自己的性别角色） */
 function genderLine(snap: CoupleSnap, me: string): string {
   const g = (snap.gender ?? '').trim();
-  if (g === '女') return `重要：「${me}」是女生。你所有的称呼、比喻、标签、夸奖都必须符合女生身份（例如「女友力max」而不是「男友力max」），绝不能用「男友/男朋友/哥们/小伙子」这类词形容${me}；也不要把${me}当成男生来调侃。`;
-  if (g === '男') return `重要：「${me}」是男生。你所有的称呼、比喻、标签、夸奖都必须符合男生身份。`;
+  if (g === '女')
+    return `重要：「${me}」是女生，你是男生——你是她的男朋友。你所有的称呼、比喻、标签、夸奖都必须符合女生身份（例如「女友力max」而不是「男友力max」），绝不能用「男友/男朋友/哥们/小伙子」这类词形容${me}，也不要把${me}当成男生来调侃；提到「男朋友」时永远指你自己，提到${me}时她是「女朋友」。`;
+  if (g === '男')
+    return `重要：「${me}」是男生，你是女生——你是他的女朋友。你所有的称呼、比喻、标签、夸奖都必须符合男生身份；提到「女朋友」时永远指你自己，提到${me}时他是「男朋友」。`;
   return '';
 }
 
@@ -485,7 +487,7 @@ export function aiAnswerWithMe(q: string, myA: string): void {
           const prev = (snap.quizTa ?? []).find((x) => x.q === q)?.a ?? '';
           a = await coupleLLM(
             llmSystem(p, me, snap),
-            `你们在玩情侣小问答，${me}刚回答了问题「${cut(q, 40)}」：「${cut(myA, 60)}」。请以「${ta}」的口吻回答同一个问题（50 字内），要呼应${me}的答案（可以甜蜜、可以小抬杠）${prev ? `；你之前答过一次「${cut(prev, 40)}」，这次可以补充或换个小说法，别完全重复` : ''}。只输出回答。`,
+            `你们在玩情侣小问答。题目是：「${cut(q, 40)}」。${me}的回答是：「${cut(myA, 60)}」。\n请以「${ta}」的身份亲自回答这道题（50 字内）：\n1）必须正面回答题目本身，说你自己真实具体的想法/经历/习惯（结合你的人设和你们的真实记忆），不要答非所问，也不要只评价${me}；\n2）语气甜蜜真诚，像热恋中的恋人说的话，绝不抱怨、不指责${me}；可以在结尾自然地呼应一下${me}的答案；\n3）用「我」的口吻说人话，禁止「作为男朋友/作为女朋友」这种自我标注${prev ? `；\n4）你之前答过一次「${cut(prev, 40)}」，这次换个角度补充，别重复原话` : ''}。\n只输出回答正文，禁止 emoji。`,
           );
         } catch {
           /* 兜底 */
@@ -588,27 +590,47 @@ export function aiTickTrail(): void {
       currentChannel = target.channel;
       const cur2 = readSnap() ?? snap;
       const city = cur2.taLoc?.name ? `（${ta}现在在${cur2.taLoc.name}，行程要在这个城市里）` : '';
+      const nowD = new Date();
+      const nowHM = `${String(nowD.getHours()).padStart(2, '0')}:${String(nowD.getMinutes()).padStart(2, '0')}`;
+      const nowMin = nowD.getHours() * 60 + nowD.getMinutes();
       let items: { t: string; place: string; note: string }[] | null = null;
       try {
         const raw = await coupleLLM(
           `${llmSystem(p, me, cur2)}${city ? `\n${city}` : ''}`,
-          `请以「${ta}」的身份编一份今天真实的行程（3~4 条，按时间顺序）：去了哪里、什么位置、什么店铺，要贴合你的人设、职业和你们的记忆（可以有一条和你有关的小心思）。\n输出 JSON：{"items":[{"t":"HH:MM","place":"地点/店铺名（≤14字）","note":"一句话（≤16字，你的小心思）"}]}。只输出 JSON。`,
+          `现在是今天 ${nowHM}（真实时间）。请以「${ta}」的身份，写出你今天从早上到现在已经发生的真实行程：\n1）只能列「已经发生过」的事——每条时间必须早于等于 ${nowHM}，绝对不能出现未来的时间；\n2）条数按今天已经过去的时间自然决定：早上 9 点前 1 条左右，中午 2 条左右，下午 3 条，晚上最多 4 条；按时间先后排序；\n3）每条：去了哪里、什么位置、什么店铺，要贴合你的人设、职业和你们的记忆（可以有一条和你有关的小心思）；\n输出 JSON：{"items":[{"t":"HH:MM","place":"地点/店铺名（≤14字）","note":"一句话（≤16字，你的小心思）"}]}。只输出 JSON。`,
         );
         const j = extractJson<{ items: { t: string; place: string; note: string }[] }>(raw);
         if (j && Array.isArray(j.items)) {
+          const toMin = (t: string) => {
+            const m = t.match(/^(\d{1,2}):(\d{2})$/);
+            return m ? Number(m[1]) * 60 + Number(m[2]) : -1;
+          };
           items = j.items
             .filter((x) => x && x.place)
-            .slice(0, 4)
             .map((x) => ({
               t: /^\d{1,2}:\d{2}$/.test(String(x.t)) ? String(x.t) : '12:00',
               place: cut(String(x.place).replace(/[「」"]/g, ''), 16),
               note: cut(String(x.note ?? '').replace(/[「」"]/g, ''), 18),
-            }));
+            }))
+            .filter((x) => {
+              const mm = toMin(x.t);
+              return mm >= 0 && mm <= nowMin; // 真实时间纪律：绝不出现未来的时间
+            })
+            .sort((a, b) => toMin(a.t) - toMin(b.t))
+            .slice(0, 4);
         }
       } catch {
         /* 兜底 */
       }
-      if (!items || items.length === 0) items = TPL_TRAIL.slice(0, 3);
+      if (!items || items.length === 0) {
+        // 兜底模板同样只保留「已经发生过」的时间；一条都没有 → 一条刚发生的兜底
+        const tplMin = (t: string) => {
+          const [h, m] = t.split(':').map(Number);
+          return h * 60 + m;
+        };
+        const past = TPL_TRAIL.filter((x) => tplMin(x.t) <= nowMin).slice(0, 3);
+        items = past.length > 0 ? past : [{ t: nowHM, place: '家里', note: '刚收拾好准备出门' }];
+      }
       writeSnap((s) => ({ ...s, taTrail: { dateKey: today, items, at: Date.now() } }));
       coupleRemember(target.contactId, target.channel, `${ta}今天的行踪：${items.map((i) => `${i.t}${i.place}`).join('、')}（TA 自己的日程，可以自然聊起）`);
       logAi(`${ta}更新了今天的行踪`);
@@ -1055,7 +1077,10 @@ async function aiTickQuiz(snap: CoupleSnap, me: string, ta: string, p: TaPersona
   const myA = mine.get(q) ?? '';
   let a = '';
   try {
-    a = await coupleLLM(llmSystem(p, me, snap), `请以「${ta}」的口吻回答这个情侣小问题（60 字内，真诚，可以带一点恋人间的亲昵）：「${q}」${myA ? `\n（${me}自己的回答是「${cut(myA, 50)}」，你的回答要呼应TA。）` : ''}只输出回答。`);
+    a = await coupleLLM(
+      llmSystem(p, me, snap),
+      `情侣小问答的题目是：「${q}」。\n请以「${ta}」的身份亲自回答（60 字内）：必须正面回答题目本身，说你自己真实具体的想法/经历（结合你的人设和你们的真实记忆），不要答非所问；语气真诚甜蜜，可以带一点恋人间的亲昵，绝不抱怨、不指责${me}；用「我」的口吻说人话${myA ? `。${me}自己的回答是「${cut(myA, 50)}」，结尾可以自然呼应一下` : ''}。只输出回答正文，禁止 emoji。`,
+    );
   } catch {
     /* 兜底 */
   }
@@ -1242,10 +1267,12 @@ export function runCoupleAiTick(channel: CoupleChannel, contactId: string): void
     }, delay);
   };
 
-  // 无 LLM 依赖的日常行为：首次进入 6s/14s；重复进入立即补做（去重内部保证幂等）
-  const quick = first ? 6000 : 800;
-  step(quick, () => aiTickMissYou(readSnap() ?? snap, me, ta));
-  step(quick + 9000, () => aiTickWater(readSnap() ?? snap, me, ta));
+  // 无 LLM 依赖的日常行为：AI 自己决定什么时候做——随机延时（40~200s / 90~300s），
+  // 与用户是否点过「每天想你」/「浇水」完全无关，绝不跟着用户的操作走（用户明确要求）。
+  const missDelayS = (first ? 40 : 25) + Math.random() * (first ? 160 : 120);
+  const waterDelayS = (first ? 90 : 55) + Math.random() * (first ? 210 : 150);
+  step(missDelayS * 1000, () => aiTickMissYou(readSnap() ?? snap, me, ta));
+  step(waterDelayS * 1000, () => aiTickWater(readSnap() ?? snap, me, ta));
 
   // LLM 行为：只在首次调度时排程（避免每次打开都调模型）；p 逐个预取
   if (first) {
@@ -1287,3 +1314,46 @@ export function runCoupleAiTick(channel: CoupleChannel, contactId: string): void
     });
   }
 }
+
+// ---------------- 恋爱状态测评（第十一轮：我和 AI 同步答题，各自出结果） ----------------
+
+/**
+ * AI（TA）回答恋爱状态测评的某一题：独立按自己性格选择一个选项。
+ * 返回选项序号；LLM 失败时返回 -1（调用方本地兜底）。
+ */
+export async function aiStatusPick(q: string, opts: string[], myPick: number, myPickText: string): Promise<number> {
+  const target = aiTarget();
+  if (!target) return -1;
+  try {
+    const p = await taPersonaOf(target.contactId);
+    const snap = readSnap();
+    if (!p || !snap) return -1;
+    currentPartnerId = target.contactId;
+    currentChannel = target.channel;
+    const me = (snap.meName || '').trim() || '我';
+    const raw = await coupleLLM(
+      llmSystem(p, me, snap),
+      `你们在做「恋爱状态测评」（18 题，基于斯滕伯格爱情三角理论），两人各自独立作答。\n题目：「${cut(q, 60)}」\n选项：${opts.map((o, i) => `${['A', 'B', 'C', 'D', 'E'][i]}.${cut(o, 26)}`).join(' ')}\n请以「${taPersonaName(p)}」的身份，完全按照你自己的真实性格和你们相处的实情选一个选项（可以和${me}一样也可以不同），不要刻意迎合。\n输出 JSON：{"pick": 0}，pick 是选项序号。只输出 JSON。`,
+    );
+    const j = extractJson<{ pick?: number }>(raw);
+    if (j && Number.isInteger(j.pick) && (j.pick as number) >= 0 && (j.pick as number) < opts.length) return j.pick as number;
+  } catch {
+    /* 本地兜底 */
+  }
+  // 本地兜底：按我的选择做一点随机偏离（大概率不同，偶尔相同）
+  const pool = opts.map((_, i) => i).filter((i) => i !== myPick);
+  if (pool.length === 0) return myPick;
+  return Math.random() < 0.25 ? myPick : pool[Math.floor(Math.random() * pool.length)];
+}
+
+function taPersonaName(p: TaPersona): string {
+  return p.name;
+}
+
+/** 把恋爱状态测评的结果写进恋人（AI）的记忆（AI 知道自己的测评结果和我的结果） */
+export function rememberStatusExam(summary: string): void {
+  const target = aiTarget();
+  if (!target) return;
+  coupleRemember(target.contactId, target.channel, summary);
+}
+
