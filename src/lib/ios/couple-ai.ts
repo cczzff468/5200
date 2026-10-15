@@ -20,7 +20,7 @@
  */
 
 import { kvGet, kvSet } from './idb-kv';
-import { memAddEventFragment, memRecallBlock } from '@/lib/memory';
+import { memAddEventFragment, memChatRecallBlock, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
 import { pushChatNotification } from './island-notify';
 import { wxUnreads, qqUnreads } from '@/lib/unread-store';
 import { isProactiveChatActive } from './proactive-msg';
@@ -37,6 +37,8 @@ interface CoupleSnap {
   anniversary?: string | null;
   meName?: string;
   taName?: string;
+  /** 我的性别（'女'/'男'/'保密'；恋爱资料页设置）——AI 的一切言行都要符合 */
+  gender?: string;
   signature?: string;
   missYou?: number;
   missYouByDay?: Record<string, number>;
@@ -144,6 +146,37 @@ function cut(s: string | undefined | null, max: number): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
+/** 去掉字符串里的全部 emoji/表情符号（用户要求：AI 留言不用 emoji）；返回去掉后的文本 */
+function stripEmoji(s: string): string {
+  return (s ?? '')
+    .replace(/[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}\u{1F9B0}-\u{1F9B3}\u200D\uFE0E\uFE0F\u2600-\u27BF\u2B00-\u2BFF\u3030\u303D\u3297\u3299\u2190-\u21FF\u2700-\u27bf]/gu, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/** 性别纪律行（用户是女生 → AI 称呼/标签/夸奖全部符合女生身份，绝不出现「男友」类词） */
+function genderLine(snap: CoupleSnap, me: string): string {
+  const g = (snap.gender ?? '').trim();
+  if (g === '女') return `重要：「${me}」是女生。你所有的称呼、比喻、标签、夸奖都必须符合女生身份（例如「女友力max」而不是「男友力max」），绝不能用「男友/男朋友/哥们/小伙子」这类词形容${me}；也不要把${me}当成男生来调侃。`;
+  if (g === '男') return `重要：「${me}」是男生。你所有的称呼、比喻、标签、夸奖都必须符合男生身份。`;
+  return '';
+}
+
+/** 最近的微信/QQ 聊天记录（心情日记等 AI 主动行为的素材；从会话 kv 同步读，非恋人空间内容） */
+function recentChatBlock(contactId: string | undefined, channel: CoupleChannel, me: string, ta: string): string {
+  if (!contactId) return '';
+  try {
+    const raw = kvGet<unknown[]>(`ios-chat-msgs:${channel}:${contactId}`) ?? [];
+    if (!Array.isArray(raw) || raw.length === 0) return '';
+    const turns = memConvoFromRaw(raw, ta).filter((t) => t && t.text && t.text.trim());
+    const recent = turns.slice(-12);
+    if (recent.length === 0) return '';
+    return recent.map((t) => `${t.role === 'me' ? me : ta}：${cut(t.text, 50)}`).join('\n');
+  } catch {
+    return '';
+  }
+}
+
 // ---------------- 链路一：聊天人设注入（AI 知道恋人空间的一切） ----------------
 
 /**
@@ -160,6 +193,8 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
   const me = (snap.meName || '').trim() || userName || '我';
   const ta = (snap.taName || '').trim() || 'TA';
   const lines: string[] = [];
+  const gline = genderLine(snap, me);
+  if (gline) lines.push(`- ${gline}`);
   const days = daysSinceAnniv(snap.anniversary);
   if (days != null) lines.push(`- 你们已经在恋人空间在一起 ${days} 天（纪念日 ${snap.anniversary}）。`);
 
@@ -365,11 +400,12 @@ export function scheduleAiReply(key: string, delayMin = 2600, delayMax = 6500): 
         try {
           text = await coupleLLM(
             `${llmSystem(p, me, snap)}\n场景：你们正在恋人空间 App 的${sceneOfKey(key, snap)}里互相留言。${threadContext(key, snap, me, ta)}`,
-            `最近的留言：\n${convo}\n\n请以「${ta}」的口吻回复${me}的最新留言：30 字内，口语、贴合人设与你们的真实记忆；如果${me}在反驳你，可以撒娇、讲道理或不服气地拌嘴，像真情侣聊天。只输出回复内容。`,
+            `最近的留言：\n${convo}\n\n请以「${ta}」的口吻回复${me}的最新留言：30 字内，口语、贴合人设与你们的真实记忆；如果${me}在反驳你，可以撒娇、讲道理或不服气地拌嘴，像真情侣聊天。禁止使用任何 emoji/表情符号。只输出回复内容。`,
           );
         } catch {
           /* 兜底 */
         }
+        text = stripEmoji(text);
         if (!text || text.length < 2) text = TPL_REPLY[Math.floor(Math.random() * TPL_REPLY.length)];
         text = cut(text, 90);
         const c = { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key, from: 'ta', text, at: Date.now() };
@@ -407,11 +443,12 @@ export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: n
         try {
           text = await coupleLLM(
             `${llmSystem(p, me, snap)}\n场景：${me}刚在恋人空间的相册「${albumName}」里上传了一张新照片，你去翻相册看到了，想在照片下面留一条言。${threadContext(threadKey, snap, me, ta)}`,
-            `请以「${ta}」的口吻给这张照片留言：25 字内，口语、贴合人设与你们的记忆（可以是夸、撒娇、想TA、约定下次一起拍）。只输出留言内容。`,
+            `请以「${ta}」的口吻给这张照片留言：25 字内，口语、贴合人设与你们的记忆（可以是夸、撒娇、想TA、约定下次一起拍）。禁止使用任何 emoji/表情符号。只输出留言内容。`,
           );
         } catch {
           /* 兜底 */
         }
+        text = stripEmoji(text);
         if (!text || text.length < 2) text = TPL_PHOTO[Math.floor(Math.random() * TPL_PHOTO.length)];
         text = cut(text, 80);
         const c = { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: threadKey, from: 'ta', text, at: Date.now() };
@@ -844,7 +881,7 @@ function snapDigest(snap: CoupleSnap, me: string, ta: string): string {
   return parts.join('；');
 }
 
-/** 组装 LLM system（人设 + 共享记忆 + 行为纪律） */
+/** 组装 LLM system（人设 + 性别纪律 + 共享记忆 + 行为纪律） */
 function llmSystem(p: TaPersona, me: string, snap: CoupleSnap): string {
   const ta = p.name;
   return [
@@ -852,8 +889,9 @@ function llmSystem(p: TaPersona, me: string, snap: CoupleSnap): string {
     p.relation ? `你们的关系：${p.relation}。` : '',
     p.persona ? `你的性格/说话风格：${cut(p.persona, 120)}` : '',
     p.background ? `你的背景：${cut(p.background, 100)}` : '',
+    genderLine(snap, me),
     `你们在恋人空间里的共享记忆：${snapDigest(snap, me, ta) || '刚刚开始，还很空白'}。`,
-    `你正在恋人空间里为你们的感情做一件小事。要求：严格贴合你的人设与你们的真实记忆，口语、简短、真诚，像真实的恋人亲手写下的；禁止出现「AI/系统/用户/模型」等字样；禁止 markdown 格式。`,
+    `你正在恋人空间里为你们的感情做一件小事。要求：严格贴合你的人设与你们的真实记忆，口语、简短、真诚，像真实的恋人亲手写下的；禁止出现「AI/系统/用户/模型」等字样；禁止 markdown 格式；禁止使用任何 emoji/表情符号。`,
   ]
     .filter(Boolean)
     .join('\n');
@@ -895,26 +933,113 @@ function aiTickWater(snap: CoupleSnap, me: string, ta: string): void {
   logAi(`${ta}给恋爱小树浇了水 🌱`);
 }
 
-const AI_MOOD_TPL = ['今天有点想你，风都像你那边的味道。♡', '路过奶茶店想起我们说好的那杯三分糖。', '今天整体不错，就是傍晚的时候突然很想你。', '今天把我们的照片翻了一遍，嘴角一直没下来。'];
+/** AI 心情日记本地兜底（不再从文本里猜 emoji；表情独立选自 MOOD_LIST） */
+const AI_MOOD_TPL = [
+  { mood: '想TA', text: '今天有点想你，风都像你那边的味道。' },
+  { mood: '甜蜜', text: '路过奶茶店想起我们说好的那杯三分糖。' },
+  { mood: '想TA', text: '今天整体不错，就是傍晚的时候突然很想你。' },
+  { mood: '开心', text: '今天翻我们的聊天记录，嘴角一直没下来。' },
+  { mood: '困困', text: '今天有点累，想早点睡，梦里要是你就好了。' },
+];
 
-/** AI 写心情日记（每天一条） */
+/** 心情标签 → 恋人空间心情表情 id（与 couple-space.tsx 的 MOOD_LIST 对齐） */
+const MOOD_LABEL_TO_EMOJI: Record<string, string> = {
+  开心: '😊',
+  甜蜜: '🥰',
+  困困: '😴',
+  生气: '😤',
+  委屈: '😢',
+  思考: '🤔',
+  兴奋: '🤩',
+  想TA: '🥲',
+};
+
+/**
+ * AI 写心情日记（每天一条）。
+ * 用户规格：素材 = 人设 + 共享记忆召回 + 最近微信/QQ 聊天内容；不要基于恋人空间里的东西；
+ * 表情必须能正常显示（从心情列表里选，不再从正文里猜）。
+ */
 async function aiTickMood(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
   const today = todayKey();
   if ((snap.moods ?? []).some((m) => m.from === 'ta' && (m.dateKey || todayKey(new Date(m.at))) === today)) return;
+  const pid = currentPartnerId;
+  const ch = currentChannel;
+  // 素材一：恋人（AI）的记忆碎片召回（与聊天时同一套记忆，含此前聊过的话题/事件）
+  let memBlock = '';
+  try {
+    if (pid) memBlock = memChatRecallBlock(pid, ch, `${ta}今天的心情日记 最近你们聊过什么`, { mode: 'private' });
+  } catch {
+    /* 召回失败不影响 */
+  }
+  // 素材二：最近的微信/QQ 聊天上下文（非恋人空间内容）
+  const chatBlock = recentChatBlock(pid, ch, me, ta);
+  const sys = [
+    `你是「${ta}」，是${me}的恋人，正在写自己的心情日记。`,
+    p.relation ? `你们的关系：${p.relation}。` : '',
+    p.persona ? `你的性格/说话风格：${cut(p.persona, 120)}` : '',
+    p.background ? `你的背景：${cut(p.background, 100)}` : '',
+    genderLine(snap, me),
+    memBlock ? `【你们的记忆碎片】\n${cut(memBlock, 700)}` : '',
+    chatBlock ? `【你们最近的聊天记录】\n${chatBlock}` : '',
+    '要求：像真人写日记，根据你今天的生活、你们最近聊天的话题和你的心情来写；素材只能来自你的人设、你们的记忆碎片和最近的聊天记录；不要提恋人空间 App 里的任何功能或内容（想你打卡/标签/协议/问答/相册/小树/轨迹等都不许出现）；口语、简短、真诚；禁止 emoji/表情符号；禁止 markdown。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  let moodLabel = '';
   let text = '';
   try {
-    text = await coupleLLM(llmSystem(p, me, snap), `请以「${ta}」的口吻写一条今天的心情日记：40 字内，用一个表情符号开头表示心情，正文可以提到${me}或你们的近况。只输出日记内容。`);
+    const raw = await coupleLLM(
+      sys,
+      `请输出 JSON：{"mood":"从 开心/甜蜜/困困/生气/委屈/思考/兴奋/想TA 里选一个最贴今天心情的","text":"日记正文（30字内，纯文本，不要表情符号）"}。只输出 JSON。`,
+    );
+    const j = extractJson<{ mood?: string; text?: string }>(raw);
+    if (j && j.text) {
+      text = stripEmoji(String(j.text));
+      moodLabel = stripEmoji(String(j.mood ?? '')).trim();
+    }
   } catch {
     /* 兜底 */
   }
-  if (!text || text.length < 4) text = AI_MOOD_TPL[Math.floor(Math.random() * AI_MOOD_TPL.length)];
+  if (!text || text.length < 2) {
+    const tpl = AI_MOOD_TPL[Math.floor(Math.random() * AI_MOOD_TPL.length)];
+    text = tpl.text;
+    moodLabel = tpl.mood;
+  }
   text = cut(text, 80);
-  const entry = { id: `ai-${Date.now()}`, emoji: /\p{Extended_Pictographic}/u.test(text) ? '' : '🫶', text, at: Date.now(), dateKey: today, from: 'ta' };
+  const emoji = MOOD_LABEL_TO_EMOJI[moodLabel] ?? '🥰';
+  const entry = { id: `ai-${Date.now()}`, emoji, text, at: Date.now(), dateKey: today, from: 'ta' };
   writeSnap((s) => ({ ...s, moods: [entry, ...((s.moods as CoupleSnap['moods']) ?? [])] }));
-  const pid = currentPartnerId;
-  if (pid) coupleRemember(pid, currentChannel, `${ta}在恋人空间写了心情日记：${cut(text, 40)}`);
+  if (pid) coupleRemember(pid, ch, `${ta}在恋人空间写了心情日记：${cut(text, 40)}`);
   logAi(`${ta}写了今天的心情日记`);
-  void notifyCouple(currentChannel, pid, `我在恋人空间写了今天的心情日记，快去看看 ♡`);
+  void notifyCouple(ch, pid, `我在恋人空间写了今天的心情日记，快去看看`);
+}
+
+/**
+ * 「戳一下他」：对方今日还没写日记时，立刻让 TA 去写（延时 2~4s 出现，像被戳了才动笔）。
+ * 返回 true = 已去写；false = TA 今天已经写过（无需再戳）。
+ */
+export function pokeTaDiary(): boolean {
+  const snap = readSnap();
+  if (!snap) return false;
+  const today = todayKey();
+  if ((snap.moods ?? []).some((m) => m.from === 'ta' && (m.dateKey || todayKey(new Date(m.at))) === today)) return false;
+  const target = aiTarget();
+  if (!target) return false;
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        const p = await taPersonaOf(target.contactId);
+        const s = readSnap();
+        if (!p || !s) return;
+        currentPartnerId = target.contactId;
+        currentChannel = target.channel;
+        await aiTickMood(s, (s.meName || '').trim() || '我', (s.taName || '').trim() || 'TA', p);
+      } catch {
+        /* 静默 */
+      }
+    })();
+  }, 1800 + Math.random() * 2200);
+  return true;
 }
 
 const AI_QUIZ_TPL = ['第一次见你的时候，心里想的是「这个人眼睛真好看」。', '希望十年后的我们，还像现在一样爱逛街、爱拌嘴、爱牵手。', '是那种看到好吃的第一反应是「带你去吃」的默契。'];
@@ -954,7 +1079,8 @@ async function aiTickImpress(snap: CoupleSnap, me: string, ta: string, p: TaPers
   const have = new Set(snap.impressionsMe ?? []);
   let picks: string[] = [];
   try {
-    const raw = await coupleLLM(llmSystem(p, me, snap), `请以「${ta}」的口吻，给${me}贴 2~3 个情侣印象标签（每个≤6字，真实可爱，贴合你们的相处）。每行一个，只输出标签本身。`);
+    const gNote = snap.gender === '女' ? `（${me}是女生，标签必须符合女生身份：用「女友力max」这类词，绝不能用「男友力」之类男性向的词，也不要用形容男生的称呼）` : '';
+    const raw = await coupleLLM(llmSystem(p, me, snap), `请以「${ta}」的口吻，给${me}贴 2~3 个情侣印象标签（每个≤6字，真实可爱，贴合你们的相处）${gNote}。每行一个，只输出标签本身。`);
     picks = raw
       .split('\n')
       .map((l) => l.replace(/^[-•\d.、\s]+/, '').trim())

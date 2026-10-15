@@ -32,6 +32,8 @@ import {
   CalendarDays,
   Camera,
   Check,
+  ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Compass,
   Crosshair,
@@ -45,18 +47,23 @@ import {
   IdCard,
   Image as ImageIcon,
   ImagePlus,
+  AlignJustify,
   Info,
   Landmark,
   Loader2,
   MapPin,
   MessageCircleHeart,
+  MessageSquare,
+  MoreVertical,
   NotebookPen,
   Pencil,
+  Orbit,
   Plane,
   Plus,
   RefreshCcw,
   Scale,
   Settings as SettingsIcon,
+  Share2,
   Smile,
   Sparkles,
   Sprout,
@@ -78,7 +85,7 @@ import {
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
-import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiTickTrail, coupleMemoryDiff, runCoupleAiTick, scheduleAiReply, syncLocFromContacts } from '@/lib/ios/couple-ai';
+import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiTickTrail, coupleMemoryDiff, pokeTaDiary, runCoupleAiTick, scheduleAiReply, syncLocFromContacts } from '@/lib/ios/couple-ai';
 import { displayNameOf, isFriendIn } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
 import L from 'leaflet';
@@ -276,18 +283,46 @@ function defaultState(): CoupleState {
   };
 }
 
-/** 读取持久化状态（缺失字段用默认值补齐，防旧数据缺键） */
+/**
+ * 心情 emoji 合法化：旧数据/AI 早期写入可能存了 MOOD_LIST 之外的值（空串/🫶等）→ 映射回有效心情（修复“AI 表情不显示”）
+ * 依据日记正文关键词推断；推不出时空串（本意是爱心）回 🥰，其余回 🤔。
+ */
+function normMoodEmoji(emoji: string, text?: string): string {
+  if (MOOD_LIST.some((m) => m.emoji === emoji)) return emoji;
+  const t = text ?? '';
+  const has = (arr: string[]) => arr.some((k) => t.includes(k));
+  if (has(['累', '困', '睡', '熬夜'])) return '😴';
+  if (has(['哭', '难过', '伤心', '委屈', '失落'])) return '😢';
+  if (has(['气', '烦', '怒', '吵'])) return '😤';
+  if (has(['甜', '爱', '亲', '抱', '喜欢你'])) return '🥰';
+  if (has(['开心', '笑', '玩', '快乐', '哈哈'])) return '😊';
+  if (has(['想', '念'])) return '🥲';
+  return emoji === '' ? '🥰' : '🤔';
+}
+
+/** 读取持久化状态（缺失字段用默认值补齐，防旧数据缺键；含旧数据修复） */
 function loadCoupleState(): CoupleState {
   try {
     const raw = kvGet<Partial<CoupleState>>(STATE_KEY);
     if (!raw) return defaultState();
-    return {
+    const merged: CoupleState = {
       ...defaultState(),
       ...raw,
       // invite 子对象深合并（旧数据无 invite 键 → 默认；存在但缺字段 → 逐字段兜底）
       invite: { ...emptyInviteMeta(), ...(raw.invite ?? {}) },
       v: 1,
     };
+    // 修复一：AI 早期写的日记 emoji 为空串/🫶 → MoodFace 找不到对应心情导致不显示；映射回有效表情
+    if (Array.isArray(merged.moods)) {
+      merged.moods = merged.moods.map((m) => ({ ...m, emoji: normMoodEmoji(m.emoji, m.text) }));
+    }
+    // 修复二：用户是女生 → 「男友力max」标签改为「女友力max」（AI 贴的和手动的都修正）
+    if (merged.gender === '女') {
+      const swap = (arr: string[]) => arr.map((t) => (t === '男友力max' ? '女友力max' : t));
+      if (Array.isArray(merged.impressionsMe)) merged.impressionsMe = swap(merged.impressionsMe);
+      if (Array.isArray(merged.aiImpressions)) merged.aiImpressions = swap(merged.aiImpressions);
+    }
+    return merged;
   } catch {
     return defaultState();
   }
@@ -1967,15 +2002,15 @@ function CommentThread({
             c.from === 'ta' ? (
               <div key={c.id} className="flex items-end gap-1.5">
                 <span className={`max-w-[82%] rounded-2xl rounded-bl-sm px-3 py-2 text-[13px] leading-relaxed ${dark ? 'bg-[#7f96e0]/25 text-[#c3cff5]' : 'bg-[#eef2fd] text-[#5a74c4]'}`}>
-                  <span className={`mr-1.5 text-[10.5px] font-semibold ${dark ? 'text-[#8fa4ef]' : 'text-[#7f96e0]'}`}>{ta}</span>
+                  <span className={`mr-0.5 text-[10.5px] font-semibold ${dark ? 'text-[#8fa4ef]' : 'text-[#7f96e0]'}`}>{ta}：</span>
                   {c.text}
                 </span>
               </div>
             ) : (
               <div key={c.id} className="flex items-end justify-end gap-1.5">
                 <span className={`max-w-[82%] rounded-2xl rounded-br-sm px-3 py-2 text-[13px] leading-relaxed ${dark ? 'bg-[#f9a8d4]/25 text-[#f9c9da]' : 'bg-[#fdeef3] text-[#d4547a]'}`}>
-                  <span className={`mr-1.5 text-[10.5px] font-semibold ${dark ? 'text-[#f9a8d4]' : 'text-[#e0607e]'}`}>{me}</span>
                   {c.text}
+                  <span className={`ml-0.5 text-[10.5px] font-semibold ${dark ? 'text-[#f9a8d4]' : 'text-[#e0607e]'}`}>：{me}</span>
                 </span>
               </div>
             ),
@@ -3957,17 +3992,21 @@ function HousePage({ state, days, close }: { state: CoupleState; days: number | 
   );
 }
 
-/** 心情日记（参考图5）：月历气泡视图 + 写日记编辑页（心情/文字/照片/位置） */
+/** 心情日记（对照用户截图重做）：大月历心情球视图 + 全部日记列表 + 日记详情 + 写日记编辑页 */
 function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
   const now0 = new Date();
-  const [view, setView] = useState<'cal' | 'write'>('cal');
+  const [view, setView] = useState<'cal' | 'write' | 'list' | 'detail'>('cal');
   const [cursor, setCursor] = useState({ y: now0.getFullYear(), m: now0.getMonth() });
   const [selDate, setSelDate] = useState(todayKey());
   const [mood, setMood] = useState('');
   const [text, setText] = useState('');
   const [photo, setPhoto] = useState<string | null>(null);
-  const [daySheet, setDaySheet] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const photoInput = useRef<HTMLInputElement | null>(null);
+
+  const me = state.meName || '我';
+  const ta = state.taName || 'TA';
+  const todayK = todayKey();
 
   /** 按日期分组（兼容旧数据：无 dateKey 时从 at 推导） */
   const byDay = useMemo(() => {
@@ -3992,6 +4031,16 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
     return arr;
   }, [cursor]);
 
+  /** 当月日记（列表用；state.moods 本身按时间倒序） */
+  const monthMoods = useMemo(() => {
+    const prefix = `${cursor.y}-${String(cursor.m + 1).padStart(2, '0')}`;
+    return state.moods.filter((m) => (m.dateKey || fmtDate(m.at)).startsWith(prefix));
+  }, [state.moods, cursor]);
+
+  /** TA 今天是否已写日记（没写 → 显示「戳一下他」气泡） */
+  const taWroteToday = state.moods.some((m) => m.from === 'ta' && (m.dateKey || fmtDate(m.at)) === todayK);
+  const detailEntry = detailId ? state.moods.find((m) => m.id === detailId) : null;
+
   const openWrite = (key: string) => {
     if (key > todayKey()) {
       showToast('不能写未来的日子哦');
@@ -4002,6 +4051,17 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
     setText('');
     setPhoto(null);
     setView('write');
+  };
+
+  const openDetail = (id: string) => {
+    setDetailId(id);
+    setView('detail');
+  };
+
+  /** 戳一下 TA：让 TA 现在去写日记（AI 立刻动笔，2~4s 后出现） */
+  const pokeTa = () => {
+    const ok = pokeTaDiary();
+    showToast(ok ? '已戳 TA，TA 这就去写日记啦' : 'TA 今天已经写过日记啦');
   };
 
   const pickPhoto = async (f: File | null) => {
@@ -4027,7 +4087,6 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
   };
 
   const editEntry = (key: string) => {
-    const list = byDay[key] || [];
     const entry = state.moods.find((m) => (m.dateKey || fmtDate(m.at)) === key);
     if (entry) {
       setSelDate(key);
@@ -4036,13 +4095,11 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
       setPhoto(entry.photo ?? null);
       setView('write');
     } else {
-      void list;
       openWrite(key);
     }
-    setDaySheet(null);
   };
 
-  // ---------- 写日记视图 ----------
+  // ---------- 写日记视图（编辑页沿用；保存按钮改粉渐变与日记主题呼应） ----------
   if (view === 'write') {
     const [sy, sm] = [Number(selDate.slice(0, 4)), Number(selDate.slice(5, 7))];
     const isToday = selDate === todayKey();
@@ -4070,10 +4127,10 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 type="button"
                 onClick={() => setMood(m.emoji)}
                 aria-pressed={mood === m.emoji}
-                className={`flex flex-col items-center gap-1 rounded-2xl py-2 transition-all ${mood === m.emoji ? 'bg-[#f1f1f4] shadow-[inset_0_1px_4px_rgba(0,0,0,0.06)]' : 'active:bg-[#f6f6f8]'}`}
+                className={`flex flex-col items-center gap-1 rounded-2xl py-2 transition-all ${mood === m.emoji ? 'bg-[#fdeef3] shadow-[inset_0_1px_4px_rgba(242,83,106,0.08)]' : 'active:bg-[#f6f6f8]'}`}
               >
                 <MoodFace mood={m.emoji} size={38} className={mood === m.emoji ? '[animation:couple-pop-heart_.4s_ease-out]' : 'opacity-90'} />
-                <span className={`text-[10px] ${mood === m.emoji ? 'font-semibold text-[#3c3c42]' : 'text-[#8e8e96]'}`}>{m.label}</span>
+                <span className={`text-[10px] ${mood === m.emoji ? 'font-semibold text-[#e0607e]' : 'text-[#8e8e96]'}`}>{m.label}</span>
               </button>
             ))}
           </div>
@@ -4133,7 +4190,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
         <button
           type="button"
           onClick={saveMood}
-          className="sticky bottom-4 z-10 mb-3 mt-5 h-12 w-full rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-[15px] font-semibold text-white shadow-[0_8px_20px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.98]"
+          className="sticky bottom-4 z-10 mb-3 mt-5 h-12 w-full rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[15px] font-semibold text-white shadow-[0_8px_20px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
         >
           完成
         </button>
@@ -4152,181 +4209,241 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
     );
   }
 
-  // ---------- 月历视图 ----------
-  const todayK = todayKey();
-  const recent = state.moods.slice(0, 4);
-  const monthPrefix = `${cursor.y}-${String(cursor.m + 1).padStart(2, '0')}`;
-  const monthCount = state.moods.filter((m) => (m.dateKey || fmtDate(m.at)).startsWith(monthPrefix)).length;
+  // ---------- 日记详情视图（参考截图3：头像+时间地点 + 大表情 + 正文 + 留言区 + 会员条） ----------
+  if (view === 'detail' && detailEntry) {
+    const isTa = detailEntry.from === 'ta';
+    const author = isTa ? ta : me;
+    const avatar = isTa ? state.taAvatar : state.meAvatar;
+    const timeLabel = timeAgoLabel(detailEntry.at);
+    const loc = (state.myLoc?.name ?? '').trim();
+    return (
+      <SubShell title="心情日记" onBack={() => setView('list')}>
+        {/* 作者行 */}
+        <div className="mt-3 flex items-center gap-3 px-1">
+          <span className="h-12 w-12 shrink-0 overflow-hidden rounded-full bg-[#ececef] shadow-sm ring-1 ring-white">
+            {avatar ? <img src={avatar} alt={author} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={48} />}
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-[17px] font-bold leading-tight text-[#2c2c30]">{author}</div>
+            <div className="mt-0.5 truncate text-[11.5px] text-[#a9a9b2]">
+              {timeLabel}
+              {loc ? `  在${loc}发布` : ''}
+            </div>
+          </div>
+        </div>
 
+        {/* 大表情 + 正文 */}
+        <div className="mt-5 flex justify-center">
+          <MoodFace mood={detailEntry.emoji} size={92} className="drop-shadow-[0_8px_18px_rgba(0,0,0,0.14)]" />
+        </div>
+        <div className="mt-4 px-1 text-[16.5px] leading-relaxed text-[#2c2c30]">{detailEntry.text || '（这一天没说话，就是心情不好不坏）'}</div>
+        {detailEntry.photo && <img src={detailEntry.photo} alt="心情照片" className="mt-3 w-full rounded-2xl object-cover" draggable={false} />}
+
+        {/* 操作行（分享/评论/更多，参考截图3 右对齐） */}
+        <div className="mt-3 flex items-center justify-end gap-5 px-1 text-[#8e8e96]">
+          <Share2 className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
+          <MessageSquare className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
+          <MoreVertical className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
+        </div>
+
+        {/* 留言区（双向；TA 回复贴合人设记忆且不用 emoji） */}
+        <div className="mt-4 border-t border-dashed border-[#e9e9ee] pt-4">
+          <CommentThread
+            state={state}
+            patch={patch as unknown as PatchFn}
+            threadKey={`mood:${detailEntry.id}`}
+            hint={isTa ? `在 ${ta} 的日记下留言` : '这篇日记的留言'}
+            testId={`mood-comment-${detailEntry.id}`}
+          />
+        </div>
+
+        {/* 会员条（参考截图3 底部样式） */}
+        <div className="sticky bottom-3 mt-5 flex items-center justify-between gap-2 rounded-2xl bg-[linear-gradient(120deg,#fce7f0,#fdeedd)] px-4 py-3 shadow-[0_4px_14px_rgba(0,0,0,0.06)]">
+          <span className="text-[12.5px] font-medium text-[#8a5a3c]">成为会员，查看对方最近的浏览时间</span>
+          <button
+            type="button"
+            onClick={() => showToast('演示版暂未开通会员')}
+            className="shrink-0 rounded-full bg-[linear-gradient(135deg,#ffd257,#ffb43c)] px-3 py-1.5 text-[12px] font-bold text-[#7a4a12] active:opacity-80"
+          >
+            开通会员
+          </button>
+        </div>
+      </SubShell>
+    );
+  }
+
+  // ---------- 全部日记列表视图（参考截图2：大日期卡 + 对方未读 + 居中表情 + 作者行） ----------
+  if (view === 'list') {
+    return (
+      <SubShell title="心情日记" onBack={() => setView('cal')}>
+        <div className="mt-2 flex items-center justify-between px-1">
+          <button type="button" className="flex items-center gap-1 text-[20px] font-extrabold text-[#2c2c30]" onClick={() => setView('cal')} aria-label="回到月历">
+            {cursor.y}.{String(cursor.m + 1).padStart(2, '0')}
+            <ChevronDown className="h-4 w-4 text-[#6e6e76]" />
+          </button>
+          <span className="text-[13.5px] font-semibold text-[#f2536a]">全部日记</span>
+        </div>
+
+        <div className="mt-3 space-y-3 pb-4">
+          {monthMoods.length === 0 && <div className="rounded-2xl bg-white py-10 text-center text-[13px] text-[#b6b6bd] shadow-sm">这个月还没有日记，去写一篇吧</div>}
+          {monthMoods.map((m) => {
+            const d = new Date(`${m.dateKey || fmtDate(m.at)}T12:00:00`);
+            const isToday = (m.dateKey || fmtDate(m.at)) === todayK;
+            const author = m.from === 'ta' ? ta : me;
+            const avatar = m.from === 'ta' ? state.taAvatar : state.meAvatar;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => openDetail(m.id)}
+                className={`block w-full rounded-2xl bg-white p-4 text-left shadow-[0_4px_14px_rgba(0,0,0,0.05)] transition-transform active:scale-[0.99] ${isToday ? 'ring-2 ring-[#f5c33c]' : ''}`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-baseline gap-1.5">
+                    <span className={`text-[24px] font-extrabold leading-none text-[#2c2c30] ${isToday ? 'underline decoration-[#f5c33c] decoration-[3px] underline-offset-[6px]' : ''}`}>{isToday ? '今天' : d.getDate()}</span>
+                    <span className="text-[11px] text-[#9a9aa2]">{d.getMonth() + 1}月,{d.getFullYear()}</span>
+                  </div>
+                  {m.from !== 'ta' ? (
+                    <span className="shrink-0 rounded-full border border-[#f2536a]/55 px-2 py-0.5 text-[10px] text-[#f2536a]">对方未读</span>
+                  ) : (
+                    <span className="shrink-0 rounded-full border border-[#7f96e0]/45 px-2 py-0.5 text-[10px] text-[#7f96e0]">TA 写的</span>
+                  )}
+                </div>
+                <div className="mt-2 flex justify-center">
+                  <MoodFace mood={m.emoji} size={80} className="drop-shadow-[0_6px_14px_rgba(0,0,0,0.10)]" />
+                </div>
+                <div className="mt-2 text-[15px] leading-relaxed text-[#2c2c30]">{m.text || '（这一天没说话）'}</div>
+                {m.photo && <img src={m.photo} alt="心情照片" className="mt-2 max-h-44 w-full rounded-xl object-cover" draggable={false} />}
+                <div className="mt-3 flex items-center justify-between">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="h-7 w-7 shrink-0 overflow-hidden rounded-full bg-[#ececef]">
+                      {avatar ? <img src={avatar} alt={author} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={28} />}
+                    </span>
+                    <span className="truncate text-[12.5px] text-[#8e8e96]">{author}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3.5 text-[#8e8e96]">
+                    <MessageSquare className="h-[17px] w-[17px]" strokeWidth={1.8} aria-hidden="true" />
+                    <MoreVertical className="h-[17px] w-[17px]" strokeWidth={1.8} aria-hidden="true" />
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </SubShell>
+    );
+  }
+
+  // ---------- 月历视图（参考截图1：大心情球 + 粉色月份导航 + 戳一戳浮层 + 写日记按钮） ----------
   return (
-    <SubShell
-      title="心情日记"
-      onBack={close}
-      right={
-        recent.length > 0 ? (
-          <span className="text-[11.5px] text-[#8e8e96]">共 {state.moods.length} 篇</span>
-        ) : undefined
-      }
-    >
-      {/* 月份切换（胶囊卡） */}
-      <div className="mt-2 flex justify-center">
-        <div className="flex items-center gap-3.5 rounded-full bg-white px-3.5 py-1.5 shadow-[0_4px_14px_rgba(0,0,0,0.06)]">
+    <SubShell title="心情日记" onBack={close}>
+      {/* 月份导航（红圆 ‹ + 大标题 + 深红圆 ›；右侧星球/菜单） */}
+      <div className="mt-2 flex items-center justify-between px-0.5">
+        <div className="flex items-center gap-2.5">
           <button
             type="button"
             aria-label="上个月"
             onClick={() => setCursor((c) => (c.m === 0 ? { y: c.y - 1, m: 11 } : { ...c, m: c.m - 1 }))}
-            className="flex h-6.5 w-6.5 items-center justify-center rounded-full bg-[#f0f0f3] p-1 text-[#6e6e76] transition-opacity active:opacity-60"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-[#e94b6b] text-white shadow-[0_3px_8px_rgba(233,75,107,0.35)] active:opacity-80"
           >
-            <ChevronRight className="h-3.5 w-3.5 rotate-180" />
+            <ChevronLeft className="h-4 w-4" strokeWidth={2.6} />
           </button>
-          <span className="min-w-[88px] text-center text-[16px] font-bold tracking-wide text-[#2c2c30]">
+          <span className="min-w-[92px] text-center text-[21px] font-extrabold tracking-wide text-[#2c2c30]">
             {cursor.y}.{String(cursor.m + 1).padStart(2, '0')}
           </span>
           <button
             type="button"
             aria-label="下个月"
             onClick={() => setCursor((c) => (c.m === 11 ? { y: c.y + 1, m: 0 } : { ...c, m: c.m + 1 }))}
-            className="flex h-6.5 w-6.5 items-center justify-center rounded-full bg-[#f0f0f3] p-1 text-[#6e6e76] transition-opacity active:opacity-60"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-[#c23352] text-white shadow-[0_3px_8px_rgba(194,51,82,0.35)] active:opacity-80"
           >
-            <ChevronRight className="h-3.5 w-3.5" />
+            <ChevronRight className="h-4 w-4" strokeWidth={2.6} />
+          </button>
+        </div>
+        <div className="flex items-center gap-3 text-[#6e6e76]">
+          <button type="button" aria-label="心情星球" onClick={() => showToast('心情星球整理中，敬请期待')} className="transition-opacity active:opacity-60">
+            <Orbit className="h-5 w-5" strokeWidth={1.8} />
+          </button>
+          <button type="button" aria-label="全部日记" onClick={() => setView('list')} className="transition-opacity active:opacity-60">
+            <AlignJustify className="h-5 w-5" strokeWidth={2} />
           </button>
         </div>
       </div>
 
-      {/* 本月记录数 */}
-      <div className="mt-2.5 flex justify-center">
-        <span className="rounded-full bg-white/90 px-3 py-1 text-[11px] text-[#8e8e96] shadow-[0_3px_10px_rgba(0,0,0,0.05)]">
-          本月记录 <b className="text-[#3c3c42]">{monthCount}</b> 篇心情
-        </span>
+      {/* 星期表头（周一起始） */}
+      <div className="mt-3 grid grid-cols-7 text-center text-[11px] text-[#b9b9c1]">
+        {['一', '二', '三', '四', '五', '六', '日'].map((w) => (
+          <span key={w}>{w}</span>
+        ))}
       </div>
 
-      {/* 日历卡片 */}
-      <div className="mt-2.5 rounded-2xl bg-white/92 p-3 shadow-[0_6px_18px_rgba(0,0,0,0.05)] backdrop-blur-sm">
-        {/* 星期表头（周一起始） */}
-        <div className="grid grid-cols-7 text-center text-[10.5px] text-[#a9a9b2]">
-          {['一', '二', '三', '四', '五', '六', '日'].map((w) => (
-            <span key={w}>{w}</span>
-          ))}
-        </div>
-
-        {/* 日期格子 */}
-        <div className="mt-2 grid grid-cols-7 gap-y-1.5">
-          {cells.map((cell, i) =>
-            cell == null ? (
-              <span key={`b${i}`} />
-            ) : (
-              <button
-                key={cell.key}
-                type="button"
-                onClick={() => {
-                  const list = byDay[cell.key];
-                  if (list && list.length > 0) setDaySheet(cell.key);
-                  else openWrite(cell.key);
-                }}
-                className="flex h-[60px] flex-col items-center justify-start pt-0.5 transition-transform active:scale-[0.94]"
-              >
-                <span className={`text-[10.5px] leading-none ${cell.key === todayK ? 'font-bold text-[#2c2c30]' : 'text-[#6e6e76]'}`}>{cell.d}</span>
-                {byDay[cell.key] ? (
-                  <span className={`mt-1 flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-white shadow-[0_2px_8px_rgba(0,0,0,0.12)] ${cell.key === todayK ? 'ring-2 ring-[#5c5c64]' : 'ring-1 ring-[#ececef]'}`}>
-                    <MoodFace mood={byDay[cell.key][byDay[cell.key].length - 1].emoji} size={30} />
-                  </span>
-                ) : (
-                  <span className={`mt-1 h-8 w-8 rounded-full border border-dashed ${cell.key === todayK ? 'border-[#b9b9c1] bg-white/70' : 'border-[#e4e4e9]'}`} />
-                )}
-                {cell.key === todayK && <span className="mt-0.5 text-[8.5px] font-semibold leading-none text-[#8e8e96]">今天</span>}
-              </button>
-            ),
-          )}
-        </div>
+      {/* 大心情球日历（有记录 → 大蜡笔表情+心情字；无记录 → 虚线空圈；今天显示「今天」） */}
+      <div className="mt-1.5 grid grid-cols-7 gap-y-1.5">
+        {cells.map((cell, i) =>
+          cell == null ? (
+            <span key={`b${i}`} />
+          ) : (
+            <button
+              key={cell.key}
+              type="button"
+              onClick={() => {
+                const list = byDay[cell.key];
+                if (list && list.length > 0) openDetail(list[list.length - 1].id);
+                else openWrite(cell.key);
+              }}
+              className="flex h-[72px] flex-col items-center justify-start pt-1 transition-transform active:scale-[0.94]"
+            >
+              <span className={`text-[10.5px] leading-none ${cell.key === todayK ? 'font-bold text-[#3c3c42]' : 'text-[#8e8e96]'}`}>{cell.key === todayK ? '今天' : cell.d}</span>
+              {byDay[cell.key] ? (
+                <>
+                  <MoodFace mood={byDay[cell.key][byDay[cell.key].length - 1].emoji} size={38} className="mt-1 drop-shadow-[0_3px_8px_rgba(0,0,0,0.10)]" />
+                  <span className="mt-0.5 max-w-full truncate text-[9px] leading-none text-[#6e6e76]">{byDay[cell.key][byDay[cell.key].length - 1].label}</span>
+                </>
+              ) : (
+                <span className={`mt-1 h-[38px] w-[38px] rounded-full border-[1.5px] border-dashed ${cell.key === todayK ? 'border-[#c9c9cf] bg-white/60' : 'border-[#e4e4e9]'}`} />
+              )}
+            </button>
+          ),
+        )}
       </div>
 
-      <div className="mt-3.5 text-center text-[14px] font-medium text-[#4a4a52]">Hi，你今天的心情怎么样？</div>
+      <div className="mt-3 text-center text-[14.5px] font-medium text-[#4a4a52]">Hi，你那天的心情怎么样？</div>
 
-      {/* 浮动写日记按钮 */}
-      <button
-        type="button"
-        onClick={() => openWrite(todayKey())}
-        className="fixed bottom-16 right-5 z-20 flex items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-4 py-2.5 text-[13px] font-semibold text-white shadow-[0_10px_24px_rgba(60,60,68,0.4)] transition-transform active:scale-[0.96]"
-      >
-        <Pencil className="h-3.5 w-3.5" />
-        写日记
-      </button>
-
-      {/* 最近的心情 */}
-      {recent.length > 0 && (
-        <>
-          <h3 className="pb-2 pt-5 text-[14px] font-bold text-[#2c2c30]">最近的心情</h3>
-          <div className="space-y-2 pb-2">
-            {recent.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => setDaySheet(m.dateKey || fmtDate(m.at))}
-                className="flex w-full items-start gap-3 rounded-2xl bg-white p-3 text-left shadow-[0_4px_12px_rgba(0,0,0,0.05)]"
-              >
-                <span className="shrink-0"><MoodFace mood={m.emoji} size={38} /></span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[13.5px] leading-relaxed text-[#2c2c30]">{m.text || '（没说话，就是心情不好不坏）'}</span>
-                  <span className="mt-0.5 block text-[11px] text-[#b6b6bd]">{m.dateKey || fmtDate(m.at)}</span>
-                </span>
-                {m.photo && <img src={m.photo} alt="心情照片" className="h-11 w-11 shrink-0 rounded-lg object-cover" draggable={false} />}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-
-      {/* 某天的心情弹层 */}
-      {daySheet && (
-        <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/35" onClick={() => setDaySheet(null)}>
-          <div className="max-h-[64%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-7 pt-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
-            <div className="mt-3 flex items-center justify-between">
-              <span className="text-[15px] font-bold text-[#2c2c30]">{daySheet === todayK ? '今天的心情' : daySheet}</span>
-              <button
-                type="button"
-                onClick={() => {
-                  editEntry(daySheet);
-                }}
-                className="rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-3.5 py-1.5 text-[11.5px] font-semibold text-white"
-              >
-                {byDay[daySheet] ? '再写一篇' : '写这篇'}
-              </button>
+      {/* 右下角浮层：对方未写日记气泡 + 戳一下他 + 写日记按钮（参考截图1） */}
+      <div className="pointer-events-none fixed bottom-[76px] right-4 z-20 flex flex-col items-end gap-1.5">
+        {!taWroteToday && (
+          <div className="pointer-events-auto flex flex-col items-end">
+            <div className="max-w-[150px] rounded-2xl rounded-br-md bg-white px-3 py-2 text-[11px] font-medium leading-snug text-[#3c3c42] shadow-[0_6px_18px_rgba(0,0,0,0.14)]">
+              对方今日还未写日记！快去戳一下 TA 吧
             </div>
-            <div className="mt-3 space-y-2">
-              {(byDay[daySheet] || []).length === 0 && <div className="py-4 text-center text-[13px] text-[#b6b6bd]">这一天还没有记录</div>}
-              {state.moods
-                .filter((m) => (m.dateKey || fmtDate(m.at)) === daySheet)
-                .map((m) => (
-                  <div key={m.id} className="rounded-2xl bg-[#f7f7f9] p-3.5">
-                    <div className="flex items-start gap-3">
-                      <span className="shrink-0"><MoodFace mood={m.emoji} size={34} /></span>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[13.5px] leading-relaxed text-[#2c2c30]">{m.text || '（没说话，就是心情不好不坏）'}</div>
-                        {m.photo && <img src={m.photo} alt="心情照片" className="mt-2 max-h-40 w-full rounded-xl object-cover" draggable={false} />}
-                      </div>
-                      {m.from === 'ta' && (
-                        <span className="shrink-0 rounded-full bg-[#eef2fd] px-2 py-0.5 text-[10px] font-bold text-[#7f96e0]">TA 写的</span>
-                      )}
-                    </div>
-                    {/* 第十轮：日记下面的双向留言（TA 的日记我也能留言，TA 会回复；全部进记忆） */}
-                    <div className="mt-3 border-t border-dashed border-[#e6e6eb] pt-3">
-                      <CommentThread
-                        state={state}
-                        patch={patch as unknown as PatchFn}
-                        threadKey={`mood:${m.id}`}
-                        hint={m.from === 'ta' ? `在 ${state.taName || 'TA'} 的日记下留言` : '这篇日记的留言'}
-                        testId={`mood-comment-${m.id}`}
-                      />
-                    </div>
-                  </div>
-                ))}
-            </div>
+            <button type="button" onClick={pokeTa} className="mt-1 rounded-full bg-[#e94b6b] px-2.5 py-1 text-[10px] font-bold text-white shadow-[0_3px_10px_rgba(233,75,107,0.4)] active:opacity-80">
+              戳一下他
+            </button>
           </div>
-        </div>
-      )}
+        )}
+        <button
+          type="button"
+          onClick={() => openWrite(todayKey())}
+          className="pointer-events-auto mt-0.5 flex items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#c86dd7_0%,#ec6f9d_55%,#f789a4_100%)] px-4 py-2.5 text-[13px] font-semibold text-white shadow-[0_10px_24px_rgba(236,111,157,0.45)] transition-transform active:scale-[0.96]"
+        >
+          <span className="inline-block -rotate-12 text-[15px] leading-none" aria-hidden="true">
+            🖍️
+          </span>
+          写日记
+        </button>
+      </div>
     </SubShell>
   );
+}
+
+/** 相对时间（日记详情头部用：刚刚 / N分钟前 / N小时前 / N天前 / 日期） */
+function timeAgoLabel(at: number): string {
+  const diff = Date.now() - at;
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}天前`;
+  return fmtDate(at);
 }
 
 /** 爱情塔罗：从牌堆抽一张 */
@@ -7288,6 +7405,17 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
   const [custom, setCustom] = useState('');
   const [batch, setBatch] = useState<string[]>(() => IMPRESSION_POOL.slice(0, 9));
 
+  /** 词库性别自适应：用户是女生时，贴给自己的词库里「男友力max」换成「女友力max」（用户是女生，男友力是男性向标签） */
+  const effPool = useMemo(() => {
+    if (target === 'me' && state.gender === '女') return IMPRESSION_POOL.map((w) => (w === '男友力max' ? '女友力max' : w));
+    return IMPRESSION_POOL;
+  }, [target, state.gender]);
+
+  // 切换贴的对象/性别变化 → 词库重置（保证性别自适应生效）
+  useEffect(() => {
+    setBatch(effPool.slice(0, 9));
+  }, [effPool]);
+
   const tags = target === 'me' ? state.impressionsMe : state.impressionsTa;
   const otherTags = target === 'me' ? state.impressionsTa : state.impressionsMe;
 
@@ -7318,8 +7446,8 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
 
   const shuffle = () => {
     const used = new Set([...tags, ...otherTags]);
-    const src = IMPRESSION_POOL.filter((w) => !used.has(w));
-    const pool = src.length >= 9 ? src : [...src, ...IMPRESSION_POOL.filter((w) => !tags.includes(w))];
+    const src = effPool.filter((w) => !used.has(w));
+    const pool = src.length >= 9 ? src : [...src, ...effPool.filter((w) => !tags.includes(w))];
     const out = [...new Set(pool)];
     // 洗牌取前 9
     for (let i = out.length - 1; i > 0; i--) {

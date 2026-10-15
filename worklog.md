@@ -19701,3 +19701,23 @@ Stage Summary:
 - 环境重置已完全恢复：代码=远程 0fd6068，图标 MD5 校验一致，依赖齐全，dev server 200
 - 邀请卡片兜底图标=粉双心图（/icons/couple.png），HMR 即时生效并实证
 - 待推送：本工作区含一处源码修改（couple-space.tsx）
+
+---
+Task ID: mood-diary-overhaul
+Agent: Z.ai Code (main)
+Task: 心情日记 AI 表情不显示修复 + AI 日记改用聊天上下文 + 界面对照截图重做 + 留言禁 emoji + 印象名字格式 + 女生身份修正
+
+Work Log:
+- couple-ai.ts：新增 stripEmoji（AI 留言全去 emoji）+ genderLine（性别纪律）；llmSystem/coupleChatBlock 注入用户性别；scheduleAiReply/aiCommentOnPhoto 输出过 stripEmoji 且提示词禁止 emoji
+- couple-ai.ts：重写 aiTickMood——素材=人设+memChatRecallBlock 记忆召回+recentChatBlock（ios-chat-msgs 最近 12 轮微信/QQ 聊天），明确禁止提恋人空间功能；LLM 输出 JSON{mood,text}，mood 从 MOOD_LIST 标签映射真实表情 id（修复表情不显示根因：旧代码 emoji 存 ''/🫶）；新增 pokeTaDiary（戳一下他）；aiTickImpress 加女生标签纪律
+- couple-space.tsx：loadCoupleState 数据修复——normMoodEmoji 把旧 AI 日记无效 emoji 按正文关键词映射回有效心情；女生用户 impressionsMe/aiImpressions 里「男友力max」→「女友力max」
+- couple-space.tsx：CommentThread 名字格式——TA 气泡「名字：内容」；我的气泡「内容 ：名字」（名字放右侧、冒号在名字前，用户要求）
+- couple-space.tsx：ImpressPage 词库性别自适应（贴女生时 男友力max→女友力max，切对象重置词库）
+- couple-space.tsx：MoodPage 全面重做（对照三张截图）——月历视图（红圆月份导航+星球/菜单图标+大心情球+虚线空圈+今天标记+「Hi，你那天的心情怎么样？」+右下角对方未写日记气泡/戳一下他/粉紫渐变写日记按钮）；全部日记列表（大日期卡+对方未读徽标+居中大表情+作者行+今天黄框）；日记详情（头像+相对时间+地点发布+大表情+操作行+留言区+会员条）；写日记完成按钮改粉渐变
+- 验证（agent-browser 全链路）：种入联系人/关系/聊天/旧 AI 日记 → 解锁进恋人空间 → 心情日历（旧 AI 日记 😴''→🥲想TA 正常显示球）→ 列表（今天黄框/对方未读/TA写的徽标）→ 详情（相对时间+地点+留言区+会员条）→ 留言发送「今天想我了吗 ：FAN」→ AI 回复「凡凡：当然想了…」无 emoji → 情侣印象贴给我显示「女友力max [TA贴]」且词库同步换词 + AI 主动贴的标签全是女性向 → 写日记视图正常
+- tsc 0 新错误、eslint 0 问题；dev server 200
+
+Stage Summary:
+- 修复：AI 日记表情不显示（根因=emoji 存了 MOOD_LIST 之外的值）；AI 日记素材改为人设+记忆+聊天上下文（不再基于恋人空间内部）；AI 留言不再用 emoji；印象聊天名字格式（TA 名字+冒号前缀、我的名字右侧冒号前置）；女生身份全链路（词库/旧数据/AI 生成/称呼）
+- 界面：心情日记三视图对照用户截图重做，新增戳一下他（AI 即时写日记）与会员条装饰
+- 待推送：couple-ai.ts + couple-space.tsx + worklog
