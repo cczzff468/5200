@@ -685,6 +685,8 @@ export function aiTickTrail(): void {
       const cur2 = readSnap() ?? snap;
       const city = cur2.taLoc?.name ? `（${ta}现在在${cur2.taLoc.name}，行程要在这个城市里）` : '';
       const myCity = cur2.myLoc?.name ?? null;
+      // 第十八轮（需求34）：行程内容也要贴「人设记忆 + 上下文聊天」——注入最近微信/QQ 聊天话题
+      const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
       const nowD = new Date();
       const nowHM = `${String(nowD.getHours()).padStart(2, '0')}:${String(nowD.getMinutes()).padStart(2, '0')}`;
       const nowMin = nowD.getHours() * 60 + nowD.getMinutes();
@@ -693,8 +695,8 @@ export function aiTickTrail(): void {
       const ICONS = ['sleep', 'phone', 'app', 'call', 'walk', 'arrive', 'car', 'charge', 'eat'];
       try {
         const raw = await coupleLLM(
-          `${llmSystem(p, me, cur2)}${city ? `\n${city}` : ''}`,
-          `现在是今天 ${nowHM}（真实时间）。请生成你们两个人今天从早上到现在的真实动态（像情侣定位软件的动态流），全部只能是「已经发生」的事：\n1）"ta"：${ta}今天的行程——去了哪里、什么位置、什么店铺，贴合你的人设、职业和你们的记忆（可以有一条和${me}有关的小心思）；icon 从 [${ICONS.join('/')}] 里选；\n2）"me"：${me}的手机动态——到了哪里/离开了哪里/上车下车/手机充电这类真实动态，text 一句完整的话（12字内，用「我…」开头，可以带上地点名「${myCity ?? ''}」）；icon 从 [walk/arrive/car/charge] 里选；\n3）每条时间必须早于等于 ${nowHM}，绝不能出现未来的时间；条数按已过去的时间自然决定：中午前各 1 条左右，下午各 2 条左右，晚上各 3 条左右；\n输出 JSON：{"ta":[{"t":"09:30","icon":"eat","place":"地点/店铺名（≤14字）","note":"一句话（≤16字）"}],"me":[{"t":"10:12","icon":"walk","text":"我离开了XX"}]}。只输出 JSON。`,
+          `${llmSystem(p, me, cur2)}${city ? `\n${city}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
+          `现在是今天 ${nowHM}（真实时间）。请生成你们两个人今天从早上到现在的真实动态（像情侣定位软件的动态流），全部只能是「已经发生」的事：\n1）"ta"：${ta}今天的行程——去了哪里、什么位置、什么店铺，贴合你的人设、职业和你们的记忆（可以有一条和${me}有关的小心思，也可以呼应你们最近聊过的事或约定）；icon 从 [${ICONS.join('/')}] 里选；\n2）"me"：${me}的手机动态——到了哪里/离开了哪里/上车下车/手机充电这类真实动态，text 一句完整的话（12字内，用「我…」开头，可以带上地点名「${myCity ?? ''}」）；icon 从 [walk/arrive/car/charge] 里选；\n3）每条时间必须早于等于 ${nowHM}，绝不能出现未来的时间；条数按已过去的时间自然决定：中午前各 1 条左右，下午各 2 条左右，晚上各 3 条左右；\n输出 JSON：{"ta":[{"t":"09:30","icon":"eat","place":"地点/店铺名（≤14字）","note":"一句话（≤16字）"}],"me":[{"t":"10:12","icon":"walk","text":"我离开了XX"}]}。只输出 JSON。`,
         );
         const j = extractJson<{ ta?: { t: string; icon?: string; place: string; note?: string }[]; me?: { t: string; icon?: string; text?: string }[] }>(raw);
         if (j && (Array.isArray(j.ta) || Array.isArray(j.me))) {
@@ -1420,6 +1422,10 @@ function pickThreadForAiComment(snap: CoupleSnap): { key: string; scene: string 
   // ③ 情侣印象留言区（TA 最近没说过话时偶尔冒泡）
   if (!comments.some((c) => c.key === 'impress' && c.from === 'ta' && Date.now() - c.at < 3 * 86400000)) {
     return { key: 'impress', scene: '情侣印象留言区' };
+  }
+  // ④ 位置与轨迹聊天区（第十八轮：TA 也会主动来聊两句今天的行程/见面计划）
+  if (!comments.some((c) => c.key === 'trail' && c.from === 'ta' && Date.now() - c.at < 2 * 86400000)) {
+    return { key: 'trail', scene: '位置与轨迹的聊天区' };
   }
   return null;
 }
