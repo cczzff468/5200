@@ -86,6 +86,7 @@ import {
   sendMyInvite,
   aiInvitesMe,
   acceptIncomingInvite,
+  COUPLE_CARD_EVENT,
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
@@ -214,7 +215,7 @@ interface CoupleState {
   statusExam: { my: Record<string, number>; ta: Record<string, number>; at: number | null; rep?: { me: StatusResult; ta: StatusResult; overall: string } | null } | null; // 恋爱状态测评：双方答题记录 + 生成过的报告（我和 AI 同步答）
   examPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[]; best?: number }[]; source: 'me' | 'ta'; at: number } | null; // 恋爱水平考试：当前激活的试卷（可反复作答；source='ta'=TA 出卷喊我答）
   examTaPaper: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[] }[]; at: number; answered?: boolean } | null; // 恋爱水平考试：TA 出卷喊我答的卷子（点聊天卡片直达答题）
-  examTaSheet: { title: string; picks: Record<string, number>; score: number; comment: string; at: number; myScore?: number | null; myComment?: string } | null; // 恋爱水平考试：TA 的答卷（TA 答了我出的卷，自评分 + 想说的话；myScore/myComment=我给 TA 的批改与批语，第十六轮）
+  examTaSheet: { title: string; picks: Record<string, number>; score?: number; comment?: string; at: number; myScore?: number | null; myComment?: string; taReply?: string } | null; // 恋爱水平考试：TA 的答卷（第十七轮：TA 只作答交卷不自评——打分批语由我来给；myScore/myComment=我给 TA 的批改与批语，taReply=TA 在我批语下的留言）
   examResult: { title: string; score: number; comment: string; answers: Record<string, number>; byTa: boolean; at: number } | null; // 恋爱水平考试：我最近一次被改卷的成绩（分数下面是 TA 想说的话）
 }
 
@@ -5830,12 +5831,33 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
 
   /** 聊天里的协议卡片点击进来（第十五轮加固）：TA 分享的 → 优先用 aiPact，没有就直接拿卡片正文填草稿，永远直达签署界面；
    *  第十六轮：TA 分享前已先签名（aiPact.signTa / 卡片 taSigned）→ 签署界面直接带着 TA 的签名等我签；
-   *  我分享的 pending → 草稿填回签署界面；已签/已拒 → 回看协议书 */
+   *  第十七轮·动态状态：卡片已是「已签署」（卡片标记 or 恋人空间存档里有同题已签协议）→ 点卡片直达已签署页面，不再进签署界面 */
   useEffect(() => {
     const p = consumePendingPactOpen();
     if (!p) return;
     // 记下卡片定位（第十六轮：我签完后把聊天里的协议卡片回写成「已签署」）
     pactCardRef.current = p.msgId && p.channel && p.contactId ? { msgId: p.msgId, channel: p.channel, contactId: p.contactId } : null;
+    const pacts = state.pacts ?? [];
+    const byId = p.pactId && p.pactId !== 'ai' ? pacts.find((x) => x.id === p.pactId) : undefined;
+    // ① 我分享的协议卡片（有记录 id）→ 直接看这份协议的当前状态（待签回签署界面 / 已签或已拒看协议书）
+    if (byId) {
+      if (byId.status === 'pending' && !byId.signTa) {
+        patch({ pactTitle: byId.title, pactPreamble: byId.preamble, pactClauses: [...byId.clauses], pactSignMe: byId.signMe, pactMeAt: byId.meAt, pactSignTa: null, pactTaAt: null, pactAt: null });
+        setSignFrom('home');
+        setView('sign');
+      } else {
+        setViewPact(byId);
+        setView('view');
+      }
+      return;
+    }
+    // ② 已签署的协议卡片（气泡自愈标记 signed）→ 打开已签署页面（回看页，带红章）
+    const signedRec = p.title ? pacts.find((x) => x.status === 'signed' && x.title === p.title) : undefined;
+    if (p.signed && signedRec) {
+      setViewPact(signedRec);
+      setView('view');
+      return;
+    }
     if (p.from === 'ta') {
       const ap = state.aiPact;
       const hasCard = !!p.title && (p.clauses?.length ?? 0) > 0;
@@ -5857,21 +5879,6 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
         });
         setSignFrom('edit');
         setView('sign');
-      } else {
-        setView('home');
-      }
-    } else if (p.pactId) {
-      const rec = (state.pacts ?? []).find((x) => x.id === p.pactId);
-      if (rec) {
-        if (rec.status === 'pending' && !rec.signTa) {
-          // 我分享出去待 TA 签的协议：把草稿填回签署界面（可再次发送/查看）
-          patch({ pactTitle: rec.title, pactPreamble: rec.preamble, pactClauses: [...rec.clauses], pactSignMe: rec.signMe, pactMeAt: rec.meAt, pactSignTa: null, pactTaAt: null, pactAt: null });
-          setSignFrom('home');
-          setView('sign');
-        } else {
-          setViewPact(rec);
-          setView('view');
-        }
       } else {
         setView('home');
       }
@@ -6004,6 +6011,20 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
     patch({ pactSignMe: state.meName || '我', pactMeAt: Date.now(), ...(taAlready ? { pactAt: Date.now() } : {}) });
     if (!taAlready) {
       showToast('签名成功 ♡ 现在点「他的签名」发给他签');
+      // 写进 AI 记忆（TA 知道我已经签了名，等他签）
+      const meta0 = readInviteMeta();
+      if (meta0.partnerContactId) {
+        const cid0 = meta0.partnerContactId;
+        const ch0: CoupleChannel = meta0.partnerApp ?? 'wx';
+        void (async () => {
+          try {
+            const { coupleRemember } = await import('@/lib/ios/couple-ai');
+            coupleRemember(cid0, ch0, `${state.meName || '我'}在恋爱协议《${state.pactTitle || '恋爱协议书'}》上签好了名，等${state.taName || 'TA'}签`);
+          } catch {
+            /* 静默 */
+          }
+        })();
+      }
       return;
     }
     // 双方签完 → 永久存档到「签署的恋爱协议」第一页
@@ -6021,14 +6042,27 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
       status: 'signed',
     };
     patchFn((prev) => ({ pacts: [rec, ...(prev.pacts ?? [])], aiPact: null }));
-    // 聊天里的协议卡片回写「已签署」（TA 分享的 pending 卡）
+    // 聊天里的协议卡片回写「已签署」（带存档 id；msgId 命中不到时按「TA 发的同题卡」兜底，保证卡片一定变「已签署」）
     const meta = readInviteMeta();
     const card = pactCardRef.current;
-    if (card?.channel && card.contactId) {
-      patchPactCardsWhere(card.channel, card.contactId, (d) => (card.msgId ? d.msgId === card.msgId : false) || (d.from === 'ta' && d.status === 'pending' && d.title === title), { status: 'signed' });
-    } else if (meta.partnerContactId) {
-      patchPactCardsWhere(meta.partnerApp ?? 'wx', meta.partnerContactId, (d) => d.from === 'ta' && d.status === 'pending' && d.title === title, { status: 'signed' });
-    }
+    const patchCards = (ch: CoupleChannel, cid: string) => {
+      const hit = patchPactCardsWhere(
+        ch,
+        cid,
+        (d) => (card?.msgId ? d.msgId === card.msgId : false) || (d.from === 'ta' && d.status !== 'declined' && d.title === title),
+        { status: 'signed', pactId: rec.id },
+      );
+      if (hit === 0) {
+        // 一张都没命中也广播一次：聊天页重载消息后，卡片气泡会按恋人空间存档自愈显示「已签署」
+        try {
+          window.dispatchEvent(new CustomEvent(COUPLE_CARD_EVENT, { detail: { cid, app: ch } }));
+        } catch {
+          /* 忽略 */
+        }
+      }
+    };
+    if (card?.channel && card.contactId) patchCards(card.channel, card.contactId);
+    else if (meta.partnerContactId) patchCards(meta.partnerApp ?? 'wx', meta.partnerContactId);
     // 写进 AI 记忆（TA 知道协议正式生效了）
     if (meta.partnerContactId) {
       const cid = meta.partnerContactId;
@@ -6085,10 +6119,13 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           pacts: (prev.pacts ?? []).map((x) => (x.id === recId ? { ...x, signTa: state.taName || 'TA', taAt: Date.now(), at: Date.now(), status: 'signed' as const } : x)),
         }));
         pendingRecIdRef.current = null;
-        // 聊天卡片同步「已签署」（第十六轮）
+        // 聊天卡片同步「已签署」（第十六轮按 msgId；第十七轮加同题卡兜底 + 回写存档 id）
         void cardMsgIdP?.then((id) => {
-          if (id && cid) patchPactCardsWhere(ch, cid, (d) => d.msgId === id, { status: 'signed' });
+          if (id && cid) patchPactCardsWhere(ch, cid, (d) => d.msgId === id, { status: 'signed', pactId: recId });
         });
+        if (cid) {
+          patchPactCardsWhere(ch, cid, (d) => d.from === 'me' && d.status === 'pending' && d.title === title, { status: 'signed', pactId: recId });
+        }
         showToast(`${state.taName || 'TA'} 签好了协议 ♡ 协议正式生效`);
       } else if (typeof r.changeIdx === 'number' && r.changeIdx >= 0 && r.changeIdx < cls.length && r.changeTo) {
         setTaProposal({ idx: r.changeIdx, to: r.changeTo, reason: r.reason });
@@ -6737,20 +6774,31 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const ta = state.taName || 'TA';
   const PER_PAGE = 5;
 
-  /** 聊天里的考试卡片点击进来（第十五轮）：TA 的卷直达答题；我的卷继续作答 */
+  /** 聊天里的考试卡片点击进来（第十五轮；第十七轮·动态状态）：
+   *  TA 出的卷我已答完 → 直达成绩页；我喊 TA 答的卷 TA 已交卷 → 直达 TA 的答卷页；否则进答题页 */
   useEffect(() => {
     const p = consumePendingExamOpen();
     if (!p) return;
-    if (p.from === 'ta' && state.examTaPaper && !state.examTaPaper.answered) {
-      setWorkTa(true);
-      setAnswers({});
-      setPage(0);
-      setView('answer');
-    } else if (p.from === 'me' && state.examPaper) {
-      setWorkTa(false);
-      setAnswers({});
-      setPage(0);
-      setView('answer');
+    if (p.from === 'ta') {
+      if (state.examTaPaper?.answered && state.examResult && (!p.title || state.examTaPaper.title === p.title)) {
+        setWorkTa(true);
+        setView('result');
+      } else if (state.examTaPaper && !state.examTaPaper.answered) {
+        setWorkTa(true);
+        setAnswers({});
+        setPage(0);
+        setView('answer');
+      }
+    } else if (p.from === 'me') {
+      if (state.examTaSheet && (!p.title || state.examTaSheet.title === p.title)) {
+        setWorkTa(false);
+        setView('tasheet');
+      } else if (state.examPaper) {
+        setWorkTa(false);
+        setAnswers({});
+        setPage(0);
+        setView('answer');
+      }
     }
   }, []);
 
@@ -6796,7 +6844,19 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
       examResult: { title: src.title, score, comment, answers: { ...answers } as Record<string, number>, byTa: workTa, at: Date.now() },
       examBest: best,
     });
-    if (workTa) patchFn((prev) => ({ examTaPaper: prev.examTaPaper ? { ...prev.examTaPaper, answered: true } : null }));
+    if (workTa) {
+      patchFn((prev) => ({ examTaPaper: prev.examTaPaper ? { ...prev.examTaPaper, answered: true } : null }));
+      // 第十七轮：聊天里「TA 出卷喊我答」的卡片回写「已答完」，点卡片直达成绩页
+      try {
+        const meta = readInviteMeta();
+        if (meta.partnerContactId) {
+          const { patchExamCardsWhere } = await import('@/lib/ios/couple-exam-share');
+          patchExamCardsWhere(meta.partnerApp ?? 'wx', meta.partnerContactId, (d) => d.from === 'ta' && d.status !== 'done' && d.title === src.title, { status: 'done' });
+        }
+      } catch {
+        /* 静默 */
+      }
+    }
     setGrading(false);
     setPage(0);
     setView('result');
@@ -6860,8 +6920,8 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
 
   const gradeLabel = (s: number) => (s >= 90 ? '满分恋人' : s >= 75 ? '优秀恋人' : s >= 60 ? '合格恋人' : '需要补课的恋人');
 
-  /** 我给 TA 的答卷批改：打分 + 批语，提交后写进恋人记忆（TA 就知道了） */
-  const submitTaGrade = () => {
+  /** 我给 TA 的答卷批改：打分 + 批语，提交后写进恋人记忆（TA 就知道了）；TA 之后会在批语下留言 */
+  const submitTaGrade = async () => {
     const s = state.examTaSheet;
     if (!s || taGrading || s.myScore != null) return;
     const c = taGradeText.trim();
@@ -6883,6 +6943,13 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
           /* 静默 */
         }
       });
+      // 第十七轮：TA 看完我的批改后，在「我的批改」下面留言感想（人设 + 记忆 + 最近聊天）
+      try {
+        const { scheduleTaReact } = await import('@/lib/ios/couple-exam-share');
+        scheduleTaReact({ channel: ch, contactId: cid, title: s.title, score: taGradeScore, comment: c });
+      } catch {
+        /* 静默 */
+      }
     }
     setTaGrading(false);
     showToast('批改完成，TA 已经知道你的批语啦 ♡');
@@ -6961,21 +7028,30 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
     );
   }
 
-  // ---------- TA 的答卷视图（TA 答我出的卷：他的选择 + 自评分 + 想说的话） ----------
+  // ---------- TA 的答卷视图（TA 答我出的卷：他的选择 + 我的批改；第十七轮 TA 不再自评——打分批语都由我来给） ----------
   if (view === 'tasheet' && state.examTaSheet) {
     const s = state.examTaSheet;
     return (
       <SubShell title={`${ta} 的答卷`} onBack={() => setView('bank')}>
         <div className="mt-3 rounded-2xl bg-white p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]" data-testid="exam-ta-sheet">
           <div className="text-[13px] font-medium text-[#9a9aa2]">《{s.title}》</div>
-          <div className="mt-2 flex items-end justify-center gap-1.5">
-            <span className="text-[46px] font-extrabold leading-none text-[#576b95]">{s.score}</span>
-            <span className="pb-1.5 text-[15px] text-[#9a9aa2]">分（自评）</span>
-          </div>
-          <div className="mt-3 rounded-xl bg-[#f5f7fc] px-4 py-3 text-left">
-            <div className="text-[12px] font-bold text-[#576b95]">{ta} 想说的话</div>
-            <div className="mt-1 text-[13.5px] leading-relaxed text-[#4a4a52]">{s.comment}</div>
-          </div>
+          {typeof s.score === 'number' ? (
+            <>
+              <div className="mt-2 flex items-end justify-center gap-1.5">
+                <span className="text-[46px] font-extrabold leading-none text-[#576b95]">{s.score}</span>
+                <span className="pb-1.5 text-[15px] text-[#9a9aa2]">分（自评）</span>
+              </div>
+              <div className="mt-3 rounded-xl bg-[#f5f7fc] px-4 py-3 text-left">
+                <div className="text-[12px] font-bold text-[#576b95]">{ta} 想说的话</div>
+                <div className="mt-1 text-[13.5px] leading-relaxed text-[#4a4a52]">{s.comment}</div>
+              </div>
+            </>
+          ) : (
+            <div className="mt-3 rounded-xl bg-[#f5f7fc] px-4 py-3.5 text-left" data-testid="exam-ta-waiting">
+              <div className="text-[12px] font-bold text-[#576b95]">{ta} 已交卷</div>
+              <div className="mt-1 text-[13px] leading-relaxed text-[#4a4a52]">他答完交卷啦，等你打分写批语——你批的每一分、写的每一句他都能看到</div>
+            </div>
+          )}
         </div>
 
         {/* 我的批改（第十六轮：TA 答完卷由我批分写批语，提交后 TA 就知道了） */}
@@ -7046,6 +7122,26 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             </div>
             <div className="mt-2.5 rounded-xl bg-[#fff5f7] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-[#4a4a52]">{s.myComment}</div>
             <div className="mt-2 text-center text-[11px] text-[#c9c9cf]">{ta} 已经知道你的批语啦</div>
+          </div>
+        )}
+        {/* TA 在我的批改下面留言（第十七轮：看完分数和批语后的感想，人设 + 记忆生成） */}
+        {s.myScore != null && (
+          <div className="mt-2.5 rounded-2xl bg-white px-4 py-3.5 shadow-[0_6px_20px_rgba(0,0,0,0.06)]" data-testid="exam-ta-reply">
+            <div className="text-[12px] font-bold text-[#576b95]">{ta} 的留言</div>
+            {s.taReply ? (
+              <div className="mt-2 flex items-start gap-2">
+                {state.taAvatar ? (
+                  <img src={state.taAvatar} alt={ta} className="h-8 w-8 shrink-0 rounded-full object-cover" draggable={false} />
+                ) : (
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#576b95]/15 text-[11px] font-bold text-[#576b95]">{ta.slice(0, 1)}</span>
+                )}
+                <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-[#f5f7fc] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-[#4a4a52]">{s.taReply}</div>
+              </div>
+            ) : (
+              <div className="mt-2 flex items-center gap-1.5 text-[12px] text-[#9a9aa2]">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> 正在写下想说的话…
+              </div>
+            )}
           </div>
         )}
         <div className="mt-4 space-y-2.5">
@@ -7299,7 +7395,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               {ta} 的答卷 <span className="text-[#576b95]">《{state.examTaSheet.title}》</span>
             </span>
             <span className="block text-[11.5px] text-[#9a9aa2]">
-              自评 {state.examTaSheet.score} 分
+              {state.examTaSheet.score != null ? `自评 ${state.examTaSheet.score} 分` : '已交卷'}
               {state.examTaSheet.myScore != null ? ` · 我批了 ${state.examTaSheet.myScore} 分` : ' · 等我批改'} · 点此看 TA 答了什么
             </span>
           </span>
@@ -8101,8 +8197,8 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
       const taPicks = Object.entries(state.replyTa?.picks ?? {}).sort(([a], [b]) => Number(a) - Number(b)).map(([k, v]) => ({ lv: Number(k), text: levels[Number(k)]?.opts[v.pick]?.t ?? '' }));
       const verdict = await aiReplyVerdict({ me: meName, ta: taName, levels, myPicks, taPicks, survival: Math.max(0, finalStats.sc) });
       patchFn({ replyVerdict: { ...verdict, at: Date.now() } });
-      // TA 的话写进留言区（reply:final，可继续回复）+ 写进 AI 记忆（AI 知道自己说了什么/我这次的成绩）
-      patchFn((prev) => ({ comments: [...(prev.comments ?? []), { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: 'reply:final', from: 'ta' as const, text: verdict.msg, at: Date.now() }] }));
+      // TA 的话写进留言区（reply:final:<本局>，可继续回复）+ 写进 AI 记忆（AI 知道自己说了什么/我这次的成绩）
+      patchFn((prev) => ({ comments: [...(prev.comments ?? []), { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: `reply:final:${String(prev.replyRun?.at ?? 'x')}`, from: 'ta' as const, text: verdict.msg, at: Date.now() }] }));
       rememberStatusExam(`回复挑战结束：AI 判定${verdict.win ? '成功（通关）' : '失败'}。总评：${verdict.comment} ${taName}在结算页对${meName}说：「${verdict.msg}」`);
       finish(verdict.win ? 'clear' : 'dead', verdict.win ? levels.length : myPicks.length);
     } catch {
@@ -8152,6 +8248,8 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
   const taPick = state.replyTa?.picks?.[String(lv)] ?? null;
   const taName = state.taName || 'TA';
   const meName = state.meName || '我';
+  // 第十七轮：留言线程按局隔离（每局的题目都不一样，同序号关卡不再是同一个讨论区）
+  const runKey = String(state.replyRun?.at ?? 'x');
 
   /** 深色顶栏（SubShell 是浅色底，这里自绘以贴合黑金参考图） */
   const darkHeader = (onBack: () => void) => (
@@ -8355,10 +8453,10 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
             </div>
           )}
 
-          {/* 看法下面的讨论区：可以反驳 TA（TA 会回，全进记忆） */}
+          {/* 看法下面的讨论区：可以反驳 TA（TA 会回，全进记忆）；每题独立，且只属于本局 */}
           {taPick && (
             <div className="mt-3 px-4">
-              <CommentThread state={state} patch={patchFn} threadKey={`reply:${lv}`} hint="不服？在下面反驳 TA" testId={`reply-discuss-${lv}`} dark />
+              <CommentThread state={state} patch={patchFn} threadKey={`reply:${runKey}:${lv}`} hint="不服？在下面反驳 TA" testId={`reply-discuss-${lv}`} dark />
             </div>
           )}
 
@@ -8400,7 +8498,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
                 )}
                 <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-white/[0.07] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-white/85" data-testid="reply-final-msg">{state.replyVerdict.msg}</div>
               </div>
-              <CommentThread state={state} patch={patchFn} threadKey="reply:final" hint={`听完 ${taName} 的话，想回一句吗`} testId="reply-final-thread" dark />
+              <CommentThread state={state} patch={patchFn} threadKey={`reply:final:${String(state.replyRun?.at ?? 'x')}`} hint={`听完 ${taName} 的话，想回一句吗`} testId="reply-final-thread" dark />
             </div>
           )}
           <div className="mt-6 flex gap-2.5">
@@ -8449,7 +8547,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
                 )}
                 <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-white/[0.07] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-white/85" data-testid="reply-final-msg">{state.replyVerdict.msg}</div>
               </div>
-              <CommentThread state={state} patch={patchFn} threadKey="reply:final" hint={`听完 ${taName} 的话，想回一句吗`} testId="reply-final-thread" dark />
+              <CommentThread state={state} patch={patchFn} threadKey={`reply:final:${String(state.replyRun?.at ?? 'x')}`} hint={`听完 ${taName} 的话，想回一句吗`} testId="reply-final-thread" dark />
             </div>
           )}
           <div className="mt-6 flex gap-2.5">

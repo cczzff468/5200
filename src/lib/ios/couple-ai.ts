@@ -90,7 +90,7 @@ interface CoupleSnap {
   /** 恋爱水平考试（第十五轮）：TA 知道卷子、成绩和彼此的作答 */
   examPaper?: { title: string; questions: { q: string; opts: string[] }[]; source?: string } | null;
   examTaPaper?: { title: string; questions: { q: string; opts: string[] }[]; at: number; answered?: boolean } | null;
-  examTaSheet?: { title: string; picks: Record<string, number>; score: number; comment: string; at: number; myScore?: number | null; myComment?: string } | null;
+  examTaSheet?: { title: string; picks: Record<string, number>; score?: number; comment?: string; at: number; myScore?: number | null; myComment?: string; taReply?: string } | null;
   examResult?: { title: string; score: number; comment: string; byTa: boolean; at: number } | null;
 }
 
@@ -104,7 +104,12 @@ function sceneOfKey(key: string, snap: CoupleSnap | null): string {
   if (key.startsWith('mood:')) return '心情日记留言区';
   if (key.startsWith('quiz:')) return '甜蜜小问答的讨论区';
   if (key === 'impress') return '情侣印象留言区';
-  if (key.startsWith('reply:')) return `回复挑战第${Number(key.split(':')[1] ?? 0) + 1}关讨论区`;
+  if (key.startsWith('reply:')) {
+    const seg = key.split(':');
+    if (seg[1] === 'final') return '回复挑战结算留言区';
+    const lv = Number(seg[seg.length - 1] ?? 0);
+    return `回复挑战第${Number.isFinite(lv) && lv > 0 ? lv + 1 : 1}关讨论区`;
+  }
   return '恋人空间留言区';
 }
 
@@ -163,13 +168,13 @@ function stripEmoji(s: string): string {
     .trim();
 }
 
-/** 性别纪律行（用户是女生 → AI 称呼/标签/夸奖全部符合女生身份，绝不出现「男友」类词；同时明确 TA 自己的性别角色） */
+/** 性别纪律行（用户是女生 → 给她的称呼/标签/夸奖全部符合女生身份，绝不出现「男友」类词；同时明确 TA 自己的性别角色，绝不能自称女友） */
 function genderLine(snap: CoupleSnap, me: string): string {
   const g = (snap.gender ?? '').trim();
   if (g === '女')
-    return `重要：「${me}」是女生，你是男生——你是她的男朋友。你所有的称呼、比喻、标签、夸奖都必须符合女生身份（例如「女友力max」而不是「男友力max」），绝不能用「男友/男朋友/哥们/小伙子」这类词形容${me}，也不要把${me}当成男生来调侃；提到「男朋友」时永远指你自己，提到${me}时她是「女朋友」。`;
+    return `重要：「${me}」是女生，你是男生——你是她的男朋友。你自己永远是男生：绝不能自称「女友/女朋友」，也不能把任何形容女生的词用在自己身上，更不能说「我可是需要被疼爱的女友」这类话（被疼爱的女友是${me}，不是你）。你给${me}的所有称呼、比喻、标签、夸奖都必须符合「她」的女生身份（例如夸她「女友力max」，绝不能用「男友力max」这类形容男生的词），绝不能用「男友/男朋友/哥们/小伙子」这类词形容${me}，也不要把${me}当成男生来调侃；提到「男朋友」时永远指你自己，提到${me}时她是「女朋友」。`;
   if (g === '男')
-    return `重要：「${me}」是男生，你是女生——你是他的女朋友。你所有的称呼、比喻、标签、夸奖都必须符合男生身份；提到「女朋友」时永远指你自己，提到${me}时他是「男朋友」。`;
+    return `重要：「${me}」是男生，你是女生——你是他的女朋友。你自己永远是女生：绝不能自称「男友/男朋友」。你给${me}的所有称呼、比喻、标签、夸奖都必须符合「他」的男生身份；提到「女朋友」时永远指你自己，提到${me}时他是「男朋友」。`;
   return '';
 }
 
@@ -341,7 +346,7 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
   const ets = snap.examTaSheet;
   if (ets) {
     lines.push(
-      `- ${ta}答了${me}出的卷子《${cut(ets.title, 16)}》，自评 ${ets.score} 分，交卷时说「${cut(ets.comment, 30)}」。这是${ta}自己的作答，${ta}当然记得。${
+      `- ${ta}答了${me}出的卷子《${cut(ets.title, 16)}》并交了卷。这是${ta}自己的作答，${ta}当然记得。${
         typeof ets.myScore === 'number' ? `${me}给${ta}的答卷批了 ${ets.myScore} 分，批语：「${cut(ets.myComment ?? '', 36)}」（${ta}知道${me}是怎么批的）。` : `${me}还没批这张卷，${ta}可以提一句让${me}快点批。`
       }`,
     );
@@ -399,8 +404,11 @@ function threadContext(key: string, snap: CoupleSnap, me: string, ta: string): s
     return `这里是情侣印象的留言区（${me}贴给${ta}的标签：${mine || '无'}；贴在${me}身上的标签：${onMe || '无'}），你们在聊对这些印象标签的看法。`;
   }
   if (key.startsWith('reply:')) {
-    const lv = Number(key.split(':')[1] ?? 0) + 1;
-    return `这是回复挑战双人闯关第 ${lv} 关的讨论区，${me}可以对${ta}刚刚的选择和看法发表意见、反驳、拌嘴。`;
+    const seg = key.split(':');
+    if (seg[1] === 'final')
+      return `这是回复挑战结束后的留言区，${me}可以对${ta}的判定和想说的话发表意见、撒娇、拌嘴。`;
+    const lv = Number(seg[seg.length - 1] ?? 0);
+    return `这是回复挑战双人闯关第 ${Number.isFinite(lv) && lv > 0 ? lv + 1 : 1} 关的讨论区（key 里的时间戳是本次挑战局次，留言只属于这一局这一关），${me}可以对${ta}刚刚的选择和看法发表意见、反驳、拌嘴。`;
   }
   return '留言写在恋人空间里。';
 }
@@ -1226,7 +1234,25 @@ async function aiTickPact(snap: CoupleSnap, me: string, ta: string, p: TaPersona
   if (snap.pactAt != null && Date.now() - (snap.pactAt ?? 0) < 7 * 86400000) return; // 刚生效过一份，冷却
   let picked: { title: string; clauses: string[] } | null = null;
   try {
-    const raw = await coupleLLM(llmSystem(p, me, snap), `请以「${ta}」的口吻拟一份恋爱协议（3~5条条款）。输出 JSON：{"title":"协议名（≤10字）","clauses":["条款1","条款2"]}。条款要贴合你们的真实相处与记忆，语气认真又可爱。只输出 JSON。`);
+    // 拟协议素材：记忆碎片召回 + 最近聊天话题（条款贴着你们的真实相处，不写空泛套路）
+    let memCtx = '';
+    try {
+      const memBlock = memChatRecallBlock(currentPartnerId, currentChannel, `${ta}想拟一份恋爱协议 你们的约定和心事`, { mode: 'private' });
+      if (memBlock) memCtx += `\n【相关记忆】\n${cut(memBlock, 240)}`;
+    } catch {
+      /* 召回失败不影响 */
+    }
+    const chatCtx = recentChatBlock(currentPartnerId, currentChannel, me, ta);
+    if (chatCtx) memCtx += `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 240)}`;
+    const raw = await coupleLLM(
+      `${llmSystem(p, me, snap)}\n场景：你想拟一份恋爱协议，签好名后分享给${me}等她签。${memCtx}`,
+      `请以「${ta}」的身份拟一份恋爱协议（3~5条条款）。硬性要求：
+1）你是男生（${me}的男朋友），条款里第一人称「我」就是你本人；${me}是女生（你的女朋友）；
+2）条款要贴着你们的真实经历、共同记忆和最近聊过的事，写具体的小事（比如你们说好的某个约定、她在意的小细节、你们的小暗号），不要写「每天说我爱你」这种谁都能写的空话；
+3）既要有你对她认真的承诺，也可以有一两条你对她的小小要求（双向才有协议的感觉，比如也请她答应你一件小事）；
+4）语气认真又可爱，每条不超过 30 字，禁止 emoji。
+输出 JSON：{"title":"协议名（≤10字）","clauses":["条款1","条款2"]}。只输出 JSON。`,
+    );
     picked = extractJson<{ title: string; clauses: string[] }>(raw);
   } catch {
     /* 兜底 */
@@ -1630,8 +1656,8 @@ export async function aiReplyVerdict(input: {
 }): Promise<{ win: boolean; comment: string; msg: string }> {
   const detail = input.myPicks.map((p) => `第${p.lv + 1}关（对方说「${cut(input.levels[p.lv]?.quote ?? '', 14)}」）你选了「${cut(p.text, 20)}」`).join('；');
   const taSide = input.taPicks.length > 0 ? `你的恋人${input.ta}各关的选择：${input.taPicks.map((p) => `第${p.lv + 1}关「${cut(p.text, 18)}」`).join('；')}。` : '';
-  const sys = `你是「恋爱高危回复挑战」的裁判兼恋爱情感分析师，语气毒舌但暖心，全部中文，禁止 emoji。`;
-  const user = `${input.me}打完了整套挑战（${input.levels.length} 关），最终存活率 ${input.survival}。各关选择：${detail}。${taSide}\n请判定他这次挑战算成功还是失败（看整体回复质量：是不是多数时候先接住了对方的情绪、有没有致命发言；存活率只作参考，判定权在你）：\n输出 JSON：{"win":true或false,"comment":"总评（40~70字，点评他哪几关选得好/哪几关踩雷，毒舌但暖心）","msg":"这是${input.ta}想对${input.me}说的话（30~60字，第一人称，贴合情侣口吻，可以调侃他刚才的选择、也可以认真说句心里话）"}。只输出 JSON。`;
+  const sys = `你是「恋爱高危回复挑战」的裁判，你是${input.me}的男朋友（男生），语气毒舌但暖心，全部中文，禁止 emoji，绝不能自称「女友/女朋友」。`;
+  const user = `${input.me}打完了整套挑战（${input.levels.length} 关），最终存活率 ${input.survival}。各关选择：${detail}。${taSide}\n请判定${input.me}这次挑战算成功还是失败（看整体回复质量：是不是多数时候先接住了对方的情绪、有没有致命发言；存活率只作参考，判定权在你）：\n输出 JSON：{"win":true或false,"comment":"总评（40~70字，点评她哪几关选得好/哪几关踩雷，毒舌但暖心）","msg":"这是${input.ta}想对${input.me}说的话（30~60字，第一人称，贴合情侣口吻，可以调侃她刚才的选择、也可以认真说句心里话）"}。只输出 JSON。`;
   const fallback = (): { win: boolean; comment: string; msg: string } => ({
     win: input.survival >= 55,
     comment: input.survival >= 55 ? '整体及格：大部分时候你接住了情绪，但仍有几关暴露了「讲道理优先」的老毛病。' : '这次翻车了：好几关你都在解释自己，而对方等的是被看见。',
@@ -1655,15 +1681,49 @@ export async function aiReplyVerdict(input: {
 
 // ---------------- 恋爱水平考试（第十五轮：官方题库 + 我喊TA答题 + TA出卷喊我答 + AI 打分想说的话） ----------------
 
-/** 出一张全新的恋爱水平考试卷（LLM 失败返回 null；mode='ta'=TA 出卷考恋人 / 'import'=官方风格新模板） */
+/** 出一张全新的恋爱水平考试卷（LLM 失败返回 null；mode='ta'=TA 出卷考恋人 / 'import'=官方风格新模板）。
+ *  第十七轮：出卷注入人设 + 性别纪律（用户是女生 → 题目以她为中心，禁止「男友…你会？」类男生向题）+ 记忆召回 + 最近聊天话题。 */
 export async function genExamPaper(mode: 'ta' | 'import'): Promise<{ title: string; notes: string[]; questions: { q: string; opts: string[] }[] } | null> {
-  const sys =
-    mode === 'ta'
-      ? '你是恋爱里的一方，要给你的恋人出一张「恋爱水平考试」卷子考考TA。题目要贴合你们的关系、日常小事和你的小脾气：可以有一两道送分题、几道态度题和一两道送命题，风格俏皮但别过分刁难。全部中文，禁止 emoji。'
-      : '你是「恋人空间恋爱水平考试」的官方出题人，为情侣出一张高质量测评卷：题目围绕恋爱中的相处细节、情商与求生欲，四个选项梯度分明（1个明显最佳、2个普通、1个明显不行）。全部中文，禁止 emoji。';
-  const user = `出一张 8 题的考试卷。输出 JSON：{"title":"试卷标题（12~22字，可以起得有梗，像「2026年恋人空间普通高等男友统一测试卷」「对象求生欲突击检查卷」）","notes":["注意事项1","注意事项2","注意事项3","注意事项4"]（每条不超过30字，正经里带点恋爱的霸道条款，像「最终解释权归出卷人所有」）,"questions":[{"q":"题干（18~40字）","opts":["A选项","B选项","C选项","D选项"]}（恰好4个选项）]}${
-    mode === 'ta' ? '。考官是你（出卷人），考的是你的恋人，卷子里可以体现你平时在意的事' : ''
-  }。只输出 JSON。`;
+  let sys: string;
+  let user: string;
+  let personaPart = '';
+  let memPart = '';
+  let me = '我';
+  const target = aiTarget();
+  if (target) {
+    try {
+      const p = await taPersonaOf(target.contactId);
+      const snap = readSnap();
+      if (p && snap) {
+        currentPartnerId = target.contactId;
+        currentChannel = target.channel;
+        me = (snap.meName || '').trim() || '我';
+        personaPart = `\n${llmSystem(p, me, snap)}`;
+        try {
+          const memBlock = memChatRecallBlock(target.contactId, target.channel, `${me}的恋爱考试 出卷素材 最近你们聊过什么`, { mode: 'private' });
+          if (memBlock) memPart += `\n【相关记忆】\n${cut(memBlock, 240)}`;
+        } catch {
+          /* 召回失败不影响 */
+        }
+        const chatCtx = recentChatBlock(target.contactId, target.channel, me, (snap.taName || '').trim() || 'TA');
+        if (chatCtx) memPart += `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 240)}`;
+      }
+    } catch {
+      /* 静默，走通用出题 */
+    }
+  }
+  if (mode === 'ta') {
+    sys = `你要给你的恋人出一张「恋爱水平考试」卷子考考她。${personaPart}`;
+    user = `出一张 8 题的考试卷，出给你的恋人${me}答。硬性要求：
+1）${me}是女生（你是她的男朋友）。所有题目必须以${me}为中心、从她的视角出发：考她的心意、她的小情绪、她希望的相处方式和浪漫、你们俩之间的事；题干和选项里的「你」都指${me}自己；
+2）绝对禁止出「男友/男朋友……你会？」这类以男友为主语、让她来应付或讨好男友的题目；也不要出打游戏、球鞋、兄弟聚会这类男生向的题；
+3）至少一半的题目要贴着你们的真实记忆或最近聊过的事（可以提到具体的小事、日期、店铺、约定），不要空泛套路；
+4）可以有一两道送分题、几道态度题、一两道送命题，风格俏皮但别过分刁难；全部中文，禁止 emoji。
+输出 JSON：{"title":"试卷标题（12~22字，可以起得有梗，像「2026年恋人空间专属女友心意测试卷」）","notes":["注意事项1","注意事项2","注意事项3","注意事项4"]（每条不超过30字，正经里带点恋爱的霸道条款，像「最终解释权归出卷人所有」）,"questions":[{"q":"题干（18~40字）","opts":["A选项","B选项","C选项","D选项"]}（恰好4个选项）]}。只输出 JSON。${memPart}`;
+  } else {
+    sys = `你是「恋人空间恋爱水平考试」的官方出题人，为情侣出一张高质量测评卷：题目围绕恋爱中的相处细节、情商与仪式感，四个选项梯度分明（1个明显最佳、2个普通、1个明显不行）。全部中文，禁止 emoji。${personaPart}`;
+    user = `出一张 8 题的考试卷。输出 JSON：{"title":"试卷标题（12~22字，可以起得有梗，像「对象求生欲突击检查卷」）","notes":["注意事项1","注意事项2","注意事项3","注意事项4"]（每条不超过30字，正经里带点恋爱的霸道条款，像「最终解释权归出卷人所有」）,"questions":[{"q":"题干（18~40字）","opts":["A选项","B选项","C选项","D选项"]}（恰好4个选项）]}。只输出 JSON。`;
+  }
   try {
     const raw = await llmUserFirst(sys, user, 0.9);
     const j = extractJson<{ title?: string; notes?: string[]; questions?: { q?: string; opts?: string[] }[] }>(raw);
@@ -1681,11 +1741,11 @@ export async function genExamPaper(mode: 'ta' | 'import'): Promise<{ title: stri
   }
 }
 
-/** TA 认真答我出的卷（一次答完 + 自评分 + 交卷时想说的话）；失败返回 null */
+/** TA 认真答我出的卷（第十七轮：只作答，不给自己打分也不写评语——打分和批语由${me}来给）；失败返回 null */
 export async function aiExamSheet(
   title: string,
   questions: { q: string; opts: string[] }[],
-): Promise<{ picks: Record<string, number>; score: number; comment: string } | null> {
+): Promise<{ picks: Record<string, number> } | null> {
   const target = aiTarget();
   if (!target || questions.length === 0) return null;
   try {
@@ -1698,21 +1758,17 @@ export async function aiExamSheet(
     const ta = (snap.taName || '').trim() || 'TA';
     const paper = questions.map((q, i) => `${i + 1}. ${cut(q.q, 50)}\n${q.opts.map((o, oi) => `${'ABCD'[oi] ?? oi + 1}. ${cut(o, 26)}`).join('\n')}`).join('\n');
     const raw = await coupleLLM(
-      `${llmSystem(p, me, snap)}\n场景：${me}给你出了一张恋爱水平考试卷《${cut(title, 20)}》，你要认真作答并给自己估分。`,
-      `试卷题目（每题从选项里选一个）：\n${paper}\n\n请以「${ta}」的身份答题：答案要符合你的人设、你们的关系和你的小聪明，可以调皮、可以撒糖，但不能乱选。\n输出 JSON：{"picks":[每题选择的序号（从0开始）数组，长度=${questions.length}],"score":你自评能得多少分（0-100整数）,"comment":"交卷时想对${me}说的话（30~60字，第一人称，贴合情侣口吻，禁止 emoji）"}。只输出 JSON。`,
+      `${llmSystem(p, me, snap)}\n场景：${me}给你出了一张恋爱水平考试卷《${cut(title, 20)}》，你认真作答后交卷。注意：你不给自己打分、也不写答后感——打分和批语是${me}的事，她批完你才能看到结果。`,
+      `试卷题目（每题从选项里选一个）：\n${paper}\n\n请以「${ta}」的身份答题：答案要符合你的人设、你们的关系和你的小聪明，可以调皮、可以撒糖，但不能乱选。\n输出 JSON：{"picks":[每题选择的序号（从0开始）数组，长度=${questions.length}]}。只输出 JSON。`,
     );
-    const j = extractJson<{ picks?: unknown; score?: number; comment?: string }>(raw);
+    const j = extractJson<{ picks?: unknown }>(raw);
     if (!j || !Array.isArray(j.picks)) return null;
     const picks: Record<string, number> = {};
     questions.forEach((q, i) => {
       const v = Number((j.picks as unknown[])[i]);
       picks[String(i)] = Number.isInteger(v) && v >= 0 && v < q.opts.length ? v : 0;
     });
-    return {
-      picks,
-      score: typeof j.score === 'number' ? Math.max(0, Math.min(100, Math.round(j.score))) : 75,
-      comment: cut(stripEmoji(String(j.comment ?? '')), 90) || '答完啦，快看看我能得多少分。',
-    };
+    return { picks };
   } catch {
     return null;
   }
@@ -1756,7 +1812,7 @@ export async function aiGradeExam(input: {
       `${llmSystem(p, me, snap)}\n场景：${
         input.byTa ? `你给${me}出的考试卷《${cut(input.title, 20)}》${me}做完交卷了，你来批卷打分` : `${me}做完了恋爱水平考试《${cut(input.title, 20)}》，你以恋人的身份来批卷`
       }。${memBlock ? `\n【相关记忆】\n${cut(memBlock, 300)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`,
-      `答题情况（每题都能看到${me}选了什么）：\n${detail}\n\n请以「${ta}」的身份批卷：结合每题答案的质量（态度、情商、有没有把你放在心上）打一个 0-100 的整数分，像真人批卷那样有区分度（别全给 100 也别往死里扣）。\n批语要像真恋人写的：贴着你的人设、你们的共享记忆（恋人空间里真实发生过的事）和最近聊过的话题来点评——可以提起一件具体的小事、一个约定或TA答得特别戳你/特别不像话的一题，别写空话套话。\n输出 JSON：{"score":分数,"comment":"分数下面你想对${me}说的话（40~70字，第一人称，点评TA答得怎么样，甜一点或小调侃都行，禁止 emoji）"}。只输出 JSON。`,
+      `答题情况（每题都能看到${me}选了什么）：\n${detail}\n\n请以「${ta}」的身份批卷（你是男生、是${me}的男朋友：批语用男朋友的口吻写给她，绝不能自称「女友/女朋友」，被疼爱的女友是${me}不是你）：结合每题答案的质量（态度、情商、有没有把你放在心上）打一个 0-100 的整数分，像真人批卷那样有区分度（别全给 100 也别往死里扣）。\n批语要像真恋人写的：贴着你的人设、你们的共享记忆（恋人空间里真实发生过的事）和最近聊过的话题来点评——可以提起一件具体的小事、一个约定或她答得特别戳你/特别不像话的一题，别写空话套话。\n输出 JSON：{"score":分数,"comment":"分数下面你想对${me}说的话（40~70字，第一人称，点评她答得怎么样，甜一点或小调侃都行，禁止 emoji）"}。只输出 JSON。`,
     );
     const j = extractJson<{ score?: number; comment?: string }>(raw);
     if (!j || typeof j.score !== 'number') return null;
@@ -1771,6 +1827,38 @@ export async function aiGradeExam(input: {
       coupleRemember(target.contactId, target.channel, `${me}做完了${input.byTa ? `${ta}出的` : ''}考试《${cut(input.title, 16)}》（${me}的作答：${brief}），${ta}批了 ${score} 分并说：「${cut(comment, 40)}」`);
     }
     return { score, comment: comment || (score >= 85 ? '答得不错，看来平时有认真把我放在心上。' : '有几题答得不太走心哦，回去重新复习一下怎么爱我。') };
+  } catch {
+    return null;
+  }
+}
+
+/** 第十七轮：我批改了 TA 的答卷（打分 + 批语）后，TA 在「我的批改」下面留言感想（人设 + 记忆 + 最近聊天）；失败返回 null */
+export async function aiExamTaReact(title: string, myScore: number, myComment: string): Promise<string | null> {
+  const target = aiTarget();
+  if (!target) return null;
+  try {
+    const p = await taPersonaOf(target.contactId);
+    const snap = readSnap();
+    if (!p || !snap) return null;
+    currentPartnerId = target.contactId;
+    currentChannel = target.channel;
+    const me = (snap.meName || '').trim() || '我';
+    const ta = (snap.taName || '').trim() || 'TA';
+    let memCtx = '';
+    try {
+      const memBlock = memChatRecallBlock(target.contactId, target.channel, `${me}批改了${ta}的考试答卷`, { mode: 'private' });
+      if (memBlock) memCtx += `\n【相关记忆】\n${cut(memBlock, 200)}`;
+    } catch {
+      /* 召回失败不影响 */
+    }
+    const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+    if (chatCtx) memCtx += `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 200)}`;
+    const raw = await coupleLLM(
+      `${llmSystem(p, me, snap)}\n场景：你答了${me}出的恋爱考试卷《${cut(title, 20)}》交了卷，${me}刚刚给你批了 ${myScore} 分，批语是「${cut(myComment, 60)}」。你在她的批改下面留一句话。${memCtx}`,
+      `请以「${ta}」的身份留言（25~55字，第一人称口语）：接住${me}给你的分数和批语——分高可以得意撒娇，分低可以不服气地讨价还价、或立正挨打保证改进，但要针对她批语里的具体内容回应；贴你的人设与你们的记忆，禁止敷衍（「好啦好啦」类不许出现），禁止 emoji。只输出留言内容。`,
+    );
+    const text = cut(stripEmoji(String(raw ?? '')), 90);
+    return text.length >= 4 ? text : null;
   } catch {
     return null;
   }

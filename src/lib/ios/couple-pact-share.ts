@@ -51,7 +51,8 @@ export interface CouplePactCardData {
 }
 
 /** 点击卡片后的待打开协议（PactPage 消费）；第十五轮起携带卡片正文——TA 分享的 pending 卡无论 aiPact 是否存在都能直达签署界面；
- *  第十六轮起携带 taSigned（TA 已先签名）与卡片消息定位（签署完成后回写卡片「已签署」） */
+ *  第十六轮起携带 taSigned（TA 已先签名）与卡片消息定位（签署完成后回写卡片「已签署」）；
+ *  第十七轮起携带 signed（卡片/恋人空间存档已是已签署 → 点卡片直达已签署页面） */
 interface PendingPactOpen {
   pactId?: string; // pacts 记录 id
   from: 'me' | 'ta'; // 卡片来源
@@ -59,6 +60,7 @@ interface PendingPactOpen {
   preamble?: string; // 卡片里的协议声明
   clauses?: string[]; // 卡片里的条款
   taSigned?: boolean; // TA 是否已先签名
+  signed?: boolean; // 第十七轮：卡片已是已签署状态（点开直达已签署页）
   msgId?: string; // 卡片消息 id
   channel?: CoupleChannel; // 卡片所在渠道
   contactId?: string; // 卡片所在会话
@@ -68,7 +70,7 @@ interface PendingPactOpen {
 let pendingPactOpen: PendingPactOpen | null = null;
 
 /** 聊天协议卡片点击 → 写待打开目标（切换 App 时带上；同 200ms 内重复点击去重） */
-export function setPendingPactOpen(p: { pactId?: string; from: 'me' | 'ta'; title?: string; preamble?: string; clauses?: string[]; taSigned?: boolean; msgId?: string; channel?: CoupleChannel; contactId?: string }): void {
+export function setPendingPactOpen(p: { pactId?: string; from: 'me' | 'ta'; title?: string; preamble?: string; clauses?: string[]; taSigned?: boolean; signed?: boolean; msgId?: string; channel?: CoupleChannel; contactId?: string }): void {
   pendingPactOpen = { ...p, at: Date.now() };
 }
 
@@ -336,7 +338,7 @@ export const COUPLE_PACT_NAV_EVENT = 'couple-pact-nav';
  * 聊天里的协议卡片被点击：记下待打开目标（含卡片正文/TA 是否已先签名/卡片消息定位）+ 切进恋人空间 + 广播导航事件。
  * （气泡组件调用；CoupleSpaceApp 收到事件后 openSub('pact')，PactPage 挂载后 consumePendingPactOpen 直达签署界面）
  */
-export function navToPact(p: { pactId?: string; from: 'me' | 'ta'; title?: string; preamble?: string; clauses?: string[]; taSigned?: boolean; msgId?: string; channel?: CoupleChannel; contactId?: string }): void {
+export function navToPact(p: { pactId?: string; from: 'me' | 'ta'; title?: string; preamble?: string; clauses?: string[]; taSigned?: boolean; signed?: boolean; msgId?: string; channel?: CoupleChannel; contactId?: string }): void {
   setPendingPactOpen(p);
   try {
     window.dispatchEvent(new CustomEvent(COUPLE_PACT_NAV_EVENT, { detail: p }));

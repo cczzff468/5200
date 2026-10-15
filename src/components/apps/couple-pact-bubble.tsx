@@ -12,6 +12,7 @@
 
 import type { CouplePactCardData } from '@/lib/ios/couple-pact-share';
 import { navToPact } from '@/lib/ios/couple-pact-share';
+import { kvGet } from '@/lib/ios/idb-kv';
 import { useUI } from '@/lib/ios/store';
 
 export interface CouplePactBubbleProps {
@@ -22,20 +23,38 @@ export interface CouplePactBubbleProps {
 }
 
 export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: CouplePactBubbleProps) {
-  const declined = data.status === 'declined';
-  const signed = data.status === 'signed';
+  // 第十七轮·动态状态（自愈）：恋人空间里已有同题的「已签署」存档 → 卡片一律按已签署显示，
+  // 修复「签完后卡片还显示去签署/点进去还是未签署」——卡片状态永远跟随恋人空间的存档真相
+  const live = (() => {
+    try {
+      const snap = kvGet<{ pacts?: { id?: string; title?: string; status?: string }[] }>('couple-space:state');
+      const pacts = Array.isArray(snap?.pacts) ? snap!.pacts! : [];
+      if (data.pactId && data.pactId !== 'ai') {
+        const byId = pacts.find((p) => p && p.id === data.pactId);
+        if (byId) return { signed: byId.status === 'signed', pactId: byId.id };
+      }
+      const byTitle = pacts.find((p) => p && p.status === 'signed' && p.title === data.title);
+      if (byTitle) return { signed: true, pactId: byTitle.id };
+    } catch {
+      /* 读不到就按卡片自身状态 */
+    }
+    return { signed: data.status === 'signed', pactId: data.pactId && data.pactId !== 'ai' ? data.pactId : undefined };
+  })();
+  const declined = data.status === 'declined' && !live.signed;
+  const signed = live.signed;
 
-  /** 点击卡片 → 进恋人空间签署协议界面（携带卡片正文/TA 是否已先签名/卡片消息定位，保证任何状态都直达对应签署/回看界面） */
+  /** 点击卡片 → 进恋人空间（携带卡片正文/TA 是否已先签名/是否已签署/卡片消息定位，任何状态都直达对应签署/回看界面） */
   const openPact = () => {
     const ui = useUI.getState();
     if (ui.locked) return;
     navToPact({
-      pactId: data.pactId,
+      pactId: live.pactId,
       from: data.from,
       title: data.title,
       preamble: data.preamble,
       clauses: data.clauses,
       taSigned: data.taSigned,
+      signed,
       msgId: data.msgId,
       channel: data.app,
       contactId: data.contactId,
@@ -44,7 +63,7 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
     else if (!ui.activeApp && ui.phase === 'closed') ui.openApp('couple');
   };
 
-  // 状态行文案（第十六轮：TA 已先签名的 pending 卡显示「已签名，等你签署」；已签署统一「已签署生效」）
+  // 状态行文案（TA 已先签名的 pending 卡显示「已签名，等你签署」；已签署统一「已签署生效」）
   let statusLine: string;
   if (data.from === 'ta') {
     statusLine = declined
@@ -64,9 +83,9 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
   return (
     <div
       data-testid={`${testidPrefix}-pact-card`}
-      className={`w-[248px] select-none overflow-hidden rounded-[10px] bg-white shadow-sm dark:bg-[#1E1E1E] ${declined ? 'opacity-75' : ''}`}
+      className={`w-[248px] select-none overflow-hidden rounded-[10px] bg-white shadow-sm dark:bg-[#1E1E1E] ${declined ? 'opacity-75' : ''} ${signed ? 'ring-1 ring-[#f2536a]/25' : ''}`}
     >
-      {/* 卡片本体：标题 + 条款摘要 + 图标（点击进签署界面） */}
+      {/* 卡片本体：标题 + 条款摘要 + 图标（点击进签署/回看界面） */}
       <button
         type="button"
         data-testid={`${testidPrefix}-pact-card-body`}
@@ -88,14 +107,21 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
             {data.clauses.length > 2 && <span className="block">…共 {data.clauses.length} 条条款</span>}
           </span>
         </span>
-        {/* 恋人空间图标（粉色双心官方原图，圆角方块） */}
-        <span aria-hidden="true" className="h-11 w-11 shrink-0 overflow-hidden rounded-[9px] shadow-[0_2px_6px_rgba(0,0,0,0.10)]">
-          <img src="/icons/couple.png" alt="恋人空间" className="h-full w-full object-cover" draggable={false} />
+        {/* 恋人空间图标（粉色双心官方原图，圆角方块）；已签署时右上角盖小红章 */}
+        <span className="relative h-11 w-11 shrink-0">
+          <span aria-hidden="true" className="block h-11 w-11 overflow-hidden rounded-[9px] shadow-[0_2px_6px_rgba(0,0,0,0.10)]">
+            <img src="/icons/couple.png" alt="恋人空间" className="h-full w-full object-cover" draggable={false} />
+          </span>
+          {signed && (
+            <span aria-hidden="true" className="absolute -right-1.5 -top-1.5 rotate-12 rounded-[4px] border border-[#e0607e] bg-white/95 px-1 py-px text-[9px] font-bold leading-tight text-[#e0607e] shadow-sm">
+              已签署
+            </span>
+          )}
         </span>
       </button>
 
-      {/* 底部：TA 的 pending 卡出「去签署」按钮；其余出状态行 */}
-      {data.from === 'ta' && data.status === 'pending' ? (
+      {/* 底部：未签署的 TA 卡出「去签署」按钮；其余出状态行（已签署动态显示「已签署生效」） */}
+      {data.from === 'ta' && data.status === 'pending' && !signed ? (
         <button
           type="button"
           data-testid={`${testidPrefix}-pact-card-sign`}
