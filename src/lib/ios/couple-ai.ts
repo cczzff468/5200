@@ -64,6 +64,8 @@ interface CoupleSnap {
   pactClauses?: string[];
   pactSignMe?: string | null;
   pactSignTa?: string | null;
+  /** 已存档的协议书（第十二轮：AI 知道全部协议及签署状态） */
+  pacts?: { id: string; title: string; preamble: string; clauses: string[]; signMe: string | null; signTa: string | null; meAt: number | null; taAt: number | null; at: number; status?: string; reason?: string }[];
   aiPact?: { title: string; preamble: string; clauses: string[]; at: number } | null;
   annivExtra?: { key: string; label: string; date: string }[];
   aiAnnivKeys?: string[];
@@ -77,12 +79,14 @@ interface CoupleSnap {
   letters?: { id: string; text: string; at: number }[];
   aiLog?: { id: string; text: string; at: number }[];
   albums?: { id: string; name: string; desc: string; photos: string[] }[];
-  /** 通用留言线程（第十轮）：相册照片/心情日记/问答/印象/回复挑战下的双向留言 */
-  comments?: { id: string; key: string; from: string; text: string; at: number }[];
+  /** 通用留言线程（第十轮）：相册照片/心情日记/问答/印象/回复挑战下的双向留言；rt=所回复的留言 id（第十二轮点击回复） */
+  comments?: { id: string; key: string; from: string; text: string; at: number; rt?: string }[];
   /** TA 今天去过的地方（人设记忆生成，灰色字展示） */
   taTrail?: { dateKey: string; items: { t: string; place: string; note: string }[]; at: number } | null;
   /** 回复挑战：TA 与我同时进行的最近一次双人闯关 */
   replyTa?: { active: boolean; picks: Record<string, { pick: number; say: string; at: number }>; mePicks: Record<string, { pick: number; text: string }>; startedAt: number; endedAt: number | null } | null;
+  /** AI 主动留言去重（每天最多一条）：最近一次主动留言的日期 key */
+  aiCommentDay?: string;
 }
 
 /** 留言线程 key → 场景名（记忆/注入/AI 上下文共用） */
@@ -245,11 +249,16 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
     );
   }
 
-  // 恋爱协议（AI 知道内容，还要能自己签字/拟协议）
+  // 恋爱协议（AI 知道内容，还要能自己签字/拟协议/被分享后自己决定签不签；第十二轮：知道全部协议及状态）
   if (snap.aiPact) {
     lines.push(`- ${ta}拟了一份恋爱协议《${cut(snap.aiPact.title, 16)}》等${me}签（条款：${snap.aiPact.clauses.slice(0, 3).map((c) => cut(c, 22)).join('；')}…）。`);
   }
-  if (snap.pactAt != null) {
+  for (const p of (snap.pacts ?? []).slice(0, 3)) {
+    const st = p.status ?? (p.signTa ? 'signed' : 'pending');
+    const stText = st === 'signed' ? '已生效（双方签名）' : st === 'declined' ? `${ta}婉拒了（理由：${cut(p.reason ?? '', 24)}）` : '等TA签署';
+    lines.push(`- 恋爱协议《${cut(p.title, 16)}》${stText}，共 ${p.clauses.length} 条：${p.clauses.slice(0, 3).map((c) => cut(c, 22)).join('；')}。`);
+  }
+  if (snap.pacts?.length === 0 && snap.pactAt != null) {
     lines.push(`- 恋爱协议《${cut(snap.pactTitle, 16)}》已生效（双方签名，共 ${(snap.pactClauses ?? []).length} 条）：${(snap.pactClauses ?? []).slice(0, 3).map((c) => cut(c, 22)).join('；')}。`);
   }
 
@@ -325,7 +334,7 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
 
 // ---------------- 链路二点五（第十轮）：AI 双向互动行为 ----------------
 
-const TPL_REPLY = ['哼，算你会说话。', '知道就好，我才没有很想你。', '好啦好啦，听你的。', '你要是早点说这句就不一样了。', '再想想，我等你的答案。', '那你要说到做到哦。'];
+const TPL_REPLY = ['嗯…你这么说，我好像有点懂了。', '等等，那我再问你——下次什么时候一起去做？', '哈哈，你终于说到点子上了。', '好吧，这次算你有诚意。', '我记下了，你可别忘了自己说的。', '那你说，具体怎么做？我听着呢。'];
 const TPL_PHOTO = ['这张也太好看了，我存下来了。', '拍得真好，下次带我一起拍。', '看到这张照片嘴角就没下来过。', '下次站在你旁边一起入镜好不好？'];
 const TPL_TRAIL = [
   { t: '09:30', place: '楼下的拾光咖啡馆', note: '点了你上次说好喝的拿铁' },
@@ -374,6 +383,9 @@ const replyTimers = new Map<string, number>();
 /**
  * 用户在某个留言线程发消息后，调度 AI（TA）根据人设 + 共享记忆回复（多轮可往返）。
  * 同线程连发会重置计时（合并到最后一条再回）；TA 已回复过最新一条则不重复回。
+ * 第十二轮：① 注入最近微信/QQ 聊天话题（留言内容要接着你们最近聊的事说）；
+ * ② 严禁敷衍话术（「好啦好啦听你的」之类一律禁止——用户点名要求）；
+ * ③ 支持点击回复（rt）：我点着 TA 某条留言回复时，AI 知道我在回应哪一句。
  */
 export function scheduleAiReply(key: string, delayMin = 2600, delayMax = 6500): void {
   const target = aiTarget();
@@ -398,11 +410,19 @@ export function scheduleAiReply(key: string, delayMin = 2600, delayMax = 6500): 
         currentPartnerId = target.contactId;
         currentChannel = target.channel;
         const convo = list.slice(-6).map((c) => `${c.from === 'ta' ? ta : me}：${cut(c.text, 60)}`).join('\n');
+        // 点击回复上下文：我这条留言带 rt → 找到对应的 TA 留言原文
+        let quoteLine = '';
+        if (lastMine.rt) {
+          const targetMsg = list.find((c) => c.id === lastMine.rt && c.from === 'ta');
+          if (targetMsg) quoteLine = `\n（${me}这条留言是点着你说的「${cut(targetMsg.text, 40)}」在回复，你的回复要直接接住这一句。）`;
+        }
+        // 最近微信/QQ 聊天话题（留言要贴着你们最近聊的事，不悬浮）
+        const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
         let text = '';
         try {
           text = await coupleLLM(
-            `${llmSystem(p, me, snap)}\n场景：你们正在恋人空间 App 的${sceneOfKey(key, snap)}里互相留言。${threadContext(key, snap, me, ta)}`,
-            `最近的留言：\n${convo}\n\n请以「${ta}」的口吻回复${me}的最新留言：30 字内，口语、贴合人设与你们的真实记忆；如果${me}在反驳你，可以撒娇、讲道理或不服气地拌嘴，像真情侣聊天。禁止使用任何 emoji/表情符号。只输出回复内容。`,
+            `${llmSystem(p, me, snap)}\n场景：你们正在恋人空间 App 的${sceneOfKey(key, snap)}里互相留言。${threadContext(key, snap, me, ta)}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 360)}` : ''}`,
+            `最近的留言：\n${convo}\n${quoteLine}\n\n请以「${ta}」的口吻回复${me}的最新留言：30 字内，口语、贴合人设与你们的真实记忆和最近聊过的话题；\n绝对禁止敷衍应付：像「好啦好啦听你的」「随便你」「都行」「好好好」这类话一个字都不许出现；\n你的回复必须接住${me}留言里的具体内容：回应他说的那件事，给出你真实的想法/感受/追问/小要求，像真情侣拌嘴或撒娇。如果${me}在反驳你，可以不服气地讲道理，也可以撒娇软化。禁止使用任何 emoji/表情符号。只输出回复内容。`,
           );
         } catch {
           /* 兜底 */
@@ -1173,7 +1193,7 @@ const AI_PACT_TPL = [
   '谁先低头谁可爱，拥抱可以解决百分之八十的矛盾',
 ];
 
-/** AI 自己拟协议让我签（无待签草稿 + 冷却 7 天） */
+/** AI 自己拟协议让我签（无待签草稿 + 冷却 7 天）；第十二轮：拟完自动把协议卡片分享到微信/QQ 会话 */
 async function aiTickPact(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
   if (snap.aiPact) return; // 已有一份等我签
   if (snap.pactAt != null && Date.now() - (snap.pactAt ?? 0) < 7 * 86400000) return; // 刚生效过一份，冷却
@@ -1190,13 +1210,113 @@ async function aiTickPact(snap: CoupleSnap, me: string, ta: string, p: TaPersona
   const title = cut(picked.title, 14).replace(/[「」"]/g, '');
   const clauses = picked.clauses.map((c) => cut(String(c), 40).replace(/^[-•\d.、\s]+/, '')).filter(Boolean).slice(0, 5);
   if (clauses.length === 0) return;
-  writeSnap((s) => ({ ...s, aiPact: { title, clauses, at: Date.now() } }));
+  writeSnap((s) => ({ ...s, aiPact: { title, preamble: snap.pactPreamble ?? '', clauses, at: Date.now() } }));
   const pid = currentPartnerId;
   if (pid) {
-    coupleRemember(pid, currentChannel, `${ta}自己拟了一份恋爱协议《${title}》（${clauses.length} 条：${clauses.slice(0, 2).join('；')}…），发给${me}签名`);
+    coupleRemember(pid, currentChannel, `${ta}自己拟了一份恋爱协议《${title}》（${clauses.length} 条：${clauses.slice(0, 2).join('；')}…），分享给${me}签名`);
   }
   logAi(`${ta}拟了一份协议《${title}》等你签`);
-  void notifyCouple(currentChannel, pid, `我拟了一份恋爱协议《${title}》，快来恋人空间签个名嘛`);
+  // 第十二轮：AI 把协议分享给我——直接发协议卡片到微信/QQ 会话（点卡片进恋人空间签署界面）
+  try {
+    const { sendPactCard } = await import('./couple-pact-share');
+    await sendPactCard({ channel: currentChannel, contactId: pid, title, preamble: snap.pactPreamble ?? '', clauses, dir: 'ta', pactId: 'ai', status: 'pending' });
+  } catch {
+    /* 分享失败不影响协议草稿落库 */
+  }
+  void notifyCouple(currentChannel, pid, `我拟了一份恋爱协议《${title}》，发你微信了，快去看看签个名嘛`);
+}
+
+/**
+ * AI 决定签/不签一份协议（第十二轮：AI 自己决定，不无脑全签）。
+ * 按人设 + 你们的记忆评估条款：合理/甜蜜的签；过分/不平等的会提出意见婉拒。
+ */
+export async function aiDecidePact(title: string, clauses: string[]): Promise<{ agree: boolean; reason: string }> {
+  const target = aiTarget();
+  if (target) {
+    try {
+      const p = await taPersonaOf(target.contactId);
+      const snap = readSnap();
+      if (p && snap) {
+        currentPartnerId = target.contactId;
+        currentChannel = target.channel;
+        const me = (snap.meName || '').trim() || '我';
+        const ta = (snap.taName || '').trim() || 'TA';
+        const raw = await coupleLLM(
+          `${llmSystem(p, me, snap)}\n场景：${me}拟了一份恋爱协议分享给你，等你决定签不签。`,
+          `协议《${cut(title, 16)}》的条款：\n${(clauses ?? []).map((c, i) => `${i + 1}. ${cut(c, 40)}`).join('\n')}\n\n请以「${ta}」的身份认真评估：这些条款是否合理、是否双方平等、是不是你真心愿意遵守的。\n大部分合理就签；如果有明显不平等/离谱的条款，可以婉拒并说出你想改的地方（语气可爱不伤人）。\n输出 JSON：{"agree":true或false,"reason":"你的理由（≤30字，口语，像恋人间的商量）"}。只输出 JSON。`,
+        );
+        const j = extractJson<{ agree?: boolean; reason?: string }>(raw);
+        if (j && typeof j.agree === 'boolean') {
+          return { agree: j.agree, reason: cut(stripEmoji(String(j.reason ?? '')), 40) || (j.agree ? '条款我都喜欢' : '有几条我想再商量') };
+        }
+      }
+    } catch {
+      /* 本地兜底 */
+    }
+  }
+  // 本地兜底：条款少于 6 条倾向签，多于 8 条倾向再商量
+  const agree = (clauses?.length ?? 0) <= 6;
+  return { agree, reason: agree ? '条款都挺合理的' : '条款有点多，我怕自己记不住' };
+}
+
+/** AI 主动留言的候选线程（挑一个「TA 还没说过话」的最新线程） */
+function pickThreadForAiComment(snap: CoupleSnap): { key: string; scene: string } | null {
+  const comments = snap.comments ?? [];
+  const hasTa = (key: string) => comments.some((c) => c.key === key && c.from === 'ta');
+  // ① 最新相册照片线程（我传的照片，TA 还没留言的）
+  for (const album of (snap.albums ?? []).slice(0, 3)) {
+    for (let i = (album.photos?.length ?? 0) - 1; i >= 0; i--) {
+      const key = `album:${album.id}:${i}`;
+      if (!hasTa(key)) return { key, scene: `相册「${album.name}」的第 ${i + 1} 张照片` };
+    }
+  }
+  // ② 我写的最新一篇日记（TA 还没留言的）
+  const myMood = (snap.moods ?? []).find((m) => m.from !== 'ta');
+  if (myMood) {
+    const key = `mood:${myMood.id}`;
+    if (!hasTa(key)) return { key, scene: `${snap.meName || '你'}写的心情日记` };
+  }
+  // ③ 情侣印象留言区（TA 最近没说过话时偶尔冒泡）
+  if (!comments.some((c) => c.key === 'impress' && c.from === 'ta' && Date.now() - c.at < 3 * 86400000)) {
+    return { key: 'impress', scene: '情侣印象留言区' };
+  }
+  return null;
+}
+
+/**
+ * AI 主动去留言区留言（每天最多一条；挑照片/日记/印象里还没说过话的线程）。
+ * 内容 = 人设 + 共享记忆 + 最近聊天话题（跟真人一样想到了就去说两句，不是等我先发）。
+ */
+async function aiTickComment(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
+  const today = todayKey();
+  if ((snap.aiCommentDay ?? '') === today) return; // 今天已经主动留过言
+  const picked = pickThreadForAiComment(snap);
+  if (!picked) return;
+  currentPartnerId = currentPartnerId || aiTarget()?.contactId || '';
+  const pid = currentPartnerId;
+  const ch = currentChannel;
+  const chatCtx = recentChatBlock(pid, ch, me, ta);
+  let text = '';
+  try {
+    text = await coupleLLM(
+      `${llmSystem(p, me, snap)}\n场景：你自己在恋人空间 App 里逛，走到了${picked.scene}的留言区，想在下面主动给${me}留一句话。${threadContext(picked.key, snap, me, ta)}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`,
+      `请以「${ta}」的口吻主动留一条言（25 字内，口语）：像真的想到了什么就说，可以想起一件事、一个小约定、或者突然想${me}了；\n绝对禁止敷衍应付（「好啦好啦听你的」「随便」「都行」这类话不许出现），也不要空洞地夸；贴着你的人设、你们的记忆和最近聊过的话题说具体的话。禁止使用任何 emoji/表情符号。只输出留言内容。`,
+    );
+  } catch {
+    /* 兜底 */
+  }
+  text = stripEmoji(text);
+  if (!text || text.length < 4) text = TPL_PHOTO[Math.floor(Math.random() * TPL_PHOTO.length)];
+  text = cut(text, 80);
+  const c = { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: picked.key, from: 'ta', text, at: Date.now() };
+  writeSnap((s) => ({
+    ...s,
+    comments: [...((s.comments as CoupleSnap['comments']) ?? []), c],
+    aiCommentDay: today,
+  }));
+  if (pid) coupleRemember(pid, ch, `${ta}自己在${picked.scene}下面给${me}留了言：${cut(text, 40)}`);
+  logAi(`${ta}主动在${picked.scene}下留了言`);
+  void notifyCouple(ch, pid, `我在${picked.scene}下面给你留了句话，去看嘛`);
 }
 
 const AI_HUNDRED_WISH = [{ note: '一起去看一次日出', why: '想看你刚醒的样子' }, { note: '一起养一盆绿植', why: '像小树一样一起长大' }, { note: '雨天共撑一把伞散步', why: '伞下只装得下我们' }, { note: '一起做一顿晚饭', why: '想尝尝你的手艺' }];
@@ -1312,6 +1432,12 @@ export function runCoupleAiTick(channel: CoupleChannel, contactId: string): void
       if (!p || !s) return;
       await aiTickPact(s, me, ta, p);
     });
+    step(152000, async () => {
+      const p = await taPersonaOf(contactId);
+      const s = readSnap();
+      if (!p || !s) return;
+      await aiTickComment(s, me, ta, p); // AI 主动去留言区留言（每天最多一条）
+    });
   }
 }
 
@@ -1356,4 +1482,124 @@ export function rememberStatusExam(summary: string): void {
   if (!target) return;
   coupleRemember(target.contactId, target.channel, summary);
 }
+
+// ---------------- 回复挑战（第十二轮：每次动态出题 + AI 判定胜负 + 结算留言） ----------------
+
+/** 动态关卡结构（与 couple-space.tsx 的 REPLY_LEVELS 同构；d=[体面值,觉察值,安抚值,存活率] 增量） */
+export interface DynReplyLevel {
+  name: string;
+  scene: string;
+  quote: string;
+  opts: { t: string; d: [number, number, number, number]; v: string }[];
+}
+
+/** 通用 LLM 调用：① 用户配置的 API 模型（优先）② 内置模型兜底（/api/chat forceSdk） */
+async function llmUserFirst(sys: string, user: string, temperature = 0.9): Promise<string> {
+  try {
+    const { useSettings } = await import('@/lib/ios/store');
+    const c = useSettings.getState().apiConfig;
+    if (c && c.baseUrl) {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            { role: 'system', content: sys },
+            { role: 'user', content: user },
+          ],
+          config: { baseUrl: c.baseUrl, apiKey: c.apiKey, model: c.model },
+          temperature,
+        }),
+      });
+      if (res.ok) {
+        const t = (await res.text()).trim();
+        if (t) return t;
+      }
+    }
+  } catch {
+    /* 走内置兜底 */
+  }
+  return coupleLLM(sys, user);
+}
+
+/** LLM 原始出题结构（score 是 0-10 质量分，落库前换算成数值增量 d） */
+interface RawReplyLevel {
+  name?: string;
+  scene?: string;
+  quote?: string;
+  opts?: { t?: string; score?: number; v?: string }[];
+}
+
+/**
+ * 生成一套全新的回复挑战关卡（6 关，每次都不一样——用户要求）。
+ * 题材从生活里来（聊天冷场/已读不回/被晾着/送命题…），贴合「高危回复」玩法；
+ * 由用户配置的 API 模型生成，失败内置模型兜底；都失败返回 null（调用方用内置题洗牌兜底）。
+ */
+export async function genReplyLevels(): Promise<DynReplyLevel[] | null> {
+  const sys =
+    '你是「恋爱高危回复挑战」的出题人。这个挑战给恋爱中的玩家看：每关给出一个恋爱里危险的高压场景（对方说了句轻描淡写但暗藏情绪的话），玩家要从 4 个回复选项里选一个。4 个选项要覆盖不同质量：1 个明显满分（先接情绪再解决问题）、1 个及格但有瑕疵、1 个解释型/敷衍型（会扣分）、1 个危险发言（大扣分，直通败局）。\n要求：场景真实日常（微信聊天/约会/吵架后的冷战/礼物/纪念日/已读不回/婆媳/吃醋/异地…都可以）、文案锋利有梗；每关场景互不重复；全部中文；禁止 emoji。';
+  const user =
+    '请出一套 6 关的题目。输出 JSON：{"levels":[{"name":"关卡名（4~6字，有梗）","scene":"场景描述（55~85字，第二人称「你」，最后引出对方那句话）","quote":"对方说的那句话（≤14字，轻描淡写但暗藏情绪）","opts":[{"t":"回复文本（≤18字）","score":0到10整数,"v":"选后的点评（18~34字，锋利有梗，点破这句回复的问题或亮点）"}]}]}。\n四个选项按 score 拉开梯度（约 9/6/3/1 分）；score≥7 的高分项要「先接住情绪再给方案」，score≤2 的危险项要明显火上浇油。只输出 JSON。';
+  try {
+    const raw = await llmUserFirst(sys, user, 0.95);
+    const j = extractJson<{ levels?: RawReplyLevel[] }>(raw);
+    const arr = j?.levels;
+    if (!Array.isArray(arr)) return null;
+    const levels: DynReplyLevel[] = [];
+    for (const l of arr.slice(0, 6)) {
+      if (!l?.name || !l.scene || !l.quote || !Array.isArray(l.opts)) continue;
+      const opts: DynReplyLevel['opts'] = [];
+      for (const o of l.opts.slice(0, 4)) {
+        if (!o?.t) continue;
+        const s = typeof o.score === 'number' ? Math.max(0, Math.min(10, Math.round(o.score))) : 5;
+        // score(0-10) → 数值增量：体面/觉察/安抚 = score-5 附近；存活率放大 2 倍（危险发言当场重伤）
+        const d: [number, number, number, number] = [s - 5, s - 5, s - 5, (s - 5) * 2];
+        opts.push({ t: cut(String(o.t), 20), d, v: cut(String(o.v ?? ''), 40) });
+      }
+      if (opts.length === 4) levels.push({ name: cut(String(l.name), 8), scene: cut(String(l.scene), 100), quote: cut(String(l.quote), 16), opts });
+    }
+    if (levels.length >= 3) return levels;
+  } catch {
+    /* 调用方兜底 */
+  }
+  return null;
+}
+
+/**
+ * 挑战结束由 AI 判定成功/失败（用户要求：最后的结果让 AI 决定）+ 给出总评和想对我说的话。
+ * 优先用户配置的 API 模型；失败内置模型；再失败本地按平均分兜底。
+ */
+export async function aiReplyVerdict(input: {
+  me: string;
+  ta: string;
+  levels: { name: string; quote: string }[];
+  myPicks: { lv: number; text: string }[];
+  taPicks: { lv: number; text: string }[];
+  survival: number;
+}): Promise<{ win: boolean; comment: string; msg: string }> {
+  const detail = input.myPicks.map((p) => `第${p.lv + 1}关（对方说「${cut(input.levels[p.lv]?.quote ?? '', 14)}」）你选了「${cut(p.text, 20)}」`).join('；');
+  const taSide = input.taPicks.length > 0 ? `你的恋人${input.ta}各关的选择：${input.taPicks.map((p) => `第${p.lv + 1}关「${cut(p.text, 18)}」`).join('；')}。` : '';
+  const sys = `你是「恋爱高危回复挑战」的裁判兼恋爱情感分析师，语气毒舌但暖心，全部中文，禁止 emoji。`;
+  const user = `${input.me}打完了整套挑战（${input.levels.length} 关），最终存活率 ${input.survival}。各关选择：${detail}。${taSide}\n请判定他这次挑战算成功还是失败（看整体回复质量：是不是多数时候先接住了对方的情绪、有没有致命发言；存活率只作参考，判定权在你）：\n输出 JSON：{"win":true或false,"comment":"总评（40~70字，点评他哪几关选得好/哪几关踩雷，毒舌但暖心）","msg":"这是${input.ta}想对${input.me}说的话（30~60字，第一人称，贴合情侣口吻，可以调侃他刚才的选择、也可以认真说句心里话）"}。只输出 JSON。`;
+  const fallback = (): { win: boolean; comment: string; msg: string } => ({
+    win: input.survival >= 55,
+    comment: input.survival >= 55 ? '整体及格：大部分时候你接住了情绪，但仍有几关暴露了「讲道理优先」的老毛病。' : '这次翻车了：好几关你都在解释自己，而对方等的是被看见。',
+    msg: `刚才那几关，有你答得让我心头一暖的，也有想敲你脑袋的。现实里可别让我等到说「没事」的那一步哦。`,
+  });
+  try {
+    const raw = await llmUserFirst(sys, user, 0.8);
+    const j = extractJson<{ win?: boolean; comment?: string; msg?: string }>(raw);
+    if (j && typeof j.win === 'boolean') {
+      return {
+        win: j.win,
+        comment: cut(stripEmoji(String(j.comment ?? '')), 90) || fallback().comment,
+        msg: cut(stripEmoji(String(j.msg ?? '')), 110) || fallback().msg,
+      };
+    }
+  } catch {
+    /* 本地兜底 */
+  }
+  return fallback();
+}
+
 

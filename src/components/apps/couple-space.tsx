@@ -85,7 +85,8 @@ import {
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
-import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiStatusPick, aiTickTrail, coupleMemoryDiff, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts } from '@/lib/ios/couple-ai';
+import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, coupleMemoryDiff, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, type DynReplyLevel } from '@/lib/ios/couple-ai';
+import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
 import { displayNameOf, isFriendIn } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
 import L from 'leaflet';
@@ -118,7 +119,7 @@ interface CouplePlace {
   lng: number;
 }
 
-/** 已保存的恋爱协议书（签署生效后自动存档；可多份，可点击回看） */
+/** 已保存的恋爱协议书（签署生效后自动存档；可多份，可点击回看；第十二轮支持分享/待对方签署） */
 interface CouplePactRecord {
   id: string;
   title: string;
@@ -129,6 +130,8 @@ interface CouplePactRecord {
   meAt: number | null;
   taAt: number | null;
   at: number; // 生效时间（双方签完）
+  status?: 'signed' | 'pending' | 'declined'; // 第十二轮：signed=已生效 pending=等TA签 declined=TA婉拒（缺省视为 signed——旧数据）
+  reason?: string; // declined 时 TA 的理由
 }
 
 interface CoupleState {
@@ -197,9 +200,11 @@ interface CoupleState {
   aiPact: { title: string; preamble: string; clauses: string[]; at: number } | null; // AI 拟的协议草稿（等我签）
   aiLog: { id: string; text: string; at: number }[]; // AI 行为日志
   invite: CoupleInviteMeta; // 邀请元数据（全局唯一：恋人绑定/待处理邀请/每联系人限一次历史）
-  comments: { id: string; key: string; from: 'me' | 'ta'; text: string; at: number }[]; // 通用留言线程（第十轮）：相册照片/日记/印象/挑战讨论下的双向留言
+  comments: { id: string; key: string; from: 'me' | 'ta'; text: string; at: number; rt?: string }[]; // 通用留言线程（第十轮）：相册照片/日记/印象/挑战讨论下的双向留言；rt=所回复的 TA 留言 id（第十二轮点击回复）
   taTrail: { dateKey: string; items: { t: string; place: string; note: string }[]; at: number } | null; // TA 今天去过的地方（人设记忆生成，灰色字展示）
   replyTa: { active: boolean; picks: Record<string, { pick: number; say: string; at: number }>; mePicks: Record<string, { pick: number; text: string }>; startedAt: number; endedAt: number | null } | null; // 回复挑战双人闯关（TA 同时作答）
+  replyRun: { levels: DynReplyLevel[]; myPicks: Record<string, number>; at: number } | null; // 回复挑战本次动态出题（第十二轮：每次开题都不一样，AI 生成）
+  replyVerdict: { win: boolean; comment: string; msg: string; at: number } | null; // 回复挑战结算：AI 判定的胜负 + 总评 + TA 想说的话
   locFollow: { me?: string | null; ta?: string | null }; // 轨迹位置跟随联系人 APP：上次同步的 region 文本
   statusExam: { my: Record<string, number>; ta: Record<string, number>; at: number | null; rep?: { me: StatusResult; ta: StatusResult; overall: string } | null } | null; // 恋爱状态测评：双方答题记录 + 生成过的报告（我和 AI 同步答）
 }
@@ -289,6 +294,8 @@ function defaultState(): CoupleState {
     comments: [],
     taTrail: null,
     replyTa: null,
+    replyRun: null,
+    replyVerdict: null,
     locFollow: {},
   };
 }
@@ -862,6 +869,17 @@ export default function CoupleSpaceApp() {
     };
     window.addEventListener(COUPLE_STATE_EVENT, sync);
     return () => window.removeEventListener(COUPLE_STATE_EVENT, sync);
+  }, []);
+
+  /** 聊天里的协议卡片点击进来（第十二轮）：切到恋人空间时直接打开协议页（PactPage 挂载后消费具体目标）。
+   *  组件可能晚于事件挂载（聊天→恋人空间切换）→ 挂载时也检查一次 pending */
+  useEffect(() => {
+    const nav = () => {
+      if (peekPendingPactOpen()) setSub('pact');
+    };
+    if (peekPendingPactOpen()) setSub('pact');
+    window.addEventListener(COUPLE_PACT_NAV_EVENT, nav);
+    return () => window.removeEventListener(COUPLE_PACT_NAV_EVENT, nav);
   }, []);
 
   /** 全局头像/名字同步（用户要求：用微信邀请→双方身份跟随微信；QQ 邀请→跟随 QQ）：
@@ -1966,17 +1984,37 @@ function SubShell(props: { title: string; onBack: () => void; children: React.Re
 type PatchFn = (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void;
 
 /**
- * 通用留言线程（第十轮）：相册照片/心情日记/情侣印象/回复挑战讨论区共用。
- * 我发消息（粉色右侧）→ AI（TA）根据人设记忆自动回复（蓝色左侧，可多轮往返）；
+ * 通用留言线程（第十轮 → 第十二轮重做样式）。
+ * 样式仿微信朋友圈评论区 + 参考截图（照片留言气泡）：我发消息（粉色右侧）→ AI（TA）根据人设记忆自动回复（左侧，可多轮往返）；
+ * 所有留言一律不显示「名字：」前缀（第十二轮用户要求：所有留言删除名字和冒号）；
+ * 每条留言带朋友圈式灰色时间（刚刚/x分钟前/1小时前…）；
+ * 点击 TA 的留言即可针对那一条回复（引用条可取消，AI 会知道你在回复哪句）；
  * 每一条都进恋人（AI）的记忆（coupleMemoryDiff 统一钩子）。
  */
+
+/** 留言/徽标文本截断（组件内用；超长加省略号） */
+function cutText(s: string, max: number): string {
+  const t = (s ?? '').trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+/** 朋友圈式评论时间（刚刚 / N分钟前 / N小时前 / 昨天 / M月D日） */
+function fmtCmtTime(ms: number): string {
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
+  if (diff < 172_800_000) return '昨天';
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
 function CommentThread({
   state,
   patch,
   threadKey,
   hint,
-  dark = false,
-  hideNames = false, // 情侣印象留言：不显示左右两边的名字，也不显示「名字：」前缀（用户要求）
+  dark = false, // 深色背景（相册大图查看）适配
   testId,
 }: {
   state: CoupleState;
@@ -1984,16 +2022,15 @@ function CommentThread({
   threadKey: string;
   hint?: string;
   dark?: boolean; // 深色背景（相册大图查看）适配
-  hideNames?: boolean;
   testId?: string;
 }) {
   const list = useMemo(() => (state.comments ?? []).filter((c) => c.key === threadKey), [state.comments, threadKey]);
   const [text, setText] = useState('');
+  const [replyTo, setReplyTo] = useState<{ id: string; text: string } | null>(null); // 点击 TA 的留言 → 针对性回复
   const me = state.meName || '我';
   const ta = state.taName || 'TA';
-  /** hideNames 时去掉历史留言文本里的「名字：」前缀（旧数据兼容） */
+  /** 历史留言文本里的「名字：」前缀统一剥掉（第十二轮：所有留言删除名字和冒号；旧数据兼容） */
   const stripNamePrefix = (t: string) => {
-    if (!hideNames) return t;
     for (const n of [ta, me, 'TA', '我']) {
       if (n && t.startsWith(`${n}：`)) return t.slice(n.length + 1).trim();
     }
@@ -2002,9 +2039,10 @@ function CommentThread({
   const send = () => {
     const t = text.trim();
     if (!t) return;
-    const c = { id: uid(), key: threadKey, from: 'me' as const, text: t, at: Date.now() };
+    const c = { id: uid(), key: threadKey, from: 'me' as const, text: t, at: Date.now(), ...(replyTo ? { rt: replyTo.id } : {}) };
     patch((prev) => ({ comments: [...(prev.comments ?? []), c] }));
     setText('');
+    setReplyTo(null);
     scheduleAiReply(threadKey); // AI（TA）延时回复（fire-and-forget）
   };
   const inputCls = dark
@@ -2017,24 +2055,43 @@ function CommentThread({
         {list.length > 0 && <span className="ml-1.5 font-normal opacity-60">· {list.length} 条留言</span>}
       </div>
       {list.length > 0 && (
-        <div className={`mt-2.5 space-y-2 overflow-y-auto ${dark ? 'max-h-36' : 'max-h-44'}`} style={{ scrollbarWidth: 'thin' }}>
-          {list.map((c) =>
-            c.from === 'ta' ? (
-              <div key={c.id} className="flex items-end gap-1.5">
-                <span className={`max-w-[82%] rounded-2xl rounded-bl-sm px-3 py-2 text-[13px] leading-relaxed ${dark ? 'bg-[#7f96e0]/25 text-[#c3cff5]' : 'bg-[#eef2fd] text-[#5a74c4]'}`}>
-                  {!hideNames && <span className={`mr-0.5 text-[10.5px] font-semibold ${dark ? 'text-[#8fa4ef]' : 'text-[#7f96e0]'}`}>{ta}：</span>}
-                  {stripNamePrefix(c.text)}
-                </span>
+        <div className={`mt-2.5 space-y-1.5 overflow-y-auto ${dark ? 'max-h-36' : 'max-h-44'}`} style={{ scrollbarWidth: 'thin' }}>
+          {list.map((c) => {
+            const body = stripNamePrefix(c.text);
+            const isTa = c.from === 'ta';
+            return (
+              <div key={c.id} className="space-y-0.5">
+                <div className={`flex ${isTa ? 'items-start justify-start' : 'items-start justify-end'}`}>
+                  <button
+                    type="button"
+                    onClick={isTa ? () => setReplyTo({ id: c.id, text: body }) : undefined}
+                    className={`max-w-[82%] rounded-2xl px-3 py-2 text-left text-[13px] leading-relaxed transition-opacity ${
+                      isTa
+                        ? dark
+                          ? 'rounded-bl-sm bg-[#7f96e0]/25 text-[#c3cff5] active:opacity-70'
+                          : 'rounded-bl-sm bg-white text-[#4a4a52] shadow-[0_1px_4px_rgba(0,0,0,0.05)] active:opacity-70'
+                        : dark
+                          ? 'rounded-br-sm bg-[#f9a8d4]/25 text-[#f9c9da]'
+                          : 'rounded-br-sm bg-[#fdeef3] text-[#d4547a]'
+                    } ${isTa ? 'cursor-pointer' : ''}`}
+                  >
+                    {body}
+                  </button>
+                </div>
+                <div className={`px-1 text-[10px] leading-none ${dark ? 'text-white/30' : 'text-[#b6b6bd]'} ${isTa ? 'text-left' : 'text-right'}`}>{fmtCmtTime(c.at)}</div>
               </div>
-            ) : (
-              <div key={c.id} className="flex items-end justify-end gap-1.5">
-                <span className={`max-w-[82%] rounded-2xl rounded-br-sm px-3 py-2 text-[13px] leading-relaxed ${dark ? 'bg-[#f9a8d4]/25 text-[#f9c9da]' : 'bg-[#fdeef3] text-[#d4547a]'}`}>
-                  {stripNamePrefix(c.text)}
-                  {!hideNames && <span className={`ml-0.5 text-[10.5px] font-semibold ${dark ? 'text-[#f9a8d4]' : 'text-[#e0607e]'}`}>：{me}</span>}
-                </span>
-              </div>
-            ),
-          )}
+            );
+          })}
+        </div>
+      )}
+      {replyTo && (
+        <div className={`mt-2 flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11.5px] ${dark ? 'bg-white/[0.07] text-white/55' : 'bg-white text-[#8e8e96]'}`}>
+          <span className="min-w-0 flex-1 truncate">
+            回复 {ta}：{cutText(replyTo.text, 24)}
+          </span>
+          <button type="button" aria-label="取消回复" onClick={() => setReplyTo(null)} className={`shrink-0 text-[13px] leading-none ${dark ? 'text-white/40' : 'text-[#b6b6bd]'}`}>
+            ×
+          </button>
         </div>
       )}
       <div className="mt-2.5 flex items-center gap-2">
@@ -2044,7 +2101,7 @@ function CommentThread({
           onKeyDown={(e) => {
             if (e.key === 'Enter') send();
           }}
-          placeholder={`想对 ${ta} 说什么…`}
+          placeholder={replyTo ? `回复 ${ta}…` : `想对 ${ta} 说什么…`}
           maxLength={80}
           className={inputCls}
         />
@@ -3080,24 +3137,6 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
             <Crosshair className="h-4 w-4" />
           </button>
         </div>
-
-        {/* TA 今天去了哪里（人设记忆生成，灰色字）：半透明卡叠在地图底部 */}
-        {trailToday && trailToday.items.length > 0 && (
-          <div className="absolute inset-x-3 bottom-[72px] z-10 rounded-2xl bg-white/85 p-3 shadow-[0_6px_18px_rgba(0,0,0,0.08)] backdrop-blur-md" data-testid="trail-card">
-            <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-[#8e8e96]">
-              <MapPin className="h-3 w-3" />
-              {state.taName || 'TA'} 今天去了哪里
-            </div>
-            <div className="mt-1 space-y-0.5">
-              {trailToday.items.map((i, k) => (
-                <div key={`${i.t}-${k}`} className="text-[11.5px] leading-relaxed text-[#9a9aa2]" data-testid="trail-item">
-                  {i.t} {i.place}
-                  {i.note ? ` · ${i.note}` : ''}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* 底部历史轨迹按钮 */}
         <button
@@ -5643,12 +5682,16 @@ function PactPaper({ data, meName, taName }: { data: PactPaperData; meName: stri
 
 /** 恋爱协议（第七轮重做，参考图3/4/5）：预览主页 → 编辑协议 → 签署协议（双方签名后盖章生效） */
 function PactPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
+  const patchFn = patch as unknown as (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void;
   const [view, setView] = useState<'home' | 'edit' | 'sign' | 'view'>('home');
   const [signFrom, setSignFrom] = useState<'home' | 'edit'>('home');
   const [taPending, setTaPending] = useState(false);
   const [viewPact, setViewPact] = useState<CouplePactRecord | null>(null);
   const [dlg, setDlg] = useState<null | { type: 'title' | 'preamble' | 'custom' | 'template' } | { type: 'clause'; idx: number }>(null);
   const [draft, setDraft] = useState('');
+  const [shareSheet, setShareSheet] = useState<null | { step: 'channel' | 'contact'; ch: CoupleChannel; title: string; preamble: string; clauses: string[]; pactId?: string; status: 'pending' | 'signed' }>(null); // 第十二轮：协议分享（选微信/QQ → 选联系人 → 卡片进会话）
+  const [shareFriends, setShareFriends] = useState<{ id: string; name: string; avatar: string | null }[]>([]);
+  const [taDeciding, setTaDeciding] = useState(false); // TA 正在决定签不签
   const clauses = state.pactClauses;
   const curPaper: PactPaperData = {
     title: state.pactTitle || '恋爱协议书',
@@ -5659,6 +5702,117 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
     meAt: state.pactMeAt,
     taAt: state.pactTaAt,
     at: state.pactAt,
+  };
+
+  /** 聊天里的协议卡片点击进来（第十二轮）：TA 分享的 → 直接进 TA 协议的签署界面；我分享的 → 回看对应协议 */
+  useEffect(() => {
+    const p = consumePendingPactOpen();
+    if (!p) return;
+    if (p.from === 'ta') {
+      if (state.aiPact) {
+        const ap = state.aiPact;
+        patch({ pactTitle: ap.title, pactPreamble: state.pactPreamble || defaultState().pactPreamble, pactClauses: [...ap.clauses], pactSignMe: null, pactMeAt: null, pactSignTa: null, pactTaAt: null, pactAt: null });
+        setSignFrom('edit');
+        setView('sign');
+      } else {
+        setView('home');
+      }
+    } else if (p.pactId) {
+      const rec = (state.pacts ?? []).find((x) => x.id === p.pactId);
+      if (rec) {
+        if (rec.status === 'pending' && !rec.signTa) {
+          // 我分享出去待 TA 签的协议：把草稿填回签署界面（可再次发送/查看）
+          patch({ pactTitle: rec.title, pactPreamble: rec.preamble, pactClauses: [...rec.clauses], pactSignMe: rec.signMe, pactMeAt: rec.meAt, pactSignTa: null, pactTaAt: null, pactAt: null });
+          setSignFrom('home');
+          setView('sign');
+        } else {
+          setViewPact(rec);
+          setView('view');
+        }
+      } else {
+        setView('home');
+      }
+    }
+  }, []);
+
+  /** 分享弹层 → 选联系人列表（该渠道 AI 好友） */
+  useEffect(() => {
+    if (!shareSheet) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const list = await listContacts();
+        if (!alive) return;
+        setShareFriends(
+          list
+            .filter((c) => c.kind !== 'user' && isFriendIn(c, shareSheet.ch))
+            .map((c) => ({ id: c.id, name: displayNameOf(c), avatar: c.avatar ?? null })),
+        );
+      } catch {
+        if (alive) setShareFriends([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [shareSheet]);
+
+  /** 发起分享：打开渠道选择弹层（协议来源 = 草稿 / 已存协议 / AI 拟的协议） */
+  const openShare = (src: { title: string; preamble: string; clauses: string[]; pactId?: string; status: 'pending' | 'signed' }) => {
+    if (!state.accepted || !src.clauses.length) {
+      showToast('先把协议写好再分享吧');
+      return;
+    }
+    setShareSheet({ step: 'channel', ch: 'wx', ...src });
+  };
+
+  /** 选定联系人 → 协议卡片发进会话；我分享给 TA 后 TA 会认真看完再决定签不签 */
+  const doShare = async (contactId: string) => {
+    if (!shareSheet) return;
+    const { ch, title, preamble, clauses: cls, pactId, status } = shareSheet;
+    setShareSheet(null);
+    try {
+      await sendPactCard({ channel: ch, contactId, title, preamble, clauses: cls, dir: 'me', pactId, status });
+      showToast(`已把《${title}》分享给 TA ♡`);
+      // 草稿分享：先存档一条 pending 记录（AI 决定后回填状态）
+      let recId = pactId;
+      if (!recId) {
+        const rec: CouplePactRecord = {
+          id: uid(),
+          title,
+          preamble,
+          clauses: [...cls],
+          signMe: state.pactSignMe || state.meName || '我',
+          signTa: null,
+          meAt: state.pactMeAt ?? Date.now(),
+          taAt: null,
+          at: Date.now(),
+          status: 'pending',
+        };
+        recId = rec.id;
+        patchFn({ pacts: [rec, ...(state.pacts ?? [])] });
+      }
+      scheduleAiPactDecision({
+        channel: ch,
+        contactId,
+        title,
+        clauses: cls,
+        onDone: (r) => {
+          patchFn((prev) => ({
+            pacts: (prev.pacts ?? []).map((x) =>
+              x.id === recId
+                ? r.agree
+                  ? { ...x, signTa: state.taName || 'TA', taAt: Date.now(), at: Date.now(), status: 'signed' as const }
+                  : { ...x, status: 'declined' as const, reason: r.reason }
+                : x,
+            ),
+          }));
+          showToast(r.agree ? `${state.taName || 'TA'} 签好了协议 ♡` : `${state.taName || 'TA'} 想再商量一下`);
+        },
+      });
+    } catch {
+      showToast('分享失败，稍后再试试');
+    }
   };
 
   /** 再添加一份协议：重置草稿为默认模板 → 进编辑（已保存的协议书不受影响） */
@@ -5787,26 +5941,53 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
   };
 
   const sendToTa = () => {
-    if (!state.pactSignMe || state.pactSignTa || taPending) return;
-    setTaPending(true);
-    showToast(`已发送给${state.taName || 'TA'}签名，等 TA 一会儿…`);
-    window.setTimeout(() => {
-      setTaPending(false);
-      // TA 签完生效，同时自动存档一份（第八轮：可多份保存/回看）
-      const rec: CouplePactRecord = {
-        id: uid(),
-        title: state.pactTitle || '恋爱协议书',
-        preamble: state.pactPreamble,
-        clauses: [...state.pactClauses],
-        signMe: state.pactSignMe || state.meName || '我',
-        signTa: state.taName || 'TA',
-        meAt: state.pactMeAt,
-        taAt: Date.now(),
-        at: Date.now(),
-      };
-      patch({ pactSignTa: rec.signTa, pactTaAt: rec.taAt, pactAt: rec.at, pacts: [rec, ...(state.pacts ?? [])] });
-      showToast('TA 已签名，恋爱协议正式生效并已保存 ♡');
-    }, 2600 + Math.random() * 2400);
+    if (!state.pactSignMe || state.pactSignTa || taDeciding) return;
+    setTaDeciding(true);
+    showToast(`协议已发给${state.taName || 'TA'}，TA 正在认真看…`);
+    // 第十二轮：TA 不再无脑全签——AI 按人设 + 条款内容自己决定签/不签
+    void (async () => {
+      try {
+        const { aiDecidePact } = await import('@/lib/ios/couple-ai');
+        const r = await aiDecidePact(state.pactTitle || '恋爱协议书', state.pactClauses);
+        if (r.agree) {
+          const rec: CouplePactRecord = {
+            id: uid(),
+            title: state.pactTitle || '恋爱协议书',
+            preamble: state.pactPreamble,
+            clauses: [...state.pactClauses],
+            signMe: state.pactSignMe || state.meName || '我',
+            signTa: state.taName || 'TA',
+            meAt: state.pactMeAt,
+            taAt: Date.now(),
+            at: Date.now(),
+            status: 'signed',
+          };
+          patch({ pactSignTa: rec.signTa, pactTaAt: rec.taAt, pactAt: rec.at, pacts: [rec, ...(state.pacts ?? [])] });
+          showToast(`TA 说：${r.reason} 协议正式生效并已保存 ♡`);
+        } else {
+          showToast(`TA 没签：${r.reason}（可以改改条款再发一次）`);
+        }
+      } catch {
+        // AI 决定失败兑底：签（与旧行为一致）
+        const rec: CouplePactRecord = {
+          id: uid(),
+          title: state.pactTitle || '恋爱协议书',
+          preamble: state.pactPreamble,
+          clauses: [...state.pactClauses],
+          signMe: state.pactSignMe || state.meName || '我',
+          signTa: state.taName || 'TA',
+          meAt: state.pactMeAt,
+          taAt: Date.now(),
+          at: Date.now(),
+          status: 'signed',
+        };
+        patch({ pactSignTa: rec.signTa, pactTaAt: rec.taAt, pactAt: rec.at, pacts: [rec, ...(state.pacts ?? [])] });
+        showToast('TA 已签名，恋爱协议正式生效并已保存 ♡');
+      } finally {
+        setTaDeciding(false);
+        setTaPending(false);
+      }
+    })();
   };
 
   const dlgTitle = dlg ? (dlg.type === 'title' ? '编辑协议名称' : dlg.type === 'preamble' ? '编辑协议声明' : dlg.type === 'clause' ? '编辑条款' : dlg.type === 'custom' ? '自定义一条' : '导入模板') : '';
@@ -5815,15 +5996,33 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
     <div className="relative h-full">
       {view === 'home' && (
         <SubShell title="恋爱协议" onBack={close}>
-          {/* TA 拟的协议（第九轮：AI 会自己拟协议等我签） */}
+          {/* 主标题（参考图3）：一起写一份 / 专属恋爱协议 */}
+          <div className="px-1 pt-2">
+            <h2 className="text-[27px] font-extrabold leading-[1.3] text-[#26262b]">
+              我们的
+              <span className="text-[#f2536a]">专属</span> 恋爱协议
+            </h2>
+            <p className="mt-2.5 text-[13.5px] leading-relaxed text-[#9a9aa2]">签一份属于你们的协议，互相分享、互相签名；TA 也会认真看，自己决定签不签。</p>
+          </div>
+
+          {/* TA 拟的协议（第九轮：AI 会自己拟协议等我签；第十二轮右上角分享按钮） */}
           {state.aiPact && (
-            <div className="mt-3 rounded-2xl border-2 border-dashed border-[#f2536a] bg-white p-4" data-testid="ai-pact-card">
-              <div className="flex items-center justify-between">
+            <div className="relative mt-4 rounded-2xl border-2 border-dashed border-[#f2536a] bg-white p-4" data-testid="ai-pact-card">
+              <button
+                type="button"
+                aria-label="分享 TA 的协议"
+                data-testid="ai-pact-share"
+                onClick={() => openShare({ title: state.aiPact!.title, preamble: state.pactPreamble, clauses: [...state.aiPact!.clauses], pactId: 'ai', status: 'pending' })}
+                className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-[#fff5f7] px-2.5 py-1 text-[11px] font-medium text-[#f2536a] active:opacity-60"
+              >
+                <Share2 className="h-3 w-3" /> 分享
+              </button>
+              <div className="flex items-center justify-between pr-16">
                 <div className="text-[14.5px] font-bold text-[#26262b]">
                   {state.taName || 'TA'} 拟了一份协议 <span className="text-[#f2536a]">《{state.aiPact.title}》</span>
                 </div>
-                <span className="shrink-0 rounded-full bg-[#fdeef2] px-2 py-0.5 text-[10.5px] font-bold text-[#f2536a]">等你签</span>
               </div>
+              <span className="absolute right-3 top-10 shrink-0 rounded-full bg-[#fdeef2] px-2 py-0.5 text-[10.5px] font-bold text-[#f2536a]">等你签</span>
               <div className="mt-2 space-y-1">
                 {state.aiPact.clauses.slice(0, 3).map((c, i) => (
                   <div key={i} className="flex gap-1.5 text-[12.5px] leading-relaxed text-[#6e6e76]">
@@ -5852,126 +6051,128 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                     const p = state.aiPact!;
                     patch({ pactTitle: p.title, pactPreamble: state.pactPreamble, pactClauses: [...p.clauses], pactSignMe: null, pactMeAt: null, pactSignTa: null, pactTaAt: null, pactAt: null, aiPact: null });
                     setSignFrom('edit');
-                    setView('edit');
-                    showToast(`已换成 ${state.taName || 'TA'} 的版本，改完就能签啦 ♡`);
+                    setView('sign');
+                    showToast(`已换成 ${state.taName || 'TA'} 的版本，签完名发给 TA 确认 ♡`);
                   }}
                   className="h-10 flex-1 rounded-full bg-[#f2536a] text-[14px] font-semibold text-white active:opacity-85"
                 >
-                  用 TA 的版本去签
+                  去签 TA 的协议
                 </button>
               </div>
             </div>
           )}
 
-          {/* 主标题（参考图3）：一起写一份 / 专属恋爱协议 */}
-          <div className="px-1 pt-2">
-            <h2 className="text-[27px] font-extrabold leading-[1.3] text-[#26262b]">
-              一起写一份
-              <br />
-              <span className="text-[#f2536a]">专属</span> 恋爱协议
-            </h2>
-            <p className="mt-2.5 text-[13.5px] leading-relaxed text-[#9a9aa2]">写下你们的约定，一起签名，生成协议书留作纪念，让爱有据可依。</p>
-          </div>
-
-          {/* 三步流程卡 */}
-          <div className="mt-4 rounded-2xl border border-[#f2dfe3] bg-white p-4 shadow-sm">
-            <div className="flex items-start">
-              {[
-                { n: '1', icon: NotebookPen, label: '写下约定', desc: '填写你们的相处约定和美好承诺' },
-                { n: '2', icon: Users, label: '双方签名', desc: '你们分别签名确认彼此的约定' },
-                { n: '3', icon: BadgeCheck, label: '生成保存', desc: '生成专属协议书可保存或分享' },
-              ].map((s, i) => (
-                <div key={s.n} className={`flex flex-1 flex-col items-center text-center ${i > 0 ? 'border-l border-dashed border-[#f0e3e5]' : ''}`}>
-                  <div className="relative">
-                    <span className="absolute -right-2 -top-2 grid h-[18px] w-[18px] place-items-center rounded-full bg-[#f2536a] text-[10.5px] font-bold text-white">{s.n}</span>
-                    <s.icon className="h-9 w-9 text-[#f2536a]" strokeWidth={1.7} />
-                  </div>
-                  <div className="mt-2 text-[14px] font-semibold text-[#26262b]">{s.label}</div>
-                  <div className="mt-1 px-1 text-[10.5px] leading-snug text-[#b6b6bd]">{s.desc}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* 协议预览 */}
-          <div className="mt-6 flex items-center justify-center gap-2">
-            <span className="text-[11px] text-[#f2536a]">♥</span>
-            <span className="text-[16px] font-bold text-[#26262b]">协议预览</span>
-            <span className="text-[11px] text-[#f2536a]">♥</span>
-          </div>
-          <div className="mt-3">
-            <PactPaper data={curPaper} meName={state.meName} taName={state.taName} />
-          </div>
-
-          {/* 已保存的协议书（第八轮：生效自动存档，可多份/可回看） */}
-          {state.pacts.length > 0 && (
-            <div className="mt-6">
-              <div className="flex items-center justify-between px-1">
-                <div className="text-[15px] font-bold text-[#26262b]">
-                  已保存的协议书 <span className="text-[#f2536a]">{state.pacts.length}</span>
-                </div>
-                <button type="button" data-testid="pact-add-another" onClick={startNewPact} className="text-[13px] font-medium text-[#f2536a] active:opacity-60">
-                  + 添加另一份
-                </button>
+          {/* 签署的恋爱协议（第一页主体，长方形卡片；右上角分享按钮） */}
+          {state.pacts.length > 0 ? (
+            <div className="mt-4">
+              <div className="px-1 text-[15px] font-bold text-[#26262b]">
+                签署的恋爱协议 <span className="text-[#f2536a]">{state.pacts.length}</span>
               </div>
-              <div className="mt-2.5 space-y-2">
-                {state.pacts.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    data-testid="pact-saved-item"
-                    onClick={() => {
-                      setViewPact(p);
-                      setView('view');
-                    }}
-                    className="flex w-full items-center gap-3 rounded-xl border border-[#f2dfe3] bg-white px-4 py-3 text-left active:bg-[#fff5f7]"
-                  >
-                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
-                      <Scale className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.9} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[14px] font-semibold text-[#26262b]">{p.title}</span>
-                      <span className="block text-[11.5px] text-[#9a9aa2]">
-                        {p.clauses.length} 条条款 · {fmtDateCn(fmtDate(p.at))} 生效 · 双方已签名
-                      </span>
-                    </span>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
-                  </button>
-                ))}
+              <div className="mt-2.5 space-y-2.5">
+                {state.pacts.map((p) => {
+                  const st = p.status ?? (p.signTa ? 'signed' : 'pending');
+                  return (
+                    <div key={p.id} className="relative rounded-2xl border border-[#f2dfe3] bg-white p-4 shadow-[0_2px_10px_rgba(242,83,106,0.05)]" data-testid="pact-saved-item">
+                      <button
+                        type="button"
+                        aria-label="分享协议"
+                        data-testid="pact-share-btn"
+                        onClick={() => openShare({ title: p.title, preamble: p.preamble, clauses: [...p.clauses], pactId: p.id, status: st === 'signed' ? 'signed' : 'pending' })}
+                        className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-[#fff5f7] px-2.5 py-1 text-[11px] font-medium text-[#f2536a] active:opacity-60"
+                      >
+                        <Share2 className="h-3 w-3" /> 分享
+                      </button>
+                      <button
+                        type="button"
+                        className="block w-full pr-16 text-left"
+                        onClick={() => {
+                          if (st === 'pending' && !p.signTa) {
+                            patch({ pactTitle: p.title, pactPreamble: p.preamble, pactClauses: [...p.clauses], pactSignMe: p.signMe, pactMeAt: p.meAt, pactSignTa: null, pactTaAt: null, pactAt: null });
+                            setSignFrom('home');
+                            setView('sign');
+                          } else {
+                            setViewPact(p);
+                            setView('view');
+                          }
+                        }}
+                      >
+                        <span className="flex items-center gap-1.5 pr-14">
+                          <Scale className="h-4 w-4 shrink-0 text-[#f2536a]" strokeWidth={1.9} />
+                          <span className="min-w-0 flex-1 truncate text-[14.5px] font-bold text-[#26262b]">《{p.title}》</span>
+                        </span>
+                        <span className="mt-1.5 block truncate text-[12px] text-[#9a9aa2]">
+                          {p.clauses.slice(0, 2).join('；')}
+                          {p.clauses.length > 2 ? `…共 ${p.clauses.length} 条` : ''}
+                        </span>
+                      </button>
+                      <div className="mt-2.5 flex items-center justify-between border-t border-dashed border-[#f2dfe3] pt-2.5">
+                        <span className="text-[11px] text-[#b6b6bd]">
+                          {p.clauses.length} 条条款 · {fmtDateCn(fmtDate(p.at))}
+                          {p.signMe ? ` · ${p.signMe}已签` : ''}
+                          {p.signTa ? ` · ${p.signTa}已签` : ''}
+                        </span>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-bold ${
+                            st === 'signed' ? 'bg-[#eaf7ef] text-[#3d9a63]' : st === 'declined' ? 'bg-[#f4f4f6] text-[#8e8e96]' : 'bg-[#fdeef2] text-[#f2536a]'
+                          }`}
+                        >
+                          {st === 'signed' ? '已生效' : st === 'declined' ? 'TA 婉拒了' : '等 TA 签署'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
+          ) : (
+            /* 空态：还没有任何协议 */
+            <div className="mt-5 rounded-2xl border border-dashed border-[#f2dfe3] bg-white/70 px-4 py-7 text-center">
+              <Scale className="mx-auto h-9 w-9 text-[#f8a0b4]" strokeWidth={1.6} />
+              <div className="mt-2 text-[14px] font-semibold text-[#4a4a52]">还没有你们的协议</div>
+              <div className="mt-1 text-[12px] leading-relaxed text-[#9a9aa2]">点右下角的 + 写下第一条约定，签名后分享给 TA</div>
+            </div>
+          )}
+
+          {/* 草稿协议入口（当前编辑中的协议，未双方签署） */}
+          {state.pactAt == null && (state.pactClauses.length > 0 || state.pactTitle !== '恋爱协议书') && (
+            <button
+              type="button"
+              data-testid="pact-draft-entry"
+              onClick={() => {
+                setSignFrom('edit');
+                setView('edit');
+              }}
+              className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-dashed border-[#f2dfe3] bg-white/70 px-4 py-3.5 text-left active:bg-[#fff5f7]"
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
+                <NotebookPen className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.8} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[14px] font-semibold text-[#26262b]">《{state.pactTitle || '恋爱协议书'}》（草稿）</span>
+                <span className="block text-[11.5px] text-[#9a9aa2]">{state.pactClauses.length} 条条款 · 点此继续编辑/签名</span>
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
+            </button>
           )}
 
           {/* 模板导入 + 创建按钮 */}
-          <div className="mt-4 text-center text-[13px] text-[#9a9aa2]">
+          <div className="mb-2 mt-4 text-center text-[13px] text-[#9a9aa2]">
             已有模板编码？
             <button type="button" data-testid="pact-import-btn" onClick={() => openDlg({ type: 'template' })} className="ml-1 font-medium text-[#f2536a] underline underline-offset-2 active:opacity-60">
               导入模板
             </button>
           </div>
+
+          {/* 右下角加号（FAB）：添加协议（第十二轮用户要求） */}
           <button
             type="button"
-            data-testid="pact-create-btn"
-            onClick={() => {
-              setSignFrom('edit');
-              setView('edit');
-            }}
-            className="mt-3 flex h-[52px] w-full items-center justify-center rounded-full bg-[#f2536a] text-[17px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98]"
+            aria-label="添加协议"
+            data-testid="pact-fab-add"
+            onClick={startNewPact}
+            className="fixed bottom-8 right-5 z-20 grid h-14 w-14 place-items-center rounded-full bg-[#f2536a] text-white shadow-[0_10px_26px_rgba(242,83,106,0.45)] transition-transform active:scale-90"
           >
-            {state.pactAt != null ? '重新编辑协议 ✦' : '创建恋爱协议 ✦'}
+            <Plus className="h-7 w-7" strokeWidth={2.4} />
           </button>
-          {state.pactAt != null && (
-            <button
-              type="button"
-              onClick={() => {
-                setSignFrom('home');
-                setView('sign');
-              }}
-              className="mt-3 w-full text-center text-[13.5px] text-[#9a9aa2] underline-offset-2 active:opacity-60"
-            >
-              查看已签署的协议书 →
-            </button>
-          )}
         </SubShell>
       )}
 
@@ -6216,6 +6417,72 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 保存
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 协议分享弹层（第十二轮）：选微信/QQ → 选联系人 → 卡片进会话 */}
+      {shareSheet && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/35" onClick={() => setShareSheet(null)}>
+          <div className="max-h-[72%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-8 pt-4 shadow-2xl" onClick={(e) => e.stopPropagation()} data-testid="pact-share-sheet">
+            <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
+            {shareSheet.step === 'channel' ? (
+              <>
+                <div className="mt-3 text-center text-[16px] font-bold text-[#26262b]">分享《{shareSheet.title}》</div>
+                <div className="mt-1 text-center text-[12px] text-[#9a9aa2]">选择分享到哪里，TA 会收到一张协议卡片</div>
+                <div className="mt-5 grid grid-cols-2 gap-3">
+                  {(
+                    [
+                      { ch: 'wx' as const, name: '微信', bg: '#07C160', label: '微' },
+                      { ch: 'qq' as const, name: 'QQ', bg: '#12B7F5', label: 'Q' },
+                    ]
+                  ).map((c) => (
+                    <button
+                      key={c.ch}
+                      type="button"
+                      data-testid={`pact-share-${c.ch}`}
+                      onClick={() => setShareSheet({ ...shareSheet, step: 'contact', ch: c.ch })}
+                      className="flex flex-col items-center gap-2 rounded-2xl border border-[#f2dfe3] bg-white py-5 active:bg-[#fff5f7]"
+                    >
+                      <span className="grid h-12 w-12 place-items-center rounded-2xl text-[20px] font-bold text-white" style={{ background: c.bg }}>
+                        {c.label}
+                      </span>
+                      <span className="text-[14px] font-semibold text-[#26262b]">分享到{c.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mt-3 flex items-center justify-between">
+                  <button type="button" aria-label="返回选渠道" onClick={() => setShareSheet({ ...shareSheet, step: 'channel' })} className="text-[13px] font-medium text-[#6e6e76]">
+                    ← {shareSheet.ch === 'wx' ? '微信' : 'QQ'}
+                  </button>
+                  <div className="text-[16px] font-bold text-[#26262b]">选择联系人</div>
+                  <span className="w-10" />
+                </div>
+                <div className="mt-3 space-y-1.5">
+                  {shareFriends.length === 0 && <div className="py-8 text-center text-[13px] text-[#9a9aa2]">{shareSheet.ch === 'wx' ? '微信' : 'QQ'}里还没有好友</div>}
+                  {shareFriends.map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      data-testid="pact-share-contact"
+                      onClick={() => void doShare(f.id)}
+                      className="flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left active:bg-[#f7f7f9]"
+                    >
+                      {f.avatar ? (
+                        <img src={f.avatar} alt={f.name} className="h-11 w-11 rounded-full object-cover" draggable={false} />
+                      ) : (
+                        <span className="grid h-11 w-11 place-items-center rounded-full bg-[#ececef] text-[15px] font-bold text-[#8e8e96]">{f.name.slice(0, 1)}</span>
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-[#26262b]">{f.name}</span>
+                      <span className="shrink-0 rounded-full bg-[#fdeef2] px-3 py-1 text-[12px] font-semibold text-[#f2536a]">发送</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -6996,7 +7263,13 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
   const [picked, setPicked] = useState<number | null>(null);
   const [players, setPlayers] = useState(791662);
   const [settled, setSettled] = useState(false); // 数值已结算（等 TA 的选择/看法看完后手动下一关）
-  const [outcome, setOutcome] = useState<null | 'next' | 'dead' | 'clear'>(null);
+  const [outcome, setOutcome] = useState<null | 'next' | 'final'>(null);
+  const [genLoading, setGenLoading] = useState(false); // 动态出题中（第十二轮：每次开题都不一样）
+  const [judging, setJudging] = useState(false); // AI 正在判定最终结果
+
+  /** 本次动态题组（第十二轮）：AI 生成，每次开始都不一样；生成失败用内置题洗牌兑底 */
+  const runLevels = state.replyRun?.levels?.length ? state.replyRun.levels : null;
+  const totalLv = runLevels?.length ?? REPLY_LEVELS.length;
 
   /** 全网挑战人数：每 2.4s 微涨，模拟全网实时在玩 */
   useEffect(() => {
@@ -7004,7 +7277,8 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
     return () => window.clearInterval(t);
   }, []);
 
-  const start = () => {
+  const start = async () => {
+    setGenLoading(true);
     setLv(0);
     setStats({ tm: 72, jc: 42, af: 48, sc: 78 });
     setPicked(null);
@@ -7012,12 +7286,24 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
     setOutcome(null);
     // 双人模式：TA 同时开始挑战（coupleMemoryDiff 检测 active false→true 自动写进 TA 的记忆）
     patch({ replyTa: { active: true, picks: {}, mePicks: {}, startedAt: Date.now(), endedAt: null } });
+    // 动态出题：用户配置的 API 模型优先 → 内置模型 → 内置题洗牌兑底（每次打开都不一样）
+    let levels: DynReplyLevel[] | null = null;
+    try {
+      levels = await genReplyLevels();
+    } catch {
+      levels = null;
+    }
+    if (!levels || levels.length < 3) {
+      levels = [...REPLY_LEVELS].sort(() => Math.random() - 0.5).slice(0, 6);
+    }
+    patchFn({ replyRun: { levels, myPicks: {}, at: Date.now() }, replyVerdict: null });
+    setGenLoading(false);
     setView('play');
   };
 
   const clamp = (n: number) => Math.max(0, Math.min(100, n));
 
-  /** 挑战结束：存纪录 + 双人战况归档（endedAt） */
+  /** 挑战结束（AI 判定后）：存纪录 + 双人战况归档（endedAt）*/
   const finish = (kind: 'dead' | 'clear', bestLv: number) => {
     patchFn((prev) => ({
       replyBest: Math.max(prev.replyBest ?? 0, bestLv),
@@ -7026,12 +7312,33 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
     setView(kind);
   };
 
-  /** 看完 TA 的选择和看法后手动进下一关（死亡/通关则去结算页） */
+  /** 全部答完 → 由 AI 判定成功/失败（第十二轮用户要求：结果 AI 说了算）+ TA 在结算页留言 */
+  const judgeFinal = async (finalStats: { sc: number }) => {
+    setJudging(true);
+    try {
+      const levels = runLevels ?? REPLY_LEVELS;
+      const myPicksRec = state.replyRun?.myPicks ?? {};
+      const myPicks = Object.entries(myPicksRec).sort(([a], [b]) => Number(a) - Number(b)).map(([k, v]) => ({ lv: Number(k), text: levels[Number(k)]?.opts[v]?.t ?? '' }));
+      const taPicks = Object.entries(state.replyTa?.picks ?? {}).sort(([a], [b]) => Number(a) - Number(b)).map(([k, v]) => ({ lv: Number(k), text: levels[Number(k)]?.opts[v.pick]?.t ?? '' }));
+      const verdict = await aiReplyVerdict({ me: meName, ta: taName, levels, myPicks, taPicks, survival: Math.max(0, finalStats.sc) });
+      patchFn({ replyVerdict: { ...verdict, at: Date.now() } });
+      // TA 的话写进留言区（reply:final，可继续回复）+ 写进 AI 记忆（AI 知道自己说了什么/我这次的成绩）
+      patchFn((prev) => ({ comments: [...(prev.comments ?? []), { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: 'reply:final', from: 'ta' as const, text: verdict.msg, at: Date.now() }] }));
+      rememberStatusExam(`回复挑战结束：AI 判定${verdict.win ? '成功（通关）' : '失败'}。总评：${verdict.comment} ${taName}在结算页对${meName}说：「${verdict.msg}」`);
+      finish(verdict.win ? 'clear' : 'dead', verdict.win ? levels.length : myPicks.length);
+    } catch {
+      // 判定失败兜底：按存活率结算
+      const win = finalStats.sc >= 55;
+      finish(win ? 'clear' : 'dead', win ? totalLv : lv + 1);
+    } finally {
+      setJudging(false);
+    }
+  };
+
+  /** 看完 TA 的选择和看法后手动进下一关（最后一关答完 → AI 判定） */
   const goNext = () => {
-    if (outcome === 'dead') {
-      finish('dead', lv + 1);
-    } else if (outcome === 'clear') {
-      finish('clear', REPLY_LEVELS.length);
+    if (outcome === 'final') {
+      void judgeFinal(stats);
     } else {
       setLv(lv + 1);
       setPicked(null);
@@ -7044,24 +7351,24 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
   const pick = (i: number) => {
     if (picked != null) return;
     setPicked(i);
-    const level = REPLY_LEVELS[lv];
+    const level = (runLevels ?? REPLY_LEVELS)[Math.min(lv, totalLv - 1)];
     // 记录我的选择（TA 能看到），并让 TA 同步作答（写 replyTa.picks[lv] + 看法 + 记忆）
-    patchFn((prev) =>
-      prev.replyTa
-        ? { replyTa: { ...prev.replyTa, active: true, mePicks: { ...prev.replyTa.mePicks, [String(lv)]: { pick: i, text: level.opts[i].t } } } }
-        : {},
-    );
+    patchFn((prev) => ({
+      replyRun: prev.replyRun ? { ...prev.replyRun, myPicks: { ...prev.replyRun.myPicks, [String(lv)]: i } } : prev.replyRun,
+      replyTa: prev.replyTa ? { ...prev.replyTa, active: true, mePicks: { ...prev.replyTa.mePicks, [String(lv)]: { pick: i, text: level.opts[i].t } } } : prev.replyTa,
+    }));
     aiReplyPickForLevel(lv, level.scene, level.quote, level.opts.map((o) => o.t), i, level.opts[i].t);
     window.setTimeout(() => {
       const d = level.opts[i].d;
       const ns = { tm: clamp(stats.tm + d[0]), jc: clamp(stats.jc + d[1]), af: clamp(stats.af + d[2]), sc: stats.sc + d[3] };
       setStats(ns);
-      setOutcome(ns.sc <= 0 ? 'dead' : lv >= REPLY_LEVELS.length - 1 ? 'clear' : 'next');
+      // 第十二轮：不再按存活率中途判死——全部答完后由 AI 综合判定成功/失败
+      setOutcome(lv >= totalLv - 1 ? 'final' : 'next');
       setSettled(true);
     }, 1600);
   };
 
-  const level = REPLY_LEVELS[Math.min(lv, REPLY_LEVELS.length - 1)];
+  const level = (runLevels ?? REPLY_LEVELS)[Math.min(lv, totalLv - 1)];
   const best = state.replyBest ?? null;
   const taPick = state.replyTa?.picks?.[String(lv)] ?? null;
   const taName = state.taName || 'TA';
@@ -7132,20 +7439,27 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
                 <div className="mt-1.5 text-[11px] text-white/35">历史通关率</div>
               </div>
               <div className="text-right">
-                <div className="text-[24px] font-extrabold leading-none text-[#f9a8d4]">{best == null ? '第4关' : best >= REPLY_LEVELS.length ? '通关🎉' : `第${best}关`}</div>
+                <div className="text-[24px] font-extrabold leading-none text-[#f9a8d4]">{best == null ? '第4关' : best >= 6 ? '通关' : `第${best}关`}</div>
                 <div className="mt-1.5 text-[11px] text-white/35">你的最深纪录</div>
               </div>
             </div>
           </div>
 
-          {/* 开始挑战 */}
+          {/* 开始挑战（第十二轮：AI 现场出题，每次都不一样） */}
           <button
             type="button"
             data-testid="reply-start-btn"
-            onClick={start}
-            className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center rounded-full bg-[linear-gradient(90deg,#f6a6ce_0%,#fbe3e9_100%)] text-[20px] font-bold text-black shadow-[0_10px_30px_rgba(246,166,206,0.25)] transition-transform active:scale-[0.98]"
+            onClick={() => void start()}
+            disabled={genLoading}
+            className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-full bg-[linear-gradient(90deg,#f6a6ce_0%,#fbe3e9_100%)] text-[20px] font-bold text-black shadow-[0_10px_30px_rgba(246,166,206,0.25)] transition-transform active:scale-[0.98] disabled:opacity-75"
           >
-            开始挑战
+            {genLoading ? (
+              <>
+                <Loader2 className="h-5 w-5 animate-spin" /> {taName || 'TA'} 正在出题…
+              </>
+            ) : (
+              '开始挑战'
+            )}
           </button>
           <p className="mt-5 text-center text-[12.5px] text-white/30">本挑战专治：自以为讲清楚了，实际上把火烧旺了。</p>
           <p className="mt-1.5 text-center text-[12.5px] text-[#8fa4ef]/80" data-testid="reply-duo-hint">
@@ -7174,7 +7488,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
         <div className="flex-1 overflow-y-auto overscroll-contain pb-10">
           <div className="px-5 pt-3">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[13px] font-bold text-[#f9a8d4]">第 {lv + 1}/{REPLY_LEVELS.length} 关</span>
+              <span className="text-[13px] font-bold text-[#f9a8d4]">第 {lv + 1}/{totalLv} 关</span>
               {state.replyTa?.active && (
                 <span className="rounded-full bg-[#7f96e0]/20 px-2.5 py-1 text-[10.5px] font-bold text-[#8fa4ef]" data-testid="reply-duo-badge">
                   双人挑战 · {taName} 也在作答
@@ -7269,28 +7583,47 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
             </div>
           )}
 
-          {/* 看完 TA 的选择/看法后手动继续（死亡/通关去结算） */}
+          {/* 看完 TA 的选择/看法后手动继续（最后一关交卷等 AI 宣判） */}
           {settled && (
             <button
               type="button"
               data-testid="reply-next"
               onClick={goNext}
-              className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center rounded-full bg-[linear-gradient(90deg,#f6a6ce_0%,#fbe3e9_100%)] text-[18px] font-bold text-black shadow-[0_10px_30px_rgba(246,166,206,0.25)] transition-transform active:scale-[0.98]"
+              disabled={judging}
+              className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-full bg-[linear-gradient(90deg,#f6a6ce_0%,#fbe3e9_100%)] text-[18px] font-bold text-black shadow-[0_10px_30px_rgba(246,166,206,0.25)] transition-transform active:scale-[0.98] disabled:opacity-70"
             >
-              {outcome === 'dead' ? '查看结算' : outcome === 'clear' ? '查看通关结算' : '下一关 →'}
+              {judging ? (
+                <>
+                  <Loader2 className="h-4.5 w-4.5 animate-spin" /> {taName} 正在判定成绩…
+                </>
+              ) : outcome === 'final' ? '交卷，等 TA 宣判' : '下一关 →'}
             </button>
           )}
         </div>
       )}
 
-      {/* 挑战失败 */}
+      {/* 挑战失败（AI 判定） */}
       {view === 'dead' && (
         <div className="flex flex-1 flex-col items-center justify-center px-8 pb-16">
           <div className="text-[34px] font-extrabold text-white">挑战失败</div>
-          <div className="mt-2 text-[15px] font-semibold text-[#f9a8d4]">
-            倒在第 {lv + 1} 关 ·「{level.name}」
-          </div>
-          <p className="mt-4 text-center text-[13.5px] leading-relaxed text-white/40">TA 已经不想说话了。这一次的沉默，比吵架更伤人。</p>
+          <div className="mt-2 text-[15px] font-semibold text-[#f9a8d4]">{taName} 判定你没及格</div>
+          {state.replyVerdict && (
+            <p className="mt-4 text-center text-[13.5px] leading-relaxed text-white/55" data-testid="reply-verdict-comment">{state.replyVerdict.comment}</p>
+          )}
+          {/* AI 的留言：TA 想说的话（可以点击回复，进 TA 的记忆） */}
+          {state.replyVerdict?.msg && (
+            <div className="mt-4 w-full">
+              <div className="flex items-start gap-2">
+                {state.taAvatar ? (
+                  <img src={state.taAvatar} alt={taName} className="h-8 w-8 shrink-0 rounded-full object-cover" draggable={false} />
+                ) : (
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#7f96e0]/25 text-[11px] font-bold text-[#8fa4ef]">{taName.slice(0, 1)}</span>
+                )}
+                <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-white/[0.07] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-white/85" data-testid="reply-final-msg">{state.replyVerdict.msg}</div>
+              </div>
+              <CommentThread state={state} patch={patchFn} threadKey="reply:final" hint={`听完 ${taName} 的话，想回一句吗`} testId="reply-final-thread" dark />
+            </div>
+          )}
           <div className="mt-6 flex gap-2.5">
             {[
               { l: '体面值', v: stats.tm },
@@ -7313,7 +7646,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
         </div>
       )}
 
-      {/* 通关成功 */}
+      {/* 通关成功（AI 判定） */}
       {view === 'clear' && (
         <div className="flex flex-1 flex-col items-center justify-center px-8 pb-16">
           <div className="text-[40px]" aria-hidden="true">
@@ -7321,10 +7654,25 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
           </div>
           <div className="mt-2 text-[32px] font-extrabold text-[#f9a8d4]">通关成功</div>
           <p className="mt-3 text-center text-[14.5px] leading-relaxed text-white/55">
-            {REPLY_LEVELS.length} 关全过 · 你已经听懂了
-            <br />
-            那些没说出口的话
+            {totalLv} 关全过 · {taName} 宣判你及格了
           </p>
+          {state.replyVerdict && (
+            <p className="mt-2 text-center text-[13px] leading-relaxed text-white/45" data-testid="reply-verdict-comment">{state.replyVerdict.comment}</p>
+          )}
+          {/* AI 的留言：TA 想说的话（可以点击回复，进 TA 的记忆） */}
+          {state.replyVerdict?.msg && (
+            <div className="mt-4 w-full">
+              <div className="flex items-start gap-2">
+                {state.taAvatar ? (
+                  <img src={state.taAvatar} alt={taName} className="h-8 w-8 shrink-0 rounded-full object-cover" draggable={false} />
+                ) : (
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#7f96e0]/25 text-[11px] font-bold text-[#8fa4ef]">{taName.slice(0, 1)}</span>
+                )}
+                <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-white/[0.07] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-white/85" data-testid="reply-final-msg">{state.replyVerdict.msg}</div>
+              </div>
+              <CommentThread state={state} patch={patchFn} threadKey="reply:final" hint={`听完 ${taName} 的话，想回一句吗`} testId="reply-final-thread" dark />
+            </div>
+          )}
           <div className="mt-6 flex gap-2.5">
             {[
               { l: '体面值', v: stats.tm },
@@ -8137,7 +8485,6 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
           patch={patchFn}
           threadKey="impress"
           hint={`和 ${state.taName || 'TA'} 聊聊你们眼里的彼此`}
-          hideNames
           testId="impress-chat"
         />
       </div>

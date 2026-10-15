@@ -161,6 +161,8 @@ import { MtShareBubble } from './mt-share-card';
 import { TbPayBubble, TbProxyDetailPage, TbShareBubble, TbExpressPicker } from './tb-share-cards';
 import { tbCreateOrderShare, tbGetProxy, tbProxyHistoryLine, tbProxyMeHistoryLine, tbReshareProxy, tbShareHistoryLine, stripTbEchoText, TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT } from '@/lib/ios/tb-share-proxy';
 import CoupleRelBubble from '@/components/apps/couple-rel-bubble';
+import CouplePactBubble from '@/components/apps/couple-pact-bubble';
+import type { CouplePactCardData } from '@/lib/ios/couple-pact-share';
 import {
   COUPLE_CARD_EVENT,
   decideCoupleCard as decideCoupleCardAction,
@@ -418,7 +420,9 @@ interface QQMsg {
   time: number;
   /** 消息种类：缺省 = 文本；image = 图片（content 为 dataURL）；location = 位置（loc 有值）；红包/转账消息 content 为空串（转账接收卡片也是 transfer）；family = 亲属卡（fam 有值）；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；relcard = 亲密关系卡片（恋人空间邀请卡/成功卡）；
    *  voice = 语音消息（voice 有值，content 保持空串）；sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；textcard = 文字图片卡片（card 有值，无生图依赖）；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片；tbpay = 淘宝代付卡片（请求/完成）；tbshare = 淘宝订单分享动态卡片 */
-  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard';
+  kind?: 'text' | 'image' | 'voice' | 'redpacket' | 'transfer' | 'location' | 'notice' | 'sticker' | 'family' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard' | 'pactcard';
+  /** 恋爱协议卡片（kind='pactcard'；第十二轮：协议分享/签署卡，由 couple-pact-share 落库，点击进恋人空间签署界面） */
+  pactcard?: CouplePactCardData;
   /** 歌曲卡片（kind='song'，Task 68 音乐 × AI）：结构同微信端 */
   song?: { name: string; artist: string; cover?: string; songId?: number; note?: string; autoPlay?: boolean; inviteDone?: boolean; agree?: boolean };
   /** 语音消息数据（kind='voice'；音频 dataURL + 时长 + 波形 + 转写，与微信端共用 VoiceMsgData 结构） */
@@ -576,6 +580,7 @@ function msgPreview(m: QQMsg | undefined): string {
   if (m.kind === 'forward') return m.fwd?.merged ? '[聊天记录]' : m.content;
   if (m.kind === 'groupcard') return '[群聊邀请]';
   if (m.kind === 'relcard') return '[亲密关系]';
+  if (m.kind === 'pactcard') return '[恋爱协议]';
   return m.content;
 }
 
@@ -4748,7 +4753,7 @@ function ChatPage({
       .filter(
         (m) =>
           // 拍一拍系统行（Task 30）也进历史：AI 要知道被拍/拍过谁与文案（按双方名字序列化，无主语歧义）
-          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'relcard' || m.kind === 'call' || m.kind === 'location' || m.kind === 'song' || (m.kind === 'sys' && !!m.sys?.pat)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
+          (!m.recalled && ((m.content || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'sticker' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'relcard' || m.kind === 'pactcard' || m.kind === 'call' || m.kind === 'location' || m.kind === 'song' || (m.kind === 'sys' && !!m.sys?.pat)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI')))
       )
       .slice(-20)
       .map((m) => {
@@ -6978,6 +6983,11 @@ function ChatPage({
                       onAccept={() => decideCoupleCard(m, true)}
                       onDecline={() => decideCoupleCard(m, false)}
                     />
+                  </div>
+                ) : m.kind === 'pactcard' && m.pactcard ? (
+                  /* 恋爱协议卡片（第十二轮）：点卡片本体进恋人空间签署界面（导航在气泡组件内） */
+                  <div {...bubblePress}>
+                    <CouplePactBubble data={m.pactcard} mine={m.role === 'me'} testidPrefix="qq" />
                   </div>
                 ) : m.kind === 'voice' && m.voice ? (
                   /* 语音消息：播放/暂停 + 波形 + 时长；长按菜单：转文字/复制/…；转写结果显示在气泡下方
