@@ -19986,3 +19986,22 @@ Work Log:
 Stage Summary:
 - 3 文件改动：couple-space.tsx（轨迹白面板删除+情书模块全面改造+工具栏调整）、couple-exam-bubble.tsx/couple-pact-bubble.tsx（代付卡同构改版）
 - 第二十七轮全部需求落地（对应累计清单 20–29 项）：轨迹记录白面板删除、邀请卡片变小+去粉边框+与代付卡片一模一样、情书封面美化、手写信入口删除+信纸移位、字体美化、信纸美化+12款+每页一样大
+---
+Task ID: 28
+Agent: Z.ai Code（主会话）
+Task: 恋人空间第二十八轮：信封上面的字位置调整、字体点击无反应修复（自托管 webfont）、新增 7 款字体（手写体/苹方 iOS）、信封与信纸再美化（参考「衔纸的鸽」「喵汪物语」信封信纸图）
+
+Work Log:
+- 定位：agent-browser 实机走查情书模块，确认「信封上面的字」= 右上角「恋人邮局 LOVE POST」圆形邮戳——原位置 top 4% 紧贴蕾丝花边，且信箱列表「可拆信」角标（right-3 top-3）正好完全压住邮戳；字体面板问题=行楷/隶书/魏碑/圆体依赖系统字体栈，缺字体时静默回退楷体/苹方，点击后渲染一模一样（=没反应）
+- 字体自托管：scripts/fetch-fonts.sh 从 Google Fonts css2 API（woff2 UA）拉取 7 款中文字体的 unicode-range 子集 CSS + 全部 woff2（每款 ~92 子集，共 21MB）到 /public/fonts/<family>/，sed 重写 URL 为本地相对路径（修复首轮 sed 模式未匹配问题）；情书页挂载时 ensureLetterFontLinks() 幂等注入 <link data-letter-font>，@font-face 按 unicode-range 按需加载，零常驻成本
+- LETTER_FONTS 重写（8→11 款）：删除不可靠系统栈字体 行楷/圆体/隶书/魏碑；新增 7 款 webfont——手写楷（Ma Shan Zheng 毛笔楷）/行书（Zhi Mang Xing）/毛草情书（Liu Jian Mao Cao）/龙藏手写（Long Cang）/小薇文艺（ZCOOL XiaoWei）/快乐体（ZCOOL KuaiLe）/黄油体（ZCOOL QingKe HuangYou）；「默认」改名「苹方 iOS」；系统保底只留苹方/楷体/宋体/仿宋（全平台存在）；全部字体点击必有可见变化
+- 持久化：CoupleState 新增 letterFontKey/letterPaperKey/letterFontSize/letterColor，pickPaper/pickFont/pickFontSize/pickColor 同步 patch——字体/信纸/字号/颜色重开 App 不再丢失
+- 信封位置调整：couple-letter-bubble.tsx Postmark 下移至 top 8.5%/right 5%（避开蕾丝花边）、缩小 w 21%/max 38px、rotate 8deg、opacity 0.9；信箱列表「可拆信/定时中/还剩 N 天」角标从 right-3 移到 left-3——邮戳文字完整可见
+- 信封美化：EnvelopeArt 新增收信字样块（「致 最爱的你」+「· 亲 启 ·」，KaiTi 栈，clamp+cqw 等比缩放，位于火漆下方 70.5%、小动物上方）；globals.css 加 @container (max-width:72px) 规则使 .letter-env-face 在编辑器工具栏小信封按钮（36px）等小容器里自动隐藏；新增 dove 底纹（飞鸟剪影 compound SVG）与 dove 小动物（衔信白鸽：翅膀+橙黄小喙，替代微笑）；LETTER_ENVELOPES 新增 白羽信鸽（米白+酒红火漆邮戳，参考图同款气质）/蔷薇飞鸟（粉蔷薇）两款
+- 信纸美化：LetterPaper 接口新增 frame/dove/headerQuote/headerScript/headerPets/fishBand/caption/padTop/grid 字段；新增 PaperDove（衔信白鸽线稿 SVG）/PaperFish（小鱼）/PaperDeco（装饰层组件：双线画框/左上衔纸鸽/右上花体题字/左上题头句/右上猫狗 PetFace/粉色小鱼骨分隔条/左下英文小字，全部 % + cqw 定位，编辑页与选择弹层预览共用等比渲染，父容器加 containerType:'inline-size'）；LETTER_PAPERS 扩至 15 款——新增 衔纸的鸽（画框+鸽子+A Winged Word+LIKE A DOVE 英文小字）/喵汪物语（幸福就是~题头+猫狗+鱼骨条）/粉稿方格（粉色作文格+画框）；方格稿纸用 grid 纹理替代横线（不受虚线开关影响）；有题头的信纸 padTop（56/62）下压正文起始位置、横线 backgroundPosition 同步平移、日期/工具 chip 自动下移避让
+- 验证：tsc 全量零错误；eslint（couple-space.tsx/couple-letter-bubble.tsx）零错误；agent-browser 实机（种子 凡凡/阿澈）：①信纸弹层 15 款全显（衔纸的鸽=画框+鸽子+花体题字、喵汪物语=题头+猫狗+鱼骨条、粉稿方格=粉格+画框）✓；②衔纸的鸽编辑页装饰层/英文小字/日期避让/正文下移 ✓；③喵汪物语/粉稿方格编辑页 ✓；④字体面板 11 款全部渲染出可见差异（手写楷/行书/毛草/龙藏/小薇/快乐/黄油 webfont 生效），点击手写楷金色选中+底部实时预览条变手写体+编辑器正文变手写体 ✓；⑤network 面板 7 个 font.css 200 + woff2 子集按 unicode-range 按需 200 ✓；⑥发送设置信封预览=邮戳下移+「致 最爱的你·亲启」字样 ✓；⑦换信封弹层 8 款（白羽信鸽/蔷薇飞鸟新样式正常）✓；⑧信箱列表角标左移后「恋人邮局」邮戳完整可见 ✓；⑨刷新后信纸/字体选择持久保留 ✓；⑩阅读页无回归 ✓；console 无错误、dev.log 无代码错误（仅预存 instrumentation Edge 警告）
+- 备注：scripts/fetch-fonts.sh 保留（后续加字体可复用）；/public/fonts 共 21MB 为 git 仓库体积主要增量
+
+Stage Summary:
+- 4 文件改动 + 21MB 字体资产：couple-space.tsx（字体表重写+懒加载+持久化+信纸接口/装饰层/3 款新信纸/信箱角标移位）、couple-letter-bubble.tsx（邮戳位置+收信字样+dove 底纹/白鸽+白羽信鸽/蔷薇飞鸟）、globals.css（@container 小容器隐藏规则）、scripts/fetch-fonts.sh + public/fonts/*（自托管字体）
+- 第二十八轮全部需求落地：信封上面的字（邮戳）位置调整+角标不再遮挡、字体点击无反应根治（自托管 webfont 全平台渲染一致）、新增 7 款字体（含手写体+苹方 iOS 明确化）+选择持久化、信封美化（收信字样+2 款新样式+鸽子元素）、信纸美化（3 款参考图同款信纸+装饰层系统）

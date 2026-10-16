@@ -596,3 +596,9 @@
     animation: none;
   }
 }
+/* 第二十八轮情书：信封收信字样——容器宽度过小时（编辑器工具栏小按钮等）自动隐藏，防止挤爆 */
+@container (max-width: 72px) {
+  .letter-env-face {
+    display: none;
+  }
+}

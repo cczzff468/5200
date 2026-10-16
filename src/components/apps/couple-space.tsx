@@ -112,7 +112,7 @@ import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, patchPactCardsWhere, pee
 import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
 import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
 import { setMtPendingPage } from '@/lib/ios/meituan-store';
-import { EnvelopeArt, LETTER_ENVELOPES } from './couple-letter-bubble';
+import { EnvelopeArt, LETTER_ENVELOPES, petKindOf, PetFace } from './couple-letter-bubble';
 import WheelDatePicker from './wheel-date-picker';
 import { displayNameOf, isFriendIn, avatarFor, type ContactRecord } from '@/lib/contacts';
 import { fileToScaledDataURL, loadProfileCard } from '@/components/ios/ProfileCard';
@@ -184,6 +184,10 @@ interface CoupleState {
   letterEnv: string; // 当前选中的信封样式 key（第十八轮）
   letterSenderName?: string; // 信封自定义署名（第二十轮：设置头像/昵称可自定义；空=跟随微信/QQ 同步的 meName）
   letterSenderAvatar?: string; // 信封自定义头像 dataURL（第二十轮；空=跟随 meAvatar）
+  letterFontKey?: string; // 情书编辑器当前字体 key（第二十八轮持久化：重开不丢）
+  letterPaperKey?: string; // 情书编辑器当前信纸 key（第二十八轮持久化）
+  letterFontSize?: number; // 情书编辑器当前字号（第二十八轮持久化）
+  letterColor?: string; // 情书编辑器当前字色（第二十八轮持久化）
   aiLetters: { id: string; text: string; envelope?: string; replyToId?: string; at: number }[]; // TA 写给我的信（AI 回信/主动写信）
   albums: CoupleAlbum[];
   moods: { id: string; emoji: string; text: string; at: number; photo?: string | null; dateKey?: string; from?: 'me' | 'ta' }[]; // 心情日记（from='ta' = AI 写的）
@@ -4013,8 +4017,31 @@ function isCustomIndex(i: number, customLen: number) {
   return i < customLen;
 }
 
-/** 未来情书信纸样式（编辑器可切换；第二十八轮美化+扩容：12 款信纸；deco=叠加装饰纹理层，decoSize=该层平铺尺寸） */
-const LETTER_PAPERS = [
+/** 信纸样式（编辑器可切换） */
+interface LetterPaper {
+  key: string;
+  name: string;
+  bg: string; // 信纸底渐变
+  line: string; // 横线颜色
+  dashed: boolean; // 横线是否跟随「虚线」开关
+  text: string; // 推荐字色（页脚计数等）
+  dark: boolean; // 深色信纸（页脚/日期用浅色）
+  deco?: string; // 叠加装饰纹理层（backgroundImage）
+  decoSize?: string; // 装饰纹理层平铺尺寸
+  // —— 第二十八轮新增（参考「衔纸的鸽」「喵汪物语」信纸图）——
+  frame?: boolean; // 双线画框（内衬边框，复刻参考图细线框）
+  dove?: boolean; // 左上角衔纸信鸽 SVG
+  headerQuote?: string; // 顶部题头句（左上，仿参考图「幸福就是~…」）
+  headerScript?: string; // 顶部花体题字（右上，仿参考图 A Winged Word）
+  headerPets?: string; // 顶部右上角小动物（字符映射 PetFace SVG）
+  fishBand?: boolean; // 题头下粉色小鱼骨分隔条
+  caption?: string; // 左下角英文小字（仿参考图 LIKE A DOVE…）
+  padTop?: number; // 编辑区顶部内边距覆盖（有题头的信纸把正文往下压，避免遮挡）
+  grid?: boolean; // 方格稿纸（田字格纹理替代横线；不受虚线开关影响）
+}
+
+/** 未来情书信纸样式（编辑器可切换；第二十八轮美化+扩容：12+3 款信纸；新增参考图同款「衔纸的鸽/喵汪物语/粉稿方格」） */
+const LETTER_PAPERS: LetterPaper[] = [
   { key: 'default', name: '信笺米黄', bg: 'linear-gradient(180deg,#fdf9ee 0%,#fbf2df 60%,#f8ecd2 100%)', line: 'rgba(196,164,116,0.55)', dashed: true, text: '#5a4a38', dark: false },
   { key: 'white', name: '纯白简约', bg: 'linear-gradient(180deg,#ffffff,#f8f9fb)', line: 'rgba(165,165,175,0.45)', dashed: false, text: '#3a3a40', dark: false },
   { key: 'gray', name: '浅灰格纹', bg: 'linear-gradient(180deg,#f7f7f9,#ececef)', line: 'rgba(150,150,162,0.42)', dashed: false, text: '#4a4a52', dark: false, deco: 'repeating-linear-gradient(90deg, transparent 0 12px, rgba(150,150,162,0.15) 12px 13px), repeating-linear-gradient(180deg, transparent 0 12px, rgba(150,150,162,0.15) 12px 13px)', decoSize: 'auto, auto' },
@@ -4027,22 +4054,164 @@ const LETTER_PAPERS = [
   { key: 'lavender', name: '薰衣草', bg: 'linear-gradient(180deg,#f7f3fc,#eee6f9)', line: 'rgba(160,140,200,0.42)', dashed: true, text: '#55446e', dark: false, deco: 'radial-gradient(circle at 10px 10px, rgba(255,255,255,0.7) 1.4px, transparent 2.2px)', decoSize: '24px 24px' },
   { key: 'milktea', name: '莓果奶茶', bg: 'linear-gradient(180deg,#fbf1e9,#f4e4d8)', line: 'rgba(190,140,110,0.45)', dashed: true, text: '#6e4a38', dark: false },
   { key: 'night', name: '星夜蓝', bg: 'linear-gradient(180deg,#232633,#191c27)', line: 'rgba(185,195,225,0.32)', dashed: true, text: '#d8deee', dark: true, deco: 'radial-gradient(circle at 14px 14px, rgba(255,255,255,0.12) 1.1px, transparent 2px)', decoSize: '30px 30px' },
+  // —— 第二十八轮新增（参考用户上传的「衔纸的鸽」「喵汪物语」信纸图）——
+  { key: 'dove', name: '衔纸的鸽', bg: 'linear-gradient(180deg,#fbf8f0 0%,#f6f0e2 55%,#f1e9d6 100%)', line: 'rgba(150,138,112,0.42)', dashed: true, text: '#5a5044', dark: false, frame: true, dove: true, headerScript: 'A Winged Word', caption: 'LIKE A DOVE ALIGHTING UPON A BLOOM OF PEACE, MAY THIS MESSAGE CARRY THE FRAGRANCE OF HOPE TO YOUR HEART', padTop: 56 },
+  { key: 'maowang', name: '喵汪物语', bg: 'linear-gradient(180deg,#ffffff 0%,#fbfbfe 100%)', line: 'rgba(168,168,180,0.4)', dashed: true, text: '#4a4a52', dark: false, headerQuote: '幸福就是~猫吃鱼，狗吃肉，奥特曼打小怪兽~', headerPets: '🐱🐶', fishBand: true, padTop: 62 },
+  { key: 'fangge', name: '粉稿方格', bg: 'linear-gradient(180deg,#fdf6f8,#faedf1)', line: 'rgba(214,150,170,0.5)', dashed: false, text: '#7a4a58', dark: false, grid: true, deco: 'repeating-linear-gradient(90deg, transparent 0 21px, rgba(214,150,170,0.22) 21px 22px), repeating-linear-gradient(180deg, transparent 0 21px, rgba(214,150,170,0.22) 21px 22px)', decoSize: 'auto, auto', frame: true },
 ];
 
-/** 未来情书字体（编辑器字体面板；第二十八轮美化：双行预览+字体栈补全+新增隶书/魏碑） */
+/**
+ * 未来情书字体（编辑器字体面板）。
+ * 第二十八轮修复「点击其中一个字体没有反应」：行楷/隶书/魏碑/圆体依赖系统字体栈，
+ * 在 iOS/Windows 上缺字体时会静默回退到楷体/苹方——点击后渲染完全一样（= 没反应）。
+ * 修复方式：删掉不可靠的系统栈字体，改为自托管 webfont（/public/fonts/*，unicode-range 子集，
+ * 全平台渲染一致）；系统保底字体只留全平台都有的苹方/楷体/宋体/仿宋。
+ * 新增 7 款：手写楷（马善政毛笔楷）、行书（志忙行）、毛草情书（柳建毛草）、龙藏手写、
+ * 小薇文艺（站酷小薇）、快乐体（站酷快乐）、黄油体（站酷庆科黄油）——均为手写/文艺向。
+ * CSS 由 LETTER_FONT_LINKS 在情书页懒加载（@font-face 仅在用到时才拉子集，零常驻成本）。
+ */
 const LETTER_FONTS = [
-  { key: 'default', name: '默认', css: '"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",sans-serif' },
+  { key: 'default', name: '苹方 iOS', css: '"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",sans-serif' },
   { key: 'kai', name: '楷体', css: 'KaiTi,"Kaiti SC",STKaiti,"Kaiti TC",serif' },
   { key: 'song', name: '宋体', css: 'SimSun,"Songti SC",STSong,"Songti TC",serif' },
-  { key: 'fang', name: '仿宋', css: 'FangSong,"Fangsong SC",STFangsong,"Fangsong TC",serif' },
-  { key: 'xing', name: '行楷', css: '"Xingkai SC",STXingkai,"Xingkai TC",KaiTi,cursive' },
-  { key: 'yuan', name: '圆体', css: '"Yuanti SC","Yuanti TC",YouYuan,"PingFang SC",sans-serif' },
-  { key: 'li', name: '隶书', css: 'LiSu,"Lisu SC",STLiti,"Kaiti SC",serif' },
-  { key: 'wei', name: '魏碑', css: '"Weibei SC",STWeibei,KaiTi,serif' },
+  { key: 'fang', name: '仿宋', css: 'FangSong,"Fangsong SC",STFangsong,"Fangsong TC","Songti SC",serif' },
+  { key: 'mashan', name: '手写楷', css: '"Ma Shan Zheng","Kaiti SC",KaiTi,serif' },
+  { key: 'zhimang', name: '行书', css: '"Zhi Mang Xing","Kaiti SC",KaiTi,cursive' },
+  { key: 'maocao', name: '毛草情书', css: '"Liu Jian Mao Cao","Xingkai SC",KaiTi,cursive' },
+  { key: 'longcang', name: '龙藏手写', css: '"Long Cang","Xingkai SC",KaiTi,cursive' },
+  { key: 'xiaowei', name: '小薇文艺', css: '"ZCOOL XiaoWei","Songti SC",SimSun,serif' },
+  { key: 'kuaile', name: '快乐体', css: '"ZCOOL KuaiLe","Yuanti SC",YouYuan,"PingFang SC",sans-serif' },
+  { key: 'huangyou', name: '黄油体', css: '"ZCOOL QingKe HuangYou","Yuanti SC",YouYuan,"PingFang SC",sans-serif' },
 ];
+
+/** 自托管字体 CSS（情书页挂载时注入 <link>，字体文件按 unicode-range 懒加载） */
+const LETTER_FONT_LINKS = [
+  '/fonts/mashanzheng/font.css',
+  '/fonts/zhimangxing/font.css',
+  '/fonts/liujianmaocao/font.css',
+  '/fonts/longcang/font.css',
+  '/fonts/zcoolxiaowei/font.css',
+  '/fonts/zcoolkuaile/font.css',
+  '/fonts/zcoolhuangyou/font.css',
+];
+
+/** 确保自托管字体 CSS 已注入页面（幂等；情书页挂载时调用） */
+function ensureLetterFontLinks() {
+  if (typeof document === 'undefined') return;
+  for (const href of LETTER_FONT_LINKS) {
+    if (!document.querySelector(`link[data-letter-font="${href}"]`)) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = href;
+      link.setAttribute('data-letter-font', href);
+      document.head.appendChild(link);
+    }
+  }
+}
 
 /** 未来情书字色 */
 const LETTER_COLORS = ['#4a4238', '#8a8a94', '#a13a52', '#b8860b', '#3f6b4f', '#4a5a7a', '#8a5a2e', '#5f3d8a'];
+
+/** 衔纸信鸽 SVG（参考「A Winged Word」信纸图左上角线稿鸽：白鸽衔信） */
+function PaperDove() {
+  return (
+    <svg viewBox="0 0 48 40" aria-hidden="true" style={{ display: 'block', width: 'clamp(20px, 10cqw, 46px)', height: 'auto', opacity: 0.8 }}>
+      <g fill="none" stroke="#a13a52" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M11 24.5c0-6.2 5.2-11.2 12.2-11.2 3.8 0 6.8 1.9 8.8 4.8l7.6 2-6.6 3.8c-1 5.8-5.8 9.8-12.6 9.8H9l3.8-4.6c-1.2-1.3-1.8-2.9-1.8-4.6Z" fill="rgba(161,58,82,0.07)" />
+        <path d="M21.5 13.4c-2.2-3.8-6.4-5.6-11.2-4.6 2 2.9 5.2 4.7 8.6 4.9" />
+        <path d="M13.5 30.5 8.5 35h6.5" />
+        <circle cx="27.6" cy="16.6" r="0.9" fill="#a13a52" stroke="none" />
+      </g>
+      <g transform="translate(33.5 21.5) rotate(10)">
+        <rect x="0" y="0" width="8.4" height="5.8" rx="0.9" fill="#fffdf6" stroke="#a13a52" strokeWidth="0.8" />
+        <path d="M0.5 0.8 4.2 3.4 7.9 0.8" fill="none" stroke="#a13a52" strokeWidth="0.7" />
+      </g>
+    </svg>
+  );
+}
+
+/** 小鱼分隔条里的单条小鱼 */
+function PaperFish() {
+  return (
+    <svg viewBox="0 0 16 10" aria-hidden="true" style={{ display: 'block', width: 'clamp(8px, 3cqw, 14px)', height: 'auto', opacity: 0.75 }}>
+      <ellipse cx="6.4" cy="5" rx="4.6" ry="2.7" fill="#f2b3c3" />
+      <path d="M10.8 5 15 2.4v5.2Z" fill="#f2b3c3" />
+      <circle cx="4.6" cy="4.4" r="0.7" fill="#fff" />
+    </svg>
+  );
+}
+
+/**
+ * 信纸装饰层（第二十八轮：参考「衔纸的鸽」「喵汪物语」信纸图）——
+ * 画框/衔纸鸽/花体题字/题头句/角落小动物/小鱼骨分隔条/左下英文小字。
+ * 全部用 % + cqw 定位缩放：编辑页（480px 高）与选择弹层预览（86px）共用同一组件等比渲染，
+ * 父容器需设置 containerType: 'inline-size'。
+ */
+function PaperDeco({ p }: { p: LetterPaper }) {
+  const hasAny = p.frame || p.dove || p.headerQuote || p.headerScript || p.headerPets || p.fishBand || p.caption;
+  if (!hasAny) return null;
+  const petKinds = (p.headerPets ? Array.from(p.headerPets).map(petKindOf).filter((k): k is NonNullable<ReturnType<typeof petKindOf>> => k !== null) : []);
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+      {/* 双线画框（复刻参考图细线边框） */}
+      {p.frame && (
+        <>
+          <div className="absolute" style={{ inset: '2.4%', border: `1px solid ${p.line}`, borderRadius: 2, opacity: 0.75 }} />
+          <div className="absolute" style={{ inset: '3.6%', border: `1px solid ${p.line}`, borderRadius: 1, opacity: 0.45 }} />
+        </>
+      )}
+      {/* 左上角衔纸信鸽 */}
+      {p.dove && (
+        <div className="absolute" style={{ left: '5.2%', top: '3.2%' }}>
+          <PaperDove />
+        </div>
+      )}
+      {/* 右上角花体题字（仿 A Winged Word） */}
+      {p.headerScript && (
+        <div
+          className="absolute"
+          style={{ top: '3.4%', right: '7%', fontFamily: 'KaiTi,"Kaiti SC",STKaiti,"Ma Shan Zheng",serif', fontStyle: 'italic', fontSize: 'clamp(9px, 3.7cqw, 18px)', letterSpacing: '0.1em', color: 'rgba(122,64,80,0.62)' }}
+        >
+          {p.headerScript}
+        </div>
+      )}
+      {/* 左上题头句（仿「幸福就是~…」） */}
+      {p.headerQuote && (
+        <div
+          className="absolute truncate"
+          style={{ top: '2.8%', left: '4.6%', right: p.headerPets ? '26%' : '4.6%', fontSize: 'clamp(8px, 3.2cqw, 15.5px)', letterSpacing: '0.05em', fontWeight: 600, color: '#9a9aa2' }}
+        >
+          {p.headerQuote}
+        </div>
+      )}
+      {/* 右上角小动物（猫+狗） */}
+      {petKinds.length > 0 && (
+        <div className="absolute flex items-start" style={{ top: '1.4%', right: '3.2%', gap: '1.2cqw' }}>
+          {petKinds.map((k, i) => (
+            <PetFace key={i} kind={k} />
+          ))}
+        </div>
+      )}
+      {/* 粉色小鱼骨分隔条 */}
+      {p.fishBand && (
+        <div className="absolute flex items-center justify-around overflow-hidden rounded-[3px]" style={{ top: '8.2%', left: '4.6%', right: '4.6%', height: 'clamp(5px, 2.8cqw, 13px)', background: '#fbe3ea' }}>
+          {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+            <PaperFish key={i} />
+          ))}
+        </div>
+      )}
+      {/* 左下角英文小字（仿 LIKE A DOVE…） */}
+      {p.caption && (
+        <div
+          className="absolute uppercase"
+          style={{ bottom: '6%', left: '5.4%', width: '64%', fontSize: 'clamp(4.5px, 1.9cqw, 9.5px)', lineHeight: 1.55, letterSpacing: '0.04em', color: 'rgba(90,74,56,0.4)' }}
+        >
+          {p.caption}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** 星空底（未来情书）：随机星点 + 缓闪 */
 function LetterStars({ count = 44 }: { count?: number }) {
@@ -4286,10 +4455,10 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   const [shareLetterId, setShareLetterId] = useState<string | null>(null); // 正在分享的信（弹出通用分享选择器）
   const [sendMode, setSendMode] = useState<'now' | 'timed'>('now'); // 寄出方式（第二十轮改名：即时发出 / 定时发出）
   const [after, setAfter] = useState(30);
-  const [paper, setPaper] = useState(LETTER_PAPERS[0]);
-  const [font, setFont] = useState(LETTER_FONTS[0]);
-  const [fontSize, setFontSize] = useState(14);
-  const [color, setColor] = useState(LETTER_COLORS[0]);
+  const [paper, setPaper] = useState<LetterPaper>(() => LETTER_PAPERS.find((p) => p.key === state.letterPaperKey) ?? LETTER_PAPERS[0]);
+  const [font, setFont] = useState<(typeof LETTER_FONTS)[number]>(() => LETTER_FONTS.find((f) => f.key === state.letterFontKey) ?? LETTER_FONTS[0]);
+  const [fontSize, setFontSize] = useState(state.letterFontSize ?? 14);
+  const [color, setColor] = useState(state.letterColor ?? LETTER_COLORS[0]);
   const [dashed, setDashed] = useState(true);
   const [receipt, setReceipt] = useState(true);
   const [toolsOpen, setToolsOpen] = useState(true);
@@ -4304,6 +4473,29 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   const arriveDate = new Date(Date.now() + after * 86400000);
   const meName0 = (state.letterSenderName || '').trim() || state.meName || '我'; // 信封署名：自定义 > 微信/QQ 同步
   const senderAvatar = state.letterSenderAvatar || state.meAvatar || null; // 信封头像：自定义 > 微信/QQ 同步
+
+  // 第二十八轮：自托管字体 CSS 懒加载（幂等；@font-face 按 unicode-range 按需拉子集）
+  useEffect(() => {
+    ensureLetterFontLinks();
+  }, []);
+
+  // 第二十八轮：信纸/字体/字号/颜色选择同步持久化（修复重开后丢失导致「看起来没选中」）
+  const pickPaper = (p: LetterPaper) => {
+    setPaper(p);
+    patch({ letterPaperKey: p.key });
+  };
+  const pickFont = (f: (typeof LETTER_FONTS)[number]) => {
+    setFont(f);
+    patch({ letterFontKey: f.key });
+  };
+  const pickFontSize = (n: number) => {
+    setFontSize(n);
+    patch({ letterFontSize: n });
+  };
+  const pickColor = (c: string) => {
+    setColor(c);
+    patch({ letterColor: c });
+  };
 
   /** 指定页写入（上限截断 + 写满提示节流 + 写满自动下滑加下一页；第二十八轮起每页容量一致） */
   const setPageTextAt = (pi: number, v: string) => {
@@ -4341,7 +4533,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   /** 三个选择弹层（信纸/字体/信封；第十九轮起编辑页与发送设置页共用） */
   const renderSheets = () => (
     <>
-      {/* 信纸选择弹层（第二十八轮：12 款信纸 + 预览带装饰纹理层） */}
+      {/* 信纸选择弹层（第二十八轮：12+3 款信纸 + 预览带装饰纹理层/画框/题头，与编辑页等比渲染） */}
       {sheet === 'paper' && (
         <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
           <div className="rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
@@ -4350,11 +4542,12 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">挑一张喜欢的信纸，把心里话写在上面 ♡</div>
             <div className="mt-3 grid max-h-[330px] grid-cols-4 gap-3 overflow-y-auto">
               {LETTER_PAPERS.map((p) => (
-                <button key={p.key} type="button" onClick={() => { setPaper(p); setSheet(null); }} className="flex flex-col items-center gap-1.5">
-                  <span className={`relative h-[86px] w-full overflow-hidden rounded-md border-2 shadow-sm ${paper.key === p.key ? 'border-[#2c2c30]' : 'border-transparent'}`}>
+                <button key={p.key} type="button" onClick={() => { pickPaper(p); setSheet(null); }} className="flex flex-col items-center gap-1.5">
+                  <span className={`relative h-[86px] w-full overflow-hidden rounded-md border-2 shadow-sm ${paper.key === p.key ? 'border-[#2c2c30]' : 'border-transparent'}`} style={{ containerType: 'inline-size' }}>
                     <span aria-hidden="true" className="absolute inset-0" style={{ background: p.bg }} />
                     {p.deco && <span aria-hidden="true" className="absolute inset-0" style={{ backgroundImage: p.deco, backgroundSize: p.decoSize }} />}
-                    <span aria-hidden="true" className="absolute inset-0" style={{ backgroundImage: `repeating-linear-gradient(180deg, transparent 0 12px, ${p.line} 12px 13px)` }} />
+                    {p.grid ? null : <span aria-hidden="true" className="absolute inset-0" style={{ backgroundImage: `repeating-linear-gradient(180deg, transparent 0 12px, ${p.line} 12px 13px)` }} />}
+                    <PaperDeco p={p} />
                   </span>
                   <span className={`w-full truncate text-[11.5px] ${paper.key === p.key ? 'font-semibold text-[#26262b]' : 'text-[#5a5a62]'}`}>{p.name}</span>
                 </button>
@@ -4372,19 +4565,19 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         </div>
       )}
 
-      {/* 字体弹层（字体/字号/颜色；第二十八轮美化：双行预览卡片+金色选中态+圆形色板+实时预览条） */}
+      {/* 字体弹层（字体/字号/颜色；第二十八轮美化：双行预览卡片+金色选中态+圆形色板+实时预览条；全部字体自托管 webfont/全平台系统字体，点击必有效果） */}
       {sheet === 'font' && (
         <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
           <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
             <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
             <div className="text-center text-[15px] font-bold text-[#2c2c30]">字体</div>
-            <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">选一种字体，让字也有温度</div>
+            <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">选一种字体，让字也有温度（新增 7 款手写体，点击即生效）</div>
             <div className="mt-3 grid grid-cols-3 gap-2.5">
               {LETTER_FONTS.map((f) => (
                 <button
                   key={f.key}
                   type="button"
-                  onClick={() => setFont(f)}
+                  onClick={() => pickFont(f)}
                   className={`rounded-xl border px-2 py-2.5 text-center transition-colors ${font.key === f.key ? 'border-[#c9a86a] bg-[#fbf5e8] shadow-[0_2px_10px_rgba(201,168,106,0.22)]' : 'border-[#e8e8ec] bg-white active:bg-[#f6f6f8]'}`}
                 >
                   <div className="text-[10.5px] font-medium text-[#9a9aa2]">{f.name}</div>
@@ -4396,7 +4589,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             <div className="mt-4 flex items-center gap-3">
               <span className="shrink-0 text-[14px] font-semibold text-[#3a3a40]">字号</span>
               <span className="text-[12px] text-[#b6b6bd]">A</span>
-              <input type="range" min={12} max={22} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="h-1.5 flex-1 accent-[#2c2c30]" aria-label="字号" />
+              <input type="range" min={12} max={22} value={fontSize} onChange={(e) => pickFontSize(Number(e.target.value))} className="h-1.5 flex-1 accent-[#2c2c30]" aria-label="字号" />
               <span className="text-[18px] font-semibold text-[#3a3a40]">A</span>
               <span className="w-8 shrink-0 rounded-full bg-[#2c2c30] py-0.5 text-center text-[12px] font-bold text-white">{fontSize}</span>
             </div>
@@ -4408,7 +4601,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                     key={c}
                     type="button"
                     aria-label={`颜色 ${c}`}
-                    onClick={() => setColor(c)}
+                    onClick={() => pickColor(c)}
                     className={`h-9 w-9 rounded-full border-2 shadow-sm ${color === c ? 'border-[#2c2c30]' : 'border-transparent'}`}
                     style={{ background: c }}
                   />
@@ -4710,9 +4903,10 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     );
   }
 
-  // ============ 编辑信件视图（第二十轮重做：纵向连续信纸，下滑即加第二页，不再左右翻页；「xx的来信」页眉标签已删除；第二十八轮：每页信纸同高同容、装饰纹理层、工具栏删手写信+信纸移位） ============
+  // ============ 编辑信件视图（第二十轮重做：纵向连续信纸，下滑即加第二页，不再左右翻页；「xx的来信」页眉标签已删除；第二十八轮：每页信纸同高同容、装饰纹理层、工具栏删手写信+信纸移位；第二十九轮：参考图同款信纸装饰层/画框/题头/方格稿纸，题头信纸正文自动下移避让） ============
   if (view === 'write') {
-    const lineBg = dashed && paper.dashed !== undefined
+    const padTop = paper.padTop ?? 32; // 题头信纸把正文往下压，避开装饰层
+    const lineBg = !paper.grid && dashed && paper.dashed !== undefined
       ? `repeating-linear-gradient(180deg, transparent 0px, transparent 30px, ${paper.line} 30px, ${paper.line} calc(30px + 1px))`
       : undefined;
     const totalChars = pages.reduce((n, p) => n + p.length, 0);
@@ -4726,20 +4920,23 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             {pages.map((ptext, pi) => {
               const pageFull = ptext.length >= LETTER_PAGE_CHARS;
               const isFocus = pi === focusSafe;
+              const hasHeader = Boolean(paper.headerQuote || paper.headerScript || paper.headerPets);
               return (
                 <div
                   key={pi}
                   className="relative shrink-0 overflow-hidden rounded-md shadow-[0_8px_28px_rgba(0,0,0,0.5)]"
-                  style={{ background: paper.bg, height: LETTER_PAGE_HEIGHT }}
+                  style={{ background: paper.bg, height: LETTER_PAGE_HEIGHT, containerType: 'inline-size' }}
                   data-testid={`letter-paper-${pi + 1}`}
                 >
-                  {/* 横线 */}
-                  {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: '0 6px' }} />}
+                  {/* 横线（方格稿纸信纸用格子纹理替代横线） */}
+                  {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: `0 ${padTop - 26}px` }} />}
                   {/* 信纸自带装饰纹理（第二十八轮：蕾丝点/樱花点/格纹/斜纹等） */}
                   {paper.deco && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: paper.deco, backgroundSize: paper.decoSize }} />}
-                  {/* 首页右上角日期（第二十轮：「xx的来信」标签删除，仅留日期） */}
+                  {/* 参考图同款装饰层（画框/衔纸鸽/题头/小鱼骨条/英文小字；第二十九轮） */}
+                  <PaperDeco p={paper} />
+                  {/* 首页右上角日期（第二十轮：「xx的来信」标签删除，仅留日期；有题头的信纸日期下移避让） */}
                   {pi === 0 && (
-                    <div className="pointer-events-none absolute right-4 top-2.5 z-[5] text-[11.5px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.5)' : 'rgba(90,74,56,0.5)' }}>
+                    <div className={`pointer-events-none absolute right-4 z-[5] text-[11.5px] ${hasHeader ? 'top-[7.4%]' : 'top-2.5'}`} style={{ color: paper.dark ? 'rgba(216,222,238,0.5)' : 'rgba(90,74,56,0.5)' }}>
                       {`${new Date().getFullYear()}年${new Date().getMonth() + 1}月${new Date().getDate()}日`}
                     </div>
                   )}
@@ -4748,15 +4945,15 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                     onChange={(e) => setPageTextAt(pi, e.target.value)}
                     onFocus={() => setFocusPage(pi)}
                     placeholder={pi === 0 ? '写下你想说的话…' : '这一页接着写…'}
-                    className="letter-pad absolute inset-0 h-full w-full resize-none bg-transparent px-5 pb-10 pt-8 leading-[30px] tracking-[0.5px] outline-none"
-                    style={{ fontFamily: font.css, fontSize, color, caretColor: color }}
+                    className="letter-pad absolute inset-0 h-full w-full resize-none bg-transparent px-5 pb-10 leading-[30px] tracking-[0.5px] outline-none"
+                    style={{ fontFamily: font.css, fontSize, color, caretColor: color, paddingTop: padTop }}
                   />
                   {/* 工具开关 chip（只在正在编辑的页显示） */}
                   {isFocus && (
                     <button
                       type="button"
                       onClick={() => setToolsOpen((v) => !v)}
-                      className="absolute right-2 top-10 z-10 rounded-md bg-[#2c2c30] px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm"
+                      className={`absolute right-2 z-10 rounded-md bg-[#2c2c30] px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm ${hasHeader ? 'top-[13%]' : 'top-10'}`}
                     >
                       工具 {toolsOpen ? '˄' : '˅'}
                     </button>
@@ -5102,8 +5299,8 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                   className="relative block w-full overflow-hidden rounded-2xl text-left shadow-[0_10px_26px_rgba(0,0,0,0.42)] transition-transform active:scale-[0.985]"
                 >
                   <EnvelopeArt envKey={l.envelope} className="h-[132px] w-full" avatar={state.taAvatar} />
-                  {/* 第二十一轮：左上角「xx的来信」标签删除；底部只显示时间（信的内容不再展示） */}
-                  <span className="absolute right-3 top-3 z-10 rounded-full bg-[#2c2c30] px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm">可拆信</span>
+                  {/* 第二十一轮：左上角「xx的来信」标签删除；底部只显示时间；第二十八轮：角标移到左上角，不再遮住右上角恋人邮局邮戳文字 */}
+                  <span className="absolute left-3 top-3 z-10 rounded-full bg-[#2c2c30] px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm">可拆信</span>
                   <span className="absolute inset-x-0 bottom-0 z-10 block bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">
                     <span className="block truncate text-[12px] font-medium tabular-nums text-white/90">{fmtMDHM(l.at)}</span>
                   </span>
@@ -5142,8 +5339,8 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 className="relative block w-full overflow-hidden rounded-2xl text-left shadow-[0_10px_26px_rgba(0,0,0,0.42)] transition-transform active:scale-[0.985]"
               >
                 <EnvelopeArt envKey={l.envelope ?? envKey} className="h-[132px] w-full" avatar={senderAvatar} />
-                {/* 第二十一轮：左上角署名标签删除；底部只显示时间（即时/定时/信封名等其它信息不再展示） */}
-                <span className={`absolute right-3 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ${open ? 'bg-[#2c2c30] text-white' : 'bg-black/38 text-white/90'}`}>
+                {/* 第二十一轮：左上角署名标签删除；底部只显示时间；第二十八轮：角标移到左上角，不再遮住右上角恋人邮局邮戳文字 */}
+                <span className={`absolute left-3 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ${open ? 'bg-[#2c2c30] text-white' : 'bg-black/38 text-white/90'}`}>
                   {open ? '可拆信' : instant ? '定时中' : `还剩 ${remain} 天`}
                 </span>
                 <span className="absolute inset-x-0 bottom-0 z-10 block bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">

@@ -14,6 +14,12 @@
  * 第十九轮（用户要求：信封封面再美化一下，不要 emoji 表情）：
  * - 底纹（爪印/星星/爱心/云朵/圆点）、火漆贴纸、底部一排小动物全部改为 SVG 手绘；
  * - 封口盖顶部加蕾丝花边（SVG 扇贝边），右上角加「恋人邮局 LOVE POST」圆形邮戳。
+ *
+ * 第二十八轮（参考「衔纸的鸽」信封信纸图）：
+ * - 邮戳下移避开蕾丝花边（原 top 4% 紧贴顶边且被信箱「可拆信」角标压住），缩小到 21% 并微调角度；
+ * - 信封正面新增收信字样「致 最爱的你 · 亲启」+ 英文小字（仿参考图封面手写体排版，cqw 缩放）；
+ * - 新增 dove 底纹（飞鸟剪影）与 dove 小动物（衔信白鸽）；
+ * - 新增两款信封样式：白羽信鸽（米白+酒红，参考图同款气质）、蔷薇飞鸟（粉蔷薇）。
  */
 
 import type { CoupleLetterCardData } from '@/lib/ios/couple-letter-share';
@@ -31,7 +37,7 @@ export interface LetterEnvelopeStyle {
   seal: string; // 火漆印颜色
   sticker: string; // 火漆上的贴纸（第十九轮起按此字符映射为 SVG 图形，不再渲染 emoji）
   pets: string; // 底部一排小动物（第十九轮起按字符映射为 SVG 小动物脸）
-  pattern: 'paw' | 'star' | 'heart' | 'cloud' | 'dot';
+  pattern: 'paw' | 'star' | 'heart' | 'cloud' | 'dot' | 'dove';
   patternColor: string; // 底纹颜色
   accent: string; // 强调色（选中描边等）
 }
@@ -43,6 +49,9 @@ export const LETTER_ENVELOPES: LetterEnvelopeStyle[] = [
   { key: 'mintbear', name: '薄荷小熊', body: 'linear-gradient(160deg,#d4f2e2,#b8e8d0)', flap: '#a9e0c4', seal: '#6fc7a0', sticker: '🌿', pets: '🐻🐰🐻', pattern: 'dot', patternColor: 'rgba(100,180,145,0.22)', accent: '#6fc7a0' },
   { key: 'skybunny', name: '晴空云朵', body: 'linear-gradient(160deg,#cfe7fb,#b3d9f5)', flap: '#a8cef2', seal: '#7fb2e8', sticker: '☁️', pets: '🐰☁️🐰', pattern: 'cloud', patternColor: 'rgba(110,160,220,0.24)', accent: '#7fb2e8' },
   { key: 'kraft', name: '牛皮复古', body: 'linear-gradient(160deg,#ead9bd,#dcc39c)', flap: '#d3b98e', seal: '#b98a5a', sticker: '❤️', pets: '🐻🦊🐻', pattern: 'heart', patternColor: 'rgba(160,110,60,0.2)', accent: '#b98a5a' },
+  // 第二十八轮新增（参考「衔纸的鸽」信封图）：白羽信鸽 —— 米白纸面 + 酒红邮戳火漆，复古信鸽气质
+  { key: 'whitedove', name: '白羽信鸽', body: 'linear-gradient(160deg,#f8f3e8,#f0e7d2)', flap: '#ecdfc4', seal: '#a13a52', sticker: '💌', pets: '🕊️☁️🕊️', pattern: 'dove', patternColor: 'rgba(161,58,82,0.15)', accent: '#a13a52' },
+  { key: 'rosedove', name: '蔷薇飞鸟', body: 'linear-gradient(160deg,#fbeee9,#f6dcd1)', flap: '#f3ccb9', seal: '#c96a72', sticker: '💌', pets: '🕊️🐰🕊️', pattern: 'heart', patternColor: 'rgba(201,106,114,0.2)', accent: '#c96a72' },
 ];
 
 export function letterEnvelopeOf(key: string | undefined): LetterEnvelopeStyle {
@@ -86,12 +95,24 @@ function PatternGlyph({ pattern, color, size }: { pattern: LetterEnvelopeStyle['
       </svg>
     );
   }
+  if (pattern === 'dove') {
+    // 飞鸟剪影（同色 compound 拼成小鸟：身+双翅+头+尾）
+    return (
+      <svg {...svgProps}>
+        <ellipse cx="10.5" cy="12.6" rx="5.2" ry="3.6" />
+        <path d="M10.5 9.6C9 6.9 6.2 5.5 3 5.7c1.4 1.9 3.4 3.1 5.8 3.4Z" />
+        <path d="M12.6 9.3c.6-2.8 2.6-4.8 5.6-5.4-.4 2.3-1.9 4.1-4.1 5Z" />
+        <circle cx="15.3" cy="11.7" r="2.2" />
+        <path d="M5.6 12.3 2.4 14.1l3.4.4Z" />
+      </svg>
+    );
+  }
   return null;
 }
 
-type PetKind = 'bunny' | 'koala' | 'pup' | 'cat' | 'mouse' | 'bear' | 'fox' | 'star' | 'cloud';
+type PetKind = 'bunny' | 'koala' | 'pup' | 'cat' | 'mouse' | 'bear' | 'fox' | 'star' | 'cloud' | 'dove';
 
-function petKindOf(ch: string): PetKind | null {
+export function petKindOf(ch: string): PetKind | null {
   if (ch === '🐰') return 'bunny';
   if (ch === '🐨') return 'koala';
   if (ch === '🐶') return 'pup';
@@ -99,6 +120,7 @@ function petKindOf(ch: string): PetKind | null {
   if (ch === '🐭') return 'mouse';
   if (ch === '🐻') return 'bear';
   if (ch === '🦊') return 'fox';
+  if (ch === '🕊️' || ch === '🕊') return 'dove';
   if (ch === '⭐️' || ch === '⭐' || ch === '🌟') return 'star';
   if (ch === '☁️' || ch === '☁') return 'cloud';
   return null;
@@ -114,11 +136,12 @@ const PET_COLORS: Record<PetKind, { face: string; inner: string; line: string }>
   fox: { face: '#f0a45f', inner: '#fbe0c3', line: 'rgba(0,0,0,0.16)' },
   star: { face: '#ffd968', inner: '#ffe9a8', line: 'rgba(0,0,0,0.10)' },
   cloud: { face: '#ffffff', inner: '#eef4fb', line: 'rgba(0,0,0,0.08)' },
+  dove: { face: '#ffffff', inner: '#f3ece0', line: 'rgba(0,0,0,0.12)' },
 };
 
 /** SVG 小动物脸（卡通信风：耳朵 + 圆脸 + 点点眼 + 腮红 + 微笑），替代原 emoji 小动物；
- *  尺寸走父容器 cqw（containerType:inline-size），任意缩放清晰 */
-function PetFace({ kind }: { kind: PetKind }) {
+ *  尺寸走父容器 cqw（containerType:inline-size），任意缩放清晰；第二十八轮导出供信纸角落装饰复用 */
+export function PetFace({ kind }: { kind: PetKind }) {
   const c = PET_COLORS[kind];
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" style={{ display: 'block', width: 'clamp(10px, 15cqw, 19px)', height: 'auto', filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.10))' }}>
@@ -153,6 +176,15 @@ function PetFace({ kind }: { kind: PetKind }) {
           <ellipse cx="19.2" cy="9.4" rx="2.1" ry="3.6" fill={c.inner} stroke={c.line} strokeWidth="0.7" transform="rotate(-14 19.2 9.4)" />
         </>
       )}
+      {kind === 'dove' && (
+        <>
+          {/* 衔信白鸽：两侧小翅膀（橙黄小喙画在五官区替代嘴巴） */}
+          <ellipse cx="3.6" cy="13.8" rx="2.5" ry="4" fill={c.inner} stroke={c.line} strokeWidth="0.7" transform="rotate(18 3.6 13.8)" />
+          <ellipse cx="20.4" cy="13.8" rx="2.5" ry="4" fill={c.inner} stroke={c.line} strokeWidth="0.7" transform="rotate(-18 20.4 13.8)" />
+          <path d="M6.4 8.2q2.2 -2.4 4.4 -0.6" fill="none" stroke={c.line} strokeWidth="0.6" strokeLinecap="round" />
+          <path d="M17.6 8.2q-2.2 -2.4 -4.4 -0.6" fill="none" stroke={c.line} strokeWidth="0.6" strokeLinecap="round" />
+        </>
+      )}
       {kind === 'star' && (
         <path d="M12 1.8 14.6 7.6 20.9 8.2 16.2 12.4 17.6 18.6 12 15.4 6.4 18.6 7.8 12.4 3.1 8.2 9.4 7.6Z" fill={c.face} stroke={c.line} strokeWidth="0.7" strokeLinejoin="round" />
       )}
@@ -166,7 +198,8 @@ function PetFace({ kind }: { kind: PetKind }) {
       <circle cx="14.8" cy="12.6" r="1.05" fill="#3c3c44" />
       <circle cx="6.9" cy="15.6" r="1.55" fill="#f7a8bc" opacity="0.6" />
       <circle cx="17.1" cy="15.6" r="1.55" fill="#f7a8bc" opacity="0.6" />
-      <path d="M10.9 15.9q1.1 1 2.2 0" stroke="#3c3c44" strokeWidth="0.9" fill="none" strokeLinecap="round" />
+      {kind !== 'dove' && <path d="M10.9 15.9q1.1 1 2.2 0" stroke="#3c3c44" strokeWidth="0.9" fill="none" strokeLinecap="round" />}
+      {kind === 'dove' && <path d="M10.5 16.1 L13.5 16.1 L12 18.5 Z" fill="#e8a04c" stroke="rgba(0,0,0,0.10)" strokeWidth="0.4" strokeLinejoin="round" />}
       {(kind === 'cat' || kind === 'mouse' || kind === 'fox') && (
         <path d="M11.2 14.2 12 15l.8-.8" fill="none" stroke="#3c3c44" strokeWidth="0.8" strokeLinejoin="round" />
       )}
@@ -227,10 +260,11 @@ function LaceTrim({ color }: { color: string }) {
   );
 }
 
-/** 恋人邮局圆形邮戳（右上角，纯 SVG 文字 + 波浪戳线） */
+/** 恋人邮局圆形邮戳（右上角，纯 SVG 文字 + 波浪戳线；
+ *  第二十八轮位置调整：下移避开顶部蕾丝花边、缩小防止被信箱角标完全遮挡，角度微调） */
 function Postmark({ color }: { color: string }) {
   return (
-    <svg viewBox="0 0 34 34" className="absolute right-[4%] top-[4%] w-[26%] max-w-[44px]" style={{ transform: 'rotate(10deg)', opacity: 0.82 }} aria-hidden="true">
+    <svg viewBox="0 0 34 34" className="absolute right-[5%] top-[8.5%] w-[21%] max-w-[38px]" style={{ transform: 'rotate(8deg)', opacity: 0.9 }} aria-hidden="true">
       <circle cx="17" cy="17" r="15.2" fill="none" stroke={color} strokeWidth="1.6" />
       <circle cx="17" cy="17" r="10.6" fill="none" stroke={color} strokeWidth="0.9" />
       <text x="17" y="15.2" textAnchor="middle" fontSize="6.4" fontWeight="700" fill={color} style={{ letterSpacing: '0.5px' }}>
@@ -329,6 +363,15 @@ export function EnvelopeArt({ envKey, className = '', pets = true, avatar }: { e
           <SealGlyph ch={st.sticker} color={sealInk} />
         </div>
       )}
+      {/* 收信字样（第二十八轮：仿参考信封封面手写体排版，cqw 缩放适配任意尺寸；位于火漆下方、小动物上方；容器宽度过小时由 globals.css @container 规则自动隐藏） */}
+      <div aria-hidden="true" className="letter-env-face absolute inset-x-0 flex flex-col items-center" style={{ top: '70.5%' }}>
+        <span style={{ fontFamily: 'KaiTi,"Kaiti SC",STKaiti,serif', fontSize: 'clamp(9px, 5.4cqw, 17px)', letterSpacing: '0.3em', textIndent: '0.3em', lineHeight: 1.25, color: 'rgba(96,60,52,0.55)' }}>
+          致 最爱的你
+        </span>
+        <span style={{ marginTop: '0.8%', fontSize: 'clamp(6px, 2.8cqw, 9.5px)', letterSpacing: '0.42em', textIndent: '0.42em', fontFamily: 'KaiTi,"Kaiti SC",STKaiti,serif', color: 'rgba(96,60,52,0.42)' }}>
+          · 亲 启 ·
+        </span>
+      </div>
       {/* 底部一排 SVG 小动物 */}
       {pets && petKinds.length > 0 && (
         <div className="absolute inset-x-0 bottom-[3%] flex items-end justify-center" style={{ gap: '4cqw' }}>
