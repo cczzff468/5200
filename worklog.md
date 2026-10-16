@@ -20127,3 +20127,24 @@ Work Log:
 Stage Summary:
 - 关键决策：①「添加账号」语义从「新建账号」改为「账号密码登录已有账号」（用户明示），账号创建统一收口在联系人 App；②总开关删除只删 UI 入口，proactive-msg 库的 masterOff 存储与 per-role 配置链路原样保留（其他入口/二级页仍读写）；③语音气泡回退用 git 历史精确还原而非手写，保证与「原来的」逐字节一致
 - 修改文件：src/components/apps/voice-bubble.tsx（回退）、src/components/apps/wechat.tsx（顶部+输入栏+切换页+设置+底部tab）、src/components/apps/qq.tsx（设置总开关+import）、src/components/apps/chat-settings.tsx（信息总开关+state+import）
+---
+Task ID: round-35
+Agent: 主协调者 (Z.ai Code)
+Task: 第三十五轮：美团/淘宝「创建订单」自建订单入库（上传图片/AI 生图/类型/优惠券/规格选项组）、淘宝删领淘金币+阿里拍卖换创建订单、美团删按摩足疗换创建订单、订单详情图片可点选生图模型+自定义提示词重新生成（自建/既有订单通用）
+
+Work Log:
+- 新增 src/lib/ios/order-custom.ts（共享层）：OrderCustomMeta（type 类型文案 / couponLabel 优惠券名 / optionGroups 规格选项组{组名,值[]}）+ normalizeOrderCustom 安全归一化 + customSpecText（组→「小菜：拍黄瓜、花生米；…」单行文案）
+- 两个订单 store 挂 custom 字段：MtOrder.custom?: OrderCustomMeta（mtLoadOrders 归一化保留）；TbOrder.custom?: OrderCustomMeta（tbLoadOrders 宽松透传天然保留）
+- 新增 src/components/apps/order-img-gen.tsx（两端共用弹层）：collectImgGenModels() 读 设置›图像生成 当前配置(imgGenConfig) + 全部生图预设(imgGenPresets)；OrderImgGenSheet = 可编辑提示词 textarea + 模型单选列表 + 未配置引导文案 + 生成中禁用态；提交回调 (prompt, cfg) 由调用方执行真实生图与落库（generateFreePhoto 无锁脸，商品图不需要角色形象）
+- 新增 src/components/apps/mt-order-create.tsx（美团创建订单页，美团黄主题）：图片卡（上传图片=file input→FileReader→compressImageSrc 640px 落 dataURL / AI 生成图片=弹层）；表单=商品名称*/类型*(自由输入+9 个快捷 chip)/单价*/数量步进器/店铺名称*；规格选项组=8 个快捷组名 chip（小菜/奶茶小料/手机内存/杯型/温度/颜色/尺寸/套餐）+ 自定义组名+、分隔值；优惠券名称+金额；备注；底部合计实时算（16−3=13 校验 ✓）；保存=构建 MtOrder{id: mtc-*, merchantId:'custom', status:'completed', statusLog, custom meta, address 取默认}前插 mtSaveOrders 真实落库 + mt-orders-changed 广播 → 跳订单列表
+- 新增 src/components/apps/tb-order-create.tsx（淘宝创建订单页，淘宝橙渐变主题）：同构表单（类型 chips 换电商 9 项：服饰鞋包/手机数码/食品饮料/奶茶外卖…）；保存=TbOrder{id: tbc-*, shopId:'custom', shopName, items[0]{pid:'custom', sku=选项组 Object.fromEntries}, status:'completed', track:[], custom}push tbSaveOrders → 跳订单列表
+- meituan.tsx：Page+'createOrder'；GRID_ICONS+PackagePlus；MT_HOME_GRID 按摩足疗(anmo,占位 filter:null) → 创建订单(create, filter:'create')→tapCat 拦截 onOpenCreateOrder；HomePage+prop；根组件接线（保存成功 setTab('orders') 直达列表）；OrdersPage 自建单卡头「自建·{类型}」黄标(mt-custom-tag)+reorder 自建守卫 toast；OrderDetailPage：hooks(IMGGenIdx/Busy/Err)+genItemImg(生成→mtLoadOrders 改 items[idx].img→mtSaveOrders+事件→toast「图片已生成并更新到订单」)，商品图包 button+Wand2 悬浮角标可点弹层，预填提示词=名称+规格+「真实商品图，明亮光线」
+- taobao.tsx：TbPage+'createOrder'；删 TbCoinIcon/PaiIcon 两函数+运营位两入口，原位换 TbCreateIcon(橙色渐变包裹箱+加号 SVG)「创建订单」onOpenPage('createOrder')；根组件接线（保存→orders tab）；OrderCard：自建橙标(tb-custom-tag)+rebuy 守卫+fake shop {tmall:false}；OrderDetailPage：fake shop(id:'custom', name:o.shopName) 防店铺回退到 TB_SHOPS[0]、openShopSafe 守卫三处进店、addAllToCart/applyRefund 自建守卫、itemRows 行点击自建不跳商品页、商品图 span[role=button](避免 button 套 button)+Wand2 角标可点弹层，预填=标题+sku 值+「电商商品实拍图」，生成→tbSaveOrders+setTick；自建无图订单 TbImg 补 🛍️ emoji 兜底（详情+列表卡）
+- 环境故障处置：dev server 被 OOM killer 连杀 5 次（4GB 机 Turbopack 编译期内存超限）——关闭 agent-browser chrome 释放内存后 keeper 自动拉起恢复；tsc/eslint 期间内存吃紧属诱因之一
+- 校验：tsc 全量零错误；新增 4 文件 eslint 零错误零警告（meituan/taobao 大文件的 29 个 react-hooks/refs 存量报错经逐行核对全部位于本次未触碰的镜像 ref/pull 指示器历史代码）；dev.log 仅既有 instrumentation 警告
+- agent-browser 端到端实测（注入测试机主 c-test-owner 联系人→美团/淘宝账密登录 testowner001/test123）：①美团宫格第 10 位=创建订单→表单全字段可填→AI 生成图片弹层（提示词/模型列表/未配置引导）→保存→订单列表「霸王茶姬+自建·奶茶甜饮黄标+已完成 ¥13.00」→详情显示「奶茶小料：珍珠、椰果、芋圆」spec+美团红包优惠行+图片点击弹「重新生成商品图片」预填提示词 ✓；②淘宝运营位行=红包签到/淘宝秒杀/创建订单(橙图标)/淘票票/飞猪，领淘金币/阿里拍卖已消失 ✓→创建订单→保存→列表「Apple产品官方旗舰店+自建·手机数码橙标+交易成功 ¥5699 共减¥300」→详情店铺名正确(不回退预置店铺)、sku「手机内存：128G、256G、512G」、图片点击弹层预填「iPhone 16 256G（128G、256G、512G） 电商商品实拍图」、无图显示 🛍️ 兜底 ✓；③自建单守卫三连：进店逛逛→「自建订单的店铺不支持进店」、加入购物车→「自建订单商品暂不支持加入购物车」、申请售后→「自建订单不支持售后」 ✓
+- 限制说明：沙盒无可用生图模型配置（用户未在该浏览器 profile 配置图像生成接口），生成按钮走真实 generateFreePhoto 管线（与聊天生图/公益生图同源已验证），端到端出图需用户自配模型后生效；上传图片链路（file input→压缩→落库）代码路径与既有头像/相册上传同源
+
+Stage Summary:
+- 关键决策：①自建订单直接以「已完成」状态入库（上传订单=记录真实已发生的单，不走支付流程）；②custom 元数据挂订单本体而非独立表——订单详情/列表/AI 感知零改动兼容；③生图弹层两端共用一份（模型=当前配置+预设合集，提交后由调用方真实写回订单 items[i].img 落库，杜绝「假成功」）；④规格选项组同时写入 item.spec（美团）/item.sku（淘宝）保证详情页既有渲染链路直接显示
+- 修改文件：src/lib/ios/order-custom.ts（新增）、src/components/apps/order-img-gen.tsx（新增）、src/components/apps/mt-order-create.tsx（新增）、src/components/apps/tb-order-create.tsx（新增）、src/lib/ios/meituan-store.ts、src/lib/ios/taobao-store.ts、src/lib/ios/meituan-data.ts、src/components/apps/meituan.tsx、src/components/apps/taobao.tsx

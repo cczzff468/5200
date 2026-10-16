@@ -56,6 +56,7 @@ import {
   Trash2,
   Truck,
   User,
+  Wand2,
   Wallet,
   X,
   Zap,
@@ -179,6 +180,10 @@ import { PayPwdGate as QqPayPwdGate, loadPayPwd as qqLoadPayPwd } from './qq';
 import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 import { LocalToast, useLocalToast } from './page-toast';
 import { TbImg } from './tb-img';
+import { TbOrderCreatePage } from './tb-order-create';
+import { OrderImgGenSheet } from './order-img-gen';
+import { generateFreePhoto } from '@/lib/imggen';
+import type { ImgGenConfig } from '@/lib/ios/store';
 
 const TB_ORANGE = '#FF5000';
 const TB_PRICE = '#FF4400';
@@ -368,7 +373,7 @@ function ContactScanIcon({ size = 22 }: { size?: number }) {
   );
 }
 
-/** 首页运营位图标（截图1：红包签到/淘宝秒杀/领淘金币/阿里拍卖/淘票票/飞猪；彩色内联 SVG） */
+/** 首页运营位图标（红包签到/淘宝秒杀/创建订单/淘票票/飞猪；彩色内联 SVG） */
 function HongbaoIcon({ size = 44 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
@@ -392,23 +397,20 @@ function MiaoshaIcon({ size = 44 }: { size?: number }) {
   );
 }
 
-function TbCoinIcon({ size = 44 }: { size?: number }) {
+/** 创建订单运营位图标（替代原领淘金币/阿里拍卖：橙色渐变圆角方块 + 白色包裹箱与加号） */
+function TbCreateIcon({ size = 44 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
-      <circle cx="24" cy="24" r="19" fill="#FFC300" />
-      <circle cx="24" cy="24" r="14" fill="#FFDB4D" />
-      <text x="24" y="30.5" textAnchor="middle" fontSize="17" fontWeight="700" fill="#C77700" fontFamily="system-ui, sans-serif">币</text>
-      <path d="M13 10.5c2-1.8 4.4-3 7-3.6" stroke="#FFE68A" strokeWidth="3" strokeLinecap="round" fill="none" />
-    </svg>
-  );
-}
-
-function PaiIcon({ size = 44 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
-      <path d="M10 8h28a4 4 0 0 1 4 4v20a4 4 0 0 1-4 4H26l-8 6v-6h-8a4 4 0 0 1-4-4V12a4 4 0 0 1 4-4Z" fill="#FF4FA0" />
-      <text x="24" y="25.5" textAnchor="middle" fontSize="12" fontWeight="700" fill="#fff" fontFamily="system-ui, sans-serif">捡漏</text>
-      <circle cx="24" cy="40.5" r="2.6" fill="#FF4FA0" />
+      <defs>
+        <linearGradient id="tbcg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#FF7A21" />
+          <stop offset="1" stopColor="#FF4400" />
+        </linearGradient>
+      </defs>
+      <rect x="7" y="7" width="34" height="34" rx="9" fill="url(#tbcg)" />
+      <rect x="13.5" y="17" width="21" height="16" rx="3" fill="#fff" opacity="0.96" />
+      <path d="M13.5 20 24 13.5 34.5 20" stroke="#fff" strokeWidth="2.8" fill="none" opacity="0.96" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M24 21.5v7M20.5 25h7" stroke="#FF4400" strokeWidth="3.2" strokeLinecap="round" />
     </svg>
   );
 }
@@ -1003,7 +1005,7 @@ function HomePage({
   onOpenProduct: (pid: string) => void;
   onToast: (m: string) => void;
   onOpenCouponCenter: () => void;
-  onOpenPage: (p: 'signin' | 'seckill' | 'movie' | 'fliggy' | 'subsidy') => void;
+  onOpenPage: (p: 'signin' | 'seckill' | 'createOrder' | 'movie' | 'fliggy' | 'subsidy') => void;
 }) {
   const feedTabs: { id: HomeFeedTab; label: string; tag?: string }[] = [
     { id: 'follow', label: '关注' },
@@ -1312,13 +1314,12 @@ function HomePage({
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
         >
-          {/* 运营位图标行（红包签到/淘宝秒杀/领淘金币/阿里拍卖/淘票票/飞猪；彩色 SVG，随列表滚动） */}
+          {/* 运营位图标行（需求：删领淘金币/阿里拍卖，原位换「创建订单」自建订单入库；随列表滚动） */}
           <div className="mt-2.5 grid grid-cols-6 px-2">
             {[
               { icon: <HongbaoIcon />, label: '红包签到', on: () => onOpenPage('signin') },
               { icon: <MiaoshaIcon />, label: '淘宝秒杀', on: () => onOpenPage('seckill') },
-              { icon: <TbCoinIcon />, label: '领淘金币', on: () => onToast('领淘金币（演示）') },
-              { icon: <PaiIcon />, label: '阿里拍卖', on: () => onToast('阿里拍卖（演示）') },
+              { icon: <TbCreateIcon />, label: '创建订单', on: () => onOpenPage('createOrder') },
               { icon: <TicketPiaoIcon />, label: '淘票票', on: () => onOpenPage('movie') },
               { icon: <FliggyIcon />, label: '飞猪', on: () => onOpenPage('fliggy') },
             ].map((it) => (
@@ -3986,7 +3987,7 @@ function OrderCard({
       </div>
     );
   }
-  const shop = shopById(o.shopId);
+  const shop = o.custom ? { tmall: false } : shopById(o.shopId);
   const nodeIdx = o.track.length - 1;
   const statusRight = (() => {
     switch (o.status) {
@@ -4004,6 +4005,10 @@ function OrderCard({
     }
   })();
   const rebuy = () => {
+    if (o.custom) {
+      onToast('自建订单商品暂不支持加入购物车');
+      return;
+    }
     for (const it of o.items) tbAddToCart(uid, it.pid, it.sku, it.qty);
     onToast('已将订单商品加入购物车');
   };
@@ -4013,6 +4018,11 @@ function OrderCard({
       <div className="flex w-full items-center gap-1.5">
         {shop.tmall ? <TmallMark /> : <span className="mr-0.5 inline-block rounded-[3px] bg-[#FF5000] px-1 py-[1px] text-[10px] font-bold leading-none text-white">淘宝</span>}
         <span className="min-w-0 truncate text-[14px] font-semibold text-black/85">{o.shopName}</span>
+        {o.custom && (
+          <span className="shrink-0 rounded-[3px] border border-[#FF7A21]/40 bg-[#FFF1E6] px-1 py-px text-[10px] font-medium leading-[14px] text-[#C24E00]" data-testid="tb-custom-tag">
+            {o.custom.type ? `自建·${o.custom.type}` : '自建订单'}
+          </span>
+        )}
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/30" />
         <span className={`ml-auto shrink-0 text-[13px] ${o.status === 'pendingPay' || o.status === 'shipped' ? 'text-[#FF6A1E]' : o.status === 'cancelled' ? 'text-black/40' : 'text-black/50'}`}>{statusRight}</span>
       </div>
@@ -4021,7 +4031,7 @@ function OrderCard({
             商品行不再跳商品详情，去掉自身 onClick 让点击冒泡到卡体 onOpen */}
         {o.items.map((it, i) => (
           <button key={i} type="button" className="flex w-full gap-2.5 text-left">
-            <TbImg src={it.img} alt={it.title} cap={it.title} className="h-[74px] w-[74px] shrink-0 rounded-lg object-cover" />
+            <TbImg src={it.img} alt={it.title} cap={it.title} emoji={o.custom ? '🛍️' : undefined} className="h-[74px] w-[74px] shrink-0 rounded-lg object-cover" />
             <div className="min-w-0 flex-1">
               <div className="flex gap-2">
                 <span className="line-clamp-1 min-w-0 flex-1 text-[13.5px] leading-5 text-black/85">{it.title}</span>
@@ -4193,6 +4203,10 @@ function OrderDetailPage({
   const [priceOpen, setPriceOpen] = useState(true);
   /** 订单取消弹窗（截图2：待付款底栏「取消」） */
   const [cancelOpen, setCancelOpen] = useState(false);
+  // 商品图点击重生成（自建/既有订单通用：选生图模型+可改提示词，生成后真实写回订单）
+  const [imgGenIdx, setImgGenIdx] = useState<number | null>(null);
+  const [imgGenBusy, setImgGenBusy] = useState(false);
+  const [imgGenErr, setImgGenErr] = useState('');
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 4000);
     return () => clearInterval(t);
@@ -4228,6 +4242,10 @@ function OrderDetailPage({
   };
   /** 退款（原路退回） */
   const applyRefund = async () => {
+    if (o?.custom) {
+      onToast('自建订单不支持售后');
+      return;
+    }
     if (!o || !o.payIdp || !o.payMethodId) {
       onToast('退款信息异常，请联系客服');
       return;
@@ -4244,6 +4262,10 @@ function OrderDetailPage({
   };
   const addAllToCart = () => {
     if (!o) return;
+    if (o.custom) {
+      onToast('自建订单商品暂不支持加入购物车');
+      return;
+    }
     for (const it of o.items) tbAddToCart(uid, it.pid, it.sku, it.qty);
     onToast('已将订单商品加入购物车');
   };
@@ -4256,7 +4278,10 @@ function OrderDetailPage({
     );
   }
   const st = tbStatusText(o);
-  const shop = shopById(o.shopId);
+  // 自建订单：店铺不在预置店铺表里，用自建店铺展示（进店/加购/售后已另行守卫）
+  const shop = o.custom
+    ? { id: 'custom', name: o.shopName, tmall: false, rating: 5, fans: '—', tag: 'custom' }
+    : shopById(o.shopId);
   const man = tbCourierMan(o.id);
   const manPhone = tbCourierPhone(o.id);
   const nodeIdx = o.track.length - 1;
@@ -4284,15 +4309,70 @@ function OrderDetailPage({
     }
   };
 
+  /** 商品图重生成：选模型+可改提示词 → 生成成功真实写回该订单项并落库刷新 */
+  const genItemImg = async (idx: number, prompt: string, cfg: ImgGenConfig & { mode?: 'proxy' | 'direct' }) => {
+    setImgGenBusy(true);
+    setImgGenErr('');
+    try {
+      const src = await generateFreePhoto(cfg, prompt);
+      const list = tbLoadOrders(uid);
+      const target = list.find((x) => x.id === orderId);
+      if (target && target.items[idx]) {
+        target.items[idx] = { ...target.items[idx], img: src };
+        tbSaveOrders(uid, list);
+        setImgGenIdx(null);
+        onToast('图片已生成并更新到订单');
+        setTick((n) => n + 1);
+      } else {
+        setImgGenErr('订单数据已变化，请关闭后重试');
+      }
+    } catch (e) {
+      setImgGenErr(e instanceof Error ? e.message : '生成失败，请重试');
+    } finally {
+      setImgGenBusy(false);
+    }
+  };
+  /** 进店逛逛（自建订单的店铺不在店铺表，守卫） */
+  const openShopSafe = () => {
+    if (o.custom) {
+      onToast('自建订单的店铺不支持进店');
+      return;
+    }
+    onOpenShop(shop.id);
+  };
+
   /** 商品行（详情页通用；variant 区分状态口径） */
   const itemRows = (variant: 'pay' | 'deliver' | 'done') => (
     <div className="mt-2 space-y-3.5">
-      {o.items.map((it, i) => {
+      {o.items.map((it, idx) => {
         const skuText = Object.entries(it.sku).map(([k, v]) => `${k}：${v}`).join('；');
         const origin = Math.round(it.price * 1.32 * 100) / 100;
         return (
-          <button key={i} type="button" onClick={() => onOpenProduct(it.pid)} className="flex w-full gap-2.5 text-left">
-            <TbImg src={it.img} alt={it.title} cap={it.title} className="h-[78px] w-[78px] shrink-0 rounded-lg object-cover" />
+          <button key={idx} type="button" onClick={() => (o.custom ? undefined : onOpenProduct(it.pid))} className="flex w-full gap-2.5 text-left">
+            {/* 图片可点：选生图模型+改提示词重新生成（自建/既有订单通用）；span 内嵌避免 button 套 button */}
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label="点击重新生成图片"
+              data-testid={`tb-item-img-${idx}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setImgGenIdx(idx);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setImgGenIdx(idx);
+                }
+              }}
+              className="relative h-[78px] w-[78px] shrink-0 rounded-lg outline-none active:opacity-80"
+            >
+              <TbImg src={it.img} alt={it.title} cap={it.title} emoji={o.custom ? '🛍️' : undefined} className="h-full w-full rounded-lg object-cover" />
+              <span className="absolute right-0.5 top-0.5 grid h-5 w-5 place-items-center rounded-full bg-black/45 text-white">
+                <Wand2 className="h-3 w-3" strokeWidth={2.2} />
+              </span>
+            </span>
             <div className="min-w-0 flex-1">
               <div className="flex gap-2">
                 <span className="line-clamp-1 min-w-0 flex-1 text-[14px] leading-5 text-black/85">{it.title}</span>
@@ -4384,7 +4464,7 @@ function OrderDetailPage({
                   <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
                   <div className="mt-0.5 text-[11px] text-black/35">平均2天退款</div>
                 </div>
-                <button type="button" onClick={() => onOpenShop(shop.id)} className="flex shrink-0 items-center text-[13px] text-black/50 active:opacity-70">
+                <button type="button" onClick={openShopSafe} className="flex shrink-0 items-center text-[13px] text-black/50 active:opacity-70">
                   进店逛逛
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
@@ -4692,7 +4772,7 @@ function OrderDetailPage({
                 <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
                 <div className="mt-0.5 text-[11.5px] text-black/40">88VIP好评率93%，客服平均22秒回复</div>
               </div>
-              <button type="button" onClick={() => onOpenShop(shop.id)} className="flex shrink-0 items-center text-[13px] text-black/55 active:opacity-70">
+              <button type="button" onClick={openShopSafe} className="flex shrink-0 items-center text-[13px] text-black/55 active:opacity-70">
                 进店逛逛
                 <ChevronRight className="h-3.5 w-3.5" />
               </button>
@@ -4842,7 +4922,7 @@ function OrderDetailPage({
                   <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
                   <div className="mt-0.5 text-[11px] text-black/35">平均2天退款</div>
                 </div>
-                <button type="button" onClick={() => onOpenShop(shop.id)} className="flex shrink-0 items-center text-[13px] text-black/50 active:opacity-70">
+                <button type="button" onClick={openShopSafe} className="flex shrink-0 items-center text-[13px] text-black/50 active:opacity-70">
                   进店逛逛
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
@@ -5038,6 +5118,19 @@ function OrderDetailPage({
               setTick((n) => n + 1);
             }
           }}
+        />
+      ) : null}
+      {/* 商品图重生成弹层（选生图模型 + 可改提示词；生成成功真实写回订单） */}
+      {imgGenIdx !== null && o.items[imgGenIdx] ? (
+        <OrderImgGenSheet
+          open
+          title="重新生成商品图片"
+          initialPrompt={`${o.items[imgGenIdx].title}${Object.keys(o.items[imgGenIdx].sku).length > 0 ? `（${Object.values(o.items[imgGenIdx].sku).join(' / ')}）` : ''} 电商商品实拍图`}
+          busy={imgGenBusy}
+          error={imgGenErr}
+          accent="#FF4400"
+          onSubmit={(p, cfg) => void genItemImg(imgGenIdx, p, cfg)}
+          onClose={() => (imgGenBusy ? undefined : setImgGenIdx(null))}
         />
       ) : null}
     </div>
@@ -7261,7 +7354,7 @@ function SettingsPage({ session, onBack, onToast, onLogout }: { session: TbSessi
 
 // ---------------- 主入口（tab 框架 + 页面栈） ----------------
 
-type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs' | 'chat' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill' | 'ticketDetail';
+type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs' | 'chat' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill' | 'ticketDetail' | 'createOrder';
 type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 
 /** 底部导航（首页/消息/购物车/我的淘宝） */
@@ -7848,6 +7941,21 @@ export default function TaobaoApp() {
   } else if (page === 'signin') {
     // 红包签到·领现金（第九轮：首页运营位图标入口）
     content = <SignInPage uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
+  } else if (page === 'createOrder') {
+    // 创建订单（需求：替代领淘金币/阿里拍卖运营位——任意类型自建订单入库）
+    content = (
+      <TbOrderCreatePage
+        uid={uid}
+        onBack={() => setPage('main')}
+        onSaved={() => {
+          // 入库成功 → 直达订单列表
+          setOrderTab('all');
+          setSubReturn('me');
+          setPage('orders');
+        }}
+        onToast={showToast}
+      />
+    );
   } else if (page === 'movie') {
     // 淘票票（第十三轮重构：四大频道 tab；确认选座/选票 → 待付款订单 → 收银台支付后出票跳票详情；周边下单 → 支付面板）
     content = (

@@ -12,6 +12,7 @@
  */
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { accLs, getActiveAccountFor } from './accounts';
+import type { OrderCustomMeta } from './order-custom';
 import { productById, shopById, tbImg, tbReviewsOf, tbShopIdForTag, TB_SHOPS, type TbProduct } from './taobao-data';
 import { tbGenProducts } from './tb-product-gen';
 
@@ -554,6 +555,8 @@ export interface TbOrder {
   aiPickup?: { contactId: string; contactName: string; app: 'wx' | 'qq'; kind: 'gift' | 'favor' };
   /** 主动代付参与标记（tbEngageTick：每单只主动问过一次，防噪） */
   aiAsked?: boolean;
+  /** 用户自建订单元数据（淘宝首页「创建订单」入库；有值 = 自建单：类型/优惠券/规格选项组） */
+  custom?: OrderCustomMeta;
 }
 
 const orderKey = (uid: string) => `tb-orders:${uid}`;

@@ -14,6 +14,8 @@ import { getContact, listContacts } from '@/lib/ios/contacts-store';
 import type { ContactRecord } from '@/lib/contacts';
 import { avatarFor } from '@/lib/contacts';
 import { MT_COUPON_SEED, MT_COUPON_TYPE_LABEL, MT_GOD_CLAIMS, MT_DEALS, MT_MERCHANTS, mtDishesOf, mtImg, type MtCouponSeed, type MtCouponType, type MtMerchant, type MtShopCouponDef } from './meituan-data';
+import type { OrderCustomMeta } from './order-custom';
+import { normalizeOrderCustom } from './order-custom';
 
 // ---------------- 登录态 ----------------
 
@@ -485,6 +487,8 @@ export interface MtOrder {
   statusLog: { status: MtOrderStatus; at: number }[];
   /** 用户评价（订单完成后提交；商详评价 tab 聚合展示） */
   review?: MtOrderReview;
+  /** 用户自建订单元数据（首页「创建订单」入库；有值 = 自建单，类型/优惠券/规格选项组） */
+  custom?: OrderCustomMeta;
 }
 
 /** 订单评价（星级 + 文字 + 标签 + 晒图 + 商家回复，演示图取内容匹配图链） */
@@ -554,6 +558,7 @@ export function mtLoadOrders(uid: string): MtOrder[] {
           : undefined,
       status: (o.status ?? 'pendingPay') as MtOrderStatus,
       createdAt: typeof o.createdAt === 'number' ? o.createdAt : Date.now(),
+      custom: normalizeOrderCustom(o.custom),
       paidAt: typeof o.paidAt === 'number' ? o.paidAt : undefined,
       cancelReason: typeof o.cancelReason === 'string' ? o.cancelReason : undefined,
       riderName: typeof o.riderName === 'string' ? o.riderName : undefined,

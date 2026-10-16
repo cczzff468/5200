@@ -87,6 +87,7 @@ import {
   Phone as PhoneIcon,
   Plane,
   Orbit,
+  PackagePlus,
   Rabbit,
   Receipt,
   RefreshCw,
@@ -108,6 +109,7 @@ import {
   Undo2,
   Users,
   Utensils,
+  Wand2,
   Wallet,
   X,
   Zap,
@@ -117,6 +119,10 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ISLAND_NAV_EVENT, takeNotifyNavigation } from '@/lib/ios/island-notify';
 import { LocalToast, useLocalToast } from './page-toast';
 import { FoodImg } from './mt-food-img';
+import { MtOrderCreatePage } from './mt-order-create';
+import { OrderImgGenSheet, type ImgGenModelOption } from './order-img-gen';
+import { generateFreePhoto } from '@/lib/imggen';
+import type { ImgGenConfig } from '@/lib/ios/store';
 import MerchantCenterPage from './mt-merchant-center';
 import MerchantEditPage from './mt-merchant-edit';
 import ShopManagePage from './mt-shop-manage';
@@ -256,7 +262,7 @@ import { listContacts, loginQQ, loginWechat } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
 
-type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices' | 'merchantCenter' | 'merchantEdit' | 'shopManage';
+type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices' | 'merchantCenter' | 'merchantEdit' | 'shopManage' | 'createOrder';
 type Tab = 'home' | 'orders' | 'cart' | 'my';
 
 const MT_YELLOW = '#FFD100';
@@ -339,6 +345,7 @@ const GRID_ICONS: Record<string, LucideIcon> = {
   Stethoscope,
   BookOpen,
   LayoutGrid,
+  PackagePlus,
 };
 
 /** 菜品图（共享实现见 ./mt-food-img：内容匹配图全链有图 + 一次重试 + 加载期 shimmer） */
@@ -1021,6 +1028,7 @@ function HomePage({
   onOpenSearch,
   onOpenChannel,
   onOpenMessages,
+  onOpenCreateOrder,
   onScan,
   onToast,
 }: {
@@ -1030,6 +1038,8 @@ function HomePage({
   onOpenChannel: (c: 'hotel' | 'fun' | 'movies' | 'shangou' | 'travel') => void;
   onOpenMessages: () => void;
   onOpenSearch: (kw?: string) => void;
+  /** 宫格「创建订单」入口（自建订单入库） */
+  onOpenCreateOrder: () => void;
   onScan: () => void;
   onToast: (m: string) => void;
 }) {
@@ -1258,6 +1268,11 @@ function HomePage({
   };
 
   const tapCat = (c: (typeof MT_HOME_GRID)[number][number]) => {
+    // 创建订单（自建订单入库，替代原「按摩足疗」占位）
+    if (c.filter === 'create') {
+      onOpenCreateOrder();
+      return;
+    }
     // 三大频道：酒店旅行 / 休闲玩乐 / 电影演出 → 独立频道页（AI 生成内容）
     if (c.filter === 'hotel' || c.filter === 'xiuxian' || c.filter === 'dianying') {
       onOpenChannel(c.filter === 'hotel' ? 'hotel' : c.filter === 'xiuxian' ? 'fun' : 'movies');
@@ -3522,6 +3537,11 @@ function OrdersPage({
   };
 
   const reorder = (o: MtOrder) => {
+    // 自建单没有真实商家页
+    if (o.custom) {
+      onToast('自建订单暂不支持再来一单');
+      return;
+    }
     // 再来一单：跳回对应商家页重新挑选（团购跳团购详情），不再直接塞购物车
     if (o.kind === 'tuangou') {
       const deal = mtDealOf(o.items[0]?.dishId ?? '');
@@ -3655,6 +3675,11 @@ function OrdersPage({
                       <Utensils className="h-3 w-3 text-[#FF8A00]" strokeWidth={2.4} />
                     </span>
                     <span className="min-w-0 flex-1 truncate text-[16px] font-bold text-black/90">{o.merchantName.split('（')[0]}</span>
+                    {o.custom && (
+                      <span className="shrink-0 rounded-[3px] border border-[#FFD100]/70 bg-[#FFFBE0] px-1 py-px text-[10px] font-medium leading-[14px] text-[#B77900]" data-testid="mt-custom-tag">
+                        {o.custom.type ? `自建·${o.custom.type}` : '自建订单'}
+                      </span>
+                    )}
                     <span className={`shrink-0 text-[13px] ${['pendingPay', 'pendingAccept', 'accepted', 'delivering'].includes(o.status) ? 'font-medium text-[#FF6000]' : 'text-[#9A9A9A]'}`}>
                       {mtStatusText(o)}
                     </span>
@@ -3983,6 +4008,10 @@ function OrderDetailPage({
   const [sharePlat, setSharePlat] = useState<'wx' | 'qq' | null>(null);
   const [shareContact, setShareContact] = useState<string | null>(null);
   const [shareSending, setShareSending] = useState(false);
+  // 商品图点击重生成（创建订单/已有订单通用：选生图模型+可改提示词，生成后真实写回订单）
+  const [imgGenIdx, setImgGenIdx] = useState<number | null>(null);
+  const [imgGenBusy, setImgGenBusy] = useState(false);
+  const [imgGenErr, setImgGenErr] = useState('');
   const order = mtGetOrder(uid, orderId);
   if (!order) {
     return (
@@ -4054,6 +4083,11 @@ function OrderDetailPage({
   const voucherCut = Math.max(0, Math.round((order.discount - couponAmt) * 100) / 100);
 
   const reorder = () => {
+    // 自建单没有真实商家页
+    if (order.custom) {
+      onToast('自建订单暂不支持再来一单');
+      return;
+    }
     // 再来一单：跳回商家页重新挑选（团购跳团购详情），不再直接塞购物车
     if (tuangou) {
       const deal = mtDealOf(order.items[0]?.dishId ?? '');
@@ -4063,6 +4097,30 @@ function OrderDetailPage({
       }
     }
     onOpenMerchant(order.merchantId);
+  };
+
+  /** 商品图重生成：选模型+可改提示词 → 生成成功真实写回该订单项并落库刷新 */
+  const genItemImg = async (idx: number, prompt: string, cfg: ImgGenConfig & { mode?: 'proxy' | 'direct' }) => {
+    setImgGenBusy(true);
+    setImgGenErr('');
+    try {
+      const src = await generateFreePhoto(cfg, prompt);
+      const list = mtLoadOrders(uid);
+      const target = list.find((x) => x.id === orderId);
+      if (target && target.items[idx]) {
+        target.items[idx] = { ...target.items[idx], img: src };
+        mtSaveOrders(uid, list);
+        window.dispatchEvent(new CustomEvent('mt-orders-changed'));
+        setImgGenIdx(null);
+        onToast('图片已生成并更新到订单');
+      } else {
+        setImgGenErr('订单数据已变化，请关闭后重试');
+      }
+    } catch (e) {
+      setImgGenErr(e instanceof Error ? e.message : '生成失败，请重试');
+    } finally {
+      setImgGenBusy(false);
+    }
   };
 
   /** 发送订单分享：动态卡片进好友聊天（买的什么/金额/五段状态/骑手名实时同步） */
@@ -4518,13 +4576,28 @@ function OrderDetailPage({
             </button>
           </div>
           <div className="mt-2.5 space-y-2">
-            {order.items.map((i) => (
+            {order.items.map((i, itemIdx) => (
               <div key={`${i.dishId}-${i.spec ?? ''}`} className="flex items-center gap-2.5">
-                {i.img ? (
-                  <FoodImg src={i.img} emoji={i.emoji} className="h-11 w-11 shrink-0 rounded-lg" />
-                ) : (
-                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-[#F5F6F7] text-[16px]">{i.emoji}</span>
-                )}
+                {/* 图片可点：选生图模型+改提示词重新生成（自建/既有订单通用） */}
+                <button
+                  type="button"
+                  aria-label="点击重新生成图片"
+                  data-testid={`mt-item-img-${itemIdx}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setImgGenIdx(itemIdx);
+                  }}
+                  className="relative h-11 w-11 shrink-0 overflow-hidden rounded-lg active:opacity-80"
+                >
+                  {i.img ? (
+                    <FoodImg src={i.img} emoji={i.emoji} className="h-full w-full" />
+                  ) : (
+                    <span className="grid h-full w-full place-items-center bg-[#F5F6F7] text-[16px]">{i.emoji}</span>
+                  )}
+                  <span className="absolute inset-0 grid place-items-center bg-black/25 opacity-0 transition-opacity hover:opacity-100">
+                    <Wand2 className="h-4 w-4 text-white" strokeWidth={2.2} />
+                  </span>
+                </button>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[13px] text-black/75">{stripDealQty(i.name)}</span>
                   {i.spec && <span className="block truncate text-[11px] text-black/40">{stripDealQty(i.spec)}</span>}
@@ -4754,6 +4827,20 @@ function OrderDetailPage({
           />
         )}
       </AnimatePresence>
+
+      {/* 商品图重生成弹层（选生图模型 + 可改提示词；生成成功真实写回订单） */}
+      {imgGenIdx !== null && order.items[imgGenIdx] && (
+        <OrderImgGenSheet
+          open
+          title="重新生成商品图片"
+          initialPrompt={`${order.items[imgGenIdx].name}${order.items[imgGenIdx].spec ? `（${stripDealQty(order.items[imgGenIdx].spec)}）` : ''} 真实商品图，明亮光线`}
+          busy={imgGenBusy}
+          error={imgGenErr}
+          accent="#FF6000"
+          onSubmit={(p, cfg) => void genItemImg(imgGenIdx, p, cfg)}
+          onClose={() => (imgGenBusy ? undefined : setImgGenIdx(null))}
+        />
+      )}
     </div>
   );
 }
@@ -12238,6 +12325,7 @@ export default function MeituanApp() {
                 }}
                 onOpenChannel={(c) => setPage(c)}
                 onOpenMessages={() => setPage('messages')}
+                onOpenCreateOrder={() => setPage('createOrder')}
                 onScan={() => openScan('meituan')}
                 onToast={showToast}
               />
@@ -12309,6 +12397,19 @@ export default function MeituanApp() {
         </div>
       )}
       {page === 'search' && <SearchPage seedKw={searchSeed} onBack={() => setPage('main')} onOpenMerchant={openMerchant} />}
+      {page === 'createOrder' && session && (
+        <MtOrderCreatePage
+          session={session}
+          onBack={() => setPage('main')}
+          onSaved={() => {
+            // 入库成功 → 直达订单列表（新建的已完成单在最上面）
+            setOrderTab('全部');
+            setTab('orders');
+            setPage('main');
+          }}
+          onToast={showToast}
+        />
+      )}
       {page === 'messages' && session && <MessagesPage session={session} onBack={() => setPage('main')} onOpenOrder={(id) => { setOrderId(id); setOrderFrom('orders'); setPage('orderDetail'); }} onOpenCoupons={() => setPage('coupons')} onToast={showToast} />}
       {page === 'member' && session && <MemberPage session={session} onBack={() => setPage('main')} onOpenCoupons={() => setPage('coupons')} onClaimCoupons={() => { const n = mtClaimGodCoupons(uid); showToast(n > 0 ? `已领取${n}张神券，可在「红包卡券」查看` : '神券已领取过了'); }} onToast={showToast} />}
       {page === 'couponCode' && session && orderId && <CouponCodePage session={session} orderId={orderId} onBack={() => setPage(orderFrom === 'orders' ? 'main' : 'orderDetail')} onToast={showToast} />}

@@ -332,7 +332,7 @@ export const MT_HOME_GRID: MtGridCat[][] = [
     { id: 'dianying', name: '电影演出', icon: 'Clapperboard', filter: 'dianying' },
     { id: 'shangou', name: '闪购', icon: 'Zap', filter: 'shangou' },
     { id: 'jipiao', name: '机票火车票', icon: 'Plane', filter: 'travel' },
-    { id: 'anmo', name: '按摩足疗', icon: 'Footprints', filter: null },
+    { id: 'create', name: '创建订单', icon: 'PackagePlus', filter: 'create' },
   ],
   [
     { id: 'paotui', name: '跑腿', icon: 'Rabbit', filter: null },
