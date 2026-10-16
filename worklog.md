@@ -19892,3 +19892,42 @@ Work Log:
 Stage Summary:
 - GitHub cczzff468/5200 main = 本地 HEAD 5ade798（第 22 轮最终版），完全同步
 - 网络备忘：沙箱→github.com 间歇性阻断依旧；阻断时可用 api.github.com:443 + Git Data API 作为兜底推送通道
+
+---
+Task ID: restore-from-github
+Agent: Z.ai Code（主会话）
+Task: 从 GitHub（cczzff468/5200）拉取第 22 轮最终版，恢复到沙箱工作区继续开发
+
+Work Log:
+- 克隆 https://github.com/cczzff468/5200.git（用户提供的 PAT）到 /tmp/repo-5200，HEAD=cfcc0fa（worklog 提交，父为 5ade798 第 22 轮最终版）
+- rsync 同步全部文件到 /home/z/my-project，排除 .git/node_modules/.next/.env/dev.log/next-env.d.ts/upload（upload 为特殊挂载点 chgrp 报错，改用 cp 恢复 314 个文件）
+- 用仓库 .git 替换工作区 .git（恢复 22 轮完整历史），remote origin 已配置用户 token，branch=main 与 origin/main 同步
+- bun install 补装 32 个包（@types/web-push/idb/jsmediatags/leaflet/remark-gfm/web-push 等）；bun run db:generate
+- 启动 dev server（端口 3000，单实例 next-server v16.1.3）
+- agent-browser 实机验证：锁屏（时间/日期/天气/通知）→ 上滑解锁 → iOS 主屏（天气/主题/浏览器/备忘录/相机/照片/文件/计算器 + dock）全部正常渲染；浏览器 console 无错误；dev.log 无代码错误（weather API 200）
+
+Stage Summary:
+- 工作区 = GitHub 第 22 轮最终版（cfcc0fa），dev server 运行中，等待用户提出第 23 轮修改/新增需求
+- 沙箱→github.com 间歇阻断备忘依然有效（可用 api.github.com:443 + Git Data API 兜底推送）
+
+---
+Task ID: 24
+Agent: Z.ai Code（主会话）
+Task: 恋人空间第二十四轮：陪答AI按人设记忆选择/留言+删「他选了」、预览试卷扁平化+三按钮（和他一起答题/答题/让他答题）、全局按钮圆角黑白灰（可用虚线）、邀请卡片美化（圆角方形logo+大标题）、位置与轨迹气泡白浅灰+发送↑、所有发送按钮→↑、留言名字黑色不遮挡往下延伸、AI全面接真实模型拒绝模板、AI决策审查修复
+
+Work Log:
+- couple-ai.ts 全面模型化：aiExamSheet/aiGradeExam/aiExamTaReact/aiDecidePact/aiAnswerWithMe/aiCommentOnPhoto/aiTickMood/aiTickQuiz/aiTickImpress/aiTickAnniv/aiTickPact/aiTickComment/aiTickHundred/aiTickLetter/aiReadLetter/aiZodiacReading/aiReplyPickForLevel/aiTickTrail 全部 coupleLLM→llmUserFirst（用户配置API模型优先，内置SDK兜底）；删除全部模板兜底常量（TPL_REPLY/TPL_PHOTO/TPL_TRAIL/tplMeTrail/AI_MOOD_TPL/AI_QUIZ_TPL/AI_IMPRESS_POOL/AI_PACT_TPL/AI_HUNDRED_WISH/AI_LETTER_TPL）与 companion 随机兜底——生成失败一律静默跳过本次（宁可不发不发套路话），下周期重试；scheduleAiReply/aiCommentOnPhoto/aiExamCompanion/aiExamSheet/aiTickTrail/aiTrailFeed 注入记忆碎片召回（memChatRecallBlock）+最近聊天上下文
+- aiExamCompanion 强化为四参（+prevThoughts）：TA 的选择与想法 = 人设+共享记忆+记忆召回+最近聊天+这张卷子前面题里已说过的话（不重复、口吻连贯）；thought 为空即视为失败返回 null
+- 新增 aiExamSubmitSay：TA 交卷在聊天里说的话由模型现说（替换固定文案「卷子答完交啦…」）；couple-pact-share 的 say 兜底话术删除（无 say 只回写卡片不发消息）
+- couple-space.tsx ExamPage：①answer 视图删除「（他选了：…）」，名字「阿澈：」改黑色加粗；②preview 视图整体重建为与答题页同款扁平列表（粉底渐变/ExamPaperSheet 白纸卷装饰全部删除，组件删除），按钮区三键：和他一起答题（白底虚线圆角）→ 发卡片+我立即进答题页同时作答；答题（黑底，原「生成试卷」改名）→ makePaper 我自己答；让他答题（白底灰环）→ 发卡片+TA答我不答回题库；ensurePaper 修复旧卷残留覆盖问题（换卷时 TA 答新卷批改页读旧题的错位隐患）；pickerMode 区分两个分享流
+- 黑白灰圆角化全站扫尾（couple-space.tsx 约 130 处）：粉/绿/蓝/紫渐变与实底按钮→#2c2c30 或白底灰环/虚线描边；选中态（心情/状态测评/回复挑战我的选项/答题我的选择）→深灰系；TA 身份蓝（#576b95/#7f96e0）按第二十二轮决议保留；分数色（绿/金/红）与轨迹类型图标色保留（信息性）；阴影彩色→中性黑
+- 位置与轨迹：我的气泡 #3ec763 绿→浅灰 #ececf1（TA 白不变）；发送按钮绿→白底↑（ArrowUp）+灰环；「查看记录」绿→深灰
+- CommentThread：名字蓝/粉→黑（dark→白）、回复xx前缀同步；留言列表 max-h-36/44 滚动截断删除（随页面一直往下延伸）；发送按钮→白底↑圆钮（7 处复用全生效）；SupportPage 发送→黑底↑；情书阅读页分享 Send 纸飞机→↑
+- 邀请卡片美化：couple-exam-bubble/couple-pact-bubble 的 AppLogo 由 rounded-full 裁圆→rounded-[7px] 圆角方形（与用户截图一致）+27px+「恋人空间」加深加大；标题 17.5→19px 加字距
+- AI 决策审查修复：①ensurePaper 换卷覆盖（上述）；②aiExamSubmitSay 交卷话术模型化（上述）；③_replyPickForLevel 无模型时只记中性选择不编看法（UI 空看法不渲染）
+- 验证：tsc 全量零错误；eslint 六文件零错误零警告；agent-browser 实机（注入凡凡/阿澈+考试卡+协议卡种子，微信登录）：邀请卡片（圆角方 logo+恋人空间+大标题+复古试卷海报/协议书排版，与用户截图一致）✓、题库→使用→预览页（扁平题目列表+和他一起答题虚线钮/答题黑钮/让他答题白钮+底部说明）✓、答题页（选项深灰选中边框+交卷黑钮）✓、AI 陪答（阿澈选择蓝框+黑色名字+人设想法「去打香锅蹦最重要…」无他选了后缀）✓、让他答题全流程（picker 黑白灰→发送→6-13s 后 examTaSheet 8 题作答落库→TA 的答卷页蓝框+对错灰钮）✓、位置与轨迹（状态行/记录条/我的气泡浅灰+头像/TA 白气泡回复「吃你做的糖醋排骨，想你了」贴人设+发送白钮↑）✓、情侣印象留言（名字黑色+发送↑+提交黑钮）✓、回复挑战/恋爱状态/心情日记/协议/星座/编年史/100件小事 全页黑白灰走查无破版 ✓；dev.log 无代码错误
+- 限制说明：留言「一直往下延伸」在相册大图查看器内仍受弹层高度约束（max-h-[38%]，照片浏览的结构性限制）；100 件小事页整体保持粉色手账拼贴美术风格（仅两枚操作按钮改黑白灰，避免破坏页面主题）
+
+Stage Summary:
+- 6 文件改动：couple-space.tsx（-约700：ExamPaperSheet 删除+三按钮+全站黑白灰）、couple-ai.ts（模型化+删模板+aiExamSubmitSay）、couple-exam-share.ts（交卷话术模型化）、couple-pact-share.ts（删 say 兜底话术）、couple-exam-bubble.tsx/couple-pact-bubble.tsx（logo 圆角方+标题美化）
+- 第二十四轮全部需求落地：陪答AI按人设记忆选择和留言+删「他选了」、预览页扁平+生成试卷→答题+三按钮体系、按钮圆角黑白灰（可用虚线）、邀请卡片对齐截图、轨迹页气泡白浅灰+发送↑、全部发送按钮↑、留言名字黑色+不遮挡延伸、AI 全面真实模型拒绝模板、AI 决策审查修复

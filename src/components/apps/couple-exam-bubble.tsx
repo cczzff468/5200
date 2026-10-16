@@ -27,9 +27,9 @@ export interface CoupleExamBubbleProps {
   testidPrefix?: string; // 'wx' | 'qq'（E2E 用）
 }
 
-/** 恋人空间圆 logo（粉色双心官方原图裁圆） */
+/** 恋人空间圆角方形 logo（官方原图自带圆角，与恋人空间截图一致） */
 function AppLogo() {
-  return <img src="/icons/couple.png" alt="" aria-hidden="true" className="h-[26px] w-[26px] rounded-full object-cover shadow-[0_1px_3px_rgba(0,0,0,0.12)]" draggable={false} />;
+  return <img src="/icons/couple.png" alt="" aria-hidden="true" className="h-[27px] w-[27px] rounded-[7px] object-cover shadow-[0_1px_3px_rgba(0,0,0,0.14)]" draggable={false} />;
 }
 
 /** 小对勾方块（迷你试卷选项前） */
@@ -86,10 +86,10 @@ export default function CoupleExamBubble({ data, mine, testidPrefix = 'wx' }: Co
         {/* 顶部：App logo + 名称（对照参考图「♡ 恋人空间」） */}
         <span className="flex items-center gap-2">
           <AppLogo />
-          <span className="text-[14px] font-medium text-[#5a5a62]">恋人空间</span>
+          <span className="text-[14.5px] font-semibold text-[#4a4a52]">恋人空间</span>
         </span>
         {/* 大标题 */}
-        <span className="mt-2 block text-[17.5px] font-bold leading-[1.4] text-[#111114]">
+        <span className="mt-2 block text-[19px] font-bold leading-[1.42] tracking-[0.01em] text-[#111114]">
           {data.from === 'ta' ? `${data.fromName}的考试已开始，请考生作答` : '恋爱水平考试已开始，请考生作答'}
         </span>
 

@@ -229,9 +229,11 @@ export function scheduleAiExamAnswer(opts: { channel: CoupleChannel; contactId: 
   window.setTimeout(() => {
     void (async () => {
       try {
-        const { aiExamSheet, coupleRemember } = await import('./couple-ai');
+        const { aiExamSheet, coupleRemember, aiExamSubmitSay } = await import('./couple-ai');
         const r = await aiExamSheet(opts.title, opts.questions);
         if (!r) return;
+        // 第二十四轮：交卷的话由 AI 按人设+记忆+上下文现说（失败就不发文字，只发通知）*/
+        const say = await aiExamSubmitSay(opts.title, opts.questions.length);
         // 写进恋人空间状态（TA 的答卷；无自评分/评语，等我批改）
         let taN = 'TA';
         let meN = '我';
@@ -246,27 +248,29 @@ export function scheduleAiExamAnswer(opts: { channel: CoupleChannel; contactId: 
         }
         // 聊天里的考试卡片回写「已答完」（点卡片直达 TA 的答卷/批改页）
         patchExamCardsWhere(opts.channel, opts.contactId, (d) => d.from === 'me' && d.status !== 'done' && d.title === opts.title, { status: 'done' });
-        // TA 的交卷通知落到会话（不说自己答得怎样，等我批）
-        const key = msgsKey(opts.channel, opts.contactId);
-        try {
-          const raw = kvGetScoped<unknown[]>(key, opts.channel);
-          const list = Array.isArray(raw) ? raw.filter((m) => m && typeof m === 'object') : [];
-          list.push({
-            id: genId(),
-            role: 'peer',
-            content: '卷子答完交啦，你快去给我批卷打分，我等你批语哦',
-            time: Date.now(),
-          });
-          kvSetScoped(key, list, opts.channel);
-        } catch {
-          /* 静默 */
+        // TA 的交卷消息落到会话（AI 现说的；不说自己答得怎样，等我批）
+        if (say) {
+          const key = msgsKey(opts.channel, opts.contactId);
+          try {
+            const raw = kvGetScoped<unknown[]>(key, opts.channel);
+            const list = Array.isArray(raw) ? raw.filter((m) => m && typeof m === 'object') : [];
+            list.push({
+              id: genId(),
+              role: 'peer',
+              content: say,
+              time: Date.now(),
+            });
+            kvSetScoped(key, list, opts.channel);
+          } catch {
+            /* 静默 */
+          }
+          try {
+            window.dispatchEvent(new CustomEvent(COUPLE_CARD_EVENT, { detail: { cid: opts.contactId, app: opts.channel } }));
+          } catch {
+            /* 静默 */
+          }
+          void notifyCard(opts.channel, opts.contactId, say.slice(0, 40));
         }
-        try {
-          window.dispatchEvent(new CustomEvent(COUPLE_CARD_EVENT, { detail: { cid: opts.contactId, app: opts.channel } }));
-        } catch {
-          /* 静默 */
-        }
-        void notifyCard(opts.channel, opts.contactId, '我把卷子答完交啦，等你批卷');
         coupleRemember(opts.contactId, opts.channel, `${taN}答完了${meN}出的恋爱考试卷《${opts.title}》并交卷，等${meN}批改打分（${taN}还没看到成绩）`);
       } catch {
         /* AI 作答失败静默 */

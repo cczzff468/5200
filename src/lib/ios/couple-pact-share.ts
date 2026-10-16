@@ -292,33 +292,28 @@ export function scheduleAiPactDecision(opts: {
       try {
         const { aiDecidePact } = await import('./couple-ai');
         const r = await aiDecidePact(opts.title, opts.clauses);
-        // TA 的回复落到会话：优先用 AI 自己说的话（像看完协议后回的话，有人设/记忆/聊天上下文），失败才用极简兜底
-        const reply =
-          r.say && r.say.trim().length >= 4
-            ? r.say.trim()
-            : r.agree
-              ? `签好啦，条款我都愿意遵守 ♡`
-              : r.changeIdx != null && r.changeTo
-                ? `第 ${r.changeIdx + 1} 条我想改一下：「${cut(String(r.changeTo), 30)}」，改成这样我就签。`
-                : `这份协议我想了想，还是先不签了：${r.reason}。`;
-        const key = msgsKey(opts.channel, opts.contactId);
-        try {
-          const raw = kvGetScoped<unknown[]>(key, opts.channel);
-          const list = Array.isArray(raw) ? raw.filter((m) => m && typeof m === 'object') : [];
-          list.push({
-            id: genId(),
-            role: 'peer',
-            content: reply,
-            time: Date.now(),
-          });
-          kvSetScoped(key, list, opts.channel);
-        } catch {
-          /* 静默 */
-        }
-        try {
-          window.dispatchEvent(new CustomEvent(COUPLE_CARD_EVENT, { detail: { cid: opts.contactId, app: opts.channel } }));
-        } catch {
-          /* 静默 */
+        // 第二十四轮：TA 的回复只发 AI 自己说的话（人设/记忆/聊天上下文生成）；生成失败就不发文字消息（只回写卡片状态），不再落模板话术
+        const reply = r.say && r.say.trim().length >= 4 ? r.say.trim() : '';
+        if (reply) {
+          const key = msgsKey(opts.channel, opts.contactId);
+          try {
+            const raw = kvGetScoped<unknown[]>(key, opts.channel);
+            const list = Array.isArray(raw) ? raw.filter((m) => m && typeof m === 'object') : [];
+            list.push({
+              id: genId(),
+              role: 'peer',
+              content: reply,
+              time: Date.now(),
+            });
+            kvSetScoped(key, list, opts.channel);
+          } catch {
+            /* 静默 */
+          }
+          try {
+            window.dispatchEvent(new CustomEvent(COUPLE_CARD_EVENT, { detail: { cid: opts.contactId, app: opts.channel } }));
+          } catch {
+            /* 静默 */
+          }
         }
         void notifyCard(opts.channel, opts.contactId, r.agree ? `你的协议我签好啦` : `关于那份协议，我想跟你商量一条`);
         opts.onDone(r);

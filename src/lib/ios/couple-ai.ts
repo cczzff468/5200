@@ -390,23 +390,8 @@ export function coupleChatBlock(contactId: string, channel: CoupleChannel, userN
 
 // ---------------- 链路二点五（第十轮）：AI 双向互动行为 ----------------
 
-const TPL_REPLY = ['嗯…你这么说，我好像有点懂了。', '等等，那我再问你——下次什么时候一起去做？', '哈哈，你终于说到点子上了。', '好吧，这次算你有诚意。', '我记下了，你可别忘了自己说的。', '那你说，具体怎么做？我听着呢。'];
-const TPL_PHOTO = ['这张也太好看了，我存下来了。', '拍得真好，下次带我一起拍。', '看到这张照片嘴角就没下来过。', '下次站在你旁边一起入镜好不好？'];
-const TPL_TRAIL = [
-  { t: '09:30', icon: 'eat', place: '楼下的拾光咖啡馆', note: '点了你上次说好喝的拿铁' },
-  { t: '12:10', icon: 'eat', place: '公司附近的面馆', note: '味道一般，想你做的那碗' },
-  { t: '16:40', icon: 'app', place: '西西弗书店', note: '翻到一本想读给你听的书' },
-  { t: '19:00', icon: 'walk', place: '地铁站口的煎饼摊', note: '多加了两个蛋，替你也加了一份' },
-];
-/** 我的手机动态兜底（位置与轨迹流；place 取自我的定位城市名） */
-function tplMeTrail(city: string | null, nowHM: string): { t: string; icon: string; text: string; place: string }[] {
-  const c = city ? city : '家附近';
-  return [
-    { t: '10:20', icon: 'walk', text: `我离开了${c}`, place: c },
-    { t: '12:40', icon: 'arrive', text: `我到了${c}的商圈`, place: `${c}的商圈` },
-    { t: nowHM, icon: 'charge', text: '我的手机开始充电了 12%', place: '' },
-  ];
-}
+// 第二十四轮：全部模板兜底已删除——AI 生成失败就跳过本次（宁可不发，不发套路话），
+// 下次触发/下个周期会重试；所有 AI 言行都由真实模型按人设+记忆+上下文生成。
 
 /** 当前恋人绑定目标（页面组件触发 AI 行为用；未建立关系返回 null） */
 function aiTarget(): { contactId: string; channel: CoupleChannel } | null {
@@ -501,20 +486,28 @@ export function scheduleAiReply(key: string, delayMin = 2600, delayMax = 6500): 
         }
         // 最近微信/QQ 聊天话题（留言要贴着你们最近聊的事，不悬浮）
         const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+        // 第二十四轮：再注入记忆碎片召回（人设+记忆+上下文三件套）
+        let memBlock = '';
+        try {
+          memBlock = memChatRecallBlock(target.contactId, target.channel, `${me}在${sceneOfKey(key, snap)}里留言说：${cut(lastMine.text, 40)}`, { mode: 'private' });
+        } catch {
+          /* 召回失败不影响 */
+        }
         // 第二十三轮：我的这条留言也写进恋人记忆（TA 之后在别处聊天也知道我说过这句）
         coupleRemember(target.contactId, target.channel, `${me}在${sceneOfKey(key, snap)}里对${ta}说：${cut(lastMine.text, 50)}`);
         let text = '';
         try {
           // 第二十三轮：改走用户配置的 API 模型优先（原内置模型限流时全部落到模板，用户反馈「没根据人设记忆聊天」）
           text = await llmUserFirst(
-            `${llmSystem(p, me, snap)}\n场景：你们正在恋人空间 App 的${sceneOfKey(key, snap)}里互相留言。${threadContext(key, snap, me, ta)}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 360)}` : ''}`,
+            `${llmSystem(p, me, snap)}\n场景：你们正在恋人空间 App 的${sceneOfKey(key, snap)}里互相留言。${threadContext(key, snap, me, ta)}${memBlock ? `\n【相关记忆】\n${cut(memBlock, 300)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 360)}` : ''}`,
             `最近的留言：\n${convo}\n${quoteLine}\n\n请以「${ta}」的口吻回复${me}的最新留言：30 字内，口语、贴合人设与你们的真实记忆和最近聊过的话题；\n绝对禁止敷衍应付：像「好啦好啦听你的」「随便你」「都行」「好好好」这类话一个字都不许出现；\n你的回复必须接住${me}留言里的具体内容：回应他说的那件事，给出你真实的想法/感受/追问/小要求，像真情侣拌嘴或撒娇。如果${me}在反驳你，可以不服气地讲道理，也可以撒娇软化。禁止使用任何 emoji/表情符号。只输出回复内容。`,
           );
         } catch {
           /* 兜底 */
         }
         text = stripEmoji(text);
-        if (!text || text.length < 2) text = TPL_REPLY[Math.floor(Math.random() * TPL_REPLY.length)];
+        // 第二十四轮：不用模板兜底——生成失败就保持安静（AI 的留言宁可不发，也不发套路话）
+        if (!text || text.length < 2) return;
         text = cut(text, 90);
         const c = { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key, from: 'ta', text, at: Date.now() };
         writeSnap((s) => ({ ...s, comments: [...((s.comments as CoupleSnap['comments']) ?? []), c] }));
@@ -547,17 +540,25 @@ export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: n
         if (!p) return;
         currentPartnerId = target.contactId;
         currentChannel = target.channel;
+        const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+        let memBlock = '';
+        try {
+          memBlock = memChatRecallBlock(target.contactId, target.channel, `${me}上传了照片 ${albumName}`, { mode: 'private' });
+        } catch {
+          /* 召回失败不影响 */
+        }
         let text = '';
         try {
-          text = await coupleLLM(
-            `${llmSystem(p, me, snap)}\n场景：${me}刚在恋人空间的相册「${albumName}」里上传了一张新照片，你去翻相册看到了，想在照片下面留一条言。${threadContext(threadKey, snap, me, ta)}`,
-            `请以「${ta}」的口吻给这张照片留言：25 字内，口语、贴合人设与你们的记忆（可以是夸、撒娇、想TA、约定下次一起拍）。禁止使用任何 emoji/表情符号。只输出留言内容。`,
+          text = await llmUserFirst(
+            `${llmSystem(p, me, snap)}\n场景：${me}刚在恋人空间的相册「${albumName}」里上传了一张新照片，你去翻相册看到了，想在照片下面留一条言。${threadContext(threadKey, snap, me, ta)}${memBlock ? `\n【相关记忆】\n${cut(memBlock, 240)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 280)}` : ''}`,
+            `请以「${ta}」的口吻给这张照片留言：25 字内，口语、贴合人设与你们的真实记忆（可以是夸、撒娇、想TA、约定下次一起拍）。禁止使用任何 emoji/表情符号。只输出留言内容。`,
           );
         } catch {
           /* 兜底 */
         }
         text = stripEmoji(text);
-        if (!text || text.length < 2) text = TPL_PHOTO[Math.floor(Math.random() * TPL_PHOTO.length)];
+        // 第二十四轮：不用模板兜底——生成失败就跳过本次留言
+        if (!text || text.length < 2) return;
         text = cut(text, 80);
         const c = { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: threadKey, from: 'ta', text, at: Date.now() };
         writeSnap((s) => ({ ...s, comments: [...((s.comments as CoupleSnap['comments']) ?? []), c] }));
@@ -591,14 +592,15 @@ export function aiAnswerWithMe(q: string, myA: string): void {
         let a = '';
         try {
           const prev = (snap.quizTa ?? []).find((x) => x.q === q)?.a ?? '';
-          a = await coupleLLM(
+          a = await llmUserFirst(
             llmSystem(p, me, snap),
             `你们在玩情侣小问答。题目是：「${cut(q, 40)}」。${me}的回答是：「${cut(myA, 60)}」。\n请以「${ta}」的身份亲自回答这道题（50 字内）：\n1）必须正面回答题目本身，说你自己真实具体的想法/经历/习惯（结合你的人设和你们的真实记忆），不要答非所问，也不要只评价${me}；\n2）语气甜蜜真诚，像热恋中的恋人说的话，绝不抱怨、不指责${me}；可以在结尾自然地呼应一下${me}的答案；\n3）用「我」的口吻说人话，禁止「作为男朋友/作为女朋友」这种自我标注${prev ? `；\n4）你之前答过一次「${cut(prev, 40)}」，这次换个角度补充，别重复原话` : ''}。\n只输出回答正文，禁止 emoji。`,
           );
         } catch {
           /* 兜底 */
         }
-        if (!a || a.length < 4) a = AI_QUIZ_TPL[Math.floor(Math.random() * AI_QUIZ_TPL.length)];
+        // 第二十四轮：不用模板兜底——生成失败就跳过本次作答
+        if (!a || a.length < 4) return;
         a = cut(a, 90);
         writeSnap((s) => ({
           ...s,
@@ -647,20 +649,21 @@ export function aiReplyPickForLevel(
           .join('、');
         let picked: { pick: number; say: string } | null = null;
         try {
-          const raw = await coupleLLM(
+          const raw = await llmUserFirst(
             `${llmSystem(p, me, snap)}\n你们在玩「恋爱高危回复挑战」双人闯关：每人独立作答，选完互相都能看到对方的选择和看法。`,
             `第${lv + 1}关场景：${cut(scene, 90)}\n题里的恋人（不是你）说：「${cut(quote, 24)}」\n选项：${opts.map((o, i) => `${['A', 'B', 'C', 'D'][i]}.${cut(o, 20)}`).join(' ')}\n你的恋人${me}刚选了「${cut(myPickText, 26)}」。${mePast ? `\n${me}之前的关卡：${mePast}。` : ''}\n请以「${ta}」的身份：1）从四个选项里选一个你会选的（按你的性格来，可以和${me}一样也可以不同）；2）用一句话说出你对这道题或对${me}选择的看法（可以赞同、吐槽、撒娇、反驳，≤36字口语）。\n输出 JSON：{"pick":0,"say":"你的看法"}。pick 是选项序号 0-3。只输出 JSON。`,
           );
           const j = extractJson<{ pick: number; say: string }>(raw);
-          if (j && Number.isInteger(j.pick) && j.pick >= 0 && j.pick < opts.length && j.say) {
-            picked = { pick: j.pick, say: cut(String(j.say).replace(/[「」"]/g, ''), 60) };
+          if (j && Number.isInteger(j.pick) && j.pick >= 0 && j.pick < opts.length) {
+            picked = { pick: j.pick, say: cut(String(j.say ?? '').replace(/[「」"]/g, ''), 60) };
           }
         } catch {
           /* 兜底 */
         }
         if (!picked) {
+          // 第二十四轮：模型不可用时只记一个中性选择，不编模板看法（say 留空，界面不渲染看法）
           const pool = [0, 1, 2].filter((x) => x !== myPick || Math.random() < 0.3);
-          picked = { pick: pool[Math.floor(Math.random() * pool.length)], say: TPL_REPLY[Math.floor(Math.random() * TPL_REPLY.length)] };
+          picked = { pick: pool.length === 0 ? myPick : pool[Math.floor(Math.random() * pool.length)], say: '' };
         }
         writeSnap((s) => {
           const rt = (s.replyTa as CoupleSnap['replyTa']) ?? { active: true, picks: {}, mePicks: {}, startedAt: Date.now(), endedAt: null };
@@ -700,6 +703,13 @@ export function aiTickTrail(): void {
       const myCity = cur2.myLoc?.name ?? null;
       // 第十八轮（需求34）：行程内容也要贴「人设记忆 + 上下文聊天」——注入最近微信/QQ 聊天话题
       const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+      let memCtx = '';
+      try {
+        const mb = memChatRecallBlock(target.contactId, target.channel, `${ta}今天的行程 位置轨迹`, { mode: 'private' });
+        if (mb) memCtx = `【相关记忆】\n${cut(mb, 240)}`;
+      } catch {
+        /* 召回失败不影响 */
+      }
       const nowD = new Date();
       const nowHM = `${String(nowD.getHours()).padStart(2, '0')}:${String(nowD.getMinutes()).padStart(2, '0')}`;
       const nowMin = nowD.getHours() * 60 + nowD.getMinutes();
@@ -707,8 +717,8 @@ export function aiTickTrail(): void {
       let items: TrailItem[] | null = null;
       const ICONS = ['sleep', 'phone', 'app', 'call', 'walk', 'arrive', 'car', 'charge', 'eat'];
       try {
-        const raw = await coupleLLM(
-          `${llmSystem(p, me, cur2)}${city ? `\n${city}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
+        const raw = await llmUserFirst(
+          `${llmSystem(p, me, cur2)}${city ? `\n${city}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}${memCtx ? `\n${memCtx}` : ''}`,
           `现在是今天 ${nowHM}（真实时间）。请生成你们两个人今天从早上到现在的真实动态（像情侣定位软件的动态流），全部只能是「已经发生」的事：\n1）"ta"：${ta}今天的行程——去了哪里、什么位置、什么店铺，贴合你的人设、职业和你们的记忆（可以有一条和${me}有关的小心思，也可以呼应你们最近聊过的事或约定）；icon 从 [${ICONS.join('/')}] 里选；\n2）"me"：${me}的手机动态——到了哪里/离开了哪里/上车下车/手机充电这类真实动态，text 一句完整的话（12字内，用「我…」开头，可以带上地点名「${myCity ?? ''}」）；icon 从 [walk/arrive/car/charge] 里选；\n3）每条时间必须早于等于 ${nowHM}，绝不能出现未来的时间；条数按已过去的时间自然决定：中午前各 1 条左右，下午各 2 条左右，晚上各 3 条左右；\n输出 JSON：{"ta":[{"t":"09:30","icon":"eat","place":"地点/店铺名（≤14字）","note":"一句话（≤16字）"}],"me":[{"t":"10:12","icon":"walk","text":"我离开了XX"}]}。只输出 JSON。`,
         );
         const j = extractJson<{ ta?: { t: string; icon?: string; place: string; note?: string }[]; me?: { t: string; icon?: string; text?: string }[] }>(raw);
@@ -747,20 +757,8 @@ export function aiTickTrail(): void {
         /* 兜底 */
       }
       if (!items || items.length === 0) {
-        // 兜底模板同样只保留「已经发生过」的时间
-        const tplMin = (t: string) => {
-          const [h, m] = t.split(':').map(Number);
-          return h * 60 + m;
-        };
-        const taPast = TPL_TRAIL.filter((x) => tplMin(x.t) <= nowMin).slice(0, 3);
-        const taItems: TrailItem[] =
-          taPast.length > 0
-            ? taPast.map((x) => ({ t: x.t, place: x.place, note: x.note, icon: x.icon, who: 'ta' as const }))
-            : [{ t: nowHM, place: '家里', note: '刚收拾好准备出门', icon: 'phone', who: 'ta' as const }];
-        const meItems: TrailItem[] = tplMeTrail(myCity, nowHM)
-          .filter((x) => tplMin(x.t) <= nowMin)
-          .map((x) => ({ t: x.t, place: x.place, note: '', icon: x.icon, who: 'me' as const, text: x.text }));
-        items = [...taItems, ...meItems].sort((a, b) => tplMin(a.t) - tplMin(b.t));
+        // 第二十四轮：不用模板兜底——生成失败本次不写入，下次触发再试
+        return;
       }
       writeSnap((s) => ({ ...s, taTrail: { dateKey: today, items, at: Date.now() } }));
       const taText = (items ?? []).filter((i) => i.who !== 'me');
@@ -1197,14 +1195,7 @@ function aiTickWater(snap: CoupleSnap, me: string, ta: string): void {
   logAi(`${ta}给恋爱小树浇了水 🌱`);
 }
 
-/** AI 心情日记本地兜底（不再从文本里猜 emoji；表情独立选自 MOOD_LIST） */
-const AI_MOOD_TPL = [
-  { mood: '想TA', text: '今天有点想你，风都像你那边的味道。' },
-  { mood: '甜蜜', text: '路过奶茶店想起我们说好的那杯三分糖。' },
-  { mood: '想TA', text: '今天整体不错，就是傍晚的时候突然很想你。' },
-  { mood: '开心', text: '今天翻我们的聊天记录，嘴角一直没下来。' },
-  { mood: '困困', text: '今天有点累，想早点睡，梦里要是你就好了。' },
-];
+// 第二十四轮：AI 心情日记的模板兜底已删除（生成失败就不写）
 
 /** 心情标签 → 恋人空间心情表情 id（与 couple-space.tsx 的 MOOD_LIST 对齐） */
 const MOOD_LABEL_TO_EMOJI: Record<string, string> = {
@@ -1252,7 +1243,7 @@ async function aiTickMood(snap: CoupleSnap, me: string, ta: string, p: TaPersona
   let moodLabel = '';
   let text = '';
   try {
-    const raw = await coupleLLM(
+    const raw = await llmUserFirst(
       sys,
       `请输出 JSON：{"mood":"从 开心/甜蜜/困困/生气/委屈/思考/兴奋/想TA 里选一个最贴今天心情的","text":"日记正文（30字内，纯文本，不要表情符号）"}。只输出 JSON。`,
     );
@@ -1265,9 +1256,8 @@ async function aiTickMood(snap: CoupleSnap, me: string, ta: string, p: TaPersona
     /* 兜底 */
   }
   if (!text || text.length < 2) {
-    const tpl = AI_MOOD_TPL[Math.floor(Math.random() * AI_MOOD_TPL.length)];
-    text = tpl.text;
-    moodLabel = tpl.mood;
+    // 第二十四轮：不用模板兜底——生成失败今天就不写日记，明天再试
+    return;
   }
   text = cut(text, 80);
   const emoji = MOOD_LABEL_TO_EMOJI[moodLabel] ?? '🥰';
@@ -1306,7 +1296,7 @@ export function pokeTaDiary(): boolean {
   return true;
 }
 
-const AI_QUIZ_TPL = ['第一次见你的时候，心里想的是「这个人眼睛真好看」。', '希望十年后的我们，还像现在一样爱逛街、爱拌嘴、爱牵手。', '是那种看到好吃的第一反应是「带你去吃」的默契。'];
+// 第二十四轮：甜蜜小问答模板兜底已删除（生成失败就不答）
 
 /** AI 回答甜蜜小问答（每天挑一个它还没答过的问题；会结合我的回答） */
 async function aiTickQuiz(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
@@ -1319,14 +1309,15 @@ async function aiTickQuiz(snap: CoupleSnap, me: string, ta: string, p: TaPersona
   const myA = mine.get(q) ?? '';
   let a = '';
   try {
-    a = await coupleLLM(
+    a = await llmUserFirst(
       llmSystem(p, me, snap),
       `情侣小问答的题目是：「${q}」。\n请以「${ta}」的身份亲自回答（60 字内）：必须正面回答题目本身，说你自己真实具体的想法/经历（结合你的人设和你们的真实记忆），不要答非所问；语气真诚甜蜜，可以带一点恋人间的亲昵，绝不抱怨、不指责${me}；用「我」的口吻说人话${myA ? `。${me}自己的回答是「${cut(myA, 50)}」，结尾可以自然呼应一下` : ''}。只输出回答正文，禁止 emoji。`,
     );
   } catch {
     /* 兜底 */
   }
-  if (!a || a.length < 4) a = AI_QUIZ_TPL[Math.floor(Math.random() * AI_QUIZ_TPL.length)];
+  // 第二十四轮：不用模板兜底——生成失败就跳过本次回答，下个周期再试
+  if (!a || a.length < 4) return;
   a = cut(a, 90);
   writeSnap((s) => {
     const list = ((s.quizTa as CoupleSnap['quizTa']) ?? []).filter((x) => x.q !== q);
@@ -1337,7 +1328,7 @@ async function aiTickQuiz(snap: CoupleSnap, me: string, ta: string, p: TaPersona
   logAi(`${ta}回答了甜蜜小问答`);
 }
 
-const AI_IMPRESS_POOL = ['睡觉不老实', '笑起来最好看', '嘴硬心软', '记性差但记得我', '黏人精', '小气鬼但是对我大方', '耐心满分', '情绪稳定器', '行走的干饭王', '安全感本人'];
+// 第二十四轮：印象标签模板池已删除（生成失败就不贴）
 
 /** AI 主动贴印象（每 3 天一次，贴「TA 眼中的你」） */
 async function aiTickImpress(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
@@ -1347,7 +1338,7 @@ async function aiTickImpress(snap: CoupleSnap, me: string, ta: string, p: TaPers
   let picks: string[] = [];
   try {
     const gNote = snap.gender === '女' ? `（${me}是女生，标签必须符合女生身份：用「女友力max」这类词，绝不能用「男友力」之类男性向的词，也不要用形容男生的称呼）` : '';
-    const raw = await coupleLLM(llmSystem(p, me, snap), `请以「${ta}」的口吻，给${me}贴 2~3 个情侣印象标签（每个≤6字，真实可爱，贴合你们的相处）${gNote}。每行一个，只输出标签本身。`);
+    const raw = await llmUserFirst(llmSystem(p, me, snap), `请以「${ta}」的口吻，给${me}贴 2~3 个情侣印象标签（每个≤6字，真实可爱，贴合你们的相处）${gNote}。每行一个，只输出标签本身。`);
     picks = raw
       .split('\n')
       .map((l) => l.replace(/^[-•\d.、\s]+/, '').trim())
@@ -1356,7 +1347,7 @@ async function aiTickImpress(snap: CoupleSnap, me: string, ta: string, p: TaPers
   } catch {
     /* 兜底 */
   }
-  if (picks.length === 0) picks = AI_IMPRESS_POOL.filter((w) => !have.has(w)).sort(() => Math.random() - 0.5).slice(0, 2);
+  // 第二十四轮：不用模板兜底——生成失败本次不贴标签，下个周期再试
   picks = picks.filter((w) => !have.has(w));
   if (picks.length === 0) return;
   writeSnap((s) => ({
@@ -1379,7 +1370,7 @@ async function aiTickAnniv(snap: CoupleSnap, me: string, ta: string, p: TaPerson
   const existing = new Set((snap.annivExtra ?? []).map((a) => a.label));
   let picked: { label: string; date: string; why: string } | null = null;
   try {
-    const raw = await coupleLLM(llmSystem(p, me, snap), `请为你们想一个新的、值得记录的纪念日（只要一个）。输出 JSON：{"label":"纪念日名（≤12字，别与已有重复）","date":"MM-DD","why":"一句话说明（≤26字）"}。已有的纪念日：${[...existing].join('、') || '无'}。只输出 JSON。`);
+    const raw = await llmUserFirst(llmSystem(p, me, snap), `请为你们想一个新的、值得记录的纪念日（只要一个）。输出 JSON：{"label":"纪念日名（≤12字，别与已有重复）","date":"MM-DD","why":"一句话说明（≤26字）"}。已有的纪念日：${[...existing].join('、') || '无'}。只输出 JSON。`);
     picked = extractJson<{ label: string; date: string; why: string }>(raw);
   } catch {
     /* 兜底 */
@@ -1407,13 +1398,7 @@ async function aiTickAnniv(snap: CoupleSnap, me: string, ta: string, p: TaPerson
   void notifyCouple(currentChannel, pid, `我给我们的恋爱日历加了一个纪念日：「${picked.label}」，你记得吗？`);
 }
 
-const AI_PACT_TPL = [
-  '吵架不过夜，睡前必须和好',
-  '每天至少说一次「我爱你」',
-  '对方说的话不许当耳旁风',
-  '周末至少留半天只属于两个人',
-  '谁先低头谁可爱，拥抱可以解决百分之八十的矛盾',
-];
+// 第二十四轮：AI 拟协议模板条款已删除（拟稿失败就不发）
 
 /** AI 自己拟协议让我签（无待签草稿 + 冷却 7 天）；第十二轮：拟完自动把协议卡片分享到微信/QQ 会话 */
 async function aiTickPact(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
@@ -1431,7 +1416,7 @@ async function aiTickPact(snap: CoupleSnap, me: string, ta: string, p: TaPersona
     }
     const chatCtx = recentChatBlock(currentPartnerId, currentChannel, me, ta);
     if (chatCtx) memCtx += `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 240)}`;
-    const raw = await coupleLLM(
+    const raw = await llmUserFirst(
       `${llmSystem(p, me, snap)}\n场景：你想拟一份恋爱协议，签好名后分享给${me}等她签。${memCtx}`,
       `请以「${ta}」的身份拟一份恋爱协议（3~5条条款）。硬性要求：
 1）你是男生（${me}的男朋友），条款里第一人称「我」就是你本人；${me}是女生（你的女朋友）；
@@ -1445,7 +1430,8 @@ async function aiTickPact(snap: CoupleSnap, me: string, ta: string, p: TaPersona
     /* 兜底 */
   }
   if (!picked?.title || !Array.isArray(picked.clauses) || picked.clauses.length === 0) {
-    picked = { title: '我们的小约定', clauses: AI_PACT_TPL.sort(() => Math.random() - 0.5).slice(0, 4) };
+    // 第二十四轮：不用模板兜底——拟稿失败本次不发，下个周期再拟
+    return;
   }
   const title = cut(picked.title, 14).replace(/[「」"]/g, '');
   const clauses = picked.clauses.map((c) => cut(String(c), 40).replace(/^[-•\d.、\s]+/, '')).filter(Boolean).slice(0, 5);
@@ -1492,7 +1478,7 @@ export async function aiDecidePact(title: string, clauses: string[]): Promise<{ 
           /* 召回失败不影响 */
         }
         chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
-        const raw = await coupleLLM(
+        const raw = await llmUserFirst(
           `${llmSystem(p, me, snap)}\n场景：${me}拟了一份恋爱协议分享给你，等你决定签不签。${memBlock ? `\n【相关记忆】\n${cut(memBlock, 300)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`,
           `协议《${cut(title, 16)}》的条款：\n${(clauses ?? []).map((c, i) => `${i + 1}. ${cut(c, 40)}`).join('\n')}\n\n请以「${ta}」的身份认真评估：这些条款是否合理、是否双方平等、是不是你真心愿意遵守的。\n你有三种回应：①条款基本合理 → 直接签；②个别条款你不乐意（只挑一条最想改的）→ 不同意并说出你想改成什么；③整体都离谱 → 婉拒（语气可爱不伤人）。\n输出 JSON：{"agree":true或false,"reason":"你的理由（≤30字，口语，像恋人间的商量）","say":"你在聊天里回给${me}的原话（35~70字，第一人称口语，像看完协议后自然回的消息：可以说签不签、为什么、想到的约定或小事，贴人设与你们的记忆，禁止列条款编号式的机械复述，禁止「协议我看过了」这种开头，禁止 emoji）","changeIdx":想改的条款序号（1起，agree为true或不想改就不写这个字段）,"changeTo":"想改成的内容（≤30字，只有给了changeIdx才写）"}。只输出 JSON。`,
         );
@@ -1512,9 +1498,9 @@ export async function aiDecidePact(title: string, clauses: string[]): Promise<{ 
       /* 本地兜底 */
     }
   }
-  // 本地兜底：条款少于 6 条倾向签，多于 8 条倾向再商量
+  // 本地兜底：模型不可用时按条款数量做中性判定（不编模板回话，say 留空不发消息）
   const agree = (clauses?.length ?? 0) <= 6;
-  return { agree, reason: agree ? '条款都挺合理的' : '条款有点多，我怕自己记不住', say: agree ? '签好啦，条款我都愿意遵守，好好爱 ♡' : undefined };
+  return { agree, reason: agree ? '条款我都愿意遵守' : '有几条我想再商量商量', say: undefined };
 }
 
 /** AI 主动留言的候选线程（挑一个「TA 还没说过话」的最新线程） */
@@ -1560,7 +1546,7 @@ async function aiTickComment(snap: CoupleSnap, me: string, ta: string, p: TaPers
   const chatCtx = recentChatBlock(pid, ch, me, ta);
   let text = '';
   try {
-    text = await coupleLLM(
+    text = await llmUserFirst(
       `${llmSystem(p, me, snap)}\n场景：你自己在恋人空间 App 里逛，走到了${picked.scene}的留言区，想在下面主动给${me}留一句话。${threadContext(picked.key, snap, me, ta)}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`,
       `请以「${ta}」的口吻主动留一条言（25 字内，口语）：像真的想到了什么就说，可以想起一件事、一个小约定、或者突然想${me}了；\n绝对禁止敷衍应付（「好啦好啦听你的」「随便」「都行」这类话不许出现），也不要空洞地夸；贴着你的人设、你们的记忆和最近聊过的话题说具体的话。禁止使用任何 emoji/表情符号。只输出留言内容。`,
     );
@@ -1568,7 +1554,8 @@ async function aiTickComment(snap: CoupleSnap, me: string, ta: string, p: TaPers
     /* 兜底 */
   }
   text = stripEmoji(text);
-  if (!text || text.length < 4) text = TPL_PHOTO[Math.floor(Math.random() * TPL_PHOTO.length)];
+  // 第二十四轮：不用模板兜底——生成失败就不主动留言（当天可再触发）
+  if (!text || text.length < 4) return;
   text = cut(text, 80);
   const c = { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: picked.key, from: 'ta', text, at: Date.now() };
   writeSnap((s) => ({
@@ -1581,7 +1568,7 @@ async function aiTickComment(snap: CoupleSnap, me: string, ta: string, p: TaPers
   void notifyCouple(ch, pid, `我在${picked.scene}下面给你留了句话，去看嘛`);
 }
 
-const AI_HUNDRED_WISH = [{ note: '一起去看一次日出', why: '想看你刚醒的样子' }, { note: '一起养一盆绿植', why: '像小树一样一起长大' }, { note: '雨天共撑一把伞散步', why: '伞下只装得下我们' }, { note: '一起做一顿晚饭', why: '想尝尝你的手艺' }];
+// 第二十四轮：100件小事模板心愿池已删除（生成失败就不发起）
 
 /** AI 发起 100 件小事（每 2 天一次） */
 async function aiTickHundred(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
@@ -1590,15 +1577,15 @@ async function aiTickHundred(snap: CoupleSnap, me: string, ta: string, p: TaPers
   const usedNotes = new Set((snap.aiHundred ?? []).map((x) => x.note));
   let picked: { note: string; why: string } | null = null;
   try {
-    const raw = await coupleLLM(llmSystem(p, me, snap), `从你们还没做过的100件小事里，挑一件「${ta}」最想和${me}一起做的。输出 JSON：{"note":"这件事（≤16字）","why":"想做的理由（≤22字）"}。只输出 JSON。`);
+    const raw = await llmUserFirst(llmSystem(p, me, snap), `从你们还没做过的100件小事里，挑一件「${ta}」最想和${me}一起做的。输出 JSON：{"note":"这件事（≤16字）","why":"想做的理由（≤22字）"}。只输出 JSON。`);
     picked = extractJson<{ note: string; why: string }>(raw);
   } catch {
     /* 兜底 */
   }
   if (!picked?.note || usedNotes.has(picked.note)) {
-    picked = AI_HUNDRED_WISH.filter((w) => !usedNotes.has(w.note))[0] ?? null;
+    // 第二十四轮：不用模板兜底——生成失败本次不发起
+    return;
   }
-  if (!picked?.note) return;
   const idx = Math.floor(Math.random() * 100);
   const entry = { idx, note: cut(picked.note, 18), why: cut(picked.why ?? '', 24), at: Date.now() };
   writeSnap((s) => {
@@ -1633,7 +1620,7 @@ export async function aiReadLetter(letterId: string, text: string): Promise<{ co
   currentChannel = target.channel;
   const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
   try {
-    const raw = await coupleLLM(
+    const raw = await llmUserFirst(
       `${llmSystem(p, me, snap)}\n场景：${me}写了一封情书寄给你（恋人空间「情书」里），你要认真读完：在信下面写一条留言，再写一封回信寄回去。${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
       `信的全文：\n"""\n${cut(text, 620)}\n"""\n请以「${ta}」的身份读完这封信，输出 JSON：\n{"comment":"在信下面写的一条留言（28字内，口语；必须接住信里具体的某句话/某件事，贴人设与你们的记忆；禁止敷衍、禁止空洞夸、禁止emoji）",\n"reply":"你写给${me}的回信全文（130~200字，像真正的回信：开头称呼${me}；正文一段一段接住信里的话、写你读信时的心情和此刻在做什么、你们的共同记忆、想${me}的地方；结尾一句只属于你们的话；像手写的信，禁止列表/markdown/emoji）"}。只输出 JSON。`,
     );
@@ -1664,7 +1651,7 @@ export async function aiZodiacReading(meSign: string, taSign: string): Promise<{
   currentChannel = target.channel;
   const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
   try {
-    const raw = await coupleLLM(
+    const raw = await llmUserFirst(
       `${llmSystem(p, me, snap)}\n场景：${me}在恋人空间「星座缘分」里查两个人的星座配对（${me}是${meSign}，你是${taSign}）。请按真实占星学的配对逻辑（元素风火水土、模式基本/固定/变动、典型相位关系）给出靠谱的解读，再结合你们的人设与最近聊天气氛落到你们俩身上，不许胡编泛泛而谈。${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`,
       `输出 JSON（禁止 emoji）：\n{"score":配对指数（整数，58~99，按这对星座真实相处的难易度给分，绝不全给高分）,"text":"缘分总评（60~90字，先讲这对星座真实相处的特点与 famous 的相性结论，再落到你们俩身上，口吻甜一点）","glow":"你们最合拍的一点（18字内，具体到相处场景）","advice":"相处建议（40~70字，给一件可执行的小事，贴合${me}${meSign}×${taSign}）","watch":"需要留意的小提醒（28~50字，语气温柔不吓人）"}。只输出 JSON。`,
     );
@@ -1684,11 +1671,7 @@ export async function aiZodiacReading(meSign: string, taSign: string): Promise<{
   }
 }
 
-/** AI 主动写信本地兜底（贴人设口吻的短情书） */
-const AI_LETTER_TPL = [
-  '见字如面。今天下班路上突然降温，第一反应是你在那边冷不冷。想起上次我们说好要一起去看日出，一直没兑现，我把它记在心里了。最近的日子平平常常，但因为有你惦记着，每天都值得期待。愿你今天被温柔对待，晚安，梦里见。',
-  '写这封信的时候，我正在阳台上吹风。突然很想你，就想提笔给你写点什么。今天路过那家奶茶店，橱窗里贴了新的海报，我想着你肯定会喜欢。等忙完这阵，我们找个周末见面吧，把想说的话当面说完。要记得按时吃饭，我一直在。',
-];
+// 第二十四轮：AI 主动写信模板已删除（写不出来就不寄）
 
 /**
  * AI 主动写情书寄给我（每 3 天最多一封；第十八轮）：
@@ -1704,7 +1687,7 @@ async function aiTickLetter(snap: CoupleSnap, me: string, ta: string, p: TaPerso
   const chatCtx = recentChatBlock(pid, ch, me, ta);
   let text = '';
   try {
-    text = await coupleLLM(
+    text = await llmUserFirst(
       `${llmSystem(p, me, snap)}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
       `请以「${ta}」的身份给${me}写一封情书（130~200字）：开头称呼${me}；正文写你最近真实的生活小事、突然想${me}的瞬间、你们记忆里一件具体的小事、想和${me}一起做的一件事；结尾一句只属于你们的话。要像真的提笔写的信，贴合你的人设与你们的共享记忆；禁止列表、markdown、emoji。只输出信的正文。`,
     );
@@ -1712,7 +1695,8 @@ async function aiTickLetter(snap: CoupleSnap, me: string, ta: string, p: TaPerso
     /* 兜底 */
   }
   text = stripEmoji(text);
-  if (!text || text.length < 40) text = AI_LETTER_TPL[Math.floor(Math.random() * AI_LETTER_TPL.length)];
+  // 第二十四轮：不用模板兜底——写信失败今天就不寄，下次再写
+  if (!text || text.length < 40) return;
   text = cut(text, 420);
   const envelope = ['pinkbunny', 'yellowpup', 'lavendrcat', 'mintbear', 'skybunny', 'kraft'][Math.floor(Math.random() * 6)];
   const letterId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -2077,9 +2061,19 @@ export async function aiExamSheet(
     currentChannel = target.channel;
     const me = (snap.meName || '').trim() || '我';
     const ta = (snap.taName || '').trim() || 'TA';
+    // 第二十四轮：注入记忆碎片召回 + 最近聊天上下文（答题要贴人设与你们的真实相处）
+    let memCtx = '';
+    try {
+      const mb = memChatRecallBlock(target.contactId, target.channel, `${ta}答${me}出的恋爱考试卷`, { mode: 'private' });
+      if (mb) memCtx += `\n【相关记忆】\n${cut(mb, 240)}`;
+    } catch {
+      /* 召回失败不影响 */
+    }
+    const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+    if (chatCtx) memCtx += `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 240)}`;
     const paper = questions.map((q, i) => `${i + 1}. ${cut(q.q, 50)}\n${q.opts.map((o, oi) => `${'ABCD'[oi] ?? oi + 1}. ${cut(o, 26)}`).join('\n')}`).join('\n');
-    const raw = await coupleLLM(
-      `${llmSystem(p, me, snap)}\n场景：${me}给你出了一张恋爱水平考试卷《${cut(title, 20)}》，你认真作答后交卷。注意：你不给自己打分、也不写答后感——打分和批语是${me}的事，她批完你才能看到结果。`,
+    const raw = await llmUserFirst(
+      `${llmSystem(p, me, snap)}\n场景：${me}给你出了一张恋爱水平考试卷《${cut(title, 20)}》，你认真作答后交卷。注意：你不给自己打分、也不写答后感——打分和批语是${me}的事，她批完你才能看到结果。${memCtx}`,
       `试卷题目（每题从选项里选一个）：\n${paper}\n\n请以「${ta}」的身份答题：答案要符合你的人设、你们的关系和你的小聪明，可以调皮、可以撒糖，但不能乱选。\n输出 JSON：{"picks":[每题选择的序号（从0开始）数组，长度=${questions.length}]}。只输出 JSON。`,
     );
     const j = extractJson<{ picks?: unknown }>(raw);
@@ -2129,7 +2123,7 @@ export async function aiGradeExam(input: {
         return `${i + 1}. ${cut(q.q, 40)} → ${pickText}`;
       })
       .join('\n');
-    const raw = await coupleLLM(
+    const raw = await llmUserFirst(
       `${llmSystem(p, me, snap)}\n场景：${
         input.byTa ? `你给${me}出的考试卷《${cut(input.title, 20)}》${me}做完交卷了，你来批卷打分` : `${me}做完了恋爱水平考试《${cut(input.title, 20)}》，你以恋人的身份来批卷`
       }。${memBlock ? `\n【相关记忆】\n${cut(memBlock, 300)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`,
@@ -2174,11 +2168,42 @@ export async function aiExamTaReact(title: string, myScore: number, myComment: s
     }
     const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
     if (chatCtx) memCtx += `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 200)}`;
-    const raw = await coupleLLM(
+    const raw = await llmUserFirst(
       `${llmSystem(p, me, snap)}\n场景：你答了${me}出的恋爱考试卷《${cut(title, 20)}》交了卷，${me}刚刚给你批了 ${myScore} 分，批语是「${cut(myComment, 60)}」。你在她的批改下面留一句话。${memCtx}`,
       `请以「${ta}」的身份留言（25~55字，第一人称口语）：接住${me}给你的分数和批语——分高可以得意撒娇，分低可以不服气地讨价还价、或立正挨打保证改进，但要针对她批语里的具体内容回应；贴你的人设与你们的记忆，禁止敷衍（「好啦好啦」类不许出现），禁止 emoji。只输出留言内容。`,
     );
     const text = cut(stripEmoji(String(raw ?? '')), 90);
+    return text.length >= 4 ? text : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 第二十四轮：TA 交卷后在聊天里说的一句话（人设+记忆+上下文生成；失败返回 null，不发模板） */
+export async function aiExamSubmitSay(title: string, count: number): Promise<string | null> {
+  const target = aiTarget();
+  if (!target) return null;
+  try {
+    const p = await taPersonaOf(target.contactId);
+    const snap = readSnap();
+    if (!p || !snap) return null;
+    currentPartnerId = target.contactId;
+    currentChannel = target.channel;
+    const me = (snap.meName || '').trim() || '我';
+    let memCtx = '';
+    try {
+      const mb = memChatRecallBlock(target.contactId, target.channel, `${p.name}交卷 等${me}批卷`, { mode: 'private' });
+      if (mb) memCtx += `\n【相关记忆】\n${cut(mb, 200)}`;
+    } catch {
+      /* 召回失败不影响 */
+    }
+    const chatCtx = recentChatBlock(target.contactId, target.channel, me, p.name);
+    if (chatCtx) memCtx += `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 200)}`;
+    const raw = await llmUserFirst(
+      `${llmSystem(p, me, snap)}\n场景：你刚答完${me}出的恋爱考试卷《${cut(title, 20)}》（共 ${count} 题）并交了卷，在聊天里给${me}发一句话。${memCtx}`,
+      `请以「${p.name}」的口吻发一句话（18~44字，第一人称口语）：告诉${me}你交卷了、等她批卷打分——可以撒娇催批、可以得意或心虚，贴你的人设与你们的真实记忆，禁止「卷子答完交啦」这种模板腔，禁止 emoji。只输出这句话。`,
+    );
+    const text = cut(stripEmoji(String(raw ?? '')), 80);
     return text.length >= 4 ? text : null;
   } catch {
     return null;
@@ -2211,11 +2236,14 @@ async function aiTickExam(snap: CoupleSnap, me: string, ta: string, p: TaPersona
 
 
 
-/** 考试陪答（第二十一轮）：我和 TA 同时答题——我每答一题，TA 同时给出 TA 的选择 + 在我答案下方写一句想法（灰色小字）；TA 知道我选了什么 */
+/** 考试陪答（第二十一轮；第二十四轮强化）：我和 TA 同时答题——我每答一题，TA 同时给出 TA 的选择 + 在我答案下方写一句想法（灰色小字）；
+ *  TA 的选择和留言全部根据人设 + 恋人空间共享记忆 + 记忆碎片召回 + 最近聊天上下文 + 这张卷子前面题里已说过的话生成，不用模板；
+ *  生成失败返回 null（调用方静默跳过，不落模板）。 */
 export async function aiExamCompanion(
   paperTitle: string,
   q: { q: string; opts: string[] },
   myPick: number,
+  prevThoughts: string[] = [],
 ): Promise<{ pick: number; thought: string } | null> {
   const target = aiTarget();
   if (!target) return null;
@@ -2226,21 +2254,31 @@ export async function aiExamCompanion(
     currentPartnerId = target.contactId;
     currentChannel = target.channel;
     const me = (snap.meName || '').trim() || '我';
+    const ta = (snap.taName || '').trim() || 'TA';
     const myText = q.opts[myPick] ?? '';
-    const sys = `${llmSystem(p, me, snap)}\n场景：你们正在一起做一张恋爱水平考试卷《${cut(paperTitle, 24)}》，两个人同时答题：她答一题你跟着答一题，你会在她选的答案下面写一句你的想法。`;
-    const user = `题目：${cut(q.q, 60)}\n选项：${q.opts.map((o, i) => `${'ABCD'[i] ?? i + 1}.${cut(o, 26)}`).join(' ')}\n她刚刚选了：「${cut(myText, 30)}」。\n请你：1）以自己的真实性格选一个你自己的答案（可以和她相同也可以不同，不要刻意迎合）；2）针对她的选择写一句 20 字内的想法：可以认同、调侃、吃醋、得意或撒娇，要贴合你的人设与你们的记忆${''}，禁止 emoji。\n输出 JSON：{"pick":0,"thought":"你的想法"}。pick 是你的选项序号（从 0 开始）。只输出 JSON。`;
+    // 素材：记忆碎片召回 + 最近聊天上下文 + 这张卷子前面题里 TA 已说过的想法（避免重复、保持连贯）
+    let memCtx = '';
+    try {
+      const mb = memChatRecallBlock(target.contactId, target.channel, `${ta}和${me}一起做恋爱考试卷 ${cut(q.q, 30)}`, { mode: 'private' });
+      if (mb) memCtx += `\n【相关记忆】\n${cut(mb, 240)}`;
+    } catch {
+      /* 召回失败不影响 */
+    }
+    const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+    if (chatCtx) memCtx += `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 240)}`;
+    const prevLine = prevThoughts.filter((t) => t && t.trim()).slice(-3);
+    if (prevLine.length > 0) memCtx += `\n【这张卷子前面题里你已经说过的话（别重复，口吻保持连贯）】\n${prevLine.map((t) => `- ${cut(t, 40)}`).join('\n')}`;
+    const sys = `${llmSystem(p, me, snap)}\n场景：你们正在一起做一张恋爱水平考试卷《${cut(paperTitle, 24)}》，两个人同时答题：她答一题你跟着答一题，你会在她选的答案下面写一句你的想法。${memCtx}`;
+    const user = `题目：${cut(q.q, 60)}\n选项：${q.opts.map((o, i) => `${'ABCD'[i] ?? i + 1}.${cut(o, 26)}`).join(' ')}\n她刚刚选了：「${cut(myText, 30)}」。\n请你：1）完全按你自己的真实性格和你们的真实经历选一个你自己的答案（可以和她相同也可以不同，不要刻意迎合）；\n2）针对她的选择写一句 20 字内的想法：可以认同、调侃、吃醋、得意或撒娇，要贴着你的人设与你们的真实记忆（可以提到一件你们之间具体的小事），禁止空洞客套，禁止 emoji。\n输出 JSON：{"pick":0,"thought":"你的想法"}。pick 是你的选项序号（从 0 开始）。只输出 JSON。`;
     const raw = await llmUserFirst(sys, user, 0.9);
     const j = extractJson<{ pick?: number; thought?: string }>(raw);
-    if (j && Number.isInteger(j.pick) && (j.pick as number) >= 0 && (j.pick as number) < q.opts.length) {
-      const thought = cut(String(j.thought ?? '').replace(/[「」"]/g, ''), 42);
-      return { pick: j.pick as number, thought: thought || '他看着你的答案笑了笑，没说话' };
+    const thought = j ? cut(String(j.thought ?? '').replace(/[「」"]/g, ''), 42).trim() : '';
+    if (j && Number.isInteger(j.pick) && (j.pick as number) >= 0 && (j.pick as number) < q.opts.length && thought.length >= 2) {
+      return { pick: j.pick as number, thought };
     }
   } catch {
-    /* 本地兜底 */
+    /* 静默 */
   }
-  // 本地兜底：大概率不同选择 + 模板想法
-  const pool = q.opts.map((_, i) => i).filter((i) => i !== myPick);
-  const pick = pool.length === 0 ? myPick : Math.random() < 0.35 ? myPick : pool[Math.floor(Math.random() * pool.length)];
-  const fb = ['选这个的你怎么有点可爱', '嗯…我心里选的是另一个哦', '跟我想的一样，默契 +1', '答对了，今晚多想你一会儿', '这题你敢选这个？记下了', '不行，这题你得听我的'];
-  return { pick, thought: fb[Math.floor(Math.random() * fb.length)] };
+  // 第二十四轮：不用模板兜底——生成失败返回 null，这一题就不写他的想法
+  return null;
 }

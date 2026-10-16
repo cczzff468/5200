@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
+  ArrowUp,
   BadgeCheck,
   BatteryCharging,
   BookHeart,
@@ -79,7 +80,6 @@ import {
   Plus,
   RefreshCcw,
   Scale,
-  Send,
   Settings as SettingsIcon,
   Share2,
   Signal,
@@ -2235,8 +2235,8 @@ function CommentThread({
     ? 'h-10 flex-1 rounded-full bg-white/10 px-4 text-[13.5px] text-white outline-none placeholder:text-white/35'
     : 'h-10 flex-1 rounded-full bg-white px-4 text-[13.5px] text-[#2c2c30] outline-none placeholder:text-[#b6b6bd]';
   // 名字配色（朋友圈评论区：名字是一个颜色、正文一个颜色）——TA 用微信链蓝、我用主题粉，一眼分清谁说的
-  const taNameCls = dark ? 'text-[#9fb4ef]' : 'text-[#576b95]';
-  const meNameCls = dark ? 'text-[#f9c9da]' : 'text-[#e0607e]';
+  const taNameCls = dark ? 'text-white' : 'text-[#26262b]';
+  const meNameCls = dark ? 'text-white' : 'text-[#26262b]';
   return (
     <div data-testid={testId} className={dark ? 'rounded-2xl bg-white/[0.06] p-3.5' : 'rounded-2xl bg-[#f7f7f9] p-3.5'}>
       <div className={dark ? 'text-[12.5px] font-semibold text-white/60' : 'text-[12.5px] font-semibold text-[#6e6e76]'}>
@@ -2244,7 +2244,7 @@ function CommentThread({
         {list.length > 0 && <span className="ml-1.5 font-normal opacity-60">· {list.length} 条留言</span>}
       </div>
       {list.length > 0 && (
-        <div className={`mt-1 overflow-y-auto ${dark ? 'max-h-36' : 'max-h-44'}`} style={{ scrollbarWidth: 'thin' }}>
+        <div className={dark ? '' : ''}>
           {list.map((c, i) => {
             const body = stripNamePrefix(c.text);
             const isTa = c.from === 'ta';
@@ -2305,9 +2305,9 @@ function CommentThread({
           onClick={send}
           disabled={!text.trim()}
           aria-label="发送留言"
-          className={`flex h-10 shrink-0 items-center gap-1 rounded-full px-4 text-[13px] font-semibold text-white transition-opacity disabled:opacity-40 ${dark ? 'bg-[linear-gradient(135deg,#f9a8d4,#f06e96)]' : 'bg-[linear-gradient(135deg,#5c5c64,#3f3f46)]'}`}
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#2c2c30] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-[#e9e9ee] transition-transform active:scale-95 disabled:opacity-40"
         >
-          发送
+          <ArrowUp className="h-5 w-5" strokeWidth={2.4} />
         </button>
       </div>
     </div>
@@ -3598,7 +3598,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                         </span>
                         <p className="min-w-0 text-[13px] leading-[1.6] text-[#2c2c30]">
                           {ln.rec.text}
-                          <button type="button" onClick={() => setTrailDetail(ln.rec)} data-testid={`trail-view-${ln.rec.id}`} className="ml-1.5 inline-block whitespace-nowrap font-semibold text-[#3d9a63]">
+                          <button type="button" onClick={() => setTrailDetail(ln.rec)} data-testid={`trail-view-${ln.rec.id}`} className="ml-1.5 inline-block whitespace-nowrap font-semibold text-[#4a4a52]">
                             查看记录
                           </button>
                         </p>
@@ -3616,12 +3616,12 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                     ) : (
                       <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#eef1f5] text-[11px] font-bold text-[#8a97a8]">{(state.taName || 'TA').slice(0, 1)}</span>
                     ))}
-                  <div className={`max-w-[70%] rounded-2xl px-3.5 py-2 text-[13.5px] leading-relaxed ${mine ? 'rounded-br-md bg-[#3ec763] text-white' : 'rounded-bl-md bg-white text-[#2c2c30] shadow-[0_1px_4px_rgba(0,0,0,0.05)]'}`}>{ln.msg.text}</div>
+                  <div className={`max-w-[70%] rounded-2xl px-3.5 py-2 text-[13.5px] leading-relaxed ${mine ? 'rounded-br-md bg-[#ececf1] text-[#2c2c30]' : 'rounded-bl-md bg-white text-[#2c2c30] shadow-[0_1px_4px_rgba(0,0,0,0.05)]'}`}>{ln.msg.text}</div>
                   {mine &&
                     (state.meAvatar ? (
                       <img src={state.meAvatar} alt={state.meName || '我'} className="h-8 w-8 shrink-0 rounded-full object-cover" draggable={false} />
                     ) : (
-                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#fdeef1] text-[11px] font-bold text-[#e58ba1]">{(state.meName || '我').slice(0, 1)}</span>
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#ececf1] text-[11px] font-bold text-[#6e6e76]">{(state.meName || '我').slice(0, 1)}</span>
                     ))}
                 </div>
               );
@@ -3657,9 +3657,9 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                 onClick={sendTrail}
                 aria-label="发送"
                 disabled={!trailDraft.trim()}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#3ec763] text-white shadow-[0_4px_12px_rgba(62,199,99,0.4)] transition-transform active:scale-95 disabled:opacity-40"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#2c2c30] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-[#e9e9ee] transition-transform active:scale-95 disabled:opacity-40"
               >
-                <Send className="h-4 w-4" />
+                <ArrowUp className="h-5 w-5" strokeWidth={2.4} />
               </button>
             </div>
           </div>
@@ -3839,7 +3839,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
                   </span>
                   <span className="flex-1 text-[16px] font-semibold leading-snug text-[#2c2c30]">{item}</span>
                   {isCustomIndex(i, custom.length) && (
-                    <span className="shrink-0 rounded-full bg-[#fdeef2] px-1.5 py-0.5 text-[9px] font-bold text-[#e88ba4]">自定义</span>
+                    <span className="shrink-0 rounded-full bg-[#f0f0f3] px-1.5 py-0.5 text-[9px] font-bold text-[#6e6e76]">自定义</span>
                   )}
                   <span
                     aria-hidden="true"
@@ -3863,7 +3863,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
           {QuestionHead}
           {/* TA 的回答（第九轮主动答 + 第十轮和我一起答） */}
           <div className="mt-6">
-            <div className="text-[15px] font-medium text-[#8f9fe8]">{ta}（TA）</div>
+            <div className="text-[15px] font-medium text-[#26262b]">{ta}（TA）</div>
             {taByQ[q] ? (
               <>
                 <div className="mt-2 whitespace-pre-wrap text-[15px] leading-relaxed text-[#4a4a52]" data-testid="quiz-ta-answer">
@@ -3879,7 +3879,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
           </div>
           {/* 我的回答 */}
           <div className="mt-7">
-            <div className="text-[15px] font-medium text-[#f78fb0]">{me}（我）</div>
+            <div className="text-[15px] font-medium text-[#26262b]">{me}（我）</div>
             {my ? (
               <>
                 <div className="mt-2 whitespace-pre-wrap text-[16px] leading-relaxed text-[#2c2c30]">{my.a}</div>
@@ -3887,7 +3887,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
                 <button
                   type="button"
                   onClick={startAnswer}
-                  className="mt-4 h-11 w-full rounded-full border-2 border-[#f3a0b8] text-[15px] font-semibold text-[#f06e96] transition-colors active:bg-[#fdf1f4]"
+                  className="mt-4 h-11 w-full rounded-full border-[1.5px] border-dashed border-[#3c3c42] text-[15px] font-semibold text-[#26262b] transition-colors active:bg-[#f7f7f9]"
                 >
                   修改我的回答
                 </button>
@@ -3896,7 +3896,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
               <button
                 type="button"
                 onClick={startAnswer}
-                className="mt-4 h-12 w-full rounded-full border-2 border-[#f3a0b8] text-[16px] font-semibold text-[#f06e96] transition-colors active:bg-[#fdf1f4]"
+                className="mt-4 h-12 w-full rounded-full border-[1.5px] border-dashed border-[#3c3c42] text-[16px] font-semibold text-[#26262b] transition-colors active:bg-[#f7f7f9]"
               >
                 点此回答问题
               </button>
@@ -3941,7 +3941,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
           type="button"
           onClick={() => setAddSheet(true)}
           aria-label="自定义问题"
-          className="absolute bottom-7 right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(135deg,#ffb9cb,#ff8fae)] text-white shadow-[0_6px_18px_rgba(240,140,170,0.55)] transition-transform active:scale-90"
+          className="absolute bottom-7 right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-[#2c2c30] text-white shadow-[0_6px_18px_rgba(0,0,0,0.28)] transition-transform active:scale-90"
         >
           <Plus className="h-7 w-7" strokeWidth={2.4} />
         </button>
@@ -4154,7 +4154,7 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
                       key={c.id}
                       type="button"
                       onClick={() => setPicked(c.id)}
-                      className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors ${active ? 'bg-white shadow-sm ring-1 ring-[#f2536a]/30' : 'active:bg-white/70'}`}
+                      className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors ${active ? 'bg-white shadow-sm ring-1 ring-[#26262b]/25' : 'active:bg-white/70'}`}
                     >
                       <span className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-[#ececef]">
                         {avatarFor(c, ch ?? 'wx') ? <img src={avatarFor(c, ch ?? 'wx') ?? ''} alt="" className="h-full w-full object-cover" draggable={false} /> : null}
@@ -4163,7 +4163,7 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
                         <span className="block truncate text-[14px] text-[#2c2c30]">{displayNameOf(c)}</span>
                         {isPartner && <span className="mt-0.5 inline-block rounded-full bg-[#fdeef1] px-1.5 py-px text-[10px] font-medium text-[#f2536a]">恋人</span>}
                       </span>
-                      {active && <Check className="h-4.5 w-4.5 shrink-0 text-[#f2536a]" strokeWidth={2.4} />}
+                      {active && <Check className="h-4.5 w-4.5 shrink-0 text-[#26262b]" strokeWidth={2.4} />}
                     </button>
                   );
                 })
@@ -4179,7 +4179,7 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
                 onClick={() => {
                   if (picked && ch) onSend(ch, picked);
                 }}
-                className="h-11 flex-1 rounded-full bg-[#f2536a] text-[15px] font-bold text-white disabled:opacity-40"
+                className="h-11 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-bold text-white disabled:opacity-40"
               >
                 发送{pickedName ? `给 ${displayNameOf(pickedName)}` : ''}
               </button>
@@ -4284,7 +4284,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               {LETTER_PAPERS.map((p) => (
                 <button key={p.key} type="button" onClick={() => { setPaper(p); setSheet(null); }} className="flex flex-col items-center gap-1.5">
                   <span
-                    className={`h-[86px] w-full rounded-md border-2 shadow-sm ${paper.key === p.key ? 'border-[#21b357]' : 'border-transparent'}`}
+                    className={`h-[86px] w-full rounded-md border-2 shadow-sm ${paper.key === p.key ? 'border-[#2c2c30]' : 'border-transparent'}`}
                     style={{ background: p.bg, backgroundImage: `repeating-linear-gradient(180deg, transparent 0 12px, ${p.line} 12px 13px)` }}
                   />
                   <span className="w-full truncate text-[11.5px] text-[#5a5a62]">{p.name}</span>
@@ -4295,7 +4295,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               <button type="button" onClick={() => showToast('更多信纸即将上架 ♡')} className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
                 更多信纸
               </button>
-              <button type="button" onClick={() => setSheet(null)} className="h-11 flex-1 rounded-full bg-[#21b357] text-[15px] font-bold text-white">
+              <button type="button" onClick={() => setSheet(null)} className="h-11 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-bold text-white">
                 完成
               </button>
             </div>
@@ -4324,9 +4324,9 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             <div className="mt-4 flex items-center gap-3">
               <span className="shrink-0 text-[14px] font-semibold text-[#3a3a40]">字号</span>
               <span className="text-[12px] text-[#b6b6bd]">A</span>
-              <input type="range" min={12} max={22} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="h-1.5 flex-1 accent-[#21b357]" aria-label="字号" />
+              <input type="range" min={12} max={22} value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} className="h-1.5 flex-1 accent-[#2c2c30]" aria-label="字号" />
               <span className="text-[18px] font-semibold text-[#3a3a40]">A</span>
-              <span className="w-8 shrink-0 rounded-full bg-[#21b357] py-0.5 text-center text-[12px] font-bold text-white">{fontSize}</span>
+              <span className="w-8 shrink-0 rounded-full bg-[#2c2c30] py-0.5 text-center text-[12px] font-bold text-white">{fontSize}</span>
             </div>
             <div className="mt-4 flex items-start gap-3">
               <span className="shrink-0 pt-1.5 text-[14px] font-semibold text-[#3a3a40]">颜色</span>
@@ -4343,7 +4343,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 ))}
               </div>
             </div>
-            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#21b357] text-[15px] font-bold text-white">
+            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#2c2c30] text-[15px] font-bold text-white">
               完成
             </button>
           </div>
@@ -4369,14 +4369,14 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                   }}
                   className="flex flex-col items-center gap-1.5"
                 >
-                  <span className={`w-full overflow-hidden rounded-lg border-2 shadow-sm ${envKey === e.key ? 'border-[#f2536a]' : 'border-transparent'}`}>
+                  <span className={`w-full overflow-hidden rounded-lg border-2 shadow-sm ${envKey === e.key ? 'border-[#2c2c30]' : 'border-transparent'}`}>
                     <EnvelopeArt envKey={e.key} className="h-[74px] w-full" />
                   </span>
-                  <span className={`text-[11.5px] ${envKey === e.key ? 'font-semibold text-[#f2536a]' : 'text-[#5a5a62]'}`}>{e.name}</span>
+                  <span className={`text-[11.5px] ${envKey === e.key ? 'font-semibold text-[#26262b]' : 'text-[#5a5a62]'}`}>{e.name}</span>
                 </button>
               ))}
             </div>
-            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#21b357] text-[15px] font-bold text-white">
+            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#2c2c30] text-[15px] font-bold text-white">
               完成
             </button>
           </div>
@@ -4469,7 +4469,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             >
               恢复默认
             </button>
-            <button type="button" onClick={saveSender} className="h-11 flex-1 rounded-full bg-[#21b357] text-[15px] font-bold text-white">
+            <button type="button" onClick={saveSender} className="h-11 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-bold text-white">
               保存
             </button>
           </div>
@@ -4656,7 +4656,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                     <button
                       type="button"
                       onClick={() => setToolsOpen((v) => !v)}
-                      className="absolute right-2 top-10 z-10 rounded-md bg-[#21b357] px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm"
+                      className="absolute right-2 top-10 z-10 rounded-md bg-[#2c2c30] px-2.5 py-1 text-[12.5px] font-medium text-white shadow-sm"
                     >
                       工具 {toolsOpen ? '˄' : '˅'}
                     </button>
@@ -4664,7 +4664,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                   {/* 右侧工具栏（虚线/手写信/字体/信封/回执/信纸） */}
                   {isFocus && toolsOpen && (
                     <div className="absolute right-2.5 top-[64px] z-10 flex flex-col gap-2.5">
-                      <button type="button" onClick={() => setDashed((v) => !v)} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${dashed ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
+                      <button type="button" onClick={() => setDashed((v) => !v)} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${dashed ? 'bg-[#2c2c30]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
                         虚线
                       </button>
                       <button type="button" onClick={() => showToast('手写信誊写功能即将上线 ♡')} className="h-[54px] w-9 rounded-lg bg-[#9a9aa2] text-[12.5px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
@@ -4679,7 +4679,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                           信封
                         </span>
                       </button>
-                      <button type="button" onClick={() => { setReceipt((v) => !v); showToast(receipt ? '已关闭回执' : '已开启回执：TA 拆信时会通知你'); }} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${receipt ? 'bg-[#21b357]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
+                      <button type="button" onClick={() => { setReceipt((v) => !v); showToast(receipt ? '已关闭回执' : '已开启回执：TA 拆信时会通知你'); }} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${receipt ? 'bg-[#2c2c30]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
                         回执
                       </button>
                       <button type="button" onClick={() => setSheet('paper')} className="relative h-[54px] w-9 rounded-lg border border-[#e8cdb2] bg-[#fdf8ec] text-[12.5px] font-bold leading-[1.15] text-[#2f6b3f] shadow-md" style={{ writingMode: 'vertical-rl' }}>
@@ -4734,7 +4734,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               patch({ letterDraft: JSON.stringify(pages) });
               setView('send');
             }}
-            className="h-[46px] flex-[1.6] rounded-full bg-[#21b357] text-[16px] font-bold text-white shadow-[0_4px_14px_rgba(33,179,87,0.4)] transition-transform active:scale-[0.97]"
+            className="h-[46px] flex-[1.6] rounded-full bg-[#2c2c30] text-[16px] font-bold text-white transition-transform active:scale-[0.97]"
           >
             下一步
           </button>
@@ -4818,7 +4818,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                     type="button"
                     onClick={() => setSendMode('timed')}
                     data-testid="send-mode-timed"
-                    className={`h-9 whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition-colors ${timed ? 'bg-[#21b357] text-white shadow-[0_2px_10px_rgba(33,179,87,0.4)]' : 'bg-white/10 text-[#b9b9c4]'}`}
+                    className={`h-9 whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition-colors ${timed ? 'bg-[#2c2c30] text-white' : 'bg-white/10 text-[#b9b9c4]'}`}
                   >
                     定时发出
                   </button>
@@ -4826,7 +4826,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                     type="button"
                     onClick={() => setSendMode('now')}
                     data-testid="send-mode-now"
-                    className={`h-9 whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition-colors ${!timed ? 'bg-[#21b357] text-white shadow-[0_2px_10px_rgba(33,179,87,0.4)]' : 'bg-white/10 text-[#b9b9c4]'}`}
+                    className={`h-9 whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition-colors ${!timed ? 'bg-[#2c2c30] text-white' : 'bg-white/10 text-[#b9b9c4]'}`}
                   >
                     即时发出
                   </button>
@@ -4840,7 +4840,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                         key={d}
                         type="button"
                         onClick={() => setAfter(d)}
-                        className={`h-10 flex-1 whitespace-nowrap rounded-full border text-[13.5px] transition-colors ${after === d ? 'border-[#21b357] bg-[#21b357]/15 font-bold text-[#4ade80]' : 'border-white/15 text-[#9c9ca6]'}`}
+                        className={`h-10 flex-1 whitespace-nowrap rounded-full border text-[13.5px] transition-colors ${after === d ? 'border-white bg-white/15 font-bold text-white' : 'border-white/15 text-[#9c9ca6]'}`}
                       >
                         {d} 天
                       </button>
@@ -4860,7 +4860,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             type="button"
             onClick={sendLetter}
             data-testid="send-letter-btn"
-            className="mt-6 h-[50px] w-full shrink-0 rounded-full bg-[#21b357] text-[16.5px] font-bold text-white shadow-[0_6px_20px_rgba(33,179,87,0.4)] transition-transform active:scale-[0.97]"
+            className="mt-6 h-[50px] w-full shrink-0 rounded-full bg-[#2c2c30] text-[16.5px] font-bold text-white transition-transform active:scale-[0.97]"
           >
             {timed ? `定时寄出（${after} 天后送达）` : '立即寄出这封信'}
           </button>
@@ -4911,7 +4911,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             <div className="pointer-events-none absolute left-1/2 top-[54px] flex h-11 -translate-x-1/2 items-center text-[16px] font-bold text-[#4a3a40]">{`${who}的来信`}</div>
             {readFrom === 'me' && !l.sharedAt && (
               <button type="button" onClick={() => setShareLetterId(l.id)} className="ml-auto mr-2 flex h-9 items-center gap-1 rounded-full border border-[#e3c8ce] bg-white/70 px-3.5 text-[13px] font-medium text-[#c25868]">
-                <Send className="h-3.5 w-3.5" />
+                <ArrowUp className="h-3.5 w-3.5" />
                 分享
               </button>
             )}
@@ -4975,7 +4975,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               {`分享给${state.taName || 'TA'}`}
             </button>
           ) : (
-            <button type="button" onClick={() => setView('write')} data-testid="read-reply-btn" className="h-[46px] flex-[1.6] rounded-full bg-[#21b357] text-[16px] font-bold text-white shadow-[0_4px_14px_rgba(33,179,87,0.4)] transition-transform active:scale-[0.97]">
+            <button type="button" onClick={() => setView('write')} data-testid="read-reply-btn" className="h-[46px] flex-[1.6] rounded-full bg-[#2c2c30] text-[16px] font-bold text-white transition-transform active:scale-[0.97]">
               回信
             </button>
           )}
@@ -5006,7 +5006,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 >
                   <EnvelopeArt envKey={l.envelope} className="h-[132px] w-full" avatar={state.taAvatar} />
                   {/* 第二十一轮：左上角「xx的来信」标签删除；底部只显示时间（信的内容不再展示） */}
-                  <span className="absolute right-3 top-3 z-10 rounded-full bg-[#21b357] px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm">可拆信</span>
+                  <span className="absolute right-3 top-3 z-10 rounded-full bg-[#2c2c30] px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm">可拆信</span>
                   <span className="absolute inset-x-0 bottom-0 z-10 block bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">
                     <span className="block truncate text-[12px] font-medium tabular-nums text-white/90">{fmtMDHM(l.at)}</span>
                   </span>
@@ -5046,7 +5046,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               >
                 <EnvelopeArt envKey={l.envelope ?? envKey} className="h-[132px] w-full" avatar={senderAvatar} />
                 {/* 第二十一轮：左上角署名标签删除；底部只显示时间（即时/定时/信封名等其它信息不再展示） */}
-                <span className={`absolute right-3 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ${open ? 'bg-[#21b357] text-white' : 'bg-black/38 text-white/90'}`}>
+                <span className={`absolute right-3 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ${open ? 'bg-[#2c2c30] text-white' : 'bg-black/38 text-white/90'}`}>
                   {open ? '可拆信' : instant ? '定时中' : `还剩 ${remain} 天`}
                 </span>
                 <span className="absolute inset-x-0 bottom-0 z-10 block bg-gradient-to-t from-black/60 to-transparent px-3.5 pb-2.5 pt-7">
@@ -5247,10 +5247,10 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 type="button"
                 onClick={() => setMood(m.emoji)}
                 aria-pressed={mood === m.emoji}
-                className={`flex flex-col items-center gap-1 rounded-2xl py-2 transition-all ${mood === m.emoji ? 'bg-[#fdeef3] shadow-[inset_0_1px_4px_rgba(242,83,106,0.08)]' : 'active:bg-[#f6f6f8]'}`}
+                className={`flex flex-col items-center gap-1 rounded-2xl py-2 transition-all ${mood === m.emoji ? 'bg-[#ececf0] shadow-[inset_0_1px_4px_rgba(0,0,0,0.07)]' : 'active:bg-[#f6f6f8]'}`}
               >
                 <MoodFace mood={m.emoji} size={38} className={mood === m.emoji ? '[animation:couple-pop-heart_.4s_ease-out]' : 'opacity-90'} />
-                <span className={`text-[10px] ${mood === m.emoji ? 'font-semibold text-[#e0607e]' : 'text-[#8e8e96]'}`}>{m.label}</span>
+                <span className={`text-[10px] ${mood === m.emoji ? 'font-semibold text-[#26262b]' : 'text-[#8e8e96]'}`}>{m.label}</span>
               </button>
             ))}
           </div>
@@ -5310,7 +5310,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
         <button
           type="button"
           onClick={saveMood}
-          className="sticky bottom-4 z-10 mb-3 mt-5 h-12 w-full rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[15px] font-semibold text-white shadow-[0_8px_20px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
+          className="sticky bottom-4 z-10 mb-3 mt-5 h-12 w-full rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white transition-transform active:scale-[0.98]"
         >
           完成
         </button>
@@ -5389,7 +5389,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
             {cursor.y}.{String(cursor.m + 1).padStart(2, '0')}
             <ChevronDown className="h-4 w-4 text-[#6e6e76]" />
           </button>
-          <span className="text-[13.5px] font-semibold text-[#f2536a]">全部日记</span>
+          <span className="text-[13.5px] font-semibold text-[#26262b]">全部日记</span>
         </div>
 
         <div className="mt-3 space-y-3 pb-4">
@@ -5408,11 +5408,11 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-baseline gap-1.5">
-                    <span className={`text-[24px] font-extrabold leading-none text-[#2c2c30] ${isToday ? 'underline decoration-[#f5c33c] decoration-[3px] underline-offset-[6px]' : ''}`}>{isToday ? '今天' : d.getDate()}</span>
+                    <span className={`text-[24px] font-extrabold leading-none text-[#2c2c30] ${isToday ? 'underline decoration-[#b9b9c2] decoration-[3px] underline-offset-[6px]' : ''}`}>{isToday ? '今天' : d.getDate()}</span>
                     <span className="text-[11px] text-[#9a9aa2]">{d.getMonth() + 1}月,{d.getFullYear()}</span>
                   </div>
                   {m.from !== 'ta' ? (
-                    <span className="shrink-0 rounded-full border border-[#f2536a]/55 px-2 py-0.5 text-[10px] text-[#f2536a]">对方未读</span>
+                    <span className="shrink-0 rounded-full border border-[#d9d9de] px-2 py-0.5 text-[10px] text-[#6e6e76]">对方未读</span>
                   ) : (
                     <span className="shrink-0 rounded-full border border-[#7f96e0]/45 px-2 py-0.5 text-[10px] text-[#7f96e0]">TA 写的</span>
                   )}
@@ -5452,7 +5452,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
             type="button"
             aria-label="上个月"
             onClick={() => setCursor((c) => (c.m === 0 ? { y: c.y - 1, m: 11 } : { ...c, m: c.m - 1 }))}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-[#e94b6b] text-white shadow-[0_3px_8px_rgba(233,75,107,0.35)] active:opacity-80"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-[#2c2c30] text-white shadow-[0_3px_8px_rgba(0,0,0,0.18)] active:opacity-80"
           >
             <ChevronLeft className="h-4 w-4" strokeWidth={2.6} />
           </button>
@@ -5463,7 +5463,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
             type="button"
             aria-label="下个月"
             onClick={() => setCursor((c) => (c.m === 11 ? { y: c.y + 1, m: 0 } : { ...c, m: c.m + 1 }))}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-[#c23352] text-white shadow-[0_3px_8px_rgba(194,51,82,0.35)] active:opacity-80"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-[#2c2c30] text-white shadow-[0_3px_8px_rgba(0,0,0,0.18)] active:opacity-80"
           >
             <ChevronRight className="h-4 w-4" strokeWidth={2.6} />
           </button>
@@ -5524,7 +5524,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <div className="max-w-[150px] rounded-2xl rounded-br-md bg-white px-3 py-2 text-[11px] font-medium leading-snug text-[#3c3c42] shadow-[0_6px_18px_rgba(0,0,0,0.14)]">
               对方今日还未写日记！快去戳一下 TA 吧
             </div>
-            <button type="button" onClick={pokeTa} className="mt-1 rounded-full bg-[#e94b6b] px-2.5 py-1 text-[10px] font-bold text-white shadow-[0_3px_10px_rgba(233,75,107,0.4)] active:opacity-80">
+            <button type="button" onClick={pokeTa} className="mt-1 rounded-full bg-[#2c2c30] px-2.5 py-1 text-[10px] font-bold text-white shadow-[0_3px_10px_rgba(0,0,0,0.2)] active:opacity-80">
               戳一下他
             </button>
           </div>
@@ -5533,7 +5533,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
           type="button"
           onClick={() => openWrite(todayKey())}
           data-testid="mood-write-btn"
-          className="pointer-events-auto mt-0.5 flex h-[46px] items-center gap-2 rounded-full bg-[linear-gradient(135deg,#ff9db4_0%,#f06e96_52%,#e0559a_100%)] pl-4 pr-5 text-[14px] font-bold tracking-wide text-white shadow-[0_12px_30px_rgba(240,110,150,0.55),inset_0_1px_0_rgba(255,255,255,0.4)] ring-2 ring-white/70 transition-all hover:shadow-[0_14px_34px_rgba(240,110,150,0.65)] active:scale-[0.94]"
+          className="pointer-events-auto mt-0.5 flex h-[46px] items-center gap-2 rounded-full bg-[#2c2c30] pl-4 pr-5 text-[14px] font-bold tracking-wide text-white shadow-[0_12px_30px_rgba(240,110,150,0.55),inset_0_1px_0_rgba(255,255,255,0.4)] ring-2 ring-white/70 transition-all hover:shadow-[0_14px_34px_rgba(240,110,150,0.65)] active:scale-[0.94]"
         >
           <PencilLine className="h-4 w-4" strokeWidth={2.4} />
           写日记
@@ -6431,7 +6431,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
                 ) : (
                   <span className="flex flex-col items-center gap-2">
                     <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(180deg,#f9b7ca,#f49cb6)] text-[30px] font-light text-white shadow-[0_4px_12px_rgba(230,130,160,0.45)]">+</span>
-                    <span className="text-[13px] font-medium text-[#e88ba4]">添加图片</span>
+                    <span className="text-[13px] font-medium text-[#6e6e76]">添加图片</span>
                   </span>
                 )}
               </button>
@@ -6631,7 +6631,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
         <button
           type="button"
           onClick={() => setShowIndex(true)}
-          className="flex items-center gap-1.5 rounded-md bg-[linear-gradient(180deg,#b7a6ec,#9d8ade)] px-3.5 py-2 text-[14px] font-bold text-white shadow-[0_4px_12px_rgba(140,120,210,0.4)] transition-transform active:scale-95"
+          className="flex items-center gap-1.5 rounded-md bg-[#4a4a52] px-3.5 py-2 text-[14px] font-bold text-white shadow-[0_4px_12px_rgba(0,0,0,0.22)] transition-transform active:scale-95"
         >
           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
           目录
@@ -6642,7 +6642,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
             const next = HUNDRED_LIST.findIndex((_, i) => !state.hundred.includes(i));
             openEdit(next >= 0 ? next : 0);
           }}
-          className="flex items-center gap-1.5 rounded-md bg-[linear-gradient(180deg,#f9a8c0,#f387a7)] px-3.5 py-2 text-[14px] font-bold text-white shadow-[0_4px_12px_rgba(230,120,155,0.45)] transition-transform active:scale-95"
+          className="flex items-center gap-1.5 rounded-md bg-[#2c2c30] px-3.5 py-2 text-[14px] font-bold text-white shadow-[0_4px_12px_rgba(0,0,0,0.22)] transition-transform active:scale-95"
         >
           <span className="text-[16px] font-light leading-none">+</span>
           添加小事
@@ -6672,7 +6672,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
           <div className="max-h-[76%] w-full overflow-hidden rounded-t-3xl bg-white" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-black/[0.05] px-5 py-3.5">
               <span className="text-[16px] font-bold text-[#3c3c42]">目录 · 已完成 {done}/100</span>
-              <button type="button" onClick={() => setShowIndex(false)} aria-label="关闭目录" className="text-[13px] font-medium text-[#e88ba4]">
+              <button type="button" onClick={() => setShowIndex(false)} aria-label="关闭目录" className="text-[13px] font-medium text-[#6e6e76]">
                 收起
               </button>
             </div>
@@ -7175,7 +7175,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           <div className="px-1 pt-2">
             <h2 className="text-[27px] font-extrabold leading-[1.3] text-[#26262b]">
               我们的
-              <span className="text-[#f2536a]">专属</span> 恋爱协议
+              <span className="text-[#26262b]">专属</span> 恋爱协议
             </h2>
             <p className="mt-2.5 text-[13.5px] leading-relaxed text-[#9a9aa2]">签一份属于你们的协议，互相分享、互相签名；TA 也会认真看，自己决定签不签。</p>
           </div>
@@ -7183,16 +7183,16 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           {/* TA 拟的协议（第九轮：AI 会自己拟协议等我签；点卡片/去签直达签署界面；
            *  第二十三轮：我拒绝后不再消失，卡片显示「已拒绝」，AI 通过记忆知道被拒） */}
           {state.aiPact && (
-            <div className={`relative mt-4 rounded-2xl border-2 border-dashed p-4 ${state.aiPact.declined ? 'border-[#d9d9de] bg-[#fafafa] opacity-80' : 'border-[#f2536a] bg-white'}`} data-testid="ai-pact-card">
+            <div className={`relative mt-4 rounded-2xl border-2 border-dashed p-4 ${state.aiPact.declined ? 'border-[#d9d9de] bg-[#fafafa] opacity-80' : 'border-[#3c3c42] bg-white'}`} data-testid="ai-pact-card">
               <div className="flex items-center justify-between pr-16">
                 <div className="text-[14.5px] font-bold text-[#26262b]">
-                  {state.taName || 'TA'} {state.aiPact.signTa ? '拟好并签好名的协议' : '拟了一份协议'} <span className="text-[#f2536a]">《{state.aiPact.title}》</span>
+                  {state.taName || 'TA'} {state.aiPact.signTa ? '拟好并签好名的协议' : '拟了一份协议'} <span>《{state.aiPact.title}》</span>
                 </div>
               </div>
               {state.aiPact.declined ? (
                 <span className="absolute right-3 top-3 shrink-0 rounded-full bg-[#f0f0f3] px-2 py-0.5 text-[10.5px] font-bold text-[#8e8e96]" data-testid="ai-pact-declined-badge">已拒绝</span>
               ) : (
-                <span className="absolute right-3 top-3 shrink-0 rounded-full bg-[#fdeef2] px-2 py-0.5 text-[10.5px] font-bold text-[#f2536a]">{state.aiPact.signTa ? 'TA已签 · 等你签' : '等你签'}</span>
+                <span className="absolute right-3 top-3 shrink-0 rounded-full bg-[#f0f0f3] px-2 py-0.5 text-[10.5px] font-bold text-[#4a4a52]">{state.aiPact.signTa ? 'TA已签 · 等你签' : '等你签'}</span>
               )}
               <div className="mt-2 space-y-1">
                 {state.aiPact.clauses.slice(0, 3).map((c, i) => (
@@ -7225,7 +7225,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         patchFn((prev) => (prev.aiPact ? { aiPact: { ...prev.aiPact, declined: false } } : {}));
                         showToast('再看看这份协议，愿意的话随时签名 ♡');
                       }}
-                      className="h-10 flex-1 rounded-full bg-white text-[14px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80"
+                      className="h-10 flex-1 rounded-full bg-white text-[14px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]"
                     >
                       重新考虑
                     </button>
@@ -7267,7 +7267,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                     setView('sign');
                     showToast(p.signTa ? `TA 已先签好名，签完你的名协议就生效 ♡` : `已换成 ${state.taName || 'TA'} 的版本，签完名发给 TA 确认 ♡`);
                   }}
-                  className="h-10 flex-1 rounded-full bg-[#f2536a] text-[14px] font-semibold text-white active:opacity-85"
+                  className="h-10 flex-1 rounded-full bg-[#2c2c30] text-[14px] font-semibold text-white active:opacity-85"
                 >
                   去签 TA 的协议
                 </button>
@@ -7280,13 +7280,13 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           {state.pacts.length > 0 ? (
             <div className="mt-4">
               <div className="px-1 text-[15px] font-bold text-[#26262b]">
-                签署的恋爱协议 <span className="text-[#f2536a]">{state.pacts.length}</span>
+                签署的恋爱协议 <span className="text-[#26262b]">{state.pacts.length}</span>
               </div>
               <div className="mt-2.5 space-y-2.5">
                 {state.pacts.map((p) => {
                   const st = p.status ?? (p.signTa ? 'signed' : 'pending');
                   return (
-                    <div key={p.id} className="relative rounded-2xl border border-[#f2dfe3] bg-white p-4 shadow-[0_2px_10px_rgba(242,83,106,0.05)]" data-testid="pact-saved-item">
+                    <div key={p.id} className="relative rounded-2xl border border-[#e9e9ee] bg-white p-4 shadow-[0_2px_10px_rgba(0,0,0,0.05)]" data-testid="pact-saved-item">
                       <button
                         type="button"
                         className="block w-full text-left"
@@ -7302,7 +7302,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         }}
                       >
                         <span className="flex items-center gap-1.5 pr-14">
-                          <Scale className="h-4 w-4 shrink-0 text-[#f2536a]" strokeWidth={1.9} />
+                          <Scale className="h-4 w-4 shrink-0 text-[#4a4a52]" strokeWidth={1.9} />
                           <span className="min-w-0 flex-1 truncate text-[14.5px] font-bold text-[#26262b]">《{p.title}》</span>
                         </span>
                         <span className="mt-1.5 block truncate text-[12px] text-[#9a9aa2]">
@@ -7318,7 +7318,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         </span>
                         <span
                           className={`shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-bold ${
-                            st === 'signed' ? 'bg-[#eaf7ef] text-[#3d9a63]' : st === 'declined' ? 'bg-[#f4f4f6] text-[#8e8e96]' : 'bg-[#fdeef2] text-[#f2536a]'
+                            st === 'signed' ? 'bg-[#eaf7ef] text-[#3d9a63]' : st === 'declined' ? 'bg-[#f4f4f6] text-[#8e8e96]' : 'bg-[#f0f0f3] text-[#4a4a52]'
                           }`}
                         >
                           {st === 'signed' ? '已生效' : st === 'declined' ? 'TA 婉拒了' : '等 TA 签署'}
@@ -7347,10 +7347,10 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 setSignFrom('edit');
                 setView('edit');
               }}
-              className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-dashed border-[#f2dfe3] bg-white/70 px-4 py-3.5 text-left active:bg-[#fff5f7]"
+              className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-dashed border-[#d9d9de] bg-white/70 px-4 py-3.5 text-left active:bg-[#f7f7f9]"
             >
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
-                <NotebookPen className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.8} />
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f0f0f3]">
+                <NotebookPen className="h-4.5 w-4.5 text-[#4a4a52]" strokeWidth={1.8} />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[14px] font-semibold text-[#26262b]">《{state.pactTitle || '恋爱协议书'}》（草稿）</span>
@@ -7363,7 +7363,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           {/* 模板导入 + 创建按钮 */}
           <div className="mb-2 mt-4 text-center text-[13px] text-[#9a9aa2]">
             已有模板编码？
-            <button type="button" data-testid="pact-import-btn" onClick={() => openDlg({ type: 'template' })} className="ml-1 font-medium text-[#f2536a] underline underline-offset-2 active:opacity-60">
+            <button type="button" data-testid="pact-import-btn" onClick={() => openDlg({ type: 'template' })} className="ml-1 font-medium text-[#26262b] underline underline-offset-2 active:opacity-60">
               导入模板
             </button>
           </div>
@@ -7374,7 +7374,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
             aria-label="添加协议"
             data-testid="pact-fab-add"
             onClick={startNewPact}
-            className="fixed bottom-8 right-5 z-20 grid h-14 w-14 place-items-center rounded-full bg-[#f2536a] text-white shadow-[0_10px_26px_rgba(242,83,106,0.45)] transition-transform active:scale-90"
+            className="fixed bottom-8 right-5 z-20 grid h-14 w-14 place-items-center rounded-full bg-[#2c2c30] text-white transition-transform active:scale-90"
           >
             <Plus className="h-7 w-7" strokeWidth={2.4} />
           </button>
@@ -7425,7 +7425,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                   dragging === i
                     ? 'rounded-lg bg-white px-2 shadow-[0_8px_22px_rgba(0,0,0,0.14)]'
                     : dragTo === i && dragging != null && dragTo !== dragging
-                      ? 'border-t-2 border-[#f2536a]'
+                      ? 'border-t-2 border-[#2c2c30]'
                       : 'border-b border-dashed border-[#e4e4e9]'
                 }`}
               >
@@ -7457,7 +7457,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
 
           {/* 新增 */}
           <div className="mt-4 grid grid-cols-2 gap-3">
-            <button type="button" data-testid="pact-random-btn" onClick={addRandom} className="h-12 rounded-xl border-2 border-[#f8a0b4] text-[14.5px] font-medium text-[#f2536a] active:bg-[#fff5f7]">
+            <button type="button" data-testid="pact-random-btn" onClick={addRandom} className="h-12 rounded-xl border-[1.5px] border-dashed border-[#3c3c42] text-[14.5px] font-medium text-[#26262b] active:bg-[#f7f7f9]">
               + 随机新增一条
             </button>
             <button type="button" data-testid="pact-custom-btn" onClick={() => openDlg({ type: 'custom' })} className="h-12 rounded-xl border border-[#d9d9de] bg-white text-[14.5px] font-medium text-[#4a4a52] active:bg-[#f7f7f9]">
@@ -7472,7 +7472,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
               setSignFrom('edit');
               setView('sign');
             }}
-            className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-full bg-[#f2536a] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98]"
+            className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-full bg-[#2c2c30] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(0,0,0,0.16)] transition-transform active:scale-[0.98]"
           >
             下一步：预览协议
           </button>
@@ -7495,7 +7495,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 disabled={!!state.pactSignMe}
                 onClick={signMe}
                 className={`mt-2 flex h-[92px] w-full items-center justify-center rounded-md border-2 border-dashed transition-colors ${
-                  state.pactSignMe ? 'border-[#f8a0b4] bg-white' : 'border-[#f8a0b4] bg-[#fff5f7] active:bg-[#ffeef2]'
+                  state.pactSignMe ? 'border-[#dcdce2] bg-white' : 'border-[#dcdce2] bg-[#f7f7f9] active:bg-[#efeff3]'
                 }`}
               >
                 {state.pactSignMe ? (
@@ -7503,12 +7503,12 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                     {state.pactSignMe}
                   </span>
                 ) : (
-                  <span className="flex items-center gap-1.5 text-[14px] text-[#f2536a]">
+                  <span className="flex items-center gap-1.5 text-[14px] text-[#26262b]">
                     <Pencil className="h-4 w-4" strokeWidth={2} /> {state.pactSignTa ? '点击签名（签完即生效）' : '点击签名'}
                   </span>
                 )}
               </button>
-              {!state.pactSignMe && <div className="mt-2 rounded-md border border-[#f2536a] px-2 py-1 text-center text-[11px] leading-snug text-[#f2536a]">{state.pactSignTa ? 'TA 已先签好名，你签完协议就生效并永久存档 ♡' : '请先签名，完成后即可生成协议书'}</div>}
+              {!state.pactSignMe && <div className="mt-2 rounded-md border border-[#d9d9de] px-2 py-1 text-center text-[11px] leading-snug text-[#6e6e76]">{state.pactSignTa ? 'TA 已先签好名，你签完协议就生效并永久存档 ♡' : '请先签名，完成后即可生成协议书'}</div>}
               <div className="mt-2.5 text-[12px] text-[#9a9aa2]">日期：{state.pactMeAt ? fmtDateCn(fmtDate(state.pactMeAt)) : '＿＿＿年＿＿月＿＿日'}</div>
             </div>
             <div>
@@ -7544,8 +7544,8 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
 
           {/* TA 想改其中一条（第十五轮：他可以不同意或改某一条；采纳后自动重发） */}
           {taProposal && !state.pactSignTa && (
-            <div className="mt-4 rounded-xl border border-[#f8a0b4] bg-[#fff5f7] p-3.5" data-testid="pact-ta-proposal">
-              <div className="text-[13.5px] font-bold text-[#f2536a]">
+            <div className="mt-4 rounded-xl border border-[#dcdce2] bg-[#f7f7f9] p-3.5" data-testid="pact-ta-proposal">
+              <div className="text-[13.5px] font-bold text-[#26262b]">
                 {state.taName || 'TA'} 想改第 {taProposal.idx + 1} 条
               </div>
               <div className="mt-1 text-[12.5px] leading-relaxed text-[#6e6e76]">{taProposal.reason}</div>
@@ -7565,7 +7565,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 >
                   坚持原条款
                 </button>
-                <button type="button" data-testid="pact-proposal-adopt" onClick={adoptTaProposal} className="h-10 flex-1 rounded-full bg-[#f2536a] text-[13.5px] font-semibold text-white active:opacity-85">
+                <button type="button" data-testid="pact-proposal-adopt" onClick={adoptTaProposal} className="h-10 flex-1 rounded-full bg-[#2c2c30] text-[13.5px] font-semibold text-white active:opacity-85">
                   采纳修改，发他重签
                 </button>
               </div>
@@ -7573,7 +7573,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           )}
 
           {state.pactAt != null ? (
-            <div className="mb-2 mt-5 rounded-xl bg-[#fdeef2] py-3.5 text-center text-[14px] font-semibold text-[#f2536a]" data-testid="pact-effective-banner">
+            <div className="mb-2 mt-5 rounded-xl bg-[#f0f0f3] py-3.5 text-center text-[14px] font-semibold text-[#26262b]" data-testid="pact-effective-banner">
               协议书已生成并生效，好好爱 ♡
             </div>
           ) : (
@@ -7591,7 +7591,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
               taName={state.taName}
             />
           </div>
-          <div className="mt-4 rounded-xl bg-[#fdeef2] py-3 text-center text-[13px] font-semibold text-[#f2536a]">
+          <div className="mt-4 rounded-xl bg-[#f0f0f3] py-3 text-center text-[13px] font-semibold text-[#26262b]">
             {fmtDateCn(fmtDate(viewPact.at))} 生效 · 双方已签名 ♡
           </div>
           <div className="mb-2 mt-4 flex gap-2.5">
@@ -7608,7 +7608,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
             >
               删除这份协议
             </button>
-            <button type="button" onClick={() => setView('home')} className="h-11 flex-1 rounded-full bg-[#f2536a] text-[15px] font-semibold text-white active:opacity-85">
+            <button type="button" onClick={() => setView('home')} className="h-11 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white active:opacity-85">
               返回
             </button>
           </div>
@@ -7651,7 +7651,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
               <button type="button" onClick={() => setDlg(null)} className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
                 取消
               </button>
-              <button type="button" data-testid="pact-dlg-save" onClick={submitDlg} className="h-11 flex-1 rounded-full bg-[#f2536a] text-[15px] font-semibold text-white active:opacity-85">
+              <button type="button" data-testid="pact-dlg-save" onClick={submitDlg} className="h-11 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white active:opacity-85">
                 保存
               </button>
             </div>
@@ -7675,157 +7675,6 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
   );
 }
 
-/** 试卷纸卡（参考图5/6：粉底白纸 + 左侧装订圈 + 大标题 + 考官 + 注意事项 + 分页题干；answer 模式可作答） */
-function ExamPaperSheet(props: {
-  title: string;
-  notes: string[];
-  questions: { q: string; opts: string[] }[];
-  examiner: string;
-  page: number;
-  perPage?: number;
-  answers?: Record<number, number>;
-  onPick?: (qi: number, oi: number) => void;
-  resultAnswers?: Record<string, number> | null;
-  bestAt?: (qi: number) => number | undefined;
-  onPrev?: () => void;
-  onNext?: () => void;
-  // 第二十一轮：AI 陪答——每答一题，TA 的选择 + 想法（灰色小字）显示在答案下面
-  taLive?: { picks: Record<string, number>; thoughts: Record<string, string> } | null;
-  taName?: string;
-  thinking?: Record<number, boolean>;
-  companionOn?: boolean;
-}) {
-  const per = props.perPage ?? 5;
-  const pages = Math.max(1, Math.ceil(props.questions.length / per));
-  const pg = Math.min(props.page, pages - 1);
-  const slice = props.questions.slice(pg * per, pg * per + per);
-  // 每题分值（满分 100 均摊；第二十一轮：题的后面标上这个题的分数）
-  const perScore = props.questions.length > 0 ? 100 / props.questions.length : 0;
-  const fmtScore = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
-  return (
-    <div className="bg-white">
-      <div className="flex">
-        {/* 装订圈 */}
-        <div className="flex w-8 shrink-0 flex-col items-center justify-around border-r border-[#e6e6ea] py-6">
-          {Array.from({ length: 10 }).map((_, i) => (
-            <span key={i} className="h-2.5 w-2.5 rounded-full border-[1.5px] border-[#c9c9cf] bg-[#f7f7f9]" />
-          ))}
-        </div>
-        <div className="min-w-0 flex-1 px-4 pb-5 pt-6">
-          <h2 className="text-center text-[20px] font-extrabold leading-[1.45] text-[#26262b]">{props.title}</h2>
-          <div className="mt-2 flex items-center gap-2">
-            <span className="h-px flex-1 bg-[#e9e9ee]" />
-            <span className="text-[11px] text-[#f2536a]" aria-hidden="true">
-              ♥
-            </span>
-            <span className="h-px flex-1 bg-[#e9e9ee]" />
-          </div>
-          <div className="mt-3 text-[13.5px] text-[#4a4a52]">考官：{props.examiner}</div>
-          {props.notes.length > 0 && (
-            <>
-              <div className="mt-3 flex items-center gap-2">
-                <span className="h-px w-8 bg-[#e9e9ee]" />
-                <span className="whitespace-nowrap text-[13.5px] font-bold tracking-widest text-[#26262b]">注意事项</span>
-                <span className="h-px flex-1 bg-[#e9e9ee]" />
-              </div>
-              <ol className="mt-1.5 space-y-1">
-                {props.notes.map((n, i) => (
-                  <li key={i} className="text-[12.5px] leading-relaxed text-[#6e6e76]">
-                    {i + 1}. {n}
-                  </li>
-                ))}
-              </ol>
-            </>
-          )}
-          <div className="mt-3 flex items-baseline justify-between border-b-2 border-[#3c3c42] pb-1.5">
-            <span className="text-[14.5px] font-bold text-[#26262b]">一、单项选择题</span>
-            <span className="shrink-0 pl-2 text-[11.5px] text-[#9a9aa2]">（共{props.questions.length}小题，每题{fmtScore(perScore)}分，满分100分）</span>
-          </div>
-          <div className="mt-1">
-            {slice.map((q, si) => {
-              const qi = pg * per + si;
-              const picked = props.answers?.[qi];
-              const bestIdx = props.bestAt?.(qi);
-              const res = props.resultAnswers;
-              return (
-                <div key={qi} className="border-b border-dashed border-[#e9e9ee] py-3 last:border-0">
-                  <div className="min-w-0 text-[14px] font-medium leading-relaxed text-[#26262b]">
-                    {qi + 1}、{q.q}
-                    {/* 第二十一轮：题的后面标上这个题的分数 */}
-                    <span className="ml-1 whitespace-nowrap text-[11px] font-normal text-[#9a9aa2]">（{fmtScore(perScore)}分）</span>
-                  </div>
-                  {/* 第二十二轮：他选的选项用蓝色边框框住 */}
-                  <div className="mt-1.5 space-y-1">
-                    {q.opts.map((o, oi) => {
-                      const isPicked = props.onPick ? picked === oi : false;
-                      const taPick = props.companionOn && props.taLive && props.answers?.[qi] != null ? props.taLive.picks[String(qi)] : undefined;
-                      const showBest = res != null && bestIdx === oi;
-                      const showWrongPick = res != null && res[qi] === oi && bestIdx !== oi;
-                      return (
-                        <button
-                          key={oi}
-                          type="button"
-                          disabled={!props.onPick}
-                          onClick={() => props.onPick?.(qi, oi)}
-                          className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] leading-relaxed transition-colors ${
-                            showBest
-                              ? 'bg-[#eaf7ef] text-[#3d9a63]'
-                              : showWrongPick
-                                ? 'bg-[#fdeef2] text-[#e0607e] line-through decoration-[#f8a0b4]'
-                                : taPick === oi
-                                  ? 'border-[1.5px] border-[#576b95] bg-[#eef2fb] text-[#576b95]'
-                                  : isPicked
-                                    ? 'bg-[#fdeef3] font-medium text-[#e0607e]'
-                                    : props.onPick
-                                      ? 'text-[#4a4a52] active:bg-[#f7f7f9]'
-                                      : 'text-[#4a4a52]'
-                          }`}
-                        >
-                          <span className={`mt-px shrink-0 font-bold ${taPick === oi ? 'text-[#576b95]' : isPicked && !showWrongPick ? 'text-[#e0607e]' : 'text-[#9a9aa2]'}`}>
-                            {'ABCD'[oi] ?? oi + 1}.
-                          </span>
-                          <span className="min-w-0">{o}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {/* 第二十一轮：AI 陪答——TA 的选择 + 想法（灰色小字，他知道我选了什么） */}
-                  {props.companionOn && props.taName && props.answers?.[qi] != null && (
-                    props.thinking?.[qi] ? (
-                      <div className="mt-1.5 flex items-center gap-1.5 pl-2 text-[11.5px] text-[#9a9aa2]">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        {props.taName} 正在想这题…
-                      </div>
-                    ) : props.taLive?.thoughts[String(qi)] ? (
-                      <div className="mt-1.5 pl-2 text-[11.5px] leading-relaxed text-[#9a9aa2]" data-testid={`exam-ta-thought-${qi}`}>
-                        {props.taName}：{props.taLive.thoughts[String(qi)]}
-                        {props.taLive?.picks[String(qi)] != null && (
-                          <span className="text-[#b6b6bd]">（他选了：{q.opts[props.taLive.picks[String(qi)]] ?? ''}）</span>
-                        )}
-                      </div>
-                    ) : null
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          {/* 页码 */}
-          <div className="mt-4 flex items-center justify-center gap-5 text-[12.5px] text-[#6e6e76]">
-            <button type="button" aria-label="上一页" onClick={props.onPrev} disabled={pg <= 0} className={`px-2 ${pg > 0 ? 'active:opacity-60' : 'opacity-30'}`}>
-              ‹
-            </button>
-            <span>
-              恋人空间试卷 {pg + 1}/{pages}
-            </span>
-            <button type="button" aria-label="下一页" onClick={props.onNext} disabled={pg >= pages - 1} className={`px-2 ${pg < pages - 1 ? 'active:opacity-60' : 'opacity-30'}`}>
-              ›
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /** 恋爱水平考试（第十五轮重做，参考图4/5/6）：官方推荐题库 → 预览试卷 → 生成试卷作答 → TA 打分+想说的话；
  *  我可以喊 TA 来答题（聊天卡片）；TA 也会自己出卷喊我来答（卡片直达答题页）；TA 批卷知道我答了什么 */
@@ -7833,7 +7682,6 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const patchFn = patch as unknown as (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void;
   const [view, setView] = useState<'bank' | 'preview' | 'answer' | 'result' | 'tasheet' | 'mine' | 'mineDetail'>('bank');
   const [preview, setPreview] = useState<ExamTpl | null>(null);
-  const [page, setPage] = useState(0);
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [workTa, setWorkTa] = useState(false); // 正在答的是 TA 出的卷
   const [grading, setGrading] = useState(false); // AI 批卷中
@@ -7846,12 +7694,12 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
   // 第二十一轮：AI 陪答（TA 和我同时答题，每答一题 TA 写下想法）；第二十三轮去掉开关，默认永远开启
   const [compBusy, setCompBusy] = useState<Record<number, boolean>>({}); // 正在生成想法的题
   const [genBusy, setGenBusy] = useState(false); // 题库 AI 出卷中
+  const [pickerMode, setPickerMode] = useState<'together' | 'ta'>('together'); // 第二十四轮：分享选择器模式（和他一起答题/让他答题）
   const [mineSel, setMineSel] = useState<CoupleState['examHistory'][number] | null>(null); // 我的卷子·选中的存档
   const genBusyRef = useRef(false);
   const genFailRef = useRef(0); // 连续失败计数（防无限重试刷接口）
   const me = state.meName || '我';
   const ta = state.taName || 'TA';
-  const PER_PAGE = 5;
 
   /** 聊天里的考试卡片点击进来（第十五轮；第十七轮·动态状态）：
    *  TA 出的卷我已答完 → 直达成绩页；我喊 TA 答的卷 TA 已交卷 → 直达 TA 的答卷页；否则进答题页 */
@@ -7865,7 +7713,6 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
       } else if (state.examTaPaper && !state.examTaPaper.answered) {
         setWorkTa(true);
         setAnswers({});
-        setPage(0);
         setView('answer');
       }
     } else if (p.from === 'me') {
@@ -7875,7 +7722,6 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
       } else if (state.examPaper) {
         setWorkTa(false);
         setAnswers({});
-        setPage(0);
         setView('answer');
       }
     }
@@ -7885,15 +7731,14 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
   const taPaper = state.examTaPaper;
   const working: { title: string; notes: string[]; questions: { q: string; opts: string[]; best?: number }[] } | null = workTa ? taPaper : paper;
 
-  /** 生成试卷（预览 → 作答） */
+  /** 生成试卷（预览 → 作答）：第二十四轮「答题」按钮 = 激活试卷并进入答题页（我自己答） */
   const makePaper = () => {
     if (!preview) return;
     patch({ examPaper: { id: `p-${Date.now()}`, title: preview.title, notes: preview.notes, questions: preview.questions, source: 'me', at: Date.now(), taLive: { picks: {}, thoughts: {} } } });
     setWorkTa(false);
     setAnswers({});
-    setPage(0);
     setView('answer');
-    showToast('试卷已生成，开始作答吧');
+    showToast('开始答题吧');
   };
 
   /** 第二十一轮：题库上滑/点更新 → AI（用户配置的 API 模型）再出 1~2 套新卷；
@@ -8007,20 +7852,28 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
       }
     }
     setGrading(false);
-    setPage(0);
     setView('result');
   };
 
-  /** 喊 TA 来答题（第十八轮需求41：先选 QQ/微信再选联系人）：卡片发进会话，TA 延时认真作答并自评分 */
-  const inviteTa = async (chArg?: CoupleChannel, cidArg?: string) => {
-    if (inviting) return;
-    const src =
-      view === 'preview' && preview
-        ? { title: preview.title, questions: preview.questions.map((q) => ({ q: q.q, opts: q.opts })), notes: preview.notes }
-        : paper
-          ? { title: paper.title, questions: paper.questions.map((q) => ({ q: q.q, opts: q.opts })), notes: paper.notes }
-          : null;
-    if (!src) return;
+  /** 第二十四轮：把预览卷落成激活卷（examPaper），答题/让TA答共用（TA 的答卷批改页题目从这里读） */
+  const ensurePaper = () => {
+    if (!preview) return;
+    // 第二十四轮（决策修复）：若激活卷是另一套题（旧卷残留），用当前预览卷覆盖——否则 TA 答新卷、批改页却读旧题会错位
+    const stale = !paper || paper.title !== preview.title || paper.questions.length !== preview.questions.length;
+    if (!stale) return;
+    patch({ examPaper: { id: `p-${Date.now()}`, title: preview.title, notes: preview.notes, questions: preview.questions, source: 'me', at: Date.now(), taLive: { picks: {}, thoughts: {} } } });
+  };
+
+  const sendExamInvite = async (ch: CoupleChannel, cid: string) => {
+    if (!preview) return;
+    const qs = preview.questions.map((q) => ({ q: q.q, opts: q.opts }));
+    await sendExamCard({ channel: ch, contactId: cid, title: preview.title, count: qs.length, dir: 'me' });
+    scheduleAiExamAnswer({ channel: ch, contactId: cid, title: preview.title, questions: qs });
+  };
+
+  /** 和他一起答题：发卡片+TA 同时作答，我立即进入答题页一起答 */
+  const inviteTogether = async (chArg?: CoupleChannel, cidArg?: string) => {
+    if (inviting || !preview) return;
     const meta = readInviteMeta();
     const cid = cidArg ?? meta.partnerContactId;
     const ch: CoupleChannel = chArg ?? meta.partnerApp ?? 'wx';
@@ -8030,13 +7883,35 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
     }
     setInviting(true);
     try {
-      // 试卷还没生成就一并生成（喊 TA 的同时我也可以答这份卷）
-      if (!paper) {
-        patch({ examPaper: { id: `p-${Date.now()}`, title: src.title, notes: src.notes, questions: preview!.questions, source: 'me', at: Date.now() } });
-      }
-      await sendExamCard({ channel: ch, contactId: cid, title: src.title, count: src.questions.length, dir: 'me' });
-      scheduleAiExamAnswer({ channel: ch, contactId: cid, title: src.title, questions: src.questions });
-      showToast(`已喊${ta}来答题，TA 答完会告诉你 ♡`);
+      ensurePaper();
+      await sendExamInvite(ch, cid);
+      setWorkTa(false);
+      setAnswers({});
+      setView('answer');
+      showToast(`卷子已发给他，你们同时开始答题吧 ♡`);
+    } catch {
+      showToast('邀请发送失败，稍后再试试');
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  /** 让他答题：发卡片+TA 作答，我不答，回题库等他交卷 */
+  const letTaAnswer = async (chArg?: CoupleChannel, cidArg?: string) => {
+    if (inviting || !preview) return;
+    const meta = readInviteMeta();
+    const cid = cidArg ?? meta.partnerContactId;
+    const ch: CoupleChannel = chArg ?? meta.partnerApp ?? 'wx';
+    if (!cid) {
+      showToast('先在微信/QQ 里和 TA 建立关系吧');
+      return;
+    }
+    setInviting(true);
+    try {
+      ensurePaper();
+      await sendExamInvite(ch, cid);
+      setView('bank');
+      showToast(`已让他答题，他答完会告诉你 ♡`);
     } catch {
       showToast('邀请发送失败，稍后再试试');
     } finally {
@@ -8056,7 +7931,9 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
     void (async () => {
       try {
         const { aiExamCompanion } = await import('@/lib/ios/couple-ai');
-        const r = await aiExamCompanion(working.title, { q: q.q, opts: q.opts }, oi);
+        // 第二十四轮：把这题之前 TA 已说过的想法传给模型（不重复、口吻连贯，全部由人设+记忆+上下文生成）
+        const prevThoughts = Object.values(state.examPaper?.taLive?.thoughts ?? {}).filter((t): t is string => typeof t === 'string' && t.trim().length > 0);
+        const r = await aiExamCompanion(working.title, { q: q.q, opts: q.opts }, oi, prevThoughts);
         if (r) {
           patchFn((prev) =>
             prev.examPaper
@@ -8133,14 +8010,14 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
         <div className="mt-3 rounded-2xl bg-white p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]">
           <div className="text-[13px] font-medium text-[#9a9aa2]">《{r.title}》</div>
           <div className="mt-2 flex items-end justify-center gap-1.5">
-            <span className="text-[52px] font-extrabold leading-none text-[#f2536a]">{r.score}</span>
+            <span className="text-[52px] font-extrabold leading-none text-[#26262b]">{r.score}</span>
             <span className="pb-1.5 text-[15px] text-[#9a9aa2]">分</span>
             <Medal className="mb-1.5 h-6 w-6 text-[#f5c33c]" strokeWidth={1.8} aria-hidden="true" />
           </div>
           <div className="mt-1 text-[15px] font-semibold text-[#4a4a52]">{gradeLabel(r.score)}</div>
           {/* TA 的批语（分数下面 TA 想说的话——用户要求） */}
-          <div className="mt-4 rounded-xl bg-[#fff5f7] px-4 py-3 text-left" data-testid="exam-ta-comment">
-            <div className="text-[12px] font-bold text-[#f2536a]">{ta} 的批语</div>
+          <div className="mt-4 rounded-xl bg-[#f7f7f9] px-4 py-3 text-left" data-testid="exam-ta-comment">
+            <div className="text-[12px] font-bold text-[#26262b]">{ta} 的批语</div>
             <div className="mt-1 text-[13.5px] leading-relaxed text-[#4a4a52]">{r.comment}</div>
           </div>
           <div className="mt-2 text-[11px] text-[#c9c9cf]">{r.byTa ? `这是 ${ta} 出的卷 · ` : ''}批卷时间 {fmtDateCn(fmtDate(r.at))}</div>
@@ -8174,23 +8051,21 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             onClick={() => {
               if (workTa && state.examTaPaper) {
                 setAnswers({});
-                setPage(0);
                 setView('answer');
               } else if (state.examPaper) {
                 setWorkTa(false);
                 setAnswers({});
-                setPage(0);
                 setView('answer');
               } else {
                 setView('bank');
               }
             }}
-            className="h-12 flex-1 rounded-full bg-white text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80"
+            className="h-12 flex-1 rounded-full bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]"
           >
             <RefreshCcw className="mr-1 inline h-4 w-4" />
             再考一次
           </button>
-          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-full bg-[#f2536a] text-[15px] font-semibold text-white active:opacity-85">
+          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white active:opacity-85">
             返回题库
           </button>
         </div>
@@ -8258,7 +8133,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         onClick={() => setTaMarks((m) => ({ ...m, [i]: { ok: true, score: Math.round(perQ * 10) / 10 } }))}
                         data-testid={`exam-mark-ok-${i}`}
                         className={`rounded-full px-3 py-1 text-[11.5px] font-semibold transition-colors ${
-                          myMark?.ok === true ? 'bg-[#3d9a63] text-white' : 'bg-[#eef7f0] text-[#3d9a63] active:bg-[#ddefe3]'
+                          myMark?.ok === true ? 'bg-[#2c2c30] text-white' : 'bg-white text-[#4a4a52] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]'
                         }`}
                       >
                         对
@@ -8268,7 +8143,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         onClick={() => setTaMarks((m) => ({ ...m, [i]: { ok: false, score: 0 } }))}
                         data-testid={`exam-mark-bad-${i}`}
                         className={`rounded-full px-3 py-1 text-[11.5px] font-semibold transition-colors ${
-                          myMark && myMark.ok === false ? 'bg-[#e0607e] text-white' : 'bg-[#fdeef2] text-[#e0607e] active:bg-[#fadbe3]'
+                          myMark && myMark.ok === false ? 'bg-[#2c2c30] text-white' : 'bg-white text-[#4a4a52] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]'
                         }`}
                       >
                         错
@@ -8304,7 +8179,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <div className="flex items-baseline justify-between px-1">
               <div className="text-[13.5px] font-bold text-[#26262b]">给他的批语</div>
               <div className="text-[12px] text-[#9a9aa2]">
-                合计 <span className="text-[17px] font-extrabold text-[#f2536a]">{Math.round(marksTotal)}</span> 分
+                合计 <span className="text-[17px] font-extrabold text-[#26262b]">{Math.round(marksTotal)}</span> 分
               </div>
             </div>
             <textarea
@@ -8321,7 +8196,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               data-testid="exam-ta-grade-submit"
               onClick={submitTaGrade}
               disabled={taGrading}
-              className="mt-3 h-11 w-full rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[14.5px] font-semibold text-white shadow-[0_6px_18px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98] disabled:opacity-50"
+              className="mt-3 h-11 w-full rounded-full bg-[#2c2c30] text-[14.5px] font-semibold text-white transition-transform active:scale-[0.98] disabled:opacity-50"
             >
               提交批改
             </button>
@@ -8396,13 +8271,13 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         onClick={() => onPickAnswer(qi, oi)}
                         className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] leading-relaxed transition-colors ${
                           isPicked
-                            ? 'border-[1.5px] border-[#f8a0b4] bg-[#fdeef3] font-medium text-[#e0607e]'
+                            ? 'border-[1.5px] border-[#2c2c30] bg-[#f0f0f3] font-medium text-[#26262b]'
                             : taPick === oi
                               ? 'border-[1.5px] border-[#576b95] bg-[#eef2fb] text-[#576b95]'
                               : 'text-[#4a4a52] active:bg-[#f7f7f9]'
                         }`}
                       >
-                        <span className={`mt-px shrink-0 font-bold ${isPicked ? 'text-[#e0607e]' : taPick === oi ? 'text-[#576b95]' : 'text-[#9a9aa2]'}`}>{'ABCD'[oi] ?? oi + 1}.</span>
+                        <span className={`mt-px shrink-0 font-bold ${isPicked ? 'text-[#26262b]' : taPick === oi ? 'text-[#576b95]' : 'text-[#9a9aa2]'}`}>{'ABCD'[oi] ?? oi + 1}.</span>
                         <span className="min-w-0">{o}</span>
                       </button>
                     );
@@ -8416,8 +8291,8 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                     </div>
                   ) : taLiveNow?.thoughts[String(qi)] ? (
                     <div className="mt-1.5 pl-2 text-[11.5px] leading-relaxed text-[#9a9aa2]" data-testid={`exam-ta-thought-${qi}`}>
-                      {ta}：{taLiveNow.thoughts[String(qi)]}
-                      {taLiveNow?.picks[String(qi)] != null && <span className="text-[#b6b6bd]">（他选了：{q.opts[taLiveNow.picks[String(qi)]] ?? ''}）</span>}
+                      <span className="font-semibold text-[#26262b]">{ta}：</span>
+                      {taLiveNow.thoughts[String(qi)]}
                     </div>
                   ) : null
                 )}
@@ -8430,7 +8305,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
           data-testid="exam-submit"
           onClick={() => void submit()}
           disabled={grading}
-          className="mb-2 mt-4 h-[52px] w-full rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98] disabled:opacity-50"
+          className="mb-2 mt-4 h-[52px] w-full rounded-full bg-[#2c2c30] text-[16.5px] font-semibold text-white transition-transform active:scale-[0.98] disabled:opacity-50"
         >
           {grading ? (
             <span className="flex items-center justify-center gap-2">
@@ -8446,44 +8321,84 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
     );
   }
 
-  // ---------- 预览视图（参考图5/6：粉底 + 白纸卷 + 生成试卷/喊他来答题） ----------
+  // ---------- 预览视图（第二十四轮：与答题页同款扁平简约——粉色底/白纸卷/装饰全部删除；三按钮：和他一起答题/答题/让他答题） ----------
   if (view === 'preview' && preview) {
+    const perScorePrev = preview.questions.length > 0 ? 100 / preview.questions.length : 0;
+    const fmtPrevScore = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
     return (
       <SubShell title="预览试卷" onBack={() => setView('bank')}>
-        <div className="-mx-3 min-h-[420px] bg-[linear-gradient(180deg,#fdeef3,#fbe3ec)] px-3 py-4">
-          <ExamPaperSheet
-            title={preview.title}
-            notes={preview.notes}
-            questions={preview.questions}
-            examiner={me}
-            page={page}
-            perPage={PER_PAGE}
-            onPrev={() => setPage((p) => Math.max(0, p - 1))}
-            onNext={() => setPage((p) => Math.min(Math.ceil(preview.questions.length / PER_PAGE) - 1, p + 1))}
-          />
+        <div className="mt-3 text-center text-[13px] font-medium text-[#9a9aa2]" data-testid="exam-preview-sheet">
+          《{preview.title}》
         </div>
-        {/* 第二十二轮：「修改试卷」改「和他一起答题」（喊他同时作答）；生成试卷并排 */}
-        <div className="mb-2 mt-4 grid grid-cols-2 gap-3">
+        {/* 题目扁平列表（与答题页同款：虚线分隔，无白面板、不可点选） */}
+        <div className="mt-2">
+          {preview.questions.map((q, qi) => (
+            <div key={qi} className="border-b border-dashed border-[#e9e9ee] py-3 last:border-0">
+              <div className="text-[13.5px] font-medium leading-relaxed text-[#26262b]">
+                {qi + 1}、{q.q}
+                <span className="ml-1 whitespace-nowrap text-[11px] font-normal text-[#9a9aa2]">（{fmtPrevScore(perScorePrev)}分）</span>
+              </div>
+              <div className="mt-1.5 space-y-1">
+                {q.opts.map((o, oi) => (
+                  <div key={oi} className="flex items-start gap-2 rounded-lg px-2 py-1.5 text-[13px] leading-relaxed text-[#4a4a52]">
+                    <span className="mt-px shrink-0 font-bold text-[#9a9aa2]">{'ABCD'[oi] ?? oi + 1}.</span>
+                    <span className="min-w-0">{o}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {/* 三按钮（第二十四轮）：和他一起答题=发给他同时作答；答题=我自己答；让他答题=发给他答 */}
+        <div className="mb-2 mt-4 space-y-2.5">
           <button
             type="button"
             data-testid="exam-invite-together"
-            onClick={() => setPickerOpen(true)}
+            onClick={() => {
+              setPickerMode('together');
+              setPickerOpen(true);
+            }}
             disabled={inviting}
-            className="h-12 rounded-full bg-white text-[14.5px] font-semibold text-[#576b95] ring-1 ring-[#b9c7e2] active:opacity-80 disabled:opacity-50"
+            className="h-12 w-full rounded-full border-[1.5px] border-dashed border-[#3c3c42] bg-white text-[15px] font-semibold text-[#26262b] active:bg-[#f7f7f9] disabled:opacity-50"
           >
-            {inviting ? '发送中…' : '和他一起答题'}
+            {inviting && pickerMode === 'together' ? '发送中…' : '和他一起答题'}
           </button>
-          <button
-            type="button"
-            data-testid="exam-make-paper"
-            onClick={makePaper}
-            className="h-12 rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[15px] font-semibold text-white shadow-[0_6px_18px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98]"
-          >
-            生成试卷
-          </button>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              data-testid="exam-make-paper"
+              onClick={makePaper}
+              className="h-12 rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white transition-transform active:scale-[0.98]"
+            >
+              答题
+            </button>
+            <button
+              type="button"
+              data-testid="exam-let-ta-answer"
+              onClick={() => {
+                setPickerMode('ta');
+                setPickerOpen(true);
+              }}
+              disabled={inviting}
+              className="h-12 rounded-full bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9] disabled:opacity-50"
+            >
+              {inviting && pickerMode === 'ta' ? '发送中…' : '让他答题'}
+            </button>
+          </div>
+          <div className="text-center text-[11.5px] leading-relaxed text-[#b6b6bd]">和他一起答题：发给他、你们同时作答；答题：我自己答；让他答题：发给他慢慢答</div>
         </div>
-        <div className="text-center text-[11.5px] leading-relaxed text-[#b6b6bd]">「和他一起答题」把卷子发给他，他和你同时作答；也可以先生成试卷自己答</div>
-        {pickerOpen && <ShareChannelPicker title="和他一起答题" hint="选择用哪个 App 发送试卷邀请，再选联系人" onSend={(ch, cid) => { setPickerOpen(false); void inviteTa(ch, cid); }} onClose={() => setPickerOpen(false)} />}
+        {pickerOpen && (
+          <ShareChannelPicker
+            title={pickerMode === 'ta' ? '让他答题' : '和他一起答题'}
+            hint="选择用哪个 App 发送试卷邀请，再选联系人"
+            onSend={(ch, cid) => {
+              setPickerOpen(false);
+              if (pickerMode === 'ta') void letTaAnswer(ch, cid);
+              else void inviteTogether(ch, cid);
+            }}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
       </SubShell>
     );
   }
@@ -8502,13 +8417,12 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             onClick={() => {
               setWorkTa(false);
               setAnswers({});
-              setPage(0);
               setView('answer');
             }}
-            className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-[#f2dfe3] bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#fff5f7]"
+            className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-[#e9e9ee] bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#f7f7f9]"
           >
-            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
-              <BookOpen className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.8} />
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f0f0f3]">
+              <BookOpen className="h-4.5 w-4.5 text-[#4a4a52]" strokeWidth={1.8} />
             </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[14px] font-semibold text-[#26262b]">正在答 《{state.examPaper.title}》</span>
@@ -8532,11 +8446,11 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                   setMineSel(h);
                   setView('mineDetail');
                 }}
-                className="flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#fff5f7]"
+                className="flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#f7f7f9]"
                 data-testid={`exam-mine-${h.id}`}
               >
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fff7e6]">
-                  <Medal className="h-4.5 w-4.5 text-[#e6a23c]" strokeWidth={1.8} />
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f7f4e9]">
+                  <Medal className="h-4.5 w-4.5 text-[#8a6d1f]" strokeWidth={1.8} />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[14px] font-semibold text-[#26262b]">《{h.title}》</span>
@@ -8569,18 +8483,17 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 } else {
                   setWorkTa(true);
                   setAnswers({});
-                  setPage(0);
                   setView('answer');
                 }
               }}
-              className="flex w-full items-center gap-3 rounded-2xl border-2 border-dashed border-[#f2536a]/55 bg-white px-4 py-3.5 text-left active:bg-[#fff5f7]"
+              className="flex w-full items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-[#3c3c42]/50 bg-white px-4 py-3.5 text-left active:bg-[#f7f7f9]"
             >
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
-                <BookOpen className="h-4.5 w-4.5 text-[#f2536a]" strokeWidth={1.8} />
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f0f0f3]">
+                <BookOpen className="h-4.5 w-4.5 text-[#4a4a52]" strokeWidth={1.8} />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[14px] font-semibold text-[#26262b]">
-                  {ta} 给你出了套卷 <span className="text-[#f2536a]">《{taPaper.title}》</span>
+                  {ta} 给你出了套卷 《{taPaper.title}》
                 </span>
                 <span className="block text-[11.5px] text-[#9a9aa2]">{taPaper.answered ? '已答完 · 点此看成绩' : `${taPaper.questions.length} 题 · 点此去答题`}</span>
               </span>
@@ -8588,9 +8501,9 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             </button>
           )}
           {state.examTaSheet && (
-            <button type="button" onClick={() => setView('tasheet')} className="flex w-full items-center gap-3 rounded-2xl border border-[#e4e9f6] bg-[#f8faff] px-4 py-3.5 text-left active:opacity-80">
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#e8eefb]">
-                <PencilLine className="h-4.5 w-4.5 text-[#576b95]" strokeWidth={1.8} />
+            <button type="button" onClick={() => setView('tasheet')} className="flex w-full items-center gap-3 rounded-2xl border border-[#e9e9ee] bg-white px-4 py-3.5 text-left active:opacity-80">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f0f0f3]">
+                <PencilLine className="h-4.5 w-4.5 text-[#4a4a52]" strokeWidth={1.8} />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[14px] font-semibold text-[#26262b]">
@@ -8616,13 +8529,12 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 type="button"
                 onClick={() => {
                   setPreview({ id: t.id, title: t.title, usage: 'AI 新卷', notes: t.notes, questions: t.questions.map((q) => ({ ...q, best: -1 })) });
-                  setPage(0);
                   setView('preview');
                 }}
-                className="flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#fff5f7]"
+                className="flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#f7f7f9]"
               >
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#fdeef2]">
-                  <BookOpen className="h-4.5 w-4.5 text-[#e0607e]" strokeWidth={1.8} />
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f0f0f3]">
+                  <BookOpen className="h-4.5 w-4.5 text-[#4a4a52]" strokeWidth={1.8} />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[14px] font-semibold text-[#26262b]">《{t.title}》</span>
@@ -8647,13 +8559,13 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
         <div className="mt-3 rounded-2xl bg-white p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]">
           <div className="text-[13px] font-medium text-[#9a9aa2]">《{h.title}》</div>
           <div className="mt-2 flex items-end justify-center gap-1.5">
-            <span className="text-[52px] font-extrabold leading-none text-[#f2536a]">{h.score}</span>
+            <span className="text-[52px] font-extrabold leading-none text-[#26262b]">{h.score}</span>
             <span className="pb-1.5 text-[15px] text-[#9a9aa2]">分</span>
             <Medal className="mb-1.5 h-6 w-6 text-[#f5c33c]" strokeWidth={1.8} aria-hidden="true" />
           </div>
           <div className="mt-1 text-[15px] font-semibold text-[#4a4a52]">{gradeLabel(h.score)}</div>
-          <div className="mt-4 rounded-xl bg-[#fff5f7] px-4 py-3 text-left">
-            <div className="text-[12px] font-bold text-[#f2536a]">{ta} 的批语</div>
+          <div className="mt-4 rounded-xl bg-[#f7f7f9] px-4 py-3 text-left">
+            <div className="text-[12px] font-bold text-[#26262b]">{ta} 的批语</div>
             <div className="mt-1 text-[13.5px] leading-relaxed text-[#4a4a52]">{h.comment}</div>
           </div>
           <div className="mt-2 text-[11px] text-[#c9c9cf]">{h.byTa ? `${ta} 出的卷 · ` : ''}交卷时间 {fmtDateCn(fmtDate(h.at))}</div>
@@ -8678,10 +8590,10 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
           })}
         </div>
         <div className="mb-2 mt-5 flex gap-2.5">
-          <button type="button" onClick={() => setView('mine')} className="h-12 flex-1 rounded-full bg-white text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f8a0b4] active:opacity-80">
+          <button type="button" onClick={() => setView('mine')} className="h-12 flex-1 rounded-full bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]">
             返回我的卷子
           </button>
-          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-full bg-[#f2536a] text-[15px] font-semibold text-white active:opacity-85">
+          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white active:opacity-85">
             返回题库
           </button>
         </div>
@@ -8702,10 +8614,10 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
           onClick={() => setView('mine')}
           className="flex h-10 items-center gap-1.5 rounded-full bg-white px-4 text-[13.5px] font-semibold text-[#26262b] shadow-sm ring-1 ring-[#e9e9ee] active:bg-[#f7f7f9]"
         >
-          <Folder className="h-4 w-4 text-[#e0607e]" strokeWidth={2} />
+          <Folder className="h-4 w-4 text-[#4a4a52]" strokeWidth={2} />
           我的卷子
           {(state.examHistory ?? []).length > 0 && (
-            <span className="rounded-full bg-[#fdeef3] px-1.5 py-px text-[10.5px] font-bold text-[#e0607e]">{(state.examHistory ?? []).length}</span>
+            <span className="rounded-full bg-[#f0f0f3] px-1.5 py-px text-[10.5px] font-bold text-[#6e6e76]">{(state.examHistory ?? []).length}</span>
           )}
         </button>
         <button
@@ -8764,7 +8676,6 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                       data-testid={`exam-use-${t.id}`}
                       onClick={() => {
                         setPreview(t);
-                        setPage(0);
                         setView('preview');
                       }}
                       className="shrink-0 rounded-[3px] border-[1.5px] border-[#3c3c42] px-4 py-1 text-[13.5px] font-bold text-[#26262b] active:bg-[#f7f7f9]"
@@ -8790,7 +8701,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
         )}
         <div className="mt-2.5 space-y-3">
           {(state.examAiPapers ?? []).map((t, idx) => (
-            <div key={t.id} className="relative rounded-[4px] border-[1.5px] border-dashed border-[#e0607e]/55 bg-white p-3.5" data-testid={`exam-ai-paper-${idx}`}>
+            <div key={t.id} className="relative rounded-[4px] border-[1.5px] border-dashed border-[#3c3c42]/50 bg-white p-3.5" data-testid={`exam-ai-paper-${idx}`}>
               <div className="text-[15px] font-bold leading-snug text-[#26262b]">{t.title}</div>
               <div className="mt-2.5 flex items-center justify-between">
                 <div className="flex items-center gap-1.5 text-[11.5px] text-[#4a4a52]">
@@ -8804,7 +8715,6 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                   type="button"
                   onClick={() => {
                     setPreview({ id: t.id, title: t.title, usage: 'AI 新卷', notes: t.notes, questions: t.questions.map((q) => ({ ...q, best: -1 })) });
-                    setPage(0);
                     setView('preview');
                   }}
                   className="shrink-0 rounded-[3px] border-[1.5px] border-[#3c3c42] px-4 py-1 text-[13.5px] font-bold text-[#26262b] active:bg-[#f7f7f9]"
@@ -8912,7 +8822,7 @@ function ZodiacPage({ state, patch, close }: { state: CoupleState; patch: (p: Pa
         onClick={() => void calc()}
         disabled={!me || !ta || loading}
         data-testid="zodiac-calc"
-        className="mt-4 h-12 w-full rounded-full bg-[linear-gradient(135deg,#f2536a,#e88ba4)] text-[16px] font-semibold text-white shadow-[0_6px_18px_rgba(242,83,106,0.32)] disabled:opacity-40"
+        className="mt-4 h-12 w-full rounded-full bg-[#2c2c30] text-[16px] font-semibold text-white disabled:opacity-40"
       >
         {loading ? '正在为你们测算缘分…' : reading ? '重新测算' : '查看缘分指数'}
       </button>
@@ -8971,8 +8881,8 @@ function ZodiacPage({ state, patch, close }: { state: CoupleState; patch: (p: Pa
               )}
               <defs>
                 <linearGradient id="zodiac-ring" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stopColor="#f7b7c5" />
-                  <stop offset="1" stopColor="#f2536a" />
+                  <stop offset="0" stopColor="#c9c9cf" />
+                  <stop offset="1" stopColor="#5c5c64" />
                 </linearGradient>
               </defs>
             </svg>
@@ -9166,7 +9076,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
         <div className="mt-5 rounded-2xl border border-[#f6e3e7] bg-white/70 p-3.5" data-testid="chronicle-edit">
           {draft.map((it, i) => (
             <div key={i} className="flex items-center gap-2.5 py-2">
-              <span className="h-3.5 w-3.5 shrink-0 rounded-full border-[3px] border-[#f2536a] bg-white" />
+              <span className="h-3.5 w-3.5 shrink-0 rounded-full border-[3px] border-[#26262b] bg-white" />
               <div className="flex flex-1 items-center gap-1 rounded-xl border border-[#f3d9df] bg-white px-2.5 py-2">
                 <select
                   value={it.y}
@@ -9212,7 +9122,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
                 aria-label={`删除第${i + 1}条`}
                 data-testid="chronicle-remove-row"
                 onClick={() => setDraft((d) => d.filter((_, j) => j !== i))}
-                className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[#fdeef2] text-[15px] font-bold text-[#f2536a] active:opacity-60"
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[#f0f0f3] text-[15px] font-bold text-[#26262b] active:opacity-60"
               >
                 −
               </button>
@@ -9223,7 +9133,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
               type="button"
               data-testid="chronicle-add-row"
               onClick={() => setDraft((d) => [...d, { y: now.getFullYear(), m: now.getMonth() + 1, status: '暗恋' }])}
-              className="w-full rounded-xl border-2 border-dashed border-[#f2536a] bg-[#fff5f7] py-2.5 text-[14px] font-medium text-[#f2536a] active:bg-[#ffeef2]"
+              className="w-full rounded-xl border-2 border-dashed border-[#3c3c42] bg-white py-2.5 text-[14px] font-medium text-[#26262b] active:bg-[#f7f7f9]"
             >
               ＋ 继续添加月份（可选）
             </button>
@@ -9234,7 +9144,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
           type="button"
           data-testid="chronicle-generate"
           onClick={saveDraft}
-          className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-full bg-[#f2536a] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.3)] transition-transform active:scale-[0.98]"
+          className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-full bg-[#2c2c30] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(0,0,0,0.16)] transition-transform active:scale-[0.98]"
         >
           生成我的编年史
         </button>
@@ -9249,7 +9159,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
         <div className="mt-5 text-center">
           <div className="text-[22px] font-extrabold tracking-wide text-[#26262b]">我的恋爱编年史</div>
           <div className="mt-2 text-[13.5px] text-[#9a9aa2]">每一段经历，都是我们共同的记忆</div>
-          <div className="mt-2.5 flex items-center justify-center gap-1 text-[12px] font-medium text-[#f2536a]">
+          <div className="mt-2.5 flex items-center justify-center gap-1 text-[12px] font-medium text-[#26262b]">
             <span aria-hidden="true">↔</span> 左右滑动查看完整年份
           </div>
         </div>
@@ -9269,7 +9179,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
             type="button"
             data-testid="chronicle-share"
             onClick={() => showToast('已生成分享卡片，发给那个TA吧 ♡')}
-            className="flex h-[52px] flex-1 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#ff7d9c,#f2536a)] text-[15.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
+            className="flex h-[52px] flex-1 items-center justify-center rounded-2xl bg-[#2c2c30] text-[15.5px] font-semibold text-white transition-transform active:scale-[0.98]"
           >
             分享给朋友
           </button>
@@ -9279,7 +9189,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
             返回修改
           </button>
           <span className="mx-4 text-[#e5d3d8]">|</span>
-          <button type="button" onClick={close} className="text-[#f2536a] underline underline-offset-4 active:opacity-60">
+          <button type="button" onClick={close} className="text-[#26262b] underline underline-offset-4 active:opacity-60">
             回到恋人空间
           </button>
         </div>
@@ -9300,14 +9210,14 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
             <h2 className="text-[21px] font-extrabold leading-snug text-[#26262b]">
               记录几个关键月份，
               <br />
-              生成你的<span className="text-[#f2536a]">恋爱编年史</span>
+              生成你的<span className="text-[#26262b]">恋爱编年史</span>
             </h2>
           </div>
           <p className="mt-2 pl-[42px] text-[13px] text-[#a4889a]">用一张表，记录感情里的重要时刻</p>
         </div>
 
         {/* 结果表格卡 */}
-        <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]" data-testid="chronicle-table-card">
+        <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]" data-testid="chronicle-table-card">
           <div className="flex items-center justify-between">
             <div className="text-[14.5px] font-bold text-[#26262b]">
               我的恋爱编年史 <span className="text-[12px]">💗</span>
@@ -9317,7 +9227,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
                 type="button"
                 data-testid="chronicle-view-showcase"
                 onClick={() => setShowcase(true)}
-                className="text-[12.5px] font-medium text-[#f2536a] active:opacity-60"
+                className="text-[12.5px] font-medium text-[#26262b] active:opacity-60"
               >
                 查看结果图 ›
               </button>
@@ -9330,8 +9240,8 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
         </div>
 
         {/* 怎么玩 */}
-        <div className="mt-7 text-center text-[17px] font-bold text-[#f2536a]">✦ 怎么玩？ ✦</div>
-        <div className="mt-3 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]">
+        <div className="mt-7 text-center text-[17px] font-bold text-[#26262b]">✦ 怎么玩？ ✦</div>
+        <div className="mt-3 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
           {[
             { n: '1', icon: <CalendarDays className="h-6 w-6" strokeWidth={1.8} />, bg: '#fde7ee', fg: '#f0609a', label: '选择关键月份', desc: '记录感情里发生变化的时间点' },
             { n: '2', icon: <Heart className="h-6 w-6" strokeWidth={1.8} />, bg: '#ece6fb', fg: '#8071cf', label: '选择对应状态', desc: '比如暗恋、暧昧、恋爱、分手、复合' },
@@ -9341,7 +9251,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
               <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl" style={{ background: s.bg, color: s.fg }}>
                 {s.icon}
               </span>
-              <span className="grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full bg-[#f2536a] text-[10.5px] font-bold text-white">{s.n}</span>
+              <span className="grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full bg-[#2c2c30] text-[10.5px] font-bold text-white">{s.n}</span>
               <span className="min-w-0">
                 <span className="block text-[15px] font-semibold text-[#26262b]">{s.label}</span>
                 <span className="block text-[12px] text-[#c0a3ab]">{s.desc}</span>
@@ -9361,7 +9271,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
             );
             setEditing(true);
           }}
-          className="mb-1 mt-6 flex h-[56px] w-full items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#ff7d9c,#f2536a)] text-[18px] font-semibold text-white shadow-[0_10px_26px_rgba(242,83,106,0.35)] transition-transform active:scale-[0.98]"
+          className="mb-1 mt-6 flex h-[56px] w-full items-center justify-center rounded-2xl bg-[#2c2c30] text-[18px] font-semibold text-white transition-transform active:scale-[0.98]"
         >
           开始制作 ✨
         </button>
@@ -9395,7 +9305,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
                 setText('');
                 showToast('已写入大事记 ✍️');
               }}
-              className="h-11 rounded-xl bg-[linear-gradient(135deg,#ff7d9c,#f2536a)] px-5 text-[15px] font-semibold text-white shadow-[0_6px_16px_rgba(242,83,106,0.28)]"
+              className="h-11 rounded-xl bg-[#2c2c30] px-5 text-[15px] font-semibold text-white"
             >
               记录
             </button>
@@ -9408,7 +9318,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
                 <div key={c.id} className="relative flex gap-4 pb-6">
                   {i < state.chronicle.length - 1 && <span aria-hidden="true" className="absolute left-[7px] top-5 h-full w-[2px] bg-[#f0dce1]" />}
                   <span className="relative z-10 mt-1.5 h-4 w-4 shrink-0 rounded-full border-[3px] border-[#eba7b6] bg-white" />
-                  <div className="flex-1 rounded-2xl bg-white p-4 shadow-[0_6px_18px_rgba(242,83,106,0.08)]">
+                  <div className="flex-1 rounded-2xl bg-white p-4 shadow-[0_6px_18px_rgba(0,0,0,0.07)]">
                     <div className="text-[13px] text-[#a4889a]">{fmtDate(c.at)}</div>
                     <div className="mt-1 text-[15px] leading-relaxed text-[#2c2c30]">{c.text}</div>
                   </div>
@@ -9811,7 +9721,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
       <div className="text-[10.5px] leading-none text-white/40">{label}</div>
       <div className="mt-1 text-[19px] font-bold leading-none text-white">{v}</div>
       <div className="mt-2 h-[3px] overflow-hidden rounded-full bg-white/10">
-        <div className="h-full rounded-full bg-[#f9a8d4] transition-[width] duration-700" style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
+        <div className="h-full rounded-full bg-white/85 transition-[width] duration-700" style={{ width: `${Math.max(0, Math.min(100, v))}%` }} />
       </div>
     </div>
   );
@@ -9841,7 +9751,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
 
           {/* 标签 + 大标题 */}
           <div className="px-5 pt-8">
-            <span className="border-b-2 border-[#f9a8d4] pb-0.5 text-[14px] font-semibold text-[#f9a8d4]">情绪高压</span>
+            <span className="border-b-2 border-white/70 pb-0.5 text-[14px] font-semibold text-white">情绪高压</span>
           </div>
           <h1 className="mt-3 px-5 text-[32px] font-extrabold leading-tight tracking-tight text-white">恋爱高危回复挑战</h1>
           <p className="mt-2 px-5 text-[15px] leading-relaxed text-white/40">对方说&ldquo;没事&rdquo;的时候，你真的听懂了吗？</p>
@@ -9850,7 +9760,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
           <div className="mx-5 mt-6 rounded-[22px] border border-white/10 bg-white/[0.04] p-5">
             <div className="grid grid-cols-3 items-end">
               <div>
-                <div className="text-[24px] font-extrabold leading-none text-[#f9a8d4] tabular-nums">{players.toLocaleString('en-US')}</div>
+                <div className="text-[24px] font-extrabold leading-none text-white tabular-nums">{players.toLocaleString('en-US')}</div>
                 <div className="mt-1.5 text-[11px] text-white/35">全网挑战人数</div>
               </div>
               <div className="text-center">
@@ -9858,7 +9768,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
                 <div className="mt-1.5 text-[11px] text-white/35">历史通关率</div>
               </div>
               <div className="text-right">
-                <div className="text-[24px] font-extrabold leading-none text-[#f9a8d4]">{best == null ? '第4关' : best >= 6 ? '通关' : `第${best}关`}</div>
+                <div className="text-[24px] font-extrabold leading-none text-white">{best == null ? '第4关' : best >= 6 ? '通关' : `第${best}关`}</div>
                 <div className="mt-1.5 text-[11px] text-white/35">你的最深纪录</div>
               </div>
             </div>
@@ -9870,7 +9780,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
             data-testid="reply-start-btn"
             onClick={() => void start()}
             disabled={genLoading}
-            className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-full bg-[linear-gradient(90deg,#f6a6ce_0%,#fbe3e9_100%)] text-[20px] font-bold text-black shadow-[0_10px_30px_rgba(246,166,206,0.25)] transition-transform active:scale-[0.98] disabled:opacity-75"
+            className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-full bg-[#2c2c30] text-[20px] font-bold text-white transition-transform active:scale-[0.98] disabled:opacity-75"
           >
             {genLoading ? (
               <>
@@ -9907,7 +9817,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
         <div className="flex-1 overflow-y-auto overscroll-contain pb-10">
           <div className="px-5 pt-3">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[13px] font-bold text-[#f9a8d4]">第 {lv + 1}/{totalLv} 关</span>
+              <span className="text-[13px] font-bold text-white/85">第 {lv + 1}/{totalLv} 关</span>
               {state.replyTa?.active && (
                 <span className="rounded-full bg-[#7f96e0]/20 px-2.5 py-1 text-[10.5px] font-bold text-[#8fa4ef]" data-testid="reply-duo-badge">
                   双人挑战 · {taName} 也在作答
@@ -9932,7 +9842,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
           </div>
 
           <div className="mt-5 flex items-center justify-between px-5">
-            <span className="text-[14px] font-bold text-[#f9a8d4]">你会怎么做</span>
+            <span className="text-[14px] font-bold text-white">你会怎么做</span>
             <span className="text-[12px] text-white/30">{picked == null ? '选择一个反应' : settled ? '看看 TA 怎么选的' : `${taName} 正在等你…`}</span>
           </div>
 
@@ -9948,14 +9858,14 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
                     disabled={picked != null}
                     onClick={() => pick(i)}
                     className={`flex w-full items-center gap-3 rounded-2xl border p-4 text-left transition-all ${
-                      isPicked ? 'border-[#f9a8d4]/70 bg-[#f9a8d4]/[0.12]' : 'border-white/[0.08] bg-white/[0.05] active:bg-white/[0.09]'
+                      isPicked ? 'border-white/60 bg-white/[0.14]' : 'border-white/[0.08] bg-white/[0.05] active:bg-white/[0.09]'
                     } ${dim ? 'opacity-35' : ''}`}
                   >
-                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#f9a8d4]/[0.14] text-[15px] font-bold text-[#f9a8d4]">{['A', 'B', 'C', 'D'][i]}</span>
+                    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/[0.12] text-[15px] font-bold text-white">{['A', 'B', 'C', 'D'][i]}</span>
                     <span className="flex-1 text-[15px] leading-snug text-white/90">{o.t}</span>
                   </button>
                   {isPicked && (
-                    <p className={`mt-2 px-2 text-[12.5px] leading-relaxed ${o.d[3] >= 0 ? 'text-[#f9a8d4]/90' : 'text-white/45'}`} data-testid="reply-verdict">
+                    <p className={`mt-2 px-2 text-[12.5px] leading-relaxed ${o.d[3] >= 0 ? 'text-white/85' : 'text-white/45'}`} data-testid="reply-verdict">
                       {o.v}
                     </p>
                   )}
@@ -9974,7 +9884,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
                   ) : (
                     <span className="grid h-8 w-8 place-items-center rounded-full bg-[#7f96e0]/25 text-[11px] font-bold text-[#8fa4ef]">{taName.slice(0, 1)}</span>
                   )}
-                  <span className="text-[13px] font-bold text-[#8fa4ef]">{taName} 的选择</span>
+                  <span className="text-[13px] font-bold text-white">{taName} 的选择</span>
                   {!taPick && <span className="ml-auto flex items-center gap-1 text-[11.5px] text-white/40"><Loader2 className="h-3 w-3 animate-spin" /> 正在作答…</span>}
                 </div>
                 {taPick && (
@@ -9986,7 +9896,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
                       {['A', 'B', 'C', 'D'][taPick.pick]}. {level.opts[taPick.pick]?.t}
                     </div>
                     <div className="mt-2.5 rounded-2xl rounded-bl-sm bg-white/[0.07] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-white/85" data-testid="reply-ta-say">
-                      <span className="mr-1.5 text-[11px] font-semibold text-[#8fa4ef]">{taName} 的看法</span>
+                      <span className="mr-1.5 text-[11px] font-semibold text-white/85">{taName} 的看法</span>
                       {taPick.say}
                     </div>
                   </>
@@ -10009,7 +9919,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
               data-testid="reply-next"
               onClick={goNext}
               disabled={judging}
-              className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-full bg-[linear-gradient(90deg,#f6a6ce_0%,#fbe3e9_100%)] text-[18px] font-bold text-black shadow-[0_10px_30px_rgba(246,166,206,0.25)] transition-transform active:scale-[0.98] disabled:opacity-70"
+              className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-full bg-[#2c2c30] text-[18px] font-bold text-white transition-transform active:scale-[0.98] disabled:opacity-70"
             >
               {judging ? (
                 <>
@@ -10025,7 +9935,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
       {view === 'dead' && (
         <div className="flex flex-1 flex-col items-center justify-center px-8 pb-16">
           <div className="text-[34px] font-extrabold text-white">挑战失败</div>
-          <div className="mt-2 text-[15px] font-semibold text-[#f9a8d4]">{taName} 判定你没及格</div>
+          <div className="mt-2 text-[15px] font-semibold text-white">{taName} 判定你没及格</div>
           {state.replyVerdict && (
             <p className="mt-4 text-center text-[13.5px] leading-relaxed text-white/55" data-testid="reply-verdict-comment">{state.replyVerdict.comment}</p>
           )}
@@ -10056,7 +9966,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
               </div>
             ))}
           </div>
-          <button type="button" onClick={start} className="mt-9 flex h-14 w-full items-center justify-center rounded-full bg-[linear-gradient(90deg,#f6a6ce,#fbe3e9)] text-[18px] font-bold text-black transition-transform active:scale-[0.98]">
+          <button type="button" onClick={start} className="mt-9 flex h-14 w-full items-center justify-center rounded-full bg-[#2c2c30] text-[18px] font-bold text-white transition-transform active:scale-[0.98]">
             再挑战一次
           </button>
           <button type="button" onClick={() => setView('home')} className="mt-3 h-12 w-full rounded-full bg-white/[0.08] text-[15px] font-medium text-white/70">
@@ -10071,7 +9981,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
           <div className="text-[40px]" aria-hidden="true">
             🎉
           </div>
-          <div className="mt-2 text-[32px] font-extrabold text-[#f9a8d4]">通关成功</div>
+          <div className="mt-2 text-[32px] font-extrabold text-white">通关成功</div>
           <p className="mt-3 text-center text-[14.5px] leading-relaxed text-white/55">
             {totalLv} 关全过 · {taName} 宣判你及格了
           </p>
@@ -10099,8 +10009,8 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
               { l: '安抚值', v: stats.af },
               { l: '存活率', v: Math.max(0, stats.sc) },
             ].map((s) => (
-              <div key={s.l} className="rounded-xl border border-[#f9a8d4]/25 bg-[#f9a8d4]/[0.08] px-3 py-2 text-center">
-                <div className="text-[10px] text-[#f9a8d4]/70">{s.l}</div>
+              <div key={s.l} className="rounded-xl border border-white/15 bg-white/[0.06] px-3 py-2 text-center">
+                <div className="text-[10px] text-white/55">{s.l}</div>
                 <div className="mt-0.5 text-[16px] font-bold text-white">{s.v}</div>
               </div>
             ))}
@@ -10369,7 +10279,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
       <SubShell title="恋爱状态" onBack={close}>
         <div className="-mx-3.5 -mb-8 min-h-full bg-[#fdf0f3] px-3.5 pb-8 pt-3">
           {/* 粉渐变主视觉横幅 */}
-          <div className="relative overflow-hidden rounded-3xl bg-[linear-gradient(125deg,#ffd3e0_0%,#fb9ab4_46%,#f2536a_100%)] px-5 pb-5 pt-4 shadow-[0_14px_34px_rgba(242,83,106,0.28)]">
+          <div className="relative overflow-hidden rounded-3xl bg-[#26262b] px-5 pb-5 pt-4">
             <span aria-hidden="true" className="pointer-events-none absolute -right-6 -top-8 h-28 w-28 rounded-full bg-white/25" />
             <span aria-hidden="true" className="pointer-events-none absolute -left-7 top-10 h-16 w-16 rounded-full bg-white/20" />
             <span aria-hidden="true" className="pointer-events-none absolute bottom-3 right-10 h-9 w-9 rounded-full bg-white/20" />
@@ -10387,20 +10297,20 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
           <div className="mt-3 text-center text-[13px] font-medium text-[#a4889a]">·18道精选问题 · 多维度专业解析</div>
 
           {/* 理论说明卡 */}
-          <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]">
+          <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
             <p className="text-[14.5px] leading-[1.9] text-[#4a4a52]">
               你们的恋爱正处于怎样的阶段？
               <br />
-              关系中的<b className="text-[#f2536a]">亲密</b>、<b className="text-[#f2536a]">激情</b>、<b className="text-[#f2536a]">承诺</b>是否均衡？
+              关系中的<b className="text-[#26262b]">亲密</b>、<b className="text-[#26262b]">激情</b>、<b className="text-[#26262b]">承诺</b>是否均衡？
               <br />
-              本测评基于<b className="text-[#f2536a]">斯滕伯格爱情三角理论</b>与<b className="text-[#f2536a]">SVR理论</b>，科学剖析你们的恋爱现状，帮助你们看清<b className="text-[#f2536a]">情感结构</b>与<b className="text-[#f2536a]">成长空间</b>。
+              本测评基于<b className="text-[#26262b]">斯滕伯格爱情三角理论</b>与<b className="text-[#26262b]">SVR理论</b>，科学剖析你们的恋爱现状，帮助你们看清<b className="text-[#26262b]">情感结构</b>与<b className="text-[#26262b]">成长空间</b>。
               <br />
-              运用人工智能进行深度分析，以数据和洞察，助你们更好地理解彼此，迈向更稳固、更幸福的<b className="text-[#f2536a]">亲密关系</b>。
+              运用人工智能进行深度分析，以数据和洞察，助你们更好地理解彼此，迈向更稳固、更幸福的<b className="text-[#26262b]">亲密关系</b>。
             </p>
             <div className="mt-3 border-t border-[#f6e7ea] pt-3">
               <div className="flex flex-wrap gap-2">
                 {['关系现状', '成长建议', '情感结构', '科学洞察'].map((t) => (
-                  <span key={t} className="rounded-full bg-[#fdeef2] px-3 py-1.5 text-[12px] font-medium text-[#e0607e]">
+                  <span key={t} className="rounded-full bg-[#f0f0f3] px-3 py-1.5 text-[12px] font-medium text-[#4a4a52]">
                     {t}
                   </span>
                 ))}
@@ -10411,8 +10321,8 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
           {/* 测评亮点 */}
           <div className="mt-6 px-1">
             <div className="flex items-center gap-2">
-              <span className="h-4 w-[3px] rounded-full bg-[#f2536a]" />
-              <span className="text-[16.5px] font-extrabold text-[#f2536a]">测评亮点</span>
+              <span className="h-4 w-[3px] rounded-full bg-[#2c2c30]" />
+              <span className="text-[16.5px] font-extrabold text-[#26262b]">测评亮点</span>
             </div>
             <div className="mt-3 space-y-2.5">
               {[
@@ -10421,7 +10331,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                 { t: '双人同步测评', d: `${ta}也会在同一时间独立作答，两份报告对比着看，甜度翻倍。`, bg: '#fdeef2' },
               ].map((c) => (
                 <div key={c.t} className="rounded-2xl p-3.5" style={{ background: c.bg }}>
-                  <div className="text-[14.5px] font-bold text-[#e0607e]">{c.t}</div>
+                  <div className="text-[14.5px] font-bold text-[#26262b]">{c.t}</div>
                   <div className="mt-1 text-[12.5px] leading-relaxed text-[#b58a97]">{c.d}</div>
                 </div>
               ))}
@@ -10445,14 +10355,14 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                   setView('quiz');
                 }
               }}
-              className="flex h-[54px] w-full items-center justify-center rounded-full bg-[linear-gradient(135deg,#ffc3d4,#f8a0b8,#f2536a)] text-[17.5px] font-bold text-white shadow-[0_10px_26px_rgba(242,83,106,0.38)] transition-transform active:scale-[0.98]"
+              className="flex h-[54px] w-full items-center justify-center rounded-full bg-[#2c2c30] text-[17.5px] font-bold text-white transition-transform active:scale-[0.98]"
             >
               {done ? '查看我们的测评报告' : answeredCount > 0 ? '继续测试' : '开始测试'}
             </button>
           </div>
 
           {/* 恋爱状态快选（保留原有功能） */}
-          <div className="mt-2 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]">
+          <div className="mt-2 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
             <div className="text-[14px] font-bold text-[#3c3c42]">现在的恋爱状态</div>
             <div className="mt-2.5 flex flex-wrap gap-2">
               {STATUS_LIST.map((s) => {
@@ -10465,7 +10375,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                       patch({ status: s });
                       showToast(`状态已更新为「${s}」`);
                     }}
-                    className={`rounded-full px-3.5 py-2 text-[13px] font-medium transition-colors ${picked ? 'bg-[#f2536a] text-white shadow-[0_4px_12px_rgba(242,83,106,0.3)]' : 'bg-[#f7f7f9] text-[#4a4a52] active:bg-[#fdeef2]'}`}
+                    className={`rounded-full px-3.5 py-2 text-[13px] font-medium transition-colors ${picked ? 'bg-[#2c2c30] text-white' : 'bg-[#f7f7f9] text-[#4a4a52] active:bg-[#ececf0]'}`}
                   >
                     {s}
                   </button>
@@ -10487,13 +10397,13 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
             {qi + 1}/{STATUS_EXAM.length}
           </div>
           <div className="mx-auto mt-1.5 h-1 w-[120px] overflow-hidden rounded-full bg-white/80">
-            <span className="block h-full rounded-full bg-[linear-gradient(90deg,#ffb9cb,#f2536a)] transition-all" style={{ width: `${((qi + 1) / STATUS_EXAM.length) * 100}%` }} />
+            <span className="block h-full rounded-full bg-[linear-gradient(90deg,#b9b9c2,#5c5c64)] transition-all" style={{ width: `${((qi + 1) / STATUS_EXAM.length) * 100}%` }} />
           </div>
 
           {/* 题目卡 */}
-          <div className="mt-4 rounded-3xl bg-white p-5 shadow-[0_10px_30px_rgba(242,83,106,0.10)]" data-testid="status-exam-card">
+          <div className="mt-4 rounded-3xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]" data-testid="status-exam-card">
             <div className="flex gap-2">
-              <span className="shrink-0 text-[17px] font-extrabold text-[#f2536a]">Q{qi + 1}</span>
+              <span className="shrink-0 text-[17px] font-extrabold text-[#26262b]">Q{qi + 1}</span>
               <span className="text-[16.5px] font-bold leading-relaxed text-[#26262b]">{q.q}</span>
             </div>
             <div className="mt-4 space-y-2.5">
@@ -10509,18 +10419,18 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                     onClick={() => pick(i)}
                     className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-3 text-left transition-colors ${
                       both
-                        ? 'bg-[#fdeef2] ring-2 ring-[#7f96e0]'
+                        ? 'bg-[#eef2fd] ring-2 ring-[#7f96e0]'
                         : mine
-                          ? 'bg-[#fdeef2] ring-2 ring-[#f2536a]'
+                          ? 'bg-[#ececf0] ring-2 ring-[#26262b]'
                           : taHere
                             ? 'bg-[#eef2fd] ring-2 ring-[#7f96e0]'
-                            : 'bg-[#f7f7f9] active:bg-[#fdeef2]'
+                            : 'bg-[#f7f7f9] active:bg-[#ececf0]'
                     }`}
                   >
                     <span className="relative shrink-0">
                       <span
                         className={`grid h-[22px] w-[22px] place-items-center rounded-full border-2 ${
-                          mine ? 'border-[#f2536a] bg-[#f2536a]' : taHere ? 'border-[#7f96e0] bg-[#7f96e0]' : 'border-[#d9d9df] bg-white'
+                          mine ? 'border-[#26262b] bg-[#26262b]' : taHere ? 'border-[#7f96e0] bg-[#7f96e0]' : 'border-[#d9d9df] bg-white'
                         }`}
                       >
                         {(mine || taHere) && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
@@ -10533,7 +10443,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                     </span>
                     <span className="min-w-0 flex-1 text-[14px] leading-snug text-[#2c2c30]">{o}</span>
                     {both && <span className="shrink-0 text-[11px] font-bold text-[#7f96e0]">你们选了同一个</span>}
-                    {mine && !taHere && <span className="shrink-0 text-[11px] font-bold text-[#f2536a]">我的选择</span>}
+                    {mine && !taHere && <span className="shrink-0 text-[11px] font-bold text-[#26262b]">我的选择</span>}
                     {taHere && !mine && <span className="shrink-0 text-[11px] font-bold text-[#7f96e0]">TA 的选择</span>}
                   </button>
                 );
@@ -10541,8 +10451,8 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
             </div>
             {/* 双方作答状态行 */}
             <div className="mt-3.5 flex items-center justify-between border-t border-[#f6e7ea] pt-3 text-[12px]">
-              <span className={`flex items-center gap-1 font-semibold ${myCur != null ? 'text-[#f2536a]' : 'text-[#c9c9cf]'}`}>
-                <span className={`grid h-4 w-4 place-items-center rounded-full ${myCur != null ? 'bg-[#f2536a]' : 'bg-[#e5e5ea]'}`}>
+              <span className={`flex items-center gap-1 font-semibold ${myCur != null ? 'text-[#26262b]' : 'text-[#c9c9cf]'}`}>
+                <span className={`grid h-4 w-4 place-items-center rounded-full ${myCur != null ? 'bg-[#2c2c30]' : 'bg-[#e5e5ea]'}`}>
                   {myCur != null && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3.5} />}
                 </span>
                 {me}
@@ -10564,7 +10474,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
               data-testid="status-exam-next"
               onClick={nextQ}
               disabled={myCur == null || aiPick == null}
-              className="mx-auto flex h-[52px] w-[64%] items-center justify-center rounded-full bg-[linear-gradient(135deg,#ffc3d4,#f8a0b8,#f2536a)] text-[16.5px] font-bold text-white shadow-[0_10px_26px_rgba(242,83,106,0.35)] transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
+              className="mx-auto flex h-[52px] w-[64%] items-center justify-center rounded-full bg-[#2c2c30] text-[16.5px] font-bold text-white transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
             >
               {qi >= STATUS_EXAM.length - 1 ? '查看我们的结果' : '下一题'}
             </button>
@@ -10597,37 +10507,37 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
     <SubShell title="恋爱状态分析" onBack={close}>
       <div className="-mx-3.5 -mb-8 min-h-full bg-[#fdf0f3] px-3.5 pb-8 pt-3">
         {genLoading && (
-          <div className="mt-2 flex items-center justify-center gap-2 rounded-2xl bg-white/85 py-3 text-[13px] font-medium text-[#e0607e] shadow-sm" data-testid="status-report-loading">
-            <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#f8b6c6] border-t-[#f2536a]" />
+          <div className="mt-2 flex items-center justify-center gap-2 rounded-2xl bg-white/85 py-3 text-[13px] font-medium text-[#6e6e76] shadow-sm" data-testid="status-report-loading">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#d9d9de] border-t-[#6e6e76]" />
             正在用你配置的 API 模型生成双方报告…
           </div>
         )}
         {rep && (
           <>
-            <div className="mt-2 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]">
+            <div className="mt-2 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
               <div className="text-[15px] font-bold text-[#26262b]">分析师点评</div>
               <div className="mt-1.5 text-[13.5px] leading-relaxed text-[#6e6e76]">{rep.overall}</div>
             </div>
 
             {/* 我的报告（粉色） */}
-            <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(242,83,106,0.09)]" data-testid="status-report-me">
+            <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]" data-testid="status-report-me">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="grid h-6 w-6 place-items-center rounded-full bg-[#f2536a] text-[11px] font-bold text-white">{me.slice(0, 1)}</span>
-                  <span className="text-[15px] font-bold text-[#f2536a]">{me} 的报告</span>
+                  <span className="grid h-6 w-6 place-items-center rounded-full bg-[#2c2c30] text-[11px] font-bold text-white">{me.slice(0, 1)}</span>
+                  <span className="text-[15px] font-bold text-[#26262b]">{me} 的报告</span>
                 </div>
-                <span className="rounded-full bg-[#fdeef2] px-2.5 py-1 text-[11px] font-bold text-[#e0607e]">{rep.me.title}</span>
+                <span className="rounded-full bg-[#f0f0f3] px-2.5 py-1 text-[11px] font-bold text-[#4a4a52]">{rep.me.title}</span>
               </div>
               <div className="mt-3 flex items-end gap-1">
-                <span className="text-[40px] font-extrabold leading-none text-[#f2536a]">{rep.me.score}</span>
+                <span className="text-[40px] font-extrabold leading-none text-[#26262b]">{rep.me.score}</span>
                 <span className="pb-1 text-[13px] text-[#c9aeb6]">分 / 100</span>
               </div>
-              {dimBars(myPicks, 'linear-gradient(90deg,#ffb9cb,#f2536a)')}
+              {dimBars(myPicks, 'linear-gradient(90deg,#b9b9c2,#5c5c64)')}
               <div className="mt-3 text-[13.5px] leading-relaxed text-[#4a4a52]">{rep.me.summary}</div>
               <div className="mt-3 space-y-1.5 border-t border-[#f6e7ea] pt-3">
                 {rep.me.advice.map((a, i) => (
                   <div key={i} className="flex gap-2 text-[13px] leading-relaxed text-[#6e6e76]">
-                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#f2536a]" />
+                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#2c2c30]" />
                     {a}
                   </div>
                 ))}
@@ -10667,7 +10577,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
             type="button"
             data-testid="status-exam-again"
             onClick={restart}
-            className="flex h-[50px] flex-1 items-center justify-center rounded-full border-2 border-[#f3a0b8] text-[15px] font-semibold text-[#f06e96] transition-colors active:bg-[#fdeef2]"
+            className="flex h-[50px] flex-1 items-center justify-center rounded-full border-[1.5px] border-dashed border-[#3c3c42] text-[15px] font-semibold text-[#26262b] transition-colors active:bg-[#f7f7f9]"
           >
             重新测试
           </button>
@@ -10676,7 +10586,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
             data-testid="status-exam-regen"
             onClick={() => void genReport(false)}
             disabled={genLoading}
-            className="flex h-[50px] flex-1 items-center justify-center rounded-full bg-[linear-gradient(135deg,#ff7d9c,#f2536a)] text-[15px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98] disabled:opacity-50"
+            className="flex h-[50px] flex-1 items-center justify-center rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white transition-transform active:scale-[0.98] disabled:opacity-50"
           >
             {report ? 'AI 重新分析' : 'AI 深度分析'}
           </button>
@@ -10790,13 +10700,13 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
         className="flex w-[76px] flex-col items-center gap-1.5"
         aria-label={`贴给${side === 'me' ? '我' : 'TA'}`}
       >
-        <span className={`relative h-[64px] w-[64px] overflow-hidden rounded-full bg-[#ececef] transition-shadow ${active ? 'shadow-[0_0_0_3px_#fff,0_0_0_6px_#f2536a]' : 'shadow-[0_0_0_3px_#fff,0_4px_12px_rgba(0,0,0,0.10)]'}`}>
+        <span className={`relative h-[64px] w-[64px] overflow-hidden rounded-full bg-[#ececef] transition-shadow ${active ? 'shadow-[0_0_0_3px_#fff,0_0_0_6px_#26262b]' : 'shadow-[0_0_0_3px_#fff,0_4px_12px_rgba(0,0,0,0.10)]'}`}>
           {avatar ? <img src={avatar} alt={name} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={64} />}
           {active && (
-            <span className="absolute -right-0.5 -top-0.5 grid h-5 w-5 place-items-center rounded-full bg-[#f2536a] text-[10px] font-bold text-white shadow">✓</span>
+            <span className="absolute -right-0.5 -top-0.5 grid h-5 w-5 place-items-center rounded-full bg-[#2c2c30] text-[10px] font-bold text-white shadow">✓</span>
           )}
         </span>
-        <span className={`max-w-full truncate text-[12.5px] ${active ? 'font-bold text-[#f2536a]' : 'text-[#6e6e76]'}`}>{name}</span>
+        <span className={`max-w-full truncate text-[12.5px] ${active ? 'font-bold text-[#26262b]' : 'text-[#6e6e76]'}`}>{name}</span>
       </button>
     );
   };
@@ -10804,10 +10714,10 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
   return (
     <SubShell title="情侣印象" onBack={close}>
       {/* 粉渐变横幅（参考图4） */}
-      <div className="-mx-3.5 -mt-0 select-none bg-[linear-gradient(120deg,#f789a4_0%,#f2536a_58%,#ee4b62_100%)] px-5 pb-12 pt-5 text-center">
+      <div className="-mx-3.5 -mt-0 select-none bg-[#26262b] px-5 pb-12 pt-5 text-center">
         <div className="flex items-center justify-center gap-1.5 text-[24px] font-extrabold leading-tight text-white">
           先选
-          <span className="grid h-[34px] w-[34px] place-items-center rounded-full bg-white text-[21px] font-extrabold text-[#f2536a] shadow-[0_3px_10px_rgba(0,0,0,0.12)]">5</span>
+          <span className="grid h-[34px] w-[34px] place-items-center rounded-full bg-white text-[21px] font-extrabold text-[#26262b] shadow-[0_3px_10px_rgba(0,0,0,0.12)]">5</span>
           个词自评一下你们吧
         </div>
       </div>
@@ -10826,7 +10736,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
           ) : (
             <div className="mt-3 flex flex-wrap justify-center gap-2" data-testid="impress-current-tags">
               {tags.map((t) => (
-                <span key={t} className="flex items-center gap-1 rounded-full bg-[#fff0f4] px-3 py-1.5 text-[13px] text-[#e0607e]">
+                <span key={t} className="flex items-center gap-1 rounded-full bg-[#f0f0f3] px-3 py-1.5 text-[13px] text-[#4a4a52]">
                   {t}
                   {(state.aiImpressions ?? []).includes(t) && target === 'me' && (
                     <span className="rounded-full bg-[#eef2fd] px-1.5 py-px text-[9px] font-bold text-[#7f96e0]">TA贴</span>
@@ -10848,7 +10758,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
             key={w}
             type="button"
             onClick={() => addTag(w)}
-            className="rounded-lg border border-[#f7dbe2] bg-white px-3.5 py-2 text-[13.5px] text-[#3c3c42] shadow-[0_2px_8px_rgba(242,83,106,0.10)] transition-transform active:scale-95"
+            className="rounded-lg border border-[#e9e9ee] bg-white px-3.5 py-2 text-[13.5px] text-[#3c3c42] shadow-[0_2px_8px_rgba(0,0,0,0.08)] transition-transform active:scale-95"
           >
             {w}
           </button>
@@ -10874,7 +10784,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
           type="button"
           onClick={shuffle}
           data-testid="impress-shuffle"
-          className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-[14px] font-medium text-[#f2536a] active:opacity-60"
+          className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-[14px] font-medium text-[#26262b] active:opacity-60"
         >
           <RefreshCcw className="h-4 w-4" />
           换一批
@@ -10884,7 +10794,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
       {/* 第十轮：印象下的聊天（TA 根据人设记忆回复；可聊标签、反驳、拌嘴） */}
       <div className="mt-5">
         <div className="mb-2 flex items-center gap-1.5 text-[13px] font-bold text-[#4a4a52]">
-          <MessageCircleHeart className="h-4 w-4 text-[#f2536a]" />
+          <MessageCircleHeart className="h-4 w-4 text-[#4a4a52]" />
           聊聊这些印象
         </div>
         <CommentThread
@@ -10902,7 +10812,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
           type="button"
           data-testid="impress-submit"
           onClick={() => showToast(tags.length > 0 ? '印象已提交，甜甜的恋爱值 +1 ♡' : '先选几个词再提交吧')}
-          className="h-[50px] w-full rounded-full bg-[linear-gradient(135deg,#f789a4,#f2536a)] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
+          className="h-[50px] w-full rounded-full bg-[#2c2c30] text-[16.5px] font-semibold text-white transition-transform active:scale-[0.98]"
         >
           提 交
         </button>
@@ -11263,7 +11173,7 @@ function MissYouPage({ state, patch, tapMissYou, showToast, close }: { state: Co
           <button
             type="button"
             onClick={() => showToast('已经去提醒他啦，让他快来想你 ♡')}
-            className="h-11 w-[196px] rounded-full bg-[linear-gradient(90deg,#4a9df3,#2f7fe8)] text-[16px] font-semibold text-white shadow-[0_6px_16px_rgba(60,130,230,0.35)] transition-transform active:scale-[0.97]"
+            className="h-11 w-[196px] rounded-full bg-[#2c2c30] text-[16px] font-semibold text-white transition-transform active:scale-[0.97]"
           >
             去提醒他
           </button>
@@ -11529,8 +11439,8 @@ function SupportPage({ close }: { close: () => void }) {
             onKeyDown={(e) => e.key === 'Enter' && send()}
             className="h-11 flex-1 rounded-full bg-[#f3f3f5] px-4 text-[15px] outline-none placeholder:text-[#b6b6bd]"
           />
-          <button type="button" onClick={send} className="h-11 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-5 text-[15px] font-semibold text-white">
-            发送
+          <button type="button" onClick={send} aria-label="发送" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#2c2c30] text-white transition-transform active:scale-95">
+            <ArrowUp className="h-5 w-5" strokeWidth={2.4} />
           </button>
         </div>
       </div>
@@ -11583,7 +11493,7 @@ function SettingsPage({ state, patch, showToast, close, onReset }: { state: Coup
           <div className="mt-2 space-y-1.5">
             {state.aiLog.slice(0, 12).map((l) => (
               <div key={l.id} className="flex items-start gap-2 text-[12.5px] leading-relaxed text-[#6e6e76]">
-                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#f2536a]/70" />
+                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#2c2c30]/70" />
                 <span className="min-w-0 flex-1">{l.text}</span>
                 <span className="shrink-0 text-[10.5px] text-[#c9c9cf]">{fmtDate(l.at).slice(5)}</span>
               </div>
