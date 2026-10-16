@@ -4013,24 +4013,32 @@ function isCustomIndex(i: number, customLen: number) {
   return i < customLen;
 }
 
-/** 未来情书信纸样式（编辑器可切换） */
+/** 未来情书信纸样式（编辑器可切换；第二十八轮美化+扩容：12 款信纸；deco=叠加装饰纹理层，decoSize=该层平铺尺寸） */
 const LETTER_PAPERS = [
-  { key: 'default', name: '默认', bg: 'linear-gradient(180deg,#fdf8ec,#fbf2df)', line: 'rgba(196,164,116,0.55)', dashed: true, text: '#5a4a38', dark: false },
-  { key: 'white', name: '纯白简约', bg: 'linear-gradient(180deg,#ffffff,#fafafb)', line: 'rgba(165,165,175,0.45)', dashed: false, text: '#3a3a40', dark: false },
-  { key: 'gray', name: '浅灰格纹', bg: 'linear-gradient(180deg,#f5f5f7,#ececef)', line: 'rgba(150,150,162,0.4)', dashed: false, text: '#4a4a52', dark: false },
-  { key: 'green', name: '墨绿复古', bg: 'linear-gradient(180deg,#f7f2e3,#efe5cb)', line: 'rgba(122,110,80,0.5)', dashed: true, text: '#4a4232', dark: false },
-  { key: 'pink', name: '柔粉蕾丝', bg: 'linear-gradient(180deg,#fdf1f4,#fae6ec)', line: 'rgba(214,150,170,0.5)', dashed: true, text: '#7a4a58', dark: false },
-  { key: 'night', name: '星夜蓝', bg: 'linear-gradient(180deg,#232633,#191c27)', line: 'rgba(185,195,225,0.32)', dashed: true, text: '#d8deee', dark: true },
+  { key: 'default', name: '信笺米黄', bg: 'linear-gradient(180deg,#fdf9ee 0%,#fbf2df 60%,#f8ecd2 100%)', line: 'rgba(196,164,116,0.55)', dashed: true, text: '#5a4a38', dark: false },
+  { key: 'white', name: '纯白简约', bg: 'linear-gradient(180deg,#ffffff,#f8f9fb)', line: 'rgba(165,165,175,0.45)', dashed: false, text: '#3a3a40', dark: false },
+  { key: 'gray', name: '浅灰格纹', bg: 'linear-gradient(180deg,#f7f7f9,#ececef)', line: 'rgba(150,150,162,0.42)', dashed: false, text: '#4a4a52', dark: false, deco: 'repeating-linear-gradient(90deg, transparent 0 12px, rgba(150,150,162,0.15) 12px 13px), repeating-linear-gradient(180deg, transparent 0 12px, rgba(150,150,162,0.15) 12px 13px)', decoSize: 'auto, auto' },
+  { key: 'green', name: '墨绿复古', bg: 'linear-gradient(180deg,#f8f3e4,#efe4c9)', line: 'rgba(122,110,80,0.5)', dashed: true, text: '#4a4232', dark: false },
+  { key: 'pink', name: '柔粉蕾丝', bg: 'linear-gradient(180deg,#fdf1f4,#fae5ec)', line: 'rgba(214,150,170,0.5)', dashed: true, text: '#7a4a58', dark: false, deco: 'radial-gradient(circle at 9px 9px, rgba(255,255,255,0.75) 1.5px, transparent 2.4px)', decoSize: '22px 22px' },
+  { key: 'sakura', name: '樱花物语', bg: 'linear-gradient(180deg,#fef4f7,#fde9ef)', line: 'rgba(228,152,176,0.45)', dashed: true, text: '#7a4a58', dark: false, deco: 'radial-gradient(circle at 12px 12px, rgba(244,143,177,0.22) 2px, transparent 3px)', decoSize: '30px 30px' },
+  { key: 'kraft', name: '牛皮纸', bg: 'linear-gradient(180deg,#f4e8d4,#ebdcc1)', line: 'rgba(154,124,84,0.5)', dashed: true, text: '#5a4632', dark: false, deco: 'repeating-linear-gradient(45deg, rgba(154,124,84,0.045) 0 3px, transparent 3px 7px), repeating-linear-gradient(-45deg, rgba(154,124,84,0.045) 0 3px, transparent 3px 7px)', decoSize: 'auto, auto' },
+  { key: 'mint', name: '薄荷苏打', bg: 'linear-gradient(180deg,#f1faf5,#e3f5eb)', line: 'rgba(110,170,140,0.42)', dashed: true, text: '#3f5a4a', dark: false, deco: 'radial-gradient(circle at 11px 11px, rgba(255,255,255,0.85) 1.8px, transparent 2.6px)', decoSize: '26px 26px' },
+  { key: 'sky', name: '晴空物语', bg: 'linear-gradient(180deg,#f1f8fe,#e3effa)', line: 'rgba(120,160,200,0.4)', dashed: true, text: '#3f5064', dark: false, deco: 'radial-gradient(circle at 13px 13px, rgba(255,255,255,0.9) 2.2px, transparent 3.2px)', decoSize: '32px 32px' },
+  { key: 'lavender', name: '薰衣草', bg: 'linear-gradient(180deg,#f7f3fc,#eee6f9)', line: 'rgba(160,140,200,0.42)', dashed: true, text: '#55446e', dark: false, deco: 'radial-gradient(circle at 10px 10px, rgba(255,255,255,0.7) 1.4px, transparent 2.2px)', decoSize: '24px 24px' },
+  { key: 'milktea', name: '莓果奶茶', bg: 'linear-gradient(180deg,#fbf1e9,#f4e4d8)', line: 'rgba(190,140,110,0.45)', dashed: true, text: '#6e4a38', dark: false },
+  { key: 'night', name: '星夜蓝', bg: 'linear-gradient(180deg,#232633,#191c27)', line: 'rgba(185,195,225,0.32)', dashed: true, text: '#d8deee', dark: true, deco: 'radial-gradient(circle at 14px 14px, rgba(255,255,255,0.12) 1.1px, transparent 2px)', decoSize: '30px 30px' },
 ];
 
-/** 未来情书字体（编辑器字体面板） */
+/** 未来情书字体（编辑器字体面板；第二十八轮美化：双行预览+字体栈补全+新增隶书/魏碑） */
 const LETTER_FONTS = [
   { key: 'default', name: '默认', css: '"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",sans-serif' },
-  { key: 'kai', name: '楷体', css: 'KaiTi,"Kaiti SC",STKaiti,serif' },
-  { key: 'song', name: '宋体', css: 'SimSun,"Songti SC",STSong,serif' },
-  { key: 'fang', name: '仿宋', css: 'FangSong,"Fangsong SC",STFangsong,serif' },
-  { key: 'xing', name: '行楷', css: '"Xingkai SC",STXingkai,KaiTi,cursive' },
-  { key: 'yuan', name: '圆体', css: '"Yuanti SC",YouYuan,"PingFang SC",sans-serif' },
+  { key: 'kai', name: '楷体', css: 'KaiTi,"Kaiti SC",STKaiti,"Kaiti TC",serif' },
+  { key: 'song', name: '宋体', css: 'SimSun,"Songti SC",STSong,"Songti TC",serif' },
+  { key: 'fang', name: '仿宋', css: 'FangSong,"Fangsong SC",STFangsong,"Fangsong TC",serif' },
+  { key: 'xing', name: '行楷', css: '"Xingkai SC",STXingkai,"Xingkai TC",KaiTi,cursive' },
+  { key: 'yuan', name: '圆体', css: '"Yuanti SC","Yuanti TC",YouYuan,"PingFang SC",sans-serif' },
+  { key: 'li', name: '隶书', css: 'LiSu,"Lisu SC",STLiti,"Kaiti SC",serif' },
+  { key: 'wei', name: '魏碑', css: '"Weibei SC",STWeibei,KaiTi,serif' },
 ];
 
 /** 未来情书字色 */
@@ -4062,38 +4070,59 @@ function LetterStars({ count = 44 }: { count?: number }) {
   );
 }
 
-/** 深夜信封（主视图插画：斜置信封 + 火漆心 + 星芒） */
+/** 深夜信封（主视图插画：斜置信封 + 火漆心 + 星芒；第二十八轮封面美化：暖光晕 + 邮票 + 地址线 + 漂浮小心心） */
 function NightEnvelope() {
   return (
-    <svg viewBox="0 0 210 150" className="w-[216px]" aria-hidden="true">
-      <defs>
-        <linearGradient id="envFace" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#3d3d48" />
-          <stop offset="1" stopColor="#232329" />
-        </linearGradient>
-      </defs>
-      {/* 底下压着的信封 */}
-      <rect x="16" y="30" width="168" height="100" rx="8" fill="#191920" transform="rotate(-5 100 80)" />
-      <rect x="22" y="36" width="156" height="88" rx="6" fill="#202027" transform="rotate(-5 100 80)" />
-      {/* 主信封 */}
-      <g transform="rotate(3 105 84)">
-        <rect x="25" y="36" width="160" height="94" rx="7" fill="url(#envFace)" stroke="#4d4d5a" strokeWidth="1.5" />
-        <path d="M25 40 L105 94 L185 40" fill="none" stroke="#4d4d5a" strokeWidth="1.5" />
-        <path d="M25 128 L88 84 M185 128 L122 84" stroke="#3c3c47" strokeWidth="1.2" opacity="0.8" />
-        {/* 火漆印 */}
-        <circle cx="105" cy="94" r="11.5" fill="#141419" stroke="#5d5d6c" strokeWidth="2" />
-        <path d={LOVE_HEART_PATH} transform="translate(105 94) scale(1.15) translate(-4.5 -3.5)" fill="#6e6e7e" />
-      </g>
-      {/* 星芒 */}
-      <g transform="translate(158 24)">
-        <path d="M0 -13 L2.2 -2.2 L13 0 L2.2 2.2 L0 13 L-2.2 2.2 L-13 0 L-2.2 -2.2 Z" fill="#ffffff" />
-        <circle r="2.6" fill="#ffffff" />
-        <path d="M0 0 L34 0 M0 0 L-30 -8 M0 0 L26 -14" stroke="#ffffff" strokeWidth="0.8" opacity="0.55" />
-      </g>
-      <circle cx="34" cy="18" r="1.4" fill="#8a8a96" />
-      <circle cx="196" cy="66" r="1.2" fill="#8a8a96" />
-      <circle cx="12" cy="86" r="1.2" fill="#8a8a96" />
-    </svg>
+    <div className="relative">
+      {/* 暖光晕（信封背后的柔光） */}
+      <div aria-hidden="true" className="absolute left-1/2 top-1/2 h-[200px] w-[262px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(closest-side,rgba(255,214,170,0.15),transparent_72%)] blur-[6px]" />
+      <svg viewBox="0 0 210 150" className="relative w-[218px] [filter:drop-shadow(0_16px_24px_rgba(0,0,0,0.55))]" aria-hidden="true">
+        <defs>
+          <linearGradient id="envFace" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#3d3d48" />
+            <stop offset="1" stopColor="#232329" />
+          </linearGradient>
+        </defs>
+        {/* 底下压着的信封 */}
+        <rect x="16" y="30" width="168" height="100" rx="8" fill="#191920" transform="rotate(-5 100 80)" />
+        <rect x="22" y="36" width="156" height="88" rx="6" fill="#202027" transform="rotate(-5 100 80)" />
+        {/* 主信封 */}
+        <g transform="rotate(3 105 84)">
+          <rect x="25" y="36" width="160" height="94" rx="7" fill="url(#envFace)" stroke="#4d4d5a" strokeWidth="1.5" />
+          <path d="M25 40 L105 94 L185 40" fill="none" stroke="#4d4d5a" strokeWidth="1.5" />
+          <path d="M25 128 L88 84 M185 128 L122 84" stroke="#3c3c47" strokeWidth="1.2" opacity="0.8" />
+          {/* 邮票（右上角小心心邮票） */}
+          <g transform="translate(150 48)">
+            <rect x="0" y="0" width="21" height="25" rx="2" fill="#1d1d24" stroke="#63636f" strokeWidth="1" />
+            <path d={LOVE_HEART_PATH} transform="translate(10.5 12.5) scale(1.05) translate(-4.5 -3.5)" fill="#8a5a68" />
+            {[0, 1, 2, 3, 4].map((i) => (
+              <circle key={`t${i}`} cx={3 + i * 3.75} cy="1.8" r="0.7" fill="#3a3a44" />
+            ))}
+            {[0, 1, 2, 3, 4].map((i) => (
+              <circle key={`b${i}`} cx={3 + i * 3.75} cy="23.2" r="0.7" fill="#3a3a44" />
+            ))}
+          </g>
+          {/* 地址线 */}
+          <line x1="34" y1="108" x2="122" y2="108" stroke="#5a5a66" strokeWidth="1.1" opacity="0.75" strokeLinecap="round" />
+          <line x1="34" y1="116" x2="102" y2="116" stroke="#4a4a56" strokeWidth="1" opacity="0.55" strokeLinecap="round" />
+          {/* 火漆印 */}
+          <circle cx="105" cy="94" r="11.5" fill="#141419" stroke="#5d5d6c" strokeWidth="2" />
+          <path d={LOVE_HEART_PATH} transform="translate(105 94) scale(1.15) translate(-4.5 -3.5)" fill="#6e6e7e" />
+        </g>
+        {/* 星芒 */}
+        <g transform="translate(158 24)">
+          <path d="M0 -13 L2.2 -2.2 L13 0 L2.2 2.2 L0 13 L-2.2 2.2 L-13 0 L-2.2 -2.2 Z" fill="#ffffff" />
+          <circle r="2.6" fill="#ffffff" />
+          <path d="M0 0 L34 0 M0 0 L-30 -8 M0 0 L26 -14" stroke="#ffffff" strokeWidth="0.8" opacity="0.55" />
+        </g>
+        <circle cx="34" cy="18" r="1.4" fill="#8a8a96" />
+        <circle cx="196" cy="66" r="1.2" fill="#8a8a96" />
+        <circle cx="12" cy="86" r="1.2" fill="#8a8a96" />
+      </svg>
+      {/* 漂浮小心心 */}
+      <span aria-hidden="true" className="absolute -right-1 top-1 text-[13px] text-[#9a6a7a] [animation:couple-float-y_3.4s_ease-in-out_infinite]">♡</span>
+      <span aria-hidden="true" className="absolute left-1 bottom-2 text-[10px] text-[#6e5a64] [animation:couple-float-y_4.2s_ease-in-out_infinite_1.1s]">♡</span>
+    </div>
   );
 }
 
@@ -4231,8 +4260,8 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
 }
 
 /** 情书（原未来情书，参考截图：黑色星空治愈风）—— 主视图（信封）→ 告白页 → 编辑信件（信纸/字体/信封/虚线工具栏/多页翻页）→ 发送设置（即时/定时拆信，参照「慢邮邮」截图重做）→ 信箱（TA 的信 + 我的信 + 信下留言 + 分享给 TA） */
-const LETTER_PAGE_CHARS = 200; // 每页信纸字数上限（写满翻下一页）
-const LETTER_PAGE_CHARS_FIRST = 300; // 第一张信纸上下更大（第二十一轮），容纳更多字
+const LETTER_PAGE_CHARS = 300; // 每页信纸字数上限（写满翻下一页；第二十八轮起每页信纸同高同容量：480px · 300 字）
+const LETTER_PAGE_HEIGHT = 480; // 每页信纸统一高度（第二十八轮：第一页与后续页一样大）
 const LETTER_MAX_PAGES = 6; // 最多页数
 
 function LettersPage({ state, patch, close, showToast }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; close: () => void; showToast: (m: string) => void }) {
@@ -4276,9 +4305,9 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   const meName0 = (state.letterSenderName || '').trim() || state.meName || '我'; // 信封署名：自定义 > 微信/QQ 同步
   const senderAvatar = state.letterSenderAvatar || state.meAvatar || null; // 信封头像：自定义 > 微信/QQ 同步
 
-  /** 指定页写入（上限截断 + 写满提示节流 + 写满自动下滑加下一页；第一张信纸更高、容量也更大） */
+  /** 指定页写入（上限截断 + 写满提示节流 + 写满自动下滑加下一页；第二十八轮起每页容量一致） */
   const setPageTextAt = (pi: number, v: string) => {
-    const cap = pi === 0 ? LETTER_PAGE_CHARS_FIRST : LETTER_PAGE_CHARS;
+    const cap = LETTER_PAGE_CHARS;
     const capped = v.slice(0, cap);
     const wasFull = (pages[pi] ?? '').length >= cap;
     setPages((ps) => ps.map((p, i) => (i === pi ? capped : p)));
@@ -4312,21 +4341,22 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   /** 三个选择弹层（信纸/字体/信封；第十九轮起编辑页与发送设置页共用） */
   const renderSheets = () => (
     <>
-      {/* 信纸选择弹层 */}
+      {/* 信纸选择弹层（第二十八轮：12 款信纸 + 预览带装饰纹理层） */}
       {sheet === 'paper' && (
         <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
           <div className="rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
             <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
             <div className="text-center text-[17px] font-bold text-[#2c2c30]">选择信纸</div>
-            <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">‹ 左右滑动切换风格 ›</div>
-            <div className="mt-3 grid max-h-[290px] grid-cols-4 gap-3 overflow-y-auto">
+            <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">挑一张喜欢的信纸，把心里话写在上面 ♡</div>
+            <div className="mt-3 grid max-h-[330px] grid-cols-4 gap-3 overflow-y-auto">
               {LETTER_PAPERS.map((p) => (
                 <button key={p.key} type="button" onClick={() => { setPaper(p); setSheet(null); }} className="flex flex-col items-center gap-1.5">
-                  <span
-                    className={`h-[86px] w-full rounded-md border-2 shadow-sm ${paper.key === p.key ? 'border-[#2c2c30]' : 'border-transparent'}`}
-                    style={{ background: p.bg, backgroundImage: `repeating-linear-gradient(180deg, transparent 0 12px, ${p.line} 12px 13px)` }}
-                  />
-                  <span className="w-full truncate text-[11.5px] text-[#5a5a62]">{p.name}</span>
+                  <span className={`relative h-[86px] w-full overflow-hidden rounded-md border-2 shadow-sm ${paper.key === p.key ? 'border-[#2c2c30]' : 'border-transparent'}`}>
+                    <span aria-hidden="true" className="absolute inset-0" style={{ background: p.bg }} />
+                    {p.deco && <span aria-hidden="true" className="absolute inset-0" style={{ backgroundImage: p.deco, backgroundSize: p.decoSize }} />}
+                    <span aria-hidden="true" className="absolute inset-0" style={{ backgroundImage: `repeating-linear-gradient(180deg, transparent 0 12px, ${p.line} 12px 13px)` }} />
+                  </span>
+                  <span className={`w-full truncate text-[11.5px] ${paper.key === p.key ? 'font-semibold text-[#26262b]' : 'text-[#5a5a62]'}`}>{p.name}</span>
                 </button>
               ))}
             </div>
@@ -4342,21 +4372,24 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         </div>
       )}
 
-      {/* 字体弹层（字体/字号/颜色） */}
+      {/* 字体弹层（字体/字号/颜色；第二十八轮美化：双行预览卡片+金色选中态+圆形色板+实时预览条） */}
       {sheet === 'font' && (
         <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
           <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
             <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
-            <div className="grid grid-cols-3 gap-2.5">
+            <div className="text-center text-[15px] font-bold text-[#2c2c30]">字体</div>
+            <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">选一种字体，让字也有温度</div>
+            <div className="mt-3 grid grid-cols-3 gap-2.5">
               {LETTER_FONTS.map((f) => (
                 <button
                   key={f.key}
                   type="button"
                   onClick={() => setFont(f)}
-                  className={`rounded-lg border px-2 py-2.5 ${font.key === f.key ? 'border-[#c9a86a] bg-[#fbf5e8]' : 'border-[#e8e8ec] bg-white'}`}
+                  className={`rounded-xl border px-2 py-2.5 text-center transition-colors ${font.key === f.key ? 'border-[#c9a86a] bg-[#fbf5e8] shadow-[0_2px_10px_rgba(201,168,106,0.22)]' : 'border-[#e8e8ec] bg-white active:bg-[#f6f6f8]'}`}
                 >
-                  <div className="text-[10.5px] text-[#9a9aa2]">{f.name}</div>
-                  <div className="mt-0.5 text-[17px] text-[#3a3a40]" style={{ fontFamily: f.css }}>见字如面</div>
+                  <div className="text-[10.5px] font-medium text-[#9a9aa2]">{f.name}</div>
+                  <div className="mt-1 text-[18px] leading-tight text-[#3a3a40]" style={{ fontFamily: f.css }}>见字如面</div>
+                  <div className="mt-0.5 text-[12.5px] text-[#8a8a94]" style={{ fontFamily: f.css }}>纸短情长</div>
                 </button>
               ))}
             </div>
@@ -4368,7 +4401,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               <span className="w-8 shrink-0 rounded-full bg-[#2c2c30] py-0.5 text-center text-[12px] font-bold text-white">{fontSize}</span>
             </div>
             <div className="mt-4 flex items-start gap-3">
-              <span className="shrink-0 pt-1.5 text-[14px] font-semibold text-[#3a3a40]">颜色</span>
+              <span className="shrink-0 pt-2 text-[14px] font-semibold text-[#3a3a40]">颜色</span>
               <div className="flex flex-wrap gap-2.5">
                 {LETTER_COLORS.map((c) => (
                   <button
@@ -4376,10 +4409,16 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                     type="button"
                     aria-label={`颜色 ${c}`}
                     onClick={() => setColor(c)}
-                    className={`h-8 w-8 rounded-lg border-2 ${color === c ? 'border-[#2c2c30]' : 'border-transparent'}`}
+                    className={`h-9 w-9 rounded-full border-2 shadow-sm ${color === c ? 'border-[#2c2c30]' : 'border-transparent'}`}
                     style={{ background: c }}
                   />
                 ))}
+              </div>
+            </div>
+            {/* 实时预览条：当前字体+字号+颜色落在当前信纸上 */}
+            <div className="mt-4 overflow-hidden rounded-xl border border-[#e8e8ec] px-4 py-3" style={{ background: paper.bg }}>
+              <div className="text-[13px] leading-[24px]" style={{ fontFamily: font.css, fontSize, color }}>
+                亲爱的他：<span className="opacity-80">落笔的那一刻，想念就有了形状。</span>
               </div>
             </div>
             <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
@@ -4569,11 +4608,25 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     </div>
   );
 
-  // ============ 主视图：信封 ============
+  // ============ 主视图：信封（第二十八轮封面美化：月亮 + 流星 + 暖光信封 + 呼吸箭头） ============
   if (view === 'home') {
     return (
       <div className="relative flex h-full flex-col overflow-hidden bg-[#0a0a0d]">
-        <LetterStars />
+        <LetterStars count={54} />
+        {/* 月亮（右上角，带光晕与暗斑） */}
+        <div aria-hidden="true" className="pointer-events-none absolute right-[11%] top-[10%] z-[5]">
+          <div className="h-[70px] w-[70px] rounded-full bg-[radial-gradient(circle_at_36%_34%,#fff8e8_0%,#f3e2bd_48%,#e6d0a2_100%)] shadow-[0_0_44px_12px_rgba(255,238,200,0.14)]">
+            <span className="absolute left-[14%] top-[30%] h-[9px] w-[9px] rounded-full bg-[#ddc79b]/60" />
+            <span className="absolute left-[46%] top-[58%] h-[6px] w-[6px] rounded-full bg-[#ddc79b]/50" />
+            <span className="absolute left-[62%] top-[24%] h-[4px] w-[4px] rounded-full bg-[#ddc79b]/40" />
+          </div>
+        </div>
+        {/* 流星（缓落） */}
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+          {[14, 62, 88].map((left, i) => (
+            <span key={i} className="absolute h-[3px] w-[3px] rounded-full bg-white shadow-[0_0_6px_rgba(255,255,255,0.9)] [animation:couple-fall_7s_linear_infinite]" style={{ left: `${left}%`, top: '2%', animationDelay: `${i * 2.6}s` }} />
+          ))}
+        </div>
         <TopBar title="情书" onBack={close} />
         {/* 信箱入口（第二十轮：原「订单记录」改叫「信箱」） */}
         <button
@@ -4589,19 +4642,25 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
           <div className="[animation:couple-float-y_5s_ease-in-out_infinite]">
             <NightEnvelope />
           </div>
-          <div className="mt-12 w-full text-[20px] font-light leading-[3.4rem] tracking-wide text-[#87878f]">
+          <div className="mt-11 w-full text-[20px] font-light leading-[3.4rem] tracking-[0.12em] text-[#8d8d96]">
             <p>把你想对他说的话</p>
             <p>写成一封信</p>
             <p>现在就寄给他吧</p>
           </div>
+          <div aria-hidden="true" className="mt-5 flex items-center gap-2 text-[10px] tracking-[0.5em] text-white/25">
+            <span>✦</span>
+            <span className="h-px w-16 bg-gradient-to-r from-transparent via-white/30 to-transparent" />
+            <span>✦</span>
+          </div>
         </div>
-        {/* 底部圆形箭头 */}
+        {/* 底部圆形箭头（呼吸光圈） */}
         <button
           type="button"
           onClick={() => setView('intro')}
           aria-label="下一步"
           className="relative z-20 mx-auto mb-9 flex h-[62px] w-[62px] items-center justify-center rounded-full border border-white/40 transition-transform active:scale-95"
         >
+          <span aria-hidden="true" className="absolute inset-[-7px] rounded-full border border-white/15 [animation:couple-twinkle_2.8s_ease-in-out_infinite]" />
           <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="#e8e8ee" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 12h15M13 6l6 6-6 6" />
           </svg>
@@ -4633,7 +4692,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         </div>
         <TopBar title="情书" onBack={() => setView('home')} />
         <div className="relative z-10 flex flex-1 flex-col justify-end px-9 pb-14">
-          <div className="text-[20px] font-light leading-[3.4rem] tracking-wide text-[#9c9ca6]">
+          <div className="text-[20px] font-light leading-[3.4rem] tracking-[0.12em] text-[#9c9ca6]">
             <p>最浪漫的告白是</p>
             <p>写给他的那封</p>
             <p>装在信封里的手写信</p>
@@ -4641,7 +4700,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
           <button
             type="button"
             onClick={() => setView('write')}
-            className="mx-auto mt-12 h-[52px] w-[248px] rounded-2xl border border-white/40 text-[16px] text-white/95 transition-transform active:scale-95"
+            className="mx-auto mt-12 h-[52px] w-[248px] rounded-2xl border border-white/40 text-[16px] text-white/95 shadow-[0_0_24px_rgba(255,255,255,0.07)] transition-transform active:scale-95"
           >
             给他写一封情书
           </button>
@@ -4651,7 +4710,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     );
   }
 
-  // ============ 编辑信件视图（第二十轮重做：纵向连续信纸，下滑即加第二页，不再左右翻页；「xx的来信」页眉标签已删除） ============
+  // ============ 编辑信件视图（第二十轮重做：纵向连续信纸，下滑即加第二页，不再左右翻页；「xx的来信」页眉标签已删除；第二十八轮：每页信纸同高同容、装饰纹理层、工具栏删手写信+信纸移位） ============
   if (view === 'write') {
     const lineBg = dashed && paper.dashed !== undefined
       ? `repeating-linear-gradient(180deg, transparent 0px, transparent 30px, ${paper.line} 30px, ${paper.line} calc(30px + 1px))`
@@ -4665,17 +4724,19 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         <div ref={scrollRef} className="relative flex-1 overflow-y-auto px-3 pb-4 pt-1.5" data-testid="letter-scroll">
           <div className="mx-auto flex w-full max-w-[430px] flex-col gap-3.5">
             {pages.map((ptext, pi) => {
-              const pageFull = ptext.length >= (pi === 0 ? LETTER_PAGE_CHARS_FIRST : LETTER_PAGE_CHARS);
+              const pageFull = ptext.length >= LETTER_PAGE_CHARS;
               const isFocus = pi === focusSafe;
               return (
                 <div
                   key={pi}
                   className="relative shrink-0 overflow-hidden rounded-md shadow-[0_8px_28px_rgba(0,0,0,0.5)]"
-                  style={{ background: paper.bg, height: pi === 0 ? 480 : 336 }}
+                  style={{ background: paper.bg, height: LETTER_PAGE_HEIGHT }}
                   data-testid={`letter-paper-${pi + 1}`}
                 >
                   {/* 横线 */}
                   {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: '0 6px' }} />}
+                  {/* 信纸自带装饰纹理（第二十八轮：蕾丝点/樱花点/格纹/斜纹等） */}
+                  {paper.deco && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: paper.deco, backgroundSize: paper.decoSize }} />}
                   {/* 首页右上角日期（第二十轮：「xx的来信」标签删除，仅留日期） */}
                   {pi === 0 && (
                     <div className="pointer-events-none absolute right-4 top-2.5 z-[5] text-[11.5px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.5)' : 'rgba(90,74,56,0.5)' }}>
@@ -4700,14 +4761,15 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                       工具 {toolsOpen ? '˄' : '˅'}
                     </button>
                   )}
-                  {/* 右侧工具栏（虚线/手写信/字体/信封/回执/信纸） */}
+                  {/* 右侧工具栏（第二十八轮：手写信入口删除，「信纸」从底部移到原来手写信的位置；顺序：虚线/信纸/字体/信封/回执） */}
                   {isFocus && toolsOpen && (
                     <div className="absolute right-2.5 top-[64px] z-10 flex flex-col gap-2.5">
                       <button type="button" onClick={() => setDashed((v) => !v)} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${dashed ? 'bg-[#2c2c30]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
                         虚线
                       </button>
-                      <button type="button" onClick={() => showToast('手写信誊写功能即将上线 ♡')} className="h-[54px] w-9 rounded-lg bg-[#9a9aa2] text-[12.5px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
-                        手写信
+                      <button type="button" onClick={() => setSheet('paper')} className="relative h-[54px] w-9 rounded-lg border border-[#e8cdb2] bg-[#fdf8ec] text-[12.5px] font-bold leading-[1.15] text-[#2f6b3f] shadow-md" style={{ writingMode: 'vertical-rl' }}>
+                        信纸
+                        <span aria-hidden="true" className="absolute -top-1 right-1 h-1.5 w-1.5 rounded-full bg-[#e05a6d]" />
                       </button>
                       <button type="button" onClick={() => setSheet('font')} className="h-[54px] w-9 rounded-lg bg-[#9a9aa2] text-[12.5px] font-bold leading-[1.15] text-white shadow-md" style={{ writingMode: 'vertical-rl' }}>
                         字体
@@ -4721,15 +4783,11 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                       <button type="button" onClick={() => { setReceipt((v) => !v); showToast(receipt ? '已关闭回执' : '已开启回执：TA 拆信时会通知你'); }} className={`h-[54px] w-9 rounded-lg text-[12.5px] font-bold leading-[1.15] text-white shadow-md transition-colors ${receipt ? 'bg-[#2c2c30]' : 'bg-[#9a9aa2]'}`} style={{ writingMode: 'vertical-rl' }}>
                         回执
                       </button>
-                      <button type="button" onClick={() => setSheet('paper')} className="relative h-[54px] w-9 rounded-lg border border-[#e8cdb2] bg-[#fdf8ec] text-[12.5px] font-bold leading-[1.15] text-[#2f6b3f] shadow-md" style={{ writingMode: 'vertical-rl' }}>
-                        信纸
-                        <span aria-hidden="true" className="absolute -top-1 right-1 h-1.5 w-1.5 rounded-full bg-[#e05a6d]" />
-                      </button>
                     </div>
                   )}
-                  {/* 页脚：本页计数 + 页码（第一张信纸容量更大） */}
+                  {/* 页脚：本页计数 + 页码（第二十八轮起每页容量一致） */}
                   <div className="pointer-events-none absolute bottom-2.5 left-4 text-[11.5px]" style={{ color: pageFull ? '#e05a6d' : paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
-                    {`${ptext.length}/${pi === 0 ? LETTER_PAGE_CHARS_FIRST : LETTER_PAGE_CHARS}`}
+                    {`${ptext.length}/${LETTER_PAGE_CHARS}`}
                   </div>
                   <div className="pointer-events-none absolute bottom-2.5 right-4 text-[12px]" style={{ color: paper.dark ? 'rgba(216,222,238,0.55)' : 'rgba(90,74,56,0.55)' }}>
                     {`第 ${pi + 1} 页`}
