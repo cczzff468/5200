@@ -20092,3 +20092,38 @@ Work Log:
 Stage Summary:
 - 关键决策：①[图片 ID:xxx] 从「漏出的文本」升级为「合法的发图指令」（AI 引用意图真实执行，未命中才降级剥除）；②切换账号页头像按 App 槽位隔离展示（与聊天端头像同源）；③首页白纱全删（可读性交给背景图本身的明度）
 - 修改文件：src/lib/chat-rich.ts（splitImageIdRefs+教学）、src/components/apps/wechat.tsx（管线接入+输入栏重做+切换页）、src/components/apps/qq.tsx（管线接入+切换卡片）、src/components/apps/chat-settings.tsx（关系行删除）、src/components/apps/couple-space.tsx（白纱+aiLog 块删除）
+---
+Task ID: round-33
+Agent: 主协调者 (Z.ai Code)
+Task: 第三十三轮：恋人空间设置页可调「背景白纱模糊度」、切换账号界面参考图美化、微信底部输入框变小+表情图标右移对齐+顶部上移、语音气泡完全按参考图重做、时间戳边框黑色变灰色（全部）
+
+Work Log:
+- 微信底部输入栏（wechat.tsx）：①输入框上下变小——min-h-[38px]→[34px]、py-[8px]→[6px]、占位符 pt-[9px]→[6px]；②表情图标右移一点（Smile 按钮加 ml-[3px]）；③图标和输入框对齐——行容器 items-end→items-center，实测 DOM 数值：输入框/语音钮/表情/加号四者垂直中心完全相等（cy=536）；④「顶部的也往上移一点」——输入区容器 pt-2→pt-1（顶部间距上移 4px）
+- 语音气泡（voice-bubble.tsx 按参考截图整体重写）：结构只剩「时长文本 + 黑色声波图标（实心喇叭+双弧 SVG）」——删除旧版圆形播放钮、波形条、微信小尾巴；我方消息时长在左声波朝右、对方消息整只镜像（声波朝左、时长在右），与真机微信一致；微信端圆角 5px→10px、高 42px；气泡宽度随时长伸缩改为 88 基础 + 3px/秒封顶 240（5s→103px）；播放中双弧按播放进度先后点亮（opacity 0.92↔0.28 过渡），voice.wave 字段保留兼容旧数据不再上屏；QQ/信息端结构同步换新、保留各端配色与圆角
+- 时间戳边框黑→灰「所有的都变」：`border-black/25`→`border-black/15`（dark 同步 /15），覆盖 4 文件 21 处同款胶囊（wechat.tsx×6 含引用条上方系统行、qq.tsx×5、wx-group.tsx×5、qq-group.tsx×5）；信息 App chat.tsx 的 bg-black/[0.06] 同款系统胶囊 ×3 一并变灰；引用块面板（py-1/py-1.5 家族）保持原样未动
+- 恋人空间背景白纱模糊度（couple-space.tsx）：①CoupleState 新增 homeVeil（0-100，默认 0=无白纱，旧数据经 defaultState 合并自动补 0）；②新增 HomeVeil 组件——backdrop-blur(0~10px) + 白纱层 opacity(0~0.72) 双层叠加，仅在首页 tab 且 homeVeil>0 时渲染（其他 tab 固定白纱不变）；③设置页「恢复默认背景」与「解除关系」之间插入滑杆行：百分比实时显示 + 清晰↔朦胧刻度，拖动即 patch 落库（kvSetDebounced 同既有管线）
+- 切换账号页（WxAccountSwitchPage）按参考截图美化：①顶栏去居中标题、「管理」改黑色；②头部重做——新绘 WxSwitchLogoGlyph（微信双气泡+眼睛 evenodd 挖孔 SVG）替代 MessageCircle 单气泡、大标题 24px semibold、副标题删除、全宽分隔线改 190px 居中短线；③账号卡 rounded-[16px] py-[18px]、名字 17px、微信号去「微信号：」前缀直接显示 ID 13px 黑/35、当前使用文字黑/85 14px；④「添加账号」改参考图样式——白卡+虚线圆角方块（灰色 Plus）+左对齐文案；⑤「登录账号」并入同款白卡家族（虚线方块+User 图标+副文案）
+- 浏览器端到端实测（agent-browser 沙盒独立 profile，注入 凡凡(c-owner-x)+小柔(c-xiaorou) 联系人/跨天消息×4+语音×2/双账号注册表/恋人空间状态）：①微信聊天我方绿气泡「5″+声波朝右」、对方白气泡「声波朝左+8″」镜像正确，时间戳胶囊边框浅灰；②输入栏 DOM 中心对齐数值全等、输入框 34px 变小生效；③语音气泡点击 data-voice-active=true 播放态切换正常；④切换账号页=参考图布局（双气泡灰 logo+大标题+短分隔线+白卡+绿点当前使用+虚线添加卡）；⑤恋人空间设置页滑杆渲染、拖到 60% 首页背景雾化模糊+白纱效果明显、kv 落库 homeVeil:60 验证持久化；⑥console 无错误、tsc 全量零错误、eslint 改动文件零错误
+- 已推送 origin/main：6f4b9c1..e413d5c
+
+Stage Summary:
+- 关键决策：①白纱模糊度单旋钮同时控制模糊与白纱浓度（0 默认尊重第三十二轮「去白纱」结论，拉高才出现）；②语音气泡播放动画用「双弧进度点亮」替代已删除的波形条点亮的视觉角色；③切换账号页「登录账号」保留功能但并入参考图白卡视觉家族（虚线方块+图标），不为保功能破坏参考图一致性
+- 修改文件：src/components/apps/wechat.tsx（输入栏+切换账号页+logo 组件）、src/components/apps/voice-bubble.tsx（整体重写）、src/components/apps/couple-space.tsx（homeVeil+HomeVeil+设置滑杆）、src/components/apps/qq.tsx / wx-group.tsx / qq-group.tsx / chat.tsx（时间戳胶囊边框变灰）
+---
+Task ID: round-34
+Agent: 主协调者 (Z.ai Code)
+Task: 第三十四轮：语音气泡恢复原版、微信聊天页顶部再上移、底部输入栏加号表情离近+输入框右延、切换账号页删添加账号弹窗（添加账号=账号密码登录）+删登录账号卡、三端设置删「AI 主动消息」全局开关、微信主页底部 tab 上下变小
+
+Work Log:
+- voice-bubble.tsx 整体回退到第三十三轮前的版本（git show 6f4b9c1 提取）：恢复「圆形播放钮（三角/暂停）+ 随宽度伸缩的录音波形条（播放中按进度逐根点亮）+ 右侧时长 + 微信小尾巴」结构；导出接口（VoiceMsgBubble/VoiceMsgData/VoiceBubbleTheme）与现版完全一致，五个调用方（wechat/qq/chat/wx-group/qq-group）零改动兼容
+- 微信聊天页顶部再上移：顶栏容器 pt-[54px]→pt-[48px]（上移 6px，返回键/标题仍完全避开 54px 状态栏内容区不重叠，实测 computed paddingTop=48px）
+- 微信底部输入栏：①行容器 gap-2.5→gap-2——输入框右缘到表情钮间距 13px→8px，输入框自动向右延伸约 5px；②表情钮去 ml-[3px]；③加号钮 ml-1→-ml-1——表情↔加号按钮盒间距 14px→4px（实测 2px rendered ≈ 3.3px 设计值），两图标明显靠近
+- 切换账号页（WxAccountSwitchPage）：①「添加账号」弹窗（AccountAddSheet）整体删除——点击「添加账号」改为直接打开账号密码登录墙（LoginScreen，slot=null 自由登录：手机号/微信号+密码，实测打开即「手机号登录」表单）；②下方「登录账号」入口卡删除（与添加账号功能重复）；③addOpen state、AccountAddSheet import 清理（account-add-sheet.tsx 文件保留，QQ 端仍在用）
+- 「AI 主动消息」全局总开关三处全删（每角色独立的「主动发消息」入口保留）：①微信设置页 ProactiveMasterRow 卡片删除；②QQ 设置页 ProactiveMasterRow 行删除；③信息聊天设置页（chat-settings.tsx SmsSettingsPage）总开关卡删除+proactiveMasterOff state+isProactiveMasterOff/setProactiveMasterOff import 清理；weixin/qq 两端 ProactiveMsgPage import 去掉 ProactiveMasterRow
+- 微信主页底部 tab 上下变小：行高 h-[52px]→h-[46px]、四个图标 26px→23px、未读/朋友圈角标 18px→17px（偏移同步 -right-8/-top-5），底部横杠安全区 pb-16 保留；实测行高 28px rendered × (1/0.608 缩放) = 46px ✓
+- 浏览器端到端实测（agent-browser，凡凡账号登录微信 + QQ 凭据 300001234/123123 登录）：①语音气泡原版结构（圆播放钮+波形条+时长）+点击播放 data-voice-active=true；②聊天顶栏 computed pt=48px；③输入栏 smile↔plus 间距 2px rendered、input↔smile 5px rendered；④微信设置页无「AI 主动消息」文字、切换账号入口保留；⑤切换账号页账号卡×2 + 添加账号卡、无登录账号卡、点添加账号直接登录墙无弹窗；⑥QQ 设置页无总开关（消息通知→通用→隐私 无残留）；⑦信息端小助手会话设置渲染正常、sms-settings-proactive-master 不存在；⑧tsc 全量零错误、eslint 改动文件零错误
+- 备注：QQ 消息 tab 头像=closeApp（退出 QQ）为既有设计，验证时经由 联系人/动态 tab 头像进抽屉→设置
+
+Stage Summary:
+- 关键决策：①「添加账号」语义从「新建账号」改为「账号密码登录已有账号」（用户明示），账号创建统一收口在联系人 App；②总开关删除只删 UI 入口，proactive-msg 库的 masterOff 存储与 per-role 配置链路原样保留（其他入口/二级页仍读写）；③语音气泡回退用 git 历史精确还原而非手写，保证与「原来的」逐字节一致
+- 修改文件：src/components/apps/voice-bubble.tsx（回退）、src/components/apps/wechat.tsx（顶部+输入栏+切换页+设置+底部tab）、src/components/apps/qq.tsx（设置总开关+import）、src/components/apps/chat-settings.tsx（信息总开关+state+import）

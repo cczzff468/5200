@@ -224,7 +224,7 @@ import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog
 import { MomentsSettingsPage } from './moments-settings';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
-import { AccountAddSheet } from './account-add-sheet';
+// 第三十四轮：添加账号弹层（AccountAddSheet）删除——「添加账号」改为直接用账号密码登录（LoginScreen）
 import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, clearForceLoginWall, createAccount, deleteAccount, getAccounts, getActiveAccountFor, getActiveAccountIdFor, isForceLoginWallActive, markAccountLoginHistory, requestForceLoginWall, switchAccountFor, type PhoneAccount } from '@/lib/ios/accounts';
 import { loginAltSlot, loginWechat, listContacts, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
@@ -311,7 +311,7 @@ import {
   type ChatSearchItem,
   type ChatSettingsBg,
 } from './chat-settings';
-import { ProactiveMsgPage, ProactiveMasterRow } from './proactive-msg-page';
+import { ProactiveMsgPage } from './proactive-msg-page';
 import { proactiveCfgSummary, parseReminderInstruction, reminderHintHit, reminderSysHint, buildReminderSysMsg, setActiveProactiveChat } from '@/lib/ios/proactive-msg';
 import { applyWbUserBlocks, collectWbBlocks, getBoundBookIds, loadBooks, setBoundBookIds, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildBranchPromptBlock, deleteCharacterBranch, formatBranchDate, getBranchMeta } from '@/lib/ios/branch';
@@ -8401,8 +8401,9 @@ function ChatPage({
       {bg.mode !== 'default' && (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />
       )}
-      {/* 顶栏：与消息区/底部输入栏同色（微信灰，非白）；多选模式下变为「取消 + 已选计数」操作栏 */}
-      <div className="relative z-10 shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
+      {/* 顶栏：与消息区/底部输入栏同色（微信灰，非白）；多选模式下变为「取消 + 已选计数」操作栏
+          第三十四轮：pt-54→pt-48（顶部再往上移一点，仍避开 54px 状态栏内容区不重叠） */}
+      <div className="relative z-10 shrink-0 bg-[#EDEDED] pt-[48px] dark:bg-[#111111]">
         {selectMode ? (
           fwdFlow === 'choose' ? (
             /* 转发勾选模式顶栏（对照原生微信多选转发：取消 + 已选择计数 + 搜索） */
@@ -9178,9 +9179,10 @@ function ChatPage({
             </div>
           </div>
         )}
-        {/* 第三十三轮：pt-2→pt-1（顶部上移一点）；items-end→items-center（图标和输入框对齐） */}
+        {/* 第三十三轮：pt-2→pt-1（顶部上移一点）；items-end→items-center（图标和输入框对齐）
+            第三十四轮：gap-2.5→gap-2（输入框往右延伸） */}
         <div className="px-2.5 pb-[18px] pt-1">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
             <button
               type="button"
               aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
@@ -9267,7 +9269,7 @@ function ChatPage({
                 setPlusOpen(false);
                 setStickerOpen((v) => !v);
               }}
-              className={`ml-[3px] flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
+              className={`flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
             >
               <Smile className="h-[25px] w-[25px]" strokeWidth={2} />
             </button>
@@ -9295,7 +9297,7 @@ function ChatPage({
                   setStickerOpen(false);
                   setPlusOpen((v) => !v);
                 }}
-                className="ml-1 flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60"
+                className="-ml-1 flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60"
               >
                 <CirclePlus className={`h-[28px] w-[28px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.8} />
               </button>
@@ -12549,10 +12551,7 @@ function WxSettingsPage({
             </button>
           ))}
         </div>
-        {/* AI 主动消息总开关（Task 51 B2：一键暂停/恢复所有角色的主动发消息） */}
-        <div className="mt-4 overflow-hidden rounded-[10px] bg-white dark:bg-[#1A1A1A]">
-          <ProactiveMasterRow accent="#07C160" testId="wx-settings-proactive-master" className="px-4 py-3" />
-        </div>
+        {/* 第三十四轮：「AI 主动消息」全局总开关删除（每角色独立设置入口保留在聊天设置里） */}
         {/* 切换账号：独立卡片行（设置列表外，退出登录上方；用户要求对照截图样式） */}
         <button
           type="button"
@@ -12659,10 +12658,9 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
     window.addEventListener(ACCOUNT_CHANGED_EVENT, fn);
     return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, fn);
   }, []);
-  /** 「登录小号」自由登录墙（覆盖全页；slot=null 不绑定槽位，用任意小号账密登录） */
+  /** 「登录小号」自由登录墙（覆盖全页；slot=null 不绑定槽位，用任意小号账密登录）
+   *  第三十四轮：「添加账号」也走这里——不再有新建账号弹层，添加账号 = 用账号密码登录 */
   const [loginOpen, setLoginOpen] = useState(false);
-  /** 「添加账号」弹层（新建大号/小号，创建后直接登录进入） */
-  const [addOpen, setAddOpen] = useState(false);
   /** 大号机主资料（跨账号直读大号库；不能用 me——小号视角下 me 是小号身份，Task 40-F 修正） */
   const [mainOwner, setMainOwner] = useState<{ name: string; wechatId: string; avatar: string | null } | null>(null);
   useEffect(() => {
@@ -12812,12 +12810,12 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
             );
           })}
 
-          {/* 添加账号（新建大号/小号，创建后直接登录进入；弹层见下）：第三十三轮对照参考图——
-              白卡 + 虚线圆角方块（灰色加号） + 左对齐文案，与账号卡同一视觉家族 */}
+          {/* 添加账号（第三十四轮：弹层删除，点击直接打开账号密码登录墙；账号在联系人 App 创建，
+              登录成功后出现在上面的列表）：保留参考图白卡 + 虚线圆角方块样式 */}
           <button
             type="button"
             data-testid="wx-account-add"
-            onClick={() => setAddOpen(true)}
+            onClick={() => setLoginOpen(true)}
             className="flex h-[76px] w-full items-center gap-3.5 rounded-[16px] bg-white px-4 text-left active:bg-black/[0.04] dark:bg-[#1A1A1A]"
           >
             <span
@@ -12829,51 +12827,11 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
             <span className="text-[15.5px] text-black/80 dark:text-white/80">添加账号</span>
           </button>
 
-          {/* 登录账号入口（第三十二轮改文案：不再分大小号，统称「登录账号」）：账号统一在联系人 App 创建；
-              登录成功后出现在上面的列表，登录过的账号切换不再需要登录。样式与「添加账号」同一家族 */}
-          <button
-            type="button"
-            data-testid="wx-account-login-alt"
-            onClick={() => setLoginOpen(true)}
-            className="flex h-[76px] w-full items-center gap-3.5 rounded-[16px] bg-white px-4 text-left active:bg-black/[0.04] dark:bg-[#1A1A1A]"
-          >
-            <span
-              className="grid h-[48px] w-[48px] shrink-0 place-items-center rounded-[10px] border-[1.5px] border-dashed border-black/20 text-black/35 dark:border-white/25 dark:text-white/35"
-              aria-hidden="true"
-            >
-              <User className="h-[20px] w-[20px]" strokeWidth={1.6} />
-            </span>
-            <span className="min-w-0">
-              <span className="block text-[15.5px] text-black/80 dark:text-white/80">登录账号</span>
-              <span className="mt-0.5 block truncate text-[11.5px] text-black/30 dark:text-white/30">用账号密码登录后出现在上面的列表</span>
-            </span>
-          </button>
+          {/* 第三十四轮：「登录账号」入口卡删除——「添加账号」本身就是账号密码登录，不再重复 */}
         </div>
       </div>
 
-      {/* 添加账号：新建大号/小号（注册表账号 + 档案联系人由弹层创建）→
-          组装 WxUser 走 onLoginOther（根组件 handleLogin：切作用域 + 会话 + 登录历史 + 回主界面） */}
-      {addOpen && (
-        <AccountAddSheet
-          onClose={() => setAddOpen(false)}
-          onCreated={(acc, rec) => {
-            setAddOpen(false);
-            onLoginOther({
-              id: rec.id,
-              name: displayNameOf(rec),
-              realName: rec.name,
-              nickname: rec.nickname ?? null,
-              avatar: rec.avatar,
-              wechatId: rec.wechatId,
-              phone: rec.phone,
-              qqId: rec.qqId,
-              altOf: acc.id,
-            });
-          }}
-        />
-      )}
-
-      {/* 登录小号：自由登录墙覆盖层（slot=null 不绑定槽位；返回关闭不退出微信） */}
+      {/* 登录小号：自由登录墙覆盖层（slot=null 不绑定槽位；返回关闭不退出微信）；「添加账号」同用此登录墙 */}
       {loginOpen && (
         <div className="absolute inset-0 z-30">
           <LoginScreen
@@ -15261,15 +15219,15 @@ function MainScreen({
         )}
       </div>
 
-      {/* 底部 TabBar（上移预留底部横杠安全区） */}
+      {/* 底部 TabBar（上移预留底部横杠安全区）；第三十四轮：上下变小 h-52→46、图标 26→23 */}
       <div className="shrink-0 border-t border-black/10 bg-[#F7F7F7] pb-[16px] dark:border-white/10 dark:bg-[#1A1A1A]">
-        <div className="flex h-[52px] items-stretch">
+        <div className="flex h-[46px] items-stretch">
           {(
             [
-              ['chats', '微信', <MessageCircle key="i" className="h-[26px] w-[26px]" strokeWidth={1.8} />, true],
-              ['contacts', '通讯录', <Users key="i" className="h-[26px] w-[26px]" strokeWidth={1.8} />, false],
-              ['discover', '发现', <Compass key="i" className="h-[26px] w-[26px]" strokeWidth={1.8} />, false],
-              ['me', '我', <User key="i" className="h-[26px] w-[26px]" strokeWidth={1.8} />, false],
+              ['chats', '微信', <MessageCircle key="i" className="h-[23px] w-[23px]" strokeWidth={1.8} />, true],
+              ['contacts', '通讯录', <Users key="i" className="h-[23px] w-[23px]" strokeWidth={1.8} />, false],
+              ['discover', '发现', <Compass key="i" className="h-[23px] w-[23px]" strokeWidth={1.8} />, false],
+              ['me', '我', <User key="i" className="h-[23px] w-[23px]" strokeWidth={1.8} />, false],
             ] as Array<[Tab, string, React.ReactNode, boolean]>
           ).map(([id, label, icon, fillActive]) => {
             const active = tab === id;
@@ -15290,7 +15248,7 @@ function MainScreen({
                     <span
                       data-testid="wx-tab-badge-chats"
                       aria-label={`${totalUnread} 条未读`}
-                      className="absolute -right-[9px] -top-[6px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[10.5px] font-semibold leading-none text-white ring-2 ring-[#F7F7F7] dark:ring-[#1A1A1A]"
+                      className="absolute -right-[8px] -top-[5px] flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[10px] font-semibold leading-none text-white ring-2 ring-[#F7F7F7] dark:ring-[#1A1A1A]"
                     >
                       {totalUnread > 99 ? '99+' : totalUnread}
                     </span>
@@ -15299,7 +15257,7 @@ function MainScreen({
                     <span
                       data-testid="wx-tab-badge-discover"
                       aria-label={`朋友圈 ${wxNoticeBadge.count} 条新消息`}
-                      className="absolute -right-[9px] -top-[6px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[10.5px] font-semibold leading-none text-white ring-2 ring-[#F7F7F7] dark:ring-[#1A1A1A]"
+                      className="absolute -right-[8px] -top-[5px] flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-[#FA5151] px-[4px] text-[10px] font-semibold leading-none text-white ring-2 ring-[#F7F7F7] dark:ring-[#1A1A1A]"
                     >
                       {wxNoticeBadge.count > 99 ? '99+' : wxNoticeBadge.count}
                     </span>
