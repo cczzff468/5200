@@ -2897,13 +2897,13 @@ function ProxySheet({
 
   const platName = plat === 'wx' ? '微信' : 'QQ';
   const Radio = ({ on }: { on: boolean }) => (
-    <span className={`grid h-[21px] w-[21px] shrink-0 place-items-center rounded-full ${on ? 'bg-[#FFC300]' : 'border-[1.5px] border-black/15'}`}>
-      {on && <Check className="h-3.5 w-3.5 text-black/80" strokeWidth={3.2} />}
+    <span className={`grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full border-2 ${on ? 'border-[#FFC300] bg-[#FFC300]' : 'border-black/20'}`}>
+      {on && <Check className="h-3 w-3 text-black/75" strokeWidth={3.4} />}
     </span>
   );
   return (
     <motion.div
-      className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/60"
+      className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/45"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -2911,53 +2911,40 @@ function ProxySheet({
       onClick={onClose}
     >
       <motion.div
-        className="max-h-[82%] overflow-hidden rounded-t-2xl bg-white pb-[max(14px,env(safe-area-inset-bottom))]"
+        className="max-h-[82%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 shadow-2xl"
         initial={{ y: 260 }}
         animate={{ y: 0 }}
         exit={{ y: 260 }}
         transition={{ type: 'spring', damping: 30, stiffness: 320 }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* 标题栏 */}
-        <div className="relative grid h-[54px] shrink-0 place-items-center">
-          {step === 'contact' && (
-            <button type="button" aria-label="返回" onClick={onBack} className="absolute left-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
-              <ChevronLeft className="h-[22px] w-[22px] text-black/80" />
-            </button>
-          )}
-          <p className="text-[16px] font-bold text-black/90">{step === 'plat' ? '找人代付' : `选择${platName}好友`}</p>
-          <button type="button" aria-label="关闭" onClick={onClose} className="absolute right-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
-            <X className="h-[20px] w-[20px] text-black/55" />
-          </button>
-        </div>
-        <p className="px-5 pb-2.5 text-[11.5px] leading-relaxed text-black/40">
+        {/* 拖拽条 + 左对齐标题/副标题（与恋人空间邀请弹层同款结构） */}
+        <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
+        <div className="mt-3 text-[17px] font-bold text-[#26262b]">{step === 'contact' && plat ? `选择${platName}好友` : '找人代付'}</div>
+        <p className="mt-1 text-[12.5px] leading-relaxed text-[#9a9aa2]">
           {step === 'plat' ? '把订单发给好友，TA付款后订单自动完成；15分钟内未付款订单自动取消' : `从${platName}好友里选一位帮忙支付本单`}
         </p>
 
         {step === 'plat' ? (
-          <div className="px-4">
+          <div className="mt-4 grid grid-cols-2 gap-2">
             {([
-              ['wx', '/icons/wechat.png', '微信好友', '发给微信里的好友代付'],
-              ['qq', '/icons/qq.png', 'QQ好友', '发给QQ里的好友代付'],
-            ] as ['wx' | 'qq', string, string, string][]).map(([v, img, name, sub]) => (
+              ['wx', '/icons/wechat.png', '通过微信发送'],
+              ['qq', '/icons/qq.png', '通过QQ发送'],
+            ] as ['wx' | 'qq', string, string][]).map(([v, img, name]) => (
               <button
                 key={v}
                 type="button"
                 data-testid={`proxy-plat-${v}`}
                 onClick={() => onPickPlat(v)}
-                className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3.5 text-left first:border-t-0 active:opacity-80"
+                className="flex h-14 items-center justify-center gap-2 rounded-xl bg-[#f6f6f8] text-[14px] font-medium text-[#3a3a40] transition-colors active:bg-[#eeeef0]"
               >
-                <img src={img} alt="" className="h-[38px] w-[38px] shrink-0 rounded-[9px]" />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-medium text-black/85">{name}</span>
-                  <span className="block text-[11px] text-black/40">{sub}</span>
-                </span>
-                <Radio on={plat === v} />
+                <img src={img} alt="" className="h-6 w-6 rounded-md object-cover" />
+                {name}
               </button>
             ))}
           </div>
         ) : (
-          <div className="max-h-[48vh] overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="mt-4 max-h-[44vh] space-y-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {friends === null ? (
               <p className="py-8 text-center text-[12px] text-black/35">正在获取好友列表…</p>
             ) : friends.length === 0 ? (
@@ -2972,7 +2959,7 @@ function ProxySheet({
                   type="button"
                   data-testid={`proxy-contact-${c.id}`}
                   onClick={() => onPickContact(c.id)}
-                  className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3 text-left first:border-t-0 active:opacity-80"
+                  className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors ${contactId === c.id ? 'bg-[#FFF8DF]' : 'active:bg-[#f6f6f8]'}`}
                 >
                   {avatarFor(c, plat ?? 'wx') ? (
                     <img src={avatarFor(c, plat ?? 'wx') ?? ''} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
@@ -2982,7 +2969,7 @@ function ProxySheet({
                     </span>
                   )}
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[15px] text-black/85">{displayNameOf(c)}</span>
+                    <span className="block truncate text-[14.5px] text-[#26262b]">{displayNameOf(c)}</span>
                     {c.relation && <span className="block text-[11px] text-black/40">{c.relation}</span>}
                   </span>
                   <Radio on={contactId === c.id} />
@@ -2993,13 +2980,23 @@ function ProxySheet({
         )}
 
         {/* 底部按钮 */}
-        <div className="px-4 pt-3">
+        <div className="mt-4 flex gap-3">
+          {step === 'contact' && (
+            <button
+              type="button"
+              aria-label="返回上一步"
+              onClick={onBack}
+              className="h-12 w-[86px] shrink-0 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62] active:bg-[#e8e8ec]"
+            >
+              上一步
+            </button>
+          )}
           {step === 'plat' ? (
             <button
               type="button"
               disabled={!plat}
               onClick={() => plat && onPickPlat(plat)}
-              className={`h-[48px] w-full rounded-full text-[16px] font-semibold ${plat ? 'bg-[#FFD100] text-black/90 active:opacity-85' : 'bg-[#F6EC9F] text-black/40'}`}
+              className={`h-12 flex-1 rounded-2xl text-[15.5px] font-semibold ${plat ? 'bg-[linear-gradient(135deg,#ffd100,#ffb62e)] text-black/85 shadow-[0_5px_14px_rgba(255,182,46,0.35)] active:opacity-85' : 'bg-[#f6ec9f] text-black/40'}`}
             >
               下一步
             </button>
@@ -3009,7 +3006,7 @@ function ProxySheet({
               data-testid="proxy-send"
               disabled={!contactId || sending}
               onClick={onSend}
-              className={`h-[48px] w-full rounded-full text-[16px] font-semibold ${contactId && !sending ? 'bg-gradient-to-r from-[#FFC300] to-[#FF9500] text-white active:opacity-85' : 'bg-[#F6EC9F] text-black/40'}`}
+              className={`h-12 flex-1 rounded-2xl text-[15.5px] font-semibold ${contactId && !sending ? 'bg-[linear-gradient(135deg,#ffd100,#ffb62e)] text-black/85 shadow-[0_5px_14px_rgba(255,182,46,0.35)] active:opacity-85' : 'bg-[#f6ec9f] text-black/40'}`}
             >
               {sending ? '正在发送…' : '发送代付请求'}
             </button>
@@ -3084,13 +3081,13 @@ function ShareSheet({
 
   const platName = plat === 'wx' ? '微信' : 'QQ';
   const Radio = ({ on }: { on: boolean }) => (
-    <span className={`grid h-[21px] w-[21px] shrink-0 place-items-center rounded-full ${on ? 'bg-[#FFC300]' : 'border-[1.5px] border-black/15'}`}>
-      {on && <Check className="h-3.5 w-3.5 text-black/80" strokeWidth={3.2} />}
+    <span className={`grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full border-2 ${on ? 'border-[#FFC300] bg-[#FFC300]' : 'border-black/20'}`}>
+      {on && <Check className="h-3 w-3 text-black/75" strokeWidth={3.4} />}
     </span>
   );
   return (
     <motion.div
-      className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/60"
+      className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/45"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -3098,53 +3095,40 @@ function ShareSheet({
       onClick={onClose}
     >
       <motion.div
-        className="max-h-[82%] overflow-hidden rounded-t-2xl bg-white pb-[max(14px,env(safe-area-inset-bottom))]"
+        className="max-h-[82%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 shadow-2xl"
         initial={{ y: 260 }}
         animate={{ y: 0 }}
         exit={{ y: 260 }}
         transition={{ type: 'spring', damping: 30, stiffness: 320 }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* 标题栏 */}
-        <div className="relative grid h-[54px] shrink-0 place-items-center">
-          {step === 'contact' && (
-            <button type="button" aria-label="返回" onClick={onBack} className="absolute left-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
-              <ChevronLeft className="h-[22px] w-[22px] text-black/80" />
-            </button>
-          )}
-          <p className="text-[16px] font-bold text-black/90">{step === 'plat' ? '分享订单' : `分享到${platName}`}</p>
-          <button type="button" aria-label="关闭" onClick={onClose} className="absolute right-2 grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
-            <X className="h-[20px] w-[20px] text-black/55" />
-          </button>
-        </div>
-        <p className="px-5 pb-2.5 text-[11.5px] leading-relaxed text-black/40">
+        {/* 拖拽条 + 左对齐标题/副标题（与恋人空间邀请弹层同款结构） */}
+        <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
+        <div className="mt-3 text-[17px] font-bold text-[#26262b]">{step === 'contact' && plat ? `分享到${platName}` : step === 'plat' ? '分享订单' : ''}</div>
+        <p className="mt-1 text-[12.5px] leading-relaxed text-[#9a9aa2]">
           {step === 'plat' ? '把订单动态卡片发给好友，买的什么、金额、配送状态都会实时同步' : `从${platName}好友里选一位分享本单动态`}
         </p>
 
         {step === 'plat' ? (
-          <div className="px-4">
+          <div className="mt-4 grid grid-cols-2 gap-2">
             {([
-              ['wx', '/icons/wechat.png', '微信好友', '发给微信里的好友看订单动态'],
-              ['qq', '/icons/qq.png', 'QQ好友', '发给QQ里的好友看订单动态'],
-            ] as ['wx' | 'qq', string, string, string][]).map(([v, img, name, sub]) => (
+              ['wx', '/icons/wechat.png', '通过微信发送'],
+              ['qq', '/icons/qq.png', '通过QQ发送'],
+            ] as ['wx' | 'qq', string, string][]).map(([v, img, name]) => (
               <button
                 key={v}
                 type="button"
                 data-testid={`share-plat-${v}`}
                 onClick={() => onPickPlat(v)}
-                className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3.5 text-left first:border-t-0 active:opacity-80"
+                className="flex h-14 items-center justify-center gap-2 rounded-xl bg-[#f6f6f8] text-[14px] font-medium text-[#3a3a40] transition-colors active:bg-[#eeeef0]"
               >
-                <img src={img} alt="" className="h-[38px] w-[38px] shrink-0 rounded-[9px]" />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-medium text-black/85">{name}</span>
-                  <span className="block text-[11px] text-black/40">{sub}</span>
-                </span>
-                <Radio on={plat === v} />
+                <img src={img} alt="" className="h-6 w-6 rounded-md object-cover" />
+                {name}
               </button>
             ))}
           </div>
         ) : (
-          <div className="max-h-[48vh] overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="mt-4 max-h-[44vh] space-y-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {friends === null ? (
               <p className="py-8 text-center text-[12px] text-black/35">正在获取好友列表…</p>
             ) : friends.length === 0 ? (
@@ -3159,7 +3143,7 @@ function ShareSheet({
                   type="button"
                   data-testid={`share-contact-${c.id}`}
                   onClick={() => onPickContact(c.id)}
-                  className="flex w-full items-center gap-3 border-t border-black/[0.05] py-3 text-left first:border-t-0 active:opacity-80"
+                  className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors ${contactId === c.id ? 'bg-[#FFF8DF]' : 'active:bg-[#f6f6f8]'}`}
                 >
                   {avatarFor(c, plat ?? 'wx') ? (
                     <img src={avatarFor(c, plat ?? 'wx') ?? ''} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
@@ -3169,7 +3153,7 @@ function ShareSheet({
                     </span>
                   )}
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[15px] text-black/85">{displayNameOf(c)}</span>
+                    <span className="block truncate text-[14.5px] text-[#26262b]">{displayNameOf(c)}</span>
                     {c.relation && <span className="block text-[11px] text-black/40">{c.relation}</span>}
                   </span>
                   <Radio on={contactId === c.id} />
@@ -3180,13 +3164,23 @@ function ShareSheet({
         )}
 
         {/* 底部按钮 */}
-        <div className="px-4 pt-3">
+        <div className="mt-4 flex gap-3">
+          {step === 'contact' && (
+            <button
+              type="button"
+              aria-label="返回上一步"
+              onClick={onBack}
+              className="h-12 w-[86px] shrink-0 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62] active:bg-[#e8e8ec]"
+            >
+              上一步
+            </button>
+          )}
           {step === 'plat' ? (
             <button
               type="button"
               disabled={!plat}
               onClick={() => plat && onPickPlat(plat)}
-              className={`h-[48px] w-full rounded-full text-[16px] font-semibold ${plat ? 'bg-[#FFD100] text-black/90 active:opacity-85' : 'bg-[#F6EC9F] text-black/40'}`}
+              className={`h-12 flex-1 rounded-2xl text-[15.5px] font-semibold ${plat ? 'bg-[linear-gradient(135deg,#ffd100,#ffb62e)] text-black/85 shadow-[0_5px_14px_rgba(255,182,46,0.35)] active:opacity-85' : 'bg-[#f6ec9f] text-black/40'}`}
             >
               下一步
             </button>
@@ -3196,7 +3190,7 @@ function ShareSheet({
               data-testid="share-send"
               disabled={!contactId || sending}
               onClick={onSend}
-              className={`h-[48px] w-full rounded-full text-[16px] font-semibold ${contactId && !sending ? 'bg-gradient-to-r from-[#FFC300] to-[#FF9500] text-white active:opacity-85' : 'bg-[#F6EC9F] text-black/40'}`}
+              className={`h-12 flex-1 rounded-2xl text-[15.5px] font-semibold ${contactId && !sending ? 'bg-[linear-gradient(135deg,#ffd100,#ffb62e)] text-black/85 shadow-[0_5px_14px_rgba(255,182,46,0.35)] active:opacity-85' : 'bg-[#f6ec9f] text-black/40'}`}
             >
               {sending ? '正在发送…' : '分享给TA'}
             </button>

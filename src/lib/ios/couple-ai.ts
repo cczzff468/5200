@@ -512,6 +512,16 @@ export function scheduleAiReply(key: string, delayMin = 2600, delayMax = 6500): 
         const c = { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key, from: 'ta', text, at: Date.now() };
         writeSnap((s) => ({ ...s, comments: [...((s.comments as CoupleSnap['comments']) ?? []), c] }));
         coupleRemember(target.contactId, target.channel, `${ta}在${sceneOfKey(key, snap)}里回复${me}：${cut(text, 40)}`);
+        // 第二十六轮：轨迹聊天里 TA 说了「正在做的事」→ 延时生成一条与之呼应的动态记录（封顶在消息之前，像真的留下痕迹）
+        if (key === 'trail' && Math.random() < 0.6) {
+          window.setTimeout(() => {
+            try {
+              aiTrailFeed({ mode: 'now', hint: text });
+            } catch {
+              /* 静默 */
+            }
+          }, 1600 + Math.random() * 2400);
+        }
       } catch {
         /* AI 回复失败静默 */
       }
@@ -797,15 +807,50 @@ export function trailSortMs(dateKey: string, t: string): number {
   return d.getTime();
 }
 
+/** 毫秒 → 'HH:MM' */
+function msToHM(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * 第二十六轮：某天「位置与轨迹」聊天里我最早一条消息的时间戳。
+ * 记录的硬封顶依据——动态记录是「历史」，绝不允许生成/排在用户已发的消息下面
+ * （用户原话：我发的信息应该在下面，上面为什么有记录往下压）。
+ */
+function firstTrailMsgMsOn(dateKey: string): number | null {
+  const snap = readSnap();
+  if (!snap) return null;
+  let min: number | null = null;
+  for (const c of (snap.comments ?? []).filter((c) => c.key === 'trail' && c.from !== 'ta')) {
+    const d = new Date(c.at);
+    const dk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    if (dk === dateKey && (min === null || c.at < min)) min = c.at;
+  }
+  return min;
+}
+
+/** 第二十六轮：轨迹聊天最近几轮对话块（记录生成要贴着「他说的话」来，像同一个人的一天） */
+function trailTalkBlock(me: string, ta: string): string {
+  const snap = readSnap();
+  const list = snap ? (snap.comments ?? []).filter((c) => c.key === 'trail').slice(-8) : [];
+  if (list.length === 0) return '';
+  return list.map((c) => `${c.from === 'ta' ? ta : me}：${cut(c.text, 40)}`).join('；');
+}
+
 const TRAIL_KINDS = ['unlock', 'screen', 'app', 'call', 'chargeOn', 'chargeOff', 'leave', 'arrive', 'offcar', 'walkplay', 'stay'];
 
 /**
  * 生成「位置与轨迹」时间线记录（第二十一轮需求：AI 按人设+记忆+上下文+真实时间生成）：
  * - mode='day'：为指定日期生成一整天 8~12 条记录（该天已生成过则跳过）；
- * - mode='now'：生成 1 条「刚刚」的记录（发消息期间/手动刷新时调用）。
+ * - mode='now'：生成 1 条「刚刚」的记录（手动刷新/TA 刚在轨迹聊天里说过话时调用，hint = TA 刚说的话）。
  * 记录句式严格按用户给的模板：手机使用类用「对方…」口径，位置类用「我…」口径。
+ * 第二十六轮：
+ * - 时间硬封顶 capHM——记录是「历史」，当天用户发过消息就绝不允许记录的时间晚于第一条消息
+ *   （否则记录会把用户发的消息压到上面，用户点名这个问题两次）；
+ * - 记录内容必须贴着 TA 在轨迹聊天里说过的话 + 人设记忆上下文生成（TA 说在吃早餐 → 就有到达早餐店的记录）。
  */
-export function aiTrailFeed(opts: { mode: 'day'; dateKey: string; daysAgo?: number } | { mode: 'now' }): void {
+export function aiTrailFeed(opts: { mode: 'day'; dateKey: string; daysAgo?: number } | { mode: 'now'; hint?: string }): void {
   const snap = readSnap();
   if (!snap) return;
   const target = aiTarget();
@@ -826,7 +871,13 @@ export function aiTrailFeed(opts: { mode: 'day'; dateKey: string; daysAgo?: numb
       const myCity = cur2.myLoc?.name ?? '';
       const taCity = cur2.taLoc?.name ?? '';
       const nowD = new Date();
+      const nowMs = Date.now();
       const nowHM = `${String(nowD.getHours()).padStart(2, '0')}:${String(nowD.getMinutes()).padStart(2, '0')}`;
+      // 第二十六轮：时间硬封顶——当天用户发过轨迹消息 → 记录时间最晚到第一条消息前 30 秒；没发过 → 今天到当前时间前 1 分钟
+      const firstMsgMs = firstTrailMsgMsOn(mode === 'day' ? opts.dateKey : todayKey());
+      const capMs = firstMsgMs != null ? firstMsgMs - 30000 : nowMs - 60000;
+      const capHM = msToHM(Math.max(capMs, 0));
+      const talk = trailTalkBlock(me, ta);
       const rules = `记录句式（必须严格套用这些句式，不许自创口径）：
 - 对方还没入睡，刚刚解锁了手机（kind=unlock，只出现在深夜/凌晨的时段）
 - 对方手机屏幕使用X小时了（kind=screen，X 为 1/2/3/5 这类整数）
@@ -839,26 +890,29 @@ export function aiTrailFeed(opts: { mode: 'day'; dateKey: string; daysAgo?: numb
 - 我下车了（kind=offcar）
 - 对方正在边走边玩手机（kind=walkplay）
 - 对方在某地点停留（kind=stay）`;
+      const talkLine = talk ? `\n【你们最近在轨迹聊天里说过的话（记录必须和这些话对得上，像同一个人真实的一天）】\n${cut(talk, 260)}` : '';
       let user: string;
       if (mode === 'day') {
         const d = new Date(`${opts.dateKey}T12:00:00`);
         const dow = `周${['日', '一', '二', '三', '四', '五', '六'][d.getDay()]}`;
         const isToday = (opts.daysAgo ?? 0) === 0;
-        const dayDesc = isToday ? `今天（${opts.dateKey} ${dow}，现在是 ${nowHM}）` : `${opts.dateKey} ${dow}（${opts.daysAgo} 天前）`;
+        const dayDesc = isToday ? `今天（${opts.dateKey} ${dow}）` : `${opts.dateKey} ${dow}（${opts.daysAgo} 天前）`;
         user = `请为「位置与轨迹」页面生成${dayDesc}一整天的动态记录时间线，8~12 条、按时间先后（早上→夜里）排列。
-${rules}
+${rules}${talkLine}
 地点要求：我（${me}）的位置动态${myCity ? `都发生在「${myCity}」` : '用真实感的地名'}（小区/公司/学校/商场/餐厅/街道，可以具体到店名）；对方的地点${taCity ? `在「${taCity}」` : ''}贴合 TA 的日常活动范围。
 硬性要求：
-1）${isToday ? `所有时间必须早于等于 ${nowHM}，绝不能出现未来时间；` : '全天时间自然分布（早上/中午/下午/晚上都要有）；'}
-2）记录必须贴合${ta}的人设、职业与作息习惯${chatCtx ? '，可以呼应你们最近聊过的事' : ''}，要合理、像真的；
-3）充电记录要成对出现（先 chargeOn 后 chargeOff，数值递增）；unlock 只出现在 23 点后或 7 点前；
-4）每条写一句 ≤28 字的 detail（点击「查看记录」时看到的场景细节）。
+1）所有时间必须早于等于 ${capHM}，绝不能出现更晚的时间（那是聊天开始之后，不会再有历史记录）；
+2）记录必须贴合${ta}的人设、职业与作息习惯${chatCtx ? '，可以呼应你们最近聊过的事' : ''}，要合理、像真的；${talk ? `\n3）如果 TA 在轨迹聊天里说过自己在做什么/去过哪，必须有一条记录与那句话对应（比如 TA 说在吃早餐，就要有「我到了××早餐店」这类记录，时间在那句话之前）；` : ''}
+4）充电记录要成对出现（先 chargeOn 后 chargeOff，数值递增）；unlock 只出现在 23 点后或 7 点前；
+5）每条写一句 ≤28 字的 detail（点击「查看记录」时看到的场景细节）。
 输出 JSON：{"records":[{"t":"09:30","kind":"app","text":"对方打开了微信23次","detail":"补充细节"}]}。只输出 JSON。`;
       } else {
-        user = `请为「位置与轨迹」页面生成 1 条「刚刚」发生的动态记录（t 固定为 "${nowHM}"）。
-${rules}
-选当下时间点（${nowHM}）最合理的那类动态，贴合${ta}的人设与作息${chatCtx ? '，可以呼应你们刚聊到的内容' : ''}；detail ≤28 字。
-输出 JSON：{"records":[{"t":"${nowHM}","kind":"…","text":"…","detail":"…"}]}。只输出 JSON。`;
+        const hint = 'hint' in opts && opts.hint ? opts.hint : '';
+        user = `请为「位置与轨迹」页面生成 1 条动态记录。
+${rules}${talkLine}
+时间固定为 "${capHM}"（这是历史时刻，不许改）。
+选这个时间点最合理的动态，必须贴合${ta}的人设与作息${hint ? `，并且要和 TA 刚说过的这句话对得上：「${cut(hint, 60)}」（TA 说了什么正在做的事，就生成对应的到达/停留/使用记录，时间就在那句话之前）` : talk ? '，并呼应你们在轨迹聊天里聊过的内容' : ''}；detail ≤28 字。
+输出 JSON：{"records":[{"t":"${capHM}","kind":"…","text":"…","detail":"…"}]}。只输出 JSON。`;
       }
       const sys = `${llmSystem(p, me, cur2)}${taCity ? `\n（${ta}现在在${taCity}）` : ''}${myCity ? `\n（${me}现在在${myCity}）` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : ''}`;
       const raw = await llmUserFirst(sys, user, 0.95);
@@ -876,16 +930,15 @@ ${rules}
         }));
       if (recs.length === 0) return;
       if (mode === 'day') {
-        // 第二十五轮：按时间先后排好 → 未来的时间丢弃（今天的记录绝不能出现还没到点的时刻）
+        // 按时间先后排好 → 晚于封顶时间的一律丢弃（记录绝不压到用户消息下面，也绝无未来时间）
         recs.sort((a, b) => {
           const ma = trailSortMs(a.dateKey, a.t);
           const mb = trailSortMs(b.dateKey, b.t);
           return (Number.isNaN(ma) ? 0 : ma) - (Number.isNaN(mb) ? 0 : mb);
         });
-        const nowMs = Date.now();
         const valid = recs.filter((r) => {
           const ms = trailSortMs(r.dateKey, r.t);
-          return !Number.isNaN(ms) && ms <= nowMs + 60000;
+          return !Number.isNaN(ms) && ms <= capMs + 60000;
         });
         if (valid.length === 0) return;
         // 渐进揭示：一条条跟着真实时间出现（今天 1.2~1.9s 一条；更早的天快速连播 0.45~0.8s）
@@ -901,19 +954,18 @@ ${rules}
         });
         logAi(`${ta}的轨迹记录更新了（${valid.length} 条将依次出现）`);
       } else {
-        // 「刚刚」记录：排序时间=落库时刻（一定排在我刚发的消息后面），立即可见
-        const nowMs = Date.now();
-        const nowHM2 = `${String(new Date(nowMs).getHours()).padStart(2, '0')}:${String(new Date(nowMs).getMinutes()).padStart(2, '0')}`;
+        // 第二十六轮：「刚刚」记录也封顶在第一条消息之前（记录是历史，永远排在用户消息上面）
         for (const r of recs) {
-          r.t = nowHM2;
-          r.sortAt = nowMs;
+          const capped = Math.min(nowMs - 15000, capMs);
+          r.t = msToHM(Math.max(capped, 0));
+          r.sortAt = Number.isNaN(trailSortMs(r.dateKey, r.t)) ? capped : trailSortMs(r.dateKey, r.t);
           r.revealAt = nowMs;
         }
         writeSnap((s) => {
           const feed = Array.isArray(s.trailFeed) ? (s.trailFeed as CoupleTrailRec[]) : [];
           return { ...s, trailFeed: [...feed, ...recs].slice(-260) };
         });
-        logAi(`轨迹新增一条刚刚的记录`);
+        logAi(`轨迹新增一条记录（呼应 TA 刚说的话）`);
       }
     } catch {
       /* 静默 */

@@ -1396,7 +1396,7 @@ export default function CoupleSpaceApp() {
                     onClick={() => setPickChannel(ch)}
                     className={`h-11 rounded-xl text-[14px] font-medium transition-colors ${
                       pickChannel === ch
-                        ? 'bg-[linear-gradient(135deg,#6a6a72,#45454c)] text-white shadow-[0_4px_12px_rgba(60,60,68,0.25)]'
+                        ? 'bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-white shadow-[0_4px_12px_rgba(242,83,106,0.30)]'
                         : 'bg-[#f3f3f5] text-[#4a4a52] active:bg-[#ececef]'
                     }`}
                   >
@@ -2304,7 +2304,7 @@ function CommentThread({
           onClick={send}
           disabled={!text.trim()}
           aria-label="发送留言"
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#2c2c30] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-[#e9e9ee] transition-transform active:scale-95 disabled:opacity-40"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-white shadow-[0_3px_10px_rgba(242,83,106,0.30)] transition-transform active:scale-95 disabled:opacity-40"
         >
           <ArrowUp className="h-5 w-5" strokeWidth={2.4} />
         </button>
@@ -3304,16 +3304,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
     patch({ comments: [...state.comments, c], trailChatsAt: Date.now() });
     setTrailDraft('');
     scheduleAiReply('trail'); // TA 按人设记忆+上下文回复，并写进 AI 记忆（couple-ai 内部闭环）
-    // 第二十一轮：发信息期间也会继续生成记录（概率延时 1 条「刚刚」的动态）
-    if (Math.random() < 0.6) {
-      window.setTimeout(() => {
-        try {
-          aiTrailFeed({ mode: 'now' });
-        } catch {
-          /* 静默 */
-        }
-      }, 2600 + Math.random() * 3600);
-    }
+    // 第二十六轮：发消息不再随手生成「刚刚」记录——记录是历史，永远排在用户消息上面（TA 回完话后 AI 会按他说的话生成呼应记录）
   };
 
   // —— 第二十一轮：位置与轨迹时间线（AI 按人设+记忆+真实时间生成；进入页面自动生成今天/昨天，可一直往更早生成） ——
@@ -3332,10 +3323,27 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
   const trailFeedRecs = useMemo(() => {
     void feedTick; //揭示时钟驱动
     const nowMs = Date.now();
-    const recs = (state.trailFeed ?? []).filter((r) => (r.revealAt ?? 0) <= nowMs); // 未到揭示时间的记录先隐藏（不要一次性生成）
+    // 第二十六轮：未到揭示时间的先隐藏；排序时间晚于当前真实时间的记录（含设备时钟被回拨的场景）绝不展示；
+    // 且某天用户发过轨迹消息后，那天的记录只保留第一条消息之前的——记录是「历史」，永远排在用户消息上面
+    const firstMsgByDay = new Map<string, number>();
+    for (const m of trailMsgs) {
+      if (m.from === 'ta') continue;
+      const d = new Date(m.at);
+      const dk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const cur = firstMsgByDay.get(dk);
+      if (cur == null || m.at < cur) firstMsgByDay.set(dk, m.at);
+    }
+    const recs = (state.trailFeed ?? []).filter((r) => {
+      if ((r.revealAt ?? 0) > nowMs) return false;
+      const sortMs = r.sortAt ?? trailSortMs(r.dateKey, r.t);
+      if (Number.isFinite(sortMs) && sortMs > nowMs + 60000) return false;
+      const first = firstMsgByDay.get(r.dateKey);
+      if (first != null && Number.isFinite(sortMs) && sortMs > first - 30000) return false;
+      return true;
+    });
     recs.sort((a, b) => (a.dateKey === b.dateKey ? a.t.localeCompare(b.t) : a.dateKey < b.dateKey ? -1 : 1)); // 升序（老→新，像聊天一样从上往下）
     return recs;
-  }, [state.trailFeed, feedTick]);
+  }, [state.trailFeed, trailMsgs, feedTick]);
   useEffect(() => {
     if (!trailPage || trailFeedInitRef.current) return;
     trailFeedInitRef.current = true;
@@ -3608,17 +3616,15 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                 const meta = TRAIL_FEED_ICON[ln.rec.kind] ?? TRAIL_FEED_ICON.stay;
                 return (
                   <div key={ln.key} className="pb-3">
-                    <div className="text-center text-[11px] font-semibold tabular-nums text-[#a8a8b2]">
-                      {ln.rec.dateKey.slice(5)} {ln.rec.t}
-                    </div>
-                    {/* 第二十五轮：删除记录后面的圆角白色面板——图标+文字直接落在背景上，像系统时间线 */}
-                    <div className="mx-auto mt-1 flex max-w-[86%] items-start justify-center gap-1.5">
-                      <span className="mt-[3px] flex h-[17px] w-[17px] shrink-0 items-center justify-center" style={{ color: meta.color }}>
+                    <div className="text-center text-[11px] font-semibold tabular-nums text-[#a8a8b2]">{ln.rec.dateKey.slice(5)} {ln.rec.t}</div>
+                    {/* 第二十六轮：按参考截图恢复每条记录的白色圆角气泡（图标+文案+查看记录，像系统事件卡片插在聊天流里） */}
+                    <div className="mx-auto mt-1.5 flex w-fit max-w-[88%] items-center gap-2 rounded-2xl bg-white px-4 py-2.5 shadow-[0_1px_6px_rgba(0,0,0,0.05)]">
+                      <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center" style={{ color: meta.color }}>
                         {meta.icon}
                       </span>
-                      <p className="min-w-0 text-[13px] leading-[1.65] text-[#2c2c30]">
+                      <p className="min-w-0 text-[13px] leading-snug text-[#2c2c30]">
                         {ln.rec.text}
-                        <button type="button" onClick={() => setTrailDetail(ln.rec)} data-testid={`trail-view-${ln.rec.id}`} className="ml-1.5 inline-block whitespace-nowrap font-semibold text-[#6e6e76] underline decoration-[#c9c9cf] underline-offset-[3px]">
+                        <button type="button" onClick={() => setTrailDetail(ln.rec)} data-testid={`trail-view-${ln.rec.id}`} className="ml-1.5 inline-block whitespace-nowrap font-semibold text-[#26262b]">
                           查看记录
                         </button>
                       </p>
@@ -3676,7 +3682,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                 onClick={sendTrail}
                 aria-label="发送"
                 disabled={!trailDraft.trim()}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-[#2c2c30] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-[#e9e9ee] transition-transform active:scale-95 disabled:opacity-40"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#2c2c30] text-white shadow-[0_3px_10px_rgba(0,0,0,0.18)] transition-transform active:scale-95 disabled:opacity-40"
               >
                 <ArrowUp className="h-5 w-5" strokeWidth={2.4} />
               </button>
@@ -3960,7 +3966,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
           type="button"
           onClick={() => setAddSheet(true)}
           aria-label="自定义问题"
-          className="absolute bottom-7 right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-white text-[#26262b] shadow-[0_6px_18px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.05] transition-transform active:scale-90"
+          className="absolute bottom-7 right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-white shadow-[0_6px_18px_rgba(242,83,106,0.38)] transition-transform active:scale-90"
         >
           <Plus className="h-7 w-7" strokeWidth={2.4} />
         </button>
@@ -4104,7 +4110,9 @@ function OrderIcon({ className = '' }: { className?: string }) {
 
 /**
  * 通用分享选择器（第十八轮需求41）：所有分享都可以选择 QQ/微信，然后再选择联系人。
- * 渠道步（微信/QQ 大按钮）→ 联系人步（好友列表；恋人联系人置顶并带「恋人」徽标、默认选中）→ 确认发送。
+ * 第二十六轮：全部分享弹窗统一成「邀请联系人开情侣空间」同款底部弹层——拖拽条 + 左对齐标题/副标题
+ * + 渠道双按钮（粉渐变选中）+ 好友列表行，恋人置顶默认选中。
+ * 渠道步（微信/QQ 大按钮）→ 联系人步（好友列表）→ 确认发送。
  */
 function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; hint?: string; onSend: (channel: CoupleChannel, contactId: string) => void; onClose: () => void }) {
   const [step, setStep] = useState<'app' | 'contact'>('app');
@@ -4130,28 +4138,36 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
   const pickedName = list?.find((c) => c.id === picked);
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 px-8" onClick={onClose}>
-      <div className="w-full rounded-2xl bg-white p-4 shadow-2xl [animation:couple-sub-in_.22s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="share-picker">
-        <div className="text-center text-[16px] font-bold text-[#2c2c30]">{title}</div>
-        {hint ? <div className="mt-1 text-center text-[11.5px] text-[#9a9aa2]">{hint}</div> : null}
+    <div className="absolute inset-0 z-[80] flex flex-col justify-end bg-black/45" onClick={onClose}>
+      <div
+        className="max-h-[78%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-9 pt-4 shadow-2xl [animation:couple-sub-in_.24s_ease-out]"
+        onClick={(e) => e.stopPropagation()}
+        data-testid="share-picker"
+      >
+        <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
+        <div className="mt-3 text-[17px] font-bold text-[#2c2c30]">{step === 'contact' && ch ? `发送到${ch === 'wx' ? '微信' : 'QQ'}` : title}</div>
+        <div className="mt-1 text-[12.5px] leading-relaxed text-[#9a9aa2]">
+          {step === 'app' ? hint || '选择渠道和要发送的 AI 好友' : `从${ch === 'wx' ? '微信' : 'QQ'}好友里选一位，恋人会置顶并默认选中`}
+        </div>
 
         {step === 'app' && (
-          <div className="mt-4 grid grid-cols-2 gap-3">
+          <div className="mt-4 grid grid-cols-2 gap-2">
             {([
-              { key: 'wx' as const, name: '微信', bg: '#f4f4f6', fg: '#2c2c30', glyph: '💬' },
-              { key: 'qq' as const, name: 'QQ', bg: '#eef4ff', fg: '#2c2c30', glyph: '🐧' },
+              { key: 'wx' as const, name: '通过微信发送', img: '/icons/wechat.png' },
+              { key: 'qq' as const, name: '通过QQ发送', img: '/icons/qq.png' },
             ]).map((a) => (
               <button
                 key={a.key}
                 type="button"
+                data-testid={`share-channel-${a.key}`}
                 onClick={() => {
                   setCh(a.key);
                   setStep('contact');
                 }}
-                className="flex flex-col items-center gap-2 rounded-2xl border border-[#ececf0] py-4 transition-transform active:scale-95"
+                className="flex h-14 items-center justify-center gap-2 rounded-xl bg-[#f3f3f5] text-[14px] font-medium text-[#4a4a52] transition-colors active:bg-[#ececef]"
               >
-                <span className={`flex h-12 w-12 items-center justify-center rounded-2xl text-[24px] ${a.key === 'wx' ? 'bg-[#e8f8ee]' : 'bg-[#eaf1fd]'}`}>{a.glyph}</span>
-                <span className="text-[14px] font-semibold text-[#3a3a40]">发送给 {a.name} 好友</span>
+                <img src={a.img} alt="" aria-hidden="true" className="h-6 w-6 rounded-md object-cover" draggable={false} />
+                {a.name}
               </button>
             ))}
           </div>
@@ -4159,11 +4175,11 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
 
         {step === 'contact' && (
           <>
-            <div className="mt-3 max-h-64 overflow-y-auto rounded-xl bg-[#f7f7f9] p-1.5">
+            <div className="mt-4 max-h-72 space-y-1 overflow-y-auto" data-testid="share-friend-list">
               {list === null ? (
-                <div className="py-8 text-center text-[12.5px] text-[#b6b6bd]">加载中…</div>
+                <div className="py-8 text-center text-[13px] text-[#b6b6bd]">加载中…</div>
               ) : list.length === 0 ? (
-                <div className="py-8 text-center text-[12.5px] text-[#b6b6bd]">这个 App 里还没有好友</div>
+                <div className="py-8 text-center text-[13px] text-[#b6b6bd]">这个 App 里还没有好友</div>
               ) : (
                 list.map((c) => {
                   const isPartner = c.id === meta.partnerContactId;
@@ -4172,33 +4188,37 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
                     <button
                       key={c.id}
                       type="button"
+                      data-testid={`share-friend-${c.id}`}
                       onClick={() => setPicked(c.id)}
-                      className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors ${active ? 'bg-white shadow-sm ring-1 ring-[#26262b]/25' : 'active:bg-white/70'}`}
+                      className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition-colors ${active ? 'bg-[#fdeef1]' : 'active:bg-[#f3f3f5]'}`}
                     >
-                      <span className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-[#ececef]">
+                      <span className="h-10 w-10 shrink-0 overflow-hidden rounded-full bg-[#ececef]">
                         {avatarFor(c, ch ?? 'wx') ? <img src={avatarFor(c, ch ?? 'wx') ?? ''} alt="" className="h-full w-full object-cover" draggable={false} /> : null}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[14px] text-[#2c2c30]">{displayNameOf(c)}</span>
-                        {isPartner && <span className="mt-0.5 inline-block rounded-full bg-[#fdeef1] px-1.5 py-px text-[10px] font-medium text-[#f2536a]">恋人</span>}
+                        <span className="block truncate text-[14.5px] text-[#2c2c30]">{displayNameOf(c)}</span>
+                        {isPartner && <span className="mt-0.5 inline-block rounded-full bg-[#fdeef1] px-1.5 py-px text-[10px] font-medium text-[#f2536a] ring-1 ring-[#f2536a]/25">恋人</span>}
                       </span>
-                      {active && <Check className="h-4.5 w-4.5 shrink-0 text-[#26262b]" strokeWidth={2.4} />}
+                      <span className={`grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full border-2 ${active ? 'border-[#f2536a] bg-[#f2536a]' : 'border-[#d9d9de]'}`}>
+                        {active && <Check className="h-3 w-3 text-white" strokeWidth={3.2} />}
+                      </span>
                     </button>
                   );
                 })
               )}
             </div>
             <div className="mt-4 flex gap-3">
-              <button type="button" onClick={() => setStep('app')} className="h-11 flex-1 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
+              <button type="button" onClick={() => setStep('app')} className="h-11 flex-1 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62] active:bg-[#e8e8ec]">
                 上一步
               </button>
               <button
                 type="button"
+                data-testid="share-send"
                 disabled={!picked}
                 onClick={() => {
                   if (picked && ch) onSend(ch, picked);
                 }}
-                className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] disabled:opacity-40"
+                className="h-11 flex-1 rounded-2xl bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-[15px] font-bold text-white shadow-[0_5px_14px_rgba(242,83,106,0.30)] disabled:opacity-40"
               >
                 发送{pickedName ? `给 ${displayNameOf(pickedName)}` : ''}
               </button>
@@ -5266,10 +5286,10 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 type="button"
                 onClick={() => setMood(m.emoji)}
                 aria-pressed={mood === m.emoji}
-                className={`flex flex-col items-center gap-1 rounded-2xl py-2 transition-all ${mood === m.emoji ? 'bg-[#ececf0] shadow-[inset_0_1px_4px_rgba(0,0,0,0.07)]' : 'active:bg-[#f6f6f8]'}`}
+                className={`flex flex-col items-center gap-1 rounded-2xl py-2 transition-all ${mood === m.emoji ? 'bg-[#fdeef1] shadow-[inset_0_1px_4px_rgba(242,83,106,0.10)]' : 'active:bg-[#f6f6f8]'}`}
               >
                 <MoodFace mood={m.emoji} size={38} className={mood === m.emoji ? '[animation:couple-pop-heart_.4s_ease-out]' : 'opacity-90'} />
-                <span className={`text-[10px] ${mood === m.emoji ? 'font-semibold text-[#26262b]' : 'text-[#8e8e96]'}`}>{m.label}</span>
+                <span className={`text-[10px] ${mood === m.emoji ? 'font-semibold text-[#f2536a]' : 'text-[#8e8e96]'}`}>{m.label}</span>
               </button>
             ))}
           </div>
@@ -5329,7 +5349,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
         <button
           type="button"
           onClick={saveMood}
-          className="sticky bottom-4 z-10 mb-3 mt-5 h-12 w-full rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
+          className="sticky bottom-4 z-10 mb-3 mt-5 h-12 w-full rounded-2xl bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-[15px] font-semibold text-white shadow-[0_6px_18px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
         >
           完成
         </button>
@@ -5610,7 +5630,7 @@ function TarotPage({ state, patch, showToast, close }: { state: CoupleState; pat
           type="button"
           onClick={draw}
           disabled={drawing}
-          className="mt-6 h-12 rounded-2xl bg-white px-12 text-[16px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] disabled:opacity-50"
+          className="mt-6 h-12 rounded-2xl bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] px-12 text-[16px] font-semibold text-white shadow-[0_5px_16px_rgba(242,83,106,0.30)] disabled:opacity-50"
         >
           {drawn != null ? '再抽一次' : '抽取塔罗牌'}
         </button>
@@ -6650,7 +6670,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
         <button
           type="button"
           onClick={() => setShowIndex(true)}
-          className="flex items-center gap-1.5 rounded-md bg-[#4a4a52] px-3.5 py-2 text-[14px] font-bold text-white shadow-[0_4px_12px_rgba(0,0,0,0.22)] transition-transform active:scale-95"
+          className="flex items-center gap-1.5 rounded-md bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] px-3.5 py-2 text-[14px] font-bold text-white shadow-[0_4px_12px_rgba(242,83,106,0.30)] transition-transform active:scale-95"
         >
           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
           目录
@@ -6661,7 +6681,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
             const next = HUNDRED_LIST.findIndex((_, i) => !state.hundred.includes(i));
             openEdit(next >= 0 ? next : 0);
           }}
-          className="flex items-center gap-1.5 rounded-md bg-[#2c2c30] px-3.5 py-2 text-[14px] font-bold text-white shadow-[0_4px_12px_rgba(0,0,0,0.22)] transition-transform active:scale-95"
+          className="flex items-center gap-1.5 rounded-md bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] px-3.5 py-2 text-[14px] font-bold text-white shadow-[0_4px_12px_rgba(242,83,106,0.30)] transition-transform active:scale-95"
         >
           <span className="text-[16px] font-light leading-none">+</span>
           添加小事
@@ -7393,7 +7413,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
             aria-label="添加协议"
             data-testid="pact-fab-add"
             onClick={startNewPact}
-            className="fixed bottom-8 right-5 z-20 grid h-14 w-14 place-items-center rounded-full bg-white text-[#26262b] shadow-[0_6px_18px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.05] transition-transform active:scale-90"
+            className="fixed bottom-8 right-5 z-20 grid h-14 w-14 place-items-center rounded-full bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-white shadow-[0_6px_18px_rgba(242,83,106,0.38)] transition-transform active:scale-90"
           >
             <Plus className="h-7 w-7" strokeWidth={2.4} />
           </button>
@@ -8152,7 +8172,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         onClick={() => setTaMarks((m) => ({ ...m, [i]: { ok: true, score: Math.round(perQ * 10) / 10 } }))}
                         data-testid={`exam-mark-ok-${i}`}
                         className={`rounded-full px-3 py-1 text-[11.5px] font-semibold transition-colors ${
-                          myMark?.ok === true ? 'bg-[#2c2c30] text-white' : 'bg-white text-[#4a4a52] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]'
+                          myMark?.ok === true ? 'bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-white shadow-[0_2px_8px_rgba(242,83,106,0.28)]' : 'bg-white text-[#4a4a52] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]'
                         }`}
                       >
                         对
@@ -8162,7 +8182,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         onClick={() => setTaMarks((m) => ({ ...m, [i]: { ok: false, score: 0 } }))}
                         data-testid={`exam-mark-bad-${i}`}
                         className={`rounded-full px-3 py-1 text-[11.5px] font-semibold transition-colors ${
-                          myMark && myMark.ok === false ? 'bg-[#2c2c30] text-white' : 'bg-white text-[#4a4a52] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]'
+                          myMark && myMark.ok === false ? 'bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-white shadow-[0_2px_8px_rgba(242,83,106,0.28)]' : 'bg-white text-[#4a4a52] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]'
                         }`}
                       >
                         错
@@ -8290,13 +8310,13 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         onClick={() => onPickAnswer(qi, oi)}
                         className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] leading-relaxed transition-colors ${
                           isPicked
-                            ? 'border-[1.5px] border-[#2c2c30] bg-[#f0f0f3] font-medium text-[#26262b]'
+                            ? 'border-[1.5px] border-[#f2536a] bg-[#fdeef1] font-medium text-[#e0405c]'
                             : taPick === oi
                               ? 'border-[1.5px] border-[#576b95] bg-[#eef2fb] text-[#576b95]'
                               : 'text-[#4a4a52] active:bg-[#f7f7f9]'
                         }`}
                       >
-                        <span className={`mt-px shrink-0 font-bold ${isPicked ? 'text-[#26262b]' : taPick === oi ? 'text-[#576b95]' : 'text-[#9a9aa2]'}`}>{'ABCD'[oi] ?? oi + 1}.</span>
+                        <span className={`mt-px shrink-0 font-bold ${isPicked ? 'text-[#f2536a]' : taPick === oi ? 'text-[#576b95]' : 'text-[#9a9aa2]'}`}>{'ABCD'[oi] ?? oi + 1}.</span>
                         <span className="min-w-0">{o}</span>
                       </button>
                     );
@@ -8324,7 +8344,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
           data-testid="exam-submit"
           onClick={() => void submit()}
           disabled={grading}
-          className="mb-2 mt-4 h-[52px] w-full rounded-2xl bg-white text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98] disabled:opacity-50"
+          className="mb-2 mt-4 h-[52px] w-full rounded-2xl bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-[16.5px] font-semibold text-white shadow-[0_6px_18px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98] disabled:opacity-50"
         >
           {grading ? (
             <span className="flex items-center justify-center gap-2">
@@ -8378,7 +8398,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               setPickerOpen(true);
             }}
             disabled={inviting}
-            className="h-12 w-full rounded-2xl border-[1.5px] border-dashed border-[#3c3c42] bg-white text-[15px] font-semibold text-[#26262b] active:bg-[#f7f7f9] disabled:opacity-50"
+            className="h-12 w-full rounded-2xl border-[1.5px] border-dashed border-[#f2536a]/70 bg-white text-[15px] font-semibold text-[#f2536a] active:bg-[#fdf2f5] disabled:opacity-50"
           >
             {inviting && pickerMode === 'together' ? '发送中…' : '和他一起答题'}
           </button>
@@ -8387,7 +8407,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               type="button"
               data-testid="exam-make-paper"
               onClick={makePaper}
-              className="h-12 rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
+              className="h-12 rounded-2xl bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-[15px] font-semibold text-white shadow-[0_5px_16px_rgba(242,83,106,0.30)] transition-transform active:scale-[0.98]"
             >
               答题
             </button>
@@ -8399,7 +8419,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 setPickerOpen(true);
               }}
               disabled={inviting}
-              className="h-12 rounded-2xl bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9] disabled:opacity-50"
+              className="h-12 rounded-2xl bg-white text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f2536a]/45 active:bg-[#fdf2f5] disabled:opacity-50"
             >
               {inviting && pickerMode === 'ta' ? '发送中…' : '让他答题'}
             </button>
@@ -9270,7 +9290,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
               <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl" style={{ background: s.bg, color: s.fg }}>
                 {s.icon}
               </span>
-              <span className="grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full bg-[#2c2c30] text-[10.5px] font-bold text-white">{s.n}</span>
+              <span className="grid h-[19px] w-[19px] shrink-0 place-items-center rounded-full bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-[10.5px] font-bold text-white">{s.n}</span>
               <span className="min-w-0">
                 <span className="block text-[15px] font-semibold text-[#26262b]">{s.label}</span>
                 <span className="block text-[12px] text-[#c0a3ab]">{s.desc}</span>
@@ -9290,7 +9310,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
             );
             setEditing(true);
           }}
-          className="mb-1 mt-6 flex h-[56px] w-full items-center justify-center rounded-2xl bg-white text-[18px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
+          className="mb-1 mt-6 flex h-[56px] w-full items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-[18px] font-semibold text-white shadow-[0_6px_18px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
         >
           开始制作 ✨
         </button>
@@ -10299,7 +10319,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
       <SubShell title="恋爱状态" onBack={close}>
         <div className="-mx-3.5 -mb-8 min-h-full bg-[#fdf0f3] px-3.5 pb-8 pt-3">
           {/* 粉渐变主视觉横幅 */}
-          <div className="relative overflow-hidden rounded-3xl bg-[#26262b] px-5 pb-5 pt-4">
+          <div className="relative overflow-hidden rounded-3xl bg-[linear-gradient(135deg,#f97362,#f2536a_55%,#e84c8b)] px-5 pb-5 pt-4">
             <span aria-hidden="true" className="pointer-events-none absolute -right-6 -top-8 h-28 w-28 rounded-full bg-white/25" />
             <span aria-hidden="true" className="pointer-events-none absolute -left-7 top-10 h-16 w-16 rounded-full bg-white/20" />
             <span aria-hidden="true" className="pointer-events-none absolute bottom-3 right-10 h-9 w-9 rounded-full bg-white/20" />
@@ -10341,7 +10361,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
           {/* 测评亮点 */}
           <div className="mt-6 px-1">
             <div className="flex items-center gap-2">
-              <span className="h-4 w-[3px] rounded-full bg-[#2c2c30]" />
+              <span className="h-4 w-[3px] rounded-full bg-[linear-gradient(180deg,#ff7a9c,#f2536a)]" />
               <span className="text-[16.5px] font-extrabold text-[#26262b]">测评亮点</span>
             </div>
             <div className="mt-3 space-y-2.5">
@@ -10375,7 +10395,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                   setView('quiz');
                 }
               }}
-              className="flex h-[54px] w-full items-center justify-center rounded-2xl bg-white text-[17.5px] font-bold text-[#131316] shadow-[0_4px_16px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
+              className="flex h-[54px] w-full items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-[17.5px] font-bold text-white shadow-[0_6px_18px_rgba(242,83,106,0.32)] transition-transform active:scale-[0.98]"
             >
               {done ? '查看我们的测评报告' : answeredCount > 0 ? '继续测试' : '开始测试'}
             </button>
@@ -10395,7 +10415,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                       patch({ status: s });
                       showToast(`状态已更新为「${s}」`);
                     }}
-                    className={`rounded-xl px-3.5 py-2 text-[13px] font-medium transition-colors ${picked ? 'bg-white text-[#131316] ring-2 ring-[#26262b]' : 'bg-[#f4f4f6] text-[#4a4a52] active:bg-[#ececf0]'}`}
+                    className={`rounded-xl px-3.5 py-2 text-[13px] font-medium transition-colors ${picked ? 'bg-[#fdeef1] text-[#e0405c] ring-2 ring-[#f2536a]/60' : 'bg-[#f4f4f6] text-[#4a4a52] active:bg-[#ececf0]'}`}
                   >
                     {s}
                   </button>
@@ -10417,7 +10437,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
             {qi + 1}/{STATUS_EXAM.length}
           </div>
           <div className="mx-auto mt-1.5 h-1 w-[120px] overflow-hidden rounded-full bg-white/80">
-            <span className="block h-full rounded-full bg-[linear-gradient(90deg,#b9b9c2,#5c5c64)] transition-all" style={{ width: `${((qi + 1) / STATUS_EXAM.length) * 100}%` }} />
+            <span className="block h-full rounded-full bg-[linear-gradient(90deg,#ff9db4,#f2536a)] transition-all" style={{ width: `${((qi + 1) / STATUS_EXAM.length) * 100}%` }} />
           </div>
 
           {/* 题目卡 */}
@@ -10439,9 +10459,9 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                     onClick={() => pick(i)}
                     className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-3 text-left transition-colors ${
                       both
-                        ? 'bg-[#eef2fd] ring-2 ring-[#7f96e0]'
+                        ? 'bg-[linear-gradient(135deg,#fdf0f5,#eef2fd)] ring-2 ring-[#f2536a]/70'
                         : mine
-                          ? 'bg-[#ececf0] ring-2 ring-[#26262b]'
+                          ? 'bg-[#fdeef1] ring-2 ring-[#f2536a]/70'
                           : taHere
                             ? 'bg-[#eef2fd] ring-2 ring-[#7f96e0]'
                             : 'bg-[#f7f7f9] active:bg-[#ececf0]'
@@ -10450,7 +10470,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                     <span className="relative shrink-0">
                       <span
                         className={`grid h-[22px] w-[22px] place-items-center rounded-full border-2 ${
-                          mine ? 'border-[#26262b] bg-[#26262b]' : taHere ? 'border-[#7f96e0] bg-[#7f96e0]' : 'border-[#d9d9df] bg-white'
+                          mine ? 'border-[#f2536a] bg-[#f2536a]' : taHere ? 'border-[#7f96e0] bg-[#7f96e0]' : 'border-[#d9d9df] bg-white'
                         }`}
                       >
                         {(mine || taHere) && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
@@ -10463,7 +10483,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                     </span>
                     <span className="min-w-0 flex-1 text-[14px] leading-snug text-[#2c2c30]">{o}</span>
                     {both && <span className="shrink-0 text-[11px] font-bold text-[#7f96e0]">你们选了同一个</span>}
-                    {mine && !taHere && <span className="shrink-0 text-[11px] font-bold text-[#26262b]">我的选择</span>}
+                    {mine && !taHere && <span className="shrink-0 text-[11px] font-bold text-[#f2536a]">我的选择</span>}
                     {taHere && !mine && <span className="shrink-0 text-[11px] font-bold text-[#7f96e0]">TA 的选择</span>}
                   </button>
                 );
@@ -10471,8 +10491,8 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
             </div>
             {/* 双方作答状态行 */}
             <div className="mt-3.5 flex items-center justify-between border-t border-[#f6e7ea] pt-3 text-[12px]">
-              <span className={`flex items-center gap-1 font-semibold ${myCur != null ? 'text-[#26262b]' : 'text-[#c9c9cf]'}`}>
-                <span className={`grid h-4 w-4 place-items-center rounded-full ${myCur != null ? 'bg-[#2c2c30]' : 'bg-[#e5e5ea]'}`}>
+              <span className={`flex items-center gap-1 font-semibold ${myCur != null ? 'text-[#e0405c]' : 'text-[#c9c9cf]'}`}>
+                <span className={`grid h-4 w-4 place-items-center rounded-full ${myCur != null ? 'bg-[#f2536a]' : 'bg-[#e5e5ea]'}`}>
                   {myCur != null && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3.5} />}
                 </span>
                 {me}
@@ -10720,13 +10740,13 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
         className="flex w-[76px] flex-col items-center gap-1.5"
         aria-label={`贴给${side === 'me' ? '我' : 'TA'}`}
       >
-        <span className={`relative h-[64px] w-[64px] overflow-hidden rounded-full bg-[#ececef] transition-shadow ${active ? 'shadow-[0_0_0_3px_#fff,0_0_0_6px_#26262b]' : 'shadow-[0_0_0_3px_#fff,0_4px_12px_rgba(0,0,0,0.10)]'}`}>
+        <span className={`relative h-[64px] w-[64px] overflow-hidden rounded-full bg-[#ececef] transition-shadow ${active ? 'shadow-[0_0_0_3px_#fff,0_0_0_6px_#f2536a]' : 'shadow-[0_0_0_3px_#fff,0_4px_12px_rgba(0,0,0,0.10)]'}`}>
           {avatar ? <img src={avatar} alt={name} className="h-full w-full object-cover" draggable={false} /> : <DefaultAvatar size={64} />}
           {active && (
-            <span className="absolute -right-0.5 -top-0.5 grid h-5 w-5 place-items-center rounded-full bg-[#2c2c30] text-[10px] font-bold text-white shadow">✓</span>
+            <span className="absolute -right-0.5 -top-0.5 grid h-5 w-5 place-items-center rounded-full bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-[10px] font-bold text-white shadow">✓</span>
           )}
         </span>
-        <span className={`max-w-full truncate text-[12.5px] ${active ? 'font-bold text-[#26262b]' : 'text-[#6e6e76]'}`}>{name}</span>
+        <span className={`max-w-full truncate text-[12.5px] ${active ? 'font-bold text-[#e0405c]' : 'text-[#6e6e76]'}`}>{name}</span>
       </button>
     );
   };
@@ -10734,7 +10754,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
   return (
     <SubShell title="情侣印象" onBack={close}>
       {/* 粉渐变横幅（参考图4） */}
-      <div className="-mx-3.5 -mt-0 select-none bg-[#26262b] px-5 pb-12 pt-5 text-center">
+      <div className="-mx-3.5 -mt-0 select-none bg-[linear-gradient(135deg,#f97362,#f2536a_55%,#e84c8b)] px-5 pb-12 pt-5 text-center">
         <div className="flex items-center justify-center gap-1.5 text-[24px] font-extrabold leading-tight text-white">
           先选
           <span className="grid h-[34px] w-[34px] place-items-center rounded-full bg-white text-[21px] font-extrabold text-[#26262b] shadow-[0_3px_10px_rgba(0,0,0,0.12)]">5</span>
@@ -11193,7 +11213,7 @@ function MissYouPage({ state, patch, tapMissYou, showToast, close }: { state: Co
           <button
             type="button"
             onClick={() => showToast('已经去提醒他啦，让他快来想你 ♡')}
-            className="h-11 w-[196px] rounded-2xl bg-white text-[16px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]"
+            className="h-11 w-[196px] rounded-2xl bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-[16px] font-semibold text-white shadow-[0_5px_16px_rgba(242,83,106,0.30)] transition-transform active:scale-[0.97]"
           >
             去提醒他
           </button>
@@ -11513,7 +11533,7 @@ function SettingsPage({ state, patch, showToast, close, onReset }: { state: Coup
           <div className="mt-2 space-y-1.5">
             {state.aiLog.slice(0, 12).map((l) => (
               <div key={l.id} className="flex items-start gap-2 text-[12.5px] leading-relaxed text-[#6e6e76]">
-                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#2c2c30]/70" />
+                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#f2536a]/60" />
                 <span className="min-w-0 flex-1">{l.text}</span>
                 <span className="shrink-0 text-[10.5px] text-[#c9c9cf]">{fmtDate(l.at).slice(5)}</span>
               </div>
@@ -11524,7 +11544,7 @@ function SettingsPage({ state, patch, showToast, close, onReset }: { state: Coup
       )}
 
       <div className="mt-6 text-center text-[12.5px] leading-relaxed text-[#b6b6bd]">
-        恋人空间 v1.0 · 白灰限定版
+        恋人空间 v1.0
         <br />
         愿有岁月可回首，且以深情共白头
       </div>

@@ -111,31 +111,31 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
         {/* 顶部：App logo + 名称 */}
         <span className="flex items-center gap-2">
           <AppLogo />
-          <span className="text-[14.5px] font-semibold text-[#4a4a52]">恋人空间</span>
+          <span className="text-[15px] font-semibold text-[#3c3c42]">恋人空间</span>
         </span>
         {/* 大标题 */}
         <span className="mt-2 block text-[19px] font-bold leading-[1.42] tracking-[0.01em] text-[#111114]">
           {data.from === 'ta' ? `${data.fromName}写的恋爱协议，等你来签名` : '我写的恋爱协议，等你来签名'}
         </span>
 
-        {/* —— 协议书文档预览（仿真排版） —— */}
-        <span className={`relative mt-2.5 block border border-[#e4e4e8] bg-white px-3.5 pb-4 pt-3.5 ${declined ? 'bg-[#fafafa]' : ''}`}>
-          <span className="block text-center text-[16.5px] font-extrabold tracking-[2px] text-[#26262b]" style={{ fontFamily: "'Songti SC','STSong','SimSun',serif" }}>
+        {/* —— 协议书文档预览（仿真排版；第二十六轮：与截图一致的白纸无边框样式） —— */}
+        <span className={`relative mt-2.5 block bg-white px-3 pb-4 pt-3 ${declined ? 'bg-[#fafafa]' : ''}`}>
+          <span className="block text-center text-[17px] font-extrabold tracking-[3px] text-[#26262b]" style={{ fontFamily: "'Songti SC','STSong','SimSun',serif" }}>
             恋爱协议书
           </span>
           <span aria-hidden="true" className="mt-2 block border-t-[1.5px] border-[#3a3a40]" />
-          <span className="mt-2.5 block text-justify text-[10.5px] leading-[1.8] text-[#3a3a40]">
+          <span className="mt-3 block text-justify text-[10.5px] leading-[1.95] text-[#3a3a40]">
             {data.preamble?.trim() || '为维护双方的感情与信任，促进彼此理解与成长，建立健康、稳定、真诚的亲密关系，双方经友好协商，达成如下协议，共同遵守：'}
           </span>
-          <span aria-hidden="true" className="mt-2.5 block border-t border-dashed border-[#d9d9de]" />
-          <span className="mt-2 block space-y-[5px]">
+          <span aria-hidden="true" className="mt-3 block border-t border-dashed border-[#d9d9de]" />
+          <span className="mt-2.5 block space-y-[6px]">
             {data.clauses.slice(0, 5).map((c, i) => (
-              <span key={i} className="flex gap-[5px] text-[10.5px] leading-[1.65] text-[#3a3a40]">
-                <span className="w-[14px] shrink-0 text-right tabular-nums">{i + 1}.</span>
+              <span key={i} className="flex gap-[5px] text-[10.5px] leading-[1.7] text-[#3a3a40]">
+                <span className="w-[15px] shrink-0 text-right tabular-nums">{i + 1}.</span>
                 <span className="min-w-0">{c}</span>
               </span>
             ))}
-            {data.clauses.length > 5 && <span className="block pl-[19px] text-[10px] text-[#9a9aa2]">……共 {data.clauses.length} 条</span>}
+            {data.clauses.length > 5 && <span className="block pl-[20px] text-[10px] text-[#9a9aa2]">……共 {data.clauses.length} 条</span>}
           </span>
           {/* 签名栏（淡淡的，像还没签的空栏） */}
           {!signed && !declined && (
