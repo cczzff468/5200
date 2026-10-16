@@ -3615,16 +3615,16 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
               if (ln.kind === 'rec') {
                 const meta = TRAIL_FEED_ICON[ln.rec.kind] ?? TRAIL_FEED_ICON.stay;
                 return (
-                  <div key={ln.key} className="pb-3">
+                  <div key={ln.key} className="pb-3.5">
                     <div className="text-center text-[11px] font-semibold tabular-nums text-[#a8a8b2]">{ln.rec.dateKey.slice(5)} {ln.rec.t}</div>
-                    {/* 第二十六轮：按参考截图恢复每条记录的白色圆角气泡（图标+文案+查看记录，像系统事件卡片插在聊天流里） */}
-                    <div className="mx-auto mt-1.5 flex w-fit max-w-[88%] items-center gap-2 rounded-2xl bg-white px-4 py-2.5 shadow-[0_1px_6px_rgba(0,0,0,0.05)]">
-                      <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center" style={{ color: meta.color }}>
+                    {/* 第二十七轮：白色圆角面板再次删除——记录直接落在背景上（居中时间 + 图标 + 文案 + 查看记录），像系统时间线 */}
+                    <div className="mx-auto mt-2 flex w-fit max-w-[88%] items-start justify-center gap-1.5">
+                      <span className="mt-[1px] flex h-[18px] w-[18px] shrink-0 items-center justify-center" style={{ color: meta.color }}>
                         {meta.icon}
                       </span>
-                      <p className="min-w-0 text-[13px] leading-snug text-[#2c2c30]">
+                      <p className="min-w-0 text-center text-[13px] leading-snug text-[#4a4a52]">
                         {ln.rec.text}
-                        <button type="button" onClick={() => setTrailDetail(ln.rec)} data-testid={`trail-view-${ln.rec.id}`} className="ml-1.5 inline-block whitespace-nowrap font-semibold text-[#26262b]">
+                        <button type="button" onClick={() => setTrailDetail(ln.rec)} data-testid={`trail-view-${ln.rec.id}`} className="ml-1.5 inline-block whitespace-nowrap font-semibold text-[#26262b] underline decoration-black/15 underline-offset-[3px]">
                           查看记录
                         </button>
                       </p>
