@@ -851,6 +851,40 @@ export function buildActionRules(pending: PendingCardInfo[], opts?: { familyCard
   ];
 }
 
+// ---------------- AI 引用已有图片：[图片 ID:xxx] 拆分（第三十二轮） ----------------
+
+/**
+ * 背景：历史序列化会把图片消息标注成「[图片 ID:…]（图片内容：…）」，AI 学会了这个格式后，
+ * 想「把某张已有的图发给对方」时会在正文里输出 [图片 ID:xxx] —— 旧管线不认它，原始标记
+ * 直接漏进气泡（用户实测：「[图片 ID:mvamxb21-36fcrxyifv9s]」原文上屏）。
+ * 现在把这类引用从回复文本里拆出来：命中会话里的图片消息 → 调用方转成真实图片消息；
+ * 未命中 → 只保留文本段（引用段与紧跟的「（图片内容：…）」说明一并剥除，绝不漏原文）。
+ * 兼容全/半角冒号、标内空格、「图片ID/图 片 ID」等变体。
+ */
+const IMG_ID_REF_RE = /\[\s*图\s*片\s*I\s*D\s*[:：]\s*([^\]】]+?)\s*\]/g;
+
+export interface ImageIdRefSeg {
+  kind: 'text' | 'imgref';
+  text?: string;
+  id?: string;
+}
+
+export function splitImageIdRefs(text: string): ImageIdRefSeg[] {
+  const segs: ImageIdRefSeg[] = [];
+  let last = 0;
+  for (const m of text.matchAll(IMG_ID_REF_RE)) {
+    const idx = m.index ?? 0;
+    if (idx > last) segs.push({ kind: 'text', text: text.slice(last, idx) });
+    segs.push({ kind: 'imgref', id: (m[1] || '').trim() });
+    last = idx + m[0].length;
+    // 紧跟的「（图片内容：…）」说明一并剥除（历史标注同款括号，AI 抄格式时常常带上）
+    const paren = /^[\s]*[（(]图片内容[:：][^）)]*[）)]?[\s]*/.exec(text.slice(last));
+    if (paren) last += paren[0].length;
+  }
+  if (last < text.length) segs.push({ kind: 'text', text: text.slice(last) });
+  return segs.length > 0 ? segs : [{ kind: 'text', text }];
+}
+
 // ---------------- AI 视觉自主决策：换头像/换朋友圈背景/存相册/选图操作 ----------------
 
 /**
@@ -878,7 +912,9 @@ export function buildVisionRules(albumSummary: { id: string; desc: string }[] | 
       '存完可以在正文里自然提一句（比如「这张我存下来了，拍得真好」「这张我收进相册啦」），让对方知道你很喜欢。' +
       '存下来的图之后随时可以用 [选图设头像:相册条目ID] 设成你的头像。' +
       '换头像/换背景前先考虑你的人设、当前情绪、与用户的关系是否合适；不合适就只口头回应图片，不要乱换。' +
-      '图片消息ID 必须从聊天记录里图片消息的 [图片 ID:…] 标注中原样抄写（如 msg-x7k2）；没收到图不要写这些标记。',
+      '【发已有的图】想把聊天里出现过的某张图直接发给对方时，在正文里单独输出 [图片 ID:那条图片消息的ID]' +
+      '（从聊天记录标注里原样抄写，如 [图片 ID:msg-x7k2]），系统会真的把那张图发出去；' +
+      '[换头像]/[存相册]/[换朋友圈背景] 的图片消息ID 同样从标注里原样抄写；没收到过图就不要写这些标记。',
     // 第二十九轮「AI 主动换头像」：不用等用户发图，按人设/记忆/心情/季节/纪念日自己想换就换（系统锁脸生图）
     '[生成新头像:外观描述]：你自己想换一个新头像时（心情变了、季节/节日到了、纪念日、换了新造型、想给对方一点新鲜感等自然原因），' +
       '输出这个标记，冒号后用一句话写新头像的样子（如「冬天里围着红围巾的自己」），系统会按你的人设生成新照片并设为你的头像，' +

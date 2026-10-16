@@ -315,6 +315,7 @@ import {
   mergeRichSegments,
   parseRichParts,
   prettifyRichText,
+  splitImageIdRefs,
   isQuitWinbackAction,
   isGroupSocialAction,
   type PendingCardInfo,
@@ -4773,6 +4774,13 @@ function ChatPage({
               // 门牌号剥除（Task 30）：模型偶尔裸抄历史行首的 [M数字] 编号进正文，统一剥掉
               const clean = cleanBubbleText(stripMsgHandleText(stickersOnNow ? safePhotoText : stripEmojiCodes('qq', stripEmojiText(safePhotoText.replace(/\[表情包\]|\[表情\]/g, ' ')))));
               if (!clean) continue;
+              // 第三十二轮：AI 模仿历史标注输出 [图片 ID:xxx]（想发那张图）→ 拆分处理：
+              // 命中会话里的图片消息 → 转成真实图片消息（QQ 图片 dataURL 存 content，img.src 同步填）；
+              // 未命中/跨会话 ID → 剥除标记（含「（图片内容：…）」说明），绝不把原始标注漏进气泡
+              const refSegs = splitImageIdRefs(clean);
+              const refBodies = refSegs.filter((s) => s.kind === 'text').map((s) => (s.text || '').trim()).filter(Boolean);
+              const refIds = refSegs.filter((s) => s.kind === 'imgref' && s.id).map((s) => s.id!);
+              const body = refBodies.join(' ').replace(/\s{2,}/g, ' ').trim();
               // Task 30 AI 引用：此前剥出过 [引用:M编号] → 挂到这第一条正文消息上（QQ 引用卡随气泡展示）；
               // 编号查不到（跨回合编号漂移/后台接力无映射）→ 静默丢弃引用，正文照常
               let attachQuote: QQMsg['quote'] | null = null;
@@ -4783,7 +4791,15 @@ function ChatPage({
                 }
                 quotePendingRef.current = null;
               }
-              out.push({ id, role: 'peer', content: clean, time: t, ...(attachQuote ? { quote: attachQuote } : {}) });
+              if (body) {
+                out.push({ id, role: 'peer', content: body, time: t, ...(attachQuote ? { quote: attachQuote } : {}) });
+              }
+              for (const refId of refIds) {
+                const refMsg = cur.find((m) => m.id === refId && m.kind === 'image' && !m.recalled) ?? null;
+                const rsrc = refMsg ? (typeof refMsg.content === 'string' && refMsg.content.startsWith('data:image/') ? refMsg.content : refMsg.img?.src || '') : '';
+                if (!rsrc) continue; // 未命中：引用段已在文本里剥除，静默降级为纯文字
+                out.push({ id: uid(), role: 'peer', content: rsrc, time: t, kind: 'image', img: { src: rsrc, desc: refMsg?.img?.desc } });
+              }
             }
             msgIdx += 1;
             t += 600 + Math.floor(Math.random() * 600);
@@ -14373,19 +14389,21 @@ function QqDrawerAccountCard({ onPick, onClose }: { onPick: (id: string) => void
                   idx > 0 ? 'border-t border-black/[0.05] dark:border-white/[0.06]' : ''
                 }`}
               >
-                {acc.id === MAIN_ACCOUNT_ID ? (
-                  <QqAvatar src={mainOwner?.avatar ?? null} alt={name} size={44} />
-                ) : (
-                  <QqAccountBubble name={name} kind="alt" size={44} />
-                )}
+                {(() => {
+                  // 第三十二轮：切换账号卡片头像跟随 QQ——每个账号显示自己档案的 QQ 槽位头像（avatars.qq），
+                  // 没设过 QQ 头像时：大号回退机主全局头像，小号回退首字母彩色圆
+                  const prof = profileOf(acc);
+                  const accAvatar = prof?.avatars?.qq ?? (acc.id === MAIN_ACCOUNT_ID ? mainOwner?.avatar ?? null : null);
+                  return accAvatar ? (
+                    <QqAvatar src={accAvatar} alt={name} size={44} />
+                  ) : (
+                    <QqAccountBubble name={name} kind="alt" size={44} />
+                  );
+                })()}
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
                     <span className="block truncate text-[16px] font-medium leading-tight">{name}</span>
-                    {acc.grade === 'main' && (
-                      <span className="shrink-0 rounded-[4px] bg-[#1E6FFF]/10 px-1 py-px text-[10.5px] leading-[1.5] text-[#1E6FFF] dark:text-[#4AA3FF]" data-testid={`qq-account-tag-${acc.id}`}>
-                        大号
-                      </span>
-                    )}
+                    {/* 第三十二轮：「大号/小号」徽标删除——列表里都是可登录的账号，不再分档位 */}
                   </span>
                   <span className="mt-0.5 block truncate text-[13px] text-black/35 dark:text-white/35">{accNoOf(acc)}</span>
                 </span>

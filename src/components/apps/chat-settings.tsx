@@ -351,29 +351,7 @@ export function ChatSettingsPage({
               <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
             </span>
           </button>
-          {/* 关系（多账号关系感知）：当前账号与这个角色的关系，决定 AI 怎么对待你；每个账号独立 */}
-          {typeof onSaveRelation === 'function' && (
-            <>
-              <div className={`border-t ${dividerCls}`} />
-              <button
-                type="button"
-                data-testid={`${testPrefix}-settings-relation`}
-                onClick={() => {
-                  setRelationDraft(relation ?? '');
-                  setRelationOpen(true);
-                }}
-                className={rowCls}
-              >
-                <span>关系</span>
-                <span className="flex shrink-0 items-center gap-2">
-                  <span data-testid={`${testPrefix}-relation-value`} className="max-w-[150px] truncate text-[14px] text-black/40 dark:text-white/40">
-                    {relation?.trim() || '未设置'}
-                  </span>
-                  <ChevronRight className="h-[18px] w-[18px] text-black/25 dark:text-white/25" strokeWidth={2} />
-                </span>
-              </button>
-            </>
-          )}
+          {/* 第三十二轮：聊天设置里的「关系」行已按用户要求删除（关系数据与 AI 感知链路保留，仅不再展示入口） */}
         </div>
 
         {/* 置顶 / 免打扰开关（纯文字行，无图标） */}

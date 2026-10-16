@@ -32,6 +32,7 @@ import {
   MailOpen,
   MapPin,
   MessageCircle,
+  Mic,
   Newspaper,
   Pencil,
   Phone,
@@ -137,6 +138,7 @@ import {
   mergeRichSegments,
   parseRichParts,
   prettifyRichText,
+  splitImageIdRefs,
   isQuitWinbackAction,
   isGroupSocialAction,
   type PendingCardInfo,
@@ -6317,6 +6319,13 @@ function ChatPage({
             // 门牌号剥除（Task 30）：模型偶尔裸抄历史行首的 [M数字] 编号进正文，统一剥掉
             const clean = cleanBubbleText(stripMsgHandleText(stickersOn ? safePhotoText2 : stripEmojiCodes('wx', stripEmojiText(safePhotoText2.replace(/\[表情包\]|\[表情\]/g, ' ')))));
             if (!clean) continue;
+            // 第三十二轮：AI 模仿历史标注输出 [图片 ID:xxx]（想发那张图）→ 拆分处理：
+            // 命中会话里的图片消息 → 转成真实图片消息（真的把那张图发出来）；
+            // 未命中/跨会话 ID → 剥除标记（含「（图片内容：…）」说明），绝不把原始标注漏进气泡
+            const refSegs = splitImageIdRefs(clean);
+            const refBodies = refSegs.filter((s) => s.kind === 'text').map((s) => (s.text || '').trim()).filter(Boolean);
+            const refIds = refSegs.filter((s) => s.kind === 'imgref' && s.id).map((s) => s.id!) ;
+            const body = refBodies.join(' ').replace(/\s{2,}/g, ' ').trim();
             // Task 30 AI 引用：此前剥出过 [引用:M编号] → 挂到这第一条正文消息上（引用块随气泡展示）；
             // 编号查不到（跨回合编号漂移/后台接力无映射）→ 静默丢弃引用，正文照常
             let attachQuote: WxMsg['quote'] | null = null;
@@ -6327,7 +6336,15 @@ function ChatPage({
               }
               ctx.pendingQuote = undefined;
             }
-            out.push({ id, role: 'peer', content: clean, time: t, ...(attachQuote ? { quote: attachQuote } : {}) });
+            if (body) {
+              out.push({ id, role: 'peer', content: body, time: t, ...(attachQuote ? { quote: attachQuote } : {}) });
+            }
+            for (const refId of refIds) {
+              const refMsg = cur.find((m) => m.id === refId && m.kind === 'image' && !m.recalled) ?? null;
+              const rsrc = refMsg ? refMsg.img?.src || (typeof refMsg.content === 'string' && refMsg.content.startsWith('data:image/') ? refMsg.content : '') : '';
+              if (!rsrc) continue; // 未命中：引用段已在文本里剥除，静默降级为纯文字
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'image', img: { src: rsrc, desc: refMsg?.img?.desc } });
+            }
           }
           ctx.msgIdx += 1;
           t += 600 + Math.floor(Math.random() * 600);
@@ -9176,14 +9193,14 @@ function ChatPage({
               className="shrink-0 active:opacity-70"
             >
               <span
-                className={`flex h-9 w-9 items-center justify-center rounded-full border-[1.5px] transition-colors active:bg-black/[0.05] dark:active:bg-white/10 ${
+                className={`flex h-[30px] w-[30px] items-center justify-center rounded-full border-[1.5px] transition-colors active:bg-black/[0.05] dark:active:bg-white/10 ${
                   voiceMode
                     ? 'border-[#07C160]/70 bg-[#07C160]/[0.08] text-[#07C160]'
-                    : 'border-black/80 text-black/85 dark:border-white/70 dark:text-white/90'
+                    : 'border-black/85 text-black/90 dark:border-white/70 dark:text-white/90'
                 }`}
               >
                 {/* 键盘模式 → 声波图标（点按进语音）；语音模式 → 键盘图标（点按切回键盘） */}
-                {voiceMode ? <KeyboardGlyph size={19} /> : <VoiceWaveGlyph size={22} />}
+                {voiceMode ? <KeyboardGlyph size={17} /> : <VoiceWaveGlyph size={19} />}
               </span>
             </button>
             {voiceMode ? (
@@ -9217,12 +9234,12 @@ function ChatPage({
                   }}
                   enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-                  placeholderClass="pl-2 pt-[7px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
+                  placeholderClass="pl-1 pt-[9px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
                   testId="wx-chat-input"
-                  className="block max-h-[132px] min-h-[36px] w-full overflow-y-auto rounded-[5px] border border-black/[0.04] bg-white py-[7px] pl-2 pr-9 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 dark:border-white/[0.07] dark:bg-[#232323] dark:shadow-none"
+                  className="block max-h-[132px] min-h-[38px] w-full overflow-y-auto rounded-[8px] bg-white py-[8px] pl-3 pr-11 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 dark:bg-[#232323] dark:shadow-none"
                 />
-                {/* 文字转语音开关（声波图标在输入框内右下角）：开启后输入文字发送为语音气泡
-                    （本地仿真，无需配置语音 API）；切到「按住说话」模式时随输入框一起隐藏 */}
+                {/* 文字转语音开关（第三十二轮：图标改麦克风——与微信参考图一致的输入框内右侧灰麦克风；
+                    开启后输入文字发送为语音气泡（本地仿真）；切到「按住说话」模式时随输入框一起隐藏） */}
                 <button
                   type="button"
                   aria-label={ttsSend ? '文字转语音发送：已开启，点击关闭' : '文字转语音发送：点击开启'}
@@ -9233,9 +9250,9 @@ function ChatPage({
                     setTtsSend(nv);
                     onToast(nv ? '已开启文字转语音：发送后为语音气泡' : '已关闭文字转语音');
                   }}
-                  className={`absolute bottom-[2px] right-1 flex h-8 w-8 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
+                  className={`absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full transition-colors active:opacity-60 ${ttsSend ? 'text-[#07C160]' : 'text-black/40 dark:text-white/40'}`}
                 >
-                  <AudioLines className="h-5 w-5" strokeWidth={ttsSend ? 2.2 : 1.8} />
+                  <Mic className="h-[21px] w-[21px]" strokeWidth={ttsSend ? 2.1 : 1.8} />
                 </button>
               </div>
             )}
@@ -9249,9 +9266,9 @@ function ChatPage({
                 setPlusOpen(false);
                 setStickerOpen((v) => !v);
               }}
-              className={`flex h-9 w-9 shrink-0 items-center justify-center active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
+              className={`flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
             >
-              <Smile className="h-[26px] w-[26px]" strokeWidth={1.7} />
+              <Smile className="h-[25px] w-[25px]" strokeWidth={2} />
             </button>
             {(input.trim() || canDispatch || pendingImgs.length > 0) ? (
               <button
@@ -9277,9 +9294,9 @@ function ChatPage({
                   setStickerOpen(false);
                   setPlusOpen((v) => !v);
                 }}
-                className="ml-1 flex h-9 w-9 shrink-0 items-center justify-center active:opacity-60"
+                className="ml-1 flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60"
               >
-                <CirclePlus className={`h-[26px] w-[26px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.5} />
+                <CirclePlus className={`h-[28px] w-[28px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`} strokeWidth={1.8} />
               </button>
             )}
           </div>
@@ -12749,19 +12766,21 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
                   }}
                   className="flex w-full items-center gap-3 rounded-[14px] bg-white px-4 py-4 text-left active:bg-black/[0.04] dark:bg-[#1A1A1A]"
                 >
-                  {isMain ? (
-                    <WxAvatar src={mainOwner?.avatar ?? null} alt={name} size={52} />
-                  ) : (
-                    <WxAccountBubble name={name} kind={acc.kind === 'anon' ? 'anon' : 'alt'} size={52} />
-                  )}
+                  {(() => {
+                    // 第三十二轮：切换账号页头像跟随微信——每个账号显示自己档案的微信槽位头像（avatars.wx），
+                    // 没设过微信头像时：大号回退机主全局头像，小号/匿名号回退首字母彩色圆
+                    const prof = isMain ? mainProfile : profileOf(acc);
+                    const accAvatar = prof?.avatars?.wx ?? (isMain ? mainOwner?.avatar ?? null : null);
+                    return accAvatar ? (
+                      <WxAvatar src={accAvatar} alt={name} size={52} />
+                    ) : (
+                      <WxAccountBubble name={name} kind={acc.kind === 'anon' ? 'anon' : 'alt'} size={52} />
+                    );
+                  })()}
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
                       <span className="block truncate text-[16.5px] font-medium">{name}</span>
-                      {acc.grade === 'main' && (
-                        <span className="shrink-0 rounded-[4px] bg-[#07C160]/10 px-1 py-px text-[10.5px] leading-[1.5] text-[#07C160]" data-testid={`wx-account-tag-${acc.id}`}>
-                          大号
-                        </span>
-                      )}
+                      {/* 第三十二轮：「大号/小号」徽标删除——列表里都是可登录的账号，不再分档位 */}
                     </span>
                     <span className="mt-0.5 block truncate text-[12.5px] text-black/40 dark:text-white/40">微信号：{wxid || '未设置'}</span>
                   </span>
@@ -12787,16 +12806,16 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
             添加账号
           </button>
 
-          {/* 登录小号入口（Task 41）：小号统一在联系人 App 「小号」tab 创建；创建后不直接出现在列表，
-              在这里用小号账密登录成功后才出现（登录历史），登录过的小号切换不再需要登录 */}
+          {/* 登录账号入口（第三十二轮改文案：不再分大小号，统称「登录账号」）：账号统一在联系人 App 创建；
+              登录成功后出现在上面的列表，登录过的账号切换不再需要登录 */}
           <button
             type="button"
             data-testid="wx-account-login-alt"
             onClick={() => setLoginOpen(true)}
             className="flex h-[84px] w-full flex-col items-center justify-center gap-1 rounded-[14px] border-[1.5px] border-dashed border-black/15 px-4 text-center text-black/40 active:bg-black/[0.03] dark:border-white/20 dark:text-white/40 dark:active:bg-white/[0.05]"
           >
-            <span className="text-[14.5px]">登录小号</span>
-            <span className="text-[12px] text-black/25 dark:text-white/25">新建小号：打开联系人 App → 「小号」；用小号账密登录后出现在上面的列表</span>
+            <span className="text-[14.5px]">登录账号</span>
+            <span className="text-[12px] text-black/25 dark:text-white/25">用账号密码登录，登录后出现在上面的列表</span>
           </button>
         </div>
       </div>

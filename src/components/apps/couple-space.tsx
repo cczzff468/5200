@@ -1459,13 +1459,12 @@ export default function CoupleSpaceApp() {
     <div className="relative flex h-full w-full flex-col overflow-hidden bg-[linear-gradient(180deg,#ffffff_0%,#f6f6f8_55%,#ececee_100%)] text-[#2c2c30]">
       <LocalToast msg={toast} />
 
-      {/* 全局背景：合影铺满整个 App，所有 Tab 共用；各 Tab 叠白纱保证可读 */}
+      {/* 全局背景：合影铺满整个 App，所有 Tab 共用。
+          第三十二轮：首页不再叠白纱（用户反馈「背景图为什么有白色的一层」）——背景图直接可见；
+          其他 Tab（相册/发现/设置）保留白纱保证卡片可读 */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0">
         <img src={homeBgSrc} alt="" className="h-full w-full object-cover" draggable={false} />
-        <div className="absolute inset-0 bg-white/70" />
-        {tab === 'home' && (
-          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.8)_0%,rgba(255,255,255,0.18)_34%,rgba(255,255,255,0.16)_58%,rgba(255,255,255,0.88)_100%)]" />
-        )}
+        {tab !== 'home' && <div className="absolute inset-0 bg-white/70" />}
       </div>
 
       {/* 内容区 */}
@@ -11821,24 +11820,7 @@ function SettingsPage({ state, patch, showToast, close, onReset }: { state: Coup
         </button>
       </div>
 
-      {/* TA 在恋人空间做的事（第九轮：AI 深度参与，全部写进记忆；此处透明展示最近 12 条） */}
-      {(state.aiLog ?? []).length > 0 && (
-        <div className="mt-5 rounded-2xl bg-white p-4 shadow-sm" data-testid="ai-log">
-          <div className="text-[14.5px] font-bold text-[#2c2c30]">
-            {state.taName || 'TA'} 最近在你们的小天地里做的事
-          </div>
-          <div className="mt-2 space-y-1.5">
-            {state.aiLog.slice(0, 12).map((l) => (
-              <div key={l.id} className="flex items-start gap-2 text-[12.5px] leading-relaxed text-[#6e6e76]">
-                <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[#f2536a]/60" />
-                <span className="min-w-0 flex-1">{l.text}</span>
-                <span className="shrink-0 text-[10.5px] text-[#c9c9cf]">{fmtDate(l.at).slice(5)}</span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-2 text-[11px] leading-relaxed text-[#c9c9cf]">TA 做的每一件事、你记录的每一件事，都会写进 TA 的记忆，聊天时都记得。</div>
-        </div>
-      )}
+      {/* 第三十二轮：「TA 最近在你们的小天地里做的事」区块已按用户要求从设置页删除（AI 行为日志仍在后台记录） */}
 
       <div className="mt-6 text-center text-[12.5px] leading-relaxed text-[#b6b6bd]">
         恋人空间 v1.0

@@ -20071,3 +20071,24 @@ Work Log:
 Stage Summary:
 - 关键决策：①AI 存图双写（peer=TA 收藏语义保留 + me=用户可见性，name 标来源）；②选图兜底执行修复「言行不一」（有图可选时绝不静默丢弃）；③视觉规则恒注入让「主动换头像」成为常驻能力；④相册留言识图前置（零配置内置兜底），留言必须点出画面内容
 - 修改文件：src/lib/ios/album-store.ts（+listAlbumsForChat）、src/lib/chat-rich.ts（buildVisionRules 三参+两条新规则）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（双写+兜底+恒注入）、src/lib/ios/couple-ai.ts（aiCommentOnPhoto 识图+aiCommentOnPhotoLazy）、src/components/apps/couple-space.tsx（上传传图+查看器 lazy 触发）、src/components/apps/couple-pact-bubble.tsx（第三十一轮卡片改版）
+
+---
+Task ID: round-32
+Agent: 主协调者 (Z.ai Code)
+Task: 第三十二轮：AI 分享图片/带图回复修复（[图片 ID:xxx] 标记漏出）、微信输入框按参考图重做、聊天设置删「关系」、切换账号界面去大号小号+头像跟随各 App、恋人空间首页去白纱、设置页删「小天地做的事」
+
+Work Log:
+- 「AI 分享图片有问题/带图回复有问题」根因：历史序列化把图片消息标注为「[图片 ID:…]（图片内容：…）」，AI 学会该格式后在想发某张已有图片时于正文输出 [图片 ID:xxx]——旧管线不认，原始标记原文上屏（用户实测「[图片 ID:mvamxb21-36fcrxyifv9s]」气泡）
+- chat-rich.ts 新增 splitImageIdRefs（+IMG_ID_REF_RE）：从回复文本拆出引用段（兼容全/半角冒号/空格变体，紧跟的「（图片内容：…）」说明一并剥除）；buildVisionRules 教学改为「【发已有的图】正文单独输出 [图片 ID:消息ID] = 系统真的把那张图发出去」——AI 的引用意图现在被合法化并真实执行
+- wechat.tsx / qq.tsx 文本管线接入：clean 后拆分 → 文本段合并成气泡（引用标记已剥）、imgref 段在会话消息里按 id 找原图（!recalled）→ 真实图片消息（QQ 端 content+img.src 双写）；未命中（编造/跨会话 ID）静默跳过图片，绝不漏原始标记
+- 微信输入栏按参考截图重做（「要一模一样，大小也要一样」）：语音钮 h-9→h-[30px]（KeyboardGlyph 17/VoiceWaveGlyph 19）；输入框 rounded-[5px]+border → rounded-[8px] 纯白无边框 min-h-[38px] py-[8px] pl-3 pr-11；框内右下声波 AudioLines → 灰色麦克风 Mic（垂直居中 right-1.5）——参考图同款；Smile 26→25px strokeWidth 2（容器 h-10）；CirclePlus 26→28px strokeWidth 1.8（容器 h-10）；Mic 新增 lucide import
+- 聊天设置「关系」行删除（chat-settings.tsx，微信/QQ/信息共用组件全生效；关系数据与 AI 感知链路保留，仅删展示入口；关系编辑弹窗保留不可达）
+- 切换账号界面：微信 WxAccountSwitchPage + QQ QqDrawerAccountCard——「大号」徽标删除（列表都是可登录账号不分档位）；头像跟随各 App（每账号显示自己档案的 avatars.wx / avatars.qq 槽位头像，没设过回退：大号=机主全局头像、小号=首字母彩色圆）；微信「登录小号」入口改「登录账号」（副文案同步去小号化）
+- 恋人空间首页背景白纱删除（用户反馈「背景图为什么有白色的一层」）：home tab 不再叠 bg-white/70 与白色渐变层，背景合影直接可见；其他 Tab（相册/发现/设置）保留白纱保证卡片可读
+- 恋人空间设置页「{TA名} 最近在你们的小天地里做的事」区块删除（aiLog 后台记录保留，仅删展示）
+- 验证：tsc 全量零错误；eslint 改动文件零错误；agent-browser 实机：①新输入栏截图放大对比参考图——圆圈波纹语音钮+白框大圆角+内嵌灰麦克风+笑脸/加号尺寸间距一致 ✓；②聊天设置「关系」行 0、「备注」保留 ✓；③切换账号页「大号」徽标 0、「登录账号」文案、凡凡头像显示微信槽位头像 ✓；④恋人空间首页龙猫背景无白纱直接可见 ✓；⑤设置页 aiLog 块 0、背景管理/解除关系/v1.0 页脚完好 ✓；⑥QQ 打开渲染正常 ✓；⑦splitImageIdRefs Node 单元 5 用例全过（文字+标记/带说明括号/纯标记/无标记/编造ID）✓
+- 限制说明：沙盒内置模型持续 429 限流——AI 真实回复带 [图片 ID:xxx] 的端到端转换未能实机触发（解析管线已过单测与 tsc，规则教学已下发，模型恢复后即生效）
+
+Stage Summary:
+- 关键决策：①[图片 ID:xxx] 从「漏出的文本」升级为「合法的发图指令」（AI 引用意图真实执行，未命中才降级剥除）；②切换账号页头像按 App 槽位隔离展示（与聊天端头像同源）；③首页白纱全删（可读性交给背景图本身的明度）
+- 修改文件：src/lib/chat-rich.ts（splitImageIdRefs+教学）、src/components/apps/wechat.tsx（管线接入+输入栏重做+切换页）、src/components/apps/qq.tsx（管线接入+切换卡片）、src/components/apps/chat-settings.tsx（关系行删除）、src/components/apps/couple-space.tsx（白纱+aiLog 块删除）
