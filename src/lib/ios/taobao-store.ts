@@ -13,7 +13,18 @@
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import { accLs, getActiveAccountFor } from './accounts';
 import type { OrderCustomMeta } from './order-custom';
-import { productById, shopById, tbImg, tbReviewsOf, tbShopIdForTag, TB_SHOPS, type TbProduct } from './taobao-data';
+import {
+  productById,
+  shopById,
+  tbImg,
+  tbReviewsOf,
+  tbShopIdForTag,
+  tbRegisterCustomProduct,
+  tbUnregisterCustomProduct,
+  TB_SHOPS,
+  type TbProduct,
+  type TbShop,
+} from './taobao-data';
 import { tbGenProducts } from './tb-product-gen';
 
 // ---------------- 登录态 ----------------
@@ -681,6 +692,8 @@ export function tbCreateOrder(opts: {
   const discount = Math.round((couponAmount ?? 0) * 100) / 100;
   const total = Math.round((itemTotal + freight - discount) * 100) / 100;
   const shopIds = Array.from(new Set(items.map((it) => productById(it.pid)?.shopId ?? '')));
+  // 自建商品订单：custom 元数据（类型/优惠券名/规格选项组）随首个自建商品快照进订单（列表「自建·类型」角标/详情展示）
+  const custom = items.map((it) => productById(it.pid)?.custom).find(Boolean);
   const order: TbOrder = {
     id: `${Date.now()}${Math.floor(Math.random() * 1000)}`,
     uid,
@@ -697,6 +710,7 @@ export function tbCreateOrder(opts: {
     status: 'pendingPay',
     createdAt: Date.now(),
     track: [],
+    ...(custom ? { custom } : {}),
   };
   const list = tbLoadOrders(uid);
   list.unshift(order);
@@ -1206,7 +1220,51 @@ export function tbStartOrderWatcher(): void {
 
 /** 商品主图（首图，s 取变体） */
 export function tbMainImg(p: TbProduct, s = 0): string {
-  return tbImg(p.tag, 600, 600, s);
+  // 自建商品优先用自有主图（上传/AI 生成），无图走品类图兜底
+  return p.img ?? tbImg(p.tag, 600, 600, s);
+}
+
+// ---------------- 自建商品持久化（第三十六轮：创建订单=创建商品，按账号隔离） ----------------
+// 「创建订单」保存的是商品（tbc-p-* 商品 + tbc-s-* 自建店铺），持久化在此；
+// 进 App 恢复注册进 taobao-data 自建商品注册表 → 首页「我的商品」区展示，
+// 点击走商品详情/SKU/购物车/结算原生链路真实下单。
+
+const customProductsKey = (uid: string) => `tb-custom-products:${uid}`;
+
+export interface TbCustomEntry {
+  p: TbProduct;
+  shop: TbShop;
+}
+
+/** 读当前账号的自建商品（无则空数组；容错过滤残缺数据） */
+export function tbLoadCustomProducts(uid: string): TbCustomEntry[] {
+  const list = kvGet<Partial<TbCustomEntry>[]>(customProductsKey(uid));
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (e): e is TbCustomEntry =>
+      Boolean(e) &&
+      typeof e.p?.id === 'string' &&
+      e.p.id.startsWith('tbc-') &&
+      typeof e.p.title === 'string' &&
+      typeof e.p.price === 'number' &&
+      typeof e.shop?.id === 'string' &&
+      typeof e.shop.name === 'string'
+  );
+}
+
+/** 写当前账号的自建商品（全量覆盖），并同步注册进运行时注册表（保存后首页立即可见） */
+export function tbSaveCustomProducts(uid: string, list: TbCustomEntry[]): void {
+  kvSet(customProductsKey(uid), list);
+  for (const e of list) tbRegisterCustomProduct(e.p, e.shop);
+}
+
+/** 删除单个自建商品（落库 + 注销运行时注册表） */
+export function tbRemoveCustomProduct(uid: string, id: string): void {
+  tbSaveCustomProducts(
+    uid,
+    tbLoadCustomProducts(uid).filter((e) => e.p.id !== id)
+  );
+  tbUnregisterCustomProduct(id);
 }
 
 /** 商品详情评价（种子 3 条 + 订单晒单评价聚合在 UI 层做） */

@@ -133,6 +133,7 @@ import {
   MT_HOME_LIST,
   MT_MERCHANTS,
   mtAllMerchants,
+  mtCustomMerchantsAll,
   mtDealOf,
   mtDishesOf,
   mtImg,
@@ -140,8 +141,10 @@ import {
   mtPersistAiRegistry,
   mtRegisterAiDeal,
   mtRegisterAiMerchant,
+  mtRegisterCustomMerchants,
   mtRegisterMyMerchants,
   mtRestoreAiRegistry,
+  mtUnregisterCustomMerchant,
   mtUnregisterMyMerchants,
   type MtDeal,
   type MtDealPackage,
@@ -191,6 +194,7 @@ import {
   mtLoadBankCards,
   mtLoadCart,
   mtLoadCoupons,
+  mtLoadCustomShops,
   mtLoadFavs,
   mtLoadHistory,
   mtLoadCardQuota,
@@ -215,6 +219,7 @@ import {
   mtSaveAddresses,
   mtSaveBankCards,
   mtSaveCart,
+  mtSaveCustomShops,
   mtSaveOrders,
   mtSavePayPwd,
   mtSavePayPwdLock,
@@ -1021,6 +1026,90 @@ function localBatch(filter: string | null, exclude: string[]): { items: FeedItem
   return { items: out, listDeals: filter === null ? seedDeals : [], listTitle: filter === null ? MT_HOME_LIST.title : null };
 }
 
+// ================================ 首页「我的商品」区（第三十六轮：创建订单=创建商品） ================================
+
+/** 首页「我的商品」横滑区：自建商品（mtc-shop-* 自建商家 + 单菜品）展示 / 删除管理；
+ *  点商品 → 进商家页走 购物车→结算 原生链路真实下单 */
+function MyProductsSection({
+  uid,
+  onOpenMerchant,
+  onToast,
+}: {
+  uid: string;
+  onOpenMerchant: (id: string) => void;
+  onToast: (m: string) => void;
+}) {
+  const [shops, setShops] = useState<MtMerchant[]>(() => {
+    // 幂等恢复注册（进 App / 创建保存后均可安全重入）
+    mtRegisterCustomMerchants(mtLoadCustomShops(uid));
+    return mtLoadCustomShops(uid);
+  });
+  const [manage, setManage] = useState(false);
+  useEffect(() => {
+    const reload = () => {
+      mtRegisterCustomMerchants(mtLoadCustomShops(uid));
+      setShops(mtLoadCustomShops(uid));
+    };
+    window.addEventListener('mt-custom-products-changed', reload);
+    return () => window.removeEventListener('mt-custom-products-changed', reload);
+  }, [uid]);
+  if (shops.length === 0) return null;
+  const remove = (m: MtMerchant) => {
+    mtSaveCustomShops(uid, mtLoadCustomShops(uid).filter((x) => x.id !== m.id));
+    mtUnregisterCustomMerchant(m.id);
+    setShops(mtLoadCustomShops(uid));
+    onToast('商品已删除');
+  };
+  return (
+    <div className="mt-2 bg-white px-3 py-3" data-testid="mt-my-products">
+      <div className="flex items-center">
+        <span className="text-[15px] font-bold text-black/85">我的商品</span>
+        <span className="ml-1.5 rounded-full bg-[#FFF3DC] px-1.5 py-px text-[10px] font-medium text-[#B77900]">创建订单=创建商品</span>
+        <button type="button" data-testid="mt-my-products-manage" onClick={() => setManage((v) => !v)} className="ml-auto text-[12px] text-black/45 active:opacity-60">
+          {manage ? '完成' : '管理'}
+        </button>
+      </div>
+      <div className="mt-2.5 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {shops.map((m) => {
+          const d = m.sections[0]?.dishes[0];
+          if (!d) return null;
+          return (
+            <div key={m.id} className="w-[108px] shrink-0">
+              <button
+                type="button"
+                data-testid={`mt-my-product-${d.name}`}
+                onClick={() => (manage ? remove(m) : onOpenMerchant(m.id))}
+                className="block w-full text-left active:opacity-80"
+              >
+                <span className="relative block h-[108px] w-full overflow-hidden rounded-xl bg-[#F5F6F7]">
+                  {d.img ? (
+                    <img src={d.img} alt={d.name} className="h-full w-full object-cover" />
+                  ) : (
+                    <span className="grid h-full w-full place-items-center text-[34px]" aria-hidden="true">{d.emoji}</span>
+                  )}
+                  {d.custom?.type ? (
+                    <span className="absolute left-0 top-0 rounded-br-lg bg-[#FFD100] px-1.5 py-0.5 text-[10px] font-bold leading-[13px] text-black/80">{d.custom.type}</span>
+                  ) : null}
+                  {manage ? <span className="absolute inset-0 grid place-items-center bg-black/35 text-[12px] font-medium text-white">删除</span> : null}
+                </span>
+                <span className="mt-1 block truncate text-[12.5px] leading-[17px] text-black/85">{d.name}</span>
+                <span className="mt-0.5 flex items-baseline gap-1">
+                  <span className="shrink-0 text-[14px] font-bold text-[#FF4B33]">
+                    <span className="text-[10px]">¥</span>
+                    {d.price % 1 === 0 ? d.price : d.price.toFixed(2)}
+                  </span>
+                  {d.coupon ? <span className="truncate rounded bg-[#FFF0F0] px-1 text-[9.5px] leading-[14px] text-[#FF4B33]">券·减{d.coupon.amount % 1 === 0 ? d.coupon.amount : d.coupon.amount.toFixed(2)}</span> : null}
+                </span>
+                <span className="mt-0.5 block truncate text-[10.5px] text-black/35">{m.name}</span>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function HomePage({
   session,
   onOpenMerchant,
@@ -1371,6 +1460,9 @@ function HomePage({
           ))}
         </div>
       </div>
+
+      {/* 我的商品（创建订单=创建商品：自建商品展示区，点商品进商家页下单） */}
+      <MyProductsSection uid={uid} onOpenMerchant={onOpenMerchant} onToast={onToast} />
 
       {/* 生成中 / 下拉刷新提示（分类宫格图标下方） */}
       <div
@@ -3264,6 +3356,8 @@ function CheckoutSheet({
       return;
     }
     const now = Date.now();
+    // 自建商品订单：custom 元数据（类型/优惠券名/规格选项组）随首个自建菜品快照进订单（列表「自建·类型」角标）
+    const firstCustom = items.map(({ dish }) => dish.custom).find(Boolean);
     const order: MtOrder = {
       id: `mt${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`,
       uid,
@@ -3284,6 +3378,7 @@ function CheckoutSheet({
       status: 'pendingPay',
       createdAt: now,
       statusLog: [{ status: 'pendingPay', at: now }],
+      ...(firstCustom ? { custom: firstCustom } : {}),
     };
     if (selCoupon) mtUseCoupon(uid, selCoupon.id);
     const list = mtLoadOrders(uid);
@@ -3537,9 +3632,9 @@ function OrdersPage({
   };
 
   const reorder = (o: MtOrder) => {
-    // 自建单没有真实商家页
-    if (o.custom) {
-      onToast('自建订单暂不支持再来一单');
+    // 自建商品订单：商品仍在（mtc-* 商家可解析）→ 正常进店重新挑；已删除则提示
+    if (o.custom && !mtMerchantOf(o.merchantId)) {
+      onToast('商品已下架，暂不支持再来一单');
       return;
     }
     // 再来一单：跳回对应商家页重新挑选（团购跳团购详情），不再直接塞购物车
@@ -4083,9 +4178,9 @@ function OrderDetailPage({
   const voucherCut = Math.max(0, Math.round((order.discount - couponAmt) * 100) / 100);
 
   const reorder = () => {
-    // 自建单没有真实商家页
-    if (order.custom) {
-      onToast('自建订单暂不支持再来一单');
+    // 自建商品订单：商品仍在（mtc-* 商家可解析）→ 正常进店重新挑；已删除则提示
+    if (order.custom && !mtMerchantOf(order.merchantId)) {
+      onToast('商品已下架，暂不支持再来一单');
       return;
     }
     // 再来一单：跳回商家页重新挑选（团购跳团购详情），不再直接塞购物车
@@ -12135,6 +12230,8 @@ export default function MeituanApp() {
       setBooting(false);
       // 商家入驻：登录态恢复后把本账号自有店铺重新注册进运行时注册表（详情页/搜索/AI 代点即时可用）
       if (v) mtRegisterMyMerchants(mtLoadShops(mtUidOf(v)));
+      // 自建商品（创建订单=创建商品）：登录态恢复后同步恢复注册（首页「我的商品」/商家页/下单链路即时可用）
+      if (v) mtRegisterCustomMerchants(mtLoadCustomShops(mtUidOf(v)));
       const nav = takeNotifyNavigation('meituan');
       if (nav?.contactId && v) {
         // AI 代点草稿「确认下单」带 pay=true：目标订单仍待支付时直达收银台，否则进订单详情
@@ -12201,6 +12298,7 @@ export default function MeituanApp() {
     setTab('home');
     setPage('main');
     mtRegisterMyMerchants(mtLoadShops(mtUidOf(s)));
+    mtRegisterCustomMerchants(mtLoadCustomShops(mtUidOf(s)));
     showToast(`欢迎回来，${s.name}`);
   }, [showToast]);
 
@@ -12209,6 +12307,8 @@ export default function MeituanApp() {
     setSession(null);
     // 商家入驻：退出登录后注销本账号自有店铺（防跨账号残留在搜索池/详情页）
     mtUnregisterMyMerchants();
+    // 自建商品：退出登录后注销全部自建商品商家（防跨账号残留；换号登录会按新账号恢复）
+    for (const m of mtCustomMerchantsAll()) mtUnregisterCustomMerchant(m.id);
     setTab('home');
     setPage('main');
   }, []);
@@ -12402,9 +12502,8 @@ export default function MeituanApp() {
           session={session}
           onBack={() => setPage('main')}
           onSaved={() => {
-            // 入库成功 → 直达订单列表（新建的已完成单在最上面）
-            setOrderTab('全部');
-            setTab('orders');
+            // 保存成功 = 商品已上首页「我的商品」区，回首页立即可见（不再直接进订单）
+            setTab('home');
             setPage('main');
           }}
           onToast={showToast}

@@ -1,19 +1,22 @@
 'use client';
 
 /**
- * 美团「创建订单」入库页（首页宫格入口）：
- * 任意类型订单都能添加（外卖/奶茶/数码/充值/电影票…自由填写）——
+ * 美团「创建订单」页（首页宫格入口）——创建订单就是创建商品（第三十六轮）：
+ * 任意类型商品都能创建（外卖/奶茶/数码/充值/电影票…自由填写）——
  * 图片可上传（相册文件选择，压缩落库）或用「设置 › 图像生成」配置的模型按自定义提示词生成；
- * 可填 类型 / 优惠券（名称+金额） / 规格选项组（小菜、奶茶小料、手机内存等，组名+值自由组合）/ 备注；
- * 保存 = 真实落库 mt-orders:<uid>（已完成状态），订单列表/详情立即可见。
+ * 可填 类型 / 优惠券（名称+金额，下单自动抵扣的菜品券） / 规格选项组（小菜、奶茶小料、手机内存等，买家可自行选择）；
+ * 保存 = 创建「商品」落库（mt-custom-shops:<uid> 自建商家+单菜品）→ 首页「我的商品」区展示；
+ * 点首页商品走 商家页→购物车→结算 原生链路，真实下单后才生成订单。
  */
 
 import { useRef, useState } from 'react';
 import { ChevronLeft, ImagePlus, Loader2, PackagePlus, Plus, Trash2, Wand2, X } from 'lucide-react';
 import { compressImageSrc, generateFreePhoto } from '@/lib/imggen';
 import type { ImgGenConfig } from '@/lib/ios/store';
-import { customSpecText, type OrderCustomOptionGroup } from '@/lib/ios/order-custom';
-import { mtLoadAddresses, mtLoadOrders, mtSaveOrders, mtUidOf, type MtSession } from '@/lib/ios/meituan-store';
+import type { OrderCustomOptionGroup, OrderCustomMeta } from '@/lib/ios/order-custom';
+import type { MtDish, MtMerchant } from '@/lib/ios/meituan-data';
+import { mtRegisterCustomMerchant } from '@/lib/ios/meituan-data';
+import { mtLoadCustomShops, mtSaveCustomShops, mtUidOf, type MtSession } from '@/lib/ios/meituan-store';
 import { OrderImgGenSheet } from './order-img-gen';
 
 /** 类型快捷选项 */
@@ -31,7 +34,7 @@ export function MtOrderCreatePage({
 }: {
   session: MtSession;
   onBack: () => void;
-  /** 保存成功（入库后跳订单列表） */
+  /** 保存成功（商品已上首页「我的商品」区） */
   onSaved: () => void;
   onToast: (m: string) => void;
 }) {
@@ -45,7 +48,6 @@ export function MtOrderCreatePage({
   const [type, setType] = useState('');
   const [shopName, setShopName] = useState('');
   const [price, setPrice] = useState('');
-  const [qty, setQty] = useState(1);
   const [couponName, setCouponName] = useState('');
   const [couponAmt, setCouponAmt] = useState('');
   const [note, setNote] = useState('');
@@ -55,9 +57,7 @@ export function MtOrderCreatePage({
   const [genBusy, setGenBusy] = useState(false);
   const [genErr, setGenErr] = useState('');
 
-  const itemTotal = Math.max(0, (parseFloat(price) || 0) * qty);
-  const cut = Math.min(parseFloat(couponAmt) || 0, itemTotal);
-  const total = Math.max(0, itemTotal - cut);
+  const cut = Math.min(parseFloat(couponAmt) || 0, parseFloat(price) || 0);
 
   const pickFile = async (f: File | null | undefined) => {
     if (!f) return;
@@ -113,56 +113,71 @@ export function MtOrderCreatePage({
       onToast('请填写店铺名称');
       return;
     }
-    if (!Number.isFinite(p) || p < 0) {
+    if (!Number.isFinite(p) || p <= 0) {
       onToast('请填写正确的单价');
       return;
     }
-    const spec = customSpecText(groups);
     const now = Date.now();
+    const r = Math.floor(Math.random() * 1e4).toString(36);
+    const shopId = `mtc-shop-${now.toString(36)}${r}`;
+    const dishId = `mtc-dish-${now.toString(36)}${r}`;
+    const price2 = Math.round(p * 100) / 100;
     const discount = Math.round(cut * 100) / 100;
-    const order = {
-      id: `mtc-${now.toString(36)}-${Math.floor(Math.random() * 1e4).toString(36)}`,
-      uid,
-      merchantId: 'custom',
-      merchantName: shop,
-      merchantEmoji: '🛍️',
-      merchantImg: img ?? undefined,
-      items: [
-        {
-          dishId: `custom-${now.toString(36)}`,
-          name,
-          price: Math.round(p * 100) / 100,
-          qty,
-          emoji: '🛍️',
-          img: img ?? undefined,
-          ...(spec ? { spec } : {}),
-        },
-      ],
-      itemTotal: Math.round(itemTotal * 100) / 100,
-      deliveryFee: 0,
-      discount,
-      ...(couponName.trim() && discount > 0 ? { couponId: `custom-coupon-${now.toString(36)}`, couponAmount: discount } : {}),
-      total: Math.round(total * 100) / 100,
-      ...(note.trim() ? { note: note.trim() } : {}),
-      kind: 'waimai' as const,
-      address: mtLoadAddresses(uid)[0],
-      status: 'completed' as const,
-      createdAt: now,
-      paidAt: now,
-      statusLog: [
-        { status: 'pendingAccept' as const, at: now },
-        { status: 'completed' as const, at: now },
-      ],
-      custom: {
-        ...(type.trim() ? { type: type.trim() } : {}),
-        ...(couponName.trim() && discount > 0 ? { couponLabel: couponName.trim() } : {}),
-        ...(groups.length > 0 ? { optionGroups: groups.filter((g) => g.name.trim() && g.values.length > 0) } : {}),
-      },
+    // 规格选项组 → 买家可选的规格弹窗（小菜/小料类多选，其余单选）；同时快照 custom 元数据随订单展示
+    const isMulti = (g: string) => /小菜|小料|配菜|加料|加购|配菜/.test(g);
+    const specs: MtDish['specs'] =
+      groups.length > 0
+        ? groups
+            .filter((g) => g.name.trim() && g.values.length > 0)
+            .map((g) => ({
+              name: g.name.trim(),
+              ...(isMulti(g.name) ? { multi: true, max: Math.max(1, g.values.length) } : {}),
+              options: g.values.map((v) => ({ label: v })),
+            }))
+        : undefined;
+    const custom: OrderCustomMeta = {
+      ...(type.trim() ? { type: type.trim() } : {}),
+      ...(couponName.trim() && discount > 0 ? { couponLabel: couponName.trim() } : {}),
+      ...(groups.length > 0 ? { optionGroups: groups.filter((g) => g.name.trim() && g.values.length > 0) } : {}),
     };
-    // 前插入库（真实落库 + 广告刷新事件）
-    mtSaveOrders(uid, [order, ...mtLoadOrders(uid)]);
-    window.dispatchEvent(new CustomEvent('mt-orders-changed'));
-    onToast('订单已入库');
+    const dish: MtDish = {
+      id: dishId,
+      name,
+      price: price2,
+      emoji: '🛍️',
+      ...(img ? { img } : {}),
+      ...(note.trim() ? { desc: note.trim() } : {}),
+      monthSale: 23,
+      ...(specs && specs.length > 0 ? { specs } : {}),
+      // 优惠券 = 菜品券：下单含此菜自动抵扣（无门槛），与创建时填的名称/金额一致
+      ...(couponName.trim() && discount > 0 ? { coupon: { name: couponName.trim(), amount: discount, min: 0 } } : {}),
+      ...(Object.keys(custom).length > 0 ? { custom } : {}),
+    };
+    const merchant: MtMerchant = {
+      id: shopId,
+      name: shop,
+      emoji: '🛍️',
+      ...(img ? { cover: img } : {}),
+      cats: [],
+      rating: 4.8,
+      monthSale: 23,
+      minOrder: 0,
+      deliveryFee: 0,
+      distanceKm: 0.8,
+      deliveryMin: 25,
+      notice: type.trim() ? `自建商品 · ${type.trim()}` : '自建商品店铺',
+      deals: [],
+      hours: '00:00-24:00',
+      addr: '线上商品 · 全国包邮',
+      sections: [{ cat: '我的商品', dishes: [dish] }],
+      reviews: [],
+      mtStatus: 'open',
+    };
+    // 落库（按账号隔离）+ 注册进运行时注册表 → 首页「我的商品」区立即展示
+    mtSaveCustomShops(uid, [...mtLoadCustomShops(uid), merchant]);
+    mtRegisterCustomMerchant(merchant);
+    window.dispatchEvent(new CustomEvent('mt-custom-products-changed'));
+    onToast('商品已创建，已显示在首页');
     onSaved();
   };
 
@@ -175,7 +190,7 @@ export function MtOrderCreatePage({
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
           <span className="text-[17px] font-bold text-black/90">创建订单</span>
-          <span className="ml-1.5 rounded-full bg-[#FFF3DC] px-2 py-0.5 text-[11px] font-medium text-[#B77900]">自建订单入库</span>
+          <span className="ml-1.5 rounded-full bg-[#FFF3DC] px-2 py-0.5 text-[11px] font-medium text-[#B77900]">创建商品 · 上首页</span>
         </div>
       </div>
 
@@ -275,17 +290,6 @@ export function MtOrderCreatePage({
               className="h-10 w-full rounded-lg bg-[#F5F6F7] px-3 text-[13.5px] text-black/85 outline-none placeholder:text-black/30"
             />
           </Field>
-          <Field label="数量">
-            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-              <button type="button" aria-label="减少" onClick={() => setQty((q) => Math.max(1, q - 1))} className="grid h-7 w-7 place-items-center rounded-full text-[18px] leading-none text-black/45 active:bg-black/5">
-                <span className="mt-[-2px]">−</span>
-              </button>
-              <span className="grid h-[30px] min-w-[40px] place-items-center rounded-[5px] border border-black/15 bg-white px-1 text-[14px] font-medium">{qty}</span>
-              <button type="button" aria-label="增加" onClick={() => setQty((q) => Math.min(99, q + 1))} className="grid h-7 w-7 place-items-center rounded-full text-[18px] leading-none text-black/45 active:bg-black/5">
-                <span className="mt-[-2px]">＋</span>
-              </button>
-            </div>
-          </Field>
           <Field label="店铺名称" required>
             <input
               value={shopName}
@@ -381,8 +385,8 @@ export function MtOrderCreatePage({
       <div className="shrink-0 border-t border-black/5 bg-white px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3">
         <div className="flex items-center gap-3">
           <span className="min-w-0 flex-1 text-[13px] text-black/45">
-            合计 <span className="text-[20px] font-bold text-black/90">¥{fmtMoney(total)}</span>
-            {cut > 0 && <span className="ml-1.5 text-[11.5px] text-[#FF4B33]">已优惠 ¥{fmtMoney(cut)}</span>}
+            单价 <span className="text-[20px] font-bold text-black/90">¥{fmtMoney(parseFloat(price) || 0)}</span>
+            {cut > 0 && <span className="ml-1.5 text-[11.5px] text-[#FF4B33]">下单抵 ¥{fmtMoney(cut)}</span>}
           </span>
           <button
             type="button"
@@ -391,7 +395,7 @@ export function MtOrderCreatePage({
             className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-r from-[#FFC300] to-[#FF9500] px-7 text-[15px] font-semibold text-black/90 active:opacity-85"
           >
             <PackagePlus className="h-[17px] w-[17px]" strokeWidth={2.1} />
-            保存订单
+            上架商品
           </button>
         </div>
       </div>

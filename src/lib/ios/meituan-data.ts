@@ -7,6 +7,7 @@
 
 import { mtGoodsImg } from '@/lib/ios/goods-img';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
+import type { OrderCustomMeta } from '@/lib/ios/order-custom';
 
 /** 内容匹配图地址（本地卡通图，Task 58）：
  *  - k=英文品类词（hotpot/pizza/milk-tea…），goods-img 映射到 public/goods 预生成 kawaii 插画；
@@ -164,6 +165,8 @@ export interface MtDish {
   coupon?: MtDishCouponDef;
   /** 售罄/在售开关（true = 已售罄：买家端置灰不可加购，AI 代点/请客自动避开） */
   soldOut?: boolean;
+  /** 自建商品元数据（创建订单=创建商品：类型/优惠券名/规格选项组，下单时随订单快照） */
+  custom?: OrderCustomMeta;
 }
 
 /** 规格选项（price 为加价，如小料 ¥1） */
@@ -1476,6 +1479,31 @@ export function mtRegisterAiDeal(d: MtDeal): void {
   AI_DEALS.set(d.id, d);
 }
 
+// ---------------- 自建商品注册表（第三十六轮：创建订单=创建商品，mtc-shop-* 商家 + 单菜品） ----------------
+// 「创建订单」保存的是商品（不是订单）：商品以 mtc-shop-* 自建商家的形式注册进运行时注册表，
+// 商家页/购物车/结算/下单等既有链路通过 mtMerchantOf / mtFindDish 无感命中，不改任何调用方；
+// 持久化按账号隔离（mt-custom-shops:<uid>，meituan-store），进 App 恢复注册。
+
+/** 注册自建商品商家（同 id 覆盖） */
+export function mtRegisterCustomMerchant(m: MtMerchant): void {
+  if (m.id.startsWith('mtc-shop-')) AI_MERCHANTS.set(m.id, m);
+}
+
+/** 批量注册自建商品商家（进 App 恢复用） */
+export function mtRegisterCustomMerchants(list: MtMerchant[]): void {
+  for (const m of list) mtRegisterCustomMerchant(m);
+}
+
+/** 注销单个自建商品商家（删除商品时调用） */
+export function mtUnregisterCustomMerchant(id: string): void {
+  if (id.startsWith('mtc-')) AI_MERCHANTS.delete(id);
+}
+
+/** 全部自建商品商家（首页「我的商品」区展示用） */
+export function mtCustomMerchantsAll(): MtMerchant[] {
+  return [...AI_MERCHANTS.values()].filter((m) => m.id.startsWith('mtc-shop-'));
+}
+
 /** 按 id 查商家（AI 生成优先，种子数据兜底） */
 export function mtMerchantOf(id: string): MtMerchant | undefined {
   return AI_MERCHANTS.get(id) ?? MT_MERCHANTS.find((m) => m.id === id);
@@ -1527,10 +1555,10 @@ export function mtRestoreAiRegistry(): void {
   }
 }
 
-/** 持久化 AI 商家/团购注册表（封顶淘汰最旧；my-shop-* 自有店铺不在此存） */
+/** 持久化 AI 商家/团购注册表（封顶淘汰最旧；my-shop-* 自有店铺 / mtc-* 自建商品不在此存——各自有独立持久化） */
 export function mtPersistAiRegistry(): void {
   try {
-    const merchants = [...AI_MERCHANTS.values()].filter((m) => !m.id.startsWith('my-shop-')).slice(-AI_REGISTRY_CAP);
+    const merchants = [...AI_MERCHANTS.values()].filter((m) => !m.id.startsWith('my-shop-') && !m.id.startsWith('mtc-shop-')).slice(-AI_REGISTRY_CAP);
     const deals = [...AI_DEALS.values()].slice(-AI_REGISTRY_CAP);
     kvSet(AI_REGISTRY_KEY, { merchants, deals });
   } catch {

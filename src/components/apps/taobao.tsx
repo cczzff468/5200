@@ -93,14 +93,18 @@ import {
   TB_PRODUCTS,
   productById,
   shopById,
+  tbCustomProductsAll,
   tbImg,
   tbRegisterAiProducts,
+  tbRegisterCustomProducts,
   tbReviewsOf,
   tbSalesText,
   tbSearchPool,
   tbSearchScore,
+  tbUnregisterCustomProduct,
   type TbCatId,
   type TbProduct,
+  type TbShop,
 } from '@/lib/ios/taobao-data';
 import {
   TB_CC_SEEDS,
@@ -128,6 +132,7 @@ import {
   tbLoadOrders,
   tbLoadSearchHist,
   tbLoadShopFollows,
+  tbLoadCustomProducts,
   tbMarkPaid,
   tbMarkRefund,
   tbMsgUnreadCount,
@@ -136,6 +141,7 @@ import {
   tbPushMsg,
   tbPushSearchHist,
   tbRemoveCartItems,
+  tbRemoveCustomProduct,
   tbResolveIdpIdentity,
   tbSyncSessionIdentity,
   tbSaveAddrs,
@@ -165,6 +171,7 @@ import {
   TB_SPEED_ORDER,
   type TbAddress,
   type TbCartItem,
+  type TbCustomEntry,
   type TbCoupon,
   type TbOrder,
   type TbOrderItem,
@@ -519,9 +526,8 @@ function TmallMark() {
 
 /** 商品图（瀑布流/列表通用，懒加载 + 服务端默认图兜底） */
 function ProductImg({ p, w = 600, h = 600, s = 0, className = '' }: { p: TbProduct; w?: number; h?: number; s?: number; className?: string }) {
-  return (
-    <TbImg src={tbImg(p.tag, w, h, s)} alt={p.title} className={`bg-[#f5f5f5] object-cover ${className}`} />
-  );
+  // 自建商品优先用自有主图（上传/AI 生成），无图走品类图兑底
+  return <TbImg src={p.img ?? tbImg(p.tag, w, h, s)} alt={p.title} className={`bg-[#f5f5f5] object-cover ${className}`} />;
 }
 
 // ---------------- 登录页 ----------------
@@ -1382,6 +1388,9 @@ function HomePage({
             </button>
           </div>
 
+          {/* 我的商品（创建订单=创建商品：自建商品展示区，点商品进详情下单） */}
+          <MyProductsSection uid={uid} onOpenProduct={onOpenProduct} onToast={onToast} />
+
           {/* 推荐商品流（双列瀑布） */}
           {feedTab === 'follow' ? (
             <FollowFeed uid={uid} follows={follows} onOpenProduct={onOpenProduct} onOpenSearch={() => setFeedTab('rec')} />
@@ -1450,6 +1459,78 @@ function ProductCard({ p, v, onOpen }: { p: TbProduct; v: number; onOpen: () => 
         </div>
       </div>
     </button>
+  );
+}
+
+// ================================ 首页「我的商品」区（第三十六轮：创建订单=创建商品） ================================
+
+/** 首页「我的商品」横滑区：自建商品（tbc-p-* 商品 + tbc-s-* 自建店铺）展示 / 删除管理；
+ *  点商品 → 商品详情走 SKU→立即购买/购物车→结算 原生链路真实下单 */
+function MyProductsSection({
+  uid,
+  onOpenProduct,
+  onToast,
+}: {
+  uid: string;
+  onOpenProduct: (pid: string) => void;
+  onToast: (m: string) => void;
+}) {
+  const [entries, setEntries] = useState<TbCustomEntry[]>(() => {
+    // 幂等恢复注册（进 App / 创建保存后均可安全重入）
+    tbRegisterCustomProducts(tbLoadCustomProducts(uid));
+    return tbLoadCustomProducts(uid);
+  });
+  const [manage, setManage] = useState(false);
+  useEffect(() => {
+    const reload = () => {
+      tbRegisterCustomProducts(tbLoadCustomProducts(uid));
+      setEntries(tbLoadCustomProducts(uid));
+    };
+    window.addEventListener('tb-custom-products-changed', reload);
+    return () => window.removeEventListener('tb-custom-products-changed', reload);
+  }, [uid]);
+  if (entries.length === 0) return null;
+  const remove = (id: string) => {
+    tbRemoveCustomProduct(uid, id);
+    setEntries(tbLoadCustomProducts(uid));
+    onToast('商品已删除');
+  };
+  return (
+    <div className="mt-2.5 rounded-2xl bg-white px-3 py-3 mx-2" data-testid="tb-my-products">
+      <div className="flex items-center">
+        <span className="text-[15px] font-bold text-black/90">我的商品</span>
+        <span className="ml-1.5 rounded-full bg-[#FFF1E6] px-1.5 py-px text-[10px] font-medium text-[#FF6A1E]">创建订单=创建商品</span>
+        <button type="button" data-testid="tb-my-products-manage" onClick={() => setManage((v) => !v)} className="ml-auto text-[12px] text-black/45 active:opacity-60">
+          {manage ? '完成' : '管理'}
+        </button>
+      </div>
+      <div className="mt-2.5 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {entries.map(({ p, shop }) => (
+          <div key={p.id} className="w-[120px] shrink-0">
+            <button
+              type="button"
+              data-testid={`tb-my-product-${p.title}`}
+              onClick={() => (manage ? remove(p.id) : onOpenProduct(p.id))}
+              className="block w-full text-left active:opacity-80"
+            >
+              <span className="relative block aspect-square w-full overflow-hidden rounded-xl bg-[#f5f5f5]">
+                <ProductImg p={p} w={240} h={240} className="h-full w-full" />
+                {p.custom?.type ? (
+                  <span className="absolute left-0 top-0 rounded-br-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-1.5 py-0.5 text-[10px] font-bold text-white">{p.custom.type}</span>
+                ) : null}
+                {manage ? <span className="absolute inset-0 grid place-items-center bg-black/35 text-[12px] font-medium text-white">删除</span> : null}
+              </span>
+              <span className="mt-1 block truncate text-[12.5px] leading-[17px] text-black/85">{p.title}</span>
+              <span className="mt-0.5 flex items-baseline gap-1">
+                <Price value={p.price} size={14} />
+                {p.coupon ? <span className="truncate rounded bg-[#FFF1E6] px-1 text-[9.5px] leading-[14px] text-[#FF4400]">券·减{p.coupon.amount % 1 === 0 ? p.coupon.amount : p.coupon.amount.toFixed(2)}</span> : null}
+              </span>
+              <span className="mt-0.5 block truncate text-[10.5px] text-black/35">{shop.name}</span>
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1985,7 +2066,8 @@ function SearchResultPage({ uid, kw, onBack, onOpenProduct, onSearchSeed }: { ui
 function ProductGallery({ p }: { p: TbProduct }) {
   const [idx, setIdx] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
-  const total = 4;
+  // 自建商品只有一张自有主图（上传/AI 生成），其余商品同 tag 多变体 4 图
+  const total = p.img ? 1 : 4;
   const onScroll = () => {
     const el = ref.current;
     if (!el) return;
@@ -2050,7 +2132,8 @@ function SkuSheet({
       const o = g.options.find((x) => x.label === sel[g.name]);
       if (o?.img) return o.img;
     }
-    return tbImg(p.tag, 200, 200, 0);
+    // 自建商品优先自有主图；无图走品类图兜底
+    return p.img ?? tbImg(p.tag, 200, 200, 0);
   }, [p, sel]);
   const ready = p.skus.every((g) => sel[g.name]);
   const addr = tbCurAddr(uid);
@@ -4005,8 +4088,9 @@ function OrderCard({
     }
   })();
   const rebuy = () => {
-    if (o.custom) {
-      onToast('自建订单商品暂不支持加入购物车');
+    // 自建商品订单：商品仍在（tbc-* 可解析）→ 正常加购；已删除则提示
+    if (o.items.some((it) => !productById(it.pid))) {
+      onToast('商品已下架，暂不能再次购买');
       return;
     }
     for (const it of o.items) tbAddToCart(uid, it.pid, it.sku, it.qty);
@@ -4240,12 +4324,8 @@ function OrderDetailPage({
       onToast('复制失败，请手动选择');
     }
   };
-  /** 退款（原路退回） */
+  /** 退款（原路退回）：自建商品订单与普通订单同链路（未付款单无 payIdp 由下方校验拦截） */
   const applyRefund = async () => {
-    if (o?.custom) {
-      onToast('自建订单不支持售后');
-      return;
-    }
     if (!o || !o.payIdp || !o.payMethodId) {
       onToast('退款信息异常，请联系客服');
       return;
@@ -4262,8 +4342,9 @@ function OrderDetailPage({
   };
   const addAllToCart = () => {
     if (!o) return;
-    if (o.custom) {
-      onToast('自建订单商品暂不支持加入购物车');
+    // 自建商品订单：商品仍在（tbc-* 可解析）→ 正常加购；已删除则提示
+    if (o.items.some((it) => !productById(it.pid))) {
+      onToast('商品已下架，暂不能再次购买');
       return;
     }
     for (const it of o.items) tbAddToCart(uid, it.pid, it.sku, it.qty);
@@ -4278,9 +4359,11 @@ function OrderDetailPage({
     );
   }
   const st = tbStatusText(o);
-  // 自建订单：店铺不在预置店铺表里，用自建店铺展示（进店/加购/售后已另行守卫）
+  // 自建商品订单：店铺在自建注册表时正常解析（可进店）；已删除/旧版直建单回退自建店铺展示
   const shop = o.custom
-    ? { id: 'custom', name: o.shopName, tmall: false, rating: 5, fans: '—', tag: 'custom' }
+    ? shopById(o.shopId).id === o.shopId
+      ? shopById(o.shopId)
+      : { id: 'custom', name: o.shopName, tmall: false, rating: 5, fans: '—', tag: 'custom' }
     : shopById(o.shopId);
   const man = tbCourierMan(o.id);
   const manPhone = tbCourierPhone(o.id);
@@ -4332,10 +4415,10 @@ function OrderDetailPage({
       setImgGenBusy(false);
     }
   };
-  /** 进店逛逛（自建订单的店铺不在店铺表，守卫） */
+  /** 进店逛逛：自建商品订单的店铺在自建注册表里时正常进店；已删除则提示 */
   const openShopSafe = () => {
-    if (o.custom) {
-      onToast('自建订单的店铺不支持进店');
+    if (o.custom && shopById(o.shopId).id !== o.shopId) {
+      onToast('店铺已下架，暂不支持进店');
       return;
     }
     onOpenShop(shop.id);
@@ -4348,7 +4431,7 @@ function OrderDetailPage({
         const skuText = Object.entries(it.sku).map(([k, v]) => `${k}：${v}`).join('；');
         const origin = Math.round(it.price * 1.32 * 100) / 100;
         return (
-          <button key={idx} type="button" onClick={() => (o.custom ? undefined : onOpenProduct(it.pid))} className="flex w-full gap-2.5 text-left">
+          <button key={idx} type="button" onClick={() => (productById(it.pid) ? onOpenProduct(it.pid) : undefined)} className="flex w-full gap-2.5 text-left">
             {/* 图片可点：选生图模型+改提示词重新生成（自建/既有订单通用）；span 内嵌避免 button 套 button */}
             <span
               role="button"
@@ -6845,7 +6928,8 @@ function ShopFollowsPage({ uid, onBack, onOpenProduct, onToast }: { uid: string;
 
 function ShopPage({ shopId, uid, onBack, onOpenProduct, onToast }: { shopId: string; uid: string; onBack: () => void; onOpenProduct: (pid: string) => void; onToast: (m: string) => void }) {
   const shop = shopById(shopId);
-  const goods = TB_PRODUCTS.filter((p) => p.shopId === shopId);
+  // 自建店铺：商品来自自建注册表（进店能看到自建商品）；预置店铺走种子表
+  const goods = [...tbCustomProductsAll().map((e) => e.p), ...TB_PRODUCTS].filter((p) => p.shopId === shopId);
   const followed = tbLoadShopFollows(uid).includes(shopId);
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
@@ -7640,7 +7724,11 @@ export default function TaobaoApp() {
 
   // Task 41：登录后恢复 AI 生成商品的持久化注册表（刷新页面/重开 App 后详情/下单链路可用）
   useEffect(() => {
-    if (session) tbRestoreAiProducts(tbUidOf(session));
+    if (session) {
+      tbRestoreAiProducts(tbUidOf(session));
+      // 自建商品（创建订单=创建商品）：同步恢复注册（首页「我的商品」/详情/下单链路即时可用）
+      tbRegisterCustomProducts(tbLoadCustomProducts(tbUidOf(session)));
+    }
   }, [session]);
 
   // 登录后刷新购物车角标
@@ -7942,16 +8030,14 @@ export default function TaobaoApp() {
     // 红包签到·领现金（第九轮：首页运营位图标入口）
     content = <SignInPage uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
   } else if (page === 'createOrder') {
-    // 创建订单（需求：替代领淘金币/阿里拍卖运营位——任意类型自建订单入库）
+    // 创建订单=创建商品（需求：替代领淘金币/阿里拍卖运营位——保存的商品上首页「我的商品」区）
     content = (
       <TbOrderCreatePage
         uid={uid}
         onBack={() => setPage('main')}
         onSaved={() => {
-          // 入库成功 → 直达订单列表
-          setOrderTab('all');
-          setSubReturn('me');
-          setPage('orders');
+          // 保存成功 = 商品已上首页，回首页立即可见（不再直接进订单）
+          setPage('main');
         }}
         onToast={showToast}
       />
@@ -8012,6 +8098,8 @@ export default function TaobaoApp() {
         onLogout={() => {
           tbSetSession(null);
           setSession(null);
+          // 自建商品：退出登录后注销全部自建商品（防跨账号残留；换号登录会按新账号恢复）
+          for (const e of tbCustomProductsAll()) tbUnregisterCustomProduct(e.p.id);
           setTab('home');
           setPage('main');
         }}

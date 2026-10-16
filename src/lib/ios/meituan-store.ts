@@ -1124,6 +1124,31 @@ export function mtGetShop(uid: string, id: string): MtMerchant | undefined {
   return mtLoadShops(uid).find((s) => s.id === id);
 }
 
+// ---------------- 自建商品（第三十六轮：创建订单=创建商品，按账号隔离） ----------------
+// 「创建订单」保存的是商品（mtc-shop-* 自建商家 + 单菜品），持久化在此、运行时注册进 meituan-data
+// 的自建商品注册表 → 首页「我的商品」区展示，点击走商家页/购物车/结算原生链路真实下单。
+
+const customShopsKey = (uid: string) => `mt-custom-shops:${uid}`;
+
+/** 读当前账号的自建商品（无则空数组；容错过滤残缺数据） */
+export function mtLoadCustomShops(uid: string): MtMerchant[] {
+  const list = kvGet<Partial<MtMerchant>[]>(customShopsKey(uid));
+  if (!Array.isArray(list)) return [];
+  return list.filter(
+    (m): m is MtMerchant =>
+      Boolean(m) &&
+      typeof (m as MtMerchant).id === 'string' &&
+      (m as MtMerchant).id.startsWith('mtc-shop-') &&
+      typeof (m as MtMerchant).name === 'string' &&
+      Array.isArray((m as MtMerchant).sections)
+  );
+}
+
+/** 写当前账号的自建商品（全量覆盖） */
+export function mtSaveCustomShops(uid: string, list: MtMerchant[]): void {
+  kvSet(customShopsKey(uid), list);
+}
+
 /**
  * 领取店铺优惠券：写入「红包卡券」（外卖类型，结算选择弹窗自动可用）。
  * 同名同面额未使用的券不重复发；返回是否新领到。

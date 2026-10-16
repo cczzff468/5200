@@ -1,25 +1,50 @@
 'use client';
 
 /**
- * 淘宝「创建订单」入库页（首页运营位入口，替代领淘金币/阿里拍卖）：
- * 任意类型订单都能添加（服饰/数码/奶茶/充值…自由填写）——
+ * 淘宝「创建订单」页（首页运营位入口，替代领淘金币/阿里拍卖）——创建订单就是创建商品（第三十六轮）：
+ * 任意类型商品都能创建（服饰/数码/奶茶/充值…自由填写）——
  * 图片可上传（相册文件选择，压缩落库）或用「设置 › 图像生成」配置的模型按自定义提示词生成；
- * 可填 类型 / 优惠券（名称+金额） / 规格选项组（手机内存、颜色、尺码、小料等）/ 备注；
- * 保存 = 真实落库 tb-orders:<uid>（已完成状态），订单列表/详情立即可见。
+ * 可填 类型 / 优惠券（名称+金额，下单自动抵扣） / 规格选项组（手机内存、颜色、尺码、小料等，买家可自行选择）；
+ * 保存 = 创建「商品」落库（tb-custom-products:<uid>，商品+自建店铺注册进运行时注册表）→ 首页「我的商品」区展示；
+ * 点首页商品走 商品详情→SKU→购物车/立即购买→结算 原生链路，真实下单后才生成订单。
  */
 
 import { useRef, useState } from 'react';
 import { ChevronLeft, ImagePlus, Loader2, PackagePlus, Plus, Trash2, Wand2, X } from 'lucide-react';
 import { compressImageSrc, generateFreePhoto } from '@/lib/imggen';
 import type { ImgGenConfig } from '@/lib/ios/store';
-import { customSpecText, type OrderCustomOptionGroup } from '@/lib/ios/order-custom';
-import { tbLoadAddrs, tbLoadOrders, tbSaveOrders, type TbAddress } from '@/lib/ios/taobao-store';
+import type { OrderCustomMeta, OrderCustomOptionGroup } from '@/lib/ios/order-custom';
+import type { TbProduct, TbShop } from '@/lib/ios/taobao-data';
+import { tbLoadCustomProducts, tbSaveCustomProducts, type TbCustomEntry } from '@/lib/ios/taobao-store';
 import { OrderImgGenSheet } from './order-img-gen';
 
 /** 类型快捷选项 */
 const TYPE_CHIPS = ['服饰鞋包', '手机数码', '食品饮料', '奶茶外卖', '美妆个护', '充值缴费', '家居日用', '图书文娱', '其他'];
 /** 规格组名快捷选项 */
 const GROUP_CHIPS = ['手机内存', '颜色', '尺码', '奶茶小料', '小菜', '杯型', '版本', '套餐'];
+
+/** 类型 → 商品类目（商品详情/搜索链路用；不在表内归 home） */
+function catOfType(t: string): TbProduct['cat'] {
+  if (/服饰|鞋|包|装/.test(t)) return 'fashion';
+  if (/手机|数码|电子|电脑/.test(t)) return 'digital';
+  if (/食品|饮料|奶茶|外卖|生鲜|果蔬|零食/.test(t)) return 'food';
+  if (/美妆|个护|护肤|化妆/.test(t)) return 'beauty';
+  if (/图书|文娱|文具/.test(t)) return 'book';
+  return 'home';
+}
+
+/** 类型 → 主图品类词（无自图时 tbImg 兑底展示用） */
+function tagOfType(t: string): string {
+  if (/手机|数码|电子/.test(t)) return 'phone';
+  if (/耳机|音响/.test(t)) return 'earbuds';
+  if (/电脑|笔记本/.test(t)) return 'laptop';
+  if (/服饰|衣|鞋|包|装/.test(t)) return 'jacket';
+  if (/奶茶|茶|饮/.test(t)) return 'milk-tea';
+  if (/零食|食品|吃/.test(t)) return 'snacks';
+  if (/美妆|护肤|口红/.test(t)) return 'lipstick';
+  if (/家具|家居|沙发|床/.test(t)) return 'sofa';
+  return 'goods';
+}
 
 const fmtMoney = (n: number) => (Math.round(n * 100) / 100).toFixed(2);
 
@@ -31,7 +56,7 @@ export function TbOrderCreatePage({
 }: {
   uid: string;
   onBack: () => void;
-  /** 保存成功（入库后跳订单列表） */
+  /** 保存成功（商品已上首页「我的商品」区） */
   onSaved: () => void;
   onToast: (m: string) => void;
 }) {
@@ -42,7 +67,6 @@ export function TbOrderCreatePage({
   const [type, setType] = useState('');
   const [shopName, setShopName] = useState('');
   const [price, setPrice] = useState('');
-  const [qty, setQty] = useState(1);
   const [couponName, setCouponName] = useState('');
   const [couponAmt, setCouponAmt] = useState('');
   const [groups, setGroups] = useState<OrderCustomOptionGroup[]>([]);
@@ -50,9 +74,7 @@ export function TbOrderCreatePage({
   const [genBusy, setGenBusy] = useState(false);
   const [genErr, setGenErr] = useState('');
 
-  const itemTotal = Math.max(0, (parseFloat(price) || 0) * qty);
-  const cut = Math.min(parseFloat(couponAmt) || 0, itemTotal);
-  const total = Math.max(0, itemTotal - cut);
+  const cut = Math.min(parseFloat(couponAmt) || 0, parseFloat(price) || 0);
 
   const pickFile = async (f: File | null | undefined) => {
     if (!f) return;
@@ -108,48 +130,52 @@ export function TbOrderCreatePage({
       onToast('请填写店铺名称');
       return;
     }
-    if (!Number.isFinite(p) || p < 0) {
+    if (!Number.isFinite(p) || p <= 0) {
       onToast('请填写正确的单价');
       return;
     }
     const now = Date.now();
+    const r = Math.floor(Math.random() * 1e4).toString(36);
     const discount = Math.round(cut * 100) / 100;
-    const addr: TbAddress | undefined = tbLoadAddrs(uid)[0];
-    const order = {
-      id: `tbc-${now.toString(36)}-${Math.floor(Math.random() * 1e4).toString(36)}`,
-      uid,
-      shopId: 'custom',
-      shopName: shop,
-      items: [
-        {
-          pid: 'custom',
-          title: name,
-          img: img ?? '',
-          sku: Object.fromEntries(groups.filter((g) => g.name.trim() && g.values.length > 0).map((g) => [g.name.trim(), g.values.join('、')])),
-          price: Math.round(p * 100) / 100,
-          qty,
-        },
-      ],
-      itemTotal: Math.round(itemTotal * 100) / 100,
-      freight: 0,
-      discount,
-      ...(couponName.trim() && discount > 0 ? { couponId: `custom-coupon-${now.toString(36)}`, couponAmount: discount } : {}),
-      total: Math.round(total * 100) / 100,
-      ...(addr ? { address: addr } : {}),
-      status: 'completed' as const,
-      createdAt: now,
-      paidAt: now,
-      completedAt: now,
-      track: [],
-      custom: {
-        ...(type.trim() ? { type: type.trim() } : {}),
-        ...(couponName.trim() && discount > 0 ? { couponLabel: couponName.trim() } : {}),
-        ...(groups.length > 0 ? { optionGroups: groups.filter((g) => g.name.trim() && g.values.length > 0) } : {}),
-      },
+    const okGroups = groups.filter((g) => g.name.trim() && g.values.length > 0);
+    const custom: OrderCustomMeta = {
+      ...(type.trim() ? { type: type.trim() } : {}),
+      ...(couponName.trim() && discount > 0 ? { couponLabel: couponName.trim() } : {}),
+      ...(okGroups.length > 0 ? { optionGroups: okGroups } : {}),
     };
-    // 真实落库（tbLoadOrders 按 createdAt 倒序展示，直接 push 即可）
-    tbSaveOrders(uid, [...tbLoadOrders(uid), order]);
-    onToast('订单已入库');
+    const shopId = `tbc-s-${now.toString(36)}${r}`;
+    const pid = `tbc-p-${now.toString(36)}${r}`;
+    const shopObj: TbShop = {
+      id: shopId,
+      name: shop,
+      tmall: false,
+      rating: 4.8,
+      fans: '128',
+      tag: 'store',
+      desc: '自建商品店铺',
+    };
+    const product: TbProduct = {
+      id: pid,
+      title: name,
+      price: Math.round(p * 100) / 100,
+      sales: 35 + (now % 900),
+      shopId,
+      cat: catOfType(type.trim() || '其他'),
+      tag: tagOfType(type.trim() || '其他'),
+      freight: 0,
+      tags: ['退货宝', '假一赔四'],
+      // 规格选项组 → 购买弹窗买家可选 SKU（颜色/内存/尺码/小料…）
+      skus: okGroups.map((g) => ({ name: g.name.trim(), options: g.values.map((v) => ({ label: v })) })),
+      // 优惠券：下单自动抵扣（与创建时填的名称/金额一致）
+      ...(couponName.trim() && discount > 0 ? { coupon: { amount: discount, min: 0 } } : {}),
+      ...(img ? { img } : {}),
+      ...(Object.keys(custom).length > 0 ? { custom } : {}),
+    };
+    // 落库（按账号隔离）+ 注册进运行时注册表 → 首页「我的商品」区立即展示
+    const entry: TbCustomEntry = { p: product, shop: shopObj };
+    tbSaveCustomProducts(uid, [entry, ...tbLoadCustomProducts(uid)]);
+    window.dispatchEvent(new CustomEvent('tb-custom-products-changed'));
+    onToast('商品已创建，已显示在首页');
     onSaved();
   };
 
@@ -162,7 +188,7 @@ export function TbOrderCreatePage({
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
           <span className="text-[17px] font-bold text-black/90">创建订单</span>
-          <span className="ml-1.5 rounded-full bg-[#FFF1E6] px-2 py-0.5 text-[11px] font-medium text-[#FF6A1E]">自建订单入库</span>
+          <span className="ml-1.5 rounded-full bg-[#FFF1E6] px-2 py-0.5 text-[11px] font-medium text-[#FF6A1E]">创建商品 · 上首页</span>
         </div>
       </div>
 
@@ -262,17 +288,6 @@ export function TbOrderCreatePage({
               className="h-10 w-full rounded-lg bg-[#F5F6F7] px-3 text-[13.5px] text-black/85 outline-none placeholder:text-black/30"
             />
           </Field>
-          <Field label="数量">
-            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-              <button type="button" aria-label="减少" onClick={() => setQty((q) => Math.max(1, q - 1))} className="grid h-7 w-7 place-items-center rounded-full text-[18px] leading-none text-black/45 active:bg-black/5">
-                <span className="mt-[-2px]">−</span>
-              </button>
-              <span className="grid h-[30px] min-w-[40px] place-items-center rounded-[5px] border border-black/15 bg-white px-1 text-[14px] font-medium">{qty}</span>
-              <button type="button" aria-label="增加" onClick={() => setQty((q) => Math.min(99, q + 1))} className="grid h-7 w-7 place-items-center rounded-full text-[18px] leading-none text-black/45 active:bg-black/5">
-                <span className="mt-[-2px]">＋</span>
-              </button>
-            </div>
-          </Field>
           <Field label="店铺名称" required>
             <input
               value={shopName}
@@ -354,12 +369,12 @@ export function TbOrderCreatePage({
         </div>
       </div>
 
-      {/* 底部合计 + 保存 */}
+      {/* 底部单价 + 保存 */}
       <div className="shrink-0 border-t border-black/5 bg-white px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3">
         <div className="flex items-center gap-3">
           <span className="min-w-0 flex-1 text-[13px] text-black/45">
-            合计 <span className="text-[20px] font-bold text-black/90">¥{fmtMoney(total)}</span>
-            {cut > 0 && <span className="ml-1.5 text-[11.5px] text-[#FF4400]">已优惠 ¥{fmtMoney(cut)}</span>}
+            单价 <span className="text-[20px] font-bold text-black/90">¥{fmtMoney(parseFloat(price) || 0)}</span>
+            {cut > 0 && <span className="ml-1.5 text-[11.5px] text-[#FF4400]">下单抵 ¥{fmtMoney(cut)}</span>}
           </span>
           <button
             type="button"
@@ -368,7 +383,7 @@ export function TbOrderCreatePage({
             className="flex h-11 shrink-0 items-center gap-1.5 rounded-full bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-7 text-[15px] font-semibold text-white active:opacity-85"
           >
             <PackagePlus className="h-[17px] w-[17px]" strokeWidth={2.1} />
-            保存订单
+            上架商品
           </button>
         </div>
       </div>

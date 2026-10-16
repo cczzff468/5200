@@ -6,6 +6,7 @@
  */
 
 import { tbGoodsImg } from '@/lib/ios/goods-img';
+import type { OrderCustomMeta } from '@/lib/ios/order-custom';
 
 /** 内容匹配图地址（本地卡通图，Task 58）：k=品类词 w/h=尺寸 s=变体 p=f 商品图 / c 门头图（参数保留兼容） */
 export function tbImg(tag: string, w = 600, h = 600, s = 0, kind: 'f' | 'c' = 'f'): string {
@@ -77,7 +78,7 @@ export const TB_SHOPS: TbShop[] = [
   { id: 's-muying', name: '萌趣玩具屋', tmall: false, rating: 4.8, fans: '15万', tag: 'toy', desc: '安抚玩偶，送礼佳品' },
 ];
 
-export const shopById = (id: string): TbShop => TB_SHOPS.find((s) => s.id === id) ?? TB_SHOPS[0];
+export const shopById = (id: string): TbShop => CUSTOM_SHOPS.get(id) ?? TB_SHOPS.find((s) => s.id === id) ?? TB_SHOPS[0];
 
 /** 无同 tag 店铺的品类 tag → 归类店铺（修「买衣服显示零食铺子」：
  *  AI 商品 tag（如 hoodie/dress）没有同名店铺时，旧逻辑按哈希随机挂店 → 卫衣挂进零食铺；
@@ -199,6 +200,10 @@ export interface TbProduct {
   promo?: string;
   /** 领券立减金额（下单可用优惠券演示） */
   coupon?: { amount: number; min: number };
+  /** 自有主图（自建商品上传/AI 生成图 dataURL；缺省走 tag 品类图） */
+  img?: string;
+  /** 自建商品元数据（创建订单=创建商品：类型/优惠券名/规格选项组，下单时随订单快照） */
+  custom?: OrderCustomMeta;
 }
 
 /** 颜色组（带商品图缩略） */
@@ -413,6 +418,9 @@ export const TB_PRODUCTS: TbProduct[] = [
 ];
 
 export const productById = (id: string): TbProduct | undefined => {
+  // 自建商品（创建订单=创建商品）：优先命中，不走 AI 商品同 tag 归店自愈（自建店不参与品类归店）
+  const custom = CUSTOM_PRODUCTS.get(id);
+  if (custom) return custom;
   const ai = AI_PRODUCTS.get(id);
   if (ai) {
     // 存量自愈（修「买衣服显示零食铺子」）：旧版 AI 商品 tag 无同 tag 店铺时按哈希随机挂店，
@@ -451,9 +459,40 @@ export function tbAiProductsAll(): TbProduct[] {
   return [...AI_PRODUCTS.values()];
 }
 
-/** 搜索池（种子 + AI 动态注册），搜索/猜你喜欢可用 */
+// ---------------- 自建商品注册表（第三十六轮：创建订单=创建商品） ----------------
+// 「创建订单」保存的是商品（不是订单）：注册进这里后，商品详情/SKU/购物车/结算/下单等既有链路
+// 通过 productById / shopById 无感命中，不改任何调用方；持久化按 tb uid 隔离（taobao-store）。
+
+const CUSTOM_PRODUCTS = new Map<string, TbProduct>();
+const CUSTOM_SHOPS = new Map<string, TbShop>();
+
+/** 注册自建商品 + 其自建店铺（同 id 覆盖） */
+export function tbRegisterCustomProduct(p: TbProduct, shop: TbShop): void {
+  if (!p.id.startsWith('tbc-')) return;
+  CUSTOM_PRODUCTS.set(p.id, p);
+  if (shop.id.startsWith('tbc-s-')) CUSTOM_SHOPS.set(shop.id, shop);
+}
+
+/** 批量注册（进 App 恢复用） */
+export function tbRegisterCustomProducts(list: { p: TbProduct; shop: TbShop }[]): void {
+  for (const e of list) tbRegisterCustomProduct(e.p, e.shop);
+}
+
+/** 注销单个自建商品（删除商品时调用，连同其自建店铺） */
+export function tbUnregisterCustomProduct(id: string): void {
+  const p = CUSTOM_PRODUCTS.get(id);
+  CUSTOM_PRODUCTS.delete(id);
+  if (p) CUSTOM_SHOPS.delete(p.shopId);
+}
+
+/** 全部自建商品 + 店铺（首页「我的商品」区展示 / 持久化回写用） */
+export function tbCustomProductsAll(): { p: TbProduct; shop: TbShop }[] {
+  return [...CUSTOM_PRODUCTS.values()].map((p) => ({ p, shop: CUSTOM_SHOPS.get(p.shopId) ?? shopById(p.shopId) }));
+}
+
+/** 搜索池（自建商品 + AI 动态注册 + 种子），搜索/猜你喜欢可用 */
 export function tbSearchPool(): TbProduct[] {
-  return [...AI_PRODUCTS.values(), ...TB_PRODUCTS];
+  return [...CUSTOM_PRODUCTS.values(), ...AI_PRODUCTS.values(), ...TB_PRODUCTS];
 }
 
 // ---------------- 搜索 ----------------
