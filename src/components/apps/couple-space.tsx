@@ -107,7 +107,7 @@ import {
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
-import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, aiTrailFeed, aiZodiacReading, coupleMemoryDiff, coupleRemember, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, type CoupleTrailRec, type DynReplyLevel } from '@/lib/ios/couple-ai';
+import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, aiTrailFeed, aiZodiacReading, coupleMemoryDiff, coupleRemember, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, trailSortMs, type CoupleTrailRec, type DynReplyLevel } from '@/lib/ios/couple-ai';
 import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, patchPactCardsWhere, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
 import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
 import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
@@ -247,7 +247,7 @@ interface CoupleState {
   examResult: { title: string; score: number; comment: string; answers: Record<string, number>; byTa: boolean; at: number } | null; // 恋爱水平考试：我最近一次被改卷的成绩（分数下面是 TA 想说的话）
   examAiPapers: { id: string; title: string; notes: string[]; questions: { q: string; opts: string[] }[]; at: number }[]; // 恋爱水平考试：AI 出的卷子库（第二十一轮：上滑无限追加、永不消失；10~30 题）
   examHistory: { id: string; title: string; score: number; comment: string; answers: Record<string, number>; byTa: boolean; questions: { q: string; opts: string[]; best: number }[]; at: number }[]; // 恋爱水平考试：做过的卷子存档（第二十一轮「我的卷子」；我的+TA 的都进）
-  trailFeed: { id: string; dateKey: string; t: string; kind: string; text: string; detail?: string; at: number }[]; // 位置与轨迹：动态记录流（第二十一轮：AI 按人设+记忆+真实时间生成，按天分组，时间线展示）
+  trailFeed: { id: string; dateKey: string; t: string; kind: string; text: string; detail?: string; at: number; revealAt?: number; sortAt?: number }[]; // 位置与轨迹：动态记录流（第二十一轮：AI 按人设+记忆+真实时间生成；第二十五轮：revealAt 渐进揭示一条条出现、sortAt 排序时间戳）
 }
 
 const STATE_KEY = 'couple-space:state';
@@ -1320,7 +1320,7 @@ export default function CoupleSpaceApp() {
                 type="button"
                 data-testid="couple-accept-btn"
                 onClick={() => void doAcceptInvite()}
-                className="mt-4 h-[64px] w-full rounded-full bg-[linear-gradient(135deg,#6a6a72,#45454c)] text-[22px] font-semibold text-white shadow-[0_12px_28px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.98]"
+                className="mt-4 h-[60px] w-full rounded-2xl bg-white text-[21px] font-semibold text-[#1b1b1f] shadow-[0_10px_26px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-transform active:scale-[0.98]"
               >
                 接受邀请
               </button>
@@ -1333,7 +1333,7 @@ export default function CoupleSpaceApp() {
               <button
                 type="button"
                 disabled
-                className="mt-4 h-[64px] w-full rounded-full bg-[linear-gradient(135deg,#b6b6bd,#9a9aa2)] text-[22px] font-semibold text-white shadow-[0_12px_28px_rgba(60,60,68,0.18)]"
+                className="mt-4 h-[60px] w-full rounded-2xl bg-[#f1f1f4] text-[21px] font-semibold text-[#9a9aa2] ring-1 ring-black/[0.04]"
               >
                 等待对方接受…
               </button>
@@ -1344,7 +1344,7 @@ export default function CoupleSpaceApp() {
                 type="button"
                 data-testid="couple-invite-btn"
                 onClick={() => setPickSheet('send')}
-                className="mt-10 h-[64px] w-full rounded-full bg-[linear-gradient(135deg,#6a6a72,#45454c)] text-[22px] font-semibold text-white shadow-[0_12px_28px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.98]"
+                className="mt-10 h-[60px] w-full rounded-2xl bg-white text-[21px] font-semibold text-[#1b1b1f] shadow-[0_10px_26px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-transform active:scale-[0.98]"
               >
                 立即邀请我的另一半
               </button>
@@ -1697,20 +1697,19 @@ function HomePage(props: {
         </button>
       </div>
 
-      {/* 底部固定四功能卡（不随内容滚动，始终贴在 Tab 栏上方） */}
+      {/* 底部固定四功能卡（不随内容滚动，始终贴在 Tab 栏上方；第二十五轮：浅灰白圆角矩形风） */}
       <div className="relative z-10 grid shrink-0 grid-cols-4 gap-2 px-3 pb-3 pt-2">
         {([
-          { key: 'tree', label: '爱情小树\n成长记', grad: 'linear-gradient(160deg,#5c5c64,#3f3f46)', icon: <Sprout className="h-6 w-6" strokeWidth={1.9} /> },
-          { key: 'track', label: '情侣轨迹', grad: 'linear-gradient(160deg,#7c7c85,#5f5f68)', icon: <Compass className="h-6 w-6" strokeWidth={1.9} /> },
-          { key: 'quiz', label: '甜蜜\n小问答', grad: 'linear-gradient(160deg,#9c9ca5,#7f7f89)', icon: <MessageCircleHeart className="h-6 w-6" strokeWidth={1.9} /> },
-          { key: 'letters', label: '情书', grad: 'linear-gradient(160deg,#bcbcc4,#9e9ea8)', icon: <BookHeart className="h-6 w-6" strokeWidth={1.9} /> },
+          { key: 'tree', label: '爱情小树\n成长记', icon: <Sprout className="h-6 w-6 text-[#3c3c42]" strokeWidth={1.9} /> },
+          { key: 'track', label: '情侣轨迹', icon: <Compass className="h-6 w-6 text-[#3c3c42]" strokeWidth={1.9} /> },
+          { key: 'quiz', label: '甜蜜\n小问答', icon: <MessageCircleHeart className="h-6 w-6 text-[#3c3c42]" strokeWidth={1.9} /> },
+          { key: 'letters', label: '情书', icon: <BookHeart className="h-6 w-6 text-[#3c3c42]" strokeWidth={1.9} /> },
         ] as const).map((c) => (
           <button
             key={c.key}
             type="button"
             onClick={() => openSub(c.key as SubPage)}
-            className="flex h-[86px] flex-col items-center justify-center gap-1.5 rounded-2xl text-white shadow-[0_8px_20px_rgba(60,60,70,0.22)] transition-transform active:scale-[0.96]"
-            style={{ background: c.grad }}
+            className="flex h-[86px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-white text-[#26262b] shadow-[0_6px_16px_rgba(0,0,0,0.07)] ring-1 ring-black/[0.05] transition-transform active:scale-[0.96]"
           >
             {c.icon}
             <span className="whitespace-pre-line text-center text-[11px] font-medium leading-tight">{c.label}</span>
@@ -1765,7 +1764,7 @@ function DiscoverPage({ openSub }: { openSub: (s: SubPage) => void }) {
         >
           { }
           <img src="/couple-map.png" alt="情侣轨迹" className="h-[118px] w-full rounded-t-2xl object-cover" draggable={false} />
-          <div className="flex h-[44px] items-center justify-center bg-[linear-gradient(135deg,#56565e,#38383f)] text-[15px] font-semibold text-white">
+          <div className="flex h-[44px] items-center justify-center bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-black/[0.04]">
             情侣轨迹
           </div>
         </button>
@@ -1776,7 +1775,7 @@ function DiscoverPage({ openSub }: { openSub: (s: SubPage) => void }) {
         >
           { }
           <img src="/couple-house.png" alt="情侣小家" className="h-[118px] w-full rounded-t-2xl object-cover" draggable={false} />
-          <div className="flex h-[44px] items-center justify-center bg-[linear-gradient(135deg,#74747d,#55555e)] text-[15px] font-semibold text-white">
+          <div className="flex h-[44px] items-center justify-center bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-black/[0.04]">
             情侣小家
           </div>
         </button>
@@ -1987,9 +1986,9 @@ function AlbumPage(props: {
       <button
         type="button"
         onClick={() => setCreating(true)}
-        className="fixed bottom-[86px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-5 py-2.5 text-[14px] font-semibold text-white shadow-[0_10px_26px_rgba(60,60,68,0.35)] transition-transform active:scale-[0.97]"
+        className="fixed bottom-[86px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-2xl bg-white px-5 py-2.5 text-[14px] font-semibold text-[#26262b] shadow-[0_10px_26px_rgba(0,0,0,0.12)] ring-1 ring-black/[0.05] transition-transform active:scale-[0.97]"
       >
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/25">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-black/[0.06]">
           <Plus className="h-3.5 w-3.5" />
         </span>
         新建相册
@@ -2568,7 +2567,7 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="flex items-center gap-1 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-4 py-2 text-[12.5px] font-semibold text-white shadow-[0_6px_16px_rgba(60,60,68,0.28)] transition-transform active:scale-[0.97]"
+          className="flex items-center gap-1 rounded-xl bg-white px-4 py-2 text-[12.5px] font-semibold text-[#26262b] shadow-[0_4px_12px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-transform active:scale-[0.97]"
         >
           <Plus className="h-3.5 w-3.5" /> 添加纪念日
         </button>
@@ -3322,11 +3321,21 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
   const trailEarlyRef = useRef(2); // 更早生成起点（今天+昨天已自动生成）
   const trailFeedInitRef = useRef(false);
   const trailScrollRef = useRef<HTMLDivElement | null>(null);
+  const trailJumpRef = useRef(true); // 打开页面时强制滚到底；之后只有贴底时才跟随
+  // 第二十五轮：渐进揭示时钟——每 0.8s 驱动一次重渲染，让记录跟着 revealAt 一条条出现
+  const [feedTick, setFeedTick] = useState(0);
+  useEffect(() => {
+    if (!trailPage) return;
+    const t = window.setInterval(() => setFeedTick((v) => v + 1), 800);
+    return () => window.clearInterval(t);
+  }, [trailPage]);
   const trailFeedRecs = useMemo(() => {
-    const recs = [...(state.trailFeed ?? [])];
+    void feedTick; //揭示时钟驱动
+    const nowMs = Date.now();
+    const recs = (state.trailFeed ?? []).filter((r) => (r.revealAt ?? 0) <= nowMs); // 未到揭示时间的记录先隐藏（不要一次性生成）
     recs.sort((a, b) => (a.dateKey === b.dateKey ? a.t.localeCompare(b.t) : a.dateKey < b.dateKey ? -1 : 1)); // 升序（老→新，像聊天一样从上往下）
     return recs;
-  }, [state.trailFeed]);
+  }, [state.trailFeed, feedTick]);
   useEffect(() => {
     if (!trailPage || trailFeedInitRef.current) return;
     trailFeedInitRef.current = true;
@@ -3348,8 +3357,11 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
   const trailLines = useMemo<TrailLine[]>(() => {
     const items: { sort: number; line: TrailLine }[] = [];
     for (const r of trailFeedRecs) {
-      const ts = new Date(`${r.dateKey}T${r.t}:00`).getTime();
-      items.push({ sort: Number.isNaN(ts) ? 0 : ts, line: { kind: 'rec', key: r.id, rec: r } });
+      // 第二十五轮：优先用落库时的排序时间戳（「刚刚」记录=真实落库时刻，一定排在我刚发的消息后面）；
+      // 旧数据/普通记录用解析后的时刻，解析失败兜底用生成时间（绝不再落到最顶上）
+      const parsed = trailSortMs(r.dateKey, r.t);
+      const ts = r.sortAt ?? (Number.isNaN(parsed) ? r.at : parsed);
+      items.push({ sort: ts, line: { kind: 'rec', key: r.id, rec: r } });
     }
     for (const m of trailMsgs) items.push({ sort: m.at, line: { kind: 'msg', key: m.id, msg: m } });
     items.sort((a, b) => a.sort - b.sort);
@@ -3369,7 +3381,15 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
   useEffect(() => {
     if (!trailPage) return;
     const el = trailScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (trailJumpRef.current) {
+      el.scrollTop = el.scrollHeight; // 打开页面时强制到底部
+      trailJumpRef.current = false;
+      return;
+    }
+    // 第二十五轮：新记录/新消息出现时，只有用户贴着底部才跟随滚动（正在翻历史时不打扰）
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 180;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [trailPage, trailLines.length]);
   /** 顶栏状态行：使用中 + 电量（取最近一条充电记录的百分比，没有则 70）+ 移动网络 */
   const trailBattery = useMemo(() => {
@@ -3508,9 +3528,9 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
               /* 静默 */
             }
           }}
-          className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-6 py-2.5 text-[14px] font-semibold text-white shadow-[0_10px_26px_rgba(60,60,68,0.4)] transition-transform active:scale-[0.97]"
+          className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-2xl bg-white px-6 py-2.5 text-[14px] font-semibold text-[#26262b] shadow-[0_10px_26px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.05] transition-transform active:scale-[0.97]"
         >
-          <MapPin className="h-4 w-4" fill="rgba(255,255,255,0.25)" />
+          <MapPin className="h-4 w-4" fill="rgba(40,40,46,0.12)" />
           位置与轨迹
         </button>
 
@@ -3560,7 +3580,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
 
           {/* 滚动内容：记录 + 聊天交织时间线（老→新，自动滚到底；无白色面板，记录条/气泡直接在背景上） */}
           <div ref={trailScrollRef} className="flex-1 overflow-y-auto px-3 pb-3" data-testid="trail-feed">
-            {/* 更早的记录（一直往前生成，无限回溯） */}
+            {/* 更早的记录（一直往前生成，无限回溯；生成后也是一条条跟着出现） */}
             <button
               type="button"
               onClick={() => {
@@ -3570,7 +3590,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                 trailEarlyRef.current += 1;
                 showToast('正在生成更早的记录…');
               }}
-              className="mx-auto mt-2 block rounded-full bg-white px-5 py-1.5 text-[11.5px] text-[#8e8e96] shadow-[0_1px_4px_rgba(0,0,0,0.04)]"
+              className="mx-auto mt-2 block rounded-xl bg-white px-5 py-1.5 text-[11.5px] text-[#8e8e96] shadow-[0_1px_4px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.04]"
               data-testid="trail-earlier"
             >
               查看更早的记录
@@ -3587,22 +3607,21 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
               if (ln.kind === 'rec') {
                 const meta = TRAIL_FEED_ICON[ln.rec.kind] ?? TRAIL_FEED_ICON.stay;
                 return (
-                  <div key={ln.key} className="pb-2.5">
+                  <div key={ln.key} className="pb-3">
                     <div className="text-center text-[11px] font-semibold tabular-nums text-[#a8a8b2]">
                       {ln.rec.dateKey.slice(5)} {ln.rec.t}
                     </div>
-                    <div className="mt-1 flex justify-center">
-                      <div className="flex max-w-[90%] items-start gap-1.5 rounded-2xl bg-white px-3.5 py-2 shadow-[0_1px_4px_rgba(0,0,0,0.05)]">
-                        <span className="mt-0.5 flex h-[17px] w-[17px] shrink-0 items-center justify-center" style={{ color: meta.color }}>
-                          {meta.icon}
-                        </span>
-                        <p className="min-w-0 text-[13px] leading-[1.6] text-[#2c2c30]">
-                          {ln.rec.text}
-                          <button type="button" onClick={() => setTrailDetail(ln.rec)} data-testid={`trail-view-${ln.rec.id}`} className="ml-1.5 inline-block whitespace-nowrap font-semibold text-[#4a4a52]">
-                            查看记录
-                          </button>
-                        </p>
-                      </div>
+                    {/* 第二十五轮：删除记录后面的圆角白色面板——图标+文字直接落在背景上，像系统时间线 */}
+                    <div className="mx-auto mt-1 flex max-w-[86%] items-start justify-center gap-1.5">
+                      <span className="mt-[3px] flex h-[17px] w-[17px] shrink-0 items-center justify-center" style={{ color: meta.color }}>
+                        {meta.icon}
+                      </span>
+                      <p className="min-w-0 text-[13px] leading-[1.65] text-[#2c2c30]">
+                        {ln.rec.text}
+                        <button type="button" onClick={() => setTrailDetail(ln.rec)} data-testid={`trail-view-${ln.rec.id}`} className="ml-1.5 inline-block whitespace-nowrap font-semibold text-[#6e6e76] underline decoration-[#c9c9cf] underline-offset-[3px]">
+                          查看记录
+                        </button>
+                      </p>
                     </div>
                   </div>
                 );
@@ -3790,7 +3809,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
         <button
           type="button"
           onClick={() => showToast('小问答打印成册（演示）')}
-          className="shrink-0 rounded-full bg-[linear-gradient(90deg,#ffb9cb,#ff9db8)] px-3 py-1.5 text-[12.5px] font-bold text-white shadow-[0_2px_8px_rgba(240,140,170,0.4)] transition-transform active:scale-95"
+          className="shrink-0 rounded-xl bg-white px-3 py-1.5 text-[12.5px] font-bold text-[#4a4a52] shadow-[0_2px_8px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.05] transition-transform active:scale-95"
         >
           小问答打印成册
         </button>
@@ -3810,7 +3829,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
             <button
               type="button"
               onClick={() => showToast('小问答打印成册（演示）')}
-              className="rounded-full rounded-l-none bg-[linear-gradient(90deg,#ffb9cb,#ff9db8)] py-2 pl-5 pr-4 text-[14px] font-bold text-white shadow-[0_3px_10px_rgba(240,140,170,0.4)] transition-transform active:scale-95"
+              className="rounded-xl bg-white py-2 pl-5 pr-4 text-[14px] font-bold text-[#4a4a52] shadow-[0_3px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.05] transition-transform active:scale-95"
             >
               打印成册
             </button>
@@ -3887,7 +3906,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
                 <button
                   type="button"
                   onClick={startAnswer}
-                  className="mt-4 h-11 w-full rounded-full border-[1.5px] border-dashed border-[#3c3c42] text-[15px] font-semibold text-[#26262b] transition-colors active:bg-[#f7f7f9]"
+                  className="mt-4 h-11 w-full rounded-2xl border-[1.5px] border-dashed border-[#3c3c42] text-[15px] font-semibold text-[#26262b] transition-colors active:bg-[#f7f7f9]"
                 >
                   修改我的回答
                 </button>
@@ -3896,7 +3915,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
               <button
                 type="button"
                 onClick={startAnswer}
-                className="mt-4 h-12 w-full rounded-full border-[1.5px] border-dashed border-[#3c3c42] text-[16px] font-semibold text-[#26262b] transition-colors active:bg-[#f7f7f9]"
+                className="mt-4 h-12 w-full rounded-2xl border-[1.5px] border-dashed border-[#3c3c42] text-[16px] font-semibold text-[#26262b] transition-colors active:bg-[#f7f7f9]"
               >
                 点此回答问题
               </button>
@@ -3928,7 +3947,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
             type="button"
             onClick={saveAnswer}
             disabled={!answer.trim()}
-            className="mx-auto mb-8 h-[52px] w-[70%] rounded-full bg-[linear-gradient(135deg,#ffc3d4,#ff92b0)] text-[17px] font-bold text-white shadow-[0_4px_14px_rgba(240,140,170,0.45)] transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
+            className="mx-auto mb-8 h-[52px] w-[70%] rounded-2xl bg-white text-[17px] font-bold text-[#1b1b1f] shadow-[0_6px_18px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
           >
             完成
           </button>
@@ -3941,7 +3960,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
           type="button"
           onClick={() => setAddSheet(true)}
           aria-label="自定义问题"
-          className="absolute bottom-7 right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-[#2c2c30] text-white shadow-[0_6px_18px_rgba(0,0,0,0.28)] transition-transform active:scale-90"
+          className="absolute bottom-7 right-4 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-white text-[#26262b] shadow-[0_6px_18px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.05] transition-transform active:scale-90"
         >
           <Plus className="h-7 w-7" strokeWidth={2.4} />
         </button>
@@ -3971,7 +3990,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
                 type="button"
                 onClick={addCustom}
                 disabled={!newQ.trim()}
-                className="h-11 flex-1 rounded-full bg-[linear-gradient(135deg,#ffb9cb,#ff8fae)] text-[15px] font-bold text-white disabled:opacity-45"
+                className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] disabled:opacity-45"
               >
                 添加
               </button>
@@ -4170,7 +4189,7 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
               )}
             </div>
             <div className="mt-4 flex gap-3">
-              <button type="button" onClick={() => setStep('app')} className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
+              <button type="button" onClick={() => setStep('app')} className="h-11 flex-1 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
                 上一步
               </button>
               <button
@@ -4179,7 +4198,7 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
                 onClick={() => {
                   if (picked && ch) onSend(ch, picked);
                 }}
-                className="h-11 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-bold text-white disabled:opacity-40"
+                className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] disabled:opacity-40"
               >
                 发送{pickedName ? `给 ${displayNameOf(pickedName)}` : ''}
               </button>
@@ -4292,10 +4311,10 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               ))}
             </div>
             <div className="mt-4 flex gap-3">
-              <button type="button" onClick={() => showToast('更多信纸即将上架 ♡')} className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
+              <button type="button" onClick={() => showToast('更多信纸即将上架 ♡')} className="h-11 flex-1 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
                 更多信纸
               </button>
-              <button type="button" onClick={() => setSheet(null)} className="h-11 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-bold text-white">
+              <button type="button" onClick={() => setSheet(null)} className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
                 完成
               </button>
             </div>
@@ -4343,7 +4362,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 ))}
               </div>
             </div>
-            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#2c2c30] text-[15px] font-bold text-white">
+            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
               完成
             </button>
           </div>
@@ -4376,7 +4395,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 </button>
               ))}
             </div>
-            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-full bg-[#2c2c30] text-[15px] font-bold text-white">
+            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
               完成
             </button>
           </div>
@@ -4465,11 +4484,11 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 setSheet(null);
                 showToast('已恢复跟随微信/QQ ♡');
               }}
-              className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]"
+              className="h-11 flex-1 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]"
             >
               恢复默认
             </button>
-            <button type="button" onClick={saveSender} className="h-11 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-bold text-white">
+            <button type="button" onClick={saveSender} className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
               保存
             </button>
           </div>
@@ -4602,7 +4621,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
           <button
             type="button"
             onClick={() => setView('write')}
-            className="mx-auto mt-12 h-[52px] w-[248px] rounded-full border border-white/40 text-[16px] text-white/95 transition-transform active:scale-95"
+            className="mx-auto mt-12 h-[52px] w-[248px] rounded-2xl border border-white/40 text-[16px] text-white/95 transition-transform active:scale-95"
           >
             给他写一封情书
           </button>
@@ -4704,7 +4723,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 type="button"
                 onClick={addPage}
                 data-testid="letter-add-page"
-                className="mx-auto mb-1 flex h-10 items-center gap-1.5 rounded-full border border-white/20 bg-white/[0.06] px-5 text-[13px] text-white/85 transition-transform active:scale-95"
+                className="mx-auto mb-1 flex h-10 items-center gap-1.5 rounded-2xl border border-white/20 bg-white/[0.06] px-5 text-[13px] text-white/85 transition-transform active:scale-95"
               >
                 <Plus className="h-4 w-4" strokeWidth={2.2} />
                 再添一页
@@ -4720,7 +4739,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               patch({ letterDraft: JSON.stringify(pages) });
               showToast(totalChars > 0 ? '草稿已保存' : '已清空草稿');
             }}
-            className="h-[46px] flex-1 rounded-full border border-white/25 text-[15.5px] font-medium text-white/90 transition-transform active:scale-[0.97]"
+            className="h-[46px] flex-1 rounded-2xl border border-white/25 text-[15.5px] font-medium text-white/90 transition-transform active:scale-[0.97]"
           >
             存草稿
           </button>
@@ -4734,7 +4753,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               patch({ letterDraft: JSON.stringify(pages) });
               setView('send');
             }}
-            className="h-[46px] flex-[1.6] rounded-full bg-[#2c2c30] text-[16px] font-bold text-white transition-transform active:scale-[0.97]"
+            className="h-[46px] flex-[1.6] rounded-2xl bg-white text-[16px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]"
           >
             下一步
           </button>
@@ -4840,7 +4859,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                         key={d}
                         type="button"
                         onClick={() => setAfter(d)}
-                        className={`h-10 flex-1 whitespace-nowrap rounded-full border text-[13.5px] transition-colors ${after === d ? 'border-white bg-white/15 font-bold text-white' : 'border-white/15 text-[#9c9ca6]'}`}
+                        className={`h-10 flex-1 whitespace-nowrap rounded-xl border text-[13.5px] transition-colors ${after === d ? 'border-white bg-white/15 font-bold text-white' : 'border-white/15 text-[#9c9ca6]'}`}
                       >
                         {d} 天
                       </button>
@@ -4860,7 +4879,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             type="button"
             onClick={sendLetter}
             data-testid="send-letter-btn"
-            className="mt-6 h-[50px] w-full shrink-0 rounded-full bg-[#2c2c30] text-[16.5px] font-bold text-white transition-transform active:scale-[0.97]"
+            className="mt-6 h-[50px] w-full shrink-0 rounded-2xl bg-white text-[16.5px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]"
           >
             {timed ? `定时寄出（${after} 天后送达）` : '立即寄出这封信'}
           </button>
@@ -4910,7 +4929,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             </button>
             <div className="pointer-events-none absolute left-1/2 top-[54px] flex h-11 -translate-x-1/2 items-center text-[16px] font-bold text-[#4a3a40]">{`${who}的来信`}</div>
             {readFrom === 'me' && !l.sharedAt && (
-              <button type="button" onClick={() => setShareLetterId(l.id)} className="ml-auto mr-2 flex h-9 items-center gap-1 rounded-full border border-[#e3c8ce] bg-white/70 px-3.5 text-[13px] font-medium text-[#c25868]">
+              <button type="button" onClick={() => setShareLetterId(l.id)} className="ml-auto mr-2 flex h-9 items-center gap-1 rounded-xl border border-[#e3e3e8] bg-white px-3.5 text-[13px] font-medium text-[#4a4a52]">
                 <ArrowUp className="h-3.5 w-3.5" />
                 分享
               </button>
@@ -4967,15 +4986,15 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         </div>
         {/* 底部操作栏（对照参考图：去写信 + 回信） */}
         <div className="relative z-20 flex shrink-0 items-center gap-3 border-t border-black/[0.06] bg-white/85 px-4 pb-7 pt-3.5 backdrop-blur">
-          <button type="button" onClick={() => setView('write')} className="h-[46px] flex-1 rounded-full border border-black/10 bg-white text-[15.5px] font-medium text-[#4a4238]">
+          <button type="button" onClick={() => setView('write')} className="h-[46px] flex-1 rounded-2xl border border-black/10 bg-white text-[15.5px] font-medium text-[#4a4a52]">
             去写信
           </button>
           {readFrom === 'me' && !l.sharedAt ? (
-            <button type="button" onClick={() => setShareLetterId(l.id)} data-testid="read-share-btn" className="h-[46px] flex-[1.6] rounded-full bg-[linear-gradient(135deg,#f7b7c5,#ef9cb2)] text-[16px] font-bold text-white shadow-[0_4px_14px_rgba(239,156,178,0.4)] transition-transform active:scale-[0.97]">
+            <button type="button" onClick={() => setShareLetterId(l.id)} data-testid="read-share-btn" className="h-[46px] flex-[1.6] rounded-2xl bg-white text-[16px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]">
               {`分享给${state.taName || 'TA'}`}
             </button>
           ) : (
-            <button type="button" onClick={() => setView('write')} data-testid="read-reply-btn" className="h-[46px] flex-[1.6] rounded-full bg-[#2c2c30] text-[16px] font-bold text-white transition-transform active:scale-[0.97]">
+            <button type="button" onClick={() => setView('write')} data-testid="read-reply-btn" className="h-[46px] flex-[1.6] rounded-2xl bg-white text-[16px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]">
               回信
             </button>
           )}
@@ -5023,7 +5042,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             <NightEnvelope />
             <p className="mt-6 text-[15px] text-[#87878f]">还没有寄出的信</p>
             <p className="mt-1.5 text-[13px] text-[#5d5d66]">去写第一封装进信封的情书吧</p>
-            <button type="button" onClick={() => setView('write')} className="mt-6 h-11 rounded-full border border-white/35 px-8 text-[14.5px] text-white/90">
+            <button type="button" onClick={() => setView('write')} className="mt-6 h-11 rounded-2xl border border-white/35 px-8 text-[14.5px] text-white/90">
               去写信
             </button>
           </div>
@@ -5059,7 +5078,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         <button
           type="button"
           onClick={() => setView('write')}
-          className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-full border border-white/25 text-[15px] text-white/90"
+          className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-white/25 text-[15px] text-white/90"
         >
           <Plus className="h-4.5 w-4.5" strokeWidth={2} />
           再写一封
@@ -5310,7 +5329,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
         <button
           type="button"
           onClick={saveMood}
-          className="sticky bottom-4 z-10 mb-3 mt-5 h-12 w-full rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white transition-transform active:scale-[0.98]"
+          className="sticky bottom-4 z-10 mb-3 mt-5 h-12 w-full rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
         >
           完成
         </button>
@@ -5452,7 +5471,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
             type="button"
             aria-label="上个月"
             onClick={() => setCursor((c) => (c.m === 0 ? { y: c.y - 1, m: 11 } : { ...c, m: c.m - 1 }))}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-[#2c2c30] text-white shadow-[0_3px_8px_rgba(0,0,0,0.18)] active:opacity-80"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#3c3c44] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] active:opacity-80"
           >
             <ChevronLeft className="h-4 w-4" strokeWidth={2.6} />
           </button>
@@ -5463,7 +5482,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
             type="button"
             aria-label="下个月"
             onClick={() => setCursor((c) => (c.m === 11 ? { y: c.y + 1, m: 0 } : { ...c, m: c.m + 1 }))}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-[#2c2c30] text-white shadow-[0_3px_8px_rgba(0,0,0,0.18)] active:opacity-80"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#3c3c44] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] active:opacity-80"
           >
             <ChevronRight className="h-4 w-4" strokeWidth={2.6} />
           </button>
@@ -5524,7 +5543,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <div className="max-w-[150px] rounded-2xl rounded-br-md bg-white px-3 py-2 text-[11px] font-medium leading-snug text-[#3c3c42] shadow-[0_6px_18px_rgba(0,0,0,0.14)]">
               对方今日还未写日记！快去戳一下 TA 吧
             </div>
-            <button type="button" onClick={pokeTa} className="mt-1 rounded-full bg-[#2c2c30] px-2.5 py-1 text-[10px] font-bold text-white shadow-[0_3px_10px_rgba(0,0,0,0.2)] active:opacity-80">
+            <button type="button" onClick={pokeTa} className="mt-1 rounded-lg bg-white px-2.5 py-1 text-[10px] font-bold text-[#3c3c44] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] active:opacity-80">
               戳一下他
             </button>
           </div>
@@ -5533,11 +5552,11 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
           type="button"
           onClick={() => openWrite(todayKey())}
           data-testid="mood-write-btn"
-          className="pointer-events-auto mt-0.5 flex h-[46px] items-center gap-2 rounded-full bg-[#2c2c30] pl-4 pr-5 text-[14px] font-bold tracking-wide text-white shadow-[0_12px_30px_rgba(240,110,150,0.55),inset_0_1px_0_rgba(255,255,255,0.4)] ring-2 ring-white/70 transition-all hover:shadow-[0_14px_34px_rgba(240,110,150,0.65)] active:scale-[0.94]"
+          className="pointer-events-auto mt-0.5 flex h-[46px] items-center gap-2 rounded-2xl bg-white pl-4 pr-5 text-[14px] font-bold tracking-wide text-[#26262b] shadow-[0_10px_26px_rgba(0,0,0,0.14)] ring-1 ring-black/[0.05] transition-all active:scale-[0.94]"
         >
           <PencilLine className="h-4 w-4" strokeWidth={2.4} />
           写日记
-          <Heart className="h-3 w-3 fill-white/85 text-white/85" aria-hidden="true" />
+          <Heart className="h-3 w-3 fill-[#f2536a]/80 text-[#f2536a]/80" aria-hidden="true" />
         </button>
       </div>
     </SubShell>
@@ -5591,7 +5610,7 @@ function TarotPage({ state, patch, showToast, close }: { state: CoupleState; pat
           type="button"
           onClick={draw}
           disabled={drawing}
-          className="mt-6 h-12 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-12 text-[16px] font-semibold text-white disabled:opacity-50"
+          className="mt-6 h-12 rounded-2xl bg-white px-12 text-[16px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] disabled:opacity-50"
         >
           {drawn != null ? '再抽一次' : '抽取塔罗牌'}
         </button>
@@ -6430,7 +6449,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
                   <img src={draft.img} alt="小事照片" className="h-full w-full object-cover" draggable={false} />
                 ) : (
                   <span className="flex flex-col items-center gap-2">
-                    <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[linear-gradient(180deg,#f9b7ca,#f49cb6)] text-[30px] font-light text-white shadow-[0_4px_12px_rgba(230,130,160,0.45)]">+</span>
+                    <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-[30px] font-light text-[#3c3c44] shadow-[0_4px_14px_rgba(0,0,0,0.14)] ring-1 ring-black/[0.05]">+</span>
                     <span className="text-[13px] font-medium text-[#6e6e76]">添加图片</span>
                   </span>
                 )}
@@ -7267,7 +7286,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                     setView('sign');
                     showToast(p.signTa ? `TA 已先签好名，签完你的名协议就生效 ♡` : `已换成 ${state.taName || 'TA'} 的版本，签完名发给 TA 确认 ♡`);
                   }}
-                  className="h-10 flex-1 rounded-full bg-[#2c2c30] text-[14px] font-semibold text-white active:opacity-85"
+                  className="h-10 flex-1 rounded-2xl bg-white text-[14px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85"
                 >
                   去签 TA 的协议
                 </button>
@@ -7374,7 +7393,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
             aria-label="添加协议"
             data-testid="pact-fab-add"
             onClick={startNewPact}
-            className="fixed bottom-8 right-5 z-20 grid h-14 w-14 place-items-center rounded-full bg-[#2c2c30] text-white transition-transform active:scale-90"
+            className="fixed bottom-8 right-5 z-20 grid h-14 w-14 place-items-center rounded-full bg-white text-[#26262b] shadow-[0_6px_18px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.05] transition-transform active:scale-90"
           >
             <Plus className="h-7 w-7" strokeWidth={2.4} />
           </button>
@@ -7472,7 +7491,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
               setSignFrom('edit');
               setView('sign');
             }}
-            className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-full bg-[#2c2c30] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(0,0,0,0.16)] transition-transform active:scale-[0.98]"
+            className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
           >
             下一步：预览协议
           </button>
@@ -7561,11 +7580,11 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                     setTaProposal(null);
                     showToast('那就保持原条款，你可以再编辑或重发');
                   }}
-                  className="h-10 flex-1 rounded-full bg-white text-[13.5px] font-medium text-[#5a5a62]"
+                  className="h-10 flex-1 rounded-2xl bg-white text-[13.5px] font-medium text-[#5a5a62]"
                 >
                   坚持原条款
                 </button>
-                <button type="button" data-testid="pact-proposal-adopt" onClick={adoptTaProposal} className="h-10 flex-1 rounded-full bg-[#2c2c30] text-[13.5px] font-semibold text-white active:opacity-85">
+                <button type="button" data-testid="pact-proposal-adopt" onClick={adoptTaProposal} className="h-10 flex-1 rounded-2xl bg-white text-[13.5px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
                   采纳修改，发他重签
                 </button>
               </div>
@@ -7604,11 +7623,11 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 setView('home');
                 showToast('已删除该份协议书');
               }}
-              className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]"
+              className="h-11 flex-1 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]"
             >
               删除这份协议
             </button>
-            <button type="button" onClick={() => setView('home')} className="h-11 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white active:opacity-85">
+            <button type="button" onClick={() => setView('home')} className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
               返回
             </button>
           </div>
@@ -7648,10 +7667,10 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
               />
             )}
             <div className="mt-4 flex gap-2.5">
-              <button type="button" onClick={() => setDlg(null)} className="h-11 flex-1 rounded-full bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
+              <button type="button" onClick={() => setDlg(null)} className="h-11 flex-1 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
                 取消
               </button>
-              <button type="button" data-testid="pact-dlg-save" onClick={submitDlg} className="h-11 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white active:opacity-85">
+              <button type="button" data-testid="pact-dlg-save" onClick={submitDlg} className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
                 保存
               </button>
             </div>
@@ -8065,7 +8084,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <RefreshCcw className="mr-1 inline h-4 w-4" />
             再考一次
           </button>
-          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white active:opacity-85">
+          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
             返回题库
           </button>
         </div>
@@ -8196,7 +8215,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               data-testid="exam-ta-grade-submit"
               onClick={submitTaGrade}
               disabled={taGrading}
-              className="mt-3 h-11 w-full rounded-full bg-[#2c2c30] text-[14.5px] font-semibold text-white transition-transform active:scale-[0.98] disabled:opacity-50"
+              className="mt-3 h-11 w-full rounded-2xl bg-white text-[14.5px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98] disabled:opacity-50"
             >
               提交批改
             </button>
@@ -8305,7 +8324,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
           data-testid="exam-submit"
           onClick={() => void submit()}
           disabled={grading}
-          className="mb-2 mt-4 h-[52px] w-full rounded-full bg-[#2c2c30] text-[16.5px] font-semibold text-white transition-transform active:scale-[0.98] disabled:opacity-50"
+          className="mb-2 mt-4 h-[52px] w-full rounded-2xl bg-white text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98] disabled:opacity-50"
         >
           {grading ? (
             <span className="flex items-center justify-center gap-2">
@@ -8359,7 +8378,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               setPickerOpen(true);
             }}
             disabled={inviting}
-            className="h-12 w-full rounded-full border-[1.5px] border-dashed border-[#3c3c42] bg-white text-[15px] font-semibold text-[#26262b] active:bg-[#f7f7f9] disabled:opacity-50"
+            className="h-12 w-full rounded-2xl border-[1.5px] border-dashed border-[#3c3c42] bg-white text-[15px] font-semibold text-[#26262b] active:bg-[#f7f7f9] disabled:opacity-50"
           >
             {inviting && pickerMode === 'together' ? '发送中…' : '和他一起答题'}
           </button>
@@ -8368,7 +8387,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               type="button"
               data-testid="exam-make-paper"
               onClick={makePaper}
-              className="h-12 rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white transition-transform active:scale-[0.98]"
+              className="h-12 rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
             >
               答题
             </button>
@@ -8380,7 +8399,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 setPickerOpen(true);
               }}
               disabled={inviting}
-              className="h-12 rounded-full bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9] disabled:opacity-50"
+              className="h-12 rounded-2xl bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9] disabled:opacity-50"
             >
               {inviting && pickerMode === 'ta' ? '发送中…' : '让他答题'}
             </button>
@@ -8593,7 +8612,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
           <button type="button" onClick={() => setView('mine')} className="h-12 flex-1 rounded-full bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]">
             返回我的卷子
           </button>
-          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white active:opacity-85">
+          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
             返回题库
           </button>
         </div>
@@ -8822,7 +8841,7 @@ function ZodiacPage({ state, patch, close }: { state: CoupleState; patch: (p: Pa
         onClick={() => void calc()}
         disabled={!me || !ta || loading}
         data-testid="zodiac-calc"
-        className="mt-4 h-12 w-full rounded-full bg-[#2c2c30] text-[16px] font-semibold text-white disabled:opacity-40"
+        className="mt-4 h-12 w-full rounded-2xl bg-white text-[16px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] disabled:opacity-40"
       >
         {loading ? '正在为你们测算缘分…' : reading ? '重新测算' : '查看缘分指数'}
       </button>
@@ -9144,7 +9163,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
           type="button"
           data-testid="chronicle-generate"
           onClick={saveDraft}
-          className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-full bg-[#2c2c30] text-[16.5px] font-semibold text-white shadow-[0_8px_22px_rgba(0,0,0,0.16)] transition-transform active:scale-[0.98]"
+          className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
         >
           生成我的编年史
         </button>
@@ -9179,7 +9198,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
             type="button"
             data-testid="chronicle-share"
             onClick={() => showToast('已生成分享卡片，发给那个TA吧 ♡')}
-            className="flex h-[52px] flex-1 items-center justify-center rounded-2xl bg-[#2c2c30] text-[15.5px] font-semibold text-white transition-transform active:scale-[0.98]"
+            className="flex h-[52px] flex-1 items-center justify-center rounded-2xl bg-white text-[15.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
           >
             分享给朋友
           </button>
@@ -9271,7 +9290,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
             );
             setEditing(true);
           }}
-          className="mb-1 mt-6 flex h-[56px] w-full items-center justify-center rounded-2xl bg-[#2c2c30] text-[18px] font-semibold text-white transition-transform active:scale-[0.98]"
+          className="mb-1 mt-6 flex h-[56px] w-full items-center justify-center rounded-2xl bg-white text-[18px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
         >
           开始制作 ✨
         </button>
@@ -9305,7 +9324,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
                 setText('');
                 showToast('已写入大事记 ✍️');
               }}
-              className="h-11 rounded-xl bg-[#2c2c30] px-5 text-[15px] font-semibold text-white"
+              className="h-11 rounded-xl bg-white px-5 text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]"
             >
               记录
             </button>
@@ -9780,7 +9799,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
             data-testid="reply-start-btn"
             onClick={() => void start()}
             disabled={genLoading}
-            className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-full bg-[#2c2c30] text-[20px] font-bold text-white transition-transform active:scale-[0.98] disabled:opacity-75"
+            className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-2xl bg-white text-[20px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98] disabled:opacity-75"
           >
             {genLoading ? (
               <>
@@ -9919,7 +9938,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
               data-testid="reply-next"
               onClick={goNext}
               disabled={judging}
-              className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-full bg-[#2c2c30] text-[18px] font-bold text-white transition-transform active:scale-[0.98] disabled:opacity-70"
+              className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-2xl bg-white text-[18px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98] disabled:opacity-70"
             >
               {judging ? (
                 <>
@@ -9931,96 +9950,97 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
         </div>
       )}
 
-      {/* 挑战失败（AI 判定） */}
+      {/* 挑战失败（AI 判定）——第二十五轮美化：徽章+光晕、宣判胶囊、引言卡、进度条数值、白色主按钮 */}
       {view === 'dead' && (
-        <div className="flex flex-1 flex-col items-center justify-center px-8 pb-16">
-          <div className="text-[34px] font-extrabold text-white">挑战失败</div>
-          <div className="mt-2 text-[15px] font-semibold text-white">{taName} 判定你没及格</div>
-          {state.replyVerdict && (
-            <p className="mt-4 text-center text-[13.5px] leading-relaxed text-white/55" data-testid="reply-verdict-comment">{state.replyVerdict.comment}</p>
-          )}
-          {/* AI 的留言：TA 想说的话（可以点击回复，进 TA 的记忆） */}
-          {state.replyVerdict?.msg && (
-            <div className="mt-4 w-full">
-              <div className="flex items-start gap-2">
-                {state.taAvatar ? (
-                  <img src={state.taAvatar} alt={taName} className="h-8 w-8 shrink-0 rounded-full object-cover" draggable={false} />
-                ) : (
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#7f96e0]/25 text-[11px] font-bold text-[#8fa4ef]">{taName.slice(0, 1)}</span>
-                )}
-                <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-white/[0.07] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-white/85" data-testid="reply-final-msg">{state.replyVerdict.msg}</div>
-              </div>
-              <CommentThread state={state} patch={patchFn} threadKey={`reply:final:${String(state.replyRun?.at ?? 'x')}`} hint={`听完 ${taName} 的话，想回一句吗`} testId="reply-final-thread" dark />
+        <div className="flex-1 overflow-y-auto overscroll-contain">
+          <div className="mx-auto flex min-h-full w-full max-w-[440px] flex-col items-center px-7 pb-10 pt-7">
+            <div className="relative" aria-hidden="true">
+              <div className="absolute -inset-7 rounded-full bg-white/[0.05] blur-2xl" />
+              <div className="relative grid h-[84px] w-[84px] place-items-center rounded-[26px] bg-white/[0.07] text-[40px] ring-1 ring-white/[0.12]">🥀</div>
             </div>
-          )}
-          <div className="mt-6 flex gap-2.5">
-            {[
-              { l: '体面值', v: stats.tm },
-              { l: '觉察值', v: stats.jc },
-              { l: '安抚值', v: stats.af },
-              { l: '存活率', v: Math.max(0, stats.sc) },
-            ].map((s) => (
-              <div key={s.l} className="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2 text-center">
-                <div className="text-[10px] text-white/35">{s.l}</div>
-                <div className="mt-0.5 text-[16px] font-bold text-white">{s.v}</div>
+            <div className="mt-5 text-[32px] font-extrabold tracking-wide text-white">挑战失败</div>
+            <div className="mt-3 rounded-full bg-white/[0.07] px-4 py-1.5 text-[12.5px] font-semibold text-white/65" data-testid="reply-dead-sub">
+              {taName} 宣判：这局没及格
+            </div>
+            {state.replyVerdict?.comment && (
+              <div className="mt-5 w-full border-l-2 border-white/25 pl-3.5 text-left text-[13.5px] leading-relaxed text-white/60" data-testid="reply-verdict-comment">
+                {state.replyVerdict.comment}
               </div>
-            ))}
+            )}
+            {/* AI 的留言：TA 想说的话（可以点击回复，进 TA 的记忆） */}
+            {state.replyVerdict?.msg && (
+              <div className="mt-5 w-full">
+                <div className="flex items-start gap-2.5">
+                  {state.taAvatar ? (
+                    <img src={state.taAvatar} alt={taName} className="h-9 w-9 shrink-0 rounded-full object-cover" draggable={false} />
+                  ) : (
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#7f96e0]/25 text-[11px] font-bold text-[#8fa4ef]">{taName.slice(0, 1)}</span>
+                  )}
+                  <div className="min-w-0 flex-1 rounded-2xl rounded-tl-md bg-white/[0.08] px-4 py-3 text-[13.5px] leading-relaxed text-white/90 ring-1 ring-white/[0.06]" data-testid="reply-final-msg">{state.replyVerdict.msg}</div>
+                </div>
+                <CommentThread state={state} patch={patchFn} threadKey={`reply:final:${String(state.replyRun?.at ?? 'x')}`} hint={`听完 ${taName} 的话，想回一句吗`} testId="reply-final-thread" dark />
+              </div>
+            )}
+            <div className="mt-6 grid w-full grid-cols-4 gap-2">
+              {statChip('体面值', stats.tm)}
+              {statChip('觉察值', stats.jc)}
+              {statChip('安抚值', stats.af)}
+              {statChip('存活率', Math.max(0, stats.sc))}
+            </div>
+            <button type="button" onClick={start} className="mt-8 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white text-[16.5px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98]" data-testid="reply-retry">
+              再挑战一次
+            </button>
+            <button type="button" onClick={() => setView('home')} className="mt-3 h-12 w-full rounded-2xl bg-white/[0.08] text-[15px] font-medium text-white/70 transition-colors active:bg-white/[0.13]">
+              回到首页
+            </button>
           </div>
-          <button type="button" onClick={start} className="mt-9 flex h-14 w-full items-center justify-center rounded-full bg-[#2c2c30] text-[18px] font-bold text-white transition-transform active:scale-[0.98]">
-            再挑战一次
-          </button>
-          <button type="button" onClick={() => setView('home')} className="mt-3 h-12 w-full rounded-full bg-white/[0.08] text-[15px] font-medium text-white/70">
-            回到首页
-          </button>
         </div>
       )}
 
-      {/* 通关成功（AI 判定） */}
+      {/* 通关成功（AI 判定）——第二十五轮美化：徽章+光晕、宣判胶囊、引言卡、进度条数值、白色主按钮 */}
       {view === 'clear' && (
-        <div className="flex flex-1 flex-col items-center justify-center px-8 pb-16">
-          <div className="text-[40px]" aria-hidden="true">
-            🎉
-          </div>
-          <div className="mt-2 text-[32px] font-extrabold text-white">通关成功</div>
-          <p className="mt-3 text-center text-[14.5px] leading-relaxed text-white/55">
-            {totalLv} 关全过 · {taName} 宣判你及格了
-          </p>
-          {state.replyVerdict && (
-            <p className="mt-2 text-center text-[13px] leading-relaxed text-white/45" data-testid="reply-verdict-comment">{state.replyVerdict.comment}</p>
-          )}
-          {/* AI 的留言：TA 想说的话（可以点击回复，进 TA 的记忆） */}
-          {state.replyVerdict?.msg && (
-            <div className="mt-4 w-full">
-              <div className="flex items-start gap-2">
-                {state.taAvatar ? (
-                  <img src={state.taAvatar} alt={taName} className="h-8 w-8 shrink-0 rounded-full object-cover" draggable={false} />
-                ) : (
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#7f96e0]/25 text-[11px] font-bold text-[#8fa4ef]">{taName.slice(0, 1)}</span>
-                )}
-                <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-white/[0.07] px-3.5 py-2.5 text-[13.5px] leading-relaxed text-white/85" data-testid="reply-final-msg">{state.replyVerdict.msg}</div>
-              </div>
-              <CommentThread state={state} patch={patchFn} threadKey={`reply:final:${String(state.replyRun?.at ?? 'x')}`} hint={`听完 ${taName} 的话，想回一句吗`} testId="reply-final-thread" dark />
+        <div className="flex-1 overflow-y-auto overscroll-contain">
+          <div className="mx-auto flex min-h-full w-full max-w-[440px] flex-col items-center px-7 pb-10 pt-7">
+            <div className="relative" aria-hidden="true">
+              <div className="absolute -inset-7 rounded-full bg-white/[0.07] blur-2xl" />
+              <div className="relative grid h-[84px] w-[84px] place-items-center rounded-[26px] bg-white/[0.08] text-[40px] ring-1 ring-white/[0.14]">🎉</div>
             </div>
-          )}
-          <div className="mt-6 flex gap-2.5">
-            {[
-              { l: '体面值', v: stats.tm },
-              { l: '觉察值', v: stats.jc },
-              { l: '安抚值', v: stats.af },
-              { l: '存活率', v: Math.max(0, stats.sc) },
-            ].map((s) => (
-              <div key={s.l} className="rounded-xl border border-white/15 bg-white/[0.06] px-3 py-2 text-center">
-                <div className="text-[10px] text-white/55">{s.l}</div>
-                <div className="mt-0.5 text-[16px] font-bold text-white">{s.v}</div>
+            <div className="mt-5 text-[32px] font-extrabold tracking-wide text-white">通关成功</div>
+            <div className="mt-3 rounded-full bg-white/[0.08] px-4 py-1.5 text-[12.5px] font-semibold text-white/70" data-testid="reply-clear-sub">
+              {totalLv} 关全过 · {taName} 宣判你及格了
+            </div>
+            {state.replyVerdict?.comment && (
+              <div className="mt-5 w-full border-l-2 border-white/25 pl-3.5 text-left text-[13.5px] leading-relaxed text-white/60" data-testid="reply-verdict-comment">
+                {state.replyVerdict.comment}
               </div>
-            ))}
+            )}
+            {/* AI 的留言：TA 想说的话（可以点击回复，进 TA 的记忆） */}
+            {state.replyVerdict?.msg && (
+              <div className="mt-5 w-full">
+                <div className="flex items-start gap-2.5">
+                  {state.taAvatar ? (
+                    <img src={state.taAvatar} alt={taName} className="h-9 w-9 shrink-0 rounded-full object-cover" draggable={false} />
+                  ) : (
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#7f96e0]/25 text-[11px] font-bold text-[#8fa4ef]">{taName.slice(0, 1)}</span>
+                  )}
+                  <div className="min-w-0 flex-1 rounded-2xl rounded-tl-md bg-white/[0.08] px-4 py-3 text-[13.5px] leading-relaxed text-white/90 ring-1 ring-white/[0.06]" data-testid="reply-final-msg">{state.replyVerdict.msg}</div>
+                </div>
+                <CommentThread state={state} patch={patchFn} threadKey={`reply:final:${String(state.replyRun?.at ?? 'x')}`} hint={`听完 ${taName} 的话，想回一句吗`} testId="reply-final-thread" dark />
+              </div>
+            )}
+            <div className="mt-6 grid w-full grid-cols-4 gap-2">
+              {statChip('体面值', stats.tm)}
+              {statChip('觉察值', stats.jc)}
+              {statChip('安抚值', stats.af)}
+              {statChip('存活率', Math.max(0, stats.sc))}
+            </div>
+            <button type="button" onClick={start} className="mt-8 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white text-[16.5px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98]" data-testid="reply-retry">
+              再挑战一次
+            </button>
+            <button type="button" onClick={() => setView('home')} className="mt-3 h-12 w-full rounded-2xl bg-white/[0.08] text-[15px] font-medium text-white/70 transition-colors active:bg-white/[0.13]">
+              回到首页
+            </button>
           </div>
-          <button type="button" onClick={start} className="mt-9 flex h-13 w-full items-center justify-center rounded-full bg-white/[0.08] text-[16px] font-semibold text-white/85 transition-transform active:scale-[0.98]">
-            再挑战一次
-          </button>
-          <button type="button" onClick={() => setView('home')} className="mt-3 h-12 w-full rounded-full bg-white/[0.08] text-[15px] font-medium text-white/70">
-            回到首页
-          </button>
         </div>
       )}
     </div>
@@ -10355,7 +10375,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                   setView('quiz');
                 }
               }}
-              className="flex h-[54px] w-full items-center justify-center rounded-full bg-[#2c2c30] text-[17.5px] font-bold text-white transition-transform active:scale-[0.98]"
+              className="flex h-[54px] w-full items-center justify-center rounded-2xl bg-white text-[17.5px] font-bold text-[#131316] shadow-[0_4px_16px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
             >
               {done ? '查看我们的测评报告' : answeredCount > 0 ? '继续测试' : '开始测试'}
             </button>
@@ -10375,7 +10395,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
                       patch({ status: s });
                       showToast(`状态已更新为「${s}」`);
                     }}
-                    className={`rounded-full px-3.5 py-2 text-[13px] font-medium transition-colors ${picked ? 'bg-[#2c2c30] text-white' : 'bg-[#f7f7f9] text-[#4a4a52] active:bg-[#ececf0]'}`}
+                    className={`rounded-xl px-3.5 py-2 text-[13px] font-medium transition-colors ${picked ? 'bg-white text-[#131316] ring-2 ring-[#26262b]' : 'bg-[#f4f4f6] text-[#4a4a52] active:bg-[#ececf0]'}`}
                   >
                     {s}
                   </button>
@@ -10474,7 +10494,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
               data-testid="status-exam-next"
               onClick={nextQ}
               disabled={myCur == null || aiPick == null}
-              className="mx-auto flex h-[52px] w-[64%] items-center justify-center rounded-full bg-[#2c2c30] text-[16.5px] font-bold text-white transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
+              className="mx-auto flex h-[52px] w-[64%] items-center justify-center rounded-2xl bg-white text-[16.5px] font-bold text-[#1b1b1f] shadow-[0_4px_16px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
             >
               {qi >= STATUS_EXAM.length - 1 ? '查看我们的结果' : '下一题'}
             </button>
@@ -10586,7 +10606,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
             data-testid="status-exam-regen"
             onClick={() => void genReport(false)}
             disabled={genLoading}
-            className="flex h-[50px] flex-1 items-center justify-center rounded-full bg-[#2c2c30] text-[15px] font-semibold text-white transition-transform active:scale-[0.98] disabled:opacity-50"
+            className="flex h-[50px] flex-1 items-center justify-center rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98] disabled:opacity-50"
           >
             {report ? 'AI 重新分析' : 'AI 深度分析'}
           </button>
@@ -10812,7 +10832,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
           type="button"
           data-testid="impress-submit"
           onClick={() => showToast(tags.length > 0 ? '印象已提交，甜甜的恋爱值 +1 ♡' : '先选几个词再提交吧')}
-          className="h-[50px] w-full rounded-full bg-[#2c2c30] text-[16.5px] font-semibold text-white transition-transform active:scale-[0.98]"
+          className="h-[50px] w-full rounded-2xl bg-white text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
         >
           提 交
         </button>
@@ -11173,7 +11193,7 @@ function MissYouPage({ state, patch, tapMissYou, showToast, close }: { state: Co
           <button
             type="button"
             onClick={() => showToast('已经去提醒他啦，让他快来想你 ♡')}
-            className="h-11 w-[196px] rounded-full bg-[#2c2c30] text-[16px] font-semibold text-white transition-transform active:scale-[0.97]"
+            className="h-11 w-[196px] rounded-2xl bg-white text-[16px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]"
           >
             去提醒他
           </button>
@@ -11439,7 +11459,7 @@ function SupportPage({ close }: { close: () => void }) {
             onKeyDown={(e) => e.key === 'Enter' && send()}
             className="h-11 flex-1 rounded-full bg-[#f3f3f5] px-4 text-[15px] outline-none placeholder:text-[#b6b6bd]"
           />
-          <button type="button" onClick={send} aria-label="发送" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#2c2c30] text-white transition-transform active:scale-95">
+          <button type="button" onClick={send} aria-label="发送" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-[#2c2c30] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-[#e9e9ee] transition-transform active:scale-95">
             <ArrowUp className="h-5 w-5" strokeWidth={2.4} />
           </button>
         </div>

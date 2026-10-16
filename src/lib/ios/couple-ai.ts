@@ -780,6 +780,21 @@ export interface CoupleTrailRec {
   text: string; // 展示文案（固定句式）
   detail?: string; // 「查看记录」详情
   at: number; // 生成时间
+  revealAt?: number; // 第二十五轮：揭示时间（渐进一条条出现，不要一次性生成；小于等于当前时间才展示）
+  sortAt?: number; // 第二十五轮：排序时间戳（「刚刚」记录=落库真实时刻，保证排在我刚发的消息后面）
+}
+
+/** 记录时间 → 排序毫秒（手工解析 HH:MM/H:MM，兼容 Safari 严格 ISO 解析；失败返回 NaN） */
+export function trailSortMs(dateKey: string, t: string): number {
+  const d = new Date(`${dateKey}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return NaN;
+  const m = /^\s*(\d{1,2}):(\d{2})/.exec(String(t ?? ''));
+  if (!m) return NaN;
+  const h = Number(m[1]);
+  const mi = Number(m[2]);
+  if (h > 23 || mi > 59) return NaN;
+  d.setHours(h, mi, 0, 0);
+  return d.getTime();
 }
 
 const TRAIL_KINDS = ['unlock', 'screen', 'app', 'call', 'chargeOn', 'chargeOff', 'leave', 'arrive', 'offcar', 'walkplay', 'stay'];
@@ -853,19 +868,53 @@ ${rules}
         .map((r, i) => ({
           id: `tr-${Date.now()}-${i}`,
           dateKey: mode === 'day' ? opts.dateKey : todayKey(),
-          t: String(r.t),
+          t: String(r.t).padStart(5, '0'),
           kind: String(r.kind),
           text: cut(String(r.text).replace(/[「」"]/g, ''), 46),
           detail: r.detail ? cut(String(r.detail).replace(/[「」"]/g, ''), 60) : '',
           at: Date.now(),
         }));
       if (recs.length === 0) return;
-      writeSnap((s) => {
-        const feed = Array.isArray(s.trailFeed) ? (s.trailFeed as CoupleTrailRec[]) : [];
-        const merged: CoupleTrailRec[] = mode === 'day' ? [...feed.filter((r) => r.dateKey !== opts.dateKey), ...recs] : [...feed, ...recs];
-        return { ...s, trailFeed: merged.slice(-260) };
-      });
-      logAi(mode === 'day' ? `${ta}的轨迹记录更新了` : `轨迹新增一条刚刚的记录`);
+      if (mode === 'day') {
+        // 第二十五轮：按时间先后排好 → 未来的时间丢弃（今天的记录绝不能出现还没到点的时刻）
+        recs.sort((a, b) => {
+          const ma = trailSortMs(a.dateKey, a.t);
+          const mb = trailSortMs(b.dateKey, b.t);
+          return (Number.isNaN(ma) ? 0 : ma) - (Number.isNaN(mb) ? 0 : mb);
+        });
+        const nowMs = Date.now();
+        const valid = recs.filter((r) => {
+          const ms = trailSortMs(r.dateKey, r.t);
+          return !Number.isNaN(ms) && ms <= nowMs + 60000;
+        });
+        if (valid.length === 0) return;
+        // 渐进揭示：一条条跟着真实时间出现（今天 1.2~1.9s 一条；更早的天快速连播 0.45~0.8s）
+        const gap = (opts.daysAgo ?? 0) === 0 ? 1200 : 450;
+        valid.forEach((r, i) => {
+          r.revealAt = nowMs + 700 + i * gap + Math.floor(Math.random() * (gap * 0.55));
+          r.sortAt = trailSortMs(r.dateKey, r.t);
+        });
+        writeSnap((s) => {
+          const feed = Array.isArray(s.trailFeed) ? (s.trailFeed as CoupleTrailRec[]) : [];
+          const merged: CoupleTrailRec[] = [...feed.filter((r) => r.dateKey !== opts.dateKey), ...valid];
+          return { ...s, trailFeed: merged.slice(-260) };
+        });
+        logAi(`${ta}的轨迹记录更新了（${valid.length} 条将依次出现）`);
+      } else {
+        // 「刚刚」记录：排序时间=落库时刻（一定排在我刚发的消息后面），立即可见
+        const nowMs = Date.now();
+        const nowHM2 = `${String(new Date(nowMs).getHours()).padStart(2, '0')}:${String(new Date(nowMs).getMinutes()).padStart(2, '0')}`;
+        for (const r of recs) {
+          r.t = nowHM2;
+          r.sortAt = nowMs;
+          r.revealAt = nowMs;
+        }
+        writeSnap((s) => {
+          const feed = Array.isArray(s.trailFeed) ? (s.trailFeed as CoupleTrailRec[]) : [];
+          return { ...s, trailFeed: [...feed, ...recs].slice(-260) };
+        });
+        logAi(`轨迹新增一条刚刚的记录`);
+      }
     } catch {
       /* 静默 */
     }

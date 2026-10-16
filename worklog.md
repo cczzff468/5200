@@ -19931,3 +19931,21 @@ Work Log:
 Stage Summary:
 - 6 文件改动：couple-space.tsx（-约700：ExamPaperSheet 删除+三按钮+全站黑白灰）、couple-ai.ts（模型化+删模板+aiExamSubmitSay）、couple-exam-share.ts（交卷话术模型化）、couple-pact-share.ts（删 say 兜底话术）、couple-exam-bubble.tsx/couple-pact-bubble.tsx（logo 圆角方+标题美化）
 - 第二十四轮全部需求落地：陪答AI按人设记忆选择和留言+删「他选了」、预览页扁平+生成试卷→答题+三按钮体系、按钮圆角黑白灰（可用虚线）、邀请卡片对齐截图、轨迹页气泡白浅灰+发送↑、全部发送按钮↑、留言名字黑色+不遮挡延伸、AI 全面真实模型拒绝模板、AI 决策审查修复
+
+---
+Task ID: 25
+Agent: Z.ai Code（主会话）
+Task: 恋人空间第二十五轮：按钮浅灰白圆角矩形风全站扫尾、回复挑战通关/失败结算页美化、位置与轨迹发消息排序修复+记录白面板删除+记录渐进揭示（不要一次性生成）+记录穿插聊天时间线
+
+Work Log:
+- couple-ai.ts 轨迹记录流改造：CoupleTrailRec 新增 revealAt（渐进揭示时间）+ sortAt（排序时间戳）；导出 trailSortMs()（手工解析 HH:MM/H:MM，兼容 Safari 严格 ISO 解析，杜绝 new Date(“...T8:05:00") NaN→排到顶上的问题）；mode='day' 生成后按时间排序、丢弃未来时刻（今天绝不出现未到点的时间）、revealAt 按 1.2~1.9s（今天）/0.45~0.8s（更早天）错峰落库——记录一条条跟着真实时间出现，不再一次性糊一屏；mode='now'（发消息/刷新触发的「刚刚」记录）t 强制为落库时刻 nowHM、sortAt=落库真实时间戳→必定排在我刚发的消息后面（修复「发消息后记录显示在上面」），revealAt=立即
+- couple-space.tsx 轨迹页：trailFeedRecs 只显示 revealAt<=now 的记录 + 0.8s ticker 驱动渐进出现（feedTick）；排序优先 sortAt、旧数据/解析失败兜底 r.at（永不落到最顶）；自动滚动改为「打开页面强制到底 + 之后只有贴底才跟随」（翻历史不被打扰）；记录渲染删除白色圆角面板——图标+文字+「查看记录」直接落在背景上（居中时间行保留），像系统时间线；「查看更早的记录」改 rounded-xl 白底灰环
+- 回复挑战结算页美化（dead/clear 同构重做）：🥀/🎉 图标徽章（rounded-[26px] 白色微底+ring+blur 光晕）、大标题、宣判胶囊（X 关全过·阿澈宣判你及格了 / 阿澈宣判：这局没及格）、总评引用卡（左侧 2px 白线）、TA 头像+气泡（ring 细边）、四数值 statChip 复用（带进度条，等宽 grid-cols-4）、再挑战一次=白底圆角矩形黑字（白光晕阴影）、回到首页=白 8% ghost；结算页改为可滚动（min-h-full m-auto 居中）
+- 全站按钮浅灰白圆角矩形扫尾（couple-space.tsx 约 60 处）：深色 pill（rounded-full bg-#2c2c30 text-white）→ rounded-2xl 白底黑字+灰环+浅影（首页/恋人邀请/信纸/情书写读/信封/心情/协议/批改/题库/星座/状态测评/情侣印象/想你/编年史/塔罗/回忆/考试三按钮等）；粉渐变按钮（打印成册/树浇水/信分享/情书寄出/新建相册 FAB/轨迹入口/邀请发送/写日记/戳一下/月导航圆钮/分享给朋友等）→ 白底深字中性影；ghost pill（信封夜场景 border-white/25 等）保留配色改 rounded-2xl；100件小事粉色手账页/甜蜜小问答心形指示/想你页补签卡+号按第二十四轮决议保留原美术主题（颜色与页面风格匹配）
+- 恋人空间 hub 底部四功能卡（爱情小树/情侣轨迹/甜蜜小问答/情书）灰渐变→白底深字圆角卡；发现页两张大卡（情侣轨迹/情侣小家）底部深色标题条→白底深字
+- 验证：tsc 全量零错误；eslint（couple-space/couple-ai）零错误零警告；agent-browser 实机（注入种子→微信登录→恋人空间）：①位置与轨迹——白面板已删、记录穿插聊天按真实时间排序、发「宝宝睡了吗」→消息贴底→TA 人设回复「刚醒，昨晚想你没睡好，今天早点见面补偿我。」贴底→「刚刚」记录排最底（原先跳到最顶的 bug 修复）、查看记录详情弹层正常、reload 后旧记录（无 revealAt）立即全显不丢；②回复挑战——开始挑战白钮→连打 6 关→AI 宣判→通关成功页（徽章光晕/宣判胶囊/引用卡/TA 气泡/进度条数值/白钮）逐项核对、留言区回复「凡凡：哼，下次我一定全对」黑名+白↑发送正常；③hub 四功能卡白色化、发现页大卡白色标题条、回复挑战首页白钮 ✓；dev.log 无代码错误（仅预存 instrumentation Edge 警告）
+- 测试环境备忘：主屏图标的 aria-label 联合 fiber onClick 直调可稳定开 App；主屏非当前页容器带 inert+aria-hidden，agent-browser 截图所见页面若 inert 会吞点击——用「第 N 页」圆点（fiber onClick）切页后恢复；解锁上滑用纯竖直轨迹（dx≤3px）避免误触翻页
+
+Stage Summary:
+- 2 文件改动：couple-space.tsx（轨迹 UI/结算页重做/全站按钮浅灰白圆角矩形/hub 发现卡白色化）、couple-ai.ts（trailSortMs+revealAt/sortAt+渐进揭示+now 记录排序修正）
+- 第二十五轮全部需求落地：按钮浅灰白风+圆角矩形+不匹配颜色修正、回复挑战成功/失败页美化、位置与轨迹发消息排序 bug 修复、记录白面板删除、记录穿插聊天时间线、记录跟随真实时间渐进出现不再一次性生成
