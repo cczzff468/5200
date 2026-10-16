@@ -45,18 +45,58 @@ export interface AlbumPageProps {
 
 /** 读图片文件并 canvas 压缩到最大边 max px 的 JPEG data URL（quality 0.8）。
  *  album-store 的 src 字段是 data URL 字符串（不是 Blob），故与 photos.tsx 的 File 直存不同，这里需读+压缩+toDataURL。
- *  第二十九轮修复「上传不了图片」：canvas 解码失败（HEIC/冷门格式/超大图）时回退存原始 dataURL
- *  （能存多少存多少，不再一失败就整张丢弃）；只有连原始读取都失败/结果不是图片时才 reject。 */
-// NOTE: wechat.tsx:1255 也有同款 readImageFile（max=720），未来可抽到 src/lib/ios/image-compress.ts 共用
+ *  第二十九轮修复「上传不了图片」：先快照 FileList 再清 input.value（规范里 value='' 会原地清空 FileList）。
+ *  第三十轮修复「上传的图片不显示」根因：此前 canvas 解码失败（iPhone HEIC/冷门格式）时回退存原始
+ *  dataURL——但 Image 已经 onerror 说明本浏览器根本无法解码该格式，存进去的就是一张永远显示不出来的
+ *  死图（网格里空白瓦片）= 用户看到的「上传成功但不显示」。现改为三级解码：Image → createImageBitmap
+ *  （支持面更广，部分平台能解 HEIC）→ 都失败才明确 reject（有 toast 反馈，绝不再存不可显示的死图）；
+ *  Image 成功但 canvas 失败时才允许存原始 dataURL（此时浏览器已证明能渲染，显示无问题）。 */
+// NOTE: wechat.tsx readImageFile（max=720）同款三级解码已同步，未来可抽到 src/lib/ios/image-compress.ts 共用
 function readImageFile(file: File, max = 1280): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const raw = typeof reader.result === 'string' ? reader.result : '';
+      // 兑底：仅当浏览器已证明能解码（Image 成功但 canvas 失败）时才存原始 dataURL
       const viaRaw = () => {
-        // 兑底：原始 dataURL（GIF/HEIC 等）——至少要是图片数据才有保存价值
         if (raw.startsWith('data:image/')) resolve(raw);
         else reject(new Error('不支持的图片格式'));
+      };
+      // 二次解码：createImageBitmap 支持面比 <img> 更广（部分平台能解 HEIC/EXIF 变体），成功仍走 canvas 压缩
+      const viaBitmap = () => {
+        if (typeof createImageBitmap !== 'function') {
+          reject(new Error('该图片格式无法显示（如 HEIC），请改用 JPG/PNG'));
+          return;
+        }
+        createImageBitmap(file, { imageOrientation: 'from-image' })
+          .then((bmp) => {
+            try {
+              const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+              const canvas = document.createElement('canvas');
+              canvas.width = Math.max(1, Math.round(bmp.width * scale));
+              canvas.height = Math.max(1, Math.round(bmp.height * scale));
+              const ctx = canvas.getContext('2d');
+              if (!ctx) {
+                reject(new Error('图片解析失败'));
+                return;
+              }
+              // 白底填底，避免透明图转 JPEG 后变黑底
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+              try {
+                bmp.close();
+              } catch {
+                /* close 失败不影响 */
+              }
+              const out = canvas.toDataURL('image/jpeg', 0.8);
+              if (typeof out === 'string' && out.startsWith('data:image/') && out.length > 22) resolve(out);
+              else reject(new Error('图片解析失败'));
+            } catch {
+              reject(new Error('图片解析失败'));
+            }
+          })
+          .catch(() => reject(new Error('该图片格式无法显示（如 HEIC），请改用 JPG/PNG')));
       };
       const img = new Image();
       img.onload = () => {
@@ -81,13 +121,16 @@ function readImageFile(file: File, max = 1280): Promise<string> {
           viaRaw();
         }
       };
-      img.onerror = () => viaRaw();
+      img.onerror = () => viaBitmap();
       img.src = raw;
     };
     reader.onerror = () => reject(new Error('文件读取失败'));
     reader.readAsDataURL(file);
   });
 }
+
+/** 轻提示自动消失时长（ms） */
+const TOAST_MS = 1600;
 
 export default function AlbumPage({
   contactId,
@@ -106,8 +149,41 @@ export default function AlbumPage({
   /** 编辑描述弹窗：null 关闭 / string 当前编辑的 albumId */
   const [editingId, setEditingId] = useState<string | null>(null);
   const [descDraft, setDescDraft] = useState('');
+  /** 浏览器渲染失败的条目（历史遗留 HEIC 等死图）：网格/查看器显示「无法显示」占位而非空白 */
+  const [brokenIds, setBrokenIds] = useState<Set<string>>(new Set());
+  /** 页内轻提示：微信/QQ 宿主都在相册页早退返回本组件、宿主级 Toast 不挂载
+   *  （上传成功/失败此前完全没有可见反馈），故在本页内置一份展示；
+   *  onToast 照常回调不破坏既有接口 */
+  const [localToast, setLocalToast] = useState('');
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const showToast = useCallback(
+    (msg: string) => {
+      setLocalToast(msg);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setLocalToast(''), TOAST_MS);
+      onToast?.(msg);
+    },
+    [onToast],
+  );
+
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    },
+    [],
+  );
+
+  const markBroken = useCallback((id: string) => {
+    setBrokenIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
 
   /** 加载相册列表（按 createdAt 升序，listAlbums 已排好） */
   const reload = useCallback(async () => {
@@ -151,9 +227,9 @@ export default function AlbumPage({
           fail += 1;
         }
       }
-      if (ok > 0 && fail > 0) onToast?.(`已添加 ${ok} 张，${fail} 张失败（可能是格式不支持）`);
-      else if (ok > 0) onToast?.(`已添加 ${ok} 张图片`);
-      else if (fail > 0) onToast?.('图片添加失败，可能是格式不支持');
+      if (ok > 0 && fail > 0) showToast(`已添加 ${ok} 张，${fail} 张失败（可能是格式不支持）`);
+      else if (ok > 0) showToast(`已添加 ${ok} 张图片`);
+      else if (fail > 0) showToast('图片添加失败，可能是格式不支持（如 HEIC 请先转 JPG）');
       await reload();
       // 自动识图描述（第二十九轮「让 AI 知道相册里的图片长什么样」）：
       // 上传成功后逐张后台识图回写 desc（fire-and-forget；未配置识图模型自动用内置兑底），
@@ -369,13 +445,21 @@ export default function AlbumPage({
                   }}
                   className="relative block aspect-square w-full overflow-hidden bg-muted transition-opacity active:opacity-80"
                 >
-                  <img
-                    src={rec.src}
-                    alt={rec.desc ?? rec.name ?? ''}
-                    loading="lazy"
-                    draggable={false}
-                    className="h-full w-full select-none object-cover"
-                  />
+                  {brokenIds.has(rec.id) ? (
+                    <span className="flex h-full w-full flex-col items-center justify-center gap-1 bg-muted">
+                      <ImageOff className="h-5 w-5 text-muted-foreground/50" aria-hidden="true" />
+                      <span className="text-[10px] text-muted-foreground/70">无法显示</span>
+                    </span>
+                  ) : (
+                    <img
+                      src={rec.src}
+                      alt={rec.desc ?? rec.name ?? ''}
+                      loading="lazy"
+                      draggable={false}
+                      onError={() => markBroken(rec.id)}
+                      className="h-full w-full select-none object-cover"
+                    />
+                  )}
                   {selectMode && (
                     <span
                       className={`absolute left-1 top-1 flex h-[22px] w-[22px] items-center justify-center rounded-full border-[1.5px] backdrop-blur-sm transition-colors ${
@@ -418,13 +502,21 @@ export default function AlbumPage({
             onTouchStart={handleStageTouchStart}
             onTouchEnd={handleStageTouchEnd}
           >
-            <img
-              key={current.id}
-              src={current.src}
-              alt={current.desc ?? current.name ?? ''}
-              draggable={false}
-              className="h-full w-full select-none object-contain"
-            />
+            {brokenIds.has(current.id) ? (
+              <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-10 text-center">
+                <ImageOff className="h-10 w-10 text-white/40" aria-hidden="true" />
+                <p className="text-[14px] text-white/70">这张图片的格式当前浏览器无法显示</p>
+              </div>
+            ) : (
+              <img
+                key={current.id}
+                src={current.src}
+                alt={current.desc ?? current.name ?? ''}
+                draggable={false}
+                onError={() => markBroken(current.id)}
+                className="h-full w-full select-none object-contain"
+              />
+            )}
           </div>
 
           {/* 顶部栏：关闭 + 当前序号 */}
@@ -551,6 +643,17 @@ export default function AlbumPage({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 页内轻提示（上传成功/失败等；宿主 Toast 在相册页不挂载，必须自渲染） */}
+      {localToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none absolute left-1/2 top-1/2 z-[80] -translate-x-1/2 -translate-y-1/2 rounded-[8px] bg-black/75 px-4 py-2.5 text-[14px] text-white"
+        >
+          {localToast}
         </div>
       )}
     </IOSScreen>

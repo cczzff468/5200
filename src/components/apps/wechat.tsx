@@ -1826,12 +1826,51 @@ export function readImageFile(file: File, max = 720): Promise<string> {
         return;
       }
       const viaRaw = () => {
-        // 兜底：原始 dataURL——至少要是图片数据才有价值
+        // 兜底：原始 dataURL——仅当浏览器已证明能解码（Image 成功但 canvas 失败）时才值得保存
         if (result.startsWith('data:image/')) resolve(result);
         else reject(new Error('图片解析失败'));
       };
+      // 第三十轮「上传的图片不显示」同款修复（与 album.tsx readImageFile 同步）：
+      // Image 解码失败（HEIC 等）时此前会原样保存 → 存进去的是永远显示不出来的死图。
+      // 现改为先试 createImageBitmap（支持面更广，部分平台能解 HEIC），仍失败才明确 reject。
+      const viaBitmap = () => {
+        if (typeof createImageBitmap !== 'function') {
+          reject(new Error('该图片格式无法显示（如 HEIC），请改用 JPG/PNG'));
+          return;
+        }
+        createImageBitmap(file, { imageOrientation: 'from-image' })
+          .then((bmp) => {
+            try {
+              const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+              const w = Math.max(1, Math.round(bmp.width * scale));
+              const h = Math.max(1, Math.round(bmp.height * scale));
+              const canvas = document.createElement('canvas');
+              canvas.width = w;
+              canvas.height = h;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) {
+                reject(new Error('图片解析失败'));
+                return;
+              }
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, w, h);
+              ctx.drawImage(bmp, 0, 0, w, h);
+              try {
+                bmp.close();
+              } catch {
+                /* close 失败不影响 */
+              }
+              const out = canvas.toDataURL('image/jpeg', 0.72);
+              if (typeof out === 'string' && out.startsWith('data:image/') && out.length > 22) resolve(out);
+              else reject(new Error('图片解析失败'));
+            } catch {
+              reject(new Error('图片解析失败'));
+            }
+          })
+          .catch(() => reject(new Error('该图片格式无法显示（如 HEIC），请改用 JPG/PNG')));
+      };
       const img = new Image();
-      img.onerror = () => viaRaw();
+      img.onerror = () => viaBitmap();
       img.onload = () => {
         try {
           const scale = Math.min(1, max / Math.max(img.width, img.height));

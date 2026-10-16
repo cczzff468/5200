@@ -20028,3 +20028,24 @@ Stage Summary:
 - 新增文件：src/lib/ios/avatar-ai.ts、src/lib/ios/album-vision.ts
 - 修改文件：couple-letter-bubble.tsx、couple-letter-share.ts、couple-space.tsx、couple-ai.ts、album.tsx、vision-client.ts、chat-stream-store.ts、chat-rich.ts、db.ts（VisionDecisionRecord + gen-avatar）、vision-log.tsx、wechat.tsx、qq.tsx
 - 测试遗留：沙盒浏览器注入了机主联系人 c-owner-test（凡凡/13800138000/密码 a12345678，QQ 10001 同密码）供登录测试，保留可复用
+
+---
+Task ID: round-30
+Agent: 主协调者 (Z.ai Code)
+Task: 第三十轮：①微信/QQ相册上传图片不显示修复；②AI 把喜欢的聊天图片存到自己相册（规则强化）；③恋爱协议+恋爱水平考试邀请卡片内容改为用户参考图文案（只改内容）
+
+Work Log:
+- 需求1 相册上传图片不显示——浏览器实测（agent-browser 上传 PNG 正常入库显示→持久化正常），定位真正问题在「解码失败兜底」：
+  - 根因 A：album.tsx/wechat.tsx readImageFile 的 viaRaw 兜底在 <img> 解码失败（iPhone HEIC 等）时仍把原始 dataURL 存库——存进去的是浏览器永远渲染不出来的死图 → 用户看到「上传成功但不显示」的空白瓦片。修复：三级解码 Image → createImageBitmap(file,{imageOrientation:'from-image'})（支持面更广）→ 都失败才明确 reject；仅当浏览器已证明能解码（Image 成功但 canvas 失败）才允许存原始 dataURL。qq.tsx compressImageFile 同步修复
+  - 根因 B：历史遗留死图记录无任何提示。修复：album.tsx 网格/查看器 img onError → 「无法显示」占位（ImageOff 图标 + 文案），查看器显示「这张图片的格式当前浏览器无法显示」
+  - 根因 C（隐藏 bug）：微信/QQ 宿主都在相册页**早退返回** AlbumPage，宿主级 Toast 根本不挂载 → 上传成功/失败从来没有可见反馈（「上传了没反应」的另一半原因）。修复：AlbumPage 内置 localToast（1.6s 自动消失，role=status aria-live），showToast 帮助函数同时回调 onToast 保持接口兼容
+- 需求2 AI 保存喜欢的聊天图片到自己的相册：链路验证（用户发图→识图→AI 回复精准描述「粉橙色的渐变搭配海边日落的文字」= AI 真看到了图）+ buildVisionRules【存相册】教学强化（人设/记忆/聊天话题/情绪/真心喜欢就存 + 存完正文自然提一句「这张我存下来了」）；执行端 [存相册:图片消息ID] 微信（addAlbum origin:'ai'+决策日志+相册缓存刷新）与 QQ 同款管线原样可用
+- 需求3 邀请卡片内容改参考图文案（外壳/头部/按钮保持代付卡家族样式不动）：
+  - couple-exam-bubble.tsx：主标题改「恋爱水平考试已开始，请考生作答」（TA 发来加出卷人名）；内容面板改试卷预览——米黄卷纸底 + 卷头（红心徽章+恋爱水平考试+「绝密」章）+ 大字「你有一份恋爱水平考试卷 待作答」（卷名红色加大）+「★ 认真作答，测出你们的恋爱真实水平 ★」胶囊 + 两条装饰题行（勾选框+题干线，不含假题干）+ 按钮改「点击进入作答」（▶ 图标）；已答完态「考试已结束/已交卷」+「查看结果」
+  - couple-pact-bubble.tsx：主标题改「我写的恋爱协议，等你来签名」（TA 发来「{fromName}写的恋爱协议」；签署/婉拒态对应文案）；内容面板改协议书全文——居中协议名 + 分隔线 + 前言段落（data.preamble）+ 虚线 + 编号条款 1-5（超过 5 条折叠「…还有 N 条，点开查看全部」）+ 状态附注（TA已先签名/婉拒理由）+ 按钮（去签署/查看协议/查看详情）；已签署态右上角「已生效 ♡」红章
+- 浏览器端到端验证：微信我→相册上传 PNG 正常显示+持久化 ✓；注入坏 HEIC 记录 → 网格「无法显示」占位 ✓；上传假 HEIC → 不再产生死图 + 页内 toast「图片添加失败，可能是格式不支持（如 HEIC 请先转 JPG）」✓（DOM 断言）；创建 CHAR 小柔→加微信好友→注入协议卡+考试卡消息→聊天渲染两卡与参考图内容一致 ✓；点协议卡直达恋人空间协议页 ✓；文字聊天 AI 回复 ✓；发图 AI 视觉描述精准 ✓；QQ 打开正常；console 无错误；改动文件 eslint 全绿
+- 说明：本浏览器为沙盒独立 profile，测试数据（角色小柔/测试消息/坏图记录）不污染用户环境
+
+Stage Summary:
+- 关键决策：①「不显示」根因是兜底存了不可渲染的死图而非入库失败——三级解码+明确拒绝+占位符三层修；②相册页 toast 必须组件自渲染（宿主早退不挂载 Toast 是结构性坑，其他早退页后续可参照）；③卡片只换内容区（标题+面板内部），宽度/圆角/头部/箭头/胶囊按钮与代付卡家族保持一致；④试卷预览用装饰题行不放假题干，避免与真实试卷内容冲突
+- 修改文件：src/components/apps/album.tsx、src/components/apps/couple-exam-bubble.tsx、src/components/apps/couple-pact-bubble.tsx、src/components/apps/wechat.tsx（readImageFile 三级解码）、src/components/apps/qq.tsx（compressImageFile 三级解码）、src/lib/chat-rich.ts（buildVisionRules 存相册教学强化）

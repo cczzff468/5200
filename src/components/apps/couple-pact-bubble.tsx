@@ -3,11 +3,15 @@
 /**
  * 恋爱协议卡片气泡（第十二轮）——微信/QQ 聊天共用。
  *
- * 第二十七轮（用户要求）：邀请卡片和淘宝/美团代付卡片样式一模一样（只换内容）——
- * 结构完全对齐 TbPayBubble/MtPayBubble：白卡 p-2.5 rounded-[14px] + 指向头像侧的小箭头
- * + 头部（logo 22px + 恋人空间 + ShieldCheck 真爱保障）+ 主标题 15px truncate
- * + 粉色横幅(88px)+白色面板拼接圆角块（小字 + 协议名大字 + 粉渐变胶囊按钮）。
- * 上下更矮、无边框彩条；签署态保持亮色，婉拒态整体褪灰（同代付完成卡语义）。
+ * 第二十七轮：邀请卡片和淘宝/美团代付卡片样式一模一样（只换内容）——
+ * 结构对齐 TbPayBubble/MtPayBubble：白卡 p-2.5 rounded-[14px] + 指向头像侧的小箭头
+ * + 头部（logo 22px + 恋人空间 + ShieldCheck 真爱保障）+ 主标题 + 内容面板 + 胶囊按钮。
+ *
+ * 第三十轮（用户参考图，只改内容）：主标题改为「我写的恋爱协议，等你来签名」；
+ * 内容面板由「粉横幅+白面板」改为参考图里的**协议书正文**：居中协议名 + 分隔线 +
+ * 前言段落 + 虚线 + 编号条款列表（最多展示 5 条，多出折叠提示）+ 签署按钮；
+ * 已签署态右上角盖「已生效」红章；婉拒态整体褪灰（同代付完成卡语义）。
+ * 卡片外壳/头部/按钮样式保持家族不变。
  *
  * 点击卡片本体 → 记 pending + 切进恋人空间 App（PactPage 消费后跳对应界面）。
  */
@@ -16,7 +20,7 @@ import type { CouplePactCardData } from '@/lib/ios/couple-pact-share';
 import { navToPact } from '@/lib/ios/couple-pact-share';
 import { kvGet } from '@/lib/ios/idb-kv';
 import { useUI } from '@/lib/ios/store';
-import { Heart, PenLine, ShieldCheck } from 'lucide-react';
+import { PenLine, ShieldCheck } from 'lucide-react';
 
 export interface CouplePactBubbleProps {
   data: CouplePactCardData;
@@ -24,6 +28,9 @@ export interface CouplePactBubbleProps {
   mine: boolean;
   testidPrefix?: string; // 'wx' | 'qq'（E2E 用）
 }
+
+/** 协议书正文最多展示的条款数（参考图为 5 条；多出的折叠成提示行） */
+const MAX_CLAUSES = 5;
 
 export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: CouplePactBubbleProps) {
   // 第十七轮·动态状态（自愈）：恋人空间里已有同题的「已签署」存档 → 卡片一律按已签署显示，
@@ -68,9 +75,20 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
     else if (!ui.activeApp && ui.phase === 'closed') ui.openApp('couple');
   };
 
-  // 文案态（对齐代付卡：请求卡恒亮粉引导签署；婉拒卡整体褪灰）
-  const banner = signed ? '恋爱协议已生效啦~' : declined ? (declinedByMe ? '这份协议被婉拒啦~' : 'TA婉拒了这份协议~') : '来签恋爱协议吧~';
-  const title = data.from === 'ta' ? `Hi~${data.fromName}写了恋爱协议等你签~` : 'Hi~我写了恋爱协议等你签名~';
+  // 主标题（第三十轮参考图口径：我写的恋爱协议，等你来签名；TA 发来的标注写协议的人）
+  const title = signed
+    ? '我们的恋爱协议生效啦~'
+    : declined
+      ? declinedByMe
+        ? '这份恋爱协议你婉拒啦~'
+        : `${data.fromName}婉拒了这份恋爱协议~`
+      : data.from === 'ta'
+        ? `${data.fromName}写的恋爱协议，等你来签名`
+        : '我写的恋爱协议，等你来签名';
+
+  const clauses = (data.clauses ?? []).filter((c) => typeof c === 'string' && c.trim());
+  const shown = clauses.slice(0, MAX_CLAUSES);
+  const extra = clauses.length - shown.length;
 
   return (
     <div
@@ -87,7 +105,7 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
       {/* 箭头指向头像侧：我发出（右）/ TA 发来（左），与代付卡一致 */}
       <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${mine ? '-right-[4px]' : '-left-[4px]'}`} />
 
-      {/* 头部：恋人空间 logo + 真爱保障 */}
+      {/* 头部：恋人空间 logo + 真爱保障（外壳保持与代付卡家族一致） */}
       <span className="relative flex items-center gap-1.5">
         <img src="/icons/couple.png" alt="" aria-hidden="true" className="h-[22px] w-[22px] rounded-full object-cover" draggable={false} />
         <span className="text-[13px] font-semibold text-black/85">恋人空间</span>
@@ -97,51 +115,69 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
         </span>
       </span>
 
-      {/* 主标题（对齐代付卡文案结构） */}
-      <span className="relative mt-1.5 block truncate text-[15px] font-semibold leading-snug text-black/90">{title}</span>
+      {/* 主标题（参考图：大字粗体） */}
+      <span className="relative mt-1.5 block text-[15px] font-bold leading-snug text-black/90">{title}</span>
 
-      {/* 粉色横幅 + 白色信息面板：拼接为一个整体圆角块（粉上白下、无缝相连） */}
-      <span className="relative mt-2 block overflow-hidden rounded-[10px] ring-1 ring-black/[0.06]">
-        <span className="relative block h-[88px] overflow-hidden bg-gradient-to-r from-[#ff7a9c] to-[#f2536a]">
-          <span aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-25" style={{ backgroundImage: 'radial-gradient(rgba(255,255,255,0.55) 1px, transparent 1.4px)', backgroundSize: '16px 16px' }} />
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[15px] font-bold text-white drop-shadow-sm">{banner}</span>
-          <Heart className="absolute right-3 top-1/2 h-8 w-8 -translate-y-1/2 text-white/35" strokeWidth={1.6} aria-hidden="true" />
-        </span>
-        {/* 信息面板（白色，与上方粉色横幅拼接成一块） */}
-        <span className="relative block bg-white px-3 pb-3 pt-2 text-center">
-          {signed ? (
-            <>
-              <span className="mt-0.5 block text-[21px] font-bold leading-tight tracking-tight text-black/90" data-testid={`${testidPrefix}-pact-card-body`}>
-                已签署生效 <span aria-hidden="true">♡</span>
-              </span>
-              <span className="mt-1 block truncate text-[11.5px] text-black/40">{data.from === 'ta' ? `${data.fromName} · ${data.toName} 的甜蜜约定` : `${data.toName} · ${data.fromName} 的甜蜜约定`}</span>
-            </>
-          ) : declined ? (
-            <>
-              <span className="block text-[19px] font-bold leading-tight tracking-tight text-black/70" data-testid={`${testidPrefix}-pact-card-body`}>
-                对方婉拒了
-              </span>
-              <span className="mt-1 block truncate text-[11.5px] text-black/40">{declinedByMe ? '你已经婉拒，TA 已经知道了' : data.reason ? `TA 想了想：${data.reason}` : '可以再沟通，或换个小约定'}</span>
-            </>
-          ) : (
-            <>
-              <span className="block text-[11.5px] text-black/40">{data.taSigned ? `${data.fromName}已签名，就等你啦` : `甜蜜约定 · 共 ${data.clauses.length} 条`}</span>
-              <span className="mt-0.5 block truncate text-[21px] font-bold leading-tight tracking-tight text-black/90" data-testid={`${testidPrefix}-pact-card-body`}>
-                {data.title || '恋爱协议书'}
-              </span>
-            </>
-          )}
-          <span
-            data-testid={canSign ? `${testidPrefix}-pact-card-sign` : undefined}
-            className="mt-2.5 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#ff7a9c] to-[#f2536a] text-[14px] font-bold text-white shadow-[0_3px_10px_rgba(242,83,106,0.28)]"
-          >
-            {signed ? '查看协议' : declined ? '查看详情' : canSign ? (
-              <>
-                <PenLine className="mr-1 h-4 w-4" strokeWidth={2.4} aria-hidden="true" />
-                去签署
-              </>
-            ) : '查看详情'}
+      {/* 协议书正文（第三十轮参考图内容：居中标题 + 分隔线 + 前言 + 编号条款） */}
+      <span className="relative mt-2 block overflow-hidden rounded-[10px] bg-[#fffdf6] px-3.5 pb-3 pt-3 ring-1 ring-black/[0.06]">
+        {/* 已签署红章（盖章叠在标题右上角） */}
+        {signed && (
+          <span aria-hidden="true" className="absolute right-2.5 top-2.5 rotate-[12deg] rounded-[4px] border-[1.5px] border-[#c2402f]/55 px-1.5 py-[3px] text-[9.5px] font-bold leading-none text-[#c2402f]/85">
+            已生效 ♡
           </span>
+        )}
+
+        {/* 协议名（参考图：居中加粗「恋爱协议书」；自定义协议名照实显示） */}
+        <span className="block text-center text-[15px] font-black tracking-wide text-black/90" data-testid={`${testidPrefix}-pact-card-body`}>
+          {data.title || '恋爱协议书'}
+        </span>
+        <span aria-hidden="true" className="mt-2 block h-px w-full bg-black/15" />
+
+        {/* 前言（参考图：为维护双方的感情与信任…共同遵守：；空前言跳过） */}
+        {data.preamble && data.preamble.trim() && (
+          <span className="mt-2 block text-justify text-[10.5px] leading-[1.75] text-black/55 line-clamp-4">{data.preamble.trim()}</span>
+        )}
+
+        {/* 虚线分隔 + 编号条款（参考图：1. 2. 3. …竖排列表；最多 5 条，多出折叠） */}
+        {shown.length > 0 && (
+          <>
+            <span aria-hidden="true" className="my-2 block border-t border-dashed border-black/10" />
+            <span className="block space-y-[5px]">
+              {shown.map((c, i) => (
+                <span key={i} className="flex items-start gap-1.5 text-[10.5px] leading-[1.6] text-black/75">
+                  <span className="shrink-0 font-semibold leading-[1.6] text-black/40">{i + 1}.</span>
+                  <span className="min-w-0 flex-1 line-clamp-2">{c.trim()}</span>
+                </span>
+              ))}
+            </span>
+            {extra > 0 && <span className="mt-1.5 block text-[9.5px] text-black/35">…还有 {extra} 条，点开查看全部</span>}
+          </>
+        )}
+        {shown.length === 0 && (
+          <span className="mt-2 block text-center text-[10.5px] text-black/45">甜蜜约定 · 一起遵守的小条款</span>
+        )}
+
+        {/* 状态附注行（TA 已先签 / 婉拒理由） */}
+        {canSign && data.taSigned && (
+          <span className="mt-2 block text-center text-[10px] text-black/40">{data.fromName}已签名，就等你啦</span>
+        )}
+        {declined && (
+          <span className="mt-2 block text-center text-[10px] text-black/40">
+            {declinedByMe ? '你已经婉拒，TA 已经知道了' : data.reason ? `TA 想了想：${data.reason}` : '可以再沟通，或换个小约定'}
+          </span>
+        )}
+
+        {/* 签署按钮（文案随状态；胶囊样式保持家族一致） */}
+        <span
+          data-testid={canSign ? `${testidPrefix}-pact-card-sign` : undefined}
+          className="mt-2.5 flex h-9 items-center justify-center rounded-full bg-gradient-to-r from-[#ff7a9c] to-[#f2536a] text-[14px] font-bold text-white shadow-[0_3px_10px_rgba(242,83,106,0.28)]"
+        >
+          {signed ? '查看协议' : declined ? '查看详情' : canSign ? (
+            <>
+              <PenLine className="mr-1 h-4 w-4" strokeWidth={2.4} aria-hidden="true" />
+              去签署
+            </>
+          ) : '查看详情'}
         </span>
       </span>
     </div>

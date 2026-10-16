@@ -1474,9 +1474,45 @@ function compressImageFile(file: File, max = 1280): Promise<string> {
         return;
       }
       const viaRaw = () => {
-        // 兑底：原始 dataURL——至少要是图片数据才有价值
+        // 兑底：仅当浏览器已证明能解码（Image 成功但 canvas 失败）时才存原始 dataURL
         if (raw.startsWith('data:image/')) resolve(raw);
         else reject(new Error('不支持的图片格式'));
+      };
+      // 第三十轮「上传的图片不显示」同款修复（与 album.tsx/wechat.tsx 同步）：
+      // Image 解码失败（HEIC 等）不再原样保存死图，先试 createImageBitmap，仍失败明确 reject
+      const viaBitmap = () => {
+        if (typeof createImageBitmap !== 'function') {
+          reject(new Error('该图片格式无法显示（如 HEIC），请改用 JPG/PNG'));
+          return;
+        }
+        createImageBitmap(file, { imageOrientation: 'from-image' })
+          .then((bmp) => {
+            try {
+              const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
+              const canvas = document.createElement('canvas');
+              canvas.width = Math.max(1, Math.round(bmp.width * scale));
+              canvas.height = Math.max(1, Math.round(bmp.height * scale));
+              const ctx = canvas.getContext('2d');
+              if (!ctx) {
+                reject(new Error('图片解析失败'));
+                return;
+              }
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+              ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+              try {
+                bmp.close();
+              } catch {
+                /* close 失败不影响 */
+              }
+              const out = canvas.toDataURL('image/jpeg', 0.82);
+              if (typeof out === 'string' && out.startsWith('data:image/') && out.length > 22) resolve(out);
+              else reject(new Error('图片解析失败'));
+            } catch {
+              reject(new Error('图片解析失败'));
+            }
+          })
+          .catch(() => reject(new Error('该图片格式无法显示（如 HEIC），请改用 JPG/PNG')));
       };
       const img = new window.Image();
       img.onload = () => {
@@ -1498,7 +1534,7 @@ function compressImageFile(file: File, max = 1280): Promise<string> {
           viaRaw();
         }
       };
-      img.onerror = () => viaRaw();
+      img.onerror = () => viaBitmap();
       img.src = raw;
     };
     reader.onerror = () => reject(new Error('图片读取失败'));
