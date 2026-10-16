@@ -20192,3 +20192,19 @@ Stage Summary:
 - 需求②：所有店铺统一品牌（头像=正在营业印章、背景=欢迎光临手绘），覆盖预置/AI/自建三类；头像可点击用「设置›图像生成」的模型+自定义提示词再生成（全局 kv 覆盖，per-shop）
 - 需求③：商品详情界面图片点击生成（淘宝详情主图/美团规格弹窗菜品图/美团菜品行图片三入口，自建+原有通用），生成结果 mutate 内存对象 + kv 持久化（tb-product-imgs/mt-product-imgs）+ 启动恢复，刷新后仍生效
 - 涉及文件：public/shop-avatar.png、public/shop-bg.png（新增）、src/lib/ios/meituan-data.ts、src/lib/ios/taobao-data.ts、src/components/apps/meituan.tsx、src/components/apps/taobao.tsx、next.config.ts（experimental.turbopackMemoryLimit 1280MB 内存保护）
+
+---
+Task ID: setup-38
+Agent: 主协调者 (Z.ai Code)
+Task: 从 GitHub (cczzff468/5200) 拉取仓库部署到沙盒工作目录并跑通
+
+Work Log:
+- git clone https://github.com/cczzff468/5200.git → /home/z/repo-5200（4068 文件，最新提交 b852aa1 第三十六/三十七轮）
+- 停掉沙盒旧模板 dev server；rsync 仓库内容到 /home/z/my-project（排除 node_modules/.next/dev.log/upload 挂载点），.git 一并迁入（origin 已带 token 可直接推送）
+- bun install 补齐依赖（32 packages）；bun run db:generate + db:push 重建 Prisma client
+- 首次启动后 /api/contacts/migrate 500（服务进程持有旧 client 的 require 缓存，db.contact undefined）→ 重启 dev server 后恢复 {"ok":true}
+- agent-browser 实测：锁屏渲染（状态栏/时间/电量/天气/日历小组件）✓ → 上滑解锁 ✓ → 主屏幕（天气小组件+应用网格+Dock+微信角标）✓；console 无错误；dev.log 仅剩既有的 instrumentation Edge Runtime 良性警告
+
+Stage Summary:
+- 项目已在 /home/z/my-project 完整运行（Next.js 16 + Turbopack，端口 3000），git 工作区与 origin/main 关联，后续修改可直接 commit + push 回 GitHub
+- 待办：等待用户提出具体的功能修改/新增需求
