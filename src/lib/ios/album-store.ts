@@ -20,6 +20,24 @@ export async function listAlbums(contactId: string): Promise<AlbumRecord[]> {
 }
 
 /**
+ * 聊天回合用的合并相册视图（第三十一轮）：AI 角色相册 + 机主相册合并升序返回。
+ * 背景：「AI 存一张图到相册」现在双写（AI 自己的相册 + 机主的「我的相册」各一份，
+ * 用户在微信/QQ「我的相册」页能直接看到 AI 存的图）；聊天侧的【相册清单】/选图兜底
+ * 统一用本合并缓存，AlbumRecord.contactId 保留原归属，执行器据此区分「TA 的相册」与
+ * 「机主的相册」（AI 两边都能选图设头像/发聊天）。
+ * meId 与 peerId 相同（理论上不该发生）时只查一份，防重复条目。
+ */
+export async function listAlbumsForChat(peerId: string, meId: string): Promise<AlbumRecord[]> {
+  try {
+    const mine = await listAlbums(peerId);
+    const owners = meId && meId !== peerId ? await listAlbums(meId) : [];
+    return [...mine, ...owners].sort((a, b) => a.createdAt - b.createdAt);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * 新增相册条目。opts.desc 识图描述、opts.name 备注/文件名、opts.origin 来源（默认 'user'）。
  * 返回写入的完整记录（含生成 id 与 createdAt）。
  */

@@ -27,6 +27,9 @@ import { isProactiveChatActive } from './proactive-msg';
 import { getContact, listContacts } from './contacts-store';
 import { avatarFor, displayNameOf } from '@/lib/contacts';
 import { dispatchStateEvent, readInviteMeta, type CoupleChannel } from './couple-invite';
+// 第三十一轮「恋人空间相册 AI 看图留言」：识图模型客户端 + 全局设置（拿识图配置，零配置自动内置兕底）
+import { describeImagesAuto } from '@/lib/vision-client';
+import { useSettings } from './store';
 
 // ---------------- 状态形状（与 couple-space.tsx 的 CoupleState 保持结构兼容的只读子集） ----------------
 
@@ -532,9 +535,11 @@ export function scheduleAiReply(key: string, delayMin = 2600, delayMax = 6500): 
 
 /**
  * 上传照片后：TA 根据人设记忆在照片下主动留言（延时 3~7s，像真的去翻相册看到）。
- * 失败本地模板兜底；每次上传都触发一次（防重：同一线程已有 TA 消息则跳过）。
+ * 第三十一轮：TA 真的「看到」照片——有 photoSrc 时先识图（零配置自动内置兜底），
+ * 留言必须点出画面里的具体内容，再结合人设/记忆/上下文；识图失败按没看到处理（不编内容）。
+ * 每次上传都触发一次（防重：同一线程已有 TA 消息则跳过）。
  */
-export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: number): void {
+export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: number, photoSrc?: string): void {
   const target = aiTarget();
   if (!target) return;
   const threadKey = `album:${albumId}:${photoIdx}`;
@@ -557,11 +562,26 @@ export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: n
         } catch {
           /* 召回失败不影响 */
         }
+        // 第三十一轮：先识图再留言（AI 亲眼看到照片内容，留言不再凭空夸「拍得好看」）
+        let photoDesc = '';
+        if (photoSrc && photoSrc.startsWith('data:image/')) {
+          try {
+            photoDesc = await describeImagesAuto(useSettings.getState().visionConfig, {
+              images: [photoSrc],
+              text: '请用一句话客观描述这张照片的内容（人物/动物/场景/物品/氛围/可见文字），60字以内。',
+            });
+          } catch {
+            /* 识图失败按没看到处理，留言不编内容 */
+          }
+        }
+        const photoBlock = photoDesc
+          ? `\n【这张照片拍的是】${cut(photoDesc, 120)}（这是${me}刚上传的照片，你亲眼看到了；留言要自然提到画面里的具体东西，不许泛泛而谈）`
+          : '';
         let text = '';
         try {
           text = await llmUserFirst(
-            `${llmSystem(p, me, snap)}\n场景：${me}刚在恋人空间的相册「${albumName}」里上传了一张新照片，你去翻相册看到了，想在照片下面留一条言。${threadContext(threadKey, snap, me, ta)}${memBlock ? `\n【相关记忆】\n${cut(memBlock, 240)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 280)}` : ''}`,
-            `请以「${ta}」的口吻给这张照片留言：25 字内，口语、贴合人设与你们的真实记忆（可以是夸、撒娇、想TA、约定下次一起拍）。禁止使用任何 emoji/表情符号。只输出留言内容。`,
+            `${llmSystem(p, me, snap)}\n场景：${me}刚在恋人空间的相册「${albumName}」里上传了一张新照片，你去翻相册看到了，想在照片下面留一条言。${threadContext(threadKey, snap, me, ta)}${photoBlock}${memBlock ? `\n【相关记忆】\n${cut(memBlock, 240)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 280)}` : ''}`,
+            `请以「${ta}」的口吻给这张照片留言：25 字内，口语、贴合人设与你们的真实记忆${photoDesc ? '，必须点出照片画面里的具体内容（你看到什么就说什么）' : '（可以是夸、撒娇、想TA、约定下次一起拍）'}。禁止使用任何 emoji/表情符号。只输出留言内容。`,
           );
         } catch {
           /* 兜底 */
@@ -579,6 +599,32 @@ export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: n
       }
     })();
   }, 3000 + Math.random() * 4000);
+}
+
+/**
+ * 第三十一轮「打开照片就可能有 TA 的留言」（节流版主动留言）：
+ * 用户在恋人空间相册点开某张照片大图时调用——TA 像真的「正好也翻到这张」一样延时来留言；
+ * 留言内容由识图（照片画面）+ 人设 + 记忆 + 上下文驱动（见 aiCommentOnPhoto）。
+ * 节流：15 分钟内最多主动触发一次（防刷屏）；该照片线程已有任何留言（用户或 TA 的）则不主动；
+ * 真正的防重/识图/生成都在 aiCommentOnPhoto 内。
+ */
+let lastLazyCommentAt = 0;
+export function aiCommentOnPhotoLazy(albumId: string, albumName: string, photoIdx: number, photoSrc?: string): void {
+  const now = Date.now();
+  if (now - lastLazyCommentAt < 15 * 60 * 1000) return;
+  lastLazyCommentAt = now;
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        const snap = readSnap();
+        const threadKey = `album:${albumId}:${photoIdx}`;
+        if (snap && (snap.comments ?? []).some((c) => c.key === threadKey)) return; // 已有互动不抢话
+      } catch {
+        /* 读不到状态就照常尝试（aiCommentOnPhoto 内部还有 TA 防重） */
+      }
+      aiCommentOnPhoto(albumId, albumName, photoIdx, photoSrc);
+    })();
+  }, 2200 + Math.random() * 2800);
 }
 
 /**

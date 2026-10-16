@@ -107,7 +107,7 @@ import {
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
-import { aiAnswerWithMe, aiCommentOnPhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, aiTrailFeed, aiZodiacReading, coupleMemoryDiff, coupleRemember, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, trailSortMs, type CoupleTrailRec, type DynReplyLevel } from '@/lib/ios/couple-ai';
+import { aiAnswerWithMe, aiCommentOnPhoto, aiCommentOnPhotoLazy, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, aiTrailFeed, aiZodiacReading, coupleMemoryDiff, coupleRemember, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, trailSortMs, type CoupleTrailRec, type DynReplyLevel } from '@/lib/ios/couple-ai';
 import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, patchPactCardsWhere, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
 import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
 import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
@@ -11918,8 +11918,9 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
       return;
     }
     patch({ albums: state.albums.map((a) => (a.id === album.id ? { ...a, photos: [...a.photos, ...urls] } : a)) });
-    // 第十轮：TA 知道我传了照片，延时去相册留言（记忆写入在 aiCommentOnPhoto 内）
-    aiCommentOnPhoto(album.id, album.name, state.albums.find((a) => a.id === album.id)?.photos.length ?? 0);
+    // 第十轮：TA 知道我传了照片，延时去相册留言；第三十一轮：把第一张新图本体传过去，
+    // TA 先识图（看到画面）再留言——留言必须点出照片里的具体内容，不再凭空夸
+    aiCommentOnPhoto(album.id, album.name, state.albums.find((a) => a.id === album.id)?.photos.length ?? 0, urls[0]);
     showToast(`已上传 ${urls.length} 张 ♡`);
   };
   const removePhoto = (idx: number) => {
@@ -11949,7 +11950,16 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
       ) : (
         <div className="mt-4 grid grid-cols-3 gap-2">
           {album.photos.map((p, i) => (
-            <button key={`${i}-${p.slice(-16)}`} type="button" onClick={() => setView(i)} className="aspect-square overflow-hidden rounded-lg bg-[#ececef]">
+            <button
+              key={`${i}-${p.slice(-16)}`}
+              type="button"
+              onClick={() => {
+                setView(i);
+                // 第三十一轮：TA 像正好也翻到这张一样，可能延时来留言（识图画面+人设+记忆，节流防刷屏）
+                aiCommentOnPhotoLazy(album.id, album.name, i, p);
+              }}
+              className="aspect-square overflow-hidden rounded-lg bg-[#ececef]"
+            >
               { }
               <img src={p} alt={`照片${i + 1}`} className="h-full w-full object-cover transition-transform active:scale-[0.97]" draggable={false} />
             </button>

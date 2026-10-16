@@ -251,7 +251,7 @@ import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, cle
 // 头像按 App 隔离：QQ 端读取/写入一律走 qq 槽位（listContactsFor 投影读取，updateContact 的 avatars 合并写入），不再共享联系人 App 的全局默认头像
 import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, createContact, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
-import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
+import { listAlbums, listAlbumsForChat, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
 import { ensureAlbumDescs } from '@/lib/ios/album-vision';
 import { buildAvatarBlock, ensureAvatarDesc, noteAvatarChanged } from '@/lib/ios/avatar-ai';
 // 生图（锁脸）：照片标签（[图片:描述]/[照片:描述]）提取/生成/规则构建（与微信端共用同一逻辑层，未配置/失败降级文字图片卡片）；
@@ -3104,19 +3104,21 @@ function ChatPage({
       alive = false;
     };
   }, [peer.id, me.name, me.realName]);
-  // 46-f：相册缓存——runAiTurn 开回合时刷新本联系人相册（listAlbums），buildReplyMsgs
+  // 46-f：相册缓存——runAiTurn 开回合时刷新本联系人相册，buildReplyMsgs
   // 同步查 pick-album-* 目标（getAlbum 是 async 不能在同步循环里 await，改预取缓存）。挂载时
-  // 也预热一次，避免接力回复（bgEnqueueBatch 路径，未走 runAiTurn）发生时缓存为空导致查不到
+  // 也预热一次，避免接力回复（bgEnqueueBatch 路径，未走 runAiTurn）发生时缓存为空导致查不到。
+  // 第三十一轮：改为「peer 相册 + 机主相册」合并视图（listAlbumsForChat）——AI 存图双写后
+  // 两边相册都有内容，选图/清单/兕底统一用合并缓存（contactId 区分归属）
   const albumCacheRef = useRef<AlbumRecord[]>([]);
   useEffect(() => {
     let alive = true;
-    void listAlbums(peer.id).then((list) => {
+    void listAlbumsForChat(peer.id, me.id).then((list) => {
       if (alive) albumCacheRef.current = list;
     });
     return () => {
       alive = false;
     };
-  }, [peer.id]);
+  }, [peer.id, me.id]);
   /** 双向拉黑状态（kv 持久化，按联系人隔离；气泡图标/设置开关/AI 感知共用） */
   const [blk, setBlk] = useState<BlockEntry>(() => loadBlock('qq', peer.id));
   // 40-a：用户发起「解除拉黑申请」的展开面板与理由输入（仅被角色拉黑时显示；ChatPage 按 peer.id keyed 重挂载，会话切换自然复位）
@@ -4325,7 +4327,7 @@ function ChatPage({
         void addAlbum(peer.id, r.src, { desc, origin: 'ai' });
         void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'imggen', targetId: '', imgSrc: r.src, reason: desc });
         notePhotoMemory(peer.id, 'qq', desc);
-        void listAlbums(peer.id).then((list) => {
+        void listAlbumsForChat(peer.id, me.id).then((list) => {
           albumCacheRef.current = list;
         });
       }
@@ -4389,7 +4391,7 @@ function ChatPage({
             // QQ 端图片 dataURL 存 content（QqImageBubble 读 m.content），img.src 同步填上与微信端一致
             enqueue([{ id: uid(), role: 'peer', content: r.src, time: Date.now(), kind: 'image', img: { src: r.src, desc: job.desc } }]);
             // 相册缓存刷新：下一轮 AI 可用 [选图发送] 把这张照片再发出来
-            void listAlbums(peer.id).then((list) => {
+            void listAlbumsForChat(peer.id, me.id).then((list) => {
               albumCacheRef.current = list;
             });
           } catch {
@@ -4617,10 +4619,20 @@ function ChatPage({
               t += 1;
               void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'change-moments-bg', targetId: imgMsg.id, imgSrc: src });
             } else {
-              void addAlbum(peer.id, src, { origin: 'ai', desc: imgMsg.img?.desc }).then((rec) => {
-                // 同步刷新相册缓存，避免本回合后续 [选图设头像/背景/发送] 引用刚存的条目时查不到
-                albumCacheRef.current = [...albumCacheRef.current, rec];
-              }).catch(() => {});
+              // save-to-album（第三十一轮双写）：AI 说「存到相册」必须真的在用户的「我的相册」页能看到——
+              // 写两份：peer 相册（TA 自己的收藏，供 TA 之后 [选图设头像/发送]）+ 机主相册（用户打开
+              // 「我的相册」直接看到，标 origin 'ai' + 备注来源）；决策日志 + 两条记录都 push 进合并缓存
+              void (async () => {
+                try {
+                  const rec = await addAlbum(peer.id, src, { origin: 'ai', desc: imgMsg.img?.desc });
+                  const ownerRec = me.id && me.id !== peer.id
+                    ? await addAlbum(me.id, src, { origin: 'ai', desc: imgMsg.img?.desc, name: `${peer.name}存的` })
+                    : null;
+                  albumCacheRef.current = [...albumCacheRef.current, rec, ...(ownerRec ? [ownerRec] : [])];
+                } catch {
+                  /* 写入失败不阻塞主流程 */
+                }
+              })();
               out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」存了一张图到相册` } });
               t += 1;
               void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'save-to-album', targetId: imgMsg.id, imgSrc: src });
@@ -4628,13 +4640,20 @@ function ChatPage({
             continue;
           }
           // 46-f：从相册选图——[选图设头像:相册条目ID] / [选图设背景:相册条目ID] / [选图发送:相册条目ID]
-          // targetId 必须原样抄自【相册清单】；用 albumCacheRef.current 同步查（runAiTurn 开回合时刷新）。
-          // 校验 album.contactId === peer.id 防止跨角色引用；查不到/不属于本角色静默丢弃，避免误发他图。
+          // targetId 应原样抄自【相册清单】；用 albumCacheRef.current 同步查（runAiTurn 开回合时刷新）。
+          // 第三十一轮：①归属校验放宽到「peer 或机主」的相册（合并缓存两边的都能选，用户说「去相册
+          // 找一张」时 AI 自己相册可能为空）；②ID 未命中/漏抄时不再静默丢弃——从缓存里兜底取
+          // 最新一张（优先 peer 相册、其次机主相册），修复「AI 说换了头像实际没换」
           if (part.action.kind === 'pick-album-avatar' || part.action.kind === 'pick-album-bg' || part.action.kind === 'pick-album-send') {
             const albumTargetId = part.action.targetId;
-            if (!albumTargetId) continue;
-            const album = albumCacheRef.current.find((a) => a.id === albumTargetId) ?? null;
-            if (!album || album.contactId !== peer.id) continue;
+            let album =
+              albumCacheRef.current.find((a) => a.id === albumTargetId && (a.contactId === peer.id || a.contactId === me.id)) ?? null;
+            if (!album) {
+              const minePool = albumCacheRef.current.filter((a) => a.contactId === peer.id);
+              const ownerPool = albumCacheRef.current.filter((a) => a.contactId === me.id);
+              album = minePool[minePool.length - 1] ?? ownerPool[ownerPool.length - 1] ?? null;
+            }
+            if (!album) continue; // 两边相册都为空：真无图可选，静默丢弃
             const src = album.src;
             if (part.action.kind === 'pick-album-avatar') {
               // 47-c #108：从相册选图换头像后同样刷新 contacts state（顶栏头像即时同步）
@@ -5055,26 +5074,33 @@ function ChatPage({
       buildVoicePlaceholderRule(base),
       buildImagePlaceholderRule(base, { excludeIds: turnImageIds }),
     ].filter(Boolean);
-    // 46-f：相册清单预取 + 视觉自主决策规则注入。buildVisionRules 默认注入【换头像/换背景/存相册】规则；
-    // 相册非空时追加【选图设头像/背景/发送】+【相册清单】（最多 20 条，desc 截 30 字防提示词过长）。
+    // 46-f：相册清单预取 + 视觉自主决策规则注入。buildVisionRules 注入【换头像/换背景/存相册/主动换头像】
+    // 常驻规则；相册非空时追加【选图设头像/背景/发送】+【相册清单】（peer 最近 20 条 + 机主最近 15 条）。
     // 同时刷新 albumCacheRef 给 buildReplyMsgs 的 pick-album-* 分支同步查用（getAlbum async 不能在
-    // 同步循环里 await，改预取缓存：本回合 buildReplyMsgs 读到的就是本次 listAlbums 的结果）
+    // 同步循环里 await，改预取缓存：本回合 buildReplyMsgs 读到的就是本次 listAlbumsForChat 的结果）
     let albumSummary: { id: string; desc: string }[] | null = null;
+    let ownerAlbumSummary: { id: string; desc: string }[] | null = null;
     try {
-      const albumList = await listAlbums(peer.id);
+      // 第三十一轮：peer 相册 + 机主相册合并预取（listAlbumsForChat）——AI 存图双写后两边都有图可选
+      const albumList = await listAlbumsForChat(peer.id, me.id);
       albumCacheRef.current = albumList;
-      // 第二十九轮：懒补缺失的图片描述（每轮最多 2 张，fire-and-forget）——
+      // 第二十九轮：懒补缺失的图片描述（每边每轮最多 2 张，fire-and-forget）——
       // desc 是【相册清单】与「AI 主动分享相册照片」的依据，补齐后下一轮 AI 就知道每张图长什么样
       if (albumList.some((a) => !a.desc)) {
-        void ensureAlbumDescs(peer.id, 2)
-          .then(async (patched) => {
-            if (patched > 0) albumCacheRef.current = await listAlbums(peer.id).catch(() => albumCacheRef.current);
+        void Promise.all([ensureAlbumDescs(peer.id, 2), me.id !== peer.id ? ensureAlbumDescs(me.id, 2) : Promise.resolve(0)])
+          .then(async () => {
+            albumCacheRef.current = await listAlbumsForChat(peer.id, me.id).catch(() => albumCacheRef.current);
           })
           .catch(() => {});
       }
       if (albumList.length > 0) {
-        // 47-c #112：取最近 20 张（末尾 20 条），而非最早的 20 张——AI 看到的是相册新增的最新内容
-        albumSummary = albumList.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }));
+        // 47-c #112：清单按归属拆两份（peer 的进【相册清单】、机主的进【对方的相册清单】），
+        // 各取最近 20/15 张——AI 看到的是相册新增的最新内容
+        albumSummary = albumList.filter((a) => a.contactId === peer.id).slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }));
+        if (me.id !== peer.id) {
+          const owners = albumList.filter((a) => a.contactId === me.id);
+          if (owners.length > 0) ownerAlbumSummary = owners.slice(-15).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }));
+        }
       }
     } catch {
       // 读相册失败不阻塞聊天主流程，仅放弃本回合的【选图操作】规则
@@ -5083,12 +5109,10 @@ function ChatPage({
     const peerAvatarSrc = avatarFor(peer, 'qq');
     if (peerAvatarSrc) ensureAvatarDesc(peer.id, 'qq', peerAvatarSrc, 'peer');
     // 【fix3-d-6】传 app='qq'：视觉规则里的「换朋友圈背景」文案按端区分（QQ 端说明改的是 QQ 资料页封面）
-    // 100-e 按需注入：会话出现过图片消息，或相册非空（第二十九轮：相册里有图就注入——
-    // AI 才能主动从相册选图分享给用户，不再要求用户先发过图）
-    const visionRules =
-      base.some((m) => m.kind === 'image') || (albumSummary !== null && albumSummary.length > 0)
-        ? buildVisionRules(albumSummary, 'qq')
-        : [];
+    // 第三十一轮：规则恒注入（不再要求会话有图/相册非空）——「自主换头像/存相册」是 AI 的常驻能力，
+    // 没图也能 [生成新头像]，按需注入会让 AI 根本不知道自己能换（拉黑仅申请卡模式除外）；
+    // 机主相册清单非空时以第三参传入（【对方的相册清单】，AI 两边都能选图）
+    const visionRules = requestOnly ? [] : buildVisionRules(albumSummary, 'qq', ownerAlbumSummary);
     // 发图片能力常开：注入照片标签规则（配置完整时发真图；未配置/生成失败自动降级为文字图片卡片，AI 无需关心）
     const photoRule = buildPhotoTagRule(peer.name);
     // AI 发说说能力（用户要求「发条说说」或自主想分享时真发）：[发说说:正文] 标记 →

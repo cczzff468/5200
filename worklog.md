@@ -20049,3 +20049,25 @@ Work Log:
 Stage Summary:
 - 关键决策：①「不显示」根因是兜底存了不可渲染的死图而非入库失败——三级解码+明确拒绝+占位符三层修；②相册页 toast 必须组件自渲染（宿主早退不挂载 Toast 是结构性坑，其他早退页后续可参照）；③卡片只换内容区（标题+面板内部），宽度/圆角/头部/箭头/胶囊按钮与代付卡家族保持一致；④试卷预览用装饰题行不放假题干，避免与真实试卷内容冲突
 - 修改文件：src/components/apps/album.tsx、src/components/apps/couple-exam-bubble.tsx、src/components/apps/couple-pact-bubble.tsx、src/components/apps/wechat.tsx（readImageFile 三级解码）、src/components/apps/qq.tsx（compressImageFile 三级解码）、src/lib/chat-rich.ts（buildVisionRules 存相册教学强化）
+
+---
+Task ID: round-31
+Agent: 主协调者 (Z.ai Code)
+Task: 第三十一轮：协议卡片上下变小+内容美化+删黑色边框、恋人空间相册 AI 看图留言（识图+主动留言）、修「AI 存图到相册但相册里没有」、修「AI 说换头像实际没换」、AI 自主存头像/换头像（无需用户说）
+
+Work Log:
+- 定位「存了但相册里没有」根因：微信/QQ「我的相册」页 = AlbumPage contactId=me.id（机主相册），而 [存相册] 执行器只写 addAlbum(peer.id)（AI 自己的相册）→ 用户永远在自己相册看不到
+- album-store.ts 新增 listAlbumsForChat(peerId, meId)：聊天回合用的「peer 相册 + 机主相册」合并视图（contactId 保留归属），全部缓存刷新点统一改用
+- wechat.tsx / qq.tsx [存相册] 双写：AI 存图同时写 peer 相册（TA 收藏，供之后选图）+ 机主相册（origin 'ai' + name「{TA名}存的」，用户「我的相册」直接可见）；决策日志不变；两条记录都 push 进合并缓存
+- wechat.tsx / qq.tsx [选图设头像/背景/发送] 修复「说换没换」：①归属校验放宽到 peer 或机主相册；②ID 未命中/漏抄不再静默丢弃——从合并缓存兜底取最新一张（优先 peer 相册）执行，编造/漏写 ID 都能真的换上
+- chat-rich.ts buildVisionRules 增强：新增【主动换头像】教学（心情/季节/节日/纪念日/话题/新鲜感自然触发，选相册图或生成新头像，间隔几天）+【说到就要做到】禁令（说了「换了」必须同条回复带标记，没有标记=没换，说「存了」必须带 [存相册:ID]）+ 第三参 ownerAlbumSummary（【对方的相册清单】，AI 两边相册都能选）
+- wechat.tsx / qq.tsx 视觉规则恒注入（!requestOnly）：不再要求会话有图/相册非空——AI 随时知道自己能 [生成新头像]/[存相册]，没图也能主动换（原来按需注入导致 AI 根本不知道自己能换头像）；清单按归属拆两份（peer 20 条 + 机主 15 条）
+- couple-ai.ts aiCommentOnPhoto 新增 photoSrc 参数：先识图（describeImagesAuto，零配置内置兜底）再留言——【这张照片拍的是】注入提示词，留言必须点出画面具体内容；识图失败按没看到处理不编内容；新增 aiCommentOnPhotoLazy（打开照片大图触发的节流主动留言：15 分钟内最多 1 次 + 该线程已有任何留言不抢话，延时 2.2~5s 像正好也翻到这张）
+- couple-space.tsx：上传照片传 urls[0] 给 aiCommentOnPhoto（TA 识图后留言）；相册网格点击缩略图时调 aiCommentOnPhotoLazy（翻到哪张 TA 就可能来留言）
+- couple-pact-bubble.tsx 协议卡第三十一轮改版：①上下变小（p-2.5→p-2、标题 15→14px、协议名 15→13.5px、条款/前言行距收紧、按钮 h-9→h-8）；②删黑色描边（ring-1 ring-black/[0.06] 删除）+ 米黄底改纯白纸面 #fffdfa；③美化：协议名两侧短渐变线装饰、分隔线改渐变淡出、条款编号改粉色 #f2536a/75、前言 4 行→3 行、阴影柔化
+- 浏览器实测（agent-browser，沙盒独立 profile，机主 c-owner-test/凡凡 + AI 小柔）：协议卡渲染 ✓（白纸面无黑边框、居中标题+装饰线+粉编号、高度 211px 明显小于旧版）；「我的相册」注入 origin:'ai' 记录后正常显示 ✓（含历史死图「无法显示」占位符正常）；恋人空间相册上传→网格→大图查看器（和 阿澈 聊聊这张照片+想对阿澈说什么+粉色↑）✓；用户留言发送+DOM 渲染 ✓；tsc 全量零错误；eslint 改动文件零错误
+- 限制说明：测试中段沙盒内置 SDK 持续 429 限流（Too many requests）——AI 聊天回复/识图留言/[存相册] 真实决策的端到端实测受阻（发消息显示「还没有配置 API Key，内置模型也不可用」为 429 的 UI 表现）；代码链路已过 tsc/eslint + 显示层（我的相册展示 AI 记录）已验证，用户配置自己的 API 后即走用户模型不受限流影响
+
+Stage Summary:
+- 关键决策：①AI 存图双写（peer=TA 收藏语义保留 + me=用户可见性，name 标来源）；②选图兜底执行修复「言行不一」（有图可选时绝不静默丢弃）；③视觉规则恒注入让「主动换头像」成为常驻能力；④相册留言识图前置（零配置内置兜底），留言必须点出画面内容
+- 修改文件：src/lib/ios/album-store.ts（+listAlbumsForChat）、src/lib/chat-rich.ts（buildVisionRules 三参+两条新规则）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（双写+兜底+恒注入）、src/lib/ios/couple-ai.ts（aiCommentOnPhoto 识图+aiCommentOnPhotoLazy）、src/components/apps/couple-space.tsx（上传传图+查看器 lazy 触发）、src/components/apps/couple-pact-bubble.tsx（第三十一轮卡片改版）
