@@ -91,8 +91,10 @@ import {
   TB_CATS,
   TB_HOT_SEARCHES,
   TB_PRODUCTS,
+  TB_SHOP_BG,
   productById,
   shopById,
+  tbApplyProductImgOverrides,
   tbCustomProductsAll,
   tbImg,
   tbRegisterAiProducts,
@@ -101,6 +103,9 @@ import {
   tbSalesText,
   tbSearchPool,
   tbSearchScore,
+  tbSetProductImg,
+  tbSetShopAvatar,
+  tbShopAvatarOf,
   tbUnregisterCustomProduct,
   type TbCatId,
   type TbProduct,
@@ -1023,6 +1028,13 @@ function HomePage({
     { id: 'wear', label: '穿搭' },
   ];
   const [feedTab, setFeedTab] = useState<HomeFeedTab>('rec');
+  // 自建商品变化令牌（第三十七轮：创建/删除商品后商品流置顶区即时重算）
+  const [customTick, setCustomTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setCustomTick((t) => t + 1);
+    window.addEventListener('tb-custom-products-changed', bump);
+    return () => window.removeEventListener('tb-custom-products-changed', bump);
+  }, []);
   // Task 40：刷新只往顶部前插新批次（refreshKey），旧内容原位保留；batch 追加式分页不回退
   // Task 41：更新内容用「设置 › API 配置」用户配置的模型生成（/api/tb-feed），AI 批次 + 分页状态
   // 全部持久化（tb-feed:<uid>:home:<tab>）——刷新页面/重开 App 后原样恢复，旧内容永不消失
@@ -1245,11 +1257,28 @@ function HomePage({
       const p = productById(t.pid);
       return p ? [{ p, v: t.v, k: t.k }] : [];
     });
-    return [...topEntries, ...base, ...tailEntries];
-  }, [tops, tails, pool, batch, feedTab, refreshKey]);
+    // 自建商品（第三十七轮）：与普通商品混排且永远置顶——刷新前插/底部追加/基底流全部排在它后面；
+    // 仅推荐频道（默认首页）混入，专题频道保持语义纯净
+    const customEntries: { p: TbProduct; v: number; k: string }[] =
+      feedTab === 'rec'
+        ? (() => {
+            void customTick;
+            tbRegisterCustomProducts(tbLoadCustomProducts(uid)); // 幂等恢复（进页/创建后均可安全重入）
+            return tbCustomProductsAll().map((e) => ({ p: e.p, v: 0, k: `c-${e.p.id}` }));
+          })()
+        : [];
+    return [...customEntries, ...topEntries, ...base, ...tailEntries];
+  }, [tops, tails, pool, batch, feedTab, refreshKey, customTick, uid]);
 
   // 需求（第十轮）：频道 tab「关注」左侧返回按钮 → 返回手机主屏幕
   const closeApp = useUI((s) => s.closeApp);
+
+  // 自建商品删除（第三十七轮：商品流置顶卡片右上角×，删除后流内即时消失）
+  const removeCustomProduct = (pid: string) => {
+    tbRemoveCustomProduct(uid, pid);
+    window.dispatchEvent(new CustomEvent('tb-custom-products-changed'));
+    onToast('商品已删除');
+  };
 
   return (
     // 需求（第八轮）：首页整体奶油肉粉色（截图1 口径），不再是橙色渐变
@@ -1388,22 +1417,31 @@ function HomePage({
             </button>
           </div>
 
-          {/* 我的商品（创建订单=创建商品：自建商品展示区，点商品进详情下单） */}
-          <MyProductsSection uid={uid} onOpenProduct={onOpenProduct} onToast={onToast} />
-
-          {/* 推荐商品流（双列瀑布） */}
+          {/* 推荐商品流（双列瀑布；自建商品已混排在流的最前面） */}
           {feedTab === 'follow' ? (
             <FollowFeed uid={uid} follows={follows} onOpenProduct={onOpenProduct} onOpenSearch={() => setFeedTab('rec')} />
           ) : (
             <div className="mt-2 flex items-start gap-2 px-2 pb-24">
               <div className="flex min-w-0 flex-1 flex-col gap-2">
                 {feed.filter((_, i) => i % 2 === 0).map(({ p, v, k }) => (
-                  <ProductCard key={k} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
+                  <ProductCard
+                    key={k}
+                    p={p}
+                    v={v}
+                    onOpen={() => onOpenProduct(p.id)}
+                    onDelete={p.id.startsWith('tbc-p-') ? () => removeCustomProduct(p.id) : undefined}
+                  />
                 ))}
               </div>
               <div className="flex min-w-0 flex-1 flex-col gap-2">
                 {feed.filter((_, i) => i % 2 === 1).map(({ p, v, k }) => (
-                  <ProductCard key={k} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
+                  <ProductCard
+                    key={k}
+                    p={p}
+                    v={v}
+                    onOpen={() => onOpenProduct(p.id)}
+                    onDelete={p.id.startsWith('tbc-p-') ? () => removeCustomProduct(p.id) : undefined}
+                  />
                 ))}
               </div>
             </div>
@@ -1435,15 +1473,36 @@ function HomePage({
   );
 }
 
-/** 单个商品卡（瀑布流） */
-function ProductCard({ p, v, onOpen }: { p: TbProduct; v: number; onOpen: () => void }) {
+/** 单个商品卡（瀑布流；第三十七轮：自建商品与普通商品同卡混排，右上角×删除自建卡） */
+function ProductCard({ p, v, onOpen, onDelete }: { p: TbProduct; v: number; onOpen: () => void; onDelete?: () => void }) {
   const shop = shopById(p.shopId);
   return (
     <button type="button" onClick={onOpen} className="block w-full overflow-hidden rounded-xl bg-white text-left active:opacity-80">
       <div className="relative">
         <ProductImg p={p} s={v} className="aspect-square w-full" />
-        {p.promo ? (
-          <span className="absolute left-0 top-0 rounded-br-lg bg-gradient-to-r from-[#FF2D2D] to-[#FF5000] px-1.5 py-0.5 text-[10px] font-bold text-white">{p.promo}</span>
+        {p.promo || p.id.startsWith('tbc-p-') ? (
+          <span className="absolute left-0 top-0 rounded-br-lg bg-gradient-to-r from-[#FF2D2D] to-[#FF5000] px-1.5 py-0.5 text-[10px] font-bold text-white">{p.promo ?? '自建'}</span>
+        ) : null}
+        {onDelete ? (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label="删除商品"
+            data-testid={`tb-del-${p.title}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.stopPropagation();
+                onDelete();
+              }
+            }}
+            className="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center rounded-full bg-black/45 text-white active:bg-black/65"
+          >
+            <X className="h-3 w-3" strokeWidth={2.6} />
+          </span>
         ) : null}
       </div>
       <div className="p-2">
@@ -1459,78 +1518,6 @@ function ProductCard({ p, v, onOpen }: { p: TbProduct; v: number; onOpen: () => 
         </div>
       </div>
     </button>
-  );
-}
-
-// ================================ 首页「我的商品」区（第三十六轮：创建订单=创建商品） ================================
-
-/** 首页「我的商品」横滑区：自建商品（tbc-p-* 商品 + tbc-s-* 自建店铺）展示 / 删除管理；
- *  点商品 → 商品详情走 SKU→立即购买/购物车→结算 原生链路真实下单 */
-function MyProductsSection({
-  uid,
-  onOpenProduct,
-  onToast,
-}: {
-  uid: string;
-  onOpenProduct: (pid: string) => void;
-  onToast: (m: string) => void;
-}) {
-  const [entries, setEntries] = useState<TbCustomEntry[]>(() => {
-    // 幂等恢复注册（进 App / 创建保存后均可安全重入）
-    tbRegisterCustomProducts(tbLoadCustomProducts(uid));
-    return tbLoadCustomProducts(uid);
-  });
-  const [manage, setManage] = useState(false);
-  useEffect(() => {
-    const reload = () => {
-      tbRegisterCustomProducts(tbLoadCustomProducts(uid));
-      setEntries(tbLoadCustomProducts(uid));
-    };
-    window.addEventListener('tb-custom-products-changed', reload);
-    return () => window.removeEventListener('tb-custom-products-changed', reload);
-  }, [uid]);
-  if (entries.length === 0) return null;
-  const remove = (id: string) => {
-    tbRemoveCustomProduct(uid, id);
-    setEntries(tbLoadCustomProducts(uid));
-    onToast('商品已删除');
-  };
-  return (
-    <div className="mt-2.5 rounded-2xl bg-white px-3 py-3 mx-2" data-testid="tb-my-products">
-      <div className="flex items-center">
-        <span className="text-[15px] font-bold text-black/90">我的商品</span>
-        <span className="ml-1.5 rounded-full bg-[#FFF1E6] px-1.5 py-px text-[10px] font-medium text-[#FF6A1E]">创建订单=创建商品</span>
-        <button type="button" data-testid="tb-my-products-manage" onClick={() => setManage((v) => !v)} className="ml-auto text-[12px] text-black/45 active:opacity-60">
-          {manage ? '完成' : '管理'}
-        </button>
-      </div>
-      <div className="mt-2.5 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {entries.map(({ p, shop }) => (
-          <div key={p.id} className="w-[120px] shrink-0">
-            <button
-              type="button"
-              data-testid={`tb-my-product-${p.title}`}
-              onClick={() => (manage ? remove(p.id) : onOpenProduct(p.id))}
-              className="block w-full text-left active:opacity-80"
-            >
-              <span className="relative block aspect-square w-full overflow-hidden rounded-xl bg-[#f5f5f5]">
-                <ProductImg p={p} w={240} h={240} className="h-full w-full" />
-                {p.custom?.type ? (
-                  <span className="absolute left-0 top-0 rounded-br-lg bg-gradient-to-r from-[#FF7A21] to-[#FF4400] px-1.5 py-0.5 text-[10px] font-bold text-white">{p.custom.type}</span>
-                ) : null}
-                {manage ? <span className="absolute inset-0 grid place-items-center bg-black/35 text-[12px] font-medium text-white">删除</span> : null}
-              </span>
-              <span className="mt-1 block truncate text-[12.5px] leading-[17px] text-black/85">{p.title}</span>
-              <span className="mt-0.5 flex items-baseline gap-1">
-                <Price value={p.price} size={14} />
-                {p.coupon ? <span className="truncate rounded bg-[#FFF1E6] px-1 text-[9.5px] leading-[14px] text-[#FF4400]">券·减{p.coupon.amount % 1 === 0 ? p.coupon.amount : p.coupon.amount.toFixed(2)}</span> : null}
-              </span>
-              <span className="mt-0.5 block truncate text-[10.5px] text-black/35">{shop.name}</span>
-            </button>
-          </div>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -1557,7 +1544,7 @@ function FollowFeed({ uid, follows, onOpenProduct, onOpenSearch }: { uid: string
         <div className="space-y-3">
           {recShops.map((s) => (
             <div key={s.id} className="flex items-center gap-3">
-              <TbImg src={tbImg(s.tag, 100, 100, 3, 'c')} alt={s.name} className="h-11 w-11 rounded-lg" />
+              <TbImg src={tbShopAvatarOf(s.id)} alt={s.name} className="h-11 w-11 rounded-lg" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1">
                   {s.tmall ? <TmallMark /> : null}
@@ -1750,7 +1737,7 @@ function ShopRow({ shopId, uid, onOpenProduct }: { shopId: string; uid: string; 
   return (
     <div className="rounded-xl bg-white p-3">
       <div className="flex items-center gap-3">
-        <TbImg src={tbImg(shop.tag, 100, 100, 0, 'c')} alt={shop.name} className="h-12 w-12 rounded-lg" />
+        <TbImg src={tbShopAvatarOf(shop.id)} alt={shop.name} className="h-12 w-12 rounded-lg" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1">
             {shop.tmall ? <TmallMark /> : null}
@@ -2063,7 +2050,7 @@ function SearchResultPage({ uid, kw, onBack, onOpenProduct, onSearchSeed }: { ui
 // ---------------- 商品详情 ----------------
 
 /** 商品图片轮播（横向 snap + 页码指示） */
-function ProductGallery({ p }: { p: TbProduct }) {
+function ProductGallery({ p, onImgClick }: { p: TbProduct; onImgClick?: () => void }) {
   const [idx, setIdx] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   // 自建商品只有一张自有主图（上传/AI 生成），其余商品同 tag 多变体 4 图
@@ -2076,13 +2063,32 @@ function ProductGallery({ p }: { p: TbProduct }) {
   return (
     <div className="relative bg-white">
       <div ref={ref} className="flex snap-x snap-mandatory overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" onScroll={onScroll}>
-        {Array.from({ length: total }, (_, i) => (
-          <div key={i} className="w-full shrink-0 snap-center">
-            <ProductImg p={p} w={750} h={750} s={i} className="aspect-square w-full" />
-          </div>
-        ))}
+        {Array.from({ length: total }, (_, i) =>
+          onImgClick ? (
+            <button
+              key={i}
+              type="button"
+              aria-label="点击生成商品图片"
+              data-testid="tb-product-imggen"
+              onClick={onImgClick}
+              className="w-full shrink-0 snap-center active:opacity-90"
+            >
+              <ProductImg p={p} w={750} h={750} s={i} className="aspect-square w-full" />
+            </button>
+          ) : (
+            <div key={i} className="w-full shrink-0 snap-center">
+              <ProductImg p={p} w={750} h={750} s={i} className="aspect-square w-full" />
+            </div>
+          )
+        )}
       </div>
-      <div className="absolute bottom-3 right-3 rounded-full bg-black/45 px-2.5 py-0.5 text-[12px] text-white">
+      {onImgClick ? (
+        <span className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-[11px] text-white">
+          <Wand2 className="h-3 w-3" strokeWidth={2} />
+          点图生成
+        </span>
+      ) : null}
+      <div className="pointer-events-none absolute bottom-3 right-3 rounded-full bg-black/45 px-2.5 py-0.5 text-[12px] text-white">
         {idx + 1}/{total}
       </div>
     </div>
@@ -2424,6 +2430,26 @@ function ProductPage({
   const favCount = String(1000 + (tbHash(`${pid}fav`) % 9000));
   // 预计送达（与 SkuSheet 同口径：跟随送达速度，真实时钟）
   const etaText = `预计${TB_SPEED_DESC[tbGetDeliverySpeed(uid)]}`;
+  // 商品图生成（第三十七轮：详情页点图 → 选模型+可编辑提示词生成新主图，自建+原有商品通用）
+  const [imgGenOpen, setImgGenOpen] = useState(false);
+  const [imgGenBusy, setImgGenBusy] = useState(false);
+  const [imgGenErr, setImgGenErr] = useState('');
+  const [imgTick, setImgTick] = useState(0);
+  const genProductImg = async (prompt: string, cfg: ImgGenConfig & { mode?: 'proxy' | 'direct' }) => {
+    setImgGenBusy(true);
+    setImgGenErr('');
+    try {
+      const src = await generateFreePhoto(cfg, prompt);
+      tbSetProductImg(pid, src);
+      setImgGenOpen(false);
+      setImgTick((t) => t + 1);
+      onToast('商品图片已生成');
+    } catch (e) {
+      setImgGenErr(e instanceof Error ? e.message : '生成失败，请重试');
+    } finally {
+      setImgGenBusy(false);
+    }
+  };
   if (!p) {
     return (
       <div className="grid h-full place-items-center bg-white">
@@ -2465,7 +2491,7 @@ function ProductPage({
         </button>
       </div>
       <div ref={scrollerRef} className="flex-1 overflow-y-auto pb-24">
-        <ProductGallery p={p} />
+        <ProductGallery key={imgTick} p={p} onImgClick={() => setImgGenOpen(true)} />
         {/* SKU 快选条 */}
         <div className="flex gap-2 overflow-x-auto bg-white px-3 py-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {(p.skus[0]?.options ?? []).slice(0, 4).map((o, i) => (
@@ -2527,7 +2553,7 @@ function ProductPage({
         </div>
         {/* 店铺卡 */}
         <button type="button" onClick={() => onOpenShop(shop.id)} className="mt-2 flex w-full items-center gap-3 bg-white px-4 py-3 text-left active:opacity-80">
-          <TbImg src={tbImg(shop.tag, 120, 120, 0, 'c')} alt={shop.name} className="h-11 w-11 rounded-lg" />
+          <TbImg src={tbShopAvatarOf(shop.id)} alt={shop.name} className="h-11 w-11 rounded-lg" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1">
               {shop.tmall ? <TmallMark /> : null}
@@ -2619,6 +2645,18 @@ function ProductPage({
       </div>
 
       {skuMode ? <SkuSheet p={p} uid={uid} mode={skuMode} onClose={() => setSkuMode(null)} onConfirm={confirmSku} /> : null}
+
+      {/* 商品图生成弹层（第三十七轮：点详情主图 → 选模型 + 可编辑提示词，生成后替换主图） */}
+      <OrderImgGenSheet
+        open={imgGenOpen}
+        title="生成商品图片"
+        initialPrompt={`${p.title}，真实感商品主图，白底商业摄影`}
+        busy={imgGenBusy}
+        error={imgGenErr}
+        accent="#FF5000"
+        onSubmit={genProductImg}
+        onClose={() => setImgGenOpen(false)}
+      />
     </div>
   );
 }
@@ -4542,7 +4580,7 @@ function OrderDetailPage({
             </div>
             <div className="mt-2 bg-white px-4 py-3">
               <div className="flex items-center gap-2.5">
-                <TbImg src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-10 w-10 rounded-lg" />
+                <TbImg src={tbShopAvatarOf(shop.id)} alt={shop.name} className="h-10 w-10 rounded-lg" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
                   <div className="mt-0.5 text-[11px] text-black/35">平均2天退款</div>
@@ -4850,7 +4888,7 @@ function OrderDetailPage({
               </button>
             ) : null}
             <div className="mt-2 flex items-center gap-3 bg-white px-4 py-3">
-              <TbImg src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-11 w-11 rounded-lg" />
+              <TbImg src={tbShopAvatarOf(shop.id)} alt={shop.name} className="h-11 w-11 rounded-lg" />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
                 <div className="mt-0.5 text-[11.5px] text-black/40">88VIP好评率93%，客服平均22秒回复</div>
@@ -5000,7 +5038,7 @@ function OrderDetailPage({
             {/* 店铺 + 商品卡（截图1：店铺图/平均2天退款/进店逛逛 + 商品行 + 加入购物车） */}
             <div className="mt-2 bg-white px-4 py-3">
               <div className="flex items-center gap-2.5">
-                <TbImg src={tbImg(shop.tag, 96, 96, 0, 'c')} alt={shop.name} className="h-10 w-10 rounded-lg" />
+                <TbImg src={tbShopAvatarOf(shop.id)} alt={shop.name} className="h-10 w-10 rounded-lg" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[15px] font-semibold text-black/85">{shop.name}</div>
                   <div className="mt-0.5 text-[11px] text-black/35">平均2天退款</div>
@@ -6884,7 +6922,7 @@ function ShopFollowsPage({ uid, onBack, onOpenProduct, onToast }: { uid: string;
               return (
                 <div key={sid} className="rounded-xl bg-white p-3">
                   <div className="flex items-center gap-3">
-                    <TbImg src={tbImg(shop.tag, 100, 100, 0, 'c')} alt={shop.name} className="h-11 w-11 rounded-lg" />
+                    <TbImg src={tbShopAvatarOf(shop.id)} alt={shop.name} className="h-11 w-11 rounded-lg" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1">
                         {shop.tmall ? <TmallMark /> : null}
@@ -6931,35 +6969,67 @@ function ShopPage({ shopId, uid, onBack, onOpenProduct, onToast }: { shopId: str
   // 自建店铺：商品来自自建注册表（进店能看到自建商品）；预置店铺走种子表
   const goods = [...tbCustomProductsAll().map((e) => e.p), ...TB_PRODUCTS].filter((p) => p.shopId === shopId);
   const followed = tbLoadShopFollows(uid).includes(shopId);
+  // 店铺头像生成（第三十七轮：点头像 → 选模型 + 提示词生成，覆盖存储；所有店铺统一入口）
+  const [avGenOpen, setAvGenOpen] = useState(false);
+  const [avGenBusy, setAvGenBusy] = useState(false);
+  const [avGenErr, setAvGenErr] = useState('');
+  const [avTick, setAvTick] = useState(0);
+  const genShopAvatar = async (prompt: string, cfg: ImgGenConfig & { mode?: 'proxy' | 'direct' }) => {
+    setAvGenBusy(true);
+    setAvGenErr('');
+    try {
+      const src = await generateFreePhoto(cfg, prompt);
+      tbSetShopAvatar(shopId, src);
+      setAvGenOpen(false);
+      setAvTick((t) => t + 1);
+      onToast('店铺头像已生成');
+    } catch (e) {
+      setAvGenErr(e instanceof Error ? e.message : '生成失败，请重试');
+    } finally {
+      setAvGenBusy(false);
+    }
+  };
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
-      <div className="bg-gradient-to-b from-[#FF6A1E] to-[#FF9A50] pb-3">
-        <div className="flex items-center px-3 pt-[58px]">
-          <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full bg-white/25 active:opacity-70">
-            <ArrowLeft className="h-[20px] w-[20px] text-white" strokeWidth={2.2} />
-          </button>
-          <span className="flex-1 text-center text-[16px] font-semibold text-white">店铺</span>
-          <span className="w-9" />
-        </div>
-        <div className="mt-3 flex items-center gap-3 px-4">
-          <TbImg src={tbImg(shop.tag, 120, 120, 0, 'c')} alt={shop.name} className="h-14 w-14 rounded-xl border-2 border-white/60" />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1">
-              {shop.tmall ? <TmallMark /> : null}
-              <span className="truncate text-[16px] font-bold text-white">{shop.name}</span>
-            </div>
-            <div className="mt-0.5 text-[12px] text-white/80">评分 {shop.rating} · {shop.fans}粉丝数{shop.desc ? ` · ${shop.desc}` : ''}</div>
+      {/* 头部：欢迎光临手绘背景（第三十七轮：所有店铺统一品牌）+ 深色文字 */}
+      <div className="relative shrink-0 overflow-hidden">
+        <img src={TB_SHOP_BG} alt="" aria-hidden="true" className="absolute inset-0 h-full w-full object-cover" />
+        <div className="relative pb-3">
+          <div className="flex items-center px-3 pt-[58px]">
+            <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full bg-white/80 active:opacity-70">
+              <ArrowLeft className="h-[20px] w-[20px] text-black/75" strokeWidth={2.2} />
+            </button>
+            <span className="flex-1 text-center text-[16px] font-semibold text-black/85">店铺</span>
+            <span className="w-9" />
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              const now = tbToggleShopFollow(uid, shopId);
-              onToast(now ? '已关注店铺' : '已取消关注');
-            }}
-            className={`rounded-full px-4 py-1.5 text-[13px] font-medium ${followed ? 'bg-white/25 text-white' : 'bg-white text-[#FF5000]'} active:opacity-80`}
-          >
-            {followed ? '已关注' : '+ 关注'}
-          </button>
+          <div className="mt-3 flex items-center gap-3 px-4">
+            <button
+              type="button"
+              aria-label="点击生成店铺头像"
+              data-testid="tb-shop-avatar"
+              onClick={() => setAvGenOpen(true)}
+              className="shrink-0 overflow-hidden rounded-xl border-2 border-white/85 shadow-sm active:opacity-80"
+            >
+              <img key={avTick} src={tbShopAvatarOf(shopId)} alt={shop.name} className="h-14 w-14 object-cover" />
+            </button>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1">
+                {shop.tmall ? <TmallMark /> : null}
+                <span className="truncate text-[16px] font-bold text-black/90">{shop.name}</span>
+              </div>
+              <div className="mt-0.5 text-[12px] text-black/55">评分 {shop.rating} · {shop.fans}粉丝数{shop.desc ? ` · ${shop.desc}` : ''}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const now = tbToggleShopFollow(uid, shopId);
+                onToast(now ? '已关注店铺' : '已取消关注');
+              }}
+              className={`shrink-0 rounded-full px-4 py-1.5 text-[13px] font-medium active:opacity-80 ${followed ? 'bg-black/10 text-black/70' : 'bg-[#FF5000] text-white'}`}
+            >
+              {followed ? '已关注' : '+ 关注'}
+            </button>
+          </div>
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
@@ -6970,6 +7040,19 @@ function ShopPage({ shopId, uid, onBack, onOpenProduct, onToast }: { shopId: str
           ))}
         </div>
       </div>
+
+      {/* 店铺头像生成弹层（第三十七轮：选模型 + 可编辑提示词） */}
+      <OrderImgGenSheet
+        open={avGenOpen}
+        title="生成店铺头像"
+        initialPrompt={`${shop.name} 店铺头像，简洁卡通图标，方形构图`}
+        busy={avGenBusy}
+        error={avGenErr}
+        accent="#FF5000"
+        submitLabel="生成头像"
+        onSubmit={genShopAvatar}
+        onClose={() => setAvGenOpen(false)}
+      />
     </div>
   );
 }
@@ -7726,8 +7809,10 @@ export default function TaobaoApp() {
   useEffect(() => {
     if (session) {
       tbRestoreAiProducts(tbUidOf(session));
-      // 自建商品（创建订单=创建商品）：同步恢复注册（首页「我的商品」/详情/下单链路即时可用）
+      // 自建商品（创建订单=创建商品）：同步恢复注册（首页商品流置顶 / 详情 / 下单链路即时可用）
       tbRegisterCustomProducts(tbLoadCustomProducts(tbUidOf(session)));
+      // 商品图生成覆盖（第三十七轮）：详情页点图生成的结果写回内存商品对象
+      tbApplyProductImgOverrides();
     }
   }, [session]);
 

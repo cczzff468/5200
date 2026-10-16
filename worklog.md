@@ -20148,3 +20148,47 @@ Work Log:
 Stage Summary:
 - 关键决策：①自建订单直接以「已完成」状态入库（上传订单=记录真实已发生的单，不走支付流程）；②custom 元数据挂订单本体而非独立表——订单详情/列表/AI 感知零改动兼容；③生图弹层两端共用一份（模型=当前配置+预设合集，提交后由调用方真实写回订单 items[i].img 落库，杜绝「假成功」）；④规格选项组同时写入 item.spec（美团）/item.sku（淘宝）保证详情页既有渲染链路直接显示
 - 修改文件：src/lib/ios/order-custom.ts（新增）、src/components/apps/order-img-gen.tsx（新增）、src/components/apps/mt-order-create.tsx（新增）、src/components/apps/tb-order-create.tsx（新增）、src/lib/ios/meituan-store.ts、src/lib/ios/taobao-store.ts、src/lib/ios/meituan-data.ts、src/components/apps/meituan.tsx、src/components/apps/taobao.tsx
+
+---
+Task ID: round-36
+Agent: 主协调者 (Z.ai Code)
+Task: 第三十六轮：逻辑换向——「创建订单」=「创建商品」上首页（落库展示在首页商品区，点商品走原生购买链路真实下单；删除「保存直接生成已完成订单+跳订单列表」旧逻辑）
+
+Work Log:
+- mt-order-create.tsx 全重写 save()：创建 mtc-shop-* 自建商家（sections:[{cat:'我的商品',dishes:[dish]}]，mtStatus:'open'，notice='自建商品 · {类型}'）+ 单菜品（specs 由选项组映射、小料类 isMulti、dish.coupon={name,amount,min:0}、custom 快照 OrderCustomMeta）；mtSaveCustomShops 落库 + mtRegisterCustomMerchant 注册 + 派发 mt-custom-products-changed + toast「商品已创建，已显示在首页」；onSaved → 回首页（不再跳订单）；头部徽标「创建商品·上首页」；删数量字段；底部按钮「上架商品」
+- tb-order-create.tsx 同构：tbc-s-*/tbc-p-*（skus 由选项组、coupon{amount,min:0}、img）；tbSaveCustomProducts + 派发 tb-custom-products-changed + onSaved 回首页
+- meituan-store.ts 新增 mtLoadCustomShops/mtSaveCustomShops（key mt-custom-shops:<uid>，容错过滤）；taobao-store.ts 新增 TbCustomEntry/tbLoadCustomProducts/tbSaveCustomProducts（保存即注册）/tbRemoveCustomProduct；mtCreateOrder/tbCreateOrder 快照 custom 进订单
+- meituan-data.ts：MtDish.custom?; mtRegisterCustomMerchant(s)/mtUnregisterCustomMerchant/mtCustomMerchantsAll（mtc-shop-* 前缀约定）；mtPersistAiRegistry 过滤排除 mtc-shop-*
+- taobao-data.ts：TbProduct.img?/custom?；CUSTOM_PRODUCTS/CUSTOM_SHOPS Map；productById 先查自建（不走 AI 归店自愈）；shopById 先查 CUSTOM_SHOPS；tbSearchPool 前置自建；tbRegisterCustomProduct(s)/tbUnregisterCustomProduct/tbCustomProductsAll
+- meituan.tsx 新增 MyProductsSection（横滑商品卡：类型角标/名称/价/券/店名，管理删除，data-testid mt-my-products/mt-my-product-<名>）插首页宫格圆点后；登录/恢复时 mtRegisterCustomMerchants，登出注销；MtOrderCreatePage onSaved→首页；MtCheckout.submit 快照 firstCustom；订单 reorder 守卫（商品已下架提示，可正常进店重挑）
+- taobao.tsx 新增淘宝版 MyProductsSection（ProductImg+Price，橙色角标）插 HomePage feed 前；ProductImg 改 p.img 优先；ProductGallery total=p.img?1:4；SkuSheet skuImg 兜底 p.img；session effect 注册恢复；ShopPage goods=自建+种子按 shopId 过滤（自建店可进店）；订单 rebuy/addAllToCart 守卫；订单详情自建店可进店+商品行可点
+- 端到端实测（浏览器）：美团——登录→创建「厚芋泥波波奶茶」¥16（小料多选+温度单选+新人立减券¥3）→首页我的商品区→商家页→规格弹窗→加购（已优惠¥3）→结算¥10→提交→订单列表「自建·奶茶甜饮」黄标+待付款→详情（规格/自建角标/优惠明细）✓；淘宝——创建「iPhone 16 256G」¥5699（Apple官方旗舰店，3档内存+双11券¥300）→详情原生渲染→SKU→加购→购物车→结算（-¥300）→提交订单成功 ✓；零钱余额不足为新环境无余额所致，订单已入库待付款
+- 校验：tsc 零错误；eslint 29 个存量误报逐行核对全部在历史镜像代码（taobao ~1035/1590、meituan ~3700），零新增
+
+Stage Summary:
+- 关键决策：创建=落库+注册进运行时注册表（复用 AI_PRODUCTS/AI_MERCHANTS 同款模式），productById/mtMerchantOf/mtFindDish 无感命中，购买链路零改动调用方；删除「保存即生成已完成订单」旧逻辑
+- 涉及文件：mt-order-create.tsx、tb-order-create.tsx（重写 save）、meituan-store.ts、taobao-store.ts、meituan-data.ts、taobao-data.ts、meituan.tsx、taobao.tsx
+
+---
+Task ID: round-37
+Agent: 主协调者 (Z.ai Code)
+Task: 第三十七轮：①自建商品混入首页普通商品流且永远置顶（刷新/重新生成仍置顶）；②所有店铺（预置/AI生成/自建）头像=「该用户正在营业」印章图、店铺背景=「欢迎光临」手绘图；③更正35轮误解——商品详情界面里面的图片可点击生成（自建+原有通用）
+
+Work Log:
+- 静态资源：用户两图存 public/shop-avatar.png（该用户正在营业 1079x1079）、public/shop-bg.png（欢迎光临 1079x947）
+- 店铺品牌统一（数据层）：meituan-data.ts/taobao-data.ts 新增 MT_SHOP_AVATAR/MT_SHOP_BG、TB_SHOP_AVATAR/TB_SHOP_BG 常量 + 全局 kv 覆盖层（mt-shop-avatars/tb-shop-avatars）+ mtShopAvatarOf/mtSetShopAvatar/tbShopAvatarOf/tbSetShopAvatar（生成覆盖优先，缺省统一印章图）
+- 美团：MerchantPage 头图改 FoodImg src=MT_SHOP_BG（128px 欢迎光临）、店铺头像 ShopAvatar（mtShopAvatarOf）+ 点击弹 OrderImgGenSheet 生成头像（generateFreePhoto→mtSetShopAvatar→tick）；MerchantCard 头像 ShopAvatar 化；商品图生成覆盖层 mtSetProductImg（mutate AI_MERCHANTS/MT_MERCHANTS 菜品 + kv mt-product-imgs）+ mtApplyProductImgOverrides（booting/login 恢复调用）
+- 淘宝：ShopPage 头部重写——背景 img src=TB_SHOP_BG cover + 深色文字（返回钮 bg-white/80 黑箭头、店铺名黑色、关注钮橙底/灰底）、头像 tbShopAvatarOf + 点击弹 OrderImgGenSheet 生成头像（tbSetShopAvatar）；7 处 tbImg(shop.tag) 头像点全部换 tbShopAvatarOf（搜索结果商家条/详情页店铺卡/退款/收藏/足迹/关注流店铺卡/推荐店铺行）；商品图覆盖层 tbSetProductImg（mutate CUSTOM/AI/TB_PRODUCTS + kv tb-product-imgs）+ productById 读取兜底 applyImgOverride + tbApplyProductImgOverrides（session effect 调用）
+- 商品详情图点击生成（需求③）：淘宝 ProductGallery 加 onImgClick（图片包 button + 左下「✨点图生成」角标）→ ProductPage 弹 OrderImgGenSheet（预填=标题+「真实感商品主图，白底商业摄影」，成功 tbSetProductImg+imgTick 重渲染）；美团 DishSpecSheet 菜品图包 button + 「✨生成」角标（onGenDish prop）→ MerchantPage 弹 OrderImgGenSheet（预填=菜名+「真实感商品照片」；genDishImg→mtSetProductImg）；补商家页菜品行图片（72px）也包 button 点击生成（data-testid mt-dish-imggen-<名>，无规格菜品也有生成入口）
+- feed 混排置顶（需求①）：淘宝 HomePage feed useMemo 前置 customEntries（feedTab==='rec' 时 tbCustomProductsAll 前置于 topEntries/base/tailEntries，customTick 监听 tb-custom-products-changed 即时重算；uid 依赖幂等恢复注册）；美团 HomePage 渲染层前置 customFeed（mtCustomMerchantsAll 商家卡排 DealListCard/feed 之前，渲染层前置使缓存恢复/刷新/上滑追加全路径自动置顶；regenerate exclude 加自建店名防 AI 撞名）
+- 删除独立「我的商品」区（两端 MyProductsSection 组件及调用处全删）：自建商品以普通商品卡混排——淘宝 ProductCard 加 onDelete（自建卡右上角×，span role=button 防嵌套，data-testid tb-del-<名>；removeCustomProduct→tbRemoveCustomProduct+事件+toast「商品已删除」；自建卡显示「自建」promo 角标）；美团 MerchantCard 加 onDelete（右上角×）+「自建」黄标（!mine && mtc-shop-*）
+- 淘宝端到端实测（agent-browser + session 注入）：创建订单→填 iPhone 16 256G/5699/Apple官方旗舰店→「上架商品」→回首页 feed **第一位**显示 iPhone 卡（「自建」橙标+右上×）→点进详情（主图「点图生成」角标）→点主图弹「生成商品图片」弹层（可编辑提示词预填+模型列表+未配置引导+取消）✓→进店铺页（欢迎光临背景+正在营业头像+深色文字）✓→返回首页下拉刷新→iPhone 卡**仍置顶第一位** ✓
+- 美团端到端实测：创建订单→厚芋泥波波奶茶/16/霸王茶姬（吾悦广场店）→上架→首页 feed 前两张=自建卡（「自建」黄标+×+正在营业头像）→进店（头部欢迎光临背景+店铺头像印章）→点菜品行图片弹「生成商品图片」弹层（可编辑提示词+模型选择）✓；testid mt-dish-imggen-厚芋泥波波奶茶 命中
+- 环境治理（沙箱 4GB OOM 战役）：dev server（Turbopack 编译 RSS ~2GB）与 chrome 共存反复触发系统 OOM→keeper 循环重启→排查链：webpack 模式（--max-old-space-size=3200/3600）编译成功但页面白屏（renderer 兼容问题）；turbopackMemoryLimit 1280MB 实测不影响 RSS 驻留；最终定位 **.next 混入 webpack 缓存导致膨胀**——rm -rf .next + 恢复原始 dev script（turbopack）+ keeper 恢复 NODE_OPTIONS=1024 后 RSS 降至 1.4-1.5GB，chrome（精简 flags）可稳定共存，验证全程通过
+- 校验：tsc 全量零错误；eslint meituan 3 + taobao 26 errors 全部为历史镜像代码（行号因新代码偏移：meituan 3768/3769/3951、taobao 1049-7365 各历史区），本轮零新增；worklog 记录本轮全部改动
+
+Stage Summary:
+- 需求①：自建商品与普通商品同卡混排（ProductCard/MerchantCard 复用），置顶=渲染层/求值层前置（淘宝 feed useMemo、美团渲染前插），刷新/前插/追加/缓存恢复全路径保持置顶；删除独立「我的商品」横滑区（该删除的删除）
+- 需求②：所有店铺统一品牌（头像=正在营业印章、背景=欢迎光临手绘），覆盖预置/AI/自建三类；头像可点击用「设置›图像生成」的模型+自定义提示词再生成（全局 kv 覆盖，per-shop）
+- 需求③：商品详情界面图片点击生成（淘宝详情主图/美团规格弹窗菜品图/美团菜品行图片三入口，自建+原有通用），生成结果 mutate 内存对象 + kv 持久化（tb-product-imgs/mt-product-imgs）+ 启动恢复，刷新后仍生效
+- 涉及文件：public/shop-avatar.png、public/shop-bg.png（新增）、src/lib/ios/meituan-data.ts、src/lib/ios/taobao-data.ts、src/components/apps/meituan.tsx、src/components/apps/taobao.tsx、next.config.ts（experimental.turbopackMemoryLimit 1280MB 内存保护）

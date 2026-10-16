@@ -1543,6 +1543,66 @@ export function mtSetShopAvatar(merchantId: string, src: string): void {
   }
 }
 
+// ---------------- 商品图生成覆盖（第三十七轮：商品详情界面点图可生成，自建+原有商品通用） ----------------
+// 生成结果：mutate 内存菜品对象（预置/AI/自建统一即时生效）+ 全局 kv 持久化（防刷新丢失）；
+// App 启动/登录恢复时调 mtApplyProductImgOverrides() 把覆盖写回内存对象。
+
+const PRODUCT_IMG_KEY = 'mt-product-imgs';
+let productImgCache: Record<string, string> | null = null;
+
+function productImgMap(): Record<string, string> {
+  if (!productImgCache) {
+    try {
+      const v = kvGet(PRODUCT_IMG_KEY) as Record<string, string> | null;
+      productImgCache = v && typeof v === 'object' ? v : {};
+    } catch {
+      productImgCache = {};
+    }
+  }
+  return productImgCache;
+}
+
+/** 在全部商家（AI 注册表 + 预置种子）里找到菜品并改图 */
+function mutateDishImg(dishId: string, src: string): void {
+  for (const m of AI_MERCHANTS.values()) {
+    for (const sec of m.sections) {
+      const d = sec.dishes.find((x) => x.id === dishId);
+      if (d) {
+        d.img = src;
+        return;
+      }
+    }
+  }
+  for (const m of MT_MERCHANTS) {
+    for (const sec of m.sections) {
+      const d = sec.dishes.find((x) => x.id === dishId);
+      if (d) {
+        d.img = src;
+        return;
+      }
+    }
+  }
+}
+
+/** 写商品图覆盖（商品详情界面点击图片生成成功后调用；mutate + 持久化，所有渲染点即时生效） */
+export function mtSetProductImg(dishId: string, src: string): void {
+  const map = productImgMap();
+  map[dishId] = src;
+  productImgCache = map;
+  mutateDishImg(dishId, src);
+  try {
+    kvSet(PRODUCT_IMG_KEY, map);
+  } catch {
+    /* 存储不可用忽略 */
+  }
+}
+
+/** 启动恢复：把已持久化的商品图覆盖写回内存菜品对象（App 登录/恢复时调用一次） */
+export function mtApplyProductImgOverrides(): void {
+  const map = productImgMap();
+  for (const [dishId, src] of Object.entries(map)) mutateDishImg(dishId, src);
+}
+
 /** 按 id 查商家（AI 生成优先，种子数据兜底） */
 export function mtMerchantOf(id: string): MtMerchant | undefined {
   return AI_MERCHANTS.get(id) ?? MT_MERCHANTS.find((m) => m.id === id);

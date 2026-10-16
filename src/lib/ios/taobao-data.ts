@@ -418,10 +418,16 @@ export const TB_PRODUCTS: TbProduct[] = [
   ]),
 ];
 
+/** 应用商品图覆盖（productById 读取兜底：注册表对象被重建后生成图依然生效） */
+function applyImgOverride(p: TbProduct): TbProduct {
+  const ov = productImgMap()[p.id];
+  return ov && p.img !== ov ? { ...p, img: ov } : p;
+};
+
 export const productById = (id: string): TbProduct | undefined => {
   // 自建商品（创建订单=创建商品）：优先命中，不走 AI 商品同 tag 归店自愈（自建店不参与品类归店）
   const custom = CUSTOM_PRODUCTS.get(id);
-  if (custom) return custom;
+  if (custom) return applyImgOverride(custom);
   const ai = AI_PRODUCTS.get(id);
   if (ai) {
     // 存量自愈（修「买衣服显示零食铺子」）：旧版 AI 商品 tag 无同 tag 店铺时按哈希随机挂店，
@@ -435,10 +441,67 @@ export const productById = (id: string): TbProduct | undefined => {
         return fixed;
       }
     }
-    return ai;
+    return applyImgOverride(ai);
   }
-  return TB_PRODUCTS.find((p) => p.id === id);
+  const seed = TB_PRODUCTS.find((p) => p.id === id);
+  return seed ? applyImgOverride(seed) : undefined;
 };
+
+// ---------------- 商品图生成覆盖（第三十七轮：商品详情页点图可生成，自建+原有商品通用） ----------------
+// 生成结果：mutate 内存对象（预置/AI/自建统一即时生效）+ 全局 kv 持久化（防刷新丢失）；
+// productById 读取时兜底应用 override（注册表对象被重建后依然正确）。
+
+const PRODUCT_IMG_KEY = 'tb-product-imgs';
+let productImgCache: Record<string, string> | null = null;
+
+function productImgMap(): Record<string, string> {
+  if (!productImgCache) {
+    try {
+      const v = kvGet(PRODUCT_IMG_KEY) as Record<string, string> | null;
+      productImgCache = v && typeof v === 'object' ? v : {};
+    } catch {
+      productImgCache = {};
+    }
+  }
+  return productImgCache;
+}
+
+/** 写商品图覆盖（商品详情页点击图片生成成功后调用；mutate + 持久化，所有渲染点即时生效） */
+export function tbSetProductImg(pid: string, src: string): void {
+  const map = productImgMap();
+  map[pid] = src;
+  productImgCache = map;
+  const custom = CUSTOM_PRODUCTS.get(pid);
+  if (custom) custom.img = src;
+  const ai = AI_PRODUCTS.get(pid);
+  if (ai) ai.img = src;
+  const seed = TB_PRODUCTS.find((p) => p.id === pid);
+  if (seed) seed.img = src;
+  try {
+    kvSet(PRODUCT_IMG_KEY, map);
+  } catch {
+    /* 存储不可用忽略 */
+  }
+}
+
+/** 启动恢复：把已持久化的商品图覆盖写回内存商品对象（App 登录/恢复时调用一次） */
+export function tbApplyProductImgOverrides(): void {
+  const map = productImgMap();
+  for (const [pid, src] of Object.entries(map)) {
+    const custom = CUSTOM_PRODUCTS.get(pid);
+    if (custom) {
+      custom.img = src;
+      continue;
+    }
+    const ai = AI_PRODUCTS.get(pid);
+    if (ai) {
+      ai.img = src;
+      continue;
+    }
+    const seed = TB_PRODUCTS.find((p) => p.id === pid);
+    if (seed) seed.img = src;
+  }
+}
 
 // ---------------- AI 生成商品注册表（刷新更新内容动态注入，持久化到 IndexedDB 后启动恢复） ----------------
 // AI 生成的商品在运行时注册进这里：商品详情/SKU/购物车/下单等既有链路通过 productById /

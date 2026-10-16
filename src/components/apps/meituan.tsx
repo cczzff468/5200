@@ -110,6 +110,7 @@ import {
   Users,
   Utensils,
   Wallet,
+  Wand2,
   X,
   Zap,
   type LucideIcon,
@@ -133,6 +134,7 @@ import {
   MT_MERCHANTS,
   MT_SHOP_BG,
   mtAllMerchants,
+  mtApplyProductImgOverrides,
   mtCustomMerchantsAll,
   mtDealOf,
   mtDishesOf,
@@ -144,6 +146,7 @@ import {
   mtRegisterCustomMerchants,
   mtRegisterMyMerchants,
   mtRestoreAiRegistry,
+  mtSetProductImg,
   mtSetShopAvatar,
   mtShopAvatarOf,
   mtUnregisterCustomMerchant,
@@ -823,7 +826,7 @@ function ShopAvatar({ m, className = '' }: { m: MtMerchant; className?: string }
   return <FoodImg src={mtShopAvatarOf(m.id)} emoji={m.emoji} className={className} />;
 }
 
-function MerchantCard({ m, onOpen }: { m: MtMerchant; onOpen: () => void }) {
+function MerchantCard({ m, onOpen, onDelete }: { m: MtMerchant; onOpen: () => void; onDelete?: () => void }) {
   return (
     <button type="button" onClick={onOpen} className="relative mb-2 block w-full break-inside-avoid overflow-hidden rounded-xl bg-white text-left shadow-[0_1px_6px_rgba(0,0,0,0.04)] active:opacity-90">
       <ShopAvatar m={m} className="h-[120px] w-full" />
@@ -832,6 +835,32 @@ function MerchantCard({ m, onOpen }: { m: MtMerchant; onOpen: () => void }) {
           我的小店
         </span>
       )}
+      {!m.mine && m.id.startsWith('mtc-shop-') && (
+        <span className="absolute left-2 top-2 rounded-md bg-[#FFD100] px-1.5 py-0.5 text-[10px] font-bold text-black/85 shadow-sm">
+          自建
+        </span>
+      )}
+      {onDelete ? (
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label="删除商品"
+          data-testid={`mt-del-${m.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.stopPropagation();
+              onDelete();
+            }
+          }}
+          className="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center rounded-full bg-black/45 text-white active:bg-black/65"
+        >
+          <X className="h-3 w-3" strokeWidth={2.6} />
+        </span>
+      ) : null}
       <span className="block px-2.5 pb-2.5 pt-2">
         <span className="block truncate text-[14px] font-bold text-black/90">{m.name}</span>
         <span className="mt-1 flex items-center gap-1.5 text-[11px]">
@@ -1033,89 +1062,7 @@ function localBatch(filter: string | null, exclude: string[]): { items: FeedItem
   return { items: out, listDeals: filter === null ? seedDeals : [], listTitle: filter === null ? MT_HOME_LIST.title : null };
 }
 
-// ================================ 首页「我的商品」区（第三十六轮：创建订单=创建商品） ================================
-
-/** 首页「我的商品」横滑区：自建商品（mtc-shop-* 自建商家 + 单菜品）展示 / 删除管理；
- *  点商品 → 进商家页走 购物车→结算 原生链路真实下单 */
-function MyProductsSection({
-  uid,
-  onOpenMerchant,
-  onToast,
-}: {
-  uid: string;
-  onOpenMerchant: (id: string) => void;
-  onToast: (m: string) => void;
-}) {
-  const [shops, setShops] = useState<MtMerchant[]>(() => {
-    // 幂等恢复注册（进 App / 创建保存后均可安全重入）
-    mtRegisterCustomMerchants(mtLoadCustomShops(uid));
-    return mtLoadCustomShops(uid);
-  });
-  const [manage, setManage] = useState(false);
-  useEffect(() => {
-    const reload = () => {
-      mtRegisterCustomMerchants(mtLoadCustomShops(uid));
-      setShops(mtLoadCustomShops(uid));
-    };
-    window.addEventListener('mt-custom-products-changed', reload);
-    return () => window.removeEventListener('mt-custom-products-changed', reload);
-  }, [uid]);
-  if (shops.length === 0) return null;
-  const remove = (m: MtMerchant) => {
-    mtSaveCustomShops(uid, mtLoadCustomShops(uid).filter((x) => x.id !== m.id));
-    mtUnregisterCustomMerchant(m.id);
-    setShops(mtLoadCustomShops(uid));
-    onToast('商品已删除');
-  };
-  return (
-    <div className="mt-2 bg-white px-3 py-3" data-testid="mt-my-products">
-      <div className="flex items-center">
-        <span className="text-[15px] font-bold text-black/85">我的商品</span>
-        <span className="ml-1.5 rounded-full bg-[#FFF3DC] px-1.5 py-px text-[10px] font-medium text-[#B77900]">创建订单=创建商品</span>
-        <button type="button" data-testid="mt-my-products-manage" onClick={() => setManage((v) => !v)} className="ml-auto text-[12px] text-black/45 active:opacity-60">
-          {manage ? '完成' : '管理'}
-        </button>
-      </div>
-      <div className="mt-2.5 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {shops.map((m) => {
-          const d = m.sections[0]?.dishes[0];
-          if (!d) return null;
-          return (
-            <div key={m.id} className="w-[108px] shrink-0">
-              <button
-                type="button"
-                data-testid={`mt-my-product-${d.name}`}
-                onClick={() => (manage ? remove(m) : onOpenMerchant(m.id))}
-                className="block w-full text-left active:opacity-80"
-              >
-                <span className="relative block h-[108px] w-full overflow-hidden rounded-xl bg-[#F5F6F7]">
-                  {d.img ? (
-                    <img src={d.img} alt={d.name} className="h-full w-full object-cover" />
-                  ) : (
-                    <span className="grid h-full w-full place-items-center text-[34px]" aria-hidden="true">{d.emoji}</span>
-                  )}
-                  {d.custom?.type ? (
-                    <span className="absolute left-0 top-0 rounded-br-lg bg-[#FFD100] px-1.5 py-0.5 text-[10px] font-bold leading-[13px] text-black/80">{d.custom.type}</span>
-                  ) : null}
-                  {manage ? <span className="absolute inset-0 grid place-items-center bg-black/35 text-[12px] font-medium text-white">删除</span> : null}
-                </span>
-                <span className="mt-1 block truncate text-[12.5px] leading-[17px] text-black/85">{d.name}</span>
-                <span className="mt-0.5 flex items-baseline gap-1">
-                  <span className="shrink-0 text-[14px] font-bold text-[#FF4B33]">
-                    <span className="text-[10px]">¥</span>
-                    {d.price % 1 === 0 ? d.price : d.price.toFixed(2)}
-                  </span>
-                  {d.coupon ? <span className="truncate rounded bg-[#FFF0F0] px-1 text-[9.5px] leading-[14px] text-[#FF4B33]">券·减{d.coupon.amount % 1 === 0 ? d.coupon.amount : d.coupon.amount.toFixed(2)}</span> : null}
-                </span>
-                <span className="mt-0.5 block truncate text-[10.5px] text-black/35">{m.name}</span>
-              </button>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
+// ================================ 首页（第三十七轮：自建商品混入瀑布流置顶，不再单独分区） ================================
 
 function HomePage({
   session,
@@ -1166,6 +1113,27 @@ function HomePage({
   const apiConfig = useSettings((s) => s.apiConfig);
   const apiCfgRef = useRef(apiConfig);
   apiCfgRef.current = apiConfig;
+  // 自建商品变化令牌（第三十七轮：创建/删除商品后置顶区即时重算）
+  const [customTick, setCustomTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setCustomTick((t) => t + 1);
+    window.addEventListener('mt-custom-products-changed', bump);
+    return () => window.removeEventListener('mt-custom-products-changed', bump);
+  }, []);
+  // 自建商品商家（创建订单=创建商品）：与普通商家混排且永远置顶——刷新/切分类/上滑追加全部排在它后面；
+  // 渲染层前置（不在 setFeed 时拼接），缓存恢复/任何刷新路径自动生效
+  const customFeed = useMemo<FeedItem[]>(() => {
+    void customTick;
+    mtRegisterCustomMerchants(mtLoadCustomShops(uid)); // 幂等恢复（进页/创建后均可安全重入）
+    return mtCustomMerchantsAll().map((m) => ({ t: 'm' as const, m }));
+  }, [uid, customTick]);
+  // 自建商品删除（第三十七轮：置顶商家卡右上角×）
+  const removeCustomShop = (m: MtMerchant) => {
+    mtSaveCustomShops(uid, mtLoadCustomShops(uid).filter((x) => x.id !== m.id));
+    mtUnregisterCustomMerchant(m.id);
+    window.dispatchEvent(new CustomEvent('mt-custom-products-changed'));
+    onToast('商品已删除');
+  };
   const genSeqRef = useRef(0); // 竞态丢弃：刷新/切分类期间旧响应作废
   const generatingRef = useRef(!homeFeedCache.ready);
   const loadingRef = useRef(false);
@@ -1257,7 +1225,11 @@ function HomePage({
     const seq = ++genSeqRef.current;
     const f = filterRef.current;
     const myShops = mtLoadShops(uid).filter((s) => s.mine && s.mtStatus !== 'closed' && (f === null || s.cats.includes(f)));
-    const exclude = [...feedRef.current.map(feedName).filter(Boolean).slice(0, 80), ...myShops.map((s) => s.name)];
+    const exclude = [
+      ...feedRef.current.map(feedName).filter(Boolean).slice(0, 80),
+      ...myShops.map((s) => s.name),
+      ...mtCustomMerchantsAll().map((m) => m.name), // 自建商品店名进排除名单：AI 不生成同名
+    ];
     const keepY = scrollRef.current?.scrollTop ?? 0; // 刷新前的浏览位置：新内容渲染后回到这里（不强制回顶部）
     generatingRef.current = true;
     loadingRef.current = false;
@@ -1468,9 +1440,6 @@ function HomePage({
         </div>
       </div>
 
-      {/* 我的商品（创建订单=创建商品：自建商品展示区，点商品进商家页下单） */}
-      <MyProductsSection uid={uid} onOpenMerchant={onOpenMerchant} onToast={onToast} />
-
       {/* 生成中 / 下拉刷新提示（分类宫格图标下方） */}
       <div
         className="grid place-items-center overflow-hidden transition-[height] duration-150"
@@ -1506,6 +1475,12 @@ function HomePage({
       ) : (
         <>
           <div className="mt-2 columns-2 gap-2 px-2">
+            {/* 自建商品商家（第三十七轮）：永远置顶——与普通商家同卡混排，右上角×删除 */}
+            {customFeed.map((it, i) =>
+              it.t === 'm' ? (
+                <MerchantCard key={`c-${it.m.id}-${i}`} m={it.m} onOpen={() => onOpenMerchant(it.m.id)} onDelete={() => removeCustomShop(it.m)} />
+              ) : null
+            )}
             {filter === null && <DealListCard title={listData.title ?? MT_HOME_LIST.title} deals={listData.deals} onOpen={onOpenDeal} />}
             {feed.map((it, i) =>
               it.t === 'deal' ? (
@@ -1515,7 +1490,7 @@ function HomePage({
               ) : null
             )}
           </div>
-          {feed.length === 0 ? (
+          {feed.length === 0 && customFeed.length === 0 ? (
             <p className="mx-3 mt-6 rounded-2xl bg-white p-8 text-center text-[13px] text-black/40">该分类下暂无商家</p>
           ) : (
             <p className="py-3 text-center text-[12px] text-black/35">
@@ -1813,6 +1788,25 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
       setAvatarGenBusy(false);
     }
   };
+  // 商品图生成（第三十七轮：规格弹窗菜品图可点击 → 选模型+可编辑提示词生成，自建+原有通用）
+  const [dishGen, setDishGen] = useState<MtDish | null>(null);
+  const [dishGenBusy, setDishGenBusy] = useState(false);
+  const [dishGenErr, setDishGenErr] = useState('');
+  const genDishImg = async (prompt: string, cfg: ImgGenConfig & { mode?: 'proxy' | 'direct' }) => {
+    if (!dishGen) return;
+    setDishGenBusy(true);
+    setDishGenErr('');
+    try {
+      const src = await generateFreePhoto(cfg, prompt);
+      mtSetProductImg(dishGen.id, src);
+      setDishGen(null);
+      onToast('商品图片已生成');
+    } catch (e) {
+      setDishGenErr(e instanceof Error ? e.message : '生成失败，请重试');
+    } finally {
+      setDishGenBusy(false);
+    }
+  };
   const catRefs = useRef<(HTMLDivElement | null)[]>([]);
   useOrdersTick();
   const shopOrders = uid ? mtLoadOrders(uid).filter((o) => o.merchantId === merchant.id) : [];
@@ -2054,7 +2048,15 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
                 {s.dishes.map((d) => (
                   <div key={d.id} className={`flex gap-2.5 py-2 ${d.soldOut ? 'opacity-55' : ''}`}>
                     <span className="relative shrink-0">
-                      <FoodImg src={d.img} emoji={d.emoji} cap={d.name} className="h-[72px] w-[72px] rounded-lg" />
+                      <button
+                        type="button"
+                        aria-label="点击生成商品图片"
+                        data-testid={`mt-dish-imggen-${d.name}`}
+                        onClick={() => setDishGen(d)}
+                        className="block active:opacity-85"
+                      >
+                        <FoodImg src={d.img} emoji={d.emoji} cap={d.name} className="h-[72px] w-[72px] rounded-lg" />
+                      </button>
                       <button
                         type="button"
                         aria-label="收藏菜品"
@@ -2319,7 +2321,7 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
         </div>
       )}
 
-      {/* 规格/小料选择弹窗（奶茶小料/食物配菜） */}
+      {/* 规格/小料选择弹窗（奶茶小料/食物配菜；第三十七轮：菜品图可点生成） */}
       <AnimatePresence>
         {specDish && (
           <DishSpecSheet
@@ -2327,6 +2329,7 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
             dish={specDish}
             onClose={() => setSpecDish(null)}
             onConfirm={({ qty, spec, unitPrice }) => addWithSpec(specDish, qty, spec, unitPrice)}
+            onGenDish={(d) => setDishGen(d)}
           />
         )}
       </AnimatePresence>
@@ -2342,6 +2345,18 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
         submitLabel="生成头像"
         onSubmit={(p, cfg) => void genShopAvatar(p, cfg)}
         onClose={() => (avatarGenBusy ? undefined : setAvatarGenOpen(false))}
+      />
+
+      {/* 商品图生成弹层（第三十七轮：点菜品详情图 → 选模型 + 可编辑提示词） */}
+      <OrderImgGenSheet
+        open={!!dishGen}
+        title="生成商品图片"
+        initialPrompt={dishGen ? `${dishGen.name}，真实感商品照片，明亮色泽，特写构图` : ''}
+        busy={dishGenBusy}
+        error={dishGenErr}
+        accent="#FF6000"
+        onSubmit={(p, cfg) => void genDishImg(p, cfg)}
+        onClose={() => (dishGenBusy ? undefined : setDishGen(null))}
       />
     </div>
   );
@@ -5670,10 +5685,13 @@ function DishSpecSheet({
   dish,
   onClose,
   onConfirm,
+  onGenDish,
 }: {
   dish: MtDish;
   onClose: () => void;
   onConfirm: (payload: { qty: number; spec: string; unitPrice: number }) => void;
+  /** 第三十七轮：点菜品详情图 → 打开图片生成弹层（自建+原有商品通用） */
+  onGenDish?: (dish: MtDish) => void;
 }) {
   const specs = dish.specs ?? [];
   // 初始选中：单选组默认第一项；多选组默认空
@@ -5732,9 +5750,25 @@ function DishSpecSheet({
         transition={{ type: 'tween', ease: [0.32, 0.72, 0, 1], duration: 0.3 }}
       >
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 pt-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {/* 头部：图 + 标题 + 关闭 */}
+          {/* 头部：图（第三十七轮：点图可生成） + 标题 + 关闭 */}
           <div className="flex items-start gap-3">
-            <FoodImg src={dish.img} emoji={dish.emoji} cap={dish.name} className="h-[88px] w-[88px] shrink-0 rounded-xl" />
+            {onGenDish ? (
+              <button
+                type="button"
+                aria-label="点击生成商品图片"
+                data-testid="mt-dish-imggen"
+                onClick={() => onGenDish(dish)}
+                className="relative shrink-0 active:opacity-85"
+              >
+                <FoodImg src={dish.img} emoji={dish.emoji} cap={dish.name} className="h-[88px] w-[88px] rounded-xl" />
+                <span className="absolute bottom-1 left-1 flex items-center gap-0.5 rounded-full bg-black/45 px-1.5 py-0.5 text-[9px] leading-none text-white">
+                  <Wand2 className="h-2.5 w-2.5" strokeWidth={2} />
+                  生成
+                </span>
+              </button>
+            ) : (
+              <FoodImg src={dish.img} emoji={dish.emoji} cap={dish.name} className="h-[88px] w-[88px] shrink-0 rounded-xl" />
+            )}
             <p className="min-w-0 flex-1 pt-1 text-[17px] font-bold leading-snug text-black/90">{dish.name}</p>
             <button type="button" aria-label="关闭" onClick={onClose} className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-black/[0.05] active:bg-black/10">
               <X className="h-4 w-4 text-black/60" />
@@ -12225,8 +12259,12 @@ export default function MeituanApp() {
       setBooting(false);
       // 商家入驻：登录态恢复后把本账号自有店铺重新注册进运行时注册表（详情页/搜索/AI 代点即时可用）
       if (v) mtRegisterMyMerchants(mtLoadShops(mtUidOf(v)));
-      // 自建商品（创建订单=创建商品）：登录态恢复后同步恢复注册（首页「我的商品」/商家页/下单链路即时可用）
-      if (v) mtRegisterCustomMerchants(mtLoadCustomShops(mtUidOf(v)));
+      // 自建商品（创建订单=创建商品）：登录态恢复后同步恢复注册（首页商品流置顶 / 商家页 / 下单链路即时可用）
+      if (v) {
+        mtRegisterCustomMerchants(mtLoadCustomShops(mtUidOf(v)));
+        // 商品图生成覆盖（第三十七轮）：详情界面点图生成的结果写回内存菜品对象
+        mtApplyProductImgOverrides();
+      }
       const nav = takeNotifyNavigation('meituan');
       if (nav?.contactId && v) {
         // AI 代点草稿「确认下单」带 pay=true：目标订单仍待支付时直达收银台，否则进订单详情
@@ -12294,6 +12332,7 @@ export default function MeituanApp() {
     setPage('main');
     mtRegisterMyMerchants(mtLoadShops(mtUidOf(s)));
     mtRegisterCustomMerchants(mtLoadCustomShops(mtUidOf(s)));
+    mtApplyProductImgOverrides();
     showToast(`欢迎回来，${s.name}`);
   }, [showToast]);
 
