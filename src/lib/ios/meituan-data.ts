@@ -1504,6 +1504,45 @@ export function mtCustomMerchantsAll(): MtMerchant[] {
   return [...AI_MERCHANTS.values()].filter((m) => m.id.startsWith('mtc-shop-'));
 }
 
+// ---------------- 店铺头像/背景（第三十七轮：所有店铺统一品牌） ----------------
+// 头像 = 「该用户正在营业」印章图，背景 = 「欢迎光临」手绘图——预置/AI 生成/自建店铺全部生效；
+// 商品详情(商家页)里点头像可用「设置 › 图像生成」的模型生成新头像（覆盖存储，全局 kv）。
+
+export const MT_SHOP_AVATAR = '/shop-avatar.png';
+export const MT_SHOP_BG = '/shop-bg.png';
+
+const SHOP_AVATAR_KEY = 'mt-shop-avatars';
+let shopAvatarCache: Record<string, string> | null = null;
+
+function shopAvatarMap(): Record<string, string> {
+  if (!shopAvatarCache) {
+    try {
+      const v = kvGet(SHOP_AVATAR_KEY) as Record<string, string> | null;
+      shopAvatarCache = v && typeof v === 'object' ? v : {};
+    } catch {
+      shopAvatarCache = {};
+    }
+  }
+  return shopAvatarCache;
+}
+
+/** 店铺头像（生成覆盖优先，缺省统一「正在营业」印章） */
+export function mtShopAvatarOf(merchantId: string): string {
+  return shopAvatarMap()[merchantId] ?? MT_SHOP_AVATAR;
+}
+
+/** 写店铺头像覆盖（商家页点头像生成后调用；运行时缓存 + kv 持久化） */
+export function mtSetShopAvatar(merchantId: string, src: string): void {
+  const map = shopAvatarMap();
+  map[merchantId] = src;
+  shopAvatarCache = map;
+  try {
+    kvSet(SHOP_AVATAR_KEY, map);
+  } catch {
+    /* 存储不可用忽略 */
+  }
+}
+
 /** 按 id 查商家（AI 生成优先，种子数据兜底） */
 export function mtMerchantOf(id: string): MtMerchant | undefined {
   return AI_MERCHANTS.get(id) ?? MT_MERCHANTS.find((m) => m.id === id);

@@ -6,6 +6,7 @@
  */
 
 import { tbGoodsImg } from '@/lib/ios/goods-img';
+import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import type { OrderCustomMeta } from '@/lib/ios/order-custom';
 
 /** 内容匹配图地址（本地卡通图，Task 58）：k=品类词 w/h=尺寸 s=变体 p=f 商品图 / c 门头图（参数保留兼容） */
@@ -488,6 +489,45 @@ export function tbUnregisterCustomProduct(id: string): void {
 /** 全部自建商品 + 店铺（首页「我的商品」区展示 / 持久化回写用） */
 export function tbCustomProductsAll(): { p: TbProduct; shop: TbShop }[] {
   return [...CUSTOM_PRODUCTS.values()].map((p) => ({ p, shop: CUSTOM_SHOPS.get(p.shopId) ?? shopById(p.shopId) }));
+}
+
+// ---------------- 店铺头像/背景（第三十七轮：所有店铺统一品牌） ----------------
+// 头像 = 「该用户正在营业」印章图，背景 = 「欢迎光临」手绘图——预置/AI 生成/自建店铺全部生效；
+// 商品详情页里点头像可用「设置 › 图像生成」的模型生成新头像（覆盖存储，全局 kv）。
+
+export const TB_SHOP_AVATAR = '/shop-avatar.png';
+export const TB_SHOP_BG = '/shop-bg.png';
+
+const SHOP_AVATAR_KEY = 'tb-shop-avatars';
+let shopAvatarCache: Record<string, string> | null = null;
+
+function shopAvatarMap(): Record<string, string> {
+  if (!shopAvatarCache) {
+    try {
+      const v = kvGet(SHOP_AVATAR_KEY) as Record<string, string> | null;
+      shopAvatarCache = v && typeof v === 'object' ? v : {};
+    } catch {
+      shopAvatarCache = {};
+    }
+  }
+  return shopAvatarCache;
+}
+
+/** 店铺头像（生成覆盖优先，缺省统一「正在营业」印章） */
+export function tbShopAvatarOf(shopId: string): string {
+  return shopAvatarMap()[shopId] ?? TB_SHOP_AVATAR;
+}
+
+/** 写店铺头像覆盖（商品详情页点头像生成后调用；运行时缓存 + kv 持久化） */
+export function tbSetShopAvatar(shopId: string, src: string): void {
+  const map = shopAvatarMap();
+  map[shopId] = src;
+  shopAvatarCache = map;
+  try {
+    kvSet(SHOP_AVATAR_KEY, map);
+  } catch {
+    /* 存储不可用忽略 */
+  }
 }
 
 /** 搜索池（自建商品 + AI 动态注册 + 种子），搜索/猜你喜欢可用 */

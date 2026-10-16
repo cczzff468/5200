@@ -109,7 +109,6 @@ import {
   Undo2,
   Users,
   Utensils,
-  Wand2,
   Wallet,
   X,
   Zap,
@@ -132,6 +131,7 @@ import {
   MT_HOME_GRID,
   MT_HOME_LIST,
   MT_MERCHANTS,
+  MT_SHOP_BG,
   mtAllMerchants,
   mtCustomMerchantsAll,
   mtDealOf,
@@ -144,6 +144,8 @@ import {
   mtRegisterCustomMerchants,
   mtRegisterMyMerchants,
   mtRestoreAiRegistry,
+  mtSetShopAvatar,
+  mtShopAvatarOf,
   mtUnregisterCustomMerchant,
   mtUnregisterMyMerchants,
   type MtDeal,
@@ -816,10 +818,15 @@ function DealListCard({ title, deals, onOpen }: { title: string; deals: MtDeal[]
 }
 
 /** 外卖商家卡（瀑布流） */
+/** 店铺头像（第三十七轮：所有店铺统一「该用户正在营业」印章；生成覆盖后显示生成图） */
+function ShopAvatar({ m, className = '' }: { m: MtMerchant; className?: string }) {
+  return <FoodImg src={mtShopAvatarOf(m.id)} emoji={m.emoji} className={className} />;
+}
+
 function MerchantCard({ m, onOpen }: { m: MtMerchant; onOpen: () => void }) {
   return (
     <button type="button" onClick={onOpen} className="relative mb-2 block w-full break-inside-avoid overflow-hidden rounded-xl bg-white text-left shadow-[0_1px_6px_rgba(0,0,0,0.04)] active:opacity-90">
-      <FoodImg src={m.cover} emoji={m.emoji} className="h-[120px] w-full" />
+      <ShopAvatar m={m} className="h-[120px] w-full" />
       {m.mine && (
         <span className="absolute left-2 top-2 rounded-md bg-[#FFD100] px-1.5 py-0.5 text-[10px] font-bold text-black/85 shadow-sm" data-testid="merchant-mine-badge">
           我的小店
@@ -1744,7 +1751,7 @@ const SEARCH_TOP = ['奶茶', '麻辣烫', '汉堡', '火锅', '水果', '比萨
 function SearchMerchantRow({ m, onOpen }: { m: MtMerchant; onOpen: () => void }) {
   return (
     <button type="button" onClick={onOpen} className="flex w-full gap-3 p-3 text-left active:bg-black/[0.02]">
-      <FoodImg src={m.cover} emoji={m.emoji} className="h-[76px] w-[76px] shrink-0 rounded-xl" />
+      <ShopAvatar m={m} className="h-[76px] w-[76px] shrink-0 rounded-xl" />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[15px] font-semibold text-black/85">{m.name}</span>
         <span className="mt-1 flex items-center gap-1.5 text-[12px]">
@@ -1786,6 +1793,26 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
   const [cartOpen, setCartOpen] = useState(false);
   const [activeCat, setActiveCat] = useState(0);
   const [specDish, setSpecDish] = useState<MtDish | null>(null); // 规格/小料选择弹窗
+  // 店铺头像生成弹层（第三十七轮：点头像 → 选模型+自定义提示词生成新头像，覆盖存储）
+  const [avatarGenOpen, setAvatarGenOpen] = useState(false);
+  const [avatarGenBusy, setAvatarGenBusy] = useState(false);
+  const [avatarGenErr, setAvatarGenErr] = useState('');
+  const [avatarTick, setAvatarTick] = useState(0);
+  const genShopAvatar = async (prompt: string, cfg: ImgGenConfig & { mode?: 'proxy' | 'direct' }) => {
+    setAvatarGenBusy(true);
+    setAvatarGenErr('');
+    try {
+      const src = await generateFreePhoto(cfg, prompt);
+      mtSetShopAvatar(merchant.id, src);
+      setAvatarGenOpen(false);
+      setAvatarTick((t) => t + 1);
+      onToast('店铺头像已生成');
+    } catch (e) {
+      setAvatarGenErr(e instanceof Error ? e.message : '生成失败，请重试');
+    } finally {
+      setAvatarGenBusy(false);
+    }
+  };
   const catRefs = useRef<(HTMLDivElement | null)[]>([]);
   useOrdersTick();
   const shopOrders = uid ? mtLoadOrders(uid).filter((o) => o.merchantId === merchant.id) : [];
@@ -1895,9 +1922,9 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
 
   return (
     <div className="flex h-full flex-col bg-[#F4F5F7]">
-      {/* 头图 + 悬浮搜索条（对齐团购详情页头；头图内底部叠店名贴片） */}
+      {/* 头图（店铺背景：欢迎光临手绘图，所有店铺统一）+ 悬浮搜索条 */}
       <div className="relative h-[128px] shrink-0">
-        <FoodImg src={merchant.cover} emoji={merchant.emoji} cap={merchant.name} className="h-full w-full" />
+        <FoodImg src={MT_SHOP_BG} emoji={merchant.emoji} cap={merchant.name} className="h-full w-full" />
         <div className="absolute inset-x-0 top-0 flex items-center gap-2 px-3 pt-[54px]">
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/35 text-white active:opacity-75">
             <ChevronLeft className="h-5 w-5" />
@@ -1928,9 +1955,19 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
       {/* 商家信息（白底直排无面板） */}
       <div className="relative z-10 -mt-6 border-y border-black/[0.05] bg-white px-4 py-3.5">
           <div className="flex gap-3">
-            <span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl">
-              <FoodImg src={merchant.cover} emoji={merchant.emoji} className="h-full w-full" />
-            </span>
+            {/* 店铺头像（所有店铺统一「正在营业」印章；点击生成自定义头像） */}
+            <button
+              type="button"
+              aria-label="点击生成店铺头像"
+              data-testid="mt-shop-avatar"
+              onClick={(e) => {
+                e.stopPropagation();
+                setAvatarGenOpen(true);
+              }}
+              className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl active:opacity-80"
+            >
+              <ShopAvatar key={avatarTick} m={merchant} className="h-full w-full" />
+            </button>
             <div className="min-w-0 flex-1">
               <p className="truncate text-[17px] font-bold text-black/85">{merchant.name}</p>
               <p className="mt-0.5 flex items-center gap-1.5 text-[12px] text-black/50">
@@ -2293,6 +2330,19 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
           />
         )}
       </AnimatePresence>
+
+      {/* 店铺头像生成弹层（点头像 → 选模型+自定义提示词） */}
+      <OrderImgGenSheet
+        open={avatarGenOpen}
+        title="生成店铺头像"
+        initialPrompt={`${merchant.name} 店铺头像，可爱手绘印章风格，简洁背景`}
+        busy={avatarGenBusy}
+        error={avatarGenErr}
+        accent="#FF6000"
+        submitLabel="生成头像"
+        onSubmit={(p, cfg) => void genShopAvatar(p, cfg)}
+        onClose={() => (avatarGenBusy ? undefined : setAvatarGenOpen(false))}
+      />
     </div>
   );
 }
@@ -3456,7 +3506,7 @@ function CheckoutSheet({
               <div className="border-t border-black/5 px-4 py-3.5">
                 <div className="flex items-center gap-2 text-[14px] font-semibold text-black/80">
                   <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-md">
-                    <FoodImg src={merchant.cover} emoji={merchant.emoji} className="h-full w-full" />
+                    <ShopAvatar m={merchant} className="h-full w-full" />
                   </span>
                   {merchant.name}
                 </div>
@@ -4103,10 +4153,6 @@ function OrderDetailPage({
   const [sharePlat, setSharePlat] = useState<'wx' | 'qq' | null>(null);
   const [shareContact, setShareContact] = useState<string | null>(null);
   const [shareSending, setShareSending] = useState(false);
-  // 商品图点击重生成（创建订单/已有订单通用：选生图模型+可改提示词，生成后真实写回订单）
-  const [imgGenIdx, setImgGenIdx] = useState<number | null>(null);
-  const [imgGenBusy, setImgGenBusy] = useState(false);
-  const [imgGenErr, setImgGenErr] = useState('');
   const order = mtGetOrder(uid, orderId);
   if (!order) {
     return (
@@ -4192,30 +4238,6 @@ function OrderDetailPage({
       }
     }
     onOpenMerchant(order.merchantId);
-  };
-
-  /** 商品图重生成：选模型+可改提示词 → 生成成功真实写回该订单项并落库刷新 */
-  const genItemImg = async (idx: number, prompt: string, cfg: ImgGenConfig & { mode?: 'proxy' | 'direct' }) => {
-    setImgGenBusy(true);
-    setImgGenErr('');
-    try {
-      const src = await generateFreePhoto(cfg, prompt);
-      const list = mtLoadOrders(uid);
-      const target = list.find((x) => x.id === orderId);
-      if (target && target.items[idx]) {
-        target.items[idx] = { ...target.items[idx], img: src };
-        mtSaveOrders(uid, list);
-        window.dispatchEvent(new CustomEvent('mt-orders-changed'));
-        setImgGenIdx(null);
-        onToast('图片已生成并更新到订单');
-      } else {
-        setImgGenErr('订单数据已变化，请关闭后重试');
-      }
-    } catch (e) {
-      setImgGenErr(e instanceof Error ? e.message : '生成失败，请重试');
-    } finally {
-      setImgGenBusy(false);
-    }
   };
 
   /** 发送订单分享：动态卡片进好友聊天（买的什么/金额/五段状态/骑手名实时同步） */
@@ -4671,28 +4693,15 @@ function OrderDetailPage({
             </button>
           </div>
           <div className="mt-2.5 space-y-2">
-            {order.items.map((i, itemIdx) => (
+            {order.items.map((i) => (
               <div key={`${i.dishId}-${i.spec ?? ''}`} className="flex items-center gap-2.5">
-                {/* 图片可点：选生图模型+改提示词重新生成（自建/既有订单通用） */}
-                <button
-                  type="button"
-                  aria-label="点击重新生成图片"
-                  data-testid={`mt-item-img-${itemIdx}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setImgGenIdx(itemIdx);
-                  }}
-                  className="relative h-11 w-11 shrink-0 overflow-hidden rounded-lg active:opacity-80"
-                >
+                <span className="h-11 w-11 shrink-0 overflow-hidden rounded-lg">
                   {i.img ? (
                     <FoodImg src={i.img} emoji={i.emoji} className="h-full w-full" />
                   ) : (
                     <span className="grid h-full w-full place-items-center bg-[#F5F6F7] text-[16px]">{i.emoji}</span>
                   )}
-                  <span className="absolute inset-0 grid place-items-center bg-black/25 opacity-0 transition-opacity hover:opacity-100">
-                    <Wand2 className="h-4 w-4 text-white" strokeWidth={2.2} />
-                  </span>
-                </button>
+                </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[13px] text-black/75">{stripDealQty(i.name)}</span>
                   {i.spec && <span className="block truncate text-[11px] text-black/40">{stripDealQty(i.spec)}</span>}
@@ -4922,20 +4931,6 @@ function OrderDetailPage({
           />
         )}
       </AnimatePresence>
-
-      {/* 商品图重生成弹层（选生图模型 + 可改提示词；生成成功真实写回订单） */}
-      {imgGenIdx !== null && order.items[imgGenIdx] && (
-        <OrderImgGenSheet
-          open
-          title="重新生成商品图片"
-          initialPrompt={`${order.items[imgGenIdx].name}${order.items[imgGenIdx].spec ? `（${stripDealQty(order.items[imgGenIdx].spec)}）` : ''} 真实商品图，明亮光线`}
-          busy={imgGenBusy}
-          error={imgGenErr}
-          accent="#FF6000"
-          onSubmit={(p, cfg) => void genItemImg(imgGenIdx, p, cfg)}
-          onClose={() => (imgGenBusy ? undefined : setImgGenIdx(null))}
-        />
-      )}
     </div>
   );
 }
@@ -5061,7 +5056,7 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
             <div className="mt-2 rounded-xl bg-[#F7F8FA] p-3">
               <div className="flex items-center gap-2.5">
                 <span className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-lg bg-white shadow-sm">
-                  <FoodImg src={merchant.cover} emoji={merchant.emoji} className="h-full w-full" />
+                  <ShopAvatar m={merchant} className="h-full w-full" />
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="flex items-center gap-1 truncate text-[15px] font-bold text-black/85">
@@ -6486,7 +6481,7 @@ function CartPage({
             <div className="border-t-[7px] border-[#F5F6F7] px-4 py-3.5">
               <button type="button" onClick={() => onOpenMerchant(merchant.id)} className="flex w-full items-center gap-1.5 text-left active:opacity-70">
                 <span className="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-md">
-                  <FoodImg src={merchant.cover} emoji={merchant.emoji} className="h-full w-full" />
+                  <ShopAvatar m={merchant} className="h-full w-full" />
                 </span>
                 <span className="min-w-0 flex-1 truncate text-[15px] font-bold text-black/85">{merchant.name}</span>
               </button>
@@ -9679,7 +9674,7 @@ function FavoritesPage({
               {storeOnly.map((m) => (
                 <div key={m.id} className="flex items-start gap-3 border-b border-black/[0.04] p-3 last:border-b-0">
                   <button type="button" onClick={() => onOpenMerchant(m.id)} className="shrink-0 active:opacity-80">
-                    <FoodImg src={m.cover} emoji={m.emoji} className="h-[76px] w-[76px] rounded-xl" />
+                    <ShopAvatar m={m} className="h-[76px] w-[76px] rounded-xl" />
                   </button>
                   <button type="button" onClick={() => onOpenMerchant(m.id)} className="min-w-0 flex-1 text-left active:opacity-80">
                     <span className="flex items-center justify-between gap-2">
@@ -9732,7 +9727,7 @@ function FavoritesPage({
                 <div key={m.id} className="border-b border-black/[0.04] px-3.5 py-3 last:border-b-0">
                   <button type="button" onClick={() => onOpenMerchant(m.id)} className="flex w-full items-center gap-2 text-left active:opacity-70">
                     <span className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-lg">
-                      <FoodImg src={m.cover} emoji={m.emoji} className="h-full w-full" />
+                      <ShopAvatar m={m} className="h-full w-full" />
                     </span>
                     <span className="min-w-0 flex-1 truncate text-[16px] font-bold text-black/90">{m.name}</span>
                     <span className="shrink-0 text-[11px] text-black/35">
@@ -9966,7 +9961,7 @@ function HistoryPage({
                       return (
                         <div key={`${h.kind}-${h.id}`} className="flex items-start gap-3 border-b border-black/[0.04] p-3 last:border-b-0">
                           <button type="button" onClick={() => onOpenMerchant(m.id)} className="shrink-0 active:opacity-80">
-                            <FoodImg src={m.cover} emoji={m.emoji} className="h-[76px] w-[76px] rounded-xl" />
+                            <ShopAvatar m={m} className="h-[76px] w-[76px] rounded-xl" />
                           </button>
                           <button type="button" onClick={() => onOpenMerchant(m.id)} className="min-w-0 flex-1 text-left active:opacity-80">
                             <span className="flex items-center justify-between gap-2">
