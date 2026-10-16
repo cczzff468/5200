@@ -37,6 +37,7 @@ function cut(s: string | undefined | null, max: number): string {
 export interface CoupleLetterCardData {
   letterId: string; // 恋人空间里的信 id（我的信在 letters / TA 的信在 aiLetters）
   envelope: string; // 信封样式 key（点击卡片进详情按此渲染）
+  envText?: string; // 信封收信字样（第二十九轮可自定义；缺省 = 默认「致 最爱的你」）
   snippet: string; // 信开头摘要（卡片展示前几行）
   from: 'me' | 'ta'; // 谁寄的（我寄给 TA / TA 寄给我）
   fromName: string;
@@ -133,6 +134,7 @@ export async function sendLetterCard(opts: {
   contactId: string;
   letterId: string;
   envelope?: string;
+  envText?: string; // 信封收信字样（第二十九轮：我的信可自定义）
   snippet: string;
   dir: 'me' | 'ta';
   replyToId?: string;
@@ -160,6 +162,7 @@ export async function sendLetterCard(opts: {
   const data: CoupleLetterCardData = {
     letterId,
     envelope: opts.envelope ?? 'pinkbunny',
+    envText: opts.envText?.trim() || undefined,
     snippet: cut(snippet, 46),
     from: dir,
     fromName: dir === 'me' ? meName : taName,

@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { IOSNavBar, IOSScreen, IOSTextButton } from '@/components/ios/IOSNavBar';
 import { listAlbums, addAlbum, updateAlbum, deleteAlbum } from '@/lib/ios/album-store';
+import { describeAlbumEntry } from '@/lib/ios/album-vision';
 import type { AlbumRecord } from '@/lib/ios/db';
 
 export interface AlbumPageProps {
@@ -37,38 +38,51 @@ export interface AlbumPageProps {
   allowEdit?: boolean;
   /** 可选：选择模式回调——查看器底部「选这张」按钮，上层据此设头像/背景或挑图发送 */
   onPick?: (albumId: string) => void;
+  /** 可选：轻提示通道（上传失败/成功反馈用；第二十九轮：不再静默吞掉失败——
+   *  微信/QQ 侧传入各自的 showToast，之前「上传了没反应」的观感大多就是失败被吞） */
+  onToast?: (m: string) => void;
 }
 
 /** 读图片文件并 canvas 压缩到最大边 max px 的 JPEG data URL（quality 0.8）。
- *  album-store 的 src 字段是 data URL 字符串（不是 Blob），故与 photos.tsx 的 File 直存不同，这里需读+压缩+toDataURL。 */
+ *  album-store 的 src 字段是 data URL 字符串（不是 Blob），故与 photos.tsx 的 File 直存不同，这里需读+压缩+toDataURL。
+ *  第二十九轮修复「上传不了图片」：canvas 解码失败（HEIC/冷门格式/超大图）时回退存原始 dataURL
+ *  （能存多少存多少，不再一失败就整张丢弃）；只有连原始读取都失败/结果不是图片时才 reject。 */
 // NOTE: wechat.tsx:1255 也有同款 readImageFile（max=720），未来可抽到 src/lib/ios/image-compress.ts 共用
 function readImageFile(file: File, max = 1280): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
+      const raw = typeof reader.result === 'string' ? reader.result : '';
+      const viaRaw = () => {
+        // 兑底：原始 dataURL（GIF/HEIC 等）——至少要是图片数据才有保存价值
+        if (raw.startsWith('data:image/')) resolve(raw);
+        else reject(new Error('不支持的图片格式'));
+      };
       const img = new Image();
       img.onload = () => {
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('canvas 不可用'));
-          return;
-        }
-        // 白底填底，避免透明 PNG 转 JPEG 后变黑底（#118）
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         try {
-          resolve(canvas.toDataURL('image/jpeg', 0.8));
-        } catch (err) {
-          reject(err instanceof Error ? err : new Error('toDataURL 失败'));
+          const scale = Math.min(1, max / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            viaRaw();
+            return;
+          }
+          // 白底填底，避免透明 PNG 转 JPEG 后变黑底（#118）
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const out = canvas.toDataURL('image/jpeg', 0.8);
+          if (typeof out === 'string' && out.startsWith('data:image/') && out.length > 22) resolve(out);
+          else viaRaw();
+        } catch {
+          viaRaw();
         }
       };
-      img.onerror = () => reject(new Error('图片加载失败'));
-      img.src = reader.result as string;
+      img.onerror = () => viaRaw();
+      img.src = raw;
     };
     reader.onerror = () => reject(new Error('文件读取失败'));
     reader.readAsDataURL(file);
@@ -81,6 +95,7 @@ export default function AlbumPage({
   onClose,
   allowEdit = true,
   onPick,
+  onToast,
 }: AlbumPageProps) {
   const [items, setItems] = useState<AlbumRecord[] | null>(null);
   const [selectMode, setSelectMode] = useState(false);
@@ -107,21 +122,45 @@ export default function AlbumPage({
   // ---------------- 添加 ----------------
 
   const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
+    // 【第二十九轮根因修复】相册上传不了的真正原因：先捕获 e.target.files 引用再清 input.value，
+    // 而浏览器规范是 value='' 会「原地清空」该 FileList（实测 captured.length 1→0）——
+    // 于是 files.length === 0 恒成立，上传永远静默返回。修复：先用 Array.from 快照（照片 App
+    // 一直用的就是这个安全模式，所以照片 App 能传、相册不能），再做后续一切。
+    const files = Array.from(event.target.files ?? []);
     event.target.value = '';
-    if (!files || files.length === 0) return;
+    if (files.length === 0) return;
     setAdding(true);
+    let ok = 0;
+    let fail = 0;
+    const added: { id: string; src: string }[] = [];
     try {
       for (const f of Array.from(files)) {
-        if (!f.type.startsWith('image/')) continue;
+        // MIME 缺失（部分安卓/iOS 分享出来的文件 type 为空）不再直接丢弃：按扩展名兜底判断（第二十九轮）
+        const looksImage = f.type.startsWith('image/') || /\.(jpe?g|png|gif|webp|bmp|heic|heif)$/i.test(f.name);
+        if (!looksImage) {
+          fail += 1;
+          continue;
+        }
         try {
           const src = await readImageFile(f);
-          await addAlbum(contactId, src, { origin: 'user', name: f.name });
+          const rec = await addAlbum(contactId, src, { origin: 'user', name: f.name });
+          ok += 1;
+          if (rec) added.push({ id: rec.id, src });
         } catch {
-          // 单张失败不阻塞后续
+          // 单张失败不阻塞后续，但不再静默：计数后统一提示
+          fail += 1;
         }
       }
+      if (ok > 0 && fail > 0) onToast?.(`已添加 ${ok} 张，${fail} 张失败（可能是格式不支持）`);
+      else if (ok > 0) onToast?.(`已添加 ${ok} 张图片`);
+      else if (fail > 0) onToast?.('图片添加失败，可能是格式不支持');
       await reload();
+      // 自动识图描述（第二十九轮「让 AI 知道相册里的图片长什么样」）：
+      // 上传成功后逐张后台识图回写 desc（fire-and-forget；未配置识图模型自动用内置兑底），
+      // 之后 AI 的【相册清单】里就是真实内容简述，能据此主动分享/聊图
+      for (const a of added) {
+        void describeAlbumEntry(a.id, a.src);
+      }
     } finally {
       setAdding(false);
     }

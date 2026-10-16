@@ -252,6 +252,8 @@ import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, cle
 import { getQqProfileBg, loginAltSlot, loginQQ, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, createContact, setQqProfileBg, getChatBgImage, setChatBgImage, removeChatBgImage, updateContact, getPeerBg, setPeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
+import { ensureAlbumDescs } from '@/lib/ios/album-vision';
+import { buildAvatarBlock, ensureAvatarDesc, noteAvatarChanged } from '@/lib/ios/avatar-ai';
 // 生图（锁脸）：照片标签（[图片:描述]/[照片:描述]）提取/生成/规则构建（与微信端共用同一逻辑层，未配置/失败降级文字图片卡片）；
 // 手动「文字图片」为卡片版（autoCardText），不走生图
 // 【20-d】补充流式分段 carry-over 工具（splitUnfinishedPhotoTag/stripUnfinishedPhotoTag）：
@@ -262,7 +264,7 @@ import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card
 import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
 import type { AlbumRecord } from '@/lib/ios/db';
 import { genId } from '@/lib/ios/db';
-import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount, socialNameOf } from '@/lib/contacts';
+import { addressNameOf, avatarFor, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount, socialNameOf } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import {
   addFriendReq,
@@ -1454,14 +1456,16 @@ function addBondPoints(contactId: string, n: number): void {
 }
 
 /** 选择说说/背景图片：读文件 → 压缩到最长边 max 的 JPEG dataURL（避免 localStorage 超限，默认 1280，表情用 240）；
- *  GIF 动图直通原始 dataURL（canvas 重绘会丢帧变静态图） */
+ *  GIF 动图直通原始 dataURL（canvas 重绘会丢帧变静态图）。
+ *  第二十九轮修复「上传不了图片」：解码/压缩失败时回退原始 dataURL（不再静默返回空串/原图硬塞），
+ *  完全失败才 reject——上层 stageImageFiles 会 toast 提示，不再毫无反应 */
 function compressImageFile(file: File, max = 1280): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const raw = typeof reader.result === 'string' ? reader.result : '';
       if (!raw) {
-        resolve('');
+        reject(new Error('图片读取失败'));
         return;
       }
       // GIF 动图直通：不经 canvas（重绘会只保留第一帧）
@@ -1469,6 +1473,11 @@ function compressImageFile(file: File, max = 1280): Promise<string> {
         resolve(raw);
         return;
       }
+      const viaRaw = () => {
+        // 兑底：原始 dataURL——至少要是图片数据才有价值
+        if (raw.startsWith('data:image/')) resolve(raw);
+        else reject(new Error('不支持的图片格式'));
+      };
       const img = new window.Image();
       img.onload = () => {
         try {
@@ -1478,19 +1487,21 @@ function compressImageFile(file: File, max = 1280): Promise<string> {
           canvas.height = Math.max(1, Math.round(img.height * scale));
           const ctx = canvas.getContext('2d');
           if (!ctx) {
-            resolve(raw);
+            viaRaw();
             return;
           }
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', 0.82));
+          const out = canvas.toDataURL('image/jpeg', 0.82);
+          if (typeof out === 'string' && out.startsWith('data:image/') && out.length > 22) resolve(out);
+          else viaRaw();
         } catch {
-          resolve(raw);
+          viaRaw();
         }
       };
-      img.onerror = () => resolve(raw);
+      img.onerror = () => viaRaw();
       img.src = raw;
     };
-    reader.onerror = () => resolve('');
+    reader.onerror = () => reject(new Error('图片读取失败'));
     reader.readAsDataURL(file);
   });
 }
@@ -3360,6 +3371,11 @@ function ChatPage({
             overflow += 1;
             continue;
           }
+          // 空串/非图片数据不再入列（第二十九轮：发出破图不如不发）
+          if (!d.startsWith('data:image/')) {
+            onToast('图片发送失败');
+            continue;
+          }
           const item = { id: uid(), src: d };
           pendingImgsRef.current = [...pendingImgsRef.current, item];
           setPendingImgs(pendingImgsRef.current);
@@ -4488,6 +4504,28 @@ function ChatPage({
             t += 1;
             continue;
           }
+          // 第二十九轮「AI 主动换头像」：[生成新头像:外观描述] → 系统按人设锁脸生成新照片 →
+          // 设为 AI 的 QQ 头像 + 头像描述落库 + 决策日志；未配置生图时静默丢弃（教学规则只在配置完整时下发）
+          if (part.action.kind === 'gen-avatar') {
+            const genDesc = part.action.targetId.trim().slice(0, 60);
+            const genCfg = useSettings.getState().imgGenConfig;
+            if (genDesc && genCfg.enabled && imgGenConfigReady(genCfg)) {
+              out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」换了一个新头像` } });
+              t += 1;
+              void (async () => {
+                try {
+                  const r = await generateCharacterPhoto({ cfg: genCfg, contactId: peer.id, desc: genDesc, charName: peer.name, useRef: true });
+                  await updateContact(peer.id, { avatars: { qq: r.src } });
+                  void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'gen-avatar', targetId: '', imgSrc: r.src, reason: genDesc });
+                  noteAvatarChanged(peer.id, 'qq', r.src, 'peer', genDesc);
+                  refreshContacts();
+                } catch {
+                  /* 生图/写入失败不阻塞主流程 */
+                }
+              })();
+            }
+            continue;
+          }
           // 46-f：视觉自主决策动作——[换头像:图片消息ID] / [换朋友圈背景:图片消息ID] / [存相册:图片消息ID]
           // targetId 按 id 在 cur 里找对应图片消息（AI 必须从最近用户发来的图片消息里原样抄 ID）；
           // 空 targetId 兜底取当回合最后一条图片消息（连续多图时取最新的一张）。QQ 端图片 dataURL
@@ -4535,6 +4573,8 @@ function ChatPage({
               out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」换了头像` } });
               t += 1;
               void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'change-avatar', targetId: imgMsg.id, imgSrc: src });
+              // 第二十九轮：头像描述落库——AI 之后知道自己现在的头像长什么样
+              noteAvatarChanged(peer.id, 'qq', src, 'peer', imgMsg.img?.desc);
             } else if (part.action.kind === 'change-moments-bg') {
               void setPeerBg('qq', peer.id, src).catch(() => {});
               out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」更换了背景封面` } });
@@ -4569,6 +4609,8 @@ function ChatPage({
               out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」从相册选了张图换头像` } });
               t += 1;
               void addVisionDecision({ contactId: peer.id, app: 'qq', action: 'pick-album-avatar', targetId: album.id, imgSrc: src });
+              // 第二十九轮：头像描述落库（相册图自带 desc 则直接用，无描述异步识图补）
+              noteAvatarChanged(peer.id, 'qq', src, 'peer', album.desc);
             } else if (part.action.kind === 'pick-album-bg') {
               void setPeerBg('qq', peer.id, src).catch(() => {});
               out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」从相册选了张图换背景` } });
@@ -4985,6 +5027,15 @@ function ChatPage({
     try {
       const albumList = await listAlbums(peer.id);
       albumCacheRef.current = albumList;
+      // 第二十九轮：懒补缺失的图片描述（每轮最多 2 张，fire-and-forget）——
+      // desc 是【相册清单】与「AI 主动分享相册照片」的依据，补齐后下一轮 AI 就知道每张图长什么样
+      if (albumList.some((a) => !a.desc)) {
+        void ensureAlbumDescs(peer.id, 2)
+          .then(async (patched) => {
+            if (patched > 0) albumCacheRef.current = await listAlbums(peer.id).catch(() => albumCacheRef.current);
+          })
+          .catch(() => {});
+      }
       if (albumList.length > 0) {
         // 47-c #112：取最近 20 张（末尾 20 条），而非最早的 20 张——AI 看到的是相册新增的最新内容
         albumSummary = albumList.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }));
@@ -4992,10 +5043,16 @@ function ChatPage({
     } catch {
       // 读相册失败不阻塞聊天主流程，仅放弃本回合的【选图操作】规则
     }
+    // 第二十九轮「头像感知」：AI 头像描述懒补（换过头像但识图还没成功时补一次；fire-and-forget）
+    const peerAvatarSrc = avatarFor(peer, 'qq');
+    if (peerAvatarSrc) ensureAvatarDesc(peer.id, 'qq', peerAvatarSrc, 'peer');
     // 【fix3-d-6】传 app='qq'：视觉规则里的「换朋友圈背景」文案按端区分（QQ 端说明改的是 QQ 资料页封面）
-    // 100-e 按需注入：本会话消息列表（base 已含本轮新消息）里从未出现过图片消息时不注入视觉规则——
-    // 从不发图的会话不占 token；出现过 ≥1 条图片消息才下发（与微信同口径）
-    const visionRules = base.some((m) => m.kind === 'image') ? buildVisionRules(albumSummary, 'qq') : [];
+    // 100-e 按需注入：会话出现过图片消息，或相册非空（第二十九轮：相册里有图就注入——
+    // AI 才能主动从相册选图分享给用户，不再要求用户先发过图）
+    const visionRules =
+      base.some((m) => m.kind === 'image') || (albumSummary !== null && albumSummary.length > 0)
+        ? buildVisionRules(albumSummary, 'qq')
+        : [];
     // 发图片能力常开：注入照片标签规则（配置完整时发真图；未配置/生成失败自动降级为文字图片卡片，AI 无需关心）
     const photoRule = buildPhotoTagRule(peer.name);
     // AI 发说说能力（用户要求「发条说说」或自主想分享时真发）：[发说说:正文] 标记 →
@@ -5019,6 +5076,9 @@ function ChatPage({
       momentsBlock,
       coupleBlock,
       locBlock,
+      // 第二十九轮「头像感知」：AI 知道自己头像长什么样、用户头像长什么样/什么时候换的；
+      // 用户换头像时 AI 会像真人一样自然注意到
+      buildAvatarBlock(peer.id, me.id, meAddrName),
       [...actionRules, ...mtEngage.rules, ...tbEngage.rules].length > 0 ? [...actionRules, ...mtEngage.rules, ...tbEngage.rules].join('\n\n') : '',
       blkBlock,
       quitCtx?.section ?? '',
@@ -11568,10 +11628,13 @@ function ProfilePage({
     e.target.value = '';
     if (!f) return;
     void fileToAvatarDataUrl(f)
-      .then((data) => updateContact(me.id, { avatars: { qq: data } }))
-      .then((rec) => {
-        if (rec) onToast('头像已更新');
-        else onToast('头像保存失败');
+      .then((data) => updateContact(me.id, { avatars: { qq: data } }).then((rec) => ({ rec, data })))
+      .then(({ rec, data }) => {
+        // 第二十九轮「让 AI 知道我换头像了」：头像描述落库（异步识图）+ 给恋人角色写事件记忆
+        if (rec) {
+          noteAvatarChanged(me.id, 'qq', data, 'me');
+          onToast('头像已更新');
+        } else onToast('头像保存失败');
       })
       .catch(() => onToast('头像保存失败'));
   };
@@ -13729,7 +13792,7 @@ function WritePostPage({
     try {
       const room = Math.max(0, 9 - images.length);
       const picked = Array.from(files).slice(0, room);
-      const datas = await Promise.all(picked.map((f) => compressImageFile(f)));
+      const datas = await Promise.all(picked.map((f) => compressImageFile(f).catch(() => '')));
       setImages((prev) => [...prev, ...datas.filter(Boolean)]);
       if (files.length > room) onToast('最多选择 9 张图片');
     } finally {
@@ -17095,6 +17158,7 @@ function MainScreen({
           title={route.albumTitle}
           onClose={() => openTabs('消息')}
           allowEdit={route.albumContactId === me.id}
+          onToast={showToast}
         />
       ) : route.page === 'vision-log' ? (
         <VisionLogPage

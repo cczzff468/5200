@@ -36,7 +36,7 @@ import type { ApiConfig } from '@/lib/ios/store';
 import { useSettings } from '@/lib/ios/store';
 import { directChatStream, isPrivateApiUrl } from '@/lib/ios/direct-api';
 import { createReplySegmentScanner } from '@/lib/reply-count';
-import { describeImages } from '@/lib/vision-client';
+import { describeImagesAuto } from '@/lib/vision-client';
 import { clearDeliverBoundary, isAiDelivering, scheduleAiDelivery } from '@/lib/ios/ai-delivery';
 import { charRequestOnlyOf, loadBlock, type BlockApp } from '@/lib/ios/block-state';
 // 40-B 多账号 AI 认知隔离：主账号（该 App 当前账号为大号）下计算「用户的小号」聊天摘录并合并进人设 system 消息
@@ -648,41 +648,37 @@ async function runStream(rt: StreamRuntime, opts: BeginChatStreamOptions): Promi
     // 最终回复仍由聊天模型生成；识图失败展示系统提示（不进上下文、不当角色台词），本轮按无图片继续
     if (opts.vision && opts.vision.images.length > 0) {
       const visionConfig = useSettings.getState().visionConfig;
-      if (visionConfig.baseUrl.trim()) {
-        try {
-          const desc = await describeImages(visionConfig, { images: opts.vision.images, text: opts.vision.text });
-          if (desc) {
-            const n = opts.vision.images.length;
-            // fix3-8 识图描述上下文行带发送者：群聊里是谁发的图片就说谁发了（speakerLabel），
-            // 未传时维持「我」（单聊=机主本人），单数/复数两种既有句式均不变
-            const speaker = opts.vision.speakerLabel || '我';
-            const prefix = n > 1 ? `（${speaker}发了 ${n} 张图片，图片内容分别是：` : `（${speaker}发了一张图片，图片内容是：`;
-            workMessages = [...baseMessages, { role: 'user' as const, content: `${prefix}${desc}）` }];
-            // 描述回写落盘（onVision 由各 App 提供）：之后的聊天历史 AI 都能读到图片内容；
-            // 换号中止后不再回写（旧账号会话的落盘动作全部停止）
-            try {
-              if (!rt.aborted) opts.onVision?.(desc);
-            } catch {
-              // 落盘失败不影响本轮回复（描述已进上下文）
-            }
-          }
-        } catch (err) {
-          const detail = err instanceof Error && err.message ? err.message : '未知原因';
-          patchState(rt, { visionNotice: `图片识别失败，本次回复未结合图片（${detail}）` });
-        }
-      } else {
-        // 未配置识图模型（#26 兜底）：图片只以「[图片]」占位进历史，模型容易无话可说
-        //（群聊甚至可能全员 [SKIP] → 发图石沉大海）。注入一条临时上下文：明确图片已收到但
-        // 看不到内容，引导自然回应（不发编造细节）；临时消息不落盘，与识图描述上下文同口径。
-        // 【100-c】文案剧情化：不再把「识图模型/系统配置」说给角色听（幕后概念），
-        // 改成「图片还在加载中」的角色视角说法，达成同一目标（不编造图片细节）；
-        // 注入条件、消息 role、拼接位置完全不变。
+      // 第二十九轮「让 AI 知道上传的图片长什么样」：识图不再依赖用户配置——
+      // describeImagesAuto 配置了走用户模型（失败自动降级），未配置直接用内置识图兜底；
+      // 内置也失败才回落「图片还在加载中」临时上下文（本轮按无图继续，不阻断聊天）
+      try {
+        const desc = await describeImagesAuto(visionConfig, { images: opts.vision.images, text: opts.vision.text });
+        if (!desc) throw new Error('识图模型返回空内容');
         const n = opts.vision.images.length;
+        // fix3-8 识图描述上下文行带发送者：群聊里是谁发的图片就说谁发了（speakerLabel），
+        // 未传时维持「我」（单聊=机主本人），单数/复数两种既有句式均不变
+        const speaker = opts.vision.speakerLabel || '我';
+        const prefix = n > 1 ? `（${speaker}发了 ${n} 张图片，图片内容分别是：` : `（${speaker}发了一张图片，图片内容是：`;
+        workMessages = [...baseMessages, { role: 'user' as const, content: `${prefix}${desc}）` }];
+        // 描述回写落盘（onVision 由各 App 提供）：之后的聊天历史 AI 都能读到图片内容；
+        // 换号中止后不再回写（旧账号会话的落盘动作全部停止）
+        try {
+          if (!rt.aborted) opts.onVision?.(desc);
+        } catch {
+          // 落盘失败不影响本轮回复（描述已进上下文）
+        }
+      } catch (err) {
+        const detail = err instanceof Error && err.message ? err.message : '未知原因';
+        // 兜底临时上下文：明确图片已收到但看不到内容，引导自然回应（不发编造细节）；
+        // 临时消息不落盘，与识图描述上下文同口径；【100-c】文案剧情化（不提幕后配置）
+        const n = opts.vision.images.length;
+        const speaker = opts.vision.speakerLabel || '我';
         const note =
           n > 1
-            ? `（我发了 ${n} 张图片，不过图片还在加载中，你暂时看不到内容——不要编造图片里有什么，可以泛泛回应，或自然让我重新发一次。）`
-            : '（我发了一张图片，不过图片还在加载中，你暂时看不到内容——不要编造图片里有什么，可以泛泛回应，或自然让我重新发一次。）';
+            ? `（${speaker}发了 ${n} 张图片，不过图片还在加载中，你暂时看不到内容——不要编造图片里有什么，可以泛泛回应，或自然让我重新发一次。）`
+            : `（${speaker}发了一张图片，不过图片还在加载中，你暂时看不到内容——不要编造图片里有什么，可以泛泛回应，或自然让我重新发一次。）`;
         workMessages = [...baseMessages, { role: 'user' as const, content: note }];
+        patchState(rt, { visionNotice: `图片识别失败，本次回复未结合图片（${detail}）` });
       }
     }
     // 换号中止（识图等待窗口内发生）：旧账号会话整体作废，不再登记 payload/发起请求

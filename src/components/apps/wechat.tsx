@@ -227,6 +227,8 @@ import { ACCOUNT_CHANGED_EVENT, MAIN_ACCOUNT_ID, accountLoginHistory, accLs, cle
 import { loginAltSlot, loginWechat, listContacts, getWxBg, setWxBg, getChatBgImage, setChatBgImage, removeChatBgImage, listContactsFor, mainOwnerContact, ownerRealNameFor, contactRealName, updateContact, getPeerBg, setPeerBg, removePeerBg, setAppRelation, cachedOwnerName } from '@/lib/ios/contacts-store';
 import { fileToAvatarDataUrl } from '@/lib/ios/avatar-upload';
 import { listAlbums, addAlbum, getAlbum, addVisionDecision } from '@/lib/ios/album-store';
+import { ensureAlbumDescs } from '@/lib/ios/album-vision';
+import { buildAvatarBlock, ensureAvatarDesc, noteAvatarChanged } from '@/lib/ios/avatar-ai';
 import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhotoTags, generateCharacterPhoto, imgGenConfigReady, notePhotoMemory, splitUnfinishedPhotoTag, stripUnfinishedPhotoTag, type PhotoTag } from '@/lib/imggen';
 import { autoCardText } from '@/lib/textcard';
 import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card-bubble';
@@ -235,7 +237,7 @@ import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
 import OfflineMeetingPage from '@/components/apps/offline-meeting';
 import type { OfflineOnlineMsg } from '@/lib/offline-meet';
-import { addressNameOf, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount, socialNameOf } from '@/lib/contacts';
+import { addressNameOf, avatarFor, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount, socialNameOf } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import {
   addFriendReq,
@@ -1809,7 +1811,9 @@ function wxApplyAiActions(
 }
 
 /** 读取用户选择的图片：压缩为最长边 max（默认 720，背景图传 1280）px 的 JPEG dataURL；
- *  GIF 动图直通原始 dataURL（canvas 重绘会丢帧变静态图）；群聊发图复用同一套压缩逻辑 */
+ *  GIF 动图直通原始 dataURL（canvas 重绘会丢帧变静态图）；群聊发图复用同一套压缩逻辑。
+ *  第二十九轮修复「发不了图」：canvas 解码失败（HEIC/冷门格式）时回退原始 dataURL，
+ *  不再把整张图直接丢弃（发出去的图总比发不出好；AI 看不了原始 HEIC 时识图兜底再处理） */
 export function readImageFile(file: File, max = 720): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1821,8 +1825,13 @@ export function readImageFile(file: File, max = 720): Promise<string> {
         resolve(result);
         return;
       }
+      const viaRaw = () => {
+        // 兜底：原始 dataURL——至少要是图片数据才有价值
+        if (result.startsWith('data:image/')) resolve(result);
+        else reject(new Error('图片解析失败'));
+      };
       const img = new Image();
-      img.onerror = () => reject(new Error('图片解析失败'));
+      img.onerror = () => viaRaw();
       img.onload = () => {
         try {
           const scale = Math.min(1, max / Math.max(img.width, img.height));
@@ -1833,13 +1842,15 @@ export function readImageFile(file: File, max = 720): Promise<string> {
           canvas.height = h;
           const ctx = canvas.getContext('2d');
           if (!ctx) {
-            reject(new Error('图片处理失败'));
+            viaRaw();
             return;
           }
           ctx.drawImage(img, 0, 0, w, h);
-          resolve(canvas.toDataURL('image/jpeg', 0.72));
+          const out = canvas.toDataURL('image/jpeg', 0.72);
+          if (typeof out === 'string' && out.startsWith('data:image/') && out.length > 22) resolve(out);
+          else viaRaw();
         } catch {
-          reject(new Error('图片处理失败'));
+          viaRaw();
         }
       };
       img.src = result;
@@ -6004,6 +6015,29 @@ function ChatPage({
         // 异步写入（updateContact/setPeerBg/addAlbum + addVisionDecision）fire-and-forget；
         // save-to-album 落盘后刷新 albumCacheRef，下一轮 pick-album-* 才能命中新加入的图。
         const vKind = part.action.kind;
+        if (vKind === 'gen-avatar') {
+          // 第二十九轮「AI 主动换头像」：[生成新头像:外观描述] → 系统按人设锁脸生成新照片 →
+          // 设为 AI 的微信头像 + 头像描述落库（AI 之后记得自己头像长什么样）+ 决策日志；
+          // 未配置生图时静默丢弃（教学规则只在配置完整时下发，这里只是保险）
+          const genDesc = part.action.targetId.trim().slice(0, 60);
+          const genCfg = useSettings.getState().imgGenConfig;
+          if (genDesc && genCfg.enabled && imgGenConfigReady(genCfg)) {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: `「${peer.name}」换了一个新头像` } });
+            t += 1;
+            void (async () => {
+              try {
+                const r = await generateCharacterPhoto({ cfg: genCfg, contactId: peer.id, desc: genDesc, charName: peer.name, useRef: true });
+                await updateContact(peer.id, { avatars: { wx: r.src } });
+                void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'gen-avatar', targetId: '', imgSrc: r.src, reason: genDesc });
+                noteAvatarChanged(peer.id, 'wx', r.src, 'peer', genDesc);
+                await onContactsChanged?.();
+              } catch {
+                /* 生图/写入失败不阻塞主流程 */
+              }
+            })();
+          }
+          continue;
+        }
         if (vKind === 'change-avatar' || vKind === 'change-moments-bg' || vKind === 'save-to-album') {
           // 找图片消息：targetId 非空按 id 找；「第N张」按编号映射（AI 把「第2张」原样写进标记时，
           // 第N张 = 会话内我发的第 N 张图片，与历史序列化「我发的第N张图」同口径，防换错图）；
@@ -6049,6 +6083,8 @@ function ChatPage({
                 // 头像按 App 隔离：AI 换头像只写微信槽位（合并语义），不影响 QQ/信息/电话的全局头像
                 await updateContact(peer.id, { avatars: { wx: src } });
                 void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'change-avatar', targetId: imgMsgId, imgSrc: src });
+                // 第二十九轮：头像描述落库——AI 之后知道自己现在的头像长什么样
+                noteAvatarChanged(peer.id, 'wx', src, 'peer', imgDesc);
                 // 47-b：刷新 MainScreen 的 contacts state，让顶栏 peer.avatar 与会话列表头像即时更新
                 await onContactsChanged?.();
               } catch {
@@ -6101,6 +6137,8 @@ function ChatPage({
                 // 头像按 App 隔离：AI 从相册选图换头像只写微信槽位（合并语义），不影响 QQ/信息/电话的全局头像
                 await updateContact(peer.id, { avatars: { wx: aSrc } });
                 void addVisionDecision({ contactId: peer.id, app: 'wx', action: 'pick-album-avatar', targetId: aId, imgSrc: aSrc });
+                // 第二十九轮：头像描述落库（相册图自带 desc 则直接用，无描述异步识图补）
+                noteAvatarChanged(peer.id, 'wx', aSrc, 'peer', aDesc);
                 // 47-b：刷新 MainScreen 的 contacts state，让顶栏 peer.avatar 与会话列表头像即时更新
                 await onContactsChanged?.();
               } catch {
@@ -6318,12 +6356,22 @@ function ChatPage({
       })
       .catch(() => {});
     // 46-e：相册缓存刷新（fire-and-forget）：上一轮 save-to-album 落盘后下一轮才能选图；
-    // 本轮用预热缓存（同 crossCtxRef 模式），首轮可能为空数组（buildVisionRules 退回基础规则）
+    // 本轮用预热缓存（同 crossCtxRef 模式），首轮可能为空数组（buildVisionRules 退回基础规则）；
+    // 第二十九轮：刷新后顺带懒补缺失的图片描述（每轮最多 2 张）——desc 是【相册清单】
+    // 与「AI 主动分享相册照片」的依据，补齐后 AI 才知道每张图长什么样
     void listAlbums(peer.id)
-      .then((list) => {
+      .then(async (list) => {
         albumCacheRef.current = list;
+        const patched = await ensureAlbumDescs(peer.id, 2).catch(() => 0);
+        if (patched > 0) {
+          const fresh = await listAlbums(peer.id).catch(() => null);
+          if (fresh) albumCacheRef.current = fresh;
+        }
       })
       .catch(() => {});
+    // 第二十九轮「头像感知」：AI 头像描述懒补（换过头像但识图还没成功时补一次；fire-and-forget）
+    const peerAvatarSrc = avatarFor(peer, 'wx');
+    if (peerAvatarSrc) ensureAvatarDesc(peer.id, 'wx', peerAvatarSrc, 'peer');
     // 40-a：本轮是否处于「仅申请卡」放行模式（byUser 命中且守卫放行）——finalize 不落兑底占位
     const requestOnly = blkEntry.byUser === true;
     // base 按 id 去重（保留后出现者）：extra/userMsg 里的消息通常已先一步进了 msgs state，
@@ -6620,10 +6668,12 @@ function ChatPage({
     const albumSummary = albumCacheRef.current.length > 0
       ? albumCacheRef.current.slice(-20).map((a) => ({ id: a.id, desc: a.desc || a.name || '图片' }))
       : null;
-    // 100-e 按需注入：本会话消息列表（base 已含本轮新消息）里从未出现过图片消息时不注入视觉规则——
-    // 从不发图的会话常年白占 token；出现过 ≥1 条图片消息才下发。【选图操作】等相册相关块仍由
-    // buildVisionRules 内部的 albumSummary 条件控制，现有条件不动
-    const visionRules = base.some((m) => m.kind === 'image') ? buildVisionRules(albumSummary) : [];
+    // 100-e 按需注入：会话出现过图片消息，或相册非空（第二十九轮：相册里有图就注入——
+    // AI 才能主动从相册选图分享给用户，不再要求用户先发过图）
+    const visionRules =
+      base.some((m) => m.kind === 'image') || (albumSummary !== null && albumSummary.length > 0)
+        ? buildVisionRules(albumSummary)
+        : [];
     // 发图片能力常开：注入照片标签规则（配置完整时发真图；未配置/生成失败自动降级为文字图片卡片，AI 无需关心）
     const photoRule = buildPhotoTagRule(peer.name);
     // AI 发朋友圈能力（用户要求「你去发个朋友圈」或自主想分享时真发）：[发朋友圈:正文] 标记 →
@@ -6647,6 +6697,9 @@ function ChatPage({
       momentsBlock,
       coupleBlock,
       locBlock,
+      // 第二十九轮「头像感知」：AI 知道自己头像长什么样、用户头像长什么样/什么时候换的；
+      // 用户换头像时 AI 会像真人一样自然注意到。同时懒补缺失的头像描述（识图失败过的）
+      buildAvatarBlock(peer.id, me.id, meAddrName),
       [...actionRules, ...mtEngage.rules, ...tbEngage.rules].length > 0 ? [...actionRules, ...mtEngage.rules, ...tbEngage.rules].join('\n\n') : '',
       blkBlock,
       quitCtx?.section ?? '',
@@ -12193,10 +12246,13 @@ function ProfilePage({
     e.target.value = '';
     if (!f) return;
     void fileToAvatarDataUrl(f)
-      .then((data) => updateContact(me.id, { avatars: { wx: data } }))
-      .then((rec) => {
-        if (rec) onToast('头像已更新');
-        else onToast('头像保存失败');
+      .then((data) => updateContact(me.id, { avatars: { wx: data } }).then((rec) => ({ rec, data })))
+      .then(({ rec, data }) => {
+        // 第二十九轮「让 AI 知道我换头像了」：头像描述落库（异步识图）+ 给恋人角色写事件记忆
+        if (rec) {
+          noteAvatarChanged(me.id, 'wx', data, 'me');
+          onToast('头像已更新');
+        } else onToast('头像保存失败');
       })
       .catch(() => onToast('头像保存失败'));
   };
@@ -14566,7 +14622,7 @@ function MainScreen({
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'album') {
     // 我的主页「相册」入口：当前用户自己的相册（可增删改）
-    return <AlbumPage contactId={me.id} title="我的相册" onClose={() => setPage('main')} allowEdit />;
+    return <AlbumPage contactId={me.id} title="我的相册" onClose={() => setPage('main')} allowEdit onToast={showToast} />;
   }
   if (page === 'momentsSettings') {
     // 48-6：朋友圈设置页（替换原「小店与卡包」入口）；onOpenPostNow 复用 moments 页 AskPostSheet

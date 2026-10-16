@@ -8,6 +8,7 @@ import {
   ImageOff,
   Loader2,
   Send,
+  Smile,
   Sparkles,
   Trash2,
   UserCircle,
@@ -43,6 +44,7 @@ const ACTION_LABELS: Record<VisionDecisionRecord['action'], { label: string; ico
   'pick-album-bg': { label: '从相册选图设背景', icon: ImageIcon, color: '#AF52DE' },
   'pick-album-send': { label: '从相册选图发送', icon: Send, color: '#FF3B30' },
   imggen: { label: '生成照片', icon: Sparkles, color: '#FF2D55' },
+  'gen-avatar': { label: '主动换新头像', icon: Smile, color: '#FF9500' },
 };
 
 /** App 来源中文标签（与 db.ts VisionDecisionRecord.app union 对齐） */

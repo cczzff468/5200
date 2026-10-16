@@ -127,3 +127,20 @@ export async function describeImages(config: VisionConfig, req: VisionRequest): 
   const msg = typeof data?.error === 'string' && data.error ? data.error : `识图请求失败（HTTP ${res.status}）`;
   throw new Error(msg);
 }
+
+/**
+ * 自动识图（第二十九轮「让 AI 知道图片长什么样」）：
+ * 配置了识图模型 → 走用户模型（失败自动降级内置模型）；未配置 → 直接用内置识图兜底。
+ * 相册自动描述 / 头像感知 / 聊天发图兜底统一走这里——用户零配置 AI 也能「看懂」图。
+ * 返回空串 = 没产出描述（调用方按未识图处理）；全部失败抛最后的错误。
+ */
+export async function describeImagesAuto(config: VisionConfig, req: VisionRequest): Promise<string> {
+  if (visionConfigReady(config)) {
+    try {
+      return await describeImages(config, req);
+    } catch {
+      // 用户识图模型失败：降级内置识图再试一次（救回本轮描述）
+    }
+  }
+  return describeViaSdk(req);
+}

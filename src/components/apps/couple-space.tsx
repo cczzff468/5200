@@ -188,6 +188,7 @@ interface CoupleState {
   letterPaperKey?: string; // 情书编辑器当前信纸 key（第二十八轮持久化）
   letterFontSize?: number; // 情书编辑器当前字号（第二十八轮持久化）
   letterColor?: string; // 情书编辑器当前字色（第二十八轮持久化）
+  letterEnvText?: string; // 信封收信字样（第二十九轮可自定义；空 = 默认「致 最爱的你」）
   aiLetters: { id: string; text: string; envelope?: string; replyToId?: string; at: number }[]; // TA 写给我的信（AI 回信/主动写信）
   albums: CoupleAlbum[];
   moods: { id: string; emoji: string; text: string; at: number; photo?: string | null; dateKey?: string; from?: 'me' | 'ta' }[]; // 心情日记（from='ta' = AI 写的）
@@ -278,6 +279,7 @@ function defaultState(): CoupleState {
     letters: [],
     letterDraft: '',
     letterEnv: 'pinkbunny',
+    letterEnvText: '',
     letterSenderName: '',
     letterSenderAvatar: '',
     aiLetters: [],
@@ -4065,16 +4067,16 @@ const LETTER_PAPERS: LetterPaper[] = [
  * 第二十八轮修复「点击其中一个字体没有反应」：行楷/隶书/魏碑/圆体依赖系统字体栈，
  * 在 iOS/Windows 上缺字体时会静默回退到楷体/苹方——点击后渲染完全一样（= 没反应）。
  * 修复方式：删掉不可靠的系统栈字体，改为自托管 webfont（/public/fonts/*，unicode-range 子集，
- * 全平台渲染一致）；系统保底字体只留全平台都有的苹方/楷体/宋体/仿宋。
- * 新增 7 款：手写楷（马善政毛笔楷）、行书（志忙行）、毛草情书（柳建毛草）、龙藏手写、
- * 小薇文艺（站酷小薇）、快乐体（站酷快乐）、黄油体（站酷庆科黄油）——均为手写/文艺向。
+ * 全平台渲染一致）。
+ * 第二十九轮：删除「仿宋」——它在 iOS 上缺字体回退到 Songti SC，和「宋体」渲染完全一样
+ * （用户反馈「字体里面有的一样」）；同时删除「宋体」同一原因：iOS/安卓上与楷体回退栈趋同的
+ * 概率高，保留渲染稳定的楷体与自托管手写体系即可。剩余每款都渲染独特：苹方（无衬线）/楷体/手写楷/
+ * 行书/毛草/龙藏/小薇/快乐/黄油。
  * CSS 由 LETTER_FONT_LINKS 在情书页懒加载（@font-face 仅在用到时才拉子集，零常驻成本）。
  */
 const LETTER_FONTS = [
   { key: 'default', name: '苹方 iOS', css: '"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei",sans-serif' },
   { key: 'kai', name: '楷体', css: 'KaiTi,"Kaiti SC",STKaiti,"Kaiti TC",serif' },
-  { key: 'song', name: '宋体', css: 'SimSun,"Songti SC",STSong,"Songti TC",serif' },
-  { key: 'fang', name: '仿宋', css: 'FangSong,"Fangsong SC",STFangsong,"Fangsong TC","Songti SC",serif' },
   { key: 'mashan', name: '手写楷', css: '"Ma Shan Zheng","Kaiti SC",KaiTi,serif' },
   { key: 'zhimang', name: '行书', css: '"Zhi Mang Xing","Kaiti SC",KaiTi,cursive' },
   { key: 'maocao', name: '毛草情书', css: '"Liu Jian Mao Cao","Xingkai SC",KaiTi,cursive' },
@@ -4449,6 +4451,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   });
   const [focusPage, setFocusPage] = useState(0); // 当前编辑页（工具栏只浮在这页上）
   const [envKey, setEnvKey] = useState<string>(state.letterEnv || 'pinkbunny'); // 信封样式（第十八轮需求37）
+  const [envText, setEnvText] = useState<string>(state.letterEnvText || ''); // 信封收信字样（第二十九轮可自定义）
   const [readId, setReadId] = useState<string | null>(null); // 正在阅读的信 id（第二十轮：信箱点进单独阅读界面）
   const [readFrom, setReadFrom] = useState<'me' | 'ta'>('ta');
   const [readPage, setReadPage] = useState(0); // 阅读页码（当前：第 x/y 页）
@@ -4621,13 +4624,43 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         </div>
       )}
 
-      {/* 信封样式选择弹层（第十八轮需求37；第十九轮起发送设置页「换信封」也走这里） */}
+      {/* 信封样式选择弹层（第十八轮需求37；第十九轮起发送设置页「换信封」也走这里；
+          第二十九轮：顶部新增「信封上的字」自定义输入——实时同步到预览与所有我的信封） */}
       {sheet === 'env' && (
         <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
           <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="env-picker">
             <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
             <div className="text-center text-[17px] font-bold text-[#2c2c30]">选择信封</div>
             <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">挑一个喜欢的信封，把信装进去寄给他</div>
+            {/* 信封上的字（第二十九轮：自定义收信字样，留空=默认「致 最爱的你」） */}
+            <div className="mt-3 flex items-center gap-3 rounded-xl bg-[#f7f5f0] px-3.5 py-2.5">
+              <span className="shrink-0 text-[13.5px] font-semibold text-[#5a5048]">信封上的字</span>
+              <input
+                value={envText}
+                onChange={(e) => {
+                  const v = e.target.value.slice(0, 10);
+                  setEnvText(v);
+                  patch({ letterEnvText: v });
+                }}
+                maxLength={10}
+                placeholder="致 最爱的你"
+                aria-label="信封上的字"
+                data-testid="env-text-input"
+                className="h-9 min-w-0 flex-1 rounded-lg bg-white px-3 text-[14px] text-[#3a322c] outline-none ring-1 ring-black/[0.06] focus:ring-[#c9a86a] placeholder:text-[#c4bcb2]"
+              />
+              {envText && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEnvText('');
+                    patch({ letterEnvText: '' });
+                  }}
+                  className="shrink-0 text-[12px] font-medium text-[#b08a6a]"
+                >
+                  恢复默认
+                </button>
+              )}
+            </div>
             <div className="mt-3 grid grid-cols-3 gap-3">
               {LETTER_ENVELOPES.map((e) => (
                 <button
@@ -4641,7 +4674,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                   className="flex flex-col items-center gap-1.5"
                 >
                   <span className={`w-full overflow-hidden rounded-lg border-2 shadow-sm ${envKey === e.key ? 'border-[#2c2c30]' : 'border-transparent'}`}>
-                    <EnvelopeArt envKey={e.key} className="h-[74px] w-full" />
+                    <EnvelopeArt envKey={e.key} className="h-[74px] w-full" faceText={envText} />
                   </span>
                   <span className={`text-[11.5px] ${envKey === e.key ? 'font-semibold text-[#26262b]' : 'text-[#5a5a62]'}`}>{e.name}</span>
                 </button>
@@ -4671,7 +4704,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     setView('read');
   }, []);
 
-  /** 寄出信件（第十九轮：删除「封存」；第二十轮：寄出方式改叫定时发出/即时发出，寄出后进信箱） */
+  /** 寄出信件（第十九轮：删除「封存」；第二十轮：寄出方式改叫定时发出/即时发出，寄出后进信箱；第二十九轮：一并持久化信封收信字样） */
   const sendLetter = () => {
     const t = fullText();
     if (!t) return;
@@ -4679,6 +4712,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
       letters: [{ id: uid(), text: t, at: Date.now(), openAfterDays: sendMode === 'now' ? 0 : after, envelope: envKey }, ...state.letters],
       letterDraft: '',
       letterEnv: envKey,
+      letterEnvText: envText,
     });
     setPages(['']);
     setFocusPage(0);
@@ -4773,7 +4807,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     const isPartner = meta.partnerContactId === contactId;
     void (async () => {
       try {
-        await sendLetterCard({ channel, contactId, letterId: l.id, envelope: l.envelope ?? envKey, snippet: l.text, dir: 'me' });
+        await sendLetterCard({ channel, contactId, letterId: l.id, envelope: l.envelope ?? envKey, envText: state.letterEnvText, snippet: l.text, dir: 'me' });
       } catch {
         /* 落库失败静默 */
       }
@@ -4903,11 +4937,14 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
     );
   }
 
-  // ============ 编辑信件视图（第二十轮重做：纵向连续信纸，下滑即加第二页，不再左右翻页；「xx的来信」页眉标签已删除；第二十八轮：每页信纸同高同容、装饰纹理层、工具栏删手写信+信纸移位；第二十九轮：参考图同款信纸装饰层/画框/题头/方格稿纸，题头信纸正文自动下移避让） ============
+  // ============ 编辑信件视图（第二十轮重做：纵向连续信纸，下滑即加第二页，不再左右翻页；「xx的来信」页眉标签已删除；第二十八轮：每页信纸同高同容、装饰纹理层、工具栏删手写信+信纸移位；第二十九轮：参考图同款信纸装饰层/画框/题头/方格稿纸，题头信纸正文自动下移避让；
+  //  第二十九轮再修「字太往上」：① 无题头信纸顶部内边距 32→52px，字不再顶到日期/画框；
+  //  ② 横线周期改为 30px 与行高严格对齐（此前 31px 周期每行漂移 1px），横线基线对齐写字行
+  //  （第一行横线落在 padTop+21 ≈ 基线下方，不再从字头上穿过）） ============
   if (view === 'write') {
-    const padTop = paper.padTop ?? 32; // 题头信纸把正文往下压，避开装饰层
+    const padTop = paper.padTop ?? 52; // 题头信纸把正文往下压，避开装饰层；无题头信纸也留足顶部留白（第二十九轮：32→52）
     const lineBg = !paper.grid && dashed && paper.dashed !== undefined
-      ? `repeating-linear-gradient(180deg, transparent 0px, transparent 30px, ${paper.line} 30px, ${paper.line} calc(30px + 1px))`
+      ? `repeating-linear-gradient(180deg, transparent 0px, transparent 29px, ${paper.line} 29px, ${paper.line} 30px)`
       : undefined;
     const totalChars = pages.reduce((n, p) => n + p.length, 0);
     const focusSafe = Math.min(focusPage, pages.length - 1);
@@ -4928,8 +4965,8 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                   style={{ background: paper.bg, height: LETTER_PAGE_HEIGHT, containerType: 'inline-size' }}
                   data-testid={`letter-paper-${pi + 1}`}
                 >
-                  {/* 横线（方格稿纸信纸用格子纹理替代横线） */}
-                  {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: `0 ${padTop - 26}px` }} />}
+                  {/* 横线（方格稿纸信纸用格子纹理替代横线；周期 30px 与行高对齐，第一行横线在 padTop+21 ≈ 基线处） */}
+                  {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: `0 ${padTop - 9}px` }} />}
                   {/* 信纸自带装饰纹理（第二十八轮：蕾丝点/樱花点/格纹/斜纹等） */}
                   {paper.deco && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: paper.deco, backgroundSize: paper.decoSize }} />}
                   {/* 参考图同款装饰层（画框/衔纸鸽/题头/小鱼骨条/英文小字；第二十九轮） */}
@@ -4972,7 +5009,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                         字体
                       </button>
                       <button type="button" onClick={() => setSheet('env')} className="relative h-[54px] w-9 overflow-hidden rounded-lg shadow-md" aria-label="选择信封样式">
-                        <EnvelopeArt envKey={envKey} className="h-full w-full" pets={false} />
+                        <EnvelopeArt envKey={envKey} className="h-full w-full" pets={false} faceText={envText} />
                         <span className="absolute inset-x-0 bottom-0 bg-black/35 py-px text-center text-[10.5px] font-bold leading-[1.15] text-white" style={{ writingMode: 'vertical-rl' }}>
                           信封
                         </span>
@@ -5059,7 +5096,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             className="relative mx-auto mt-2 block w-full overflow-hidden rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.45)] transition-transform active:scale-[0.99]"
             data-testid="send-envelope-preview"
           >
-            <EnvelopeArt envKey={envKey} className="h-[196px] w-full" avatar={senderAvatar} />
+            <EnvelopeArt envKey={envKey} className="h-[196px] w-full" avatar={senderAvatar} faceText={envText} />
           </button>
 
           {/* 设置行组（信封设置/收信效果/背景音乐/寄出方式） */}
@@ -5212,13 +5249,18 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
           </div>
           <div className="mt-1 px-5 text-[11.5px] text-[#bb959d]">✉ 一封来信，一份心意</div>
         </div>
-        {/* 信纸（米色 + 虚线行 + 称呼 + 正文 + 日期/页码） */}
+        {/* 信纸（米色 + 虚线行 + 称呼 + 正文 + 日期/页码；第二十九轮：正文位置下移（字不再顶到纸上沿）+
+            横线与行高 30px 对齐 + 应用编辑器选的字体/字号/字色——阅读页与编辑页所见即所得） */}
         <div className="relative z-10 flex-1 overflow-y-auto px-4 pb-4 pt-2">
           <div className="relative mx-auto max-w-[430px] overflow-hidden rounded-xl bg-[#fdf9ef] shadow-[0_12px_30px_rgba(140,90,100,0.18)]" data-testid="letter-read-paper">
-            <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: 'repeating-linear-gradient(180deg, transparent 0px, transparent 30px, rgba(210,180,140,0.5) 30px, rgba(210,180,140,0.5) calc(30px + 1px))', backgroundPosition: '0 6px' }} />
-            <div className="relative px-5 pb-2 pt-4">
+            <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: `repeating-linear-gradient(180deg, transparent 0px, transparent 29px, rgba(210,180,140,0.5) 29px, rgba(210,180,140,0.5) 30px)`, backgroundPosition: '0 66px' }} />
+            <div className="relative px-5 pb-2 pt-8">
               <div className="text-[15.5px] font-semibold text-[#4a3f34]">{`亲爱的${greet}`}</div>
-              <div className="mt-1 whitespace-pre-wrap text-[15px] leading-[30px] tracking-[0.5px] text-[#4a4238]" style={{ minHeight: 240 }} data-testid="letter-read-body">
+              <div
+                className="mt-1.5 whitespace-pre-wrap leading-[30px] tracking-[0.5px] text-[#4a4238]"
+                style={{ minHeight: 240, fontFamily: font.css, fontSize, color, paddingTop: 14 }}
+                data-testid="letter-read-body"
+              >
                 {locked ? '' : readPages[page]}
               </div>
             </div>
@@ -5230,7 +5272,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             {/* 定时信未到期：遮罩 + 提示 */}
             {locked && (
               <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#fdf9ef]/75 backdrop-blur-[3px]" data-testid="read-locked">
-                <EnvelopeArt envKey={l.envelope} className="h-[92px] w-[120px]" pets={false} />
+                <EnvelopeArt envKey={l.envelope} className="h-[92px] w-[120px]" pets={false} faceText={readFrom === 'me' ? state.letterEnvText : undefined} />
                 <p className="mt-4 text-[14px] font-medium text-[#8a6a58]">这封信还在时间的路上</p>
                 <p className="mt-1 text-[12px] text-[#b09a84]">{`还剩 ${remainR} 天就能拆开了 ♡`}</p>
               </div>
@@ -5338,7 +5380,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 data-testid={`box-me-${l.id}`}
                 className="relative block w-full overflow-hidden rounded-2xl text-left shadow-[0_10px_26px_rgba(0,0,0,0.42)] transition-transform active:scale-[0.985]"
               >
-                <EnvelopeArt envKey={l.envelope ?? envKey} className="h-[132px] w-full" avatar={senderAvatar} />
+                <EnvelopeArt envKey={l.envelope ?? envKey} className="h-[132px] w-full" avatar={senderAvatar} faceText={state.letterEnvText} />
                 {/* 第二十一轮：左上角署名标签删除；底部只显示时间；第二十八轮：角标移到左上角，不再遮住右上角恋人邮局邮戳文字 */}
                 <span className={`absolute left-3 top-3 z-10 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-sm ${open ? 'bg-[#2c2c30] text-white' : 'bg-black/38 text-white/90'}`}>
                   {open ? '可拆信' : instant ? '定时中' : `还剩 ${remain} 天`}

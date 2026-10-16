@@ -1799,7 +1799,8 @@ async function aiTickLetter(snap: CoupleSnap, me: string, ta: string, p: TaPerso
   // 第二十四轮：不用模板兜底——写信失败今天就不寄，下次再写
   if (!text || text.length < 40) return;
   text = cut(text, 420);
-  const envelope = ['pinkbunny', 'yellowpup', 'lavendrcat', 'mintbear', 'skybunny', 'kraft'][Math.floor(Math.random() * 6)];
+  // 第二十九轮：信封池补齐第二十八轮新增的两款（whitedove 白羽信鸽 / rosedove 蔷薇飞鸟），此前漏加
+  const envelope = ['pinkbunny', 'yellowpup', 'lavendrcat', 'mintbear', 'skybunny', 'kraft', 'whitedove', 'rosedove'][Math.floor(Math.random() * 8)];
   const letterId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   writeSnap((s) => ({
     ...s,

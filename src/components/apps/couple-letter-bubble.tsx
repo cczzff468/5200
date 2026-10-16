@@ -303,11 +303,14 @@ function EnvelopePattern({ style }: { style: LetterEnvelopeStyle }) {
  * 卡通信封图形（恋人空间情书页与聊天卡片共用；第十九轮重绘：零 emoji 全 SVG；第二十轮美化 + 头像火漆）：
  * 信封身 + 底纹 + 内衼信纸探头 + V 形封口盖（渐变高光）+ 顶部蕾丝花边 + 圆形火漆印
  * （传 avatar 时火漆位改盖发件人头像印章）+ 右上角恋人邮局邮戳 + 底部一排 SVG 小动物 + 内描边。
+ * 第二十九轮：收信字样可自定义（faceText 传入信封上的第一行字；空/缺省 = 默认「致 最爱的你」，
+ * 第二行「· 亲 启 ·」保持装饰样式不变）。
  */
-export function EnvelopeArt({ envKey, className = '', pets = true, avatar }: { envKey?: string; className?: string; pets?: boolean; avatar?: string | null }) {
+export function EnvelopeArt({ envKey, className = '', pets = true, avatar, faceText }: { envKey?: string; className?: string; pets?: boolean; avatar?: string | null; faceText?: string | null }) {
   const st = letterEnvelopeOf(envKey);
   const petKinds = Array.from(st.pets).map(petKindOf).filter((k): k is PetKind => k !== null);
   const sealInk = 'rgba(255,255,255,0.92)';
+  const customLine = (faceText ?? '').trim() || '致 最爱的你'; // 收信字样第一行（第二十九轮可自定义，空 = 默认）
   return (
     <div aria-hidden="true" className={`relative overflow-hidden ${className}`} style={{ background: st.body, borderRadius: 10, containerType: 'inline-size' }}>
       <EnvelopePattern style={st} />
@@ -363,10 +366,11 @@ export function EnvelopeArt({ envKey, className = '', pets = true, avatar }: { e
           <SealGlyph ch={st.sticker} color={sealInk} />
         </div>
       )}
-      {/* 收信字样（第二十八轮：仿参考信封封面手写体排版，cqw 缩放适配任意尺寸；位于火漆下方、小动物上方；容器宽度过小时由 globals.css @container 规则自动隐藏） */}
+      {/* 收信字样（第二十八轮：仿参考信封封面手写体排版，cqw 缩放适配任意尺寸；位于火漆下方、小动物上方；容器宽度过小时由 globals.css @container 规则自动隐藏）
+          第二十九轮：第一行支持自定义（faceText 整行替换；空 = 默认「致 最爱的你」）；长文字自动收紧字距防溢出 */}
       <div aria-hidden="true" className="letter-env-face absolute inset-x-0 flex flex-col items-center" style={{ top: '70.5%' }}>
-        <span style={{ fontFamily: 'KaiTi,"Kaiti SC",STKaiti,serif', fontSize: 'clamp(9px, 5.4cqw, 17px)', letterSpacing: '0.3em', textIndent: '0.3em', lineHeight: 1.25, color: 'rgba(96,60,52,0.55)' }}>
-          致 最爱的你
+        <span style={{ fontFamily: 'KaiTi,"Kaiti SC",STKaiti,serif', fontSize: 'clamp(9px, 5.4cqw, 17px)', letterSpacing: customLine.length > 6 ? '0.12em' : '0.3em', textIndent: '0.3em', lineHeight: 1.25, color: 'rgba(96,60,52,0.55)', maxWidth: '92%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {customLine}
         </span>
         <span style={{ marginTop: '0.8%', fontSize: 'clamp(6px, 2.8cqw, 9.5px)', letterSpacing: '0.42em', textIndent: '0.42em', fontFamily: 'KaiTi,"Kaiti SC",STKaiti,serif', color: 'rgba(96,60,52,0.42)' }}>
           · 亲 启 ·
@@ -410,10 +414,15 @@ export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: 
   // 第二十三轮（用户反馈）：分享卡片不显示时间、不显示「可拆信」徽章——只有分享卡片不显示（信箱列表照旧），
   // 整张卡就是一枚纯净的信封（火漆位仍是头像），点卡片直接读信
   let avatar: string | null = null;
+  let envText: string | undefined;
   try {
     const snap = kvGet<Record<string, unknown>>('couple-space:state');
     if (data.from === 'ta') avatar = (snap?.taAvatar as string | null) ?? null;
     else avatar = ((snap?.letterSenderAvatar as string) || (snap?.meAvatar as string) || '') || null;
+    // 第二十九轮：信封收信字样可自定义——我的信带自定义字样（卡片落库时已写入 data.envText），
+    // 旧卡片/TA 的信没有该字段 → 走 EnvelopeArt 默认「致 最爱的你」
+    if (typeof data.envText === 'string' && data.envText.trim()) envText = data.envText;
+    else if (data.from === 'me' && typeof snap?.letterEnvText === 'string' && snap.letterEnvText.trim()) envText = snap.letterEnvText;
   } catch {
     /* 读不到就用纯火漆印 */
   }
@@ -428,7 +437,7 @@ export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: 
       }}
       className="relative block w-[248px] cursor-pointer select-none overflow-hidden rounded-[10px] shadow-sm transition-transform active:scale-[0.985]"
     >
-      <EnvelopeArt envKey={data.envelope} className="h-[132px] w-full" pets avatar={avatar} />
+      <EnvelopeArt envKey={data.envelope} className="h-[132px] w-full" pets avatar={avatar} faceText={envText} />
     </button>
   );
 }

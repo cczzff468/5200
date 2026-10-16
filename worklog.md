@@ -20005,3 +20005,26 @@ Work Log:
 Stage Summary:
 - 4 文件改动 + 21MB 字体资产：couple-space.tsx（字体表重写+懒加载+持久化+信纸接口/装饰层/3 款新信纸/信箱角标移位）、couple-letter-bubble.tsx（邮戳位置+收信字样+dove 底纹/白鸽+白羽信鸽/蔷薇飞鸟）、globals.css（@container 小容器隐藏规则）、scripts/fetch-fonts.sh + public/fonts/*（自托管字体）
 - 第二十八轮全部需求落地：信封上面的字（邮戳）位置调整+角标不再遮挡、字体点击无反应根治（自托管 webfont 全平台渲染一致）、新增 7 款字体（含手写体+苹方 iOS 明确化）+选择持久化、信封美化（收信字样+2 款新样式+鸽子元素）、信纸美化（3 款参考图同款信纸+装饰层系统）
+
+---
+Task ID: round-29
+Agent: 主协调者 (Z.ai Code)
+Task: 第二十九轮：信封收信字样自定义、信纸文字位置修复、删重复字体、微信QQ相册上传修复（根因）、AI 零配置识图、AI 头像感知+主动换头像、相册照片 AI 主动分享
+
+Work Log:
+- 三路并行 Explore（情书模块/相册与图片上传/头像人设记忆系统）完成全链路勘察
+- 需求1 信封自定义文字：EnvelopeArt 新增 faceText prop（couple-letter-bubble.tsx，长文字自动收紧字距+ellipsis）；CoupleLetterCardData/sendLetterCard 新增 envText 字段（couple-letter-share.ts）；CoupleState 新增 letterEnvText 持久化；信封选择弹层新增「信封上的字」输入框（实时 patch + 恢复默认）；编辑器工具栏/发送预览/信箱我的信/阅读页锁定遮罩/聊天气泡全链路传入 faceText
+- 需求2 信纸文字太往上：编辑器无题头信纸 padTop 32→52px；横线周期 31px→30px 与行高严格对齐（背景位移 padTop-26→padTop-9，横线落在基线处不再穿字头）；阅读页 pt-4→pt-8+正文 paddingTop 14、横线同步对齐、并应用编辑器所选字体/字号/字色（阅读页与编辑页所见即所得）
+- 需求3 字体去重：LETTER_FONTS 删除「宋体/仿宋」两枚系统栈字体（iOS 缺字体回退 Songti SC 渲染与对方完全一致 = 用户看到的「一样的」），剩 9 款每款渲染独特
+- 需求4 相册上传修复——浏览器实测复现并定位根因：album.tsx handleUpload 先捕获 e.target.files 引用再清 input.value，而规范行为 value='' 会「原地清空」该 FileList（实测 captured.length 1→0）→ files.length===0 恒成立 → 上传永远静默返回；照片 App 一直用 Array.from 快照所以正常。修复：Array.from(event.target.files ?? []) 先快照。同批加固：readImageFile 解码失败回退原始 dataURL（HEIC/冷门格式不再整张丢弃）、MIME 为空按扩展名兜底、成功/失败 toast 反馈（新增 onToast prop，微信/QQ 传入 showToast）、QQ compressImageFile 空 dataURL 拒绝+跳过空图
+- 需求5 AI 知道图片长什么样：vision-client 新增 describeImagesAuto（配置识图模型失败自动降级内置模型，未配置直接用内置 forceSdk）；chat-stream-store 识图分支重写（零配置也能识图，全部失败才回落「图片加载中」临时上下文）；album-vision.ts 新模块：上传后自动识图回写 AlbumRecord.desc + ensureAlbumDescs 每轮 AI 回合懒补 2 张；微信/QQ 回合开头接入懒补
+- 需求6 AI 头像感知+主动换头像：新模块 avatar-ai.ts——noteAvatarChanged（识图描述落 kv avatar-desc:{cid} + 机主换头像给恋人角色写事件记忆 memAddEventFragment sourceTag=owner-avatar）+ ensureAvatarDesc 懒补 + buildAvatarBlock 注入【头像近况】system 块（AI 知道自己头像长什么样、用户何时换了头像并被要求像真人一样自然注意到）；接入微信/QQ 资料页换头像回调、[换头像]/[选图设头像] 执行器；新动作 [生成新头像:外观描述]（chat-rich 注册 gen-avatar kind + 标签解析 + ACTION_RE/TAIL_RE），执行器 generateCharacterPhoto 锁脸生图→写 App 槽位头像→决策日志（vision-log 新增中文条目「主动换新头像」）→头像描述落库；规则在 buildVisionRules 常驻注入（限图片间隔提醒）
+- 需求7 相册照片 AI 主动分享：视觉规则注入条件从「会话出现过图片」放宽为「出现过图片或相册非空」；buildVisionRules【选图操作】新增主动分享教学（聊到相关话题主动挑贴合的图发+按真实内容说话）+【相册清单】desc 截断 30→60 字
+- 附带：couple-ai 信封池补第二十八轮新增 whitedove/rosedove 两款
+- 浏览器端到端验证（agent-browser）：信封自定义文字（输入→发送设置预览「致 亲爱的阿澈」→信箱→阅读页）✓；编辑器正文下移+横线对齐 ✓；阅读页字体应用 ✓；字体面板 9 款无重复 ✓；相册上传完整链路（Playwright 上传→入库→缩略图渲染→自动识图 desc「粉紫色渐变至浅黄色」）✓；/api/vision forceSdk curl 验证 ✓；微信登录→相册→个人资料页 ✓；QQ 登录→主屏 ✓；console 无错误；tsc --noEmit 全绿；改动文件 eslint 全绿
+
+Stage Summary:
+- 关键决策：①上传 bug 根因是 FileList 原地清空语义而非解码失败（解码回退/提示是叠加加固）；②识图兜底统一走 describeImagesAuto（零配置可用，用户配置的模型优先）；③头像描述存 kv 全局共享（avatar-desc:{contactId}）+ 记忆碎片只写恋人角色（按 sourceTag 去重）；④AI 主动换头像复用锁脸生图管线，未配置生图时规则不下发
+- 新增文件：src/lib/ios/avatar-ai.ts、src/lib/ios/album-vision.ts
+- 修改文件：couple-letter-bubble.tsx、couple-letter-share.ts、couple-space.tsx、couple-ai.ts、album.tsx、vision-client.ts、chat-stream-store.ts、chat-rich.ts、db.ts（VisionDecisionRecord + gen-avatar）、vision-log.tsx、wechat.tsx、qq.tsx
+- 测试遗留：沙盒浏览器注入了机主联系人 c-owner-test（凡凡/13800138000/密码 a12345678，QQ 10001 同密码）供登录测试，保留可复用
