@@ -5663,7 +5663,7 @@ function ChatPage({
       <div className="pt-1 text-center">
         <span
           data-testid="qq-block-line-me"
-          className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
+          className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60"
         >
           消息已发出，但被对方拒收了。
         </span>
@@ -6822,7 +6822,7 @@ function ChatPage({
             >
               {showTime && (
                 <div className="my-2 text-center">
-                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
+                  <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
                 </div>
               )}
               {lineOnly ? (
@@ -6855,7 +6855,7 @@ function ChatPage({
                   {m.recalled ? (
                 /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
                 <div data-testid="qq-recall-row" className="mb-3 text-center">
-                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                  <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">
                     {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                   </span>
                 </div>
@@ -6864,7 +6864,7 @@ function ChatPage({
               ) : m.kind === 'sys' && m.sys ? (
                 /* 系统提示行（拉黑/解除拉黑等状态变更）：居中半透明胶囊，与撤回行同款 */
                 <div data-testid="qq-sys-row" className="mb-3 text-center">
-                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                  <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">
                     {m.sys.text}
                   </span>
                 </div>
@@ -7267,7 +7267,7 @@ function ChatPage({
             {/* 好友验证消息标注（与系统提示同款胶囊：气泡下方居中；验证消息独立保留在聊天记录里） */}
             {m.fr === 'apply' || m.fr === 'greet' ? (
               <div data-testid="qq-fr-note" className="mb-2 text-center">
-                <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">
                   {m.fr === 'apply' ? '以上为验证消息' : '以上是打招呼的内容'}
                 </span>
               </div>

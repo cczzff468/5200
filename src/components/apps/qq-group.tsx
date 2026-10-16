@@ -4561,7 +4561,7 @@ export function QqGroupChatPage({
           {m.quote && (
             <div
               data-testid="qq-grp-quote-block"
-              className="mb-1 max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
+              className="mb-1 max-w-full overflow-hidden rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60"
             >
               <p className="line-clamp-2 whitespace-pre-wrap break-all">
                 {m.quote.name}：{m.quote.content}
@@ -4665,13 +4665,13 @@ export function QqGroupChatPage({
               <div key={m.id} className="py-2 text-center">
                 {showTime && (
                   <div className="pb-1.5">
-                    <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtGroupTime(m.time)}</span>
+                    <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">{fmtGroupTime(m.time)}</span>
                   </div>
                 )}
                 {m.notice ? (
                   <QQNoticeRow icon={m.notice.icon} pre={m.notice.pre} accent={m.notice.accent} />
                 ) : (
-                  <span className="inline-block max-w-[280px] truncate rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                  <span className="inline-block max-w-[280px] truncate rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">
                     {m.noticeText ?? m.content}
                   </span>
                 )}
@@ -4709,7 +4709,7 @@ export function QqGroupChatPage({
             >
               {showTime && (
                 <div className="py-2 text-center">
-                  <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtGroupTime(m.time)}</span>
+                  <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">{fmtGroupTime(m.time)}</span>
                 </div>
               )}
               {lineOnly ? (
@@ -4743,7 +4743,7 @@ export function QqGroupChatPage({
                   ))}
               {m.recalled ? (
                 <div className="py-1.5 text-center">
-                  <span className="inline-block max-w-[280px] truncate rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                  <span className="inline-block max-w-[280px] truncate rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">
                     {mine ? '你撤回了一条消息' : `"${m.senderName || '有人'}" 撤回了一条消息`}
                   </span>
                 </div>

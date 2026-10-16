@@ -7197,7 +7197,7 @@ function ChatPage({
       <div className="py-1.5 text-center">
         <span
           data-testid="wx-block-line-me"
-          className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
+          className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60"
         >
           消息已发出，但被对方拒收了。
         </span>
@@ -8534,7 +8534,7 @@ function ChatPage({
             {/* 时间分隔（截图样式：居中半透明胶囊） */}
             {(i === 0 || m.time - msgs[i - 1].time > 5 * 60_000) && (
               <div className="py-2 text-center">
-                <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
+                <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">{fmtChatTime(m.time)}</span>
               </div>
             )}
             {lineOnly ? (
@@ -8567,7 +8567,7 @@ function ChatPage({
                 {m.recalled ? (
               /* 已撤回：居中半透明胶囊（你撤回了一条消息 / 对方撤回了一条消息） */
               <div data-testid="wx-recall-row" className="py-1.5 text-center">
-                <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">
                   {m.role === 'me' ? '你撤回了一条消息' : '对方撤回了一条消息'}
                 </span>
               </div>
@@ -8576,7 +8576,7 @@ function ChatPage({
             ) : m.kind === 'sys' && m.sys ? (
               /* 系统提示行（拉黑/解除拉黑等状态变更）：居中半透明胶囊，与撤回行同款 */
               <div data-testid="wx-sys-row" className="py-1.5 text-center">
-                <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">
                   {m.sys.text}
                 </span>
               </div>
@@ -8970,7 +8970,7 @@ function ChatPage({
                     return (
                       <div
                         data-testid="wx-quote-block"
-                        className="mt-[3px] max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60"
+                        className="mt-[3px] max-w-full overflow-hidden rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60"
                       >
                         {qThumb ? (
                           <div className="flex items-center gap-2" data-testid="wx-quote-thumb-row">
@@ -9019,7 +9019,7 @@ function ChatPage({
             {/* 好友验证消息标注（与系统提示同款胶囊：气泡下方居中；验证消息独立保留在聊天记录里） */}
             {m.fr === 'apply' || m.fr === 'greet' ? (
               <div data-testid="wx-fr-note" className="py-1 text-center">
-                <span className="inline-block rounded-[4px] border border-black/25 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/25 dark:bg-white/[0.13] dark:text-white/60">
+                <span className="inline-block rounded-[4px] border border-black/15 bg-white/75 px-2 py-[3px] text-[12px] leading-[1.4] text-black/50 dark:border-white/15 dark:bg-white/[0.13] dark:text-white/60">
                   {m.fr === 'apply' ? '以上为验证消息' : '以上是打招呼的内容'}
                 </span>
               </div>
@@ -9178,8 +9178,9 @@ function ChatPage({
             </div>
           </div>
         )}
-        <div className="px-2.5 pb-[18px] pt-2">
-          <div className="flex items-end gap-2.5">
+        {/* 第三十三轮：pt-2→pt-1（顶部上移一点）；items-end→items-center（图标和输入框对齐） */}
+        <div className="px-2.5 pb-[18px] pt-1">
+          <div className="flex items-center gap-2.5">
             <button
               type="button"
               aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
@@ -9234,9 +9235,9 @@ function ChatPage({
                   }}
                   enterKeyHint={enterSend ? 'send' : undefined}
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
-                  placeholderClass="pl-1 pt-[9px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
+                  placeholderClass="pl-1 pt-[6px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
                   testId="wx-chat-input"
-                  className="block max-h-[132px] min-h-[38px] w-full overflow-y-auto rounded-[8px] bg-white py-[8px] pl-3 pr-11 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 dark:bg-[#232323] dark:shadow-none"
+                  className="block max-h-[132px] min-h-[34px] w-full overflow-y-auto rounded-[8px] bg-white py-[6px] pl-3 pr-11 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 dark:bg-[#232323] dark:shadow-none"
                 />
                 {/* 文字转语音开关（第三十二轮：图标改麦克风——与微信参考图一致的输入框内右侧灰麦克风；
                     开启后输入文字发送为语音气泡（本地仿真）；切到「按住说话」模式时随输入框一起隐藏） */}
@@ -9266,7 +9267,7 @@ function ChatPage({
                 setPlusOpen(false);
                 setStickerOpen((v) => !v);
               }}
-              className={`flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
+              className={`ml-[3px] flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60 ${stickerOpen ? 'text-[#07C160]' : ''}`}
             >
               <Smile className="h-[25px] w-[25px]" strokeWidth={2} />
             </button>
@@ -12618,6 +12619,24 @@ function WxAccountBubble({ name, kind, size = 52 }: { name: string; kind: 'alt' 
   );
 }
 
+/** 微信双气泡 logo（切换账号页顶部灰 logo，第三十三轮对照参考截图：两只带眼睛的对话气泡，evenodd 挖孔） */
+function WxSwitchLogoGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 64 64" fill="currentColor" className={className} aria-hidden="true">
+      {/* 大气泡（左上）+ 两只眼睛挖孔 */}
+      <path
+        fillRule="evenodd"
+        d="M25 9C13.4 9 4 16.6 4 26c0 5.3 3 10 7.7 13.1l-2.1 6.5a.9.9 0 0 0 1.3 1l7.9-4.2c2 .5 4 .7 6.2.7h.4a17.4 17.4 0 0 1-.9-5.6c0-8.5 8-15.4 17.9-15.4h.6C40.8 13.9 33.6 9 25 9zm-7 11.2a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5zm14 0a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z"
+      />
+      {/* 小气泡（右下，尾巴右上）+ 两只眼睛挖孔 */}
+      <path
+        fillRule="evenodd"
+        d="M41.2 24.2c-9.8 0-17.8 6.5-17.8 14.5s8 14.5 17.8 14.5c1.9 0 3.8-.2 5.5-.7l6.9 3.7a.9.9 0 0 0 1.3-1l-1.9-5.7c3.7-2.7 6-6.5 6-10.8 0-8-8-14.5-17.8-14.5zm-5.6 9a2.2 2.2 0 1 1 0 4.4 2.2 2.2 0 0 1 0-4.4zm11.2 0a2.2 2.2 0 1 1 0 4.4 2.2 2.2 0 0 1 0-4.4z"
+      />
+    </svg>
+  );
+}
+
 function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack: () => void; /** 「登录小号」自由登录成功 → 根组件 handleLogin（切作用域 + 记登录历史） */ onLoginOther: (u: WxUser) => void }) {
   // 页内 toast（App 根 toast 在提前 return 分支不渲染，同收藏页口径）
   const [toast, showToast] = useLocalToast();
@@ -12697,13 +12716,12 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
 
   return (
     <div className="absolute inset-0 z-20 flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white">
-      {/* 顶栏：返回 + 居中标题 + 管理/完成（有多个账号才显示管理） */}
+      {/* 顶栏：返回 + 管理/完成（第三十三轮对照参考图：去居中标题，管理改黑色；有多个账号才显示管理） */}
       <div className="pt-[54px]">
         <div className="relative flex h-11 items-center px-2">
           <button type="button" aria-label="返回" data-testid="wx-account-back" onClick={onBack} className="active:opacity-50">
             <ChevronLeft className="h-7 w-7" strokeWidth={2} />
           </button>
-          <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-[17px] font-medium">切换账号</span>
           {accounts.length > 1 && (
             <button
               type="button"
@@ -12712,7 +12730,7 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
                 setDelTarget(null);
                 setManaging((v) => !v);
               }}
-              className="ml-auto mr-1 min-w-[44px] text-right text-[15.5px] text-[#576B95] active:opacity-60"
+              className="ml-auto mr-1 min-w-[44px] text-right text-[16px] text-black/85 active:opacity-60 dark:text-white/85"
             >
               {managing ? '完成' : '管理'}
             </button>
@@ -12720,17 +12738,16 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-10 pt-9">
-        {/* 顶部：微信灰 logo + 大字（对照截图） */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-7">
+        {/* 顶部：微信双气泡灰 logo + 大字 + 短分隔线（第三十三轮对照参考截图重做） */}
         <div className="flex flex-col items-center" data-testid="wx-account-header">
-          <MessageCircle className="h-[52px] w-[52px] text-black/20 dark:text-white/20" strokeWidth={1.4} aria-hidden="true" />
-          <p className="mt-4 text-[19px] font-medium text-black/80 dark:text-white/80">轻触头像以切换账号</p>
-          <p className="mt-1.5 text-[12.5px] text-black/35 dark:text-white/35">仅切换微信，不影响 QQ / 信息 / 电话</p>
+          <WxSwitchLogoGlyph className="h-[58px] w-[58px] text-black/[0.15] dark:text-white/[0.15]" />
+          <p className="mt-[58px] text-[24px] font-semibold tracking-[0.5px] text-black/90 dark:text-white/90">轻触头像以切换账号</p>
+          <span className="mb-8 mt-7 h-px w-[190px] bg-black/[0.12] dark:bg-white/[0.14]" />
         </div>
-        <div className="mb-6 mt-5 h-px bg-black/10 dark:bg-white/10" />
 
         {/* 账号卡列表：白卡（深色深灰卡）；当前账号绿点 +「当前使用」；点其他卡 → switchAccountFor('wx') */}
-        <div className="space-y-3">
+        <div className="space-y-3.5">
           {accounts.map((acc) => {
             const isCurrent = acc.id === activeId;
             const isMain = acc.id === MAIN_ACCOUNT_ID;
@@ -12764,7 +12781,7 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
                     // v2 不刷新：写 per-app 标记 + 派发事件；本页监听刷新绿点，根组件重读数据/登录态
                     switchAccountFor('wx', acc.id);
                   }}
-                  className="flex w-full items-center gap-3 rounded-[14px] bg-white px-4 py-4 text-left active:bg-black/[0.04] dark:bg-[#1A1A1A]"
+                  className="flex w-full items-center gap-3.5 rounded-[16px] bg-white px-4 py-[18px] text-left active:bg-black/[0.04] dark:bg-[#1A1A1A]"
                 >
                   {(() => {
                     // 第三十二轮：切换账号页头像跟随微信——每个账号显示自己档案的微信槽位头像（avatars.wx），
@@ -12779,15 +12796,15 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
                   })()}
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5">
-                      <span className="block truncate text-[16.5px] font-medium">{name}</span>
+                      <span className="block truncate text-[17px] font-medium">{name}</span>
                       {/* 第三十二轮：「大号/小号」徽标删除——列表里都是可登录的账号，不再分档位 */}
                     </span>
-                    <span className="mt-0.5 block truncate text-[12.5px] text-black/40 dark:text-white/40">微信号：{wxid || '未设置'}</span>
+                    <span className="mt-1 block truncate text-[13px] text-black/35 dark:text-white/35">{wxid || '未设置'}</span>
                   </span>
                   {isCurrent && (
                     <span className="flex shrink-0 items-center gap-1.5" aria-label="当前使用">
                       <span className="h-2 w-2 rounded-full bg-[#07C160]" aria-hidden="true" />
-                      <span className="text-[13px] text-black/45 dark:text-white/45">当前使用</span>
+                      <span className="text-[14px] text-black/85 dark:text-white/85">当前使用</span>
                     </span>
                   )}
                 </button>
@@ -12795,27 +12812,41 @@ function WxAccountSwitchPage({ me, onBack, onLoginOther }: { me: WxUser; onBack:
             );
           })}
 
-          {/* 添加账号（新建大号/小号，创建后直接登录进入；弹层见下） */}
+          {/* 添加账号（新建大号/小号，创建后直接登录进入；弹层见下）：第三十三轮对照参考图——
+              白卡 + 虚线圆角方块（灰色加号） + 左对齐文案，与账号卡同一视觉家族 */}
           <button
             type="button"
             data-testid="wx-account-add"
             onClick={() => setAddOpen(true)}
-            className="flex h-[64px] w-full items-center justify-center gap-1.5 rounded-[14px] bg-white text-[14.5px] text-black/70 active:bg-black/[0.03] dark:bg-[#1A1A1A] dark:text-white/70 dark:active:bg-white/[0.06]"
+            className="flex h-[76px] w-full items-center gap-3.5 rounded-[16px] bg-white px-4 text-left active:bg-black/[0.04] dark:bg-[#1A1A1A]"
           >
-            <span className="grid h-5 w-5 place-items-center rounded-full bg-[#07C160] text-[13px] leading-none text-white" aria-hidden="true">＋</span>
-            添加账号
+            <span
+              className="grid h-[48px] w-[48px] shrink-0 place-items-center rounded-[10px] border-[1.5px] border-dashed border-black/20 text-black/35 dark:border-white/25 dark:text-white/35"
+              aria-hidden="true"
+            >
+              <Plus className="h-[22px] w-[22px]" strokeWidth={1.6} />
+            </span>
+            <span className="text-[15.5px] text-black/80 dark:text-white/80">添加账号</span>
           </button>
 
           {/* 登录账号入口（第三十二轮改文案：不再分大小号，统称「登录账号」）：账号统一在联系人 App 创建；
-              登录成功后出现在上面的列表，登录过的账号切换不再需要登录 */}
+              登录成功后出现在上面的列表，登录过的账号切换不再需要登录。样式与「添加账号」同一家族 */}
           <button
             type="button"
             data-testid="wx-account-login-alt"
             onClick={() => setLoginOpen(true)}
-            className="flex h-[84px] w-full flex-col items-center justify-center gap-1 rounded-[14px] border-[1.5px] border-dashed border-black/15 px-4 text-center text-black/40 active:bg-black/[0.03] dark:border-white/20 dark:text-white/40 dark:active:bg-white/[0.05]"
+            className="flex h-[76px] w-full items-center gap-3.5 rounded-[16px] bg-white px-4 text-left active:bg-black/[0.04] dark:bg-[#1A1A1A]"
           >
-            <span className="text-[14.5px]">登录账号</span>
-            <span className="text-[12px] text-black/25 dark:text-white/25">用账号密码登录，登录后出现在上面的列表</span>
+            <span
+              className="grid h-[48px] w-[48px] shrink-0 place-items-center rounded-[10px] border-[1.5px] border-dashed border-black/20 text-black/35 dark:border-white/25 dark:text-white/35"
+              aria-hidden="true"
+            >
+              <User className="h-[20px] w-[20px]" strokeWidth={1.6} />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[15.5px] text-black/80 dark:text-white/80">登录账号</span>
+              <span className="mt-0.5 block truncate text-[11.5px] text-black/30 dark:text-white/30">用账号密码登录后出现在上面的列表</span>
+            </span>
           </button>
         </div>
       </div>

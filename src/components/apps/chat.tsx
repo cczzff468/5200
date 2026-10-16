@@ -3220,14 +3220,14 @@ function ChatView({
               {m.recalled ? (
                 /* 已撤回：居中灰字胶囊（你撤回一条消息 / 对方撤回一条消息） */
                 <div className="mt-2.5 flex justify-center" data-testid="sms-recall-row">
-                  <span className="rounded-[4px] border border-black/25 bg-black/[0.06] px-2 py-[3px] text-[12px] leading-[1.4] text-black/55 dark:border-white/25 dark:bg-white/[0.1] dark:text-white/60">
+                  <span className="rounded-[4px] border border-black/15 bg-black/[0.06] px-2 py-[3px] text-[12px] leading-[1.4] text-black/55 dark:border-white/15 dark:bg-white/[0.1] dark:text-white/60">
                     {mine ? '你撤回一条消息' : '对方撤回一条消息'}
                   </span>
                 </div>
               ) : m.sys ? (
                 /* 系统提示行（拉黑/解除拉黑等状态变更）：居中灰字胶囊 */
                 <div className="mt-2.5 flex justify-center" data-testid="sms-sys-row">
-                  <span className="rounded-[4px] border border-black/25 bg-black/[0.06] px-2 py-[3px] text-[12px] leading-[1.4] text-black/55 dark:border-white/25 dark:bg-white/[0.1] dark:text-white/60">
+                  <span className="rounded-[4px] border border-black/15 bg-black/[0.06] px-2 py-[3px] text-[12px] leading-[1.4] text-black/55 dark:border-white/15 dark:bg-white/[0.1] dark:text-white/60">
                     {m.sys.text}
                   </span>
                 </div>
@@ -3432,7 +3432,7 @@ function ChatView({
                   {m.quote && (
                     <div
                       data-testid="sms-quote-block"
-                      className="mb-1 max-w-full overflow-hidden rounded-[4px] border border-black/25 bg-black/[0.06] px-2 py-[3px] text-[12px] leading-[1.4] text-black/55 dark:border-white/25 dark:bg-white/[0.1] dark:text-white/60"
+                      className="mb-1 max-w-full overflow-hidden rounded-[4px] border border-black/15 bg-black/[0.06] px-2 py-[3px] text-[12px] leading-[1.4] text-black/55 dark:border-white/15 dark:bg-white/[0.1] dark:text-white/60"
                     >
                       <p className="line-clamp-2 whitespace-pre-wrap break-all">
                         {m.quote.name}：{m.quote.content}

@@ -171,6 +171,7 @@ interface CoupleState {
   taAvatar: string | null;
   signature: string;
   homeBg: string | null; // 首页合影背景 dataURL；null = 内置默认图
+  homeVeil: number; // 首页背景白纱模糊度 0-100（设置页可调；0 = 无白纱背景直接可见，100 = 最朦胧）
   missYou: number; // 每天想你累计次数
   missYouByDay: Record<string, number>; // 'YYYY-MM-DD' → 当日次数
   missSince: string | null; // 首次点击「每天想你」的日期；非空后首页大圆消失、头像下显示想念天数
@@ -268,6 +269,7 @@ function defaultState(): CoupleState {
     taAvatar: null,
     signature: '',
     homeBg: null,
+    homeVeil: 0,
     missYou: 0,
     missYouByDay: {},
     missSince: null,
@@ -1460,11 +1462,14 @@ export default function CoupleSpaceApp() {
       <LocalToast msg={toast} />
 
       {/* 全局背景：合影铺满整个 App，所有 Tab 共用。
-          第三十二轮：首页不再叠白纱（用户反馈「背景图为什么有白色的一层」）——背景图直接可见；
-          其他 Tab（相册/发现/设置）保留白纱保证卡片可读 */}
+          首页白纱改为设置页可调（第三十三轮「背景白纱模糊度」滑杆）：0 = 无白纱直接可见（默认），
+          拉高则叠加白色纱层 + 背景模糊；其他 Tab（相册/发现/我们/设置）保留白纱保证卡片可读 */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0">
         <img src={homeBgSrc} alt="" className="h-full w-full object-cover" draggable={false} />
         {tab !== 'home' && <div className="absolute inset-0 bg-white/70" />}
+        {tab === 'home' && (state.homeVeil ?? 0) > 0 && (
+          <HomeVeil level={state.homeVeil ?? 0} />
+        )}
       </div>
 
       {/* 内容区 */}
@@ -11784,7 +11789,21 @@ function SupportPage({ close }: { close: () => void }) {
   );
 }
 
-/** 设置：换背景 / 解除关系（重置） / 关于 */
+/** 首页背景白纱层（第三十三轮）：半透明白纱 + 背景模糊，强度由设置页「背景白纱模糊度」滑杆控制 */
+function HomeVeil({ level }: { level: number }) {
+  const v = Math.max(0, Math.min(100, level)) / 100;
+  return (
+    <>
+      <div
+        className="absolute inset-0"
+        style={{ backdropFilter: `blur(${(v * 10).toFixed(1)}px)`, WebkitBackdropFilter: `blur(${(v * 10).toFixed(1)}px)` }}
+      />
+      <div className="absolute inset-0 bg-white" style={{ opacity: v * 0.72 }} />
+    </>
+  );
+}
+
+/** 设置：换背景 / 白纱模糊度 / 解除关系（重置） / 关于 */
 function SettingsPage({ state, patch, showToast, close, onReset }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void; onReset: () => void }) {
   const [confirmReset, setConfirmReset] = useState(false);
   const bgInput = useRef<HTMLInputElement | null>(null);
@@ -11810,6 +11829,28 @@ function SettingsPage({ state, patch, showToast, close, onReset }: { state: Coup
           <span className="text-[16px] font-medium text-[#2c2c30]">恢复默认背景</span>
           <ChevronRight className="h-5 w-5 text-[#c6c6cd]" />
         </button>
+        {/* 背景白纱模糊度（第三十三轮）：实时调节首页背景的白纱强度，0 = 无白纱直接可见 */}
+        <div className="border-t border-black/[0.04] px-5 pb-5 pt-4" data-testid="couple-home-veil-row">
+          <div className="flex items-center justify-between">
+            <span className="text-[16px] font-medium text-[#2c2c30]">背景白纱模糊度</span>
+            <span className="text-[13px] tabular-nums text-[#9a9aa2]" data-testid="couple-home-veil-value">{(state.homeVeil ?? 0)}%</span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={state.homeVeil ?? 0}
+            onChange={(e) => patch({ homeVeil: Number(e.target.value) })}
+            className="mt-3.5 w-full accent-[#3f3f46]"
+            aria-label="背景白纱模糊度"
+            data-testid="couple-home-veil-slider"
+          />
+          <div className="mt-1 flex justify-between text-[11px] text-[#c6c6cd]">
+            <span>清晰</span>
+            <span>朦胧</span>
+          </div>
+        </div>
         <button
           type="button"
           onClick={() => setConfirmReset(true)}
