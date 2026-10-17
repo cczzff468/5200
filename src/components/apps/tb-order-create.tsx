@@ -243,7 +243,7 @@ export function TbOrderCreatePage({
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
           <span className="text-[17px] font-bold text-black/90">{editing ? '编辑商品' : '创建订单'}</span>
-          <span className="ml-1.5 rounded-full bg-[#FFF1E6] px-2 py-0.5 text-[11px] font-medium text-[#FF6A1E]">{editing ? '修改后原位更新' : '创建商品 · 上首页'}</span>
+          {/* 第三十九轮：按需求删除「创建商品·上首页」/「修改后原位更新」标签 */}
         </div>
       </div>
 

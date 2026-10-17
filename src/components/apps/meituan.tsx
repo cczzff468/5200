@@ -148,6 +148,7 @@ import {
   mtRegisterCustomMerchants,
   mtRegisterMyMerchants,
   mtRestoreAiRegistry,
+  mtSetDealImg,
   mtSetProductImg,
   mtSetShopAvatar,
   mtShopAvatarOf,
@@ -274,7 +275,7 @@ import { listContacts, loginQQ, loginWechat } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
 
-type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices' | 'merchantCenter' | 'merchantEdit' | 'shopManage' | 'createOrder' | 'manageProducts';
+type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices' | 'merchantCenter' | 'merchantEdit' | 'shopManage' | 'createOrder' | 'manageProducts' | 'customProduct';
 type Tab = 'home' | 'orders' | 'cart' | 'my';
 
 const MT_YELLOW = '#FFD100';
@@ -1062,6 +1063,7 @@ function HomePage({
   onOpenMessages,
   onOpenCreateOrder,
   onOpenManage,
+  onOpenCustomProduct,
   onScan,
   onToast,
 }: {
@@ -1075,6 +1077,8 @@ function HomePage({
   onOpenCreateOrder: () => void;
   /** 宫格「管理商品」入口（第三十八轮：编辑/删除自建商品） */
   onOpenManage: () => void;
+  /** 第三十九轮：点首页自建商品卡 → 自建商品详情页（不再进店铺页） */
+  onOpenCustomProduct: (mid: string) => void;
   onScan: () => void;
   onToast: (m: string) => void;
 }) {
@@ -1466,9 +1470,9 @@ function HomePage({
       ) : (
         <>
           <div className="mt-2 columns-2 gap-2 px-2">
-            {/* 自建商品商家（第三十六轮）：永远置顶——与普通商家同卡混排（第三十八轮：封面=商品图，卡片无角标无×） */}
+            {/* 自建商品商家（第三十六轮）：永远置顶——与普通商家同卡混排；第三十九轮：点击直达自建商品详情页 */}
             {customFeed.map((it, i) =>
-              it.t === 'm' ? <MerchantCard key={`c-${it.m.id}-${i}`} m={it.m} onOpen={() => onOpenMerchant(it.m.id)} /> : null
+              it.t === 'm' ? <MerchantCard key={`c-${it.m.id}-${i}`} m={it.m} onOpen={() => onOpenCustomProduct(it.m.id)} /> : null
             )}
             {filter === null && <DealListCard title={listData.title ?? MT_HOME_LIST.title} deals={listData.deals} onOpen={onOpenDeal} />}
             {feed.map((it, i) =>
@@ -4961,10 +4965,30 @@ function CopyBtn({ onClick }: { onClick: () => void }) {
 
 function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal: MtDeal; onBack: () => void; onBuy: (mode: 'group' | 'direct') => void; onOpenMerchant: (id: string) => void; onToast: (m: string) => void }) {
   const merchant = mtMerchantOf(deal.merchantId);
-  const thumbs = MT_DEALS.filter((d) => d.merchantId === deal.merchantId).slice(0, 5);
   const groupPrice = deal.groupPrice ?? Math.max(0.1, Math.round((deal.price - 2) * 10) / 10);
   const { favs, toggle } = useFavs();
   const dealFav = favs.deals.includes(deal.id);
+  // 第三十九轮：点头图 → AI 生图弹层（选模型+可编辑提示词，生成的图 mutate+kv 持久化永久保存）
+  const [dealGenOpen, setDealGenOpen] = useState(false);
+  const [dealGenBusy, setDealGenBusy] = useState(false);
+  const [dealGenErr, setDealGenErr] = useState('');
+  const [dealImgTick, setDealImgTick] = useState(0);
+  void dealImgTick;
+  const genDealImg = async (prompt: string, cfg: ImgGenConfig & { mode?: 'proxy' | 'direct' }) => {
+    setDealGenBusy(true);
+    setDealGenErr('');
+    try {
+      const src = await generateFreePhoto(cfg, prompt);
+      mtSetDealImg(deal.id, src);
+      setDealImgTick((t) => t + 1); // deal 对象已 mutate，tick 触发重渲染显示新图
+      setDealGenOpen(false);
+      onToast('图片已生成并保存');
+    } catch (e) {
+      setDealGenErr(e instanceof Error ? e.message : '生成失败，请重试');
+    } finally {
+      setDealGenBusy(false);
+    }
+  };
   if (!merchant) {
     return (
       <div className="flex h-full items-center justify-center bg-white">
@@ -4976,9 +5000,11 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
   return (
     <div className="flex h-full flex-col bg-white">
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* 头图 + 悬浮搜索 */}
-        <div className="relative h-[228px]">
-          <FoodImg src={deal.img} emoji={deal.emoji} className="h-full w-full" />
+        {/* 头图 + 悬浮搜索（第三十九轮：点图可 AI 生成；套餐缩略条已删，图延伸显示） */}
+        <div className="relative h-[340px]">
+          <button type="button" aria-label="点击生成团购图片" data-testid="mt-deal-imggen" onClick={() => setDealGenOpen(true)} className="block h-full w-full active:opacity-95">
+            <FoodImg src={deal.img} emoji={deal.emoji} className="h-full w-full" />
+          </button>
           <div className="absolute inset-x-0 top-0 flex items-center gap-2 px-3 pt-[54px]">
             <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/35 text-white active:opacity-75">
               <ChevronLeft className="h-5 w-5" />
@@ -5003,24 +5029,7 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
           <span className="absolute bottom-3 right-3 rounded-full bg-black/45 px-2 py-0.5 text-[10px] text-white">1/3</span>
         </div>
 
-        {/* 套餐缩略条 */}
-        <div className="flex gap-2 overflow-x-auto bg-white px-3 py-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {thumbs.map((t, i) => (
-            <div key={t.id} className={`w-[78px] shrink-0 rounded-lg p-[3px] ${i === 0 ? 'border-[1.5px] border-[#FF2D7E]' : ''}`}>
-              <FoodImg src={t.img} emoji={t.emoji} className="h-[60px] w-full rounded-md" />
-              <p className="mt-1 line-clamp-2 text-[10px] leading-tight text-black/70">{t.title}</p>
-              <p className="text-[11px] font-semibold" style={{ color: i === 0 ? MT_PINK : MT_PRICE }}>
-                ¥{fmtMoney(t.price)}
-              </p>
-            </div>
-          ))}
-          <button type="button" onClick={() => onToast('全部套餐（演示）')} className="flex w-8 shrink-0 flex-col items-center justify-center text-[11px] text-black/45">
-            全部
-            <ChevronRight className="h-3.5 w-3.5 rotate-90" />
-          </button>
-        </div>
-
-        {/* 价格块（粉）+ 标题/须知/门店/规则/详情（紧贴套餐缩略条：无上边距/上分隔带，消除粉色条上方空隙） */}
+        {/* 价格块（粉）+ 标题/须知/门店/规则/详情（第三十九轮：套餐缩略条已删，价格块紧贴延伸后的头图） */}
         <div className="overflow-hidden border-b-[7px] border-[#F5F6F7]">
           <div className="bg-gradient-to-r from-[#FF2D7E] to-[#FF5E9E] px-4 pb-3 pt-3">
             <div className="flex items-center gap-1.5">
@@ -5168,6 +5177,179 @@ function DealDetailPage({ deal, onBack, onBuy, onOpenMerchant, onToast }: { deal
           </button>
         </div>
       </div>
+
+      {/* 团购图生成弹层（第三十九轮：点头图 → 选模型+可编辑提示词，生成结果持久化） */}
+      <OrderImgGenSheet
+        open={dealGenOpen}
+        title="生成团购图片"
+        initialPrompt={`${deal.title}，真实感商品照片，明亮色泽，特写构图`}
+        busy={dealGenBusy}
+        error={dealGenErr}
+        accent="#FF2D7E"
+        onSubmit={(p, cfg) => void genDealImg(p, cfg)}
+        onClose={() => (dealGenBusy ? undefined : setDealGenOpen(false))}
+      />
+    </div>
+  );
+}
+
+// ================================ 自建商品详情页（第三十九轮：点自建商品卡直达，不再是店铺详细界面） ================================
+
+function MtCustomProductPage({
+  session,
+  merchant,
+  onBack,
+  onCheckout,
+  onToast,
+}: {
+  session: MtSession;
+  merchant: MtMerchant;
+  onBack: () => void;
+  /** 立即购买确认后打开结算弹层（购物车已写好本商品） */
+  onCheckout: (mid: string) => void;
+  onToast: (m: string) => void;
+}) {
+  const uid = mtUidOf(session);
+  const dish = merchant.sections[0]?.dishes[0];
+  const [tick, setTick] = useState(0);
+  void tick; // 商品图 mutate 后触发重渲染
+  // 生图弹层（第三十九轮：详情页点图也能用 API 图像生成模型生成，结果持久化）
+  const [genOpen, setGenOpen] = useState(false);
+  const [genBusy, setGenBusy] = useState(false);
+  const [genErr, setGenErr] = useState('');
+  // 规格选择（有规格先弹规格弹窗再结算；复用 DishSpecSheet）
+  const [specOpen, setSpecOpen] = useState(false);
+  const genImg = async (prompt: string, cfg: ImgGenConfig & { mode?: 'proxy' | 'direct' }) => {
+    if (!dish) return;
+    setGenBusy(true);
+    setGenErr('');
+    try {
+      const src = await generateFreePhoto(cfg, prompt);
+      mtSetProductImg(dish.id, src);
+      setTick((t) => t + 1);
+      setGenOpen(false);
+      onToast('图片已生成并保存');
+    } catch (e) {
+      setGenErr(e instanceof Error ? e.message : '生成失败，请重试');
+    } finally {
+      setGenBusy(false);
+    }
+  };
+  if (!dish) {
+    return (
+      <div className="flex h-full items-center justify-center bg-white">
+        <p className="text-[13px] text-black/40">商品不存在</p>
+      </div>
+    );
+  }
+  const type = dish.custom?.type || (merchant.notice?.startsWith('自建商品 · ') ? merchant.notice.slice('自建商品 · '.length) : '');
+  const groups = dish.custom?.optionGroups ?? [];
+  /** 立即购买：写购物车（本商品单独结算语义，替换跨店残留）→ 打开结算弹层 */
+  const buy = ({ qty, spec, unitPrice }: { qty: number; spec: string; unitPrice: number }) => {
+    mtSaveCart(uid, {
+      merchantId: merchant.id,
+      items: [{ dishId: dish.id, qty, ...(spec ? { spec } : {}), ...(unitPrice > dish.price ? { unitPrice } : {}) }],
+    });
+    onCheckout(merchant.id);
+  };
+  const directBuy = () => {
+    if ((dish.specs?.length ?? 0) > 0) {
+      setSpecOpen(true);
+      return;
+    }
+    buy({ qty: 1, spec: '', unitPrice: dish.price });
+  };
+
+  return (
+    <div className="flex h-full flex-col bg-[#F4F5F7]">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* 大图（点图可 AI 生成） */}
+        <div className="relative h-[340px] bg-white">
+          <button type="button" aria-label="点击生成商品图片" data-testid="mt-custom-imggen" onClick={() => setGenOpen(true)} className="block h-full w-full active:opacity-95">
+            <FoodImg src={dish.img} emoji={dish.emoji} className="h-full w-full" />
+          </button>
+          <div className="absolute inset-x-0 top-0 flex items-center px-3 pt-[54px]">
+            <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full bg-black/35 text-white active:opacity-75">
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* 价格 + 标题 + 类型/规格 */}
+        <div className="bg-white px-4 pb-4 pt-3">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[26px] font-bold leading-none" style={{ color: MT_PRICE }}>
+              <span className="text-[15px]">¥</span>
+              {fmtMoney(dish.price)}
+            </span>
+            {dish.coupon ? <span className="rounded-[3px] bg-[#FFE8F1] px-1.5 py-0.5 text-[11px] font-medium text-[#FF2D7E]">{dish.coupon.name} 下单减¥{fmtMoney(dish.coupon.amount)}</span> : null}
+            <span className="ml-auto text-[11px] text-black/35">月售{dish.monthSale}+</span>
+          </div>
+          <p className="mt-2 text-[17px] font-bold leading-snug text-black/90">{dish.name}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {type ? <span className="rounded-[4px] bg-[#FFF3DC] px-1.5 py-0.5 text-[11px] font-medium text-[#B77900]">{type}</span> : null}
+            {groups.map((g) => (
+              <span key={g.name} className="rounded-[4px] bg-black/[0.04] px-1.5 py-0.5 text-[11px] text-black/55">
+                {g.name}：{g.values.join('、')}
+              </span>
+            ))}
+          </div>
+          {/* 保障行（对齐真机商品详情的放心买条） */}
+          <div className="mt-3 flex items-center gap-3 border-t border-black/5 pt-2.5 text-[11px] text-black/45">
+            <span className="flex items-center gap-1"><Check className="h-3 w-3 text-[#FF6000]" strokeWidth={3} />正品保障</span>
+            <span className="flex items-center gap-1"><Check className="h-3 w-3 text-[#FF6000]" strokeWidth={3} />随时退</span>
+            <span className="flex items-center gap-1"><Check className="h-3 w-3 text-[#FF6000]" strokeWidth={3} />过期自动退</span>
+          </div>
+        </div>
+
+        {/* 店铺信息行（纯展示，点击商品不再进店铺页） */}
+        <div className="mt-2 flex items-center gap-2.5 bg-white px-4 py-3">
+          <FoodImg src={mtShopAvatarOf(merchant.id)} emoji={merchant.emoji} className="h-10 w-10 shrink-0 rounded-lg" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[13.5px] font-semibold text-black/85">{merchant.name}</p>
+            <p className="text-[11px] text-black/40">线上商品 · 全国包邮</p>
+          </div>
+        </div>
+      </div>
+
+      {/* 底部：立即购买 */}
+      <div className="shrink-0 border-t border-black/5 bg-white px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
+        <button
+          type="button"
+          data-testid="mt-custom-buy"
+          onClick={directBuy}
+          className="h-12 w-full rounded-full bg-gradient-to-r from-[#FFD100] to-[#FF9500] text-[16px] font-bold text-black/90 shadow-sm active:opacity-85"
+        >
+          立即购买
+        </button>
+      </div>
+
+      {/* 规格弹窗（有规格先选规格再结算；弹窗内菜品图同样可点生成） */}
+      <AnimatePresence>
+        {specOpen && (
+          <DishSpecSheet
+            dish={dish}
+            onClose={() => setSpecOpen(false)}
+            onConfirm={(payload) => {
+              setSpecOpen(false);
+              buy(payload);
+            }}
+            onGenDish={() => setGenOpen(true)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* 商品图生成弹层 */}
+      <OrderImgGenSheet
+        open={genOpen}
+        title="生成商品图片"
+        initialPrompt={`${dish.name}，真实感商品照片，明亮色泽，特写构图`}
+        busy={genBusy}
+        error={genErr}
+        accent="#FF6000"
+        onSubmit={(p, cfg) => void genImg(p, cfg)}
+        onClose={() => (genBusy ? undefined : setGenOpen(false))}
+      />
     </div>
   );
 }
@@ -12213,6 +12395,8 @@ export default function MeituanApp() {
   const [searchSeed, setSearchSeed] = useState('');
   /** 第三十八轮：编辑中的自建商品（管理商品页→编辑→创建商品页预填原位更新；null = 新建） */
   const [editShop, setEditShop] = useState<MtMerchant | null>(null);
+  /** 第三十九轮：自建商品详情页目标（mtc-shop-* id；点首页自建商品卡直达，不再进店铺页） */
+  const [customMid, setCustomMid] = useState<string | null>(null);
   /** 评价弹层目标订单 */
   const [rateFor, setRateFor] = useState<MtOrder | null>(null);
   /** 找人代付详情（订单列表「代付详情」入口；只读） */
@@ -12421,12 +12605,14 @@ export default function MeituanApp() {
   const uid = mtUidOf(session);
   const merchant = merchantId ? mtMerchantOf(merchantId) : undefined;
   const deal = dealId ? mtDealOf(dealId) : undefined;
+  const customMerchant = customMid ? mtMerchantOf(customMid) : undefined;
   const checkoutMerchant = (checkoutMid ?? merchantId) ? mtMerchantOf((checkoutMid ?? merchantId) as string) : undefined;
 
   // 兜底（渲染期状态修正，React 官方模式）：商家/团购详情目标不存在（如「再来一单」引用重启后
   // 未再注册的 AI 商家）→ 立即回主页重渲染，避免白屏卡死
   if (page === 'merchant' && merchantId && !merchant) setPage('main');
   if (page === 'deal' && dealId && !deal) setPage('main');
+  if (page === 'customProduct' && customMid && !customMerchant) setPage('main');
 
   const pickAddr = (a: MtAddress) => {
     mtSetCurAddr(uid, a.id);
@@ -12455,6 +12641,10 @@ export default function MeituanApp() {
                   setPage('createOrder');
                 }}
                 onOpenManage={() => setPage('manageProducts')}
+                onOpenCustomProduct={(mid) => {
+                  setCustomMid(mid);
+                  setPage('customProduct');
+                }}
                 onScan={() => openScan('meituan')}
                 onToast={showToast}
               />
@@ -12526,6 +12716,18 @@ export default function MeituanApp() {
         </div>
       )}
       {page === 'search' && <SearchPage seedKw={searchSeed} onBack={() => setPage('main')} onOpenMerchant={openMerchant} />}
+      {page === 'customProduct' && session && customMerchant && (
+        <MtCustomProductPage
+          session={session}
+          merchant={customMerchant}
+          onBack={() => setPage('main')}
+          onCheckout={(mid) => {
+            setCheckoutMid(mid);
+            setCheckoutOpen(true);
+          }}
+          onToast={showToast}
+        />
+      )}
       {page === 'manageProducts' && session && (
         <MtProductManagePage
           session={session}

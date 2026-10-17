@@ -1,13 +1,13 @@
 'use client';
 
 /**
- * 美团「创建商品」页（首页宫格入口）——创建订单就是创建商品（第三十六轮，第三十八轮改名）：
- * 任意类型商品都能创建（外卖/奶茶/数码/充值/电影票…自由填写）——
+ * 美团「创建商品」页（首页宫格入口）——创建的是商品（不是店铺，第三十九轮明确）：
+ * 任意类型商品都能创建（奶茶/外卖/团购/充值/电影票…自由填写）——
  * 图片可上传（相册文件选择，压缩落库）或用「设置 › 图像生成」配置的模型按自定义提示词生成；
- * 可填 类型 / 优惠券（名称+金额，下单自动抵扣的菜品券） / 规格选项组（小菜、奶茶小料、手机内存等，买家可自行选择）；
- * 保存 = 创建「商品」落库（mt-custom-shops:<uid> 自建商家+单菜品）→ 首页商品流置顶展示；
- * 点首页商品走 商家页→购物车→结算 原生链路，真实下单后才生成订单。
- * 第三十八轮：支持编辑模式（管理商品页入口）——预填表单、保存原位更新（商家/菜品 id 不变，历史订单引用不失效）。
+ * 可填 类型 / 优惠券（名称+金额，下单自动抵扣的菜品券） / 规格选项组（小菜、奶茶小料等，买家可自行选择）；
+ * 保存 = 创建「商品」落库（mt-custom-shops:<uid>，无店铺语义）→ 首页商品流置顶展示；
+ * 点首页商品走 自建商品详情页→立即购买 原生链路（不再进店铺页），真实下单后才生成订单。
+ * 第三十九轮：删头部「创建商品·上首页」标签/店铺名称/备注，与淘宝创建页各自独立。
  */
 
 import { useRef, useState } from 'react';
@@ -39,11 +39,9 @@ function prefillFrom(editing: MtMerchant) {
     img: dish?.img ?? null,
     itemName: dish?.name ?? '',
     type: dish?.custom?.type || typeFromNotice,
-    shopName: editing.name,
     price: dish ? String(dish.price) : '',
     couponName: dish?.custom?.couponLabel ?? '',
     couponAmt: dish?.coupon ? String(dish.coupon.amount) : '',
-    note: dish?.desc ?? '',
     groups,
   };
 }
@@ -69,14 +67,12 @@ export function MtOrderCreatePage({
   // 图片（dataURL）
   const [img, setImg] = useState<string | null>(pre?.img ?? null);
   const [imgBusy, setImgBusy] = useState(false);
-  // 表单
+  // 表单（第三十九轮：无店铺名称/备注——创建的是商品，不是店铺）
   const [itemName, setItemName] = useState(pre?.itemName ?? '');
   const [type, setType] = useState(pre?.type ?? '');
-  const [shopName, setShopName] = useState(pre?.shopName ?? '');
   const [price, setPrice] = useState(pre?.price ?? '');
   const [couponName, setCouponName] = useState(pre?.couponName ?? '');
   const [couponAmt, setCouponAmt] = useState(pre?.couponAmt ?? '');
-  const [note, setNote] = useState(pre?.note ?? '');
   const [groups, setGroups] = useState<OrderCustomOptionGroup[]>(pre?.groups ?? []);
   // 生图弹层
   const [genOpen, setGenOpen] = useState(false);
@@ -129,21 +125,16 @@ export function MtOrderCreatePage({
 
   const save = () => {
     const name = itemName.trim();
-    const shop = shopName.trim();
     const p = parseFloat(price);
     if (!name) {
       onToast('请填写商品名称');
-      return;
-    }
-    if (!shop) {
-      onToast('请填写店铺名称');
       return;
     }
     if (!Number.isFinite(p) || p <= 0) {
       onToast('请填写正确的单价');
       return;
     }
-    // 编辑模式：沿用原商家/菜品 id（历史订单、购物车引用不失效），仅更新字段
+    // 编辑模式：沿用原商家/菜品 id（历史订单、购物车引用不失效），仅更新字段；店铺名随商品名（第三十九轮：无店铺语义）
     if (editing) {
       const price2 = Math.round(p * 100) / 100;
       const discount = Math.round(cut * 100) / 100;
@@ -170,7 +161,6 @@ export function MtOrderCreatePage({
         price: price2,
         emoji: '🛍️',
         ...(img ? { img } : {}),
-        ...(note.trim() ? { desc: note.trim() } : {}),
         monthSale: oldDish?.monthSale ?? 23,
         ...(specs && specs.length > 0 ? { specs } : {}),
         ...(couponName.trim() && discount > 0 ? { coupon: { name: couponName.trim(), amount: discount, min: 0 } } : {}),
@@ -178,12 +168,12 @@ export function MtOrderCreatePage({
       };
       const merchant: MtMerchant = {
         ...editing,
-        name: shop,
+        name,
         ...(img ? { cover: img } : {}),
         notice: type.trim() ? `自建商品 · ${type.trim()}` : '自建商品店铺',
         sections: [{ cat: '我的商品', dishes: [dish] }],
       };
-      // 原位替换落库 + 重注册（同 id 覆盖）→ 首页/商家页/管理页即时生效
+      // 原位替换落库 + 重注册（同 id 覆盖）→ 首页/详情/管理页即时生效
       mtSaveCustomShops(uid, mtLoadCustomShops(uid).map((m) => (m.id === editing.id ? merchant : m)));
       mtRegisterCustomMerchant(merchant);
       window.dispatchEvent(new CustomEvent('mt-custom-products-changed'));
@@ -220,16 +210,16 @@ export function MtOrderCreatePage({
       price: price2,
       emoji: '🛍️',
       ...(img ? { img } : {}),
-      ...(note.trim() ? { desc: note.trim() } : {}),
       monthSale: 23,
       ...(specs && specs.length > 0 ? { specs } : {}),
       // 优惠券 = 菜品券：下单含此菜自动抵扣（无门槛），与创建时填的名称/金额一致
       ...(couponName.trim() && discount > 0 ? { coupon: { name: couponName.trim(), amount: discount, min: 0 } } : {}),
       ...(Object.keys(custom).length > 0 ? { custom } : {}),
     };
+    // 第三十九轮：创建的是商品不是店铺——商家名=商品名（卡片标题/详情/结算显示用），无独立店铺字段
     const merchant: MtMerchant = {
       id: shopId,
-      name: shop,
+      name,
       emoji: '🛍️',
       ...(img ? { cover: img } : {}),
       cats: [],
@@ -264,7 +254,7 @@ export function MtOrderCreatePage({
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
           <span className="text-[17px] font-bold text-black/90">{editing ? '编辑商品' : '创建商品'}</span>
-          <span className="ml-1.5 rounded-full bg-[#FFF3DC] px-2 py-0.5 text-[11px] font-medium text-[#B77900]">{editing ? '修改后原位更新' : '创建商品 · 上首页'}</span>
+          {/* 第三十九轮：按需求删除「创建商品·上首页」/「修改后原位更新」标签 */}
         </div>
       </div>
 
@@ -327,7 +317,7 @@ export function MtOrderCreatePage({
               value={itemName}
               onChange={(e) => setItemName(e.target.value)}
               maxLength={30}
-              placeholder="如：厚芋泥波波奶茶 / iPhone 256G"
+              placeholder="如：厚芋泥波波奶茶 / 鲜榨西瓜汁"
               data-testid="mt-create-name"
               className="h-10 w-full rounded-lg bg-[#F5F6F7] px-3 text-[13.5px] text-black/85 outline-none placeholder:text-black/30"
             />
@@ -361,16 +351,6 @@ export function MtOrderCreatePage({
               inputMode="decimal"
               placeholder="0.00"
               data-testid="mt-create-price"
-              className="h-10 w-full rounded-lg bg-[#F5F6F7] px-3 text-[13.5px] text-black/85 outline-none placeholder:text-black/30"
-            />
-          </Field>
-          <Field label="店铺名称" required>
-            <input
-              value={shopName}
-              onChange={(e) => setShopName(e.target.value)}
-              maxLength={20}
-              placeholder="如：霸王茶姬（吾悦广场店）"
-              data-testid="mt-create-shop"
               className="h-10 w-full rounded-lg bg-[#F5F6F7] px-3 text-[13.5px] text-black/85 outline-none placeholder:text-black/30"
             />
           </Field>
@@ -421,9 +401,9 @@ export function MtOrderCreatePage({
           </button>
         </div>
 
-        {/* 优惠券 + 备注 */}
+        {/* 优惠券（第三十九轮：备注已按需求删除——创建商品不需要备注） */}
         <div className="mt-2.5 rounded-xl bg-white px-4 py-4">
-          <p className="text-[15px] font-bold text-black/85">优惠与备注</p>
+          <p className="text-[15px] font-bold text-black/85">优惠券</p>
           <Field label="优惠券名称">
             <input
               value={couponName}
@@ -440,16 +420,6 @@ export function MtOrderCreatePage({
               inputMode="decimal"
               placeholder="0.00"
               className="h-10 w-full rounded-lg bg-[#F5F6F7] px-3 text-[13.5px] text-black/85 outline-none placeholder:text-black/30"
-            />
-          </Field>
-          <Field label="备注">
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              rows={2}
-              maxLength={60}
-              placeholder="订单备注（少冰 / 不要香菜…）"
-              className="w-full resize-none rounded-lg bg-[#F5F6F7] px-3 py-2 text-[13.5px] leading-[1.6] text-black/85 outline-none placeholder:text-black/30"
             />
           </Field>
         </div>

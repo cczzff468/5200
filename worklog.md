@@ -20228,3 +20228,22 @@ Work Log:
 Stage Summary:
 - 关键决策：①删除/编辑统一收口到管理页（首页卡片回归纯浏览形态）；②编辑沿用原 id 原位替换（订单/购物车跨页引用安全）；③商家卡封面按「店铺身份vs商品内容」拆分——列表场景一律商品图，店铺身份场景（详情页头图/头像/搜索行）保留印章图；④补菜图覆盖三层查找（AI 商家 sections → 种子 sections → AI 补菜注册表）保证任意菜品生成图跨刷新存活
 - 修改文件：src/lib/ios/meituan-data.ts（宫格改名+manage 项、mutateDishImg 三层、mtDeleteProductImg）、src/lib/ios/taobao-data.ts（tbDeleteProductImg）、src/components/apps/mt-order-create.tsx / tb-order-create.tsx（编辑模式+改名）、src/components/apps/mt-product-manage.tsx / tb-product-manage.tsx（新增）、src/components/apps/meituan.tsx（商家卡封面/宫格/接线）、src/components/apps/taobao.tsx（去标签去×/TbManageIcon/运营位重排/接线）
+
+---
+Task ID: round-39
+Agent: 主协调者 (Z.ai Code)
+Task: 第三十九轮：淘宝详情图删「点图生成」角标（点击保留）；美团团购详情页点图可 AI 生成+删「全部」缩略条图延伸；美团宫格删「外卖」；淘宝/美团创建页各自独立（美团=纯商品无店铺字段/无备注）；自建商品点进商品详情页（非店铺页）+立即购买；删「创建商品·上首页」角标
+
+Work Log:
+- 【淘宝详情图角标】ProductGallery 删左下角「✨点图生成」badge（Wand2 span），button 点击 → OrderImgGenSheet 保留
+- 【美团团购详情页】DealDetailPage：①头图 228px→340px（图延伸显示，1/3 角标保留）；②删套餐缩略条（thumbs+「全部」按钮整块删除）；③头图包 button（data-testid=mt-deal-imggen）→ OrderImgGenSheet（预填 deal.title 提示词，粉 accent）；④meituan-data 新增 mutateDealImg + mtSetDealImg（与菜品覆盖共用 mt-product-imgs kv 表，id 不冲突）+ mtApplyProductImgOverrides 双查（dish 未命中再查 deal）；mutateDishImg 返回 boolean
+- 【美团宫格删外卖】MT_HOME_GRID 第 1 页首项「外卖」删除（剩 10 项：团购…管理商品）
+- 【创建页分离·美团纯商品化】mt-order-create：①头部「创建商品·上首页」/「修改后原位更新」角标删除（淘宝页同步删）；②店铺名称字段+校验删除——创建的是商品不是店铺，商家名=商品名（卡片标题/详情/结算显示）；③「优惠与备注」→「优惠券」，备注 textarea 删除（note state/prefill/save desc 全清）；④名称占位符美团化（厚芋泥波波奶茶/鲜榨西瓜汁，去 iPhone）；淘宝 tb-order-create 保留店铺名称字段（电商语义）——两页各自显示各自的
+- 【自建商品详情页】新增 MtCustomProductPage（meituan.tsx 内）：点首页自建商品卡直达商品详情（不再进店铺详细界面）——大图 340px（点图生成）+价格/券/月售+标题+类型/规格 chips+正品保障条+店铺信息行（纯展示不可点）+底部「立即购买」；立即购买=mtSaveCart 写本商品（单独结算语义）→ CheckoutSheet（有规格先弹 DishSpecSheet 复用，弹窗内图也可点生成）；根组件 customMid state+customMerchant+渲染期兜底（目标不存在回主页）
+- 管理商品页行删店铺名行（商家名=商品名后重复）
+- 浏览器端到端实测（mttest001 重新登录）：①宫格 10 项无外卖 ✓；②创建页无角标/无店铺名称/无备注（DOM 断言全过）✓；③创建厚芋泥波波奶茶→首页置顶卡→点击直达商品详情页（大图+¥16+类型角标+保障行+立即购买）✓；④立即购买→确认订单弹层（¥16-新客立减3=¥13）✓；⑤团购详情页缩略条消失、图延伸 340px、点图弹「生成团购图片」（预填提示词+模型选择）✓；⑥淘宝详情图角标消失（badgeRemoved:true）+点击弹层正常 ✓；console 无错误
+- 校验：tsc 全量零错误；eslint 错误分布与 HEAD 基线一致（29 refs + 2 exhaustive-deps 历史存量，零新增）
+
+Stage Summary:
+- 关键决策：①美团自建商品从「商家载体」转为「纯商品」语义——内部仍以 mtc-shop 单菜品商家承载（购买链路零改动），但 UI 全链路（创建表单/卡片标题/详情页/管理页）只呈现商品；②立即购买采用「替换购物车为该商品再结算」复用既有 CheckoutSheet（不做独立直购管线）；③团购图与菜品图共用一张覆盖 kv 表（id 空间不冲突），启动恢复一次遍历双查
+- 修改文件：src/lib/ios/meituan-data.ts、src/components/apps/meituan.tsx（DealDetailPage+MtCustomProductPage+宫格接线+根路由）、src/components/apps/mt-order-create.tsx、src/components/apps/tb-order-create.tsx、src/components/apps/mt-product-manage.tsx、src/components/apps/taobao.tsx（ProductGallery 角标）

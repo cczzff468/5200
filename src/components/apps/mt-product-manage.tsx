@@ -83,7 +83,6 @@ export function MtProductManagePage({
                       <p className="min-w-0 flex-1 truncate text-[14px] font-semibold text-black/85">{dish?.name ?? '未命名商品'}</p>
                       {type ? <span className="shrink-0 rounded-[4px] bg-[#FFF3DC] px-1.5 py-0.5 text-[10px] font-medium text-[#B77900]">{type}</span> : null}
                     </div>
-                    <p className="mt-0.5 truncate text-[11.5px] text-black/40">{m.name}</p>
                     <p className="mt-1 flex items-baseline gap-1.5">
                       <span className="text-[16px] font-bold" style={{ color: '#FF6000' }}>
                         ¥{dish ? dish.price.toFixed(2) : '0.00'}

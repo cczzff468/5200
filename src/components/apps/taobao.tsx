@@ -2069,12 +2069,7 @@ function ProductGallery({ p, onImgClick }: { p: TbProduct; onImgClick?: () => vo
           )
         )}
       </div>
-      {onImgClick ? (
-        <span className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-[11px] text-white">
-          <Wand2 className="h-3 w-3" strokeWidth={2} />
-          点图生成
-        </span>
-      ) : null}
+      {/* 第三十九轮：按需求删除「点图生成」角标（点击图片仍可打开生成弹层） */}
       <div className="pointer-events-none absolute bottom-3 right-3 rounded-full bg-black/45 px-2.5 py-0.5 text-[12px] text-white">
         {idx + 1}/{total}
       </div>

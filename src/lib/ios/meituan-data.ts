@@ -326,7 +326,7 @@ export interface MtGridCat {
 }
 export const MT_HOME_GRID: MtGridCat[][] = [
   [
-    { id: 'waimai', name: '外卖', icon: 'Bike', filter: 'waimai' },
+    // 第三十九轮：按需求删除「外卖」宫格项
     { id: 'tuangou', name: '团购', icon: 'Ticket', filter: 'tuangou' },
     { id: 'meishi', name: '美食', icon: 'Utensils', filter: 'meishi' },
     { id: 'yao', name: '看病买药', icon: 'Cross', filter: 'maiyao' },
@@ -1566,13 +1566,13 @@ function productImgMap(): Record<string, string> {
 /** 在全部商家（AI 注册表 + 预置种子）+ AI 自主补菜注册表里找到菜品并改图。
  *  AI 补菜（mt-ai-dish-registry）必须覆盖：否则给补菜生成的图只在当次会话生效，
  *  刷新后补菜对象由注册表重建、图丢失（生成的图片必须永久保存，除非重新生成）。 */
-function mutateDishImg(dishId: string, src: string): void {
+function mutateDishImg(dishId: string, src: string): boolean {
   for (const m of AI_MERCHANTS.values()) {
     for (const sec of m.sections) {
       const d = sec.dishes.find((x) => x.id === dishId);
       if (d) {
         d.img = src;
-        return;
+        return true;
       }
     }
   }
@@ -1581,7 +1581,7 @@ function mutateDishImg(dishId: string, src: string): void {
       const d = sec.dishes.find((x) => x.id === dishId);
       if (d) {
         d.img = src;
-        return;
+        return true;
       }
     }
   }
@@ -1589,9 +1589,10 @@ function mutateDishImg(dishId: string, src: string): void {
     const d = arr.find((x) => x.id === dishId);
     if (d) {
       d.img = src;
-      return;
+      return true;
     }
   }
+  return false;
 }
 
 /** 写商品图覆盖（商品详情界面点击图片生成成功后调用；mutate + 持久化，所有渲染点即时生效） */
@@ -1607,10 +1608,36 @@ export function mtSetProductImg(dishId: string, src: string): void {
   }
 }
 
+/** 团购图同理：在 AI 团购注册表 + 预置团购里找到并改图（生成的图必须永久保存，除非重新生成） */
+function mutateDealImg(dealId: string, src: string): void {
+  const ai = AI_DEALS.get(dealId);
+  if (ai) {
+    ai.img = src;
+    return;
+  }
+  const seed = MT_DEALS.find((d) => d.id === dealId);
+  if (seed) seed.img = src;
+}
+
+/** 写团购图覆盖（团购详情页点图生成成功后调用；mutate + 持久化，与菜品覆盖共用同一张 kv 表，id 不冲突） */
+export function mtSetDealImg(dealId: string, src: string): void {
+  const map = productImgMap();
+  map[dealId] = src;
+  productImgCache = map;
+  mutateDealImg(dealId, src);
+  try {
+    kvSet(PRODUCT_IMG_KEY, map);
+  } catch {
+    /* 存储不可用忽略 */
+  }
+}
+
 /** 启动恢复：把已持久化的商品图覆盖写回内存菜品对象（App 登录/恢复时调用一次） */
 export function mtApplyProductImgOverrides(): void {
   const map = productImgMap();
-  for (const [dishId, src] of Object.entries(map)) mutateDishImg(dishId, src);
+  for (const [dishId, src] of Object.entries(map)) {
+    if (!mutateDishImg(dishId, src)) mutateDealImg(dishId, src);
+  }
 }
 
 /** 删除商品图覆盖（自建商品删除时调用：商品没了覆盖不再有意义，防 kv 无限膨胀） */
