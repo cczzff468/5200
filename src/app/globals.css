@@ -610,24 +610,6 @@
     transform: scale(1.1);
   }
 }
-/* 切牌：上半叠飞起 → 悬停 → 落回（视觉等价于切到牌堆底下，终点回原位故无跳变） */
-@keyframes tarot-cut-fly {
-  0% {
-    transform: translate(0, 0) rotate(0deg);
-  }
-  38% {
-    transform: translate(26px, -54px) rotate(6deg);
-  }
-  55% {
-    transform: translate(26px, -54px) rotate(6deg);
-  }
-  82% {
-    transform: translate(-3px, 42px) rotate(-2deg);
-  }
-  100% {
-    transform: translate(0, 0) rotate(0deg);
-  }
-}
 /* 当前待填牌位的虚线框呼吸 */
 @keyframes tarot-slot-pulse {
   0%,
@@ -679,7 +661,6 @@
 @media (prefers-reduced-motion: reduce) {
   [animation\:tarot-shuffle-card],
   [animation\:tarot-pile-glow],
-  [animation\:tarot-cut-fly],
   [animation\:tarot-slot-pulse],
   [animation\:tarot-reveal-in],
   [animation\:tarot-text-in],

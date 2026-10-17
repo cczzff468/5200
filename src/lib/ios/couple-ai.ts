@@ -1847,43 +1847,23 @@ export function coupleTarotRemember(contactId: string, channel: CoupleChannel, c
 }
 
 /**
- * 爱情塔罗 AI 解读：结合每张牌的正/逆位牌意 + 占卜主题/自定义问题 + 人设语气 + 记忆与最近聊天
- * （比如最近是不是吵架了），用「TA 陪我看牌」的口吻生成自然解读。返回 null 时调用方走本地兜底。
+ * 爱情塔罗 AI 解读（第四十七轮：去人设、去记忆——纯塔罗解读）：
+ * 一位专业塔罗占卜师的客观解读，只依据牌本身：每张牌的正/逆位牌意 + 它所在牌位的职责。
+ * 不带入恋人人设语气、不引用记忆与聊天记录（塔罗事件写记忆照旧，但解读与它们无关）。
+ * 返回 null 时调用方走本地兜底。
  */
 export async function aiTarotReading(opts: { themeLabel: string; question?: string; spreadName: string; cards: TarotAiCard[] }): Promise<{ per: string[]; overall: string } | null> {
-  const target = aiTarget();
-  if (!target) return null;
-  const snap = readSnap();
-  if (!snap) return null;
-  const me = (snap.meName || '').trim() || '我';
-  const ta = (snap.taName || '').trim() || 'TA';
-  const p = await taPersonaOf(target.contactId);
-  if (!p) return null;
-  currentPartnerId = target.contactId;
-  currentChannel = target.channel;
-  const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
-  // 记忆碎片召回（与聊天同一套记忆：最近的共同经历/吵架/约定都会被带进解读）
-  let memBlock = '';
-  try {
-    memBlock = memChatRecallBlock(target.contactId, target.channel, `${me}和${ta}最近的感情状态 共同经历 吵架 约定 心事`, { mode: 'private' });
-  } catch {
-    /* 召回失败不影响 */
-  }
   const cardLines = opts.cards
     .map((c, i) => `${i + 1}.【${c.pos}${c.posEn ? ` / ${c.posEn}` : ''}】${c.name}（${c.nameEn}）· ${c.reversed ? '逆位' : '正位'}\n   牌位职责：${c.posHint || '—'}\n   牌意：${c.meaning}\n   关键词：${c.keys}`)
     .join('\n');
   const sys = [
-    llmSystem(p, me, snap),
-    `场景：${me}刚刚在恋人空间「爱情塔罗」里完成了一次占卜（主题：${opts.themeLabel}${opts.question ? `；TA 的问题是「${opts.question}」` : ''}；牌阵：「${opts.spreadName}」），抽好了牌，正等${ta}陪TA一起看牌、把解读说给TA听。`,
-    memBlock ? `【你们的记忆碎片】\n${cut(memBlock, 700)}` : '',
-    chatCtx ? `【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : '',
-    '解读纪律：必须严格按牌阵与牌位逐张解读——第 i 张只谈它自己那个牌位的职责（例如「阻碍」位只谈阻碍、「过去影响」位只谈过去、「最终结果」位才谈结局），把牌位职责与这张牌的正/逆位牌意揉在一起说，绝不混淆不同牌位的意思、绝不张冠李戴；逆位的牌一律按逆位牌意解读。然后再自然落到你们俩的真实关系与最近的状态上（结合上面的记忆和聊天气氛，最近吵过架就收着点说，甜蜜期就放开了说）；用符合你人设的语气，像恋人坐在身边一起看牌，一句一句讲给对方听；不要占卜术语堆砌，不要模板腔，不要「可能也许」满天飞，敢给具体的小建议。',
-  ]
-    .filter(Boolean)
-    .join('\n');
-  const user = `本次占卜用的是「${opts.spreadName}」牌阵，共抽了 ${opts.cards.length} 张牌（综合解读只能围绕这 ${opts.cards.length} 张牌，绝不要提别的牌）。\n牌位顺序与抽牌结果：\n${cardLines}\n\n请输出 JSON（禁止 emoji、禁止 markdown）：\n{"per":["第1张牌的解读（40~85字：先点牌位职责与正/逆位牌意，再落到你们俩，像说给对方听的话）","…每张牌一条，顺序与数量和上面完全一致"],"overall":"综合解读（90~160字：按牌阵顺序把整副牌串起来回答主题/问题，给一句贴你们关系的收尾，用${ta}的口吻，禁止列表）"}。只输出 JSON。`;
+    '你是一位经验丰富、语气温柔而专业的塔罗占卜师，正在为来访者逐张解读一副刚抽好的牌。你的解读只依据牌本身：每张牌的正/逆位牌意，加上它所在牌位的职责。',
+    '解读纪律：必须严格按牌阵与牌位逐张解读——第 i 张只谈它自己那个牌位的职责（例如「阻碍」位只谈阻碍、「过去影响」位只谈过去、「最终结果」位才谈结局），把牌位职责与这张牌的正/逆位牌意揉在一起说，绝不混淆不同牌位的意思、绝不张冠李戴；逆位的牌一律按逆位牌意解读。',
+    '语气：平静、真诚、有洞察力，像一位懂塔罗的朋友坐在身边陪你一张张看牌；不堆砌占卜术语，没有模板腔，不给空洞的「可能也许」，敢给具体的小建议；绝不编造来访者的身份、经历或感情细节，不引用任何「你们的故事」。',
+  ].join('\n');
+  const user = `来访者的占卜主题：${opts.themeLabel}${opts.question ? `；具体的问题是「${opts.question}」` : ''}。\n本次用的是「${opts.spreadName}」牌阵，共抽了 ${opts.cards.length} 张牌（综合解读只能围绕这 ${opts.cards.length} 张牌，绝不要提别的牌）。\n牌位顺序与抽牌结果：\n${cardLines}\n\n请输出 JSON（禁止 emoji、禁止 markdown）：\n{"per":["第1张牌的解读（40~85字：点出牌位职责，结合正/逆位牌意温柔讲透，可直接对来访者说话）","…每张牌一条，顺序与数量和上面完全一致"],"overall":"综合解读（90~160字：按牌阵顺序把整副牌串起来回答主题/问题，落一句务实的收尾与建议，禁止列表）"}。只输出 JSON。`;
   try {
-    const raw = await llmUserFirst(sys, user, 0.9);
+    const raw = await llmUserFirst(sys, user, 0.8);
     const j = extractJson<{ per?: string[]; overall?: string }>(raw);
     if (!j || !Array.isArray(j.per) || j.per.length === 0) return null;
     const per = opts.cards.map((_, i) => stripEmoji(cut(String(j.per?.[i] ?? ''), 130))).filter(Boolean);

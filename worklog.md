@@ -20414,3 +20414,23 @@ Work Log:
 Stage Summary:
 - 关键决策：①牌阵与主题解耦——主题只定「问什么」、牌阵洗牌后独立选「怎么摆」，AI 同时拿到主题语境与牌位职责，13 种牌阵共用一套选牌/翻牌/解读管线；②动态牌位用「归一化网格坐标+ResizeObserver 实测容器」渲染，任意牌阵（十字/金字塔/竖列/生命之树）零特例排版，rot/labelDy/labelSide 三个修正字段覆盖横牌交叠与标签避让；③飞牌动画用「测量矩形+单元素幽灵层+transition」而非 FLIP 全量重排——起点带牌轮当前倾角、终点缩放匹配牌位尺寸（横牌位宽高互换），落位后由 onTransitionEnd 提交状态，飞行中禁连点避免乱序；④右缘牌轮锚点从「容器中心」改为「容器底部右缘外」，弧从底部中央沿右缘展开，贴参考图形态；⑤凯尔特横牌标签重叠用「横牌 y 上移 0.92 行+现况 labelDy 14+潜意识根源 y 2.3」三处微调化解
 - 涉及文件：src/lib/tarot-deck.ts（+13 牌阵定义+类型扩展）、src/components/apps/couple-tarot.tsx（全量重写）、src/lib/ios/couple-ai.ts（aiTarotReading 按牌位强化）、src/app/globals.css（塔罗动画浅色化+2 组新 keyframes）
+---
+Task ID: round-47
+Agent: 主协调者 (Z.ai Code)
+Task: 第四十七轮：塔罗牌按用户反馈四项重做——①上网调研+AI 生成复古线稿塔罗牌面（大阿尔卡那 22 张插画 + 小阿尔卡那 SVG pip 阵）②选牌界面牌轮变大、上方牌位框变小 ③AI 解读去人设去记忆（纯塔罗师按牌位正逆位解读）④切牌动画重做（轻触牌堆触发三叠分合 1.4s + 防抖 + 自动进牌阵）
+
+Work Log:
+- 【网图调研】image-search 拉取真实塔罗牌卡面参考（Etsy 玫瑰金 Rider-Waite 实拍 + Canva 手绘 THE SUN 线稿卡），提炼真实卡面设计语言：米色纸底 + 双线内框切角 + 顶部罗马数字 tab + 中央线稿插画占满 + 底部英文名小字
+- 【AI 生成牌面插画】①majors.png（1024²，z-ai image 一次生成 6×4=24 格 sprite：愚人→世界 22 张大阿尔卡那线稿插画 + 2 格备用星/月徽记，复古炭墨线稿+米色纸底风格统一）；出图校对发现两处偏差并修复——恋人格画成了天使、倒吊人缺失，补生成 patch.png（1344×768 左右两格：左恋人男女牵手+太阳、右倒吊人树挂），MAJOR_SPRITE 映射表实测校对（月亮→备用新月格[5,3]、太阳→[0,3]、审判→[1,3]、世界→[2,3]）归位 22 张全部正确；资源落 public/tarot/
+- 【卡面重写 CardFace】MajorArt 用 backgroundSize 600%×400% + backgroundPosition 百分比按格裁切 sprite（恋人/倒吊人走 patch 200%×100% 左右半）；MinorArt 小阿尔卡那：数字牌按经典扑克 pip 阵（PIP_LAYOUT A~10 共 10 套单位坐标）渲染 SuitGlyph 花色线稿（权杖带叶 staff / 圣杯 chalice / 宝剑 blade / 星币 coin+五角星，纯 SVG stroke 炭墨色），宫廷牌（侍从/骑士/王后/国王）单个大花色符号+顶部徽记（✦☾☼♛）+底部中文职衔；CardFace 布局=复古米色纸底 PAPER_BG + 双线内框 + 顶部罗马数字/点数+小花色 + 中央插画窗 + 底部 nameEn 小写字距 + 中文名（font-serif 复古味），逆位整面 rotate-180+黑徽章；CardBack 同步复古化（斜纹格底+月徽圆环+四角星）；解读卡头像改 ☾ 纸色徽章、标题「塔罗解读·按牌位职责·按正逆位牌意」
+- 【尺寸调整】牌轮 CARD_W 64→88、CARD_H 101→137（黄金比例 0.642）、WHEEL_R 310→400（扇形更高更贴右缘）；SpreadSlots geo 加 pickScale=mode==='pick'?0.76:1（选牌时牌位框缩小 24%，翻牌/详情视图保持原大），pickSlotsH 上限 54%→46%、系数 28+6r→22+5r
+- 【AI 去人设去记忆】couple-ai.ts aiTarotReading 重写：删除 aiTarget/readSnap/taPersonaOf/recentChatBlock/memChatRecallBlock 全部人设与记忆召回，系统提示改「经验丰富、语气温柔而专业的塔罗占卜师，只依据牌本身（正逆位牌意+牌位职责）」，保留严格按牌位纪律+逆位按逆位牌意+不编造来访者经历约束，temperature 0.9→0.8；调用点签名不变，coupleTarotRemember 塔罗事件写记忆保留（记忆仅记录事件，解读不消费记忆）；fallbackReading 兜底文案同步去人设（"真正的心意一直都在你们之间"→"顺着牌面的提示走，答案已经在你手里了"）；ReadingCard 删 taName/taAvatar props、RevealBody/DetailPage 级联清理
+- 【三叠切牌重做】ShuffleView 重写：①交互改「洗牌阶段轻触/长按洗牌（保留）→洗过即切牌阶段，提示恒为『请在牌堆处轻触，进行切牌』，轻触牌堆即切牌」——删除旧「切牌/开始选牌阵」双按钮，新增「再洗一次」ghost 胶囊（cutStage 可重复洗）；②CutPhase 状态机 idle→left(0ms)→right(360ms)→hold(720ms)→merge(960ms)→end(1440ms)，pileCardState 按卡组计算每张牌目标 transform：顶部 6 张分到左（-104px,-7° z40 阴影加深）、中段 5 张再分到右（+104px,+6.5° z30）、底部 5 张留中，三叠停顿后合拢按真实切牌顺序（右叠垫底 z8、左叠其上 z12、中叠最顶 z20）+组内 stagger delay+drop-shadow 层级感；cutFlip 交替 6/5 与 5/6 切分可重复播放；③doCut 防抖（cuttingRef 动画中 return + cutTimersRef 统一管理 timer + 卸载清理），pileDown 切牌阶段不启动长按、pileUp 切牌阶段轻触=doCut；④切牌完成自动 setView('spread') 进牌阵选择；主组件增 cutPhase state、restart 重置、cutStageRef 同步
+- 【动画清理】globals.css 删除不再使用的 tarot-cut-fly keyframes 及 reduced-motion 引用
+- 【修 transition 告警】切牌卡 transitionDelay 并入 transition shorthand（React「mix shorthand and non-shorthand」告警清零，清空 console 后实测 0 条）
+- 【端到端实测】agent-browser 全流程（种子联系人小澄+couple-space:state accepted+关锁屏）：主题页无图标玻璃行 ✓ → 轻触洗牌散牌动画+洗后提示「请在牌堆处轻触，进行切牌」+「再洗一次」 ✓ → 轻触牌堆切牌：200ms 帧截图三叠分明（左倾-7°/中正/右倾+6.5°+阴影层级）✓、MutationObserver 实测切换时刻 1453ms/1460ms（1.4s 设计命中 1~1.5s 区间）✓、连点 3 次 60ms 间隔防抖无重复动画 ✓、动画完成自动进牌阵 ✓（含返回洗牌页再切牌循环）→ 牌阵页 13 种 ✓ → 凯尔特十字：10 个小号虚线牌位（0.76 缩放）+右缘大号扇形牌轮（88×137）同屏对比 ✓ → 点牌飞入×10（第 2 张横牌位落位正确）+「选好了」+翻牌胶囊浮现 ✓ → 翻牌视图：凯尔特十字横牌+「第N张·牌位/EN」标签，大牌面=皇后Ⅲ麦穗/皇帝Ⅳ宝座/教皇Ⅴ持杖复古线稿插画清晰，小牌面=权杖9（9 杖 pip 阵）/宝剑A（单剑居中）/星币侍从逆位（5 星币 pip+整面 180°+逆位徽章+侍从✦徽记）✓ → AI 解读三连测全部纯塔罗口吻：无「宝贝」类恋人称呼、无记忆引用（对照第四十六轮同场景输出）、严格按牌位职责（现况位谈现况/阻碍位谈阻碍/身体·心智·灵性位各司其职）、正逆位牌意正确（魔术师逆位言不由衷/女祭司逆位压抑/星币7逆位焦躁）✓ → 历史 3 条持久化+详情布局还原 ✓ → mem-frag:seed-tarot-47 含 couple-tarot 塔罗事件 ✓ → console 清空后切牌零告警 ✓ → dev.log 无新增错误（仅既有 instrumentation Edge Runtime 警告）
+- 校验：bunx tsc --noEmit 全量零错误；bun run lint 49 problems（45+4）与基线一致，couple-tarot.tsx / couple-ai.ts 零问题
+
+Stage Summary:
+- 关键决策：①78 张牌面的插画化用「AI 一次生成 24 格 sprite + 按格裁切」而非逐张生成——成本 1/24 且风格天然统一；出图后人工校对格序，用一张补丁图修复恋人/倒吊人两格偏差、用备用星月格归位月/日/审判/世界，22 张全部正确；②小阿尔卡那不生成图而用 SVG pip 阵（10 套扑克式坐标+4 套线稿花色符号）——56 张零图实现且任意尺寸清晰；③解读去人设用「换系统提示词」而非加后缀过滤——纯塔罗师人格从源头杜绝恋人语气与记忆引用，塔罗事件写记忆保留（记录与解读职责分离）；④三叠切牌用「分状态机+每卡目标 transform+transition」而非 keyframes——16 张牌各有独立轨迹与层级（z 8~40），CSS 变量/keyframes 无法表达；切完即 setView 跳页，天然规避回位跳变；⑤切牌入口从按钮改为「轻触牌堆」，与洗牌共用一个手势区，用 cutStageRef 分流（洗牌阶段长按持续洗、切牌阶段轻触即切），界面更简洁
+- 涉及文件：public/tarot/majors.png（新增）、public/tarot/patch.png（新增）、src/components/apps/couple-tarot.tsx（牌面/尺寸/切牌/解读卡重写）、src/lib/ios/couple-ai.ts（aiTarotReading 去人设去记忆）、src/app/globals.css（删 tarot-cut-fly）

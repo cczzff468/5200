@@ -1,17 +1,19 @@
 'use client';
 
 /**
- * 恋人空间「爱情塔罗」· 浅色毛玻璃风（第四十六轮重做）。
+ * 恋人空间「爱情塔罗」· 浅色毛玻璃风 + 复古线稿塔罗牌面（第四十七轮）。
  *
- * 流程：选主题（预设 + 自定义问题）→ 洗牌（轻触一次 / 长按持续）+ 切牌 →
- * 选牌阵（13 种经典牌阵，含牌位职责说明）→ 选牌（上方按牌阵动态生成虚线牌位框 +
- * 右侧边缘 78 张扇形牌轮：上下滑动 / 双指缩放，点牌飞入第 1 个空牌位）→
- * 翻牌（牌位内逐张 3D 翻开，正/逆位 + 「第N张·牌位 / English」说明）→
- * AI 严格按牌位解读（牌意正逆位 + 牌位职责 + 人设语气 + 记忆上下文）→ 结果 / 历史。
+ * 流程：选主题（预设 + 自定义问题）→ 洗牌（轻触一次 / 长按持续）→ 轻触牌堆三叠切牌（防抖，1.4s，
+ * 左叠分出 → 右叠分出 → 停顿 → 合拢，完成后自动进入）→ 选牌阵（13 种经典牌阵，含牌位职责说明）→
+ * 选牌（上方按牌阵动态生成小号虚线牌位框 + 右侧边缘 78 张大号扇形牌轮：上下滑动 / 双指缩放，
+ * 点牌飞入第 1 个空牌位）→ 翻牌（牌位内逐张 3D 翻开，正/逆位 + 「第N张·牌位 / English」说明）→
+ * AI 纯塔罗解读（第四十七轮去人设去记忆：只按牌位职责 + 正逆位牌意，不带入恋人语气与聊天记忆）→ 结果 / 历史。
  *
+ * - 牌面：大阿尔卡那 22 张用 /tarot/majors.png（6×4 网格按格裁切）+ /tarot/patch.png（恋人/倒吊人），
+ *   小阿尔卡那用 SVG pip 阵 + 花色线稿符号（SuitGlyph）；复古米色纸底 + 双线内框 + 罗马数字 + 底部牌名；
  * - 牌库与牌阵：src/lib/tarot-deck.ts（大阿尔卡那 22 + 小阿尔卡那 56，含正逆位牌意）；
  * - 持久化：state.tarotReadings[contactId]（按恋人联系人 ID 隔离，随 couple-space:state 落 IndexedDB，重启可查）；
- * - 记忆：解读完成后 coupleTarotRemember 写入恋人（AI）记忆（sourceTag='couple-tarot'，标记塔罗事件）；
+ * - 记忆：解读完成后 coupleTarotRemember 写入恋人（AI）记忆（sourceTag='couple-tarot'，标记塔罗事件；仅记录事件，解读本身不用记忆）；
  * - 动画：globals.css tarot-* keyframes；牌轮用 CSS 变量（--wa 角度 / --ws 缩放）驱动，一次样式写全牌生效。
  */
 
@@ -26,6 +28,7 @@ import {
   type TarotCardDef,
   type TarotReading,
   type TarotSpread,
+  type TarotSuit,
   type TarotTheme,
 } from '@/lib/tarot-deck';
 import { aiTarotReading, coupleTarotRemember, type TarotAiCard } from '@/lib/ios/couple-ai';
@@ -61,56 +64,198 @@ function fmtTs(ms: number): string {
 /** AI 失败时的本地兜底解读（牌位 + 牌意直出，语气平实） */
 function fallbackReading(positions: SpreadPos[], cards: { def: TarotCardDef; reversed: boolean }[]): { per: string[]; overall: string } {
   const per = cards.map((c, i) => `【${positions[i]?.label ?? '牌面'}】${c.def.name}（${c.reversed ? '逆位' : '正位'}）——${c.reversed ? c.def.reversed : c.def.upright}`);
-  const overall = `整副牌落在「${cards.map((c) => (c.reversed ? c.def.revKeys : c.def.upKeys).split(' · ')[0]).join('、')}」这些能量上。牌面只是镜子，真正的心意一直都在你们之间。`;
+  const overall = `整副牌落在「${cards.map((c) => (c.reversed ? c.def.revKeys : c.def.upKeys).split(' · ')[0]).join('、')}」这些能量上。顺着牌面的提示走，答案已经在你手里了。`;
   return { per, overall };
 }
 
-// ---------------- 卡背 / 卡面 / 3D 翻牌（浅色玻璃质感） ----------------
+// ---------------- 卡背 / 卡面 / 3D 翻牌（第四十七轮：复古线稿塔罗牌面） ----------------
+
+const INK = '#43392b'; // 复古炭墨
+const PAPER_BG = 'linear-gradient(168deg,#f9f4e7 0%,#f4edda 52%,#ece1c6 100%)';
+
+/** 大阿尔卡那 → majors.png（6 列 × 4 行）网格位置；恋人 / 倒吊人走 patch.png 左右半（实际出图校对） */
+const MAJOR_SPRITE: Record<number, [number, number]> = {
+  0: [0, 0], 1: [1, 0], 2: [2, 0], 3: [3, 0], 4: [4, 0], 5: [5, 0],
+  7: [1, 1], 8: [2, 1], 9: [3, 1], 10: [4, 1], 11: [5, 1],
+  13: [1, 2], 14: [2, 2], 15: [3, 2], 16: [4, 2], 17: [5, 2],
+  18: [5, 3], 19: [0, 3], 20: [1, 3], 21: [2, 3],
+};
+
+/** 大阿尔卡那中央插画：sprite 按格裁切 */
+function MajorArt({ idx }: { idx: number }) {
+  const cell = MAJOR_SPRITE[idx];
+  const base: CSSProperties = { width: '100%', height: '100%', display: 'block' };
+  if (cell) {
+    const [c, r] = cell;
+    return (
+      <div
+        style={{
+          ...base,
+          backgroundImage: 'url(/tarot/majors.png)',
+          backgroundSize: '600% 400%',
+          backgroundPosition: `${(c / 5) * 100}% ${(r / 3) * 100}%`,
+        }}
+      />
+    );
+  }
+  // 恋人(6) / 倒吊人(12)：patch.png 左右两半
+  return (
+    <div
+      style={{
+        ...base,
+        backgroundImage: 'url(/tarot/patch.png)',
+        backgroundSize: '200% 100%',
+        backgroundPosition: idx === 6 ? '0% 0%' : '100% 0%',
+      }}
+    />
+  );
+}
+
+/** 小阿尔卡那花色线稿符号（权杖 / 圣杯 / 宝剑 / 星币） */
+function SuitGlyph({ suit, size, stroke = 1.6 }: { suit: TarotSuit; size: number; stroke?: number }) {
+  const s = { stroke: INK, strokeWidth: stroke, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, fill: 'none' };
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ display: 'block' }}>
+      {suit === 'wands' && (
+        <>
+          <path d="M12 21V3.5" {...s} />
+          <path d="M12 9C9.4 8.5 7.7 6.7 7.5 3.8c2.9.2 4.6 1.9 5 4.6" {...s} />
+          <path d="M12 14c2.6-.5 4.3-2.3 4.5-5.2-2.9.2-4.6 1.9-5 4.6" {...s} />
+          <path d="M9.2 21h5.6" {...s} />
+        </>
+      )}
+      {suit === 'cups' && (
+        <>
+          <path d="M6.5 4h11c0 5-2.6 8-5.5 8S6.5 9 6.5 4z" {...s} />
+          <path d="M12 12v6.2" {...s} />
+          <path d="M9.4 18.2h5.2" {...s} />
+          <path d="M7.8 21h8.4" {...s} />
+        </>
+      )}
+      {suit === 'swords' && (
+        <>
+          <path d="M12 2.5 13.7 15h-3.4L12 2.5z" {...s} />
+          <path d="M7 16.4h10" {...s} />
+          <path d="M12 16.4V21" {...s} />
+          <path d="M9.4 21h5.2" {...s} />
+        </>
+      )}
+      {suit === 'pentacles' && (
+        <>
+          <circle cx="12" cy="12" r="8.4" {...s} />
+          <path d="M12 6.6l1.7 3.5 3.8.5-2.8 2.6.8 3.8-3.5-2-3.5 2 .8-3.8-2.8-2.6 3.8-.5L12 6.6z" {...s} />
+        </>
+      )}
+    </svg>
+  );
+}
+
+/** 小阿尔卡那数字牌 pip 排布（经典扑克式阵位，0~1 单位坐标） */
+const PIP_LAYOUT: Record<string, [number, number][]> = {
+  A: [[0.5, 0.5]],
+  '2': [[0.5, 0.17], [0.5, 0.83]],
+  '3': [[0.5, 0.13], [0.5, 0.5], [0.5, 0.87]],
+  '4': [[0.29, 0.17], [0.71, 0.17], [0.29, 0.83], [0.71, 0.83]],
+  '5': [[0.29, 0.15], [0.71, 0.15], [0.5, 0.5], [0.29, 0.85], [0.71, 0.85]],
+  '6': [[0.29, 0.13], [0.71, 0.13], [0.29, 0.5], [0.71, 0.5], [0.29, 0.87], [0.71, 0.87]],
+  '7': [[0.29, 0.13], [0.71, 0.13], [0.5, 0.315], [0.29, 0.5], [0.71, 0.5], [0.29, 0.87], [0.71, 0.87]],
+  '8': [[0.29, 0.11], [0.71, 0.11], [0.29, 0.37], [0.71, 0.37], [0.29, 0.63], [0.71, 0.63], [0.29, 0.89], [0.71, 0.89]],
+  '9': [[0.29, 0.11], [0.71, 0.11], [0.29, 0.37], [0.71, 0.37], [0.5, 0.5], [0.29, 0.63], [0.71, 0.63], [0.29, 0.89], [0.71, 0.89]],
+  '10': [[0.29, 0.1], [0.71, 0.1], [0.5, 0.24], [0.29, 0.38], [0.71, 0.38], [0.29, 0.62], [0.71, 0.62], [0.5, 0.76], [0.29, 0.9], [0.71, 0.9]],
+};
+
+/** 小阿尔卡那中央图形：数字牌 = pip 阵；宫廷牌 = 单个大花色符号 + 徽记 */
+function MinorArt({ suit, numeral, w, h }: { suit: TarotSuit; numeral: string; w: number; h: number }) {
+  const court = numeral === '侍从' || numeral === '骑士' || numeral === '王后' || numeral === '国王';
+  if (court) {
+    const mark = numeral === '侍从' ? '✦' : numeral === '骑士' ? '☾' : numeral === '王后' ? '☼' : '♛';
+    return (
+      <div className="relative flex h-full w-full items-center justify-center">
+        <span className="absolute left-1/2 top-0 -translate-x-1/2 font-serif" style={{ color: INK, fontSize: Math.max(7, w * 0.13), lineHeight: 1.2 }}>{mark}</span>
+        <SuitGlyph suit={suit} size={Math.min(w * 0.5, h * 0.4)} stroke={1.4} />
+        <span className="absolute bottom-0 left-1/2 -translate-x-1/2 whitespace-nowrap font-serif" style={{ color: INK, fontSize: Math.max(5.5, w * 0.1), letterSpacing: '0.14em' }}>{numeral}</span>
+        <span className="absolute left-1 top-0.5" style={{ color: INK, fontSize: Math.max(4, w * 0.07) }}>✦</span>
+        <span className="absolute right-1 bottom-0.5" style={{ color: INK, fontSize: Math.max(4, w * 0.07) }}>✦</span>
+      </div>
+    );
+  }
+  const pips = PIP_LAYOUT[numeral] ?? PIP_LAYOUT.A;
+  const glyphW = numeral === 'A' ? Math.min(w * 0.44, h * 0.34) : numeral === '10' ? Math.min(w * 0.2, h * 0.15) : Math.min(w * 0.24, h * 0.18);
+  return (
+    <div className="relative h-full w-full">
+      {pips.map(([px, py], i) => (
+        <span key={i} className="absolute" style={{ left: `${px * 100}%`, top: `${py * 100}%`, transform: 'translate(-50%,-50%)' }}>
+          <SuitGlyph suit={suit} size={glyphW} stroke={numeral === 'A' ? 1.5 : 1.3} />
+        </span>
+      ))}
+    </div>
+  );
+}
 
 function CardBack({ w, h }: { w: number; h: number }) {
   return (
     <div
-      className="relative overflow-hidden border border-gray-200/90 shadow-[0_2px_10px_rgba(17,24,39,0.10)]"
-      style={{ width: w, height: h, borderRadius: Math.max(6, w * 0.12), background: 'linear-gradient(160deg,#ffffff 0%,#f4f5f7 52%,#e9ebef 100%)' }}
+      className="relative overflow-hidden border shadow-[0_2px_10px_rgba(17,24,39,0.10)]"
+      style={{ width: w, height: h, borderRadius: Math.max(6, w * 0.12), borderColor: 'rgba(67,57,43,0.4)', background: PAPER_BG }}
     >
-      <div className="absolute inset-[3px] rounded-[7px] border border-gray-200/80" />
-      {/* 星点纹理 */}
+      <div className="absolute inset-[2.5px] rounded-[6px] border" style={{ borderColor: 'rgba(67,57,43,0.55)' }} />
+      <div className="absolute inset-[5px] rounded-[5px] border" style={{ borderColor: 'rgba(67,57,43,0.3)' }} />
+      {/* 复古斜纹格底 */}
       <div
-        className="absolute inset-0 opacity-55"
-        style={{ backgroundImage: 'radial-gradient(circle, #d3d6db 0.7px, transparent 1px)', backgroundSize: '13px 13px' }}
+        className="absolute inset-[6px] opacity-25"
+        style={{
+          backgroundImage:
+            'repeating-linear-gradient(45deg, rgba(67,57,43,0.7) 0 0.6px, transparent 0.6px 7px), repeating-linear-gradient(-45deg, rgba(67,57,43,0.7) 0 0.6px, transparent 0.6px 7px)',
+        }}
       />
-      {/* 中央徽记 */}
+      {/* 中央月徽圆环 */}
       <div className="absolute inset-0 flex items-center justify-center">
         <div
-          className="flex items-center justify-center rounded-full border border-gray-300/80 bg-white/85 backdrop-blur-sm"
-          style={{ width: w * 0.34, height: w * 0.34 }}
+          className="flex items-center justify-center rounded-full border bg-[#f7f1e0]"
+          style={{ width: w * 0.38, height: w * 0.38, borderColor: 'rgba(67,57,43,0.55)' }}
         >
-          <span className="text-gray-400" style={{ fontSize: Math.max(8, w * 0.14) }}>☾</span>
+          <span className="font-serif" style={{ color: INK, fontSize: Math.max(8, w * 0.17), lineHeight: 1 }}>☾</span>
         </div>
       </div>
-      <span className="absolute left-1 top-1 text-[6.5px] text-gray-300">✦</span>
-      <span className="absolute right-1 bottom-1 text-[6.5px] text-gray-300">✦</span>
+      <span className="absolute left-1.5 top-1.5" style={{ color: 'rgba(67,57,43,0.5)', fontSize: Math.max(5, w * 0.08) }}>✦</span>
+      <span className="absolute right-1.5 bottom-1.5" style={{ color: 'rgba(67,57,43,0.5)', fontSize: Math.max(5, w * 0.08) }}>✦</span>
     </div>
   );
 }
 
 function CardFace({ def, reversed, w, h }: { def: TarotCardDef; reversed: boolean; w: number; h: number }) {
+  const majorIdx = def.arcana === 'major' ? Number(def.id.slice(6)) : -1;
   return (
     <div
-      className="relative overflow-hidden border border-gray-200/90 shadow-[0_3px_14px_rgba(17,24,39,0.10)]"
-      style={{ width: w, height: h, borderRadius: Math.max(6, w * 0.12), background: 'linear-gradient(168deg,#ffffff 0%,#fafbfc 55%,#eef0f3 100%)' }}
+      className="relative overflow-hidden border shadow-[0_3px_14px_rgba(17,24,39,0.12)]"
+      style={{ width: w, height: h, borderRadius: Math.max(6, w * 0.12), borderColor: 'rgba(67,57,43,0.4)', background: PAPER_BG }}
     >
-      <div className="absolute inset-[3px] rounded-[7px] border border-gray-200/70" />
-      <div className={`flex h-full w-full flex-col items-center justify-between px-1 py-1.5 ${reversed ? 'rotate-180' : ''}`}>
-        <div className="font-semibold tracking-[0.16em] text-gray-400" style={{ fontSize: Math.max(6, w * 0.115) }}>{def.numeral}</div>
-        <div className="flex flex-col items-center gap-0.5">
-          <span style={{ fontSize: Math.max(11, w * 0.26) }}>{def.symbol}</span>
-          <div className="whitespace-nowrap font-bold text-gray-900" style={{ fontSize: Math.max(7.5, w * 0.16) }}>{def.name}</div>
-          <div className="whitespace-nowrap uppercase tracking-[0.08em] text-gray-400" style={{ fontSize: Math.max(5, w * 0.088) }}>{def.nameEn}</div>
+      <div className="absolute inset-[2.5px] rounded-[6px] border" style={{ borderColor: 'rgba(67,57,43,0.55)' }} />
+      <div className="absolute inset-[5px] rounded-[5px] border" style={{ borderColor: 'rgba(67,57,43,0.3)' }} />
+      <div className={`flex h-full w-full flex-col items-center ${reversed ? 'rotate-180' : ''}`} style={{ padding: `${Math.max(4, h * 0.035)}px ${Math.max(4, w * 0.06)}px` }}>
+        {/* 顶部：罗马数字 / 点数 + 花色 */}
+        <div className="flex shrink-0 items-center gap-[3px] font-serif font-semibold" style={{ color: INK, fontSize: Math.max(6.5, w * 0.13), letterSpacing: '0.1em', lineHeight: 1.1 }}>
+          <span>{def.numeral}</span>
+          {def.suit && <SuitGlyph suit={def.suit} size={Math.max(7, w * 0.14)} stroke={2} />}
         </div>
-        <div className="text-center leading-snug text-gray-500" style={{ fontSize: Math.max(5, w * 0.09) }}>{reversed ? def.revKeys : def.upKeys}</div>
+        {/* 中央插画窗 */}
+        <div
+          className="relative mx-auto mt-[2px] mb-[2px] shrink-0 overflow-hidden"
+          style={{ width: w - Math.max(8, w * 0.14), flex: 1, borderRadius: 4, border: '1px solid rgba(67,57,43,0.32)' }}
+        >
+          {def.arcana === 'major' ? (
+            <MajorArt idx={majorIdx} />
+          ) : (
+            <MinorArt suit={def.suit!} numeral={def.numeral} w={w - Math.max(8, w * 0.14)} h={h - Math.max(14, h * 0.2)} />
+          )}
+        </div>
+        {/* 底部：英文名 + 中文名 */}
+        <div className="w-full shrink-0 text-center" style={{ color: INK }}>
+          <div className="truncate font-serif uppercase" style={{ fontSize: Math.max(5, w * 0.082), letterSpacing: '0.07em', lineHeight: 1.25 }}>{def.nameEn}</div>
+          <div className="truncate font-medium" style={{ fontSize: Math.max(6, w * 0.1), lineHeight: 1.3 }}>{def.name}</div>
+        </div>
       </div>
-      {reversed && <div className="absolute right-1 top-1 rounded-full bg-gray-900 px-1 py-[1px] text-[7px] font-bold text-white">逆位</div>}
+      {reversed && <div className="absolute right-1 top-1 rounded-full bg-gray-900/85 px-1 py-[1px] text-[7px] font-bold text-white">逆位</div>}
     </div>
   );
 }
@@ -174,15 +319,17 @@ function SpreadSlots({ spread, positions, slots, revsBySlot, flippedCount, mode,
     const availH = size.h - 2;
     const rowH = availH / spread.rows;
     const colW = availW / spread.cols;
+    // 第四十七轮：选牌时牌位框更小（放大牌轮的视觉空间）
+    const pickScale = mode === 'pick' ? 0.76 : 1;
     let cardW: number;
     let cardH: number;
     if (rotAll) {
       // 整阵横牌（脉轮竖列）：视觉高 = cardW
-      cardW = Math.max(20, Math.min(rowH - 2, (colW - 6) / 1.58));
+      cardW = Math.max(20, Math.min(rowH - 2, (colW - 6) / 1.58)) * pickScale;
       cardH = cardW * 1.58;
     } else {
-      cardH = Math.max(30, rowH - labelH - 4);
-      cardW = Math.min(cardH * 0.64, colW - 5);
+      cardH = Math.max(30, rowH - labelH - 4) * pickScale;
+      cardW = Math.min(cardH * 0.64, colW - 5) * pickScale;
       cardH = cardW / 0.64;
     }
     return { padX, leftW, labelH, cardW, cardH, rowH, colW };
@@ -394,7 +541,7 @@ function ThemeView({ themes, customQ, setCustomQ, onPick, historyCount, onHistor
   );
 }
 
-// ---------------- 洗牌（轻触一次 / 长按持续）+ 切牌 ----------------
+// ---------------- 洗牌（轻触一次 / 长按持续）+ 三叠切牌（第四十七轮重做） ----------------
 
 const PILE = Array.from({ length: 16 }, (_, i) => ({
   x: Math.round(Math.sin(i * 2.7) * 9),
@@ -407,22 +554,88 @@ const PILE = Array.from({ length: 16 }, (_, i) => ({
   dur: (0.72 + (i % 4) * 0.09).toFixed(2),
 }));
 
-function ShuffleView({ theme, question, tick, count, cutCount, cutFlip, cutting, holding, onDown, onUp, onCut, onStart }: {
+/** 切牌阶段：idle → left（第一叠分到左）→ right（再从中间分一叠到右）→ hold（三叠停顿）→ merge（合拢） */
+type CutPhase = 'idle' | 'left' | 'right' | 'hold' | 'merge';
+
+// 切牌时间线：0 起 left，360ms 起 right，720ms 三叠停顿，960ms 合拢，1400ms 完成收尾（总计 1.4s）
+
+/**
+ * 牌堆里每张牌在三叠切牌中的目标状态：
+ * cutFlip=false：左叠=顶部 6 张（i>=10），右叠=中间 5 张（5..9），中叠=底部 5 张（0..4）；
+ * cutFlip=true 时各分界 -1。合拢顺序按真实切牌：右叠垫底、左叠其上、中叠在最顶。
+ */
+function pileCardState(o: (typeof PILE)[number], i: number, phase: CutPhase, cutFlip: boolean): {
+  transform: string;
+  zIndex: number;
+  filter?: string;
+  delay: number;
+} {
+  const leftFrom = cutFlip ? 11 : 10;
+  const rightFrom = cutFlip ? 6 : 5;
+  const inLeft = i >= leftFrom;
+  const inRight = !inLeft && i >= rightFrom;
+  const base = `translate(-50%,-50%) translate(${o.x}px,${o.y}px) rotate(${o.r}deg)`;
+  const kl = i - leftFrom; // 组内序号（错峰用）
+  const kr = i - rightFrom;
+  if (inLeft) {
+    if (phase === 'left' || phase === 'right' || phase === 'hold') {
+      return {
+        transform: `translate(-50%,-50%) translate(-104px, ${-3 - kl * 1.5}px) rotate(-7deg)`,
+        zIndex: 40,
+        filter: 'drop-shadow(0 12px 14px rgba(17,24,39,0.22))',
+        delay: kl * 0.026,
+      };
+    }
+    if (phase === 'merge') {
+      return {
+        transform: `translate(-50%,-50%) translate(${1 - kl * 0.3}px, ${-0.8 - kl * 0.35}px) rotate(-1.1deg)`,
+        zIndex: 12,
+        filter: 'drop-shadow(0 5px 8px rgba(17,24,39,0.15))',
+        delay: 0.03 + kl * 0.018,
+      };
+    }
+    return { transform: base, zIndex: 20, delay: 0 };
+  }
+  if (inRight) {
+    if (phase === 'left') return { transform: base, zIndex: 14, delay: 0 };
+    if (phase === 'right' || phase === 'hold') {
+      return {
+        transform: `translate(-50%,-50%) translate(104px, ${2 + kr * 1.4}px) rotate(6.5deg)`,
+        zIndex: 30,
+        filter: 'drop-shadow(0 12px 14px rgba(17,24,39,0.22))',
+        delay: kr * 0.026,
+      };
+    }
+    if (phase === 'merge') {
+      return {
+        transform: `translate(-50%,-50%) translate(${-0.8}px, ${0.5 + kr * 0.3}px) rotate(0.9deg)`,
+        zIndex: 8,
+        filter: 'drop-shadow(0 3px 6px rgba(17,24,39,0.1))',
+        delay: kr * 0.018,
+      };
+    }
+    return { transform: base, zIndex: 14, delay: 0 };
+  }
+  // 中叠（底部 5~6 张，合拢时在最顶）
+  if (phase === 'merge') return { transform: base, zIndex: 20, filter: 'drop-shadow(0 6px 9px rgba(17,24,39,0.16))', delay: 0 };
+  return { transform: base, zIndex: 10, delay: 0 };
+}
+
+function ShuffleView({ theme, question, tick, count, cutFlip, cutting, cutPhase, holding, onDown, onUp, onReshuffle }: {
   theme: TarotTheme;
   question: string;
   tick: number;
   count: number;
-  cutCount: number;
   cutFlip: boolean;
   cutting: boolean;
+  cutPhase: CutPhase;
   holding: boolean;
   onDown: () => void;
   onUp: () => void;
-  onCut: () => void;
-  onStart: () => void;
+  onReshuffle: () => void;
 }) {
-  const cutPoint = cutFlip ? 11 : 9;
-  const hint = count === 0 ? '轻触牌堆洗一次 · 长按持续洗牌' : cutCount === 0 ? '洗好了，切一下牌吧' : '好了，去选牌阵吧';
+  const cutStage = count > 0; // 洗过一次即进入切牌阶段
+  const hint = count === 0 ? '轻触牌堆洗一次 · 长按持续洗牌' : '请在牌堆处轻触，进行切牌';
   return (
     <div className="flex h-full flex-col items-center px-6">
       <div className="mt-2 text-center">
@@ -433,7 +646,7 @@ function ShuffleView({ theme, question, tick, count, cutCount, cutFlip, cutting,
         </div>
       </div>
 
-      {/* 牌堆（可按压） */}
+      {/* 牌堆（可按压：洗牌阶段轻触/长按洗牌，切牌阶段轻触切牌） */}
       <div
         className="relative mt-1 flex flex-1 items-center justify-center self-stretch touch-none select-none"
         onPointerDown={onDown}
@@ -448,64 +661,52 @@ function ShuffleView({ theme, question, tick, count, cutCount, cutFlip, cutting,
         />
         <div className="relative h-[172px] w-[110px]">
           {PILE.map((o, i) => {
-            const inTop = i >= cutPoint;
-            const cuttingCard = cutting && inTop;
+            const st = cutting ? pileCardState(o, i, cutPhase, cutFlip) : null;
             return (
               <div
                 key={i}
                 className="absolute left-1/2 top-1/2"
-                style={{ transform: `translate(-50%,-50%) translate(${o.x}px,${o.y}px) rotate(${o.r}deg)`, zIndex: inTop ? 20 : 10 }}
+                style={{
+                  transform: st ? st.transform : `translate(-50%,-50%) translate(${o.x}px,${o.y}px) rotate(${o.r}deg)`,
+                  zIndex: st ? st.zIndex : 10,
+                  filter: st?.filter,
+                  // delay 并入 shorthand（避免 transition/transitionDelay 混用告警）
+                  transition: cutting ? `transform 340ms cubic-bezier(.4,.55,.3,1.04) ${(st?.delay ?? 0).toFixed(3)}s, filter 300ms ease ${(st?.delay ?? 0).toFixed(3)}s` : undefined,
+                  willChange: cutting ? 'transform' : undefined,
+                }}
               >
-                {/* 切牌层：切牌时上半叠飞起落回（视觉等价于切到牌堆底下） */}
+                {/* 洗牌层：key=tick 重挂载触发洗牌动画 */}
                 <div
+                  key={tick}
                   style={
-                    cuttingCard
-                      ? ({ animation: `tarot-cut-fly 0.64s cubic-bezier(.42,.45,.4,1) ${((i - cutPoint) * 0.024).toFixed(3)}s both`, willChange: 'transform' } as CSSProperties)
+                    tick > 0
+                      ? ({ '--sx': `${o.sx}px`, '--sy': `${o.sy}px`, '--sr': `${o.sr}deg`, animation: `tarot-shuffle-card ${o.dur}s ease-in-out ${o.delay}s both`, willChange: 'transform' } as CSSProperties)
                       : undefined
                   }
                 >
-                  {/* 洗牌层：key=tick 重挂载触发洗牌动画 */}
-                  <div
-                    key={tick}
-                    style={
-                      tick > 0
-                        ? ({ '--sx': `${o.sx}px`, '--sy': `${o.sy}px`, '--sr': `${o.sr}deg`, animation: `tarot-shuffle-card ${o.dur}s ease-in-out ${o.delay}s both`, willChange: 'transform' } as CSSProperties)
-                        : undefined
-                    }
-                  >
-                    <CardBack w={110} h={172} />
-                  </div>
+                  <CardBack w={110} h={172} />
                 </div>
               </div>
             );
           })}
         </div>
         {holding && <div className="absolute bottom-1 text-[11.5px] text-gray-500" style={{ animation: 'tarot-star-pulse 1.2s ease-in-out infinite' }}>持续洗牌中…</div>}
+        {cutting && <div className="absolute bottom-1 text-[11.5px] text-gray-500">切牌中…</div>}
       </div>
 
-      {/* 切牌 + 开始选牌 */}
+      {/* 提示 + 再洗一次（切牌动画完成后自动进入牌阵选择） */}
       <div className="flex w-full flex-col items-center gap-2.5 pb-6">
-        <div className="text-[11.5px] text-gray-400">{hint}</div>
-        <div className="flex w-full items-center justify-center gap-2.5">
+        <div className="text-[12px] text-gray-500">{hint}</div>
+        {cutStage && !cutting && (
           <button
             type="button"
-            onClick={onCut}
-            disabled={count === 0 || cutting}
-            data-testid="tarot-cut"
-            className="h-11 flex-1 rounded-full border border-white/90 bg-white/65 text-[14px] font-semibold text-gray-800 backdrop-blur-xl shadow-[0_4px_14px_rgba(17,24,39,0.06)] transition-all active:scale-[0.97] disabled:opacity-35"
+            onClick={onReshuffle}
+            data-testid="tarot-reshuffle"
+            className="h-9 rounded-full border border-white/90 bg-white/55 px-5 text-[12.5px] text-gray-500 backdrop-blur-xl transition-opacity active:opacity-60"
           >
-            切牌
+            再洗一次
           </button>
-          <button
-            type="button"
-            onClick={onStart}
-            disabled={cutCount === 0 || cutting}
-            data-testid="tarot-start-pick"
-            className="h-11 flex-1 rounded-full bg-gray-900 text-[14px] font-semibold text-white shadow-[0_8px_20px_rgba(17,24,39,0.22)] transition-all active:scale-[0.97] disabled:opacity-35"
-          >
-            开始选牌阵
-          </button>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -607,11 +808,11 @@ function SpreadView({ theme, question, onStart }: {
 // ---------------- 右缘扇形牌轮（78 张，上下滑动 / 双指缩放 / 点选飞牌） ----------------
 
 const WHEEL_STEP = 360 / 78;
-const WHEEL_R = 310;
+const WHEEL_R = 400; // 第四十七轮：牌轮半径加大（扇形更高、更贴右缘展开）
 const WHEEL_MIN_SCALE = 0.7;
 const WHEEL_MAX_SCALE = 1.4;
-const CARD_W = 64;
-const CARD_H = 101;
+const CARD_W = 88; // 第四十七轮：牌轮上的牌变大
+const CARD_H = 137;
 
 function CardWheel({ hidden, onTapCard, varRef }: { hidden: number[]; onTapCard: (idx: number, el: HTMLElement) => void; varRef?: React.MutableRefObject<string> }) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -803,7 +1004,7 @@ function FlyGhost({ fly, onEnd }: { fly: FlyState; onEnd: () => void }) {
 // ---------------- 选牌视图（动态牌位框 + 右缘牌轮） ----------------
 
 function pickSlotsH(spread: TarotSpread): string {
-  return `${Math.min(54, 28 + spread.rows * 6)}%`;
+  return `${Math.min(46, 22 + spread.rows * 5)}%`;
 }
 
 function PickView({ theme, question, spread, positions, slots, revsBySlot, filledCount, fly, wheelVarRef, slotRefCb, onSlotTap, onCardTap, onFlip }: {
@@ -887,24 +1088,23 @@ function revealSlotsH(rows: number): number {
   return 380;
 }
 
-function ReadingCard({ reading, taName, taAvatar, positions, drawnDefs }: {
+function ReadingCard({ reading, positions, drawnDefs }: {
   reading: { per: string[]; overall: string; aiUsed: boolean } | null;
-  taName: string;
-  taAvatar: string | null;
   positions: SpreadPos[];
   drawnDefs: { def: TarotCardDef; reversed: boolean }[];
 }) {
   return (
     <div className="mt-3 rounded-2xl border border-white/80 bg-white/65 p-4 backdrop-blur-xl shadow-[0_6px_22px_rgba(17,24,39,0.06)]" data-testid="tarot-reading">
       <div className="flex items-center gap-2.5">
-        {taAvatar ? (
-          <img src={taAvatar} alt={taName} className="h-9 w-9 rounded-full border border-gray-200 object-cover" />
-        ) : (
-          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-200/80 text-[14px] font-bold text-gray-700">{taName.slice(0, 1)}</span>
-        )}
+        <span
+          className="flex h-9 w-9 items-center justify-center rounded-full border font-serif text-[15px]"
+          style={{ borderColor: 'rgba(67,57,43,0.35)', background: PAPER_BG, color: INK }}
+        >
+          ☾
+        </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[14px] font-bold text-gray-900">{taName} 的解读</div>
-          <div className="text-[10.5px] text-gray-500">结合牌位 · 牌意 · 你们的故事</div>
+          <div className="text-[14px] font-bold text-gray-900">塔罗解读</div>
+          <div className="text-[10.5px] text-gray-500">按牌位职责 · 按正逆位牌意</div>
         </div>
       </div>
 
@@ -914,7 +1114,7 @@ function ReadingCard({ reading, taName, taAvatar, positions, drawnDefs }: {
             <span className="absolute inset-0 rounded-full border-2 border-gray-300 border-t-gray-800" style={{ animation: 'tarot-halo-spin 0.9s linear infinite' }} />
             <Star className="h-2.5 w-2.5 text-gray-700" />
           </span>
-          <span className="text-[12.5px] text-gray-600">{taName} 正在结合你们的故事解读这副牌…</span>
+          <span className="text-[12.5px] text-gray-600">正在解读这副牌…</span>
         </div>
       ) : (
         <div className="mt-3.5 flex flex-col gap-3">
@@ -941,7 +1141,7 @@ function ReadingCard({ reading, taName, taAvatar, positions, drawnDefs }: {
   );
 }
 
-function RevealBody({ spread, positions, slots, revsBySlot, flippedCount, mode, theme, question, reading, taName, taAvatar, footer }: {
+function RevealBody({ spread, positions, slots, revsBySlot, flippedCount, mode, theme, question, reading, footer }: {
   spread: TarotSpread;
   positions: SpreadPos[];
   slots: (number | null)[];
@@ -951,8 +1151,6 @@ function RevealBody({ spread, positions, slots, revsBySlot, flippedCount, mode, 
   theme: { label: string };
   question: string;
   reading: { per: string[]; overall: string; aiUsed: boolean } | null;
-  taName: string;
-  taAvatar: string | null;
   footer?: React.ReactNode;
 }) {
   const drawnDefs = slots
@@ -972,7 +1170,7 @@ function RevealBody({ spread, positions, slots, revsBySlot, flippedCount, mode, 
         <SpreadSlots spread={spread} positions={positions} slots={slots} revsBySlot={revsBySlot} flippedCount={flippedCount} mode={mode} />
       </div>
 
-      <ReadingCard reading={reading} taName={taName} taAvatar={taAvatar} positions={positions} drawnDefs={drawnDefs} />
+      <ReadingCard reading={reading} positions={positions} drawnDefs={drawnDefs} />
       {footer}
     </div>
   );
@@ -1070,7 +1268,6 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
   const meta = readInviteMeta();
   const cid = meta.partnerContactId || 'default';
   const channel = meta.partnerApp ?? 'wx';
-  const taName = (state.taName || '').trim() || 'TA';
   const meName = (state.meName || '').trim() || '我';
 
   const [view, setView] = useState<View>('theme');
@@ -1081,6 +1278,7 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
   const [cutCount, setCutCount] = useState(0);
   const [cutFlip, setCutFlip] = useState(false);
   const [cutting, setCutting] = useState(false);
+  const [cutPhase, setCutPhase] = useState<CutPhase>('idle');
   const [holding, setHolding] = useState(false);
   const [spread, setSpread] = useState<TarotSpread | null>(null);
   const [spreadN, setSpreadN] = useState(1);
@@ -1106,8 +1304,43 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
     setShuffleTick((t) => t + 1);
     setShuffleCount((n) => n + 1);
   }, []);
+  const cutStage = shuffleCount > 0; // 洗过一次即进入切牌阶段
+  const cutStageRef = useRef(false);
+  cutStageRef.current = cutStage;
+
+  // —— 三叠切牌（1.4s）：左叠分出 → 右叠分出 → 三叠停顿 → 合拢（右垫底·左其上·中顶） → 自动进牌阵 ——
+  const cutTimersRef = useRef<number[]>([]);
+  const doCut = useCallback(() => {
+    if (cuttingRef.current || shuffleCount === 0) return; // 防抖：动画中不重复触发
+    cuttingRef.current = true;
+    setCutting(true);
+    setCutPhase('left');
+    setCutCount((n) => n + 1);
+    const t = cutTimersRef.current;
+    t.push(window.setTimeout(() => setCutPhase('right'), 360));
+    t.push(window.setTimeout(() => setCutPhase('hold'), 720));
+    t.push(window.setTimeout(() => setCutPhase('merge'), 960));
+    t.push(
+      window.setTimeout(() => {
+        cuttingRef.current = false;
+        setCutting(false);
+        setCutPhase('idle');
+        setCutFlip((f) => !f); // 换一组切分，动画可重复
+        setView('spread'); // 切牌完成，自动进入牌阵选择
+      }, 1440),
+    );
+  }, [shuffleCount]);
+  useEffect(
+    () => () => {
+      cutTimersRef.current.forEach((id) => window.clearTimeout(id));
+      cutTimersRef.current = [];
+    },
+    [],
+  );
+
   const pileDown = useCallback(() => {
     if (cuttingRef.current) return;
+    if (cutStageRef.current) return; // 切牌阶段：按下不启动长按洗牌
     holdingRef.current = false;
     pressTimer.current = window.setTimeout(() => {
       holdingRef.current = true;
@@ -1117,6 +1350,11 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
   }, [doShuffle]);
   const pileUp = useCallback(() => {
     if (cuttingRef.current) return;
+    if (cutStageRef.current) {
+      // 切牌阶段：轻触牌堆 = 切牌（cuttingRef 防抖，动画中不重复触发）
+      doCut();
+      return;
+    }
     if (pressTimer.current != null) {
       window.clearTimeout(pressTimer.current);
       pressTimer.current = null;
@@ -1127,7 +1365,7 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
     } else {
       doShuffle();
     }
-  }, [doShuffle]);
+  }, [doShuffle, doCut]);
   useEffect(() => {
     if (!holding) return;
     const iv = window.setInterval(doShuffle, 1000);
@@ -1139,19 +1377,6 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
     },
     [],
   );
-
-  // —— 切牌：上半叠飞起再落回（视觉等价于切到牌堆底下） ——
-  const doCut = useCallback(() => {
-    if (cuttingRef.current || shuffleCount === 0) return;
-    cuttingRef.current = true;
-    setCutting(true);
-    setCutCount((n) => n + 1);
-    window.setTimeout(() => {
-      cuttingRef.current = false;
-      setCutting(false);
-      setCutFlip((f) => !f); // 换一半再切，动画可重复
-    }, 680);
-  }, [shuffleCount]);
 
   // —— 选定牌阵 → 进入选牌 ——
   const startSpread = useCallback((s: TarotSpread, n: number) => {
@@ -1351,6 +1576,7 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
     setCutCount(0);
     setCutFlip(false);
     setCutting(false);
+    setCutPhase('idle');
     cuttingRef.current = false;
     setView('theme');
   }, []);
@@ -1414,14 +1640,13 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
             question={theme.custom ? customQ.trim() : ''}
             tick={shuffleTick}
             count={shuffleCount}
-            cutCount={cutCount}
             cutFlip={cutFlip}
             cutting={cutting}
+            cutPhase={cutPhase}
             holding={holding}
             onDown={pileDown}
             onUp={pileUp}
-            onCut={doCut}
-            onStart={() => setView('spread')}
+            onReshuffle={doShuffle}
           />
         )}
         {view === 'spread' && theme && (
@@ -1455,8 +1680,6 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
             theme={{ label: theme.label }}
             question={theme.custom ? customQ.trim() : ''}
             reading={reading}
-            taName={taName}
-            taAvatar={state.taAvatar}
             footer={
               reading ? (
                 <div className="mt-4 grid grid-cols-2 gap-2.5">
@@ -1493,8 +1716,6 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
         {view === 'detail' && detail && (
           <DetailPage
             reading={detail}
-            state={state}
-            taName={taName}
             onBack={() => {
               setDetail(null);
               setView('history');
@@ -1526,10 +1747,8 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
 
 // ---------------- 历史详情 ----------------
 
-function DetailPage({ reading, state, taName, onBack, onDelete }: {
+function DetailPage({ reading, onBack, onDelete }: {
   reading: TarotReading;
-  state: CoupleState;
-  taName: string;
   onBack: () => void;
   onDelete: () => void;
 }) {
@@ -1547,8 +1766,6 @@ function DetailPage({ reading, state, taName, onBack, onDelete }: {
       theme={{ label: reading.themeLabel }}
       question={reading.question}
       reading={reading.per.length > 0 || reading.overall ? { per: reading.per, overall: reading.overall, aiUsed: reading.aiUsed } : null}
-      taName={taName}
-      taAvatar={state.taAvatar}
       footer={
         <div className="mt-4 grid grid-cols-2 gap-2.5">
           <button
