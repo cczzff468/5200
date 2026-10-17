@@ -20565,3 +20565,20 @@ Work Log:
 Stage Summary:
 - 关键决策：①修在「切页衔接」而非「各牌阵」——幽灵 click 是 pointerup 选牌 + 卸载原目标的固有组合，根容器 capture 拦截一处覆盖所有牌阵与所有误触目标（牌位/翻牌/去选牌按钮）；②620→600ms 窗口取值：覆盖补发 click（实测 <100ms）+ 飞牌期，且不影响真人后续操作；③filledCount→findIndex(null) 只换「牌位定位」三处，进度文案「已选 X/N」与序号语义不变
 - 涉及文件：src/components/apps/couple-tarot.tsx（pickGuardRef + onClickCapture + handleSlotTap 防护 + SlotsView/WheelView nextSlot 定位）
+
+---
+Task ID: round-54
+Agent: 主协调者 (Z.ai Code)
+Task: 第五十四轮：用户追问「有没有更好的办法」——把第五十三轮的幽灵 click 600ms 时间窗防护升级为「事件配对（arming）」确定性方案
+
+Work Log:
+- 【方案对比】用户质疑时间窗方案后评估四条路线：①源头 preventDefault——Pointer Events 规范明确 click 不属于 compatibility mouse events，取消 pointerdown/up 也拦不住 click，不可行；②延迟卸载牌轮（等补发 click 落在原元素）——引入人为延迟与卸载时序复杂度；③时间窗（第五十三轮现状）——启发式：快设备误吞 600ms 内真实操作、慢设备/长任务下补发 click 晚于 600ms 会漏放；④事件配对（选定）——click 必须配对到本页内的 pointerdown/keydown 才合法，无手势来源的 click 即幽灵，确定性零误判
+- 【实现】pickGuardRef 时间戳整体移除，换 clickArmedRef：根容器 onPointerDownCapture / onKeyDownCapture 武装（键盘 Enter/Space 无 pointerdown 也要能激活按钮）；根容器 onClickCapture 消费武装（armed→放行并复位）或吞掉（unarmed→preventDefault+stopPropagation）；handleCardTap 切页前主动解除武装——本手势即将卸载自己的目标，其补发 click 定义上必是幽灵；handleSlotTap 内 600ms 双保险随时间窗一起移除（单机制，无双保险冗余）
+- 【正确性论证】幽灵 click 只产生于「pointerup 选牌 + 目标卸载」的牌轮选牌手势，该手势在切页前必经 handleCardTap 解除武装；其余任何手势都停留在本页，其 click 天然合法；程序化 .click()（组件内无使用点，已 grep 确认）签名等同幽灵被吞，属预期行为；键盘激活由 onKeyDownCapture 武装兜住，无障碍不回退
+- 【测试环境】agent-browser 全新 profile：发现 kv store 是 {key,value} 记录 + keyPath（显式传 out-of-line key 会同步抛 DataError 致 Promise 永不落定→eval 超时假象），种数据须写 put({key,value})；?open=couple 深链接锁屏时不抢开（PhoneShell 开机门控），改走解锁→搜索→应用库→恋人空间→发现→爱情塔罗
+- 【端到端实测】三张牌（ppt）全流程 6 项断言全过：A) 选第 1 张后飞牌中段幽灵 click 命中 slot0（elementFromPoint 确认命中牌位）→ 牌保留 ✓；B) 延迟 1.5s+ 幽灵 click（旧 600ms 窗已过期、旧方案必漏放的场景）→ 仍被吞 ✓；C) 真实手势序列（pointerdown+click）点已填 slot0 → 正常收回、按钮回「去选第 1 张牌 · 过去」✓（arming 不误伤真实操作，600ms 内快操作限制消除）；D) 重选落回 slot0（findIndex 修复回归）✓；E) 第 2/3 张选完各遭 1-2 次幽灵 click → 三张全满 +「翻牌」✓；F) 翻牌页三张 reginanka 牌面（教皇逆/命运之轮/倒吊人逆）+ round-52 徽章 + AI 按牌位解读 4 段 ✓。牌阵张数回归：单张牌（1 位）选满即「翻牌」✓；二选一（5 位十字）选 2 张后 slot0/slot1 遭幽灵 click 均保留、按钮「去选第 3 张牌 · A 结果」✓。console 零错误、页面 errors 空、dev.log 仅既有 instrumentation 基线警告
+- 校验：bunx tsc --noEmit 零错误；bunx eslint couple-tarot.tsx 零问题；git 提交
+
+Stage Summary:
+- 关键决策：①防幽灵 click 的正确抽象是「事件配对」而非「时间窗」——幽灵 click 的本质特征是『没有配对 pointerdown 的 click』（因果签名），不是『发生得太快的 click』（时间启发）；②武装/解除的三个落点：根容器捕获武装（pointerdown+keydown）、click 消费或吞掉、牌轮选牌切页前主动解除——全页一处根容器统一处理，覆盖所有牌阵张数与所有误触目标（牌位/去选牌/翻牌按钮），不随牌阵增长复杂度；③收益：任何延迟的补发 click 都拦得住（慢设备/长任务安全）、600ms 内真实快操作不再被误吞、删除双保险冗余代码
+- 涉及文件：src/components/apps/couple-tarot.tsx（pickGuardRef→clickArmedRef、根容器三捕获处理器、handleCardTap 解除武装、handleSlotTap 移除时间检查、头注释补第五十四轮）
