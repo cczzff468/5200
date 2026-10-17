@@ -582,6 +582,97 @@
   opacity: 0.42;
   font-weight: 300;
 }
+/* —— 第四十五轮 爱情塔罗（暗黑星空风）—— */
+/* 洗牌：单张牌飞出再归位（外层定位，内层做位移旋转；--sx/--sy/--sr 每张随机） */
+@keyframes tarot-shuffle-card {
+  0% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  32% {
+    transform: translate(var(--sx), var(--sy)) rotate(var(--sr));
+  }
+  68% {
+    transform: translate(calc(var(--sx) * -0.55), calc(var(--sy) * -0.55)) rotate(calc(var(--sr) * -0.7));
+  }
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+}
+/* 牌堆呼吸光晕 */
+@keyframes tarot-pile-glow {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.75;
+    transform: scale(1.12);
+  }
+}
+/* 选中的牌在牌轮上向上浮动 */
+@keyframes tarot-pick-lift {
+  0% {
+    transform: translateY(0);
+  }
+  55% {
+    transform: translateY(-34px);
+  }
+  100% {
+    transform: translateY(-26px);
+  }
+}
+/* 翻牌后卡面浮现 */
+@keyframes tarot-reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+/* 解读文字渐入上移 */
+@keyframes tarot-text-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* AI 解读加载：紫环旋转 */
+@keyframes tarot-halo-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* 星空大星呼吸（塔罗占卜进行中） */
+@keyframes tarot-star-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [animation\:tarot-shuffle-card],
+  [animation\:tarot-pile-glow],
+  [animation\:tarot-pick-lift],
+  [animation\:tarot-reveal-in],
+  [animation\:tarot-text-in],
+  [animation\:tarot-halo-spin],
+  [animation\:tarot-star-pulse] {
+    animation: none;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   [animation\:couple-sub-in],
   [animation\:couple-pop-heart],

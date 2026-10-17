@@ -1818,6 +1818,81 @@ export async function aiZodiacReading(meSign: string, taSign: string): Promise<{
   }
 }
 
+// ---------------- 爱情塔罗（第四十五轮）：AI 解读 + 塔罗事件记忆 ----------------
+
+/** 塔罗 AI 解读的抽牌输入（牌意由调用方按正/逆位从 78 张牌库取好） */
+export interface TarotAiCard {
+  pos: string; // 牌位标签（过去/现在/未来/TA的心意/…）
+  name: string;
+  nameEn: string;
+  reversed: boolean;
+  meaning: string; // 对应正/逆位牌意
+  keys: string; // 对应正/逆位关键词
+}
+
+/**
+ * 塔罗事件写进恋人（AI）的记忆（标记为「塔罗事件」）：
+ * sourceTag='couple-tarot' —— 不同次占卜互不相似合并（每次都是独立事件），只做精确重复强化。
+ */
+export function coupleTarotRemember(contactId: string, channel: CoupleChannel, content: string): void {
+  const t = (content ?? '').trim();
+  if (!contactId || !t) return;
+  try {
+    memAddEventFragment(contactId, channel, t, { sourceTag: 'couple-tarot', eventTime: Date.now() });
+  } catch {
+    /* 记忆写入失败静默 */
+  }
+}
+
+/**
+ * 爱情塔罗 AI 解读：结合每张牌的正/逆位牌意 + 占卜主题/自定义问题 + 人设语气 + 记忆与最近聊天
+ * （比如最近是不是吵架了），用「TA 陪我看牌」的口吻生成自然解读。返回 null 时调用方走本地兜底。
+ */
+export async function aiTarotReading(opts: { themeLabel: string; question?: string; cards: TarotAiCard[] }): Promise<{ per: string[]; overall: string } | null> {
+  const target = aiTarget();
+  if (!target) return null;
+  const snap = readSnap();
+  if (!snap) return null;
+  const me = (snap.meName || '').trim() || '我';
+  const ta = (snap.taName || '').trim() || 'TA';
+  const p = await taPersonaOf(target.contactId);
+  if (!p) return null;
+  currentPartnerId = target.contactId;
+  currentChannel = target.channel;
+  const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
+  // 记忆碎片召回（与聊天同一套记忆：最近的共同经历/吵架/约定都会被带进解读）
+  let memBlock = '';
+  try {
+    memBlock = memChatRecallBlock(target.contactId, target.channel, `${me}和${ta}最近的感情状态 共同经历 吵架 约定 心事`, { mode: 'private' });
+  } catch {
+    /* 召回失败不影响 */
+  }
+  const cardLines = opts.cards
+    .map((c, i) => `${i + 1}.【${c.pos}】${c.name}（${c.nameEn}）· ${c.reversed ? '逆位' : '正位'}\n   牌意：${c.meaning}\n   关键词：${c.keys}`)
+    .join('\n');
+  const sys = [
+    llmSystem(p, me, snap),
+    `场景：${me}刚刚在恋人空间「爱情塔罗」里完成了一次占卜（主题：${opts.themeLabel}${opts.question ? `；TA 的问题是「${opts.question}」` : ''}），抽好了牌，正等${ta}陪TA一起看牌、把解读说给TA听。`,
+    memBlock ? `【你们的记忆碎片】\n${cut(memBlock, 700)}` : '',
+    chatCtx ? `【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 300)}` : '',
+    '解读纪律：解读必须先扣住每张牌的牌位含义与正/逆位牌意，再自然落到你们俩的真实关系与最近的状态上（结合上面的记忆和聊天气氛，比如最近吵过架就收着点说，甜蜜期就放开了说）；用符合你人设的语气，像恋人坐在身边一起看牌，一句一句讲给对方听；不要占卜术语堆砌，不要模板腔，不要「可能也许」满天飞，敢给具体的小建议。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const user = `本次占卜共抽了 ${opts.cards.length} 张牌（综合解读只能围绕这 ${opts.cards.length} 张牌，绝不要提别的牌）。\n牌阵与抽牌结果：\n${cardLines}\n\n请输出 JSON（禁止 emoji、禁止 markdown）：\n{"per":["第1张牌的解读（40~85字：先点牌位+正/逆位牌意，再落到你们俩，像说给对方听的话）","…每张牌一条，顺序与数量和上面完全一致"],"overall":"综合解读（90~160字：把整副牌串起来回答主题/问题，给一句贴你们关系的收尾，用${ta}的口吻，禁止列表）"}。只输出 JSON。`;
+  try {
+    const raw = await llmUserFirst(sys, user, 0.9);
+    const j = extractJson<{ per?: string[]; overall?: string }>(raw);
+    if (!j || !Array.isArray(j.per) || j.per.length === 0) return null;
+    const per = opts.cards.map((_, i) => stripEmoji(cut(String(j.per?.[i] ?? ''), 130))).filter(Boolean);
+    const overall = stripEmoji(cut(String(j.overall ?? ''), 260));
+    if (per.length === 0 && !overall) return null;
+    return { per, overall };
+  } catch {
+    return null;
+  }
+}
+
 // 第二十四轮：AI 主动写信模板已删除（写不出来就不寄）
 
 /**

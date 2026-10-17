@@ -20367,3 +20367,25 @@ Work Log:
 Stage Summary:
 - 关键决策：①信纸问题根因是「布局浪费一整行」而非「座位差 3px」——52px 顶距让正文从第三条线开始写，用户三次反馈的「字太往下」实际是整行错位；②横线 div top:32 起画一举解决「线穿日期」与「日期下空行无上线」两个观感问题，公式对题头信纸（56/62）同样自适应；③座位 24px 以用户设备字体度量为准（沙盒 Noto 与鸿蒙 Sans 底部差 3px，以用户实测 24.6 为锚）；④续聊单条化在客户端 followupMax 与服务端 maxCount 双侧强制，任何一侧的旧调用/旧响应都被夹到 1 条，多段响应合并补标点防粘句；⑤网易云胶囊用 grid-cols-5 而非 flex+scroll——对齐网易云原生等宽入口且根治窄屏截断
 - 涉及文件：src/components/apps/couple-space.tsx（编辑页 padTop/横线 div/注释 + 阅读页横线 1px）、src/lib/ios/call-followup.ts、src/app/api/phone/followup/route.ts、src/components/apps/music-mine.tsx
+---
+Task ID: round-45
+Agent: 主协调者 (Z.ai Code)
+Task: 第四十五轮：恋人空间发现页「爱情塔罗」全新重做——暗黑星空风完整占卜流程（主题→洗牌→78 张扇形牌轮选牌→翻牌→AI 解读→历史记录）
+
+Work Log:
+- 【78 张完整牌库】新建 src/lib/tarot-deck.ts：大阿尔卡那 22 张（愚人~世界，罗马数字+专属符号 emoji）+ 小阿尔卡那 56 张（权杖🔥/圣杯💧/宝剑⚔️/星币🪙 × A~10/侍从/骑士/王后/国王），每张含恋爱视角的正位/逆位牌意 + 正逆位关键词 + 卡面符号；tarotDraw() 随机抽 N 张不重复并随机正逆位（约 38% 逆位率）；持久化类型 TarotReading（theme/question/spread/cards/per/overall/aiUsed）与 TarotReadingsMap（contactId → 记录数组）
+- 【AI 解读】couple-ai.ts 新增 aiTarotReading()：走 aiZodiacReading 同款管线（aiTarget→readSnap→taPersonaOf→recentChatBlock→memChatRecallBlock 记忆召回→llmSystem 人设→llmUserFirst 用户API优先/内置兜底），prompt 注入每张牌的【牌位】牌名（正/逆位）+ 牌意 + 关键词，要求「TA 陪我看牌」口吻、结合最近聊天气氛（吵架收着说/甜蜜放开说）、按牌数强约束（单张不再说"这三张牌"），输出 JSON {per[], overall}；coupleTarotRemember() 用 sourceTag='couple-tarot' 写记忆（不同次占卜互不相似合并，标记塔罗事件）
+- 【动画】globals.css 新增 7 组 tarot-* keyframes（洗牌散牌飞出归位/牌堆呼吸光晕/选中上浮/翻牌浮现/解读文字渐入/紫环加载/星呼吸）+ reduced-motion 降级
+- 【主组件】新建 src/components/apps/couple-tarot.tsx（~1050 行，6 个视图）：
+  · 主题选择：4 预设主题卡（恋爱运势 3 张过去/现在/未来、当前状态 1 张、TA 的想法 3 张心意/顾虑/期待、关系走向 3 张现状/考验/走向）+ 自定义问题（内联 textarea，问题带进洗牌/解读/记忆）；有历史时显示「占卜记录(n)」入口
+  · 洗牌：16 张牌背堆叠（确定性随机偏移），轻触洗一次（380ms 长按阈值区分）、长按持续洗（1s 间隔循环 + 「正在与牌灵连接…」），已洗次数统计，洗过才亮「开始选牌」
+  · 选牌：78 张牌背扇形牌轮（CSS 变量 --wa 角度/--ws 缩放驱动，一次样式写全牌生效），单指拖拽旋转（0.26deg/px + rAF 惯性衰减 0.93）、双指捏合缩放（0.75~1.3，R=430px 圆心 132%）、点选上浮（-26px + 品红光晕 + z 提升）+ 对应牌位槽填卡背（虚线槽激活脉冲）；点选即抽牌（picks=牌轮下标，正逆位进轮时预定），再点可撤销，选满自动 750ms 后进翻牌
+  · 翻牌+解读：3D rotateY 逐张翻转（480ms 起每 640ms 一张），逆位卡面整体旋转 180°+「逆位」徽章；全翻完后调 aiTarotReading，加载态（紫环旋转+星芒）→ 逐段渐入（牌位+牌名+正/逆位标题+解读文+综合解读卡），失败走本地牌意兜底（aiUsed 标记）
+  · 结果/历史/详情：TA 头像+名字的解读面板；tarotReadings[contactId] 持久化（函数式 patch + IndexedDB 落盘），coupleTarotRemember 写「（塔罗事件）」记忆 + toast；历史列表（主题/问题/时间/牌 chips/摘要）→ 详情（牌阵+完整解读+删除）
+- 【接入】couple-space.tsx：CoupleState.tarotHistory → tarotReadings: TarotReadingsMap（defaultState 同步），SubRouter.patch 宽化 PatchFn，case 'tarot' 渲染 CoupleTarotPage，删除旧单张抽牌 TarotPage 与 12 张简化 TAROT_DECK（无残留引用）
+- 【端到端实测】agent-browser 全流程：注入联系人（小澄/温柔黏人/异地人设）+ couple-space:state 建立关系 → 发现页点「爱情塔罗」→ 主题卡 5 张+暗黑星空紫调渲染 ✓ → 恋爱运势：轻触洗牌「已洗 1 次·牌已经醒了」→ 长按 2.6s 连续洗 3 次+「正在与牌灵连接…」✓ → 牌轮 78 张扇形展开（修复：初版误用 3 张 drawn 导致挤堆，重构为点选即抽牌）→ 拖拽旋转/点选上浮光晕/槽位填充/「第 N 张牌」推进 ✓ → 选满自动翻牌：愚人正位/星币王后正位/皇后逆位（卡面 180°+徽章）✓ → AI 解读 15s 内生成：结合牌意（愚人=勇敢迈出第一步）、记忆（"还记得我们第一次见面时你那个傻傻的笑容吗"、"异地"）、人设口吻（"宝贝""我会一直陪着你"），无模板腔 ✓ → 单张自定义问题（"我们下个月会见面吗？"）：问题条+大卡居中+AI 只围绕 1 张牌作答（prompt 修复生效）✓ → 历史列表 3 条+详情还原+删除 ✓ → reload 后历史仍在（持久化）✓ → kv 检查 tarotReadings[contactId] 完整落库 ✓ → mem-frag:contactId 含 sourceTag='couple-tarot'「（塔罗事件）阿澈在恋人空间用塔罗牌占卜…」✓ → 回归星座缘分等子页正常 ✓
+- 校验：bunx tsc --noEmit 零错误；eslint 改动文件零问题（全量 lint OOM 为既有基线）；dev.log 仅既有 instrumentation Edge Runtime 警告
+
+Stage Summary:
+- 关键决策：①「点选即抽牌」取代「先抽后选」——牌轮渲染全部 78 张牌背，点选的牌就是结果（正逆位进轮时预定），既符合真实塔罗手感又让牌轮视觉完整；②牌轮用 CSS 变量驱动 transform（--wa/--ws）而非 React state——拖拽/惯性每帧只写一次样式，78 节点零重渲染；③数据沿用恋人空间 IndexedDB kv 体系（tarotReadings 按联系人 ID 隔离）而非新建 Prisma 表，与其余子页持久化路径一致且天然支持重启回看；④AI 解读复用 couple-ai 既有管线（人设/记忆召回/最近聊天/双模型兜底），塔罗事件用独立 sourceTag 防止不同次占卜被相似合并
+- 涉及文件：src/lib/tarot-deck.ts（新增，78 张牌库+类型）、src/components/apps/couple-tarot.tsx（新增，主组件）、src/lib/ios/couple-ai.ts（+aiTarotReading/+coupleTarotRemember）、src/app/globals.css（+7 组动画）、src/components/apps/couple-space.tsx（接入+删旧 TarotPage）

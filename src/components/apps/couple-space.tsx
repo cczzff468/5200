@@ -112,6 +112,8 @@ import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, patchPactCardsWhere, pee
 import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
 import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
 import { setMtPendingPage } from '@/lib/ios/meituan-store';
+import CoupleTarotPage from './couple-tarot';
+import type { TarotReadingsMap } from '@/lib/tarot-deck';
 import { EnvelopeArt, LETTER_ENVELOPES, petKindOf, PetFace } from './couple-letter-bubble';
 import WheelDatePicker from './wheel-date-picker';
 import { displayNameOf, isFriendIn, avatarFor, type ContactRecord } from '@/lib/contacts';
@@ -161,7 +163,7 @@ interface CouplePactRecord {
   reason?: string; // declined 时 TA 的理由
 }
 
-interface CoupleState {
+export interface CoupleState {
   v: 1;
   accepted: boolean; // 是否已接受邀请
   anniversary: string | null; // 纪念日 'YYYY-MM-DD'
@@ -215,7 +217,7 @@ interface CoupleState {
   pactTaAt: number | null; // TA 签名时间
   zodiac: { me: string; ta: string } | null; // 星座缘分选择
   zodiacReading: { me: string; ta: string; score: number; text: string; glow: string; advice: string; watch: string; at: number } | null; // 星座缘分解读（第十九轮：用户 API 模型按真实占星生成，可重测覆盖）
-  tarotHistory: { id: string; name: string; at: number }[]; // 塔罗抽牌历史（存最近一张）
+  tarotReadings: TarotReadingsMap; // 爱情塔罗占卜记录（contactId → 记录，按角色 ID 隔离；第四十五轮重做）
   married: boolean; // 小礼堂：是否已婚
   marriedAt: number | null;
   meetPlace: string; // 情侣轨迹：相遇地点
@@ -322,7 +324,7 @@ function defaultState(): CoupleState {
     pactTaAt: null,
     zodiac: null,
     zodiacReading: null,
-    tarotHistory: [],
+    tarotReadings: {},
     married: false,
     marriedAt: null,
     meetPlace: '',
@@ -422,22 +424,6 @@ const QUIZ_POOL = [
   '你最近一次偷偷想我是什么时候？',
   '你希望十年后的我们是什么样子？',
   '在我们的小家里，你最想拥有哪一个角落？',
-];
-
-/** 爱情塔罗牌组（白灰意象 + 恋爱解读） */
-const TAROT_DECK = [
-  { name: '月亮', meaning: '藏在心底的温柔正悄悄发酵，有些话不必说破，TA 都懂。' },
-  { name: '星星', meaning: '你们的未来像夜空一样辽阔，许下的愿望正在路上。' },
-  { name: '太阳', meaning: '关系进入明亮期，坦诚相待会有甜甜的回应。' },
-  { name: '恋人', meaning: '正位恋人！心意的双向奔赴，大胆靠近吧。' },
-  { name: '命运之轮', meaning: '缘分的齿轮转到你们这边，该发生的甜蜜马上发生。' },
-  { name: '塔', meaning: '小小争执只是云朵路过，各退一步晴空万里。' },
-  { name: '隐士', meaning: '给彼此一点独处空间，想念会在安静里生长。' },
-  { name: '皇后', meaning: '被爱包围的一天，适合撒撒娇、收收礼物。' },
-  { name: '皇帝', meaning: '今天适合把约定定下来，仪式感是爱情的锚。' },
-  { name: '魔术师', meaning: '把「我想你」变成小惊喜，魔法由你施展。' },
-  { name: '女祭司', meaning: '直觉很准的一天，TA 的小心思你能一眼看穿。' },
-  { name: '世界', meaning: '圆满之牌！一个阶段完成了，去庆祝吧。' },
 ];
 
 /** 100 件小事清单（前 5 项与参考图一致：用情侣头像/一起看电影/第一次合照的照片/互穿对方衣服拍照/连麦睡觉） */
@@ -2326,7 +2312,7 @@ function CommentThread({
 function SubRouter(props: {
   sub: SubPage;
   state: CoupleState;
-  patch: (p: Partial<CoupleState>) => void;
+  patch: PatchFn;
   albumId: string | null;
   days: number | null;
   tapMissYou: () => void;
@@ -2352,7 +2338,7 @@ function SubRouter(props: {
     case 'mood':
       return <MoodPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'tarot':
-      return <TarotPage state={state} patch={patch} showToast={showToast} close={close} />;
+      return <CoupleTarotPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'hundred':
       return <HundredPage state={state} patch={patch} close={close} showToast={showToast} />;
     case 'pact':
@@ -5894,55 +5880,6 @@ function timeAgoLabel(at: number): string {
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
   if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}天前`;
   return fmtDate(at);
-}
-
-/** 爱情塔罗：从牌堆抽一张 */
-function TarotPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {
-  const [drawn, setDrawn] = useState<number | null>(null);
-  const [drawing, setDrawing] = useState(false);
-  const draw = () => {
-    if (drawing) return;
-    setDrawing(true);
-    setDrawn(null);
-    setTimeout(() => {
-      const idx = Math.floor(Math.random() * TAROT_DECK.length);
-      setDrawn(idx);
-      setDrawing(false);
-      patch({ tarotHistory: [{ id: uid(), name: TAROT_DECK[idx].name, at: Date.now() }] } as Partial<CoupleState>);
-      showToast(`抽到了「${TAROT_DECK[idx].name}」`);
-    }, 900);
-  };
-  return (
-    <SubShell title="爱情塔罗" onBack={close}>
-      <div className="mt-4 rounded-2xl bg-white/80 backdrop-blur-xl p-6 text-center shadow-sm">
-        <div className="text-[15px] text-[#8e8e96]">深呼吸，心里想着 TA，然后抽一张牌</div>
-        <div className="mx-auto mt-5 flex h-[180px] w-[124px] items-center justify-center rounded-2xl border-[3px] border-[#e2e2e7] bg-[linear-gradient(160deg,#f7f7f9,#e8e8ec)] shadow-inner">
-          {drawn != null ? (
-            <div className="px-2">
-              <div className="text-[34px]">🃏</div>
-              <div className="mt-1 text-[16px] font-bold text-[#2c2c30]">{TAROT_DECK[drawn].name}</div>
-            </div>
-          ) : (
-            <div className="text-[13px] leading-relaxed text-[#9a9aa2]">
-              {drawing ? <Loader2 className="mx-auto h-8 w-8 animate-spin text-[#8e8e97]" /> : '命运\n之牌'}
-            </div>
-          )}
-        </div>
-        {drawn != null && <div className="mt-4 text-[15px] leading-relaxed text-[#4a4a52]">{TAROT_DECK[drawn].meaning}</div>}
-        <button
-          type="button"
-          onClick={draw}
-          disabled={drawing}
-          className="mt-6 h-12 rounded-2xl bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] px-12 text-[16px] font-semibold text-white shadow-[0_5px_16px_rgba(242,83,106,0.30)] disabled:opacity-50"
-        >
-          {drawn != null ? '再抽一次' : '抽取塔罗牌'}
-        </button>
-        {state.tarotHistory && state.tarotHistory.length > 0 && (
-          <div className="mt-4 text-[13px] text-[#b6b6bd]">上次抽到：{state.tarotHistory[0].name}</div>
-        )}
-      </div>
-    </SubShell>
-  );
 }
 
 /** 100 件小事（手账拼贴风）：标题牌 + 拍立得卡片 + 待完成/已完成邮戳 */
