@@ -76,7 +76,26 @@ export function CoverImg({
   alt?: string;
 }) {
   const url = coverSrc(src);
-  if (!url) {
+  // 失败态与 url 绑定存一起，url 变化在渲染期重置（React「无需 Effect」模式，
+  // 避免 effect 里 setState；换头像/封面后重新尝试加载）
+  const [state, setState] = useState({ url, failed: false });
+  if (state.url !== url) setState({ url, failed: false });
+  const failed = state.url === url && state.failed;
+  // 无图或加载失败（外链失效/网络不可达）都不显示浏览器破图：
+  // 有名字 → 首字占位（头像破了仍能认出是谁）；无名字 → 唱片图标占位
+  if (!url || failed) {
+    const ch = (alt || '').trim().slice(0, 1);
+    if (ch) {
+      return (
+        <div
+          role="img"
+          aria-label={alt}
+          className={`flex items-center justify-center bg-zinc-300 text-[13px] font-semibold text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300 ${rounded} ${className}`}
+        >
+          {ch}
+        </div>
+      );
+    }
     return (
       <div
         className={`flex items-center justify-center bg-zinc-200 dark:bg-zinc-800 ${rounded} ${className}`}
@@ -86,13 +105,13 @@ export function CoverImg({
     );
   }
   return (
-     
     <img
       src={url}
       alt={alt || '封面'}
       loading="lazy"
       className={`object-cover bg-zinc-200 dark:bg-zinc-800 ${rounded} ${className}`}
       draggable={false}
+      onError={() => setState({ url, failed: true })}
     />
   );
 }

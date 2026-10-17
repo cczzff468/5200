@@ -35,8 +35,9 @@
 import { buildPersonaSystemPrompt, type PersonaSource } from './persona';
 import { memAddEventFragment, memChatRecallBlock, getMemSettings } from '../memory';
 import { listContacts, getContact, ownerRealName } from './contacts-store';
-import type { ContactRecord } from '../contacts';
+import { avatarFor, type ContactRecord } from '../contacts';
 import { kvGet, kvSet, kvDel } from './idb-kv';
+import { readInviteMeta, COUPLE_STATE_EVENT } from './couple-invite';
 import { useSettings } from './store';
 import { useEffect, useState } from 'react';
 import { useMusic, setSongPlayedHook } from './music-store';
@@ -1451,9 +1452,12 @@ export function useTogetherLive(): TogetherSession | null {
     const reread = () => setRev((n) => n + 1);
     window.addEventListener('contact-avatar-changed', reread);
     window.addEventListener('contact-updated', reread);
+    // 恋人关系状态变更（接受邀请/解除关系）：渠道头像来源可能切换，也重读（第五十五轮）
+    window.addEventListener(COUPLE_STATE_EVENT, reread);
     return () => {
       window.removeEventListener('contact-avatar-changed', reread);
       window.removeEventListener('contact-updated', reread);
+      window.removeEventListener(COUPLE_STATE_EVENT, reread);
     };
   }, [cid]);
   useEffect(() => {
@@ -1462,7 +1466,17 @@ export function useTogetherLive(): TogetherSession | null {
     void getContact(cid)
       .then((c) => {
         if (!on) return;
-        setOverride(c ? { cid, name: c.nickname || c.name || '', avatar: c.avatar || '' } : null);
+        // 渠道头像（第五十五轮，用户要求：QQ 邀请的关系→TA 用 QQ 头像，微信邀请的→微信头像）：
+        // 一起听对象就是绑定恋人时，头像取关系渠道的分 App 头像槽位（与恋人空间同源），
+        // 未绑定关系/渠道不匹配时保持联系人全局头像
+        const meta = readInviteMeta();
+        const chAv =
+          meta.partnerApp && meta.partnerContactId === cid ? avatarFor(c, meta.partnerApp) : null;
+        setOverride(
+          c
+            ? { cid, name: c.nickname || c.name || '', avatar: chAv || c.avatar || '' }
+            : null,
+        );
       })
       .catch(() => {
         /* 联系人库不可用时保持快照 */

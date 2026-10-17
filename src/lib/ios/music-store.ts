@@ -880,17 +880,30 @@ export function exitGuestMode(): void {
   useMusic.setState({ guestMode: false });
 }
 
-export const GUEST_DEFAULT_AVATAR =
-  'https://api.dicebear.com/7.x/adventurer/svg?seed=MusicGuest&backgroundColor=b6e3f4';
+/** 本地渐变头像（dataURI SVG，零外部依赖）：dicebear 外链在部分网络环境不可达，一进去就是破图（第五十五轮） */
+function localAvatar(from: string, to: string, glyph: string): string {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">` +
+    `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">` +
+    `<stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/>` +
+    `</linearGradient></defs><rect width="96" height="96" fill="url(#g)"/>` +
+    `<circle cx="48" cy="40" r="15" fill="rgba(255,255,255,0.35)"/>` +
+    `<path d="M 20 96 Q 48 62 76 96 Z" fill="rgba(255,255,255,0.35)"/>` +
+    `<text x="70" y="34" font-size="26" text-anchor="middle">${glyph}</text>` +
+    `</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
 
-/** 游客预设头像（本地歌单/资料编辑用） */
+export const GUEST_DEFAULT_AVATAR = localAvatar('#8ab4f8', '#c7a6f2', '🎵');
+
+/** 游客预设头像（本地歌单/资料编辑用；全部本地生成，第五十五轮去 dicebear 依赖） */
 export const GUEST_AVATAR_PRESETS: string[] = [
   GUEST_DEFAULT_AVATAR,
-  'https://api.dicebear.com/7.x/adventurer/svg?seed=Sunny&backgroundColor=ffd5dc',
-  'https://api.dicebear.com/7.x/adventurer/svg?seed=Melody&backgroundColor=ffdfbf',
-  'https://api.dicebear.com/7.x/adventurer/svg?seed=Rhythm&backgroundColor=c0aede',
-  'https://api.dicebear.com/7.x/adventurer/svg?seed=Echo&backgroundColor=d1d4f9',
-  'https://api.dicebear.com/7.x/adventurer/svg?seed=Lyric&backgroundColor=caffbf',
+  localAvatar('#f7a8c4', '#fbc68f', '🌙'),
+  localAvatar('#ffb88a', '#ff9a8b', '☀️'),
+  localAvatar('#7fd8c8', '#5fb8e8', '🎧'),
+  localAvatar('#c0aede', '#f2a6c8', '🎈'),
+  localAvatar('#a8e6a1', '#7fd8c8', '🌈'),
 ];
 
 export function getGuestProfile(): GuestProfile {
