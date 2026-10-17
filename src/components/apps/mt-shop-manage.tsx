@@ -30,7 +30,8 @@ import {
   Tags,
   Ticket,
   Trash2,
-} from 'lucide-react';import { MT_CATS, mtRegisterAiMerchant, mtUnregisterMerchant, type MtDish, type MtMerchant } from '@/lib/ios/meituan-data';
+} from 'lucide-react';
+import { MT_CATS, mtRegisterAiMerchant, mtUnregisterMerchant, type MtDish, type MtMerchant } from '@/lib/ios/meituan-data';
 import {
   MT_STATUS_LABEL,
   mtLoadCart,
@@ -39,6 +40,7 @@ import {
   mtSaveCart,
   mtSaveOrders,
   mtSaveShops,
+  mtDeliveryMinutesOf,
   mtUidOf,
   type MtOrder,
   type MtSession,
@@ -259,7 +261,7 @@ export default function ShopManagePage({
                 <span className="font-semibold">{shop.rating}</span>
               </span>
               <span>月售{shop.monthSale}+</span>
-              <span>{shop.deliveryMin}分钟 · {shop.distanceKm}km</span>
+              <span>{mtDeliveryMinutesOf(shop.id)}分钟 · {shop.distanceKm}km</span>
             </p>
           </div>
           {/* 编辑店铺入口（替代原头图右上角笔图标） */}

@@ -20265,3 +20265,24 @@ Work Log:
 Stage Summary:
 - 关键决策：①创建页语义彻底分家——淘宝=电商（颜色/尺码/内存/版本），美团=本地生活（小菜/小料/温度/糖度），两端 chips/文案/placeholder/表单字段互不出现对方域词；②客服头像=表情包资产按店铺 hash 稳定分配（非随机，刷新/跨会话不变）；③「交易物流」做成官方服务号动态流（读全量订单而非只 shipped 的快递页），每状态独立文案/主题色/锚点时间，与灵动岛物流提醒天然联动
 - 涉及文件：public/kefu-1~5.png（新增）、src/lib/ios/taobao-data.ts（tbKefuAvatarOf）、src/components/apps/taobao.tsx（TradeLogisticsPage+消息页头像+接线）、src/components/apps/taobao-msg-chat.tsx（客服头像×2）、src/components/apps/mt-order-create.tsx / tb-order-create.tsx（chips 分离）、src/components/apps/meituan.tsx（商家卡单图）
+
+---
+Task ID: round-41
+Agent: 主协调者 (Z.ai Code)
+Task: 第四十一轮：①淘宝+美团订单送达速度用户可自定义（快5-15分钟/正常15-30分钟/慢30-60分钟/自定义区间）；②美团「我的」页「我的碳账户」改为「送达速度」入口；③送达速度改为毛玻璃风格弹窗（两端共用）；④修复 AI 对拼音缩写的理解（wyxn=我也想你，此前 AI 答成「我爱你想你」）
+
+Work Log:
+- 【全局速度模块】新增 src/lib/ios/delivery-speed.ts：DsPreset = fast/normal/slow/custom，DS_RANGE 快5-15/正常15-30/慢30-60 分钟、自定义 1-480 分钟（min≤max 校验，min>max 自动对调）；存储用 kvGetRaw/kvSetRaw 真全局键 delivery-speed:global（无账号后缀，淘宝+美团任一端改两端同时生效）；dsMinutesFor(seed) 在区间内按 31 进制哈希确定性抖动（同一订单/商家号同设置下时间可复现）；dsSet 广播 window 事件 delivery-speed-changed 供 UI 即时刷新；兼容旧淘宝纯档位字符串值
+- 【淘宝数据层】taobao-store.ts：TbDeliverySpeed 扩为四档（+custom）；TB_SPEED_DESC 文案改分钟级（5-15分钟送达/15-30/30-60）；tbGetDeliverySpeed 读全局设置（保留签名零破坏调用点）、新增 tbSpeedDescText() 动态文案（custom 显示自定义区间）；tbDeliveryTiming 改 totalMs=dsMinutesFor(seed)*60000，shipDelay=total×12% 夹 1~15 分钟，trackStep≥20s（分钟级速度下 4 节点也能走完）；删除 speedJitter；TB_PAY_TTL 待付款 30min 不变
+- 【美团数据层】meituan-store.ts：mtDeliveryMinutesOf(orderId) 从固定 5~30 分钟哈希改为 dsMinutesFor(orderId)——支付页 ETA（meituan.tsx 2529/2672）、状态机送达时刻（deliveryMsOf/acceptMsOf/pickupMsOf）、详情页 ETA 大字（4222）、代付（mt-proxy-pay 466）全部调用点自动跟随用户速度
+- 【毛玻璃弹窗】新增 src/components/apps/delivery-speed-sheet.tsx：iOS 毛玻璃（bg-white/65 + backdrop-blur-2xl + backdrop-saturate-150 + 白高光描边 + 上滑 quick-in-up 动画 + 黑/30 backdrop-blur 遮罩）；三档 SpeedPresetRow（accent 圆形徽标 + 区间 + 实心勾选圈/空心圈）；自定义行展开「最快X分钟/最慢Y分钟」输入（1-480 校验、错误红字提示、应用按钮）；底部「当前：X-Y分钟送达」+ 完成按钮；accent 随宿主（淘宝橙 #FF5000 / 美团黄 #FFC300）
+- 【美团入口】meituan.tsx MyPage：「我的碳账户」→「送达速度」（Timer 图标，testid my-speed，下方小字实时显示当前区间 dsDescShort，testid my-speed-desc）；speedOpen state + DeliverySpeedSheet 接线（黄 accent）；useReducer tick 监听 delivery-speed-changed 保持 desc 即时
+- 【美团显示一致性】商家卡/搜索行/商家页头部/店铺信息/闪购频道/商家管理页的静态 {m.deliveryMin}分钟 全部改为 {mtDeliveryMinutesOf(m.id)}分钟（跟随速度：慢档下巷口葱油饼 35 分钟、自定义 10-20 档下 19 分钟）；meituan-shangou.tsx 3 处 + mt-shop-manage.tsx 1 处 + meituan.tsx 5 处
+- 【淘宝入口】taobao.tsx MePage：「我的消费明细」资产行原内嵌三选一 chips 整块删除 → 「送达速度」button（testid tb-speed-entry，value 行显示 tbSpeedDescText，testid tb-speed-value）点击弹 DeliverySpeedSheet（橙 accent）；商品详情 SkuSheet 与结算确认的 etaText 改 tbSpeedDescText()（预计X-Y分钟送达）；删除 TB_SPEED_LABEL/TB_SPEED_ORDER/tbGetDeliverySpeed/tbSetDeliverySpeed 等旧符号引用
+- 【AI 缩写修复】persona.ts（微信/QQ/信息/电话四端共用 prompt）【说话风格】后新增「读懂拼音缩写」规则段：字母串=拼音首字母逐字拆解；固定词典 wyxn=我也想你（w-我 y-也 x-想 n-你）、hxhx=好想好想、xswl、yyds、nsdd、dbq、bdjw、u1s1、zqsg、pyq、awsl、gkd、srds、kdl、plmm、3q；拆解优先级（词典→逐字组词→叠字母当叠词→数字谐音）；被问含义时必须先给正确含义（明令禁止答成「我爱你想你」）；tb-chat-ai.ts 淘宝客服 prompt 同步加第 12 条拆解规则
+- 端到端实测（agent-browser）：①美团我的页送达速度入口 15-30分钟 desc ✓；②毛玻璃弹窗渲染（三档+自定义+当前值+完成）✓；③切「快」→当前 5-15分钟 ✓；④自定义 10/20 应用 → 10-20分钟 + 我的页 desc 同步 ✓；⑤淘宝我的淘宝速度行显示 10-20分钟送达（全局共享跨 App 同步）✓；⑥淘宝弹窗自定义回填 10/20 → 切「慢」→ 行上 30-60分钟送达 ✓；⑦淘宝商品详情页「预计30-60分钟送达」✓；⑧美团商家页头部/商家卡 35 分钟（慢档区间内；此前 10-20 档为 19 分钟）✓；⑨美团确认订单页「立即配送 · 预计 35 分钟送达」✓；⑩下单 ¥19 待付款 → 支付页「现在支付，预计02:19送达」（01:48+35min=02:19 与商家页/确认页完全同源）✓；⑪AI 缩写 SDK 实测：上文 wyxn,hxhx 对话后问「你知道wyxn什么意思啊」→ 回复「wyxn就是'我也想你'的意思呀，w-我 y-也 x-想 n-你，嘿嘿，我也好想你哦～」PASS（未答成我爱你想你）
+- 校验：tsc 全量零错误；eslint 修改文件（meituan 3 / taobao 26+2 与 HEAD 基线完全一致，delivery-speed.ts/delivery-speed-sheet.tsx/persona.ts/tb-chat-ai.ts 等新改动零报错）
+
+Stage Summary:
+- 关键决策：①送达速度做成淘宝+美团共用的单一全局设置（kvGetRaw 真全局键），符合用户「淘宝美团订单送达速度」一句话管两端的语义；②所有 ETA/时间轴入口共用 dsMinutesFor(seed)（种子=订单号/商家号），支付页承诺、状态机推进、详情页大字、商家卡展示、灵动岛倒计时天然同源；③旧静态 deliveryMin 字段保留在数据结构（AI 生成/入驻表单默认值仍在用），但全部展示点替换为动态推导；④淘宝物流节奏 shipDelay/trackStep 改等比缩放适配分钟级窗口（此前 3-6h 档逻辑删除）
+- 涉及文件：src/lib/ios/delivery-speed.ts、src/components/apps/delivery-speed-sheet.tsx（新增）；src/lib/ios/taobao-store.ts、src/lib/ios/meituan-store.ts、src/components/apps/taobao.tsx、src/components/apps/meituan.tsx、src/components/apps/meituan-shangou.tsx、src/components/apps/mt-shop-manage.tsx、src/lib/ios/persona.ts、src/lib/ios/tb-chat-ai.ts

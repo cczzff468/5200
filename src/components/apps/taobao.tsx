@@ -15,7 +15,7 @@
  *   订单/购物车商品图内底部带商品名白字贴片（TbImg cap），历史订单旧图链经 legacyImgUrl 自动迁移本地卡通图；
  * - 数据：tb-* IndexedDB kv 按 uid 隔离（taobao-store.ts）；UI 图标一律 SVG（禁 emoji）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import {
   ArrowLeft,
   Bell,
@@ -126,7 +126,6 @@ import {
   tbClearSearchHist,
   tbConfirmReceive,
   tbCreateOrder,
-  tbGetDeliverySpeed,
   tbGetSession,
   tbIdpLoggedIn,
   tbLoadAddrs,
@@ -155,7 +154,6 @@ import {
   tbSaveOrders,
   tbSetCartAllChecked,
   tbSetCurAddr,
-  tbSetDeliverySpeed,
   tbSetMsgsReadAt,
   tbSetSession,
   tbStartOrderWatcher,
@@ -172,9 +170,7 @@ import {
   tbUpdateCartItem,
   tbUseCoupon,
   tbWipeUid,
-  TB_SPEED_DESC,
-  TB_SPEED_LABEL,
-  TB_SPEED_ORDER,
+  tbSpeedDescText,
   type TbAddress,
   type TbCartItem,
   type TbCustomEntry,
@@ -182,9 +178,9 @@ import {
   type TbOrder,
   type TbOrderItem,
   type TbOrderStatus,
-  type TbDeliverySpeed,
   type TbSession,
 } from '@/lib/ios/taobao-store';
+import { DeliverySpeedSheet } from './delivery-speed-sheet';
 import { tbExecutePay, tbListPayChannels, tbRefundToOrigin, type TbPayChannel } from '@/lib/ios/taobao-pay';
 import { BillPage, FliggyPage, MoviePage, SeckillPage, SignInPage, SubsidyPage, TicketDetailPage } from './taobao-channels';
 import { TbMsgChatPage } from './taobao-msg-chat';
@@ -2133,8 +2129,8 @@ function SkuSheet({
   }, [p.id]);
   const addon = addonPool.length ? addonPool[addonIdx % addonPool.length] : null;
   const totalPrice = Math.round((price + (addonSel && addon ? addon.price : 0)) * 100) / 100;
-  // 送达时间跟随「送达速度」设置（第六十八轮：快 30分钟-1小时 / 正常 1-3小时 / 慢 3-6小时，真实时钟）
-  const etaText = `预计${TB_SPEED_DESC[tbGetDeliverySpeed(uid)]}`;
+  // 送达时间跟随「送达速度」设置（第四十一轮：快 5-15分钟 / 正常 15-30分钟 / 慢 30-60分钟 / 自定义，真实时钟）
+  const etaText = `预计${tbSpeedDescText()}`;
   const sizeGroup = p.skus.find((g) => g.name === '尺码');
   const sizeGuide = sizeGroup ? { h: 165 + (tbHash(p.id) % 15), w: 55 + (tbHash(`${p.id}w`) % 25), shoulder: 42 + (tbHash(`${p.id}s`) % 8), chest: 108 + (tbHash(`${p.id}c`) % 16) } : null;
   const discount = p.originPrice ? Math.round((p.originPrice - price) * 100) / 100 : 0;
@@ -2412,7 +2408,7 @@ function ProductPage({
   // 收藏人数（确定性，展示用；收藏后数字橙色高亮）
   const favCount = String(1000 + (tbHash(`${pid}fav`) % 9000));
   // 预计送达（与 SkuSheet 同口径：跟随送达速度，真实时钟）
-  const etaText = `预计${TB_SPEED_DESC[tbGetDeliverySpeed(uid)]}`;
+  const etaText = `预计${tbSpeedDescText()}`;
   // 商品图生成（第三十七轮：详情页点图 → 选模型+可编辑提示词生成新主图，自建+原有商品通用）
   const [imgGenOpen, setImgGenOpen] = useState(false);
   const [imgGenBusy, setImgGenBusy] = useState(false);
@@ -5743,8 +5739,15 @@ function MePage({
   // 商品图片样式选择弹层（第六十六轮：从主题 App 迁出，红包位改为选择器入口）
   const [goodsStyleOpen, setGoodsStyleOpen] = useState(false);
   const goodsImgStyle = useSettings((s) => s.goodsImgStyle);
-  // 送达速度（第六十八轮：快/正常/慢 三选一，持久化按账号；切换后在途单/新单时间轴统一跟随）
-  const [speed, setSpeed] = useState<TbDeliverySpeed>(() => tbGetDeliverySpeed(uid));
+  // 送达速度（第四十一轮：毛玻璃弹窗，快 5-15/正常 15-30/慢 30-60/自定义；
+  // 与美团共用全局设置，切换后在途单/新单时间轴统一跟随）
+  const [speedOpen, setSpeedOpen] = useState(false);
+  const [, speedTick] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const onSpeed = () => speedTick();
+    window.addEventListener('delivery-speed-changed', onSpeed);
+    return () => window.removeEventListener('delivery-speed-changed', onSpeed);
+  }, []);
   useEffect(() => {
     tbTickOrders(uid);
     const t = setInterval(() => setTick((n) => n + 1), 5000);
@@ -5928,34 +5931,12 @@ function MePage({
               <span className="text-[12px] leading-none text-black/45">优惠券</span>
               <span className="mt-1.5 flex h-[18px] items-center justify-center text-[16px] font-bold leading-none text-black/90">{coupons.length}张</span>
             </button>
-            {/* 送达速度（用户需求：原骑手位改为送货时间快慢选择；快/正常/慢 三选一，
-                全店订单时间按真实时钟跟随该速度） */}
-            <div className="flex flex-1 flex-col items-center py-1.5">
+            {/* 送达速度（第四十一轮：点击弹毛玻璃弹窗，快 5-15/正常 15-30/慢 30-60/自定义；
+                与美团共用全局设置，全店订单时间按真实时钟跟随该速度） */}
+            <button type="button" data-testid="tb-speed-entry" onClick={() => setSpeedOpen(true)} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
               <span className="text-[12px] leading-none text-black/45">送达速度</span>
-              <div className="mt-1.5 flex h-[18px] items-center justify-center gap-[2px]" data-testid="tb-speed-picker">
-                {TB_SPEED_ORDER.map((s) => {
-                  const on = speed === s;
-                  return (
-                    <button
-                      key={s}
-                      type="button"
-                      data-testid={`tb-speed-${s}`}
-                      onClick={() => {
-                        if (speed === s) return;
-                        setSpeed(s);
-                        tbSetDeliverySpeed(uid, s);
-                        onToast(`已切换为「${TB_SPEED_LABEL[s]}」速：付款后${TB_SPEED_DESC[s]}`);
-                      }}
-                      className={`rounded-full px-1.5 py-[3px] text-[10px] leading-none transition-colors active:opacity-75 ${
-                        on ? 'bg-[#FF5000] font-semibold text-white' : 'bg-black/[0.05] text-black/50'
-                      }`}
-                    >
-                      {TB_SPEED_LABEL[s]}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+              <span className="mt-1.5 flex h-[18px] items-center justify-center text-[13px] font-bold leading-none text-black/90" data-testid="tb-speed-value">{tbSpeedDescText()}</span>
+            </button>
             {/* 快递员（用户反馈：账户余额位改为快递员；显示当前运输快递员形象，点按弹选择层；
                 选中的形象用于淘宝物流地图巡航，默认运输车） */}
             <button type="button" data-testid="my-courier" onClick={() => setCourierOpen(true)} className="flex flex-1 flex-col items-center py-1.5 active:opacity-70">
@@ -6093,6 +6074,8 @@ function MePage({
     </div>
     {/* 商品图片样式选择（第六十六轮：从主题 App 迁出的入口弹层；与美团共用同一全局样式） */}
     {goodsStyleOpen ? <GoodsStyleSheet accent="#FF5000" onClose={() => setGoodsStyleOpen(false)} /> : null}
+    {/* 送达速度毛玻璃弹窗（第四十一轮：全局共享设置，淘宝/美团订单统一跟随） */}
+    {speedOpen ? <DeliverySpeedSheet accent="#FF5000" onClose={() => setSpeedOpen(false)} onToast={onToast} /> : null}
     {/* 运输快递员选择（用户反馈：账户余额位改为快递员；底部弹层内置 9 位快递员，
         选中后用于淘宝物流地图巡航；默认运输车；立体投影展示） */}
     {courierOpen ? (

@@ -25,7 +25,7 @@
  *   订单/店铺小菜大图内底部带订单名白字贴片（FoodImg cap）；
  * - 全局状态推进与灵动岛通知见 MeituanOrderWatcher。
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -104,6 +104,7 @@ import {
   Stethoscope,
   Store,
   Ticket,
+  Timer,
   Trash2,
   TriangleAlert,
   TreePine,
@@ -165,6 +166,8 @@ import TravelChannelPage from './meituan-travel';
 import ShangouChannelPage from './meituan-shangou';
 import { useSettings, useUI } from '@/lib/ios/store';
 import { GoodsStyleSheet, GoodsStyleThumb } from './goods-style-sheet';
+import { DeliverySpeedSheet } from './delivery-speed-sheet';
+import { dsDescShort } from '@/lib/ios/delivery-speed';
 import { mtNotifyShopOrderPaid } from '@/lib/ios/mt-shop-notify';
 import { ScanOverlayWhen, openScan } from './mt-scan';
 import {
@@ -1721,7 +1724,7 @@ function SearchMerchantRow({ m, onOpen }: { m: MtMerchant; onOpen: () => void })
             <span className="font-semibold">{m.rating}</span>
           </span>
           <span className="text-black/40">月售{m.monthSale >= 10000 ? `${(m.monthSale / 10000).toFixed(1)}万` : m.monthSale}+</span>
-          <span className="text-black/40">{m.deliveryMin}分钟 · {m.distanceKm}km</span>
+          <span className="text-black/40">{mtDeliveryMinutesOf(m.id)}分钟 · {m.distanceKm}km</span>
         </span>
         <span className="mt-1 block text-[12px] text-black/55">
           起送 ¥{m.minOrder} · 配送 ¥{m.deliveryFee}
@@ -1956,7 +1959,7 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
                   <span className="font-semibold">{merchant.rating}</span>
                 </span>
                 <span>月售{merchant.monthSale >= 10000 ? `${(merchant.monthSale / 10000).toFixed(1)}万` : merchant.monthSale}+</span>
-                <span>{merchant.deliveryMin}分钟 · {merchant.distanceKm}km</span>
+                <span>{mtDeliveryMinutesOf(merchant.id)}分钟 · {merchant.distanceKm}km</span>
               </p>
             </div>
           </div>
@@ -2176,7 +2179,7 @@ function MerchantPage({ merchant, onBack, onCheckout, onOpenOrder, onToast }: { 
               ['营业时间', merchant.hours],
               ['起送价', `¥${merchant.minOrder}`],
               ['配送费', `¥${merchant.deliveryFee}（满45免配送费）`],
-              ['预计送达', `约 ${merchant.deliveryMin} 分钟`],
+              ['预计送达', `约 ${mtDeliveryMinutesOf(merchant.id)} 分钟`],
               ['商家公告', merchant.notice ?? '暂无公告'],
             ].map(([k, v]) => (
               <div key={k} className="flex gap-3">
@@ -9365,6 +9368,14 @@ function MyPage({
   // 商品图片样式选择弹层（第六十六轮：从主题 App 迁出，工作兼职位改为选择器入口）
   const [goodsStyleOpen, setGoodsStyleOpen] = useState(false);
   const goodsImgStyle = useSettings((s) => s.goodsImgStyle);
+  // 送达速度毛玻璃弹窗（第四十一轮：原「我的碳账户」位改为送达速度，全局共享设置）
+  const [speedOpen, setSpeedOpen] = useState(false);
+  const [, speedTick] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    const onSpeed = () => speedTick();
+    window.addEventListener('delivery-speed-changed', onSpeed);
+    return () => window.removeEventListener('delivery-speed-changed', onSpeed);
+  }, []);
 
   const cell = (Icon: LucideIcon, label: string, badge: number | null, onTap: () => void, tint = 'text-black/75') => (
     <button key={label} type="button" onClick={onTap} className="flex flex-col items-center gap-1.5 active:opacity-70">
@@ -9551,14 +9562,15 @@ function MyPage({
           <span className="text-[11px] text-black/70">商品图片样式</span>
         </button>
         {([
-          [Leaf, '我的碳账户', () => onToast('我的碳账户（演示）'), ''],
-          [LayoutGrid, '更多工具', () => onToast('更多工具（演示）'), ''],
-        ] as [LucideIcon, string, () => void, string][]).map(([Icon, l, tap, tid]) => (
+          [Timer, '送达速度', () => setSpeedOpen(true), 'my-speed', dsDescShort()],
+          [LayoutGrid, '更多工具', () => onToast('更多工具（演示）'), '', ''],
+        ] as [LucideIcon, string, () => void, string, string][]).map(([Icon, l, tap, tid, sub]) => (
           <button key={l} type="button" data-testid={tid || undefined} onClick={tap} className="flex flex-col items-center gap-1.5 active:opacity-70">
             <span className="flex h-[46px] items-center justify-center">
               <Icon className="h-[22px] w-[22px] text-black/75" strokeWidth={1.8} />
             </span>
             <span className="text-[11px] text-black/70">{l}</span>
+            {sub ? <span data-testid={tid ? `${tid}-desc` : undefined} className="-mt-1 text-[9px] leading-none text-black/35">{sub}</span> : null}
           </button>
         ))}
       </div>
@@ -9569,6 +9581,9 @@ function MyPage({
 
       {/* 商品图片样式选择（第六十六轮：从主题 App 迁出的入口弹层；与淘宝共用同一全局样式） */}
       {goodsStyleOpen ? <GoodsStyleSheet accent="#FF9500" onClose={() => setGoodsStyleOpen(false)} /> : null}
+
+      {/* 送达速度毛玻璃弹窗（第四十一轮：全局共享，淘宝/美团订单统一跟随） */}
+      {speedOpen ? <DeliverySpeedSheet accent="#FFC300" onClose={() => setSpeedOpen(false)} onToast={onToast} /> : null}
 
       {/* 骑手形象选择（底部弹层；选中形象用于配送地图巡航） */}
       <AnimatePresence>
@@ -9886,7 +9901,7 @@ function FavoritesPage({
                       <span className="font-semibold text-[#FF6000]">{m.rating}</span>
                       <span className="ml-2 text-black/45">月售{m.monthSale >= 10000 ? `${(m.monthSale / 10000).toFixed(1)}万` : m.monthSale}</span>
                       <span className="ml-auto text-black/45">
-                        {m.deliveryMin}分钟 {m.distanceKm}km
+                        {mtDeliveryMinutesOf(m.id)}分钟 {m.distanceKm}km
                       </span>
                     </span>
                     <span className="mt-1.5 block truncate text-[13px] text-black/40">{m.cats.map((c) => MT_CATS.find((x) => x.id === c)?.name ?? c).slice(0, 2).join('  ')}</span>
@@ -10173,7 +10188,7 @@ function HistoryPage({
                               <span className="font-semibold text-[#FF6000]">{m.rating}</span>
                               <span className="ml-2 text-black/45">月售{m.monthSale >= 10000 ? `${(m.monthSale / 10000).toFixed(1)}万` : m.monthSale}</span>
                               <span className="ml-auto text-black/45">
-                                {m.deliveryMin}分钟 {m.distanceKm}km
+                                {mtDeliveryMinutesOf(m.id)}分钟 {m.distanceKm}km
                               </span>
                             </span>
                             <span className="mt-1.5 flex items-center justify-between">

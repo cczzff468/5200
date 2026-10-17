@@ -14,6 +14,7 @@ import { mtImg, mtRegisterAiMerchant, type MtDish, type MtMerchant } from '@/lib
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import {
   mtCurAddrId,
+  mtDeliveryMinutesOf,
   mtLoadAddresses,
   mtLoadOrders,
   mtSaveOrders,
@@ -251,7 +252,7 @@ export default function ShangouChannelPage({
           <div className="mt-1.5 flex items-center gap-2 px-5 text-[11px] text-black/45">
             <span className="text-[#FF8A00]">★{shop.rating}</span>
             <span>月售{shop.monthSale >= 10000 ? `${(shop.monthSale / 10000).toFixed(1)}万+` : `${shop.monthSale}+`}</span>
-            <span>· 配送 ¥{shop.deliveryFee} · {shop.deliveryMin}分钟</span>
+            <span>· 配送 ¥{shop.deliveryFee} · {mtDeliveryMinutesOf(shop.id)}分钟</span>
             <span>· {shop.distanceKm}km</span>
           </div>
         </div>
@@ -337,7 +338,7 @@ export default function ShangouChannelPage({
                 <div className="flex justify-between pt-1 text-[14px] font-bold text-black/90"><span>实付</span><span className="text-[#FF4B33]">¥{payable}</span></div>
               </div>
               <p className="mt-2 flex items-center gap-1 text-[11px] text-black/40">
-                <Clock3 className="h-3.5 w-3.5" /> 预计 {shop.deliveryMin} 分钟送达 · 超时赔付
+                <Clock3 className="h-3.5 w-3.5" /> 预计 {mtDeliveryMinutesOf(shop.id)} 分钟送达 · 超时赔付
               </p>
               <button type="button" onClick={submit} className="mt-3 h-12 w-full rounded-full bg-gradient-to-r from-[#FFC300] to-[#FF9500] text-[16px] font-semibold text-black/90 active:opacity-85">
                 提交订单
@@ -395,7 +396,7 @@ export default function ShangouChannelPage({
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[15px] font-bold text-black/90">{m.name}</span>
                 <span className="mt-0.5 block text-[11px] text-black/45">
-                  <span className="font-semibold text-[#FF8A00]">★ {m.rating}</span> 月售{m.monthSale >= 10000 ? `${(m.monthSale / 10000).toFixed(1)}万+` : `${m.monthSale}+`} · {m.deliveryMin}分钟 · {m.distanceKm}km
+                  <span className="font-semibold text-[#FF8A00]">★ {m.rating}</span> 月售{m.monthSale >= 10000 ? `${(m.monthSale / 10000).toFixed(1)}万+` : `${m.monthSale}+`} · {mtDeliveryMinutesOf(m.id)}分钟 · {m.distanceKm}km
                 </span>
                 <span className="mt-0.5 block text-[11px] text-black/45">起送¥{m.minOrder} · 配送¥{m.deliveryFee}</span>
                 <span className="mt-1 flex flex-wrap gap-1">

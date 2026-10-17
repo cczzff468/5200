@@ -9,6 +9,7 @@
  * 支付不在这里：meituan-pay.ts 动态 import 微信/QQ 钱包模块（避免全局加载 1.4 万行聊天模块）。
  */
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
+import { dsMinutesFor } from './delivery-speed';
 import { accLs, getActiveAccountFor, isForceLoginWallActive } from '@/lib/ios/accounts';
 import { getContact, listContacts } from '@/lib/ios/contacts-store';
 import type { ContactRecord } from '@/lib/contacts';
@@ -630,9 +631,13 @@ const DELIVERED_MS = 45 * 60_000;
 /** 待支付超时（自动取消，对齐真机 15 分钟） */
 export const PAY_TIMEOUT_MS = 15 * 60_000;
 
-/** 按订单号确定性推导配送时长（5~30 分钟）：支付页 ETA、状态机送达时刻、详情页承诺保持一致 */
-export const mtDeliveryMinutesOf = (orderId: string): number =>
-  5 + ([...orderId].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) >>> 0, 7) % 26);
+/**
+ * 按订单号（种子）在当前送达速度区间内确定性取分钟：
+ * 支付页 ETA、状态机送达时刻、详情页承诺保持一致；
+ * 第四十一轮起跟随全局「送达速度」设置（快 5-15 / 正常 15-30 / 慢 30-60 / 自定义区间，
+ * 美团「我的 › 送达速度」与淘宝端共用，改后新单立即生效）。
+ */
+export const mtDeliveryMinutesOf = (orderId: string): number => dsMinutesFor(orderId);
 
 /** 配送总时长（毫秒） */
 const deliveryMsOf = (o: { id: string }): number => mtDeliveryMinutesOf(o.id) * 60_000;
