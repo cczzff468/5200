@@ -20286,3 +20286,24 @@ Work Log:
 Stage Summary:
 - 关键决策：①送达速度做成淘宝+美团共用的单一全局设置（kvGetRaw 真全局键），符合用户「淘宝美团订单送达速度」一句话管两端的语义；②所有 ETA/时间轴入口共用 dsMinutesFor(seed)（种子=订单号/商家号），支付页承诺、状态机推进、详情页大字、商家卡展示、灵动岛倒计时天然同源；③旧静态 deliveryMin 字段保留在数据结构（AI 生成/入驻表单默认值仍在用），但全部展示点替换为动态推导；④淘宝物流节奏 shipDelay/trackStep 改等比缩放适配分钟级窗口（此前 3-6h 档逻辑删除）
 - 涉及文件：src/lib/ios/delivery-speed.ts、src/components/apps/delivery-speed-sheet.tsx（新增）；src/lib/ios/taobao-store.ts、src/lib/ios/meituan-store.ts、src/components/apps/taobao.tsx、src/components/apps/meituan.tsx、src/components/apps/meituan-shangou.tsx、src/components/apps/mt-shop-manage.tsx、src/lib/ios/persona.ts、src/lib/ios/tb-chat-ai.ts
+---
+Task ID: round-42
+Agent: 主协调者 (Z.ai Code)
+Task: 第四十二轮：①美团/淘宝送达速度拆成各自独立设置（美团分钟级 快5-15/正常15-30/慢30-60；淘宝小时级 快30分钟-1小时/正常1-2小时/慢3-4小时，均可自定义）；②淘宝美团所有选择弹窗毛玻璃化；③两端底部 tab 改毛玻璃胶囊；④恋人空间全部界面毛玻璃胶囊/按钮/卡片；⑤修复恋人空间首页「每天想你」按钮消失（打卡后不再隐藏）
+
+Work Log:
+- 【送达速度双 App 独立】delivery-speed.ts 重构：DsScope='meituan'|'taobao'，DS_RANGES 按 App 各自三档（美团 5-15/15-30/30-60 分钟；淘宝 30-60/60-120/180-240 分钟），存储分键 delivery-speed:meituan / delivery-speed:taobao（互不影响）；旧全局键 delivery-speed:global 仅作迁移兜底（读档位意图映射到各 App 对应区间）；dsGet/dsSet/dsDesc/dsDescShort/dsMinutesFor 全部带 scope；新增 dsFmtDur/dsFmtRange 智能时长文案（关键防歧义：美团永远「X-Y分钟」——30-60 显示「30-60分钟」而非「30分钟-1小时」；淘宝小时级 30-60→「30分钟-1小时」、60-120→「1-2小时」、180-240→「3-4小时」）
+- 【淘宝小时级节奏适配】taobao-store：tbSpeedDescText→dsDesc('taobao')、tbDeliveryTiming→dsMinutesFor(seed,'taobao')；shipDelay 夹 2~40 分钟（小时级订单也有合理发货时刻）、trackStep≥30s；删 TB_SPEED_DESC 旧分钟级文案；meituan-store：mtDeliveryMinutesOf→dsMinutesFor(orderId,'meituan')
+- 【速度弹窗】delivery-speed-sheet 增加 scope prop：按 scope 渲染各自三档区间文案 + 提示语（美团「按此速度送达」/淘宝「按此速度发货送达」）；自定义输入保持分钟 1-480；accent 淘宝橙/美团黄不变；meituan.tsx/taobao.tsx 传 scope="meituan"/"taobao"
+- 【底部 tab 毛玻璃胶囊】三 App 统一改「悬浮胶囊条」：外层透明容器（px-4 + pb-[max(10px,safe-area)]）+ 内层 rounded-[26px] border-white/60 bg-white/80 shadow backdrop-blur-2xl backdrop-saturate-150；选中项品牌色 pill（美团黄 #FFC300/25、淘宝橙 #FF5000/10、恋人空间粉 #f2536a/10）；taobao tab 为 absolute 悬浮，购物车结算栏/空车栏 bottom-[53px]→bottom-[72px] 并毛玻璃化、上拉加载指示 bottom-[66px]→[85px]、购物车回到顶部钮 bottom-[150px]→[172px] 且白圆钮改毛玻璃
+- 【弹窗全面毛玻璃】meituan(21处)/taobao(9处)/couple-space(8处) 全部底部弹层容器 rounded-t-* bg-white → bg-white/80 backdrop-blur-2xl backdrop-saturate-150（38 处，含地址选择/规格选择/优惠券/配送方式/支付密码等所有选择弹窗）；taobao 支付弹窗 bg-[#F6F7F9]→/90；居中确认弹窗（登录/删除确认）bg-white→/85；商品详情叠图面板（-mt-4 圆角面板）同步毛玻璃
+- 【界面毛玻璃美化】淘宝通用 TopBar 与各页 sticky 顶栏 → bg-white/80 backdrop-blur-2xl（7 处）；购物车结算栏/去逛逛栏、美团商家页底部操作栏/购物车栏（5 处）→ 毛玻璃 + border-white/60；美团 sticky 分组头 → /85
+- 【恋人空间毛玻璃胶囊化】约 150 处：四功能卡/发现页大卡与宫格/纪念日气泡/右侧悬浮按钮（黑底改白毛玻璃胶囊）/情书·考试·协议·编年史等全部页面卡片与按钮 bg-white → bg-white/75~85 + backdrop-blur-xl/2xl（sed 分层批量 + 手工兜底，装饰性雪花/星点/圆点保留不动）；聊天气泡/输入框/选字体卡/分享按钮全毛玻璃；底部输入栏 → bg-white/90 backdrop-blur-2xl
+- 【每天想你恢复】HomePage 大圆去掉 missDays==null 条件改为始终渲染（用户反馈首次打卡后消失找不到入口）；打卡后圆内下方显示「已想 X 天 ♡」胶囊徽标；大圆本体灰渐变 → 毛玻璃（border-white/70 bg-white/25 backdrop-blur-2xl + 白字投影）；补 data-testid=miss-you-btn
+- 【显示假象澄清】验证中发现 grep 输出把 pb-[max( 打成 pb-ax( （[m 被输出管道吞掉的显示假象），用 grep -c 确认文件实际无损坏，未引入历史 bug
+- 端到端实测（agent-browser，注入 couple-space:state 含 missSince 已打卡场景）：①恋人空间首页「每天想你」大圆恢复显示（已想 373 天 ♡ 徽标）+ 点击打卡正常 + 毛玻璃胶囊 tab + 发现页卡片毛玻璃 ✓；②美团我的页速度 desc「30-60分钟」（分钟格式正确，非「30分钟-1小时」）；③美团弹窗三档 5-15/15-30/30-60 分钟 + 毛玻璃 + 切快→5-15 分钟即时生效 ✓；④淘宝速度行 legacy slow 迁移显示「3-4小时送达」✓；⑤淘宝弹窗三档 30分钟-1小时/1-2小时/3-4小时（选中慢）+ 毛玻璃 ✓；⑥淘宝切快→「30分钟-1小时送达」，IndexedDB 双键独立 {mt:fast(5-15), tb:fast(30-60)} ✓；⑦淘宝商品详情「预计30分钟-1小时送达」✓；⑧回美团我的页仍「5-15分钟」（互不影响）✓；⑨美团确认订单页「预计 5 分钟送达」（跟随美团 fast）✓；⑩美团自定义 10/20 应用→「10-20分钟」desc 同步 ✓；⑪美团规格弹窗 DishSpecSheet/淘宝详情面板毛玻璃视觉确认 ✓；测试后重置两键回默认
+- 校验：tsc 全量零错误；eslint 四文件 31 problems（29 errors+2 warnings）与 HEAD 基线完全一致，零新增
+
+Stage Summary:
+- 关键决策：①送达速度从「全局一份」拆为「每 App 一份」（用户本轮明确要求两端不一样），分键存储+事件广播保持既有 UI 联动；②时长文案按 App 语义分格式（美团恒分钟/淘宝小时级智能），消除 30-60 双义歧义；③tab 胶囊采用「保留布局占位+视觉胶囊」方案（美团/恋人空间流内布局不变、淘宝 absolute 悬浮同步结算栏 bottom 依赖），深色模式由 shop-dark.css 既有 bg-white/80 映射自动适配；④弹窗毛玻璃统一 bg-white/80 backdrop-blur-2xl backdrop-saturate-150（可读性与磨砂感平衡）；⑤每天想你大圆改为「常驻+打卡计数徽标」而非「打卡后消失」
+- 涉及文件：src/lib/ios/delivery-speed.ts、src/components/apps/delivery-speed-sheet.tsx、src/lib/ios/taobao-store.ts、src/lib/ios/meituan-store.ts、src/components/apps/meituan.tsx、src/components/apps/taobao.tsx、src/components/apps/couple-space.tsx

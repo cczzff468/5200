@@ -681,7 +681,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
 
       {auth && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/50 px-8" onClick={() => !busy && setAuth(null)}>
-          <div className="w-full rounded-2xl bg-white p-5" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2.5">
               <img src={auth.idp === 'wx' ? '/icons/wechat.png' : '/icons/qq.png'} alt="" className="h-9 w-9 rounded-lg" />
               <img src="/icons/meituan-app.png" alt="" className="h-6 w-6 rounded-md" />
@@ -723,40 +723,42 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: MtSession) => void; onTo
 
 // ================================ 底部导航（首页/购物车/我的） ================================
 
-/** 底部 Tab：首页=房子、购物车=推车、我的=笑脸+金皇冠；
- *  选中态变黄（「我的」选中变黑：黑底黄脸），未选中黑色 75%；底部加高避开 Home 指示条 */
+/** 底部 Tab：第四十二轮改「毛玻璃胶囊」悬浮条（bg-white/80 + backdrop-blur-2xl + 白高光描边圆角胶囊）；
+ *  首页=房子、购物车=推车、我的=笑脸+金皇冠；选中态黄底 pill + 变黄（「我的」选中变黑：黑底黄脸） */
 function BottomTabBar({ active, onTab }: { active: Tab; onTab: (t: Tab) => void }) {
   const labelCls = (on: boolean, activeCls: string) => `text-[10px] leading-none ${on ? `font-semibold ${activeCls}` : 'font-medium text-black/75'}`;
   const homeOn = active === 'home';
   const cartOn = active === 'cart';
   const myOn = active === 'my';
   return (
-    <div className="relative z-20 flex shrink-0 items-start border-t border-black/[0.06] bg-white pb-[max(18px,env(safe-area-inset-bottom))] pt-[9px]">
-      {/* 首页：房子（选中=黄色）；未选中用 text-black/90 类而非内联色——深色模式下随 shop-dark 翻白
-          （第六十八轮修复：内联 rgba(0,0,0,0.9) 无法被覆盖，深色下黑图标画在深底上不可见） */}
-      <button type="button" onClick={() => onTab('home')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
-        <House className={`h-[24px] w-[24px] ${homeOn ? 'text-[#FFC300]' : 'text-black/90'}`} strokeWidth={homeOn ? 2.4 : 1.8} />
-        <span className={labelCls(homeOn, 'text-[#FFA200]')}>首页</span>
-      </button>
-      {/* 购物车（选中=黄色） */}
-      <button type="button" onClick={() => onTab('cart')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
-        <ShoppingCart className={`h-[24px] w-[24px] ${cartOn ? 'text-[#FFC300]' : 'text-black/90'}`} strokeWidth={cartOn ? 2.4 : 1.8} />
-        <span className={labelCls(cartOn, 'text-[#FFA200]')}>购物车</span>
-      </button>
-      {/* 我的：笑脸 + 金皇冠（选中=黑色：黑底黄脸） */}
-      <button type="button" onClick={() => onTab('my')} className="flex flex-1 flex-col items-center gap-[4px] active:opacity-70">
-        <span className="relative">
-          <span className={`grid h-[24px] w-[24px] place-items-center rounded-full ${myOn ? 'bg-gradient-to-b from-[#2E2E2E] to-[#0A0A0A]' : 'bg-gradient-to-b from-[#FFE14D] to-[#FFC300]'}`}>
-            <svg viewBox="0 0 24 24" className="h-[24px] w-[24px]" aria-hidden="true">
-              <circle cx="8.8" cy="10" r="1.5" fill={myOn ? '#FFD100' : '#3A2B00'} />
-              <circle cx="15.2" cy="10" r="1.5" fill={myOn ? '#FFD100' : '#3A2B00'} />
-              <path d="M7.8 13.8c1.3 1.8 2.7 2.7 4.2 2.7s2.9-.9 4.2-2.7" stroke={myOn ? '#FFD100' : '#3A2B00'} strokeWidth="1.7" strokeLinecap="round" fill="none" />
-            </svg>
+    <div className="relative z-20 shrink-0 px-4 pb-[max(10px,env(safe-area-inset-bottom))] pt-2">
+      <div className="flex items-center rounded-[26px] border border-white/60 bg-white/80 py-[7px] shadow-[0_10px_36px_rgba(0,0,0,0.16)] backdrop-blur-2xl backdrop-saturate-150">
+        {/* 首页：房子（选中=黄色 pill）；未选中用 text-black/90 类而非内联色——深色模式下随 shop-dark 翻白
+            （第六十八轮修复：内联 rgba(0,0,0,0.9) 无法被覆盖，深色下黑图标画在深底上不可见） */}
+        <button type="button" onClick={() => onTab('home')} className={`flex flex-1 flex-col items-center gap-[4px] rounded-full py-[3px] active:opacity-70 ${homeOn ? 'bg-[#FFC300]/25' : ''}`}>
+          <House className={`h-[24px] w-[24px] ${homeOn ? 'text-[#FFC300]' : 'text-black/90'}`} strokeWidth={homeOn ? 2.4 : 1.8} />
+          <span className={labelCls(homeOn, 'text-[#FFA200]')}>首页</span>
+        </button>
+        {/* 购物车（选中=黄色 pill） */}
+        <button type="button" onClick={() => onTab('cart')} className={`flex flex-1 flex-col items-center gap-[4px] rounded-full py-[3px] active:opacity-70 ${cartOn ? 'bg-[#FFC300]/25' : ''}`}>
+          <ShoppingCart className={`h-[24px] w-[24px] ${cartOn ? 'text-[#FFC300]' : 'text-black/90'}`} strokeWidth={cartOn ? 2.4 : 1.8} />
+          <span className={labelCls(cartOn, 'text-[#FFA200]')}>购物车</span>
+        </button>
+        {/* 我的：笑脸 + 金皇冠（选中=黑色 pill：黑底黄脸） */}
+        <button type="button" onClick={() => onTab('my')} className={`flex flex-1 flex-col items-center gap-[4px] rounded-full py-[3px] active:opacity-70 ${myOn ? 'bg-black/[0.06]' : ''}`}>
+          <span className="relative">
+            <span className={`grid h-[24px] w-[24px] place-items-center rounded-full ${myOn ? 'bg-gradient-to-b from-[#2E2E2E] to-[#0A0A0A]' : 'bg-gradient-to-b from-[#FFE14D] to-[#FFC300]'}`}>
+              <svg viewBox="0 0 24 24" className="h-[24px] w-[24px]" aria-hidden="true">
+                <circle cx="8.8" cy="10" r="1.5" fill={myOn ? '#FFD100' : '#3A2B00'} />
+                <circle cx="15.2" cy="10" r="1.5" fill={myOn ? '#FFD100' : '#3A2B00'} />
+                <path d="M7.8 13.8c1.3 1.8 2.7 2.7 4.2 2.7s2.9-.9 4.2-2.7" stroke={myOn ? '#FFD100' : '#3A2B00'} strokeWidth="1.7" strokeLinecap="round" fill="none" />
+              </svg>
+            </span>
+            <Crown className="absolute -right-[7px] -top-[6px] h-[13px] w-[13px] text-[#E8A200]" fill="#FFC93A" strokeWidth={1.4} />
           </span>
-          <Crown className="absolute -right-[7px] -top-[6px] h-[13px] w-[13px] text-[#E8A200]" fill="#FFC93A" strokeWidth={1.4} />
-        </span>
-        <span className={labelCls(myOn, 'text-black/95')}>我的</span>
-      </button>
+          <span className={labelCls(myOn, 'text-black/95')}>我的</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -2358,7 +2360,7 @@ function AddressPickerSheet({ uid, onClose, onPicked, onManage }: { uid: string;
   const cur = mtCurAddrId(uid);
   return (
     <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/45" onClick={onClose}>
-      <div className="max-h-[70%] overflow-y-auto rounded-t-2xl bg-white pb-6" onClick={(e) => e.stopPropagation()}>
+      <div className="max-h-[70%] overflow-y-auto rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 pb-6" onClick={(e) => e.stopPropagation()}>
         <p className="py-3.5 text-center text-[16px] font-semibold text-black/85">选择收货地址</p>
         <div className="px-4">
           {addrs.map((a) => (
@@ -2930,7 +2932,7 @@ function PayPage({
       </div>
 
       {/* 底部：立减横幅 + 确认交易 */}
-      <div className="shrink-0 border-t border-black/[0.05] bg-white px-3.5 pb-[max(12px,env(safe-area-inset-bottom))] pt-1.5">
+      <div className="shrink-0 border-t border-white/60 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-3.5 pb-[max(12px,env(safe-area-inset-bottom))] pt-1.5">
         <div className="mt-1 flex items-center gap-3 bg-[#FFF6D8] px-4 py-2.5">
           <div className="min-w-0 flex-1">
             <p className="text-[14px] font-bold text-black/85">
@@ -3072,7 +3074,7 @@ function ProxySheet({
       onClick={onClose}
     >
       <motion.div
-        className="max-h-[82%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 shadow-2xl"
+        className="max-h-[82%] overflow-y-auto rounded-t-3xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 shadow-2xl"
         initial={{ y: 260 }}
         animate={{ y: 0 }}
         exit={{ y: 260 }}
@@ -3256,7 +3258,7 @@ function ShareSheet({
       onClick={onClose}
     >
       <motion.div
-        className="max-h-[82%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 shadow-2xl"
+        className="max-h-[82%] overflow-y-auto rounded-t-3xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 shadow-2xl"
         initial={{ y: 260 }}
         animate={{ y: 0 }}
         exit={{ y: 260 }}
@@ -3448,7 +3450,7 @@ function CheckoutSheet({
       {/* 遮罩：点击弹窗外任意区域关闭 */}
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <motion.div
-        className="absolute inset-x-0 bottom-0 top-[72px] flex flex-col overflow-hidden rounded-t-[20px] bg-white"
+        className="absolute inset-x-0 bottom-0 top-[72px] flex flex-col overflow-hidden rounded-t-[20px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -3950,7 +3952,7 @@ function OrdersPage({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'tween', duration: 0.24, ease: [0.32, 0.72, 0, 1] }}
-              className="absolute inset-x-0 bottom-0 rounded-t-3xl bg-white px-5 pb-9 pt-5 shadow-[0_-16px_50px_rgba(0,0,0,0.18)]"
+              className="absolute inset-x-0 bottom-0 rounded-t-3xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-5 pb-9 pt-5 shadow-[0_-16px_50px_rgba(0,0,0,0.18)]"
               data-testid="mt-order-filter-sheet"
             >
               <div className="flex items-center">
@@ -4837,7 +4839,7 @@ function OrderDetailPage({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'tween', duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
-              className="absolute inset-x-0 bottom-0 flex max-h-[76%] flex-col rounded-t-2xl bg-white"
+              className="absolute inset-x-0 bottom-0 flex max-h-[76%] flex-col rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150"
             >
               <div className="relative flex shrink-0 items-center justify-center py-4">
                 <p className="text-[16px] font-bold text-black/85">订单跟踪</p>
@@ -5309,7 +5311,7 @@ function MtCustomProductPage({
       </div>
 
       {/* 底部：立即购买 */}
-      <div className="shrink-0 border-t border-black/5 bg-white px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
+      <div className="shrink-0 border-t border-white/60 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
         <button
           type="button"
           data-testid="mt-custom-buy"
@@ -5500,7 +5502,7 @@ function DealConfirmSheet({
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
 
       <motion.div
-        className="absolute inset-x-0 bottom-0 top-[64px] flex flex-col overflow-hidden rounded-t-[20px] bg-white"
+        className="absolute inset-x-0 bottom-0 top-[64px] flex flex-col overflow-hidden rounded-t-[20px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -5771,7 +5773,7 @@ function CouponPickerSheet({
       {/* 点弹窗外任意区域关闭 */}
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <motion.div
-        className="absolute inset-x-0 bottom-0 flex max-h-[72%] flex-col overflow-hidden rounded-t-[20px] bg-white"
+        className="absolute inset-x-0 bottom-0 flex max-h-[72%] flex-col overflow-hidden rounded-t-[20px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -5910,7 +5912,7 @@ function DishSpecSheet({
       {/* 点弹窗外任意区域关闭 */}
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <motion.div
-        className="absolute inset-x-0 bottom-0 top-[56px] flex flex-col overflow-hidden rounded-t-[20px] bg-white"
+        className="absolute inset-x-0 bottom-0 top-[56px] flex flex-col overflow-hidden rounded-t-[20px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -5973,7 +5975,7 @@ function DishSpecSheet({
         </div>
 
         {/* 底部：价格 + 步进 + 选好了 */}
-        <div className="shrink-0 border-t border-black/[0.05] bg-white px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3">
+        <div className="shrink-0 border-t border-white/60 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3">
           <div className="flex items-center gap-2">
             <span className="text-[24px] font-bold leading-none text-[#FF2D7E]">
               <span className="text-[14px]">¥</span>
@@ -6236,7 +6238,7 @@ function CouponsPage({
           </div>
 
           {/* 底部功能条：我的钱包 / 领神券 / 返利 / 会员中心 */}
-          <div className="absolute inset-x-0 bottom-0 flex shrink-0 items-start border-t border-black/[0.05] bg-white pb-[max(8px,env(safe-area-inset-bottom))] pt-2.5">
+          <div className="absolute inset-x-0 bottom-0 flex shrink-0 items-start border-t border-white/60 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 pb-[max(8px,env(safe-area-inset-bottom))] pt-2.5">
             <button type="button" onClick={onOpenWallet} className="flex flex-1 flex-col items-center gap-1 active:opacity-70">
               <Wallet className="h-[22px] w-[22px] text-black/80" strokeWidth={1.8} />
               <span className="text-[11px] text-black/70">我的钱包</span>
@@ -6436,7 +6438,7 @@ function AddAddressPage({ session, onBack, editing, onToast }: { session: MtSess
       </div>
 
       {/* 表单面板（上拉圆角盖住地图底部，对齐真机截图） */}
-      <div className="relative -mt-5 flex min-h-0 flex-1 flex-col rounded-t-[20px] bg-white shadow-[0_-6px_20px_rgba(0,0,0,0.06)]">
+      <div className="relative -mt-5 flex min-h-0 flex-1 flex-col rounded-t-[20px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_-6px_20px_rgba(0,0,0,0.06)]">
         <span aria-hidden="true" className="mx-auto mt-2 block h-1 w-9 shrink-0 rounded-full bg-black/10" />
         <div className="min-h-0 flex-1 overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {/* 地址：点开联想浮层 */}
@@ -6516,7 +6518,7 @@ function AddAddressPage({ session, onBack, editing, onToast }: { session: MtSess
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 30, stiffness: 330 }}
-              className="rounded-t-[20px] bg-white pb-6"
+              className="rounded-t-[20px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150 pb-6"
               onClick={(e) => e.stopPropagation()}
             >
               <p className="py-3.5 text-center text-[16px] font-semibold text-black/85">选择收货地址</p>
@@ -6897,11 +6899,11 @@ function MtWalletSheet({ title, onClose, children }: { title: string; onClose: (
     >
       <style>{MT_SHEET_CSS}</style>
       <div
-        className="max-h-[88%] overflow-y-auto rounded-t-[22px] bg-white pb-[30px] no-scrollbar"
+        className="max-h-[88%] overflow-y-auto rounded-t-[22px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150 pb-[30px] no-scrollbar"
         style={{ animation: 'mtSheetUp 0.32s cubic-bezier(0.2, 0.85, 0.3, 1) both', boxShadow: '0 -10px 40px rgba(0,0,0,0.18)' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 bg-white">
+        <div className="sticky top-0 z-10 bg-white/85 backdrop-blur-2xl backdrop-saturate-150">
           <div className="mx-auto mt-2.5 h-1 w-9 rounded-full bg-black/15" aria-hidden="true" />
           <div className="relative flex h-11 items-center justify-center">
             <p className="text-[16px] font-bold text-black/90">{title}</p>
@@ -6993,7 +6995,7 @@ function MtPayPwdSheet({
   const keyBtnLocked = 'flex h-[52px] items-center justify-center bg-white/60 text-[22px] font-medium text-black/30';
   return (
     <div
-      className="rounded-t-[22px] bg-white pb-[30px]"
+      className="rounded-t-[22px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150 pb-[30px]"
       style={{ animation: 'mtSheetUp 0.32s cubic-bezier(0.2, 0.85, 0.3, 1) both' }}
       onClick={(e) => e.stopPropagation()}
       data-testid="mt-keypad"
@@ -7787,7 +7789,7 @@ function WalletCardsPage({ session, onClose, onOpenBills, onOpenPayPwd, onOpenDr
         </div>
 
         {/* 白色圆角面板：彩色图标行 + 翻页点 + 权益活动 + 底部落款 */}
-        <div className="relative min-h-[430px] rounded-t-[22px] bg-white px-4 pb-6 pt-4">
+        <div className="relative min-h-[430px] rounded-t-[22px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 pb-6 pt-4">
           <div className="grid grid-cols-5 py-1">
             {(
               [
@@ -9562,7 +9564,7 @@ function MyPage({
           <span className="text-[11px] text-black/70">商品图片样式</span>
         </button>
         {([
-          [Timer, '送达速度', () => setSpeedOpen(true), 'my-speed', dsDescShort()],
+          [Timer, '送达速度', () => setSpeedOpen(true), 'my-speed', dsDescShort('meituan')],
           [LayoutGrid, '更多工具', () => onToast('更多工具（演示）'), '', ''],
         ] as [LucideIcon, string, () => void, string, string][]).map(([Icon, l, tap, tid, sub]) => (
           <button key={l} type="button" data-testid={tid || undefined} onClick={tap} className="flex flex-col items-center gap-1.5 active:opacity-70">
@@ -9582,8 +9584,8 @@ function MyPage({
       {/* 商品图片样式选择（第六十六轮：从主题 App 迁出的入口弹层；与淘宝共用同一全局样式） */}
       {goodsStyleOpen ? <GoodsStyleSheet accent="#FF9500" onClose={() => setGoodsStyleOpen(false)} /> : null}
 
-      {/* 送达速度毛玻璃弹窗（第四十一轮：全局共享，淘宝/美团订单统一跟随） */}
-      {speedOpen ? <DeliverySpeedSheet accent="#FFC300" onClose={() => setSpeedOpen(false)} onToast={onToast} /> : null}
+      {/* 送达速度毛玻璃弹窗（第四十二轮：美团独立分钟级三档，与淘宝小时级互不影响） */}
+      {speedOpen ? <DeliverySpeedSheet scope="meituan" accent="#FFC300" onClose={() => setSpeedOpen(false)} onToast={onToast} /> : null}
 
       {/* 骑手形象选择（底部弹层；选中形象用于配送地图巡航） */}
       <AnimatePresence>
@@ -9595,7 +9597,7 @@ function MyPage({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'tween', duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
-              className="absolute inset-x-0 bottom-0 rounded-t-2xl bg-white pb-8"
+              className="absolute inset-x-0 bottom-0 rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 pb-8"
               data-testid="rider-sheet"
             >
               <div className="relative flex shrink-0 items-center justify-center py-4">
@@ -9973,7 +9975,7 @@ function FavoritesPage({
 
       {/* 底部操作条（选中菜品后出现） */}
       {tab === 'dish' && sel.size > 0 && (
-        <div className="absolute inset-x-0 bottom-0 z-10 flex items-center gap-2.5 border-t border-black/[0.06] bg-white/95 px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))] backdrop-blur">
+        <div className="absolute inset-x-0 bottom-0 z-10 flex items-center gap-2.5 border-t border-white/60 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
           <button type="button" onClick={() => unfav([...sel])} className="h-11 rounded-full border border-[#FF4B33]/40 px-5 text-[14px] text-[#FF4B33] active:bg-black/5">
             取消收藏({sel.size})
           </button>
@@ -10275,7 +10277,7 @@ function RefundApplySheet({ order, onClose, onToast }: { order: MtOrder; onClose
       {/* 点击弹窗外任意区域关闭 */}
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <motion.div
-        className="absolute inset-x-0 bottom-0 flex flex-col overflow-hidden rounded-t-[20px] bg-white"
+        className="absolute inset-x-0 bottom-0 flex flex-col overflow-hidden rounded-t-[20px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -10320,7 +10322,7 @@ function RefundApplySheet({ order, onClose, onToast }: { order: MtOrder; onClose
           />
         </div>
 
-        <div className="shrink-0 border-t border-black/5 bg-white px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
+        <div className="shrink-0 border-t border-white/60 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
           <button type="button" onClick={submit} className="h-12 w-full rounded-full bg-[#FFD100] text-[16px] font-semibold text-black/90 shadow-sm active:opacity-85">
             提交申请
           </button>
@@ -11013,7 +11015,7 @@ function RoomSheet({ hotel, room, onClose, onBook }: { hotel: FunHotel; room: Fu
     <motion.div className="absolute inset-0 z-40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.22 }}>
       <div className="absolute inset-0 bg-black/55" onClick={onClose} />
       <motion.div
-        className="absolute inset-x-0 bottom-0 top-[46px] flex flex-col overflow-hidden rounded-t-[18px] bg-white"
+        className="absolute inset-x-0 bottom-0 top-[46px] flex flex-col overflow-hidden rounded-t-[18px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -11104,7 +11106,7 @@ function HotelConfirmSheet({ hotel, room, onClose, onOpenPay, onToast }: { hotel
     <motion.div className="absolute inset-0 z-40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.22 }}>
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <motion.div
-        className="absolute inset-x-0 bottom-0 top-[110px] flex flex-col overflow-hidden rounded-t-[18px] bg-white"
+        className="absolute inset-x-0 bottom-0 top-[110px] flex flex-col overflow-hidden rounded-t-[18px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -11392,7 +11394,7 @@ function FunDealConfirmSheet({ venue, deal, onClose, onOpenPay, onToast }: { ven
     <motion.div className="absolute inset-0 z-40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.22 }}>
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <motion.div
-        className="absolute inset-x-0 bottom-0 top-[150px] flex flex-col overflow-hidden rounded-t-[18px] bg-white"
+        className="absolute inset-x-0 bottom-0 top-[150px] flex flex-col overflow-hidden rounded-t-[18px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -11780,7 +11782,7 @@ function MovieConfirmSheet({ movie, onClose, onOpenPay, onToast }: { movie: FunM
     <motion.div className="absolute inset-0 z-40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.22 }}>
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <motion.div
-        className="absolute inset-x-0 bottom-0 top-[90px] flex flex-col overflow-hidden rounded-t-[18px] bg-white"
+        className="absolute inset-x-0 bottom-0 top-[90px] flex flex-col overflow-hidden rounded-t-[18px] bg-white/80 backdrop-blur-2xl backdrop-saturate-150"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         exit={{ y: '100%' }}
@@ -12293,7 +12295,7 @@ function RateSheet({ order, onClose, onToast }: { order: MtOrder; onClose: () =>
 
   return (
     <div className="absolute inset-0 z-40 flex items-end bg-black/45" onClick={onClose}>
-      <div className="max-h-[86%] w-full overflow-y-auto rounded-t-2xl bg-white p-4 pb-[max(16px,env(safe-area-inset-bottom))]" onClick={(e) => e.stopPropagation()}>
+      <div className="max-h-[86%] w-full overflow-y-auto rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 p-4 pb-[max(16px,env(safe-area-inset-bottom))]" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <p className="text-[16px] font-bold text-black/90">评价订单</p>
           <button type="button" aria-label="关闭" onClick={onClose} className="grid h-7 w-7 place-items-center rounded-full bg-black/[0.05]">

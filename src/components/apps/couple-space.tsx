@@ -1328,7 +1328,7 @@ export default function CoupleSpaceApp() {
                 type="button"
                 data-testid="couple-accept-btn"
                 onClick={() => void doAcceptInvite()}
-                className="mt-4 h-[60px] w-full rounded-2xl bg-white text-[21px] font-semibold text-[#1b1b1f] shadow-[0_10px_26px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-transform active:scale-[0.98]"
+                className="mt-4 h-[60px] w-full rounded-2xl bg-white/75 backdrop-blur-xl text-[21px] font-semibold text-[#1b1b1f] shadow-[0_10px_26px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-transform active:scale-[0.98]"
               >
                 接受邀请
               </button>
@@ -1352,7 +1352,7 @@ export default function CoupleSpaceApp() {
                 type="button"
                 data-testid="couple-invite-btn"
                 onClick={() => setPickSheet('send')}
-                className="mt-10 h-[60px] w-full rounded-2xl bg-white text-[21px] font-semibold text-[#1b1b1f] shadow-[0_10px_26px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-transform active:scale-[0.98]"
+                className="mt-10 h-[60px] w-full rounded-2xl bg-white/75 backdrop-blur-xl text-[21px] font-semibold text-[#1b1b1f] shadow-[0_10px_26px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-transform active:scale-[0.98]"
               >
                 立即邀请我的另一半
               </button>
@@ -1376,7 +1376,7 @@ export default function CoupleSpaceApp() {
               { label: '爱情树', icon: <Sprout className="h-8 w-8" strokeWidth={1.8} /> },
               { label: '纪念日', icon: <BadgeCheck className="h-8 w-8" strokeWidth={1.8} /> },
             ].map((it) => (
-              <div key={it.label} className="flex h-[110px] flex-col items-center justify-center gap-2.5 rounded-2xl bg-white shadow-[0_6px_18px_rgba(0,0,0,0.05)]">
+              <div key={it.label} className="flex h-[110px] flex-col items-center justify-center gap-2.5 rounded-2xl bg-white/80 backdrop-blur-xl shadow-[0_6px_18px_rgba(0,0,0,0.05)]">
                 <span className="text-[#6e6e76]">{it.icon}</span>
                 <span className="text-[15px] font-medium text-[#4a4a52]">{it.label}</span>
               </div>
@@ -1387,7 +1387,7 @@ export default function CoupleSpaceApp() {
         {/* 邀请选人弹层：渠道（微信/QQ）+ AI 好友列表（每联系人限一次，已邀请过置灰） */}
         {pickSheet && (
           <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/35" onClick={() => setPickSheet(null)}>
-            <div className="max-h-[74%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-9 pt-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="max-h-[74%] overflow-y-auto rounded-t-3xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-5 pb-9 pt-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
               <div className="mx-auto h-1 w-10 rounded-full bg-[#e0e0e5]" />
               <div className="mt-3 text-[17px] font-bold text-[#2c2c30]">{pickSheet === 'send' ? '邀请你的另一半' : '让 TA 来邀请你'}</div>
               <div className="mt-1 text-[12.5px] leading-relaxed text-[#9a9aa2]">
@@ -1509,10 +1509,10 @@ export default function CoupleSpaceApp() {
         {tab === 'us' && <UsPage state={state} days={days} openSub={openSub} />}
       </div>
 
-      {/* 底部 Tab 栏（子页打开时隐藏） */}
+      {/* 底部 Tab 栏（子页打开时隐藏）——第四十二轮：毛玻璃胶囊悬浮条 */}
       {!sub && (
-        <nav aria-label="情侣空间导航" className="relative z-20 shrink-0 border-t border-black/[0.06] bg-white/90 pb-3 pt-1 backdrop-blur-md">
-          <div className="grid grid-cols-4">
+        <nav aria-label="情侣空间导航" className="relative z-20 shrink-0 px-4 pb-[max(10px,env(safe-area-inset-bottom))] pt-2">
+          <div className="grid grid-cols-4 rounded-[26px] border border-white/60 bg-white/80 py-[6px] shadow-[0_10px_36px_rgba(0,0,0,0.16)] backdrop-blur-2xl backdrop-saturate-150">
             {([
               { key: 'home', label: '首页', icon: Heart },
               { key: 'discover', label: '发现', icon: Compass },
@@ -1531,13 +1531,13 @@ export default function CoupleSpaceApp() {
                   }}
                   aria-label={t.label}
                   aria-current={active ? 'page' : undefined}
-                  className="flex h-[42px] flex-col items-center justify-center gap-[2px] transition-opacity active:opacity-60"
+                  className={`flex h-[42px] flex-col items-center justify-center gap-[2px] rounded-full transition-all active:opacity-60 ${active ? 'bg-[#f2536a]/10' : ''}`}
                 >
                   <Icon
                     className="h-[19px] w-[19px]"
                     strokeWidth={active ? 2.5 : 1.9}
                     fill={active && t.key === 'home' ? 'currentColor' : 'none'}
-                    color={active ? '#3a3a40' : '#b6b6bd'}
+                    color={active ? '#e0455c' : '#b6b6bd'}
                   />
                   <span className={`text-[10px] leading-none ${active ? 'font-semibold text-[#3a3a40]' : 'text-[#b6b6bd]'}`}>{t.label}</span>
                 </button>
@@ -1651,29 +1651,35 @@ function HomePage(props: {
           {avatarCol('ta')}
         </div>
 
-      {/* 每天想你大圆：首次点击打卡后消失，改为头像下方想念天数（记录入口在右侧悬浮心形按钮） */}
-      {missDays == null && (
-        <div className="relative mt-3 flex h-[286px] w-full items-start justify-center">
-          {/* 引号装饰 */}
-          <span aria-hidden="true" className="absolute left-[18%] top-[44px] select-none font-serif text-[44px] font-bold leading-none text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">&ldquo;</span>
-          <span aria-hidden="true" className="absolute right-[18%] top-[44px] select-none font-serif text-[44px] font-bold leading-none text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">&rdquo;</span>
-          <button
-            type="button"
-            onClick={() => {
-              tapMissYou();
-              setPulse((p) => p + 1);
-            }}
-            aria-label="每天想你，点击打卡"
-            className="relative top-[36px] flex h-[150px] w-[150px] items-center justify-center rounded-full bg-[radial-gradient(circle_at_32%_28%,#cfcfd6,#a9a9b2_68%,#96969f)] text-white shadow-[0_16px_40px_rgba(70,70,80,0.38)] transition-transform active:scale-[0.97]"
-          >
-            <span aria-hidden="true" className="absolute -inset-2.5 rounded-full bg-white/30" />
-            <span key={pulse} aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-full bg-white/40 [animation:couple-ripple-out_.7s_ease-out]" />
-            <span key={`t${pulse}`} className="relative block text-[20px] font-bold tracking-wide [animation:couple-pop-heart_.45s_ease-out]">
+      {/* 每天想你大圆（第四十二轮恢复：始终显示不再消失；打卡后圆内下方补想念天数小字，记录入口在右侧悬浮心形按钮） */}
+      <div className="relative mt-3 flex h-[286px] w-full items-start justify-center">
+        {/* 引号装饰 */}
+        <span aria-hidden="true" className="absolute left-[18%] top-[44px] select-none font-serif text-[44px] font-bold leading-none text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">&ldquo;</span>
+        <span aria-hidden="true" className="absolute right-[18%] top-[44px] select-none font-serif text-[44px] font-bold leading-none text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">&rdquo;</span>
+        <button
+          type="button"
+          data-testid="miss-you-btn"
+          onClick={() => {
+            tapMissYou();
+            setPulse((p) => p + 1);
+          }}
+          aria-label="每天想你，点击打卡"
+          className="group relative top-[36px] flex h-[150px] w-[150px] items-center justify-center rounded-full border border-white/70 bg-white/25 shadow-[0_16px_40px_rgba(70,70,80,0.32)] backdrop-blur-2xl backdrop-saturate-150 transition-transform active:scale-[0.97]"
+        >
+          <span aria-hidden="true" className="absolute -inset-2.5 rounded-full bg-white/30" />
+          <span key={pulse} aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-full bg-white/40 [animation:couple-ripple-out_.7s_ease-out]" />
+          <span className="relative flex flex-col items-center">
+            <span key={`t${pulse}`} className="block text-[20px] font-bold tracking-wide text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.18)] [animation:couple-pop-heart_.45s_ease-out]">
               每天想你
             </span>
-          </button>
-        </div>
-      )}
+            {missDays != null && (
+              <span className="mt-1 rounded-full bg-white/70 px-2 py-[2px] text-[10px] font-semibold leading-none text-[#6b6b74] shadow-[0_2px_8px_rgba(0,0,0,0.10)]">
+                已想 {missDays} 天 ♡
+              </span>
+            )}
+          </span>
+        </button>
+      </div>
 
         <input
           ref={bgInput}
@@ -1687,13 +1693,13 @@ function HomePage(props: {
         />
       </div>
 
-      {/* 右侧悬浮操作（想念记录 / 换背景）：固定在功能卡上方，不随内容滚动 */}
+      {/* 右侧悬浮操作（想念记录 / 换背景）：固定在功能卡上方，不随内容滚动；第四十二轮：毛玻璃胶囊按钮 */}
       <div className="absolute bottom-[116px] right-3 z-20 flex flex-col gap-2.5">
         <button
           type="button"
           onClick={() => openSub('missyou')}
           aria-label="每天想你记录"
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition-opacity active:opacity-70"
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-white/70 bg-white/45 text-[#5a5a62] shadow-[0_4px_14px_rgba(0,0,0,0.10)] backdrop-blur-2xl backdrop-saturate-150 transition-opacity active:opacity-70"
         >
           <Heart className="h-4 w-4" fill="none" />
         </button>
@@ -1701,7 +1707,7 @@ function HomePage(props: {
           type="button"
           onClick={() => bgInput.current?.click()}
           aria-label="更换背景"
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition-opacity active:opacity-70"
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-white/70 bg-white/45 text-[#5a5a62] shadow-[0_4px_14px_rgba(0,0,0,0.10)] backdrop-blur-2xl backdrop-saturate-150 transition-opacity active:opacity-70"
         >
           <ImageIcon className="h-4 w-4" />
         </button>
@@ -1719,7 +1725,7 @@ function HomePage(props: {
             key={c.key}
             type="button"
             onClick={() => openSub(c.key as SubPage)}
-            className="flex h-[86px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-white text-[#26262b] shadow-[0_6px_16px_rgba(0,0,0,0.07)] ring-1 ring-black/[0.05] transition-transform active:scale-[0.96]"
+            className="flex h-[86px] flex-col items-center justify-center gap-1.5 rounded-2xl bg-white/75 backdrop-blur-xl text-[#26262b] shadow-[0_6px_16px_rgba(0,0,0,0.07)] ring-1 ring-black/[0.05] transition-transform active:scale-[0.96]"
           >
             {c.icon}
             <span className="whitespace-pre-line text-center text-[11px] font-medium leading-tight">{c.label}</span>
@@ -1770,22 +1776,22 @@ function DiscoverPage({ openSub }: { openSub: (s: SubPage) => void }) {
         <button
           type="button"
           onClick={() => openSub('track')}
-          className="overflow-hidden rounded-2xl bg-white shadow-[0_8px_22px_rgba(0,0,0,0.08)] transition-transform active:scale-[0.98]"
+          className="overflow-hidden rounded-2xl bg-white/80 backdrop-blur-xl shadow-[0_8px_22px_rgba(0,0,0,0.08)] transition-transform active:scale-[0.98]"
         >
           { }
           <img src="/couple-map.png" alt="情侣轨迹" className="h-[118px] w-full rounded-t-2xl object-cover" draggable={false} />
-          <div className="flex h-[44px] items-center justify-center bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-black/[0.04]">
+          <div className="flex h-[44px] items-center justify-center bg-white/80 backdrop-blur-xl text-[15px] font-semibold text-[#26262b] ring-1 ring-black/[0.04]">
             情侣轨迹
           </div>
         </button>
         <button
           type="button"
           onClick={() => openSub('house')}
-          className="overflow-hidden rounded-2xl bg-white shadow-[0_8px_22px_rgba(0,0,0,0.08)] transition-transform active:scale-[0.98]"
+          className="overflow-hidden rounded-2xl bg-white/80 backdrop-blur-xl shadow-[0_8px_22px_rgba(0,0,0,0.08)] transition-transform active:scale-[0.98]"
         >
           { }
           <img src="/couple-house.png" alt="情侣小家" className="h-[118px] w-full rounded-t-2xl object-cover" draggable={false} />
-          <div className="flex h-[44px] items-center justify-center bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-black/[0.04]">
+          <div className="flex h-[44px] items-center justify-center bg-white/80 backdrop-blur-xl text-[15px] font-semibold text-[#26262b] ring-1 ring-black/[0.04]">
             情侣小家
           </div>
         </button>
@@ -1914,7 +1920,7 @@ function AlbumPage(props: {
                     uploadTo(a.id);
                   }
                 }}
-                className="rounded-full bg-white px-3 py-1 text-[11.5px] font-medium text-[#4a4a52] shadow-sm"
+                className="rounded-full bg-white/75 backdrop-blur-xl px-3 py-1 text-[11.5px] font-medium text-[#4a4a52] shadow-sm"
               >
                 立即上传
               </span>
@@ -1996,7 +2002,7 @@ function AlbumPage(props: {
       <button
         type="button"
         onClick={() => setCreating(true)}
-        className="fixed bottom-[86px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-2xl bg-white px-5 py-2.5 text-[14px] font-semibold text-[#26262b] shadow-[0_10px_26px_rgba(0,0,0,0.12)] ring-1 ring-black/[0.05] transition-transform active:scale-[0.97]"
+        className="fixed bottom-[86px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-2xl bg-white/75 backdrop-blur-xl px-5 py-2.5 text-[14px] font-semibold text-[#26262b] shadow-[0_10px_26px_rgba(0,0,0,0.12)] ring-1 ring-black/[0.05] transition-transform active:scale-[0.97]"
       >
         <span className="flex h-5 w-5 items-center justify-center rounded-full bg-black/[0.06]">
           <Plus className="h-3.5 w-3.5" />
@@ -2007,7 +2013,7 @@ function AlbumPage(props: {
       {/* 新建相册弹层 */}
       {creating && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 px-10" onClick={() => setCreating(false)}>
-          <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="text-[17px] font-semibold text-[#2c2c30]">新建相册</div>
             <input
               value={newName}
@@ -2092,7 +2098,7 @@ function UsPage({ state, days, openSub }: { state: CoupleState; days: number | n
     <div className="h-full overflow-y-auto overscroll-contain pb-6">
       <div className="px-3 pt-[62px]">
         {/* 蕾丝装饰日记卡：蝴蝶结 + 圆点拱边 + 方格纸底纹 + 像素心 */}
-        <div className="relative overflow-hidden rounded-2xl bg-white pb-4 shadow-[0_8px_22px_rgba(0,0,0,0.06)]">
+        <div className="relative overflow-hidden rounded-2xl bg-white/80 backdrop-blur-xl pb-4 shadow-[0_8px_22px_rgba(0,0,0,0.06)]">
           {/* 方格纸底纹 */}
           <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[linear-gradient(#00000007_1px,transparent_1px),linear-gradient(90deg,#00000007_1px,transparent_1px)] bg-[size:14px_14px]" />
           {/* 左右角小蝴蝶结 */}
@@ -2242,7 +2248,7 @@ function CommentThread({
   };
   const inputCls = dark
     ? 'h-10 flex-1 rounded-full bg-white/10 px-4 text-[13.5px] text-white outline-none placeholder:text-white/35'
-    : 'h-10 flex-1 rounded-full bg-white px-4 text-[13.5px] text-[#2c2c30] outline-none placeholder:text-[#b6b6bd]';
+    : 'h-10 flex-1 rounded-full bg-white/75 backdrop-blur-xl px-4 text-[13.5px] text-[#2c2c30] outline-none placeholder:text-[#b6b6bd]';
   // 名字配色（朋友圈评论区：名字是一个颜色、正文一个颜色）——TA 用微信链蓝、我用主题粉，一眼分清谁说的
   const taNameCls = dark ? 'text-white' : 'text-[#26262b]';
   const meNameCls = dark ? 'text-white' : 'text-[#26262b]';
@@ -2484,7 +2490,7 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
       </div>
 
       {/* 纪念日列表 */}
-      <div className="mt-3.5 overflow-hidden rounded-2xl bg-white shadow-sm">
+      <div className="mt-3.5 overflow-hidden rounded-2xl bg-white/80 backdrop-blur-xl shadow-sm">
         {/* 我们在一起（主纪念日） */}
         <button
           type="button"
@@ -2570,14 +2576,14 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
 
       {/* 底部：提醒提示 + 添加纪念日 */}
       <div className="mt-4 flex items-center justify-center gap-3">
-        <span className={`flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[12px] ${setReminder ? 'border-[#d9d9de] bg-white text-[#8e8e96]' : 'border-[#e6e6ea] bg-[#f7f7f9] text-[#9a9aa2]'}`}>
+        <span className={`flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[12px] ${setReminder ? 'border-[#d9d9de] bg-white/80 backdrop-blur-xl text-[#8e8e96]' : 'border-[#e6e6ea] bg-[#f7f7f9] text-[#9a9aa2]'}`}>
           <Sparkles className="h-3.5 w-3.5" />
           {setReminder ? '纪念日提醒已开启' : '还没设置提醒哦'}
         </span>
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="flex items-center gap-1 rounded-xl bg-white px-4 py-2 text-[12.5px] font-semibold text-[#26262b] shadow-[0_4px_12px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-transform active:scale-[0.97]"
+          className="flex items-center gap-1 rounded-xl bg-white/75 backdrop-blur-xl px-4 py-2 text-[12.5px] font-semibold text-[#26262b] shadow-[0_4px_12px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-transform active:scale-[0.97]"
         >
           <Plus className="h-3.5 w-3.5" /> 添加纪念日
         </button>
@@ -2586,7 +2592,7 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
       {/* 编辑纪念日弹层 */}
       {editing && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 px-8" onClick={() => setEditing(null)}>
-          <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="text-[15px] font-semibold text-[#2c2c30]">{editing.label}</div>
             <button
               type="button"
@@ -2617,7 +2623,7 @@ function AnniversaryPage(props: { state: CoupleState; patch: (p: Partial<CoupleS
       {/* 添加纪念日弹层 */}
       {adding && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 px-8" onClick={() => setAdding(false)}>
-          <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="text-[15px] font-semibold text-[#2c2c30]">添加纪念日</div>
             <input
               value={newName}
@@ -2868,7 +2874,7 @@ function TreePage({ state, waterTree, close, showToast }: { state: CoupleState; 
             <button
               type="button"
               onClick={() => showToast('昨天忘浇水啦，今天补上还不断签！')}
-              className="absolute -bottom-14 right-0 flex h-12 w-12 rotate-3 flex-col items-center justify-center rounded-xl bg-white shadow-[0_4px_12px_rgba(0,0,0,0.18)] [animation:couple-float-y_2.4s_ease-in-out_infinite]"
+              className="absolute -bottom-14 right-0 flex h-12 w-12 rotate-3 flex-col items-center justify-center rounded-xl bg-white/85 backdrop-blur-xl shadow-[0_4px_12px_rgba(0,0,0,0.18)] [animation:couple-float-y_2.4s_ease-in-out_infinite]"
             >
               <span className="text-[8.5px] font-bold leading-none text-[#e0483a]">断签</span>
               <span className="mt-0.5 text-[10px] font-extrabold leading-none text-[#333]">昨天</span>
@@ -3185,7 +3191,7 @@ function PlaceSearchRow({ label, current, onPick, onClear, showToast }: { label:
               onClear();
               setResults(null);
             }}
-            className="flex max-w-[70%] items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[11.5px] text-[#6e6e76] shadow-sm"
+            className="flex max-w-[70%] items-center gap-1 rounded-full bg-white/75 backdrop-blur-xl px-2.5 py-1 text-[11.5px] text-[#6e6e76] shadow-sm"
           >
             <MapPin className="h-3 w-3 shrink-0 text-[#8e8e96]" />
             <span className="truncate">{current.name}</span>
@@ -3204,7 +3210,7 @@ function PlaceSearchRow({ label, current, onPick, onClear, showToast }: { label:
           }}
           placeholder="搜索城市或地址，如「上海」"
           maxLength={30}
-          className="h-10 flex-1 rounded-xl bg-white px-3.5 text-[14px] shadow-sm outline-none placeholder:text-[#b6b6bd]"
+          className="h-10 flex-1 rounded-xl bg-white/75 backdrop-blur-xl px-3.5 text-[14px] shadow-sm outline-none placeholder:text-[#b6b6bd]"
         />
         <button
           type="button"
@@ -3215,7 +3221,7 @@ function PlaceSearchRow({ label, current, onPick, onClear, showToast }: { label:
         </button>
       </div>
       {results != null && results.length > 0 && (
-        <div className="mt-2 max-h-40 overflow-y-auto rounded-xl bg-white p-1 shadow-sm">
+        <div className="mt-2 max-h-40 overflow-y-auto rounded-xl bg-white/75 backdrop-blur-xl p-1 shadow-sm">
           {results.map((it, i) => (
             <button
               key={`${it.name}-${i}`}
@@ -3296,7 +3302,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
   // 真实距离：双方都设置了真实位置才有
   const distKm = state.myLoc && state.taLoc ? haversineKm(state.myLoc.lat, state.myLoc.lng, state.taLoc.lat, state.taLoc.lng) : null;
 
-  const toolBtn = 'flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#6e6e76] shadow-[0_3px_10px_rgba(0,0,0,0.10)] transition-opacity active:opacity-60';
+  const toolBtn = 'flex h-8 w-8 items-center justify-center rounded-full bg-white/75 backdrop-blur-xl text-[#6e6e76] shadow-[0_3px_10px_rgba(0,0,0,0.10)] transition-opacity active:opacity-60';
 
   // —— 位置与轨迹独立界面：聊天区（写进 AI 记忆） ——
   const [trailDraft, setTrailDraft] = useState('');
@@ -3484,7 +3490,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                 <svg viewBox="0 0 200 20" className="absolute inset-0 h-full w-full" aria-hidden="true">
                   <path d="M8 10 C 50 -4, 150 24, 192 10" fill="none" stroke="#c7c7ce" strokeWidth="2.2" strokeDasharray="5 5" strokeLinecap="round" />
                 </svg>
-                <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-white px-2.5 py-[3px] text-[10px] text-[#6e6e76] shadow-sm ring-1 ring-[#e9e9ee]">
+                <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-white/75 backdrop-blur-xl px-2.5 py-[3px] text-[10px] text-[#6e6e76] shadow-sm ring-1 ring-[#e9e9ee]">
                   {distKm != null
                     ? `相距 ${fmtKm(distKm)}`
                     : state.myLoc || state.taLoc
@@ -3546,7 +3552,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
               /* 静默 */
             }
           }}
-          className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-2xl bg-white px-6 py-2.5 text-[14px] font-semibold text-[#26262b] shadow-[0_10px_26px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.05] transition-transform active:scale-[0.97]"
+          className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-2xl bg-white/75 backdrop-blur-xl px-6 py-2.5 text-[14px] font-semibold text-[#26262b] shadow-[0_10px_26px_rgba(0,0,0,0.16)] ring-1 ring-black/[0.05] transition-transform active:scale-[0.97]"
         >
           <MapPin className="h-4 w-4" fill="rgba(40,40,46,0.12)" />
           位置与轨迹
@@ -3608,7 +3614,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                 trailEarlyRef.current += 1;
                 showToast('正在生成更早的记录…');
               }}
-              className="mx-auto mt-2 block rounded-xl bg-white px-5 py-1.5 text-[11.5px] text-[#8e8e96] shadow-[0_1px_4px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.04]"
+              className="mx-auto mt-2 block rounded-xl bg-white/75 backdrop-blur-xl px-5 py-1.5 text-[11.5px] text-[#8e8e96] shadow-[0_1px_4px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.04]"
               data-testid="trail-earlier"
             >
               查看更早的记录
@@ -3651,7 +3657,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                     ) : (
                       <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#eef1f5] text-[11px] font-bold text-[#8a97a8]">{(state.taName || 'TA').slice(0, 1)}</span>
                     ))}
-                  <div className={`max-w-[70%] rounded-2xl px-3.5 py-2 text-[13.5px] leading-relaxed ${mine ? 'rounded-br-md bg-[#ececf1] text-[#2c2c30]' : 'rounded-bl-md bg-white text-[#2c2c30] shadow-[0_1px_4px_rgba(0,0,0,0.05)]'}`}>{ln.msg.text}</div>
+                  <div className={`max-w-[70%] rounded-2xl px-3.5 py-2 text-[13.5px] leading-relaxed ${mine ? 'rounded-br-md bg-[#ececf1] text-[#2c2c30]' : 'rounded-bl-md bg-white/80 backdrop-blur-xl text-[#2c2c30] shadow-[0_1px_4px_rgba(0,0,0,0.05)]'}`}>{ln.msg.text}</div>
                   {mine &&
                     (state.meAvatar ? (
                       <img src={state.meAvatar} alt={state.meName || '我'} className="h-8 w-8 shrink-0 rounded-full object-cover" draggable={false} />
@@ -3668,7 +3674,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                 ) : (
                   <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#eef1f5] text-[11px] font-bold text-[#8a97a8]">{(state.taName || 'TA').slice(0, 1)}</span>
                 )}
-                <div className="rounded-2xl rounded-bl-md bg-white px-3.5 py-2 text-[12.5px] text-[#9a9aa2] shadow-[0_1px_4px_rgba(0,0,0,0.05)]">正在输入…</div>
+                <div className="rounded-2xl rounded-bl-md bg-white/80 backdrop-blur-xl px-3.5 py-2 text-[12.5px] text-[#9a9aa2] shadow-[0_1px_4px_rgba(0,0,0,0.05)]">正在输入…</div>
               </div>
             )}
           </div>
@@ -3684,7 +3690,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
                 }}
                 placeholder={`和${state.taName || 'TA'}聊聊今天的行程…`}
                 maxLength={120}
-                className="h-10 flex-1 rounded-full bg-white px-4 text-[13.5px] shadow-[0_2px_8px_rgba(0,0,0,0.05)] outline-none placeholder:text-[#b6b6bd]"
+                className="h-10 flex-1 rounded-full bg-white/75 backdrop-blur-xl px-4 text-[13.5px] shadow-[0_2px_8px_rgba(0,0,0,0.05)] outline-none placeholder:text-[#b6b6bd]"
                 data-testid="trail-input"
               />
               <button
@@ -3702,7 +3708,7 @@ function TrackPage({ state, patch, days, showToast, close }: { state: CoupleStat
           {/* 查看记录详情弹层 */}
           {trailDetail && (
             <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={() => setTrailDetail(null)}>
-              <div className="rounded-t-2xl bg-white px-5 pb-9 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="trail-detail-sheet">
+              <div className="rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-5 pb-9 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="trail-detail-sheet">
                 <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
                 <div className="flex items-center gap-2">
                   <span className="flex h-6 w-6 items-center justify-center" style={{ color: (TRAIL_FEED_ICON[trailDetail.kind] ?? TRAIL_FEED_ICON.stay).color }}>
@@ -3825,7 +3831,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
         <button
           type="button"
           onClick={() => showToast('小问答打印成册（演示）')}
-          className="shrink-0 rounded-xl bg-white px-3 py-1.5 text-[12.5px] font-bold text-[#4a4a52] shadow-[0_2px_8px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.05] transition-transform active:scale-95"
+          className="shrink-0 rounded-xl bg-white/75 backdrop-blur-xl px-3 py-1.5 text-[12.5px] font-bold text-[#4a4a52] shadow-[0_2px_8px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.05] transition-transform active:scale-95"
         >
           小问答打印成册
         </button>
@@ -3845,7 +3851,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
             <button
               type="button"
               onClick={() => showToast('小问答打印成册（演示）')}
-              className="rounded-xl bg-white py-2 pl-5 pr-4 text-[14px] font-bold text-[#4a4a52] shadow-[0_3px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.05] transition-transform active:scale-95"
+              className="rounded-xl bg-white/75 backdrop-blur-xl py-2 pl-5 pr-4 text-[14px] font-bold text-[#4a4a52] shadow-[0_3px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.05] transition-transform active:scale-95"
             >
               打印成册
             </button>
@@ -3963,7 +3969,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
             type="button"
             onClick={saveAnswer}
             disabled={!answer.trim()}
-            className="mx-auto mb-8 h-[52px] w-[70%] rounded-2xl bg-white text-[17px] font-bold text-[#1b1b1f] shadow-[0_6px_18px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
+            className="mx-auto mb-8 h-[52px] w-[70%] rounded-2xl bg-white/75 backdrop-blur-xl text-[17px] font-bold text-[#1b1b1f] shadow-[0_6px_18px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
           >
             完成
           </button>
@@ -3985,7 +3991,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
       {/* 自定义问题弹层 */}
       {addSheet && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/40 px-8" onClick={() => setAddSheet(false)}>
-          <div className="w-full rounded-2xl bg-white p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="text-center text-[17px] font-bold text-[#2c2c30]">自定义问题</div>
             <QuizHeartLine className="mt-3" />
             <textarea
@@ -4006,7 +4012,7 @@ function QuizPage({ state, patch, days, showToast, close }: { state: CoupleState
                 type="button"
                 onClick={addCustom}
                 disabled={!newQ.trim()}
-                className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] disabled:opacity-45"
+                className="h-11 flex-1 rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] disabled:opacity-45"
               >
                 添加
               </button>
@@ -4344,7 +4350,7 @@ function ShareChannelPicker({ title, hint, onSend, onClose }: { title: string; h
   return (
     <div className="absolute inset-0 z-[80] flex flex-col justify-end bg-black/45" onClick={onClose}>
       <div
-        className="max-h-[78%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-9 pt-4 shadow-2xl [animation:couple-sub-in_.24s_ease-out]"
+        className="max-h-[78%] overflow-y-auto rounded-t-3xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-5 pb-9 pt-4 shadow-2xl [animation:couple-sub-in_.24s_ease-out]"
         onClick={(e) => e.stopPropagation()}
         data-testid="share-picker"
       >
@@ -4543,7 +4549,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
       {/* 信纸选择弹层（第二十八轮：12+3 款信纸 + 预览带装饰纹理层/画框/题头，与编辑页等比渲染） */}
       {sheet === 'paper' && (
         <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
-          <div className="rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
+          <div className="rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
             <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
             <div className="text-center text-[17px] font-bold text-[#2c2c30]">选择信纸</div>
             <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">挑一张喜欢的信纸，把心里话写在上面 ♡</div>
@@ -4564,7 +4570,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               <button type="button" onClick={() => showToast('更多信纸即将上架 ♡')} className="h-11 flex-1 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
                 更多信纸
               </button>
-              <button type="button" onClick={() => setSheet(null)} className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
+              <button type="button" onClick={() => setSheet(null)} className="h-11 flex-1 rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
                 完成
               </button>
             </div>
@@ -4575,7 +4581,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
       {/* 字体弹层（字体/字号/颜色；第二十八轮美化：双行预览卡片+金色选中态+圆形色板+实时预览条；全部字体自托管 webfont/全平台系统字体，点击必有效果） */}
       {sheet === 'font' && (
         <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
-          <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
+          <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
             <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
             <div className="text-center text-[15px] font-bold text-[#2c2c30]">字体</div>
             <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">选一种字体，让字也有温度（新增 7 款手写体，点击即生效）</div>
@@ -4585,7 +4591,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                   key={f.key}
                   type="button"
                   onClick={() => pickFont(f)}
-                  className={`rounded-xl border px-2 py-2.5 text-center transition-colors ${font.key === f.key ? 'border-[#c9a86a] bg-[#fbf5e8] shadow-[0_2px_10px_rgba(201,168,106,0.22)]' : 'border-[#e8e8ec] bg-white active:bg-[#f6f6f8]'}`}
+                  className={`rounded-xl border px-2 py-2.5 text-center transition-colors ${font.key === f.key ? 'border-[#c9a86a] bg-[#fbf5e8] shadow-[0_2px_10px_rgba(201,168,106,0.22)]' : 'border-[#e8e8ec] bg-white/75 backdrop-blur-xl active:bg-[#f6f6f8]'}`}
                 >
                   <div className="text-[10.5px] font-medium text-[#9a9aa2]">{f.name}</div>
                   <div className="mt-1 text-[18px] leading-tight text-[#3a3a40]" style={{ fontFamily: f.css }}>见字如面</div>
@@ -4621,7 +4627,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 亲爱的他：<span className="opacity-80">落笔的那一刻，想念就有了形状。</span>
               </div>
             </div>
-            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
+            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
               完成
             </button>
           </div>
@@ -4632,7 +4638,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
           第二十九轮：顶部新增「信封上的字」自定义输入——实时同步到预览与所有我的信封） */}
       {sheet === 'env' && (
         <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
-          <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="env-picker">
+          <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="env-picker">
             <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
             <div className="text-center text-[17px] font-bold text-[#2c2c30]">选择信封</div>
             <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">挑一个喜欢的信封，把信装进去寄给他</div>
@@ -4650,7 +4656,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 placeholder="致 最爱的你"
                 aria-label="信封上的字"
                 data-testid="env-text-input"
-                className="h-9 min-w-0 flex-1 rounded-lg bg-white px-3 text-[14px] text-[#3a322c] outline-none ring-1 ring-black/[0.06] focus:ring-[#c9a86a] placeholder:text-[#c4bcb2]"
+                className="h-9 min-w-0 flex-1 rounded-lg bg-white/80 backdrop-blur-xl px-3 text-[14px] text-[#3a322c] outline-none ring-1 ring-black/[0.06] focus:ring-[#c9a86a] placeholder:text-[#c4bcb2]"
               />
               {envText && (
                 <button
@@ -4684,7 +4690,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 </button>
               ))}
             </div>
-            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
+            <button type="button" onClick={() => setSheet(null)} className="mt-5 h-11 w-full rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
               完成
             </button>
           </div>
@@ -4735,7 +4741,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   const renderSenderSheet = () =>
     sheet === 'sender' && (
       <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/55" onClick={() => setSheet(null)}>
-        <div className="rounded-t-2xl bg-white px-5 pb-9 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="sender-sheet">
+        <div className="rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-5 pb-9 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="sender-sheet">
           <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
           <div className="text-center text-[17px] font-bold text-[#2c2c30]">信封署名</div>
           <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">自定义信封上的头像与昵称，留空则跟随微信/QQ</div>
@@ -4778,7 +4784,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             >
               恢复默认
             </button>
-            <button type="button" onClick={saveSender} className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
+            <button type="button" onClick={saveSender} className="h-11 flex-1 rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-bold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]">
               保存
             </button>
           </div>
@@ -5069,7 +5075,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
               patch({ letterDraft: JSON.stringify(pages) });
               setView('send');
             }}
-            className="h-[46px] flex-[1.6] rounded-2xl bg-white text-[16px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]"
+            className="h-[46px] flex-[1.6] rounded-2xl bg-white/75 backdrop-blur-xl text-[16px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]"
           >
             下一步
           </button>
@@ -5195,7 +5201,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             type="button"
             onClick={sendLetter}
             data-testid="send-letter-btn"
-            className="mt-6 h-[50px] w-full shrink-0 rounded-2xl bg-white text-[16.5px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]"
+            className="mt-6 h-[50px] w-full shrink-0 rounded-2xl bg-white/75 backdrop-blur-xl text-[16.5px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]"
           >
             {timed ? `定时寄出（${after} 天后送达）` : '立即寄出这封信'}
           </button>
@@ -5245,7 +5251,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             </button>
             <div className="pointer-events-none absolute left-1/2 top-[54px] flex h-11 -translate-x-1/2 items-center text-[16px] font-bold text-[#4a3a40]">{`${who}的来信`}</div>
             {readFrom === 'me' && !l.sharedAt && (
-              <button type="button" onClick={() => setShareLetterId(l.id)} className="ml-auto mr-2 flex h-9 items-center gap-1 rounded-xl border border-[#e3e3e8] bg-white px-3.5 text-[13px] font-medium text-[#4a4a52]">
+              <button type="button" onClick={() => setShareLetterId(l.id)} className="ml-auto mr-2 flex h-9 items-center gap-1 rounded-xl border border-[#e3e3e8] bg-white/80 backdrop-blur-xl px-3.5 text-[13px] font-medium text-[#4a4a52]">
                 <ArrowUp className="h-3.5 w-3.5" />
                 分享
               </button>
@@ -5307,15 +5313,15 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
         </div>
         {/* 底部操作栏（对照参考图：去写信 + 回信） */}
         <div className="relative z-20 flex shrink-0 items-center gap-3 border-t border-black/[0.06] bg-white/85 px-4 pb-7 pt-3.5 backdrop-blur">
-          <button type="button" onClick={() => setView('write')} className="h-[46px] flex-1 rounded-2xl border border-black/10 bg-white text-[15.5px] font-medium text-[#4a4a52]">
+          <button type="button" onClick={() => setView('write')} className="h-[46px] flex-1 rounded-2xl border border-black/10 bg-white/80 backdrop-blur-xl text-[15.5px] font-medium text-[#4a4a52]">
             去写信
           </button>
           {readFrom === 'me' && !l.sharedAt ? (
-            <button type="button" onClick={() => setShareLetterId(l.id)} data-testid="read-share-btn" className="h-[46px] flex-[1.6] rounded-2xl bg-white text-[16px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]">
+            <button type="button" onClick={() => setShareLetterId(l.id)} data-testid="read-share-btn" className="h-[46px] flex-[1.6] rounded-2xl bg-white/75 backdrop-blur-xl text-[16px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]">
               {`分享给${state.taName || 'TA'}`}
             </button>
           ) : (
-            <button type="button" onClick={() => setView('write')} data-testid="read-reply-btn" className="h-[46px] flex-[1.6] rounded-2xl bg-white text-[16px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]">
+            <button type="button" onClick={() => setView('write')} data-testid="read-reply-btn" className="h-[46px] flex-[1.6] rounded-2xl bg-white/75 backdrop-blur-xl text-[16px] font-bold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.97]">
               回信
             </button>
           )}
@@ -5420,7 +5426,7 @@ function HousePage({ state, days, close }: { state: CoupleState; days: number | 
   const unlocked = Math.floor(warmth / 18) + 1;
   return (
     <SubShell title="情侣小家" onBack={close}>
-      <div className="mt-4 overflow-hidden rounded-2xl bg-white shadow-sm">
+      <div className="mt-4 overflow-hidden rounded-2xl bg-white/80 backdrop-blur-xl shadow-sm">
         { }
         <img src="/couple-house.png" alt="我们的小家" className="h-[190px] w-full object-cover" draggable={false} />
         <div className="px-5 py-4">
@@ -5436,7 +5442,7 @@ function HousePage({ state, days, close }: { state: CoupleState; days: number | 
       <h3 className="px-2 pb-2 pt-6 text-[17px] font-bold">家具清单（温馨度解锁）</h3>
       <div className="grid grid-cols-2 gap-3">
         {furnitures.map((f, i) => (
-          <div key={f} className={`flex h-16 items-center gap-2 rounded-2xl px-4 text-[15px] ${i < unlocked ? 'bg-white font-medium text-[#2c2c30] shadow-sm' : 'bg-[#ececef] text-[#b6b6bd]'}`}>
+          <div key={f} className={`flex h-16 items-center gap-2 rounded-2xl px-4 text-[15px] ${i < unlocked ? 'bg-white/80 backdrop-blur-xl font-medium text-[#2c2c30] shadow-sm' : 'bg-[#ececef] text-[#b6b6bd]'}`}>
             {i < unlocked ? f : '🔒 待解锁'}
           </div>
         ))}
@@ -5566,7 +5572,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
     const selLabel = MOOD_LIST.find((m) => m.emoji === mood)?.label;
     return (
       <SubShell title="心情日记" onBack={() => setView('cal')}>
-        <div className="mt-3 rounded-2xl bg-white px-4 pb-4 pt-4 shadow-[0_6px_18px_rgba(0,0,0,0.05)]">
+        <div className="mt-3 rounded-2xl bg-white/75 backdrop-blur-xl px-4 pb-4 pt-4 shadow-[0_6px_18px_rgba(0,0,0,0.05)]">
           {/* 日期头 */}
           <div className="flex items-baseline gap-2 border-b border-black/[0.05] pb-3">
             <span className="text-[22px] font-bold leading-none text-[#2c2c30]">{isToday ? '今天' : selDate}</span>
@@ -5733,7 +5739,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
         </div>
 
         <div className="mt-3 space-y-3 pb-4">
-          {monthMoods.length === 0 && <div className="rounded-2xl bg-white py-10 text-center text-[13px] text-[#b6b6bd] shadow-sm">这个月还没有日记，去写一篇吧</div>}
+          {monthMoods.length === 0 && <div className="rounded-2xl bg-white/80 backdrop-blur-xl py-10 text-center text-[13px] text-[#b6b6bd] shadow-sm">这个月还没有日记，去写一篇吧</div>}
           {monthMoods.map((m) => {
             const d = new Date(`${m.dateKey || fmtDate(m.at)}T12:00:00`);
             const isToday = (m.dateKey || fmtDate(m.at)) === todayK;
@@ -5744,7 +5750,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 key={m.id}
                 type="button"
                 onClick={() => openDetail(m.id)}
-                className={`block w-full rounded-2xl bg-white p-4 text-left shadow-[0_4px_14px_rgba(0,0,0,0.05)] transition-transform active:scale-[0.99] ${isToday ? 'ring-2 ring-[#f5c33c]' : ''}`}
+                className={`block w-full rounded-2xl bg-white/80 backdrop-blur-xl p-4 text-left shadow-[0_4px_14px_rgba(0,0,0,0.05)] transition-transform active:scale-[0.99] ${isToday ? 'ring-2 ring-[#f5c33c]' : ''}`}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-baseline gap-1.5">
@@ -5792,7 +5798,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
             type="button"
             aria-label="上个月"
             onClick={() => setCursor((c) => (c.m === 0 ? { y: c.y - 1, m: 11 } : { ...c, m: c.m - 1 }))}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#3c3c44] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] active:opacity-80"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/75 backdrop-blur-xl text-[#3c3c44] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] active:opacity-80"
           >
             <ChevronLeft className="h-4 w-4" strokeWidth={2.6} />
           </button>
@@ -5803,7 +5809,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
             type="button"
             aria-label="下个月"
             onClick={() => setCursor((c) => (c.m === 11 ? { y: c.y + 1, m: 0 } : { ...c, m: c.m + 1 }))}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#3c3c44] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] active:opacity-80"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/75 backdrop-blur-xl text-[#3c3c44] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] active:opacity-80"
           >
             <ChevronRight className="h-4 w-4" strokeWidth={2.6} />
           </button>
@@ -5861,10 +5867,10 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
       <div className="pointer-events-none fixed bottom-[76px] right-4 z-20 flex flex-col items-end gap-1.5">
         {!taWroteToday && (
           <div className="pointer-events-auto flex flex-col items-end">
-            <div className="max-w-[150px] rounded-2xl rounded-br-md bg-white px-3 py-2 text-[11px] font-medium leading-snug text-[#3c3c42] shadow-[0_6px_18px_rgba(0,0,0,0.14)]">
+            <div className="max-w-[150px] rounded-2xl rounded-br-md bg-white/80 backdrop-blur-xl px-3 py-2 text-[11px] font-medium leading-snug text-[#3c3c42] shadow-[0_6px_18px_rgba(0,0,0,0.14)]">
               对方今日还未写日记！快去戳一下 TA 吧
             </div>
-            <button type="button" onClick={pokeTa} className="mt-1 rounded-lg bg-white px-2.5 py-1 text-[10px] font-bold text-[#3c3c44] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] active:opacity-80">
+            <button type="button" onClick={pokeTa} className="mt-1 rounded-lg bg-white/80 backdrop-blur-xl px-2.5 py-1 text-[10px] font-bold text-[#3c3c44] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-black/[0.06] active:opacity-80">
               戳一下他
             </button>
           </div>
@@ -5873,7 +5879,7 @@ function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patc
           type="button"
           onClick={() => openWrite(todayKey())}
           data-testid="mood-write-btn"
-          className="pointer-events-auto mt-0.5 flex h-[46px] items-center gap-2 rounded-2xl bg-white pl-4 pr-5 text-[14px] font-bold tracking-wide text-[#26262b] shadow-[0_10px_26px_rgba(0,0,0,0.14)] ring-1 ring-black/[0.05] transition-all active:scale-[0.94]"
+          className="pointer-events-auto mt-0.5 flex h-[46px] items-center gap-2 rounded-2xl bg-white/80 backdrop-blur-xl pl-4 pr-5 text-[14px] font-bold tracking-wide text-[#26262b] shadow-[0_10px_26px_rgba(0,0,0,0.14)] ring-1 ring-black/[0.05] transition-all active:scale-[0.94]"
         >
           <PencilLine className="h-4 w-4" strokeWidth={2.4} />
           写日记
@@ -5912,7 +5918,7 @@ function TarotPage({ state, patch, showToast, close }: { state: CoupleState; pat
   };
   return (
     <SubShell title="爱情塔罗" onBack={close}>
-      <div className="mt-4 rounded-2xl bg-white p-6 text-center shadow-sm">
+      <div className="mt-4 rounded-2xl bg-white/80 backdrop-blur-xl p-6 text-center shadow-sm">
         <div className="text-[15px] text-[#8e8e96]">深呼吸，心里想着 TA，然后抽一张牌</div>
         <div className="mx-auto mt-5 flex h-[180px] w-[124px] items-center justify-center rounded-2xl border-[3px] border-[#e2e2e7] bg-[linear-gradient(160deg,#f7f7f9,#e8e8ec)] shadow-inner">
           {drawn != null ? (
@@ -6759,7 +6765,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
           <div className="relative mx-auto mt-3 w-full max-w-[300px]">
             <span aria-hidden="true" className="absolute -left-2 -top-2 z-10 h-5 w-16 rotate-[-32deg] rounded-[3px] bg-[#f6c9d6]/80 shadow-sm" />
             <span aria-hidden="true" className="absolute -bottom-2 -right-2 z-10 h-5 w-16 rotate-[-32deg] rounded-[3px] bg-[#f6c9d6]/80 shadow-sm" />
-            <div className="rounded-md bg-white p-3 shadow-[0_8px_24px_rgba(210,120,150,0.22)]">
+            <div className="rounded-md bg-white/85 backdrop-blur-xl p-3 shadow-[0_8px_24px_rgba(210,120,150,0.22)]">
               <button
                 type="button"
                 onClick={() => fileInput.current?.click()}
@@ -6770,7 +6776,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
                   <img src={draft.img} alt="小事照片" className="h-full w-full object-cover" draggable={false} />
                 ) : (
                   <span className="flex flex-col items-center gap-2">
-                    <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-[30px] font-light text-[#3c3c44] shadow-[0_4px_14px_rgba(0,0,0,0.14)] ring-1 ring-black/[0.05]">+</span>
+                    <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white/75 backdrop-blur-xl text-[30px] font-light text-[#3c3c44] shadow-[0_4px_14px_rgba(0,0,0,0.14)] ring-1 ring-black/[0.05]">+</span>
                     <span className="text-[13px] font-medium text-[#6e6e76]">添加图片</span>
                   </span>
                 )}
@@ -6924,7 +6930,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
                 onClick={() => openEdit(idx)}
                 aria-pressed={checked}
                 aria-label={`小事：${item}`}
-                className={`relative mb-5 rounded-md bg-white px-2 pb-1.5 pt-2 shadow-[0_6px_16px_rgba(200,110,140,0.22)] transition-transform active:scale-[0.96] ${HUNDRED_ROT[idx % 4]} ${i % 2 === 1 ? 'mt-7' : ''}`}
+                className={`relative mb-5 rounded-md bg-white/85 backdrop-blur-xl px-2 pb-1.5 pt-2 shadow-[0_6px_16px_rgba(200,110,140,0.22)] transition-transform active:scale-[0.96] ${HUNDRED_ROT[idx % 4]} ${i % 2 === 1 ? 'mt-7' : ''}`}
               >
                 {/* 胶带 */}
                 <span aria-hidden="true" className="absolute -top-2 left-1/2 z-10 h-4 w-12 -translate-x-1/2 rotate-[-5deg] rounded-[3px] bg-[#f6cdd9]/90 shadow-sm" />
@@ -7009,7 +7015,7 @@ function HundredPage({ state, patch, close, showToast }: { state: CoupleState; p
       {/* 目录弹层 */}
       {showIndex && (
         <div className="absolute inset-0 z-40 flex items-end bg-black/35" onClick={() => setShowIndex(false)}>
-          <div className="max-h-[76%] w-full overflow-hidden rounded-t-3xl bg-white" onClick={(e) => e.stopPropagation()}>
+          <div className="max-h-[76%] w-full overflow-hidden rounded-t-3xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-black/[0.05] px-5 py-3.5">
               <span className="text-[16px] font-bold text-[#3c3c42]">目录 · 已完成 {done}/100</span>
               <button type="button" onClick={() => setShowIndex(false)} aria-label="关闭目录" className="text-[13px] font-medium text-[#6e6e76]">
@@ -7090,7 +7096,7 @@ function PactPaper({ data, meName, taName }: { data: PactPaperData; meName: stri
     return { name, at };
   };
   return (
-    <div className="relative overflow-hidden rounded-lg border border-[#e9e9ee] bg-white px-5 pb-6 pt-6 shadow-[0_4px_18px_rgba(0,0,0,0.05)]">
+    <div className="relative overflow-hidden rounded-lg border border-[#e9e9ee] bg-white/80 backdrop-blur-xl px-5 pb-6 pt-6 shadow-[0_4px_18px_rgba(0,0,0,0.05)]">
       <div className="text-center text-[21px] font-bold tracking-[2px] text-[#26262b]">{data.title || '恋爱协议书'}</div>
       <div className="mt-4 h-[2px] bg-[#2c2c30]" />
       <p className="mt-4 text-justify text-[13.5px] leading-[1.9] text-[#4a4a52]">{data.preamble}</p>
@@ -7523,7 +7529,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           {/* TA 拟的协议（第九轮：AI 会自己拟协议等我签；点卡片/去签直达签署界面；
            *  第二十三轮：我拒绝后不再消失，卡片显示「已拒绝」，AI 通过记忆知道被拒） */}
           {state.aiPact && (
-            <div className={`relative mt-4 rounded-2xl border-2 border-dashed p-4 ${state.aiPact.declined ? 'border-[#d9d9de] bg-[#fafafa] opacity-80' : 'border-[#3c3c42] bg-white'}`} data-testid="ai-pact-card">
+            <div className={`relative mt-4 rounded-2xl border-2 border-dashed p-4 ${state.aiPact.declined ? 'border-[#d9d9de] bg-[#fafafa] opacity-80' : 'border-[#3c3c42] bg-white/85 backdrop-blur-xl'}`} data-testid="ai-pact-card">
               <div className="flex items-center justify-between pr-16">
                 <div className="text-[14.5px] font-bold text-[#26262b]">
                   {state.taName || 'TA'} {state.aiPact.signTa ? '拟好并签好名的协议' : '拟了一份协议'} <span>《{state.aiPact.title}》</span>
@@ -7565,7 +7571,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         patchFn((prev) => (prev.aiPact ? { aiPact: { ...prev.aiPact, declined: false } } : {}));
                         showToast('再看看这份协议，愿意的话随时签名 ♡');
                       }}
-                      className="h-10 flex-1 rounded-full bg-white text-[14px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]"
+                      className="h-10 flex-1 rounded-full bg-white/75 backdrop-blur-xl text-[14px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]"
                     >
                       重新考虑
                     </button>
@@ -7607,7 +7613,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                     setView('sign');
                     showToast(p.signTa ? `TA 已先签好名，签完你的名协议就生效 ♡` : `已换成 ${state.taName || 'TA'} 的版本，签完名发给 TA 确认 ♡`);
                   }}
-                  className="h-10 flex-1 rounded-2xl bg-white text-[14px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85"
+                  className="h-10 flex-1 rounded-2xl bg-white/75 backdrop-blur-xl text-[14px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85"
                 >
                   去签 TA 的协议
                 </button>
@@ -7626,7 +7632,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 {state.pacts.map((p) => {
                   const st = p.status ?? (p.signTa ? 'signed' : 'pending');
                   return (
-                    <div key={p.id} className="relative rounded-2xl border border-[#e9e9ee] bg-white p-4 shadow-[0_2px_10px_rgba(0,0,0,0.05)]" data-testid="pact-saved-item">
+                    <div key={p.id} className="relative rounded-2xl border border-[#e9e9ee] bg-white/80 backdrop-blur-xl p-4 shadow-[0_2px_10px_rgba(0,0,0,0.05)]" data-testid="pact-saved-item">
                       <button
                         type="button"
                         className="block w-full text-left"
@@ -7728,7 +7734,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           <button
             type="button"
             onClick={() => openDlg({ type: 'title' }, state.pactTitle)}
-            className="mt-2.5 flex min-h-[52px] w-full items-center justify-between gap-3 rounded-xl border border-[#e4e4e9] bg-white px-4 py-3 text-left active:bg-[#fafafa]"
+            className="mt-2.5 flex min-h-[52px] w-full items-center justify-between gap-3 rounded-xl border border-[#e4e4e9] bg-white/80 backdrop-blur-xl px-4 py-3 text-left active:bg-[#fafafa]"
           >
             <span className="flex-1 truncate text-[15.5px] text-[#26262b]">{state.pactTitle || '恋爱协议书'}</span>
             <span className="flex shrink-0 items-center gap-1 text-[13px] text-[#26262b]">
@@ -7741,7 +7747,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
           <button
             type="button"
             onClick={() => openDlg({ type: 'preamble' }, state.pactPreamble)}
-            className="mt-2.5 flex w-full items-start justify-between gap-3 rounded-xl border border-[#e4e4e9] bg-white p-4 text-left active:bg-[#fafafa]"
+            className="mt-2.5 flex w-full items-start justify-between gap-3 rounded-xl border border-[#e4e4e9] bg-white/80 backdrop-blur-xl p-4 text-left active:bg-[#fafafa]"
           >
             <span className="flex-1 text-[13.5px] leading-[1.8] text-[#4a4a52]">{state.pactPreamble}</span>
             <span className="mt-0.5 flex shrink-0 items-center gap-1 text-[13px] text-[#26262b]">
@@ -7763,7 +7769,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 }}
                 className={`flex items-center gap-1.5 py-3.5 ${
                   dragging === i
-                    ? 'rounded-lg bg-white px-2 shadow-[0_8px_22px_rgba(0,0,0,0.14)]'
+                    ? 'rounded-lg bg-white/85 backdrop-blur-xl px-2 shadow-[0_8px_22px_rgba(0,0,0,0.14)]'
                     : dragTo === i && dragging != null && dragTo !== dragging
                       ? 'border-t-2 border-[#2c2c30]'
                       : 'border-b border-dashed border-[#e4e4e9]'
@@ -7800,7 +7806,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
             <button type="button" data-testid="pact-random-btn" onClick={addRandom} className="h-12 rounded-xl border-[1.5px] border-dashed border-[#3c3c42] text-[14.5px] font-medium text-[#26262b] active:bg-[#f7f7f9]">
               + 随机新增一条
             </button>
-            <button type="button" data-testid="pact-custom-btn" onClick={() => openDlg({ type: 'custom' })} className="h-12 rounded-xl border border-[#d9d9de] bg-white text-[14.5px] font-medium text-[#4a4a52] active:bg-[#f7f7f9]">
+            <button type="button" data-testid="pact-custom-btn" onClick={() => openDlg({ type: 'custom' })} className="h-12 rounded-xl border border-[#d9d9de] bg-white/80 backdrop-blur-xl text-[14.5px] font-medium text-[#4a4a52] active:bg-[#f7f7f9]">
               + 自定义一条
             </button>
           </div>
@@ -7812,7 +7818,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
               setSignFrom('edit');
               setView('sign');
             }}
-            className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
+            className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white/75 backdrop-blur-xl text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
           >
             下一步：预览协议
           </button>
@@ -7835,7 +7841,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 disabled={!!state.pactSignMe}
                 onClick={signMe}
                 className={`mt-2 flex h-[92px] w-full items-center justify-center rounded-md border-2 border-dashed transition-colors ${
-                  state.pactSignMe ? 'border-[#dcdce2] bg-white' : 'border-[#dcdce2] bg-[#f7f7f9] active:bg-[#efeff3]'
+                  state.pactSignMe ? 'border-[#dcdce2] bg-white/80 backdrop-blur-xl' : 'border-[#dcdce2] bg-[#f7f7f9] active:bg-[#efeff3]'
                 }`}
               >
                 {state.pactSignMe ? (
@@ -7889,7 +7895,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 {state.taName || 'TA'} 想改第 {taProposal.idx + 1} 条
               </div>
               <div className="mt-1 text-[12.5px] leading-relaxed text-[#6e6e76]">{taProposal.reason}</div>
-              <div className="mt-2 rounded-lg bg-white px-3 py-2 text-[13px] leading-relaxed text-[#26262b]">
+              <div className="mt-2 rounded-lg bg-white/80 backdrop-blur-xl px-3 py-2 text-[13px] leading-relaxed text-[#26262b]">
                 <span className="text-[#9a9aa2]">原条款：{cutText(clauses[taProposal.idx] ?? '', 40)}</span>
                 <span className="mt-1 block">改成：{taProposal.to}</span>
               </div>
@@ -7901,11 +7907,11 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
                     setTaProposal(null);
                     showToast('那就保持原条款，你可以再编辑或重发');
                   }}
-                  className="h-10 flex-1 rounded-2xl bg-white text-[13.5px] font-medium text-[#5a5a62]"
+                  className="h-10 flex-1 rounded-2xl bg-white/75 backdrop-blur-xl text-[13.5px] font-medium text-[#5a5a62]"
                 >
                   坚持原条款
                 </button>
-                <button type="button" data-testid="pact-proposal-adopt" onClick={adoptTaProposal} className="h-10 flex-1 rounded-2xl bg-white text-[13.5px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
+                <button type="button" data-testid="pact-proposal-adopt" onClick={adoptTaProposal} className="h-10 flex-1 rounded-2xl bg-white/75 backdrop-blur-xl text-[13.5px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
                   采纳修改，发他重签
                 </button>
               </div>
@@ -7948,7 +7954,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
             >
               删除这份协议
             </button>
-            <button type="button" onClick={() => setView('home')} className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
+            <button type="button" onClick={() => setView('home')} className="h-11 flex-1 rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
               返回
             </button>
           </div>
@@ -7958,7 +7964,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
       {/* 编辑弹层：名称/声明/条款/自定义/模板编码 */}
       {dlg && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/35 px-6" onClick={() => setDlg(null)}>
-          <div className="w-full rounded-2xl bg-white p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="text-[16.5px] font-bold text-[#26262b]">{dlgTitle}</div>
             {dlg.type === 'template' ? (
               <input
@@ -7991,7 +7997,7 @@ function PactPage({ state, patch, showToast, close }: { state: CoupleState; patc
               <button type="button" onClick={() => setDlg(null)} className="h-11 flex-1 rounded-2xl bg-[#f0f0f3] text-[15px] font-medium text-[#5a5a62]">
                 取消
               </button>
-              <button type="button" data-testid="pact-dlg-save" onClick={submitDlg} className="h-11 flex-1 rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
+              <button type="button" data-testid="pact-dlg-save" onClick={submitDlg} className="h-11 flex-1 rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
                 保存
               </button>
             </div>
@@ -8347,7 +8353,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
     const r = state.examResult;
     return (
       <SubShell title="考试成绩" onBack={() => setView('bank')}>
-        <div className="mt-3 rounded-2xl bg-white p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]">
+        <div className="mt-3 rounded-2xl bg-white/80 backdrop-blur-xl p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]">
           <div className="text-[13px] font-medium text-[#9a9aa2]">《{r.title}》</div>
           <div className="mt-2 flex items-end justify-center gap-1.5">
             <span className="text-[52px] font-extrabold leading-none text-[#26262b]">{r.score}</span>
@@ -8371,7 +8377,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               const my = r.answers[String(i)];
               const best = q.best;
               return (
-                <div key={i} className="rounded-xl bg-white px-3.5 py-2.5 text-[12.5px] shadow-sm">
+                <div key={i} className="rounded-xl bg-white/75 backdrop-blur-xl px-3.5 py-2.5 text-[12.5px] shadow-sm">
                   <div className="font-medium text-[#26262b]">
                     {i + 1}. {q.q}
                   </div>
@@ -8400,12 +8406,12 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 setView('bank');
               }
             }}
-            className="h-12 flex-1 rounded-full bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]"
+            className="h-12 flex-1 rounded-full bg-white/75 backdrop-blur-xl text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]"
           >
             <RefreshCcw className="mr-1 inline h-4 w-4" />
             再考一次
           </button>
-          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
+          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
             返回题库
           </button>
         </div>
@@ -8473,7 +8479,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         onClick={() => setTaMarks((m) => ({ ...m, [i]: { ok: true, score: Math.round(perQ * 10) / 10 } }))}
                         data-testid={`exam-mark-ok-${i}`}
                         className={`rounded-full px-3 py-1 text-[11.5px] font-semibold transition-colors ${
-                          myMark?.ok === true ? 'bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-white shadow-[0_2px_8px_rgba(242,83,106,0.28)]' : 'bg-white text-[#4a4a52] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]'
+                          myMark?.ok === true ? 'bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-white shadow-[0_2px_8px_rgba(242,83,106,0.28)]' : 'bg-white/80 backdrop-blur-xl text-[#4a4a52] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]'
                         }`}
                       >
                         对
@@ -8483,7 +8489,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                         onClick={() => setTaMarks((m) => ({ ...m, [i]: { ok: false, score: 0 } }))}
                         data-testid={`exam-mark-bad-${i}`}
                         className={`rounded-full px-3 py-1 text-[11.5px] font-semibold transition-colors ${
-                          myMark && myMark.ok === false ? 'bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-white shadow-[0_2px_8px_rgba(242,83,106,0.28)]' : 'bg-white text-[#4a4a52] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]'
+                          myMark && myMark.ok === false ? 'bg-[linear-gradient(135deg,#ff7a9c,#f2536a)] text-white shadow-[0_2px_8px_rgba(242,83,106,0.28)]' : 'bg-white/80 backdrop-blur-xl text-[#4a4a52] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]'
                         }`}
                       >
                         错
@@ -8528,7 +8534,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               rows={3}
               maxLength={80}
               placeholder={`写句批语，比如「第3题答到我心里了」…`}
-              className="mt-2 w-full resize-none rounded-xl bg-white p-3 text-[13px] leading-relaxed text-[#26262b] shadow-[0_1px_4px_rgba(0,0,0,0.04)] outline-none placeholder:text-[#b6b6bd]"
+              className="mt-2 w-full resize-none rounded-xl bg-white/75 backdrop-blur-xl p-3 text-[13px] leading-relaxed text-[#26262b] shadow-[0_1px_4px_rgba(0,0,0,0.04)] outline-none placeholder:text-[#b6b6bd]"
               data-testid="exam-ta-grade-text"
             />
             <button
@@ -8536,7 +8542,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               data-testid="exam-ta-grade-submit"
               onClick={submitTaGrade}
               disabled={taGrading}
-              className="mt-3 h-11 w-full rounded-2xl bg-white text-[14.5px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98] disabled:opacity-50"
+              className="mt-3 h-11 w-full rounded-2xl bg-white/75 backdrop-blur-xl text-[14.5px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98] disabled:opacity-50"
             >
               提交批改
             </button>
@@ -8563,7 +8569,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 ) : (
                   <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#576b95]/15 text-[11px] font-bold text-[#576b95]">{ta.slice(0, 1)}</span>
                 )}
-                <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-white px-3.5 py-2.5 text-[13.5px] leading-relaxed text-[#4a4a52] shadow-[0_1px_4px_rgba(0,0,0,0.04)]">{s.taReply}</div>
+                <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-white/80 backdrop-blur-xl px-3.5 py-2.5 text-[13.5px] leading-relaxed text-[#4a4a52] shadow-[0_1px_4px_rgba(0,0,0,0.04)]">{s.taReply}</div>
               </div>
             ) : (
               <div className="mt-2 flex items-center gap-1.5 px-1 text-[12px] text-[#9a9aa2]">
@@ -8572,7 +8578,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             )}
           </div>
         )}
-        <button type="button" onClick={() => setView('bank')} className="mx-auto mb-2 mt-6 block rounded-full bg-white px-6 py-2 text-[12.5px] text-[#8e8e96] shadow-[0_1px_4px_rgba(0,0,0,0.05)]">
+        <button type="button" onClick={() => setView('bank')} className="mx-auto mb-2 mt-6 block rounded-full bg-white/75 backdrop-blur-xl px-6 py-2 text-[12.5px] text-[#8e8e96] shadow-[0_1px_4px_rgba(0,0,0,0.05)]">
           返回题库
         </button>
       </SubShell>
@@ -8699,7 +8705,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               setPickerOpen(true);
             }}
             disabled={inviting}
-            className="h-12 w-full rounded-2xl border-[1.5px] border-dashed border-[#f2536a]/70 bg-white text-[15px] font-semibold text-[#f2536a] active:bg-[#fdf2f5] disabled:opacity-50"
+            className="h-12 w-full rounded-2xl border-[1.5px] border-dashed border-[#f2536a]/70 bg-white/85 backdrop-blur-xl text-[15px] font-semibold text-[#f2536a] active:bg-[#fdf2f5] disabled:opacity-50"
           >
             {inviting && pickerMode === 'together' ? '发送中…' : '和他一起答题'}
           </button>
@@ -8720,7 +8726,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                 setPickerOpen(true);
               }}
               disabled={inviting}
-              className="h-12 rounded-2xl bg-white text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f2536a]/45 active:bg-[#fdf2f5] disabled:opacity-50"
+              className="h-12 rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-semibold text-[#f2536a] ring-1 ring-[#f2536a]/45 active:bg-[#fdf2f5] disabled:opacity-50"
             >
               {inviting && pickerMode === 'ta' ? '发送中…' : '让他答题'}
             </button>
@@ -8759,7 +8765,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               setAnswers({});
               setView('answer');
             }}
-            className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-[#e9e9ee] bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#f7f7f9]"
+            className="mt-3 flex w-full items-center gap-3 rounded-2xl border border-[#e9e9ee] bg-white/80 backdrop-blur-xl px-4 py-3.5 text-left shadow-sm active:bg-[#f7f7f9]"
           >
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f0f0f3]">
               <BookOpen className="h-4.5 w-4.5 text-[#4a4a52]" strokeWidth={1.8} />
@@ -8775,7 +8781,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
         {/* 做过的卷子（我的 + TA 出的我答的，交卷即存档） */}
         <div className="mt-3 px-1 text-[14px] font-bold text-[#26262b]">做过的卷子</div>
         {hist.length === 0 ? (
-          <div className="mt-2 rounded-2xl bg-white py-8 text-center text-[12.5px] text-[#b6b6bd] shadow-sm" data-testid="exam-mine-empty">还没有做过的卷子，去题库挑一套吧</div>
+          <div className="mt-2 rounded-2xl bg-white/80 backdrop-blur-xl py-8 text-center text-[12.5px] text-[#b6b6bd] shadow-sm" data-testid="exam-mine-empty">还没有做过的卷子，去题库挑一套吧</div>
         ) : (
           <div className="mt-2 space-y-2.5">
             {hist.map((h) => (
@@ -8786,7 +8792,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                   setMineSel(h);
                   setView('mineDetail');
                 }}
-                className="flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#f7f7f9]"
+                className="flex w-full items-center gap-3 rounded-2xl bg-white/75 backdrop-blur-xl px-4 py-3.5 text-left shadow-sm active:bg-[#f7f7f9]"
                 data-testid={`exam-mine-${h.id}`}
               >
                 <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f7f4e9]">
@@ -8826,7 +8832,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                   setView('answer');
                 }
               }}
-              className="flex w-full items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-[#3c3c42]/50 bg-white px-4 py-3.5 text-left active:bg-[#f7f7f9]"
+              className="flex w-full items-center gap-3 rounded-2xl border-[1.5px] border-dashed border-[#3c3c42]/50 bg-white/80 backdrop-blur-xl px-4 py-3.5 text-left active:bg-[#f7f7f9]"
             >
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f0f0f3]">
                 <BookOpen className="h-4.5 w-4.5 text-[#4a4a52]" strokeWidth={1.8} />
@@ -8841,7 +8847,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             </button>
           )}
           {state.examTaSheet && (
-            <button type="button" onClick={() => setView('tasheet')} className="flex w-full items-center gap-3 rounded-2xl border border-[#e9e9ee] bg-white px-4 py-3.5 text-left active:opacity-80">
+            <button type="button" onClick={() => setView('tasheet')} className="flex w-full items-center gap-3 rounded-2xl border border-[#e9e9ee] bg-white/80 backdrop-blur-xl px-4 py-3.5 text-left active:opacity-80">
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f0f0f3]">
                 <PencilLine className="h-4.5 w-4.5 text-[#4a4a52]" strokeWidth={1.8} />
               </span>
@@ -8854,13 +8860,13 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c9cf]" />
             </button>
           )}
-          {!taPaper && !state.examTaSheet && <div className="rounded-2xl bg-white py-8 text-center text-[12.5px] text-[#b6b6bd] shadow-sm">{ta} 还没出过卷子</div>}
+          {!taPaper && !state.examTaSheet && <div className="rounded-2xl bg-white/80 backdrop-blur-xl py-8 text-center text-[12.5px] text-[#b6b6bd] shadow-sm">{ta} 还没出过卷子</div>}
         </div>
 
         {/* AI 出的卷子（未作答的存档；永不消失） */}
         <div className="mt-5 px-1 text-[14px] font-bold text-[#26262b]">AI 出的卷子</div>
         {aiPapersDesc.length === 0 ? (
-          <div className="mt-2 rounded-2xl bg-white py-8 text-center text-[12.5px] text-[#b6b6bd] shadow-sm">还没有 AI 出的卷子，回题库上滑生成</div>
+          <div className="mt-2 rounded-2xl bg-white/80 backdrop-blur-xl py-8 text-center text-[12.5px] text-[#b6b6bd] shadow-sm">还没有 AI 出的卷子，回题库上滑生成</div>
         ) : (
           <div className="mt-2 space-y-2.5">
             {aiPapersDesc.map((t) => (
@@ -8871,7 +8877,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
                   setPreview({ id: t.id, title: t.title, usage: 'AI 新卷', notes: t.notes, questions: t.questions.map((q) => ({ ...q, best: -1 })) });
                   setView('preview');
                 }}
-                className="flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm active:bg-[#f7f7f9]"
+                className="flex w-full items-center gap-3 rounded-2xl bg-white/75 backdrop-blur-xl px-4 py-3.5 text-left shadow-sm active:bg-[#f7f7f9]"
               >
                 <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#f0f0f3]">
                   <BookOpen className="h-4.5 w-4.5 text-[#4a4a52]" strokeWidth={1.8} />
@@ -8896,7 +8902,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
     const fmtScore = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
     return (
       <SubShell title="试卷详情" onBack={() => setView('mine')}>
-        <div className="mt-3 rounded-2xl bg-white p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]">
+        <div className="mt-3 rounded-2xl bg-white/80 backdrop-blur-xl p-5 text-center shadow-[0_6px_20px_rgba(0,0,0,0.06)]">
           <div className="text-[13px] font-medium text-[#9a9aa2]">《{h.title}》</div>
           <div className="mt-2 flex items-end justify-center gap-1.5">
             <span className="text-[52px] font-extrabold leading-none text-[#26262b]">{h.score}</span>
@@ -8916,7 +8922,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             const my = h.answers[String(i)];
             const best = q.best;
             return (
-              <div key={i} className="rounded-xl bg-white px-3.5 py-2.5 text-[12.5px] shadow-sm">
+              <div key={i} className="rounded-xl bg-white/75 backdrop-blur-xl px-3.5 py-2.5 text-[12.5px] shadow-sm">
                 <div className="font-medium text-[#26262b]">
                   {i + 1}. {q.q}
                   <span className="ml-1 text-[11px] font-normal text-[#9a9aa2]">（{fmtScore(perScore)}分）</span>
@@ -8930,10 +8936,10 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
           })}
         </div>
         <div className="mb-2 mt-5 flex gap-2.5">
-          <button type="button" onClick={() => setView('mine')} className="h-12 flex-1 rounded-full bg-white text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]">
+          <button type="button" onClick={() => setView('mine')} className="h-12 flex-1 rounded-full bg-white/75 backdrop-blur-xl text-[15px] font-semibold text-[#26262b] ring-1 ring-[#dcdce2] active:bg-[#f7f7f9]">
             返回我的卷子
           </button>
-          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
+          <button type="button" onClick={() => setView('bank')} className="h-12 flex-1 rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] active:opacity-85">
             返回题库
           </button>
         </div>
@@ -8952,7 +8958,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
           type="button"
           data-testid="exam-mine"
           onClick={() => setView('mine')}
-          className="flex h-10 items-center gap-1.5 rounded-full bg-white px-4 text-[13.5px] font-semibold text-[#26262b] shadow-sm ring-1 ring-[#e9e9ee] active:bg-[#f7f7f9]"
+          className="flex h-10 items-center gap-1.5 rounded-full bg-white/75 backdrop-blur-xl px-4 text-[13.5px] font-semibold text-[#26262b] shadow-sm ring-1 ring-[#e9e9ee] active:bg-[#f7f7f9]"
         >
           <Folder className="h-4 w-4 text-[#4a4a52]" strokeWidth={2} />
           我的卷子
@@ -8969,14 +8975,14 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
             void genMore();
           }}
           disabled={genBusy}
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#6e6e76] shadow-sm ring-1 ring-[#e9e9ee] active:bg-[#f7f7f9] disabled:opacity-50"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/75 backdrop-blur-xl text-[#6e6e76] shadow-sm ring-1 ring-[#e9e9ee] active:bg-[#f7f7f9] disabled:opacity-50"
         >
           {genBusy ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <RefreshCcw className="h-4.5 w-4.5" strokeWidth={2} />}
         </button>
       </div>
 
       {/* 题库纸卡（装订圈 + 官方推荐题库 + 模板列表） */}
-      <div className="mt-3 overflow-hidden rounded-lg bg-white shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+      <div className="mt-3 overflow-hidden rounded-lg bg-white/80 backdrop-blur-xl shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
         <div className="flex">
           <div className="flex w-8 shrink-0 flex-col items-center justify-around border-r border-[#e6e6ea] py-6">
             {Array.from({ length: 10 }).map((_, i) => (
@@ -9041,7 +9047,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
         )}
         <div className="mt-2.5 space-y-3">
           {(state.examAiPapers ?? []).map((t, idx) => (
-            <div key={t.id} className="relative rounded-[4px] border-[1.5px] border-dashed border-[#3c3c42]/50 bg-white p-3.5" data-testid={`exam-ai-paper-${idx}`}>
+            <div key={t.id} className="relative rounded-[4px] border-[1.5px] border-dashed border-[#3c3c42]/50 bg-white/85 backdrop-blur-xl p-3.5" data-testid={`exam-ai-paper-${idx}`}>
               <div className="text-[15px] font-bold leading-snug text-[#26262b]">{t.title}</div>
               <div className="mt-2.5 flex items-center justify-between">
                 <div className="flex items-center gap-1.5 text-[11.5px] text-[#4a4a52]">
@@ -9078,7 +9084,7 @@ function ExamPage({ state, patch, showToast, close }: { state: CoupleState; patc
               genFailRef.current = 0;
               void genMore();
             }}
-            className="mx-auto mb-2 mt-3 block rounded-full bg-white px-5 py-2 text-[12.5px] text-[#6e6e76] ring-1 ring-[#e9e9ee]"
+            className="mx-auto mb-2 mt-3 block rounded-full bg-white/75 backdrop-blur-xl px-5 py-2 text-[12.5px] text-[#6e6e76] ring-1 ring-[#e9e9ee]"
           >
             生成遇到点小问题，点我再试一次
           </button>
@@ -9162,7 +9168,7 @@ function ZodiacPage({ state, patch, close }: { state: CoupleState; patch: (p: Pa
         onClick={() => void calc()}
         disabled={!me || !ta || loading}
         data-testid="zodiac-calc"
-        className="mt-4 h-12 w-full rounded-2xl bg-white text-[16px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] disabled:opacity-40"
+        className="mt-4 h-12 w-full rounded-2xl bg-white/75 backdrop-blur-xl text-[16px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] disabled:opacity-40"
       >
         {loading ? '正在为你们测算缘分…' : reading ? '重新测算' : '查看缘分指数'}
       </button>
@@ -9417,7 +9423,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
           {draft.map((it, i) => (
             <div key={i} className="flex items-center gap-2.5 py-2">
               <span className="h-3.5 w-3.5 shrink-0 rounded-full border-[3px] border-[#26262b] bg-white" />
-              <div className="flex flex-1 items-center gap-1 rounded-xl border border-[#f3d9df] bg-white px-2.5 py-2">
+              <div className="flex flex-1 items-center gap-1 rounded-xl border border-[#f3d9df] bg-white/80 backdrop-blur-xl px-2.5 py-2">
                 <select
                   value={it.y}
                   onChange={(e) => setDraft((d) => d.map((x, j) => (j === i ? { ...x, y: Number(e.target.value) } : x)))}
@@ -9473,7 +9479,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
               type="button"
               data-testid="chronicle-add-row"
               onClick={() => setDraft((d) => [...d, { y: now.getFullYear(), m: now.getMonth() + 1, status: '暗恋' }])}
-              className="w-full rounded-xl border-2 border-dashed border-[#3c3c42] bg-white py-2.5 text-[14px] font-medium text-[#26262b] active:bg-[#f7f7f9]"
+              className="w-full rounded-xl border-2 border-dashed border-[#3c3c42] bg-white/85 backdrop-blur-xl py-2.5 text-[14px] font-medium text-[#26262b] active:bg-[#f7f7f9]"
             >
               ＋ 继续添加月份（可选）
             </button>
@@ -9484,7 +9490,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
           type="button"
           data-testid="chronicle-generate"
           onClick={saveDraft}
-          className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
+          className="mb-2 mt-6 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white/75 backdrop-blur-xl text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
         >
           生成我的编年史
         </button>
@@ -9511,7 +9517,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
             type="button"
             data-testid="chronicle-save-img"
             onClick={() => showToast('结果图已生成，长按表格即可保存 ♡')}
-            className="flex h-[52px] flex-1 items-center justify-center rounded-2xl border-2 border-[#e7dfe2] bg-white text-[15.5px] font-semibold text-[#3c3c42] shadow-sm transition-transform active:scale-[0.98]"
+            className="flex h-[52px] flex-1 items-center justify-center rounded-2xl border-2 border-[#e7dfe2] bg-white/80 backdrop-blur-xl text-[15.5px] font-semibold text-[#3c3c42] shadow-sm transition-transform active:scale-[0.98]"
           >
             保存完整图片
           </button>
@@ -9519,7 +9525,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
             type="button"
             data-testid="chronicle-share"
             onClick={() => showToast('已生成分享卡片，发给那个TA吧 ♡')}
-            className="flex h-[52px] flex-1 items-center justify-center rounded-2xl bg-white text-[15.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
+            className="flex h-[52px] flex-1 items-center justify-center rounded-2xl bg-white/75 backdrop-blur-xl text-[15.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
           >
             分享给朋友
           </button>
@@ -9557,7 +9563,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
         </div>
 
         {/* 结果表格卡 */}
-        <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]" data-testid="chronicle-table-card">
+        <div className="mt-4 rounded-2xl bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]" data-testid="chronicle-table-card">
           <div className="flex items-center justify-between">
             <div className="text-[14.5px] font-bold text-[#26262b]">
               我的恋爱编年史 <span className="text-[12px]">💗</span>
@@ -9581,7 +9587,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
 
         {/* 怎么玩 */}
         <div className="mt-7 text-center text-[17px] font-bold text-[#26262b]">✦ 怎么玩？ ✦</div>
-        <div className="mt-3 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
+        <div className="mt-3 rounded-2xl bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
           {[
             { n: '1', icon: <CalendarDays className="h-6 w-6" strokeWidth={1.8} />, bg: '#fde7ee', fg: '#f0609a', label: '选择关键月份', desc: '记录感情里发生变化的时间点' },
             { n: '2', icon: <Heart className="h-6 w-6" strokeWidth={1.8} />, bg: '#ece6fb', fg: '#8071cf', label: '选择对应状态', desc: '比如暗恋、暧昧、恋爱、分手、复合' },
@@ -9633,7 +9639,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
               }}
               placeholder="记录一件值得记住的小事…"
               maxLength={40}
-              className="h-11 flex-1 rounded-xl bg-white px-3.5 text-[15px] shadow-sm outline-none placeholder:text-[#c9aeb6]"
+              className="h-11 flex-1 rounded-xl bg-white/75 backdrop-blur-xl px-3.5 text-[15px] shadow-sm outline-none placeholder:text-[#c9aeb6]"
             />
             <button
               type="button"
@@ -9645,7 +9651,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
                 setText('');
                 showToast('已写入大事记 ✍️');
               }}
-              className="h-11 rounded-xl bg-white px-5 text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]"
+              className="h-11 rounded-xl bg-white/75 backdrop-blur-xl px-5 text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07]"
             >
               记录
             </button>
@@ -9658,7 +9664,7 @@ function ChroniclePage({ state, patch, showToast, close }: { state: CoupleState;
                 <div key={c.id} className="relative flex gap-4 pb-6">
                   {i < state.chronicle.length - 1 && <span aria-hidden="true" className="absolute left-[7px] top-5 h-full w-[2px] bg-[#f0dce1]" />}
                   <span className="relative z-10 mt-1.5 h-4 w-4 shrink-0 rounded-full border-[3px] border-[#eba7b6] bg-white" />
-                  <div className="flex-1 rounded-2xl bg-white p-4 shadow-[0_6px_18px_rgba(0,0,0,0.07)]">
+                  <div className="flex-1 rounded-2xl bg-white/80 backdrop-blur-xl p-4 shadow-[0_6px_18px_rgba(0,0,0,0.07)]">
                     <div className="text-[13px] text-[#a4889a]">{fmtDate(c.at)}</div>
                     <div className="mt-1 text-[15px] leading-relaxed text-[#2c2c30]">{c.text}</div>
                   </div>
@@ -10077,7 +10083,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
           <div className="space-y-2.5 px-5 pt-4" aria-hidden="true">
             <div className="flex items-end gap-2">
               <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] bg-[#3a3a40] text-[11px] font-semibold text-white">TA</span>
-              <span className="rounded-[4px] rounded-tl-none bg-white px-3 py-1.5 text-[14px] text-black">没事，你忙吧。</span>
+              <span className="rounded-[4px] rounded-tl-none bg-white/85 backdrop-blur-xl px-3 py-1.5 text-[14px] text-black">没事，你忙吧。</span>
             </div>
             <div className="flex items-end justify-end gap-2">
               <span className="rounded-[4px] rounded-tr-none bg-[#a8e05f] px-3 py-1.5 text-[14px] text-black">那我先不回了?</span>
@@ -10085,7 +10091,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
             </div>
             <div className="flex items-end gap-2">
               <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] bg-[#3a3a40] text-[11px] font-semibold text-white">TA</span>
-              <span className="rounded-[4px] rounded-tl-none bg-white px-3 py-1.5 text-[14px] text-black">随便你。</span>
+              <span className="rounded-[4px] rounded-tl-none bg-white/85 backdrop-blur-xl px-3 py-1.5 text-[14px] text-black">随便你。</span>
             </div>
           </div>
 
@@ -10120,7 +10126,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
             data-testid="reply-start-btn"
             onClick={() => void start()}
             disabled={genLoading}
-            className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-2xl bg-white text-[20px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98] disabled:opacity-75"
+            className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-2xl bg-white/75 backdrop-blur-xl text-[20px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98] disabled:opacity-75"
           >
             {genLoading ? (
               <>
@@ -10259,7 +10265,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
               data-testid="reply-next"
               onClick={goNext}
               disabled={judging}
-              className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-2xl bg-white text-[18px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98] disabled:opacity-70"
+              className="mx-5 mt-5 flex h-14 w-[calc(100%-40px)] items-center justify-center gap-2 rounded-2xl bg-white/75 backdrop-blur-xl text-[18px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98] disabled:opacity-70"
             >
               {judging ? (
                 <>
@@ -10308,7 +10314,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
               {statChip('安抚值', stats.af)}
               {statChip('存活率', Math.max(0, stats.sc))}
             </div>
-            <button type="button" onClick={start} className="mt-8 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white text-[16.5px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98]" data-testid="reply-retry">
+            <button type="button" onClick={start} className="mt-8 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white/75 backdrop-blur-xl text-[16.5px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98]" data-testid="reply-retry">
               再挑战一次
             </button>
             <button type="button" onClick={() => setView('home')} className="mt-3 h-12 w-full rounded-2xl bg-white/[0.08] text-[15px] font-medium text-white/70 transition-colors active:bg-white/[0.13]">
@@ -10355,7 +10361,7 @@ function ReplyPage({ state, patch, close }: { state: CoupleState; patch: (p: Par
               {statChip('安抚值', stats.af)}
               {statChip('存活率', Math.max(0, stats.sc))}
             </div>
-            <button type="button" onClick={start} className="mt-8 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white text-[16.5px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98]" data-testid="reply-retry">
+            <button type="button" onClick={start} className="mt-8 flex h-[52px] w-full items-center justify-center rounded-2xl bg-white/75 backdrop-blur-xl text-[16.5px] font-bold text-[#131316] shadow-[0_10px_30px_rgba(255,255,255,0.12)] transition-transform active:scale-[0.98]" data-testid="reply-retry">
               再挑战一次
             </button>
             <button type="button" onClick={() => setView('home')} className="mt-3 h-12 w-full rounded-2xl bg-white/[0.08] text-[15px] font-medium text-white/70 transition-colors active:bg-white/[0.13]">
@@ -10638,7 +10644,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
           <div className="mt-3 text-center text-[13px] font-medium text-[#a4889a]">·18道精选问题 · 多维度专业解析</div>
 
           {/* 理论说明卡 */}
-          <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
+          <div className="mt-4 rounded-2xl bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
             <p className="text-[14.5px] leading-[1.9] text-[#4a4a52]">
               你们的恋爱正处于怎样的阶段？
               <br />
@@ -10703,7 +10709,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
           </div>
 
           {/* 恋爱状态快选（保留原有功能） */}
-          <div className="mt-2 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
+          <div className="mt-2 rounded-2xl bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
             <div className="text-[14px] font-bold text-[#3c3c42]">现在的恋爱状态</div>
             <div className="mt-2.5 flex flex-wrap gap-2">
               {STATUS_LIST.map((s) => {
@@ -10742,7 +10748,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
           </div>
 
           {/* 题目卡 */}
-          <div className="mt-4 rounded-3xl bg-white p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]" data-testid="status-exam-card">
+          <div className="mt-4 rounded-3xl bg-white/85 backdrop-blur-2xl p-5 shadow-[0_10px_30px_rgba(0,0,0,0.08)]" data-testid="status-exam-card">
             <div className="flex gap-2">
               <span className="shrink-0 text-[17px] font-extrabold text-[#26262b]">Q{qi + 1}</span>
               <span className="text-[16.5px] font-bold leading-relaxed text-[#26262b]">{q.q}</span>
@@ -10815,7 +10821,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
               data-testid="status-exam-next"
               onClick={nextQ}
               disabled={myCur == null || aiPick == null}
-              className="mx-auto flex h-[52px] w-[64%] items-center justify-center rounded-2xl bg-white text-[16.5px] font-bold text-[#1b1b1f] shadow-[0_4px_16px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
+              className="mx-auto flex h-[52px] w-[64%] items-center justify-center rounded-2xl bg-white/75 backdrop-blur-xl text-[16.5px] font-bold text-[#1b1b1f] shadow-[0_4px_16px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-all active:scale-[0.98] disabled:opacity-45 disabled:shadow-none"
             >
               {qi >= STATUS_EXAM.length - 1 ? '查看我们的结果' : '下一题'}
             </button>
@@ -10855,13 +10861,13 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
         )}
         {rep && (
           <>
-            <div className="mt-2 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
+            <div className="mt-2 rounded-2xl bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
               <div className="text-[15px] font-bold text-[#26262b]">分析师点评</div>
               <div className="mt-1.5 text-[13.5px] leading-relaxed text-[#6e6e76]">{rep.overall}</div>
             </div>
 
             {/* 我的报告（粉色） */}
-            <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]" data-testid="status-report-me">
+            <div className="mt-4 rounded-2xl bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_24px_rgba(0,0,0,0.07)]" data-testid="status-report-me">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="grid h-6 w-6 place-items-center rounded-full bg-[#2c2c30] text-[11px] font-bold text-white">{me.slice(0, 1)}</span>
@@ -10886,7 +10892,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
             </div>
 
             {/* TA 的报告（蓝色） */}
-            <div className="mt-4 rounded-2xl bg-white p-4 shadow-[0_8px_24px_rgba(127,150,224,0.14)]" data-testid="status-report-ta">
+            <div className="mt-4 rounded-2xl bg-white/80 backdrop-blur-xl p-4 shadow-[0_8px_24px_rgba(127,150,224,0.14)]" data-testid="status-report-ta">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="grid h-6 w-6 place-items-center rounded-full bg-[#7f96e0] text-[11px] font-bold text-white">{ta.slice(0, 1)}</span>
@@ -10927,7 +10933,7 @@ function StatusPage({ state, patch, showToast, close }: { state: CoupleState; pa
             data-testid="status-exam-regen"
             onClick={() => void genReport(false)}
             disabled={genLoading}
-            className="flex h-[50px] flex-1 items-center justify-center rounded-2xl bg-white text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98] disabled:opacity-50"
+            className="flex h-[50px] flex-1 items-center justify-center rounded-2xl bg-white/75 backdrop-blur-xl text-[15px] font-semibold text-[#1b1b1f] shadow-[0_2px_10px_rgba(0,0,0,0.06)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98] disabled:opacity-50"
           >
             {report ? 'AI 重新分析' : 'AI 深度分析'}
           </button>
@@ -11058,13 +11064,13 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
       <div className="-mx-3.5 -mt-0 select-none bg-[linear-gradient(135deg,#f97362,#f2536a_55%,#e84c8b)] px-5 pb-12 pt-5 text-center">
         <div className="flex items-center justify-center gap-1.5 text-[24px] font-extrabold leading-tight text-white">
           先选
-          <span className="grid h-[34px] w-[34px] place-items-center rounded-full bg-white text-[21px] font-extrabold text-[#26262b] shadow-[0_3px_10px_rgba(0,0,0,0.12)]">5</span>
+          <span className="grid h-[34px] w-[34px] place-items-center rounded-full bg-white/75 backdrop-blur-xl text-[21px] font-extrabold text-[#26262b] shadow-[0_3px_10px_rgba(0,0,0,0.12)]">5</span>
           个词自评一下你们吧
         </div>
       </div>
 
       {/* 双头像卡（压在横幅上） */}
-      <div className="-mt-9 rounded-2xl bg-white px-4 pb-5 pt-5 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
+      <div className="-mt-9 rounded-2xl bg-white/75 backdrop-blur-xl px-4 pb-5 pt-5 shadow-[0_8px_24px_rgba(0,0,0,0.07)]">
         <div className="flex items-start justify-center gap-9">{avatarBlock('me')}{avatarBlock('ta')}</div>
         <div className="mt-4 border-t border-dashed border-[#e9e9ee] pt-3 text-center">
           <div className="text-[12.5px] text-[#9a9aa2]">
@@ -11099,7 +11105,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
             key={w}
             type="button"
             onClick={() => addTag(w)}
-            className="rounded-lg border border-[#e9e9ee] bg-white px-3.5 py-2 text-[13.5px] text-[#3c3c42] shadow-[0_2px_8px_rgba(0,0,0,0.08)] transition-transform active:scale-95"
+            className="rounded-lg border border-[#e9e9ee] bg-white/80 backdrop-blur-xl px-3.5 py-2 text-[13.5px] text-[#3c3c42] shadow-[0_2px_8px_rgba(0,0,0,0.08)] transition-transform active:scale-95"
           >
             {w}
           </button>
@@ -11153,7 +11159,7 @@ function ImpressPage({ state, patch, showToast, close }: { state: CoupleState; p
           type="button"
           data-testid="impress-submit"
           onClick={() => showToast(tags.length > 0 ? '印象已提交，甜甜的恋爱值 +1 ♡' : '先选几个词再提交吧')}
-          className="h-[50px] w-full rounded-2xl bg-white text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
+          className="h-[50px] w-full rounded-2xl bg-white/75 backdrop-blur-xl text-[16.5px] font-semibold text-[#1b1b1f] shadow-[0_4px_14px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.07] transition-transform active:scale-[0.98]"
         >
           提 交
         </button>
@@ -11196,7 +11202,7 @@ function ProfilePage({ state, patch, showToast, close, onReset }: { state: Coupl
   return (
     <SubShell title="我的恋爱资料" onBack={close}>
       {/* 第一组：我的资料 */}
-      <div className="mt-3 overflow-hidden rounded-2xl bg-white shadow-sm">
+      <div className="mt-3 overflow-hidden rounded-2xl bg-white/80 backdrop-blur-xl shadow-sm">
         <button type="button" onClick={() => meInput.current?.click()} className={rowCls}>
           <span className={labelCls}>头像</span>
           <span className="ml-auto mr-1 h-9 w-9 overflow-hidden rounded-full bg-[#ececef]">
@@ -11265,7 +11271,7 @@ function ProfilePage({ state, patch, showToast, close, onReset }: { state: Coupl
       {/* 弹层们 */}
       {dialog != null && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 px-8" onClick={() => setDialog(null)}>
-          <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             {dialog === 'nickname' && (
               <>
                 <div className="text-[15px] font-semibold text-[#2c2c30]">修改昵称</div>
@@ -11655,7 +11661,7 @@ function MissYouPage({ state, patch, tapMissYou, showToast, close }: { state: Co
       {/* 说明 / 记录弹层 */}
       {sheet !== 'none' && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/40 px-8" onClick={() => setSheet('none')}>
-          <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             {sheet === 'explain' ? (
               <>
                 <div className="text-[16px] font-bold text-[#2c2c30]">补签卡说明</div>
@@ -11695,7 +11701,7 @@ function ChapelPage({ state, patch, showToast, close }: { state: CoupleState; pa
   return (
     <SubShell title="小礼堂" onBack={close}>
       {state.married ? (
-        <div className="mt-6 rounded-2xl bg-white p-6 text-center shadow-sm">
+        <div className="mt-6 rounded-2xl bg-white/80 backdrop-blur-xl p-6 text-center shadow-sm">
           <div className="text-[34px]">💒</div>
           <div className="mt-2 text-[22px] font-bold tracking-[4px] text-[#2c2c30]">结 婚 证</div>
           <div className="mt-4 space-y-2 text-[16px] text-[#4a4a52]">
@@ -11711,7 +11717,7 @@ function ChapelPage({ state, patch, showToast, close }: { state: CoupleState; pa
           </div>
         </div>
       ) : (
-        <div className="mt-6 flex flex-col items-center rounded-2xl bg-white py-10 shadow-sm">
+        <div className="mt-6 flex flex-col items-center rounded-2xl bg-white/80 backdrop-blur-xl py-10 shadow-sm">
           <div className="text-[44px]">💍</div>
           <div className="mt-3 text-[18px] font-bold text-[#2c2c30]">准备一场求婚仪式</div>
           <p className="mt-2 px-8 text-center text-[14px] leading-relaxed text-[#9a9aa2]">在小礼堂，单膝跪地，把余生的每一天都交给对方。</p>
@@ -11766,11 +11772,11 @@ function SupportPage({ close }: { close: () => void }) {
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {msgs.map((m) => (
           <div key={m.id} className={`flex ${m.me ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed ${m.me ? 'bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-white' : 'bg-white text-[#2c2c30] shadow-sm'}`}>{m.text}</div>
+            <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 text-[15px] leading-relaxed ${m.me ? 'bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] text-white' : 'bg-white/80 backdrop-blur-xl text-[#2c2c30] shadow-sm'}`}>{m.text}</div>
           </div>
         ))}
       </div>
-      <div className="shrink-0 border-t border-black/[0.05] bg-white p-3 pb-5">
+      <div className="shrink-0 border-t border-black/[0.05] bg-white/90 backdrop-blur-2xl p-3 pb-5">
         <div className="flex gap-2">
           <input
             value={text}
@@ -11780,7 +11786,7 @@ function SupportPage({ close }: { close: () => void }) {
             onKeyDown={(e) => e.key === 'Enter' && send()}
             className="h-11 flex-1 rounded-full bg-[#f3f3f5] px-4 text-[15px] outline-none placeholder:text-[#b6b6bd]"
           />
-          <button type="button" onClick={send} aria-label="发送" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white text-[#2c2c30] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-[#e9e9ee] transition-transform active:scale-95">
+          <button type="button" onClick={send} aria-label="发送" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/75 backdrop-blur-xl text-[#2c2c30] shadow-[0_2px_8px_rgba(0,0,0,0.10)] ring-1 ring-[#e9e9ee] transition-transform active:scale-95">
             <ArrowUp className="h-5 w-5" strokeWidth={2.4} />
           </button>
         </div>
@@ -11809,7 +11815,7 @@ function SettingsPage({ state, patch, showToast, close, onReset }: { state: Coup
   const bgInput = useRef<HTMLInputElement | null>(null);
   return (
     <SubShell title="设置" onBack={close}>
-      <div className="mt-4 overflow-hidden rounded-2xl bg-white shadow-sm">
+      <div className="mt-4 overflow-hidden rounded-2xl bg-white/80 backdrop-blur-xl shadow-sm">
         <button
           type="button"
           onClick={() => bgInput.current?.click()}
@@ -11888,7 +11894,7 @@ function SettingsPage({ state, patch, showToast, close, onReset }: { state: Coup
       />
       {confirmReset && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/35 px-10" onClick={() => setConfirmReset(false)}>
-          <div className="w-full rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="text-[17px] font-semibold text-[#2c2c30]">确定解除恋人关系吗？</div>
             <p className="mt-2 text-[14px] leading-relaxed text-[#9a9aa2]">将清空恋人空间的全部数据（相册、日记、情书、成长值……），此操作不可恢复。</p>
             <div className="mt-4 flex gap-3">

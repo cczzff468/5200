@@ -1,33 +1,41 @@
 'use client';
 
 /**
- * 送达速度毛玻璃弹窗（第四十一轮，淘宝 + 美团共用）：
+ * 送达速度毛玻璃弹窗（第四十二轮：美团 / 淘宝各自独立设置）：
  * - iOS 毛玻璃风（backdrop-blur-2xl + 半透明白 + 高光描边），底部上滑弹层；
- * - 三档固定速度：快 5-15 分钟 / 正常 15-30 分钟 / 慢 30-60 分钟；
+ * - 美团（分钟级）：快 5-15 分钟 / 正常 15-30 分钟 / 慢 30-60 分钟；
+ * - 淘宝（小时级）：快 30 分钟-1 小时 / 正常 1-2 小时 / 慢 3-4 小时；
  * - 自定义：展开「最快 X 分钟 / 最慢 Y 分钟」输入（1-480，min ≤ max），应用后即时生效；
- * - 设置全局共享（delivery-speed.ts）：淘宝、美团订单（新单 ETA/状态机/时间轴）统一跟随；
+ * - 设置按 App 分键存储（delivery-speed.ts），只影响当前 App 的订单 ETA / 状态机 / 时间轴；
  * - accent 随宿主 App：淘宝橙 #FF5000 / 美团黄 #FFC300。
  */
 
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
-import { DS_CUSTOM_MAX, DS_CUSTOM_MIN, DS_LABEL, DS_RANGE, dsDescShort, dsGet, dsSet, type DsPreset } from '@/lib/ios/delivery-speed';
+import { DS_CUSTOM_MAX, DS_CUSTOM_MIN, DS_LABEL, DS_RANGES, dsDescShort, dsGet, dsSet, type DsPreset, type DsScope } from '@/lib/ios/delivery-speed';
 
 const PRESETS: Exclude<DsPreset, 'custom'>[] = ['fast', 'normal', 'slow'];
 
+const SCOPE_HINT: Record<DsScope, string> = {
+  meituan: '美团订单按此速度送达（真实时钟），改后新订单立即生效',
+  taobao: '淘宝订单按此速度发货送达（真实时钟），改后新订单立即生效',
+};
+
 /** 三档固定速度选项行（选中态：accent 描边 + 实心勾选圈） */
 function SpeedPresetRow({
+  scope,
   preset,
   active,
   accent,
   onPick,
 }: {
+  scope: DsScope;
   preset: Exclude<DsPreset, 'custom'>;
   active: boolean;
   accent: string;
   onPick: () => void;
 }) {
-  const r = DS_RANGE[preset];
+  const r = DS_RANGES[scope][preset];
   return (
     <button
       type="button"
@@ -35,7 +43,7 @@ function SpeedPresetRow({
       aria-pressed={active}
       onClick={onPick}
       className={`flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all active:scale-[0.985] ${
-        active ? 'border-transparent bg-white/80' : 'border-white/50 bg-white/30'
+        active ? 'border-transparent bg-white/85' : 'border-white/50 bg-white/35'
       }`}
       style={active ? { boxShadow: `inset 0 0 0 2px ${accent}, 0 4px 18px rgba(0,0,0,0.08)` } : undefined}
     >
@@ -47,9 +55,7 @@ function SpeedPresetRow({
       </span>
       <span className="min-w-0 flex-1">
         <span className={`block text-[14.5px] font-semibold ${active ? 'text-black/90' : 'text-black/70'}`}>{DS_LABEL[preset]}速送达</span>
-        <span className="mt-0.5 block text-[11.5px] text-black/40">
-          {r.min}-{r.max} 分钟
-        </span>
+        <span className="mt-0.5 block text-[11.5px] text-black/40">{dsDescShort(scope, { preset, min: r.min, max: r.max })}</span>
       </span>
       {active ? (
         <span className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full" style={{ backgroundColor: accent }}>
@@ -63,28 +69,31 @@ function SpeedPresetRow({
 }
 
 export function DeliverySpeedSheet({
+  scope,
   accent = '#FF5000',
   onClose,
   onToast,
 }: {
+  /** 宿主 App：美团（分钟级三档）/ 淘宝（小时级三档），各自独立存储 */
+  scope: DsScope;
   /** 强调色（淘宝橙 / 美团黄） */
   accent?: string;
   onClose: () => void;
   onToast: (m: string) => void;
 }) {
-  const [setting, setSetting] = useState(() => dsGet());
+  const [setting, setSetting] = useState(() => dsGet(scope));
   // 自定义输入（展开时显示；切换到自定义档即展开）
-  const [customOpen, setCustomOpen] = useState(() => dsGet().preset === 'custom');
-  const [cMin, setCMin] = useState(() => String(dsGet().preset === 'custom' ? dsGet().min : 10));
-  const [cMax, setCMax] = useState(() => String(dsGet().preset === 'custom' ? dsGet().max : 25));
+  const [customOpen, setCustomOpen] = useState(() => dsGet(scope).preset === 'custom');
+  const [cMin, setCMin] = useState(() => String(dsGet(scope).preset === 'custom' ? dsGet(scope).min : 10));
+  const [cMax, setCMax] = useState(() => String(dsGet(scope).preset === 'custom' ? dsGet(scope).max : 25));
   const [cErr, setCErr] = useState('');
 
   // 其他入口改速度后本弹窗跟随（全局事件）
   useEffect(() => {
-    const on = () => setSetting(dsGet());
+    const on = () => setSetting(dsGet(scope));
     window.addEventListener('delivery-speed-changed', on);
     return () => window.removeEventListener('delivery-speed-changed', on);
-  }, []);
+  }, [scope]);
 
   const applyPreset = (p: DsPreset): void => {
     if (p === 'custom') {
@@ -95,12 +104,12 @@ export function DeliverySpeedSheet({
       setCustomOpen(true);
       return;
     }
-    const r = DS_RANGE[p];
-    dsSet({ preset: p, min: r.min, max: r.max });
+    const r = DS_RANGES[scope][p];
+    dsSet(scope, { preset: p, min: r.min, max: r.max });
     setSetting({ preset: p, min: r.min, max: r.max });
     setCErr('');
     setCustomOpen(false);
-    onToast(`已切换为「${DS_LABEL[p]}」速：${dsDescShort({ preset: p, min: r.min, max: r.max })}送达`);
+    onToast(`已切换为「${DS_LABEL[p]}」速：${dsDescShort(scope, { preset: p, min: r.min, max: r.max })}送达`);
   };
 
   const applyCustom = (): void => {
@@ -115,9 +124,9 @@ export function DeliverySpeedSheet({
       return;
     }
     setCErr('');
-    dsSet({ preset: 'custom', min, max });
+    dsSet(scope, { preset: 'custom', min, max });
     setSetting({ preset: 'custom', min, max });
-    onToast(`已自定义送达速度：${min}-${max}分钟送达`);
+    onToast(`已自定义送达速度：${dsDescShort(scope, { preset: 'custom', min, max })}送达`);
   };
 
   return (
@@ -127,7 +136,7 @@ export function DeliverySpeedSheet({
         role="dialog"
         aria-label="送达速度"
         onClick={(e) => e.stopPropagation()}
-        className="overflow-hidden rounded-t-[24px] border-t border-white/70 bg-white/65 shadow-[0_-10px_44px_rgba(0,0,0,0.18)] backdrop-blur-2xl backdrop-saturate-150 [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]"
+        className="overflow-hidden rounded-t-[24px] border-t border-white/70 bg-white/70 shadow-[0_-10px_44px_rgba(0,0,0,0.18)] backdrop-blur-2xl backdrop-saturate-150 [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]"
       >
         {/* 把手条 */}
         <div className="flex justify-center pt-2.5">
@@ -142,15 +151,14 @@ export function DeliverySpeedSheet({
             </span>
           </button>
         </div>
-        <p className="px-5 pb-2 text-[11.5px] leading-relaxed text-black/40">
-          淘宝、美团订单统一按此速度送达（真实时钟），改后新订单立即生效
-        </p>
+        <p className="px-5 pb-2 text-[11.5px] leading-relaxed text-black/40">{SCOPE_HINT[scope]}</p>
 
         {/* 三档固定速度 */}
         <div className="space-y-2 px-4 pt-1">
           {PRESETS.map((p) => (
             <SpeedPresetRow
               key={p}
+              scope={scope}
               preset={p}
               active={setting.preset === p}
               accent={accent}
@@ -165,7 +173,7 @@ export function DeliverySpeedSheet({
             aria-pressed={setting.preset === 'custom'}
             onClick={() => applyPreset('custom')}
             className={`flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all active:scale-[0.985] ${
-              setting.preset === 'custom' ? 'border-transparent bg-white/80' : 'border-white/50 bg-white/30'
+              setting.preset === 'custom' ? 'border-transparent bg-white/85' : 'border-white/50 bg-white/35'
             }`}
             style={setting.preset === 'custom' ? { boxShadow: `inset 0 0 0 2px ${accent}, 0 4px 18px rgba(0,0,0,0.08)` } : undefined}
           >
@@ -175,7 +183,7 @@ export function DeliverySpeedSheet({
             <span className="min-w-0 flex-1">
               <span className={`block text-[14.5px] font-semibold ${setting.preset === 'custom' ? 'text-black/90' : 'text-black/70'}`}>自定义</span>
               <span className="mt-0.5 block text-[11.5px] text-black/40">
-                {setting.preset === 'custom' ? `${setting.min}-${setting.max} 分钟` : '自己定最快/最慢分钟数'}
+                {setting.preset === 'custom' ? `${dsDescShort(scope, setting)}（最快/最慢可再调）` : '自己定最快/最慢分钟数'}
               </span>
             </span>
             {setting.preset === 'custom' ? (
@@ -232,7 +240,7 @@ export function DeliverySpeedSheet({
 
         {/* 当前生效提示 + 完成 */}
         <p className="px-5 pt-3 text-center text-[11.5px] text-black/45">
-          当前：<span className="font-semibold text-black/70" data-testid="speed-current-desc">{dsDescShort(setting)}</span>送达
+          当前：<span className="font-semibold text-black/70" data-testid="speed-current-desc">{dsDescShort(scope, setting)}</span>送达
         </p>
         <div className="flex justify-center px-4 pb-6 pt-2">
           <button

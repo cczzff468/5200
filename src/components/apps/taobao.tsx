@@ -254,7 +254,7 @@ function useCountdown(target: number | undefined): string {
 /** 页面顶栏（返回 + 标题 + 右侧槽位） */
 function TopBar({ title, onBack, right, light }: { title: string; onBack?: () => void; right?: ReactNode; light?: boolean }) {
   return (
-    <div className={`sticky top-0 z-30 px-3 pt-[54px] ${light ? 'bg-[#FF5000] text-white' : 'bg-white text-black/90'}`}>
+    <div className={`sticky top-0 z-30 px-3 pt-[54px] ${light ? 'bg-[#FF5000] text-white' : 'bg-white/80 text-black/90 backdrop-blur-2xl backdrop-saturate-150'}`}>
       <div className="flex h-12 items-center gap-2">
         {onBack ? (
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
@@ -483,7 +483,7 @@ function CancelOrderSheet({ onClose, onConfirm }: { onClose: () => void; onConfi
   const [reason, setReason] = useState(TB_CANCEL_REASONS[0]);
   return (
     <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={onClose}>
-      <div className="rounded-t-2xl bg-white [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()}>
+      <div className="rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()}>
         {/* 标题 + 关闭 */}
         <div className="relative flex items-center justify-center pb-3 pt-5">
           <span className="text-[17px] font-bold text-black/90">订单取消</span>
@@ -522,7 +522,7 @@ function CancelOrderSheet({ onClose, onConfirm }: { onClose: () => void; onConfi
 function RefundConfirmSheet({ busy, onClose, onConfirm }: { busy: boolean; onClose: () => void; onConfirm: () => void }) {
   return (
     <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={busy ? undefined : onClose}>
-      <div className="rounded-t-2xl bg-white [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()}>
+      <div className="rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()}>
         <div className="relative flex items-center justify-center pb-3 pt-5">
           <span className="text-[17px] font-bold text-black/90">申请退款</span>
           {!busy ? (
@@ -966,7 +966,7 @@ function LoginPage({ onLogin, onToast }: { onLogin: (s: TbSession) => void; onTo
       {/* 一键授权确认卡 */}
       {auth ? (
         <div className="absolute inset-0 z-40 grid place-items-center bg-black/40 px-8">
-          <div className="w-full max-w-[300px] rounded-2xl bg-white p-5">
+          <div className="w-full max-w-[300px] rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5">
             <div className="text-center text-[17px] font-semibold">授权登录</div>
             <div className="mt-4 flex items-center gap-3 rounded-xl bg-black/[0.03] p-3">
               {auth.avatar ? (
@@ -1462,9 +1462,9 @@ function HomePage({
           </div>
         )}
         {/* 上拉加载指示器（悬浮于列表区底部；Task 45：底部拉一拉=追加新内容，上方内容不变；
-            第六十八轮：bottom-6→bottom-[66px] 提到 53px 底部 Tab 之上——用户反馈提示被 tab 挡住） */}
+            第六十八轮：bottom-6→bottom-[66px] 提到底部 Tab 之上；第四十二轮 tab 胶囊化→85px 继续避开） */}
         {(pullUpY > 0 || refreshingDir === 'up') && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-[66px] z-40 grid place-items-center">
+          <div className="pointer-events-none absolute inset-x-0 bottom-[85px] z-40 grid place-items-center">
             <div className="flex h-9 items-center gap-2 rounded-full bg-black/55 px-4 text-[13px] text-white shadow-lg">
               <Loader2 className="h-4 w-4 animate-spin text-white/90" />
               {refreshingDir === 'up' ? '正在加载…' : pullUpY > 56 ? '松开加载更多' : '拉一拉加载更多'}
@@ -1950,7 +1950,7 @@ function SearchResultPage({ uid, kw, onBack, onOpenProduct, onSearchSeed }: { ui
 
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
-      <div className="sticky top-0 z-30 bg-white pb-2 pt-[58px]">
+      <div className="sticky top-0 z-30 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 pb-2 pt-[58px]">
         <div className="flex items-center gap-2 px-3">
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
             <ArrowLeft className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
@@ -2136,7 +2136,7 @@ function SkuSheet({
   const discount = p.originPrice ? Math.round((p.originPrice - price) * 100) / 100 : 0;
   return (
     <div className="absolute inset-0 z-40 flex flex-col justify-end bg-black/40" onClick={onClose}>
-      <div className="flex max-h-[82%] flex-col rounded-t-2xl bg-white" onClick={(e) => e.stopPropagation()}>
+      <div className="flex max-h-[82%] flex-col rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150" onClick={(e) => e.stopPropagation()}>
         <div className="min-h-0 flex-1 overflow-y-auto pb-2">
           {/* 地址行（截图9头部；需求：删铅笔图标，点击地址切换收货地址） */}
           <div className="px-4 pb-2 pt-3">
@@ -2592,7 +2592,7 @@ function ProductPage({
       </div>
 
       {/* 底部操作栏（截图1：店铺/客服/收藏数 + 黄色加入购物车 + 橙色领券购买，方形圆角） */}
-      <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-1 border-t border-black/[0.06] bg-white/95 px-3 pb-6 pt-2 backdrop-blur-md">
+      <div className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-1 border-t border-white/60 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-3 pb-6 pt-2">
         <button type="button" onClick={() => onOpenShop(shop.id)} className="flex w-[48px] flex-col items-center gap-0.5 active:opacity-60">
           <ShoppingBag className="h-[20px] w-[20px] text-black/70" strokeWidth={2} />
           <span className="text-[10px] text-black/50">店铺</span>
@@ -2758,7 +2758,7 @@ function CartPage({
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
       {/* 顶栏（截图4：购物车(N) 左对齐 + 搜索/对比/管理） */}
-      <div className="sticky top-0 z-30 bg-white px-3 pb-2.5 pt-[58px]">
+      <div className="sticky top-0 z-30 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-3 pb-2.5 pt-[58px]">
         <div className="flex items-center">
           {onBack ? (
             <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
@@ -3014,7 +3014,7 @@ function CartPage({
           type="button"
           aria-label="回到顶部"
           onClick={() => listRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
-          className="absolute bottom-[150px] right-3 z-30 grid h-11 w-11 place-items-center rounded-full bg-white/95 shadow-[0_4px_14px_rgba(0,0,0,0.12)] ring-1 ring-black/5 active:opacity-80"
+          className="absolute bottom-[172px] right-3 z-30 grid h-11 w-11 place-items-center rounded-full bg-white/80 shadow-[0_4px_14px_rgba(0,0,0,0.12)] ring-1 ring-white/60 backdrop-blur-2xl backdrop-saturate-150 active:opacity-80"
         >
           <span className="flex flex-col items-center">
             <ChevronUp className="h-4 w-4 text-black/60" strokeWidth={2.4} />
@@ -3025,7 +3025,7 @@ function CartPage({
 
       {/* 底部（截图5/6：普通=全选+合计共减+结算；管理=全选+分享/移入收藏/删除；tab 模式避开底栏） */}
       {items.length > 0 ? (
-        <div className={`absolute inset-x-0 z-30 flex items-center gap-2 border-t border-black/[0.06] bg-white/95 px-3 pt-2.5 backdrop-blur-md ${onBack ? 'bottom-0 pb-6' : 'bottom-[53px] pb-3'}`}>
+        <div className={`absolute inset-x-0 z-30 flex items-center gap-2 border-t border-white/60 bg-white/80 px-3 pt-2.5 backdrop-blur-2xl backdrop-saturate-150 ${onBack ? 'bottom-0 pb-6' : 'bottom-[72px] pb-3'}`}>
           <button
             type="button"
             onClick={() => {
@@ -3076,7 +3076,7 @@ function CartPage({
           )}
         </div>
       ) : (
-        <div className={`absolute inset-x-0 z-30 border-t border-black/[0.06] bg-white/95 px-3 pt-2 backdrop-blur-md ${onBack ? 'bottom-0 pb-6' : 'bottom-[53px] pb-3'}`}>
+        <div className={`absolute inset-x-0 z-30 border-t border-white/60 bg-white/80 px-3 pt-2 backdrop-blur-2xl backdrop-saturate-150 ${onBack ? 'bottom-0 pb-6' : 'bottom-[72px] pb-3'}`}>
           <button type="button" onClick={onOpenHome} className="h-10 w-full rounded-xl bg-gradient-to-r from-[#FF7A21] to-[#FF4400] text-[15px] font-semibold text-white active:opacity-85">
             去逛逛
           </button>
@@ -3424,7 +3424,7 @@ function PaySheet({
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/50" onClick={paying ? undefined : onClose}>
-      <div className="max-h-[88%] overflow-y-auto rounded-t-[22px] bg-[#F6F7F9] pb-8 [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()}>
+      <div className="max-h-[88%] overflow-y-auto rounded-t-[22px] bg-[#F6F7F9]/90 backdrop-blur-2xl backdrop-saturate-150 pb-8 [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()}>
         {/* 顶部拖拽指示条 + 标题 */}
         <div className="flex justify-center pt-2.5">
           <span className="h-1 w-9 rounded-full bg-black/12" />
@@ -3676,7 +3676,7 @@ function TbContactPickSheet({
   return (
     <div className="absolute inset-0 z-[70] flex flex-col justify-end bg-black/45" onClick={onClose} data-testid={step === 'plat' ? `${platTestIdPrefix}-sheet` : undefined}>
       <div
-        className="max-h-[82%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 shadow-2xl [animation:quick-in-up_.24s_cubic-bezier(0.32,0.72,0,1)_both]"
+        className="max-h-[82%] overflow-y-auto rounded-t-3xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 shadow-2xl [animation:quick-in-up_.24s_cubic-bezier(0.32,0.72,0,1)_both]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 拖拽条 + 左对齐标题/副标题（与恋人空间邀请弹层同款结构） */}
@@ -3853,7 +3853,7 @@ function OrdersPage({
   ];
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
-      <div className="sticky top-0 z-30 bg-[#f4f4f4] pt-[58px]">
+      <div className="sticky top-0 z-30 bg-[#f4f4f4]/85 backdrop-blur-2xl backdrop-saturate-150 pt-[58px]">
         <div className="flex items-center gap-2 px-3">
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 shrink-0 place-items-center rounded-full active:bg-black/5">
             <ArrowLeft className="h-[22px] w-[22px] text-black/80" strokeWidth={2.2} />
@@ -5303,7 +5303,7 @@ function LogisticsPage({
         </div>
         <div className="flex-1 overflow-y-auto pb-8">
           <TbExpressMap phase="prepare" etaTitle={pre.title} etaSub={pre.sub} addrDetail={o.address?.detail} originCity="杭州市" destCity={tbCityOfRegion(o.address?.region)} phaseFrac={0} />
-          <div className="relative z-10 -mt-4 rounded-t-2xl bg-white px-4 pb-3 pt-4">
+          <div className="relative z-10 -mt-4 rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 pb-3 pt-4">
             <div className="flex items-center gap-2">
               <Package className="h-5 w-5 shrink-0 text-[#FF6A1E]" strokeWidth={2.1} />
               <span className="text-[17px] font-bold text-black/90">{pre.head}</span>
@@ -5420,7 +5420,7 @@ function LogisticsPage({
       <div className="flex-1 overflow-y-auto pb-8">
         <TbExpressMap phase={phase} etaTitle={eta.title} etaSub={eta.sub} addrDetail={o.address?.detail} originCity={originCity} destCity={destCity} phaseFrac={phaseFrac} />
         {/* 白卡（压住地图底部圆角） */}
-        <div className="relative z-10 -mt-4 rounded-t-2xl bg-white px-4 pb-3 pt-4">
+        <div className="relative z-10 -mt-4 rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 pb-3 pt-4">
           {/* 快递公司行 */}
           <div className="flex items-center gap-2">
             <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#1677FF]/10 text-[11px] font-bold text-[#1677FF]">{co.slice(0, 1)}</span>
@@ -5638,7 +5638,7 @@ function RateSheet({ order, uid, onClose, onToast }: { order: TbOrder; uid: stri
   const [tags, setTags] = useState<string[]>([]);
   return (
     <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={onClose}>
-      <div className="rounded-t-2xl bg-white p-4 pb-8" onClick={(e) => e.stopPropagation()}>
+      <div className="rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 p-4 pb-8" onClick={(e) => e.stopPropagation()}>
         <div className="text-center text-[16px] font-semibold text-black/85">评价商品</div>
         <div className="mt-3 flex items-center gap-2">
           <span className="text-[13px] text-black/50">整体评分</span>
@@ -6074,13 +6074,13 @@ function MePage({
     </div>
     {/* 商品图片样式选择（第六十六轮：从主题 App 迁出的入口弹层；与美团共用同一全局样式） */}
     {goodsStyleOpen ? <GoodsStyleSheet accent="#FF5000" onClose={() => setGoodsStyleOpen(false)} /> : null}
-    {/* 送达速度毛玻璃弹窗（第四十一轮：全局共享设置，淘宝/美团订单统一跟随） */}
-    {speedOpen ? <DeliverySpeedSheet accent="#FF5000" onClose={() => setSpeedOpen(false)} onToast={onToast} /> : null}
+    {/* 送达速度毛玻璃弹窗（第四十二轮：淘宝独立小时级三档 30分钟-1小时/1-2小时/3-4小时，与美团分钟级互不影响） */}
+    {speedOpen ? <DeliverySpeedSheet scope="taobao" accent="#FF5000" onClose={() => setSpeedOpen(false)} onToast={onToast} /> : null}
     {/* 运输快递员选择（用户反馈：账户余额位改为快递员；底部弹层内置 9 位快递员，
         选中后用于淘宝物流地图巡航；默认运输车；立体投影展示） */}
     {courierOpen ? (
       <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45" onClick={() => setCourierOpen(false)}>
-        <div className="rounded-t-2xl bg-white [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()} data-testid="courier-sheet">
+        <div className="rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 [animation:quick-in-up_.26s_cubic-bezier(0.32,0.72,0,1)_both]" onClick={(e) => e.stopPropagation()} data-testid="courier-sheet">
           <div className="relative flex items-center justify-center pb-3 pt-5">
             <span className="text-[17px] font-bold text-black/90">选择运输快递员</span>
             <button type="button" aria-label="关闭" onClick={() => setCourierOpen(false)} className="absolute right-4 top-5 grid h-7 w-7 place-items-center active:opacity-60">
@@ -6216,7 +6216,7 @@ function MsgsPage({
     // 需求（第八轮）：消息界面白色简洁风（截图2），消息 tab 根页面无返回键
     <div className="flex h-full flex-col bg-white">
       {/* 大标题头（消息 + 清除未读 + 搜索/通讯录/加号） */}
-      <div className="sticky top-0 z-30 bg-white px-4 pb-2 pt-[56px]">
+      <div className="sticky top-0 z-30 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 pb-2 pt-[56px]">
         <div className="flex items-center gap-2">
           <span className="text-[27px] font-bold leading-none tracking-tight text-black/92">消息</span>
           <button
@@ -6748,7 +6748,7 @@ function AddressEditPage({ uid, editing, onBack, onToast }: { uid: string; editi
       {/* 删除确认弹层 */}
       {delOpen ? (
         <div className="absolute inset-0 z-50 grid place-items-center bg-black/45 px-10" onClick={() => setDelOpen(false)}>
-          <div className="w-full max-w-[280px] rounded-2xl bg-white p-5" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-[280px] rounded-2xl bg-white/85 backdrop-blur-2xl backdrop-saturate-150 p-5" onClick={(e) => e.stopPropagation()}>
             <div className="text-center text-[16px] font-semibold text-black/85">删除地址</div>
             <div className="mt-2 text-center text-[13px] leading-5 text-black/50">确定删除「{editing?.name}」的地址吗？删除后不可恢复。</div>
             <div className="mt-4 grid grid-cols-2 gap-3">
@@ -7340,7 +7340,7 @@ function CouponsPage({ uid, onBack, onToast }: { uid: string; onBack: () => void
   return (
     <div className="flex h-full flex-col bg-[#f4f4f4]">
       <TopBar title="我的优惠券" onBack={onBack} />
-      <div className="sticky top-0 z-30 flex gap-6 bg-white px-4 pb-2">
+      <div className="sticky top-0 z-30 flex gap-6 bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 pb-2">
         {(['ok', 'used'] as const).map((t) => (
           <button key={t} type="button" onClick={() => setTab(t)} className={`relative pb-1.5 text-[15px] ${tab === t ? 'font-semibold text-[#FF5000]' : 'text-black/55'}`}>
             {t === 'ok' ? '未使用' : '已使用'}
@@ -7598,52 +7598,52 @@ function SettingsPage({ session, onBack, onToast, onLogout }: { session: TbSessi
 type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'tradeLogistics' | 'settings' | 'msgs' | 'chat' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill' | 'ticketDetail' | 'createOrder' | 'manageProducts';
 type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 
-/** 底部导航（首页/消息/购物车/我的淘宝） */
+/** 底部导航（首页/消息/购物车/我的淘宝）——第四十二轮改「毛玻璃胶囊」悬浮条
+ *  （bg-white/80 + backdrop-blur-2xl + 白高光描边圆角胶囊；选中项橙底 pill 高亮） */
 function BottomTabBar({ active, onTab, cartCount, msgCount }: { active: TbTab; onTab: (t: TbTab) => void; cartCount: number; msgCount: number }) {
   return (
-    <div className="absolute inset-x-0 bottom-0 z-40 flex items-stretch border-t border-black/[0.05] bg-white/95 pb-[max(12px,env(safe-area-inset-bottom))] pt-0.5 backdrop-blur-lg">
-      {/* 需求（第十轮）：底部 tab 上下变窄一点（pt-1.5→pt-0.5、pb-5→pb-3、行距/内边距收紧）；
-          本轮：固定高 53px（=1px 边线+2+图标 23+文字 15+12），购物车结算栏按此对齐消除底部空隙；
-          第六十八轮：pb-3→max(12px,safe-area)——移动端安全区设备深色 tab 底部延伸到指示条之下 */}
-      {/* 首页（active：橙色淘 logo 圆，截图1） */}
-      <button type="button" onClick={() => onTab('home')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
-        {active === 'home' ? (
-          <TbLogoMark size={23} />
-        ) : (
-          <HomeIcon className="h-[23px] w-[23px] text-black/60" strokeWidth={1.9} />
-        )}
-        <span className={`text-[10px] ${active === 'home' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>首页</span>
-      </button>
-      {/* 视频（截图2：圆角方播放） */}
-      <button type="button" onClick={() => onTab('video')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
-        <TbVideoTabIcon active={active === 'video'} />
-        <span className={`text-[10px] ${active === 'video' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>视频</span>
-      </button>
-      {/* 消息（截图1/2：气泡三点图标；active 橙色填充白点） */}
-      <button type="button" onClick={() => onTab('msgs')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
-        <span className="relative">
-          <TbMsgTabIcon active={active === 'msgs'} />
-          {msgCount > 0 ? (
-            <span className="absolute -right-2 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#FF4400] px-1 text-[10px] font-bold text-white">{msgCount > 99 ? '99+' : msgCount}</span>
-          ) : null}
-        </span>
-        <span className={`text-[10px] ${active === 'msgs' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>消息</span>
-      </button>
-      {/* 购物车 */}
-      <button type="button" onClick={() => onTab('cart')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
-        <span className="relative">
-          <ShoppingCart className={`h-[23px] w-[23px] ${active === 'cart' ? 'text-[#FF5000]' : 'text-black/60'}`} strokeWidth={active === 'cart' ? 2.3 : 1.9} />
-          {cartCount > 0 ? (
-            <span className="absolute -right-2 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#FF4400] px-1 text-[10px] font-bold text-white">{cartCount > 99 ? '99+' : cartCount}</span>
-          ) : null}
-        </span>
-        <span className={`text-[10px] ${active === 'cart' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>购物车</span>
-      </button>
-      {/* 我的淘宝（笑脸，截图2） */}
-      <button type="button" onClick={() => onTab('me')} className="relative flex flex-1 flex-col items-center gap-0 py-0 active:opacity-60">
-        <TbMeTabIcon active={active === 'me'} />
-        <span className={`text-[10px] ${active === 'me' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>我的淘宝</span>
-      </button>
+    <div className="absolute inset-x-0 bottom-0 z-40 px-4 pb-[max(8px,env(safe-area-inset-bottom))] pt-1.5">
+      <div className="flex items-center rounded-[26px] border border-white/60 bg-white/80 py-[6px] shadow-[0_10px_36px_rgba(0,0,0,0.16)] backdrop-blur-2xl backdrop-saturate-150">
+        {/* 首页（active：橙色淘 logo 圆 + 橙 pill，截图1） */}
+        <button type="button" onClick={() => onTab('home')} className={`relative flex flex-1 flex-col items-center gap-0 rounded-full py-[3px] active:opacity-60 ${active === 'home' ? 'bg-[#FF5000]/10' : ''}`}>
+          {active === 'home' ? (
+            <TbLogoMark size={23} />
+          ) : (
+            <HomeIcon className="h-[23px] w-[23px] text-black/60" strokeWidth={1.9} />
+          )}
+          <span className={`text-[10px] ${active === 'home' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>首页</span>
+        </button>
+        {/* 视频（截图2：圆角方播放） */}
+        <button type="button" onClick={() => onTab('video')} className={`relative flex flex-1 flex-col items-center gap-0 rounded-full py-[3px] active:opacity-60 ${active === 'video' ? 'bg-[#FF5000]/10' : ''}`}>
+          <TbVideoTabIcon active={active === 'video'} />
+          <span className={`text-[10px] ${active === 'video' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>视频</span>
+        </button>
+        {/* 消息（截图1/2：气泡三点图标；active 橙色填充白点） */}
+        <button type="button" onClick={() => onTab('msgs')} className={`relative flex flex-1 flex-col items-center gap-0 rounded-full py-[3px] active:opacity-60 ${active === 'msgs' ? 'bg-[#FF5000]/10' : ''}`}>
+          <span className="relative">
+            <TbMsgTabIcon active={active === 'msgs'} />
+            {msgCount > 0 ? (
+              <span className="absolute -right-2 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#FF4400] px-1 text-[10px] font-bold text-white">{msgCount > 99 ? '99+' : msgCount}</span>
+            ) : null}
+          </span>
+          <span className={`text-[10px] ${active === 'msgs' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>消息</span>
+        </button>
+        {/* 购物车 */}
+        <button type="button" onClick={() => onTab('cart')} className={`relative flex flex-1 flex-col items-center gap-0 rounded-full py-[3px] active:opacity-60 ${active === 'cart' ? 'bg-[#FF5000]/10' : ''}`}>
+          <span className="relative">
+            <ShoppingCart className={`h-[23px] w-[23px] ${active === 'cart' ? 'text-[#FF5000]' : 'text-black/60'}`} strokeWidth={active === 'cart' ? 2.3 : 1.9} />
+            {cartCount > 0 ? (
+              <span className="absolute -right-2 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[#FF4400] px-1 text-[10px] font-bold text-white">{cartCount > 99 ? '99+' : cartCount}</span>
+            ) : null}
+          </span>
+          <span className={`text-[10px] ${active === 'cart' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>购物车</span>
+        </button>
+        {/* 我的淘宝（笑脸，截图2） */}
+        <button type="button" onClick={() => onTab('me')} className={`relative flex flex-1 flex-col items-center gap-0 rounded-full py-[3px] active:opacity-60 ${active === 'me' ? 'bg-[#FF5000]/10' : ''}`}>
+          <TbMeTabIcon active={active === 'me'} />
+          <span className={`text-[10px] ${active === 'me' ? 'font-medium text-[#FF5000]' : 'text-black/45'}`}>我的淘宝</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -7654,7 +7654,7 @@ function AddrPickerSheet({ uid, onClose, onManage }: { uid: string; onClose: () 
   const curId = tbCurAddrId(uid);
   return (
     <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={onClose}>
-      <div className="max-h-[70%] overflow-y-auto rounded-t-2xl bg-white pb-8" onClick={(e) => e.stopPropagation()}>
+      <div className="max-h-[70%] overflow-y-auto rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 pb-8" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 pb-2 pt-4">
           <span className="text-[16px] font-semibold text-black/85">选择收货地址</span>
           <button type="button" aria-label="关闭" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-full bg-black/[0.04]">

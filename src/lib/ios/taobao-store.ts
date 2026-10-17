@@ -11,7 +11,7 @@
  * - 支付不在这里：taobao-pay.ts 动态 import 微信/QQ 钱包模块（支付复用现有 QQ、微信逻辑）。
  */
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
-import { DS_RANGE, dsDesc, dsGet, dsMinutesFor, dsSet } from './delivery-speed';
+import { DS_RANGES, dsDesc, dsGet, dsMinutesFor, dsSet } from './delivery-speed';
 import { accLs, getActiveAccountFor } from './accounts';
 import type { OrderCustomMeta } from './order-custom';
 import {
@@ -628,47 +628,42 @@ export function tbArrivedAtStation(o: TbOrder | null | undefined): boolean {
 export const TB_PAY_TTL = 30 * 60_000; // 待付款 30min 超时自动取消
 export const TB_TRACK_NODES = ['包裹已由商家揽收', '运输中：包裹已到达【杭州转运中心】', '派送中：快递员正在为您派送', '包裹已放入菜鸟驿站，请凭取件码领取'];
 
-/** 送达速度（第四十一轮：升级为全局分钟级——
- *  快的 5-15 分钟送达、正常 15-30 分钟、慢的 30-60 分钟，另支持自定义区间；
- *  存储迁到全局共享模块 delivery-speed.ts（与美团同一份设置），
- *  选择器改为「我的淘宝 › 送达速度」行点击弹毛玻璃弹窗；
+/** 送达速度（第四十二轮：淘宝独立小时级——
+ *  快的 30 分钟-1 小时送达、正常 1-2 小时、慢的 3-4 小时，另支持自定义区间；
+ *  存储在 delivery-speed.ts 按 App 分键（delivery-speed:taobao，与美团互不影响），
+ *  选择器为「我的淘宝 › 送达速度」行点击弹毛玻璃弹窗；
  *  全店订单（新单/在途单/生成历史单）统一跟随） */
 export type TbDeliverySpeed = 'fast' | 'normal' | 'slow' | 'custom';
 export const TB_SPEED_ORDER: TbDeliverySpeed[] = ['fast', 'normal', 'slow', 'custom'];
 export const TB_SPEED_LABEL: Record<TbDeliverySpeed, string> = { fast: '快', normal: '正常', slow: '慢', custom: '自定义' };
-export const TB_SPEED_DESC: Record<Exclude<TbDeliverySpeed, 'custom'>, string> = {
-  fast: '5-15分钟送达',
-  normal: '15-30分钟送达',
-  slow: '30-60分钟送达',
-};
 
-/** 读送达速度档位（全局共享设置，uid 参数保留兼容旧调用点） */
+/** 读送达速度档位（淘宝独立设置，uid 参数保留兼容旧调用点） */
 export function tbGetDeliverySpeed(_uid: string): TbDeliverySpeed {
-  return dsGet().preset;
+  return dsGet('taobao').preset;
 }
 
-/** 当前速度的动态文案（custom 时显示自定义区间） */
+/** 当前速度的动态文案（如「30分钟-1小时送达」，custom 时显示自定义区间） */
 export function tbSpeedDescText(): string {
-  return dsDesc();
+  return dsDesc('taobao');
 }
 
-/** 兼容旧签名：写三档档位（custom 请直接用 delivery-speed.ts 的 dsSet） */
+/** 兼容旧签名：写三档档位（custom 请直接用 delivery-speed.ts 的 dsSet('taobao', …)） */
 export function tbSetDeliverySpeed(_uid: string, speed: 'fast' | 'normal' | 'slow'): void {
-  const r = DS_RANGE[speed];
-  dsSet({ preset: speed, min: r.min, max: r.max });
+  const r = DS_RANGES.taobao[speed];
+  dsSet('taobao', { preset: speed, min: r.min, max: r.max });
 }
 
-/** 速度 → 时间参数（全真实时钟，第四十一轮改分钟级窗口 + 自定义区间）：
- *  total = 付款→送达总时长（在当前速度区间内按订单哈希抖动，跟随全局送达速度）；
- *  shipDelay = 付款→发货（按总时长等比 12%，夹在 1~15 分钟）；
+/** 速度 → 时间参数（全真实时钟，第四十二轮改淘宝小时级窗口 + 自定义区间）：
+ *  total = 付款→送达总时长（在当前速度区间内按订单哈希抖动，跟随淘宝送达速度）；
+ *  shipDelay = 付款→发货（按总时长等比 12%，夹在 2 分钟~40 分钟，小时级下也能先发货）；
  *  trackStep = 相邻物流节点间隔（4 节点走完即送达） */
 export function tbDeliveryTiming(
   _uid: string,
   seed: string
 ): { totalMs: number; shipDelayMs: number; trackStepMs: number } {
-  const totalMs = dsMinutesFor(seed) * 60_000;
-  const shipDelayMs = Math.min(15 * 60_000, Math.max(60_000, Math.round(totalMs * 0.12)));
-  const trackStepMs = Math.max(20_000, Math.round((totalMs - shipDelayMs) / TB_TRACK_NODES.length));
+  const totalMs = dsMinutesFor(seed, 'taobao') * 60_000;
+  const shipDelayMs = Math.min(40 * 60_000, Math.max(2 * 60_000, Math.round(totalMs * 0.12)));
+  const trackStepMs = Math.max(30_000, Math.round((totalMs - shipDelayMs) / TB_TRACK_NODES.length));
   return { totalMs, shipDelayMs, trackStepMs };
 }
 

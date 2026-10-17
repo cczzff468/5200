@@ -634,10 +634,10 @@ export const PAY_TIMEOUT_MS = 15 * 60_000;
 /**
  * 按订单号（种子）在当前送达速度区间内确定性取分钟：
  * 支付页 ETA、状态机送达时刻、详情页承诺保持一致；
- * 第四十一轮起跟随全局「送达速度」设置（快 5-15 / 正常 15-30 / 慢 30-60 / 自定义区间，
- * 美团「我的 › 送达速度」与淘宝端共用，改后新单立即生效）。
+ * 第四十二轮起跟随美团独立「送达速度」设置（快 5-15 / 正常 15-30 / 慢 30-60 / 自定义区间，
+ * 美团「我的 › 送达速度」毛玻璃弹窗改后新单立即生效；与淘宝小时级设置互不影响）。
  */
-export const mtDeliveryMinutesOf = (orderId: string): number => dsMinutesFor(orderId);
+export const mtDeliveryMinutesOf = (orderId: string): number => dsMinutesFor(orderId, 'meituan');
 
 /** 配送总时长（毫秒） */
 const deliveryMsOf = (o: { id: string }): number => mtDeliveryMinutesOf(o.id) * 60_000;
