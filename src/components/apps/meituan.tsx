@@ -88,6 +88,7 @@ import {
   Plane,
   Orbit,
   PackagePlus,
+  PackageSearch,
   Rabbit,
   Receipt,
   RefreshCw,
@@ -120,6 +121,7 @@ import { ISLAND_NAV_EVENT, takeNotifyNavigation } from '@/lib/ios/island-notify'
 import { LocalToast, useLocalToast } from './page-toast';
 import { FoodImg } from './mt-food-img';
 import { MtOrderCreatePage } from './mt-order-create';
+import { MtProductManagePage } from './mt-product-manage';
 import { OrderImgGenSheet, type ImgGenModelOption } from './order-img-gen';
 import { generateFreePhoto } from '@/lib/imggen';
 import type { ImgGenConfig } from '@/lib/ios/store';
@@ -272,7 +274,7 @@ import { listContacts, loginQQ, loginWechat } from '@/lib/ios/contacts-store';
 import { avatarFor, displayNameOf, isFriendIn, type ContactRecord } from '@/lib/contacts';
 import { MtProxyDetailPage } from './mt-proxy-detail';
 
-type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices' | 'merchantCenter' | 'merchantEdit' | 'shopManage' | 'createOrder';
+type Page = 'main' | 'search' | 'merchant' | 'orderDetail' | 'addresses' | 'addAddress' | 'about' | 'deal' | 'settings' | 'favorites' | 'history' | 'refundDetail' | 'coupons' | 'hotel' | 'fun' | 'movies' | 'travel' | 'shangou' | 'messages' | 'member' | 'couponCode' | 'wallet' | 'walletBalance' | 'walletCards' | 'walletBills' | 'walletPayPwd' | 'walletLoan' | 'walletCardQuota' | 'walletDrugFund' | 'invoices' | 'merchantCenter' | 'merchantEdit' | 'shopManage' | 'createOrder' | 'manageProducts';
 type Tab = 'home' | 'orders' | 'cart' | 'my';
 
 const MT_YELLOW = '#FFD100';
@@ -356,6 +358,7 @@ const GRID_ICONS: Record<string, LucideIcon> = {
   BookOpen,
   LayoutGrid,
   PackagePlus,
+  PackageSearch,
 };
 
 /** 菜品图（共享实现见 ./mt-food-img：内容匹配图全链有图 + 一次重试 + 加载期 shimmer） */
@@ -820,47 +823,33 @@ function DealListCard({ title, deals, onOpen }: { title: string; deals: MtDeal[]
   );
 }
 
-/** 外卖商家卡（瀑布流） */
-/** 店铺头像（第三十七轮：所有店铺统一「该用户正在营业」印章；生成覆盖后显示生成图） */
+/** 店铺头像（第三十七轮：所有店铺统一「该用户正在营业」印章；生成覆盖后显示生成图）
+ *  第三十八轮：仅保留给店铺详情页/列表行等「店铺身份」场景使用；首页商家卡封面改用商品图（见 MerchantCard）。 */
 function ShopAvatar({ m, className = '' }: { m: MtMerchant; className?: string }) {
   return <FoodImg src={mtShopAvatarOf(m.id)} emoji={m.emoji} className={className} />;
 }
 
-function MerchantCard({ m, onOpen, onDelete }: { m: MtMerchant; onOpen: () => void; onDelete?: () => void }) {
+/** 外卖商家卡（瀑布流）
+ *  第三十八轮：封面改为商品图片（本店菜单前 3 道菜的图/emoji 兜底，单菜=整幅商品图）——
+ *  不再显示店铺印章图（进入店铺详情页才显示店铺图）；去掉「自建」角标与右上角×（删除统一收口到管理商品页）。 */
+function MerchantCard({ m, onOpen }: { m: MtMerchant; onOpen: () => void }) {
+  const dishes = mtDishesOf(m).slice(0, 3);
   return (
     <button type="button" onClick={onOpen} className="relative mb-2 block w-full break-inside-avoid overflow-hidden rounded-xl bg-white text-left shadow-[0_1px_6px_rgba(0,0,0,0.04)] active:opacity-90">
-      <ShopAvatar m={m} className="h-[120px] w-full" />
+      {dishes.length > 0 ? (
+        <span className="flex h-[120px] w-full gap-[2px] bg-white">
+          {dishes.map((d) => (
+            <FoodImg key={d.id} src={d.img} emoji={d.emoji} className="h-full min-w-0 flex-1" />
+          ))}
+        </span>
+      ) : (
+        <FoodImg emoji={m.emoji} className="h-[120px] w-full" />
+      )}
       {m.mine && (
         <span className="absolute left-2 top-2 rounded-md bg-[#FFD100] px-1.5 py-0.5 text-[10px] font-bold text-black/85 shadow-sm" data-testid="merchant-mine-badge">
           我的小店
         </span>
       )}
-      {!m.mine && m.id.startsWith('mtc-shop-') && (
-        <span className="absolute left-2 top-2 rounded-md bg-[#FFD100] px-1.5 py-0.5 text-[10px] font-bold text-black/85 shadow-sm">
-          自建
-        </span>
-      )}
-      {onDelete ? (
-        <span
-          role="button"
-          tabIndex={0}
-          aria-label="删除商品"
-          data-testid={`mt-del-${m.name}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.stopPropagation();
-              onDelete();
-            }
-          }}
-          className="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center rounded-full bg-black/45 text-white active:bg-black/65"
-        >
-          <X className="h-3 w-3" strokeWidth={2.6} />
-        </span>
-      ) : null}
       <span className="block px-2.5 pb-2.5 pt-2">
         <span className="block truncate text-[14px] font-bold text-black/90">{m.name}</span>
         <span className="mt-1 flex items-center gap-1.5 text-[11px]">
@@ -1072,6 +1061,7 @@ function HomePage({
   onOpenChannel,
   onOpenMessages,
   onOpenCreateOrder,
+  onOpenManage,
   onScan,
   onToast,
 }: {
@@ -1081,8 +1071,10 @@ function HomePage({
   onOpenChannel: (c: 'hotel' | 'fun' | 'movies' | 'shangou' | 'travel') => void;
   onOpenMessages: () => void;
   onOpenSearch: (kw?: string) => void;
-  /** 宫格「创建订单」入口（自建订单入库） */
+  /** 宫格「创建商品」入口（自建订单入库） */
   onOpenCreateOrder: () => void;
+  /** 宫格「管理商品」入口（第三十八轮：编辑/删除自建商品） */
+  onOpenManage: () => void;
   onScan: () => void;
   onToast: (m: string) => void;
 }) {
@@ -1127,13 +1119,7 @@ function HomePage({
     mtRegisterCustomMerchants(mtLoadCustomShops(uid)); // 幂等恢复（进页/创建后均可安全重入）
     return mtCustomMerchantsAll().map((m) => ({ t: 'm' as const, m }));
   }, [uid, customTick]);
-  // 自建商品删除（第三十七轮：置顶商家卡右上角×）
-  const removeCustomShop = (m: MtMerchant) => {
-    mtSaveCustomShops(uid, mtLoadCustomShops(uid).filter((x) => x.id !== m.id));
-    mtUnregisterCustomMerchant(m.id);
-    window.dispatchEvent(new CustomEvent('mt-custom-products-changed'));
-    onToast('商品已删除');
-  };
+  // 第三十八轮：置顶商家卡右上角×已按需求删除，删除统一收口到「管理商品」页
   const genSeqRef = useRef(0); // 竞态丢弃：刷新/切分类期间旧响应作废
   const generatingRef = useRef(!homeFeedCache.ready);
   const loadingRef = useRef(false);
@@ -1336,9 +1322,14 @@ function HomePage({
   };
 
   const tapCat = (c: (typeof MT_HOME_GRID)[number][number]) => {
-    // 创建订单（自建订单入库，替代原「按摩足疗」占位）
+    // 创建商品（自建订单入库，替代原「按摩足疗」占位）
     if (c.filter === 'create') {
       onOpenCreateOrder();
+      return;
+    }
+    // 管理商品（第三十八轮：编辑/删除自建商品统一收口）
+    if (c.filter === 'manage') {
+      onOpenManage();
       return;
     }
     // 三大频道：酒店旅行 / 休闲玩乐 / 电影演出 → 独立频道页（AI 生成内容）
@@ -1475,11 +1466,9 @@ function HomePage({
       ) : (
         <>
           <div className="mt-2 columns-2 gap-2 px-2">
-            {/* 自建商品商家（第三十七轮）：永远置顶——与普通商家同卡混排，右上角×删除 */}
+            {/* 自建商品商家（第三十六轮）：永远置顶——与普通商家同卡混排（第三十八轮：封面=商品图，卡片无角标无×） */}
             {customFeed.map((it, i) =>
-              it.t === 'm' ? (
-                <MerchantCard key={`c-${it.m.id}-${i}`} m={it.m} onOpen={() => onOpenMerchant(it.m.id)} onDelete={() => removeCustomShop(it.m)} />
-              ) : null
+              it.t === 'm' ? <MerchantCard key={`c-${it.m.id}-${i}`} m={it.m} onOpen={() => onOpenMerchant(it.m.id)} /> : null
             )}
             {filter === null && <DealListCard title={listData.title ?? MT_HOME_LIST.title} deals={listData.deals} onOpen={onOpenDeal} />}
             {feed.map((it, i) =>
@@ -12222,6 +12211,8 @@ export default function MeituanApp() {
   const [subReturn, setSubReturn] = useState<'main' | 'settings'>('main');
   /** 搜索页预填词（首页热词点击带入） */
   const [searchSeed, setSearchSeed] = useState('');
+  /** 第三十八轮：编辑中的自建商品（管理商品页→编辑→创建商品页预填原位更新；null = 新建） */
+  const [editShop, setEditShop] = useState<MtMerchant | null>(null);
   /** 评价弹层目标订单 */
   const [rateFor, setRateFor] = useState<MtOrder | null>(null);
   /** 找人代付详情（订单列表「代付详情」入口；只读） */
@@ -12459,7 +12450,11 @@ export default function MeituanApp() {
                 }}
                 onOpenChannel={(c) => setPage(c)}
                 onOpenMessages={() => setPage('messages')}
-                onOpenCreateOrder={() => setPage('createOrder')}
+                onOpenCreateOrder={() => {
+                  setEditShop(null);
+                  setPage('createOrder');
+                }}
+                onOpenManage={() => setPage('manageProducts')}
                 onScan={() => openScan('meituan')}
                 onToast={showToast}
               />
@@ -12531,14 +12526,32 @@ export default function MeituanApp() {
         </div>
       )}
       {page === 'search' && <SearchPage seedKw={searchSeed} onBack={() => setPage('main')} onOpenMerchant={openMerchant} />}
-      {page === 'createOrder' && session && (
-        <MtOrderCreatePage
+      {page === 'manageProducts' && session && (
+        <MtProductManagePage
           session={session}
           onBack={() => setPage('main')}
+          onEdit={(m) => {
+            setEditShop(m);
+            setPage('createOrder');
+          }}
+          onToast={showToast}
+        />
+      )}
+      {page === 'createOrder' && session && (
+        <MtOrderCreatePage
+          key={editShop?.id ?? 'new'}
+          session={session}
+          editing={editShop}
+          onBack={() => setPage(editShop ? 'manageProducts' : 'main')}
           onSaved={() => {
-            // 保存成功 = 商品已上首页「我的商品」区，回首页立即可见（不再直接进订单）
-            setTab('home');
-            setPage('main');
+            // 保存成功：新建 → 回首页立即可见；编辑 → 回管理商品页
+            if (editShop) {
+              setEditShop(null);
+              setPage('manageProducts');
+            } else {
+              setTab('home');
+              setPage('main');
+            }
           }}
           onToast={showToast}
         />

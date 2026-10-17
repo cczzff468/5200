@@ -1,12 +1,13 @@
 'use client';
 
 /**
- * 淘宝「创建订单」页（首页运营位入口，替代领淘金币/阿里拍卖）——创建订单就是创建商品（第三十六轮）：
+ * 淘宝「创建订单」页（首页运营位入口）——创建订单就是创建商品（第三十六轮）：
  * 任意类型商品都能创建（服饰/数码/奶茶/充值…自由填写）——
  * 图片可上传（相册文件选择，压缩落库）或用「设置 › 图像生成」配置的模型按自定义提示词生成；
  * 可填 类型 / 优惠券（名称+金额，下单自动抵扣） / 规格选项组（手机内存、颜色、尺码、小料等，买家可自行选择）；
- * 保存 = 创建「商品」落库（tb-custom-products:<uid>，商品+自建店铺注册进运行时注册表）→ 首页「我的商品」区展示；
+ * 保存 = 创建「商品」落库（tb-custom-products:<uid>，商品+自建店铺注册进运行时注册表）→ 首页商品流置顶展示；
  * 点首页商品走 商品详情→SKU→购物车/立即购买→结算 原生链路，真实下单后才生成订单。
+ * 第三十八轮：支持编辑模式（管理订单页入口）——预填表单、保存原位更新（商品/店铺 id 不变，历史订单引用不失效）。
  */
 
 import { useRef, useState } from 'react';
@@ -15,6 +16,7 @@ import { compressImageSrc, generateFreePhoto } from '@/lib/imggen';
 import type { ImgGenConfig } from '@/lib/ios/store';
 import type { OrderCustomMeta, OrderCustomOptionGroup } from '@/lib/ios/order-custom';
 import type { TbProduct, TbShop } from '@/lib/ios/taobao-data';
+import { tbRegisterCustomProduct } from '@/lib/ios/taobao-data';
 import { tbLoadCustomProducts, tbSaveCustomProducts, type TbCustomEntry } from '@/lib/ios/taobao-store';
 import { OrderImgGenSheet } from './order-img-gen';
 
@@ -48,28 +50,51 @@ function tagOfType(t: string): string {
 
 const fmtMoney = (n: number) => (Math.round(n * 100) / 100).toFixed(2);
 
+/** 编辑模式预填：从自建商品条目还原表单初始值（规格组优先用 custom 快照，其次映射 skus） */
+function prefillFrom(editing: TbCustomEntry) {
+  const { p } = editing;
+  const groups: OrderCustomOptionGroup[] =
+    p.custom?.optionGroups?.map((g) => ({ name: g.name, values: [...g.values] })) ??
+    p.skus?.map((g) => ({ name: g.name, values: g.options.map((o) => o.label) })) ??
+    [];
+  return {
+    img: p.img ?? null,
+    itemName: p.title,
+    type: p.custom?.type ?? '',
+    shopName: editing.shop.name,
+    price: String(p.price),
+    couponName: p.custom?.couponLabel ?? '',
+    couponAmt: p.coupon ? String(p.coupon.amount) : '',
+    groups,
+  };
+}
+
 export function TbOrderCreatePage({
   uid,
   onBack,
   onSaved,
   onToast,
+  editing,
 }: {
   uid: string;
   onBack: () => void;
-  /** 保存成功（商品已上首页「我的商品」区） */
+  /** 保存成功（新商品上首页 / 编辑后回管理页） */
   onSaved: () => void;
   onToast: (m: string) => void;
+  /** 编辑模式：传入要编辑的自建商品条目（管理订单页入口）；不传 = 新建 */
+  editing?: TbCustomEntry | null;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
-  const [img, setImg] = useState<string | null>(null);
+  const pre = editing ? prefillFrom(editing) : null;
+  const [img, setImg] = useState<string | null>(pre?.img ?? null);
   const [imgBusy, setImgBusy] = useState(false);
-  const [itemName, setItemName] = useState('');
-  const [type, setType] = useState('');
-  const [shopName, setShopName] = useState('');
-  const [price, setPrice] = useState('');
-  const [couponName, setCouponName] = useState('');
-  const [couponAmt, setCouponAmt] = useState('');
-  const [groups, setGroups] = useState<OrderCustomOptionGroup[]>([]);
+  const [itemName, setItemName] = useState(pre?.itemName ?? '');
+  const [type, setType] = useState(pre?.type ?? '');
+  const [shopName, setShopName] = useState(pre?.shopName ?? '');
+  const [price, setPrice] = useState(pre?.price ?? '');
+  const [couponName, setCouponName] = useState(pre?.couponName ?? '');
+  const [couponAmt, setCouponAmt] = useState(pre?.couponAmt ?? '');
+  const [groups, setGroups] = useState<OrderCustomOptionGroup[]>(pre?.groups ?? []);
   const [genOpen, setGenOpen] = useState(false);
   const [genBusy, setGenBusy] = useState(false);
   const [genErr, setGenErr] = useState('');
@@ -134,6 +159,36 @@ export function TbOrderCreatePage({
       onToast('请填写正确的单价');
       return;
     }
+    // 编辑模式：沿用原商品/店铺 id（历史订单、购物车引用不失效），仅更新字段
+    if (editing) {
+      const discount = Math.round(cut * 100) / 100;
+      const okGroups = groups.filter((g) => g.name.trim() && g.values.length > 0);
+      const custom: OrderCustomMeta = {
+        ...(type.trim() ? { type: type.trim() } : {}),
+        ...(couponName.trim() && discount > 0 ? { couponLabel: couponName.trim() } : {}),
+        ...(okGroups.length > 0 ? { optionGroups: okGroups } : {}),
+      };
+      const product: TbProduct = {
+        ...editing.p,
+        title: name,
+        price: Math.round(p * 100) / 100,
+        cat: catOfType(type.trim() || '其他'),
+        tag: tagOfType(type.trim() || '其他'),
+        skus: okGroups.map((g) => ({ name: g.name.trim(), options: g.values.map((v) => ({ label: v })) })),
+        ...(couponName.trim() && discount > 0 ? { coupon: { amount: discount, min: 0 } } : { coupon: undefined }),
+        ...(img ? { img } : { img: undefined }),
+        ...(Object.keys(custom).length > 0 ? { custom } : { custom: undefined }),
+      };
+      const shopObj: TbShop = { ...editing.shop, name: shop };
+      // 原位替换落库 + 重注册（同 id 覆盖）→ 首页/详情/管理页即时生效
+      const list = tbLoadCustomProducts(uid).map((e) => (e.p.id === editing.p.id ? { p: product, shop: shopObj } : e));
+      tbSaveCustomProducts(uid, list);
+      tbRegisterCustomProduct(product, shopObj);
+      window.dispatchEvent(new CustomEvent('tb-custom-products-changed'));
+      onToast('商品已更新');
+      onSaved();
+      return;
+    }
     const now = Date.now();
     const r = Math.floor(Math.random() * 1e4).toString(36);
     const discount = Math.round(cut * 100) / 100;
@@ -187,8 +242,8 @@ export function TbOrderCreatePage({
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
-          <span className="text-[17px] font-bold text-black/90">创建订单</span>
-          <span className="ml-1.5 rounded-full bg-[#FFF1E6] px-2 py-0.5 text-[11px] font-medium text-[#FF6A1E]">创建商品 · 上首页</span>
+          <span className="text-[17px] font-bold text-black/90">{editing ? '编辑商品' : '创建订单'}</span>
+          <span className="ml-1.5 rounded-full bg-[#FFF1E6] px-2 py-0.5 text-[11px] font-medium text-[#FF6A1E]">{editing ? '修改后原位更新' : '创建商品 · 上首页'}</span>
         </div>
       </div>
 

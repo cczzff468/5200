@@ -335,7 +335,8 @@ export const MT_HOME_GRID: MtGridCat[][] = [
     { id: 'dianying', name: '电影演出', icon: 'Clapperboard', filter: 'dianying' },
     { id: 'shangou', name: '闪购', icon: 'Zap', filter: 'shangou' },
     { id: 'jipiao', name: '机票火车票', icon: 'Plane', filter: 'travel' },
-    { id: 'create', name: '创建订单', icon: 'PackagePlus', filter: 'create' },
+    { id: 'create', name: '创建商品', icon: 'PackagePlus', filter: 'create' },
+    { id: 'manage', name: '管理商品', icon: 'PackageSearch', filter: 'manage' },
   ],
   [
     { id: 'paotui', name: '跑腿', icon: 'Rabbit', filter: null },
@@ -1562,7 +1563,9 @@ function productImgMap(): Record<string, string> {
   return productImgCache;
 }
 
-/** 在全部商家（AI 注册表 + 预置种子）里找到菜品并改图 */
+/** 在全部商家（AI 注册表 + 预置种子）+ AI 自主补菜注册表里找到菜品并改图。
+ *  AI 补菜（mt-ai-dish-registry）必须覆盖：否则给补菜生成的图只在当次会话生效，
+ *  刷新后补菜对象由注册表重建、图丢失（生成的图片必须永久保存，除非重新生成）。 */
 function mutateDishImg(dishId: string, src: string): void {
   for (const m of AI_MERCHANTS.values()) {
     for (const sec of m.sections) {
@@ -1580,6 +1583,13 @@ function mutateDishImg(dishId: string, src: string): void {
         d.img = src;
         return;
       }
+    }
+  }
+  for (const arr of ensureAiDishRegistry().values()) {
+    const d = arr.find((x) => x.id === dishId);
+    if (d) {
+      d.img = src;
+      return;
     }
   }
 }
@@ -1601,6 +1611,19 @@ export function mtSetProductImg(dishId: string, src: string): void {
 export function mtApplyProductImgOverrides(): void {
   const map = productImgMap();
   for (const [dishId, src] of Object.entries(map)) mutateDishImg(dishId, src);
+}
+
+/** 删除商品图覆盖（自建商品删除时调用：商品没了覆盖不再有意义，防 kv 无限膨胀） */
+export function mtDeleteProductImg(dishId: string): void {
+  const map = productImgMap();
+  if (!(dishId in map)) return;
+  delete map[dishId];
+  productImgCache = map;
+  try {
+    kvSet(PRODUCT_IMG_KEY, map);
+  } catch {
+    /* 存储不可用忽略 */
+  }
 }
 
 /** 按 id 查商家（AI 生成优先，种子数据兜底） */

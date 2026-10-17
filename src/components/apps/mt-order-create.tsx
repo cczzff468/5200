@@ -1,12 +1,13 @@
 'use client';
 
 /**
- * 美团「创建订单」页（首页宫格入口）——创建订单就是创建商品（第三十六轮）：
+ * 美团「创建商品」页（首页宫格入口）——创建订单就是创建商品（第三十六轮，第三十八轮改名）：
  * 任意类型商品都能创建（外卖/奶茶/数码/充值/电影票…自由填写）——
  * 图片可上传（相册文件选择，压缩落库）或用「设置 › 图像生成」配置的模型按自定义提示词生成；
  * 可填 类型 / 优惠券（名称+金额，下单自动抵扣的菜品券） / 规格选项组（小菜、奶茶小料、手机内存等，买家可自行选择）；
- * 保存 = 创建「商品」落库（mt-custom-shops:<uid> 自建商家+单菜品）→ 首页「我的商品」区展示；
+ * 保存 = 创建「商品」落库（mt-custom-shops:<uid> 自建商家+单菜品）→ 首页商品流置顶展示；
  * 点首页商品走 商家页→购物车→结算 原生链路，真实下单后才生成订单。
+ * 第三十八轮：支持编辑模式（管理商品页入口）——预填表单、保存原位更新（商家/菜品 id 不变，历史订单引用不失效）。
  */
 
 import { useRef, useState } from 'react';
@@ -26,32 +27,57 @@ const GROUP_CHIPS = ['小菜', '奶茶小料', '手机内存', '杯型', '温度
 
 const fmtMoney = (n: number) => (Math.round(n * 100) / 100).toFixed(2);
 
+/** 编辑模式预填：从自建商家对象还原表单初始值（规格组优先用 custom 快照，其次映射 specs） */
+function prefillFrom(editing: MtMerchant) {
+  const dish = editing.sections[0]?.dishes[0];
+  const typeFromNotice = editing.notice?.startsWith('自建商品 · ') ? editing.notice.slice('自建商品 · '.length) : '';
+  const groups: OrderCustomOptionGroup[] =
+    dish?.custom?.optionGroups?.map((g) => ({ name: g.name, values: [...g.values] })) ??
+    dish?.specs?.map((g) => ({ name: g.name, values: g.options.map((o) => o.label) })) ??
+    [];
+  return {
+    img: dish?.img ?? null,
+    itemName: dish?.name ?? '',
+    type: dish?.custom?.type || typeFromNotice,
+    shopName: editing.name,
+    price: dish ? String(dish.price) : '',
+    couponName: dish?.custom?.couponLabel ?? '',
+    couponAmt: dish?.coupon ? String(dish.coupon.amount) : '',
+    note: dish?.desc ?? '',
+    groups,
+  };
+}
+
 export function MtOrderCreatePage({
   session,
   onBack,
   onSaved,
   onToast,
+  editing,
 }: {
   session: MtSession;
   onBack: () => void;
-  /** 保存成功（商品已上首页「我的商品」区） */
+  /** 保存成功（新商品上首页 / 编辑后回管理页） */
   onSaved: () => void;
   onToast: (m: string) => void;
+  /** 编辑模式：传入要编辑的自建商品（管理商品页入口）；不传 = 新建 */
+  editing?: MtMerchant | null;
 }) {
   const uid = mtUidOf(session);
   const fileRef = useRef<HTMLInputElement>(null);
+  const pre = editing ? prefillFrom(editing) : null;
   // 图片（dataURL）
-  const [img, setImg] = useState<string | null>(null);
+  const [img, setImg] = useState<string | null>(pre?.img ?? null);
   const [imgBusy, setImgBusy] = useState(false);
   // 表单
-  const [itemName, setItemName] = useState('');
-  const [type, setType] = useState('');
-  const [shopName, setShopName] = useState('');
-  const [price, setPrice] = useState('');
-  const [couponName, setCouponName] = useState('');
-  const [couponAmt, setCouponAmt] = useState('');
-  const [note, setNote] = useState('');
-  const [groups, setGroups] = useState<OrderCustomOptionGroup[]>([]);
+  const [itemName, setItemName] = useState(pre?.itemName ?? '');
+  const [type, setType] = useState(pre?.type ?? '');
+  const [shopName, setShopName] = useState(pre?.shopName ?? '');
+  const [price, setPrice] = useState(pre?.price ?? '');
+  const [couponName, setCouponName] = useState(pre?.couponName ?? '');
+  const [couponAmt, setCouponAmt] = useState(pre?.couponAmt ?? '');
+  const [note, setNote] = useState(pre?.note ?? '');
+  const [groups, setGroups] = useState<OrderCustomOptionGroup[]>(pre?.groups ?? []);
   // 生图弹层
   const [genOpen, setGenOpen] = useState(false);
   const [genBusy, setGenBusy] = useState(false);
@@ -115,6 +141,54 @@ export function MtOrderCreatePage({
     }
     if (!Number.isFinite(p) || p <= 0) {
       onToast('请填写正确的单价');
+      return;
+    }
+    // 编辑模式：沿用原商家/菜品 id（历史订单、购物车引用不失效），仅更新字段
+    if (editing) {
+      const price2 = Math.round(p * 100) / 100;
+      const discount = Math.round(cut * 100) / 100;
+      const isMulti = (g: string) => /小菜|小料|配菜|加料|加购|配菜/.test(g);
+      const specs: MtDish['specs'] =
+        groups.length > 0
+          ? groups
+              .filter((g) => g.name.trim() && g.values.length > 0)
+              .map((g) => ({
+                name: g.name.trim(),
+                ...(isMulti(g.name) ? { multi: true, max: Math.max(1, g.values.length) } : {}),
+                options: g.values.map((v) => ({ label: v })),
+              }))
+          : undefined;
+      const custom: OrderCustomMeta = {
+        ...(type.trim() ? { type: type.trim() } : {}),
+        ...(couponName.trim() && discount > 0 ? { couponLabel: couponName.trim() } : {}),
+        ...(groups.length > 0 ? { optionGroups: groups.filter((g) => g.name.trim() && g.values.length > 0) } : {}),
+      };
+      const oldDish = editing.sections[0]?.dishes[0];
+      const dish: MtDish = {
+        id: oldDish?.id ?? `mtc-dish-${Date.now().toString(36)}`,
+        name,
+        price: price2,
+        emoji: '🛍️',
+        ...(img ? { img } : {}),
+        ...(note.trim() ? { desc: note.trim() } : {}),
+        monthSale: oldDish?.monthSale ?? 23,
+        ...(specs && specs.length > 0 ? { specs } : {}),
+        ...(couponName.trim() && discount > 0 ? { coupon: { name: couponName.trim(), amount: discount, min: 0 } } : {}),
+        ...(Object.keys(custom).length > 0 ? { custom } : {}),
+      };
+      const merchant: MtMerchant = {
+        ...editing,
+        name: shop,
+        ...(img ? { cover: img } : {}),
+        notice: type.trim() ? `自建商品 · ${type.trim()}` : '自建商品店铺',
+        sections: [{ cat: '我的商品', dishes: [dish] }],
+      };
+      // 原位替换落库 + 重注册（同 id 覆盖）→ 首页/商家页/管理页即时生效
+      mtSaveCustomShops(uid, mtLoadCustomShops(uid).map((m) => (m.id === editing.id ? merchant : m)));
+      mtRegisterCustomMerchant(merchant);
+      window.dispatchEvent(new CustomEvent('mt-custom-products-changed'));
+      onToast('商品已更新');
+      onSaved();
       return;
     }
     const now = Date.now();
@@ -189,8 +263,8 @@ export function MtOrderCreatePage({
           <button type="button" aria-label="返回" onClick={onBack} className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5">
             <ChevronLeft className="h-6 w-6 text-black/75" />
           </button>
-          <span className="text-[17px] font-bold text-black/90">创建订单</span>
-          <span className="ml-1.5 rounded-full bg-[#FFF3DC] px-2 py-0.5 text-[11px] font-medium text-[#B77900]">创建商品 · 上首页</span>
+          <span className="text-[17px] font-bold text-black/90">{editing ? '编辑商品' : '创建商品'}</span>
+          <span className="ml-1.5 rounded-full bg-[#FFF3DC] px-2 py-0.5 text-[11px] font-medium text-[#B77900]">{editing ? '修改后原位更新' : '创建商品 · 上首页'}</span>
         </div>
       </div>
 

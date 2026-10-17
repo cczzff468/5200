@@ -20208,3 +20208,23 @@ Work Log:
 Stage Summary:
 - 项目已在 /home/z/my-project 完整运行（Next.js 16 + Turbopack，端口 3000），git 工作区与 origin/main 关联，后续修改可直接 commit + push 回 GitHub
 - 待办：等待用户提出具体的功能修改/新增需求
+
+---
+Task ID: round-38
+Agent: 主协调者 (Z.ai Code)
+Task: 第三十八轮：自建商品卡去「自建」标签去右上角×；淘宝运营位创建订单后移+新增管理订单（管理自建商品）；美团宫格创建订单改名创建商品+新增管理商品；美团首页商家卡封面改商品图（详情页保留店铺图）；美团商品详情图生成入口确认+生成图片永久保存（覆盖层补齐 AI 补菜）
+
+Work Log:
+- 【去标签去×】淘宝 ProductCard 删 onDelete prop 与「自建」角标（promo 真实活动角标保留）；删 removeCustomProduct + 两处调用；美团 MerchantCard 删「自建」黄标与 onDelete ×；删 removeCustomShop（删除统一收口到管理页）
+- 【淘宝运营位】重排为 红包签到/淘宝秒杀/淘票票/飞猪/创建订单/管理订单（grid-cols-6 正好填满）；新增 TbManageIcon（深橙渐变+白色清单圆点行，与 TbCreateIcon 同家族）；onOpenPage union + TbPage 增加 'manageProducts'
+- 【美团宫格】MT_HOME_GRID「创建订单」→「创建商品」+ 新增「管理商品」（PackageSearch 图标，GRID_ICONS 补注册）；tapCat handle filter==='manage'；Page 类型 + HomePage onOpenManage 接线
+- 【管理页】新增 mt-product-manage.tsx（美团黄主题：列表行=图+名称+类型角标+店铺+价+券+规格摘要+编辑/删除，空状态引导去创建）与 tb-product-manage.tsx（淘宝橙主题，标题「管理订单」副标「管理自建的商品」）；删除时同步 tbDeleteProductImg/mtDeleteProductImg 清理 kv 残留覆盖
+- 【编辑模式】mt-order-create/tb-order-create 增加 editing prop：prefillFrom 还原表单（名称/类型/价/店铺/券/规格组，custom.optionGroups 优先、specs/skus 映射兜底）；保存走编辑分支——沿用原商家/菜品/商品/店铺 id（历史订单引用不失效）原位替换落库+重注册+广播；头部「编辑商品/修改后原位更新」；根组件 editShop/editEntry state + key 强制重挂 + 保存后回管理页
+- 【商家卡封面=商品图】MerchantCard 封面从 ShopAvatar 印章改为 mtDishesOf(m) 前 3 道菜 FoodImg 横排（单菜=整幅商品图，无菜=emoji 兜底）；ShopAvatar 保留给店铺详情页/列表行等店铺身份场景（详情页 欢迎光临背景+正在营业头像 不变）
+- 【生成图片永久保存】meituan-data mutateDishImg 补齐第三层查找：AI 自主补菜注册表（mt-ai-dish-registry）——此前给补菜生成的图 kv 有记录但补菜对象刷新后重建丢图；新增 mtDeleteProductImg/tbDeleteProductImg（删商品时清理）；AI 商家注册表本身持久化（mutate 后 dish.img 随 mtPersistAiRegistry 写穿 kv）+ 启动 mtRestoreAiRegistry 先于 mtApplyProductImgOverrides 的顺序已确认
+- 浏览器端到端实测（agent-browser 新 profile，注入 user 联系人 c-mt-tester → 美团/淘宝账密 mttest001/test123 登录）：①美团宫格 11 格=创建商品+管理商品 ✓；②首页商家卡封面全为 3 列菜品图（惠民超市/拾光咖啡/百信医药）✓；③创建商品（芋泥波波奶茶 ¥16）置顶第一位、无标签无×、封面=商品图 ✓；④管理商品页 共1件 + 编辑预填（名称/类型/价/店铺全还原）+ 改名「（大杯）」保存原位更新 ✓；⑤店铺详情页保留 欢迎光临背景+正在营业头像+公告 ✓；⑥菜品行点图弹「生成商品图片」弹层（提示词+模型选择+未配置引导）✓；⑦kv 注入 mt-product-imgs 覆盖 → 刷新 → 重开美团 → 卡封面 img.src=注入 dataURL（启动恢复 ✓）+ 商家页菜品行同图 ✓；⑧淘宝运营位 6 图标顺序 ✓；⑨管理订单页空状态/创建 iPad Pro ¥4999 置顶无标签无×（DOM 断言 hasZijian/hasX/hasPromoBadge 全 false）✓；⑩编辑改价 ¥4599 → 首页同步 ✓ → 删除回空状态 ✓；console 无错误
+- 校验：tsc 全量零错误；eslint 错误分布与 HEAD 基线完全一致（29 react-hooks/refs + 2 exhaustive-deps 全部为历史镜像代码），新增 4 文件（2 管理页+2 data 层）+ 2 创建页零新增报错
+
+Stage Summary:
+- 关键决策：①删除/编辑统一收口到管理页（首页卡片回归纯浏览形态）；②编辑沿用原 id 原位替换（订单/购物车跨页引用安全）；③商家卡封面按「店铺身份vs商品内容」拆分——列表场景一律商品图，店铺身份场景（详情页头图/头像/搜索行）保留印章图；④补菜图覆盖三层查找（AI 商家 sections → 种子 sections → AI 补菜注册表）保证任意菜品生成图跨刷新存活
+- 修改文件：src/lib/ios/meituan-data.ts（宫格改名+manage 项、mutateDishImg 三层、mtDeleteProductImg）、src/lib/ios/taobao-data.ts（tbDeleteProductImg）、src/components/apps/mt-order-create.tsx / tb-order-create.tsx（编辑模式+改名）、src/components/apps/mt-product-manage.tsx / tb-product-manage.tsx（新增）、src/components/apps/meituan.tsx（商家卡封面/宫格/接线）、src/components/apps/taobao.tsx（去标签去×/TbManageIcon/运营位重排/接线）

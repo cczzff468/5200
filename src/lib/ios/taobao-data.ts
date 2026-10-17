@@ -503,6 +503,19 @@ export function tbApplyProductImgOverrides(): void {
   }
 }
 
+/** 删除商品图覆盖（自建商品删除时调用：商品没了覆盖不再有意义，防 kv 无限膨胀） */
+export function tbDeleteProductImg(pid: string): void {
+  const map = productImgMap();
+  if (!(pid in map)) return;
+  delete map[pid];
+  productImgCache = map;
+  try {
+    kvSet(PRODUCT_IMG_KEY, map);
+  } catch {
+    /* 存储不可用忽略 */
+  }
+}
+
 // ---------------- AI 生成商品注册表（刷新更新内容动态注入，持久化到 IndexedDB 后启动恢复） ----------------
 // AI 生成的商品在运行时注册进这里：商品详情/SKU/购物车/下单等既有链路通过 productById /
 // tbSearchPool 无感命中，不改任何调用方；注册表内容随 tb-ai-products:<uid> 持久化，刷新页面后恢复。

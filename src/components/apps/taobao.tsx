@@ -193,6 +193,7 @@ import { TbPullIndicator, useTbPullRefresh } from './tb-pull-refresh';
 import { LocalToast, useLocalToast } from './page-toast';
 import { TbImg } from './tb-img';
 import { TbOrderCreatePage } from './tb-order-create';
+import { TbProductManagePage } from './tb-product-manage';
 import { OrderImgGenSheet } from './order-img-gen';
 import { generateFreePhoto } from '@/lib/imggen';
 import type { ImgGenConfig } from '@/lib/ios/store';
@@ -423,6 +424,28 @@ function TbCreateIcon({ size = 44 }: { size?: number }) {
       <rect x="13.5" y="17" width="21" height="16" rx="3" fill="#fff" opacity="0.96" />
       <path d="M13.5 20 24 13.5 34.5 20" stroke="#fff" strokeWidth="2.8" fill="none" opacity="0.96" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M24 21.5v7M20.5 25h7" stroke="#FF4400" strokeWidth="3.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** 管理订单运营位图标（第三十八轮：深橙渐变圆角方块 + 白色清单与圆点行，与创建订单同家族） */
+function TbManageIcon({ size = 44 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+      <defs>
+        <linearGradient id="tbmg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#FF9A3D" />
+          <stop offset="1" stopColor="#FF6A00" />
+        </linearGradient>
+      </defs>
+      <rect x="7" y="7" width="34" height="34" rx="9" fill="url(#tbmg)" />
+      <rect x="14" y="13.5" width="20" height="21" rx="3" fill="#fff" opacity="0.96" />
+      <circle cx="19" cy="20" r="1.8" fill="#FF6A00" />
+      <path d="M22.5 20h8.5" stroke="#FF8A1E" strokeWidth="2.4" strokeLinecap="round" />
+      <circle cx="19" cy="26.5" r="1.8" fill="#FF6A00" />
+      <path d="M22.5 26.5h8.5" stroke="#FF8A1E" strokeWidth="2.4" strokeLinecap="round" />
+      <circle cx="19" cy="30.5" r="1.8" fill="#FF6A00" opacity="0.55" />
+      <path d="M22.5 30.5h5" stroke="#FF8A1E" strokeWidth="2.4" strokeLinecap="round" opacity="0.55" />
     </svg>
   );
 }
@@ -1016,7 +1039,7 @@ function HomePage({
   onOpenProduct: (pid: string) => void;
   onToast: (m: string) => void;
   onOpenCouponCenter: () => void;
-  onOpenPage: (p: 'signin' | 'seckill' | 'createOrder' | 'movie' | 'fliggy' | 'subsidy') => void;
+  onOpenPage: (p: 'signin' | 'seckill' | 'createOrder' | 'manageProducts' | 'movie' | 'fliggy' | 'subsidy') => void;
 }) {
   const feedTabs: { id: HomeFeedTab; label: string; tag?: string }[] = [
     { id: 'follow', label: '关注' },
@@ -1273,12 +1296,7 @@ function HomePage({
   // 需求（第十轮）：频道 tab「关注」左侧返回按钮 → 返回手机主屏幕
   const closeApp = useUI((s) => s.closeApp);
 
-  // 自建商品删除（第三十七轮：商品流置顶卡片右上角×，删除后流内即时消失）
-  const removeCustomProduct = (pid: string) => {
-    tbRemoveCustomProduct(uid, pid);
-    window.dispatchEvent(new CustomEvent('tb-custom-products-changed'));
-    onToast('商品已删除');
-  };
+  // 第三十八轮：商品卡右上角×已按需求删除，删除统一收口到「管理订单」页
 
   return (
     // 需求（第八轮）：首页整体奶油肉粉色（截图1 口径），不再是橙色渐变
@@ -1349,14 +1367,15 @@ function HomePage({
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
         >
-          {/* 运营位图标行（需求：删领淘金币/阿里拍卖，原位换「创建订单」自建订单入库；随列表滚动） */}
+          {/* 运营位图标行（第三十八轮：创建订单后移 + 新增「管理订单」管理自建商品；随列表滚动） */}
           <div className="mt-2.5 grid grid-cols-6 px-2">
             {[
               { icon: <HongbaoIcon />, label: '红包签到', on: () => onOpenPage('signin') },
               { icon: <MiaoshaIcon />, label: '淘宝秒杀', on: () => onOpenPage('seckill') },
-              { icon: <TbCreateIcon />, label: '创建订单', on: () => onOpenPage('createOrder') },
               { icon: <TicketPiaoIcon />, label: '淘票票', on: () => onOpenPage('movie') },
               { icon: <FliggyIcon />, label: '飞猪', on: () => onOpenPage('fliggy') },
+              { icon: <TbCreateIcon />, label: '创建订单', on: () => onOpenPage('createOrder') },
+              { icon: <TbManageIcon />, label: '管理订单', on: () => onOpenPage('manageProducts') },
             ].map((it) => (
               <button key={it.label} type="button" onClick={it.on} className="flex flex-col items-center gap-1 py-0.5 active:opacity-70">
                 {it.icon}
@@ -1424,24 +1443,12 @@ function HomePage({
             <div className="mt-2 flex items-start gap-2 px-2 pb-24">
               <div className="flex min-w-0 flex-1 flex-col gap-2">
                 {feed.filter((_, i) => i % 2 === 0).map(({ p, v, k }) => (
-                  <ProductCard
-                    key={k}
-                    p={p}
-                    v={v}
-                    onOpen={() => onOpenProduct(p.id)}
-                    onDelete={p.id.startsWith('tbc-p-') ? () => removeCustomProduct(p.id) : undefined}
-                  />
+                  <ProductCard key={k} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
                 ))}
               </div>
               <div className="flex min-w-0 flex-1 flex-col gap-2">
                 {feed.filter((_, i) => i % 2 === 1).map(({ p, v, k }) => (
-                  <ProductCard
-                    key={k}
-                    p={p}
-                    v={v}
-                    onOpen={() => onOpenProduct(p.id)}
-                    onDelete={p.id.startsWith('tbc-p-') ? () => removeCustomProduct(p.id) : undefined}
-                  />
+                  <ProductCard key={k} p={p} v={v} onOpen={() => onOpenProduct(p.id)} />
                 ))}
               </div>
             </div>
@@ -1474,35 +1481,15 @@ function HomePage({
 }
 
 /** 单个商品卡（瀑布流；第三十七轮：自建商品与普通商品同卡混排，右上角×删除自建卡） */
-function ProductCard({ p, v, onOpen, onDelete }: { p: TbProduct; v: number; onOpen: () => void; onDelete?: () => void }) {
+function ProductCard({ p, v, onOpen }: { p: TbProduct; v: number; onOpen: () => void }) {
   const shop = shopById(p.shopId);
   return (
     <button type="button" onClick={onOpen} className="block w-full overflow-hidden rounded-xl bg-white text-left active:opacity-80">
       <div className="relative">
         <ProductImg p={p} s={v} className="aspect-square w-full" />
-        {p.promo || p.id.startsWith('tbc-p-') ? (
-          <span className="absolute left-0 top-0 rounded-br-lg bg-gradient-to-r from-[#FF2D2D] to-[#FF5000] px-1.5 py-0.5 text-[10px] font-bold text-white">{p.promo ?? '自建'}</span>
-        ) : null}
-        {onDelete ? (
-          <span
-            role="button"
-            tabIndex={0}
-            aria-label="删除商品"
-            data-testid={`tb-del-${p.title}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onDelete();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.stopPropagation();
-                onDelete();
-              }
-            }}
-            className="absolute right-1.5 top-1.5 grid h-[22px] w-[22px] place-items-center rounded-full bg-black/45 text-white active:bg-black/65"
-          >
-            <X className="h-3 w-3" strokeWidth={2.6} />
-          </span>
+        {/* 活动角标（第三十八轮：自建商品不再有任何标签/角标，只有真实 promo 才显示） */}
+        {p.promo ? (
+          <span className="absolute left-0 top-0 rounded-br-lg bg-gradient-to-r from-[#FF2D2D] to-[#FF5000] px-1.5 py-0.5 text-[10px] font-bold text-white">{p.promo}</span>
         ) : null}
       </div>
       <div className="p-2">
@@ -7521,7 +7508,7 @@ function SettingsPage({ session, onBack, onToast, onLogout }: { session: TbSessi
 
 // ---------------- 主入口（tab 框架 + 页面栈） ----------------
 
-type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs' | 'chat' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill' | 'ticketDetail' | 'createOrder';
+type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs' | 'chat' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill' | 'ticketDetail' | 'createOrder' | 'manageProducts';
 type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 
 /** 底部导航（首页/消息/购物车/我的淘宝） */
@@ -7728,6 +7715,8 @@ export default function TaobaoApp() {
   /** 票务订单详情（第十三轮淘票票）+ 返回目标（订单列表/淘票票）+ 淘票票初始频道 */
   const [ticketId, setTicketId] = useState<string | null>(null);
   const [ticketReturn, setTicketReturn] = useState<'movie' | 'orders'>('orders');
+  /** 第三十八轮：编辑中的自建商品（管理订单页→编辑→创建订单页预填原位更新；null = 新建） */
+  const [editEntry, setEditEntry] = useState<TbCustomEntry | null>(null);
   const [movieTab, setMovieTab] = useState<'movie' | 'comedy' | 'concert' | 'merch'>('movie');
   /** 二级页返回目标（订单页可从「我的」或首页进入） */
   const [subReturn, setSubReturn] = useState<TbTab>('me');
@@ -8114,15 +8103,35 @@ export default function TaobaoApp() {
   } else if (page === 'signin') {
     // 红包签到·领现金（第九轮：首页运营位图标入口）
     content = <SignInPage uid={uid} onBack={() => setPage('main')} onToast={showToast} />;
-  } else if (page === 'createOrder') {
-    // 创建订单=创建商品（需求：替代领淘金币/阿里拍卖运营位——保存的商品上首页「我的商品」区）
+  } else if (page === 'manageProducts') {
+    // 管理订单（第三十八轮：管理自建的商品——列表/编辑/删除，删除统一收口到本页）
     content = (
-      <TbOrderCreatePage
+      <TbProductManagePage
         uid={uid}
         onBack={() => setPage('main')}
+        onEdit={(e) => {
+          setEditEntry(e);
+          setPage('createOrder');
+        }}
+        onToast={showToast}
+      />
+    );
+  } else if (page === 'createOrder') {
+    // 创建订单=创建商品（需求：替代领淘金币/阿里拍卖运营位——保存的商品上首页「我的商品」区）；第三十八轮支持编辑模式
+    content = (
+      <TbOrderCreatePage
+        key={editEntry?.p.id ?? 'new'}
+        uid={uid}
+        editing={editEntry}
+        onBack={() => setPage(editEntry ? 'manageProducts' : 'main')}
         onSaved={() => {
-          // 保存成功 = 商品已上首页，回首页立即可见（不再直接进订单）
-          setPage('main');
+          // 保存成功：新建 → 回首页立即可见；编辑 → 回管理订单页
+          if (editEntry) {
+            setEditEntry(null);
+            setPage('manageProducts');
+          } else {
+            setPage('main');
+          }
         }}
         onToast={showToast}
       />
