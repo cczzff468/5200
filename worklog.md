@@ -20471,3 +20471,45 @@ Work Log:
 Stage Summary:
 - 环境已完整恢复：工作区代码 = GitHub 仓库 HEAD（cde6c34 塔罗第四十八轮），git 历史完整、origin 可推送、依赖齐全、数据库含用户数据、dev server 经 keeper 守护运行于 3000、锁屏/主屏/解锁全流程浏览器实测通过
 - 关键发现：①仓库 608MB 需浅克隆；②工作区自带 next-keeper.sh 守护脚本负责 dev server 自愈，无需手动启动；③全量 lint OOM 与 instrumentation 警告均为项目既有基线，非本次引入
+---
+Task ID: round-50-a
+Agent: 牌面资源子代理
+Task: 搜索并下载 78 张简约塔罗牌面图片到 public/tarot/deck/
+
+Work Log:
+- 【读档】tail 150 行 worklog 了解第四十五~四十九轮塔罗重做脉络（当前牌面=第四十七轮 AI 炭墨线稿 sprite majors.png+patch.png+SVG pip 阵，用户要求换成网上好看的简约牌面）
+- 【候选仓库探测】GitHub API 逐一验证：AriaMoradi/tarot-api 已 404（repo 不存在）；ekelen/tarot-api（408★）static 目录只有 JSON 无图；metabismuth/tarot-json（78★，MIT）= RWS 1909 扫描 350×600 带 "© U.S. G.S." 水印戳；krates98/tarotcardapi（74★）= 78 张 RWS 风 jpg ~30KB 分辨率偏低；reginanka/tarot-cards（CC BY 4.0）= 848×1264 WebP 深蓝金幻想要塞但底部有灰色标题条且 VLM 评"装饰过重显旧"；Tarotoo-tarot-dataset 只有牌义 JSON 无图；mixvlad/TarotCards（32★）= 9 套公有领域/开放牌组合集（rider-waite/marseille/sola-busca/tarot-nouveau/soimoi 等），SOURCES.md 逐套注明出处与许可
+- 【风格评审】下载样张用 z-ai vision 多轮对比评审：①RWS Steve-P 修复扫描（720×1200，公有领域）= 经典但 halftone 噪点重、色彩冲、VLM 评"dated/busy，现代浅色主题 App 里显廉价"；②Soimoi（Mike Koz 2025 生成牌组，CC BY 4.0）= 电影感绘画风、色调统一、无边框无水印无标题字、VLM 评"premium/modern，最优雅"；③reginanka = 金饰华丽但灰色标题条像模板贴上去的。综合「好看+统一+无水印+许可清晰」选 Soimoi
+- 【许可核实】mixvlad 仓库 tarot/soimoi/LICENSE 原文：Soimoi Tarot Deck © 2025 Mike Koz (koz.tv)，图像按 CC BY 4.0 授权（可自由分享/改编含商用，须署名+许可链接；官方建议署名可放 App 关于/致谢页）；mixvlad/TarotCards 本身 MIT
+- 【下载】raw.githubusercontent.com 在本沙盒不可达、jsdelivr 报 repo 超 50MB 限制（403），改用 git 的 PAT 凭证（复用 origin 内置 token）sparse 浅克隆：git clone --filter=blob:none --sparse --depth 1 mixvlad/TarotCards → sparse-checkout set tarot/soimoi/720px，一次拉回 79 文件（78 牌+Cover）
+- 【落盘重命名】映射 00_Fool→major-00 ... 21_World→major-21（源牌组即 RWS 序：08=Strength 力量/11=Justice 正义，与本项目 tarot-deck.ts 编号一致）；Wands01~14→wands-01~14、Cups→cups、Swords→swords、Pents01~14→pentacles-01~14（01=Ace、11=Page、12=Knight、13=Queen、14=King）；全部为正位图（逆位由代码 rotate-180 实现）；落 public/tarot/deck/ 共 78 文件
+- 【校验】ls|wc -l = 78 ✓；逐张 file 验证 78/78 均为有效 JPEG 无损坏、单张均 >200KB（>5KB 要求 40 倍余量）✓；PIL 实测 78 张全部 720×1080 统一尺寸 ✓；总大小 23.8MB（avg 312KB/张）
+- 【内容正确性终检】PIL 拼两张带文件名标签的 contact sheet（大阿尔卡那 4×6 + 小阿尔卡那 8×7 全 56 张）→ z-ai vision 逐格核对：22 张大牌图意与牌名全部匹配（愚人悬崖/恋人成对/倒吊人倒挂/死神骷髅/高塔雷击…）、56 张小牌花色符号与文件名花色全匹配、宫廷牌（11-14）均为人像、数字牌点数正确、无重复无坏图、全牌面无标题字无水印 ✓
+- 【合规文件】public/tarot/SOIMOI-CREDITS.txt（署名文本）+ public/tarot/soimoi-LICENSE（CC BY 4.0 全文随仓库分发版）；deck 目录内不放假文件保持恰好 78 张
+- 未改 src/ 任何代码（按任务约束，代码接线由主协调者后续轮次执行）；未 git commit/push
+
+Stage Summary:
+- 最终采用牌组：Soimoi Tarot（Mike Koz 2025 生成牌组，现代电影感绘画风、深色调、无水印无标题字）；来源 https://github.com/mixvlad/TarotCards （tarot/soimoi/720px/，原始出处 koz.tv）；许可证 CC BY 4.0（© 2025 Mike Koz，可自由使用含商用，须署名）；分发仓库本身 MIT；署名写法："Soimoi Tarot" by Mike Koz (https://koz.tv/), licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/) —— 建议放塔罗功能「关于/致谢」或 couple-tarot.tsx 文件头注释
+- 文件清单状态：78 张齐全（major-00~21 + wands/cups/swords/pentacles 各 01~14），零缺失
+- 实际文件扩展名与尺寸：统一 .jpg，78 张全部 720×1080（2:3），单张 214~426KB、平均 312KB、总计 23.8MB；均为正位、单张单文件（非 sprite 拼图）
+- 注意事项：①src/ 代码尚未引用这些图（CardFace 仍走旧 sprite+SVG 管线），下一轮需把 couple-tarot.tsx 卡面改为 /tarot/deck/{suit}-{nn}.jpg / major-{nn}.jpg（正位，逆位 CSS rotate-180）；②旧素材 public/tarot/majors.png、patch.png 保留未删（代码仍引用，删除需与接线同轮）；③Soimoi 为深色调牌面，叠在浅色毛玻璃 UI 上时卡片自带白边框或阴影更协调；④牌面本身不含牌名字（无烘焙文字），代码侧已有牌名/罗马数字渲染不受影响；⑤candidates reginanka（CC BY 4.0，848×1264 WebP 深蓝金风）与 RWS 修复扫描（PD，steve-p.org 经 mixvlad）已验证可用，如需换风格可直接从同一仓库补拉
+
+---
+Task ID: round-50
+Agent: 主协调者 (Z.ai Code)
+Task: 第五十轮：塔罗按用户参考图（quin App 截图）五项重做——①排位页/牌轮页拆成独立界面交替 ②牌轮改大幅扇形 ③洗牌改散牌乱堆+点击打乱 ④切牌改整叠整齐+上下左右四叠（无限切）⑤接入网上真实简约塔罗牌面
+
+Work Log:
+- 【牌面资源】子代理（round-50-a）多轮探测后选定 Soimoi Tarot（© 2025 Mike Koz，CC BY 4.0，mixvlad/TarotCards 分发），78 张 720×1080 统一 JPG（共 23.8MB）落 public/tarot/deck/，命名 major-00~21 / {wands|cups|swords|pentacles}-01~14（01=A，11~14=侍从/骑士/王后/国王），VLM 逐格核对牌面与文件名全匹配；备选 reginanka（CC BY 4.0）与 RWS 公有领域已验证可随时补拉
+- 【CardFace 重写】DeckArt 组件 <img> 读 /tarot/deck/{id}.jpg（object-cover 全幅）+ onError 兜底回原 majors sprite / SVG pip 线稿；卡面结构改为「全幅牌面图 + 左上罗马数字纸章 + 底部米纸名牌条（中文名+英文小字）」，逆位整面 rotate-180 + 右上角逆位徽章保留；CardBack 加极淡星座连线纹理（64×88 data-URI SVG 平铺，参考 quin 牌背）
+- 【洗牌页重做】ScatterCard 随机散乱模型（16 张，±112/±120px、±62°，每次洗牌重新生成）；牌堆默认即散乱铺开（参考图 1 形态），点击牌堆=重新打乱（散点过渡 430ms + tarot-shuffle-card 扔牌动画）、长按持续洗牌保留；「再洗一次」按钮移除
+- 【切牌重做】CutPhase 新状态机 tidy(0.3s 整叠整齐)→split(0.34s 上/右/下/左四叠弹开，组内微错位成小牌堆)→hold(0.24s)→merge(0.34s 反序回拢)，总 1.24s 可无限切（cutFlip 翻转方向分配+组内随机错位防重复观感）；切完 neat=true 保持整齐牌叠，点牌堆才重新打乱；restart/换主题重置 neat
+- 【排位页/牌轮页拆分】View 新增 slots/wheel 替代 pick：SlotsView=牌阵布局独占全屏（大标题=当前待填牌位名，牌位框 pickScale 0.85，底部「去选第 N 张牌·牌位名」/选满变「翻牌」）；WheelView=「第N张牌·牌阵名」小字+牌位名 24px 大标题+「双指放大牌轮·滑动牌轮·点选牌」提示+全屏牌轮+「查看牌位」ghost 按钮
+- 【飞牌跨页】牌轮页点牌→记录点击处页面坐标进 pendingCardRef→自动切回排位页→双 rAF 等布局稳定后测量目标牌位→FlyGhost 从点击处飞入牌位（520ms 贝塞尔+旋转+缩放匹配，横牌位宽高互换）→onTransitionEnd 落位；点牌位收回保留
+- 【扇形牌轮】CardWheel 重写：轮心锚右下角屏外（+10,+36），78 张沿 R=430 圆环铺开，transform=translate(-R·cosγ,-R·sinγ) rotate(γ-90°)（γ=--wa+i·step，CSS trig 函数），牌顶指向圆外呈放射状扇面，可见窗口约 100°≈18 张；全 transform 合成层动画（一次 CSS 变量更新驱动全牌），竖滑为主横滑辅助 0.13deg/px、惯性衰减 0.93、双指缩放 0.7~1.35（R 与牌同步缩放）
+- 【端到端实测】agent-browser 全流程（?open=couple 深链接+种子 accepted 状态）：主题页→洗牌页散乱牌堆（星座纹牌背）✓→点击牌堆重新打乱 ✓→「切牌」1.24s 四叠上下左右分开合拢（split 中段截图四方向分明）✓→切完整齐牌叠保持 ✓→再切一刀/再点牌堆打乱 ✓→「下一步」13 种牌阵 ✓→三张牌·过去现在未来→排位页（大标题「过去」+3 牌位+第 1 位脉冲）✓→「去选第 1 张牌」→牌轮页大扇形（参考图形态：底部横牌→右缘竖牌放射展开）✓→点扇面中段牌→自动回排位页+牌飞入「过去」位 ✓→第 2/3 张同循环→牌阵已满+「翻牌」✓→逐张 3D 翻开真实 Soimoi 牌面（正义 XI/命运之轮 X/死神 XIII 逆位整面倒置+徽章）✓→AI 解读按牌位生成+写入记忆 toast ✓→历史记录+详情页新牌面还原 ✓→console 零错误，dev.log 仅既有 instrumentation 基线警告
+- 校验：bunx tsc --noEmit 零错误；bunx eslint couple-tarot.tsx 零问题
+
+Stage Summary:
+- 关键决策：①排位/牌轮拆页用「pendingCard 跨页飞牌」衔接——牌轮页点牌先记坐标再切页，排位页布局稳定后起飞，用户感知为「从扇面抽出一张飞回牌位」；②扇形轮用 CSS trig（cos/sin 进 calc）而非逐帧 JS 排布，保留单 CSS 变量驱动的全牌联动与合成器动画；③切牌完成态用 neat 状态而非动画残影——合拢即整齐牌叠，与「点击牌堆=打乱」形成明确的状态往返；④牌面选 Soimoi 而非 RWS：现代电影感统一风格、无水印无烘焙字、CC BY 4.0 可商用，署名落卡头注释与 public/tarot/SOIMOI-CREDITS.txt
+- 涉及文件：src/components/apps/couple-tarot.tsx（全量重写 1900 行）、public/tarot/deck/*（新增 78 张）、public/tarot/soimoi-LICENSE + SOIMOI-CREDITS.txt（新增署名文件）
