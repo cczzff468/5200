@@ -20247,3 +20247,21 @@ Work Log:
 Stage Summary:
 - 关键决策：①美团自建商品从「商家载体」转为「纯商品」语义——内部仍以 mtc-shop 单菜品商家承载（购买链路零改动），但 UI 全链路（创建表单/卡片标题/详情页/管理页）只呈现商品；②立即购买采用「替换购物车为该商品再结算」复用既有 CheckoutSheet（不做独立直购管线）；③团购图与菜品图共用一张覆盖 kv 表（id 空间不冲突），启动恢复一次遍历双查
 - 修改文件：src/lib/ios/meituan-data.ts、src/components/apps/meituan.tsx（DealDetailPage+MtCustomProductPage+宫格接线+根路由）、src/components/apps/mt-order-create.tsx、src/components/apps/tb-order-create.tsx、src/components/apps/mt-product-manage.tsx、src/components/apps/taobao.tsx（ProductGallery 角标）
+
+---
+Task ID: round-40
+Agent: 主协调者 (Z.ai Code)
+Task: 第四十轮：①淘宝/美团创建商品界面完全分开（类型/规格选项各归各位，该加的加该删的删）；②美团首页商家卡封面单图（去三宫格）；③淘宝消息界面客服头像换成用户提供的牛马表情包（5张，按店铺稳定分配）；④开发消息界面「交易物流」服务号页
+
+Work Log:
+- 【静态资源】用户 5 张表情包（朱队友/牛马/陈遵旨/李来做/刘不住）sharp 压缩至 240×240 PNG（~28KB/张）存 public/kefu-1.png ~ kefu-5.png
+- 【客服头像映射】taobao-data.ts 新增 TB_KEFU_AVATARS + tbKefuAvatarOf(key)——店铺 key 稳定 hash（31 进制滚动）→ 5 选 1，同一店铺永远同一张；替换点：①taobao.tsx 消息页会话列表头像（原 tbImg(c.tag) 店铺图 → 表情包，无 shopId 时用会话名兜底 hash）②taobao-msg-chat.tsx 聊天页 bot 头像 ×2（消息气泡侧 + 打字中提示侧，tbImg(shop.tag) → tbKefuAvatarOf(shop.id)）
+- 【创建页分离】mt-order-create.tsx：TYPE_CHIPS 删「手机数码」加「甜点蛋糕」；GROUP_CHIPS 删「手机内存/颜色/尺寸」改餐饮组「小菜/奶茶小料/杯型/温度/糖度/辣度/份量/套餐」；规格说明文案/类型 placeholder 同步美团化（如 外卖/奶茶甜饮）；文件头注释更新。tb-order-create.tsx：TYPE_CHIPS 删「奶茶外卖」加「运动户外/虚拟充值」；GROUP_CHIPS 删「奶茶小料/小菜/杯型/套餐」改电商组「颜色/尺码/手机内存/容量/版本/配置/款式/套装」；说明文案改「颜色 / 尺码 / 手机内存 等自由组合」、类型 placeholder（手机数码/服饰鞋包）；店铺名称字段保留（电商语义，与美团纯商品表单区分）
+- 【商家卡单图】meituan.tsx MerchantCard：封面从 mtDishesOf(m).slice(0,3) 三列拼贴改为单张商品图（首菜 FoodImg 铺满 150px，无菜 emoji 兜底）——商品图内容化更彻底，店铺图只在店铺详情页
+- 【交易物流服务号页】taobao.tsx 新增 TradeLogisticsPage（TbPage 加 'tradeLogistics'）：服务号头部（橙卡车图标+官方账号简介）+ 全订单动态流（tbLoadOrders 全状态、按动态锚点时间倒序）——tradeDyn() 状态映射：refund>退款成功(红)/ticket 出票成功(蓝)/pendingPay 等待付款(橙「24小时内完成支付」)/pendingDeliver 支付成功(蓝含实付金额)/shipped 已发货(绿+最新物流轨迹)/completed 交易完成(绿)/cancelled 交易关闭(灰)；每卡带商品摘要行（快照图+标题+件数+店铺名）+ fmtChatTime 时间，点击 openOrderSmart 进订单详情；5s 轮询 tick 跟进物流推进；空状态引导。MsgsPage「交易物流」服务号行 onClick 从 onOpenExpress 改为新 prop onOpenTradeLogistics（「我的淘宝」页快递入口仍走 ExpressPage 不受影响）
+- 端到端实测（agent-browser）：注入 user 联系人 c-qq-tester + 写 qq-session 键 → 淘宝 QQ 账密登录 → ①消息页会话/聊天页客服头像全为表情包 ✓；②真实下单（落地灯 ¥159，新增地址后提交）→ 收银台关闭 → 交易物流页「等待付款」橙卡（24h 文案+商品摘要）✓；③kv 改 shipped 带轨迹 →「已发货」绿卡显示「快件已到达北京朝阳营业部…」+ 灵动岛「运输中」联动 ✓；④改 pendingDeliver →「支付成功」蓝卡「实付 ¥159.00…」+ 灵动岛「等待发货」✓；⑤点动态卡 → 订单详情（运输中/查看物流）✓；⑥淘宝创建订单页 DOM 断言：类型 9 chips 无奶茶外卖、规格 8 chips 无奶茶小料 ✓；⑦美团 QQ 一键登录 → 首页商家卡（蜜雪冰城/葱油饼/仁安大药房）全为单张商品图 ✓；⑧美团创建商品页：类型 9 chips 无手机数码、规格 8 chips（小菜/奶茶小料/杯型/温度/糖度/辣度/份量/套餐）无手机内存 ✓
+- 校验：tsc 全量零错误；eslint 修改 6 文件错误数与 HEAD 基线完全一致（29 errors + 2 warnings 全部历史存量，零新增）
+
+Stage Summary:
+- 关键决策：①创建页语义彻底分家——淘宝=电商（颜色/尺码/内存/版本），美团=本地生活（小菜/小料/温度/糖度），两端 chips/文案/placeholder/表单字段互不出现对方域词；②客服头像=表情包资产按店铺 hash 稳定分配（非随机，刷新/跨会话不变）；③「交易物流」做成官方服务号动态流（读全量订单而非只 shipped 的快递页），每状态独立文案/主题色/锚点时间，与灵动岛物流提醒天然联动
+- 涉及文件：public/kefu-1~5.png（新增）、src/lib/ios/taobao-data.ts（tbKefuAvatarOf）、src/components/apps/taobao.tsx（TradeLogisticsPage+消息页头像+接线）、src/components/apps/taobao-msg-chat.tsx（客服头像×2）、src/components/apps/mt-order-create.tsx / tb-order-create.tsx（chips 分离）、src/components/apps/meituan.tsx（商家卡单图）

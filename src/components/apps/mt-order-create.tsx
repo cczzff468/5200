@@ -4,7 +4,7 @@
  * 美团「创建商品」页（首页宫格入口）——创建的是商品（不是店铺，第三十九轮明确）：
  * 任意类型商品都能创建（奶茶/外卖/团购/充值/电影票…自由填写）——
  * 图片可上传（相册文件选择，压缩落库）或用「设置 › 图像生成」配置的模型按自定义提示词生成；
- * 可填 类型 / 优惠券（名称+金额，下单自动抵扣的菜品券） / 规格选项组（小菜、奶茶小料等，买家可自行选择）；
+ * 可填 类型 / 优惠券（名称+金额，下单自动抵扣的菜品券） / 规格选项组（小菜、奶茶小料、温度糖度等餐饮规格，买家可自行选择）；
  * 保存 = 创建「商品」落库（mt-custom-shops:<uid>，无店铺语义）→ 首页商品流置顶展示；
  * 点首页商品走 自建商品详情页→立即购买 原生链路（不再进店铺页），真实下单后才生成订单。
  * 第三十九轮：删头部「创建商品·上首页」标签/店铺名称/备注，与淘宝创建页各自独立。
@@ -20,10 +20,10 @@ import { mtRegisterCustomMerchant } from '@/lib/ios/meituan-data';
 import { mtLoadCustomShops, mtSaveCustomShops, mtUidOf, type MtSession } from '@/lib/ios/meituan-store';
 import { OrderImgGenSheet } from './order-img-gen';
 
-/** 类型快捷选项 */
-const TYPE_CHIPS = ['外卖', '奶茶甜饮', '团购', '手机数码', '充值缴费', '电影票', '生鲜果蔬', '日用百货', '其他'];
-/** 规格组名快捷选项 */
-const GROUP_CHIPS = ['小菜', '奶茶小料', '手机内存', '杯型', '温度', '颜色', '尺寸', '套餐'];
+/** 类型快捷选项（美团端独立：纯生活服务/到店到家，不混电商类目） */
+const TYPE_CHIPS = ['外卖', '奶茶甜饮', '甜点蛋糕', '团购', '电影票', '充值缴费', '生鲜果蔬', '日用百货', '其他'];
+/** 规格组名快捷选项（美团端独立：餐饮规格，手机内存/颜色等电商规格不出现） */
+const GROUP_CHIPS = ['小菜', '奶茶小料', '杯型', '温度', '糖度', '辣度', '份量', '套餐'];
 
 const fmtMoney = (n: number) => (Math.round(n * 100) / 100).toFixed(2);
 
@@ -327,7 +327,7 @@ export function MtOrderCreatePage({
               value={type}
               onChange={(e) => setType(e.target.value)}
               maxLength={12}
-              placeholder="自由填写，如 外卖 / 充值缴费"
+              placeholder="自由填写，如 外卖 / 奶茶甜饮"
               data-testid="mt-create-type"
               className="h-10 w-full rounded-lg bg-[#F5F6F7] px-3 text-[13.5px] text-black/85 outline-none placeholder:text-black/30"
             />
@@ -360,7 +360,7 @@ export function MtOrderCreatePage({
         <div className="mt-2.5 rounded-xl bg-white px-4 py-4">
           <div className="flex items-center">
             <p className="text-[15px] font-bold text-black/85">规格选项</p>
-            <span className="ml-1.5 text-[11px] text-black/35">小菜 / 奶茶小料 / 手机内存 等自由组合</span>
+            <span className="ml-1.5 text-[11px] text-black/35">小菜 / 奶茶小料 / 温度糖度 等自由组合</span>
           </div>
           <div className="mt-1 flex flex-wrap gap-1.5">
             {GROUP_CHIPS.filter((g) => !groups.some((x) => x.name === g)).map((g) => (

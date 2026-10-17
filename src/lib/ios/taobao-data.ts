@@ -27,6 +27,18 @@ export const TB_LIP_COLORS = [
 /** 淘宝主品牌色 */
 export const TB_ORANGE = '#FF5000';
 
+// ---------------- 客服头像（第四十轮：牛马打工人表情包，消息页会话/客服聊天页通用） ----------------
+
+/** 5 张客服头像（用户指定：朱队友/牛马/陈遵旨/李来做/刘不住） */
+const TB_KEFU_AVATARS = ['/kefu-1.png', '/kefu-2.png', '/kefu-3.png', '/kefu-4.png', '/kefu-5.png'];
+
+/** 店铺 → 客服头像稳定映射（同一店铺永远同一张；key=shopId 或会话名兜底） */
+export function tbKefuAvatarOf(key: string): string {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return TB_KEFU_AVATARS[h % TB_KEFU_AVATARS.length];
+}
+
 // ---------------- 分类 ----------------
 
 export type TbCatId = 'digital' | 'fashion' | 'home' | 'beauty' | 'food' | 'book';

@@ -4,7 +4,7 @@
  * 淘宝「创建订单」页（首页运营位入口）——创建订单就是创建商品（第三十六轮）：
  * 任意类型商品都能创建（服饰/数码/奶茶/充值…自由填写）——
  * 图片可上传（相册文件选择，压缩落库）或用「设置 › 图像生成」配置的模型按自定义提示词生成；
- * 可填 类型 / 优惠券（名称+金额，下单自动抵扣） / 规格选项组（手机内存、颜色、尺码、小料等，买家可自行选择）；
+ * 可填 类型 / 优惠券（名称+金额，下单自动抵扣） / 规格选项组（颜色、尺码、手机内存等电商规格，买家可自行选择）；
  * 保存 = 创建「商品」落库（tb-custom-products:<uid>，商品+自建店铺注册进运行时注册表）→ 首页商品流置顶展示；
  * 点首页商品走 商品详情→SKU→购物车/立即购买→结算 原生链路，真实下单后才生成订单。
  * 第三十八轮：支持编辑模式（管理订单页入口）——预填表单、保存原位更新（商品/店铺 id 不变，历史订单引用不失效）。
@@ -20,10 +20,10 @@ import { tbRegisterCustomProduct } from '@/lib/ios/taobao-data';
 import { tbLoadCustomProducts, tbSaveCustomProducts, type TbCustomEntry } from '@/lib/ios/taobao-store';
 import { OrderImgGenSheet } from './order-img-gen';
 
-/** 类型快捷选项 */
-const TYPE_CHIPS = ['服饰鞋包', '手机数码', '食品饮料', '奶茶外卖', '美妆个护', '充值缴费', '家居日用', '图书文娱', '其他'];
-/** 规格组名快捷选项 */
-const GROUP_CHIPS = ['手机内存', '颜色', '尺码', '奶茶小料', '小菜', '杯型', '版本', '套餐'];
+/** 类型快捷选项（淘宝端独立：纯电商类目，不混餐饮/生活服务） */
+const TYPE_CHIPS = ['服饰鞋包', '手机数码', '食品饮料', '美妆个护', '运动户外', '家居日用', '图书文娱', '虚拟充值', '其他'];
+/** 规格组名快捷选项（淘宝端独立：电商规格，奶茶小料/杯型等餐饮规格不出现） */
+const GROUP_CHIPS = ['颜色', '尺码', '手机内存', '容量', '版本', '配置', '款式', '套装'];
 
 /** 类型 → 商品类目（商品详情/搜索链路用；不在表内归 home） */
 function catOfType(t: string): TbProduct['cat'] {
@@ -316,7 +316,7 @@ export function TbOrderCreatePage({
               value={type}
               onChange={(e) => setType(e.target.value)}
               maxLength={12}
-              placeholder="自由填写，如 手机数码 / 充值缴费"
+              placeholder="自由填写，如 手机数码 / 服饰鞋包"
               data-testid="tb-create-type"
               className="h-10 w-full rounded-lg bg-[#F5F6F7] px-3 text-[13.5px] text-black/85 outline-none placeholder:text-black/30"
             />
@@ -359,7 +359,7 @@ export function TbOrderCreatePage({
         <div className="mt-2.5 rounded-xl bg-white px-4 py-4">
           <div className="flex items-center">
             <p className="text-[15px] font-bold text-black/85">规格选项</p>
-            <span className="ml-1.5 text-[11px] text-black/35">手机内存 / 颜色 / 奶茶小料 等自由组合</span>
+            <span className="ml-1.5 text-[11px] text-black/35">颜色 / 尺码 / 手机内存 等自由组合</span>
           </div>
           <div className="mt-1 flex flex-wrap gap-1.5">
             {GROUP_CHIPS.filter((g) => !groups.some((x) => x.name === g)).map((g) => (

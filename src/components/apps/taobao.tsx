@@ -100,6 +100,7 @@ import {
   tbRegisterAiProducts,
   tbRegisterCustomProducts,
   tbReviewsOf,
+  tbKefuAvatarOf,
   tbSalesText,
   tbSearchPool,
   tbSearchScore,
@@ -6162,7 +6163,7 @@ function MsgServiceRow({ icon, title, sub, time, onClick }: { icon: ReactNode; t
 function MsgsPage({
   uid,
   onOpenOrder,
-  onOpenExpress,
+  onOpenTradeLogistics,
   onOpenRefundOrders,
   onOpenCouponCenter,
   onOpenChat,
@@ -6170,7 +6171,8 @@ function MsgsPage({
 }: {
   uid: string;
   onOpenOrder: (id: string) => void;
-  onOpenExpress: () => void;
+  /** 进入交易物流服务号页（第四十轮：消息页「交易物流」行专用，展示全订单交易/物流动态流） */
+  onOpenTradeLogistics: () => void;
   onOpenRefundOrders: () => void;
   onOpenCouponCenter: () => void;
   /** 进入店铺客服聊天（Task 43：消息页会话点击 → AI 客服聊天；orderId 附带订单上下文，聊天页自动补订单卡） */
@@ -6277,7 +6279,7 @@ function MsgsPage({
             }
             title="交易物流"
             sub={lastLogi?.text ?? '暂无包裹动态更新'}
-            onClick={onOpenExpress}
+            onClick={onOpenTradeLogistics}
           />
           <MsgServiceRow
             icon={
@@ -6334,8 +6336,8 @@ function MsgsPage({
                 }}
                 className={`flex w-full items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.03] ${i < chats.length - 1 ? 'border-b border-black/[0.04]' : ''}`}
               >
-                {c.tag ? (
-                  <TbImg src={tbImg(c.tag, 120, 120, 3)} alt={c.name} className="h-[46px] w-[46px] shrink-0 rounded-xl" />
+                {c.shopId || c.tag ? (
+                  <img src={tbKefuAvatarOf(c.shopId ?? c.name)} alt={c.name} className="h-[46px] w-[46px] shrink-0 rounded-xl object-cover" />
                 ) : (
                   <span className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-xl bg-[#F2F3F5] text-[17px] font-bold text-black/45">{c.name.slice(0, 1)}</span>
                 )}
@@ -7448,6 +7450,113 @@ function ExpressPage({ uid, onBack, onOpenOrder }: { uid: string; onBack: () => 
   );
 }
 
+// ---------------- 交易物流服务号（第四十轮：消息页「交易物流」入口，全订单交易/物流动态流） ----------------
+
+/** 订单动态锚点时间（退款 > 完成 > 最新轨迹 > 支付 > 下单） */
+function tradeDynAt(o: TbOrder): number {
+  if (o.refund?.at) return o.refund.at;
+  if (o.completedAt) return o.completedAt;
+  if (o.track.length > 0) return o.track[o.track.length - 1].at;
+  if (o.paidAt) return o.paidAt;
+  return o.createdAt;
+}
+
+/** 订单 → 动态文案（状态标题 + 描述 + 主题色） */
+function tradeDyn(o: TbOrder): { title: string; desc: string; color: string } {
+  if (o.refund) return { title: '退款成功', desc: `退款 ¥${o.refund.amount.toFixed(2)} 已按支付方式原路退回，请留意账单变化`, color: '#FA5151' };
+  if (o.ticket && (o.status === 'pendingDeliver' || o.status === 'shipped')) {
+    return { title: '出票成功', desc: `「${o.ticket.title}」${o.ticket.dateLabel} ${o.ticket.start} 场次出票成功，取票号 ${o.ticket.ticketNo}`, color: '#2B7DE9' };
+  }
+  switch (o.status) {
+    case 'pendingPay':
+      return { title: '等待付款', desc: '订单已提交，请在 24 小时内完成支付，超时未付订单将自动取消', color: '#FF7A00' };
+    case 'pendingDeliver':
+      return { title: '支付成功', desc: `实付 ¥${o.total.toFixed(2)}，商家正在为您准备发货，请耐心等待`, color: '#2B7DE9' };
+    case 'shipped':
+      return { title: '已发货', desc: o.track.length > 0 ? o.track[o.track.length - 1].text : '包裹已交由快递公司运输，请留意物流更新', color: '#0BB07B' };
+    case 'completed':
+      return { title: '交易完成', desc: '订单已确认收货，感谢您的购买，欢迎评价晒单', color: '#0BB07B' };
+    case 'cancelled':
+      return { title: '交易关闭', desc: o.cancelReason ?? '订单已取消，期待下次光临', color: '#9AA0A6' };
+  }
+}
+
+/** 交易物流服务号页（官方账号口吻：每单一条交易/物流动态，点击进订单详情） */
+function TradeLogisticsPage({ uid, onBack, onOpenOrder }: { uid: string; onBack: () => void; onOpenOrder: (id: string) => void }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 5000);
+    return () => clearInterval(t);
+  }, []);
+  tbTickOrders(uid);
+  const orders = tbLoadOrders(uid).sort((a, b) => tradeDynAt(b) - tradeDynAt(a));
+  return (
+    <div className="flex h-full flex-col bg-[#f4f4f4]">
+      <TopBar title="交易物流" onBack={onBack} />
+      <div className="flex-1 overflow-y-auto pb-10">
+        {/* 服务号头部 */}
+        <div className="flex items-center gap-3 bg-white px-4 py-4">
+          <span className="grid h-[52px] w-[52px] shrink-0 place-items-center rounded-2xl bg-[#FF7A2E]">
+            <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2.5 7.5A1.5 1.5 0 0 1 4 6h8.5a1.5 1.5 0 0 1 1.5 1.5V16H4.6L2.5 14V7.5Z" fill="#fff" />
+              <path d="M14 9h3.2c.5 0 .95.24 1.22.65L20.5 12.6c.2.28.3.6.3.94V15a1 1 0 0 1-1 1h-.6a2.4 2.4 0 0 0-4.7 0H14V9Z" fill="#fff" />
+              <circle cx="7" cy="17" r="1.9" fill="#fff" stroke="#FF7A2E" strokeWidth="1.2" />
+              <circle cx="16.8" cy="17" r="1.9" fill="#fff" stroke="#FF7A2E" strokeWidth="1.2" />
+            </svg>
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[16.5px] font-bold text-black/90">交易物流</div>
+            <div className="mt-0.5 text-[12.5px] text-black/45">官方账号 · 交易与物流动态提醒</div>
+          </div>
+        </div>
+        {/* 动态流（按动态时间倒序） */}
+        {orders.length === 0 ? (
+          <div className="grid place-items-center bg-white py-16">
+            <Truck className="h-12 w-12 text-black/10" strokeWidth={1.6} />
+            <div className="mt-3 text-[15px] text-black/45">暂无交易物流动态</div>
+          </div>
+        ) : (
+          <div className="space-y-2 px-2 pt-2" data-testid="tb-trade-logi-list">
+            {orders.map((o) => {
+              const dyn = tradeDyn(o);
+              const at = tradeDynAt(o);
+              const item = o.items[0];
+              return (
+                <button key={o.id} type="button" data-testid={`tb-trade-dyn-${o.status}`} onClick={() => onOpenOrder(o.id)} className="block w-full rounded-xl bg-white p-3.5 text-left active:opacity-80">
+                  <span className="flex items-start gap-2.5">
+                    <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full" style={{ background: `${dyn.color}16` }}>
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ background: dyn.color }} />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline gap-2">
+                        <span className="text-[14.5px] font-semibold" style={{ color: dyn.color }}>
+                          {dyn.title}
+                        </span>
+                        <span className="ml-auto shrink-0 text-[11px] text-black/30">{fmtChatTime(at)}</span>
+                      </span>
+                      <span className="mt-0.5 block text-[12.5px] leading-[18px] text-black/60">{dyn.desc}</span>
+                    </span>
+                  </span>
+                  {item ? (
+                    <span className="mt-2.5 flex items-center gap-2.5 rounded-lg bg-[#F7F8FA] p-2.5">
+                      <img src={item.img} alt={item.title} className="h-11 w-11 shrink-0 rounded-md object-cover" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] text-black/80">{item.title}</span>
+                        {o.items.length > 1 ? <span className="mt-0.5 block text-[11.5px] text-black/40">等 {o.items.length} 件商品</span> : null}
+                      </span>
+                      <span className="max-w-[92px] shrink-0 truncate text-[11.5px] text-black/40">{o.shopName}</span>
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SettingsPage({ session, onBack, onToast, onLogout }: { session: TbSession; onBack: () => void; onToast: (m: string) => void; onLogout: () => void }) {
   const uid = tbUidOf(session);
   return (
@@ -7503,7 +7612,7 @@ function SettingsPage({ session, onBack, onToast, onLogout }: { session: TbSessi
 
 // ---------------- 主入口（tab 框架 + 页面栈） ----------------
 
-type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'settings' | 'msgs' | 'chat' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill' | 'ticketDetail' | 'createOrder' | 'manageProducts';
+type TbPage = 'main' | 'search' | 'searchResult' | 'product' | 'checkout' | 'orders' | 'orderDetail' | 'logistics' | 'addresses' | 'addressEdit' | 'coupons' | 'couponCenter' | 'favorites' | 'foots' | 'shopFollows' | 'shop' | 'reviews' | 'express' | 'tradeLogistics' | 'settings' | 'msgs' | 'chat' | 'subsidy' | 'seckill' | 'signin' | 'movie' | 'fliggy' | 'bill' | 'ticketDetail' | 'createOrder' | 'manageProducts';
 type TbTab = 'home' | 'video' | 'msgs' | 'cart' | 'me';
 
 /** 底部导航（首页/消息/购物车/我的淘宝） */
@@ -7901,7 +8010,7 @@ export default function TaobaoApp() {
           <MsgsPage
             uid={uid}
             onOpenOrder={(id) => openOrderSmart(id, 'orders')}
-            onOpenExpress={() => setPage('express')}
+            onOpenTradeLogistics={() => setPage('tradeLogistics')}
             onOpenRefundOrders={() => {
               setOrderTab('cancelled');
               setSubReturn('me');
@@ -8178,6 +8287,9 @@ export default function TaobaoApp() {
   } else if (page === 'express') {
     // 用户口径统一：点击订单/包裹一律进对应状态订单详情页（物流页走详情内「查看物流」）
     content = <ExpressPage uid={uid} onBack={() => setPage('main')} onOpenOrder={(id) => openOrderSmart(id, 'orders')} />;
+  } else if (page === 'tradeLogistics') {
+    // 交易物流服务号（第四十轮：消息页「交易物流」入口——全订单交易/物流动态流，点击进订单详情）
+    content = <TradeLogisticsPage uid={uid} onBack={() => setPage('main')} onOpenOrder={(id) => openOrderSmart(id, 'orders')} />;
   } else if (page === 'settings') {
     content = (
       <SettingsPage

@@ -28,7 +28,7 @@ import {
   SmilePlus,
   Store,
 } from 'lucide-react';
-import { productById, shopById, tbImg } from '@/lib/ios/taobao-data';
+import { productById, shopById, tbImg, tbKefuAvatarOf } from '@/lib/ios/taobao-data';
 import { tbLoadOrders } from '@/lib/ios/taobao-store';
 import { getContact } from '@/lib/ios/contacts-store';
 import { TbImg } from './tb-img';
@@ -439,7 +439,7 @@ export function TbMsgChatPage({
                 // 店家侧（左）：方头像 + 客服昵称 + 白气泡 / 独立卡片
                 <div className="mb-2.5 flex items-start gap-2">
                   <img
-                    src={tbImg(shop.tag, 120, 120, 3)}
+                    src={tbKefuAvatarOf(shop.id)}
                     alt={shop.name}
                     className="h-9 w-9 shrink-0 rounded-lg object-cover"
                     draggable={false}
@@ -519,7 +519,7 @@ export function TbMsgChatPage({
         {typing ? (
           <div className="mb-2.5 flex items-start gap-2">
             <img
-              src={tbImg(shop.tag, 120, 120, 3)}
+              src={tbKefuAvatarOf(shop.id)}
               alt={shop.name}
               className="h-9 w-9 shrink-0 rounded-lg object-cover"
               draggable={false}

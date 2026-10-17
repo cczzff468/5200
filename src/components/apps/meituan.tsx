@@ -831,21 +831,14 @@ function ShopAvatar({ m, className = '' }: { m: MtMerchant; className?: string }
 }
 
 /** 外卖商家卡（瀑布流）
- *  第三十八轮：封面改为商品图片（本店菜单前 3 道菜的图/emoji 兜底，单菜=整幅商品图）——
- *  不再显示店铺印章图（进入店铺详情页才显示店铺图）；去掉「自建」角标与右上角×（删除统一收口到管理商品页）。 */
+ *  第三十八轮起封面显示商品图片；第四十轮改为单张商品图（首菜图/emoji 兜底，不再三宫格拼贴）——
+ *  店铺图仅在店铺详情页展示；无「自建」角标与右上角×（删除统一收口到管理商品页）。 */
 function MerchantCard({ m, onOpen }: { m: MtMerchant; onOpen: () => void }) {
-  const dishes = mtDishesOf(m).slice(0, 3);
+  // 第四十轮：封面显示一张商品图（不再三宫格多图拼贴；店铺图仅在店铺详情页展示）
+  const dish = mtDishesOf(m)[0];
   return (
     <button type="button" onClick={onOpen} className="relative mb-2 block w-full break-inside-avoid overflow-hidden rounded-xl bg-white text-left shadow-[0_1px_6px_rgba(0,0,0,0.04)] active:opacity-90">
-      {dishes.length > 0 ? (
-        <span className="flex h-[120px] w-full gap-[2px] bg-white">
-          {dishes.map((d) => (
-            <FoodImg key={d.id} src={d.img} emoji={d.emoji} className="h-full min-w-0 flex-1" />
-          ))}
-        </span>
-      ) : (
-        <FoodImg emoji={m.emoji} className="h-[120px] w-full" />
-      )}
+      <FoodImg src={dish?.img} emoji={dish?.emoji ?? m.emoji} className="h-[150px] w-full" />
       {m.mine && (
         <span className="absolute left-2 top-2 rounded-md bg-[#FFD100] px-1.5 py-0.5 text-[10px] font-bold text-black/85 shadow-sm" data-testid="merchant-mine-badge">
           我的小店
