@@ -20452,3 +20452,22 @@ Work Log:
 Stage Summary:
 - 关键决策：①纯色牌背不找图改手写 CSS——市面无纯白灰牌背现成素材，CSS 近纯色渐变+细内框在 100px 与 60px 尺寸下都清晰锐利且零加载成本；②竖排鼓轮用「大半径圆的竖直切线段+反向自转」而非改成直列——保留牌轮弧形鼓胀的视觉趣味（中位牌最探入、上下牌渐次收进），又满足「牌竖着」；一套 CSS 变量仍只写一次驱动 78 张牌；③拖拽灵敏度按 R 等比折算（0.062deg/px≈1:1 跟手）替代旧扇形的 0.34， otherwise 一次拖动会飞掠 7 张牌；④切牌从「轻触牌堆」改回「按钮触发」+「下一步」显式推进——用户明确要按钮化流程，牌堆点击只保留洗牌一个语义，交互无歧义；⑤步骤条独占一行修复与标题的重叠（本轮唯一实锚的「位置问题」，其余视图在浏览器逐屏截图复核无错位）
 - 涉及文件：src/components/apps/couple-tarot.tsx（CardBack/CardWheel/FlyGhost/ShuffleView/顶栏重写，PickView/主组件接线清理）
+
+---
+Task ID: round-49
+Agent: 主协调者 (Z.ai Code)
+Task: 第四十九轮：从 GitHub 仓库 cczzff468/5200 拉取完整项目到工作区，恢复开发环境，等待用户新功能需求
+
+Work Log:
+- 【仓库拉取】用 PAT 浅克隆（--depth 1）github.com/cczzff468/5200 到 /tmp/repo-5200（608MB，4080 文件，首次全量克隆超时后改浅克隆成功）；HEAD=cde6c34（塔罗第四十八轮）
+- 【工作区同步】rsync 同步仓库内容到 /home/z/my-project（排除 .git/node_modules/dev.log/.next），用仓库 .git 替换工作区初始 .git（保留完整提交历史与推权）；upload 目录 chgrp 报 I/O error 但文件完整（162M 清单比对一致）；git status --short 零输出=工作树与 HEAD 完全一致
+- 【远程配置】origin 设为带 PAT 的 HTTPS URL（仅存 .git/config 本地不入库）；user.name=cczzff468 / user.email=noreply.github.com；git ls-remote 验证远程可达（HEAD=cde6c34）
+- 【依赖恢复】bun install 增量安装 32 包（idb/jsmediatags/leaflet/remark-gfm/web-push 及 @types）
+- 【数据库恢复】db/custom.db（225KB 含用户数据）随仓库同步；DATABASE_URL=file:/home/z/my-project/db/custom.db；bun run db:push 确认 schema 一致并重生成 Prisma Client v6.19.2
+- 【服务恢复】发现仓库自带守护脚本 mini-services/netease-api/next-keeper.sh（3000 无监听 5 秒内自动拉起 bun run dev），清理旧进程后 keeper 自动重启成功；dev.log：Ready in 1983ms
+- 【端到端自检】agent-browser：锁屏完整渲染（状态栏/时钟/农历/小组件/手电筒相机）→ 鼠标模拟上滑解锁成功 → 主屏渲染（天气组件 16° 阵雨北京/8 个应用图标/搜索/Dock 4 图标带角标）；浏览器 console/errors 零输出；GET / 200；dev.log 仅既有 instrumentation getBuiltinModule 警告（基线）；bun run lint 全量 OOM SIGKILL（既有基线，worklog round-48 已记录）
+- 待办：等待用户提出修改/新增功能需求
+
+Stage Summary:
+- 环境已完整恢复：工作区代码 = GitHub 仓库 HEAD（cde6c34 塔罗第四十八轮），git 历史完整、origin 可推送、依赖齐全、数据库含用户数据、dev server 经 keeper 守护运行于 3000、锁屏/主屏/解锁全流程浏览器实测通过
+- 关键发现：①仓库 608MB 需浅克隆；②工作区自带 next-keeper.sh 守护脚本负责 dev server 自愈，无需手动启动；③全量 lint OOM 与 instrumentation 警告均为项目既有基线，非本次引入
