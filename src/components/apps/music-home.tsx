@@ -307,7 +307,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
       {avatarSheet && (
         <div className="absolute inset-0 z-[80] flex items-end">
           <button type="button" aria-label="关闭" onClick={() => setAvatarSheet(false)} className="absolute inset-0 bg-black/40" />
-          <div className="relative w-full rounded-t-2xl bg-white p-5 pb-9 dark:bg-zinc-900" data-testid="music-avatar-sheet">
+          <div className="relative w-full rounded-t-2xl border-t border-white/60 bg-white/85 p-5 pb-9 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85" data-testid="music-avatar-sheet">
             <div className="mb-4 flex items-center gap-3">
               <CoverImg src={headAvatar} className="h-12 w-12" rounded="rounded-full" alt={headName} />
               <div className="min-w-0 flex-1">
@@ -322,7 +322,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
                   setAvatarSheet(false);
                   onSettings();
                 }}
-                className="h-11 w-full rounded-full border border-zinc-300 text-[14px] text-zinc-700 active:scale-[0.98] dark:border-zinc-600 dark:text-zinc-200"
+                className="h-11 w-full rounded-full border border-white/60 bg-white/70 text-[14px] text-zinc-700 ring-1 ring-black/[0.06] backdrop-blur-xl active:scale-[0.98] dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-200 dark:ring-white/10"
               >
                 账号与设置
               </button>

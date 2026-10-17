@@ -20307,3 +20307,45 @@ Work Log:
 Stage Summary:
 - 关键决策：①送达速度从「全局一份」拆为「每 App 一份」（用户本轮明确要求两端不一样），分键存储+事件广播保持既有 UI 联动；②时长文案按 App 语义分格式（美团恒分钟/淘宝小时级智能），消除 30-60 双义歧义；③tab 胶囊采用「保留布局占位+视觉胶囊」方案（美团/恋人空间流内布局不变、淘宝 absolute 悬浮同步结算栏 bottom 依赖），深色模式由 shop-dark.css 既有 bg-white/80 映射自动适配；④弹窗毛玻璃统一 bg-white/80 backdrop-blur-2xl backdrop-saturate-150（可读性与磨砂感平衡）；⑤每天想你大圆改为「常驻+打卡计数徽标」而非「打卡后消失」
 - 涉及文件：src/lib/ios/delivery-speed.ts、src/components/apps/delivery-speed-sheet.tsx、src/lib/ios/taobao-store.ts、src/lib/ios/meituan-store.ts、src/components/apps/meituan.tsx、src/components/apps/taobao.tsx、src/components/apps/couple-space.tsx
+---
+Task ID: 43-b
+Agent: music-glass 子代理
+Task: 第四十三轮：网易云音乐 App 全面毛玻璃胶囊化（底部tab胶囊/迷你条/弹窗/按钮/卡片）
+
+Work Log:
+- 【底部 TabBar 毛玻璃胶囊】music.tsx showTabBar 渲染层去掉旧的「实色底长条 + border-t + h-10px 垫高」结构，改为透明悬浮容器（px-4 + pb-[max(10px,env(safe-area-inset-bottom))]）；胶囊壳移入 music-shared.tsx MusicTabBar 组件自身：rounded-[24px] border-white/60 bg-white/80 shadow-[0_10px_36px_rgba(0,0,0,0.16)] backdrop-blur-2xl backdrop-saturate-150（dark: border-white/10 bg-zinc-900/75），data-testid="music-tabbar" 保留在 nav 上；激活 tab = 浅红胶囊底 bg-[#C20C0C]/10（dark: #FF5A5A/15）+ rounded-full + 品牌红字 #C20C0C，未激活灰
+- 【MiniBar 同步】music.tsx 全局迷你条 bottom 偏移 showTabBar ? 58 : 0 → 62 : 0（胶囊实占 = pb 10px + 高 46px = 56px，迷你条自身 mb-1.5，62 留 6px 悬浮间隙）；MiniBar 本体 bg-white → bg-white/80 backdrop-blur-2xl backdrop-saturate-150 border-white/60 + 柔影升级（dark: zinc-800/80），一起听双头像交叠 ring 改半透明 ring-white/80
+- 【music.tsx 登录页玻璃】QR 卡片 bg-white → bg-white/75 backdrop-blur-xl + ring-black/[0.06] + 柔影；扫码状态遮罩 /95 → /85+blur；扫码/手机号分段控件选中片 → bg-white/85+blur；游客模式/API 设置两个胶囊按钮 → bg-white/70 backdrop-blur-xl ring；手机号/验证码/密码输入框全部 bg-white/70 backdrop-blur-xl（dark: zinc-800/70）；ApiCfgSheet 底部弹层容器 → bg-white/85 backdrop-blur-2xl border-t border-white/60（dark: zinc-900/85），内部两个输入框与「测试连接」按钮玻璃化
+- 【music-shared.tsx】AddToSongSheet 底部弹层、PlaylistCreateDialog 居中弹窗容器毛玻璃（bg-white/85 backdrop-blur-2xl backdrop-saturate-150 + border），新建歌单输入框 bg-white/70
+- 【music-home.tsx】账号快开面板（头像点击弹层）玻璃化；「账号与设置」按钮玻璃化
+- 【music-heart.tsx 心动深色沉浸页】引导条 bg-white/[0.08] → bg-white/10 backdrop-blur-2xl ring-white/15；大圆播放钮 bg-white/[0.13]+blur-sm → bg-white/15 backdrop-blur-xl；「播放全部」胶囊 bg-white/[0.06] → bg-white/10 backdrop-blur-xl border-white/15
+- 【music-search.tsx】搜索胶囊框 → bg-white/75 backdrop-blur-xl ring-black/[0.06]（dark: zinc-900/75）；热搜榜/热歌榜两张横滑大卡 → bg-white/75 backdrop-blur-xl border-white/60 + 柔影（dark: zinc-900/75）；歌手/专辑半屏面板 → bg-white/85 backdrop-blur-2xl
+- 【music-mine.tsx 11 处】白色面板吸顶主 Tab 行 → bg-[#F8F8F8]/90 backdrop-blur-xl；头像设置/编辑资料/装扮/最近·收藏·本地列表/写笔记/添加状态 6 个底部弹层全部 → bg-white/85 backdrop-blur-2xl border-t-white/60；资料表单 5 个输入框 + 笔记标题/正文 + 状态输入 → bg-white/70 backdrop-blur-xl（dark: zinc-800/70）；笔记卡 → bg-white/75+blur+柔影；深色头部「添加状态」胶囊与最近/本地/收藏/装扮胶囊入口 → bg-white/10 backdrop-blur-xl ring-white/15
+- 【music-player.tsx 10 处】深色弹层：一起听记录/播放列表 QueueSheet bg-[#1c1c1e]/95+blur-xl → bg-zinc-900/70 backdrop-blur-2xl border-t-white/10（规范深色公式）；一起听设置菜单 bg-[#2b2b2d]/95 → bg-zinc-900/70 backdrop-blur-2xl border-white/10（箭头 zinc-800 同步）；快聊输入条 bg-black/55+blur-xl → bg-black/45 backdrop-blur-2xl border-t-white/10；空队列「返回」钮加玻璃描边。浅色弹层（内容为白字浅底样式，保文字可读性用白玻璃）：歌曲操作 MoreSheet/播放器样式/歌曲百科/定时关闭（replace_all 3 处）/分享给好友/邀请一起听 → bg-white/85 backdrop-blur-2xl border-t-white/60
+- 【music-playlist.tsx】圆形下载按钮 → bg-white/75 backdrop-blur-xl border-white/60
+- 【music-settings.tsx】账号/API 配置/关于三张卡 + 「我的音乐主页」行 → bg-white/80 backdrop-blur-xl border-white/60 + 柔影（dark: zinc-900/80）；两个 API 输入框玻璃化；退出登录确认弹窗 → bg-white/85 backdrop-blur-2xl border-white/60；取消按钮玻璃化（红「退出」保持实色）
+- 【music-comments.tsx】吸顶「评论(N)+排序」行 → bg-white/85 backdrop-blur-xl（dark: zinc-950/85）；输入框保持既有黑/5 软胶囊（纯白页上白玻璃不可见，维持原设计）
+- 【music-together.tsx 一起听聊天】推荐歌曲卡 → bg-white/10 backdrop-blur-2xl border-white/15；文字气泡/typing 气泡 → bg-white/10 backdrop-blur-xl；推荐入口圆钮/语音圆钮 → bg-white/10 backdrop-blur-xl border-white/15；输入胶囊 → bg-white/10 backdrop-blur-2xl border-white/15；歌曲行 bg-white/8 → /10
+- 【校验】bunx tsc --noEmit 全量零错误；git 仅 11 个 music-* 文件变更（+85/-86 行，纯 className/style 视觉层，全部 data-testid/onClick/状态逻辑零改动）；agent-browser 实测：锁屏上滑解锁 → 聚光灯搜「音乐」打开网易云 → 登录页 QR 卡/按钮玻璃类生效 → 游客模式进入 tabs → 胶囊 TabBar 渲染正确（x=16/bottom=10/h=46/w=388 悬浮胶囊，激活项浅红胶囊底+红字，data-testid 保留）→ MiniBar 全局层 bottom=62px → 心动页深色玻璃面板类生效；console 无运行时错误（仅既有 Fast Refresh/HMR 日志）
+
+Stage Summary:
+- 关键决策：①TabBar 胶囊壳直接内聚到 MusicTabBar 组件（music.tsx 外层只留 px-4+safe-area 悬浮定位容器），与 couple-space/淘宝/美团第四十二轮胶囊条完全同款（rounded-[24px] bg-white/80 backdrop-blur-2xl 柔影）；②MiniBar bottom 62 = 胶囊实际占位 56px（pb10+高46）+6px 间隙，比任务书预估的 74 更贴合实际结构（任务书按 pt-2 假设多算了 12px）；③播放器内浅色内容弹层用「白玻璃」bg-white/85 而非深色玻璃规范——这些弹层内部全是浅色主题文字类（text-zinc-900），换深色底会不可读，白玻璃盖在黑胶背景上磨砂效果一致且零逻辑改动；④深色沉浸页（心动/播放列表/一起听记录/设置菜单/快聊条）严格执行 bg-zinc-900|white/10 + backdrop-blur-2xl + border-white/10~15 深色公式；⑤品牌红（#C20C0C 登录/保存/播放全部）与深色主 CTA（bg-zinc-900 胶囊钮）保持实色不玻璃化
+- 跳过项：music-comments.tsx 底部输入框（纯白页面上 bg-white/70 不可见，原 bg-black/[0.05] 软胶囊已是最佳观感）；播放页 HeadBubble（实色气泡带旋转尾巴，半透明会产生尾巴接缝双重叠加）；评论/我的页整页背景与顶部遮罩条（背景不玻璃化规范 + 评论页遮罩条是防穿帮功能件）
+- 涉及文件（11 个，全部在允许清单内）：src/components/apps/music.tsx（15 处）、music-shared.tsx（6 处）、music-home.tsx（2 处）、music-heart.tsx（3 处）、music-search.tsx（4 处）、music-mine.tsx（11 处）、music-player.tsx（9 处，含 1 处 replace_all 命中 3 弹层）、music-playlist.tsx（1 处）、music-settings.tsx（6 处，含 replace_all 3 卡片）、music-comments.tsx（1 处）、music-together.tsx（7 处）
+---
+Task ID: 43-a
+Agent: 主协调者 (Z.ai Code)
+Task: 第四十三轮（恋人空间部分）：①「每天想你」大圆删「已想x天」徽标+两侧引号装饰；②每天点击一次后消失（次日恢复显示）；③底部 tab 首页爱心图标去黑色填充；④情书「信封上的字」从选择信封弹窗移到发送设置界面；⑤编辑信件信纸文字与横线对齐（字坐在线上）
+
+Work Log:
+- 【大圆去徽标去引号】HomePage 每天想一大圆内删除「已想 X 天 ♡」胶囊徽标（missDays 条件块整段删除），圆内只剩「每天想你」字样；两侧 font-serif &ldquo;/&rdquo; 引号装饰 span 整体删除（missDays 变量仍被头像下「想他/想我 X 天」徽标使用，保留）
+- 【每天打卡后消失】HomePage 新增 missedToday = (state.missYouByDay?.[todayKey()] ?? 0) > 0；大圆容器（含 h-286px 布局）包 {!missedToday && (...)} —— 当天已打卡即整块消失，次日（missYouByDay 无今日键）自动恢复显示；替换第四十二轮「常驻+徽标」方案（用户本轮明确要求点击后消失）
+- 【爱心图标去填充】底部 Tab 栏首页 Heart 图标 fill={active && key==='home' ? 'currentColor' : 'none'} → fill="none" 固定 —— 此前 fill:'currentColor' 在 SVG 中解析的是 CSS color（黑）而非 stroke 的 #e0455c，导致激活态爱心内部是黑色填充；现在永远纯描边
+- 【信封上的字迁移】LettersPage 'env' 弹层删除「信封上的字」输入块（信封网格预览保留 faceText={envText}，副标题补「信封上的字在发送设置里填写」指引）；'send' 发送设置视图在「信封设置」行后新增「信封上的字」行（dark 风格 bg-white/10 输入 + ring-white/15，maxLength 10，placeholder 致 最爱的你，envText 非空显示「恢复默认」清除钮），data-testid=env-text-input 随迁；输入实时 patch({letterEnvText}) 同步上方信封大预览与寄出的信封
+- 【信纸文字对齐】像素级实测：各字体（苹方/楷体/手写楷/行书/毛草/龙藏/快乐体/黄油体/小薇）DOM 渲染字形底部统一落在 30px 行盒 22-23px 处，而横线画在 20-21px（字悬挂线下 1-2px = 用户说的「字太往下了」）；修复：编辑页横线 backgroundPosition padTop-9 → padTop-6（线下移 3px，第一行横线 padTop+23 ≈ 字形底部，文字恰好坐线上），阅读页横线 66px → 69px 同步；改动含注释记录测量方法
+- 端到端实测（agent-browser，注入 couple-space:state 已建立关系场景）：①首页大圆只剩「每天想你」（无徽标无引号）✓；②点击 → toast「想 TA 的心意 +1 ♡」+ 大圆整块消失 ✓；③刷新后保持消失（missYouByDay 持久化）✓；④模拟次日（仅保留昨日键）→ 大圆恢复显示 ✓；⑤tab 栏爱心放大截图确认纯描边无填充 ✓；⑥选择信封弹窗无文字输入（9 个按钮=8 信封+完成）✓；⑦发送设置出现「信封上的字」行，输入「致 亲爱的阿澄」信封大预览实时同步 ✓；⑧信纸输入三行文字截图测量：字形底(146/165/183) 与横线(148/166/185) 关系=线在字底 1-2px 处，文字坐线上 ✓
+- 校验：bunx tsc --noEmit 全量零错误；bun run lint 49 problems（45 errors+4 warnings）与 HEAD 基线 stash 对比完全一致零新增；顺手删除历史误提交的根目录 --clip 空文件
+
+Stage Summary:
+- 关键决策：①「每天想你」回归原始打卡语义——当天打卡后大圆消失、次日恢复（以 missYouByDay 今日键为准，计数/连续天数/记录页完全不受影响）；②爱心图标黑色填充根因=SVG fill:'currentColor' 解析 CSS color 而非 stroke 属性色，统一 fill="none" 一次性杜绝；③信纸对齐不逐字体做 nudge——实测 9 款字体字形底部高度一致（22-23px），横线统一右移 3px 即全字体通用；④「信封上的字」归属「发送设置」语义（寄出前最后配置），编辑页工具栏信封按钮仍可快速换样式
+- 涉及文件：src/components/apps/couple-space.tsx（HomePage 大圆/Tab 栏/LettersPage env 弹层/send 视图/编辑页横线/阅读页横线）

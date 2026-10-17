@@ -308,7 +308,7 @@ export function MusicHeart() {
       {/* 引导条（还没有任何口味数据时；深色版） */}
       {!hasSeeds && list !== null && list.length > 0 && (
         <div
-          className="mx-4 mb-1 flex items-center gap-2 rounded-xl bg-white/[0.08] px-3 py-2 text-[11px] leading-snug text-white/70 ring-1 ring-white/10"
+          className="mx-4 mb-1 flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2 text-[11px] leading-snug text-white/70 ring-1 ring-white/15 backdrop-blur-2xl"
           data-testid="music-heart-hint"
         >
           <Heart className="h-3.5 w-3.5 shrink-0 text-[#FF5A5A]" fill="currentColor" />
@@ -403,7 +403,7 @@ export function MusicHeart() {
               onClick={playHero}
               data-testid="music-heart-play"
               aria-label={heroPlaying ? '暂停' : '播放心动歌单'}
-              className="flex h-[62px] w-[62px] shrink-0 items-center justify-center rounded-full bg-white/[0.13] text-white ring-1 ring-white/15 backdrop-blur-sm transition active:scale-95 active:bg-white/20"
+              className="flex h-[62px] w-[62px] shrink-0 items-center justify-center rounded-full bg-white/15 text-white ring-1 ring-white/15 backdrop-blur-xl transition active:scale-95 active:bg-white/20"
             >
               {heroPlaying ? (
                 <Pause className="h-7 w-7" fill="currentColor" strokeWidth={0} />
@@ -455,7 +455,7 @@ export function MusicHeart() {
               type="button"
               onClick={() => songs.length > 0 && void playSong(songs[0], songs)}
               data-testid="music-heart-play-all"
-              className="flex items-center gap-1 rounded-full border border-white/20 bg-white/[0.06] px-3 py-1 text-[12px] text-white/85 active:scale-95"
+              className="flex items-center gap-1 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[12px] text-white/85 backdrop-blur-xl active:scale-95"
             >
               <Play className="h-3 w-3" fill="currentColor" strokeWidth={0} />
               播放全部

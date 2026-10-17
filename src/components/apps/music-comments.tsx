@@ -329,7 +329,7 @@ export function CommentsPage() {
 
         {/* 排序档（吸顶不随滚动，且停在状态栏/灵动岛下方——第三十四轮修复：
             原先 top-0 滚动后计数行顶到状态栏上与其重叠，用户截图反馈） */}
-        <div className="sticky top-[54px] z-10 flex items-center justify-between bg-white px-4 pb-2 pt-2 dark:bg-zinc-950">
+        <div className="sticky top-[54px] z-10 flex items-center justify-between bg-white/85 px-4 pb-2 pt-2 backdrop-blur-xl dark:bg-zinc-950/85">
           <p className="text-[17px] font-bold text-zinc-900 dark:text-zinc-100" data-testid="music-comment-total">
             评论{data ? `(${fmtPlayCount(data.total) || data.total})` : ''}
           </p>

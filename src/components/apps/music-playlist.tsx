@@ -282,7 +282,7 @@ export function MusicPlaylist() {
           <button
             type="button"
             onClick={() => void download()}
-            className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-300 text-zinc-600 dark:border-zinc-600 dark:text-zinc-300"
+            className="flex h-10 w-10 items-center justify-center rounded-full border border-white/60 bg-white/75 text-zinc-600 shadow-[0_4px_16px_rgba(0,0,0,0.06)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-300"
             aria-label="下载当前歌曲"
           >
             <Download className="h-4 w-4" />

@@ -400,7 +400,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
             type="button"
             onClick={() => setStatusOpen(true)}
             data-testid="music-mine-add-status"
-            className="relative -top-2 flex items-center gap-1 rounded-full bg-white/15 py-[6px] pl-[11px] pr-[13px] text-[12px] leading-none text-white/90 backdrop-blur-sm active:bg-white/25"
+            className="relative -top-2 flex items-center gap-1 rounded-full bg-white/15 py-[6px] pl-[11px] pr-[13px] text-[12px] leading-none text-white/90 ring-1 ring-white/15 backdrop-blur-xl active:bg-white/25"
           >
             {/* 已有状态且自带表情图标时不再叠加笑脸；无状态时显示加号 */}
             {!statusText ? (
@@ -512,7 +512,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
       {/* ================= 白色面板 ================= */}
       <div className="bg-[#F8F8F8] dark:bg-zinc-900">
         {/* 主 Tab 行（音乐/播客/笔记）——始终显示，任意 Tab 下都能切换 */}
-        <div className="sticky top-0 z-10 border-b border-black/5 bg-[#F8F8F8] px-5 dark:border-white/10 dark:bg-zinc-900">
+        <div className="sticky top-0 z-10 border-b border-black/5 bg-[#F8F8F8]/90 px-5 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-900/90">
           <div className="flex items-center gap-8">
             {(
               [
@@ -878,7 +878,7 @@ function Pill({
       type="button"
       onClick={onClick}
       data-testid={testId}
-      className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-white/10 px-3.5 text-[13px] text-white/90 active:bg-white/20"
+      className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-3.5 text-[13px] text-white/90 backdrop-blur-xl active:bg-white/20"
     >
       {icon}
       {label}
@@ -961,7 +961,7 @@ function LoginAvatarSheet({
   return (
     <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-login-avatar-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
+      <div className="relative w-full rounded-t-2xl border-t border-white/60 bg-white/85 p-5 pb-[104px] backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mb-4 flex items-center justify-between">
           <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">头像设置</p>
           <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
@@ -1071,7 +1071,7 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
   return (
     <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-profile-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative max-h-[86%] w-full overflow-y-auto rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
+      <div className="relative max-h-[86%] w-full overflow-y-auto rounded-t-2xl border-t border-white/60 bg-white/85 p-5 pb-[104px] backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mb-4 flex items-center justify-between">
           <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">编辑资料</p>
           <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
@@ -1129,7 +1129,7 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
           onChange={(e) => setNickname(e.target.value.slice(0, 16))}
           placeholder="给自己起个名字"
           data-testid="music-profile-nickname"
-          className="mb-3 h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+          className="mb-3 h-10 w-full rounded-lg border border-black/10 bg-white/70 px-3 text-[14px] text-zinc-900 outline-none backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100"
         />
         <label className="mb-1 block text-[12px] text-zinc-500">个性签名</label>
         <input
@@ -1137,7 +1137,7 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
           onChange={(e) => setSignature(e.target.value.slice(0, 40))}
           placeholder="写一句签名展示在主页"
           data-testid="music-profile-signature"
-          className="mb-4 h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+          className="mb-4 h-10 w-full rounded-lg border border-black/10 bg-white/70 px-3 text-[14px] text-zinc-900 outline-none backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100"
         />
 
         {/* 关注 / 粉丝 */}
@@ -1149,7 +1149,7 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
               onChange={(e) => setFollows(e.target.value.replace(/\D/g, '').slice(0, 6))}
               inputMode="numeric"
               data-testid="music-stats-follows"
-              className="h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+              className="h-10 w-full rounded-lg border border-black/10 bg-white/70 px-3 text-[14px] text-zinc-900 outline-none backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100"
             />
           </div>
           <div className="flex-1">
@@ -1159,7 +1159,7 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
               onChange={(e) => setFans(e.target.value.replace(/\D/g, '').slice(0, 6))}
               inputMode="numeric"
               data-testid="music-stats-fans"
-              className="h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+              className="h-10 w-full rounded-lg border border-black/10 bg-white/70 px-3 text-[14px] text-zinc-900 outline-none backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100"
             />
           </div>
         </div>
@@ -1207,7 +1207,7 @@ function ProfileEditSheet({ onClose }: { onClose: () => void }) {
               onChange={(e) => setVipLevel(e.target.value.replace(/\D/g, '').slice(0, 2))}
               inputMode="numeric"
               data-testid="music-vip-level"
-              className="h-10 w-full min-w-0 rounded-lg border border-black/10 bg-zinc-50 px-3 text-[14px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+              className="h-10 w-full min-w-0 rounded-lg border border-black/10 bg-white/70 px-3 text-[14px] text-zinc-900 outline-none backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100"
             />
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -1294,7 +1294,7 @@ function DressSheet({
   return (
     <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-dress-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
+      <div className="relative w-full rounded-t-2xl border-t border-white/60 bg-white/85 p-5 pb-[104px] backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mb-4 flex items-center justify-between">
           <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">主页装扮</p>
           <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
@@ -1428,7 +1428,7 @@ function MineSheet({ kind, onClose }: { kind: Exclude<SheetKind, 'profile' | 'st
   return (
     <div className="absolute inset-0 z-[80] flex items-end">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative flex max-h-[78%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
+      <div className="relative flex max-h-[78%] w-full flex-col rounded-t-2xl border-t border-white/60 bg-white/85 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="flex items-center justify-between px-4 py-3">
           <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">{title}</p>
           <button type="button" onClick={onClose} className="text-[13px] text-zinc-400">
@@ -1759,7 +1759,7 @@ function NotesList() {
           {notes.map((n) => (
             <div
               key={n.id}
-              className="rounded-xl bg-white p-3.5 shadow-[0_1px_4px_rgba(0,0,0,0.05)] dark:bg-zinc-800"
+              className="rounded-xl border border-white/60 bg-white/75 p-3.5 shadow-[0_8px_28px_rgba(0,0,0,0.08)] backdrop-blur-xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-800/75"
               data-testid="music-mine-note-item"
             >
               <div className="flex items-center gap-2">
@@ -1793,7 +1793,7 @@ function NotesList() {
       {composerOpen && (
         <div className="absolute inset-0 z-[72] flex items-end" data-testid="music-mine-note-composer">
           <button type="button" aria-label="关闭" onClick={() => setComposerOpen(false)} className="absolute inset-0 bg-black/45" />
-          <div className="relative w-full rounded-t-2xl bg-white pb-8 dark:bg-zinc-900">
+          <div className="relative w-full rounded-t-2xl border-t border-white/60 bg-white/85 pb-8 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
             <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-zinc-300 dark:bg-zinc-600" />
             <div className="flex items-center justify-between px-5 pt-3">
               <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">写笔记</p>
@@ -1807,7 +1807,7 @@ function NotesList() {
                 onChange={(e) => setDraftTitle(e.target.value)}
                 placeholder="标题"
                 data-testid="music-mine-note-title"
-                className="w-full rounded-xl bg-zinc-100 px-3.5 py-2.5 text-[14px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-zinc-800 dark:text-zinc-100"
+                className="w-full rounded-xl bg-white/70 px-3.5 py-2.5 text-[14px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-zinc-800 dark:text-zinc-100"
               />
               <textarea
                 value={draftBody}
@@ -1815,7 +1815,7 @@ function NotesList() {
                 placeholder="今天听到了什么想记下来的…"
                 rows={5}
                 data-testid="music-mine-note-body"
-                className="mt-2.5 w-full resize-none rounded-xl bg-zinc-100 px-3.5 py-2.5 text-[13px] leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-zinc-800 dark:text-zinc-100"
+                className="mt-2.5 w-full resize-none rounded-xl bg-white/70 px-3.5 py-2.5 text-[13px] leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-zinc-800 dark:text-zinc-100"
               />
               <button
                 type="button"
@@ -1851,7 +1851,7 @@ function StatusEditSheet({
   return (
     <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-status-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-[104px] dark:bg-zinc-900">
+      <div className="relative w-full rounded-t-2xl border-t border-white/60 bg-white/85 p-5 pb-[104px] backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mx-auto mb-3.5 h-1 w-8 rounded-full bg-black/10 dark:bg-white/20" />
         <p className="mb-4 text-center text-[16px] font-bold text-zinc-900 dark:text-zinc-100">添加状态</p>
         <div className="relative">
@@ -1861,7 +1861,7 @@ function StatusEditSheet({
             onChange={(e) => setText(e.target.value.slice(0, 20))}
             placeholder="记录此刻的状态…"
             data-testid="music-status-input"
-            className="h-11 w-full rounded-xl border border-black/10 bg-zinc-100 px-3.5 pr-12 text-[14px] text-zinc-900 outline-none placeholder:text-zinc-400 focus:border-[#C20C0C]/50 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+            className="h-11 w-full rounded-xl border border-black/10 bg-white/70 px-3.5 pr-12 text-[14px] text-zinc-900 outline-none backdrop-blur-xl placeholder:text-zinc-400 focus:border-[#C20C0C]/50 dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100"
           />
           <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[10px] tabular-nums text-zinc-400">
             {text.length}/20

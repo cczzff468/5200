@@ -73,7 +73,7 @@ export function TogetherChat() {
             ) : null}
             <div className={`flex max-w-[72%] flex-col ${mine ? 'items-end' : 'items-start'}`}>
               {m.role === 'recs' && m.songs ? (
-                <div className="w-[240px] rounded-2xl rounded-bl-md bg-white/12 p-2.5">
+                <div className="w-[240px] rounded-2xl rounded-bl-md border border-white/15 bg-white/10 p-2.5 backdrop-blur-2xl">
                   <p className="px-0.5 pb-1.5 text-[12px] text-white/85">{m.text}</p>
                   <div className="space-y-1.5">
                     {m.songs.map((s) => (
@@ -87,7 +87,7 @@ export function TogetherChat() {
                           )
                         }
                         data-testid={`music-tg-rec-${s.id}`}
-                        className="flex w-full items-center gap-2 rounded-xl bg-white/8 p-1.5 text-left active:bg-white/15"
+                        className="flex w-full items-center gap-2 rounded-xl bg-white/10 p-1.5 text-left active:bg-white/15"
                       >
                         <CoverImg src={s.picUrl} className="h-9 w-9" rounded="rounded-md" alt={s.name} />
                         <span className="min-w-0 flex-1">
@@ -113,7 +113,7 @@ export function TogetherChat() {
               ) : (
                 // 双方气泡同款深灰半透明（参考网易云真实一起听界面）；我的右侧、对方左侧
                 <p
-                  className={`whitespace-pre-wrap break-words rounded-2xl bg-white/12 px-3.5 py-2.5 text-[14px] leading-relaxed text-white/95 ${
+                  className={`whitespace-pre-wrap break-words rounded-2xl bg-white/10 px-3.5 py-2.5 text-[14px] leading-relaxed text-white/95 backdrop-blur-xl ${
                     mine ? 'rounded-br-md' : 'rounded-bl-md'
                   }`}
                 >
@@ -129,7 +129,7 @@ export function TogetherChat() {
       {aiBusy && (
         <div className="flex items-end gap-2.5" data-testid="music-tg-typing">
           <CoverImg src={together.avatar} className="h-9 w-9 shrink-0" rounded="rounded-full" alt={together.name} />
-          <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-md bg-white/12 px-4 py-3.5">
+          <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-md bg-white/10 px-4 py-3.5 backdrop-blur-xl">
             <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/65" />
             <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/65 [animation-delay:-0.25s]" />
             <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/65 [animation-delay:-0.5s]" />
@@ -169,11 +169,11 @@ export function TogetherChatInput({ onToast }: { onToast?: (m: string) => void }
         disabled={recBusy}
         data-testid="music-tg-recommend"
         aria-label="让 TA 推荐歌曲"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white/80 disabled:opacity-50 active:scale-95"
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white/80 backdrop-blur-xl disabled:opacity-50 active:scale-95"
       >
         {recBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Music4 className="h-4 w-4" />}
       </button>
-      <div className="flex h-10 min-w-0 flex-1 items-center rounded-full bg-white/12 pl-4 pr-2">
+      <div className="flex h-10 min-w-0 flex-1 items-center rounded-full border border-white/15 bg-white/10 pl-4 pr-2 backdrop-blur-2xl">
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -205,7 +205,7 @@ export function TogetherChatInput({ onToast }: { onToast?: (m: string) => void }
         onClick={() => onToast?.('语音消息即将上线')}
         aria-label="语音消息"
         data-testid="music-tg-voice"
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/12 text-white/85 active:scale-95"
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white/85 backdrop-blur-xl active:scale-95"
       >
         <AudioLines className="h-[18px] w-[18px]" />
       </button>

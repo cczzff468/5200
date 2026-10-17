@@ -250,7 +250,7 @@ export function MusicSearch() {
       {/* 搜索栏：胶囊框（放大镜 + 热词轮播 + 搜索钮）；返回键已删除（第三十三轮反馈） */}
       <div className="sticky top-0 z-20 bg-[#F8F8F8]/95 px-4 pb-2 pt-[54px] backdrop-blur-xl dark:bg-black/95">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-[38px] min-w-0 flex-1 items-center rounded-full border border-black/[0.08] bg-white px-3 dark:border-white/10 dark:bg-zinc-900">
+          <div className="flex h-[38px] min-w-0 flex-1 items-center rounded-full border border-white/60 bg-white/75 px-3 ring-1 ring-black/[0.06] backdrop-blur-xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/75 dark:ring-white/10">
             <Search className="h-[17px] w-[17px] shrink-0 text-zinc-500 dark:text-zinc-400" />
             <input
               ref={inputRef}
@@ -404,7 +404,7 @@ export function MusicSearch() {
             {/* 热搜榜 / 热歌榜 横滑卡片 */}
             <div className="no-scrollbar mt-2 flex gap-3 overflow-x-auto px-4" data-testid="music-search-boards">
               {/* 热搜榜 */}
-              <div className="w-[82%] shrink-0 rounded-2xl bg-white p-4 dark:bg-zinc-900" data-testid="music-search-hotboard">
+              <div className="w-[82%] shrink-0 rounded-2xl border border-white/60 bg-white/75 p-4 shadow-[0_8px_28px_rgba(0,0,0,0.08)] backdrop-blur-xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/75" data-testid="music-search-hotboard">
                 <div className="flex items-center gap-2.5 border-b border-black/[0.06] pb-3 dark:border-white/10">
                   <p className="text-[17px] font-bold text-zinc-900 dark:text-zinc-100">热搜榜</p>
                   <button
@@ -447,7 +447,7 @@ export function MusicSearch() {
               </div>
 
               {/* 热歌榜 */}
-              <div className="w-[82%] shrink-0 rounded-2xl bg-white p-4 dark:bg-zinc-900" data-testid="music-search-songboard">
+              <div className="w-[82%] shrink-0 rounded-2xl border border-white/60 bg-white/75 p-4 shadow-[0_8px_28px_rgba(0,0,0,0.08)] backdrop-blur-xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/75" data-testid="music-search-songboard">
                 <div className="flex items-center gap-2.5 border-b border-black/[0.06] pb-3 dark:border-white/10">
                   <p className="text-[17px] font-bold text-zinc-900 dark:text-zinc-100">{hotSongsTop?.name ?? '热歌榜'}</p>
                   <button
@@ -576,7 +576,7 @@ export function MusicSearch() {
       {sheet && (
         <div className="absolute inset-0 z-[80] flex items-end">
           <button type="button" aria-label="关闭" onClick={() => setSheet(null)} className="absolute inset-0 bg-black/40" />
-          <div className="relative flex max-h-[75%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
+          <div className="relative flex max-h-[75%] w-full flex-col rounded-t-2xl border-t border-white/60 bg-white/85 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
             <div className="flex items-center gap-3 p-4 pb-2">
               <button type="button" onClick={() => setSheet(null)} aria-label="返回">
                 <ChevronLeft className="h-5 w-5 text-zinc-500" />

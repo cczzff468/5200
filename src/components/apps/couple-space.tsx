@@ -1536,7 +1536,7 @@ export default function CoupleSpaceApp() {
                   <Icon
                     className="h-[19px] w-[19px]"
                     strokeWidth={active ? 2.5 : 1.9}
-                    fill={active && t.key === 'home' ? 'currentColor' : 'none'}
+                    fill="none"
                     color={active ? '#e0455c' : '#b6b6bd'}
                   />
                   <span className={`text-[10px] leading-none ${active ? 'font-semibold text-[#3a3a40]' : 'text-[#b6b6bd]'}`}>{t.label}</span>
@@ -1583,6 +1583,8 @@ function HomePage(props: {
   const { state, days, missDays, tapMissYou, openSub, onPickBg, onClose } = props;
   const bgInput = useRef<HTMLInputElement | null>(null);
   const [pulse, setPulse] = useState(0);
+  /** 今天是否已打卡（第四十三轮：每天点击一次后大圆消失，次日恢复显示） */
+  const missedToday = (state.missYouByDay?.[todayKey()] ?? 0) > 0;
 
   /** 头像 + 下方想念天数徽标（点击「每天想你」后出现） */
   const avatarCol = (side: 'me' | 'ta') => {
@@ -1651,11 +1653,9 @@ function HomePage(props: {
           {avatarCol('ta')}
         </div>
 
-      {/* 每天想你大圆（第四十二轮恢复：始终显示不再消失；打卡后圆内下方补想念天数小字，记录入口在右侧悬浮心形按钮） */}
+      {/* 每天想你大圆（第四十三轮：当天已打卡时隐藏，次日恢复；圆内字样只剩「每天想你」，引号装饰已删） */}
+      {!missedToday && (
       <div className="relative mt-3 flex h-[286px] w-full items-start justify-center">
-        {/* 引号装饰 */}
-        <span aria-hidden="true" className="absolute left-[18%] top-[44px] select-none font-serif text-[44px] font-bold leading-none text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">&ldquo;</span>
-        <span aria-hidden="true" className="absolute right-[18%] top-[44px] select-none font-serif text-[44px] font-bold leading-none text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.18)]">&rdquo;</span>
         <button
           type="button"
           data-testid="miss-you-btn"
@@ -1668,18 +1668,12 @@ function HomePage(props: {
         >
           <span aria-hidden="true" className="absolute -inset-2.5 rounded-full bg-white/30" />
           <span key={pulse} aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-full bg-white/40 [animation:couple-ripple-out_.7s_ease-out]" />
-          <span className="relative flex flex-col items-center">
-            <span key={`t${pulse}`} className="block text-[20px] font-bold tracking-wide text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.18)] [animation:couple-pop-heart_.45s_ease-out]">
-              每天想你
-            </span>
-            {missDays != null && (
-              <span className="mt-1 rounded-full bg-white/70 px-2 py-[2px] text-[10px] font-semibold leading-none text-[#6b6b74] shadow-[0_2px_8px_rgba(0,0,0,0.10)]">
-                已想 {missDays} 天 ♡
-              </span>
-            )}
+          <span key={`t${pulse}`} className="relative block text-[20px] font-bold tracking-wide text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.18)] [animation:couple-pop-heart_.45s_ease-out]">
+            每天想你
           </span>
         </button>
       </div>
+      )}
 
         <input
           ref={bgInput}
@@ -4641,36 +4635,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
           <div className="max-h-[78%] overflow-y-auto rounded-t-2xl bg-white/80 backdrop-blur-2xl backdrop-saturate-150 px-4 pb-8 pt-3 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()} data-testid="env-picker">
             <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
             <div className="text-center text-[17px] font-bold text-[#2c2c30]">选择信封</div>
-            <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">挑一个喜欢的信封，把信装进去寄给他</div>
-            {/* 信封上的字（第二十九轮：自定义收信字样，留空=默认「致 最爱的你」） */}
-            <div className="mt-3 flex items-center gap-3 rounded-xl bg-[#f7f5f0] px-3.5 py-2.5">
-              <span className="shrink-0 text-[13.5px] font-semibold text-[#5a5048]">信封上的字</span>
-              <input
-                value={envText}
-                onChange={(e) => {
-                  const v = e.target.value.slice(0, 10);
-                  setEnvText(v);
-                  patch({ letterEnvText: v });
-                }}
-                maxLength={10}
-                placeholder="致 最爱的你"
-                aria-label="信封上的字"
-                data-testid="env-text-input"
-                className="h-9 min-w-0 flex-1 rounded-lg bg-white/80 backdrop-blur-xl px-3 text-[14px] text-[#3a322c] outline-none ring-1 ring-black/[0.06] focus:ring-[#c9a86a] placeholder:text-[#c4bcb2]"
-              />
-              {envText && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEnvText('');
-                    patch({ letterEnvText: '' });
-                  }}
-                  className="shrink-0 text-[12px] font-medium text-[#b08a6a]"
-                >
-                  恢复默认
-                </button>
-              )}
-            </div>
+            <div className="mt-1 text-center text-[11px] text-[#b6b6bd]">挑一个喜欢的信封，把信装进去寄给他（信封上的字在发送设置里填写）</div>
             <div className="mt-3 grid grid-cols-3 gap-3">
               {LETTER_ENVELOPES.map((e) => (
                 <button
@@ -4949,8 +4914,9 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
 
   // ============ 编辑信件视图（第二十轮重做：纵向连续信纸，下滑即加第二页，不再左右翻页；「xx的来信」页眉标签已删除；第二十八轮：每页信纸同高同容、装饰纹理层、工具栏删手写信+信纸移位；第二十九轮：参考图同款信纸装饰层/画框/题头/方格稿纸，题头信纸正文自动下移避让；
   //  第二十九轮再修「字太往上」：① 无题头信纸顶部内边距 32→52px，字不再顶到日期/画框；
-  //  ② 横线周期改为 30px 与行高严格对齐（此前 31px 周期每行漂移 1px），横线基线对齐写字行
-  //  （第一行横线落在 padTop+21 ≈ 基线下方，不再从字头上穿过）） ============
+  //  ② 横线周期改为 30px 与行高严格对齐（此前 31px 周期每行漂移 1px），横线基线对齐写字行；
+  //  ③ 第四十三轮再修「字太往下」：实测各字体字形底部在行盒 22-23px 处而横线在 20-21px（字悬挂在线下），
+  //  横线整体下移 3px（padTop-9→padTop-6），文字恰好坐在线上） ============
   if (view === 'write') {
     const padTop = paper.padTop ?? 52; // 题头信纸把正文往下压，避开装饰层；无题头信纸也留足顶部留白（第二十九轮：32→52）
     const lineBg = !paper.grid && dashed && paper.dashed !== undefined
@@ -4975,8 +4941,8 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                   style={{ background: paper.bg, height: LETTER_PAGE_HEIGHT, containerType: 'inline-size' }}
                   data-testid={`letter-paper-${pi + 1}`}
                 >
-                  {/* 横线（方格稿纸信纸用格子纹理替代横线；周期 30px 与行高对齐，第一行横线在 padTop+21 ≈ 基线处） */}
-                  {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: `0 ${padTop - 9}px` }} />}
+                  {/* 横线（方格稿纸信纸用格子纹理替代横线；周期 30px 与行高对齐，第四十三轮横线下移 3px：第一行横线在 padTop+23 ≈ 字形底部，文字坐在线上） */}
+                  {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: `0 ${padTop - 6}px` }} />}
                   {/* 信纸自带装饰纹理（第二十八轮：蕾丝点/樱花点/格纹/斜纹等） */}
                   {paper.deco && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: paper.deco, backgroundSize: paper.decoSize }} />}
                   {/* 参考图同款装饰层（画框/衔纸鸽/题头/小鱼骨条/英文小字；第二十九轮） */}
@@ -5132,6 +5098,35 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                 </button>
               </div>
             </div>
+            {/* 信封上的字（第四十三轮：从选择信封弹窗移到这里；实时同步到上方信封预览与寄出的信封） */}
+            <div className="flex items-center gap-3 px-4 py-3.5">
+              <span className="w-[76px] shrink-0 text-[15px] font-semibold text-white">信封上的字</span>
+              <input
+                value={envText}
+                onChange={(e) => {
+                  const v = e.target.value.slice(0, 10);
+                  setEnvText(v);
+                  patch({ letterEnvText: v });
+                }}
+                maxLength={10}
+                placeholder="致 最爱的你"
+                aria-label="信封上的字"
+                data-testid="env-text-input"
+                className="h-9 min-w-0 flex-1 rounded-lg bg-white/10 px-3 text-[13.5px] text-white outline-none ring-1 ring-white/15 focus:ring-white/40 placeholder:text-white/35"
+              />
+              {envText && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEnvText('');
+                    patch({ letterEnvText: '' });
+                  }}
+                  className="shrink-0 text-[12px] font-medium text-[#4ade80]"
+                >
+                  恢复默认
+                </button>
+              )}
+            </div>
             {/* 收信效果 */}
             <div className="flex items-center gap-3 px-4 py-3.5">
               <span className="w-[76px] shrink-0 text-[15px] font-semibold text-white">收信效果</span>
@@ -5263,7 +5258,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             横线与行高 30px 对齐 + 应用编辑器选的字体/字号/字色——阅读页与编辑页所见即所得） */}
         <div className="relative z-10 flex-1 overflow-y-auto px-4 pb-4 pt-2">
           <div className="relative mx-auto max-w-[430px] overflow-hidden rounded-xl bg-[#fdf9ef] shadow-[0_12px_30px_rgba(140,90,100,0.18)]" data-testid="letter-read-paper">
-            <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: `repeating-linear-gradient(180deg, transparent 0px, transparent 29px, rgba(210,180,140,0.5) 29px, rgba(210,180,140,0.5) 30px)`, backgroundPosition: '0 66px' }} />
+            <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: `repeating-linear-gradient(180deg, transparent 0px, transparent 29px, rgba(210,180,140,0.5) 29px, rgba(210,180,140,0.5) 30px)`, backgroundPosition: '0 69px' }} />
             <div className="relative px-5 pb-2 pt-8">
               <div className="text-[15.5px] font-semibold text-[#4a3f34]">{`亲爱的${greet}`}</div>
               <div

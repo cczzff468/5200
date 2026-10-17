@@ -298,7 +298,7 @@ export function MusicPlayer() {
           <button
             type="button"
             onClick={close}
-            className="rounded-full bg-white/10 px-5 py-1.5 text-[12px] text-zinc-300"
+            className="rounded-full border border-white/15 bg-white/10 px-5 py-1.5 text-[12px] text-zinc-300 backdrop-blur-xl"
           >
             返回
           </button>
@@ -1778,7 +1778,7 @@ function QuickInputBar({
         style={{ backgroundColor: 'transparent' }}
       />
       <div
-        className="absolute inset-x-0 bottom-0 z-[40] flex items-center gap-2 bg-black/55 px-4 pb-7 pt-3 backdrop-blur-xl"
+        className="absolute inset-x-0 bottom-0 z-[40] flex items-center gap-2 border-t border-white/10 bg-black/45 px-4 pb-7 pt-3 backdrop-blur-2xl"
         data-testid="music-quick-input"
         style={{
           animation: 'quick-in-up 0.22s ease-out',
@@ -1875,8 +1875,8 @@ function TogetherMenu({
       <button type="button" aria-label="关闭菜单" onClick={onClose} className="absolute inset-0 bg-black/45" />
       <div className="absolute right-4 top-[100px] w-[200px]">
         {/* 指向入口按钮的小箭头 */}
-        <div className="absolute right-[22px] h-3 w-3 rotate-45 rounded-[2px] bg-[#2b2b2d] -top-[6px]" />
-        <div className="relative overflow-hidden rounded-[16px] bg-[#2b2b2d]/95 shadow-[0_18px_50px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+        <div className="absolute right-[22px] h-3 w-3 rotate-45 rounded-[2px] bg-zinc-800 -top-[6px]" />
+        <div className="relative overflow-hidden rounded-[16px] border border-white/10 bg-zinc-900/70 shadow-[0_18px_50px_rgba(0,0,0,0.55)] backdrop-blur-2xl">
           {rows.map((r, i) => (
             <button
               key={r.k}
@@ -1930,7 +1930,7 @@ function TgRecordSheet({
   return (
     <div className="absolute inset-0 z-[63] flex items-end" data-testid="music-tg-record">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/50" />
-      <div className="relative flex max-h-[68%] w-full flex-col rounded-t-2xl bg-[#1c1c1e]/95 backdrop-blur-xl">
+      <div className="relative flex max-h-[68%] w-full flex-col rounded-t-2xl border-t border-white/10 bg-zinc-900/70 backdrop-blur-2xl">
         <div className="flex items-center justify-between px-5 py-3.5">
           <p className="text-[15px] font-bold text-white">一起听记录</p>
           <button type="button" onClick={onClose} aria-label="关闭">
@@ -2139,7 +2139,7 @@ function MoreSheet({
   return (
     <div className="absolute inset-0 z-[66] flex items-end" data-testid="music-player-more-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
-      <div className="relative flex max-h-[82%] w-full flex-col rounded-t-2xl bg-white pb-6 dark:bg-zinc-900">
+      <div className="relative flex max-h-[82%] w-full flex-col rounded-t-2xl border-t border-white/60 bg-white/85 pb-6 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600" />
         <div className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
           {/* 歌曲信息 + 为TA心动 */}
@@ -2440,7 +2440,7 @@ function PlayerStyleSheet({ onClose, onToast }: { onClose: () => void; onToast: 
   return (
     <div className="absolute inset-0 z-[70] flex items-end" data-testid="music-player-style-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
-      <div className="relative w-full rounded-t-2xl bg-white pb-7 dark:bg-zinc-900">
+      <div className="relative w-full rounded-t-2xl border-t border-white/60 bg-white/85 pb-7 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-zinc-300 dark:bg-zinc-600" />
         <p className="mt-3 text-center text-[15px] font-bold text-zinc-900 dark:text-zinc-100">播放器样式</p>
         <div className="mt-2 px-3">
@@ -2542,7 +2542,7 @@ function SongInfoSheet({ song, onClose }: { song: NcmSong; onClose: () => void }
   return (
     <div className="absolute inset-0 z-[70] flex items-end" data-testid="music-player-info-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
-      <div className="relative w-full rounded-t-2xl bg-white pb-7 dark:bg-zinc-900">
+      <div className="relative w-full rounded-t-2xl border-t border-white/60 bg-white/85 pb-7 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-zinc-300 dark:bg-zinc-600" />
         <p className="mt-3 text-center text-[15px] font-bold text-zinc-900 dark:text-zinc-100">歌曲百科</p>
         <div className="flex items-center gap-3 px-5 pt-4">
@@ -2583,7 +2583,7 @@ function SleepSheet({ onClose, onToast }: { onClose: () => void; onToast: (m: st
   return (
     <div className="absolute inset-0 z-[70] flex items-end" data-testid="music-player-sleep-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
-      <div className="relative w-full rounded-t-2xl bg-white pb-7 dark:bg-zinc-900">
+      <div className="relative w-full rounded-t-2xl border-t border-white/60 bg-white/85 pb-7 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-zinc-300 dark:bg-zinc-600" />
         <p className="mt-3 text-center text-[15px] font-bold text-zinc-900 dark:text-zinc-100">定时关闭</p>
         <div className="mt-2 px-3">
@@ -2695,7 +2695,7 @@ function ShareToChatSheet({
   return (
     <div className="absolute inset-0 z-[72] flex items-end" data-testid="music-share-chat-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/45" />
-      <div className="relative flex max-h-[70%] w-full flex-col rounded-t-2xl bg-white pb-6 dark:bg-zinc-900">
+      <div className="relative flex max-h-[70%] w-full flex-col rounded-t-2xl border-t border-white/60 bg-white/85 pb-6 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-zinc-300 dark:bg-zinc-600" />
 
         {step === 'app' ? (
@@ -2874,7 +2874,7 @@ function QueueSheet({ onClose }: { onClose: () => void }) {
   return (
     <div className="absolute inset-0 z-[66] flex items-end" data-testid="music-queue-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/50" />
-      <div className="relative flex max-h-[65%] w-full flex-col rounded-t-2xl bg-[#1c1c1e]/95 backdrop-blur-xl">
+      <div className="relative flex max-h-[65%] w-full flex-col rounded-t-2xl border-t border-white/10 bg-zinc-900/70 backdrop-blur-2xl">
         <div className="flex items-center justify-between px-5 py-3.5">
           <p className="text-[14px] font-bold text-white">
             当前播放 <span className="text-[11px] font-normal text-white/40">({queue.length})</span>
@@ -2982,7 +2982,7 @@ function InviteSheet({
   return (
     <div className="absolute inset-0 z-[67] flex items-end" data-testid="music-invite-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/50" />
-      <div className="relative flex max-h-[70%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
+      <div className="relative flex max-h-[70%] w-full flex-col rounded-t-2xl border-t border-white/60 bg-white/85 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="flex items-center justify-between px-5 py-3.5">
           <div>
             <p className="text-[15px] font-bold text-zinc-900 dark:text-zinc-100">{title}</p>

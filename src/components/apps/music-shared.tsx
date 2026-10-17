@@ -273,7 +273,7 @@ export function AddToSongSheet({ song, onClose }: { song: NcmSong; onClose: () =
   return (
     <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-addto-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative flex max-h-[72%] w-full flex-col rounded-t-2xl bg-white dark:bg-zinc-900">
+      <div className="relative flex max-h-[72%] w-full flex-col rounded-t-2xl border-t border-white/60 bg-white/85 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mx-auto mt-2.5 h-1 w-8 shrink-0 rounded-full bg-black/15 dark:bg-white/20" />
         <div className="flex shrink-0 items-center justify-between px-4 pb-1 pt-3">
           <p className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">添加到歌单</p>
@@ -396,7 +396,7 @@ export function PlaylistCreateDialog({
   return (
     <div className="absolute inset-0 z-[82] flex items-center justify-center px-9" data-testid="music-pl-create-dialog">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/50" />
-      <div className="relative w-full max-w-[310px] overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-zinc-800">
+      <div className="relative w-full max-w-[310px] overflow-hidden rounded-2xl border border-white/60 bg-white/85 shadow-2xl backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-800/85">
         <p className="pt-5 text-center text-[16px] font-bold text-zinc-900 dark:text-zinc-100">新建歌单</p>
         <div className="px-5 pt-4">
           <input
@@ -408,7 +408,7 @@ export function PlaylistCreateDialog({
             }}
             placeholder="输入歌单名字"
             data-testid="music-pl-create-name"
-            className="h-10 w-full rounded-lg bg-zinc-100 px-3 text-[14px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:bg-zinc-700 dark:text-zinc-100"
+            className="h-10 w-full rounded-lg bg-white/70 px-3 text-[14px] text-zinc-900 outline-none backdrop-blur-xl placeholder:text-zinc-400 dark:bg-zinc-700/80 dark:text-zinc-100"
           />
           <label className="mt-3 flex w-fit cursor-pointer items-center gap-2 text-[13px] text-zinc-600 dark:text-zinc-300">
             <input
@@ -487,13 +487,14 @@ const TABS: { key: MusicNav['tab']; label: string }[] = [
   { key: 'mine', label: '我的' },
 ];
 
-/** 底部 TabBar：纯文字（无图标），激活态加粗黑字；背景透明露出页面底色（避免白色长条包裹迷你条） */
+/** 底部 TabBar：毛玻璃悬浮胶囊（第四十三轮，样式对齐 couple-space/淘宝/美团胶囊条）：
+ *  纯文字（无图标），激活项加浅红胶囊底 + 品牌红字，未激活灰；胶囊壳自带磨砂 + 柔影 */
 export function MusicTabBar() {
   const tab = useMusic((s) => s.nav.tab);
   const setTab = useMusic((s) => s.setTab);
   return (
     <nav
-      className="pointer-events-auto flex h-[46px] shrink-0 items-stretch"
+      className="pointer-events-auto flex h-[46px] shrink-0 items-stretch rounded-[24px] border border-white/60 bg-white/80 shadow-[0_10px_36px_rgba(0,0,0,0.16)] backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/75"
       data-testid="music-tabbar"
     >
       {TABS.map((t) => {
@@ -504,9 +505,9 @@ export function MusicTabBar() {
             type="button"
             onClick={() => setTab(t.key)}
             data-testid={`music-tab-${t.key}`}
-            className={`flex flex-1 items-center justify-center ${
+            className={`mx-1 my-1.5 flex flex-1 items-center justify-center rounded-full transition-all active:opacity-70 ${
               active
-                ? 'font-bold text-zinc-900 dark:text-white'
+                ? 'bg-[#C20C0C]/10 font-bold text-[#C20C0C] dark:bg-[#FF5A5A]/15 dark:text-[#FF6B6B]'
                 : 'font-medium text-zinc-400 dark:text-zinc-500'
             }`}
           >
@@ -537,7 +538,7 @@ export function MiniBar() {
   if (!current) return null;
   return (
     <div
-      className="pointer-events-auto mx-3 mb-1.5 flex h-[42px] shrink-0 items-center rounded-full bg-white pl-1 pr-1.5 shadow-[0_4px_16px_rgba(0,0,0,0.12)] dark:bg-zinc-800 dark:shadow-[0_4px_16px_rgba(0,0,0,0.5)]"
+      className="pointer-events-auto mx-3 mb-1.5 flex h-[42px] shrink-0 items-center rounded-full border border-white/60 bg-white/80 pl-1 pr-1.5 shadow-[0_8px_28px_rgba(0,0,0,0.14)] backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-800/80 dark:shadow-[0_8px_28px_rgba(0,0,0,0.5)]"
       data-testid="music-minibar"
     >
       <button
@@ -557,7 +558,7 @@ export function MiniBar() {
             />
             <CoverImg
               src={loginUid ? loginAvatar : getGuestAvatar()}
-              className="-ml-2.5 h-[34px] w-[34px] ring-2 ring-white dark:ring-zinc-800"
+              className="-ml-2.5 h-[34px] w-[34px] ring-2 ring-white/80 dark:ring-zinc-800/80"
               rounded="rounded-full"
               alt="我"
             />

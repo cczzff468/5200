@@ -66,7 +66,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-[110px]">
         {/* 账号 */}
-        <section className="rounded-2xl border border-black/5 bg-white p-4 dark:border-white/10 dark:bg-zinc-900" data-testid="music-settings-account">
+        <section className="rounded-2xl border border-white/60 bg-white/80 p-4 shadow-[0_8px_28px_rgba(0,0,0,0.08)] backdrop-blur-xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/80" data-testid="music-settings-account">
           <p className="mb-3 text-[13px] font-bold text-zinc-500">账号</p>
           {loginUid ? (
             <div className="flex items-center gap-3">
@@ -109,7 +109,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
         </section>
 
         {/* API 配置 */}
-        <section className="rounded-2xl border border-black/5 bg-white p-4 dark:border-white/10 dark:bg-zinc-900" data-testid="music-settings-api">
+        <section className="rounded-2xl border border-white/60 bg-white/80 p-4 shadow-[0_8px_28px_rgba(0,0,0,0.08)] backdrop-blur-xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/80" data-testid="music-settings-api">
           <div className="mb-3 flex items-center gap-1.5">
             <Link2 className="h-4 w-4 text-zinc-400" />
             <p className="text-[13px] font-bold text-zinc-500">API 配置</p>
@@ -120,7 +120,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
             onChange={(e) => setCfg({ ...cfg, baseUrl: e.target.value })}
             placeholder="内置默认（本机优先 · 云端兜底）"
             data-testid="music-settings-baseurl"
-            className="mb-3 h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[13px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+            className="mb-3 h-10 w-full rounded-lg border border-black/10 bg-white/70 px-3 text-[13px] text-zinc-900 outline-none backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100"
           />
           <div className="mb-1 flex items-center gap-1.5">
             <KeyRound className="h-3.5 w-3.5 text-zinc-400" />
@@ -131,7 +131,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
             onChange={(e) => setCfg({ ...cfg, apiKey: e.target.value })}
             placeholder="留空即可"
             data-testid="music-settings-apikey"
-            className="h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[13px] text-zinc-900 outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+            className="h-10 w-full rounded-lg border border-black/10 bg-white/70 px-3 text-[13px] text-zinc-900 outline-none backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100"
           />
           <div className="mt-3 flex gap-2.5">
             <button
@@ -158,7 +158,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
         </section>
 
         {/* 关于 */}
-        <section className="rounded-2xl border border-black/5 bg-white p-4 dark:border-white/10 dark:bg-zinc-900">
+        <section className="rounded-2xl border border-white/60 bg-white/80 p-4 shadow-[0_8px_28px_rgba(0,0,0,0.08)] backdrop-blur-xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/80">
           <div className="mb-2 flex items-center gap-1.5">
             <ShieldCheck className="h-4 w-4 text-zinc-400" />
             <p className="text-[13px] font-bold text-zinc-500">关于</p>
@@ -172,7 +172,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
 
         {confirmLogout && (
           <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40" data-testid="music-logout-confirm">
-            <div className="mx-8 w-full max-w-[280px] rounded-2xl bg-white p-5 dark:bg-zinc-800">
+            <div className="mx-8 w-full max-w-[280px] rounded-2xl border border-white/60 bg-white/85 p-5 shadow-2xl backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-800/85">
               <p className="text-center text-[15px] font-semibold text-zinc-900 dark:text-zinc-100">退出登录？</p>
               <p className="mt-1.5 text-center text-[12px] text-zinc-400">
                 退出后将返回登录页，本地历史与播放队列会保留
@@ -181,7 +181,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
                 <button
                   type="button"
                   onClick={() => setConfirmLogout(false)}
-                  className="h-10 flex-1 rounded-full border border-zinc-300 text-[13px] text-zinc-600 dark:border-zinc-600 dark:text-zinc-300"
+                  className="h-10 flex-1 rounded-full border border-white/60 bg-white/70 text-[13px] text-zinc-600 ring-1 ring-black/[0.06] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-300 dark:ring-white/10"
                 >
                   取消
                 </button>
@@ -201,7 +201,7 @@ export function MusicSettings({ asSheet = false, onBack }: { asSheet?: boolean; 
         <button
           type="button"
           onClick={() => useMusic.getState().setTab('mine')}
-          className="flex w-full items-center justify-between rounded-2xl border border-black/5 bg-white px-4 py-3.5 dark:border-white/10 dark:bg-zinc-900"
+          className="flex w-full items-center justify-between rounded-2xl border border-white/60 bg-white/80 px-4 py-3.5 shadow-[0_8px_28px_rgba(0,0,0,0.08)] backdrop-blur-xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/80"
         >
           <span className="text-[13px] text-zinc-600 dark:text-zinc-300">我的音乐主页</span>
           <ChevronRight className="h-4 w-4 text-zinc-300" />

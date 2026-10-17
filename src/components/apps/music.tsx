@@ -98,13 +98,10 @@ export default function MusicApp() {
                 {nav.tab === 'search' && <MusicSearch />}
                 {nav.tab === 'mine' && <MusicMine onSettings={() => setShowSettings(true)} />}
               </div>
-              {/* 底部悬浮层：TabBar 实色底（不再透明露内容），迷你条由全局层渲染 */}
+              {/* 底部悬浮层：TabBar 毛玻璃胶囊悬浮条（第四十三轮；胶囊壳在 MusicTabBar 组件内），迷你条由全局层渲染 */}
               {showTabBar && (
-                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col">
-                  <div className="pointer-events-auto border-t border-black/[0.06] bg-[#F8F8F8] dark:border-white/10 dark:bg-[#141416]">
-                    <MusicTabBar />
-                    <div className="h-[10px] shrink-0" />
-                  </div>
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 px-4 pb-[max(10px,env(safe-area-inset-bottom))]">
+                  <MusicTabBar />
                 </div>
               )}
             </div>
@@ -113,11 +110,12 @@ export default function MusicApp() {
           {nav.view === 'player' && <MusicPlayer />}
           {nav.view === 'playlist' && <MusicPlaylist />}
 
-          {/* 全局迷你播放条：tabs/歌单/设置页都悬浮显示（全屏播放页除外）；TabBar 可见时贴其上方 */}
+          {/* 全局迷你播放条：tabs/歌单/设置页都悬浮显示（全屏播放页除外）；TabBar 胶囊可见时贴其上方
+              （胶囊 = pb 10px + 高 46px ≈ 占 56px，迷你条自身 mb-1.5，bottom 62 留出 6px 间隙） */}
           {showMini && (
             <div
               className="pointer-events-none absolute inset-x-0 z-[70]"
-              style={{ bottom: showTabBar ? 58 : 0 }}
+              style={{ bottom: showTabBar ? 62 : 0 }}
               data-testid="music-minibar-global"
             >
               <MiniBar />
@@ -171,7 +169,7 @@ function LoginView() {
             data-testid={`music-login-tab-${t.k}`}
             className={`flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-[13px] font-medium transition-all ${
               tab === t.k
-                ? 'bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white'
+                ? 'bg-white/85 text-zinc-900 shadow-sm backdrop-blur-xl dark:bg-zinc-700/85 dark:text-white'
                 : 'text-zinc-500'
             }`}
           >
@@ -189,7 +187,7 @@ function LoginView() {
             type="button"
             onClick={() => enterGuestMode()}
             data-testid="music-guest-enter"
-            className="rounded-full border border-zinc-300 px-5 py-2 text-[13px] text-zinc-600 active:scale-95 dark:border-zinc-600 dark:text-zinc-300"
+            className="rounded-full border border-white/60 bg-white/70 px-5 py-2 text-[13px] text-zinc-600 ring-1 ring-black/[0.06] backdrop-blur-xl active:scale-95 dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-300 dark:ring-white/10"
           >
             先逛逛（游客模式）
           </button>
@@ -197,7 +195,7 @@ function LoginView() {
             type="button"
             onClick={() => setShowApiCfg(true)}
             data-testid="music-api-cfg-open"
-            className="flex items-center gap-1 rounded-full border border-zinc-300 px-5 py-2 text-[13px] text-zinc-600 active:scale-95 dark:border-zinc-600 dark:text-zinc-300"
+            className="flex items-center gap-1 rounded-full border border-white/60 bg-white/70 px-5 py-2 text-[13px] text-zinc-600 ring-1 ring-black/[0.06] backdrop-blur-xl active:scale-95 dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-300 dark:ring-white/10"
           >
             <Settings2 className="h-3.5 w-3.5" />
             API 设置
@@ -284,14 +282,14 @@ function QrLogin() {
 
   return (
     <div className="flex flex-col items-center" data-testid="music-qr-login">
-      <div className="relative flex h-[190px] w-[190px] items-center justify-center rounded-2xl border border-black/5 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-zinc-800">
+      <div className="relative flex h-[190px] w-[190px] items-center justify-center rounded-2xl border border-white/60 bg-white/75 p-3 shadow-[0_8px_28px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.06] backdrop-blur-xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-800/70">
         {status === 'loading' && <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />}
         {qr && status !== 'loading' && (
           <>
             { }
             <img src={qr.qrimg} alt="网易云登录二维码" className="h-full w-full" draggable={false} />
             {(status === 'expired' || status === 'ok') && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-2xl bg-white/95 dark:bg-zinc-900/95">
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-2xl bg-white/85 backdrop-blur-xl dark:bg-zinc-900/85">
                 {status === 'expired' ? (
                   <>
                     <p className="text-[12px] text-zinc-500">二维码已过期</p>
@@ -379,7 +377,7 @@ function PhoneLogin() {
 
   return (
     <div className="mx-auto flex w-full max-w-[300px] flex-col gap-3" data-testid="music-phone-login">
-      <div className="flex items-center rounded-xl border border-black/10 bg-white px-3 dark:border-white/10 dark:bg-zinc-800">
+      <div className="flex items-center rounded-xl border border-white/60 bg-white/70 px-3 ring-1 ring-black/[0.06] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:ring-white/10">
         <span className="pr-2 text-[14px] font-medium text-zinc-700 dark:text-zinc-200">+86</span>
         <input
           value={phone}
@@ -398,14 +396,14 @@ function PhoneLogin() {
             placeholder="输入验证码"
             inputMode="numeric"
             data-testid="music-login-captcha"
-            className="h-11 min-w-0 flex-1 rounded-xl border border-black/10 bg-white px-3 text-[15px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+            className="h-11 min-w-0 flex-1 rounded-xl border border-white/60 bg-white/70 px-3 text-[15px] text-zinc-900 outline-none ring-1 ring-black/[0.06] backdrop-blur-xl placeholder:text-zinc-400 dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100 dark:ring-white/10"
           />
           <button
             type="button"
             onClick={() => void sendCode()}
             disabled={countdown > 0}
             data-testid="music-login-send"
-            className="h-11 shrink-0 rounded-xl border border-[#C20C0C]/40 px-3 text-[12px] text-[#C20C0C] disabled:opacity-40 active:scale-95"
+            className="h-11 shrink-0 rounded-xl border border-[#C20C0C]/40 bg-white/60 px-3 text-[12px] text-[#C20C0C] backdrop-blur-xl disabled:opacity-40 active:scale-95 dark:bg-zinc-800/60"
           >
             {countdown > 0 ? `${countdown}s` : '获取验证码'}
           </button>
@@ -417,7 +415,7 @@ function PhoneLogin() {
           placeholder="输入密码"
           type="password"
           data-testid="music-login-password"
-          className="h-11 rounded-xl border border-black/10 bg-white px-3 text-[15px] text-zinc-900 outline-none placeholder:text-zinc-400 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+          className="h-11 rounded-xl border border-white/60 bg-white/70 px-3 text-[15px] text-zinc-900 outline-none ring-1 ring-black/[0.06] backdrop-blur-xl placeholder:text-zinc-400 dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100 dark:ring-white/10"
         />
       )}
       <button
@@ -483,7 +481,7 @@ export function ApiCfgSheet({ onClose }: { onClose: () => void }) {
   return (
     <div className="absolute inset-0 z-[80] flex items-end" data-testid="music-api-cfg-sheet">
       <button type="button" aria-label="关闭" onClick={onClose} className="absolute inset-0 bg-black/40" />
-      <div className="relative w-full rounded-t-2xl bg-white p-5 pb-8 dark:bg-zinc-900">
+      <div className="relative w-full rounded-t-2xl border-t border-white/60 bg-white/85 p-5 pb-8 backdrop-blur-2xl backdrop-saturate-150 dark:border-white/10 dark:bg-zinc-900/85">
         <div className="mb-1 flex items-center justify-between">
           <h3 className="text-[16px] font-bold text-zinc-900 dark:text-zinc-100">API 设置</h3>
           <button type="button" onClick={onClose} className="text-zinc-400">
@@ -502,7 +500,7 @@ export function ApiCfgSheet({ onClose }: { onClose: () => void }) {
           onChange={(e) => setBaseUrl(e.target.value)}
           placeholder="如 https://your-server.com:3000"
           data-testid="music-api-baseurl"
-          className="mb-3 h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[13px] outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+          className="mb-3 h-10 w-full rounded-lg border border-black/10 bg-white/70 px-3 text-[13px] outline-none backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100"
         />
         <label className="mb-1 block text-[12px] font-medium text-zinc-600 dark:text-zinc-300">
           API Key（选填，部分部署需要）
@@ -512,7 +510,7 @@ export function ApiCfgSheet({ onClose }: { onClose: () => void }) {
           onChange={(e) => setApiKey(e.target.value)}
           placeholder="留空即可"
           data-testid="music-api-key"
-          className="mb-4 h-10 w-full rounded-lg border border-black/10 bg-zinc-50 px-3 text-[13px] outline-none dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100"
+          className="mb-4 h-10 w-full rounded-lg border border-black/10 bg-white/70 px-3 text-[13px] outline-none backdrop-blur-xl dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-100"
         />
         {result && (
           <p
@@ -527,7 +525,7 @@ export function ApiCfgSheet({ onClose }: { onClose: () => void }) {
             type="button"
             onClick={() => void test()}
             disabled={testing}
-            className="h-10 flex-1 rounded-full border border-zinc-300 text-[13px] text-zinc-600 disabled:opacity-40 active:scale-95 dark:border-zinc-600 dark:text-zinc-300"
+            className="h-10 flex-1 rounded-full border border-white/60 bg-white/70 text-[13px] text-zinc-600 ring-1 ring-black/[0.06] backdrop-blur-xl disabled:opacity-40 active:scale-95 dark:border-white/10 dark:bg-zinc-800/70 dark:text-zinc-300 dark:ring-white/10"
           >
             {testing ? '测试中…' : '测试连接'}
           </button>
