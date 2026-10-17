@@ -20549,3 +20549,19 @@ Work Log:
 Stage Summary:
 - 关键决策：徽章配色跟随第五十一轮 reginanka 牌组身份（夜蓝底+香槟金），而非延续旧纸色——解读卡正上方就是三张深蓝金新牌面，图标与牌面同源呼应最协调；图标选 lucide MoonStar 而非自绘 SVG：月牙+一点星光刚好点题、与项目其他 lucide 用法一致、零维护成本
 - 涉及文件：src/components/apps/couple-tarot.tsx（import 增 MoonStar、ReadingCard 图标重做、删 PAPER_BG、头注释补记）
+---
+Task ID: round-53
+Agent: 主协调者 (Z.ai Code)
+Task: 第五十三轮：修复「三张牌选完第 3 张后第 1 张牌消失、要求重选」——排查全部牌阵同类问题并修复
+
+Work Log:
+- 【根因定位】CardWheel 选牌挂在 onPointerUp（endPtr→onTapCard），切回排位页后浏览器会为该次点按补发一个 click；原目标（牌轮卡牌）已卸载，部分内核（iOS WebKit 等）把这次「幽灵 click」重新命中到排位页同位置的元素——落在已放牌的牌位上即触发「点牌位收回」（handleSlotTap 置 null），刚选的牌被清掉。第 1 次选牌时所有牌位为空、误触无效果（return prev），故从第 2 张起「有时候」才发作；幽灵 click 也可能落在「去选牌/翻牌」按钮造成闪跳，同一根因。全部 ≥2 张牌阵共用该衔接路径 → 全部受影响，与具体牌阵无关
+- 【修复一（幽灵 click）】handleCardTap 切页前打 pickGuardRef 时间戳：①页面根容器加 onClickCapture——600ms 内 preventDefault+stopPropagation 吞掉一切 click（防误触牌位/按钮）；②handleSlotTap 内 600ms 内直接 return（双保险）；guard 窗口覆盖飞牌动画期（520ms），窗口过期后「点牌位收回」功能不受影响
+- 【修复二（衍生 bug，顺带发现）】「点牌位收回」清掉中间牌位后，SlotsView/WheelView 用 filledCount 当牌位索引：按钮牌位名、牌轮大标题、脉冲高亮 activeSlot 全部指错（如收回过去位后按钮显示「去选第 2 张·现在」、高亮已填的现在位）。SlotsView/WheelView 改用 slots.findIndex(s=>s===null)（第一个空位）计算 nextSlot/nextPos/activeSlot；序号「第 N 张」保持 filledCount+1（选择顺序语义）
+- 【校验】bunx tsc --noEmit 零错误 ×2；bunx eslint couple-tarot.tsx 零问题 ×2
+- 【端到端实测】agent-browser 全流程（种 accepted 状态 → 恋人空间 → 发现 → 爱情塔罗 → 恋爱运势 → 洗牌 → 切牌 → 三张牌）：A) JS 派发 PointerEvent 模拟牌轮点选第 1 张 → slot0 filled ✓；B) 选第 2 张后立刻在 slot0 中心 elementFromPoint().click() 模拟 WebKit 幽灵点击（ghostTarget=0 确认命中）→ slot0 保持 filled、按钮「去选第 3 张·未来」✓（修复前此处必清空）；C) guard 过期后点 slot0 → 正常收回，按钮=「去选第 2 张牌 · 过去」+脉冲高亮 slot0（修正生效）✓；D) 补选+幽灵 click slot1 → slot1 保持 filled ✓；E) 第 3 张+幽灵 click slot0 → 三张全满+「翻牌」出现 ✓；F) 翻牌 → 三张深蓝金牌面正常翻开+AI 解读按牌位生成 ✓；console 零错误
+- 【测试工程备注】页面上主屏隐藏 DOM 与塔罗 DOM 并存，querySelectorAll 须按可见性过滤（rect 宽高>0 且 x∈手机屏区）；牌轮卡牌 tap 用 dispatchEvent PointerEvent(pointerdown+pointerup) 触发 endPtr 真实路径
+
+Stage Summary:
+- 关键决策：①修在「切页衔接」而非「各牌阵」——幽灵 click 是 pointerup 选牌 + 卸载原目标的固有组合，根容器 capture 拦截一处覆盖所有牌阵与所有误触目标（牌位/翻牌/去选牌按钮）；②620→600ms 窗口取值：覆盖补发 click（实测 <100ms）+ 飞牌期，且不影响真人后续操作；③filledCount→findIndex(null) 只换「牌位定位」三处，进度文案「已选 X/N」与序号语义不变
+- 涉及文件：src/components/apps/couple-tarot.tsx（pickGuardRef + onClickCapture + handleSlotTap 防护 + SlotsView/WheelView nextSlot 定位）

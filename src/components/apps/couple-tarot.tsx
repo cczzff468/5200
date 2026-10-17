@@ -25,6 +25,12 @@
  *   public/tarot/DECK-CREDITS.txt；加载失败仍退回原 sprite/SVG 线稿；
  * - 牌面配色随牌组换装：CardFace 名牌条/罗马数字章/边框改深蓝夜空底 + 香槟金文字（牌背不变）。
  *
+ * 第五十三轮变更：
+ * - 修复「选完第 2/3 张牌后先前牌位被清空、要求重选」：牌轮用 pointerup 选牌，切页后浏览器
+ *   补发的 click 会被重新命中到排位页同位置元素（牌位/按钮）——第 1 次选牌时牌位全空无感，
+ *   之后随机发作。切页打 pickGuard 时间戳：600ms 内根容器 capture 吞 click + 牌位回收双防护；
+ *   全部牌阵通用（根因在切页衔接，不在具体牌阵）。
+ *
  * 第五十二轮变更：
  * - 「塔罗解读」标题图标美化：文字符号「☾」圆章改为深蓝夜空渐变徽章（金线描边 + 顶部内高光），
  *   内置香槟金 MoonStar 细线图标，与 reginanka 深蓝金牌面同源呼应；结果页与历史详情页共用。
@@ -1078,8 +1084,11 @@ function SlotsView({ theme, question, spread, positions, slots, revsBySlot, fill
   onFlip: () => void;
 }) {
   const need = positions.length;
-  const full = filledCount >= need;
-  const nextPos = full ? null : positions[filledCount];
+  // 下一个待填牌位 = 第一个空位（而非已填数索引）：「点牌位收回」可清空中间任意位，
+  // 用 filledCount 当索引会指错牌位（按钮/大标题/脉冲高亮全错位，第五十三轮修正）
+  const nextSlot = slots.findIndex((s) => s === null);
+  const full = nextSlot < 0;
+  const nextPos = full ? null : positions[nextSlot];
   return (
     <div className="relative flex h-full flex-col">
       <div className="shrink-0 px-5 pt-1 text-center">
@@ -1104,7 +1113,7 @@ function SlotsView({ theme, question, spread, positions, slots, revsBySlot, fill
           revsBySlot={revsBySlot}
           flippedCount={0}
           mode="pick"
-          activeSlot={full ? undefined : filledCount}
+          activeSlot={full ? undefined : nextSlot}
           onSlotTap={onSlotTap}
           slotRefCb={slotRefCb}
         />
@@ -1148,8 +1157,9 @@ function WheelView({ theme, question, spread, positions, slots, filledCount, onC
   onBackToSlots: () => void;
 }) {
   const need = positions.length;
-  const full = filledCount >= need;
-  const nextPos = positions[Math.min(filledCount, need - 1)];
+  const nextSlot = slots.findIndex((s) => s === null); // 与排位页同一算法：第一个空位才是当前牌位
+  const full = nextSlot < 0;
+  const nextPos = positions[full ? need - 1 : nextSlot];
   const hidden = useMemo(() => slots.filter((s): s is number => s !== null), [slots]);
   return (
     <div className="relative flex h-full flex-col">
@@ -1504,6 +1514,7 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
   const flyRef = useRef<FlyState | null>(null);
   flyRef.current = fly;
   const pendingCardRef = useRef<{ idx: number; slotIdx: number; gx: number; gy: number } | null>(null);
+  const pickGuardRef = useRef(0); // 牌轮选牌切页时刻：屏蔽切页后浏览器补发的「幽灵 click」（第五十三轮）
   const slotEls = useRef<(HTMLDivElement | null)[]>([]);
   const pageRef = useRef<HTMLDivElement>(null);
   const slotRefCb = useCallback((i: number, el: HTMLDivElement | null) => {
@@ -1533,6 +1544,10 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
         gx: sr.left + sr.width / 2 - (pr?.left ?? 0),
         gy: sr.top + sr.height / 2 - (pr?.top ?? 0),
       };
+      // 选牌用 pointerup 触发，切页后浏览器还会补发一次 click；原目标已卸载时
+      // 该 click 会被重新命中到排位页同位置的元素（牌位/按钮），误触「收回牌位」
+      // 导致刚选的牌消失。切页前打时间戳，600ms 内的 click 一律忽略。
+      pickGuardRef.current = Date.now();
       setView('slots');
     },
     [],
@@ -1591,6 +1606,7 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
 
   const handleSlotTap = useCallback((i: number) => {
     if (flyRef.current) return;
+    if (Date.now() - pickGuardRef.current < 600) return; // 切页幽灵点击防护（与根容器 capture 拦截双保险）
     setSlots((prev) => {
       if (prev[i] == null) return prev;
       const n = [...prev];
@@ -1719,7 +1735,18 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
   const step = view === 'shuffle' ? 0 : view === 'spread' ? 1 : view === 'slots' || view === 'wheel' ? 2 : view === 'reveal' ? 3 : -1;
 
   return (
-    <div ref={pageRef} className="relative flex h-full flex-col overflow-hidden bg-[#f1f2f4] text-gray-900">
+    <div
+      ref={pageRef}
+      className="relative flex h-full flex-col overflow-hidden bg-[#f1f2f4] text-gray-900"
+      onClickCapture={(e) => {
+        // 牌轮选牌（pointerup）切页后浏览器补发的 click：600ms 内一律吞掉，
+        // 防其被重新命中到排位页的牌位（误收回）/「去选牌」「翻牌」按钮（误跳页）上
+        if (Date.now() - pickGuardRef.current < 600) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+    >
       {/* 浅色氛围光斑 */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
         <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-white/85 blur-3xl" />
