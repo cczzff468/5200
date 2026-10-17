@@ -25,6 +25,10 @@
  *   public/tarot/DECK-CREDITS.txt；加载失败仍退回原 sprite/SVG 线稿；
  * - 牌面配色随牌组换装：CardFace 名牌条/罗马数字章/边框改深蓝夜空底 + 香槟金文字（牌背不变）。
  *
+ * 第五十二轮变更：
+ * - 「塔罗解读」标题图标美化：文字符号「☾」圆章改为深蓝夜空渐变徽章（金线描边 + 顶部内高光），
+ *   内置香槟金 MoonStar 细线图标，与 reginanka 深蓝金牌面同源呼应；结果页与历史详情页共用。
+ *
  * - 牌库与牌阵：src/lib/tarot-deck.ts（大阿尔卡那 22 + 小阿尔卡那 56，含正逆位牌意）；
  * - 持久化：state.tarotReadings[contactId]（按恋人联系人 ID 隔离，随 couple-space:state 落 IndexedDB，重启可查）；
  * - 记忆：解读完成后 coupleTarotRemember 写入恋人（AI）记忆（sourceTag='couple-tarot'，仅记录事件，解读不用记忆）；
@@ -32,7 +36,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeft, Star, Trash2 } from 'lucide-react';
+import { ArrowLeft, MoonStar, Star, Trash2 } from 'lucide-react';
 import {
   TAROT_FULL_DECK,
   TAROT_SPREADS,
@@ -85,7 +89,6 @@ function fallbackReading(positions: SpreadPos[], cards: { def: TarotCardDef; rev
 // ---------------- 卡背 / 卡面 / 3D 翻牌（第四十九轮：真实牌面图 + 星座纹牌背） ----------------
 
 const INK = '#43392b'; // 复古炭墨
-const PAPER_BG = 'linear-gradient(168deg,#f9f4e7 0%,#f4edda 52%,#ece1c6 100%)';
 
 /** 大阿尔卡那 → majors.png（6 列 × 4 行）网格位置；恋人 / 倒吊人走 patch.png 左右半（线稿兜底用） */
 const MAJOR_SPRITE: Record<number, [number, number]> = {
@@ -1194,10 +1197,15 @@ function ReadingCard({ reading, positions, drawnDefs }: {
     <div className="mt-3 rounded-2xl border border-white/80 bg-white/65 p-4 backdrop-blur-xl shadow-[0_6px_22px_rgba(17,24,39,0.06)]" data-testid="tarot-reading">
       <div className="flex items-center gap-2.5">
         <span
-          className="flex h-9 w-9 items-center justify-center rounded-full border font-serif text-[15px]"
-          style={{ borderColor: 'rgba(67,57,43,0.35)', background: PAPER_BG, color: INK }}
+          aria-hidden
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full"
+          style={{
+            background: 'linear-gradient(155deg,#1b2244 0%,#0c1026 100%)',
+            border: '1px solid rgba(203,174,110,0.5)',
+            boxShadow: '0 3px 10px rgba(13,18,38,0.16), inset 0 1px 0 rgba(236,217,160,0.22)',
+          }}
         >
-          ☾
+          <MoonStar className="h-[17px] w-[17px]" strokeWidth={1.4} style={{ color: '#ecd9a0' }} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-[14px] font-bold text-gray-900">塔罗解读</div>

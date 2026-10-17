@@ -20533,3 +20533,19 @@ Work Log:
 Stage Summary:
 - 关键决策：①换装选 reginanka 而非其他 7 套：唯一兼具「精美度第一+78 张完整+CC BY 4.0+风格统一」的候选，深蓝金与浅色毛玻璃 App 形成高级撞色；②裁掉烘焙标题条带而不是保留——我们有自己的中英文名牌条，双牌名冗余且浅蓝条带廉价，裁后图片窗比例匹配仅 4% 竖向裁切；③m08/m11 马赛序换位在转换管线中一次性完成（不改牌库数据）；④源组缺审判用 AI 同风格补绘（延续 round-47 sprite 补丁思路），风格对比图验证与月亮/正义同框和谐；⑤牌面配色随牌组升级为深蓝金但结构不动、牌背严格保持第四十九轮定稿
 - 涉及文件：public/tarot/deck/*（78 张全部替换，18MB）、public/tarot/DECK-CREDITS.txt（新增）、public/tarot/SOIMOI-CREDITS.txt + soimoi-LICENSE（删除）、src/components/apps/couple-tarot.tsx（CardFace 配色 + 头部注释/cardImgSrc 注释更新）
+---
+Task ID: round-52
+Agent: 主协调者 (Z.ai Code)
+Task: 第五十二轮：用户反馈「塔罗牌界面塔罗解读前面的图标再美化一下，简约」——重做 ReadingCard 标题图标
+
+Work Log:
+- 【定位】ReadingCard（src/components/apps/couple-tarot.tsx）标题图标原为「纸色渐变圆 + 边框 + 文字符号 ☾」，与第五十一轮深蓝金牌面气质脱节；结果页与历史详情页共用该组件，一处改动双处生效
+- 【新图标】改为深蓝夜空渐变徽章（linear-gradient(155deg,#1b2244→#0c1026)，与 CardFace 名牌条同源）+ 1px 香槟金描边 rgba(203,174,110,.5) + 柔和外投影 + 顶部内高光；内置 lucide MoonStar 细线图标（17px、strokeWidth 1.4、#ecd9a0 金），月+星点题「塔罗/星空」且极简
+- 【清理】PAPER_BG 常量随之无使用点，删除；INK 仍被 SVG 线稿兜底使用保留；文件头注释补第五十二轮变更记录
+- 【校验】bunx tsc --noEmit 零错误；bunx eslint couple-tarot.tsx 零问题
+- 【端到端实测】agent-browser：解锁主屏 → 应用库进恋人空间（IndexedDB ios-phone-db/kv 种入 couple-space:state accepted=true + 一条 ppt 三张牌历史记录）→ 发现页网格进爱情塔罗 → 主题页底部「占卜记录 (1)」→ 历史列表 → 详情页：三张深蓝金新牌面正常，「塔罗解读」前新徽章渲染正确（3.2 倍特写截图核对：夜蓝圆章、金环、金月星细线清晰无毛边）；console 零新增错误，dev.log 仅既有 instrumentation 基线警告
+- 【过程备注】主屏翻页手势（rootPointerDown 屏蔽 button 起点 + trackFollow 位移阈值）对 Playwright 鼠标拖拽不响应，改走「主屏搜索 → 应用库 → 点图标」路径；种子脚本顺带验证了 kv 层结构与 tarotReadings 兼容性（旧记录无 spreadKey 时详情页有 pseudo 牌阵兜底）
+
+Stage Summary:
+- 关键决策：徽章配色跟随第五十一轮 reginanka 牌组身份（夜蓝底+香槟金），而非延续旧纸色——解读卡正上方就是三张深蓝金新牌面，图标与牌面同源呼应最协调；图标选 lucide MoonStar 而非自绘 SVG：月牙+一点星光刚好点题、与项目其他 lucide 用法一致、零维护成本
+- 涉及文件：src/components/apps/couple-tarot.tsx（import 增 MoonStar、ReadingCard 图标重做、删 PAPER_BG、头注释补记）
