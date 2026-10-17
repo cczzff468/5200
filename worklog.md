@@ -20389,3 +20389,28 @@ Work Log:
 Stage Summary:
 - 关键决策：①「点选即抽牌」取代「先抽后选」——牌轮渲染全部 78 张牌背，点选的牌就是结果（正逆位进轮时预定），既符合真实塔罗手感又让牌轮视觉完整；②牌轮用 CSS 变量驱动 transform（--wa/--ws）而非 React state——拖拽/惯性每帧只写一次样式，78 节点零重渲染；③数据沿用恋人空间 IndexedDB kv 体系（tarotReadings 按联系人 ID 隔离）而非新建 Prisma 表，与其余子页持久化路径一致且天然支持重启回看；④AI 解读复用 couple-ai 既有管线（人设/记忆召回/最近聊天/双模型兜底），塔罗事件用独立 sourceTag 防止不同次占卜被相似合并
 - 涉及文件：src/lib/tarot-deck.ts（新增，78 张牌库+类型）、src/components/apps/couple-tarot.tsx（新增，主组件）、src/lib/ios/couple-ai.ts（+aiTarotReading/+coupleTarotRemember）、src/app/globals.css（+7 组动画）、src/components/apps/couple-space.tsx（接入+删旧 TarotPage）
+---
+Task ID: round-46
+Agent: 主协调者 (Z.ai Code)
+Task: 第四十六轮：塔罗牌功能按新需求彻底重做——浅灰白毛玻璃胶囊风 + 洗牌加切牌 + 右缘扇形牌轮 + 13 种牌阵动态牌位系统（选阵→动态虚线牌位框→飞牌入位→翻牌→AI 严格按牌位解读）
+
+Work Log:
+- 【牌阵系统】src/lib/tarot-deck.ts 新增 SpreadPos/TarotSpread/TAROT_SPREADS：13 种经典牌阵分【基础类】（单张牌·今日讯息 1 张、三张牌·过去现在未来、三张牌·身心灵、二选一 5 张现状+A/B发展与结果）与【主题类】（每周牌阵·七天周日~周六、脉轮·七张海底轮→顶轮、凯尔特十字 10 位现况/阻碍/潜意识根源/过去影响/近期可能/即将到来/自我认知/外部影响/希望与恐惧/最终结果、爱情金字塔 4 位、心灵感应阵 7 位表层/深层/课题/纽带、四元素平衡阵火水土风、抉择阵左右路结局+核心、生命之树阵 10 源质王冠→王国、每日一牌+补牌 1~3 张可变张数）；每个牌位含 label/en/hint（职责说明供 AI 按位解读）+ 网格坐标（x/y 支持小数）+ rot（凯尔特横牌 90°、脉轮整阵横牌）+ labelDy 标签偏移；TarotReading 扩展 spreadKey/spreadName/posEn（可选，旧记录兼容）；TarotTheme 移除固定 spread（牌阵洗牌后独立选）
+- 【AI 严格按牌位解读】couple-ai.ts aiTarotReading 增加 spreadName 入参、TarotAiCard 增加 posEn/posHint；牌位行格式「i.【牌位 / EN】牌名·正/逆位+牌位职责+牌意+关键词」；解读纪律改写：第 i 张只谈自己牌位的职责（阻碍位只谈阻碍、最终结果位才谈结局），绝不混淆张冠李戴，逆位一律按逆位牌意；综合解读按牌阵顺序串牌
+- 【主组件重写】src/components/apps/couple-tarot.tsx 全量重写（~1560 行）：视图流 theme→shuffle→spread→pick→reveal→history/detail，步骤条改 4 步「洗牌·牌阵·选牌·解读」
+  · 浅色毛玻璃风：bg-[#f1f2f4]+白/灰光斑，玻璃卡 border-white/80+bg-white/60+backdrop-blur+浅阴影，主按钮黑胶囊、次按钮玻璃胶囊；卡背白瓷渐变+星点纹理+☾徽记圆环，卡面白底灰字+逆位黑徽章；删除原暗黑星空 StarField
+  · 主题页去图标：纯文字行（名称+描述），自定义问题内联展开
+  · 洗牌页删「已洗 X 次·牌已经醒了」，提示语三态（轻触/长按→洗好了切一下→去选牌阵）；新增切牌：上半叠 tarot-cut-fly 动画飞起→悬停→落回（终点回原位=切到牌堆底下视觉等价，无跳变），cutFlip 交替切上半/下半，切完才亮「开始选牌阵」
+  · 牌阵选择页：分组列表，每行 SVG 点阵示意图（按牌阵坐标生成的布局缩略图，横牌画圆角矩形）+名称+简述+张数胶囊；每日一牌可变张数内联展开 1/2/3 选择
+  · 右缘扇形牌轮：78 张牌背锚定容器右缘外 30px、底部 100%（rotate(θ)translateX(-310px·scale)），弧从底部中央沿右缘展开（初始角 12°），上下滑动旋转（-dy·0.34+dx·0.1 辅助）+惯性衰减、双指捏合缩放 0.7~1.4、点选飞牌；已选/飞行中的牌 opacity 0 隐藏
+  · 动态牌位框 SpreadSlots：按 spread 坐标绝对定位虚线圆角框（序号+激活脉冲 tarot-slot-pulse），行高按容器 ResizeObserver 实测计算（rotAll 横牌阵/labelSide 左标签/下方标签 pick 单行·flip 两行「第N张·牌位+EN」），支持任意行列小数坐标与 rot 交叠牌（凯尔特十字横跨）
+  · 飞牌动画：点牌轮→读取牌/牌位 getBoundingClientRect（相对页面容器）+牌轮当前倾角（CardWheel 每帧写 varRef）→FlyGhost 从牌位贴纸起点带角度飞向牌位（520ms 贝塞尔+rotate 到牌位角+scale 匹配牌位尺寸，横牌位 sx/sy 互换），onTransitionEnd 落位填牌背；飞行中禁止连点；点已填牌位可收回（撤销）
+  · 翻牌+解读：选满浮现「翻牌」黑胶囊→reveal 视图逐张 3D rotateY（420ms 起每 560ms 一张，rot 牌位随牌横置）→AI 解读卡（头像+「TA 的解读」+按牌位分条+综合）→tarotReadings[contactId] 持久化+coupleTarotRemember 写「（塔罗事件）以『XX』牌阵占卜…」记忆+toast
+  · 历史：条目含牌阵徽章+牌位·牌名·正逆 chips；详情用 spreadInfoOf 还原布局（spreadKey 查表，旧记录退化为横排 pseudo spread）
+- 【动画】globals.css tarot-* 重写为浅色系：保留 shuffle-card/reveal-in/text-in/halo-spin，pile-glow 改白光晕、star-pulse 改纯透明度呼吸，新增 cut-fly（切牌）与 slot-pulse（牌位呼吸），移除 pick-lift；reduced-motion 列表同步
+- 【端到端实测】agent-browser 全流程（种子联系人 Angela+couple-space:state accepted）：发现→爱情塔罗→主题（无图标玻璃行）→恋爱运势：轻触洗牌提示三态+切牌动画（上半叠飞起落回）+「开始选牌阵」启用→牌阵页 13 种（示意图/名称/简述/张数）→凯尔特十字：十字+右纵列 10 个虚线牌位（序号+标签+激活脉冲）→右缘扇形牌轮（18 张沿右下缘弧形可见）→点牌飞入现况位（中途截图确认飞行）→连续点选 10 张填满（阻碍位横牌落位正确）→「翻牌」浮现→逐张 3D 翻开（圣杯8逆/恋人/战车/力量等+第N张·牌位/EN 标签）→AI 解读 15s 生成：现况位「星币国王逆位…固执守旧…心寒」、阻碍位「愚人正位…爱需要勇敢」、外部影响位「恋人正位…双向奔赴」，人设口吻（"宝"）+引用记忆（情书/测试卷）✓→历史 2 条（凯尔特十字徽章+牌位 chips）→详情布局还原+标签不再重叠→自定义问题「我们下个月会更好吗」+每日一牌 3 张变体（主牌/建议·补牌①②横排大牌+愚人/魔术师/女祭司逆位徽章+AI 按位解读）→脉轮阵 7 位竖列左标签+横牌飞入顶轮位→点牌位收回（1/7→0/7）✓→dev.log 无新增错误
+- 校验：bun run lint 改动文件零新增（couple-tarot 0 问题；全量 48 错误均为既有基线）
+
+Stage Summary:
+- 关键决策：①牌阵与主题解耦——主题只定「问什么」、牌阵洗牌后独立选「怎么摆」，AI 同时拿到主题语境与牌位职责，13 种牌阵共用一套选牌/翻牌/解读管线；②动态牌位用「归一化网格坐标+ResizeObserver 实测容器」渲染，任意牌阵（十字/金字塔/竖列/生命之树）零特例排版，rot/labelDy/labelSide 三个修正字段覆盖横牌交叠与标签避让；③飞牌动画用「测量矩形+单元素幽灵层+transition」而非 FLIP 全量重排——起点带牌轮当前倾角、终点缩放匹配牌位尺寸（横牌位宽高互换），落位后由 onTransitionEnd 提交状态，飞行中禁连点避免乱序；④右缘牌轮锚点从「容器中心」改为「容器底部右缘外」，弧从底部中央沿右缘展开，贴参考图形态；⑤凯尔特横牌标签重叠用「横牌 y 上移 0.92 行+现况 labelDy 14+潜意识根源 y 2.3」三处微调化解
+- 涉及文件：src/lib/tarot-deck.ts（+13 牌阵定义+类型扩展）、src/components/apps/couple-tarot.tsx（全量重写）、src/lib/ios/couple-ai.ts（aiTarotReading 按牌位强化）、src/app/globals.css（塔罗动画浅色化+2 组新 keyframes）

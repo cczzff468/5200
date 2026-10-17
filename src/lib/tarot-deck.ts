@@ -210,7 +210,10 @@ export interface TarotReading {
   themeKey: string; // 'love' | 'state' | 'hismind' | 'future' | 'custom'
   themeLabel: string;
   question: string; // 自定义问题（其他主题为空串）
+  spreadKey?: string; // 牌阵 key（第四十六轮；旧记录无此字段）
+  spreadName?: string; // 牌阵名（如「凯尔特十字」）
   spread: string[]; // 牌位标签，如 ['过去','现在','未来']
+  posEn?: string[]; // 牌位英文名（与 spread 对齐）
   cards: TarotDrawnCard[]; // 与 spread 一一对应
   per: string[]; // 每张牌的 AI 解读（与 cards 对齐）
   overall: string; // 综合解读（TA 的口吻）
@@ -220,11 +223,268 @@ export interface TarotReading {
 /** contactId → 该角色的全部占卜记录（新在前，最多 60 条） */
 export type TarotReadingsMap = Record<string, TarotReading[]>;
 
-/** 占卜主题预设（牌阵 / 张数 / 文案） */
+/** 占卜主题预设（问什么；牌阵在洗牌后单独选） */
 export interface TarotTheme {
   key: string;
   label: string;
   desc: string;
-  spread: string[];
   custom?: boolean;
+}
+
+// ---------------- 牌阵（第四十六轮：13 种经典牌阵 + 动态牌位框） ----------------
+
+/** 单个牌位：标签 / 英文名 / 职责说明（供 AI 严格按位解读）/ 布局坐标（x 列 y 行，可为小数）/ 旋转角 / 标签下移修正 */
+export interface SpreadPos {
+  label: string;
+  en: string;
+  hint: string;
+  x: number;
+  y: number;
+  rot?: number;
+  labelDy?: number;
+}
+
+/** 牌阵定义：positions 顺序 = 抽牌填充顺序（第 1 张填 positions[0]…） */
+export interface TarotSpread {
+  key: string;
+  name: string;
+  group: '基础类' | '主题类';
+  desc: string;
+  /** 可选张数（固定牌阵为 [n]；每日一牌为 [1,2,3]） */
+  counts: number[];
+  cols: number;
+  rows: number;
+  /** 牌位标签放左侧（脉轮竖列用），默认放下方 */
+  labelSide?: 'left';
+  positions: (n: number) => SpreadPos[];
+}
+
+function pos(label: string, en: string, hint: string, x: number, y: number, rot?: number, labelDy?: number): SpreadPos {
+  const p: SpreadPos = { label, en, hint, x, y };
+  if (rot) p.rot = rot;
+  if (labelDy) p.labelDy = labelDy;
+  return p;
+}
+
+export const TAROT_SPREADS: TarotSpread[] = [
+  // —— 基础类 ——
+  {
+    key: 'single',
+    name: '单张牌',
+    group: '基础类',
+    desc: '今日讯息，回应当下核心问题',
+    counts: [1],
+    cols: 1,
+    rows: 1,
+    positions: () => [pos('今日讯息', 'Now', '回应当下最核心的能量与讯息', 0, 0)],
+  },
+  {
+    key: 'ppt',
+    name: '三张牌 · 过去现在未来',
+    group: '基础类',
+    desc: '造成现状的过往因素、当下实况、未来结果',
+    counts: [3],
+    cols: 3,
+    rows: 1,
+    positions: () => [
+      pos('过去', 'Past', '造成现状的过往因素', 0, 0),
+      pos('现在', 'Present', '当下的实况与能量', 1, 0),
+      pos('未来', 'Future', '事情走向的未来结果', 2, 0),
+    ],
+  },
+  {
+    key: 'bsl',
+    name: '三张牌 · 身心灵',
+    group: '基础类',
+    desc: '身体、心智、灵性三个层面',
+    counts: [3],
+    cols: 3,
+    rows: 1,
+    positions: () => [
+      pos('身体', 'Body', '身体的状况与能量水平', 0, 0),
+      pos('心智', 'Mind', '理性思考与情绪状态', 1, 0),
+      pos('灵性', 'Spirit', '灵魂层面的指引', 2, 0),
+    ],
+  },
+  {
+    key: 'binary',
+    name: '二选一',
+    group: '基础类',
+    desc: '两个选择，各自的走向与结果',
+    counts: [5],
+    cols: 3,
+    rows: 2,
+    positions: () => [
+      pos('现状', 'Current', '你现在的处境', 0, 0.5),
+      pos('A 发展', 'Path A', '选择 A 的走向', 1, 0),
+      pos('A 结果', 'Outcome A', '选择 A 带来的结果', 1, 1),
+      pos('B 发展', 'Path B', '选择 B 的走向', 2, 0),
+      pos('B 结果', 'Outcome B', '选择 B 带来的结果', 2, 1),
+    ],
+  },
+  // —— 主题类 ——
+  {
+    key: 'weekly',
+    name: '每周牌阵 · 七天',
+    group: '主题类',
+    desc: '周日到周六，七天的状态',
+    counts: [7],
+    cols: 4,
+    rows: 2,
+    positions: () => [
+      pos('周日', 'Sun', '周日的状态与能量', 0, 0),
+      pos('周一', 'Mon', '周一的状态与能量', 1, 0),
+      pos('周二', 'Tue', '周二的状态与能量', 2, 0),
+      pos('周三', 'Wed', '周三的状态与能量', 3, 0),
+      pos('周四', 'Thu', '周四的状态与能量', 0.5, 1),
+      pos('周五', 'Fri', '周五的状态与能量', 1.5, 1),
+      pos('周六', 'Sat', '周六的状态与能量', 2.5, 1),
+    ],
+  },
+  {
+    key: 'chakra',
+    name: '脉轮 · 七张',
+    group: '主题类',
+    desc: '七个脉轮，由下而上的能量',
+    counts: [7],
+    cols: 1,
+    rows: 7,
+    labelSide: 'left',
+    positions: () => [
+      pos('顶轮', 'Crown', '灵性连接与信念', 0, 0, 90),
+      pos('眉心轮', 'Third Eye', '直觉与洞见', 0, 1, 90),
+      pos('喉轮', 'Throat', '沟通与真实表达', 0, 2, 90),
+      pos('心轮', 'Heart', '爱与被爱的能力', 0, 3, 90),
+      pos('太阳轮', 'Solar Plexus', '自信与行动力', 0, 4, 90),
+      pos('脐轮', 'Sacral', '情感与亲密的流动', 0, 5, 90),
+      pos('海底轮', 'Root', '生存与安全感的根基', 0, 6, 90),
+    ],
+  },
+  {
+    key: 'celtic',
+    name: '凯尔特十字',
+    group: '主题类',
+    desc: '经典牌阵，全面剖析一件事',
+    counts: [10],
+    cols: 4,
+    rows: 4,
+    positions: () => [
+      pos('现况', 'Present', '当下的核心状况', 1, 1, undefined, 14),
+      pos('阻碍', 'Challenge', '横在现况之上的阻碍与挑战', 1, 0.92, 90),
+      pos('潜意识根源', 'Subconscious', '深层的潜意识根源', 1, 2.3),
+      pos('过去影响', 'Past', '正在影响局面的过去因素', 0, 1),
+      pos('近期可能', 'Possibility', '近期可能出现的状态', 1, 0),
+      pos('即将到来', 'Coming', '即将到来的发展', 2, 1),
+      pos('自我认知', 'Self', '你自己的心态与认知', 3, 3),
+      pos('外部影响', 'External', '环境与他人带来的影响', 3, 2),
+      pos('希望与恐惧', 'Hopes & Fears', '你的希望与恐惧', 3, 1),
+      pos('最终结果', 'Outcome', '整件事的最终结果', 3, 0),
+    ],
+  },
+  {
+    key: 'pyramid',
+    name: '爱情金字塔',
+    group: '主题类',
+    desc: '你 · TA · 现状与未来发展',
+    counts: [4],
+    cols: 3,
+    rows: 2,
+    positions: () => [
+      pos('你的心态', 'You', '你在这段关系里的心态', 0, 1),
+      pos('对方心态', 'Them', '对方在这段关系里的心态', 1, 1),
+      pos('现状', 'Bond', '你们之间的现状', 2, 1),
+      pos('未来发展', 'Future', '这段关系的未来发展', 1, 0),
+    ],
+  },
+  {
+    key: 'soul',
+    name: '心灵感应阵',
+    group: '主题类',
+    desc: '深度灵魂伴侣 / 业力关系分析',
+    counts: [7],
+    cols: 3,
+    rows: 3,
+    positions: () => [
+      pos('你的表层', 'Your Surface', '你表层的情绪状态', 0, 0),
+      pos('TA 的表层', 'Their Surface', 'TA 表层的情绪状态', 2, 0),
+      pos('你的深层', 'Your Depth', '你内心深处的需求', 0, 1),
+      pos('TA 的深层', 'Their Depth', 'TA 内心深处的需求', 2, 1),
+      pos('你的课题', 'Your Lesson', '你要学习的灵魂课题', 0, 2),
+      pos('TA 的课题', 'Their Lesson', 'TA 要学习的灵魂课题', 2, 2),
+      pos('灵魂纽带', 'Soul Bond', '你们之间深层的灵魂纽带', 1, 1),
+    ],
+  },
+  {
+    key: 'elements',
+    name: '四元素平衡阵',
+    group: '主题类',
+    desc: '火水土风，四个面向的平衡',
+    counts: [4],
+    cols: 2,
+    rows: 2,
+    positions: () => [
+      pos('火 · 行动', 'Fire', '行动与热情的面向', 0, 0),
+      pos('水 · 情感', 'Water', '情感与直觉的面向', 1, 0),
+      pos('风 · 思维', 'Air', '思维与沟通的面向', 0, 1),
+      pos('土 · 现实', 'Earth', '现实与物质的面向', 1, 1),
+    ],
+  },
+  {
+    key: 'choice',
+    name: '抉择阵',
+    group: '主题类',
+    desc: '中间看核心，左右看两条路的结局',
+    counts: [3],
+    cols: 3,
+    rows: 1,
+    positions: () => [
+      pos('选择 A 结局', 'Path A', '选择 A 的结局', 0, 0),
+      pos('核心问题', 'The Core', '问题的核心', 1, 0),
+      pos('选择 B 结局', 'Path B', '选择 B 的结局', 2, 0),
+    ],
+  },
+  {
+    key: 'tree',
+    name: '生命之树阵',
+    group: '主题类',
+    desc: '卡巴拉生命之树，十个源质',
+    counts: [10],
+    cols: 3,
+    rows: 5,
+    positions: () => [
+      pos('王冠', 'Crown', '最高理想与愿景', 1, 0),
+      pos('智慧', 'Wisdom', '创造性的冲动与智慧', 2, 1),
+      pos('理解', 'Understanding', '理解与接纳', 0, 1),
+      pos('仁慈', 'Mercy', '扩张与慷慨', 2, 2),
+      pos('严厉', 'Severity', '纪律与挑战', 0, 2),
+      pos('美丽', 'Beauty', '平衡与核心自我', 1, 2),
+      pos('胜利', 'Victory', '情感与欲望', 2, 3),
+      pos('荣耀', 'Glory', '思维与荣耀', 0, 3),
+      pos('基础', 'Foundation', '潜意识与根基', 1, 3),
+      pos('王国', 'Kingdom', '现实的落点与显化', 1, 4),
+    ],
+  },
+  {
+    key: 'daily',
+    name: '每日一牌 + 补牌',
+    group: '主题类',
+    desc: '主牌看能量，补牌看建议',
+    counts: [1, 2, 3],
+    cols: 3,
+    rows: 1,
+    positions: (n) =>
+      n <= 1
+        ? [pos('主牌', 'Energy', '今天的整体能量', 1, 0)]
+        : n === 2
+          ? [pos('主牌', 'Energy', '今天的整体能量', 0.5, 0), pos('建议 · 补牌', 'Advice', '主牌能量背后的补充建议', 1.5, 0)]
+          : [
+              pos('主牌', 'Energy', '今天的整体能量', 0, 0),
+              pos('建议 · 补牌 ①', 'Advice 1', '主牌能量的补充建议', 1, 0),
+              pos('建议 · 补牌 ②', 'Advice 2', '更进一步的补充建议', 2, 0),
+            ],
+  },
+];
+
+export function tarotSpreadByKey(key: string): TarotSpread | undefined {
+  return TAROT_SPREADS.find((s) => s.key === key);
 }

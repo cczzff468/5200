@@ -582,7 +582,7 @@
   opacity: 0.42;
   font-weight: 300;
 }
-/* —— 第四十五轮 爱情塔罗（暗黑星空风）—— */
+/* —— 第四十六轮 爱情塔罗（浅色毛玻璃风）—— */
 /* 洗牌：单张牌飞出再归位（外层定位，内层做位移旋转；--sx/--sy/--sr 每张随机） */
 @keyframes tarot-shuffle-card {
   0% {
@@ -598,31 +598,47 @@
     transform: translate(0, 0) rotate(0deg);
   }
 }
-/* 牌堆呼吸光晕 */
+/* 牌堆呼吸光晕（浅色） */
 @keyframes tarot-pile-glow {
   0%,
   100% {
-    opacity: 0.35;
+    opacity: 0.3;
     transform: scale(1);
   }
   50% {
-    opacity: 0.75;
-    transform: scale(1.12);
+    opacity: 0.65;
+    transform: scale(1.1);
   }
 }
-/* 选中的牌在牌轮上向上浮动 */
-@keyframes tarot-pick-lift {
+/* 切牌：上半叠飞起 → 悬停 → 落回（视觉等价于切到牌堆底下，终点回原位故无跳变） */
+@keyframes tarot-cut-fly {
   0% {
-    transform: translateY(0);
+    transform: translate(0, 0) rotate(0deg);
+  }
+  38% {
+    transform: translate(26px, -54px) rotate(6deg);
   }
   55% {
-    transform: translateY(-34px);
+    transform: translate(26px, -54px) rotate(6deg);
+  }
+  82% {
+    transform: translate(-3px, 42px) rotate(-2deg);
   }
   100% {
-    transform: translateY(-26px);
+    transform: translate(0, 0) rotate(0deg);
   }
 }
-/* 翻牌后卡面浮现 */
+/* 当前待填牌位的虚线框呼吸 */
+@keyframes tarot-slot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(17, 24, 39, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(17, 24, 39, 0);
+  }
+}
+/* 牌落入牌位/卡面浮现 */
 @keyframes tarot-reveal-in {
   from {
     opacity: 0;
@@ -644,28 +660,27 @@
     transform: translateY(0);
   }
 }
-/* AI 解读加载：紫环旋转 */
+/* AI 解读加载：环旋转 */
 @keyframes tarot-halo-spin {
   to {
     transform: rotate(360deg);
   }
 }
-/* 星空大星呼吸（塔罗占卜进行中） */
+/* 长按洗牌提示呼吸 */
 @keyframes tarot-star-pulse {
   0%,
   100% {
     opacity: 0.4;
-    transform: scale(0.9);
   }
   50% {
     opacity: 1;
-    transform: scale(1.08);
   }
 }
 @media (prefers-reduced-motion: reduce) {
   [animation\:tarot-shuffle-card],
   [animation\:tarot-pile-glow],
-  [animation\:tarot-pick-lift],
+  [animation\:tarot-cut-fly],
+  [animation\:tarot-slot-pulse],
   [animation\:tarot-reveal-in],
   [animation\:tarot-text-in],
   [animation\:tarot-halo-spin],
