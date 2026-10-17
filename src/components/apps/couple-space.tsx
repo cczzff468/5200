@@ -4915,10 +4915,11 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   // ============ 编辑信件视图（第二十轮重做：纵向连续信纸，下滑即加第二页，不再左右翻页；「xx的来信」页眉标签已删除；第二十八轮：每页信纸同高同容、装饰纹理层、工具栏删手写信+信纸移位；第二十九轮：参考图同款信纸装饰层/画框/题头/方格稿纸，题头信纸正文自动下移避让；
   //  第二十九轮再修「字太往上」：① 无题头信纸顶部内边距 32→52px，字不再顶到日期/画框；
   //  ② 横线周期改为 30px 与行高严格对齐（此前 31px 周期每行漂移 1px），横线基线对齐写字行；
-  //  ③ 第四十三轮再修「字太往下」：实测各字体字形底部在行盒 22-23px 处而横线在 20-21px（字悬挂在线下），
-  //  横线整体下移 3px（padTop-9→padTop-6），文字恰好坐在线上） ============
+  //  ③ 第四十三轮再修「字太往下」：横线整体下移 3px（padTop-9→padTop-6）；
+  //  ④ 第四十四轮再修「日期下整行空置、字低了整整一行」：无题头信纸正文顶部内边距 52→26——正文从日期下第一格横线开始写；
+  //  横线只从 y=32（日期下方）起画不再穿过日期；座位 23→24（用户设备字形底部略压线，下移 1px 让字稳稳坐线上）） ============
   if (view === 'write') {
-    const padTop = paper.padTop ?? 52; // 题头信纸把正文往下压，避开装饰层；无题头信纸也留足顶部留白（第二十九轮：32→52）
+    const padTop = paper.padTop ?? 26; // 无题头信纸：正文从日期下第一格横线开始写（第四十四轮 52→26，删掉浪费的空行；有题头信纸仍用各自 padTop 避让装饰层）
     const lineBg = !paper.grid && dashed && paper.dashed !== undefined
       ? `repeating-linear-gradient(180deg, transparent 0px, transparent 29px, ${paper.line} 29px, ${paper.line} 30px)`
       : undefined;
@@ -4941,8 +4942,8 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
                   style={{ background: paper.bg, height: LETTER_PAGE_HEIGHT, containerType: 'inline-size' }}
                   data-testid={`letter-paper-${pi + 1}`}
                 >
-                  {/* 横线（方格稿纸信纸用格子纹理替代横线；周期 30px 与行高对齐，第四十三轮横线下移 3px：第一行横线在 padTop+23 ≈ 字形底部，文字坐在线上） */}
-                  {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: lineBg, backgroundPosition: `0 ${padTop - 6}px` }} />}
+                  {/* 横线（方格稿纸信纸用格子纹理替代横线）：只从 y=32（日期下方）起画不穿过日期；座位 24px：第 k 条线 = 正文第 k 行盒顶+24 ≈ 字形底部，文字坐线上（第四十四轮；题头信纸 padTop 56/62 同公式自适应） */}
+                  {lineBg && <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0" style={{ top: 32, backgroundImage: lineBg, backgroundPosition: `0 ${padTop - 37}px` }} />}
                   {/* 信纸自带装饰纹理（第二十八轮：蕾丝点/樱花点/格纹/斜纹等） */}
                   {paper.deco && <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: paper.deco, backgroundSize: paper.decoSize }} />}
                   {/* 参考图同款装饰层（画框/衔纸鸽/题头/小鱼骨条/英文小字；第二十九轮） */}
@@ -5258,7 +5259,7 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             横线与行高 30px 对齐 + 应用编辑器选的字体/字号/字色——阅读页与编辑页所见即所得） */}
         <div className="relative z-10 flex-1 overflow-y-auto px-4 pb-4 pt-2">
           <div className="relative mx-auto max-w-[430px] overflow-hidden rounded-xl bg-[#fdf9ef] shadow-[0_12px_30px_rgba(140,90,100,0.18)]" data-testid="letter-read-paper">
-            <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: `repeating-linear-gradient(180deg, transparent 0px, transparent 29px, rgba(210,180,140,0.5) 29px, rgba(210,180,140,0.5) 30px)`, backgroundPosition: '0 69px' }} />
+            <div aria-hidden="true" className="pointer-events-none absolute inset-0" style={{ backgroundImage: `repeating-linear-gradient(180deg, transparent 0px, transparent 29px, rgba(210,180,140,0.5) 29px, rgba(210,180,140,0.5) 30px)`, backgroundPosition: '0 70px' }} />
             <div className="relative px-5 pb-2 pt-8">
               <div className="text-[15.5px] font-semibold text-[#4a3f34]">{`亲爱的${greet}`}</div>
               <div

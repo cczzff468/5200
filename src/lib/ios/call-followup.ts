@@ -68,7 +68,7 @@ export interface CallFollowupPayload {
   worldbookBlock?: string;
   timeBlock?: string;
   multiApp?: boolean;
-  /** 续聊条数上限（该会话聊天设置「回复条数」；未传/非法时服务端与本地解析回退 2） */
+  /** 续聊条数上限（第四十四轮起恒为 1：挂断后只留一条言，全部想说的话在这条里说完；传值仅为兼容旧调用点） */
   replyCount?: number;
   /** 通话媒体（Task 22 视频通话）：video=视频通话——服务端补媒体说明，AI 续聊文字按视频口径；缺省语音 */
   media?: 'voice' | 'video';
@@ -81,21 +81,34 @@ export interface CallFollowupPayload {
   callerUnknown?: boolean;
 }
 
-/** 条数上限收窄：非法/未传回退 2（旧行为），合法值夹在 [1, 30]（与回复条数选项同范围） */
-function followupMax(n: unknown): number {
-  const v = typeof n === 'number' && Number.isFinite(n) ? Math.floor(n) : NaN;
-  return Number.isFinite(v) ? Math.min(30, Math.max(1, v)) : 2;
+/** 条数硬约束（第四十四轮）：挂断后 AI 只留一条留言——把想说的全部说完在这条里；
+ *  此前按会话「回复条数」上限多发（回退 2），用户反馈要只留一次言；兼容旧调用点仍接收 replyCount 但不再消费 */
+function followupMax(_n: unknown): number {
+  return 1;
 }
 
-/** 从模型文本提取续聊消息（宽松：JSON 平衡块优先，失败按行拆；去标记/符号/包裹引号，最多 max 条） */
+/** 从模型文本提取续聊留言（宽松：JSON 平衡块优先，失败按行拆；去标记/符号/包裹引号）。
+ *  第四十四轮：max≤1 时把模型拆出的多段合并为一条（标点缺失自动补句号），内容截断上限 600 字——
+ *  「一条把全部想说的说完」不被 200 字旧上限腰斩 */
 export function parseFollowupText(raw: string, max = 2): string[] {
+  const cap = max <= 1 ? 600 : 200;
   const clean = (s: string) =>
     s
       .replace(/〔挂断〕|【挂断】|\[挂断\]|（挂断）|\(挂断\)/g, '')
       .replace(/[*_`#>~[\]]/g, '')
       .replace(/^["'「『]+|["'」』]+$/g, '')
       .trim()
-      .slice(0, 200);
+      .slice(0, cap);
+  const mergeToOne = (list: string[]): string[] => {
+    if (max > 1 || list.length <= 1) return list.slice(0, max);
+    // 多段合一条：前段无结尾标点时补句号，避免硬拼接粘句
+    let joined = '';
+    for (const seg of list) {
+      if (!joined) joined = seg;
+      else joined += /[。！？…~～!?]$/.test(joined) ? seg : `。${seg}`;
+    }
+    return [joined.slice(0, cap)];
+  };
   const start = raw.indexOf('{');
   if (start >= 0) {
     let depth = 0;
@@ -121,7 +134,7 @@ export function parseFollowupText(raw: string, max = 2): string[] {
                 .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
                 .map(clean)
                 .filter(Boolean);
-              if (out.length > 0) return out.slice(0, max);
+              if (out.length > 0) return mergeToOne(out);
             }
           } catch {
             // JSON 不完整：走按行兜底
@@ -131,11 +144,12 @@ export function parseFollowupText(raw: string, max = 2): string[] {
       }
     }
   }
-  return raw
-    .split('\n')
-    .map((l) => clean(l))
-    .filter(Boolean)
-    .slice(0, max);
+  return mergeToOne(
+    raw
+      .split('\n')
+      .map((l) => clean(l))
+      .filter(Boolean),
+  );
 }
 
 /** 请求挂断续聊文字（fire-and-forget 友好：所有失败静默返回 []，由调用方决定总结时序） */
@@ -167,7 +181,7 @@ export async function requestCallFollowup(p: CallFollowupPayload): Promise<strin
     if (res.ok && Array.isArray(data.messages)) {
       return (data.messages as unknown[])
         .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-        .map((x) => x.trim().slice(0, 200))
+        .map((x) => x.trim().slice(0, max <= 1 ? 600 : 200))
         .slice(0, max);
     }
     return [];

@@ -488,8 +488,8 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           )}
         </div>
 
-        {/* 胶囊入口 */}
-        <div className="mt-3 flex items-center gap-2 overflow-x-auto px-4 no-scrollbar">
+        {/* 胶囊入口（第四十四轮：等宽网格一行排开——窄屏不再溢出滚动/截断，与网易云原生入口排布一致） */}
+        <div className="mt-3 grid grid-cols-5 items-center gap-2 px-4">
           <Pill icon={<Clock3 className="h-[18px] w-[18px]" />} label="最近" onClick={() => setSheet('recent')} testId="music-mine-recent" />
           <Pill icon={<ArrowDownToLine className="h-[18px] w-[18px]" />} label="本地" onClick={() => setSheet('local')} testId="music-mine-local" />
           <Pill icon={<Star className="h-[18px] w-[18px]" />} label="收藏" onClick={() => setSheet('liked')} testId="music-mine-liked" />
@@ -499,7 +499,7 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
             onClick={onSettings}
             aria-label="更多"
             data-testid="music-mine-more"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white/90 active:bg-white/20"
+            className="flex h-11 w-full items-center justify-center rounded-xl bg-white/10 text-white/90 backdrop-blur-xl active:bg-white/20"
           >
             <LayoutGrid className="h-[18px] w-[18px]" />
           </button>
@@ -878,7 +878,7 @@ function Pill({
       type="button"
       onClick={onClick}
       data-testid={testId}
-      className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-3.5 text-[13px] text-white/90 backdrop-blur-xl active:bg-white/20"
+      className="flex h-11 w-full min-w-0 items-center justify-center gap-1 rounded-xl border border-white/15 bg-white/10 px-1 text-[13px] text-white/90 backdrop-blur-xl active:bg-white/20"
     >
       {icon}
       {label}

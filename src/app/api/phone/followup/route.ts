@@ -5,8 +5,8 @@ export const runtime = 'nodejs';
 /**
  * 通话挂断后 AI 续聊文字（微信 / QQ / 电话 App 三端共用）：
  *
- * 挂断是通话的延续而不是终点——AI 按人设像平时发消息那样，紧接着再发文字（条数上限 =
- * 该会话「聊天设置 › 回复条数」，由前端随请求直传 replyCount；上限不是任务，没话可以少发）：
+ * 挂断是通话的延续而不是终点——AI 按人设像平时发消息那样，紧接着再发文字（第四十四轮：恒只发 1 条——
+ * 用户要求「打完电话只留一次言，那一次把全部想说的都说出来」；这一条可以是一小段话，把想说的全部说完）：
  * 接着说通话里没聊完的话茬、补一句叮嘱/约定、表达关心，或对「被挂断/没接通」做自然反应。
  * 各挂断场景共用本 API（由前端引擎区分场景注入说明）：
  *   1. AI 主动挂断（ai-hangup）；2. 用户挂断（hangup / 来电被拒 reject / 未接 missed-in / 拨号取消 cancel）；
@@ -144,11 +144,10 @@ function buildFollowupSystemPrompt(
    *  续聊按「刚接到一通陌生电话」框架（机主身份/关系/多端记忆不下发） */
   callerUnknown?: boolean
 ): string {
-  // 条数语义与主聊回复条数同源：上限 = 聊天设置里该会话的回复条数；上限不是任务，没话可以少
+  // 条数语义（第四十四轮）：恒 1 条——打完电话只留一次言，想说的全部在这条里说完；
+  // replyCount 仍接收但不再消费（旧调用点兼容）；这一条可以是一小段话，不等于短
   const countRule =
-    maxCount <= 1
-      ? '条数硬约束：本次只发 1 条消息。'
-      : `条数硬约束：本次发 1~${maxCount} 条消息——${maxCount} 条是上限，没话可以少发（哪怕只发 1 条）；话茬多、聊得投机就多发几条，条数以内容自然为准，绝不硬凑。`;
+    '条数硬约束：本次只发 1 条消息——把你想说的全部放进这一条里（像真人发的一大段话，几句话连着说完），绝不拆成多条。';
   // 接通后结束：按真实时长分档给衔接引导（B-3）——只有「聊了一会儿」才有「接着话茬」资格；
   // 「挂得快」类小情绪只允许「对方先挂」；没聊起来则要求打圆场并硬性禁止虚构通话内容
   const endedRules: string[] =
@@ -186,39 +185,49 @@ function buildFollowupSystemPrompt(
       countRule,
       '绝对不要复读通话里已经说过的原话；不要自我介绍；不要说「刚才我们通话了」这类出戏的话——就像平时聊微信/QQ 一样接着说；',
       '语气完全符合你的人设和此刻情绪（聊得开心就热络、对方拒接/没接可以有点小委屈、深夜可以带着困意）；',
-      '每条消息像真人随手发的：口语化、简短（一条一般 1~2 句），可以有语气词；不要 markdown 符号、不要引号包裹、不要表情符号；',
+      '这一条消息像真人发的一段话：口语化，把想说的几件事/没说完的话茧/叮嘱关心连起来说完（一般 2~6 句），不分条、不列清单、不要 markdown 符号、不要引号包裹、不要表情符号；',
       hasChat ? '结合下方最近聊天内容让消息更有来由。' : '没有最近聊天记录时，就纯粹基于人设和这次通话发挥。',
       '严格输出一个 JSON 对象，不要输出任何其他文字：',
-      maxCount <= 1 ? '{"messages":["第一条"]}' : '{"messages":["第一条","第二条"]}',
-      maxCount <= 1
-        ? 'messages 数组只放 1 条消息文本。'
-        : `messages 数组放你要发的消息文本（每条一个元素），共 1~${maxCount} 条；没话可以少发，内容简短时 1 条也可以。`,
+      '{"messages":["一条完整的话（想说的全部在这里说完）"]}',
+      'messages 数组只放 1 个元素——这一条里把想说的全部说完。',
     ],
   });
 }
 
-/** 生成结果清洗：JSON 优先（宽松平衡块），失败按行拆；统一去标记/符号/包裹引号，最多 max 条（条数上限随会话设置） */
+/** 生成结果清洗（第四十四轮）：JSON 优先（宽松平衡块），失败按行拆；去标记/符号/包裹引号；
+ *  恒 1 条：模型不听话拆了多段时合并为一条（标点缺失自动补句号），截断上限 600 字（旧 200 不够「说完全部」） */
 function normalizeFollowup(raw: string, max: number): string[] {
+  const cap = max <= 1 ? 600 : 200;
   const clean = (s: string) =>
     s
       .replace(/〔挂断〕|【挂断】|\[挂断\]|（挂断）|\(挂断\)/g, '')
       .replace(/[*_`#>~]/g, '')
       .replace(/^["'「『]+|["'」』]+$/g, '')
       .trim()
-      .slice(0, 200);
+      .slice(0, cap);
+  const mergeToOne = (list: string[]): string[] => {
+    if (max > 1 || list.length <= 1) return list.slice(0, max);
+    let joined = '';
+    for (const seg of list) {
+      if (!joined) joined = seg;
+      else joined += /[。！？…~～!?]$/.test(joined) ? seg : `。${seg}`;
+    }
+    return [joined.slice(0, cap)];
+  };
   const obj = extractJsonObject(raw);
   if (obj && Array.isArray(obj.messages)) {
     const out = (obj.messages as unknown[])
       .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
       .map(clean)
       .filter(Boolean);
-    if (out.length > 0) return out.slice(0, max);
+    if (out.length > 0) return mergeToOne(out);
   }
-  return raw
-    .split('\n')
-    .map((l) => clean(l))
-    .filter(Boolean)
-    .slice(0, max);
+  return mergeToOne(
+    raw
+      .split('\n')
+      .map((l) => clean(l))
+      .filter(Boolean),
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -257,9 +266,11 @@ export async function POST(req: NextRequest) {
   // 多账号关系感知：前端按当前通话账号传入（activeAccountIdOf）；不传 = 大号口径（零破坏）
   const accountId = typeof root.accountId === 'string' && root.accountId.trim() ? root.accountId.trim().slice(0, 40) : undefined;
 
-  // 条数上限：聊天设置「回复条数」（前端随请求直传该会话的设置值）；未传/非法回退 2（旧行为）
+  // 条数上限（第四十四轮）：恒 1——打完电话只留一条言，全部想说的话在这条里说完；
+  // replyCount 仍读取但不再消费（旧调用点/旧请求兼容）
   const rcRaw = typeof root.replyCount === 'number' && Number.isFinite(root.replyCount) ? Math.floor(root.replyCount) : NaN;
-  const maxCount = Number.isFinite(rcRaw) ? Math.min(30, Math.max(1, rcRaw)) : 2;
+  void rcRaw;
+  const maxCount = 1;
 
   const direction = root.direction === 'in' ? 'in' : 'out';
   const endReasonRaw = typeof root.endReason === 'string' ? root.endReason.trim() : '';

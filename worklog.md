@@ -20349,3 +20349,21 @@ Work Log:
 Stage Summary:
 - 关键决策：①「每天想你」回归原始打卡语义——当天打卡后大圆消失、次日恢复（以 missYouByDay 今日键为准，计数/连续天数/记录页完全不受影响）；②爱心图标黑色填充根因=SVG fill:'currentColor' 解析 CSS color 而非 stroke 属性色，统一 fill="none" 一次性杜绝；③信纸对齐不逐字体做 nudge——实测 9 款字体字形底部高度一致（22-23px），横线统一右移 3px 即全字体通用；④「信封上的字」归属「发送设置」语义（寄出前最后配置），编辑页工具栏信封按钮仍可快速换样式
 - 涉及文件：src/components/apps/couple-space.tsx（HomePage 大圆/Tab 栏/LettersPage env 弹层/send 视图/编辑页横线/阅读页横线）
+---
+Task ID: round-44
+Agent: 主协调者 (Z.ai Code)
+Task: 第四十四轮：①信纸+信纸文字再调整（日期下整行空置、字低了整整一行）；②AI 打完电话只留一次言（一条把全部想说的说完）；③网易云「我的」页最近/本地等胶囊按钮位置调整
+
+Work Log:
+- 【信纸文字对齐（用户第 3 次反馈）】对用户上传原图 Screenshot_20261017_112322.jpg 像素级测量确诊真实病因：横线每 30px 一条（物理 649/559/469），「喜欢你」坐在第三条线上，日期下第一格横线整行空置——正文顶部内边距 52px 造成约 1.7 个行高浪费，视觉上「字太往下/不在任何线上」；且用户设备字体（鸿蒙 Sans 系）字形底部在行盒 24.6px 处，旧座位 23px 时字形压线 1.1px
+- 【编辑页修复】couple-space.tsx 编辑信件视图：①无题头信纸正文 paddingTop 默认 52→26（正文从日期下第一格横线开始写，删掉浪费的空行；题头信纸 padTop 56/62 保留各自避让装饰层）；②横线 div 从 inset-0 改 top:32 起画（上溢被信纸 overflow 裁剪，横线不再穿过右上角日期），backgroundPosition padTop-6→padTop-37（公式：线 y = 32 + (padTop-37) + 29 + 30k = padTop+24+30k）；③座位 23→24（第 k 条线 = 正文第 k 行盒顶+24 ≈ 用户设备字形底部，字稳稳坐线上；沙盒字体差 3px 属字体度量差，用户设备为 ±0.2px 贴合）
+- 【阅读页同步】阅读信件页横线 backgroundPosition 69→70（座位与编辑页一致 24px；DOM 实测 body 盒顶 paper+75.25，线 99/129/159+30k，字形底 ~96 贴线）
+- 【AI 电话留言只留一次】call-followup.ts：followupMax() 恒返回 1（replyCount 参数保留仅兼容旧调用点不再消费）；parseFollowupText max≤1 时把模型拆出的多段合并为一条（前段无结尾标点自动补「。」再拼，防粘句），截断上限 200→600 字（「说完全部」不被旧上限腰斩）；requestCallFollowup 非 directOnly 路径同步 600 上限；4 个调用点（chat-call.ts 微信/QQ、proactive-call.ts 主动来电、phone.tsx 电话 App 语音留言、chat.tsx 信息 App）全部走 requestCallFollowup 消费数组，数组 ≤1 自动全端生效
+- 【followup API 同口径】route.ts：maxCount 恒 1（rcRaw 读取后 void 兼容）；countRule 改「本次只发 1 条消息——把你想说的全部放进这一条里（像真人发的一大段话，几句话连着说完），绝不拆成多条」；单条风格规则「一般 2~6 句，不分条、不列清单」；JSON 示例改单元素；normalizeFollowup 与客户端同款 mergeToOne+600 上限；文件头注释更新
+- 【网易云我的页胶囊】music-mine.tsx：入口行 flex+overflow-x-auto（窄屏溢出滚动/装扮被截断）改 grid grid-cols-5 gap-2 等宽一行排开；Pill 组件 shrink-0 px-3.5 → w-full min-w-0 justify-center px-1（图标+文字居中，390px 宽每格 65px 稳放「最近/本地/收藏/装扮」）；「更多」钮 w-11 → w-full 居中；testid 全保留
+- 端到端实测（agent-browser+PIL 像素分析+API 直调）：①编辑信件页「喜欢你」坐在日期下第一条横线上（线 paper+50/80/110，字底 151 vs 线 154，沙盒 3px/用户设备 0.2px），日期区无横线穿过 ✓；②阅读页线 99+30k 贴字底 ✓；③POST /api/phone/followup（接通 95s 转写+replyCount:5）实测返回 {"messages":[1 条]}——单条含关心+叮嘱+期待明天全部内容 ✓；④网易云我的页五胶囊等宽一行（最近|本地|收藏|装扮|更多）无溢出，点「最近」最近播放面板正常弹出 ✓；⑤dev.log 无新增错误（仅既有 instrumentation Edge Runtime 警告）
+- 校验：bunx tsc --noEmit 全量零错误；bun run lint 49 problems（45 errors+4 warnings）与 HEAD 基线完全一致，4 个改动文件零新增
+
+Stage Summary:
+- 关键决策：①信纸问题根因是「布局浪费一整行」而非「座位差 3px」——52px 顶距让正文从第三条线开始写，用户三次反馈的「字太往下」实际是整行错位；②横线 div top:32 起画一举解决「线穿日期」与「日期下空行无上线」两个观感问题，公式对题头信纸（56/62）同样自适应；③座位 24px 以用户设备字体度量为准（沙盒 Noto 与鸿蒙 Sans 底部差 3px，以用户实测 24.6 为锚）；④续聊单条化在客户端 followupMax 与服务端 maxCount 双侧强制，任何一侧的旧调用/旧响应都被夹到 1 条，多段响应合并补标点防粘句；⑤网易云胶囊用 grid-cols-5 而非 flex+scroll——对齐网易云原生等宽入口且根治窄屏截断
+- 涉及文件：src/components/apps/couple-space.tsx（编辑页 padTop/横线 div/注释 + 阅读页横线 1px）、src/lib/ios/call-followup.ts、src/app/api/phone/followup/route.ts、src/components/apps/music-mine.tsx
