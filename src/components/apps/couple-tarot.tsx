@@ -10,8 +10,6 @@
  * 交替往复直到选满 → 翻牌（逐张 3D 翻开）→ AI 纯塔罗解读 → 结果 / 历史。
  *
  * 第四十九轮变更：
- * - 牌面：/tarot/deck/ 78 张真实牌面图（Soimoi Tarot © 2025 Mike Koz, CC BY 4.0，
- *   https://creativecommons.org/licenses/by/4.0/ ；mixvlad/TarotCards 分发），加载失败退回原 sprite/SVG 线稿；
  * - 洗牌：牌堆默认散乱铺开（参考 quin 洗牌页），点击牌堆随时重新打乱；
  * - 切牌：「再洗一次」按钮移除，改为「切牌」——先把牌整叠整齐，再按上/右/下/左四叠分开、停顿、
  *   合拢（可无限切，每方向随机错位），完成后「下一步」选牌阵；
@@ -19,6 +17,13 @@
  *   点牌后回到排位页、牌从点击处飞入牌位，再点「去选第 N 张牌」进入下一张；
  * - 牌轮：大幅扇形（轮心在右下角屏外，78 张沿圆环切线铺开，牌顶指向圆外呈放射状），滑动旋转 + 双指缩放；
  * - 牌背：白灰底 + 极淡星座连线纹理（参考 quin 牌背）。
+ *
+ * 第五十一轮变更：
+ * - 牌面换装：/tarot/deck/ 78 张换为 reginanka 深蓝金拱门牌组（"Tarot Cards WebP Collection"
+ *   by reginanka, CC BY 4.0, github.com/reginanka/tarot-cards；WebP 裁掉底部标题条带后转 JPG，
+ *   马赛序 m08/m11 已按 RWS 序互换；源 m20「审判」误图已 AI 按同风格补绘），署名见
+ *   public/tarot/DECK-CREDITS.txt；加载失败仍退回原 sprite/SVG 线稿；
+ * - 牌面配色随牌组换装：CardFace 名牌条/罗马数字章/边框改深蓝夜空底 + 香槟金文字（牌背不变）。
  *
  * - 牌库与牌阵：src/lib/tarot-deck.ts（大阿尔卡那 22 + 小阿尔卡那 56，含正逆位牌意）；
  * - 持久化：state.tarotReadings[contactId]（按恋人联系人 ID 隔离，随 couple-space:state 落 IndexedDB，重启可查）；
@@ -201,7 +206,7 @@ function MinorArt({ suit, numeral, w, h }: { suit: TarotSuit; numeral: string; w
   );
 }
 
-/** 牌面图路径：/tarot/deck/ 78 张（Soimoi Tarot，CC BY 4.0 © 2025 Mike Koz） */
+/** 牌面图路径：/tarot/deck/ 78 张（reginanka 深蓝金拱门牌组，CC BY 4.0，署名见 public/tarot/DECK-CREDITS.txt） */
 function cardImgSrc(def: TarotCardDef): string {
   if (def.arcana === 'major') return `/tarot/deck/major-${def.id.slice(6)}.jpg`;
   const rankIdx: Record<string, string> = { A: '01', '2': '02', '3': '03', '4': '04', '5': '05', '6': '06', '7': '07', '8': '08', '9': '09', '10': '10', '侍从': '11', '骑士': '12', '王后': '13', '国王': '14' };
@@ -247,30 +252,30 @@ function CardBack({ w, h }: { w: number; h: number }) {
   );
 }
 
-/** 牌面：真实牌面图全幅 + 底部名牌条（罗马数字 / 点数 + 中英文名），逆位整面 rotate-180 */
+/** 牌面：真实牌面图全幅 + 底部名牌条（罗马数字 / 点数 + 中英文名），逆位整面 rotate-180（第五十一轮换深蓝金配色） */
 function CardFace({ def, reversed, w, h }: { def: TarotCardDef; reversed: boolean; w: number; h: number }) {
   const stripH = Math.max(15, h * 0.175);
   return (
     <div
-      className="relative overflow-hidden border shadow-[0_3px_14px_rgba(17,24,39,0.12)]"
-      style={{ width: w, height: h, borderRadius: Math.max(6, w * 0.12), borderColor: 'rgba(67,57,43,0.4)', background: PAPER_BG }}
+      className="relative overflow-hidden border shadow-[0_3px_14px_rgba(17,24,39,0.14)]"
+      style={{ width: w, height: h, borderRadius: Math.max(6, w * 0.12), borderColor: 'rgba(203,174,110,0.5)', background: '#0d1226' }}
     >
       <div className={`absolute inset-0 flex flex-col ${reversed ? 'rotate-180' : ''}`}>
         <div className="relative min-h-0 flex-1 overflow-hidden">
           <DeckArt def={def} w={w} h={h - stripH} />
           <div
             className="absolute left-[3px] top-[3px] rounded-[3px] border font-serif font-semibold"
-            style={{ color: INK, fontSize: Math.max(5, w * 0.088), lineHeight: 1.35, padding: '0 2.5px', borderColor: 'rgba(67,57,43,0.3)', background: 'rgba(249,244,231,0.92)' }}
+            style={{ color: '#ecd9a0', fontSize: Math.max(5, w * 0.088), lineHeight: 1.35, padding: '0 2.5px', borderColor: 'rgba(203,174,110,0.45)', background: 'rgba(10,14,32,0.78)' }}
           >
             {def.numeral}
           </div>
         </div>
         <div
           className="flex shrink-0 flex-col justify-center text-center"
-          style={{ height: stripH, borderTop: '1px solid rgba(67,57,43,0.28)', padding: '0 2px', background: PAPER_BG }}
+          style={{ height: stripH, borderTop: '1px solid rgba(203,174,110,0.4)', padding: '0 2px', background: 'linear-gradient(180deg,#131935 0%,#0b0f22 100%)' }}
         >
-          <div className="truncate font-medium" style={{ color: INK, fontSize: Math.max(5.5, w * 0.095), lineHeight: 1.25 }}>{def.name}</div>
-          <div className="truncate font-serif uppercase" style={{ color: 'rgba(67,57,43,0.62)', fontSize: Math.max(4.5, w * 0.07), lineHeight: 1.2, letterSpacing: '0.05em' }}>{def.nameEn}</div>
+          <div className="truncate font-medium" style={{ color: '#f2e7c8', fontSize: Math.max(5.5, w * 0.095), lineHeight: 1.25 }}>{def.name}</div>
+          <div className="truncate font-serif uppercase" style={{ color: 'rgba(214,188,132,0.78)', fontSize: Math.max(4.5, w * 0.07), lineHeight: 1.2, letterSpacing: '0.05em' }}>{def.nameEn}</div>
         </div>
       </div>
       {reversed && <div className="absolute right-1 top-1 rounded-full bg-gray-900/85 px-1 py-[1px] text-[7px] font-bold text-white">逆位</div>}

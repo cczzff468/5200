@@ -20513,3 +20513,23 @@ Work Log:
 Stage Summary:
 - 关键决策：①排位/牌轮拆页用「pendingCard 跨页飞牌」衔接——牌轮页点牌先记坐标再切页，排位页布局稳定后起飞，用户感知为「从扇面抽出一张飞回牌位」；②扇形轮用 CSS trig（cos/sin 进 calc）而非逐帧 JS 排布，保留单 CSS 变量驱动的全牌联动与合成器动画；③切牌完成态用 neat 状态而非动画残影——合拢即整齐牌叠，与「点击牌堆=打乱」形成明确的状态往返；④牌面选 Soimoi 而非 RWS：现代电影感统一风格、无水印无烘焙字、CC BY 4.0 可商用，署名落卡头注释与 public/tarot/SOIMOI-CREDITS.txt
 - 涉及文件：src/components/apps/couple-tarot.tsx（全量重写 1900 行）、public/tarot/deck/*（新增 78 张）、public/tarot/soimoi-LICENSE + SOIMOI-CREDITS.txt（新增署名文件）
+
+---
+Task ID: round-51
+Agent: 主协调者 (Z.ai Code)
+Task: 第五十一轮：用户反馈「塔罗牌正面再去找找美观的，好看的，背面不要变」——重新调研并更换 78 张牌面为 reginanka 深蓝金拱门牌组，牌背保持不变
+
+Work Log:
+- 【候选调研】GitHub 仓库搜索（30 结果逐个看）+ mixvlad/TarotCards 9 套开源牌组全量稀疏拉取样张（etteilla 75 张不全/marseille/vieville/sola-busca/tarot-nouveau/visconti-sforza 73 张不全/rider-waite）+ 上一轮遗留样张（reginanka/RWS/soimoi）做成 8 套×4 张对比拼图直接目检：Tarot Nouveau 最雅但是法式花色（红桃黑桃）语义错位、Marseille/Vieville/Sola-Busca 木刻铜版古旧、RWS dated、Etteilla 晦暗——**reginanka 深蓝星空+金色藤蔓拱门+古典油画人物明显最美**；HuggingFace 数据集接口超时未及检索
+- 【许可核实】reginanka/tarot-cards LICENSE.md = CC BY 4.0 官方全文；README 标注「Full 78-card Tarot deck + card back in WebP, 848×1264, Justice VIII/Strength XI（马赛序）」；用 PAT 稀疏克隆拉回 cards/（79 文件 13MB）与 cards.json（含牌名/正逆位牌意元数据）
+- 【编号核对】cards.json 确认 m08=Justice、m11=Strength（马赛序）——按本项目 RWS 序映射时互换：major-08←m11(力量)、major-11←m08(正义)；宫廷牌 11=侍从/12=骑士/13=王后/14=国王与我们一致；花色 w/c/s/p→权杖/圣杯/宝剑/星币直映
+- 【素材缺陷与修复】VLM 校验拼图（大阿尔卡那 4×6+小阿尔卡那 8×7）逐格核对 78 张：小牌 56 张全部正确（含 c09 九杯递花非误图）；大阿尔卡那 21/22 正确，唯一缺陷 m20「审判」在源牌组里是第二张正义（剑+天平）——用 z-ai image 按同风格补绘：864×1152 两版对比选优（深蓝底金藤蔓边框+天使吹号+白旗金十字+墓中复活），cover 裁切到 848×1140 替换 major-20.jpg
+- 【裁条带】全部 78 张裁掉底部 23px 黑边+101px 浅蓝标题条带（848×1264→848×1140），消掉烘焙英文牌名避免与我们的名牌条重复；q86 JPG 共 16.9MB（较 Soimoi 23.8MB 更小）；object-cover 在现有图片窗（0.777 比例）仅裁 4% 高度，拱门完整
+- 【落盘】覆盖 public/tarot/deck/ 78 张（同名直换，代码 cardImgSrc 零改动）；删 SOIMOI-CREDITS.txt/soimoi-LICENSE，新增 DECK-CREDITS.txt（reginanka 署名+CC BY 4.0+四项改动说明）
+- 【CardFace 换装】配新牌组深蓝金调：容器底 #0d1226 深夜蓝+边框 rgba(203,174,110,.5) 古金；罗马数字章改深蓝玻璃底 rgba(10,14,32,.78)+香槟金字 #ecd9a0；名牌条改深蓝渐变(#131935→#0b0f22)+象牙白中文名 #f2e7c8+金英文 rgba(214,188,132,.78)+金分隔线；**CardBack 组件一行未动**（白灰星座纹牌背保持原样）；INK/PAPER_BG 仍被 SVG 线稿回退与解读卡使用故保留
+- 【端到端实测】agent-browser 全流程（?open=couple 深链接+持久化 accepted 状态直达）：主题页→洗牌页散牌堆（牌背不变✓）→切牌四叠上下左右动画✓→切完整齐牌叠+「下一步」✓→13 种牌阵→三张牌·过去现在未来→排位页→牌轮页大扇形（牌背不变✓）→点牌跨页飞入牌位×3→「翻牌」→逐张 3D 翻开：节制(逆位整面倒置+徽章)/死神 XIII/倒吊人 XII 全部深蓝金拱门新牌面+金字罗马章+深蓝名牌条✓→AI 解读按牌位生成✓→deck 图片抽查 7 张全 200✓→console 清空后零错误✓→dev.log 仅既有 instrumentation 基线警告
+- 校验：bunx tsc --noEmit 零错误；bunx eslint couple-tarot.tsx 零问题
+
+Stage Summary:
+- 关键决策：①换装选 reginanka 而非其他 7 套：唯一兼具「精美度第一+78 张完整+CC BY 4.0+风格统一」的候选，深蓝金与浅色毛玻璃 App 形成高级撞色；②裁掉烘焙标题条带而不是保留——我们有自己的中英文名牌条，双牌名冗余且浅蓝条带廉价，裁后图片窗比例匹配仅 4% 竖向裁切；③m08/m11 马赛序换位在转换管线中一次性完成（不改牌库数据）；④源组缺审判用 AI 同风格补绘（延续 round-47 sprite 补丁思路），风格对比图验证与月亮/正义同框和谐；⑤牌面配色随牌组升级为深蓝金但结构不动、牌背严格保持第四十九轮定稿
+- 涉及文件：public/tarot/deck/*（78 张全部替换，18MB）、public/tarot/DECK-CREDITS.txt（新增）、public/tarot/SOIMOI-CREDITS.txt + soimoi-LICENSE（删除）、src/components/apps/couple-tarot.tsx（CardFace 配色 + 头部注释/cardImgSrc 注释更新）
