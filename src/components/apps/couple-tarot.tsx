@@ -25,11 +25,16 @@
  *   public/tarot/DECK-CREDITS.txt；加载失败仍退回原 sprite/SVG 线稿；
  * - 牌面配色随牌组换装：CardFace 名牌条/罗马数字章/边框改深蓝夜空底 + 香槟金文字（牌背不变）。
  *
+ * 第五十四轮变更：
+ * - 幽灵 click 防护由 600ms 时间窗改为「事件配对（arming）」确定性方案：根容器
+ *   onPointerDownCapture / onKeyDownCapture 先武装，click 配对消费后解除；无手势来源的
+ *   click（牌轮选牌切页后浏览器补发的那次）一律按幽灵吞掉——不依赖时钟，延迟再久也拦得住，
+ *   也不再误吞用户在 600ms 内的快速真实操作；pickGuard 时间戳与牌位侧双保险随之移除。
+ *
  * 第五十三轮变更：
  * - 修复「选完第 2/3 张牌后先前牌位被清空、要求重选」：牌轮用 pointerup 选牌，切页后浏览器
  *   补发的 click 会被重新命中到排位页同位置元素（牌位/按钮）——第 1 次选牌时牌位全空无感，
- *   之后随机发作。切页打 pickGuard 时间戳：600ms 内根容器 capture 吞 click + 牌位回收双防护；
- *   全部牌阵通用（根因在切页衔接，不在具体牌阵）。
+ *   之后随机发作；全部牌阵通用（根因在切页衔接，不在具体牌阵）。
  *
  * 第五十二轮变更：
  * - 「塔罗解读」标题图标美化：文字符号「☾」圆章改为深蓝夜空渐变徽章（金线描边 + 顶部内高光），
@@ -1514,7 +1519,11 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
   const flyRef = useRef<FlyState | null>(null);
   flyRef.current = fly;
   const pendingCardRef = useRef<{ idx: number; slotIdx: number; gx: number; gy: number } | null>(null);
-  const pickGuardRef = useRef(0); // 牌轮选牌切页时刻：屏蔽切页后浏览器补发的「幽灵 click」（第五十三轮）
+  // 「事件配对」防幽灵 click（第五十四轮）：真实手势（pointerdown / 键盘 keydown）先武装本页，
+  // 其配对的 click 才被放行并消费武装；没有手势来源的 click 一律视为幽灵。
+  // 牌轮选牌用 pointerup 切页，原目标卸载后浏览器补发的那次 click 无任何新 pointerdown，
+  // 必被根容器吞掉——确定性过滤，不依赖时间窗，补发再晚也拦得住。
+  const clickArmedRef = useRef(false);
   const slotEls = useRef<(HTMLDivElement | null)[]>([]);
   const pageRef = useRef<HTMLDivElement>(null);
   const slotRefCb = useCallback((i: number, el: HTMLDivElement | null) => {
@@ -1546,8 +1555,9 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
       };
       // 选牌用 pointerup 触发，切页后浏览器还会补发一次 click；原目标已卸载时
       // 该 click 会被重新命中到排位页同位置的元素（牌位/按钮），误触「收回牌位」
-      // 导致刚选的牌消失。切页前打时间戳，600ms 内的 click 一律忽略。
-      pickGuardRef.current = Date.now();
+      // 导致刚选的牌消失。本手势即将卸载自己的目标——主动解除武装，补发的 click
+      // 因无配对 pointerdown 被根容器按幽灵吞掉（第五十四轮）。
+      clickArmedRef.current = false;
       setView('slots');
     },
     [],
@@ -1606,7 +1616,6 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
 
   const handleSlotTap = useCallback((i: number) => {
     if (flyRef.current) return;
-    if (Date.now() - pickGuardRef.current < 600) return; // 切页幽灵点击防护（与根容器 capture 拦截双保险）
     setSlots((prev) => {
       if (prev[i] == null) return prev;
       const n = [...prev];
@@ -1738,10 +1747,20 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
     <div
       ref={pageRef}
       className="relative flex h-full flex-col overflow-hidden bg-[#f1f2f4] text-gray-900"
+      onPointerDownCapture={() => {
+        // 真实指针手势先武装：其后配对的 click 才会被放行（键盘 Enter/Space 走 onKeyDownCapture 同理）
+        clickArmedRef.current = true;
+      }}
+      onKeyDownCapture={() => {
+        clickArmedRef.current = true;
+      }}
       onClickCapture={(e) => {
-        // 牌轮选牌（pointerup）切页后浏览器补发的 click：600ms 内一律吞掉，
-        // 防其被重新命中到排位页的牌位（误收回）/「去选牌」「翻牌」按钮（误跳页）上
-        if (Date.now() - pickGuardRef.current < 600) {
+        // 幽灵 click 过滤（第五十四轮，替代 600ms 时间窗）：click 必须配对到本页内的
+        // pointerdown/keydown 才合法；牌轮选牌（pointerup）切页后浏览器补发的那次没有
+        // 新手势来源，无论延迟多久都被吞掉，防其命中牌位（误收回）/「去选牌」「翻牌」按钮（误跳页）
+        if (clickArmedRef.current) {
+          clickArmedRef.current = false;
+        } else {
           e.preventDefault();
           e.stopPropagation();
         }
