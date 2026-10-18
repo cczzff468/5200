@@ -20730,3 +20730,21 @@ Work Log:
 Stage Summary:
 - 项目已完整落地 /home/z/my-project 并在 3000 端口运行，git 历史与远程推送链路就绪
 - 待用户明确本轮需要修改/添加的具体功能后开工
+
+---
+Task ID: 2
+Agent: 主协调 Agent (Z.ai Code)
+Task: 调研"情侣小家"（家具交互+可移动+小人操控）可行资源与方案（用户明确本轮先不做）
+
+Work Log:
+- web-search 多轮搜索：GitHub 开源 home-decor/interior 项目、免费像素家具素材、技术方案对比
+- 核实 Kenney Furniture Kit：CC0 授权（可商用），120+ 家具 2D iso/top-down sprite
+- 核实 LimeZu Modern Interiors（itch.io）：数千现代家具（电视/洗衣机/衣橱/床等）+ 角色生成器，免费版限私用
+- 核实 bitglow cozy 系列 / Hormelz CC0 人物动画 / craftpix 免费小家素材
+- 确认项目已有 @dnd-kit/core + framer-motion 依赖（零新增依赖可行）
+- 发现项目 public/ 已有 couple-house.png / couple-home-bg.png / couple-map.png，恋人空间已有静态"情侣小家"入口卡片（couple-space.tsx L1775/L5422，仅图片+温馨度展示，无交互）
+- 结论：纯 React DOM + dnd-kit + framer-motion 方案最优，素材用 Kenney(CC0)/LimeZu/AI生图补充
+
+Stage Summary:
+- 调研完成，产出三套技术方案对比与推荐方案（方案1：React DOM 渲染，零新增依赖）
+- 待用户确认方案后下一轮开发；素材渠道已锁定（Kenney CC0 / LimeZu / 项目 image-generation 技能）
