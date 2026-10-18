@@ -20748,3 +20748,20 @@ Work Log:
 Stage Summary:
 - 调研完成，产出三套技术方案对比与推荐方案（方案1：React DOM 渲染，零新增依赖）
 - 待用户确认方案后下一轮开发；素材渠道已锁定（Kenney CC0 / LimeZu / 项目 image-generation 技能）
+
+---
+Task ID: 3
+Agent: 主协调 Agent (Z.ai Code)
+Task: 调研"小人用操作杆（摇杆）控制移动"的可行性（用户明确本轮先不做）
+
+Work Log:
+- 搜索 react 虚拟摇杆方案：nipplejs（零依赖、最流行、支持触摸+鼠标+动态定位）、react-joystick-component（React 封装版 6.2.1）
+- 核实 npm 包信息：nipplejs v1.0.4 零依赖 476KB；react-joystick-component peer 仅 react/react-dom
+- 结论：完全可行。三种实现路径：①自绘摇杆（pointer 事件 ~100 行零依赖，样式可控最推荐）②nipplejs ③react-joystick-component
+- 摇杆交互设计要点：动态定位模式（手指按哪摇杆在哪出现，Brawl Stars 同款）、方向向量归一化(-1~1)×速度驱动小人移动、配合四方向走路动画切换
+- 与既定方案①（React DOM + dnd-kit + framer-motion）完全兼容，摇杆就是一个固定/动态定位的 DOM 组件
+
+Stage Summary:
+- 摇杆操控方案确认可行，实现路径已锁定（自绘优先）
+- 情侣小家功能设计汇总：家具点击交互 + dnd-kit 拖拽移动 + 摇杆操控小人（双操控模式可并存：摇杆+点击寻路）
+- 继续等待用户确认后开工
