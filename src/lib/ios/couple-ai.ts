@@ -37,14 +37,17 @@ import { generateCharacterPhoto, imgGenConfigReady } from '@/lib/imggen';
 
 const STATE_KEY = 'couple-space:state';
 
-/** 文字图片（未配置生图模型时的「照片」：一段文字卡片当照片贴在相册里） */
+/**
+ * 文字图片（未配置生图模型时的「照片」：一张只画着「画面」的文字卡片贴在相册里）。
+ * 第五十七轮：卡片上只显示画面（desc）；text 改为随照片附给对方的一句话（进照片下方留言区）。
+ */
 export interface CoupleTextPhoto {
   kind: 'textcard';
-  /** 卡片上呈现的画面文字（把这张照片的画面讲给你听） */
-  text: string;
-  /** 画面描述（配置生图模型后可据此生成真图） */
+  /** 画面（第三人称客观描述；卡片上只显示这一段，也是配置生图模型后的生图提示词） */
   desc?: string;
-  /** 是否 TA（AI）放的 */
+  /** 随照片附的一句话（进照片留言区，不在卡片上；旧数据无 desc 时卡片回退显示它） */
+  text: string;
+  /** 是否 TA（AI）拍的 */
   byTa?: boolean;
   at: number;
 }
@@ -563,8 +566,12 @@ export function scheduleAiReply(key: string, delayMin = 2600, delayMax = 6500): 
  * 第三十一轮：TA 真的「看到」照片——有 photoSrc 时先识图（零配置自动内置兜底），
  * 留言必须点出画面里的具体内容，再结合人设/记忆/上下文；识图失败按没看到处理（不编内容）。
  * 每次上传都触发一次（防重：同一线程已有 TA 消息则跳过）。
+ * 第五十七轮：opts.byTa —— 照片是 TA（AI）自己拍的（AI 生成/文字图片）：留言必须是「拍摄者」视角
+ * （我拍到了什么/拍的时候在想什么），绝不能再夸「${me}拍得真好」；opts.knownDesc —— 拍摄者本来就
+ * 知道画面（desc），直接用，不再走识图。
  */
-export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: number, photoSrc?: string): void {
+export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: number, photoSrc?: string, opts?: { byTa?: boolean; knownDesc?: string }): void {
+  const byTa = Boolean(opts?.byTa);
   const target = aiTarget();
   if (!target) return;
   const threadKey = `album:${albumId}:${photoIdx}`;
@@ -583,13 +590,16 @@ export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: n
         const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
         let memBlock = '';
         try {
-          memBlock = memChatRecallBlock(target.contactId, target.channel, `${me}上传了照片 ${albumName}`, { mode: 'private' });
+          memBlock = memChatRecallBlock(target.contactId, target.channel, byTa ? `${ta}自己拍了张照片放进相册 ${albumName}` : `${me}上传了照片 ${albumName}`, { mode: 'private' });
         } catch {
           /* 召回失败不影响 */
         }
         // 第三十一轮：先识图再留言（AI 亲眼看到照片内容，留言不再凭空夸「拍得好看」）
+        // 第五十七轮：TA 自己拍的照片直接用 knownDesc（画面本来就是 TA 定的），不识图
         let photoDesc = '';
-        if (photoSrc && photoSrc.startsWith('data:image/')) {
+        if (byTa && opts?.knownDesc) {
+          photoDesc = opts.knownDesc;
+        } else if (photoSrc && photoSrc.startsWith('data:image/')) {
           try {
             photoDesc = await describeImagesAuto(useSettings.getState().visionConfig, {
               images: [photoSrc],
@@ -600,13 +610,20 @@ export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: n
           }
         }
         const photoBlock = photoDesc
-          ? `\n【这张照片拍的是】${cut(photoDesc, 120)}（这是${me}刚上传的照片，你亲眼看到了；留言要自然提到画面里的具体东西，不许泛泛而谈）`
+          ? byTa
+            ? `\n【这张照片拍的是】${cut(photoDesc, 120)}（这是你自己拍的照片，画面你当然记得；以拍摄者的口吻自然说到画面里的东西）`
+            : `\n【这张照片拍的是】${cut(photoDesc, 120)}（这是${me}刚上传的照片，你亲眼看到了；留言要自然提到画面里的具体东西，不许泛泛而谈）`
           : '';
+        const commentScene = byTa
+          ? `这张照片是你自己拍好放进恋人空间相册「${albumName}」的，${me}打开相册看到了它，你想在照片下面跟${me}说两句`
+          : `${me}刚在恋人空间的相册「${albumName}」里上传了一张新照片，你去翻相册看到了，想在照片下面留一条言`;
         let text = '';
         try {
           text = await llmUserFirst(
-            `${llmSystem(p, me, snap)}\n场景：${me}刚在恋人空间的相册「${albumName}」里上传了一张新照片，你去翻相册看到了，想在照片下面留一条言。${threadContext(threadKey, snap, me, ta)}${photoBlock}${memBlock ? `\n【相关记忆】\n${cut(memBlock, 240)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 280)}` : ''}`,
-            `请以「${ta}」的口吻给这张照片留言：25 字内，口语、贴合人设与你们的真实记忆${photoDesc ? '，必须点出照片画面里的具体内容（你看到什么就说什么）' : '（可以是夸、撒娇、想TA、约定下次一起拍）'}。禁止使用任何 emoji/表情符号。只输出留言内容。`,
+            `${llmSystem(p, me, snap)}\n场景：${commentScene}。${threadContext(threadKey, snap, me, ta)}${photoBlock}${memBlock ? `\n【相关记忆】\n${cut(memBlock, 240)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 280)}` : ''}`,
+            byTa
+              ? `请以「${ta}」的口吻给这张你自己拍的照片留言：25 字内，口语、贴合人设与你们的真实记忆。你是拍摄者——说拍到了什么/拍的时候在想什么/为什么想拍给${me}看；绝对禁止夸「${me}拍得真好」这类话（照片是你拍的，不是${me}拍的）。禁止使用任何 emoji/表情符号。只输出留言内容。`
+              : `请以「${ta}」的口吻给这张照片留言：25 字内，口语、贴合人设与你们的真实记忆${photoDesc ? '，必须点出照片画面里的具体内容（你看到什么就说什么）' : '（可以是夸、撒娇、想TA、约定下次一起拍）'}。禁止使用任何 emoji/表情符号。只输出留言内容。`,
           );
         } catch {
           /* 兜底 */
@@ -634,7 +651,7 @@ export function aiCommentOnPhoto(albumId: string, albumName: string, photoIdx: n
  * 真正的防重/识图/生成都在 aiCommentOnPhoto 内。
  */
 let lastLazyCommentAt = 0;
-export function aiCommentOnPhotoLazy(albumId: string, albumName: string, photoIdx: number, photoSrc?: string): void {
+export function aiCommentOnPhotoLazy(albumId: string, albumName: string, photoIdx: number, photoSrc?: string, opts?: { byTa?: boolean; knownDesc?: string }): void {
   const now = Date.now();
   if (now - lastLazyCommentAt < 15 * 60 * 1000) return;
   lastLazyCommentAt = now;
@@ -647,7 +664,7 @@ export function aiCommentOnPhotoLazy(albumId: string, albumName: string, photoId
       } catch {
         /* 读不到状态就照常尝试（aiCommentOnPhoto 内部还有 TA 防重） */
       }
-      aiCommentOnPhoto(albumId, albumName, photoIdx, photoSrc);
+      aiCommentOnPhoto(albumId, albumName, photoIdx, photoSrc, opts);
     })();
   }, 2200 + Math.random() * 2800);
 }
@@ -1934,6 +1951,8 @@ async function aiTickLetter(snap: CoupleSnap, me: string, ta: string, p: TaPerso
   const pid = currentPartnerId;
   const ch = currentChannel;
   const chatCtx = recentChatBlock(pid, ch, me, ta);
+  // 第五十七轮：补上共享记忆（纪念日/相册/日记/问答等），信里的具体小事不只从聊天里挑
+  const shared = snapDigest(snap, me, ta);
   // 第五十六轮：补上记忆碎片召回（AI 主动写信也要知道你们私聊过的具体事）
   let memBlock = '';
   try {
@@ -1944,8 +1963,8 @@ async function aiTickLetter(snap: CoupleSnap, me: string, ta: string, p: TaPerso
   let text = '';
   try {
     text = await llmUserFirst(
-      `${llmSystem(p, me, snap)}${memBlock ? `\n【你们的记忆碎片】\n${cut(memBlock, 400)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
-      `请以「${ta}」的身份给${me}写一封情书（130~200字）：开头称呼${me}；正文写你最近真实的生活小事、突然想${me}的瞬间、你们记忆里一件具体的小事、想和${me}一起做的一件事；结尾一句只属于你们的话。要像真的提笔写的信，贴合你的人设与你们的共享记忆；禁止列表、markdown、emoji。只输出信的正文。`,
+      `${llmSystem(p, me, snap)}${shared ? `\n【你们的共享记忆】\n${cut(shared, 380)}` : ''}${memBlock ? `\n【你们的记忆碎片】\n${cut(memBlock, 400)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
+      `请以「${ta}」的身份给${me}写一封情书（130~200字）：开头称呼${me}；正文写你最近真实的生活小事、突然想${me}的瞬间、从上面的共享记忆/记忆碎片/最近聊天里挑一件具体的、只有你们俩才懂的小事写进去、想和${me}一起做的一件事；结尾一句只属于你们的话。要像真的提笔写的信，贴合你的人设、你们的共享记忆和最近聊过的话题；绝对禁止空话套话；禁止列表、markdown、emoji。只输出信的正文。`,
     );
   } catch {
     /* 兜底 */
@@ -2008,7 +2027,7 @@ export async function aiDecideCouplePhoto(opts?: { albumId?: string; hint?: stri
   try {
     const raw = await llmUserFirst(
       `${llmSystem(p, me, snap)}${memBlock ? `\n【你们的记忆碎片】\n${cut(memBlock, 400)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
-      `你刚用手机拍了一张照片，想放进恋人空间的相册里给${me}看。${albumChoices}。${opts?.hint ? `\n${me}想要的画面：${cut(opts.hint, 120)}（围绕这个画面拍）` : ''}\n要求：照片内容必须贴合你的人设、你们最近的生活与聊天话题（像你真实生活里随手拍的一张）。输出 JSON：\n{"album":"相册id","desc":"照片画面描述（40~90字：你的样子/在做什么/穿着/场景/光线氛围，供生图提示词用，第三人称客观描述）","text":"文字图片内容（60~120字：用这段文字把这张照片的画面讲给${me}听，第一人称、口语、有画面感、像随照片附的一句话）"}\n只输出 JSON。`,
+      `你刚用手机拍了一张照片，想放进恋人空间的相册里给${me}看。${albumChoices}。${opts?.hint ? `\n${me}想要的画面：${cut(opts.hint, 120)}（围绕这个画面拍）` : ''}\n要求：照片内容必须贴合你的人设、你们最近的生活与聊天话题（像你真实生活里随手拍的一张）。输出 JSON：\n{"album":"相册id","desc":"画面描述（40~90字：你的样子/在做什么/穿着/场景/光线氛围，第三人称客观描述；这张「照片」卡片上只显示这段画面，要把画面写得上照）","text":"随照片附给${me}的一句话（20~45字，第一人称、口语：像把照片递给${me}时随口说的话——你在哪/拍到了什么/为什么想让TA看；不要复述穿着外貌等画面细节，那些写在desc里）"}\n只输出 JSON。`,
     );
     const j = extractJson<{ album?: string; desc?: string; text?: string }>(raw);
     const desc = stripEmoji(cut(j?.desc ?? '', 220));
@@ -2034,6 +2053,7 @@ function appendCouplePhoto(albumId: string, entry: CouplePhotoEntry, photoDayKey
 /**
  * AI 主动往相册放一张照片（每 2 天最多一张；打开恋人空间时随其它行为调度）：
  * 已配置生图模型 → 锁脸生成真图（失败自动降级文字图片）；未配置 → 文字图片卡片。
+ * 第五十七轮：TA 随照片附的一句话（decided.text）作为拍摄者视角的第一条留言写进照片下方。
  */
 async function aiTickAlbumPhoto(snap: CoupleSnap, me: string, ta: string): Promise<void> {
   const today = todayKey();
@@ -2048,74 +2068,30 @@ async function aiTickAlbumPhoto(snap: CoupleSnap, me: string, ta: string): Promi
   const albumId = (snap.albums ?? []).some((a) => a.id === decided.albumId) ? decided.albumId : ((snap.albums ?? [])[0]?.id ?? 'ta');
   // 生成真图 or 文字图片
   let entry: CouplePhotoEntry;
-  let kindNote = '';
   let usedImgGen = false;
   try {
     const cfg = useSettings.getState().imgGenConfig;
     if (cfg.enabled && imgGenConfigReady(cfg)) {
       const r = await generateCharacterPhoto({ cfg, contactId: pid, desc: decided.desc, charName: ta, useRef: true });
       entry = r.src;
-      kindNote = '一张照片';
       usedImgGen = true;
     } else {
       entry = { kind: 'textcard', text: decided.text, desc: decided.desc, byTa: true, at: Date.now() };
-      kindNote = '一张文字图片';
     }
   } catch {
     // 生图失败降级文字图片（不白跑一趟）
     entry = { kind: 'textcard', text: decided.text, desc: decided.desc, byTa: true, at: Date.now() };
-    kindNote = '一张文字图片';
   }
+  const newIdx = (snap.albums ?? []).find((a) => a.id === albumId)?.photos.length ?? 0;
   appendCouplePhoto(albumId, entry, today);
-  coupleRemember(pid, ch, `${ta}往恋人空间相册里放了一张照片（${cut(decided.desc, 60)}）`);
+  // 随照片附的一句话 → 照片下方第一条留言（拍摄者视角，第五十七轮）
+  writeSnap((s) => ({
+    ...s,
+    comments: [...((s.comments as CoupleSnap['comments']) ?? []), { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: `album:${albumId}:${newIdx}`, from: 'ta', text: decided.text, at: Date.now() }],
+  }));
+  coupleRemember(pid, ch, `${ta}自己拍了一张照片放进恋人空间相册（${cut(decided.desc, 60)}），并对${me}说：${cut(decided.text, 40)}`);
   logAi(`${ta}放了一张新照片到相册`);
   void notifyCouple(ch, pid, usedImgGen ? '我拍了张照片放进我们的相册了，快去看看 ♡' : '我给我们的相册放了一张文字照片，快去看看 ♡');
-}
-
-// —— 情书 AI 代笔（第五十六轮：编辑页「AI 帮我写」——以我的口吻给 TA 写，素材=人设+共享记忆+记忆碎片+最近聊天） ——
-
-/**
- * AI 代笔：帮「我」以第一人称给恋人（TA）写一封情书（恋人空间情书编辑页用）。
- * 素材 = TA 的人设 + 共享记忆 + 记忆碎片召回 + 最近微信/QQ 聊天内容。
- * 返回信的正文纯文本（≤900 字，可分页填入信纸）；LLM 失败返回 null。
- */
-export async function aiComposeLetterForMe(hint?: string): Promise<string | null> {
-  const target = aiTarget();
-  if (!target) return null;
-  const snap = readSnap();
-  if (!snap) return null;
-  const me = (snap.meName || '').trim() || '我';
-  const ta = (snap.taName || '').trim() || 'TA';
-  const p = await taPersonaOf(target.contactId);
-  if (!p) return null;
-  currentPartnerId = target.contactId;
-  currentChannel = target.channel;
-  let memBlock = '';
-  try {
-    memBlock = memChatRecallBlock(target.contactId, target.channel, `${me}想给${ta}写一封情书`, { mode: 'private' });
-  } catch {
-    /* 召回失败不影响 */
-  }
-  const chatCtx = recentChatBlock(target.contactId, target.channel, me, ta);
-  const sys = [
-    `你是一支安静的代笔笔。请以「${me}」的第一人称口吻，给${me}的恋人「${ta}」写一封情书（这封信会以${me}的名义寄出）。`,
-    p.relation ? `他们俩的关系：${p.relation}。` : '',
-    `「${ta}」的性格/说话风格（信里的话要写给这样的TA看）：${cut(p.persona, 120)}`,
-    `「${me}」的性别：${snap.gender || '保密'}；信里的自称、语气必须符合${me}的性别身份，称呼${ta}的方式也要符合对方的性别。`,
-    `他们的共享记忆：${snapDigest(snap, me, ta) || '刚刚开始，还很空白'}。`,
-    memBlock ? `【他们的记忆碎片】\n${cut(memBlock, 500)}` : '',
-    chatCtx ? `【他们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 400)}` : '',
-    `要求：像${me}亲手写给${ta}的信；正文 200~320 字；必须从上面的记忆和最近聊天里挑一两件具体的、只有你们俩才懂的小事写进去（绝不写空话套话）；口语、真诚、甜蜜但不腻；开头可以直接称呼「${ta}」也可以直接进入正文；结尾可落款「${me}」；像手写的信，禁止列表/markdown/emoji；禁止出现「AI/代笔/系统/模型」等字样。`,
-  ]
-    .filter(Boolean)
-    .join('\n');
-  try {
-    const raw = await llmUserFirst(sys, `${hint ? `${me}想在这封信里说到：${cut(hint, 120)}（自然写进去，不要生硬罗列）。` : ''}请直接输出信的正文，不要任何解释和前后缀。`);
-    const text = stripEmoji(cut(raw.replace(/^\s*(好的[，,]?|以下是?[你您].{0,8}的信[：:]?)\s*/i, ''), 920));
-    return text.length >= 40 ? text : null;
-  } catch {
-    return null;
-  }
 }
 
 // —— 调度（打开恋人空间时触发；模块级防重入 + 每行为独立去重） ——

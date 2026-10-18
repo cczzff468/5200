@@ -107,7 +107,7 @@ import {
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
-import { aiAnswerWithMe, aiCommentOnPhoto, aiCommentOnPhotoLazy, aiComposeLetterForMe, aiDecideCouplePhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, aiTrailFeed, aiZodiacReading, coupleMemoryDiff, coupleRemember, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, trailSortMs, isTextPhoto, type CouplePhotoEntry, type CoupleTextPhoto, type CoupleTrailRec, type DynReplyLevel } from '@/lib/ios/couple-ai';
+import { aiAnswerWithMe, aiCommentOnPhoto, aiCommentOnPhotoLazy, aiDecideCouplePhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, aiTrailFeed, aiZodiacReading, coupleMemoryDiff, coupleRemember, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, trailSortMs, isTextPhoto, type CouplePhotoEntry, type CoupleTextPhoto, type CoupleTrailRec, type DynReplyLevel } from '@/lib/ios/couple-ai';
 import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, patchPactCardsWhere, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
 import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
 import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
@@ -1951,10 +1951,9 @@ function AlbumPage(props: {
           >
             {a.photos[0] ? (
               isTextPhoto(a.photos[0]) ? (
-                // 文字图片封面（第五十六轮）：淡紫渐变小卡 + 文案摘要
-                <span className="flex h-full w-full flex-col items-center justify-center gap-1.5 bg-[linear-gradient(150deg,#f7f1f9,#f0f2f8_60%,#eef4f6)] px-4">
-                  <span className="text-[10px] font-bold tracking-[0.2em] text-[#b9a6c6]">文字图片</span>
-                  <span className="line-clamp-3 w-full text-center text-[11px] leading-snug text-[#8d8398]">{a.photos[0].text}</span>
+                // 文字图片封面（第五十七轮）：只显示画面（desc），淡紫渐变小卡
+                <span className="flex h-full w-full items-center justify-center bg-[linear-gradient(150deg,#f7f1f9,#f0f2f8_60%,#eef4f6)] px-4">
+                  <span className="line-clamp-4 w-full text-center text-[11px] leading-relaxed text-[#8d8398]">{a.photos[0].desc || a.photos[0].text}</span>
                 </span>
               ) : (
                 <img src={a.photos[0]} alt={a.name} className="h-full w-full object-cover" draggable={false} />
@@ -4464,8 +4463,6 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   const [dashed, setDashed] = useState(true);
   const [receipt, setReceipt] = useState(true);
   const [toolsOpen, setToolsOpen] = useState(true);
-  const [aiWriting, setAiWriting] = useState(false); // 第五十六轮：AI 代笔中
-  const aiOverwriteArmed = useRef(0); // 已有内容时二次确认（6 秒内再点一次才覆盖）
   const [sheet, setSheet] = useState<null | 'paper' | 'font' | 'env' | 'sender'>(null);
   const [senderName, setSenderName] = useState(''); // 署名设置弹层草稿（第二十轮）
   const [senderAvatarDraft, setSenderAvatarDraft] = useState('');
@@ -4533,40 +4530,6 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
 
   /** 多页合并成全文（发送/字数统计用） */
   const fullText = () => pages.map((p) => p.trim()).filter(Boolean).join('\n');
-
-  /** 第五十六轮：AI 帮我写（以我的口吻给 TA 写一封情书，素材=TA人设+共享记忆+记忆碎片+最近聊天；填进信纸后可继续手改） */
-  const aiWrite = async () => {
-    if (aiWriting) return;
-    if (!readInviteMeta().partnerContactId) {
-      showToast('先邀请 TA 开通恋人空间，AI 才能帮你们写信');
-      return;
-    }
-    if (fullText() && Date.now() - aiOverwriteArmed.current > 6000) {
-      aiOverwriteArmed.current = Date.now();
-      showToast('信纸上已有内容，6 秒内再点一次将覆盖重写');
-      return;
-    }
-    setAiWriting(true);
-    try {
-      const text = await aiComposeLetterForMe();
-      if (!text) {
-        showToast('TA 现在写不出来，稍后再试试');
-        return;
-      }
-      const next: string[] = [];
-      for (let i = 0; i < text.length && next.length < LETTER_MAX_PAGES; i += LETTER_PAGE_CHARS) next.push(text.slice(i, i + LETTER_PAGE_CHARS));
-      const filled = next.length > 0 ? next : [''];
-      setPages(filled);
-      setFocusPage(0);
-      patch({ letterDraft: JSON.stringify(filled) });
-      showToast('AI 写好了，已填进信纸 ♡ 可以继续修改');
-      setTimeout(() => scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' }), 60);
-    } catch {
-      showToast('写信失败，请重试');
-    } finally {
-      setAiWriting(false);
-    }
-  };
 
   /** 三个选择弹层（信纸/字体/信封；第十九轮起编辑页与发送设置页共用） */
   const renderSheets = () => (
@@ -5051,18 +5014,9 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
             )}
           </div>
         </div>
-        {/* 底部操作栏：AI 帮我写 · 存草稿 · 下一步（第二十轮：页码导航移除，页码显示在每张信纸上；第五十六轮加 AI 代笔） */}
+        {/* 底部操作栏：存草稿 · 下一步（第二十轮：页码导航移除，页码显示在每张信纸上；第五十七轮：删「AI 帮我写」——
+            情书由 TA 自己根据人设/共享记忆/记忆碎片/最近聊天主动写来寄（couple-ai.ts aiTickLetter）） */}
         <div className="relative z-20 flex shrink-0 items-center gap-2.5 border-t border-white/8 bg-[#141419] px-4 pb-7 pt-3.5">
-          <button
-            type="button"
-            onClick={() => void aiWrite()}
-            disabled={aiWriting}
-            data-testid="letter-ai-write"
-            className="flex h-[46px] flex-1 items-center justify-center gap-1.5 rounded-2xl border border-[#5a4a52] bg-[#2a222a] text-[14.5px] font-semibold text-[#f0c9d4] transition-transform active:scale-[0.97] disabled:opacity-60"
-          >
-            {aiWriting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {aiWriting ? '写信中…' : 'AI 帮我写'}
-          </button>
           <button
             type="button"
             onClick={() => {
@@ -11924,7 +11878,8 @@ function SettingsPage({ state, patch, showToast, close, onReset }: { state: Coup
   );
 }
 
-/** 相册详情：照片网格 + 上传 + AI 拍（配置生图→真图/可改提示词；未配置→文字图片）+ 删除 + 文字图片大图升级真图（第五十六轮） */
+/** 相册详情：照片网格 + 上传 + AI 拍（右下角悬浮按钮；配置生图→真图/可改提示词；未配置→文字图片）
+ *  + 文字图片大图「生成」升级真图（提示词可改）+ 删除 + 照片留言区（第五十七轮） */
 function AlbumDetail({ state, patch, albumId, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState> | ((prev: CoupleState) => Partial<CoupleState>)) => void; albumId: string | null; showToast: (m: string) => void; close: () => void }) {
   const album = state.albums.find((a) => a.id === albumId);
   const input = useRef<HTMLInputElement | null>(null);
@@ -11936,7 +11891,7 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
   const [genDesc, setGenDesc] = useState('');
   const [genBusy, setGenBusy] = useState<null | 'suggest' | 'gen' | 'text'>(null);
   const [genErr, setGenErr] = useState('');
-  const [upBusy, setUpBusy] = useState(false);
+  const [upgIdx, setUpgIdx] = useState<number | null>(null); // 第五十七轮：文字图片→真图升级模式（大图里点「生成」进入）
   if (!album) {
     return (
       <SubShell title="相册" onBack={close}>
@@ -11991,10 +11946,12 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
   };
   const openGenSheet = () => {
     setGenOpen(true);
+    setUpgIdx(null);
     setGenErr('');
     if (imgReady && !genDesc.trim()) void aiSuggest(); // 打开即让 TA 先想一个画面
   };
-  /** 生成真图（锁脸：按 TA 的参考图/外貌生成，提示词可改） */
+  /** 生成真图（锁脸：按 TA 的参考图/外貌生成，提示词可改）。
+   *  第五十七轮：普通模式追加新照片；升级模式（upgIdx）替换对应文字图片。两种模式 TA 都是拍摄者，留言走拍摄者视角。 */
   const genRealPhoto = async () => {
     const desc = genDesc.trim();
     if (!desc) {
@@ -12009,18 +11966,25 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
     setGenErr('');
     try {
       const r = await generateCharacterPhoto({ cfg: imgCfg, contactId: partnerId, desc, charName: taName, useRef: true });
-      const idx = album.photos.length;
-      appendPhoto(r.src);
+      const idx = upgIdx != null ? upgIdx : album.photos.length;
+      const upgrading = upgIdx != null;
+      patch((prev) => ({
+        albums: prev.albums.map((a) =>
+          a.id === album.id ? { ...a, photos: upgrading ? a.photos.map((p, i) => (i === upgIdx ? r.src : p)) : [...a.photos, r.src] } : a,
+        ),
+      }));
       setGenOpen(false);
       setGenDesc('');
-      showToast('照片已放进相册 ♡');
-      aiCommentOnPhoto(album.id, album.name, idx, r.src);
+      setUpgIdx(null);
+      showToast(upgrading ? '已生成真图 ♡' : '照片已放进相册 ♡');
+      aiCommentOnPhoto(album.id, album.name, idx, r.src, { byTa: true, knownDesc: desc });
     } catch (e) {
       setGenErr(e instanceof Error ? e.message : '照片生成失败，请重试');
     }
     setGenBusy(null);
   };
-  /** 让 TA 拍一张文字图片（未配置生图模型时 / 或想先要文字版时） */
+  /** 让 TA 拍一张文字图片（未配置生图模型时 / 或想先要文字版时）。
+   *  第五十七轮：随照片附的一句话（r.text）作为 TA 的第一条留言写进照片下方（拍摄者视角）。 */
   const genTextPhoto = async () => {
     if (!partnerId) {
       setGenErr('先邀请 TA 建立情侣关系吧');
@@ -12035,7 +11999,14 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
         setGenBusy(null);
         return;
       }
+      const idx = album.photos.length;
       appendPhoto({ kind: 'textcard', text: r.text, desc: r.desc, byTa: true, at: Date.now() });
+      patch((prev) => ({
+        comments: [
+          ...(prev.comments ?? []),
+          { id: `ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, key: `album:${album.id}:${idx}`, from: 'ta', text: r.text, at: Date.now() },
+        ],
+      }));
       setGenOpen(false);
       setGenDesc('');
       showToast('文字图片已放进相册 ♡');
@@ -12044,85 +12015,86 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
     }
     setGenBusy(null);
   };
-  /** 文字图片 → 生成真图（大图查看里的升级按钮；配置了生图模型才显示） */
-  const upgradeTextPhoto = async (idx: number) => {
-    const entry = album.photos[idx];
-    if (!entry || !isTextPhoto(entry) || upBusy) return;
+  const cur = view != null ? album.photos[view] : undefined;
+  const curText = cur && isTextPhoto(cur) ? cur : null; // 文字图片卡片（类型收窄后用）
+  const curImg = cur && !isTextPhoto(cur) ? cur : null; // 真图 dataURL
+  /** 第五十七轮：文字图片大图里的「生成」——进入升级模式弹层，画面描述可改，用生图模型变成真照片 */
+  const openUpgradeSheet = () => {
+    if (genBusy === 'gen') return;
+    if (!imgReady) {
+      showToast('设置 → 图像生成 配置生图模型后，就能把文字图片变成真照片');
+      return;
+    }
     if (!partnerId) {
       showToast('先邀请 TA 建立情侣关系吧');
       return;
     }
-    setUpBusy(true);
-    try {
-      const r = await generateCharacterPhoto({ cfg: imgCfg, contactId: partnerId, desc: (entry.desc || entry.text).trim(), charName: taName, useRef: true });
-      patch((prev) => ({ albums: prev.albums.map((a) => (a.id === album.id ? { ...a, photos: a.photos.map((p, i) => (i === idx ? r.src : p)) } : a)) }));
-      showToast('已生成真图，替换了文字图片 ♡');
-      aiCommentOnPhoto(album.id, album.name, idx, r.src);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : '照片生成失败，请重试');
-    }
-    setUpBusy(false);
+    setGenDesc(curText?.desc || curText?.text || '');
+    setUpgIdx(view);
+    setGenErr('');
+    setGenOpen(true);
   };
-  const cur = view != null ? album.photos[view] : undefined;
-  const curText = cur && isTextPhoto(cur) ? cur : null; // 文字图片卡片（类型收窄后用）
-  const curImg = cur && !isTextPhoto(cur) ? cur : null; // 真图 dataURL
   return (
     <SubShell
       title={album.name}
       onBack={close}
       right={
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={openGenSheet}
-            data-testid="album-ai-shot"
-            className="flex h-9 items-center gap-1 rounded-full border border-white/20 bg-white/10 px-3.5 text-[13px] font-semibold text-white/90 backdrop-blur"
-          >
-            <Sparkles className="h-4 w-4" /> AI拍
-          </button>
-          <button
-            type="button"
-            onClick={() => input.current?.click()}
-            className="flex h-9 items-center gap-1 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-4 text-[13px] font-semibold text-white"
-          >
-            <Plus className="h-4 w-4" /> 上传
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => input.current?.click()}
+          className="flex h-9 items-center gap-1 rounded-full bg-[linear-gradient(135deg,#5c5c64,#3f3f46)] px-4 text-[13px] font-semibold text-white"
+        >
+          <Plus className="h-4 w-4" /> 上传
+        </button>
       }
     >
-      {album.photos.length === 0 ? (
-        <div className="mt-20 flex flex-col items-center gap-3 text-[#b6b6bd]">
-          <ImageIcon className="h-12 w-12" strokeWidth={1.3} />
-          <div className="text-[14px]">还没有照片，点右上角上传或让 TA 拍一张吧</div>
-        </div>
-      ) : (
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          {album.photos.map((p, i) => {
-            const tp = isTextPhoto(p);
-            return (
-              <button
-                key={`${i}-${tp ? `t${p.at}` : String(p).slice(-24)}`}
-                type="button"
-                onClick={() => {
-                  setView(i);
-                  // 第三十一轮：TA 像正好也翻到这张一样，可能延时来留言（识图画面+人设+记忆，节流防刷屏）
-                  aiCommentOnPhotoLazy(album.id, album.name, i, tp ? undefined : p);
-                }}
-                className="aspect-square overflow-hidden rounded-lg bg-[#ececef]"
-              >
-                {tp ? (
-                  <span className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[linear-gradient(150deg,#f7f1f9,#f0f2f8_60%,#eef4f6)] px-2">
-                    <span className="text-[9px] font-bold tracking-[0.18em] text-[#b9a6c6]">文字图片</span>
-                    <span className="line-clamp-4 w-full text-center text-[10px] leading-snug text-[#8d8398]">{p.text}</span>
-                  </span>
-                ) : (
-                  <img src={p} alt={`照片${i + 1}`} className="h-full w-full object-cover transition-transform active:scale-[0.97]" draggable={false} />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      <div className="flex min-h-full flex-col">
+        {album.photos.length === 0 ? (
+          <div className="mt-20 flex flex-col items-center gap-3 text-[#b6b6bd]">
+            <ImageIcon className="h-12 w-12" strokeWidth={1.3} />
+            <div className="text-[14px]">还没有照片，点右上角上传，或点右下角让 TA 拍一张吧</div>
+          </div>
+        ) : (
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            {album.photos.map((p, i) => {
+              const tp = isTextPhoto(p);
+              return (
+                <button
+                  key={`${i}-${tp ? `t${p.at}` : String(p).slice(-24)}`}
+                  type="button"
+                  onClick={() => {
+                    setView(i);
+                    // 第三十一轮：TA 像正好也翻到这张一样，可能延时来留言（识图画面+人设+记忆，节流防刷屏）
+                    // 第五十七轮：文字图片直接把画面（desc）与拍摄者身份带给 TA，不识图
+                    aiCommentOnPhotoLazy(album.id, album.name, i, tp ? undefined : p, tp ? { byTa: p.byTa, knownDesc: p.desc } : undefined);
+                  }}
+                  className="aspect-square overflow-hidden rounded-lg bg-[#ececef]"
+                >
+                  {tp ? (
+                    // 第五十七轮：文字图片只显示画面（desc）
+                    <span className="flex h-full w-full items-center justify-center bg-[linear-gradient(155deg,#f6eff8,#eef1f7_55%,#eaf3f4)] px-2.5">
+                      <span className="line-clamp-5 w-full text-center text-[10.5px] leading-relaxed text-[#857a90]">{p.desc || p.text}</span>
+                    </span>
+                  ) : (
+                    <img src={p} alt={`照片${i + 1}`} className="h-full w-full object-cover transition-transform active:scale-[0.97]" draggable={false} />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {/* 第五十七轮：AI 拍悬浮按钮移到右下角（贴内容底部，随滚动始终可见） */}
+        <button
+          type="button"
+          onClick={openGenSheet}
+          data-testid="album-ai-shot"
+          className="sticky bottom-4 z-30 ml-auto mt-auto self-end rounded-full bg-[linear-gradient(135deg,#8b7ba8,#6f5f92)] px-5 py-3 text-[14px] font-semibold text-white shadow-[0_8px_22px_rgba(111,95,146,0.45)] transition-transform active:scale-95"
+        >
+          <span className="flex items-center gap-1.5">
+            <Sparkles className="h-[17px] w-[17px]" /> AI拍
+          </span>
+        </button>
+      </div>
       {/* 大图查看 + 删除 + 照片留言区（第十轮：TA 会来留言，我可以回复，多轮往返） */}
       {view != null && (
         <div className="absolute inset-0 z-40 flex flex-col bg-black/90" onClick={() => setView(null)}>
@@ -12145,20 +12117,20 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
                 className="w-full max-w-[350px] rounded-2xl bg-[linear-gradient(160deg,#fbf5ef,#f6eef4_55%,#eef1f7)] p-5 shadow-2xl ring-1 ring-black/10"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="text-[10.5px] font-bold tracking-[0.22em] text-[#b9a6c6]">{curText.byTa ? `${taName} 的文字图片` : '文字图片'}</div>
-                <p className="mt-3 whitespace-pre-wrap text-[15.5px] leading-7 text-[#4a4450]">{curText.text}</p>
-                {curText.desc && <p className="mt-3 border-t border-black/5 pt-2.5 text-[11px] leading-relaxed text-[#a296a8]">画面：{curText.desc}</p>}
-                {imgReady && (
+                {/* 第五十七轮：文字图片只显示画面；随照附言在下方留言区 */}
+                <p className="whitespace-pre-wrap text-[16px] leading-8 text-[#4a4450]">{curText.desc || curText.text}</p>
+                <div className="mt-4 flex items-center justify-between border-t border-black/5 pt-3">
+                  <span className="text-[11.5px] text-[#a296a8]">{curText.byTa ? `${taName} 拍的 · 文字图片` : '文字图片'}</span>
                   <button
                     type="button"
-                    disabled={upBusy}
-                    onClick={() => void upgradeTextPhoto(view)}
-                    className="mt-4 flex h-11 w-full items-center justify-center gap-1.5 rounded-xl bg-[linear-gradient(135deg,#8b7ba8,#6f5f92)] text-[14px] font-semibold text-white shadow disabled:opacity-60"
+                    disabled={genBusy === 'gen'}
+                    onClick={openUpgradeSheet}
+                    className="flex h-9 items-center gap-1 rounded-full bg-[linear-gradient(135deg,#8b7ba8,#6f5f92)] px-3.5 text-[13px] font-semibold text-white shadow disabled:opacity-60"
                   >
-                    {upBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                    {upBusy ? '正在生成…' : '用 AI 生成这张照片'}
+                    {genBusy === 'gen' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                    生成
                   </button>
-                )}
+                </div>
               </div>
             ) : curImg ? (
               <img src={curImg} alt="查看照片" className="max-h-full max-w-full object-contain" draggable={false} onClick={(e) => e.stopPropagation()} />
@@ -12169,14 +12141,26 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
           </div>
         </div>
       )}
-      {/* AI 拍照弹层（第五十六轮） */}
+      {/* AI 拍照弹层（第五十六轮 → 第五十七轮：支持文字图片升级模式，提示词可改） */}
       {genOpen && (
-        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/55" onClick={() => (genBusy ? null : setGenOpen(false))}>
+        <div
+          className="absolute inset-0 z-50 flex flex-col justify-end bg-black/55"
+          onClick={() => {
+            if (!genBusy) {
+              setGenOpen(false);
+              setUpgIdx(null);
+            }
+          }}
+        >
           <div className="rounded-t-2xl bg-white/85 px-4 pb-8 pt-3 backdrop-blur-2xl backdrop-saturate-150 [animation:couple-sub-in_.24s_ease-out]" onClick={(e) => e.stopPropagation()}>
             <span aria-hidden="true" className="mx-auto mb-2 block h-1 w-10 rounded-full bg-[#dcdce2]" />
-            <div className="text-center text-[17px] font-bold text-[#2c2c30]">让 {taName} 拍一张</div>
+            <div className="text-center text-[17px] font-bold text-[#2c2c30]">{upgIdx != null ? '生成这张照片' : `让 ${taName} 拍一张`}</div>
             <div className="mt-1 text-center text-[11.5px] leading-relaxed text-[#b6b6bd]">
-              {imgReady ? 'TA 会按你们的记忆拍一张照片，画面描述可以随便改' : '未配置生图模型：TA 先拍一张「文字图片」给你们（设置 → 图像生成 配置后这里可以生成真图）'}
+              {upgIdx != null
+                ? '把画面描述改成你想要的样子（也可以点「AI 想画面」让 TA 重新想），确认后生成真照片替换这张文字图片'
+                : imgReady
+                  ? 'TA 会按你们的记忆拍一张照片，画面描述可以随便改'
+                  : '未配置生图模型：TA 先拍一张「文字图片」给你们（设置 → 图像生成 配置后这里可以生成真图）'}
             </div>
             <textarea
               value={genDesc}
@@ -12211,15 +12195,17 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
                 </button>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => void genTextPhoto()}
-              disabled={genBusy !== null}
-              className="mt-2.5 flex h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-[#e9e2f0] bg-white/70 text-[14px] font-medium text-[#7b6f88] disabled:opacity-50"
-            >
-              {genBusy === 'text' ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircleHeart className="h-4 w-4" />}
-              {genBusy === 'text' ? 'TA 正在拍…' : imgReady ? '或让 TA 拍一张文字图片' : '让 TA 拍一张（文字图片）'}
-            </button>
+            {upgIdx == null && (
+              <button
+                type="button"
+                onClick={() => void genTextPhoto()}
+                disabled={genBusy !== null}
+                className="mt-2.5 flex h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-[#e9e2f0] bg-white/70 text-[14px] font-medium text-[#7b6f88] disabled:opacity-50"
+              >
+                {genBusy === 'text' ? <Loader2 className="h-4 w-4 animate-spin" /> : <MessageCircleHeart className="h-4 w-4" />}
+                {genBusy === 'text' ? 'TA 正在拍…' : imgReady ? '或让 TA 拍一张文字图片' : '让 TA 拍一张（文字图片）'}
+              </button>
+            )}
           </div>
         </div>
       )}
