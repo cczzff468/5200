@@ -4,45 +4,57 @@ import { db } from '@/lib/db';
 export const runtime = 'nodejs';
 
 /**
- * 情侣小家持久化 API（Prisma 单行快照，按浏览器工作区隔离）
+ * 情侣小家 3D 持久化 API（Prisma 单行快照，按浏览器工作区隔离）
  *
  * - GET  → { data: HomeState | null, coins: number, rev: number }（无档案时 data=null，客户端播默认布局）
  * - POST → 保存全量快照 { data, coins, rev }（乐观并发：rev 不匹配返回 409 + 服务端最新版，客户端采纳服务端）
  *          { action: 'reset' } → 删除档案（客户端重新播种默认布局）
  *
  * 校验策略：结构宽松但逐字段清洗（条数/坐标/金币钳制），防止任意大 payload 与坐标穿模。
+ * 3D 坐标系：房间中心为原点，坐标可为负（±20 米钳制）。
  */
 
 interface FurnItem {
   id: string;
   kind: string;
   x: number;
-  y: number;
-  flip?: boolean;
+  z: number;
+  r?: number;
   st?: Record<string, unknown>;
 }
 
 interface HomePayload {
+  v: number;
   furniture: FurnItem[];
-  chars: Record<string, { x: number; y: number; dir?: string }>;
+  chars: Record<string, { x: number; z: number; dir?: string }>;
   night?: boolean;
 }
 
 const MAX_ITEMS = 150;
-const MAX_COORD = 4000;
+/** 3D 世界坐标绝对值上限（米） */
+const MAX_COORD = 20;
 const MAX_JSON = 256 * 1024;
 
-function clampNum(v: unknown, max: number): number | null {
+/** 有符号坐标清洗：钳到 [-MAX_COORD, MAX_COORD]，非法返回 null */
+function clampCoord(v: unknown): number | null {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
   if (!Number.isFinite(n)) return null;
-  return Math.max(0, Math.min(max, Math.round(n)));
+  return Math.max(-MAX_COORD, Math.min(MAX_COORD, Math.round(n * 100) / 100));
+}
+
+function clampInt(v: unknown, min: number, max: number): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return null;
+  return Math.max(min, Math.min(max, Math.round(n)));
 }
 
 function cleanStr(v: unknown, max: number): string {
   return typeof v === 'string' ? v.trim().slice(0, max) : '';
 }
 
-/** 宽松清洗 HomeState；结构不合法返回 null */
+const DIRS = new Set(['up', 'down', 'left', 'right']);
+
+/** 宽松清洗 HomeState（3D 版 v=3）；结构不合法返回 null */
 function normalizeHome(raw: unknown): HomePayload | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
@@ -51,18 +63,19 @@ function normalizeHome(raw: unknown): HomePayload | null {
   for (const it of r.furniture.slice(0, MAX_ITEMS)) {
     if (!it || typeof it !== 'object') continue;
     const f = it as Record<string, unknown>;
-    const x = clampNum(f.x, MAX_COORD);
-    const y = clampNum(f.y, MAX_COORD);
+    const x = clampCoord(f.x);
+    const z = clampCoord(f.z);
     const id = cleanStr(f.id, 64);
     const kind = cleanStr(f.kind, 24);
-    if (x == null || y == null || !id || !kind) continue;
+    if (x == null || z == null || !id || !kind) continue;
+    const rot = clampInt(f.r, 0, 3);
     const st =
       f.st && typeof f.st === 'object' && !Array.isArray(f.st)
         ? JSON.stringify(f.st).length <= 2048
           ? (f.st as Record<string, unknown>)
           : {}
         : {};
-    furniture.push({ id, kind, x, y, flip: f.flip === true ? true : undefined, st });
+    furniture.push({ id, kind, x, z, r: rot ?? 0, st });
   }
   if (furniture.length === 0 && r.furniture.length > 0) return null;
   const chars: HomePayload['chars'] = {};
@@ -70,13 +83,15 @@ function normalizeHome(raw: unknown): HomePayload | null {
     for (const [key, val] of Object.entries(r.chars as Record<string, unknown>).slice(0, 4)) {
       if (!val || typeof val !== 'object') continue;
       const c = val as Record<string, unknown>;
-      const x = clampNum(c.x, MAX_COORD);
-      const y = clampNum(c.y, MAX_COORD);
-      if (x == null || y == null) continue;
-      chars[key] = { x, y, dir: c.dir === 'left' || c.dir === 'right' ? c.dir : undefined };
+      const x = clampCoord(c.x);
+      const z = clampCoord(c.z);
+      if (x == null || z == null) continue;
+      const dir = typeof c.dir === 'string' && DIRS.has(c.dir) ? c.dir : undefined;
+      chars[key] = { x, z, dir };
     }
   }
-  return { furniture, chars, night: r.night === true };
+  if (!chars.me || !chars.partner) return null;
+  return { v: 3, furniture, chars, night: r.night === true };
 }
 
 function wsOf(req: NextRequest): string {
@@ -89,7 +104,7 @@ export async function GET(req: NextRequest) {
     const row = await db.coupleHome.findUnique({ where: { workspaceId: wsOf(req) } });
     if (!row) return NextResponse.json({ data: null, coins: null, rev: 0 });
     return NextResponse.json({
-      data: normalizeHome(JSON.parse(row.data)) ?? null,
+      data: normalizeHome(JSON.parse(row.data)),
       coins: row.coins,
       rev: row.rev,
     });
@@ -119,25 +134,28 @@ export async function POST(req: NextRequest) {
 
   const home = normalizeHome(body.data);
   if (!home) return NextResponse.json({ error: 'bad-data' }, { status: 400 });
-  const coinsRaw = clampNum(body.coins, 1_000_000);
-  const coins = coinsRaw == null ? 0 : coinsRaw;
-  const clientRev = clampNum(body.rev, 1_000_000) ?? 0;
+  const coins = clampInt(body.coins, 0, 1_000_000) ?? 0;
+  const clientRev = clampInt(body.rev, 0, 1_000_000) ?? 0;
   const dataStr = JSON.stringify(home);
   if (dataStr.length > MAX_JSON) return NextResponse.json({ error: 'too-large' }, { status: 413 });
 
   try {
-    // 乐观并发：服务端已有更高版本且与客户端 rev 不一致 → 409 + 回带服务端最新（客户端采纳）
+    // 乐观并发：仅当服务端存的是合法 v3 数据且 rev 不一致 → 409 + 回带服务端最新（客户端采纳）；
+    // 服务端若存的是旧格式（2D 时代 / 损坏数据），直接用新快照覆盖完成迁移。
     const existing = await db.coupleHome.findUnique({ where: { workspaceId } });
-    if (existing && existing.rev !== clientRev) {
-      return NextResponse.json(
-        {
-          conflict: true,
-          data: normalizeHome(JSON.parse(existing.data)),
-          coins: existing.coins,
-          rev: existing.rev,
-        },
-        { status: 409 },
-      );
+    if (existing) {
+      const serverHome = normalizeHome(JSON.parse(existing.data));
+      if (serverHome && existing.rev !== clientRev) {
+        return NextResponse.json(
+          {
+            conflict: true,
+            data: serverHome,
+            coins: existing.coins,
+            rev: existing.rev,
+          },
+          { status: 409 },
+        );
+      }
     }
     const row = await db.coupleHome.upsert({
       where: { workspaceId },

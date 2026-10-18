@@ -1,197 +1,224 @@
 'use client';
 
 /**
- * 情侣小家 —— 目录 / 默认布局 / 常量 / 持久化（Prisma + IndexedDB 双层）
+ * 情侣小家 3D —— 家具目录 / 默认布局 / 持久化
  *
- * 素材：AI 生成「Adorable Home 式 2.5D 卡通写实」贴图（奶油+蜂蜜木色系），洋红抠图透明 PNG。
- * 贴图纵横比无需手写：容器宽固定、高由 img 自然比例撑开（CSS auto 高 + translateY(-100%) 锚底）。
+ * 模型：Kenney Furniture Kit 2.0（CC0，kenney.nl），浅色系重着色（白色/浅灰/浅粉/浅黄/蜂蜜木）。
+ * 持久化：IndexedDB 即时缓存 + Prisma 服务端快照（rev 乐观并发）。
  */
 
 import { kvGet, kvSet, kvSetDebounced } from '@/lib/ios/idb-kv';
 import { getWorkspaceId } from '@/lib/ios/workspace';
-import type { ClothDef, FurnitureItem, HomeState } from './types';
+import type { CatalogEntry, FurnitureItem, HomeState } from './types';
 
 // ---------------- 世界常量 ----------------
 
-/** 世界宽（横向约 2.9 屏，滑动/跟随留足空间） */
-export const WORLD_W = 1120;
-/** 世界高（墙 + 进深很深的大开间：客厅/餐厨/卧室/洗衣角分区） */
-export const WORLD_H = 1640;
-/** 背景墙底边（含踢脚线）的世界 y；之下全是地板 */
-export const WALL_BOTTOM = 300;
-/** 小人行走区边界（地板内缩） */
-export const WALK_MARGIN = 46;
-/** 编辑模式拖拽网格吸附（世界 px） */
-export const GRID = 16;
-/** 小人显示高（世界 px） */
-export const CHAR_H = 130;
+/** 房间宽（米，x 轴） */
+export const ROOM_W = 9;
+/** 房间深（米，z 轴） */
+export const ROOM_D = 6;
+/** 墙高（米） */
+export const WALL_H = 2.4;
+/** 墙厚 */
+export const WALL_T = 0.12;
+/** 模型统一放大倍数（Kenney 原尺寸为真实家具比例，放大更 Q 萌饱满） */
+export const MODEL_SCALE = 1.75;
+/** 编辑模式拖拽吸附（米） */
+export const SNAP = 0.25;
+/** 小人行走边界内缩 */
+export const WALK_MARGIN = 0.4;
+/** 小人身高（米） */
+export const CHAR_H = 0.95;
+
+export const ROOM_X = ROOM_W / 2;
+export const ROOM_Z = ROOM_D / 2;
 
 // ---------------- 家具目录 ----------------
 
-const IMG = (f: string) => `/home/furniture/${f}`;
+const G = (f: string) => `/models/furniture/${f}.glb`;
 
 /** 家具目录：kind → 静态配置（价格单位：金币） */
-export const CATALOG: Record<string, import('./types').CatalogEntry> = {
+export const CATALOG: Record<string, CatalogEntry> = {
   // ---- 沙发区 ----
   sofa: {
-    kind: 'sofa', img: IMG('sofa.webp'), w: 250, name: '奶油双人沙发', cat: 'sofa', price: 300,
+    kind: 'sofa', glb: G('sofa'), name: '奶油双人沙发', cat: 'sofa', price: 300, fp: [1.7, 0.75],
     acts: { playful: true },
-    quips: ['窝在沙发里最舒服啦～', '一起看会儿电视？', '毯子还留着你的温度'],
   },
   sofaLong: {
-    kind: 'sofaLong', img: IMG('sofaLong.webp'), w: 330, name: '奶油三人沙发', cat: 'sofa', price: 420,
+    kind: 'sofaLong', glb: G('sofaLong'), name: '奶油三人沙发', cat: 'sofa', price: 420, fp: [1.7, 1.45],
     acts: { playful: true },
-    quips: ['躺平～', '三人位我们的地盘', '中间的位置留给抱枕'],
   },
-  pillow: {
-    kind: 'pillow', img: IMG('pillow.webp'), w: 60, name: '爱心抱枕', cat: 'decor', price: 25,
+  loungeChair: {
+    kind: 'loungeChair', glb: G('loungeChair'), name: '米白躺椅', cat: 'sofa', price: 260, fp: [0.9, 1.2],
     acts: { playful: true },
-    quips: ['软乎乎', '打枕头战！', '抱着它看剧最舒服'],
+  },
+  ottoman: {
+    kind: 'ottoman', glb: G('ottoman'), name: '软软脚凳', cat: 'sofa', price: 90, fp: [0.75, 0.8],
+    acts: { playful: true },
   },
   // ---- 桌几 ----
   coffeeTable: {
-    kind: 'coffeeTable', img: IMG('coffeeTable.webp'), w: 160, name: '原木茶几', cat: 'table', price: 120,
+    kind: 'coffeeTable', glb: G('coffeeTable'), name: '蜂蜜木茶几', cat: 'table', price: 120, fp: [1.15, 0.7],
     acts: { playful: true },
-    quips: ['两杯热可可还冒着气 ☕', '遥控器就在这儿～', '小心别踢到桌角'],
   },
-  tableDining: {
-    kind: 'tableDining', img: IMG('tableDining.webp'), w: 190, name: '双人餐桌', cat: 'table', price: 160,
+  diningTable: {
+    kind: 'diningTable', glb: G('diningTable'), name: '圆脚餐桌', cat: 'table', price: 160, fp: [1.2, 1.4],
     acts: { playful: true },
-    quips: ['桌上的郁金香是你买的', '晚上一起吃火锅？', '烛光晚餐预定中'],
   },
   chair: {
-    kind: 'chair', img: IMG('chair.webp'), w: 95, name: '软垫餐椅', cat: 'table', price: 45,
+    kind: 'chair', glb: G('chair'), name: '软垫椅', cat: 'table', price: 45, fp: [0.35, 0.35],
     acts: { playful: true },
-    quips: ['拉开坐坐', '你先坐', '椅垫是新换的'],
   },
   sideTable: {
-    kind: 'sideTable', img: IMG('sideTable.webp'), w: 110, name: '照片边几', cat: 'table', price: 80,
-    acts: { playful: true },
-    quips: ['相框里是那年海边', '抽屉里有小秘密', '咖啡杯还没收'],
+    kind: 'sideTable', glb: G('sideTable'), name: '抽屉边几', cat: 'table', price: 80, fp: [0.9, 0.4],
+    acts: { door: true },
   },
-  nightstand: {
-    kind: 'nightstand', img: IMG('nightstand.webp'), w: 110, name: '床头柜', cat: 'bed', price: 90,
+  desk: {
+    kind: 'desk', glb: G('desk'), name: '浅木书桌', cat: 'table', price: 220, fp: [1.3, 0.7],
     acts: { playful: true },
-    quips: ['闹钟再睡五分钟', '柜里有睡前故事书', '放着一杯温水'],
   },
   // ---- 床品 ----
   bed: {
-    kind: 'bed', img: IMG('bed.webp'), w: 310, name: '软软双人床', cat: 'bed', price: 450,
+    kind: 'bed', glb: G('bed'), name: '粉白双人床', cat: 'bed', price: 450, fp: [1.7, 2.0],
     acts: { playful: true },
-    quips: ['被窝已预热 🔥', '今晚几点睡？', '枕头大战输的人铺床'],
+  },
+  bedSingle: {
+    kind: 'bedSingle', glb: G('bedSingle'), name: '单人小床', cat: 'bed', price: 260, fp: [1.0, 2.0],
+    acts: { playful: true },
+  },
+  nightstand: {
+    kind: 'nightstand', glb: G('nightstand'), name: '小抽屉床头柜', cat: 'bed', price: 90, fp: [0.5, 0.4],
+    acts: { door: true },
   },
   // ---- 地毯 ----
   rug: {
-    kind: 'rug', img: IMG('rug.webp'), w: 330, name: '粉粉圆地毯', cat: 'decor', price: 100,
-    acts: { playful: true },
-    quips: ['踩上去软软的', '光脚踩踩超舒服', '刚吸过尘哦'],
-    zBias: -3000, flippable: false,
+    kind: 'rug', glb: G('rug'), name: '浅粉圆地毯', cat: 'decor', price: 100, fp: [1.6, 1.6],
+    acts: { playful: true }, flat: true,
+  },
+  rugRect: {
+    kind: 'rugRect', glb: G('rugRect'), name: '米色长地毯', cat: 'decor', price: 130, fp: [2.75, 1.6],
+    acts: { playful: true }, flat: true,
+  },
+  doormat: {
+    kind: 'doormat', glb: G('doormat'), name: '进门地垫', cat: 'decor', price: 25, fp: [0.75, 0.4],
+    acts: { playful: true }, flat: true,
   },
   // ---- 影音 ----
   tvStand: {
-    kind: 'tvStand', img: IMG('tvStand.webp'), w: 235, name: '原木电视柜', cat: 'table', price: 150,
+    kind: 'tvStand', glb: G('tvStand'), name: '原木电视柜', cat: 'table', price: 150, fp: [1.4, 0.45],
     acts: { playful: true },
-    quips: ['柜子里塞满了零食', '理线…算了明天再理', '遥控器八成又掉后面了'],
   },
   tv: {
-    kind: 'tv', img: IMG('tv.webp'), w: 185, name: '智能电视', cat: 'appliance', price: 260,
-    acts: { toggle: true }, glow: 240, emissive: 0.9, flippable: false,
-  },
-  recordPlayer: {
-    kind: 'recordPlayer', img: IMG('recordPlayer.webp'), w: 115, name: '复古唱机', cat: 'appliance', price: 200,
-    acts: { toggle: true }, glow: 120, emissive: 0.3,
-    quips: [' ♪ 咔哒——放上一张黑胶'],
+    kind: 'tv', glb: G('tv'), name: '智能电视', cat: 'appliance', price: 260, fp: [1.2, 0.25],
+    acts: { toggle: true }, light: { y: 0.55, color: '#cfe6ff', intensity: 0.8 },
   },
   speaker: {
-    kind: 'speaker', img: IMG('speaker.webp'), w: 75, name: '小音箱', cat: 'appliance', price: 90,
+    kind: 'speaker', glb: G('speaker'), name: '小音箱', cat: 'appliance', price: 90, fp: [0.3, 0.3],
     acts: { playful: true },
-    quips: ['低音炮轰隆隆', '连上蓝牙放歌吧', '今晚来点爵士？'],
+  },
+  radio: {
+    kind: 'radio', glb: G('radio'), name: '复古收音机', cat: 'appliance', price: 200, fp: [0.55, 0.2],
+    acts: { toggle: true }, light: { y: 0.28, color: '#ffd9a0', intensity: 0.4 },
+  },
+  microwave: {
+    kind: 'microwave', glb: G('microwave'), name: '小微波炉', cat: 'appliance', price: 180, fp: [0.5, 0.4],
+    acts: { playful: true },
+  },
+  toaster: {
+    kind: 'toaster', glb: G('toaster'), name: '烤面包机', cat: 'appliance', price: 120, fp: [0.35, 0.2],
+    acts: { playful: true },
   },
   // ---- 灯具 ----
   lampFloor: {
-    kind: 'lampFloor', img: IMG('lampFloor.webp'), w: 100, name: '纸灯落地灯', cat: 'lamp', price: 110,
-    acts: { toggle: true }, glow: 230, emissive: 0.85,
+    kind: 'lampFloor', glb: G('lampFloor'), name: '蘑菇落地灯', cat: 'lamp', price: 110, fp: [0.3, 0.3],
+    acts: { toggle: true }, light: { y: 1.45, color: '#ffd9a0', intensity: 1.2 },
   },
   lampTable: {
-    kind: 'lampTable', img: IMG('lampTable.webp'), w: 70, name: '蘑菇小台灯', cat: 'lamp', price: 70,
-    acts: { toggle: true }, glow: 170, emissive: 0.8,
+    kind: 'lampTable', glb: G('lampTable'), name: '蘑菇小台灯', cat: 'lamp', price: 70, fp: [0.3, 0.3],
+    acts: { toggle: true }, light: { y: 0.48, color: '#ffd9a0', intensity: 0.9 },
   },
-  // ---- 植物/宠物/装饰 ----
-  plantMonstera: {
-    kind: 'plantMonstera', img: IMG('plantMonstera.webp'), w: 110, name: '龟背竹', cat: 'plant', price: 60,
+  // ---- 植物 ----
+  plant: {
+    kind: 'plant', glb: G('plant'), name: '大盆绿植', cat: 'plant', price: 60, fp: [0.4, 0.45],
     acts: { playful: true },
-    quips: ['浇点水吧 💧', '它今天也很精神', '新叶子又展开一片'],
   },
   plantSmall: {
-    kind: 'plantSmall', img: IMG('plantSmall.webp'), w: 60, name: '小多肉', cat: 'plant', price: 30,
+    kind: 'plantSmall', glb: G('plantSmall'), name: '小多肉', cat: 'plant', price: 30, fp: [0.2, 0.2],
     acts: { playful: true },
-    quips: ['小小一盆超可爱', '晒晒太阳～', '它说今天也要加油'],
   },
-  cat: {
-    kind: 'cat', img: IMG('cat.webp'), w: 100, name: '橘猫「团团」', cat: 'decor', price: 500,
+  // ---- 收纳 ----
+  bookcase: {
+    kind: 'bookcase', glb: G('bookcase'), name: '开放书架', cat: 'decor', price: 140, fp: [0.7, 0.45],
     acts: { playful: true },
-    quips: ['喵呜～ 🐾', '呼噜呼噜…别吵醒它', '团团今天占了晒太阳位'],
   },
-  books: {
-    kind: 'books', img: IMG('books.webp'), w: 65, name: '书堆', cat: 'decor', price: 20,
-    acts: { playful: true },
-    quips: ['睡前读物～', '你折页角的习惯还没改', '下次去书展吧'],
+  wardrobe: {
+    kind: 'wardrobe', glb: G('wardrobe'), name: '双门衣柜', cat: 'decor', price: 320, fp: [0.7, 0.45],
+    acts: { door: true },
   },
   box: {
-    kind: 'box', img: IMG('box.webp'), imgOpen: IMG('boxOpen.webp'), w: 90, name: '收纳纸箱', cat: 'decor', price: 0,
+    kind: 'box', glb: G('box'), glbAlt: G('boxOpen'), name: '收纳纸箱', cat: 'decor', price: 0, fp: [0.4, 0.4],
     acts: { door: true },
   },
   trashcan: {
-    kind: 'trashcan', img: IMG('trashcan.webp'), w: 65, name: '小垃圾桶', cat: 'decor', price: 20,
+    kind: 'trashcan', glb: G('trashcan'), name: '小垃圾桶', cat: 'decor', price: 20, fp: [0.35, 0.4],
     acts: { playful: true },
-    quips: ['今天也要垃圾分类', '咦，有张电影票根', '空的，很干净'],
   },
-  // ---- 大家电 ----
-  wardrobe: {
-    kind: 'wardrobe', img: IMG('wardrobe.webp'), imgOpen: IMG('wardrobeOpen.webp'), w: 140, name: '双开门衣橱', cat: 'appliance', price: 320,
-    acts: { door: true },
+  books: {
+    kind: 'books', glb: G('books'), name: '书堆', cat: 'decor', price: 20, fp: [0.25, 0.15],
+    acts: { playful: true },
   },
+  coatRack: {
+    kind: 'coatRack', glb: G('coatRack'), name: '衣帽架', cat: 'decor', price: 85, fp: [0.5, 0.5],
+    acts: { playful: true },
+  },
+  // ---- 厨卫家电 ----
   fridge: {
-    kind: 'fridge', img: IMG('fridge.webp'), imgOpen: IMG('fridgeOpen.webp'), w: 130, name: '奶油小冰箱', cat: 'appliance', price: 380,
+    kind: 'fridge', glb: G('fridge'), name: '奶油冰箱', cat: 'appliance', price: 380, fp: [0.75, 0.5],
     acts: { door: true },
   },
   stove: {
-    kind: 'stove', img: IMG('stove.webp'), w: 155, name: '复古灶台', cat: 'appliance', price: 300,
+    kind: 'stove', glb: G('stove'), name: '复古灶台', cat: 'appliance', price: 300, fp: [0.75, 0.8],
     acts: { playful: true },
-    quips: ['今晚吃什么呢', '咕嘟咕嘟炖着汤', '刚擦过灶台'],
+  },
+  sink: {
+    kind: 'sink', glb: G('sink'), name: '厨房水槽', cat: 'appliance', price: 210, fp: [0.75, 0.8],
+    acts: { door: true },
+  },
+  kitchenBar: {
+    kind: 'kitchenBar', glb: G('kitchenBar'), name: '小吧台', cat: 'table', price: 240, fp: [0.75, 0.35],
+    acts: { playful: true },
   },
   washer: {
-    kind: 'washer', img: IMG('washer.webp'), w: 110, name: '滚筒洗衣机', cat: 'appliance', price: 350,
-    acts: { washer: true },
+    kind: 'washer', glb: G('washer'), name: '滚筒洗衣机', cat: 'appliance', price: 350, fp: [0.7, 0.7],
+    acts: { door: true, washer: true },
+  },
+  bathtub: {
+    kind: 'bathtub', glb: G('bathtub'), name: '泡泡浴缸', cat: 'bathroom', price: 400, fp: [2.1, 1.0],
+    acts: { playful: true },
+  },
+  toilet: {
+    kind: 'toilet', glb: G('toilet'), name: '小白马桶', cat: 'bathroom', price: 150, fp: [0.55, 0.85],
+    acts: { playful: true },
+  },
+  // ---- 宠物 ----
+  bear: {
+    kind: 'bear', glb: G('bear'), name: '小熊「团团」', cat: 'decor', price: 500, fp: [0.7, 0.45],
+    acts: { playful: true },
   },
 };
 
-/** 商店分类 tab 配置（编辑模式底部栏） */
-export const SHOP_TABS: { key: import('./types').FurnCategory; label: string; emoji: string }[] = [
-  { key: 'all', label: '全部', emoji: '🏠' },
-  { key: 'sofa', label: '沙发', emoji: '🛋️' },
-  { key: 'table', label: '桌几', emoji: '🪑' },
-  { key: 'bed', label: '床品', emoji: '🛏️' },
-  { key: 'lamp', label: '灯具', emoji: '💡' },
-  { key: 'plant', label: '植物', emoji: '🪴' },
-  { key: 'appliance', label: '家电', emoji: '🧺' },
-  { key: 'decor', label: '装饰', emoji: '🧸' },
+/** 商店分类 tab 配置（编辑模式底部栏；纯文字，无图标） */
+export const SHOP_TABS: { key: import('./types').FurnCategory; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'sofa', label: '沙发' },
+  { key: 'table', label: '桌几' },
+  { key: 'bed', label: '床品' },
+  { key: 'lamp', label: '灯具' },
+  { key: 'plant', label: '植物' },
+  { key: 'appliance', label: '家电' },
+  { key: 'bathroom', label: '卫浴' },
+  { key: 'decor', label: '装饰' },
 ];
-
-// ---------------- 衣物目录 ----------------
-
-export const CLOTHES: ClothDef[] = [
-  { id: 'c1', emoji: '👕', name: '白T恤', color: '#e8ecef' },
-  { id: 'c2', emoji: '👗', name: '碎花裙', color: '#f2b8c6' },
-  { id: 'c3', emoji: '🧥', name: '牛仔外套', color: '#7d9bd1' },
-  { id: 'c4', emoji: '🧶', name: '米色毛衣', color: '#e5d3b3' },
-  { id: 'c5', emoji: '👖', name: '牛仔裤', color: '#6f87a8' },
-  { id: 'c6', emoji: '🧣', name: '红围巾', color: '#e07a7a' },
-  { id: 'c7', emoji: '👕', name: '条纹衫', color: '#b9d0cf' },
-  { id: 'c8', emoji: '🩳', name: '运动短裤', color: '#a7b6d9' },
-];
-
-export const CLOTH_MAP: Record<string, ClothDef> = Object.fromEntries(CLOTHES.map((c) => [c.id, c]));
 
 // ---------------- 默认布局 ----------------
 
@@ -199,55 +226,66 @@ let seq = 0;
 const F = (
   kind: FurnitureItem['kind'],
   x: number,
-  y: number,
+  z: number,
+  r = 0,
   st: FurnitureItem['st'] = {},
-  flip = false,
-): FurnitureItem => ({ id: `${kind}-${++seq}`, kind, x, y, st, flip });
+): FurnitureItem => ({ id: `${kind}-${Date.now().toString(36)}-${++seq}`, kind, x, z, r, st });
 
-/** 初始大开间布局：客厅（中上）· 餐厨角（右上）· 卧室角（左下）· 洗衣角（右下） */
+/**
+ * 初始 9×6 开间布局：
+ * 客厅（中北，电视墙+沙发对坐）· 餐厨（东侧）· 卧室（西南）· 洗衣角（东南）· 卫浴（西北）
+ */
 export function defaultHome(): HomeState {
   seq = 0;
   return {
+    v: 3,
     night: false,
     furniture: [
-      // —— 客厅（中上）：电视墙 + 沙发对坐 ——
-      F('tvStand', 430, 430),
-      F('tv', 430, 386), // 电视摆在柜面上（y 略高于柜底线）
-      F('speaker', 590, 436),
-      F('rug', 430, 720),
-      F('sofa', 430, 690),
-      F('coffeeTable', 430, 540),
-      F('pillow', 350, 640),
-      F('lampFloor', 235, 500),
-      F('recordPlayer', 240, 690),
-      F('plantMonstera', 635, 490),
+      // —— 客厅（中北）：电视墙 + 沙发对坐 ——
+      F('rugRect', 0, -0.6, 0),
+      F('tvStand', 0, -2.55, 0),
+      F('tv', 0, -2.35, 0),
+      F('speaker', -1.15, -2.5, 0),
+      F('sofa', 0, 1.0, 2), // 面向北（电视）
+      F('coffeeTable', 0, -0.75, 0),
+      F('ottoman', 1.35, 0.9, 0),
+      F('lampFloor', -1.9, 0.4, 0),
+      F('plant', 1.95, -2.4, 0),
+      F('books', -0.85, -0.7, 0),
 
-      // —— 餐厨角（右上）：冰箱+灶台贴墙，餐桌在其下方 ——
-      F('fridge', 990, 430, { open: false }),
-      F('stove', 855, 425),
-      F('tableDining', 900, 650),
-      F('chair', 805, 625),
-      F('chair', 995, 675),
-      F('trashcan', 1048, 780),
+      // —— 餐厨（东侧）——
+      F('fridge', 3.9, -2.3, 3, { open: false }),
+      F('stove', 3.05, -2.62, 0),
+      F('sink', 3.05, -1.7, 2),
+      F('diningTable', 3.1, 0.6, 0),
+      F('chair', 2.35, 0.15, 1),
+      F('chair', 3.85, 0.15, 3),
+      F('trashcan', 4.1, 1.6, 0),
 
-      // —— 卧室角（左下；整体右移避开摇杆遮挡区，世界 x<210 且靠下会被左下摇杆挡住）——
-      F('bed', 340, 1280),
-      F('nightstand', 190, 1170),
-      F('lampTable', 190, 1120),
-      F('wardrobe', 262, 1450, { open: false, clothes: ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'] }),
-      F('books', 545, 1150),
+      // —— 卧室（西南）——
+      F('bed', -2.9, 1.7, 1), // 床头朝西墙
+      F('nightstand', -1.95, 0.9, 3),
+      F('lampTable', -1.95, 0.35, 3, { on: false }),
+      F('wardrobe', -2.5, -2.5, 0, { open: false }),
+      F('bookcase', -3.9, -1.3, 1),
 
-      // —— 洗衣角（右下）——
-      F('washer', 960, 1300, { open: false, clothes: [] }),
-      F('box', 840, 1430, { open: false }),
+      // —— 洗衣角（东南）——
+      F('washer', 3.85, 2.3, 3, { open: false }),
+      F('box', 3.0, 2.5, 0, { open: false }),
 
-      // —— 散落各处的可爱 ——
-      F('cat', 630, 1450),
-      F('plantSmall', 1010, 1000),
+      // —— 卫浴（西北）——
+      F('bathtub', -3.6, -0.4, 1),
+      F('toilet', -1.35, -2.6, 2),
+
+      // —— 散落的可爱 ——
+      F('bear', 0.65, 1.55, 3),
+      F('doormat', -0.4, 2.6, 2),
+      F('plantSmall', 2.0, 2.6, 0),
+      F('radio', 1.35, -2.55, 0),
     ],
     chars: {
-      me: { id: 'me', x: 560, y: 1020, dir: 'down' },
-      partner: { id: 'partner', x: 650, y: 1070, dir: 'left' },
+      me: { x: 0, z: 1.9, dir: 'up' },
+      partner: { x: 0.8, z: 2.2, dir: 'left' },
     },
   };
 }
@@ -261,15 +299,16 @@ export interface HomePersist {
   rev: number;
 }
 
-const KEY = 'couple-home:state';
+const KEY = 'couple-home:state3d';
 const API = '/api/couple-home';
+
+const valid = (h: HomeState | null | undefined): h is HomeState =>
+  !!h && (h as HomeState).v === 3 && Array.isArray(h.furniture) && !!h.chars?.me && !!h.chars?.partner;
 
 /** 同步读缓存（首屏即时渲染；无则 null） */
 export function loadCache(): HomePersist | null {
   const saved = kvGet<HomePersist>(KEY);
-  if (saved && Array.isArray(saved.home?.furniture) && saved.home.chars?.me && saved.home.chars?.partner) {
-    return saved;
-  }
+  if (saved && valid(saved.home)) return saved;
   return null;
 }
 
@@ -289,7 +328,7 @@ export async function fetchRemote(): Promise<HomePersist | null> {
     const res = await fetch(API, { headers: { 'X-Workspace-Id': getWorkspaceId() }, cache: 'no-store' });
     if (!res.ok) return null;
     const json = (await res.json()) as { data: HomeState | null; coins: number | null; rev: number };
-    if (!json.data || !json.data.chars?.me || !json.data.chars?.partner) return null;
+    if (!valid(json.data)) return null;
     return { home: json.data, coins: json.coins ?? 0, rev: json.rev ?? 0 };
   } catch {
     return null;
@@ -306,7 +345,7 @@ export async function pushRemote(p: HomePersist): Promise<HomePersist | 'conflic
     });
     if (res.status === 409) {
       const json = (await res.json()) as { data: HomeState | null; coins: number; rev: number };
-      if (!json.data) return 'conflict-none';
+      if (!valid(json.data)) return 'conflict-none';
       return { home: json.data, coins: json.coins, rev: json.rev };
     }
     if (!res.ok) return 'conflict-none';
@@ -332,3 +371,14 @@ export async function resetRemote(): Promise<HomePersist> {
   kvSet(KEY, fresh);
   return fresh;
 }
+
+// ---------------- 金币规则 ----------------
+
+/** playful 家具点击冷却（秒） */
+export const PLAY_COOLDOWN = 3;
+/** playful 点击奖励区间 */
+export const PLAY_REWARD: [number, number] = [1, 2];
+/** 洗衣完成收取奖励 */
+export const WASH_REWARD = 8;
+/** 初始金币 */
+export const INIT_COINS = 600;

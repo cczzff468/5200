@@ -20812,3 +20812,29 @@ Stage Summary:
 - 情侣小家完成 2.0 重制：Adorable Home 式卡通写实 2.5D 视觉（38 张 AI 生成蓝幕抠图 WebP 素材 + CSS 房间），生活模式（摇杆+第一人称跟随镜头+家具交互）与编辑模式（上帝视角+网格+商店+翻转/删除/重置）双形态，金币经济（交互赚币/购买/回收），昼夜光照系统，Prisma+IndexedDB 双层持久化（乐观并发），全屏支持
 - 关键技术资产：tools/ 下可复用的素材生成+抠图管线（蓝幕洪泛双约束算法）；camState 的手机壳 scale 换算模型（后续任何 world-overlay 组件都需要）
 - 待办（下轮可选）：家具碰撞体积、更多房间/楼层、TA 互动对话接入、BGM 音效、家具旋转 90°
+
+---
+Task ID: 3
+Agent: 主协调者 (Z.ai Code)
+Task: 情侣小家 3D 化重制——Kenney CC0 GLB 模型 + react-three-fiber 真实 3D 场景 + 编辑模式旋转 + 浅色系配色 + 移除新手提示气泡/图标
+
+Work Log:
+- 下载 Kenney Furniture Kit 2.0（CC0，kenney.nl，140 个 GLB），挑选 41 个家具模型拷贝到 public/models/furniture/（684KB）
+- 安装 three@0.186 + @react-three/fiber@9.8 + @react-three/drei@10.7
+- 发现 Kenney 材质命名全 kit 统一（wood/carpet/metal/lamp…14 种），按材质名映射浅色系调色板（白/浅灰/浅粉/浅黄/蜂蜜木/柔黑），model-kit.ts 共享材质缓存+兜底降饱和提亮
+- 发现模型带独立门节点（doorLeft/doorRight/doorFridge/washerDoor…），实现铰链 pivot 装配 + damp 开门动画；纸箱类无门节点用 glbAlt 换模型
+- 重写 types.ts/catalog.ts：3D 坐标系（房间 9×6m、MODEL_SCALE 1.75、r 旋转步进）、41 种家具目录、默认布局 30 件、持久化（v:3 版本守卫 + idb + Prisma rev 并发）
+- 新建 scene/ 五件套：Room（canvas 木纹地板+四面墙按相机自动隐藏+暖光窗）、Furn3D（模型+门动画+灯罩发光+电视屏幕+洗衣机状态灯+选中光圈+弹跳）、Char3D（程序化 Q 版小人：胶囊身+圆头+黑豆眼+腮红+走路弹跳）、model-kit、HomeScene（Canvas+昼夜灯光+跟随相机+OrbitControls 编辑视角+PointerRig 拖拽/旋转+EditGrid+WASD）
+- 重写 CoupleHome.tsx：生活/装修双模式、商店抽屉（9 分类纯文字 tab）、旋转/删除操作栏、金币经济（playful 冷却赚币+洗衣 30s 收取 +8）、全屏、Toast、去掉了所有新手提示气泡与图标（含摇杆脚印 emoji）
+- 重写 API route：3D 坐标校验（±20m 有符号、r 0-3、v=3 守卫）；修复旧 2D 数据死锁（旧格式直接覆盖迁移，仅合法 v3 参与 409 冲突）
+- 修复三个深层 bug：
+  1) Canvas 双重缩放：R3F useMeasure 用 getBoundingClientRect（物理 px）被手机壳 CSS transform 二次缩放 → resize={{ offsetSize: true }}
+  2) 手势失灵：洗衣机倒计时 setItems 每秒强制重渲染 → PointerRig effect 每秒重建清零手势闭包 → 手势状态/回调全部入 ref + 倒计时无事可做时不再 setState
+  3) 滑动吞事件：浏览器把画布拖拽当原生 drag（dragstart→pointercancel 吃掉 pointermove）→ canvas draggable=false + userSelect/webkitUserDrag none + dragstart preventDefault；监听器改 window 捕获阶段
+- agent-browser + VLM 端到端实测：解锁→恋人空间→发现→情侣小家全链路；WASD 移动+镜头跟随、滑动旋转视角、点沙发 +金币、电视开关发光、衣柜/冰箱真实开门动画、编辑模式俯瞰+拖拽+旋转+删除、商店购买（605→575）、夜晚模式（窗光+灯光）、洗衣机完整流程（启动→30s→washDone→收取 +8）、持久化全链路（金币 601/衣柜开门状态跨刷新保留）
+
+Stage Summary:
+- 情侣小家完成 2.5D→真实 3D 的全面重制：Kenney CC0 模型浅色系重着色、可旋转编辑、无提示气泡、白/浅灰/浅粉/浅黄配色
+- 关键产物：src/components/apps/couple-home/{types,catalog,CoupleHome,Joystick}.ts(x) + scene/{model-kit,Room,Furn3D,Char3D,HomeScene}.ts(x) + public/models/furniture/*.glb(41)
+- API 兼容 v3 3D 格式并自动迁移旧 2D 数据；Prisma schema 不变
+- 全部核心交互经浏览器实测通过；lint 干净；dev server 正常

@@ -108,7 +108,7 @@ function JoystickInner({ onVec, size = 128 }: JoystickProps) {
           }}
         />
       ))}
-      {/* 摇杆头 */}
+      {/* 摇杆头（中心浅刻环，无图标） */}
       <motion.div
         className="absolute left-1/2 top-1/2 rounded-full"
         animate={{ x: knob.x - 30, y: knob.y - 30 }}
@@ -122,7 +122,7 @@ function JoystickInner({ onVec, size = 128 }: JoystickProps) {
           boxShadow: '0 5px 14px rgba(0,0,0,0.28), inset 0 -3px 6px rgba(0,0,0,0.08)',
         }}
       >
-        <div className="flex h-full w-full items-center justify-center text-[18px] opacity-60">👣</div>
+        <div className="absolute inset-0 m-auto h-7 w-7 rounded-full border border-[#c9c3b5]/60" />
       </motion.div>
     </div>
   );
