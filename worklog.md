@@ -20667,3 +20667,20 @@ Stage Summary:
 - 三项新反馈全部实现并浏览器实测通过：①情书频率 = AI 按人设/记忆/近况自己决定（无固定间隔）；②聊天里讨情书 TA 真的写好寄到会话（信封卡片）；③相册 AI 生成图（含文字图片升级后）大图右侧有重生成图标（纯图标无文字标签），提示词可自定义后原位再生成
 - 关键决策：①讨信走「正则意图检测 + 定向写信管线」而非聊天动作标记——普通回复照常（TA 先应声）+ 信件异步寄到，改动面小且 UX 自然；②真图 desc 随照片落盘（CoupleGenPhoto）——重生成提示词的持久化基础，AI 主动放照同享；③每天一次尝试上限保留（防 LLM 每次打开都调模型），但写不写完全交给人设化的 AI 判断
 - 涉及文件：src/lib/ios/couple-ai.ts（CoupleGenPhoto/isGenPhoto/photoSrc/aiTickLetter 重写/coupleLetterAskHit/aiWriteLetterOnRequest/aiTickAlbumPhoto 真图卡片）、src/components/apps/couple-space.tsx（大图右侧重生成图标/删卡片内「生成」文字按钮/渲染与留言适配）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（runAiTurn 讨信钩子）
+
+---
+Task ID: 5
+Agent: main (Z.ai Code)
+Task: 第五十九轮：用户反馈修复——生成图缺「再次生成」按钮 / 删图后留言残留 / 文字图片改极简风 / AI拍按钮改毛玻璃
+
+Work Log:
+- 「再次生成」按钮缺失根因：旧版本生成的真图在 state 里是纯字符串 dataURL（CoupleGenPhoto 卡片是第五十八轮才引入），isGenPhoto 判定不到 → canRegen=false → 按钮不渲染；第五十九轮改为 canRegen = view != null（所有照片开放重生成：文字图片/AI 真图/旧字符串图/我上传的），升级弹层预填 desc（旧图无 desc 则空 + 「AI 想画面」可补），浏览器 mock /api/imggen 全链路实测：旧字符串猫图 → 点右侧 Sparkles 图标 → 弹层改提示词 → 生成 → 原位替换成功
+- 删图留言残留根因：留言按「album:相册id:序号」挂靠，removePhoto 只删照片不删留言 → 残留 + 后续新补位照片背上旧留言；修复：removePhoto 同事务 filter 掉该序号留言 + 正则把更高序号的留言 key 整体前移一位（留言永远跟着照片走）；实测：删文字图（2 条留言）→ 留言消失，猫图留言从 key1 前移到 key0 跟图迁移；再删猫图 → 夜景图留言（TA 延时留言，历经两次删除）依然正确跟随、无任何残留
+- 文字图片极简风（用户嫌渐变米紫难看）：三处渲染点统一改纯白系——相册封面（白底+ring-inset 细描边+灰字）、网格瓦片（白底+ring-inset+灰字 line-clamp-4）、大图卡（纯白 rounded-[22px]+大留白 p-6+行高 2+细分割线+灰色小字「小暖 拍的 · 文字图片」），截图确认干净不花
+- AI拍按钮毛玻璃（用户嫌紫渐变难看）：右下角悬浮胶囊改 bg-gradient-to-b from-white/75 to-white/45 + backdrop-blur-2xl backdrop-saturate-150 + border-white/70 + 柔和投影 + 深灰字 + 紫 Sparkles 图标；并修复幽灵按钮问题——打开大图查看层时按钮隐藏（view==null 才渲染），不再隔着 bg-black/90 半透明罩透出来（用户截图里的诡异暗圆就是它）
+- 验证：bunx tsc --noEmit 零错误；bunx eslint 零问题；agent-browser 端到端（种子 IDB couple-space:state：textcard+旧字符串图+img 卡+三条留言）——瓦片/大图极简风 ✓、旧字符串图有重生成按钮 ✓、mock 生图原位替换 ✓、删除照片留言清理与对齐 ✓、AI拍毛玻璃样式 ✓、查看层无幽灵按钮 ✓；dev.log 仅原有 instrumentation 警告与偶发 /api/chat 502（上游波动，与本次改动无关）
+
+Stage Summary:
+- 四项反馈全部修复并浏览器实测通过
+- 关键决策：①重生成按钮对所有照片开放——旧字符串生成图无法与用户上传区分，一刀切开放既修 bug 又白赚「AI 重拍我上传的照片」能力；②删图留言清理修在 removePhoto 一处（filter+key 前移）而非改留言挂靠键为照片 id——改动面最小且旧数据无需迁移；③文字图片三处渲染点（封面/瓦片/大图）统一纯白极简语言，与真图并排不打架；④AI拍毛玻璃 + 查看层隐藏，顺手消除用户截图里的幽灵按钮
+- 涉及文件：src/components/apps/couple-space.tsx（removePhoto 留言清理与对齐 / canRegen 全量开放 / 封面+瓦片+大图文字图片极简风 / AI拍毛玻璃+查看层隐藏）

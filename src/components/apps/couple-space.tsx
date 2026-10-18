@@ -1951,9 +1951,9 @@ function AlbumPage(props: {
           >
             {a.photos[0] ? (
               isTextPhoto(a.photos[0]) ? (
-                // 文字图片封面（第五十七轮）：只显示画面（desc），淡紫渐变小卡
-                <span className="flex h-full w-full items-center justify-center bg-[linear-gradient(150deg,#f7f1f9,#f0f2f8_60%,#eef4f6)] px-4">
-                  <span className="line-clamp-4 w-full text-center text-[11px] leading-relaxed text-[#8d8398]">{a.photos[0].desc || a.photos[0].text}</span>
+                // 文字图片封面（第六十轮极简风）：只显示画面（desc），纯白 + 细描边 + 灰字，与瓦片/大图同风格
+                <span className="flex h-full w-full items-center justify-center bg-white px-4 ring-1 ring-inset ring-black/[0.06]">
+                  <span className="line-clamp-4 w-full text-center text-[11px] leading-[1.75] tracking-[0.01em] text-[#9a9aa2]">{a.photos[0].desc || a.photos[0].text}</span>
                 </span>
               ) : (
                 <img src={photoSrc(a.photos[0])} alt={a.name} className="h-full w-full object-cover" draggable={false} />
@@ -11926,7 +11926,18 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
     showToast(`已上传 ${urls.length} 张 ♡`);
   };
   const removePhoto = (idx: number) => {
-    patch({ albums: state.albums.map((a) => (a.id === album.id ? { ...a, photos: a.photos.filter((_, i) => i !== idx) } : a)) });
+    // 第六十轮：删照片时同步删掉它名下的留言，并把后面照片的留言 key 整体前移一位——
+    // 此前留言按「album:相册id:序号」挂靠，删图后留言残留，之后新补位的照片还会背上旧留言
+    patch((prev) => ({
+      albums: prev.albums.map((a) => (a.id === album.id ? { ...a, photos: a.photos.filter((_, i) => i !== idx) } : a)),
+      comments: (prev.comments ?? [])
+        .filter((c) => c.key !== `album:${album.id}:${idx}`)
+        .map((c) => {
+          const m = /^album:(.+):(\d+)$/.exec(c.key);
+          if (m && m[1] === album.id && Number(m[2]) > idx) return { ...c, key: `album:${album.id}:${Number(m[2]) - 1}` };
+          return c;
+        }),
+    }));
     setView(null);
     showToast('已删除');
   };
@@ -12020,9 +12031,10 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
   const cur = view != null ? album.photos[view] : undefined;
   const curText = cur && isTextPhoto(cur) ? cur : null; // 文字图片卡片（类型收窄后用）
   const curImg = cur && !isTextPhoto(cur) ? cur : null; // 真图（dataURL 字符串或 AI 生成卡片）
-  const curGen = curImg && isGenPhoto(curImg) ? curImg : null; // AI 生成的真图卡片（带 desc，可再生成）
-  // 第五十八轮：大图右侧的重生成按钮——文字图片（AI 拍的）与 AI 生成真图可再生成（提示词可改）；我上传的照片不显示
-  const canRegen = curText != null || curGen != null;
+  const curGen = curImg && isGenPhoto(curImg) ? curImg : null; // AI 生成的真图卡片（带 desc，重生成时预填提示词用）
+  // 第六十轮：大图右侧的重生成按钮对所有照片开放——旧版本生成的真图存的是纯字符串（没有 desc 卡片），
+  // 用户反馈「生成图片旁边没有再次生成按钮」；现在文字图片 / AI 真图 / 旧图 / 我上传的都能重生成（提示词可改）
+  const canRegen = view != null;
   /** 第五十七轮：文字图片大图里的「生成」——进入升级模式弹层，画面描述可改，用生图模型变成真照片
    *  第五十八轮：AI 生成真图同用此入口再生成（预填当时的提示词，可改），生成后原位替换 */
   const openUpgradeSheet = () => {
@@ -12080,9 +12092,9 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
                   className="aspect-square overflow-hidden rounded-lg bg-[#ececef]"
                 >
                   {tp ? (
-                    // 第五十七轮：文字图片只显示画面（desc）
-                    <span className="flex h-full w-full items-center justify-center bg-[linear-gradient(155deg,#f6eff8,#eef1f7_55%,#eaf3f4)] px-2.5">
-                      <span className="line-clamp-5 w-full text-center text-[10.5px] leading-relaxed text-[#857a90]">{p.desc || p.text}</span>
+                    // 第六十轮：文字图片瓦片极简风——纯白 + 细描边 + 灰字，和真图并排不花
+                    <span className="flex h-full w-full items-center justify-center bg-white px-2 ring-1 ring-inset ring-black/[0.07]">
+                      <span className="line-clamp-4 w-full text-center text-[10px] leading-[1.7] tracking-[0.01em] text-[#9a9aa2]">{p.desc || p.text}</span>
                     </span>
                   ) : (
                     <img src={photoSrc(p)} alt={`照片${i + 1}`} className="h-full w-full object-cover transition-transform active:scale-[0.97]" draggable={false} />
@@ -12092,17 +12104,17 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
             })}
           </div>
         )}
-        {/* 第五十七轮：AI 拍悬浮按钮移到右下角（贴内容底部，随滚动始终可见） */}
-        <button
-          type="button"
-          onClick={openGenSheet}
-          data-testid="album-ai-shot"
-          className="sticky bottom-4 z-30 ml-auto mt-auto self-end rounded-full bg-[linear-gradient(135deg,#8b7ba8,#6f5f92)] px-5 py-3 text-[14px] font-semibold text-white shadow-[0_8px_22px_rgba(111,95,146,0.45)] transition-transform active:scale-95"
-        >
-          <span className="flex items-center gap-1.5">
-            <Sparkles className="h-[17px] w-[17px]" /> AI拍
-          </span>
-        </button>
+        {/* 第六十轮：AI 拍悬浮按钮——毛玻璃风格（半透白 + 背景模糊 + 白描边）；打开大图查看时隐藏（此前隔着半透明黑罩露出，像个幽灵按钮） */}
+        {view == null && (
+          <button
+            type="button"
+            onClick={openGenSheet}
+            data-testid="album-ai-shot"
+            className="sticky bottom-4 z-30 ml-auto mt-auto flex items-center gap-1.5 self-end rounded-full border border-white/70 bg-gradient-to-b from-white/75 to-white/45 px-[18px] py-3 text-[14px] font-semibold text-[#3c3c42] shadow-[0_10px_30px_rgba(70,60,90,0.18)] backdrop-blur-2xl backdrop-saturate-150 transition-all active:scale-95"
+          >
+            <Sparkles className="h-[17px] w-[17px] text-[#9b8bb4]" /> AI拍
+          </button>
+        )}
       </div>
       {/* 大图查看 + 删除 + 照片留言区（第十轮：TA 会来留言，我可以回复，多轮往返） */}
       {view != null && (
@@ -12124,14 +12136,11 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
           <div className="flex min-h-0 flex-1 items-center justify-center gap-3 px-5 pb-3">
             <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center">
               {curText ? (
-                <div
-                  className="w-full max-w-[350px] rounded-2xl bg-[linear-gradient(160deg,#fbf5ef,#f6eef4_55%,#eef1f7)] p-5 shadow-2xl ring-1 ring-black/10"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {/* 第五十七轮：文字图片只显示画面；随照附言在下方留言区 */}
-                  <p className="whitespace-pre-wrap text-[16px] leading-8 text-[#4a4450]">{curText.desc || curText.text}</p>
-                  <div className="mt-4 border-t border-black/5 pt-3">
-                    <span className="text-[11.5px] text-[#a296a8]">{curText.byTa ? `${taName} 拍的 · 文字图片` : '文字图片'}</span>
+                <div className="w-full max-w-[340px] rounded-[22px] bg-white p-6 shadow-[0_24px_70px_rgba(0,0,0,0.45)]" onClick={(e) => e.stopPropagation()}>
+                  {/* 第六十轮：文字图片极简风——纯白卡面 + 大留白 + 细分割线，只讲画面本身 */}
+                  <p className="whitespace-pre-wrap text-[15px] leading-[2] tracking-[0.02em] text-[#2f2f34]">{curText.desc || curText.text}</p>
+                  <div className="mt-5 border-t border-black/[0.06] pt-3">
+                    <span className="text-[11px] tracking-[0.05em] text-[#b4b4bc]">{curText.byTa ? `${taName} 拍的 · 文字图片` : '文字图片'}</span>
                   </div>
                 </div>
               ) : curImg ? (
