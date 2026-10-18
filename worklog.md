@@ -20601,3 +20601,30 @@ Stage Summary:
 - git remote origin 已配置（含 token），分支 main，HEAD=d223429（网易云第五十五轮）
 - 最新提交主题：网易云 CoverImg onError 兜底 + 默认头像本地化 + 一起听 AI 头像跟随
 - 等待用户提出具体功能修改/新增需求
+
+---
+Task ID: 2
+Agent: main (Z.ai Code)
+Task: 恋人空间三大功能：AI 相册拍照 / 情书 AI 代笔 / 情侣印象「贴上」按钮
+
+Work Log:
+- 并行探索代理分析 couple-space.tsx(11969行)/couple-ai.ts(2489行)/album-store/imggen 管线
+- couple-ai.ts:
+  * 修复 recentChatBlock 聊天键 bug（ios-chat-msgs:wx:<id> → wx-chat-msgs:<id>，此前恒为空）
+  * 新增 CoupleTextPhoto/CouplePhotoEntry/isTextPhoto 共享类型（文字图片卡片）
+  * 新增 aiDecideCouplePhoto（LLM 按人设+记忆+聊天决定拍什么/放哪个相册，输出 desc+text）
+  * 新增 aiTickAlbumPhoto（AI 每 2 天自动往相册放照片；配置生图→锁脸真图，未配置/失败→文字图片）+ 调度
+  * 新增 aiComposeLetterForMe（AI 代笔情书：以用户口吻写给 TA）
+  * aiReadLetter/aiTickLetter/aiTickImpress 补注入 memChatRecallBlock 记忆碎片召回
+- couple-space.tsx:
+  * AlbumDetail 重写：新增「AI拍」按钮 + 底部弹层（已配置生图→可编辑提示词+AI想画面+生成真图；未配置→文字图片）+ 文字图片网格/大图渲染 + 大图「用 AI 生成这张照片」升级按钮
+  * LettersPage：底部栏新增「AI 帮我写」（含已有内容二次确认、分页填充信纸、可继续手改）
+  * ImpressPage：自定义输入框旁补「♡ 贴上」按钮（此前只能按回车，移动端无入口）
+  * CoupleAlbum.photos 类型升级为 CouplePhotoEntry[]；封面/计数/温馨度全兼容
+- Agent Browser 端到端验证：创建 CHAR 小暖 + USER 小桃 → 微信加好友 → 恋人空间邀请绑定 →
+  印象「贴上」成功 / 相册 AI 拍生成文字图片+大图+留言 / 情书 AI 代笔填满信纸（/api/chat 200）
+
+Stage Summary:
+- 三个需求全部实现并浏览器实测通过；未配置生图时全部降级文字图片，配置后自动出现真图/改提示词/升级入口
+- 顺手修复了影响所有 couple-ai 行为的聊天记录键 bug
+- 待提交推送
