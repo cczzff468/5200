@@ -20870,3 +20870,23 @@ Stage Summary:
 - 关键决策：电视改程序化建模（弃 Kenney GLB）换取完全的视觉控制力；y 抬升字段打通「上墙/上桌」两类摆法且拖拽平面随高度对齐；非客厅家具 hidden 而非删除（后续开放零成本）
 - 涉及文件：src/components/apps/couple-home/{types,catalog,CoupleHome}.ts(x) + scene/{model-kit,Room,Furn3D,TV3D,HomeScene}.ts(x) + src/app/api/couple-home/route.ts
 - 待办（下轮可选）：卧室/厨卫家具开放与分区装修、TA 互动对话、BGM 音效、家具碰撞体积精细化
+
+---
+Task ID: sync-1
+Agent: 主协调 Agent (Z.ai Code)
+Task: 从 GitHub (cczzff468/5200) 拉取仓库到工作目录并启动验证
+
+Work Log:
+- 使用用户提供的 PAT 克隆 https://github.com/cczzff468/5200.git 到 /home/z/5200-repo（4252 个文件，最新提交 1efa05c 情侣小家 v4）
+- 清空 /home/z/my-project 旧模板内容（保留 node_modules），将仓库完整同步过去（含 .git，远程 origin 已带 PAT 可直接推送）
+- bun install 补齐依赖（83 packages）；bunx prisma generate 成功
+- 创建 .env：DATABASE_URL=file:/home/z/my-project/db/custom.db（数据库 241KB 含原数据随仓库同步）
+- 清理端口占用后干净启动 bun run dev（3000 端口），GET / 200 in 343ms
+- 网易云 mini 服务（ncm-keeper/next-keeper 守护，3010 端口）自动恢复运行，HTTP 200
+- agent-browser 端到端验证：锁屏渲染正常（时间/农历/天气/电量）→ 上滑解锁成功 → 主屏渲染（天气小组件+应用网格+Dock）→ 控制台零错误
+- curl 验证 /api/weather、/api/couple-home 均 200
+
+Stage Summary:
+- 仓库已完整落地 /home/z/my-project 并在 3000 端口运行，git 推送链路就绪（origin 已带 PAT）
+- 项目当前版本：情侣小家 v4（commit 1efa05c）
+- 待用户明确本轮需要修改/添加的具体功能后开工
