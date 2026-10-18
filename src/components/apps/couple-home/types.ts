@@ -1,16 +1,16 @@
 'use client';
 
 /**
- * 情侣小家 3D —— 类型定义
+ * 情侣小家 3D —— 类型定义（v4）
  *
- * 真实 3D 场景（three.js / react-three-fiber）：
- *  - 房间为 9m × 6m 的开间，家具用 Kenney Furniture Kit（CC0）低多边形 GLB 模型；
- *  - 世界坐标：原点在房间中心地面，x 向右、z 向屏幕内、y 向上；
- *  - 家具 (x, z) 表示「底部中心」，r 为绕 Y 轴的旋转（0/1/2/3 → 0°/90°/180°/270°）；
- *  - 两个模式：live（生活：摇杆+跟随镜头+点家具交互）/ edit（装修：俯瞰+拖拽+旋转+商店）。
+ * - 房间 9m × 6m，家具 MODEL_SCALE=2.0（更饱满大气）；
+ * - 家具 (x, z) 底部中心，y 为抬升（电视上墙 / 物件上桌）；
+ * - ry = 任意角度水平旋转（弧度），rx = 俯仰旋转（弧度，钳 ±1.05）；
+ * - col = 用户自选主色（编辑模式调色盘）；
+ * - 两个模式：live（摇杆+跟随镜头+家具交互）/ edit（俯瞰+拖拽+旋转+调色+商店）。
  */
 
-/** 家具种类（catalog 的 key，对应 public/models/furniture/<kind>.glb） */
+/** 家具种类（catalog 的 key） */
 export type FurnitureKind =
   | 'sofa'
   | 'sofaLong'
@@ -68,11 +68,17 @@ export type FurnCategory =
 export interface FurnitureItem {
   id: string;
   kind: FurnitureKind;
-  /** 世界坐标：底部中心（地面） */
+  /** 世界坐标：底部中心 */
   x: number;
   z: number;
-  /** 绕 Y 轴旋转步数：0/1/2/3 → 0°/90°/180°/270° */
-  r?: number;
+  /** 抬升（米）：电视上墙 / 小物件放上桌面；默认 0 贴地 */
+  y?: number;
+  /** 水平旋转（弧度，任意角度；π = 面向北） */
+  ry?: number;
+  /** 俯仰旋转（弧度，钳 ±1.05 ≈ ±60°） */
+  rx?: number;
+  /** 用户自选主色（#rrggbb；undefined = 目录默认白色系） */
+  col?: string;
   /** 家具私有状态（开关/门/洗衣等） */
   st: FurnitureState;
 }
@@ -89,14 +95,14 @@ export interface FurnitureState {
   washDone?: boolean;
   /** 洗衣机：本次运转开始时间戳 */
   washStart?: number;
-  /** playful 上次互动时间戳（金币冷却用，不持久化也可） */
+  /** playful 上次互动时间戳（弹跳冷却） */
   lastTouch?: number;
 }
 
 /** 小人身份 */
 export type CharId = 'me' | 'partner';
 
-/** 小人朝向（3D：heading 弧度也行，这里存 4 向便于持久化） */
+/** 小人朝向（持久化 4 向） */
 export type CharDir = 'up' | 'down' | 'left' | 'right';
 
 /** 小人持久化状态 */
@@ -109,8 +115,8 @@ export interface CharState {
 
 /** 小家整体持久化数据（服务端 JSON 快照） */
 export interface HomeState {
-  /** 数据版本：3 = 3D 版；不匹配则重播种默认布局 */
-  v: 3;
+  /** 数据版本：4 = 白色系客厅版；不匹配则重播种默认布局 */
+  v: 4;
   furniture: FurnitureItem[];
   chars: Record<CharId, { x: number; z: number; dir: CharDir }>;
   /** 昼夜：true = 夜晚 */
@@ -120,16 +126,16 @@ export interface HomeState {
 /** 家具目录条目（静态配置，不持久化） */
 export interface CatalogEntry {
   kind: FurnitureKind;
-  /** GLB 路径 */
-  glb: string;
+  /** GLB 路径（tv 为程序化建模，无 GLB） */
+  glb?: string;
   /** 开门态 GLB（纸箱这类无独立门节点的换模型） */
   glbAlt?: string;
   name: string;
   cat: FurnCategory;
-  /** 商店售价（金币）；0 = 免费基础件 */
-  price: number;
-  /** 占位脚印（世界米，未旋转时 x×z），选中光圈/碰撞用 */
+  /** 占位脚印（世界米，未旋转时 x×z，已含 MODEL_SCALE） */
   fp: [number, number];
+  /** 卧室/厨卫等非客厅家具：商店暂不展示（客厅完成后陆续开放） */
+  hidden?: boolean;
   /** 交互能力 */
   acts: {
     /** 点击开/关（灯、电视、收音机） */
@@ -138,10 +144,10 @@ export interface CatalogEntry {
     door?: boolean;
     /** 洗衣机专属流程 */
     washer?: boolean;
-    /** 点击弹跳 + 少量金币 */
+    /** 点击弹跳 */
     playful?: boolean;
   };
-  /** 是灯具/屏幕：开着时附加点光（y 为灯高） */
+  /** 是灯具：开着时附加点光（y 为灯高） */
   light?: { y: number; color?: string; intensity?: number };
   /** 模型朝向微调（弧度，绕 Y） */
   yaw?: number;

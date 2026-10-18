@@ -1,14 +1,15 @@
 'use client';
 
 /**
- * 情侣小家 3D —— 单件家具渲染
+ * 情侣小家 3D —— 单件家具渲染（v4）
  *
- * - Kenney GLB 浅色系模型 + 旋转（r 步进 90°）；
+ * - Kenney GLB 白色系模型 + 任意角度水平旋转（ry）+ 俯仰（rx）+ 抬升（y）；
+ * - tv：程序化美颜电视（TV3D）；
  * - 门节点真实开合动画（wardrobe/fridge/washer/sink/nightstand/stove）；
  * - 纸箱类无门节点 → 开门态换模型（glbAlt）；
- * - 灯具/电视/收音机：开 = 灯罩发光 + 点光（夜晚更亮）；
+ * - 灯具/收音机：开 = 灯罩发光 + 点光（夜晚更亮）；
  * - playful 点击弹跳；洗衣机运转轻微抖动 + 状态灯；
- * - 编辑模式选中光圈 + 拖拽（父组件接管指针）。
+ * - 编辑模式：选中光圈（移动模式绿色）+ 拖拽（父组件接管指针）+ 用户调色 tint。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -16,7 +17,7 @@ import * as THREE from 'three';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import type { CatalogEntry, FurnitureItem, HomeMode } from '../types';
 import { animateDoors, cloneFurniture, ensureModel, type FurnModel } from './model-kit';
-import { PLAY_COOLDOWN } from '../catalog';
+import TV3D from './TV3D';
 
 export interface Furn3DProps {
   item: FurnitureItem;
@@ -24,37 +25,54 @@ export interface Furn3DProps {
   night: boolean;
   mode: HomeMode;
   selected: boolean;
+  /** 移动模式激活（选中光圈变绿，提示可拖动画面搬运） */
+  moving?: boolean;
   onPointerDown: (e: ThreeEvent<PointerEvent>, item: FurnitureItem) => void;
   onTap: (item: FurnitureItem) => void;
 }
 
-/** useGLTF 之外的轻量加载钩子（不依赖 suspense） */
-function useFurnModel(url: string | undefined, cloneMats: boolean, yaw?: number): FurnModel | null {
+/** useGLTF 之外的轻量加载钩子（不依赖 suspense；tint 变化时重新克隆） */
+function useFurnModel(
+  url: string | undefined,
+  cloneMats: boolean,
+  yaw: number | undefined,
+  tint: string | undefined,
+): FurnModel | null {
   const [model, setModel] = useState<FurnModel | null>(null);
   useEffect(() => {
     if (!url) return;
     let alive = true;
     ensureModel(url)
       .then(() => {
-        if (alive) setModel(cloneFurniture(url, { cloneMats, yaw }));
+        if (alive) setModel(cloneFurniture(url, { cloneMats, yaw, tint }));
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [url, cloneMats, yaw]);
+  }, [url, cloneMats, yaw, tint]);
   return model;
 }
 
-export default function Furn3D({ item, entry, night, mode, selected, onPointerDown, onTap }: Furn3DProps) {
+export default function Furn3D({
+  item,
+  entry,
+  night,
+  mode,
+  selected,
+  moving,
+  onPointerDown,
+  onTap,
+}: Furn3DProps) {
   const group = useRef<THREE.Group>(null);
   const inner = useRef<THREE.Group>(null);
   const bounceAt = useRef(0);
   const [hovered, setHovered] = useState(false);
 
+  const isTV = entry.kind === 'tv';
   const cloneMats = !!entry.acts?.toggle || !!entry.acts?.washer;
-  const primary = useFurnModel(entry.glb, cloneMats, entry.yaw);
-  const alt = useFurnModel(entry.glbAlt, cloneMats, entry.yaw);
+  const primary = useFurnModel(isTV ? undefined : entry.glb, cloneMats, entry.yaw, item.col);
+  const alt = useFurnModel(isTV ? undefined : entry.glbAlt, cloneMats, entry.yaw, item.col);
   const useAlt = !!entry.glbAlt && !!item.st?.open;
 
   const model = useAlt ? alt ?? primary : primary;
@@ -126,10 +144,10 @@ export default function Furn3D({ item, entry, night, mode, selected, onPointerDo
     }
   });
 
-  const ringR = Math.max(entry.fp[0], entry.fp[1]) / 2 + 0.16;
+  const ringR = Math.max(entry.fp[0], entry.fp[1]) / 2 + 0.18;
+  /** 选中圈贴地面（抬升家具的光圈投影到地板） */
+  const ringY = -(item.y ?? 0) + 0.025;
 
-  // 电视屏幕（附加发光面板）
-  const tvOn = entry.kind === 'tv' && !!item.st?.on;
   const modelSize = model?.size;
 
   const handlers = useMemo(
@@ -146,6 +164,7 @@ export default function Furn3D({ item, entry, night, mode, selected, onPointerDo
       over: (e: ThreeEvent<PointerEvent>) => {
         // 不 stopPropagation：R3F 合成事件的 stopPropagation 会连带阻断原生事件冒泡，
         // 进而杀掉场景级拖拽/旋转视角的 pointermove 监听
+        void e;
         setHovered(true);
         document.body.style.cursor = mode === 'edit' ? 'grab' : 'pointer';
       },
@@ -160,8 +179,8 @@ export default function Furn3D({ item, entry, night, mode, selected, onPointerDo
   return (
     <group
       ref={group}
-      position={[item.x, 0, item.z]}
-      rotation={[0, ((item.r ?? 0) * Math.PI) / 2, 0]}
+      position={[item.x, item.y ?? 0, item.z]}
+      rotation={[item.rx ?? 0, item.ry ?? 0, 0]}
     >
       <group
         ref={inner}
@@ -172,18 +191,8 @@ export default function Furn3D({ item, entry, night, mode, selected, onPointerDo
       >
         {model && <primitive object={model.root} />}
 
-        {/* 电视屏幕面板 */}
-        {entry.kind === 'tv' && modelSize && (
-          <mesh position={[0, modelSize.y * 0.62, modelSize.z / 2 + 0.02]}>
-            <planeGeometry args={[modelSize.x * 0.82, modelSize.y * 0.5]} />
-            <meshStandardMaterial
-              color={tvOn ? '#dceeff' : '#33363b'}
-              emissive={tvOn ? '#bfe0ff' : '#000000'}
-              emissiveIntensity={tvOn ? (night ? 1.6 : 1.0) : 0}
-              roughness={0.3}
-            />
-          </mesh>
-        )}
+        {/* 电视（程序化美颜大屏） */}
+        {isTV && <TV3D on={!!item.st?.on} night={night} col={item.col} />}
 
         {/* 洗衣机状态灯 */}
         {entry.acts?.washer && modelSize && (
@@ -205,26 +214,27 @@ export default function Furn3D({ item, entry, night, mode, selected, onPointerDo
         />
       )}
 
-      {/* 选中光圈（编辑模式） */}
+      {/* 选中光圈（编辑模式；移动模式变绿） */}
       {selected && (
-        <mesh ref={ring} position={[0, 0.025, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <mesh ref={ring} position={[0, ringY, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[ringR - 0.06, ringR, 40]} />
-          <meshStandardMaterial color="#f2a9bc" emissive="#f2a9bc" emissiveIntensity={0.9} transparent opacity={0.9} />
+          <meshStandardMaterial
+            color={moving ? '#7fc792' : '#f2a9bc'}
+            emissive={moving ? '#7fc792' : '#f2a9bc'}
+            emissiveIntensity={0.9}
+            transparent
+            opacity={0.9}
+          />
         </mesh>
       )}
 
       {/* hover 高亮圈（编辑模式非选中时） */}
       {mode === 'edit' && hovered && !selected && (
-        <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <mesh position={[0, ringY, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[ringR - 0.04, ringR - 0.01, 40]} />
-          <meshStandardMaterial color="#e8e2d2" transparent opacity={0.6} />
+          <meshStandardMaterial color="#e5e2d8" transparent opacity={0.6} />
         </mesh>
       )}
     </group>
   );
-}
-
-/** 交互冷却判断（父组件用） */
-export function canPlay(item: FurnitureItem, now: number): boolean {
-  return now - (item.st?.lastTouch ?? 0) > PLAY_COOLDOWN * 1000;
 }

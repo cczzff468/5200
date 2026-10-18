@@ -6,12 +6,12 @@ export const runtime = 'nodejs';
 /**
  * 情侣小家 3D 持久化 API（Prisma 单行快照，按浏览器工作区隔离）
  *
- * - GET  → { data: HomeState | null, coins: number, rev: number }（无档案时 data=null，客户端播默认布局）
- * - POST → 保存全量快照 { data, coins, rev }（乐观并发：rev 不匹配返回 409 + 服务端最新版，客户端采纳服务端）
+ * - GET  → { data: HomeState | null, rev: number }（无档案时 data=null，客户端播默认布局）
+ * - POST → 保存全量快照 { data, rev }（乐观并发：rev 不匹配返回 409 + 服务端最新版，客户端采纳服务端）
  *          { action: 'reset' } → 删除档案（客户端重新播种默认布局）
  *
- * 校验策略：结构宽松但逐字段清洗（条数/坐标/金币钳制），防止任意大 payload 与坐标穿模。
- * 3D 坐标系：房间中心为原点，坐标可为负（±20 米钳制）。
+ * 校验策略：结构宽松但逐字段清洗（条数/坐标/角度/颜色钳制），防止任意大 payload 与坐标穿模。
+ * 3D 坐标系：房间中心为原点，坐标可为负（±20 米钳制）；金币系统已移除（列保留恒 0）。
  */
 
 interface FurnItem {
@@ -19,7 +19,14 @@ interface FurnItem {
   kind: string;
   x: number;
   z: number;
-  r?: number;
+  /** 抬升（米）：电视上墙 / 小物上桌 */
+  y?: number;
+  /** 水平旋转（弧度，任意角度） */
+  ry?: number;
+  /** 俯仰旋转（弧度，±~60°） */
+  rx?: number;
+  /** 用户自选主色（#rrggbb） */
+  col?: string;
   st?: Record<string, unknown>;
 }
 
@@ -35,11 +42,11 @@ const MAX_ITEMS = 150;
 const MAX_COORD = 20;
 const MAX_JSON = 256 * 1024;
 
-/** 有符号坐标清洗：钳到 [-MAX_COORD, MAX_COORD]，非法返回 null */
-function clampCoord(v: unknown): number | null {
+/** 有符号坐标清洗：钳到 [-max, max]，非法返回 null */
+function clampCoord(v: unknown, max = MAX_COORD): number | null {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
   if (!Number.isFinite(n)) return null;
-  return Math.max(-MAX_COORD, Math.min(MAX_COORD, Math.round(n * 100) / 100));
+  return Math.max(-max, Math.min(max, Math.round(n * 100) / 100));
 }
 
 function clampInt(v: unknown, min: number, max: number): number | null {
@@ -50,6 +57,18 @@ function clampInt(v: unknown, min: number, max: number): number | null {
 
 function cleanStr(v: unknown, max: number): string {
   return typeof v === 'string' ? v.trim().slice(0, max) : '';
+}
+
+/** 弧度清洗：钳到 [-π, π]（非法返回 null） */
+function clampRad(v: unknown, max: number): number | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return null;
+  return Math.max(-max, Math.min(max, Math.round(n * 1000) / 1000));
+}
+
+/** 用户色清洗：仅接受 #rrggbb */
+function cleanHex(v: unknown): string | undefined {
+  return typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : undefined;
 }
 
 const DIRS = new Set(['up', 'down', 'left', 'right']);
@@ -68,14 +87,17 @@ function normalizeHome(raw: unknown): HomePayload | null {
     const id = cleanStr(f.id, 64);
     const kind = cleanStr(f.kind, 24);
     if (x == null || z == null || !id || !kind) continue;
-    const rot = clampInt(f.r, 0, 3);
+    const ry = clampRad(f.ry, Math.PI);
+    const rx = clampRad(f.rx, 1.1);
+    const y = clampCoord(f.y, 2.4);
+    const col = cleanHex(f.col);
     const st =
       f.st && typeof f.st === 'object' && !Array.isArray(f.st)
         ? JSON.stringify(f.st).length <= 2048
           ? (f.st as Record<string, unknown>)
           : {}
         : {};
-    furniture.push({ id, kind, x, z, r: rot ?? 0, st });
+    furniture.push({ id, kind, x, z, ry: ry ?? 0, rx: rx ?? 0, y: y ?? 0, col, st });
   }
   if (furniture.length === 0 && r.furniture.length > 0) return null;
   const chars: HomePayload['chars'] = {};
@@ -91,7 +113,7 @@ function normalizeHome(raw: unknown): HomePayload | null {
     }
   }
   if (!chars.me || !chars.partner) return null;
-  return { v: 3, furniture, chars, night: r.night === true };
+  return { v: typeof r.v === 'number' ? r.v : 4, furniture, chars, night: r.night === true };
 }
 
 function wsOf(req: NextRequest): string {
@@ -102,10 +124,9 @@ function wsOf(req: NextRequest): string {
 export async function GET(req: NextRequest) {
   try {
     const row = await db.coupleHome.findUnique({ where: { workspaceId: wsOf(req) } });
-    if (!row) return NextResponse.json({ data: null, coins: null, rev: 0 });
+    if (!row) return NextResponse.json({ data: null, rev: 0 });
     return NextResponse.json({
       data: normalizeHome(JSON.parse(row.data)),
-      coins: row.coins,
       rev: row.rev,
     });
   } catch {
@@ -134,23 +155,27 @@ export async function POST(req: NextRequest) {
 
   const home = normalizeHome(body.data);
   if (!home) return NextResponse.json({ error: 'bad-data' }, { status: 400 });
-  const coins = clampInt(body.coins, 0, 1_000_000) ?? 0;
   const clientRev = clampInt(body.rev, 0, 1_000_000) ?? 0;
   const dataStr = JSON.stringify(home);
   if (dataStr.length > MAX_JSON) return NextResponse.json({ error: 'too-large' }, { status: 413 });
 
   try {
-    // 乐观并发：仅当服务端存的是合法 v3 数据且 rev 不一致 → 409 + 回带服务端最新（客户端采纳）；
-    // 服务端若存的是旧格式（2D 时代 / 损坏数据），直接用新快照覆盖完成迁移。
+    // 乐观并发：仅当服务端存的是「同代（v4）合法数据」且 rev 不一致 → 409 + 回带服务端最新（客户端采纳）；
+    // 服务端若存的是旧格式（v3 / 2D 时代 / 损坏数据），直接用新快照覆盖完成迁移。
     const existing = await db.coupleHome.findUnique({ where: { workspaceId } });
     if (existing) {
-      const serverHome = normalizeHome(JSON.parse(existing.data));
+      let serverVer = 0;
+      try {
+        serverVer = (JSON.parse(existing.data) as { v?: number }).v ?? 0;
+      } catch {
+        serverVer = 0;
+      }
+      const serverHome = serverVer === 4 ? normalizeHome(JSON.parse(existing.data)) : null;
       if (serverHome && existing.rev !== clientRev) {
         return NextResponse.json(
           {
             conflict: true,
             data: serverHome,
-            coins: existing.coins,
             rev: existing.rev,
           },
           { status: 409 },
@@ -159,8 +184,8 @@ export async function POST(req: NextRequest) {
     }
     const row = await db.coupleHome.upsert({
       where: { workspaceId },
-      create: { workspaceId, data: dataStr, coins, rev: 1 },
-      update: { data: dataStr, coins, rev: { increment: 1 } },
+      create: { workspaceId, data: dataStr, coins: 0, rev: 1 },
+      update: { data: dataStr, coins: 0, rev: { increment: 1 } },
     });
     return NextResponse.json({ ok: true, rev: row.rev });
   } catch {

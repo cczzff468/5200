@@ -20838,3 +20838,35 @@ Stage Summary:
 - 关键产物：src/components/apps/couple-home/{types,catalog,CoupleHome,Joystick}.ts(x) + scene/{model-kit,Room,Furn3D,Char3D,HomeScene}.ts(x) + public/models/furniture/*.glb(41)
 - API 兼容 v3 3D 格式并自动迁移旧 2D 数据；Prisma schema 不变
 - 全部核心交互经浏览器实测通过；lint 干净；dev server 正常
+
+---
+Task ID: 5
+Agent: 主协调者 (Z.ai Code)
+Task: 情侣小家 v4 —— 电视美化 / 全屋白色系 / 完整客厅 / 四向旋转 / 移动按钮 / 家具调色盘 / 画面缩放 / 移除金币
+
+Work Log:
+- 数据模型 v4（types.ts）：FurnitureItem 新增 ry（任意角度水平旋转）/ rx（俯仰 ±60°）/ y（抬升：电视上墙、物件上桌）/ col（用户自选颜色）；HomeState v:4 版本守卫（v3 及更早一律重播种）
+- 白色主调重着色（scene/model-kit.ts）：调色板全面改白（wood→云白 #f7f4ee、carpet→覆盖白、metal→亮白，去木色），点缀仅保留浅粉坐垫/浅黄灯罩/柔黑支脚/鼠尾草绿植/奶油小熊；新增 tintMaterial —— 用户色只作用于主体材质（次级框架压暗 14%、金属面混 18% 灰、坐垫提亮），植物绿/灯罩黄/柔黑保留形成「白 + 彩混搭」
+- 程序化美颜电视（scene/TV3D.tsx，替代 Kenney 小电视 GLB）：1.8m 超大屏 + 柔黑超窄边框 + 品牌小灯点；开机 Canvas 动态彩屏（樱粉/天青/杏黄三光斑流动 ~12fps 重绘）；电视背后氛围背光（bias lighting，夜里墙面映光晕）+ 前场柔光点光；开关 damp 淡入淡出；上墙支架（默认布局挂电视柜上方墙面，底缘恰在柜顶 4cm 上）
+- 家具变大：MODEL_SCALE 1.75 → 2.0；全部 fp 脚印按 GLB 实测包围盒重标（node + three GLTFLoader 测量脚本）；新增 footprintOf(entry, ry) 任意角度旋转 AABB（碰撞/拖拽钳位/落点查找共用）
+- 完整客厅默认布局（23 件）：电视墙（挂墙大屏 + 电视柜 + 双落地音箱 + 书架 + 大绿植）· 沙发对坐区（云白沙发 + 休闲椅 + 脚凳 + 边桌[台灯+多肉摆上桌面 y=0.77] + 长地毯 + 茶几[书堆 y=0.46]）· 西侧工作角（书桌 + 椅 + 收音机上桌）· 南侧玄关（地垫 + 衣帽架 + 小熊 + 垃圾桶）；卧室/厨卫 12 种家具标记 hidden 暂不出商店（客厅完成后开放）
+- 编辑模式新交互（HomeScene + CoupleHome）：
+  - 四向旋转：左/右 45° 步进（ry 归一 ±π）+ 上/下俯仰 15° 步进（rx 钳 ±1.05）
+  - 移动模式：工具栏 Move 按钮开关，激活后按住画布任意处拖动即搬运选中家具（OrbitControls 让位，选中圈变绿）
+  - 调色盘：Droplet 按钮弹面板 —— 10 色预设（云白/奶油/浅灰/柔黑/浅粉/樱粉/浅黄/抹茶/雾灰蓝/雾紫）+ input[type=color] 自定义 + 恢复原色；col 持久化 + 材质按 tint 重克隆
+  - 画面缩放：右缘 +/− 按钮（ZoomPoker 每帧消费指令队列，绕 OrbitControls target 推拉 0.8×/1.25×，钳 3.2~23m）
+  - 拖拽平面随家具高度（墙挂电视在其 y 平面拖动，不再掉到地面）；抬升 >0.45m 的家具不参与行走碰撞
+- 选中圈投影到地面（抬升家具 ringY = -y）；悬停/拖拽光标、洗衣机抖动、门轴动画、playful 弹跳全保留
+- 金币系统全面移除：顶栏金币组件、coinFloats、商店价格/购买校验、playful 赏金、洗衣奖励、INIT_COINS/WASH_REWARD 全删；商店变「随便买」；API 不再读写 coins（DB 列保留恒 0）；HomePersist 瘦身为 {home, rev}
+- API route v4：清洗 ry（±π）/ rx（±1.1）/ y（0~2.4）/ col（#rrggbb 正则）；409 仅当服务端为同代 v4 合法数据才触发（旧 v3 直接覆盖迁移，修复旧数据死锁）
+- pushRemote 类型安全重构：返回 HomePersist | 'offline' | {conflict: HomePersist}（顺带修掉 v3 遗留的 'conflict' 字面量分支不可达类型漏洞——旧代码 res.home 在类型上是 string 访问）
+- Room.tsx 地板改云白（#f4f2ed + 浅灰拼板缝），夜色地板同步调浅
+- 修复 tsc 报错：webkitUserDrag → setProperty('-webkit-user-drag')；PointerRig 缺 itemsRef prop
+- agent-browser + VLM + IndexedDB/Prisma 双层状态断言，端到端全项验证：解锁→恋人空间→发现→情侣小家；电视点击开机（VLM 确认彩屏 + 墙面光晕）；夜晚模式（VLM 评价「科技感与温度并存」）；编辑模式俯瞰+网格+无价商店；选中/四向旋转（ry 实测 -π/2→+π/2）/俯仰（像素差 1925px 证实）/调色（IDB col=#f2b3c2 落库 + 柔黑像素差 528 证实渲染）/直接拖拽（lampTable 2.28,1.0→-2.5,-1）/移动模式（空画布起拖同样生效）/缩放按钮（像素差 45706）/商店免费购买（n 23→24）/删除（回到 23）/重置布局（台灯归位 + 旋转颜色全恢复）；WASD 行走 + 镜头跟随（像素差 38444 + me 坐标 -1.33,1.96 落库）；playful 弹跳（sofa/coffeeTable/ottoman lastTouch）；Prisma 两工作区均 v4 n=23；刷新重进全量恢复
+- 调试遗留清除：[dbg] furnDown/dragMove 插桩日志已移除；测量脚本 /tmp/measure.mjs 已删
+
+Stage Summary:
+- 情侣小家 v4 完成：白色系完整客厅（23 件实测尺寸家具 + 挂墙美颜电视 + 桌面摆件生态），编辑模式六件套（拖拽/移动按钮/四向旋转/调色盘/缩放/免费商店）全部实测通过，金币系统移除，v4 持久化含 409 迁移
+- 关键决策：电视改程序化建模（弃 Kenney GLB）换取完全的视觉控制力；y 抬升字段打通「上墙/上桌」两类摆法且拖拽平面随高度对齐；非客厅家具 hidden 而非删除（后续开放零成本）
+- 涉及文件：src/components/apps/couple-home/{types,catalog,CoupleHome}.ts(x) + scene/{model-kit,Room,Furn3D,TV3D,HomeScene}.ts(x) + src/app/api/couple-home/route.ts
+- 待办（下轮可选）：卧室/厨卫家具开放与分区装修、TA 互动对话、BGM 音效、家具碰撞体积精细化

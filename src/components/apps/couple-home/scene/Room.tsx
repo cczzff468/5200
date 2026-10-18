@@ -1,9 +1,9 @@
 'use client';
 
 /**
- * 情侣小家 3D —— 房间外壳
+ * 情侣小家 3D —— 房间外壳（v4 白色系）
  *
- * - 地板：浅蜂蜜木色 + canvas 程序化木纹（plank 条纹）；
+ * - 地板：云白微纹地板（canvas 程序化淡灰拼板缝，不再是木色）；
  * - 墙壁：暖白 + 浅灰踢脚线，浅粉点缀墙裙；四面墙按相机方位自动隐藏（洋房剖面效果）；
  * - 窗户：两面墙上装浅黄暖光窗（夜里发暖光）。
  */
@@ -21,30 +21,30 @@ function makeFloorTexture(): THREE.CanvasTexture {
   cv.width = S;
   cv.height = S;
   const ctx = cv.getContext('2d')!;
-  // 底色：浅蜂蜜木
-  ctx.fillStyle = '#ecdfc2';
+  // 底色：云白
+  ctx.fillStyle = '#f4f2ed';
   ctx.fillRect(0, 0, S, S);
-  // plank：横向 4 条板，每条 128px
+  // 拼板：横向 4 条，微差灰白
   const plank = S / 4;
   for (let i = 0; i < 4; i++) {
-    const shade = i % 2 === 0 ? 'rgba(214,190,140,0.5)' : 'rgba(206,182,132,0.45)';
+    const shade = i % 2 === 0 ? 'rgba(214,212,205,0.5)' : 'rgba(206,204,197,0.45)';
     ctx.fillStyle = shade;
     ctx.fillRect(0, i * plank, S, plank);
-    // 板间缝
-    ctx.fillStyle = 'rgba(150,124,84,0.35)';
+    // 板间缝（浅灰）
+    ctx.fillStyle = 'rgba(178,175,167,0.4)';
     ctx.fillRect(0, i * plank - 1.5, S, 3);
     // 竖向接缝（错缝）
     const seamX = ((i * 137) % S) + 40;
     ctx.fillRect(seamX, i * plank + 2, 2.5, plank - 4);
   }
-  // 细木纹（很淡）
-  ctx.strokeStyle = 'rgba(160,132,90,0.10)';
+  // 极淡哑光纹理
+  ctx.strokeStyle = 'rgba(180,177,170,0.06)';
   ctx.lineWidth = 1;
   for (let i = 0; i < 26; i++) {
     const y = Math.random() * S;
     ctx.beginPath();
     ctx.moveTo(0, y);
-    ctx.bezierCurveTo(S * 0.3, y + 6, S * 0.6, y - 6, S, y + 2);
+    ctx.bezierCurveTo(S * 0.3, y + 5, S * 0.6, y - 5, S, y + 2);
     ctx.stroke();
   }
   const tex = new THREE.CanvasTexture(cv);
@@ -191,13 +191,13 @@ export default function Room({ night, onFloorTap }: { night: boolean; onFloorTap
         }}
       >
         <planeGeometry args={[ROOM_W, ROOM_D]} />
-        <meshStandardMaterial map={floorTex} color={night ? '#cbbd9c' : '#f2ead2'} roughness={0.9} />
+        <meshStandardMaterial map={floorTex} color={night ? '#c9c5bb' : '#f5f2ec'} roughness={0.9} />
       </mesh>
 
       {/* 地板外沿：浅灰围边（剖面观感） */}
       <mesh position={[0, -0.05, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[ROOM_W + 0.6, ROOM_D + 0.6]} />
-        <meshStandardMaterial color="#d8d4c8" roughness={0.95} />
+        <meshStandardMaterial color="#d4d1c9" roughness={0.95} />
       </mesh>
 
       {/* 四面墙（自动隐藏朝相机侧） */}

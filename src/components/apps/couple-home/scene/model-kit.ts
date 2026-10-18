@@ -1,45 +1,75 @@
 /**
- * 情侣小家 3D —— Kenney GLB 模型加工工具
+ * 情侣小家 3D —— Kenney GLB 模型加工工具（白色系 v4）
  *
- * 1) 浅色系重着色：Kenney 模型材质命名全 kit 统一（wood/carpet/metal/...），
- *    按材质名映射到「白色 / 浅灰 / 浅粉 / 浅黄 / 蜂蜜木 / 柔黑」浅色系调色板；
+ * 1) 白色主调重着色：以白 / 暖白为主，点缀浅灰 / 浅粉 / 浅黄 / 柔黑 / 鼠尾草绿，
+ *    不再使用木色（用户指定：白色可以和其他颜色混着，简约大气）；
  * 2) 归一化：按包围盒把模型放到「底部贴地、XZ 居中」并统一放大 MODEL_SCALE；
- * 3) 门轴装配：doorLeft/doorRight/door… 等独立门节点包进 pivot 组放在铰链边，
- *    旋转 pivot 即可做真实开门动画。
+ * 3) 门轴装配：doorLeft/doorRight/door… 等独立门节点包进 pivot 组放在铰链边；
+ * 4) 用户调色：tint 选项对「主体材质」按所选颜色重着色（保留植物绿 / 灯罩黄 / 柔黑
+ *    等点缀色，形成白 + 彩的混搭感）。
  */
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MODEL_SCALE } from '../catalog';
 
-// ---------------- 浅色系调色板 ----------------
+// ---------------- 白色系调色板 ----------------
 
-/** 材质名 → 浅色系颜色（用户指定：白、黑、浅黄、浅灰、浅粉等浅色系） */
+/** 材质名 → 白色系颜色（主白 + 少量点缀） */
 const PALETTE: Record<string, number> = {
-  wood: 0xe9cb9c, // 蜂蜜浅木
-  woodDark: 0xd6af7f, // 深一档木色
-  carpet: 0xf4b9c4, // 浅粉
-  carpetDarker: 0xe7a4b1, // 玫瑰粉
-  carpetWhite: 0xfaf9f4, // 暖白
-  metal: 0xdcdcd8, // 浅暖灰（去蓝）
-  metalDark: 0x57585c, // 柔黑
-  metalMedium: 0x9c9ea1, // 中灰
-  metalLight: 0xf5f2eb, // 暖白
-  plant: 0xa8d8bb, // 柔和鼠尾草绿
-  lamp: 0xffe9ac, // 浅黄（灯罩）
-  glass: 0xdfe6e1, // 雾白
-  fur: 0xdbaf87, // 焦糖（小熊）
+  // 主体一律白系
+  wood: 0xf7f4ee, // 云白（原木框架 → 白）
+  woodDark: 0xe4e1da, // 浅暖灰（次级框架）
+  carpet: 0xfdfcf9, // 覆盖白（坐垫主体）
+  carpetDarker: 0xe9e6df, // 浅灰白（坐垫阴影）
+  carpetWhite: 0xfffefb, // 纯白
+  metal: 0xf1efeb, // 亮白金属
+  metalLight: 0xfbfaf6, // 白
+  metalMedium: 0xd6d4cf, // 浅灰（桌面 / 台面）
+  metalDark: 0x43464b, // 柔黑（支脚 / 点缀）
+  // 点缀色（偶尔的个别色）
+  plant: 0xa8d8bb, // 鼠尾草绿（植物保持自然绿）
+  lamp: 0xffe9ac, // 浅黄灯罩
+  glass: 0xeef0ec, // 雾白玻璃
+  fur: 0xf3ece0, // 奶油白（小熊）
 };
 
-/** 兜底：未知材质 → 原色降饱和提亮 */
+/** 兜底：未知材质 → 原色降饱和提亮为白系 */
 function fallbackLighten(c: THREE.Color): THREE.Color {
   const hsl = { h: 0, s: 0, l: 0 };
   c.getHSL(hsl);
-  c.setHSL(hsl.h, Math.min(hsl.s, 0.18), THREE.MathUtils.lerp(hsl.l, 0.86, 0.55));
+  c.setHSL(hsl.h, Math.min(hsl.s, 0.12), THREE.MathUtils.lerp(hsl.l, 0.9, 0.6));
   return c;
 }
 
-/** 共享调色板材质缓存（同材质名全屋共享；toggle 家具由调用方 clone） */
+/** 可被用户调色重着色的「主体材质」 */
+const TINTABLE = new Set(['wood', 'woodDark', 'carpet', 'carpetDarker', 'carpetWhite', 'metal', 'metalLight', 'metalMedium', 'fur']);
+
+/** 对单个材质应用用户色（保持明暗层次，混出高级感） */
+function tintMaterial(mat: THREE.MeshStandardMaterial, hex: string, role: string): void {
+  const c = new THREE.Color(hex);
+  switch (role) {
+    case 'woodDark':
+    case 'carpetDarker':
+      c.multiplyScalar(0.86); // 次级框架压暗一档
+      break;
+    case 'metal':
+    case 'metalMedium': {
+      // 金属面：混 18% 浅灰，避免大面积高饱和
+      const gray = new THREE.Color(0xd8d6d1);
+      c.lerp(gray, 0.18);
+      break;
+    }
+    case 'carpetWhite':
+      c.lerp(new THREE.Color(0xffffff), 0.25); // 坐垫提亮
+      break;
+    default:
+      break;
+  }
+  mat.color = c;
+}
+
+/** 共享调色板材质缓存（同材质名全屋共享；toggle / tint 家具由调用方 clone） */
 const sharedMats = new Map<string, THREE.MeshStandardMaterial>();
 
 export function paletteMaterial(name: string, baseColor?: THREE.Color): THREE.MeshStandardMaterial {
@@ -47,7 +77,7 @@ export function paletteMaterial(name: string, baseColor?: THREE.Color): THREE.Me
   if (cached) return cached;
   const hex = PALETTE[name];
   const color =
-    hex !== undefined ? new THREE.Color(hex) : fallbackLighten((baseColor ?? new THREE.Color(0xeceae2)).clone());
+    hex !== undefined ? new THREE.Color(hex) : fallbackLighten((baseColor ?? new THREE.Color(0xefede7)).clone());
   const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0 });
   mat.name = name; // 克隆后仍可按名识别（灯罩发光用）
   sharedMats.set(name, mat);
@@ -119,10 +149,14 @@ export interface DoorPivot {
 /**
  * 克隆 + 归一化一个家具模型（须先 await loadModel(url)）：
  * - scale = MODEL_SCALE；底部贴地（minY → 0）、XZ 居中；
- * - 材质替换为浅色系（cloneMats=true 时每实例独立材质，供发光调光）；
+ * - 材质替换为白色系（cloneMats=true 时每实例独立材质，供发光调光）；
+ * - tint 时主体材质按用户色重着色（点缀色保留）；
  * - 门节点装配 pivot。
  */
-export function cloneFurniture(url: string, opts: { cloneMats?: boolean; yaw?: number } = {}): FurnModel {
+export function cloneFurniture(
+  url: string,
+  opts: { cloneMats?: boolean; yaw?: number; tint?: string } = {},
+): FurnModel {
   const proto = protoMap.get(url);
   if (!proto) throw new Error(`model not loaded: ${url}`);
 
@@ -137,7 +171,8 @@ export function cloneFurniture(url: string, opts: { cloneMats?: boolean; yaw?: n
   inner.scale.setScalar(MODEL_SCALE);
   root.add(inner);
 
-  // 材质替换（浅色系）
+  // 材质替换（白色系 + 可选用户色）
+  const needClone = !!opts.cloneMats || !!opts.tint;
   inner.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh) return;
@@ -145,8 +180,14 @@ export function cloneFurniture(url: string, opts: { cloneMats?: boolean; yaw?: n
     m.receiveShadow = true;
     const src = m.material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[];
     const mapOne = (mat: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial => {
-      const base = paletteMaterial(mat.name || 'default', mat.color);
-      return opts.cloneMats ? base.clone() : base;
+      const name = mat.name || 'default';
+      const base = paletteMaterial(name, mat.color);
+      if (needClone) {
+        const own = base.clone();
+        if (opts.tint && TINTABLE.has(name)) tintMaterial(own, opts.tint, name);
+        return own;
+      }
+      return base;
     };
     m.material = Array.isArray(src) ? src.map(mapOne) : mapOne(src);
   });
