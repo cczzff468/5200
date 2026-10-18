@@ -118,7 +118,9 @@ export const CATALOG: Record<string, CatalogEntry> = {
   },
   // ---- 影音 ----
   tvStand: {
-    kind: 'tvStand', glb: G('tvStand'), name: '简约电视柜', cat: 'table', fp: [1.6, 0.5],
+    kind: 'tvStand', glb: G('tvStand'), name: '简约电视柜', cat: 'table',
+    // 非均匀放大：原宽 1.6m 承不住 1.8m 大屏电视（用户反馈不适配），拉宽至 2.08m 微抬柜体
+    scale: [1.3, 1.06, 1.0], fp: [2.08, 0.5],
     acts: { playful: true },
   },
   tv: {
@@ -260,6 +262,7 @@ export function defaultHome(): HomeState {
   return {
     v: 4,
     night: false,
+    win: [false, false, false],
     furniture: [
       // —— 电视墙（北） ——
       F('tvStand', 0, -2.7),

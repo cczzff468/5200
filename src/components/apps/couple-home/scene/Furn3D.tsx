@@ -37,6 +37,7 @@ function useFurnModel(
   cloneMats: boolean,
   yaw: number | undefined,
   tint: string | undefined,
+  scale: [number, number, number] | undefined,
 ): FurnModel | null {
   const [model, setModel] = useState<FurnModel | null>(null);
   useEffect(() => {
@@ -44,13 +45,13 @@ function useFurnModel(
     let alive = true;
     ensureModel(url)
       .then(() => {
-        if (alive) setModel(cloneFurniture(url, { cloneMats, yaw, tint }));
+        if (alive) setModel(cloneFurniture(url, { cloneMats, yaw, tint, scale }));
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [url, cloneMats, yaw, tint]);
+  }, [url, cloneMats, yaw, tint, scale]);
   return model;
 }
 
@@ -71,8 +72,8 @@ export default function Furn3D({
 
   const isTV = entry.kind === 'tv';
   const cloneMats = !!entry.acts?.toggle || !!entry.acts?.washer;
-  const primary = useFurnModel(isTV ? undefined : entry.glb, cloneMats, entry.yaw, item.col);
-  const alt = useFurnModel(isTV ? undefined : entry.glbAlt, cloneMats, entry.yaw, item.col);
+  const primary = useFurnModel(isTV ? undefined : entry.glb, cloneMats, entry.yaw, item.col, entry.scale);
+  const alt = useFurnModel(isTV ? undefined : entry.glbAlt, cloneMats, entry.yaw, item.col, entry.scale);
   const useAlt = !!entry.glbAlt && !!item.st?.open;
 
   const model = useAlt ? alt ?? primary : primary;

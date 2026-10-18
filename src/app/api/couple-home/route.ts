@@ -35,6 +35,12 @@ interface HomePayload {
   furniture: FurnItem[];
   chars: Record<string, { x: number; z: number; dir?: string }>;
   night?: boolean;
+  /** 窗户开态（最多 8 扇） */
+  win?: boolean[];
+  /** 地板自定义色（#rrggbb） */
+  floorCol?: string;
+  /** 墙壁自定义色（#rrggbb） */
+  wallCol?: string;
 }
 
 const MAX_ITEMS = 150;
@@ -113,7 +119,20 @@ function normalizeHome(raw: unknown): HomePayload | null {
     }
   }
   if (!chars.me || !chars.partner) return null;
-  return { v: typeof r.v === 'number' ? r.v : 4, furniture, chars, night: r.night === true };
+  // 窗户开态：最多 8 扇布尔值
+  let win: boolean[] | undefined;
+  if (Array.isArray(r.win)) {
+    win = r.win.slice(0, 8).map((w) => w === true);
+  }
+  return {
+    v: typeof r.v === 'number' ? r.v : 4,
+    furniture,
+    chars,
+    night: r.night === true,
+    win,
+    floorCol: cleanHex(r.floorCol),
+    wallCol: cleanHex(r.wallCol),
+  };
 }
 
 function wsOf(req: NextRequest): string {

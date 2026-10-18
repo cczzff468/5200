@@ -148,14 +148,15 @@ export interface DoorPivot {
 
 /**
  * 克隆 + 归一化一个家具模型（须先 await loadModel(url)）：
- * - scale = MODEL_SCALE；底部贴地（minY → 0）、XZ 居中；
+ * - scale = MODEL_SCALE（可叠加 opts.scale 非均匀缩放：用于拉宽电视柜等单件适配）；
+ *   底部贴地（minY → 0）、XZ 居中；
  * - 材质替换为白色系（cloneMats=true 时每实例独立材质，供发光调光）；
  * - tint 时主体材质按用户色重着色（点缀色保留）；
  * - 门节点装配 pivot。
  */
 export function cloneFurniture(
   url: string,
-  opts: { cloneMats?: boolean; yaw?: number; tint?: string } = {},
+  opts: { cloneMats?: boolean; yaw?: number; tint?: string; scale?: [number, number, number] } = {},
 ): FurnModel {
   const proto = protoMap.get(url);
   if (!proto) throw new Error(`model not loaded: ${url}`);
@@ -163,12 +164,16 @@ export function cloneFurniture(
   const root = new THREE.Group();
   const inner = proto.clone(true);
 
-  // 归一化：贴地 + XZ 居中 + 放大
+  // 归一化：贴地 + XZ 居中 + 放大（可选非均匀乘子）
+  const [sx, sy, sz] = opts.scale ?? [1, 1, 1];
   const box = new THREE.Box3().setFromObject(inner);
-  const size = box.getSize(new THREE.Vector3()).multiplyScalar(MODEL_SCALE);
+  const size = box
+    .getSize(new THREE.Vector3())
+    .multiplyScalar(MODEL_SCALE)
+    .multiply(new THREE.Vector3(sx, sy, sz));
   const center = box.getCenter(new THREE.Vector3());
-  inner.position.set(-center.x, -box.min.y, -center.z);
-  inner.scale.setScalar(MODEL_SCALE);
+  inner.scale.set(MODEL_SCALE * sx, MODEL_SCALE * sy, MODEL_SCALE * sz);
+  inner.position.set(-center.x * MODEL_SCALE * sx, -box.min.y * MODEL_SCALE * sy, -center.z * MODEL_SCALE * sz);
   root.add(inner);
 
   // 材质替换（白色系 + 可选用户色）

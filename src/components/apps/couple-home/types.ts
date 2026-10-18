@@ -121,6 +121,12 @@ export interface HomeState {
   chars: Record<CharId, { x: number; z: number; dir: CharDir }>;
   /** 昼夜：true = 夜晚 */
   night: boolean;
+  /** 窗户开态（顺序与 Room 内三扇窗一致：北墙左/北墙右/西墙；缺省全关） */
+  win?: boolean[];
+  /** 地板自定义色（#rrggbb；缺省 = 默认云白） */
+  floorCol?: string;
+  /** 墙壁自定义色（#rrggbb；缺省 = 默认暖白） */
+  wallCol?: string;
 }
 
 /** 家具目录条目（静态配置，不持久化） */
@@ -132,8 +138,10 @@ export interface CatalogEntry {
   glbAlt?: string;
   name: string;
   cat: FurnCategory;
-  /** 占位脚印（世界米，未旋转时 x×z，已含 MODEL_SCALE） */
+  /** 占位脚印（世界米，未旋转时 x×z，已含 MODEL_SCALE 与 scale） */
   fp: [number, number];
+  /** 非均匀缩放（xyz 各轴乘子，在 MODEL_SCALE 之上；用于拉宽电视柜等单件适配） */
+  scale?: [number, number, number];
   /** 卧室/厨卫等非客厅家具：商店暂不展示（客厅完成后陆续开放） */
   hidden?: boolean;
   /** 交互能力 */

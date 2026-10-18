@@ -5,9 +5,11 @@
 /**
  * 情侣小家 3D —— 场景主体（R3F Canvas 内核，v4）
  *
- * - 生活模式：镜头跟随小人（滑动旋转视角 / 滚轮缩放 / 俯仰微调）+ 摇杆/WASD 移动 + 碰撞；
+ * - 生活模式：镜头跟随小人（滑动全方位旋转视角：左右任意转 + 上下低角↔近俯瞰；
+ *   拖拽时 1:1 直接控制，松手恢复平滑跟随）+ 摇杆/WASD 移动 + 碰撞；
+ *   从装修模式退出时从当前相机位置反推球坐标无缝接管，不再出现「拖动变慢」；
  * - 编辑模式：OrbitControls 上帝视角 + 家具拖拽（射线投到家具所在高度平面，0.25m 吸附）
- *   + 移动模式（选中后拖动画面任意位置搬运）+ 缩放按钮；
+ *   + 移动模式（选中后拖动画面任意位置搬运）+ 四向按钮微调 + 缩放按钮；
  * - 昼夜灯光切换：白天暖阳光 + 夜晚冷月光 + 灯具/窗户点光。
  */
 
@@ -35,6 +37,15 @@ export interface HomeSceneProps {
   joyRef: RefObject<{ dx: number; dy: number }>;
   /** 缩放指令队列（HUD 按钮 → 场内相机） */
   zoomCmd: RefObject<{ v: number; dir: number }>;
+  /** 四向微调指令（HUD 方向按钮 → 按当前视角方位换算世界轴） */
+  moveCmd: RefObject<{ v: number; dir: 'up' | 'down' | 'left' | 'right' }>;
+  onNudge: (dx: number, dz: number) => void;
+  /** 三扇窗开态 + 切换回调（窗户开合） */
+  win?: boolean[];
+  onToggleWin?: (i: number) => void;
+  /** 用户自定义地板/墙色 */
+  floorCol?: string;
+  wallCol?: string;
   onFloorTap: () => void;
   onFurnTap: (item: FurnitureItem) => void;
   onDragEnd: (id: string) => void;
@@ -42,6 +53,10 @@ export interface HomeSceneProps {
   onDragMove: (id: string, x: number, z: number) => void;
   onDragSelect: (id: string) => void;
 }
+
+/** 生活模式视角俯仰范围：接近水平（低角仰视）↔ 近乎俯瞰（全方位拉动视角） */
+const PITCH_MIN = 0.22;
+const PITCH_MAX = 1.5;
 
 // ---------------- 小工具 ----------------
 
@@ -132,6 +147,7 @@ function GameLoop({
   distRef,
   modeRef,
   itemsRef,
+  lookRef,
 }: {
   meRT: CharRT;
   taRT: CharRT;
@@ -142,14 +158,34 @@ function GameLoop({
   distRef: RefObject<{ d: number }>;
   modeRef: RefObject<HomeMode>;
   itemsRef: RefObject<FurnitureItem[]>;
+  /** 拖拽中 1:1 直接控制镜头（true 时不做惯性 lerp） */
+  lookRef: RefObject<{ on: boolean }>;
 }) {
   const { camera } = useThree();
   const desired = useRef(new THREE.Vector3());
   const lookAt = useRef(new THREE.Vector3());
+  const prevMode = useRef<HomeMode>('live');
+  const catchUp = useRef(0);
 
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
-    if (modeRef.current !== 'live') return;
+    if (modeRef.current !== 'live') {
+      prevMode.current = modeRef.current;
+      return;
+    }
+
+    // —— 模式切换无缝接管：装修 → 生活时从当前相机位置反推球坐标，
+    //    视角从用户离开的地方继续，彻底消除「退出后拖动变慢」 ——
+    if (prevMode.current !== 'live') {
+      const off = camera.position.clone().sub(new THREE.Vector3(meRT.x, 0, meRT.z));
+      const len = Math.max(off.length(), 0.001);
+      if (azRef.current) azRef.current.az = Math.atan2(off.x, off.z);
+      if (pitchRef.current)
+        pitchRef.current.p = clamp(Math.asin(clamp(off.y / len, -1, 1)), PITCH_MIN, PITCH_MAX);
+      if (distRef.current) distRef.current.d = clamp(len, 4.5, 11);
+      catchUp.current = 1.1; // 短暂加速收紧到跟随轨道
+    }
+    prevMode.current = 'live';
 
     // —— 输入合成（摇杆 + 键盘） ——
     const j = joyRef.current ?? { dx: 0, dy: 0 };
@@ -194,7 +230,15 @@ function GameLoop({
     const cy = Math.sin(pitch) * dist;
     const ch = Math.cos(pitch) * dist;
     desired.current.set(meRT.x + Math.sin(az) * ch, cy + 0.55, meRT.z + Math.cos(az) * ch);
-    camera.position.lerp(desired.current, 1 - Math.exp(-dt * 5));
+
+    if (lookRef.current?.on) {
+      // 拖拽中：1:1 直接控制（与装修模式轨道同样的跟手感，无惯性延迟）
+      camera.position.copy(desired.current);
+    } else {
+      const rate = catchUp.current > 0 ? 9 : 5;
+      if (catchUp.current > 0) catchUp.current -= dt;
+      camera.position.lerp(desired.current, 1 - Math.exp(-dt * rate));
+    }
     lookAt.current.set(meRT.x, 1.0, meRT.z);
     camera.lookAt(lookAt.current);
   });
@@ -218,6 +262,7 @@ function PointerRig({
   dragRef,
   moveSelRef,
   itemsRef,
+  lookRef,
   onDragMove,
   onDragEnd,
   onDragSelect,
@@ -229,6 +274,7 @@ function PointerRig({
   dragRef: RefObject<DragInfo | null>;
   moveSelRef: RefObject<{ id: string | null; on: boolean }>;
   itemsRef: RefObject<FurnitureItem[]>;
+  lookRef: RefObject<{ on: boolean }>;
   onDragMove: HomeSceneProps['onDragMove'];
   onDragEnd: HomeSceneProps['onDragEnd'];
   onDragSelect: HomeSceneProps['onDragSelect'];
@@ -243,7 +289,7 @@ function PointerRig({
     cbRef.current = { onDragMove, onDragEnd, onDragSelect };
   });
   // 手势状态存 ref：即便 effect 重建也不丢「按住中」状态
-  const gesture = useRef({ down: false, lastX: 0, lastY: 0 });
+  const gesture = useRef({ down: false, lastX: 0, lastY: 0, moved: 0 });
 
   useEffect(() => {
     const el = gl.domElement;
@@ -273,6 +319,8 @@ function PointerRig({
       gesture.current.down = true;
       gesture.current.lastX = e.clientX;
       gesture.current.lastY = e.clientY;
+      gesture.current.moved = 0;
+      lookRef.current.on = false;
 
       // —— 移动模式：按下画布任意处即搬运选中家具 ——
       const ms = moveSelRef.current;
@@ -291,6 +339,7 @@ function PointerRig({
       const dy = e.clientY - g.lastY;
       g.lastX = e.clientX;
       g.lastY = e.clientY;
+      g.moved += Math.abs(dx) + Math.abs(dy);
 
       // —— 编辑模式：家具拖拽 ——
       const d = dragRef.current;
@@ -311,17 +360,19 @@ function PointerRig({
         }
       }
 
-      // —— 生活模式：滑动旋转视角 / 微调俯仰 ——
+      // —— 生活模式：滑动全方位旋转视角（左右任意转 / 上下低角↔近俯瞰） ——
       if (modeRef.current === 'live' && !dragRef.current) {
+        if (g.moved > 6) lookRef.current.on = true; // 超过轻点阈值 → 1:1 直接控制
         const az = azRef.current;
         if (az) az.az -= dx * 0.006;
         const p = pitchRef.current;
-        if (p) p.p = clamp(p.p + dy * 0.004, 0.45, 1.25);
+        if (p) p.p = clamp(p.p + dy * 0.004, PITCH_MIN, PITCH_MAX);
       }
     };
 
     const onUp = () => {
       gesture.current.down = false;
+      lookRef.current.on = false;
       const d = dragRef.current;
       if (d?.active) {
         cbRef.current.onDragEnd(d.id);
@@ -353,7 +404,7 @@ function PointerRig({
       el.removeEventListener('dragstart', blockDrag);
     };
     // 仅依赖 three 稳定对象与 ref —— 回调已走 cbRef，重渲染不拆装
-  }, [camera, gl, raycaster, controls, modeRef, azRef, pitchRef, distRef, dragRef, moveSelRef]);
+  }, [camera, gl, raycaster, controls, modeRef, azRef, pitchRef, distRef, dragRef, moveSelRef, lookRef]);
 
   return null;
 }
@@ -402,6 +453,51 @@ function MoveModeGate({ moveOn, mode }: { moveOn: boolean; mode: HomeMode }) {
   useEffect(() => {
     if (controls) controls.enabled = mode === 'edit' && !moveOn;
   }, [controls, moveOn, mode]);
+  return null;
+}
+
+// ---------------- 四向微调（HUD 方向按钮 → 按当前视角方位换算世界轴） ----------------
+
+function NudgePoker({
+  moveCmd,
+  onNudge,
+}: {
+  moveCmd: RefObject<{ v: number; dir: 'up' | 'down' | 'left' | 'right' }>;
+  onNudge: (dx: number, dz: number) => void;
+}) {
+  const { camera } = useThree();
+  const controls = useThree((s) => s.controls) as unknown as { target: THREE.Vector3 } | null;
+  const last = useRef(0);
+  useFrame(() => {
+    const cmd = moveCmd.current;
+    if (!cmd || cmd.v === last.current) return;
+    last.current = cmd.v;
+    // 相机方位角 → 吸附到最近的 90° 象限，方向按钮永远沿屏幕视觉方向移动
+    const t = controls?.target;
+    const az = Math.atan2(
+      camera.position.x - (t?.x ?? 0),
+      camera.position.z - (t?.z ?? 0),
+    );
+    const q = Math.round(az / (Math.PI / 2)) * (Math.PI / 2);
+    const fx = -Math.sin(q);
+    const fz = -Math.cos(q);
+    let dx = 0;
+    let dz = 0;
+    if (cmd.dir === 'up') {
+      dx = fx;
+      dz = fz;
+    } else if (cmd.dir === 'down') {
+      dx = -fx;
+      dz = -fz;
+    } else if (cmd.dir === 'left') {
+      dx = fz;
+      dz = -fx;
+    } else {
+      dx = -fz;
+      dz = fx;
+    }
+    onNudge(dx, dz);
+  });
   return null;
 }
 
@@ -469,7 +565,8 @@ function Lights({ night }: { night: boolean }) {
 
 export default function HomeScene(props: HomeSceneProps) {
   const {
-    items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd,
+    items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge,
+    win, onToggleWin, floorCol, wallCol,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect,
   } = props;
 
@@ -486,6 +583,7 @@ export default function HomeScene(props: HomeSceneProps) {
   const pitchRef = useRef({ p: 0.92 });
   const distRef = useRef({ d: 8.8 });
   const dragRef = useRef<DragInfo | null>(null);
+  const lookRef = useRef({ on: false });
   const moveSelRef = useRef<{ id: string | null; on: boolean }>({ id: null, on: false });
   useEffect(() => {
     moveSelRef.current = { id: moveOn ? selId : null, on: moveOn && !!selId };
@@ -523,7 +621,14 @@ export default function HomeScene(props: HomeSceneProps) {
     >
       <color attach="background" args={[night ? '#24272f' : '#efe8da']} />
       <Lights night={night} />
-      <Room night={night} onFloorTap={onFloorTap} />
+      <Room
+        night={night}
+        onFloorTap={onFloorTap}
+        win={win}
+        onToggleWin={onToggleWin}
+        floorCol={floorCol}
+        wallCol={wallCol}
+      />
       {mode === 'edit' && <EditGrid />}
 
       {items.map((item) => {
@@ -548,6 +653,7 @@ export default function HomeScene(props: HomeSceneProps) {
       <Char3D rt={taRT} who="partner" />
       <EditCameraKick mode={mode} />
       <ZoomPoker zoomCmd={zoomCmd} />
+      <NudgePoker moveCmd={moveCmd} onNudge={onNudge} />
       <MoveModeGate moveOn={moveOn} mode={mode} />
 
       {mode === 'edit' && (
@@ -574,6 +680,7 @@ export default function HomeScene(props: HomeSceneProps) {
         distRef={distRef}
         modeRef={modeRef}
         itemsRef={itemsRef}
+        lookRef={lookRef}
       />
       <PointerRig
         modeRef={modeRef}
@@ -583,6 +690,7 @@ export default function HomeScene(props: HomeSceneProps) {
         dragRef={dragRef}
         moveSelRef={moveSelRef}
         itemsRef={itemsRef}
+        lookRef={lookRef}
         onDragMove={handleDragMove}
         onDragEnd={onDragEnd}
         onDragSelect={onDragSelect}

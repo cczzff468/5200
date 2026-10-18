@@ -20909,3 +20909,25 @@ Work Log:
 Stage Summary:
 - 拾光小屋已作为独立 App 上屏第 3 页（恋人空间右侧），图标为用户提供的双猫看海图，数据与恋人空间入口互通
 - 涉及文件：public/icons/cottage.png(新)、src/components/apps/cottage.tsx(新)、store.ts、registry.tsx、HomeScreen.tsx、appstore.tsx
+
+---
+Task ID: cottage-v5
+Agent: 主协调 Agent (Z.ai Code)
+Task: 拾光小屋五连改——电视柜适配/窗户开合/地板墙色/全方位视角/退出变慢修复/移动双方式/四宫格旋转
+
+Work Log:
+- GLB 实测排查（three GLTFLoader 测量脚本，37 个模型全量）：确认唯一不适配 = 电视 1.8m 宽 > 电视柜 1.6m 宽（其余上桌物件 sideTable 0.769/lampTable 0.77、coffeeTable 0.46/books 0.46、desk 0.769/radio 0.77 全部吻合）
+- 电视柜适配：CatalogEntry 新增 scale?: [x,y,z] 非均匀缩放（model-kit cloneFurniture 支持），tvStand scale [1.3,1.06,1.0] → 2.08m 宽承托 1.8m 电视，fp 同步 [2.08,0.5]，Furn3D 透传 entry.scale
+- 窗户开合（Room.tsx 重写窗组件）：三扇推拉窗（北×2+西×1），固定扇+活动扇（阻尼滑移动画 damp 7），窗外风景 canvas 纹理（白天蓝天白云双帆船 / 夜晚星空月亮），点击开合（delta>8 防拖拽误触），夜里开窗暖光自动减弱；HomeState 新增 win?: boolean[] 持久化（3 扇）
+- 地板/墙壁自定义色：HomeState 新增 floorCol/wallCol（#rrggbb），Room 材质 color 与纹理相乘；编辑模式新增「地板墙色」面板（Paintbrush 按钮，10 色卡+自定义 color input+默认恢复），与家具调色盘同款交互
+- 全方位视角：俯仰钳制 0.45~1.25 → 0.22~1.5（低角仰视↔近俯瞰），水平依旧任意旋转
+- 退出变慢修复（双保险）：① GameLoop 在 edit→live 时从当前相机位置反推球坐标（az/pitch/dist 无缝接管+1.1s 加速收紧 rate 9），不再从高空长距离 lerp；② 拖拽中 lookRef.on=true 时相机 1:1 直接 copy 跟随位（超 6px 阈值才激活，轻点不触发），与装修模式轨道同手感
+- 移动双方式：HUD 方向键十字盘（上下左右 0.25m 微调，NudgePoker 按 Canvas 内相机方位角吸附 90° 象限换算屏幕方向→世界轴，脚印钳位）+ 原有按住拖动/移动模式（中心 Move 键开关）
+- 旋转四宫格：原 4 个横排按钮改为 2×2（上排左转/右转，下排下俯/上仰）
+- API route：normalizeHome 清洗 win（≤8 布尔）/floorCol/wallCol（cleanHex）
+- 验证：tsc+eslint 全绿；agent-browser 实测 7 项：电视柜宽度适配、左窗点开（中梃滑移+海景开阔）、地板浅黄+墙雾灰蓝生效、俯瞰↔低角全方位拖拽、退出装修后拖 100px 视角大幅旋转（1:1 无延迟）、茶几上移+右转 45°、刷新后地板/墙色/茶几位置旋转全保留；控制台零错误
+
+Stage Summary:
+- 拾光小屋 v4.1：视觉适配（电视柜）+ 三个新交互（窗/地板墙色/全方位视角）+ 两个手感修复（退出变慢/移动双方式）+ HUD 重排（四宫格+十字盘）
+- 数据结构向后兼容：win/floorCol/wallCol 均为可选字段，旧档案缺省即默认值，无版本迁移
+- 涉及文件：types.ts、catalog.ts、model-kit.ts、Furn3D.tsx、Room.tsx、HomeScene.tsx、CoupleHome.tsx、api/couple-home/route.ts
