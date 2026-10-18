@@ -689,3 +689,15 @@
     display: none;
   }
 }
+
+/* ---------------- 情侣小家动画 ---------------- */
+@keyframes char-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+@keyframes tv-flicker {
+  0%, 100% { opacity: 0.85; }
+  40% { opacity: 1; }
+  60% { opacity: 0.72; }
+  80% { opacity: 0.95; }
+}

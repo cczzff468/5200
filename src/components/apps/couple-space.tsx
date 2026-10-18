@@ -113,6 +113,7 @@ import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, sch
 import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
 import { setMtPendingPage } from '@/lib/ios/meituan-store';
 import CoupleTarotPage from './couple-tarot';
+import CoupleHome from './couple-home/CoupleHome';
 import type { TarotReadingsMap } from '@/lib/tarot-deck';
 import { EnvelopeArt, LETTER_ENVELOPES, petKindOf, PetFace } from './couple-letter-bubble';
 import WheelDatePicker from './wheel-date-picker';
@@ -2342,7 +2343,8 @@ function SubRouter(props: {
     case 'letters':
       return <LettersPage state={state} patch={patch} close={close} showToast={showToast} />;
     case 'house':
-      return <HousePage state={state} days={days} close={close} />;
+      // 第五十九轮：情侣小家升级为可交互小家（家具开关/拖拽、摇杆操控小人、视角跟随）
+      return <CoupleHome close={close} />;
     case 'mood':
       return <MoodPage state={state} patch={patch} showToast={showToast} close={close} />;
     case 'tarot':
@@ -5409,38 +5411,6 @@ function LettersPage({ state, patch, close, showToast }: { state: CoupleState; p
   );
 }
 
-/** 情侣小家：温馨度随天数与相册照片数成长 */
-function HousePage({ state, days, close }: { state: CoupleState; days: number | null; close: () => void }) {
-  const photos = state.albums.reduce((n, a) => n + a.photos.length, 0);
-  const warmth = Math.min(100, (days ?? 0) * 2 + photos * 3 + (state.married ? 20 : 0));
-  const furnitures = ['🛏️ 双人大床', '🪴 绿植角落', '🍳 小厨房', '📚 书架', '🐱 一只猫', '🪟 飘窗'];
-  const unlocked = Math.floor(warmth / 18) + 1;
-  return (
-    <SubShell title="情侣小家" onBack={close}>
-      <div className="mt-4 overflow-hidden rounded-2xl bg-white/80 backdrop-blur-xl shadow-sm">
-        { }
-        <img src="/couple-house.png" alt="我们的小家" className="h-[190px] w-full object-cover" draggable={false} />
-        <div className="px-5 py-4">
-          <div className="flex items-baseline justify-between">
-            <span className="text-[15px] font-semibold text-[#2c2c30]">温馨度</span>
-            <span className="text-[13px] text-[#9a9aa2]">陪伴 {days ?? 0} 天 · 照片 {photos} 张</span>
-          </div>
-          <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-[#efeff2]">
-            <div className="h-full rounded-full bg-[linear-gradient(90deg,#9e9ea8,#5c5c64)]" style={{ width: `${warmth}%` }} />
-          </div>
-        </div>
-      </div>
-      <h3 className="px-2 pb-2 pt-6 text-[17px] font-bold">家具清单（温馨度解锁）</h3>
-      <div className="grid grid-cols-2 gap-3">
-        {furnitures.map((f, i) => (
-          <div key={f} className={`flex h-16 items-center gap-2 rounded-2xl px-4 text-[15px] ${i < unlocked ? 'bg-white/80 backdrop-blur-xl font-medium text-[#2c2c30] shadow-sm' : 'bg-[#ececef] text-[#b6b6bd]'}`}>
-            {i < unlocked ? f : '🔒 待解锁'}
-          </div>
-        ))}
-      </div>
-    </SubShell>
-  );
-}
 
 /** 心情日记（对照用户截图重做）：大月历心情球视图 + 全部日记列表 + 日记详情 + 写日记编辑页 */
 function MoodPage({ state, patch, showToast, close }: { state: CoupleState; patch: (p: Partial<CoupleState>) => void; showToast: (m: string) => void; close: () => void }) {

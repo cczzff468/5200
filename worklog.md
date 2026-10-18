@@ -20765,3 +20765,22 @@ Stage Summary:
 - 摇杆操控方案确认可行，实现路径已锁定（自绘优先）
 - 情侣小家功能设计汇总：家具点击交互 + dnd-kit 拖拽移动 + 摇杆操控小人（双操控模式可并存：摇杆+点击寻路）
 - 继续等待用户确认后开工
+
+---
+Task ID: 4
+Agent: 主协调 Agent (Z.ai Code)
+Task: 开发「情侣小家」客厅篇（Kenney 卡通扁平风 + 家具交互 + 摇杆小人 + 视角跟随/滑动切换）
+
+Work Log:
+- 素材落地：OpenGameArt 下载 Kenney Furniture Kit（CC0，120 个俯视家具 sprite）→ public/home/furniture/（52 个精选）；shorepine/kenney 镜像取 Toon Characters 男女小人 idle+run3帧 → public/home/chars/
+- 新建 src/components/apps/couple-home/ 六个文件：types.ts / catalog.ts（21 种家具目录+8件衣物+默认布局+IMG_SIZE）/ Furniture.tsx（点击交互+长按350ms拖拽+16px网格吸附+灯光晕/电视蓝光/洗衣机wobble）/ Character.tsx（billboard纸片人+run帧动画+深度缩放+阴影）/ Joystick.tsx（自绘摇杆360°+玻璃质感）/ Panels.tsx（衣橱/洗衣机底部抽屉面板）/ CoupleHome.tsx（世界1080x1400+camera follow/free+手势路由+粒子+昼夜+TA AI漫游+idb-kv持久化）
+- globals.css 追加 char-bob / tv-flicker keyframes
+- couple-space.tsx：'house' 路由替换为 <CoupleHome/>，删除静态 HousePage（5414-5445行）
+- 修复 React Compiler lint：渲染期读写 ref → state 驱动 + useEffect 同步 ref；合成事件 setPointerCapture NotFoundError → try-catch
+- agent-browser 端到端验证 10 项全通过：灯开关（toast+粒子+光晕）/ 摇杆移动（240px/s 精确）/ tap 寻路 / pan 滑动切视角（camera 精确跟随手指）/ 衣橱开门面板6件衣物 / 送洗流转 / 洗衣机8秒启动→完成→取回闭环 / 电视开关（正在播放气泡）/ 家具拖拽（996,400→1016,560 网格吸附+保存toast）/ 夜晚模式（滤镜+灯光）/ TA AI 漫游（610→72 横穿房间）
+- dev.log 无运行时错误；couple-home lint 零问题
+
+Stage Summary:
+- 情侣小家·客厅上线：恋人在恋人空间「发现→情侣小家」进入
+- 世界 1080x1400、21 种家具、8 件衣物、摇杆+寻路双操控、视角跟随+滑动自由切换、昼夜系统、全部状态 IndexedDB 持久化
+- 待办（下一轮可选）：卧室/厨房/阳台扩展、电视播放真实照片轮播、家具商店购买解锁、双人实时同步
