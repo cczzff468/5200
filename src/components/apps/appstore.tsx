@@ -69,6 +69,7 @@ const TAGLINES: Record<AppId, string> = {
   meituan: '外卖团购，吃喝玩乐',
   taobao: '淘好货，要淘宝',
   couple: '恋人空间，两个人的小天地',
+  cottage: '拾光小屋，把日常装进小家',
 };
 
 /** 分类（排行榜副标题 & 搜索关键字） */
@@ -98,6 +99,7 @@ const CATEGORY: Record<AppId, string> = {
   meituan: '生活服务',
   taobao: '购物',
   couple: '社交',
+  cottage: '生活',
 };
 
 /** App 标签页分组 */

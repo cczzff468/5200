@@ -20890,3 +20890,22 @@ Stage Summary:
 - 仓库已完整落地 /home/z/my-project 并在 3000 端口运行，git 推送链路就绪（origin 已带 PAT）
 - 项目当前版本：情侣小家 v4（commit 1efa05c）
 - 待用户明确本轮需要修改/添加的具体功能后开工
+
+---
+Task ID: feature-cottage-1
+Agent: 主协调 Agent (Z.ai Code)
+Task: 「情侣小家」独立成 App「拾光小屋」+ 用户提供的双猫图标
+
+Work Log:
+- 处理用户上传图标（卡普喔 1024x1024 PNG，自带透明圆角）→ sharp 缩放压缩为 public/icons/cottage.png（512x512，81KB）
+- src/lib/ios/store.ts：AppId 联合类型新增 'cottage'
+- 新建 src/components/apps/cottage.tsx：拾光小屋 App 壳，完整复用 couple-home/CoupleHome 3D 场景，close 回调改为 useUI.getState().closeApp()（返回按钮=关闭 App 回主屏）；与恋人空间「发现→情侣小家」共享同一份数据（idb-kv + Prisma 同 workspaceId）
+- src/components/apps/registry.tsx：注册 CottageApp（dynamic 懒加载），AppDef 新增条目：name 拾光小屋 / image /icons/cottage.png / 备用 glyph House 线条图
+- src/components/ios/HomeScreen.tsx：PAGE3_APP_IDS 页尾追加 'cottage'（不升版：存量布局走 sanitize 缺失补位自动上屏）
+- src/components/apps/appstore.tsx：TAGLINES/CATEGORY 两个 Record<AppId,...> 补齐 cottage（TSC 穷举要求）
+- 验证：bunx tsc --noEmit 全绿；eslint 四文件零告警；agent-browser 实测：主屏第 3 页猫咪图标出现→点击打开 3D 小家（白系客厅/家具/双小人渲染正常）→摇杆移动+镜头跟随正常→返回按钮关闭回主屏→恋人空间正常打开→控制台零错误
+- 未改动 couple-space.tsx 与 couple-home/ 内部文件，恋人空间内「情侣小家」入口行为不变
+
+Stage Summary:
+- 拾光小屋已作为独立 App 上屏第 3 页（恋人空间右侧），图标为用户提供的双猫看海图，数据与恋人空间入口互通
+- 涉及文件：public/icons/cottage.png(新)、src/components/apps/cottage.tsx(新)、store.ts、registry.tsx、HomeScreen.tsx、appstore.tsx

@@ -1362,7 +1362,8 @@ export type AppId =
   | 'memory'
   | 'worldbook'
   | 'meituan'
-  | 'couple';
+  | 'couple'
+  | 'cottage';
 
 export type AppPhase = 'closed' | 'opening' | 'open' | 'closing';
 

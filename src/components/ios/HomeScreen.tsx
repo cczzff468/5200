@@ -342,8 +342,9 @@ const PAGE2_APP_IDS: AppId[] = ['reminders', 'recorder', 'calendar', 'clock'];
 /** 第 3 页 App（用户指定：音乐/微信/App Store[在 QQ 左侧]/QQ；网易云小组件在其上方；
  *  世界书自 v9 起纳入页尾——否则 v9 重置路径提前 return 不会走 App 补位逻辑，世界书会从主屏消失；
  *  美团自 v10 起纳入页尾——存量布局走 sanitize 的「缺失 App 补位」自动上屏；
- *  情侣空间随后纳入页尾（不升版：存量布局同样走「缺失 App 补位」自动上屏）） */
-const PAGE3_APP_IDS: AppId[] = ['music', 'wechat', 'appstore', 'qq', 'memory', 'worldbook', 'meituan', 'couple'];
+ *  情侣空间随后纳入页尾（不升版：存量布局同样走「缺失 App 补位」自动上屏））；
+ *  拾光小屋（原「情侣小家」独立 App）纳入页尾（不升版：存量布局自动补位上屏） */
+const PAGE3_APP_IDS: AppId[] = ['music', 'wechat', 'appstore', 'qq', 'memory', 'worldbook', 'meituan', 'couple', 'cottage'];
 /** 其余小组件（默认收起不显示：写入 hidden，需要时从「+」画廊/主题小组件页找回；
  *  网易云小组件自 v6 起默认上屏第 3 页，不再收起；
  *  v9 起 widgets-7 的四个新小组件 iCity/日历/表盘时钟/拍立得也默认收起——用户要求新添加的小组件不显示） */

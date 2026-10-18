@@ -18,6 +18,7 @@ import {
   Folder,
   Ghost,
   Heart as HeartIcon,
+  House as HouseIcon,
   Image as ImageIcon,
   MessageCircle,
   Music2,
@@ -60,6 +61,7 @@ const WorldBookApp = dynamic(() => import('./worldbook'), { ssr: false });
 const MeituanApp = dynamic(() => import('./meituan'), { ssr: false });
 const TaobaoApp = dynamic(() => import('./taobao'), { ssr: false });
 const CoupleSpaceApp = dynamic(() => import('./couple-space'), { ssr: false });
+const CottageApp = dynamic(() => import('./cottage'), { ssr: false });
 
 export interface AppMeta {
   id: AppId;
@@ -424,6 +426,15 @@ const APP_DEFS: AppDef[] = [
     // 备用线条图（毛玻璃/液态样式时展示）：双心轮廓
     glyph: <HeartIcon className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
     component: CoupleSpaceApp,
+  },
+  {
+    id: 'cottage',
+    name: '拾光小屋',
+    // 真实图标：用户提供的双猫看海图标（卡普喔风）——原「情侣小家」独立成 App（用户指定命名）
+    image: '/icons/cottage.png',
+    // 备用线条图（毛玻璃/液态样式时展示）：小屋轮廓
+    glyph: <HouseIcon className={GLYPH_CLASS} strokeWidth={GLYPH_STROKE} />,
+    component: CottageApp,
   },
 ];
 
