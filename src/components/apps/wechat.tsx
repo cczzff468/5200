@@ -197,7 +197,7 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { kvGet, kvGetRaw, kvSet, kvSetDebounced, kvDel } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters, setMemScopeForApp } from '@/lib/memory';
-import { coupleChatBlock } from '@/lib/ios/couple-ai';
+import { aiWriteLetterOnRequest, coupleChatBlock, coupleLetterAskHit } from '@/lib/ios/couple-ai';
 import {
   addCharMomentPost,
   addUserMomentComment,
@@ -6459,6 +6459,12 @@ function ChatPage({
       // #35 时序兜底：历史数据/合并竞态可能把上一轮未投递完的回复排在用户新消息之后（旧气泡倒挂），
       // 按创建时间稳定排序还原对话时序（正常数据 time 单调，排序为空操作），保证上下文顺序正确
       .sort((a, b) => a.time - b.time);
+    // 恋人空间×情书（第五十八轮）：我在聊天里让 TA 写情书/写信 → TA 稍后真的提笔写一封寄到本会话
+    //（只对恋人绑定的联系人生效；TA 先在聊天里自然应声，几秒后信封卡片寄到；90 秒冷却防重复）
+    {
+      const lastMine = [...base].reverse().find((m) => m.role === 'me' && typeof m.content === 'string' && m.content.trim());
+      if (lastMine && coupleLetterAskHit(String(lastMine.content))) aiWriteLetterOnRequest(peer.id, 'wx');
+    }
     // fix3-c #1/#2：AI 历史序列化用的机主称呼与角色名（meAddrName 声明自下方上移至此，供凭据卡句式与卡片终态执行者后缀使用）
     const meAddrName = addressNameOf(me, useSettings.getState().addressMode);
     const actorNames: WxCardActorNames = { me: meAddrName, peer: peer.name };

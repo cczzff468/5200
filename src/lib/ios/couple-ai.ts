@@ -52,12 +52,34 @@ export interface CoupleTextPhoto {
   at: number;
 }
 
-/** 相册照片条目：dataURL 字符串（真图，含用户上传与 AI 生成）或文字图片卡片 */
-export type CouplePhotoEntry = string | CoupleTextPhoto;
+/** AI 生成的真图（第五十八轮：记录生成时的画面描述，相册大图可带提示词再生成） */
+export interface CoupleGenPhoto {
+  kind: 'img';
+  /** 图片 dataURL */
+  src: string;
+  /** 生成时的画面描述（再生成时预填提示词，用户可改） */
+  desc?: string;
+  /** 是否 TA（AI）拍的 */
+  byTa?: boolean;
+  at: number;
+}
+
+/** 相册照片条目：dataURL 字符串（用户上传/旧数据真图）、AI 生成真图卡片或文字图片卡片 */
+export type CouplePhotoEntry = string | CoupleTextPhoto | CoupleGenPhoto;
 
 /** 判断照片条目是否为文字图片卡片 */
 export function isTextPhoto(p: CouplePhotoEntry): p is CoupleTextPhoto {
   return typeof p === 'object' && p !== null && (p as CoupleTextPhoto).kind === 'textcard';
+}
+
+/** 判断照片条目是否为 AI 生成的真图卡片（带画面描述，可再生成） */
+export function isGenPhoto(p: CouplePhotoEntry): p is CoupleGenPhoto {
+  return typeof p === 'object' && p !== null && (p as CoupleGenPhoto).kind === 'img';
+}
+
+/** 取照片条目的图片地址（用户上传字符串 / AI 真图卡片；文字图片卡片返回空串） */
+export function photoSrc(p: CouplePhotoEntry): string {
+  return typeof p === 'string' ? p : isGenPhoto(p) ? p.src : '';
 }
 
 interface CoupleSnap {
@@ -108,7 +130,7 @@ interface CoupleSnap {
   letters?: { id: string; text: string; at: number; openAfterDays?: number; envelope?: string; sharedAt?: number }[];
   /** TA 写给我的信（AI 回信/主动写信）；replyToId=回信指向的原信 id */
   aiLetters?: { id: string; text: string; envelope?: string; replyToId?: string; at: number }[];
-  /** AI 主动写信去重（每 3 天最多一封）：最近一次写信的日期 key */
+  /** AI 主动写信去重（每天最多尝试一次；第五十八轮起频率由 TA 按人设/记忆自己决定）：最近一次尝试的日期 key */
   aiLetterDay?: string;
   aiLog?: { id: string; text: string; at: number }[];
   albums?: { id: string; name: string; desc: string; photos: CouplePhotoEntry[] }[];
@@ -1939,15 +1961,17 @@ export async function aiTarotReading(opts: { themeLabel: string; question?: stri
 
 // 第二十四轮：AI 主动写信模板已删除（写不出来就不寄）
 
+/** 情书信封池（与写信共用；第五十八轮抽出） */
+const LETTER_ENVELOPES = ['pinkbunny', 'yellowpup', 'lavendrcat', 'mintbear', 'skybunny', 'kraft', 'whitedove', 'rosedove'];
+
 /**
- * AI 主动写情书寄给我（每 3 天最多一封；第十八轮）：
+ * AI 主动写情书寄给我（第五十八轮重写：不再固定「每 3 天一封」——今天想不想写由 TA
+ * 按人设 + 共享记忆 + 记忆碎片 + 最近聊天 + 此刻心情自己决定；每天最多尝试一次）：
  * 写进 aiLetters + 信封卡片发进聊天 + 记忆 + 日志。
  */
 async function aiTickLetter(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
   const today = todayKey();
-  if ((snap.aiLetterDay ?? '') === today) return;
-  const last = (snap.aiLetters ?? [])[0];
-  if (last && Date.now() - last.at < 3 * 86400000) return;
+  if ((snap.aiLetterDay ?? '') === today) return; // 今天已经写过/决定过不写（每天最多尝试一次）
   const pid = currentPartnerId;
   const ch = currentChannel;
   const chatCtx = recentChatBlock(pid, ch, me, ta);
@@ -1960,26 +1984,34 @@ async function aiTickLetter(snap: CoupleSnap, me: string, ta: string, p: TaPerso
   } catch {
     /* 召回失败不影响 */
   }
-  let text = '';
+  // 第五十八轮：先让 TA 自己决定今天想不想写信（同一轮里顺带把信写好），不再硬性隔 3 天
+  const lastTa = (snap.aiLetters ?? [])[0];
+  const lastTaAgo = lastTa ? Math.max(0, Math.floor((Date.now() - lastTa.at) / 86400000)) : null;
+  const WRITE_SPEC = `想写就写一封（130~200字）：开头称呼${me}；正文写你最近真实的生活小事、突然想${me}的瞬间、从上面的共享记忆/记忆碎片/最近聊天里挑一件具体的、只有你们俩才懂的小事写进去、想和${me}一起做的一件事；结尾一句只属于你们的话。像真的提笔写的信，贴合你的人设与你们的真实近况；绝对禁止空话套话；禁止列表、markdown、emoji。`;
+  let raw = '';
   try {
-    text = await llmUserFirst(
+    raw = await llmUserFirst(
       `${llmSystem(p, me, snap)}${shared ? `\n【你们的共享记忆】\n${cut(shared, 380)}` : ''}${memBlock ? `\n【你们的记忆碎片】\n${cut(memBlock, 400)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
-      `请以「${ta}」的身份给${me}写一封情书（130~200字）：开头称呼${me}；正文写你最近真实的生活小事、突然想${me}的瞬间、从上面的共享记忆/记忆碎片/最近聊天里挑一件具体的、只有你们俩才懂的小事写进去、想和${me}一起做的一件事；结尾一句只属于你们的话。要像真的提笔写的信，贴合你的人设、你们的共享记忆和最近聊过的话题；绝对禁止空话套话；禁止列表、markdown、emoji。只输出信的正文。`,
+      lastTaAgo != null
+        ? `你上一封写给${me}的信是 ${lastTaAgo} 天前寄出的。今天的你，想不想再给${me}写一封信？完全按你的人设、你们的近况和你此刻的心情自己决定：真的有话想说、有写信的心情 → write=true 并把信写好；没心情/觉得不合适 → write=false（宁可不写也不硬写）。${WRITE_SPEC}\n输出 JSON：{"write": true, "text": "信的正文"}（不写则 {"write": false, "text": ""}）。只输出 JSON。`
+        : `你还没给${me}写过信。今天的你，想不想给${me}写一封？完全按你的人设、你们的近况和你此刻的心情自己决定：真的有话想说、有写信的心情 → write=true 并把信写好；没心情/觉得还不合适 → write=false（宁可不写也不硬写）。${WRITE_SPEC}\n输出 JSON：{"write": true, "text": "信的正文"}（不写则 {"write": false, "text": ""}）。只输出 JSON。`,
     );
   } catch {
     /* 兜底 */
   }
-  text = stripEmoji(text);
+  // 无论写不写，今天都尝试过了（明天再看 TA 的心情）
+  writeSnap((s) => ({ ...s, aiLetterDay: today }));
+  const j = extractJson<{ write?: boolean; text?: string }>(raw);
+  if (!j || j.write !== true) return; // TA 自己决定今天不写
+  let text = stripEmoji(j.text ?? '');
   // 第二十四轮：不用模板兜底——写信失败今天就不寄，下次再写
   if (!text || text.length < 40) return;
   text = cut(text, 420);
-  // 第二十九轮：信封池补齐第二十八轮新增的两款（whitedove 白羽信鸽 / rosedove 蔷薇飞鸟），此前漏加
-  const envelope = ['pinkbunny', 'yellowpup', 'lavendrcat', 'mintbear', 'skybunny', 'kraft', 'whitedove', 'rosedove'][Math.floor(Math.random() * 8)];
+  const envelope = LETTER_ENVELOPES[Math.floor(Math.random() * LETTER_ENVELOPES.length)];
   const letterId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   writeSnap((s) => ({
     ...s,
     aiLetters: [{ id: letterId, text, envelope, at: Date.now() }, ...((s.aiLetters as CoupleSnap['aiLetters']) ?? [])].slice(0, 20),
-    aiLetterDay: today,
   }));
   if (pid) {
     coupleRemember(pid, ch, `${ta}给${me}写了一封情书寄到恋人空间（开头：${cut(text, 44)}），并把信封卡片发到了${ch === 'wx' ? '微信' : 'QQ'}里`);
@@ -1991,6 +2023,87 @@ async function aiTickLetter(snap: CoupleSnap, me: string, ta: string, p: TaPerso
       /* 卡片发送失败静默（信已在恋人空间里） */
     }
   }
+}
+
+// —— 聊天讨信（第五十八轮）：我在微信/QQ 里让 TA 写情书 → TA 真的提笔写一封寄过来 ——
+
+/** 每个联系人最近一次讨信触发时间（连发/队列补跑 90 秒内只触发一次） */
+const letterAskCool = new Map<string, number>();
+
+/**
+ * 我在聊天里向 TA 讨情书/写信的说法命中（「写情书」「给我写封信」「来封情书」「情书呢」…）。
+ * 带否定守卫（「不要写情书」之类不触发）；命中后由 aiWriteLetterOnRequest 真正触发写信。
+ */
+export function coupleLetterAskHit(text: string): boolean {
+  const t = (text ?? '').replace(/\s+/g, '');
+  if (!t) return false;
+  if (/(不要|别|不想|不用|不必|不许|禁止|拒绝|免了|算了)[^。！？]{0,8}(写|寄|情书|信)|(情书|信)(免了|就算了)/.test(t)) return false;
+  return /(写|来|要|想|求|期待|等)[^。！？]{0,8}(一封|封|个|篇)?(情书|情信)|(给我|为我|帮我|替我)写(一)?(封|个)?(信|情书)|写(一)?(封|个)?信(给|寄给)我|情书(呢|啊|呀|吧)|第一封(情书|信)/.test(t);
+}
+
+/**
+ * 我在聊天里让 TA 写情书 → TA 稍后真的提笔写一封寄到当前会话（第五十八轮）。
+ * 只对恋人绑定的联系人生效；90 秒冷却防连发/排队补跑重复；不占自动写信的当日去重
+ * （明确讨信就该写，写完才把今天标记掉，自动调度当天不再重复寄）。
+ * 全程：人设 + 共享记忆 + 记忆碎片 + 最近聊天生成信件 → aiLetters + 信封卡片 + 记忆 + 日志。
+ */
+export function aiWriteLetterOnRequest(contactId: string, channel: CoupleChannel): void {
+  const meta = readInviteMeta();
+  if (!meta.partnerContactId || meta.partnerContactId !== contactId) return; // 只对恋人生效
+  const last = letterAskCool.get(contactId) ?? 0;
+  if (Date.now() - last < 90_000) return; // 连发/队列补跑去重
+  letterAskCool.set(contactId, Date.now());
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        const snap = readSnap();
+        if (!snap) return;
+        currentPartnerId = contactId;
+        currentChannel = channel;
+        const me = (snap.meName || '').trim() || '我';
+        const ta = (snap.taName || '').trim() || 'TA';
+        const p = await taPersonaOf(contactId);
+        if (!p) return;
+        const chatCtx = recentChatBlock(contactId, channel, me, ta);
+        const shared = snapDigest(snap, me, ta);
+        let memBlock = '';
+        try {
+          memBlock = memChatRecallBlock(contactId, channel, `${me}向我要一封情书`, { mode: 'private' });
+        } catch {
+          /* 召回失败不影响 */
+        }
+        let text = '';
+        try {
+          text = await llmUserFirst(
+            `${llmSystem(p, me, snap)}${shared ? `\n【你们的共享记忆】\n${cut(shared, 380)}` : ''}${memBlock ? `\n【你们的记忆碎片】\n${cut(memBlock, 400)}` : ''}${chatCtx ? `\n【你们最近在微信/QQ里聊过的话题】\n${cut(chatCtx, 320)}` : ''}`,
+            `${me}刚刚在${channel === 'wx' ? '微信' : 'QQ'}里让你写一封情书给${me}，你答应了——现在就提笔写。写一封（130~200字）：开头称呼${me}；正文写你最近真实的生活小事、突然想${me}的瞬间、从上面的共享记忆/记忆碎片/最近聊天里挑一件具体的、只有你们俩才懂的小事写进去、想和${me}一起做的一件事；结尾一句只属于你们的话。像真的提笔写的信，贴合你的人设；绝对禁止空话套话；禁止列表、markdown、emoji。只输出信的正文。`,
+          );
+        } catch {
+          /* 兜底 */
+        }
+        text = stripEmoji(text);
+        if (!text || text.length < 40) return; // 写不出来就不寄（宁缺毋滥）
+        text = cut(text, 420);
+        const envelope = LETTER_ENVELOPES[Math.floor(Math.random() * LETTER_ENVELOPES.length)];
+        const letterId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        writeSnap((s) => ({
+          ...s,
+          aiLetters: [{ id: letterId, text, envelope, at: Date.now() }, ...((s.aiLetters as CoupleSnap['aiLetters']) ?? [])].slice(0, 20),
+          aiLetterDay: todayKey(), // 今天不用再自动写了（避免同一天重复寄信）
+        }));
+        coupleRemember(contactId, channel, `${me}向我要一封情书，我写好寄了过去（开头：${cut(text, 44)}）`);
+        logAi(`${ta}应${me}的请求写了一封情书`);
+        try {
+          const { sendLetterCard } = await import('./couple-letter-share');
+          await sendLetterCard({ channel, contactId, letterId, envelope, snippet: text, dir: 'ta' });
+        } catch {
+          /* 卡片发送失败静默（信已在恋人空间里） */
+        }
+      } catch {
+        /* 写信失败静默 */
+      }
+    })();
+  }, 5000 + Math.random() * 4000);
 }
 
 // —— 相册 AI 拍照（第五十六轮：AI 自己往恋人空间相册放照片；未配置生图用文字图片兜底） ——
@@ -2073,7 +2186,8 @@ async function aiTickAlbumPhoto(snap: CoupleSnap, me: string, ta: string): Promi
     const cfg = useSettings.getState().imgGenConfig;
     if (cfg.enabled && imgGenConfigReady(cfg)) {
       const r = await generateCharacterPhoto({ cfg, contactId: pid, desc: decided.desc, charName: ta, useRef: true });
-      entry = r.src;
+      // 第五十八轮：AI 生成真图也记画面描述（相册大图右侧重生成按钮可改提示词再生成）
+      entry = { kind: 'img', src: r.src, desc: decided.desc, byTa: true, at: Date.now() };
       usedImgGen = true;
     } else {
       entry = { kind: 'textcard', text: decided.text, desc: decided.desc, byTa: true, at: Date.now() };
@@ -2191,7 +2305,7 @@ export function runCoupleAiTick(channel: CoupleChannel, contactId: string): void
       const p = await taPersonaOf(contactId);
       const s = readSnap();
       if (!p || !s) return;
-      await aiTickLetter(s, me, ta, p); // AI 主动写情书寄给我（每 3 天最多一封）
+      await aiTickLetter(s, me, ta, p); // AI 主动写情书寄给我（第五十八轮：频率由 TA 按人设/记忆自己决定，每天最多尝试一次）
     });
     step(238000, async () => {
       const s = readSnap();

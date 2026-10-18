@@ -20648,3 +20648,22 @@ Stage Summary:
 - 五项反馈全部修复并浏览器实测通过；commit fa3beae 已推送 GitHub（be9046d..fa3beae）
 - 关键决策：①文字图片 desc/text 分工——画面即卡片内容、附言进留言区（信息不丢且视角天然正确）；②拍摄者视角修在 aiCommentOnPhoto 场景层而非调用点散改——byTa/knownDesc 参数一处覆盖 AI 生成/文字图片/升级替换全部路径；③「生成」按钮常驻（未配置给引导）符合「以后配置了就能用」的预期；④升级模式复用 AI 拍弹层（upgIdx 分支）而非独立 UI，代码增量最小
 - 涉及文件：src/lib/ios/couple-ai.ts（CoupleTextPhoto 注释/aiDecideCouplePhoto 文案分工/aiCommentOnPhoto+Lazy byTa/aiTickAlbumPhoto 附言种子/aiTickLetter 共享记忆/删 aiComposeLetterForMe）、src/components/apps/couple-space.tsx（封面+瓦片+大图只显示画面/生成按钮+升级弹层/AI拍 FAB 右下角/删 AI 帮我写）
+
+---
+Task ID: 4
+Agent: main (Z.ai Code)
+Task: 第五十八轮：情书频率改 AI 自主决定 + 聊天讨情书 AI 真写 + 相册生成图右侧「重生成图标」（无文字、可改提示词再生成）
+
+Work Log:
+- 情书频率：aiTickLetter 删掉「距上封不足 3 天不写」的硬间隔——改为单轮 LLM 自主决定：注入人设+共享记忆+记忆碎片+最近聊天+上一封信距今几天，TA 自己判断今天想不想写（write=true 并把信写好 / write=false 宁缺毋滥）；aiLetterDay 语义改为「今天已尝试过」（每天最多尝试一次，写不写由 TA 心情决定）
+- 聊天讨信：couple-ai.ts 新增 coupleLetterAskHit（写情书/给我写封信/来封情书/情书呢…正则 + 否定守卫）与 aiWriteLetterOnRequest(contactId, channel)——只对恋人绑定联系人生效、90 秒冷却防连发/队列补跑、延时 5~9s 像真的去写：人设+共享记忆+记忆碎片+最近聊天生成信件 → aiLetters + 信封卡片发进当前会话 + coupleRemember + aiLetterDay 标记；wechat.tsx / qq.tsx 的 runAiTurn 在 base 组装后检测我最新一条文字消息（含语音转写），命中即触发
+- 相册重生成：新增 CoupleGenPhoto 类型（kind:'img' + src + desc + byTa + at）与 isGenPhoto/photoSrc 助手，CouplePhotoEntry 三态；genRealPhoto（手动 AI 拍）与 aiTickAlbumPhoto（AI 主动放照）生成的真图都记成卡片携带 desc
+- 大图右侧重生成按钮：删掉文字图片卡片内的「生成」文字按钮（用户要求无「生成」两字标签），改为大图查看层 图片/卡片右面的圆形 Sparkles 图标按钮（44px、无文字、aria-label=重新生成这张照片）；文字图片与 AI 生成真图显示（我上传的照片不显示），点击进入升级弹层：预填当时提示词可自由修改（自定义提示词）+「AI 想画面」+「生成照片」原位替换
+- 渲染适配：相册封面/网格瓦片/大图全部走 photoSrc（兼容旧字符串照片）；网格点击 TA 留言对 AI 真图也带 byTa+knownDesc（拍摄者视角，不识图）
+- 校验：tsc 定向检查 5 个改动文件零错误；agent-browser 端到端实测——创建机主 USER 账号登录微信→发「写封情书给我吧」→TA 自然回复+寄来新情书（内容贴合人设记忆与刚才聊的逛花店话题）→点信封直达信件页 ✓；相册文字图片大图只显示画面+「小暖 拍的」归属+右侧 Sparkles 图标 ✓；点图标弹层预填提示词可改 ✓；AI拍按钮右下角 ✓
+- dev.log 无新增错误（仅原仓库自带 instrumentation 警告）
+
+Stage Summary:
+- 三项新反馈全部实现并浏览器实测通过：①情书频率 = AI 按人设/记忆/近况自己决定（无固定间隔）；②聊天里讨情书 TA 真的写好寄到会话（信封卡片）；③相册 AI 生成图（含文字图片升级后）大图右侧有重生成图标（纯图标无文字标签），提示词可自定义后原位再生成
+- 关键决策：①讨信走「正则意图检测 + 定向写信管线」而非聊天动作标记——普通回复照常（TA 先应声）+ 信件异步寄到，改动面小且 UX 自然；②真图 desc 随照片落盘（CoupleGenPhoto）——重生成提示词的持久化基础，AI 主动放照同享；③每天一次尝试上限保留（防 LLM 每次打开都调模型），但写不写完全交给人设化的 AI 判断
+- 涉及文件：src/lib/ios/couple-ai.ts（CoupleGenPhoto/isGenPhoto/photoSrc/aiTickLetter 重写/coupleLetterAskHit/aiWriteLetterOnRequest/aiTickAlbumPhoto 真图卡片）、src/components/apps/couple-space.tsx（大图右侧重生成图标/删卡片内「生成」文字按钮/渲染与留言适配）、src/components/apps/wechat.tsx、src/components/apps/qq.tsx（runAiTurn 讨信钩子）
