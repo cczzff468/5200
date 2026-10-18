@@ -20628,3 +20628,23 @@ Stage Summary:
 - 三个需求全部实现并浏览器实测通过；未配置生图时全部降级文字图片，配置后自动出现真图/改提示词/升级入口
 - 顺手修复了影响所有 couple-ai 行为的聊天记录键 bug
 - 待提交推送
+
+---
+Task ID: 3
+Agent: main (Z.ai Code)
+Task: 第五十七轮：用户反馈修复——文字图片只显示画面 / 留言拍摄者视角 / 文字旁「生成」按钮 / AI拍移右下角 / 删情书「AI 帮我写」
+
+Work Log:
+- 文字图片「只显示画面」：CoupleTextPhoto 语义重分工（desc=画面，卡片唯一显示内容；text=随照附言）；网格瓦片/大图卡片/相册封面三处渲染点全部改为只显示 desc（旧数据无 desc 回退 text），删掉「文字图片」角标与「画面：」脚注
+- 留言视角 bug 根因：aiCommentOnPhoto 的 system 场景写死「${me}刚上传了一张新照片」→ TA 给自己拍的照片留言时夸「凡凡宝宝拍得真好看」；修复：新增 opts.byTa/knownDesc——TA 自己拍的照片走拍摄者视角提示词（说拍到了什么/拍时在想什么，禁止夸对方拍照技术），knownDesc 直接用画面描述不再识图
+- 附言去处：aiTickAlbumPhoto（AI 主动放照）与 genTextPhoto（手动 AI 拍）生成后把 decided.text/r.text 作为 TA 的第一条留言写进 album:{id}:{idx} 线程（writeSnap/patch comments），附言不再丢失
+- 「生成」按钮：文字图片大图卡片右下角新增「生成」（未配置生图→toast 引导设置；已配置→升级弹层 upgIdx 模式：预填 desc 可改 + 「AI 想画面」重想 + 「生成照片」替换该文字图片）；删除原整宽「用 AI 生成这张照片」按钮与 upgradeTextPhoto（genRealPhoto 统一处理追加/替换两模式，TA 留言均走拍摄者视角）
+- AI拍按钮：从详情页标题栏移除，改为右下角悬浮胶囊（min-h-full flex-col + mt-auto + sticky bottom-4，内容短时贴底、长时随滚动始终可见）
+- 情书：LettersPage 删除「AI 帮我写」按钮/aiWriting/aiOverwriteArmed/aiWrite，couple-ai.ts 删除 aiComposeLetterForMe；aiTickLetter 补 snapDigest 共享记忆注入（纪念日/相册/日记/印象/协议）+ 提示词强调从共享记忆/记忆碎片/最近聊天挑具体小事
+- 端到端实测（agent-browser，种子 CHAR 小暖+accepted 状态）：瓦片/大图只显示画面 ✓；FAB 右下角 ✓；种子照片打开后 TA 自动留言「看到这束花就想到你…」拍摄者视角 ✓；AI 拍弹层→文字图片生成（LLM）→新瓦片只显示画面+附言自动进留言区 ✓；未配置生图点「生成」→引导 toast ✓；种子假 imgGenConfig 后「生成」→升级弹层（预填 desc 可改）→假端点报错兜底显示 fetch failed ✓；情书编辑页只剩 存草稿/下一步 ✓
+- 校验：bunx tsc --noEmit 零错误；bunx eslint 两文件零问题；git commit fa3beae + push origin main 成功
+
+Stage Summary:
+- 五项反馈全部修复并浏览器实测通过；commit fa3beae 已推送 GitHub（be9046d..fa3beae）
+- 关键决策：①文字图片 desc/text 分工——画面即卡片内容、附言进留言区（信息不丢且视角天然正确）；②拍摄者视角修在 aiCommentOnPhoto 场景层而非调用点散改——byTa/knownDesc 参数一处覆盖 AI 生成/文字图片/升级替换全部路径；③「生成」按钮常驻（未配置给引导）符合「以后配置了就能用」的预期；④升级模式复用 AI 拍弹层（upgIdx 分支）而非独立 UI，代码增量最小
+- 涉及文件：src/lib/ios/couple-ai.ts（CoupleTextPhoto 注释/aiDecideCouplePhoto 文案分工/aiCommentOnPhoto+Lazy byTa/aiTickAlbumPhoto 附言种子/aiTickLetter 共享记忆/删 aiComposeLetterForMe）、src/components/apps/couple-space.tsx（封面+瓦片+大图只显示画面/生成按钮+升级弹层/AI拍 FAB 右下角/删 AI 帮我写）
