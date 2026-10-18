@@ -20697,3 +20697,16 @@ Work Log:
 
 Stage Summary:
 - 两项微调完成并实测通过；涉及文件 src/components/apps/couple-space.tsx（查看层顶栏布局/AI拍按钮内容）
+
+---
+Task ID: 7
+Agent: main (Z.ai Code)
+Task: 第六十一轮：用户反馈修复——查看层右上角按钮挡住状态栏
+
+Work Log:
+- 根因：查看层顶栏容器「flex h-[54px] items-center justify-end pt-[54px]」——总高 54px + 上内边距 54px → 内容区高度为 0，两个按钮垂直居中时中心点落在 y=54、按钮上缘约 y=34，正好压进状态栏（用户截图：✦ 与 🗑 与电池/信号图标重叠）；此布局缺陷从上一轮只有删除按钮时就存在，加第二个按钮后更明显
+- 修复：顶栏改为「flex items-center justify-end gap-2.5 px-4 pb-2.5 pt-[54px]」（去掉固定高度）——按钮行整体排在状态栏下方，与底层相册页返回/标题行同一水平带（y=54~94）
+- 验证：tsc --noEmit 零错误；agent-browser 实测——✦重生成 与 🗑删除 清晰位于状态栏（03:06/100% 电池）下方、与「拍给TA看」标题行对齐，不再有任何遮挡；点击重生成仍正常弹提示/弹层
+
+Stage Summary:
+- 状态栏遮挡修复完成并实测通过；涉及文件 src/components/apps/couple-space.tsx（查看层顶栏布局一处）

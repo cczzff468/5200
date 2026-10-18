@@ -12119,8 +12119,9 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
       {/* 大图查看 + 删除 + 照片留言区（第十轮：TA 会来留言，我可以回复，多轮往返） */}
       {view != null && (
         <div className="absolute inset-0 z-40 flex flex-col bg-black/90" onClick={() => setView(null)}>
-          {/* 第六十一轮：重生成按钮移到右上角（与删除并排；点开可改提示词再生成） */}
-          <div className="flex h-[54px] items-center justify-end gap-2.5 px-4 pt-[54px]">
+          {/* 第六十一轮：重生成按钮移到右上角（与删除并排；点开可改提示词再生成）
+              第六十二轮：修顶栏布局——原 h-[54px]+pt-[54px] 内容区高度为 0，按钮垂直居中上溢挡住状态栏；改为按钮行整体排在状态栏下方（与返回/标题行同一水平带） */}
+          <div className="flex items-center justify-end gap-2.5 px-4 pb-2.5 pt-[54px]">
             {canRegen && (
               <button
                 type="button"
