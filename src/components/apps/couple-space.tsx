@@ -12104,22 +12104,38 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
             })}
           </div>
         )}
-        {/* 第六十轮：AI 拍悬浮按钮——毛玻璃风格（半透白 + 背景模糊 + 白描边）；打开大图查看时隐藏（此前隔着半透明黑罩露出，像个幽灵按钮） */}
+        {/* 第六十一轮：AI 拍悬浮按钮——毛玻璃风格，去掉图标只留「AI拍」文字；打开大图查看时隐藏 */}
         {view == null && (
           <button
             type="button"
             onClick={openGenSheet}
             data-testid="album-ai-shot"
-            className="sticky bottom-4 z-30 ml-auto mt-auto flex items-center gap-1.5 self-end rounded-full border border-white/70 bg-gradient-to-b from-white/75 to-white/45 px-[18px] py-3 text-[14px] font-semibold text-[#3c3c42] shadow-[0_10px_30px_rgba(70,60,90,0.18)] backdrop-blur-2xl backdrop-saturate-150 transition-all active:scale-95"
+            className="sticky bottom-4 z-30 ml-auto mt-auto flex items-center self-end rounded-full border border-white/70 bg-gradient-to-b from-white/75 to-white/45 px-5 py-3 text-[14px] font-semibold text-[#3c3c42] shadow-[0_10px_30px_rgba(70,60,90,0.18)] backdrop-blur-2xl backdrop-saturate-150 transition-all active:scale-95"
           >
-            <Sparkles className="h-[17px] w-[17px] text-[#9b8bb4]" /> AI拍
+            AI拍
           </button>
         )}
       </div>
       {/* 大图查看 + 删除 + 照片留言区（第十轮：TA 会来留言，我可以回复，多轮往返） */}
       {view != null && (
         <div className="absolute inset-0 z-40 flex flex-col bg-black/90" onClick={() => setView(null)}>
-          <div className="flex h-[54px] items-center justify-end px-4 pt-[54px]">
+          {/* 第六十一轮：重生成按钮移到右上角（与删除并排；点开可改提示词再生成） */}
+          <div className="flex h-[54px] items-center justify-end gap-2.5 px-4 pt-[54px]">
+            {canRegen && (
+              <button
+                type="button"
+                aria-label="重新生成这张照片"
+                title="重新生成（提示词可改）"
+                disabled={genBusy === 'gen'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openUpgradeSheet();
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white transition-transform active:scale-95 disabled:opacity-50"
+              >
+                {genBusy === 'gen' ? <Loader2 className="h-5 w-5 animate-spin" /> : <Sparkles className="h-5 w-5" />}
+              </button>
+            )}
             <button
               type="button"
               onClick={(e) => {
@@ -12132,8 +12148,8 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
               <Trash2 className="h-5 w-5" />
             </button>
           </div>
-          {/* 第五十八轮：重生成图标按钮贴在图片/卡片右面（无文字标签；点开可改提示词再生成） */}
-          <div className="flex min-h-0 flex-1 items-center justify-center gap-3 px-5 pb-3">
+          {/* 第六十一轮：图片/卡片居中展示（重生成按钮已移右上角，不再贴图右侧） */}
+          <div className="flex min-h-0 flex-1 items-center justify-center px-5 pb-3">
             <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center">
               {curText ? (
                 <div className="w-full max-w-[340px] rounded-[22px] bg-white p-6 shadow-[0_24px_70px_rgba(0,0,0,0.45)]" onClick={(e) => e.stopPropagation()}>
@@ -12147,21 +12163,6 @@ function AlbumDetail({ state, patch, albumId, showToast, close }: { state: Coupl
                 <img src={photoSrc(curImg)} alt="查看照片" className="max-h-full max-w-full object-contain" draggable={false} onClick={(e) => e.stopPropagation()} />
               ) : null}
             </div>
-            {canRegen && (
-              <button
-                type="button"
-                aria-label="重新生成这张照片"
-                title="重新生成（提示词可改）"
-                disabled={genBusy === 'gen'}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openUpgradeSheet();
-                }}
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/15 text-white shadow-lg backdrop-blur transition-transform active:scale-95 disabled:opacity-50"
-              >
-                {genBusy === 'gen' ? <Loader2 className="h-[19px] w-[19px] animate-spin" /> : <Sparkles className="h-[19px] w-[19px]" />}
-              </button>
-            )}
           </div>
           <div className="max-h-[38%] shrink-0 overflow-y-auto px-3 pb-6" onClick={(e) => e.stopPropagation()}>
             <CommentThread state={state} patch={patch as unknown as PatchFn} threadKey={`album:${album.id}:${view}`} hint={`和 ${taName} 聊聊这张照片`} dark testId={`album-comment-${view}`} />
