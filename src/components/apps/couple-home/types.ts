@@ -1,53 +1,69 @@
 'use client';
 
 /**
- * 情侣小家（客厅篇）—— 类型定义
+ * 情侣小家 —— 类型定义（2.5D 卡通写实版）
  *
- * 世界坐标：原点在房间左上，x 向右、y 向下；所有可摆放物（家具/小人）的 (x, y)
- * 一律表示「底部中心」（脚底/接地线），渲染层级 zIndex = round(y)，
- * 由此自然形成「越靠下越靠前」的俯视深度关系。
+ * 视角模型（Adorable Home 式正面 2.5D）：
+ *  - 房间 = 背景墙（上）+ 大地板（下），玩家以「正面微俯视」观看；
+ *  - 世界坐标：原点在房间左上，x 向右、y 向下；
+ *  - 所有可摆放物（家具/小人）的 (x, y) 一律表示「底部中心」（贴地线）；
+ *  - 渲染层级 zIndex = round(y)：越靠下（离镜头越近）越靠前，天然 2.5D 深度。
+ *
+ * 两个模式：
+ *  - live（生活模式）：摇杆操控小人 + 镜头跟随小人 + 点家具交互；
+ *  - edit（编辑/装修模式）：上帝视角看全屋、拖拽家具、商店购买、翻转/删除、昼夜切换。
  */
 
-/** 家具种类（对应 catalog 里的定义） */
+/** 家具种类（catalog 的 key） */
 export type FurnitureKind =
   | 'sofa'
   | 'sofaLong'
   | 'coffeeTable'
   | 'rug'
-  | 'tvCabinet'
+  | 'tvStand'
   | 'tv'
-  | 'lampRound'
-  | 'lampSquare'
-  | 'wardrobe'
-  | 'washer'
-  | 'fridge'
-  | 'plant'
-  | 'plantSmall'
+  | 'recordPlayer'
   | 'speaker'
   | 'sideTable'
+  | 'lampFloor'
+  | 'lampTable'
+  | 'plantMonstera'
+  | 'plantSmall'
+  | 'pillow'
+  | 'cat'
   | 'trashcan'
-  | 'tableRound'
-  | 'chair'
-  | 'box'
   | 'books'
-  | 'pillow';
+  | 'box'
+  | 'bed'
+  | 'nightstand'
+  | 'wardrobe'
+  | 'tableDining'
+  | 'chair'
+  | 'fridge'
+  | 'stove'
+  | 'washer';
 
-/** 单件家具实例（持久化的最小单元） */
+/** 家具分类（商店栏的 tab） */
+export type FurnCategory = 'all' | 'sofa' | 'table' | 'bed' | 'lamp' | 'plant' | 'appliance' | 'decor';
+
+/** 单件家具实例（持久化最小单元） */
 export interface FurnitureItem {
   id: string;
   kind: FurnitureKind;
   /** 世界坐标：底部中心 */
   x: number;
   y: number;
-  /** 家具私有状态（开/关、衣物等） */
+  /** 翻转（镜像朝向） */
+  flip?: boolean;
+  /** 家具私有状态（开关/门/衣物等） */
   st: FurnitureState;
 }
 
 /** 家具状态（按需可选字段） */
 export interface FurnitureState {
-  /** 灯 / 电视：开 = true */
+  /** 灯 / 电视 / 唱机：开 = true */
   on?: boolean;
-  /** 衣橱 / 纸箱：门开 = true */
+  /** 衣橱 / 冰箱 / 纸箱：门开 = true */
   open?: boolean;
   /** 衣橱 / 洗衣机内的衣物 id 列表 */
   clothes?: string[];
@@ -55,35 +71,36 @@ export interface FurnitureState {
   washing?: boolean;
   /** 洗衣机：洗好待取 */
   washDone?: boolean;
-  /** 洗衣机：本次运转开始时间戳（算进度用） */
+  /** 洗衣机：本次运转开始时间戳 */
   washStart?: number;
 }
 
 /** 小人身份 */
 export type CharId = 'me' | 'partner';
 
-/** 小人状态 */
+/** 小人朝向（决定贴图：背面=向上走远离镜头 / 正面=向下走朝镜头 / 侧向=左右） */
+export type CharDir = 'up' | 'down' | 'left' | 'right';
+
+/** 小人运行时状态 */
 export interface CharState {
   id: CharId;
   x: number;
   y: number;
-  /** 朝向（billboard 纸片人：翻转贴图即可） */
-  dir: 'left' | 'right';
+  dir: CharDir;
   moving?: boolean;
 }
 
-/** 小家整体持久化数据 */
+/** 小家整体持久化数据（服务端 JSON 快照） */
 export interface HomeState {
   furniture: FurnitureItem[];
-  chars: Record<CharId, CharState>;
-  /** 昼夜：true = 夜晚（夜晚房间变暗，灯具光晕更醒目） */
+  chars: Record<CharId, { x: number; y: number; dir: CharDir }>;
+  /** 昼夜：true = 夜晚 */
   night: boolean;
 }
 
-/** 衣物目录条目 */
+/** 衣物目录条目（衣橱/洗衣机流程用） */
 export interface ClothDef {
   id: string;
-  /** 展示 emoji（俯视小家里不画衣服贴图，用 emoji 徽章直观可爱） */
   emoji: string;
   name: string;
   color: string;
@@ -94,29 +111,36 @@ export interface CatalogEntry {
   kind: FurnitureKind;
   /** 贴图路径（关/默认态） */
   img: string;
-  /** 贴图路径（开门态；无则为 null） */
+  /** 贴图路径（开门态；无则 null） */
   imgOpen?: string;
-  /** 显示宽 px（世界坐标下）；高按贴图纵横比推算 */
+  /** 显示宽（世界 px）；高按贴图纵横比推算 */
   w: number;
-  /** 名称（浮层/气泡用） */
   name: string;
+  /** 商店分类 */
+  cat: FurnCategory;
+  /** 商店售价（金币）；0 = 免费的基础件 */
+  price: number;
   /** 交互能力 */
   acts: {
-    /** 点击开/关（灯、电视等） */
+    /** 点击开/关（灯、电视、唱机） */
     toggle?: boolean;
-    /** 可开门（衣橱、纸箱） */
+    /** 可开门（衣橱、冰箱、纸箱） */
     door?: boolean;
-    /** 洗衣机专用流程 */
+    /** 洗衣机专属流程 */
     washer?: boolean;
-    /** 点击仅弹跳+气泡反馈 */
+    /** 点击弹跳+气泡+少量金币 */
     playful?: boolean;
   };
-  /** 点击气泡文案（playful 家具） */
+  /** playful 家具的点击气泡文案 */
   quips?: string[];
-  /** 深度层级偏移（地毯等贴地物需要压在所有家具之下） */
+  /** 深度偏移（地毯等贴地物压在一切之下） */
   zBias?: number;
-  /** 灯具光晕半径（世界 px；仅灯类） */
+  /** 灯具光晕半径（世界 px，仅灯类/电视夜光） */
   glow?: number;
+  /** 夜晚自发光强度 0~1（灯罩/屏幕，越大夜光越亮） */
+  emissive?: number;
+  /** 是否可翻转（多数可；地毯/电视等对称物关闭以省 UI） */
+  flippable?: boolean;
 }
 
 /** 摇杆输出（归一化 -1~1） */
@@ -125,13 +149,14 @@ export interface JoyVec {
   dy: number;
 }
 
-/** 粒子（音符/爱心/泡泡反馈） */
+/** 粒子（爱心/音符/泡泡/金币反馈） */
 export interface Particle {
   id: number;
-  /** 世界坐标 */
   x: number;
   y: number;
   emoji: string;
-  /** 随机偏移相位（渲染时计算弧线） */
   seed: number;
 }
+
+/** 编辑模式选中操作 */
+export type EditAction = 'rotate' | 'delete';

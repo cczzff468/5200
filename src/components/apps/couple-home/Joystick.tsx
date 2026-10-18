@@ -5,11 +5,12 @@
  *
  * - 固定底座 + 摇杆头（半透明玻璃风，贴 iOS 手机壳审美）
  * - pointer 事件计算归一化方向向量（-1 ~ 1），通过回调实时上报
- * - 松手自动回正（framer-motion 弹簧），输出归零
- * - knob 拖出范围时按圆形边界 clamp，保持 360° 全方向
+ * - ⚠️ 手机壳整体缩放（桌面 ~0.57）：pointer 的 client 坐标是屏幕物理像素，
+ *   而本组件内部布局是 CSS 像素 —— 必须先除以 scale 换算回 CSS 系再算偏移。
+ * - 松手自动回正（framer-motion 弹簧），输出归零；knob 拖出范围按圆形边界 clamp
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { memo, useCallback, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 
 export interface JoystickProps {
@@ -18,11 +19,11 @@ export interface JoystickProps {
   size?: number;
 }
 
-export default function Joystick({ onVec, size = 128 }: JoystickProps) {
+function JoystickInner({ onVec, size = 128 }: JoystickProps) {
   const [knob, setKnob] = useState({ x: 0, y: 0 });
   const [active, setActive] = useState(false);
-  const centerRef = useRef<{ cx: number; cy: number } | null>(null);
-  const R = size / 2 - 22; // knob 最大半径
+  const centerRef = useRef<{ cx: number; cy: number; scale: number } | null>(null);
+  const R = size / 2 - 22; // knob 最大半径（CSS px）
 
   const down = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
@@ -33,10 +34,12 @@ export default function Joystick({ onVec, size = 128 }: JoystickProps) {
         /* 非活跃指针（合成事件）安全忽略 */
       }
       const r = e.currentTarget.getBoundingClientRect();
-      centerRef.current = { cx: r.left + r.width / 2, cy: r.top + r.height / 2 };
+      // 手机壳缩放：屏幕物理 px → 组件 CSS px 的换算因子
+      const scale = r.width > 0 ? r.width / size : 1;
+      centerRef.current = { cx: r.left + r.width / 2, cy: r.top + r.height / 2, scale };
       setActive(true);
     },
-    [],
+    [size],
   );
 
   const move = useCallback(
@@ -44,8 +47,9 @@ export default function Joystick({ onVec, size = 128 }: JoystickProps) {
       e.stopPropagation();
       const c = centerRef.current;
       if (!c) return;
-      let dx = e.clientX - c.cx;
-      let dy = e.clientY - c.cy;
+      // 屏幕 px → CSS px（除以手机壳 scale），再计算与中心的偏移
+      let dx = (e.clientX - c.cx) / c.scale;
+      let dy = (e.clientY - c.cy) / c.scale;
       const len = Math.hypot(dx, dy);
       if (len > R) {
         dx = (dx / len) * R;
@@ -123,3 +127,5 @@ export default function Joystick({ onVec, size = 128 }: JoystickProps) {
     </div>
   );
 }
+
+export default memo(JoystickInner);

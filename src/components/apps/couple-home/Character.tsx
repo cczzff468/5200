@@ -1,70 +1,43 @@
 'use client';
 
 /**
- * 情侣小家 —— 小人（billboard 纸片人）
+ * 情侣小家 —— 小人（2.5D 定向纸片人）
  *
- * - Kenney Toon Characters（男红衣 / 女蓝衣），idle + run 3 帧走路循环
- * - 左右移动翻转贴图；上下移动靠纵深缩放（上远小下近大）营造俯视透视
- * - 移动中 130ms/帧 播 run 序列，静止播 idle；脚下椭圆阴影贴地
+ * - 贴图：AI 生成 Adorable Home 式 Q 版小人 ×（我=男生 / TA=女生）×（正面/背面/侧面）
+ * - 朝向映射：up→背面（远离镜头）/ down→正面（朝镜头）/ left→左侧面 / right=左侧面镜像
+ * - 走路动画：CSS bob（上下轻弹 + 微倾斜），贴图单帧 + 摆动足够可爱
+ * - 脚下椭圆阴影贴地；zIndex = round(y) 参与世界深度排序
  */
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo } from 'react';
 import type { CharState } from './types';
-import { CHAR_H, WORLD_H, WORLD_W, PIX } from './catalog';
+import { CHAR_H } from './catalog';
 
-const SHEET: Record<'me' | 'partner', { idle: string; run: [string, string, string] }> = {
+const SHEET: Record<'me' | 'partner', { front: string; back: string; side: string }> = {
   me: {
-    idle: '/home/chars/character_malePerson_idle.png',
-    run: [
-      '/home/chars/character_malePerson_run0.png',
-      '/home/chars/character_malePerson_run1.png',
-      '/home/chars/character_malePerson_run2.png',
-    ],
+    front: '/home/chars/me_front.webp',
+    back: '/home/chars/me_back.webp',
+    side: '/home/chars/me_side.webp',
   },
   partner: {
-    idle: '/home/chars/character_femalePerson_idle.png',
-    run: [
-      '/home/chars/character_femalePerson_run0.png',
-      '/home/chars/character_femalePerson_run1.png',
-      '/home/chars/character_femalePerson_run2.png',
-    ],
+    front: '/home/chars/ta_front.webp',
+    back: '/home/chars/ta_back.webp',
+    side: '/home/chars/ta_side.webp',
   },
 };
 
 export interface CharacterProps {
   ch: CharState;
-  /** 世界→视口换算由外层 transform 完成，这里只负责世界内定位 */
-  scaleBase?: number;
+  /** 编辑模式下隐藏小人（上帝视角装修） */
+  hidden?: boolean;
 }
 
-function CharacterInner({ ch, scaleBase = 1 }: CharacterProps) {
-  const [frame, setFrame] = useState(0);
-  const raf = useRef<number>(0);
-
-  // 走路帧动画（只在 moving 时推进；静止帧渲染时直接显示 idle 贴图）
-  useEffect(() => {
-    if (!ch.moving) return;
-    let last = performance.now();
-    const tick = (t: number) => {
-      if (t - last > 130) {
-        last = t;
-        setFrame((f) => (f + 1) % 3);
-      }
-      raf.current = requestAnimationFrame(tick);
-    };
-    raf.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf.current);
-  }, [ch.moving]);
-
-  // 深度缩放：上(0)→0.84，下(WORLD_H)→1.05，配合 z 排序产生俯视纵深
-  const depth = useMemo(() => {
-    const t = Math.min(1, Math.max(0, ch.y / WORLD_H));
-    return (0.84 + t * 0.21) * scaleBase;
-  }, [ch.y, scaleBase]);
-
-  const src = ch.moving ? SHEET[ch.id].run[frame] : SHEET[ch.id].idle;
-  const h = Math.round(CHAR_H * depth);
-  const w = Math.round((96 / 128) * h);
+function CharacterInner({ ch, hidden }: CharacterProps) {
+  if (hidden) return null;
+  const sheet = SHEET[ch.id];
+  const isSide = ch.dir === 'left' || ch.dir === 'right';
+  const src = ch.dir === 'up' ? sheet.back : ch.dir === 'down' ? sheet.front : sheet.side;
+  const flip = ch.dir === 'right';
 
   return (
     <div
@@ -74,59 +47,47 @@ function CharacterInner({ ch, scaleBase = 1 }: CharacterProps) {
         left: ch.x,
         top: ch.y,
         transform: 'translate(-50%, -100%)',
-        zIndex: Math.round(ch.y),
-        width: w,
-        height: h,
+        zIndex: Math.round(ch.y) + 5,
+        height: CHAR_H,
+        width: (CHAR_H * 3) / 4, // 宽按 3:4 纵横比预留，img 自身等比缩放居中
+        visibility: hidden ? 'hidden' : undefined,
       }}
     >
       {/* 脚下阴影（贴地椭圆，不随走路帧抖） */}
       <div
         className="absolute left-1/2 -translate-x-1/2 rounded-[50%]"
         style={{
-          bottom: -6,
-          width: w * 0.52,
-          height: w * 0.22,
-          background: 'rgba(40,44,52,0.26)',
-          filter: 'blur(2px)',
+          bottom: -7,
+          width: 52,
+          height: 16,
+          background: 'rgba(64,52,40,0.22)',
+          filter: 'blur(3px)',
         }}
       />
       <img
         src={src}
-        alt=""
+        alt={ch.id === 'me' ? '我' : 'TA'}
         draggable={false}
-        className="h-full w-full"
+        className="h-full w-full object-contain"
         style={{
-          imageRendering: PIX,
-          transform: ch.dir === 'left' ? 'scaleX(-1)' : undefined,
-          // 上下移动的轻微摆动（走路弹性）
-          animation: ch.moving ? 'char-bob 0.26s ease-in-out infinite' : undefined,
+          transform: flip ? 'scaleX(-1)' : undefined,
+          animation: ch.moving ? 'char-bob 0.34s ease-in-out infinite' : undefined,
+          filter: 'drop-shadow(0 4px 6px rgba(60,48,36,0.18))',
         }}
       />
-    </div>
-  );
-}
-
-/** 名牌（世界内跟随，配合 camera 一起被裁剪） */
-export function CharBadge({ ch, label }: { ch: CharState; label: string }) {
-  if (ch.x < -80 || ch.x > WORLD_W + 80) return null;
-  return (
-    <div
-      className="pointer-events-none absolute select-none"
-      style={{
-        left: ch.x,
-        top: ch.y,
-        transform: 'translate(-50%, -100%)',
-        zIndex: Math.round(ch.y) + 1,
-      }}
-    >
+      {/* 名牌 */}
       <div
-        className="mb-[104px] whitespace-nowrap rounded-full px-2.5 py-[3px] text-[11px] font-semibold text-white"
+        className="pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-2.5 py-[3px] text-[11px] font-semibold text-white"
         style={{
-          background: ch.id === 'me' ? 'rgba(226,106,150,0.85)' : 'rgba(96,144,178,0.85)',
+          top: -26,
+          background:
+            ch.id === 'me'
+              ? 'linear-gradient(135deg, rgba(226,106,150,0.92), rgba(214,88,128,0.92))'
+              : 'linear-gradient(135deg, rgba(112,158,196,0.92), rgba(96,144,178,0.92))',
           boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
         }}
       >
-        {label}
+        {ch.id === 'me' ? '我' : 'TA'}
       </div>
     </div>
   );

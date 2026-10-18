@@ -89,3 +89,15 @@ model Contact {
   @@index([kind])
   @@index([workspaceId])
 }
+/// 情侣小家：每个浏览器工作区一行的完整家快照（家具实例/小人/昼夜，JSON），金币单独存列
+model CoupleHome {
+  /// 浏览器工作区 ID（X-Workspace-Id 请求头）
+  workspaceId String   @id
+  /// 家数据 JSON（HomeState：furniture 数组 + chars 位置 + night）
+  data        String
+  /// 装修金币（交互赚币 + 买家具扣币）
+  coins       Int      @default(0)
+  /// 服务端版本号（乐观并发：客户端带上匹配的 rev 才允许覆盖，防旧数据回写）
+  rev         Int      @default(0)
+  updatedAt   DateTime @updatedAt
+}

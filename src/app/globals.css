@@ -701,3 +701,36 @@
   60% { opacity: 0.72; }
   80% { opacity: 0.95; }
 }
+
+/* ===================== 情侣小家 2.5D ===================== */
+@keyframes char-bob {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-5px) rotate(-1.2deg); }
+}
+@keyframes ch-furn-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes ch-tv-play {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes ch-float-up {
+  0% { transform: translate(-50%, 0) scale(0.7); opacity: 0; }
+  15% { transform: translate(-50%, -12px) scale(1.1); opacity: 1; }
+  100% { transform: translate(-50%, -64px) scale(1); opacity: 0; }
+}
+@keyframes ch-twinkle-star {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.95; }
+}
+@keyframes ch-coin-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.25); }
+  100% { transform: scale(1); }
+}
+@keyframes ch-cloud-drift {
+  0% { transform: translateX(-8%); }
+  100% { transform: translateX(8%); }
+}

@@ -20784,3 +20784,31 @@ Stage Summary:
 - 情侣小家·客厅上线：恋人在恋人空间「发现→情侣小家」进入
 - 世界 1080x1400、21 种家具、8 件衣物、摇杆+寻路双操控、视角跟随+滑动自由切换、昼夜系统、全部状态 IndexedDB 持久化
 - 待办（下一轮可选）：卧室/厨房/阳台扩展、电视播放真实照片轮播、家具商店购买解锁、双人实时同步
+
+---
+Task ID: 60
+Agent: 主协调者 (Z.ai Code)
+Task: 情侣小家 2.0 —— 「卡通写实 2.5D」全面重制（Adorable Home 风 + 第一人称跟随镜头 + 编辑模式 + 全屏 + Prisma 持久化）
+
+Work Log:
+- 素材生产管线 v1→v3（洋红→洪泛→蓝幕）：38 张 AI 生成贴图（32 家具 + 6 人物方向），全部换纯蓝幕 #1E66FF 生成（与奶油/木色/粉色/绿植色系完全正交）；`tools/gen-home-assets.mjs`（串行+429退避重试+增量续跑）与 `tools/process-home-assets.mjs`（边框种子洪泛 + 局部连续性16 + 全局边框簇64 双约束 + 边缘羽化去预乘 + 裁切 + lanczos + WebP92/alphaQuality100 输出，共 1.9MB）；VLM 拼图审查 + 定向重生成 3 张问题贴图（冰箱/抱枕/女孩侧面）
+- 素材坑记录：① 模型把"纯洋红"画成粉色渐变 → 严格色距抠图 0 命中，粉底烙进贴图；② 洪泛只有局部连续性会穿透物体内渐变（ghost 化）；③ sharp 的 palette:true + 真实 resize 组合会丢 alpha 通道（3ch）——最终 WebP 输出绕开
+- Prisma：schema 新增 `CoupleHome`（workspaceId 主键 / data JSON / coins / rev 乐观并发）；`bun run db:push`
+- API `src/app/api/couple-home/route.ts`：GET 拉档案（无档案返 data:null 客户端播种默认布局）；POST 保存快照（rev 不匹配 409 回带服务端最新，客户端采纳）；action:reset 删档重播种；逐字段清洗（条数150/坐标4000/JSON 256KB/金币 1e6 钳制）；修复 flip 字段被 normalize 丢弃的 bug
+- 前端重写 `src/components/apps/couple-home/*`：
+  - types.ts：2.5D 正面视角坐标模型（底部中心锚点 + zIndex=round(y) 深度排序）、edit/live 双模式类型、FurnCategory 商店分类
+  - catalog.ts：26 种家具目录（贴图/宽/价格/分类/交互能力/光晕）+ 8 个商店 tab + 衣物目录 + 默认布局（大开间：客厅/餐厨/卧室/洗衣角，卧室整体右移避开摇杆遮挡区）+ 持久化（idb 即时缓存 + Prisma 对账 + 防抖推送 + 409 采纳）
+  - camState.ts（新）：镜头/视口共享状态；**修复手机壳整体 scale ~0.57 的系统性换算 bug**（view 量屏幕物理像素、世界用游戏 root CSS 像素，所有 clientToWorld/viewW 必须除以 scale*zoom）
+  - CoupleHome.tsx：CSS 房间（背景墙+墙裙+踢脚线+两扇昼夜窗+门+相框/挂钟/搁板墙饰+木地板+编辑网格）、rAF 游戏循环（摇杆+键盘 WASD 移动 300px/s、TA 漫游 AI、洗衣机 8s 计时、镜头 lerp 跟随 me@58% 屏高=第一人称跟随手感、自由拖动 2.6s 回跟、编辑模式 zoom 0.62 上帝视角）、夜光层（multiply 暗幕 + 灯具/电视 screen 光晕 + 电视开机动画彩屏）、顶部栏（返回/标题/金币/昼夜/全屏/装修开关）、编辑模式（网格+选中绿框锚点+浮动按钮 ✓翻转✕回收50%退款+底部商店分类+金币购买+重置布局二次确认）、粒子反馈、WardrobePanel/WasherPanel 衣物流转、Toast、首次提示（SSR 安全 localStorage）
+  - Furniture.tsx：宽定高随贴图自然比例（CSS auto 高 + motion x/y '-50%'/'-100%' 锚底，避开 framer transform 覆盖冲突）、生活模式短按交互/长按 340ms 拖拽 16px 吸附、编辑模式点选+按住即拖、开门换贴图（衣橱/冰箱/纸箱）、洗衣机 wobble+徽标、playful 家具气泡+赚金币 1-3
+  - Character.tsx：六方向贴图（我=男生/TA=女生 × 正面/背面/侧面）、走路 CSS bob 摆动、方向→贴图映射（up=背面远离镜头=第一人称跟随时看背影）、椭圆阴影+名牌
+  - Joystick.tsx：玻璃拟态摇杆；**修复 scale 换算**（屏幕物理 px ÷ 手机壳 scale → CSS px 再算偏移）
+- 全局 CSS 追加 keyframes：char-bob / ch-furn-bob / ch-tv-play / ch-float-up / ch-twinkle-star / ch-coin-pop / ch-cloud-drift
+- 浏览器 E2E 全流程验证（agent-browser 真实鼠标/键盘+VLM 截图审查）：解锁→主屏→恋人空间（IDB 种子联系人与 couple 状态走真实邀请流程→AI 4-11s 自动接受）→发现→情侣小家；摇杆走动+镜头跟随（背影/正面/侧面贴图切换）、电视开关（彩色动画屏+蓝光）、夜晚模式（暗幕+暖光晕+窗月亮星星）、编辑模式（上帝视角+网格+商店栏）、选中/拖拽/购买（扣金币+落库）/删除（回收退款）、洗衣机全流程（衣橱送洗→启动→8s→洗好徽标→取回衣橱 6/6）、Prisma 持久化（刷新后家具/金币/昼夜/小人位置全保留）、重置布局、关面板顺手关门
+- 入口卡片封面 `public/couple-house.png` 重生成（2.5D 客厅渲染图 1344x768）；删除全部旧 Kenney 像素素材（chars 8 + furniture 47 张）
+- Fullscreen API 已接入（无头浏览器环境权限拒绝属环境限制，代码已 catch + toast 降级，真实浏览器可用）
+
+Stage Summary:
+- 情侣小家完成 2.0 重制：Adorable Home 式卡通写实 2.5D 视觉（38 张 AI 生成蓝幕抠图 WebP 素材 + CSS 房间），生活模式（摇杆+第一人称跟随镜头+家具交互）与编辑模式（上帝视角+网格+商店+翻转/删除/重置）双形态，金币经济（交互赚币/购买/回收），昼夜光照系统，Prisma+IndexedDB 双层持久化（乐观并发），全屏支持
+- 关键技术资产：tools/ 下可复用的素材生成+抠图管线（蓝幕洪泛双约束算法）；camState 的手机壳 scale 换算模型（后续任何 world-overlay 组件都需要）
+- 待办（下轮可选）：家具碰撞体积、更多房间/楼层、TA 互动对话接入、BGM 音效、家具旋转 90°
