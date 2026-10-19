@@ -1,10 +1,10 @@
 'use client';
 
 /**
- * 情侣小家 3D —— 类型定义（v4）
+ * 情侣小家 3D —— 类型定义（v5·两室一厅）
  *
- * - 房间 9m × 6m，家具 MODEL_SCALE=2.0（更饱满大气）；
- * - 家具 (x, z) 底部中心，y 为抬升（电视上墙 / 物件上桌）；
+ * - 客厅 9m × 6m + 卧室 6m × 5m（南侧推门相通），家具 MODEL_SCALE=2.0；
+ * - 家具 (x, z) 底部中心，y 为抬升（电视上墙 / 空调上墙 / 物件上桌）；
  * - ry = 任意角度水平旋转（弧度），rx = 俯仰旋转（弧度，钳 ±1.05）；
  * - col = 用户自选主色（编辑模式调色盘）；
  * - 两个模式：live（摇杆+跟随镜头+家具交互）/ edit（俯瞰+拖拽+旋转+调色+商店）。
@@ -40,6 +40,8 @@ export type FurnitureKind =
   | 'bear'
   | 'box'
   | 'trashcan'
+  | 'aircon'
+  | 'photoFrame'
   | 'fridge'
   | 'stove'
   | 'sink'
@@ -97,6 +99,8 @@ export interface FurnitureState {
   washStart?: number;
   /** playful 上次互动时间戳（弹跳冷却） */
   lastTouch?: number;
+  /** 相框照片（压缩后 dataURL，永久保存在档案里） */
+  photo?: string;
 }
 
 /** 小人身份 */
@@ -115,18 +119,24 @@ export interface CharState {
 
 /** 小家整体持久化数据（服务端 JSON 快照） */
 export interface HomeState {
-  /** 数据版本：4 = 白色系客厅版；不匹配则重播种默认布局 */
-  v: 4;
+  /** 数据版本：5 = 两室一厅（客厅+卧室+门+空调+相框）；不匹配则重播种默认布局 */
+  v: 5;
   furniture: FurnitureItem[];
   chars: Record<CharId, { x: number; z: number; dir: CharDir }>;
   /** 昼夜：true = 夜晚 */
   night: boolean;
-  /** 窗户开态（顺序与 Room 内三扇窗一致：北墙左/北墙右/西墙；缺省全关） */
+  /** 窗户开态（5 扇：客厅北×2 / 客厅西 / 卧室西 / 卧室南；缺省全关） */
   win?: boolean[];
   /** 地板自定义色（#rrggbb；缺省 = 默认云白） */
   floorCol?: string;
   /** 墙壁自定义色（#rrggbb；缺省 = 默认暖白） */
   wallCol?: string;
+  /** 卧室门开态（开 = 小人可以穿过门洞进出卧室） */
+  doorOpen?: boolean;
+  /** 门自定义色（#rrggbb；缺省 = 默认暖白） */
+  doorCol?: string;
+  /** 窗框自定义色（#rrggbb；缺省 = 默认浅木白） */
+  winCol?: string;
 }
 
 /** 家具目录条目（静态配置，不持久化） */
@@ -146,7 +156,7 @@ export interface CatalogEntry {
   hidden?: boolean;
   /** 交互能力 */
   acts: {
-    /** 点击开/关（灯、电视、收音机） */
+    /** 点击开/关（灯、电视、收音机、空调） */
     toggle?: boolean;
     /** 可开门（有 door 节点或 glbAlt） */
     door?: boolean;
@@ -154,6 +164,8 @@ export interface CatalogEntry {
     washer?: boolean;
     /** 点击弹跳 */
     playful?: boolean;
+    /** 相框：点击从手机上传照片 */
+    photo?: boolean;
   };
   /** 是灯具：开着时附加点光（y 为灯高） */
   light?: { y: number; color?: string; intensity?: number };

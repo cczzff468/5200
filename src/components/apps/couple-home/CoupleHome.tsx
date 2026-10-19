@@ -20,6 +20,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  ChevronsDown,
+  ChevronsUp,
   Droplet,
   Loader2,
   Maximize,
@@ -40,9 +42,9 @@ import {
 import Joystick from './Joystick';
 import {
   CATALOG,
+  clampFurnToRooms,
   PLAY_COOLDOWN,
   ROOM_X,
-  ROOM_Z,
   SHOP_TABS,
   SNAP,
   TILT_LIMIT,
@@ -77,6 +79,48 @@ const WASH_SECONDS = 30;
 const YAW_STEP = Math.PI / 4;
 /** 俯仰旋转步进（弧度，15°） */
 const TILT_STEP = Math.PI / 12;
+/** 升降步进（米）：把小家具抬上桌 / 放回地面 */
+const LIFT_STEP = 0.23;
+const LIFT_MAX = 2.05;
+
+/** 相片窗宽高比（Extras3D 相框 0.4×0.56） */
+const PHOTO_ASPECT = 0.4 / 0.56;
+
+/**
+ * 手机照片 → 居中裁到相框比例 → 压成 JPEG dataURL（几十 KB，可永久存在小家档案里）
+ */
+function compressPhoto(file: File, maxH = 480, quality = 0.72): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    const finish = (fn: () => void) => {
+      URL.revokeObjectURL(url);
+      fn();
+    };
+    img.onload = () => {
+      try {
+        let cw = img.width;
+        let ch = img.height;
+        if (cw / ch > PHOTO_ASPECT) cw = Math.round(ch * PHOTO_ASPECT);
+        else ch = Math.round(cw / PHOTO_ASPECT);
+        const sx = (img.width - cw) / 2;
+        const sy = (img.height - ch) / 2;
+        const scale = Math.min(1, maxH / ch);
+        const cv = document.createElement('canvas');
+        cv.width = Math.max(1, Math.round(cw * scale));
+        cv.height = Math.max(1, Math.round(ch * scale));
+        const ctx = cv.getContext('2d')!;
+        ctx.drawImage(img, sx, sy, cw, ch, 0, 0, cv.width, cv.height);
+        const data = cv.toDataURL('image/jpeg', quality);
+        finish(() => resolve(data));
+      } catch (err) {
+        finish(() => reject(err instanceof Error ? err : new Error('compress-fail')));
+      }
+    };
+    img.onerror = () => finish(() => reject(new Error('img-load-fail')));
+    img.src = url;
+  });
+}
 
 /** 调色盘预设（白色为主 + 可混搭的点缀色） */
 const SWATCHES: { hex: string; name: string }[] = [
@@ -93,6 +137,73 @@ const SWATCHES: { hex: string; name: string }[] = [
 ];
 
 const dirToHeading: Record<string, number> = { up: Math.PI, down: 0, left: -Math.PI / 2, right: Math.PI / 2 };
+
+/** 装修面板单行选色（色卡 + 自定义 + 默认），地板/墙/门/窗共用 */
+function ColorRow({
+  label,
+  value,
+  onPick,
+  fallback,
+}: {
+  label: string;
+  value?: string;
+  onPick: (hex: string | null) => void;
+  fallback: string;
+}) {
+  const validHex = /^#[0-9a-fA-F]{6}$/.test(value ?? '');
+  return (
+    <div className="mb-3.5 last:mb-0">
+      <div className="mb-1 text-[12.5px] font-medium text-[#6a6a6e]">{label}</div>
+      <div className="mb-2 grid grid-cols-5 gap-2.5">
+        {SWATCHES.map((s) => (
+          <button
+            key={s.hex}
+            onClick={() => onPick(s.hex)}
+            title={s.name}
+            aria-label={`${label}选色 ${s.name}`}
+            className="group flex flex-col items-center gap-1"
+          >
+            <span
+              className={
+                value === s.hex
+                  ? 'h-9 w-9 rounded-full ring-2 ring-[#f2a9bc] ring-offset-2 shadow-md'
+                  : 'h-9 w-9 rounded-full shadow-sm ring-1 ring-black/10 transition group-active:scale-90'
+              }
+              style={{ background: s.hex }}
+            />
+            <span className="text-[10px] text-[#8a8a86]">{s.name}</span>
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2.5">
+        <label className="relative flex h-10 flex-1 cursor-pointer items-center gap-2.5 rounded-2xl bg-[#f6f4ef] px-3 ring-1 ring-[#eae7df]">
+          <span
+            className="h-6 w-6 rounded-lg shadow-inner ring-1 ring-black/10"
+            style={{
+              background: validHex
+                ? value
+                : 'conic-gradient(#f6cdd6,#f9e6a6,#c9e3cf,#dcd2ec,#f6cdd6)',
+            }}
+          />
+          <span className="text-[12px] font-medium text-[#4a4a4e]">自定义{label}色</span>
+          <input
+            type="color"
+            aria-label={`自定义${label}颜色`}
+            className="absolute inset-0 cursor-pointer opacity-0"
+            value={validHex ? value : fallback}
+            onChange={(e) => onPick(e.target.value)}
+          />
+        </label>
+        <button
+          onClick={() => onPick(null)}
+          className="flex h-10 items-center rounded-2xl bg-[#f1efe9] px-3.5 text-[12px] font-medium text-[#8a8a86] transition active:scale-95"
+        >
+          默认
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function headingToDir(h: number): 'up' | 'down' | 'left' | 'right' {
   const deg = ((((h * 180) / Math.PI) % 360) + 360) % 360;
@@ -123,9 +234,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [items, setItems] = useState<FurnitureItem[]>(pack.home.furniture);
   const [night, setNight] = useState<boolean>(pack.home.night);
   const [rev, setRev] = useState<number>(pack.rev);
-  const [win, setWin] = useState<boolean[]>(pack.home.win ?? [false, false, false]);
+  const [win, setWin] = useState<boolean[]>([0, 1, 2, 3, 4].map((i) => !!pack.home.win?.[i]));
   const [floorCol, setFloorCol] = useState<string | undefined>(pack.home.floorCol);
   const [wallCol, setWallCol] = useState<string | undefined>(pack.home.wallCol);
+  const [doorOpen, setDoorOpen] = useState<boolean>(!!pack.home.doorOpen);
+  const [doorCol, setDoorCol] = useState<string | undefined>(pack.home.doorCol);
+  const [winCol, setWinCol] = useState<string | undefined>(pack.home.winCol);
 
   // ---------------- UI 状态 ----------------
   const [mode, setMode] = useState<HomeMode>('live');
@@ -139,6 +253,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [full, setFull] = useState(false);
 
   const rootRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoTargetRef = useRef<string | null>(null);
 
   // ---------------- 小人运行时（ref 高频更新，不走 React） ----------------
   const meRT = useRef<CharRT>({
@@ -176,6 +292,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
   floorColRef.current = floorCol;
   const wallColRef = useRef(wallCol);
   wallColRef.current = wallCol;
+  const doorOpenRef = useRef(doorOpen);
+  doorOpenRef.current = doorOpen;
+  const doorColRef = useRef(doorCol);
+  doorColRef.current = doorCol;
+  const winColRef = useRef(winCol);
+  winColRef.current = winCol;
 
   // ---------------- 提示 ----------------
   const toast = useCallback((msg: string) => {
@@ -187,12 +309,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
   // ---------------- 快照与推送 ----------------
   const snap = useCallback((): HomePersist => {
     const home: HomeState = {
-      v: 4,
+      v: 5,
       furniture: itemsRef.current,
       night: nightRef.current,
       win: winRef.current,
       floorCol: floorColRef.current,
       wallCol: wallColRef.current,
+      doorOpen: doorOpenRef.current,
+      doorCol: doorColRef.current,
+      winCol: winColRef.current,
       chars: {
         me: {
           x: Math.round(meRT.current.x * 100) / 100,
@@ -209,6 +334,18 @@ export default function CoupleHome({ close }: { close: () => void }) {
     return { home, rev: revRef.current };
   }, []);
 
+  /** 采纳一份完整档案（远端冲突 / 初始化 / 重置共用） */
+  const adoptHome = useCallback((h: HomeState) => {
+    setItems(h.furniture);
+    setNight(h.night);
+    setWin([0, 1, 2, 3, 4].map((i) => !!h.win?.[i]));
+    setFloorCol(h.floorCol);
+    setWallCol(h.wallCol);
+    setDoorOpen(!!h.doorOpen);
+    setDoorCol(h.doorCol);
+    setWinCol(h.winCol);
+  }, []);
+
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pushTick = useRef(0);
   const doPush = useCallback(
@@ -218,11 +355,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       if ('conflict' in res) {
         // 采纳服务端最新
         const s = res.conflict;
-        setItems(s.home.furniture);
-        setNight(s.home.night);
-        setWin(s.home.win ?? [false, false, false]);
-        setFloorCol(s.home.floorCol);
-        setWallCol(s.home.wallCol);
+        adoptHome(s.home);
         setRev(s.rev);
         meRT.current.x = s.home.chars.me.x;
         meRT.current.z = s.home.chars.me.z;
@@ -234,7 +367,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       }
       setRev(res.rev);
     },
-    [toast],
+    [toast, adoptHome],
   );
 
   const schedulePush = useCallback(
@@ -258,11 +391,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       const remote = await fetchRemote();
       if (!alive) return;
       if (remote && remote.rev > pack.rev) {
-        setItems(remote.home.furniture);
-        setNight(remote.home.night);
-        setWin(remote.home.win ?? [false, false, false]);
-        setFloorCol(remote.home.floorCol);
-        setWallCol(remote.home.wallCol);
+        adoptHome(remote.home);
         setRev(remote.rev);
         meRT.current.x = remote.home.chars.me.x;
         meRT.current.z = remote.home.chars.me.z;
@@ -354,6 +483,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
         patch({ on: !st.on });
         return;
       }
+      if (entry.acts?.photo) {
+        // 相框：唤起系统相册/相机选照片（生活模式）
+        photoTargetRef.current = item.id;
+        fileInputRef.current?.click();
+        return;
+      }
       if (entry.acts?.door) {
         patch({ open: !st.open });
         return;
@@ -402,7 +537,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     toast('已收起家具');
   }, [selId, saveSoon, toast]);
 
-  /** 四向微调：沿屏幕视觉方向移动选中家具一格（0.25m 吸附 + 脚印钳位） */
+  /** 四向微调：沿屏幕视觉方向移动选中家具一格（0.25m 吸附 + 双房间钳位） */
   const nudgeSel = useCallback(
     (dx: number, dz: number) => {
       if (!selId) return;
@@ -413,9 +548,24 @@ export default function CoupleHome({ close }: { close: () => void }) {
           const [w, d] = e ? footprintOf(e, f.ry ?? 0) : [0.5, 0.5];
           const hw = Math.max(w / 2, 0.18);
           const hd = Math.max(d / 2, 0.18);
-          const x = Math.min(ROOM_X - hw, Math.max(-ROOM_X + hw, f.x + dx * SNAP));
-          const z = Math.min(ROOM_Z - hd, Math.max(-ROOM_Z + hd, f.z + dz * SNAP));
+          const [x, z] = clampFurnToRooms(f.x + dx * SNAP, f.z + dz * SNAP, hw, hd);
           return { ...f, x, z };
+        }),
+      );
+      saveSoon();
+    },
+    [selId, saveSoon],
+  );
+
+  /** 升降选中家具：抬上桌面 / 放回地面（相框、小盆栽、书堆…） */
+  const liftSel = useCallback(
+    (dir: 1 | -1) => {
+      if (!selId) return;
+      setItems((prev) =>
+        prev.map((f) => {
+          if (f.id !== selId) return f;
+          const y = Math.round(Math.min(LIFT_MAX, Math.max(0, (f.y ?? 0) + dir * LIFT_STEP)) * 100) / 100;
+          return { ...f, y };
         }),
       );
       saveSoon();
@@ -478,6 +628,52 @@ export default function CoupleHome({ close }: { close: () => void }) {
     [saveSoon],
   );
 
+  const applyDoorCol = useCallback(
+    (hex: string | null) => {
+      setDoorCol(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
+  const applyWinCol = useCallback(
+    (hex: string | null) => {
+      setWinCol(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
+  /** 卧室门开合（点击门本体） */
+  const toggleDoor = useCallback(() => {
+    setDoorOpen((o) => {
+      const next = !o;
+      toast(next ? '门开啦，走进去就是卧室～' : '卧室门已关上');
+      return next;
+    });
+    saveSoon();
+  }, [saveSoon, toast]);
+
+  /** 相框选照片完成：压缩 → 写入家具状态（永久保存） */
+  const onPickPhoto = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0];
+      e.target.value = ''; // 允许重复选同一张
+      const id = photoTargetRef.current;
+      photoTargetRef.current = null;
+      if (!f || !id) return;
+      try {
+        const data = await compressPhoto(f);
+        setItems((prev) => prev.map((it) => (it.id === id ? { ...it, st: { ...it.st, photo: data } } : it)));
+        saveSoon();
+        toast('照片装进相框啦，永久保存～');
+      } catch {
+        toast('照片读取失败，换一张试试？');
+      }
+    },
+    [saveSoon, toast],
+  );
+
   /** 编辑模式画面缩放 */
   const zoom = useCallback(
     (dir: 1 | -1) => {
@@ -537,9 +733,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
     (kind: FurnitureKind) => {
       const e = CATALOG[kind];
       if (!e) return;
-      const spot = findSpot(kind);
       const id = `${kind}-${Date.now().toString(36)}`;
-      setItems((prev) => [...prev, { id, kind, x: spot.x, z: spot.z, ry: 0, st: {} }]);
+      if (kind === 'aircon') {
+        // 壁挂空调默认挂东墙（1.85m 高，面朝西）
+        setItems((prev) => [...prev, { id, kind, x: 4.34, z: -1.6, y: 1.85, ry: -Math.PI / 2, st: {} }]);
+      } else {
+        const spot = findSpot(kind);
+        setItems((prev) => [...prev, { id, kind, x: spot.x, z: spot.z, ry: 0, st: {} }]);
+      }
       setSelId(id);
       saveSoon();
       toast(`已添加「${e.name}」`);
@@ -549,11 +750,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   const resetHome = useCallback(async () => {
     const fresh = await resetRemote();
-    setItems(fresh.home.furniture);
-    setNight(fresh.home.night);
-    setWin(fresh.home.win ?? [false, false, false]);
-    setFloorCol(fresh.home.floorCol);
-    setWallCol(fresh.home.wallCol);
+    adoptHome(fresh.home);
     setRev(fresh.rev);
     meRT.current.x = fresh.home.chars.me.x;
     meRT.current.z = fresh.home.chars.me.z;
@@ -564,7 +761,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setPaletteOpen(false);
     setRoomStyleOpen(false);
     toast('小家已重置');
-  }, [toast]);
+  }, [toast, adoptHome]);
 
   // ---------------- 模式 / 昼夜 / 全屏 ----------------
   const switchMode = useCallback(
@@ -618,6 +815,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   return (
     <div ref={rootRef} className="absolute inset-0 select-none overflow-hidden bg-[#efece4]">
+      {/* 照片选择（相框用；隐藏） */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={onPickPhoto}
+      />
+
       {/* 3D 场景 */}
       <HomeScene
         items={items}
@@ -635,6 +841,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
         onToggleWin={toggleWin}
         floorCol={floorCol}
         wallCol={wallCol}
+        doorCol={doorCol}
+        winCol={winCol}
+        doorOpen={doorOpen}
+        onToggleDoor={toggleDoor}
         onFloorTap={onFloorTap}
         onFurnTap={onFurnTap}
         onDragMove={onDragMove}
@@ -782,6 +992,26 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       <ChevronDown className="h-4 w-4" />
                     </button>
                     <span />
+                  </div>
+
+                  {/* 升降：抬上桌 / 放回地（相框、小盆栽…） */}
+                  <div className="grid grid-rows-2 gap-px rounded-xl bg-[#efece3] p-1">
+                    <button
+                      onClick={() => liftSel(1)}
+                      aria-label="抬高一层（可放上桌面）"
+                      title="抬高一层"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#7a8a96] shadow-sm transition active:scale-90 active:bg-[#e2edf3] active:text-[#4e7f95]"
+                    >
+                      <ChevronsUp className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => liftSel(-1)}
+                      aria-label="放低一层（放回地面）"
+                      title="放低一层"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#7a8a96] shadow-sm transition active:scale-90 active:bg-[#e2edf3] active:text-[#4e7f95]"
+                    >
+                      <ChevronsDown className="h-4 w-4" />
+                    </button>
                   </div>
 
                   {/* 旋转：四宫格（上排 左转/右转，下排 下俯/上仰） */}
@@ -988,7 +1218,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         )}
       </AnimatePresence>
 
-      {/* ===== 装修面板：地板 / 墙壁自定义颜色 ===== */}
+      {/* ===== 装修面板：地板 / 墙壁 / 门 / 窗 自定义颜色 ===== */}
       <AnimatePresence>
         {mode === 'edit' && roomStyleOpen && (
           <motion.div
@@ -1007,7 +1237,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mb-1 flex items-center justify-between">
-                <span className="text-[15px] font-semibold text-[#3a3a3e]">装修 · 地板与墙壁</span>
+                <span className="text-[15px] font-semibold text-[#3a3a3e]">装修 · 换颜色</span>
                 <button
                   onClick={() => setRoomStyleOpen(false)}
                   aria-label="关闭装修面板"
@@ -1016,94 +1246,13 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              <p className="mb-4 text-[11.5px] text-[#9a9a96]">挑一套喜欢的地板和墙色，或自定义任意颜色</p>
+              <p className="mb-3 text-[11.5px] text-[#9a9a96]">地板、墙壁、门窗都能换成喜欢的颜色</p>
 
-              {/* 地板 */}
-              <div className="mb-1 text-[12.5px] font-medium text-[#6a6a6e]">地板</div>
-              <div className="mb-3 grid grid-cols-5 gap-2.5">
-                {SWATCHES.map((s) => (
-                  <button key={s.hex} onClick={() => applyFloorCol(s.hex)} title={s.name} aria-label={`地板选色 ${s.name}`} className="group flex flex-col items-center gap-1">
-                    <span
-                      className={
-                        floorCol === s.hex
-                          ? 'h-9 w-9 rounded-full ring-2 ring-[#f2a9bc] ring-offset-2 shadow-md'
-                          : 'h-9 w-9 rounded-full shadow-sm ring-1 ring-black/10 transition group-active:scale-90'
-                      }
-                      style={{ background: s.hex }}
-                    />
-                    <span className="text-[10px] text-[#8a8a86]">{s.name}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="mb-4 flex items-center gap-2.5">
-                <label className="relative flex h-10 flex-1 cursor-pointer items-center gap-2.5 rounded-2xl bg-[#f6f4ef] px-3 ring-1 ring-[#eae7df]">
-                  <span
-                    className="h-6 w-6 rounded-lg shadow-inner ring-1 ring-black/10"
-                    style={{
-                      background: /^#[0-9a-fA-F]{6}$/.test(floorCol ?? '')
-                        ? floorCol
-                        : 'conic-gradient(#f6cdd6,#f9e6a6,#c9e3cf,#dcd2ec,#f6cdd6)',
-                    }}
-                  />
-                  <span className="text-[12px] font-medium text-[#4a4a4e]">自定义地板色</span>
-                  <input
-                    type="color"
-                    aria-label="自定义地板颜色"
-                    className="absolute inset-0 cursor-pointer opacity-0"
-                    value={/^#[0-9a-fA-F]{6}$/.test(floorCol ?? '') ? floorCol : '#f5f2ec'}
-                    onChange={(e) => applyFloorCol(e.target.value)}
-                  />
-                </label>
-                <button
-                  onClick={() => applyFloorCol(null)}
-                  className="flex h-10 items-center rounded-2xl bg-[#f1efe9] px-3.5 text-[12px] font-medium text-[#8a8a86] transition active:scale-95"
-                >
-                  默认
-                </button>
-              </div>
-
-              {/* 墙壁 */}
-              <div className="mb-1 text-[12.5px] font-medium text-[#6a6a6e]">墙壁</div>
-              <div className="mb-3 grid grid-cols-5 gap-2.5">
-                {SWATCHES.map((s) => (
-                  <button key={s.hex} onClick={() => applyWallCol(s.hex)} title={s.name} aria-label={`墙壁选色 ${s.name}`} className="group flex flex-col items-center gap-1">
-                    <span
-                      className={
-                        wallCol === s.hex
-                          ? 'h-9 w-9 rounded-full ring-2 ring-[#a9c7e2] ring-offset-2 shadow-md'
-                          : 'h-9 w-9 rounded-full shadow-sm ring-1 ring-black/10 transition group-active:scale-90'
-                      }
-                      style={{ background: s.hex }}
-                    />
-                    <span className="text-[10px] text-[#8a8a86]">{s.name}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="flex items-center gap-2.5">
-                <label className="relative flex h-10 flex-1 cursor-pointer items-center gap-2.5 rounded-2xl bg-[#f6f4ef] px-3 ring-1 ring-[#eae7df]">
-                  <span
-                    className="h-6 w-6 rounded-lg shadow-inner ring-1 ring-black/10"
-                    style={{
-                      background: /^#[0-9a-fA-F]{6}$/.test(wallCol ?? '')
-                        ? wallCol
-                        : 'conic-gradient(#f6cdd6,#f9e6a6,#c9e3cf,#dcd2ec,#f6cdd6)',
-                    }}
-                  />
-                  <span className="text-[12px] font-medium text-[#4a4a4e]">自定义墙色</span>
-                  <input
-                    type="color"
-                    aria-label="自定义墙壁颜色"
-                    className="absolute inset-0 cursor-pointer opacity-0"
-                    value={/^#[0-9a-fA-F]{6}$/.test(wallCol ?? '') ? wallCol : '#f7f3ec'}
-                    onChange={(e) => applyWallCol(e.target.value)}
-                  />
-                </label>
-                <button
-                  onClick={() => applyWallCol(null)}
-                  className="flex h-10 items-center rounded-2xl bg-[#f1efe9] px-3.5 text-[12px] font-medium text-[#8a8a86] transition active:scale-95"
-                >
-                  默认
-                </button>
+              <div className="scrollbar-none max-h-[52vh] overflow-y-auto pr-0.5">
+                <ColorRow label="地板" value={floorCol} onPick={applyFloorCol} fallback="#f5f2ec" />
+                <ColorRow label="墙壁" value={wallCol} onPick={applyWallCol} fallback="#f7f3ec" />
+                <ColorRow label="门" value={doorCol} onPick={applyDoorCol} fallback="#f3efe6" />
+                <ColorRow label="窗" value={winCol} onPick={applyWinCol} fallback="#f0e7d4" />
               </div>
             </motion.div>
           </motion.div>

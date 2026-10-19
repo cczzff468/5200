@@ -1,11 +1,12 @@
 'use client';
 
 /**
- * 情侣小家 3D v4 —— 家具目录 / 默认布局 / 持久化（白色系·客厅篇）
+ * 情侣小家 3D v5 —— 家具目录 / 默认布局 / 持久化（两室一厅）
  *
  * - 模型：Kenney Furniture Kit 2.0（CC0）白色系重着色（云白主体 + 浅灰/浅粉/浅黄/柔黑点缀，无木色）；
  * - MODEL_SCALE = 2.0：家具更饱满大气；fp 脚印 = 实测包围盒（含缩放）；
- * - 默认布局 = 完整客厅（电视墙 + 沙发对坐 + 工作角）；卧室/厨卫家具商店暂不展示（后续开放）；
+ * - 户型：客厅 9×6（北）+ 卧室 6×5（南），中间隔墙带门（点击开门后小人可走进卧室）；
+ * - 新增：立体壁挂空调 / 立式相框（手机上传照片，永久保存）；
  * - 金币系统已移除（家具随便买随便摆）；
  * - 持久化：IndexedDB 即时缓存 + Prisma 服务端快照（rev 乐观并发）。
  */
@@ -38,12 +39,47 @@ export const TILT_LIMIT = 1.05;
 export const ROOM_X = ROOM_W / 2;
 export const ROOM_Z = ROOM_D / 2;
 
+// ---------------- 卧室（v5 两室一厅） ----------------
+
+/** 卧室西缘（与客厅西墙齐平） */
+export const BED_X0 = -ROOM_X;
+/** 卧室东缘 */
+export const BED_X1 = 1.5;
+/** 卧室北缘（= 客厅南墙，隔墙所在） */
+export const BED_Z0 = ROOM_Z;
+/** 卧室南缘 */
+export const BED_Z1 = BED_Z0 + 5;
+export const BED_W = BED_X1 - BED_X0;
+export const BED_D = BED_Z1 - BED_Z0;
+/** 卧室门洞中心（在隔墙上） */
+export const DOOR_X = -2.5;
+/** 门洞宽（米） */
+export const DOOR_W = 0.94;
+/** 门洞高（米） */
+export const DOOR_H = 2.06;
+/** 门走廊半宽（小人穿门判定，比门洞略窄） */
+export const DOOR_PASS = 0.3;
+
 /** 家具在任意水平角下的占地 AABB（fp 未旋转脚印 × 旋转） */
 export function footprintOf(entry: CatalogEntry, ry: number): [number, number] {
   const [w, d] = entry.fp;
   const c = Math.abs(Math.cos(ry));
   const s = Math.abs(Math.sin(ry));
   return [w * c + d * s, w * s + d * c];
+}
+
+/** 家具双房间钳制：z < 隔墙 → 客厅；z ≥ 隔墙 → 卧室（不许跨墙骑墙） */
+export function clampFurnToRooms(x: number, z: number, hw: number, hd: number): [number, number] {
+  if (z < BED_Z0) {
+    return [
+      Math.min(ROOM_X - hw, Math.max(-ROOM_X + hw, x)),
+      Math.min(BED_Z0 - hd, Math.max(-ROOM_Z + hd, z)),
+    ];
+  }
+  return [
+    Math.min(BED_X1 - hw, Math.max(-ROOM_X + hw, x)),
+    Math.min(BED_Z1 - hd, Math.max(BED_Z0 + hd, z)),
+  ];
 }
 
 // ---------------- 家具目录 ----------------
@@ -90,17 +126,17 @@ export const CATALOG: Record<string, CatalogEntry> = {
     kind: 'desk', glb: G('desk'), name: '简约书桌', cat: 'table', fp: [1.47, 0.78],
     acts: { playful: true },
   },
-  // ---- 床品（后续开放） ----
+  // ---- 床品（卧室篇正式开放） ----
   bed: {
-    kind: 'bed', glb: G('bed'), name: '粉白双人床', cat: 'bed', fp: [1.91, 2.25], hidden: true,
+    kind: 'bed', glb: G('bed'), name: '粉白双人床', cat: 'bed', fp: [1.91, 2.25],
     acts: { playful: true },
   },
   bedSingle: {
-    kind: 'bedSingle', glb: G('bedSingle'), name: '单人小床', cat: 'bed', fp: [1.14, 2.25], hidden: true,
+    kind: 'bedSingle', glb: G('bedSingle'), name: '单人小床', cat: 'bed', fp: [1.14, 2.25],
     acts: { playful: true },
   },
   nightstand: {
-    kind: 'nightstand', glb: G('nightstand'), name: '小抽屉床头柜', cat: 'bed', fp: [0.53, 0.43], hidden: true,
+    kind: 'nightstand', glb: G('nightstand'), name: '小抽屉床头柜', cat: 'bed', fp: [0.53, 0.43],
     acts: { door: true },
   },
   // ---- 地毯 ----
@@ -167,7 +203,7 @@ export const CATALOG: Record<string, CatalogEntry> = {
     acts: { playful: true },
   },
   wardrobe: {
-    kind: 'wardrobe', glb: G('wardrobe'), name: '双门衣柜', cat: 'decor', fp: [0.8, 0.5], hidden: true,
+    kind: 'wardrobe', glb: G('wardrobe'), name: '双门衣柜', cat: 'decor', fp: [0.8, 0.5],
     acts: { door: true },
   },
   box: {
@@ -177,6 +213,16 @@ export const CATALOG: Record<string, CatalogEntry> = {
   trashcan: {
     kind: 'trashcan', glb: G('trashcan'), name: '小垃圾桶', cat: 'decor', fp: [0.42, 0.47],
     acts: { playful: true },
+  },
+  // ---- 家电·空调（程序化建模，壁挂式） ----
+  aircon: {
+    kind: 'aircon', name: '立体壁挂空调', cat: 'appliance', fp: [0.92, 0.28],
+    acts: { toggle: true },
+  },
+  // ---- 装饰·相框（程序化建模，点击上传照片） ----
+  photoFrame: {
+    kind: 'photoFrame', name: '立式相框', cat: 'decor', fp: [0.52, 0.3],
+    acts: { photo: true },
   },
   books: {
     kind: 'books', glb: G('books'), name: '书堆', cat: 'decor', fp: [0.3, 0.19],
@@ -252,19 +298,19 @@ const F = (
 });
 
 /**
- * 初始 9×6 开间 · 完整客厅：
- * 北墙电视墙（挂墙大屏 + 电视柜 + 落地音箱 + 书架绿植）
- * · 中部沙发对坐（地毯 + 茶几 + 休闲椅 + 边桌台灯）
- * · 西侧工作角（书桌 + 椅 + 收音机）· 南侧玄关（地垫 + 衣帽架）
+ * 初始 v5 两室一厅：
+ * 客厅：北墙电视墙 + 沙发对坐 + 西侧工作角 + 东壁空调 + 玄关（门在隔墙）
+ * 卧室：双人床 + 床头柜×2 + 衣柜 + 圆地毯 + 相框绿植
  */
 export function defaultHome(): HomeState {
   seq = 0;
   return {
-    v: 4,
+    v: 5,
     night: false,
-    win: [false, false, false],
+    win: [false, false, false, false, false],
+    doorOpen: false,
     furniture: [
-      // —— 电视墙（北） ——
+      // —— 客厅·电视墙（北） ——
       F('tvStand', 0, -2.7),
       F('tv', 0, -2.88, { y: 1.19 }), // 挂墙：屏幕底缘恰在电视柜顶上方
       F('speaker', -1.55, -2.72),
@@ -272,7 +318,7 @@ export function defaultHome(): HomeState {
       F('bookcase', -2.7, -2.7),
       F('plant', 2.62, -2.62),
 
-      // —— 客厅中心 ——
+      // —— 客厅·中心 ——
       F('rugRect', 0.15, -0.3),
       F('coffeeTable', 0.15, -0.35),
       F('books', 0.55, -0.3, { y: 0.46, ry: 0.4 }), // 摆上茶几
@@ -284,16 +330,28 @@ export function defaultHome(): HomeState {
       F('plantSmall', 1.98, 1.55, { y: 0.77 }), // 摆上边桌
       F('lampFloor', -1.95, 2.0),
 
-      // —— 西侧工作角 ——
+      // —— 客厅·工作角（西） ——
       F('desk', -3.95, 0.3, { ry: Math.PI / 2 }),
       F('chair', -3.15, 0.3, { ry: -Math.PI / 2 }),
       F('radio', -3.9, 0.1, { y: 0.77, ry: Math.PI / 2 }), // 摆上书桌
 
-      // —— 玄关（南） ——
+      // —— 客厅·空调（东壁挂）+ 玄关（南，门旁） ——
+      F('aircon', 4.34, -1.6, { y: 1.85, ry: -Math.PI / 2 }),
+      F('photoFrame', 3.4, 2.45, { ry: Math.PI }), // 立式相框（东南角，不挡去卧室的门路）
       F('bear', 1.45, 2.35, { ry: -2.6 }),
-      F('doormat', 0.15, 2.72),
-      F('coatRack', 2.72, 2.5),
-      F('trashcan', -2.55, 2.55),
+      F('doormat', DOOR_X, 2.62),
+      F('coatRack', -3.55, 2.5),
+      F('trashcan', -3.62, -2.58),
+
+      // —— 卧室（隔墙南侧，推门而入） ——
+      F('bed', -3.32, 5.6, { ry: -Math.PI / 2 }), // 双人床靠西墙（床头朝西）
+      F('nightstand', -3.4, 4.25),
+      F('nightstand', -3.4, 6.95),
+      F('lampTable', -3.4, 6.95, { y: 0.56 }), // 床头灯
+      F('wardrobe', 0.95, 3.35), // 衣柜靠卧室北墙
+      F('rug', -0.9, 5.5), // 圆地毯
+      F('plant', 1.0, 7.4),
+      F('photoFrame', -1.7, 7.45, { ry: Math.PI }), // 卧室相框
     ],
     chars: {
       me: { x: 0.15, z: 2.3, dir: 'up' },
@@ -314,7 +372,7 @@ const KEY = 'couple-home:state3d';
 const API = '/api/couple-home';
 
 const valid = (h: HomeState | null | undefined): h is HomeState =>
-  !!h && (h as HomeState).v === 4 && Array.isArray(h.furniture) && !!h.chars?.me && !!h.chars?.partner;
+  !!h && (h as HomeState).v === 5 && Array.isArray(h.furniture) && !!h.chars?.me && !!h.chars?.partner;
 
 /** 同步读缓存（首屏即时渲染；无则 null） */
 export function loadCache(): HomePersist | null {

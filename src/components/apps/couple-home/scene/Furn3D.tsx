@@ -18,6 +18,7 @@ import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import type { CatalogEntry, FurnitureItem, HomeMode } from '../types';
 import { animateDoors, cloneFurniture, ensureModel, type FurnModel } from './model-kit';
 import TV3D from './TV3D';
+import { Aircon3D, PhotoFrame3D } from './Extras3D';
 
 export interface Furn3DProps {
   item: FurnitureItem;
@@ -194,6 +195,12 @@ export default function Furn3D({
 
         {/* 电视（程序化美颜大屏） */}
         {isTV && <TV3D on={!!item.st?.on} night={night} col={item.col} />}
+
+        {/* 立体壁挂空调（程序化建模：导风板摆动 + 冷风丝） */}
+        {entry.kind === 'aircon' && <Aircon3D on={!!item.st?.on} night={night} col={item.col} />}
+
+        {/* 立式相框（程序化建模：手机上传照片，永久保存） */}
+        {entry.kind === 'photoFrame' && <PhotoFrame3D col={item.col} photo={item.st?.photo} />}
 
         {/* 洗衣机状态灯 */}
         {entry.acts?.washer && modelSize && (

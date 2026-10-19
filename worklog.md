@@ -20931,3 +20931,29 @@ Stage Summary:
 - 拾光小屋 v4.1：视觉适配（电视柜）+ 三个新交互（窗/地板墙色/全方位视角）+ 两个手感修复（退出变慢/移动双方式）+ HUD 重排（四宫格+十字盘）
 - 数据结构向后兼容：win/floorCol/wallCol 均为可选字段，旧档案缺省即默认值，无版本迁移
 - 涉及文件：types.ts、catalog.ts、model-kit.ts、Furn3D.tsx、Room.tsx、HomeScene.tsx、CoupleHome.tsx、api/couple-home/route.ts
+
+---
+Task ID: cottage-v6
+Agent: 主协调 Agent (Z.ai Code)
+Task: 拾光小屋 v5 两室一厅——粉色块移除/上下开窗/立体空调/相框照片上传/卧室+门+穿行/门窗换色/缩放与滑动修复
+
+Work Log:
+- 粉色块：删除 Room.tsx 旧版「西墙浅粉护墙板」装饰面（用户反馈像一块突兀粉色）
+- 上下开窗：Window 组件重写为上悬窗（整扇窗扇绕顶部铰链外翻 32°，damp 7 动画），五扇窗（客厅北×2/客厅西/卧室西/卧室南），winCol 自定义窗框色，win[] 扩至 5 并持久化
+- 立体空调：新建 scene/Extras3D.tsx——Aircon3D 程序化建模（机身+进风格栅+导风板 damp 摆动+Breeze 冷风丝循环+LED+夜间冷光点光），kind='aircon' 壁挂东墙 (4.34,-1.6,y1.85)，acts.toggle 点击开关；商店可购买（buy 特例直接落东墙）
+- 相框：PhotoFrame3D 程序化立式相框（框体+嵌板+斜撑+蝴蝶结），无照片显示粉系「点我传合照」占位 canvas 画；acts.photo 点击唤起系统相册，compressPhoto 居中裁 0.72 比例→JPEG q0.72→dataURL 写入 st.photo（IndexedDB+Prisma 永久保存）；服务端 normalize 白名单校验 dataURL、单件 st ≤320KB、照片 ≤12 张
+- 卧室+门：户型扩为两室一厅（客厅 9×6 + 卧室 6×5，BED_* 常量）；隔墙（两段+门头梁 DoorLintel）+ 卧室三面墙 + 卧室地板；HouseDoor 程序化门（框+造型嵌板+双面把手+夜里门缝暖光，左铰链向卧室内开 -1.78rad）；doorOpen/doorCol 持久化，点击开门 toast 引导
+- 穿行碰撞：collideAndClamp 双房间钳制——门开且 |x-DOOR_X|<0.3 时允许跨越 z=3 走廊，否则按所在房间钳位；partner 永远留客厅（wander 传 doorOpen=false）；clampFurnToRooms 家具双房间钳制（拖拽/微调共用，不许骑墙）
+- 隔墙可见性新规则：sharedWallVisible(相机z, 对焦z)——只有隔墙挡在「镜头↔小人/轨道中心」之间才隐藏（修正旧 z 区间规则的缺陷：小人走到门口看门时墙不再消失，门始终可点；走进卧室后墙自动消失形成剖面）；门/门头梁/隔墙同隐同现；GameLoop 每帧写 focusRef（live=小人 z / edit=轨道 target z）
+- 指针系统加固：PointerRig 按 pointerId 只跟踪第一根手指（第二根/捏合在生活模式完全忽略——修复「退出编辑模式还能放大缩小」）；旋转灵敏度 0.006→0.0075/0.004→0.005，1:1 阈值 6→4px；退出装修 catchUp 1.1→0.55s；layout.tsx 增加 viewport maximumScale=1 userScalable=false 禁页面捏合
+- 卧室家具：bed/bedSingle/nightstand/wardrobe 商店取消 hidden；默认布局卧室=双人床（床头朝西 ry=-π/2）+床头柜×2+台灯+衣柜+圆地毯+绿植+相框；客厅新增相框移位东南角（原门口位置挡路，实测发现后修正）
+- 编辑模式：俯瞰相机 (8.6,14.5,15.2) 罩住两室一厅 + OrbitControls target (0,0.4,2.2)；EditGrid 双房间网格；工具栏新增「升降」双按钮（liftSel ±0.23m，0~2.05m，相框上桌/放回地）
+- 装修面板重构：ColorRow 组件化，地板/墙壁/门/窗四行（色卡+自定义+默认），面板滚动区
+- API route：v5 同代冲突判断（v4 旧档直接迁移覆盖）、doorOpen/doorCol/winCol 清洗、MAX_JSON 1.5MB、st 320KB、照片白名单+12 张上限
+- 验证：tsc+eslint 全绿（本项目存量告警除外）；agent-browser 实测——粉墙板消失、五扇上悬窗开合+窗框换色（门浅粉生效）、空调点击开启（导风板张开+LED+冷风丝）、相框照片服务端注入后渲染成功（占位画→真照片）、门点击开启（toast+门板内摆）、小人经门洞双向穿行客厅↔卧室（相机跟随+隔墙自动隐藏）、卧室家具布局完整、编辑俯瞰双房间、升降/四宫格/商店工具栏正常、昼夜/门态/窗态/小人位置/相框照片全部跨刷新持久化；dev.log 无新增运行时错误（instrumentation.ts 的 Edge Runtime 告警为存量）
+- 环境备注：无头浏览器 rAF 节流导致行走需逐帧驱动（真实设备 60fps 无此问题）；主屏分页器被快速连续滑动卡住属手机 UI 存量问题，与本任务无关
+
+Stage Summary:
+- 拾光小屋升级 v5 两室一厅：南向推门卧室 + 立体壁挂空调 + 手机照片相框（永久保存）+ 上下开窗 + 门窗换色 + 行走/缩放/滑动三处手感修复
+- 数据 v4→v5 自动迁移（旧档重播种默认布局）；win[] 扩容、doorOpen/doorCol/winCol/st.photo 均向后兼容可选字段
+- 涉及文件：types.ts、catalog.ts、scene/Room.tsx（重写）、scene/HomeScene.tsx（重写）、scene/Extras3D.tsx（新）、scene/Furn3D.tsx、CoupleHome.tsx、api/couple-home/route.ts、app/layout.tsx

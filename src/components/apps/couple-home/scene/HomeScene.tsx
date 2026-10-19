@@ -3,12 +3,14 @@
 /* eslint-disable react-hooks/immutability -- R3F/游戏循环需要原地修改 three 对象与运行时小人状态 */
 
 /**
- * 情侣小家 3D —— 场景主体（R3F Canvas 内核，v4）
+ * 情侣小家 3D —— 场景主体（R3F Canvas 内核，v5 两室一厅）
  *
  * - 生活模式：镜头跟随小人（滑动全方位旋转视角：左右任意转 + 上下低角↔近俯瞰；
  *   拖拽时 1:1 直接控制，松手恢复平滑跟随）+ 摇杆/WASD 移动 + 碰撞；
- *   从装修模式退出时从当前相机位置反推球坐标无缝接管，不再出现「拖动变慢」；
- * - 编辑模式：OrbitControls 上帝视角 + 家具拖拽（射线投到家具所在高度平面，0.25m 吸附）
+ *   指针系统按 pointerId 跟踪（双指捏合在生活模式不再引发旋转/缩放混乱）；
+ *   从装修模式退出时从当前相机位置反推球坐标无缝接管 + 缩短追赶窗口；
+ * - 走出家门：点门开门后，小人可经门洞走进卧室（隔墙两侧行走钳制 + 门走廊判定）；
+ * - 编辑模式：OrbitControls 上帝视角 + 家具拖拽（双房间钳制 + 0.25m 吸附）
  *   + 移动模式（选中后拖动画面任意位置搬运）+ 四向按钮微调 + 缩放按钮；
  * - 昼夜灯光切换：白天暖阳光 + 夜晚冷月光 + 灯具/窗户点光。
  */
@@ -20,7 +22,19 @@ import { OrbitControls } from '@react-three/drei';
 import Room from './Room';
 import Furn3D from './Furn3D';
 import Char3D from './Char3D';
-import { CATALOG, ROOM_X, ROOM_Z, SNAP, footprintOf } from '../catalog';
+import {
+  BED_X1,
+  BED_Z0,
+  BED_Z1,
+  CATALOG,
+  clampFurnToRooms,
+  DOOR_PASS,
+  DOOR_X,
+  ROOM_X,
+  ROOM_Z,
+  SNAP,
+  footprintOf,
+} from '../catalog';
 import type { CatalogEntry, CharRT, FurnitureItem, HomeMode } from '../types';
 
 // ---------------- 对外 Props ----------------
@@ -40,12 +54,17 @@ export interface HomeSceneProps {
   /** 四向微调指令（HUD 方向按钮 → 按当前视角方位换算世界轴） */
   moveCmd: RefObject<{ v: number; dir: 'up' | 'down' | 'left' | 'right' }>;
   onNudge: (dx: number, dz: number) => void;
-  /** 三扇窗开态 + 切换回调（窗户开合） */
+  /** 五扇窗开态 + 切换回调 */
   win?: boolean[];
   onToggleWin?: (i: number) => void;
-  /** 用户自定义地板/墙色 */
+  /** 用户自定义地板/墙/门/窗框颜色 */
   floorCol?: string;
   wallCol?: string;
+  doorCol?: string;
+  winCol?: string;
+  /** 卧室门开态 + 切换 */
+  doorOpen?: boolean;
+  onToggleDoor?: () => void;
   onFloorTap: () => void;
   onFurnTap: (item: FurnitureItem) => void;
   onDragEnd: (id: string) => void;
@@ -70,8 +89,13 @@ function lerpAngle(cur: number, target: number, k: number): number {
   return cur + d * k;
 }
 
-/** 小人 vs 家具 AABB（膨胀 0.2）推出 + 房间边界钳位（抬升家具不挡路） */
-function collideAndClamp(c: CharRT, items: FurnitureItem[]) {
+/** 家具双房间钳制：见 catalog.clampFurnToRooms（z < 隔墙 → 客厅；否则卧室） */
+
+/**
+ * 小人 vs 家具 AABB（膨胀 0.2）推出 + 房间边界钳制（抬升家具不挡路）。
+ * 两室一厅：隔墙挡路，只有「门开着且在门走廊内」才能穿过（partner 传 allowDoor=false 永远留在客厅）。
+ */
+function collideAndClamp(c: CharRT, items: FurnitureItem[], doorOpen: boolean) {
   for (const it of items) {
     const e = CATALOG[it.kind];
     if (!e || e.flat) continue;
@@ -87,11 +111,21 @@ function collideAndClamp(c: CharRT, items: FurnitureItem[]) {
     if (penX < penZ) c.x = it.x + (dx >= 0 ? hw : -hw);
     else c.z = it.z + (dz >= 0 ? hd : -hd);
   }
-  c.x = clamp(c.x, -ROOM_X + 0.35, ROOM_X - 0.35);
-  c.z = clamp(c.z, -ROOM_Z + 0.35, ROOM_Z - 0.35);
+  const m = 0.35;
+  if (c.z < BED_Z0) {
+    // —— 客厅侧 ——
+    c.x = clamp(c.x, -ROOM_X + m, ROOM_X - m);
+    const inCorridor = doorOpen && Math.abs(c.x - DOOR_X) < DOOR_PASS;
+    c.z = inCorridor ? clamp(c.z, -ROOM_Z + m, BED_Z0 + m) : clamp(c.z, -ROOM_Z + m, BED_Z0 - m);
+  } else {
+    // —— 卧室侧 ——
+    c.x = clamp(c.x, -ROOM_X + m, BED_X1 - m);
+    const inCorridor = doorOpen && Math.abs(c.x - DOOR_X) < DOOR_PASS;
+    c.z = inCorridor ? clamp(c.z, BED_Z0 - m, BED_Z1 - m) : clamp(c.z, BED_Z0 + m, BED_Z1 - m);
+  }
 }
 
-/** partner 漫游 AI */
+/** partner 漫游 AI（只待在客厅，不破门） */
 function wander(c: CharRT, dt: number, items: FurnitureItem[]) {
   const now = performance.now() / 1000;
   if (c.target) {
@@ -109,9 +143,9 @@ function wander(c: CharRT, dt: number, items: FurnitureItem[]) {
       c.moving = true;
       c.heading = lerpAngle(c.heading, Math.atan2(dx, dz), Math.min(1, dt * 8));
     }
-    collideAndClamp(c, items);
+    collideAndClamp(c, items, false);
   } else if (now > c.nextWander) {
-    c.target = { x: rand(-ROOM_X + 0.7, ROOM_X - 0.7), z: rand(-ROOM_Z + 0.7, ROOM_Z - 0.7) };
+    c.target = { x: rand(-ROOM_X + 0.7, ROOM_X - 0.7), z: rand(-ROOM_Z + 0.7, ROOM_Z - 0.9) };
   }
 }
 
@@ -147,7 +181,9 @@ function GameLoop({
   distRef,
   modeRef,
   itemsRef,
+  doorRef,
   lookRef,
+  focusRef,
 }: {
   meRT: CharRT;
   taRT: CharRT;
@@ -158,10 +194,15 @@ function GameLoop({
   distRef: RefObject<{ d: number }>;
   modeRef: RefObject<HomeMode>;
   itemsRef: RefObject<FurnitureItem[]>;
+  /** 卧室门开态（ref 高频读取） */
+  doorRef: RefObject<{ open: boolean }>;
   /** 拖拽中 1:1 直接控制镜头（true 时不做惯性 lerp） */
   lookRef: RefObject<{ on: boolean }>;
+  /** 相机对焦物 z（隔墙可见性用） */
+  focusRef: RefObject<{ z: number }>;
 }) {
   const { camera } = useThree();
+  const controls = useThree((s) => s.controls) as unknown as { target?: THREE.Vector3 } | null;
   const desired = useRef(new THREE.Vector3());
   const lookAt = useRef(new THREE.Vector3());
   const prevMode = useRef<HomeMode>('live');
@@ -175,7 +216,7 @@ function GameLoop({
     }
 
     // —— 模式切换无缝接管：装修 → 生活时从当前相机位置反推球坐标，
-    //    视角从用户离开的地方继续，彻底消除「退出后拖动变慢」 ——
+    //    视角从用户离开的地方继续；拖拽/松手都立即回到 1:1 手感 ——
     if (prevMode.current !== 'live') {
       const off = camera.position.clone().sub(new THREE.Vector3(meRT.x, 0, meRT.z));
       const len = Math.max(off.length(), 0.001);
@@ -183,7 +224,8 @@ function GameLoop({
       if (pitchRef.current)
         pitchRef.current.p = clamp(Math.asin(clamp(off.y / len, -1, 1)), PITCH_MIN, PITCH_MAX);
       if (distRef.current) distRef.current.d = clamp(len, 4.5, 11);
-      catchUp.current = 1.1; // 短暂加速收紧到跟随轨道
+      lookRef.current.on = false;
+      catchUp.current = 0.55; // 短暂收紧到跟随轨道（比旧版更短，退出即能跟手拖动）
     }
     prevMode.current = 'live';
 
@@ -219,9 +261,9 @@ function GameLoop({
     } else {
       meRT.moving = false;
     }
-    collideAndClamp(meRT, itemsRef.current ?? []);
+    collideAndClamp(meRT, itemsRef.current ?? [], doorRef.current?.open ?? false);
 
-    // partner 漫游
+    // partner 漫游（客厅内）
     wander(taRT, dt, itemsRef.current ?? []);
 
     // —— 相机跟随（球坐标：方位角 az / 俯仰 pitch / 距离 dist） ——
@@ -241,6 +283,10 @@ function GameLoop({
     }
     lookAt.current.set(meRT.x, 1.0, meRT.z);
     camera.lookAt(lookAt.current);
+
+    // 对焦物 z：生活=小人 / 编辑=轨道中心（供隔墙可见性判断）
+    const curMode = modeRef.current as HomeMode;
+    focusRef.current.z = curMode === 'edit' ? controls?.target?.z ?? 2.4 : meRT.z;
   });
   return null;
 }
@@ -281,7 +327,6 @@ function PointerRig({
 }) {
   const { camera, gl, raycaster } = useThree();
   const controls = useThree((s) => s.controls) as unknown as { enabled: boolean } | null;
-  const itemsRefP = itemsRef;
 
   // 回调存 ref：父组件重渲染（回调身份变化）不会拆装监听
   const cbRef = useRef({ onDragMove, onDragEnd, onDragSelect });
@@ -289,7 +334,8 @@ function PointerRig({
     cbRef.current = { onDragMove, onDragEnd, onDragSelect };
   });
   // 手势状态存 ref：即便 effect 重建也不丢「按住中」状态
-  const gesture = useRef({ down: false, lastX: 0, lastY: 0, moved: 0 });
+  // pid：只跟踪第一根落屏的手指，第二根手指（捏合/误触）完全忽略 —— 生活模式不再被捏合搞乱视角
+  const gesture = useRef({ down: false, pid: -1, lastX: 0, lastY: 0, moved: 0 });
 
   useEffect(() => {
     const el = gl.domElement;
@@ -311,12 +357,15 @@ function PointerRig({
 
     /** 把拖拽平面移到家具所在高度（贴地家具 y=0；抬升家具在其水平面） */
     const alignPlane = (id: string) => {
-      const it = itemsRefP.current?.find((f) => f.id === id);
+      const it = itemsRef.current?.find((f) => f.id === id);
       plane.constant = -(it?.y ?? 0);
     };
 
     const onDown = (e: PointerEvent) => {
+      // 已有手指在屏（旋转/拖拽中）→ 后续手指全部忽略（捏合不搞乱视角/不再误缩放）
+      if (gesture.current.down && gesture.current.pid !== e.pointerId) return;
       gesture.current.down = true;
+      gesture.current.pid = e.pointerId;
       gesture.current.lastX = e.clientX;
       gesture.current.lastY = e.clientY;
       gesture.current.moved = 0;
@@ -334,7 +383,7 @@ function PointerRig({
 
     const onMove = (e: PointerEvent) => {
       const g = gesture.current;
-      if (!g.down) return;
+      if (!g.down || e.pointerId !== g.pid) return;
       const dx = e.clientX - g.lastX;
       const dy = e.clientY - g.lastY;
       g.lastX = e.clientX;
@@ -362,16 +411,19 @@ function PointerRig({
 
       // —— 生活模式：滑动全方位旋转视角（左右任意转 / 上下低角↔近俯瞰） ——
       if (modeRef.current === 'live' && !dragRef.current) {
-        if (g.moved > 6) lookRef.current.on = true; // 超过轻点阈值 → 1:1 直接控制
+        if (g.moved > 4) lookRef.current.on = true; // 超过轻点阈值 → 1:1 直接控制
         const az = azRef.current;
-        if (az) az.az -= dx * 0.006;
+        if (az) az.az -= dx * 0.0075;
         const p = pitchRef.current;
-        if (p) p.p = clamp(p.p + dy * 0.004, PITCH_MIN, PITCH_MAX);
+        if (p) p.p = clamp(p.p + dy * 0.005, PITCH_MIN, PITCH_MAX);
       }
     };
 
-    const onUp = () => {
+    const onUp = (e: PointerEvent) => {
+      // 不是跟踪中的那根手指抬起 → 不结束手势
+      if (gesture.current.down && e.pointerId !== gesture.current.pid) return;
       gesture.current.down = false;
+      gesture.current.pid = -1;
       lookRef.current.on = false;
       const d = dragRef.current;
       if (d?.active) {
@@ -394,7 +446,6 @@ function PointerRig({
     window.addEventListener('pointerup', onUp, true);
     window.addEventListener('pointercancel', onUp, true);
     el.addEventListener('wheel', onWheel, { passive: true });
-    el.addEventListener('dragstart', blockDrag);
     return () => {
       el.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove, true);
@@ -404,7 +455,7 @@ function PointerRig({
       el.removeEventListener('dragstart', blockDrag);
     };
     // 仅依赖 three 稳定对象与 ref —— 回调已走 cbRef，重渲染不拆装
-  }, [camera, gl, raycaster, controls, modeRef, azRef, pitchRef, distRef, dragRef, moveSelRef, lookRef]);
+  }, [camera, gl, raycaster, controls, modeRef, azRef, pitchRef, distRef, dragRef, moveSelRef, lookRef, itemsRef]);
 
   return null;
 }
@@ -428,13 +479,17 @@ function ZoomPoker({ zoomCmd }: { zoomCmd: RefObject<{ v: number; dir: number }>
   return null;
 }
 
-// ---------------- 编辑网格 ----------------
+// ---------------- 编辑网格（客厅 + 卧室两块） ----------------
 
 function EditGrid() {
   const geo = useMemo(() => {
     const pts: number[] = [];
-    for (let x = -ROOM_X; x <= ROOM_X + 0.001; x += SNAP) pts.push(x, 0.015, -ROOM_Z, x, 0.015, ROOM_Z);
-    for (let z = -ROOM_Z; z <= ROOM_Z + 0.001; z += SNAP) pts.push(-ROOM_X, 0.015, z, ROOM_X, 0.015, z);
+    const span = (x0: number, x1: number, z0: number, z1: number) => {
+      for (let x = x0; x <= x1 + 0.001; x += SNAP) pts.push(x, 0.015, z0, x, 0.015, z1);
+      for (let z = z0; z <= z1 + 0.001; z += SNAP) pts.push(x0, 0.015, z, x1, 0.015, z);
+    };
+    span(-ROOM_X, ROOM_X, -ROOM_Z, BED_Z0); // 客厅
+    span(-ROOM_X, BED_X1, BED_Z0, BED_Z1); // 卧室
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     return g;
@@ -501,7 +556,7 @@ function NudgePoker({
   return null;
 }
 
-// ---------------- 编辑相机（进入装修模式时拉到俯瞰位） ----------------
+// ---------------- 编辑相机（进入装修模式时拉到俯瞰位，罩住两室一厅） ----------------
 
 function EditCameraKick({ mode }: { mode: HomeMode }) {
   const { camera } = useThree();
@@ -509,13 +564,13 @@ function EditCameraKick({ mode }: { mode: HomeMode }) {
   useEffect(() => {
     const cam = camera as THREE.PerspectiveCamera;
     if (mode === 'edit' && prev.current !== 'edit') {
-      // 对角俯瞰位 + 广角，竖屏窄视野也能罩住全屋
-      cam.position.set(5.6, 11, 4.6);
+      // 南侧斜上空俯瞰位（客厅+卧室全罩住），竖屏窄视野也够广
+      cam.position.set(8.6, 14.5, 15.2);
       if (cam.isPerspectiveCamera) {
         cam.fov = 55;
         cam.updateProjectionMatrix();
       }
-      cam.lookAt(0, 0.3, 0);
+      cam.lookAt(0, 0.3, 2.4);
     } else if (mode === 'live' && prev.current !== 'live') {
       if (cam.isPerspectiveCamera && cam.fov !== 48) {
         cam.fov = 48;
@@ -549,12 +604,12 @@ function Lights({ night }: { night: boolean }) {
         color={night ? '#b9c8e2' : '#ffe9c8'}
         shadow-mapSize-width={1024}
         shadow-mapSize-height={1024}
-        shadow-camera-left={-7}
-        shadow-camera-right={7}
-        shadow-camera-top={7}
-        shadow-camera-bottom={-7}
+        shadow-camera-left={-8}
+        shadow-camera-right={8}
+        shadow-camera-top={10}
+        shadow-camera-bottom={-10}
         shadow-camera-near={0.5}
-        shadow-camera-far={25}
+        shadow-camera-far={30}
         shadow-bias={-0.0006}
       />
     </>
@@ -566,24 +621,30 @@ function Lights({ night }: { night: boolean }) {
 export default function HomeScene(props: HomeSceneProps) {
   const {
     items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge,
-    win, onToggleWin, floorCol, wallCol,
+    win, onToggleWin, floorCol, wallCol, doorCol, winCol, doorOpen, onToggleDoor,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect,
   } = props;
 
   const modeRef = useRef<HomeMode>(mode);
   const itemsRef = useRef<FurnitureItem[]>(items);
+  const doorRef = useRef({ open: !!doorOpen });
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
+  useEffect(() => {
+    doorRef.current.open = !!doorOpen;
+  }, [doorOpen]);
 
   const azRef = useRef({ az: 0 });
   const pitchRef = useRef({ p: 0.92 });
   const distRef = useRef({ d: 8.8 });
   const dragRef = useRef<DragInfo | null>(null);
   const lookRef = useRef({ on: false });
+  /** 相机对焦物 z（生活=小人 / 编辑=轨道中心）→ 隔墙判断是否挡在镜头与它之间 */
+  const focusRef = useRef({ z: 2.4 });
   const moveSelRef = useRef<{ id: string | null; on: boolean }>({ id: null, on: false });
   useEffect(() => {
     moveSelRef.current = { id: moveOn ? selId : null, on: moveOn && !!selId };
@@ -597,7 +658,7 @@ export default function HomeScene(props: HomeSceneProps) {
     }
   };
 
-  /** 拖拽实时钳位 + 吸附（拖拽平面 = 家具自身高度） */
+  /** 拖拽实时钳位 + 吸附（双房间；拖拽平面 = 家具自身高度） */
   const handleDragMove = (id: string, x: number, z: number) => {
     const it = itemsRef.current.find((f) => f.id === id);
     if (it) {
@@ -607,7 +668,8 @@ export default function HomeScene(props: HomeSceneProps) {
       const hd = Math.max(d / 2, 0.18);
       const sx = Math.round(x / SNAP) * SNAP;
       const sz = Math.round(z / SNAP) * SNAP;
-      onDragMove(id, clamp(sx, -ROOM_X + hw, ROOM_X - hw), clamp(sz, -ROOM_Z + hd, ROOM_Z - hd));
+      const [cx, cz] = clampFurnToRooms(sx, sz, hw, hd);
+      onDragMove(id, cx, cz);
     }
   };
 
@@ -628,6 +690,11 @@ export default function HomeScene(props: HomeSceneProps) {
         onToggleWin={onToggleWin}
         floorCol={floorCol}
         wallCol={wallCol}
+        doorCol={doorCol}
+        winCol={winCol}
+        doorOpen={doorOpen}
+        onToggleDoor={onToggleDoor}
+        focusRef={focusRef}
       />
       {mode === 'edit' && <EditGrid />}
 
@@ -662,10 +729,10 @@ export default function HomeScene(props: HomeSceneProps) {
           enableDamping
           dampingFactor={0.08}
           minDistance={3.2}
-          maxDistance={23}
+          maxDistance={26}
           minPolarAngle={0.12}
           maxPolarAngle={1.32}
-          target={[0, 0.5, 0]}
+          target={[0, 0.4, 2.2]}
           screenSpacePanning={false}
         />
       )}
@@ -680,7 +747,9 @@ export default function HomeScene(props: HomeSceneProps) {
         distRef={distRef}
         modeRef={modeRef}
         itemsRef={itemsRef}
+        doorRef={doorRef}
         lookRef={lookRef}
+        focusRef={focusRef}
       />
       <PointerRig
         modeRef={modeRef}

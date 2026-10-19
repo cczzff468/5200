@@ -41,12 +41,23 @@ interface HomePayload {
   floorCol?: string;
   /** 墙壁自定义色（#rrggbb） */
   wallCol?: string;
+  /** 卧室门开态 */
+  doorOpen?: boolean;
+  /** 门自定义色（#rrggbb） */
+  doorCol?: string;
+  /** 窗框自定义色（#rrggbb） */
+  winCol?: string;
 }
 
 const MAX_ITEMS = 150;
 /** 3D 世界坐标绝对值上限（米） */
 const MAX_COORD = 20;
-const MAX_JSON = 256 * 1024;
+/** 相框照片放大后总快照上限（每张照片压缩后约 20~50KB，最多 12 张） */
+const MAX_JSON = 1536 * 1024;
+/** 单件家具状态（含照片 dataURL）上限 */
+const MAX_ST = 320 * 1024;
+/** 相框照片数量上限 */
+const MAX_PHOTOS = 12;
 
 /** 有符号坐标清洗：钳到 [-max, max]，非法返回 null */
 function clampCoord(v: unknown, max = MAX_COORD): number | null {
@@ -79,12 +90,13 @@ function cleanHex(v: unknown): string | undefined {
 
 const DIRS = new Set(['up', 'down', 'left', 'right']);
 
-/** 宽松清洗 HomeState（3D 版 v=3）；结构不合法返回 null */
+/** 宽松清洗 HomeState（3D 版 v5 两室一厅）；结构不合法返回 null */
 function normalizeHome(raw: unknown): HomePayload | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   if (!Array.isArray(r.furniture)) return null;
   const furniture: FurnItem[] = [];
+  let photoCount = 0;
   for (const it of r.furniture.slice(0, MAX_ITEMS)) {
     if (!it || typeof it !== 'object') continue;
     const f = it as Record<string, unknown>;
@@ -97,12 +109,23 @@ function normalizeHome(raw: unknown): HomePayload | null {
     const rx = clampRad(f.rx, 1.1);
     const y = clampCoord(f.y, 2.4);
     const col = cleanHex(f.col);
-    const st =
-      f.st && typeof f.st === 'object' && !Array.isArray(f.st)
-        ? JSON.stringify(f.st).length <= 2048
-          ? (f.st as Record<string, unknown>)
-          : {}
-        : {};
+    let st: Record<string, unknown> = {};
+    if (f.st && typeof f.st === 'object' && !Array.isArray(f.st)) {
+      const rawSt = f.st as Record<string, unknown>;
+      if (JSON.stringify(rawSt).length <= MAX_ST) {
+        st = rawSt;
+        // 相框照片：总数限 12 张，超额剩掉照片字段
+        if (typeof st.photo === 'string') {
+          if (photoCount >= MAX_PHOTOS || !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(st.photo)) {
+            const clone = { ...st };
+            delete clone.photo;
+            st = clone;
+          } else {
+            photoCount++;
+          }
+        }
+      }
+    }
     furniture.push({ id, kind, x, z, ry: ry ?? 0, rx: rx ?? 0, y: y ?? 0, col, st });
   }
   if (furniture.length === 0 && r.furniture.length > 0) return null;
@@ -125,13 +148,16 @@ function normalizeHome(raw: unknown): HomePayload | null {
     win = r.win.slice(0, 8).map((w) => w === true);
   }
   return {
-    v: typeof r.v === 'number' ? r.v : 4,
+    v: typeof r.v === 'number' ? r.v : 5,
     furniture,
     chars,
     night: r.night === true,
     win,
     floorCol: cleanHex(r.floorCol),
     wallCol: cleanHex(r.wallCol),
+    doorOpen: r.doorOpen === true,
+    doorCol: cleanHex(r.doorCol),
+    winCol: cleanHex(r.winCol),
   };
 }
 
@@ -179,8 +205,8 @@ export async function POST(req: NextRequest) {
   if (dataStr.length > MAX_JSON) return NextResponse.json({ error: 'too-large' }, { status: 413 });
 
   try {
-    // 乐观并发：仅当服务端存的是「同代（v4）合法数据」且 rev 不一致 → 409 + 回带服务端最新（客户端采纳）；
-    // 服务端若存的是旧格式（v3 / 2D 时代 / 损坏数据），直接用新快照覆盖完成迁移。
+    // 乐观并发：仅当服务端存的是「同代（v5）合法数据」且 rev 不一致 → 409 + 回带服务端最新（客户端采纳）；
+    // 服务端若存的是旧格式（v4 / 2D 时代 / 损坏数据），直接用新快照覆盖完成迁移。
     const existing = await db.coupleHome.findUnique({ where: { workspaceId } });
     if (existing) {
       let serverVer = 0;
@@ -189,7 +215,7 @@ export async function POST(req: NextRequest) {
       } catch {
         serverVer = 0;
       }
-      const serverHome = serverVer === 4 ? normalizeHome(JSON.parse(existing.data)) : null;
+      const serverHome = serverVer === 5 ? normalizeHome(JSON.parse(existing.data)) : null;
       if (serverHome && existing.rev !== clientRev) {
         return NextResponse.json(
           {
