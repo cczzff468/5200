@@ -21057,3 +21057,16 @@ Stage Summary:
 - 穿墙透视修复完成：墙体遮挡从「相机方位粗判+瞬时硬切」升级为「视线段×AABB 精确判定+阻尼淡入淡出」，只藏真正挡住小人的墙且丝滑过渡；相机加墙体钳制杜绝字面钻墙；门窗/门梁/窗与宿主墙同隐同现不浮空
 - 涉及文件：scene/Room.tsx（segHitsBox/useWallOcclusionFade/门窗宿主墙盒/buildWallBoxes 导出）、scene/HomeScene.tsx（pushCameraOutWalls/GameLoop 钳制+focusRef 编辑模式修复）
 - 用户需求全部满足：方案 A（动态隐藏+平滑 opacity）+ 方案 B（相机碰撞边界）组合落地；滑动/点击/编辑拖拽均未破坏
+
+---
+Task ID: cottage-v11-menu
+Agent: 主协调 Agent (Z.ai Code)
+Task: 用户报告「小人躺反了」+ 要求列出可选事项清单（新家具/完善/优化），只列不做
+
+Work Log:
+- 截图确认躺反 Bug：床枕头/玩偶在床头侧，小人头朝床尾（Char3D lie 姿势 Ry(π)·Rx(π/2) 与 anchorOf 的 heading 对齐方向不匹配，头指向床尾侧）
+- 盘点现状：41 个 GLB 家具 + 程序化小物 15 件；交互已有 seat×6/sleep×2/bath×2/watch(tv)/work(laptop)/door×7/toggle×7/playful/photo×4/washer
+- 输出可选项菜单（A Bug 修复 / B 新家具 / C 交互扩展 / D 大型系统 / E 体验优化）交用户勾选，未写任何代码
+
+Stage Summary:
+- 本轮零代码改动；躺反修复已定位（lie 朝向需翻转 π 并全角度自测）待用户批准
