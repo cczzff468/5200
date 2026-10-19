@@ -29,6 +29,7 @@ import {
   Fan3D,
   Juicer3D,
   Kettle3D,
+  Laptop3D,
   Mirror3D,
   Plates3D,
   PlushCat3D,
@@ -261,10 +262,11 @@ export default function Furn3D({
         {entry.kind === 'cup' && <Cup3D col={item.col} />}
         {entry.kind === 'juicer' && <Juicer3D col={item.col} />}
 
-        {/* 风扇（开 = 叶片旋转 + 摇头）/ 插座 / 吊灯（挂顶） */}
+        {/* 风扇（开 = 叶片旋转 + 摇头）/ 插座 / 吊灯（挂顶）/ 手提电脑（开 = 屏盖翻开 + 屏幕发光） */}
         {entry.kind === 'fan' && <Fan3D on={!!item.st?.on} col={item.col} />}
         {entry.kind === 'socket' && <Socket3D col={item.col} />}
         {entry.kind === 'chandelier' && <Chandelier3D on={!!item.st?.on} night={night} col={item.col} />}
+        {entry.kind === 'laptop' && <Laptop3D on={!!item.st?.on} col={item.col} />}
 
         {/* 洗衣机状态灯 */}
         {entry.acts?.washer && modelSize && (

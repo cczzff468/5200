@@ -76,6 +76,8 @@ interface HomePayload {
   charStyle?: string;
   /** 昼夜跟随真实时间 */
   nightAuto?: boolean;
+  /** 「我」正在进行的家具动作（重进页面恢复姿势） */
+  act?: { type?: string; itemId?: string };
 }
 
 const MAX_ITEMS = 240;
@@ -118,6 +120,8 @@ function cleanHex(v: unknown): string | undefined {
 }
 
 const DIRS = new Set(['up', 'down', 'left', 'right']);
+/** 可持久化的家具动作类型（与前端 CharAction 对齐） */
+const ACT_TYPES = new Set(['sit', 'lie', 'bath', 'shower', 'watch', 'work']);
 
 /** 宽松清洗 HomeState（3D 版 v5 两室一厅）；结构不合法返回 null */
 function normalizeHome(raw: unknown): HomePayload | null {
@@ -194,6 +198,14 @@ function normalizeHome(raw: unknown): HomePayload | null {
     const bath = clean(d.bath);
     if (bed != null || kt != null || bath != null) doorPos = { bed, kt, bath };
   }
+  // 「我」正在进行的家具动作（类型白名单 + 家具 id 截断；不合法直接丢）
+  let act: HomePayload['act'] | undefined;
+  if (r.act && typeof r.act === 'object' && !Array.isArray(r.act)) {
+    const a = r.act as Record<string, unknown>;
+    const type = typeof a.type === 'string' && ACT_TYPES.has(a.type) ? a.type : undefined;
+    const itemId = cleanStr(a.itemId, 64) || undefined;
+    if (type && itemId) act = { type, itemId };
+  }
   return {
     v: typeof r.v === 'number' ? r.v : 5,
     furniture,
@@ -222,6 +234,7 @@ function normalizeHome(raw: unknown): HomePayload | null {
     fp: r.fp === true,
     charStyle: r.charStyle === 'real' ? 'real' : r.charStyle === 'cartoon' ? 'cartoon' : undefined,
     nightAuto: r.nightAuto !== false,
+    act,
   };
 }
 

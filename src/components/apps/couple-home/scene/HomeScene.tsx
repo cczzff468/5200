@@ -116,6 +116,16 @@ export interface HomeSceneProps {
 const PITCH_MIN = 0.22;
 const PITCH_MAX = 1.5;
 
+/** 家具动作 → 小人姿势（watch/work 也是坐姿） */
+const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
+  sit: 'sit',
+  lie: 'lie',
+  bath: 'bath',
+  shower: 'shower',
+  watch: 'sit',
+  work: 'sit',
+};
+
 // ---------------- 小工具 ----------------
 
 const clamp = THREE.MathUtils.clamp;
@@ -358,7 +368,7 @@ function GameLoop({
       } else {
         meRT.moving = false;
         act.arrived = true;
-        poseRef.current.pose = act.type === 'lie' ? 'lie' : act.type === 'bath' ? 'bath' : 'sit';
+        poseRef.current.pose = POSE_OF_ACT[act.type] ?? 'sit';
         poseRef.current.y = act.y;
       }
     } else if (act) {

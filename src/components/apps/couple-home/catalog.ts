@@ -392,7 +392,8 @@ export const CATALOG: Record<string, CatalogEntry> = {
   },
   tv: {
     kind: 'tv', name: '高清大屏电视', cat: 'appliance', fp: [1.8, 0.15],
-    acts: { toggle: true },
+    // 看电视：小人坐到电视前地板上（屏幕朝本地 +z，人面朝电视 ry+π），电视自动开机
+    acts: { toggle: true, watch: { y: 0.02, dz: 1.15 } },
   },
   speaker: {
     kind: 'speaker', glb: G('speaker'), name: '落地音箱', cat: 'appliance', fp: [0.3, 0.3],
@@ -521,7 +522,12 @@ export const CATALOG: Record<string, CatalogEntry> = {
   // ---- 卫浴全套（v5.4：淋浴/浴室柜洗手台/挂壁镜/毛巾架） ----
   shower: {
     kind: 'shower', name: '玻璃淋浴房', cat: 'bathroom', fp: [1.02, 1.02], h: 2.05,
-    acts: { toggle: true },
+    // 站进淋浴房冲澡：背板在 +x/+z 侧，人面朝背板角落（ryOff π/4）；花洒自动开水；
+    // 起身从步入口（-x/-z 对角）走出；toggle 保留（单独开水用）
+    acts: {
+      toggle: true,
+      bath: { y: 0.04, dx: -0.06, dz: -0.06, stand: true, ryOff: Math.PI / 4, out: [-0.82, -0.82] },
+    },
   },
   basin: {
     kind: 'basin', name: '浴室柜洗手台', cat: 'bathroom', fp: [0.96, 0.54], h: 0.86,
@@ -594,6 +600,12 @@ export const CATALOG: Record<string, CatalogEntry> = {
   socket: {
     kind: 'socket', name: '墙壁插座', cat: 'appliance', fp: [0.14, 0.06], wallMount: true, wallY: 0.38, h: 0.1,
     acts: {},
+  },
+  // ---- 电器·手提电脑（程序化建模，摆桌面；点击「上网」小人坐到桌前敲键盘） ----
+  laptop: {
+    kind: 'laptop', name: '手提电脑', cat: 'appliance', fp: [0.36, 0.26], h: 0.24,
+    // 屏幕朝本地 +z；小人坐在电脑前（y=椅面高）敲键盘；开屏盖/关屏盖动画
+    acts: { work: { y: 0.45, dz: 0.5 } },
   },
   // ---- 灯具·吊灯（程序化建模，挂在天花板；点击开/关） ----
   chandelier: {
@@ -675,6 +687,7 @@ export function defaultHome(): HomeState {
       F('desk', -3.95, 0.3, { ry: Math.PI / 2 }),
       F('chair', -3.15, 0.3, { ry: -Math.PI / 2 }),
       F('radio', -3.9, 0.1, { y: 0.77, ry: Math.PI / 2 }), // 摆上书桌
+      F('laptop', -3.61, 0.62, { y: 0.78, ry: Math.PI / 2 }), // 手提电脑摆上书桌（前缘）
 
       // —— 客厅·空调（东壁挂）+ 玄关（南，门旁） ——
       F('aircon', 4.34, -1.6, { y: 1.85, ry: -Math.PI / 2 }),
@@ -1059,9 +1072,40 @@ export function migrateBathV54(h: HomeState): HomeState {
   return { ...h, furniture: furn, doorPos, winPos };
 }
 
-/** 老档全量迁移链：卧室补全 → 厨房开放 → 卫生间+小物全家桶 → 卫生间搬家（v5.4 客厅东侧） */
+let migSeq5 = 0;
+
+/**
+ * v5.5 家具互动迁移（幂等）：老档案补一台手提电脑 —— 跟随书桌实际位置与朝向
+ * 落在桌面前缘（local (-0.3, 0.34)，避开常驻的收音机 local (0.2, 0.05)）；没有书桌就不补（可商店购买）。
+ */
+export function migrateActV55(h: HomeState): HomeState {
+  if (!h || h.v !== 5 || !Array.isArray(h.furniture)) return h;
+  if (h.furniture.some((f) => f.kind === 'laptop')) return h;
+  const desk = h.furniture.find((f) => f.kind === 'desk');
+  if (!desk) return h;
+  const ry = desk.ry ?? 0;
+  const c = Math.cos(ry);
+  const s = Math.sin(ry);
+  const lx = -0.3;
+  const lz = 0.34;
+  const furn: FurnitureItem[] = [
+    ...h.furniture,
+    {
+      id: `laptop-mig5-${Date.now().toString(36)}-${++migSeq5}`,
+      kind: 'laptop',
+      x: desk.x + lx * c + lz * s,
+      z: desk.z - lx * s + lz * c,
+      y: 0.78,
+      ry,
+      st: {},
+    },
+  ];
+  return { ...h, furniture: furn };
+}
+
+/** 老档全量迁移链：卧室补全 → 厨房开放 → 卫生间+小物全家桶 → 卫生间搬家（v5.4 客厅东侧） → 家具互动补全 */
 export function migrateHome(h: HomeState): HomeState {
-  return migrateBathV54(migrateBathV53(migrateKitchenV52(migrateBedroomV51(h))));
+  return migrateActV55(migrateBathV54(migrateBathV53(migrateKitchenV52(migrateBedroomV51(h)))));
 }
 
 /** 同步读缓存（首屏即时渲染；无则 null） */

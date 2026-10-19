@@ -29,6 +29,7 @@ import {
   Clock,
   Droplet,
   Eye,
+  Laptop,
   Loader2,
   Maximize,
   Minimize,
@@ -38,9 +39,11 @@ import {
   Pencil,
   RotateCcw,
   RotateCw,
+  ShowerHead,
   Store,
   Sun,
   Trash2,
+  Tv,
   UserRound,
   Users,
   X,
@@ -248,6 +251,72 @@ function normAngle(a: number): number {
   return x;
 }
 
+/** 家具动作 → 小人姿势（watch/work 也是坐姿） */
+const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
+  sit: 'sit',
+  lie: 'lie',
+  bath: 'bath',
+  shower: 'shower',
+  watch: 'sit',
+  work: 'sit',
+};
+
+/** 动作按钮文案：[待开始, 进行中] */
+const ACT_LABELS: Record<CharAction['type'], [string, string]> = {
+  sit: ['坐下', '站起来'],
+  lie: ['睡觉', '起床'],
+  bath: ['泡个澡', '出来啦'],
+  shower: ['冲个澡', '出来啦'],
+  watch: ['看电视', '关电视'],
+  work: ['上网', '休息一下'],
+};
+
+/**
+ * 由动作类型 + 家具实例算出完整动作参数（落点/朝向/支撑面/起身落点）。
+ * 起身落点默认沿「背对所面对象」方向留出一步：躺床从床尾下、坐椅向房内跨一步、
+ * 看电视/上网向后离屏；目录锚点可用 out 显式指定（淋浴房从步入口 -x/-z 对角出去）。
+ */
+function anchorOf(type: CharAction['type'], item: FurnitureItem): CharAction | null {
+  const entry = CATALOG[item.kind];
+  const a =
+    type === 'sit'
+      ? entry?.acts.seat
+      : type === 'lie'
+        ? entry?.acts.sleep
+        : type === 'bath' || type === 'shower'
+          ? entry?.acts.bath
+          : type === 'watch'
+            ? entry?.acts.watch
+            : entry?.acts.work;
+  if (!a) return null;
+  // 目录锚点统一形状（seat/sleep/watch/work 是 bath 的子集，字段可选）
+  const an = a as {
+    y: number;
+    dx?: number;
+    dz?: number;
+    ryOff?: number;
+    out?: [number, number];
+  };
+  const ry0 = item.ry ?? 0;
+  const ry = ry0 + (an.ryOff ?? 0);
+  const cos = Math.cos(ry0);
+  const sin = Math.sin(ry0);
+  const lx = an.dx ?? 0;
+  const lz = an.dz ?? 0;
+  const back = type === 'lie' ? -1.45 : type === 'bath' ? 0.95 : 0.55;
+  const out: [number, number] = an.out ?? [lx, lz + back];
+  return {
+    type,
+    itemId: item.id,
+    tx: item.x + lx * cos + lz * sin,
+    tz: item.z - lx * sin + lz * cos,
+    ry,
+    y: a.y,
+    ox: item.x + out[0] * cos + out[1] * sin,
+    oz: item.z - out[0] * sin + out[1] * cos,
+  };
+}
+
 interface Toast {
   id: number;
   msg: string;
@@ -298,8 +367,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [thumbMap, setThumbMap] = useState<Record<string, string>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [full, setFull] = useState(false);
-  /** 家具互动（生活模式）：点击可坐/睡/泡的家具后弹出确认按钮 */
-  const [charAction, setCharAction] = useState<{ type: 'sit' | 'lie' | 'bath'; itemId: string; active: boolean } | null>(null);
+  /** 家具互动（生活模式）：点击可坐/睡/泡/淋浴/看电视/上网的家具后弹出确认按钮 */
+  const [charAction, setCharAction] = useState<{
+    type: CharAction['type'];
+    itemId: string;
+    active: boolean;
+  } | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -424,6 +497,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
       fp: fpRef.current.on,
       charStyle: charStyleRef.current,
       nightAuto: nightAutoRef.current,
+      // 正在进行的家具动作（已摆好姿势才存，重进页面接着坐/睡/泡/淋浴/看电视/上网）
+      act: (() => {
+        const a = actRef.current;
+        return a?.arrived ? { type: a.type, itemId: a.itemId } : undefined;
+      })(),
       chars: {
         me: {
           x: Math.round(meRT.current.x * 100) / 100,
@@ -467,6 +545,20 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setFp(!!h.fp);
     setCharStyle(h.charStyle === 'real' ? 'real' : 'cartoon');
     setNightAuto(h.nightAuto !== false);
+    // 恢复「我」正在进行的家具动作（仅在当前没有进行中动作时：
+    // 初始化/重置/409 采纳互不打架；家具已被删则忽略）
+    if (!actRef.current && poseRef.current.pose === 'stand') {
+      const a = h.act;
+      const it = a ? h.furniture.find((f) => f.id === a.itemId) : undefined;
+      const full = it && a ? anchorOf(a.type, it) : null;
+      if (a && full) {
+        full.arrived = true;
+        actRef.current = full;
+        poseRef.current.pose = POSE_OF_ACT[a.type];
+        poseRef.current.y = full.y;
+        setCharAction({ type: a.type, itemId: a.itemId, active: true });
+      }
+    }
   }, []);
 
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -537,6 +629,21 @@ export default function CoupleHome({ close }: { close: () => void }) {
     };
   }, []);
 
+  // 首屏恢复：上次退出时正在进行的家具动作（坐/睡/泡/淋浴/看电视/上网；
+  // 远端采纳会走 adoptHome 内的同名恢复，这里兜本地缓存路径）
+  useEffect(() => {
+    const a = pack.home.act;
+    if (!a || actRef.current || poseRef.current.pose !== 'stand') return;
+    const it = pack.home.furniture.find((f) => f.id === a.itemId);
+    const full = it ? anchorOf(a.type, it) : null;
+    if (!full) return;
+    full.arrived = true;
+    actRef.current = full;
+    poseRef.current.pose = POSE_OF_ACT[a.type];
+    poseRef.current.y = full.y;
+    setCharAction({ type: a.type, itemId: a.itemId, active: true });
+  }, []);
+
   // 定期推送 + 卸载兜底
   useEffect(() => {
     const t = setInterval(() => {
@@ -575,47 +682,66 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   // ---------------- 家具交互（生活模式） ----------------
 
-  /** 结束当前动作：站起来 / 起床 / 出浴（泡澡自动关水穿衣） */
+  /**
+   * 结束当前动作：起身走下家具（落到预留的起身落点）；
+   * 淋浴自动关花洒、看电视自动关电视、上网自动合电脑、泡澡自动关水（全部穿衣恢复原状）。
+   */
   const endAction = useCallback(() => {
     const act = actRef.current;
     actRef.current = null;
     poseRef.current.pose = 'stand';
     poseRef.current.y = 0;
     setCharAction(null);
-    if (act?.type === 'bath') {
-      const it = itemsRef.current.find((f) => f.id === act.itemId);
-      if (it?.st?.bathWater) {
-        setItems((prev) => prev.map((f) => (f.id === act.itemId ? { ...f, st: { ...f.st, bathWater: false } } : f)));
-        saveSoon();
-      }
-      toast('洗得香香的，穿好衣服啦');
+    if (!act) return;
+    // 已摆好姿势才挪到起身落点（走到半路被替换时保持原地，由新动作接着寻路）
+    if (act.arrived && act.ox != null && act.oz != null) {
+      meRT.current.x = act.ox;
+      meRT.current.z = act.oz;
     }
-  }, [saveSoon, toast]);
+    const off = (id: string, patch: FurnitureItem['st']) =>
+      setItems((prev) => prev.map((f) => (f.id === id ? { ...f, st: { ...f.st, ...patch } } : f)));
+    if (act.type === 'bath') {
+      const it = itemsRef.current.find((f) => f.id === act.itemId);
+      if (it?.st?.bathWater) off(act.itemId, { bathWater: false });
+      toast('洗得香香的，穿好衣服啦');
+    } else if (act.type === 'shower') {
+      off(act.itemId, { on: false });
+      toast('冲干净啦，穿好衣服出来咯～');
+    } else if (act.type === 'watch') {
+      off(act.itemId, { on: false });
+      toast('电视关掉啦，让眼睛歇一歇～');
+    } else if (act.type === 'work') {
+      off(act.itemId, { on: false });
+      toast('合上电脑，起来走走～');
+    }
+    saveSoon();
+  }, [meRT, saveSoon, toast]);
 
-  /** 开始动作：小人走向家具落点 → 摆姿势（GameLoop 驱动） */
+  /** 开始动作：小人走向家具落点 → 摆姿势（GameLoop 驱动）；淋浴/看电视/上网自动开水开机 */
   const beginAction = useCallback(
-    (type: 'sit' | 'lie' | 'bath', item: FurnitureItem) => {
-      const entry = CATALOG[item.kind];
-      const a: { y: number; dx?: number; dz?: number } | undefined =
-        type === 'sit' ? entry?.acts.seat : type === 'lie' ? entry?.acts.sleep : entry?.acts.bath;
-      if (!a) return;
-      const ry = item.ry ?? 0;
-      const cos = Math.cos(ry);
-      const sin = Math.sin(ry);
-      const lx = a.dx ?? 0;
-      const lz = a.dz ?? 0;
-      actRef.current = {
-        type,
-        itemId: item.id,
-        tx: item.x + lx * cos + lz * sin,
-        tz: item.z - lx * sin + lz * cos,
-        ry,
-        y: a.y,
-      };
+    (type: CharAction['type'], item: FurnitureItem) => {
+      const act = anchorOf(type, item);
+      if (!act) return;
+      actRef.current = act;
       setCharAction((prev) => (prev ? { ...prev, active: true } : { type, itemId: item.id, active: true }));
-      toast(type === 'sit' ? '走过去坐下咯～' : type === 'lie' ? '上床躺好，盖好被子～' : '脱掉衣服，泡澡泡起来～');
+      const turnOn = (patch: FurnitureItem['st']) =>
+        setItems((prev) => prev.map((f) => (f.id === item.id ? { ...f, st: { ...f.st, ...patch } } : f)));
+      if (type === 'sit') toast('走过去坐下咯～');
+      else if (type === 'lie') toast('上床躺好，盖好被子～');
+      else if (type === 'bath') toast('脱掉衣服，泡澡泡起来～');
+      else if (type === 'shower') {
+        turnOn({ on: true });
+        toast('打开花洒，冲个热水澡～');
+      } else if (type === 'watch') {
+        turnOn({ on: true });
+        toast('打开电视，窝着看一会儿～');
+      } else {
+        turnOn({ on: true });
+        toast('打开电脑，上网冲一下浪～');
+      }
+      saveSoon();
     },
-    [toast],
+    [toast, saveSoon],
   );
 
   const onFurnTap = useCallback(
@@ -631,10 +757,22 @@ export default function CoupleHome({ close }: { close: () => void }) {
         return;
       }
 
-      // 生活模式：可坐/睡/泡的家具 → 弹出确认按钮（先结束当前姿势）
-      if (entry.acts?.seat || entry.acts?.sleep || entry.acts?.bath) {
+      // 生活模式：可坐/睡/泡/淋浴/看电视/上网的家具 → 弹出确认按钮（先结束当前姿势，
+      //   小人自动从当前家具上下来，再走向新目标 —— 同一时刻只做一个动作）
+      const acts = entry.acts;
+      if (acts?.seat || acts?.sleep || acts?.bath || acts?.watch || acts?.work) {
         if (poseRef.current.pose !== 'stand' || actRef.current) endAction();
-        const type: 'sit' | 'lie' | 'bath' = entry.acts.bath ? 'bath' : entry.acts.sleep ? 'lie' : 'sit';
+        const type: CharAction['type'] = acts?.bath
+          ? acts.bath.stand
+            ? 'shower'
+            : 'bath'
+          : acts?.sleep
+            ? 'lie'
+            : acts?.seat
+              ? 'sit'
+              : acts?.watch
+                ? 'watch'
+                : 'work';
         setCharAction({ type, itemId: item.id, active: false });
         return;
       }
@@ -1520,20 +1658,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <Armchair className="h-[18px] w-[18px]" />
                 ) : charAction.type === 'lie' ? (
                   <BedDouble className="h-[18px] w-[18px]" />
-                ) : (
+                ) : charAction.type === 'bath' ? (
                   <Bath className="h-[18px] w-[18px]" />
+                ) : charAction.type === 'shower' ? (
+                  <ShowerHead className="h-[18px] w-[18px]" />
+                ) : charAction.type === 'watch' ? (
+                  <Tv className="h-[18px] w-[18px]" />
+                ) : (
+                  <Laptop className="h-[18px] w-[18px]" />
                 )}
-                {charAction.active
-                  ? charAction.type === 'sit'
-                    ? '站起来'
-                    : charAction.type === 'lie'
-                      ? '起床'
-                      : '出来啦'
-                  : charAction.type === 'sit'
-                    ? '坐下'
-                    : charAction.type === 'lie'
-                      ? '睡觉'
-                      : '泡个澡'}
+                {ACT_LABELS[charAction.type][charAction.active ? 1 : 0]}
               </motion.button>
             </motion.div>
           )}

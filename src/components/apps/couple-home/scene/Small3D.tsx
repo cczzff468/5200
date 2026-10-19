@@ -927,3 +927,60 @@ export function TowelRack3D({ col }: { col?: string }) {
     </group>
   );
 }
+
+// ---------------- 手提电脑（开 = 屏盖翻开 + 屏幕发光；关 = 合盖待机） ----------------
+
+export function Laptop3D({ on, col }: { on?: boolean; col?: string }) {
+  const body = col ?? '#e8e6e1';
+  const dark = '#3c4046';
+  const lid = useRef<THREE.Group>(null);
+  useFrame((_, rawDt) => {
+    const d = Math.min(rawDt, 0.05);
+    if (lid.current) {
+      // 屏盖绕后缘铰链开合：合盖 ≈ 平贴键盘（1.52rad），开盖微后仰（0.18rad）
+      const target = on ? 0.18 : 1.52;
+      lid.current.rotation.x = THREE.MathUtils.damp(lid.current.rotation.x, target, 8, d);
+    }
+  });
+  return (
+    <group>
+      {/* 底座 */}
+      <mesh position={[0, 0.012, 0]} castShadow>
+        <boxGeometry args={[0.34, 0.018, 0.24]} />
+        {mat(body, 0.5, { metalness: 0.15 })}
+      </mesh>
+      {/* 键盘面（开盖时透出背光） */}
+      <mesh position={[0, 0.023, 0.008]}>
+        <boxGeometry args={[0.29, 0.004, 0.16]} />
+        {mat(dark, 0.6, { emissive: on ? '#5a7d95' : '#000000', emissiveIntensity: on ? 0.35 : 0 })}
+      </mesh>
+      {/* 触控板 */}
+      <mesh position={[0, 0.023, 0.082]}>
+        <boxGeometry args={[0.09, 0.003, 0.048]} />
+        {mat('#9aa0a8', 0.5)}
+      </mesh>
+      {/* 屏盖（绕后缘开合） */}
+      <group ref={lid} position={[0, 0.022, -0.115]}>
+        <mesh position={[0, 0.105, 0]} castShadow>
+          <boxGeometry args={[0.34, 0.21, 0.014]} />
+          {mat(body, 0.5, { metalness: 0.15 })}
+        </mesh>
+        {/* 屏幕（开机发光，关机深黑） */}
+        <mesh position={[0, 0.105, 0.009]}>
+          <boxGeometry args={[0.305, 0.18, 0.003]} />
+          <meshStandardMaterial
+            color={on ? '#c8e4f2' : '#23262b'}
+            emissive={on ? '#8ec8e6' : '#000000'}
+            emissiveIntensity={on ? 0.95 : 0}
+            roughness={0.3}
+          />
+        </mesh>
+        {/* 屏上摄像头小点 */}
+        <mesh position={[0, 0.197, 0.01]}>
+          <sphereGeometry args={[0.005, 8, 8]} />
+          {mat('#5a5f66', 0.4)}
+        </mesh>
+      </group>
+    </group>
+  );
+}

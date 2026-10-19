@@ -69,6 +69,11 @@ interface CharRig {
   clothes: THREE.Mesh[];
   /** 泡澡素体（肤色躯干，平时隐藏） */
   skinTorso: THREE.Mesh;
+  /** 泡澡/淋浴泡泡（脱衣遮挡，腰圈 + 头顶洗发沫，平时隐藏） */
+  foam: THREE.Group;
+  /** 睡觉 Zzz（躺床时从头顶飘起，平时隐藏） */
+  zzz: THREE.Group;
+  zzzSprites: THREE.Sprite[];
 }
 
 const stdMat = (c: string, rough = 0.8, extra?: Partial<THREE.MeshStandardMaterialParameters>) =>
@@ -238,6 +243,42 @@ function buildChar(who: 'me' | 'partner', style: 'cartoon' | 'real'): CharRig {
   );
   skinTorso.visible = false;
 
+  // ---------- 泡澡/淋浴泡泡（脱衣遮挡：腰圈 + 肩头 + 头顶洗发沫，平时隐藏） ----------
+  const foam = new THREE.Group();
+  foam.visible = false;
+  lieWrap.add(foam);
+  const foamMat = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.22, transparent: true, opacity: 0.94 });
+  const foamAdd = (x: number, y: number, z: number, r: number) => {
+    const fm = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), foamMat);
+    fm.position.set(x, y, z);
+    fm.castShadow = false;
+    foam.add(fm);
+  };
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    foamAdd(Math.cos(a) * (P.torsoR + 0.035), P.torsoY - P.torsoLen * 0.28 + (i % 2) * 0.04, Math.sin(a) * (P.torsoR + 0.035), 0.05 + (i % 3) * 0.013);
+  }
+  foamAdd(-P.torsoR * 0.7, P.torsoY + P.torsoLen * 0.42, P.torsoR * 0.6, 0.045);
+  foamAdd(P.torsoR * 0.7, P.torsoY + P.torsoLen * 0.42, P.torsoR * 0.6, 0.05);
+  foamAdd(-P.headR * 0.42, P.headY + P.headR * 0.72, P.headR * 0.18, 0.05);
+  foamAdd(P.headR * 0.46, P.headY + P.headR * 0.78, -P.headR * 0.12, 0.055);
+  foamAdd(0, P.headY + P.headR * 0.9, P.headR * 0.28, 0.045);
+
+  // ---------- 睡觉 Zzz（挂 root：躺姿时头部在局部 +z 侧，Zzz 从头上方飘起） ----------
+  const zzz = new THREE.Group();
+  zzz.visible = false;
+  g.add(zzz);
+  const zzzTex = makeZzzTexture();
+  const zzzSprites: THREE.Sprite[] = [];
+  for (let i = 0; i < 3; i++) {
+    const sm = new THREE.SpriteMaterial({ map: zzzTex, transparent: true, opacity: 0, depthWrite: false });
+    const sp = new THREE.Sprite(sm);
+    sp.scale.setScalar(0.11 + i * 0.045);
+    sp.position.set(0.14 + i * 0.03, 0.72 + i * 0.16, 0.78 + i * 0.07);
+    zzz.add(sp);
+    zzzSprites.push(sp);
+  }
+
   // 脖子（拟真风露出脖颈）
   if (style === 'real') {
     mesh(new THREE.CylinderGeometry(0.034, 0.04, 0.07, 10), stdMat(o.skin, 0.65), 0, P.torsoY + P.torsoLen / 2 + P.torsoR + 0.02, 0, lieWrap);
@@ -391,10 +432,30 @@ function buildChar(who: 'me' | 'partner', style: 'cartoon' | 'real'): CharRig {
     back.rotation.x = -0.1;
   }
 
-  return { root: g, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, hipY: P.hipY, clothes, skinTorso };
+  return { root: g, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, hipY: P.hipY, clothes, skinTorso, foam, zzz, zzzSprites };
 }
 
 const dampN = THREE.MathUtils.damp;
+
+/** Zzz 字贴图（睡觉特效用，白字 + 雾紫描边） */
+function makeZzzTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 128;
+  const ctx = cv.getContext('2d')!;
+  ctx.font = '900 92px "PingFang SC", "Nunito", ui-rounded, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 16;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'rgba(179,168,204,0.95)';
+  ctx.strokeText('Z', 64, 70);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('Z', 64, 70);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef }: Char3DProps) {
   const rig = useMemo(() => buildChar(who, style), [who, style]);
@@ -409,14 +470,24 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef }: Ch
     h.rotation.y = rt.heading;
 
     const t = state.clock.elapsedTime;
-    const { root, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, clothes, skinTorso, hipY } = rig;
+    const { root, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, clothes, skinTorso, foam, zzz, zzzSprites, hipY } = rig;
     const pose: CharPose = who === 'me' ? (poseRef?.current?.pose ?? 'stand') : 'stand';
     const poseY = poseRef?.current?.y ?? 0;
 
-    // 泡澡：脱衣（隐藏衣物 + 素体可见）
-    const bathing = pose === 'bath';
-    for (const m of clothes) m.visible = !bathing;
-    skinTorso.visible = bathing;
+    // 泡澡/淋浴：脱衣（隐藏衣物 + 素体可见 + 泡泡遮挡）
+    const undressed = pose === 'bath' || pose === 'shower';
+    for (const m of clothes) m.visible = !undressed;
+    skinTorso.visible = undressed;
+    foam.visible = undressed;
+    // 睡觉 Zzz：躺床时从头顶飘起
+    zzz.visible = pose === 'lie';
+    if (pose === 'lie') {
+      zzzSprites.forEach((sp, i) => {
+        const ph = (t * 0.42 + i * 0.34) % 1;
+        sp.position.y = 0.72 + i * 0.15 + ph * 0.32;
+        (sp.material as THREE.SpriteMaterial).opacity = Math.sin(ph * Math.PI) * 0.95;
+      });
+    }
 
     if (pose === 'stand') {
       // 躺姿包裹复位
@@ -450,6 +521,7 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef }: Ch
         root.rotation.x = dampN(root.rotation.x, 0, 10, dt);
         root.rotation.z = dampN(root.rotation.z, 0, 10, dt);
       }
+      head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
       return;
     }
 
@@ -471,8 +543,35 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef }: Ch
       armR.rotation.z = dampN(armR.rotation.z, -0.35, 8, dt);
       foreL.rotation.x = dampN(foreL.rotation.x, -0.15, 8, dt);
       foreR.rotation.x = dampN(foreR.rotation.x, -0.15, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
       // 睡觉呼吸（胸口起伏更明显）
       root.position.y += Math.sin(t * 1.6) * 0.006;
+      return;
+    }
+
+    if (pose === 'shower') {
+      // —— 站姿淋浴：双臂抬搓头发 + 微微仰头 + 身体轻晃（水从花洒落下） ——
+      lieWrap.rotation.x = dampN(lieWrap.rotation.x, 0, 10, dt);
+      lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 10, dt);
+      root.position.y = dampN(root.position.y, Math.max(0.02, poseY), 9, dt);
+      root.rotation.x = dampN(root.rotation.x, 0, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, Math.sin(t * 1.4) * 0.035, 8, dt);
+      legL.rotation.x = dampN(legL.rotation.x, 0.03, 8, dt);
+      legR.rotation.x = dampN(legR.rotation.x, -0.03, 8, dt);
+      kneeL.rotation.x = dampN(kneeL.rotation.x, 0, 8, dt);
+      kneeR.rotation.x = dampN(kneeR.rotation.x, 0, 8, dt);
+      const washUp = -2.45 + Math.sin(t * 2.1) * 0.07;
+      armL.rotation.x = dampN(armL.rotation.x, washUp, 7, dt);
+      armR.rotation.x = dampN(armR.rotation.x, washUp + Math.sin(t * 2.3) * 0.06, 7, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.3, 7, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.3, 7, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.55, 7, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.62, 7, dt);
+      head.rotation.x = dampN(head.rotation.x, -0.16, 6, dt);
+      // 泡泡轻轻浮动
+      foam.children.forEach((f, i) => {
+        f.position.y += Math.sin(t * 2.2 + i * 1.3) * 0.00035;
+      });
       return;
     }
 
@@ -495,8 +594,14 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef }: Ch
     armR.rotation.z = dampN(armR.rotation.z, 0.12, 8, dt);
     foreL.rotation.x = dampN(foreL.rotation.x, pose === 'bath' ? -0.5 : -0.7, 9, dt);
     foreR.rotation.x = dampN(foreR.rotation.x, pose === 'bath' ? -0.5 : -0.7, 9, dt);
+    head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
     // 泡澡时轻轻晃悠 + 呼噜泡泡般的上下浮动
-    if (bathing) root.position.y += Math.sin(t * 2.4) * 0.006;
+    if (pose === 'bath') {
+      root.position.y += Math.sin(t * 2.4) * 0.006;
+      foam.children.forEach((f, i) => {
+        f.position.y += Math.sin(t * 2.2 + i * 1.3) * 0.00035;
+      });
+    }
   });
 
   return (

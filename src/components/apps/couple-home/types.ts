@@ -78,7 +78,8 @@ export type FurnitureKind =
   | 'shower'
   | 'basin'
   | 'mirror'
-  | 'towelRack';
+  | 'towelRack'
+  | 'laptop';
 
 /** 家具分类（商店栏的 tab） */
 export type FurnCategory =
@@ -207,6 +208,8 @@ export interface HomeState {
   charStyle?: 'cartoon' | 'real';
   /** 昼夜跟随真实时间（手动点太阳/月亮后变 false） */
   nightAuto?: boolean;
+  /** 「我」正在进行的家具动作（重进页面恢复姿势；家具被删则忽略） */
+  act?: { type: CharAction['type']; itemId: string };
 }
 
 /** 家具目录条目（静态配置，不持久化） */
@@ -244,10 +247,24 @@ export interface CatalogEntry {
     photo?: boolean;
     /** 可坐：点击出「坐下」按钮，小人走过去坐下（按钮变「站起来」） */
     seat?: { y: number; dx?: number; dz?: number };
-    /** 可睡：点击出「睡觉」按钮，小人走过去躺上床（按钮变「起床」） */
+    /** 可睡：点击出「睡觉」按钮，小人走过去躺上床（按钮变「起床」，头朝枕头 + Zzz 特效） */
     sleep?: { y: number; dz?: number };
-    /** 可泡澡：点击出「泡澡」按钮，小人脱衣坐进浴缸（按钮变「出来」）；浴缸水龙头可放水 */
-    bath?: { y: number; dx?: number; dz?: number };
+    /**
+     * 可泡澡/淋浴：小人脱衣走进浴缸或淋浴房（按钮变「出来」）；out = 起身落点（局部坐标）；
+     * stand = 站姿淋浴（花洒自动开水）；ryOff = 朝向偏移；浴缸水龙头可放水
+     */
+    bath?: {
+      y: number;
+      dx?: number;
+      dz?: number;
+      stand?: boolean;
+      ryOff?: number;
+      out?: [number, number];
+    };
+    /** 可看：点击出「看电视」按钮，小人坐到电视前地板上（电视自动开机，按钮变「关电视」） */
+    watch?: { y: number; dz?: number };
+    /** 可用：点击出「上网」按钮，小人坐到电脑前敲键盘（屏幕自动亮起，按钮变「休息一下」） */
+    work?: { y: number; dz?: number };
   };
   /** 是灯具：开着时附加点光（y 为相对家具原点的灯高） */
   light?: { y: number; color?: string; intensity?: number };
@@ -269,21 +286,24 @@ export interface CharRT {
   nextWander: number;
 }
 
-/** 小人姿势：站立 / 坐下 / 躺床 / 泡澡（脱衣坐浴缸） */
-export type CharPose = 'stand' | 'sit' | 'lie' | 'bath';
+/** 小人姿势：站立 / 坐下 / 躺床 / 泡澡（脱衣坐浴缸）/ 淋浴（脱衣站淋浴房） */
+export type CharPose = 'stand' | 'sit' | 'lie' | 'bath' | 'shower';
 
 /** 小人画风 */
 export type CharStyle = 'cartoon' | 'real';
 
 /** 小人正在执行的家具动作（走向家具 → 摆姿势） */
 export interface CharAction {
-  type: 'sit' | 'lie' | 'bath';
+  type: 'sit' | 'lie' | 'bath' | 'shower' | 'watch' | 'work';
   itemId: string;
   /** 目标落点（世界坐标）与朝向、坐垫高度 */
   tx: number;
   tz: number;
   ry: number;
   y: number;
+  /** 起身落点（世界坐标；结束动作时小人自然走下家具落在这里） */
+  ox?: number;
+  oz?: number;
   /** 已走到位（姿势已摆好） */
   arrived?: boolean;
 }
