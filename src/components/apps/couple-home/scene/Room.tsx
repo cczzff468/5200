@@ -1,5 +1,7 @@
 'use client';
 
+/* eslint-disable react-hooks/immutability -- R3F/游戏循环需要原地修改 three 对象（墙体遮挡淡出每帧写 visible/材质） */
+
 /**
  * 情侣小家 3D —— 房屋外壳（v5.3 四室：客厅+卧室+厨房+卫生间）
  *
@@ -8,7 +10,8 @@
  * - 门/窗数据驱动（catalog.DOORS / WINS）：编辑模式下点击 = 选中（可沿墙滑行/换颜色），不开合；
  *   生活模式下点击 = 开合；
  * - 天花板：四房间各一块，相机钻进屋子（低视角）才显示，俯瞰自动隐藏；颜色分开换；
- * - 墙壁：按相机方位自动隐藏（洋房剖面效果）；隔墙按「镜头↔对焦物」轴线判定隐藏；
+ * - 墙壁：视线段遮挡淡出（方案A）——只隐藏「相机→对焦物」视线真正穿过的墙（slab 法 AABB 相交），
+ *   材质 opacity 每帧阻尼淡入淡出（丝滑变透明而非硬切 visible）；门/窗/门梁与所在墙同隐同现；
  *   地板/墙色四房间分开自定义。
  */
 
@@ -184,7 +187,7 @@ function makeNightSkyTexture(): THREE.CanvasTexture {
 
 // ---------------- 墙体 ----------------
 
-/** 相机对焦物（生活=小人 / 编辑=轨道中心）；隔墙按轴判断是否挡在镜头与它之间 */
+/** 相机对焦物（生活=小人 / 编辑=轨道中心）；墙体按「视线段是否穿过」判断隐藏 */
 interface FocusPos {
   x: number;
   z: number;
@@ -198,20 +201,122 @@ interface WallDef {
   size: [number, number, number];
   /** 朝室外的法线 */
   normal: THREE.Vector3;
-  /** 共享内墙：不按法线隐藏，改按「镜头与对焦物是否被墙隔开」轴线判定（见 sharedVisible） */
-  shared?: { axis: 'x' | 'z'; at: number };
   /** 是否画踢脚线（默认画） */
   baseboard?: boolean;
   /** 归属房间：四房间分开换色 */
   room: 'lr' | 'br' | 'kt' | 'ba';
 }
 
+/** 墙体世界 AABB（墙盒不旋转，中心±半尺寸） */
+function boxOf(def: WallDef): THREE.Box3 {
+  return new THREE.Box3(
+    new THREE.Vector3(def.pos[0] - def.size[0] / 2, def.pos[1] - def.size[1] / 2, def.pos[2] - def.size[2] / 2),
+    new THREE.Vector3(def.pos[0] + def.size[0] / 2, def.pos[1] + def.size[1] / 2, def.pos[2] + def.size[2] / 2),
+  );
+}
+
+const _segDir = new THREE.Vector3();
+
 /**
- * 共享内墙可见性：只有当墙挡在「镜头」与「对焦物」（小人/轨道中心）之间时才隐藏 ——
- * 小人站在门口看门时墙照常可见（能点门），走进隔壁后墙自动消失形成剖面。
+ * 视线段 P0→P1 是否穿过 AABB（slab 法；t 限定 [0,1]）——
+ * 只统计「相机与对焦物之间」的墙：对焦物身后（t>1）与相机身后（t<0）的墙一律不隐藏，
+ * 杜绝「望穿小人身后的墙看到屋外」的过度剖面。
  */
-function sharedVisible(camAt: number, focusAt: number, at: number): boolean {
-  return (camAt - at) * (focusAt - at) >= 0;
+function segHitsBox(p0: THREE.Vector3, p1: THREE.Vector3, b: THREE.Box3): boolean {
+  let tmin = 0;
+  let tmax = 1;
+  _segDir.subVectors(p1, p0);
+  for (const ax of ['x', 'y', 'z'] as const) {
+    const d = _segDir[ax];
+    if (Math.abs(d) < 1e-9) {
+      if (p0[ax] < b.min[ax] || p0[ax] > b.max[ax]) return false;
+    } else {
+      let t1 = (b.min[ax] - p0[ax]) / d;
+      let t2 = (b.max[ax] - p0[ax]) / d;
+      if (t1 > t2) {
+        const t = t1;
+        t1 = t2;
+        t2 = t;
+      }
+      if (t1 > tmin) tmin = t1;
+      if (t2 < tmax) tmax = t2;
+      if (tmin > tmax) return false;
+    }
+  }
+  return true;
+}
+
+const _focusP = new THREE.Vector3();
+/** 材质淡出前的基准值（透明/深度写状态也要还原，玻璃/光晕等本就透明的材质不受影响） */
+const _matBase = new WeakMap<THREE.Material, { o: number; t: boolean; d: boolean }>();
+
+/**
+ * 墙体遮挡淡出（方案 A 核心）：
+ * - 遮挡判定 = 「相机→对焦物」视线段是否穿过墙体 AABB（boxes 任一命中即挡）；
+ * - 命中 → 组内所有材质 opacity 每帧阻尼淡出（透明期 depthWrite=false 防排序瑕疵，
+ *   接近全隐才 visible=false 跳过渲染）；移开 → 阻尼淡回，结束后按基准一次性还原交还声明式控制。
+ * 旋转时墙「丝滑变透明」而非啪地消失；只藏真正挡住视线的墙。
+ */
+function useWallOcclusionFade(
+  root: RefObject<THREE.Group | null>,
+  boxes: THREE.Box3[],
+  focusRef?: RefObject<FocusPos>,
+) {
+  const op = useRef(1);
+  const fading = useRef(false);
+  useFrame(({ camera }, rawDt) => {
+    const g = root.current;
+    if (!g) return;
+    const f = focusRef?.current;
+    _focusP.set(f?.x ?? 0, 1, f?.z ?? 2.4);
+    let blocked = false;
+    for (const b of boxes) {
+      if (segHitsBox(camera.position, _focusP, b)) {
+        blocked = true;
+        break;
+      }
+    }
+    const dt = Math.min(rawDt, 0.05);
+    op.current = THREE.MathUtils.damp(op.current, blocked ? 0 : 1, blocked ? 14 : 8, dt);
+    const v = op.current;
+    const vis = v > 0.015;
+    if (g.visible !== vis) g.visible = vis;
+    if (!vis) return; // 全隐：材质保持淡出态，恢复时阻尼淡回
+    if (v < 0.998) {
+      fading.current = true;
+      g.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const mm = mesh.material as THREE.Material | THREE.Material[];
+        for (const m of Array.isArray(mm) ? mm : [mm]) {
+          let base = _matBase.get(m);
+          if (!base) {
+            base = { o: m.opacity, t: m.transparent, d: m.depthWrite };
+            _matBase.set(m, base);
+          }
+          m.opacity = base.o * v;
+          m.transparent = true;
+          m.depthWrite = false;
+        }
+      });
+    } else if (fading.current) {
+      // 淡出结束：按基准一次性还原（透明/深度写状态也还原），交还声明式控制
+      fading.current = false;
+      g.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const mm = mesh.material as THREE.Material | THREE.Material[];
+        for (const m of Array.isArray(mm) ? mm : [mm]) {
+          const base = _matBase.get(m);
+          if (base) {
+            m.opacity = base.o;
+            m.transparent = base.t;
+            m.depthWrite = base.d;
+          }
+        }
+      });
+    }
+  });
 }
 
 /**
@@ -224,20 +329,20 @@ function buildWalls(doorBed: number, doorKt: number, doorBath: number): WallDef[
   return [
     // —— 客厅 ——
     { key: 'back', pos: [0, H / 2, -ROOM_Z - WALL_T / 2], size: [ROOM_W + WALL_T * 2, H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'lr' },
-    { key: 'frontWest', pos: [(-ROOM_X - WALL_T + doorBed - DOOR_W / 2) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [doorBed - DOOR_W / 2 - (-ROOM_X - WALL_T), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: { axis: 'z', at: BED_Z0 }, room: 'lr' },
-    { key: 'frontEast', pos: [(doorBed + DOOR_W / 2 + BED_X1) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [BED_X1 - (doorBed + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: { axis: 'z', at: BED_Z0 }, room: 'lr' },
+    { key: 'frontWest', pos: [(-ROOM_X - WALL_T + doorBed - DOOR_W / 2) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [doorBed - DOOR_W / 2 - (-ROOM_X - WALL_T), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'lr' },
+    { key: 'frontEast', pos: [(doorBed + DOOR_W / 2 + BED_X1) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [BED_X1 - (doorBed + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'lr' },
     { key: 'left', pos: [-ROOM_X - WALL_T / 2, H / 2, 0], size: [WALL_T, H, ROOM_D], normal: new THREE.Vector3(-1, 0, 0), room: 'lr' },
-    // 客厅东墙（= 卫生间西墙）：两段夹卫生间门洞（axis x 判定：两侧互看时隐藏）
-    { key: 'rightA', pos: [ROOM_X + WALL_T / 2, H / 2, (-ROOM_Z - WALL_T / 2 + doorBath - DOOR_W / 2) / 2], size: [WALL_T, H, doorBath - DOOR_W / 2 - (-ROOM_Z - WALL_T / 2)], normal: new THREE.Vector3(1, 0, 0), shared: { axis: 'x', at: ROOM_X }, room: 'lr' },
-    { key: 'rightB', pos: [ROOM_X + WALL_T / 2, H / 2, (doorBath + DOOR_W / 2 + ROOM_Z + WALL_T / 2) / 2], size: [WALL_T, H, ROOM_Z + WALL_T / 2 - (doorBath + DOOR_W / 2)], normal: new THREE.Vector3(1, 0, 0), shared: { axis: 'x', at: ROOM_X }, room: 'lr' },
+    // 客厅东墙（= 卫生间西墙）：两段夹卫生间门洞
+    { key: 'rightA', pos: [ROOM_X + WALL_T / 2, H / 2, (-ROOM_Z - WALL_T / 2 + doorBath - DOOR_W / 2) / 2], size: [WALL_T, H, doorBath - DOOR_W / 2 - (-ROOM_Z - WALL_T / 2)], normal: new THREE.Vector3(1, 0, 0), room: 'lr' },
+    { key: 'rightB', pos: [ROOM_X + WALL_T / 2, H / 2, (doorBath + DOOR_W / 2 + ROOM_Z + WALL_T / 2) / 2], size: [WALL_T, H, ROOM_Z + WALL_T / 2 - (doorBath + DOOR_W / 2)], normal: new THREE.Vector3(1, 0, 0), room: 'lr' },
     // —— 卧室（隔墙南侧） ——
     { key: 'bedLeft', pos: [-ROOM_X - WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(-1, 0, 0), room: 'br' },
-    // 卧室/厨房共墙（axis x 判定：两侧互看时隐藏）
-    { key: 'bedRight', pos: [BED_X1 + WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0), shared: { axis: 'x', at: BED_X1 }, room: 'br' },
+    // 卧室/厨房共墙
+    { key: 'bedRight', pos: [BED_X1 + WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0), room: 'br' },
     { key: 'bedBack', pos: [(BED_X0 + BED_X1) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [BED_X1 - BED_X0 + WALL_T * 2, H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'br' },
     // —— 厨房（北墙两段夹门洞；北墙延伸到卫生间东缘，与卫生间南墙共面） ——
-    { key: 'ktNorthWest', pos: [(BED_X1 + doorKt - DOOR_W / 2) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [doorKt - DOOR_W / 2 - BED_X1, H, WALL_T], normal: new THREE.Vector3(0, 0, -1), shared: { axis: 'z', at: BED_Z0 }, room: 'kt' },
-    { key: 'ktNorthMain', pos: [(doorKt + DOOR_W / 2 + BATH_X1 + WALL_T) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [BATH_X1 + WALL_T - (doorKt + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, -1), shared: { axis: 'z', at: BED_Z0 }, room: 'kt' },
+    { key: 'ktNorthWest', pos: [(BED_X1 + doorKt - DOOR_W / 2) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [doorKt - DOOR_W / 2 - BED_X1, H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'kt' },
+    { key: 'ktNorthMain', pos: [(doorKt + DOOR_W / 2 + BATH_X1 + WALL_T) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [BATH_X1 + WALL_T - (doorKt + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'kt' },
     // 厨房东墙（v5.4 变外墙，无门洞）
     { key: 'ktEast', pos: [KTCH_X1 + WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0), room: 'kt' },
     { key: 'ktSouth', pos: [(BED_X1 + KTCH_X1) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [KTCH_X1 - BED_X1 + WALL_T * 2, H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'kt' },
@@ -247,32 +352,25 @@ function buildWalls(doorBed: number, doorKt: number, doorBath: number): WallDef[
   ];
 }
 
-/** 门洞上方的门头梁（随所在隔墙同隐同现；无踢脚线） */
+/** 门洞上方的门头梁（与所在整墙同隐同现；无踢脚线） */
 function DoorLintel({
   pos,
   alongAxis,
   wallCol,
   night,
-  focusAxis,
-  focusAt,
   focusRef,
+  hostBox,
 }: {
   pos: [number, number, number];
   alongAxis: 'x' | 'z';
   wallCol?: string;
   night: boolean;
-  focusAxis: 'x' | 'z';
-  focusAt: number;
   focusRef?: RefObject<FocusPos>;
+  /** 所在整墙（含门洞跨度）的剖面盒：视线穿过墙上任意处 → 门梁随墙同隐 */
+  hostBox: THREE.Box3;
 }) {
   const ref = useRef<THREE.Group>(null);
-  const { camera } = useThree();
-  useFrame(() => {
-    if (!ref.current) return;
-    const f = focusRef?.current;
-    const cam = focusAxis === 'x' ? camera.position.x : camera.position.z;
-    ref.current.visible = sharedVisible(cam, (focusAxis === 'x' ? f?.x : f?.z) ?? focusAt - 1, focusAt);
-  });
+  useWallOcclusionFade(ref, useMemo(() => [hostBox], [hostBox]), focusRef);
   const size: [number, number, number] = alongAxis === 'x' ? [DOOR_W + 0.04, WALL_H - 2.06, WALL_T] : [WALL_T, WALL_H - 2.06, DOOR_W + 0.04];
   return (
     <group ref={ref}>
@@ -287,25 +385,7 @@ const DOOR_H = 2.06;
 
 function Wall({ def, night, wallCol, focusRef }: { def: WallDef; night: boolean; wallCol?: string; focusRef?: RefObject<FocusPos> }) {
   const ref = useRef<THREE.Group>(null);
-  const { camera } = useThree();
-  const center = useMemo(
-    () => new THREE.Vector3(def.pos[0], def.pos[1], def.pos[2]),
-    [def],
-  );
-
-  useFrame(() => {
-    if (!ref.current) return;
-    if (def.shared) {
-      // 共享内墙：只在挡住「镜头→对焦物」视线时隐藏（门/门梁同隐同现）
-      const f = focusRef?.current;
-      const cam = def.shared.axis === 'x' ? camera.position.x : camera.position.z;
-      ref.current.visible = sharedVisible(cam, (def.shared.axis === 'x' ? f?.x : f?.z) ?? BED_Z0 - 1, def.shared.at);
-      return;
-    }
-    // 相机在该墙外侧（视向穿过墙体） → 隐藏，形成剖面屋
-    const camDir = camera.position.clone().sub(center);
-    ref.current.visible = camDir.dot(def.normal) < 0.6;
-  });
+  useWallOcclusionFade(ref, useMemo(() => [boxOf(def)], [def]), focusRef);
 
   return (
     <group ref={ref}>
@@ -336,6 +416,14 @@ function Wall({ def, night, wallCol, focusRef }: { def: WallDef; night: boolean;
       )}
     </group>
   );
+}
+
+/**
+ * 墙段碰撞盒（生活模式相机防钻墙钳制用；不含门洞区域——相机可从开着的门洞穿过）。
+ * 随门位变化重建：门挪 → 墙段 AABB 跟随。
+ */
+export function buildWallBoxes(doorBed: number, doorKt: number, doorBath: number): THREE.Box3[] {
+  return buildWalls(doorBed, doorKt, doorBath).map(boxOf);
 }
 
 // ---------------- 门牌（门洞上方：卧室 / 厨房 / 卫生间） ----------------
@@ -418,9 +506,8 @@ function HouseDoor({
   selected,
   onSelect,
   onEditPointerDown,
-  focusAxis,
-  focusAt,
   focusRef,
+  hostBox,
 }: {
   pos: [number, number];
   ry: number;
@@ -434,23 +521,30 @@ function HouseDoor({
   selected: boolean;
   onSelect: () => void;
   onEditPointerDown: (e: ThreeEvent<PointerEvent>) => void;
-  focusAxis: 'x' | 'z';
-  focusAt: number;
   focusRef?: RefObject<FocusPos>;
+  /** 所在整墙（含门洞跨度）的剖面盒：视线穿过墙上任意处 → 门随墙同隐（不浮空） */
+  hostBox: THREE.Box3;
 }) {
   const panel = useRef<THREE.Group>(null);
   const doorRoot = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
-  const { camera } = useThree();
 
-  // 门随隔墙同隐同现（隔墙可见时门正常可见，走近就能点）
-  useFrame(() => {
-    if (doorRoot.current) {
-      const f = focusRef?.current;
-      const cam = focusAxis === 'x' ? camera.position.x : camera.position.z;
-      doorRoot.current.visible = sharedVisible(cam, (focusAxis === 'x' ? f?.x : f?.z) ?? focusAt - 1, focusAt);
-    }
-  });
+  // 门遮挡盒：门洞区域（含门框包边）；视线穿过门洞 → 门随墙同隐；从开着的门洞看过去也淡出门板
+  const doorBox = useMemo(() => {
+    const hw = DOOR_W / 2 + 0.09;
+    const ht = (WALL_T + 0.03) / 2 + 0.02;
+    const top = DOOR_H + 0.08;
+    return ry === 0
+      ? new THREE.Box3(
+          new THREE.Vector3(pos[0] - hw, 0, pos[1] - ht),
+          new THREE.Vector3(pos[0] + hw, top, pos[1] + ht),
+        )
+      : new THREE.Box3(
+          new THREE.Vector3(pos[0] - ht, 0, pos[1] - hw),
+          new THREE.Vector3(pos[0] + ht, top, pos[1] + hw),
+        );
+  }, [pos[0], pos[1], ry]);
+  useWallOcclusionFade(doorRoot, useMemo(() => [doorBox, hostBox], [doorBox, hostBox]), focusRef);
 
   useFrame((_, dt) => {
     if (!panel.current) return;
@@ -572,6 +666,8 @@ function Window({
   selected,
   onSelect,
   onEditPointerDown,
+  focusRef,
+  hostBox,
 }: {
   position: [number, number, number];
   rotationY: number;
@@ -583,13 +679,33 @@ function Window({
   selected: boolean;
   onSelect: () => void;
   onEditPointerDown: (e: ThreeEvent<PointerEvent>) => void;
+  focusRef?: RefObject<FocusPos>;
+  /** 所在墙的剖面盒：墙被视线穿过时窗随墙同隐（避免墙隐了窗浮空） */
+  hostBox: THREE.Box3 | null;
 }) {
   const glow = useRef<THREE.PointLight>(null);
   const sashPivot = useRef<THREE.Group>(null);
+  const root = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
 
   const skyTex = useMemo(() => (night ? makeNightSkyTexture() : makeDaySkyTexture()), [night]);
   const frameCol = col ?? '#f0e7d4';
+
+  // 窗遮挡盒：窗框范围；视线穿窗或穿所在墙 → 窗淡出
+  const winBox = useMemo(
+    () =>
+      rotationY === 0
+        ? new THREE.Box3(
+            new THREE.Vector3(position[0] - 0.78, position[1] - 0.68, position[2] - 0.1),
+            new THREE.Vector3(position[0] + 0.78, position[1] + 0.68, position[2] + 0.1),
+          )
+        : new THREE.Box3(
+            new THREE.Vector3(position[0] - 0.1, position[1] - 0.68, position[2] - 0.78),
+            new THREE.Vector3(position[0] + 0.1, position[1] + 0.68, position[2] + 0.78),
+          ),
+    [position[0], position[1], position[2], rotationY],
+  );
+  useWallOcclusionFade(root, useMemo(() => (hostBox ? [winBox, hostBox] : [winBox]), [winBox, hostBox]), focusRef);
 
   useFrame((_, dt) => {
     if (!sashPivot.current) return;
@@ -637,7 +753,7 @@ function Window({
   };
 
   return (
-    <group position={position} rotation={[0, rotationY, 0]}>
+    <group position={position} rotation={[0, rotationY, 0]} ref={root}>
       {/* 窗外风景（凹进墙内，透过玻璃可见） */}
       <mesh position={[0, 0, -0.045]}>
         <planeGeometry args={[1.36, 1.14]} />
@@ -855,6 +971,36 @@ export default function Room({
   /** 墙段随门位动态重建（门挪 → 墙洞跟随） */
   const walls = useMemo(() => buildWalls(doorBed, doorKt, doorBath), [doorBed, doorKt, doorBath]);
 
+  /** 三面门洞墙的「整墙剖面盒」（两段夹门洞的并集，含门洞跨度）：门/门梁随整墙同隐同现 */
+  const slabs = useMemo(() => {
+    const union = (a: string, b: string): THREE.Box3 => {
+      const wa = walls.find((w) => w.key === a);
+      const wb = walls.find((w) => w.key === b);
+      if (!wa || !wb) return new THREE.Box3();
+      return boxOf(wa).union(boxOf(wb));
+    };
+    return {
+      bed: union('frontWest', 'frontEast'),
+      kt: union('ktNorthWest', 'ktNorthMain'),
+      bath: union('rightA', 'rightB'),
+    };
+  }, [walls]);
+
+  /** 每扇窗所在墙的剖面盒（墙被视线穿过时窗随墙同隐，避免墙隐了窗浮空） */
+  const winHosts = useMemo(() => {
+    const boxes = walls.map(boxOf);
+    return WINS.map((w, i) => {
+      const along = winPos?.[i] ?? w.def;
+      const cx = w.axis === 'z' ? along : w.at + w.side * 0.08;
+      const cz = w.axis === 'z' ? w.at + w.side * 0.08 : along;
+      const p = new THREE.Vector3(cx, 1.5, cz);
+      for (const b of boxes) {
+        if (b.clone().expandByScalar(0.18).containsPoint(p)) return b;
+      }
+      return null;
+    });
+  }, [walls, winPos]);
+
   /** 各房间地板材质（共享同一张纹理，颜色独立） */
   const floorMat = (col?: string) => (
     <meshStandardMaterial
@@ -940,10 +1086,10 @@ export default function Room({
         />
       ))}
 
-      {/* 门洞上方的门头梁 ×3 */}
-      <DoorLintel pos={[doorBed, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallCol} night={night} focusAxis="z" focusAt={BED_Z0} focusRef={focusRef} />
-      <DoorLintel pos={[doorKt, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallColK} night={night} focusAxis="z" focusAt={BED_Z0} focusRef={focusRef} />
-      <DoorLintel pos={[ROOM_X + WALL_T / 2, DOOR_H + (WALL_H - DOOR_H) / 2, doorBath]} alongAxis="z" wallCol={wallCol} night={night} focusAxis="x" focusAt={ROOM_X} focusRef={focusRef} />
+      {/* 门洞上方的门头梁 ×3（与所在整墙同隐同现） */}
+      <DoorLintel pos={[doorBed, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallCol} night={night} focusRef={focusRef} hostBox={slabs.bed} />
+      <DoorLintel pos={[doorKt, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallColK} night={night} focusRef={focusRef} hostBox={slabs.kt} />
+      <DoorLintel pos={[ROOM_X + WALL_T / 2, DOOR_H + (WALL_H - DOOR_H) / 2, doorBath]} alongAxis="z" wallCol={wallCol} night={night} focusRef={focusRef} hostBox={slabs.bath} />
 
       {/* 三扇门（点击开合 / 编辑模式选中滑行；门牌挂门洞上方） */}
       <HouseDoor
@@ -958,9 +1104,8 @@ export default function Room({
         selected={selWall === 'door-bed'}
         onSelect={() => onWallTap?.('door-bed')}
         onEditPointerDown={(e) => onWallPointerDown?.(e, 'door-bed')}
-        focusAxis="z"
-        focusAt={BED_Z0}
         focusRef={focusRef}
+        hostBox={slabs.bed}
       />
       <HouseDoor
         pos={[doorKt, BED_Z0]}
@@ -974,9 +1119,8 @@ export default function Room({
         selected={selWall === 'door-kt'}
         onSelect={() => onWallTap?.('door-kt')}
         onEditPointerDown={(e) => onWallPointerDown?.(e, 'door-kt')}
-        focusAxis="z"
-        focusAt={BED_Z0}
         focusRef={focusRef}
+        hostBox={slabs.kt}
       />
       <HouseDoor
         pos={[ROOM_X, doorBath]}
@@ -990,9 +1134,8 @@ export default function Room({
         selected={selWall === 'door-bath'}
         onSelect={() => onWallTap?.('door-bath')}
         onEditPointerDown={(e) => onWallPointerDown?.(e, 'door-bath')}
-        focusAxis="x"
-        focusAt={ROOM_X}
         focusRef={focusRef}
+        hostBox={slabs.bath}
       />
 
       {/* —— 九扇上悬窗（数据驱动，编辑模式可选中沿墙滑行） —— */}
@@ -1013,6 +1156,8 @@ export default function Room({
             selected={selWall === `win-${i}`}
             onSelect={() => onWallTap?.(`win-${i}`)}
             onEditPointerDown={(e) => onWallPointerDown?.(e, `win-${i}`)}
+            focusRef={focusRef}
+            hostBox={winHosts[i]}
           />
         );
       })}

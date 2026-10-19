@@ -21036,3 +21036,24 @@ Stage Summary:
 - 数据向后兼容：charStyle/nightAuto/bathWater 可选字段 + migrateBathV54 幂等，老档无损升级
 - 涉及文件：types.ts、catalog.ts、scene/{Room,HomeScene,Char3D,Furn3D,Small3D}.tsx、CoupleHome.tsx、api/couple-home/route.ts
 - 待办（下轮可选）：partner 也会响应互动（一起坐沙发/同床）、厨房做饭流程、BGM 音效、浴室水汽粒子
+
+---
+Task ID: cottage-v10-wallfade
+Agent: 主协调 Agent (Z.ai Code)
+Task: 修复情侣小家「穿墙透视」——旋转视角时靠近相机的墙壁消失、看到房间外/隔壁房间布局（方案 A 视线段遮挡淡出 + 方案 B 相机防钻墙钳制）
+
+Work Log:
+- 诊断确认三问题同源：Room.tsx 旧「洋房剖面」逻辑（外墙法线点积>0.6 即整面隐藏 / 共享内墙单轴判定）瞬时 visible 切换且判定偏激进 → 旋转时墙啪地消失、误藏不该藏的墙看到夜空背景与隔壁房间；材质侧排除（墙均为不透明 meshStandardMaterial，无 transparent 误设、无背面剔除问题）；附带确认生活模式相机无边界钳制可字面钻进墙盒
+- 方案 A（Room.tsx）：新增 segHitsBox（slab 法视线段×AABB，t 限定 [0,1]——只统计相机与对焦物之间的墙，身后墙不隐藏）+ boxOf（墙定义→世界 AABB）+ useWallOcclusionFade（遮挡时组内全部材质 opacity 每帧阻尼淡出（隐快显慢 λ14/8）、透明期 depthWrite=false 防排序瑕疵、接近全隐才 visible=false 跳渲染；恢复后按 WeakMap 基准一次性还原 opacity/transparent/depthWrite 交还声明式控制，全可见期不干预材质故颜色/高亮声明式变化照常生效）
+- 判定精确化：Wall 用自身墙段盒；HouseDoor = 门洞盒+所在整墙并集盒（两段夹门洞 Box3.union，含门洞跨度）——墙段任意处被视线穿过门随墙同隐不浮空；DoorLintel = 整墙并集盒（门梁⊂墙 slab）；Window = 窗框盒+宿主墙盒（walls 中包含窗中心的盒，pad 0.18 容忍窗外凸 0.08）——墙隐窗随墙隐不浮空；三面门洞墙并集盒在 Room 内 useMemo（frontWest∪frontEast / ktNorthWest∪ktNorthMain / rightA∪rightB），九扇窗宿主墙逐窗匹配
+- 删除旧机制：sharedVisible 函数、WallDef.shared 字段、外墙法线点积判定、DoorLintel/HouseDoor 的 focusAxis/focusAt props 全部移除，统一走视线段判定
+- 焦点修复：GameLoop 原本编辑模式提前 return 导致 focusRef 陈旧（死代码）——对焦写入移到提前 return 之前，编辑模式=轨道 controls.target、生活模式=小人，两种模式墙体淡出判定都正确
+- 方案 B（HomeScene.tsx）：新增 pushCameraOutWalls（墙段 AABB 外扩 0.15m、沿最小穿透轴推出，dy 轴下推钳 0.3 防钻地板）——第三人称轨道目标点每帧先钳制再 copy/lerp，低俯仰/近距离不再钻墙；只钳墙段盒，门洞区域可自由穿过；第一人称不动（眼睛在小人体内，小人本身有 collideAndClamp）；buildWallBoxes 从 Room 导出（随门位 useMemo 重建）传入 GameLoop
+- 范围保障：未动 PointerRig 手势链路/滑动参数/点击拖拽 raycast——视角滑动、家具点击、编辑拖拽零影响
+- 端到端实测（agent-browser）：解锁→搜索打开拾光小屋→生活模式多角度旋转（近墙丝滑淡出/小人身后的墙完整保留/无屋外虚空/无隔壁房间误透视）→ 压低视角近水平（遮挡墙淡出正常，rot2/rot4/rot6 截图验证）→ 一次按住三方向连续滑动不松手（P0 滑动手感完好）→ 滚轮拉远拉近（推拉正常+近距离墙淡出正确+钳制不破坏手感）→ 装修模式进/出（旋转/拖拽/工具条/完成退出正常）→ 第一/第三人称切换（FP 眼位正常无穿墙）→ tsc+eslint 零错误（Room.tsx 按代码库先例加 react-hooks/immutability 文件级豁免注释）→ 控制台无新增错误（主屏预存 1000 行空 ✗ 为 HMR 噪音与本次无关，全新加载即复现）
+- 排障记录：rot3 左缘粉色竖条经多角度复查确认为卫生间毛巾架粉色毛巾装饰，非渲染 Bug
+
+Stage Summary:
+- 穿墙透视修复完成：墙体遮挡从「相机方位粗判+瞬时硬切」升级为「视线段×AABB 精确判定+阻尼淡入淡出」，只藏真正挡住小人的墙且丝滑过渡；相机加墙体钳制杜绝字面钻墙；门窗/门梁/窗与宿主墙同隐同现不浮空
+- 涉及文件：scene/Room.tsx（segHitsBox/useWallOcclusionFade/门窗宿主墙盒/buildWallBoxes 导出）、scene/HomeScene.tsx（pushCameraOutWalls/GameLoop 钳制+focusRef 编辑模式修复）
+- 用户需求全部满足：方案 A（动态隐藏+平滑 opacity）+ 方案 B（相机碰撞边界）组合落地；滑动/点击/编辑拖拽均未破坏

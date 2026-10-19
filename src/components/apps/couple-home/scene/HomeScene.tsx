@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import Room from './Room';
+import Room, { buildWallBoxes } from './Room';
 import Furn3D from './Furn3D';
 import Char3D from './Char3D';
 import {
@@ -129,6 +129,36 @@ function lerpAngle(cur: number, target: number, k: number): number {
 }
 
 /** 家具双房间钳制：见 catalog.clampFurnToRooms（z < 隔墙 → 客厅；否则卧室） */
+
+/**
+ * 方案 B 兕底：把点推出墙体 AABB（外扩 pad 余量，沿最小穿透轴推出）——
+ * 低俯仰/近距离时相机不再钻进墙里（字面穿墙）。只处理墙段盒，门洞区域可自由穿过。
+ */
+function pushCameraOutWalls(p: THREE.Vector3, boxes: THREE.Box3[]) {
+  const pad = 0.15;
+  for (const b of boxes) {
+    const x0 = b.min.x - pad;
+    const x1 = b.max.x + pad;
+    const y0 = b.min.y - pad;
+    const y1 = b.max.y + pad;
+    const z0 = b.min.z - pad;
+    const z1 = b.max.z + pad;
+    if (p.x <= x0 || p.x >= x1 || p.y <= y0 || p.y >= y1 || p.z <= z0 || p.z >= z1) continue;
+    const dx0 = p.x - x0;
+    const dx1 = x1 - p.x;
+    const dy0 = p.y - y0;
+    const dy1 = y1 - p.y;
+    const dz0 = p.z - z0;
+    const dz1 = z1 - p.z;
+    const m = Math.min(dx0, dx1, dy0, dy1, dz0, dz1);
+    if (m === dx0) p.x = x0;
+    else if (m === dx1) p.x = x1;
+    else if (m === dy0) p.y = Math.max(y0, 0.3);
+    else if (m === dy1) p.y = y1;
+    else if (m === dz0) p.z = z0;
+    else p.z = z1;
+  }
+}
 
 /** 门开态 + 沿墙坐标（碰撞走廊判定用；ref 高频读取） */
 export interface DoorLive {
@@ -248,6 +278,7 @@ function GameLoop({
   fpRef,
   poseRef,
   actRef,
+  wallBoxes,
 }: {
   meRT: CharRT;
   taRT: CharRT;
@@ -270,6 +301,8 @@ function GameLoop({
   poseRef: RefObject<{ pose: CharPose; y: number }>;
   /** 正在执行的家具动作（走向家具 → 摆姿势） */
   actRef: RefObject<CharAction | null>;
+  /** 墙段碰撞盒（随门位重建；生活模式相机防钻墙钳制用） */
+  wallBoxes: THREE.Box3[];
 }) {
   const { camera } = useThree();
   const controls = useThree((s) => s.controls) as unknown as { target?: THREE.Vector3 } | null;
@@ -282,8 +315,14 @@ function GameLoop({
 
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
-    if (modeRef.current !== 'live') {
-      prevMode.current = modeRef.current;
+
+    // 对焦物：生活=小人 / 编辑=轨道中心（墙体遮挡淡出判定用；两种模式都要刷新）
+    const modeNow = modeRef.current as HomeMode;
+    focusRef.current.z = modeNow === 'edit' ? controls?.target?.z ?? 2.4 : meRT.z;
+    focusRef.current.x = modeNow === 'edit' ? controls?.target?.x ?? 0 : meRT.x;
+
+    if (modeNow !== 'live') {
+      prevMode.current = modeNow;
       return;
     }
 
@@ -415,6 +454,8 @@ function GameLoop({
       const cy = Math.sin(pitch) * dist;
       const ch = Math.cos(pitch) * dist;
       desired.current.set(meRT.x + Math.sin(az) * ch, cy + 0.55, meRT.z + Math.cos(az) * ch);
+      // 方案 B 兕底：轨道目标点先推出墙体盒，低俯仰/近距离不再字面穿墙
+      pushCameraOutWalls(desired.current, wallBoxes);
 
       if (lookRef.current?.on) {
         // 拖拽中：1:1 直接控制（与装修模式轨道同样的跟手感，无惯性延迟）
@@ -432,11 +473,6 @@ function GameLoop({
         cam.updateProjectionMatrix();
       }
     }
-
-    // 对焦物：生活=小人 / 编辑=轨道中心（供隔墙可见性判断）
-    const curMode = modeRef.current as HomeMode;
-    focusRef.current.z = curMode === 'edit' ? controls?.target?.z ?? 2.4 : meRT.z;
-    focusRef.current.x = curMode === 'edit' ? controls?.target?.x ?? 0 : meRT.x;
   });
   return null;
 }
@@ -858,6 +894,18 @@ export default function HomeScene(props: HomeSceneProps) {
   const azRef = useRef({ az: 0 });
   const pitchRef = useRef({ p: 0.92 });
   const distRef = useRef({ d: 8.8 });
+
+  /** 墙段碰撞盒（随门位变化重建；生活模式相机防钻墙钳制用） */
+  const wallBoxes = useMemo(
+    () =>
+      buildWallBoxes(
+        doorPos?.bed ?? DOORS[0].def,
+        doorPos?.kt ?? DOORS[1].def,
+        doorPos?.bath ?? DOORS[2].def,
+      ),
+    [doorPos?.bed, doorPos?.kt, doorPos?.bath],
+  );
+
   const dragRef = useRef<DragInfo | null>(null);
   const lookRef = useRef({ on: false });
   /** 相机对焦物（生活=小人 / 编辑=轨道中心）→ 隔墙判断是否挡在镜头与它之间 */
@@ -1014,6 +1062,7 @@ export default function HomeScene(props: HomeSceneProps) {
         fpRef={fpRef}
         poseRef={poseRef}
         actRef={actRef}
+        wallBoxes={wallBoxes}
       />
       <PointerRig
         mode={mode}
