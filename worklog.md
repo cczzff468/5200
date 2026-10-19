@@ -20984,3 +20984,30 @@ Stage Summary:
 - 顺带修复：门/开关类状态被在途旧快照 409 采纳回滚的真实 Bug（快照改在推送触发时生成）
 - 涉及文件：types.ts、catalog.ts、scene/{Room,HomeScene,Extras3D,Furn3D,ShopThumbs(新),model-kit}.ts(x)、CoupleHome.tsx、api/couple-home/route.ts
 - 待办（下轮可选）：浴室（bathtub/toilet/washer 已在目录 hidden）、TA 走进厨房互动、厨房水槽/灶台点击交互（做饭流程）、BGM
+
+---
+Task ID: cottage-v8
+Agent: 主协调 Agent (Z.ai Code)
+Task: 拾光小屋 v5.3——卫生间第四房间/编辑模式门窗可移动换色/团团美颜+新玩偶/全套厨具小物/天花板换色/第一人称视角
+
+Work Log:
+- 卫生间（厨房东侧 4×5m，BATH_X1=11.5）：北/东/南外墙 + 厨房|卫生间共墙改 shared 轴判定；第三扇门（厨房|卫生间共墙，z=7.0，向浴室内开）；卫生间地板/墙/外沿围边/EditGrid 第四块；roomAt/ROOM_SPANS/clampFurnToRooms 扩为四房间；默认布局浴缸(窗下)+马桶+洗衣机(东南角)+门垫+绿植；WALL_SLOTS 补卫生间三段（含 avoid 窗区）
+- 门窗数据驱动化（catalog.WINS 9 扇 / DOORS 3 扇 + resolveWinPos/resolveDoorPos/clampWallAlong）：窗/门可沿墙滑行（0.25 步进），同墙窗与门互不重叠（间距钳制：卫生间门滑到 6.9 被同墙厨房东窗顶住的实测验证）；拖拽平面窗 1.5m/门 1.0m；滑行结ция吸附 0.05m；winPos[]/doorPos{bed,kt,bath} 持久化
+- 编辑模式门窗交互：点击=选中（粉框高亮）不再开合；专用工具栏（四向沿墙微调+换色+取消，无删除/旋转/升降）；调色盘门窗选中时改全屋 winCol/doorCol；生活模式点击门窗仍开合（回归不变）；隔墙可见性规则下门窗与墙同隐同现（DoorLintel/HouseDoor/Window 焦点轴泛化 focusAxis/focusAt）
+- 动态墙段：buildWalls(doorBed,doorKt,doorBath) 随门位重建南隔墙/厨房北墙/厨房东墙（门挪→墙洞跟随）
+- 小熊「团团」美颜：Bear3D 程序化建模替代 Kenney GLB（圆耳内粉+奶油吻部+黑豆眼+腮红+樱粉蝴蝶结+奶油肚皮/肉垫，焦糖色系）；新玩偶 PlushPanda3D 滚滚（黑耳黑眼罩白身）/PlushPig3D 呼噜（粉猪鼻子卷尾眯眯眼）/PlushCat3D 咪咪（尖耳竖尾奶油肚）
+- 厨具小物全家桶（Small3D.tsx 新文件，15 个程序化组件）：Pot3D 汤锅(双耳+盖)/Kettle3D 鸣笛水壶(壶嘴+拱把)/Bowls3D 叠叠碗(粉边)/Plates3D 白瓷盘(三只)/Chopsticks3D 筷子筒(四根斜插)/Spoons3D 小勺子/Cup3D 马克杯×2(热可可)/Juicer3D 榨汁机(橙汁+桔子)/Fan3D 落地风扇(开=叶片旋转+摇头+绿灯)/Socket3D 墙壁插座(二孔+三孔+小开关，挂墙 y0.38)/Chandelier3D 奶油吊灯(吸顶盘+吊杆+钟罩+发光灯泡+点光，挂顶 y2.36)；商店新增「厨具」「卫浴」两个分类 tab
+- 天花板：四房间各一块（Ceiling 组件，rotation.x=π/2 朝下），相机 XZ 在房间内且 y<墙高-0.12 才显示（钻进屋内可见/俯瞰自动隐藏）；ceilCol/ceilColBed/ceilColK/ceilColB 分开换色；装修面板四房间各加「天花板」行
+- 第一人称：GameLoop 双分支——fp 开=相机贴眼位(y0.84+走路颠簸)、lookAt 沿 az/pitch 前视、fov 66、隐藏「我」角色、切入时俯仰重置 0.12 平视；fp 关=原第三人称球坐标跟随（fov 48）；PointerRig 俯仰范围 fp 时放开至 [-0.5,1.3]（可仰视吊灯/天花板）；HUD 新增「第一/第三人称」切换按钮（live 模式，樱粉激活态）；fp 持久化
+- 碰撞：collideAndClamp 三门走廊判定（bedDoor/ktDoor 用沿墙 x、bathDoor 用 z；doorRef 携带 open+along 同步 doorPos）；实测穿行=小人沿门洞走廊从卫生间走进厨房（7.68,6.9，z 锁定在移动后的门位）
+- migrateBathV53 幂等迁移（老档 55→81 件实测）：补卫生间全套/吊灯逐间/插座逐间/风扇/厨具小物（跟随灶台/餐桌/吧台实际位置落位）/新玩偶（跟随沙发/床/脚凳）；旧档厨房东壁相框让位卫生间门→挪厨房南壁；migrateKitchenV52 新相框改挂南壁
+- API route：win 扩 12、winPos/doorPos/四房间地板墙/四天花板色/bathDoorOpen/fp 清洗入库
+- 修复：切第一人称俯仰沿用轨道俯瞰角（低头看地板）→切入重置 0.12 平视
+- agent-browser 端到端实测：迁移 81 件（吊灯×4/插座×4/卫生间全套/厨具/玩偶全落位）→ 编辑俯瞰四室 → 窗编辑选中工具栏（不开合）+右移 4 格滑动+雾灰蓝换色（winCol #d9e0e6 落库）→ 卫生间门选中+滑行避让（7.0→6.9 被同墙窗顶住）→ 生活模式点门开启+小人穿行走廊（z=6.9 门位同步）→ 第一人称平视（窗户正对）+抬头见天花板 → 第三人称看卫生间全貌（浴缸龙头/马桶/吊灯/插座/门垫）→ 团团新造型+滚滚坐沙发 → 商店缩略图+×N 角标 → 全程控制台零新增错误
+- 排障记录：①「窗躺在地板上」为高空俯角+宽 fov 下的透视压扁错觉（低视角证实窗户直立，窗底影线加重错觉），非 bug；②teleport 需直接 POST 服务端（本地 IDB 改动会被远端 rev 采纳覆盖）
+
+Stage Summary:
+- 拾光小屋 v5.3：四室一厅（客厅+卧室+厨房+卫生间）+ 门窗全数据驱动可编辑（沿墙滑行/换色/避让）+ 团团美颜与三只新玩偶 + 15 件程序化小物（锅碗筷盘勺杯榨汁机风扇插座吊灯）+ 天花板四房间换色 + 第一/第三人称视角切换
+- 数据向后兼容：新增字段全部可选 + migrateBathV53 幂等，老档无损升级（55→81 件）
+- 涉及文件：types.ts、catalog.ts、scene/{Room,HomeScene,Furn3D,Char3D,Small3D(新)}.tsx、CoupleHome.tsx、api/couple-home/route.ts
+- 待办（下轮可选）：TA 走进其他房间互动、厨房做饭流程（水槽/灶台点击）、BGM 音效、浴室水汽粒子

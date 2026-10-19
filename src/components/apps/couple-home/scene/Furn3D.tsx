@@ -19,6 +19,23 @@ import type { CatalogEntry, FurnitureItem, HomeMode } from '../types';
 import { animateDoors, cloneFurniture, ensureModel, type FurnModel } from './model-kit';
 import TV3D from './TV3D';
 import { Aircon3D, PhotoFrame3D, PlushBunny3D, PlushDuck3D, Polaroid3D, Vanity3D, WallPhoto3D } from './Extras3D';
+import {
+  Bear3D,
+  Bowls3D,
+  Chandelier3D,
+  Chopsticks3D,
+  Cup3D,
+  Fan3D,
+  Juicer3D,
+  Kettle3D,
+  Plates3D,
+  PlushCat3D,
+  PlushPanda3D,
+  PlushPig3D,
+  Pot3D,
+  Socket3D,
+  Spoons3D,
+} from './Small3D';
 
 export interface Furn3DProps {
   item: FurnitureItem;
@@ -218,10 +235,29 @@ export default function Furn3D({
         {entry.kind === 'photoWallWide' && <WallPhoto3D col={item.col} photo={item.st?.photo} wide />}
         {entry.kind === 'polaroid' && <Polaroid3D col={item.col} photo={item.st?.photo} />}
 
-        {/* 毛绒玩偶 ×2 + 梳妆台（程序化建模） */}
+        {/* 毛绒玩偶 + 梳妆台（程序化建模） */}
         {entry.kind === 'plushBunny' && <PlushBunny3D col={item.col} />}
         {entry.kind === 'plushDuck' && <PlushDuck3D col={item.col} />}
+        {entry.kind === 'plushPanda' && <PlushPanda3D col={item.col} />}
+        {entry.kind === 'plushPig' && <PlushPig3D col={item.col} />}
+        {entry.kind === 'plushCat' && <PlushCat3D col={item.col} />}
         {entry.kind === 'vanity' && <Vanity3D col={item.col} />}
+        {entry.kind === 'bear' && <Bear3D col={item.col} />}
+
+        {/* 厨具小物（程序化建模） */}
+        {entry.kind === 'pot' && <Pot3D col={item.col} />}
+        {entry.kind === 'kettle' && <Kettle3D col={item.col} />}
+        {entry.kind === 'bowls' && <Bowls3D col={item.col} />}
+        {entry.kind === 'plates' && <Plates3D col={item.col} />}
+        {entry.kind === 'chopsticks' && <Chopsticks3D col={item.col} />}
+        {entry.kind === 'spoons' && <Spoons3D col={item.col} />}
+        {entry.kind === 'cup' && <Cup3D col={item.col} />}
+        {entry.kind === 'juicer' && <Juicer3D col={item.col} />}
+
+        {/* 风扇（开 = 叶片旋转 + 摇头）/ 插座 / 吊灯（挂顶） */}
+        {entry.kind === 'fan' && <Fan3D on={!!item.st?.on} col={item.col} />}
+        {entry.kind === 'socket' && <Socket3D col={item.col} />}
+        {entry.kind === 'chandelier' && <Chandelier3D on={!!item.st?.on} night={night} col={item.col} />}
 
         {/* 洗衣机状态灯 */}
         {entry.acts?.washer && modelSize && (

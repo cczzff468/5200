@@ -49,13 +49,29 @@ interface HomePayload {
   doorOpen?: boolean;
   /** 厨房门开态 */
   kitchenDoorOpen?: boolean;
+  /** 卫生间门开态 */
+  bathDoorOpen?: boolean;
   /** 门自定义色（#rrggbb） */
   doorCol?: string;
   /** 窗框自定义色（#rrggbb） */
   winCol?: string;
-  /** 厨房地板/墙自定义色（#rrggbb；三房间分开换色） */
+  /** 厨房地板/墙自定义色（#rrggbb；四房间分开换色） */
   floorColK?: string;
   wallColK?: string;
+  /** 卫生间地板/墙自定义色 */
+  floorColB?: string;
+  wallColB?: string;
+  /** 天花板自定义色（四房间分开） */
+  ceilCol?: string;
+  ceilColBed?: string;
+  ceilColK?: string;
+  ceilColB?: string;
+  /** 每扇窗沿墙坐标（≤12 个） */
+  winPos?: number[];
+  /** 三扇门沿墙坐标 */
+  doorPos?: { bed?: number; kt?: number; bath?: number };
+  /** 第一人称视角 */
+  fp?: boolean;
 }
 
 const MAX_ITEMS = 240;
@@ -151,10 +167,28 @@ function normalizeHome(raw: unknown): HomePayload | null {
     }
   }
   if (!chars.me || !chars.partner) return null;
-  // 窗户开态：最多 8 扇布尔值
+  // 窗户开态：最多 12 扇布尔值
   let win: boolean[] | undefined;
   if (Array.isArray(r.win)) {
-    win = r.win.slice(0, 8).map((w) => w === true);
+    win = r.win.slice(0, 12).map((w) => w === true);
+  }
+  // 每扇窗沿墙坐标
+  let winPos: number[] | undefined;
+  if (Array.isArray(r.winPos)) {
+    const arr = r.winPos.slice(0, 12)
+      .map((v) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-30, Math.min(30, Math.round(v * 100) / 100)) : null));
+    if (arr.some((v) => v != null)) winPos = arr.map((v) => v ?? 0);
+  }
+  // 三扇门沿墙坐标
+  let doorPos: HomePayload['doorPos'] | undefined;
+  if (r.doorPos && typeof r.doorPos === 'object' && !Array.isArray(r.doorPos)) {
+    const d = r.doorPos as Record<string, unknown>;
+    const clean = (v: unknown) =>
+      typeof v === 'number' && Number.isFinite(v) ? Math.max(-30, Math.min(30, Math.round(v * 100) / 100)) : undefined;
+    const bed = clean(d.bed);
+    const kt = clean(d.kt);
+    const bath = clean(d.bath);
+    if (bed != null || kt != null || bath != null) doorPos = { bed, kt, bath };
   }
   return {
     v: typeof r.v === 'number' ? r.v : 5,
@@ -162,16 +196,26 @@ function normalizeHome(raw: unknown): HomePayload | null {
     chars,
     night: r.night === true,
     win,
+    winPos,
+    doorPos,
     floorCol: cleanHex(r.floorCol),
     wallCol: cleanHex(r.wallCol),
     floorColBed: cleanHex(r.floorColBed),
     wallColBed: cleanHex(r.wallColBed),
     doorOpen: r.doorOpen === true,
     kitchenDoorOpen: r.kitchenDoorOpen === true,
+    bathDoorOpen: r.bathDoorOpen === true,
     doorCol: cleanHex(r.doorCol),
     winCol: cleanHex(r.winCol),
     floorColK: cleanHex(r.floorColK),
     wallColK: cleanHex(r.wallColK),
+    floorColB: cleanHex(r.floorColB),
+    wallColB: cleanHex(r.wallColB),
+    ceilCol: cleanHex(r.ceilCol),
+    ceilColBed: cleanHex(r.ceilColBed),
+    ceilColK: cleanHex(r.ceilColK),
+    ceilColB: cleanHex(r.ceilColB),
+    fp: r.fp === true,
   };
 }
 

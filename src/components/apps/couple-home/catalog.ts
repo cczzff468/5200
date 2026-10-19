@@ -74,10 +74,25 @@ export const KTCH_W = KTCH_X1 - KTCH_X0;
 /** 厨房门洞中心（在厨房北墙上） */
 export const KDOOR_X = 2.9;
 
-/** 三房间归属：z<隔墙=客厅；隔墙南、卧室东墙西=卧室；东=厨房 */
+// ---------------- 卫生间（v5.3 第四房间：厨房东侧，穿厨房而入） ----------------
+
+/** 卫生间西缘（= 厨房东墙，共墙带门） */
+export const BATH_X0 = KTCH_X1;
+/** 卫生间东缘 */
+export const BATH_X1 = 11.5;
+/** 卫生间北缘 / 南缘（与卧室厨房齐平） */
+export const BATH_Z0 = BED_Z0;
+export const BATH_Z1 = BED_Z1;
+export const BATH_W = BATH_X1 - BATH_X0;
+/** 卫生间门洞中心（在厨房|卫生间共墙上，沿 z 滑动） */
+export const BDOOR_Z = 7.0;
+
+/** 四房间归属：z<隔墙=客厅；隔墙南、卧室东墙西=卧室；再东到 7.5=厨房；最东=卫生间 */
 export function roomAt(x: number, z: number): RoomId {
   if (z < BED_Z0) return 'lr';
-  return x < BED_X1 ? 'br' : 'kt';
+  if (x < BED_X1) return 'br';
+  if (x < KTCH_X1) return 'kt';
+  return 'ba';
 }
 
 /** 各房间随机落点范围（x0,x1,z0,z1，已内缩防贴墙） */
@@ -85,9 +100,10 @@ export const ROOM_SPANS: Record<RoomId, [number, number, number, number]> = {
   lr: [-ROOM_X + 0.5, ROOM_X - 0.5, -ROOM_Z + 0.5, BED_Z0 - 0.5],
   br: [-ROOM_X + 0.5, BED_X1 - 0.5, BED_Z0 + 0.5, BED_Z1 - 0.5],
   kt: [BED_X1 + 0.5, KTCH_X1 - 0.5, BED_Z0 + 0.5, BED_Z1 - 0.5],
+  ba: [KTCH_X1 + 0.5, BATH_X1 - 0.5, BED_Z0 + 0.5, BED_Z1 - 0.5],
 };
 
-export const ROOM_NAMES: Record<RoomId, string> = { lr: '客厅', br: '卧室', kt: '厨房' };
+export const ROOM_NAMES: Record<RoomId, string> = { lr: '客厅', br: '卧室', kt: '厨房', ba: '卫生间' };
 
 /** 家具在任意水平角下的占地 AABB（fp 未旋转脚印 × 旋转） */
 export function footprintOf(entry: CatalogEntry, ry: number): [number, number] {
@@ -97,7 +113,7 @@ export function footprintOf(entry: CatalogEntry, ry: number): [number, number] {
   return [w * c + d * s, w * s + d * c];
 }
 
-/** 家具三房间钳制：客厅/卧室/厨房，不许骑墙 */
+/** 家具四房间钳制：客厅/卧室/厨房/卫生间，不许骑墙 */
 export function clampFurnToRooms(x: number, z: number, hw: number, hd: number): [number, number] {
   if (z < BED_Z0) {
     // 客厅
@@ -113,9 +129,16 @@ export function clampFurnToRooms(x: number, z: number, hw: number, hd: number): 
       Math.min(BED_Z1 - hd, Math.max(BED_Z0 + hd, z)),
     ];
   }
-  // 厨房
+  if (x < KTCH_X1) {
+    // 厨房
+    return [
+      Math.min(KTCH_X1 - hw, Math.max(BED_X1 + hw, x)),
+      Math.min(BED_Z1 - hd, Math.max(BED_Z0 + hd, z)),
+    ];
+  }
+  // 卫生间
   return [
-    Math.min(KTCH_X1 - hw, Math.max(BED_X1 + hw, x)),
+    Math.min(BATH_X1 - hw, Math.max(KTCH_X1 + hw, x)),
     Math.min(BED_Z1 - hd, Math.max(BED_Z0 + hd, z)),
   ];
 }
@@ -132,23 +155,29 @@ export interface WallSlot {
   to: number;
   /** 朝向（面向屋内） */
   ry: number;
+  /** 该墙上窗户/门洞的沿墙区间（高挂件避让） */
+  avoid?: [number, number][];
 }
 
-/** 全屋可用墙面（已避开窗户/门洞/电视墙主区） */
+/** 全屋可用墙面（avoid = 该墙上窗户/门洞的沿墙区间，高挂件避让） */
 export const WALL_SLOTS: WallSlot[] = [
   // 客厅
-  { room: 'lr', axis: 'z', at: -ROOM_Z + 0.07, from: -4.0, to: 4.0, ry: 0 },
-  { room: 'lr', axis: 'x', at: -ROOM_X + 0.07, from: -2.6, to: 2.6, ry: Math.PI / 2 },
+  { room: 'lr', axis: 'z', at: -ROOM_Z + 0.07, from: -4.0, to: 4.0, ry: 0, avoid: [[-3.05, -1.35], [1.35, 3.05]] },
+  { room: 'lr', axis: 'x', at: -ROOM_X + 0.07, from: -2.6, to: 2.6, ry: Math.PI / 2, avoid: [[-2.45, -0.75]] },
   { room: 'lr', axis: 'x', at: ROOM_X - 0.07, from: -2.6, to: 2.6, ry: -Math.PI / 2 },
   { room: 'lr', axis: 'z', at: BED_Z0 - 0.07, from: -1.5, to: 1.9, ry: Math.PI },
   // 卧室
-  { room: 'br', axis: 'x', at: -ROOM_X + 0.07, from: 3.5, to: 7.5, ry: Math.PI / 2 },
+  { room: 'br', axis: 'x', at: -ROOM_X + 0.07, from: 3.3, to: 4.5, ry: Math.PI / 2 },
   { room: 'br', axis: 'x', at: BED_X1 - 0.07, from: 3.5, to: 7.5, ry: -Math.PI / 2 },
-  { room: 'br', axis: 'z', at: BED_Z1 - 0.07, from: -4.0, to: 0.9, ry: Math.PI },
+  { room: 'br', axis: 'z', at: BED_Z1 - 0.07, from: -4.0, to: 0.9, ry: Math.PI, avoid: [[-2.05, -0.35]] },
   // 厨房（北墙避开门洞与灶台区）
   { room: 'kt', axis: 'z', at: BED_Z0 + 0.19, from: 3.7, to: 7.1, ry: 0 },
-  { room: 'kt', axis: 'x', at: KTCH_X1 - 0.07, from: 3.5, to: 7.5, ry: -Math.PI / 2 },
-  { room: 'kt', axis: 'z', at: BED_Z1 - 0.07, from: 1.9, to: 7.1, ry: Math.PI },
+  { room: 'kt', axis: 'x', at: KTCH_X1 - 0.07, from: 3.5, to: 7.5, ry: -Math.PI / 2, avoid: [[4.55, 6.25], [6.35, 7.65]] },
+  { room: 'kt', axis: 'z', at: BED_Z1 - 0.07, from: 1.9, to: 7.1, ry: Math.PI, avoid: [[3.75, 5.45]] },
+  // 卫生间
+  { room: 'ba', axis: 'x', at: KTCH_X1 + 0.07, from: 3.2, to: 4.4, ry: Math.PI / 2 },
+  { room: 'ba', axis: 'x', at: BATH_X1 - 0.07, from: 3.5, to: 7.5, ry: -Math.PI / 2, avoid: [[4.55, 6.25]] },
+  { room: 'ba', axis: 'z', at: BED_Z1 - 0.07, from: 7.7, to: 11.3, ry: Math.PI },
 ];
 
 /** 找离 (x,z) 最近的挂墙槽位并投影到墙上（返回槽位 + 贴墙坐标） */
@@ -174,6 +203,112 @@ export function snapToWallSlot(
   const s = best?.slot ?? WALL_SLOTS[0];
   const a = Math.max(s.from, Math.min(s.to, s.axis === 'z' ? x : z));
   return { slot: s, x: s.axis === 'z' ? a : s.at, z: s.axis === 'z' ? s.at : a };
+}
+
+// ---------------- 窗户 / 门（数据驱动：可选中、沿墙滑行） ----------------
+
+/** 单扇窗定义：axis = 墙走向（'z' 墙沿 x 走），at = 墙内脸坐标，side = 窗组偏离内脸方向 */
+export interface WinDef {
+  room: RoomId;
+  axis: 'x' | 'z';
+  at: number;
+  side: 1 | -1;
+  ry: number;
+  /** 默认沿墙坐标 */
+  def: number;
+  /** 沿墙可滑动范围 */
+  min: number;
+  max: number;
+}
+
+/** 九扇上悬窗（客厅北×2 / 客厅西 / 卧室西 / 卧室南 / 厨房东 / 厨房南 / 卫生间北 / 卫生间东） */
+export const WINS: WinDef[] = [
+  { room: 'lr', axis: 'z', at: -ROOM_Z, side: 1, ry: 0, def: -2.2, min: -3.6, max: 3.6 },
+  { room: 'lr', axis: 'z', at: -ROOM_Z, side: 1, ry: 0, def: 2.2, min: -3.6, max: 3.6 },
+  { room: 'lr', axis: 'x', at: -ROOM_X, side: 1, ry: Math.PI / 2, def: -1.6, min: -2.2, max: 2.2 },
+  { room: 'br', axis: 'x', at: -ROOM_X, side: 1, ry: Math.PI / 2, def: 5.2, min: 3.7, max: 7.3 },
+  { room: 'br', axis: 'z', at: BED_Z1, side: -1, ry: Math.PI, def: -1.2, min: -3.6, max: 0.8 },
+  { room: 'kt', axis: 'x', at: KTCH_X1, side: -1, ry: -Math.PI / 2, def: 5.4, min: 3.7, max: 7.3 },
+  { room: 'kt', axis: 'z', at: BED_Z1, side: -1, ry: Math.PI, def: 4.6, min: 2.4, max: 7.3 },
+  { room: 'ba', axis: 'z', at: BED_Z0, side: 1, ry: 0, def: 9.5, min: 8.0, max: 11.0 },
+  { room: 'ba', axis: 'x', at: BATH_X1, side: -1, ry: -Math.PI / 2, def: 5.4, min: 3.7, max: 7.3 },
+];
+
+/** 门定义：axis/at 同 WinDef（门组落在墙中心线上） */
+export interface DoorDef {
+  id: 'bed' | 'kt' | 'bath';
+  name: string;
+  axis: 'x' | 'z';
+  at: number;
+  ry: number;
+  def: number;
+  min: number;
+  max: number;
+}
+
+/** 三扇门（卧室门 / 厨房门在 z=3 隔墙；卫生间门在 x=7.5 共墙） */
+export const DOORS: DoorDef[] = [
+  { id: 'bed', name: '卧室门', axis: 'z', at: BED_Z0, ry: 0, def: DOOR_X, min: -3.9, max: 0.9 },
+  { id: 'kt', name: '厨房门', axis: 'z', at: BED_Z0, ry: 0, def: KDOOR_X, min: 2.1, max: 6.9 },
+  { id: 'bath', name: '卫生间门', axis: 'x', at: KTCH_X1, ry: Math.PI / 2, def: BDOOR_Z, min: 3.6, max: 7.4 },
+];
+
+/** 同墙滑行件的半宽（窗 1.5m 宽 / 门 0.94m 宽 + 富余） */
+const WIN_HALF = 0.82;
+const DOOR_HALF = 0.56;
+
+/** 同墙邻居（用于滑行避让：同墙的窗与门互不重叠；用当前坐标，缺省用默认位） */
+function wallNeighbors(
+  selfId: string,
+  axis: 'x' | 'z',
+  at: number,
+  winPos?: number[],
+  doorPos?: { bed: number; kt: number; bath: number },
+): { along: number; half: number }[] {
+  const out: { along: number; half: number }[] = [];
+  for (const [i, w] of WINS.entries()) {
+    if (`win-${i}` === selfId || w.axis !== axis || Math.abs(w.at - at) > 0.01) continue;
+    out.push({ along: winPos?.[i] ?? w.def, half: WIN_HALF });
+  }
+  for (const d of DOORS) {
+    if (`door-${d.id}` === selfId || d.axis !== axis || Math.abs(d.at - at) > 0.01) continue;
+    out.push({ along: doorPos?.[d.id] ?? d.def, half: DOOR_HALF });
+  }
+  return out;
+}
+
+/** 把沿墙坐标钳回滑行范围并避让同墙邻居（门/窗滑行共用） */
+export function clampWallAlong(selfId: string, def: { axis: 'x' | 'z'; at: number; min: number; max: number }, along: number, neighbors: { along: number; half: number }[]): number {
+  let a = Math.max(def.min, Math.min(def.max, along));
+  for (const o of neighbors) {
+    const need = o.half + (selfId.startsWith('door-') ? DOOR_HALF : WIN_HALF) + 0.12;
+    if (Math.abs(a - o.along) < need) {
+      a = o.along > a ? o.along - need : o.along + need;
+    }
+  }
+  return Math.max(def.min, Math.min(def.max, a));
+}
+
+/** 编辑模式拖拽/微调一扇窗：返回沿墙钳制后的完整位置 */
+export function resolveWinPos(i: number, along: number, winPos?: number[], doorPos?: { bed: number; kt: number; bath: number }): { x: number; z: number; along: number } {
+  const w = WINS[i];
+  const cur = winPos?.[i] ?? w.def;
+  const others = wallNeighbors(`win-${i}`, w.axis, w.at, winPos, doorPos);
+  const a = clampWallAlong(`win-${i}`, w, Number.isFinite(along) ? along : cur, others);
+  const x = w.axis === 'z' ? a : w.at + w.side * 0.08;
+  const z = w.axis === 'z' ? w.at + w.side * 0.08 : a;
+  return { x, z, along: a };
+}
+
+/** 编辑模式拖拽/微调一扇门：返回沿墙钳制后的完整位置（门组在墙中心线上） */
+export function resolveDoorPos(id: 'bed' | 'kt' | 'bath', along: number, winPos?: number[], doorPos?: { bed: number; kt: number; bath: number }): { x: number; z: number; along: number } {
+  const d = DOORS.find((x) => x.id === id)!;
+  const cur = doorPos?.[id] ?? d.def;
+  const others = wallNeighbors(`door-${id}`, d.axis, d.at, winPos, doorPos);
+  const a = clampWallAlong(`door-${id}`, d, Number.isFinite(along) ? along : cur, others);
+  const x = d.axis === 'z' ? a : d.at;
+  const z = d.axis === 'z' ? d.at : a;
+  return { x, z, along: a };
 }
 
 // ---------------- 家具目录 ----------------
@@ -370,32 +505,95 @@ export const CATALOG: Record<string, CatalogEntry> = {
     acts: { playful: true },
   },
   washer: {
-    kind: 'washer', glb: G('washer'), name: '滚筒洗衣机', cat: 'appliance', fp: [0.78, 0.78], hidden: true,
+    kind: 'washer', glb: G('washer'), name: '滚筒洗衣机', cat: 'bathroom', fp: [0.78, 0.78], h: 0.85,
     acts: { door: true, washer: true },
   },
   bathtub: {
-    kind: 'bathtub', glb: G('bathtub'), name: '泡泡浴缸', cat: 'bathroom', fp: [2.38, 1.12], hidden: true,
+    kind: 'bathtub', glb: G('bathtub'), name: '泡泡浴缸', cat: 'bathroom', fp: [2.38, 1.12], h: 0.62,
     acts: { playful: true },
   },
   toilet: {
-    kind: 'toilet', glb: G('toilet'), name: '小白马桶', cat: 'bathroom', fp: [0.63, 0.95], hidden: true,
+    kind: 'toilet', glb: G('toilet'), name: '小白马桶', cat: 'bathroom', fp: [0.63, 0.95], h: 0.72,
     acts: { playful: true },
   },
   // ---- 宠物 ----
   bear: {
-    kind: 'bear', glb: G('bear'), name: '小熊「团团」', cat: 'decor', fp: [0.78, 0.49],
+    kind: 'bear', name: '小熊「团团」', cat: 'decor', fp: [0.6, 0.46], h: 0.55,
     acts: { playful: true },
+  },
+  plushPanda: {
+    kind: 'plushPanda', name: '熊猫玩偶「滚滚」', cat: 'decor', fp: [0.3, 0.3], h: 0.3,
+    acts: { playful: true },
+  },
+  plushPig: {
+    kind: 'plushPig', name: '小猪玩偶「呼噜」', cat: 'decor', fp: [0.3, 0.3], h: 0.28,
+    acts: { playful: true },
+  },
+  plushCat: {
+    kind: 'plushCat', name: '猫咪玩偶「咪咪」', cat: 'decor', fp: [0.3, 0.34], h: 0.3,
+    acts: { playful: true },
+  },
+  // ---- 厨具小物（程序化建模，摆桌/摆灶台） ----
+  pot: {
+    kind: 'pot', name: '奶油汤锅', cat: 'kitchen', fp: [0.3, 0.3], h: 0.2,
+    acts: { playful: true },
+  },
+  kettle: {
+    kind: 'kettle', name: '鸣笛水壶', cat: 'kitchen', fp: [0.26, 0.26], h: 0.22,
+    acts: { playful: true },
+  },
+  bowls: {
+    kind: 'bowls', name: '叠叠小碗', cat: 'kitchen', fp: [0.24, 0.24], h: 0.14,
+    acts: { playful: true },
+  },
+  plates: {
+    kind: 'plates', name: '白瓷盘子', cat: 'kitchen', fp: [0.28, 0.28], h: 0.07,
+    acts: { playful: true },
+  },
+  chopsticks: {
+    kind: 'chopsticks', name: '筷子筒', cat: 'kitchen', fp: [0.14, 0.14], h: 0.24,
+    acts: { playful: true },
+  },
+  spoons: {
+    kind: 'spoons', name: '小勺子', cat: 'kitchen', fp: [0.14, 0.1], h: 0.12,
+    acts: { playful: true },
+  },
+  cup: {
+    kind: 'cup', name: '马克杯', cat: 'kitchen', fp: [0.2, 0.14], h: 0.12,
+    acts: { playful: true },
+  },
+  juicer: {
+    kind: 'juicer', name: '榨汁机', cat: 'appliance', fp: [0.24, 0.24], h: 0.3,
+    acts: { playful: true },
+  },
+  // ---- 电器·风扇（程序化建模，点击开/关叶片旋转） ----
+  fan: {
+    kind: 'fan', name: '落地风扇', cat: 'appliance', fp: [0.34, 0.34], h: 1.1,
+    acts: { toggle: true },
+  },
+  // ---- 电器·插座（程序化建模，挂墙低位） ----
+  socket: {
+    kind: 'socket', name: '墙壁插座', cat: 'appliance', fp: [0.14, 0.06], wallMount: true, wallY: 0.38, h: 0.1,
+    acts: {},
+  },
+  // ---- 灯具·吊灯（程序化建模，挂在天花板；点击开/关） ----
+  chandelier: {
+    kind: 'chandelier', name: '奶油吊灯', cat: 'lamp', fp: [0.42, 0.42], h: 0.62,
+    acts: { toggle: true },
   },
 };
 
-/** 商店分类 tab 配置（编辑模式底部栏；纯文字，无图标；客厅篇分类） */
+/** 商店分类 tab 配置（编辑模式底部栏；纯文字，无图标） */
 export const SHOP_TABS: { key: import('./types').FurnCategory; label: string }[] = [
   { key: 'all', label: '全部' },
   { key: 'sofa', label: '沙发' },
   { key: 'table', label: '桌几' },
+  { key: 'bed', label: '床品' },
   { key: 'lamp', label: '灯具' },
   { key: 'plant', label: '植物' },
   { key: 'appliance', label: '家电' },
+  { key: 'kitchen', label: '厨具' },
+  { key: 'bathroom', label: '卫浴' },
   { key: 'decor', label: '装饰' },
 ];
 
@@ -418,19 +616,21 @@ const F = (
 });
 
 /**
- * 初始 v5.2 三室：客厅 + 卧室 + 厨房（卧室东侧，推门而入）
- * 客厅：北墙电视墙 + 沙发对坐 + 西侧工作角 + 东壁空调 + 玄关
- * 卧室：双人床 + 床头柜×2 + 衣柜 + 梳妆台 + 空调 + 玩偶×2 + 挂墙相框
- * 厨房：冰箱灶台水槽沿北墙 + 吧台 + 餐桌 + 微波炉烤面包机 + 拍立得 + 挂墙相框
+ * 初始 v5.3 四室：客厅 + 卧室 + 厨房 + 卫生间（卧室东侧，推门而入）
+ * 客厅：北墙电视墙 + 沙发对坐 + 西侧工作角 + 东壁空调 + 玄关 + 风扇 + 吊灯
+ * 卧室：双人床 + 床头柜×2 + 衣柜 + 梳妆台 + 空调 + 玩偶×3 + 挂墙相框 + 吊灯
+ * 厨房：冰箱灶台水槽沿北墙 + 吧台 + 餐桌 + 锅碗筷盘勺杯榨汁机 + 吊灯
+ * 卫生间：浴缸 + 马桶 + 洗衣机 + 吊灯 + 插座
  */
 export function defaultHome(): HomeState {
   seq = 0;
   return {
     v: 5,
     night: false,
-    win: [false, false, false, false, false, false, false],
+    win: [false, false, false, false, false, false, false, false, false],
     doorOpen: false,
     kitchenDoorOpen: false,
+    bathDoorOpen: false,
     furniture: [
       // —— 客厅·电视墙（北） ——
       F('tvStand', 0, -2.7),
@@ -464,10 +664,14 @@ export function defaultHome(): HomeState {
       F('doormat', DOOR_X, 2.62),
       F('coatRack', -3.55, 2.5),
       F('trashcan', -3.62, -2.58),
+      F('fan', 3.7, 1.75, { ry: -2.4 }), // 落地风扇
+      F('chandelier', 0, 0.2, { y: WALL_H - 0.04 }), // 客厅吊灯
+      F('socket', ROOM_X - 0.07, -0.9, { y: 0.38, ry: -Math.PI / 2 }), // 客厅东壁插座
 
       // —— 卧室（隔墙南侧，推门而入；家具齐备） ——
       F('bed', -3.32, 5.6, { ry: -Math.PI / 2 }), // 双人床靠西墙（床头朝西）
       F('plushBunny', -2.62, 5.12, { y: 0.42, ry: -2.3 }), // 毛绒兔坐在床上
+      F('plushPig', -2.85, 5.95, { y: 0.42, ry: 2.2 }), // 小猪玩偶坐床上
       F('nightstand', -3.4, 4.25),
       F('plushDuck', -3.4, 4.25, { y: 0.53, ry: 0.5 }), // 小黄鸭摆上床头柜
       F('nightstand', -3.4, 6.95),
@@ -480,25 +684,49 @@ export function defaultHome(): HomeState {
       F('plant', -0.35, 7.55),
       F('photoFrame', -1.7, 7.45, { ry: Math.PI }), // 卧室相框
       F('photoWall', 1.43, 4.6, { y: 1.45, ry: -Math.PI / 2 }), // 卧室东壁挂墙相框
+      F('plushCat', -1.5, 0.45, { y: 0.4, ry: -0.7 }), // 猫咪玩偶坐脚凳 —— 改放客厅
+      F('chandelier', -1.5, 5.5, { y: WALL_H - 0.04 }), // 卧室吊灯
+      F('socket', -ROOM_X + 0.07, 3.7, { y: 0.38, ry: Math.PI / 2 }), // 卧室西壁插座
 
       // —— 厨房（卧室东侧，北墙开门洞通客厅） ——
       F('fridge', 7.0, 3.41), // 冰箱靠北墙
       F('stove', 6.0, 3.57), // 灶台
+      F('pot', 5.82, 3.52, { y: 0.92 }), // 汤锅上灶
+      F('kettle', 6.3, 3.35, { y: 0.92, ry: -0.5 }), // 水壶上灶
       F('sink', 5.0, 3.57), // 水槽
       F('kitchenBar', 7.2, 5.4, { ry: -Math.PI / 2 }), // 吧台靠东墙（窗下）
       F('chair', 6.55, 5.12, { ry: Math.PI / 2 }), // 吧台椅×2
       F('chair', 6.55, 5.68, { ry: Math.PI / 2 }),
       F('plantSmall', 7.2, 5.68, { y: 0.85 }), // 吧台小多肉
+      F('cup', 7.2, 5.4, { y: 0.86, ry: 0.4 }), // 马克杯摆吧台
       F('polaroid', 7.2, 5.08, { y: 0.85, ry: -Math.PI / 2 + 0.2 }), // 拍立得摆吧台
       F('diningTable', 3.3, 6.5), // 餐桌
       F('chair', 2.2, 6.5, { ry: Math.PI / 2 }), // 餐椅×2
       F('chair', 4.4, 6.5, { ry: -Math.PI / 2 }),
       F('microwave', 3.0, 6.2, { y: 0.74, ry: 0.3 }), // 微波炉上桌
       F('toaster', 3.6, 6.75, { y: 0.74, ry: -0.2 }), // 烤面包机上桌
+      F('bowls', 2.85, 6.62, { y: 0.74 }), // 碗上桌
+      F('plates', 3.72, 6.32, { y: 0.74 }), // 盘子上桌
+      F('chopsticks', 3.28, 6.78, { y: 0.74 }), // 筷子筒上桌
+      F('juicer', 3.62, 6.6, { y: 0.74, ry: 0.5 }), // 榨汁机上桌
       F('doormat', KDOOR_X, 3.75), // 厨房门垫
       F('plant', 1.95, 7.5),
-      F('photoWall', KTCH_X1 - 0.07, 6.6, { y: 1.45, ry: -Math.PI / 2 }), // 厨房东壁挂墙相框
+      F('photoWall', 6.4, BED_Z1 - 0.07, { y: 1.45, ry: Math.PI }), // 厨房南壁挂墙相框
       F('photoWallWide', -ROOM_X + 0.07, 1.7, { y: 1.5, ry: Math.PI / 2 }), // 客厅西墙横相框
+      F('socket', 4.2, BED_Z0 + 0.19, { y: 0.38, ry: 0 }), // 厨房北壁插座
+      F('chandelier', 4.5, 5.5, { y: WALL_H - 0.04 }), // 厨房吊灯
+
+      // —— 卫生间（厨房东侧，推门而入） ——
+      F('bathtub', 9.5, 3.7), // 泡泡浴缸靠北墙（窗下）
+      F('toilet', 8.05, 3.62, { ry: -Math.PI / 2 }), // 小白马桶靠西墙
+      F('washer', 10.85, 7.3, { ry: Math.PI }), // 洗衣机东南角
+      F('doormat', 8.35, 7.0, { ry: Math.PI / 2 }), // 卫生间门垫
+      F('plant', 11.0, 3.45), // 绿植
+      F('chandelier', 9.5, 5.5, { y: WALL_H - 0.04 }), // 卫生间吊灯
+      F('socket', KTCH_X1 + 0.07, 3.6, { y: 0.38, ry: Math.PI / 2 }), // 卫生间西壁插座
+
+      // —— 客厅补充：熊猫玩偶坐沙发 ——
+      F('plushPanda', 0.52, 1.32, { y: 0.47, ry: 2.9 }),
     ],
     chars: {
       me: { x: 0.15, z: 2.3, dir: 'up' },
@@ -629,17 +857,120 @@ export function migrateKitchenV52(h: HomeState): HomeState {
     if (kinds.has('kitchenBar')) add('polaroid', 7.2, 5.08, 0.85, -Math.PI / 2 + 0.2);
     else add('polaroid', 6.6, 4.6, 0, -Math.PI / 2 + 0.2);
   }
-  // 三款新相框：厨房东壁 / 客厅西墙横框（老档这两面墙均空余）
-  if (!kinds.has('photoWall')) add('photoWall', KTCH_X1 - 0.07, 6.6, 1.45, -Math.PI / 2);
+  // 三款新相框：厨房南壁 / 客厅西墙横框（老档这两面墙均空余；厨房东壁留给卫生间门）
+  if (!kinds.has('photoWall')) add('photoWall', 6.4, BED_Z1 - 0.07, 1.45, Math.PI);
   if (!kinds.has('photoWallWide')) add('photoWallWide', -ROOM_X + 0.07, 1.7, 1.5, Math.PI / 2);
 
   if (furn.length === h.furniture.length) return h;
   return { ...h, furniture: furn };
 }
 
-/** 老档全量迁移链：卧室补全 → 厨房开放 */
+let migSeq3 = 0;
+
+/**
+ * v5.3 卫生间 + 小物全家桶迁移（幂等，不动用户已有布置）：
+ * - 卫生间（厨房东侧）老档必空 → 补浴缸/马桶/洗衣机/门垫/绿植；
+ * - 吊灯（四房间逐间检查）/ 插座（四房间）/ 落地风扇 / 厨具小物（跟随灶台/餐桌/吧台实际位置）；
+ * - 新玩偶（滚滚/呼噜/咪咪）跟随沙发/床/脚凳实际位置；
+ * - 旧档挂在厨房东壁的相框让位给卫生间门 → 挪到厨房南壁。
+ */
+export function migrateBathV53(h: HomeState): HomeState {
+  if (!h || h.v !== 5 || !Array.isArray(h.furniture)) return h;
+  const furn = h.furniture.slice();
+  const stamp = Date.now().toString(36);
+  const add = (kind: FurnitureKind, x: number, z: number, y?: number, ry?: number) =>
+    furn.push({ id: `${kind}-mig3-${stamp}-${++migSeq3}`, kind, x, z, y, ry, st: {} });
+  const kinds = new Set(furn.map((f) => f.kind));
+  const inRoom = (kind: string, room: RoomId) =>
+    furn.some((f) => f.kind === kind && roomAt(f.x, f.z) === room);
+
+  // 旧档相框挂在厨房东壁（卫生间门的位置）→ 挪到厨房南壁
+  const ktEastFrame = furn.find(
+    (f) => f.kind === 'photoWall' && Math.abs(f.x - (KTCH_X1 - 0.07)) < 0.12,
+  );
+  if (ktEastFrame) {
+    ktEastFrame.x = 6.4;
+    ktEastFrame.z = BED_Z1 - 0.07;
+    ktEastFrame.ry = Math.PI;
+  }
+
+  // 卫生间（老档必空：无任何家具落在卫生间区域）
+  const hasBath = furn.some((f) => roomAt(f.x, f.z) === 'ba');
+  if (!hasBath) {
+    add('bathtub', 9.5, 3.7, 0, 0);
+    add('toilet', 8.05, 3.62, 0, -Math.PI / 2);
+    add('washer', 10.85, 7.3, 0, Math.PI);
+    add('doormat', 8.35, 7.0, 0, Math.PI / 2);
+    add('plant', 11.0, 3.45, 0, 0);
+  }
+  // 吊灯：逐间补
+  for (const room of ['lr', 'br', 'kt', 'ba'] as RoomId[]) {
+    if (!inRoom('chandelier', room)) {
+      const spot: Record<RoomId, [number, number]> = {
+        lr: [0, 0.2], br: [-1.5, 5.5], kt: [4.5, 5.5], ba: [9.5, 5.5],
+      };
+      add('chandelier', spot[room][0], spot[room][1], WALL_H - 0.04, 0);
+    }
+  }
+  // 插座：逐间补
+  for (const room of ['lr', 'br', 'kt', 'ba'] as RoomId[]) {
+    if (!inRoom('socket', room)) {
+      const spot: Record<RoomId, [number, number, number]> = {
+        lr: [ROOM_X - 0.07, -0.9, -Math.PI / 2],
+        br: [-ROOM_X + 0.07, 3.7, Math.PI / 2],
+        kt: [4.2, BED_Z0 + 0.19, 0],
+        ba: [KTCH_X1 + 0.07, 3.6, Math.PI / 2],
+      };
+      add('socket', spot[room][0], spot[room][1], 0.38, spot[room][2]);
+    }
+  }
+  // 落地风扇
+  if (!kinds.has('fan')) add('fan', 3.7, 1.75, 0, -2.4);
+  // 厨具小物：跟随灶台/餐桌/吧台实际位置
+  if (!kinds.has('pot')) {
+    const stove = furn.find((f) => f.kind === 'stove');
+    if (stove) {
+      add('pot', stove.x - 0.18, stove.z - 0.05, 0.92, 0);
+      add('kettle', stove.x + 0.3, stove.z - 0.22, 0.92, -0.5);
+    }
+  }
+  if (!kinds.has('bowls')) {
+    const dt = furn.find((f) => f.kind === 'diningTable');
+    if (dt) {
+      add('bowls', dt.x - 0.45, dt.z + 0.12, 0.74, 0);
+      add('plates', dt.x + 0.42, dt.z - 0.18, 0.74, 0);
+      add('chopsticks', dt.x - 0.02, dt.z + 0.28, 0.74, 0);
+      add('juicer', dt.x + 0.32, dt.z + 0.1, 0.74, 0.5);
+    }
+  }
+  if (!kinds.has('cup')) {
+    const bar = furn.find((f) => f.kind === 'kitchenBar');
+    if (bar) add('cup', bar.x, bar.z, 0.86, 0.4);
+  }
+  // 新玩偶：跟随沙发/床/脚凳
+  if (!kinds.has('plushPanda')) {
+    const sofa = furn.find((f) => f.kind === 'sofa');
+    if (sofa) add('plushPanda', sofa.x + 0.37, sofa.z - 0.03, 0.47, (sofa.ry ?? 0) + 2.9);
+    else add('plushPanda', 0.5, 2.0, 0, 2.9);
+  }
+  if (!kinds.has('plushPig')) {
+    const bed = furn.find((f) => f.kind === 'bed');
+    if (bed) add('plushPig', bed.x + 0.47, bed.z + 0.35, 0.42, (bed.ry ?? 0) + 2.2);
+    else add('plushPig', -1.0, 5.8, 0, 2.2);
+  }
+  if (!kinds.has('plushCat')) {
+    const ot = furn.find((f) => f.kind === 'ottoman');
+    if (ot) add('plushCat', ot.x, ot.z, 0.4, -0.7);
+    else add('plushCat', -1.5, 0.5, 0, -0.7);
+  }
+
+  if (furn.length === h.furniture.length && !ktEastFrame) return h;
+  return { ...h, furniture: furn };
+}
+
+/** 老档全量迁移链：卧室补全 → 厨房开放 → 卫生间+小物全家桶 */
 export function migrateHome(h: HomeState): HomeState {
-  return migrateKitchenV52(migrateBedroomV51(h));
+  return migrateBathV53(migrateKitchenV52(migrateBedroomV51(h)));
 }
 
 /** 同步读缓存（首屏即时渲染；无则 null） */

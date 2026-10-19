@@ -1,12 +1,14 @@
 'use client';
 
 /**
- * 情侣小家 3D —— 类型定义（v5·两室一厅）
+ * 情侣小家 3D —— 类型定义（v5.3 四室一厅）
  *
- * - 客厅 9m × 6m + 卧室 6m × 5m（南侧推门相通），家具 MODEL_SCALE=2.0；
- * - 家具 (x, z) 底部中心，y 为抬升（电视上墙 / 空调上墙 / 物件上桌）；
+ * - 客厅 9m × 6m + 卧室 6×5 + 厨房 6×5 + 卫生间 4×5，家具 MODEL_SCALE=2.0；
+ * - 家具 (x, z) 底部中心，y 为抬升（电视上墙 / 空调上墙 / 物件上桌 / 吊灯挂顶）；
  * - ry = 任意角度水平旋转（弧度），rx = 俯仰旋转（弧度，钳 ±1.05）；
  * - col = 用户自选主色（编辑模式调色盘）；
+ * - 窗户/门可编辑：winPos（每扇沿墙滑行坐标）/ doorPos（每扇门沿墙坐标）；
+ * - 天花板四房间分开换色；fp = 第一人称视角；
  * - 两个模式：live（摇杆+跟随镜头+家具交互）/ edit（俯瞰+拖拽+旋转+调色+商店）。
  */
 
@@ -47,6 +49,9 @@ export type FurnitureKind =
   | 'polaroid'
   | 'plushBunny'
   | 'plushDuck'
+  | 'plushPanda'
+  | 'plushPig'
+  | 'plushCat'
   | 'vanity'
   | 'fridge'
   | 'stove'
@@ -58,7 +63,18 @@ export type FurnitureKind =
   | 'desk'
   | 'coatRack'
   | 'toaster'
-  | 'microwave';
+  | 'microwave'
+  | 'pot'
+  | 'kettle'
+  | 'bowls'
+  | 'plates'
+  | 'chopsticks'
+  | 'spoons'
+  | 'cup'
+  | 'juicer'
+  | 'fan'
+  | 'socket'
+  | 'chandelier';
 
 /** 家具分类（商店栏的 tab） */
 export type FurnCategory =
@@ -70,6 +86,7 @@ export type FurnCategory =
   | 'plant'
   | 'appliance'
   | 'bathroom'
+  | 'kitchen'
   | 'decor';
 
 /** 单件家具实例（持久化最小单元） */
@@ -79,7 +96,7 @@ export interface FurnitureItem {
   /** 世界坐标：底部中心 */
   x: number;
   z: number;
-  /** 抬升（米）：电视上墙 / 小物件放上桌面；默认 0 贴地 */
+  /** 抬升（米）：电视上墙 / 小物件放上桌面 / 吊灯挂顶；默认 0 贴地 */
   y?: number;
   /** 水平旋转（弧度，任意角度；π = 面向北） */
   ry?: number;
@@ -92,11 +109,11 @@ export interface FurnitureItem {
 }
 
 /** 房间标识（小人在哪个房间，商店家具就添到哪个房间） */
-export type RoomId = 'lr' | 'br' | 'kt';
+export type RoomId = 'lr' | 'br' | 'kt' | 'ba';
 
 /** 家具状态（按需可选字段） */
 export interface FurnitureState {
-  /** 灯 / 电视 / 收音机：开 = true */
+  /** 灯 / 电视 / 收音机 / 空调 / 风扇 / 吊灯：开 = true */
   on?: boolean;
   /** 衣橱 / 冰箱 / 纸箱 / 洗衣机门：开 = true */
   open?: boolean;
@@ -126,42 +143,66 @@ export interface CharState {
   dir: CharDir;
 }
 
+/** 三扇门沿墙坐标（卧室门/厨房门在 z=3 隔墙上沿 x 滑动；卫生间门在 x=7.5 墙上沿 z 滑动） */
+export interface DoorPos {
+  bed: number;
+  kt: number;
+  bath: number;
+}
+
 /** 小家整体持久化数据（服务端 JSON 快照） */
 export interface HomeState {
-  /** 数据版本：5 = 两室一厅（客厅+卧室+门+空调+相框）；不匹配则重播种默认布局 */
+  /** 数据版本：5 = 3D 时代（四室一厅靠增量迁移，不换版本号） */
   v: 5;
   furniture: FurnitureItem[];
   chars: Record<CharId, { x: number; z: number; dir: CharDir }>;
   /** 昼夜：true = 夜晚 */
   night: boolean;
-  /** 窗户开态（5 扇：客厅北×2 / 客厅西 / 卧室西 / 卧室南；缺省全关） */
+  /** 窗户开态（9 扇：客厅北×2 / 客厅西 / 卧室西 / 卧室南 / 厨房东 / 厨房南 / 卫生间北 / 卫生间东） */
   win?: boolean[];
+  /** 每扇窗沿墙滑行坐标（undefined = 默认位） */
+  winPos?: number[];
+  /** 三扇门沿墙坐标（undefined = 默认位） */
+  doorPos?: DoorPos;
   /** 地板自定义色（#rrggbb；缺省 = 默认云白；客厅） */
   floorCol?: string;
   /** 墙壁自定义色（#rrggbb；缺省 = 默认暖白；客厅） */
   wallCol?: string;
-  /** 卧室地板自定义色（#rrggbb；缺省 = 默认云白；客厅卧室分开换色） */
+  /** 卧室地板自定义色 */
   floorColBed?: string;
-  /** 卧室墙壁自定义色（#rrggbb；缺省 = 默认暖白；客厅卧室分开换色） */
+  /** 卧室墙壁自定义色 */
   wallColBed?: string;
+  /** 厨房地板自定义色 */
+  floorColK?: string;
+  /** 厨房墙壁自定义色 */
+  wallColK?: string;
+  /** 卫生间地板自定义色 */
+  floorColB?: string;
+  /** 卫生间墙壁自定义色 */
+  wallColB?: string;
+  /** 天花板自定义色（客厅/卧室/厨房/卫生间 分开换色） */
+  ceilCol?: string;
+  ceilColBed?: string;
+  ceilColK?: string;
+  ceilColB?: string;
   /** 卧室门开态（开 = 小人可以穿过门洞进出卧室） */
   doorOpen?: boolean;
-  /** 门自定义色（#rrggbb；缺省 = 默认暖白） */
+  /** 厨房门开态 */
+  kitchenDoorOpen?: boolean;
+  /** 卫生间门开态 */
+  bathDoorOpen?: boolean;
+  /** 门自定义色（#rrggbb；缺省 = 默认暖白；全屋通用） */
   doorCol?: string;
   /** 窗框自定义色（#rrggbb；缺省 = 默认浅木白） */
   winCol?: string;
-  /** 厨房门开态（开 = 小人可以穿过门洞进出厨房） */
-  kitchenDoorOpen?: boolean;
-  /** 厨房地板自定义色（#rrggbb；缺省 = 默认云白；三房间分开换色） */
-  floorColK?: string;
-  /** 厨房墙壁自定义色（#rrggbb；缺省 = 默认暖白；三房间分开换色） */
-  wallColK?: string;
+  /** 第一人称视角（true = 小人就是「我」） */
+  fp?: boolean;
 }
 
 /** 家具目录条目（静态配置，不持久化） */
 export interface CatalogEntry {
   kind: FurnitureKind;
-  /** GLB 路径（tv 为程序化建模，无 GLB） */
+  /** GLB 路径（程序化建模的没有） */
   glb?: string;
   /** 开门态 GLB（纸箱这类无独立门节点的换模型） */
   glbAlt?: string;
@@ -171,15 +212,17 @@ export interface CatalogEntry {
   fp: [number, number];
   /** 非均匀缩放（xyz 各轴乘子，在 MODEL_SCALE 之上；用于拉宽电视柜等单件适配） */
   scale?: [number, number, number];
-  /** 卧室/厨卫等非客厅家具：商店暂不展示（客厅完成后陆续开放） */
+  /** 非客厅家具：商店暂不展示 */
   hidden?: boolean;
-  /** 挂墙件（相框/电视）：购买/拖拽后自动吸附到最近的墙，y 即挂高 */
+  /** 挂墙件（相框/插座/电视）：购买/拖拽后自动吸附到最近的墙 */
   wallMount?: boolean;
+  /** 挂墙件的默认挂高（米；缺省 1.45） */
+  wallY?: number;
   /** 家具实测高度（米，用于挂墙件避让高家具） */
   h?: number;
   /** 交互能力 */
   acts: {
-    /** 点击开/关（灯、电视、收音机、空调） */
+    /** 点击开/关（灯、电视、收音机、空调、风扇、吊灯） */
     toggle?: boolean;
     /** 可开门（有 door 节点或 glbAlt） */
     door?: boolean;
@@ -190,7 +233,7 @@ export interface CatalogEntry {
     /** 相框：点击从手机上传照片 */
     photo?: boolean;
   };
-  /** 是灯具：开着时附加点光（y 为灯高） */
+  /** 是灯具：开着时附加点光（y 为相对家具原点的灯高） */
   light?: { y: number; color?: string; intensity?: number };
   /** 模型朝向微调（弧度，绕 Y） */
   yaw?: number;

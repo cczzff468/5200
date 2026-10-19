@@ -18,6 +18,8 @@ import type { CharRT } from '../types';
 export interface Char3DProps {
   rt: CharRT;
   who: 'me' | 'partner';
+  /** 隐藏（第一人称时隐藏「我」） */
+  hide?: boolean;
 }
 
 const OUTFIT: Record<'me' | 'partner', { cloth: string; hair: string; skin: string }> = {
@@ -87,12 +89,13 @@ function buildChar(who: 'me' | 'partner'): THREE.Group {
   return g;
 }
 
-export default function Char3D({ rt, who }: Char3DProps) {
+export default function Char3D({ rt, who, hide }: Char3DProps) {
   const root = useMemo(() => buildChar(who), [who]);
   const holder = useRef<THREE.Group>(null);
 
   useFrame((state) => {
     if (!holder.current) return;
+    holder.current.visible = !hide;
     holder.current.position.set(rt.x, 0, rt.z);
     holder.current.rotation.y = rt.heading;
     const t = state.clock.elapsedTime;

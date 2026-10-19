@@ -23,6 +23,7 @@ import {
   ChevronsDown,
   ChevronsUp,
   Droplet,
+  Eye,
   Loader2,
   Maximize,
   Minimize,
@@ -35,20 +36,25 @@ import {
   Store,
   Sun,
   Trash2,
+  Users,
   X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import Joystick from './Joystick';
 import {
+  BATH_X1,
   CATALOG,
+  DOORS,
   PLAY_COOLDOWN,
   ROOM_SPANS,
   ROOM_NAMES,
   SHOP_TABS,
   SNAP,
   TILT_LIMIT,
+  WALL_H,
   WALL_SLOTS,
+  WINS,
   clampFurnToRooms,
   defaultHome,
   fetchRemote,
@@ -56,6 +62,8 @@ import {
   loadCache,
   pushRemote,
   resetRemote,
+  resolveDoorPos,
+  resolveWinPos,
   roomAt,
   saveCache,
   saveCacheNow,
@@ -249,7 +257,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [items, setItems] = useState<FurnitureItem[]>(pack.home.furniture);
   const [night, setNight] = useState<boolean>(pack.home.night);
   const [rev, setRev] = useState<number>(pack.rev);
-  const [win, setWin] = useState<boolean[]>([0, 1, 2, 3, 4, 5, 6].map((i) => !!pack.home.win?.[i]));
+  const [win, setWin] = useState<boolean[]>([0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => !!pack.home.win?.[i]));
   const [floorCol, setFloorCol] = useState<string | undefined>(pack.home.floorCol);
   const [wallCol, setWallCol] = useState<string | undefined>(pack.home.wallCol);
   const [floorColBed, setFloorColBed] = useState<string | undefined>(pack.home.floorColBed);
@@ -260,6 +268,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [winCol, setWinCol] = useState<string | undefined>(pack.home.winCol);
   const [floorColK, setFloorColK] = useState<string | undefined>(pack.home.floorColK);
   const [wallColK, setWallColK] = useState<string | undefined>(pack.home.wallColK);
+  const [floorColB, setFloorColB] = useState<string | undefined>(pack.home.floorColB);
+  const [wallColB, setWallColB] = useState<string | undefined>(pack.home.wallColB);
+  const [ceilCol, setCeilCol] = useState<string | undefined>(pack.home.ceilCol);
+  const [ceilColBed, setCeilColBed] = useState<string | undefined>(pack.home.ceilColBed);
+  const [ceilColK, setCeilColK] = useState<string | undefined>(pack.home.ceilColK);
+  const [ceilColB, setCeilColB] = useState<string | undefined>(pack.home.ceilColB);
+  const [bathDoorOpen, setBathDoorOpen] = useState<boolean>(!!pack.home.bathDoorOpen);
+  const [winPos, setWinPos] = useState<number[] | undefined>(pack.home.winPos);
+  const [doorPos, setDoorPos] = useState<{ bed: number; kt: number; bath: number } | undefined>(pack.home.doorPos);
+  const [fp, setFp] = useState<boolean>(!!pack.home.fp);
 
   // ---------------- UI 状态 ----------------
   const [mode, setMode] = useState<HomeMode>('live');
@@ -329,6 +347,28 @@ export default function CoupleHome({ close }: { close: () => void }) {
   floorColKRef.current = floorColK;
   const wallColKRef = useRef(wallColK);
   wallColKRef.current = wallColK;
+  const floorColBRef = useRef(floorColB);
+  floorColBRef.current = floorColB;
+  const wallColBRef = useRef(wallColB);
+  wallColBRef.current = wallColB;
+  const ceilColRef = useRef(ceilCol);
+  ceilColRef.current = ceilCol;
+  const ceilColBedRef = useRef(ceilColBed);
+  ceilColBedRef.current = ceilColBed;
+  const ceilColKRef = useRef(ceilColK);
+  ceilColKRef.current = ceilColK;
+  const ceilColBRef = useRef(ceilColB);
+  ceilColBRef.current = ceilColB;
+  const bathDoorOpenRef = useRef(bathDoorOpen);
+  bathDoorOpenRef.current = bathDoorOpen;
+  const winPosRef = useRef(winPos);
+  winPosRef.current = winPos;
+  const doorPosRef = useRef(doorPos);
+  doorPosRef.current = doorPos;
+  const fpRef = useRef({ on: fp });
+  useEffect(() => {
+    fpRef.current.on = fp;
+  }, [fp]);
 
   // ---------------- 提示 ----------------
   const toast = useCallback((msg: string) => {
@@ -344,16 +384,26 @@ export default function CoupleHome({ close }: { close: () => void }) {
       furniture: itemsRef.current,
       night: nightRef.current,
       win: winRef.current,
+      winPos: winPosRef.current,
+      doorPos: doorPosRef.current,
       floorCol: floorColRef.current,
       wallCol: wallColRef.current,
       floorColBed: floorColBedRef.current,
       wallColBed: wallColBedRef.current,
       floorColK: floorColKRef.current,
       wallColK: wallColKRef.current,
+      floorColB: floorColBRef.current,
+      wallColB: wallColBRef.current,
+      ceilCol: ceilColRef.current,
+      ceilColBed: ceilColBedRef.current,
+      ceilColK: ceilColKRef.current,
+      ceilColB: ceilColBRef.current,
       doorOpen: doorOpenRef.current,
       kitchenDoorOpen: kitchenDoorOpenRef.current,
+      bathDoorOpen: bathDoorOpenRef.current,
       doorCol: doorColRef.current,
       winCol: winColRef.current,
+      fp: fpRef.current.on,
       chars: {
         me: {
           x: Math.round(meRT.current.x * 100) / 100,
@@ -374,17 +424,27 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const adoptHome = useCallback((h: HomeState) => {
     setItems(h.furniture);
     setNight(h.night);
-    setWin([0, 1, 2, 3, 4, 5, 6].map((i) => !!h.win?.[i]));
+    setWin([0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => !!h.win?.[i]));
     setFloorCol(h.floorCol);
     setWallCol(h.wallCol);
     setFloorColBed(h.floorColBed);
     setWallColBed(h.wallColBed);
     setFloorColK(h.floorColK);
     setWallColK(h.wallColK);
+    setFloorColB(h.floorColB);
+    setWallColB(h.wallColB);
+    setCeilCol(h.ceilCol);
+    setCeilColBed(h.ceilColBed);
+    setCeilColK(h.ceilColK);
+    setCeilColB(h.ceilColB);
     setDoorOpen(!!h.doorOpen);
     setKitchenDoorOpen(!!h.kitchenDoorOpen);
+    setBathDoorOpen(!!h.bathDoorOpen);
     setDoorCol(h.doorCol);
     setWinCol(h.winCol);
+    setWinPos(h.winPos);
+    setDoorPos(h.doorPos);
+    setFp(!!h.fp);
   }, []);
 
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -584,10 +644,42 @@ export default function CoupleHome({ close }: { close: () => void }) {
     toast('已收起家具');
   }, [selId, saveSoon, toast]);
 
-  /** 四向微调：沿屏幕视觉方向移动选中家具一格（0.25m 吸附 + 双房间钳位） */
+  /** 四向微调：沿屏幕视觉方向移动选中目标（家具 = 一格；门窗 = 沿墙滑行） */
   const nudgeSel = useCallback(
     (dx: number, dz: number) => {
       if (!selId) return;
+      // —— 门窗：沿墙滑行（只取切向分量） ——
+      if (selId.startsWith('win-') || selId.startsWith('door-')) {
+        const step = 0.25;
+        if (selId.startsWith('win-')) {
+          const i = Number(selId.slice(4));
+          const w = WINS[i];
+          if (!w) return;
+          if (w.axis === 'z' && dx === 0) return;
+          if (w.axis === 'x' && dz === 0) return;
+          const cur = winPosRef.current?.[i] ?? w.def;
+          const along = cur + (w.axis === 'z' ? Math.sign(dx) : Math.sign(dz)) * step;
+          const r = resolveWinPos(i, along, winPosRef.current, doorPosRef.current);
+          setWinPos((prev) => {
+            const next = prev ? prev.slice() : WINS.map((ww) => ww.def);
+            next[i] = r.along;
+            return next;
+          });
+        } else {
+          const did = selId.slice(5) as 'bed' | 'kt' | 'bath';
+          const d = DOORS.find((dd) => dd.id === did);
+          if (!d) return;
+          if (d.axis === 'z' && dx === 0) return;
+          if (d.axis === 'x' && dz === 0) return;
+          const cur = doorPosRef.current?.[did] ?? d.def;
+          const along = cur + (d.axis === 'z' ? Math.sign(dx) : Math.sign(dz)) * step;
+          const r = resolveDoorPos(did, along, winPosRef.current, doorPosRef.current);
+          setDoorPos((prev) => ({ bed: DOORS[0].def, kt: DOORS[1].def, bath: DOORS[2].def, ...prev, [did]: r.along }));
+        }
+        saveSoon();
+        return;
+      }
+      // —— 家具：四房间钳位 + 吸附 ——
       setItems((prev) =>
         prev.map((f) => {
           if (f.id !== selId) return f;
@@ -625,10 +717,20 @@ export default function CoupleHome({ close }: { close: () => void }) {
     moveCmd.current = { v: moveCmd.current.v + 1, dir };
   }, []);
 
-  /** 调色盘：选中家具上色 / 恢复默认 */
+  /** 调色盘：选中目标上色 / 恢复默认（门窗选中时改全屋门窗色） */
   const applyColor = useCallback(
     (hex: string | null) => {
       if (!selId) return;
+      if (selId.startsWith('win-')) {
+        setWinCol(hex ?? undefined);
+        saveSoon();
+        return;
+      }
+      if (selId.startsWith('door-')) {
+        setDoorCol(hex ?? undefined);
+        saveSoon();
+        return;
+      }
       setItems((prev) =>
         prev.map((f) => (f.id === selId ? { ...f, col: hex ?? undefined } : f)),
       );
@@ -709,6 +811,56 @@ export default function CoupleHome({ close }: { close: () => void }) {
     [saveSoon],
   );
 
+  /** 卫生间地板/墙壁自定义色（四房间分开换色） */
+  const applyFloorColB = useCallback(
+    (hex: string | null) => {
+      setFloorColB(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
+  const applyWallColB = useCallback(
+    (hex: string | null) => {
+      setWallColB(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
+  /** 天花板自定义色（四房间分开） */
+  const applyCeilCol = useCallback(
+    (hex: string | null) => {
+      setCeilCol(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
+  const applyCeilColBed = useCallback(
+    (hex: string | null) => {
+      setCeilColBed(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
+  const applyCeilColK = useCallback(
+    (hex: string | null) => {
+      setCeilColK(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
+  const applyCeilColB = useCallback(
+    (hex: string | null) => {
+      setCeilColB(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
   const applyDoorCol = useCallback(
     (hex: string | null) => {
       setDoorCol(hex ?? undefined);
@@ -745,6 +897,36 @@ export default function CoupleHome({ close }: { close: () => void }) {
     saveSoon();
   }, [saveSoon, toast]);
 
+  /** 卫生间门开合（点击门本体） */
+  const toggleBathDoor = useCallback(() => {
+    setBathDoorOpen((o) => {
+      const next = !o;
+      toast(next ? '浴室门开啦，泡泡浴准备～' : '卫生间门已关上');
+      return next;
+    });
+    saveSoon();
+  }, [saveSoon, toast]);
+
+  /** 编辑模式点选门窗（选中而非开合） */
+  const onWallTap = useCallback(
+    (id: string) => {
+      setShopOpen(false);
+      setPaletteOpen(false);
+      setSelId((s) => (s === id ? null : id));
+    },
+    [],
+  );
+
+  /** 第一/第三人称切换 */
+  const toggleFp = useCallback(() => {
+    setFp((v) => {
+      const next = !v;
+      toast(next ? '第一人称：你就是小人本人啦～' : '第三人称：跟随视角');
+      return next;
+    });
+    saveSoon();
+  }, [saveSoon, toast]);
+
   /** 相框选照片完成：按框型裁剪 → 压缩 → 写入家具状态（永久保存） */
   const onPickPhoto = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -775,6 +957,27 @@ export default function CoupleHome({ close }: { close: () => void }) {
   );
 
   const onDragMove = useCallback((id: string, x: number, z: number) => {
+    // 门窗：沿墙滑行（写入 winPos/doorPos）
+    if (id.startsWith('win-')) {
+      const i = Number(id.slice(4));
+      const w = WINS[i];
+      if (!w) return;
+      const along = w.axis === 'z' ? x : z;
+      setWinPos((prev) => {
+        const next = prev ? prev.slice() : WINS.map((ww) => ww.def);
+        next[i] = along;
+        return next;
+      });
+      return;
+    }
+    if (id.startsWith('door-')) {
+      const did = id.slice(5) as 'bed' | 'kt' | 'bath';
+      const d = DOORS.find((dd) => dd.id === did);
+      if (!d) return;
+      const along = d.axis === 'z' ? x : z;
+      setDoorPos((prev) => ({ bed: DOORS[0].def, kt: DOORS[1].def, bath: DOORS[2].def, ...prev, [did]: along }));
+      return;
+    }
     setItems((prev) => prev.map((f) => (f.id === id ? { ...f, x, z } : f)));
   }, []);
 
@@ -782,9 +985,35 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setSelId(id);
   }, []);
 
-  /** 拖拽结束：挂墙件自动吸附到最近的墙面并朝向屋内 */
+  /** 拖拽结束：家具挂墙件自动贴墙；门窗吸附到 0.05m 网格 */
   const onDragEnd = useCallback(
     (id: string) => {
+      if (id.startsWith('win-')) {
+        const i = Number(id.slice(4));
+        const w = WINS[i];
+        if (w) {
+          const cur = winPosRef.current?.[i] ?? w.def;
+          const r = resolveWinPos(i, Math.round(cur * 20) / 20, winPosRef.current, doorPosRef.current);
+          setWinPos((prev) => {
+            const next = prev ? prev.slice() : WINS.map((ww) => ww.def);
+            next[i] = r.along;
+            return next;
+          });
+        }
+        saveSoon();
+        return;
+      }
+      if (id.startsWith('door-')) {
+        const did = id.slice(5) as 'bed' | 'kt' | 'bath';
+        const d = DOORS.find((dd) => dd.id === did);
+        if (d) {
+          const cur = doorPosRef.current?.[did] ?? d.def;
+          const r = resolveDoorPos(did, Math.round(cur * 20) / 20, winPosRef.current, doorPosRef.current);
+          setDoorPos((prev) => ({ bed: DOORS[0].def, kt: DOORS[1].def, bath: DOORS[2].def, ...prev, [did]: r.along }));
+        }
+        saveSoon();
+        return;
+      }
       const it = itemsRef.current.find((f) => f.id === id);
       if (it && CATALOG[it.kind]?.wallMount) {
         const s = snapToWallSlot(it.x, it.z);
@@ -839,14 +1068,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
     return { x: Math.round(((x0 + x1) / 2) * 4) / 4, z: Math.round(((z0 + z1) / 2) * 4) / 4 };
   }, []);
 
-  /** 在指定房间找一段空墙面（避开已挂件/高家具；返回贴墙坐标与朝向） */
+  /** 在指定房间找一段空墙面（避开已挂件/高家具/窗户门洞；返回贴墙坐标与朝向） */
   const findWallSpot = useCallback(
     (room: RoomId, kind: FurnitureKind): { x: number; z: number; ry: number } => {
       const e = CATALOG[kind];
       const w = e.fp[0];
+      const high = (e.wallY ?? 1.45) > 0.9; // 高挂件（相框/电视）需要避让窗户/门洞
       const slots = WALL_SLOTS.filter((s) => s.room === room);
-      for (const s of slots.length ? slots : WALL_SLOTS) {
+      outer: for (const s of slots.length ? slots : WALL_SLOTS) {
         for (let a = s.from + w / 2 + 0.15; a <= s.to - w / 2 - 0.15 + 0.001; a += 0.45) {
+          if (high && s.avoid?.some(([a0, a1]) => a > a0 - w / 2 && a < a1 + w / 2)) continue;
           const px = s.axis === 'z' ? a : s.at;
           const pz = s.axis === 'z' ? s.at : a;
           const free = itemsRef.current.every((it) => {
@@ -885,16 +1116,27 @@ export default function CoupleHome({ close }: { close: () => void }) {
       const id = `${kind}-${Date.now().toString(36)}-${++buySeq}`;
       const room: RoomId = roomAt(meRT.current.x, meRT.current.z);
 
-      if (e.wallMount || kind === 'tv') {
-        // 挂墙件（相框/电视）：挂到当前房间的空墙面
+      if (kind === 'chandelier') {
+        // 吊灯：挂当前房间天花板中央附近
+        const spot = findSpot(kind, room);
+        setItems((prev) => [...prev, { id, kind, x: spot.x, z: spot.z, y: WALL_H - 0.04, st: {} }]);
+        toast(`吊灯挂到${ROOM_NAMES[room]}天花板啦`);
+      } else if (e.wallMount || kind === 'tv') {
+        // 挂墙件（相框/插座/电视）：挂到当前房间的空墙面
         const spot = findWallSpot(room, kind);
-        const y = kind === 'tv' ? 1.19 : 1.45;
+        const y = kind === 'tv' ? 1.19 : (e.wallY ?? 1.45);
         setItems((prev) => [...prev, { id, kind, x: spot.x, z: spot.z, y, ry: spot.ry, st: {} }]);
         toast(`已挂到${ROOM_NAMES[room]}墙上`);
       } else if (kind === 'aircon') {
         // 壁挂空调：挂当前房间东墙（1.85m 高，面朝西）
         const pos =
-          room === 'lr' ? { x: 4.34, z: -1.6 } : room === 'br' ? { x: 1.39, z: 5.6 } : { x: 7.38, z: 4.1 };
+          room === 'lr'
+            ? { x: 4.34, z: -1.6 }
+            : room === 'br'
+              ? { x: 1.39, z: 5.6 }
+              : room === 'kt'
+                ? { x: 7.38, z: 4.1 }
+                : { x: BATH_X1 - 0.16, z: 4.2 };
         setItems((prev) => [...prev, { id, kind, x: pos.x, z: pos.z, y: 1.85, ry: -Math.PI / 2, st: {} }]);
         toast(`已挂到${ROOM_NAMES[room]}东墙`);
       } else {
@@ -967,8 +1209,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
   }, []);
 
   // ---------------- 渲染 ----------------
-  const selItem = selId ? items.find((f) => f.id === selId) : null;
+  const selItem = selId && !selId.startsWith('win-') && !selId.startsWith('door-') ? items.find((f) => f.id === selId) : null;
   const selEntry = selItem ? CATALOG[selItem.kind] : null;
+  const isWallSel = !!selId && (selId.startsWith('win-') || selId.startsWith('door-'));
+  const selWallName = selId?.startsWith('win-')
+    ? '窗户'
+    : DOORS.find((d) => selId === `door-${d.id}`)?.name ?? '';
+  /** 调色盘当前值（门窗选中时对应全局门窗色） */
+  const paletteVal = selId?.startsWith('win-') ? winCol : selId?.startsWith('door-') ? doorCol : selItem?.col;
 
   /** 操作按钮通用样式 */
   const toolBtn = 'flex h-9 w-9 items-center justify-center rounded-full transition active:scale-90';
@@ -997,8 +1245,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
         zoomCmd={zoomCmd}
         moveCmd={moveCmd}
         onNudge={nudgeSel}
+        fp={fp}
+        fpRef={fpRef}
         win={win}
         onToggleWin={toggleWin}
+        winPos={winPos}
+        doorPos={doorPos}
         floorCol={floorCol}
         wallCol={wallCol}
         doorCol={doorCol}
@@ -1007,15 +1259,24 @@ export default function CoupleHome({ close }: { close: () => void }) {
         wallColBed={wallColBed}
         floorColK={floorColK}
         wallColK={wallColK}
+        floorColB={floorColB}
+        wallColB={wallColB}
+        ceilCol={ceilCol}
+        ceilColBed={ceilColBed}
+        ceilColK={ceilColK}
+        ceilColB={ceilColB}
         doorOpen={doorOpen}
         kitchenDoorOpen={kitchenDoorOpen}
+        bathDoorOpen={bathDoorOpen}
         onToggleDoor={toggleDoor}
         onToggleKitchenDoor={toggleKitchenDoor}
+        onToggleBathDoor={toggleBathDoor}
         onFloorTap={onFloorTap}
         onFurnTap={onFurnTap}
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onDragSelect={onDragSelect}
+        onWallTap={onWallTap}
       />
 
       {/* ===== HUD ===== */}
@@ -1092,7 +1353,79 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
         {/* 底部区 */}
         <div className="p-4 pb-6">
-          {/* 选中操作条（编辑模式） */}
+          {/* 选中操作条（编辑模式·门窗：移动/换色，不可删除） */}
+          <AnimatePresence>
+            {mode === 'edit' && isWallSel && !shopOpen && !paletteOpen && (
+              <motion.div
+                key={selId}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 16 }}
+                className="pointer-events-auto mx-auto mb-3 w-fit"
+              >
+                <div className="mx-auto mb-1.5 w-fit rounded-full bg-black/25 px-2.5 py-0.5 text-[11px] font-medium text-white/95 backdrop-blur-sm">
+                  {selWallName} · 拖动或方向键沿墙移动
+                </div>
+                <div className="flex items-center gap-1 rounded-2xl bg-white/90 p-1.5 shadow-lg backdrop-blur">
+                  {/* 四向微调（沿墙滑行） */}
+                  <div className="grid grid-cols-3 grid-rows-3 gap-px rounded-xl bg-[#efece3] p-1">
+                    <span />
+                    <button
+                      onClick={() => issueMoveCmd('up')}
+                      aria-label="上移"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                    >
+                      <ChevronUp className="h-4 w-4" />
+                    </button>
+                    <span />
+                    <button
+                      onClick={() => issueMoveCmd('left')}
+                      aria-label="左移"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <span className="flex h-7 w-7 items-center justify-center text-[9px] text-[#b8b5ac]">沿墙</span>
+                    <button
+                      onClick={() => issueMoveCmd('right')}
+                      aria-label="右移"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                    <span />
+                    <button
+                      onClick={() => issueMoveCmd('down')}
+                      aria-label="下移"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                    >
+                      <ChevronDown className="h-4 w-4" />
+                    </button>
+                    <span />
+                  </div>
+                  {/* 换色 */}
+                  <button
+                    onClick={() => setPaletteOpen(true)}
+                    aria-label="给门窗换色"
+                    title="换颜色"
+                    className={`${toolBtn} bg-[#f0e2ee] text-[#b07193] hover:bg-[#ead4e4]`}
+                  >
+                    <Droplet className="h-4 w-4" />
+                  </button>
+                  {/* 取消选中 */}
+                  <button
+                    onClick={() => setSelId(null)}
+                    aria-label="取消选中"
+                    className={`${toolBtn} bg-[#efeef0] text-[#8a8a90]`}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* 选中操作条（编辑模式·家具） */}
           <AnimatePresence>
             {mode === 'edit' && selItem && selEntry && !shopOpen && !paletteOpen && (
               <motion.div
@@ -1254,8 +1587,23 @@ export default function CoupleHome({ close }: { close: () => void }) {
             </div>
             <div className={mode === 'live' ? 'hidden' : 'flex-1'} />
 
-            {/* 模式切换 + 商店 + 装修 */}
+            {/* 模式切换 + 视角 + 商店 + 装修 */}
             <div className="pointer-events-auto flex flex-col items-end gap-2">
+              {mode === 'live' && (
+                <button
+                  onClick={toggleFp}
+                  aria-label={fp ? '切换第三人称' : '切换第一人称'}
+                  title={fp ? '第三人称（跟随视角）' : '第一人称（小人就是自己）'}
+                  className={
+                    fp
+                      ? 'flex h-11 items-center gap-2 rounded-full bg-[#f2b3c2] px-4 text-[13px] font-semibold text-white shadow-md transition active:scale-95'
+                      : 'flex h-11 items-center gap-2 rounded-full bg-white/85 px-4 text-[13px] font-medium text-[#4a4a4e] shadow-md backdrop-blur transition active:scale-95'
+                  }
+                >
+                  {fp ? <Eye className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+                  {fp ? '第一人称' : '第三人称'}
+                </button>
+              )}
               {mode === 'edit' && (
                 <div className="flex items-center gap-2">
                   <button
@@ -1299,9 +1647,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
         </div>
       </div>
 
-      {/* ===== 调色盘面板（编辑模式选中家具） ===== */}
+      {/* ===== 调色盘面板（编辑模式：家具 / 门窗） ===== */}
       <AnimatePresence>
-        {mode === 'edit' && paletteOpen && selItem && selEntry && (
+        {mode === 'edit' && paletteOpen && (isWallSel || (selItem && selEntry)) && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -1318,7 +1666,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mb-1 flex items-center justify-between">
-                <span className="text-[15px] font-semibold text-[#3a3a3e]">给「{selEntry.name}」上色</span>
+                <span className="text-[15px] font-semibold text-[#3a3a3e]">
+                  {isWallSel ? `给「${selWallName}」换色` : `给「${selEntry!.name}」上色`}
+                </span>
                 <button
                   onClick={() => setPaletteOpen(false)}
                   aria-label="关闭调色盘"
@@ -1327,7 +1677,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              <p className="mb-4 text-[11.5px] text-[#9a9a96]">白色为主，点缀色随心混搭</p>
+              <p className="mb-4 text-[11.5px] text-[#9a9a96]">
+                {isWallSel ? '全屋门窗一起换色' : '白色为主，点缀色随心混搭'}
+              </p>
 
               {/* 色卡网格 */}
               <div className="grid grid-cols-5 gap-2.5">
@@ -1341,7 +1693,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   >
                     <span
                       className={
-                        selItem.col === s.hex
+                        paletteVal === s.hex
                           ? 'h-10 w-10 rounded-full ring-2 ring-[#f2a9bc] ring-offset-2 shadow-md'
                           : 'h-10 w-10 rounded-full shadow-sm ring-1 ring-black/10 transition group-active:scale-90'
                       }
@@ -1358,8 +1710,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <span
                     className="h-7 w-7 rounded-lg shadow-inner ring-1 ring-black/10"
                     style={{
-                      background: /^#[0-9a-fA-F]{6}$/.test(selItem.col ?? '')
-                        ? selItem.col
+                      background: /^#[0-9a-fA-F]{6}$/.test(paletteVal ?? '')
+                        ? paletteVal
                         : 'conic-gradient(#f6cdd6,#f9e6a6,#c9e3cf,#dcd2ec,#f6cdd6)',
                     }}
                   />
@@ -1368,7 +1720,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     type="color"
                     aria-label="自定义颜色"
                     className="absolute inset-0 cursor-pointer opacity-0"
-                    value={/^#[0-9a-fA-F]{6}$/.test(selItem.col ?? '') ? selItem.col : '#ffffff'}
+                    value={/^#[0-9a-fA-F]{6}$/.test(paletteVal ?? '') ? paletteVal : '#ffffff'}
                     onChange={(e) => applyColor(e.target.value)}
                   />
                 </label>
@@ -1412,9 +1764,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              <p className="mb-3 text-[11.5px] text-[#9a9a96]">三房间分开换色，门窗也能换</p>
+              <p className="mb-3 text-[11.5px] text-[#9a9a96]">四房间 + 天花板分开换色，门窗也能换</p>
 
-              <div className="scrollbar-none max-h-[52vh] overflow-y-auto pr-0.5">
+              <div className="scrollbar-none max-h-[54vh] overflow-y-auto pr-0.5">
                 {/* —— 客厅 —— */}
                 <div className="mb-2 flex items-center gap-1.5">
                   <span className="h-1.5 w-1.5 rounded-full bg-[#f2b3c2]" />
@@ -1422,6 +1774,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 </div>
                 <ColorRow label="地板" value={floorCol} onPick={applyFloorCol} fallback="#f5f2ec" />
                 <ColorRow label="墙壁" value={wallCol} onPick={applyWallCol} fallback="#f7f3ec" />
+                <ColorRow label="天花板" value={ceilCol} onPick={applyCeilCol} fallback="#fbf9f3" />
 
                 {/* —— 卧室 —— */}
                 <div className="mb-2 mt-4 flex items-center gap-1.5">
@@ -1430,6 +1783,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 </div>
                 <ColorRow label="地板" value={floorColBed} onPick={applyFloorColBed} fallback="#f5f2ec" />
                 <ColorRow label="墙壁" value={wallColBed} onPick={applyWallColBed} fallback="#f7f3ec" />
+                <ColorRow label="天花板" value={ceilColBed} onPick={applyCeilColBed} fallback="#fbf9f3" />
 
                 {/* —— 厨房 —— */}
                 <div className="mb-2 mt-4 flex items-center gap-1.5">
@@ -1438,6 +1792,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 </div>
                 <ColorRow label="地板" value={floorColK} onPick={applyFloorColK} fallback="#f5f2ec" />
                 <ColorRow label="墙壁" value={wallColK} onPick={applyWallColK} fallback="#f7f3ec" />
+                <ColorRow label="天花板" value={ceilColK} onPick={applyCeilColK} fallback="#fbf9f3" />
+
+                {/* —— 卫生间 —— */}
+                <div className="mb-2 mt-4 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#a8d8cf]" />
+                  <span className="text-[12px] font-semibold text-[#8a8a90]">卫生间</span>
+                </div>
+                <ColorRow label="地板" value={floorColB} onPick={applyFloorColB} fallback="#f5f2ec" />
+                <ColorRow label="墙壁" value={wallColB} onPick={applyWallColB} fallback="#f7f3ec" />
+                <ColorRow label="天花板" value={ceilColB} onPick={applyCeilColB} fallback="#fbf9f3" />
 
                 {/* —— 门窗（全屋通用） —— */}
                 <div className="mb-2 mt-4 flex items-center gap-1.5">
@@ -1562,6 +1926,7 @@ const CAT_COLORS: Record<string, [string, string]> = {
   plant: ['#c3e5cf', '#a8d8bb'],
   appliance: ['#e8e9e6', '#dcdcd8'],
   bathroom: ['#e3e9e6', '#d5e0da'],
+  kitchen: ['#fdeccd', '#f8dfae'],
   decor: ['#e6cfae', '#dbaf87'],
 };
 
