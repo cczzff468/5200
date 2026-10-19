@@ -381,6 +381,8 @@ export interface CharAction {
   arrived?: boolean;
   /** 到位后摆的姿势（缺省按 type 查 POSE_OF_ACT；play 乐器按 kind 分流钢琴/吉他） */
   pose?: CharPose;
+  /** 走到位后的回调（GameLoop 触发一次；拿饮料 → 开门取杯进入「端着逛」模式） */
+  onArrive?: () => void;
 }
 
 /** 模式 */

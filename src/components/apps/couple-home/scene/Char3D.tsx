@@ -30,6 +30,8 @@ export interface Char3DProps {
   poseRef?: RefObject<{ pose: CharPose; y: number }>;
   /** 穿搭编号（衣柜换装；0=默认，1/2=换色套装；partner 固定 0） */
   outfit?: number;
+  /** 手持物（true = 右手握小水杯，拿饮料后端着到处逛） */
+  carryRef?: RefObject<{ cup: boolean }>;
 }
 
 /** 穿搭色板（两角色 × 三套；0 为默认，衣柜换装循环切换） */
@@ -123,6 +125,8 @@ interface CharRig {
   /** 化妆星星（化妆时绕头部旋转闪烁，平时隐藏） */
   spark: THREE.Group;
   sparkSprites: THREE.Sprite[];
+  /** 手持小水杯（拿饮料后握在右手，平时隐藏） */
+  cup: THREE.Group;
 }
 
 const stdMat = (c: string, rough = 0.8, extra?: Partial<THREE.MeshStandardMaterialParameters>) =>
@@ -381,6 +385,35 @@ function buildChar(who: 'me' | 'partner', style: 'cartoon' | 'real', outfit = 0)
     mesh(new THREE.SphereGeometry(P.foreR * 1.25, 10, 8), stdMat(o.skin, 0.65), 0, -P.foreLen - P.foreR * 0.6, 0, fore);
   }
 
+  // ---------- 手持小水杯（拿饮料后握在右手，平时隐藏；挂在右前臂手心位置） ----------
+  const cup = new THREE.Group();
+  cup.visible = false;
+  cup.scale.setScalar(style === 'cartoon' ? 1 : 0.72);
+  const cupGlass = new THREE.MeshStandardMaterial({
+    color: '#cfeaf4',
+    roughness: 0.2,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 0.62,
+  });
+  const cupBody = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.024, 0.072, 12), cupGlass);
+  cupBody.castShadow = false;
+  cup.add(cupBody);
+  const cupJuice = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.026, 0.021, 0.052, 12),
+    stdMat('#f2b7c6', 0.35),
+  );
+  cupJuice.position.y = -0.004;
+  cupJuice.castShadow = false;
+  cup.add(cupJuice);
+  const cupStraw = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.085, 8), stdMat('#f4a7b9', 0.5));
+  cupStraw.position.set(0.012, 0.052, 0);
+  cupStraw.rotation.z = 0.18;
+  cupStraw.castShadow = false;
+  cup.add(cupStraw);
+  cup.position.set(0, -P.foreLen - P.foreR * 0.85, 0.028);
+  foreR.add(cup);
+
   // ---------- 头 + 脸 + 发型 ----------
   const head = new THREE.Group();
   head.position.set(0, P.headY, 0);
@@ -495,7 +528,7 @@ function buildChar(who: 'me' | 'partner', style: 'cartoon' | 'real', outfit = 0)
     back.rotation.x = -0.1;
   }
 
-  return { root: g, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, hipY: P.hipY, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites };
+  return { root: g, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, hipY: P.hipY, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, cup };
 }
 
 const dampN = THREE.MathUtils.damp;
@@ -555,7 +588,7 @@ function makeZzzTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outfit = 0 }: Char3DProps) {
+export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outfit = 0, carryRef }: Char3DProps) {
   const rig = useMemo(() => buildChar(who, style, outfit), [who, style, outfit]);
   const holder = useRef<THREE.Group>(null);
 
@@ -568,9 +601,12 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outf
     h.rotation.y = rt.heading;
 
     const t = state.clock.elapsedTime;
-    const { root, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, hipY } = rig;
+    const { root, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, hipY, cup } = rig;
     const pose: CharPose = who === 'me' ? (poseRef?.current?.pose ?? 'stand') : 'stand';
     const poseY = poseRef?.current?.y ?? 0;
+    // 手持水杯（拿饮料后端着逛；躺床/泡澡/淋浴时收起）
+    const carry = who === 'me' && carryRef?.current?.cup === true;
+    cup.visible = carry && pose !== 'lie' && pose !== 'bath' && pose !== 'shower';
 
     // 化妆星星：仅化妆时可见旋转闪烁
     spark.visible = pose === 'makeup';
@@ -609,12 +645,19 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outf
         kneeL.rotation.x = dampN(kneeL.rotation.x, Math.max(0, -s) * 0.85, 22, dt);
         kneeR.rotation.x = dampN(kneeR.rotation.x, Math.max(0, s) * 0.85, 22, dt);
         armL.rotation.x = dampN(armL.rotation.x, -s * 0.55, 20, dt);
-        armR.rotation.x = dampN(armR.rotation.x, s * 0.55, 20, dt);
         foreL.rotation.x = dampN(foreL.rotation.x, -0.35, 14, dt);
-        foreR.rotation.x = dampN(foreR.rotation.x, -0.35, 14, dt);
         root.position.y = Math.abs(Math.sin(t * 9.5)) * (style === 'cartoon' ? 0.038 : 0.026);
         root.rotation.x = dampN(root.rotation.x, 0.07, 12, dt);
         root.rotation.z = dampN(root.rotation.z, s * 0.035, 14, dt);
+        if (carry) {
+          // 端着杯子走路：右手端平不让饮料洒出来，只摆左臂
+          armR.rotation.x = dampN(armR.rotation.x, -0.66, 14, dt);
+          armR.rotation.z = dampN(armR.rotation.z, 0.2, 12, dt);
+          foreR.rotation.x = dampN(foreR.rotation.x, -1.02, 14, dt);
+        } else {
+          armR.rotation.x = dampN(armR.rotation.x, s * 0.55, 20, dt);
+          foreR.rotation.x = dampN(foreR.rotation.x, -0.35, 14, dt);
+        }
       } else {
         // —— 待机：呼吸 + 手臂微晃 ——
         legL.rotation.x = dampN(legL.rotation.x, 0, 10, dt);
@@ -622,14 +665,24 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outf
         kneeL.rotation.x = dampN(kneeL.rotation.x, 0, 10, dt);
         kneeR.rotation.x = dampN(kneeR.rotation.x, 0, 10, dt);
         armL.rotation.x = dampN(armL.rotation.x, Math.sin(t * 1.7) * 0.04, 8, dt);
-        armR.rotation.x = dampN(armR.rotation.x, -Math.sin(t * 1.7) * 0.04, 8, dt);
         foreL.rotation.x = dampN(foreL.rotation.x, -0.12, 8, dt);
-        foreR.rotation.x = dampN(foreR.rotation.x, -0.12, 8, dt);
         root.position.y = Math.sin(t * 2.2) * 0.008 + 0.004;
         root.rotation.x = dampN(root.rotation.x, 0, 10, dt);
         root.rotation.z = dampN(root.rotation.z, 0, 10, dt);
+        if (carry) {
+          // 站着端杯：周期性举到嘴边咪一小口再放回来
+          const ph = (t % 4.8) / 4.8;
+          const sip = ph > 0.52 ? Math.sin(((ph - 0.52) / 0.48) * Math.PI) : 0;
+          armR.rotation.x = dampN(armR.rotation.x, -0.28 - sip * 1.78, 9, dt);
+          armR.rotation.z = dampN(armR.rotation.z, 0.2, 10, dt);
+          foreR.rotation.x = dampN(foreR.rotation.x, -0.5 - sip * 0.72, 9, dt);
+          head.rotation.x = dampN(head.rotation.x, -sip * 0.16, 7, dt);
+        } else {
+          armR.rotation.x = dampN(armR.rotation.x, -Math.sin(t * 1.7) * 0.04, 8, dt);
+          foreR.rotation.x = dampN(foreR.rotation.x, -0.12, 8, dt);
+        }
       }
-      head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
+      if (!carry) head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
       return;
     }
 
@@ -825,6 +878,12 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outf
     foreL.rotation.x = dampN(foreL.rotation.x, pose === 'bath' ? -0.5 : -0.7, 9, dt);
     foreR.rotation.x = dampN(foreR.rotation.x, pose === 'bath' ? -0.5 : -0.7, 9, dt);
     head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
+    // 坐着端杯：右手把杯子端在胸前（只对 sit；泡澡时不拿东西）
+    if (pose === 'sit' && carry) {
+      armR.rotation.x = dampN(armR.rotation.x, -1.02, 9, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.18, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.95, 9, dt);
+    }
     // 泡澡时轻轻晃悠 + 呼噜泡泡般的上下浮动
     if (pose === 'bath') {
       root.position.y += Math.sin(t * 2.4) * 0.006;

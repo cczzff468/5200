@@ -71,6 +71,10 @@ export interface HomeSceneProps {
   poseRef: RefObject<{ pose: CharPose; y: number }>;
   /** 正在执行的家具动作 */
   actRef: RefObject<CharAction | null>;
+  /** 手持物（true = 右手拿小水杯，拿饮料后端着到处逛） */
+  carryRef?: RefObject<{ cup: boolean }>;
+  /** 乐器弹奏特写（非 null = 镜头推近该乐器；覆盖层 UI 发声） */
+  instRef?: RefObject<{ kind: 'piano' | 'guitar'; itemId: string } | null>;
   /** 浴缸水龙头点击（放水/关水） */
   onFaucetTap?: (item: FurnitureItem) => void;
   /** 九扇窗开态 + 切换回调 */
@@ -306,6 +310,7 @@ function GameLoop({
   poseRef,
   actRef,
   wallBoxes,
+  instRef,
 }: {
   meRT: CharRT;
   taRT: CharRT;
@@ -328,6 +333,8 @@ function GameLoop({
   poseRef: RefObject<{ pose: CharPose; y: number }>;
   /** 正在执行的家具动作（走向家具 → 摆姿势） */
   actRef: RefObject<CharAction | null>;
+  /** 乐器弹奏特写（非 null = 镜头推近该乐器） */
+  instRef?: RefObject<{ kind: 'piano' | 'guitar'; itemId: string } | null>;
   /** 墙段碰撞盒（随门位重建；生活模式相机防钻墙钳制用） */
   wallBoxes: THREE.Box3[];
 }) {
@@ -387,6 +394,7 @@ function GameLoop({
         act.arrived = true;
         poseRef.current.pose = act.pose ?? POSE_OF_ACT[act.type] ?? 'sit';
         poseRef.current.y = act.y;
+        act.onArrive?.();
       }
     } else if (act) {
       // 已摆好姿势：锁输入（摇杆/WASD 忽略）、不碰撞（人在家具上），朝向缓转向家具朝向
@@ -455,6 +463,45 @@ function GameLoop({
           : poseNow === 'bath'
             ? Math.max(0.66, poseYNow + 0.66)
             : Math.max(0.35, poseYNow + 0.24); // 躺在床上侧目
+
+    // —— 乐器弹奏特写：镜头推到乐器斜前方（越过小人肩膀看琴键/琴弦），覆盖层 UI 发声 ——
+    const inst = instRef?.current;
+    if (inst) {
+      const it = (itemsRef.current ?? []).find((f) => f.id === inst.itemId);
+      if (it) {
+        const ry = it.ry ?? 0;
+        const fx = Math.sin(ry);
+        const fz = Math.cos(ry);
+        const rx = Math.cos(ry);
+        const rz = -Math.sin(ry);
+        const isPiano = inst.kind === 'piano';
+        // 竖屏水平 FOV 很窄，特写机位要留足距离才能框住整件乐器
+        const near = isPiano ? 1.85 : 1.7; // 相机离乐器中心（琴凳/站位一侧）
+        const side = isPiano ? 0.55 : 0.72; // 肩侧偏移（吉他站姿避开后脑勺）
+        const camY = isPiano ? 1.52 : 1.34;
+        const lookNear = isPiano ? 0.3 : 0.15;
+        const lookY = isPiano ? 0.7 : 0.5;
+        desired.current.set(
+          it.x + fx * near + rx * side,
+          camY,
+          it.z + fz * near + rz * side,
+        );
+        // 方案 B 兜底：特写镜头也不许钻墙
+        pushCameraOutWalls(desired.current, wallBoxes);
+        camera.position.lerp(desired.current, 1 - Math.exp(-dt * 3.2));
+        lookAt.current.set(it.x + fx * lookNear - rx * 0.1, lookY, it.z + fz * lookNear - rz * 0.1);
+        camera.lookAt(lookAt.current);
+        const cam = camera as THREE.PerspectiveCamera;
+        if (cam.isPerspectiveCamera && cam.fov !== 52) {
+          cam.fov = 52;
+          cam.updateProjectionMatrix();
+        }
+        // 对焦物 = 乐器（隔墙淡出判定用，不然琴身随镜头位置闪隐）
+        focusRef.current.x = it.x;
+        focusRef.current.z = it.z;
+        return;
+      }
+    }
 
     if (fpOn) {
       // —— 第一人称：相机就是小人的眼睛（走路轻微颠簸，视角 = az/pitch） ——
@@ -938,7 +985,7 @@ function BedNightLight({ poseRef, meRT }: { poseRef: RefObject<{ pose: CharPose;
 export default function HomeScene(props: HomeSceneProps) {
   const {
     items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge, fp, fpRef,
-    charStyle, poseRef, actRef, onFaucetTap, outfit, activeAct, mealTableId, floorTex, wallTex,
+    charStyle, poseRef, actRef, carryRef, instRef, onFaucetTap, outfit, activeAct, mealTableId, floorTex, wallTex,
     win, onToggleWin, winPos, doorPos,
     floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, floorColK, wallColK, floorColB, wallColB,
     ceilCol, ceilColBed, ceilColK, ceilColB,
@@ -1118,7 +1165,7 @@ export default function HomeScene(props: HomeSceneProps) {
         );
       })}
 
-      <Char3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} />
+      <Char3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} carryRef={carryRef} />
       <Char3D rt={taRT} who="partner" style={charStyle} />
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       <EditCameraKick mode={mode} />
@@ -1157,6 +1204,7 @@ export default function HomeScene(props: HomeSceneProps) {
         poseRef={poseRef}
         actRef={actRef}
         wallBoxes={wallBoxes}
+        instRef={instRef}
       />
       <PointerRig
         mode={mode}

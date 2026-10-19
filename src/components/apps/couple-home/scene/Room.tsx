@@ -342,12 +342,17 @@ function segHitsBox(p0: THREE.Vector3, p1: THREE.Vector3, b: THREE.Box3): boolea
 const _focusP = new THREE.Vector3();
 /** 材质淡出前的基准值（透明/深度写状态也要还原，玻璃/光晕等本就透明的材质不受影响） */
 const _matBase = new WeakMap<THREE.Material, { o: number; t: boolean; d: boolean }>();
+/** mesh 原始 raycast（淡出期间临时禁用射线，恢复时还原） */
+const _rayBase = new WeakMap<THREE.Mesh, THREE.Mesh['raycast']>();
+const _noopRaycast = () => {};
 
 /**
  * 墙体遮挡淡出（方案 A 核心）：
  * - 遮挡判定 = 「相机→对焦物」视线段是否穿过墙体 AABB（boxes 任一命中即挡）；
  * - 命中 → 组内所有材质 opacity 每帧阻尼淡出（透明期 depthWrite=false 防排序瑕疵，
  *   接近全隐才 visible=false 跳过渲染）；移开 → 阻尼淡回，结束后按基准一次性还原交还声明式控制。
+ * - ⚑ 淡出期间同步禁用组内 mesh 的 raycast（可见即可穿，点击穿透到身后家具）；
+ *   否则半透明的门板/窗扇会挡住相机与家具之间的点击（真实 UX bug：看得见点不到）。
  * 旋转时墙「丝滑变透明」而非啪地消失；只藏真正挡住视线的墙。
  */
 function useWallOcclusionFade(
@@ -357,6 +362,7 @@ function useWallOcclusionFade(
 ) {
   const op = useRef(1);
   const fading = useRef(false);
+  const _rayOn = useRef(true);
   useFrame(({ camera }, rawDt) => {
     const g = root.current;
     if (!g) return;
@@ -374,6 +380,22 @@ function useWallOcclusionFade(
     const v = op.current;
     const vis = v > 0.015;
     if (g.visible !== vis) g.visible = vis;
+    // ⚑ 可见即可穿：淡出中（含半透明过渡期）禁用射线；完全恢复才还原
+    const wantRay = v > 0.95;
+    if (wantRay !== _rayOn.current) {
+      _rayOn.current = wantRay;
+      g.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        if (wantRay) {
+          const orig = _rayBase.get(mesh);
+          if (orig) mesh.raycast = orig;
+        } else {
+          if (!_rayBase.has(mesh)) _rayBase.set(mesh, mesh.raycast);
+          mesh.raycast = _noopRaycast;
+        }
+      });
+    }
     if (!vis) return; // 全隐：材质保持淡出态，恢复时阻尼淡回
     if (v < 0.998) {
       fading.current = true;

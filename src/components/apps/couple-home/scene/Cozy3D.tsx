@@ -730,8 +730,9 @@ export function StarProjector3D({ on }: CozyProps) {
       </mesh>
       {/* 淡紫点光 */}
       <pointLight ref={light} position={[0, 0.15, 0]} color="#cdb4f0" intensity={0} distance={2.5} />
-      {/* 天花板星点（Points，缓慢自转） */}
-      <points ref={stars} geometry={starGeo} visible={false}>
+      {/* 天花板星点（Points，缓慢自转；⚑ 禁用 raycast —— Points 默认 1m 射线阈值
+          会把整片星空域变成隐形热区，劫持射向屋里家具的点击） */}
+      <points ref={stars} geometry={starGeo} visible={false} raycast={() => {}}>
         <pointsMaterial
           size={0.035}
           color="#ffe9b8"

@@ -21116,3 +21116,25 @@ Stage Summary:
 - 拾光小屋 v5.6：躺反修复+面向家具朝向修复（watch/work 系列背对 bug 一并修正）+ 15 件程序化新家具（全迁移落位）+ 7 个新姿势 + 做饭吃饭/换装/化妆/弹琴/照镜子/喝一杯/投喂/换台/体重秤九大交互 + 睡觉关灯小夜灯 + 昼夜平滑 + 地板墙纸纹理 + dpr/性能优化
 - 数据向后兼容：全部新字段可选 + migrateCozyV56 幂等 + COZY_FIX 老档矫正，老档无损升级（86→101 件）
 - 涉及文件：types.ts、catalog.ts、scene/{Char3D,HomeScene,Room,Furn3D,TV3D,Cozy3D(新)}.tsx、CoupleHome.tsx、api/couple-home/route.ts、worklog.md
+
+---
+Task ID: cottage-v13-freedom
+Agent: 主协调 Agent (Z.ai Code)
+Task: 拾光小屋 v5.7——电视/喝饮料自由走动 + 吉他/钢琴可弹奏发声（镜头特写 + Web Audio 合成）+ 两个点击遮挡 bug 修复
+
+Work Log:
+- 电视改「开关机」：onFurnTap 对 toggle+watch 型（电视）直接切换 st.on，不再进 watch 动作锁人——打开电视后小人自由走动/坐沙发都可以；换台按钮从「看电视动作中」改为「电视开着常驻」（cycleChannel 改为自动找开着的那台电视，不再依赖 charAction.itemId），底部按钮堆叠错位（196/254/312px 三档）
+- 拿饮料「端着逛」：CharAction 新增 onArrive 回调（GameLoop 到位时触发一次）；drink 流程改为 走向冰箱→自动开门→onArrive 置 carryRef.cup=true+0.9s 咕咚咕咚→关冰箱门+endAction（不收杯子）→小人端杯自由走动；HUD 新增「放下杯子」按钮（dropCup）
+- Char3D 手持水杯：右前臂挂小水杯（玻璃杯+粉色饮料+吸管，cartoon/real 两档缩放），躺床/泡澡/淋浴自动收起；端杯时右臂端平（走路只摆左臂），站立时周期性举杯抿一口+歪头，坐下时端在胸前
+- 乐器弹奏模式：instrument.ts（Web Audio 合成，零素材）——吉他 Karplus-Strong 物理建模拨弦（噪声激励+延迟环衰减，2.6s 自然余音，六弦 E2-A2-D3-G3-B3-E4 按频率缓存 AudioBuffer）；钢琴 4 分音谐波叠加+指数衰减包络（高次泛音快衰减）；InstrumentOverlay.tsx 覆盖层——吉他竖版六弦木纹指板（点弦拨音/按住横扫=扫弦/弦高频抖动动画/品丝品记），钢琴 C4–C6 两组织八度黑白键（多指和弦/按住滑键=滑音/按下动效），顶部标题条+「结束演奏」；面板外 pointer 穿透可继续转视角
+- 镜头特写：GameLoop 新增 instRef 分支——镜头推到乐器斜前方过肩机位（piano near1.85/camY1.52，guitar near1.7/camY1.34/side0.72，FOV52，竖屏窄 FOV 留足距离），pushCameraOutWalls 兜底防钻墙，对焦物切到乐器（隔墙淡出判定同步）；恢复时 FOV 回 48 由常规分支自动接管
+- play 动作接线：beginAction('play') 即开覆盖层+特写（小人同步走位摆姿势），「结束演奏」=closeInst（收镜头+endAction）；E1 恢复：重进页面时 play 动作直接回到弹奏特写模式；弹奏中点其他家具/离开生活模式自动收覆盖层
+- Bug 修复①（重大）：星空投影灯 70 颗星是 THREE.Points，three.js 对 Points 默认 1m 射线阈值——整片天花板星域成为隐形热区，劫持射向屋内家具的全部点击（实测钢琴怎么点都命中 starLamp）；修复=points raycast 禁用
+- Bug 修复②：useWallOcclusionFade 新增「可见即可穿」——淡出期间（含半透明过渡）同步禁用组内 mesh raycast（_rayBase WeakMap 记录原始值），恢复时还原；否则半透明门板/窗扇挡住相机与家具之间的点击（看得见点不到）
+- 端到端实测（agent-browser）：电视点击开机（音乐台亮屏+toast+不锁人）→ 摇杆走开电视继续播 → 换台 3→1 → 吉他：确认按钮→特写镜头+六弦指板→点弦/扫弦→结束演奏收镜头+起身 → 钢琴：特写+C4-C6 键盘→点键发声无报错→结束 → 冰箱：喝一杯→走向冰箱开门→拿杯端着走（杯在手中可见，换台+放下杯子双按钮堆叠）→放下杯子+冰箱门自动关+act 清空 → 全程 console 零错误
+- 排障记录：①钢琴点击 10+ 次不命中，tapdbg 日志定位到 starLamp Points 劫持（1m 阈值）；②特写镜头首版太近（竖屏水平 FOV 仅 ~23°，0.95m 处视野宽 0.39m，吉他糊满画面）——拉远到 1.7/1.85 + FOV52；③API 传送脚本 409——POST rev 必须与服务端完全一致（不是 +1）
+
+Stage Summary:
+- 拾光小屋 v5.7：电视=纯开关机（开着随便逛）+ 拿饮料端着走（杯子握手里随时放下）+ 吉他/钢琴真实可弹（特写镜头 + 竖版六弦扫弦 / 两组织八度琴键 + Web Audio 物理建模合成音）+ 星域劫持点击与淡出墙挡点击两个隐性 bug 修复
+- 涉及文件：types.ts（CharAction.onArrive）、instrument.ts（新）、InstrumentOverlay.tsx（新）、scene/{Char3D,HomeScene,Room,Cozy3D,Furn3D}.tsx、CoupleHome.tsx
+- 数据向后兼容：无新持久化字段（carry/inst 均为运行时态；play 动作恢复复用既有 act 字段）

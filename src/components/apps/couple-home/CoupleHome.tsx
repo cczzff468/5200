@@ -57,6 +57,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import Joystick from './Joystick';
+import InstrumentOverlay from './InstrumentOverlay';
 import {
   BATH_X1,
   CATALOG,
@@ -451,6 +452,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const actRef = useRef<CharAction | null>(null);
   /** 自动结束型动作的定时器（做饭/喝东西/换装） */
   const actTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 乐器弹奏特写（吉他/钢琴：镜头推近 + 可弹奏覆盖层；ref 给 GameLoop 高频读） */
+  const instRef = useRef<{ kind: 'piano' | 'guitar'; itemId: string } | null>(null);
+  const [inst, setInst] = useState<{ kind: 'piano' | 'guitar'; itemId: string } | null>(null);
+  /** 手持物（拿饮料后杯子握在右手，可以端着到处逛） */
+  const carryRef = useRef({ cup: false });
+  const [carryCup, setCarryCup] = useState(false);
   /** 编辑模式缩放指令（HUD 按钮 → Canvas 内相机） */
   const zoomCmd = useRef({ v: 0, dir: 0 });
   /** 四向微调指令（HUD 方向按钮 → Canvas 内按视角方位换算） */
@@ -710,6 +717,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
     poseRef.current.pose = full.pose ?? POSE_OF_ACT[a.type];
     poseRef.current.y = full.y;
     setCharAction({ type: a.type, itemId: a.itemId, active: true });
+    // 上次正在弹琴/弹吉他 → 直接回到弹奏特写模式
+    if (a.type === 'play' && it) {
+      const kind = it.kind === 'piano' ? 'piano' : 'guitar';
+      instRef.current = { kind, itemId: a.itemId };
+      setInst({ kind, itemId: a.itemId });
+    }
   }, []);
 
   // 定期推送 + 卸载兜底
@@ -791,8 +804,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
       toast('吃饱啦，一桌好菜吃光光～');
     } else if (act.type === 'cook') {
       toast('好，先不做了～');
-    } else if (act.type === 'drink') {
-      toast('放下杯子，满足～');
     } else if (act.type === 'play') {
       toast('演奏结束，掌声响起来～');
     } else if (act.type === 'makeup') {
@@ -844,11 +855,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
         });
         toast('系上围裙，认真做饭中…');
       } else if (type === 'drink') {
+        // 拿一杯冰饮：走到冰箱 → 自动开门 → 咕哚咕哚喝一口 → 杯子握在手里，
+        // 之后小人完全自由（走动/坐下都可以），随时按「放下杯子」结束
         turnOn({ open: true });
-        auto(3800, () => {
-          if (actRef.current?.type === 'drink') endAction();
-        });
-        toast('从冰箱拿杯冰饮，咕哚咕哚～');
+        act.onArrive = () => {
+          carryRef.current.cup = true;
+          setCarryCup(true);
+          auto(900, () => {
+            turnOn({ open: false });
+            if (actRef.current?.type === 'drink') endAction();
+            toast('拿好冰饮，端着慢慢逛～');
+          });
+        };
+        toast('走到冰箱拿杯冰饮…');
       } else if (type === 'dress') {
         turnOn({ open: true });
         auto(1500, () => {
@@ -860,9 +879,13 @@ export default function CoupleHome({ close }: { close: () => void }) {
         });
         toast('打开衣柜挑一挑…');
       } else if (type === 'eat') toast('开饭开饭，自己做的最香～');
-      else if (type === 'play')
+      else if (type === 'play') {
+        // 乐器弹奏：小人走向乐器摆姿势 + 镜头推近 + 可弹奏覆盖层（点弦/点键真实发声）
+        const kind = item.kind === 'piano' ? 'piano' : 'guitar';
+        instRef.current = { kind, itemId: item.id };
+        setInst({ kind, itemId: item.id });
         toast(item.kind === 'piano' ? '坐上琴凳，弹一首小曲～' : '抱起吉他，来一段扫弦～');
-      else if (type === 'makeup') toast('坐下来补个妆，今天也要美美的～');
+      } else if (type === 'makeup') toast('坐下来补个妆，今天也要美美的～');
       else if (type === 'mirror') toast('照照镜子，今天状态不错嘛～');
       saveSoon();
     },
@@ -886,6 +909,21 @@ export default function CoupleHome({ close }: { close: () => void }) {
         setPaletteOpen(false);
         setSelId((s) => (s === item.id ? null : item.id));
         return;
+      }
+
+      // 电视：点击 = 开/关机（打开后小人自由走动，随时坐沙发上看看 —— 不再锁在电视前）
+      if (entry.acts?.toggle && entry.acts?.watch) {
+        const on = !item.st?.on;
+        setItems((prev) => prev.map((f) => (f.id === item.id ? { ...f, st: { ...f.st, on } } : f)));
+        toast(on ? '打开电视咯，随便逛，随时坐下看～' : '电视关掉啦，让眼睛歇一歇～');
+        saveSoon();
+        return;
+      }
+
+      // 弹奏中点别的家具/门窗：先收起乐器界面（动作由下方统一接管）
+      if (instRef.current) {
+        instRef.current = null;
+        setInst(null);
       }
 
       // 生活模式：可互动的家具 → 弹出确认按钮（先结束当前姿势，
@@ -1003,21 +1041,32 @@ export default function CoupleHome({ close }: { close: () => void }) {
     saveSoon();
   }, [charAction, saveSoon, toast]);
 
-  /** C1 看电视时换台（频道 1→2→3 循环；自动开机） */
+  /** C1 换台（电视开着随时可按，不再依附「看电视」动作；频道 1→2→3 循环） */
   const cycleChannel = useCallback(() => {
-    const id = charAction?.itemId;
-    if (!id) return;
+    const tv = itemsRef.current.find((f) => f.kind === 'tv' && f.st?.on);
+    if (!tv) return;
+    const next = (((tv.st?.channel ?? 1) % 3) + 1) as 1 | 2 | 3;
     setItems((prev) =>
-      prev.map((f) =>
-        f.id === id
-          ? { ...f, st: { ...f.st, on: true, channel: (((f.st?.channel ?? 1) % 3) + 1) as 1 | 2 | 3 } }
-          : f,
-      ),
+      prev.map((f) => (f.id === tv.id ? { ...f, st: { ...f.st, on: true, channel: next } } : f)),
     );
-    const next = ((itemsRef.current.find((f) => f.id === id)?.st?.channel ?? 1) % 3) + 1;
     toast(next === 1 ? '回到流光频道～' : next === 2 ? '换到啵啵新闻台～' : '换到拾光音乐台～');
     saveSoon();
-  }, [charAction, saveSoon, toast]);
+  }, [saveSoon, toast]);
+
+  /** 结束乐器弹奏（覆盖层「结束演奏」按钮）：收特写镜头 + 起身 */
+  const closeInst = useCallback(() => {
+    instRef.current = null;
+    setInst(null);
+    endAction();
+  }, [endAction]);
+
+  /** 放下杯子（端着饮料逛时）：收杯子 */
+  const dropCup = useCallback(() => {
+    carryRef.current.cup = false;
+    setCarryCup(false);
+    toast('放下杯子，满足～');
+    saveSoon();
+  }, [saveSoon, toast]);
 
   // ---------------- 编辑操作 ----------------
   const rotateY = useCallback(
@@ -1659,6 +1708,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
     return () => document.removeEventListener('fullscreenchange', onFs);
   }, []);
 
+  // 离开生活模式（进装修/商店全屏遮挡等）时收起乐器弹奏界面
+  useEffect(() => {
+    if (mode !== 'live' && instRef.current) {
+      instRef.current = null;
+      setInst(null);
+    }
+  }, [mode]);
+
   // ---------------- 渲染 ----------------
   const selItem = selId && !selId.startsWith('win-') && !selId.startsWith('door-') ? items.find((f) => f.id === selId) : null;
   const selEntry = selItem ? CATALOG[selItem.kind] : null;
@@ -1671,6 +1728,18 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   /** 操作按钮通用样式 */
   const toolBtn = 'flex h-9 w-9 items-center justify-center rounded-full transition active:scale-90';
+
+  /** 电视开着（生活模式随时换台，看电视不再锁人） */
+  const tvOn = items.some((f) => f.kind === 'tv' && f.st?.on);
+  // 底部按钮堆叠位置：与动作栏/端杯按钮错开
+  const cupBarCls = charAction ? 'bottom-[254px]' : 'bottom-[196px]';
+  const tvBarCls = charAction
+    ? carryCup
+      ? 'bottom-[312px]'
+      : 'bottom-[254px]'
+    : carryCup
+      ? 'bottom-[254px]'
+      : 'bottom-[196px]';
 
   return (
     <div ref={rootRef} className="absolute inset-0 select-none overflow-hidden bg-[#efece4]">
@@ -1701,6 +1770,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
         charStyle={charStyle}
         poseRef={poseRef}
         actRef={actRef}
+        carryRef={carryRef}
+        instRef={instRef}
         onFaucetTap={onFaucetTap}
         outfit={outfit}
         activeAct={charAction}
@@ -1800,7 +1871,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
         {/* 家具互动按钮（生活模式）：坐下/睡觉/泡澡 → 站起来/起床/出来 */}
         <AnimatePresence>
-          {mode === 'live' && charAction && (
+          {mode === 'live' && charAction && !(charAction.type === 'play' && inst) && (
             <motion.div
               key="action-bar"
               initial={{ opacity: 0, y: 14 }}
@@ -1816,16 +1887,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 >
                   <Droplet className="h-[18px] w-[18px]" />
                   放水
-                </button>
-              )}
-              {charAction.active && charAction.type === 'watch' && (
-                <button
-                  onClick={cycleChannel}
-                  aria-label="电视换台"
-                  className="pointer-events-auto flex h-12 items-center gap-2 whitespace-nowrap rounded-full bg-[#f4b3c2] px-5 text-[14px] font-semibold text-white shadow-lg transition active:scale-95"
-                >
-                  <Tv className="h-[18px] w-[18px]" />
-                  换台
                 </button>
               )}
               <motion.button
@@ -1878,6 +1939,53 @@ export default function CoupleHome({ close }: { close: () => void }) {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* 电视开着：随时换台（看电视不再是动作，小人自由走动） */}
+        <AnimatePresence>
+          {mode === 'live' && tvOn && !inst && (
+            <motion.div
+              key="tv-bar"
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              className={`absolute left-1/2 z-20 -translate-x-1/2 ${tvBarCls}`}
+            >
+              <button
+                onClick={cycleChannel}
+                aria-label="电视换台"
+                className="pointer-events-auto flex h-12 items-center gap-2 whitespace-nowrap rounded-full bg-[#f4b3c2] px-5 text-[14px] font-semibold text-white shadow-lg transition active:scale-95"
+              >
+                <Tv className="h-[18px] w-[18px]" />
+                换台
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* 端着饮料：随时放下（拿饮料不再锁人，杯子握在手里到处逛） */}
+        <AnimatePresence>
+          {mode === 'live' && carryCup && (
+            <motion.div
+              key="cup-bar"
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              className={`absolute left-1/2 z-20 -translate-x-1/2 ${cupBarCls}`}
+            >
+              <button
+                onClick={dropCup}
+                aria-label="放下杯子"
+                className="pointer-events-auto flex h-12 items-center gap-2 whitespace-nowrap rounded-full bg-[#a8d4e6] px-5 text-[14px] font-semibold text-white shadow-lg transition active:scale-95"
+              >
+                <CupSoda className="h-[18px] w-[18px]" />
+                放下杯子
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* 乐器弹奏覆盖层（吉他弦/钢琴键，点按真实发声） */}
+        {inst && <InstrumentOverlay kind={inst.kind} onClose={closeInst} />}
 
         {/* 编辑模式：缩放按钮（右缘中部） */}
         {mode === 'edit' && (
