@@ -115,7 +115,218 @@ function Breeze() {
   );
 }
 
-// ---------------- 立式相框 ----------------
+// ---------------- 毛绒兔玩偶（坐在床上/地上的软软兔） ----------------
+
+export function PlushBunny3D({ col }: { col?: string }) {
+  const fur = col ?? '#fdf9f4';
+  const pink = '#f6c2cf';
+  const blush = '#f7ccd6';
+  return (
+    <group>
+      {/* 身体（胖乎乎水滴形） */}
+      <mesh position={[0, 0.15, 0]} scale={[1, 0.95, 0.88]} castShadow>
+        <sphereGeometry args={[0.15, 20, 16]} />
+        <meshStandardMaterial color={fur} roughness={0.95} />
+      </mesh>
+      {/* 肚皮 */}
+      <mesh position={[0, 0.14, 0.075]} scale={[1, 1.05, 0.55]}>
+        <sphereGeometry args={[0.1, 16, 12]} />
+        <meshStandardMaterial color="#ffffff" roughness={0.95} />
+      </mesh>
+      {/* 头 */}
+      <mesh position={[0, 0.37, 0.01]} castShadow>
+        <sphereGeometry args={[0.125, 20, 16]} />
+        <meshStandardMaterial color={fur} roughness={0.95} />
+      </mesh>
+      {/* 长耳朵 ×2（微外撇） */}
+      {[-1, 1].map((s) => (
+        <group key={s} position={[0.05 * s, 0.55, -0.01]} rotation={[0.08, 0, 0.22 * s]}>
+          <mesh scale={[1, 1, 0.62]}>
+            <capsuleGeometry args={[0.036, 0.15, 6, 12]} />
+            <meshStandardMaterial color={fur} roughness={0.95} />
+          </mesh>
+          <mesh position={[0, 0, 0.016]} scale={[0.62, 0.85, 0.4]}>
+            <capsuleGeometry args={[0.026, 0.12, 4, 8]} />
+            <meshStandardMaterial color={pink} roughness={0.9} />
+          </mesh>
+        </group>
+      ))}
+      {/* 眼睛 + 鼻子 + 腮红 */}
+      {[-1, 1].map((s) => (
+        <mesh key={`e${s}`} position={[0.048 * s, 0.39, 0.105]}>
+          <sphereGeometry args={[0.015, 8, 8]} />
+          <meshStandardMaterial color="#4a3f3a" roughness={0.4} />
+        </mesh>
+      ))}
+      <mesh position={[0, 0.362, 0.122]}>
+        <sphereGeometry args={[0.011, 8, 8]} />
+        <meshStandardMaterial color={pink} roughness={0.6} />
+      </mesh>
+      {[-1, 1].map((s) => (
+        <mesh key={`b${s}`} position={[0.082 * s, 0.355, 0.088]} scale={[1, 0.7, 0.35]}>
+          <sphereGeometry args={[0.026, 10, 8]} />
+          <meshStandardMaterial color={blush} roughness={0.9} />
+        </mesh>
+      ))}
+      {/* 小手（贴身） */}
+      {[-1, 1].map((s) => (
+        <mesh key={`a${s}`} position={[0.135 * s, 0.2, 0.03]} scale={[0.75, 1.15, 0.75]}>
+          <sphereGeometry args={[0.05, 12, 10]} />
+          <meshStandardMaterial color={fur} roughness={0.95} />
+        </mesh>
+      ))}
+      {/* 脚丫（往前伸） */}
+      {[-1, 1].map((s) => (
+        <mesh key={`f${s}`} position={[0.075 * s, 0.055, 0.1]} scale={[1, 0.62, 1.3]}>
+          <sphereGeometry args={[0.055, 12, 10]} />
+          <meshStandardMaterial color={fur} roughness={0.95} />
+        </mesh>
+      ))}
+      {/* 圆尾巴 */}
+      <mesh position={[0, 0.1, -0.14]}>
+        <sphereGeometry args={[0.045, 10, 8]} />
+        <meshStandardMaterial color="#ffffff" roughness={0.95} />
+      </mesh>
+    </group>
+  );
+}
+
+// ---------------- 小黄鸭玩偶（床头柜摆件） ----------------
+
+export function PlushDuck3D({ col }: { col?: string }) {
+  const body = col ?? '#f7dc8f';
+  return (
+    <group>
+      {/* 身体 */}
+      <mesh position={[0, 0.105, 0]} scale={[1, 0.88, 1.1]} castShadow>
+        <sphereGeometry args={[0.105, 18, 14]} />
+        <meshStandardMaterial color={body} roughness={0.95} />
+      </mesh>
+      {/* 头 */}
+      <mesh position={[0, 0.25, 0.012]} castShadow>
+        <sphereGeometry args={[0.082, 18, 14]} />
+        <meshStandardMaterial color={body} roughness={0.95} />
+      </mesh>
+      {/* 橙嘴 */}
+      <mesh position={[0, 0.242, 0.088]} scale={[1.35, 0.5, 0.85]}>
+        <sphereGeometry args={[0.028, 10, 8]} />
+        <meshStandardMaterial color="#efaf62" roughness={0.7} />
+      </mesh>
+      {/* 眼睛 */}
+      {[-1, 1].map((s) => (
+        <mesh key={s} position={[0.034 * s, 0.272, 0.07]}>
+          <sphereGeometry args={[0.012, 8, 8]} />
+          <meshStandardMaterial color="#4a3f3a" roughness={0.4} />
+        </mesh>
+      ))}
+      {/* 翅膀 ×2 */}
+      {[-1, 1].map((s) => (
+        <mesh key={`w${s}`} position={[0.098 * s, 0.115, 0]} rotation={[0, 0, 0.25 * s]} scale={[0.45, 0.85, 1.1]}>
+          <sphereGeometry args={[0.05, 12, 10]} />
+          <meshStandardMaterial color="#f2d07e" roughness={0.95} />
+        </mesh>
+      ))}
+      {/* 翘尾巴 */}
+      <mesh position={[0, 0.15, -0.105]} rotation={[-0.6, 0, 0]} scale={[1, 1, 0.6]}>
+        <sphereGeometry args={[0.04, 10, 8]} />
+        <meshStandardMaterial color={body} roughness={0.95} />
+      </mesh>
+    </group>
+  );
+}
+
+// ---------------- 粉白梳妆台（桌面 + 椭圆镜 + 小圆凳） ----------------
+
+export function Vanity3D({ col }: { col?: string }) {
+  const white = '#fbfaf7';
+  const frame = col ?? '#f3efe6';
+  const pink = '#f6cdd6';
+  const mirrorBlue = '#dfeaf0';
+  return (
+    <group>
+      {/* 桌面 */}
+      <mesh position={[0, 0.72, -0.125]} castShadow receiveShadow>
+        <boxGeometry args={[1.1, 0.05, 0.46]} />
+        <meshStandardMaterial color={white} roughness={0.6} />
+      </mesh>
+      {/* 两侧板式桌腿 */}
+      {[-1, 1].map((s) => (
+        <mesh key={`l${s}`} position={[0.51 * s, 0.35, -0.125]} castShadow>
+          <boxGeometry args={[0.05, 0.7, 0.42]} />
+          <meshStandardMaterial color={white} roughness={0.7} />
+        </mesh>
+      ))}
+      {/* 抽屉面板 + 拉手 */}
+      <mesh position={[0, 0.615, 0.098]}>
+        <boxGeometry args={[0.98, 0.13, 0.024]} />
+        <meshStandardMaterial color={frame} roughness={0.75} />
+      </mesh>
+      {[-1, 1].map((s) => (
+        <mesh key={`k${s}`} position={[0.22 * s, 0.615, 0.118]}>
+          <sphereGeometry args={[0.017, 10, 8]} />
+          <meshStandardMaterial color="#d9cfb8" metalness={0.4} roughness={0.4} />
+        </mesh>
+      ))}
+
+      {/* 椭圆镜（背倾 8°，细框圈住） */}
+      <group position={[0, 1.12, -0.3]} rotation={[-0.14, 0, 0]}>
+        <mesh scale={[1, 1.28, 1]}>
+          <cylinderGeometry args={[0.2, 0.2, 0.018, 28]} />
+          <meshStandardMaterial color={frame} roughness={0.75} />
+        </mesh>
+        <mesh position={[0, 0, 0.011]} scale={[1, 1.28, 1]}>
+          <cylinderGeometry args={[0.172, 0.172, 0.014, 28]} />
+          <meshStandardMaterial color={mirrorBlue} roughness={0.12} metalness={0.35} />
+        </mesh>
+        {/* 镜顶小蝴蝶结 */}
+        <mesh position={[0, 0.262, 0.01]}>
+          <sphereGeometry args={[0.024, 10, 8]} />
+          <meshStandardMaterial color={pink} roughness={0.6} />
+        </mesh>
+      </group>
+      {/* 镜子支撑柱 */}
+      <mesh position={[0, 0.87, -0.275]}>
+        <boxGeometry args={[0.06, 0.3, 0.035]} />
+        <meshStandardMaterial color={frame} roughness={0.8} />
+      </mesh>
+
+      {/* 桌面小物：香水瓶 + 珍珠盒 */}
+      <mesh position={[-0.32, 0.775, -0.1]} castShadow>
+        <cylinderGeometry args={[0.035, 0.045, 0.1, 12]} />
+        <meshStandardMaterial color={pink} roughness={0.35} />
+      </mesh>
+      <mesh position={[-0.32, 0.84, -0.1]}>
+        <sphereGeometry args={[0.018, 8, 8]} />
+        <meshStandardMaterial color="#d9cfb8" metalness={0.5} roughness={0.35} />
+      </mesh>
+      <mesh position={[0.34, 0.775, -0.08]}>
+        <sphereGeometry args={[0.05, 14, 12]} />
+        <meshStandardMaterial color="#ffffff" roughness={0.5} />
+      </mesh>
+
+      {/* 小圆凳（粉垫白腿，位于桌前） */}
+      <group position={[0, 0, 0.32]}>
+        <mesh position={[0, 0.44, 0]} castShadow>
+          <cylinderGeometry args={[0.165, 0.165, 0.05, 20]} />
+          <meshStandardMaterial color={pink} roughness={0.85} />
+        </mesh>
+        <mesh position={[0, 0.405, 0]}>
+          <cylinderGeometry args={[0.15, 0.15, 0.025, 20]} />
+          <meshStandardMaterial color={white} roughness={0.7} />
+        </mesh>
+        {[0, 1, 2, 3].map((i) => {
+          const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+          return (
+            <mesh key={i} position={[Math.cos(a) * 0.11, 0.19, Math.sin(a) * 0.11]} castShadow>
+              <cylinderGeometry args={[0.018, 0.014, 0.38, 10]} />
+              <meshStandardMaterial color={white} roughness={0.7} />
+            </mesh>
+          );
+        })}
+      </group>
+    </group>
+  );
+}
 
 /** 无照片时的占位画（粉系渐变 + 爱心 + 提示字） */
 function makePlaceholderTexture(): THREE.CanvasTexture {

@@ -37,10 +37,14 @@ interface HomePayload {
   night?: boolean;
   /** 窗户开态（最多 8 扇） */
   win?: boolean[];
-  /** 地板自定义色（#rrggbb） */
+  /** 地板自定义色（#rrggbb；客厅） */
   floorCol?: string;
-  /** 墙壁自定义色（#rrggbb） */
+  /** 墙壁自定义色（#rrggbb；客厅） */
   wallCol?: string;
+  /** 卧室地板自定义色（#rrggbb；客厅卧室分开换色） */
+  floorColBed?: string;
+  /** 卧室墙壁自定义色（#rrggbb；客厅卧室分开换色） */
+  wallColBed?: string;
   /** 卧室门开态 */
   doorOpen?: boolean;
   /** 门自定义色（#rrggbb） */
@@ -155,6 +159,8 @@ function normalizeHome(raw: unknown): HomePayload | null {
     win,
     floorCol: cleanHex(r.floorCol),
     wallCol: cleanHex(r.wallCol),
+    floorColBed: cleanHex(r.floorColBed),
+    wallColBed: cleanHex(r.wallColBed),
     doorOpen: r.doorOpen === true,
     doorCol: cleanHex(r.doorCol),
     winCol: cleanHex(r.winCol),

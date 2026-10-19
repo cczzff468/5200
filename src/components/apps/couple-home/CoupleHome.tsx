@@ -237,6 +237,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [win, setWin] = useState<boolean[]>([0, 1, 2, 3, 4].map((i) => !!pack.home.win?.[i]));
   const [floorCol, setFloorCol] = useState<string | undefined>(pack.home.floorCol);
   const [wallCol, setWallCol] = useState<string | undefined>(pack.home.wallCol);
+  const [floorColBed, setFloorColBed] = useState<string | undefined>(pack.home.floorColBed);
+  const [wallColBed, setWallColBed] = useState<string | undefined>(pack.home.wallColBed);
   const [doorOpen, setDoorOpen] = useState<boolean>(!!pack.home.doorOpen);
   const [doorCol, setDoorCol] = useState<string | undefined>(pack.home.doorCol);
   const [winCol, setWinCol] = useState<string | undefined>(pack.home.winCol);
@@ -292,6 +294,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
   floorColRef.current = floorCol;
   const wallColRef = useRef(wallCol);
   wallColRef.current = wallCol;
+  const floorColBedRef = useRef(floorColBed);
+  floorColBedRef.current = floorColBed;
+  const wallColBedRef = useRef(wallColBed);
+  wallColBedRef.current = wallColBed;
   const doorOpenRef = useRef(doorOpen);
   doorOpenRef.current = doorOpen;
   const doorColRef = useRef(doorCol);
@@ -315,6 +321,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
       win: winRef.current,
       floorCol: floorColRef.current,
       wallCol: wallColRef.current,
+      floorColBed: floorColBedRef.current,
+      wallColBed: wallColBedRef.current,
       doorOpen: doorOpenRef.current,
       doorCol: doorColRef.current,
       winCol: winColRef.current,
@@ -341,6 +349,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setWin([0, 1, 2, 3, 4].map((i) => !!h.win?.[i]));
     setFloorCol(h.floorCol);
     setWallCol(h.wallCol);
+    setFloorColBed(h.floorColBed);
+    setWallColBed(h.wallColBed);
     setDoorOpen(!!h.doorOpen);
     setDoorCol(h.doorCol);
     setWinCol(h.winCol);
@@ -628,6 +638,23 @@ export default function CoupleHome({ close }: { close: () => void }) {
     [saveSoon],
   );
 
+  /** 卧室地板/墙壁自定义色（客厅卧室分开换色） */
+  const applyFloorColBed = useCallback(
+    (hex: string | null) => {
+      setFloorColBed(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
+  const applyWallColBed = useCallback(
+    (hex: string | null) => {
+      setWallColBed(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
   const applyDoorCol = useCallback(
     (hex: string | null) => {
       setDoorCol(hex ?? undefined);
@@ -735,15 +762,22 @@ export default function CoupleHome({ close }: { close: () => void }) {
       if (!e) return;
       const id = `${kind}-${Date.now().toString(36)}`;
       if (kind === 'aircon') {
-        // 壁挂空调默认挂东墙（1.85m 高，面朝西）
-        setItems((prev) => [...prev, { id, kind, x: 4.34, z: -1.6, y: 1.85, ry: -Math.PI / 2, st: {} }]);
+        // 壁挂空调：第一台挂客厅东墙，第二台自动换到卧室东墙，之后交替（1.85m 高，面朝西）
+        const airconCount = itemsRef.current.filter((f) => f.kind === 'aircon').length;
+        const inBedroom = airconCount % 2 === 1;
+        const pos = inBedroom ? { x: 1.4, z: 5.6 } : { x: 4.34, z: -1.6 };
+        setItems((prev) => [
+          ...prev,
+          { id, kind, x: pos.x, z: pos.z, y: 1.85, ry: -Math.PI / 2, st: {} },
+        ]);
+        toast(inBedroom ? '已挂到卧室东墙' : '已挂到客厅东墙');
       } else {
         const spot = findSpot(kind);
         setItems((prev) => [...prev, { id, kind, x: spot.x, z: spot.z, ry: 0, st: {} }]);
+        toast(`已添加「${e.name}」`);
       }
       setSelId(id);
       saveSoon();
-      toast(`已添加「${e.name}」`);
     },
     [findSpot, saveSoon, toast],
   );
@@ -843,6 +877,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
         wallCol={wallCol}
         doorCol={doorCol}
         winCol={winCol}
+        floorColBed={floorColBed}
+        wallColBed={wallColBed}
         doorOpen={doorOpen}
         onToggleDoor={toggleDoor}
         onFloorTap={onFloorTap}
@@ -1246,11 +1282,30 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              <p className="mb-3 text-[11.5px] text-[#9a9a96]">地板、墙壁、门窗都能换成喜欢的颜色</p>
+              <p className="mb-3 text-[11.5px] text-[#9a9a96]">客厅卧室分开换色，门窗也能换</p>
 
               <div className="scrollbar-none max-h-[52vh] overflow-y-auto pr-0.5">
+                {/* —— 客厅 —— */}
+                <div className="mb-2 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#f2b3c2]" />
+                  <span className="text-[12px] font-semibold text-[#8a8a90]">客厅</span>
+                </div>
                 <ColorRow label="地板" value={floorCol} onPick={applyFloorCol} fallback="#f5f2ec" />
                 <ColorRow label="墙壁" value={wallCol} onPick={applyWallCol} fallback="#f7f3ec" />
+
+                {/* —— 卧室 —— */}
+                <div className="mb-2 mt-4 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#c9a8dc]" />
+                  <span className="text-[12px] font-semibold text-[#8a8a90]">卧室</span>
+                </div>
+                <ColorRow label="地板" value={floorColBed} onPick={applyFloorColBed} fallback="#f5f2ec" />
+                <ColorRow label="墙壁" value={wallColBed} onPick={applyWallColBed} fallback="#f7f3ec" />
+
+                {/* —— 门窗（全屋通用） —— */}
+                <div className="mb-2 mt-4 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#a8c5e0]" />
+                  <span className="text-[12px] font-semibold text-[#8a8a90]">门 · 窗</span>
+                </div>
                 <ColorRow label="门" value={doorCol} onPick={applyDoorCol} fallback="#f3efe6" />
                 <ColorRow label="窗" value={winCol} onPick={applyWinCol} fallback="#f0e7d4" />
               </div>

@@ -15,7 +15,7 @@
  * - 昼夜灯光切换：白天暖阳光 + 夜晚冷月光 + 灯具/窗户点光。
  */
 
-import { useEffect, useMemo, useRef, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -57,11 +57,14 @@ export interface HomeSceneProps {
   /** 五扇窗开态 + 切换回调 */
   win?: boolean[];
   onToggleWin?: (i: number) => void;
-  /** 用户自定义地板/墙/门/窗框颜色 */
+  /** 用户自定义地板/墙/门/窗框颜色（客厅） */
   floorCol?: string;
   wallCol?: string;
   doorCol?: string;
   winCol?: string;
+  /** 卧室地板/墙壁自定义色（客厅卧室分开换色） */
+  floorColBed?: string;
+  wallColBed?: string;
   /** 卧室门开态 + 切换 */
   doorOpen?: boolean;
   onToggleDoor?: () => void;
@@ -301,6 +304,7 @@ interface DragInfo {
 }
 
 function PointerRig({
+  mode,
   modeRef,
   azRef,
   pitchRef,
@@ -313,6 +317,8 @@ function PointerRig({
   onDragEnd,
   onDragSelect,
 }: {
+  /** 当前模式（真值）：模式切换时全量复位手势状态（退出装修立刻解绑拖拽语境） */
+  mode: HomeMode;
   modeRef: RefObject<HomeMode>;
   azRef: RefObject<{ az: number }>;
   pitchRef: RefObject<{ p: number }>;
@@ -337,14 +343,50 @@ function PointerRig({
   // pid：只跟踪第一根落屏的手指，第二根手指（捏合/误触）完全忽略 —— 生活模式不再被捏合搞乱视角
   const gesture = useRef({ down: false, pid: -1, lastX: 0, lastY: 0, moved: 0 });
 
+  /** 手势全量复位：视角滑动/拖拽/移动搬运统一解绑（模式切换 / 页面失焦 / 后台化兜底） */
+  const resetGesture = useCallback(
+    (fireDragEnd: boolean) => {
+      const d = dragRef.current;
+      if (fireDragEnd && d?.active) cbRef.current.onDragEnd(d.id);
+      dragRef.current = null;
+      gesture.current = { down: false, pid: -1, lastX: 0, lastY: 0, moved: 0 };
+      lookRef.current.on = false;
+    },
+    [dragRef, lookRef],
+  );
+
+  // ⚑ 模式切换（尤其装修→生活）瞬间：立刻解绑一切拖拽/手势状态。
+  // 旧版生活模式旋转分支被 !dragRef 拦住，装修残留的拖拽语境会「吃掉」滑动视角 ——
+  // 现在退出装修的同时清空全部手势状态，双保险。
+  useEffect(() => {
+    resetGesture(false);
+    if (controls) controls.enabled = mode === 'edit' && !moveSelRef.current?.on;
+  }, [mode]);
+
   useEffect(() => {
     const el = gl.domElement;
     // 阻止浏览器把画布拖拽当成原生 drag/选区拖动（否则 dragstart+pointercancel 会吞掉后续 pointermove）
     el.draggable = false;
     el.style.userSelect = 'none';
     el.style.setProperty('-webkit-user-drag', 'none');
+    // ⚑ 触摸加固：把 touch-action 直接钉在真正的命中目标（canvas 元素本体）上，
+    //   并在 touchmove 里 preventDefault（passive:false）—— 从根源杜绝浏览器把「滑动视角」
+    //   认领成原生滚动/捏合后回 pointercancel 掐断手势（真机连续滑动被截断的元凶）。
+    //   只拦 touchmove，不拦 touchstart/touchend —— 点家具/门窗的 click 合成不受影响。
+    el.style.touchAction = 'none';
+    const preventNative = (e: Event) => e.preventDefault();
+    el.addEventListener('touchmove', preventNative, { passive: false });
+    el.addEventListener('gesturestart', preventNative); // iOS Safari 双指捏合
+    el.addEventListener('gesturechange', preventNative);
     const blockDrag = (e: Event) => e.preventDefault();
     el.addEventListener('dragstart', blockDrag);
+    /** 页面失焦/后台化：手指可能永远等不到 pointerup，强制解绑防止手势卡死 */
+    const onGone = () => resetGesture(true);
+    const onVis = () => {
+      if (document.hidden) resetGesture(true);
+    };
+    window.addEventListener('blur', onGone);
+    document.addEventListener('visibilitychange', onVis);
     /** 拖拽平面：随目标家具高度调整（墙挂电视在其高度平面上拖动） */
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     const hit = new THREE.Vector3();
@@ -390,9 +432,9 @@ function PointerRig({
       g.lastY = e.clientY;
       g.moved += Math.abs(dx) + Math.abs(dy);
 
-      // —— 编辑模式：家具拖拽 ——
+      // —— 编辑模式：家具拖拽 / 移动模式搬运（仅编辑模式认领；残留状态绝不影响生活模式） ——
       const d = dragRef.current;
-      if (d) {
+      if (modeRef.current === 'edit' && d) {
         if (!d.active && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 8) {
           d.active = true;
           alignPlane(d.id);
@@ -410,7 +452,8 @@ function PointerRig({
       }
 
       // —— 生活模式：滑动全方位旋转视角（左右任意转 / 上下低角↔近俯瞰） ——
-      if (modeRef.current === 'live' && !dragRef.current) {
+      //    与 dragRef 完全解耦：无任何残留状态能拦截旋转；无节流/防抖，连续跟手 ——
+      if (modeRef.current === 'live') {
         if (g.moved > 4) lookRef.current.on = true; // 超过轻点阈值 → 1:1 直接控制
         const az = azRef.current;
         if (az) az.az -= dx * 0.0075;
@@ -422,16 +465,9 @@ function PointerRig({
     const onUp = (e: PointerEvent) => {
       // 不是跟踪中的那根手指抬起 → 不结束手势
       if (gesture.current.down && e.pointerId !== gesture.current.pid) return;
-      gesture.current.down = false;
-      gesture.current.pid = -1;
-      lookRef.current.on = false;
-      const d = dragRef.current;
-      if (d?.active) {
-        cbRef.current.onDragEnd(d.id);
-      }
+      resetGesture(true);
       // 移动模式保持占用相机；普通拖拽结束后归还 OrbitControls
-      if (controls) controls.enabled = !moveSelRef.current?.on;
-      dragRef.current = null;
+      if (controls) controls.enabled = modeRef.current === 'edit' && !moveSelRef.current?.on;
     };
 
     const onWheel = (e: WheelEvent) => {
@@ -441,7 +477,7 @@ function PointerRig({
     };
 
     el.addEventListener('pointerdown', onDown);
-    // ⚠ 捕获阶段挂 window：避免任何元素 stopPropagation 吞掉 move/up
+    // ⚑ 捕获阶段挂 window：任何子元素的 stopPropagation 都吃不掉 move/up，滑动事件永不截断
     window.addEventListener('pointermove', onMove, true);
     window.addEventListener('pointerup', onUp, true);
     window.addEventListener('pointercancel', onUp, true);
@@ -452,10 +488,15 @@ function PointerRig({
       window.removeEventListener('pointerup', onUp, true);
       window.removeEventListener('pointercancel', onUp, true);
       el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchmove', preventNative);
+      el.removeEventListener('gesturestart', preventNative);
+      el.removeEventListener('gesturechange', preventNative);
       el.removeEventListener('dragstart', blockDrag);
+      window.removeEventListener('blur', onGone);
+      document.removeEventListener('visibilitychange', onVis);
     };
     // 仅依赖 three 稳定对象与 ref —— 回调已走 cbRef，重渲染不拆装
-  }, [camera, gl, raycaster, controls, modeRef, azRef, pitchRef, distRef, dragRef, moveSelRef, lookRef, itemsRef]);
+  }, [camera, gl, raycaster, controls, modeRef, azRef, pitchRef, distRef, dragRef, moveSelRef, lookRef, itemsRef, resetGesture]);
 
   return null;
 }
@@ -621,7 +662,7 @@ function Lights({ night }: { night: boolean }) {
 export default function HomeScene(props: HomeSceneProps) {
   const {
     items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge,
-    win, onToggleWin, floorCol, wallCol, doorCol, winCol, doorOpen, onToggleDoor,
+    win, onToggleWin, floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, doorOpen, onToggleDoor,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect,
   } = props;
 
@@ -690,6 +731,8 @@ export default function HomeScene(props: HomeSceneProps) {
         onToggleWin={onToggleWin}
         floorCol={floorCol}
         wallCol={wallCol}
+        floorColBed={floorColBed}
+        wallColBed={wallColBed}
         doorCol={doorCol}
         winCol={winCol}
         doorOpen={doorOpen}
@@ -752,6 +795,7 @@ export default function HomeScene(props: HomeSceneProps) {
         focusRef={focusRef}
       />
       <PointerRig
+        mode={mode}
         modeRef={modeRef}
         azRef={azRef}
         pitchRef={pitchRef}

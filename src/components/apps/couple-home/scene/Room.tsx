@@ -189,6 +189,8 @@ interface WallDef {
   shared?: boolean;
   /** 是否画踢脚线（默认画） */
   baseboard?: boolean;
+  /** 归属房间：客厅/卧室分开换色（wallCol / wallColBed） */
+  room: 'lr' | 'br';
 }
 
 /**
@@ -200,18 +202,18 @@ function sharedWallVisible(cameraZ: number, focusZ: number): boolean {
   return (cameraZ - BED_Z0) * (focusZ - BED_Z0) >= 0;
 }
 
-/** 墙段定义：四面外围墙 + 隔墙两段（门洞两侧）+ 卧室三面墙 */
+/** 墙段定义：四面外围墙 + 隔墙两段（门洞两侧）+ 卧室三面墙；客厅/卧室分别归色 */
 const WALLS: WallDef[] = [
   // —— 客厅 ——
-  { key: 'back', pos: [0, WALL_H / 2, -ROOM_Z - WALL_T / 2], size: [ROOM_W + WALL_T * 2, WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, -1) },
-  { key: 'frontEast', pos: [(DOOR_X + DOOR_W / 2 + ROOM_X + WALL_T) / 2, WALL_H / 2, BED_Z0 + WALL_T / 2], size: [ROOM_X + WALL_T - (DOOR_X + DOOR_W / 2), WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: true },
-  { key: 'frontWest', pos: [(-ROOM_X - WALL_T + DOOR_X - DOOR_W / 2) / 2, WALL_H / 2, BED_Z0 + WALL_T / 2], size: [DOOR_X - DOOR_W / 2 - (-ROOM_X - WALL_T), WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: true },
-  { key: 'left', pos: [-ROOM_X - WALL_T / 2, WALL_H / 2, 0], size: [WALL_T, WALL_H, ROOM_D], normal: new THREE.Vector3(-1, 0, 0) },
-  { key: 'right', pos: [ROOM_X + WALL_T / 2, WALL_H / 2, 0], size: [WALL_T, WALL_H, ROOM_D], normal: new THREE.Vector3(1, 0, 0) },
+  { key: 'back', pos: [0, WALL_H / 2, -ROOM_Z - WALL_T / 2], size: [ROOM_W + WALL_T * 2, WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'lr' },
+  { key: 'frontEast', pos: [(DOOR_X + DOOR_W / 2 + ROOM_X + WALL_T) / 2, WALL_H / 2, BED_Z0 + WALL_T / 2], size: [ROOM_X + WALL_T - (DOOR_X + DOOR_W / 2), WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: true, room: 'lr' },
+  { key: 'frontWest', pos: [(-ROOM_X - WALL_T + DOOR_X - DOOR_W / 2) / 2, WALL_H / 2, BED_Z0 + WALL_T / 2], size: [DOOR_X - DOOR_W / 2 - (-ROOM_X - WALL_T), WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: true, room: 'lr' },
+  { key: 'left', pos: [-ROOM_X - WALL_T / 2, WALL_H / 2, 0], size: [WALL_T, WALL_H, ROOM_D], normal: new THREE.Vector3(-1, 0, 0), room: 'lr' },
+  { key: 'right', pos: [ROOM_X + WALL_T / 2, WALL_H / 2, 0], size: [WALL_T, WALL_H, ROOM_D], normal: new THREE.Vector3(1, 0, 0), room: 'lr' },
   // —— 卧室（隔墙南侧） ——
-  { key: 'bedLeft', pos: [-ROOM_X - WALL_T / 2, WALL_H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, WALL_H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(-1, 0, 0) },
-  { key: 'bedRight', pos: [BED_X1 + WALL_T / 2, WALL_H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, WALL_H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0) },
-  { key: 'bedBack', pos: [(BED_X0 + BED_X1) / 2, WALL_H / 2, BED_Z1 + WALL_T / 2], size: [BED_X1 - BED_X0 + WALL_T * 2, WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1) },
+  { key: 'bedLeft', pos: [-ROOM_X - WALL_T / 2, WALL_H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, WALL_H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(-1, 0, 0), room: 'br' },
+  { key: 'bedRight', pos: [BED_X1 + WALL_T / 2, WALL_H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, WALL_H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0), room: 'br' },
+  { key: 'bedBack', pos: [(BED_X0 + BED_X1) / 2, WALL_H / 2, BED_Z1 + WALL_T / 2], size: [BED_X1 - BED_X0 + WALL_T * 2, WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'br' },
 ];
 
 /** 门洞上方的门头梁（随隔墙同隐同现；无踢脚线） */
@@ -286,7 +288,11 @@ function Wall({ def, night, wallCol, focusRef }: { def: WallDef; night: boolean;
 
 // ---------------- 门（卧室门，可开合可换色） ----------------
 
-/** 门：门框（三个边条）+ 门板（左铰链 pivot，向卧室内侧摆开）+ 双面把手 */
+/**
+ * 门：门框（三个边条，略压进门洞形成企口）+ 门板（左铰链 pivot，向卧室内侧摆开）+ 双面把手。
+ * ⚑ v5.1 修漏缝：旧门板 0.87m 宽塞在 0.94m 门洞里，四边漏出 3.5~8.5cm 缝隙（窗外天光从缝里漏进来）。
+ *   新尺寸：门板 0.90×2.03 填满门洞，门垛/门头梁加宽并各压进门洞 2~4.5cm 盖住板边 —— 四边全封闭。
+ */
 function HouseDoor({
   open,
   col,
@@ -319,6 +325,9 @@ function HouseDoor({
   const doorCol = col ?? '#f3efe6';
   const frameCol = useMemo(() => new THREE.Color(doorCol).multiplyScalar(0.86), [doorCol]);
   const frameStr = `#${frameCol.getHexString()}`;
+  /** 门板宽/高：比门洞各边小 2cm（藏在门垛/门头梁企口后面，不露缝） */
+  const PANEL_W = DOOR_W - 0.04;
+  const PANEL_H = DOOR_H - 0.03;
 
   const toggle = (e: { delta: number; stopPropagation: () => void }) => {
     if (e.delta > 8) return; // 拖动视角不算点击
@@ -340,62 +349,62 @@ function HouseDoor({
 
   return (
     <group position={[DOOR_X, 0, BED_Z0]} ref={doorRoot}>
-      {/* 门框：左右门垛 + 门头梁包边 */}
-      <mesh position={[-DOOR_W / 2 - 0.025, DOOR_H / 2 + 0.02, WALL_T / 2]} castShadow>
-        <boxGeometry args={[0.05, DOOR_H + 0.04, WALL_T + 0.03]} />
+      {/* 门框：左右门垛（0.07 宽，压进门洞 2cm 盖住门板边）+ 门头梁包边（压下 4.5cm） */}
+      <mesh position={[-DOOR_W / 2 - 0.015, DOOR_H / 2 + 0.005, WALL_T / 2]} castShadow>
+        <boxGeometry args={[0.07, DOOR_H + 0.01, WALL_T + 0.03]} />
         <meshStandardMaterial color={frameStr} roughness={0.8} />
       </mesh>
-      <mesh position={[DOOR_W / 2 + 0.025, DOOR_H / 2 + 0.02, WALL_T / 2]} castShadow>
-        <boxGeometry args={[0.05, DOOR_H + 0.04, WALL_T + 0.03]} />
+      <mesh position={[DOOR_W / 2 + 0.015, DOOR_H / 2 + 0.005, WALL_T / 2]} castShadow>
+        <boxGeometry args={[0.07, DOOR_H + 0.01, WALL_T + 0.03]} />
         <meshStandardMaterial color={frameStr} roughness={0.8} />
       </mesh>
-      <mesh position={[0, DOOR_H + 0.045, WALL_T / 2]} castShadow>
-        <boxGeometry args={[DOOR_W + 0.1, 0.05, WALL_T + 0.03]} />
+      <mesh position={[0, DOOR_H, WALL_T / 2]} castShadow>
+        <boxGeometry args={[DOOR_W + 0.16, 0.09, WALL_T + 0.03]} />
         <meshStandardMaterial color={frameStr} roughness={0.8} />
       </mesh>
 
       {/* 门板（铰链在左侧门垛，往卧室方向开；点击开合） */}
       <group
         ref={panel}
-        position={[-DOOR_W / 2 + 0.03, 0, WALL_T / 2]}
+        position={[-DOOR_W / 2 + 0.02, 0, WALL_T / 2]}
         onClick={toggle}
         {...hoverProps}
       >
-        <group position={[DOOR_W / 2 - 0.03, 0, 0]}>
-          {/* 门板主体 */}
-          <mesh position={[0, DOOR_H / 2 - 0.03, 0]} castShadow receiveShadow>
-            <boxGeometry args={[DOOR_W - 0.07, DOOR_H - 0.07, 0.045]} />
+        <group position={[DOOR_W / 2 - 0.02, 0, 0]}>
+          {/* 门板主体（填满门洞，边缝全部藏进门框企口） */}
+          <mesh position={[0, PANEL_H / 2 + 0.005, 0]} castShadow receiveShadow>
+            <boxGeometry args={[PANEL_W, PANEL_H, 0.045]} />
             <meshStandardMaterial color={doorCol} roughness={0.75} />
           </mesh>
           {/* 门板凹凸造型线（上下两块嵌板） */}
-          <mesh position={[0, DOOR_H * 0.7, 0.026]}>
-            <boxGeometry args={[DOOR_W - 0.24, 0.62, 0.012]} />
+          <mesh position={[0, PANEL_H * 0.7, 0.026]}>
+            <boxGeometry args={[PANEL_W - 0.18, 0.62, 0.012]} />
             <meshStandardMaterial color={frameStr} roughness={0.8} />
           </mesh>
-          <mesh position={[0, DOOR_H * 0.28, 0.026]}>
-            <boxGeometry args={[DOOR_W - 0.24, 0.5, 0.012]} />
+          <mesh position={[0, PANEL_H * 0.28, 0.026]}>
+            <boxGeometry args={[PANEL_W - 0.18, 0.5, 0.012]} />
             <meshStandardMaterial color={frameStr} roughness={0.8} />
           </mesh>
           {/* 把手（双面） */}
-          <mesh position={[DOOR_W / 2 - 0.16, DOOR_H * 0.46, 0.045]}>
+          <mesh position={[PANEL_W / 2 - 0.11, PANEL_H * 0.47, 0.045]}>
             <sphereGeometry args={[0.032, 12, 10]} />
             <meshStandardMaterial color="#d9cfb8" metalness={0.55} roughness={0.35} />
           </mesh>
-          <mesh position={[DOOR_W / 2 - 0.16, DOOR_H * 0.46, -0.045]}>
+          <mesh position={[PANEL_W / 2 - 0.11, PANEL_H * 0.47, -0.045]}>
             <sphereGeometry args={[0.032, 12, 10]} />
             <meshStandardMaterial color="#d9cfb8" metalness={0.55} roughness={0.35} />
           </mesh>
           {/* 夜里门缝透出的暖光提示 */}
           {!open && night && (
-            <mesh position={[DOOR_W / 2 - 0.04, DOOR_H / 2, 0.026]}>
-              <boxGeometry args={[0.012, DOOR_H - 0.2, 0.004]} />
+            <mesh position={[PANEL_W / 2 - 0.03, PANEL_H / 2, 0.026]}>
+              <boxGeometry args={[0.012, PANEL_H - 0.2, 0.004]} />
               <meshBasicMaterial color="#ffd98f" transparent opacity={0.35} toneMapped={false} />
             </mesh>
           )}
           {/* hover 高亮 */}
           {hovered && (
-            <mesh position={[0, DOOR_H / 2 - 0.03, 0.03]}>
-              <planeGeometry args={[DOOR_W - 0.05, DOOR_H - 0.05]} />
+            <mesh position={[0, PANEL_H / 2, 0.03]}>
+              <planeGeometry args={[PANEL_W - 0.03, PANEL_H - 0.03]} />
               <meshBasicMaterial color="#ffffff" transparent opacity={0.14} depthWrite={false} />
             </mesh>
           )}
@@ -570,10 +579,14 @@ export interface RoomProps {
   /** 五扇窗开态（客厅北左 / 客厅北右 / 客厅西 / 卧室西 / 卧室南） */
   win?: boolean[];
   onToggleWin?: (i: number) => void;
-  /** 用户自定义地板色（#rrggbb；缺省云白） */
+  /** 客厅地板自定义色（#rrggbb；缺省云白） */
   floorCol?: string;
-  /** 用户自定义墙色（#rrggbb；缺省暖白） */
+  /** 客厅墙坎自定义色（#rrggbb；缺省暖白） */
   wallCol?: string;
+  /** 卧室地板自定义色（#rrggbb；缺省云白；客厅卧室分开换色） */
+  floorColBed?: string;
+  /** 卧室墙坎自定义色（#rrggbb；缺省暖白；客厅卧室分开换色） */
+  wallColBed?: string;
   /** 门色（#rrggbb；缺省暖白） */
   doorCol?: string;
   /** 窗框色（#rrggbb；缺省浅木白） */
@@ -592,6 +605,8 @@ export default function Room({
   onToggleWin,
   floorCol,
   wallCol,
+  floorColBed,
+  wallColBed,
   doorCol,
   winCol,
   doorOpen,
@@ -600,10 +615,11 @@ export default function Room({
 }: RoomProps) {
   const floorTex = useMemo(() => makeFloorTexture(), []);
 
-  const floorMat = () => (
+  /** 客厅/卧室地板各自材质（共享同一张纹理，颜色独立） */
+  const floorMat = (col?: string) => (
     <meshStandardMaterial
       map={floorTex}
-      color={floorCol ?? (night ? '#c9c5bb' : '#f5f2ec')}
+      color={col ?? (night ? '#c9c5bb' : '#f5f2ec')}
       roughness={0.9}
     />
   );
@@ -621,10 +637,10 @@ export default function Room({
         }}
       >
         <planeGeometry args={[ROOM_W, ROOM_D]} />
-        {floorMat()}
+        {floorMat(floorCol)}
       </mesh>
 
-      {/* 卧室地板 */}
+      {/* 卧室地板（颜色与客厅独立） */}
       <mesh
         position={[(BED_X0 + BED_X1) / 2, 0, (BED_Z0 + BED_Z1) / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -636,7 +652,7 @@ export default function Room({
         }}
       >
         <planeGeometry args={[BED_W, BED_Z1 - BED_Z0]} />
-        {floorMat()}
+        {floorMat(floorColBed)}
       </mesh>
 
       {/* 地板外沿：浅灰围边（剖面观感） */}
@@ -649,9 +665,15 @@ export default function Room({
         <meshStandardMaterial color="#d4d1c9" roughness={0.95} />
       </mesh>
 
-      {/* 各面墙（自动隐藏朝相机侧；支持自定义色） */}
+      {/* 各面墙（自动隐藏朝相机侧；客厅/卧室分开换色） */}
       {WALLS.map((def) => (
-        <Wall key={def.key} def={def} night={night} wallCol={wallCol} focusRef={focusRef} />
+        <Wall
+          key={def.key}
+          def={def}
+          night={night}
+          wallCol={def.room === 'br' ? wallColBed : wallCol}
+          focusRef={focusRef}
+        />
       ))}
 
       {/* 门洞上方的门头梁 */}

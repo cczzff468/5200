@@ -18,7 +18,7 @@ import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import type { CatalogEntry, FurnitureItem, HomeMode } from '../types';
 import { animateDoors, cloneFurniture, ensureModel, type FurnModel } from './model-kit';
 import TV3D from './TV3D';
-import { Aircon3D, PhotoFrame3D } from './Extras3D';
+import { Aircon3D, PhotoFrame3D, PlushBunny3D, PlushDuck3D, Vanity3D } from './Extras3D';
 
 export interface Furn3DProps {
   item: FurnitureItem;
@@ -163,10 +163,7 @@ export default function Furn3D({
         if (e.delta > 8) return; // 拖拽后不触发点击
         onTap(item);
       },
-      over: (e: ThreeEvent<PointerEvent>) => {
-        // 不 stopPropagation：R3F 合成事件的 stopPropagation 会连带阻断原生事件冒泡，
-        // 进而杀掉场景级拖拽/旋转视角的 pointermove 监听
-        void e;
+      over: () => {
         setHovered(true);
         document.body.style.cursor = mode === 'edit' ? 'grab' : 'pointer';
       },
@@ -178,6 +175,21 @@ export default function Furn3D({
     [item, onPointerDown, onTap, mode],
   );
 
+  /**
+   * ⚑ 悬停高亮只在「编辑模式 + 精细指针（鼠标）」下挂载。
+   * R3F 对带 Over/Out 处理器的对象每次 pointermove 都会递归射线检测 ——
+   * 生活模式（触屏）挂了全部家具 GLB，每帧滑动都要扫完整场景，真机上直接把滑动事件拖死。
+   * 门控后生活/编辑触屏模式的 pointermove 射线开销归零，滑动视角恢复丝滑。
+   */
+  const finePointer = useMemo(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: fine)').matches,
+    [],
+  );
+  const hoverHandlers =
+    mode === 'edit' && finePointer
+      ? { onPointerOver: handlers.over, onPointerOut: handlers.out }
+      : {};
+
   return (
     <group
       ref={group}
@@ -188,8 +200,7 @@ export default function Furn3D({
         ref={inner}
         onPointerDown={handlers.down}
         onClick={handlers.click}
-        onPointerOver={handlers.over}
-        onPointerOut={handlers.out}
+        {...hoverHandlers}
       >
         {model && <primitive object={model.root} />}
 
@@ -201,6 +212,11 @@ export default function Furn3D({
 
         {/* 立式相框（程序化建模：手机上传照片，永久保存） */}
         {entry.kind === 'photoFrame' && <PhotoFrame3D col={item.col} photo={item.st?.photo} />}
+
+        {/* 毛绒玩偶 ×2 + 梳妆台（程序化建模） */}
+        {entry.kind === 'plushBunny' && <PlushBunny3D col={item.col} />}
+        {entry.kind === 'plushDuck' && <PlushDuck3D col={item.col} />}
+        {entry.kind === 'vanity' && <Vanity3D col={item.col} />}
 
         {/* 洗衣机状态灯 */}
         {entry.acts?.washer && modelSize && (

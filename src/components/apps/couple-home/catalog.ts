@@ -6,14 +6,14 @@
  * - 模型：Kenney Furniture Kit 2.0（CC0）白色系重着色（云白主体 + 浅灰/浅粉/浅黄/柔黑点缀，无木色）；
  * - MODEL_SCALE = 2.0：家具更饱满大气；fp 脚印 = 实测包围盒（含缩放）；
  * - 户型：客厅 9×6（北）+ 卧室 6×5（南），中间隔墙带门（点击开门后小人可走进卧室）；
- * - 新增：立体壁挂空调 / 立式相框（手机上传照片，永久保存）；
+ * - 新增：立体壁挂空调（客厅/卧室）/ 立式相框（手机上传照片，永久保存）/ 毛绒玩偶 / 梳妆台；
  * - 金币系统已移除（家具随便买随便摆）；
  * - 持久化：IndexedDB 即时缓存 + Prisma 服务端快照（rev 乐观并发）。
  */
 
 import { kvGet, kvSet, kvSetDebounced } from '@/lib/ios/idb-kv';
 import { getWorkspaceId } from '@/lib/ios/workspace';
-import type { CatalogEntry, FurnitureItem, HomeState } from './types';
+import type { CatalogEntry, FurnitureItem, FurnitureKind, HomeState } from './types';
 
 // ---------------- 世界常量 ----------------
 
@@ -214,7 +214,7 @@ export const CATALOG: Record<string, CatalogEntry> = {
     kind: 'trashcan', glb: G('trashcan'), name: '小垃圾桶', cat: 'decor', fp: [0.42, 0.47],
     acts: { playful: true },
   },
-  // ---- 家电·空调（程序化建模，壁挂式） ----
+  // ---- 家电·空调（程序化建模，壁挂式；客厅/卧室东墙均适用） ----
   aircon: {
     kind: 'aircon', name: '立体壁挂空调', cat: 'appliance', fp: [0.92, 0.28],
     acts: { toggle: true },
@@ -223,6 +223,20 @@ export const CATALOG: Record<string, CatalogEntry> = {
   photoFrame: {
     kind: 'photoFrame', name: '立式相框', cat: 'decor', fp: [0.52, 0.3],
     acts: { photo: true },
+  },
+  // ---- 玩偶（程序化毛绒建模，点击弹跳） ----
+  plushBunny: {
+    kind: 'plushBunny', name: '毛绒兔玩偶', cat: 'decor', fp: [0.32, 0.32],
+    acts: { playful: true },
+  },
+  plushDuck: {
+    kind: 'plushDuck', name: '小黄鸭玩偶', cat: 'decor', fp: [0.28, 0.28],
+    acts: { playful: true },
+  },
+  // ---- 家具·梳妆台（程序化建模：桌面 + 椭圆镜 + 小圆凳） ----
+  vanity: {
+    kind: 'vanity', name: '粉白梳妆台', cat: 'table', fp: [1.3, 0.95],
+    acts: { playful: true },
   },
   books: {
     kind: 'books', glb: G('books'), name: '书堆', cat: 'decor', fp: [0.3, 0.19],
@@ -300,7 +314,7 @@ const F = (
 /**
  * 初始 v5 两室一厅：
  * 客厅：北墙电视墙 + 沙发对坐 + 西侧工作角 + 东壁空调 + 玄关（门在隔墙）
- * 卧室：双人床 + 床头柜×2 + 衣柜 + 圆地毯 + 相框绿植
+ * 卧室：双人床 + 床头柜×2 + 衣柜 + 梳妆台 + 卧室空调 + 玩偶×2 + 圆地毯绿植相框
  */
 export function defaultHome(): HomeState {
   seq = 0;
@@ -343,14 +357,19 @@ export function defaultHome(): HomeState {
       F('coatRack', -3.55, 2.5),
       F('trashcan', -3.62, -2.58),
 
-      // —— 卧室（隔墙南侧，推门而入） ——
+      // —— 卧室（隔墙南侧，推门而入；家具齐备） ——
       F('bed', -3.32, 5.6, { ry: -Math.PI / 2 }), // 双人床靠西墙（床头朝西）
+      F('plushBunny', -2.62, 5.12, { y: 0.42, ry: -2.3 }), // 毛绒兔坐在床上
       F('nightstand', -3.4, 4.25),
+      F('plushDuck', -3.4, 4.25, { y: 0.53, ry: 0.5 }), // 小黄鸭摆上床头柜
       F('nightstand', -3.4, 6.95),
       F('lampTable', -3.4, 6.95, { y: 0.56 }), // 床头灯
-      F('wardrobe', 0.95, 3.35), // 衣柜靠卧室北墙
+      F('wardrobe', 0.95, 3.35), // 衣柜靠卧室北墙（隔墙）
+      F('vanity', 0.95, 7.5, { ry: Math.PI }), // 梳妆台靠卧室南墙（凳子朝北）
+      F('aircon', 1.4, 5.6, { y: 1.85, ry: -Math.PI / 2 }), // 卧室东壁空调
+      F('lampFloor', -4.05, 7.3), // 卧室角落落地灯
       F('rug', -0.9, 5.5), // 圆地毯
-      F('plant', 1.0, 7.4),
+      F('plant', -0.35, 7.55),
       F('photoFrame', -1.7, 7.45, { ry: Math.PI }), // 卧室相框
     ],
     chars: {
@@ -374,10 +393,81 @@ const API = '/api/couple-home';
 const valid = (h: HomeState | null | undefined): h is HomeState =>
   !!h && (h as HomeState).v === 5 && Array.isArray(h.furniture) && !!h.chars?.me && !!h.chars?.partner;
 
+// ---------------- v5.1 卧室家具补全迁移（老档案增量补插，不动用户已有布置） ----------------
+
+/** 某个落点附近是否已有落地家具占位（flat 地毯/抬升摆件不算） */
+function spotBusy(furn: FurnitureItem[], x: number, z: number, r = 0.55): boolean {
+  return furn.some((f) => {
+    const e = CATALOG[f.kind];
+    if (!e || e.flat || (f.y ?? 0) > 0.45) return false;
+    return Math.abs(f.x - x) < r && Math.abs(f.z - z) < r;
+  });
+}
+
+let migSeq = 0;
+
+/**
+ * v5.1 卧室家具补全：老档案缺新家具（毛绒兔/小黄鸭/梳妆台/卧室空调/卧室落地灯）时
+ * 按默认布局补插 —— 玩偶跟随床/床头柜的实际位置，其余在落点空闲时才补；幂等，可反复调用。
+ */
+export function migrateBedroomV51(h: HomeState): HomeState {
+  if (!h || h.v !== 5 || !Array.isArray(h.furniture)) return h;
+  const furn = h.furniture.slice();
+  const stamp = Date.now().toString(36);
+  const add = (kind: FurnitureKind, x: number, z: number, y?: number, ry?: number) =>
+    furn.push({ id: `${kind}-mig-${stamp}-${++migSeq}`, kind, x, z, y, ry, st: {} });
+
+  const kinds = new Set(furn.map((f) => f.kind));
+  const inBedroom = (kind: string) => furn.some((f) => f.kind === kind && f.z >= BED_Z0 - 0.1);
+
+  // 毛绒兔坐在床上（跟随床的位置与朝向；没有床就放地毯边）
+  if (!kinds.has('plushBunny')) {
+    const bed = furn.find((f) => f.kind === 'bed');
+    if (bed) {
+      // 默认：床 ry=-π/2、兔偏移 (+0.70, -0.48)；按用户床的实际朝向旋转变换偏移
+      const a = (bed.ry ?? 0) + Math.PI / 2;
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      add('plushBunny', bed.x + 0.7 * c - 0.48 * s, bed.z - 0.7 * s - 0.48 * c, 0.42, (bed.ry ?? 0) - 0.8);
+    } else if (!spotBusy(furn, -0.2, 5.6, 0.4)) {
+      add('plushBunny', -0.2, 5.6, 0, -2.3);
+    }
+  }
+  // 小黄鸭摆上床头柜（跟随第一只床头柜实际位置）
+  if (!kinds.has('plushDuck')) {
+    const ns = furn.find((f) => f.kind === 'nightstand');
+    if (ns) add('plushDuck', ns.x, ns.z, 0.53, 0.5);
+  }
+  // 梳妆台（卧室南墙东侧）：老档案的绿植常占着这个位（旧默认 (1.0,7.4)）→ 让位到新默认点再补
+  if (!kinds.has('vanity')) {
+    if (!spotBusy(furn, 0.95, 7.5, 0.85)) {
+      add('vanity', 0.95, 7.5, 0, Math.PI);
+    } else {
+      const blocker = furn.find(
+        (f) => f.kind === 'plant' && f.z >= BED_Z0 && Math.abs(f.x - 0.95) < 0.85 && Math.abs(f.z - 7.5) < 0.85 && (f.y ?? 0) <= 0.45,
+      );
+      if (blocker && !spotBusy(furn.filter((f) => f !== blocker), -0.35, 7.55, 0.6)) {
+        blocker.x = -0.35;
+        blocker.z = 7.55;
+        add('vanity', 0.95, 7.5, 0, Math.PI);
+      }
+    }
+  }
+  // 卧室空调（全屋只有一台且卧室没有 → 补到卧室东墙）
+  if (furn.filter((f) => f.kind === 'aircon').length === 1 && !inBedroom('aircon')) {
+    add('aircon', 1.4, 5.6, 1.85, -Math.PI / 2);
+  }
+  // 卧室落地灯（西南角，空闲才补）
+  if (!inBedroom('lampFloor') && !spotBusy(furn, -4.05, 7.3, 0.5)) add('lampFloor', -4.05, 7.3, 0, 0);
+
+  if (furn.length === h.furniture.length) return h;
+  return { ...h, furniture: furn };
+}
+
 /** 同步读缓存（首屏即时渲染；无则 null） */
 export function loadCache(): HomePersist | null {
   const saved = kvGet<HomePersist>(KEY);
-  if (saved && valid(saved.home)) return saved;
+  if (saved && valid(saved.home)) return { ...saved, home: migrateBedroomV51(saved.home) };
   return null;
 }
 
@@ -398,7 +488,7 @@ export async function fetchRemote(): Promise<HomePersist | null> {
     if (!res.ok) return null;
     const json = (await res.json()) as { data: HomeState | null; rev: number };
     if (!valid(json.data)) return null;
-    return { home: json.data, rev: json.rev ?? 0 };
+    return { home: migrateBedroomV51(json.data), rev: json.rev ?? 0 };
   } catch {
     return null;
   }

@@ -42,6 +42,9 @@ export type FurnitureKind =
   | 'trashcan'
   | 'aircon'
   | 'photoFrame'
+  | 'plushBunny'
+  | 'plushDuck'
+  | 'vanity'
   | 'fridge'
   | 'stove'
   | 'sink'
@@ -127,10 +130,14 @@ export interface HomeState {
   night: boolean;
   /** 窗户开态（5 扇：客厅北×2 / 客厅西 / 卧室西 / 卧室南；缺省全关） */
   win?: boolean[];
-  /** 地板自定义色（#rrggbb；缺省 = 默认云白） */
+  /** 地板自定义色（#rrggbb；缺省 = 默认云白；客厅） */
   floorCol?: string;
-  /** 墙壁自定义色（#rrggbb；缺省 = 默认暖白） */
+  /** 墙壁自定义色（#rrggbb；缺省 = 默认暖白；客厅） */
   wallCol?: string;
+  /** 卧室地板自定义色（#rrggbb；缺省 = 默认云白；客厅卧室分开换色） */
+  floorColBed?: string;
+  /** 卧室墙壁自定义色（#rrggbb；缺省 = 默认暖白；客厅卧室分开换色） */
+  wallColBed?: string;
   /** 卧室门开态（开 = 小人可以穿过门洞进出卧室） */
   doorOpen?: boolean;
   /** 门自定义色（#rrggbb；缺省 = 默认暖白） */
