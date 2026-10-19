@@ -41,6 +41,7 @@ import {
   Spoons3D,
   TowelRack3D,
 } from './Small3D';
+import { COZY_PARTS } from './Cozy3D';
 
 export interface Furn3DProps {
   item: FurnitureItem;
@@ -54,6 +55,12 @@ export interface Furn3DProps {
   onTap: (item: FurnitureItem) => void;
   /** 浴缸水龙头点击（放水/关水；仅生活模式） */
   onFaucetTap?: (item: FurnitureItem) => void;
+  /** 灶台烹饪中（蒸汽） */
+  cooking?: boolean;
+  /** 餐桌：好菜已上桌 */
+  meal?: boolean;
+  /** 乐器演奏中（钢琴键位/音符） */
+  playing?: boolean;
 }
 
 /** useGLTF 之外的轻量加载钩子（不依赖 suspense；tint 变化时重新克隆） */
@@ -90,6 +97,9 @@ export default function Furn3D({
   onPointerDown,
   onTap,
   onFaucetTap,
+  cooking,
+  meal,
+  playing,
 }: Furn3DProps) {
   const group = useRef<THREE.Group>(null);
   const inner = useRef<THREE.Group>(null);
@@ -175,6 +185,9 @@ export default function Furn3D({
   /** 选中圈贴地面（抬升家具的光圈投影到地板） */
   const ringY = -(item.y ?? 0) + 0.025;
 
+  /** v5.6 温馨扩展组件（按 kind 取） */
+  const CozyPart = COZY_PARTS[entry.kind];
+
   const modelSize = model?.size;
 
   const handlers = useMemo(
@@ -230,7 +243,7 @@ export default function Furn3D({
         {model && <primitive object={model.root} />}
 
         {/* 电视（程序化美颜大屏） */}
-        {isTV && <TV3D on={!!item.st?.on} night={night} col={item.col} />}
+        {isTV && <TV3D on={!!item.st?.on} night={night} col={item.col} channel={item.st?.channel} />}
 
         {/* 立体壁挂空调（程序化建模：导风板摆动 + 冷风丝） */}
         {entry.kind === 'aircon' && <Aircon3D on={!!item.st?.on} night={night} col={item.col} />}
@@ -290,6 +303,24 @@ export default function Furn3D({
             onFaucet={() => onFaucetTap?.(item)}
           />
         )}
+
+        {/* v5.6 温馨扩展（Cozy3D 程序化建模）：窗帘/壁炉/鱼缸/豆袋/钢琴/吉他/穿衣镜/星空灯/床幔/咖啡机/果盘/浴帘/洗漱/体重秤/置物架 */}
+        {CozyPart && (
+          <CozyPart
+            col={item.col}
+            on={!!item.st?.on}
+            open={!!item.st?.on}
+            playing={playing}
+            brewing={!!item.st?.on}
+            fedAt={item.st?.fedAt}
+          />
+        )}
+
+        {/* 灶台烹饪：锅上蒸汽 */}
+        {entry.kind === 'stove' && cooking && <StoveSteam />}
+
+        {/* 餐桌：一桌好菜 */}
+        {entry.kind === 'diningTable' && meal && <MealDish />}
       </group>
 
       {/* 灯光（开着才亮；夜晚更暖） */}
@@ -440,6 +471,80 @@ function TubExtras({
           </mesh>
         ))}
       </group>
+    </group>
+  );
+}
+
+// ---------------- 灶台烹饪蒸汽（做饭时从锅口升腾） ----------------
+
+function StoveSteam() {
+  const group = useRef<THREE.Group>(null);
+  const PUFFS = 4;
+  useFrame((state) => {
+    if (!group.current) return;
+    const t = state.clock.elapsedTime;
+    group.current.children.forEach((c, i) => {
+      const ph = ((t * 0.55 + i / PUFFS) % 1 + 1) % 1;
+      c.position.y = 0.1 + ph * 0.42;
+      c.position.x = Math.sin(ph * 5 + i * 2.1) * 0.05;
+      const s = 0.07 + ph * 0.13;
+      c.scale.set(s, s, s);
+      const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
+      m.opacity = Math.sin(ph * Math.PI) * 0.5;
+    });
+  });
+  return (
+    <group ref={group} position={[-0.18, 0.92, 0]}>
+      {Array.from({ length: PUFFS }, (_, i) => (
+        <mesh key={i}>
+          <sphereGeometry args={[1, 10, 8]} />
+          <meshStandardMaterial color="#ffffff" transparent opacity={0} depthWrite={false} roughness={1} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+// ---------------- 一桌好菜（做饭完成摆上餐桌） ----------------
+
+function MealDish() {
+  return (
+    <group position={[0, 0.735, 0]}>
+      {/* 大圆盘 */}
+      <mesh position={[0, 0.015, 0]} castShadow>
+        <cylinderGeometry args={[0.26, 0.22, 0.03, 24]} />
+        <meshStandardMaterial color="#fdfbf6" roughness={0.35} />
+      </mesh>
+      {/* 红烧肉块 ×3 */}
+      {[
+        [-0.07, 0.05],
+        [0.08, -0.03],
+        [0.0, 0.1],
+      ].map(([x, z], i) => (
+        <mesh key={i} position={[x, 0.055, z]} rotation={[0, i * 1.3, 0]} castShadow>
+          <boxGeometry args={[0.09, 0.05, 0.09]} />
+          <meshStandardMaterial color="#b4643c" roughness={0.55} />
+        </mesh>
+      ))}
+      {/* 绿菜点缀 */}
+      {[
+        [0.13, 0.12],
+        [-0.14, -0.08],
+      ].map(([x, z], i) => (
+        <mesh key={`g${i}`} position={[x, 0.045, z]} scale={[1, 0.5, 1]} castShadow>
+          <sphereGeometry args={[0.035, 10, 8]} />
+          <meshStandardMaterial color="#7fbf7a" roughness={0.7} />
+        </mesh>
+      ))}
+      {/* 小碗汤 */}
+      <mesh position={[0.3, 0.04, -0.18]} castShadow>
+        <cylinderGeometry args={[0.07, 0.05, 0.06, 14]} />
+        <meshStandardMaterial color="#fdfbf6" roughness={0.4} />
+      </mesh>
+      <mesh position={[0.3, 0.062, -0.18]}>
+        <cylinderGeometry args={[0.06, 0.06, 0.012, 14]} />
+        <meshStandardMaterial color="#e8b04c" roughness={0.3} />
+      </mesh>
     </group>
   );
 }

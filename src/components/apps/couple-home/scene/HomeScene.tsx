@@ -110,13 +110,23 @@ export interface HomeSceneProps {
   onDragSelect: (id: string) => void;
   /** 编辑模式点选门窗（不开合） */
   onWallTap?: (id: string) => void;
+  /** 「我」的穿搭编号（衣柜换装） */
+  outfit?: number;
+  /** 正在进行的家具动作（灶台蒸汽 / 乐器音符联动） */
+  activeAct?: { type: CharAction['type']; itemId: string; active: boolean } | null;
+  /** 好菜上桌的餐桌 id（null = 没有饭菜） */
+  mealTableId?: string | null;
+  /** 地板纹理（全屋通用）：wood 木纹（默认）/ plain 素色 / check 瓷砖 */
+  floorTex?: 'plain' | 'wood' | 'check';
+  /** 墙纸纹理（全屋通用）：plain 素色（默认）/ dot 碎花 / stripe 条纹 */
+  wallTex?: 'plain' | 'dot' | 'stripe';
 }
 
 /** 生活模式视角俯仰范围：接近水平（低角仰视）↔ 近乎俯瞰（全方位拉动视角） */
 const PITCH_MIN = 0.22;
 const PITCH_MAX = 1.5;
 
-/** 家具动作 → 小人姿势（watch/work 也是坐姿） */
+/** 家具动作 → 小人姿势（watch/work 也是坐姿；play 按乐器分流，见 act.pose） */
 const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
   sit: 'sit',
   lie: 'lie',
@@ -124,6 +134,13 @@ const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
   shower: 'shower',
   watch: 'sit',
   work: 'sit',
+  cook: 'cook',
+  eat: 'eat',
+  drink: 'drink',
+  play: 'sit',
+  makeup: 'makeup',
+  mirror: 'mirror',
+  dress: 'stand',
 };
 
 // ---------------- 小工具 ----------------
@@ -368,7 +385,7 @@ function GameLoop({
       } else {
         meRT.moving = false;
         act.arrived = true;
-        poseRef.current.pose = POSE_OF_ACT[act.type] ?? 'sit';
+        poseRef.current.pose = act.pose ?? POSE_OF_ACT[act.type] ?? 'sit';
         poseRef.current.y = act.y;
       }
     } else if (act) {
@@ -824,26 +841,68 @@ function EditCameraKick({ mode }: { mode: HomeMode }) {
   return null;
 }
 
-// ---------------- 灯光 ----------------
+// ---------------- 灯光（昼夜 mix 平滑过渡） ----------------
 
-function Lights({ night }: { night: boolean }) {
+const DAY_BG = '#efe8da';
+const NIGHT_BG = '#24272f';
+const _TMP_C = /* @__PURE__ */ new THREE.Color();
+
+/**
+ * E2 昼夜平滑：mix 每帧向目标阻尼（0=白天 / 1=夜晚），驱动天空底色；
+ * 全局灯照强度/颜色随 mix 渐变（见 Lights），窗内星空/墙色微差保持瞬切（感知权重低）。
+ */
+function NightBlend({ night, mixRef }: { night: boolean; mixRef: RefObject<{ v: number }> }) {
+  const scene = useThree((s) => s.scene);
+  const bg = useMemo(() => new THREE.Color(DAY_BG), []);
+  const tmp = useMemo(() => new THREE.Color(), []);
+  useFrame((_, dt) => {
+    mixRef.current.v = THREE.MathUtils.damp(mixRef.current.v, night ? 1 : 0, 2.2, Math.min(dt, 0.05));
+    tmp.set(DAY_BG).lerp(_TMP_C.set(NIGHT_BG), mixRef.current.v);
+    bg.copy(tmp);
+    scene.background = bg;
+  });
+  return null;
+}
+
+function Lights({ night, mixRef }: { night: boolean; mixRef: RefObject<{ v: number }> }) {
   const dir = useRef<THREE.DirectionalLight>(null);
+  const amb = useRef<THREE.AmbientLight>(null);
+  const hemi = useRef<THREE.HemisphereLight>(null);
+  const tmp = useMemo(() => new THREE.Color(), []);
   useEffect(() => {
     // 切换昼夜时重投阴影
     dir.current?.shadow?.camera?.updateProjectionMatrix();
   }, [night]);
+  useFrame((_, dt) => {
+    const k = mixRef.current.v;
+    const d = Math.min(dt, 0.05);
+    if (amb.current) {
+      amb.current.intensity = THREE.MathUtils.damp(amb.current.intensity, night ? 0.55 : 0.95, 2.2, d);
+      amb.current.color.copy(tmp.set('#fff3e0').lerp(_TMP_C.set('#a8b4cd'), k));
+    }
+    if (hemi.current) {
+      hemi.current.intensity = THREE.MathUtils.damp(hemi.current.intensity, night ? 0.5 : 0.55, 2.2, d);
+      hemi.current.color.copy(tmp.set('#fdf6e8').lerp(_TMP_C.set('#39415c'), k));
+      hemi.current.groundColor.copy(tmp.set('#e5d6b8').lerp(_TMP_C.set('#23252c'), k));
+    }
+    if (dir.current) {
+      dir.current.intensity = THREE.MathUtils.damp(dir.current.intensity, night ? 0.35 : 1.55, 2.2, d);
+      dir.current.color.copy(tmp.set('#ffe9c8').lerp(_TMP_C.set('#b9c8e2'), k));
+      // 太阳/月亮方位也缓推
+      dir.current.position.x = THREE.MathUtils.damp(dir.current.position.x, night ? -4 : 5, 2, d);
+      dir.current.position.z = THREE.MathUtils.damp(dir.current.position.z, night ? -3 : 4, 2, d);
+    }
+  });
   return (
     <>
-      <ambientLight intensity={night ? 0.55 : 0.95} color={night ? '#a8b4cd' : '#fff3e0'} />
-      <hemisphereLight
-        args={[night ? '#39415c' : '#fdf6e8', night ? '#23252c' : '#e5d6b8', night ? 0.5 : 0.55]}
-      />
+      <ambientLight ref={amb} intensity={0.95} color="#fff3e0" />
+      <hemisphereLight ref={hemi} args={['#fdf6e8', '#e5d6b8', 0.55]} />
       <directionalLight
         ref={dir}
         castShadow
-        position={night ? [-4, 6, -3] : [5, 7.5, 4]}
-        intensity={night ? 0.35 : 1.55}
-        color={night ? '#b9c8e2' : '#ffe9c8'}
+        position={[5, 7.5, 4]}
+        intensity={1.55}
+        color="#ffe9c8"
         shadow-mapSize-width={1024}
         shadow-mapSize-height={1024}
         shadow-camera-left={-8}
@@ -858,12 +917,28 @@ function Lights({ night }: { night: boolean }) {
   );
 }
 
+/**
+ * C6 睡觉小夜灯：躺床时小人身边亮起一盏暖色小夜灯（全屋主灯已自动关闭），
+ * 起床后缓缓熄灭。
+ */
+function BedNightLight({ poseRef, meRT }: { poseRef: RefObject<{ pose: CharPose; y: number }>; meRT: CharRT }) {
+  const light = useRef<THREE.PointLight>(null);
+  useFrame((_, dt) => {
+    const l = light.current;
+    if (!l) return;
+    const on = poseRef.current?.pose === 'lie';
+    l.intensity = THREE.MathUtils.damp(l.intensity, on ? 0.55 : 0, 3, Math.min(dt, 0.05));
+    l.position.set(meRT.x, 0.85, meRT.z);
+  });
+  return <pointLight ref={light} color="#ffd9a0" intensity={0} distance={2.6} decay={2} />;
+}
+
 // ---------------- Canvas 主体 ----------------
 
 export default function HomeScene(props: HomeSceneProps) {
   const {
     items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge, fp, fpRef,
-    charStyle, poseRef, actRef, onFaucetTap,
+    charStyle, poseRef, actRef, onFaucetTap, outfit, activeAct, mealTableId, floorTex, wallTex,
     win, onToggleWin, winPos, doorPos,
     floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, floorColK, wallColK, floorColB, wallColB,
     ceilCol, ceilColBed, ceilColK, ceilColB,
@@ -873,6 +948,8 @@ export default function HomeScene(props: HomeSceneProps) {
 
   const modeRef = useRef<HomeMode>(mode);
   const itemsRef = useRef<FurnitureItem[]>(items);
+  /** E2 昼夜混合系数（0=白天 → 1=夜晚，每帧阻尼） */
+  const nightMixRef = useRef({ v: night ? 1 : 0 });
   const winPosRef = useRef(winPos);
   const doorPosRef = useRef(doorPos);
   const doorRef = useRef({
@@ -974,13 +1051,14 @@ export default function HomeScene(props: HomeSceneProps) {
   return (
     <Canvas
       shadows="soft"
-      dpr={[1, 2]}
+      dpr={[1, 1.75]}
       camera={{ fov: 48, near: 0.1, far: 80, position: [0, 6.2, 7.4] }}
       style={{ touchAction: 'none' }}
       resize={{ offsetSize: true }}
+      performance={{ min: 0.5 }}
     >
-      <color attach="background" args={[night ? '#24272f' : '#efe8da']} />
-      <Lights night={night} />
+      <NightBlend night={night} mixRef={nightMixRef} />
+      <Lights night={night} mixRef={nightMixRef} />
       <Room
         night={night}
         onFloorTap={onFloorTap}
@@ -1013,6 +1091,8 @@ export default function HomeScene(props: HomeSceneProps) {
         onToggleKitchenDoor={onToggleKitchenDoor}
         onToggleBathDoor={onToggleBathDoor}
         focusRef={focusRef}
+        floorTex={floorTex}
+        wallTex={wallTex}
       />
       {mode === 'edit' && <EditGrid />}
 
@@ -1031,12 +1111,16 @@ export default function HomeScene(props: HomeSceneProps) {
             onPointerDown={onFurnPointerDown}
             onTap={onFurnTap}
             onFaucetTap={onFaucetTap}
+            cooking={activeAct?.type === 'cook' && activeAct.active && activeAct.itemId === item.id}
+            playing={activeAct?.type === 'play' && activeAct.active && activeAct.itemId === item.id}
+            meal={!!mealTableId && mealTableId === item.id}
           />
         );
       })}
 
-      <Char3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} />
+      <Char3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} />
       <Char3D rt={taRT} who="partner" style={charStyle} />
+      <BedNightLight poseRef={poseRef} meRT={meRT} />
       <EditCameraKick mode={mode} />
       <ZoomPoker zoomCmd={zoomCmd} />
       <NudgePoker moveCmd={moveCmd} onNudge={onNudge} />

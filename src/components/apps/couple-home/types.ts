@@ -79,7 +79,22 @@ export type FurnitureKind =
   | 'basin'
   | 'mirror'
   | 'towelRack'
-  | 'laptop';
+  | 'laptop'
+  | 'curtain'
+  | 'fireplace'
+  | 'fishtank'
+  | 'beanbag'
+  | 'piano'
+  | 'guitar'
+  | 'standingMirror'
+  | 'starLamp'
+  | 'canopy'
+  | 'coffeeMaker'
+  | 'fruitBasket'
+  | 'wallShelf'
+  | 'bathCurtain'
+  | 'toiletries'
+  | 'scale';
 
 /** 家具分类（商店栏的 tab） */
 export type FurnCategory =
@@ -134,6 +149,12 @@ export interface FurnitureState {
   photo?: string;
   /** 浴缸/淋浴：水龙头放水中 */
   bathWater?: boolean;
+  /** 电视频道（0=关机不算，1..N 频道） */
+  channel?: number;
+  /** 鱼缸：上次投喂时间戳（Date.now()，6 秒内鱼加速聚食） */
+  fedAt?: number;
+  /** 咖啡机：煮咖啡中 */
+  brewing?: boolean;
 }
 
 /** 小人身份 */
@@ -210,6 +231,14 @@ export interface HomeState {
   nightAuto?: boolean;
   /** 「我」正在进行的家具动作（重进页面恢复姿势；家具被删则忽略） */
   act?: { type: CharAction['type']; itemId: string };
+  /** 「我」的穿搭编号（衣柜换装；0=默认，1/2=换色套装） */
+  outfit?: number;
+  /** 地板纹理：wood = 木纹条（默认）/ plain = 素色 / check = 大格瓷砖（全屋通用、颜色仍分房间） */
+  floorTex?: 'plain' | 'wood' | 'check';
+  /** 墙面纹理：dot = 碎花 / stripe = 细条纹（缺省素色，全屋通用、颜色仍分房间） */
+  wallTex?: 'plain' | 'dot' | 'stripe';
+  /** 做饭系统：一桌好菜已上桌（去餐桌「开饭」） */
+  mealReady?: boolean;
 }
 
 /** 家具目录条目（静态配置，不持久化） */
@@ -235,7 +264,7 @@ export interface CatalogEntry {
   h?: number;
   /** 交互能力 */
   acts: {
-    /** 点击开/关（灯、电视、收音机、空调、风扇、吊灯、淋浴） */
+    /** 点击开/关（灯、电视、收音机、空调、风扇、吊灯、淋浴、壁炉、星空灯） */
     toggle?: boolean;
     /** 可开门（有 door 节点或 glbAlt） */
     door?: boolean;
@@ -245,6 +274,22 @@ export interface CatalogEntry {
     playful?: boolean;
     /** 相框：点击从手机上传照片 */
     photo?: boolean;
+    /** 投喂（鱼缸）：点一下撒鱼食，6 秒鱼群聚食 */
+    feed?: boolean;
+    /** 照镜子：小人走过去对镜自照（微微摆 pose） */
+    mirror?: { y?: number; dx?: number; dz?: number; out?: [number, number] };
+    /** 做饭：小人走到灶台前颠勺，数秒后一桌好菜上餐桌 */
+    cook?: { y: number; dx?: number; dz?: number; out?: [number, number] };
+    /** 开饭：饭菜已上桌，小人坐到餐桌边吃饭（按钮变「吃饱啦」） */
+    eat?: { y: number; dx?: number; dz?: number; out?: [number, number] };
+    /** 喝东西：小人走到冰箱前拿杯喝的（自动开门，喝完自动结束） */
+    drink?: { y: number; dx?: number; dz?: number; out?: [number, number] };
+    /** 换装：小人走到衣柜前换一套穿搭（自动开门，换完自动结束） */
+    dress?: { y?: number; dx?: number; dz?: number; out?: [number, number] };
+    /** 演奏乐器：piano 坐琴凳弹 / guitar 站着抱琴弹（音符飘出） */
+    play?: { y: number; dx?: number; dz?: number; ryOff?: number; out?: [number, number] };
+    /** 化妆：小人坐到梳妆台前补妆（星星特效） */
+    makeup?: { y: number; dx?: number; dz?: number; out?: [number, number] };
     /** 可坐：点击出「坐下」按钮，小人走过去坐下（按钮变「站起来」） */
     seat?: { y: number; dx?: number; dz?: number };
     /** 可睡：点击出「睡觉」按钮，小人走过去躺上床（按钮变「起床」，头朝枕头 + Zzz 特效） */
@@ -286,15 +331,43 @@ export interface CharRT {
   nextWander: number;
 }
 
-/** 小人姿势：站立 / 坐下 / 躺床 / 泡澡（脱衣坐浴缸）/ 淋浴（脱衣站淋浴房） */
-export type CharPose = 'stand' | 'sit' | 'lie' | 'bath' | 'shower';
+/**
+ * 小人姿势：站立 / 坐下 / 躺床 / 泡澡（脱衣坐浴缸）/ 淋浴（脱衣站淋浴房）/
+ * 做饭 / 吃饭 / 喝东西 / 弹琴 / 弹吉他 / 化妆 / 照镜子
+ */
+export type CharPose =
+  | 'stand'
+  | 'sit'
+  | 'lie'
+  | 'bath'
+  | 'shower'
+  | 'cook'
+  | 'eat'
+  | 'drink'
+  | 'piano'
+  | 'guitar'
+  | 'makeup'
+  | 'mirror';
 
 /** 小人画风 */
 export type CharStyle = 'cartoon' | 'real';
 
 /** 小人正在执行的家具动作（走向家具 → 摆姿势） */
 export interface CharAction {
-  type: 'sit' | 'lie' | 'bath' | 'shower' | 'watch' | 'work';
+  type:
+    | 'sit'
+    | 'lie'
+    | 'bath'
+    | 'shower'
+    | 'watch'
+    | 'work'
+    | 'cook'
+    | 'eat'
+    | 'drink'
+    | 'play'
+    | 'makeup'
+    | 'mirror'
+    | 'dress';
   itemId: string;
   /** 目标落点（世界坐标）与朝向、坐垫高度 */
   tx: number;
@@ -306,6 +379,8 @@ export interface CharAction {
   oz?: number;
   /** 已走到位（姿势已摆好） */
   arrived?: boolean;
+  /** 到位后摆的姿势（缺省按 type 查 POSE_OF_ACT；play 乐器按 kind 分流钢琴/吉他） */
+  pose?: CharPose;
 }
 
 /** 模式 */

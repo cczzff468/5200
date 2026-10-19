@@ -28,29 +28,75 @@ export interface Char3DProps {
   style?: 'cartoon' | 'real';
   /** 姿势（「我」专属；partner 永远站立） */
   poseRef?: RefObject<{ pose: CharPose; y: number }>;
+  /** 穿搭编号（衣柜换装；0=默认，1/2=换色套装；partner 固定 0） */
+  outfit?: number;
 }
 
-/** 穿搭色板（两角色） */
-const OUTFIT = {
-  me: {
-    skin: '#ffe3cd',
-    hair: '#4a342a',
-    tank: '#f7f5f1',
-    jacket: '#efe8da',
-    jeans: '#3e4d5c',
-    shoes: '#f4f2ee',
-    blush: '#f6b1b8',
-  },
-  partner: {
-    skin: '#ffdfc6',
-    hair: '#26262c',
-    tank: '#1e1e24',
-    jacket: '#2c2c33',
-    jeans: '#33333b',
-    shoes: '#f6f5f2',
-    blush: '#f2b9b0',
-  },
-} as const;
+/** 穿搭色板（两角色 × 三套；0 为默认，衣柜换装循环切换） */
+const OUTFITS: Record<'me' | 'partner', Record<'skin' | 'hair' | 'tank' | 'jacket' | 'jeans' | 'shoes' | 'blush', string>[]> = {
+  me: [
+    {
+      skin: '#ffe3cd',
+      hair: '#4a342a',
+      tank: '#f7f5f1',
+      jacket: '#efe8da',
+      jeans: '#3e4d5c',
+      shoes: '#f4f2ee',
+      blush: '#f6b1b8',
+    },
+    {
+      // 樱粉家居服：粉开衫 + 奶白背心 + 米色阔腿裤
+      skin: '#ffe3cd',
+      hair: '#4a342a',
+      tank: '#fbf6ee',
+      jacket: '#f2c1cd',
+      jeans: '#dcc9b0',
+      shoes: '#f4ede4',
+      blush: '#f6b1b8',
+    },
+    {
+      // 薄荷慵懒风：薄荷开衫 + 白背心 + 焦糖裤
+      skin: '#ffe3cd',
+      hair: '#4a342a',
+      tank: '#f9f7f2',
+      jacket: '#bcdcc8',
+      jeans: '#b08968',
+      shoes: '#efe8dc',
+      blush: '#f6b1b8',
+    },
+  ],
+  partner: [
+    {
+      skin: '#ffdfc6',
+      hair: '#26262c',
+      tank: '#1e1e24',
+      jacket: '#2c2c33',
+      jeans: '#33333b',
+      shoes: '#f6f5f2',
+      blush: '#f2b9b0',
+    },
+    {
+      // 燕麦暖男：燕麦夹克 + 白 T + 灰棕牛仔裤
+      skin: '#ffdfc6',
+      hair: '#26262c',
+      tank: '#f5f2ec',
+      jacket: '#8a7563',
+      jeans: '#5a544c',
+      shoes: '#f6f5f2',
+      blush: '#f2b9b0',
+    },
+    {
+      // 雾蓝清爽：雾蓝夹克 + 杏色 T + 深蓝牛仔裤
+      skin: '#ffdfc6',
+      hair: '#26262c',
+      tank: '#f2e8d8',
+      jacket: '#6d7f8c',
+      jeans: '#3e4d5c',
+      shoes: '#f6f5f2',
+      blush: '#f2b9b0',
+    },
+  ],
+};
 
 interface CharRig {
   root: THREE.Group;
@@ -74,6 +120,9 @@ interface CharRig {
   /** 睡觉 Zzz（躺床时从头顶飘起，平时隐藏） */
   zzz: THREE.Group;
   zzzSprites: THREE.Sprite[];
+  /** 化妆星星（化妆时绕头部旋转闪烁，平时隐藏） */
+  spark: THREE.Group;
+  sparkSprites: THREE.Sprite[];
 }
 
 const stdMat = (c: string, rough = 0.8, extra?: Partial<THREE.MeshStandardMaterialParameters>) =>
@@ -83,8 +132,8 @@ const stdMat = (c: string, rough = 0.8, extra?: Partial<THREE.MeshStandardMateri
  * 组装一只有关节的小人（纯几何，无外部依赖）。
  * 结构：root(起伏/前倾) → lieWrap(躺姿旋转) → [腿×2(髋→膝), 躯干+开衫, 臂×2(肩→肘), 头+发型]
  */
-function buildChar(who: 'me' | 'partner', style: 'cartoon' | 'real'): CharRig {
-  const o = OUTFIT[who];
+function buildChar(who: 'me' | 'partner', style: 'cartoon' | 'real', outfit = 0): CharRig {
+  const o = OUTFITS[who][outfit % OUTFITS[who].length];
   const g = new THREE.Group();
   const clothes: THREE.Mesh[] = [];
 
@@ -264,7 +313,7 @@ function buildChar(who: 'me' | 'partner', style: 'cartoon' | 'real'): CharRig {
   foamAdd(P.headR * 0.46, P.headY + P.headR * 0.78, -P.headR * 0.12, 0.055);
   foamAdd(0, P.headY + P.headR * 0.9, P.headR * 0.28, 0.045);
 
-  // ---------- 睡觉 Zzz（挂 root：躺姿时头部在局部 +z 侧，Zzz 从头上方飘起） ----------
+  // ---------- 睡觉 Zzz（挂 root：躺姿时头部在局部 -z 床头侧，Zzz 从头上方飘起） ----------
   const zzz = new THREE.Group();
   zzz.visible = false;
   g.add(zzz);
@@ -274,9 +323,23 @@ function buildChar(who: 'me' | 'partner', style: 'cartoon' | 'real'): CharRig {
     const sm = new THREE.SpriteMaterial({ map: zzzTex, transparent: true, opacity: 0, depthWrite: false });
     const sp = new THREE.Sprite(sm);
     sp.scale.setScalar(0.11 + i * 0.045);
-    sp.position.set(0.14 + i * 0.03, 0.72 + i * 0.16, 0.78 + i * 0.07);
+    sp.position.set(0.14 + i * 0.03, 0.72 + i * 0.16, -0.78 - i * 0.07);
     zzz.add(sp);
     zzzSprites.push(sp);
+  }
+
+  // ---------- 化妆星星（挂 root：化妆时绕头部旋转闪烁） ----------
+  const spark = new THREE.Group();
+  spark.visible = false;
+  g.add(spark);
+  const sparkTex = makeSparkTexture();
+  const sparkSprites: THREE.Sprite[] = [];
+  for (let i = 0; i < 5; i++) {
+    const sm = new THREE.SpriteMaterial({ map: sparkTex, transparent: true, opacity: 0, depthWrite: false });
+    const sp = new THREE.Sprite(sm);
+    sp.scale.setScalar(0.09 + (i % 2) * 0.04);
+    spark.add(sp);
+    sparkSprites.push(sp);
   }
 
   // 脖子（拟真风露出脖颈）
@@ -432,10 +495,45 @@ function buildChar(who: 'me' | 'partner', style: 'cartoon' | 'real'): CharRig {
     back.rotation.x = -0.1;
   }
 
-  return { root: g, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, hipY: P.hipY, clothes, skinTorso, foam, zzz, zzzSprites };
+  return { root: g, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, hipY: P.hipY, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites };
 }
 
 const dampN = THREE.MathUtils.damp;
+
+/** 化妆星星贴图（四角星光，樱粉渐变） */
+function makeSparkTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 96;
+  cv.height = 96;
+  const ctx = cv.getContext('2d')!;
+  const cx = 48;
+  const cy = 48;
+  const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, 42);
+  g.addColorStop(0, 'rgba(255,236,246,0.98)');
+  g.addColorStop(0.4, 'rgba(247,183,208,0.9)');
+  g.addColorStop(1, 'rgba(247,183,208,0)');
+  ctx.fillStyle = g;
+  // 四角星（两条交叉的菱形光芒）
+  const star = (long: number, wide: number, rot: number) => {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot);
+    ctx.beginPath();
+    ctx.moveTo(0, -long);
+    ctx.quadraticCurveTo(wide, -wide, long, 0);
+    ctx.quadraticCurveTo(wide, wide, 0, long);
+    ctx.quadraticCurveTo(-wide, wide, -long, 0);
+    ctx.quadraticCurveTo(-wide, -wide, 0, -long);
+    ctx.fill();
+    ctx.restore();
+  };
+  ctx.fillStyle = g;
+  star(40, 7, 0);
+  star(24, 5, Math.PI / 4);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 /** Zzz 字贴图（睡觉特效用，白字 + 雾紫描边） */
 function makeZzzTexture(): THREE.CanvasTexture {
@@ -457,8 +555,8 @@ function makeZzzTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef }: Char3DProps) {
-  const rig = useMemo(() => buildChar(who, style), [who, style]);
+export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outfit = 0 }: Char3DProps) {
+  const rig = useMemo(() => buildChar(who, style, outfit), [who, style, outfit]);
   const holder = useRef<THREE.Group>(null);
 
   useFrame((state, rawDt) => {
@@ -470,9 +568,19 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef }: Ch
     h.rotation.y = rt.heading;
 
     const t = state.clock.elapsedTime;
-    const { root, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, clothes, skinTorso, foam, zzz, zzzSprites, hipY } = rig;
+    const { root, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, hipY } = rig;
     const pose: CharPose = who === 'me' ? (poseRef?.current?.pose ?? 'stand') : 'stand';
     const poseY = poseRef?.current?.y ?? 0;
+
+    // 化妆星星：仅化妆时可见旋转闪烁
+    spark.visible = pose === 'makeup';
+    if (pose === 'makeup') {
+      sparkSprites.forEach((sp, i) => {
+        const a = t * 1.25 + (i / sparkSprites.length) * Math.PI * 2;
+        sp.position.set(Math.cos(a) * 0.3, 0.98 + Math.sin(t * 2.1 + i * 1.4) * 0.055, Math.sin(a) * 0.3);
+        (sp.material as THREE.SpriteMaterial).opacity = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * 3.2 + i * 1.9));
+      });
+    }
 
     // 泡澡/淋浴：脱衣（隐藏衣物 + 素体可见 + 泡泡遮挡）
     const undressed = pose === 'bath' || pose === 'shower';
@@ -527,9 +635,10 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef }: Ch
 
     // —— 姿势（坐下 / 躺床 / 泡澡） ——
     if (pose === 'lie') {
-      // 躺平：头朝家具 +z（床头侧），脸朝天（先 Ry(π) 再 Rx(π/2)）
-      lieWrap.rotation.x = dampN(lieWrap.rotation.x, Math.PI / 2, 8, dt);
-      lieWrap.rotation.y = dampN(lieWrap.rotation.y, Math.PI, 8, dt);
+      // 躺平：头朝家具 -z（床头/枕头侧），脸朝天（Rx(-π/2)：+y 头→-z、+z 脸→+y）
+      // ⚑ v5.5 修复「躺反」：旧版 (π/2, π) 头朝 +z 正好躺在床尾，翻转为头在枕头侧
+      lieWrap.rotation.x = dampN(lieWrap.rotation.x, -Math.PI / 2, 8, dt);
+      lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 8, dt);
       root.position.y = dampN(root.position.y, poseY + 0.06, 8, dt);
       root.rotation.x = dampN(root.rotation.x, 0, 8, dt);
       root.rotation.z = dampN(root.rotation.z, 0, 8, dt);
@@ -572,6 +681,127 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef }: Ch
       foam.children.forEach((f, i) => {
         f.position.y += Math.sin(t * 2.2 + i * 1.3) * 0.00035;
       });
+      return;
+    }
+
+    // —— v5.6 新姿势（做饭 / 吃饭 / 喝东西 / 弹琴 / 弹吉他 / 化妆 / 照镜子） ——
+    /** 站姿基底： lieWrap 复位 + 直腿 + 呼吸起伏 */
+    const standBase = () => {
+      lieWrap.rotation.x = dampN(lieWrap.rotation.x, 0, 10, dt);
+      lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 10, dt);
+      root.position.y = dampN(root.position.y, Math.sin(t * 2.2) * 0.008 + 0.004, 10, dt);
+      root.rotation.x = dampN(root.rotation.x, 0, 10, dt);
+      legL.rotation.x = dampN(legL.rotation.x, 0, 10, dt);
+      legR.rotation.x = dampN(legR.rotation.x, 0, 10, dt);
+      kneeL.rotation.x = dampN(kneeL.rotation.x, 0, 10, dt);
+      kneeR.rotation.x = dampN(kneeR.rotation.x, 0, 10, dt);
+    };
+    /** 坐姿基底： eat/piano/makeup 共用（屈髋屈膝 + 落座高度） */
+    const sitBase = () => {
+      lieWrap.rotation.x = dampN(lieWrap.rotation.x, 0, 10, dt);
+      lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 10, dt);
+      root.position.y = dampN(root.position.y, Math.max(0.02, poseY - hipY), 9, dt);
+      root.rotation.x = dampN(root.rotation.x, 0.03, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, 0, 8, dt);
+      legL.rotation.x = dampN(legL.rotation.x, -1.5, 10, dt);
+      legR.rotation.x = dampN(legR.rotation.x, -1.5, 10, dt);
+      kneeL.rotation.x = dampN(kneeL.rotation.x, 1.44, 10, dt);
+      kneeR.rotation.x = dampN(kneeR.rotation.x, 1.44, 10, dt);
+    };
+
+    if (pose === 'cook') {
+      // —— 做饭：站灶台前，一手持铲推拉颠勺，一手叉腰，微前倾 ——
+      standBase();
+      root.rotation.x = dampN(root.rotation.x, 0.1, 8, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -1.02 + Math.sin(t * 5.2) * 0.3, 12, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.14, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.4 + Math.sin(t * 5.2 + 0.6) * 0.16, 12, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -0.22, 8, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.92, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.55, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, -0.12, 8, dt);
+      return;
+    }
+    if (pose === 'eat') {
+      // —— 吃饭：坐餐桌边，一手循环舀饭送嘴 + 咀嚼 ——
+      sitBase();
+      const lift = Math.max(0, Math.sin(((t * 0.82) % 1) * Math.PI));
+      armR.rotation.x = dampN(armR.rotation.x, -0.5 - lift * 1.42, 14, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.16, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.5 - lift * 0.78, 14, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -0.35, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.18, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.85, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.14 - lift * 0.16, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 7) * 0.02, 10, dt);
+      return;
+    }
+    if (pose === 'drink') {
+      // —— 喝东西：站冰箱前举杯仰头咕咚咕咚 ——
+      standBase();
+      armR.rotation.x = dampN(armR.rotation.x, -2.02, 9, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.2, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.88, 9, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -0.08, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.12, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.14, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, -0.1 + Math.sin(t * 6) * 0.012, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, Math.sin(t * 1.6) * 0.02, 8, dt);
+      return;
+    }
+    if (pose === 'piano') {
+      // —— 弹钢琴：坐琴凳，双臂前伸，前臂交替敲键，身体随节奏轻摇 ——
+      sitBase();
+      const kL = Math.max(0, Math.sin(t * 5.4));
+      const kR = Math.max(0, Math.sin(t * 5.4 + Math.PI));
+      armL.rotation.x = dampN(armL.rotation.x, -1.26, 10, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -1.26, 10, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.22, 8, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.22, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.44 - kL * 0.4, 16, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.44 - kR * 0.4, 16, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.18, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, Math.sin(t * 2.6) * 0.028, 8, dt);
+      return;
+    }
+    if (pose === 'guitar') {
+      // —— 弹吉他：站姿抱琴，一手扫弦一手按弦，身体摇摆点脚 ——
+      standBase();
+      armR.rotation.x = dampN(armR.rotation.x, -0.88, 10, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.34, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -1.12 + Math.sin(t * 7.2) * 0.24, 14, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -0.78, 10, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.52, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.5, 10, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 3.4) * 0.06, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, Math.sin(t * 3.4) * 0.035, 8, dt);
+      root.position.y = dampN(root.position.y, Math.abs(Math.sin(t * 3.4)) * 0.012 + 0.004, 10, dt);
+      return;
+    }
+    if (pose === 'makeup') {
+      // —— 化妆：坐梳妆台小凳，一手持粉扑轻拍脸颊，歪头照镜子 ——
+      sitBase();
+      armR.rotation.x = dampN(armR.rotation.x, -1.6 + Math.sin(t * 2.9) * 0.16, 12, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.3, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -1.02, 10, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -0.3, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.16, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.72, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.05, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 1.9) * 0.1, 8, dt);
+      return;
+    }
+    if (pose === 'mirror') {
+      // —— 照镜子：一手叉腰一手撩头发，左右打量自己 ——
+      standBase();
+      armL.rotation.x = dampN(armL.rotation.x, -0.2, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.98, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.6, 8, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -1.52 + Math.sin(t * 1.8) * 0.12, 9, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.34, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.92, 9, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 1.4) * 0.12, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, Math.sin(t * 0.9) * 0.04, 8, dt);
       return;
     }
 

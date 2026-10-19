@@ -76,6 +76,14 @@ interface HomePayload {
   charStyle?: string;
   /** 昼夜跟随真实时间 */
   nightAuto?: boolean;
+  /** 「我」的穿搭编号（衣柜换装） */
+  outfit?: number;
+  /** 做饭系统：一桌好菜已上桌 */
+  mealReady?: boolean;
+  /** 地板纹理 */
+  floorTex?: string;
+  /** 墙纸纹理 */
+  wallTex?: string;
   /** 「我」正在进行的家具动作（重进页面恢复姿势） */
   act?: { type?: string; itemId?: string };
 }
@@ -121,7 +129,12 @@ function cleanHex(v: unknown): string | undefined {
 
 const DIRS = new Set(['up', 'down', 'left', 'right']);
 /** 可持久化的家具动作类型（与前端 CharAction 对齐） */
-const ACT_TYPES = new Set(['sit', 'lie', 'bath', 'shower', 'watch', 'work']);
+const ACT_TYPES = new Set([
+  'sit', 'lie', 'bath', 'shower', 'watch', 'work',
+  'cook', 'eat', 'drink', 'dress', 'play', 'makeup', 'mirror',
+]);
+const FLOOR_TEXES = new Set(['plain', 'wood', 'check']);
+const WALL_TEXES = new Set(['plain', 'dot', 'stripe']);
 
 /** 宽松清洗 HomeState（3D 版 v5 两室一厅）；结构不合法返回 null */
 function normalizeHome(raw: unknown): HomePayload | null {
@@ -234,6 +247,10 @@ function normalizeHome(raw: unknown): HomePayload | null {
     fp: r.fp === true,
     charStyle: r.charStyle === 'real' ? 'real' : r.charStyle === 'cartoon' ? 'cartoon' : undefined,
     nightAuto: r.nightAuto !== false,
+    outfit: clampInt(r.outfit, 0, 9) ?? undefined,
+    mealReady: r.mealReady === true,
+    floorTex: typeof r.floorTex === 'string' && FLOOR_TEXES.has(r.floorTex) ? r.floorTex : undefined,
+    wallTex: typeof r.wallTex === 'string' && WALL_TEXES.has(r.wallTex) ? r.wallTex : undefined,
     act,
   };
 }

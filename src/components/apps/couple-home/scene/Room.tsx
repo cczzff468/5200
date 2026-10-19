@@ -41,8 +41,9 @@ import {
   ROOM_Z,
 } from '../catalog';
 
-// ---------------- 木地板纹理 ----------------
+// ---------------- 地板/墙面纹理（E3：装修面板可选，颜色仍由材质 color 相乘生效） ----------------
 
+/** 默认木纹条地板（与旧版一致） */
 function makeFloorTexture(): THREE.CanvasTexture {
   const S = 512;
   const cv = document.createElement('canvas');
@@ -81,6 +82,98 @@ function makeFloorTexture(): THREE.CanvasTexture {
   tex.repeat.set(3, 2);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
+  return tex;
+}
+
+/** 大格瓷砖地板（素雅方格 + 细缝） */
+function makeFloorCheckerTexture(): THREE.CanvasTexture {
+  const S = 512;
+  const cv = document.createElement('canvas');
+  cv.width = S;
+  cv.height = S;
+  const ctx = cv.getContext('2d')!;
+  ctx.fillStyle = '#f6f4ef';
+  ctx.fillRect(0, 0, S, S);
+  const cell = S / 4;
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      if ((i + j) % 2 === 0) {
+        ctx.fillStyle = 'rgba(224,220,210,0.55)';
+        ctx.fillRect(i * cell, j * cell, cell, cell);
+      }
+    }
+  }
+  ctx.strokeStyle = 'rgba(190,186,176,0.6)';
+  ctx.lineWidth = 3;
+  for (let i = 0; i <= 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * cell, 0);
+    ctx.lineTo(i * cell, S);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i * cell);
+    ctx.lineTo(S, i * cell);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 2);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+/** 墙纸碎花（白底 + 淡粉小花点阵，颜色由材质 color 相乘） */
+function makeWallDotTexture(): THREE.CanvasTexture {
+  const S = 256;
+  const cv = document.createElement('canvas');
+  cv.width = S;
+  cv.height = S;
+  const ctx = cv.getContext('2d')!;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, S, S);
+  const dot = (x: number, y: number, r: number, c: string) => {
+    ctx.fillStyle = c;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      const x = i * 64 + (j % 2 ? 32 : 0) + 32;
+      const y = j * 64 + 32;
+      dot(x, y, 7, 'rgba(242,169,188,0.4)');
+      dot(x + 14, y + 9, 3, 'rgba(242,169,188,0.25)');
+      dot(x - 13, y - 8, 2.5, 'rgba(180,205,185,0.3)');
+    }
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 2);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** 墙纸细竖条纹（白底 + 淡色竖条，颜色由材质 color 相乘） */
+function makeWallStripeTexture(): THREE.CanvasTexture {
+  const S = 256;
+  const cv = document.createElement('canvas');
+  cv.width = S;
+  cv.height = S;
+  const ctx = cv.getContext('2d')!;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, S, S);
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(213,206,194,0.4)' : 'rgba(226,221,210,0.32)';
+    ctx.fillRect(i * 32, 0, 16, S);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 2);
+  tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
@@ -360,6 +453,7 @@ function DoorLintel({
   night,
   focusRef,
   hostBox,
+  wallTexMap,
 }: {
   pos: [number, number, number];
   alongAxis: 'x' | 'z';
@@ -368,6 +462,7 @@ function DoorLintel({
   focusRef?: RefObject<FocusPos>;
   /** 所在整墙（含门洞跨度）的剖面盒：视线穿过墙上任意处 → 门梁随墙同隐 */
   hostBox: THREE.Box3;
+  wallTexMap?: THREE.Texture;
 }) {
   const ref = useRef<THREE.Group>(null);
   useWallOcclusionFade(ref, useMemo(() => [hostBox], [hostBox]), focusRef);
@@ -376,23 +471,23 @@ function DoorLintel({
     <group ref={ref}>
       <mesh position={pos} castShadow receiveShadow>
         <boxGeometry args={size} />
-        <meshStandardMaterial color={wallCol ?? (night ? '#e9e4d8' : '#f7f3ec')} roughness={0.95} />
+        <meshStandardMaterial color={wallCol ?? (night ? '#e9e4d8' : '#f7f3ec')} map={wallTexMap} roughness={0.95} />
       </mesh>
     </group>
   );
 }
 const DOOR_H = 2.06;
 
-function Wall({ def, night, wallCol, focusRef }: { def: WallDef; night: boolean; wallCol?: string; focusRef?: RefObject<FocusPos> }) {
+function Wall({ def, night, wallCol, wallTexMap, focusRef }: { def: WallDef; night: boolean; wallCol?: string; wallTexMap?: THREE.Texture; focusRef?: RefObject<FocusPos> }) {
   const ref = useRef<THREE.Group>(null);
   useWallOcclusionFade(ref, useMemo(() => [boxOf(def)], [def]), focusRef);
 
   return (
     <group ref={ref}>
-      {/* 墙体：暖白（支持用户自定义色） */}
+      {/* 墙体：暖白（支持用户自定义色 + 墙纸纹理） */}
       <mesh position={def.pos} castShadow receiveShadow>
         <boxGeometry args={def.size} />
-        <meshStandardMaterial color={wallCol ?? (night ? '#e9e4d8' : '#f7f3ec')} roughness={0.95} />
+        <meshStandardMaterial color={wallCol ?? (night ? '#e9e4d8' : '#f7f3ec')} map={wallTexMap} roughness={0.95} />
       </mesh>
       {/* 踢脚线：浅灰（内侧面贴墙） */}
       {def.baseboard !== false && (
@@ -927,6 +1022,10 @@ export interface RoomProps {
   onToggleBathDoor?: () => void;
   /** 相机对焦物（生活模式=小人，编辑模式=轨道中心）；隔墙用它判断是否挡在镜头与对焦物之间 */
   focusRef?: RefObject<FocusPos>;
+  /** 地板纹理（全屋通用，颜色仍分房间）：wood 木纹（默认）/ plain 素色 / check 大格瓷砖 */
+  floorTex?: 'plain' | 'wood' | 'check';
+  /** 墙纸纹理（全屋通用，颜色仍分房间）：plain 素色（默认）/ dot 碎花 / stripe 细条纹 */
+  wallTex?: 'plain' | 'dot' | 'stripe';
 }
 
 export default function Room({
@@ -961,8 +1060,16 @@ export default function Room({
   onToggleKitchenDoor,
   onToggleBathDoor,
   focusRef,
+  floorTex = 'wood',
+  wallTex = 'plain',
 }: RoomProps) {
-  const floorTex = useMemo(() => makeFloorTexture(), []);
+  const floorWoodTex = useMemo(() => makeFloorTexture(), []);
+  const floorCheckTex = useMemo(() => makeFloorCheckerTexture(), []);
+  const wallDotTex = useMemo(() => makeWallDotTexture(), []);
+  const wallStripeTex = useMemo(() => makeWallStripeTexture(), []);
+  /** 当前选用的地板/墙纸纹理（plain = 无贴图纯色） */
+  const floorMap = floorTex === 'wood' ? floorWoodTex : floorTex === 'check' ? floorCheckTex : null;
+  const wallMap = wallTex === 'dot' ? wallDotTex : wallTex === 'stripe' ? wallStripeTex : null;
 
   const doorBed = doorPos?.bed ?? DOORS[0].def;
   const doorKt = doorPos?.kt ?? DOORS[1].def;
@@ -1001,10 +1108,10 @@ export default function Room({
     });
   }, [walls, winPos]);
 
-  /** 各房间地板材质（共享同一张纹理，颜色独立） */
+  /** 各房间地板材质（共享同一张纹理，颜色独立；plain = 素色无贴图） */
   const floorMat = (col?: string) => (
     <meshStandardMaterial
-      map={floorTex}
+      map={floorMap ?? undefined}
       color={col ?? (night ? '#c9c5bb' : '#f5f2ec')}
       roughness={0.9}
     />
@@ -1082,14 +1189,15 @@ export default function Room({
           def={def}
           night={night}
           wallCol={def.room === 'br' ? wallColBed : def.room === 'kt' ? wallColK : def.room === 'ba' ? wallColB : wallCol}
+          wallTexMap={wallMap ?? undefined}
           focusRef={focusRef}
         />
       ))}
 
       {/* 门洞上方的门头梁 ×3（与所在整墙同隐同现） */}
-      <DoorLintel pos={[doorBed, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallCol} night={night} focusRef={focusRef} hostBox={slabs.bed} />
-      <DoorLintel pos={[doorKt, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallColK} night={night} focusRef={focusRef} hostBox={slabs.kt} />
-      <DoorLintel pos={[ROOM_X + WALL_T / 2, DOOR_H + (WALL_H - DOOR_H) / 2, doorBath]} alongAxis="z" wallCol={wallCol} night={night} focusRef={focusRef} hostBox={slabs.bath} />
+      <DoorLintel pos={[doorBed, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallCol} night={night} focusRef={focusRef} hostBox={slabs.bed} wallTexMap={wallMap ?? undefined} />
+      <DoorLintel pos={[doorKt, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallColK} night={night} focusRef={focusRef} hostBox={slabs.kt} wallTexMap={wallMap ?? undefined} />
+      <DoorLintel pos={[ROOM_X + WALL_T / 2, DOOR_H + (WALL_H - DOOR_H) / 2, doorBath]} alongAxis="z" wallCol={wallCol} night={night} focusRef={focusRef} hostBox={slabs.bath} wallTexMap={wallMap ?? undefined} />
 
       {/* 三扇门（点击开合 / 编辑模式选中滑行；门牌挂门洞上方） */}
       <HouseDoor

@@ -21070,3 +21070,49 @@ Work Log:
 
 Stage Summary:
 - 本轮零代码改动；躺反修复已定位（lie 朝向需翻转 π 并全角度自测）待用户批准
+
+---
+Task ID: cottage-v12a
+Agent: 家具建模子代理
+Task: 新建 Cozy3D.tsx —— 15 件程序化新家具模型
+
+Work Log:
+- 前情：读 worklog 最后 3 个 section（v9 卫浴+小人 / v10 穿墙淡出修复 / v11 待办菜单）确认「新家具」为用户勾选方向；读 Small3D.tsx 前 250 行学习 mat() 暖奶油材质辅助与注释风格，读 Furn3D.tsx TubExtras(331~445) 学习 useFrame + THREE.MathUtils.damp + Math.min(dt,0.05) 动画惯例
+- 新建 src/components/apps/couple-home/scene/Cozy3D.tsx（唯一改动文件，未动 catalog/types/Furn3D 等任何其他文件）：'use client' + 中文注释头；import 仅 react(useMemo/useRef/ReactElement 类型)、three、@react-three/fiber(useFrame)，零新增依赖
+- 共享设施：CozyProps 接口（col/on/open/playing/brewing/fedAt）；mat() 材质辅助（roughness 0.85 主 + 金属件 0.3/0.75）；shade() 同色系加深（坐坑/裙边/碗沿阴影感）；makeNoteTexture（canvas 画 ♪♫♬）与 makeSteamTexture（径向渐变白雾）贴图工厂
+- 15 件组件全部原点=底部中心贴地（WallShelf3D 例外=挂板背面中心）：Curtain3D（黄铜杆 h2.25+两端球头、每片 6 根竖向胶囊波浪条，open 时 damp 收拢 ±0.95/30% 宽）；Fireplace3D（奶白炉体+木搁板+黑内腔+炭灰炉膛口+交叉木柴，on 时 3 片 emissive 锥火焰 sin 抖动 + 余烬 pointLight damp 往返 0.9~1.4 flicker distance 3）；Fishtank3D（木柜座+透明玻璃缸+浅蓝水体顶部留 0.06 空气+砂砾+2 水草 sin 摆，3 条小鱼椭圆轨道各自半径/相位/高度且 rotation 朝向速度方向，5 气泡循环上浮，fedAt<6s 时 8 粒食物下沉+鱼速×2.2+轨道缩 45% 聚食，聚食度 damp 过渡）；Beanbag3D（压扁大球+更暗小球坐坑+锥台裙边）；Piano3D（主体+斜上盖+木键盘托+白键×14+黑键×10+红毡条+双前腿+黄铜踏板×3+琴凳 z+0.72，playing 时每 0.16s 随机 2~3 白键 damp 下沉 0.012 + 3 音符精灵循环上浮淡出）；Guitar3D（8 字双球身+音孔黄铜圈+琴桥+琴颈指板品丝+弦钮+4 弦+小三脚架，整体 rotation.x=-0.21 后仰贴地，playing 时琴身 42Hz 微振 + 音符上浮）；StandingMirror3D（circle 椭圆镜 metalness0.9/envMapIntensity1.2+樱粉 torus 框+背板+斜撑+双足，后仰 4°）；StarProjector3D（底盘+磨砂半球罩 emissive damp+开关点+紫 pointLight 0.7/2.5，on 时 70 星点 THREE.Points（半径 1.6 @y2.46 加法混合）damp 显隐并缓慢自转）；Canopy3D（四立柱 h1.95+顶框四横杆+顶面纱 0.25+四侧垂纱 0.3 DoubleSide，床头侧只挂两窄条，垂纱顶端支点 sin 微摆 0.02，柱顶黄铜球饰）；CoffeeMaker3D（机身塔+圆弧盖+出液罩+旋钮+玻璃壶含咖啡液与把+侧面小杯，brewing 时 3 蒸汽精灵循环上浮放大淡出+指示灯 emissive damp 亮红）；FruitBowl3D（半球壳木碗 DoubleSide+碗沿 torus+3 苹果带柄+香蕉 torus 0.6π 弧段带两端蒂+2 橙子）；WallShelf3D（板 0.9×0.2 背面原点+隐形托架+3 竖书彩色书脊+多肉盆栽+玻璃罐棉球）；BathCurtain3D（黄铜杆 h2.0+8 挂环+白纱帘 plane 0.45 DoubleSide，open 时 damp 收拢 x+0.7/25% 堆褶，底边微摆）；Toiletries3D（漱口杯+2 斜插牙刷彩色刷头+皂碟椭圆皂+一白一琥珀按压瓶带泵头）；Scale3D（玻璃感扁盒 0.34×0.045+深色显示窗+淡绿 emissive 数字条+四防滑脚）
+- 动画全部 useFrame 实现（damp/sin/循环相位），无 setInterval；castShadow 仅大件主体，小零件不投影；transparent 面料均 depthWrite=false 防排序瑕疵
+- 自检：bunx tsc --noEmit 修 2 处（气泡数组引用名 BUBBLE_XZ、牙刷 map 元组类型标注）后零错误；git status 确认仅新增 Cozy3D.tsx 一个源文件
+
+Stage Summary:
+- 导出：CozyProps 接口 + 15 个组件 + COZY_PARTS 注册表（kind：curtain/fireplace/fishtank/beanbag/piano/guitar/standingMirror/starLamp/canopy/coffeeMaker/fruitBasket/wallShelf/bathCurtain/toiletries/scale，均为 (p: CozyProps) => ReactElement）
+- footprint（宽×深×高，米）：curtain 2.4×0.16×2.30 / fireplace 1.58×0.5×1.10 / fishtank 0.9×0.45×1.10 / beanbag 0.98×0.9×0.53 / piano 1.5×1.15×1.24（含琴凳，凳面在 z+0.72）/ guitar 0.55×0.45×1.05（后仰 12°）/ standingMirror 0.95×0.55×1.65（后仰 4°）/ starLamp 0.24×0.24×0.13（星点覆盖半径 1.6 @y2.46）/ canopy 2.0×2.34×1.95 / coffeeMaker 0.38×0.28×0.38 / fruitBasket 0.4×0.4×0.24 / wallShelf 0.9×0.2×0.22（原点=挂板背面中心，挂墙件）/ bathCurtain 2.1×0.08×2.0 / toiletries 0.4×0.2×0.26 / scale 0.34×0.34×0.06
+- 动画要点：curtain/bathCurtain damp 开合（位置+scale.x）；fireplace 火焰 sin 抖动+光强 damp 0.9~1.4 flicker；fishtank 鱼轨道+朝向速度方向+投食 6s 加速聚食+气泡/食物循环；piano 随机键 damp 按压+音符精灵；guitar 微振+音符精灵；starLamp 星点 damp 显隐+自转；canopy 垂纱 sin 风摆；coffeeMaker 蒸汽精灵+指示灯
+- 待接线（主代理）：catalog kind→COZY_PARTS 映射、CozyProps 状态透传（open/on/playing/brewing/fedAt）、MODEL_SCALE 与挂墙件 y 定位
+
+---
+Task ID: cottage-v12-cozy
+Agent: 主协调 Agent (Z.ai Code)
+Task: 拾光小屋 v5.6——躺反修复 + 15 件温馨新家具 + 交互大扩展（做饭/换装/化妆/弹琴/照镜子/喝一杯/开饭/投喂/换台）+ 昼夜平滑 + 地板墙纸纹理 + 性能优化
+
+Work Log:
+- A1 躺反修复：Char3D lie 姿势从 (x=π/2,y=π) 翻转为 (x=-π/2,y=0)——头从局部 +z（床尾）转到 -z（床头/枕头侧）；Zzz 精灵 z 坐标同步翻到 -0.78 侧；sleep 锚点 dz 0.1→0.2 头更贴枕；实测截图 Zzz 在床头侧（粉玩偶/台灯端）+ 用户原报 Bug 场景复验
+- A2 坐姿审计：发现 watch/work 等面向家具型动作朝向系统性错误（背对电视/电脑）——新增 FACE_ACTS 集合，anchorOf 对 watch/work/cook/eat/drink/dress/play/makeup/mirror 统一 ry+π 面向家具；实测看电视/做饭/开饭全部脸对家具
+- B 子代理并行交付 Cozy3D.tsx（15 件程序化建模：curtain 落地窗帘/fireplace 壁炉火光/fishtank 鱼群游动+投喂聚食/beanbag 豆袋/piano 立式钢琴琴凳+跳键+音符/guitar 木吉他/standingMirror 粉框穿衣镜/starLamp 星空投影灯+天花板星点/canopy 床幔纱帐/coffeeMaker 蒸汽咖啡机/fruitBasket 果盘/wallShelf 挂墙架/bathCurtain 浴帘/toiletries 洗漱套装/scale 体重秤）
+- B 接线：Furn3D 注册 COZY_PARTS 按 kind 渲染（col/on/open/playing/brewing/fedAt 透传）；types 新增 15 kind + FurnitureState(channel/fedAt/brewing) + HomeState(outfit/floorTex/wallTex/mealReady) + acts(cook/eat/drink/dress/play/makeup/mirror/feed)；catalog 全条目+商城上架（decor/sofa/lamp/appliance/kitchen/bathroom 分区）；migrateCozyV56 幂等迁移（落点 free() 防撞+canopy 跟随床位）+ 首版坐标落错房间（x>1.5 进了厨房）的 COZY_FIX 老档矫正；defaultHome 全量补默认布局
+- ⚑ 床幔挡点击修复：Canopy3D 遍历子孙 mesh raycast=()=>{}——罩床不拦截「睡觉」点击（实测点床弹按钮）
+- C1 电视频道：TV3D Canvas 纹理三频道（1 流光云朵+弹跳球 / 2 啵啵新闻：旋转地球+滚动字幕 / 3 拾光音乐台：跳动均衡器），换台重建纹理；HUD 看电视时加「换台」按钮 cycle st.channel 持久化
+- C2 做饭系统：灶台「做一顿饭」→ 寻路站位（面向灶台）+ cook 姿势（持铲推拉+叉腰）+ StoveSteam 锅上蒸汽 5 秒 → mealReady=true + 餐桌 MealDish（红烧肉盘+汤碗）→ 餐桌弹「开饭」→ 坐东缘面朝桌 eat 姿势（舀饭送嘴循环+咀嚼）→「吃饱啦」收盘；半途取消不上菜
+- C3 冰箱「喝一杯」：自动开门+drink 姿势（举杯仰头）3.8s 自动结束；C4 衣柜「换套衣服」：开门+1.5s 后 outfit=(o+1)%3 三套色板（me 樱粉家居服/薄荷慵懒风，partner 燕麦/雾蓝）自动结束，outfit 入库+Char3D 重建 rig；C5 梳妆台「化个妆」：坐姿+粉扑轻拍+Char3D 星光精灵环绕闪烁；C6 躺床自动关全屋灯（entry.light && st.on）+ BedNightLight 暖光小夜灯贴身渐亮
+- 新姿势 7 个（Char3D）：cook/eat/drink/piano(交替敲键)/guitar(扫弦摇摆点脚)/makeup/mirror(叉腰撩发打量)，standBase/sitBase 复用基底
+- E1 状态持久化：act 恢复带 full.pose 分流+AUTO_ACTS（cook/drink/dress）不恢复不持久化；outfit/mealReady/floorTex/wallTex 入库+adoptHome 同步；API route ACT_TYPES 扩 13 种+新字段清洗（floorTex/wallTex 白名单）
+- E2 昼夜平滑：nightMix 阻尼（λ2.2）驱动 NightBlend 天空 lerp + Lights 四灯强度/颜色/太阳月亮方位渐变；实测中间态截图确认丝滑
+- E3 纹理：Room 新增 makeFloorCheckerTexture（大格瓷砖）+ makeWallDotTexture（碎花点阵）+ makeWallStripeTexture（细条纹），装修面板加「地板花纹 木纹/素色/瓷砖」「墙纸花纹 素色/碎花/条纹」chips；实测瓷砖地板+碎花墙纸生效
+- E4 性能：Canvas dpr [1,2]→[1,1.75] + performance.min 0.5
+- 端到端实测（agent-browser）：迁移 15 件全落位（API 核对坐标）→ 躺反修复（Zzz 床头侧铁证）→ 做饭全流程（站位颠勺+不做了按钮→饭菜上桌→开饭入座→吃饱收盘）→ 电视三频道换台（新闻台地球/音乐台均衡器截图）→ 看电视面朝电视 → 窗帘点击开合（帘条收拢露窗）→ 弹琴入座（演奏结束按钮）→ 昼夜平滑两态 → 瓷砖/碎花纹理 → 连续弧线滑动手感丝滑 → 控制台零错误（仅 three 弃用 warning 预存）
+- 排障记录：①床幔拦截床点击（raycast 穿透修复）；②piano/starLamp/standingMirror 迁移坐标落错厨房（x>1.5 越界）——COZY_FIX 老档矫正；③传送测试被 act 持久化恢复拉回床上（E1 特性正常，测试时需先清 act）；④API 读数有 2.5s 推送延迟（debounce 正常）
+
+Stage Summary:
+- 拾光小屋 v5.6：躺反修复+面向家具朝向修复（watch/work 系列背对 bug 一并修正）+ 15 件程序化新家具（全迁移落位）+ 7 个新姿势 + 做饭吃饭/换装/化妆/弹琴/照镜子/喝一杯/投喂/换台/体重秤九大交互 + 睡觉关灯小夜灯 + 昼夜平滑 + 地板墙纸纹理 + dpr/性能优化
+- 数据向后兼容：全部新字段可选 + migrateCozyV56 幂等 + COZY_FIX 老档矫正，老档无损升级（86→101 件）
+- 涉及文件：types.ts、catalog.ts、scene/{Char3D,HomeScene,Room,Furn3D,TV3D,Cozy3D(新)}.tsx、CoupleHome.tsx、api/couple-home/route.ts、worklog.md

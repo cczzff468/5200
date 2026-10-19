@@ -22,10 +22,12 @@ export interface TV3DProps {
   night: boolean;
   /** 用户自选颜色（作用于支架与边框背面） */
   col?: string;
+  /** 频道（1=流光云朵 / 2=啵啵新闻 / 3=音乐台；undefined = 流光） */
+  channel?: number;
 }
 
-/** 屏幕动态画面：柔和流动的三色渐变（浅粉 / 天青 / 杏黄） */
-function makeScreenTexture(): { tex: THREE.CanvasTexture; draw: (t: number) => void } {
+/** 屏幕动态画面：频道制（1 流光云朵 / 2 啵啵新闻 / 3 音乐台），换台即重建纹理 */
+function makeScreenTexture(channel: number): { tex: THREE.CanvasTexture; draw: (t: number) => void } {
   const W = 256;
   const H = 152;
   const cv = document.createElement('canvas');
@@ -45,23 +47,108 @@ function makeScreenTexture(): { tex: THREE.CanvasTexture; draw: (t: number) => v
     // 深底
     ctx.fillStyle = '#101318';
     ctx.fillRect(0, 0, W, H);
-    // 流动光斑
-    for (const b of blobs) {
-      const x = (b.px + Math.sin(t * b.sx) * 0.18 + 1) * 0.5 * W;
-      const y = (b.py + Math.cos(t * b.sy) * 0.16 + 1) * 0.5 * H;
-      const r = b.r * W * 0.6;
-      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, `rgba(${b.c},0.85)`);
-      g.addColorStop(1, `rgba(${b.c},0)`);
-      ctx.fillStyle = g;
+    if (channel === 2) {
+      // —— 频道 2「啵啵新闻」：深蓝演播室 + 旋转地球 + 底部滚动条 ——
+      const g2 = ctx.createLinearGradient(0, 0, 0, H);
+      g2.addColorStop(0, '#1b2c4a');
+      g2.addColorStop(1, '#101a30');
+      ctx.fillStyle = g2;
+      ctx.fillRect(0, 0, W, H);
+      // 旋转地球（橙黄经纬线）
+      const ex = W * 0.78;
+      const ey = H * 0.4;
+      const er = W * 0.13;
+      ctx.strokeStyle = 'rgba(243,214,150,0.85)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ex, ey, er, 0, Math.PI * 2);
+      ctx.stroke();
+      for (let i = 0; i < 3; i++) {
+        const ph = (t * 0.5 + i / 3) % 1;
+        const rx = er * Math.abs(Math.cos(ph * Math.PI));
+        ctx.beginPath();
+        ctx.ellipse(ex, ey, Math.max(1.5, rx), er, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      for (let i = 0; i < 4; i++) {
+        const lat = ey + (i - 1.5) * er * 0.45;
+        ctx.beginPath();
+        ctx.ellipse(ex, lat, er * Math.sqrt(Math.max(0.05, 1 - ((lat - ey) / er) ** 2)), er * 0.14, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(243,214,150,0.22)';
+      ctx.beginPath();
+      ctx.arc(ex, ey, er + 6, 0, Math.PI * 2);
+      ctx.fill();
+      // 标题条 + 滚动字幕
+      ctx.fillStyle = '#f2a9bc';
+      ctx.fillRect(0, H * 0.72, W, H * 0.14);
+      ctx.fillStyle = '#fff7f9';
+      ctx.font = '900 20px system-ui, sans-serif';
+      ctx.fillText('LIVE', W * 0.05, H * 0.815);
+      const scroll = ((t * 46) % (W + 190)) - 150;
+      ctx.fillText('小家新闻：今天也是甜甜的一天', scroll, H * 0.815);
+      // 台标
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.font = '900 17px system-ui, sans-serif';
+      ctx.fillText('啵啵台', W * 0.06, H * 0.2);
+    } else if (channel === 3) {
+      // —— 频道 3「音乐台」：暗紫底 + 跳动均衡器 ——
+      const g3 = ctx.createLinearGradient(0, 0, 0, H);
+      g3.addColorStop(0, '#241a38');
+      g3.addColorStop(1, '#151024');
+      ctx.fillStyle = g3;
+      ctx.fillRect(0, 0, W, H);
+      const bars = 14;
+      const bw = W / (bars * 1.6);
+      for (let i = 0; i < bars; i++) {
+        const v = 0.22 + Math.abs(Math.sin(t * 2.6 + i * 0.9) * Math.cos(t * 1.3 + i * 0.4)) * 0.62;
+        const bh = v * H * 0.62;
+        const hue = 330 + Math.sin(i * 0.6 + t * 0.5) * 30;
+        ctx.fillStyle = `hsl(${hue}, 62%, 68%)`;
+        const x = (i + 0.3) * (W / bars) + bw * 0.2;
+        ctx.fillRect(x, H * 0.82 - bh, bw, bh);
+        ctx.fillStyle = 'rgba(255,255,255,0.16)';
+        ctx.fillRect(x, H * 0.82 - bh - 5, bw, 3);
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.font = '900 17px system-ui, sans-serif';
+      ctx.fillText('♪ 拾光电台', W * 0.06, H * 0.16);
+    } else {
+      // —— 频道 1「流光云朵」（默认）：三色流动光斑 + 弹跳小球 ——
+      for (const b of blobs) {
+        const x = (b.px + Math.sin(t * b.sx) * 0.18 + 1) * 0.5 * W;
+        const y = (b.py + Math.cos(t * b.sy) * 0.16 + 1) * 0.5 * H;
+        const r = b.r * W * 0.6;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(${b.c},0.85)`);
+        g.addColorStop(1, `rgba(${b.c},0)`);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+      }
+      // 弹跳小球（影子 + 反弹）
+      const bx = (0.5 + Math.sin(t * 0.7) * 0.32) * W;
+      const bp = (t * 0.9) % 1;
+      const by = H * 0.72 - Math.abs(Math.sin(bp * Math.PI)) * H * 0.34;
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.beginPath();
+      ctx.ellipse(bx, H * 0.76, 14 - by / H * 4, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#f7c66b';
+      ctx.beginPath();
+      ctx.arc(bx, by, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.65)';
+      ctx.beginPath();
+      ctx.arc(bx - 3, by - 3, 4, 0, Math.PI * 2);
+      ctx.fill();
+      // 底部淡淡反光带（像画面里的地平线）
+      const lg = ctx.createLinearGradient(0, H * 0.7, 0, H);
+      lg.addColorStop(0, 'rgba(255,255,255,0)');
+      lg.addColorStop(1, 'rgba(255,255,255,0.10)');
+      ctx.fillStyle = lg;
       ctx.fillRect(0, 0, W, H);
     }
-    // 底部淡淡反光带（像画面里的地平线）
-    const lg = ctx.createLinearGradient(0, H * 0.7, 0, H);
-    lg.addColorStop(0, 'rgba(255,255,255,0)');
-    lg.addColorStop(1, 'rgba(255,255,255,0.10)');
-    ctx.fillStyle = lg;
-    ctx.fillRect(0, 0, W, H);
     tex.needsUpdate = true;
   };
   draw(0);
@@ -73,8 +160,8 @@ const PANEL_W = 1.8;
 const PANEL_H = 1.05;
 const PANEL_T = 0.05;
 
-export default function TV3D({ on, night, col }: TV3DProps) {
-  const screen = useMemo(() => makeScreenTexture(), []);
+export default function TV3D({ on, night, col, channel = 1 }: TV3DProps) {
+  const screen = useMemo(() => makeScreenTexture(channel), [channel]);
   const screenMat = useRef<THREE.MeshStandardMaterial>(null);
   const frontGlow = useRef<THREE.PointLight>(null);
   const backGlow = useRef<THREE.PointLight>(null);
