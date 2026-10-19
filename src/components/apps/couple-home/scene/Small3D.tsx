@@ -743,3 +743,187 @@ export function Chandelier3D({ on, night, col }: { on: boolean; night: boolean; 
     </group>
   );
 }
+
+// ---------------- 玻璃淋浴房（v5.4；背板在 +x/+z 角，开向 -x/-z；开 = 花洒出水） ----------------
+
+export function Shower3D({ on, col }: { on: boolean; col?: string }) {
+  const body = col ?? '#fdfbf5';
+  const chrome = '#c9d2d8';
+  const glassMat = { color: '#cfe6ee', transparent: true, opacity: 0.22, roughness: 0.1, metalness: 0.1 } as const;
+  return (
+    <group>
+      {/* 淋浴底盘（微凸圆角方） */}
+      <mesh position={[0, 0.035, 0]} castShadow receiveShadow>
+        <boxGeometry args={[0.94, 0.07, 0.94]} />
+        {mat(body, 0.5)}
+      </mesh>
+      <mesh position={[0, 0.075, 0]}>
+        <boxGeometry args={[0.86, 0.015, 0.86]} />
+        {mat('#eef2f0', 0.4)}
+      </mesh>
+      {/* 背板 ×2（靠墙角 +x/+z，固定玻璃；另两面步入式开放） */}
+      <mesh position={[0.455, 1.0, 0]} castShadow>
+        <boxGeometry args={[0.03, 1.9, 0.94]} />
+        <meshStandardMaterial {...glassMat} />
+      </mesh>
+      <mesh position={[0, 1.0, 0.455]} castShadow>
+        <boxGeometry args={[0.94, 1.9, 0.03]} />
+        <meshStandardMaterial {...glassMat} />
+      </mesh>
+      {/* 玻璃拉手（进浴口侧沿） */}
+      <mesh position={[0.44, 1.05, 0.13]} rotation={[0, Math.PI / 2, 0]}>
+        <cylinderGeometry args={[0.012, 0.012, 0.24, 8]} />
+        {mat(chrome, 0.35, { metalness: 0.7 })}
+      </mesh>
+      {/* 立柱 + 花洒臂 + 顶喷（东北角立柱） */}
+      <mesh position={[0.38, 0.95, 0.38]} castShadow>
+        <cylinderGeometry args={[0.02, 0.024, 1.9, 10]} />
+        {mat(chrome, 0.35, { metalness: 0.7 })}
+      </mesh>
+      <mesh position={[0.24, 1.92, 0.1]} rotation={[0, 0.5, Math.PI / 2]}>
+        <cylinderGeometry args={[0.014, 0.014, 0.42, 8]} />
+        {mat(chrome, 0.35, { metalness: 0.7 })}
+      </mesh>
+      <mesh position={[0.06, 1.88, -0.04]} rotation={[0.3, 0, 0]}>
+        <cylinderGeometry args={[0.085, 0.055, 0.05, 18]} />
+        {mat(chrome, 0.3, { metalness: 0.7 })}
+      </mesh>
+      {/* 控制旋钮 */}
+      <mesh position={[0.36, 0.75, 0.35]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.03, 0.03, 0.025, 14]} />
+        {mat(on ? '#8fd0e8' : '#dfe5e8', 0.4, { emissive: on ? '#5db6d8' : '#000000', emissiveIntensity: on ? 0.7 : 0 })}
+      </mesh>
+      {/* 开 = 花洒出水（半透明水丝锥） */}
+      {on && (
+        <mesh position={[0.06, 1.62, -0.04]}>
+          <coneGeometry args={[0.11, 1.5, 14, 1, true]} />
+          <meshStandardMaterial color="#bfe3f2" transparent opacity={0.32} roughness={0.15} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+// ---------------- 浴室柜洗手台（柜体 + 台面 + 陶瓷盆 + 冷热龙头） ----------------
+
+export function Basin3D({ col }: { col?: string }) {
+  const body = col ?? '#fdfbf5';
+  const chrome = '#c9d2d8';
+  return (
+    <group>
+      {/* 柜体 */}
+      <mesh position={[0, 0.3, 0]} castShadow receiveShadow>
+        <boxGeometry args={[0.9, 0.6, 0.48]} />
+        {mat(body, 0.7)}
+      </mesh>
+      {/* 柜门缝 ×2 + 小圆拉手 */}
+      <mesh position={[0, 0.3, 0.242]}>
+        <boxGeometry args={[0.012, 0.52, 0.005]} />
+        {mat('#d8d4ca', 0.7)}
+      </mesh>
+      {[-0.12, 0.12].map((x) => (
+        <mesh key={x} position={[x, 0.42, 0.25]}>
+          <sphereGeometry args={[0.016, 10, 8]} />
+          {mat(chrome, 0.35, { metalness: 0.7 })}
+        </mesh>
+      ))}
+      {/* 台面 */}
+      <mesh position={[0, 0.63, 0]} castShadow>
+        <boxGeometry args={[0.96, 0.05, 0.52]} />
+        {mat('#f4f1ea', 0.45)}
+      </mesh>
+      {/* 陶瓷盆（椭圆浅盆） */}
+      <mesh position={[0, 0.7, 0.02]} castShadow>
+        <cylinderGeometry args={[0.17, 0.13, 0.09, 20]} />
+        {mat('#ffffff', 0.25)}
+      </mesh>
+      <mesh position={[0, 0.745, 0.02]}>
+        <torusGeometry args={[0.165, 0.014, 8, 24]} />
+        {mat('#ffffff', 0.25)}
+      </mesh>
+      {/* 龙头（立柱 + 弯头） */}
+      <mesh position={[0, 0.76, -0.18]} castShadow>
+        <cylinderGeometry args={[0.018, 0.022, 0.16, 10]} />
+        {mat(chrome, 0.3, { metalness: 0.75 })}
+      </mesh>
+      <mesh position={[0, 0.84, -0.13]} rotation={[Math.PI / 2, 0, 0]}>
+        <cylinderGeometry args={[0.013, 0.013, 0.12, 8]} />
+        {mat(chrome, 0.3, { metalness: 0.75 })}
+      </mesh>
+      {/* 冷热把手 ×2 */}
+      {[-0.06, 0.06].map((x) => (
+        <mesh key={x} position={[x, 0.845, -0.18]}>
+          <cylinderGeometry args={[0.012, 0.012, 0.02, 8]} />
+          {mat(x < 0 ? '#a8d4e6' : '#f2b3b3', 0.4)}
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+// ---------------- 挂壁大镜子（挂墙；镜面高反光 + 樱粉细框） ----------------
+
+export function Mirror3D({ col }: { col?: string }) {
+  const frame = col ?? '#f6e3e9';
+  return (
+    <group>
+      {/* 外框 */}
+      <mesh position={[0, 0, 0.02]} castShadow>
+        <boxGeometry args={[0.62, 0.84, 0.035]} />
+        {mat(frame, 0.6)}
+      </mesh>
+      {/* 镜面（高金属度 + 微蓝白 → 假反射质感） */}
+      <mesh position={[0, 0, 0.041]}>
+        <boxGeometry args={[0.54, 0.76, 0.008]} />
+        <meshStandardMaterial color="#e8f1f5" roughness={0.06} metalness={0.85} envMapIntensity={1.2} />
+      </mesh>
+      {/* 顶部柔光（镜面高光条） */}
+      <mesh position={[-0.1, 0.24, 0.047]} rotation={[0, 0, 0.5]}>
+        <planeGeometry args={[0.3, 0.05]} />
+        <meshBasicMaterial color="#ffffff" transparent opacity={0.5} />
+      </mesh>
+      <mesh position={[0.12, 0.05, 0.047]} rotation={[0, 0, 0.5]}>
+        <planeGeometry args={[0.16, 0.03]} />
+        <meshBasicMaterial color="#ffffff" transparent opacity={0.35} />
+      </mesh>
+    </group>
+  );
+}
+
+// ---------------- 毛巾架（挂墙双杆 + 搭着的软毛巾） ----------------
+
+export function TowelRack3D({ col }: { col?: string }) {
+  const chrome = '#c9d2d8';
+  const towel = col ?? '#f5c9d4';
+  return (
+    <group>
+      {/* 底座 ×2 + 双杆 */}
+      {[-0.2, 0.2].map((x) => (
+        <mesh key={`b${x}`} position={[x, 0, 0.03]}>
+          <cylinderGeometry args={[0.018, 0.018, 0.055, 10]} />
+          {mat(chrome, 0.35, { metalness: 0.7 })}
+        </mesh>
+      ))}
+      {[-0.035, 0.045].map((z, i) => (
+        <mesh key={`r${i}`} position={[0, 0, z + 0.02]} rotation={[0, 0, Math.PI / 2]} castShadow>
+          <cylinderGeometry args={[0.011, 0.011, 0.44, 10]} />
+          {mat(chrome, 0.35, { metalness: 0.7 })}
+        </mesh>
+      ))}
+      {/* 搭着的毛巾（垂下两折） */}
+      <mesh position={[0.02, -0.13, 0.045]} castShadow>
+        <boxGeometry args={[0.24, 0.3, 0.022]} />
+        {mat(towel, 0.95)}
+      </mesh>
+      <mesh position={[0.02, -0.28, 0.028]} castShadow>
+        <boxGeometry args={[0.22, 0.05, 0.05] } />
+        {mat(towel, 0.95)}
+      </mesh>
+      {/* 毛巾条纹 */}
+      <mesh position={[0.02, -0.245, 0.058]}>
+        <boxGeometry args={[0.24, 0.02, 0.004]} />
+        {mat('#ffffff', 0.9)}
+      </mesh>
+    </group>
+  );
+}

@@ -16,7 +16,10 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import {
+  BATH_X0,
   BATH_X1,
+  BATH_Z0,
+  BATH_Z1,
   BED_X0,
   BED_X1,
   BED_W,
@@ -211,7 +214,11 @@ function sharedVisible(camAt: number, focusAt: number, at: number): boolean {
   return (camAt - at) * (focusAt - at) >= 0;
 }
 
-/** 隔墙（带门洞）随门位动态重建：门挪 → 墙段跟随 */
+/**
+ * 隔墙（带门洞）随门位动态重建：门挪 → 墙段跟随。
+ * v5.4 户型：客厅 9×6（西北）+ 卫生间 4×6（客厅东侧）+ 卧室 6×5 / 厨房 6×5（南排）；
+ * 卫生间门开在客厅东墙（x=4.5），厨房东墙变外墙（无门洞）。
+ */
 function buildWalls(doorBed: number, doorKt: number, doorBath: number): WallDef[] {
   const H = WALL_H;
   return [
@@ -220,22 +227,23 @@ function buildWalls(doorBed: number, doorKt: number, doorBath: number): WallDef[
     { key: 'frontWest', pos: [(-ROOM_X - WALL_T + doorBed - DOOR_W / 2) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [doorBed - DOOR_W / 2 - (-ROOM_X - WALL_T), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: { axis: 'z', at: BED_Z0 }, room: 'lr' },
     { key: 'frontEast', pos: [(doorBed + DOOR_W / 2 + BED_X1) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [BED_X1 - (doorBed + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: { axis: 'z', at: BED_Z0 }, room: 'lr' },
     { key: 'left', pos: [-ROOM_X - WALL_T / 2, H / 2, 0], size: [WALL_T, H, ROOM_D], normal: new THREE.Vector3(-1, 0, 0), room: 'lr' },
-    { key: 'right', pos: [ROOM_X + WALL_T / 2, H / 2, 0], size: [WALL_T, H, ROOM_D], normal: new THREE.Vector3(1, 0, 0), room: 'lr' },
+    // 客厅东墙（= 卫生间西墙）：两段夹卫生间门洞（axis x 判定：两侧互看时隐藏）
+    { key: 'rightA', pos: [ROOM_X + WALL_T / 2, H / 2, (-ROOM_Z - WALL_T / 2 + doorBath - DOOR_W / 2) / 2], size: [WALL_T, H, doorBath - DOOR_W / 2 - (-ROOM_Z - WALL_T / 2)], normal: new THREE.Vector3(1, 0, 0), shared: { axis: 'x', at: ROOM_X }, room: 'lr' },
+    { key: 'rightB', pos: [ROOM_X + WALL_T / 2, H / 2, (doorBath + DOOR_W / 2 + ROOM_Z + WALL_T / 2) / 2], size: [WALL_T, H, ROOM_Z + WALL_T / 2 - (doorBath + DOOR_W / 2)], normal: new THREE.Vector3(1, 0, 0), shared: { axis: 'x', at: ROOM_X }, room: 'lr' },
     // —— 卧室（隔墙南侧） ——
     { key: 'bedLeft', pos: [-ROOM_X - WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(-1, 0, 0), room: 'br' },
     // 卧室/厨房共墙（axis x 判定：两侧互看时隐藏）
     { key: 'bedRight', pos: [BED_X1 + WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0), shared: { axis: 'x', at: BED_X1 }, room: 'br' },
     { key: 'bedBack', pos: [(BED_X0 + BED_X1) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [BED_X1 - BED_X0 + WALL_T * 2, H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'br' },
-    // —— 厨房（北墙两段夹门洞；东墙两段夹卫生间门洞） ——
+    // —— 厨房（北墙两段夹门洞；北墙延伸到卫生间东缘，与卫生间南墙共面） ——
     { key: 'ktNorthWest', pos: [(BED_X1 + doorKt - DOOR_W / 2) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [doorKt - DOOR_W / 2 - BED_X1, H, WALL_T], normal: new THREE.Vector3(0, 0, -1), shared: { axis: 'z', at: BED_Z0 }, room: 'kt' },
-    { key: 'ktNorthMain', pos: [(doorKt + DOOR_W / 2 + KTCH_X1) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [KTCH_X1 - (doorKt + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, -1), shared: { axis: 'z', at: BED_Z0 }, room: 'kt' },
-    { key: 'ktEastA', pos: [KTCH_X1 + WALL_T / 2, H / 2, (BED_Z0 - WALL_T / 2 + doorBath - DOOR_W / 2) / 2], size: [WALL_T, H, doorBath - DOOR_W / 2 - (BED_Z0 - WALL_T / 2)], normal: new THREE.Vector3(1, 0, 0), shared: { axis: 'x', at: KTCH_X1 }, room: 'kt' },
-    { key: 'ktEastB', pos: [KTCH_X1 + WALL_T / 2, H / 2, (doorBath + DOOR_W / 2 + BED_Z1 + WALL_T / 2) / 2], size: [WALL_T, H, BED_Z1 + WALL_T / 2 - (doorBath + DOOR_W / 2)], normal: new THREE.Vector3(1, 0, 0), shared: { axis: 'x', at: KTCH_X1 }, room: 'kt' },
+    { key: 'ktNorthMain', pos: [(doorKt + DOOR_W / 2 + BATH_X1 + WALL_T) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [BATH_X1 + WALL_T - (doorKt + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, -1), shared: { axis: 'z', at: BED_Z0 }, room: 'kt' },
+    // 厨房东墙（v5.4 变外墙，无门洞）
+    { key: 'ktEast', pos: [KTCH_X1 + WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0), room: 'kt' },
     { key: 'ktSouth', pos: [(BED_X1 + KTCH_X1) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [KTCH_X1 - BED_X1 + WALL_T * 2, H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'kt' },
-    // —— 卫生间（厨房东侧；北墙带窗，东/南外墙） ——
-    { key: 'bathNorth', pos: [(KTCH_X1 + BATH_X1) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [BATH_X1 - KTCH_X1 + WALL_T * 2, H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'ba' },
-    { key: 'bathEast', pos: [BATH_X1 + WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0 + WALL_T * 2], normal: new THREE.Vector3(1, 0, 0), room: 'ba' },
-    { key: 'bathSouth', pos: [(KTCH_X1 + BATH_X1) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [BATH_X1 - KTCH_X1 + WALL_T * 2, H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'ba' },
+    // —— 卫生间（客厅东侧；北墙带窗，东墙带窗，南墙由 ktNorthMain 延伸段覆盖） ——
+    { key: 'bathNorth', pos: [(BATH_X0 + BATH_X1) / 2, H / 2, BATH_Z0 - WALL_T / 2], size: [BATH_X1 - BATH_X0, H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'ba' },
+    { key: 'bathEast', pos: [BATH_X1 + WALL_T / 2, H / 2, (BATH_Z0 + BATH_Z1) / 2], size: [WALL_T, H, BATH_Z1 - BATH_Z0 + WALL_T * 2], normal: new THREE.Vector3(1, 0, 0), room: 'ba' },
   ];
 }
 
@@ -330,6 +338,68 @@ function Wall({ def, night, wallCol, focusRef }: { def: WallDef; night: boolean;
   );
 }
 
+// ---------------- 门牌（门洞上方：卧室 / 厨房 / 卫生间） ----------------
+
+/** 门牌纹理：白底圆角 + 樱粉描边 + 中文标签（canvas 绘制，每标签只建一次） */
+const signTexCache = new Map<string, THREE.CanvasTexture>();
+function makeSignTexture(label: string): THREE.CanvasTexture {
+  const hit = signTexCache.get(label);
+  if (hit) return hit;
+  const W = 256;
+  const H = 112;
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext('2d')!;
+  // 白底圆角卡片
+  ctx.fillStyle = '#fffdf8';
+  ctx.strokeStyle = '#f2b3c2';
+  ctx.lineWidth = 7;
+  const r = 26;
+  ctx.beginPath();
+  ctx.moveTo(r + 4, 4);
+  ctx.arcTo(W - 4, 4, W - 4, H - 4, r);
+  ctx.arcTo(W - 4, H - 4, 4, H - 4, r);
+  ctx.arcTo(4, H - 4, 4, 4, r);
+  ctx.arcTo(4, 4, W - 4, 4, r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // 中文标签
+  ctx.fillStyle = '#4a4a4e';
+  ctx.font = '600 52px "PingFang SC", "Microsoft YaHei", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, W / 2, H / 2 + 4);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  signTexCache.set(label, tex);
+  return tex;
+}
+
+/** 门牌：挂在门洞正上方（面向门外走来的那一侧），随门位移动 */
+function DoorSign({ label }: { label: string }) {
+  const tex = useMemo(() => makeSignTexture(label), [label]);
+  return (
+    <group position={[0, DOOR_H + 0.21, -WALL_T / 2 - 0.015]} rotation={[0, Math.PI, 0]}>
+      {/* 牌面（微微凸出墙面，双面均可读） */}
+      <mesh position={[0, 0, 0.008]} castShadow>
+        <boxGeometry args={[0.46, 0.21, 0.02]} />
+        <meshStandardMaterial color="#fffdf8" roughness={0.7} />
+      </mesh>
+      <mesh position={[0, 0, 0.02]}>
+        <planeGeometry args={[0.44, 0.19]} />
+        <meshBasicMaterial map={tex} toneMapped={false} />
+      </mesh>
+      <mesh position={[0, 0, -0.008]} rotation={[0, Math.PI, 0]}>
+        <planeGeometry args={[0.44, 0.19]} />
+        <meshBasicMaterial map={tex} toneMapped={false} />
+      </mesh>
+    </group>
+  );
+}
+
 // ---------------- 门（三扇：可开合可换色；编辑模式点击=选中不开门） ----------------
 
 /**
@@ -342,6 +412,7 @@ function HouseDoor({
   open,
   col,
   night,
+  sign,
   onToggle,
   editMode,
   selected,
@@ -356,6 +427,8 @@ function HouseDoor({
   open: boolean;
   col?: string;
   night: boolean;
+  /** 门牌标签（卧室/厨房/卫生间；空串不挂） */
+  sign?: string;
   onToggle: () => void;
   editMode: boolean;
   selected: boolean;
@@ -413,6 +486,8 @@ function HouseDoor({
 
   return (
     <group position={[pos[0], 0, pos[1]]} rotation={[0, ry, 0]} ref={doorRoot}>
+      {/* 门牌（门洞上方，随门位移动） */}
+      {sign ? <DoorSign label={sign} /> : null}
       {/* 门框：左右门垛（0.07 宽，压进门洞 2cm 盖住门板边）+ 门头梁包边（压下 4.5cm） */}
       <mesh position={[-DOOR_W / 2 - 0.015, DOOR_H / 2 + 0.005, WALL_T / 2]} castShadow>
         <boxGeometry args={[0.07, DOOR_H + 0.01, WALL_T + 0.03]} />
@@ -825,14 +900,14 @@ export default function Room({
         {floorMat(floorColK)}
       </mesh>
 
-      {/* 卫生间地板（颜色独立第四间） */}
+      {/* 卫生间地板（颜色独立第四间；v5.4 客厅东侧） */}
       <mesh
-        position={[(KTCH_X1 + BATH_X1) / 2, 0, (BED_Z0 + BED_Z1) / 2]}
+        position={[(BATH_X0 + BATH_X1) / 2, 0, (BATH_Z0 + BATH_Z1) / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
         receiveShadow
         onClick={floorTap}
       >
-        <planeGeometry args={[BATH_X1 - KTCH_X1, BED_Z1 - BED_Z0]} />
+        <planeGeometry args={[BATH_X1 - BATH_X0, BATH_Z1 - BATH_Z0]} />
         {floorMat(floorColB)}
       </mesh>
 
@@ -849,8 +924,8 @@ export default function Room({
         <planeGeometry args={[KTCH_X1 - BED_X1 + 0.6, BED_Z1 - BED_Z0 + 0.6]} />
         <meshStandardMaterial color="#d4d1c9" roughness={0.95} />
       </mesh>
-      <mesh position={[(KTCH_X1 + BATH_X1) / 2, -0.05, (BED_Z0 + BED_Z1) / 2]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[BATH_X1 - KTCH_X1 + 0.6, BED_Z1 - BED_Z0 + 0.6]} />
+      <mesh position={[(BATH_X0 + BATH_X1) / 2, -0.05, (BATH_Z0 + BATH_Z1) / 2]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[BATH_X1 - BATH_X0 + 0.6, BATH_Z1 - BATH_Z0 + 0.6]} />
         <meshStandardMaterial color="#d4d1c9" roughness={0.95} />
       </mesh>
 
@@ -868,15 +943,16 @@ export default function Room({
       {/* 门洞上方的门头梁 ×3 */}
       <DoorLintel pos={[doorBed, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallCol} night={night} focusAxis="z" focusAt={BED_Z0} focusRef={focusRef} />
       <DoorLintel pos={[doorKt, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallColK} night={night} focusAxis="z" focusAt={BED_Z0} focusRef={focusRef} />
-      <DoorLintel pos={[KTCH_X1 + WALL_T / 2, DOOR_H + (WALL_H - DOOR_H) / 2, doorBath]} alongAxis="z" wallCol={wallColK} night={night} focusAxis="x" focusAt={KTCH_X1} focusRef={focusRef} />
+      <DoorLintel pos={[ROOM_X + WALL_T / 2, DOOR_H + (WALL_H - DOOR_H) / 2, doorBath]} alongAxis="z" wallCol={wallCol} night={night} focusAxis="x" focusAt={ROOM_X} focusRef={focusRef} />
 
-      {/* 三扇门（点击开合 / 编辑模式选中滑行） */}
+      {/* 三扇门（点击开合 / 编辑模式选中滑行；门牌挂门洞上方） */}
       <HouseDoor
         pos={[doorBed, BED_Z0]}
         ry={DOORS[0].ry}
         open={!!doorOpen}
         col={doorCol}
         night={night}
+        sign="卧室"
         onToggle={() => onToggleDoor?.()}
         editMode={!!editMode}
         selected={selWall === 'door-bed'}
@@ -892,6 +968,7 @@ export default function Room({
         open={!!kitchenDoorOpen}
         col={doorCol}
         night={night}
+        sign="厨房"
         onToggle={() => onToggleKitchenDoor?.()}
         editMode={!!editMode}
         selected={selWall === 'door-kt'}
@@ -902,18 +979,19 @@ export default function Room({
         focusRef={focusRef}
       />
       <HouseDoor
-        pos={[KTCH_X1, doorBath]}
+        pos={[ROOM_X, doorBath]}
         ry={DOORS[2].ry}
         open={!!bathDoorOpen}
         col={doorCol}
         night={night}
+        sign="卫生间"
         onToggle={() => onToggleBathDoor?.()}
         editMode={!!editMode}
         selected={selWall === 'door-bath'}
         onSelect={() => onWallTap?.('door-bath')}
         onEditPointerDown={(e) => onWallPointerDown?.(e, 'door-bath')}
         focusAxis="x"
-        focusAt={KTCH_X1}
+        focusAt={ROOM_X}
         focusRef={focusRef}
       />
 
@@ -943,7 +1021,7 @@ export default function Room({
       <Ceiling x0={-ROOM_X} x1={ROOM_X} z0={-ROOM_Z} z1={BED_Z0} col={ceilCol} night={night} />
       <Ceiling x0={-ROOM_X} x1={BED_X1} z0={BED_Z0} z1={BED_Z1} col={ceilColBed} night={night} />
       <Ceiling x0={BED_X1} x1={KTCH_X1} z0={BED_Z0} z1={BED_Z1} col={ceilColK} night={night} />
-      <Ceiling x0={KTCH_X1} x1={BATH_X1} z0={BED_Z0} z1={BED_Z1} col={ceilColB} night={night} />
+      <Ceiling x0={BATH_X0} x1={BATH_X1} z0={BATH_Z0} z1={BATH_Z1} col={ceilColB} night={night} />
     </group>
   );
 }

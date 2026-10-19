@@ -74,7 +74,11 @@ export type FurnitureKind =
   | 'juicer'
   | 'fan'
   | 'socket'
-  | 'chandelier';
+  | 'chandelier'
+  | 'shower'
+  | 'basin'
+  | 'mirror'
+  | 'towelRack';
 
 /** 家具分类（商店栏的 tab） */
 export type FurnCategory =
@@ -127,6 +131,8 @@ export interface FurnitureState {
   lastTouch?: number;
   /** 相框照片（压缩后 dataURL，永久保存在档案里） */
   photo?: string;
+  /** 浴缸/淋浴：水龙头放水中 */
+  bathWater?: boolean;
 }
 
 /** 小人身份 */
@@ -197,6 +203,10 @@ export interface HomeState {
   winCol?: string;
   /** 第一人称视角（true = 小人就是「我」） */
   fp?: boolean;
+  /** 小人画风：cartoon = Q版卡通 / real = 拟真（默认 cartoon） */
+  charStyle?: 'cartoon' | 'real';
+  /** 昼夜跟随真实时间（手动点太阳/月亮后变 false） */
+  nightAuto?: boolean;
 }
 
 /** 家具目录条目（静态配置，不持久化） */
@@ -222,7 +232,7 @@ export interface CatalogEntry {
   h?: number;
   /** 交互能力 */
   acts: {
-    /** 点击开/关（灯、电视、收音机、空调、风扇、吊灯） */
+    /** 点击开/关（灯、电视、收音机、空调、风扇、吊灯、淋浴） */
     toggle?: boolean;
     /** 可开门（有 door 节点或 glbAlt） */
     door?: boolean;
@@ -232,6 +242,12 @@ export interface CatalogEntry {
     playful?: boolean;
     /** 相框：点击从手机上传照片 */
     photo?: boolean;
+    /** 可坐：点击出「坐下」按钮，小人走过去坐下（按钮变「站起来」） */
+    seat?: { y: number; dx?: number; dz?: number };
+    /** 可睡：点击出「睡觉」按钮，小人走过去躺上床（按钮变「起床」） */
+    sleep?: { y: number; dz?: number };
+    /** 可泡澡：点击出「泡澡」按钮，小人脱衣坐进浴缸（按钮变「出来」）；浴缸水龙头可放水 */
+    bath?: { y: number; dx?: number; dz?: number };
   };
   /** 是灯具：开着时附加点光（y 为相对家具原点的灯高） */
   light?: { y: number; color?: string; intensity?: number };
@@ -251,6 +267,25 @@ export interface CharRT {
   /** 漫游目标（partner 用） */
   target: { x: number; z: number } | null;
   nextWander: number;
+}
+
+/** 小人姿势：站立 / 坐下 / 躺床 / 泡澡（脱衣坐浴缸） */
+export type CharPose = 'stand' | 'sit' | 'lie' | 'bath';
+
+/** 小人画风 */
+export type CharStyle = 'cartoon' | 'real';
+
+/** 小人正在执行的家具动作（走向家具 → 摆姿势） */
+export interface CharAction {
+  type: 'sit' | 'lie' | 'bath';
+  itemId: string;
+  /** 目标落点（世界坐标）与朝向、坐垫高度 */
+  tx: number;
+  tz: number;
+  ry: number;
+  y: number;
+  /** 已走到位（姿势已摆好） */
+  arrived?: boolean;
 }
 
 /** 模式 */

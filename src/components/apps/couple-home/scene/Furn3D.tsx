@@ -20,6 +20,7 @@ import { animateDoors, cloneFurniture, ensureModel, type FurnModel } from './mod
 import TV3D from './TV3D';
 import { Aircon3D, PhotoFrame3D, PlushBunny3D, PlushDuck3D, Polaroid3D, Vanity3D, WallPhoto3D } from './Extras3D';
 import {
+  Basin3D,
   Bear3D,
   Bowls3D,
   Chandelier3D,
@@ -28,13 +29,16 @@ import {
   Fan3D,
   Juicer3D,
   Kettle3D,
+  Mirror3D,
   Plates3D,
   PlushCat3D,
   PlushPanda3D,
   PlushPig3D,
   Pot3D,
+  Shower3D,
   Socket3D,
   Spoons3D,
+  TowelRack3D,
 } from './Small3D';
 
 export interface Furn3DProps {
@@ -47,6 +51,8 @@ export interface Furn3DProps {
   moving?: boolean;
   onPointerDown: (e: ThreeEvent<PointerEvent>, item: FurnitureItem) => void;
   onTap: (item: FurnitureItem) => void;
+  /** 浴缸水龙头点击（放水/关水；仅生活模式） */
+  onFaucetTap?: (item: FurnitureItem) => void;
 }
 
 /** useGLTF 之外的轻量加载钩子（不依赖 suspense；tint 变化时重新克隆） */
@@ -82,6 +88,7 @@ export default function Furn3D({
   moving,
   onPointerDown,
   onTap,
+  onFaucetTap,
 }: Furn3DProps) {
   const group = useRef<THREE.Group>(null);
   const inner = useRef<THREE.Group>(null);
@@ -266,6 +273,21 @@ export default function Furn3D({
             <meshStandardMaterial color="#d9d9d4" emissive="#7fd69a" emissiveIntensity={0} />
           </mesh>
         )}
+
+        {/* 卫浴全套（v5.4：淋浴房/洗手台/镜子/毛巾架） */}
+        {entry.kind === 'shower' && <Shower3D on={!!item.st?.on} col={item.col} />}
+        {entry.kind === 'basin' && <Basin3D col={item.col} />}
+        {entry.kind === 'mirror' && <Mirror3D col={item.col} />}
+        {entry.kind === 'towelRack' && <TowelRack3D col={item.col} />}
+
+        {/* 泡泡浴缸：水龙头（可点击放水）+ 水位上涨 + 泡泡 */}
+        {entry.kind === 'bathtub' && (
+          <TubExtras
+            filling={!!item.st?.bathWater}
+            interactive={mode === 'live'}
+            onFaucet={() => onFaucetTap?.(item)}
+          />
+        )}
       </group>
 
       {/* 灯光（开着才亮；夜晚更暖） */}
@@ -300,6 +322,122 @@ export default function Furn3D({
           <meshStandardMaterial color="#e5e2d8" transparent opacity={0.6} />
         </mesh>
       )}
+    </group>
+  );
+}
+
+// ---------------- 浴缸附属：水龙头 + 放水 + 水位 + 泡泡（程序化） ----------------
+
+const BUBBLE_POS: [number, number, number][] = [
+  [-0.7, 0, -0.18],
+  [-0.35, 0, 0.22],
+  [0.05, 0, -0.25],
+  [0.3, 0, 0.12],
+  [0.62, 0, -0.1],
+  [-0.12, 0, 0.05],
+  [0.82, 0, 0.24],
+  [-0.85, 0, 0.16],
+];
+
+function TubExtras({
+  filling,
+  interactive,
+  onFaucet,
+}: {
+  filling: boolean;
+  interactive: boolean;
+  onFaucet: () => void;
+}) {
+  const water = useRef<THREE.Mesh>(null);
+  const bubbles = useRef<THREE.Group>(null);
+  const stream = useRef<THREE.Mesh>(null);
+  const knob = useRef<THREE.Mesh>(null);
+  const level = useRef(0.1);
+
+  useFrame((state, dt) => {
+    const d = Math.min(dt, 0.05);
+    // 水位：放水 → 涨到 0.42；关水 → 缓慢回落
+    level.current = THREE.MathUtils.damp(level.current, filling ? 0.42 : 0.08, filling ? 0.9 : 1.6, d);
+    if (water.current) {
+      water.current.visible = level.current > 0.1;
+      // 底部贴 0.05，顶部 ≈ 0.05 + level
+      water.current.scale.y = Math.max(0.02, level.current);
+      water.current.position.y = 0.05 + water.current.scale.y / 2;
+    }
+    if (bubbles.current) {
+      bubbles.current.visible = filling && level.current > 0.24;
+      const t = state.clock.elapsedTime;
+      bubbles.current.children.forEach((b, i) => {
+        b.position.y = 0.06 + Math.abs(Math.sin(t * 1.4 + i * 1.7)) * 0.05;
+      });
+    }
+    if (stream.current) stream.current.visible = filling;
+    if (knob.current) {
+      const m = knob.current.material as THREE.MeshStandardMaterial;
+      m.emissive = m.emissive ?? new THREE.Color();
+      m.emissive.set(filling ? '#7fc3e8' : '#000000');
+      m.emissiveIntensity = filling ? 0.9 : 0;
+    }
+  });
+
+  const chrome = '#c9d2d8';
+  return (
+    <group>
+      {/* 水龙头（立在浴缸 +x 端的外沿上） */}
+      <group position={[1.0, 0.56, 0.18]}>
+        <mesh castShadow>
+          <cylinderGeometry args={[0.03, 0.036, 0.3, 12]} />
+          <meshStandardMaterial color={chrome} roughness={0.28} metalness={0.75} />
+        </mesh>
+        {/* 弯头出水嘴（朝浴缸内） */}
+        <mesh position={[-0.11, 0.19, 0]} rotation={[0, 0, Math.PI / 2]} castShadow>
+          <cylinderGeometry args={[0.02, 0.02, 0.24, 10]} />
+          <meshStandardMaterial color={chrome} roughness={0.28} metalness={0.75} />
+        </mesh>
+        {/* 旋钮（点击放水/关水；带放大的隐形热区方便手指点按） */}
+        <mesh
+          ref={knob}
+          position={[0.02, 0.19, 0.05]}
+          rotation={[Math.PI / 2, 0, 0]}
+        >
+          <cylinderGeometry args={[0.032, 0.032, 0.024, 14]} />
+          <meshStandardMaterial color={filling ? '#a8d4e6' : '#e8e4dc'} roughness={0.35} />
+        </mesh>
+        <mesh
+          position={[0.02, 0.19, 0.03]}
+          onClick={
+            interactive
+              ? (e) => {
+                  e.stopPropagation();
+                  onFaucet();
+                }
+              : undefined
+          }
+        >
+          <boxGeometry args={[0.16, 0.16, 0.16]} />
+          {/* 全透明热区（透明度 0 仍参与射线检测；visible=false 会被 raycaster 跳过） */}
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      </group>
+      {/* 出水水柱 */}
+      <mesh ref={stream} position={[0.82, 0.28, 0.18]} visible={false}>
+        <cylinderGeometry args={[0.02, 0.03, 0.5, 8]} />
+        <meshStandardMaterial color="#bfe3f2" transparent opacity={0.5} roughness={0.15} />
+      </mesh>
+      {/* 缸内水体（水位随 useFrame 涨落；box 高 1，缩放后顶面 ≈ 0.05+level） */}
+      <mesh ref={water} position={[-0.06, 0.1, 0]} scale={[1, 0.1, 1]} visible={false}>
+        <boxGeometry args={[2.05, 1, 0.86]} />
+        <meshStandardMaterial color="#cdeaf5" transparent opacity={0.55} roughness={0.2} />
+      </mesh>
+      {/* 泡泡群（放水时浮在水面） */}
+      <group ref={bubbles} visible={false}>
+        {BUBBLE_POS.map((p, i) => (
+          <mesh key={i} position={p} scale={[1, 0.6, 1]}>
+            <sphereGeometry args={[0.05 + (i % 3) * 0.018, 10, 8]} />
+            <meshStandardMaterial color="#ffffff" transparent opacity={0.85} roughness={0.3} />
+          </mesh>
+        ))}
+      </group>
     </group>
   );
 }

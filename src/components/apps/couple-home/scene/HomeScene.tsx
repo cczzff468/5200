@@ -23,7 +23,10 @@ import Room from './Room';
 import Furn3D from './Furn3D';
 import Char3D from './Char3D';
 import {
+  BATH_X0,
   BATH_X1,
+  BATH_Z0,
+  BATH_Z1,
   BED_X1,
   BED_Z0,
   BED_Z1,
@@ -40,7 +43,7 @@ import {
   resolveDoorPos,
   resolveWinPos,
 } from '../catalog';
-import type { CatalogEntry, CharRT, FurnitureItem, HomeMode } from '../types';
+import type { CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, HomeMode } from '../types';
 
 // ---------------- 对外 Props ----------------
 
@@ -62,6 +65,14 @@ export interface HomeSceneProps {
   /** 第一人称视角（true = 小人就是「我」） */
   fp?: boolean;
   fpRef: RefObject<{ on: boolean }>;
+  /** 小人画风（cartoon Q版 / real 拟真） */
+  charStyle?: 'cartoon' | 'real';
+  /** 「我」的姿势 + 支撑面高度（坐下/睡觉/泡澡） */
+  poseRef: RefObject<{ pose: CharPose; y: number }>;
+  /** 正在执行的家具动作 */
+  actRef: RefObject<CharAction | null>;
+  /** 浴缸水龙头点击（放水/关水） */
+  onFaucetTap?: (item: FurnitureItem) => void;
   /** 九扇窗开态 + 切换回调 */
   win?: boolean[];
   onToggleWin?: (i: number) => void;
@@ -128,8 +139,8 @@ export interface DoorLive {
 
 /**
  * 小人 vs 家具 AABB（膨胀 0.2）推出 + 四房间边界钳制（抬升家具不挡路）。
- * 四室：客厅 / 卧室 / 厨房 / 卫生间 —— 隔墙挡路，只有「对应门开着且在门走廊内」才能穿过
- * （partner 传全关门永远留在客厅）。
+ * v5.4 四室：客厅（西北）/ 卫生间（客厅东侧）/ 卧室 / 厨房（南排）——
+ * 隔墙挡路，只有「对应门开着且在门走廊内」才能穿过（partner 传全关门永远留在客厅）。
  */
 function collideAndClamp(c: CharRT, items: FurnitureItem[], bedDoor: DoorLive, ktDoor: DoorLive, bathDoor: DoorLive) {
   for (const it of items) {
@@ -152,24 +163,25 @@ function collideAndClamp(c: CharRT, items: FurnitureItem[], bedDoor: DoorLive, k
   const inKtCorr = ktDoor.open && Math.abs(c.x - ktDoor.along) < DOOR_PASS;
   const inBathCorr = bathDoor.open && Math.abs(c.z - bathDoor.along) < DOOR_PASS;
   if (c.z < BED_Z0) {
-    // —— 客厅侧 ——
-    c.x = clamp(c.x, -ROOM_X + m, ROOM_X - m);
-    const zMax = inBedCorr || inKtCorr ? BED_Z0 + m : BED_Z0 - m;
-    c.z = clamp(c.z, -ROOM_Z + m, zMax);
+    // —— 北排：客厅（西）+ 卫生间（客厅东墙以东） ——
+    if (c.x >= BATH_X0) {
+      // 卫生间：西墙只有门走廊可穿，东/北/南为外墙
+      c.x = clamp(c.x, inBathCorr ? BATH_X0 - m : BATH_X0 + m, BATH_X1 - m);
+      c.z = clamp(c.z, -ROOM_Z + m, ROOM_Z - m);
+    } else {
+      // 客厅：东墙只有门走廊可穿；南隔墙两门走廊
+      c.x = clamp(c.x, -ROOM_X + m, inBathCorr ? BATH_X0 + m : BATH_X0 - m);
+      const zMax = inBedCorr || inKtCorr ? BED_Z0 + m : BED_Z0 - m;
+      c.z = clamp(c.z, -ROOM_Z + m, zMax);
+    }
   } else if (c.x < BED_X1) {
     // —— 卧室侧 ——
     c.x = clamp(c.x, -ROOM_X + m, BED_X1 - m);
     c.z = inBedCorr ? clamp(c.z, BED_Z0 - m, BED_Z1 - m) : clamp(c.z, BED_Z0 + m, BED_Z1 - m);
-  } else if (c.x < KTCH_X1) {
-    // —— 厨房侧（北门通客厅 / 西门通卫生间） ——
-    const xMax = inBathCorr ? KTCH_X1 + m : KTCH_X1 - m;
-    c.x = clamp(c.x, BED_X1 + m, xMax);
-    c.z = inKtCorr ? clamp(c.z, BED_Z0 - m, BED_Z1 - m) : clamp(c.z, BED_Z0 + m, BED_Z1 - m);
   } else {
-    // —— 卫生间侧 ——
-    const xMin = inBathCorr ? KTCH_X1 - m : KTCH_X1 + m;
-    c.x = clamp(c.x, xMin, BATH_X1 - m);
-    c.z = clamp(c.z, BED_Z0 + m, BED_Z1 - m);
+    // —— 厨房侧（北门通客厅；东墙 v5.4 起封闭） ——
+    c.x = clamp(c.x, BED_X1 + m, KTCH_X1 - m);
+    c.z = inKtCorr ? clamp(c.z, BED_Z0 - m, BED_Z1 - m) : clamp(c.z, BED_Z0 + m, BED_Z1 - m);
   }
 }
 
@@ -234,6 +246,8 @@ function GameLoop({
   lookRef,
   focusRef,
   fpRef,
+  poseRef,
+  actRef,
 }: {
   meRT: CharRT;
   taRT: CharRT;
@@ -252,6 +266,10 @@ function GameLoop({
   focusRef: RefObject<{ x: number; z: number }>;
   /** 第一人称视角开关 */
   fpRef: RefObject<{ on: boolean }>;
+  /** 「我」的姿势（stand/sit/lie/bath + 支撑面高度） */
+  poseRef: RefObject<{ pose: CharPose; y: number }>;
+  /** 正在执行的家具动作（走向家具 → 摆姿势） */
+  actRef: RefObject<CharAction | null>;
 }) {
   const { camera } = useThree();
   const controls = useThree((s) => s.controls) as unknown as { target?: THREE.Vector3 } | null;
@@ -286,45 +304,69 @@ function GameLoop({
     }
     prevMode.current = 'live';
 
-    // —— 输入合成（摇杆 + 键盘） ——
-    const j = joyRef.current ?? { dx: 0, dy: 0 };
-    let mx = j.dx;
-    let mz = j.dy;
-    const keys = keysRef.current;
-    if (keys && keys.size) {
-      if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
-      if (keys.has('d') || keys.has('arrowright')) mx += 1;
-      if (keys.has('w') || keys.has('arrowup')) mz -= 1;
-      if (keys.has('s') || keys.has('arrowdown')) mz += 1;
-    }
-    mx = clamp(mx, -1, 1);
-    mz = clamp(mz, -1, 1);
-
-    const az = azRef.current?.az ?? 0;
-    const fx = -Math.sin(az);
-    const fz = -Math.cos(az);
-    const rx = Math.cos(az);
-    const rz = -Math.sin(az);
-    let vx = fx * -mz + rx * mx;
-    let vz = fz * -mz + rz * mx;
-    const len = Math.hypot(vx, vz);
-
-    if (len > 0.04) {
-      const sp = Math.min(1, len) * 2.7;
-      meRT.x += (vx / len) * sp * dt;
-      meRT.z += (vz / len) * sp * dt;
-      meRT.moving = true;
-      meRT.heading = lerpAngle(meRT.heading, Math.atan2(vx, vz), Math.min(1, dt * 14));
-    } else {
+    // —— 家具动作优先：走向目标 → 摆姿势（坐下/睡觉/泡澡） ——
+    const act = actRef.current;
+    if (act && !act.arrived) {
+      const dx = act.tx - meRT.x;
+      const dz = act.tz - meRT.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 0.1) {
+        const sp = 1.7 * dt;
+        meRT.x += (dx / d) * Math.min(sp, d);
+        meRT.z += (dz / d) * Math.min(sp, d);
+        meRT.moving = true;
+        meRT.heading = lerpAngle(meRT.heading, Math.atan2(dx, dz), Math.min(1, dt * 12));
+      } else {
+        meRT.moving = false;
+        act.arrived = true;
+        poseRef.current.pose = act.type === 'lie' ? 'lie' : act.type === 'bath' ? 'bath' : 'sit';
+        poseRef.current.y = act.y;
+      }
+    } else if (act) {
+      // 已摆好姿势：锁输入（摇杆/WASD 忽略）、不碰撞（人在家具上），朝向缓转向家具朝向
       meRT.moving = false;
+      meRT.heading = lerpAngle(meRT.heading, act.ry, Math.min(1, dt * 6));
+    } else {
+      // —— 常规输入合成（摇杆 + 键盘） ——
+      const j = joyRef.current ?? { dx: 0, dy: 0 };
+      let mx = j.dx;
+      let mz = j.dy;
+      const keys = keysRef.current;
+      if (keys && keys.size) {
+        if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
+        if (keys.has('d') || keys.has('arrowright')) mx += 1;
+        if (keys.has('w') || keys.has('arrowup')) mz -= 1;
+        if (keys.has('s') || keys.has('arrowdown')) mz += 1;
+      }
+      mx = clamp(mx, -1, 1);
+      mz = clamp(mz, -1, 1);
+
+      const az0 = azRef.current?.az ?? 0;
+      const fx = -Math.sin(az0);
+      const fz = -Math.cos(az0);
+      const rx = Math.cos(az0);
+      const rz = -Math.sin(az0);
+      let vx = fx * -mz + rx * mx;
+      let vz = fz * -mz + rz * mx;
+      const len = Math.hypot(vx, vz);
+
+      if (len > 0.04) {
+        const sp = Math.min(1, len) * 2.7;
+        meRT.x += (vx / len) * sp * dt;
+        meRT.z += (vz / len) * sp * dt;
+        meRT.moving = true;
+        meRT.heading = lerpAngle(meRT.heading, Math.atan2(vx, vz), Math.min(1, dt * 14));
+      } else {
+        meRT.moving = false;
+      }
+      collideAndClamp(
+        meRT,
+        itemsRef.current ?? [],
+        doorRef.current?.bed ?? CLOSED_DOOR,
+        doorRef.current?.kt ?? CLOSED_DOOR,
+        doorRef.current?.bath ?? CLOSED_DOOR,
+      );
     }
-    collideAndClamp(
-      meRT,
-      itemsRef.current ?? [],
-      doorRef.current?.bed ?? CLOSED_DOOR,
-      doorRef.current?.kt ?? CLOSED_DOOR,
-      doorRef.current?.bath ?? CLOSED_DOOR,
-    );
 
     // partner 漫游（客厅内）
     wander(taRT, dt, itemsRef.current ?? []);
@@ -335,15 +377,29 @@ function GameLoop({
     if (fpOn && !lastFp.current && pitchRef.current) pitchRef.current.p = 0.12;
     lastFp.current = fpOn;
 
+    // 第一人称眼高：坐/躺/泡时贴姿势支撑面
+    const poseNow = poseRef.current?.pose ?? 'stand';
+    const poseYNow = poseRef.current?.y ?? 0;
+    const az = azRef.current?.az ?? 0;
+    const eyeH =
+      poseNow === 'stand'
+        ? 0.84
+        : poseNow === 'sit'
+          ? Math.max(0.62, poseYNow + 0.42)
+          : poseNow === 'bath'
+            ? Math.max(0.66, poseYNow + 0.66)
+            : Math.max(0.35, poseYNow + 0.24); // 躺在床上侧目
+
     if (fpOn) {
       // —— 第一人称：相机就是小人的眼睛（走路轻微颠簸，视角 = az/pitch） ——
+      const az = azRef.current?.az ?? 0;
       const pitch = clamp(pitchRef.current?.p ?? 0, -0.5, 1.3);
       const bob = meRT.moving ? Math.abs(Math.sin(clock.current * 9)) * 0.032 : 0;
-      camera.position.set(meRT.x, 0.84 + bob, meRT.z);
+      camera.position.set(meRT.x, eyeH + bob, meRT.z);
       const cp = Math.cos(pitch);
       lookAt.current.set(
         meRT.x - Math.sin(az) * cp * 8,
-        0.84 + bob - Math.sin(pitch) * 8,
+        eyeH + bob - Math.sin(pitch) * 8,
         meRT.z - Math.cos(az) * cp * 8,
       );
       camera.lookAt(lookAt.current);
@@ -631,10 +687,10 @@ function EditGrid() {
       for (let x = x0; x <= x1 + 0.001; x += SNAP) pts.push(x, 0.015, z0, x, 0.015, z1);
       for (let z = z0; z <= z1 + 0.001; z += SNAP) pts.push(x0, 0.015, z, x1, 0.015, z);
     };
-    span(-ROOM_X, ROOM_X, -ROOM_Z, BED_Z0); // 客厅
+    span(-ROOM_X, ROOM_X, -ROOM_Z, BED_Z0); // 客厅（西段；卫生间在东段单独一块）
+    span(BATH_X0, BATH_X1, BATH_Z0, BATH_Z1); // 卫生间（客厅东侧）
     span(-ROOM_X, BED_X1, BED_Z0, BED_Z1); // 卧室
     span(BED_X1, KTCH_X1, BED_Z0, BED_Z1); // 厨房
-    span(KTCH_X1, BATH_X1, BED_Z0, BED_Z1); // 卫生间
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     return g;
@@ -761,6 +817,7 @@ function Lights({ night }: { night: boolean }) {
 export default function HomeScene(props: HomeSceneProps) {
   const {
     items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge, fp, fpRef,
+    charStyle, poseRef, actRef, onFaucetTap,
     win, onToggleWin, winPos, doorPos,
     floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, floorColK, wallColK, floorColB, wallColB,
     ceilCol, ceilColBed, ceilColK, ceilColB,
@@ -915,12 +972,13 @@ export default function HomeScene(props: HomeSceneProps) {
             moving={moveOn && selId === item.id}
             onPointerDown={onFurnPointerDown}
             onTap={onFurnTap}
+            onFaucetTap={onFaucetTap}
           />
         );
       })}
 
-      <Char3D rt={meRT} who="me" hide={fp && mode === 'live'} />
-      <Char3D rt={taRT} who="partner" />
+      <Char3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} />
+      <Char3D rt={taRT} who="partner" style={charStyle} />
       <EditCameraKick mode={mode} />
       <ZoomPoker zoomCmd={zoomCmd} />
       <NudgePoker moveCmd={moveCmd} onNudge={onNudge} />
@@ -954,6 +1012,8 @@ export default function HomeScene(props: HomeSceneProps) {
         lookRef={lookRef}
         focusRef={focusRef}
         fpRef={fpRef}
+        poseRef={poseRef}
+        actRef={actRef}
       />
       <PointerRig
         mode={mode}

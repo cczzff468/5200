@@ -15,6 +15,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  Armchair,
+  Baby,
+  Bath,
+  BedDouble,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -22,6 +26,7 @@ import {
   ChevronUp,
   ChevronsDown,
   ChevronsUp,
+  Clock,
   Droplet,
   Eye,
   Loader2,
@@ -36,6 +41,7 @@ import {
   Store,
   Sun,
   Trash2,
+  UserRound,
   Users,
   X,
   ZoomIn,
@@ -71,7 +77,7 @@ import {
   type HomePersist,
 } from './catalog';
 import { getCachedThumb } from './scene/ShopThumbs';
-import type { CharRT, FurnitureItem, FurnitureKind, HomeMode, HomeState, RoomId } from './types';
+import type { CharAction, CharPose, CharRT, CharStyle, FurnitureItem, FurnitureKind, HomeMode, HomeState, RoomId } from './types';
 
 const HomeScene = dynamic(() => import('./scene/HomeScene'), {
   ssr: false,
@@ -278,6 +284,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [winPos, setWinPos] = useState<number[] | undefined>(pack.home.winPos);
   const [doorPos, setDoorPos] = useState<{ bed: number; kt: number; bath: number } | undefined>(pack.home.doorPos);
   const [fp, setFp] = useState<boolean>(!!pack.home.fp);
+  const [charStyle, setCharStyle] = useState<CharStyle>(pack.home.charStyle === 'real' ? 'real' : 'cartoon');
+  const [nightAuto, setNightAuto] = useState<boolean>(pack.home.nightAuto !== false);
 
   // ---------------- UI 状态 ----------------
   const [mode, setMode] = useState<HomeMode>('live');
@@ -290,6 +298,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [thumbMap, setThumbMap] = useState<Record<string, string>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [full, setFull] = useState(false);
+  /** 家具互动（生活模式）：点击可坐/睡/泡的家具后弹出确认按钮 */
+  const [charAction, setCharAction] = useState<{ type: 'sit' | 'lie' | 'bath'; itemId: string; active: boolean } | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -313,6 +323,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
     nextWander: 5,
   });
   const joyRef = useRef({ dx: 0, dy: 0 });
+  /** 小人姿势（stand/sit/lie/bath + 支撑面高度）：GameLoop / Char3D 每帧读取 */
+  const poseRef = useRef<{ pose: CharPose; y: number }>({ pose: 'stand', y: 0 });
+  /** 正在执行的家具动作（走向家具 → 摆姿势） */
+  const actRef = useRef<CharAction | null>(null);
   /** 编辑模式缩放指令（HUD 按钮 → Canvas 内相机） */
   const zoomCmd = useRef({ v: 0, dir: 0 });
   /** 四向微调指令（HUD 方向按钮 → Canvas 内按视角方位换算） */
@@ -369,6 +383,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
   useEffect(() => {
     fpRef.current.on = fp;
   }, [fp]);
+  const charStyleRef = useRef(charStyle);
+  charStyleRef.current = charStyle;
+  const nightAutoRef = useRef(nightAuto);
+  nightAutoRef.current = nightAuto;
 
   // ---------------- 提示 ----------------
   const toast = useCallback((msg: string) => {
@@ -404,6 +422,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
       doorCol: doorColRef.current,
       winCol: winColRef.current,
       fp: fpRef.current.on,
+      charStyle: charStyleRef.current,
+      nightAuto: nightAutoRef.current,
       chars: {
         me: {
           x: Math.round(meRT.current.x * 100) / 100,
@@ -445,6 +465,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setWinPos(h.winPos);
     setDoorPos(h.doorPos);
     setFp(!!h.fp);
+    setCharStyle(h.charStyle === 'real' ? 'real' : 'cartoon');
+    setNightAuto(h.nightAuto !== false);
   }, []);
 
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -552,6 +574,50 @@ export default function CoupleHome({ close }: { close: () => void }) {
   }, [toast, saveSoon]);
 
   // ---------------- 家具交互（生活模式） ----------------
+
+  /** 结束当前动作：站起来 / 起床 / 出浴（泡澡自动关水穿衣） */
+  const endAction = useCallback(() => {
+    const act = actRef.current;
+    actRef.current = null;
+    poseRef.current.pose = 'stand';
+    poseRef.current.y = 0;
+    setCharAction(null);
+    if (act?.type === 'bath') {
+      const it = itemsRef.current.find((f) => f.id === act.itemId);
+      if (it?.st?.bathWater) {
+        setItems((prev) => prev.map((f) => (f.id === act.itemId ? { ...f, st: { ...f.st, bathWater: false } } : f)));
+        saveSoon();
+      }
+      toast('洗得香香的，穿好衣服啦');
+    }
+  }, [saveSoon, toast]);
+
+  /** 开始动作：小人走向家具落点 → 摆姿势（GameLoop 驱动） */
+  const beginAction = useCallback(
+    (type: 'sit' | 'lie' | 'bath', item: FurnitureItem) => {
+      const entry = CATALOG[item.kind];
+      const a: { y: number; dx?: number; dz?: number } | undefined =
+        type === 'sit' ? entry?.acts.seat : type === 'lie' ? entry?.acts.sleep : entry?.acts.bath;
+      if (!a) return;
+      const ry = item.ry ?? 0;
+      const cos = Math.cos(ry);
+      const sin = Math.sin(ry);
+      const lx = a.dx ?? 0;
+      const lz = a.dz ?? 0;
+      actRef.current = {
+        type,
+        itemId: item.id,
+        tx: item.x + lx * cos + lz * sin,
+        tz: item.z - lx * sin + lz * cos,
+        ry,
+        y: a.y,
+      };
+      setCharAction((prev) => (prev ? { ...prev, active: true } : { type, itemId: item.id, active: true }));
+      toast(type === 'sit' ? '走过去坐下咯～' : type === 'lie' ? '上床躺好，盖好被子～' : '脱掉衣服，泡澡泡起来～');
+    },
+    [toast],
+  );
+
   const onFurnTap = useCallback(
     (item: FurnitureItem) => {
       const entry = CATALOG[item.kind];
@@ -562,6 +628,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
         setShopOpen(false);
         setPaletteOpen(false);
         setSelId((s) => (s === item.id ? null : item.id));
+        return;
+      }
+
+      // 生活模式：可坐/睡/泡的家具 → 弹出确认按钮（先结束当前姿势）
+      if (entry.acts?.seat || entry.acts?.sleep || entry.acts?.bath) {
+        if (poseRef.current.pose !== 'stand' || actRef.current) endAction();
+        const type: 'sit' | 'lie' | 'bath' = entry.acts.bath ? 'bath' : entry.acts.sleep ? 'lie' : 'sit';
+        setCharAction({ type, itemId: item.id, active: false });
         return;
       }
 
@@ -606,8 +680,31 @@ export default function CoupleHome({ close }: { close: () => void }) {
         patch({ lastTouch: now });
       }
     },
-    [mode, saveSoon, toast],
+    [mode, saveSoon, toast, endAction],
   );
+
+  /** 浴缸水龙头：放水 / 关水 */
+  const onFaucetTap = useCallback(
+    (item: FurnitureItem) => {
+      const on = !item.st?.bathWater;
+      setItems((prev) => prev.map((f) => (f.id === item.id ? { ...f, st: { ...f.st, bathWater: on } } : f)));
+      toast(on ? '哗啦啦～热水放好咯' : '水龙头关上啦');
+      saveSoon();
+    },
+    [saveSoon, toast],
+  );
+
+  /** 泡澡时的放水/关水按钮（浴缸 = 当前动作的家具） */
+  const toggleBathWater = useCallback(() => {
+    const id = charAction?.itemId;
+    if (!id) return;
+    setItems((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, st: { ...f.st, bathWater: !f.st?.bathWater } } : f)),
+    );
+    const on = !itemsRef.current.find((f) => f.id === id)?.st?.bathWater;
+    toast(on ? '哗啦啦～热水放好咯' : '水龙头关上啦');
+    saveSoon();
+  }, [charAction, saveSoon, toast]);
 
   // ---------------- 编辑操作 ----------------
   const rotateY = useCallback(
@@ -1136,7 +1233,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
               ? { x: 1.39, z: 5.6 }
               : room === 'kt'
                 ? { x: 7.38, z: 4.1 }
-                : { x: BATH_X1 - 0.16, z: 4.2 };
+                : { x: BATH_X1 - 0.16, z: -0.8 };
         setItems((prev) => [...prev, { id, kind, x: pos.x, z: pos.z, y: 1.85, ry: -Math.PI / 2, st: {} }]);
         toast(`已挂到${ROOM_NAMES[room]}东墙`);
       } else {
@@ -1169,8 +1266,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const switchMode = useCallback(
     (m: HomeMode) => {
       setMode(m);
-      if (m === 'edit') setShopOpen(true);
-      else {
+      if (m === 'edit') {
+        setShopOpen(true);
+        // 进装修模式：结束进行中的坐/睡/泡动作
+        if (actRef.current || poseRef.current.pose !== 'stand') {
+          actRef.current = null;
+          poseRef.current.pose = 'stand';
+          setCharAction(null);
+        }
+      } else {
         setShopOpen(false);
         setSelId(null);
         setMoveOn(false);
@@ -1184,9 +1288,39 @@ export default function CoupleHome({ close }: { close: () => void }) {
   );
 
   const toggleNight = useCallback(() => {
+    // 手动切换 → 脱离真实时间自动模式
+    setNightAuto(false);
     setNight((n) => !n);
     saveSoon();
   }, [saveSoon]);
+
+  /** 昼夜跟随真实时间（19:00~6:00 算夜晚，每 30s 校对） */
+  const enableAutoNight = useCallback(() => {
+    setNightAuto(true);
+    saveSoon();
+    toast('昼夜已跟随真实时间～');
+  }, [saveSoon, toast]);
+
+  useEffect(() => {
+    if (!nightAuto) return;
+    const compute = () => {
+      const h = new Date().getHours();
+      return h >= 19 || h < 6;
+    };
+    setNight(compute());
+    const t = setInterval(() => setNight(compute()), 30000);
+    return () => clearInterval(t);
+  }, [nightAuto]);
+
+  /** 小人画风：Q版卡通 ↔ 拟真 */
+  const toggleCharStyle = useCallback(() => {
+    setCharStyle((s) => {
+      const next = s === 'cartoon' ? 'real' : 'cartoon';
+      toast(next === 'real' ? '换成拟真小人啦，还是很像你～' : '换回 Q 版卡通小人～');
+      return next;
+    });
+    saveSoon();
+  }, [saveSoon, toast]);
 
   const toggleFull = useCallback(async () => {
     try {
@@ -1247,6 +1381,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
         onNudge={nudgeSel}
         fp={fp}
         fpRef={fpRef}
+        charStyle={charStyle}
+        poseRef={poseRef}
+        actRef={actRef}
+        onFaucetTap={onFaucetTap}
         win={win}
         onToggleWin={toggleWin}
         winPos={winPos}
@@ -1291,11 +1429,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
             <ChevronLeft className="h-5 w-5" />
           </button>
 
-          {/* 模式标签 */}
-          <div className="rounded-full bg-black/25 px-2.5 py-0.5 text-[10px] font-medium tracking-wide text-white/90 backdrop-blur-sm">
-            {mode === 'live' ? '生活模式' : '装修模式'}
-          </div>
-
           <div className="flex gap-2">
             <button
               onClick={toggleNight}
@@ -1303,6 +1436,18 @@ export default function CoupleHome({ close }: { close: () => void }) {
               className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#7a6a4e] shadow-sm backdrop-blur transition active:scale-95"
             >
               {night ? <Moon className="h-[18px] w-[18px]" /> : <Sun className="h-[18px] w-[18px]" />}
+            </button>
+            <button
+              onClick={enableAutoNight}
+              aria-label="昼夜跟随真实时间"
+              title="昼夜跟随真实时间（19点~6点为夜晚）"
+              className={
+                nightAuto
+                  ? 'pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-[#3a3a3e]/80 text-[#ffd98f] shadow-sm backdrop-blur transition active:scale-95'
+                  : 'pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95'
+              }
+            >
+              <Clock className="h-[18px] w-[18px]" />
             </button>
             <button
               onClick={toggleFull}
@@ -1330,6 +1475,69 @@ export default function CoupleHome({ close }: { close: () => void }) {
             ))}
           </AnimatePresence>
         </div>
+
+        {/* 家具互动按钮（生活模式）：坐下/睡觉/泡澡 → 站起来/起床/出来 */}
+        <AnimatePresence>
+          {mode === 'live' && charAction && (
+            <motion.div
+              key="action-bar"
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              className="absolute bottom-[196px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-2"
+            >
+              {charAction.active && charAction.type === 'bath' && (
+                <button
+                  onClick={toggleBathWater}
+                  aria-label="浴缸放水/关水"
+                  className="pointer-events-auto flex h-12 items-center gap-2 whitespace-nowrap rounded-full bg-[#a8d4e6] px-5 text-[14px] font-semibold text-white shadow-lg transition active:scale-95"
+                >
+                  <Droplet className="h-[18px] w-[18px]" />
+                  放水
+                </button>
+              )}
+              <motion.button
+                key={`${charAction.itemId}-${charAction.active}`}
+                initial={{ opacity: 0, scale: 0.92 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.94 }}
+                transition={{ type: 'spring', damping: 24, stiffness: 340 }}
+                onClick={() => {
+                  if (!charAction.active) {
+                    const it = itemsRef.current.find((f) => f.id === charAction.itemId);
+                    if (it) beginAction(charAction.type, it);
+                  } else {
+                    endAction();
+                  }
+                }}
+                className={
+                  charAction.active
+                    ? 'pointer-events-auto flex h-12 items-center gap-2 rounded-full bg-[#3a3a3e]/85 px-6 text-[14px] font-semibold text-white shadow-xl backdrop-blur transition active:scale-95'
+                    : 'pointer-events-auto flex h-12 items-center gap-2 rounded-full bg-[#f4b3c2] px-6 text-[14px] font-semibold text-white shadow-lg shadow-[#f4b3c2]/40 transition active:scale-95'
+                }
+              >
+                {charAction.type === 'sit' ? (
+                  <Armchair className="h-[18px] w-[18px]" />
+                ) : charAction.type === 'lie' ? (
+                  <BedDouble className="h-[18px] w-[18px]" />
+                ) : (
+                  <Bath className="h-[18px] w-[18px]" />
+                )}
+                {charAction.active
+                  ? charAction.type === 'sit'
+                    ? '站起来'
+                    : charAction.type === 'lie'
+                      ? '起床'
+                      : '出来啦'
+                  : charAction.type === 'sit'
+                    ? '坐下'
+                    : charAction.type === 'lie'
+                      ? '睡觉'
+                      : '泡个澡'}
+              </motion.button>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* 编辑模式：缩放按钮（右缘中部） */}
         {mode === 'edit' && (
@@ -1587,8 +1795,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
             </div>
             <div className={mode === 'live' ? 'hidden' : 'flex-1'} />
 
-            {/* 模式切换 + 视角 + 商店 + 装修 */}
+            {/* 画风 + 模式切换 + 视角 + 商店 + 装修 */}
             <div className="pointer-events-auto flex flex-col items-end gap-2">
+              {mode === 'live' && (
+                <button
+                  onClick={toggleCharStyle}
+                  aria-label={charStyle === 'cartoon' ? '切换拟真小人' : '切换卡通小人'}
+                  title={charStyle === 'cartoon' ? '换成拟真小人' : '换成 Q 版卡通小人'}
+                  className="flex h-11 items-center gap-2 rounded-full bg-white/85 px-4 text-[13px] font-medium text-[#4a4a4e] shadow-md backdrop-blur transition active:scale-95"
+                >
+                  {charStyle === 'cartoon' ? <Baby className="h-4 w-4 text-[#e78ba4]" /> : <UserRound className="h-4 w-4 text-[#8a7a54]" />}
+                  {charStyle === 'cartoon' ? '卡通小人' : '拟真小人'}
+                </button>
+              )}
               {mode === 'live' && (
                 <button
                   onClick={toggleFp}

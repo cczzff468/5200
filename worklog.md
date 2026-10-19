@@ -21011,3 +21011,28 @@ Stage Summary:
 - 数据向后兼容：新增字段全部可选 + migrateBathV53 幂等，老档无损升级（55→81 件）
 - 涉及文件：types.ts、catalog.ts、scene/{Room,HomeScene,Furn3D,Char3D,Small3D(新)}.tsx、CoupleHome.tsx、api/couple-home/route.ts
 - 待办（下轮可选）：TA 走进其他房间互动、厨房做饭流程（水槽/灶台点击）、BGM 音效、浴室水汽粒子
+
+---
+Task ID: cottage-v9
+Agent: 主协调 Agent (Z.ai Code)
+Task: 拾光小屋 v5.4——卫生间搬家到客厅东侧+洁具补全/门牌/全新可动小人（卡通+拟真双画风）/坐睡泡澡互动/真实时间昼夜
+
+Work Log:
+- 户型重构：卫生间从厨房东侧（x7.5~11.5,z3~8）整体搬到客厅东侧（x4.5~8.5,z-3~3），门改开在客厅东墙（x=4.5 沿 z 滑行）；roomAt/ROOM_SPANS/clampFurnToRooms/collideAndClamp 四处同步（客厅东墙走廊判定 inBathCorr 换轴）；厨房东墙变封闭外墙；WINS[7/8] 卫生间双窗随迁（北窗在浴缸上方/东窗）；WALL_SLOTS 卫生间三段重算；migrateBathV54 幂等迁移（旧位默认洁具删除按新布局重摆、用户自买件平移钳位、旧门位/旧窗位越界自动复位）
+- Room.tsx buildWalls 重写：客厅东墙拆 rightA/rightB 两段夹门洞（shared axis x）+ 卫生间 bathNorth/bathEast 新墙；ktNorthMain 延伸到 BATH_X1 覆盖卫生间南墙；地板/围边/天花板四件套随户型更新；DoorLintel 卫生间门梁移位
+- 门牌：DoorSign 组件（canvas 圆角白卡+樱粉描边+中文标签纹理，双面贴图），挂在三扇门洞正上方随门位移动——卧室/厨房/卫生间
+- 卫浴补全：Shower3D 玻璃淋浴房（底盘+双固定玻璃背板+立柱顶喷+旋钮，开=花洒出水锥）/Basin3D 浴室柜洗手台（柜体+陶瓷盆+冷热龙头）/Mirror3D 挂壁大镜子（樱粉框+高金属镜面+高光条）/TowelRack3D 毛巾架（双杆+搭巾）；马桶加 seat 锚点；商店「卫浴」tab 全上架
+- Char3D 全新重写：四级关节骨架（肩/肘/髋/膝 pivot）+ 两角色×两画风（me=女主深棕长卷发+白背心+奶油开衫+深蓝喇叭裤+小白鞋；partner=男主柔黑蓬松短发+黑夹克+黑牛仔；cartoon Q 版大头 / real 拟真纤细）；走路=摆臂+迈腿+膝盖随摆+身体起伏，待机=呼吸+手臂微晃；姿势阻尼过渡：sit（屈髋屈膝坐）/lie（Ry(π)·Rx(π/2) 躺平面朝天头朝床头）/bath（脱衣：衣物网格隐藏+素体躯干显示+泡澡浮动）
+- 家具互动：catalog acts.seat/sleep/bath 锚点（沙发×2/休闲椅/脚凳/椅/马桶可坐；双人床/单人床可睡；浴缸可泡）；点家具弹「坐下/睡觉/泡个澡」按钮 → GameLoop actRef 寻路走到落点摆姿势 → 按钮变「站起来/起床/出来啦」；姿势期间锁输入不碰撞；点其他家具自动先起身
+- 浴缸水龙头：TubExtras（立柱+弯头+旋钮全透明热区 0.16）点击放水；st.bathWater 持久化；水位 damp 涨落+出水水柱+水面泡泡群；泡澡时 HUD 加「放水」按钮（3D 旋钮太小不好点）；出浴自动关水穿衣
+- HUD：删除「生活模式/装修模式」标签；昼夜双按钮——太阳/月亮手动切换（自动模式脱离）+ 时钟按钮开启「跟随真实时间」（19:00~6:00 夜晚，30s 校对，nightAuto 持久化）；「卡通小人/拟真小人」画风切换按钮
+- GameLoop：actRef 寻路分支（1.7m/s 走向 tx/tz → 到位摆姿势+朝向阻尼对齐）；第一人称眼高随姿势（坐/躺/泡贴支撑面）
+- API route：charStyle/nightAuto 清洗入库
+- 端到端实测（agent-browser）：迁移 84 件全落位 → 装修俯瞰四室新户型（卫生间在客厅右翼）→ 卫浴 tab 六件套全上架 → 删除模式标签 ✓ → 女主新造型（棕长卷发白开衫）+ 走路迈腿动画 ✓ → 点餐椅「坐下」→ 走过去坐下 →「站起来」✓ → 传送浴缸「泡个澡」→ 坐进缸内肩膀以上露出 + 「放水」水位上涨泡泡 + 「出来啦」站起穿衣 ✓ → 传送卧室「睡觉」→ 躺床头朝床头脸朝天 →「起床」✓ → 「拟真小人」切换（纤细比例）→ 切回卡通 ✓ → 传送门走廊按 D 穿墙进浴室（4.3→7.02）✓ → 夜晚按钮（窗外星空月亮+窗边暖光）→ 时钟按钮恢复真实时间白天 ✓ → 门牌白卡挂门洞上方可见 ✓
+- 排障记录：①headless rAF 节流导致键盘行走仅 1/4 速（非 bug，真机正常）；②agent-browser 读服务端位置有最长 60s 推送延迟，需切模式强制 schedulePush 后再读；③visible=false 网格不参与射线检测——水龙头热区改全透明材质；④小人被冰箱与东墙夹角卡住属正常碰撞，改用 API 传送（POST rev+1 后 reload 采纳）
+
+Stage Summary:
+- 拾光小屋 v5.4：四室新户型（卫生间门开在客厅）+ 卫浴全套（淋浴房/洗手台/镜子/毛巾架）+ 三扇门挂牌 + 全新可动小人（女主/男主 × 卡通/拟真，摆臂迈腿走路）+ 坐/睡/泡澡互动与浴缸放水 + 真实时间昼夜
+- 数据向后兼容：charStyle/nightAuto/bathWater 可选字段 + migrateBathV54 幂等，老档无损升级
+- 涉及文件：types.ts、catalog.ts、scene/{Room,HomeScene,Char3D,Furn3D,Small3D}.tsx、CoupleHome.tsx、api/couple-home/route.ts
+- 待办（下轮可选）：partner 也会响应互动（一起坐沙发/同床）、厨房做饭流程、BGM 音效、浴室水汽粒子
