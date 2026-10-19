@@ -127,6 +127,11 @@ export function ensureModel(url: string): Promise<THREE.Group> {
   return loadModel(url);
 }
 
+/** 模型是否已加载完毕（商城缩略图捕获前轮询用） */
+export function isModelReady(url: string): boolean {
+  return protoMap.has(url);
+}
+
 // ---------------- 归一化与克隆 ----------------
 
 export interface FurnModel {

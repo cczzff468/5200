@@ -30,6 +30,8 @@ import {
   clampFurnToRooms,
   DOOR_PASS,
   DOOR_X,
+  KDOOR_X,
+  KTCH_X1,
   ROOM_X,
   ROOM_Z,
   SNAP,
@@ -62,12 +64,16 @@ export interface HomeSceneProps {
   wallCol?: string;
   doorCol?: string;
   winCol?: string;
-  /** 卧室地板/墙壁自定义色（客厅卧室分开换色） */
+  /** 卧室/厨房地板墙壁自定义色（三房间分开换色） */
   floorColBed?: string;
   wallColBed?: string;
-  /** 卧室门开态 + 切换 */
+  floorColK?: string;
+  wallColK?: string;
+  /** 卧室门 / 厨房门开态 + 切换 */
   doorOpen?: boolean;
+  kitchenDoorOpen?: boolean;
   onToggleDoor?: () => void;
+  onToggleKitchenDoor?: () => void;
   onFloorTap: () => void;
   onFurnTap: (item: FurnitureItem) => void;
   onDragEnd: (id: string) => void;
@@ -95,10 +101,11 @@ function lerpAngle(cur: number, target: number, k: number): number {
 /** 家具双房间钳制：见 catalog.clampFurnToRooms（z < 隔墙 → 客厅；否则卧室） */
 
 /**
- * 小人 vs 家具 AABB（膨胀 0.2）推出 + 房间边界钳制（抬升家具不挡路）。
- * 两室一厅：隔墙挡路，只有「门开着且在门走廊内」才能穿过（partner 传 allowDoor=false 永远留在客厅）。
+ * 小人 vs 家具 AABB（膨胀 0.2）推出 + 三房间边界钳制（抬升家具不挡路）。
+ * 三室：客厅 / 卧室 / 厨房 —— 隔墙挡路，只有「对应门开着且在门走廊内」才能穿过
+ * （卧室↔厨房共墙不设门；partner 传双关门永远留在客厅）。
  */
-function collideAndClamp(c: CharRT, items: FurnitureItem[], doorOpen: boolean) {
+function collideAndClamp(c: CharRT, items: FurnitureItem[], bedDoorOpen: boolean, ktDoorOpen: boolean) {
   for (const it of items) {
     const e = CATALOG[it.kind];
     if (!e || e.flat) continue;
@@ -118,13 +125,20 @@ function collideAndClamp(c: CharRT, items: FurnitureItem[], doorOpen: boolean) {
   if (c.z < BED_Z0) {
     // —— 客厅侧 ——
     c.x = clamp(c.x, -ROOM_X + m, ROOM_X - m);
-    const inCorridor = doorOpen && Math.abs(c.x - DOOR_X) < DOOR_PASS;
-    c.z = inCorridor ? clamp(c.z, -ROOM_Z + m, BED_Z0 + m) : clamp(c.z, -ROOM_Z + m, BED_Z0 - m);
-  } else {
+    const inBedCorr = bedDoorOpen && Math.abs(c.x - DOOR_X) < DOOR_PASS;
+    const inKtCorr = ktDoorOpen && Math.abs(c.x - KDOOR_X) < DOOR_PASS;
+    const zMax = inBedCorr || inKtCorr ? BED_Z0 + m : BED_Z0 - m;
+    c.z = clamp(c.z, -ROOM_Z + m, zMax);
+  } else if (c.x < BED_X1) {
     // —— 卧室侧 ——
     c.x = clamp(c.x, -ROOM_X + m, BED_X1 - m);
-    const inCorridor = doorOpen && Math.abs(c.x - DOOR_X) < DOOR_PASS;
-    c.z = inCorridor ? clamp(c.z, BED_Z0 - m, BED_Z1 - m) : clamp(c.z, BED_Z0 + m, BED_Z1 - m);
+    const inCorr = bedDoorOpen && Math.abs(c.x - DOOR_X) < DOOR_PASS;
+    c.z = inCorr ? clamp(c.z, BED_Z0 - m, BED_Z1 - m) : clamp(c.z, BED_Z0 + m, BED_Z1 - m);
+  } else {
+    // —— 厨房侧 ——
+    c.x = clamp(c.x, BED_X1 + m, KTCH_X1 - m);
+    const inCorr = ktDoorOpen && Math.abs(c.x - KDOOR_X) < DOOR_PASS;
+    c.z = inCorr ? clamp(c.z, BED_Z0 - m, BED_Z1 - m) : clamp(c.z, BED_Z0 + m, BED_Z1 - m);
   }
 }
 
@@ -146,7 +160,7 @@ function wander(c: CharRT, dt: number, items: FurnitureItem[]) {
       c.moving = true;
       c.heading = lerpAngle(c.heading, Math.atan2(dx, dz), Math.min(1, dt * 8));
     }
-    collideAndClamp(c, items, false);
+    collideAndClamp(c, items, false, false);
   } else if (now > c.nextWander) {
     c.target = { x: rand(-ROOM_X + 0.7, ROOM_X - 0.7), z: rand(-ROOM_Z + 0.7, ROOM_Z - 0.9) };
   }
@@ -197,12 +211,12 @@ function GameLoop({
   distRef: RefObject<{ d: number }>;
   modeRef: RefObject<HomeMode>;
   itemsRef: RefObject<FurnitureItem[]>;
-  /** 卧室门开态（ref 高频读取） */
-  doorRef: RefObject<{ open: boolean }>;
+  /** 卧室门/厨房门开态（ref 高频读取） */
+  doorRef: RefObject<{ bed: boolean; kt: boolean }>;
   /** 拖拽中 1:1 直接控制镜头（true 时不做惯性 lerp） */
   lookRef: RefObject<{ on: boolean }>;
-  /** 相机对焦物 z（隔墙可见性用） */
-  focusRef: RefObject<{ z: number }>;
+  /** 相机对焦物（隔墙可见性用） */
+  focusRef: RefObject<{ x: number; z: number }>;
 }) {
   const { camera } = useThree();
   const controls = useThree((s) => s.controls) as unknown as { target?: THREE.Vector3 } | null;
@@ -264,7 +278,7 @@ function GameLoop({
     } else {
       meRT.moving = false;
     }
-    collideAndClamp(meRT, itemsRef.current ?? [], doorRef.current?.open ?? false);
+    collideAndClamp(meRT, itemsRef.current ?? [], doorRef.current?.bed ?? false, doorRef.current?.kt ?? false);
 
     // partner 漫游（客厅内）
     wander(taRT, dt, itemsRef.current ?? []);
@@ -287,9 +301,10 @@ function GameLoop({
     lookAt.current.set(meRT.x, 1.0, meRT.z);
     camera.lookAt(lookAt.current);
 
-    // 对焦物 z：生活=小人 / 编辑=轨道中心（供隔墙可见性判断）
+    // 对焦物：生活=小人 / 编辑=轨道中心（供隔墙可见性判断）
     const curMode = modeRef.current as HomeMode;
     focusRef.current.z = curMode === 'edit' ? controls?.target?.z ?? 2.4 : meRT.z;
+    focusRef.current.x = curMode === 'edit' ? controls?.target?.x ?? 0 : meRT.x;
   });
   return null;
 }
@@ -531,6 +546,7 @@ function EditGrid() {
     };
     span(-ROOM_X, ROOM_X, -ROOM_Z, BED_Z0); // 客厅
     span(-ROOM_X, BED_X1, BED_Z0, BED_Z1); // 卧室
+    span(BED_X1, KTCH_X1, BED_Z0, BED_Z1); // 厨房
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     return g;
@@ -605,13 +621,13 @@ function EditCameraKick({ mode }: { mode: HomeMode }) {
   useEffect(() => {
     const cam = camera as THREE.PerspectiveCamera;
     if (mode === 'edit' && prev.current !== 'edit') {
-      // 南侧斜上空俯瞰位（客厅+卧室全罩住），竖屏窄视野也够广
-      cam.position.set(8.6, 14.5, 15.2);
+      // 东南斜上空俯瞰位（三室全罩住），竖屏窄视野也够广
+      cam.position.set(9.6, 14.8, 15.8);
       if (cam.isPerspectiveCamera) {
         cam.fov = 55;
         cam.updateProjectionMatrix();
       }
-      cam.lookAt(0, 0.3, 2.4);
+      cam.lookAt(1.3, 0.3, 2.5);
     } else if (mode === 'live' && prev.current !== 'live') {
       if (cam.isPerspectiveCamera && cam.fov !== 48) {
         cam.fov = 48;
@@ -662,13 +678,14 @@ function Lights({ night }: { night: boolean }) {
 export default function HomeScene(props: HomeSceneProps) {
   const {
     items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge,
-    win, onToggleWin, floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, doorOpen, onToggleDoor,
+    win, onToggleWin, floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, floorColK, wallColK,
+    doorOpen, kitchenDoorOpen, onToggleDoor, onToggleKitchenDoor,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect,
   } = props;
 
   const modeRef = useRef<HomeMode>(mode);
   const itemsRef = useRef<FurnitureItem[]>(items);
-  const doorRef = useRef({ open: !!doorOpen });
+  const doorRef = useRef({ bed: !!doorOpen, kt: !!kitchenDoorOpen });
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
@@ -676,16 +693,17 @@ export default function HomeScene(props: HomeSceneProps) {
     itemsRef.current = items;
   }, [items]);
   useEffect(() => {
-    doorRef.current.open = !!doorOpen;
-  }, [doorOpen]);
+    doorRef.current.bed = !!doorOpen;
+    doorRef.current.kt = !!kitchenDoorOpen;
+  }, [doorOpen, kitchenDoorOpen]);
 
   const azRef = useRef({ az: 0 });
   const pitchRef = useRef({ p: 0.92 });
   const distRef = useRef({ d: 8.8 });
   const dragRef = useRef<DragInfo | null>(null);
   const lookRef = useRef({ on: false });
-  /** 相机对焦物 z（生活=小人 / 编辑=轨道中心）→ 隔墙判断是否挡在镜头与它之间 */
-  const focusRef = useRef({ z: 2.4 });
+  /** 相机对焦物（生活=小人 / 编辑=轨道中心）→ 隔墙判断是否挡在镜头与它之间 */
+  const focusRef = useRef({ x: 0, z: 2.4 });
   const moveSelRef = useRef<{ id: string | null; on: boolean }>({ id: null, on: false });
   useEffect(() => {
     moveSelRef.current = { id: moveOn ? selId : null, on: moveOn && !!selId };
@@ -733,10 +751,14 @@ export default function HomeScene(props: HomeSceneProps) {
         wallCol={wallCol}
         floorColBed={floorColBed}
         wallColBed={wallColBed}
+        floorColK={floorColK}
+        wallColK={wallColK}
         doorCol={doorCol}
         winCol={winCol}
         doorOpen={doorOpen}
+        kitchenDoorOpen={kitchenDoorOpen}
         onToggleDoor={onToggleDoor}
+        onToggleKitchenDoor={onToggleKitchenDoor}
         focusRef={focusRef}
       />
       {mode === 'edit' && <EditGrid />}
@@ -775,7 +797,7 @@ export default function HomeScene(props: HomeSceneProps) {
           maxDistance={26}
           minPolarAngle={0.12}
           maxPolarAngle={1.32}
-          target={[0, 0.4, 2.2]}
+          target={[1.3, 0.4, 2.5]}
           screenSpacePanning={false}
         />
       )}

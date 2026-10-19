@@ -1,11 +1,13 @@
 'use client';
 
 /**
- * 情侣小家 3D —— 程序化新家具（v5）
+ * 情侣小家 3D —— 程序化新家具（v5.2）
  *
  * - Aircon3D：立体壁挂空调（圆角机身 + 导风板摆动 + 运行冷风丝 + 指示灯 + 夜间冷光）；
  * - PhotoFrame3D：立式相框（木框 + 斜撑脚架），相片来自手机上传（st.photo dataURL），
- *   没有照片时显示「点我传合照」粉系占位画；照片永久保存在小家档案里。
+ *   没有照片时显示「点我传合照」粉系占位画；照片永久保存在小家档案里；
+ * - WallPhoto3D：挂墙相框（竖版 / 横版），贴墙平挂；
+ * - Polaroid3D：拍立得（白边厚相纸 + 胶带 + 小支架，微微倾角）。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -328,10 +330,10 @@ export function Vanity3D({ col }: { col?: string }) {
   );
 }
 
-/** 无照片时的占位画（粉系渐变 + 爱心 + 提示字） */
-function makePlaceholderTexture(): THREE.CanvasTexture {
-  const W = 256;
-  const H = 344;
+/** 无照片时的占位画（粉系渐变 + 爱心 + 提示字；wide 横版变体） */
+function makePlaceholderTexture(wide = false): THREE.CanvasTexture {
+  const W = wide ? 384 : 256;
+  const H = wide ? 256 : 344;
   const cv = document.createElement('canvas');
   cv.width = W;
   cv.height = H;
@@ -343,9 +345,9 @@ function makePlaceholderTexture(): THREE.CanvasTexture {
   ctx.fillRect(0, 0, W, H);
   // 爱心
   ctx.fillStyle = '#f2a9bc';
-  const cx = W / 2;
-  const cy = H * 0.4;
-  const s = 34;
+  const cx = wide ? W * 0.32 : W / 2;
+  const cy = H * 0.42;
+  const s = wide ? 30 : 34;
   ctx.beginPath();
   ctx.moveTo(cx, cy + s * 0.9);
   ctx.bezierCurveTo(cx - s * 1.4, cy - s * 0.2, cx - s * 0.6, cy - s * 1.2, cx, cy - s * 0.4);
@@ -353,27 +355,32 @@ function makePlaceholderTexture(): THREE.CanvasTexture {
   ctx.fill();
   // 小爱心点缀
   ctx.fillStyle = 'rgba(242,169,188,0.45)';
-  for (const [dx, dy, r] of [[-62, -70, 10], [58, -52, 8], [48, 66, 9], [-50, 78, 7]] as const) {
+  for (const [dx, dy, r] of wide
+    ? [[-70, -52, 9], [72, -40, 8], [64, 44, 8], [-58, 52, 7]]
+    : [[-62, -70, 10], [58, -52, 8], [48, 66, 9], [-50, 78, 7]] as const) {
     ctx.beginPath();
     ctx.arc(cx + dx, cy + dy, r, 0, Math.PI * 2);
     ctx.fill();
   }
   // 提示文字
   ctx.fillStyle = '#b07193';
-  ctx.font = '600 30px system-ui, sans-serif';
+  ctx.font = '600 28px system-ui, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('点我传', cx, H * 0.68);
-  ctx.fillText('合照哦', cx, H * 0.68 + 40);
+  if (wide) {
+    ctx.fillText('点我传合照哦', W * 0.68, H * 0.52);
+  } else {
+    ctx.fillText('点我传', cx, H * 0.68);
+    ctx.fillText('合照哦', cx, H * 0.68 + 40);
+  }
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
   return tex;
 }
 
-export function PhotoFrame3D({ col, photo }: { col?: string; photo?: string }) {
+/** 照片 dataURL → texture（异步加载，变化时重建） */
+function usePhotoTexture(photo?: string): THREE.Texture | null {
   const [texState, setTexState] = useState<{ photo: string; tex: THREE.Texture } | null>(null);
-
-  // 照片 dataURL → texture（照片变化时重建；setState 只发生在异步回调里）
   useEffect(() => {
     if (!photo) return;
     let alive = true;
@@ -391,10 +398,12 @@ export function PhotoFrame3D({ col, photo }: { col?: string; photo?: string }) {
       alive = false;
     };
   }, [photo]);
+  return texState && texState.photo === photo ? texState.tex : null;
+}
 
+export function PhotoFrame3D({ col, photo }: { col?: string; photo?: string }) {
   const placeholder = useMemo(() => makePlaceholderTexture(), []);
-  // 当前 photo 对不上已加载的纹理（无照片/刚换图）→ 回落占位画
-  const photoTex = texState && texState.photo === photo ? texState.tex : null;
+  const photoTex = usePhotoTexture(photo);
   const frameCol = col ?? '#f5f1e8';
   const frameDark = useMemo(() => new THREE.Color(frameCol).multiplyScalar(0.88), [frameCol]);
 
@@ -440,6 +449,114 @@ export function PhotoFrame3D({ col, photo }: { col?: string; photo?: string }) {
       <mesh position={[0, 0.34, -0.12]} rotation={[-0.42, 0, 0]} castShadow>
         <boxGeometry args={[0.4, 0.56, 0.02]} />
         <meshStandardMaterial color={frameDark} roughness={0.85} />
+      </mesh>
+    </group>
+  );
+}
+
+// ---------------- 挂墙相框（竖版 0.56×0.72 / 横版 1.1×0.7，贴墙平挂） ----------------
+
+export function WallPhoto3D({ col, photo, wide }: { col?: string; photo?: string; wide?: boolean }) {
+  const placeholder = useMemo(() => makePlaceholderTexture(wide), [wide]);
+  const photoTex = usePhotoTexture(photo);
+  const frameCol = col ?? '#f5f1e8';
+  const frameDark = useMemo(() => new THREE.Color(frameCol).multiplyScalar(0.87), [frameCol]);
+
+  const W = wide ? 1.1 : 0.56;
+  const H = wide ? 0.7 : 0.72;
+  const PW = wide ? 1.0 : 0.46;
+  const PH = wide ? 0.6 : 0.6;
+  const cy = H / 2;
+
+  return (
+    <group>
+      {/* 主背板（贴墙） */}
+      <mesh position={[0, cy, 0]} castShadow>
+        <boxGeometry args={[W, H, 0.042]} />
+        <meshStandardMaterial color={frameCol} roughness={0.8} />
+      </mesh>
+
+      {/* 相片窗 */}
+      <mesh position={[0, cy, 0.023]}>
+        <planeGeometry args={[PW, PH]} />
+        <meshStandardMaterial map={photoTex ?? placeholder} roughness={0.55} />
+      </mesh>
+
+      {/* 内衬细边 */}
+      <mesh position={[0, cy + PH / 2 + 0.014, 0.02]}>
+        <boxGeometry args={[PW + 0.05, 0.028, 0.05]} />
+        <meshStandardMaterial color={frameDark} roughness={0.75} />
+      </mesh>
+      <mesh position={[0, cy - PH / 2 - 0.014, 0.02]}>
+        <boxGeometry args={[PW + 0.05, 0.028, 0.05]} />
+        <meshStandardMaterial color={frameDark} roughness={0.75} />
+      </mesh>
+      <mesh position={[-PW / 2 - 0.014, cy, 0.02]}>
+        <boxGeometry args={[0.028, PH + 0.05, 0.05]} />
+        <meshStandardMaterial color={frameDark} roughness={0.75} />
+      </mesh>
+      <mesh position={[PW / 2 + 0.014, cy, 0.02]}>
+        <boxGeometry args={[0.028, PH + 0.05, 0.05]} />
+        <meshStandardMaterial color={frameDark} roughness={0.75} />
+      </mesh>
+
+      {/* 顶部小蝴蝶结（竖版） / 角落小心心（横版） */}
+      {wide ? (
+        <mesh position={[-W / 2 + 0.09, cy + PH / 2 + 0.055, 0.026]} rotation={[0, 0, 0.3]} scale={[1, 0.85, 1]}>
+          <sphereGeometry args={[0.026, 10, 8]} />
+          <meshStandardMaterial color="#f2b3c2" roughness={0.6} />
+        </mesh>
+      ) : (
+        <mesh position={[0, cy + H / 2 + 0.035, 0.02]}>
+          <sphereGeometry args={[0.03, 10, 8]} />
+          <meshStandardMaterial color="#f2b3c2" roughness={0.6} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+// ---------------- 拍立得（白边厚相纸 + 胶带 + 小支架，微微倾角） ----------------
+
+export function Polaroid3D({ col, photo }: { col?: string; photo?: string }) {
+  const placeholder = useMemo(() => makePlaceholderTexture(false), []);
+  const photoTex = usePhotoTexture(photo);
+  const paper = col ?? '#fdfcf8';
+
+  // 相纸 0.34×0.42：上边 0.03 / 侧边 0.03 / 下边 0.11（经典拍立得比例）
+  const W = 0.34;
+  const H = 0.42;
+  const PH = 0.28;
+  const cy = H / 2;
+
+  return (
+    <group rotation={[0, 0, 0.035]}>
+      {/* 相纸主体 */}
+      <mesh position={[0, cy, 0]} castShadow>
+        <boxGeometry args={[W, H, 0.02]} />
+        <meshStandardMaterial color={paper} roughness={0.85} />
+      </mesh>
+      {/* 方形相片窗 */}
+      <mesh position={[0, cy + 0.035, 0.012]}>
+        <planeGeometry args={[PH, PH]} />
+        <meshStandardMaterial map={photoTex ?? placeholder} roughness={0.5} />
+      </mesh>
+      {/* 底部留白手写字（无照片时更俏皮；有照片时隐去） */}
+      {!photo && (
+        <mesh position={[0, cy - 0.115, 0.012]}>
+          <planeGeometry args={[0.22, 0.05]} />
+          <meshBasicMaterial color="#e8b7c4" transparent opacity={0.55} toneMapped={false} />
+        </mesh>
+      )}
+      {/* 顶部胶带（微斜的半透米黄胶带） */}
+      <mesh position={[0.01, H - 0.008, 0.006]} rotation={[0, 0, -0.12]}>
+        <boxGeometry args={[0.12, 0.036, 0.004]} />
+        <meshStandardMaterial color="#f4e8c8" roughness={0.5} transparent opacity={0.82} />
+      </mesh>
+      {/* 背后小支架（斜撑） */}
+      <mesh position={[0, 0.16, -0.05]} rotation={[-0.5, 0, 0]} castShadow>
+        <boxGeometry args={[0.24, 0.3, 0.012]} />
+        <meshStandardMaterial color={paper} roughness={0.85} />
       </mesh>
     </group>
   );

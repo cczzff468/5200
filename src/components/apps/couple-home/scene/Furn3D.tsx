@@ -18,7 +18,7 @@ import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import type { CatalogEntry, FurnitureItem, HomeMode } from '../types';
 import { animateDoors, cloneFurniture, ensureModel, type FurnModel } from './model-kit';
 import TV3D from './TV3D';
-import { Aircon3D, PhotoFrame3D, PlushBunny3D, PlushDuck3D, Vanity3D } from './Extras3D';
+import { Aircon3D, PhotoFrame3D, PlushBunny3D, PlushDuck3D, Polaroid3D, Vanity3D, WallPhoto3D } from './Extras3D';
 
 export interface Furn3DProps {
   item: FurnitureItem;
@@ -212,6 +212,11 @@ export default function Furn3D({
 
         {/* 立式相框（程序化建模：手机上传照片，永久保存） */}
         {entry.kind === 'photoFrame' && <PhotoFrame3D col={item.col} photo={item.st?.photo} />}
+
+        {/* 挂墙相框（竖版/横版） + 拍立得 */}
+        {entry.kind === 'photoWall' && <WallPhoto3D col={item.col} photo={item.st?.photo} />}
+        {entry.kind === 'photoWallWide' && <WallPhoto3D col={item.col} photo={item.st?.photo} wide />}
+        {entry.kind === 'polaroid' && <Polaroid3D col={item.col} photo={item.st?.photo} />}
 
         {/* 毛绒玩偶 ×2 + 梳妆台（程序化建模） */}
         {entry.kind === 'plushBunny' && <PlushBunny3D col={item.col} />}

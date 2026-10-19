@@ -20957,3 +20957,30 @@ Stage Summary:
 - 拾光小屋升级 v5 两室一厅：南向推门卧室 + 立体壁挂空调 + 手机照片相框（永久保存）+ 上下开窗 + 门窗换色 + 行走/缩放/滑动三处手感修复
 - 数据 v4→v5 自动迁移（旧档重播种默认布局）；win[] 扩容、doorOpen/doorCol/winCol/st.photo 均向后兼容可选字段
 - 涉及文件：types.ts、catalog.ts、scene/Room.tsx（重写）、scene/HomeScene.tsx（重写）、scene/Extras3D.tsx（新）、scene/Furn3D.tsx、CoupleHome.tsx、api/couple-home/route.ts、app/layout.tsx
+
+---
+Task ID: cottage-v7
+Agent: 主协调 Agent (Z.ai Code)
+Task: 拾光小屋 v5.2——厨房三室/挂墙相框+拍立得/小人所在房间购买/商城1:1缩略图/无限添加/门状态回滚修复
+
+Work Log:
+- GLB 实测（three GLTFLoader 脚本）：kitchenBar h0.84 / fridge h1.84 / stove h0.90 / sink h0.98 / diningTable h0.733 / bookcase 1.76 / wardrobe 1.7 / lampFloor 1.72 / coatRack 1.54 / plant 1.31 → 铺设厨房与挂墙避让数据
+- 厨房第三房间（catalog.ts）：KTCH_* 常量（厨房 = 卧室东侧 6×5，KTCH_X1=7.5，KDOOR_X=2.9 北墙开门洞通客厅）；roomAt/ROOM_SPANS/ROOM_NAMES；clampFurnToRooms 三区域钳制；WALL_SLOTS 全屋 10 段挂墙槽位 + snapToWallSlot
+- Room.tsx 重写墙体：南隔墙三段（卧室门+厨房门洞）+ 厨房北墙两段/东墙/南墙 + 卧室东墙改「卧室|厨房共墙」；共享墙可见性泛化为按轴（axis x|z，focusRef 扩为 {x,z}）；厨房地板+外沿围边；双门 HouseDoor（x 参数化）+ 双 DoorLintel；七扇上悬窗（新增厨房东/南）；三房间独立地板/墙色（floorColK/wallColK）
+- HomeScene：collideAndClamp 三房间 + 双门走廊判定（partner 仍留客厅）；编辑网格三房间；编辑俯瞰相机 (9.6,14.8,15.8) target (1.3,0.4,2.5)
+- 新家具（Extras3D）：WallPhoto3D 挂墙相框（竖版 0.56×0.72 / 横版 1.1×0.7，贴墙平挂）+ Polaroid3D 拍立得（白边厚相纸+胶带+小支架+微倾角）；photoTexture 钩子抽取复用；占位画 wide 变体；photoWall/photoWallWide/polaroid 三 kind 入目录（acts.photo）
+- 厨房家具解除隐藏：fridge/stove/sink/kitchenBar/microwave/toaster 上架；默认布局厨房全套（冰箱灶台水槽沿北墙+吧台+吧台椅×2+餐桌+餐椅×2+微波炉烤面包机上桌 y0.74+门垫+绿植+拍立得吧台 y0.85）
+- migrateKitchenV52 老档迁移（幂等）：无厨房家具则整套补插；拍立得跟随吧台有无决定上桌/落地；photoWall/photoWallWide 补挂厨房东壁/客厅西墙；migrateHome = 卧室补全 → 厨房开放 链式
+- 商城 1:1 缩略图（scene/ShopThumbs.tsx 新建）：隐藏离屏 R3F 画布（viewport 外 224px）+ Capturer 逐件快照 —— 等模型就绪 → 包围球自适应取景（地毯俯视/常规 3/4 视角）→ gl.render 后同步 toDataURL 透明底 PNG；复用 Furn3D 同渲染路径；模块级 MEM 缓存；失败标空串防死循环
+- CoupleHome：buy() 按 roomAt(meRT) 落家具 —— 地板件 findSpot(room)、挂墙件 findWallSpot(room)（避让已挂件+高家具 h>1.05）、空调按房间东墙、电视自动挂墙 y1.19；购买 id 加 buySeq 防同毫秒碰撞（无限添加）；拖拽结束挂墙件自动吸附最近墙 + 朝向屋内；compressPhoto 按框型比例裁剪（PHOTO_ASPECTS 四种）；装修面板加厨房分区（三房间分开换色）；商城商品 1:1 缩略图 + ×N 已有角标
+- ⚑ 修复「门开又被悄悄关上」：schedulePush 旧版在调用瞬间抓快照 —— ref 未更新 + 2.5s 内在途旧 rev 推送 409 采纳会把新门态回滚；改为推送定时器触发时 snap()（ref/rev 均最新）+ 60ms 快速本地落盘
+- API route：kitchenDoorOpen/floorColK/wallColK 清洗；MAX_ITEMS 150→240
+- 端到端实测排障记录：①截图存项目目录触发 Turbopack 持续 Fast Refresh → 组件反复重挂载把小人位置重置（假死表象）——截图改存 /tmp 后消失；②小人被 sideTable(西面)×bear(北面) 直角夹角卡死属正常碰撞，绕行即可；③摇杆实际中心 (78,770) 与假设 (63,745) 偏移导致推杆方向偏差
+- agent-browser 验证全项：迁移注入 55 件（厨房 16+三款相框+win7）→ 编辑俯瞰三室+网格 → 商城 41 张 1:1 缩略图+×N 角标（冰箱/灶台/水槽/微波炉/烤面包机全上架）→ 装修面板三房间分区+厨房地板抹茶生效 → 小人经厨房门洞穿行进厨房（(6.07,6.57) 实测）→ 厨房内景（水槽灶台冰箱挂墙相框+墙剖面）→ 厨房内买沙发落厨房 (6.5,6.75)+×2 角标 → 买挂墙相框自动贴厨房北墙 (4.13,3.25,y1.45) 避让灶台区 → 门开态跨刷新持久化 → 刷新后 0 控制台错误 → tsc+eslint 全绿
+
+Stage Summary:
+- 拾光小屋 v5.2：三室一厅（客厅+卧室+厨房双门穿行）+ 挂墙相框×2/拍立得（照片按框型裁剪永久保存）+ 小人所在房间购买（含挂墙件自动贴墙避让）+ 商城 1:1 实物缩略图与无限添加（×N 角标）
+- 数据向后兼容：kitchenDoorOpen/floorColK/wallColK 可选字段 + migrateKitchenV52 幂等迁移，老档无损升级
+- 顺带修复：门/开关类状态被在途旧快照 409 采纳回滚的真实 Bug（快照改在推送触发时生成）
+- 涉及文件：types.ts、catalog.ts、scene/{Room,HomeScene,Extras3D,Furn3D,ShopThumbs(新),model-kit}.ts(x)、CoupleHome.tsx、api/couple-home/route.ts
+- 待办（下轮可选）：浴室（bathtub/toilet/washer 已在目录 hidden）、TA 走进厨房互动、厨房水槽/灶台点击交互（做饭流程）、BGM

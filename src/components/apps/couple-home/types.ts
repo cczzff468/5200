@@ -42,6 +42,9 @@ export type FurnitureKind =
   | 'trashcan'
   | 'aircon'
   | 'photoFrame'
+  | 'photoWall'
+  | 'photoWallWide'
+  | 'polaroid'
   | 'plushBunny'
   | 'plushDuck'
   | 'vanity'
@@ -87,6 +90,9 @@ export interface FurnitureItem {
   /** 家具私有状态（开关/门/洗衣等） */
   st: FurnitureState;
 }
+
+/** 房间标识（小人在哪个房间，商店家具就添到哪个房间） */
+export type RoomId = 'lr' | 'br' | 'kt';
 
 /** 家具状态（按需可选字段） */
 export interface FurnitureState {
@@ -144,6 +150,12 @@ export interface HomeState {
   doorCol?: string;
   /** 窗框自定义色（#rrggbb；缺省 = 默认浅木白） */
   winCol?: string;
+  /** 厨房门开态（开 = 小人可以穿过门洞进出厨房） */
+  kitchenDoorOpen?: boolean;
+  /** 厨房地板自定义色（#rrggbb；缺省 = 默认云白；三房间分开换色） */
+  floorColK?: string;
+  /** 厨房墙壁自定义色（#rrggbb；缺省 = 默认暖白；三房间分开换色） */
+  wallColK?: string;
 }
 
 /** 家具目录条目（静态配置，不持久化） */
@@ -161,6 +173,10 @@ export interface CatalogEntry {
   scale?: [number, number, number];
   /** 卧室/厨卫等非客厅家具：商店暂不展示（客厅完成后陆续开放） */
   hidden?: boolean;
+  /** 挂墙件（相框/电视）：购买/拖拽后自动吸附到最近的墙，y 即挂高 */
+  wallMount?: boolean;
+  /** 家具实测高度（米，用于挂墙件避让高家具） */
+  h?: number;
   /** 交互能力 */
   acts: {
     /** 点击开/关（灯、电视、收音机、空调） */

@@ -1,14 +1,15 @@
 'use client';
 
 /**
- * 情侣小家 3D —— 房屋外壳（v5 两室一厅）
+ * 情侣小家 3D —— 房屋外壳（v5.2 三室：客厅+卧室+厨房）
  *
- * - 户型：客厅 9×6（北）+ 卧室 6×5（南），中间隔墙带门洞；
- * - 门：点击开合（向卧室内侧摆开），小人可穿过门洞进入卧室；门色可自定义（doorCol）；
- * - 窗户：五扇上悬窗（客厅北×2 / 客厅西 / 卧室西 / 卧室南），点击后窗扇绕顶部铰链
- *   向外上方打开，露出窗外风景（白天蓝天帆船 / 夜晚星空月亮）；窗框色可自定义（winCol）；
- * - 墙壁：按相机方位自动隐藏（洋房剖面效果）；地板/墙色用户自定义；
- * - 已移除旧版西墙浅粉护墙板（用户反馈像一块突兀的粉色）。
+ * - 户型：客厅 9×6（北）+ 卧室 6×5（西南）+ 厨房 6×5（东南，与卧室共墙），
+ *   两道门洞（卧室门/厨房门）都在 z=3 南墙上，点击开门后小人可穿行；
+ * - 门：点击开合（向屋内摆开），门色可自定义（doorCol 全屋通用）；
+ * - 窗户：七扇上悬窗（客厅北×2 / 客厅西 / 卧室西 / 卧室南 / 厨房东 / 厨房南），
+ *   点击后窗扇绕顶部铰链向外上方打开，露出窗外风景；窗框色可自定义（winCol）；
+ * - 墙壁：按相机方位自动隐藏（洋房剖面效果）；隔墙按「镜头↔对焦物」轴线判定隐藏；
+ *   地板/墙色三房间分开自定义（floorCol/wallCol + floorColBed/wallColBed + floorColK/wallColK）。
  */
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
@@ -23,6 +24,8 @@ import {
   DOOR_H,
   DOOR_W,
   DOOR_X,
+  KDOOR_X,
+  KTCH_X1,
   ROOM_W,
   ROOM_D,
   WALL_H,
@@ -177,6 +180,12 @@ function makeNightSkyTexture(): THREE.CanvasTexture {
 
 // ---------------- 单面墙 ----------------
 
+/** 相机对焦物（生活=小人 / 编辑=轨道中心）；隔墙按轴判断是否挡在镜头与它之间 */
+interface FocusPos {
+  x: number;
+  z: number;
+}
+
 interface WallDef {
   key: string;
   /** 墙中心位置 */
@@ -185,48 +194,54 @@ interface WallDef {
   size: [number, number, number];
   /** 朝室外的法线 */
   normal: THREE.Vector3;
-  /** 隔墙标记：不按法线隐藏，改用「镜头与对焦物是否被隔墙隔开」规则（见 sharedWallVisible） */
-  shared?: boolean;
+  /** 共享内墙：不按法线隐藏，改按「镜头与对焦物是否被墙隔开」轴线判定（见 sharedVisible） */
+  shared?: { axis: 'x' | 'z'; at: number };
   /** 是否画踢脚线（默认画） */
   baseboard?: boolean;
-  /** 归属房间：客厅/卧室分开换色（wallCol / wallColBed） */
-  room: 'lr' | 'br';
+  /** 归属房间：三房间分开换色 */
+  room: 'lr' | 'br' | 'kt';
 }
 
 /**
- * 隔墙（客厅南墙 / 门 / 门头梁）可见性：
- * 只有当隔墙挡在「镜头」与「对焦物」（小人/轨道中心）之间时才隐藏 ——
- * 小人站在客厅门口看门时墙照常可见（能点门），走进卧室后墙自动消失形成剖面。
+ * 共享内墙可见性：只有当墙挡在「镜头」与「对焦物」（小人/轨道中心）之间时才隐藏 ——
+ * 小人站在门口看门时墙照常可见（能点门），走进隔壁后墙自动消失形成剖面。
  */
-function sharedWallVisible(cameraZ: number, focusZ: number): boolean {
-  return (cameraZ - BED_Z0) * (focusZ - BED_Z0) >= 0;
+function sharedVisible(camAt: number, focusAt: number, at: number): boolean {
+  return (camAt - at) * (focusAt - at) >= 0;
 }
 
-/** 墙段定义：四面外围墙 + 隔墙两段（门洞两侧）+ 卧室三面墙；客厅/卧室分别归色 */
+/** 墙段定义：外围墙 + 南隔墙（两道门洞）+ 厨房外墙；三房间分别归色 */
 const WALLS: WallDef[] = [
   // —— 客厅 ——
   { key: 'back', pos: [0, WALL_H / 2, -ROOM_Z - WALL_T / 2], size: [ROOM_W + WALL_T * 2, WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'lr' },
-  { key: 'frontEast', pos: [(DOOR_X + DOOR_W / 2 + ROOM_X + WALL_T) / 2, WALL_H / 2, BED_Z0 + WALL_T / 2], size: [ROOM_X + WALL_T - (DOOR_X + DOOR_W / 2), WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: true, room: 'lr' },
-  { key: 'frontWest', pos: [(-ROOM_X - WALL_T + DOOR_X - DOOR_W / 2) / 2, WALL_H / 2, BED_Z0 + WALL_T / 2], size: [DOOR_X - DOOR_W / 2 - (-ROOM_X - WALL_T), WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: true, room: 'lr' },
+  { key: 'frontWest', pos: [(-ROOM_X - WALL_T + DOOR_X - DOOR_W / 2) / 2, WALL_H / 2, BED_Z0 + WALL_T / 2], size: [DOOR_X - DOOR_W / 2 - (-ROOM_X - WALL_T), WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: { axis: 'z', at: BED_Z0 }, room: 'lr' },
+  // 南隔墙·卧室门东侧段（延伸到卧室/厨房共墙）
+  { key: 'frontEast', pos: [(DOOR_X + DOOR_W / 2 + BED_X1) / 2, WALL_H / 2, BED_Z0 + WALL_T / 2], size: [BED_X1 - (DOOR_X + DOOR_W / 2), WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), shared: { axis: 'z', at: BED_Z0 }, room: 'lr' },
   { key: 'left', pos: [-ROOM_X - WALL_T / 2, WALL_H / 2, 0], size: [WALL_T, WALL_H, ROOM_D], normal: new THREE.Vector3(-1, 0, 0), room: 'lr' },
   { key: 'right', pos: [ROOM_X + WALL_T / 2, WALL_H / 2, 0], size: [WALL_T, WALL_H, ROOM_D], normal: new THREE.Vector3(1, 0, 0), room: 'lr' },
   // —— 卧室（隔墙南侧） ——
   { key: 'bedLeft', pos: [-ROOM_X - WALL_T / 2, WALL_H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, WALL_H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(-1, 0, 0), room: 'br' },
-  { key: 'bedRight', pos: [BED_X1 + WALL_T / 2, WALL_H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, WALL_H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0), room: 'br' },
+  // 卧室/厨房共墙（axis x 判定：两侧互看时隐藏）
+  { key: 'bedRight', pos: [BED_X1 + WALL_T / 2, WALL_H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, WALL_H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0), shared: { axis: 'x', at: BED_X1 }, room: 'br' },
   { key: 'bedBack', pos: [(BED_X0 + BED_X1) / 2, WALL_H / 2, BED_Z1 + WALL_T / 2], size: [BED_X1 - BED_X0 + WALL_T * 2, WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'br' },
+  // —— 厨房（卧室东侧；北墙两段夹门洞，东/南外墙） ——
+  { key: 'ktNorthWest', pos: [(BED_X1 + KDOOR_X - DOOR_W / 2) / 2, WALL_H / 2, BED_Z0 + WALL_T / 2], size: [KDOOR_X - DOOR_W / 2 - BED_X1, WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, -1), shared: { axis: 'z', at: BED_Z0 }, room: 'kt' },
+  { key: 'ktNorthMain', pos: [(KDOOR_X + DOOR_W / 2 + KTCH_X1) / 2, WALL_H / 2, BED_Z0 + WALL_T / 2], size: [KTCH_X1 - (KDOOR_X + DOOR_W / 2), WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, -1), shared: { axis: 'z', at: BED_Z0 }, room: 'kt' },
+  { key: 'ktEast', pos: [KTCH_X1 + WALL_T / 2, WALL_H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, WALL_H, BED_Z1 - BED_Z0 + WALL_T], normal: new THREE.Vector3(1, 0, 0), room: 'kt' },
+  { key: 'ktSouth', pos: [(BED_X1 + KTCH_X1) / 2, WALL_H / 2, BED_Z1 + WALL_T / 2], size: [KTCH_X1 - BED_X1 + WALL_T * 2, WALL_H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'kt' },
 ];
 
-/** 门洞上方的门头梁（随隔墙同隐同现；无踢脚线） */
-function DoorLintel({ wallCol, night, focusRef }: { wallCol?: string; night: boolean; focusRef?: RefObject<{ z: number }> }) {
+/** 门洞上方的门头梁（随所在隔墙同隐同现；无踢脚线） */
+function DoorLintel({ x, wallCol, night, focusRef }: { x: number; wallCol?: string; night: boolean; focusRef?: RefObject<FocusPos> }) {
   const ref = useRef<THREE.Group>(null);
   const { camera } = useThree();
   useFrame(() => {
     if (!ref.current) return;
-    ref.current.visible = sharedWallVisible(camera.position.z, focusRef?.current?.z ?? BED_Z0 - 1);
+    ref.current.visible = sharedVisible(camera.position.z, focusRef?.current?.z ?? BED_Z0 - 1, BED_Z0);
   });
   return (
     <group ref={ref}>
-      <mesh position={[DOOR_X, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} castShadow receiveShadow>
+      <mesh position={[x, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} castShadow receiveShadow>
         <boxGeometry args={[DOOR_W + 0.04, WALL_H - DOOR_H, WALL_T]} />
         <meshStandardMaterial color={wallCol ?? (night ? '#e9e4d8' : '#f7f3ec')} roughness={0.95} />
       </mesh>
@@ -234,7 +249,7 @@ function DoorLintel({ wallCol, night, focusRef }: { wallCol?: string; night: boo
   );
 }
 
-function Wall({ def, night, wallCol, focusRef }: { def: WallDef; night: boolean; wallCol?: string; focusRef?: RefObject<{ z: number }> }) {
+function Wall({ def, night, wallCol, focusRef }: { def: WallDef; night: boolean; wallCol?: string; focusRef?: RefObject<FocusPos> }) {
   const ref = useRef<THREE.Group>(null);
   const { camera } = useThree();
   const center = useMemo(
@@ -245,8 +260,10 @@ function Wall({ def, night, wallCol, focusRef }: { def: WallDef; night: boolean;
   useFrame(() => {
     if (!ref.current) return;
     if (def.shared) {
-      // 隔墙：只在挡住「镜头→对焦物」视线时隐藏（与门/门头梁同隐同现）
-      ref.current.visible = sharedWallVisible(camera.position.z, focusRef?.current?.z ?? BED_Z0 - 1);
+      // 共享内墙：只在挡住「镜头→对焦物」视线时隐藏（门/门梁同隐同现）
+      const f = focusRef?.current;
+      const cam = def.shared.axis === 'x' ? camera.position.x : camera.position.z;
+      ref.current.visible = sharedVisible(cam, (def.shared.axis === 'x' ? f?.x : f?.z) ?? BED_Z0 - 1, def.shared.at);
       return;
     }
     // 相机在该墙外侧（视向穿过墙体） → 隐藏，形成剖面屋
@@ -286,39 +303,41 @@ function Wall({ def, night, wallCol, focusRef }: { def: WallDef; night: boolean;
   );
 }
 
-// ---------------- 门（卧室门，可开合可换色） ----------------
+// ---------------- 门（卧室门 / 厨房门，可开合可换色） ----------------
 
 /**
- * 门：门框（三个边条，略压进门洞形成企口）+ 门板（左铰链 pivot，向卧室内侧摆开）+ 双面把手。
- * ⚑ v5.1 修漏缝：旧门板 0.87m 宽塞在 0.94m 门洞里，四边漏出 3.5~8.5cm 缝隙（窗外天光从缝里漏进来）。
- *   新尺寸：门板 0.90×2.03 填满门洞，门垛/门头梁加宽并各压进门洞 2~4.5cm 盖住板边 —— 四边全封闭。
+ * 门：门框（三个边条，略压进门洞形成企口）+ 门板（左铰链 pivot，向屋内摆开）+ 双面把手。
+ * ⚑ v5.1 修漏缝：门板 0.90×2.03 填满门洞，门垛/门头梁加宽并各压进门洞 2~4.5cm 盖住板边 —— 四边全封闭。
  */
 function HouseDoor({
+  x,
   open,
   col,
   night,
   onToggle,
   focusRef,
 }: {
+  x: number;
   open: boolean;
   col?: string;
   night: boolean;
   onToggle: () => void;
-  focusRef?: RefObject<{ z: number }>;
+  focusRef?: RefObject<FocusPos>;
 }) {
   const panel = useRef<THREE.Group>(null);
   const doorRoot = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
   const { camera } = useThree();
 
-  // 门随隔墙同隐同现（隔墙可见时门也作为客厅南墙的一部分正常可见，走近就能点）
+  // 门随隔墙同隐同现（隔墙可见时门正常可见，走近就能点）
   useFrame(() => {
-    if (doorRoot.current) doorRoot.current.visible = sharedWallVisible(camera.position.z, focusRef?.current?.z ?? BED_Z0 - 1);
+    if (doorRoot.current)
+      doorRoot.current.visible = sharedVisible(camera.position.z, focusRef?.current?.z ?? BED_Z0 - 1, BED_Z0);
   });
 
   useFrame((_, dt) => {
     if (!panel.current) return;
-    // 关 = 与隔墙同面；开 = 向卧室内侧（+z）摆开约 100°
+    // 关 = 与隔墙同面；开 = 向屋内（+z）摆开约 100°
     panel.current.rotation.y = THREE.MathUtils.damp(panel.current.rotation.y, open ? -1.78 : 0, 6, dt);
   });
 
@@ -348,7 +367,7 @@ function HouseDoor({
   };
 
   return (
-    <group position={[DOOR_X, 0, BED_Z0]} ref={doorRoot}>
+    <group position={[x, 0, BED_Z0]} ref={doorRoot}>
       {/* 门框：左右门垛（0.07 宽，压进门洞 2cm 盖住门板边）+ 门头梁包边（压下 4.5cm） */}
       <mesh position={[-DOOR_W / 2 - 0.015, DOOR_H / 2 + 0.005, WALL_T / 2]} castShadow>
         <boxGeometry args={[0.07, DOOR_H + 0.01, WALL_T + 0.03]} />
@@ -576,26 +595,32 @@ function Window({
 export interface RoomProps {
   night: boolean;
   onFloorTap?: () => void;
-  /** 五扇窗开态（客厅北左 / 客厅北右 / 客厅西 / 卧室西 / 卧室南） */
+  /** 七扇窗开态（客厅北左 / 客厅北右 / 客厅西 / 卧室西 / 卧室南 / 厨房东 / 厨房南） */
   win?: boolean[];
   onToggleWin?: (i: number) => void;
   /** 客厅地板自定义色（#rrggbb；缺省云白） */
   floorCol?: string;
   /** 客厅墙坎自定义色（#rrggbb；缺省暖白） */
   wallCol?: string;
-  /** 卧室地板自定义色（#rrggbb；缺省云白；客厅卧室分开换色） */
+  /** 卧室地板自定义色（#rrggbb；缺省云白；三房间分开换色） */
   floorColBed?: string;
-  /** 卧室墙坎自定义色（#rrggbb；缺省暖白；客厅卧室分开换色） */
+  /** 卧室墙坎自定义色（#rrggbb；缺省暖白；三房间分开换色） */
   wallColBed?: string;
-  /** 门色（#rrggbb；缺省暖白） */
+  /** 厨房地板自定义色（#rrggbb；缺省云白；三房间分开换色） */
+  floorColK?: string;
+  /** 厨房墙坎自定义色（#rrggbb；缺省暖白；三房间分开换色） */
+  wallColK?: string;
+  /** 门色（#rrggbb；全屋两道门通用） */
   doorCol?: string;
   /** 窗框色（#rrggbb；缺省浅木白） */
   winCol?: string;
-  /** 卧室门开态 */
+  /** 卧室门 / 厨房门开态 */
   doorOpen?: boolean;
+  kitchenDoorOpen?: boolean;
   onToggleDoor?: () => void;
-  /** 相机对焦物 z（生活模式=小人，编辑模式=轨道中心）；隔墙用它判断是否挡在镜头与对焦物之间 */
-  focusRef?: RefObject<{ z: number }>;
+  onToggleKitchenDoor?: () => void;
+  /** 相机对焦物（生活模式=小人，编辑模式=轨道中心）；隔墙用它判断是否挡在镜头与对焦物之间 */
+  focusRef?: RefObject<FocusPos>;
 }
 
 export default function Room({
@@ -607,10 +632,14 @@ export default function Room({
   wallCol,
   floorColBed,
   wallColBed,
+  floorColK,
+  wallColK,
   doorCol,
   winCol,
   doorOpen,
+  kitchenDoorOpen,
   onToggleDoor,
+  onToggleKitchenDoor,
   focusRef,
 }: RoomProps) {
   const floorTex = useMemo(() => makeFloorTexture(), []);
@@ -655,6 +684,21 @@ export default function Room({
         {floorMat(floorColBed)}
       </mesh>
 
+      {/* 厨房地板（颜色独立第三间） */}
+      <mesh
+        position={[(BED_X1 + KTCH_X1) / 2, 0, (BED_Z0 + BED_Z1) / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        receiveShadow
+        onClick={(e) => {
+          if (e.delta > 8) return;
+          e.stopPropagation();
+          onFloorTap?.();
+        }}
+      >
+        <planeGeometry args={[KTCH_X1 - BED_X1, BED_Z1 - BED_Z0]} />
+        {floorMat(floorColK)}
+      </mesh>
+
       {/* 地板外沿：浅灰围边（剖面观感） */}
       <mesh position={[0, -0.05, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[ROOM_W + 0.6, ROOM_D + 0.6]} />
@@ -664,23 +708,30 @@ export default function Room({
         <planeGeometry args={[BED_W + 0.6, BED_Z1 - BED_Z0 + 0.6]} />
         <meshStandardMaterial color="#d4d1c9" roughness={0.95} />
       </mesh>
+      <mesh position={[(BED_X1 + KTCH_X1) / 2, -0.05, (BED_Z0 + BED_Z1) / 2]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[KTCH_X1 - BED_X1 + 0.6, BED_Z1 - BED_Z0 + 0.6]} />
+        <meshStandardMaterial color="#d4d1c9" roughness={0.95} />
+      </mesh>
 
-      {/* 各面墙（自动隐藏朝相机侧；客厅/卧室分开换色） */}
+      {/* 各面墙（自动隐藏朝相机侧；三房间分开换色） */}
       {WALLS.map((def) => (
         <Wall
           key={def.key}
           def={def}
           night={night}
-          wallCol={def.room === 'br' ? wallColBed : wallCol}
+          wallCol={def.room === 'br' ? wallColBed : def.room === 'kt' ? wallColK : wallCol}
           focusRef={focusRef}
         />
       ))}
 
-      {/* 门洞上方的门头梁 */}
-      <DoorLintel wallCol={wallCol} night={night} focusRef={focusRef} />
+      {/* 门洞上方的门头梁 ×2 */}
+      <DoorLintel x={DOOR_X} wallCol={wallCol} night={night} focusRef={focusRef} />
+      <DoorLintel x={KDOOR_X} wallCol={wallColK} night={night} focusRef={focusRef} />
 
       {/* 卧室门（点击开合，可换色） */}
-      <HouseDoor open={!!doorOpen} col={doorCol} night={night} onToggle={() => onToggleDoor?.()} focusRef={focusRef} />
+      <HouseDoor x={DOOR_X} open={!!doorOpen} col={doorCol} night={night} onToggle={() => onToggleDoor?.()} focusRef={focusRef} />
+      {/* 厨房门（点击开合，可换色） */}
+      <HouseDoor x={KDOOR_X} open={!!kitchenDoorOpen} col={doorCol} night={night} onToggle={() => onToggleKitchenDoor?.()} focusRef={focusRef} />
 
       {/* —— 窗：客厅北×2 + 客厅西 + 卧室西 + 卧室南（上悬窗，点击外翻打开） —— */}
       <Window
@@ -722,6 +773,23 @@ export default function Room({
         open={win?.[4] ?? false}
         col={winCol}
         onToggle={() => onToggleWin?.(4)}
+      />
+      {/* 厨房东窗（吧台上方） + 厨房南窗（餐桌旁） */}
+      <Window
+        position={[KTCH_X1 - 0.08, 1.5, 5.4]}
+        rotationY={-Math.PI / 2}
+        night={night}
+        open={win?.[5] ?? false}
+        col={winCol}
+        onToggle={() => onToggleWin?.(5)}
+      />
+      <Window
+        position={[4.6, 1.5, BED_Z1 - 0.08]}
+        rotationY={Math.PI}
+        night={night}
+        open={win?.[6] ?? false}
+        col={winCol}
+        onToggle={() => onToggleWin?.(6)}
       />
     </group>
   );

@@ -47,13 +47,18 @@ interface HomePayload {
   wallColBed?: string;
   /** 卧室门开态 */
   doorOpen?: boolean;
+  /** 厨房门开态 */
+  kitchenDoorOpen?: boolean;
   /** 门自定义色（#rrggbb） */
   doorCol?: string;
   /** 窗框自定义色（#rrggbb） */
   winCol?: string;
+  /** 厨房地板/墙自定义色（#rrggbb；三房间分开换色） */
+  floorColK?: string;
+  wallColK?: string;
 }
 
-const MAX_ITEMS = 150;
+const MAX_ITEMS = 240;
 /** 3D 世界坐标绝对值上限（米） */
 const MAX_COORD = 20;
 /** 相框照片放大后总快照上限（每张照片压缩后约 20~50KB，最多 12 张） */
@@ -162,8 +167,11 @@ function normalizeHome(raw: unknown): HomePayload | null {
     floorColBed: cleanHex(r.floorColBed),
     wallColBed: cleanHex(r.wallColBed),
     doorOpen: r.doorOpen === true,
+    kitchenDoorOpen: r.kitchenDoorOpen === true,
     doorCol: cleanHex(r.doorCol),
     winCol: cleanHex(r.winCol),
+    floorColK: cleanHex(r.floorColK),
+    wallColK: cleanHex(r.wallColK),
   };
 }
 

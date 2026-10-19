@@ -42,23 +42,28 @@ import {
 import Joystick from './Joystick';
 import {
   CATALOG,
-  clampFurnToRooms,
   PLAY_COOLDOWN,
-  ROOM_X,
+  ROOM_SPANS,
+  ROOM_NAMES,
   SHOP_TABS,
   SNAP,
   TILT_LIMIT,
+  WALL_SLOTS,
+  clampFurnToRooms,
   defaultHome,
   fetchRemote,
   footprintOf,
   loadCache,
   pushRemote,
   resetRemote,
+  roomAt,
   saveCache,
   saveCacheNow,
+  snapToWallSlot,
   type HomePersist,
 } from './catalog';
-import type { CharRT, FurnitureItem, FurnitureKind, HomeMode, HomeState } from './types';
+import { getCachedThumb } from './scene/ShopThumbs';
+import type { CharRT, FurnitureItem, FurnitureKind, HomeMode, HomeState, RoomId } from './types';
 
 const HomeScene = dynamic(() => import('./scene/HomeScene'), {
   ssr: false,
@@ -72,6 +77,9 @@ const HomeScene = dynamic(() => import('./scene/HomeScene'), {
   ),
 });
 
+/** 商城缩略图工作室（隐藏离屏画布，商品 1:1 快照） */
+const ShopThumbStudio = dynamic(() => import('./scene/ShopThumbs'), { ssr: false });
+
 /** 洗衣一轮时长（秒） */
 const WASH_SECONDS = 30;
 
@@ -83,13 +91,18 @@ const TILT_STEP = Math.PI / 12;
 const LIFT_STEP = 0.23;
 const LIFT_MAX = 2.05;
 
-/** 相片窗宽高比（Extras3D 相框 0.4×0.56） */
-const PHOTO_ASPECT = 0.4 / 0.56;
+/** 相片窗宽高比：按框型裁剪（立式/挂墙竖版 3:4 偏竖、横版 5:3、拍立得 1:1） */
+const PHOTO_ASPECTS: Record<string, number> = {
+  photoFrame: 0.4 / 0.56,
+  photoWall: 0.46 / 0.6,
+  photoWallWide: 1.0 / 0.6,
+  polaroid: 1,
+};
 
 /**
- * 手机照片 → 居中裁到相框比例 → 压成 JPEG dataURL（几十 KB，可永久存在小家档案里）
+ * 手机照片 → 居中裁到指定比例 → 压成 JPEG dataURL（几十 KB，可永久存在小家档案里）
  */
-function compressPhoto(file: File, maxH = 480, quality = 0.72): Promise<string> {
+function compressPhoto(file: File, aspect: number, maxH = 520, quality = 0.72): Promise<string> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
@@ -101,8 +114,8 @@ function compressPhoto(file: File, maxH = 480, quality = 0.72): Promise<string> 
       try {
         let cw = img.width;
         let ch = img.height;
-        if (cw / ch > PHOTO_ASPECT) cw = Math.round(ch * PHOTO_ASPECT);
-        else ch = Math.round(cw / PHOTO_ASPECT);
+        if (cw / ch > aspect) cw = Math.round(ch * aspect);
+        else ch = Math.round(cw / aspect);
         const sx = (img.width - cw) / 2;
         const sy = (img.height - ch) / 2;
         const scale = Math.min(1, maxH / ch);
@@ -227,6 +240,8 @@ interface Toast {
 }
 
 let uid = 0;
+/** 购买序号（同毫秒连点也保证 id 唯一 —— 商城无限添加不串档） */
+let buySeq = 0;
 
 export default function CoupleHome({ close }: { close: () => void }) {
   // ---------------- 持久化状态 ----------------
@@ -234,14 +249,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [items, setItems] = useState<FurnitureItem[]>(pack.home.furniture);
   const [night, setNight] = useState<boolean>(pack.home.night);
   const [rev, setRev] = useState<number>(pack.rev);
-  const [win, setWin] = useState<boolean[]>([0, 1, 2, 3, 4].map((i) => !!pack.home.win?.[i]));
+  const [win, setWin] = useState<boolean[]>([0, 1, 2, 3, 4, 5, 6].map((i) => !!pack.home.win?.[i]));
   const [floorCol, setFloorCol] = useState<string | undefined>(pack.home.floorCol);
   const [wallCol, setWallCol] = useState<string | undefined>(pack.home.wallCol);
   const [floorColBed, setFloorColBed] = useState<string | undefined>(pack.home.floorColBed);
   const [wallColBed, setWallColBed] = useState<string | undefined>(pack.home.wallColBed);
   const [doorOpen, setDoorOpen] = useState<boolean>(!!pack.home.doorOpen);
+  const [kitchenDoorOpen, setKitchenDoorOpen] = useState<boolean>(!!pack.home.kitchenDoorOpen);
   const [doorCol, setDoorCol] = useState<string | undefined>(pack.home.doorCol);
   const [winCol, setWinCol] = useState<string | undefined>(pack.home.winCol);
+  const [floorColK, setFloorColK] = useState<string | undefined>(pack.home.floorColK);
+  const [wallColK, setWallColK] = useState<string | undefined>(pack.home.wallColK);
 
   // ---------------- UI 状态 ----------------
   const [mode, setMode] = useState<HomeMode>('live');
@@ -251,6 +269,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [roomStyleOpen, setRoomStyleOpen] = useState(false);
   const [shopOpen, setShopOpen] = useState(false);
   const [shopTab, setShopTab] = useState<string>('all');
+  const [thumbMap, setThumbMap] = useState<Record<string, string>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [full, setFull] = useState(false);
 
@@ -300,10 +319,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
   wallColBedRef.current = wallColBed;
   const doorOpenRef = useRef(doorOpen);
   doorOpenRef.current = doorOpen;
+  const kitchenDoorOpenRef = useRef(kitchenDoorOpen);
+  kitchenDoorOpenRef.current = kitchenDoorOpen;
   const doorColRef = useRef(doorCol);
   doorColRef.current = doorCol;
   const winColRef = useRef(winCol);
   winColRef.current = winCol;
+  const floorColKRef = useRef(floorColK);
+  floorColKRef.current = floorColK;
+  const wallColKRef = useRef(wallColK);
+  wallColKRef.current = wallColK;
 
   // ---------------- 提示 ----------------
   const toast = useCallback((msg: string) => {
@@ -323,7 +348,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
       wallCol: wallColRef.current,
       floorColBed: floorColBedRef.current,
       wallColBed: wallColBedRef.current,
+      floorColK: floorColKRef.current,
+      wallColK: wallColKRef.current,
       doorOpen: doorOpenRef.current,
+      kitchenDoorOpen: kitchenDoorOpenRef.current,
       doorCol: doorColRef.current,
       winCol: winColRef.current,
       chars: {
@@ -346,12 +374,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const adoptHome = useCallback((h: HomeState) => {
     setItems(h.furniture);
     setNight(h.night);
-    setWin([0, 1, 2, 3, 4].map((i) => !!h.win?.[i]));
+    setWin([0, 1, 2, 3, 4, 5, 6].map((i) => !!h.win?.[i]));
     setFloorCol(h.floorCol);
     setWallCol(h.wallCol);
     setFloorColBed(h.floorColBed);
     setWallColBed(h.wallColBed);
+    setFloorColK(h.floorColK);
+    setWallColK(h.wallColK);
     setDoorOpen(!!h.doorOpen);
+    setKitchenDoorOpen(!!h.kitchenDoorOpen);
     setDoorCol(h.doorCol);
     setWinCol(h.winCol);
   }, []);
@@ -381,13 +412,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
   );
 
   const schedulePush = useCallback(
-    (p?: HomePersist) => {
-      const data = p ?? snap();
-      saveCache(data); // idb 节流写
+    (_p?: HomePersist) => {
+      // ⚑ 快照在推送定时器触发时才生成（ref 渲染后已最新）：
+      //   旧版在 schedulePush 调用瞬间抓快照 —— 门刚点开时 ref 还是旧值，
+      //   且 2.5s 内若有一笔在途旧 rev 推送落到服务端，409 采纳会把刚开
+      //   的门「回滚关闭」。现在统一在触发时取最新 ref + 最新 rev。
       if (pushTimer.current) clearTimeout(pushTimer.current);
       pushTimer.current = setTimeout(() => {
+        const data = snap();
+        saveCache(data); // idb 节流写
         void doPush(data);
       }, 2500);
+      // 快速本地落盘（setState 渲染完成后 ref 已最新，~60ms 足够）
+      setTimeout(() => saveCache(snap()), 60);
     },
     [snap, doPush],
   );
@@ -655,6 +692,23 @@ export default function CoupleHome({ close }: { close: () => void }) {
     [saveSoon],
   );
 
+  /** 厨房地板/墙壁自定义色（三房间分开换色） */
+  const applyFloorColK = useCallback(
+    (hex: string | null) => {
+      setFloorColK(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
+  const applyWallColK = useCallback(
+    (hex: string | null) => {
+      setWallColK(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
   const applyDoorCol = useCallback(
     (hex: string | null) => {
       setDoorCol(hex ?? undefined);
@@ -681,7 +735,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
     saveSoon();
   }, [saveSoon, toast]);
 
-  /** 相框选照片完成：压缩 → 写入家具状态（永久保存） */
+  /** 厨房门开合（点击门本体） */
+  const toggleKitchenDoor = useCallback(() => {
+    setKitchenDoorOpen((o) => {
+      const next = !o;
+      toast(next ? '厨房门开啦，里面香喷喷～' : '厨房门已关上');
+      return next;
+    });
+    saveSoon();
+  }, [saveSoon, toast]);
+
+  /** 相框选照片完成：按框型裁剪 → 压缩 → 写入家具状态（永久保存） */
   const onPickPhoto = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const f = e.target.files?.[0];
@@ -689,8 +753,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
       const id = photoTargetRef.current;
       photoTargetRef.current = null;
       if (!f || !id) return;
+      const kind = itemsRef.current.find((it) => it.id === id)?.kind ?? 'photoFrame';
       try {
-        const data = await compressPhoto(f);
+        const data = await compressPhoto(f, PHOTO_ASPECTS[kind] ?? 0.714);
         setItems((prev) => prev.map((it) => (it.id === id ? { ...it, st: { ...it.st, photo: data } } : it)));
         saveSoon();
         toast('照片装进相框啦，永久保存～');
@@ -713,16 +778,24 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setItems((prev) => prev.map((f) => (f.id === id ? { ...f, x, z } : f)));
   }, []);
 
+  const onDragSelect = useCallback((id: string) => {
+    setSelId(id);
+  }, []);
+
+  /** 拖拽结束：挂墙件自动吸附到最近的墙面并朝向屋内 */
   const onDragEnd = useCallback(
-    (_id: string) => {
+    (id: string) => {
+      const it = itemsRef.current.find((f) => f.id === id);
+      if (it && CATALOG[it.kind]?.wallMount) {
+        const s = snapToWallSlot(it.x, it.z);
+        const nx = s.x + Math.sin(s.slot.ry) * 0.06;
+        const nz = s.z + Math.cos(s.slot.ry) * 0.06;
+        setItems((prev) => prev.map((f) => (f.id === id ? { ...f, x: nx, z: nz, ry: s.slot.ry } : f)));
+      }
       saveSoon();
     },
     [saveSoon],
   );
-
-  const onDragSelect = useCallback((id: string) => {
-    setSelId(id);
-  }, []);
 
   const onFloorTap = useCallback(() => {
     setSelId(null);
@@ -738,13 +811,23 @@ export default function CoupleHome({ close }: { close: () => void }) {
     return list;
   }, [shopTab]);
 
-  /** 找个不太挤的落点 */
-  const findSpot = useCallback((kind: FurnitureKind): { x: number; z: number } => {
+  /** 缩略图待生成队列（undefined = 还没处理过；空串 = 失败已跳过；稳定引用，避免工作室重复重启） */
+  const thumbQueue = useMemo(
+    () =>
+      shopItems
+        .filter((e) => thumbMap[e.kind] === undefined && !getCachedThumb(e.kind))
+        .map((e) => e.kind),
+    [shopItems, thumbMap],
+  );
+
+  /** 找个不太挤的落点（小人当前所在房间内） */
+  const findSpot = useCallback((kind: FurnitureKind, room: RoomId): { x: number; z: number } => {
     const e = CATALOG[kind];
     const [w, d] = e.fp;
+    const [x0, x1, z0, z1] = ROOM_SPANS[room];
     for (let i = 0; i < 40; i++) {
-      const x = (Math.random() - 0.5) * 6;
-      const z = (Math.random() - 0.3) * 3.4;
+      const x = x0 + Math.random() * (x1 - x0);
+      const z = z0 + Math.random() * (z1 - z0);
       const ok = itemsRef.current.every((it) => {
         const ce = CATALOG[it.kind];
         if (!ce || (it.y ?? 0) > 0.45) return true;
@@ -753,33 +836,76 @@ export default function CoupleHome({ close }: { close: () => void }) {
       });
       if (ok) return { x: Math.round(x * 4) / 4, z: Math.round(z * 4) / 4 };
     }
-    return { x: 0, z: 0.5 };
+    return { x: Math.round(((x0 + x1) / 2) * 4) / 4, z: Math.round(((z0 + z1) / 2) * 4) / 4 };
   }, []);
 
+  /** 在指定房间找一段空墙面（避开已挂件/高家具；返回贴墙坐标与朝向） */
+  const findWallSpot = useCallback(
+    (room: RoomId, kind: FurnitureKind): { x: number; z: number; ry: number } => {
+      const e = CATALOG[kind];
+      const w = e.fp[0];
+      const slots = WALL_SLOTS.filter((s) => s.room === room);
+      for (const s of slots.length ? slots : WALL_SLOTS) {
+        for (let a = s.from + w / 2 + 0.15; a <= s.to - w / 2 - 0.15 + 0.001; a += 0.45) {
+          const px = s.axis === 'z' ? a : s.at;
+          const pz = s.axis === 'z' ? s.at : a;
+          const free = itemsRef.current.every((it) => {
+            const ce = CATALOG[it.kind];
+            if (!ce) return true;
+            const ialong = s.axis === 'z' ? it.x : it.z;
+            const idist = s.axis === 'z' ? Math.abs(it.z - s.at) : Math.abs(it.x - s.at);
+            // 已挂件/高家具占位：同墙面且沿墙距离不够 → 避让
+            const tallBlock = (ce.h ?? 0) > 1.05 && (it.y ?? 0) < 0.45 && idist < 0.9;
+            const wallBlock = (it.y ?? 0) > 0.9 && idist < 0.55;
+            if (!tallBlock && !wallBlock) return true;
+            const [ow] = footprintOf(ce, it.ry ?? 0);
+            return Math.abs(ialong - a) > (ow + w) / 2 + 0.25;
+          });
+          if (free) {
+            return { x: px + Math.sin(s.ry) * 0.06, z: pz + Math.cos(s.ry) * 0.06, ry: s.ry };
+          }
+        }
+      }
+      const s = slots[0] ?? WALL_SLOTS[0];
+      const a = (s.from + s.to) / 2;
+      return {
+        x: (s.axis === 'z' ? a : s.at) + Math.sin(s.ry) * 0.06,
+        z: (s.axis === 'z' ? s.at : a) + Math.cos(s.ry) * 0.06,
+        ry: s.ry,
+      };
+    },
+    [],
+  );
+
+  /** 小人在哪个房间，新家具就添加到哪个房间（商城可无限重复购买） */
   const buy = useCallback(
     (kind: FurnitureKind) => {
       const e = CATALOG[kind];
       if (!e) return;
-      const id = `${kind}-${Date.now().toString(36)}`;
-      if (kind === 'aircon') {
-        // 壁挂空调：第一台挂客厅东墙，第二台自动换到卧室东墙，之后交替（1.85m 高，面朝西）
-        const airconCount = itemsRef.current.filter((f) => f.kind === 'aircon').length;
-        const inBedroom = airconCount % 2 === 1;
-        const pos = inBedroom ? { x: 1.4, z: 5.6 } : { x: 4.34, z: -1.6 };
-        setItems((prev) => [
-          ...prev,
-          { id, kind, x: pos.x, z: pos.z, y: 1.85, ry: -Math.PI / 2, st: {} },
-        ]);
-        toast(inBedroom ? '已挂到卧室东墙' : '已挂到客厅东墙');
+      const id = `${kind}-${Date.now().toString(36)}-${++buySeq}`;
+      const room: RoomId = roomAt(meRT.current.x, meRT.current.z);
+
+      if (e.wallMount || kind === 'tv') {
+        // 挂墙件（相框/电视）：挂到当前房间的空墙面
+        const spot = findWallSpot(room, kind);
+        const y = kind === 'tv' ? 1.19 : 1.45;
+        setItems((prev) => [...prev, { id, kind, x: spot.x, z: spot.z, y, ry: spot.ry, st: {} }]);
+        toast(`已挂到${ROOM_NAMES[room]}墙上`);
+      } else if (kind === 'aircon') {
+        // 壁挂空调：挂当前房间东墙（1.85m 高，面朝西）
+        const pos =
+          room === 'lr' ? { x: 4.34, z: -1.6 } : room === 'br' ? { x: 1.39, z: 5.6 } : { x: 7.38, z: 4.1 };
+        setItems((prev) => [...prev, { id, kind, x: pos.x, z: pos.z, y: 1.85, ry: -Math.PI / 2, st: {} }]);
+        toast(`已挂到${ROOM_NAMES[room]}东墙`);
       } else {
-        const spot = findSpot(kind);
+        const spot = findSpot(kind, room);
         setItems((prev) => [...prev, { id, kind, x: spot.x, z: spot.z, ry: 0, st: {} }]);
-        toast(`已添加「${e.name}」`);
+        toast(`已添加「${e.name}」到${ROOM_NAMES[room]}`);
       }
       setSelId(id);
       saveSoon();
     },
-    [findSpot, saveSoon, toast],
+    [findSpot, findWallSpot, saveSoon, toast],
   );
 
   const resetHome = useCallback(async () => {
@@ -879,8 +1005,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
         winCol={winCol}
         floorColBed={floorColBed}
         wallColBed={wallColBed}
+        floorColK={floorColK}
+        wallColK={wallColK}
         doorOpen={doorOpen}
+        kitchenDoorOpen={kitchenDoorOpen}
         onToggleDoor={toggleDoor}
+        onToggleKitchenDoor={toggleKitchenDoor}
         onFloorTap={onFloorTap}
         onFurnTap={onFurnTap}
         onDragMove={onDragMove}
@@ -1282,7 +1412,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              <p className="mb-3 text-[11.5px] text-[#9a9a96]">客厅卧室分开换色，门窗也能换</p>
+              <p className="mb-3 text-[11.5px] text-[#9a9a96]">三房间分开换色，门窗也能换</p>
 
               <div className="scrollbar-none max-h-[52vh] overflow-y-auto pr-0.5">
                 {/* —— 客厅 —— */}
@@ -1300,6 +1430,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 </div>
                 <ColorRow label="地板" value={floorColBed} onPick={applyFloorColBed} fallback="#f5f2ec" />
                 <ColorRow label="墙壁" value={wallColBed} onPick={applyWallColBed} fallback="#f7f3ec" />
+
+                {/* —— 厨房 —— */}
+                <div className="mb-2 mt-4 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#e8c9a0]" />
+                  <span className="text-[12px] font-semibold text-[#8a8a90]">厨房</span>
+                </div>
+                <ColorRow label="地板" value={floorColK} onPick={applyFloorColK} fallback="#f5f2ec" />
+                <ColorRow label="墙壁" value={wallColK} onPick={applyWallColK} fallback="#f7f3ec" />
 
                 {/* —— 门窗（全屋通用） —— */}
                 <div className="mb-2 mt-4 flex items-center gap-1.5">
@@ -1360,27 +1498,56 @@ export default function CoupleHome({ close }: { close: () => void }) {
               ))}
             </div>
 
-            {/* 商品网格 */}
+            {/* 商品网格（1:1 实物缩略图 + 已有数量角标；无限购买） */}
             <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto px-4 pb-5 pt-1">
-              {shopItems.map((e) => (
-                <button
-                  key={e.kind}
-                  onClick={() => buy(e.kind)}
-                  className="flex flex-col items-start gap-1 rounded-2xl bg-[#faf8f3] p-2.5 text-left shadow-sm ring-1 ring-[#efece2] transition active:scale-95"
-                >
-                  <span
-                    className="h-9 w-9 rounded-xl shadow-inner"
-                    style={{ background: `linear-gradient(135deg, ${catColor(e.cat)}, ${shade(e.cat)})` }}
-                  />
-                  <span className="w-full truncate text-[11.5px] font-medium leading-tight text-[#4a4a4e]">
-                    {e.name}
-                  </span>
-                </button>
-              ))}
+              {shopItems.map((e) => {
+                const owned = items.filter((it) => it.kind === e.kind).length;
+                const thumb = thumbMap[e.kind] || getCachedThumb(e.kind);
+                return (
+                  <button
+                    key={e.kind}
+                    onClick={() => buy(e.kind)}
+                    className="relative flex flex-col items-start gap-1 rounded-2xl bg-[#faf8f3] p-2 text-left shadow-sm ring-1 ring-[#efece2] transition active:scale-95"
+                  >
+                    {owned > 0 && (
+                      <span className="absolute right-1.5 top-1.5 rounded-full bg-[#f4b3c2] px-1.5 py-0.5 text-[9px] font-semibold leading-none text-white shadow-sm">
+                        ×{owned}
+                      </span>
+                    )}
+                    {thumb ? (
+                      <img
+                        src={thumb}
+                        alt={e.name}
+                        draggable={false}
+                        className="h-16 w-full rounded-xl object-contain"
+                      />
+                    ) : (
+                      <span
+                        className="h-16 w-full animate-pulse rounded-xl shadow-inner"
+                        style={{ background: `linear-gradient(135deg, ${catColor(e.cat)}, ${shade(e.cat)})` }}
+                      />
+                    )}
+                    <span className="w-full truncate text-[11.5px] font-medium leading-tight text-[#4a4a4e]">
+                      {e.name}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* 商城 1:1 缩略图工作室（隐藏离屏画布，逐件快照） */}
+      {shopOpen && thumbQueue[0] && (
+        <ShopThumbStudio
+          kind={thumbQueue[0]}
+          onThumb={(kind, url) => {
+            // 失败（空串）也标记，避免死循环重试
+            setThumbMap((m) => (m[kind] === url ? m : { ...m, [kind]: url }));
+          }}
+        />
+      )}
     </div>
   );
 }
