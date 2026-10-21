@@ -21138,3 +21138,20 @@ Stage Summary:
 - 拾光小屋 v5.7：电视=纯开关机（开着随便逛）+ 拿饮料端着走（杯子握手里随时放下）+ 吉他/钢琴真实可弹（特写镜头 + 竖版六弦扫弦 / 两组织八度琴键 + Web Audio 物理建模合成音）+ 星域劫持点击与淡出墙挡点击两个隐性 bug 修复
 - 涉及文件：types.ts（CharAction.onArrive）、instrument.ts（新）、InstrumentOverlay.tsx（新）、scene/{Char3D,HomeScene,Room,Cozy3D,Furn3D}.tsx、CoupleHome.tsx
 - 数据向后兼容：无新持久化字段（carry/inst 均为运行时态；play 动作恢复复用既有 act 字段）
+
+---
+Task ID: sync-repo-001
+Agent: 主协调 Agent (Z.ai Code)
+Task: 从 GitHub (cczzff468/5200) 拉取仓库并完整跑通本地环境
+
+Work Log:
+- git 直连 GnuTLS 不稳定，改用 https + token 浅克隆（--depth 1 --branch main）成功（3946 文件）
+- rsync 全量同步到 /home/z/my-project（排除 .git / node_modules），随后复制 .git 保留历史与 remote（origin 已配 token）
+- bun install（84 packages）+ prisma db push（schema 与 db/custom.db 已对齐，Client v6.19.2 生成成功）
+- 清理端口占用后重启 dev server（.next 重建），Ready in 1.6s，首页 GET / 200
+- agent-browser 端到端验证：锁屏渲染 → 上滑解锁 → 主屏 App 图标齐全 → 信息 App → 进入「小助手」会话 → 发送「你好，测试一下」→ AI 正常回复 6 秒语音气泡，全程浏览器 console 零错误
+- dev.log 中仅有原仓库预存的 instrumentation.ts Edge Runtime 警告（ncm-keeper 实际已拉起）；lint 的 45 errors 亦为原代码预存 react-hooks 规则问题，未阻塞运行
+
+Stage Summary:
+- 仓库 v5.7（f009b1e 电视/喝饮料自由走动 + 吉他/钢琴可弹奏发声）已在本地完整运行，前后端链路验证通过
+- 待办：等待用户指定需要修改/新增的功能
