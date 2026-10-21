@@ -7021,7 +7021,7 @@ function ChatPage({
   // 并拉取本会话待达消息（关页前没跑完的回复，服务端生成/暂存后在这里送达）；回前台/重新聚焦再拉一次。
   // 拉取走 deliverBgRef → 与正常回复完全一致的投递管线（逐条落盘 + 灵动岛通知 + 语音频率判定）
   useEffect(() => {
-    registerBgSession(sessionKey, { title: peer.name, app: 'wechat' });
+    registerBgSession(sessionKey, { title: peer.name, app: 'wechat', avatar: peer.avatar ?? null });
     const pull = () => {
       void pullBgPending(sessionKey).then((items) => {
         if (!mountedRef.current || items.length === 0) return;

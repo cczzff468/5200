@@ -2152,14 +2152,14 @@ function ChatView({
     bgDeliverRef.current = deliverBgItems;
   });
 
-  // 挂载注册会话元数据（pagehide 上报 beacon 携带显示名，Web Push 标题用对方名字）；
+  // 挂载注册会话元数据（pagehide 上报 beacon 携带显示名+头像，Web Push 标题/通知头像用对方名字与头像）；
   // 卸载/会话切换时解除（ChatView 按 storageKey keyed 重挂载，切会话先卸旧再挂新）
   useEffect(() => {
-    registerBgSession(sessionKey, { title: peerLabel, app: 'chat' });
+    registerBgSession(sessionKey, { title: peerLabel, app: 'chat', avatar: peerAvatarSrc });
     return () => {
       unregisterBgSession(sessionKey);
     };
-  }, [peerLabel, sessionKey]);
+  }, [peerLabel, peerAvatarSrc, sessionKey]);
 
   // 挂载 + 回前台时拉取本会话待达消息（服务端即清除），经原投递管线逐条落盘
   //（灵动岛通知/语音频率与页面内 AI 回复完全同口径；会话有活跃流/投递时 pull 内部返回空，等下次回前台再拉）

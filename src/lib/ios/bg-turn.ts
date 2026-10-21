@@ -8,16 +8,22 @@
  *   的会话（ai-delivery 未落盘尾部），用 sendBeacon 上报 /api/chat/bg：
  *   - 流没跑完（mode=generate）→ 服务端用同一套生成链路把回复生成出来；
  *   - 投递没落盘完（mode=deliver）→ 现成消息文本直接入服务端 pending 队列。
- *   服务端完成后尽力发 Web Push（每条消息一条系统通知）；重开网页后从 pending 拉取。
+ *   beacon meta 携带 会话显示名 + 压缩后的角色头像（registerBgSession 时预压缩缓存，
+ *   pagehide 同步读取）——服务端 Web Push 通知用它展示「谁发来的」。
+ *   服务端完成后：① 尽力发 Web Push（每条消息一条系统通知，含头像）；
+ *   ② 向 SSE 长连接广播 bg-pending 事件。
  *
  * 二、拉取（页面打开后）：
  *   - 聊天页挂载 / 回前台：pullBgPending(sessionKey) 拉取本会话待达消息（服务端即清除），
  *     由各 App 走原有投递管线（buildReplyMsgs → enqueueBatch → 逐条落盘+灵动岛弹窗+未读角标）；
  *   - 会话列表页挂载：peekBgBadgeCounts() 拉各会话待达条数 → 未读角标（同一批条目只提示一次，
- *     localStorage 去重；拉取投递后自动解除）。
+ *     localStorage 去重；拉取投递后自动解除）；
+ *   - 接力窗口内：旧实现是 2.5s 轮询，已废除 —— 改为常驻 SSE 长连接（/api/events），
+ *     服务端 enqueue 时广播 bg-pending 事件，pullBgPending 收到事件立即拉取（零轮询、零延迟）；
+ *     SSE 断线/多实例部署收不到广播时靠挂载/回前台首拉与 Web Push 保底，不丢消息。
  *
- * 会话显示名由聊天页挂载时 registerBgSession 注册（beacon 携带，Web Push 标题用联系人名；
- * 未注册时服务端回退为 App 名）。
+ * 会话显示名/头像由聊天页挂载时 registerBgSession 注册（beacon 携带，Web Push 标题/头像用；
+ * 未注册时服务端回退为 App 名、无头像）。
  */
 
 import { getActiveStreamPayloads } from '../chat-stream-store';
@@ -26,6 +32,17 @@ import { getDeliveringSessionKeys, peekPendingMsgs } from './ai-delivery';
 export interface BgSessionMeta {
   title: string;
   app: 'wechat' | 'qq' | 'chat';
+  /** 角色头像（路径或 dataURL，原样传入）：挂载时预压缩成 ≤96px 圆形 JPEG 存缓存，pagehide 同步取用 */
+  avatar?: string | null;
+}
+
+interface SessionMetaEntry {
+  title: string;
+  app: 'wechat' | 'qq' | 'chat';
+  /** 压缩后的头像 dataURL（异步就绪后回填；pagehide 直接同步读） */
+  avatarSmall?: string;
+  /** 压缩时用的原头像（回填时校验会话没被重新注册） */
+  avatarRaw?: string;
 }
 
 /** 待拉取的接力消息（服务端 pending 项） */
@@ -38,16 +55,81 @@ export interface BgPendingItem {
   createdAt: number;
 }
 
-// ---------------- 会话元数据（beacon 携带显示名，Web Push 标题用） ----------------
+// ---------------- 会话元数据（beacon 携带显示名+头像，Web Push 标题/通知头像用） ----------------
 
-const sessionMetas = new Map<string, BgSessionMeta>();
+const sessionMetas = new Map<string, SessionMetaEntry>();
 
 export function registerBgSession(sessionKey: string, meta: BgSessionMeta): void {
-  sessionMetas.set(sessionKey, meta);
+  sessionMetas.set(sessionKey, { title: meta.title, app: meta.app, avatarRaw: meta.avatar ?? undefined });
+  // 头像预压缩（异步）：pagehide 是同步瞬间取不到异步结果，这里挂载时就压好缓存
+  const raw = meta.avatar;
+  if (raw) {
+    void compressAvatarForPush(raw).then((small) => {
+      const cur = sessionMetas.get(sessionKey);
+      // 会话期间头像没被重新注册/没被清掉才回填
+      if (cur && cur.avatarRaw === raw && small) cur.avatarSmall = small;
+    });
+  }
 }
 
 export function unregisterBgSession(sessionKey: string): void {
   sessionMetas.delete(sessionKey);
+}
+
+// ---------------- 头像压缩（Web Push 通知 icon 用；≤2600 字符，超出放弃） ----------------
+
+/** Web Push payload 上限 4096 字节：头像 dataURL 预算 2600 字符（留余量给标题/正文/tag） */
+const AVATAR_PUSH_MAX = 2600;
+
+const avatarCompCache = new Map<string, string | null>();
+const AVATAR_CACHE_MAX = 64;
+
+/** 把任意头像（路径/dataURL）压成 96px 圆形 JPEG dataURL；失败/超限返回 null（通知不带头像） */
+async function compressAvatarForPush(src: string): Promise<string | null> {
+  const cached = avatarCompCache.get(src);
+  if (cached !== undefined) return cached;
+  const out = await new Promise<string | null>((resolve) => {
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      const timer = window.setTimeout(() => resolve(null), 4000);
+      img.onload = () => {
+        window.clearTimeout(timer);
+        try {
+          const S = 96;
+          const canvas = document.createElement('canvas');
+          canvas.width = S;
+          canvas.height = S;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return resolve(null);
+          // 圆形裁切铺满（系统通知里头像以圆形呈现）
+          ctx.beginPath();
+          ctx.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2);
+          ctx.closePath();
+          ctx.clip();
+          const side = Math.min(img.width, img.height) || S;
+          ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, S, S);
+          resolve(canvas.toDataURL('image/jpeg', 0.72));
+        } catch {
+          resolve(null); // 跨域污染画布等
+        }
+      };
+      img.onerror = () => {
+        window.clearTimeout(timer);
+        resolve(null);
+      };
+      img.src = src;
+    } catch {
+      resolve(null);
+    }
+  });
+  const final = out && out.length <= AVATAR_PUSH_MAX ? out : null;
+  avatarCompCache.set(src, final);
+  if (avatarCompCache.size > AVATAR_CACHE_MAX) {
+    const oldest = avatarCompCache.keys().next().value;
+    if (oldest !== undefined) avatarCompCache.delete(oldest);
+  }
+  return final;
 }
 
 // ---------------- pagehide 上报（页面关闭瞬间的接力请求） ----------------
@@ -139,6 +221,16 @@ function sendBgBeacon(body: Record<string, unknown>, sessionKey: string): void {
   }
 }
 
+/** beacon meta：显示名 + 压缩头像（同步读取预压缩缓存，未就绪则不带头像） */
+function beaconMeta(sessionKey: string): BgSessionMeta {
+  const m = sessionMetas.get(sessionKey);
+  return {
+    title: m?.title ?? '',
+    app: m?.app ?? 'chat',
+    ...(m?.avatarSmall ? { avatar: m.avatarSmall } : {}),
+  };
+}
+
 /**
  * 群聊会话（wx:group: / qq:group:）暂不接力：群页还没有拉取投递管线（说话人/动作标记
  * 依赖回合闭包），接力进服务端 pending 后永远没人拉，反而变成永远消不掉的幻影角标 ——
@@ -160,7 +252,7 @@ if (typeof window !== 'undefined') {
             mode: 'generate',
             sessionKey: s.sessionKey,
             payload: { messages: s.messages, config: s.config },
-            meta: sessionMetas.get(s.sessionKey),
+            meta: beaconMeta(s.sessionKey),
           },
           s.sessionKey,
         );
@@ -171,11 +263,80 @@ if (typeof window !== 'undefined') {
         if (streams.some((s) => s.sessionKey === key)) continue;
         const texts = undeliveredTexts(key);
         if (texts.length === 0) continue;
-        sendBgBeacon({ mode: 'deliver', sessionKey: key, texts, meta: sessionMetas.get(key) }, key);
+        sendBgBeacon({ mode: 'deliver', sessionKey: key, texts, meta: beaconMeta(key) }, key);
       }
     } catch {
       // pagehide 里任何异常都吞掉（不影响卸载）
     }
+  });
+}
+
+// ---------------- SSE 长连接（/api/events；废除接力窗口轮询） ----------------
+
+/**
+ * 常驻 EventSource 单例：服务端 enqueue 接力回复时广播 bg-pending { sessionKey }，
+ * 这里分发给等待中的 pullBgPending。断线由 EventSource 原生自动重连；
+ * 事件只承载「哪个会话有新消息」，不承载消息本体 —— 丢事件不丢消息
+ * （挂载/回前台首拉 + Web Push 保底）。
+ */
+type BgSseWaiter = (sessionKey: string) => void;
+const sseWaiters = new Set<BgSseWaiter>();
+let sseStarted = false;
+
+function ensureBgSse(): void {
+  if (sseStarted || typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+  sseStarted = true;
+  try {
+    const es = new EventSource('/api/events');
+    es.addEventListener('bg-pending', (ev) => {
+      let key = '';
+      try {
+        const d = JSON.parse((ev as MessageEvent).data) as { sessionKey?: unknown };
+        if (typeof d.sessionKey === 'string') key = d.sessionKey;
+      } catch {
+        return;
+      }
+      if (!key) return;
+      for (const w of [...sseWaiters]) {
+        try {
+          w(key);
+        } catch {
+          // 单个 waiter 异常不影响其它
+        }
+      }
+    });
+    es.onerror = () => {
+      // 浏览器自动重连；不手动 close（close 后接力窗口只能靠超时兜底）
+    };
+  } catch {
+    sseStarted = false; // 构造失败（如 CSP）：下次再试
+  }
+}
+
+/**
+ * 等待指定会话的 bg-pending 事件（或超时）。
+ * 返回 true = 收到该会话的事件（调用方应立即拉取）；false = 截止时间到仍未收到。
+ */
+function waitForBgSseEvent(sessionKey: string, deadline: number): Promise<boolean> {
+  ensureBgSse();
+  return new Promise((resolve) => {
+    if (Date.now() >= deadline) {
+      resolve(false);
+      return;
+    }
+    let done = false;
+    const finish = (v: boolean) => {
+      if (done) return;
+      done = true;
+      sseWaiters.delete(waiter);
+      window.clearTimeout(timer);
+      resolve(v);
+    };
+    const waiter: BgSseWaiter = (key) => {
+      if (key === sessionKey) finish(true);
+    };
+    sseWaiters.add(waiter);
+    const timer = window.setTimeout(() => finish(false), Math.max(250, deadline - Date.now()));
   });
 }
 
@@ -184,7 +345,7 @@ if (typeof window !== 'undefined') {
 /** 同一会话进行中的拉取（挂载 + 回前台可能同时触发；共用同一 Promise 防重复轮询） */
 const inflightPulls = new Map<string, Promise<BgPendingItem[]>>();
 
-/** 单次拉取（不轮询）：GET 服务端 pending 并解析 */
+/** 单次拉取（不清除）：GET 服务端 pending 并解析 */
 async function fetchPendingOnce(sessionKey: string): Promise<BgPendingItem[]> {
   const res = await fetch(`/api/chat/bg?sessionKey=${encodeURIComponent(sessionKey)}`);
   if (!res.ok) return [];
@@ -215,9 +376,11 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * 拉取本会话的接力消息（只读，不清除；调用方确认接手投递后需调 consumeBgPending 清除服务端队列）。
  * 聊天页挂载与回前台时调用；会话正有活跃流/投递时跳过（等下一轮回前台再拉，避免与新回复交错）。
  *
- * 关页接力窗口内（pagehide 上报后服务端还在生成，见 noteRelaySent）：首次拉空时继续轮询，
- * 直到回复入队被拉到或窗口过期 —— 用户比服务端先回到网页也不会「看不到回复以为没生成」。
- * 用户在轮询期间自己发了新消息（出现活跃流）→ 停止轮询：流开始时已上报 cancel，服务端会丢弃接力回复。
+ * 关页接力窗口内（pagehide 上报后服务端还在生成，见 noteRelaySent）：首次拉空后挂起等待
+ * SSE bg-pending 事件（旧版 2.5s 轮询已废除）—— 服务端 enqueue 时广播，这里收到立即拉取；
+ * SSE 不可用（多实例部署/连接断开）时事件等不到 → 窗口过期后自然返回，回前台首拉与
+ * Web Push 保底，消息不丢。用户在等待期间自己发了新消息（出现活跃流）→ 停止等待：
+ * 流开始时已上报 cancel，服务端会丢弃接力回复。
  *
  * 读拉/写清分离：拉到不消费，避免 StrictMode 双挂载/快速切会话时「先拉到的实例被卸载丢弃、
  * pending 已清空」的竞态丢消息（调用方 alive 校验通过后再 consume）。
@@ -235,17 +398,21 @@ export async function pullBgPending(sessionKey: string): Promise<BgPendingItem[]
         clearRelayWindow(sessionKey);
         return first;
       }
-      // 接力窗口内轮询（窗口来自本页上报或重开网页前上一页的 sessionStorage 登记）
+      // 接力窗口内等待 SSE 事件（窗口来自本页上报或重开网页前上一页的 sessionStorage 登记）
       const deadline = loadRelayWindows().get(sessionKey);
       if (!deadline) return [];
       while (Date.now() < deadline) {
         if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) return [];
-        await sleep(2500);
+        const got = await waitForBgSseEvent(sessionKey, deadline);
+        if (!got) break; // 窗口过期（SSE 不可用或服务端一直没入队）
+        if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) return [];
         const items = await fetchPendingOnce(sessionKey);
         if (items.length > 0) {
           clearRelayWindow(sessionKey);
           return items;
         }
+        // 极小概率：事件比 enqueue 早到/事件被另一实例处理 → 继续等下一条事件直到窗口结束
+        await sleep(150);
       }
       clearRelayWindow(sessionKey);
       return [];

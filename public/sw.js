@@ -24,10 +24,14 @@ self.addEventListener('push', (event) => {
   const body = typeof data.body === 'string' ? data.body : '';
   const tag = typeof data.tag === 'string' ? data.tag : `push-${Date.now()}`;
   const url = typeof data.url === 'string' && data.url ? data.url : '/';
+  // 角色头像（服务端携带的压缩 dataURL / 路径）：离线通知也显示「谁发来的」；
+  // 缺失时回落到信息 App 图标（与历史行为一致）
+  const icon = typeof data.icon === 'string' && data.icon ? data.icon : '/icons/chat.png';
   event.waitUntil(
     self.registration.showNotification(title, {
       body,
       tag,
+      icon,
       data: { url },
       badge: '/icons/wechat.png',
       silent: true,

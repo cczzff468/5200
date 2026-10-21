@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import webpush from 'web-push';
 import { getVapidKeys, readPushJson, writePushJson } from '@/lib/server/push-store';
+import { broadcastEvent } from '@/lib/server/event-bus';
 
 /**
  * 退出网页后续复（服务端接力）：
@@ -11,8 +12,11 @@ import { getVapidKeys, readPushJson, writePushJson } from '@/lib/server/push-sto
  * - mode='deliver'：流已 finalize 但逐条投递（打字节奏）还没落盘完 → 上报现成的消息文本。
  * - mode='cancel'：用户回到网页后自己发了新消息接管了会话 → 丢弃还在生成中的接力回复（防双回复）。
  *
- * 两种方式最终都写入本会话的 pending 队列（内存态），并尽力给已订阅的浏览器发 Web Push
- * （每条消息一条系统通知；页面已关、浏览器还开着时也能弹）。
+ * 两种方式最终都写入本会话的 pending 队列（内存态），并：
+ * ① 尽力给已订阅的浏览器发 Web Push（每条消息一条系统通知，含角色头像 icon——页面已关、
+ *    浏览器还开着时也能弹带头像的通知）；
+ * ② 向所有 SSE 长连接客户端（/api/events）广播 bg-pending 事件 —— 客户端收到后立即拉取，
+ *    替代旧的 2.5s 轮询（多实例部署下广播可能跨不了实例，客户端首拉/回前台拉取保底）。
  * 用户重新打开网页后：聊天页挂载/回前台时 GET ?sessionKey=… 拉取并走各 App 原有投递管线
  * （逐条落盘 + 灵动岛弹窗 + 未读角标）；会话列表页 GET ?peekAll=1 拉各会话条数点亮未读。
  *
@@ -56,6 +60,19 @@ interface PendingItem {
   title: string;
   createdAt: number;
 }
+
+/** 会话元数据（beacon 上报：显示名 + 压缩后的角色头像 dataURL）→ Web Push 通知 icon 用 */
+interface SessionMeta {
+  title: string;
+  /** 压缩到 ~96px 的头像 dataURL（客户端压缩，服务端只做长度上限）；空 = 无头像 */
+  avatar?: string;
+}
+
+/** 会话键 → 最近一次 beacon 上报的元数据（内存态；Web Push 通知头像/标题用） */
+const sessionMetas = new Map<string, SessionMeta>();
+const MAX_METAS = 200;
+/** 头像 dataURL 硬上限（客户端已压缩到 ~96px JPEG；超限截断丢弃，宁可不带头像也不能超 Web Push 4KB payload） */
+const AVATAR_MAX_CHARS = 2600;
 
 /** 会话键 → 待拉取消息（内存态；服务重启清空） */
 const pending = new Map<string, PendingItem[]>();
@@ -140,7 +157,16 @@ function enqueue(sessionKey: string, texts: string[], single: boolean, title: st
     const first = pending.keys().next().value;
     if (first) pending.delete(first);
   }
-  void pushToSubscribers(sessionKey, texts, title);
+  const meta = sessionMetas.get(sessionKey);
+  // ① SSE 广播：在线客户端收到后立即拉取（废除轮询的核心通道）
+  broadcastEvent('bg-pending', {
+    sessionKey,
+    count: item.texts.length,
+    title: title || meta?.title || '',
+    at: item.createdAt,
+  });
+  // ② Web Push：页面已关/已冻结时的系统通知（带角色头像）
+  void pushToSubscribers(sessionKey, texts, title, meta?.avatar);
   return item;
 }
 
@@ -152,13 +178,17 @@ interface PushSubLike {
   [k: string]: unknown;
 }
 
-async function pushToSubscribers(sessionKey: string, texts: string[], title: string): Promise<void> {
+async function pushToSubscribers(sessionKey: string, texts: string[], title: string, avatar?: string): Promise<void> {
   try {
     const vapid = await getVapidKeys();
     if (!vapid) return;
     const subs = await readPushJson<PushSubLike[]>('push-subs.json', []);
     if (!Array.isArray(subs) || subs.length === 0) return;
-    const notifyTitle = title || appDefaultName(sessionKey);
+    const meta = sessionMetas.get(sessionKey);
+    const notifyTitle = title || meta?.title || appDefaultName(sessionKey);
+    // 角色头像（客户端压缩后的 dataURL，≤2600 字符）：sw.js push 处理器用它作通知 icon ——
+    // 页面完全关闭时弹出的离线通知也能显示头像（超长/缺失时不带 icon，浏览器用默认图标）
+    const icon = typeof avatar === 'string' && avatar.startsWith('data:image/') && avatar.length <= AVATAR_MAX_CHARS ? avatar : undefined;
     const alive: PushSubLike[] = [];
     await Promise.all(
       subs.map(async (sub) => {
@@ -170,7 +200,7 @@ async function pushToSubscribers(sessionKey: string, texts: string[], title: str
             const preview = texts[i].replace(/\s+/g, ' ').trim().slice(0, 120);
             await webpush.sendNotification(
               sub as unknown as Parameters<typeof webpush.sendNotification>[0],
-              JSON.stringify({ title: notifyTitle, body: preview, tag: `bg-${Date.now().toString(36)}-${i}`, url: '/' }),
+              JSON.stringify({ title: notifyTitle, body: preview, tag: `bg-${Date.now().toString(36)}-${i}`, url: '/', ...(icon ? { icon } : {}) }),
               { vapidDetails: { subject: 'mailto:bg-reply@ios-phone.local', publicKey: vapid.publicKey, privateKey: vapid.privateKey } },
             );
           }
@@ -249,7 +279,7 @@ export async function POST(req: Request): Promise<NextResponse> {
         payload?: BgPayload;
         texts?: unknown;
         single?: unknown;
-        meta?: { title?: unknown; app?: unknown };
+        meta?: { title?: unknown; avatar?: unknown; app?: unknown };
       }
     | null;
   if (!body || typeof body.sessionKey !== 'string' || !body.sessionKey.trim() || body.sessionKey.length > 160) {
@@ -257,6 +287,19 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
   const sessionKey = body.sessionKey;
   const title = typeof body.meta?.title === 'string' ? body.meta.title.slice(0, 60) : '';
+  // 会话元数据（标题 + 压缩头像）登记：Web Push 通知 icon 与标题兜底用。
+  // generate/deliver 都带 meta；头像必须以 data:image/ 开头且不超上限（超限丢弃，宁缺勿炸 payload）。
+  if (title || (typeof body.meta?.avatar === 'string' && body.meta.avatar.startsWith('data:image/'))) {
+    const rawAvatar = typeof body.meta?.avatar === 'string' ? body.meta.avatar : undefined;
+    sessionMetas.set(sessionKey, {
+      title,
+      ...(rawAvatar && rawAvatar.length <= AVATAR_MAX_CHARS ? { avatar: rawAvatar } : {}),
+    });
+    if (sessionMetas.size > MAX_METAS) {
+      const first = sessionMetas.keys().next().value;
+      if (first) sessionMetas.delete(first);
+    }
+  }
 
   if (body.mode === 'generate') {
     // 流式没跑完就关页：服务端接管生成。同一会话进行中不重复接（防双回复）

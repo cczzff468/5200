@@ -5532,7 +5532,7 @@ function ChatPage({
   // 挂载注册会话元数据（pagehide 上报 beacon 携带显示名，Web Push 标题用联系人名）；
   // 卸载/会话切换时解除（ChatPage 按 peer.id keyed 重挂载，切人先卸旧再挂新）
   useEffect(() => {
-    registerBgSession(sessionKey, { title: peer.name, app: 'qq' });
+    registerBgSession(sessionKey, { title: peer.name, app: 'qq', avatar: peer.avatar ?? null });
     return () => {
       unregisterBgSession(sessionKey);
     };
