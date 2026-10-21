@@ -296,8 +296,8 @@ export function SwingChair3D({ col, sat }: CozyPlusProps) {
   useFrame((state, dt) => {
     if (!basket.current) return;
     const t = state.clock.elapsedTime;
-    // 坐上去摆幅加大（阻尼过渡），平时轻晃
-    const amp = THREE.MathUtils.damp(basket.current.userData.amp ?? 0.045, sat ? 0.13 : 0.045, 2.2, dt);
+    // 坐上去摆幅略加大（阻尼过渡），平时轻晃；小人坐姿不跟摆，幅度收敛防穿插
+    const amp = THREE.MathUtils.damp(basket.current.userData.amp ?? 0.028, sat ? 0.05 : 0.028, 2.2, dt);
     basket.current.userData.amp = amp;
     basket.current.rotation.x = Math.sin(t * 1.35) * amp;
   });

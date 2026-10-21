@@ -732,10 +732,11 @@ export const CATALOG: Record<string, CatalogEntry> = {
     kind: 'screen', name: '高清幕布', cat: 'appliance', fp: [2.3, 0.12], wallMount: true, wallY: 1.5, h: 1.32,
     acts: {},
   },
-  // J2 吊篮秋千椅（坐上去轻轻摇晃）
+  // J2 吊篮秋千椅（坐上去轻轻摇晃）；座位 = 吊篮内坐垫顶面（挂架 1.88 − 垫心 0.92 + 垫半高 ≈ 1.0m，
+  // v6.1 修正：老值 0.5 让小人整个沉进吊篮、腿从开口篮底穿出）
   swingChair: {
     kind: 'swingChair', name: '吊篮秋千椅', cat: 'sofa', fp: [1.08, 1.0], h: 1.95,
-    acts: { seat: { y: 0.5, dz: 0.1 } },
+    acts: { seat: { y: 0.99, dz: -0.02 } },
   },
   // J3 玄关鞋柜（开门收纳，柜底摆拖鞋）
   shoeCabinet: {
