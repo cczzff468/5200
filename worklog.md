@@ -21363,3 +21363,23 @@ Work Log:
 Stage Summary:
 - 拾光小屋 v5.9：吊床下架、阳台门窗归位、投影仪对投幕布、餐桌/火锅坐姿朝向修正、乐器面板全面改版（真钢琴/和弦下移/毛玻璃收缩音色/删录音）、黑胶八音盒白色化+点歌弹窗、家具播放不弹灵动岛、11 品种宠物（含性格/性别/取名）
 - 涉及文件：types/catalog/pet-breeds(新)/CoupleHome/InstrumentOverlay/instrument/api route/music-store/MusicIsland/music/scene/{CozyPlus3D,Pet3D}、worklog.md
+
+---
+Task ID: cottage-v60-a
+Agent: Z.ai Code (main)
+Task: 拾光小屋 v6.0 —— 用户本轮反馈（动物丑要真实/领养弹窗丑/删阳台玻璃/点歌台去图标+搜索+歌单+队列/八音盒关不了+美化+可搜歌）
+
+Work Log:
+- 【删除阳台玻璃栏杆】Room.tsx 删 BalconyRail 组件与南/东两面调用（用户截图里的浮空长方形玻璃），BAL_* 常量保留（阳台地板/边界仍在用）；grep 全仓 0 残留
+- 【AI 真照品种图】z-ai CLI 生成 11 张一比一品种照（柴犬/博美/金毛/哈士奇/柯基/橘猫/布偶/三花/狸花/金渐层/奶牛猫，统一奶油棚拍风），sharp 360×360 palette 压缩后共 780KB 入 public/pets/<id>.png
+- 【领养弹窗焕新】pet-breeds.ts +img 字段；①种类页=品种真照叠叠乐圆泡+渐变底；②品种页=2列真照卡片(图+名+人设+「真实还原」角标)；③登记页/已有宠物档案=圆形真照头像+渐变卡；流程端到端实测（汪星人→柴犬→男孩/布丁→接回家→柴犬落场景）
+- 【Pet3D 花纹重绘】patches 头部花纹从「单侧色斑」改为「头顶后部大色帽(M.p2)+单侧眼罩(三花橘罩/奶牛黑罩)」；三花/奶牛 BODY_PATCHES 扩到 3 块不等形（后背大块+胁斑+肩斑，俯视角可读）；双眼 0.023→0.026 + 高光加大
+- 【小屋点歌重构】新建 SongSheet.tsx（音箱/黑胶/八音盒共用）：标题去掉🔊图标；三页签=搜歌(cloudsearch 450ms 防抖+最近在听兜底)/歌单(userPlaylists+playlistDetail+songsDetail 分批,未登录给引导)/队列(点行切歌 ambient/单曲移除/一键清空/当前曲 AudioLines 动画)；歌行「排队」= addToQueue 不打断当前播放；CoupleHome 删旧内联 sheet+HouseSongList+playHouseSong(musicCurrent 一并清)
+- 【八音盒重做】catalog 删 playful（点击不再弹跳放固定旋律）；CoupleHome 点击 musicBox=弹点歌面板；st.on 随 useMusic.playing 联动 effect 扩到 vinyl+musicBox；MusicBox3D 签名 touch→on：暂停=合盖（根治「关不了」），播放=开盖+音筒转+发条旋钮转+音符飘出；美化=拱顶盒盖+金棱线+金包角+盒内丝绒镜面+粉裙芭蕾舞者随乐旋转
+- 【端到端验证】agent-browser 实机：领养三步全流程（真照卡片可见）→柴犬布丁落场景→黑胶点击弹新面板→搜「晴天」出 20 首→点封面播放成功(206 流媒)→排 2 首进队列→队列页切歌/移除/清空布局正确→歌单页未登录引导正确→八音盒点击弹面板→暂停后盒盖合上；tsc 全仓 0 错误、7 个改动文件 eslint 0 错误
+- 【排障记录】①SongSheet 首版 default import 报错→改具名导入；②疑似 CoupleHome「ealReady 语法损坏」实为工具输出层吞字伪影（[mealR 被渲染层吃掉），hex 验证文件完好，勿误修；③catalog musicBox 删 acts 后 tsc 报 acts 必填→补 acts:{}
+
+Stage Summary:
+- 拾光小屋 v6.0：11 品种 AI 真照 + 领养/档案 UI 全面真照化 + 宠物头部花纹品种级重绘 + 阳台浮空玻璃栏杆删除 + 小屋点歌三页签（搜歌/我的歌单/播放队列）+ 八音盒可开关可搜歌白色金边芭蕾舞者化
+- 涉及文件：public/pets/*(新11图)、pet-breeds.ts、CoupleHome.tsx、SongSheet.tsx(新)、catalog.ts、scene/{Room,CozyPlus3D,Pet3D}.tsx、worklog.md
+- commit 4d619c7 已推送 origin/main
