@@ -12,6 +12,7 @@
  */
 
 import { useSettings, type SttConfig } from './store';
+import { isOfflineAsrReady, offlineAsrTranscribe } from './offline-asr';
 
 export type { SttConfig } from './store';
 
@@ -46,11 +47,25 @@ export function isSttReady(cfg?: SttConfig): boolean {
 /**
  * 把录音 Blob 转成文字。空结果返回 ''（调用方按失败处理）。
  * 失败抛 Error（中文文案，不回显 Key）。
+ *
+ * 优先级（已验证的离线方案）：端侧模型已就绪 → 本地 WASM（SenseVoice）识别，断网可用；
+ * 本地失败/无文本 → 静默降级云端 STT（需已配置服务商）；云端也失败才抛错。
  */
 export async function transcribeAudioBlob(blob: Blob): Promise<string> {
+  // ① 端侧离线识别（零配置、断网可用）：失败静默降级，不阻塞云端兑底
+  if (isOfflineAsrReady()) {
+    try {
+      const localText = await offlineAsrTranscribe(blob);
+      if (localText) return localText;
+    } catch {
+      // 本地引擎失败（初始化中/解码异常/超时）：静默降级云端
+    }
+  }
+
+  // ② 云端 STT（需配置 OpenAI 兼容服务商）
   const cfg = useSettings.getState().sttConfig;
   if (!isSttReady(cfg)) {
-    throw new Error('请先配置语音识别（STT）');
+    throw new Error('请先配置语音识别（STT）或下载离线识别模型');
   }
   const configPart = { provider: 'openai' as const, baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model };
 
@@ -84,7 +99,20 @@ export async function transcribeAudioBlob(blob: Blob): Promise<string> {
  * AI 按「语音占位」防编造规则回应，绝不假装听过。不抛错，调用方无需 try/catch。
  */
 export async function autoTranscribeForAi(blob: Blob | undefined, timeoutMs = 20000): Promise<string> {
-  if (!blob || !isSttReady()) return '';
+  if (!blob) return '';
+  // 端侧离线优先（就绪即用，零成本零延迟无外发流量）
+  if (isOfflineAsrReady()) {
+    try {
+      const localText = await Promise.race([
+        offlineAsrTranscribe(blob),
+        new Promise<string>((_, rej) => window.setTimeout(() => rej(new Error('离线识别超时')), timeoutMs)),
+      ]);
+      if (localText.trim()) return localText.trim();
+    } catch {
+      // 本地失败静默降级云端
+    }
+  }
+  if (!isSttReady()) return '';
   try {
     const text = await Promise.race([
       transcribeAudioBlob(blob),

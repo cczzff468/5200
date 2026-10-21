@@ -21155,3 +21155,27 @@ Work Log:
 Stage Summary:
 - 仓库 v5.7（f009b1e 电视/喝饮料自由走动 + 吉他/钢琴可弹奏发声）已在本地完整运行，前后端链路验证通过
 - 待办：等待用户指定需要修改/新增的功能
+
+---
+Task ID: notify-tts-offline-asr
+Agent: 主协调 Agent (Z.ai Code)
+Task: 修复 Netlify 部署下通知/Web Speech 失效（SW 通知通道 + 云端 TTS 兜底）+ 重建离线语音识别（SenseVoice 端侧 WASM 终极方案）
+
+Work Log:
+- 【通知】复现分析：Android Chrome 页面里无 Notification 构造器（Illegal constructor），原实现全用 new Notification；且 subscribe-failed 文案一律甩锅 iframe，误导用户
+- 新建 system-notify.ts：SW showNotification 优先 + new Notification 兜底 + 懒注册 /sw.js；island-notify 与设置页测试通知全部改走该助手
+- push 诊断文案按真实根因区分：AbortError=浏览器连不上境外推送服务器（国内网络常见），不再误导「新标签页」；VAPID 密钥支持环境变量（Netlify 稳定）+ .data 写失败自动落 /tmp（新建 lib/server/push-store.ts，/api/push 与 /api/chat/bg 统一走它）
+- 【Web Speech/TTS】Android 无中文 TTS 引擎或网络语音被墙 → speechSynthesis 静音：builtin-voices.speakBuiltin 返回「是否真正出声」（onstart 置位），新增 probeBuiltinEngine 静音探针（音量 0 句号实测，≤3.5s，会话缓存，首次手势预热）；tts-client 本地哑火自动降级云端合成（provider='server'，新建 lib/server/cloud-tts.ts 用平台 SDK，wav 上游仅支持 wav/pcm），女声→tongtong 男声→xiaochen；提取 playTtsAudioBlob 共用播放函数
+- 修复信息 App 助手会话 AI 语音条点击静音模拟的缺口：ai-voice 内置通道必带 synth='builtin' + chat.tsx 渲染时旧消息 peer 侧兜底标记
+- 【离线 ASR 重建】严格按已验证终极方案：npm 安装 speech-asr@1.1.6；scripts/copy-asr.mjs 拷贝 wasm+glue+worker 到 public/asr 并双补丁——① glue loadPackage 函数体首行插 return（禁用 500MB .data 下载）② worker init 支持 modelFiles 注入（Module.FS_createDataFile 写 MEMFS 根，此 Emscripten 不导出 Module.FS，首个补丁版踩坑已修正）
+- 模型源：ModelScope 直链（Mr7Cat/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17，model.int8.onnx=239,233,841 字节与验证完全一致 + tokens.txt 315,894；备源 pengzhendong 同字节）；curl 实测 200/206、双跳 CORS ACAO:*、无阻墙；Range 测速 ~16MB/s
+- 新建 lib/ios/offline-asr.ts：Cache API(sensevoice-asr-v1) 持久化 + 流式下载进度（Content-Length/已知字节兜底）+ 字节完整性校验 + 主备源自动切换 + Worker 桥（init 带 modelFiles transfer 零拷贝）+ Blob→decodeAudioData→单声道混流→线性重采样16k→decode；调试钩子 window.__offlineAsr
+- stt-client.transcribeAudioBlob / autoTranscribeForAi 改为端侧优先：isOfflineAsrReady→本地识别，失败/空文本静默降级云端（长按转文字/预览浮层/直发自动转写全链路生效）
+- 设置 › 语音 API 新增「离线识别（端侧模型，可选）」模块：下载按钮（约 229MB）/进度条（百分比+MB+主备源标识）/已就绪+删除模型/失败重试，zustand store 驱动
+- 端到端实测（agent-browser）：下载 5s→81%、10s→100% 完成；首版 Module.FS.writeFile 报错（FS 未导出）→ 修正补丁 → 重试秒级（缓存命中验证 Cache API）→ 引擎 ready；云端 TTS 合成「你好世界，今天天气怎么样」喂本地引擎 → 685ms 识别出「你好，世界。今天天气怎么样？」（ITN 标点正确）；console 零错误；tsc 通过、新文件 eslint 干净
+
+Stage Summary:
+- Netlify 独立部署下：页面隐藏通知走 SW 通道全平台可用；推送诊断不再误导；VAPID 可用环境变量固定
+- Web Speech 静音设备（国内安卓）自动云端兜底，语音功能「一定有声音」
+- 离线识别完整落地：ModelScope 直链 + Cache API 一次下载 + MEMFS 注入 + SenseVoice int8 本地推理（断网可用，识别质量实测准确），云端 STT 自动兜底
+- 涉及文件：lib/ios/{system-notify(新),offline-asr(新),island-notify,builtin-voices,tts-client,stt-client}.ts、lib/server/{push-store(新),cloud-tts(新)}.ts、api/{push,chat/bg,tts}/route.ts、components/apps/{settings,chat}.tsx、scripts/copy-asr.mjs(新)、public/asr/*(新)、.env.example(新)、package.json(asr:copy)

@@ -8,6 +8,7 @@
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
     "db:push": "prisma db push --accept-data-loss",
+    "asr:copy": "bun scripts/copy-asr.mjs",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset"
@@ -78,6 +79,7 @@
     "remark-gfm": "^4.0.1",
     "sharp": "^0.34.3",
     "sonner": "^2.0.6",
+    "speech-asr": "^1.1.6",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7",
     "three": "^0.186.1",

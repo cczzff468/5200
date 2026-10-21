@@ -113,6 +113,7 @@ import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { lastPushStatus, setupPushSubscription, teardownPushSubscription } from '@/lib/ios/push-client';
 import { showSystemNotification } from '@/lib/ios/system-notify';
+import { deleteOfflineModel, initOfflineAsr, useOfflineAsr } from '@/lib/ios/offline-asr';
 import { isSysNotifyEnabled, setSysNotifyEnabled } from '@/lib/ios/island-notify';
 import {
   addCustomRingtone,
@@ -5647,6 +5648,10 @@ function VoicePage({ onBack }: { onBack: () => void }) {
               />
             </div>
 
+            {/* 离线识别（端侧模型，可选）：SenseVoice WASM 本地推理，下载后断网可用，
+                按住说话/转文字优先本地，失败静默降级云端 */}
+            <OfflineAsrSection />
+
             {/* 服务端兑底（可选）：长按旧语音气泡转文字 / 实时识别不可用时兑底（内置识别模型已移除） */}
             <div className="border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
               <div className="text-[14px] font-medium text-foreground">服务端兑底（OpenAI 兼容，可选）</div>
@@ -5732,6 +5737,123 @@ function VoicePage({ onBack }: { onBack: () => void }) {
 }
 
 // ---------------- 字体 ----------------
+
+/**
+ * 离线识别（端侧模型，可选）下载模块：
+ * - 模型：SenseVoice int8（约 229 MB）+ tokens，阿里云 ModelScope 直链（国内直连不走 HF）；
+ * - 缓存：浏览器 Cache API 持久化，只需下载一次；进度条实时更新（流式读取 Content-Length）；
+ * - 主源失败自动切换备用源；下载完成自动注入 WASM 引擎（MEMFS），状态置「已就绪」；
+ * - 就绪后按住说话/转文字优先本地识别（断网可用），失败静默降级云端 STT（stt-client 已接）。
+ */
+function OfflineAsrSection() {
+  const { status, progress, sourceIndex, error } = useOfflineAsr();
+  const [busy, setBusy] = useState(false);
+  const [toastMsg, showToast] = useLocalToast();
+
+  const totalMb = progress ? progress.total / 1048576 : 229;
+  const loadedMb = progress ? progress.loaded / 1048576 : 0;
+
+  const startDownload = async (): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    useOfflineAsr.getState().set({
+      status: 'downloading',
+      error: null,
+      progress: { loaded: 0, total: Math.round(totalMb * 1048576), pct: 0 },
+    });
+    try {
+      await initOfflineAsr(); // 内部：下载（进度实时写 store）→ 注入 → ready 状态
+      showToast('离线识别模型已就绪，按住说话优先本地识别');
+    } catch {
+      // 错误状态已由 offline-asr 内部写入（store.error），UI 展示
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeModel = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      await deleteOfflineModel();
+      showToast('已删除端侧模型与本地缓存');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[14px] font-medium text-foreground">离线识别（端侧模型，可选）</div>
+          <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground/70">
+            SenseVoice 中文端侧模型（WASM 本地推理）：下载后按住说话/转文字优先本地识别，断网可用；
+            本地失败自动静默降级云端。模型存浏览器缓存，只需下载一次。
+          </p>
+        </div>
+      </div>
+
+      {/* 状态区 */}
+      {status === 'checking' && (
+        <p className="mt-2 text-[12px] text-muted-foreground">正在检查本地缓存…</p>
+      )}
+
+      {(status === 'not-downloaded' || (status === 'error' && !busy)) && (
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void startDownload()}
+            disabled={busy}
+            className="rounded-full bg-foreground px-4 py-2 text-[13px] font-medium text-background transition-all active:scale-[0.97] disabled:opacity-50"
+          >
+            {status === 'error' ? '重试下载模型（约 229 MB）' : '下载模型（约 229 MB）'}
+          </button>
+          <span className="text-[12px] text-muted-foreground/70">阿里云 ModelScope 直链，国内不绕墙</span>
+        </div>
+      )}
+
+      {status === 'error' && error && (
+        <p className="mt-1.5 text-[12px] leading-relaxed" style={{ color: IOS_RED }}>
+          {error}
+        </p>
+      )}
+
+      {status === 'downloading' && (
+        <div className="mt-2">
+          <div className="h-2 overflow-hidden rounded-full bg-black/[0.07] dark:bg-white/[0.12]">
+            <div
+              className="h-full rounded-full bg-[#07C160] transition-[width] duration-300"
+              style={{ width: `${Math.max(2, progress?.pct ?? 0)}%` }}
+            />
+          </div>
+          <div className="mt-1.5 flex items-center justify-between text-[12px] text-muted-foreground">
+            <span>
+              下载中 {progress ? `${progress.pct.toFixed(1)}%` : '准备中…'}
+              {progress ? ` · ${loadedMb.toFixed(1)}/${totalMb.toFixed(0)} MB` : ''}
+            </span>
+            <span>{sourceIndex === 0 ? '主源' : '备用源'}</span>
+          </div>
+          <p className="mt-1 text-[12px] text-muted-foreground/60">下载完成后自动注入引擎，可离开本页（下次进入续传整包）。</p>
+        </div>
+      )}
+
+      {status === 'ready' && (
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <p className="text-[12px] text-[#07C160]">✓ 已就绪：按住说话优先本地识别（断网可用）</p>
+          <button
+            type="button"
+            onClick={() => void removeModel()}
+            disabled={busy}
+            className="shrink-0 rounded-full px-3 py-1.5 text-[12px] text-muted-foreground ring-1 ring-black/[0.08] transition-all active:scale-[0.97] disabled:opacity-50 dark:ring-white/[0.12]"
+          >
+            删除模型
+          </button>
+        </div>
+      )}
+      <LocalToast msg={toastMsg} />
+    </div>
+  );
+}
 
 /** 字体列表玻璃卡：GrayCard 同款毛玻璃配方但无内边距（divide-y 行列表用，分隔线贴边） */
 function FontListCard({ children }: { children: ReactNode }) {
