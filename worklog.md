@@ -21383,3 +21383,24 @@ Stage Summary:
 - 拾光小屋 v6.0：11 品种 AI 真照 + 领养/档案 UI 全面真照化 + 宠物头部花纹品种级重绘 + 阳台浮空玻璃栏杆删除 + 小屋点歌三页签（搜歌/我的歌单/播放队列）+ 八音盒可开关可搜歌白色金边芭蕾舞者化
 - 涉及文件：public/pets/*(新11图)、pet-breeds.ts、CoupleHome.tsx、SongSheet.tsx(新)、catalog.ts、scene/{Room,CozyPlus3D,Pet3D}.tsx、worklog.md
 - commit 4d619c7 已推送 origin/main
+
+---
+Task ID: cottage-v62-pet3d
+Agent: Z.ai Code (main)
+Task: 拾光小屋 v6.2 —— 宠物从 2D 立绘面片重写为真·3D 卡通手办建模（用户参考图 chibi 3D 渲染风）
+
+Work Log:
+- Pet3D.tsx 全量重写（479→约860 行）：删除 AI 立绘 sprite 加载/billboard/翻转逻辑，改为 buildPet() 程序化 3D 建模（与 Char3D 小人同管线，模型朝 +z，holder.rotation.y=heading 随移动转身）
+- Chibi 手办比例：大圆头(headR=0.155*headRound) + 圆豆身体(椭圆球) + 4 条小短腿(髋 pivot) + 无脖颈堆叠，root 缩放 0.88*look.scale 保持世界尺寸与旧版一致
+- 脸部：超大果冻眼(eyeR=headR*0.235, 虹膜用 look.eye 色=哈士奇/布偶蓝眼, 双高光球) + 周期眨眼(1.6-4.4s) + 打盹闭眼；腮红 CircleGeometry；狗大吻/猫小吻+ω 嘴；猫胡须 4 根；鼻头用 look.nose
+- 耳型三态：erect 立耳(球椭+粉内耳)/erectBig 柯基大立耳/floppy 金毛垂耳(悬挂胶囊)；尾型五态：curl 柴犬卷尾(torus 弧)/plume 羽状尾(金毛博美布偶,布偶尾尖深色)/sickle 哈士奇镰刀尾/question 猫问号尾/bob 柯基短尾球
+- 花色六方案（顶球冠壳贴面 hug 渲染）：saddle 柴犬金毛背鞍/tabby 橘猫狸花背纹+额头川纹/points 布偶面罩+深耳深爪深尾尖/patches 三花双色头帽+背斑(黑尾)/blaze 哈士奇深冠+白眉心纹(柯基白纹)/solid 金渐层背脊毛尖冠；博美奶白绒毛脖圈
+- 动画：四腿对角步态+身体起伏/待机呼吸(model.scale.y)/尾巴快慢摇/吃饭低头(head.rx 0.52)/撸宠蹦跳+爱心粒子(保留)/打盹💤(保留)；girl 头顶 3D 粉蝴蝶结(双翼球+结心，替代旧平面贴图)
+- 清理：git rm public/pets/sprite-*.png(11张,不再引用)、删除 raw/ 中间产物；领养 UI 真照 /pets/<id>.png 保留不动
+- 校验：tsc 全仓 0 错误、eslint Pet3D.tsx 0 错误
+- 实机验证（agent-browser）：解锁→拾光小屋→确认布偶仙仙 3D 手办渲染（大头圆身/腮红/深鼻/小短腿/立体蓬松，非面片）；领养全流程送走→换哈士奇二哈（深冠+白吻+粉内耳可见）；撸宠/喂食 UI 正常；console 无 Pet3D 相关报错；俯视相机限制导致侧脸细节待用户实测反馈
+
+Stage Summary:
+- 宠物系统完成「AI 平面立绘 → 真 3D 卡通手办」转型：11 品种特征全参数化渲染（耳型/尾型/花色/眼色/体型），随方向实时转身，动画全家桶（步态/呼吸/摇尾/眨眼/低头吃/蹦跳）
+- 用户参考图两要素落地：3D 渲染质感(参考图2 chibi 手办) + 可爱卡通大眼腮红(参考图1 插画元素)
+- 涉及文件：scene/Pet3D.tsx(重写)、删除 public/pets/sprite-*.png 与 raw/、worklog.md
