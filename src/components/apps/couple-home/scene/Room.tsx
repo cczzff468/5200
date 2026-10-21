@@ -1331,18 +1331,6 @@ export default function Room({
         hostBox={slabs.bal}
       />
 
-      {/* —— 阳台栏杆（南/东两面玻璃护栏 + 木扶手；开放式阳台） —— */}
-      <BalconyRail
-        from={[BAL_X0, BAL_Z1]}
-        to={[BAL_X1, BAL_Z1]}
-        night={night}
-      />
-      <BalconyRail
-        from={[BAL_X1, BAL_Z0]}
-        to={[BAL_X1, BAL_Z1]}
-        night={night}
-      />
-
       {/* —— 九扇上悬窗（数据驱动，编辑模式可选中沿墙滑行） —— */}
       {WINS.map((w, i) => {
         const along = winPos?.[i] ?? w.def;
@@ -1372,54 +1360,6 @@ export default function Room({
       <Ceiling x0={-ROOM_X} x1={BED_X1} z0={BED_Z0} z1={BED_Z1} col={ceilColBed} night={night} />
       <Ceiling x0={BED_X1} x1={KTCH_X1} z0={BED_Z0} z1={BED_Z1} col={ceilColK} night={night} />
       <Ceiling x0={BATH_X0} x1={BATH_X1} z0={BATH_Z0} z1={BATH_Z1} col={ceilColB} night={night} />
-    </group>
-  );
-}
-
-// ---------------- 阳台玻璃栏杆（v5.7：开放式阳台，玻璃 + 木扶手） ----------------
-
-function BalconyRail({ from, to, night }: { from: [number, number]; to: [number, number]; night: boolean }) {
-  const dx = to[0] - from[0];
-  const dz = to[1] - from[1];
-  const len = Math.hypot(dx, dz);
-  const cx = (from[0] + to[0]) / 2;
-  const cz = (from[1] + to[1]) / 2;
-  const ry = Math.atan2(dx, dz);
-  const H = 1.02;
-  const posts = Math.max(2, Math.round(len / 0.95) + 1);
-  return (
-    <group position={[cx, 0, cz]} rotation={[0, ry, 0]}>
-      {/* 玻璃栏板（淡青透明） */}
-      <mesh position={[0, H / 2, 0]} castShadow>
-        <boxGeometry args={[len, H - 0.06, 0.025]} />
-        <meshStandardMaterial
-          color={night ? '#9fb4bd' : '#cfe4e8'}
-          roughness={0.06}
-          metalness={0.08}
-          transparent
-          opacity={0.3}
-        />
-      </mesh>
-      {/* 木扶手（顶杆） */}
-      <mesh position={[0, H, 0]} castShadow>
-        <boxGeometry args={[len + 0.06, 0.06, 0.07]} />
-        <meshStandardMaterial color={night ? '#a8946f' : '#d9c7a4'} roughness={0.7} />
-      </mesh>
-      {/* 底槛 */}
-      <mesh position={[0, 0.03, 0]}>
-        <boxGeometry args={[len, 0.06, 0.05]} />
-        <meshStandardMaterial color={night ? '#9a8a6e' : '#cfc0a0'} roughness={0.8} />
-      </mesh>
-      {/* 立柱（等分） */}
-      {Array.from({ length: posts }, (_, i) => {
-        const x = -len / 2 + (len / (posts - 1)) * i;
-        return (
-          <mesh key={i} position={[x, H / 2, 0]} castShadow>
-            <boxGeometry args={[0.045, H, 0.045]} />
-            <meshStandardMaterial color={night ? '#8a7a5e' : '#c4b494'} roughness={0.7} metalness={0.15} />
-          </mesh>
-        );
-      })}
     </group>
   );
 }

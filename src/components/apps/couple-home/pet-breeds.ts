@@ -66,6 +66,8 @@ export interface PetBreed {
   blurb: string;
   /** 面板大 emoji */
   emoji: string;
+  /** 领养面板真实品种照（public/pets/<id>.png，AI 生成一比一复刻） */
+  img: string;
   /** 领养时建议名（可改名） */
   suggest: string;
   look: PetBreedLook;
@@ -79,6 +81,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '柴犬',
     blurb: '爱微笑也会冷脸',
     emoji: '🐕',
+    img: '/pets/shiba.png',
     suggest: '布丁',
     look: {
       // scale 1.16 = v5.8 时代狗体型（Pet3D 旧版 dog S=1.16），保持柴犬现状大小
@@ -93,6 +96,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '博美',
     blurb: '一小团会跑的棉花糖',
     emoji: '🐶',
+    img: '/pets/pomeranian.png',
     suggest: '毛球',
     look: {
       scale: 0.82, bodyLen: 0.92, legLen: 0.82, legR: 0.85, headRound: 1.16,
@@ -106,6 +110,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '金毛',
     blurb: '大暖男，谁都能摸',
     emoji: '🦮',
+    img: '/pets/golden.png',
     suggest: '暖宝',
     look: {
       scale: 1.24, bodyLen: 1.12, legLen: 1.14, legR: 1.18, headRound: 1.04,
@@ -119,6 +124,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '哈士奇',
     blurb: '戏精附体，家拆不停',
     emoji: '🐺',
+    img: '/pets/husky.png',
     suggest: '二哈',
     look: {
       scale: 1.18, bodyLen: 1.08, legLen: 1.1, legR: 1.05, headRound: 1.02,
@@ -133,6 +139,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '柯基',
     blurb: '小短腿电蜜臀',
     emoji: '🐶',
+    img: '/pets/corgi.png',
     suggest: '短腿',
     look: {
       scale: 0.95, bodyLen: 1.32, legLen: 0.56, legR: 1.15, headRound: 1.1,
@@ -148,6 +155,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '橘猫',
     blurb: '十个橘猫九个胖',
     emoji: '🐱',
+    img: '/pets/orange.png',
     suggest: '团子',
     look: {
       scale: 1.0, bodyLen: 1, legLen: 1, legR: 1, headRound: 1,
@@ -161,6 +169,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '布偶猫',
     blurb: '黏人小仙女，抱不腻',
     emoji: '😸',
+    img: '/pets/ragdoll.png',
     suggest: '仙仙',
     look: {
       scale: 1.12, bodyLen: 1.14, legLen: 1.08, legR: 1.1, headRound: 1.06,
@@ -174,6 +183,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '三花猫',
     blurb: '招财锦鲤本鲤',
     emoji: '🐈',
+    img: '/pets/calico.png',
     suggest: '花花',
     look: {
       scale: 0.98, bodyLen: 1, legLen: 1, legR: 0.98, headRound: 1.04,
@@ -188,6 +198,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '狸花猫',
     blurb: '中华田园猫之王',
     emoji: '🐈',
+    img: '/pets/lihua.png',
     suggest: '阿狸',
     look: {
       scale: 1.02, bodyLen: 1.04, legLen: 1.04, legR: 0.96, headRound: 1.0,
@@ -201,6 +212,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '金渐层',
     blurb: '行走的金元宝',
     emoji: '🐱',
+    img: '/pets/goldenShaded.png',
     suggest: '金金',
     look: {
       scale: 1.04, bodyLen: 1, legLen: 0.96, legR: 1.12, headRound: 1.16,
@@ -215,6 +227,7 @@ export const PET_BREEDS: PetBreed[] = [
     name: '奶牛猫',
     blurb: '液体猫，上蹿下跳',
     emoji: '🐈‍⬛',
+    img: '/pets/tuxedo.png',
     suggest: '奶牛',
     look: {
       scale: 1.0, bodyLen: 1.02, legLen: 1.02, legR: 1.0, headRound: 1.02,

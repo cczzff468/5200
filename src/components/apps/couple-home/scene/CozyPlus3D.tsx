@@ -17,10 +17,9 @@
  * 尺寸单位 = 米（世界坐标，MODEL_SCALE 由接线方处理——本系列直接按世界尺寸建模）。
  */
 
-import { useEffect, useMemo, useRef, type ReactElement } from 'react';
+import { useMemo, useRef, type ReactElement } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { PIANO_WHITE, pianoNote } from '../instrument';
 
 /** 共享 props：接线方按家具类型透传 */
 export interface CozyPlusProps {
@@ -1134,31 +1133,17 @@ export function Vinyl3D({ col, on }: CozyPlusProps) {
   );
 }
 
-// ---------------- 14. 复古八音盒（v5.8 B1/D2：开盖叮嗜噈八音盒音色） ----------------
+// ---------------- 14. 复古八音盒（v6.0：点击弹点歌面板选歌，盒盖/芭蕾舞者随播放开合起舞，可暂停可关） ----------------
 
-/** 八音盒旋律（《天空之城》片段）：[音名, 拍数]，音名需在 PIANO_WHITE 域内 */
-const MUSIC_BOX_TUNE: [string, number][] = [
-  ['A4', 1], ['B4', 1], ['C5', 1], ['B4', 1], ['C5', 1], ['E5', 1], ['B4', 2],
-  ['E4', 1], ['F4', 1], ['E4', 1], ['F4', 1], ['C5', 1], ['E4', 2],
-  ['C5', 1], ['C5', 1], ['C5', 1], ['B4', 1], ['C5', 1], ['B4', 1], ['C5', 3],
-];
-const MUSIC_BOX_BEAT = 330;
-
-export function MusicBox3D({ col, touch }: CozyPlusProps) {
-  // v5.9：奶白盒身 + 金色镶边（用户要求变白色）
+export function MusicBox3D({ col, on }: CozyPlusProps) {
+  // v5.9 奶白盒身 + 金色镶边；v6.0 随 useMusic 播放态开盖（上层 effect 同步 st.on）——
+  // 暂停即合盖，彻底解决「关不了」；不再内置固定旋律，改由点歌面板搜歌驱动
   const shell = col ?? '#f7f4ee';
   const lid = useRef<THREE.Group>(null);
   const drum = useRef<THREE.Group>(null);
+  const dancer = useRef<THREE.Group>(null);
+  const crank = useRef<THREE.Group>(null);
   const notes = useRef<(THREE.Sprite | null)[]>([]);
-  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const playingUntil = useRef(0);
-  const openedFor = useRef(0);
-  /** 音名 → 频率（与钢琴面板同一张音域表） */
-  const freqOf = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const k of PIANO_WHITE) map[k.name] = k.freq;
-    return map;
-  }, []);
   const noteTex = useMemo(() => {
     const cv = document.createElement('canvas');
     cv.width = 64;
@@ -1174,44 +1159,25 @@ export function MusicBox3D({ col, touch }: CozyPlusProps) {
     return tex;
   }, []);
 
-  // 点击（lastTouch 变化）→ 开盖 + 八音盒音色放旋律
-  useEffect(() => {
-    if (!touch) return;
-    const now = performance.now();
-    if (now - openedFor.current < 1200) return; // 弹跳冷却重复触发忽略
-    openedFor.current = now;
-    playingUntil.current = now + MUSIC_BOX_TUNE.reduce((s, [, b]) => s + b, 0) * MUSIC_BOX_BEAT + 600;
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
-    let t = 260; // 盖子先开一点再响
-    for (const [name, beats] of MUSIC_BOX_TUNE) {
-      const ms = t;
-      const freq = freqOf[name];
-      if (freq) timers.current.push(setTimeout(() => pianoNote(freq, 0.85, 'musicbox'), ms));
-      t += beats * MUSIC_BOX_BEAT;
-    }
-    return () => {
-      timers.current.forEach(clearTimeout);
-      timers.current = [];
-    };
-  }, [touch, freqOf]);
-  useEffect(
-    () => () => {
-      timers.current.forEach(clearTimeout);
-    },
-    [],
-  );
-
   useFrame((state, dt) => {
     const d = Math.min(dt, 0.05);
-    const open = performance.now() < playingUntil.current;
-    // 盖子绕后缘铰链翻开 ~1.9rad
+    const open = !!on;
+    // 盖子绕后缘铰链翻开 ~1.9rad（播放中常开，暂停缓缓合上）
     if (lid.current) {
       lid.current.rotation.x = THREE.MathUtils.damp(lid.current.rotation.x, open ? -1.9 : 0, 6, d);
     }
     // 音筒：开盖时慢转
-    if (drum.current) {
-      if (open) drum.current.rotation.x += d * 1.6;
+    if (drum.current && open) drum.current.rotation.x += d * 1.6;
+    // 发条旋钮：播放中转动
+    if (crank.current && open) crank.current.rotation.y += d * 2.2;
+    // 芭蕾舞者：开盖起舞（自转 + 轻微踮起）
+    if (dancer.current) {
+      if (open) {
+        dancer.current.rotation.y += d * 3.4;
+        dancer.current.position.y = THREE.MathUtils.damp(dancer.current.position.y, 0.012, 4, d);
+      } else {
+        dancer.current.position.y = THREE.MathUtils.damp(dancer.current.position.y, 0, 4, d);
+      }
     }
     // 音符飘出
     const t = state.clock.elapsedTime;
@@ -1230,7 +1196,7 @@ export function MusicBox3D({ col, touch }: CozyPlusProps) {
 
   return (
     <group>
-      {/* 盒身（奶白 + 底部金色踢脚线） */}
+      {/* 盒身（奶白 + 底部金色踢脚线 + 金色包角） */}
       <mesh position={[0, 0.07, 0]} castShadow receiveShadow>
         <boxGeometry args={[0.24, 0.14, 0.18]} />
         {mat(shell, 0.5)}
@@ -1239,38 +1205,92 @@ export function MusicBox3D({ col, touch }: CozyPlusProps) {
         <boxGeometry args={[0.244, 0.016, 0.184]} />
         {mat('#d9b25e', 0.35, { metalness: 0.55 })}
       </mesh>
-      {/* 盖子（绕后缘开合） */}
+      {[
+        [-0.115, -0.085],
+        [0.115, -0.085],
+        [-0.115, 0.085],
+        [0.115, 0.085],
+      ].map(([x, z], i) => (
+        <mesh key={i} position={[x, 0.07, z]}>
+          <cylinderGeometry args={[0.007, 0.007, 0.142, 8]} />
+          {mat('#d9b25e', 0.35, { metalness: 0.55 })}
+        </mesh>
+      ))}
+      {/* 盖子（绕后缘开合；拱顶 + 金边） */}
       <group ref={lid} position={[0, 0.14, -0.09]}>
         <mesh position={[0, 0.012, 0.09]} castShadow>
           <boxGeometry args={[0.24, 0.022, 0.18]} />
           {mat(shade(shell, 1.05), 0.45)}
         </mesh>
-        {/* 盖内星形镶嵌（开盖可见） */}
-        <mesh position={[0, -0.002, 0.09]} rotation={[-Math.PI / 2, 0, 0]}>
-          <circleGeometry args={[0.045, 10]} />
-          {mat('#e8c977', 0.35, { metalness: 0.5 })}
+        {/* 拱顶（半圆柱） */}
+        <mesh position={[0, 0.022, 0.09]} rotation={[Math.PI / 2, 0, 0]} castShadow>
+          <cylinderGeometry args={[0.09, 0.09, 0.24, 16, 1, false, 0, Math.PI]} />
+          {mat(shade(shell, 1.08), 0.45)}
         </mesh>
-        {/* 盖面金色描边 */}
-        <mesh position={[0, 0.024, 0.09]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.062, 0.07, 24]} />
+        {/* 拱顶金色棱线 */}
+        <mesh position={[0, 0.112, 0.09]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.088, 0.004, 8, 20, Math.PI]} />
           {mat('#d9b25e', 0.35, { metalness: 0.55 })}
+        </mesh>
+        {/* 盖面金色描边花环 */}
+        <mesh position={[0, -0.002, 0.09]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[0.055, 0.064, 24]} />
+          {mat('#e0bb6a', 0.35, { metalness: 0.5 })}
         </mesh>
       </group>
-      {/* 侧面发条旋钮 */}
-      <mesh position={[0.128, 0.07, 0]} rotation={[0, 0, Math.PI / 2]} castShadow>
-        <cylinderGeometry args={[0.022, 0.022, 0.016, 12]} />
-        {mat('#c9a13e', 0.35, { metalness: 0.6 })}
-      </mesh>
-      {/* 内部音筒 + 滚针（开盖可见） */}
-      <group ref={drum} position={[0, 0.152, 0.02]}>
-        <mesh castShadow>
-          <cylinderGeometry args={[0.032, 0.032, 0.13, 14]} />
-          {mat('#d9b25e', 0.35, { metalness: 0.55 })}
+      {/* 侧面发条旋钮（播放中转动） */}
+      <group ref={crank} position={[0.128, 0.07, 0]}>
+        <mesh rotation={[0, 0, Math.PI / 2]} castShadow>
+          <cylinderGeometry args={[0.02, 0.02, 0.014, 12]} />
+          {mat('#c9a13e', 0.35, { metalness: 0.6 })}
         </mesh>
-        {[-0.045, 0, 0.045].map((x) => (
-          <mesh key={x} position={[x, 0.034, 0]}>
-            <sphereGeometry args={[0.005, 6, 6]} />
-            {mat('#b58a2e', 0.4, { metalness: 0.5 })}
+        <mesh position={[0.012, 0, 0]} rotation={[0, 0, Math.PI / 2]}>
+          <cylinderGeometry args={[0.004, 0.004, 0.014, 8]} />
+          {mat('#b58a2e', 0.4, { metalness: 0.5 })}
+        </mesh>
+      </group>
+      {/* 盒内丝绒镜面（开盖可见） */}
+      <mesh position={[0, 0.141, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[0.085, 24]} />
+        {mat('#f3e6fa', 0.85)}
+      </mesh>
+      {/* 芭蕾舞者（开盖起舞：粉裙 + 金腰线） */}
+      <group ref={dancer} position={[0, 0, 0.042]}>
+        {/* 裙摆（圆锥纱裙） */}
+        <mesh position={[0, 0.022, 0]} castShadow>
+          <coneGeometry args={[0.026, 0.038, 14]} />
+          {mat('#fbd7e2', 0.6)}
+        </mesh>
+        {/* 裙摆金边 */}
+        <mesh position={[0, 0.005, 0]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.0245, 0.0022, 6, 16]} />
+          {mat('#e0bb6a', 0.35, { metalness: 0.5 })}
+        </mesh>
+        {/* 上身 */}
+        <mesh position={[0, 0.05, 0]}>
+          <cylinderGeometry args={[0.007, 0.011, 0.02, 10]} />
+          {mat('#f6c9d6', 0.6)}
+        </mesh>
+        {/* 头 + 发髻 */}
+        <mesh position={[0, 0.068, 0]}>
+          <sphereGeometry args={[0.0085, 10, 8]} />
+          {mat('#fce8dc', 0.6)}
+        </mesh>
+        <mesh position={[0, 0.076, -0.002]}>
+          <sphereGeometry args={[0.0045, 8, 6]} />
+          {mat('#8a5a3a', 0.7)}
+        </mesh>
+      </group>
+      {/* 内部音筒 + 滚针（开盖可见，舞者身后） */}
+      <group ref={drum} position={[0, 0.152, -0.045]}>
+        <mesh castShadow>
+          <cylinderGeometry args={[0.028, 0.028, 0.11, 14]} />
+          {mat('#f2e8d8', 0.4, { metalness: 0.2 })}
+        </mesh>
+        {[-0.038, 0, 0.038].map((x) => (
+          <mesh key={x} position={[x, 0.03, 0]}>
+            <sphereGeometry args={[0.0045, 6, 6]} />
+            {mat('#c9a13e', 0.4, { metalness: 0.5 })}
           </mesh>
         ))}
       </group>

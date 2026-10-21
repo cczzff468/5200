@@ -784,10 +784,10 @@ export const CATALOG: Record<string, CatalogEntry> = {
     kind: 'vinyl', name: '黑胶唱片机', cat: 'appliance', fp: [0.52, 0.4], h: 0.2,
     acts: { toggle: true },
   },
-  // 复古八音盒（摆电视柜台面）：点击开盖，叮叮咚咚放一首小旋律（八音盒音色）
+  // 复古八音盒（摆电视柜台面）：点击弹点歌面板选歌，盒盖/芭蕾舞者随播放开合起舞（v6.0，暂停即合盖）
   musicBox: {
     kind: 'musicBox', name: '复古八音盒', cat: 'decor', fp: [0.26, 0.2], h: 0.24,
-    acts: { playful: true },
+    acts: {},
   },
 };
 

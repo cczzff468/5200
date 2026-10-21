@@ -118,15 +118,17 @@ const EXTRAS: Record<string, BreedExtras> = {
 
 /** patches 方案躯干斑块分布（c=0 → patchCols[0]，c=1 → patchCols[1]；p=位置 z 会按 bodyLen 拉伸） */
 const BODY_PATCHES: Record<string, { c: 0 | 1; p: [number, number, number]; s: [number, number, number] }[]> = {
-  // 三花：白底 + 背部黑块 + 前背橘块（橘黑斑块头背分布）
+  // 三花：白底 + 后背黑大块 + 前肩橘块 + 颈侧小黑斑（橘黑斑块头背分布，俯视角清晰可读）
   calico: [
-    { c: 1, p: [0.05, 0.275, -0.09], s: [0.095, 0.05, 0.11] },
-    { c: 0, p: [-0.06, 0.255, 0.06], s: [0.08, 0.045, 0.1] },
+    { c: 1, p: [0.06, 0.27, -0.1], s: [0.1, 0.055, 0.12] },
+    { c: 0, p: [-0.065, 0.26, 0.07], s: [0.085, 0.05, 0.105] },
+    { c: 1, p: [0.085, 0.205, 0.13], s: [0.05, 0.045, 0.06] },
   ],
-  // 奶牛猫：白底 + 背部大黑块 + 体侧小黑块（奶牛式随机大块）
+  // 奶牛猫：白底 + 背部大黑块 + 左胁黑斑 + 右肩小黑斑（奶牛式随机大块，v6.0 加三块不等形）
   tuxedo: [
-    { c: 0, p: [0, 0.285, -0.05], s: [0.1, 0.05, 0.16] },
-    { c: 0, p: [-0.09, 0.21, -0.11], s: [0.05, 0.045, 0.07] },
+    { c: 0, p: [0.01, 0.285, -0.06], s: [0.105, 0.052, 0.17] },
+    { c: 0, p: [-0.095, 0.2, -0.1], s: [0.055, 0.05, 0.08] },
+    { c: 0, p: [0.09, 0.215, 0.13], s: [0.05, 0.042, 0.06] },
   ],
 };
 
@@ -598,8 +600,8 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
               <mesh position={[0, -0.026, 0.176]} scale={[1.15, 0.8, 0.8]} material={M.nose}>
                 <sphereGeometry args={[0.02, 10, 8]} />
               </mesh>
-              {/* 眼睛 ×2（虹膜=品种眼色，哈士奇/布偶蓝眼；双高光保留；眨眼时整体压扁） */}
-              {[-0.06, 0.06].map((x, i) => (
+              {/* 眼睛 ×2（虹膜=品种眼色，哈士奇/布偶蓝眼；双高光保留；眨眼时整体压扁；v6.0 加大更 Q） */}
+              {[-0.062, 0.062].map((x, i) => (
                 <mesh
                   key={i}
                   ref={(el) => {
@@ -608,13 +610,13 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
                   position={[x, 0.03, 0.12]}
                   material={M.iris}
                 >
-                  <sphereGeometry args={[0.023, 16, 12]} />
+                  <sphereGeometry args={[0.026, 16, 12]} />
                   {/* 大高光（左上）+ 小高光（右下） */}
-                  <mesh position={[-0.008, 0.009, 0.016]} scale={[1, 1, 0.55]} material={M.hi}>
-                    <sphereGeometry args={[0.0068, 8, 8]} />
+                  <mesh position={[-0.009, 0.01, 0.018]} scale={[1, 1, 0.55]} material={M.hi}>
+                    <sphereGeometry args={[0.0078, 8, 8]} />
                   </mesh>
-                  <mesh position={[0.007, -0.007, 0.018]} material={M.hi}>
-                    <sphereGeometry args={[0.0034, 6, 6]} />
+                  <mesh position={[0.008, -0.008, 0.02]} material={M.hi}>
+                    <sphereGeometry args={[0.0038, 6, 6]} />
                   </mesh>
                 </mesh>
               ))}
@@ -674,16 +676,26 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
                   <sphereGeometry args={[1, 14, 12]} />
                 </mesh>
               )}
-              {/* patches：头上斑块（三花橘斑在左耳侧 / 奶牛黑斑在右耳侧） */}
+              {/* patches：品种级头部花纹（v6.0 重画：头顶后部大色帽 + 单侧眼罩，俯视/正视都读得出花色）
+                  三花：右后黑帽 + 左眼橘罩（耳左橘右黑）；奶牛：右后黑帽 + 左眼黑罩（双耳黑） */}
               {look.pattern === 'patches' && (
-                <mesh
-                  position={[breed.id === 'calico' ? -0.095 : 0.095, 0.07, 0.03]}
-                  rotation={[0, 0, breed.id === 'calico' ? 0.45 : -0.45]}
-                  scale={[0.056, 0.062, 0.052]}
-                  material={breed.id === 'calico' ? M.p1 : M.p2}
-                >
-                  <sphereGeometry args={[1, 12, 10]} />
-                </mesh>
+                <>
+                  <mesh
+                    position={[0.05, 0.105, -0.05]}
+                    rotation={[0.35, 0, 0.3]}
+                    scale={[0.088, 0.055, 0.082]}
+                    material={M.p2}
+                  >
+                    <sphereGeometry args={[1, 14, 12]} />
+                  </mesh>
+                  <mesh
+                    position={[-0.062, 0.026, 0.104]}
+                    scale={[0.043, 0.041, 0.038]}
+                    material={breed.id === 'calico' ? M.p1 : M.p2}
+                  >
+                    <sphereGeometry args={[1, 12, 10]} />
+                  </mesh>
+                </>
               )}
               {/* 狸花猫：额头 M 形纹（三道深色竖纹，左右两道外撇） */}
               {breed.id === 'lihua' &&

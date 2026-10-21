@@ -64,10 +64,9 @@ import {
 } from 'lucide-react';
 import Joystick from './Joystick';
 import InstrumentOverlay from './InstrumentOverlay';
+import { SongSheet } from './SongSheet';
 import { PET_BREEDS, breedOf } from './pet-breeds';
 import { useMusic } from '@/lib/ios/music-store';
-import type { NcmSong } from '@/lib/ios/music-api';
-import { songCover } from '@/lib/ios/music-api';
 import { localDB, genId } from '@/lib/ios/db';
 import { useWeatherSnapshot, weatherCodeInfo } from '../weather-core';
 import { listContacts } from '@/lib/ios/contacts-store';
@@ -489,15 +488,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
     if ((c >= 71 && c <= 77) || c === 85 || c === 86) return 'snow';
     return 'clear';
   }, [weather]);
-  /** 音乐 App 正在放歌（音箱飘音符 + 点歌面板当前曲） */
+  /** 音乐 App 正在放歌（音箱飘音符 + 黑胶/八音盒跟播联动） */
   const musicPlaying = useMusic((s) => s.playing);
-  const musicCurrent = useMusic((s) => s.current);
-  // 黑胶唱片机随音乐播放自动转/停（v5.9：唱片机不再手动开关，跟播放态联动）
+  // 黑胶唱片机 / 八音盒随音乐播放自动转/停、开/合盖（v5.9 起跟播放态联动，八音盒 v6.0 加入）
   useEffect(() => {
     setItems((prev) => {
       let changed = false;
       const next = prev.map((f) => {
-        if (f.kind !== 'vinyl') return f;
+        if (f.kind !== 'vinyl' && f.kind !== 'musicBox') return f;
         if (!!f.st?.on === musicPlaying) return f;
         changed = true;
         return { ...f, st: { ...f.st, on: musicPlaying } };
@@ -1135,8 +1133,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
         return;
       }
 
-      // 黑胶唱片机：点击 = 弹出点歌面板（选中的歌全屋响起，唱片随播放自动旋转 —— v5.9）
-      if (item.kind === 'vinyl') {
+      // 黑胶唱片机 / 八音盒：点击 = 弹出点歌面板（搜歌/我的歌单/队列；全屋响起，随播放自动旋转/开盖 —— v6.0）
+      if (item.kind === 'vinyl' || item.kind === 'musicBox') {
         setMusicSheet(true);
         return;
       }
@@ -1403,16 +1401,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setInviteOpen(false);
     if (name) toast(`送${name}到门口，记得常来玩呀～`);
   }, [guest, toast]);
-
-  // —— F3 音响点歌（音乐 App 的歌在全屋响起；ambient = 家具播放中不弹灵动岛） ——
-  const playHouseSong = useCallback(
-    async (song: NcmSong) => {
-      await useMusic.getState().playSong(song, undefined, { ambient: true });
-      toast(`🎵《${song.name}》正在小屋响起`);
-      setMusicSheet(false);
-    },
-    [toast],
-  );
 
   // —— F6 拍照模式：快门 → 存进情侣相册 ——
   const photoBusy = useRef(false);
@@ -2948,15 +2936,20 @@ export default function CoupleHome({ close }: { close: () => void }) {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mb-3 flex items-center justify-between">
-                <span className="text-[15px] font-semibold text-[#3a3a3e]">
-                  {pet
-                    ? `${breedOf(pet.sp, pet.breed).emoji} ${pet.name}`
-                    : !adoptSp
-                      ? '🐾 领养一只小可爱'
-                      : !adoptBreed
-                        ? '🐾 选个品种'
-                        : '🐾 登记小户口'}
-                </span>
+                <div>
+                  <span className="text-[15px] font-semibold text-[#3a3a3e]">
+                    {pet
+                      ? `${pet.name} 的小档案`
+                      : !adoptSp
+                        ? '领养一只小可爱'
+                        : !adoptBreed
+                          ? '选个品种'
+                          : '登记小户口'}
+                  </span>
+                  <p className="mt-0.5 text-[11px] text-[#9a9a96]">
+                    {pet ? '点一点它就能撸一撸哦' : !adoptSp ? '先选猫猫还是狗狗' : !adoptBreed ? '都是真实品种的样子' : '选性别，取个名字'}
+                  </p>
+                </div>
                 <button
                   onClick={closePetSheet}
                   aria-label="关闭宠物面板"
@@ -2967,35 +2960,48 @@ export default function CoupleHome({ close }: { close: () => void }) {
               </div>
               {!pet ? (
                 !adoptSp ? (
-                  // ① 选种类：汪星人 / 喵星人
+                  // ① 选种类：汪星人 / 喵星人（真实品种照叠叠乐）
                   <div className="grid grid-cols-2 gap-3">
-                    <button
-                      onClick={() => setAdoptSp('dog')}
-                      className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fdeee6] p-4 shadow-sm ring-1 ring-[#f5dcc8] transition active:scale-95"
-                    >
-                      <span className="text-[34px] leading-none">🐶</span>
-                      <span className="text-[13px] font-semibold text-[#4a4a4e]">汪星人</span>
-                      <span className="text-[10.5px] text-[#9a9a96]">博美/金毛/二哈/柯基</span>
-                    </button>
-                    <button
-                      onClick={() => setAdoptSp('cat')}
-                      className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fdf3e4] p-4 shadow-sm ring-1 ring-[#f3e5c8] transition active:scale-95"
-                    >
-                      <span className="text-[34px] leading-none">🐱</span>
-                      <span className="text-[13px] font-semibold text-[#4a4a4e]">喵星人</span>
-                      <span className="text-[10.5px] text-[#9a9a96]">布偶/三花/狸花/橘猫</span>
-                    </button>
+                    {(['dog', 'cat'] as const).map((sp) => {
+                      const imgs = PET_BREEDS.filter((b) => b.sp === sp).slice(0, 4);
+                      return (
+                        <button
+                          key={sp}
+                          onClick={() => setAdoptSp(sp)}
+                          className={`relative flex flex-col items-center gap-2 overflow-hidden rounded-2xl p-4 pt-5 shadow-sm ring-1 transition active:scale-95 ${
+                            sp === 'dog' ? 'bg-gradient-to-b from-[#fdeee6] to-[#fde3e0] ring-[#f5dcc8]' : 'bg-gradient-to-b from-[#fdf3e4] to-[#fbeada] ring-[#f3e5c8]'
+                          }`}
+                        >
+                          <span className="flex -space-x-2.5">
+                            {imgs.map((b, i) => (
+                              <img
+                                key={b.id}
+                                src={b.img}
+                                alt={b.name}
+                                className="h-11 w-11 rounded-full object-cover ring-2 ring-white shadow-sm"
+                                style={{ zIndex: imgs.length - i }}
+                                loading="lazy"
+                              />
+                            ))}
+                          </span>
+                          <span className="text-[13px] font-semibold text-[#4a4a4e]">{sp === 'dog' ? '汪星人' : '喵星人'}</span>
+                          <span className="text-[10px] text-[#9a9a96]">
+                            {sp === 'dog' ? '柴犬 · 博美 · 金毛 · 二哈 · 柯基' : '橘猫 · 布偶 · 三花 · 狸花 · 金渐层'}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : !adoptBreed ? (
-                  // ② 选品种（按种类列出；可返回换种类）
+                  // ② 选品种（真实品种照卡片；可返回换种类）
                   <div>
                     <button
                       onClick={() => setAdoptSp(null)}
                       className="mb-2 flex items-center gap-1 rounded-full bg-[#f5f3ef] px-3 py-1 text-[11px] font-medium text-[#8a8a90] transition active:scale-95"
                     >
-                      ← 换个种类
+                      ‹ 换个种类
                     </button>
-                    <div className="scrollbar-none grid max-h-[46vh] grid-cols-2 gap-2 overflow-y-auto">
+                    <div className="scrollbar-none grid max-h-[46vh] grid-cols-2 gap-2.5 overflow-y-auto pb-1">
                       {PET_BREEDS.filter((b) => b.sp === adoptSp).map((b) => (
                         <button
                           key={b.id}
@@ -3003,11 +3009,18 @@ export default function CoupleHome({ close }: { close: () => void }) {
                             setAdoptBreed(b.id);
                             setAdoptName(b.suggest);
                           }}
-                          className="flex flex-col items-center gap-1 rounded-2xl bg-[#faf8f3] p-3 ring-1 ring-[#efece2] transition active:scale-95"
+                          className="group overflow-hidden rounded-2xl bg-white text-left shadow-sm ring-1 ring-[#efe9df] transition active:scale-95"
                         >
-                          <span className="text-[26px] leading-none">{b.emoji}</span>
-                          <span className="text-[12.5px] font-semibold text-[#4a4a4e]">{b.name}</span>
-                          <span className="text-[10px] leading-tight text-[#9a9a96]">{b.blurb}</span>
+                          <span className="relative block">
+                            <img src={b.img} alt={b.name} className="h-[86px] w-full object-cover" loading="lazy" />
+                            <span className="absolute bottom-1 right-1 rounded-full bg-white/85 px-1.5 py-0.5 text-[9px] font-medium text-[#b08968] shadow-sm">
+                              真实还原
+                            </span>
+                          </span>
+                          <span className="block px-2.5 pb-2 pt-1.5">
+                            <span className="block text-[12.5px] font-semibold text-[#4a4a4e]">{b.name}</span>
+                            <span className="block truncate text-[9.5px] leading-tight text-[#9a9a96]">{b.blurb}</span>
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -3016,10 +3029,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   (() => {
                     const b = breedOf(adoptSp, adoptBreed);
                     return (
-                      // ③ 性别 + 取名 + 接回家
+                      // ③ 性别 + 取名 + 接回家（真实品种照头像）
                       <div className="flex flex-col gap-3">
-                        <div className="flex items-center gap-3 rounded-2xl bg-[#faf6ee] p-3 ring-1 ring-[#f3ecdd]">
-                          <span className="text-[30px] leading-none">{b.emoji}</span>
+                        <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-[#faf6ee] to-[#fdf1ec] p-3 ring-1 ring-[#f3ecdd]">
+                          <img
+                            src={b.img}
+                            alt={b.name}
+                            className="h-14 w-14 rounded-full object-cover ring-2 ring-white shadow-md"
+                          />
                           <span className="min-w-0 flex-1">
                             <span className="block text-[14px] font-semibold text-[#3a3a3e]">{b.name}</span>
                             <span className="block truncate text-[11px] text-[#9a9a96]">{b.blurb}</span>
@@ -3071,8 +3088,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 )
               ) : (
                 <div className="flex flex-col gap-2.5">
-                  <div className="flex items-center gap-3 rounded-2xl bg-[#faf6ee] p-3 ring-1 ring-[#f3ecdd]">
-                    <span className="text-[26px] leading-none">{breedOf(pet.sp, pet.breed).emoji}</span>
+                  <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-[#faf6ee] to-[#fdf1ec] p-3 ring-1 ring-[#f3ecdd]">
+                    <img
+                      src={breedOf(pet.sp, pet.breed).img}
+                      alt={breedOf(pet.sp, pet.breed).name}
+                      className="h-[52px] w-[52px] rounded-full object-cover ring-2 ring-white shadow-md"
+                    />
                     <span className="min-w-0 flex-1">
                       <span className="block text-[14px] font-semibold text-[#3a3a3e]">
                         {pet.name} <span className={pet.gender === 'girl' ? 'text-[#e58aa8]' : 'text-[#7fa7d9]'}>{pet.gender === 'girl' ? '♀' : '♂'}</span>
@@ -3102,62 +3123,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
         )}
       </AnimatePresence>
 
-      {/* ===== 小屋点歌（F3：音箱放真歌） ===== */}
-      <AnimatePresence>
-        {musicSheet && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 z-30 flex items-end justify-center bg-black/25 pb-6"
-            onClick={() => setMusicSheet(false)}
-          >
-            <motion.div
-              initial={{ y: 60, opacity: 0.8 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 50, opacity: 0 }}
-              transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-              className="pointer-events-auto w-full max-w-[320px] rounded-3xl bg-white/96 p-5 shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="mb-3 flex items-center justify-between">
-                <div>
-                  <span className="text-[15px] font-semibold text-[#3a3a3e]">🔊 小屋点歌</span>
-                  <p className="mt-0.5 text-[11px] text-[#9a9a96]">用音乐 App 的歌，全屋响起</p>
-                </div>
-                <button
-                  onClick={() => setMusicSheet(false)}
-                  aria-label="关闭点歌面板"
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              {/* 当前播放 */}
-              {musicCurrent && (
-                <button
-                  onClick={() => {
-                    void useMusic.getState().toggle();
-                  }}
-                  className="mb-3 flex w-full items-center gap-3 rounded-2xl bg-[#fdf3e4] p-3 text-left transition active:scale-[0.98]"
-                >
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f2b3c2] text-white">
-                    <Music className="h-5 w-5" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-semibold text-[#3a3a3e]">{musicCurrent.name}</span>
-                    <span className="block truncate text-[11px] text-[#9a9a96]">{musicCurrent.artists?.[0]?.name ?? ''}</span>
-                  </span>
-                  <span className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold text-white ${musicPlaying ? 'bg-[#8fce9e]' : 'bg-[#f2b3c2]'}`}>
-                    {musicPlaying ? '暂停' : '播放'}
-                  </span>
-                </button>
-              )}
-              <HouseSongList onPick={playHouseSong} />
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* ===== 小屋点歌（F3：音箱/黑胶/八音盒共用；搜歌 · 我的歌单 · 队列 —— v6.0 重构） ===== */}
+      <SongSheet open={musicSheet} onClose={() => setMusicSheet(false)} onToast={toast} />
 
       {/* ===== 邀请访客（F7：AI 联系人来家做客） ===== */}
       <AnimatePresence>
@@ -3578,52 +3545,3 @@ function shade(cat: string): string {
   return (CAT_COLORS[cat] ?? CAT_COLORS.decor)[1];
 }
 
-// ---------------- 小屋点歌：最近播放 + 红心歌单（音乐 App 数据直读） ----------------
-
-function HouseSongList({ onPick }: { onPick: (song: NcmSong) => void }) {
-  const history = useMusic((s) => s.history);
-  const liked = useMusic((s) => s.likedSongs);
-
-  const songs = useMemo(() => {
-    const seen = new Set<number>();
-    const out: NcmSong[] = [];
-    for (const h of history.slice(0, 10)) {
-      if (h.song && !seen.has(h.song.id)) {
-        seen.add(h.song.id);
-        out.push(h.song);
-      }
-    }
-    for (const s of Object.values(liked)) {
-      if (s && !seen.has(s.id) && out.length < 14) {
-        seen.add(s.id);
-        out.push(s);
-      }
-    }
-    return out;
-  }, [history, liked]);
-
-  if (songs.length === 0) {
-    return <p className="py-4 text-center text-[12px] text-[#a8a8a4]">去音乐 App 听几首歌，这里就能点播啦</p>;
-  }
-  return (
-    <div className="scrollbar-none max-h-[220px] overflow-y-auto">
-      <p className="mb-1.5 px-1 text-[11px] font-medium text-[#a8a8a4]">最近在听 · 点一首放进小屋</p>
-      {songs.map((song) => (
-        <button
-          key={song.id}
-          onClick={() => onPick(song)}
-          className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition active:scale-[0.98] active:bg-[#f6f4ef]"
-        >
-          <img src={songCover(song)} alt="" className="h-9 w-9 rounded-lg object-cover" loading="lazy" />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[12.5px] font-medium text-[#3a3a3e]">{song.name}</span>
-            <span className="block truncate text-[10.5px] text-[#9a9a96]">
-              {song.artists?.map((a) => a.name).join('/') ?? ''}
-            </span>
-          </span>
-          <Music className="h-3.5 w-3.5 shrink-0 text-[#c9a0ae]" />
-        </button>
-      ))}
-    </div>
-  );
-}
