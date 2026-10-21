@@ -45,41 +45,7 @@ export const BUILTIN_TTS_VOICES: BuiltinVoicePreset[] = [
 export const BUILTIN_DEFAULT_FEMALE = 'builtin:xiaoyue';
 export const BUILTIN_DEFAULT_MALE = 'builtin:zichuan';
 
-// ---------------- 离线神经网络声线（免费语音包 · vits-zh-aishell3 多说话人，见 offline-tts.ts） ----------------
-
-/**
- * 免费语音包声线预设（AISHELL3 174 说话人里预设 4 个代表音色）：
- * - id 以 neural: 前缀持久化（defaultVoiceId / 联系人 voiceId），换设备语义不变；
- * - 说话人性别的公开表不可靠，UI 不标男女——试听后自行选用；
- * - 未下载语音包时这些声线自动回退 Web Speech / 云端兜底（tts-client 内处理）。
- */
-export interface NeuralVoicePreset {
-  /** 持久化 id（neural:<sid>） */
-  id: string;
-  /** 展示名 */
-  name: string;
-  /** vits-zh-aishell3 说话人 id */
-  sid: number;
-}
-
-export const NEURAL_TTS_VOICES: NeuralVoicePreset[] = [
-  { id: 'neural:2', name: '灵音', sid: 2 },
-  { id: 'neural:9', name: '清越', sid: 9 },
-  { id: 'neural:40', name: '沉璧', sid: 40 },
-  { id: 'neural:120', name: '青川', sid: 120 },
-];
-
-/** 是否离线神经网络声线 id */
-export function isNeuralVoiceId(voiceId: string | null | undefined): boolean {
-  return typeof voiceId === 'string' && voiceId.startsWith('neural:');
-}
-
-/** neural:<sid> → 说话人 id（非法返回 null） */
-export function resolveNeuralSid(voiceId: string | null | undefined): number | null {
-  if (!isNeuralVoiceId(voiceId)) return null;
-  const n = Number.parseInt((voiceId ?? '').slice('neural:'.length), 10);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-}
+// ---------------- 展示列表与判定 ----------------
 
 /** 设置页/联系人音色选择器用的展示列表（{id,name} 结构） */
 export const BUILTIN_VOICE_OPTIONS: { id: string; name: string }[] = BUILTIN_TTS_VOICES.map((v) => ({

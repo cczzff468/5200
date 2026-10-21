@@ -129,15 +129,7 @@ import {
 } from '@/lib/ios/notify-sound';
 import { LocalToast, useLocalToast } from './page-toast';
 import { describeImages } from '@/lib/vision-client';
-import { BUILTIN_TTS_VOICES, isBuiltinVoiceId, isBuiltinVoiceSupported, isNeuralVoiceId, NEURAL_TTS_VOICES, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
-import {
-  deleteOfflineTtsModel,
-  ensureOfflineTts,
-  OFFLINE_TTS_TOTAL_BYTES,
-  restoreOfflineTtsStatus,
-  synthesizeOfflineTts,
-  useOfflineTts,
-} from '@/lib/ios/offline-tts';
+import { BUILTIN_TTS_VOICES, isBuiltinVoiceId, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
 import { useMyVoices } from '@/lib/ios/my-voices';
 import {
   applyAppFont,
@@ -4830,11 +4822,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
-  // 免费离线语音包（neural 声线）状态 + 下载/删除入口（useOfflineTts 全局 store）
-  const offlineTts = useOfflineTts();
-  useEffect(() => {
-    restoreOfflineTtsStatus();
-  }, []);
   /** 试听 ObjectURL 回收（内存：原先每次试听都 new Audio(URL.createObjectURL(blob))
    *  且从不 revoke——听一次泄漏一个 blob URL；改从 audio.src 取回统一回收） */
   const revokePreviewSrc = (audio: HTMLAudioElement | null): void => {
@@ -4969,60 +4956,13 @@ function VoicePage({ onBack }: { onBack: () => void }) {
     }).catch(() => setPreviewingBuiltinId(null));
   };
 
-  /** 停掉试听中的 Audio（离线声线试听用） */
+  /** 停掉试听中的 Audio（云端/我的音色试听用） */
   const stopPreviewAudio = () => {
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
       revokePreviewSrc(previewAudioRef.current);
       previewAudioRef.current = null;
     }
-  };
-
-  /** 离线神经网络声线试听：未下载先拉起下载；已就绪本地合成后播放 */
-  const previewNeuralVoice = async (sid: number) => {
-    if (previewingBuiltinId) {
-      stopBuiltinSpeech();
-      stopPreviewAudio();
-      const prev = previewingBuiltinId;
-      setPreviewingBuiltinId(null);
-      if (prev === `neural:${sid}`) return;
-    }
-    setPreviewingBuiltinId(`neural:${sid}`);
-    setPreviewError('');
-    try {
-      await ensureOfflineTts();
-      const blob = await synthesizeOfflineTts('你好，这是免费离线语音包的声线，很高兴认识你。', sid, 1);
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      previewAudioRef.current = audio;
-      audio.onended = () => {
-        revokePreviewSrc(audio);
-        if (previewAudioRef.current === audio) previewAudioRef.current = null;
-        setPreviewingBuiltinId(null);
-      };
-      audio.onerror = () => {
-        revokePreviewSrc(audio);
-        if (previewAudioRef.current === audio) previewAudioRef.current = null;
-        setPreviewingBuiltinId(null);
-      };
-      await audio.play().catch(() => {
-        revokePreviewSrc(audio);
-        if (previewAudioRef.current === audio) previewAudioRef.current = null;
-        setPreviewingBuiltinId(null);
-      });
-    } catch (e) {
-      setPreviewError(e instanceof Error ? e.message : '语音包未就绪，请先下载免费语音包');
-      setPreviewingBuiltinId(null);
-    }
-  };
-
-  /** 点击离线声线卡片：未下载 → 拉起下载；已就绪 → 设为默认声线 */
-  const selectNeuralVoice = (id: string) => {
-    if (offlineTts.status !== 'ready') {
-      void ensureOfflineTts().catch(() => undefined);
-      return;
-    }
-    updateTtsConfig({ defaultVoiceId: id });
   };
 
   const runPreview = async () => {
@@ -5324,116 +5264,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                     </div>
                   );
                 })}
-                {/* 免费离线语音包声线（neural:）：高质量神经网络合成，下载一次约 42MB 断网可用 */}
-                {NEURAL_TTS_VOICES.map((v) => {
-                  const active = ttsConfig.defaultVoiceId.trim() === v.id;
-                  const playing = previewingBuiltinId === v.id;
-                  const pkgReady = offlineTts.status === 'ready';
-                  return (
-                    <div
-                      key={v.id}
-                      role="button"
-                      tabIndex={0}
-                      aria-pressed={active}
-                      data-testid={`neural-voice-${v.id}`}
-                      onClick={() => selectNeuralVoice(v.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          selectNeuralVoice(v.id);
-                        }
-                      }}
-                      className={`flex flex-col gap-1.5 rounded-[18px] p-3 backdrop-blur-2xl transition-all ${
-                        active
-                          ? 'bg-white/85 shadow-[0_8px_22px_rgba(17,24,39,0.1)] ring-1 ring-white/80 dark:bg-white/[0.14] dark:ring-white/[0.16]'
-                          : 'bg-white/45 shadow-[0_2px_10px_rgba(17,24,39,0.04)] ring-1 ring-white/60 dark:bg-white/[0.05] dark:ring-white/[0.08]'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-1.5">
-                        <span className="flex min-w-0 items-center gap-1.5">
-                          <span className="truncate text-[15px] font-medium">{v.name}</span>
-                          <span className="shrink-0 rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 dark:text-violet-400">
-                            离线
-                          </span>
-                        </span>
-                        {active && <Check className="h-4 w-4 shrink-0" strokeWidth={2.5} aria-hidden="true" />}
-                      </div>
-                      <div className="flex items-center justify-between gap-1.5">
-                        <span className="truncate text-[11px] text-muted-foreground">{pkgReady ? '神经网络声线' : '需下载语音包'}</span>
-                        <button
-                          type="button"
-                          aria-label={`试听声线${v.name}`}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void previewNeuralVoice(v.sid);
-                          }}
-                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-all ${
-                            playing ? 'bg-white/90 text-foreground shadow-sm dark:bg-white/[0.22]' : 'bg-white/60 text-muted-foreground ring-1 ring-black/[0.05] active:bg-white/85 dark:bg-white/[0.08] dark:ring-white/[0.1]'
-                          }`}
-                        >
-                          <AudioLines className={`h-3.5 w-3.5 ${playing ? 'animate-pulse' : ''}`} aria-hidden="true" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* 语音包管理（离线声线共用）：未下载显示下载按钮 / 下载中进度 / 已就绪可删除 */}
-              <div className="mt-3 rounded-[16px] border border-black/[0.05] bg-white/50 p-3 dark:border-white/[0.08] dark:bg-white/[0.05]">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-foreground">免费语音包（离线神经网络）</div>
-                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                      {offlineTts.status === 'ready'
-                        ? '已就绪 · 上方「离线」声线可用（断网也能合成）'
-                        : offlineTts.status === 'downloading'
-                          ? '下载中…'
-                          : offlineTts.status === 'error'
-                            ? `下载失败：${offlineTts.error ?? '请重试'}`
-                            : `约 ${Math.round(OFFLINE_TTS_TOTAL_BYTES / 1048576)}MB · 下载一次永久可用`}
-                    </p>
-                  </div>
-                  {offlineTts.status === 'ready' ? (
-                    <button
-                      type="button"
-                      data-testid="tts-offline-delete"
-                      onClick={() => void deleteOfflineTtsModel()}
-                      className="shrink-0 rounded-full bg-white/70 px-3.5 py-1.5 text-[12px] font-medium text-muted-foreground ring-1 ring-black/[0.06] transition-all hover:text-[#FF3B30] active:scale-[0.97] dark:bg-white/[0.08] dark:ring-white/[0.1]"
-                    >
-                      删除
-                    </button>
-                  ) : offlineTts.status !== 'downloading' && offlineTts.status !== 'checking' ? (
-                    <button
-                      type="button"
-                      data-testid="tts-offline-download"
-                      onClick={() => void ensureOfflineTts().catch(() => undefined)}
-                      className="flex shrink-0 items-center gap-1.5 rounded-full bg-foreground px-3.5 py-1.5 text-[12px] font-medium text-background transition-all active:scale-[0.97]"
-                    >
-                      <Download className="h-3.5 w-3.5" />
-                      {offlineTts.status === 'error' ? '重试下载' : '下载语音包'}
-                    </button>
-                  ) : null}
-                </div>
-                {offlineTts.status === 'downloading' && offlineTts.progress && (
-                  <div className="mt-2">
-                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/[0.07] dark:bg-white/10">
-                      <div
-                        className="h-full rounded-full bg-[#34C759] transition-all duration-200"
-                        style={{ width: `${Math.max(2, offlineTts.progress.pct)}%` }}
-                      />
-                    </div>
-                    <p className="mt-1 text-right text-[10px] tabular-nums text-muted-foreground">
-                      {Math.round(offlineTts.progress.pct)}% · {(offlineTts.progress.loaded / 1048576).toFixed(1)}/{(offlineTts.progress.total / 1048576).toFixed(0)}MB
-                    </p>
-                  </div>
-                )}
-                {offlineTts.status === 'checking' && (
-                  <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    正在检查语音包…
-                  </p>
-                )}
               </div>
             </section>
 
