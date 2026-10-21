@@ -19,6 +19,7 @@ import {
   Baby,
   Bath,
   BedDouble,
+  Camera,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -30,6 +31,7 @@ import {
   CupSoda,
   Droplet,
   Eye,
+  Gamepad2,
   Laptop,
   Loader2,
   Maximize,
@@ -38,6 +40,7 @@ import {
   Move,
   Music,
   Paintbrush,
+  PawPrint,
   Pencil,
   RotateCcw,
   RotateCw,
@@ -48,6 +51,7 @@ import {
   Sun,
   Trash2,
   Tv,
+  UserPlus,
   Utensils,
   UtensilsCrossed,
   UserRound,
@@ -58,6 +62,14 @@ import {
 } from 'lucide-react';
 import Joystick from './Joystick';
 import InstrumentOverlay from './InstrumentOverlay';
+import { useMusic } from '@/lib/ios/music-store';
+import { coverSrc } from '../music-shared';
+import type { NcmSong } from '@/lib/ios/music-api';
+import { localDB, genId } from '@/lib/ios/db';
+import { useWeatherSnapshot, weatherCodeInfo } from '../weather-core';
+import { listContacts } from '@/lib/ios/contacts-store';
+import { addAlbum } from '@/lib/ios/album-store';
+import { readInviteMeta } from '@/lib/ios/couple-invite';
 import {
   BATH_X1,
   CATALOG,
@@ -88,6 +100,11 @@ import {
 } from './catalog';
 import { getCachedThumb } from './scene/ShopThumbs';
 import type { CharAction, CharPose, CharRT, CharStyle, FurnitureItem, FurnitureKind, HomeMode, HomeState, RoomId } from './types';
+
+/** 做饭小游戏（选菜谱→切菜/翻炒/装盘→上桌，v5.7 F5） */
+const CookingGame = dynamic(() => import('./CookingGame'), { ssr: false });
+/** 五子棋对弈（棋盘桌，v5.7 J7） */
+const ChessOverlay = dynamic(() => import('./ChessOverlay'), { ssr: false });
 
 const HomeScene = dynamic(() => import('./scene/HomeScene'), {
   ssr: false,
@@ -258,7 +275,7 @@ function normAngle(a: number): number {
   return x;
 }
 
-/** 家具动作 → 小人姿势（watch/work 也是坐姿；play 按乐器分流，见 act.pose） */
+/** 家具动作 → 小人姿势（watch/work/game 也是坐姿；play 按乐器分流，见 act.pose） */
 const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
   sit: 'sit',
   lie: 'lie',
@@ -273,6 +290,8 @@ const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
   makeup: 'makeup',
   mirror: 'mirror',
   dress: 'stand',
+  game: 'sit',
+  hotpot: 'eat',
 };
 
 /** 自动结束型动作（走到位后定时完成；退出重进时不恢复） */
@@ -293,6 +312,8 @@ const ACT_LABELS: Record<CharAction['type'], [string, string]> = {
   play: ['演奏一曲', '演奏结束'],
   makeup: ['化个妆', '化好啦'],
   mirror: ['照照镜子', '照好啦'],
+  game: ['打游戏', '不玩啦'],
+  hotpot: ['开涮火锅', '吃饱啦'],
 };
 
 /**
@@ -330,7 +351,11 @@ function anchorOf(type: CharAction['type'], item: FurnitureItem): CharAction | n
                         ? entry?.acts.makeup
                         : type === 'mirror'
                           ? entry?.acts.mirror
-                          : entry?.acts.work;
+                          : type === 'hotpot'
+                            ? entry?.acts.hotpot
+                            : type === 'game'
+                              ? entry?.acts.game
+                              : entry?.acts.work;
   if (!a) return null;
   // 目录锚点统一形状（各 act 是同一形状的子集，字段可选）
   const an = a as {
@@ -396,7 +421,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [ceilColB, setCeilColB] = useState<string | undefined>(pack.home.ceilColB);
   const [bathDoorOpen, setBathDoorOpen] = useState<boolean>(!!pack.home.bathDoorOpen);
   const [winPos, setWinPos] = useState<number[] | undefined>(pack.home.winPos);
-  const [doorPos, setDoorPos] = useState<{ bed: number; kt: number; bath: number } | undefined>(pack.home.doorPos);
+  const [doorPos, setDoorPos] = useState<{ bed: number; kt: number; bath: number; bal?: number } | undefined>(pack.home.doorPos);
   const [fp, setFp] = useState<boolean>(!!pack.home.fp);
   const [charStyle, setCharStyle] = useState<CharStyle>(pack.home.charStyle === 'real' ? 'real' : 'cartoon');
   const [nightAuto, setNightAuto] = useState<boolean>(pack.home.nightAuto !== false);
@@ -405,6 +430,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [mealReady, setMealReady] = useState<boolean>(!!pack.home.mealReady);
   const [floorTex, setFloorTex] = useState<'plain' | 'wood' | 'check'>(pack.home.floorTex ?? 'wood');
   const [wallTex, setWallTex] = useState<'plain' | 'dot' | 'stripe'>(pack.home.wallTex ?? 'plain');
+  // v5.7 拾光扩展：阳台门/色 + 好菜名 + 宠物
+  const [balconyDoorOpen, setBalconyDoorOpen] = useState<boolean>(!!pack.home.balconyDoorOpen);
+  const [floorColBal, setFloorColBal] = useState<string | undefined>(pack.home.floorColBal);
+  const [wallColBal, setWallColBal] = useState<string | undefined>(pack.home.wallColBal);
+  const [mealName, setMealName] = useState<string | undefined>(pack.home.mealName);
+  const [pet, setPet] = useState<HomeState['pet']>(pack.home.pet ?? null);
 
   // ---------------- UI 状态 ----------------
   const [mode, setMode] = useState<HomeMode>('live');
@@ -417,6 +448,26 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [thumbMap, setThumbMap] = useState<Record<string, string>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [full, setFull] = useState(false);
+  /** v5.7 拾光扩展面板：宠物（领养/喂养）/ 点歌 / 邀访客 / 五子棋 / 做饭小游戏 / 拍照模式 */
+  const [petSheet, setPetSheet] = useState(false);
+  const [musicSheet, setMusicSheet] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteList, setInviteList] = useState<{ id: string; name: string }[]>([]);
+  const [guest, setGuest] = useState<{ id: string; name: string } | null>(null);
+  const [chess, setChess] = useState<{ itemId: string } | null>(null);
+  const [cookingGame, setCookingGame] = useState(false);
+  const [photoMode, setPhotoMode] = useState(false);
+  /** 天气（与天气 App 共享缓存）：rain/snow/clear 驱动窗外特效 + 夜晚自动开灯 */
+  const weather = useWeatherSnapshot();
+  const weatherFx: 'rain' | 'snow' | 'clear' = useMemo(() => {
+    const c = weather?.current.code ?? 0;
+    if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82) || (c >= 95 && c <= 99)) return 'rain';
+    if ((c >= 71 && c <= 77) || c === 85 || c === 86) return 'snow';
+    return 'clear';
+  }, [weather]);
+  /** 音乐 App 正在放歌（音箱飘音符 + 点歌面板当前曲） */
+  const musicPlaying = useMusic((s) => s.playing);
+  const musicCurrent = useMusic((s) => s.current);
   /** 家具互动（生活模式）：点击可坐/睡/泡/淋浴/看电视/上网的家具后弹出确认按钮 */
   const [charAction, setCharAction] = useState<{
     type: CharAction['type'];
@@ -458,6 +509,18 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 手持物（拿饮料后杯子握在右手，可以端着到处逛） */
   const carryRef = useRef({ cup: false });
   const [carryCup, setCarryCup] = useState(false);
+  /** 宠物运行时（位置持久化进 HomeState.pet）+ 喂食目标 */
+  const petRT = useRef<CharRT>({
+    x: pack.home.pet?.x ?? -1.2,
+    z: pack.home.pet?.z ?? 1.2,
+    heading: Math.PI / 2,
+    moving: false,
+    target: null,
+    nextWander: 2,
+  });
+  const petFeedRef = useRef<{ x: number; z: number; at: number } | null>(null);
+  /** 访客运行时（非持久化，会话级） */
+  const guestRT = useRef<CharRT | null>(null);
   /** 编辑模式缩放指令（HUD 按钮 → Canvas 内相机） */
   const zoomCmd = useRef({ v: 0, dir: 0 });
   /** 四向微调指令（HUD 方向按钮 → Canvas 内按视角方位换算） */
@@ -526,6 +589,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
   floorTexRef.current = floorTex;
   const wallTexRef = useRef(wallTex);
   wallTexRef.current = wallTex;
+  const balconyDoorOpenRef = useRef(balconyDoorOpen);
+  balconyDoorOpenRef.current = balconyDoorOpen;
+  const floorColBalRef = useRef(floorColBal);
+  floorColBalRef.current = floorColBal;
+  const wallColBalRef = useRef(wallColBal);
+  wallColBalRef.current = wallColBal;
+  const mealNameRef = useRef(mealName);
+  mealNameRef.current = mealName;
+  const petRef = useRef(pet);
+  petRef.current = pet;
+  const petFeedShownRef = useRef(false);
 
   // ---------------- 提示 ----------------
   const toast = useCallback((msg: string) => {
@@ -567,6 +641,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
       mealReady: mealReadyRef.current,
       floorTex: floorTexRef.current,
       wallTex: wallTexRef.current,
+      balconyDoorOpen: balconyDoorOpenRef.current,
+      floorColBal: floorColBalRef.current,
+      wallColBal: wallColBalRef.current,
+      mealName: mealNameRef.current,
+      pet: petRef.current
+        ? {
+            sp: petRef.current.sp,
+            name: petRef.current.name,
+            x: Math.round(petRT.current.x * 100) / 100,
+            z: Math.round(petRT.current.z * 100) / 100,
+            fedAt: petFeedRef.current && Date.now() - petFeedRef.current.at < 10000 ? petFeedRef.current.at : undefined,
+          }
+        : undefined,
       // 正在进行的家具动作（已摆好姿势才存，重进页面接着坐/睡/泡/淋浴/看电视/上网；
       // 自动结束型不存 —— 重进后重新发起即可）
       act: (() => {
@@ -620,6 +707,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setMealReady(!!h.mealReady);
     setFloorTex(h.floorTex ?? 'wood');
     setWallTex(h.wallTex ?? 'plain');
+    setBalconyDoorOpen(!!h.balconyDoorOpen);
+    setFloorColBal(h.floorColBal);
+    setWallColBal(h.wallColBal);
+    setMealName(h.mealName);
+    setPet(h.pet ?? null);
+    if (h.pet) {
+      petRT.current.x = h.pet.x;
+      petRT.current.z = h.pet.z;
+    }
     // 恢复「我」正在进行的家具动作（仅在当前没有进行中动作时：
     // 初始化/重置/409 采纳互不打架；家具已被删或自动结束型动作则忽略）
     if (!actRef.current && poseRef.current.pose === 'stand' && h.act && !AUTO_ACTS.has(h.act.type)) {
@@ -801,7 +897,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
       toast('合上电脑，起来走走～');
     } else if (act.type === 'eat') {
       setMealReady(false);
+      setMealName(undefined);
       toast('吃饱啦，一桌好菜吃光光～');
+    } else if (act.type === 'hotpot') {
+      // 吃完火锅：炉火顺手关掉
+      off(act.itemId, { on: false });
+      toast('火锅吃到撑，满足～');
+    } else if (act.type === 'game') {
+      // 不玩啦：主机与电视一起关
+      off(act.itemId, { on: false });
+      setItems((prev) =>
+        prev.map((f) => (f.kind === 'tv' && f.st?.on ? { ...f, st: { ...f.st, on: false } } : f)),
+      );
+      toast('手柄一放，眼睛休息一下～');
     } else if (act.type === 'cook') {
       toast('好，先不做了～');
     } else if (act.type === 'play') {
@@ -846,6 +954,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
       } else if (type === 'work') {
         turnOn({ on: true });
         toast('打开电脑，上网冲一下浪～');
+      } else if (type === 'hotpot') {
+        // 开涮火锅：炉火自动开（红汤翻滚），吃到饱手动起身
+        turnOn({ on: true });
+        toast('炉火开啦，今天的火锅局走起～');
+      } else if (type === 'game') {
+        // 打游戏：主机自动开机 + 电视自动亮（手柄已握在手里）
+        turnOn({ on: true });
+        setItems((prev) =>
+          prev.map((f) => (f.kind === 'tv' && !f.st?.on ? { ...f, st: { ...f.st, on: true } } : f)),
+        );
+        toast('主机开机，电视亮啦，开玩～');
       } else if (type === 'cook') {
         // C2 做饭：站位煓勺 5 秒 → 一桌好菜自动上餐桌
         auto(5000, () => {
@@ -926,6 +1045,36 @@ export default function CoupleHome({ close }: { close: () => void }) {
         setInst(null);
       }
 
+      // —— v5.7 拾光扩展特殊交互（优先于通用动作链） ——
+      // 棋盘桌：开一局五子棋（不再走 playful 弹跳）
+      if (item.kind === 'chessTable') {
+        setChess({ itemId: item.id });
+        return;
+      }
+      // 灶台：开做饭小游戏（选菜谱→切菜/翻炒/装盘→上桌）
+      if (item.kind === 'stove' && entry.acts?.cook) {
+        setCookingGame(true);
+        return;
+      }
+      // 音箱：打开「小屋点歌」（用音乐 App 的歌，全屋响起）
+      if (item.kind === 'speaker') {
+        setMusicSheet(true);
+        return;
+      }
+      // 幕布：点击 = 开关任意一台投影仪（联动幕布）
+      if (item.kind === 'screen') {
+        const proj = itemsRef.current.find((f) => f.kind === 'projector');
+        const turningOn = !proj?.st?.on;
+        setItems((prev) =>
+          prev.map((f) =>
+            f.kind === 'projector' ? { ...f, st: { ...f.st, on: turningOn } } : f,
+          ),
+        );
+        toast(turningOn ? '投影仪开机，幕布放下咯～' : '投影仪关机，幕布收起啦');
+        saveSoon();
+        return;
+      }
+
       // 生活模式：可互动的家具 → 弹出确认按钮（先结束当前姿势，
       //   小人自动从当前家具上下来，再走向新目标 —— 同一时刻只做一个动作）
       //   eat 仅在饭菜上桌时出现（否则落到 playful 弹跳）
@@ -956,7 +1105,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
                             ? 'watch'
                             : acts?.work
                               ? 'work'
-                              : null;
+                              : acts?.hotpot
+                                ? 'hotpot'
+                                : acts?.game
+                                  ? 'game'
+                                  : null;
       if (actType) {
         if (poseRef.current.pose !== 'stand' || actRef.current) endAction();
         setCharAction({ type: actType, itemId: item.id, active: false });
@@ -1068,7 +1221,235 @@ export default function CoupleHome({ close }: { close: () => void }) {
     saveSoon();
   }, [saveSoon, toast]);
 
-  // ---------------- 编辑操作 ----------------
+  // ==================== v5.7 拾光扩展功能 ====================
+
+  // —— F2 宠物：领养 / 喂食 / 撸宠 / 送走 ——
+  const adoptPet = useCallback(
+    (sp: 'cat' | 'dog') => {
+      const name = sp === 'cat' ? '团子' : '布丁';
+      setPet({ sp, name, x: -1.2, z: 1.2 });
+      petRT.current = { x: -1.2, z: 1.2, heading: Math.PI / 2, moving: false, target: null, nextWander: 1.5 };
+      setPetSheet(false);
+      toast(`${name}加入这个家啦，记得常喂它哦～`);
+      saveSoon();
+    },
+    [saveSoon, toast],
+  );
+
+  const feedPet = useCallback(() => {
+    if (!petRef.current) return;
+    petFeedRef.current = { x: petRT.current.x + 0.3, z: petRT.current.z + 0.3, at: Date.now() };
+    setPetSheet(false);
+    toast('开饭啦！它迈着小碎步冲过来了～');
+  }, [toast]);
+
+  const sendPetAway = useCallback(() => {
+    setPet(null);
+    petFeedRef.current = null;
+    setPetSheet(false);
+    toast('挥挥小爪子，下次再来玩呀～');
+    saveSoon();
+  }, [saveSoon, toast]);
+
+  const PET_TAP_MSGS = ['开心地蹭了蹭你的手心', '咕噜咕噜地打起了呼噜', '围着你转了一圈又一圈', '仰起头求摸摸，可爱死了', '尾巴摇成了小风扇～'];
+  const petTap = useCallback(() => {
+    if (!petRef.current) return;
+    toast(`${petRef.current.name} ${PET_TAP_MSGS[Math.floor(Math.random() * PET_TAP_MSGS.length)]}`);
+  }, [toast]);
+
+  // —— F7 邀请访客 ——
+  const openInvite = useCallback(async () => {
+    setInviteOpen(true);
+    try {
+      const all = await listContacts();
+      setInviteList(
+        all
+          .filter((c) => c.kind !== 'user' && c.name?.trim())
+          .slice(0, 12)
+          .map((c) => ({ id: c.id, name: c.name.trim() })),
+      );
+    } catch {
+      setInviteList([]);
+    }
+  }, []);
+
+  const inviteGuest = useCallback(
+    (g: { id: string; name: string }) => {
+      guestRT.current = { x: -2.5, z: 2.2, heading: Math.PI, moving: false, target: null, nextWander: 1.2 };
+      setGuest(g);
+      setInviteOpen(false);
+      toast(`${g.name}来家里做客啦，快去打个招呼～`);
+    },
+    [toast],
+  );
+
+  const dismissGuest = useCallback(() => {
+    const name = guest?.name;
+    guestRT.current = null;
+    setGuest(null);
+    setInviteOpen(false);
+    if (name) toast(`送${name}到门口，记得常来玩呀～`);
+  }, [guest, toast]);
+
+  // —— F3 音响点歌（音乐 App 的歌在全屋响起） ——
+  const playHouseSong = useCallback(
+    async (song: NcmSong) => {
+      await useMusic.getState().playSong(song);
+      toast(`🎵《${song.name}》正在小屋响起`);
+      setMusicSheet(false);
+    },
+    [toast],
+  );
+
+  // —— F6 拍照模式：快门 → 存进情侣相册 ——
+  const photoBusy = useRef(false);
+  const takePhoto = useCallback(async () => {
+    if (photoBusy.current) return;
+    const canvas = rootRef.current?.querySelector('canvas');
+    if (!canvas) {
+      toast('找不到画面，稍后再试');
+      return;
+    }
+    photoBusy.current = true;
+    try {
+      const raw = canvas.toDataURL('image/jpeg', 0.92);
+      // 压缩到最长边 1280（相册同款压缩规格）
+      const data = await new Promise<string>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const scale = Math.min(1, 1280 / Math.max(img.width, img.height));
+            const cv = document.createElement('canvas');
+            cv.width = Math.max(1, Math.round(img.width * scale));
+            cv.height = Math.max(1, Math.round(img.height * scale));
+            cv.getContext('2d')!.drawImage(img, 0, 0, cv.width, cv.height);
+            resolve(cv.toDataURL('image/jpeg', 0.85));
+          } catch (e) {
+            reject(e instanceof Error ? e : new Error('compress-fail'));
+          }
+        };
+        img.onerror = () => reject(new Error('img-load-fail'));
+        img.src = raw;
+      });
+      const b64 = data.split(',')[1] ?? '';
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'image/jpeg' });
+      const partnerId = readInviteMeta().partnerContactId;
+      if (!partnerId) {
+        // 没有恋人档案：落到手机「照片」相机胶卷（不丢照）
+        await localDB.put('photos', { id: genId(), blob, name: `拾光小屋 ${new Date().toLocaleDateString('zh-CN')}.jpg`, createdAt: Date.now() });
+        toast('📸 已存进照片 App');
+        return;
+      }
+      await addAlbum(partnerId, data, {
+        origin: 'user',
+        name: `拾光小屋 · ${new Date().toLocaleDateString('zh-CN')}`,
+      });
+      toast('📸 已存进情侣相册');
+    } catch {
+      toast('拍照失败了，再试一次');
+    } finally {
+      photoBusy.current = false;
+    }
+  }, [toast]);
+
+  // —— F5 做饭小游戏：完成 → 一桌好菜上桌 ——
+  const onCookingDone = useCallback(
+    (dish: string) => {
+      setCookingGame(false);
+      setMealReady(true);
+      setMealName(dish);
+      toast(`「${dish}」出锅啦，上桌开饭吧～`);
+      saveSoon();
+    },
+    [saveSoon, toast],
+  );
+
+  // —— F4 天气联动：雨声白噪音 + 夜晚自动开灯 ——
+  const rainAudioRef = useRef<{ ctx: AudioContext; gain: GainNode } | null>(null);
+  useEffect(() => {
+    const raining = weatherFx === 'rain';
+    if (raining && !rainAudioRef.current) {
+      try {
+        const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (Ctx) {
+          const ctx = new Ctx();
+          const len = ctx.sampleRate * 2;
+          const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+          const ch = buf.getChannelData(0);
+          for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * 0.55;
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.loop = true;
+          const filter = ctx.createBiquadFilter();
+          filter.type = 'lowpass';
+          filter.frequency.value = 900;
+          const gain = ctx.createGain();
+          gain.gain.value = 0.045;
+          src.connect(filter).connect(gain).connect(ctx.destination);
+          src.start();
+          rainAudioRef.current = { ctx, gain };
+        }
+      } catch {
+        /* 音频不可用静默忽略 */
+      }
+    } else if (!raining && rainAudioRef.current) {
+      const { ctx, gain } = rainAudioRef.current;
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
+      setTimeout(() => {
+        void ctx.close().catch(() => {});
+      }, 800);
+      rainAudioRef.current = null;
+    }
+    return () => {
+      if (rainAudioRef.current) {
+        void rainAudioRef.current.ctx.close().catch(() => {});
+        rainAudioRef.current = null;
+      }
+    };
+  }, [weatherFx]);
+
+  // 卸载时停雨声
+  useEffect(
+    () => () => {
+      if (rainAudioRef.current) {
+        void rainAudioRef.current.ctx.close().catch(() => {});
+        rainAudioRef.current = null;
+      }
+    },
+    [],
+  );
+
+  /** 夜晚自动开灯：真实夜晚（19~6 点）第一次进入小屋 → 客厅/卧室主灯自动亮起 */
+  const autoLightsDone = useRef(false);
+  useEffect(() => {
+    if (autoLightsDone.current || !nightAuto || !night) return;
+    autoLightsDone.current = true;
+    const hour = new Date().getHours();
+    if (hour < 19 && hour >= 6) return; // 只在真实夜间生效
+    const hadOn = itemsRef.current.some((f) => CATALOG[f.kind]?.light && f.st?.on);
+    if (hadOn) return;
+    setItems((prev) =>
+      prev.map((f) => {
+        const e = CATALOG[f.kind];
+        if (!e?.light) return f;
+        const room = roomAt(f.x, f.z);
+        return room === 'lr' || room === 'br' ? { ...f, st: { ...f.st, on: true } } : f;
+      }),
+    );
+    toast('天黑了，帮你把灯打开啦～');
+  }, [night, nightAuto, toast]);
+
+  // 天气面板信息（HUD 顶部小胶囊）
+  const weatherInfo = useMemo(() => {
+    if (!weather) return null;
+    const info = weatherCodeInfo(weather.current.code);
+    return { label: info.label, Icon: info.Icon, temp: Math.round(weather.current.temperature), city: weather.name };
+  }, [weather]);
+
+  // ==================== 编辑操作 ====================
   const rotateY = useCallback(
     (dir: 1 | -1) => {
       if (!selId) return;
@@ -1125,7 +1506,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
             return next;
           });
         } else {
-          const did = selId.slice(5) as 'bed' | 'kt' | 'bath';
+          const did = selId.slice(5) as 'bed' | 'kt' | 'bath' | 'bal';
           const d = DOORS.find((dd) => dd.id === did);
           if (!d) return;
           if (d.axis === 'z' && dx === 0) return;
@@ -1133,7 +1514,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
           const cur = doorPosRef.current?.[did] ?? d.def;
           const along = cur + (d.axis === 'z' ? Math.sign(dx) : Math.sign(dz)) * step;
           const r = resolveDoorPos(did, along, winPosRef.current, doorPosRef.current);
-          setDoorPos((prev) => ({ bed: DOORS[0].def, kt: DOORS[1].def, bath: DOORS[2].def, ...prev, [did]: r.along }));
+          setDoorPos((prev) => ({ bed: DOORS[0].def, kt: DOORS[1].def, bath: DOORS[2].def, bal: DOORS[3].def, ...prev, [did]: r.along }));
         }
         saveSoon();
         return;
@@ -1287,6 +1668,22 @@ export default function CoupleHome({ close }: { close: () => void }) {
     [saveSoon],
   );
 
+  const applyFloorColBal = useCallback(
+    (hex: string | null) => {
+      setFloorColBal(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
+  const applyWallColBal = useCallback(
+    (hex: string | null) => {
+      setWallColBal(hex ?? undefined);
+      saveSoon();
+    },
+    [saveSoon],
+  );
+
   /** 天花板自定义色（四房间分开） */
   const applyCeilCol = useCallback(
     (hex: string | null) => {
@@ -1366,6 +1763,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
     saveSoon();
   }, [saveSoon, toast]);
 
+  const toggleBalconyDoor = useCallback(() => {
+    setBalconyDoorOpen((o) => {
+      const next = !o;
+      toast(next ? '阳台门开啦，出去晒晒太阳～' : '阳台门已关上');
+      return next;
+    });
+    saveSoon();
+  }, [saveSoon, toast]);
+
   /** 编辑模式点选门窗（选中而非开合） */
   const onWallTap = useCallback(
     (id: string) => {
@@ -1434,7 +1840,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       const d = DOORS.find((dd) => dd.id === did);
       if (!d) return;
       const along = d.axis === 'z' ? x : z;
-      setDoorPos((prev) => ({ bed: DOORS[0].def, kt: DOORS[1].def, bath: DOORS[2].def, ...prev, [did]: along }));
+      setDoorPos((prev) => ({ bed: DOORS[0].def, kt: DOORS[1].def, bath: DOORS[2].def, bal: DOORS[3].def, ...prev, [did]: along }));
       return;
     }
     setItems((prev) => prev.map((f) => (f.id === id ? { ...f, x, z } : f)));
@@ -1468,7 +1874,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         if (d) {
           const cur = doorPosRef.current?.[did] ?? d.def;
           const r = resolveDoorPos(did, Math.round(cur * 20) / 20, winPosRef.current, doorPosRef.current);
-          setDoorPos((prev) => ({ bed: DOORS[0].def, kt: DOORS[1].def, bath: DOORS[2].def, ...prev, [did]: r.along }));
+          setDoorPos((prev) => ({ bed: DOORS[0].def, kt: DOORS[1].def, bath: DOORS[2].def, bal: DOORS[3].def, ...prev, [did]: r.along }));
         }
         saveSoon();
         return;
@@ -1792,6 +2198,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
         wallColK={wallColK}
         floorColB={floorColB}
         wallColB={wallColB}
+        floorColBal={floorColBal}
+        wallColBal={wallColBal}
         ceilCol={ceilCol}
         ceilColBed={ceilColBed}
         ceilColK={ceilColK}
@@ -1799,9 +2207,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
         doorOpen={doorOpen}
         kitchenDoorOpen={kitchenDoorOpen}
         bathDoorOpen={bathDoorOpen}
+        balconyDoorOpen={balconyDoorOpen}
         onToggleDoor={toggleDoor}
         onToggleKitchenDoor={toggleKitchenDoor}
         onToggleBathDoor={toggleBathDoor}
+        onToggleBalconyDoor={toggleBalconyDoor}
+        pet={pet ? { sp: pet.sp, name: pet.name } : null}
+        petRT={petRT}
+        petFeedRef={petFeedRef}
+        onPetTap={petTap}
+        guestRT={guestRT}
+        guestName={guest?.name ?? null}
+        musicPlaying={musicPlaying}
+        weatherFx={weatherFx}
         onFloorTap={onFloorTap}
         onFurnTap={onFurnTap}
         onDragMove={onDragMove}
@@ -1810,19 +2228,76 @@ export default function CoupleHome({ close }: { close: () => void }) {
         onWallTap={onWallTap}
       />
 
+      {/* Toast（含拍照模式 —— 拍照时 HUD 隐藏，toast 仍需可见） */}
+      <div className="pointer-events-none absolute left-1/2 top-24 z-40 flex -translate-x-1/2 flex-col items-center gap-1.5">
+        <AnimatePresence>
+          {toasts.map((t) => (
+            <motion.div
+              key={t.id}
+              initial={{ opacity: 0, y: -8, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -6, scale: 0.95 }}
+              className="rounded-full bg-[#3a3a3e]/85 px-3.5 py-1.5 text-[12px] text-white shadow-lg backdrop-blur-sm"
+            >
+              {t.msg}
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+
       {/* ===== HUD ===== */}
+      {!photoMode && (
       <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">
         {/* 顶栏 */}
         <div className="flex items-start justify-between p-3 pt-11">
-          <button
-            onClick={close}
-            aria-label="返回"
-            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
+          <div className="flex items-start gap-2">
+            <button
+              onClick={close}
+              aria-label="返回"
+              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+
+            {/* 天气胶囊（真实天气联动：城市 + 天气 + 温度） */}
+            {weatherInfo && (
+              <div className="pointer-events-auto flex h-10 items-center gap-1.5 rounded-full bg-white/75 px-3 shadow-sm backdrop-blur">
+                <weatherInfo.Icon className="h-4 w-4 text-[#7a8aa0]" />
+                <span className="text-[12px] font-semibold text-[#4a4a4e]">{weatherInfo.temp}°</span>
+                <span className="max-w-[64px] truncate text-[11px] text-[#8a8a90]">{weatherInfo.city}</span>
+              </div>
+            )}
+          </div>
 
           <div className="flex gap-2">
+            {/* 拍照模式（F6：隐藏 UI 摆拍，存情侣相册） */}
+            <button
+              onClick={() => setPhotoMode(true)}
+              aria-label="拍照模式"
+              title="拍照模式"
+              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+            >
+              <Camera className="h-[18px] w-[18px]" />
+            </button>
+            {/* 宠物（F2：领养/喂养） */}
+            <button
+              onClick={() => setPetSheet(true)}
+              aria-label="宠物"
+              title={pet ? `${pet.name}` : '领养一只宠物'}
+              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#b08968] shadow-sm backdrop-blur transition active:scale-95"
+            >
+              <PawPrint className="h-[18px] w-[18px]" />
+            </button>
+            {/* 邀请访客（F7：AI 联系人来家做客） */}
+            <button
+              onClick={openInvite}
+              aria-label="邀请访客"
+              title={guest ? `${guest.name}正在做客` : '邀请 AI 联系人来家里做客'}
+              className="pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+            >
+              <UserPlus className="h-[18px] w-[18px]" />
+              {guest && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-white bg-[#7fc792]" />}
+            </button>
             <button
               onClick={toggleNight}
               aria-label={night ? '切换白天' : '切换夜晚'}
@@ -1850,23 +2325,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
               {full ? <Minimize className="h-[18px] w-[18px]" /> : <Maximize className="h-[18px] w-[18px]" />}
             </button>
           </div>
-        </div>
-
-        {/* Toast */}
-        <div className="pointer-events-none absolute left-1/2 top-24 z-20 flex -translate-x-1/2 flex-col items-center gap-1.5">
-          <AnimatePresence>
-            {toasts.map((t) => (
-              <motion.div
-                key={t.id}
-                initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -6, scale: 0.95 }}
-                className="rounded-full bg-[#3a3a3e]/85 px-3.5 py-1.5 text-[12px] text-white shadow-lg backdrop-blur-sm"
-              >
-                {t.msg}
-              </motion.div>
-            ))}
-          </AnimatePresence>
         </div>
 
         {/* 家具互动按钮（生活模式）：坐下/睡觉/泡澡 → 站起来/起床/出来 */}
@@ -1931,6 +2389,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <Music className="h-[18px] w-[18px]" />
                 ) : charAction.type === 'makeup' || charAction.type === 'mirror' ? (
                   <Sparkles className="h-[18px] w-[18px]" />
+                ) : charAction.type === 'game' ? (
+                  <Gamepad2 className="h-[18px] w-[18px]" />
+                ) : charAction.type === 'hotpot' ? (
+                  <UtensilsCrossed className="h-[18px] w-[18px]" />
                 ) : (
                   <Laptop className="h-[18px] w-[18px]" />
                 )}
@@ -2313,6 +2775,229 @@ export default function CoupleHome({ close }: { close: () => void }) {
           </div>
         </div>
       </div>
+      )}
+
+      {/* ===== 拍照模式（F6）：隐藏全部 UI，快门存情侣相册 ===== */}
+      <AnimatePresence>
+        {photoMode && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="pointer-events-none absolute inset-0 z-30">
+            <button
+              onClick={() => setPhotoMode(false)}
+              aria-label="退出拍照模式"
+              className="pointer-events-auto absolute left-3 top-11 flex h-10 w-10 items-center justify-center rounded-full bg-black/35 text-white shadow backdrop-blur transition active:scale-95"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <span className="absolute left-1/2 top-12 -translate-x-1/2 rounded-full bg-black/30 px-3 py-1 text-[11px] text-white/90 backdrop-blur">
+              拍照模式 · 画面随你摆
+            </span>
+            <button
+              onClick={takePhoto}
+              aria-label="拍照"
+              className="pointer-events-auto absolute bottom-8 left-1/2 flex h-16 w-16 -translate-x-1/2 items-center justify-center rounded-full border-4 border-white/90 bg-white/25 shadow-xl backdrop-blur transition active:scale-90"
+            >
+              <Camera className="h-7 w-7 text-white" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ===== 五子棋对弈（棋盘桌 J7） ===== */}
+      <AnimatePresence>
+        {chess && <ChessOverlay onClose={() => setChess(null)} />}
+      </AnimatePresence>
+
+      {/* ===== 做饭小游戏（灶台 F5） ===== */}
+      <AnimatePresence>
+        {cookingGame && <CookingGame onComplete={onCookingDone} onClose={() => setCookingGame(false)} />}
+      </AnimatePresence>
+
+      {/* ===== 宠物面板（F2：领养 / 喂养 / 送走） ===== */}
+      <AnimatePresence>
+        {petSheet && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-30 flex items-end justify-center bg-black/25 pb-6"
+            onClick={() => setPetSheet(false)}
+          >
+            <motion.div
+              initial={{ y: 60, opacity: 0.8 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 50, opacity: 0 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+              className="pointer-events-auto w-full max-w-[300px] rounded-3xl bg-white/96 p-5 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-[15px] font-semibold text-[#3a3a3e]">{pet ? `${pet.sp === 'cat' ? '🐱' : '🐶'} ${pet.name}` : '🐾 领养一只小可爱'}</span>
+                <button
+                  onClick={() => setPetSheet(false)}
+                  aria-label="关闭宠物面板"
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {!pet ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => adoptPet('cat')}
+                    className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fdf3e4] p-4 shadow-sm ring-1 ring-[#f3e5c8] transition active:scale-95"
+                  >
+                    <span className="text-[34px] leading-none">🐱</span>
+                    <span className="text-[13px] font-semibold text-[#4a4a4e]">橘白猫</span>
+                    <span className="text-[11px] text-[#9a9a96]">「团子」爱打盹</span>
+                  </button>
+                  <button
+                    onClick={() => adoptPet('dog')}
+                    className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fdeee6] p-4 shadow-sm ring-1 ring-[#f5dcc8] transition active:scale-95"
+                  >
+                    <span className="text-[34px] leading-none">🐶</span>
+                    <span className="text-[13px] font-semibold text-[#4a4a4e]">小柴犬</span>
+                    <span className="text-[11px] text-[#9a9a96]">「布丁」爱撒欢</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2.5">
+                  <p className="text-[12px] text-[#8a8a90]">点一点它就能撸一撸，头顶会冒爱心哦～</p>
+                  <button
+                    onClick={feedPet}
+                    className="flex h-11 items-center justify-center gap-2 rounded-full bg-[#f2b3c2] text-[14px] font-semibold text-white shadow transition active:scale-95"
+                  >
+                    🍚 喂它吃饭
+                  </button>
+                  <button
+                    onClick={sendPetAway}
+                    className="flex h-11 items-center justify-center rounded-full bg-[#f6eded] text-[13px] font-medium text-[#c26a6a] transition active:scale-95"
+                  >
+                    送它出门玩
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ===== 小屋点歌（F3：音箱放真歌） ===== */}
+      <AnimatePresence>
+        {musicSheet && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-30 flex items-end justify-center bg-black/25 pb-6"
+            onClick={() => setMusicSheet(false)}
+          >
+            <motion.div
+              initial={{ y: 60, opacity: 0.8 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 50, opacity: 0 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+              className="pointer-events-auto w-full max-w-[320px] rounded-3xl bg-white/96 p-5 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <span className="text-[15px] font-semibold text-[#3a3a3e]">🔊 小屋点歌</span>
+                  <p className="mt-0.5 text-[11px] text-[#9a9a96]">用音乐 App 的歌，全屋响起</p>
+                </div>
+                <button
+                  onClick={() => setMusicSheet(false)}
+                  aria-label="关闭点歌面板"
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {/* 当前播放 */}
+              {musicCurrent && (
+                <button
+                  onClick={() => {
+                    void useMusic.getState().toggle();
+                  }}
+                  className="mb-3 flex w-full items-center gap-3 rounded-2xl bg-[#fdf3e4] p-3 text-left transition active:scale-[0.98]"
+                >
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f2b3c2] text-white">
+                    <Music className="h-5 w-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-semibold text-[#3a3a3e]">{musicCurrent.name}</span>
+                    <span className="block truncate text-[11px] text-[#9a9a96]">{musicCurrent.artists?.[0]?.name ?? ''}</span>
+                  </span>
+                  <span className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold text-white ${musicPlaying ? 'bg-[#8fce9e]' : 'bg-[#f2b3c2]'}`}>
+                    {musicPlaying ? '暂停' : '播放'}
+                  </span>
+                </button>
+              )}
+              <HouseSongList onPick={playHouseSong} />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ===== 邀请访客（F7：AI 联系人来家做客） ===== */}
+      <AnimatePresence>
+        {inviteOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-30 flex items-end justify-center bg-black/25 pb-6"
+            onClick={() => setInviteOpen(false)}
+          >
+            <motion.div
+              initial={{ y: 60, opacity: 0.8 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 50, opacity: 0 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+              className="pointer-events-auto w-full max-w-[320px] rounded-3xl bg-white/96 p-5 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <span className="text-[15px] font-semibold text-[#3a3a3e]">🚪 邀请谁来做客？</span>
+                  {guest && <p className="mt-0.5 text-[11px] text-[#9a9a96]">现在 {guest.name} 正在屋里逛</p>}
+                </div>
+                <button
+                  onClick={() => setInviteOpen(false)}
+                  aria-label="关闭邀请面板"
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="scrollbar-none max-h-[46vh] overflow-y-auto">
+                {inviteList.length === 0 && <p className="py-6 text-center text-[12.5px] text-[#a8a8a4]">还没有 AI 联系人，先去「联系人」创建一个吧</p>}
+                {inviteList.map((c) => {
+                  const isCurrent = guest?.id === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => (isCurrent ? dismissGuest() : inviteGuest(c))}
+                      className="mb-2 flex w-full items-center gap-3 rounded-2xl bg-[#faf8f3] p-3 text-left ring-1 ring-[#efece2] transition active:scale-[0.98]"
+                    >
+                      <span className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-[#f6cdd6] to-[#dcd2ec] text-[15px] font-semibold text-white">
+                        {c.name.slice(0, 1)}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-[#3a3a3e]">{c.name}</span>
+                      <span
+                        className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold text-white ${
+                          isCurrent ? 'bg-[#e08a8a]' : 'bg-[#f2b3c2]'
+                        }`}
+                      >
+                        {isCurrent ? '送客出门' : '邀请'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ===== 调色盘面板（编辑模式：家具 / 门窗） ===== */}
       <AnimatePresence>
@@ -2469,6 +3154,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 <ColorRow label="地板" value={floorColB} onPick={applyFloorColB} fallback="#f5f2ec" />
                 <ColorRow label="墙壁" value={wallColB} onPick={applyWallColB} fallback="#f7f3ec" />
                 <ColorRow label="天花板" value={ceilColB} onPick={applyCeilColB} fallback="#fbf9f3" />
+
+                {/* —— 阳台（v5.7） —— */}
+                <div className="mb-2 mt-4 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#d9c7a4]" />
+                  <span className="text-[12px] font-semibold text-[#8a8a90]">阳台</span>
+                </div>
+                <ColorRow label="地板" value={floorColBal} onPick={applyFloorColBal} fallback="#e2d2b4" />
+                <ColorRow label="墙壁" value={wallColBal} onPick={applyWallColBal} fallback="#f7f3ec" />
 
                 {/* —— 门窗（全屋通用） —— */}
                 <div className="mb-2 mt-4 flex items-center gap-1.5">
@@ -2662,4 +3355,54 @@ function catColor(cat: string): string {
 }
 function shade(cat: string): string {
   return (CAT_COLORS[cat] ?? CAT_COLORS.decor)[1];
+}
+
+// ---------------- 小屋点歌：最近播放 + 红心歌单（音乐 App 数据直读） ----------------
+
+function HouseSongList({ onPick }: { onPick: (song: NcmSong) => void }) {
+  const history = useMusic((s) => s.history);
+  const liked = useMusic((s) => s.likedSongs);
+
+  const songs = useMemo(() => {
+    const seen = new Set<number>();
+    const out: NcmSong[] = [];
+    for (const h of history.slice(0, 10)) {
+      if (h.song && !seen.has(h.song.id)) {
+        seen.add(h.song.id);
+        out.push(h.song);
+      }
+    }
+    for (const s of Object.values(liked)) {
+      if (s && !seen.has(s.id) && out.length < 14) {
+        seen.add(s.id);
+        out.push(s);
+      }
+    }
+    return out;
+  }, [history, liked]);
+
+  if (songs.length === 0) {
+    return <p className="py-4 text-center text-[12px] text-[#a8a8a4]">去音乐 App 听几首歌，这里就能点播啦</p>;
+  }
+  return (
+    <div className="scrollbar-none max-h-[220px] overflow-y-auto">
+      <p className="mb-1.5 px-1 text-[11px] font-medium text-[#a8a8a4]">最近在听 · 点一首放进小屋</p>
+      {songs.map((song) => (
+        <button
+          key={song.id}
+          onClick={() => onPick(song)}
+          className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition active:scale-[0.98] active:bg-[#f6f4ef]"
+        >
+          <img src={coverSrc(song)} alt="" className="h-9 w-9 rounded-lg object-cover" loading="lazy" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[12.5px] font-medium text-[#3a3a3e]">{song.name}</span>
+            <span className="block truncate text-[10.5px] text-[#9a9a96]">
+              {song.artists?.map((a) => a.name).join('/') ?? ''}
+            </span>
+          </span>
+          <Music className="h-3.5 w-3.5 shrink-0 text-[#c9a0ae]" />
+        </button>
+      ))}
+    </div>
+  );
 }

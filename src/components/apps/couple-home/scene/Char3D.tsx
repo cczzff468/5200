@@ -21,21 +21,23 @@ import type { CharPose, CharRT } from '../types';
 
 export interface Char3DProps {
   rt: CharRT;
-  who: 'me' | 'partner';
+  who: 'me' | 'partner' | 'guest';
   /** 隐藏（第一人称时隐藏「我」） */
   hide?: boolean;
   /** 画风：cartoon Q版 / real 拟真 */
   style?: 'cartoon' | 'real';
-  /** 姿势（「我」专属；partner 永远站立） */
+  /** 姿势（「我」专属；partner/访客永远站立） */
   poseRef?: RefObject<{ pose: CharPose; y: number }>;
   /** 穿搭编号（衣柜换装；0=默认，1/2=换色套装；partner 固定 0） */
   outfit?: number;
   /** 手持物（true = 右手握小水杯，拿饮料后端着到处逛） */
   carryRef?: RefObject<{ cup: boolean }>;
+  /** 访客名牌（头顶浮名字牌；缺省不挂） */
+  guestName?: string;
 }
 
 /** 穿搭色板（两角色 × 三套；0 为默认，衣柜换装循环切换） */
-const OUTFITS: Record<'me' | 'partner', Record<'skin' | 'hair' | 'tank' | 'jacket' | 'jeans' | 'shoes' | 'blush', string>[]> = {
+const OUTFITS: Record<'me' | 'partner' | 'guest', Record<'skin' | 'hair' | 'tank' | 'jacket' | 'jeans' | 'shoes' | 'blush', string>[]> = {
   me: [
     {
       skin: '#ffe3cd',
@@ -98,6 +100,45 @@ const OUTFITS: Record<'me' | 'partner', Record<'skin' | 'hair' | 'tank' | 'jacke
       blush: '#f2b9b0',
     },
   ],
+  // 访客（受邀来家的 AI 联系人）：几套换色套装，按名牌哈希取色，同一人每次来访穿同色
+  guest: [
+    {
+      skin: '#ffe0c9',
+      hair: '#5a3a2e',
+      tank: '#f6f2ea',
+      jacket: '#d9a8a0',
+      jeans: '#6a5a4e',
+      shoes: '#f4f2ee',
+      blush: '#f2b9b0',
+    },
+    {
+      skin: '#ffdfc6',
+      hair: '#2e2e34',
+      tank: '#f5f2ec',
+      jacket: '#a8c0b8',
+      jeans: '#4a5568',
+      shoes: '#f6f5f2',
+      blush: '#f2b9b0',
+    },
+    {
+      skin: '#ffe3cd',
+      hair: '#6a4a30',
+      tank: '#fbf6ee',
+      jacket: '#c0a8d0',
+      jeans: '#5a5a66',
+      shoes: '#f4ede4',
+      blush: '#f6b1b8',
+    },
+    {
+      skin: '#ffdfc6',
+      hair: '#3a3230',
+      tank: '#f2ece0',
+      jacket: '#e0b878',
+      jeans: '#4e5a52',
+      shoes: '#f6f5f2',
+      blush: '#f2b9b0',
+    },
+  ],
 };
 
 interface CharRig {
@@ -136,8 +177,9 @@ const stdMat = (c: string, rough = 0.8, extra?: Partial<THREE.MeshStandardMateri
  * 组装一只有关节的小人（纯几何，无外部依赖）。
  * 结构：root(起伏/前倾) → lieWrap(躺姿旋转) → [腿×2(髋→膝), 躯干+开衫, 臂×2(肩→肘), 头+发型]
  */
-function buildChar(who: 'me' | 'partner', style: 'cartoon' | 'real', outfit = 0): CharRig {
-  const o = OUTFITS[who][outfit % OUTFITS[who].length];
+function buildChar(who: 'me' | 'partner' | 'guest', style: 'cartoon' | 'real', outfit = 0): CharRig {
+  const palette = OUTFITS[who];
+  const o = palette[outfit % palette.length];
   const g = new THREE.Group();
   const clothes: THREE.Mesh[] = [];
 
@@ -588,8 +630,16 @@ function makeZzzTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outfit = 0, carryRef }: Char3DProps) {
-  const rig = useMemo(() => buildChar(who, style, outfit), [who, style, outfit]);
+export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outfit = 0, carryRef, guestName }: Char3DProps) {
+  // 访客按名牌哈希固定取一套配色（同一人每次来访穿同色）
+  const guestOutfit = useMemo(() => {
+    if (who !== 'guest' || !guestName) return 0;
+    let h = 0;
+    for (let i = 0; i < guestName.length; i++) h = (h * 31 + guestName.charCodeAt(i)) >>> 0;
+    return h % 4;
+  }, [who, guestName]);
+  const effOutfit = who === 'guest' ? guestOutfit : outfit;
+  const rig = useMemo(() => buildChar(who, style, effOutfit), [who, style, effOutfit]);
   const holder = useRef<THREE.Group>(null);
 
   useFrame((state, rawDt) => {
@@ -896,6 +946,48 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outf
   return (
     <group ref={holder} scale={1}>
       <primitive object={rig.root} />
+      {/* 访客名牌：头顶浮名字牌（白底樱粉描边 + 名字） */}
+      {who === 'guest' && guestName && <GuestTag name={guestName} />}
+    </group>
+  );
+}
+
+/** 访客头顶名牌（canvas 纹理，随头部位置） */
+function GuestTag({ name }: { name: string }) {
+  const tex = useMemo(() => {
+    const W = 256;
+    const H = 96;
+    const cv = document.createElement('canvas');
+    cv.width = W;
+    cv.height = H;
+    const ctx = cv.getContext('2d')!;
+    const r = 24;
+    ctx.fillStyle = 'rgba(255,253,248,0.94)';
+    ctx.strokeStyle = '#f2b3c2';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(r + 3, 3);
+    ctx.arcTo(W - 3, 3, W - 3, H - 3, r);
+    ctx.arcTo(W - 3, H - 3, 3, H - 3, r);
+    ctx.arcTo(3, H - 3, 3, 3, r);
+    ctx.arcTo(3, 3, W - 3, 3, r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#4a4a4e';
+    ctx.font = '600 46px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(name.slice(0, 6), W / 2, H / 2 + 3);
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }, [name]);
+  return (
+    <group position={[0, 1.32, 0]}>
+      <sprite scale={[0.52, 0.2, 1]}>
+        <spriteMaterial map={tex} transparent depthWrite={false} toneMapped={false} />
+      </sprite>
     </group>
   );
 }

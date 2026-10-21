@@ -42,6 +42,7 @@ import {
   TowelRack3D,
 } from './Small3D';
 import { COZY_PARTS } from './Cozy3D';
+import { COZY_PLUS_PARTS } from './CozyPlus3D';
 
 export interface Furn3DProps {
   item: FurnitureItem;
@@ -61,6 +62,10 @@ export interface Furn3DProps {
   meal?: boolean;
   /** 乐器演奏中（钢琴键位/音符） */
   playing?: boolean;
+  /** 任一投影仪开着（幕布放下放电影） */
+  projectorOn?: boolean;
+  /** 有人坐在这件家具上（吊篮秋千摆幅加大） */
+  sitting?: boolean;
 }
 
 /** useGLTF 之外的轻量加载钩子（不依赖 suspense；tint 变化时重新克隆） */
@@ -100,6 +105,8 @@ export default function Furn3D({
   cooking,
   meal,
   playing,
+  projectorOn,
+  sitting,
 }: Furn3DProps) {
   const group = useRef<THREE.Group>(null);
   const inner = useRef<THREE.Group>(null);
@@ -187,6 +194,8 @@ export default function Furn3D({
 
   /** v5.6 温馨扩展组件（按 kind 取） */
   const CozyPart = COZY_PARTS[entry.kind];
+  /** v5.7 拾光扩展组件（按 kind 取） */
+  const PlusPart = COZY_PLUS_PARTS[entry.kind];
 
   const modelSize = model?.size;
 
@@ -313,6 +322,17 @@ export default function Furn3D({
             playing={playing}
             brewing={!!item.st?.on}
             fedAt={item.st?.fedAt}
+          />
+        )}
+
+        {/* v5.7 拾光扩展（CozyPlus3D 程序化建模）：投影仪/幕布/吊篮秋千/鞋柜/挂画组/加湿器/酒柜/棋盘桌/火锅桌/吊床/游戏机/花架 */}
+        {PlusPart && (
+          <PlusPart
+            col={item.col}
+            on={!!item.st?.on}
+            open={!!item.st?.open}
+            projectorOn={projectorOn}
+            sat={sitting}
           />
         )}
 

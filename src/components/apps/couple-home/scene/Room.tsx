@@ -19,6 +19,10 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import {
+  BAL_X0,
+  BAL_X1,
+  BAL_Z0,
+  BAL_Z1,
   BATH_X0,
   BATH_X1,
   BATH_Z0,
@@ -439,7 +443,7 @@ function useWallOcclusionFade(
  * v5.4 户型：客厅 9×6（西北）+ 卫生间 4×6（客厅东侧）+ 卧室 6×5 / 厨房 6×5（南排）；
  * 卫生间门开在客厅东墙（x=4.5），厨房东墙变外墙（无门洞）。
  */
-function buildWalls(doorBed: number, doorKt: number, doorBath: number): WallDef[] {
+function buildWalls(doorBed: number, doorKt: number, doorBath: number, doorBal: number): WallDef[] {
   const H = WALL_H;
   return [
     // —— 客厅 ——
@@ -454,7 +458,9 @@ function buildWalls(doorBed: number, doorKt: number, doorBath: number): WallDef[
     { key: 'bedLeft', pos: [-ROOM_X - WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(-1, 0, 0), room: 'br' },
     // 卧室/厨房共墙
     { key: 'bedRight', pos: [BED_X1 + WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0), room: 'br' },
-    { key: 'bedBack', pos: [(BED_X0 + BED_X1) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [BED_X1 - BED_X0 + WALL_T * 2, H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'br' },
+    // 卧室南墙（= 阳台北墙 v5.7：两段夹阳台门洞）
+    { key: 'bedBackWest', pos: [(BED_X0 - WALL_T + doorBal - DOOR_W / 2) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [doorBal - DOOR_W / 2 - (BED_X0 - WALL_T), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'br' },
+    { key: 'bedBackEast', pos: [(doorBal + DOOR_W / 2 + BED_X1 + WALL_T) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [BED_X1 + WALL_T - (doorBal + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'br' },
     // —— 厨房（北墙两段夹门洞；北墙延伸到卫生间东缘，与卫生间南墙共面） ——
     { key: 'ktNorthWest', pos: [(BED_X1 + doorKt - DOOR_W / 2) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [doorKt - DOOR_W / 2 - BED_X1, H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'kt' },
     { key: 'ktNorthMain', pos: [(doorKt + DOOR_W / 2 + BATH_X1 + WALL_T) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [BATH_X1 + WALL_T - (doorKt + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'kt' },
@@ -464,6 +470,8 @@ function buildWalls(doorBed: number, doorKt: number, doorBath: number): WallDef[
     // —— 卫生间（客厅东侧；北墙带窗，东墙带窗，南墙由 ktNorthMain 延伸段覆盖） ——
     { key: 'bathNorth', pos: [(BATH_X0 + BATH_X1) / 2, H / 2, BATH_Z0 - WALL_T / 2], size: [BATH_X1 - BATH_X0, H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'ba' },
     { key: 'bathEast', pos: [BATH_X1 + WALL_T / 2, H / 2, (BATH_Z0 + BATH_Z1) / 2], size: [WALL_T, H, BATH_Z1 - BATH_Z0 + WALL_T * 2], normal: new THREE.Vector3(1, 0, 0), room: 'ba' },
+    // —— 阳台（v5.7：卧室南侧；西墙=建筑外墙，南/东面开放式栏杆单独渲染） ——
+    { key: 'balWest', pos: [BAL_X0 - WALL_T / 2, H / 2, (BAL_Z0 + BAL_Z1) / 2], size: [WALL_T, H, BAL_Z1 - BAL_Z0], normal: new THREE.Vector3(-1, 0, 0), room: 'bal' },
   ];
 }
 
@@ -539,8 +547,8 @@ function Wall({ def, night, wallCol, wallTexMap, focusRef }: { def: WallDef; nig
  * 墙段碰撞盒（生活模式相机防钻墙钳制用；不含门洞区域——相机可从开着的门洞穿过）。
  * 随门位变化重建：门挪 → 墙段 AABB 跟随。
  */
-export function buildWallBoxes(doorBed: number, doorKt: number, doorBath: number): THREE.Box3[] {
-  return buildWalls(doorBed, doorKt, doorBath).map(boxOf);
+export function buildWallBoxes(doorBed: number, doorKt: number, doorBath: number, doorBal: number): THREE.Box3[] {
+  return buildWalls(doorBed, doorKt, doorBath, doorBal).map(boxOf);
 }
 
 // ---------------- 门牌（门洞上方：卧室 / 厨房 / 卫生间） ----------------
@@ -1014,18 +1022,20 @@ export interface RoomProps {
   onToggleWin?: (i: number) => void;
   /** 每扇窗沿墙坐标（缺省 = 默认位） */
   winPos?: number[];
-  /** 三扇门沿墙坐标 */
-  doorPos?: { bed: number; kt: number; bath: number };
+  /** 三/四扇门沿墙坐标 */
+  doorPos?: { bed: number; kt: number; bath: number; bal?: number };
   /** 客厅地板/墙自定义色 */
   floorCol?: string;
   wallCol?: string;
-  /** 卧室 / 厨房 / 卫生间地板墙自定义色（四房间分开换色） */
+  /** 卧室 / 厨房 / 卫生间 / 阳台地板墙自定义色（分开换色） */
   floorColBed?: string;
   wallColBed?: string;
   floorColK?: string;
   wallColK?: string;
   floorColB?: string;
   wallColB?: string;
+  floorColBal?: string;
+  wallColBal?: string;
   /** 天花板自定义色（四房间分开） */
   ceilCol?: string;
   ceilColBed?: string;
@@ -1035,13 +1045,15 @@ export interface RoomProps {
   doorCol?: string;
   /** 窗框色（#rrggbb；缺省浅木白） */
   winCol?: string;
-  /** 卧室门 / 厨房门 / 卫生间门开态 */
+  /** 卧室门 / 厨房门 / 卫生间门 / 阳台门开态 */
   doorOpen?: boolean;
   kitchenDoorOpen?: boolean;
   bathDoorOpen?: boolean;
+  balconyDoorOpen?: boolean;
   onToggleDoor?: () => void;
   onToggleKitchenDoor?: () => void;
   onToggleBathDoor?: () => void;
+  onToggleBalconyDoor?: () => void;
   /** 相机对焦物（生活模式=小人，编辑模式=轨道中心）；隔墙用它判断是否挡在镜头与对焦物之间 */
   focusRef?: RefObject<FocusPos>;
   /** 地板纹理（全屋通用，颜色仍分房间）：wood 木纹（默认）/ plain 素色 / check 大格瓷砖 */
@@ -1069,6 +1081,8 @@ export default function Room({
   wallColK,
   floorColB,
   wallColB,
+  floorColBal,
+  wallColBal,
   ceilCol,
   ceilColBed,
   ceilColK,
@@ -1078,9 +1092,11 @@ export default function Room({
   doorOpen,
   kitchenDoorOpen,
   bathDoorOpen,
+  balconyDoorOpen,
   onToggleDoor,
   onToggleKitchenDoor,
   onToggleBathDoor,
+  onToggleBalconyDoor,
   focusRef,
   floorTex = 'wood',
   wallTex = 'plain',
@@ -1096,11 +1112,12 @@ export default function Room({
   const doorBed = doorPos?.bed ?? DOORS[0].def;
   const doorKt = doorPos?.kt ?? DOORS[1].def;
   const doorBath = doorPos?.bath ?? DOORS[2].def;
+  const doorBal = doorPos?.bal ?? DOORS[3].def;
 
   /** 墙段随门位动态重建（门挪 → 墙洞跟随） */
-  const walls = useMemo(() => buildWalls(doorBed, doorKt, doorBath), [doorBed, doorKt, doorBath]);
+  const walls = useMemo(() => buildWalls(doorBed, doorKt, doorBath, doorBal), [doorBed, doorKt, doorBath, doorBal]);
 
-  /** 三面门洞墙的「整墙剖面盒」（两段夹门洞的并集，含门洞跨度）：门/门梁随整墙同隐同现 */
+  /** 门洞墙的「整墙剖面盒」（两段夹门洞的并集，含门洞跨度）：门/门梁随整墙同隐同现 */
   const slabs = useMemo(() => {
     const union = (a: string, b: string): THREE.Box3 => {
       const wa = walls.find((w) => w.key === a);
@@ -1112,6 +1129,7 @@ export default function Room({
       bed: union('frontWest', 'frontEast'),
       kt: union('ktNorthWest', 'ktNorthMain'),
       bath: union('rightA', 'rightB'),
+      bal: union('bedBackWest', 'bedBackEast'),
     };
   }, [walls]);
 
@@ -1186,6 +1204,21 @@ export default function Room({
         {floorMat(floorColB)}
       </mesh>
 
+      {/* 阳台地板（木色露台感；v5.7 卧室南侧） */}
+      <mesh
+        position={[(BAL_X0 + BAL_X1) / 2, 0, (BAL_Z0 + BAL_Z1) / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        receiveShadow
+        onClick={floorTap}
+      >
+        <planeGeometry args={[BAL_X1 - BAL_X0, BAL_Z1 - BAL_Z0]} />
+        <meshStandardMaterial
+          map={floorMap ?? undefined}
+          color={floorColBal ?? (night ? '#c4b394' : '#e2d2b4')}
+          roughness={0.92}
+        />
+      </mesh>
+
       {/* 地板外沿：浅灰围边（剖面观感） */}
       <mesh position={[0, -0.05, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[ROOM_W + 0.6, ROOM_D + 0.6]} />
@@ -1203,25 +1236,40 @@ export default function Room({
         <planeGeometry args={[BATH_X1 - BATH_X0 + 0.6, BATH_Z1 - BATH_Z0 + 0.6]} />
         <meshStandardMaterial color="#d4d1c9" roughness={0.95} />
       </mesh>
+      <mesh position={[(BAL_X0 + BAL_X1) / 2, -0.05, (BAL_Z0 + BAL_Z1) / 2]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[BAL_X1 - BAL_X0 + 0.6, BAL_Z1 - BAL_Z0 + 0.6]} />
+        <meshStandardMaterial color="#d4d1c9" roughness={0.95} />
+      </mesh>
 
-      {/* 各面墙（自动隐藏朝相机侧；四房间分开换色；门位变化时墙段动态重建） */}
+      {/* 各面墙（自动隐藏朝相机侧；分开换色；门位变化时墙段动态重建） */}
       {walls.map((def) => (
         <Wall
           key={def.key}
           def={def}
           night={night}
-          wallCol={def.room === 'br' ? wallColBed : def.room === 'kt' ? wallColK : def.room === 'ba' ? wallColB : wallCol}
+          wallCol={
+            def.room === 'br'
+              ? wallColBed
+              : def.room === 'kt'
+                ? wallColK
+                : def.room === 'ba'
+                  ? wallColB
+                  : def.room === 'bal'
+                    ? wallColBal
+                    : wallCol
+          }
           wallTexMap={wallMap ?? undefined}
           focusRef={focusRef}
         />
       ))}
 
-      {/* 门洞上方的门头梁 ×3（与所在整墙同隐同现） */}
+      {/* 门洞上方的门头梁 ×4（与所在整墙同隐同现） */}
       <DoorLintel pos={[doorBed, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallCol} night={night} focusRef={focusRef} hostBox={slabs.bed} wallTexMap={wallMap ?? undefined} />
       <DoorLintel pos={[doorKt, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallColK} night={night} focusRef={focusRef} hostBox={slabs.kt} wallTexMap={wallMap ?? undefined} />
       <DoorLintel pos={[ROOM_X + WALL_T / 2, DOOR_H + (WALL_H - DOOR_H) / 2, doorBath]} alongAxis="z" wallCol={wallCol} night={night} focusRef={focusRef} hostBox={slabs.bath} wallTexMap={wallMap ?? undefined} />
+      <DoorLintel pos={[doorBal, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z1 + WALL_T / 2]} alongAxis="x" wallCol={wallColBal ?? wallColBed} night={night} focusRef={focusRef} hostBox={slabs.bal} wallTexMap={wallMap ?? undefined} />
 
-      {/* 三扇门（点击开合 / 编辑模式选中滑行；门牌挂门洞上方） */}
+      {/* 四扇门（点击开合 / 编辑模式选中滑行；门牌挂门洞上方） */}
       <HouseDoor
         pos={[doorBed, BED_Z0]}
         ry={DOORS[0].ry}
@@ -1267,6 +1315,33 @@ export default function Room({
         focusRef={focusRef}
         hostBox={slabs.bath}
       />
+      <HouseDoor
+        pos={[doorBal, BED_Z1]}
+        ry={DOORS[3].ry}
+        open={!!balconyDoorOpen}
+        col={doorCol}
+        night={night}
+        sign="阳台"
+        onToggle={() => onToggleBalconyDoor?.()}
+        editMode={!!editMode}
+        selected={selWall === 'door-bal'}
+        onSelect={() => onWallTap?.('door-bal')}
+        onEditPointerDown={(e) => onWallPointerDown?.(e, 'door-bal')}
+        focusRef={focusRef}
+        hostBox={slabs.bal}
+      />
+
+      {/* —— 阳台栏杆（南/东两面玻璃护栏 + 木扶手；开放式阳台） —— */}
+      <BalconyRail
+        from={[BAL_X0, BAL_Z1]}
+        to={[BAL_X1, BAL_Z1]}
+        night={night}
+      />
+      <BalconyRail
+        from={[BAL_X1, BAL_Z0]}
+        to={[BAL_X1, BAL_Z1]}
+        night={night}
+      />
 
       {/* —— 九扇上悬窗（数据驱动，编辑模式可选中沿墙滑行） —— */}
       {WINS.map((w, i) => {
@@ -1292,11 +1367,59 @@ export default function Room({
         );
       })}
 
-      {/* —— 天花板 ×4（相机在屋内低视角才显示；颜色分开换） —— */}
+      {/* —— 天花板 ×4（相机在屋内低视角才显示；颜色分开换；阳台开放式无顶） —— */}
       <Ceiling x0={-ROOM_X} x1={ROOM_X} z0={-ROOM_Z} z1={BED_Z0} col={ceilCol} night={night} />
       <Ceiling x0={-ROOM_X} x1={BED_X1} z0={BED_Z0} z1={BED_Z1} col={ceilColBed} night={night} />
       <Ceiling x0={BED_X1} x1={KTCH_X1} z0={BED_Z0} z1={BED_Z1} col={ceilColK} night={night} />
       <Ceiling x0={BATH_X0} x1={BATH_X1} z0={BATH_Z0} z1={BATH_Z1} col={ceilColB} night={night} />
+    </group>
+  );
+}
+
+// ---------------- 阳台玻璃栏杆（v5.7：开放式阳台，玻璃 + 木扶手） ----------------
+
+function BalconyRail({ from, to, night }: { from: [number, number]; to: [number, number]; night: boolean }) {
+  const dx = to[0] - from[0];
+  const dz = to[1] - from[1];
+  const len = Math.hypot(dx, dz);
+  const cx = (from[0] + to[0]) / 2;
+  const cz = (from[1] + to[1]) / 2;
+  const ry = Math.atan2(dx, dz);
+  const H = 1.02;
+  const posts = Math.max(2, Math.round(len / 0.95) + 1);
+  return (
+    <group position={[cx, 0, cz]} rotation={[0, ry, 0]}>
+      {/* 玻璃栏板（淡青透明） */}
+      <mesh position={[0, H / 2, 0]} castShadow>
+        <boxGeometry args={[len, H - 0.06, 0.025]} />
+        <meshStandardMaterial
+          color={night ? '#9fb4bd' : '#cfe4e8'}
+          roughness={0.06}
+          metalness={0.08}
+          transparent
+          opacity={0.3}
+        />
+      </mesh>
+      {/* 木扶手（顶杆） */}
+      <mesh position={[0, H, 0]} castShadow>
+        <boxGeometry args={[len + 0.06, 0.06, 0.07]} />
+        <meshStandardMaterial color={night ? '#a8946f' : '#d9c7a4'} roughness={0.7} />
+      </mesh>
+      {/* 底槛 */}
+      <mesh position={[0, 0.03, 0]}>
+        <boxGeometry args={[len, 0.06, 0.05]} />
+        <meshStandardMaterial color={night ? '#9a8a6e' : '#cfc0a0'} roughness={0.8} />
+      </mesh>
+      {/* 立柱（等分） */}
+      {Array.from({ length: posts }, (_, i) => {
+        const x = -len / 2 + (len / (posts - 1)) * i;
+        return (
+          <mesh key={i} position={[x, H / 2, 0]} castShadow>
+            <boxGeometry args={[0.045, H, 0.045]} />
+            <meshStandardMaterial color={night ? '#8a7a5e' : '#c4b494'} roughness={0.7} metalness={0.15} />
+          </mesh>
+        );
+      })}
     </group>
   );
 }

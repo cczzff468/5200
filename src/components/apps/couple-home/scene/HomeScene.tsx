@@ -23,6 +23,8 @@ import Room, { buildWallBoxes } from './Room';
 import Furn3D from './Furn3D';
 import Char3D from './Char3D';
 import {
+  BAL_X1,
+  BAL_Z1,
   BATH_X0,
   BATH_X1,
   BATH_Z0,
@@ -44,6 +46,7 @@ import {
   resolveWinPos,
 } from '../catalog';
 import type { CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, HomeMode } from '../types';
+import Pet3D, { type PetData } from './Pet3D';
 
 // ---------------- 对外 Props ----------------
 
@@ -99,13 +102,18 @@ export interface HomeSceneProps {
   ceilColBed?: string;
   ceilColK?: string;
   ceilColB?: string;
-  /** 三扇门开态 + 切换 */
+  /** 三/四扇门开态 + 切换 */
   doorOpen?: boolean;
   kitchenDoorOpen?: boolean;
   bathDoorOpen?: boolean;
+  balconyDoorOpen?: boolean;
   onToggleDoor?: () => void;
   onToggleKitchenDoor?: () => void;
   onToggleBathDoor?: () => void;
+  onToggleBalconyDoor?: () => void;
+  /** 阳台地板/墙自定义色（v5.7） */
+  floorColBal?: string;
+  wallColBal?: string;
   onFloorTap: () => void;
   onFurnTap: (item: FurnitureItem) => void;
   onDragEnd: (id: string) => void;
@@ -118,6 +126,18 @@ export interface HomeSceneProps {
   outfit?: number;
   /** 正在进行的家具动作（灶台蒸汽 / 乐器音符联动） */
   activeAct?: { type: CharAction['type']; itemId: string; active: boolean } | null;
+  /** 宠物（null = 未领养）：数据 + 运行时 ref + 点击回调 + 喂食目标 */
+  pet?: PetData | null;
+  petRT?: RefObject<CharRT>;
+  petFeedRef?: RefObject<{ x: number; z: number; at: number } | null>;
+  onPetTap?: () => void;
+  /** 访客（邀请的 AI 联系人）：运行时 ref + 名牌（null = 无访客） */
+  guestRT?: RefObject<CharRT | null>;
+  guestName?: string | null;
+  /** 音响放歌中（音箱上方飘音符） */
+  musicPlaying?: boolean;
+  /** 天气特效：rain 雨 / snow 雪 / clear 无（窗外粒子） */
+  weatherFx?: 'rain' | 'snow' | 'clear';
   /** 好菜上桌的餐桌 id（null = 没有饭菜） */
   mealTableId?: string | null;
   /** 地板纹理（全屋通用）：wood 木纹（默认）/ plain 素色 / check 瓷砖 */
@@ -130,7 +150,7 @@ export interface HomeSceneProps {
 const PITCH_MIN = 0.22;
 const PITCH_MAX = 1.5;
 
-/** 家具动作 → 小人姿势（watch/work 也是坐姿；play 按乐器分流，见 act.pose） */
+/** 家具动作 → 小人姿势（watch/work/game 也是坐姿；play 按乐器分流，见 act.pose） */
 const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
   sit: 'sit',
   lie: 'lie',
@@ -145,6 +165,8 @@ const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
   makeup: 'makeup',
   mirror: 'mirror',
   dress: 'stand',
+  game: 'sit',
+  hotpot: 'eat',
 };
 
 // ---------------- 小工具 ----------------
@@ -199,11 +221,18 @@ export interface DoorLive {
 }
 
 /**
- * 小人 vs 家具 AABB（膨胀 0.2）推出 + 四房间边界钳制（抬升家具不挡路）。
- * v5.4 四室：客厅（西北）/ 卫生间（客厅东侧）/ 卧室 / 厨房（南排）——
+ * 小人 vs 家具 AABB（膨胀 0.2）推出 + 房间边界钳制（抬升家具不挡路）。
+ * v5.7 五区：客厅（西北）/ 卫生间（客厅东侧）/ 卧室 / 厨房（南排）/ 阳台（卧室南侧）——
  * 隔墙挡路，只有「对应门开着且在门走廊内」才能穿过（partner 传全关门永远留在客厅）。
  */
-function collideAndClamp(c: CharRT, items: FurnitureItem[], bedDoor: DoorLive, ktDoor: DoorLive, bathDoor: DoorLive) {
+function collideAndClamp(
+  c: CharRT,
+  items: FurnitureItem[],
+  bedDoor: DoorLive,
+  ktDoor: DoorLive,
+  bathDoor: DoorLive,
+  balDoor: DoorLive,
+) {
   for (const it of items) {
     const e = CATALOG[it.kind];
     if (!e || e.flat) continue;
@@ -223,6 +252,7 @@ function collideAndClamp(c: CharRT, items: FurnitureItem[], bedDoor: DoorLive, k
   const inBedCorr = bedDoor.open && Math.abs(c.x - bedDoor.along) < DOOR_PASS;
   const inKtCorr = ktDoor.open && Math.abs(c.x - ktDoor.along) < DOOR_PASS;
   const inBathCorr = bathDoor.open && Math.abs(c.z - bathDoor.along) < DOOR_PASS;
+  const inBalCorr = balDoor.open && Math.abs(c.x - balDoor.along) < DOOR_PASS;
   if (c.z < BED_Z0) {
     // —— 北排：客厅（西）+ 卫生间（客厅东墙以东） ——
     if (c.x >= BATH_X0) {
@@ -236,9 +266,16 @@ function collideAndClamp(c: CharRT, items: FurnitureItem[], bedDoor: DoorLive, k
       c.z = clamp(c.z, -ROOM_Z + m, zMax);
     }
   } else if (c.x < BED_X1) {
-    // —— 卧室侧 ——
+    // —— 卧室/阳台侧 ——
     c.x = clamp(c.x, -ROOM_X + m, BED_X1 - m);
-    c.z = inBedCorr ? clamp(c.z, BED_Z0 - m, BED_Z1 - m) : clamp(c.z, BED_Z0 + m, BED_Z1 - m);
+    if (c.z > BED_Z1) {
+      // 阳台：南/东栏杆、西外墙；北墙只有门走廊可穿
+      const zMin = inBalCorr ? BED_Z1 - m : BED_Z1 + m;
+      c.z = clamp(c.z, zMin, BAL_Z1 - m);
+    } else {
+      const zMax = inBalCorr ? BAL_Z1 - m : BED_Z1 - m;
+      c.z = inBedCorr ? clamp(c.z, BED_Z0 - m, zMax) : clamp(c.z, BED_Z0 + m, zMax);
+    }
   } else {
     // —— 厨房侧（北门通客厅；东墙 v5.4 起封闭） ——
     c.x = clamp(c.x, BED_X1 + m, KTCH_X1 - m);
@@ -265,7 +302,7 @@ function wander(c: CharRT, dt: number, items: FurnitureItem[]) {
       c.moving = true;
       c.heading = lerpAngle(c.heading, Math.atan2(dx, dz), Math.min(1, dt * 8));
     }
-    collideAndClamp(c, items, CLOSED_DOOR, CLOSED_DOOR, CLOSED_DOOR);
+    collideAndClamp(c, items, CLOSED_DOOR, CLOSED_DOOR, CLOSED_DOOR, CLOSED_DOOR);
   } else if (now > c.nextWander) {
     c.target = { x: rand(-ROOM_X + 0.7, ROOM_X - 0.7), z: rand(-ROOM_Z + 0.7, ROOM_Z - 0.9) };
   }
@@ -311,6 +348,7 @@ function GameLoop({
   actRef,
   wallBoxes,
   instRef,
+  guestRT,
 }: {
   meRT: CharRT;
   taRT: CharRT;
@@ -335,6 +373,8 @@ function GameLoop({
   actRef: RefObject<CharAction | null>;
   /** 乐器弹奏特写（非 null = 镜头推近该乐器） */
   instRef?: RefObject<{ kind: 'piano' | 'guitar'; itemId: string } | null>;
+  /** 访客运行时（非 null = 有访客在屋里溜达） */
+  guestRT?: RefObject<CharRT | null>;
   /** 墙段碰撞盒（随门位重建；生活模式相机防钻墙钳制用） */
   wallBoxes: THREE.Box3[];
 }) {
@@ -439,11 +479,15 @@ function GameLoop({
         doorRef.current?.bed ?? CLOSED_DOOR,
         doorRef.current?.kt ?? CLOSED_DOOR,
         doorRef.current?.bath ?? CLOSED_DOOR,
+        doorRef.current?.bal ?? CLOSED_DOOR,
       );
     }
 
     // partner 漫游（客厅内）
     wander(taRT, dt, itemsRef.current ?? []);
+    // 访客漫游（客厅内；非 null = 有访客）
+    const guest = guestRT?.current;
+    if (guest) wander(guest, dt * 0.92, itemsRef.current ?? []);
 
     clock.current += dt;
     const fpOn = fpRef.current?.on === true;
@@ -988,8 +1032,10 @@ export default function HomeScene(props: HomeSceneProps) {
     charStyle, poseRef, actRef, carryRef, instRef, onFaucetTap, outfit, activeAct, mealTableId, floorTex, wallTex,
     win, onToggleWin, winPos, doorPos,
     floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, floorColK, wallColK, floorColB, wallColB,
+    floorColBal, wallColBal,
     ceilCol, ceilColBed, ceilColK, ceilColB,
-    doorOpen, kitchenDoorOpen, bathDoorOpen, onToggleDoor, onToggleKitchenDoor, onToggleBathDoor,
+    doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, onToggleDoor, onToggleKitchenDoor, onToggleBathDoor, onToggleBalconyDoor,
+    pet, petRT, petFeedRef, onPetTap, guestRT, guestName, musicPlaying, weatherFx,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
   } = props;
 
@@ -1003,6 +1049,7 @@ export default function HomeScene(props: HomeSceneProps) {
     bed: { open: !!doorOpen, along: DOORS[0].def },
     kt: { open: !!kitchenDoorOpen, along: DOORS[1].def },
     bath: { open: !!bathDoorOpen, along: DOORS[2].def },
+    bal: { open: !!balconyDoorOpen, along: DOORS[3].def },
   });
   useEffect(() => {
     modeRef.current = mode;
@@ -1018,11 +1065,13 @@ export default function HomeScene(props: HomeSceneProps) {
     doorRef.current.bed.open = !!doorOpen;
     doorRef.current.kt.open = !!kitchenDoorOpen;
     doorRef.current.bath.open = !!bathDoorOpen;
-  }, [doorOpen, kitchenDoorOpen, bathDoorOpen]);
+    doorRef.current.bal.open = !!balconyDoorOpen;
+  }, [doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen]);
   useEffect(() => {
     doorRef.current.bed.along = doorPos?.bed ?? DOORS[0].def;
     doorRef.current.kt.along = doorPos?.kt ?? DOORS[1].def;
     doorRef.current.bath.along = doorPos?.bath ?? DOORS[2].def;
+    doorRef.current.bal.along = doorPos?.bal ?? DOORS[3].def;
   }, [doorPos]);
 
   const azRef = useRef({ az: 0 });
@@ -1036,9 +1085,15 @@ export default function HomeScene(props: HomeSceneProps) {
         doorPos?.bed ?? DOORS[0].def,
         doorPos?.kt ?? DOORS[1].def,
         doorPos?.bath ?? DOORS[2].def,
+        doorPos?.bal ?? DOORS[3].def,
       ),
-    [doorPos?.bed, doorPos?.kt, doorPos?.bath],
+    [doorPos?.bed, doorPos?.kt, doorPos?.bath, doorPos?.bal],
   );
+
+  /** 任一投影仪开着（幕布放下放电影） */
+  const projectorOn = items.some((f) => f.kind === 'projector' && f.st?.on);
+  /** 正坐着的家具（吊篮秋千摆幅加大） */
+  const sittingId = activeAct?.active && activeAct.type === 'sit' ? activeAct.itemId : null;
 
   const dragRef = useRef<DragInfo | null>(null);
   const lookRef = useRef({ on: false });
@@ -1075,7 +1130,7 @@ export default function HomeScene(props: HomeSceneProps) {
       return;
     }
     if (id.startsWith('door-')) {
-      const did = id.slice(5) as 'bed' | 'kt' | 'bath';
+      const did = id.slice(5) as 'bed' | 'kt' | 'bath' | 'bal';
       const d = DOORS.find((x) => x.id === did);
       if (!d) return;
       const r = resolveDoorPos(did, d.axis === 'z' ? x : z, winPosRef.current, doorPosRef.current);
@@ -1097,6 +1152,7 @@ export default function HomeScene(props: HomeSceneProps) {
 
   return (
     <Canvas
+      gl={{ preserveDrawingBuffer: true }}
       shadows="soft"
       dpr={[1, 1.75]}
       camera={{ fov: 48, near: 0.1, far: 80, position: [0, 6.2, 7.4] }}
@@ -1125,6 +1181,8 @@ export default function HomeScene(props: HomeSceneProps) {
         wallColK={wallColK}
         floorColB={floorColB}
         wallColB={wallColB}
+        floorColBal={floorColBal}
+        wallColBal={wallColBal}
         ceilCol={ceilCol}
         ceilColBed={ceilColBed}
         ceilColK={ceilColK}
@@ -1134,9 +1192,11 @@ export default function HomeScene(props: HomeSceneProps) {
         doorOpen={doorOpen}
         kitchenDoorOpen={kitchenDoorOpen}
         bathDoorOpen={bathDoorOpen}
+        balconyDoorOpen={balconyDoorOpen}
         onToggleDoor={onToggleDoor}
         onToggleKitchenDoor={onToggleKitchenDoor}
         onToggleBathDoor={onToggleBathDoor}
+        onToggleBalconyDoor={onToggleBalconyDoor}
         focusRef={focusRef}
         floorTex={floorTex}
         wallTex={wallTex}
@@ -1161,13 +1221,23 @@ export default function HomeScene(props: HomeSceneProps) {
             cooking={activeAct?.type === 'cook' && activeAct.active && activeAct.itemId === item.id}
             playing={activeAct?.type === 'play' && activeAct.active && activeAct.itemId === item.id}
             meal={!!mealTableId && mealTableId === item.id}
+            projectorOn={projectorOn}
+            sitting={sittingId === item.id}
           />
         );
       })}
 
       <Char3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} carryRef={carryRef} />
       <Char3D rt={taRT} who="partner" style={charStyle} />
+      {guestRT?.current && (
+        <Char3D rt={guestRT.current} who="guest" style={charStyle} guestName={guestName ?? undefined} />
+      )}
+      {pet && petRT && (
+        <Pet3D pet={pet} rt={petRT} itemsRef={itemsRef} feedRef={petFeedRef} onTap={onPetTap} />
+      )}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
+      <WeatherFX kind={weatherFx ?? 'clear'} win={win} winPos={winPos} />
+      <SpeakerNotes items={items} active={!!musicPlaying} />
       <EditCameraKick mode={mode} />
       <ZoomPoker zoomCmd={zoomCmd} />
       <NudgePoker moveCmd={moveCmd} onNudge={onNudge} />
@@ -1205,6 +1275,7 @@ export default function HomeScene(props: HomeSceneProps) {
         actRef={actRef}
         wallBoxes={wallBoxes}
         instRef={instRef}
+        guestRT={guestRT}
       />
       <PointerRig
         mode={mode}
@@ -1222,5 +1293,175 @@ export default function HomeScene(props: HomeSceneProps) {
         onDragSelect={onDragSelect}
       />
     </Canvas>
+  );
+}
+
+// ---------------- 天气特效：窗外雨/雪（v5.7 F4 真实天气联动） ----------------
+
+/** 雨丝贴图（竖向细条纹，循环下滚） */
+function makeRainTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 256;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, 128, 256);
+  for (let i = 0; i < 60; i++) {
+    const x = Math.random() * 128;
+    const y = Math.random() * 256;
+    const len = 10 + Math.random() * 16;
+    ctx.strokeStyle = `rgba(190,214,235,${0.35 + Math.random() * 0.4})`;
+    ctx.lineWidth = 1 + Math.random();
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - 2.5, y + len);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 3);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** 雪点贴图（圆形柔边白点） */
+function makeSnowTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 256;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, 128, 256);
+  for (let i = 0; i < 70; i++) {
+    const x = Math.random() * 128;
+    const y = Math.random() * 256;
+    const r = 1.6 + Math.random() * 2.8;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.95)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 3);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * 窗外天气幕帘：每扇窗户外侧挂一片循环滚动的雨/雪贴图（廉价高效，透过玻璃看雨最真）。
+ * kind = 'clear' 时整组隐藏。
+ */
+function WeatherFX({
+  kind,
+  win,
+  winPos,
+}: {
+  kind: 'rain' | 'snow' | 'clear';
+  win?: boolean[];
+  winPos?: number[];
+}) {
+  const rainTex = useMemo(() => makeRainTexture(), []);
+  const snowTex = useMemo(() => makeSnowTexture(), []);
+  useFrame((_, dt) => {
+    if (kind === 'clear') return;
+    const tex = kind === 'snow' ? snowTex : rainTex;
+    const speed = kind === 'snow' ? 0.055 : 0.29;
+    tex.offset.y = (tex.offset.y - dt * speed) % 1;
+    tex.offset.x = kind === 'snow' ? Math.sin(performance.now() / 2600) * 0.06 : 0;
+  });
+  const activeTex = kind === 'snow' ? snowTex : kind === 'rain' ? rainTex : null;
+  return (
+    <group>
+      {WINS.map((w, i) => {
+        const along = winPos?.[i] ?? w.def;
+        const x = w.axis === 'z' ? along : w.at + w.side * 0.5;
+        const z = w.axis === 'z' ? w.at + w.side * 0.5 : along;
+        const ry = w.ry;
+        return (
+          <mesh key={i} position={[x, 1.55, z]} rotation={[0, ry, 0]} visible={kind !== 'clear'}>
+            <planeGeometry args={[1.9, 2.5]} />
+            {activeTex ? (
+              <meshBasicMaterial
+                map={activeTex}
+                transparent
+                opacity={kind === 'snow' ? 0.85 : 0.75}
+                depthWrite={false}
+                toneMapped={false}
+              />
+            ) : (
+              <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+            )}
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
+// ---------------- 音响放歌：音箱上方飘音符（v5.7 F3） ----------------
+
+/** 音符贴图（canvas 画 ♪♫） */
+function makeNoteSprite(ch: string): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 96;
+  cv.height = 96;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, 96, 96);
+  ctx.fillStyle = '#c98a9e';
+  ctx.font = '60px serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(ch, 48, 52);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function SpeakerNotes({ items, active }: { items: FurnitureItem[]; active: boolean }) {
+  const speakers = useMemo(() => items.filter((f) => f.kind === 'speaker' || f.kind === 'radio'), [items]);
+  const noteTex = useMemo(() => [makeNoteSprite('♪'), makeNoteSprite('♫')], []);
+  const sprites = useRef<(THREE.Sprite | null)[]>([]);
+  const seeds = useMemo(() => [0, 0.3, 0.6, 0.15, 0.45, 0.8], []);
+  useFrame((state) => {
+    const t = state.clock.elapsedTime;
+    sprites.current.forEach((sp, i) => {
+      if (!sp) return;
+      const si = Math.floor(i / 3);
+      const sp3 = i % 3;
+      const host = speakers[si];
+      if (!host || !active) {
+        sp.visible = false;
+        return;
+      }
+      const s = seeds[i % seeds.length];
+      const life = (t * 0.55 + s) % 1;
+      sp.visible = true;
+      sp.position.set(
+        host.x + Math.sin(s * 21 + t * 1.2) * 0.16,
+        1.5 + sp3 * 0.25 + life * 0.55,
+        host.z + Math.cos(s * 15 + t * 0.9) * 0.16,
+      );
+      sp.scale.setScalar(0.22 + life * 0.1);
+      (sp.material as THREE.SpriteMaterial).opacity = Math.max(0, 0.9 * (1 - life));
+    });
+  });
+  return (
+    <group>
+      {Array.from({ length: speakers.length * 3 }, (_, i) => (
+        <sprite
+          key={i}
+          ref={(el) => {
+            sprites.current[i] = el;
+          }}
+          visible={false}
+        >
+          <spriteMaterial map={noteTex[i % 2]} transparent depthWrite={false} />
+        </sprite>
+      ))}
+    </group>
   );
 }

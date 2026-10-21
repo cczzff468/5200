@@ -68,8 +68,8 @@ interface HomePayload {
   ceilColB?: string;
   /** 每扇窗沿墙坐标（≤12 个） */
   winPos?: number[];
-  /** 三扇门沿墙坐标 */
-  doorPos?: { bed?: number; kt?: number; bath?: number };
+  /** 四扇门沿墙坐标 */
+  doorPos?: { bed?: number; kt?: number; bath?: number; bal?: number };
   /** 第一人称视角 */
   fp?: boolean;
   /** 小人画风 */
@@ -80,6 +80,15 @@ interface HomePayload {
   outfit?: number;
   /** 做饭系统：一桌好菜已上桌 */
   mealReady?: boolean;
+  /** 做饭小游戏：本次上桌的菜名 */
+  mealName?: string;
+  /** 宠物系统：已领养的宠物 */
+  pet?: { sp?: string; name?: string; x?: number; z?: number; fedAt?: number };
+  /** 阳台门开态（v5.7） */
+  balconyDoorOpen?: boolean;
+  /** 阳台地板/墙自定义色 */
+  floorColBal?: string;
+  wallColBal?: string;
   /** 地板纹理 */
   floorTex?: string;
   /** 墙纸纹理 */
@@ -132,6 +141,7 @@ const DIRS = new Set(['up', 'down', 'left', 'right']);
 const ACT_TYPES = new Set([
   'sit', 'lie', 'bath', 'shower', 'watch', 'work',
   'cook', 'eat', 'drink', 'dress', 'play', 'makeup', 'mirror',
+  'game', 'hotpot',
 ]);
 const FLOOR_TEXES = new Set(['plain', 'wood', 'check']);
 const WALL_TEXES = new Set(['plain', 'dot', 'stripe']);
@@ -209,7 +219,8 @@ function normalizeHome(raw: unknown): HomePayload | null {
     const bed = clean(d.bed);
     const kt = clean(d.kt);
     const bath = clean(d.bath);
-    if (bed != null || kt != null || bath != null) doorPos = { bed, kt, bath };
+    const bal = clean(d.bal);
+    if (bed != null || kt != null || bath != null || bal != null) doorPos = { bed, kt, bath, bal };
   }
   // 「我」正在进行的家具动作（类型白名单 + 家具 id 截断；不合法直接丢）
   let act: HomePayload['act'] | undefined;
@@ -249,6 +260,21 @@ function normalizeHome(raw: unknown): HomePayload | null {
     nightAuto: r.nightAuto !== false,
     outfit: clampInt(r.outfit, 0, 9) ?? undefined,
     mealReady: r.mealReady === true,
+    mealName: cleanStr(r.mealName, 16) || undefined,
+    pet: (() => {
+      if (!r.pet || typeof r.pet !== 'object') return undefined;
+      const p = r.pet as Record<string, unknown>;
+      const sp = p.sp === 'cat' || p.sp === 'dog' ? p.sp : undefined;
+      const name = cleanStr(p.name, 8);
+      const x = clampCoord(p.x);
+      const z = clampCoord(p.z);
+      if (!sp || !name || x == null || z == null) return undefined;
+      const fedAt = typeof p.fedAt === 'number' && Number.isFinite(p.fedAt) ? Math.round(p.fedAt) : undefined;
+      return { sp, name, x, z, fedAt };
+    })(),
+    balconyDoorOpen: r.balconyDoorOpen === true,
+    floorColBal: cleanHex(r.floorColBal),
+    wallColBal: cleanHex(r.wallColBal),
     floorTex: typeof r.floorTex === 'string' && FLOOR_TEXES.has(r.floorTex) ? r.floorTex : undefined,
     wallTex: typeof r.wallTex === 'string' && WALL_TEXES.has(r.wallTex) ? r.wallTex : undefined,
     act,

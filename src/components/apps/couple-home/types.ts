@@ -94,7 +94,20 @@ export type FurnitureKind =
   | 'wallShelf'
   | 'bathCurtain'
   | 'toiletries'
-  | 'scale';
+  | 'scale'
+  // ---- v5.7 拾光扩展（用户选择清单 J1~J11） ----
+  | 'projector'
+  | 'screen'
+  | 'swingChair'
+  | 'shoeCabinet'
+  | 'wallArt'
+  | 'humidifier'
+  | 'wineCabinet'
+  | 'chessTable'
+  | 'hotpotTable'
+  | 'hammock'
+  | 'gameConsole'
+  | 'flowerStand';
 
 /** 家具分类（商店栏的 tab） */
 export type FurnCategory =
@@ -128,8 +141,8 @@ export interface FurnitureItem {
   st: FurnitureState;
 }
 
-/** 房间标识（小人在哪个房间，商店家具就添到哪个房间） */
-export type RoomId = 'lr' | 'br' | 'kt' | 'ba';
+/** 房间标识（小人在哪个房间，商店家具就添到哪个房间；bal = 阳台 v5.7） */
+export type RoomId = 'lr' | 'br' | 'kt' | 'ba' | 'bal';
 
 /** 家具状态（按需可选字段） */
 export interface FurnitureState {
@@ -155,9 +168,13 @@ export interface FurnitureState {
   fedAt?: number;
   /** 咖啡机：煮咖啡中 */
   brewing?: boolean;
+  /** 火锅桌：炉火开着（汤底沸腾冒泡）——复用 on 亦可，此字段预留 */
+  simmer?: boolean;
+  /** 棋盘桌：上一局的残局（编辑模式存档不丢） */
+  chess?: number[];
 }
 
-/** 小人身份 */
+/** 小人身份（guest = 邀请来做客的 AI 联系人，v5.7） */
 export type CharId = 'me' | 'partner';
 
 /** 小人朝向（持久化 4 向） */
@@ -239,6 +256,15 @@ export interface HomeState {
   wallTex?: 'plain' | 'dot' | 'stripe';
   /** 做饭系统：一桌好菜已上桌（去餐桌「开饭」） */
   mealReady?: boolean;
+  /** 做饭小游戏：本次上桌的菜名（端上桌显示 + 开饭 toast） */
+  mealName?: string;
+  /** 宠物系统：已领养的宠物（位置持久化；缺省 = 未领养） */
+  pet?: { sp: 'cat' | 'dog'; name: string; x: number; z: number; fedAt?: number };
+  /** 阳台门开态（v5.7 阳台房间） */
+  balconyDoorOpen?: boolean;
+  /** 阳台地板/墙自定义色 */
+  floorColBal?: string;
+  wallColBal?: string;
 }
 
 /** 家具目录条目（静态配置，不持久化） */
@@ -310,6 +336,10 @@ export interface CatalogEntry {
     watch?: { y: number; dz?: number };
     /** 可用：点击出「上网」按钮，小人坐到电脑前敲键盘（屏幕自动亮起，按钮变「休息一下」） */
     work?: { y: number; dz?: number };
+    /** 打游戏：小人走到主机前坐下开玩（同 work 的坐姿；屏幕/电视自动亮） */
+    game?: { y: number; dz?: number };
+    /** 吃火锅：小人坐到火锅桌边涮火锅（炉火自动开，吃到饱手动起身） */
+    hotpot?: { y: number; dx?: number; dz?: number; out?: [number, number] };
   };
   /** 是灯具：开着时附加点光（y 为相对家具原点的灯高） */
   light?: { y: number; color?: string; intensity?: number };
@@ -333,7 +363,7 @@ export interface CharRT {
 
 /**
  * 小人姿势：站立 / 坐下 / 躺床 / 泡澡（脱衣坐浴缸）/ 淋浴（脱衣站淋浴房）/
- * 做饭 / 吃饭 / 喝东西 / 弹琴 / 弹吉他 / 化妆 / 照镜子
+ * 做饭 / 吃饭 / 喝东西 / 弹琴 / 弹吉他 / 化妆 / 照镜子（game 复用 sit）
  */
 export type CharPose =
   | 'stand'
@@ -367,7 +397,9 @@ export interface CharAction {
     | 'play'
     | 'makeup'
     | 'mirror'
-    | 'dress';
+    | 'dress'
+    | 'game'
+    | 'hotpot';
   itemId: string;
   /** 目标落点（世界坐标）与朝向、坐垫高度 */
   tx: number;
