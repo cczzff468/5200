@@ -21179,3 +21179,22 @@ Stage Summary:
 - Web Speech 静音设备（国内安卓）自动云端兜底，语音功能「一定有声音」
 - 离线识别完整落地：ModelScope 直链 + Cache API 一次下载 + MEMFS 注入 + SenseVoice int8 本地推理（断网可用，识别质量实测准确），云端 STT 自动兜底
 - 涉及文件：lib/ios/{system-notify(新),offline-asr(新),island-notify,builtin-voices,tts-client,stt-client}.ts、lib/server/{push-store(新),cloud-tts(新)}.ts、api/{push,chat/bg,tts}/route.ts、components/apps/{settings,chat}.tsx、scripts/copy-asr.mjs(新)、public/asr/*(新)、.env.example(新)、package.json(asr:copy)
+
+---
+Task ID: remove-offline-tts-voice-pack
+Agent: Z.ai Code (main)
+Task: 用户反馈「免费语音包（离线神经网络）一直下载不了」，要求删除新添加的内置离线音色功能
+
+Work Log:
+- grep 定位全部引用：settings.tsx（声线卡片/语音包管理 UI + previewNeuralVoice/selectNeuralVoice）、tts-client.ts（neural: 播放分支）、builtin-voices.ts（NEURAL_TTS_VOICES/isNeuralVoiceId/resolveNeuralSid）、offline-tts.ts（整个模块）、public/tts/（sherpa-onnx WASM worker + 引擎 + 41MB wasm）
+- 删除 src/lib/ios/offline-tts.ts、public/tts/ 整个目录（offline-tts-worker.js、sherpa-onnx-tts-engine.js、sherpa-onnx-wasm-main-tts.wasm）
+- builtin-voices.ts：移除 neural 声线段落（NeuralVoicePreset/NEURAL_TTS_VOICES/isNeuralVoiceId/resolveNeuralSid），6 个 Web Speech 内置声线不受影响
+- tts-client.ts：移除 neural 导入与「免费离线语音包」本地合成播放分支（Web Speech / 云端兜底链路保持原样）
+- settings.tsx：移除 offline-tts 导入、useOfflineTts 状态、离线声线卡片（灵音/清越/沉璧/青川）、「免费语音包（离线神经网络）」下载/进度/删除区块
+- 改动文件 eslint 通过；agent-browser 端到端验证：解锁→设置→语音 API，确认 neuralGone/packGone/sixBuiltinOk/previewBtn 全部通过，刷新后 console 无错误
+- git commit e4a9a98 并 push 到 origin/main 成功
+
+Stage Summary:
+- 免费离线语音包功能已完全移除（原下载源 hf-mirror/huggingface 在用户网络不可达，40MB 停在 0%）
+- 语音 API 设置页恢复为简约形态：仅 6 个内置声线（晓月/小溪/云舒/子川/墨阳/辰风）+ 试听 + 我的音色
+- 历史存档若存有 neural:* voiceId，resolveBuiltinPreset 启发式会安全回退默认声线，不会报错
