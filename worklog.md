@@ -21198,3 +21198,23 @@ Stage Summary:
 - 免费离线语音包功能已完全移除（原下载源 hf-mirror/huggingface 在用户网络不可达，40MB 停在 0%）
 - 语音 API 设置页恢复为简约形态：仅 6 个内置声线（晓月/小溪/云舒/子川/墨阳/辰风）+ 试听 + 我的音色
 - 历史存档若存有 neural:* voiceId，resolveBuiltinPreset 启发式会安全回退默认声线，不会报错
+
+---
+Task ID: batch-landscape-moments-ui
+Agent: Z.ai Code (main)
+Task: ①离线识别按钮方形圆角+文字单行 ②通知页隐藏推送订阅AbortError报错 ③修复AI反复说「发了朋友圈快去看」 ④横屏视口手机全屏 ⑤拾光小屋可添加内容调研
+
+Work Log:
+- settings.tsx OfflineAsrSection：下载按钮 rounded-full→rounded-xl + whitespace-nowrap，说明文字移至按钮下方；删除模型按钮同步 rounded-xl
+- settings.tsx pushStatusText：subscribe-failed 且 detail 命中 /aborterror|push service error|registration failed/i 时返回空串；渲染处改为「有文案才显示」，不再回退显示原始状态码
+- moments.ts buildMomentsChatBlock：注入块末尾追加【动态提及频率硬规则】（同一条动态最多主动提一次/对方回应过后严禁催看/没新动态不翻旧账）——sms/微信/QQ/电话/主动消息五个注入口全部生效
+- PhoneShell.tsx：fit 增加 landscape（innerWidth>innerHeight）；横屏时占位盒宽高互换（FRAME_H×s, FRAME_W×s）、旋转层 translate(-50%,-50%) rotate(90deg) scale(s) 绕中心天然居中、机身固定 390×844 带边框；竖屏路径零改动；壳内 JSX 抽取为 shellInner 横竖共用；底部边缘手势旋转感知（横屏=屏左缘右滑开多任务）
+- shell-scale.ts：新增 rotated 标志；HomeScreen.tsx：主屏翻页手势前进轴交换（swipeX/swipeY helper）、claimSwipe 轨道宽取旋转后 bbox 高、rowCap 测量旋转感知
+- 浏览器验证：1200×560 横屏→手机横躺铺满全屏+设置 App 可点击打开；500×900 竖屏回归正常；离线识别按钮方形圆角单行；注入 ios-push-status=subscribe-failed(AbortError) 后通知页不再显示该报错且保留重试链接；console 无错误
+- 拾光小屋调研：遍历 couple-home/catalog.ts（~90 件家具/4 房间/13 种交互）与 couple-space.tsx 子页清单，整理可添加功能/家具/优化建议清单交用户选择
+- commit 9f6098d 并 push 成功
+
+Stage Summary:
+- 横屏全屏为「机身旋转 90° 铺满」方案：视觉横放、点击/滚动天然可用；主屏翻页与多任务手势已做轴交换适配；编辑模式图标拖拽的视口映射未适配（横屏下建议竖屏编辑，属已知小限制）
+- 朋友圈重复催看为 prompt 层修复：注入块明令「同一条动态最多提一次、对方看过后严禁催看」
+- 拾光小屋建议清单（功能：宠物/AI同框/真实天气/昼夜自动/音响放歌/做饭小游戏/拍照模式/访客/成就/家具搜索；家具：投影仪/吊篮秋千/鞋柜/壁画/加湿器/游戏机/棋盘桌/火锅桌/吊床/阳台；优化：户型模板/截图分享/小人自定义）等待用户勾选
