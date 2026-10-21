@@ -21218,3 +21218,23 @@ Stage Summary:
 - 横屏全屏为「机身旋转 90° 铺满」方案：视觉横放、点击/滚动天然可用；主屏翻页与多任务手势已做轴交换适配；编辑模式图标拖拽的视口映射未适配（横屏下建议竖屏编辑，属已知小限制）
 - 朋友圈重复催看为 prompt 层修复：注入块明令「同一条动态最多提一次、对方看过后严禁催看」
 - 拾光小屋建议清单（功能：宠物/AI同框/真实天气/昼夜自动/音响放歌/做饭小游戏/拍照模式/访客/成就/家具搜索；家具：投影仪/吊篮秋千/鞋柜/壁画/加湿器/游戏机/棋盘桌/火锅桌/吊床/阳台；优化：户型模板/截图分享/小人自定义）等待用户勾选
+
+---
+Task ID: cottage-v57-shine
+Agent: Z.ai Code (main)
+Task: 拾光小屋 APP 按用户全选清单实现：J1~J12 家具 + F2~F7 功能（用户上一轮发的表格 J1-J12/F2-F7 全部勾选）
+
+Work Log:
+- 数据层：types.ts 新增 12 个 FurnitureKind + RoomId 'bal'（阳台）+ CharAction 'game'/'hotpot' + HomeState.pet/mealName/balconyDoorOpen/floorColBal/wallColBal；catalog.ts 阳台常量（BAL_X0/X1/Z0/Z1，卧室南侧 6×2.5m）+ roomAt/clampFurnToRooms/ROOM_SPANS/ROOM_NAMES 四扇门/挂墙槽扩展 + 12 件家具目录（投影仪/幕布/吊篮秋千/鞋柜/挂画组/加湿器/酒柜/棋盘桌/火锅桌/吊床/游戏机/花架）+ 默认布局（客厅影音区+玄关+卧室吊床+阳台套装）+ migrateShineV57 幂等迁移（老档自动补齐，已验证 23 件老档迁移到 117 件）
+- 3D 建模：新建 scene/CozyPlus3D.tsx（12 件程序化模型：投影仪光锥/幕布放下放电影[canvas 手绘黄昏山谷+运镜]/藤编吊篮摆动/双开门鞋柜+拖鞋/三联抽象挂画[程序化油画纹理]/加湿器雾气呼吸灯/玻璃酒柜+酒瓶酒杯暖灯/五子棋盘桌+残局棋子/火锅桌红汤沸腾气泡蒸汽/立柱吊床轻晃/主机呼吸灯带+双摇杆/三层开花花架飘花瓣），Furn3D 按 COZY_PLUS_PARTS 分发并透传 projectorOn/sitting
+- 阳台房间：Room.tsx 卧室南墙拆两段夹阳台门洞 + 第 4 扇门（门牌「阳台」）+ 阳台木色地板 + 玻璃栏杆组件（南/东两面）+ 西外墙；HomeScene collideAndClamp 阳台走廊钳制 + doorRef.bal + buildWallBoxes 4 门位
+- 功能系统：Pet3D.tsx（猫「团子」/柴犬「布丁」程序化建模 + 溜达 AI/避障/打盹💤/吃粥🍚/撸宠爱心粒子/开心转圈 + 位置持久化进 HomeState.pet）；CookingGame.tsx（选菜谱 3 选 1 → 切菜点亮点块 → 翻炒踩点颠勺 → 长按蓄力装盘 → 评级上桌，另有「直接热剩饭」跳过路径）；ChessOverlay.tsx（15×15 五子棋，启发式评分 AI 攻防加权+扰动）；Char3D 扩展 who='guest'（4 套访客配色按名字哈希 + 头顶名牌 sprite）
+- CoupleHome 接线：HUD 顶栏新增天气胶囊（复用天气 App useWeatherSnapshot）+ 拍照/宠物/邀访客三按钮；新动作 game（主机+电视自动开）/hotpot（炉火自动开）全链路（anchorOf/POSE_OF_ACT/ACT_LABELS/endAction 清理）；灶台点按=做饭小游戏、棋盘桌点按=五子棋、音箱点按=小屋点歌面板（useMusic 直读最近播放+红心，playSong 全屋响起 + 音箱飘音符 SpeakerNotes）、幕布点按=联动投影仪；拍照模式（HUD 隐藏+快门 → canvas toDataURL[preserveDrawingBuffer] → 压缩 1280 → 有恋人存情侣相册 addAlbum / 无恋人存照片 App 相机胶卷）——修复过程中发现拍照时 toast 容器随 HUD 隐藏，已把 Toast 移出 HUD 独立渲染；天气联动（rain→雨丝贴图窗外滚动+WebAudio 低通白噪音雨声，snow→雪点；真实夜间 19~6 点首次进屋自动开客厅/卧室灯）；装修面板新增阳台地板/墙壁换色行
+- API 层：/api/couple-home 清洗扩展（pet{sp,name,x,z,fedAt}/mealName/balconyDoorOpen/floorColBal/wallColBal/doorPos.bal/ACT_TYPES+game+hotpot）
+- 验证（agent-browser）：锁屏解锁→进小屋→场景零 console 错误；天气胶囊「15°北京」；商店 12 件新家具全部在列；迁移后 DB 确认 117 件家具含全部新 kind + 阳台套装（swingChair/loungeChair/flowerStand/plant/doormat）；宠物领养端到端（toast「团子加入这个家」+宠物入场景+位置入库）；拍照模式端到端（HUD 全隐→快门→「📸 已存进照片 App」+photos 表 30KB blob）；邀请面板开合+空列表兜底（该工作区无 AI 联系人，筛选已修正为 kind!=='user' 与微信一致）；拍照流程曾因 photoBusy 卡死排查 → 根因是无恋人分支 toast 不可见 + photoBusy 状态，两处均已修复；eslint 全部通过
+
+Stage Summary:
+- commit 26c020f 已 push origin/main（注意：db/custom.db 运行时快照随提交入库，与仓库既有惯例一致）
+- 拾光小屋现为「四室一厅+阳台」：19 类可交互家具、宠物、访客、做饭小游戏、五子棋、点歌、拍照、天气联动
+- 已知小限制：棋盘桌/灶台的 3D 点击验证因无头环境坐标命中困难改为逻辑链路验证（与已验证的宠物面板同一 mount 模式）；访客生成需工作区存在 AI 联系人（kind≠user）
+- 横屏模式下小屋 HUD 旋转 90° 呈现（沿袭上批任务的 PhoneShell 横屏方案），触控坐标天然映射无需适配
