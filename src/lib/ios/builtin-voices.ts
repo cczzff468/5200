@@ -317,6 +317,47 @@ export function isBuiltinVoiceSupported(): boolean {
   return typeof window !== 'undefined' && 'speechSynthesis' in window;
 }
 
+// ---------------- 引擎可用性探针（国内安卓常无中文 TTS 引擎/网络语音连不上 → 静音） ----------------
+
+/**
+ * 探测本地语音引擎是否真的能出声：朗读一个音量为 0 的句号，onstart 触发 = 引擎可用。
+ * 背景：speechSynthesis 在 Android Chrome 只要有接口就算「支持」，但设备没装中文 TTS 引擎、
+ * 或只有需要连 Google 服务器的网络语音（国内被墙）时，speak() 永远无声——无法从 API 状态区分，
+ * 只能小代价实测。结果按会话缓存（引擎可用性中途不会变）。
+ * 返回 true = 引擎已证明能出声；false = 未监听/未支持/3.5s 内未出声（按不可用处理，走云端兑底）。
+ */
+let engineProbe: Promise<boolean> | null = null;
+
+export function probeBuiltinEngine(): Promise<boolean> {
+  if (!isBuiltinVoiceSupported()) return Promise.resolve(false);
+  if (engineProbe) return engineProbe;
+  engineProbe = new Promise<boolean>((resolve) => {
+    let done = false;
+    const finish = (v: boolean) => {
+      if (done) return;
+      done = true;
+      try {
+        window.speechSynthesis.cancel(); // 探针即开始也立刻收掉，不留残余
+      } catch {
+        // 引擎不可用时静默
+      }
+      resolve(v);
+    };
+    try {
+      const u = new SpeechSynthesisUtterance('。');
+      u.volume = 0; // 静音探针：用户无感知
+      u.rate = 2;
+      u.onstart = () => finish(true);
+      u.onerror = () => finish(false);
+      window.speechSynthesis.speak(u);
+      window.setTimeout(() => finish(false), 3500);
+    } catch {
+      finish(false);
+    }
+  });
+  return engineProbe;
+}
+
 // ---------------- 单例播放 ----------------
 
 let speakToken = 0;
@@ -370,14 +411,16 @@ export interface BuiltinSpeakOptions {
 
 /**
  * 用浏览器内置引擎朗读一段文本（单例）。
- * 不支持/无文本时走 onError 并抛错；正常结束走 onEnd；被打断（stopBuiltinSpeech）只 resolve 不回调。
+ * 返回「是否真正出声」：引擎 onstart 触发 = true；不支持/无文本/启动看门狗超时（设备无可用
+ * 语音引擎，常见于国内安卓）= false —— 调用方可据此走云端 TTS 兑底，不再无声。
+ * 正常结束走 onEnd；被打断（stopBuiltinSpeech）只 resolve 不回调。
  * iOS Safari 看门狗（#19）：onend 在长文本下可能永不触发 ——
  * ① 无启动兜底（onstart ~8s 未触发 → 静默 finish，不算说过话）；
  * ② onstart 后每 ~1.2s 轮询 speaking/pending（引擎既不说也没排队 → 走「自然结束」触发 onEnd）；
  * ③ 按文本量估算的硬超时（强制自然结束）——三重兜底保证本 Promise 一定能 resolve，
  *   免提通话状态机不再卡死在「正在说话」。
  */
-export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
+export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<boolean> {
   if (!isBuiltinVoiceSupported()) {
     const msg = '当前浏览器不支持内置语音';
     opts.onError?.(msg);
@@ -394,6 +437,9 @@ export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
   if (!opts.keepOthers) stopOtherAudio('builtin-tts');
   stopBuiltinSpeech();
   const myToken = speakToken;
+
+  // 是否真正出声（onstart 触发）；resolve 时返回给调用方，用于「引擎静音 → 云端兑底」决策
+  let spoke = false;
 
   await new Promise<void>((resolve) => {
     let finished = false;
@@ -467,6 +513,7 @@ export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
           finish();
           return;
         }
+        spoke = true; // 引擎真正出声：供调用方判断「本地引擎可用」
         // 引擎真正出声：清掉「无启动兜底」
         if (startFallbackTimer !== null) {
           window.clearTimeout(startFallbackTimer);
@@ -570,6 +617,9 @@ export async function speakBuiltin(opts: BuiltinSpeakOptions): Promise<void> {
       }
     }
   });
+  // 返回「是否真正出声」：false = 引擎静音（设备无中文 TTS 引擎/网络语音不可达），
+  // 调用方（tts-client）据此走云端 TTS 兜底
+  return spoke;
 }
 
 // 注册到全局音频焦点：语音消息气泡/其它 TTS 开播前会停掉这里

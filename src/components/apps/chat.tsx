@@ -3275,7 +3275,13 @@ function ChatView({
                     <div {...bubblePress}>
                       <VoiceMsgBubble
                         msgId={m.id}
-                        voice={m.voice}
+                        voice={{
+                          ...m.voice,
+                          // 旧存档兼容：早期内置语音条没存 synth/contactId（assistant 会话两者皆无），
+                          // 点击会被当成「我方文字转语音」走静音模拟。对方（AI）的静音语音条
+                          // 一律按内置朗读通道处理——旧消息无需迁移即可点击真实出声
+                          synth: m.voice.synth ?? (mine ? undefined : 'builtin'),
+                        }}
                         side={mine ? 'me' : 'peer'}
                         theme="im"
                         style={mine ? { backgroundColor: SELF_BLUE } : undefined}

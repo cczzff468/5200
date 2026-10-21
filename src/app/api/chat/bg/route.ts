@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import webpush from 'web-push';
+import { getVapidKeys, readPushJson, writePushJson } from '@/lib/server/push-store';
 
 /**
  * 退出网页后续复（服务端接力）：
@@ -143,52 +144,19 @@ function enqueue(sessionKey: string, texts: string[], single: boolean, title: st
   return item;
 }
 
-/* ---------------- Web Push（每条消息一条系统通知；失败静默） ---------------- */
+/* ---------------- Web Push（每条消息一条系统通知；失败静默） ----------------
+ * 存储统一走 /lib/server/push-store（双路径：.data → /tmp 兑底只读 FS；VAPID 优先环境变量） */
 
 interface PushSubLike {
   endpoint?: unknown;
   [k: string]: unknown;
 }
 
-async function readJsonFile<T>(file: string, fallback: T): Promise<T> {
-  try {
-    const { readFile } = await import('fs/promises');
-    const path = await import('path');
-    const raw = await readFile(path.join(process.cwd(), '.data', file), 'utf8');
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-async function writeJsonFile(file: string, value: unknown): Promise<void> {
-  try {
-    const { writeFile, mkdir } = await import('fs/promises');
-    const path = await import('path');
-    await mkdir(path.join(process.cwd(), '.data'), { recursive: true });
-    await writeFile(path.join(process.cwd(), '.data', file), JSON.stringify(value), 'utf8');
-  } catch {
-    // 持久化失败不阻断（推送为尽力而为）
-  }
-}
-
-async function getVapid(): Promise<{ publicKey: string; privateKey: string } | null> {
-  try {
-    const saved = await readJsonFile<{ publicKey?: string; privateKey?: string }>('vapid.json', {});
-    if (saved.publicKey && saved.privateKey) return { publicKey: saved.publicKey, privateKey: saved.privateKey };
-    const keys = webpush.generateVAPIDKeys();
-    await writeJsonFile('vapid.json', keys);
-    return { publicKey: keys.publicKey, privateKey: keys.privateKey };
-  } catch {
-    return null;
-  }
-}
-
 async function pushToSubscribers(sessionKey: string, texts: string[], title: string): Promise<void> {
   try {
-    const vapid = await getVapid();
+    const vapid = await getVapidKeys();
     if (!vapid) return;
-    const subs = await readJsonFile<PushSubLike[]>('push-subs.json', []);
+    const subs = await readPushJson<PushSubLike[]>('push-subs.json', []);
     if (!Array.isArray(subs) || subs.length === 0) return;
     const notifyTitle = title || appDefaultName(sessionKey);
     const alive: PushSubLike[] = [];
@@ -213,7 +181,7 @@ async function pushToSubscribers(sessionKey: string, texts: string[], title: str
         }
       }),
     );
-    await writeJsonFile('push-subs.json', alive);
+    await writePushJson('push-subs.json', alive);
   } catch {
     // 推送失败不影响 pending 队列（重开网页仍能拉到）
   }

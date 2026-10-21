@@ -29,6 +29,7 @@
 import { create } from 'zustand';
 import { useUI } from './store';
 import { setupPushSubscription } from './push-client';
+import { showSystemNotification } from './system-notify';
 import { wxChatFlags, qqChatFlags } from '@/lib/chat-flags';
 import { playNotifySound } from './notify-sound';
 
@@ -438,22 +439,16 @@ async function buildNotifyIcon(n: IslandNotification): Promise<string> {
 }
 
 async function postWebNotification(n: IslandNotification): Promise<void> {
-  try {
-    const icon = await buildNotifyIcon(n);
-    const notif = new Notification(n.title, {
-      body: n.subtitle ? `【${n.subtitle}】${n.body}` : n.body,
-      tag: n.id, // 每条消息一个独立系统通知（不再按会话替换合并）
-      icon,
-      silent: true,
-    });
-    notif.onclick = () => {
-      window.focus();
-      navigateToNotifyTarget(n.target);
-      notif.close();
-    };
-  } catch {
-    // 构造失败（部分浏览器限制）静默降级为应用内弹窗
-  }
+  // SW showNotification 优先（Android Chrome 页面里无 Notification 构造器，直接 new 会抛
+  // Illegal constructor——必须走 Service Worker 通道）；桌面无 SW 时自动落到页面构造器兜底；
+  // 两条通道都不可用时返回 null → 静默降级为应用内灵动岛弹窗（已在 pushChatNotification 弹过）
+  await showSystemNotification(n.title, {
+    body: n.subtitle ? `【${n.subtitle}】${n.body}` : n.body,
+    tag: n.id, // 每条消息一个独立系统通知（不再按会话替换合并）
+    icon: await buildNotifyIcon(n),
+    badge: NOTIFY_APP_ICON[n.app],
+    onclick: () => navigateToNotifyTarget(n.target),
+  }).catch(() => null);
 }
 
 function maybeWebNotification(n: IslandNotification): void {

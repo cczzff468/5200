@@ -15,6 +15,8 @@ import { FISH_VOICE_PREFIX, SAFE_VOICE_BY_PROVIDER, type TtsConfig, useSettings 
 import {
   isBuiltinVoiceSupported,
   isBuiltinVoiceId,
+  probeBuiltinEngine,
+  resolveBuiltinPreset,
   speakBuiltin,
   stopBuiltinSpeech,
   BUILTIN_DEFAULT_FEMALE,
@@ -148,6 +150,12 @@ let currentUrl: string | null = null;
 let currentFinish: (() => void) | null = null;
 
 /**
+ * 本地内置引擎是否已证明「哑火」（无中文 TTS 引擎/网络语音不可达，国内安卓常见）：
+ * 首次探针/播放确认静音后置位，本会话后续直接走云端兜底（不再重复探测白等）。
+ */
+let builtinEngineBroken = false;
+
+/**
  * 停止当前播放并释放资源（页面销毁/挂断/切聊天/新一轮播放前调用）。
  * API 音频与内置朗读引擎（speechSynthesis）一并【立刻】截断——挂断电话后声音必须立即停止（用户反馈），
  * 内置引擎此前只被各播放函数自行管理、挂断时漏停，这里统一收口。
@@ -194,7 +202,7 @@ export interface SpeakOptions {
   /** 真正开始出声前的回调（UI 置为「播放中」用）；播放失败不触发 */
   onStart?: () => void;
   /** 播放进度回调（0~1，逐字字幕同步用）：API 音频走 timeupdate，内置引擎走 boundary 事件；
-   *  引擎不报进度时由内置估算兑底（按字数×语速推算），不触发则调用方自行处理 */
+   *  引擎不报进度时由内置估算兜底（按字数×语速推算），不触发则调用方自行处理 */
   onProgress?: (ratio: number) => void;
   /** 播放自然结束后的回调（被 stopSpeaking 打断时不触发）；失败仍会抛错不走这里 */
   onEnd?: () => void;
@@ -209,8 +217,10 @@ export interface SpeakOptions {
 /**
  * 播放一段文本（单例：自动停掉上一段）：
  * - 服务商 = 内置语音，或 API 未配置 → 浏览器本地引擎（免费、零配置）；
+ *   本地引擎「哑火」（设备无中文 TTS / 网络语音被墙，国内安卓常见）→ 自动降级云端合成
+ *   （provider='server'，零配置），保证一定有声音；
  * - 否则走用户语音 API（经本站代理 /api/tts）。
- * 失败抛错（含服务商中文文案）——调用方决定是否回退服务端兜底；文字聊天不受影响。
+ * 本地+云端都失败才抛错（含服务商中文文案）——调用方决定是否回退服务端兜底；文字聊天不受影响。
  */
 export async function speakUserTts(opts: SpeakOptions): Promise<void> {
   const cfg = useSettings.getState().ttsConfig;
@@ -220,7 +230,7 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
     throw new Error('没有可朗读的文本');
   }
 
-  // ---- 进度包装：真实进度（timeupdate / boundary）优先；启动后 600ms 仍无真实进度则按字数×语速估算兑底 ----
+  // ---- 进度包装：真实进度（timeupdate / boundary）优先；启动后 600ms 仍无真实进度则按字数×语速估算兜底 ----
   const estDurationMs = Math.max(600, (cleaned.length / (3.8 * (opts.speed ?? 1))) * 1000);
   let realProgress = false;
   let fallbackTimer: number | null = null;
@@ -258,11 +268,8 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
   };
 
   try {
-  // ① 内置语音（浏览器本地引擎）：男女声线免配置
+  // ① 内置语音：本地引擎可用→本地朗读（零延迟、离线）；静音/不支持→云端兜底（零配置，一定有声音）
   if (useBuiltinEngine) {
-    if (!isBuiltinVoiceSupported()) {
-      throw new Error('当前浏览器不支持内置语音');
-    }
     const rv = await resolveVoiceForContact(opts.contactId ?? null);
     const explicit = opts.voiceId?.trim() ?? '';
     let voiceId = explicit || rv.voiceId;
@@ -270,23 +277,45 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
     if (!explicit && rv.source === 'builtin' && rv.gender) {
       voiceId = rv.gender === 'male' ? BUILTIN_DEFAULT_MALE : BUILTIN_DEFAULT_FEMALE;
     }
+    const presetGender = resolveBuiltinPreset(voiceId, rv.gender).gender;
+
     let errorMessage: string | null = null;
-    await speakBuiltin({
-      text: cleaned,
-      voiceId,
-      volume: opts.volume,
-      speed: opts.speed,
-      keepOthers: opts.keepOthers,
-      onStart: wrapped.onStart,
-      onEnd: wrapped.onEnd,
-      onProgress: wrapped.onProgress,
-      onError: (m) => {
-        errorMessage = m;
-      },
-      cancelled: opts.cancelled,
-    });
-    if (errorMessage) throw new Error(errorMessage);
-    return;
+    let spoke = false;
+    if (isBuiltinVoiceSupported() && !builtinEngineBroken && (await probeBuiltinEngine())) {
+      // 引擎可用性探针（≤3.5s，会话级缓存）：国内安卓无中文 TTS 引擎/网络语音被墙时直接跳过本地，
+      // 不再傻等 8s 启动看门狗；探针已由首次用户手势预热（模块尾部）
+      await speakBuiltin({
+        text: cleaned,
+        voiceId,
+        volume: opts.volume,
+        speed: opts.speed,
+        keepOthers: opts.keepOthers,
+        onStart: wrapped.onStart,
+        onEnd: wrapped.onEnd,
+        onProgress: wrapped.onProgress,
+        onError: (m) => {
+          errorMessage = m;
+        },
+        cancelled: opts.cancelled,
+      }).then(
+        (v) => {
+          spoke = v;
+        },
+        () => {
+          spoke = false;
+        },
+      );
+    }
+    if (spoke && !errorMessage) return;
+    // 本地引擎不出声（无中文 TTS 引擎/网络语音被墙）或播放中途报错：
+    // 标记哑火（后续播放免探测）+ 云端兜底，保证「一定有声音」；云端也失败才抛错给调用方
+    builtinEngineBroken = true;
+    try {
+      await playCloudTtsFallback(cleaned, presetGender, opts, estDurationMs, wrapped);
+      return;
+    } catch (cloudErr) {
+      throw errorMessage ? new Error(errorMessage) : cloudErr;
+    }
   }
 
   // ② 用户语音 API（MiniMax / OpenAI 兼容）
@@ -338,13 +367,26 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
     return; // 期间已有新播放/已取消：直接丢弃这段音频
   }
 
+  await playTtsAudioBlob(blob, opts, myToken, estDurationMs, wrapped);
+  // 正常播完（未被 stopSpeaking 打断）才触发 onEnd；电话的「对方讲完→回到听」状态机依赖它
+  if (myToken === playToken) wrapped.onEnd?.();
+  } finally {
+    stopFallback();
+  }
+}
+
+/**
+ * 播放一段 TTS 音频 Blob（用户 API 通道与云端兜底共用）：
+ * 进度（timeupdate 真实进度）、硬超时兜底（onended 丢失防悬挂）、令牌防旧链路触碰公共状态。
+ */
+function playTtsAudioBlob(blob: Blob, opts: SpeakOptions, myToken: number, estDurationMs: number, wrapped: SpeakOptions): Promise<void> {
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   audio.volume = opts.volume ?? 1;
   currentAudio = audio;
   currentUrl = url;
 
-  await new Promise<void>((resolve) => {
+  return new Promise<void>((resolve) => {
     let finished = false;
     // 轻量硬超时兜底（#19 同类风险）：HTMLAudioElement 的 onended 在个别引擎/流异常下也可能丢失
     // （播放卡死 → await 永久悬挂、通话状态机停在「正在说话」）——按文本量估算音频时长
@@ -375,17 +417,78 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
     audio.ontimeupdate = () => {
       const d = audio.duration;
       if (myToken === playToken && Number.isFinite(d) && d > 0) {
-        emitReal(Math.min(0.98, audio.currentTime / d));
+        wrapped.onProgress?.(Math.min(0.98, audio.currentTime / d));
       }
     };
     audio.play().catch(finish); // 自动播放策略等导致的播放失败：静默结束
     audioHardTimer = window.setTimeout(finish, estDurationMs + 15000);
   });
-  // 正常播完（未被 stopSpeaking 打断）才触发 onEnd；电话的「对方讲完→回到听」状态机依赖它
-  if (myToken === playToken) wrapped.onEnd?.();
-  } finally {
-    stopFallback();
+}
+
+/**
+ * 云端 TTS 兜底（provider='server'，零配置）：本地 speechSynthesis 哑火时拉 mp3 用 Audio 播放。
+ * 音色按声线性别映射（女→tongtong 温暖亲切 / 男→xiaochen 沉稳专业）；
+ * 进度/收尾语义与用户 API 通道完全一致，通话状态机无感切换。
+ */
+async function playCloudTtsFallback(
+  cleaned: string,
+  gender: 'male' | 'female' | null,
+  opts: SpeakOptions,
+  estDurationMs: number,
+  wrapped: SpeakOptions,
+): Promise<void> {
+  stopSpeaking();
+  if (!opts.keepOthers) stopOtherAudio('tts');
+  const myToken = playToken;
+  const cloudVoice = gender === 'male' ? 'xiaochen' : 'tongtong';
+  let res: Response;
+  try {
+    // 与主通道同款 30s 看门狗：云端合成卡死不让通话状态机无限等待
+    res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        config: { provider: 'server' },
+        voiceId: cloudVoice,
+        text: cleaned.slice(0, 900),
+        speed: opts.speed ?? 1,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (err) {
+    const name = (err as { name?: string } | null)?.name ?? '';
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    if (name === 'TimeoutError' || /timeout|timed out/i.test(msg)) {
+      throw new Error('云端语音合成超时，请稍后再试');
+    }
+    throw err;
   }
+  if (!res.ok) {
+    let msg = '云端语音生成失败';
+    try {
+      const j = (await res.json()) as { error?: string } | null;
+      if (j?.error) msg = j.error;
+    } catch {
+      // 非 JSON 错误体（网关页等）用默认文案
+    }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  if (myToken !== playToken || opts.cancelled?.()) {
+    return; // 期间已有新播放/已取消：直接丢弃这段音频
+  }
+  await playTtsAudioBlob(blob, opts, myToken, estDurationMs, wrapped);
+  if (myToken === playToken) wrapped.onEnd?.();
+}
+
+if (typeof window !== 'undefined') {
+  // 首次用户手势时预热本地引擎探针（音量为 0 的静音实测，用户无感知）：
+  // 探明「哑火」后，首次真实播放直接云端兜底，不再有探测等待
+  const warmEngine = () => {
+    window.removeEventListener('pointerdown', warmEngine);
+    void probeBuiltinEngine();
+  };
+  window.addEventListener('pointerdown', warmEngine, { passive: true });
 }
 
 // 注册到全局音频焦点：语音消息气泡开始播放前会停掉这里的 TTS 朗读

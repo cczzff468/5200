@@ -112,6 +112,7 @@ import {
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
 import { isWebSpeechSupported } from '@/lib/ios/web-speech';
 import { lastPushStatus, setupPushSubscription, teardownPushSubscription } from '@/lib/ios/push-client';
+import { showSystemNotification } from '@/lib/ios/system-notify';
 import { isSysNotifyEnabled, setSysNotifyEnabled } from '@/lib/ios/island-notify';
 import {
   addCustomRingtone,
@@ -704,8 +705,11 @@ function ThemePage({ onBack }: { onBack: () => void }) {
 
 // ---------------- 通知 ----------------
 
-/** 推送订阅状态 → 中文描述（null = 状态未知/未尝试） */
+/** 推送订阅状态 → 中文描述（null = 状态未知/未尝试）。
+ *  诊断文案按真实根因区分：AbortError = 浏览器连不上推送服务器（国内网络常见，Chrome/Edge 的
+ *  推送走 FCM、Firefox 走 Mozilla，都在境外），与 iframe 无关——别再误导用户去找「新标签页」。 */
 function pushStatusText(state: string, detail?: string): string {
+  const detailIsPushServiceBlocked = /AbortError/i.test(detail ?? '');
   switch (state) {
     case 'subscribed':
       return '推送已订阅：页面关闭后，新回复会以系统通知送达。';
@@ -718,6 +722,9 @@ function pushStatusText(state: string, detail?: string): string {
     case 'key-failed':
       return `推送密钥获取失败${detail ? `（${detail}）` : ''}。`;
     case 'subscribe-failed':
+      if (detailIsPushServiceBlocked) {
+        return '浏览器推送服务连接失败（AbortError）：当前网络连不上 Chrome/Edge/Firefox 的境外推送服务器，国内网络常见，属正常现象。不影响页面开着时的通知——切走标签页/锁屏也能收到；页面完全关闭后的离线推送需要能连通推送服务的网络。';
+      }
       return `推送订阅被拦截${detail ? `（${detail}）` : ''}，多见于预览面板 iframe —— 用新标签页打开本页后重试。`;
     default:
       return '';
@@ -798,8 +805,9 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
     }
   };
 
-  /** 测试系统通知：立即构造一条（不等切走标签页），验证本环境能否弹系统通知 */
-  const fireTestNotification = (): void => {
+  /** 测试系统通知：走 SW showNotification 优先（Android Chrome 页面里无 Notification 构造器，
+   *  直接 new 会抛 Illegal constructor——必须走 Service Worker 通道），桌面无 SW 时落到页面构造器 */
+  const fireTestNotification = async (): Promise<void> => {
     if (typeof window === 'undefined' || typeof Notification === 'undefined') {
       setTestResult('fail');
       return;
@@ -814,20 +822,14 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
       return;
     }
     setTestResult('busy');
-    try {
-      const n = new Notification('测试通知', {
-        body: '系统通知通道正常：切走标签页 / 最小化时，AI 的新消息会像这样弹出。',
-        tag: `test-${Date.now()}`,
-        icon: '/icons/chat.png',
-      });
-      n.onclick = () => {
-        window.focus();
-        n.close();
-      };
-      setTestResult('ok');
-    } catch {
-      setTestResult('fail');
-    }
+    const channel = await showSystemNotification('测试通知', {
+      body: '系统通知通道正常：切走标签页 / 最小化时，AI 的新消息会像这样弹出。',
+      tag: `test-${Date.now()}`,
+      icon: '/icons/chat.png',
+      badge: '/icons/chat.png',
+      onclick: () => window.focus(),
+    });
+    setTestResult(channel ? 'ok' : 'fail');
   };
 
   return (
@@ -857,7 +859,7 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
         <GroupCard>
           <button
             type="button"
-            onClick={fireTestNotification}
+            onClick={() => void fireTestNotification()}
             disabled={testResult === 'busy' || !enabled}
             className="flex h-[46px] w-full items-center justify-between px-4 text-left disabled:opacity-50"
           >
@@ -877,7 +879,8 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
       )}
       {testResult === 'fail' && (
         <p className="mt-2 px-1 text-[12px] leading-relaxed" style={{ color: IOS_RED }}>
-          无法构造系统通知：当前环境（多为 iframe）被浏览器拦截，请用新标签页打开本页。
+          系统通知未能弹出：页面构造与 Service Worker 两条通道都被拦截。若在预览面板里请用新标签页打开；
+          独立部署时多为浏览器策略限制（Android 需允许站点通知）。
         </p>
       )}
       {pushState && (

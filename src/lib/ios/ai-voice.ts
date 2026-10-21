@@ -264,11 +264,14 @@ export async function synthesizeAiVoice(text: string, contactId: string | null |
   const useBuiltinEngine = cfg.provider === 'builtin' || !isTtsConfigured(cfg);
   const wave = hashWaveBars(cleaned, 22);
 
-  // ① 内置引擎 / 未配置语音 API：静音语音条——不出音频文件；点击由 voice-player 按 contactId
-  //    走角色音色实时朗读（speakUserTts：内置引擎兜底出声，配了 API 用 API 音色），
-  //    长按「转文字」仍可看原文
+  // ① 内置引擎 / 未配置语音 API：静音语音条——不出音频文件；点击由 voice-player 走
+  //    角色音色实时朗读（speakUserTts：本地引擎可用用本地，哑火自动云端兜底，配了 API 用 API 音色），
+  //    长按「转文字」仍可看原文。
+  //    synth='builtin' 必带：assistant 等非联系人会话没有 contactId，历史上无标记会被
+  //    voice-player 误判为「我方文字转语音」走静音模拟——点击永远无声（用户反馈的
+  //    「Web Speech 不能用」场景之一）；带标记后所有 AI 语音条点击都真实出声
   if (useBuiltinEngine) {
-    return { url: '', duration: estimateDuration(cleaned), wave, localText: cleaned };
+    return { url: '', duration: estimateDuration(cleaned), wave, localText: cleaned, synth: 'builtin' };
   }
 
   // ② 用户语音 API（MiniMax / OpenAI 兼容）：合成真实音频 → dataURL 持久化
