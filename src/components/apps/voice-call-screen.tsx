@@ -17,8 +17,9 @@
  * - 通话单句弹幕（CaptionStream）：同一时刻只显示 AI 最新一句（我方说话不上屏），新句出现旧句消失；
  *   完整聊天气泡在挂断后落进聊天记录（引擎回传 transcript，宿主 writeCallCard 逐条落库）——
  *   「打电话界面显示单句弹幕，聊天界面才显示聊天气泡」；文字聊天不再单设消息区（弹幕继续显示，信息开关只控输入条）。
- * - 通话中文字聊天：接通后右上角信息图标开关——底部三个按钮上方出现内联输入条（消息区+输入框），
- *   开启期间字幕隐藏（用户需求）；AI 回复文字进消息区同时用角色音色 TTS 播报
+ * - 通话中文字聊天：接通后右上角信息图标开关——打开即进入「信息界面」（与打电话界面同款：
+ *   语音说的+打字的全部轮次以气泡完整呈现，语音轮次带声波小标），开启期间字幕隐藏；
+ *   AI 回复文字进消息区同时用角色音色 TTS 播报
  *   （Task 33：只要配置了声音——内置语音免配置恒可用，配了第三方语音 API 用 API——打字回复也出声）；
  *   关闭输入条字幕恢复，通话不断；QQ 电话同样。
  * - 通话卡片（CallCardBubble）：结束后插入聊天记录——普通文字气泡同款样式（跟普通气泡一样），
@@ -28,6 +29,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  AudioLines,
   BellOff,
   MessageSquare,
   Mic,
@@ -249,14 +251,12 @@ export function CallChatHeader({ name, avatar }: { name: string; avatar: string 
  * - 右上角信息图标开关：开启期间字幕隐藏（用户需求），关闭字幕恢复；通话不断；
  * - Task 28 定稿（用户反馈）：面板不再自带 header——小头像+名字由宿主 CallChatHeader 放到屏幕
  *   顶部时长上方；聊天模式下中央大头像+名字隐藏，「头像名字下面都是文字输入」，底部按钮不消失；
- * - 消息区只显示文字轮次（via='text'）：我发的消息 + AI 的文字回复；语音轮次不在此显示；
- *   inputOnly=true 时消息区整个不渲染（语音通话页用：单句弹幕常驻，输入条开关只负责输入栏，
- *   完整聊天气泡在挂断后的聊天记录里看）；
- *   高度 messagesMaxH 内联 style maxHeight（默认 35vh；视频通话传 20vh——消息区过高会向上顶到
- *   互换态全屏「我的头像」，Task 28 追加反馈后视频侧压低消息区+头像上移双管齐下；
+ * - 信息界面与打电话界面同款（用户需求）：显示【全部轮次】——语音说的（带声波小标）+
+ *   打字的全部上屏，对方白气泡在左/我方绿气泡在右，可滚动自动滚底；不再只显示文字轮次；
+ *   fill=true（语音通话页）时消息列表 flex-1 撑满剩余空间（与打电话页同构），
+ *   否则用 messagesMaxH 限高（视频通话页 20vh，防顶到互换态全屏「我的头像」；
  *   用内联样式而非 Tailwind 任意值类——max-h-[20vh] 类在部分构建管线下不生成 CSS）；
- * - 消息区限高 messagesMaxH（内部滚动 no-scrollbar）；通话页底部按钮均为流式/底部锚定布局
- *   （语音页中部 flex-1 自动压缩、视频页底部容器 bottom 锚定），消息区再高按钮也不会被顶出屏幕；
+ * - 消息区底部锚定按钮均为流式/底部锚定布局，消息区再高按钮也不会被顶出屏幕；
  * - AI 回复形态由引擎决定（sendText/runTurn）：配置了第三方语音 API → TTS 语音回复（不出文字），
  *   没配 → 文字回复（消息区气泡）；AI 回应中显示三点动画。
  */
@@ -266,22 +266,23 @@ export function InlineCallChat({
   call,
   className = '',
   messagesMaxH = '35vh',
-  inputOnly = false,
+  fill = false,
 }: {
   variant: 'wx' | 'qq';
   call: ChatCallApi;
   className?: string;
-  /** 消息区最大高（CSS 值，内联 style maxHeight）：语音默认 35vh（flex 弹性区自适配）；
-   *  视频通话传 20vh（聊天模式+互换后给全屏「我的头像」留出净空区，不再被气泡盖住） */
+  /** 消息区最大高（CSS 值，内联 style maxHeight）：默认 35vh；视频通话传 20vh。
+   *  fill=true 时忽略（消息列表 flex-1 填满剩余空间） */
   messagesMaxH?: string;
-  /** 只渲染输入栏（消息区不渲染，单句弹幕继续显示；语音通话页用，视频页缺省关） */
-  inputOnly?: boolean;
+  /** true = 消息列表 flex-1 填满（语音通话页与打电话页同构）；默认 false（限高模式） */
+  fill?: boolean;
 }) {
   const [draft, setDraft] = useState('');
   const { chatLog, textBusy, error } = call;
   const listRef = useRef<HTMLDivElement | null>(null);
-  const isWx = variant === 'wx';
-  const textMsgs = chatLog.filter((m) => m.via === 'text');
+  // 信息界面显示全部轮次（与打电话界面同款）：语音说的 + 打字的，空消息（流式空气泡）过滤
+  const transcriptMsgs = chatLog.filter((m) => m.content.trim().length > 0);
+  const lastMsg = transcriptMsgs[transcriptMsgs.length - 1];
 
   // 新消息/回应中自动滚到底
   useEffect(() => {
@@ -297,46 +298,46 @@ export function InlineCallChat({
   };
 
   return (
-    <div className={`shrink-0 ${className}`} data-testid={`${variant}-call-textbar`}>
-      {/* 文字轮次消息（最近 8 条，超高滚动；无滚动条；Task 28 定稿：max-h-[35vh]，
-          「头像名字下面都是文字输入」，内部滚动、底部按钮不被顶出屏幕；
-          inputOnly 时不渲染——语音页单句弹幕常驻，完整聊天气泡在挂断后的聊天记录里看） */}
-      {!inputOnly && (textMsgs.length > 0 || textBusy) && (
+    <div className={`${fill ? 'flex min-h-0 flex-1 flex-col' : 'shrink-0'} ${className}`} data-testid={`${variant}-call-textbar`}>
+      {/* 全部轮次消息（语音+文字；超高滚动；无滚动条）——与打电话信息界面同款 */}
+      {(transcriptMsgs.length > 0 || textBusy) && (
         <div
           ref={listRef}
-          style={{ maxHeight: messagesMaxH }}
-          className="no-scrollbar mx-1 mb-2 flex flex-col gap-1.5 overflow-y-auto"
+          style={fill ? undefined : { maxHeight: messagesMaxH }}
+          className="no-scrollbar mx-1 mb-2 flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto"
         >
-          {textMsgs.slice(-8).map((m, i) => (
-            <p
-              key={`${m.at}-${i}`}
-              className={`w-fit max-w-[78%] whitespace-pre-wrap break-words px-3.5 py-[7px] text-[14px] leading-[1.5] shadow-[0_1px_3px_rgba(0,0,0,0.3)] ${
-                m.role === 'user'
-                  ? isWx
-                    ? 'ml-auto rounded-[10px] bg-[#95EC69] text-black'
-                    : 'ml-auto rounded-[12px] text-white'
-                  : 'mr-auto rounded-[10px] bg-white text-[#1F2329]'
-              }`}
-              style={m.role === 'user' && !isWx ? { backgroundColor: '#0099FF' } : undefined}
-            >
-              {m.content}
-            </p>
+          {transcriptMsgs.map((m, i) => (
+            <div key={`${m.at}-${i}`} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <p
+                className={`flex max-w-[82%] items-start gap-1.5 whitespace-pre-wrap break-words px-3.5 py-2 text-[14.5px] leading-snug shadow-[0_1px_3px_rgba(0,0,0,0.3)] ${
+                  m.role === 'user'
+                    ? 'rounded-[16px] rounded-br-[5px] bg-[#34C759] text-white'
+                    : 'rounded-[16px] rounded-bl-[5px] bg-white/15 text-white/95'
+                }`}
+              >
+                {/* 语音轮次带声波小标（与打电话信息界面同款：语音说的也能看出来） */}
+                {m.via !== 'text' && <AudioLines className="mt-[3px] h-3.5 w-3.5 shrink-0 opacity-60" aria-hidden="true" />}
+                <span className="min-w-0">{m.content}</span>
+              </p>
+            </div>
           ))}
-          {textBusy && (
-            <p
-              className="mr-auto flex items-center gap-1.5 rounded-[10px] bg-white px-3.5 py-[11px] shadow-[0_1px_3px_rgba(0,0,0,0.3)]"
-              aria-label="对方正在回应"
-            >
-              {[0, 150, 300].map((d) => (
-                <span key={d} className="h-1.5 w-1.5 animate-bounce rounded-full bg-black/35" style={{ animationDelay: `${d}ms` }} />
-              ))}
-            </p>
+          {textBusy && (!lastMsg || lastMsg.role === 'user') && (
+            <div className="flex justify-start">
+              <p
+                className="flex items-center gap-1.5 rounded-[16px] rounded-bl-[5px] bg-white/15 px-3.5 py-2.5"
+                aria-label="对方正在回应"
+              >
+                {[0, 150, 300].map((d) => (
+                  <span key={d} className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/60" style={{ animationDelay: `${d}ms` }} />
+                ))}
+              </p>
+            </div>
           )}
         </div>
       )}
       {error && <p className="px-2 pb-1.5 text-center text-[12px] text-red-300">{error}</p>}
-      {/* 输入栏（三按钮上方；信息图标开合） */}
-      <div className="flex items-center gap-2 pb-1.5">
+      {/* 输入栏（三按钮上方；信息图标开合）——与打电话界面同款胶囊输入框 */}
+      <div className="flex shrink-0 items-center gap-2 pb-1.5">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -346,10 +347,11 @@ export function InlineCallChat({
               send();
             }
           }}
-          placeholder="发消息…"
-          aria-label="输入消息"
+          placeholder="输入要说的话…"
+          maxLength={200}
+          aria-label="输入要说的话"
           data-testid={`${variant}-call-textbar-input`}
-          className="h-10 min-w-0 flex-1 rounded-full bg-white/[0.12] px-4 text-[15px] text-white ring-1 ring-white/15 outline-none transition-shadow placeholder:text-white/35 focus:ring-white/35"
+          className="h-10 min-w-0 flex-1 rounded-full border border-white/20 bg-white/10 px-4 text-[15px] text-white outline-none transition-colors placeholder:text-white/35 focus:border-white/45"
         />
         <button
           type="button"
@@ -358,8 +360,9 @@ export function InlineCallChat({
           aria-label="发送"
           data-testid={`${variant}-call-textbar-send`}
           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors active:opacity-70 ${
-            draft.trim() && !textBusy ? (isWx ? 'bg-[#07C160] text-white' : 'bg-[#0099FF] text-white') : 'bg-white/10 text-white/40'
-          }`}
+            draft.trim() && !textBusy ? 'bg-white text-black' : 'bg-white/10 text-white/40'
+          }`
+        }
         >
           <SendHorizontal className="h-[18px] w-[18px]" strokeWidth={2} />
         </button>
@@ -452,14 +455,11 @@ function WxCallScreen({ name, avatar, contact, direction, initialHistory, memory
       )}
 
       {/* 中部：普通模式=头像名字居中（顶部弹性区封顶，把空间让给单句弹幕——与电话 App 同款，
-          拨号中与接通后头像位置连续不跳）；聊天模式：单句弹幕继续显示 + 输入栏，
-          底部按钮不受影响仍在 */}
+          拨号中与接通后头像位置连续不跳）；聊天模式：完整对话记录（语音+文字全部轮次，
+          与打电话信息界面同款）+ 输入栏，底部按钮不受影响仍在 */}
       {textChatOpen && phase === 'active' ? (
         <div className="flex min-h-0 flex-1 flex-col px-4 pb-1">
-          <div className="flex min-h-0 w-full flex-1 flex-col items-center overflow-hidden">
-            <CaptionStream variant="wx" call={call} />
-          </div>
-          <InlineCallChat variant="wx" call={call} className="w-full" inputOnly />
+          <InlineCallChat variant="wx" call={call} className="w-full" fill />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-9">
@@ -649,13 +649,11 @@ function QqCallScreen({ name, avatar, contact, direction, initialHistory, memory
       )}
 
       {/* 中部：普通模式=头像名字居中（顶部弹性区封顶——与微信皮肤/电话 App 同款，把空间让给单句弹幕）；
-          聊天模式：单句弹幕继续显示 + 输入栏，底部按钮不受影响仍在 */}
+          聊天模式：完整对话记录（语音+文字全部轮次，与打电话信息界面同款）+ 输入栏，
+          底部按钮不受影响仍在 */}
       {textChatOpen && phase === 'active' ? (
         <div className="flex min-h-0 flex-1 flex-col px-4 pb-1">
-          <div className="flex min-h-0 w-full flex-1 flex-col items-center overflow-hidden">
-            <CaptionStream variant="qq" call={call} />
-          </div>
-          <InlineCallChat variant="qq" call={call} className="w-full" inputOnly />
+          <InlineCallChat variant="qq" call={call} className="w-full" fill />
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col items-center px-8 pb-14 pt-[62px]">

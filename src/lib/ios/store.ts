@@ -347,6 +347,10 @@ interface SettingsState {
   appFontScale: number;
   /** 顶部状态栏显示开关（Task 36）：false = 隐藏时间/信号/电量状态栏（灵动岛为硬件开孔保留） */
   statusBarVisible: boolean;
+  /** 灵动岛常驻开关：true = 顶部黑色胶囊灵动岛常驻显示；false = 隐藏基础胶囊，
+   *  只显示 APP 灵动岛（音乐岛大/小窗、美团/淘宝配送岛、灵动岛通知卡、来电胶囊等）。
+   *  与状态栏开关独立：关灵动岛不影响状态栏文字/图标 */
+  islandPersistent: boolean;
   /** 全局字重（400=标准；300/400/500/600，未显式设 font-weight 的文本生效） */
   appFontWeight: number;
   loaded: boolean;
@@ -368,6 +372,8 @@ interface SettingsState {
   setAppFontWeight: (weight: number) => void;
   /** 顶部状态栏显示开关；立即持久化，PhoneShell/StatusBar 实时响应 */
   setStatusBarVisible: (v: boolean) => void;
+  /** 灵动岛常驻开关；立即持久化，PhoneShell 实时响应（APP 灵动岛不受影响） */
+  setIslandPersistent: (v: boolean) => void;
   setWallpaperPreset: (id: string) => void;
   setCustomWallpaper: (blob: Blob | null) => void;
   /** 设置锁屏壁纸预设（独立于主屏幕壁纸） */
@@ -424,6 +430,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   appFontScale: 1,
   appFontWeight: 400,
   statusBarVisible: true,
+  islandPersistent: true,
   iconStyle: 'real',
   goodsImgStyle: 'cartoon',
   loaded: false,
@@ -431,7 +438,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec, islandPersistentRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -453,6 +460,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'iconStyle'),
         localDB.get('settings', 'goodsImgStyle'),
         localDB.get('settings', 'themeDefaultLight'),
+        localDB.get('settings', 'islandPersistent'),
       ]);
 
       // 性能：八个含密文信封的字段并行解密（getKey 并发单飞，密钥只读一次 IDB）——
@@ -759,6 +767,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
             : 400,
         // 状态栏开关：无记录 = 显示（默认开）；仅接受布尔值
         statusBarVisible: typeof statusBarRec?.value === 'boolean' ? statusBarRec.value : true,
+        // 灵动岛常驻：无记录 = 常驻（默认开）；仅接受布尔值
+        islandPersistent: typeof islandPersistentRec?.value === 'boolean' ? islandPersistentRec.value : true,
         iconStyle,
         goodsImgStyle,
         loaded: true,
@@ -818,6 +828,11 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setStatusBarVisible: (v) => {
     set({ statusBarVisible: v });
     void localDB.put('settings', { key: 'statusBarVisible', value: v });
+  },
+
+  setIslandPersistent: (v) => {
+    set({ islandPersistent: v });
+    void localDB.put('settings', { key: 'islandPersistent', value: v });
   },
 
   setWallpaperPreset: (id) => {

@@ -129,7 +129,15 @@ import {
 } from '@/lib/ios/notify-sound';
 import { LocalToast, useLocalToast } from './page-toast';
 import { describeImages } from '@/lib/vision-client';
-import { BUILTIN_TTS_VOICES, describeBuiltinVoiceMappings, isBuiltinVoiceId, isBuiltinVoiceSupported, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
+import { BUILTIN_TTS_VOICES, isBuiltinVoiceId, isBuiltinVoiceSupported, isNeuralVoiceId, NEURAL_TTS_VOICES, speakBuiltin, stopBuiltinSpeech } from '@/lib/ios/builtin-voices';
+import {
+  deleteOfflineTtsModel,
+  ensureOfflineTts,
+  OFFLINE_TTS_TOTAL_BYTES,
+  restoreOfflineTtsStatus,
+  synthesizeOfflineTts,
+  useOfflineTts,
+} from '@/lib/ios/offline-tts';
 import { useMyVoices } from '@/lib/ios/my-voices';
 import {
   applyAppFont,
@@ -405,6 +413,9 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
   // 状态栏显示开关（Task 36）：控制顶部时间/信号/电量状态栏是否显示
   const statusBarVisible = useSettings((s) => s.statusBarVisible);
   const setStatusBarVisible = useSettings((s) => s.setStatusBarVisible);
+  // 灵动岛常驻开关（用户需求）：关闭后隐藏顶部黑色胶囊基础灵动岛，只显示 APP 灵动岛
+  const islandPersistent = useSettings((s) => s.islandPersistent);
+  const setIslandPersistent = useSettings((s) => s.setIslandPersistent);
 
   const [airplane, setAirplane] = useState(false);
 
@@ -538,7 +549,7 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
               />
             </button>
           </div>
-          <MainRow icon={Wifi} tone={TONE_BLUE} label="无线局域网" value="未连接" chevron />
+          <MainRow icon={Wifi} tone={TONE_BLUE} label="无线局域网" value="我爱你" chevron />
           <MainRow icon={Bluetooth} tone={TONE_BLUE} label="蓝牙" value="打开" chevron />
         </div>
 
@@ -590,6 +601,30 @@ function RootPage({ onOpen }: { onOpen: (page: Page) => void }) {
               <span
                 className={`pointer-events-none absolute left-[2px] top-[2px] block h-[27px] w-[27px] rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.25)] transition-transform duration-200 ${
                   statusBarVisible ? 'translate-x-[20px]' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+          {/* 灵动岛常驻开关（用户需求）：关闭后顶部黑色胶囊灵动岛不显示，
+              但 APP 灵动岛（音乐岛大/小窗、外卖/快递配送岛、灵动岛通知卡、来电胶囊）照常显示。
+              与飞行模式同款 iOS 原生 51×31 大开关，开启态 #34C759 绿 */}
+          <div className="flex min-h-[52px] items-center gap-3 px-4 py-2">
+            <RowIcon icon={Smartphone} tone={TONE_GRAY} />
+            <span className="min-w-0 flex-1 truncate text-[16px]">灵动岛常驻</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={islandPersistent}
+              aria-label="灵动岛常驻"
+              data-testid="settings-island-persistent-switch"
+              onClick={() => setIslandPersistent(!islandPersistent)}
+              className={`relative h-[31px] w-[51px] shrink-0 rounded-full transition-colors duration-200 ${
+                islandPersistent ? 'bg-[#34C759]' : 'bg-black/15 dark:bg-white/25'
+              }`}
+            >
+              <span
+                className={`pointer-events-none absolute left-[2px] top-[2px] block h-[27px] w-[27px] rounded-full bg-white shadow-[0_2px_5px_rgba(0,0,0,0.25)] transition-transform duration-200 ${
+                  islandPersistent ? 'translate-x-[20px]' : 'translate-x-0'
                 }`}
               />
             </button>
@@ -706,11 +741,8 @@ function ThemePage({ onBack }: { onBack: () => void }) {
 
 // ---------------- 通知 ----------------
 
-/** 推送订阅状态 → 中文描述（null = 状态未知/未尝试）。
- *  诊断文案按真实根因区分：AbortError = 浏览器连不上推送服务器（国内网络常见，Chrome/Edge 的
- *  推送走 FCM、Firefox 走 Mozilla，都在境外），与 iframe 无关——别再误导用户去找「新标签页」。 */
+/** 推送订阅状态 → 中文描述（null = 状态未知/未尝试） */
 function pushStatusText(state: string, detail?: string): string {
-  const detailIsPushServiceBlocked = /AbortError/i.test(detail ?? '');
   switch (state) {
     case 'subscribed':
       return '推送已订阅：页面关闭后，新回复会以系统通知送达。';
@@ -719,14 +751,11 @@ function pushStatusText(state: string, detail?: string): string {
     case 'no-permission':
       return detail || '尚未开启通知权限。';
     case 'sw-failed':
-      return `后台服务注册失败${detail ? `（${detail}）` : ''}，多见于预览面板 iframe 环境 —— 用新标签页打开可解决。`;
+      return `后台服务注册失败${detail ? `（${detail}）` : ''}。`;
     case 'key-failed':
       return `推送密钥获取失败${detail ? `（${detail}）` : ''}。`;
     case 'subscribe-failed':
-      if (detailIsPushServiceBlocked) {
-        return '浏览器推送服务连接失败（AbortError）：当前网络连不上 Chrome/Edge/Firefox 的境外推送服务器，国内网络常见，属正常现象。不影响页面开着时的通知——切走标签页/锁屏也能收到；页面完全关闭后的离线推送需要能连通推送服务的网络。';
-      }
-      return `推送订阅被拦截${detail ? `（${detail}）` : ''}，多见于预览面板 iframe —— 用新标签页打开本页后重试。`;
+      return `推送订阅未完成${detail ? `（${detail}）` : ''}。`;
     default:
       return '';
   }
@@ -3053,10 +3082,10 @@ function VisionPage({ onBack }: { onBack: () => void }) {
               )}
             </div>
 
-            {/* 未配置提示 */}
+            {/* 未配置提示（精简） */}
             {!visionConfig.baseUrl.trim() && (
               <div className="rounded-[16px] border border-amber-500/30 bg-amber-300/15 px-3.5 py-2.5 text-[12px] leading-relaxed text-amber-700 backdrop-blur-xl dark:border-amber-400/25 dark:bg-amber-300/[0.08] dark:text-amber-200/90">
-                还没有配置识图模型：聊天中发送图片不会触发识图（不影响文字聊天）。填写 OpenAI 兼容的多模态接口地址与模型名后，发图即可让 AI 看懂图片。
+                未配置：聊天发图不会触发识图（不影响文字聊天）。
               </div>
             )}
 
@@ -3072,9 +3101,6 @@ function VisionPage({ onBack }: { onBack: () => void }) {
                 {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScanEye className="h-3.5 w-3.5" />}
                 {testing ? '正在识图…' : '测试识图'}
               </button>
-              <p className="mt-1.5 text-center text-[11px] leading-snug text-muted-foreground/70">
-                发送一张内置测试图片，验证接口连通与识图效果
-              </p>
               {testError && (
                 <div
                   data-testid="vision-test-error"
@@ -3098,13 +3124,9 @@ function VisionPage({ onBack }: { onBack: () => void }) {
           </div>
         </section>
 
-        {/* 使用说明（页尾） */}
+        {/* 使用说明（精简为一段） */}
         <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
-          识图模型只负责「看图」：聊天里发图片时先用它把图片转成文字描述，再交给聊天模型生成回复；两者配置互相独立、互不覆盖。未配置时发图不识图，文字聊天不受影响。
-        </p>
-
-        <p className="text-[11px] leading-relaxed text-muted-foreground/80">
-          图片仅内联传给你自己配置的识图接口，不经过任何第三方图床；预设保存在本机 IndexedDB（API Key 加密存储）。
+          识图模型只负责「看图」：发图先转文字描述再交给聊天模型；图片仅传给你自己配置的接口，预设存本机。
         </p>
       </div>
     </DetailShell>
@@ -3130,6 +3152,9 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
   const updateImgGenConfig = useSettings((s) => s.updateImgGenConfig);
   const setImgGenPresets = useSettings((s) => s.setImgGenPresets);
 
+  // Tab：连接配置 / 形象锁定（预设区下方，用户需求）
+  const [imgTab, setImgTab] = useState<'conn' | 'face'>('conn');
+
   const [showKey, setShowKey] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [presetName, setPresetName] = useState('');
@@ -3152,6 +3177,19 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
     setTestError('');
     setTestSrc('');
   };
+
+  // 自动开启总开关（用户需求「配置了以后开关自动打开，不需要手动打开」）：
+  // 监听配置完整性（地址+模型名都已填），只在「不完整 → 完整」的临界沿自动置 enabled=true；
+  // 已完整后用户手动关闭不会被强制重开（无临界沿），保留手动控制权
+  const cfgComplete = Boolean(imgGenConfig.baseUrl.trim() && imgGenConfig.model.trim());
+  const wasCompleteRef = useRef(cfgComplete);
+  useEffect(() => {
+    const prev = wasCompleteRef.current;
+    wasCompleteRef.current = cfgComplete;
+    if (cfgComplete && !prev && !useSettings.getState().imgGenConfig.enabled) {
+      updateImgGenConfig({ enabled: true });
+    }
+  }, [cfgComplete, updateImgGenConfig]);
 
   // —— 预设管理 ——
   const allPresets: ImgGenPreset[] = [BUILTIN_IMGGEN_PRESET, ...imgGenPresets];
@@ -3439,7 +3477,44 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
               )}
             </section>
 
-            {/* 配置表单 */}
+            {/* Tab（用户需求）：连接配置 / 形象锁定（预设下方、连接配置上方，iOS 分段控件风） */}
+            <div
+              className="flex rounded-[12px] bg-white/40 p-1 ring-1 ring-black/[0.05] backdrop-blur-xl dark:bg-white/[0.05] dark:ring-white/[0.08]"
+              role="tablist"
+              aria-label="图像生成设置分区"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={imgTab === 'conn'}
+                data-testid="imggen-tab-conn"
+                onClick={() => setImgTab('conn')}
+                className={`h-9 flex-1 rounded-[9px] text-[13.5px] font-medium transition-all ${
+                  imgTab === 'conn'
+                    ? 'bg-white/90 text-foreground shadow-sm dark:bg-white/[0.16]'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                连接配置
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={imgTab === 'face'}
+                data-testid="imggen-tab-face"
+                onClick={() => setImgTab('face')}
+                className={`h-9 flex-1 rounded-[9px] text-[13.5px] font-medium transition-all ${
+                  imgTab === 'face'
+                    ? 'bg-white/90 text-foreground shadow-sm dark:bg-white/[0.16]'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                形象锁定
+              </button>
+            </div>
+
+            {/* 配置表单（连接配置 tab） */}
+            {imgTab === 'conn' && (
             <section>
               <SectionLabel
                 icon={Wrench}
@@ -3740,13 +3815,14 @@ function ImageGenPage({ onBack }: { onBack: () => void }) {
                 </div>
               </GrayCard>
             </section>
+            )}
 
-            {/* 形象锁定（锁脸）：按角色设置生图参考图 + 外貌描述（原聊天设置入口迁移至此） */}
-            <FaceLockSection />
+            {/* 形象锁定 tab：按角色设置生图参考图 + 外貌描述（原聊天设置入口迁移至此） */}
+            {imgTab === 'face' && <FaceLockSection />}
 
             {/* 使用说明（页尾） */}
             <p className="px-1 text-[12px] leading-relaxed text-muted-foreground">
-              图像生成与聊天/识图配置相互独立、互不覆盖。开启后 AI 回复里出现照片标签会自动生成照片并发进聊天、存入角色相册；在上方「形象锁定」为角色上传参考图即可锁脸，让照片里的人物长相保持一致。
+              图像生成与聊天/识图配置相互独立、互不覆盖。开启后 AI 回复里出现照片标签会自动生成照片并发进聊天、存入角色相册；在「形象锁定」标签页为角色上传参考图即可锁脸，让照片里的人物长相保持一致。
             </p>
 
             <p className="text-[11px] leading-relaxed text-muted-foreground/80">
@@ -4754,6 +4830,11 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  // 免费离线语音包（neural 声线）状态 + 下载/删除入口（useOfflineTts 全局 store）
+  const offlineTts = useOfflineTts();
+  useEffect(() => {
+    restoreOfflineTtsStatus();
+  }, []);
   /** 试听 ObjectURL 回收（内存：原先每次试听都 new Audio(URL.createObjectURL(blob))
    *  且从不 revoke——听一次泄漏一个 blob URL；改从 audio.src 取回统一回收） */
   const revokePreviewSrc = (audio: HTMLAudioElement | null): void => {
@@ -4779,25 +4860,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const [builtinSupport, setBuiltinSupport] = useState<boolean | null>(null);
   useEffect(() => {
     setBuiltinSupport(isBuiltinVoiceSupported());
-  }, []);
-  // 本机实际声源分配（每张声线卡片展示背后用的系统语音；voices 异步就绪后重读）
-  const [builtinVoiceMap, setBuiltinVoiceMap] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (!isBuiltinVoiceSupported()) return;
-    let alive = true;
-    const read = () => {
-      if (!alive) return;
-      const m = describeBuiltinVoiceMappings();
-      if (Object.keys(m).length > 0) setBuiltinVoiceMap(m);
-    };
-    read();
-    const t1 = window.setTimeout(read, 800);
-    const t2 = window.setTimeout(read, 2000); // 部分引擎 voices 就绪较慢
-    return () => {
-      alive = false;
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
-    };
   }, []);
 
   // 页面卸载：停掉试听音频并释放
@@ -4892,6 +4954,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
   const previewBuiltinVoice = (voiceId: string) => {
     if (previewingBuiltinId) {
       stopBuiltinSpeech();
+      stopPreviewAudio();
       setPreviewingBuiltinId(null);
       if (previewingBuiltinId === voiceId) return;
     }
@@ -4904,6 +4967,62 @@ function VoicePage({ onBack }: { onBack: () => void }) {
       onEnd: () => setPreviewingBuiltinId(null),
       onError: () => setPreviewingBuiltinId(null),
     }).catch(() => setPreviewingBuiltinId(null));
+  };
+
+  /** 停掉试听中的 Audio（离线声线试听用） */
+  const stopPreviewAudio = () => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      revokePreviewSrc(previewAudioRef.current);
+      previewAudioRef.current = null;
+    }
+  };
+
+  /** 离线神经网络声线试听：未下载先拉起下载；已就绪本地合成后播放 */
+  const previewNeuralVoice = async (sid: number) => {
+    if (previewingBuiltinId) {
+      stopBuiltinSpeech();
+      stopPreviewAudio();
+      const prev = previewingBuiltinId;
+      setPreviewingBuiltinId(null);
+      if (prev === `neural:${sid}`) return;
+    }
+    setPreviewingBuiltinId(`neural:${sid}`);
+    setPreviewError('');
+    try {
+      await ensureOfflineTts();
+      const blob = await synthesizeOfflineTts('你好，这是免费离线语音包的声线，很高兴认识你。', sid, 1);
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      previewAudioRef.current = audio;
+      audio.onended = () => {
+        revokePreviewSrc(audio);
+        if (previewAudioRef.current === audio) previewAudioRef.current = null;
+        setPreviewingBuiltinId(null);
+      };
+      audio.onerror = () => {
+        revokePreviewSrc(audio);
+        if (previewAudioRef.current === audio) previewAudioRef.current = null;
+        setPreviewingBuiltinId(null);
+      };
+      await audio.play().catch(() => {
+        revokePreviewSrc(audio);
+        if (previewAudioRef.current === audio) previewAudioRef.current = null;
+        setPreviewingBuiltinId(null);
+      });
+    } catch (e) {
+      setPreviewError(e instanceof Error ? e.message : '语音包未就绪，请先下载免费语音包');
+      setPreviewingBuiltinId(null);
+    }
+  };
+
+  /** 点击离线声线卡片：未下载 → 拉起下载；已就绪 → 设为默认声线 */
+  const selectNeuralVoice = (id: string) => {
+    if (offlineTts.status !== 'ready') {
+      void ensureOfflineTts().catch(() => undefined);
+      return;
+    }
+    updateTtsConfig({ defaultVoiceId: id });
   };
 
   const runPreview = async () => {
@@ -5136,33 +5255,20 @@ function VoicePage({ onBack }: { onBack: () => void }) {
           </div>
         </section>
 
-        {/* 内置语音：免费零配置，男女声线网格 + 逐个试听 */}
+        {/* 内置语音：免费零配置，男女声线网格 + 逐个试听（提示精简：一行说明 + 不支持时一行警告） */}
         {isBuiltin && (
           <>
             <section>
-              <div className="rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[14px] font-medium text-foreground">内置声线（3 女 · 3 男 · 免费）</div>
-                    <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/80">
-                      用浏览器内置语音引擎在本地合成，不需要 API、不需要联网、不产生费用；点击卡片设为全局默认，喇叭按钮可逐个试听。
-                    </p>
-                    {builtinSupport === false && (
-                      <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-relaxed text-[#FF3B30]">
-                        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                        当前浏览器不支持内置语音，播放将自动回退服务端语音；建议换 Chrome / Edge 体验。
-                      </p>
-                    )}
-                  </div>
-                  <span className="shrink-0 rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] font-medium text-green-600 dark:text-green-400">
-                    免费
-                  </span>
-                </div>
+              <div className="flex items-center justify-between gap-2">
+                <p className="min-w-0 truncate text-[12px] text-muted-foreground">本地合成 · 免费 · 离线可用 · 点卡片设为默认</p>
+                {builtinSupport === false && (
+                  <p className="flex shrink-0 items-center gap-1 text-[12px] text-[#FF3B30]">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                    浏览器不支持，将回退服务端语音
+                  </p>
+                )}
               </div>
-            </section>
-
-            <section>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="mt-2 grid grid-cols-2 gap-2">
                 {BUILTIN_TTS_VOICES.map((v) => {
                   const active = ttsConfig.defaultVoiceId.trim() === v.id;
                   const playing = previewingBuiltinId === v.id;
@@ -5215,18 +5321,123 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                           <AudioLines className={`h-3.5 w-3.5 ${playing ? 'animate-pulse' : ''}`} aria-hidden="true" />
                         </button>
                       </div>
-                      {builtinVoiceMap[v.id] && (
-                        <div className="truncate text-[10px] text-muted-foreground/60" title={`声源：${builtinVoiceMap[v.id]}`}>
-                          声源：{builtinVoiceMap[v.id]}
-                        </div>
-                      )}
+                    </div>
+                  );
+                })}
+                {/* 免费离线语音包声线（neural:）：高质量神经网络合成，下载一次约 42MB 断网可用 */}
+                {NEURAL_TTS_VOICES.map((v) => {
+                  const active = ttsConfig.defaultVoiceId.trim() === v.id;
+                  const playing = previewingBuiltinId === v.id;
+                  const pkgReady = offlineTts.status === 'ready';
+                  return (
+                    <div
+                      key={v.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={active}
+                      data-testid={`neural-voice-${v.id}`}
+                      onClick={() => selectNeuralVoice(v.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          selectNeuralVoice(v.id);
+                        }
+                      }}
+                      className={`flex flex-col gap-1.5 rounded-[18px] p-3 backdrop-blur-2xl transition-all ${
+                        active
+                          ? 'bg-white/85 shadow-[0_8px_22px_rgba(17,24,39,0.1)] ring-1 ring-white/80 dark:bg-white/[0.14] dark:ring-white/[0.16]'
+                          : 'bg-white/45 shadow-[0_2px_10px_rgba(17,24,39,0.04)] ring-1 ring-white/60 dark:bg-white/[0.05] dark:ring-white/[0.08]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-[15px] font-medium">{v.name}</span>
+                          <span className="shrink-0 rounded-full bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-600 dark:text-violet-400">
+                            离线
+                          </span>
+                        </span>
+                        {active && <Check className="h-4 w-4 shrink-0" strokeWidth={2.5} aria-hidden="true" />}
+                      </div>
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="truncate text-[11px] text-muted-foreground">{pkgReady ? '神经网络声线' : '需下载语音包'}</span>
+                        <button
+                          type="button"
+                          aria-label={`试听声线${v.name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void previewNeuralVoice(v.sid);
+                          }}
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-all ${
+                            playing ? 'bg-white/90 text-foreground shadow-sm dark:bg-white/[0.22]' : 'bg-white/60 text-muted-foreground ring-1 ring-black/[0.05] active:bg-white/85 dark:bg-white/[0.08] dark:ring-white/[0.1]'
+                          }`}
+                        >
+                          <AudioLines className={`h-3.5 w-3.5 ${playing ? 'animate-pulse' : ''}`} aria-hidden="true" />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
               </div>
+
+              {/* 语音包管理（离线声线共用）：未下载显示下载按钮 / 下载中进度 / 已就绪可删除 */}
+              <div className="mt-3 rounded-[16px] border border-black/[0.05] bg-white/50 p-3 dark:border-white/[0.08] dark:bg-white/[0.05]">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium text-foreground">免费语音包（离线神经网络）</div>
+                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      {offlineTts.status === 'ready'
+                        ? '已就绪 · 上方「离线」声线可用（断网也能合成）'
+                        : offlineTts.status === 'downloading'
+                          ? '下载中…'
+                          : offlineTts.status === 'error'
+                            ? `下载失败：${offlineTts.error ?? '请重试'}`
+                            : `约 ${Math.round(OFFLINE_TTS_TOTAL_BYTES / 1048576)}MB · 下载一次永久可用`}
+                    </p>
+                  </div>
+                  {offlineTts.status === 'ready' ? (
+                    <button
+                      type="button"
+                      data-testid="tts-offline-delete"
+                      onClick={() => void deleteOfflineTtsModel()}
+                      className="shrink-0 rounded-full bg-white/70 px-3.5 py-1.5 text-[12px] font-medium text-muted-foreground ring-1 ring-black/[0.06] transition-all hover:text-[#FF3B30] active:scale-[0.97] dark:bg-white/[0.08] dark:ring-white/[0.1]"
+                    >
+                      删除
+                    </button>
+                  ) : offlineTts.status !== 'downloading' && offlineTts.status !== 'checking' ? (
+                    <button
+                      type="button"
+                      data-testid="tts-offline-download"
+                      onClick={() => void ensureOfflineTts().catch(() => undefined)}
+                      className="flex shrink-0 items-center gap-1.5 rounded-full bg-foreground px-3.5 py-1.5 text-[12px] font-medium text-background transition-all active:scale-[0.97]"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      {offlineTts.status === 'error' ? '重试下载' : '下载语音包'}
+                    </button>
+                  ) : null}
+                </div>
+                {offlineTts.status === 'downloading' && offlineTts.progress && (
+                  <div className="mt-2">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/[0.07] dark:bg-white/10">
+                      <div
+                        className="h-full rounded-full bg-[#34C759] transition-all duration-200"
+                        style={{ width: `${Math.max(2, offlineTts.progress.pct)}%` }}
+                      />
+                    </div>
+                    <p className="mt-1 text-right text-[10px] tabular-nums text-muted-foreground">
+                      {Math.round(offlineTts.progress.pct)}% · {(offlineTts.progress.loaded / 1048576).toFixed(1)}/{(offlineTts.progress.total / 1048576).toFixed(0)}MB
+                    </p>
+                  </div>
+                )}
+                {offlineTts.status === 'checking' && (
+                  <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    正在检查语音包…
+                  </p>
+                )}
+              </div>
             </section>
 
-            {/* 试听 */}
+            {/* 试听（提示精简：去掉页尾长说明） */}
             <section>
               <button
                 type="button"
@@ -5243,10 +5454,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   {previewError}
                 </p>
               )}
-              <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
-                音色优先级：联系人的独立声线（联系人 App 编辑）→ 内置声线按联系人性别自动选男女声。
-                电话、微信、QQ 的语音播放即时生效。
-              </p>
             </section>
           </>
         )}
@@ -5315,11 +5522,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   autoComplete="off"
                   className="h-11 rounded-[14px] border-black/[0.05] bg-white/55 text-[14px] shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_3px_10px_rgba(17,24,39,0.05)] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.07] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_3px_10px_rgba(0,0,0,0.2)]"
                 />
-                {!ttsConfig.groupId.trim() && (
-                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/70">
-                    MiniMax 的音色列表与语音合成接口都需要带上 GroupId。
-                  </p>
-                )}
               </div>
             )}
 
@@ -5439,13 +5641,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                   </button>
                 ))}
               </div>
-              <p className="mt-1.5 text-[12px] leading-relaxed text-muted-foreground/80">
-                {isMinimax
-                  ? 'MiniMax 合成接口必须携带模型名。'
-                  : isFish
-                    ? 'Fish Audio 通过音色 ID（reference_id）定位声线，模型名留空即可。'
-                    : '不需要模型的服务商可留空：留空时请求不携带 model 参数，需要时再填。'}
-              </p>
             </div>
 
             {/* 全局默认音色（并入连接配置卡片：角色未设独立音色时使用，音色 ID 手动填写） */}
@@ -5503,11 +5698,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                 </p>
               )}
             </div>
-
-            <p className="text-[12px] leading-relaxed text-muted-foreground">
-              音色优先级：联系人的独立音色（联系人 App 编辑）→ 这里的全局默认 → 系统安全默认。
-              配置会在电话、微信、QQ 的语音播放中生效；合成失败不影响文字聊天。
-            </p>
           </div>
         </section>
         </>
@@ -5518,8 +5708,7 @@ function VoicePage({ onBack }: { onBack: () => void }) {
           <SectionLabel icon={AudioLines} tone={TONE_ORANGE}>我的音色</SectionLabel>
           <div className="flex flex-col gap-3 rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
             <p className="text-[12px] leading-relaxed text-muted-foreground/80">
-              把常用的音色存成自己的 preset：填一个名字 + 音色 ID（MiniMax / OpenAI 兼容音色名或内置声线都可），永久保存在本机；
-              在联系人编辑和聊天设置「他的声音」里都能点选使用。填好后可先「测试」试听效果，满意再保存。
+              常用音色存成 preset（名字 + 音色 ID），联系人/聊天设置「他的声音」可点选使用。
             </p>
             {myVoices.length > 0 && (
               <div className="flex flex-col gap-2">
@@ -5631,13 +5820,12 @@ function VoicePage({ onBack }: { onBack: () => void }) {
         <section>
           <SectionLabel icon={MessageSquareText} tone={TONE_GREEN}>语音识别 STT（转文字）</SectionLabel>
           <div className="flex flex-col gap-3 rounded-[22px] bg-white/55 p-4 shadow-[0_8px_28px_rgba(17,24,39,0.06)] ring-1 ring-white/70 backdrop-blur-2xl dark:bg-white/[0.06] dark:ring-white/[0.09]">
-            {/* 识别主通道：Web Speech（浏览器原生实时识别）——通话免提语音与语音消息转写都用它 */}
+            {/* 识别主通道：Web Speech（浏览器原生实时识别）——提示精简为一行 */}
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[14px] font-medium text-foreground">浏览器实时识别（Web Speech）</div>
                 <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground/70">
-                  识别主通道（免配置、零请求）：通话免提语音识别、语音消息「划到转文字」与直发语音自动转写都用浏览器内置引擎实时完成；
-                  关闭后直发语音只有音频（AI 按语音占位回应，除非配置下方服务端兑底）。
+                  通话免提与语音消息转写的主通道（免配置）；关闭后直发语音只有音频。
                   {wsSupport === null ? '' : wsSupport ? '当前浏览器：支持。' : '当前浏览器：不支持。'}
                 </p>
               </div>
@@ -5652,12 +5840,11 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                 按住说话/转文字优先本地，失败静默降级云端 */}
             <OfflineAsrSection />
 
-            {/* 服务端兑底（可选）：长按旧语音气泡转文字 / 实时识别不可用时兑底（内置识别模型已移除） */}
+            {/* 服务端兑底（可选）：提示精简为一行 */}
             <div className="border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
               <div className="text-[14px] font-medium text-foreground">服务端兑底（OpenAI 兼容，可选）</div>
               <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground/70">
-                用于：长按旧语音气泡「转文字」（无实时识别文本时）、浏览器不支持 Web Speech 时的自动转写兑底；
-                留空则只用浏览器实时识别。
+                浏览器识别不可用时的兑底；留空则只用浏览器实时识别。
                 {sttConfig.provider === 'openai' && sttConfig.apiKey.trim() && sttConfig.baseUrl.trim()
                   ? '当前：已启用。'
                   : '当前：未启用。'}
@@ -5672,9 +5859,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                     placeholder="如 https://api.openai.com/v1"
                     className="h-11 rounded-[14px] border-black/[0.05] bg-white/55 text-[14px] shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_3px_10px_rgba(17,24,39,0.05)] backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.07] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_3px_10px_rgba(0,0,0,0.2)]"
                   />
-                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/70">
-                    兼容 OpenAI /audio/transcriptions 接口的服务商（Whisper 等）；填到 /v1 即可。
-                  </p>
                 </div>
                 <div>
                   <FieldLabel>API Key</FieldLabel>
@@ -5694,9 +5878,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                       {showSttKey ? '隐藏' : '显示'}
                     </button>
                   </div>
-                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground/70">
-                    Key 加密存在本机，不进日志；识别请求经本站代理转发，不直接暴露给网页。
-                  </p>
                 </div>
                 <div>
                   <FieldLabel>识别模型（选填）</FieldLabel>
@@ -5724,9 +5905,6 @@ function VoicePage({ onBack }: { onBack: () => void }) {
                     ))}
                   </div>
                 </div>
-                <p className="text-[12px] leading-relaxed text-muted-foreground">
-                  保存后立即生效（每次转文字现场读取）；识别失败不影响语音消息的发送与播放；与上方 TTS（文字转语音）配置相互独立、互不覆盖。
-                </p>
               </>
           </div>
         </section>
@@ -5787,8 +5965,7 @@ function OfflineAsrSection() {
         <div className="min-w-0">
           <div className="text-[14px] font-medium text-foreground">离线识别（端侧模型，可选）</div>
           <p className="mt-0.5 text-[12px] leading-relaxed text-muted-foreground/70">
-            SenseVoice 中文端侧模型（WASM 本地推理）：下载后按住说话/转文字优先本地识别，断网可用；
-            本地失败自动静默降级云端。模型存浏览器缓存，只需下载一次。
+            SenseVoice 中文端侧模型（约 229MB，仅下载一次）：断网也可识别。
           </p>
         </div>
       </div>

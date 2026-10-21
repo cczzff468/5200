@@ -15,13 +15,16 @@ import { FISH_VOICE_PREFIX, SAFE_VOICE_BY_PROVIDER, type TtsConfig, useSettings 
 import {
   isBuiltinVoiceSupported,
   isBuiltinVoiceId,
+  isNeuralVoiceId,
   probeBuiltinEngine,
   resolveBuiltinPreset,
+  resolveNeuralSid,
   speakBuiltin,
   stopBuiltinSpeech,
   BUILTIN_DEFAULT_FEMALE,
   BUILTIN_DEFAULT_MALE,
 } from './builtin-voices';
+import { ensureOfflineTts, isOfflineTtsReady, synthesizeOfflineTts } from './offline-tts';
 
 // 类型与默认值定义在 store（避免循环依赖），这里重导出供 UI 层使用
 export type { TtsConfig } from './store';
@@ -278,6 +281,31 @@ export async function speakUserTts(opts: SpeakOptions): Promise<void> {
       voiceId = rv.gender === 'male' ? BUILTIN_DEFAULT_MALE : BUILTIN_DEFAULT_FEMALE;
     }
     const presetGender = resolveBuiltinPreset(voiceId, rv.gender).gender;
+
+    // ⓪ 免费离线语音包（neural: 声线）：已下载 → 本地神经网络合成播放（免费高质量、断网可用）；
+    // 未下载/初始化失败 → 落回下方 Web Speech / 云端兑底，不影响出声
+    if (isNeuralVoiceId(voiceId)) {
+      try {
+        await ensureOfflineTts(); // 缓存完整时仅初始化 Worker；未下载会拉起下载（设置页也有入口）
+      } catch {
+        // 未下载/下载失败：走下面的内置引擎回退
+      }
+      if (isOfflineTtsReady()) {
+        try {
+          stopSpeaking();
+          if (!opts.keepOthers) stopOtherAudio('tts');
+          const myToken = playToken;
+          const sid = resolveNeuralSid(voiceId) ?? 0;
+          const blob = await synthesizeOfflineTts(cleaned.slice(0, 300), sid, Math.min(2, Math.max(0.5, opts.speed ?? 1)));
+          if (myToken !== playToken || opts.cancelled?.()) return;
+          await playTtsAudioBlob(blob, opts, myToken, estDurationMs, wrapped);
+          if (myToken === playToken) wrapped.onEnd?.();
+          return;
+        } catch {
+          // 合成失败：继续走下方 Web Speech / 云端兑底
+        }
+      }
+    }
 
     let errorMessage: string | null = null;
     let spoke = false;

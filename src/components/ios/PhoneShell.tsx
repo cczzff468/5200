@@ -101,6 +101,9 @@ export default function PhoneShell() {
   const barLight = useLightForeground('bottom');
   // 状态栏显示开关（Task 36）：设置页可关闭顶部时间/信号/电量状态栏
   const statusBarVisible = useSettings((s) => s.statusBarVisible);
+  // 灵动岛常驻开关（用户需求）：关闭后隐藏顶部黑色胶囊基础灵动岛，
+  // 只显示 APP 灵动岛（音乐岛大/小窗、美团/淘宝配送岛、灵动岛通知卡、来电胶囊等均不受影响）
+  const islandPersistent = useSettings((s) => s.islandPersistent);
   // 灵动岛通知展示中（含收起动画）：灵动岛隐藏，通知卡在同一几何位无缝形变，收起后灵动岛恢复
   const islandCovered = useIslandNotify((s) => s.current !== null);
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -398,9 +401,11 @@ export default function PhoneShell() {
         {/* 状态栏 + 灵动岛 + 全局灵动岛通知（通知展开期间灵动岛隐藏，收起后恢复）。
             状态栏开关（Task 36，设置 › 显示与亮度组；Task 37 扩展）：关闭后隐藏时间/信号/电量状态栏，
             灵动岛一并隐藏（用户要求「灵动岛也消失」）；全局弹窗不受影响——
-            灵动岛通知卡/来电胶囊/闹钟横幅等仍照常从原位弹出（IslandNotificationLayer 等独立于本开关） */}
+            灵动岛通知卡/来电胶囊/闹钟横幅等仍照常从原位弹出（IslandNotificationLayer 等独立于本开关）。
+            灵动岛常驻开关（用户需求）：关闭后顶部黑色胶囊基础灵动岛不显示，但 APP 灵动岛
+            （音乐岛大/小窗、美团/淘宝配送岛、灵动岛通知卡、来电胶囊）全部照常显示 */}
         {statusBarVisible && <StatusBar />}
-        {statusBarVisible && !islandCovered && (
+        {statusBarVisible && islandPersistent && !islandCovered && (
           <div
             className="pointer-events-none absolute left-1/2 top-[11px] z-[80] h-[33px] w-[118px] -translate-x-1/2 rounded-full bg-black"
             aria-hidden="true"
