@@ -19,6 +19,7 @@ import {
   Baby,
   Bath,
   BedDouble,
+  BookOpen,
   Camera,
   Check,
   ChevronDown,
@@ -28,6 +29,7 @@ import {
   ChevronsDown,
   ChevronsUp,
   Clock,
+  Coffee,
   CupSoda,
   Droplet,
   Eye,
@@ -63,8 +65,8 @@ import {
 import Joystick from './Joystick';
 import InstrumentOverlay from './InstrumentOverlay';
 import { useMusic } from '@/lib/ios/music-store';
-import { coverSrc } from '../music-shared';
 import type { NcmSong } from '@/lib/ios/music-api';
+import { songCover } from '@/lib/ios/music-api';
 import { localDB, genId } from '@/lib/ios/db';
 import { useWeatherSnapshot, weatherCodeInfo } from '../weather-core';
 import { listContacts } from '@/lib/ios/contacts-store';
@@ -275,7 +277,7 @@ function normAngle(a: number): number {
   return x;
 }
 
-/** 家具动作 → 小人姿势（watch/work/game 也是坐姿；play 按乐器分流，见 act.pose） */
+/** 家具动作 → 小人姿势（watch/work/game 也是坐姿；play 按乐器分流，见 act.pose；coffee 复用喝姿；read 专门看书姿势） */
 const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
   sit: 'sit',
   lie: 'lie',
@@ -292,10 +294,12 @@ const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
   dress: 'stand',
   game: 'sit',
   hotpot: 'eat',
+  coffee: 'drink',
+  read: 'read',
 };
 
 /** 自动结束型动作（走到位后定时完成；退出重进时不恢复） */
-const AUTO_ACTS: ReadonlySet<CharAction['type']> = new Set(['cook', 'drink', 'dress']);
+const AUTO_ACTS: ReadonlySet<CharAction['type']> = new Set(['cook', 'drink', 'dress', 'coffee']);
 
 /** 动作按钮文案：[待开始, 进行中] */
 const ACT_LABELS: Record<CharAction['type'], [string, string]> = {
@@ -314,6 +318,8 @@ const ACT_LABELS: Record<CharAction['type'], [string, string]> = {
   mirror: ['照照镜子', '照好啦'],
   game: ['打游戏', '不玩啦'],
   hotpot: ['开涮火锅', '吃饱啦'],
+  coffee: ['端一杯咖啡', '放下杯子'],
+  read: ['抽本书读', '合上书'],
 };
 
 /**
@@ -323,7 +329,7 @@ const ACT_LABELS: Record<CharAction['type'], [string, string]> = {
  * ⚑ 面向家具型动作（watch/work/cook/…）小人朝向 = 家具朝向 + π（脸对着家具）。
  */
 const FACE_ACTS: ReadonlySet<CharAction['type']> = new Set([
-  'watch', 'work', 'cook', 'eat', 'drink', 'dress', 'play', 'makeup', 'mirror',
+  'watch', 'work', 'cook', 'eat', 'drink', 'dress', 'play', 'makeup', 'mirror', 'coffee',
 ]);
 
 function anchorOf(type: CharAction['type'], item: FurnitureItem): CharAction | null {
@@ -343,19 +349,24 @@ function anchorOf(type: CharAction['type'], item: FurnitureItem): CharAction | n
                 ? entry?.acts.eat
                 : type === 'drink'
                   ? entry?.acts.drink
-                  : type === 'dress'
-                    ? entry?.acts.dress
-                    : type === 'play'
-                      ? entry?.acts.play
-                      : type === 'makeup'
-                        ? entry?.acts.makeup
-                        : type === 'mirror'
-                          ? entry?.acts.mirror
-                          : type === 'hotpot'
-                            ? entry?.acts.hotpot
-                            : type === 'game'
-                              ? entry?.acts.game
-                              : entry?.acts.work;
+                  // read 的 itemId 是「沙发/椅子」本身：锚点复用 seat 配置
+                  : type === 'read'
+                    ? entry?.acts.seat
+                    : type === 'coffee'
+                      ? entry?.acts.coffee
+                      : type === 'dress'
+                        ? entry?.acts.dress
+                        : type === 'play'
+                          ? entry?.acts.play
+                          : type === 'makeup'
+                            ? entry?.acts.makeup
+                            : type === 'mirror'
+                              ? entry?.acts.mirror
+                              : type === 'hotpot'
+                                ? entry?.acts.hotpot
+                                : type === 'game'
+                                  ? entry?.acts.game
+                                  : entry?.acts.work;
   if (!a) return null;
   // 目录锚点统一形状（各 act 是同一形状的子集，字段可选）
   const an = a as {
@@ -382,8 +393,15 @@ function anchorOf(type: CharAction['type'], item: FurnitureItem): CharAction | n
     y: a.y ?? 0,
     ox: item.x + out[0] * cos + out[1] * sin,
     oz: item.z - out[0] * sin + out[1] * cos,
-    // play 按乐器分流姿势（钢琴坐姿 / 吉他站姿）
-    pose: type === 'play' ? (item.kind === 'piano' ? 'piano' : 'guitar') : undefined,
+    // play 按乐器分流姿势（钢琴坐姿 / 吉他站姿）；read 用专门的看书坐姿
+    pose:
+      type === 'play'
+        ? item.kind === 'piano'
+          ? 'piano'
+          : 'guitar'
+        : type === 'read'
+          ? 'read'
+          : undefined,
   };
 }
 
@@ -435,7 +453,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [floorColBal, setFloorColBal] = useState<string | undefined>(pack.home.floorColBal);
   const [wallColBal, setWallColBal] = useState<string | undefined>(pack.home.wallColBal);
   const [mealName, setMealName] = useState<string | undefined>(pack.home.mealName);
-  const [pet, setPet] = useState<HomeState['pet']>(pack.home.pet ?? null);
+  const [pet, setPet] = useState<HomeState['pet']>(pack.home.pet ?? undefined);
 
   // ---------------- UI 状态 ----------------
   const [mode, setMode] = useState<HomeMode>('live');
@@ -506,8 +524,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 乐器弹奏特写（吉他/钢琴：镜头推近 + 可弹奏覆盖层；ref 给 GameLoop 高频读） */
   const instRef = useRef<{ kind: 'piano' | 'guitar'; itemId: string } | null>(null);
   const [inst, setInst] = useState<{ kind: 'piano' | 'guitar'; itemId: string } | null>(null);
-  /** 手持物（拿饮料后杯子握在右手，可以端着到处逛） */
-  const carryRef = useRef({ cup: false });
+  /** 手持物（拿饮料/咖啡后杯子握在右手，可以端着到处逛；coffee = 咖啡冒热气款） */
+  const carryRef = useRef({ cup: false, coffee: false });
   const [carryCup, setCarryCup] = useState(false);
   /** 宠物运行时（位置持久化进 HomeState.pet）+ 喂食目标 */
   const petRT = useRef<CharRT>({
@@ -711,7 +729,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setFloorColBal(h.floorColBal);
     setWallColBal(h.wallColBal);
     setMealName(h.mealName);
-    setPet(h.pet ?? null);
+    setPet(h.pet ?? undefined);
     if (h.pet) {
       petRT.current.x = h.pet.x;
       petRT.current.z = h.pet.z;
@@ -914,6 +932,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
       toast('好，先不做了～');
     } else if (act.type === 'play') {
       toast('演奏结束，掌声响起来～');
+    } else if (act.type === 'read') {
+      toast('合上书，回味一下～');
     } else if (act.type === 'makeup') {
       toast('化好啦，气色满满～');
     } else if (act.type === 'mirror') {
@@ -926,6 +946,31 @@ export default function CoupleHome({ close }: { close: () => void }) {
    *  淋浴/看电视/上网自动开水开机；躺床自动关灯；做饭/喝东西/换装定时自动完成。 */
   const beginAction = useCallback(
     (type: CharAction['type'], item: FurnitureItem) => {
+      // B3 阅读：锚点不在书架本身（书架没有 seat），先找最近可坐家具再入座
+      if (type === 'read') {
+        const seats = itemsRef.current.filter((f) => {
+          const e = CATALOG[f.kind];
+          return !!e?.acts.seat && (f.y ?? 0) < 0.45;
+        });
+        if (seats.length === 0) {
+          actRef.current = null;
+          setCharAction(null);
+          toast('先买张沙发或椅子，才能坐着看书呀');
+          return;
+        }
+        const seat = seats.reduce((best, f) => {
+          const db = Math.hypot(best.x - meRT.current.x, best.z - meRT.current.z);
+          const df = Math.hypot(f.x - meRT.current.x, f.z - meRT.current.z);
+          return df < db ? f : best;
+        });
+        const a = anchorOf('read', seat);
+        if (!a) return;
+        actRef.current = a;
+        setCharAction((prev) => (prev ? { ...prev, active: true } : { type, itemId: seat.id, active: true }));
+        toast(`抽了本书，坐到${CATALOG[seat.kind]?.name ?? '沙发'}上慢慢看～`);
+        saveSoon();
+        return;
+      }
       const act = anchorOf(type, item);
       if (!act) return;
       actRef.current = act;
@@ -979,6 +1024,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         turnOn({ open: true });
         act.onArrive = () => {
           carryRef.current.cup = true;
+          carryRef.current.coffee = false;
           setCarryCup(true);
           auto(900, () => {
             turnOn({ open: false });
@@ -987,6 +1033,20 @@ export default function CoupleHome({ close }: { close: () => void }) {
           });
         };
         toast('走到冰箱拿杯冰饮…');
+      } else if (type === 'coffee') {
+        // A3 端一杯咖啡：走到咖啡机 → 唌哚喏煮一杯（蒸汽升腾）→ 热咖啡握在手里端着逛
+        turnOn({ on: true });
+        act.onArrive = () => {
+          carryRef.current.cup = true;
+          carryRef.current.coffee = true;
+          setCarryCup(true);
+          auto(2000, () => {
+            turnOn({ on: false });
+            if (actRef.current?.type === 'coffee') endAction();
+            toast('热咖啡到手，暖暖的～');
+          });
+        };
+        toast('咖啡机喌哚喌哚煮咖啡…');
       } else if (type === 'dress') {
         turnOn({ open: true });
         auto(1500, () => {
@@ -1035,6 +1095,41 @@ export default function CoupleHome({ close }: { close: () => void }) {
         const on = !item.st?.on;
         setItems((prev) => prev.map((f) => (f.id === item.id ? { ...f, st: { ...f.st, on } } : f)));
         toast(on ? '打开电视咯，随便逛，随时坐下看～' : '电视关掉啦，让眼睛歇一歇～');
+        saveSoon();
+        return;
+      }
+
+      // 游戏主机：点击 = 开/关机（开机自动亮电视，小人自由走动 —— v5.8 不再锁在主机前）
+      if (item.kind === 'gameConsole') {
+        const on = !item.st?.on;
+        setItems((prev) =>
+          prev.map((f) => {
+            if (f.id === item.id) return { ...f, st: { ...f.st, on } };
+            if (f.kind === 'tv') return { ...f, st: { ...f.st, on } }; // 电视跟主机同开同关
+            return f;
+          }),
+        );
+        toast(on ? '主机开机，电视亮啦，随便逛～' : '主机关掉啦，去干点别的吧～');
+        saveSoon();
+        return;
+      }
+
+      // 黑胶唱片机：点击 = 唱片开始转 + 联动音乐 App 放歌（再点暂停）；没歌去音乐 App 点
+      if (item.kind === 'vinyl') {
+        const on = !item.st?.on;
+        setItems((prev) => prev.map((f) => (f.id === item.id ? { ...f, st: { ...f.st, on } } : f)));
+        const m = useMusic.getState();
+        if (on) {
+          if (!m.playing) {
+            const last = m.history.find((h) => h.song)?.song ?? null;
+            if (m.current) void m.toggle();
+            else if (last) void useMusic.getState().playSong(last);
+          }
+          toast('黑胶开始转，满屋都是音乐～');
+        } else {
+          if (m.playing) void useMusic.getState().toggle();
+          toast('唱针抬起，音乐停啦');
+        }
         saveSoon();
         return;
       }
@@ -1091,25 +1186,27 @@ export default function CoupleHome({ close }: { close: () => void }) {
               ? 'cook'
               : acts?.drink
                 ? 'drink'
-                : acts?.dress
-                  ? 'dress'
-                  : acts?.play
-                    ? 'play'
-                    : acts?.makeup
-                      ? 'makeup'
-                      : acts?.mirror
-                        ? 'mirror'
-                        : acts?.seat
-                          ? 'sit'
-                          : acts?.watch
-                            ? 'watch'
-                            : acts?.work
-                              ? 'work'
-                              : acts?.hotpot
-                                ? 'hotpot'
-                                : acts?.game
-                                  ? 'game'
-                                  : null;
+                : acts?.coffee
+                  ? 'coffee'
+                  : acts?.read
+                    ? 'read'
+                    : acts?.dress
+                      ? 'dress'
+                      : acts?.play
+                        ? 'play'
+                        : acts?.makeup
+                          ? 'makeup'
+                          : acts?.mirror
+                            ? 'mirror'
+                            : acts?.seat
+                              ? 'sit'
+                              : acts?.watch
+                                ? 'watch'
+                                : acts?.work
+                                  ? 'work'
+                                  : acts?.hotpot
+                                    ? 'hotpot'
+                                    : null;
       if (actType) {
         if (poseRef.current.pose !== 'stand' || actRef.current) endAction();
         setCharAction({ type: actType, itemId: item.id, active: false });
@@ -1213,9 +1310,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
     endAction();
   }, [endAction]);
 
-  /** 放下杯子（端着饮料逛时）：收杯子 */
+  /** 放下杯子（端着饮料/咖啡逛时）：收杯子 */
   const dropCup = useCallback(() => {
     carryRef.current.cup = false;
+    carryRef.current.coffee = false;
     setCarryCup(false);
     toast('放下杯子，满足～');
     saveSoon();
@@ -1244,7 +1342,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
   }, [toast]);
 
   const sendPetAway = useCallback(() => {
-    setPet(null);
+    setPet(undefined);
     petFeedRef.current = null;
     setPetSheet(false);
     toast('挥挥小爪子，下次再来玩呀～');
@@ -2383,6 +2481,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <Utensils className="h-[18px] w-[18px]" />
                 ) : charAction.type === 'drink' ? (
                   <CupSoda className="h-[18px] w-[18px]" />
+                ) : charAction.type === 'coffee' ? (
+                  <Coffee className="h-[18px] w-[18px]" />
+                ) : charAction.type === 'read' ? (
+                  <BookOpen className="h-[18px] w-[18px]" />
                 ) : charAction.type === 'dress' ? (
                   <Shirt className="h-[18px] w-[18px]" />
                 ) : charAction.type === 'play' ? (
@@ -3393,7 +3495,7 @@ function HouseSongList({ onPick }: { onPick: (song: NcmSong) => void }) {
           onClick={() => onPick(song)}
           className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition active:scale-[0.98] active:bg-[#f6f4ef]"
         >
-          <img src={coverSrc(song)} alt="" className="h-9 w-9 rounded-lg object-cover" loading="lazy" />
+          <img src={songCover(song)} alt="" className="h-9 w-9 rounded-lg object-cover" loading="lazy" />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[12.5px] font-medium text-[#3a3a3e]">{song.name}</span>
             <span className="block truncate text-[10.5px] text-[#9a9a96]">

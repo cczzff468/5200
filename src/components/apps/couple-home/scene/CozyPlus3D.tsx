@@ -20,14 +20,16 @@
 import { useEffect, useMemo, useRef, type ReactElement } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
+import { PIANO_WHITE, pianoNote } from '../instrument';
 
 /** 共享 props：接线方按家具类型透传 */
 export interface CozyPlusProps {
   col?: string;      // 用户调色主色
-  on?: boolean;      // 开关状态（projector/humidifier/gameConsole/hotpotTable 炉火）
+  on?: boolean;      // 开关状态（projector/humidifier/gameConsole/vinyl 唱片旋转）
   open?: boolean;    // 门开合（shoeCabinet/wineCabinet）/ 幕布放下（screen 跟随投影仪）
   projectorOn?: boolean; // 任一投影仪开着（screen 用）
   sat?: boolean;     // 有人坐在吊篮上（摆幅加大）
+  touch?: number;    // playful 上次互动时间戳（musicBox 开盖放旋律）
 }
 
 const mat = (c: string, rough = 0.85, extra?: Partial<THREE.MeshStandardMaterialParameters>) => (
@@ -207,9 +209,13 @@ export function Projector3D({ col, on }: CozyPlusProps) {
           {mat('#c9c4b8', 0.7)}
         </mesh>
       ))}
-      {/* 光锥（开机时投向前方） */}
+      {/* 光锥（开机时投向前方）；⚑ raycast 禁用：透明锥体不拦截后方家具的点击 */}
       <group ref={cone} position={[0.06, 0.08, 0.17]} visible={false}>
-        <mesh position={[0, 0, 1.1]} rotation={[Math.PI / 2, 0, 0]}>
+        <mesh
+          position={[0, 0, 1.1]}
+          rotation={[Math.PI / 2, 0, 0]}
+          raycast={() => null}
+        >
           <coneGeometry args={[0.72, 2.2, 24, 1, true]} />
           <meshBasicMaterial
             color="#cfe0ff"
@@ -1054,6 +1060,264 @@ export function FlowerStand3D({ col }: CozyPlusProps) {
   );
 }
 
+// ---------------- 13. 黑胶唱片机（v5.8 B1） ----------------
+
+export function Vinyl3D({ col, on }: CozyPlusProps) {
+  const wood = col ?? '#8a6a4e';
+  const disc = useRef<THREE.Group>(null);
+  const arm = useRef<THREE.Group>(null);
+  const notes = useRef<(THREE.Sprite | null)[]>([]);
+  const noteTex = useMemo(() => {
+    const cv = document.createElement('canvas');
+    cv.width = 64;
+    cv.height = 64;
+    const ctx = cv.getContext('2d')!;
+    ctx.fillStyle = '#e8b84b';
+    ctx.font = 'bold 44px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('♪', 32, 34);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }, []);
+  useFrame((state, dt) => {
+    const d = Math.min(dt, 0.05);
+    // 唱片：开机匀速旋转
+    if (disc.current && on) disc.current.rotation.y += d * 2.4;
+    // 唱臂：开机搭上唱片，关机抬起归位
+    if (arm.current) {
+      const target = on ? -0.52 : 0.45;
+      arm.current.rotation.y = THREE.MathUtils.damp(arm.current.rotation.y, target, 5, d);
+      arm.current.rotation.z = THREE.MathUtils.damp(arm.current.rotation.z, on ? -0.06 : 0, 5, d);
+    }
+    // 音符飘出（开机时）
+    const t = state.clock.elapsedTime;
+    notes.current.forEach((sp, i) => {
+      if (!sp) return;
+      const m = sp.material as THREE.SpriteMaterial;
+      if (!on) {
+        m.opacity = 0;
+        return;
+      }
+      const ph = (t * 0.5 + i * 0.37) % 1;
+      sp.position.set(0.18 + Math.sin(t * 1.6 + i * 2.1) * 0.07, 0.24 + ph * 0.34, -0.05 - i * 0.03);
+      m.opacity = 0.9 * (1 - ph);
+    });
+  });
+  return (
+    <group>
+      {/* 木质底座 */}
+      <mesh position={[0, 0.045, 0]} castShadow receiveShadow>
+        <boxGeometry args={[0.52, 0.09, 0.38]} />
+        {mat(wood, 0.6, { metalness: 0.05 })}
+      </mesh>
+      <mesh position={[0, 0.095, 0]} receiveShadow>
+        <boxGeometry args={[0.5, 0.012, 0.36]} />
+        {mat(shade(wood, 1.15), 0.55)}
+      </mesh>
+      {/* 唱盘 + 黑胶唱片（开机旋转） */}
+      <group ref={disc} position={[-0.08, 0.105, 0]}>
+        <mesh castShadow>
+          <cylinderGeometry args={[0.135, 0.135, 0.014, 28]} />
+          {mat('#3a3a3e', 0.45)}
+        </mesh>
+        {/* 唱片纹路（两圈细环） */}
+        {[0.1, 0.075].map((r) => (
+          <mesh key={r} position={[0, 0.008, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <torusGeometry args={[r, 0.0016, 6, 40]} />
+            {mat('#5c5c60', 0.4)}
+          </mesh>
+        ))}
+        {/* 唱片中心标签 */}
+        <mesh position={[0, 0.008, 0]}>
+          <cylinderGeometry args={[0.042, 0.042, 0.002, 20]} />
+          {mat('#f2b3c2', 0.7)}
+        </mesh>
+        <mesh position={[0, 0.01, 0]}>
+          <cylinderGeometry args={[0.004, 0.004, 0.02, 10]} />
+          {mat('#c9c9c9', 0.3, { metalness: 0.6 })}
+        </mesh>
+      </group>
+      {/* 唱臂（底座枢轴 + 臂杆 + 唱头，开机搭到唱片上） */}
+      <group ref={arm} position={[0.17, 0.11, 0.12]}>
+        <mesh castShadow>
+          <cylinderGeometry args={[0.02, 0.024, 0.035, 12]} />
+          {mat('#c9c9c9', 0.35, { metalness: 0.55 })}
+        </mesh>
+        <mesh position={[0.03, 0.02, -0.09]} rotation={[0, 0.35, 0]} castShadow>
+          <cylinderGeometry args={[0.005, 0.005, 0.21, 8]} />
+          {mat('#d9d9d9', 0.3, { metalness: 0.6 })}
+        </mesh>
+        <mesh position={[0.062, 0.014, -0.178]} rotation={[0, 0.35, 0]}>
+          <boxGeometry args={[0.016, 0.014, 0.03]} />
+          {mat('#3a3a3e', 0.5)}
+        </mesh>
+      </group>
+      {/* 开机音符飘出 */}
+      {[0, 1, 2].map((i) => (
+        <sprite
+          key={i}
+          ref={(el) => {
+            notes.current[i] = el;
+          }}
+          position={[0.18, 0.3, 0]}
+          scale={[0.07, 0.07, 1]}
+        >
+          <spriteMaterial map={noteTex} transparent opacity={0} depthWrite={false} />
+        </sprite>
+      ))}
+    </group>
+  );
+}
+
+// ---------------- 14. 复古八音盒（v5.8 B1/D2：开盖叮嗜噈八音盒音色） ----------------
+
+/** 八音盒旋律（《天空之城》片段）：[音名, 拍数]，音名需在 PIANO_WHITE 域内 */
+const MUSIC_BOX_TUNE: [string, number][] = [
+  ['A4', 1], ['B4', 1], ['C5', 1], ['B4', 1], ['C5', 1], ['E5', 1], ['B4', 2],
+  ['E4', 1], ['F4', 1], ['E4', 1], ['F4', 1], ['C5', 1], ['E4', 2],
+  ['C5', 1], ['C5', 1], ['C5', 1], ['B4', 1], ['C5', 1], ['B4', 1], ['C5', 3],
+];
+const MUSIC_BOX_BEAT = 330;
+
+export function MusicBox3D({ col, touch }: CozyPlusProps) {
+  const wood = col ?? '#a8825e';
+  const lid = useRef<THREE.Group>(null);
+  const drum = useRef<THREE.Group>(null);
+  const notes = useRef<(THREE.Sprite | null)[]>([]);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const playingUntil = useRef(0);
+  const openedFor = useRef(0);
+  /** 音名 → 频率（与钢琴面板同一张音域表） */
+  const freqOf = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const k of PIANO_WHITE) map[k.name] = k.freq;
+    return map;
+  }, []);
+  const noteTex = useMemo(() => {
+    const cv = document.createElement('canvas');
+    cv.width = 64;
+    cv.height = 64;
+    const ctx = cv.getContext('2d')!;
+    ctx.fillStyle = '#d9a13e';
+    ctx.font = 'bold 40px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('♫', 32, 34);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }, []);
+
+  // 点击（lastTouch 变化）→ 开盖 + 八音盒音色放旋律
+  useEffect(() => {
+    if (!touch) return;
+    const now = performance.now();
+    if (now - openedFor.current < 1200) return; // 弹跳冷却重复触发忽略
+    openedFor.current = now;
+    playingUntil.current = now + MUSIC_BOX_TUNE.reduce((s, [, b]) => s + b, 0) * MUSIC_BOX_BEAT + 600;
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    let t = 260; // 盖子先开一点再响
+    for (const [name, beats] of MUSIC_BOX_TUNE) {
+      const ms = t;
+      const freq = freqOf[name];
+      if (freq) timers.current.push(setTimeout(() => pianoNote(freq, 0.85, 'musicbox'), ms));
+      t += beats * MUSIC_BOX_BEAT;
+    }
+    return () => {
+      timers.current.forEach(clearTimeout);
+      timers.current = [];
+    };
+  }, [touch, freqOf]);
+  useEffect(
+    () => () => {
+      timers.current.forEach(clearTimeout);
+    },
+    [],
+  );
+
+  useFrame((state, dt) => {
+    const d = Math.min(dt, 0.05);
+    const open = performance.now() < playingUntil.current;
+    // 盖子绕后缘铰链翻开 ~1.9rad
+    if (lid.current) {
+      lid.current.rotation.x = THREE.MathUtils.damp(lid.current.rotation.x, open ? -1.9 : 0, 6, d);
+    }
+    // 音筒：开盖时慢转
+    if (drum.current) {
+      if (open) drum.current.rotation.x += d * 1.6;
+    }
+    // 音符飘出
+    const t = state.clock.elapsedTime;
+    notes.current.forEach((sp, i) => {
+      if (!sp) return;
+      const m = sp.material as THREE.SpriteMaterial;
+      if (!open) {
+        m.opacity = 0;
+        return;
+      }
+      const ph = (t * 0.42 + i * 0.29) % 1;
+      sp.position.set(Math.sin(t * 1.5 + i * 2.4) * 0.09, 0.3 + ph * 0.32, 0.05 + Math.cos(t + i) * 0.04);
+      m.opacity = 0.9 * (1 - ph);
+    });
+  });
+
+  return (
+    <group>
+      {/* 盒身 */}
+      <mesh position={[0, 0.07, 0]} castShadow receiveShadow>
+        <boxGeometry args={[0.24, 0.14, 0.18]} />
+        {mat(wood, 0.6)}
+      </mesh>
+      {/* 盖子（绕后缘开合） */}
+      <group ref={lid} position={[0, 0.14, -0.09]}>
+        <mesh position={[0, 0.012, 0.09]} castShadow>
+          <boxGeometry args={[0.24, 0.022, 0.18]} />
+          {mat(shade(wood, 1.12), 0.55)}
+        </mesh>
+        {/* 盖内星形镶嵌（开盖可见） */}
+        <mesh position={[0, -0.002, 0.09]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[0.045, 10]} />
+          {mat('#e8c977', 0.35, { metalness: 0.5 })}
+        </mesh>
+      </group>
+      {/* 侧面发条旋钮 */}
+      <mesh position={[0.128, 0.07, 0]} rotation={[0, 0, Math.PI / 2]} castShadow>
+        <cylinderGeometry args={[0.022, 0.022, 0.016, 12]} />
+        {mat('#c9a13e', 0.35, { metalness: 0.6 })}
+      </mesh>
+      {/* 内部音筒 + 滚针（开盖可见） */}
+      <group ref={drum} position={[0, 0.152, 0.02]}>
+        <mesh castShadow>
+          <cylinderGeometry args={[0.032, 0.032, 0.13, 14]} />
+          {mat('#d9b25e', 0.35, { metalness: 0.55 })}
+        </mesh>
+        {[-0.045, 0, 0.045].map((x) => (
+          <mesh key={x} position={[x, 0.034, 0]}>
+            <sphereGeometry args={[0.005, 6, 6]} />
+            {mat('#b58a2e', 0.4, { metalness: 0.5 })}
+          </mesh>
+        ))}
+      </group>
+      {/* 音符飘出 */}
+      {[0, 1, 2].map((i) => (
+        <sprite
+          key={i}
+          ref={(el) => {
+            notes.current[i] = el;
+          }}
+          position={[0, 0.34, 0]}
+          scale={[0.07, 0.07, 1]}
+        >
+          <spriteMaterial map={noteTex} transparent opacity={0} depthWrite={false} />
+        </sprite>
+      ))}
+    </group>
+  );
+}
+
 // ---------------- 注册表（接线方按 kind 取用） ----------------
 
 export const COZY_PLUS_PARTS: Record<string, (p: CozyPlusProps) => ReactElement> = {
@@ -1069,4 +1333,6 @@ export const COZY_PLUS_PARTS: Record<string, (p: CozyPlusProps) => ReactElement>
   hammock: Hammock3D,
   gameConsole: GameConsole3D,
   flowerStand: FlowerStand3D,
+  vinyl: Vinyl3D,
+  musicBox: MusicBox3D,
 };

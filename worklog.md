@@ -21238,3 +21238,77 @@ Stage Summary:
 - 拾光小屋现为「四室一厅+阳台」：19 类可交互家具、宠物、访客、做饭小游戏、五子棋、点歌、拍照、天气联动
 - 已知小限制：棋盘桌/灶台的 3D 点击验证因无头环境坐标命中困难改为逻辑链路验证（与已验证的宠物面板同一 mount 模式）；访客生成需工作区存在 AI 联系人（kind≠user）
 - 横屏模式下小屋 HUD 旋转 90° 呈现（沿袭上批任务的 PhoneShell 横屏方案），触控坐标天然映射无需适配
+
+---
+Task ID: 2-b
+Agent: instrument-upgrade subagent
+Task: 乐器升级 A1和弦/A2小星星/A4录音回放/D2音色 + 覆盖层下移
+
+Work Log:
+- instrument.ts 全量扩展（原 5 个导出与 2 参调用签名完全兼容）：钢琴音色 PianoTimbre（grand 原样保留/ep 电钢=纯正弦基频+0.24 二倍频+约 8ms 高频 tine 瞬态+1.45s 快衰减+音量 0.34/musicbox 八音盒=基频+非谐波 ×3.98 ×9.2 分音+3 音分微失谐闪光正弦+2.8s 长余音+音量 0.25）；吉他音色 GuitarTimbre（acoustic 原参数/ukulele=damp 0.992+1.4s 更亮更短），pluckCache 键从数字改为「音色:频率」字符串（音色缓存隔离）
+- 音符事件总线：NoteEvent{kind,freq,name} + onNote 订阅（返回退订）+ emitNote 广播（订阅者异常 try/catch 隔离；录音武装中且未传 record:false 时自动写入录音带）——3D 小人手部同步代理只需 onNote 即可拿到演示曲/回放/手动弹奏的全部音符
+- 会话级录音机单例：recStart（清带武装）/recStop（解除并返回事件）/recClear（清带）/recIsRecording/recGet/recSubscribe（开始停止清空通知 UI）/recStartedAt（计时用）/recPlayTimbre 备忘对象；RecEvent = NoteEvent + {t: 相对开始毫秒, vol}
+- 吉他和弦：GuitarChord{id,name,offsets,tint} + GUITAR_CHORDS 五个标准指法（C/G/Am/F/Em，低 E→高 e 半音偏移，null=闷弦）+ chordStringFreq(openFreq,semi)=openFreq×2^(semi/12)
+- 小星星：TWINKLE 42 音（36 个四分+6 个二分，共 48 拍≈20.2s）+ twinkleTempoMs=420，音名全部落在 C4–C6 键域
+- InstrumentOverlay：面板容器 mb-[168px] h-[46%] max-h-[420px] → mb-[104px] h-[36%] max-h-[320px]（下移收短不挡小人，穿透行为不变，标题条+结束演奏保留）；新增 h-9 共享工具条（音色 chips 左侧：钢琴 钢琴/电钢/八音盒、吉他 木吉他/尤克里里，激活粉底白字；右侧 ●录（录音中红底+elapsed 秒数）/▶回放（无录音或录音中禁用 40% 透明，播放中变■停止）/×清除）
+- 录音回放：replay 按事件 t 值 setTimeout 排程（timer ids 存 ref，■停止/清除/卸载全清），音色路由=事件 kind 匹配当前面板用当前音色、否则用该乐器默认音色（grand/acoustic），replay 调 synth+emitNote({record:false}) 防自录；录音机为模块级单例，跨钢琴/吉他面板关闭重开均共享
+- 小星星：工具条内（仅钢琴面板）按钮排程 setTimeout 链（二分音符=2 拍），每音 pianoNote+emitNote(record:false)，demoOn 防双开，⏹停止可中断，切乐器/关面板/卸载自动清定时器；演示期间手动按键不冲突
+- 键位灯光统一走 onNote 订阅：PianoPanel 收 kind=piano 事件点亮同名键 300ms（覆盖演示曲+回放），GuitarPanel 收 kind=guitar 事件按开放弦频率就近点亮对应弦 520ms——手动弹奏/演示/回放三路共用一套视觉
+- 吉他和弦条：指板底部 bottom-9 一排 5 个粉彩 chip（GUITAR_CHORDS.tint 底+白字，容器 pointer-events-none 仅 chip 自身拦截，不挡扫弦）；pointerDown 按住=heldChord（state+ref 双份，抬升+白环视觉，任意位置 pointerup/cancel 释放），徽标切换「已按 C 和弦 · 扫弦试试」；twang 改为：按和弦时 offset null 的弦直接闷掉不出声，否则 chordStringFreq 出和弦把位音，音符名=按弦时「和弦·弦名」否则弦名，多指一手按和弦一手扫弦成立
+- 验证：npx eslint 两文件零错误；npx tsc --noEmit 全仓 13 个错误全部为预存（CoupleHome/catalog/HomeScene/Room 的 bal/pet/NcmSong 旧问题），两目标文件零错误；tsx 运行时断言通过（和弦偏移/chordStringFreq 数值/TWINKLE 42 音 48 拍且全部可弹/事件总线广播/录音过滤 record:false/停止后缓冲保留/清除生效）；git status 仅 2 个自有文件变更；未跑 dev server 未提交
+
+Stage Summary:
+- instrument.ts 新导出契约（主代理接线用）：type PianoTimbre='grand'|'ep'|'musicbox'；type GuitarTimbre='acoustic'|'ukulele'；pianoNote(freq,vol=1,timbre='grand')；pluckString(freq,vol=1,timbre='acoustic')；interface NoteEvent{kind:'piano'|'guitar';freq:number;name:string}；emitNote(e,opts?:{record?:boolean})；onNote(cb)=>unsubscribe；interface RecEvent extends NoteEvent{t:number;vol:number}；recStart()/recStop():RecEvent[]/recClear()/recIsRecording():boolean/recGet():RecEvent[]/recStartedAt():number/recSubscribe(cb)=>unsubscribe/recPlayTimbre:{current:PianoTimbre|GuitarTimbre|null}；interface GuitarChord{id,name,offsets:(number|null)[],tint}；GUITAR_CHORDS(C,G,Am,F,Em)；chordStringFreq(openFreq,semi|null):number；TWINKLE:{name,beats}[](42音)；twinkleTempoMs=420
+- 3D 小人手部同步接入方式： CoupleHome 中 onNote(e=>…)（kind/freq/name 齐全，演示曲与回放也会广播）；若需主动触发音画同步可调 emitNote({kind,freq,name})
+- InstrumentOverlay.tsx：props 接口未变 {kind:'piano'|'guitar';onClose:()=>void}；面板已下移收短（mb-[104px] h-[36%] max-h-[320px]）；录音/回放/音色/小星星全部在覆盖层内闭环，主代理无需额外接线
+
+---
+Task ID: 2-a
+Agent: pet-beautify subagent
+Task: 拾光小屋宠物美化（Pet3D 视觉升级）
+
+Work Log:
+- 读 worklog 末尾 3 个 section 确认上下文（v57-shine 引入 Pet3D 猫「团子」/狗「布丁」），通读 Pet3D.tsx 418 行梳理 refs/AI/动画/JPG 结构
+- 头部 Q 化：头椭球 [0.14,0.125,0.13]→[0.16,0.142,0.15]（≈1.15×，y 压扁=底部略平），球段 16x14→24x18；口吻白垫/鼻子同步放大，猫改粉鼻 #e5808e、狗深棕鼻 #4a3b30
+- 眼睛升级：半径 0.018→0.023（16x12 段，roughness 0.15 亮面），每只眼内嵌两颗 MeshBasicMaterial 白高光（大 0.0068 左上 + 小 0.0034 右下，作为眼球子网格随眨眼一起压扁）；useFrame + nextBlink ref 实现每 4-6s 眨眼（scale.y→0.1 持续 120ms）
+- 腮红：两颗 #f6a8b0 压扁椭球（opacity 0.55 transparent + depthWrite=false），旋转贴合脸颊曲面
+- 内耳：猫耳锥加大加平滑（4→12 段 + scale z 0.72 压扁）并内嵌粉锥 #f5b3bd；狗垂耳内嵌浅奶油斑 #f0dcbd；耳朵全部改 group 包裹（ears ref）支持抖耳
+- 花纹：猫=3 道 #c47f3e 虎斑纹（部分环面 arc 1.05 + 组级 x 向缩放 0.72，骑在背脊上、两端没入毛里）；狗=C.dark 深棕背块（鞍形椭球）+ 奶油胸斑 + 白色腮点 ×2
+- 胡须（猫）：每侧 3 根 radius 0.002 / 长 0.07 白色细圆柱，Euler [tilt, -s·0.4, -s·1.4] 向外前侧扇形张开，根部埋进脸颊
+- 项圈+铃铛：环面项圈（猫 #e05c6e / 狗 #5c8ae0）围颈 + 金色铃铛球（metalness 0.55）+ 深金环箍；bell ref 在 useFrame 里 rotation.z 正弦摆（走路 0.22rad / 待机 0.05rad）
+- 尾巴重做：猫=三节父链锥形圆柱（-0.15/+0.55/+1.35 rad 链式旋转）构成问号卷尾 + 深色尾尖球（问号的点），tailMid/tailTail(tailTip) ref 带相位差的惯性摆动（开心 2.6s 内幅度/频率随既有 tail.rotation.y 逻辑同步放大）；狗=3.5rad 部分环面粗卷尾 + 双封口球（奶油色尾尖），沿既有 rotation.y 左右摇摆
+- 待机动画：呼吸（body.scale y ±1.5% @1.6s，x/z 反向 0.6×保体积）+ 抖耳（每 4.5-7.5s 随机单耳 rotation.z 46Hz 抖 0.4s）
+- 闲坐：sitSt/sitBlend ref —— 静止（非移动非进食）超 6s → damp 过渡坐下（身体 rotation.x -0.34rad 后仰 + 下沉 0.042 + 后腿折叠 -0.95rad + 前腿 +0.34 反向补偿保持直立）持续 2-3s 再起身；期间出现新 wander 目标立即自然站起，不触碰溜达/喂食 AI 逻辑
+- 材质/性能：主毛料 roughness 统一 0.9（无 flatShading），castShadow 仅保留躯干/头/腿/尾根/卷尾等主体（细小件全关）；运行时猫 41 mesh / 狗 36 mesh（<80 预算）
+- 心情气泡 y 常量 0.52/0.6→0.57/0.65（头抬高后避免气泡插进耳朵，逻辑不变）；爱心粒子/饭碗/喂食/溜达/点击逻辑零改动
+- 验证：npx eslint src/.../Pet3D.tsx 通过（exit 0 零输出）；tsc --noEmit 全项目无任何 Pet3D 报错（仅其他文件预存错误，与本任务无关）；git status 确认本任务仅改 Pet3D.tsx
+
+Stage Summary:
+- Pet3D 视觉全面升级完成：Q 版大头 + 双高光眨眼大眼 + 腮红 + 内耳 + 胡须 + 虎斑纹/柴犬花色 + 项圈铃铛 + 问号卷尾/柴犬卷尾 + 呼吸/抖耳/眨眼微动画 + 久坐休息姿势
+- 对外 API 100% 不变：Pet3DProps / PetData / 默认导出 / rt 持久化 / 溜达・喂食・撸宠・心情气泡行为全部保留
+- 涉及文件：仅 src/components/apps/couple-home/scene/Pet3D.tsx（418→623 行）
+
+---
+Task ID: cottage-v58-melody
+Agent: Z.ai Code (main) + 2-a pet-beautify subagent + 2-b instrument-upgrade subagent
+Task: 拾光小屋 v5.8 旋律扩展 —— 用户反馈四张截图问题修复 + 宠物美化 + 游戏主机自由走动 + A1和弦/A2小星星/A3端咖啡/A4录音回放/B1黑胶八音盒/B3书架阅读/D2音色切换
+
+Work Log:
+- 【截图问题排查】img3 吊床穿模根因：吊床长轴沿 x（立柱 ±x）而 sleep 躺姿沿局部 -z → 小人横跨吊床、布面穿过身体——catalog hammock sleep 加 ryOff: π/2 + out [0,0.9]，实测头枕西端枕头沿长轴躺 ✓；img3/4 卧室南岸撞车（v5.6 钢琴自动落点压梳妆台、v5.7 吊床自动落点压钢琴琴凳、v5.1 绿植塞进琴身）→ migrateMelodyV14 幂等矫正（仅动仍在自动落点的件：吊床→(-0.75,4.35) ry0、钢琴→(-0.2,7.25)、卧室绿植→(-1.15,7.55)），defaultHome 同步改 ✓
+- 【投影仪光锥劫持点击】透明光锥 mesh 拦截后方家具点击（同类 starLamp Points bug）→ cone raycast=()=>null；实测游戏主机可正常点中
+- 【游戏主机自由走动】gameConsole 改纯 toggle（同电视）：开机自动亮电视、小人不再锁在主机前；catalog 删 game act（类型保留兼容老档），onFurnTap 主机分支同开同关电视；实测开机 toast + 摇杆/键盘自由走动 ✓
+- 【A3 端一杯咖啡】coffeeMaker acts.coffee 锚点（FACE_ACTS 面向机器）→ 走到咖啡机 → 煮 2s（机器亮灯冒汽）→ 咖啡到手端着逛；Char3D 杯子三态：冰饮（粉液+吸管）/ 热咖啡（棕液+杯柄+杯口热气 sprite 循环，粉液/吸管隐藏）；「放下杯子」按钮复用；实测全流程 + 端着走 ✓
+- 【B3 书架阅读】bookcase acts.read → beginAction('read') 就近找可坐家具（seat 锚点复用 anchorOf('read', seat)，恢复链路天然兼容）→ Char3D 新 read 坐姿（双手托书 + 书本封面/书页/书脊 + 每 2.8s 翻页角动画 + 低头看书浮动）；无座提示先买沙发；实测抽书→坐脚凳看书→合上书 ✓
+- 【B1 黑胶唱片机+八音盒】新 kind vinyl/musicBox + Vinyl3D（木座+旋转唱片+唱臂开机搭上+音符飘出）/ MusicBox3D（开盖铰链+音筒滚针+《天空之城》片段八音盒音色旋律+♫ 飘出）；CozyPlusProps 加 touch 透传 lastTouch；v5.8 迁移补齐上电视柜（首版 free() 被电视柜本体/窗帘误挡落地的 bug 一并矫正）；黑胶点击联动音乐 App（无歌提示去点歌）；实测两者交互 + 入库 ✓
+- 【乐器特写机位】inst 相机 side 0.55/0.72→0.95/1.32、near→1.95/1.8、camY→1.66/1.6、lookAt 侧偏 -0.3——后脑勺不再居中挡琴；配合 2-b 覆盖层下移（mb-104 h-36%）小人全程可见
+- 【集成 2-b 乐器升级】A1 吉他和弦（按住 C/G/Am/F/Em chip 扫弦出和弦、闷弦静音、已按徽标）/ A2 小星星一键自动弹（琴键随节拍点亮+⏹停止）/ A4 录音回放（录带秒数、跨乐器共享、回放点亮琴键琴弦、record:false 防自录）/ D2 音色（钢琴 原声/电钢/八音盒、吉他 木吉他/尤克里里）——实测小星星演奏、录 4 音回放、双音色切换 ✓
+- 【A2 手指跟键】instrument.ts 音符事件总线 emitNote/onNote → Char3D 订阅：钢琴音符驱动对应侧前臂敲键脉冲（左右手交替）、吉他扫弦驱动右臂扫弦脉冲——小人手跟着按键/琴弦动
+- 【宠物美化 2-a】Pet3D 大眼双高光+眨眼、腮红、猫内耳粉/狗垂耳浅色、猫三道背纹/柴犬鞍纹、胡须、项圈+铃铛（走路摇摆）、猫三节问号尾/柴犬卷尾、呼吸起伏、耳朵随机抖动、久坐小憩姿势——AI/喂食/撸宠逻辑不变
+- 【类型与兼容】types +vinyl/musicBox kind、+coffee/read act、+read pose、sleep +ryOff/out；api ACT_TYPES +coffee/read；顺手修掉 v5.7 遗留 tsc 错误（HomeScene/Room 的 bal 缺型、POSE_OF_ACT 缺项、doorPos.bal、petFeedRef 可选性、pet setPet(null)→undefined、点歌封面 coverSrc(song)→songCover(song)）——全仓 tsc 0 错误、改动文件 eslint 0 错误
+- 【端到端】用户工作区 32f84bf3 实机验证：迁移(119件)→吊床沿轴躺(Zzz)→主机开机走动→钢琴(覆盖层下移/小星星/录音回放/双音色)→吉他(和弦按住+扫弦/特写机位)→咖啡端杯→黑胶开关→八音盒→书架阅读→撸宠 全链路通过；测试后用户存档已恢复原状（下次打开自动迁移到新布局）
+- 排障记录：①黑胶/八音盒首版落地——free() 把电视柜本体和窗帘当占位；②迁移绿植没挪——find('plant') 找到客厅第一盆，改按落点匹配；③锁屏 z-65 层导致点击无响应——用 [role=dialog][aria-label=锁屏] 定位后上滑解锁；④子代理 InstrumentOverlay 曾出现 `const eldChord` 文件损坏瞬态，复核时已自愈并二次校验 eslint/tsc 通过
+
+Stage Summary:
+- 拾光小屋 v5.8：四张截图问题修复（吊床穿模/卧室撞车/覆盖层挡人/光锥劫持点击）+ 宠物全面美化 + 主机自由走动 + 吉他和弦/小星星演示/录音回放/三种钢琴音色两种吉他音色/端咖啡逛街/书架阅读/黑胶联动音乐App/八音盒旋律
+- 数据向后兼容：新字段全部可选，migrateMelodyV14 幂等（老档自动补 2 件新家具 + 卧室布局矫正，仅动自动落点件）
+- 涉及文件：types.ts、catalog.ts、CoupleHome.tsx、api route、scene/{Char3D,HomeScene,Room,CozyPlus3D,Furn3D,Pet3D}.tsx、instrument.ts、InstrumentOverlay.tsx、worklog.md

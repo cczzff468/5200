@@ -300,8 +300,8 @@ interface WallDef {
   normal: THREE.Vector3;
   /** 是否画踢脚线（默认画） */
   baseboard?: boolean;
-  /** 归属房间：四房间分开换色 */
-  room: 'lr' | 'br' | 'kt' | 'ba';
+  /** 归属房间：五房间分开换色（bal = 阳台 v5.7） */
+  room: 'lr' | 'br' | 'kt' | 'ba' | 'bal';
 }
 
 /** 墙体世界 AABB（墙盒不旋转，中心±半尺寸） */

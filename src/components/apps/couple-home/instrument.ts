@@ -4,8 +4,11 @@
  * 情侣小家 —— 网页音频合成（零素材，纯 Web Audio）
  *
  * - 吉他拨弦：Karplus-Strong 物理建模（噪声激励 → 延迟环低通衰减），
- *   每根弦按频率预生成一次 AudioBuffer 缓存复用，音色接近真实木吉他；
+ *   按「音色+频率」预生成一次 AudioBuffer 缓存复用，音色接近真实木吉他；
  * - 钢琴：基频 + 2/3/4 次谐波叠加（高次谐波衰减更快）+ 快起音长衰减包络；
+ * - 音色：钢琴（grand 大钢琴 / ep 电钢 / musicbox 八音盒）、吉他（acoustic 木吉他 / ukulele 尤克里里）；
+ * - 音符事件总线（onNote/emitNote）：供 3D 小人手势同步、琴键弦位灯光、录音机；
+ * - 弹奏录音机（recStart/recStop/...）：会话级内存缓冲，不持久化；
  * - AudioContext 懒创建 + 用户手势时 resume（iOS Safari 兼容）。
  */
 
@@ -41,26 +44,35 @@ export const GUITAR_STRINGS: { name: string; freq: number; wound: boolean }[] = 
   { name: 'e', freq: 329.63, wound: false },
 ];
 
-/** 已生成的拨弦音色缓存（同弦不重复合成） */
-const pluckCache = new Map<number, AudioBuffer>();
+/** 吉他音色：acoustic 木吉他 / ukulele 尤克里里（更亮更短促） */
+export type GuitarTimbre = 'acoustic' | 'ukulele';
+
+/** 各音色的 Karplus-Strong 参数 */
+const PLUCK_PRESET: Record<GuitarTimbre, { damp: number; seconds: number; gain: number }> = {
+  acoustic: { damp: 0.996, seconds: 2.6, gain: 0.42 },
+  ukulele: { damp: 0.992, seconds: 1.4, gain: 0.4 },
+};
+
+/** 已生成的拨弦音色缓存（音色+频率 相同不重复合成） */
+const pluckCache = new Map<string, AudioBuffer>();
 
 /**
  * Karplus-Strong 拨弦：环长 = 采样率/频率，环内初始填噪声，
- * 之后每样点 = 0.996 × (前环两样点均值)，2.6 秒自然衰减到静音。
+ * 之后每样点 = damp × (前环两样点均值)，木吉他 2.6 秒 / 尤克里里 1.4 秒自然衰减到静音。
  */
-export function pluckString(freq: number, vol = 1): void {
+export function pluckString(freq: number, vol = 1, timbre: GuitarTimbre = 'acoustic'): void {
   const ac = ensureAudio();
   if (!ac) return;
-  const key = Math.round(freq * 10);
+  const preset = PLUCK_PRESET[timbre] ?? PLUCK_PRESET.acoustic;
+  const key = `${timbre}:${Math.round(freq * 10)}`;
   let buf = pluckCache.get(key);
   if (!buf) {
     const sr = ac.sampleRate;
     const n = Math.max(2, Math.round(sr / freq));
-    const len = Math.floor(sr * 2.6);
+    const len = Math.floor(sr * preset.seconds);
     const data = new Float32Array(len);
     for (let i = 0; i < n; i++) data[i] = Math.random() * 2 - 1;
-    const damp = 0.996;
-    for (let i = n; i < len; i++) data[i] = damp * 0.5 * (data[i - n] + data[i - n + 1]);
+    for (let i = n; i < len; i++) data[i] = preset.damp * 0.5 * (data[i - n] + data[i - n + 1]);
     // 轻微淡入避免咔哒声
     const fade = Math.min(n, 64);
     for (let i = 0; i < fade; i++) data[i] *= i / fade;
@@ -71,10 +83,36 @@ export function pluckString(freq: number, vol = 1): void {
   const src = ac.createBufferSource();
   src.buffer = buf;
   const g = ac.createGain();
-  g.gain.value = 0.42 * vol;
+  g.gain.value = preset.gain * vol;
   src.connect(g);
   g.connect(ac.destination);
   src.start();
+}
+
+// ---------------- 吉他和弦 ----------------
+
+export interface GuitarChord {
+  id: string;
+  name: string;
+  /** 每弦半音偏移（低 E → 高 e，顺序同 GUITAR_STRINGS）；null = 该弦闷住不发声 */
+  offsets: (number | null)[];
+  /** 和弦按键的粉彩底色 */
+  tint: string;
+}
+
+/** 常用开放和弦（标准指法半音偏移） */
+export const GUITAR_CHORDS: GuitarChord[] = [
+  { id: 'C', name: 'C', offsets: [null, 3, 2, 0, 1, 0], tint: '#7fb8a4' },
+  { id: 'G', name: 'G', offsets: [3, 2, 0, 0, 0, 3], tint: '#e8a87c' },
+  { id: 'Am', name: 'Am', offsets: [null, 0, 2, 2, 1, 0], tint: '#a48bc2' },
+  { id: 'F', name: 'F', offsets: [1, 3, 3, 2, 1, 1], tint: '#6f9fd8' },
+  { id: 'Em', name: 'Em', offsets: [0, 2, 2, 0, 0, 0], tint: '#d88a9c' },
+];
+
+/** 按弦音高：openFreq × 2^(semi/12)；semi 为 null（闷弦）时返回开放弦音高，出不出声由调用方决定 */
+export function chordStringFreq(openFreq: number, semi: number | null): number {
+  if (semi == null) return openFreq;
+  return openFreq * Math.pow(2, semi / 12);
 }
 
 // ---------------- 钢琴 ----------------
@@ -112,11 +150,96 @@ export const PIANO_BLACK: { after: number; name: string; freq: number }[] = [
   { after: 12, name: 'A#5', freq: 932.33 },
 ];
 
-/** 钢琴音：谐波叠加 + 指数衰减（每音独立节点，播完自动回收） */
-export function pianoNote(freq: number, vol = 1): void {
+/** 钢琴音色：grand 大钢琴（默认）/ ep 电钢 / musicbox 八音盒 */
+export type PianoTimbre = 'grand' | 'ep' | 'musicbox';
+
+/**
+ * 钢琴音：谐波叠加 + 指数衰减（每音独立节点，播完自动回收）。
+ * - grand：三角波基频 + 2/3/4 次谐波（原有音色，默认参数不变）；
+ * - ep：纯正弦基频 + 柔和 2 倍频 + 约 8ms「音簧」敲击瞬态，衰减稍快、音量更暖；
+ * - musicbox：钟铃质感 —— 基频 + 非谐波分音（×3.98 / ×9.2）+ +3 音分微失谐闪光，长余音、整体更轻。
+ */
+export function pianoNote(freq: number, vol = 1, timbre: PianoTimbre = 'grand'): void {
   const ac = ensureAudio();
   if (!ac) return;
   const t0 = ac.currentTime;
+
+  if (timbre === 'ep') {
+    const master = ac.createGain();
+    master.gain.setValueAtTime(0.0001, t0);
+    master.gain.exponentialRampToValueAtTime(0.34 * vol, t0 + 0.01);
+    master.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.45);
+    master.connect(ac.destination);
+    const partials: [number, number][] = [
+      [1, 1],
+      [2, 0.24],
+      [4, 0.05],
+    ];
+    for (const [mult, amp] of partials) {
+      const osc = ac.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq * mult;
+      const og = ac.createGain();
+      og.gain.setValueAtTime(amp, t0);
+      og.gain.exponentialRampToValueAtTime(Math.max(0.0001, amp * 0.08), t0 + 0.9);
+      osc.connect(og);
+      og.connect(master);
+      osc.start(t0);
+      osc.stop(t0 + 1.6);
+    }
+    // tine 敲击瞬态：约 8ms 的高频正弦短促「叮」
+    const tine = ac.createOscillator();
+    tine.type = 'sine';
+    tine.frequency.value = Math.min(6200, freq * 6 + 1200);
+    const tg = ac.createGain();
+    tg.gain.setValueAtTime(0.08 * vol, t0);
+    tg.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.008);
+    tine.connect(tg);
+    tg.connect(ac.destination);
+    tine.start(t0);
+    tine.stop(t0 + 0.02);
+    return;
+  }
+
+  if (timbre === 'musicbox') {
+    const master = ac.createGain();
+    master.gain.setValueAtTime(0.0001, t0);
+    master.gain.exponentialRampToValueAtTime(0.25 * vol, t0 + 0.005);
+    master.gain.exponentialRampToValueAtTime(0.0001, t0 + 2.8);
+    master.connect(ac.destination);
+    // [倍率, 起始幅度, 各自分音衰减到 10% 的秒数] —— 非谐波分音先收，基频长余音
+    const partials: [number, number, number][] = [
+      [1, 1, 2.4],
+      [3.98, 0.16, 0.9],
+      [9.2, 0.045, 0.35],
+    ];
+    for (const [mult, amp, decay] of partials) {
+      const osc = ac.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq * mult;
+      const og = ac.createGain();
+      og.gain.setValueAtTime(amp, t0);
+      og.gain.exponentialRampToValueAtTime(Math.max(0.0001, amp * 0.1), t0 + decay);
+      osc.connect(og);
+      og.connect(master);
+      osc.start(t0);
+      osc.stop(t0 + 2.9);
+    }
+    // 微失谐（+3 音分）第二正弦，制造细碎闪光感
+    const sparkle = ac.createOscillator();
+    sparkle.type = 'sine';
+    sparkle.frequency.value = freq * Math.pow(2, 3 / 1200);
+    const sg = ac.createGain();
+    sg.gain.setValueAtTime(0.3, t0);
+    sg.gain.exponentialRampToValueAtTime(0.0001, t0 + 2.2);
+    sparkle.connect(sg);
+    sg.connect(master);
+    sparkle.start(t0);
+    sparkle.stop(t0 + 2.4);
+    return;
+  }
+
+  // grand：三角波基频 + 2/3/4 次谐波
   const master = ac.createGain();
   master.gain.setValueAtTime(0.0001, t0);
   master.gain.exponentialRampToValueAtTime(0.5 * vol, t0 + 0.012);
@@ -140,6 +263,157 @@ export function pianoNote(freq: number, vol = 1): void {
     og.connect(master);
     osc.start(t0);
     osc.stop(t0 + 2.0);
+  }
+}
+
+// ---------------- 《小星星》演示曲（钢琴） ----------------
+
+/** 小星星旋律（与 PIANO_WHITE/PIANO_BLACK 音名对应）；beats：1 = 四分音符，2 = 乐句末二分音符 */
+export const TWINKLE: { name: string; beats: number }[] = [
+  { name: 'C4', beats: 1 },
+  { name: 'C4', beats: 1 },
+  { name: 'G4', beats: 1 },
+  { name: 'G4', beats: 1 },
+  { name: 'A4', beats: 1 },
+  { name: 'A4', beats: 1 },
+  { name: 'G4', beats: 2 },
+  { name: 'F4', beats: 1 },
+  { name: 'F4', beats: 1 },
+  { name: 'E4', beats: 1 },
+  { name: 'E4', beats: 1 },
+  { name: 'D4', beats: 1 },
+  { name: 'D4', beats: 1 },
+  { name: 'C4', beats: 2 },
+  { name: 'G4', beats: 1 },
+  { name: 'G4', beats: 1 },
+  { name: 'F4', beats: 1 },
+  { name: 'F4', beats: 1 },
+  { name: 'E4', beats: 1 },
+  { name: 'E4', beats: 1 },
+  { name: 'D4', beats: 2 },
+  { name: 'G4', beats: 1 },
+  { name: 'G4', beats: 1 },
+  { name: 'F4', beats: 1 },
+  { name: 'F4', beats: 1 },
+  { name: 'E4', beats: 1 },
+  { name: 'E4', beats: 1 },
+  { name: 'D4', beats: 2 },
+  { name: 'C4', beats: 1 },
+  { name: 'C4', beats: 1 },
+  { name: 'G4', beats: 1 },
+  { name: 'G4', beats: 1 },
+  { name: 'A4', beats: 1 },
+  { name: 'A4', beats: 1 },
+  { name: 'G4', beats: 2 },
+  { name: 'F4', beats: 1 },
+  { name: 'F4', beats: 1 },
+  { name: 'E4', beats: 1 },
+  { name: 'E4', beats: 1 },
+  { name: 'D4', beats: 1 },
+  { name: 'D4', beats: 1 },
+  { name: 'C4', beats: 2 },
+];
+
+/** 小星星每拍毫秒数（四分音符时值） */
+export const twinkleTempoMs = 420;
+
+// ---------------- 弹奏录音机（会话级内存缓冲，不持久化） ----------------
+
+export interface RecEvent extends NoteEvent {
+  /** 相对录音开始的毫秒数 */
+  t: number;
+  vol: number;
+}
+
+let recArmed = false;
+let recT0 = 0;
+let recBuf: RecEvent[] = [];
+const recSubs = new Set<() => void>();
+
+function recNotify(): void {
+  recSubs.forEach((cb) => cb());
+}
+
+/** 开始录音：清空旧带并武装 */
+export function recStart(): void {
+  recArmed = true;
+  recT0 = Date.now();
+  recBuf = [];
+  recNotify();
+}
+
+/** 停止录音：解除武装，返回本次录到的事件（缓冲保留可直接回放） */
+export function recStop(): RecEvent[] {
+  recArmed = false;
+  recNotify();
+  return recBuf;
+}
+
+/** 清空录音缓冲（录音中调用无效） */
+export function recClear(): void {
+  if (recArmed) return;
+  recBuf = [];
+  recNotify();
+}
+
+export function recIsRecording(): boolean {
+  return recArmed;
+}
+
+/** 本次录音开始的时刻（Date.now() 毫秒）；未开始过返回 0（供 UI 计时显示） */
+export function recStartedAt(): number {
+  return recT0;
+}
+
+/** 当前录音缓冲（可能为空） */
+export function recGet(): RecEvent[] {
+  return recBuf;
+}
+
+/** 订阅录音开始/停止/清空通知（供 UI 刷新）；返回退订函数 */
+export function recSubscribe(cb: () => void): () => void {
+  recSubs.add(cb);
+  return () => {
+    recSubs.delete(cb);
+  };
+}
+
+/** 回放音色备忘（可选简化用；覆盖层回放自带音色路由，并不依赖它） */
+export const recPlayTimbre: { current: PianoTimbre | GuitarTimbre | null } = { current: null };
+
+// ---------------- 音符事件总线（3D 小人手势同步 / 键位灯光 / 录音） ----------------
+
+export interface NoteEvent {
+  kind: 'piano' | 'guitar';
+  freq: number;
+  name: string;
+}
+
+type NoteCb = (e: NoteEvent) => void;
+const noteSubs = new Set<NoteCb>();
+
+/** 订阅音符事件（弹奏、演示曲、回放都会广播）；返回退订函数 */
+export function onNote(cb: NoteCb): () => void {
+  noteSubs.add(cb);
+  return () => {
+    noteSubs.delete(cb);
+  };
+}
+
+/**
+ * 广播一个音符事件：通知全部订阅者；
+ * 录音武装中（且未显式传 record:false）会顺手记进录音带（回放/演示曲传 record:false 防自录）。
+ */
+export function emitNote(e: NoteEvent, opts?: { record?: boolean }): void {
+  noteSubs.forEach((cb) => {
+    try {
+      cb(e);
+    } catch {
+      // 单个订阅者异常不影响其他订阅者与录音
+    }
+  });
+  if (recArmed && opts?.record !== false) {
+    recBuf.push({ ...e, t: Math.max(0, Date.now() - recT0), vol: 1 });
   }
 }
 

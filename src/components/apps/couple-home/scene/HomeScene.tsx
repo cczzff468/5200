@@ -74,8 +74,8 @@ export interface HomeSceneProps {
   poseRef: RefObject<{ pose: CharPose; y: number }>;
   /** 正在执行的家具动作 */
   actRef: RefObject<CharAction | null>;
-  /** 手持物（true = 右手拿小水杯，拿饮料后端着到处逛） */
-  carryRef?: RefObject<{ cup: boolean }>;
+  /** 手持物（true = 右手拿小水杯，拿饮料/咖啡后端着到处逛） */
+  carryRef?: RefObject<{ cup: boolean; coffee?: boolean }>;
   /** 乐器弹奏特写（非 null = 镜头推近该乐器；覆盖层 UI 发声） */
   instRef?: RefObject<{ kind: 'piano' | 'guitar'; itemId: string } | null>;
   /** 浴缸水龙头点击（放水/关水） */
@@ -85,7 +85,7 @@ export interface HomeSceneProps {
   onToggleWin?: (i: number) => void;
   /** 每扇窗沿墙坐标 / 三扇门沿墙坐标 */
   winPos?: number[];
-  doorPos?: { bed: number; kt: number; bath: number };
+  doorPos?: { bed: number; kt: number; bath: number; bal?: number };
   /** 用户自定义地板/墙/门/窗框颜色（客厅） */
   floorCol?: string;
   wallCol?: string;
@@ -129,7 +129,7 @@ export interface HomeSceneProps {
   /** 宠物（null = 未领养）：数据 + 运行时 ref + 点击回调 + 喂食目标 */
   pet?: PetData | null;
   petRT?: RefObject<CharRT>;
-  petFeedRef?: RefObject<{ x: number; z: number; at: number } | null>;
+  petFeedRef: RefObject<{ x: number; z: number; at: number } | null>;
   onPetTap?: () => void;
   /** 访客（邀请的 AI 联系人）：运行时 ref + 名牌（null = 无访客） */
   guestRT?: RefObject<CharRT | null>;
@@ -167,6 +167,8 @@ const POSE_OF_ACT: Record<CharAction['type'], CharPose> = {
   dress: 'stand',
   game: 'sit',
   hotpot: 'eat',
+  coffee: 'drink',
+  read: 'read',
 };
 
 // ---------------- 小工具 ----------------
@@ -359,8 +361,8 @@ function GameLoop({
   distRef: RefObject<{ d: number }>;
   modeRef: RefObject<HomeMode>;
   itemsRef: RefObject<FurnitureItem[]>;
-  /** 三扇门开态 + 沿墙坐标（ref 高频读取） */
-  doorRef: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive }>;
+  /** 每扇门开态 + 沿墙坐标（ref 高频读取；bal = 阳台门 v5.7） */
+  doorRef: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive }>;
   /** 拖拽中 1:1 直接控制镜头（true 时不做惯性 lerp） */
   lookRef: RefObject<{ on: boolean }>;
   /** 相机对焦物（隔墙可见性用） */
@@ -520,11 +522,11 @@ function GameLoop({
         const rz = -Math.sin(ry);
         const isPiano = inst.kind === 'piano';
         // 竖屏水平 FOV 很窄，特写机位要留足距离才能框住整件乐器
-        const near = isPiano ? 1.85 : 1.7; // 相机离乐器中心（琴凳/站位一侧）
-        const side = isPiano ? 0.55 : 0.72; // 肩侧偏移（吉他站姿避开后脑勺）
-        const camY = isPiano ? 1.52 : 1.34;
+        const near = isPiano ? 1.95 : 1.8; // 相机离乐器中心（琴凳/站位一侧）
+        const side = isPiano ? 0.95 : 1.32; // 肩侧偏移加大：越过肩膀看琴，避免后脑勺挡镜头
+        const camY = isPiano ? 1.66 : 1.6;
         const lookNear = isPiano ? 0.3 : 0.15;
-        const lookY = isPiano ? 0.7 : 0.5;
+        const lookY = isPiano ? 0.78 : 0.66;
         desired.current.set(
           it.x + fx * near + rx * side,
           camY,
@@ -533,7 +535,7 @@ function GameLoop({
         // 方案 B 兜底：特写镜头也不许钻墙
         pushCameraOutWalls(desired.current, wallBoxes);
         camera.position.lerp(desired.current, 1 - Math.exp(-dt * 3.2));
-        lookAt.current.set(it.x + fx * lookNear - rx * 0.1, lookY, it.z + fz * lookNear - rz * 0.1);
+        lookAt.current.set(it.x + fx * lookNear - rx * 0.3, lookY, it.z + fz * lookNear - rz * 0.3);
         camera.lookAt(lookAt.current);
         const cam = camera as THREE.PerspectiveCamera;
         if (cam.isPerspectiveCamera && cam.fov !== 52) {

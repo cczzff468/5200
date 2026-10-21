@@ -325,7 +325,7 @@ export default function Furn3D({
           />
         )}
 
-        {/* v5.7 拾光扩展（CozyPlus3D 程序化建模）：投影仪/幕布/吊篮秋千/鞋柜/挂画组/加湿器/酒柜/棋盘桌/火锅桌/吊床/游戏机/花架 */}
+        {/* v5.7 拾光扩展（CozyPlus3D 程序化建模）：投影仪/幕布/吊篮秋千/鞋柜/挂画组/加湿器/酒柜/棋盘桌/火锅桌/吊床/游戏机/花架 + v5.8 黑胶唱片机/八音盒 */}
         {PlusPart && (
           <PlusPart
             col={item.col}
@@ -333,6 +333,7 @@ export default function Furn3D({
             open={!!item.st?.open}
             projectorOn={projectorOn}
             sat={sitting}
+            touch={item.st?.lastTouch}
           />
         )}
 

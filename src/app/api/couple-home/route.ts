@@ -141,7 +141,7 @@ const DIRS = new Set(['up', 'down', 'left', 'right']);
 const ACT_TYPES = new Set([
   'sit', 'lie', 'bath', 'shower', 'watch', 'work',
   'cook', 'eat', 'drink', 'dress', 'play', 'makeup', 'mirror',
-  'game', 'hotpot',
+  'game', 'hotpot', 'coffee', 'read',
 ]);
 const FLOOR_TEXES = new Set(['plain', 'wood', 'check']);
 const WALL_TEXES = new Set(['plain', 'dot', 'stripe']);

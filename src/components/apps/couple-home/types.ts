@@ -107,7 +107,10 @@ export type FurnitureKind =
   | 'hotpotTable'
   | 'hammock'
   | 'gameConsole'
-  | 'flowerStand';
+  | 'flowerStand'
+  // ---- v5.8 旋律扩展（B1 黑胶唱片机/八音盒） ----
+  | 'vinyl'
+  | 'musicBox';
 
 /** 家具分类（商店栏的 tab） */
 export type FurnCategory =
@@ -318,8 +321,10 @@ export interface CatalogEntry {
     makeup?: { y: number; dx?: number; dz?: number; out?: [number, number] };
     /** 可坐：点击出「坐下」按钮，小人走过去坐下（按钮变「站起来」） */
     seat?: { y: number; dx?: number; dz?: number };
-    /** 可睡：点击出「睡觉」按钮，小人走过去躺上床（按钮变「起床」，头朝枕头 + Zzz 特效） */
-    sleep?: { y: number; dz?: number };
+    /** 可睡：点击出「睡觉」按钮，小人走过去躺上床（按钮变「起床」，头朝枕头 + Zzz 特效）；
+     *  ryOff = 躺下朝向偏移（吊床等长轴沿 x 的家具用，让小人躺在长轴上而非横跨）；
+     *  out = 起身落点（局部坐标，锚点缺省时用） */
+    sleep?: { y: number; dz?: number; ryOff?: number; out?: [number, number] };
     /**
      * 可泡澡/淋浴：小人脱衣走进浴缸或淋浴房（按钮变「出来」）；out = 起身落点（局部坐标）；
      * stand = 站姿淋浴（花洒自动开水）；ryOff = 朝向偏移；浴缸水龙头可放水
@@ -338,6 +343,10 @@ export interface CatalogEntry {
     work?: { y: number; dz?: number };
     /** 打游戏：小人走到主机前坐下开玩（同 work 的坐姿；屏幕/电视自动亮） */
     game?: { y: number; dz?: number };
+    /** 端一杯咖啡：小人走到咖啡机前煮一杯端着逛（热气袅袅，同 drink 的自由走动） */
+    coffee?: { y: number; dx?: number; dz?: number; out?: [number, number] };
+    /** 阅读：书架标记（点击抽一本书，走到最近的沙发/椅子坐下翻页看） */
+    read?: boolean;
     /** 吃火锅：小人坐到火锅桌边涮火锅（炉火自动开，吃到饱手动起身） */
     hotpot?: { y: number; dx?: number; dz?: number; out?: [number, number] };
   };
@@ -363,7 +372,7 @@ export interface CharRT {
 
 /**
  * 小人姿势：站立 / 坐下 / 躺床 / 泡澡（脱衣坐浴缸）/ 淋浴（脱衣站淋浴房）/
- * 做饭 / 吃饭 / 喝东西 / 弹琴 / 弹吉他 / 化妆 / 照镜子（game 复用 sit）
+ * 做饭 / 吃饭 / 喝东西 / 弹琴 / 弹吉他 / 化妆 / 照镜子（game 复用 sit）/ 坐着看书
  */
 export type CharPose =
   | 'stand'
@@ -377,7 +386,8 @@ export type CharPose =
   | 'piano'
   | 'guitar'
   | 'makeup'
-  | 'mirror';
+  | 'mirror'
+  | 'read';
 
 /** 小人画风 */
 export type CharStyle = 'cartoon' | 'real';
@@ -399,7 +409,9 @@ export interface CharAction {
     | 'mirror'
     | 'dress'
     | 'game'
-    | 'hotpot';
+    | 'hotpot'
+    | 'coffee'
+    | 'read';
   itemId: string;
   /** 目标落点（世界坐标）与朝向、坐垫高度 */
   tx: number;

@@ -457,7 +457,8 @@ export const CATALOG: Record<string, CatalogEntry> = {
   // ---- 收纳 ----
   bookcase: {
     kind: 'bookcase', glb: G('bookcase'), name: '开放书架', cat: 'decor', fp: [0.8, 0.5], h: 1.76,
-    acts: { playful: true },
+    // 「抽本书」：走到最近的沙发/椅子坐下翻页看（v5.8 B3）
+    acts: { playful: true, read: true },
   },
   wardrobe: {
     kind: 'wardrobe', glb: G('wardrobe'), name: '双门衣柜', cat: 'decor', fp: [0.8, 0.5], h: 1.7,
@@ -692,8 +693,8 @@ export const CATALOG: Record<string, CatalogEntry> = {
   // ---- 厨房 ----
   coffeeMaker: {
     kind: 'coffeeMaker', name: '迷你咖啡机', cat: 'appliance', fp: [0.38, 0.28], h: 0.38,
-    // 点击煮一杯：蒸汽升腾 + 指示灯亮
-    acts: { toggle: true },
+    // 点击煮一杯：蒸汽升腾 + 指示灯亮；「端一杯」小人走到咖啡机前煮一杯热咖啡端着逛（v5.8 A3）
+    acts: { toggle: true, coffee: { y: 0, dz: 0.45, out: [0, 0.95] } },
   },
   fruitBasket: {
     kind: 'fruitBasket', name: '满满果盘', cat: 'kitchen', fp: [0.4, 0.4], h: 0.24,
@@ -761,24 +762,37 @@ export const CATALOG: Record<string, CatalogEntry> = {
     kind: 'chessTable', name: '棋盘桌', cat: 'table', fp: [0.98, 0.98], h: 0.7,
     acts: { playful: true },
   },
-  // J8 火锅桌（点击开火：红汤翻滚冒泡；「开涮」小人坐桌边吃火锅）
+  // J8 火锅桌（点击开火：红汤翻滚冒泡；「开涮」小人坐桌边吃火锅；座位离桌沿留出腿部空间）
   hotpotTable: {
     kind: 'hotpotTable', name: '火锅桌', cat: 'table', fp: [1.15, 1.15], h: 0.78,
-    acts: { toggle: true, hotpot: { y: 0.46, dx: 0.92, out: [1.5, 0] } },
+    acts: { toggle: true, hotpot: { y: 0.46, dx: 1.02, out: [1.55, 0] } },
   },
   // J9 双人吊床（躺上去摇一摇，Zzz 特效）
+  // ⚑ ryOff π/2：吊床长轴沿 x（立柱在 ±x），小人躺下头朝局部 -x（枕头侧）而不是横跨吊床
   hammock: {
     kind: 'hammock', name: '双人吊床', cat: 'bed', fp: [2.35, 0.95], h: 0.95,
-    acts: { sleep: { y: 0.48, dz: 0 } },
+    acts: { sleep: { y: 0.48, dz: 0, ryOff: Math.PI / 2, out: [0, 0.9] } },
   },
-  // J10 游戏主机（点击开机：附近电视自动亮 + 「打游戏」坐到主机前开玩）
+  // J10 游戏主机（点击开机：附近电视自动亮；开机后小人自由走动，同电视 v5.8）
   gameConsole: {
     kind: 'gameConsole', name: '游戏主机', cat: 'appliance', fp: [0.44, 0.32], h: 0.13,
-    acts: { toggle: true, game: { y: 0.02, dz: 0.72 } },
+    acts: { toggle: true },
   },
   // J11 花架（开花植物三层架，点一点落花瓣）
   flowerStand: {
     kind: 'flowerStand', name: '开花花架', cat: 'plant', fp: [0.78, 0.38], h: 1.08,
+    acts: { playful: true },
+  },
+
+  // ==================== v5.8 旋律扩展（B1：黑胶唱片机 + 八音盒） ====================
+  // 黑胶唱片机（摆电视柜台面）：点击开机转盘旋转 + 联动音乐 App 放歌（再点暂停）
+  vinyl: {
+    kind: 'vinyl', name: '黑胶唱片机', cat: 'appliance', fp: [0.52, 0.4], h: 0.2,
+    acts: { toggle: true },
+  },
+  // 复古八音盒（摆电视柜台面）：点击开盖，叮叮咚咚放一首小旋律（八音盒音色）
+  musicBox: {
+    kind: 'musicBox', name: '复古八音盒', cat: 'decor', fp: [0.26, 0.2], h: 0.24,
     acts: { playful: true },
   },
 };
@@ -882,7 +896,7 @@ export function defaultHome(): HomeState {
       F('aircon', 1.4, 5.6, { y: 1.85, ry: -Math.PI / 2 }), // 卧室东壁空调
       F('lampFloor', -4.05, 7.3), // 卧室角落落地灯
       F('rug', -0.9, 5.5), // 圆地毯
-      F('plant', -0.35, 7.55),
+      F('plant', -1.15, 7.55), // 绿植（钢琴西侧，不塞进琴身）
       F('photoFrame', -1.7, 7.45, { ry: Math.PI }), // 卧室相框
       F('photoWall', 1.43, 4.6, { y: 1.45, ry: -Math.PI / 2 }), // 卧室东壁挂墙相框
       F('plushCat', -1.5, 0.45, { y: 0.4, ry: -0.7 }), // 猫咪玩偶坐脚凳 —— 改放客厅
@@ -941,7 +955,7 @@ export function defaultHome(): HomeState {
       F('beanbag', 2.6, 0.55), // 懒人豆袋
       F('guitar', -2.85, 2.5), // 角落吉他
       F('wallShelf', ROOM_X - 0.07, 0.8, { y: 1.4, ry: -Math.PI / 2 }), // 客厅东壁置物架
-      F('piano', 0.35, 7.25, { ry: Math.PI }), // 卧室东南角钢琴（琴凳朝屋内）
+      F('piano', -0.2, 7.25, { ry: Math.PI }), // 卧室南墙钢琴（西移避开梳妆台，琴凳朝屋内）
       F('standingMirror', 1.25, 4.4, { ry: -Math.PI / 2 }), // 卧室穿衣镜
       F('starLamp', 1.1, 6.3), // 卧室星空灯
       F('canopy', -3.32, 5.6, { ry: -Math.PI / 2 }), // 床幔跟随床位
@@ -961,8 +975,10 @@ export function defaultHome(): HomeState {
       F('chessTable', -2.4, -1.7), // 客厅西北角棋盘桌
       F('hotpotTable', 3.1, -1.35), // 客厅东北火锅桌
       F('gameConsole', -0.55, -2.72, { y: 0.62 }), // 游戏主机摆上电视柜
+      F('vinyl', -1.15, -2.72, { y: 0.62 }), // 黑胶唱片机摆上电视柜（v5.8）
+      F('musicBox', 0.1, -2.72, { y: 0.62 }), // 八音盒摆上电视柜（v5.8）
       F('flowerStand', 1.98, 2.62), // 边桌旁花架
-      F('hammock', 0.35, 6.35, { ry: Math.PI }), // 卧室南侧双人吊床
+      F('hammock', -0.75, 4.35), // 卧室中西部双人吊床（长轴沿西东，不压钢琴/梳妆台）
 
       // —— 阳台（卧室南侧，推门而出） ——
       F('swingChair', -3.5, 9.35), // 吊篮秋千椅
@@ -1146,25 +1162,27 @@ export function migrateBathV53(h: HomeState): HomeState {
     add('doormat', 8.35, 7.0, 0, Math.PI / 2);
     add('plant', 11.0, 3.45, 0, 0);
   }
-  // 吊灯：逐间补
-  for (const room of ['lr', 'br', 'kt', 'ba'] as RoomId[]) {
+  // 吊灯：逐间补（阳台不装吊灯/插座）
+  for (const room of ['lr', 'br', 'kt', 'ba'] as const) {
     if (!inRoom('chandelier', room)) {
-      const spot: Record<RoomId, [number, number]> = {
+      const spot: Partial<Record<RoomId, [number, number]>> = {
         lr: [0, 0.2], br: [-1.5, 5.5], kt: [4.5, 5.5], ba: [9.5, 5.5],
       };
-      add('chandelier', spot[room][0], spot[room][1], WALL_H - 0.04, 0);
+      const s = spot[room];
+      if (s) add('chandelier', s[0], s[1], WALL_H - 0.04, 0);
     }
   }
   // 插座：逐间补
-  for (const room of ['lr', 'br', 'kt', 'ba'] as RoomId[]) {
+  for (const room of ['lr', 'br', 'kt', 'ba'] as const) {
     if (!inRoom('socket', room)) {
-      const spot: Record<RoomId, [number, number, number]> = {
+      const spot: Partial<Record<RoomId, [number, number, number]>> = {
         lr: [ROOM_X - 0.07, -0.9, -Math.PI / 2],
         br: [-ROOM_X + 0.07, 3.7, Math.PI / 2],
         kt: [4.2, BED_Z0 + 0.19, 0],
         ba: [KTCH_X1 + 0.07, 3.6, Math.PI / 2],
       };
-      add('socket', spot[room][0], spot[room][1], 0.38, spot[room][2]);
+      const s = spot[room];
+      if (s) add('socket', s[0], s[1], 0.38, s[2]);
     }
   }
   // 落地风扇
@@ -1446,9 +1464,82 @@ export function migrateShineV57(h: HomeState): HomeState {
   return { ...h, furniture: furn };
 }
 
-/** 老档全量迁移链：卧室补全 → 厨房开放 → 卫生间+小物全家桶 → 卫生间搬家（v5.4 客厅东侧） → 家具互动补全 → 温馨扩展 → 拾光扩展 */
+let migSeq14 = 0;
+
+/**
+ * v5.8 旋律扩展迁移（幂等）：
+ * ① 老档补黑胶唱片机 + 八音盒（电视柜台面，落点被占则贴柜落地）；
+ * ② 修复 v5.6/v5.7 自动落点的卧室南岸撞车（钢琴压梳妆台/绿植塞进琴身/吊床压钢琴琴凳）——
+ *    仅当家具仍在自动落点（用户没自己挪过）时才矫正。
+ */
+export function migrateMelodyV14(h: HomeState): HomeState {
+  if (!h || h.v !== 5 || !Array.isArray(h.furniture)) return h;
+  const furn = h.furniture.slice();
+  const stamp = Date.now().toString(36);
+  const add = (kind: FurnitureKind, x: number, z: number, y?: number, ry?: number) =>
+    furn.push({ id: `${kind}-mig14-${stamp}-${++migSeq14}`, kind, x, z, ry: ry ?? 0, y, st: {} });
+
+  // ① 黑胶唱片机 + 八音盒：跟电视柜台面（同 v5.7 主机规则直接摆上柜，柜面互不重叠）；
+  //    首版迁移曾因 free() 被电视柜本体/窗帘挡住而落到柜前地面（-?,-2.25, y=0）→ 顺手挪上柜面
+  const tvStand = furn.find((f) => f.kind === 'tvStand');
+  const vinyl = furn.find((f) => f.kind === 'vinyl');
+  if (!vinyl) {
+    if (tvStand) add('vinyl', tvStand.x - 1.15, tvStand.z, 0.62, tvStand.ry ?? 0);
+    else add('vinyl', -1.15, -2.4);
+  } else if (
+    tvStand &&
+    Math.abs(vinyl.x - (tvStand.x - 1.15)) < 0.06 &&
+    Math.abs(vinyl.z + 2.25) < 0.06 &&
+    (vinyl.y ?? 0) < 0.45
+  ) {
+    vinyl.x = tvStand.x - 1.15;
+    vinyl.z = tvStand.z;
+    vinyl.y = 0.62;
+    vinyl.ry = tvStand.ry ?? 0;
+  }
+  const musicBox = furn.find((f) => f.kind === 'musicBox');
+  if (!musicBox) {
+    if (tvStand) add('musicBox', tvStand.x + 0.1, tvStand.z, 0.62, tvStand.ry ?? 0);
+    else add('musicBox', 0.55, -2.4);
+  } else if (
+    tvStand &&
+    Math.abs(musicBox.x - (tvStand.x + 0.1)) < 0.06 &&
+    Math.abs(musicBox.z + 2.25) < 0.06 &&
+    (musicBox.y ?? 0) < 0.45
+  ) {
+    musicBox.x = tvStand.x + 0.1;
+    musicBox.z = tvStand.z;
+    musicBox.y = 0.62;
+    musicBox.ry = tvStand.ry ?? 0;
+  }
+
+  // ② 卧室南岸撞车矫正（只动仍在自动落点的件）
+  // 吊床（v5.7 自动落点 0.35,6.35 压住钢琴琴凳区）→ 挪到卧室中西部空地
+  const hammock = furn.find((f) => f.kind === 'hammock');
+  if (hammock && Math.abs(hammock.x - 0.35) < 0.06 && Math.abs(hammock.z - 6.35) < 0.06) {
+    hammock.x = -0.75;
+    hammock.z = 4.35;
+    hammock.ry = 0;
+  }
+  // 绿植（v5.1 自动落点 -0.35,7.55 会塞进钢琴）→ 先挪，钢琴才能西移
+  // ⚑ 直接按落点匹配（全屋有多盆 plant，find 第一个会找错）
+  const plant = furn.find((f) => f.kind === 'plant' && Math.abs(f.x + 0.35) < 0.06 && Math.abs(f.z - 7.55) < 0.06);
+  if (plant) {
+    plant.x = -1.15;
+  }
+  // 钢琴（v5.6 自动落点 0.35,7.25 东端压梳妆台）→ 西移 0.55
+  const piano = furn.find((f) => f.kind === 'piano');
+  if (piano && Math.abs(piano.x - 0.35) < 0.06 && Math.abs(piano.z - 7.25) < 0.06) {
+    piano.x = -0.2;
+  }
+  return { ...h, furniture: furn };
+}
+
+/** 老档全量迁移链：卧室补全 → 厨房开放 → 卫生间+小物全家桶 → 卫生间搬家（v5.4 客厅东侧） → 家具互动补全 → 温馨扩展 → 拾光扩展 → 旋律扩展 */
 export function migrateHome(h: HomeState): HomeState {
-  return migrateShineV57(migrateCozyV56(migrateActV55(migrateBathV54(migrateBathV53(migrateKitchenV52(migrateBedroomV51(h)))))));
+  return migrateMelodyV14(
+    migrateShineV57(migrateCozyV56(migrateActV55(migrateBathV54(migrateBathV53(migrateKitchenV52(migrateBedroomV51(h))))))),
+  );
 }
 
 /** 同步读缓存（首屏即时渲染；无则 null） */

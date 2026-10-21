@@ -14,9 +14,10 @@
  * - 朝向由 GameLoop 每帧写入 rt 并贴到 holder；第一人称时 hide。
  */
 
-import { useMemo, useRef, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
+import { onNote } from '../instrument';
 import type { CharPose, CharRT } from '../types';
 
 export interface Char3DProps {
@@ -30,8 +31,8 @@ export interface Char3DProps {
   poseRef?: RefObject<{ pose: CharPose; y: number }>;
   /** 穿搭编号（衣柜换装；0=默认，1/2=换色套装；partner 固定 0） */
   outfit?: number;
-  /** 手持物（true = 右手握小水杯，拿饮料后端着到处逛） */
-  carryRef?: RefObject<{ cup: boolean }>;
+  /** 手持物（true = 右手握小水杯，拿饮料/咖啡后端着到处逛；coffee = 咖啡款冒热气） */
+  carryRef?: RefObject<{ cup: boolean; coffee?: boolean }>;
   /** 访客名牌（头顶浮名字牌；缺省不挂） */
   guestName?: string;
 }
@@ -166,8 +167,20 @@ interface CharRig {
   /** 化妆星星（化妆时绕头部旋转闪烁，平时隐藏） */
   spark: THREE.Group;
   sparkSprites: THREE.Sprite[];
-  /** 手持小水杯（拿饮料后握在右手，平时隐藏） */
+  /** 手持小水杯（拿饮料/咖啡后握在右手，平时隐藏） */
   cup: THREE.Group;
+  /** 咖啡液（端咖啡时显示，冰饮时隐藏） */
+  cupCoffee: THREE.Mesh;
+  /** 冰饮粉色液体（端咖啡时隐藏） */
+  cupJuice: THREE.Mesh;
+  /** 杯吸管（冰饮时显示） */
+  cupStraw: THREE.Mesh;
+  /** 咖啡热气（端咖啡时从杯口袭袭升起） */
+  cupSteam: THREE.Sprite;
+  /** 看书时的书（封面+书页+翻页页角；仅 read 姿势可见） */
+  book: THREE.Group;
+  /** 正在翻的那一页（绕书脊翻动） */
+  bookFlip: THREE.Group;
 }
 
 const stdMat = (c: string, rough = 0.8, extra?: Partial<THREE.MeshStandardMaterialParameters>) =>
@@ -453,8 +466,84 @@ function buildChar(who: 'me' | 'partner' | 'guest', style: 'cartoon' | 'real', o
   cupStraw.rotation.z = 0.18;
   cupStraw.castShadow = false;
   cup.add(cupStraw);
+  // 咖啡液（端咖啡时切换显示；带奶泡拉花色）
+  const cupCoffee = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.026, 0.021, 0.05, 12),
+    stdMat('#7a4a28', 0.4),
+  );
+  cupCoffee.position.y = -0.005;
+  cupCoffee.visible = false;
+  cup.add(cupCoffee);
+  // 咖啡杯柄（挂在咖啡液组上 → 端冰饮时随咖啡液一起隐藏）
+  const cupHandle = new THREE.Mesh(new THREE.TorusGeometry(0.014, 0.004, 6, 12), stdMat('#f7f5ef', 0.5));
+  cupHandle.position.set(-0.032, 0.003, 0);
+  cupHandle.castShadow = false;
+  cupCoffee.add(cupHandle);
+  // 热气（端咖啡时从杯口袭袭升起）
+  const steamTex = (() => {
+    const cv = document.createElement('canvas');
+    cv.width = 64;
+    cv.height = 64;
+    const c2 = cv.getContext('2d')!;
+    const gr = c2.createRadialGradient(32, 32, 3, 32, 32, 30);
+    gr.addColorStop(0, 'rgba(255,255,255,0.75)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    c2.fillStyle = gr;
+    c2.fillRect(0, 0, 64, 64);
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
+  const cupSteam = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: steamTex, transparent: true, opacity: 0, depthWrite: false }),
+  );
+  cupSteam.scale.setScalar(0.05);
+  cupSteam.position.set(0.004, 0.07, 0);
+  cup.add(cupSteam);
   cup.position.set(0, -P.foreLen - P.foreR * 0.85, 0.028);
   foreR.add(cup);
+
+  // ---------- 看书的书（封面 + 书页 + 翻页页角；仅 read 姿势可见；挂在躯干前） ----------
+  const book = new THREE.Group();
+  book.visible = false;
+  const bookCoverMat = stdMat(who === 'me' ? '#e8a3b3' : '#7a9ec2', 0.55);
+  const bookPaperMat = stdMat('#faf7f0', 0.85);
+  // 左右封面（微 V 形摊开）
+  const coverL = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.012, 0.15), bookCoverMat);
+  coverL.position.set(-0.055, 0, 0);
+  coverL.rotation.z = 0.12;
+  coverL.castShadow = false;
+  book.add(coverL);
+  const coverR = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.012, 0.15), bookCoverMat);
+  coverR.position.set(0.055, 0, 0);
+  coverR.rotation.z = -0.12;
+  coverR.castShadow = false;
+  book.add(coverR);
+  // 左右页块
+  const pageL = new THREE.Mesh(new THREE.BoxGeometry(0.098, 0.016, 0.138), bookPaperMat);
+  pageL.position.set(-0.05, 0.012, 0);
+  pageL.rotation.z = 0.1;
+  book.add(pageL);
+  const pageR = new THREE.Mesh(new THREE.BoxGeometry(0.098, 0.016, 0.138), bookPaperMat);
+  pageR.position.set(0.05, 0.012, 0);
+  pageR.rotation.z = -0.1;
+  book.add(pageR);
+  // 书脊
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.02, 0.152), bookCoverMat);
+  spine.position.set(0, 0.006, 0);
+  book.add(spine);
+  // 翻页页角（绕书脊 z 轴翻转）
+  const bookFlip = new THREE.Group();
+  bookFlip.position.set(0, 0.024, 0);
+  const flipMesh = new THREE.Mesh(new THREE.BoxGeometry(0.096, 0.003, 0.136), bookPaperMat);
+  flipMesh.position.x = 0.048;
+  flipMesh.castShadow = false;
+  bookFlip.add(flipMesh);
+  book.add(bookFlip);
+  book.position.set(0, style === 'cartoon' ? 0.34 : 0.5, 0.24);
+  book.rotation.x = -0.42; // 书面朝上微仰
+  book.scale.setScalar(style === 'cartoon' ? 1 : 0.82);
+  g.add(book);
 
   // ---------- 头 + 脸 + 发型 ----------
   const head = new THREE.Group();
@@ -570,7 +659,7 @@ function buildChar(who: 'me' | 'partner' | 'guest', style: 'cartoon' | 'real', o
     back.rotation.x = -0.1;
   }
 
-  return { root: g, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, hipY: P.hipY, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, cup };
+  return { root: g, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, hipY: P.hipY, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, cup, cupCoffee, cupJuice, cupStraw, cupSteam, book, bookFlip };
 }
 
 const dampN = THREE.MathUtils.damp;
@@ -641,6 +730,21 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outf
   const effOutfit = who === 'guest' ? guestOutfit : outfit;
   const rig = useMemo(() => buildChar(who, style, effOutfit), [who, style, effOutfit]);
   const holder = useRef<THREE.Group>(null);
+  /** 音符事件（弹琴/扫弦的手部脉冲同步：小人手跟着按键/琴弦动） */
+  const noteFx = useRef({ pianoSide: 1, pianoAt: 0, guitarAt: 0 });
+  useEffect(() => {
+    if (who !== 'me') return;
+    return onNote((e) => {
+      if (e.kind === 'piano') {
+        noteFx.current.pianoSide *= -1;
+        noteFx.current.pianoAt = performance.now();
+      } else {
+        noteFx.current.guitarAt = performance.now();
+      }
+    });
+  }, [who]);
+  /** 看书翻页计时 */
+  const flipAt = useRef(0);
 
   useFrame((state, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
@@ -651,12 +755,33 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outf
     h.rotation.y = rt.heading;
 
     const t = state.clock.elapsedTime;
-    const { root, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, hipY, cup } = rig;
+    const { root, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, hipY, cup, cupCoffee, cupJuice, cupStraw, cupSteam, book, bookFlip } = rig;
     const pose: CharPose = who === 'me' ? (poseRef?.current?.pose ?? 'stand') : 'stand';
     const poseY = poseRef?.current?.y ?? 0;
-    // 手持水杯（拿饮料后端着逛；躺床/泡澡/淋浴时收起）
+    // 手持水杯（拿饮料/咖啡后端着逛；躺床/泡澡/淋浴时收起）
     const carry = who === 'me' && carryRef?.current?.cup === true;
+    const carryCoffee = carry && carryRef?.current?.coffee === true;
     cup.visible = carry && pose !== 'lie' && pose !== 'bath' && pose !== 'shower';
+    // 咖啡款：棕色热咖啡 + 热气，吸管/冰饮液隐藏；冰饮款：粉色饮料 + 吸管
+    cupCoffee.visible = carryCoffee;
+    cupJuice.visible = !carryCoffee;
+    cupStraw.visible = !carryCoffee;
+    if (carryCoffee) {
+      const sp = cupSteam.material as THREE.SpriteMaterial;
+      const ph = (t * 0.55) % 1;
+      cupSteam.position.y = 0.06 + ph * 0.1;
+      cupSteam.scale.setScalar(0.04 + ph * 0.05);
+      sp.opacity = Math.sin(ph * Math.PI) * 0.6;
+    } else {
+      (cupSteam.material as THREE.SpriteMaterial).opacity = 0;
+    }
+    // 看书：仅 read 姿势亮出书 + 周期翻页
+    book.visible = pose === 'read';
+    if (pose === 'read') {
+      if (t - flipAt.current > 2.8) flipAt.current = t;
+      const fp = Math.min(1, Math.max(0, (t - flipAt.current) / 0.55));
+      bookFlip.rotation.z = fp < 1 ? -Math.PI * (1 - Math.cos(fp * Math.PI)) / 2 : 0;
+    }
 
     // 化妆星星：仅化妆时可见旋转闪烁
     spark.visible = pose === 'makeup';
@@ -853,32 +978,54 @@ export default function Char3D({ rt, who, hide, style = 'cartoon', poseRef, outf
       return;
     }
     if (pose === 'piano') {
-      // —— 弹钢琴：坐琴凳，双臂前伸，前臂交替敲键，身体随节奏轻摇 ——
+      // —— 弹钢琴：坐琴凳，双臂前伸，前臂交替敲键；弹奏音符驱动对应侧手跟键动 ——
       sitBase();
-      const kL = Math.max(0, Math.sin(t * 5.4));
-      const kR = Math.max(0, Math.sin(t * 5.4 + Math.PI));
+      const nowMs = performance.now();
+      const sinceNote = nowMs - noteFx.current.pianoAt;
+      const pulse = sinceNote < 220 ? 1 - sinceNote / 220 : 0;
+      const noteSideL = noteFx.current.pianoSide > 0;
+      const kL = Math.max(Math.max(0, Math.sin(t * 5.4)) * 0.55, pulse * (noteSideL ? 1 : 0));
+      const kR = Math.max(Math.max(0, Math.sin(t * 5.4 + Math.PI)) * 0.55, pulse * (noteSideL ? 0 : 1));
       armL.rotation.x = dampN(armL.rotation.x, -1.26, 10, dt);
       armR.rotation.x = dampN(armR.rotation.x, -1.26, 10, dt);
       armL.rotation.z = dampN(armL.rotation.z, -0.22, 8, dt);
       armR.rotation.z = dampN(armR.rotation.z, 0.22, 8, dt);
-      foreL.rotation.x = dampN(foreL.rotation.x, -0.44 - kL * 0.4, 16, dt);
-      foreR.rotation.x = dampN(foreR.rotation.x, -0.44 - kR * 0.4, 16, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.44 - kL * 0.4, 20, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.44 - kR * 0.4, 20, dt);
       head.rotation.x = dampN(head.rotation.x, 0.18, 8, dt);
       root.rotation.z = dampN(root.rotation.z, Math.sin(t * 2.6) * 0.028, 8, dt);
       return;
     }
     if (pose === 'guitar') {
-      // —— 弹吉他：站姿抱琴，一手扫弦一手按弦，身体摇摆点脚 ——
+      // —— 弹吉他：站姿抱琴，一手扫弦一手按弦，扫弦音符驱动右手跟弦动 ——
       standBase();
+      const nowMs = performance.now();
+      const sinceStrum = nowMs - noteFx.current.guitarAt;
+      const strum = sinceStrum < 260 ? Math.sin((1 - sinceStrum / 260) * Math.PI) : 0;
       armR.rotation.x = dampN(armR.rotation.x, -0.88, 10, dt);
       armR.rotation.z = dampN(armR.rotation.z, 0.34, 8, dt);
-      foreR.rotation.x = dampN(foreR.rotation.x, -1.12 + Math.sin(t * 7.2) * 0.24, 14, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -1.12 + Math.sin(t * 7.2) * 0.16 - strum * 0.34, 22, dt);
       armL.rotation.x = dampN(armL.rotation.x, -0.78, 10, dt);
       armL.rotation.z = dampN(armL.rotation.z, -0.52, 8, dt);
       foreL.rotation.x = dampN(foreL.rotation.x, -0.5, 10, dt);
       head.rotation.z = dampN(head.rotation.z, Math.sin(t * 3.4) * 0.06, 8, dt);
       root.rotation.z = dampN(root.rotation.z, Math.sin(t * 3.4) * 0.035, 8, dt);
       root.position.y = dampN(root.position.y, Math.abs(Math.sin(t * 3.4)) * 0.012 + 0.004, 10, dt);
+      return;
+    }
+    if (pose === 'read') {
+      // —— 看书：坐姿抱书，双手托书，偶尔翻页，头微微低着看 ——
+      sitBase();
+      armL.rotation.x = dampN(armL.rotation.x, -1.08, 10, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -1.08, 10, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.3, 8, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.3, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.86, 10, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.86, 10, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.32, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 0.7) * 0.03, 8, dt);
+      // 书随呼吸轻轻浮动
+      book.position.y = (style === 'cartoon' ? 0.34 : 0.5) + Math.sin(t * 1.8) * 0.006;
       return;
     }
     if (pose === 'makeup') {
