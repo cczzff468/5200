@@ -83,7 +83,7 @@ interface HomePayload {
   /** 做饭小游戏：本次上桌的菜名 */
   mealName?: string;
   /** 宠物系统：已领养的宠物 */
-  pet?: { sp?: string; name?: string; x?: number; z?: number; fedAt?: number };
+  pet?: { sp?: string; breed?: string; name?: string; gender?: string; x?: number; z?: number; fedAt?: number };
   /** 阳台门开态（v5.7） */
   balconyDoorOpen?: boolean;
   /** 阳台地板/墙自定义色 */
@@ -270,7 +270,9 @@ function normalizeHome(raw: unknown): HomePayload | null {
       const z = clampCoord(p.z);
       if (!sp || !name || x == null || z == null) return undefined;
       const fedAt = typeof p.fedAt === 'number' && Number.isFinite(p.fedAt) ? Math.round(p.fedAt) : undefined;
-      return { sp, name, x, z, fedAt };
+      const breed = typeof p.breed === 'string' && p.breed.length <= 24 ? p.breed : undefined;
+      const gender = p.gender === 'boy' || p.gender === 'girl' ? p.gender : undefined;
+      return { sp, breed, name, gender, x, z, fedAt };
     })(),
     balconyDoorOpen: r.balconyDoorOpen === true,
     floorColBal: cleanHex(r.floorColBal),

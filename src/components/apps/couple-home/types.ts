@@ -105,7 +105,6 @@ export type FurnitureKind =
   | 'wineCabinet'
   | 'chessTable'
   | 'hotpotTable'
-  | 'hammock'
   | 'gameConsole'
   | 'flowerStand'
   // ---- v5.8 旋律扩展（B1 黑胶唱片机/八音盒） ----
@@ -191,11 +190,12 @@ export interface CharState {
   dir: CharDir;
 }
 
-/** 三扇门沿墙坐标（卧室门/厨房门在 z=3 隔墙上沿 x 滑动；卫生间门在 x=7.5 墙上沿 z 滑动） */
+/** 三/四扇门沿墙坐标（卧室门/厨房门在 z=3 隔墙上沿 x 滑动；卫生间门在 x=7.5 墙上沿 z 滑动；bal = 阳台门 v5.7） */
 export interface DoorPos {
   bed: number;
   kt: number;
   bath: number;
+  bal?: number;
 }
 
 /** 小家整体持久化数据（服务端 JSON 快照） */
@@ -261,8 +261,10 @@ export interface HomeState {
   mealReady?: boolean;
   /** 做饭小游戏：本次上桌的菜名（端上桌显示 + 开饭 toast） */
   mealName?: string;
-  /** 宠物系统：已领养的宠物（位置持久化；缺省 = 未领养） */
-  pet?: { sp: 'cat' | 'dog'; name: string; x: number; z: number; fedAt?: number };
+  /** 宠物系统：已领养的宠物（位置持久化；缺省 = 未领养）。
+   *  breed = pet-breeds.ts 品种 id（缺省 = 老档兜底：cat 橘猫 / dog 柴犬）；
+   *  gender = 'boy' | 'girl'（缺省按 boy 渲染项圈）。 */
+  pet?: { sp: 'cat' | 'dog'; breed?: string; name: string; gender?: 'boy' | 'girl'; x: number; z: number; fedAt?: number };
   /** 阳台门开态（v5.7 阳台房间） */
   balconyDoorOpen?: boolean;
   /** 阳台地板/墙自定义色 */
@@ -309,8 +311,8 @@ export interface CatalogEntry {
     mirror?: { y?: number; dx?: number; dz?: number; out?: [number, number] };
     /** 做饭：小人走到灶台前颠勺，数秒后一桌好菜上餐桌 */
     cook?: { y: number; dx?: number; dz?: number; out?: [number, number] };
-    /** 开饭：饭菜已上桌，小人坐到餐桌边吃饭（按钮变「吃饱啦」） */
-    eat?: { y: number; dx?: number; dz?: number; out?: [number, number] };
+    /** 开饭：饭菜已上桌，小人坐到餐桌边吃饭（按钮变「吃饱啦」）；ryOff = 朝向偏移（坐东缘面朝桌心） */
+    eat?: { y: number; dx?: number; dz?: number; ryOff?: number; out?: [number, number] };
     /** 喝东西：小人走到冰箱前拿杯喝的（自动开门，喝完自动结束） */
     drink?: { y: number; dx?: number; dz?: number; out?: [number, number] };
     /** 换装：小人走到衣柜前换一套穿搭（自动开门，换完自动结束） */
@@ -347,8 +349,8 @@ export interface CatalogEntry {
     coffee?: { y: number; dx?: number; dz?: number; out?: [number, number] };
     /** 阅读：书架标记（点击抽一本书，走到最近的沙发/椅子坐下翻页看） */
     read?: boolean;
-    /** 吃火锅：小人坐到火锅桌边涮火锅（炉火自动开，吃到饱手动起身） */
-    hotpot?: { y: number; dx?: number; dz?: number; out?: [number, number] };
+    /** 吃火锅：小人坐到火锅桌边涮火锅（炉火自动开，吃到饱手动起身）；ryOff = 朝向偏移（坐东缘面朝锅） */
+    hotpot?: { y: number; dx?: number; dz?: number; ryOff?: number; out?: [number, number] };
   };
   /** 是灯具：开着时附加点光（y 为相对家具原点的灯高） */
   light?: { y: number; color?: string; intensity?: number };

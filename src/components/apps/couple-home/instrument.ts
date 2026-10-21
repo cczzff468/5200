@@ -7,8 +7,7 @@
  *   按「音色+频率」预生成一次 AudioBuffer 缓存复用，音色接近真实木吉他；
  * - 钢琴：基频 + 2/3/4 次谐波叠加（高次谐波衰减更快）+ 快起音长衰减包络；
  * - 音色：钢琴（grand 大钢琴 / ep 电钢 / musicbox 八音盒）、吉他（acoustic 木吉他 / ukulele 尤克里里）；
- * - 音符事件总线（onNote/emitNote）：供 3D 小人手势同步、琴键弦位灯光、录音机；
- * - 弹奏录音机（recStart/recStop/...）：会话级内存缓冲，不持久化；
+ * - 音符事件总线（onNote/emitNote）：供 3D 小人手势同步、琴键弦位灯光；
  * - AudioContext 懒创建 + 用户手势时 resume（iOS Safari 兼容）。
  */
 
@@ -117,8 +116,15 @@ export function chordStringFreq(openFreq: number, semi: number | null): number {
 
 // ---------------- 钢琴 ----------------
 
-/** 两组八度白键（C4 → C6，15 键） */
+/** 三个完整八度白键（C3 → C6，22 键）；label 只标每个八度的 C（C3/C4/C5/C6） */
 export const PIANO_WHITE: { name: string; freq: number; label?: boolean }[] = [
+  { name: 'C3', freq: 130.81, label: true },
+  { name: 'D3', freq: 146.83 },
+  { name: 'E3', freq: 164.81 },
+  { name: 'F3', freq: 174.61 },
+  { name: 'G3', freq: 196.0 },
+  { name: 'A3', freq: 220.0 },
+  { name: 'B3', freq: 246.94 },
   { name: 'C4', freq: 261.63, label: true },
   { name: 'D4', freq: 293.66 },
   { name: 'E4', freq: 329.63 },
@@ -136,18 +142,23 @@ export const PIANO_WHITE: { name: string; freq: number; label?: boolean }[] = [
   { name: 'C6', freq: 1046.5, label: true },
 ];
 
-/** 黑键：after = 夹在第几个白键之后（0 起） */
+/** 黑键：after = 夹在第几个白键之后（0 起）；每组八度按真实钢琴 2+3 排布（C♯D♯｜F♯G♯A♯） */
 export const PIANO_BLACK: { after: number; name: string; freq: number }[] = [
-  { after: 0, name: 'C#4', freq: 277.18 },
-  { after: 1, name: 'D#4', freq: 311.13 },
-  { after: 3, name: 'F#4', freq: 369.99 },
-  { after: 4, name: 'G#4', freq: 415.3 },
-  { after: 5, name: 'A#4', freq: 466.16 },
-  { after: 7, name: 'C#5', freq: 554.37 },
-  { after: 8, name: 'D#5', freq: 622.25 },
-  { after: 10, name: 'F#5', freq: 739.99 },
-  { after: 11, name: 'G#5', freq: 830.61 },
-  { after: 12, name: 'A#5', freq: 932.33 },
+  { after: 0, name: 'C#3', freq: 138.59 },
+  { after: 1, name: 'D#3', freq: 155.56 },
+  { after: 3, name: 'F#3', freq: 185.0 },
+  { after: 4, name: 'G#3', freq: 207.65 },
+  { after: 5, name: 'A#3', freq: 233.08 },
+  { after: 7, name: 'C#4', freq: 277.18 },
+  { after: 8, name: 'D#4', freq: 311.13 },
+  { after: 10, name: 'F#4', freq: 369.99 },
+  { after: 11, name: 'G#4', freq: 415.3 },
+  { after: 12, name: 'A#4', freq: 466.16 },
+  { after: 14, name: 'C#5', freq: 554.37 },
+  { after: 15, name: 'D#5', freq: 622.25 },
+  { after: 17, name: 'F#5', freq: 739.99 },
+  { after: 18, name: 'G#5', freq: 830.61 },
+  { after: 19, name: 'A#5', freq: 932.33 },
 ];
 
 /** 钢琴音色：grand 大钢琴（默认）/ ep 电钢 / musicbox 八音盒 */
@@ -317,71 +328,7 @@ export const TWINKLE: { name: string; beats: number }[] = [
 /** 小星星每拍毫秒数（四分音符时值） */
 export const twinkleTempoMs = 420;
 
-// ---------------- 弹奏录音机（会话级内存缓冲，不持久化） ----------------
-
-export interface RecEvent extends NoteEvent {
-  /** 相对录音开始的毫秒数 */
-  t: number;
-  vol: number;
-}
-
-let recArmed = false;
-let recT0 = 0;
-let recBuf: RecEvent[] = [];
-const recSubs = new Set<() => void>();
-
-function recNotify(): void {
-  recSubs.forEach((cb) => cb());
-}
-
-/** 开始录音：清空旧带并武装 */
-export function recStart(): void {
-  recArmed = true;
-  recT0 = Date.now();
-  recBuf = [];
-  recNotify();
-}
-
-/** 停止录音：解除武装，返回本次录到的事件（缓冲保留可直接回放） */
-export function recStop(): RecEvent[] {
-  recArmed = false;
-  recNotify();
-  return recBuf;
-}
-
-/** 清空录音缓冲（录音中调用无效） */
-export function recClear(): void {
-  if (recArmed) return;
-  recBuf = [];
-  recNotify();
-}
-
-export function recIsRecording(): boolean {
-  return recArmed;
-}
-
-/** 本次录音开始的时刻（Date.now() 毫秒）；未开始过返回 0（供 UI 计时显示） */
-export function recStartedAt(): number {
-  return recT0;
-}
-
-/** 当前录音缓冲（可能为空） */
-export function recGet(): RecEvent[] {
-  return recBuf;
-}
-
-/** 订阅录音开始/停止/清空通知（供 UI 刷新）；返回退订函数 */
-export function recSubscribe(cb: () => void): () => void {
-  recSubs.add(cb);
-  return () => {
-    recSubs.delete(cb);
-  };
-}
-
-/** 回放音色备忘（可选简化用；覆盖层回放自带音色路由，并不依赖它） */
-export const recPlayTimbre: { current: PianoTimbre | GuitarTimbre | null } = { current: null };
-
-// ---------------- 音符事件总线（3D 小人手势同步 / 键位灯光 / 录音） ----------------
+// ---------------- 音符事件总线（3D 小人手势同步 / 琴键弦位灯光） ----------------
 
 export interface NoteEvent {
   kind: 'piano' | 'guitar';
@@ -401,20 +348,19 @@ export function onNote(cb: NoteCb): () => void {
 }
 
 /**
- * 广播一个音符事件：通知全部订阅者；
- * 录音武装中（且未显式传 record:false）会顺手记进录音带（回放/演示曲传 record:false 防自录）。
+ * 广播一个音符事件：通知全部订阅者。
+ * 第二参数为兼容旧调用方的保留签名（旧代码会传 { record?: boolean } 控制录音带），
+ * 录音功能已移除，参数仅忽略不再使用。
  */
 export function emitNote(e: NoteEvent, opts?: { record?: boolean }): void {
+  void opts;
   noteSubs.forEach((cb) => {
     try {
       cb(e);
     } catch {
-      // 单个订阅者异常不影响其他订阅者与录音
+      // 单个订阅者异常不影响其他订阅者
     }
   });
-  if (recArmed && opts?.record !== false) {
-    recBuf.push({ ...e, t: Math.max(0, Date.now() - recT0), vol: 1 });
-  }
 }
 
 /** 音名显示（黑键用 ♯ 更可爱） */

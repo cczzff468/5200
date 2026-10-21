@@ -64,6 +64,7 @@ import {
 } from 'lucide-react';
 import Joystick from './Joystick';
 import InstrumentOverlay from './InstrumentOverlay';
+import { PET_BREEDS, breedOf } from './pet-breeds';
 import { useMusic } from '@/lib/ios/music-store';
 import type { NcmSong } from '@/lib/ios/music-api';
 import { songCover } from '@/lib/ios/music-api';
@@ -454,6 +455,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [wallColBal, setWallColBal] = useState<string | undefined>(pack.home.wallColBal);
   const [mealName, setMealName] = useState<string | undefined>(pack.home.mealName);
   const [pet, setPet] = useState<HomeState['pet']>(pack.home.pet ?? undefined);
+  // 领养向导：种类 → 品种 → 性别+名字（v5.9 品种库）
+  const [adoptSp, setAdoptSp] = useState<'cat' | 'dog' | null>(null);
+  const [adoptBreed, setAdoptBreed] = useState<string | null>(null);
+  const [adoptGender, setAdoptGender] = useState<'boy' | 'girl'>('boy');
+  const [adoptName, setAdoptName] = useState('');
 
   // ---------------- UI 状态 ----------------
   const [mode, setMode] = useState<HomeMode>('live');
@@ -486,6 +492,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 音乐 App 正在放歌（音箱飘音符 + 点歌面板当前曲） */
   const musicPlaying = useMusic((s) => s.playing);
   const musicCurrent = useMusic((s) => s.current);
+  // 黑胶唱片机随音乐播放自动转/停（v5.9：唱片机不再手动开关，跟播放态联动）
+  useEffect(() => {
+    setItems((prev) => {
+      let changed = false;
+      const next = prev.map((f) => {
+        if (f.kind !== 'vinyl') return f;
+        if (!!f.st?.on === musicPlaying) return f;
+        changed = true;
+        return { ...f, st: { ...f.st, on: musicPlaying } };
+      });
+      return changed ? next : prev;
+    });
+  }, [musicPlaying]);
   /** 家具互动（生活模式）：点击可坐/睡/泡/淋浴/看电视/上网的家具后弹出确认按钮 */
   const [charAction, setCharAction] = useState<{
     type: CharAction['type'];
@@ -666,7 +685,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
       pet: petRef.current
         ? {
             sp: petRef.current.sp,
+            breed: petRef.current.breed,
             name: petRef.current.name,
+            gender: petRef.current.gender,
             x: Math.round(petRT.current.x * 100) / 100,
             z: Math.round(petRT.current.z * 100) / 100,
             fedAt: petFeedRef.current && Date.now() - petFeedRef.current.at < 10000 ? petFeedRef.current.at : undefined,
@@ -1114,23 +1135,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
         return;
       }
 
-      // 黑胶唱片机：点击 = 唱片开始转 + 联动音乐 App 放歌（再点暂停）；没歌去音乐 App 点
+      // 黑胶唱片机：点击 = 弹出点歌面板（选中的歌全屋响起，唱片随播放自动旋转 —— v5.9）
       if (item.kind === 'vinyl') {
-        const on = !item.st?.on;
-        setItems((prev) => prev.map((f) => (f.id === item.id ? { ...f, st: { ...f.st, on } } : f)));
-        const m = useMusic.getState();
-        if (on) {
-          if (!m.playing) {
-            const last = m.history.find((h) => h.song)?.song ?? null;
-            if (m.current) void m.toggle();
-            else if (last) void useMusic.getState().playSong(last);
-          }
-          toast('黑胶开始转，满屋都是音乐～');
-        } else {
-          if (m.playing) void useMusic.getState().toggle();
-          toast('唱针抬起，音乐停啦');
-        }
-        saveSoon();
+        setMusicSheet(true);
         return;
       }
 
@@ -1321,17 +1328,25 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   // ==================== v5.7 拾光扩展功能 ====================
 
-  // —— F2 宠物：领养 / 喂食 / 撸宠 / 送走 ——
+  // —— F2 宠物：领养（种类→品种→性别+名字）/ 喂食 / 撸宠 / 送走 ——
+  const closePetSheet = useCallback(() => {
+    setPetSheet(false);
+    setAdoptSp(null);
+    setAdoptBreed(null);
+    setAdoptName('');
+  }, []);
+
   const adoptPet = useCallback(
-    (sp: 'cat' | 'dog') => {
-      const name = sp === 'cat' ? '团子' : '布丁';
-      setPet({ sp, name, x: -1.2, z: 1.2 });
+    (sp: 'cat' | 'dog', breedId: string, gender: 'boy' | 'girl', rawName: string) => {
+      const breed = breedOf(sp, breedId);
+      const name = (rawName.trim() || breed.suggest).slice(0, 8);
+      setPet({ sp, breed: breed.id, name, gender, x: -1.2, z: 1.2 });
       petRT.current = { x: -1.2, z: 1.2, heading: Math.PI / 2, moving: false, target: null, nextWander: 1.5 };
-      setPetSheet(false);
-      toast(`${name}加入这个家啦，记得常喂它哦～`);
+      closePetSheet();
+      toast(`${name}（${breed.name}·${gender === 'girl' ? '女孩' : '男孩'}）加入这个家啦，记得常喂它哦～`);
       saveSoon();
     },
-    [saveSoon, toast],
+    [closePetSheet, saveSoon, toast],
   );
 
   const feedPet = useCallback(() => {
@@ -1389,10 +1404,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
     if (name) toast(`送${name}到门口，记得常来玩呀～`);
   }, [guest, toast]);
 
-  // —— F3 音响点歌（音乐 App 的歌在全屋响起） ——
+  // —— F3 音响点歌（音乐 App 的歌在全屋响起；ambient = 家具播放中不弹灵动岛） ——
   const playHouseSong = useCallback(
     async (song: NcmSong) => {
-      await useMusic.getState().playSong(song);
+      await useMusic.getState().playSong(song, undefined, { ambient: true });
       toast(`🎵《${song.name}》正在小屋响起`);
       setMusicSheet(false);
     },
@@ -2310,7 +2325,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         onToggleKitchenDoor={toggleKitchenDoor}
         onToggleBathDoor={toggleBathDoor}
         onToggleBalconyDoor={toggleBalconyDoor}
-        pet={pet ? { sp: pet.sp, name: pet.name } : null}
+        pet={pet ? { sp: pet.sp, name: pet.name, breed: pet.breed, gender: pet.gender } : null}
         petRT={petRT}
         petFeedRef={petFeedRef}
         onPetTap={petTap}
@@ -2381,7 +2396,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
             <button
               onClick={() => setPetSheet(true)}
               aria-label="宠物"
-              title={pet ? `${pet.name}` : '领养一只宠物'}
+              title={pet ? `${pet.name}（${breedOf(pet.sp, pet.breed).name}）` : '领养一只宠物'}
               className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#b08968] shadow-sm backdrop-blur transition active:scale-95"
             >
               <PawPrint className="h-[18px] w-[18px]" />
@@ -2914,7 +2929,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         {cookingGame && <CookingGame onComplete={onCookingDone} onClose={() => setCookingGame(false)} />}
       </AnimatePresence>
 
-      {/* ===== 宠物面板（F2：领养 / 喂养 / 送走） ===== */}
+      {/* ===== 宠物面板（F2：领养向导 种类→品种→性别+名字 / 喂养 / 送走） ===== */}
       <AnimatePresence>
         {petSheet && (
           <motion.div
@@ -2922,20 +2937,28 @@ export default function CoupleHome({ close }: { close: () => void }) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="absolute inset-0 z-30 flex items-end justify-center bg-black/25 pb-6"
-            onClick={() => setPetSheet(false)}
+            onClick={closePetSheet}
           >
             <motion.div
               initial={{ y: 60, opacity: 0.8 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 50, opacity: 0 }}
               transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-              className="pointer-events-auto w-full max-w-[300px] rounded-3xl bg-white/96 p-5 shadow-2xl"
+              className="pointer-events-auto w-full max-w-[320px] rounded-3xl bg-white/96 p-5 shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mb-3 flex items-center justify-between">
-                <span className="text-[15px] font-semibold text-[#3a3a3e]">{pet ? `${pet.sp === 'cat' ? '🐱' : '🐶'} ${pet.name}` : '🐾 领养一只小可爱'}</span>
+                <span className="text-[15px] font-semibold text-[#3a3a3e]">
+                  {pet
+                    ? `${breedOf(pet.sp, pet.breed).emoji} ${pet.name}`
+                    : !adoptSp
+                      ? '🐾 领养一只小可爱'
+                      : !adoptBreed
+                        ? '🐾 选个品种'
+                        : '🐾 登记小户口'}
+                </span>
                 <button
-                  onClick={() => setPetSheet(false)}
+                  onClick={closePetSheet}
                   aria-label="关闭宠物面板"
                   className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
                 >
@@ -2943,26 +2966,122 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 </button>
               </div>
               {!pet ? (
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => adoptPet('cat')}
-                    className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fdf3e4] p-4 shadow-sm ring-1 ring-[#f3e5c8] transition active:scale-95"
-                  >
-                    <span className="text-[34px] leading-none">🐱</span>
-                    <span className="text-[13px] font-semibold text-[#4a4a4e]">橘白猫</span>
-                    <span className="text-[11px] text-[#9a9a96]">「团子」爱打盹</span>
-                  </button>
-                  <button
-                    onClick={() => adoptPet('dog')}
-                    className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fdeee6] p-4 shadow-sm ring-1 ring-[#f5dcc8] transition active:scale-95"
-                  >
-                    <span className="text-[34px] leading-none">🐶</span>
-                    <span className="text-[13px] font-semibold text-[#4a4a4e]">小柴犬</span>
-                    <span className="text-[11px] text-[#9a9a96]">「布丁」爱撒欢</span>
-                  </button>
-                </div>
+                !adoptSp ? (
+                  // ① 选种类：汪星人 / 喵星人
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => setAdoptSp('dog')}
+                      className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fdeee6] p-4 shadow-sm ring-1 ring-[#f5dcc8] transition active:scale-95"
+                    >
+                      <span className="text-[34px] leading-none">🐶</span>
+                      <span className="text-[13px] font-semibold text-[#4a4a4e]">汪星人</span>
+                      <span className="text-[10.5px] text-[#9a9a96]">博美/金毛/二哈/柯基</span>
+                    </button>
+                    <button
+                      onClick={() => setAdoptSp('cat')}
+                      className="flex flex-col items-center gap-1.5 rounded-2xl bg-[#fdf3e4] p-4 shadow-sm ring-1 ring-[#f3e5c8] transition active:scale-95"
+                    >
+                      <span className="text-[34px] leading-none">🐱</span>
+                      <span className="text-[13px] font-semibold text-[#4a4a4e]">喵星人</span>
+                      <span className="text-[10.5px] text-[#9a9a96]">布偶/三花/狸花/橘猫</span>
+                    </button>
+                  </div>
+                ) : !adoptBreed ? (
+                  // ② 选品种（按种类列出；可返回换种类）
+                  <div>
+                    <button
+                      onClick={() => setAdoptSp(null)}
+                      className="mb-2 flex items-center gap-1 rounded-full bg-[#f5f3ef] px-3 py-1 text-[11px] font-medium text-[#8a8a90] transition active:scale-95"
+                    >
+                      ← 换个种类
+                    </button>
+                    <div className="scrollbar-none grid max-h-[46vh] grid-cols-2 gap-2 overflow-y-auto">
+                      {PET_BREEDS.filter((b) => b.sp === adoptSp).map((b) => (
+                        <button
+                          key={b.id}
+                          onClick={() => {
+                            setAdoptBreed(b.id);
+                            setAdoptName(b.suggest);
+                          }}
+                          className="flex flex-col items-center gap-1 rounded-2xl bg-[#faf8f3] p-3 ring-1 ring-[#efece2] transition active:scale-95"
+                        >
+                          <span className="text-[26px] leading-none">{b.emoji}</span>
+                          <span className="text-[12.5px] font-semibold text-[#4a4a4e]">{b.name}</span>
+                          <span className="text-[10px] leading-tight text-[#9a9a96]">{b.blurb}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  (() => {
+                    const b = breedOf(adoptSp, adoptBreed);
+                    return (
+                      // ③ 性别 + 取名 + 接回家
+                      <div className="flex flex-col gap-3">
+                        <div className="flex items-center gap-3 rounded-2xl bg-[#faf6ee] p-3 ring-1 ring-[#f3ecdd]">
+                          <span className="text-[30px] leading-none">{b.emoji}</span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-[14px] font-semibold text-[#3a3a3e]">{b.name}</span>
+                            <span className="block truncate text-[11px] text-[#9a9a96]">{b.blurb}</span>
+                          </span>
+                          <button
+                            onClick={() => setAdoptBreed(null)}
+                            className="shrink-0 rounded-full bg-white/80 px-3 py-1.5 text-[11px] font-medium text-[#b08968] ring-1 ring-[#efe3cf] transition active:scale-95"
+                          >
+                            换一只
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          {(['boy', 'girl'] as const).map((g) => (
+                            <button
+                              key={g}
+                              onClick={() => setAdoptGender(g)}
+                              className={`flex h-10 items-center justify-center gap-1.5 rounded-full text-[13px] font-semibold transition active:scale-95 ${
+                                adoptGender === g
+                                  ? g === 'boy'
+                                    ? 'bg-[#7fa7d9] text-white shadow'
+                                    : 'bg-[#f2a2bc] text-white shadow'
+                                  : 'bg-[#f5f3ef] text-[#8a8a90]'
+                              }`}
+                            >
+                              {g === 'boy' ? '♂ 男孩' : '♀ 女孩'}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex h-11 items-center gap-2 rounded-full bg-[#f5f3ef] px-4">
+                          <span className="shrink-0 text-[12px] font-medium text-[#9a9a96]">名字</span>
+                          <input
+                            value={adoptName}
+                            onChange={(e) => setAdoptName(e.target.value)}
+                            maxLength={8}
+                            placeholder={b.suggest}
+                            aria-label="给宠物取名字"
+                            className="h-full min-w-0 flex-1 bg-transparent text-[14px] text-[#3a3a3e] outline-none placeholder:text-[#c0beb8]"
+                          />
+                        </div>
+                        <button
+                          onClick={() => adoptPet(adoptSp, adoptBreed, adoptGender, adoptName)}
+                          className="flex h-11 items-center justify-center gap-2 rounded-full bg-[#f2b3c2] text-[14px] font-semibold text-white shadow transition active:scale-95"
+                        >
+                          接 {adoptName.trim() || b.suggest} 回家
+                        </button>
+                      </div>
+                    );
+                  })()
+                )
               ) : (
                 <div className="flex flex-col gap-2.5">
+                  <div className="flex items-center gap-3 rounded-2xl bg-[#faf6ee] p-3 ring-1 ring-[#f3ecdd]">
+                    <span className="text-[26px] leading-none">{breedOf(pet.sp, pet.breed).emoji}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[14px] font-semibold text-[#3a3a3e]">
+                        {pet.name} <span className={pet.gender === 'girl' ? 'text-[#e58aa8]' : 'text-[#7fa7d9]'}>{pet.gender === 'girl' ? '♀' : '♂'}</span>
+                      </span>
+                      <span className="block truncate text-[11px] text-[#9a9a96]">
+                        {breedOf(pet.sp, pet.breed).name} · {breedOf(pet.sp, pet.breed).blurb}
+                      </span>
+                    </span>
+                  </div>
                   <p className="text-[12px] text-[#8a8a90]">点一点它就能撸一撸，头顶会冒爱心哦～</p>
                   <button
                     onClick={feedPet}

@@ -57,6 +57,11 @@ export default function MusicApp() {
   const openAppNow = useMusic((s) => s.openAppNow);
   const [showSettings, setShowSettings] = useState(false);
 
+  // 用户打开音乐 App = 亲自接管播放：清除「小屋家具播放中」标记，灵动岛恢复正常显示（v5.9）
+  useEffect(() => {
+    if (useMusic.getState().ambient) useMusic.setState({ ambient: false });
+  }, []);
+
   // 状态栏前景实时跟随当前界面背景明暗（第三十三轮反馈：背景深→状态栏白，背景白→状态栏黑）：
   // 播放页（封面模糊深色底）→ 白字；心动 tab（第六十四轮深色沉浸版式）→ 白字；
   // 登录/首页/搜索/我的/歌单/设置/评论（浅底）→ 黑字；深色主题下浅底页转黑底 → 白字。

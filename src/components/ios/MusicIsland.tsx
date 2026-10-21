@@ -194,8 +194,10 @@ export default function MusicIsland() {
   );
 
   // 不放音乐（暂停超过 5 秒宽限 / 无歌）时弹窗整体消失（第十八轮反馈 + 第二十轮宽限）
+  // 拾光小屋家具（音箱/黑胶）播放中（ambient）也不弹岛 —— 用户在音乐 App 内点歌/打开 App 自动恢复（v5.9）
+  const ambient = useMusic((s) => s.ambient);
   const hidden =
-    !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !current || (!playing && !pauseGrace);
+    !statusBarVisible || screenOff || chatNotifyShowing || callPresenting || !current || (!playing && !pauseGrace) || ambient;
 
   // 弹窗可见性 → music-store.islandVisible（StatusBar 据此隐藏/恢复「移动数据」图标）。
   // 订阅外部派生值（含 pauseGrace 内部态）在回调里 setState，渲染期不碰 store

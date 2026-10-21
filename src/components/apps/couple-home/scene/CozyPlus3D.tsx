@@ -9,7 +9,7 @@
  * - SwingChair3D 吊篮秋千椅（永久轻摆 + 藤编吊篮）/ ShoeCabinet3D 玄关鞋柜（双开门 + 拖鞋 + 绿植）；
  * - WallArt3D 装饰挂画组（三联抽象画，程序化油画纹理）/ Humidifier3D 香薰加湿器（雾气袅袅 + 呼吸柔光）；
  * - WineCabinet3D 玻璃酒柜（开门见酒瓶酒杯 + 暖灯）/ ChessTable3D 棋盘桌（五子棋盘 + 棋子 + 双凳）；
- * - HotpotTable3D 火锅桌（开火红汤翻滚冒泡 + 蒸汽）/ Hammock3D 双人吊床（立柱吊床轻晃）；
+ * - HotpotTable3D 火锅桌（开火红汤翻滚冒泡 + 蒸汽）；
  * - GameConsole3D 游戏主机（开机灯带 + 手柄）/ FlowerStand3D 开花花架（三层花架 + 花瓣微落）。
  *
  * 约定：原点 = 底部中心贴地 y=0（Screen3D/WallArt3D 挂墙件 = 挂点、背面贴墙朝 +z 伸向屋内）；
@@ -871,67 +871,7 @@ export function HotpotTable3D({ col, on }: CozyPlusProps) {
   );
 }
 
-// ---------------- 10. 双人吊床 ----------------
-
-export function Hammock3D({ col }: CozyPlusProps) {
-  const cloth = col ?? '#f2c1cd';
-  const bed = useRef<THREE.Group>(null);
-  useFrame((state) => {
-    if (!bed.current) return;
-    const t = state.clock.elapsedTime;
-    bed.current.rotation.z = Math.sin(t * 1.05) * 0.025;
-  });
-  return (
-    <group>
-      {/* 两端立柱（A 字支架） */}
-      {[[-1.05, 0.18], [1.05, -0.18]].map(([x, tilt], i) => (
-        <group key={i} position={[x, 0, 0]}>
-          <mesh position={[0, 0.75, -0.16]} rotation={[0, 0, tilt]} castShadow>
-            <cylinderGeometry args={[0.045, 0.055, 1.5, 10]} />
-            {mat('#d9cbb2', 0.75)}
-          </mesh>
-          <mesh position={[0, 0.75, 0.16]} rotation={[0, 0, -tilt]} castShadow>
-            <cylinderGeometry args={[0.045, 0.055, 1.5, 10]} />
-            {mat('#d9cbb2', 0.75)}
-          </mesh>
-          <mesh position={[0, 0.02, 0]}>
-            <boxGeometry args={[0.14, 0.05, 0.6]} />
-            {mat(shade('#d9cbb2', 0.88), 0.85)}
-          </mesh>
-        </group>
-      ))}
-      {/* 吊床（布面 + 两端系绳，整体轻晃） */}
-      <group ref={bed}>
-        {/* 布面：中间下垂的弧形（用弯曲的扁圆柱近似） */}
-        <mesh position={[0, 0.52, 0]} rotation={[0, 0, Math.PI / 2]} castShadow>
-          <torusGeometry args={[0.62, 0.14, 8, 28, Math.PI]} />
-          <meshStandardMaterial color={cloth} roughness={0.95} side={THREE.DoubleSide} />
-        </mesh>
-        {/* 枕区加厚 */}
-        <mesh position={[-0.62, 0.66, 0]} rotation={[0, 0, 0.32]} castShadow>
-          <boxGeometry args={[0.5, 0.09, 0.5]} />
-          {mat('#f7f0ea', 0.95)}
-        </mesh>
-        {/* 系绳 */}
-        {[-1, 1].map((s) => (
-          <mesh key={s} position={[s * 0.98, 0.98, 0]} rotation={[0, 0, s * 0.5]}>
-            <cylinderGeometry args={[0.012, 0.012, 0.75, 8]} />
-            {mat('#b09a7a', 0.85)}
-          </mesh>
-        ))}
-        {/* 布面流苏边 */}
-        {[-1, 1].map((s) => (
-          <mesh key={`f${s}`} position={[s * 0.55, 0.52, 0]} rotation={[Math.PI / 2, 0, 0]}>
-            <cylinderGeometry args={[0.145, 0.145, 0.015, 14]} />
-            {mat(shade(cloth, 0.9), 0.95)}
-          </mesh>
-        ))}
-      </group>
-    </group>
-  );
-}
-
-// ---------------- 11. 游戏主机 ----------------
+// ---------------- 10. 游戏主机 ----------------
 
 export function GameConsole3D({ col, on }: CozyPlusProps) {
   const body = col ?? '#2f3138';
@@ -1063,7 +1003,8 @@ export function FlowerStand3D({ col }: CozyPlusProps) {
 // ---------------- 13. 黑胶唱片机（v5.8 B1） ----------------
 
 export function Vinyl3D({ col, on }: CozyPlusProps) {
-  const wood = col ?? '#8a6a4e';
+  // v5.9：奶白机身 + 金色包边（用户要求变白色）
+  const shell = col ?? '#f7f5f0';
   const disc = useRef<THREE.Group>(null);
   const arm = useRef<THREE.Group>(null);
   const notes = useRef<(THREE.Sprite | null)[]>([]);
@@ -1107,15 +1048,37 @@ export function Vinyl3D({ col, on }: CozyPlusProps) {
   });
   return (
     <group>
-      {/* 木质底座 */}
+      {/* 奶白机身（金色包边 + 圆润侧腰线） */}
       <mesh position={[0, 0.045, 0]} castShadow receiveShadow>
         <boxGeometry args={[0.52, 0.09, 0.38]} />
-        {mat(wood, 0.6, { metalness: 0.05 })}
+        {mat(shell, 0.5)}
       </mesh>
       <mesh position={[0, 0.095, 0]} receiveShadow>
         <boxGeometry args={[0.5, 0.012, 0.36]} />
-        {mat(shade(wood, 1.15), 0.55)}
+        {mat(shade(shell, 1.04), 0.45)}
       </mesh>
+      {/* 金色包边腰线（四面环绕） */}
+      <mesh position={[0, 0.062, 0.192]}>
+        <boxGeometry args={[0.524, 0.014, 0.008]} />
+        {mat('#d9b25e', 0.3, { metalness: 0.6 })}
+      </mesh>
+      <mesh position={[0, 0.062, -0.192]}>
+        <boxGeometry args={[0.524, 0.014, 0.008]} />
+        {mat('#d9b25e', 0.3, { metalness: 0.6 })}
+      </mesh>
+      {[-0.261, 0.261].map((x) => (
+        <mesh key={x} position={[x, 0.062, 0]}>
+          <boxGeometry args={[0.008, 0.014, 0.384]} />
+          {mat('#d9b25e', 0.3, { metalness: 0.6 })}
+        </mesh>
+      ))}
+      {/* 金色支脚 ×4 */}
+      {[[-0.21, -0.13], [0.21, -0.13], [-0.21, 0.13], [0.21, 0.13]].map(([x, z], i) => (
+        <mesh key={i} position={[x, 0.008, z]} castShadow>
+          <sphereGeometry args={[0.016, 10, 8]} />
+          {mat('#c9a13e', 0.35, { metalness: 0.55 })}
+        </mesh>
+      ))}
       {/* 唱盘 + 黑胶唱片（开机旋转） */}
       <group ref={disc} position={[-0.08, 0.105, 0]}>
         <mesh castShadow>
@@ -1139,11 +1102,11 @@ export function Vinyl3D({ col, on }: CozyPlusProps) {
           {mat('#c9c9c9', 0.3, { metalness: 0.6 })}
         </mesh>
       </group>
-      {/* 唱臂（底座枢轴 + 臂杆 + 唱头，开机搭到唱片上） */}
+      {/* 唱臂（黄铜底座枢轴 + 臂杆 + 唱头，开机搭到唱片上） */}
       <group ref={arm} position={[0.17, 0.11, 0.12]}>
         <mesh castShadow>
           <cylinderGeometry args={[0.02, 0.024, 0.035, 12]} />
-          {mat('#c9c9c9', 0.35, { metalness: 0.55 })}
+          {mat('#c9a13e', 0.35, { metalness: 0.6 })}
         </mesh>
         <mesh position={[0.03, 0.02, -0.09]} rotation={[0, 0.35, 0]} castShadow>
           <cylinderGeometry args={[0.005, 0.005, 0.21, 8]} />
@@ -1182,7 +1145,8 @@ const MUSIC_BOX_TUNE: [string, number][] = [
 const MUSIC_BOX_BEAT = 330;
 
 export function MusicBox3D({ col, touch }: CozyPlusProps) {
-  const wood = col ?? '#a8825e';
+  // v5.9：奶白盒身 + 金色镶边（用户要求变白色）
+  const shell = col ?? '#f7f4ee';
   const lid = useRef<THREE.Group>(null);
   const drum = useRef<THREE.Group>(null);
   const notes = useRef<(THREE.Sprite | null)[]>([]);
@@ -1266,21 +1230,30 @@ export function MusicBox3D({ col, touch }: CozyPlusProps) {
 
   return (
     <group>
-      {/* 盒身 */}
+      {/* 盒身（奶白 + 底部金色踢脚线） */}
       <mesh position={[0, 0.07, 0]} castShadow receiveShadow>
         <boxGeometry args={[0.24, 0.14, 0.18]} />
-        {mat(wood, 0.6)}
+        {mat(shell, 0.5)}
+      </mesh>
+      <mesh position={[0, 0.012, 0]}>
+        <boxGeometry args={[0.244, 0.016, 0.184]} />
+        {mat('#d9b25e', 0.35, { metalness: 0.55 })}
       </mesh>
       {/* 盖子（绕后缘开合） */}
       <group ref={lid} position={[0, 0.14, -0.09]}>
         <mesh position={[0, 0.012, 0.09]} castShadow>
           <boxGeometry args={[0.24, 0.022, 0.18]} />
-          {mat(shade(wood, 1.12), 0.55)}
+          {mat(shade(shell, 1.05), 0.45)}
         </mesh>
         {/* 盖内星形镶嵌（开盖可见） */}
         <mesh position={[0, -0.002, 0.09]} rotation={[-Math.PI / 2, 0, 0]}>
           <circleGeometry args={[0.045, 10]} />
           {mat('#e8c977', 0.35, { metalness: 0.5 })}
+        </mesh>
+        {/* 盖面金色描边 */}
+        <mesh position={[0, 0.024, 0.09]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[0.062, 0.07, 24]} />
+          {mat('#d9b25e', 0.35, { metalness: 0.55 })}
         </mesh>
       </group>
       {/* 侧面发条旋钮 */}
@@ -1330,7 +1303,6 @@ export const COZY_PLUS_PARTS: Record<string, (p: CozyPlusProps) => ReactElement>
   wineCabinet: WineCabinet3D,
   chessTable: ChessTable3D,
   hotpotTable: HotpotTable3D,
-  hammock: Hammock3D,
   gameConsole: GameConsole3D,
   flowerStand: FlowerStand3D,
   vinyl: Vinyl3D,

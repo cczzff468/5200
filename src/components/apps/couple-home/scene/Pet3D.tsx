@@ -3,26 +3,37 @@
 /* eslint-disable react-hooks/immutability -- R3F/宠物 AI 需要每帧原地修改对象与运行时状态 */
 
 /**
- * 情侣小家 3D —— 宠物系统（v5.7 F2：领养猫/狗，在客厅溜达）
+ * 情侣小家 3D —— 宠物系统（v5.7 F2 领养 → v5.8 美化 → v5.9 品种一比一复刻）
  *
- * - 两种宠物：cat 橘白猫「团子」/ dog 柴犬「布丁」（纯几何程序化建模，Q 版体型）；
- * - AI：随机目标溜达（撞家具绕开）+ 时不时坐下歇会儿/打盹（头顶冒 💤）；
+ * - 11 个真实品种（../pet-breeds PET_BREEDS 驱动）：狗 柴犬/博美/金毛/哈士奇/柯基，
+ *   猫 橘猫/布偶/三花/狸花/金渐层/奶牛猫；建模全部由 breedOf(sp, pet.breed).look 决定：
+ *   毛色 hex / 花色六方案（solid·tabby·points·patches·saddle·blaze）/ 耳型三态
+ *   （erect 立耳·erectBig 柯基大立耳·floppy 垂耳）/ 尾型五态（question·curl·plume·sickle·bob）/
+ *   体型（scale·bodyLen·legLen·legR·headRound）/ 鼻色 / 虹膜色（哈士奇·布偶蓝眼）。
+ * - AI：随机目标溜达（撞家具绕开）+ 时不时坐下歇会儿/打盹（头顶冒 💤）——v5.7 起逻辑零改动；
  * - 点击撸宠：爱心气泡上浮 + 开心转圈（冷却 2.5s 防连点）；
  * - 喂食：碗出现在宠物面前 → 跑过去低头吃（🍚 气泡），吃完碗消失（上层负责发碗/收碗）；
  * - 位置持久化由上层负责（petRT 随存档快照写入 HomeState.pet）。
- * - v5.8 美化：大头 Q 版 + 双高光眨眼、腮红、粉内耳、虎斑纹/柴犬花色、胡须、项圈铃铛、
- *   三节问号卷尾（猫）/ 柴犬卷绒尾（狗）、待机呼吸 + 偶尔抖耳 + 久坐会坐下歇脚（纯视觉增强，AI 不变）。
+ * - 性别配饰：boy 蓝项圈+金铃铛 / girl 粉项圈+头顶蝴蝶结（只由 gender 决定，与物种无关）。
+ * - v5.8 美化全保留：大头 Q 版 + 双高光眨眼、腮红、粉内耳、胡须、呼吸 + 抖耳 + 久坐会坐下歇脚。
+ * - 体型 scale 乘在 holder 内的视觉子 group 上（AI 逻辑坐标/持久化不受影响）；碰撞余量按
+ *   scale 微调，长腿品种整体抬到爪底贴地防穿地。
  */
 
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import type { CharRT, FurnitureItem } from '../types';
 import { CATALOG, ROOM_X, ROOM_Z, BED_Z0, footprintOf } from '../catalog';
+import { breedOf, type PetGender } from '../pet-breeds';
 
 export interface PetData {
   sp: 'cat' | 'dog';
   name: string;
+  /** 品种 id（PET_BREEDS；缺省/未知时按 species 兜底：cat→橘猫 dog→柴犬） */
+  breed?: string;
+  /** 性别：boy 蓝项圈+金铃铛 / girl 粉项圈+头顶蝴蝶结；缺省按 boy */
+  gender?: PetGender;
 }
 
 export interface Pet3DProps {
@@ -85,20 +96,49 @@ function makeBubbleTexture(kind: 'heart' | 'rice' | 'zzz'): THREE.CanvasTexture 
   return tex;
 }
 
-/** 宠物配色 */
-const PET_COLORS: Record<'cat' | 'dog', { fur: string; belly: string; dark: string }> = {
-  cat: { fur: '#e8a05c', belly: '#fbf3e4', dark: '#c47f3e' },
-  dog: { fur: '#e0a860', belly: '#f9efe0', dark: '#b8823e' },
+/** 品种微调参数（look 之外的小个性化：口吻宽/耳大小/鬃毛/plume 尾弯曲方向与粗细） */
+interface BreedExtras {
+  muzzleW?: number; // 口吻宽度乘子（金毛宽吻）
+  earK?: number; // 耳朵相对大小（博美小尖耳）
+  mane?: boolean; // 博美颈部鬃毛
+  plumeRoot?: number; // plume 尾：根段弯曲（rad，负=向后再向下/上）
+  plumeMid?: number; // plume 尾：中段追加弯曲
+  plumeR?: number; // plume 尾：蓬松粗细乘子
+}
+const EXTRAS: Record<string, BreedExtras> = {
+  // 博美：尾羽翻卷贴背（后仰再向前上卷）+ 小尖耳 + 颈部鬃毛
+  pomeranian: { earK: 0.82, mane: true, plumeRoot: -1.35, plumeMid: 1.7, plumeR: 1.15 },
+  // 金毛：宽吻 + 自然下垂微翘的羽状尾
+  golden: { muzzleW: 1.28, plumeRoot: -1.85, plumeMid: 0.4, plumeR: 1.0 },
+  // 布偶：蓬松大尾松松上扬
+  ragdoll: { plumeRoot: -0.85, plumeMid: 0.95, plumeR: 1.2 },
+  // 哈士奇：略宽口吻 + 中等偏大立耳
+  husky: { muzzleW: 1.08, earK: 1.06 },
 };
 
-/** 宠物 Living-room 边界 + 家具避障（简化版碰撞） */
-function clampPet(c: CharRT, items: FurnitureItem[]) {
+/** patches 方案躯干斑块分布（c=0 → patchCols[0]，c=1 → patchCols[1]；p=位置 z 会按 bodyLen 拉伸） */
+const BODY_PATCHES: Record<string, { c: 0 | 1; p: [number, number, number]; s: [number, number, number] }[]> = {
+  // 三花：白底 + 背部黑块 + 前背橘块（橘黑斑块头背分布）
+  calico: [
+    { c: 1, p: [0.05, 0.275, -0.09], s: [0.095, 0.05, 0.11] },
+    { c: 0, p: [-0.06, 0.255, 0.06], s: [0.08, 0.045, 0.1] },
+  ],
+  // 奶牛猫：白底 + 背部大黑块 + 体侧小黑块（奶牛式随机大块）
+  tuxedo: [
+    { c: 0, p: [0, 0.285, -0.05], s: [0.1, 0.05, 0.16] },
+    { c: 0, p: [-0.09, 0.21, -0.11], s: [0.05, 0.045, 0.07] },
+  ],
+};
+
+/** 宠物 Living-room 边界 + 家具避障（简化版碰撞）；margin 随体型 scale 微调 */
+function clampPet(c: CharRT, items: FurnitureItem[], scale = 1) {
+  const m = 0.14 * scale;
   for (const it of items) {
     const e = CATALOG[it.kind];
     if (!e || e.flat || (it.y ?? 0) > 0.45) continue;
     const [w, d] = footprintOf(e, it.ry ?? 0);
-    const hw = w / 2 + 0.14;
-    const hd = d / 2 + 0.14;
+    const hw = w / 2 + m;
+    const hd = d / 2 + m;
     const dx = c.x - it.x;
     const dz = c.z - it.z;
     if (Math.abs(dx) > hw || Math.abs(dz) > hd) continue;
@@ -130,15 +170,97 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
   const tailTip = useRef<THREE.Group>(null);
   const bell = useRef<THREE.Group>(null);
 
-  const C = PET_COLORS[pet.sp];
+  // —— 品种与性别（v5.9：全部外观由 look 驱动） ——
+  const breed = breedOf(pet.sp, pet.breed);
+  const look = breed.look;
   const isCat = pet.sp === 'cat';
-  /** 体型：狗比猫大一号 */
-  const S = isCat ? 1 : 1.16;
+  const gender: PetGender = pet.gender ?? 'boy';
+  const ex = EXTRAS[breed.id] ?? {};
+  const bl = look.bodyLen; // 身长乘子
+  const ll = look.legLen; // 腿长乘子
+  const lr = look.legR; // 腿粗乘子
+  const hr = look.headRound; // 头圆度乘子
+  const earK = ex.earK ?? (isCat ? 1 : 1.06);
+  // 长腿品种整体抬升：爪底（0.12 + 0.02 - 0.14·ll - 0.032·lr）刚好贴地，防止放大后穿地
+  const lift = Math.max(0, 0.14 * ll + 0.032 * lr - 0.155);
 
   const tex = useMemo(
     () => ({ heart: makeBubbleTexture('heart'), rice: makeBubbleTexture('rice'), zzz: makeBubbleTexture('zzz') }),
     [],
   );
+
+  /** 共享材质池（每只宠物一份，mesh 间复用；品种/性别变化时重建并 dispose 旧材质） */
+  const M = useMemo(() => {
+    const std = (color: string, roughness = 0.9) => new THREE.MeshStandardMaterial({ color, roughness });
+    const pc = look.patchCols ?? [look.dark, look.dark];
+    // 耳朵外侧配色：垂耳金毛/布偶重点色/奶牛猫 → 深色；三花 → 左橘右黑；其余 = 主毛色
+    const darkEar = look.ear === 'floppy' || breed.id === 'ragdoll' || breed.id === 'tuxedo';
+    const earL = darkEar ? look.dark : breed.id === 'calico' ? pc[0] : look.fur;
+    const earR = darkEar ? look.dark : breed.id === 'calico' ? pc[1] : look.fur;
+    return {
+      fur: std(look.fur),
+      belly: std(look.belly),
+      dark: std(look.dark),
+      p1: std(pc[0]),
+      p2: std(pc[1]),
+      nose: std(look.nose, 0.4),
+      iris: std(look.eye, 0.15),
+      earIn: std(isCat ? '#f5b3bd' : '#e8c9a8'),
+      earL: std(earL),
+      earR: std(earR),
+      blush: new THREE.MeshStandardMaterial({ color: '#f6a8b0', roughness: 0.9, transparent: true, opacity: 0.55, depthWrite: false }),
+      collar: std(gender === 'girl' ? '#f28cb8' : '#5c8ae0', 0.6),
+      bow: std('#f7a8c4', 0.7),
+      bowKnot: std('#ef8fb2', 0.7),
+      bell: new THREE.MeshStandardMaterial({ color: '#f3c34e', roughness: 0.3, metalness: 0.55 }),
+      ring: new THREE.MeshStandardMaterial({ color: '#c89a2e', roughness: 0.4, metalness: 0.5 }),
+      hi: new THREE.MeshBasicMaterial({ color: '#ffffff' }),
+      whisker: new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.85 }),
+    };
+  }, [breed, isCat, gender]);
+
+  useEffect(() => {
+    const mats = Object.values(M);
+    return () => mats.forEach((m) => m.dispose());
+  }, [M]);
+
+  // 尾巴链参数（question 猫问号尾 / sickle 哈士奇镰刀尾 / plume 羽状蓬松尾共用三节链）
+  const TC =
+    look.tail === 'question'
+      ? { root: -0.15, mid: 0.55, tip: 1.35, r: 1, len: 1, tipR: 0.015 }
+      : look.tail === 'sickle'
+        ? { root: -0.62, mid: 1.15, tip: 0.12, r: 0.85, len: 1.15, tipR: 0.014 }
+        : look.tail === 'plume'
+          ? {
+              root: ex.plumeRoot ?? -1.1,
+              mid: ex.plumeMid ?? 0.9,
+              tip: 0.12,
+              r: (ex.plumeR ?? 1.05) * 1.5,
+              len: 1.28,
+              tipR: 0.03 * ((ex.plumeR ?? 1.05) * 1.5),
+            }
+          : null;
+  const L1 = 0.12 * (TC?.len ?? 1);
+  const L2 = 0.11 * (TC?.len ?? 1);
+  const L3 = 0.085 * (TC?.len ?? 1);
+  // 尾尖色：博美/哈士奇/金毛浅色尾尖，其余深色（问号的点/重点色/狸花环纹尾尖黑）
+  const tipMat = breed.id === 'pomeranian' || breed.id === 'husky' || breed.id === 'golden' ? M.belly : M.dark;
+  // 布偶重点色：尾巴整条深色
+  const tailMat = look.pattern === 'points' ? M.dark : M.fur;
+  // 布偶面具式口吻（深色），其余浅色口吻
+  const muzzleMat = breed.id === 'ragdoll' ? M.dark : M.belly;
+  // 爪尖：重点色深色靴子，其余浅色爪（blaze 品种即白爪尖）
+  const pawMat = look.pattern === 'points' ? M.dark : M.belly;
+  const patchMatOf = (c: 0 | 1) => (c === 0 ? M.p1 : M.p2);
+  const bodyPatches =
+    BODY_PATCHES[breed.id] ??
+    (look.pattern === 'patches'
+      ? ([
+          { c: 0, p: [0.06, 0.27, -0.05], s: [0.09, 0.05, 0.11] },
+          { c: 1, p: [-0.05, 0.26, 0.07], s: [0.08, 0.045, 0.09] },
+        ] as { c: 0 | 1; p: [number, number, number]; s: [number, number, number] }[])
+      : null);
+
   /** 撸宠爱心粒子（点击时触发，本地计时） */
   const petAt = useRef(0);
   const eatAt = useRef(0);
@@ -182,7 +304,7 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
     const c = rt.current;
     if (!c) return;
 
-    // —— AI：喂食优先 → 溜达 → 打盹 ——
+    // —— AI：喂食优先 → 溜达 → 打盹（v5.7 原逻辑，零改动） ——
     const feed = feedRef.current;
     const now = performance.now();
     const eating = feed && now - feed.at < 9000 && Math.hypot(c.x - feed.x, c.z - feed.z) < 0.22;
@@ -230,7 +352,7 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
         }
       }
     }
-    clampPet(c, itemsRef.current ?? []);
+    clampPet(c, itemsRef.current ?? [], look.scale);
     h.position.set(c.x, 0, c.z);
     h.rotation.y = c.heading;
 
@@ -256,11 +378,12 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
     }
     sitBlend.current = THREE.MathUtils.damp(sitBlend.current, idleNow && sitSt.current.sitAt > 0 ? 1 : 0, 5, dt);
     const sit = sitBlend.current;
-    // 走路：身体起伏 + 四腿交替；坐下：上身向后仰 + 身体微沉（后腿在下面折叠）
+    // 走路：身体起伏 + 四腿交替；坐下：上身向后仰 + 身体微沉（长身品种后仰角收敛防穿地）
     if (body.current) {
-      body.current.position.y = (walking ? Math.abs(Math.sin(t * 11)) * 0.02 * S : 0) - sit * 0.042;
+      body.current.position.y =
+        lift + (walking ? Math.abs(Math.sin(t * 11)) * 0.02 * look.scale : 0) - sit * 0.042;
       body.current.rotation.z = walking ? Math.sin(t * 11) * 0.04 : 0;
-      body.current.rotation.x = -0.34 * sit;
+      body.current.rotation.x = (-0.34 / Math.sqrt(bl)) * sit;
     }
     const legSwing = walking ? Math.sin(t * 11) * 0.5 : 0;
     if (legFL.current) legFL.current.rotation.x = legSwing + sit * 0.34;
@@ -284,7 +407,7 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
     // 呼吸：待机时身体 y ±1.5% @1.6s（x/z 轻微反向，保持体积感）
     if (body.current) {
       const br = Math.sin((t * Math.PI * 2) / 1.6) * 0.015;
-      body.current.scale.set(S * (1 - br * 0.6), S * (1 + br), S * (1 - br * 0.6));
+      body.current.scale.set(1 - br * 0.6, 1 + br, 1 - br * 0.6);
     }
     // 眨眼：每 4-6s 一次，压扁 120ms
     if (t >= nextBlink.current) {
@@ -295,7 +418,7 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
     eyes.current.forEach((e) => {
       if (e) e.scale.y = blinking ? 0.1 : 1;
     });
-    // 抖耳：每 ~5s 随机一边快速抖一下
+    // 抖耳：每 ~5s 随机一边快速抖一下（垂耳改成整片大幅甩动 + 日常轻轻晃）
     if (t >= nextTwitch.current) {
       twitchUntil.current = t + 0.4;
       twitchSide.current = Math.random() < 0.5 ? 0 : 1;
@@ -305,30 +428,40 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
     ears.current.forEach((e, i) => {
       if (!e) return;
       const sd = i === 0 ? -1 : 1;
-      e.rotation.z = (isCat ? -0.22 * sd : 0.5 * sd) + (i === twitchSide.current ? twk : 0);
+      if (look.ear === 'floppy') {
+        const sway = Math.sin(t * 2.6 + i * 1.3) * (walking ? 0.055 : 0.028);
+        e.rotation.z = 0.95 * sd + sway + (i === twitchSide.current ? Math.sin(t * 46) * 0.3 : 0);
+      } else {
+        const base = look.ear === 'erectBig' ? -0.12 : isCat ? -0.22 : -0.15;
+        e.rotation.z = base * sd + (i === twitchSide.current ? twk : 0);
+      }
     });
     // 尾巴链惯性：中/末节带相位差的小幅摆动（开心时幅度变大）
     const happyNow = !!petAt.current && now - petAt.current < 2600;
     const tf = happyNow ? 14 : 5;
     if (tailMid.current) tailMid.current.rotation.z = Math.sin(t * tf + 0.7) * (happyNow ? 0.22 : 0.1);
     if (tailTip.current) tailTip.current.rotation.z = Math.sin(t * tf + 1.3) * (happyNow ? 0.3 : 0.14);
-    // 铃铛：走路时叮当晃
+    // 铃铛：走路时叮当晃（girl 没有铃铛，ref 为空自动跳过）
     if (bell.current) bell.current.rotation.z = Math.sin(t * 9) * (walking ? 0.22 : 0.05);
     // 撸宠后开心转一小圈
     if (petAt.current && now - petAt.current < 900) {
       h.rotation.y = c.heading + Math.sin(((now - petAt.current) / 900) * Math.PI) * 1.4;
     }
 
-    // —— 心情气泡（优先级：吃饭 > 打盹 > 撸宠爱心由粒子表达） ——
+    // —— 心情气泡（优先级：吃饭 > 打盹 > 撸宠爱心由粒子表达）；y 随耳型/头圆度抬高避免插进耳朵 ——
     if (moodSprite.current) {
       const showRice = eatingNow;
       const showZzz = !showRice && !!dozedOff.current && now - dozedOff.current < 3500 && !c.moving;
       moodSprite.current.visible = showRice || showZzz;
       moodSprite.current.material.map = showRice ? tex.rice : tex.zzz;
       moodSprite.current.material.needsUpdate = true;
-      moodSprite.current.position.set(0.02, (isCat ? 0.57 : 0.65) + Math.sin(t * 2) * 0.02, 0);
+      const moodY =
+        (isCat ? 0.57 : 0.65) +
+        (look.ear === 'erect' || look.ear === 'erectBig' ? 0.035 : 0) +
+        (hr - 1) * 0.15;
+      moodSprite.current.position.set(0.02, moodY + Math.sin(t * 2) * 0.02, 0);
     }
-    // —— 爱心粒子（撸宠后 1.6 秒） ——
+    // —— 爱心粒子（撸宠后 1.6 秒；在视觉子 group 内随体型自动缩放） ——
     const heartAge = petAt.current ? (now - petAt.current) / 1000 : -1;
     hearts.current.forEach((sp, i) => {
       if (!sp) return;
@@ -357,254 +490,389 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
 
   return (
     <group>
-      {/* 宠物本体 */}
+      {/* 宠物本体（holder = AI 坐标系；vis = 纯视觉，整体体型 scale 乘在这里） */}
       <group
         ref={holder}
         onClick={handleTap}
         onPointerDown={(e) => e.stopPropagation()}
       >
-        <group ref={body} scale={S}>
-          {/* 躯干（胶囊感：椭球） */}
-          <mesh position={[0, 0.2, 0]} scale={[0.16, 0.13, 0.24]} castShadow>
-            <sphereGeometry args={[1, 20, 16]} />
-            <meshStandardMaterial color={C.fur} roughness={0.9} />
-          </mesh>
-          {/* 白肚皮 */}
-          <mesh position={[0, 0.17, 0.06]} scale={[0.12, 0.09, 0.18]}>
-            <sphereGeometry args={[1, 14, 12]} />
-            <meshStandardMaterial color={C.belly} roughness={0.9} />
-          </mesh>
-          {/* 猫：背上 3 道橘色虎斑纹（局部环面弧段，两端没入毛里） */}
-          {isCat &&
-            [0.1, 0, -0.09].map((z, i) => (
-              <group key={i} position={[0, 0.185, z]} scale={[0.72, 1, 1]}>
-                <mesh rotation={[0, 0, 1.05]}>
-                  <torusGeometry args={[0.148, 0.013, 8, 20, 1.05]} />
-                  <meshStandardMaterial color={C.dark} roughness={0.9} />
-                </mesh>
-              </group>
-            ))}
-          {/* 狗：柴犬花色——深棕背块 + 奶油胸 */}
-          {!isCat && (
-            <>
-              <mesh position={[0, 0.29, -0.03]} scale={[0.12, 0.055, 0.15]}>
-                <sphereGeometry args={[1, 16, 12]} />
-                <meshStandardMaterial color={C.dark} roughness={0.9} />
-              </mesh>
-              <mesh position={[0, 0.25, 0.135]} scale={[0.085, 0.08, 0.095]}>
-                <sphereGeometry args={[1, 12, 10]} />
-                <meshStandardMaterial color={C.belly} roughness={0.9} />
-              </mesh>
-            </>
-          )}
-
-          {/* 四条腿 */}
-          {(
-            [
-              [-0.08, 0.14, legFL],
-              [0.08, 0.14, legFR],
-              [-0.08, -0.13, legBL],
-              [0.08, -0.13, legBR],
-            ] as const
-          ).map(([x, z, ref], i) => (
-            <group key={i} ref={ref} position={[x, 0.12, z]}>
-              <mesh position={[0, -0.05, 0]} castShadow>
-                <cylinderGeometry args={[0.032, 0.028, 0.14, 10]} />
-                <meshStandardMaterial color={C.fur} roughness={0.9} />
-              </mesh>
-              <mesh position={[0, -0.12, 0.012]}>
-                <sphereGeometry args={[0.032, 10, 8]} />
-                <meshStandardMaterial color={C.belly} roughness={0.9} />
-              </mesh>
-            </group>
-          ))}
-
-          {/* 头（更大更Q：24x18 扁圆、底部略平；frente +z） */}
-          <group ref={head} position={[0, 0.34, 0.14]}>
-            <mesh scale={[0.16, 0.142, 0.15]} castShadow>
-              <sphereGeometry args={[1, 24, 18]} />
-              <meshStandardMaterial color={C.fur} roughness={0.9} />
+        <group scale={look.scale}>
+          <group ref={body}>
+            {/* 躯干（胶囊感：椭球，bodyLen 沿 z 拉伸） */}
+            <mesh position={[0, 0.2, 0]} scale={[0.16, 0.13, 0.24 * bl]} castShadow material={M.fur}>
+              <sphereGeometry args={[1, 20, 16]} />
             </mesh>
-            {/* 口吻（白） */}
-            <mesh position={[0, -0.042, 0.115]} scale={[0.082, 0.062, 0.068]}>
-              <sphereGeometry args={[1, 16, 12]} />
-              <meshStandardMaterial color={C.belly} roughness={0.9} />
+            {/* 浅色肚皮 */}
+            <mesh position={[0, 0.17, 0.055 * bl]} scale={[0.12, 0.09, 0.17 * bl]} material={M.belly}>
+              <sphereGeometry args={[1, 14, 12]} />
             </mesh>
-            {/* 鼻子（猫粉鼻 / 狗深棕鼻） */}
-            <mesh position={[0, -0.026, 0.176]} scale={[1.15, 0.8, 0.8]}>
-              <sphereGeometry args={[0.02, 10, 8]} />
-              <meshStandardMaterial color={isCat ? '#e5808e' : '#4a3b30'} roughness={0.4} />
-            </mesh>
-            {/* 眼睛 ×2（大而亮 + 双高光；眨眼时整体压扁） */}
-            {[-0.06, 0.06].map((x, i) => (
-              <mesh
-                key={i}
-                ref={(el) => {
-                  eyes.current[i] = el;
-                }}
-                position={[x, 0.03, 0.12]}
-              >
-                <sphereGeometry args={[0.023, 16, 12]} />
-                <meshStandardMaterial color="#332b26" roughness={0.15} />
-                {/* 大高光（左上）+ 小高光（右下） */}
-                <mesh position={[-0.008, 0.009, 0.016]} scale={[1, 1, 0.55]}>
-                  <sphereGeometry args={[0.0068, 8, 8]} />
-                  <meshBasicMaterial color="#ffffff" />
-                </mesh>
-                <mesh position={[0.007, -0.007, 0.018]}>
-                  <sphereGeometry args={[0.0034, 6, 6]} />
-                  <meshBasicMaterial color="#ffffff" />
-                </mesh>
-              </mesh>
-            ))}
-            {/* 腮红（软粉椭圆，半埋进脸颊） */}
-            {[-1, 1].map((s) => (
-              <mesh key={s} position={[s * 0.075, -0.026, 0.122]} rotation={[0, s * 0.45, 0]} scale={[0.032, 0.022, 0.015]}>
-                <sphereGeometry args={[1, 10, 8]} />
-                <meshStandardMaterial color="#f6a8b0" roughness={0.9} transparent opacity={0.55} depthWrite={false} />
-              </mesh>
-            ))}
-            {/* 胡须（猫：每侧 3 根细白须，向外前侧张开） */}
-            {isCat &&
-              [-1, 1].map((s) =>
-                [0.28, -0.02, -0.32].map((tilt, i) => (
-                  <mesh key={`${s}-${i}`} position={[s * 0.158, -0.032 + (i - 1) * 0.01, 0.142]} rotation={[tilt, -s * 0.4, -s * 1.4]}>
-                    <cylinderGeometry args={[0.002, 0.002, 0.07, 5]} />
-                    <meshBasicMaterial color="#ffffff" transparent opacity={0.85} />
+            {/* —— 花色（六方案） —— */}
+            {/* tabby：背脊三道深色虎斑纹（橘猫/狸花，z 随身长铺开） */}
+            {look.pattern === 'tabby' &&
+              [0.1, 0, -0.09].map((z, i) => (
+                <group key={i} position={[0, 0.185, z * bl]} scale={[0.72, 1, 1]}>
+                  <mesh rotation={[0, 0, 1.05]} material={M.dark}>
+                    <torusGeometry args={[0.148, 0.013, 8, 20, 1.05]} />
                   </mesh>
-                )),
-              )}
-            {/* 猫三角耳（含粉内耳）/ 狗垂耳（含浅色内耳）——组包裹便于抖耳 */}
-            {[-1, 1].map((s, i) => (
-              <group
-                key={s}
-                ref={(el) => {
-                  ears.current[i] = el;
-                }}
-                position={[s * (isCat ? 0.092 : 0.1), isCat ? 0.118 : 0.02, 0]}
-                rotation={[isCat ? 0.1 : 0, 0, isCat ? -0.22 * s : 0.5 * s]}
-              >
-                {isCat ? (
-                  <>
-                    <mesh position={[0, 0.048, 0]} scale={[1, 1, 0.72]}>
-                      <coneGeometry args={[0.048, 0.1, 12]} />
-                      <meshStandardMaterial color={C.fur} roughness={0.9} />
-                    </mesh>
-                    <mesh position={[0, 0.042, 0.02]} scale={[1, 1, 0.72]}>
-                      <coneGeometry args={[0.026, 0.058, 10]} />
-                      <meshStandardMaterial color="#f5b3bd" roughness={0.9} />
-                    </mesh>
-                  </>
-                ) : (
-                  <>
-                    <mesh position={[0, 0, -0.008]} scale={[0.05, 0.095, 0.06]}>
-                      <sphereGeometry args={[1, 12, 10]} />
-                      <meshStandardMaterial color={C.dark} roughness={0.9} />
-                    </mesh>
-                    <mesh position={[s * -0.014, 0.005, 0.026]} scale={[0.026, 0.058, 0.032]}>
-                      <sphereGeometry args={[1, 10, 8]} />
-                      <meshStandardMaterial color="#f0dcbd" roughness={0.9} />
-                    </mesh>
-                  </>
-                )}
-              </group>
-            ))}
-            {/* 狗：白色腮点 */}
-            {!isCat &&
-              [-1, 1].map((s) => (
-                <mesh key={s} position={[s * 0.095, -0.022, 0.112]} scale={[0.018, 0.022, 0.016]}>
-                  <sphereGeometry args={[1, 10, 8]} />
-                  <meshStandardMaterial color={C.belly} roughness={0.9} />
-                </mesh>
-              ))}
-          </group>
-
-          {/* 尾巴（猫：三节问号卷尾 / 狗：柴犬卷绒尾） */}
-          <group ref={tail} position={[0, 0.26, -0.22]} rotation={isCat ? [-0.15, 0, 0] : [0, 0, 0]}>
-            {isCat ? (
-              <>
-                {/* 第一节：微微后仰的粗根 */}
-                <mesh position={[0, 0.06, 0]} castShadow>
-                  <cylinderGeometry args={[0.017, 0.024, 0.12, 10]} />
-                  <meshStandardMaterial color={C.fur} roughness={0.9} />
-                </mesh>
-                {/* 第二节（带摆动惯性） */}
-                <group ref={tailMid} position={[0, 0.12, 0]} rotation={[0.55, 0, 0]}>
-                  <mesh position={[0, 0.055, 0]}>
-                    <cylinderGeometry args={[0.014, 0.017, 0.11, 10]} />
-                    <meshStandardMaterial color={C.fur} roughness={0.9} />
-                  </mesh>
-                  {/* 第三节 + 深色尾尖圆球（问号的「点」） */}
-                  <group ref={tailTip} position={[0, 0.11, 0]} rotation={[1.35, 0, 0]}>
-                    <mesh position={[0, 0.0425, 0]}>
-                      <cylinderGeometry args={[0.009, 0.014, 0.085, 10]} />
-                      <meshStandardMaterial color={C.fur} roughness={0.9} />
-                    </mesh>
-                    <mesh position={[0, 0.098, 0]}>
-                      <sphereGeometry args={[0.015, 10, 8]} />
-                      <meshStandardMaterial color={C.dark} roughness={0.9} />
-                    </mesh>
-                  </group>
                 </group>
-              </>
-            ) : (
+              ))}
+            {/* saddle：背脊鞍形深色块 + 浅色胸口（柴犬/金毛） */}
+            {look.pattern === 'saddle' && (
               <>
-                {/* 卷成 3.5rad 弧的粗环尾（侧面可见的柴犬卷） */}
-                <mesh position={[0, 0.1, -0.02]} rotation={[0, Math.PI / 2, 0]} castShadow>
-                  <torusGeometry args={[0.06, 0.026, 10, 24, 3.5]} />
-                  <meshStandardMaterial color={C.fur} roughness={0.9} />
+                <mesh position={[0, 0.29, -0.03 * bl]} scale={[0.12, 0.055, 0.15 * bl]} material={M.dark}>
+                  <sphereGeometry args={[1, 16, 12]} />
                 </mesh>
-                {/* 弧端封口球（尾根 / 奶油色尾尖） */}
-                <mesh position={[0, 0.1, -0.08]}>
-                  <sphereGeometry args={[0.026, 10, 8]} />
-                  <meshStandardMaterial color={C.fur} roughness={0.9} />
-                </mesh>
-                <mesh position={[0, 0.079, 0.036]}>
-                  <sphereGeometry args={[0.026, 10, 8]} />
-                  <meshStandardMaterial color={C.belly} roughness={0.9} />
+                <mesh position={[0, 0.25, 0.135 * bl]} scale={[0.085, 0.08, 0.095]} material={M.belly}>
+                  <sphereGeometry args={[1, 12, 10]} />
                 </mesh>
               </>
             )}
-          </group>
+            {/* solid：背部毛尖色渐层（博美暖影 / 金渐层毛尖黑渐层） */}
+            {look.pattern === 'solid' && (
+              <mesh position={[0, 0.29, -0.02 * bl]} scale={[0.11, 0.05, 0.16 * bl]} material={M.dark}>
+                <sphereGeometry args={[1, 16, 12]} />
+              </mesh>
+            )}
+            {/* blaze：背部大色块 + 白胸围脖（柯基红背白胸 / 哈士奇灰背白胸） */}
+            {look.pattern === 'blaze' && (
+              <>
+                <mesh position={[0, 0.29, -0.03 * bl]} scale={[0.115, 0.05, 0.15 * bl]} material={M.dark}>
+                  <sphereGeometry args={[1, 16, 12]} />
+                </mesh>
+                <mesh position={[0, 0.25, 0.135 * bl]} scale={[0.09, 0.085, 0.095]} material={M.belly}>
+                  <sphereGeometry args={[1, 12, 10]} />
+                </mesh>
+              </>
+            )}
+            {/* patches：白底 + 橘/黑或黑/黑椭圆斑块（三花/奶牛猫，真实分布=头一块+背一两块） */}
+            {bodyPatches?.map((pt, i) => (
+              <mesh
+                key={i}
+                position={[pt.p[0], pt.p[1], pt.p[2] * bl]}
+                scale={pt.s}
+                material={patchMatOf(pt.c)}
+              >
+                <sphereGeometry args={[1, 14, 12]} />
+              </mesh>
+            ))}
 
-          {/* 项圈 + 铃铛（猫粉红 / 狗蓝） */}
-          <group position={[0, 0.215, 0.11]}>
-            <mesh rotation={[Math.PI / 2, 0, 0]}>
-              <torusGeometry args={[0.088, 0.014, 10, 24]} />
-              <meshStandardMaterial color={isCat ? '#e05c6e' : '#5c8ae0'} roughness={0.6} />
-            </mesh>
-            <group ref={bell} position={[0, -0.012, 0.13]}>
-              <mesh position={[0, -0.012, 0.01]}>
-                <sphereGeometry args={[0.017, 12, 10]} />
-                <meshStandardMaterial color="#f3c34e" roughness={0.3} metalness={0.55} />
+            {/* 四条腿（legLen/legR 缩放，顶部髋关节固定；bodyLen 时前后腿外移） */}
+            {(
+              [
+                [-0.08, 0.14, legFL],
+                [0.08, 0.14, legFR],
+                [-0.08, -0.13, legBL],
+                [0.08, -0.13, legBR],
+              ] as const
+            ).map(([x, z, ref], i) => (
+              <group key={i} ref={ref} position={[x, 0.12, z * bl]}>
+                <mesh position={[0, 0.02 - 0.07 * ll, 0]} castShadow material={M.fur}>
+                  <cylinderGeometry args={[0.032 * lr, 0.028 * lr, 0.14 * ll, 10]} />
+                </mesh>
+                {/* 重点色深色「袜子」（布偶四肢末端深色） */}
+                {look.pattern === 'points' && (
+                  <mesh position={[0, 0.02 - 0.105 * ll, 0]} material={M.dark}>
+                    <cylinderGeometry args={[0.033 * lr, 0.0295 * lr, 0.07 * ll, 10]} />
+                  </mesh>
+                )}
+                <mesh position={[0, 0.02 - 0.14 * ll, 0.012]} material={pawMat}>
+                  <sphereGeometry args={[0.032 * lr, 10, 8]} />
+                </mesh>
+              </group>
+            ))}
+
+            {/* 头（更大更Q：headRound 整组缩放 = 头更圆且五官同步；frente +z） */}
+            <group ref={head} position={[0, 0.34, 0.14 * bl]} scale={hr}>
+              <mesh scale={[0.16, 0.142, 0.15]} castShadow material={M.fur}>
+                <sphereGeometry args={[1, 24, 18]} />
               </mesh>
-              <mesh position={[0, -0.016, 0.01]} rotation={[Math.PI / 2, 0, 0]}>
-                <torusGeometry args={[0.016, 0.002, 6, 14]} />
-                <meshStandardMaterial color="#c89a2e" roughness={0.4} metalness={0.5} />
+              {/* 口吻（浅色 / 布偶面具深色；金毛加宽） */}
+              <mesh
+                position={[0, -0.042, 0.115]}
+                scale={[0.082 * (ex.muzzleW ?? 1), 0.062, 0.068]}
+                material={muzzleMat}
+              >
+                <sphereGeometry args={[1, 16, 12]} />
               </mesh>
+              {/* 鼻子（品种鼻色） */}
+              <mesh position={[0, -0.026, 0.176]} scale={[1.15, 0.8, 0.8]} material={M.nose}>
+                <sphereGeometry args={[0.02, 10, 8]} />
+              </mesh>
+              {/* 眼睛 ×2（虹膜=品种眼色，哈士奇/布偶蓝眼；双高光保留；眨眼时整体压扁） */}
+              {[-0.06, 0.06].map((x, i) => (
+                <mesh
+                  key={i}
+                  ref={(el) => {
+                    eyes.current[i] = el;
+                  }}
+                  position={[x, 0.03, 0.12]}
+                  material={M.iris}
+                >
+                  <sphereGeometry args={[0.023, 16, 12]} />
+                  {/* 大高光（左上）+ 小高光（右下） */}
+                  <mesh position={[-0.008, 0.009, 0.016]} scale={[1, 1, 0.55]} material={M.hi}>
+                    <sphereGeometry args={[0.0068, 8, 8]} />
+                  </mesh>
+                  <mesh position={[0.007, -0.007, 0.018]} material={M.hi}>
+                    <sphereGeometry args={[0.0034, 6, 6]} />
+                  </mesh>
+                </mesh>
+              ))}
+              {/* 腮红（软粉椭圆，半埋进脸颊） */}
+              {[-1, 1].map((s) => (
+                <mesh
+                  key={s}
+                  position={[s * 0.075, -0.026, 0.122]}
+                  rotation={[0, s * 0.45, 0]}
+                  scale={[0.032, 0.022, 0.015]}
+                  material={M.blush}
+                >
+                  <sphereGeometry args={[1, 10, 8]} />
+                </mesh>
+              ))}
+              {/* 胡须（猫：每侧 3 根细白须，向外前侧张开） */}
+              {isCat &&
+                [-1, 1].map((s) =>
+                  [0.28, -0.02, -0.32].map((tilt, i) => (
+                    <mesh
+                      key={`${s}-${i}`}
+                      position={[s * 0.158, -0.032 + (i - 1) * 0.01, 0.142]}
+                      rotation={[tilt, -s * 0.4, -s * 1.4]}
+                      material={M.whisker}
+                    >
+                      <cylinderGeometry args={[0.002, 0.002, 0.07, 5]} />
+                    </mesh>
+                  )),
+                )}
+              {/* blaze：面部鼻梁白纵纹（柯基/哈士奇） */}
+              {look.pattern === 'blaze' && (
+                <mesh position={[0, 0.018, 0.128]} scale={[0.03, 0.085, 0.03]} material={M.belly}>
+                  <sphereGeometry args={[1, 10, 10]} />
+                </mesh>
+              )}
+              {/* 哈士奇：额头灰斑（灰帽子 + 两道灰眉） */}
+              {breed.id === 'husky' && (
+                <>
+                  <mesh position={[0, 0.112, -0.012]} scale={[0.105, 0.048, 0.105]} material={M.dark}>
+                    <sphereGeometry args={[1, 14, 10]} />
+                  </mesh>
+                  {[-1, 1].map((s) => (
+                    <mesh
+                      key={s}
+                      position={[s * 0.052, 0.08, 0.112]}
+                      scale={[0.034, 0.026, 0.024]}
+                      material={M.dark}
+                    >
+                      <sphereGeometry args={[1, 10, 8]} />
+                    </mesh>
+                  ))}
+                </>
+              )}
+              {/* 布偶重点色：脸部深色面具 */}
+              {look.pattern === 'points' && (
+                <mesh position={[0, -0.012, 0.112]} scale={[0.086, 0.064, 0.058]} material={M.dark}>
+                  <sphereGeometry args={[1, 14, 12]} />
+                </mesh>
+              )}
+              {/* patches：头上斑块（三花橘斑在左耳侧 / 奶牛黑斑在右耳侧） */}
+              {look.pattern === 'patches' && (
+                <mesh
+                  position={[breed.id === 'calico' ? -0.095 : 0.095, 0.07, 0.03]}
+                  rotation={[0, 0, breed.id === 'calico' ? 0.45 : -0.45]}
+                  scale={[0.056, 0.062, 0.052]}
+                  material={breed.id === 'calico' ? M.p1 : M.p2}
+                >
+                  <sphereGeometry args={[1, 12, 10]} />
+                </mesh>
+              )}
+              {/* 狸花猫：额头 M 形纹（三道深色竖纹，左右两道外撇） */}
+              {breed.id === 'lihua' &&
+                [-0.032, 0, 0.032].map((x) => (
+                  <mesh
+                    key={x}
+                    position={[x, 0.095, 0.112]}
+                    rotation={[0, 0, x === 0 ? 0 : x > 0 ? -0.55 : 0.55]}
+                    material={M.dark}
+                  >
+                    <boxGeometry args={[0.011, 0.05, 0.014]} />
+                  </mesh>
+                ))}
+              {/* 狗：白色腮点（布偶面具脸上不放） */}
+              {!isCat && look.pattern !== 'points' &&
+                [-1, 1].map((s) => (
+                  <mesh key={s} position={[s * 0.095, -0.022, 0.112]} scale={[0.018, 0.022, 0.016]} material={M.belly}>
+                    <sphereGeometry args={[1, 10, 8]} />
+                  </mesh>
+                ))}
+              {/* —— 耳型三态（组包裹便于抖耳） —— */}
+              {[-1, 1].map((s, i) => (
+                <group
+                  key={s}
+                  ref={(el) => {
+                    ears.current[i] = el;
+                  }}
+                  position={
+                    look.ear === 'floppy'
+                      ? [s * 0.128, 0.02, 0.005]
+                      : look.ear === 'erectBig'
+                        ? [s * 0.105, 0.1, 0.005]
+                        : [s * (isCat ? 0.092 : 0.1), isCat ? 0.118 : 0.102, isCat ? 0 : -0.008]
+                  }
+                  rotation={
+                    look.ear === 'floppy'
+                      ? [0.12, 0, 0.95 * s]
+                      : look.ear === 'erectBig'
+                        ? [0.03, 0, -0.12 * s]
+                        : [isCat ? 0.1 : 0.05, 0, (isCat ? -0.22 : -0.15) * s]
+                  }
+                >
+                  {look.ear === 'floppy' ? (
+                    // 垂耳（金毛）：头两侧偏下的圆角垂片 + 浅色内耳，useFrame 微微摆动
+                    <>
+                      <mesh position={[s * 0.01, -0.028, 0]} scale={[0.03, 0.078, 0.055]} material={i === 0 ? M.earL : M.earR}>
+                        <sphereGeometry args={[1, 12, 10]} />
+                      </mesh>
+                      <mesh position={[s * 0.002, -0.026, 0.02]} scale={[0.017, 0.048, 0.032]} material={M.earIn}>
+                        <sphereGeometry args={[1, 10, 8]} />
+                      </mesh>
+                    </>
+                  ) : look.ear === 'erectBig' ? (
+                    // 大立耳（柯基）：更大更圆的三角耳
+                    <>
+                      <mesh position={[0, 0.055, 0]} scale={[1, 1, 0.6]} material={i === 0 ? M.earL : M.earR}>
+                        <coneGeometry args={[0.062, 0.13, 14]} />
+                      </mesh>
+                      <mesh position={[0, 0.048, 0.022]} scale={[1, 1, 0.6]} material={M.earIn}>
+                        <coneGeometry args={[0.034, 0.075, 12]} />
+                      </mesh>
+                    </>
+                  ) : (
+                    // 立耳（猫锥耳 / 柴犬·哈士奇三角立耳）：含内耳
+                    <>
+                      <mesh position={[0, 0.048 * earK, 0]} scale={[1, 1, 0.72]} material={i === 0 ? M.earL : M.earR}>
+                        <coneGeometry args={[(isCat ? 0.048 : 0.054) * earK, (isCat ? 0.1 : 0.108) * earK, 12]} />
+                      </mesh>
+                      <mesh position={[0, 0.042 * earK, 0.02]} scale={[1, 1, 0.72]} material={M.earIn}>
+                        <coneGeometry args={[(isCat ? 0.026 : 0.03) * earK, (isCat ? 0.058 : 0.062) * earK, 10]} />
+                      </mesh>
+                    </>
+                  )}
+                </group>
+              ))}
+              {/* gender==='girl'：头顶蝴蝶结（两个锥形翼 + 中心结） */}
+              {gender === 'girl' && (
+                <group position={[0.075, 0.1, 0.03]} rotation={[0.15, 0.35, -0.45]}>
+                  <mesh position={[-0.026, 0, 0]} rotation={[0, 0, -Math.PI / 2 + 0.35]} scale={[1, 1, 0.55]} material={M.bow}>
+                    <coneGeometry args={[0.023, 0.05, 10]} />
+                  </mesh>
+                  <mesh position={[0.026, 0, 0]} rotation={[0, 0, Math.PI / 2 - 0.35]} scale={[1, 1, 0.55]} material={M.bow}>
+                    <coneGeometry args={[0.023, 0.05, 10]} />
+                  </mesh>
+                  <mesh scale={[1, 1, 0.55]} material={M.bowKnot}>
+                    <sphereGeometry args={[0.014, 10, 8]} />
+                  </mesh>
+                </group>
+              )}
+            </group>
+
+            {/* —— 尾型五态 —— */}
+            <group ref={tail} position={[0, 0.26, -0.22 * bl]} rotation={[TC?.root ?? 0, 0, 0]}>
+              {TC ? (
+                <>
+                  {/* 第一节：粗根（问号尾/镰刀尾/羽状尾共用三节链，弯曲角与粗细按品种） */}
+                  <mesh position={[0, L1 / 2, 0]} castShadow material={tailMat}>
+                    <cylinderGeometry args={[0.017 * TC.r, 0.024 * TC.r, L1, 10]} />
+                  </mesh>
+                  {/* 第二节（带摆动惯性） */}
+                  <group ref={tailMid} position={[0, L1, 0]} rotation={[TC.mid, 0, 0]}>
+                    <mesh position={[0, L2 / 2, 0]} material={tailMat}>
+                      <cylinderGeometry args={[0.014 * TC.r, 0.017 * TC.r, L2, 10]} />
+                    </mesh>
+                    {/* 狸花猫：尾部环状花纹 */}
+                    {breed.id === 'lihua' &&
+                      [0.035, 0.075].map((y, i) => (
+                        <mesh key={i} position={[0, y, 0]} rotation={[Math.PI / 2, 0, 0]} material={M.dark}>
+                          <torusGeometry args={[0.0185, 0.0045, 6, 14]} />
+                        </mesh>
+                      ))}
+                    {/* 第三节 + 尾尖圆球（问号的点 / 白尾尖 / 蓬松毛球） */}
+                    <group ref={tailTip} position={[0, L2, 0]} rotation={[TC.tip, 0, 0]}>
+                      <mesh position={[0, L3 / 2, 0]} material={tailMat}>
+                        <cylinderGeometry args={[0.009 * TC.r, 0.014 * TC.r, L3, 10]} />
+                      </mesh>
+                      <mesh position={[0, L3 + TC.tipR * 0.85, 0]} material={tipMat}>
+                        <sphereGeometry args={[TC.tipR, 10, 8]} />
+                      </mesh>
+                    </group>
+                  </group>
+                </>
+              ) : look.tail === 'curl' ? (
+                <>
+                  {/* 柴犬：卷成 3.5rad 弧的粗卷尾（侧面可见的卷绒） */}
+                  <mesh position={[0, 0.1, -0.02]} rotation={[0, Math.PI / 2, 0]} castShadow material={M.fur}>
+                    <torusGeometry args={[0.06, 0.026, 10, 24, 3.5]} />
+                  </mesh>
+                  {/* 弧端封口球（尾根 / 奶油色尾尖） */}
+                  <mesh position={[0, 0.1, -0.08]} material={M.fur}>
+                    <sphereGeometry args={[0.026, 10, 8]} />
+                  </mesh>
+                  <mesh position={[0, 0.079, 0.036]} material={M.belly}>
+                    <sphereGeometry args={[0.026, 10, 8]} />
+                  </mesh>
+                </>
+              ) : (
+                // 柯基：无尾/断尾 → 小圆凸
+                <mesh position={[0, 0.035, -0.028]} scale={[1, 0.78, 1]} castShadow material={M.fur}>
+                  <sphereGeometry args={[0.052, 12, 10]} />
+                </mesh>
+              )}
+            </group>
+
+            {/* 博美颈部鬃毛（项圈后侧的蓬松围毛） */}
+            {ex.mane && (
+              <mesh position={[0, 0.275, -0.01]} scale={[0.12, 0.085, 0.105]} material={M.fur}>
+                <sphereGeometry args={[1, 14, 12]} />
+              </mesh>
+            )}
+
+            {/* 项圈（色只由 gender 决定：boy 蓝 / girl 粉）+ boy 金铃铛 */}
+            <group position={[0, 0.215, 0.11 * bl]}>
+              <mesh rotation={[Math.PI / 2, 0, 0]} material={M.collar}>
+                <torusGeometry args={[0.088, 0.014, 10, 24]} />
+              </mesh>
+              {gender === 'boy' && (
+                <group ref={bell} position={[0, -0.012, 0.13]}>
+                  <mesh position={[0, -0.012, 0.01]} material={M.bell}>
+                    <sphereGeometry args={[0.017, 12, 10]} />
+                  </mesh>
+                  <mesh position={[0, -0.016, 0.01]} rotation={[Math.PI / 2, 0, 0]} material={M.ring}>
+                    <torusGeometry args={[0.016, 0.002, 6, 14]} />
+                  </mesh>
+                </group>
+              )}
             </group>
           </group>
-        </group>
 
-        {/* 心情气泡（🍚 吃饭 / 💤 打盹） */}
-        <sprite ref={moodSprite} position={[0, 0.57, 0]} scale={[0.2, 0.2, 1]} visible={false}>
-          <spriteMaterial map={tex.rice} transparent depthWrite={false} />
-        </sprite>
-
-        {/* 撸宠爱心 ×5 */}
-        {heartMats.map((m, i) => (
-          <sprite
-            key={i}
-            ref={(el) => {
-              hearts.current[i] = el;
-            }}
-            position={[0, 0.5, 0]}
-            scale={[0.14, 0.14, 1]}
-            visible
-          >
-            <primitive object={m} attach="material" />
+          {/* 心情气泡（🍚 吃饭 / 💤 打盹；随体型自动缩放） */}
+          <sprite ref={moodSprite} position={[0, 0.6, 0]} scale={[0.2, 0.2, 1]} visible={false}>
+            <spriteMaterial map={tex.rice} transparent depthWrite={false} />
           </sprite>
-        ))}
+
+          {/* 撸宠爱心 ×5 */}
+          {heartMats.map((m, i) => (
+            <sprite
+              key={i}
+              ref={(el) => {
+                hearts.current[i] = el;
+              }}
+              position={[0, 0.5, 0]}
+              scale={[0.14, 0.14, 1]}
+              visible
+            >
+              <primitive object={m} attach="material" />
+            </sprite>
+          ))}
+        </group>
       </group>
 
       {/* 饭碗（世界坐标，跟喂食点走） */}

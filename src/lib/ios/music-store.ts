@@ -288,6 +288,9 @@ interface MusicState {
   // 灵动岛音乐弹窗可见性（第二十三轮反馈：弹窗可见时状态栏隐藏「移动数据」图标，
   // 弹窗消失后恢复；由 MusicIsland 同步写入，StatusBar 只读）
   islandVisible: boolean;
+  // 拾光小屋家具播放中（v5.9）：音箱/黑胶点歌后 true —— 灵动岛不弹音乐弹窗，
+  // 进音乐 App 或在 App 内点歌后自动回 false；会话级不持久化
+  ambient: boolean;
 
   boot: () => Promise<void>;
   openAppNow: () => void;
@@ -300,7 +303,7 @@ interface MusicState {
   openComments: (s: NcmSong) => void;
   closeComments: () => void;
 
-  playSong: (song: NcmSong, queue?: NcmSong[]) => Promise<void>;
+  playSong: (song: NcmSong, queue?: NcmSong[], opts?: { ambient?: boolean }) => Promise<void>;
   playQueueAt: (index: number) => Promise<void>;
   toggle: () => void;
   next: (auto?: boolean) => Promise<void>;
@@ -430,6 +433,7 @@ export const useMusic = create<MusicState>((set, get) => ({
   tgAiBusy: false,
   followedArtists: {},
   islandVisible: false,
+  ambient: false,
 
   boot: async () => {
     if (get().booted) return;
@@ -488,8 +492,10 @@ export const useMusic = create<MusicState>((set, get) => ({
   openComments: (song) => set({ commentSong: song }),
   closeComments: () => set({ commentSong: null }),
 
-  playSong: async (song, queue) => {
+  playSong: async (song, queue, opts) => {
     const s = get();
+    // 播放来源：拾光小屋家具传 { ambient: true }（灵动岛不弹窗）；App 内点歌默认 false
+    set({ ambient: !!opts?.ambient });
     const base = queue && queue.length ? queue.slice() : s.queue.slice();
     const idx = base.findIndex((x) => x.id === song.id);
     if (idx >= 0) {

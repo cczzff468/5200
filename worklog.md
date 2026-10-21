@@ -21312,3 +21312,54 @@ Stage Summary:
 - 拾光小屋 v5.8：四张截图问题修复（吊床穿模/卧室撞车/覆盖层挡人/光锥劫持点击）+ 宠物全面美化 + 主机自由走动 + 吉他和弦/小星星演示/录音回放/三种钢琴音色两种吉他音色/端咖啡逛街/书架阅读/黑胶联动音乐App/八音盒旋律
 - 数据向后兼容：新字段全部可选，migrateMelodyV14 幂等（老档自动补 2 件新家具 + 卧室布局矫正，仅动自动落点件）
 - 涉及文件：types.ts、catalog.ts、CoupleHome.tsx、api route、scene/{Char3D,HomeScene,Room,CozyPlus3D,Furn3D,Pet3D}.tsx、instrument.ts、InstrumentOverlay.tsx、worklog.md
+
+---
+Task ID: cottage-v59-a
+Agent: instrument-refine subagent
+Task: 乐器面板整改（和弦条下移/覆盖层下沉/真钢琴三组八度/毛玻璃收缩音色选择/删除录音）
+
+Work Log:
+- 仅改 2 文件：src/components/apps/couple-home/InstrumentOverlay.tsx、instrument.ts（未触碰其他文件）
+- 【instrument.ts 真钢琴音域】PIANO_WHITE 从 C4–C6（15 键）扩到 C3–C6 三个完整八度 22 白键（A4=440 十二平均律，C3=130.81…C6=1046.5），label 只标 C3/C4/C5/C6；PIANO_BLACK 扩到 15 黑键，after 索引严格按真实钢琴每组 2+3（i*7+[0,1,3,4,5]，C♯D♯｜F♯G♯A♯，E-F/B-C 无黑键）；MusicBox3D（CozyPlus3D）用的 PIANO_WHITE 音名→频率表 A4–E5 全在新域内不受影响
+- 【instrument.ts 删录音机】整段删除 RecEvent/recStart/recStop/recClear/recIsRecording/recStartedAt/recGet/recSubscribe/recPlayTimbre 及模块级 recArmed/recT0/recBuf/recSubs；emitNote 保留第二参签名 emitNote(e, opts?: { record?: boolean }): void（兼容旧调用方传 {record:false}，函数体内 void opts 忽略、不再写录音带）；onNote/prettyNote/PIANO_WHITE/PIANO_BLACK/GUITAR_STRINGS/GUITAR_CHORDS/chordStringFreq/TWINKLE(42 音未动)/twinkleTempoMs/pianoNote/pluckString 导出签名全部不变；头注释同步去掉录音机条目
+- 【和弦条下移】吉他和弦条从指板内部（absolute bottom-9）移出为独立一条毛玻璃圆角条（h-11 rounded-2xl + backdrop-blur-2xl bg-white/70），置于吉他面板下方；按住交互原样平移（pointerdown 按住=按弦 stopPropagation+preventDefault+touch-none，window pointerup/pointercancel 释放）；heldChord state+ref 从 GuitarPanel 提升到新 GuitarStage（琴体+和弦条组合），GuitarPanel 改收 heldChord/heldChordRef props，twang 读 ref 即时取把位
+- 【覆盖层下沉】容器 mb-[104px]→mb-[64px]；面板高度改为按 kind 定高容器（钢琴 h-[39%] max-h-[340px]、吉他 h-[45%] max-h-[388px]，百分比相对 inset-0 根定高，flex-1 撑键床≈34%），面板底边贴近屏幕底部，3D 小人视野更足
+- 【真钢琴重绘】PianoPanel 重写：外层木纹琴体（repeating-linear-gradient 竖细木纹+深胡桃木渐变+ring-1 ring-black/40+上亮下暗 inset 倒角），键床上沿 7px 红色呢毯条（z-20 压住黑键后端），22 白键象牙渐变+左右倒角 inset 阴影+键前立面（前窄后宽立体感）+按下 scaleY(0.972)，15 黑键 2+3 定位（left=calc((after+1)*unit% - 0.3unit%)、宽 0.6unit、高 60%）+斜面高光/投影+按下变亮，白键只标 C3–C6、黑键标注删除；白/黑键按压手势抽成 pressHandlers(name,freq) 工厂（点按/滑音/多指/pointercapture 不变），卸载补清 pressed 定时器；删「点键发声…」提示 pill
+- 【毛玻璃收缩音色选择】删旧音色 chips 工具条；新 TimbrePicker：标题条上「当前音色名+ChevronDown」按钮，点开向上弹毛玻璃浮层（GLASS=border-white/60 bg-white/70 shadow+backdrop-blur-2xl，instPopUp 动画），选项行选中打勾（Check/粉 accent），document pointerdown 捕获阶段点外部自动收起（capture:true 先于面板 stopPropagation）；标题条改 GLASS 毛玻璃（左：🎵 弹钢琴 · C3–C6/弹吉他；右：小星星(仅钢琴,播放中变停止)+音色选择+结束演奏），去掉多余提示文字，吉他保留「已按 X 和弦」条件徽标
+- 【删录音 UI/逻辑】InstrumentOverlay 删 recording/recStartAt/tick/playing/playTimers/elapsed/hasRec/canPlay/toggleRec/clearRec/startPlayback/stopPlayback 及 recSubscribe effect、recPlayTimbre 同步；小星星 startDemo 改调 emitNote(e)（无 opts），timbreRef 保留、kindRef 删；卸载/切乐器清演示定时器逻辑不变
+- 验证：npx eslint 两文件 exit 0 零输出；npx tsc --noEmit 全仓 0 错误；bun 运行时断言：22 白+15 黑、label=C3/C4/C5/C6、after 索引=[0,1,3,4,5,7,8,10,11,12,14,15,17,18,19]、TWINKLE 42 音全在 NOTE_FREQ 可弹、rec* 9 个导出全不存在、emitNote arity=2、onNote/prettyNote 正常；grep 全仓外部调用方仅 CozyPlus3D(PIANO_WHITE,pianoNote)/Char3D(onNote)，签名兼容
+
+---
+Task ID: cottage-v59-b
+Agent: pet-breeds subagent（超时，主代理验收收尾）
+Task: 宠物品种系统（11 品种一比一复刻 + 性别配饰）
+
+Work Log:
+- 子代理在超时前已完成 Pet3D.tsx 全量参数化改造（623→891 行）与 pet-breeds.ts 品种库消费，超时发生在写 worklog 之前；主代理复核：tsc --noEmit 全仓 0 错误、eslint 两文件 0 错误、JSX 闭合完整、饭碗/AI/喂食链路保留
+- Pet3D 按 breedOf(sp, pet.breed).look 驱动：体型（scale/bodyLen/legLen/legR/headRound）、耳型三态（erect/erectBig 柯基大立耳/floppy 金毛垂耳）、尾型五态（question/curl/plume 羽状/sickle 镰刀/bob 柯基无尾）、花色六方案（solid/tabby/saddle/points 布偶重点色/patches 三花奶牛斑块/blaze 柯基哈士奇面部白纹）、虹膜色 look.eye（哈士奇布偶蓝眼）、性别配饰（boy 蓝项圈金铃铛 / girl 粉项圈+蝴蝶结）
+
+Stage Summary:
+- PetData 增加可选 breed/gender（向后兼容，老档 breed 缺省按 species 兜底 cat→橘猫 dog→柴犬）；pet-breeds.ts 元数据（id/sp/name/blurb/emoji/suggest）为领养 UI 契约，look 参数已按品种特征就位
+
+---
+Task ID: cottage-v59-serene
+Agent: Z.ai Code (main) + instrument-refine subagent (2a) + pet-breeds subagent (2b)
+Task: 拾光小屋 v5.9 静修整改 —— 用户本轮 16 项反馈（删吊床/阳台门窗/乐器手感/白色家电/坐姿方向/宠物品种系统）
+
+Work Log:
+- 【删除双人吊床】types FurnitureKind 移除 'hammock'；catalog 删条目+默认布局；migrateSereneV15 老档按字符串匹配移除（实测用户档 119→118 件）；CozyPlus3D 删 Hammock3D 模型与注册表
+- 【阳台窗户/门重叠】根因：卧室南窗 win[4] 默认位 (-1.2) 与阳台门默认位 (-1.2) 完全同位（窗浮在门洞上）→ 窗默认改 0.35（门洞东侧，墙垛间隔 ≥0.73m），滑行避让 clampWallAlong 双向生效；migrateSereneV15 对已存档 winPos[4] 与门距 <1.5 的矫正到 0.35；实机验证门西窗东清晰分离
+- 【迷你投影仪】老默认 (0,0.2) 吊装但光锥朝 +z 打不到西壁幕布 → 默认位改 (-2.3,-0.5, y2.06, ry -π/2 对投幕布, rx 0.16 俯角)；F() 助手补 rx 支持；migrateShineV57 need 表 + migrateSereneV15 同步矫正老档（实测已迁移到位）
+- 【坐姿方向】diningTable.eat 加 ryOff π/2（坐东缘面朝桌心，修复截图1侧对餐桌）、hotpotTable.hotpot 加 ryOff -π/2（坐东缘面朝锅）；types 两个 act 签名补 ryOff
+- 【乐器面板】(2a 子代理) 吉他和弦条移出指板为面板下方独立毛玻璃条；覆盖层 mb-104→64 下沉；钢琴重绘 C3–C6 三个完整八度 22 白+15 黑键（真钢琴 2+3 黑键定位/红呢毯/木纹琴体/键前立面），小星星 42 音仍全可弹；音色改收缩式毛玻璃下拉（点开向上浮层/选中打勾/点外收起）；录音回放整删（instrument.ts rec* 全删，emitNote 保留 opts 兼容签名）
+- 【音乐家具点歌】黑胶点击从「直接开关」改弹小屋点歌面板（同音箱）；黑胶唱片旋转改随 useMusic.playing 自动联动（effect 同步 st.on）；playHouseSong 传 ambient:true
+- 【灵动岛抑制】music-store 新增 ambient 会话级字段（playSong 第三参 {ambient:true} 置位，App 内点歌默认清位，自动切歌 playQueueAt 不动）；MusicIsland hidden 条件 +ambient；音乐 App 挂载时清位（用户亲自接管即恢复）
+- 【白色家电】黑胶唱片机奶白机身+金色包边腰线+金色支脚+黄铜唱臂；八音盒奶白盒身+金色踢脚线+盖面金环描边
+- 【宠物品种系统】(2b 子代理 + 主代理收尾) 新建 pet-breeds.ts：11 品种（柴犬/博美/金毛/哈士奇/柯基 + 橘猫/布偶/三花/狸花/金渐层/奶牛猫），look 参数（体型四乘子/耳型三态/尾型五态/花色六方案/虹膜色/鼻色）；Pet3D 全量参数化（623→891 行）；性别配饰 boy 蓝项圈金铃铛 / girl 粉项圈蝴蝶结；PetData +breed/gender 可选（老档兜底 cat→橘猫 dog→柴犬，实测糯米无 breed 正确回退橘猫）
+- 【领养向导 UI】宠物面板三步流：汪/喵星人 → 品种网格（emoji+名+人设，可返回）→ 性别 ♂♂/♀♀ + 取名输入框（默认建议名）+「接 XX 回家」；已有宠物显示品种+性别徽章；adoptPet 带 breed/gender 落库
+- 【数据链路】types pet +breed/gender；api route pet 清洗 +breed(≤24)/gender(boy|girl)；CoupleHome snap() 快照补 breed/gender（首版漏了导致 DB 缺字段，已修+实测入库 {'breed':'ragdoll','gender':'girl'}）
+- 【端到端验证】agent-browser 实机：迁移(吊床删/投影仪对投/窗挪位)→黑胶点歌弹窗→领养全流程(喵星人→布偶→改糯米→女孩→接回家+toast)→布偶重点色渲染→撸宠→老档橘猫兜底→钢琴(C3-C6 全键/小星星自动弹琴键点亮音符飘出/毛玻璃音色)→吉他(和弦条下移/已按C和弦/尤克里里切换)→卧室门阳台门开合→窗门分离目视；tsc 全仓 0 错误、改动文件 eslint 0 错误；测试产生的领养数据落在测试工作区，用户工作区 32f84bf3 未动
+
+Stage Summary:
+- 拾光小屋 v5.9：吊床下架、阳台门窗归位、投影仪对投幕布、餐桌/火锅坐姿朝向修正、乐器面板全面改版（真钢琴/和弦下移/毛玻璃收缩音色/删录音）、黑胶八音盒白色化+点歌弹窗、家具播放不弹灵动岛、11 品种宠物（含性格/性别/取名）
+- 涉及文件：types/catalog/pet-breeds(新)/CoupleHome/InstrumentOverlay/instrument/api route/music-store/MusicIsland/music/scene/{CozyPlus3D,Pet3D}、worklog.md
