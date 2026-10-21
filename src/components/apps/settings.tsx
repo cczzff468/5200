@@ -747,6 +747,9 @@ function pushStatusText(state: string, detail?: string): string {
     case 'key-failed':
       return `推送密钥获取失败${detail ? `（${detail}）` : ''}。`;
     case 'subscribe-failed':
+      // 推送服务连不上（AbortError: Registration failed - push service error）：
+      // 国内网络访问 Chrome/Firefox 境外推送服务失败，属常见现象且不影响页面内通知——不显示，避免吓用户
+      if (/aborterror|push service error|registration failed/i.test(detail ?? '')) return '';
       return `推送订阅未完成${detail ? `（${detail}）` : ''}。`;
     default:
       return '';
@@ -905,12 +908,12 @@ function NotificationPage({ onBack }: { onBack: () => void }) {
           独立部署时多为浏览器策略限制（Android 需允许站点通知）。
         </p>
       )}
-      {pushState && (
+      {pushState && pushStatusText(pushState, pushDetail) && (
         <p
           className={`mt-2 px-1 text-[12px] leading-relaxed ${pushState === 'subscribed' ? 'text-muted-foreground' : ''}`}
           style={pushState === 'subscribed' ? undefined : { color: IOS_RED }}
         >
-          {pushStatusText(pushState, pushDetail) || `推送状态：${pushState}`}
+          {pushStatusText(pushState, pushDetail)}
         </p>
       )}
       {/* 订阅失败重试入口（force 重跑订阅链路，不再被单次锁锁死到刷新整页） */}
@@ -5806,16 +5809,16 @@ function OfflineAsrSection() {
       )}
 
       {(status === 'not-downloaded' || (status === 'error' && !busy)) && (
-        <div className="mt-2 flex items-center gap-2">
+        <div className="mt-2">
           <button
             type="button"
             onClick={() => void startDownload()}
             disabled={busy}
-            className="rounded-full bg-foreground px-4 py-2 text-[13px] font-medium text-background transition-all active:scale-[0.97] disabled:opacity-50"
+            className="whitespace-nowrap rounded-xl bg-foreground px-4 py-2 text-[13px] font-medium text-background transition-all active:scale-[0.97] disabled:opacity-50"
           >
             {status === 'error' ? '重试下载模型（约 229 MB）' : '下载模型（约 229 MB）'}
           </button>
-          <span className="text-[12px] text-muted-foreground/70">阿里云 ModelScope 直链，国内不绕墙</span>
+          <p className="mt-1.5 text-[12px] text-muted-foreground/70">阿里云 ModelScope 直链，国内不绕墙</p>
         </div>
       )}
 
@@ -5851,7 +5854,7 @@ function OfflineAsrSection() {
             type="button"
             onClick={() => void removeModel()}
             disabled={busy}
-            className="shrink-0 rounded-full px-3 py-1.5 text-[12px] text-muted-foreground ring-1 ring-black/[0.08] transition-all active:scale-[0.97] disabled:opacity-50 dark:ring-white/[0.12]"
+            className="shrink-0 whitespace-nowrap rounded-xl px-3 py-1.5 text-[12px] text-muted-foreground ring-1 ring-black/[0.08] transition-all active:scale-[0.97] disabled:opacity-50 dark:ring-white/[0.12]"
           >
             删除模型
           </button>

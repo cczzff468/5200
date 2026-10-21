@@ -1510,7 +1510,9 @@ export default function HomeScreen() {
     const track = trackRef.current;
     if (track) {
       track.style.transition = 'none';
-      s.w = track.getBoundingClientRect().width || 1;
+      // 横屏旋转后 getBoundingClientRect 返回旋转后 bbox：前进轴对应屏募高度而非宽度
+      const rect = track.getBoundingClientRect();
+      s.w = (shellScale.rotated ? rect.height : rect.width) || 1;
     }
     holdDots();
     clearBlankPress();
@@ -1561,6 +1563,12 @@ export default function HomeScreen() {
     showDots();
   };
 
+  /** 横屏旋转时壳本地系相对视口转了 90°：翻页手势的「前进轴」从视口 x 换到视口 y
+   *  （clientX↔clientY 互换后，用户在屏幕上沿页面平铺方向滑动才能翻页） */
+  const swipeX = (e: { clientX: number; clientY: number }) => (shellScale.rotated ? e.clientY : e.clientX);
+  /** 副轴（判定斜向手势用）：横屏时与前进轴互换 */
+  const swipeY = (e: { clientX: number; clientY: number }) => (shellScale.rotated ? e.clientX : e.clientY);
+
   // ---------------- 矮视口网格行数收敛 ----------------
   // 用户实测（手机分屏/自由小窗，壳高仅 ~500px）：①编辑模式下底部行 App 按住拖不动——
   // 底行图标被 z-10 的页点带/Dock 盖住，按压全落在浮层上；②文件夹拖到底部空白会
@@ -1576,7 +1584,9 @@ export default function HomeScreen() {
       if (!window.matchMedia('(min-width: 640px)').matches) {
         const root = rootRef.current;
         if (!root) return;
-        shellH = root.getBoundingClientRect().height / (shellScale.value || 1);
+        // 横屏旋转后壳 bbox 宽高互换：本地高 = 旋转后 bbox 宽 ÷ 缩放
+        const r = root.getBoundingClientRect();
+        shellH = (shellScale.rotated ? r.width : r.height) / (shellScale.value || 1);
       }
       // 页点带顶边 = 壳高 − 根容器 pb-38 − Dock 高（有 App 84 / 空 26）− 页点带 34（与渲染处常量一致）
       const dockH = layoutRef.current.dock.length > 0 ? 84 : 26;
@@ -2809,12 +2819,12 @@ export default function HomeScreen() {
     const onTile = !!t.closest('[data-tile]');
     if (!dragging && !spotlight && (!edit || !onTile)) {
       swipe.current = {
-        startX: e.clientX,
-        startY: e.clientY,
+        startX: swipeX(e),
+        startY: swipeY(e),
         claimed: false,
         dead: false,
         moved: false,
-        lastX: e.clientX,
+        lastX: swipeX(e),
         lastT: performance.now(),
         v: 0,
         w: 0,
@@ -2841,8 +2851,9 @@ export default function HomeScreen() {
     // 轻扫 → 跟手翻页（编辑模式从空白处起手同样生效；手指带页走，松手按位移/甩速吸附）
     const s = swipe.current;
     if (s && !dragging && !spotlight) {
-      const dx = e.clientX - s.startX;
-      const dy = e.clientY - s.startY;
+      const px = swipeX(e);
+      const dx = px - s.startX;
+      const dy = swipeY(e) - s.startY;
       if (!s.claimed && !s.dead && Math.hypot(dx, dy) > SWIPE_CLAIM_PX) {
         if (Math.abs(dx) > Math.abs(dy)) claimSwipe();
         else s.dead = true;
@@ -2851,8 +2862,8 @@ export default function HomeScreen() {
         const now = performance.now();
         const dt = now - s.lastT;
         if (dt > 0) {
-          s.v = 0.8 * s.v + (0.2 * (e.clientX - s.lastX)) / dt;
-          s.lastX = e.clientX;
+          s.v = 0.8 * s.v + (0.2 * (px - s.lastX)) / dt;
+          s.lastX = px;
           s.lastT = now;
         }
         if (frame.current === null) {
@@ -2872,7 +2883,7 @@ export default function HomeScreen() {
   };
 
   const rootPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    endSwipe(true, e.clientX);
+    endSwipe(true, swipeX(e));
     const start = blankStart.current;
     const downAt = blankDownAt.current;
     clearBlankPress();

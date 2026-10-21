@@ -12,5 +12,9 @@
  *   local = (viewport - 壳原点) / scale
  * WAAPI/FX 的 translate 像素增量（FLIP/落位/滑动跟手）同理 ÷ scale。
  * 移动端全屏恒为 1（换算后数值不变，代码单一路径）。
+ *
+ * rotated（横屏旋转）：视口为横屏（宽>高）时 PhoneShell 把机身旋转 90° 铺满视口，
+ * 壳本地坐标系相对视口旋转了 90°——HomeScreen 的轻扫翻页等视口轴向手势需按
+ * rotated 交换 x/y 轴（clientX↔clientY），其余命中检测走 getBoundingClientRect 天然正确。
  */
-export const shellScale = { value: 1 };
+export const shellScale = { value: 1, rotated: false };
