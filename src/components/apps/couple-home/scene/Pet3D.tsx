@@ -22,7 +22,8 @@ import * as THREE from 'three';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import type { CharRT, FurnitureItem } from '../types';
 import { CATALOG, ROOM_X, ROOM_Z, BED_Z0, footprintOf } from '../catalog';
-import { modelOf } from '../pet-models';
+import { modelOf, variantOf } from '../pet-models';
+import { playSfx } from '../sfx';
 import PetModelView, { type PetViewHandle } from './PetModelView';
 
 export interface PetData {
@@ -30,6 +31,8 @@ export interface PetData {
   name: string;
   /** 模型 id（pet-models PET_MODELS；老档旧品种 id 由 modelOf 兜底映射） */
   breed?: string;
+  /** 毛色变体 id（pet-models PetVariant；空 = 原色） */
+  vt?: string;
   /** 性别（保留字段；Q 版模型不区分配饰） */
   gender?: 'boy' | 'girl';
 }
@@ -44,6 +47,10 @@ export interface Pet3DProps {
   feedRef: React.RefObject<{ x: number; z: number; at: number } | null>;
   /** 点击撸宠回调（上层弹 toast） */
   onTap?: () => void;
+  /** 毛色变体 id（v8.1；空 = 原色） */
+  vt?: string;
+  /** 模型就绪回调（v8.1 加载体验：GLB 挂载完成后上层隐藏加载胶囊） */
+  onModelReady?: () => void;
 }
 
 /** 接地软阴影贴图（径向渐变圆） */
@@ -63,7 +70,7 @@ function makeShadowTexture(): THREE.CanvasTexture {
 }
 
 /** 爱心/饭粒/瞌睡气泡贴图（canvas 手绘） */
-function makeBubbleTexture(kind: 'heart' | 'rice' | 'zzz'): THREE.CanvasTexture {
+function makeBubbleTexture(kind: 'heart' | 'rice' | 'zzz' | 'star'): THREE.CanvasTexture {
   const S = 96;
   const cv = document.createElement('canvas');
   cv.width = S;
@@ -94,6 +101,20 @@ function makeBubbleTexture(kind: 'heart' | 'rice' | 'zzz'): THREE.CanvasTexture 
       ctx.arc(x, y, 3, 0, Math.PI * 2);
       ctx.fill();
     }
+  } else if (kind === 'star') {
+    // 四芒小星星
+    ctx.fillStyle = '#ffd76e';
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const ang = (Math.PI / 4) * i - Math.PI / 2;
+      const rad = i % 2 === 0 ? 34 : 9;
+      const x = 48 + Math.cos(ang) * rad;
+      const y = 48 + Math.sin(ang) * rad;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
   } else {
     ctx.fillStyle = '#8a9ab8';
     ctx.font = 'bold 64px sans-serif';
@@ -131,21 +152,28 @@ function clampPet(c: CharRT, items: FurnitureItem[]) {
   c.z = THREE.MathUtils.clamp(c.z, -ROOM_Z + 0.32, BED_Z0 - 0.32);
 }
 
-export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps) {
+export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap, vt, onModelReady }: Pet3DProps) {
   const holder = useRef<THREE.Group>(null);
   const pvRef = useRef<PetViewHandle>(null);
   const hearts = useRef<(THREE.Sprite | null)[]>([]);
+  const sparkles = useRef<(THREE.Sprite | null)[]>([]);
+  const munches = useRef<(THREE.Sprite | null)[]>([]);
+  const zzzez = useRef<(THREE.Sprite | null)[]>([]);
   const moodSprite = useRef<THREE.Sprite>(null);
   const bowl = useRef<THREE.Group>(null);
+  /** 打盹起始沿检测（进盹瞬间播一声小哈欠音效） */
+  const prevDozing = useRef(false);
 
-  // —— 模型（pet-models 注册表；老档旧品种 id 自动兜底） ——
+  // —— 模型（pet-models 注册表；老档旧品种 id 自动兜底）+ 毛色变体 ——
   const model = modelOf(pet.breed);
+  const variant = useMemo(() => variantOf(model, vt ?? pet.vt), [model, vt, pet.vt]);
 
   const bubbleTex = useMemo(
     () => ({
       heart: makeBubbleTexture('heart'),
       rice: makeBubbleTexture('rice'),
       zzz: makeBubbleTexture('zzz'),
+      star: makeBubbleTexture('star'),
       shadow: makeShadowTexture(),
     }),
     [],
@@ -172,6 +200,39 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
     [bubbleTex],
   );
   useEffect(() => () => heartMats.forEach((m) => m.dispose()), [heartMats]);
+
+  const starMats = useMemo(
+    () =>
+      Array.from({ length: 3 }, () => {
+        const m = new THREE.SpriteMaterial({ map: bubbleTex.star, transparent: true, opacity: 0, depthWrite: false });
+        return m;
+      }),
+    [bubbleTex],
+  );
+  const munchMats = useMemo(
+    () =>
+      Array.from({ length: 3 }, () => {
+        const m = new THREE.SpriteMaterial({ map: bubbleTex.rice, transparent: true, opacity: 0, depthWrite: false });
+        return m;
+      }),
+    [bubbleTex],
+  );
+  const zzzMats = useMemo(
+    () =>
+      Array.from({ length: 2 }, () => {
+        const m = new THREE.SpriteMaterial({ map: bubbleTex.zzz, transparent: true, opacity: 0, depthWrite: false });
+        return m;
+      }),
+    [bubbleTex],
+  );
+  useEffect(
+    () => () => {
+      starMats.forEach((m) => m.dispose());
+      munchMats.forEach((m) => m.dispose());
+      zzzMats.forEach((m) => m.dispose());
+    },
+    [starMats, munchMats, zzzMats],
+  );
 
   const handleTap = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
@@ -270,6 +331,8 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
     const walking = c.moving && !eatingNow && !rushing;
     const happyNow = !!petAt.current && now - petAt.current < 1200;
     const dozing = !!dozedOff.current && now - dozedOff.current < 3500 && !c.moving && !eatingNow;
+    if (dozing && !prevDozing.current) playSfx('nap'); // 进盹瞬间一声小哈欠
+    prevDozing.current = dozing;
 
     pvRef.current?.tick(t, dt, {
       walk: walking ? 1 : 0,
@@ -309,6 +372,49 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
       sp.scale.setScalar(0.13 + ph * 0.06);
     });
 
+    // —— 开心小星星（撸宠加成，比爱心更跳脱） ——
+    const sparkAge = petAt.current ? (now - petAt.current) / 1000 : -1;
+    sparkles.current.forEach((sp, i) => {
+      if (!sp) return;
+      const m = sp.material as THREE.SpriteMaterial;
+      if (sparkAge < 0 || sparkAge > 1.1) {
+        m.opacity = 0;
+        return;
+      }
+      const ph = (sparkAge * 1.5 + i * 0.22) % 1;
+      sp.position.set(Math.cos(i * 2.5 + 1) * 0.2, h * (0.5 + i * 0.06) + ph * 0.36, Math.sin(i * 2.1) * 0.15);
+      m.opacity = Math.max(0, 0.9 * (1 - ph));
+      sp.scale.setScalar(0.1 + Math.sin(ph * Math.PI) * 0.05);
+    });
+
+    // —— 吃饭小饭粒（嘴边蹦跳） ——
+    munches.current.forEach((sp, i) => {
+      if (!sp) return;
+      const m = sp.material as THREE.SpriteMaterial;
+      if (!eatingNow) {
+        m.opacity = 0;
+        return;
+      }
+      const ph = ((now / 1000) * 1.2 + i * 0.37) % 1;
+      sp.position.set(Math.sin(i * 2.4 + 0.6) * 0.1, h * 0.42 - ph * 0.12 + Math.sin(t * 9 + i) * 0.015, 0.12 + Math.cos(i * 1.9) * 0.05);
+      m.opacity = Math.sin(ph * Math.PI) * 0.85;
+      sp.scale.setScalar(0.085);
+    });
+
+    // —— 打盹 Zzz 飘升 ——
+    zzzez.current.forEach((sp, i) => {
+      if (!sp) return;
+      const m = sp.material as THREE.SpriteMaterial;
+      if (!dozing) {
+        m.opacity = 0;
+        return;
+      }
+      const ph = ((now / 1000) * 0.45 + i * 0.5) % 1;
+      sp.position.set(0.08 + i * 0.09 + Math.sin(ph * Math.PI * 2 + i) * 0.03, h * 0.55 + ph * 0.4, 0.05);
+      m.opacity = (1 - ph) * 0.75;
+      sp.scale.setScalar(0.09 + ph * 0.06);
+    });
+
     // —— 饭碗（有未吃完的投喂才显示） ——
     if (bowl.current) {
       const show = !!feed && now - feed.at < 9000 && !eatingDone(now);
@@ -331,9 +437,24 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
           <meshBasicMaterial map={bubbleTex.shadow} transparent depthWrite={false} />
         </mesh>
 
-        {/* 精选 GLB 宠物（v8.0：盲盒柴犬 / 写实小黑猫） */}
+        {/* 点按代理盒（v8.1）：蒙皮网格（幼犬/黑猫）的绑定姿态射线检测不可靠，
+            用包住本体的隐形几何体统一承接撸宠点击（colorWrite=false 全透明但可 raycast） */}
+        <mesh position={[0, model.targetH * 0.5, 0]}>
+          <boxGeometry args={[0.36, model.targetH * 0.95, 0.3]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} colorWrite={false} />
+        </mesh>
+
+        {/* 精选 GLB 宠物（v8.0：盲盒柴犬 / 写实小黑猫；v8.1 支持毛色变体） */}
         <Suspense fallback={null}>
-          <PetModelView ref={pvRef} model={model} onReady={(h) => { hRef.current = h; }} />
+          <PetModelView
+            ref={pvRef}
+            model={model}
+            variant={variant}
+            onReady={(h) => {
+              hRef.current = h;
+              onModelReady?.();
+            }}
+          />
         </Suspense>
 
         {/* 心情气泡（🍚 吃饭 / 💤 打盹） */}
@@ -351,6 +472,48 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
             position={[0, 0.4, 0]}
             scale={[0.13, 0.13, 1]}
             visible
+          >
+            <primitive object={m} attach="material" />
+          </sprite>
+        ))}
+
+        {/* 开心小星星 ×3（撸宠加成） */}
+        {starMats.map((m, i) => (
+          <sprite
+            key={`st${i}`}
+            ref={(el) => {
+              sparkles.current[i] = el;
+            }}
+            position={[0, 0.4, 0]}
+            scale={[0.1, 0.1, 1]}
+          >
+            <primitive object={m} attach="material" />
+          </sprite>
+        ))}
+
+        {/* 吃饭小饭粒 ×3 */}
+        {munchMats.map((m, i) => (
+          <sprite
+            key={`mn${i}`}
+            ref={(el) => {
+              munches.current[i] = el;
+            }}
+            position={[0, 0.4, 0]}
+            scale={[0.085, 0.085, 1]}
+          >
+            <primitive object={m} attach="material" />
+          </sprite>
+        ))}
+
+        {/* 打盹 Zzz 飘升 ×2 */}
+        {zzzMats.map((m, i) => (
+          <sprite
+            key={`zz${i}`}
+            ref={(el) => {
+              zzzez.current[i] = el;
+            }}
+            position={[0, 0.4, 0]}
+            scale={[0.09, 0.09, 1]}
           >
             <primitive object={m} attach="material" />
           </sprite>

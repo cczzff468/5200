@@ -21502,3 +21502,46 @@ Work Log:
 Stage Summary:
 - 宠物视觉全面重做为「程序化 Q 版盲盒风」：8 品种全部原创拼装建模（零外部资产、零版权风险），大头豆眼腮红萌系比例精确贴合用户参考图；程序化动画替代骨骼动画（弹跳/摇摆/眨眼/压扁打盹/果冻感反而更 Q）；品种数 4→8，老档 breed id 全兼容；-2MB 资产瘦身
 - 最终状态：拾光小屋内留下黑柴「炭炭」（用户参考图1同款），可随时送走换领其他 7 只
+
+---
+Task ID: v8.1-1
+Agent: 资源搜寻代理 (subagent)
+Task: 宠物系统新增 1~2 款高质量 3D 宠物模型（优先垂耳狗/柯基/小白狗 > 垂耳兔/白兔 > 小狐狸/仓鼠/鹦鹉），质量对标现有盲盒柴犬/写实小黑猫，拒绝低模/纯顶点色/粗糙扫描件
+
+Work Log:
+- 复盘 worklog（pet-3d-models-1022 / qpet-v7-blindbox-1022）与 /home/z/petview/ 遗留候选（上一会话中断产物）：puppy.glb（Sketchfab "Dog Puppy" by kenchoo）、choco_bunny.glb（CC-BY）、beagle.gltf（CC-BY-NC）、keji.gltf、Quaternius dog.glb
+- GLB 校验器复用（python struct 解析 magic/JSON chunk → tris/meshes/textures/animations）
+- [候选1] beagle.gltf：10,267 tris/2 贴图，但 license.txt 为 CC-BY-NC-4.0（禁商用）→ 直接淘汰
+- [候选2] keji.gltf（2,120 tris/无贴图）、dog.glb（Quaternius 1,950 tris/0 贴图）→ 低于 3000 tris 硬线，淘汰
+- [候选3] choco_bunny.glb（Ergoni，CC-BY 4.0，31,515 tris）：实为「兔子下午茶」陈列景（马克杯+棉花糖+桌子+3 只兔子烘焙进同一 mesh 的 Bony 节点）；尝试 GLB JSON chunk 手术只留 Bony 节点（含 chunk type 0x4E4F534A/空格 padding 两次调试），浏览器确认单个 mesh 内含 3 只位置各异的不相交兔子复制体 → 单体提取需做 bin 缓冲连通分量手术、收益/风险比差，放弃
+- [候选4] Siesta "Bunny"（GitHub 镜像 shamedlulu/artest，CC-BY 4.0，37,756 tris）：ghdl.py API blob 下载 scene.gltf/bin/法线贴图 → pack_glb.py 打包 1.65MB GLB → 实测为「穿卫衣的拟人兔女郎角色」白模（无 baseColor 贴图，仅法线贴图）→ 与「宠物动物」不符且素模被用户否决过，淘汰
+- [候选5 ✅] puppy.glb（Sketchfab "Dog Puppy" by kenchoo）：Sketchfab API 复核 license=CC Attribution（CC-BY 4.0， Commercial use allowed），14,844 tris/3 贴图（1 JPEG+2 PNG）/1 段动画（"Animation"，8.71s，87 通道），GLB 2.86MB ≤ 8MB
+- agent-browser 视觉验证（test2.html harness，VLM 逐帧评审）：正面=奶油金垂耳幼犬、毛发贴图精细、湿鼻高光眼、8.5/10；连续 3 帧姿势不同（头部张望 idle 循环确认在播）；背面=贴图完整无死白、尾形自然、8/10；无破面/黑块/贴图错误；原生面朝 +Z（正前）
+- 交付：puppy.glb → public/pets3d/（pets3d 总体积 8.9MB）；CREDITS.md 追加「## v8.1 新增」小节；清理 petview 全部淘汰候选（cand/、bunny_*、dog.glb）
+- 检索留痕：Sketchfab search API（无鉴权）按 license=CC Attribution/CC0 + glb size≤8MB + faceCount≥3000 过滤 rabbit/bunny/corgi/puppy/hamster/fox/parrot 七连查；GitHub code search 找 Sketchfab 镜像（"Chobby Bun"→仅 Doom 贴图 mod、siesta bunny→artest）；poly.pizza/Quaternius/ir-engine/chonky-hounds 按指令继续回避
+
+Stage Summary:
+- 新增 1 款合格模型：puppy.glb（奶油垂耳幼犬，CC-BY 4.0，14,844 tris/3 贴图/8.7s 张望 idle 动画/2.86MB，正前朝向 +Z，实机渲染 8.5/10 与写实小黑猫同档）——满足优先级第 1 档「垂耳狗」
+- 兔线全军覆没：唯一可达的垂耳兔候选（Choco Bunny 陈列景/兔女郎白模/CC-BY-NC Beagle）均因造型/授权/许可不过关淘汰；按「宁缺毋滥」只交付 1 款
+- 对接提示：单 clip「Animation」可直接当 idle 播放，或叠加 PetModelView 刚体层蹦跳/吃食/打盹程序化动画（同 shiba 路线）；无需骨骼重定向
+
+---
+Task ID: v8.1-pet-polish
+Agent: Z.ai Code (main)
+Task: 宠物系统五项优化落地（用户从优化清单勾选 1/2/3/6/7）：①更多品种 ②换毛色 ③交互升级 ⑥音效系统 ⑦加载体验
+
+Work Log:
+- 【①更多品种】整合子代理搜寻成果：puppy.glb（奶油垂耳幼犬，CC-BY 4.0，14844 tris/3 贴图/自带「Animation」8.7s 张望 idle 骨骼动画/2.86MB）注册进 PET_MODELS（id=puppy，clip='Animation'，targetH 0.3，无 yawOffset——原生面朝 +Z）；领养卡自动铺开（3 张）；兔线候选全灭（禁商用/素模/陈列景）按「宁缺毋滥」只收 1 款
+- 【②换毛色】pet-models.ts 新增 PetVariant 接口（color+strength）与 variants 字段：柴犬（奶油 0.5/胡麻 0.45）、幼犬（蜜棕 0.4/烟灰 0.5）、黑猫（蓝灰 0.55/奶白 0.78）；variantOf() 查询；PetModelView.applyVariantTint()：SkeletonUtils.clone 后克隆材质（缓存原材质不动）→ onBeforeCompile 注入 GLSL `uniform vec3 uPetTint; uniform float uPetTintMix;` + color_fragment 后 mix 调色（眼鼻嘴材质名 regex 跳过）+ customProgramCacheKey 按 strength 分档；types.ts pet.vt 存档字段；UI：领养第二步毛色 chips（带色点）+ 档案卡毛色行即时切换（changePetVariant 写档+saveSoon）+ blurb 显示当前毛色
+- 【③交互升级】Pet3D.tsx：新增 star 四芒星 canvas 贴图与 3 组新粒子——开心小星星×3（撸宠 1.1s 比爱心更跳脱）/ 吃饭小饭粒×3（嘴边蹦跳 sin 呼吸）/ 打盹 Zzz 飘升×2（0.45Hz 循环上浮淡出）；全部 useMemo 材质 + dispose 清理 + opacity 门控零渲染开销
+- 【⑥音效】新建 sfx.ts：WebAudio 纯合成零资产（OscillatorNode+GainNode 包络）——tap 咕噜泡泡/feed plop/adopt 四音 fanfare/nap 下滑哈欠/sparkle 三连星音/pop；AudioContext 惰性创建+resume；localStorage 'ch-sfx' 持久化；接线：撸宠 tap(+50% sparkle)、喂食 feed、领养 adopt、送走 pop、进盹 nap（Pet3D useFrame 上升沿）；宠物面板头新增 Volume2/VolumeX 开关（toggleSfx）
+- 【⑦加载体验】CoupleHome pvReady 状态：petBreed 变化→胶囊显、Pet3D onModelReady→隐（HomeScene 透传）；「毛孩子正在打包行李…」framer-motion 胶囊（Loader2 旋转）；进屋 1.5s 后台 fetch force-cache 预热全部 GLB
+- 【关键修复】蒙皮网格点按失效：puppy/黑猫为 SkinnedMesh，绑定姿态 raycast 打不到可见网格（射线穿透打到身后家具弹「坐下」）→ Pet3D 加隐形点按代理盒（boxGeometry 0.36×targetH×0.3 + colorWrite=false 材质，可 raycast 不可见）统一承接撸宠点击，对所有模型可靠
+- 【关键修复】shader 编译报错：GLSL 里未声明 uniform（'uPetTint' undeclared identifier）→ 片元着色器头部补声明
+- 调试方法论沉淀：r3f 射线用 offsetX/offsetY，agent-browser eval 合成 PointerEvent 的 offsetX 恒为 0（射线全打屏幕左上角）→ 3D 场景点按必须用 agent-browser mouse move/down/up 真实事件；console.log 埋点 + window 暴露 holder 查 __r3f.handlers 是定位利器
+- agent-browser 全流程实机验证（390×844）：3 卡片领养面板 ✓ → 领养布丁（加载胶囊→消失）✓ → 幼犬渲染（奶油垂耳+毛发贴图，与黑猫同档）✓ → 喂食冲碗 ✓ → 撸宠开心连蹦（console 确认 handleTap delta=0）✓ → 档案毛色切蜜棕（实时变色+档案持久化）✓ → 冷重载存档恢复 ✓ → 黑猫奶白领养（tint 管线同路验证，白猫白地板难辨=生效）✓ → 最终恢复炭团（柴犬·原色）✓；console 全程零 error（仅历史 2 条 three.js 弃用警告）；couple-home 改动文件 lint 零错误
+
+Stage Summary:
+- 宠物系统 v8.1：品种 2→3（新增奶油垂耳幼犬「布丁」）、全模型支持毛色变体（领养可选+档案即时换）、交互特效三层粒子（星星/饭粒/Zzz）、WebAudio 合成音效全套带面板开关、GLB 预热+加载胶囊；两处关键 bug 修复（蒙皮 raycast 代理盒、shader uniform 声明）
+- 新增资产 puppy.glb 2.86MB（pets3d 共 8.9MB），全部许可合规（CC-BY 4.0 已记 CREDITS.md）
+- 最终存档：柴犬「炭团」原色在场

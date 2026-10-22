@@ -11,6 +11,14 @@
  *   由 modelOf() 统一映射（狗类→shiba，猫类→cat）；未知/缺省 → 柴犬兜底。
  */
 
+/** 毛色变体（v8.1）：shader mix 调色 —— color 目标色，strength 混合强度（0 原色 → 1 纯色） */
+export interface PetVariant {
+  id: string;
+  name: string;
+  color: string;
+  strength: number;
+}
+
 /** 宠物模型（UI 元数据 + GLB 资产 + 动画适配参数） */
 export interface PetModel {
   id: string;
@@ -35,6 +43,8 @@ export interface PetModel {
   yawOffset?: number;
   /** 蹦跳参数：步频 & 跳高 */
   hop?: { freq: number; height: number };
+  /** 毛色变体（v8.1：shader mix 调色；缺省 = 仅原色） */
+  variants?: PetVariant[];
 }
 
 export const PET_MODELS: PetModel[] = [
@@ -50,6 +60,28 @@ export const PET_MODELS: PetModel[] = [
     speed: 1,
     suggest: '炭团',
     hop: { freq: 7.2, height: 0.055 },
+    variants: [
+      { id: 'cream', name: '奶油', color: '#f3e7d3', strength: 0.5 },
+      { id: 'sesame', name: '胡麻', color: '#6f5642', strength: 0.45 },
+    ],
+  },
+  {
+    id: 'puppy',
+    sp: 'dog',
+    name: '垂耳幼犬',
+    blurb: '奶油色小软毛，站着也会东张西望',
+    emoji: '🐶',
+    tint: ['#fbf3e4', '#f3e4c8'],
+    glb: '/pets3d/puppy.glb',
+    targetH: 0.3,
+    speed: 0.95,
+    suggest: '布丁',
+    clip: 'Animation',
+    hop: { freq: 6.8, height: 0.05 },
+    variants: [
+      { id: 'honey', name: '蜜棕', color: '#c98d5a', strength: 0.4 },
+      { id: 'smoke', name: '烟灰', color: '#9aa0a8', strength: 0.5 },
+    ],
   },
   {
     id: 'cat',
@@ -65,6 +97,10 @@ export const PET_MODELS: PetModel[] = [
     clip: 'Take 001',
     yawOffset: -Math.PI / 2,
     hop: { freq: 6.4, height: 0.045 },
+    variants: [
+      { id: 'blue', name: '蓝灰', color: '#8e9aae', strength: 0.55 },
+      { id: 'milk', name: '奶白', color: '#ece4d6', strength: 0.78 },
+    ],
   },
 ];
 
@@ -101,4 +137,10 @@ export function modelOf(breed?: string): PetModel {
     if (mapped) return PET_MODELS.find((m) => m.id === mapped) ?? PET_MODELS[0];
   }
   return PET_MODELS[0];
+}
+
+/** 找毛色变体（id 为空/未命中 → undefined = 原色） */
+export function variantOf(model: PetModel, vtId?: string): PetVariant | undefined {
+  if (!vtId) return undefined;
+  return model.variants?.find((v) => v.id === vtId);
 }

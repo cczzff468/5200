@@ -265,7 +265,7 @@ export interface HomeState {
    *  breed = pet-models.ts 模型 id（v8.0 起为 2 款精选高精度 GLB：柴犬 / 小黑猫；
    *  老档旧品种 id 由 modelOf() 兜底映射到新品种）；
    *  gender = 'boy' | 'girl'（仅存档保留，3D 模型不再区分配饰）。 */
-  pet?: { sp: 'cat' | 'dog'; breed?: string; name: string; gender?: 'boy' | 'girl'; x: number; z: number; fedAt?: number };
+  pet?: { sp: 'cat' | 'dog'; breed?: string; vt?: string; name: string; gender?: 'boy' | 'girl'; x: number; z: number; fedAt?: number };
   /** 阳台门开态（v5.7 阳台房间） */
   balconyDoorOpen?: boolean;
   /** 阳台地板/墙自定义色 */

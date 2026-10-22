@@ -58,6 +58,8 @@ import {
   UtensilsCrossed,
   UserRound,
   Users,
+  Volume2,
+  VolumeX,
   X,
   ZoomIn,
   ZoomOut,
@@ -65,7 +67,8 @@ import {
 import Joystick from './Joystick';
 import InstrumentOverlay from './InstrumentOverlay';
 import { SongSheet } from './SongSheet';
-import { PET_MODELS, modelOf } from './pet-models';
+import { PET_MODELS, modelOf, variantOf } from './pet-models';
+import { playSfx, sfxEnabled, setSfxEnabled } from './sfx';
 import { useMusic } from '@/lib/ios/music-store';
 import { localDB, genId } from '@/lib/ios/db';
 import { useWeatherSnapshot, weatherCodeInfo } from '../weather-core';
@@ -458,6 +461,26 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [adoptBreed, setAdoptBreed] = useState<string | null>(null);
   const [adoptGender, setAdoptGender] = useState<'boy' | 'girl'>('boy');
   const [adoptName, setAdoptName] = useState('');
+  /** 领养向导毛色（'' = 原色） */
+  const [adoptVt, setAdoptVt] = useState('');
+  /** 交互音效开关（v8.1，localStorage 持久化） */
+  const [sfxOn, setSfxOn] = useState(true);
+  /** 宠物模型就绪（false = 显示「正在赶来」加载胶囊；Pet3D onModelReady 置回 true） */
+  const [pvReady, setPvReady] = useState(true);
+  const petBreed = pet?.breed;
+  // v8.1：冷加载/换品种时先显示加载胶囊，模型挂载完成（onModelReady）后消失
+  useEffect(() => {
+    setPvReady(petBreed === undefined);
+  }, [petBreed]);
+  // v8.1：进屋 1.5s 后台预热全部宠物 GLB（领养/进场景秒出）
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      PET_MODELS.forEach((m) => {
+        fetch(m.glb, { cache: 'force-cache' }).catch(() => {});
+      });
+    }, 1500);
+    return () => window.clearTimeout(id);
+  }, []);
 
   // ---------------- UI 状态 ----------------
   const [mode, setMode] = useState<HomeMode>('live');
@@ -1333,12 +1356,13 @@ export default function CoupleHome({ close }: { close: () => void }) {
   }, []);
 
   const adoptPet = useCallback(
-    (breedId: string, gender: 'boy' | 'girl', rawName: string) => {
+    (breedId: string, gender: 'boy' | 'girl', rawName: string, vt?: string) => {
       const m = modelOf(breedId);
       const name = (rawName.trim() || m.suggest).slice(0, 8);
-      setPet({ sp: m.sp, breed: m.id, name, gender, x: -1.2, z: 1.2 });
+      setPet({ sp: m.sp, breed: m.id, vt: vt || undefined, name, gender, x: -1.2, z: 1.2 });
       petRT.current = { x: -1.2, z: 1.2, heading: Math.PI / 2, moving: false, target: null, nextWander: 1.5 };
       closePetSheet();
+      playSfx('adopt');
       toast(`${name}（${m.name}·${gender === 'girl' ? '女孩' : '男孩'}）加入这个家啦，记得常喂它哦～`);
       saveSoon();
     },
@@ -1349,6 +1373,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     if (!petRef.current) return;
     petFeedRef.current = { x: petRT.current.x + 0.3, z: petRT.current.z + 0.3, at: Date.now() };
     setPetSheet(false);
+    playSfx('feed');
     toast('开饭啦！它迈着小碎步冲过来了～');
   }, [toast]);
 
@@ -1356,6 +1381,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setPet(undefined);
     petFeedRef.current = null;
     setPetSheet(false);
+    playSfx('pop');
     toast('挥挥小爪子，下次再来玩呀～');
     saveSoon();
   }, [saveSoon, toast]);
@@ -1363,8 +1389,30 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const PET_TAP_MSGS = ['开心地蹭了蹭你的手心', '咕噜咕噜地打起了呼噜', '围着你转了一圈又一圈', '仰起头求摸摸，可爱死了', '尾巴摇成了小风扇～'];
   const petTap = useCallback(() => {
     if (!petRef.current) return;
+    playSfx('tap');
+    if (Math.random() < 0.5) playSfx('sparkle');
     toast(`${petRef.current.name} ${PET_TAP_MSGS[Math.floor(Math.random() * PET_TAP_MSGS.length)]}`);
   }, [toast]);
+
+  /** 交互音效开关（v8.1） */
+  const toggleSfx = useCallback(() => {
+    setSfxOn((v) => {
+      const next = !v;
+      setSfxEnabled(next);
+      if (next) playSfx('pop');
+      return next;
+    });
+  }, []);
+
+  /** 现有宠物换毛色（v8.1：写档 + 轻提示） */
+  const changePetVariant = useCallback(
+    (vt: string) => {
+      setPet((prev) => (prev ? { ...prev, vt: vt || undefined } : prev));
+      saveSoon();
+      if (vt) playSfx('sparkle');
+    },
+    [saveSoon],
+  );
 
   // —— F7 邀请访客 ——
   const openInvite = useCallback(async () => {
@@ -2311,9 +2359,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
         onToggleKitchenDoor={toggleKitchenDoor}
         onToggleBathDoor={toggleBathDoor}
         onToggleBalconyDoor={toggleBalconyDoor}
-        pet={pet ? { sp: pet.sp, name: pet.name, breed: pet.breed, gender: pet.gender } : null}
+        pet={pet ? { sp: pet.sp, name: pet.name, breed: pet.breed, vt: pet.vt, gender: pet.gender } : null}
         petRT={petRT}
         petFeedRef={petFeedRef}
+        onPetModelReady={() => setPvReady(true)}
         onPetTap={petTap}
         guestRT={guestRT}
         guestName={guest?.name ?? null}
@@ -2343,6 +2392,21 @@ export default function CoupleHome({ close }: { close: () => void }) {
           ))}
         </AnimatePresence>
       </div>
+
+      {/* 宠物模型加载胶囊（v8.1 加载体验：GLB 就绪前显示） */}
+      <AnimatePresence>
+        {!pvReady && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="pointer-events-none absolute left-1/2 top-24 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full bg-white/85 px-3.5 py-1.5 shadow-md backdrop-blur"
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-[#b08968]" />
+            <span className="text-[12px] font-medium text-[#6a5a4e]">毛孩子正在打包行李…</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ===== HUD ===== */}
       {!photoMode && (
@@ -2946,24 +3010,35 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     {pet ? '点一点它就能撸一撸哦' : !adoptBreed ? '毛茸茸的家庭新成员，挑一位带回家吧' : '选性别，取个名字'}
                   </p>
                 </div>
-                <button
-                  onClick={closePetSheet}
-                  aria-label="关闭宠物面板"
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={toggleSfx}
+                    aria-label={sfxOn ? '关闭交互音效' : '开启交互音效'}
+                    title={sfxOn ? '关闭音效' : '开启音效'}
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
+                  >
+                    {sfxOn ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+                  </button>
+                  <button
+                    onClick={closePetSheet}
+                    aria-label="关闭宠物面板"
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
               {!pet ? (
                 !adoptBreed ? (
-                  // ① 选宠物：柴犬 / 小黑猫（v8.0 精选高精度雕刻模型）
-                  <div className="grid grid-cols-2 gap-3">
+                  // ① 选宠物（v8.1：PET_MODELS 注册表驱动，模型越多自动铺开）
+                  <div className="scrollbar-none grid max-h-[52vh] grid-cols-2 gap-3 overflow-y-auto">
                     {PET_MODELS.map((m) => (
                       <button
                         key={m.id}
                         onClick={() => {
                           setAdoptBreed(m.id);
                           setAdoptName(m.suggest);
+                          setAdoptVt('');
                         }}
                         className="flex flex-col items-center gap-1.5 overflow-hidden rounded-2xl p-4 pt-5 shadow-sm ring-1 ring-white/70 transition active:scale-95"
                         style={{ backgroundImage: `linear-gradient(to bottom, ${m.tint[0]}, ${m.tint[1]})` }}
@@ -2980,8 +3055,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 ) : (
                   (() => {
                     const m = modelOf(adoptBreed);
+                    const vtOpts: { id: string; name: string; color: string }[] = [
+                      { id: '', name: '原色', color: '' },
+                      ...(m.variants ?? []),
+                    ];
                     return (
-                      // ② 性别 + 取名 + 接回家（emoji 头像）
+                      // ② 毛色 + 性别 + 取名 + 接回家（emoji 头像）
                       <div className="flex flex-col gap-3">
                         <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-[#faf6ee] to-[#fdf1ec] p-3 ring-1 ring-[#f3ecdd]">
                           <span
@@ -3001,6 +3080,26 @@ export default function CoupleHome({ close }: { close: () => void }) {
                             换一只
                           </button>
                         </div>
+                        {vtOpts.length > 1 && (
+                          <div className="flex flex-wrap items-center gap-1.5 rounded-2xl bg-[#f5f3ef] px-3 py-2">
+                            <span className="shrink-0 text-[11px] font-medium text-[#9a9a96]">毛色</span>
+                            {vtOpts.map((v) => (
+                              <button
+                                key={v.id || 'default'}
+                                onClick={() => setAdoptVt(v.id)}
+                                aria-label={`毛色：${v.name}`}
+                                className={`flex h-7 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium transition active:scale-95 ${
+                                  adoptVt === v.id
+                                    ? 'bg-white text-[#4a4a4e] shadow ring-2 ring-[#f2b3c2]'
+                                    : 'bg-white/60 text-[#8a8a90]'
+                                }`}
+                              >
+                                {v.color && <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: v.color }} />}
+                                {v.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                         <div className="grid grid-cols-2 gap-2">
                           {(['boy', 'girl'] as const).map((g) => (
                             <button
@@ -3030,7 +3129,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                           />
                         </div>
                         <button
-                          onClick={() => adoptPet(adoptBreed, adoptGender, adoptName)}
+                          onClick={() => adoptPet(adoptBreed, adoptGender, adoptName, adoptVt)}
                           className="flex h-11 items-center justify-center gap-2 rounded-full bg-[#f2b3c2] text-[14px] font-semibold text-white shadow transition active:scale-95"
                         >
                           接 {adoptName.trim() || m.suggest} 回家
@@ -3042,6 +3141,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
               ) : (
                 (() => {
                   const pm = modelOf(pet.breed);
+                  const pv = variantOf(pm, pet.vt);
                   return (
                     <div className="flex flex-col gap-2.5">
                       <div className="flex items-center gap-3 rounded-2xl bg-gradient-to-r from-[#faf6ee] to-[#fdf1ec] p-3 ring-1 ring-[#f3ecdd]">
@@ -3056,10 +3156,30 @@ export default function CoupleHome({ close }: { close: () => void }) {
                             {pet.name} <span className={pet.gender === 'girl' ? 'text-[#e58aa8]' : 'text-[#7fa7d9]'}>{pet.gender === 'girl' ? '♀' : '♂'}</span>
                           </span>
                           <span className="block truncate text-[11px] text-[#9a9a96]">
-                            {pm.name} · {pm.blurb}
+                            {pm.name}
+                            {pv ? ` · ${pv.name}` : ''} · {pm.blurb}
                           </span>
                         </span>
                       </div>
+                      {pm.variants && pm.variants.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 rounded-2xl bg-[#f5f3ef] px-3 py-2">
+                          <span className="shrink-0 text-[11px] font-medium text-[#9a9a96]">毛色</span>
+                          {[{ id: '', name: '原色' }, ...pm.variants].map((v) => (
+                            <button
+                              key={v.id || 'default'}
+                              onClick={() => changePetVariant(v.id)}
+                              aria-label={`换成${v.name}毛色`}
+                              className={`h-7 rounded-full px-2.5 text-[11px] font-medium transition active:scale-95 ${
+                                (pet.vt ?? '') === v.id
+                                  ? 'bg-white text-[#4a4a4e] shadow ring-2 ring-[#f2b3c2]'
+                                  : 'bg-white/60 text-[#8a8a90]'
+                              }`}
+                            >
+                              {v.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       <p className="text-[12px] text-[#8a8a90]">点一点它就能撸一撸，头顶会冒爱心哦～</p>
                       <button
                         onClick={feedPet}

@@ -19,7 +19,7 @@ import * as THREE from 'three';
 import { useFrame, useLoader } from '@react-three/fiber';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import type { PetModel } from '../pet-models';
+import type { PetModel, PetVariant } from '../pet-models';
 
 interface GLTFResult {
   scene: THREE.Group;
@@ -40,13 +40,15 @@ export interface PetViewHandle {
 
 interface Props {
   model: PetModel;
+  /** 毛色变体（v8.1；undefined = 原色） */
+  variant?: PetVariant;
   /** 就绪回调（模型挂载后触发一次，用于把精确高度带给气泡定位） */
   onReady?: (h: number) => void;
 }
 
 const damp = THREE.MathUtils.damp;
 
-const PetModelView = forwardRef<PetViewHandle, Props>(function PetModelView({ model, onReady }, ref) {
+const PetModelView = forwardRef<PetViewHandle, Props>(function PetModelView({ model, variant, onReady }, ref) {
   const gltf = useLoader(GLTFLoader, model.glb) as unknown as GLTFResult;
 
   const root = useRef<THREE.Group>(null);
@@ -82,6 +84,9 @@ const PetModelView = forwardRef<PetViewHandle, Props>(function PetModelView({ mo
     const box2 = new THREE.Box3().setFromObject(g);
     g.position.y = -box2.min.y;
 
+    // 毛色变体（v8.1）：克隆材质注入 mix 调色（useLoader 缓存里的原材质不动）
+    if (variant && variant.strength > 0) applyVariantTint(g, variant);
+
     // 骨骼动画（黑猫 Take 001：坐姿舔毛/挠脸）
     let m: THREE.AnimationMixer | null = null;
     if (model.clip && gltf.animations?.length) {
@@ -90,7 +95,7 @@ const PetModelView = forwardRef<PetViewHandle, Props>(function PetModelView({ mo
       m.clipAction(clip).play();
     }
     return { g, mixer: m };
-  }, [gltf, model.glb, model.targetH, model.yawOffset, model.clip]);
+  }, [gltf, model.glb, model.targetH, model.yawOffset, model.clip, variant]);
 
   const body = rig.g;
 
@@ -183,6 +188,38 @@ function gltfSafeScene(gltf: GLTFResult): THREE.Group {
     return fallback;
   }
   return gltf.scene as THREE.Group;
+}
+
+/** 毛色变体调色：克隆材质 → onBeforeCompile 注入 mix（diffuseColor → uPetTint） */
+function applyVariantTint(g: THREE.Object3D, v: PetVariant) {
+  const tint = new THREE.Color(v.color);
+  const skip = /eye|iris|pupil|nose|mouth|tongue/i; // 眼鼻嘴不参与毛色调色
+  g.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    const next = mats.map((src) => {
+      const mat = src as THREE.Material & { color?: THREE.Color; name?: string };
+      if (!mat || !mat.color || skip.test(mat.name ?? '')) return src;
+      const c = mat.clone() as typeof mat;
+      c.onBeforeCompile = (shader) => {
+        shader.uniforms.uPetTint = { value: tint.clone() };
+        shader.uniforms.uPetTintMix = { value: v.strength };
+        shader.fragmentShader =
+          'uniform vec3 uPetTint;\nuniform float uPetTintMix;\n' +
+          shader.fragmentShader.replace(
+            '#include <color_fragment>',
+            [
+              '#include <color_fragment>',
+              '  diffuseColor.rgb = mix(diffuseColor.rgb, uPetTint, uPetTintMix);',
+            ].join('\n'),
+          );
+      };
+      c.customProgramCacheKey = () => `pet-tint-${v.strength}`;
+      return c;
+    });
+    m.material = (Array.isArray(m.material) ? next : next[0]) as typeof m.material;
+  });
 }
 
 export default PetModelView;

@@ -20,6 +20,17 @@
   「Take 001」= 坐姿舔毛/挠脸待机循环（约 6s），由 `PetModelView.tsx` 的
   AnimationMixer 播放、按状态调节 timeScale。
 
+## v8.1 新增
+
+### 🐶 奶油垂耳幼犬 `puppy.glb`（约 2.9MB）
+
+- **来源**：Sketchfab — ["Dog Puppy" by kenchoo](https://sketchfab.com/3d-models/dog-puppy-72331763040e4314b154f84348fe0957)
+- **授权**：CC Attribution 4.0（CC-BY 4.0）
+- **说明**：写实毛绒质感奶油色垂耳幼犬（精细毛发贴图 + 湿润鼻头/高光眼睛 +
+  KHR_materials_specular 材质），14,844 tris / 3 张贴图 / 静态骨骼站立。
+  自带 1 段 8.7s 循环待机动画「Animation」（头部左右张望微动），可由
+  `PetModelView.tsx` 播放或叠加刚体层程序化动作；模型原生面朝 +Z（正前）。
+
 ## 历史记录
 
 ### v7.0 —— 程序化 Q 版宠物（已移除）

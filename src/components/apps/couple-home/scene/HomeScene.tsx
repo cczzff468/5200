@@ -130,6 +130,7 @@ export interface HomeSceneProps {
   pet?: PetData | null;
   petRT?: RefObject<CharRT>;
   petFeedRef: RefObject<{ x: number; z: number; at: number } | null>;
+  onPetModelReady?: () => void;
   onPetTap?: () => void;
   /** 访客（邀请的 AI 联系人）：运行时 ref + 名牌（null = 无访客） */
   guestRT?: RefObject<CharRT | null>;
@@ -1037,7 +1038,7 @@ export default function HomeScene(props: HomeSceneProps) {
     floorColBal, wallColBal,
     ceilCol, ceilColBed, ceilColK, ceilColB,
     doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, onToggleDoor, onToggleKitchenDoor, onToggleBathDoor, onToggleBalconyDoor,
-    pet, petRT, petFeedRef, onPetTap, guestRT, guestName, musicPlaying, weatherFx,
+    pet, petRT, petFeedRef, onPetModelReady, onPetTap, guestRT, guestName, musicPlaying, weatherFx,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
   } = props;
 
@@ -1235,7 +1236,7 @@ export default function HomeScene(props: HomeSceneProps) {
         <Char3D rt={guestRT.current} who="guest" style={charStyle} guestName={guestName ?? undefined} />
       )}
       {pet && petRT && (
-        <Pet3D pet={pet} rt={petRT} itemsRef={itemsRef} feedRef={petFeedRef} onTap={onPetTap} />
+        <Pet3D pet={pet} rt={petRT} itemsRef={itemsRef} feedRef={petFeedRef} onTap={onPetTap} onModelReady={onPetModelReady} />
       )}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       <WeatherFX kind={weatherFx ?? 'clear'} win={win} winPos={winPos} />
