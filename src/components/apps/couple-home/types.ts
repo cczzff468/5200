@@ -262,7 +262,7 @@ export interface HomeState {
   /** 做饭小游戏：本次上桌的菜名（端上桌显示 + 开饭 toast） */
   mealName?: string;
   /** 宠物系统：已领养的宠物（位置持久化；缺省 = 未领养）。
-   *  breed = pet-models.ts 模型 id（v7.0 起为 8 款程序化 Q 版盲盒风；
+   *  breed = pet-models.ts 模型 id（v8.0 起为 2 款精选高精度 GLB：柴犬 / 小黑猫；
    *  老档旧品种 id 由 modelOf() 兜底映射到新品种）；
    *  gender = 'boy' | 'girl'（仅存档保留，3D 模型不再区分配饰）。 */
   pet?: { sp: 'cat' | 'dog'; breed?: string; name: string; gender?: 'boy' | 'girl'; x: number; z: number; fedAt?: number };

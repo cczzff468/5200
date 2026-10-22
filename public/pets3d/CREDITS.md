@@ -1,23 +1,38 @@
 # 宠物 3D 模型来源与授权
 
-## v7.0（当前）—— 程序化 Q 版宠物（无外部模型）
+## v8.0（当前）—— 精选高精度现成模型
 
-自 v7.0 起，宠物全部改为 **纯 three.js 程序化建模**（`src/components/apps/couple-home/scene/QPet.tsx`），
-按用户提供的 Q 版大头参考图（黑柴插画 / 六连萌猫插画 / 3D 盲盒狗）原创搭建：
-超大圆头、黑豆眼双高光、ω 嘴、腮红、奶白肚皮、小短腿、卷尾 / 蓬尾 / 长尾、头部色斑。
+### 🐕 柴犬 `shiba.glb`（约 1.9MB）
 
-- **不使用任何第三方模型 / 贴图，无版权归属问题**；
-- 造型风格参考仅用于美术方向（头像/盲盒通用风格，不受版权保护的表达自由实现）；
-- 8 个品种（黑柴 / 奶油柴 / 哈士奇 / 小狐狸 / 白奶猫 / 橘猫 / 三花猫 / 奶牛猫）
-  全部由 `pet-models.ts` 的 `QPetSpec` 配色与耳尾斑块参数驱动。
+- **来源**：Sketchfab — ["Shiba" by zixisun51](https://sketchfab.com/3d-models/shiba-faef9fe5ace445e7b2989d1c1ece361c)
+- **授权**：CC Attribution 4.0（CC-BY 4.0）
+- **说明**：Q 版盲盒手办风坐姿柴犬（大头圆眼、白眉点、红色项圈、手绘贴图、
+  KHR_materials_unlit 材质）。静态模型，动画由 `PetModelView.tsx` 的刚体层
+  程序化驱动（蹦跳 / 呼吸 / 前倾吃 / 压扁打盹 / 开心连蹦）。
 
-## 历史记录 —— v6.4 曾使用 Quaternius 模型（已移除）
+### 🐈‍⬛ 小黑猫 `cat.glb`（约 4.1MB）
 
-v6.4 ~ v6.9 期间曾使用 **Quaternius — Ultimate Animated Animals Pack**（CC0 公有领域）
-的低多边形 GLB 模型（柴犬 / 哈士奇 / 狐狸 / 猫）。因风格与用户期望的 Q 版大头盲盒风
-差距较大，v7.0 起弃用并从仓库移除 GLB 文件（git 历史仍可追溯）。
+- **来源**：GitHub [moonwavestudios/rooms_full](https://github.com/moonwavestudios/rooms_full)
+  （`models/cat/cat (2)/`，独立游戏《Rooms》官方开源仓库，作者自绘资产）
+- **授权**：MIT License（随仓库 LICENSE）
+- **说明**：写实毛绒质感黑猫玩家模型（sk_player_cat）：雕刻网格 + 毛发多层
+  半透明壳 + 眼球/胡须贴图 + 完整骨骼（j_* 关节 175 通道）；自带骨骼动画
+  「Take 001」= 坐姿舔毛/挠脸待机循环（约 6s），由 `PetModelView.tsx` 的
+  AnimationMixer 播放、按状态调节 timeScale。
+
+## 历史记录
+
+### v7.0 —— 程序化 Q 版宠物（已移除）
+
+纯 three.js 程序化建模（QPet.tsx，按用户参考图原创拼装，无第三方资产）。
+因观感被用户反馈「跟假的一样」，v8.0 起弃用并移除（git 历史仍可追溯）。
+
+### v6.4 —— Quaternius 模型（已移除）
+
+曾使用 **Quaternius — Ultimate Animated Animals Pack**（CC0 公有领域）
+低多边形模型。因风格差距较大弃用。
 
 - 作者主页：https://quaternius.com
 - 授权：CC0 1.0 Universal（公有领域）
 
-特此记录，感谢 Quaternius 曾提供的优秀 CC0 资源。
+特此记录，感谢以上作者提供的优秀资源。

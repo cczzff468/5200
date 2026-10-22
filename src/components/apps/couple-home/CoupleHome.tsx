@@ -2943,7 +2943,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                         : '登记小户口'}
                   </span>
                   <p className="mt-0.5 text-[11px] text-[#9a9a96]">
-                    {pet ? '点一点它就能撸一撸哦' : !adoptBreed ? 'Q 萌盲盒小可爱，挑一只带回家吧' : '选性别，取个名字'}
+                    {pet ? '点一点它就能撸一撸哦' : !adoptBreed ? '毛茸茸的家庭新成员，挑一位带回家吧' : '选性别，取个名字'}
                   </p>
                 </div>
                 <button
@@ -2956,7 +2956,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
               </div>
               {!pet ? (
                 !adoptBreed ? (
-                  // ① 选宠物：8 只程序化 Q 版盲盒风 3D 宠物（QPet.tsx 按参考图建模）
+                  // ① 选宠物：柴犬 / 小黑猫（v8.0 精选高精度雕刻模型）
                   <div className="grid grid-cols-2 gap-3">
                     {PET_MODELS.map((m) => (
                       <button
@@ -2972,7 +2972,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                         <span className="text-[13px] font-semibold text-[#4a4a4e]">{m.name}</span>
                         <span className="text-[10px] leading-tight text-[#9a9a96]">{m.blurb}</span>
                         <span className="mt-0.5 rounded-full bg-white/80 px-2 py-0.5 text-[9px] font-medium text-[#b08968] shadow-sm">
-                          Q 版 3D · 自带卖萌
+                          真 3D 模型 · 会蹦会撒娇
                         </span>
                       </button>
                     ))}

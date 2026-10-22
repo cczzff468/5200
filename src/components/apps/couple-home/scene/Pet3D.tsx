@@ -3,27 +3,27 @@
 /* eslint-disable react-hooks/immutability -- 宠物 AI 需要每帧原地修改 runtime 对象（与 Char3D 同模式） */
 
 /**
- * 情侣小屋 3D —— 宠物系统（v5.7 领养 → v6.2 3D建模 → v6.4 现成模型 → v7.0 程序化 Q 版）
+ * 情侣小屋 3D —— 宠物系统（v5.7 领养 → v6.2 3D建模 → v6.4 现成模型 → v7.0 程序化 → v8.0 精选 GLB）
  *
- * - v7.0：用户嫌 Quaternius 低多边形不好看，发来 Q 版大头参考图；现成模型站无同款
- *   免费风格，改为纯 three.js 程序化盲盒风建模（QPet.tsx，见 pet-models 8 品种）；
- * - 渲染：QPet（大头圆身豆眼腮红 + 程序化动画），本组件只负责 AI 与状态权重；
- * - 状态机（权重传给 QPet，阻尼混合）：
- *   溜达 walk / 冲饭 run（靠近饭碗 1.6m 内加速冲刺）/ 待机 idle（呼吸+眨眼）/ 吃饭 eat /
- *   打盹 nap（压扁耷耳）/ 撸宠开心 happy（连蹦 squash&stretch）；
+ * - v8.0：用户反馈程序化盲盒宠物「跟假的一样」→ 换装两款高精度雕刻模型
+ *   （盲盒柴犬 + 写实小黑猫，见 pet-models），渲染层拆到 PetModelView；
+ * - 渲染：PetModelView（GLB 加载 + 黑猫舔毛骨骼动画 + 坐姿蹦跳刚体动画层）；
+ * - 状态机（权重传给 PetModelView，阻尼混合）：
+ *   溜达 walk / 冲饭 run（靠近饭碗 1.6m 内加速冲刺）/ 待机 idle（呼吸+舔毛）/ 吃饭 eat /
+ *   打盹 nap（压扁+慢呼吸）/ 撸宠开心 happy（原地连蹦+黑猫快速洗脸）；
  * - AI 零改动：随机目标溜达（撞家具绕开 + 卡死换目标）+ 时不时打盹；
  *   喂食跑过去低头吃（🍚 气泡）；点击撸宠开心蹦跳（❤️ 粒子 + 💤 打盹气泡保留）；
  * - 朝向：heading 由移动方向实时阻尼写入（与 Char3D 同一坐标系，绕 Y 轴转身）；
  * - 位置持久化由上层负责（petRT 随存档快照写入 HomeState.pet）。
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import type { CharRT, FurnitureItem } from '../types';
 import { CATALOG, ROOM_X, ROOM_Z, BED_Z0, footprintOf } from '../catalog';
 import { modelOf } from '../pet-models';
-import QPet, { type QPetHandle } from './QPet';
+import PetModelView, { type PetViewHandle } from './PetModelView';
 
 export interface PetData {
   sp: 'cat' | 'dog';
@@ -133,7 +133,7 @@ function clampPet(c: CharRT, items: FurnitureItem[]) {
 
 export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps) {
   const holder = useRef<THREE.Group>(null);
-  const qRef = useRef<QPetHandle>(null);
+  const pvRef = useRef<PetViewHandle>(null);
   const hearts = useRef<(THREE.Sprite | null)[]>([]);
   const moodSprite = useRef<THREE.Sprite>(null);
   const bowl = useRef<THREE.Group>(null);
@@ -152,7 +152,7 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
   );
   useEffect(() => () => Object.values(bubbleTex).forEach((t) => t.dispose()), [bubbleTex]);
 
-  /** 模型头顶世界高度（QPet 按比例精确建模 ≈ model.targetH），供气泡/爱心定位 */
+  /** 模型头顶世界高度（PetModelView 归一化后 ≈ model.targetH），供气泡/爱心定位 */
   const hRef = useRef(model.targetH);
 
   /** 撸宠爱心粒子（点击时触发，本地计时） */
@@ -264,14 +264,14 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
     hz.position.set(c.x, 0, c.z);
     hz.rotation.y = c.heading;
 
-    // —— 状态权重 → QPet 程序化动画 ——
+    // —— 状态权重 → PetModelView 双层动画 ——
     const eatingNow = !!eating || (eatAt.current > 0 && now - eatAt.current < 2600);
     if (eatingDone(now)) eatAt.current = 0;
     const walking = c.moving && !eatingNow && !rushing;
     const happyNow = !!petAt.current && now - petAt.current < 1200;
     const dozing = !!dozedOff.current && now - dozedOff.current < 3500 && !c.moving && !eatingNow;
 
-    qRef.current?.tick(t, dt, {
+    pvRef.current?.tick(t, dt, {
       walk: walking ? 1 : 0,
       run: rushing && c.moving ? 1 : 0,
       eat: eatingNow ? 1 : 0,
@@ -319,7 +319,7 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
 
   return (
     <group>
-      {/* 宠物本体（holder = AI 坐标系；QPet 内部自带弹跳/摇摆动画层） */}
+      {/* 宠物本体（holder = AI 坐标系；PetModelView 内部自带蹦跳/呼吸动画层） */}
       <group
         ref={holder}
         onClick={handleTap}
@@ -327,12 +327,14 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
       >
         {/* 接地软阴影 */}
         <mesh position={[0, 0.012, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <planeGeometry args={[0.46, 0.38]} />
+          <planeGeometry args={[0.5, 0.42]} />
           <meshBasicMaterial map={bubbleTex.shadow} transparent depthWrite={false} />
         </mesh>
 
-        {/* 程序化 Q 版盲盒风宠物（v7.0） */}
-        <QPet ref={qRef} spec={model.spec} targetH={model.targetH} />
+        {/* 精选 GLB 宠物（v8.0：盲盒柴犬 / 写实小黑猫） */}
+        <Suspense fallback={null}>
+          <PetModelView ref={pvRef} model={model} onReady={(h) => { hRef.current = h; }} />
+        </Suspense>
 
         {/* 心情气泡（🍚 吃饭 / 💤 打盹） */}
         <sprite ref={moodSprite} position={[0, 0.5, 0]} scale={[0.2, 0.2, 1]} visible={false}>
