@@ -21482,3 +21482,23 @@ Work Log:
 
 Stage Summary:
 - 宠物从「AI 立绘 billboard」全面升级为「现成 CC0 Q版卡通 3D 骨骼动画模型」：4 款（柴犬🐕/哈士奇🐺/小狐狸🦊/奶猫🐱），真 3D 可随相机任意角度观察，动画丰富（走/跑/吃/睡/开心跳）；品种系统按用户要求移除，老档自动兼容；新增资产 1.9MB GLB + CREDITS
+
+---
+Task ID: qpet-v7-blindbox-1022
+Agent: Z.ai Code (main)
+Task: 用户嫌 Quaternius 低多边形宠物「好难看」，发来三张 Q 版参考图（大头黑柴水彩插画 / 六连萌猫插画 / 3D 盲盒垂耳狗），要求按图做「Q 版大头盲盒风」宠物
+
+Work Log:
+- 方案决策：现成模型站无免费同款「大头盲盒」风格带骨骼动画的模型 → 改为纯 three.js 程序化建模，风格完全可控、贴合参考图
+- 重写 pet-models.ts：品种扩为 8 只（黑柴🖤参考图同款 / 奶油柴🍞 / 哈士奇🐺 / 小狐狸🦊 / 白奶猫🐱 / 橘猫🍊 / 三花猫🍀 / 奶牛猫🐮）；新增 QPetSpec（main/belly/dark/tan/blush/innerEar/nose 配色 + ear: pointy|round + tail: curl|up|long + patch: brows|cap|calico|tux|tabby|none）；LEGACY_MAP 扩容（orange→cat-orange、ragdoll→cat-white、calico→cat-calico、lihua/tuxedo→cat-tux、cat→cat-white、pomeranian/golden→cream 等），未知 id 兜底黑柴
+- 新建 scene/QPet.tsx（程序化建模核心）：狗/猫两套骨架（大头≈55% 身高），球体拼装——大圆头+奶白口鼻+鼻头+ω 嘴（双 torus 下弧）+黑豆眼双高光（group scaleY 眨眼）+腮红（贴面扁球）+四种头部斑块（眉颊点/灰帽/三花/奶牛/虎斑纹，半嵌扁球贴面法）+奶白肚皮+四条小短腿（柱+白爪）+三种尾巴（柴犬 torus 卷尾 / 狐狸哈士奇 TubeGeometry 蓬尾带白尖 / 猫长尾）；MeshStandardMaterial roughness 0.55 盲盒光滑质感；targetH/natural 比例整体缩放
+- QPet 动画（tick 权重阻尼混合）：走路弹跳+左右摇摆+对角小短腿倒腾 / 冲饭加速前倾 / 待机呼吸+随机眨眼(2.4-5.2s)+歪头 / 吃饭点头 / 打盹整体压扁 26%+耳朵耷拉 / 撸宠连蹦+摇尾+果冻 squash&stretch；耳走抖+尾摆频率随状态变化
+- 重写 scene/Pet3D.tsx：删 GLTFLoader/SkeletonUtils/mixer/自校准全套（-240 行），改 QPet 渲染 + 状态权重传递；新增 rushing 冲刺态（距碗 1.6m 内 speed 2.1）；AI/气泡/爱心粒子/饭碗/软阴影/存档持久化零改动
+- CoupleHome.tsx 领养 UI：8 卡片 grid、文案换「Q 萌盲盒小可爱」「Q 版 3D · 自带卖萌」；types.ts 注释更新
+- 清理：删除 public/pets3d/*.glb（2MB 废弃资产），CREDITS.md 重写（v7.0 程序化原创无版权问题 + 历史 Quaternius 记录）
+- agent-browser 实机验证：领养面板 8 卡片 ✓ → 领养黑柴炭炭 → Q 版轮廓（大头圆身橘眉点白爪）✓ → 喂食（开饭 toast + 冲碗 + 低头吃 + 🍚 气泡 + 饭碗）✓ → 点击撸宠（❤️ 爱心粒子实测可见）✓ → 送走换三花猫（白底橘/黑斑块 + 圆耳）✓ → 换哈士奇（灰帽斑块 + 立耳 + 上翘蓬尾白尾尖，多帧像素级确认）✓ → 换回黑柴收尾；拍照模式拖拽旋转视角可用；console 零错误（仅历史 2 条 three.js 弃用警告）；couple-home API 全 200（存档持久化正常）
+- lint：couple-home 改动文件零错误零警告（仓库既有错误在无关文件）
+
+Stage Summary:
+- 宠物视觉全面重做为「程序化 Q 版盲盒风」：8 品种全部原创拼装建模（零外部资产、零版权风险），大头豆眼腮红萌系比例精确贴合用户参考图；程序化动画替代骨骼动画（弹跳/摇摆/眨眼/压扁打盹/果冻感反而更 Q）；品种数 4→8，老档 breed id 全兼容；-2MB 资产瘦身
+- 最终状态：拾光小屋内留下黑柴「炭炭」（用户参考图1同款），可随时送走换领其他 7 只

@@ -454,7 +454,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [wallColBal, setWallColBal] = useState<string | undefined>(pack.home.wallColBal);
   const [mealName, setMealName] = useState<string | undefined>(pack.home.mealName);
   const [pet, setPet] = useState<HomeState['pet']>(pack.home.pet ?? undefined);
-  // 领养向导：选模型 → 性别+名字（v6.4 现成 3D 模型库）
+  // 领养向导：选模型 → 性别+名字（v7.0 程序化 Q 版模型库）
   const [adoptBreed, setAdoptBreed] = useState<string | null>(null);
   const [adoptGender, setAdoptGender] = useState<'boy' | 'girl'>('boy');
   const [adoptName, setAdoptName] = useState('');
@@ -2943,7 +2943,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                         : '登记小户口'}
                   </span>
                   <p className="mt-0.5 text-[11px] text-[#9a9a96]">
-                    {pet ? '点一点它就能撸一撸哦' : !adoptBreed ? '现成的 3D 小可爱，带一只回家吧' : '选性别，取个名字'}
+                    {pet ? '点一点它就能撸一撸哦' : !adoptBreed ? 'Q 萌盲盒小可爱，挑一只带回家吧' : '选性别，取个名字'}
                   </p>
                 </div>
                 <button
@@ -2956,7 +2956,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
               </div>
               {!pet ? (
                 !adoptBreed ? (
-                  // ① 选宠物：4 只现成 Q 版 3D 模型（Quaternius CC0，全骨骼动画）
+                  // ① 选宠物：8 只程序化 Q 版盲盒风 3D 宠物（QPet.tsx 按参考图建模）
                   <div className="grid grid-cols-2 gap-3">
                     {PET_MODELS.map((m) => (
                       <button
@@ -2972,7 +2972,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                         <span className="text-[13px] font-semibold text-[#4a4a4e]">{m.name}</span>
                         <span className="text-[10px] leading-tight text-[#9a9a96]">{m.blurb}</span>
                         <span className="mt-0.5 rounded-full bg-white/80 px-2 py-0.5 text-[9px] font-medium text-[#b08968] shadow-sm">
-                          3D · 真骨骼动画
+                          Q 版 3D · 自带卖萌
                         </span>
                       </button>
                     ))}

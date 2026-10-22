@@ -1,13 +1,23 @@
 # 宠物 3D 模型来源与授权
 
-模型来自 **Quaternius — Ultimate Animated Animals Pack**（Q版低多边形卡通风格，自带骨骼动画）。
+## v7.0（当前）—— 程序化 Q 版宠物（无外部模型）
+
+自 v7.0 起，宠物全部改为 **纯 three.js 程序化建模**（`src/components/apps/couple-home/scene/QPet.tsx`），
+按用户提供的 Q 版大头参考图（黑柴插画 / 六连萌猫插画 / 3D 盲盒狗）原创搭建：
+超大圆头、黑豆眼双高光、ω 嘴、腮红、奶白肚皮、小短腿、卷尾 / 蓬尾 / 长尾、头部色斑。
+
+- **不使用任何第三方模型 / 贴图，无版权归属问题**；
+- 造型风格参考仅用于美术方向（头像/盲盒通用风格，不受版权保护的表达自由实现）；
+- 8 个品种（黑柴 / 奶油柴 / 哈士奇 / 小狐狸 / 白奶猫 / 橘猫 / 三花猫 / 奶牛猫）
+  全部由 `pet-models.ts` 的 `QPetSpec` 配色与耳尾斑块参数驱动。
+
+## 历史记录 —— v6.4 曾使用 Quaternius 模型（已移除）
+
+v6.4 ~ v6.9 期间曾使用 **Quaternius — Ultimate Animated Animals Pack**（CC0 公有领域）
+的低多边形 GLB 模型（柴犬 / 哈士奇 / 狐狸 / 猫）。因风格与用户期望的 Q 版大头盲盒风
+差距较大，v7.0 起弃用并从仓库移除 GLB 文件（git 历史仍可追溯）。
 
 - 作者主页：https://quaternius.com
-- Pack 页面：https://quaternius.com/packs/ultimateanimatedanimals.html
-- 授权：**CC0 1.0 Universal（公有领域）** —— 可自由用于个人与商业项目，无需署名。
-- 获取途径（CC0 镜像仓库）：
-  - ShibaInu.glb / Husky.glb / Fox.glb ← https://github.com/trebeljahr/quaternius-showcase（public/glb/animals_pack/）
-  - Cat.glb ← https://github.com/JieeiroSst/Knight-of-the-Garden（assets3d/quaternius/animals/cat.glb）
-- 原始 poly.pizza 页面：Shiba Inu https://poly.pizza/m/y4wdQpg767 · Husky https://poly.pizza/m/wcWiuEqwzq
+- 授权：CC0 1.0 Universal（公有领域）
 
-本项目按 CC0 使用，特此记录来源以表感谢。
+特此记录，感谢 Quaternius 曾提供的优秀 CC0 资源。

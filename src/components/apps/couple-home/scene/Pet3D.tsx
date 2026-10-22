@@ -1,39 +1,36 @@
 'use client';
 
-/* eslint-disable react-hooks/immutability -- R3F/宠物 AI 需要每帧原地修改 runtime 对象（与 Char3D 同模式） */
+/* eslint-disable react-hooks/immutability -- 宠物 AI 需要每帧原地修改 runtime 对象（与 Char3D 同模式） */
 
 /**
- * 情侣小家 3D —— 宠物系统（v5.7 领养 → v6.2 3D建模 → v6.3 立绘 → v6.4 现成模型）
+ * 情侣小屋 3D —— 宠物系统（v5.7 领养 → v6.2 3D建模 → v6.4 现成模型 → v7.0 程序化 Q 版）
  *
- * - v6.4：放弃自绘/立绘，整体换成 **Quaternius Ultimate Animated Animals** 现成
- *   Q 版卡通 3D 模型（CC0，柴犬/哈士奇/小狐狸/奶猫，见 public/pets3d/CREDITS.md），
- *   GLTFLoader + SkeletonUtils.clone + AnimationMixer 播放骨骼动画；
- * - 状态机（clip 按后缀匹配，猫另一套命名见 pet-models）：
- *   溜达 Walk / 冲饭 Gallop|Run / 待机 Idle / 吃饭 Eating / 打盹 HeadLow / 撸宠开心 Gallop_Jump；
- *   clip 间 crossfade 0.25s 平滑切换，走路循环 LoopRepeat；
- * - 首帧自校准：播放 Idle 一帧后按蒙皮包围盒（Box3 precise，含骨骼变形）把模型
- *   统一缩放到 targetH 世界高度并底部贴地 —— 不同来源模型零手工调参；
+ * - v7.0：用户嫌 Quaternius 低多边形不好看，发来 Q 版大头参考图；现成模型站无同款
+ *   免费风格，改为纯 three.js 程序化盲盒风建模（QPet.tsx，见 pet-models 8 品种）；
+ * - 渲染：QPet（大头圆身豆眼腮红 + 程序化动画），本组件只负责 AI 与状态权重；
+ * - 状态机（权重传给 QPet，阻尼混合）：
+ *   溜达 walk / 冲饭 run（靠近饭碗 1.6m 内加速冲刺）/ 待机 idle（呼吸+眨眼）/ 吃饭 eat /
+ *   打盹 nap（压扁耷耳）/ 撸宠开心 happy（连蹦 squash&stretch）；
  * - AI 零改动：随机目标溜达（撞家具绕开 + 卡死换目标）+ 时不时打盹；
  *   喂食跑过去低头吃（🍚 气泡）；点击撸宠开心蹦跳（❤️ 粒子 + 💤 打盹气泡保留）；
  * - 朝向：heading 由移动方向实时阻尼写入（与 Char3D 同一坐标系，绕 Y 轴转身）；
  * - 位置持久化由上层负责（petRT 随存档快照写入 HomeState.pet）。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { CharRT, FurnitureItem } from '../types';
 import { CATALOG, ROOM_X, ROOM_Z, BED_Z0, footprintOf } from '../catalog';
 import { modelOf } from '../pet-models';
+import QPet, { type QPetHandle } from './QPet';
 
 export interface PetData {
   sp: 'cat' | 'dog';
   name: string;
   /** 模型 id（pet-models PET_MODELS；老档旧品种 id 由 modelOf 兜底映射） */
   breed?: string;
-  /** 性别（保留字段；3D 模型不再区分配饰） */
+  /** 性别（保留字段；Q 版模型不区分配饰） */
   gender?: 'boy' | 'girl';
 }
 
@@ -134,105 +131,15 @@ function clampPet(c: CharRT, items: FurnitureItem[]) {
   c.z = THREE.MathUtils.clamp(c.z, -ROOM_Z + 0.32, BED_Z0 - 0.32);
 }
 
-// ---------------- GLB 加载（模块级缓存，重领养不重复下载） ----------------
-
-interface PetGltf {
-  scene: THREE.Group;
-  animations: THREE.AnimationClip[];
-}
-
-const gltfCache = new Map<string, Promise<PetGltf>>();
-
-function loadPetGlb(url: string): Promise<PetGltf> {
-  let p = gltfCache.get(url);
-  if (!p) {
-    p = new Promise<PetGltf>((resolve, reject) => {
-      new GLTFLoader().load(
-        url,
-        (gltf) => resolve({ scene: gltf.scene as unknown as THREE.Group, animations: gltf.animations }),
-        undefined,
-        reject,
-      );
-    });
-    gltfCache.set(url, p);
-  }
-  return p;
-}
-
 export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps) {
   const holder = useRef<THREE.Group>(null);
-  const grip = useRef<THREE.Group>(null);
+  const qRef = useRef<QPetHandle>(null);
   const hearts = useRef<(THREE.Sprite | null)[]>([]);
   const moodSprite = useRef<THREE.Sprite>(null);
   const bowl = useRef<THREE.Group>(null);
 
   // —— 模型（pet-models 注册表；老档旧品种 id 自动兜底） ——
   const model = modelOf(pet.breed);
-
-  // —— GLB 异步加载（加载完成才挂树，避免空引用） ——
-  const [gltf, setGltf] = useState<PetGltf | null>(null);
-  useEffect(() => {
-    let alive = true;
-    setGltf(null);
-    loadPetGlb(model.glb)
-      .then((g) => {
-        if (alive) setGltf(g);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [model.glb]);
-
-  // —— 骨骼克隆 + 动画混合器 + clip 表（按后缀匹配） ——
-  const rig = useMemo(() => {
-    if (!gltf) return null;
-    const obj = skeletonClone(gltf.scene);
-    obj.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (m.isMesh) {
-        m.castShadow = true;
-        m.receiveShadow = false;
-        m.frustumCulled = false; // 蒙皮包围盒易误剔除
-      }
-    });
-    const mixer = new THREE.AnimationMixer(obj);
-    const find = (suffix: string) =>
-      gltf.animations.find((a) => a.name.endsWith(suffix)) ?? null;
-    const clips = {
-      idle: find(model.clips.idle),
-      walk: find(model.clips.walk),
-      run: find(model.clips.run),
-      eat: find(model.clips.eat),
-      nap: find(model.clips.nap),
-      happy: find(model.clips.happy),
-    };
-    return { obj, mixer, clips };
-  }, [gltf, model.clips]);
-
-  useEffect(() => {
-    return () => {
-      rig?.mixer.stopAllAction();
-      rig?.mixer.uncacheRoot(rig.obj);
-    };
-  }, [rig]);
-
-  // —— 当前动画状态（crossfade 切换） ——
-  const curClip = useRef<{ key: string; action: THREE.AnimationAction } | null>(null);
-  const playClip = (key: keyof typeof rig.clips, fade = 0.25, loop = true) => {
-    if (!rig) return;
-    const clip = rig.clips[key];
-    if (!clip) return;
-    if (curClip.current?.key === key) return;
-    const next = rig.mixer.clipAction(clip);
-    next.reset();
-    next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
-    next.clampWhenFinished = !loop;
-    next.setEffectiveTimeScale(1).setEffectiveWeight(1);
-    next.fadeIn(fade).play();
-    curClip.current?.action.fadeOut(fade);
-    curClip.current = { key, action: next };
-  };
 
   const bubbleTex = useMemo(
     () => ({
@@ -245,15 +152,13 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
   );
   useEffect(() => () => Object.values(bubbleTex).forEach((t) => t.dispose()), [bubbleTex]);
 
-  /** 模型头顶世界高度（自校准后 ≈ model.targetH），供气泡/爱心/阴影定位 */
+  /** 模型头顶世界高度（QPet 按比例精确建模 ≈ model.targetH），供气泡/爱心定位 */
   const hRef = useRef(model.targetH);
 
   /** 撸宠爱心粒子（点击时触发，本地计时） */
   const petAt = useRef(0);
   const eatAt = useRef(0);
   const dozedOff = useRef(0);
-  /** 首帧自校准（等待 mixer 至少跑过一帧再量包围盒） */
-  const calibTick = useRef(0);
   /** 卡死检测：目标点被夹进家具内永远到不了 → 超时主动换目标 */
   const stuckPrev = useRef({ x: 0, z: 0 });
   const stuckSince = useRef(0);
@@ -292,8 +197,13 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
     // —— AI：喂食优先 → 溜达 → 打盹（v5.7 原逻辑，零改动） ——
     const feed = feedRef.current;
     const now = performance.now();
-    const eating = feed && now - feed.at < 9000 && Math.hypot(c.x - feed.x, c.z - feed.z) < 0.22;
+    const atBowl = feed && Math.hypot(c.x - feed.x, c.z - feed.z) < 0.22;
+    const eating = feed && now - feed.at < 9000 && atBowl;
     if (eating && eatAt.current === 0) eatAt.current = now;
+
+    /** 冲饭冲刺：碗还在且没吃完、正在赶路、距碗 1.6m 内 */
+    const rushing =
+      !!feed && !eatingDone(now) && !eating && !!c.target && Math.hypot(c.x - feed.x, c.z - feed.z) < 1.6;
 
     if (c.target) {
       const dx = c.target.x - c.x;
@@ -314,7 +224,7 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
         stuckPrev.current = { x: c.x, z: c.z };
         stuckSince.current = now;
       } else {
-        const sp = (eating ? 2.1 : 0.85) * model.speed * dt;
+        const sp = (rushing ? 2.1 : 0.85) * model.speed * dt;
         c.x += (dx / d) * sp;
         c.z += (dz / d) * sp;
         c.moving = true;
@@ -354,40 +264,20 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
     hz.position.set(c.x, 0, c.z);
     hz.rotation.y = c.heading;
 
-    // —— 动画状态机：走路/冲饭/吃饭/打盹/撸宠/待机 ——
+    // —— 状态权重 → QPet 程序化动画 ——
     const eatingNow = !!eating || (eatAt.current > 0 && now - eatAt.current < 2600);
     if (eatingDone(now)) eatAt.current = 0;
-    const walking = c.moving && !eatingNow;
+    const walking = c.moving && !eatingNow && !rushing;
     const happyNow = !!petAt.current && now - petAt.current < 1200;
     const dozing = !!dozedOff.current && now - dozedOff.current < 3500 && !c.moving && !eatingNow;
 
-    if (rig) {
-      // 自校准：先播 idle 让蒙皮到位，再按包围盒缩放贴地（首两帧完成）
-      if (calibTick.current < 2) {
-        rig.mixer.update(dt);
-        calibTick.current += 1;
-        if (calibTick.current === 2) {
-          const box = new THREE.Box3().setFromObject(rig.obj, true);
-          if (!box.isEmpty()) {
-            const size = box.getSize(new THREE.Vector3());
-            if (size.y > 0.01) {
-              const s = model.targetH / size.y;
-              grip.current?.scale.setScalar(s);
-              if (grip.current) grip.current.position.y = -box.min.y * s;
-              hRef.current = model.targetH;
-            }
-          }
-        }
-      } else {
-        rig.mixer.update(dt);
-      }
-
-      if (happyNow) playClip('happy', 0.12);
-      else if (eatingNow) playClip('eat');
-      else if (dozing) playClip('nap', 0.5);
-      else if (walking) playClip(eating ? 'run' : 'walk');
-      else playClip('idle', 0.4);
-    }
+    qRef.current?.tick(t, dt, {
+      walk: walking ? 1 : 0,
+      run: rushing && c.moving ? 1 : 0,
+      eat: eatingNow ? 1 : 0,
+      nap: dozing ? 1 : 0,
+      happy: happyNow ? 1 : 0,
+    });
 
     const h = hRef.current;
 
@@ -429,7 +319,7 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
 
   return (
     <group>
-      {/* 宠物本体（holder = AI 坐标系；grip = 自校准缩放贴地层） */}
+      {/* 宠物本体（holder = AI 坐标系；QPet 内部自带弹跳/摇摆动画层） */}
       <group
         ref={holder}
         onClick={handleTap}
@@ -441,10 +331,8 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
           <meshBasicMaterial map={bubbleTex.shadow} transparent depthWrite={false} />
         </mesh>
 
-        {/* Quaternius Q版卡通模型（骨骼动画；加载完成才挂树） */}
-        <group ref={grip} visible={!!rig}>
-          {rig && <primitive object={rig.obj} />}
-        </group>
+        {/* 程序化 Q 版盲盒风宠物（v7.0） */}
+        <QPet ref={qRef} spec={model.spec} targetH={model.targetH} />
 
         {/* 心情气泡（🍚 吃饭 / 💤 打盹） */}
         <sprite ref={moodSprite} position={[0, 0.5, 0]} scale={[0.2, 0.2, 1]} visible={false}>
