@@ -21545,3 +21545,23 @@ Stage Summary:
 - 宠物系统 v8.1：品种 2→3（新增奶油垂耳幼犬「布丁」）、全模型支持毛色变体（领养可选+档案即时换）、交互特效三层粒子（星星/饭粒/Zzz）、WebAudio 合成音效全套带面板开关、GLB 预热+加载胶囊；两处关键 bug 修复（蒙皮 raycast 代理盒、shader uniform 声明）
 - 新增资产 puppy.glb 2.86MB（pets3d 共 8.9MB），全部许可合规（CC-BY 4.0 已记 CREDITS.md）
 - 最终存档：柴犬「炭团」原色在场
+
+---
+Task ID: pull-repo-1022
+Agent: Z.ai Code (main)
+Task: 从 GitHub 拉取 cczzff468/5200 仓库到沙箱工作目录，部署并验证可运行，等待用户提出修改/新增功能需求
+
+Work Log:
+- git clone（带 PAT 鉴权）https://github.com/cczzff468/5200.git → /home/z/repo-5200（main @ 3c9a83f，v8.1 宠物系统五项优化）
+- 同步工作树到 /home/z/my-project（排除 .git/node_modules/.next/dev.log/db/.env），并用仓库 .git 接管沙箱模板 git 历史，origin 已带 PAT 可直接 push
+- 保留沙箱 .env（DATABASE_URL=file:/home/z/my-project/db/custom.db），复制仓库 db/custom.db（含用户历史数据）
+- bun install 主项目（85 packages）+ mini-services/netease-api（468 packages）
+- bun run db:push → 数据库已同步，Prisma Client 生成成功
+- bun run dev 启动 3000 端口；instrumentation 自动拉起 ncm-keeper → netease-api 3010 端口 200
+- agent-browser 实机验证：锁屏（时间/天气/日历组件）→ 上滑解锁 → 主屏幕（天气小组件 7°晴 + 8 App 图标 + Dock）→ 信息 App → 小助手会话 → 发送「你好，请用一句话介绍你自己」→ AI 正常回复 8" 语音消息（POST /api/chat 200 in 959ms）
+- console 零 error；dev.log 仅 instrumentation Edge Runtime 已知良性警告（代码首行已 return 规避，与原仓库一致）
+
+Stage Summary:
+- 拾光小屋 v8.1 已在沙箱完整跑通：Next.js 3000 + netease-api 3010 双服务在线，核心 AI 聊天链路（发消息→LLM→TTS 语音回复）端到端可用
+- git 仓库就绪：/home/z/my-project 即用户仓库克隆（含全部历史），改动后可 commit + push 回 GitHub
+- 当前状态：等待用户指定要修改或新增的功能
