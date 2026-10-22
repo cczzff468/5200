@@ -21462,3 +21462,23 @@ Work Log:
 
 Stage Summary:
 - 工作区已完整恢复到 GitHub 最新状态（main=831dc50），依赖/数据库/env/mini-service 全部就绪，可直接开发新功能；改动可随时 commit + push 回 origin/main
+
+---
+Task ID: pet-3d-models-1022
+Agent: Z.ai Code (main)
+Task: 宠物系统改为现成 Q 版卡通 3D 模型（用户需求：去 GitHub 等找现成模型，有什么用什么，品种系统不要了）
+
+Work Log:
+- 资源调研：poly.pizza 直连被 Cloudflare 拦（API 需 key）、three.js 仓库已移除 Fox 模型；GitHub code search 定位到两个 CC0 镜像仓库：
+  - trebeljahr/quaternius-showcase（1545 个 Quaternius GLB 全镜像）→ animals_pack 拿到 ShibaInu/Husky/Fox
+  - JieeiroSst/Knight-of-the-Garden → assets3d/quaternius/animals 拿到 cat.glb
+  - 模型为 Quaternius Ultimate Animated Animals Pack，CC0 公有领域（记录来源至 public/pets3d/CREDITS.md）
+- Python 解析 GLB：4 模型均带骨骼动画（Idle/Walk/Gallop/Eating/Idle_2_HeadLow/Gallop_Jump 等；cat 另一套命名 Run/Idle_Eating/Jump_Loop，clip 名三重前缀）；ShibaInu/Husky 静态 rest pose 悬浮 y≈6.16，需运行时校准
+- 新增 pet-models.ts 替换 pet-breeds.ts（删除 11 品种）：4 款模型注册表（glb 路径/clip 后缀映射/targetH/speed/emoji 卡片色），LEGACY_MAP 兼容老档旧品种 id（husky 直通，其余狗→shiba，猫→cat）；修复 modelOf 新 id 直查 bug（fox/cat 起初被兜底映射成 shiba）
+- 重写 scene/Pet3D.tsx：GLTFLoader（模块级缓存）+ SkeletonUtils.clone + AnimationMixer 状态机（walk/run/eat/nap/happy/idle crossfade 0.25s）；首帧自校准（播 Idle 一帧后 Box3.setFromObject precise 按蒙皮包围盒缩放到 targetH 并贴地，对 rest-pose 悬浮模型零手工调参）；frustumCulled=false 防蒙皮误剔除；保留 v5.7 AI 零改动（随机溜达/卡死换目标/喂食冲碗/打盹/撸宠爱心粒子/🍚💤气泡/饭碗/软阴影）
+- CoupleHome.tsx：领养向导 3 步（种类→品种→性别名）压缩为 2 步（4 模型 emoji+渐变卡 → 性别+名字）；档案卡 img→emoji；F2 按钮 title 用 modelOf；types.ts 注释更新
+- agent-browser 实机验证：领养面板 4 卡片渲染 ✓ → 领养小狐狸 → Fox.glb 200、比例正确贴地、自主溜达转向 ✓ → 喂食（饭碗出现、狐狸跑到碗边进食）✓ → 点击撸宠（toast「开心地蹭了蹭你的手心」+ 开心打滚动画）✓ → 换领养奶猫 → Cat.glb 200、深色小猫 Walk 动画双帧对比确认 ✓；console 零错误
+- lint：改动文件零错误（仓库既有 54 个错误在 meituan/taobao 等无关文件）
+
+Stage Summary:
+- 宠物从「AI 立绘 billboard」全面升级为「现成 CC0 Q版卡通 3D 骨骼动画模型」：4 款（柴犬🐕/哈士奇🐺/小狐狸🦊/奶猫🐱），真 3D 可随相机任意角度观察，动画丰富（走/跑/吃/睡/开心跳）；品种系统按用户要求移除，老档自动兼容；新增资产 1.9MB GLB + CREDITS

@@ -3,35 +3,38 @@
 /* eslint-disable react-hooks/immutability -- R3F/宠物 AI 需要每帧原地修改 runtime 对象（与 Char3D 同模式） */
 
 /**
- * 情侣小家 3D —— 宠物系统（v5.7 领养 → v5.9 品种 → v6.1/v6.2 3D建模 → v6.3 Q版立绘）
+ * 情侣小家 3D —— 宠物系统（v5.7 领养 → v6.2 3D建模 → v6.3 立绘 → v6.4 现成模型）
  *
- * - 11 个真实品种（../pet-breeds PET_BREEDS）：狗 柴犬/博美/金毛/哈士奇/柯基，
- *   猫 橘猫/布偶/三花/狸花/金渐层/奶牛猫；
- * - v6.3 渲染：AI 生成的 Q 版 3D 手办风立绘（public/pets/chibi/< breedId>-<gender>.png，
- *   绿幕抠图透明底），THREE.Sprite 全向 billboard —— 相机无论方位角/俯仰如何跟随，
- *   宠物始终完整正对镜头；品种特征（毛色/花纹/耳尾）与性别配饰（boy 蓝项圈金铃铛 /
- *   girl 粉蝴蝶结）全部由立绘画师级还原，和真实品种一模一样；
- * - 方向：随移动 dx 自动镜像翻转（阻尼穿过 0 时天然呈现「转身」效果）；
- * - 动画：走路蹦跳起伏 + 屏面歪头小碎步 / 待机呼吸 / 吃饭压扁拱碗 / 打盹歪倒(💤) /
- *   撸宠开心蹦跳(❤️)；
- * - AI 零改动：随机目标溜达（撞家具绕开）+ 时不时打盹；喂食跑过去低头吃（🍚 气泡）；
+ * - v6.4：放弃自绘/立绘，整体换成 **Quaternius Ultimate Animated Animals** 现成
+ *   Q 版卡通 3D 模型（CC0，柴犬/哈士奇/小狐狸/奶猫，见 public/pets3d/CREDITS.md），
+ *   GLTFLoader + SkeletonUtils.clone + AnimationMixer 播放骨骼动画；
+ * - 状态机（clip 按后缀匹配，猫另一套命名见 pet-models）：
+ *   溜达 Walk / 冲饭 Gallop|Run / 待机 Idle / 吃饭 Eating / 打盹 HeadLow / 撸宠开心 Gallop_Jump；
+ *   clip 间 crossfade 0.25s 平滑切换，走路循环 LoopRepeat；
+ * - 首帧自校准：播放 Idle 一帧后按蒙皮包围盒（Box3 precise，含骨骼变形）把模型
+ *   统一缩放到 targetH 世界高度并底部贴地 —— 不同来源模型零手工调参；
+ * - AI 零改动：随机目标溜达（撞家具绕开 + 卡死换目标）+ 时不时打盹；
+ *   喂食跑过去低头吃（🍚 气泡）；点击撸宠开心蹦跳（❤️ 粒子 + 💤 打盹气泡保留）；
+ * - 朝向：heading 由移动方向实时阻尼写入（与 Char3D 同一坐标系，绕 Y 轴转身）；
  * - 位置持久化由上层负责（petRT 随存档快照写入 HomeState.pet）。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { CharRT, FurnitureItem } from '../types';
 import { CATALOG, ROOM_X, ROOM_Z, BED_Z0, footprintOf } from '../catalog';
-import { breedOf, type PetGender } from '../pet-breeds';
+import { modelOf } from '../pet-models';
 
 export interface PetData {
   sp: 'cat' | 'dog';
   name: string;
-  /** 品种 id（PET_BREEDS；缺省/未知时按 species 兜底：cat→橘猫 dog→柴犬） */
+  /** 模型 id（pet-models PET_MODELS；老档旧品种 id 由 modelOf 兜底映射） */
   breed?: string;
-  /** 性别：boy / girl（立绘自带配饰：boy 蓝项圈 / girl 粉蝴蝶结）；缺省按 boy */
-  gender?: PetGender;
+  /** 性别（保留字段；3D 模型不再区分配饰） */
+  gender?: 'boy' | 'girl';
 }
 
 export interface Pet3DProps {
@@ -44,6 +47,22 @@ export interface Pet3DProps {
   feedRef: React.RefObject<{ x: number; z: number; at: number } | null>;
   /** 点击撸宠回调（上层弹 toast） */
   onTap?: () => void;
+}
+
+/** 接地软阴影贴图（径向渐变圆） */
+function makeShadowTexture(): THREE.CanvasTexture {
+  const S = 128;
+  const cv = document.createElement('canvas');
+  cv.width = S;
+  cv.height = S;
+  const ctx = cv.getContext('2d')!;
+  const g = ctx.createRadialGradient(S / 2, S / 2, 4, S / 2, S / 2, S / 2);
+  g.addColorStop(0, 'rgba(60,50,44,0.5)');
+  g.addColorStop(0.6, 'rgba(60,50,44,0.22)');
+  g.addColorStop(1, 'rgba(60,50,44,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S, S);
+  return new THREE.CanvasTexture(cv);
 }
 
 /** 爱心/饭粒/瞌睡气泡贴图（canvas 手绘） */
@@ -94,25 +113,9 @@ function makeBubbleTexture(kind: 'heart' | 'rice' | 'zzz'): THREE.CanvasTexture 
   return tex;
 }
 
-/** 接地软阴影贴图（径向渐变圆） */
-function makeShadowTexture(): THREE.CanvasTexture {
-  const S = 128;
-  const cv = document.createElement('canvas');
-  cv.width = S;
-  cv.height = S;
-  const ctx = cv.getContext('2d')!;
-  const g = ctx.createRadialGradient(S / 2, S / 2, 4, S / 2, S / 2, S / 2);
-  g.addColorStop(0, 'rgba(60,50,44,0.5)');
-  g.addColorStop(0.6, 'rgba(60,50,44,0.22)');
-  g.addColorStop(1, 'rgba(60,50,44,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, S, S);
-  return new THREE.CanvasTexture(cv);
-}
-
-/** 宠物 Living-room 边界 + 家具避障（简化版碰撞）；margin 随体型 scale 微调 */
-function clampPet(c: CharRT, items: FurnitureItem[], scale = 1) {
-  const m = 0.14 * scale;
+/** 宠物 Living-room 边界 + 家具避障（简化版碰撞） */
+function clampPet(c: CharRT, items: FurnitureItem[]) {
+  const m = 0.14;
   for (const it of items) {
     const e = CATALOG[it.kind];
     if (!e || e.flat || (it.y ?? 0) > 0.45) continue;
@@ -131,52 +134,105 @@ function clampPet(c: CharRT, items: FurnitureItem[], scale = 1) {
   c.z = THREE.MathUtils.clamp(c.z, -ROOM_Z + 0.32, BED_Z0 - 0.32);
 }
 
-/** 立绘基准世界高度（×品种 look.scale；狗大猫小沿用品种体型） */
-const SPRITE_H = 0.48;
+// ---------------- GLB 加载（模块级缓存，重领养不重复下载） ----------------
+
+interface PetGltf {
+  scene: THREE.Group;
+  animations: THREE.AnimationClip[];
+}
+
+const gltfCache = new Map<string, Promise<PetGltf>>();
+
+function loadPetGlb(url: string): Promise<PetGltf> {
+  let p = gltfCache.get(url);
+  if (!p) {
+    p = new Promise<PetGltf>((resolve, reject) => {
+      new GLTFLoader().load(
+        url,
+        (gltf) => resolve({ scene: gltf.scene as unknown as THREE.Group, animations: gltf.animations }),
+        undefined,
+        reject,
+      );
+    });
+    gltfCache.set(url, p);
+  }
+  return p;
+}
 
 export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps) {
   const holder = useRef<THREE.Group>(null);
-  const petSprite = useRef<THREE.Sprite>(null);
+  const grip = useRef<THREE.Group>(null);
   const hearts = useRef<(THREE.Sprite | null)[]>([]);
   const moodSprite = useRef<THREE.Sprite>(null);
   const bowl = useRef<THREE.Group>(null);
 
-  // —— 品种与性别（决定立绘 URL）——
-  const breed = breedOf(pet.sp, pet.breed);
-  const gender: PetGender = pet.gender ?? 'boy';
-  // v= 立绘版本号（素材更新时递增，防浏览器缓存旧抠图）
-  const url = `/pets/chibi/${breed.id}-${gender}.png?v=66`;
+  // —— 模型（pet-models 注册表；老档旧品种 id 自动兜底） ——
+  const model = modelOf(pet.breed);
 
-  // —— 立绘纹理（异步加载，加载完再显示避免黑块闪烁）——
-  const [ready, setReady] = useState(false);
-  const [aspect, setAspect] = useState(1);
-  const tex = useMemo(() => {
-    const t = new THREE.TextureLoader().load(url, (loaded) => {
-      loaded.colorSpace = THREE.SRGBColorSpace;
-      loaded.generateMipmaps = false;
-      loaded.minFilter = THREE.LinearFilter;
-      const img = loaded.image;
-      if (img && img.width > 0) setAspect(img.width / img.height);
-      setReady(true);
-    });
-    t.colorSpace = THREE.SRGBColorSpace;
-    return t;
-  }, [url]);
+  // —— GLB 异步加载（加载完成才挂树，避免空引用） ——
+  const [gltf, setGltf] = useState<PetGltf | null>(null);
   useEffect(() => {
-    setReady(false);
-    return () => tex.dispose();
-  }, [tex]);
-  const mat = useMemo(
-    () =>
-      new THREE.SpriteMaterial({
-        map: tex,
-        transparent: true,
-        alphaTest: 0.06,
-        depthWrite: false,
-      }),
-    [tex],
-  );
-  useEffect(() => () => mat.dispose(), [mat]);
+    let alive = true;
+    setGltf(null);
+    loadPetGlb(model.glb)
+      .then((g) => {
+        if (alive) setGltf(g);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [model.glb]);
+
+  // —— 骨骼克隆 + 动画混合器 + clip 表（按后缀匹配） ——
+  const rig = useMemo(() => {
+    if (!gltf) return null;
+    const obj = skeletonClone(gltf.scene);
+    obj.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) {
+        m.castShadow = true;
+        m.receiveShadow = false;
+        m.frustumCulled = false; // 蒙皮包围盒易误剔除
+      }
+    });
+    const mixer = new THREE.AnimationMixer(obj);
+    const find = (suffix: string) =>
+      gltf.animations.find((a) => a.name.endsWith(suffix)) ?? null;
+    const clips = {
+      idle: find(model.clips.idle),
+      walk: find(model.clips.walk),
+      run: find(model.clips.run),
+      eat: find(model.clips.eat),
+      nap: find(model.clips.nap),
+      happy: find(model.clips.happy),
+    };
+    return { obj, mixer, clips };
+  }, [gltf, model.clips]);
+
+  useEffect(() => {
+    return () => {
+      rig?.mixer.stopAllAction();
+      rig?.mixer.uncacheRoot(rig.obj);
+    };
+  }, [rig]);
+
+  // —— 当前动画状态（crossfade 切换） ——
+  const curClip = useRef<{ key: string; action: THREE.AnimationAction } | null>(null);
+  const playClip = (key: keyof typeof rig.clips, fade = 0.25, loop = true) => {
+    if (!rig) return;
+    const clip = rig.clips[key];
+    if (!clip) return;
+    if (curClip.current?.key === key) return;
+    const next = rig.mixer.clipAction(clip);
+    next.reset();
+    next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    next.clampWhenFinished = !loop;
+    next.setEffectiveTimeScale(1).setEffectiveWeight(1);
+    next.fadeIn(fade).play();
+    curClip.current?.action.fadeOut(fade);
+    curClip.current = { key, action: next };
+  };
 
   const bubbleTex = useMemo(
     () => ({
@@ -189,18 +245,15 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
   );
   useEffect(() => () => Object.values(bubbleTex).forEach((t) => t.dispose()), [bubbleTex]);
 
-  /** 立绘世界高度（头顶），供气泡/爱心/阴影定位 */
-  const h = SPRITE_H * breed.look.scale;
+  /** 模型头顶世界高度（自校准后 ≈ model.targetH），供气泡/爱心/阴影定位 */
+  const hRef = useRef(model.targetH);
 
   /** 撸宠爱心粒子（点击时触发，本地计时） */
   const petAt = useRef(0);
   const eatAt = useRef(0);
   const dozedOff = useRef(0);
-  /** 镜像翻转：1 = 立绘原向，-1 = 镜像（阻尼过渡呈现转身）；迟滞带防抖动 */
-  const flipCur = useRef(1);
-  const flipTarget = useRef(1);
-  const squash = useRef(1);
-  const lastX = useRef(0);
+  /** 首帧自校准（等待 mixer 至少跑过一帧再量包围盒） */
+  const calibTick = useRef(0);
   /** 卡死检测：目标点被夹进家具内永远到不了 → 超时主动换目标 */
   const stuckPrev = useRef({ x: 0, z: 0 });
   const stuckSince = useRef(0);
@@ -227,8 +280,6 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
   /** 投喂是否已吃完（开吃满 2.6 秒即吃完） */
   const eatingDone = (now: number) =>
     !feedRef.current || (eatAt.current > 0 && now - eatAt.current > 2600);
-
-  const damp = THREE.MathUtils.damp;
 
   useFrame((state, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
@@ -263,7 +314,7 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
         stuckPrev.current = { x: c.x, z: c.z };
         stuckSince.current = now;
       } else {
-        const sp = (eating ? 2.1 : 0.85) * dt;
+        const sp = (eating ? 2.1 : 0.85) * model.speed * dt;
         c.x += (dx / d) * sp;
         c.z += (dz / d) * sp;
         c.moving = true;
@@ -299,55 +350,46 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
         }
       }
     }
-    clampPet(c, itemsRef.current ?? [], breed.look.scale);
+    clampPet(c, itemsRef.current ?? []);
     hz.position.set(c.x, 0, c.z);
     hz.rotation.y = c.heading;
 
-    // —— 立绘动画：蹦跳起伏 / 呼吸 / 压扁吃饭打盹 / 屏面歪头小碎步 / 镜像转身 ——
+    // —— 动画状态机：走路/冲饭/吃饭/打盹/撸宠/待机 ——
     const eatingNow = !!eating || (eatAt.current > 0 && now - eatAt.current < 2600);
     if (eatingDone(now)) eatAt.current = 0;
     const walking = c.moving && !eatingNow;
     const happyNow = !!petAt.current && now - petAt.current < 1200;
     const dozing = !!dozedOff.current && now - dozedOff.current < 3500 && !c.moving && !eatingNow;
 
-    const bob = walking ? Math.abs(Math.sin(t * 12)) * 0.02 : Math.sin(t * 2.1) * 0.006 + 0.004;
-    let hop = 0;
-    if (happyNow) {
-      const ph = ((now - petAt.current) % 300) / 300;
-      hop = Math.abs(Math.sin(ph * Math.PI)) * 0.05;
+    if (rig) {
+      // 自校准：先播 idle 让蒙皮到位，再按包围盒缩放贴地（首两帧完成）
+      if (calibTick.current < 2) {
+        rig.mixer.update(dt);
+        calibTick.current += 1;
+        if (calibTick.current === 2) {
+          const box = new THREE.Box3().setFromObject(rig.obj, true);
+          if (!box.isEmpty()) {
+            const size = box.getSize(new THREE.Vector3());
+            if (size.y > 0.01) {
+              const s = model.targetH / size.y;
+              grip.current?.scale.setScalar(s);
+              if (grip.current) grip.current.position.y = -box.min.y * s;
+              hRef.current = model.targetH;
+            }
+          }
+        }
+      } else {
+        rig.mixer.update(dt);
+      }
+
+      if (happyNow) playClip('happy', 0.12);
+      else if (eatingNow) playClip('eat');
+      else if (dozing) playClip('nap', 0.5);
+      else if (walking) playClip(eating ? 'run' : 'walk');
+      else playClip('idle', 0.4);
     }
-    const br = !walking ? Math.sin((t * Math.PI * 2) / 1.7) * 0.012 : 0;
 
-    // 压扁：吃饭 0.95（拱碗）/ 打盹 0.9（歪倒），其余 1
-    const squashTarget = eatingNow ? 0.95 : dozing ? 0.9 : 1;
-    squash.current = damp(squash.current, squashTarget, 8, dt);
-
-    // 镜像：面向屏幕上的移动方向（立绘默认朝右）；带迟滞带防边界抖动
-    const mdx = c.x - lastX.current;
-    if (walking) {
-      if (flipTarget.current === 1 && mdx < -0.004) flipTarget.current = -1;
-      else if (flipTarget.current === -1 && mdx > 0.004) flipTarget.current = 1;
-    }
-    lastX.current = c.x;
-    flipCur.current = damp(flipCur.current, flipTarget.current, 11, dt);
-
-    // 屏面内歪头小碎步：走路摇摆 / 打盹歪倒 / 吃饭拱动 / 待机轻晃
-    const tilt = walking
-      ? Math.sin(t * 12) * 0.05
-      : dozing
-        ? 0.1
-        : eatingNow
-          ? Math.sin(t * 9) * 0.05
-          : Math.sin(t * 1.4) * 0.015;
-    mat.rotation = tilt;
-
-    if (petSprite.current) {
-      const sy = squash.current;
-      const w = h * aspect;
-      petSprite.current.position.y = h / 2 + bob + hop - (eatingNow ? 0.012 : 0) - (dozing ? 0.02 : 0);
-      // 压扁时横向补体积（果冻感）
-      petSprite.current.scale.set(w * flipCur.current * (1 + (1 - sy) * 0.55), h * sy * (1 + br), 1);
-    }
+    const h = hRef.current;
 
     // —— 心情气泡（🍚 吃饭 / 💤 打盹；撸宠爱心由粒子表达） ——
     if (moodSprite.current) {
@@ -387,7 +429,7 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
 
   return (
     <group>
-      {/* 宠物本体（holder = AI 坐标系；立绘 sprite 始终面向相机） */}
+      {/* 宠物本体（holder = AI 坐标系；grip = 自校准缩放贴地层） */}
       <group
         ref={holder}
         onClick={handleTap}
@@ -395,17 +437,17 @@ export default function Pet3D({ pet, rt, itemsRef, feedRef, onTap }: Pet3DProps)
       >
         {/* 接地软阴影 */}
         <mesh position={[0, 0.012, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <planeGeometry args={[h * 1.12, h * 0.88]} />
+          <planeGeometry args={[0.46, 0.38]} />
           <meshBasicMaterial map={bubbleTex.shadow} transparent depthWrite={false} />
         </mesh>
 
-        {/* Q 版品种立绘（绿幕抠图透明底；加载完成才显示） */}
-        <sprite ref={petSprite} position={[0, h / 2, 0]} scale={[h, h, 1]} visible={ready}>
-          <primitive object={mat} attach="material" />
-        </sprite>
+        {/* Quaternius Q版卡通模型（骨骼动画；加载完成才挂树） */}
+        <group ref={grip} visible={!!rig}>
+          {rig && <primitive object={rig.obj} />}
+        </group>
 
         {/* 心情气泡（🍚 吃饭 / 💤 打盹） */}
-        <sprite ref={moodSprite} position={[0, h + 0.13, 0]} scale={[0.2, 0.2, 1]} visible={false}>
+        <sprite ref={moodSprite} position={[0, 0.5, 0]} scale={[0.2, 0.2, 1]} visible={false}>
           <spriteMaterial map={bubbleTex.rice} transparent depthWrite={false} />
         </sprite>
 
