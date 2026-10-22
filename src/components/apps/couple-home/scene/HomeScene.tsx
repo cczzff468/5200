@@ -46,7 +46,6 @@ import {
   resolveWinPos,
 } from '../catalog';
 import type { CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, HomeMode } from '../types';
-import Pet3D, { type PetData } from './Pet3D';
 
 // ---------------- 对外 Props ----------------
 
@@ -126,12 +125,6 @@ export interface HomeSceneProps {
   outfit?: number;
   /** 正在进行的家具动作（灶台蒸汽 / 乐器音符联动） */
   activeAct?: { type: CharAction['type']; itemId: string; active: boolean } | null;
-  /** 宠物（null = 未领养）：数据 + 运行时 ref + 点击回调 + 喂食目标 */
-  pet?: PetData | null;
-  petRT?: RefObject<CharRT>;
-  petFeedRef: RefObject<{ x: number; z: number; at: number } | null>;
-  onPetModelReady?: () => void;
-  onPetTap?: () => void;
   /** 访客（邀请的 AI 联系人）：运行时 ref + 名牌（null = 无访客） */
   guestRT?: RefObject<CharRT | null>;
   guestName?: string | null;
@@ -1038,7 +1031,7 @@ export default function HomeScene(props: HomeSceneProps) {
     floorColBal, wallColBal,
     ceilCol, ceilColBed, ceilColK, ceilColB,
     doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, onToggleDoor, onToggleKitchenDoor, onToggleBathDoor, onToggleBalconyDoor,
-    pet, petRT, petFeedRef, onPetModelReady, onPetTap, guestRT, guestName, musicPlaying, weatherFx,
+    guestRT, guestName, musicPlaying, weatherFx,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
   } = props;
 
@@ -1234,9 +1227,6 @@ export default function HomeScene(props: HomeSceneProps) {
       <Char3D rt={taRT} who="partner" style={charStyle} />
       {guestRT?.current && (
         <Char3D rt={guestRT.current} who="guest" style={charStyle} guestName={guestName ?? undefined} />
-      )}
-      {pet && petRT && (
-        <Pet3D pet={pet} rt={petRT} itemsRef={itemsRef} feedRef={petFeedRef} onTap={onPetTap} onModelReady={onPetModelReady} />
       )}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       <WeatherFX kind={weatherFx ?? 'clear'} win={win} winPos={winPos} />

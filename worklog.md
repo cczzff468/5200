@@ -21565,3 +21565,20 @@ Stage Summary:
 - 拾光小屋 v8.1 已在沙箱完整跑通：Next.js 3000 + netease-api 3010 双服务在线，核心 AI 聊天链路（发消息→LLM→TTS 语音回复）端到端可用
 - git 仓库就绪：/home/z/my-project 即用户仓库克隆（含全部历史），改动后可 commit + push 回 GitHub
 - 当前状态：等待用户指定要修改或新增的功能
+
+---
+Task ID: remove-pet-1022
+Agent: Z.ai Code (main)
+Task: 应用户要求删除拾光小屋宠物系统（v8.0-8.1 全部 3D 宠物功能）
+
+Work Log:
+- 删除整文件：public/pets3d/（3 GLB + CREDITS.md，8.9MB）、pet-models.ts、scene/Pet3D.tsx、scene/PetModelView.tsx、sfx.ts（6 音全宠物向）
+- CoupleHome.tsx（3627→3249 行）：移除 pet/adopt*/sfxOn/pvReady 状态与 useEffect 预热、petRT/petFeedRef/petRef refs、存档快照 pet 字段、adoptHome 恢复逻辑、6 个宠物回调（领养/喂食/送走/撸宠/音效开关/换毛色）、HUD 爪印按钮、宠物面板整段（领养向导+档案）、加载胶囊；清理 PawPrint/Volume2/VolumeX import
+- HomeScene.tsx：移除 Pet3D import、5 个宠物 props、解构、渲染块
+- types.ts：移除 HomeState.pet；api/couple-home/route.ts：移除 HomePayload.pet + normalizeHome 宠物清洗块（旧档 pet 数据由白名单自动丢弃，零迁移成本）
+- 验证：tsc --noEmit 全绿、eslint 4 文件 0 告警、agent-browser 实机（拾光小屋正常打开，HUD 无宠物按钮，3D 场景/摇杆/装修正常），POST /api/couple-home 200（无 pet 字段存档写入成功）
+
+Stage Summary:
+- 宠物系统完整移除（前端 UI/3D 渲染/音效/资产/存档字段/API 清洗五层），-9MB 资产、-约 1500 行代码
+- 拾光小屋保留功能：装修/家具商店、生活模式、做饭小游戏、点歌、钢琴吉他、五子棋、拍照模式、邀请 AI 访客、天气联动、昼夜系统
+- 待办：向用户提供拾光小屋优化/新增清单供勾选

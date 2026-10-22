@@ -82,8 +82,6 @@ interface HomePayload {
   mealReady?: boolean;
   /** 做饭小游戏：本次上桌的菜名 */
   mealName?: string;
-  /** 宠物系统：已领养的宠物 */
-  pet?: { sp?: string; breed?: string; name?: string; gender?: string; x?: number; z?: number; fedAt?: number };
   /** 阳台门开态（v5.7） */
   balconyDoorOpen?: boolean;
   /** 阳台地板/墙自定义色 */
@@ -261,19 +259,6 @@ function normalizeHome(raw: unknown): HomePayload | null {
     outfit: clampInt(r.outfit, 0, 9) ?? undefined,
     mealReady: r.mealReady === true,
     mealName: cleanStr(r.mealName, 16) || undefined,
-    pet: (() => {
-      if (!r.pet || typeof r.pet !== 'object') return undefined;
-      const p = r.pet as Record<string, unknown>;
-      const sp = p.sp === 'cat' || p.sp === 'dog' ? p.sp : undefined;
-      const name = cleanStr(p.name, 8);
-      const x = clampCoord(p.x);
-      const z = clampCoord(p.z);
-      if (!sp || !name || x == null || z == null) return undefined;
-      const fedAt = typeof p.fedAt === 'number' && Number.isFinite(p.fedAt) ? Math.round(p.fedAt) : undefined;
-      const breed = typeof p.breed === 'string' && p.breed.length <= 24 ? p.breed : undefined;
-      const gender = p.gender === 'boy' || p.gender === 'girl' ? p.gender : undefined;
-      return { sp, breed, name, gender, x, z, fedAt };
-    })(),
     balconyDoorOpen: r.balconyDoorOpen === true,
     floorColBal: cleanHex(r.floorColBal),
     wallColBal: cleanHex(r.wallColBal),
