@@ -21444,3 +21444,21 @@ Work Log:
 
 Stage Summary:
 - 工作区已完整恢复到 GitHub 最新状态（main=eaf8bed，拾光小屋 v6.3），依赖/数据库/env/mini-service 全部就绪，可直接继续开发新功能；改动可随时 commit + push 回 origin/main
+
+---
+Task ID: restore-from-github-1022-b
+Agent: Z.ai Code (main)
+Task: 从 GitHub 仓库 cczzff468/5200 拉取全部代码到新沙箱工作区并恢复运行环境
+
+Work Log:
+- git clone（token 鉴权）→ /tmp/repo-5200，4004 个文件，main=831dc50（拾光小屋 v6.3 之后）
+- rsync --delete 同步到 /home/z/my-project（排除 node_modules/.next/dev.log/.zscripts/upload），git 历史完整保留，工作树 0 差异
+- bun install 补齐 85 个依赖（three/@react-three/leaflet/idb/jsmediatags/speech-asr/web-push 等）
+- cp .env.example .env；prisma generate + db push（db/custom.db 634KB 用户数据随仓库恢复）
+- dev server 重启（清 .next），GET / 200；instrumentation ncm-keeper 自动拉起 netease-api(3010)
+- agent-browser 实机验证（390x844 竖屏）：锁屏(时间/日期/天气/电量小组件)→上滑解锁→主屏幕(天气组件真实数据 15°C 北京/分页/App网格/Dock)→信息App(小助手会话+未读角标1)→发送"你好测试"→已送达→AI语音回复气泡→POST /api/tts 200 播放→App切换器多任务卡片→拾光小屋(3D场景全家具/双角色走动动画/宠物/摇杆/装修按钮/POST /api/couple-home 200 Prisma持久化)
+- console 零错误（仅 THREE.Clock/WebGLShadowMap 两条无害弃用警告）
+- git remote origin 已配置 token，git push --dry-run → "Everything up-to-date"，推送权限可用
+
+Stage Summary:
+- 工作区已完整恢复到 GitHub 最新状态（main=831dc50），依赖/数据库/env/mini-service 全部就绪，可直接开发新功能；改动可随时 commit + push 回 origin/main
