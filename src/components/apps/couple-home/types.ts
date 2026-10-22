@@ -198,6 +198,13 @@ export interface DoorPos {
   bal?: number;
 }
 
+/** 回收站条目：被收起的家具 + 收起时间（D1 装修撤销/回收站） */
+export interface TrashEntry {
+  item: FurnitureItem;
+  /** 收起时间戳（ms） */
+  at: number;
+}
+
 /** 小家整体持久化数据（服务端 JSON 快照） */
 export interface HomeState {
   /** 数据版本：5 = 3D 时代（四室一厅靠增量迁移，不换版本号） */
@@ -261,6 +268,8 @@ export interface HomeState {
   mealReady?: boolean;
   /** 做饭小游戏：本次上桌的菜名（端上桌显示 + 开饭 toast） */
   mealName?: string;
+  /** 回收站：装修模式收起的家具（可恢复；前端最多存 30 件，超出丢最旧） */
+  trash?: TrashEntry[];
   /** 阳台门开态（v5.7 阳台房间） */
   balconyDoorOpen?: boolean;
   /** 阳台地板/墙自定义色 */

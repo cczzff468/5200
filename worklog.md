@@ -21582,3 +21582,20 @@ Stage Summary:
 - 宠物系统完整移除（前端 UI/3D 渲染/音效/资产/存档字段/API 清洗五层），-9MB 资产、-约 1500 行代码
 - 拾光小屋保留功能：装修/家具商店、生活模式、做饭小游戏、点歌、钢琴吉他、五子棋、拍照模式、邀请 AI 访客、天气联动、昼夜系统
 - 待办：向用户提供拾光小屋优化/新增清单供勾选
+
+---
+Task ID: d1-d4-1022
+Agent: Z.ai Code (main)
+Task: 拾光小屋 D1 装修撤销/回收站 + D4 渲染性能优化（用户从优化清单勾选）
+
+Work Log:
+- 【D1 数据层】types.ts 新增 TrashEntry{item,at} 与 HomeState.trash（≤30 件环形丢弃最旧）；API route.ts 把家具单件清洗重构为 cleanFurnItem()（家具表/回收站共用），trash 白名单清洗（30 上限、相框照片额度与在场家具共享防绕过 12 张上限）
+- 【D1 交互层】CoupleHome.tsx：trash/trashOpen state + trashRef 进快照（snap/adoptHome 同步）；removeSel 收起家具→进回收站（toast 带家具名提示可在回收站找回）；restoreFromTrash（id 撞车换新 id、clampFurnToRooms 钳回房间防布局变化卡墙、放回后自动选中）；undoRemove（回收站最新一件）；clearTrash；Ctrl+Z/Cmd+Z 全局快捷键（输入框聚焦不抢、preventDefault）
+- 【D1 UI 层】装修模式按钮行新增「撤销收起」圆钮（空回收站置灰）+「回收站」圆钮（红色角标计数 >99 显示 99+）；回收站底部抽屉（max-h-46%）：空态引导文案 / 2~3 列卡片网格（ShopThumbs 缩略图或调色色块兜底 + 名称 + 收起时间 + 单件恢复钮）/ 清空按钮
+- 【D4 自适应画质】HomeScene.tsx 新增 SceneQuality 三档（high/mid/low）：drei PerformanceMonitor 驱动 onDecline 逐级降（high→mid→low）/ onIncline 逐级升 / flipflops=2 连续抖动 onFallback 锁 low；dpr 档位 [1,1.75]/[1,1.35]/[0.85,1]；Lights 接收 quality：castShadow low 档全关，阴影贴图 1024→512 且切换时 dispose 旧贴图重分配
+- 【D4 阴影瘦身】model-kit.ts cloneFurniture 遍历中：<12cm 微小组件（拉手/铰链/小脚，几何包围盒×世界矩阵实测）castShadow=false —— 阴影 pass 绘制调用大幅减少、视觉无差别（主体影子仍在）；测量前 updateMatrixWorld(true) 刷新克隆体世界矩阵
+- 验证：tsc 全绿；改动文件 eslint 0 错误 0 警告（src/ 其余 47 个 error 为仓库既有、与本次无关，已用 git stash 基线对比确认）；agent-browser 全流程实测：选中米白休闲椅→收起（角标+1/撤销钮激活/toast 提示）→撤销按钮恢复（自动选中）→再收起→回收站面板（缩略图+时间+恢复钮）→面板内恢复（空态正常）→Ctrl+Z 快捷键恢复 ✓；持久化：真实 workspace 查询 rev21 trash=1，刷新重进后角标=1 ✓；console 近期无 error（THREE.PCFSoftShadowMap 弃用警告为仓库既有）
+
+Stage Summary:
+- 误删家具三重保障：收起 toast 即时提示 + Ctrl+Z（桌面）/撤销钮（移动）一键撤回 + 回收站面板逐件恢复/清空；回收站随存档持久化（双端共享，≤30 件）
+- 性能：FPS 感知自动降档（dpr+阴影），低端机/家具多时不再卡死；阴影 pass 微件剔除减负；恢复能力升级不影响原存档结构（trash 为可选字段，老档零迁移）

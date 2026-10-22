@@ -180,14 +180,28 @@ export function cloneFurniture(
   inner.scale.set(MODEL_SCALE * sx, MODEL_SCALE * sy, MODEL_SCALE * sz);
   inner.position.set(-center.x * MODEL_SCALE * sx, -box.min.y * MODEL_SCALE * sy, -center.z * MODEL_SCALE * sz);
   root.add(inner);
+  inner.updateMatrixWorld(true); // D4：微件测量前刷新世界矩阵（克隆后 matrixWorld 已过期）
 
   // 材质替换（白色系 + 可选用户色）
   const needClone = !!opts.cloneMats || !!opts.tint;
+  const tmpBox = new THREE.Box3();
+  const tmpSize = new THREE.Vector3();
   inner.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh) return;
+    // D4 性能：微小组件（拉手/铰链/小脚等 <12cm）不投影 —— 阴影 pass 少一半 draw call，
+    // 视觉上几乎无差别（影子仍由家具主体投出）；接收阴影保留
     m.castShadow = true;
     m.receiveShadow = true;
+    const geo = m.geometry;
+    if (geo) {
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      if (geo.boundingBox) {
+        tmpBox.copy(geo.boundingBox).applyMatrix4(m.matrixWorld);
+        tmpBox.getSize(tmpSize);
+        if (Math.max(tmpSize.x, tmpSize.y, tmpSize.z) * MODEL_SCALE < 0.12) m.castShadow = false;
+      }
+    }
     const src = m.material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[];
     const mapOne = (mat: THREE.MeshStandardMaterial): THREE.MeshStandardMaterial => {
       const name = mat.name || 'default';

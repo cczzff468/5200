@@ -93,6 +93,8 @@ interface HomePayload {
   wallTex?: string;
   /** 「我」正在进行的家具动作（重进页面恢复姿势） */
   act?: { type?: string; itemId?: string };
+  /** 回收站：装修模式收起的家具（可恢复，≤30 件） */
+  trash?: { item: FurnItem; at: number }[];
 }
 
 const MAX_ITEMS = 240;
@@ -144,43 +146,51 @@ const ACT_TYPES = new Set([
 const FLOOR_TEXES = new Set(['plain', 'wood', 'check']);
 const WALL_TEXES = new Set(['plain', 'dot', 'stripe']);
 
+/** 单件家具清洗（家具表与回收站共用；photoCounter 跨件累计相框照片数） */
+function cleanFurnItem(
+  f: Record<string, unknown>,
+  photoCounter: { n: number },
+): FurnItem | null {
+  const x = clampCoord(f.x);
+  const z = clampCoord(f.z);
+  const id = cleanStr(f.id, 64);
+  const kind = cleanStr(f.kind, 24);
+  if (x == null || z == null || !id || !kind) return null;
+  const ry = clampRad(f.ry, Math.PI);
+  const rx = clampRad(f.rx, 1.1);
+  const y = clampCoord(f.y, 2.4);
+  const col = cleanHex(f.col);
+  let st: Record<string, unknown> = {};
+  if (f.st && typeof f.st === 'object' && !Array.isArray(f.st)) {
+    const rawSt = f.st as Record<string, unknown>;
+    if (JSON.stringify(rawSt).length <= MAX_ST) {
+      st = rawSt;
+      // 相框照片：总数限 12 张，超额剩掉照片字段
+      if (typeof st.photo === 'string') {
+        if (photoCounter.n >= MAX_PHOTOS || !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(st.photo)) {
+          const clone = { ...st };
+          delete clone.photo;
+          st = clone;
+        } else {
+          photoCounter.n++;
+        }
+      }
+    }
+  }
+  return { id, kind, x, z, ry: ry ?? 0, rx: rx ?? 0, y: y ?? 0, col, st };
+}
+
 /** 宽松清洗 HomeState（3D 版 v5 两室一厅）；结构不合法返回 null */
 function normalizeHome(raw: unknown): HomePayload | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   if (!Array.isArray(r.furniture)) return null;
   const furniture: FurnItem[] = [];
-  let photoCount = 0;
+  const photoCounter = { n: 0 };
   for (const it of r.furniture.slice(0, MAX_ITEMS)) {
     if (!it || typeof it !== 'object') continue;
-    const f = it as Record<string, unknown>;
-    const x = clampCoord(f.x);
-    const z = clampCoord(f.z);
-    const id = cleanStr(f.id, 64);
-    const kind = cleanStr(f.kind, 24);
-    if (x == null || z == null || !id || !kind) continue;
-    const ry = clampRad(f.ry, Math.PI);
-    const rx = clampRad(f.rx, 1.1);
-    const y = clampCoord(f.y, 2.4);
-    const col = cleanHex(f.col);
-    let st: Record<string, unknown> = {};
-    if (f.st && typeof f.st === 'object' && !Array.isArray(f.st)) {
-      const rawSt = f.st as Record<string, unknown>;
-      if (JSON.stringify(rawSt).length <= MAX_ST) {
-        st = rawSt;
-        // 相框照片：总数限 12 张，超额剩掉照片字段
-        if (typeof st.photo === 'string') {
-          if (photoCount >= MAX_PHOTOS || !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(st.photo)) {
-            const clone = { ...st };
-            delete clone.photo;
-            st = clone;
-          } else {
-            photoCount++;
-          }
-        }
-      }
-    }
-    furniture.push({ id, kind, x, z, ry: ry ?? 0, rx: rx ?? 0, y: y ?? 0, col, st });
+    const cleaned = cleanFurnItem(it as Record<string, unknown>, photoCounter);
+    if (cleaned) furniture.push(cleaned);
   }
   if (furniture.length === 0 && r.furniture.length > 0) return null;
   const chars: HomePayload['chars'] = {};
@@ -228,6 +238,21 @@ function normalizeHome(raw: unknown): HomePayload | null {
     const itemId = cleanStr(a.itemId, 64) || undefined;
     if (type && itemId) act = { type, itemId };
   }
+  // 回收站（≤30 件；照片额度与在场家具共享，避免用回收站绕过 12 张上限）
+  let trash: HomePayload['trash'];
+  if (Array.isArray(r.trash)) {
+    const arr: { item: FurnItem; at: number }[] = [];
+    for (const t of r.trash.slice(0, 30)) {
+      if (!t || typeof t !== 'object') continue;
+      const e = t as Record<string, unknown>;
+      if (!e.item || typeof e.item !== 'object') continue;
+      const item = cleanFurnItem(e.item as Record<string, unknown>, photoCounter);
+      if (!item) continue;
+      const at = typeof e.at === 'number' && Number.isFinite(e.at) ? Math.round(e.at) : 0;
+      arr.push({ item, at });
+    }
+    if (arr.length > 0) trash = arr;
+  }
   return {
     v: typeof r.v === 'number' ? r.v : 5,
     furniture,
@@ -265,6 +290,7 @@ function normalizeHome(raw: unknown): HomePayload | null {
     floorTex: typeof r.floorTex === 'string' && FLOOR_TEXES.has(r.floorTex) ? r.floorTex : undefined,
     wallTex: typeof r.wallTex === 'string' && WALL_TEXES.has(r.wallTex) ? r.wallTex : undefined,
     act,
+    trash,
   };
 }
 

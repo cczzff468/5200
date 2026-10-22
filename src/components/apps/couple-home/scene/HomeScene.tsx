@@ -15,10 +15,10 @@
  * - 昼夜灯光切换：白天暖阳光 + 夜晚冷月光 + 灯具/窗户点光。
  */
 
-import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
+import { OrbitControls, PerformanceMonitor } from '@react-three/drei';
 import Room, { buildWallBoxes } from './Room';
 import Furn3D from './Furn3D';
 import Char3D from './Char3D';
@@ -951,7 +951,18 @@ function NightBlend({ night, mixRef }: { night: boolean; mixRef: RefObject<{ v: 
   return null;
 }
 
-function Lights({ night, mixRef }: { night: boolean; mixRef: RefObject<{ v: number }> }) {
+/** D4 画质档位：FPS 自适应降级（dpr 钳制 + 阴影分辨率/开关） */
+export type SceneQuality = 'high' | 'mid' | 'low';
+/** 档位 → Canvas dpr 区间 */
+const Q_DPR: Record<SceneQuality, [number, number]> = {
+  high: [1, 1.75],
+  mid: [1, 1.35],
+  low: [0.85, 1],
+};
+/** 档位 → 主光阴影贴图边长（low = 整关阴影） */
+const Q_SHADOW: Record<SceneQuality, number> = { high: 1024, mid: 512, low: 0 };
+
+function Lights({ night, mixRef, quality }: { night: boolean; mixRef: RefObject<{ v: number }>; quality: SceneQuality }) {
   const dir = useRef<THREE.DirectionalLight>(null);
   const amb = useRef<THREE.AmbientLight>(null);
   const hemi = useRef<THREE.HemisphereLight>(null);
@@ -960,6 +971,21 @@ function Lights({ night, mixRef }: { night: boolean; mixRef: RefObject<{ v: numb
     // 切换昼夜时重投阴影
     dir.current?.shadow?.camera?.updateProjectionMatrix();
   }, [night]);
+  // D4：画质档位变化 → 重分配阴影贴图尺寸（dispose 旧贴图才会按新 mapSize 重建）
+  useEffect(() => {
+    const l = dir.current;
+    if (!l) return;
+    l.castShadow = quality !== 'low';
+    const size = Q_SHADOW[quality];
+    if (size > 0 && l.shadow.mapSize.width !== size) {
+      l.shadow.mapSize.set(size, size);
+      if (l.shadow.map) {
+        l.shadow.map.dispose();
+        l.shadow.map = null;
+      }
+      l.shadow.camera.updateProjectionMatrix();
+    }
+  }, [quality]);
   useFrame((_, dt) => {
     const k = mixRef.current.v;
     const d = Math.min(dt, 0.05);
@@ -1023,6 +1049,8 @@ function BedNightLight({ poseRef, meRT }: { poseRef: RefObject<{ pose: CharPose;
 // ---------------- Canvas 主体 ----------------
 
 export default function HomeScene(props: HomeSceneProps) {
+  // D4：FPS 自适应画质（PerformanceMonitor 检测掉帧逐级降，恢复后逐级升；连续抖动 2 次锁最低）
+  const [quality, setQuality] = useState<SceneQuality>('high');
   const {
     items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge, fp, fpRef,
     charStyle, poseRef, actRef, carryRef, instRef, onFaucetTap, outfit, activeAct, mealTableId, floorTex, wallTex,
@@ -1150,14 +1178,20 @@ export default function HomeScene(props: HomeSceneProps) {
     <Canvas
       gl={{ preserveDrawingBuffer: true }}
       shadows="soft"
-      dpr={[1, 1.75]}
+      dpr={Q_DPR[quality]}
       camera={{ fov: 48, near: 0.1, far: 80, position: [0, 6.2, 7.4] }}
       style={{ touchAction: 'none' }}
       resize={{ offsetSize: true }}
       performance={{ min: 0.5 }}
     >
+      <PerformanceMonitor
+        onDecline={() => setQuality((q) => (q === 'high' ? 'mid' : 'low'))}
+        onIncline={() => setQuality((q) => (q === 'low' ? 'mid' : 'high'))}
+        flipflops={2}
+        onFallback={() => setQuality('low')}
+      />
       <NightBlend night={night} mixRef={nightMixRef} />
-      <Lights night={night} mixRef={nightMixRef} />
+      <Lights night={night} mixRef={nightMixRef} quality={quality} />
       <Room
         night={night}
         onFloorTap={onFloorTap}
