@@ -21426,3 +21426,21 @@ Stage Summary:
 - 宠物系统完成「程序化 3D 建模 → AI Q版3D手办立绘」第三次迭代：画师级品种还原（和真实的一模一样）+ Q版大眼萌 + 性别配饰 + 全向 billboard + 镜像转身 + 五态动画 + 卡死自愈；资产管线（生成脚本+五级抠图算法+压缩）入库可复现
 - 涉及文件：scene/Pet3D.tsx(重写)、public/pets/chibi/*(新22图)、scripts/{gen-pet-chibi,chroma-pet-chibi,crop}.ts(新)、worklog.md
 - commit 36bcaf8 已推送 origin/main
+
+---
+Task ID: restore-from-github-1022
+Agent: Z.ai Code (main)
+Task: 从 GitHub 仓库 cczzff468/5200 拉取全部代码到沙箱工作区并恢复运行环境
+
+Work Log:
+- git clone 直连 github.com 因 TLS 瞬时故障失败 → 改用 GitHub API tarball（api.github.com 可达）下载 160MB 源码包解压
+- rsync --delete 同步到 /home/z/my-project（排除 node_modules/.next/dev.log/upload/download 挂载点），与 origin/main(eaf8bed) 0 差异对齐
+- 网络恢复后 git init -b main + fetch origin main 完整历史（231MB pack），git reset origin/main 对齐索引，工作树 0 差异
+- bun install 补齐 85 个新依赖（three/@react-three/drei+fiber/leaflet/idb/jsmediatags/remark-gfm/speech-asr/web-push 等）
+- cp .env.example .env；prisma generate + db push → "The database is already in sync"（db/custom.db 634KB 用户数据完好）
+- 重启 dev server（清 .next），首页 GET 200；netease-api(3010) 经 instrumentation ncm-keeper 自动常驻 200
+- agent-browser 实机验证：锁屏→上滑解锁→主屏幕（天气小组件真实数据 6°C 北京/角标/Dock）→信息App（AI助手会话+未读红点）→拾光小屋（3D场景/双Q版小人/黑胶/全屋家具渲染正常）；console 零错误
+- git push --dry-run origin main → "Everything up-to-date"，token 推送权限可用
+
+Stage Summary:
+- 工作区已完整恢复到 GitHub 最新状态（main=eaf8bed，拾光小屋 v6.3），依赖/数据库/env/mini-service 全部就绪，可直接继续开发新功能；改动可随时 commit + push 回 origin/main
