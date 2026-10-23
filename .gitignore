@@ -57,3 +57,5 @@ tool-results
 mini-services/netease-api/dev.log
 upload/
 public/tts/models-dev/
+upload-glb/
+*.log

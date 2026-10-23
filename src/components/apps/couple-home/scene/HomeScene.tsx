@@ -24,6 +24,7 @@ import Room, { buildWallBoxes } from './Room';
 import Furn3D from './Furn3D';
 import Char3D from './Char3D';
 import CharKit3D from './CharKit3D';
+import CharCustom3D from './CharCustom3D';
 import {
   BAL_X0,
   BAL_X1,
@@ -1423,8 +1424,8 @@ export default function HomeScene(props: HomeSceneProps) {
         );
       })}
 
-      <CharKit3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} carryRef={carryRef} />
-      <CharKit3D rt={taRT} who="partner" style={charStyle} />
+      <CharCustom3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} carryRef={carryRef} />
+      <CharCustom3D rt={taRT} who="partner" style={charStyle} />
       {guestRT?.current && (
         <Char3D rt={guestRT.current} who="guest" style={charStyle} guestName={guestName ?? undefined} />
       )}
