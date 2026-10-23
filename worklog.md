@@ -21841,3 +21841,20 @@ Stage Summary:
 - 本地已完整跑通远程仓库最新版（v6.4），dev server 运行于 3000 端口
 - 远程 origin 已配置 PAT 可直接推送，上游已跟踪 origin/main
 - 等待用户提出具体的功能修改/新增需求
+
+---
+Task ID: 2
+Agent: main (Z.ai Code)
+Task: 修复用户 GLB 大文件上传失败（HTTP 400）问题
+
+Work Log:
+- 定位原因：dev.log 中无任何 upload-glb 记录 → 71MB 请求体被中间网关直接拒绝（未到 Next.js）
+- 重写 src/app/api/upload-glb/route.ts：新增分片上传协议（chunk 模式保存分片到 upload-glb/.parts/{uploadId}/{seq}，finish 模式按序合并），保留单文件兼容模式
+- 重写 src/app/page.tsx 上传浮层：2MB 分片 + 每片最多 3 次自动重试 + 实时进度（loadedBase+chunk内进度）
+- 端到端测试 1（bun 脚本经 Caddy :81）：75MB 假文件 38 片上传，合并后 MD5 与源文件一致
+- 端到端测试 2（agent-browser 真实页面环境 eval XHR）：6MB 文件 4 片，HTTP 200，落盘文件逐字节校验通过
+- 清理全部测试产物（测试 GLB、临时脚本、.parts 残留）
+
+Stage Summary:
+- 上传通道已升级为分片上传，网关大请求体限制被彻底绕开；等待用户重新上传 小人男生.glb(71.3MB) / 小人女生.glb(73.8MB)
+- 文件落地目录：/home/z/my-project/upload-glb/
