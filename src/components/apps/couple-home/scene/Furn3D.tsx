@@ -342,7 +342,8 @@ export default function Furn3D({
         )}
 
         {/* v5.7 拾光扩展（CozyPlus3D 程序化建模）：投影仪/幕布/吊篮秋千/鞋柜/挂画组/加湿器/酒柜/棋盘桌/火锅桌/吊床/游戏机/花架 + v5.8 黑胶唱片机/八音盒
-            + v5.9 节日/阳台/挂墙/绿植/毛绒/茶角 20 件（photoWallLove 的照片经 photo 透传入注册表，无需 kind 专属重复渲染） */}
+            + v5.9 节日/阳台/挂墙/绿植/毛绒/茶角 20 件（photoWallLove 的照片经 photo 透传入注册表，无需 kind 专属重复渲染）
+            + v6.1 娃娃机/软木留言板（lastClaw = 抓中时间戳，30s 内顶灯珠庆祝彩蛋） */}
         {PlusPart && (
           <PlusPart
             col={item.col}
@@ -353,6 +354,7 @@ export default function Furn3D({
             touch={item.st?.lastTouch}
             photo={item.st?.photo}
             lc={item.st?.lc}
+            lastClaw={item.st?.lastClaw}
           />
         )}
 

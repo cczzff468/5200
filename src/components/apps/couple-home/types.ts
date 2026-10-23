@@ -135,7 +135,10 @@ export type FurnitureKind =
   | 'beanbagBlanket'
   // ---- v5.9 下午茶角（F8） ----
   | 'teaSet'
-  | 'cakeStand';
+  | 'cakeStand'
+  // ---- v6.1 留言板 + 娃娃机（G8 共享留言板 / G10 抓娃娃） ----
+  | 'clawMachine'
+  | 'noteBoard';
 
 /** 家具分类（商店栏的 tab；set = 成套摆放 F3） */
 export type FurnCategory =
@@ -203,6 +206,8 @@ export interface FurnitureState {
   chess?: number[];
   /** 灯具自选光色（#rrggbb；E7 灯光氛围：台灯/落地灯/星空灯可调，undefined = 目录默认暖光） */
   lc?: string;
+  /** 娃娃机：上次抓中时间戳（Date.now()，冷却用） */
+  lastClaw?: number;
 }
 
 /** 小人身份（guest = 邀请来做客的 AI 联系人，v5.7） */
@@ -295,6 +300,42 @@ export interface HomeState {
   /** 阳台地板/墙自定义色 */
   floorColBal?: string;
   wallColBal?: string;
+  /** G1 多套装修方案：保存的整屋快照（最多 3 套；应用时整组切换、一步可撤销） */
+  layouts?: LayoutSnap[];
+  /** G8 共享留言板：留言（最多 50 条，新的在后） */
+  notes?: NoteEntry[];
+  /** G8 各自身份最后已读时间戳（毫秒）；进门提醒未读便签用 */
+  notesSeen?: { me?: number; partner?: number };
+}
+
+/** G1 装修方案快照（家具整组 + 各房间地板/墙色；不含照片 —— 相框照片不随方案备份，控制存档体积） */
+export interface LayoutSnap {
+  /** 方案名（方案A/B/C…最长 12 字） */
+  name: string;
+  /** 保存时间戳 */
+  ts: number;
+  furniture: FurnitureItem[];
+  floorCol?: string;
+  wallCol?: string;
+  floorColBed?: string;
+  wallColBed?: string;
+  floorColK?: string;
+  wallColK?: string;
+  floorColB?: string;
+  wallColB?: string;
+  floorColBal?: string;
+  wallColBal?: string;
+}
+
+/** G8 留言板单条便签 */
+export interface NoteEntry {
+  id: string;
+  /** 正文（最长 120 字） */
+  text: string;
+  /** 创建时间戳（毫秒） */
+  ts: number;
+  /** 留言人身份 */
+  by: 'me' | 'partner';
 }
 
 /** 家具目录条目（静态配置，不持久化） */

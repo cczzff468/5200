@@ -21714,3 +21714,41 @@ Work Log:
 
 Stage Summary:
 - 套装 tab 与商品网格视觉统一：全部为 1:1 真实 3D 渲染缩略图，emoji 清零；架构上 ShopThumbs 支持任意「组合快照」目标（`set:` 前缀），后续新增套装零成本获得同款缩略图
+
+---
+Task ID: g-series-contracts
+Agent: Z.ai Code (main)
+Task: G 系列合同先行 —— types/catalog/API 三处共享契约（G1 方案/G8 留言板/G10 娃娃机）
+
+Work Log:
+- types.ts：FurnitureKind 新增 'clawMachine' | 'noteBoard'；FurnitureState 新增 lastClaw（娃娃机冷却时间戳）；HomeState 新增 layouts?: LayoutSnap[]（≤3 套，含家具整组+各房间地板/墙色，不含照片）/ notes?: NoteEntry[]（≤50 条 {id,text≤120,ts,by:'me'|'partner'}）/ notesSeen?: {me?,partner?}
+- catalog.ts：clawMachine（decor，fp[0.82,0.66] h1.78，acts:{}）与 noteBoard（decor，挂墙件 wallMount wallY1.5 fp[0.72,0.08] h0.6，acts:{}）两条目录；点击行为不走 acts，由 CoupleHome 按 kind 拦截（同 chessTable/vinyl 模式）
+- route.ts：HomePayload 扩 layouts/notes/notesSeen；新增 cleanG1G8() —— layouts ≤3 套走 cleanFurnItem 同款清洗但强制剔除 st.photo（方案不备份照片，控存档体积）、notes ≤50 条逐字段清洗（id≤40/text≤120/ts/by 白名单）、notesSeen clampInt；normalizeHome 尾部以 ...cleanG1G8(r, photoCounter) 展开
+- tsc --noEmit 全绿
+
+Stage Summary:
+- 数据契约已定，供并行子代理使用：
+  · A（场景）：HomeScene.tsx 独占 —— G2 窗外动态风景（白天流云/夜晚星空月亮/天气变灰）+ G5 天气深化（雨=玻璃水珠贴图层、雪=窗台/阳台积雪白沿 + 雨天环境光变暗变冷）+ G3 彩蛋小生物（蝴蝶/小鸟阳台花丛附近漫游，点击惊飞，新增可选 prop onCritterTap?: (kind:'butterfly'|'bird')=>void）；已有 WeatherFX 雨雪幕帘保留叠用；阳台房间坐标 ROOM_SPANS.bal（catalog.ts）；只 live 模式出小生物
+  · B（游戏+模型）：新建 src/components/apps/couple-home/games/{ClawMachineGame,LatteArtGame,PuzzleGame}.tsx + clawMachine/noteBoard 程序化 3D 模型（挂进现有 CozyPlus3D/Furn3D 部件注册表，跟随 v5.9 20 件模式）；游戏组件合同：
+    - ClawMachineGame props { open:boolean; onClose:()=>void; onWin:(plush:'plushBunny'|'plushDuck'|'plushPanda'|'plushPig'|'plushCat'|'bear')=>void; disabled?:boolean }（disabled=冷却中，组件内展示倒计时）
+    - LatteArtGame props { open:boolean; onClose:()=>void; onResult:(r:'miss'|'ok'|'perfect')=>void }
+    - PuzzleGame props { open:boolean; onClose:()=>void; photo?:string }（photo=相框 dataURL，缺省用内置插画；3×3 交换拼图+步数计时+胜利动画）
+  · C（接线）：CoupleHome.tsx 独占 —— G1 方案 UI（装修面板新增「方案」区，保存=当前快照入槽、应用=pushHistory 一步可撤销后整组切换+颜色状态套用）、G8 noteBoard 点击→留言面板（发/删便签+进门未读 toast+打开后写 notesSeen.me=Date.now()）、G10 接线（clawMachine 点击→ClawMachineGame，抓中=pushHistory('claw')+findSpot 摆对应毛绒+st.lastClaw 冷却 30s；coffeeMaker 点击→LatteArtGame，ok/perfect 后走既有 coffee 端杯动作；photoFrame 点击→ActionSheet(换照片/拼图/取消)，拼图用 item.st.photo）
+
+---
+Task ID: g-series-impl-1022
+Agent: Z.ai Code (main) + 场景子代理(g-scene) + 游戏子代理(g-games)
+Task: G 系列 six 项 —— G1 多套装修方案 / G2 窗外动态风景 / G3 彩蛋小生物 / G5 天气深度联动 / G8 共享留言板 / G10 三连小游戏
+
+Work Log:
+- 合同先行（见 g-series-contracts）：types/catalog/API 三处契约先行落地，三代理零冲突
+- 场景侧（HomeScene.tsx）：子代理完成挂载点与 Lights gloomy 后超时，主代理补齐 4 个组件定义 —— SceneryFX（每扇窗 1.5m 外 3.4×2.7 远景幕帘：白天蓝天渐变+远山+3 朵漂移蓬松云 / 夜晚深蓝星空+64 星点+月牙，rain/snow 染灰变体，useFrame offset 漂移零 setState）；GlassRain（玻璃外表面 0.44m 水珠贴图层：46 圆珠+3 水痕，极缓下滑，仅 rain）；SnowDeco（9 窗台白沿 box + 阳台整片薄雪 plane，仅 snow）；Critters（蝴蝶=双翼圆面扑扇 / 小鸟=球身锥嘴，仅 live 模式，首次 7~15s 后生成、之后 25~55s，锚点 60% 阳台 ROOM_SPANS.bal / 40% 花盆附近，正弦漫游+朝向速度方向，生命期 15~25s 自然飞走，onPointerDown 惊飞+onCritterTap 回调，同屏≤2，编辑模式静默离场）
+- 游戏侧（子代理 g-games，代码完整落地）：games/ClawMachineGame.tsx（六格毛绒 CSS 造型无 emoji、爪子摆动+落爪+60% 抓中、收下 TA）、games/LatteArtGame.tsx（timing 指针三段轨道 miss/ok/perfect、perfect 爱心拉花动画）、games/PuzzleGame.tsx（3×3 照片切片交换拼图、缺省 canvas 内置拾光小屋插画、步数+计时+胜利动画）；ClawMachine3D（粉框玻璃罩+迷你毛绒+摇杆+出奖口，st.lastClaw 30s 内顶灯亮）与 NoteBoard3D（木框软木底+三张歪斜便利贴+图钉）注册进 CozyPlus3D
+- 接线侧（CoupleHome.tsx）：G1 装修面板新增「方案」区（A/B/C 槽位卡：存入/应用/覆盖；saveLayout=takeSnap 映射 LayoutSnap+delete st.photo；applyLayout=pushHistory('layout')+整组 setItems+十项颜色状态套用，一步可撤销实测）；G8 noteBoard 点击 openNotes（写 notesSeen.me）+ NotesOverlay 新组件（便签墙两栏歪斜便签/我粉 TA 黄/图钉+撕下）+ 首份带便签档案到达时未读 toast 一次性提醒；G10 四个 kind 拦截进 onFurnTap（clawMachine 30s 冷却 toast→游戏、noteBoard→面板、coffeeMaker→拉花、photoFrame→ActionSheet 换照片/拼一拼）；onClawWin=pushHistory('claw')+findSpot 摆毛绒+lastClaw+「抓到啦」toast；onLatteResult=ok/perfect 走既有 setCharAction coffee 端杯链
+- 排障记录：①并行子代理双双超时于最终报告但代码已落地，主代理核验补齐（HomeScene 4 组件定义缺失由主代理补写）；②工具输出管道会把「[m」吞成 ANSI 序列造成文件损坏假象（sed/rg/Bun/Read 全部显示 ealReady），od 字节级检查确认磁盘内容完好、tsc exit 0 为真，勿信显示伪影；③MultiEdit 非原子回滚导致 onFurnTap 特判块重复插入一次，sed 定位删除
+- 验证：tsc --noEmit 全绿；eslint 全部改动文件 0 error 0 warning；agent-browser 全新会话实测 —— 夜窗星月幕帘（G2 多角度可见）✓、方案区渲染+存入 119 件+应用后娃娃机消失+撤销后回归（G1 全闭环）✓、娃娃机游戏全流程（摆爪→落爪→抓住熊熊→收下→毛绒入场+冷却存档）✓、留言板（点击开面板→贴便签→粉签渲染 我·10/23）✓、相框菜单（换照片/拼一拼/取消）→拼图 3×3 交换步数+计时 ✓、page-errors=0 ✓
+- 持久化验证：DB workspace b2a905e8 rev41 —— layouts:[方案A·119]、notes:[记得明天一起去买菜哦]、notesSeen.me 已写入，furniture 124 与操作一致（API cleanG1G8 白名单生效）
+- 已知未实测（代码+模式验证）：LatteArtGame 完整点击流（咖啡机在厨房、实机走位未达；接线与 claw 同构）、Critters 视觉目击（生成间隔 25~55s 随机、相机未对准阳台时段）、GlassRain/SnowDeco（真实天气依赖，本地晴）
+
+Stage Summary:
+- 拾光小屋 v6.1：整屋快照三槽方案（应用即撤销粒度）、窗外有了风景（云/星/月/阴雨灰）、阳台花丛会有蝴蝶小鸟造访（点击惊飞）、雨雪天玻璃挂珠窗台积雪环境光转灰、软木留言板给 TA 留话进门提醒、娃娃机/咖啡拉花/照片拼图三连小游戏；新增家具 clawMachine+noteBoard，API 白名单扩展 layouts/notes/notesSeen

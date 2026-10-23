@@ -16,6 +16,9 @@
  * 挂钟/世界地图/纪念照片墙（挂墙）、龟背竹/仙人掌/水培瓶（绿植）、大号泰迪熊/抱枕堆/豆袋毯（毛绒）、
  * 下午茶具/蛋糕架（茶角）。
  *
+ * v6.1 新增 2 件：娃娃机 ClawMachine3D（G10 抓娃娃，lastClaw 30s 内顶灯珠庆祝闪烁）/
+ * 软木留言板 NoteBoard3D（G8 挂墙便签，板面居中朝 +z，同 WorldMap3D 挂墙约定）。
+ *
  * 约定：原点 = 底部中心贴地 y=0（Screen3D/WallArt3D 挂墙件 = 挂点、背面贴墙朝 +z 伸向屋内）；
  * 配色全屋暖奶油系；动画一律 useFrame + THREE.MathUtils.damp / sin；
  * 尺寸单位 = 米（世界坐标，MODEL_SCALE 由接线方处理——本系列直接按世界尺寸建模）。
@@ -35,6 +38,7 @@ export interface CozyPlusProps {
   touch?: number;    // playful 上次互动时间戳（musicBox 开盖放旋律）
   photo?: string;    // 纪念照片墙照片（压缩后 dataURL，photoWallLove 用；v5.9）
   lc?: string;       // 灯具自选光色 #rrggbb（E7：红灯笼等发光件的自发光/点光色，undefined = 目录默认；v5.9）
+  lastClaw?: number; // 娃娃机上次抓中时间戳（Date.now()，30s 内顶灯珠庆祝闪烁 + 内部点光；v6.1）
 }
 
 const mat = (c: string, rough = 0.85, extra?: Partial<THREE.MeshStandardMaterialParameters>) => (
@@ -2634,6 +2638,321 @@ export function CakeStand3D(_p: CozyPlusProps) {
   );
 }
 
+// ---------------- 35. 娃娃机（v6.1 G10：粉框玻璃罩 + 顶灯珠 + 迷你毛绒球 + 摇杆按钮 + 出奖口） ----------------
+
+/** 「CLAW」小字牌贴图（白底粉字，canvas 手绘） */
+function makeClawSignTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 256;
+  cv.height = 96;
+  const ctx = cv.getContext('2d')!;
+  ctx.fillStyle = '#fdf6f2';
+  ctx.fillRect(0, 0, 256, 96);
+  ctx.strokeStyle = '#f2b3c2';
+  ctx.lineWidth = 10;
+  ctx.strokeRect(6, 6, 244, 84);
+  ctx.fillStyle = '#e8899a';
+  ctx.font = 'bold 54px "Avenir Next", "PingFang SC", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('CLAW', 128, 52);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+export function ClawMachine3D({ col, lastClaw }: CozyPlusProps) {
+  const main = col ?? '#f0aebd';
+  const dark = shade(main, 0.82);
+  const signTex = useMemo(() => makeClawSignTexture(), []);
+  // 彩蛋：30s 内刚抓中（st.lastClaw）→ 顶灯珠庆祝闪烁 + 内部暖光
+  const celebrate = !!lastClaw && Date.now() - lastClaw < 30000;
+  /** 顶灯珠共享材质（useFrame 呼吸/庆祝闪烁） */
+  const beadMat = useMemo(
+    () => new THREE.MeshStandardMaterial({ color: '#ffe9c4', emissive: '#ffd98f', emissiveIntensity: 0.4, roughness: 0.3 }),
+    [],
+  );
+  const glowLight = useRef<THREE.PointLight>(null);
+  const clawGrp = useRef<THREE.Group>(null);
+  useEffect(() => () => {
+    beadMat.dispose();
+    signTex.dispose();
+  }, []);
+  useFrame((state) => {
+    const t = state.clock.elapsedTime;
+    if (celebrate) {
+      beadMat.emissiveIntensity = 1.7 + Math.sin(t * 7) * 0.9;
+      if (glowLight.current) glowLight.current.intensity = 1.1 + Math.sin(t * 7) * 0.5;
+    } else {
+      beadMat.emissiveIntensity = 0.4 + Math.sin(t * 2.1) * 0.12; // 平时微呼吸
+      if (glowLight.current) glowLight.current.intensity = 0;
+    }
+    // 抓爪沿轨轻摆
+    if (clawGrp.current) clawGrp.current.rotation.z = Math.sin(t * 0.8) * 0.05;
+  });
+  const glass = { transparent: true, opacity: 0.16, roughness: 0.08, metalness: 0.1, depthWrite: false } as const;
+  /** 迷你毛绒球（出奖口附近一堆彩色小球） */
+  const balls: [number, number, number, number, string][] = [
+    [0.16, 0.665, 0.14, 0.068, '#fdf9f4'],
+    [0.3, 0.66, -0.06, 0.062, '#f6c2cf'],
+    [-0.24, 0.66, 0.1, 0.064, '#f7e6a6'],
+    [-0.05, 0.655, -0.16, 0.06, '#cfe6f5'],
+    [0.23, 0.78, 0.03, 0.05, '#f9c9d4'],
+  ];
+  return (
+    <group>
+      {/* 底座柜身（粉色金属） */}
+      <mesh position={[0, 0.29, 0]} castShadow receiveShadow>
+        <boxGeometry args={[0.82, 0.58, 0.66]} />
+        {mat(main, 0.42, { metalness: 0.35 })}
+      </mesh>
+      <mesh position={[0, 0.035, 0]}>
+        <boxGeometry args={[0.86, 0.07, 0.7]} />
+        {mat(dark, 0.5, { metalness: 0.3 })}
+      </mesh>
+      {/* 出奖口（正面黑色小洞 + 浅沿） */}
+      <mesh position={[0, 0.22, 0.332]}>
+        <boxGeometry args={[0.34, 0.24, 0.014]} />
+        {mat(dark, 0.5)}
+      </mesh>
+      <mesh position={[0, 0.22, 0.342]}>
+        <boxGeometry args={[0.3, 0.2, 0.012]} />
+        {mat('#22222a', 0.65)}
+      </mesh>
+      {/* 投币口 */}
+      <mesh position={[0.31, 0.38, 0.335]}>
+        <boxGeometry args={[0.035, 0.14, 0.012]} />
+        {mat('#d9d9de', 0.35, { metalness: 0.6 })}
+      </mesh>
+      {/* 平顶操控台（摇杆 + 双按钮） */}
+      <mesh position={[0, 0.6, 0.24]} castShadow>
+        <boxGeometry args={[0.82, 0.04, 0.2]} />
+        {mat(shade(main, 0.94), 0.45, { metalness: 0.3 })}
+      </mesh>
+      <group position={[-0.2, 0.655, 0.2]}>
+        <mesh castShadow>
+          <cylinderGeometry args={[0.011, 0.014, 0.09, 8]} />
+          {mat('#d9d9de', 0.35, { metalness: 0.6 })}
+        </mesh>
+        <mesh position={[0, 0.06, 0]} castShadow>
+          <sphereGeometry args={[0.036, 14, 12]} />
+          {mat('#e05a4e', 0.35)}
+        </mesh>
+      </group>
+      <mesh position={[0.1, 0.632, 0.29]}>
+        <cylinderGeometry args={[0.03, 0.032, 0.02, 14]} />
+        {mat('#e8b84b', 0.35, { emissive: '#e8b84b', emissiveIntensity: 0.12 })}
+      </mesh>
+      <mesh position={[0.23, 0.632, 0.29]}>
+        <cylinderGeometry args={[0.03, 0.032, 0.02, 14]} />
+        {mat('#7fc3e8', 0.35, { emissive: '#7fc3e8', emissiveIntensity: 0.12 })}
+      </mesh>
+      {/* 玻璃罩内胆：地板 + 背板 */}
+      <mesh position={[0, 0.59, 0]}>
+        <boxGeometry args={[0.78, 0.02, 0.62]} />
+        {mat('#f7f2ea', 0.85)}
+      </mesh>
+      <mesh position={[0, 1.07, -0.31]}>
+        <boxGeometry args={[0.78, 0.98, 0.02]} />
+        {mat('#fbf4ea', 0.9)}
+      </mesh>
+      {/* 四角立柱 */}
+      {[
+        [-0.387, -0.307],
+        [0.387, -0.307],
+        [-0.387, 0.307],
+        [0.387, 0.307],
+      ].map(([px, pz], i) => (
+        <mesh key={i} position={[px, 1.07, pz]} castShadow>
+          <boxGeometry args={[0.045, 0.98, 0.045]} />
+          {mat(dark, 0.45, { metalness: 0.35 })}
+        </mesh>
+      ))}
+      {/* 玻璃四壁（半透明） */}
+      <mesh position={[0, 1.07, 0.308]} raycast={() => null}>
+        <boxGeometry args={[0.73, 0.94, 0.01]} />
+        <meshStandardMaterial color="#dff1f6" {...glass} />
+      </mesh>
+      <mesh position={[0, 1.07, -0.308]} raycast={() => null}>
+        <boxGeometry args={[0.73, 0.94, 0.01]} />
+        <meshStandardMaterial color="#dff1f6" {...glass} />
+      </mesh>
+      <mesh position={[0.387, 1.07, 0]} raycast={() => null}>
+        <boxGeometry args={[0.01, 0.94, 0.57]} />
+        <meshStandardMaterial color="#dff1f6" {...glass} />
+      </mesh>
+      <mesh position={[-0.387, 1.07, 0]} raycast={() => null}>
+        <boxGeometry args={[0.01, 0.94, 0.57]} />
+        <meshStandardMaterial color="#dff1f6" {...glass} />
+      </mesh>
+      {/* 奖池毛绒球（堆在出奖口附近） */}
+      {balls.map(([bx, by, bz, r, c], i) => (
+        <mesh key={i} position={[bx, by, bz]} castShadow>
+          <sphereGeometry args={[r, 14, 12]} />
+          {mat(c, 0.95)}
+        </mesh>
+      ))}
+      {/* 内部轨道 + 抓爪（沿轨轻摆） */}
+      <mesh position={[0, 1.47, 0.05]} rotation={[0, 0, Math.PI / 2]}>
+        <cylinderGeometry args={[0.012, 0.012, 0.72, 10]} />
+        {mat('#d9d9de', 0.35, { metalness: 0.6 })}
+      </mesh>
+      <group ref={clawGrp} position={[-0.12, 1.47, 0.05]}>
+        <mesh>
+          <boxGeometry args={[0.06, 0.045, 0.06]} />
+          {mat(dark, 0.45, { metalness: 0.35 })}
+        </mesh>
+        <mesh position={[0, -0.1, 0]}>
+          <cylinderGeometry args={[0.004, 0.004, 0.16, 6]} />
+          {mat('#b8b8be', 0.4, { metalness: 0.5 })}
+        </mesh>
+        <mesh position={[0, -0.19, 0]}>
+          <sphereGeometry args={[0.026, 10, 8]} />
+          {mat('#8a8a92', 0.35, { metalness: 0.6 })}
+        </mesh>
+        {[1, -1].map((s) => (
+          <mesh key={s} position={[0.022 * s, -0.235, 0]} rotation={[Math.PI, 0, 0.42 * s]}>
+            <coneGeometry args={[0.011, 0.055, 8]} />
+            {mat('#8a8a92', 0.35, { metalness: 0.6 })}
+          </mesh>
+        ))}
+      </group>
+      {/* 顶棚 + 盖 + 顶珠 */}
+      <mesh position={[0, 1.63, 0]} castShadow>
+        <boxGeometry args={[0.86, 0.14, 0.7]} />
+        {mat(main, 0.42, { metalness: 0.35 })}
+      </mesh>
+      <mesh position={[0, 1.715, 0]}>
+        <boxGeometry args={[0.8, 0.07, 0.64]} />
+        {mat(shade(main, 0.92), 0.45, { metalness: 0.3 })}
+      </mesh>
+      <mesh position={[0, 1.765, 0]}>
+        <sphereGeometry args={[0.022, 10, 8]} />
+        {mat('#e8b84b', 0.35, { metalness: 0.4 })}
+      </mesh>
+      {/* 顶灯珠 ×5（lastClaw 30s 内庆祝闪烁） */}
+      {[-0.26, -0.13, 0, 0.13, 0.26].map((bx) => (
+        <mesh key={bx} position={[bx, 1.575, 0.345]} material={beadMat}>
+          <sphereGeometry args={[0.017, 10, 8]} />
+        </mesh>
+      ))}
+      {/* 「CLAW」小字牌 */}
+      <mesh position={[0, 1.63, 0.352]}>
+        <boxGeometry args={[0.36, 0.12, 0.014]} />
+        {mat('#fdf6f2', 0.5)}
+      </mesh>
+      <mesh position={[0, 1.63, 0.361]} raycast={() => null}>
+        <planeGeometry args={[0.34, 0.1]} />
+        <meshStandardMaterial map={signTex} roughness={0.5} />
+      </mesh>
+      {/* 庆祝暖光（平时 intensity=0 不耗性能） */}
+      <pointLight ref={glowLight} position={[0, 1.5, 0.15]} color="#ffd98f" intensity={0} distance={2.4} decay={2} />
+    </group>
+  );
+}
+
+// ---------------- 36. 软木留言板（v6.1 G8：木框 + 软木底 + 彩色便利贴 + 红图钉；挂墙件板面居中朝 +z） ----------------
+
+/** 软木斑驳贴图（随机斑点） */
+function makeCorkTexture(): THREE.CanvasTexture {
+  const S = 128;
+  const cv = document.createElement('canvas');
+  cv.width = S;
+  cv.height = S;
+  const ctx = cv.getContext('2d')!;
+  ctx.fillStyle = '#d9b489';
+  ctx.fillRect(0, 0, S, S);
+  const tones = ['#c8a173', '#e3c69b', '#d0aa7d', '#c19b6c'];
+  for (let i = 0; i < 220; i++) {
+    ctx.fillStyle = tones[i % tones.length];
+    ctx.beginPath();
+    ctx.arc(Math.random() * S, Math.random() * S, 0.6 + Math.random() * 1.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+export function NoteBoard3D({ col }: CozyPlusProps) {
+  const wood = col ?? '#c9a87a';
+  const corkTex = useMemo(() => makeCorkTexture(), []);
+  useEffect(() => () => {
+    corkTex.dispose();
+  }, []);
+  /** 便利贴（薄方块 + 手写短线 + 顶部红图钉；rz = 微歪斜） */
+  const note = (x: number, y: number, c: string, rz: number, key: string) => (
+    <group key={key} position={[x, y, 0.03]} rotation={[0, 0, rz]}>
+      <mesh castShadow>
+        <boxGeometry args={[0.16, 0.16, 0.006]} />
+        {mat(c, 0.9)}
+      </mesh>
+      {[-0.038, -0.004, 0.03].map((ly, i) => (
+        <mesh key={i} position={[i === 2 ? -0.012 : 0.008, ly, 0.004]}>
+          <boxGeometry args={[i === 2 ? 0.068 : 0.1, 0.007, 0.002]} />
+          {mat(shade(c, 0.55), 0.9)}
+        </mesh>
+      ))}
+      <mesh position={[0, 0.058, 0.007]}>
+        <sphereGeometry args={[0.009, 8, 8]} />
+        {mat('#e05a4e', 0.35)}
+      </mesh>
+    </group>
+  );
+  return (
+    <group>
+      {/* 木框四边 */}
+      <mesh position={[0, 0.275, 0.017]} castShadow>
+        <boxGeometry args={[0.72, 0.05, 0.034]} />
+        {mat(wood, 0.7)}
+      </mesh>
+      <mesh position={[0, -0.275, 0.017]} castShadow>
+        <boxGeometry args={[0.72, 0.05, 0.034]} />
+        {mat(wood, 0.7)}
+      </mesh>
+      {[-1, 1].map((s) => (
+        <mesh key={s} position={[0.335 * s, 0, 0.017]} castShadow>
+          <boxGeometry args={[0.05, 0.55, 0.034]} />
+          {mat(wood, 0.7)}
+        </mesh>
+      ))}
+      {/* 软木底板 */}
+      <mesh position={[0, 0, 0.012]}>
+        <boxGeometry args={[0.63, 0.5, 0.018]} />
+        <meshStandardMaterial map={corkTex} roughness={0.95} />
+      </mesh>
+      {/* 三张彩色便利贴（黄/粉/蓝，微歪斜） */}
+      {note(-0.15, 0.09, '#f7e6a6', 0.09, 'a')}
+      {note(0.13, 0.12, '#f9c9d4', -0.08, 'b')}
+      {note(0.0, -0.12, '#cfe6f5', 0.13, 'c')}
+      {/* 粉色便签上的小红心涂鸦 */}
+      <group position={[0.13, 0.075, 0.042]} rotation={[0, 0, -0.08]}>
+        <mesh position={[-0.013, 0.008, 0]}>
+          <sphereGeometry args={[0.013, 8, 8]} />
+          {mat('#e05a4e', 0.6)}
+        </mesh>
+        <mesh position={[0.013, 0.008, 0]}>
+          <sphereGeometry args={[0.013, 8, 8]} />
+          {mat('#e05a4e', 0.6)}
+        </mesh>
+        <mesh position={[0, -0.011, 0]} rotation={[0, 0, Math.PI]}>
+          <coneGeometry args={[0.017, 0.024, 10]} />
+          {mat('#e05a4e', 0.6)}
+        </mesh>
+      </group>
+      {/* 底缘笔架 + 一支马克笔 */}
+      <mesh position={[0.05, -0.315, 0.04]} castShadow>
+        <boxGeometry args={[0.28, 0.02, 0.055]} />
+        {mat(shade(wood, 0.9), 0.7)}
+      </mesh>
+      <mesh position={[-0.03, -0.297, 0.04]} rotation={[0, 0, Math.PI / 2 + 0.06]} castShadow>
+        <capsuleGeometry args={[0.011, 0.085, 4, 10]} />
+        {mat('#7fc792', 0.5)}
+      </mesh>
+    </group>
+  );
+}
+
 // ---------------- 注册表（接线方按 kind 取用） ----------------
 
 export const COZY_PLUS_PARTS: Record<string, (p: CozyPlusProps) => ReactElement> = {
@@ -2670,4 +2989,6 @@ export const COZY_PLUS_PARTS: Record<string, (p: CozyPlusProps) => ReactElement>
   beanbagBlanket: BeanbagBlanket3D,
   teaSet: TeaSet3D,
   cakeStand: CakeStand3D,
+  clawMachine: ClawMachine3D,
+  noteBoard: NoteBoard3D,
 };

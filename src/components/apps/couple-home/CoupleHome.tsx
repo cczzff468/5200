@@ -35,6 +35,7 @@ import {
   Eye,
   Flame,
   Gamepad2,
+  ImagePlus,
   Laptop,
   Loader2,
   Maximize,
@@ -44,6 +45,7 @@ import {
   Music,
   Paintbrush,
   Pencil,
+  Puzzle,
   RotateCcw,
   RotateCw,
   Undo2,
@@ -108,12 +110,20 @@ import {
 } from './catalog';
 import { sfx } from './sfx';
 import { getCachedThumb } from './scene/ShopThumbs';
-import type { CharAction, CharPose, CharRT, CharStyle, FurnitureItem, FurnitureKind, HomeMode, HomeState, RoomId } from './types';
+import type { CharAction, CharPose, CharRT, CharStyle, FurnitureItem, FurnitureKind, HomeMode, HomeState, LayoutSnap, NoteEntry, RoomId } from './types';
 
 /** 做饭小游戏（选菜谱→切菜/翻炒/装盘→上桌，v5.7 F5） */
 const CookingGame = dynamic(() => import('./CookingGame'), { ssr: false });
 /** 五子棋对弈（棋盘桌，v5.7 J7） */
 const ChessOverlay = dynamic(() => import('./ChessOverlay'), { ssr: false });
+/** 软木留言板（G8 共享留言板） */
+const NotesOverlay = dynamic(() => import('./NotesOverlay'), { ssr: false });
+/** 抓娃娃机（G10） */
+const ClawMachineGame = dynamic(() => import('./games/ClawMachineGame'), { ssr: false });
+/** 咖啡拉花（G10） */
+const LatteArtGame = dynamic(() => import('./games/LatteArtGame'), { ssr: false });
+/** 照片拼图（G10） */
+const PuzzleGame = dynamic(() => import('./games/PuzzleGame'), { ssr: false });
 
 const HomeScene = dynamic(() => import('./scene/HomeScene'), {
   ssr: false,
@@ -528,6 +538,23 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [guest, setGuest] = useState<{ id: string; name: string } | null>(null);
   const [chess, setChess] = useState<{ itemId: string } | null>(null);
   const [cookingGame, setCookingGame] = useState(false);
+  // —— v6.1 G 系列：装修方案 / 留言板 / 三连小游戏 ——
+  /** G1 装修方案（最多 3 套整屋快照） */
+  const [layouts, setLayouts] = useState<LayoutSnap[]>(pack.home.layouts ?? []);
+  /** G8 留言板便签 */
+  const [notes, setNotes] = useState<NoteEntry[]>(pack.home.notes ?? []);
+  const [noteOpen, setNoteOpen] = useState(false);
+  /** G8 各自未读提醒只弹一次 */
+  const notesRemindRef = useRef(false);
+  /** G8 我方已读时间戳（打开面板时刷新） */
+  const notesSeenRef = useRef<{ me?: number; partner?: number }>(pack.home.notesSeen ?? {});
+  /** G10 娃娃机：正在玩的机器家具 id */
+  const [clawFor, setClawFor] = useState<string | null>(null);
+  /** G10 咖啡拉花小游戏 */
+  const [latteOpen, setLatteOpen] = useState(false);
+  /** G10 相框菜单（换照片/拼图）与拼图会话 */
+  const [photoMenuFor, setPhotoMenuFor] = useState<string | null>(null);
+  const [puzzleFor, setPuzzleFor] = useState<{ photo?: string } | null>(null);
   const [photoMode, setPhotoMode] = useState(false);
   /** E3 音效开关（持久化在 sfx 模块内 localStorage，挂载时读回） */
   const [sfxOn, setSfxOn] = useState(true);
@@ -673,6 +700,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
   wallColBalRef.current = wallColBal;
   const mealNameRef = useRef(mealName);
   mealNameRef.current = mealName;
+  const layoutsRef = useRef(layouts);
+  layoutsRef.current = layouts;
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
   const sfxOnRef = useRef(sfxOn);
   sfxOnRef.current = sfxOn;
   const modeRef = useRef(mode);
@@ -784,6 +815,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
       floorColBal: floorColBalRef.current,
       wallColBal: wallColBalRef.current,
       mealName: mealNameRef.current,
+      layouts: layoutsRef.current,
+      notes: notesRef.current,
+      notesSeen: notesSeenRef.current,
       // 正在进行的家具动作（已摆好姿势才存，重进页面接着坐/睡/泡/淋浴/看电视/上网；
       // 自动结束型不存 —— 重进后重新发起即可）
       act: (() => {
@@ -841,6 +875,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setFloorColBal(h.floorColBal);
     setWallColBal(h.wallColBal);
     setMealName(h.mealName);
+    setLayouts(h.layouts ?? []);
+    setNotes(h.notes ?? []);
+    notesSeenRef.current = h.notesSeen ?? {};
     clearHistory();
     // 恢复「我」正在进行的家具动作（仅在当前没有进行中动作时：
     // 初始化/重置/409 采纳互不打架；家具已被删或自动结束型动作则忽略）
@@ -1185,6 +1222,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
     return items.find((f) => f.kind === 'diningTable')?.id ?? null;
   }, [mealReady, items]);
 
+  // —— G8 留言板：打开并记已读（onFurnTap 之前声明） ——
+  const openNotes = useCallback(() => {
+    notesSeenRef.current = { ...notesSeenRef.current, me: Date.now() };
+    setNoteOpen(true);
+    sfx.tap();
+    saveSoon();
+  }, [saveSoon]);
+
   const onFurnTap = useCallback(
     (item: FurnitureItem) => {
       sfx.tap(); // E3：所有家具点按轻响（函数最前面，提前 return 分支也有声）
@@ -1244,6 +1289,30 @@ export default function CoupleHome({ close }: { close: () => void }) {
       // 灶台：开做饭小游戏（选菜谱→切菜/翻炒/装盘→上桌）
       if (item.kind === 'stove' && entry.acts?.cook) {
         setCookingGame(true);
+        return;
+      }
+      // G10 娃娃机：开一局抓娃娃（30 秒冷却）
+      if (item.kind === 'clawMachine') {
+        if (Date.now() - (item.st?.lastClaw ?? 0) < 30_000) {
+          toast('娃娃机补货中，歇一会儿再来抓～');
+          return;
+        }
+        setClawFor(item.id);
+        return;
+      }
+      // G8 软木留言板：打开留言面板（顺便记已读）
+      if (item.kind === 'noteBoard') {
+        openNotes();
+        return;
+      }
+      // G10 咖啡机：先玩拉花小游戏，拉好了再端走
+      if (item.kind === 'coffeeMaker') {
+        setLatteOpen(true);
+        return;
+      }
+      // G10 立式相框：换照片 / 拼一拼 二选一
+      if (item.kind === 'photoFrame' && entry.acts?.photo) {
+        setPhotoMenuFor(item.id);
         return;
       }
       // 音箱：打开「小屋点歌」（用音乐 App 的歌，全屋响起）
@@ -1360,7 +1429,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         }
       }
     },
-    [mode, saveSoon, toast, endAction, mealReady],
+    [mode, saveSoon, toast, endAction, mealReady, openNotes],
   );
 
   /** 浴缸水龙头：放水 / 关水 */
@@ -1514,6 +1583,95 @@ export default function CoupleHome({ close }: { close: () => void }) {
       saveSoon();
     },
     [saveSoon, toast],
+  );
+
+  // —— G8 进门未读便签提醒（首份带便签的档案到达时只弹一次） ——
+  useEffect(() => {
+    if (notesRemindRef.current || notes.length === 0) return;
+    notesRemindRef.current = true;
+    const seen = notesSeenRef.current.me ?? 0;
+    const unread = notes.filter((n) => n.by === 'partner' && n.ts > seen).length;
+    if (unread > 0) toast(`TA给你留了 ${unread} 条便签，点留言板看看～`);
+  }, [notes, toast]);
+
+  // —— G10 咖啡拉花：ok/perfect 才开煮（走既有「端一杯」动作链） ——
+  const onLatteResult = useCallback(
+    (r: 'miss' | 'ok' | 'perfect') => {
+      setLatteOpen(false);
+      if (r === 'miss') {
+        toast('奶泡洒了…擦擦台面，再试一次？');
+        return;
+      }
+      const machine = itemsRef.current.find((f) => f.kind === 'coffeeMaker');
+      if (!machine) return;
+      if (poseRef.current.pose !== 'stand' || actRef.current) endAction();
+      setCharAction({ type: 'coffee', itemId: machine.id, active: false });
+      toast(r === 'perfect' ? '完美爱心拉花！咖啡机喌哚喌哚煮咖啡…' : '不错的拉花！咖啡机喌哚喌哚煮咖啡…');
+    },
+    [toast, endAction],
+  );
+
+  // —— G1 装修方案：保存当前整屋快照到槽位（照片不随方案备份） ——
+  const saveLayout = useCallback(
+    (slot: number) => {
+      const s = takeSnap();
+      const strip = (f: FurnitureItem): FurnitureItem => {
+        const clone = { ...f, st: { ...f.st } };
+        delete clone.st.photo;
+        return clone;
+      };
+      const snap: LayoutSnap = {
+        name: `方案${['A', 'B', 'C'][slot]}`,
+        ts: Date.now(),
+        furniture: s.items.map(strip),
+        floorCol: s.floorCol,
+        wallCol: s.wallCol,
+        floorColBed: s.floorColBed,
+        wallColBed: s.wallColBed,
+        floorColK: s.floorColK,
+        wallColK: s.wallColK,
+        floorColB: s.floorColB,
+        wallColB: s.wallColB,
+        floorColBal: s.floorColBal,
+        wallColBal: s.wallColBal,
+      };
+      setLayouts((prev) => {
+        const next = prev.slice();
+        next[slot] = snap;
+        return next;
+      });
+      sfx.tap();
+      toast(`已存入${snap.name}（${snap.furniture.length} 件，不含照片）`);
+      saveSoon();
+    },
+    [takeSnap, toast, saveSoon],
+  );
+
+  // —— G1 装修方案：整屋切换（一步入栈，撤销即回旧布置） ——
+  const applyLayout = useCallback(
+    (slot: number) => {
+      const snap = layoutsRef.current[slot];
+      if (!snap) return;
+      pushHistory('layout');
+      setItems(snap.furniture.map((f) => ({ ...f, st: { ...f.st } })));
+      setFloorCol(snap.floorCol);
+      setWallCol(snap.wallCol);
+      setFloorColBed(snap.floorColBed);
+      setWallColBed(snap.wallColBed);
+      setFloorColK(snap.floorColK);
+      setWallColK(snap.wallColK);
+      setFloorColB(snap.floorColB);
+      setWallColB(snap.wallColB);
+      setFloorColBal(snap.floorColBal);
+      setWallColBal(snap.wallColBal);
+      setSelId(null);
+      setMoveOn(false);
+      setPaletteOpen(false);
+      sfx.place();
+      toast(`切换到${snap.name}，整屋 ${snap.furniture.length} 件（撤销可回旧布置）`);
+      saveSoon();
+    },
+    [pushHistory, toast, saveSoon],
   );
 
   // —— F4 天气联动：雨声白噪音 + 夜晚自动开灯 ——
@@ -2218,6 +2376,28 @@ export default function CoupleHome({ close }: { close: () => void }) {
     }
     return { x: Math.round(((x0 + x1) / 2) * 4) / 4, z: Math.round(((z0 + z1) / 2) * 4) / 4 };
   }, []);
+
+  // —— G10 娃娃机：抓中的毛绒直接摆进房间（一步可撤销；依赖 findSpot，故在其后声明） ——
+  const onClawWin = useCallback(
+    (plush: 'plushBunny' | 'plushDuck' | 'plushPanda' | 'plushPig' | 'plushCat' | 'bear') => {
+      const machineId = clawFor;
+      setClawFor(null);
+      if (!machineId) return;
+      pushHistory('claw');
+      const room = roomAt(meRT.current.x, meRT.current.z);
+      const spot = findSpot(plush, room);
+      const id = `${plush}-${Date.now().toString(36)}-${++buySeq}`;
+      const now = Date.now();
+      setItems((prev) => [
+        ...prev.map((f) => (f.id === machineId ? { ...f, st: { ...f.st, lastClaw: now } } : f)),
+        { id, kind: plush, x: spot.x, z: spot.z, st: {} } as FurnitureItem,
+      ]);
+      sfx.place();
+      toast(`抓到啦！${CATALOG[plush]?.name ?? '毛绒'}搬进了${ROOM_NAMES[room]}～`);
+      saveSoon();
+    },
+    [clawFor, pushHistory, findSpot, toast, saveSoon],
+  );
 
   /** 在指定房间找一段空墙面（避开已挂件/高家具/窗户门洞；返回贴墙坐标与朝向） */
   const findWallSpot = useCallback(
@@ -3203,6 +3383,90 @@ export default function CoupleHome({ close }: { close: () => void }) {
         {cookingGame && <CookingGame onComplete={onCookingDone} onClose={() => setCookingGame(false)} />}
       </AnimatePresence>
 
+      {/* ===== G10 相框菜单：换照片 / 拼一拼 ===== */}
+      <AnimatePresence>
+        {photoMenuFor && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-30 flex items-end justify-center bg-black/25 p-6 pb-10"
+            onClick={() => setPhotoMenuFor(null)}
+          >
+            <motion.div
+              initial={{ y: 60, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 40, opacity: 0 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 340 }}
+              className="pointer-events-auto w-full max-w-[260px] overflow-hidden rounded-3xl bg-white/95 shadow-2xl backdrop-blur-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="pt-3.5 text-center text-[12px] text-[#9a9a96]">立式相框</p>
+              <button
+                onClick={() => {
+                  photoTargetRef.current = photoMenuFor;
+                  fileInputRef.current?.click();
+                  setPhotoMenuFor(null);
+                }}
+                className="flex w-full items-center justify-center gap-1.5 px-5 py-3 text-[13.5px] font-medium text-[#4a4a4e] transition active:bg-black/5"
+              >
+                <ImagePlus className="h-4 w-4 text-[#e8a3b3]" /> 换一张照片
+              </button>
+              <div className="mx-5 h-px bg-[#f0eeea]" />
+              <button
+                onClick={() => {
+                  const it = itemsRef.current.find((f) => f.id === photoMenuFor);
+                  setPuzzleFor({ photo: it?.st?.photo });
+                  setPhotoMenuFor(null);
+                }}
+                className="flex w-full items-center justify-center gap-1.5 px-5 py-3 text-[13.5px] font-medium text-[#4a4a4e] transition active:bg-black/5"
+              >
+                <Puzzle className="h-4 w-4 text-[#e8a3b3]" /> 用照片拼一拼
+              </button>
+              <div className="mx-5 h-px bg-[#f0eeea]" />
+              <button
+                onClick={() => setPhotoMenuFor(null)}
+                className="w-full px-5 py-3 text-[13.5px] font-medium text-[#b8b4ae] transition active:bg-black/5"
+              >
+                取消
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ===== G8 软木留言板面板 ===== */}
+      <AnimatePresence>
+        {noteOpen && (
+          <NotesOverlay
+            notes={notes}
+            onClose={() => setNoteOpen(false)}
+            onPost={(text) => {
+              setNotes((prev) => [
+                ...prev.slice(-49),
+                {
+                  id: `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+                  text,
+                  ts: Date.now(),
+                  by: 'me',
+                },
+              ]);
+              sfx.tap();
+              saveSoon();
+            }}
+            onDelete={(id) => {
+              setNotes((prev) => prev.filter((n) => n.id !== id));
+              saveSoon();
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* ===== G10 抓娃娃 / 咖啡拉花 / 照片拼图 ===== */}
+      <ClawMachineGame open={!!clawFor} onClose={() => setClawFor(null)} onWin={onClawWin} />
+      <LatteArtGame open={latteOpen} onClose={() => setLatteOpen(false)} onResult={onLatteResult} />
+      <PuzzleGame open={!!puzzleFor} onClose={() => setPuzzleFor(null)} photo={puzzleFor?.photo} />
+
       {/* ===== 小屋点歌（F3：音箱/黑胶/八音盒共用；搜歌 · 我的歌单 · 队列 —— v6.0 重构） ===== */}
       <SongSheet open={musicSheet} onClose={() => setMusicSheet(false)} onToast={toast} />
 
@@ -3540,6 +3804,62 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                {/* —— G1 装修方案（整屋快照 A/B/C，应用一步可撤销） —— */}
+                <div className="mb-2 mt-4 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#f2a9bc]" />
+                  <span className="text-[12px] font-semibold text-[#8a8a90]">装修方案</span>
+                </div>
+                <p className="mb-2 text-[10.5px] leading-snug text-[#a8a8a4]">
+                  整屋快照（家具+各房间地板墙色，不含照片），换季搬家一键切换，应用后可撤销
+                </p>
+                <div className="flex flex-col gap-2">
+                  {[0, 1, 2].map((i) => {
+                    const snap = layouts[i];
+                    const tag = ['A', 'B', 'C'][i];
+                    return (
+                      <div key={i} className="flex items-center gap-2 rounded-2xl bg-[#faf8f3] p-2.5 ring-1 ring-[#efece2]">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#f6cdd6] to-[#dcd2ec] text-[12px] font-bold text-white">
+                          {tag}
+                        </span>
+                        {snap ? (
+                          <>
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[12px] font-semibold text-[#3a3a3e]">
+                                方案{tag} · {snap.furniture.length} 件
+                              </div>
+                              <div className="text-[10px] text-[#a8a8a4]">
+                                {new Date(snap.ts).toLocaleDateString('zh-CN')} 保存
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => applyLayout(i)}
+                              className="shrink-0 rounded-full bg-[#f4b3c2] px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition active:scale-95"
+                            >
+                              应用
+                            </button>
+                            <button
+                              onClick={() => saveLayout(i)}
+                              className="shrink-0 rounded-full bg-[#f0eff1] px-3 py-1.5 text-[11px] font-medium text-[#8a8a90] transition active:scale-95"
+                            >
+                              覆盖
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <div className="min-w-0 flex-1 text-[12px] text-[#a8a8a4]">方案{tag} · 空</div>
+                            <button
+                              onClick={() => saveLayout(i)}
+                              className="shrink-0 rounded-full bg-[#f4b3c2] px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition active:scale-95"
+                            >
+                              存入当前布置
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </motion.div>

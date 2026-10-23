@@ -901,6 +901,17 @@ export const CATALOG: Record<string, CatalogEntry> = {
     kind: 'cakeStand', name: '蛋糕架', cat: 'kitchen', fp: [0.28, 0.28], h: 0.28,
     acts: { playful: true },
   },
+  // ---- v6.1 留言板 + 娃娃机（G8 共享留言板 / G10 小游戏） ----
+  clawMachine: {
+    kind: 'clawMachine', name: '娃娃机', cat: 'decor', fp: [0.82, 0.66], h: 1.78,
+    // 点击开一局抓娃娃（接线在 CoupleHome：抓中的毛绒直接摆进房间）
+    acts: {},
+  },
+  noteBoard: {
+    kind: 'noteBoard', name: '软木留言板', cat: 'decor', fp: [0.72, 0.08], wallMount: true, wallY: 1.5, h: 0.6,
+    // 点击打开留言面板（给 TA 留言 / 待办）
+    acts: {},
+  },
 };
 
 // ---------------- 成套摆放（F3：一键把一组家具按预设相对位放进房间） ----------------

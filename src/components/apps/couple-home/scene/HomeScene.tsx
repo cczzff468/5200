@@ -24,7 +24,9 @@ import Room, { buildWallBoxes } from './Room';
 import Furn3D from './Furn3D';
 import Char3D from './Char3D';
 import {
+  BAL_X0,
   BAL_X1,
+  BAL_Z0,
   BAL_Z1,
   BATH_X0,
   BATH_X1,
@@ -37,6 +39,7 @@ import {
   clampFurnToRooms,
   DOOR_PASS,
   KTCH_X1,
+  ROOM_SPANS,
   ROOM_X,
   ROOM_Z,
   SNAP,
@@ -141,6 +144,8 @@ export interface HomeSceneProps {
   wallTex?: 'plain' | 'dot' | 'stripe';
   /** E7 灯光氛围：当前亮着的灯具数量（开灯越多环境光越亮越暖；缺省 0） */
   litLamps?: number;
+  /** G3 彩蛋小生物：点击惊飞回调（kind = 蝴蝶/小鸟） */
+  onCritterTap?: (kind: 'butterfly' | 'bird') => void;
 }
 
 /** 生活模式视角俯仰范围：接近水平（低角仰视）↔ 近乎俯瞰（全方位拉动视角） */
@@ -1051,6 +1056,8 @@ const DAY_BG = '#efe8da';
 const NIGHT_BG = '#24272f';
 const _TMP_C = /* @__PURE__ */ new THREE.Color();
 const _WARM = /* @__PURE__ */ new THREE.Color(); // E7 夜晚开灯 → 环境光向暖色偏移的目标色
+const _COOL_C = /* @__PURE__ */ new THREE.Color(); // G5 雨天阴沉 → 环境/半球光向冷灰偏移的目标色
+const _WHITE_C = /* @__PURE__ */ new THREE.Color('#ffffff'); // G2 幕帘染色基准（material.color 每帧复位用）
 
 /**
  * E2 昼夜平滑：mix 每帧向目标阻尼（0=白天 / 1=夜晚），驱动天空底色；
@@ -1085,17 +1092,22 @@ function Lights({
   mixRef,
   quality,
   litLamps = 0,
+  gloomy = false,
 }: {
   night: boolean;
   mixRef: RefObject<{ v: number }>;
   quality: SceneQuality;
   /** E7：亮着的灯具数量（越多环境光越亮越暖；夜晚全额生效，白天 ×0.3） */
   litLamps?: number;
+  /** G5 雨天阴沉：环境/半球光变暗变冷（damp 平滑过渡，不瞬切；雪不动灯光） */
+  gloomy?: boolean;
 }) {
   const dir = useRef<THREE.DirectionalLight>(null);
   const amb = useRef<THREE.AmbientLight>(null);
   const hemi = useRef<THREE.HemisphereLight>(null);
   const tmp = useMemo(() => new THREE.Color(), []);
+  /** G5 阴沉系数（0=晴 / 1=雨天全值），每帧 damp */
+  const gloomRef = useRef(0);
   useEffect(() => {
     // 切换昼夜时重投阴影
     dir.current?.shadow?.camera?.updateProjectionMatrix();
@@ -1121,26 +1133,32 @@ function Lights({
     // E7 灯光氛围：亮着的灯具越多环境光越亮越暖（直接加进 damp 目标值，昼夜 damp 不受影响）
     const lit = Math.min(litLamps, 5);
     const dayK = night ? 1 : 0.3; // 夜晚全额生效，白天轻微
+    // G5 雨天氛围：在昼夜 damp 目标上再让环境/半球光亮度 ×0.85 + 色调向冷灰偏移（平滑过渡）
+    gloomRef.current = THREE.MathUtils.damp(gloomRef.current, gloomy ? 1 : 0, 2.2, d);
+    const gloom = 1 - 0.15 * gloomRef.current;
     if (amb.current) {
       amb.current.intensity = THREE.MathUtils.damp(
         amb.current.intensity,
-        (night ? 0.55 : 0.95) + lit * 0.07 * dayK,
+        ((night ? 0.55 : 0.95) + lit * 0.07 * dayK) * gloom,
         2.2,
         d,
       );
       // 昼夜 lerp 完成后再向暖色微调（tmp 是复用临时色，必须等 lerp 用完再叠加，且只在夜晚生效）
       amb.current.color
         .copy(tmp.set('#fff3e0').lerp(_TMP_C.set('#a8b4cd'), k))
-        .lerp(_WARM.set('#ffdcb0'), lit * 0.06 * (night ? 1 : 0));
+        .lerp(_WARM.set('#ffdcb0'), lit * 0.06 * (night ? 1 : 0))
+        .lerp(_COOL_C.set('#8d99ad'), gloomRef.current * 0.35);
     }
     if (hemi.current) {
       hemi.current.intensity = THREE.MathUtils.damp(
         hemi.current.intensity,
-        (night ? 0.5 : 0.55) + lit * 0.05 * dayK,
+        ((night ? 0.5 : 0.55) + lit * 0.05 * dayK) * gloom,
         2.2,
         d,
       );
-      hemi.current.color.copy(tmp.set('#fdf6e8').lerp(_TMP_C.set('#39415c'), k));
+      hemi.current.color
+        .copy(tmp.set('#fdf6e8').lerp(_TMP_C.set('#39415c'), k))
+        .lerp(_COOL_C.set('#8d99ad'), gloomRef.current * 0.3);
       hemi.current.groundColor.copy(tmp.set('#e5d6b8').lerp(_TMP_C.set('#23252c'), k));
     }
     if (dir.current) {
@@ -1204,7 +1222,7 @@ export default function HomeScene(props: HomeSceneProps) {
     floorColBal, wallColBal,
     ceilCol, ceilColBed, ceilColK, ceilColB,
     doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, onToggleDoor, onToggleKitchenDoor, onToggleBathDoor, onToggleBalconyDoor,
-    guestRT, guestName, musicPlaying, weatherFx, litLamps,
+    guestRT, guestName, musicPlaying, weatherFx, litLamps, onCritterTap,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
   } = props;
 
@@ -1261,6 +1279,8 @@ export default function HomeScene(props: HomeSceneProps) {
 
   /** 任一投影仪开着（幕布放下放电影） */
   const projectorOn = items.some((f) => f.kind === 'projector' && f.st?.on);
+  /** G5 雨天氛围：rain 时环境光阴沉（内部换算传给 Lights，不进 Props 合同） */
+  const gloomy = weatherFx === 'rain';
   /** 正坐着的家具（吊篮秋千摆幅加大） */
   const sittingId = activeAct?.active && activeAct.type === 'sit' ? activeAct.itemId : null;
 
@@ -1336,7 +1356,7 @@ export default function HomeScene(props: HomeSceneProps) {
         onFallback={() => setQuality('low')}
       />
       <NightBlend night={night} mixRef={nightMixRef} />
-      <Lights night={night} mixRef={nightMixRef} quality={quality} litLamps={litLamps} />
+      <Lights night={night} mixRef={nightMixRef} quality={quality} litLamps={litLamps} gloomy={gloomy} />
       <Room
         night={night}
         onFloorTap={onFloorTap}
@@ -1410,6 +1430,10 @@ export default function HomeScene(props: HomeSceneProps) {
       )}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       <WeatherFX kind={weatherFx ?? 'clear'} win={win} winPos={winPos} />
+      <SceneryFX kind={weatherFx ?? 'clear'} night={night} win={win} winPos={winPos} />
+      <GlassRain kind={weatherFx ?? 'clear'} winPos={winPos} />
+      <SnowDeco kind={weatherFx ?? 'clear'} winPos={winPos} />
+      <Critters mode={mode} items={items} onCritterTap={onCritterTap} />
       <SpeakerNotes items={items} active={!!musicPlaying} />
       <EditCameraKick mode={mode} />
       <ZoomPoker zoomCmd={zoomCmd} />
@@ -1571,6 +1595,473 @@ function WeatherFX({
           </mesh>
         );
       })}
+    </group>
+  );
+}
+
+// ---------------- G2 窗外动态风景 + G5 积雪/水珠 + G3 彩蛋小生物（v6.1） ----------------
+
+/** 白天天空底图（淡蓝渐变 + 远山 + 蓬松云；rainy=true 染灰压暗） */
+function makeDaySkyTexture(rainy: boolean): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 256;
+  cv.height = 192;
+  const ctx = cv.getContext('2d')!;
+  const g = ctx.createLinearGradient(0, 0, 0, 192);
+  if (rainy) {
+    g.addColorStop(0, '#9aa9b8');
+    g.addColorStop(0.65, '#b6bfc9');
+    g.addColorStop(1, '#c9cdd2');
+  } else {
+    g.addColorStop(0, '#a5ddf2');
+    g.addColorStop(0.62, '#d9f0f7');
+    g.addColorStop(1, '#f4ecdc');
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 192);
+  // 远山两叠（雨天更淡）
+  ctx.fillStyle = rainy ? 'rgba(150,160,170,0.5)' : 'rgba(160,196,178,0.55)';
+  ctx.beginPath();
+  ctx.moveTo(0, 152);
+  ctx.quadraticCurveTo(64, 108, 138, 150);
+  ctx.quadraticCurveTo(196, 118, 256, 148);
+  ctx.lineTo(256, 192);
+  ctx.lineTo(0, 192);
+  ctx.closePath();
+  ctx.fill();
+  // 云朵（椭圆簇）
+  const cloud = (cx: number, cy: number, s: number, alpha: number) => {
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    for (const [dx, dy, r] of [[-26, 6, 17], [0, 0, 23], [26, 7, 16], [-10, -9, 15], [12, -8, 14]] as const) {
+      ctx.beginPath();
+      ctx.ellipse(cx + dx * s, cy + dy * s, r * s, r * s * 0.72, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+  cloud(58, 52, 1, rainy ? 0.5 : 0.95);
+  cloud(176, 86, 0.72, rainy ? 0.42 : 0.85);
+  cloud(120, 26, 0.55, rainy ? 0.36 : 0.8);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** 夜晚星空底图（深蓝渐变 + 星点 + 月牙；rainy=true 罩灰） */
+function makeNightSkyTexture(rainy: boolean): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 256;
+  cv.height = 192;
+  const ctx = cv.getContext('2d')!;
+  const g = ctx.createLinearGradient(0, 0, 0, 192);
+  if (rainy) {
+    g.addColorStop(0, '#2b3440');
+    g.addColorStop(1, '#46505c');
+  } else {
+    g.addColorStop(0, '#17203a');
+    g.addColorStop(0.7, '#2a3654');
+    g.addColorStop(1, '#3d4a66');
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 192);
+  // 星点
+  if (!rainy) {
+    for (let i = 0; i < 64; i++) {
+      const x = Math.random() * 256;
+      const y = Math.random() * 150;
+      const r = 0.6 + Math.random() * 1.3;
+      ctx.fillStyle = `rgba(255,250,235,${0.35 + Math.random() * 0.6})`;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // 月牙（白圆被夜色圆啃出一弯）
+    ctx.fillStyle = 'rgba(255,246,214,0.95)';
+    ctx.beginPath();
+    ctx.arc(196, 46, 17, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1c2740';
+    ctx.beginPath();
+    ctx.arc(189, 41, 15, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = 'rgba(140,150,160,0.4)';
+    ctx.fillRect(0, 0, 256, 192);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** G2 窗外远景幕帘：每扇窗更外侧挂一块天空（白天流云漂移/夜晚星空月牙，雨雪染灰） */
+function SceneryFX({
+  kind,
+  night,
+  winPos,
+}: {
+  kind: 'rain' | 'snow' | 'clear';
+  night: boolean;
+  win?: boolean[];
+  winPos?: number[];
+}) {
+  const texDay = useMemo(() => makeDaySkyTexture(false), []);
+  const texDayBad = useMemo(() => makeDaySkyTexture(true), []);
+  const texNight = useMemo(() => makeNightSkyTexture(false), []);
+  const texNightBad = useMemo(() => makeNightSkyTexture(true), []);
+  const bad = kind !== 'clear';
+  const tex = night ? (bad ? texNightBad : texNight) : bad ? texDayBad : texDay;
+  useFrame((_, dt) => {
+    // 云缓慢漂移（夜晚更慢，星星微微流动不突兀）
+    const v = night ? 0.004 : 0.011;
+    texDay.offset.x = (texDay.offset.x - dt * v) % 1;
+    texDayBad.offset.x = (texDayBad.offset.x - dt * v * 1.6) % 1;
+    texNight.offset.x = (texNight.offset.x - dt * v) % 1;
+    texNightBad.offset.x = (texNightBad.offset.x - dt * v) % 1;
+  });
+  return (
+    <group>
+      {WINS.map((w, i) => {
+        const along = winPos?.[i] ?? w.def;
+        const x = w.axis === 'z' ? along : w.at + w.side * 1.5;
+        const z = w.axis === 'z' ? w.at + w.side * 1.5 : along;
+        return (
+          <mesh key={i} position={[x, 1.72, z]} rotation={[0, w.ry, 0]}>
+            <planeGeometry args={[3.4, 2.7]} />
+            <meshBasicMaterial map={tex} toneMapped={false} fog={false} depthWrite={false} />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
+/** G5 玻璃水珠贴图（圆珠 + 竖向水痕） */
+function makeGlassRainTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 256;
+  const ctx = cv.getContext('2d')!;
+  ctx.clearRect(0, 0, 128, 256);
+  // 三道水痕
+  for (let i = 0; i < 3; i++) {
+    const x = 16 + Math.random() * 96;
+    const y = Math.random() * 120;
+    const h = 70 + Math.random() * 90;
+    const lg = ctx.createLinearGradient(0, y, 0, y + h);
+    lg.addColorStop(0, 'rgba(225,238,248,0.05)');
+    lg.addColorStop(0.8, 'rgba(225,238,248,0.3)');
+    lg.addColorStop(1, 'rgba(225,238,248,0.05)');
+    ctx.strokeStyle = lg;
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 1.5, y + h);
+    ctx.stroke();
+  }
+  // 圆珠
+  for (let i = 0; i < 46; i++) {
+    const x = Math.random() * 128;
+    const y = Math.random() * 256;
+    const r = 1.2 + Math.random() * 2.6;
+    const rg = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, 0, x, y, r);
+    rg.addColorStop(0, 'rgba(255,255,255,0.9)');
+    rg.addColorStop(0.55, 'rgba(214,232,244,0.5)');
+    rg.addColorStop(1, 'rgba(214,232,244,0)');
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1.4, 1.6);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** G5 雨天玻璃水珠层：贴在每扇窗玻璃外表面，极缓慢下滑 */
+function GlassRain({ kind, winPos }: { kind: 'rain' | 'snow' | 'clear'; winPos?: number[] }) {
+  const tex = useMemo(() => makeGlassRainTexture(), []);
+  useFrame((_, dt) => {
+    if (kind !== 'rain') return;
+    tex.offset.y = (tex.offset.y - dt * 0.016) % 1;
+    tex.offset.x = Math.sin(performance.now() / 3400) * 0.01;
+  });
+  return (
+    <group>
+      {WINS.map((w, i) => {
+        const along = winPos?.[i] ?? w.def;
+        const x = w.axis === 'z' ? along : w.at + w.side * 0.44;
+        const z = w.axis === 'z' ? w.at + w.side * 0.44 : along;
+        return (
+          <mesh key={i} position={[x, 1.52, z]} rotation={[0, w.ry, 0]} visible={kind === 'rain'}>
+            <planeGeometry args={[1.7, 2.2]} />
+            <meshBasicMaterial map={tex} transparent opacity={0.55} depthWrite={false} toneMapped={false} />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
+/** G5 雪天积雪：窗外窗台白沿 + 阳台地面薄雪（仅 snow 可见） */
+function SnowDeco({ kind, winPos }: { kind: 'rain' | 'snow' | 'clear'; winPos?: number[] }) {
+  return (
+    <group visible={kind === 'snow'}>
+      {WINS.map((w, i) => {
+        const along = winPos?.[i] ?? w.def;
+        const x = w.axis === 'z' ? along : w.at + w.side * 0.56;
+        const z = w.axis === 'z' ? w.at + w.side * 0.56 : along;
+        return (
+          <mesh key={i} position={[x, 0.92, z]} rotation={[0, w.ry, 0]}>
+            <boxGeometry args={[1.72, 0.055, 0.16]} />
+            <meshStandardMaterial color="#f3f7fb" roughness={1} />
+          </mesh>
+        );
+      })}
+      <mesh
+        position={[(BAL_X0 + BAL_X1) / 2, 0.014, (BAL_Z0 + BAL_Z1) / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+      >
+        <planeGeometry args={[BAL_X1 - BAL_X0 - 0.24, BAL_Z1 - BAL_Z0 - 0.24]} />
+        <meshStandardMaterial color="#eef4f9" transparent opacity={0.55} roughness={1} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
+/** 彩蛋小生物运行时状态（ref 内高频更新，不入 React state） */
+interface CritterRT {
+  active: boolean;
+  kind: 'butterfly' | 'bird';
+  ax: number;
+  az: number;
+  t0: number;
+  life: number;
+  fleeing: boolean;
+  fx: number;
+  fz: number;
+  fy: number;
+  seed: number;
+}
+
+const CRITTER_PLANTS = new Set(['plant', 'plantSmall', 'monstera', 'flowerBox', 'flowerStand', 'hydro', 'cactus']);
+
+/** G3 彩蛋小生物：蝴蝶/小鸟在阳台花丛附近漫游，点击惊飞（仅 live 模式生成） */
+function Critters({
+  mode,
+  items,
+  onCritterTap,
+}: {
+  mode: HomeMode;
+  items: FurnitureItem[];
+  onCritterTap?: (kind: 'butterfly' | 'bird') => void;
+}) {
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const tapRef = useRef(onCritterTap);
+  tapRef.current = onCritterTap;
+
+  const crits = useRef<CritterRT[]>(
+    Array.from({ length: 2 }, (_, i) => ({
+      active: false,
+      kind: i === 0 ? 'butterfly' : 'bird',
+      ax: 0,
+      az: 0,
+      t0: 0,
+      life: 0,
+      fleeing: false,
+      fx: 0,
+      fz: 0,
+      fy: 0,
+      seed: Math.random() * 10,
+    })),
+  );
+  const groups = useRef<(THREE.Group | null)[]>([]);
+  const wings = useRef<(THREE.Group | null)[][]>([[], []]);
+  const prev = useRef<[number, number][]>([[0, 0], [0, 0]]);
+  const nextSpawn = useRef(7 + Math.random() * 8); // 首次 7~15s 出现，后续 25~55s
+
+  const startle = useCallback((c: CritterRT, kind: 'butterfly' | 'bird') => {
+    if (!c.active || c.fleeing) return;
+    c.fleeing = true;
+    c.fx = (Math.random() - 0.5) * 3.2;
+    c.fz = -2.4 - Math.random() * 1.6;
+    c.fy = 3.4;
+    tapRef.current?.(kind);
+  }, []);
+
+  useFrame((state, dt) => {
+    const t = state.clock.elapsedTime;
+    // 生成调度（仅 live）
+    if (modeRef.current === 'live') {
+      if (t >= nextSpawn.current) {
+        const c = crits.current.find((x) => !x.active);
+        if (c) {
+          const plants = itemsRef.current.filter((f) => CRITTER_PLANTS.has(f.kind));
+          if (plants.length && Math.random() < 0.4) {
+            const p = plants[Math.floor(Math.random() * plants.length)];
+            c.ax = p.x + (Math.random() - 0.5) * 1.3;
+            c.az = p.z + (Math.random() - 0.5) * 1.3;
+          } else {
+            c.ax = BAL_X0 + 0.7 + Math.random() * Math.max(0.4, BAL_X1 - BAL_X0 - 1.4);
+            c.az = BAL_Z0 + 0.55 + Math.random() * Math.max(0.4, BAL_Z1 - BAL_Z0 - 1.1);
+          }
+          c.active = true;
+          c.t0 = t;
+          c.life = 15 + Math.random() * 10;
+          c.fleeing = false;
+          c.seed = Math.random() * 10;
+          const g = groups.current[crits.current.indexOf(c)];
+          if (g) {
+            g.position.set(c.ax, c.kind === 'butterfly' ? 0.6 : 1.0, c.az);
+            g.visible = true;
+          }
+          nextSpawn.current = t + 25 + Math.random() * 30;
+        } else {
+          nextSpawn.current = t + 8;
+        }
+      }
+    } else {
+      // 编辑模式：全部悄悄离场（不弹提示）
+      crits.current.forEach((c) => {
+        if (c.active && !c.fleeing) {
+          c.fleeing = true;
+          c.fy = 2.8;
+        }
+      });
+    }
+
+    crits.current.forEach((c, i) => {
+      const g = groups.current[i];
+      if (!g) return;
+      if (!c.active) {
+        g.visible = false;
+        return;
+      }
+      const age = t - c.t0;
+      if (!c.fleeing && age > c.life) {
+        // 生命期到：自然飞走
+        c.fleeing = true;
+        const a = Math.random() * Math.PI * 2;
+        c.fx = Math.cos(a) * 2.4;
+        c.fz = Math.sin(a) * 2.4 - 1.6;
+        c.fy = 2.8;
+      }
+      const px = prev.current[i][0];
+      const pz = prev.current[i][1];
+      if (c.fleeing) {
+        g.position.x += c.fx * dt;
+        g.position.y += c.fy * dt;
+        g.position.z += c.fz * dt;
+        if (g.position.y > 6.2) {
+          c.active = false;
+          g.visible = false;
+          return;
+        }
+      } else {
+        const s = c.seed;
+        const bx = c.ax + Math.sin(t * 0.55 + s) * 0.72;
+        const bz = c.az + Math.cos(t * 0.42 + s * 1.7) * 0.58;
+        const by = c.kind === 'butterfly' ? 0.55 + Math.sin(t * 1.6 + s) * 0.3 : 0.95 + Math.sin(t * 1.1 + s) * 0.2;
+        const k = Math.min(1, dt * 2.4);
+        g.position.x += (bx - g.position.x) * k;
+        g.position.y += (by - g.position.y) * k;
+        g.position.z += (bz - g.position.z) * k;
+      }
+      // 朝向速度方向
+      const dx = g.position.x - px;
+      const dz = g.position.z - pz;
+      if (Math.abs(dx) + Math.abs(dz) > 0.002) g.rotation.y = Math.atan2(dx, dz);
+      prev.current[i][0] = g.position.x;
+      prev.current[i][1] = g.position.z;
+      // 翅膀扑扇（惊飞更快）
+      const flapRate = c.kind === 'butterfly' ? 17 : 11;
+      const flap = Math.sin(t * flapRate + c.seed * 3) * (c.fleeing ? 1.05 : 0.75);
+      const wl = wings.current[i]?.[0];
+      const wr = wings.current[i]?.[1];
+      if (wl) wl.rotation.z = 0.3 + flap;
+      if (wr) wr.rotation.z = -0.3 - flap;
+    });
+  });
+
+  const handleDown = (i: number) => (e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    const c = crits.current[i];
+    if (modeRef.current !== 'live') return;
+    startle(c, c.kind);
+  };
+
+  const setWing = (i: number, j: number) => (g: THREE.Group | null) => {
+    if (wings.current[i]) wings.current[i][j] = g;
+  };
+
+  return (
+    <group>
+      {/* 蝴蝶 */}
+      <group
+        ref={(g) => {
+          groups.current[0] = g;
+        }}
+        visible={false}
+        onPointerDown={handleDown(0)}
+      >
+        <mesh scale={[0.045, 0.045, 0.1]}>
+          <sphereGeometry args={[1, 10, 8]} />
+          <meshStandardMaterial color="#7a5a62" roughness={0.8} />
+        </mesh>
+        <group ref={setWing(0, 0)} position={[0.02, 0.02, 0]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0.09, 0, 0.01]}>
+            <circleGeometry args={[0.11, 14]} />
+            <meshStandardMaterial color="#f2a9c4" roughness={0.7} side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+        <group ref={setWing(0, 1)} position={[-0.02, 0.02, 0]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[-0.09, 0, 0.01]}>
+            <circleGeometry args={[0.11, 14]} />
+            <meshStandardMaterial color="#f2a9c4" roughness={0.7} side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+      </group>
+      {/* 小鸟 */}
+      <group
+        ref={(g) => {
+          groups.current[1] = g;
+        }}
+        visible={false}
+        onPointerDown={handleDown(1)}
+      >
+        <mesh scale={[0.075, 0.068, 0.098]}>
+          <sphereGeometry args={[1, 12, 10]} />
+          <meshStandardMaterial color="#c98a5e" roughness={0.85} />
+        </mesh>
+        <mesh position={[0, 0.055, 0.075]} scale={[0.05, 0.05, 0.05]}>
+          <sphereGeometry args={[1, 10, 8]} />
+          <meshStandardMaterial color="#d49a6e" roughness={0.85} />
+        </mesh>
+        <mesh position={[0, 0.05, 0.125]} rotation={[Math.PI / 2, 0, 0]}>
+          <coneGeometry args={[0.016, 0.05, 8]} />
+          <meshStandardMaterial color="#e8b04a" roughness={0.7} />
+        </mesh>
+        <group ref={setWing(1, 0)} position={[0.05, 0.03, 0]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0.055, 0, 0]}>
+            <circleGeometry args={[0.062, 12]} />
+            <meshStandardMaterial color="#a8703f" roughness={0.8} side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+        <group ref={setWing(1, 1)} position={[-0.05, 0.03, 0]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[-0.055, 0, 0]}>
+            <circleGeometry args={[0.062, 12]} />
+            <meshStandardMaterial color="#a8703f" roughness={0.8} side={THREE.DoubleSide} />
+          </mesh>
+        </group>
+      </group>
     </group>
   );
 }

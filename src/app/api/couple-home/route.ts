@@ -93,6 +93,26 @@ interface HomePayload {
   wallTex?: string;
   /** 「我」正在进行的家具动作（重进页面恢复姿势） */
   act?: { type?: string; itemId?: string };
+  /** G1 装修方案快照（≤3 套；家具内照片不随方案备份） */
+  layouts?: {
+    name?: string;
+    ts?: number;
+    furniture?: FurnItem[];
+    floorCol?: string;
+    wallCol?: string;
+    floorColBed?: string;
+    wallColBed?: string;
+    floorColK?: string;
+    wallColK?: string;
+    floorColB?: string;
+    wallColB?: string;
+    floorColBal?: string;
+    wallColBal?: string;
+  }[];
+  /** G8 留言板便签（≤50 条） */
+  notes?: { id?: string; text?: string; ts?: number; by?: string }[];
+  /** G8 已读时间戳 */
+  notesSeen?: { me?: number; partner?: number };
 }
 
 const MAX_ITEMS = 240;
@@ -274,7 +294,73 @@ function normalizeHome(raw: unknown): HomePayload | null {
     floorTex: typeof r.floorTex === 'string' && FLOOR_TEXES.has(r.floorTex) ? r.floorTex : undefined,
     wallTex: typeof r.wallTex === 'string' && WALL_TEXES.has(r.wallTex) ? r.wallTex : undefined,
     act,
+    ...cleanG1G8(r, photoCounter),
   };
+}
+
+/** G1/G8 扩展字段清洗：装修方案（≤3 套，照片不备份）/ 留言板便签（≤50 条）/ 已读时间戳 */
+function cleanG1G8(r: Record<string, unknown>, photoCounter: { n: number }): Pick<HomePayload, 'layouts' | 'notes' | 'notesSeen'> {
+  const out: Pick<HomePayload, 'layouts' | 'notes' | 'notesSeen'> = {};
+  // 装修方案：整组家具走同一清洗器（photoCounter 传入但照片一律剔除，避免存档翻倍）
+  if (Array.isArray(r.layouts)) {
+    const layouts: NonNullable<HomePayload['layouts']> = [];
+    for (const raw of r.layouts.slice(0, 3)) {
+      if (!raw || typeof raw !== 'object') continue;
+      const l = raw as Record<string, unknown>;
+      if (!Array.isArray(l.furniture)) continue;
+      const furniture: FurnItem[] = [];
+      for (const it of l.furniture.slice(0, MAX_ITEMS)) {
+        if (!it || typeof it !== 'object') continue;
+        const cleaned = cleanFurnItem(it as Record<string, unknown>, photoCounter);
+        if (!cleaned) continue;
+        if (cleaned.st && typeof cleaned.st === 'object' && 'photo' in cleaned.st) {
+          const clone = { ...cleaned.st };
+          delete clone.photo; // 方案不备份照片，控存档体积
+          cleaned.st = clone;
+        }
+        furniture.push(cleaned);
+      }
+      layouts.push({
+        name: cleanStr(l.name, 12) || '未命名方案',
+        ts: clampInt(l.ts, 0, Number.MAX_SAFE_INTEGER) ?? 0,
+        furniture,
+        floorCol: cleanHex(l.floorCol),
+        wallCol: cleanHex(l.wallCol),
+        floorColBed: cleanHex(l.floorColBed),
+        wallColBed: cleanHex(l.wallColBed),
+        floorColK: cleanHex(l.floorColK),
+        wallColK: cleanHex(l.wallColK),
+        floorColB: cleanHex(l.floorColB),
+        wallColB: cleanHex(l.wallColB),
+        floorColBal: cleanHex(l.floorColBal),
+        wallColBal: cleanHex(l.wallColBal),
+      });
+    }
+    if (layouts.length) out.layouts = layouts;
+  }
+  // 留言板便签
+  if (Array.isArray(r.notes)) {
+    const notes: NonNullable<HomePayload['notes']> = [];
+    for (const raw of r.notes.slice(-50)) {
+      if (!raw || typeof raw !== 'object') continue;
+      const n = raw as Record<string, unknown>;
+      const id = cleanStr(n.id, 40);
+      const text = cleanStr(n.text, 120);
+      const ts = clampInt(n.ts, 0, Number.MAX_SAFE_INTEGER);
+      const by = n.by === 'me' || n.by === 'partner' ? n.by : undefined;
+      if (!id || !text || ts == null || !by) continue;
+      notes.push({ id, text, ts, by });
+    }
+    if (notes.length) out.notes = notes;
+  }
+  // 已读时间戳
+  if (r.notesSeen && typeof r.notesSeen === 'object' && !Array.isArray(r.notesSeen)) {
+    const s = r.notesSeen as Record<string, unknown>;
+    const me = clampInt(s.me, 0, Number.MAX_SAFE_INTEGER);
+    const partner = clampInt(s.partner, 0, Number.MAX_SAFE_INTEGER);
+    if (me != null || partner != null) out.notesSeen = { me: me ?? undefined, partner: partner ?? undefined };
+  }
+  return out;
 }
 
 function wsOf(req: NextRequest): string {
