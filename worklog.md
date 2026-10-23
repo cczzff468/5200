@@ -21786,3 +21786,20 @@ Work Log:
 
 Stage Summary:
 - 项目完整恢复至拾光小屋 v6.2 状态，dev server 正常运行于 :3000，git main 可直接推送远端；等待用户提出功能修改需求
+
+---
+Task ID: v6.3-1023
+Agent: Z.ai Code (main)
+Task: 用户反馈两项 —— ①删除窗外蓝色远景幕帘 ②小人回归 3D 建模
+
+Work Log:
+- 定位蓝色面板 = v6.1 G2 SceneryFX 远景天空幕帘（每扇窗外 1.5m 处 3.4×2.7 plane，室内视角下悬浮突兀）
+- HomeScene.tsx：移除 SceneryFX 组件 + makeDaySkyTexture/makeNightSkyTexture 专用纹理 + 未使用的 _WHITE_C；窗景保留 Room.tsx 内凹式窗外风景（透过玻璃可见，不受影响）；G5 玻璃水珠/积雪、G3 小生物均保留
+- 主角回 3D：me/partner 从 CharSprite 换回 Char3D（v5.4 四级关节程序化骨架：走路摆臂迈步/坐躺泡澡姿势/换装实时变色/端杯/软阴影全原生支持，签名完全兼容零适配）；访客本就是 Char3D 不动
+- CoupleHome.tsx：衣柜 toast 恢复「换上新衣服，好看！」
+- 清理：删除 CharSprite.tsx / 4 张立绘 PNG / scripts/char-cutout.py（均可从 git 历史找回）
+- 验证：tsc --noEmit 绿；eslint 两文件 0 error 0 warning；agent-browser 实测 —— 进屋无蓝色面板✓、第三人称棕色头发女主 3D 小人✓、摇杆走动✓、卡通/拟真双向切换✓、page-errors=0
+- 提交 4146b6c 已推送 origin/main
+
+Stage Summary:
+- 拾光小屋 v6.3：窗外只剩内凹窗景不再有悬浮蓝天板；主角回归 3D 建模小人（Q版/拟真两套比例可切换）；立绘资产与抠图管线下架
