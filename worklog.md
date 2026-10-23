@@ -21699,3 +21699,18 @@ Work Log:
 
 Stage Summary:
 - 拾光小屋 v5.9 全量落地：F1 节日限定（按月自动出现）+ F2 互动升级（壁炉粒子/滚筒/微波炉）+ F3 五套装一键成组 + F4 阳台四件 + F5 墙面三件 + F6 绿植三件 + F7 毛绒三件 + F8 下午茶两件 + E2 拖拽对齐辅助 + E3 合成音效回归 + E7 灯光氛围，共 20 件新家具、6 大交互升级
+
+---
+Task ID: set-icons-1022
+Agent: Z.ai Code (main)
+Task: 套装商店图标美化 —— 去 emoji，改为整套家具真实 3D 合成缩略图
+
+Work Log:
+- ShopThumbs.tsx 通用化：目标支持 `set:${id}`（套装合成快照）——parseTarget/itemsOf/entriesOf 三个解析器按目标产出落位实例清单（套装按 FURN_SETS 预设 dx/dz/ry/y 整组落进画布）；Capturer 就绪判定改为「整组全部 GLB 就绪」，取景对套装用偏俯拍视角（dir 0.4,1.05,0.82 + 边距 1.22）让整套布局一目了然；缓存键即 `set:${id}`，与单件缩略图共用 MEM 命名空间
+- CoupleHome.tsx：SET_ICONS emoji 表删除，换 SET_FALLBACK（lucide 线性图标 BedDouble/Armchair/BookOpen/Coffee/Flame，仅作生成前占位）；thumbQueue 在套装 tab 追加 5 个 `set:*` 目标；套装卡片重排——顶部 h-20 整组渲染横幅缩略图 + 名称右侧「N 件」胶囊 + desc + 整组一步撤销提示 + 一键举放按钮
+- 排障记录：dev overlay 报 6 条幽灵错误（Pet3D 找不到/useState undefined/ChunkLoadError），经查为旧会话 tab 的 overlay 状态回放——源码 rg 零引用、清 .next 重启 dev server、新开 --session verify 全新浏览器上下文 page-errors=0，确认构建干净
+- 实测：新会话全流程（解锁→第3页→拾光小屋→装修→商店→套装 tab）等待队列跑完，5 张套装合成缩略图全部成型（床组/沙发组/书房/下午茶/烧烤含吊床 BBQ 花箱），无 emoji，tsc+eslint 双绿
+- 注意：套装合成快照逐件排队生成（每套 2~4s），首次打开套装 tab 会有数秒渐进呈现，卡片有 lucide 占位+呼吸动画兜底
+
+Stage Summary:
+- 套装 tab 与商品网格视觉统一：全部为 1:1 真实 3D 渲染缩略图，emoji 清零；架构上 ShopThumbs 支持任意「组合快照」目标（`set:` 前缀），后续新增套装零成本获得同款缩略图

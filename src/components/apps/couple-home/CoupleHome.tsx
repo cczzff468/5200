@@ -33,6 +33,7 @@ import {
   CupSoda,
   Droplet,
   Eye,
+  Flame,
   Gamepad2,
   Laptop,
   Loader2,
@@ -65,6 +66,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import Joystick from './Joystick';
 import InstrumentOverlay from './InstrumentOverlay';
 import { SongSheet } from './SongSheet';
@@ -207,13 +209,13 @@ const LIGHT_SWATCHES: { hex: string; name: string }[] = [
   { hex: '#d4b8e8', name: '梦紫' },
 ];
 
-/** F3 套装卡片 emoji 头部（套装没有单一 GLB 缩略图，用 emoji 兜） */
-const SET_ICONS: Record<string, string> = {
-  bedSet: '🛏️',
-  sofaSet: '🛋️',
-  studySet: '📚',
-  teaCorner: '🍰',
-  balconySet: '🍖',
+/** F3 套装卡片兜底线性图标（lucide；真实 3D 整组合成缩略图生成前的占位） */
+const SET_FALLBACK: Record<string, LucideIcon> = {
+  bedSet: BedDouble,
+  sofaSet: Armchair,
+  studySet: BookOpen,
+  teaCorner: Coffee,
+  balconySet: Flame,
 };
 
 const dirToHeading: Record<string, number> = { up: Math.PI, down: 0, left: -Math.PI / 2, right: Math.PI / 2 };
@@ -2186,14 +2188,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
     return list;
   }, [shopTab]);
 
-  /** 缩略图待生成队列（undefined = 还没处理过；空串 = 失败已跳过；稳定引用，避免工作室重复重启） */
-  const thumbQueue = useMemo(
-    () =>
-      shopItems
-        .filter((e) => thumbMap[e.kind] === undefined && !getCachedThumb(e.kind))
-        .map((e) => e.kind),
-    [shopItems, thumbMap],
-  );
+  /** 缩略图待生成队列（undefined = 还没处理过；空串 = 失败已跳过；稳定引用，避免工作室重复重启）；套装 tab 追加 `set:${id}` 整组合成目标 */
+  const thumbQueue = useMemo(() => {
+    const kindQ = shopItems
+      .filter((e) => thumbMap[e.kind] === undefined && !getCachedThumb(e.kind))
+      .map((e) => e.kind);
+    const setQ =
+      shopTab === 'set'
+        ? FURN_SETS.filter((s) => thumbMap[`set:${s.id}`] === undefined && !getCachedThumb(`set:${s.id}`)).map((s) => `set:${s.id}`)
+        : [];
+    return [...kindQ, ...setQ];
+  }, [shopItems, thumbMap, shopTab]);
 
   /** 找个不太挤的落点（小人当前所在房间内） */
   const findSpot = useCallback((kind: FurnitureKind, room: RoomId): { x: number; z: number } => {
@@ -3591,29 +3596,45 @@ export default function CoupleHome({ close }: { close: () => void }) {
             {/* 套装 tab（F3 成套举放） / 商品网格（1:1 实物缩略图 + 已有数量角标；无限购买） */}
             {shopTab === 'set' ? (
               <div className="grid max-h-72 grid-cols-2 gap-2 overflow-y-auto px-4 pb-5 pt-1">
-                {FURN_SETS.map((s) => (
-                  <div
-                    key={s.id}
-                    className="flex flex-col rounded-2xl bg-[#faf8f3] p-2.5 text-left shadow-sm ring-1 ring-[#efece2]"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#f6cdd6] to-[#dcd2ec] text-[15px]">
-                        {SET_ICONS[s.id] ?? '🛋️'}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-[#3a3a3e]">
-                        {s.name}
-                      </span>
-                    </div>
-                    <p className="mt-1.5 text-[11px] leading-snug text-[#8a8a86]">{s.desc}</p>
-                    <p className="mt-0.5 text-[10px] text-[#a8a8a4]">共 {s.items.length} 件 · 整组一步撤销</p>
-                    <button
-                      onClick={() => placeSet(s.id)}
-                      className="mt-2 rounded-full bg-[#f4b3c2] py-1.5 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
+                {FURN_SETS.map((s) => {
+                  const setThumb = thumbMap[`set:${s.id}`] ?? getCachedThumb(`set:${s.id}`);
+                  const Fallback = SET_FALLBACK[s.id] ?? Armchair;
+                  return (
+                    <div
+                      key={s.id}
+                      className="flex flex-col rounded-2xl bg-[#faf8f3] p-2.5 text-left shadow-sm ring-1 ring-[#efece2]"
                     >
-                      一键举放
-                    </button>
-                  </div>
-                ))}
+                      {setThumb ? (
+                        <img
+                          src={setThumb}
+                          alt={s.name}
+                          draggable={false}
+                          className="h-20 w-full rounded-xl object-contain"
+                        />
+                      ) : (
+                        <span className="flex h-20 w-full animate-pulse items-center justify-center rounded-xl bg-gradient-to-br from-[#f6cdd6] to-[#dcd2ec]">
+                          <Fallback className="h-7 w-7 text-white/90" strokeWidth={1.75} aria-hidden />
+                        </span>
+                      )}
+                      <div className="mt-1.5 flex items-center justify-between gap-1.5">
+                        <span className="min-w-0 truncate text-[12.5px] font-semibold text-[#3a3a3e]">
+                          {s.name}
+                        </span>
+                        <span className="shrink-0 rounded-full bg-[#f1efe9] px-1.5 py-0.5 text-[9.5px] leading-none text-[#8a8a86]">
+                          {s.items.length} 件
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[11px] leading-snug text-[#8a8a86]">{s.desc}</p>
+                      <p className="mt-0.5 text-[10px] text-[#a8a8a4]">整组一步撤销</p>
+                      <button
+                        onClick={() => placeSet(s.id)}
+                        className="mt-2 rounded-full bg-[#f4b3c2] py-1.5 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
+                      >
+                        一键举放
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto px-4 pb-5 pt-1">
