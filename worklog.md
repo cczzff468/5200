@@ -21752,3 +21752,21 @@ Work Log:
 
 Stage Summary:
 - 拾光小屋 v6.1：整屋快照三槽方案（应用即撤销粒度）、窗外有了风景（云/星/月/阴雨灰）、阳台花丛会有蝴蝶小鸟造访（点击惊飞）、雨雪天玻璃挂珠窗台积雪环境光转灰、软木留言板给 TA 留话进门提醒、娃娃机/咖啡拉花/照片拼图三连小游戏；新增家具 clawMachine+noteBoard，API 白名单扩展 layouts/notes/notesSeen
+
+---
+Task ID: char-sprite-1022
+Agent: Z.ai Code (main)
+Task: 小人替换 —— 用户提供的豆包立绘（写实 3D 风 + Q 版各一对）接入拾光小屋 3D 场景
+
+Work Log:
+- 抠图管线（scripts/char-cutout.py，PIL+numpy+scipy+cv2，输入 upload/ 四张原图）：grabCut 矩形初始化 → 白鞋救援两遍法（写实图鞋盒区域第二遍 PR_FGD + 高亮像素确定前景）→ 男主鞋与地板同亮度（都≥0.94），亮度法失效改边缘法：σ4 强预模糊压地板颗粒 + sobel>6 取鞋轮廓 + 4px 膨胀 → 两脚间地板「亮柱」用清除矩形（gap_clear）→ 鞋底以下地板用切除线（男 0.913）→ 右下角「豆包AI生成」水印角清除 → 最大连通域（胸口种子）+ 填洞 + 边缘羽化 → 按高度 640/560 导出。调试手段：品红底预览逐轮目检 + 中间掩码 debug 面板 + 亮度/梯度扫描定位鞋底线
+- 产物 public/couple-home/char-{me,ta}-{real,cartoon}.png 共四张 612KB（me=女主/partner=男主 × real 写实/cartoon Q版）
+- 新建 scene/CharSprite.tsx：与 Char3D 完全同签名（rt/who/hide/style/poseRef/outfit/carryRef，outfit 兼容忽略），billboard 每帧 copy camera.quaternion（OrbitControls 环绕时立绘永远正面）；模块级纹理缓存 + 渲染期直读 + 加载后 bump（规避 set-state-in-effect 警告）；走路颠步+左右微摆、待机呼吸；坐姿类（sit/eat/piano/read/makeup）按 HIP_FRAC（real 0.48/cartoon 0.42）下沉对齐支撑面；躺床=立绘隐藏+Zzz 三连飘字；泡澡/淋浴=立绘隐藏+泡泡团（6 球正弦起伏）；端饮料=手边浮小杯（咖啡棕液+热气 / 冰饮粉液+吸管）；脚下软阴影贴片（立绘隐藏时缩小淡出）；meshStandardMaterial+alphaTest 融入昼夜光照；Q版/写实高度 0.96/1.04 与原程序化小人一致，家具交互高度全部兼容
+- HomeScene.tsx：me/partner 换 CharSprite；AI 访客保留 Char3D（头顶名牌+按名换色，与立绘主角色区分身份）
+- CoupleHome.tsx：衣柜 dress 动作文案改「在衣柜比了比，还是这一套最搭～」（立绘不换色，outfit 状态仍循环保存以兼容存档）
+- 排障记录：①v1 扩散法背景建模被人物颜色污染整块失败 → 归一化卷积仍受壁纸渐变干扰 → 改 grabCut 一步到位；②白鞋 vs 浅地板同亮度：女主靠亮度带+保护半径，男主整块地板≥0.94 只能靠「边缘细节」区分（强模糊+sobel）；③鞋盒下沿外的第一遍 grabCut 矩形底边残留亮块，扩大 shoe_box + bottom_cut 双保险
+- 实测（agent-browser 新会话 v62：解锁→翻页→进屋）：写实↔Q版双向切换渲染✓（HUD 卡通小人/拟真小人按钮）、走路摇摆+软阴影✓、沙发「坐下」立绘下沉对齐+「站起来」回归✓、装修模式上帝视角 billboard✓、家具遮挡关系正确、tsc+eslint 双绿、page-errors=0
+- 未实测（同构机制，风险低）：躺床 Zzz / 泡澡泡泡特效（卧室寻路耗时未走完；与已验证的「立绘隐藏+特效显示」机制同构）；真实雨雪天下的立绘观感
+
+Stage Summary:
+- 拾光小屋 v6.2：两位主角正式换成用户提供的豆包立绘——写实 3D 风为默认观感之一、Q 版一键切换（沿用既有画风按钮与 charStyle 存档字段）；billboard 纸片人保留全部既有交互（坐/躺/泡澡/做饭/端杯/换装动作占位/软阴影），AI 访客维持程序化小人以免与主角撞脸；scripts/char-cutout.py 可复用于后续更换立绘

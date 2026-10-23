@@ -1196,7 +1196,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         turnOn({ open: true });
         auto(1500, () => {
           setOutfit((o) => (o + 1) % 3);
-          toast('换上新衣服，好看！');
+          toast('在衣柜前比了比，还是这一套最搭～');
         });
         auto(2700, () => {
           if (actRef.current?.type === 'dress') endAction();

@@ -23,6 +23,7 @@ import { OrbitControls, PerformanceMonitor } from '@react-three/drei';
 import Room, { buildWallBoxes } from './Room';
 import Furn3D from './Furn3D';
 import Char3D from './Char3D';
+import CharSprite from './CharSprite';
 import {
   BAL_X0,
   BAL_X1,
@@ -1423,8 +1424,8 @@ export default function HomeScene(props: HomeSceneProps) {
         );
       })}
 
-      <Char3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} carryRef={carryRef} />
-      <Char3D rt={taRT} who="partner" style={charStyle} />
+      <CharSprite rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} carryRef={carryRef} />
+      <CharSprite rt={taRT} who="partner" style={charStyle} />
       {guestRT?.current && (
         <Char3D rt={guestRT.current} who="guest" style={charStyle} guestName={guestName ?? undefined} />
       )}
