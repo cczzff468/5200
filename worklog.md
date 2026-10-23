@@ -21803,3 +21803,22 @@ Work Log:
 
 Stage Summary:
 - 拾光小屋 v6.3：窗外只剩内凹窗景不再有悬浮蓝天板；主角回归 3D 建模小人（Q版/拟真两套比例可切换）；立绘资产与抠图管线下架
+
+---
+Task ID: v6.4-1023
+Agent: Z.ai Code (main)
+Task: 用户需求 —— 小人更好看，去 GitHub 等网站找优质 3D 角色资产
+
+Work Log:
+- 网络调研：itch.io/poly.pizza/readyplayer.me/market.pmnd.rs 均被沙盒墙拦截；codeload.github.com 与 api.github.com 可用 → 锁定 GitHub 托管资产
+- 对比 KayKit Adventurers（仅奇幻 FBX 20MB/个）、Quaternius UAL 镜像（动画库 glTF 需绑定）、J-Ponzo 转换版等，最终选中 NoLimitNexus/game-models（2.3MB，仓库自述 CC0）：模块化身体套件（素体+19 部件共享 KayKit Rig_Medium 23 骨骼）+ KayKit 132 个 CC0 动画
+- 资产落地 public/couple-home/kit/：body + 5 发型 + 3 上衣 + 2 裤 + 2 鞋共 13 件套 + 5 个动画库 GLB（3.4MB）
+- 离线 FK 采样（bun+three 脚本）：Sit_Chair_Idle hips y=0.481/z=-0.397、Lie_Idle 头朝 -z 且 minBoneY=0 → 坐/躺锚点精确换算，无需浏览器盲调
+- 新建 CharKit3D.tsx：useGLTF 共享缓存 + SkeletonUtils 按实例 clone + 材质按名独立换色（沿用 v5.4 三套穿搭色板故事：白背心奶油/樱粉/薄荷 × 黑夹克/燕麦/雾蓝）；每部件独立 mixer 同步播同一 clip，0.22s 淡入切换；hides 清单隐藏被衣物覆盖的素体区域；Q版头骨 1.22 放大（发饰刚体跟随）；手持咖啡/冰饮挂 handslotr 骨；Zzz/泡泡/化妆星星程序化点缀
+- HomeScene：me/partner 换 CharKit3D，访客保留 Char3D（换装 toast 恢复「换上新衣服，好看！」于 v6.3 已还原）
+- 排障：react-hooks/immutability 对 hook 产物原地改写的误报（R3F 每帧动画惯例）→ 文件级 disable；useMemo 依赖数组非简单表达式 → 提取 confKey 字符串
+- 验证：tsc + eslint 双绿；agent-browser 实测 —— 双主角渲染（棕长发女主/黑蓬松男主）✓、走路✓、沙发「坐下」臀部正确落座+膝盖弯曲+脸面渲染✓、「站起来」✓、Q 版大头双向切换✓、存档 API 200✓
+- 未实测：衣柜三套穿搭实机循环（同挂载组装代码路径，机制同构）、泡澡/躺床动画实机（clip 已离线验证、锚点已采样）
+
+Stage Summary:
+- 拾光小屋 v6.4：主角从小人积木升级为专业低多边形 GLB 角色（有关键帧待机呼吸/走路摆臂/自然坐姿/躺床动画），CC0 无版权风险，访客仍程序化小人
