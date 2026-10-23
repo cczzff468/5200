@@ -21822,3 +21822,22 @@ Work Log:
 
 Stage Summary:
 - 拾光小屋 v6.4：主角从小人积木升级为专业低多边形 GLB 角色（有关键帧待机呼吸/走路摆臂/自然坐姿/躺床动画），CC0 无版权风险，访客仍程序化小人
+
+---
+Task ID: 1
+Agent: Z.ai Code (main)
+Task: 从 GitHub 拉取 cczzff468/5200 仓库并让项目在本地跑起来，等待用户提出功能修改/新增需求
+
+Work Log:
+- 添加 remote origin（使用用户提供的 GitHub PAT），fetch origin main 成功（仓库约 4006 个文件，最新提交 v6.4 模块化 GLB 小人）
+- 确认远程仓库为「拾光小屋/AI Phone」情侣应用（Next.js 16 + shadcn + Prisma/SQLite + react-three-fiber），与本地脚手架同栈，故 git reset --hard origin/main 将本地完全同步到远程版本
+- 设置 main 分支上游跟踪 origin/main，之后可直接 git push 推送
+- cp .env.example .env（DATABASE_URL=file:/home/z/my-project/db/custom.db）
+- bun install 安装依赖（含 three/drei/fiber、web-push、leaflet、speech-asr 等 85 个包）
+- 后台启动 bun run dev，905ms Ready，ncm-keeper 正常 spawn
+- agent-browser 端到端验证：锁屏渲染✓ → 上滑解锁✓ → 主屏应用图标✓ → 打开信息应用且 DB 数据（小助手欢迎语）加载✓；浏览器控制台无错误；天气 API 200
+
+Stage Summary:
+- 本地已完整跑通远程仓库最新版（v6.4），dev server 运行于 3000 端口
+- 远程 origin 已配置 PAT 可直接推送，上游已跟踪 origin/main
+- 等待用户提出具体的功能修改/新增需求
