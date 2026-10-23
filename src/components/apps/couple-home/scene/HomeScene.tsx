@@ -23,7 +23,6 @@ import { OrbitControls, PerformanceMonitor } from '@react-three/drei';
 import Room, { buildWallBoxes } from './Room';
 import Furn3D from './Furn3D';
 import Char3D from './Char3D';
-import CharSprite from './CharSprite';
 import {
   BAL_X0,
   BAL_X1,
@@ -1058,7 +1057,6 @@ const NIGHT_BG = '#24272f';
 const _TMP_C = /* @__PURE__ */ new THREE.Color();
 const _WARM = /* @__PURE__ */ new THREE.Color(); // E7 夜晚开灯 → 环境光向暖色偏移的目标色
 const _COOL_C = /* @__PURE__ */ new THREE.Color(); // G5 雨天阴沉 → 环境/半球光向冷灰偏移的目标色
-const _WHITE_C = /* @__PURE__ */ new THREE.Color('#ffffff'); // G2 幕帘染色基准（material.color 每帧复位用）
 
 /**
  * E2 昼夜平滑：mix 每帧向目标阻尼（0=白天 / 1=夜晚），驱动天空底色；
@@ -1424,14 +1422,13 @@ export default function HomeScene(props: HomeSceneProps) {
         );
       })}
 
-      <CharSprite rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} carryRef={carryRef} />
-      <CharSprite rt={taRT} who="partner" style={charStyle} />
+      <Char3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} carryRef={carryRef} />
+      <Char3D rt={taRT} who="partner" style={charStyle} />
       {guestRT?.current && (
         <Char3D rt={guestRT.current} who="guest" style={charStyle} guestName={guestName ?? undefined} />
       )}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       <WeatherFX kind={weatherFx ?? 'clear'} win={win} winPos={winPos} />
-      <SceneryFX kind={weatherFx ?? 'clear'} night={night} win={win} winPos={winPos} />
       <GlassRain kind={weatherFx ?? 'clear'} winPos={winPos} />
       <SnowDeco kind={weatherFx ?? 'clear'} winPos={winPos} />
       <Critters mode={mode} items={items} onCritterTap={onCritterTap} />
@@ -1600,144 +1597,7 @@ function WeatherFX({
   );
 }
 
-// ---------------- G2 窗外动态风景 + G5 积雪/水珠 + G3 彩蛋小生物（v6.1） ----------------
-
-/** 白天天空底图（淡蓝渐变 + 远山 + 蓬松云；rainy=true 染灰压暗） */
-function makeDaySkyTexture(rainy: boolean): THREE.CanvasTexture {
-  const cv = document.createElement('canvas');
-  cv.width = 256;
-  cv.height = 192;
-  const ctx = cv.getContext('2d')!;
-  const g = ctx.createLinearGradient(0, 0, 0, 192);
-  if (rainy) {
-    g.addColorStop(0, '#9aa9b8');
-    g.addColorStop(0.65, '#b6bfc9');
-    g.addColorStop(1, '#c9cdd2');
-  } else {
-    g.addColorStop(0, '#a5ddf2');
-    g.addColorStop(0.62, '#d9f0f7');
-    g.addColorStop(1, '#f4ecdc');
-  }
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 256, 192);
-  // 远山两叠（雨天更淡）
-  ctx.fillStyle = rainy ? 'rgba(150,160,170,0.5)' : 'rgba(160,196,178,0.55)';
-  ctx.beginPath();
-  ctx.moveTo(0, 152);
-  ctx.quadraticCurveTo(64, 108, 138, 150);
-  ctx.quadraticCurveTo(196, 118, 256, 148);
-  ctx.lineTo(256, 192);
-  ctx.lineTo(0, 192);
-  ctx.closePath();
-  ctx.fill();
-  // 云朵（椭圆簇）
-  const cloud = (cx: number, cy: number, s: number, alpha: number) => {
-    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
-    for (const [dx, dy, r] of [[-26, 6, 17], [0, 0, 23], [26, 7, 16], [-10, -9, 15], [12, -8, 14]] as const) {
-      ctx.beginPath();
-      ctx.ellipse(cx + dx * s, cy + dy * s, r * s, r * s * 0.72, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  };
-  cloud(58, 52, 1, rainy ? 0.5 : 0.95);
-  cloud(176, 86, 0.72, rainy ? 0.42 : 0.85);
-  cloud(120, 26, 0.55, rainy ? 0.36 : 0.8);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-/** 夜晚星空底图（深蓝渐变 + 星点 + 月牙；rainy=true 罩灰） */
-function makeNightSkyTexture(rainy: boolean): THREE.CanvasTexture {
-  const cv = document.createElement('canvas');
-  cv.width = 256;
-  cv.height = 192;
-  const ctx = cv.getContext('2d')!;
-  const g = ctx.createLinearGradient(0, 0, 0, 192);
-  if (rainy) {
-    g.addColorStop(0, '#2b3440');
-    g.addColorStop(1, '#46505c');
-  } else {
-    g.addColorStop(0, '#17203a');
-    g.addColorStop(0.7, '#2a3654');
-    g.addColorStop(1, '#3d4a66');
-  }
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 256, 192);
-  // 星点
-  if (!rainy) {
-    for (let i = 0; i < 64; i++) {
-      const x = Math.random() * 256;
-      const y = Math.random() * 150;
-      const r = 0.6 + Math.random() * 1.3;
-      ctx.fillStyle = `rgba(255,250,235,${0.35 + Math.random() * 0.6})`;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // 月牙（白圆被夜色圆啃出一弯）
-    ctx.fillStyle = 'rgba(255,246,214,0.95)';
-    ctx.beginPath();
-    ctx.arc(196, 46, 17, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#1c2740';
-    ctx.beginPath();
-    ctx.arc(189, 41, 15, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    ctx.fillStyle = 'rgba(140,150,160,0.4)';
-    ctx.fillRect(0, 0, 256, 192);
-  }
-  const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-/** G2 窗外远景幕帘：每扇窗更外侧挂一块天空（白天流云漂移/夜晚星空月牙，雨雪染灰） */
-function SceneryFX({
-  kind,
-  night,
-  winPos,
-}: {
-  kind: 'rain' | 'snow' | 'clear';
-  night: boolean;
-  win?: boolean[];
-  winPos?: number[];
-}) {
-  const texDay = useMemo(() => makeDaySkyTexture(false), []);
-  const texDayBad = useMemo(() => makeDaySkyTexture(true), []);
-  const texNight = useMemo(() => makeNightSkyTexture(false), []);
-  const texNightBad = useMemo(() => makeNightSkyTexture(true), []);
-  const bad = kind !== 'clear';
-  const tex = night ? (bad ? texNightBad : texNight) : bad ? texDayBad : texDay;
-  useFrame((_, dt) => {
-    // 云缓慢漂移（夜晚更慢，星星微微流动不突兀）
-    const v = night ? 0.004 : 0.011;
-    texDay.offset.x = (texDay.offset.x - dt * v) % 1;
-    texDayBad.offset.x = (texDayBad.offset.x - dt * v * 1.6) % 1;
-    texNight.offset.x = (texNight.offset.x - dt * v) % 1;
-    texNightBad.offset.x = (texNightBad.offset.x - dt * v) % 1;
-  });
-  return (
-    <group>
-      {WINS.map((w, i) => {
-        const along = winPos?.[i] ?? w.def;
-        const x = w.axis === 'z' ? along : w.at + w.side * 1.5;
-        const z = w.axis === 'z' ? w.at + w.side * 1.5 : along;
-        return (
-          <mesh key={i} position={[x, 1.72, z]} rotation={[0, w.ry, 0]}>
-            <planeGeometry args={[3.4, 2.7]} />
-            <meshBasicMaterial map={tex} toneMapped={false} fog={false} depthWrite={false} />
-          </mesh>
-        );
-      })}
-    </group>
-  );
-}
+// ---------------- G5 积雪/水珠 + G3 彩蛋小生物（v6.1；G2 远景幕帘已按需求移除） ----------------
 
 /** G5 玻璃水珠贴图（圆珠 + 竖向水痕） */
 function makeGlassRainTexture(): THREE.CanvasTexture {
