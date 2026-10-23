@@ -7,8 +7,8 @@
  * - tv：程序化美颜电视（TV3D）；
  * - 门节点真实开合动画（wardrobe/fridge/washer/sink/nightstand/stove）；
  * - 纸箱类无门节点 → 开门态换模型（glbAlt）；
- * - 灯具/收音机：开 = 灯罩发光 + 点光（夜晚更亮）；
- * - playful 点击弹跳；洗衣机运转轻微抖动 + 状态灯；
+ * - 灯具/收音机：开 = 灯罩发光 + 点光（夜晚更亮），lc = 用户自选光色优先；
+ * - playful 点击弹跳；洗衣机运转轻微抖动 + 状态灯 + 滚筒转动；微波炉加热 = 门缝暖光 + 蒸汽 + 嗡嗡抖动；
  * - 编辑模式：选中光圈（移动模式绿色）+ 拖拽（父组件接管指针）+ 用户调色 tint。
  */
 
@@ -41,7 +41,7 @@ import {
   Spoons3D,
   TowelRack3D,
 } from './Small3D';
-import { COZY_PARTS } from './Cozy3D';
+import { COZY_PARTS, makeSteamTexture } from './Cozy3D';
 import { COZY_PLUS_PARTS } from './CozyPlus3D';
 
 export interface Furn3DProps {
@@ -180,6 +180,12 @@ export default function Furn3D({
         }
       }
     }
+    // 微波炉加热：整机轻微嗡嗡抖动（v5.9 F2，仅 on 时生效，关闭立即归位）
+    if (entry.kind === 'microwave' && group.current) {
+      group.current.position.x = item.st?.on
+        ? item.x + Math.sin(state.clock.elapsedTime * 58) * 0.002
+        : item.x;
+    }
     // 选中光圈呼吸
     if (ring.current) {
       ring.current.rotation.z = state.clock.elapsedTime * 0.8;
@@ -298,6 +304,16 @@ export default function Furn3D({
           </mesh>
         )}
 
+        {/* 洗衣机滚筒转动（v5.9 F2：washing 时正面观察窗半透明转盘 + 泡沫） */}
+        {entry.acts?.washer && modelSize && (
+          <WasherDrum washing={!!item.st?.washing} modelSize={modelSize} />
+        )}
+
+        {/* 微波炉加热外显（v5.9 F2：门缝暖光 + 蒸汽；整机抖动在外层 useFrame 处理，GLB 内腔不可见） */}
+        {entry.kind === 'microwave' && modelSize && (
+          <MicrowaveHeat on={!!item.st?.on} modelSize={modelSize} />
+        )}
+
         {/* 卫浴全套（v5.4：淋浴房/洗手台/镜子/毛巾架） */}
         {entry.kind === 'shower' && <Shower3D on={!!item.st?.on} col={item.col} />}
         {entry.kind === 'basin' && <Basin3D col={item.col} />}
@@ -325,7 +341,8 @@ export default function Furn3D({
           />
         )}
 
-        {/* v5.7 拾光扩展（CozyPlus3D 程序化建模）：投影仪/幕布/吊篮秋千/鞋柜/挂画组/加湿器/酒柜/棋盘桌/火锅桌/吊床/游戏机/花架 + v5.8 黑胶唱片机/八音盒 */}
+        {/* v5.7 拾光扩展（CozyPlus3D 程序化建模）：投影仪/幕布/吊篮秋千/鞋柜/挂画组/加湿器/酒柜/棋盘桌/火锅桌/吊床/游戏机/花架 + v5.8 黑胶唱片机/八音盒
+            + v5.9 节日/阳台/挂墙/绿植/毛绒/茶角 20 件（photoWallLove 的照片经 photo 透传入注册表，无需 kind 专属重复渲染） */}
         {PlusPart && (
           <PlusPart
             col={item.col}
@@ -334,6 +351,8 @@ export default function Furn3D({
             projectorOn={projectorOn}
             sat={sitting}
             touch={item.st?.lastTouch}
+            photo={item.st?.photo}
+            lc={item.st?.lc}
           />
         )}
 
@@ -344,11 +363,11 @@ export default function Furn3D({
         {entry.kind === 'diningTable' && meal && <MealDish />}
       </group>
 
-      {/* 灯光（开着才亮；夜晚更暖） */}
+      {/* 灯光（开着才亮；夜晚更暖；lc = 用户自选光色优先，E7） */}
       {entry.light && item.st?.on && modelSize && (
         <pointLight
           position={[0, entry.light.y, 0]}
-          color={entry.light.color ?? '#ffd9a0'}
+          color={item.st?.lc ?? entry.light.color ?? '#ffd9a0'}
           intensity={(entry.light.intensity ?? 1) * (night ? 1.5 : 0.55)}
           distance={5.5}
           decay={2}
@@ -492,6 +511,113 @@ function TubExtras({
           </mesh>
         ))}
       </group>
+    </group>
+  );
+}
+
+// ---------------- 微波炉加热外显（v5.9 F2：门缝暖光 + 蒸汽；整机抖动由主 useFrame 处理） ----------------
+
+function MicrowaveHeat({ on, modelSize }: { on: boolean; modelSize: THREE.Vector3 }) {
+  const steamTex = useMemo(() => makeSteamTexture(), []);
+  const puffs = useRef<(THREE.Sprite | null)[]>([]);
+  const glow = useRef<THREE.Mesh>(null);
+  useFrame((state) => {
+    if (!on) return;
+    const t = state.clock.elapsedTime;
+    // 门缝暖光呼吸
+    if (glow.current) {
+      (glow.current.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.3 + Math.sin(t * 2.2) * 0.25;
+    }
+    // 顶部蒸汽 ×2 循环上升
+    puffs.current.forEach((sp, i) => {
+      if (!sp) return;
+      const life = (t * 0.5 + i * 0.5) % 1;
+      sp.position.set((i === 0 ? -0.05 : 0.05) + Math.sin(t * 1.2 + i * 3) * 0.02, modelSize.y + 0.02 + life * 0.2, 0);
+      const s = 0.06 + life * 0.1;
+      sp.scale.set(s, s, 1);
+      (sp.material as THREE.SpriteMaterial).opacity = 0.5 * (1 - life);
+    });
+  });
+  return (
+    <group visible={on}>
+      {/* 门缝暖光薄板（发光细长条贴在门缝处） */}
+      <mesh ref={glow} position={[modelSize.x * 0.14, modelSize.y * 0.5, modelSize.z / 2 + 0.004]} raycast={() => null}>
+        <planeGeometry args={[modelSize.x * 0.035, modelSize.y * 0.62]} />
+        <meshStandardMaterial
+          color="#ffe9c4"
+          emissive="#ffcf8a"
+          emissiveIntensity={1.2}
+          transparent
+          opacity={0.85}
+          depthWrite={false}
+        />
+      </mesh>
+      {/* 顶部逸出蒸汽 ×2 */}
+      {[0, 1].map((i) => (
+        <sprite
+          key={i}
+          ref={(el) => { puffs.current[i] = el; }}
+          position={[0, modelSize.y + 0.05, 0]}
+          scale={[0.07, 0.07, 1]}
+        >
+          <spriteMaterial map={steamTex} transparent opacity={0} depthWrite={false} />
+        </sprite>
+      ))}
+    </group>
+  );
+}
+
+// ---------------- 洗衣机滚筒转动（v5.9 F2：washing 时正面观察窗半透明转盘 + 泡沫） ----------------
+
+function WasherDrum({ washing, modelSize }: { washing: boolean; modelSize: THREE.Vector3 }) {
+  const root = useRef<THREE.Group>(null);
+  const spin = useRef<THREE.Group>(null);
+  const foam = useRef<(THREE.Mesh | null)[]>([]);
+  const r = Math.min(modelSize.x, modelSize.y) * 0.26;
+  useFrame((state, dt) => {
+    if (root.current) root.current.visible = washing; // 结束即隐藏省渲染
+    if (!washing) return;
+    // 滚筒匀速转动
+    if (spin.current) spin.current.rotation.z -= Math.min(dt, 0.05) * 4.2;
+    // 泡沫小球贴窗缘轻浮
+    const t = state.clock.elapsedTime;
+    foam.current.forEach((f, i) => {
+      if (!f) return;
+      const a = i * 2.1 + 0.6;
+      f.position.set(
+        Math.cos(a) * r * 0.86,
+        Math.sin(a) * r * 0.86 + Math.sin(t * 2.4 + i * 1.9) * 0.008,
+        0.012,
+      );
+    });
+  });
+  return (
+    <group ref={root} position={[0, modelSize.y * 0.55, modelSize.z / 2 + 0.006]} visible={false}>
+      {/* 旋转内筒（深色半透明盘 + 3 根辐条） */}
+      <group ref={spin}>
+        <mesh rotation={[Math.PI / 2, 0, 0]} raycast={() => null}>
+          <cylinderGeometry args={[r, r, 0.006, 26]} />
+          <meshStandardMaterial color="#3a4048" roughness={0.4} transparent opacity={0.42} depthWrite={false} />
+        </mesh>
+        {[0, 1, 2].map((i) => (
+          <mesh key={i} rotation={[0, 0, (i * Math.PI) / 3]} position={[0, 0, 0.004]} raycast={() => null}>
+            <boxGeometry args={[r * 1.7, 0.014, 0.004]} />
+            <meshStandardMaterial color="#565e68" roughness={0.5} transparent opacity={0.55} />
+          </mesh>
+        ))}
+      </group>
+      {/* 观察窗外圈环 */}
+      <mesh position={[0, 0, 0.008]} raycast={() => null}>
+        <torusGeometry args={[r * 0.99, 0.012, 8, 32]} />
+        <meshStandardMaterial color="#cfd4d8" roughness={0.35} metalness={0.4} />
+      </mesh>
+      {/* 泡沫 ×3 */}
+      {[0, 1, 2].map((i) => (
+        <mesh key={`f${i}`} ref={(el) => { foam.current[i] = el; }} raycast={() => null}>
+          <sphereGeometry args={[0.016, 8, 8]} />
+          <meshStandardMaterial color="#ffffff" roughness={0.3} transparent opacity={0.75} depthWrite={false} />
+        </mesh>
+      ))}
     </group>
   );
 }

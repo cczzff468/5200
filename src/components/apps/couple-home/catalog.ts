@@ -430,7 +430,8 @@ export const CATALOG: Record<string, CatalogEntry> = {
   },
   microwave: {
     kind: 'microwave', glb: G('microwave'), name: '小微波炉', cat: 'appliance', fp: [0.58, 0.46], h: 0.36,
-    acts: { playful: true },
+    // 点击加热/停止：门缝暖光 + 蒸汽袅袅（v5.9 F2 互动升级）
+    acts: { toggle: true }, light: { y: 0.18, color: '#ffd9a0', intensity: 0.3 },
   },
   toaster: {
     kind: 'toaster', glb: G('toaster'), name: '烤面包机', cat: 'appliance', fp: [0.38, 0.2], h: 0.26,
@@ -790,11 +791,217 @@ export const CATALOG: Record<string, CatalogEntry> = {
     kind: 'musicBox', name: '复古八音盒', cat: 'decor', fp: [0.26, 0.2], h: 0.24,
     acts: {},
   },
+
+  // ==================== v5.9 节日限定（F1：按月份自动出现，商店不售） ====================
+  // 圣诞树（11~12月自动出现）：彩灯闪烁 + 顶星发光
+  xmasTree: {
+    kind: 'xmasTree', name: '圣诞树', cat: 'decor', fp: [1.0, 1.0], h: 1.9,
+    acts: { playful: true }, light: { y: 1.7, color: '#ffe6a8', intensity: 0.55 },
+  },
+  // 礼物堆（11~12月）：点点彩盒弹跳
+  giftPile: {
+    kind: 'giftPile', name: '礼物堆', cat: 'decor', fp: [0.9, 0.7], h: 0.5,
+    acts: { playful: true },
+  },
+  // 红灯笼（1~2月新春）：暖光圆灯
+  lantern: {
+    kind: 'lantern', name: '红灯笼', cat: 'lamp', fp: [0.34, 0.34], h: 0.62,
+    acts: { toggle: true }, light: { y: 0.4, color: '#ff8a5c', intensity: 0.6 },
+  },
+  // 春联（1~2月新春，挂墙）：福字竖联
+  springCouplet: {
+    kind: 'springCouplet', name: '新春春联', cat: 'decor', fp: [0.42, 0.08], wallMount: true, wallY: 1.45, h: 1.15,
+    acts: { playful: true },
+  },
+  // 南瓜灯（10月万圣节）：点亮点亮鬼脸蜡烛
+  pumpkin: {
+    kind: 'pumpkin', name: '南瓜灯', cat: 'lamp', fp: [0.34, 0.34], h: 0.34,
+    acts: { toggle: true }, light: { y: 0.2, color: '#ff9a3d', intensity: 0.5 },
+  },
+
+  // ==================== v5.9 阳台扩充（F4） ====================
+  // 吊床（长轴沿 x）：躺下时 ryOff π/2 让小人顺长轴躺
+  hammock: {
+    kind: 'hammock', name: '悠闲吊床', cat: 'sofa', fp: [2.1, 0.9], h: 0.75,
+    acts: { sleep: { y: 0.42, ryOff: Math.PI / 2, out: [1.2, 0] } },
+  },
+  // BBQ 烤架：点击开炭火（火光 + 烟雾）
+  bbq: {
+    kind: 'bbq', name: 'BBQ 烤架', cat: 'appliance', fp: [0.8, 0.6], h: 1.0,
+    acts: { toggle: true }, light: { y: 0.5, color: '#ff9a3d', intensity: 0.45 },
+  },
+  // 户外躺椅：坐上去晒太阳
+  loungeOutdoor: {
+    kind: 'loungeOutdoor', name: '户外躺椅', cat: 'sofa', fp: [0.8, 1.7], h: 0.78,
+    acts: { seat: { y: 0.4, dz: -0.3 } },
+  },
+  // 花箱栅栏：阳台装饰（一排小花）
+  flowerBox: {
+    kind: 'flowerBox', name: '花箱栅栏', cat: 'plant', fp: [1.8, 0.3], h: 0.55,
+    acts: { playful: true },
+  },
+
+  // ==================== v5.9 墙面装饰（F5） ====================
+  // 挂钟：指针跟真实时间走
+  wallClock: {
+    kind: 'wallClock', name: '挂钟', cat: 'decor', fp: [0.4, 0.08], wallMount: true, wallY: 1.55, h: 0.4,
+    acts: {},
+  },
+  // 世界地图挂图：手绘风
+  worldMap: {
+    kind: 'worldMap', name: '世界地图', cat: 'decor', fp: [1.5, 0.08], wallMount: true, wallY: 1.5, h: 0.95,
+    acts: { playful: true },
+  },
+  // 恋爱纪念照片墙：心形相框组，可换自己的合照（photo 流程同相框）
+  photoWallLove: {
+    kind: 'photoWallLove', name: '纪念照片墙', cat: 'decor', fp: [1.3, 0.1], wallMount: true, wallY: 1.5, h: 0.9,
+    acts: { photo: true },
+  },
+
+  // ==================== v5.9 绿植系列（F6） ====================
+  monstera: {
+    kind: 'monstera', name: '龟背竹', cat: 'plant', fp: [0.6, 0.55], h: 1.0,
+    acts: { playful: true },
+  },
+  cactus: {
+    kind: 'cactus', name: '小仙人掌', cat: 'plant', fp: [0.26, 0.26], h: 0.42,
+    acts: { playful: true },
+  },
+  // 水培瓶：摆桌面小物
+  hydro: {
+    kind: 'hydro', name: '水培瓶', cat: 'plant', fp: [0.14, 0.14], h: 0.26,
+    acts: { playful: true },
+  },
+
+  // ==================== v5.9 毛绒伙伴（F7） ====================
+  // 大号泰迪熊：小人可以坐进怀里抱抱（seat = 熊腿上）
+  teddyBig: {
+    kind: 'teddyBig', name: '大号泰迪熊', cat: 'decor', fp: [1.0, 0.8], h: 1.25,
+    acts: { playful: true, seat: { y: 0.62, dz: 0.08 } },
+  },
+  // 抱枕堆：坐上去软软的
+  pillowPile: {
+    kind: 'pillowPile', name: '抱枕堆', cat: 'sofa', fp: [0.72, 0.55], h: 0.35,
+    acts: { playful: true, seat: { y: 0.26, dz: 0 } },
+  },
+  // 懒人豆袋毯：豆袋 + 盖毯，一坐就陷进去
+  beanbagBlanket: {
+    kind: 'beanbagBlanket', name: '懒人豆袋毯', cat: 'sofa', fp: [1.05, 0.95], h: 0.55,
+    acts: { playful: true, seat: { y: 0.3, dz: 0.02 } },
+  },
+
+  // ==================== v5.9 下午茶角（F8） ====================
+  // 茶几套餐具（茶壶 + 杯组，摆桌面小物）
+  teaSet: {
+    kind: 'teaSet', name: '下午茶具', cat: 'kitchen', fp: [0.3, 0.22], h: 0.16,
+    acts: { playful: true },
+  },
+  // 蛋糕架（双层点心台）
+  cakeStand: {
+    kind: 'cakeStand', name: '蛋糕架', cat: 'kitchen', fp: [0.28, 0.28], h: 0.28,
+    acts: { playful: true },
+  },
 };
 
-/** 商店分类 tab 配置（编辑模式底部栏；纯文字，无图标） */
+// ---------------- 成套摆放（F3：一键把一组家具按预设相对位放进房间） ----------------
+
+/** 套装单件：kind + 相对锚点偏移（dx/dz 米，锚点 = findSpot 找到的落点）；可选 ry / y（抬上桌） */
+export interface FurnSetItem {
+  kind: FurnitureKind;
+  dx: number;
+  dz: number;
+  ry?: number;
+  y?: number;
+}
+
+export interface FurnSet {
+  id: string;
+  name: string;
+  desc: string;
+  /** 锚点定位用的代表家具（最大的那件，findSpot 用它找空位） */
+  anchor: FurnitureKind;
+  items: FurnSetItem[];
+}
+
+/** 商店「套装」tab 的套装清单（相对偏移已验证不重叠，clamped 到当前房间） */
+export const FURN_SETS: FurnSet[] = [
+  {
+    id: 'bedSet',
+    name: '温馨卧室套装',
+    desc: '双人床 + 床头柜×2 + 衣柜',
+    anchor: 'bed',
+    items: [
+      { kind: 'bed', dx: 0, dz: 0 },
+      { kind: 'nightstand', dx: -1.35, dz: -0.2 },
+      { kind: 'nightstand', dx: 1.35, dz: -0.2 },
+      { kind: 'wardrobe', dx: 0, dz: -1.75 },
+    ],
+  },
+  {
+    id: 'sofaSet',
+    name: '客厅沙发套装',
+    desc: '长地毯 + 双人沙发 + 茶几',
+    anchor: 'rugRect',
+    items: [
+      { kind: 'rugRect', dx: 0, dz: 0 },
+      { kind: 'sofa', dx: 0, dz: -1.6 },
+      { kind: 'coffeeTable', dx: 0, dz: -0.1 },
+    ],
+  },
+  {
+    id: 'studySet',
+    name: '元气书房套装',
+    desc: '书桌 + 软垫椅 + 书架 + 台灯',
+    anchor: 'desk',
+    items: [
+      { kind: 'desk', dx: 0, dz: 0 },
+      { kind: 'chair', dx: 0, dz: 0.75 },
+      { kind: 'bookcase', dx: 0, dz: -1.1 },
+      { kind: 'lampTable', dx: -0.5, dz: 0, y: 0.78 },
+    ],
+  },
+  {
+    id: 'teaCorner',
+    name: '下午茶角套装',
+    desc: '边桌 + 椅×2 + 茶具 + 蛋糕架',
+    anchor: 'sideTable',
+    items: [
+      { kind: 'sideTable', dx: 0, dz: 0 },
+      { kind: 'chair', dx: -0.55, dz: 0.62, ry: Math.PI },
+      { kind: 'chair', dx: 0.55, dz: 0.62, ry: Math.PI },
+      { kind: 'teaSet', dx: 0, dz: 0, y: 0.56 },
+      { kind: 'cakeStand', dx: 0.32, dz: 0, y: 0.56 },
+    ],
+  },
+  {
+    id: 'balconySet',
+    name: '假日烧烤套装',
+    desc: '吊床 + BBQ + 躺椅 + 花箱',
+    anchor: 'hammock',
+    items: [
+      { kind: 'hammock', dx: 0, dz: 0 },
+      { kind: 'bbq', dx: 2.2, dz: -0.3 },
+      { kind: 'loungeOutdoor', dx: 1.0, dz: 1.1 },
+      { kind: 'flowerBox', dx: 2.1, dz: 0.85 },
+    ],
+  },
+];
+
+// ---------------- 节日限定（F1：按月份自动出现） ----------------
+
+/** 月份（1~12）→ 当月应自动出现的节日家具 kind；商店不售、删掉当月不再补（下月/来年再来） */
+export const SEASONAL: Record<number, FurnitureKind[]> = {
+  10: ['pumpkin'],
+  11: ['xmasTree', 'giftPile'],
+  12: ['xmasTree', 'giftPile'],
+  1: ['lantern', 'springCouplet'],
+  2: ['lantern', 'springCouplet'],
+};
+
+/** 商店分类 tab 配置（编辑模式底部栏；纯文字，无图标；set = 成套摆放 F3） */
 export const SHOP_TABS: { key: import('./types').FurnCategory; label: string }[] = [
   { key: 'all', label: '全部' },
+  { key: 'set', label: '套装' },
   { key: 'sofa', label: '沙发' },
   { key: 'table', label: '桌几' },
   { key: 'bed', label: '床品' },

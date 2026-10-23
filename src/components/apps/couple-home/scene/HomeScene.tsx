@@ -12,7 +12,8 @@
  * - 走出家门：点门开门后，小人可经门洞走进卧室（隔墙两侧行走钳制 + 门走廊判定）；
  * - 编辑模式：OrbitControls 上帝视角 + 家具拖拽（双房间钳制 + 0.25m 吸附）
  *   + 移动模式（选中后拖动画面任意位置搬运）+ 四向按钮微调 + 缩放按钮；
- * - 昼夜灯光切换：白天暖阳光 + 夜晚冷月光 + 灯具/窗户点光。
+ *   拖拽辅助 DragAid：全屋对齐网格增亮 + 吸附底座 + 重叠红框警告（E2）；
+ * - 昼夜灯光切换：白天暖阳光 + 夜晚冷月光 + 灯具/窗户点光；开灯越多环境光越亮越暖（E7）。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
@@ -138,6 +139,8 @@ export interface HomeSceneProps {
   floorTex?: 'plain' | 'wood' | 'check';
   /** 墙纸纹理（全屋通用）：plain 素色（默认）/ dot 碎花 / stripe 条纹 */
   wallTex?: 'plain' | 'dot' | 'stripe';
+  /** E7 灯光氛围：当前亮着的灯具数量（开灯越多环境光越亮越暖；缺省 0） */
+  litLamps?: number;
 }
 
 /** 生活模式视角俯仰范围：接近水平（低角仰视）↔ 近乎俯瞰（全方位拉动视角） */
@@ -852,6 +855,120 @@ function EditGrid() {
   );
 }
 
+// ---------------- E2 拖拽对齐辅助（网格增亮 + 吸附底座 + 重叠红警告） ----------------
+
+/** 吸附底座配色：普通淡粉 / 重叠红色 */
+const AID_PINK = '#f2b3c2';
+const AID_RED = '#e05a4e';
+
+/**
+ * DragAid —— 装修模式拖拽辅助（全部 useFrame 原地改对象，零 setState，非拖拽零开销）：
+ * ① 一块覆盖全屋的大 gridHelper（0.25m 一格 = SNAP），edit 极淡常显、拖拽中增亮、live 隐藏；
+ * ② 拖拽中家具脚下的吸附底座（淡粉半透明面 + 描边框），跟随家具 x/z/ry，尺寸 = footprint；
+ * ③ 底座 AABB 与其他家具相交 → 底座变红（跳过 flat 地毯 / y>0.45 桌上物 / 自己）。
+ */
+function DragAid({
+  modeRef,
+  dragRef,
+  itemsRef,
+}: {
+  modeRef: RefObject<HomeMode>;
+  dragRef: RefObject<DragInfo | null>;
+  itemsRef: RefObject<FurnitureItem[]>;
+}) {
+  const grid = useRef<THREE.GridHelper>(null);
+  const base = useRef<THREE.Group>(null);
+  const fill = useRef<THREE.Mesh>(null);
+  const rim = useRef<THREE.LineSegments>(null);
+  /** 单位平面描边框：每帧按 footprint scale，几何不重建 */
+  const rimGeo = useMemo(() => new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1)), []);
+  useEffect(() => () => rimGeo.dispose(), [rimGeo]);
+
+  useFrame((_, dtRaw) => {
+    const d = Math.min(dtRaw, 0.05);
+    const edit = modeRef.current === 'edit';
+    const drag = dragRef.current;
+
+    // ① 编辑网格：live 模式 visible=false；拖拽中透明度 0.08 → 0.22（damp 平滑）
+    const gh = grid.current;
+    if (gh) {
+      gh.visible = edit;
+      const mats = Array.isArray(gh.material) ? gh.material : [gh.material];
+      const target = edit && drag?.active ? 0.22 : 0.08;
+      for (const m of mats) {
+        m.transparent = true;
+        m.depthWrite = false;
+        m.opacity = THREE.MathUtils.damp(m.opacity, edit ? target : 0, 9, d);
+      }
+    }
+
+    // ②③ 吸附底座 + 重叠红警告（仅拖拽家具时每帧 O(n) 扫 items；win-/door- 拖拽找不到 → 隐藏）
+    const g = base.current;
+    const f = fill.current;
+    const r = rim.current;
+    if (!g || !f || !r) return;
+    const it = edit && drag?.active ? itemsRef.current.find((q) => q.id === drag.id) : undefined;
+    const entry = it ? CATALOG[it.kind] : undefined;
+    if (!it || !entry) {
+      g.visible = false;
+      return;
+    }
+    const [fw1, fd1] = footprintOf(entry, it.ry ?? 0);
+    let overlap = false;
+    if (!entry.flat && (it.y ?? 0) <= 0.45) {
+      const list = itemsRef.current;
+      for (let i = 0; i < list.length; i++) {
+        const o = list[i];
+        if (o.id === it.id) continue;
+        const e2 = CATALOG[o.kind];
+        if (!e2 || e2.flat || (o.y ?? 0) > 0.45) continue;
+        const [w2, d2] = footprintOf(e2, o.ry ?? 0);
+        if (Math.abs(o.x - it.x) < (fw1 + w2) / 2 && Math.abs(o.z - it.z) < (fd1 + d2) / 2) {
+          overlap = true;
+          break;
+        }
+      }
+    }
+    g.visible = true;
+    g.position.set(it.x, 0.02, it.z);
+    g.rotation.y = it.ry ?? 0;
+    const [w0, d0] = entry.fp;
+    f.scale.set(w0, d0, 1);
+    r.scale.set(w0, d0, 1);
+    const fm = f.material as THREE.MeshBasicMaterial;
+    fm.color.set(overlap ? AID_RED : AID_PINK);
+    fm.opacity = overlap ? 0.3 : 0.18;
+    const rm = r.material as THREE.LineBasicMaterial;
+    rm.color.set(overlap ? AID_RED : AID_PINK);
+    rm.opacity = overlap ? 0.6 : 0.35;
+  });
+
+  return (
+    <group>
+      {/* 大网格：x∈[-4.5,8.5]（宽13）、z 中心 3.75，0.25m 一格 = 52 分割，盖住五房间地面 */}
+      <gridHelper
+        ref={grid}
+        args={[13, 52, '#d8b0a8', '#a89a78']}
+        position={[2, 0.012, 3.75]}
+        material-transparent
+        material-opacity={0.08}
+        material-depthWrite={false}
+        renderOrder={1}
+        visible={false}
+      />
+      <group ref={base} visible={false}>
+        <mesh ref={fill} rotation={[-Math.PI / 2, 0, 0]} renderOrder={2}>
+          <planeGeometry args={[1, 1]} />
+          <meshBasicMaterial color={AID_PINK} transparent opacity={0.18} depthWrite={false} />
+        </mesh>
+        <lineSegments ref={rim} geometry={rimGeo} rotation={[-Math.PI / 2, 0, 0]} renderOrder={3}>
+          <lineBasicMaterial color={AID_PINK} transparent opacity={0.35} depthWrite={false} />
+        </lineSegments>
+      </group>
+    </group>
+  );
+}
+
 // ---------------- 移动模式接管相机（激活时禁用轨道旋转） ----------------
 
 function MoveModeGate({ moveOn, mode }: { moveOn: boolean; mode: HomeMode }) {
@@ -933,6 +1050,7 @@ function EditCameraKick({ mode }: { mode: HomeMode }) {
 const DAY_BG = '#efe8da';
 const NIGHT_BG = '#24272f';
 const _TMP_C = /* @__PURE__ */ new THREE.Color();
+const _WARM = /* @__PURE__ */ new THREE.Color(); // E7 夜晚开灯 → 环境光向暖色偏移的目标色
 
 /**
  * E2 昼夜平滑：mix 每帧向目标阻尼（0=白天 / 1=夜晚），驱动天空底色；
@@ -962,7 +1080,18 @@ const Q_DPR: Record<SceneQuality, [number, number]> = {
 /** 档位 → 主光阴影贴图边长（low = 整关阴影） */
 const Q_SHADOW: Record<SceneQuality, number> = { high: 1024, mid: 512, low: 0 };
 
-function Lights({ night, mixRef, quality }: { night: boolean; mixRef: RefObject<{ v: number }>; quality: SceneQuality }) {
+function Lights({
+  night,
+  mixRef,
+  quality,
+  litLamps = 0,
+}: {
+  night: boolean;
+  mixRef: RefObject<{ v: number }>;
+  quality: SceneQuality;
+  /** E7：亮着的灯具数量（越多环境光越亮越暖；夜晚全额生效，白天 ×0.3） */
+  litLamps?: number;
+}) {
   const dir = useRef<THREE.DirectionalLight>(null);
   const amb = useRef<THREE.AmbientLight>(null);
   const hemi = useRef<THREE.HemisphereLight>(null);
@@ -989,12 +1118,28 @@ function Lights({ night, mixRef, quality }: { night: boolean; mixRef: RefObject<
   useFrame((_, dt) => {
     const k = mixRef.current.v;
     const d = Math.min(dt, 0.05);
+    // E7 灯光氛围：亮着的灯具越多环境光越亮越暖（直接加进 damp 目标值，昼夜 damp 不受影响）
+    const lit = Math.min(litLamps, 5);
+    const dayK = night ? 1 : 0.3; // 夜晚全额生效，白天轻微
     if (amb.current) {
-      amb.current.intensity = THREE.MathUtils.damp(amb.current.intensity, night ? 0.55 : 0.95, 2.2, d);
-      amb.current.color.copy(tmp.set('#fff3e0').lerp(_TMP_C.set('#a8b4cd'), k));
+      amb.current.intensity = THREE.MathUtils.damp(
+        amb.current.intensity,
+        (night ? 0.55 : 0.95) + lit * 0.07 * dayK,
+        2.2,
+        d,
+      );
+      // 昼夜 lerp 完成后再向暖色微调（tmp 是复用临时色，必须等 lerp 用完再叠加，且只在夜晚生效）
+      amb.current.color
+        .copy(tmp.set('#fff3e0').lerp(_TMP_C.set('#a8b4cd'), k))
+        .lerp(_WARM.set('#ffdcb0'), lit * 0.06 * (night ? 1 : 0));
     }
     if (hemi.current) {
-      hemi.current.intensity = THREE.MathUtils.damp(hemi.current.intensity, night ? 0.5 : 0.55, 2.2, d);
+      hemi.current.intensity = THREE.MathUtils.damp(
+        hemi.current.intensity,
+        (night ? 0.5 : 0.55) + lit * 0.05 * dayK,
+        2.2,
+        d,
+      );
       hemi.current.color.copy(tmp.set('#fdf6e8').lerp(_TMP_C.set('#39415c'), k));
       hemi.current.groundColor.copy(tmp.set('#e5d6b8').lerp(_TMP_C.set('#23252c'), k));
     }
@@ -1059,7 +1204,7 @@ export default function HomeScene(props: HomeSceneProps) {
     floorColBal, wallColBal,
     ceilCol, ceilColBed, ceilColK, ceilColB,
     doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, onToggleDoor, onToggleKitchenDoor, onToggleBathDoor, onToggleBalconyDoor,
-    guestRT, guestName, musicPlaying, weatherFx,
+    guestRT, guestName, musicPlaying, weatherFx, litLamps,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
   } = props;
 
@@ -1191,7 +1336,7 @@ export default function HomeScene(props: HomeSceneProps) {
         onFallback={() => setQuality('low')}
       />
       <NightBlend night={night} mixRef={nightMixRef} />
-      <Lights night={night} mixRef={nightMixRef} quality={quality} />
+      <Lights night={night} mixRef={nightMixRef} quality={quality} litLamps={litLamps} />
       <Room
         night={night}
         onFloorTap={onFloorTap}
@@ -1232,6 +1377,7 @@ export default function HomeScene(props: HomeSceneProps) {
         wallTex={wallTex}
       />
       {mode === 'edit' && <EditGrid />}
+      <DragAid modeRef={modeRef} dragRef={dragRef} itemsRef={itemsRef} />
 
       {items.map((item) => {
         const entry = CATALOG[item.kind];

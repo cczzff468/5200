@@ -21618,3 +21618,84 @@ Stage Summary:
 - 装修撤销能力从「仅收起」升级为全操作覆盖：放置/收起/移动（微调+拖拽）/旋转（四向）/升降/单件换色/门窗换色移动/16 种房间色/地板墙纸纹理，全部可撤销可重做；连续手势（拖拽帧/快速连点）自动合并为一步，栈深 60
 - 回收站面板整个移除（UI+存档字段+API 清洗），撤销栈成为唯一找回通道，交互更轻
 - 已知限制：撤销栈为会话级（刷新后清空，符合主流编辑器习惯）；重置小家/冲突采纳对方布置会清空历史（防串档）
+
+---
+Task ID: v59-foundation-1022
+Agent: Z.ai Code (main)
+Task: 拾光小屋 v5.9 数据基础层 —— F1-F8 家具包全部目录 + E7 灯色字段 + F3 套装定义 + F1 节日表（为三个并行子代理打地基）
+
+Work Log:
+- types.ts：FurnitureKind 新增 20 个 kind（节日 xmasTree/giftPile/lantern/springCouplet/pumpkin；阳台 hammock/bbq/loungeOutdoor/flowerBox；墙面 wallClock/worldMap/photoWallLove；绿植 monstera/cactus/hydro；毛绒 teddyBig/pillowPile/beanbagBlanket；茶角 teaSet/cakeStand）；FurnCategory 加 'set'；FurnitureState 加 lc?（灯具自选光色 #rrggbb）
+- catalog.ts：新增 20 条 CatalogEntry（含 acts：hammock sleep ryOff π/2、teddyBig/pillowPile/beanbagBlanket seat、bbq/pumpkin/lantern toggle+light、photoWallLove photo、microwave 升级 toggle+light）；FURN_SETS 5 套装（温馨卧室/客厅沙发/元气书房/下午茶角/假日烧烤，含预设相对偏移与 anchor）；SEASONAL 月份表（10 南瓜灯、11-12 圣诞树+礼物堆、1-2 灯笼+春联）；SHOP_TABS 插入 '套装' tab；FURN_SETS/FurnSet/FurnSetItem 导出
+- tsc --noEmit 全绿
+
+Stage Summary:
+- 数据契约已固定，三个并行子代理按此实现：A=程序化模型(CozyPlus3D/Cozy3D/Furn3D)、B=CoupleHome 接线(音效/套装/节日/灯色UI/拖拽吸附)、C=HomeScene 场景辅助(网格/重叠警告/灯光环境光)
+- API route.ts 零改动（st 宽松放行 lc，kind 字符串清洗兼容新 kind）
+
+---
+Task ID: scene-aid-1022
+Agent: 场景辅助子代理 (general-purpose)
+Task: HomeScene.tsx 场景辅助 —— E2 拖拽对齐辅助（DragAid：网格增亮/吸附底座/重叠红警告）+ E7 灯光氛围（开灯越多环境光越亮越暖）
+
+Work Log:
+- 只改动 HomeScene.tsx（+160 行）；顶部已有 react-hooks/immutability 整档 eslint-disable，DragAid 原地修改透明度直接沿用，无新增 disable
+- 新增 DragAid 组件（挂场景 JSX 内 EditGrid 之后，常驻挂载自管可见性，非拖拽零开销）：
+  ① 编辑网格：一块大 gridHelper args=[13,52,'#d8b0a8','#a89a78']（0.25m 一格=52 分割，x 覆盖 [-4.5,8.5]、position [2,0.012,3.75] 平移到区域中心），useFrame 从 modeRef/dragRef 直读——live 模式 visible=false；edit 默认 opacity 0.08，拖拽中（dragRef.current?.active）damp 提到 0.22（透明度/depthWrite 每帧原地改，material 兼容数组写法）
+  ② 吸附底座：单位 1×1 plane（rotation.x=-π/2）+ EdgesGeometry 描边框，每帧 scale 到 entry.fp 尺寸（几何不重建）；group position 跟随家具 x/z（y=0.02）、rotation.y=item.ry；普通 #f2b3c2 opacity 0.18（描边 0.35）；dragRef.current?.id 在 itemsRef 里找不到（win-/door- 拖拽）或非拖拽时整组隐藏
+  ③ 重叠红警告：拖拽中每帧 O(n) 扫 items（n<240），AABB 相交判定 |dx|<(w1+w2)/2 且 |dz|<(d1+d2)/2（宽度用 footprintOf(entry, ry) 换算旋转后宽深）；跳过 flat 地毯类 / y>0.45 桌上物 / 自己；被拖件本身是 flat 或 y>0.45 也不判；相交 → 底座变 #e05a4e opacity 0.3 + 描边 0.6
+- E7 灯光氛围：HomeSceneProps 加 litLamps?: number，主体解构后传 <Lights litLamps={...}>；Lights 加第 4 个 prop（缺省 0），在既有昼夜 damp 目标值上叠加加项（lit=min(litLamps,5)，dayK=night?1:0.3）：ambient 目标 (night?0.55:0.95)+lit*0.07*dayK、hemisphere 目标 (night?0.5:0.55)+lit*0.05*dayK（damp 既有，平滑）；ambient 颜色在昼夜 lerp 完成后再 .lerp(_WARM('#ffdcb0'), lit*0.06*(night?1:0))（模块级新 _WARM 临时色，不污染复用的 tmp）；dir 主光不动
+- 验证：bunx tsc --noEmit 全绿（含并行代理改动后的 CoupleHome/catalog/types，litLamps 可选 prop 对接零冲突）；bunx eslint HomeScene.tsx 0 error 0 警告；git diff 确认本次仅 HomeScene.tsx 变更（其余文件为并行代理所改）
+
+Stage Summary:
+- DragAid 拖拽对齐辅助落地：全屋 0.25m 对齐网格（edit 极淡常显/拖拽增亮/live 隐藏）+ 家具脚下淡粉吸附底座（跟随 x/z/ry，footprint 精确贴合）+ 重叠 AABB 红色警告（跳过地毯/桌上物/自己）；全部 useFrame 原地改对象，零 setState、非拖拽零开销
+- E7 灯光氛围落地：夜晚开灯 ambient/hemisphere 亮度按灯数线性增亮（每盏 +0.07/+0.05，上限 5 盏），环境光色向 #ffdcb0 暖调微调（每盏 +0.06 混合），白天开灯效果 ×0.3 轻微；昼夜 damp 逻辑零破坏
+- 对接点：CoupleHome 侧（并行代理 B）只需传 litLamps={亮着的灯具数}（st.on 的灯/吊灯/台灯等计数）即可生效
+
+---
+Task ID: home-wiring-1022
+Agent: 接线子代理 (general-purpose)
+Task: 拾光小屋 CoupleHome 五路接线 —— E3 音效回归 / F3 成套摆放 / F1 节日限定 / E7 灯光氛围 UI / E2 拖拽吸附
+
+Work Log:
+- 新建 sfx.ts（WebAudio 纯合成零资产，模块级单例）：getAudioContext() 惰性创建 AudioContext + master gain(0.14) + suspended 自动 resume，try/catch 全兜底（SSR/隐私模式/无 AudioContext 静默降级）；localStorage `ch-home-sfx` 持久化开关（'1'/'0'，缺省开）；五音色：tap（sine 880→660 滑落 0.05s）/ place（triangle 320→520 上滑 0.09s + 150→90Hz thud）/ remove（bandpass 噪声 2600→500Hz 短扫 0.18s）/ door（sine 140Hz 26Hz LFO 短震 0.12s + 2100Hz tick）/ step（lowpass 900Hz 噪声 tick 0.04s，gain 0.55 更低）；导出 sfx = { tap, place, remove, door, step, setEnabled, isEnabled }
+- E3 接线：sfxOn state + 挂载读回 + toggleSfx 回调（翻转 + setEnabled + toast 音效已开/已关）；两处 HUD 圆钮（编辑行 undo/redo 与地板墙色之间、生活模式右列第一人称下方）共用 toggleSfx，Volume2/VolumeX 随 sfxOn 切换，aria-label=音效开关；onFurnTap 最前 sfx.tap()（提前 return 分支也有声）、buy 成功路径 sfx.place()、removeSel sfx.remove()、四个门窗 toggle sfx.door()；脚步声 useEffect setInterval(380ms) 查 meRT.moving && mode==='live' && sfxOn（sfxOn/mode 走 ref 读避免重挂，卸载清理）
+- F3 接线：placeSet 回调 —— FURN_SETS.find → pushHistory 一次（整组一步撤销）→ anchor=findSpot(set.anchor, roomAt(me)) → 每件 footprintOf 取半宽 clampFurnToRooms(anchor+dx/dz) 落位（y/ry 透传，id 用 `${kind}-${Date.now().toString(36)}-${++buySeq}` 同款格式）→ 一次性 setItems 追加 → toast 共 N 件 → saveSoon，不 setSelId；商店抽屉 shopTab==='set' 时渲染套装卡列表（grid-cols-2，emoji 头部 SET_ICONS + 名称 + desc + 件数 + 一键摆放钮，沿用 bg-[#faf8f3] ring-[#efece2] 卡片风），商品网格移入 else 分支；shopItems useMemo 不动（'set' 天然空数组，thumbQueue 对空数组安全）
+- F1 接线：seasonalDismissed ref（Set<string>）；useEffect([items]) 按 `new Date().getMonth()+1` 查 SEASONAL，对每个 kind 判重（已有/dismissed 跳过）→ findSpot(k,'lr') 找位 → 追加新家具（同款 id 格式，st:{}）→ toast「N 月啦，XX悄悄出现在客厅～」；不 pushHistory（非用户操作）；removeSel 对 victim.kind 记入 dismissed（用户删掉的当月不再自动补）
+- E7 接线：litLampCount useMemo（items.reduce 计 CATALOG[kind].light && st.on 的灯具数）→ `<HomeScene litLamps={litLampCount}>`（并行代理 C 的 prop 已就位，tsc 零冲突）；调色盘面板在家具色板行后新增「灯光颜色」行（selEntry?.light 才显示）：6 预设圆片（暖黄/奶白/玫粉/天青/星绿/梦紫）+ 默认钮，当前 lc 高亮 ring；applyLightColor(hex|null) 只改 st.lc（null=undefined 恢复默认）+ saveSoon（按规格不 pushHistory、不动其它状态）
+- E2 接线：onDragMove 家具分支 x/z 先 Math.round(v*4)/4 吸附 0.25m 网格再写入（sx/sz 替换原 x/z），门窗沿墙分支保持不动
+- 验证：bunx tsc --noEmit 全绿（litLamps 与场景侧 prop 对接成功，无待集成报错）；bunx eslint CoupleHome.tsx + sfx.ts 0 error 0 warning
+
+Stage Summary:
+- 五个交互特性全部接线完成：全屋合成音效（点按/放置/收起/门轴/脚步，开关持久化双入口可切）、商店「套装」tab 五套装一键整组摆放（一步可撤销）、当月节日家具自动现身客厅（删后当月不再补）、灯具自选光色调色盘行 + 亮灯数驱动场景环境光增亮（对接代理 C）、拖拽 0.25m 网格吸附
+- 仅改 CoupleHome.tsx（+227 行）与新建 sfx.ts（+197 行），scene/catalog/types/api 零触碰；tsc/eslint 双绿，与并行代理 A/C 的产物（HomeScene litLamps/新模型）接口对齐无冲突
+
+---
+Task ID: furn-models-1022
+Agent: 模型子代理 (general-purpose，主代理论证补记——该代理任务超时于最终报告，代码已全部落地)
+Task: 20 件程序化家具模型（CozyPlus3D）+ 壁炉火星/洗衣机滚筒/微波炉加热（F2）
+
+Work Log:
+- CozyPlus3D.tsx：CozyPlusProps 扩展 photo/lc 字段；新增 20 个程序化部件并全部注册进 COZY_PLUS_PARTS（33 项）：XmasTree3D（三层锥树+彩球+顶星）、GiftPile3D（礼盒堆+缎带）、Lantern3D（红灯笼+金帽流苏+on 发光）、SpringCouplet3D（挂墙春联对+菱形福字）、Pumpkin3D（南瓜鬼脸+on 蜡烛橙光）、Hammock3D（木柱+条纹布带吊床）、Bbq3D（炭炉+烤网+on 火苗/烟）、LoungeOutdoor3D（藤编躺椅）、FlowerBox3D（花箱栅栏+花簇）、WallClock3D（实时时针分针秒针 useFrame 驱动）、WorldMap3D（canvas 手绘世界地图+木框）、PhotoWallLove3D（心形相框+photo dataURL 贴图+拍立得+红心）、Monstera3D/Cactus3D/Hydro3D（绿植三件）、TeddyBig3D（坐姿大泰迪+领结，seat 坐腿上）、PillowPile3D/BeanbagBlanket3D（抱枕堆/豆袋毯）、TeaSet3D（茶壶双杯托盘）、CakeStand3D（双层点心架）
+- Cozy3D.tsx：Fireplace3D 升级——新增 5~6 颗上升火星粒子（橙黄 emissive，sin 相位循环渐隐，仅 on 时可见）
+- Furn3D.tsx：PlusPart 调用点透传 photo/lc；pointLight 颜色改 item.st?.lc ?? 目录默认（E7）；photoWallLove 走 COZY_PLUS_PARTS 注册表渲染；新增 MicrowaveHeat（on 时门缝暖光+蒸汽 sprite+轻微抖动）与 WasherDrum（washing 时滚筒窗旋转盘+辐条+泡沫，modelSize 定位）两组件
+- 验证：tsc 全绿；eslint 0 error（主代理复测确认）
+
+Stage Summary:
+- 20 件新家具全部程序化建模（零 GLB 资产），商城缩略图经 ShopThumbs 自动生成；F2 三件互动升级（壁炉火星粒子/洗衣机滚筒/微波炉加热）全部随既有状态机驱动，关闭态零渲染开销
+- 实机验证：泰迪熊/挂钟（表盘刻度+实时指针）/龟背竹/吊床/BBQ/南瓜灯（toggle 点亮+存档 on=true）渲染正常
+
+---
+Task ID: v59-integration-1022
+Agent: Z.ai Code (main)
+Task: v5.9 整合验证 + 浏览器实测 + 数据清理（F1-F8 + E2/E3/E7 全量）
+
+Work Log:
+- 统一验证：tsc --noEmit 全绿；eslint 8 个改动文件 0 error 0 warning；agent-browser 430×932 全流程实测
+- 实测通过：F1 南瓜灯 10 月自动现身客厅（toast「10 月啦，南瓜灯悄悄出现在客厅～」+ 存档 on=true）✓；F3 套装 tab 五套装 UI + 下午茶角套装一键摆放（5 件含桌上物 y=0.56 精确落位存档）✓；套装整组撤销/重做（rev 82→84 一步回滚整组）✓；F4 吊床/BBQ/花箱模型渲染 ✓；F5 挂钟挂墙（表盘刻度可见）✓；F6 龟背竹 ✓；F7 大号泰迪熊（棕身红领结）✓；F8 茶具蛋糕架 ✓；E2 编辑网格 + 拖拽吸附底座 + 重叠红框警告（吊床拖向 BBQ 实拍红色警告）✓；E3 音效开关按钮双模式 HUD 就位 ✓；E7 灯光颜色行（6 预设+默认）+ lc=#ffb3c6 存档持久化 ✓；壁炉点火（on=true+炉膛余烬暖光）✓
+- 已知现象（非缺陷）：撤销栈为会话级，测试中 409 冲突触发 clearHistory 后早期操作不可撤销（符合既有设计）；turbopack errors 面板残留并行编辑期 HMR 旧错误（当前编译 200 干净、console 零错误、rg 确认无 Pet3D 引用）
+- 测试数据清理：撤销 4 步 + API 精确过滤（移除测试购买的台灯/泰迪熊/挂钟/地图/龟背竹与两套测试套装），存档 118 件恢复整洁，页面重载渲染正常
+- 遗留说明：洗衣机滚筒/微波炉蒸汽在关闭态零渲染开销，washing/on 态视觉经代码审查验证（状态机为既有流程，本会话受相机限制未走到卫生间实测）
+
+Stage Summary:
+- 拾光小屋 v5.9 全量落地：F1 节日限定（按月自动出现）+ F2 互动升级（壁炉粒子/滚筒/微波炉）+ F3 五套装一键成组 + F4 阳台四件 + F5 墙面三件 + F6 绿植三件 + F7 毛绒三件 + F8 下午茶两件 + E2 拖拽对齐辅助 + E3 合成音效回归 + E7 灯光氛围，共 20 件新家具、6 大交互升级

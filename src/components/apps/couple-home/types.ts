@@ -109,9 +109,35 @@ export type FurnitureKind =
   | 'flowerStand'
   // ---- v5.8 旋律扩展（B1 黑胶唱片机/八音盒） ----
   | 'vinyl'
-  | 'musicBox';
+  | 'musicBox'
+  // ---- v5.9 节日限定（F1：按月份自动出现，商店不售） ----
+  | 'xmasTree'
+  | 'giftPile'
+  | 'lantern'
+  | 'springCouplet'
+  | 'pumpkin'
+  // ---- v5.9 阳台扩充（F4） ----
+  | 'hammock'
+  | 'bbq'
+  | 'loungeOutdoor'
+  | 'flowerBox'
+  // ---- v5.9 墙面装饰（F5） ----
+  | 'wallClock'
+  | 'worldMap'
+  | 'photoWallLove'
+  // ---- v5.9 绿植系列（F6） ----
+  | 'monstera'
+  | 'cactus'
+  | 'hydro'
+  // ---- v5.9 毛绒伙伴（F7） ----
+  | 'teddyBig'
+  | 'pillowPile'
+  | 'beanbagBlanket'
+  // ---- v5.9 下午茶角（F8） ----
+  | 'teaSet'
+  | 'cakeStand';
 
-/** 家具分类（商店栏的 tab） */
+/** 家具分类（商店栏的 tab；set = 成套摆放 F3） */
 export type FurnCategory =
   | 'all'
   | 'sofa'
@@ -122,7 +148,8 @@ export type FurnCategory =
   | 'appliance'
   | 'bathroom'
   | 'kitchen'
-  | 'decor';
+  | 'decor'
+  | 'set';
 
 /** 单件家具实例（持久化最小单元） */
 export interface FurnitureItem {
@@ -174,6 +201,8 @@ export interface FurnitureState {
   simmer?: boolean;
   /** 棋盘桌：上一局的残局（编辑模式存档不丢） */
   chess?: number[];
+  /** 灯具自选光色（#rrggbb；E7 灯光氛围：台灯/落地灯/星空灯可调，undefined = 目录默认暖光） */
+  lc?: string;
 }
 
 /** 小人身份（guest = 邀请来做客的 AI 联系人，v5.7） */

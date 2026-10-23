@@ -3,7 +3,7 @@
 /**
  * 情侣小家 3D —— 暖奶油风新家具「Cozy 系列」（15 件程序化模型，无 GLB）
  *
- * - Curtain3D 落地窗帘（开合 damp）/ Fireplace3D 壁炉（火焰抖动 + 余烬光 flicker）；
+ * - Curtain3D 落地窗帘（开合 damp）/ Fireplace3D 壁炉（火焰抖动 + 余烬光 flicker + 火星粒子飘升）；
  * - Fishtank3D 鱼缸（三鱼椭圆巡游 + 气泡 + 投食加速聚食）/ Beanbag3D 懒人沙发；
  * - Piano3D 立式钢琴 + 琴凳（随机琴键按压 + 音符精灵上浮）/ Guitar3D 木吉他斜倚（振动 + 音符）；
  * - StandingMirror3D 穿衣落地镜 / StarProjector3D 星空投影灯（天花板星点 THREE.Points 自转）；
@@ -54,8 +54,8 @@ function makeNoteTexture(ch: string): THREE.CanvasTexture {
   return tex;
 }
 
-/** 白色蒸汽雾贴图（径向渐变） */
-function makeSteamTexture(): THREE.CanvasTexture {
+/** 白色蒸汽雾贴图（径向渐变；export 供 Furn3D 微波炉蒸汽复用） */
+export function makeSteamTexture(): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
   cv.width = 64;
   cv.height = 64;
@@ -129,10 +129,32 @@ const FIRE_FLAMES = [
   { pos: [-0.01, 0.34, 0.04] as [number, number, number], r: 0.055, h: 0.18, c: '#ffd166' },
 ];
 
+/** 火星粒子：各自随机相位，从炉膛向上飘 0.5m 渐隐循环（v5.9 F2） */
+const FIRE_SPARKS = [0.07, 0.23, 0.41, 0.57, 0.74, 0.9];
+
+/** 火星贴图（橙黄径向光斑，加法混合发亮） */
+function makeEmberTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 32;
+  cv.height = 32;
+  const ctx = cv.getContext('2d')!;
+  const g = ctx.createRadialGradient(16, 16, 1, 16, 16, 15);
+  g.addColorStop(0, 'rgba(255,230,150,1)');
+  g.addColorStop(0.4, 'rgba(255,160,60,0.8)');
+  g.addColorStop(1, 'rgba(255,120,40,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 32, 32);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 export function Fireplace3D({ on }: CozyProps) {
   const cream = '#f6f2ea';
   const flames = useRef<(THREE.Mesh | null)[]>([]);
   const light = useRef<THREE.PointLight>(null);
+  const sparks = useRef<(THREE.Sprite | null)[]>([]);
+  const sparkTex = useMemo(() => makeEmberTexture(), []);
 
   useFrame((state, dt) => {
     const d = Math.min(dt, 0.05);
@@ -152,6 +174,22 @@ export function Fireplace3D({ on }: CozyProps) {
       const target = on ? 1.15 + Math.sin(t * 9.3) * 0.25 : 0;
       light.current.intensity = THREE.MathUtils.damp(light.current.intensity, target, 8, d);
     }
+    // 火星粒子：仅开火时从炉膛向上飘 0.5m 渐隐循环（visible=false 省渲染）
+    sparks.current.forEach((sp, i) => {
+      if (!sp) return;
+      sp.visible = !!on;
+      if (!on) return;
+      const s = FIRE_SPARKS[i];
+      const life = (t * 0.5 + s) % 1;
+      sp.position.set(
+        Math.sin(s * 43 + t * 1.4) * 0.1,
+        0.36 + life * 0.5,
+        Math.cos(s * 29 + t) * 0.05,
+      );
+      const sc = 0.028 + (1 - life) * 0.02;
+      sp.scale.set(sc, sc, 1);
+      (sp.material as THREE.SpriteMaterial).opacity = Math.max(0, 0.95 * (1 - life));
+    });
   });
 
   return (
@@ -201,6 +239,23 @@ export function Fireplace3D({ on }: CozyProps) {
       ))}
       {/* 余烬光 */}
       <pointLight ref={light} position={[0, 0.42, 0.05]} color="#ff9a3d" intensity={0} distance={3} />
+      {/* 火星粒子 ×6（仅开火可见，加法混合橙黄光斑） */}
+      {FIRE_SPARKS.map((_, i) => (
+        <sprite
+          key={i}
+          ref={(el) => { sparks.current[i] = el; }}
+          position={[0, 0.4, 0]}
+          visible={false}
+        >
+          <spriteMaterial
+            map={sparkTex}
+            transparent
+            opacity={0}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+          />
+        </sprite>
+      ))}
     </group>
   );
 }

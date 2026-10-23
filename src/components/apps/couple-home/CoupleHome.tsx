@@ -59,6 +59,8 @@ import {
   UtensilsCrossed,
   UserRound,
   Users,
+  Volume2,
+  VolumeX,
   X,
   ZoomIn,
   ZoomOut,
@@ -76,9 +78,11 @@ import {
   BATH_X1,
   CATALOG,
   DOORS,
+  FURN_SETS,
   PLAY_COOLDOWN,
   ROOM_SPANS,
   ROOM_NAMES,
+  SEASONAL,
   SHOP_TABS,
   SNAP,
   TILT_LIMIT,
@@ -100,6 +104,7 @@ import {
   snapToWallSlot,
   type HomePersist,
 } from './catalog';
+import { sfx } from './sfx';
 import { getCachedThumb } from './scene/ShopThumbs';
 import type { CharAction, CharPose, CharRT, CharStyle, FurnitureItem, FurnitureKind, HomeMode, HomeState, RoomId } from './types';
 
@@ -191,6 +196,25 @@ const SWATCHES: { hex: string; name: string }[] = [
   { hex: '#d9e0e6', name: '雾灰蓝' },
   { hex: '#dcd2ec', name: '雾紫' },
 ];
+
+/** E7 灯光颜色预设（调色盘「灯光颜色」行：暖黄/奶白/玫粉/天青/星绿/梦紫） */
+const LIGHT_SWATCHES: { hex: string; name: string }[] = [
+  { hex: '#ffd9a0', name: '暖黄' },
+  { hex: '#fff2dc', name: '奶白' },
+  { hex: '#ffb3c6', name: '玫粉' },
+  { hex: '#a8d8e8', name: '天青' },
+  { hex: '#b8e6c9', name: '星绿' },
+  { hex: '#d4b8e8', name: '梦紫' },
+];
+
+/** F3 套装卡片 emoji 头部（套装没有单一 GLB 缩略图，用 emoji 兜） */
+const SET_ICONS: Record<string, string> = {
+  bedSet: '🛏️',
+  sofaSet: '🛋️',
+  studySet: '📚',
+  teaCorner: '🍰',
+  balconySet: '🍖',
+};
 
 const dirToHeading: Record<string, number> = { up: Math.PI, down: 0, left: -Math.PI / 2, right: Math.PI / 2 };
 
@@ -503,6 +527,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [chess, setChess] = useState<{ itemId: string } | null>(null);
   const [cookingGame, setCookingGame] = useState(false);
   const [photoMode, setPhotoMode] = useState(false);
+  /** E3 音效开关（持久化在 sfx 模块内 localStorage，挂载时读回） */
+  const [sfxOn, setSfxOn] = useState(true);
   /** 天气（与天气 App 共享缓存）：rain/snow/clear 驱动窗外特效 + 夜晚自动开灯 */
   const weather = useWeatherSnapshot();
   const weatherFx: 'rain' | 'snow' | 'clear' = useMemo(() => {
@@ -645,6 +671,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
   wallColBalRef.current = wallColBal;
   const mealNameRef = useRef(mealName);
   mealNameRef.current = mealName;
+  const sfxOnRef = useRef(sfxOn);
+  sfxOnRef.current = sfxOn;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  /** F1 节日限定：用户收起过的节日 kind（当月不再自动补） */
+  const seasonalDismissed = useRef<Set<string>>(new Set());
   // ---------------- 装修历史：撤销/重做快照栈 ----------------
   const undoStack = useRef<EditSnap[]>([]);
   const redoStack = useRef<EditSnap[]>([]);
@@ -1153,6 +1185,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   const onFurnTap = useCallback(
     (item: FurnitureItem) => {
+      sfx.tap(); // E3：所有家具点按轻响（函数最前面，提前 return 分支也有声）
       const entry = CATALOG[item.kind];
       if (!entry) return;
 
@@ -1594,7 +1627,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
     if (!selId) return;
     const victim = itemsRef.current.find((f) => f.id === selId);
     pushHistory();
+    // F1：用户亲手收起的节日家具当月不再自动补（下月/来年再见面）
+    if (victim) seasonalDismissed.current.add(victim.kind);
     setItems((prev) => prev.filter((f) => f.id !== selId));
+    sfx.remove(); // E3：收起 swoosh
     setSelId(null);
     setMoveOn(false);
     setPaletteOpen(false);
@@ -1776,6 +1812,18 @@ export default function CoupleHome({ close }: { close: () => void }) {
     [selId, pushHistory, saveSoon],
   );
 
+  /** E7 灯光颜色：只改选中灯具的自选光色（null = 恢复目录默认暖光，不动其它状态） */
+  const applyLightColor = useCallback(
+    (hex: string | null) => {
+      if (!selId) return;
+      setItems((prev) =>
+        prev.map((f) => (f.id === selId ? { ...f, st: { ...f.st, lc: hex ?? undefined } } : f)),
+      );
+      saveSoon();
+    },
+    [selId, saveSoon],
+  );
+
   const toggleMove = useCallback(() => {
     setMoveOn((m) => {
       const next = !m;
@@ -1948,6 +1996,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   /** 卧室门开合（点击门本体） */
   const toggleDoor = useCallback(() => {
+    sfx.door(); // E3：门轴轻响
     setDoorOpen((o) => {
       const next = !o;
       toast(next ? '门开啦，走进去就是卧室～' : '卧室门已关上');
@@ -1958,6 +2007,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   /** 厨房门开合（点击门本体） */
   const toggleKitchenDoor = useCallback(() => {
+    sfx.door();
     setKitchenDoorOpen((o) => {
       const next = !o;
       toast(next ? '厨房门开啦，里面香喷喷～' : '厨房门已关上');
@@ -1968,6 +2018,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   /** 卫生间门开合（点击门本体） */
   const toggleBathDoor = useCallback(() => {
+    sfx.door();
     setBathDoorOpen((o) => {
       const next = !o;
       toast(next ? '浴室门开啦，泡泡浴准备～' : '卫生间门已关上');
@@ -1977,6 +2028,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
   }, [saveSoon, toast]);
 
   const toggleBalconyDoor = useCallback(() => {
+    sfx.door();
     setBalconyDoorOpen((o) => {
       const next = !o;
       toast(next ? '阳台门开啦，出去晒晒太阳～' : '阳台门已关上');
@@ -2004,6 +2056,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
     });
     saveSoon();
   }, [saveSoon, toast]);
+
+  /** E3 音效开关（生活/编辑模式两处按钮共用；持久化在 sfx 模块内） */
+  const toggleSfx = useCallback(() => {
+    setSfxOn((on) => {
+      const next = !on;
+      sfx.setEnabled(next);
+      toast(next ? '音效已开' : '音效已关');
+      return next;
+    });
+  }, [toast]);
 
   /** 相框选照片完成：按框型裁剪 → 压缩 → 写入家具状态（永久保存） */
   const onPickPhoto = useCallback(
@@ -2059,7 +2121,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
       return;
     }
     pushHistory(`drag-${id}`); // 拖拽首帧入栈：整段拖拽合为一步
-    setItems((prev) => prev.map((f) => (f.id === id ? { ...f, x, z } : f)));
+    // E2 拖拽吸附：x/z 先落到 0.25m 网格再写入（门窗分支有自己的沿墙吸附，不在此处理）
+    const sx = Math.round(x * 4) / 4;
+    const sz = Math.round(z * 4) / 4;
+    setItems((prev) => prev.map((f) => (f.id === id ? { ...f, x: sx, z: sz } : f)));
   }, [pushHistory]);
 
   const onDragSelect = useCallback((id: string) => {
@@ -2227,10 +2292,64 @@ export default function CoupleHome({ close }: { close: () => void }) {
         toast(`已添加「${e.name}」到${ROOM_NAMES[room]}`);
       }
       setSelId(id);
+      sfx.place(); // E3：可爱 pop（在 setSelId 前后皆可，这里放成功路径末尾）
       saveSoon();
     },
     [findSpot, findWallSpot, pushHistory, saveSoon, toast],
   );
+
+  /** F3 成套举放：锚点找位后整组落位（一次 pushHistory，整组一步撤销；不 setSelId 以免误导单件拖拽） */
+  const placeSet = useCallback(
+    (id: string) => {
+      const set = FURN_SETS.find((s) => s.id === id);
+      if (!set) return;
+      pushHistory();
+      const anchor = findSpot(set.anchor, roomAt(meRT.current.x, meRT.current.z));
+      const newItems: FurnitureItem[] = set.items.map((it) => {
+        const e = CATALOG[it.kind];
+        const [w, d] = e ? footprintOf(e, it.ry ?? 0) : [0.5, 0.5];
+        const hw = Math.max(w / 2, 0.18);
+        const hd = Math.max(d / 2, 0.18);
+        const [x, z] = clampFurnToRooms(anchor.x + it.dx, anchor.z + it.dz, hw, hd);
+        const item: FurnitureItem = {
+          id: `${it.kind}-${Date.now().toString(36)}-${++buySeq}`,
+          kind: it.kind,
+          x,
+          z,
+          st: {},
+        };
+        if (it.y != null) item.y = it.y;
+        if (it.ry != null) item.ry = it.ry;
+        return item;
+      });
+      setItems((prev) => [...prev, ...newItems]);
+      toast(`已摆好「${set.name}」，共 ${newItems.length} 件`);
+      sfx.place();
+      saveSoon();
+    },
+    [findSpot, pushHistory, saveSoon, toast],
+  );
+
+  // F1 节日限定：当月节日家具自动悄悄出现在客厅（不 pushHistory —— 不算用户操作；
+  // 用户收起过的 kind 记入 seasonalDismissed，当月不再补）
+  useEffect(() => {
+    const month = new Date().getMonth() + 1;
+    const kinds = SEASONAL[month];
+    if (!kinds || kinds.length === 0) return;
+    const additions: FurnitureItem[] = [];
+    for (const k of kinds) {
+      if (seasonalDismissed.current.has(k)) continue;
+      if (items.some((f) => f.kind === k)) continue;
+      if (!CATALOG[k]) continue;
+      const spot = findSpot(k, 'lr');
+      additions.push({ id: `${k}-${Date.now().toString(36)}-${++buySeq}`, kind: k, x: spot.x, z: spot.z, st: {} });
+    }
+    if (additions.length === 0) return;
+    setItems((prev) => [...prev, ...additions]);
+    for (const it of additions) {
+      toast(`${month} 月啦，${CATALOG[it.kind].name}悄悄出现在客厅～`);
+    }
+  }, [items, findSpot, toast]);
 
   const resetHome = useCallback(async () => {
     const fresh = await resetRemote();
@@ -2339,6 +2458,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
     }
   }, [mode]);
 
+  // E3 音效开关初始化：读 localStorage（缺省开）
+  useEffect(() => {
+    setSfxOn(sfx.isEnabled());
+  }, []);
+
+  // E3 脚步声：生活模式小人走动时每 380ms 一步（状态走 ref 读，interval 不重挂）
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (meRT.current.moving === true && modeRef.current === 'live' && sfxOnRef.current) sfx.step();
+    }, 380);
+    return () => clearInterval(t);
+  }, []);
+
   // ---------------- 渲染 ----------------
   const selItem = selId && !selId.startsWith('win-') && !selId.startsWith('door-') ? items.find((f) => f.id === selId) : null;
   const selEntry = selItem ? CATALOG[selItem.kind] : null;
@@ -2354,6 +2486,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   /** 电视开着（生活模式随时换台，看电视不再锁人） */
   const tvOn = items.some((f) => f.kind === 'tv' && f.st?.on);
+  /** E7 点亮的灯具数（传给场景侧做环境光加成，灯越多屋里越暖） */
+  const litLampCount = useMemo(
+    () => items.reduce((n, f) => n + (CATALOG[f.kind]?.light && f.st?.on ? 1 : 0), 0),
+    [items],
+  );
   // 底部按钮堆叠位置：与动作栏/端杯按钮错开
   const cupBarCls = charAction ? 'bottom-[254px]' : 'bottom-[196px]';
   const tvBarCls = charAction
@@ -2433,6 +2570,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         guestName={guest?.name ?? null}
         musicPlaying={musicPlaying}
         weatherFx={weatherFx}
+        litLamps={litLampCount}
         onFloorTap={onFloorTap}
         onFurnTap={onFurnTap}
         onDragMove={onDragMove}
@@ -2941,6 +3079,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   {fp ? '第一人称' : '第三人称'}
                 </button>
               )}
+              {mode === 'live' && (
+                // E3 音效开关（与装修模式同款，共用 toggleSfx）
+                <button
+                  onClick={toggleSfx}
+                  aria-label="音效开关"
+                  title={sfxOn ? '关闭音效' : '开启音效'}
+                  className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 text-[#4a4a4e] shadow-md backdrop-blur transition active:scale-95"
+                >
+                  {sfxOn ? <Volume2 className="h-[18px] w-[18px]" /> : <VolumeX className="h-[18px] w-[18px]" />}
+                </button>
+              )}
               {mode === 'edit' && (
                 <div className="flex items-center gap-2">
                   {/* 撤销上一步装修操作（Ctrl+Z）：放置/收起/移动/旋转/升降/换色/门窗均可撤销 */}
@@ -2962,6 +3111,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 shadow-md backdrop-blur transition active:scale-95 disabled:opacity-40"
                   >
                     <Redo2 className="h-[18px] w-[18px] text-[#6a7a8a]" />
+                  </button>
+                  {/* E3 音效开关（undo/redo 同排，地板墙色左侧；与生活模式共用 toggleSfx） */}
+                  <button
+                    onClick={toggleSfx}
+                    aria-label="音效开关"
+                    title={sfxOn ? '关闭音效' : '开启音效'}
+                    className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 shadow-md backdrop-blur transition active:scale-95"
+                  >
+                    {sfxOn ? <Volume2 className="h-[18px] w-[18px] text-[#6a7a8a]" /> : <VolumeX className="h-[18px] w-[18px] text-[#b09a9a]" />}
                   </button>
                   <button
                     onClick={() => setRoomStyleOpen((o) => !o)}
@@ -3188,6 +3346,47 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   原色
                 </button>
               </div>
+
+              {/* E7 灯光颜色（灯具专属：换的是灯光本身的颜色，非外观；选中 lc 高亮对应圆片） */}
+              {selEntry?.light && (
+                <div className="mt-4 border-t border-[#f0ede5] pt-3.5">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[12.5px] font-medium text-[#6a6a6e]">灯光颜色</span>
+                    <span className="text-[10.5px] text-[#a8a8a4]">开灯后才看得到哦</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {LIGHT_SWATCHES.map((s) => (
+                      <button
+                        key={s.hex}
+                        onClick={() => applyLightColor(s.hex)}
+                        title={s.name}
+                        aria-label={`灯光颜色 ${s.name}`}
+                        className="group flex flex-col items-center"
+                      >
+                        <span
+                          className={
+                            selItem?.st?.lc === s.hex
+                              ? 'h-8 w-8 rounded-full ring-2 ring-[#f2a9bc] ring-offset-2 shadow-md'
+                              : 'h-8 w-8 rounded-full shadow-sm ring-1 ring-black/10 transition group-active:scale-90'
+                          }
+                          style={{ background: s.hex }}
+                        />
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => applyLightColor(null)}
+                      aria-label="恢复默认灯光颜色"
+                      className={
+                        selItem?.st?.lc
+                          ? 'ml-auto rounded-full bg-[#f1efe9] px-3 py-1.5 text-[11.5px] font-medium text-[#8a8a86] transition active:scale-95'
+                          : 'ml-auto rounded-full bg-[#f2b3c2] px-3 py-1.5 text-[11.5px] font-semibold text-white shadow-sm transition active:scale-95'
+                      }
+                    >
+                      默认
+                    </button>
+                  </div>
+                </div>
+              )}
             </motion.div>
           </motion.div>
         )}
@@ -3389,42 +3588,70 @@ export default function CoupleHome({ close }: { close: () => void }) {
               ))}
             </div>
 
-            {/* 商品网格（1:1 实物缩略图 + 已有数量角标；无限购买） */}
-            <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto px-4 pb-5 pt-1">
-              {shopItems.map((e) => {
-                const owned = items.filter((it) => it.kind === e.kind).length;
-                const thumb = thumbMap[e.kind] || getCachedThumb(e.kind);
-                return (
-                  <button
-                    key={e.kind}
-                    onClick={() => buy(e.kind)}
-                    className="relative flex flex-col items-start gap-1 rounded-2xl bg-[#faf8f3] p-2 text-left shadow-sm ring-1 ring-[#efece2] transition active:scale-95"
+            {/* 套装 tab（F3 成套举放） / 商品网格（1:1 实物缩略图 + 已有数量角标；无限购买） */}
+            {shopTab === 'set' ? (
+              <div className="grid max-h-72 grid-cols-2 gap-2 overflow-y-auto px-4 pb-5 pt-1">
+                {FURN_SETS.map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex flex-col rounded-2xl bg-[#faf8f3] p-2.5 text-left shadow-sm ring-1 ring-[#efece2]"
                   >
-                    {owned > 0 && (
-                      <span className="absolute right-1.5 top-1.5 rounded-full bg-[#f4b3c2] px-1.5 py-0.5 text-[9px] font-semibold leading-none text-white shadow-sm">
-                        ×{owned}
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#f6cdd6] to-[#dcd2ec] text-[15px]">
+                        {SET_ICONS[s.id] ?? '🛋️'}
                       </span>
-                    )}
-                    {thumb ? (
-                      <img
-                        src={thumb}
-                        alt={e.name}
-                        draggable={false}
-                        className="h-16 w-full rounded-xl object-contain"
-                      />
-                    ) : (
-                      <span
-                        className="h-16 w-full animate-pulse rounded-xl shadow-inner"
-                        style={{ background: `linear-gradient(135deg, ${catColor(e.cat)}, ${shade(e.cat)})` }}
-                      />
-                    )}
-                    <span className="w-full truncate text-[11.5px] font-medium leading-tight text-[#4a4a4e]">
-                      {e.name}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+                      <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-[#3a3a3e]">
+                        {s.name}
+                      </span>
+                    </div>
+                    <p className="mt-1.5 text-[11px] leading-snug text-[#8a8a86]">{s.desc}</p>
+                    <p className="mt-0.5 text-[10px] text-[#a8a8a4]">共 {s.items.length} 件 · 整组一步撤销</p>
+                    <button
+                      onClick={() => placeSet(s.id)}
+                      className="mt-2 rounded-full bg-[#f4b3c2] py-1.5 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
+                    >
+                      一键举放
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto px-4 pb-5 pt-1">
+                {shopItems.map((e) => {
+                  const owned = items.filter((it) => it.kind === e.kind).length;
+                  const thumb = thumbMap[e.kind] || getCachedThumb(e.kind);
+                  return (
+                    <button
+                      key={e.kind}
+                      onClick={() => buy(e.kind)}
+                      className="relative flex flex-col items-start gap-1 rounded-2xl bg-[#faf8f3] p-2 text-left shadow-sm ring-1 ring-[#efece2] transition active:scale-95"
+                    >
+                      {owned > 0 && (
+                        <span className="absolute right-1.5 top-1.5 rounded-full bg-[#f4b3c2] px-1.5 py-0.5 text-[9px] font-semibold leading-none text-white shadow-sm">
+                          ×{owned}
+                        </span>
+                      )}
+                      {thumb ? (
+                        <img
+                          src={thumb}
+                          alt={e.name}
+                          draggable={false}
+                          className="h-16 w-full rounded-xl object-contain"
+                        />
+                      ) : (
+                        <span
+                          className="h-16 w-full animate-pulse rounded-xl shadow-inner"
+                          style={{ background: `linear-gradient(135deg, ${catColor(e.cat)}, ${shade(e.cat)})` }}
+                        />
+                      )}
+                      <span className="w-full truncate text-[11.5px] font-medium leading-tight text-[#4a4a4e]">
+                        {e.name}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
