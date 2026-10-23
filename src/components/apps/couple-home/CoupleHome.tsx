@@ -46,6 +46,7 @@ import {
   RotateCcw,
   RotateCw,
   Undo2,
+  Redo2,
   Shirt,
   ShowerHead,
   Sparkles,
@@ -100,7 +101,7 @@ import {
   type HomePersist,
 } from './catalog';
 import { getCachedThumb } from './scene/ShopThumbs';
-import type { CharAction, CharPose, CharRT, CharStyle, FurnitureItem, FurnitureKind, HomeMode, HomeState, RoomId, TrashEntry } from './types';
+import type { CharAction, CharPose, CharRT, CharStyle, FurnitureItem, FurnitureKind, HomeMode, HomeState, RoomId } from './types';
 
 /** 做饭小游戏（选菜谱→切菜/翻炒/装盘→上桌，v5.7 F5） */
 const CookingGame = dynamic(() => import('./CookingGame'), { ssr: false });
@@ -413,6 +414,36 @@ let uid = 0;
 /** 购买序号（同毫秒连点也保证 id 唯一 —— 商城无限添加不串档） */
 let buySeq = 0;
 
+/** 装修快照：一次装修操作（放置/收起/移动/旋转/升降/换色/门窗调整）前的完整可编辑状态 */
+interface EditSnap {
+  items: FurnitureItem[];
+  winPos?: number[];
+  doorPos?: { bed: number; kt: number; bath: number; bal?: number };
+  winCol?: string;
+  doorCol?: string;
+  floorCol?: string;
+  wallCol?: string;
+  floorColBed?: string;
+  wallColBed?: string;
+  floorColK?: string;
+  wallColK?: string;
+  floorColB?: string;
+  wallColB?: string;
+  ceilCol?: string;
+  ceilColBed?: string;
+  ceilColK?: string;
+  ceilColB?: string;
+  floorColBal?: string;
+  wallColBal?: string;
+  floorTex: 'plain' | 'wood' | 'check';
+  wallTex: 'plain' | 'dot' | 'stripe';
+}
+
+/** 撤销栈深度上限（步） */
+const HIST_MAX = 60;
+/** 连续手势合并时间窗（ms）：拖拽帧/快速连点并入栈顶同一步 */
+const HIST_COALESCE = 900;
+
 export default function CoupleHome({ close }: { close: () => void }) {
   // ---------------- 持久化状态 ----------------
   const [pack] = useState<HomePersist>(() => loadCache() ?? { home: defaultHome(), rev: 0 });
@@ -452,8 +483,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [floorColBal, setFloorColBal] = useState<string | undefined>(pack.home.floorColBal);
   const [wallColBal, setWallColBal] = useState<string | undefined>(pack.home.wallColBal);
   const [mealName, setMealName] = useState<string | undefined>(pack.home.mealName);
-  /** D1 回收站：装修模式收起的家具（可恢复，持久化随存档；最多 30 件） */
-  const [trash, setTrash] = useState<TrashEntry[]>(pack.home.trash ?? []);
 
   // ---------------- UI 状态 ----------------
   const [mode, setMode] = useState<HomeMode>('live');
@@ -468,8 +497,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [full, setFull] = useState(false);
   /** v5.7 拾光扩展面板：点歌 / 邀访客 / 五子棋 / 做饭小游戏 / 拍照模式 */
   const [musicSheet, setMusicSheet] = useState(false);
-  /** D1 回收站面板（装修模式） */
-  const [trashOpen, setTrashOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteList, setInviteList] = useState<{ id: string; name: string }[]>([]);
   const [guest, setGuest] = useState<{ id: string; name: string } | null>(null);
@@ -618,8 +645,66 @@ export default function CoupleHome({ close }: { close: () => void }) {
   wallColBalRef.current = wallColBal;
   const mealNameRef = useRef(mealName);
   mealNameRef.current = mealName;
-  const trashRef = useRef(trash);
-  trashRef.current = trash;
+  // ---------------- 装修历史：撤销/重做快照栈 ----------------
+  const undoStack = useRef<EditSnap[]>([]);
+  const redoStack = useRef<EditSnap[]>([]);
+  /** 连续手势合并标记（拖拽帧/快速连点在时间窗内并入栈顶同一步） */
+  const histTagRef = useRef<{ tag: string | null; at: number }>({ tag: null, at: 0 });
+  /** 栈长度（驱动撤销/重做按钮禁用态） */
+  const [histLen, setHistLen] = useState({ u: 0, r: 0 });
+
+  /** 抓取当前可编辑状态快照（浅拷贝，防后续原地修改串档） */
+  const takeSnap = useCallback(
+    (): EditSnap => ({
+      items: itemsRef.current.map((f) => ({ ...f, st: { ...f.st } })),
+      winPos: winPosRef.current ? winPosRef.current.slice() : undefined,
+      doorPos: doorPosRef.current ? { ...doorPosRef.current } : undefined,
+      winCol: winColRef.current,
+      doorCol: doorColRef.current,
+      floorCol: floorColRef.current,
+      wallCol: wallColRef.current,
+      floorColBed: floorColBedRef.current,
+      wallColBed: wallColBedRef.current,
+      floorColK: floorColKRef.current,
+      wallColK: wallColKRef.current,
+      floorColB: floorColBRef.current,
+      wallColB: wallColBRef.current,
+      ceilCol: ceilColRef.current,
+      ceilColBed: ceilColBedRef.current,
+      ceilColK: ceilColKRef.current,
+      ceilColB: ceilColBRef.current,
+      floorColBal: floorColBalRef.current,
+      wallColBal: wallColBalRef.current,
+      floorTex: floorTexRef.current,
+      wallTex: wallTexRef.current,
+    }),
+    [],
+  );
+
+  /** 每次装修操作前调用：当前状态入撤销栈、清空重做栈（tag = 连续手势标记） */
+  const pushHistory = useCallback(
+    (tag?: string) => {
+      const now = Date.now();
+      if (tag && histTagRef.current.tag === tag && now - histTagRef.current.at < HIST_COALESCE) {
+        histTagRef.current.at = now; // 同一连续手势：栈顶快照已是手势起点，不重复入栈
+        return;
+      }
+      histTagRef.current = { tag: tag ?? null, at: now };
+      undoStack.current.push(takeSnap());
+      if (undoStack.current.length > HIST_MAX) undoStack.current.shift();
+      redoStack.current = [];
+      setHistLen({ u: undoStack.current.length, r: 0 });
+    },
+    [takeSnap],
+  );
+
+  /** 重置/采纳对方布置后清空历史（快照已失效） */
+  const clearHistory = useCallback(() => {
+    undoStack.current = [];
+    redoStack.current = [];
+    histTagRef.current = { tag: null, at: 0 };
+    setHistLen({ u: 0, r: 0 });
+  }, []);
 
   // ---------------- 提示 ----------------
   const toast = useCallback((msg: string) => {
@@ -665,7 +750,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
       floorColBal: floorColBalRef.current,
       wallColBal: wallColBalRef.current,
       mealName: mealNameRef.current,
-      trash: trashRef.current.length > 0 ? trashRef.current : undefined,
       // 正在进行的家具动作（已摆好姿势才存，重进页面接着坐/睡/泡/淋浴/看电视/上网；
       // 自动结束型不存 —— 重进后重新发起即可）
       act: (() => {
@@ -723,7 +807,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setFloorColBal(h.floorColBal);
     setWallColBal(h.wallColBal);
     setMealName(h.mealName);
-    setTrash(Array.isArray(h.trash) ? h.trash : []);
+    clearHistory();
     // 恢复「我」正在进行的家具动作（仅在当前没有进行中动作时：
     // 初始化/重置/409 采纳互不打架；家具已被删或自动结束型动作则忽略）
     if (!actRef.current && poseRef.current.pose === 'stand' && h.act && !AUTO_ACTS.has(h.act.type)) {
@@ -738,7 +822,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         setCharAction({ type: a.type, itemId: a.itemId, active: true });
       }
     }
-  }, []);
+  }, [clearHistory]);
 
   const pushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pushTick = useRef(0);
@@ -1483,15 +1567,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const rotateY = useCallback(
     (dir: 1 | -1) => {
       if (!selId) return;
+      pushHistory(`rot-${selId}`);
       setItems((prev) => prev.map((f) => (f.id === selId ? { ...f, ry: normAngle((f.ry ?? 0) + dir * YAW_STEP) } : f)));
       saveSoon();
     },
-    [selId, saveSoon],
+    [selId, pushHistory, saveSoon],
   );
 
   const tilt = useCallback(
     (dir: 1 | -1) => {
       if (!selId) return;
+      pushHistory(`tilt-${selId}`);
       setItems((prev) =>
         prev.map((f) =>
           f.id === selId
@@ -1501,75 +1587,94 @@ export default function CoupleHome({ close }: { close: () => void }) {
       );
       saveSoon();
     },
-    [selId, saveSoon],
+    [selId, pushHistory, saveSoon],
   );
 
   const removeSel = useCallback(() => {
     if (!selId) return;
     const victim = itemsRef.current.find((f) => f.id === selId);
+    pushHistory();
     setItems((prev) => prev.filter((f) => f.id !== selId));
-    if (victim) {
-      // D1：进回收站（可撤销/可恢复；超 30 件丢最旧）
-      setTrash((prev) => {
-        const next = [...prev, { item: victim, at: Date.now() }];
-        return next.length > 30 ? next.slice(next.length - 30) : next;
-      });
-    }
     setSelId(null);
     setMoveOn(false);
     setPaletteOpen(false);
     saveSoon();
-    toast(victim ? `已收起「${CATALOG[victim.kind]?.name ?? victim.kind}」· 可在回收站找回` : '已收起家具');
-  }, [selId, saveSoon, toast]);
+    toast(victim ? `已收起「${CATALOG[victim.kind]?.name ?? victim.kind}」，撤销可找回` : '已收起家具');
+  }, [selId, pushHistory, saveSoon, toast]);
 
-  /** 恢复一件回收站家具：id 撞车换新 id，落点钳回房间内（防装修期间布局变化卡墙） */
-  const restoreFromTrash = useCallback(
-    (entryId: string) => {
-      const entry = trashRef.current.find((t) => t.item.id === entryId);
-      if (!entry) return;
-      const e = CATALOG[entry.item.kind];
-      const [w, d] = e ? footprintOf(e, entry.item.ry ?? 0) : [0.5, 0.5];
-      const [x, z] = clampFurnToRooms(entry.item.x, entry.item.z, Math.max(w / 2, 0.18), Math.max(d / 2, 0.18));
-      const item: FurnitureItem = { ...entry.item, x, z };
-      // 同 id 已在场（理论不可能，稳妥起见）→ 换新 id
-      if (itemsRef.current.some((f) => f.id === item.id)) item.id = `${item.kind}-back-${Date.now().toString(36)}`;
-      setItems((prev) => [...prev, item]);
-      setTrash((prev) => prev.filter((t) => t.item.id !== entryId));
-      setSelId(item.id);
+  /** 应用一份快照（撤销/重做共用）：整体回滚可编辑状态并清选择 */
+  const applySnap = useCallback(
+    (s: EditSnap) => {
+      setItems(s.items);
+      setWinPos(s.winPos);
+      setDoorPos(s.doorPos);
+      setWinCol(s.winCol);
+      setDoorCol(s.doorCol);
+      setFloorCol(s.floorCol);
+      setWallCol(s.wallCol);
+      setFloorColBed(s.floorColBed);
+      setWallColBed(s.wallColBed);
+      setFloorColK(s.floorColK);
+      setWallColK(s.wallColK);
+      setFloorColB(s.floorColB);
+      setWallColB(s.wallColB);
+      setCeilCol(s.ceilCol);
+      setCeilColBed(s.ceilColBed);
+      setCeilColK(s.ceilColK);
+      setCeilColB(s.ceilColB);
+      setFloorColBal(s.floorColBal);
+      setWallColBal(s.wallColBal);
+      setFloorTex(s.floorTex);
+      setWallTex(s.wallTex);
+      setSelId(null);
+      setMoveOn(false);
+      setPaletteOpen(false);
       saveSoon();
-      toast(`已放回「${e?.name ?? item.kind}」`);
     },
-    [saveSoon, toast],
+    [saveSoon],
   );
 
-  /** 撤销最近一次收起（Ctrl+Z / 撤销按钮）：回收站最新一件放回原位 */
-  const undoRemove = useCallback(() => {
-    const last = trashRef.current[trashRef.current.length - 1];
-    if (!last) return;
-    restoreFromTrash(last.item.id);
-  }, [restoreFromTrash]);
+  /** 撤销上一步装修操作（Ctrl+Z / 撤销按钮）：覆盖放置/收起/移动/旋转/升降/换色/门窗调整 */
+  const undo = useCallback(() => {
+    const prev = undoStack.current.pop();
+    if (!prev) {
+      toast('没有可撤销的操作啦');
+      return;
+    }
+    redoStack.current.push(takeSnap());
+    histTagRef.current = { tag: null, at: 0 };
+    setHistLen({ u: undoStack.current.length, r: redoStack.current.length });
+    applySnap(prev);
+  }, [applySnap, takeSnap, toast]);
 
-  /** 清空回收站 */
-  const clearTrash = useCallback(() => {
-    if (trashRef.current.length === 0) return;
-    setTrash([]);
-    setTrashOpen(false);
-    saveSoon();
-    toast('回收站已清空');
-  }, [saveSoon, toast]);
+  /** 重做（取消上一次撤销）：Ctrl+Shift+Z / Ctrl+Y / 重做按钮 */
+  const redo = useCallback(() => {
+    const next = redoStack.current.pop();
+    if (!next) {
+      toast('没有可重做的操作啦');
+      return;
+    }
+    undoStack.current.push(takeSnap());
+    histTagRef.current = { tag: null, at: 0 };
+    setHistLen({ u: undoStack.current.length, r: redoStack.current.length });
+    applySnap(next);
+  }, [applySnap, takeSnap, toast]);
 
-  // Ctrl+Z / Cmd+Z 撤销收起（仅装修模式；输入框聚焦时不抢）
+  // Ctrl+Z 撤销 / Ctrl+Shift+Z 或 Ctrl+Y 重做（输入框聚焦时不抢）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement | null)?.isContentEditable) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k !== 'z' && k !== 'y') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       e.preventDefault();
-      undoRemove();
+      if (k === 'z' && !e.shiftKey) undo();
+      else redo();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undoRemove]);
+  }, [undo, redo]);
 
   /** 四向微调：沿屏幕视觉方向移动选中目标（家具 = 一格；门窗 = 沿墙滑行） */
   const nudgeSel = useCallback(
@@ -1584,6 +1689,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
           if (!w) return;
           if (w.axis === 'z' && dx === 0) return;
           if (w.axis === 'x' && dz === 0) return;
+          pushHistory(`move-${selId}`);
           const cur = winPosRef.current?.[i] ?? w.def;
           const along = cur + (w.axis === 'z' ? Math.sign(dx) : Math.sign(dz)) * step;
           const r = resolveWinPos(i, along, winPosRef.current, doorPosRef.current);
@@ -1598,6 +1704,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
           if (!d) return;
           if (d.axis === 'z' && dx === 0) return;
           if (d.axis === 'x' && dz === 0) return;
+          pushHistory(`move-${selId}`);
           const cur = doorPosRef.current?.[did] ?? d.def;
           const along = cur + (d.axis === 'z' ? Math.sign(dx) : Math.sign(dz)) * step;
           const r = resolveDoorPos(did, along, winPosRef.current, doorPosRef.current);
@@ -1607,6 +1714,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         return;
       }
       // —— 家具：四房间钳位 + 吸附 ——
+      pushHistory(`move-${selId}`);
       setItems((prev) =>
         prev.map((f) => {
           if (f.id !== selId) return f;
@@ -1620,13 +1728,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
       );
       saveSoon();
     },
-    [selId, saveSoon],
+    [selId, pushHistory, saveSoon],
   );
 
   /** 升降选中家具：抬上桌面 / 放回地面（相框、小盆栽、书堆…） */
   const liftSel = useCallback(
     (dir: 1 | -1) => {
       if (!selId) return;
+      pushHistory(`lift-${selId}`);
       setItems((prev) =>
         prev.map((f) => {
           if (f.id !== selId) return f;
@@ -1636,7 +1745,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       );
       saveSoon();
     },
-    [selId, saveSoon],
+    [selId, pushHistory, saveSoon],
   );
 
   /** HUD 方向按钮 → 微调指令（Canvas 内按当前视角方位换算世界轴） */
@@ -1648,6 +1757,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const applyColor = useCallback(
     (hex: string | null) => {
       if (!selId) return;
+      pushHistory();
       if (selId.startsWith('win-')) {
         setWinCol(hex ?? undefined);
         saveSoon();
@@ -1663,7 +1773,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       );
       saveSoon();
     },
-    [selId, saveSoon],
+    [selId, pushHistory, saveSoon],
   );
 
   const toggleMove = useCallback(() => {
@@ -1690,134 +1800,150 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 地板/墙壁自定义色（null = 恢复默认） */
   const applyFloorCol = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setFloorCol(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyWallCol = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setWallCol(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   /** 卧室地板/墙壁自定义色（客厅卧室分开换色） */
   const applyFloorColBed = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setFloorColBed(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyWallColBed = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setWallColBed(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   /** 厨房地板/墙壁自定义色（三房间分开换色） */
   const applyFloorColK = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setFloorColK(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyWallColK = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setWallColK(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   /** 卫生间地板/墙壁自定义色（四房间分开换色） */
   const applyFloorColB = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setFloorColB(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyWallColB = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setWallColB(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyFloorColBal = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setFloorColBal(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyWallColBal = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setWallColBal(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   /** 天花板自定义色（四房间分开） */
   const applyCeilCol = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setCeilCol(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyCeilColBed = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setCeilColBed(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyCeilColK = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setCeilColK(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyCeilColB = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setCeilColB(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyDoorCol = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setDoorCol(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   const applyWinCol = useCallback(
     (hex: string | null) => {
+      pushHistory();
       setWinCol(hex ?? undefined);
       saveSoon();
     },
-    [saveSoon],
+    [pushHistory, saveSoon],
   );
 
   /** 卧室门开合（点击门本体） */
@@ -1914,6 +2040,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       const i = Number(id.slice(4));
       const w = WINS[i];
       if (!w) return;
+      pushHistory(`drag-win-${i}`); // 首帧入栈，后续帧合入同一步
       const along = w.axis === 'z' ? x : z;
       setWinPos((prev) => {
         const next = prev ? prev.slice() : WINS.map((ww) => ww.def);
@@ -1926,12 +2053,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
       const did = id.slice(5) as 'bed' | 'kt' | 'bath';
       const d = DOORS.find((dd) => dd.id === did);
       if (!d) return;
+      pushHistory(`drag-door-${did}`);
       const along = d.axis === 'z' ? x : z;
       setDoorPos((prev) => ({ bed: DOORS[0].def, kt: DOORS[1].def, bath: DOORS[2].def, bal: DOORS[3].def, ...prev, [did]: along }));
       return;
     }
+    pushHistory(`drag-${id}`); // 拖拽首帧入栈：整段拖拽合为一步
     setItems((prev) => prev.map((f) => (f.id === id ? { ...f, x, z } : f)));
-  }, []);
+  }, [pushHistory]);
 
   const onDragSelect = useCallback((id: string) => {
     setSelId(id);
@@ -2065,6 +2194,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     (kind: FurnitureKind) => {
       const e = CATALOG[kind];
       if (!e) return;
+      pushHistory();
       const id = `${kind}-${Date.now().toString(36)}-${++buySeq}`;
       const room: RoomId = roomAt(meRT.current.x, meRT.current.z);
 
@@ -2099,7 +2229,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       setSelId(id);
       saveSoon();
     },
-    [findSpot, findWallSpot, saveSoon, toast],
+    [findSpot, findWallSpot, pushHistory, saveSoon, toast],
   );
 
   const resetHome = useCallback(async () => {
@@ -2813,29 +2943,25 @@ export default function CoupleHome({ close }: { close: () => void }) {
               )}
               {mode === 'edit' && (
                 <div className="flex items-center gap-2">
-                  {/* D1 撤销最近一次收起（Ctrl+Z） */}
+                  {/* 撤销上一步装修操作（Ctrl+Z）：放置/收起/移动/旋转/升降/换色/门窗均可撤销 */}
                   <button
-                    onClick={undoRemove}
-                    disabled={trash.length === 0}
-                    aria-label="撤销收起"
-                    title="撤销最近一次收起（Ctrl+Z）"
+                    onClick={undo}
+                    disabled={histLen.u === 0}
+                    aria-label="撤销"
+                    title="撤销上一步（Ctrl+Z）"
                     className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 shadow-md backdrop-blur transition active:scale-95 disabled:opacity-40"
                   >
                     <Undo2 className="h-[18px] w-[18px] text-[#6a7a8a]" />
                   </button>
-                  {/* D1 回收站（收起的家具可找回） */}
+                  {/* 重做（取消上一次撤销）：Ctrl+Shift+Z / Ctrl+Y */}
                   <button
-                    onClick={() => setTrashOpen((o) => !o)}
-                    aria-label="回收站"
-                    title="回收站"
-                    className="relative flex h-11 w-11 items-center justify-center rounded-full bg-white/85 shadow-md backdrop-blur transition active:scale-95"
+                    onClick={redo}
+                    disabled={histLen.r === 0}
+                    aria-label="重做"
+                    title="重做（Ctrl+Shift+Z / Ctrl+Y）"
+                    className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 shadow-md backdrop-blur transition active:scale-95 disabled:opacity-40"
                   >
-                    <Trash2 className={`h-[18px] w-[18px] ${trashOpen ? 'text-[#d4717f]' : 'text-[#8a8a90]'}`} />
-                    {trash.length > 0 && (
-                      <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#e58a95] px-1 text-[10px] font-semibold text-white">
-                        {trash.length > 99 ? '99+' : trash.length}
-                      </span>
-                    )}
+                    <Redo2 className="h-[18px] w-[18px] text-[#6a7a8a]" />
                   </button>
                   <button
                     onClick={() => setRoomStyleOpen((o) => !o)}
@@ -3168,6 +3294,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       <button
                         key={v}
                         onClick={() => {
+                          pushHistory();
                           setFloorTex(v);
                           saveSoon();
                         }}
@@ -3195,6 +3322,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       <button
                         key={v}
                         onClick={() => {
+                          pushHistory();
                           setWallTex(v);
                           saveSoon();
                         }}
@@ -3211,94 +3339,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 </div>
               </div>
             </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ===== 回收站抽屉（D1：装修模式，收起的家具可找回/可清空） ===== */}
-      <AnimatePresence>
-        {mode === 'edit' && trashOpen && (
-          <motion.div
-            initial={{ y: '100%' }}
-            animate={{ y: 0 }}
-            exit={{ y: '100%' }}
-            transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-            className="absolute inset-x-0 bottom-0 z-10 flex max-h-[46%] flex-col rounded-t-3xl bg-white/95 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur-xl"
-          >
-            <div className="flex items-center justify-between px-4 pb-1 pt-3">
-              <div>
-                <span className="text-[15px] font-semibold text-[#3a3a3e]">回收站</span>
-                <p className="mt-0.5 text-[11px] text-[#9a9a96]">收起的家具都在这里，放回后可继续拖动摆放</p>
-              </div>
-              <div className="flex items-center gap-2">
-                {trash.length > 0 && (
-                  <button
-                    onClick={clearTrash}
-                    className="rounded-full bg-[#f6eded] px-3 py-1.5 text-[11px] font-medium text-[#c26a6a] transition active:scale-95"
-                  >
-                    清空
-                  </button>
-                )}
-                <button
-                  onClick={() => setTrashOpen(false)}
-                  aria-label="关闭回收站"
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-            <div className="thin-scrollbar min-h-[96px] flex-1 overflow-y-auto px-4 pb-4 pt-2">
-              {trash.length === 0 ? (
-                <div className="flex h-[88px] flex-col items-center justify-center gap-1 text-center">
-                  <Trash2 className="h-6 w-6 text-[#c9c7c1]" />
-                  <span className="text-[12px] text-[#9a9a96]">回收站空空如也</span>
-                  <span className="text-[11px] text-[#b5b3ad]">装修时点「收起」的家具会出现在这里</span>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {trash
-                    .slice()
-                    .reverse()
-                    .map((t) => {
-                      const entry = CATALOG[t.item.kind];
-                      const thumb = thumbMap[t.item.kind] || getCachedThumb(t.item.kind);
-                      return (
-                        <div
-                          key={t.item.id}
-                          className="flex items-center gap-2 rounded-2xl bg-[#f7f5f1] p-2 ring-1 ring-[#efece3]"
-                        >
-                          <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white shadow-sm">
-                            {thumb ? (
-                              <img src={thumb} alt={entry?.name ?? t.item.kind} className="h-full w-full object-cover" />
-                            ) : (
-                              <span
-                                className="h-5 w-5 rounded-md"
-                                style={{ background: t.item.col ?? '#e8e5de' }}
-                              />
-                            )}
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[12px] font-semibold text-[#4a4a4e]">
-                              {entry?.name ?? t.item.kind}
-                            </span>
-                            <span className="block text-[10px] text-[#9a9a96]">
-                              {new Date(t.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 收起
-                            </span>
-                          </span>
-                          <button
-                            onClick={() => restoreFromTrash(t.item.id)}
-                            aria-label={`放回${entry?.name ?? t.item.kind}`}
-                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#eaf4ec] text-[#5f9e6e] transition active:scale-90"
-                          >
-                            <Undo2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                </div>
-              )}
-            </div>
           </motion.div>
         )}
       </AnimatePresence>

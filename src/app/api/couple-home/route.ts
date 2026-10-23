@@ -93,8 +93,6 @@ interface HomePayload {
   wallTex?: string;
   /** 「我」正在进行的家具动作（重进页面恢复姿势） */
   act?: { type?: string; itemId?: string };
-  /** 回收站：装修模式收起的家具（可恢复，≤30 件） */
-  trash?: { item: FurnItem; at: number }[];
 }
 
 const MAX_ITEMS = 240;
@@ -238,21 +236,7 @@ function normalizeHome(raw: unknown): HomePayload | null {
     const itemId = cleanStr(a.itemId, 64) || undefined;
     if (type && itemId) act = { type, itemId };
   }
-  // 回收站（≤30 件；照片额度与在场家具共享，避免用回收站绕过 12 张上限）
-  let trash: HomePayload['trash'];
-  if (Array.isArray(r.trash)) {
-    const arr: { item: FurnItem; at: number }[] = [];
-    for (const t of r.trash.slice(0, 30)) {
-      if (!t || typeof t !== 'object') continue;
-      const e = t as Record<string, unknown>;
-      if (!e.item || typeof e.item !== 'object') continue;
-      const item = cleanFurnItem(e.item as Record<string, unknown>, photoCounter);
-      if (!item) continue;
-      const at = typeof e.at === 'number' && Number.isFinite(e.at) ? Math.round(e.at) : 0;
-      arr.push({ item, at });
-    }
-    if (arr.length > 0) trash = arr;
-  }
+  // —— 回收站已下线：撤销/重做走前端快照栈 ——
   return {
     v: typeof r.v === 'number' ? r.v : 5,
     furniture,
@@ -290,7 +274,6 @@ function normalizeHome(raw: unknown): HomePayload | null {
     floorTex: typeof r.floorTex === 'string' && FLOOR_TEXES.has(r.floorTex) ? r.floorTex : undefined,
     wallTex: typeof r.wallTex === 'string' && WALL_TEXES.has(r.wallTex) ? r.wallTex : undefined,
     act,
-    trash,
   };
 }
 

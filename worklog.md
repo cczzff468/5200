@@ -21599,3 +21599,22 @@ Work Log:
 Stage Summary:
 - 误删家具三重保障：收起 toast 即时提示 + Ctrl+Z（桌面）/撤销钮（移动）一键撤回 + 回收站面板逐件恢复/清空；回收站随存档持久化（双端共享，≤30 件）
 - 性能：FPS 感知自动降档（dpr+阴影），低端机/家具多时不再卡死；阴影 pass 微件剔除减负；恢复能力升级不影响原存档结构（trash 为可选字段，老档零迁移）
+
+---
+Task ID: undo-redo-upgrade-1022
+Agent: Z.ai Code (main)
+Task: D1 升级 —— 装修撤销/重做统一系统（移动/旋转/升降/换色/门窗全可撤销 + 新增重做），删除回收站
+
+Work Log:
+- 【快照栈】CoupleHome.tsx 模块级新增 EditSnap 接口（items/winPos/doorPos/16 种房间色/floorTex/wallTex 全量可编辑状态）+ HIST_MAX=60 + HIST_COALESCE=900ms；组件内 undoStack/redoStack ref + histTagRef 连续手势合并标记 + histLen state 驱动按钮禁用态
+- 【全操作埋点】rotateY(rot-tag)/tilt/liftSel（连点合并为一步）、nudgeSel 三分支（门窗沿墙/家具 move-tag）、onDragMove（拖拽首帧入栈 drag-tag、后续帧合并=整段拖拽一步）、buy/removeSel/applyColor（每步独立）、16 个房间换色函数 + 地板/墙纸纹理按钮
+- 【撤销/重做】applySnap 整体回滚快照（20 项 setState + 清选择 + saveSoon）；undo（pop 撤销栈→当前态压重做栈）/redo（反向）；快捷键升级 Ctrl+Z 撤销 / Ctrl+Shift+Z 与 Ctrl+Y 重做（输入框聚焦不抢）；空栈 toast 提示
+- 【回收站下线】删除 trash/trashOpen state、trashRef、restoreFromTrash、undoRemove、clearTrash、回收站抽屉 JSX、HUD 回收站按钮；snap()/adoptHome() 去 trash 字段；types.ts 删 TrashEntry + HomeState.trash；API route.ts 删 trash 清洗段（旧档 trash 字段白名单自动丢弃，零迁移）；HUD 换成 撤销+重做 双圆钮（空栈置灰）
+- 【历史失效保护】adoptHome（初始化/409 冲突采纳/重置）调用 clearHistory() 防止跨档案串快照
+- 【实测】agent-browser 全流程：旋转×2→收起→撤销恢复→重做再收起 ✓；茶几微调×2（900ms 内合并一步）→撤销回原位→重做回去 ✓；像素 diff 证明重做后场景与撤销前逐像素一致（仅选中圈消失）；Ctrl+Z/Ctrl+Y 键盘路径 ✓；按钮禁用态 DOM 探测准确（撤0重0/撤1重1）✓；console 无新增错误
+- 【数据修复】测试期间收起的云白长地毯(rugRect)已通过存档 API 精确恢复到默认位 (0.15,-0.3)、茶几复位 (0.15,-1.1)，rev 62 校验通过
+
+Stage Summary:
+- 装修撤销能力从「仅收起」升级为全操作覆盖：放置/收起/移动（微调+拖拽）/旋转（四向）/升降/单件换色/门窗换色移动/16 种房间色/地板墙纸纹理，全部可撤销可重做；连续手势（拖拽帧/快速连点）自动合并为一步，栈深 60
+- 回收站面板整个移除（UI+存档字段+API 清洗），撤销栈成为唯一找回通道，交互更轻
+- 已知限制：撤销栈为会话级（刷新后清空，符合主流编辑器习惯）；重置小家/冲突采纳对方布置会清空历史（防串档）
