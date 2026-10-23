@@ -21770,3 +21770,19 @@ Work Log:
 
 Stage Summary:
 - 拾光小屋 v6.2：两位主角正式换成用户提供的豆包立绘——写实 3D 风为默认观感之一、Q 版一键切换（沿用既有画风按钮与 charStyle 存档字段）；billboard 纸片人保留全部既有交互（坐/躺/泡澡/做饭/端杯/换装动作占位/软阴影），AI 访客维持程序化小人以免与主角撞脸；scripts/char-cutout.py 可复用于后续更换立绘
+
+---
+Task ID: repo-migrate-1023
+Agent: Z.ai Code (main)
+Task: 从 GitHub cczzff468/5200 拉取项目到沙盒并恢复运行环境
+
+Work Log:
+- tarball 方式拉取 main 分支（152MB 压缩包，git clone 因 GnuTLS 网络问题超时；fetch 用 http.version=HTTP/1.1 成功，depth 50 保留提交历史）
+- 迁移 src/public/prisma/db/mini-services/skills/scripts 等全部内容进 /home/z/my-project，保留沙盒 .env(node_modules)
+- bun install 补齐 13 个新依赖（three/@react-three/leaflet/web-push/speech-asr 等）
+- prisma generate + db push 重新生成 Client（修复 db.contact undefined 报错）；仓库自带 custom.db 数据一并恢复
+- git reset origin/main 对齐 v6.2 历史（6e97c1f），remote origin 已配 token 可直接 push
+- agent-browser 实测：锁屏渲染✓ 上滑解锁✓ 三页主屏翻页✓ 微信登录页开关✓ 信息App欢迎消息✓ API contacts/migrate 200✓ page-errors=0
+
+Stage Summary:
+- 项目完整恢复至拾光小屋 v6.2 状态，dev server 正常运行于 :3000，git main 可直接推送远端；等待用户提出功能修改需求
