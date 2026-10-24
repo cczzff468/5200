@@ -21926,3 +21926,25 @@ Stage Summary:
 - HUD 精简完成：顶部只剩 返回 + [装修小家][拍照][⋮][全屏]；三点菜单收纳时间/声音/视角
 - 女主发型终版：高发际线+水滴刘海+双马尾焦糖挑染+双蝴蝶结+小卷呆毛+齐胸波波背发
 - 仓库待推送：3 个源文件改动（db/custom.db 为运行时数据不入库提交）
+
+---
+Task ID: wardrobe-v62-1024
+Agent: Z.ai Code (main)
+Task: 女生小人八字刘海（原刘海挡眼）+ 衣柜弹窗换装系统（连衣裙/上衣/裤子/裙子/鞋子 + 高马尾/短发/直发/大波浪/双马尾）+ 男生小人删头发小球（用户截图黑球）
+
+Work Log:
+- 定位根因①：男生"蓬松云朵黑发"头顶 6 颗 puff 球即用户说的"小球"（截图近景大黑球=贴近头部时的 cap/puff 球），删除 6 球 + 呆毛底球，鬓角改贴面扁束 → 男生头发为顺滑圆盖+前帘刘海+小锥呆毛
+- 定位根因②：女生 8 撮空气刘海下垂过低盖住眉毛眼睛 → 重做为八字刘海：每侧 3 撮泪滴发束沿对角线从额头中线向两侧斜下扫（rotation.z ±0.72），cap 前缘抬高（thetaLength 0.48π + rotation.x -0.18）露出额头中分与眉眼
+- 新增 wardrobe-data.ts：DRESSES×4 / TOPS×4 / BOTTOMS×4（skirt/short/long 三形态）/ SHOES×4 / HAIR_NAMES，3D 渲染与弹窗图标共用
+- CharChibi3D 改造：buildChar 增加 wear 参数（GirlWear：hair/dress/top/bottom/shoes）；服装分件渲染——连衣裙=同色 torso+锥裙+腰线+白边，分体=上衣色 torso+裙/短裤(大腿裤色)/长裤(全腿裤色)，鞋款配件（帆布包边/玛丽珍袢带/短靴靴筒）；5 发型分支（twin 双马尾双蝴蝶结+呆毛 / high 高马尾颅顶束+大蝴蝶结 / bob 波波头内扣 / straight 长直发到腰 / wave 大波浪 S 形球串）；裤装大腿/小腿 mesh 入 clothes 数组（泡澡正常脱衣）
+- 新增 Wardrobe.tsx：底部抽屉弹窗（上半屏透出 3D 实时试穿），分类 tab（发型/连衣裙/上衣/下装/鞋子）+ SVG 手绘图标网格 + 选中粉圈✓；选上衣/下装自动 dress=-1 切分体，选连衣裙切回；主题色跟随衣柜粉
+- CoupleHome：outfit→wear 状态（sanitizeWear 防脏数据），点衣柜家具→「换套衣服」→走到位自动弹衣柜弹窗，关弹窗 endAction + 衣柜门自动关；弹窗期间隐藏「换好啦」动作按钮（修 z 层遮挡）；HomeScene/HomeState/API 全链路透传 wear
+- API /api/couple-home：新增 wear 字段清洗（发型白名单 + 款号钳制 -1..8）；此前 outfit-only 校验会静默丢 wear
+- 排障：直写 sqlite 的播种档含 python utf-8 文本导致 Prisma P2023（Inconsistent column data）GET/POST 全 500 → 删脏行改走 API 播种；主应用 0 console error 确认（此前 535 条 x 错误全部来自已删除的 test-chibi 临时页 fast-refresh 残留 rt=undefined，主链路无此问题，useFrame 顺手加 !rt 静默防护）
+- 验证：tsc 绿 / eslint 绿（couple-home 全目录 + api）；agent-browser 真机 E2E：解锁→拾光小屋→点衣柜→换套衣服→走到位弹窗✓→高马尾/薄荷T恤/牛仔长裤/米色短靴实时换装✓→关闭→衣柜门关✓→DB wear={hair:high,dress:-1,top:2,bottom:3,shoes:3}✓→重载回读穿搭✓；临时 test-chibi 特写页验证 5 发型四视角后删除
+- 提交 5560783 已推送 origin/main
+
+Stage Summary:
+- 衣柜系统上线：点击衣柜→弹窗 1:1 换装（5 发型 × 4 连衣裙 × 4 上衣 × 4 下装 × 4 鞋，分体/连衣裙自动切换），实时试穿+全量持久化
+- 女生八字刘海不再挡眼；男生头发顺滑无小球
+- 仓库状态：HEAD=5560783 与远端同步；db/custom.db 为运行时数据不入库
