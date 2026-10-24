@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { sanitizeBoyWear, sanitizeTints, type BoyWear, type WearTints } from '@/components/apps/couple-home/types';
 
 export const runtime = 'nodejs';
 
@@ -37,6 +38,8 @@ interface HomePayload {
   night?: boolean;
   /** 窗户开态（最多 8 扇） */
   win?: boolean[];
+  /** 每扇窗是否存在（false = 已被收起；缺省 = 全部存在） */
+  winExist?: boolean[];
   /** 地板自定义色（#rrggbb；客厅） */
   floorCol?: string;
   /** 墙壁自定义色（#rrggbb；客厅） */
@@ -77,7 +80,16 @@ interface HomePayload {
   /** 「我」的穿搭编号（衣柜换装） */
   outfit?: number;
   /** 「我」的衣柜穿搭（v6.2：发型 + 连衣裙/分体 + 鞋） */
-  wear?: { hair?: string; dress?: number; top?: number; bottom?: number; shoes?: number };
+  wear?: {
+    hair?: string;
+    dress?: number;
+    top?: number;
+    bottom?: number;
+    shoes?: number;
+    tints?: WearTints;
+  };
+  /** 「对方」的衣柜穿搭（v6.3：男生发型 + 上衣/裤子 + 鞋） */
+  wear2?: BoyWear;
   /** 做饭系统：一桌好菜已上桌 */
   mealReady?: boolean;
   /** 做饭小游戏：本次上桌的菜名 */
@@ -229,6 +241,11 @@ function normalizeHome(raw: unknown): HomePayload | null {
   if (Array.isArray(r.win)) {
     win = r.win.slice(0, 12).map((w) => w === true);
   }
+  // 窗户存在态：最多 12 扇（false = 已收起；未传 = 全部存在）
+  let winExist: boolean[] | undefined;
+  if (Array.isArray(r.winExist)) {
+    winExist = r.winExist.slice(0, 12).map((w) => w === true);
+  }
   // 每扇窗沿墙坐标
   let winPos: number[] | undefined;
   if (Array.isArray(r.winPos)) {
@@ -263,6 +280,7 @@ function normalizeHome(raw: unknown): HomePayload | null {
     chars,
     night: r.night === true,
     win,
+    winExist,
     winPos,
     doorPos,
     floorCol: cleanHex(r.floorCol),
@@ -286,6 +304,7 @@ function normalizeHome(raw: unknown): HomePayload | null {
     nightAuto: r.nightAuto !== false,
     outfit: clampInt(r.outfit, 0, 9) ?? undefined,
     ...cleanWear(r.wear),
+    ...cleanWear2(r.wear2),
     mealReady: r.mealReady === true,
     mealName: cleanStr(r.mealName, 16) || undefined,
     balconyDoorOpen: r.balconyDoorOpen === true,
@@ -298,7 +317,7 @@ function normalizeHome(raw: unknown): HomePayload | null {
   };
 }
 
-/** 女主衣柜穿搭清洗（v6.2）：发型白名单 + 款号钳制 */
+/** 女主衣柜穿搭清洗（v6.2）：发型白名单 + 款号钳制 + 调色盘清洗 */
 const HAIR_STYLES = new Set(['twin', 'high', 'bob', 'straight', 'wave']);
 function cleanWear(raw: unknown): Pick<HomePayload, 'wear'> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
@@ -308,7 +327,8 @@ function cleanWear(raw: unknown): Pick<HomePayload, 'wear'> {
   const top = clampInt(w.top, 0, 8);
   const bottom = clampInt(w.bottom, 0, 8);
   const shoes = clampInt(w.shoes, 0, 8);
-  if (hair == null && dress == null && top == null && bottom == null && shoes == null) return {};
+  const tints = sanitizeTints(w.tints);
+  if (hair == null && dress == null && top == null && bottom == null && shoes == null && !tints) return {};
   return {
     wear: {
       hair: hair ?? 'twin',
@@ -316,8 +336,23 @@ function cleanWear(raw: unknown): Pick<HomePayload, 'wear'> {
       top: top ?? 0,
       bottom: bottom ?? 0,
       shoes: shoes ?? 0,
+      ...(tints ? { tints } : {}),
     },
   };
+}
+
+/** 男生衣柜穿搭清洗（v6.3）：走 types 的归档清洗器（发型白名单 + 款号钳 0..3 + 调色盘） */
+function cleanWear2(raw: unknown): Pick<HomePayload, 'wear2'> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const w = raw as Record<string, unknown>;
+  const hasAny =
+    typeof w.hair === 'string' ||
+    typeof w.top === 'number' ||
+    typeof w.bottom === 'number' ||
+    typeof w.shoes === 'number' ||
+    (w.tints != null && typeof w.tints === 'object' && !Array.isArray(w.tints));
+  if (!hasAny) return {};
+  return { wear2: sanitizeBoyWear(w) };
 }
 
 /** G1/G8 扩展字段清洗：装修方案（≤3 套，照片不备份）/ 留言板便签（≤50 条）/ 已读时间戳 */

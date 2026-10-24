@@ -352,8 +352,9 @@ export function Screen3D({ col, projectorOn }: CozyPlusProps) {
       </mesh>
       {/* 幕布（从卷轴向下展开；本地组 y=0 在卷轴下沿） */}
       <group ref={drop} position={[0, -1.3, 0]} scale={[1, 0.04, 1]}>
+        {/* 幕布白底（只垫在画面正后方：2.02×1.14 画面 + 上下 0.19 黑边，四周留 3cm 净边） */}
         <mesh position={[0, 1.3, 0.045]} castShadow>
-          <boxGeometry args={[2.16, 2.6, 0.02]} />
+          <boxGeometry args={[2.08, 1.58, 0.02]} />
           {mat('#fbfaf6', 0.9)}
         </mesh>
         {/* 电影画面（宽银幕 + 上下黑边） */}

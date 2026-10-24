@@ -5,7 +5,7 @@
  *
  * - 吉他：竖版六弦木纹指板（低音弦在左），点弦拨音、按住横扫 = 扫弦；
  *   指板下方独立一条毛玻璃和弦条 C/G/Am/F/Em：按住即「按弦」，此时扫弦弹出和弦把位（闷弦不发声）；
- * - 钢琴：C3→C6 三个完整八度（22 白键 + 15 黑键，2+3 真实排布），木纹琴体 + 键床上沿红呢毯 +
+ * - 钢琴：C3→C6 三个完整八度（22 白键 + 15 黑键，2+3 真实排布），深胡桃木渐变琴体 + 键床上沿红呢毯 + 金线收边 +
  *   白键倒角阴影/键前立面/黑键斜面高光，多指和弦、滑音（glissando），《小星星》一键演示（播放中再点变停止）；
  * - 音色：标题条上的收缩式选择器（毛玻璃浮层向上弹出、选中打勾、点外部自动收起）；
  * - 整体毛玻璃简约风；覆盖层下沉（mb-64px）给 3D 小人让视野，面板外区域 pointer 穿透可转视角。
@@ -428,14 +428,22 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
     <div
       className="relative min-h-0 flex-1 overflow-hidden rounded-[22px] shadow-2xl ring-1 ring-black/40"
       style={{
-        background:
-          // 竖向细木纹 + 深胡桃木渐变琴体
-          'repeating-linear-gradient(93deg, rgba(0,0,0,0.08) 0px, rgba(0,0,0,0.08) 2px, rgba(255,235,200,0.05) 3px, rgba(0,0,0,0) 7px), linear-gradient(180deg,#6d4b2e 0%,#553a23 26%,#42301c 62%,#31220f 100%)',
+        // 深胡桃/浓咖啡竖向渐变琴体（无细条纹，温润高级）
+        background: 'linear-gradient(180deg,#6a4c33 0%,#57402c 30%,#463322 62%,#362718 100%)',
       }}
     >
-      {/* 琴体倒角：上缘一线木高光、下缘沉入阴影 */}
-      <div className="pointer-events-none absolute inset-0 z-30 rounded-[22px] shadow-[inset_0_1px_0_rgba(255,235,200,0.3),inset_0_-3px_8px_rgba(0,0,0,0.55)]" />
-      <div className="flex h-full flex-col px-[7px] pb-2 pt-[6px]">
+      {/* 极淡的大尺度木色晕染（暖光在上、阴影沉底，整块木料的天然明暗，无条纹） */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            'radial-gradient(120% 75% at 16% 0%, rgba(255,208,146,0.95) 0%, rgba(255,208,146,0) 55%), radial-gradient(150% 95% at 86% 100%, rgba(22,9,0,0.95) 0%, rgba(22,9,0,0) 58%)',
+          opacity: 0.05,
+        }}
+      />
+      {/* 琴体倒角：上缘一线暖木高光、下缘沉入阴影 */}
+      <div className="pointer-events-none absolute inset-0 z-30 rounded-[22px] shadow-[inset_0_1px_0_rgba(255,240,210,0.35),inset_0_-4px_10px_rgba(0,0,0,0.5)]" />
+      <div className="flex h-full flex-col px-[9px] pb-[9px] pt-[7px]">
         {/* 键床上沿红色呢毯条 */}
         <div
           className="relative z-20 mx-[2px] h-[7px] shrink-0 rounded-[3px]"
@@ -444,6 +452,8 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
             boxShadow: 'inset 0 -2px 3px rgba(0,0,0,0.45), 0 1px 2px rgba(0,0,0,0.35)',
           }}
         />
+        {/* 呢毯下的细金线收边（优雅点睛） */}
+        <div className="relative z-20 mx-[2px] h-[2px] shrink-0 rounded-full bg-gradient-to-r from-transparent via-[#d9b36c]/70 to-transparent" />
         {/* 键床（黑键后端塞进呢毯下） */}
         <div className="relative -mt-[3px] min-h-0 flex-1">
           {/* 22 白键：象牙渐变 + 左右倒角 + 键前立面 */}
@@ -453,13 +463,13 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
               return (
                 <div
                   key={k.name}
-                  className="relative flex-1 touch-none border-r border-[#c2bbaa]/70 last:border-r-0"
+                  className="relative flex-1 touch-none border-r border-[#d9d3c3]/70 last:border-r-0"
                   style={{
                     WebkitTapHighlightColor: 'transparent',
                     borderRadius: '0 0 5px 5px',
                     background: on
-                      ? 'linear-gradient(180deg,#ece4d0,#d8cfb7)'
-                      : 'linear-gradient(180deg,#fefefc 0%,#f8f6f0 58%,#edeadd 100%)',
+                      ? 'linear-gradient(180deg,#fdeef3 0%,#f9dde7 100%)'
+                      : 'linear-gradient(180deg,#fffefb 0%,#faf7ee 55%,#efe9d8 100%)',
                     boxShadow:
                       'inset -1.5px 0 2px -1px rgba(70,60,40,0.3), inset 1.5px 0 2px -1px rgba(255,255,255,0.9), inset 0 -4px 5px -3px rgba(70,60,40,0.42)',
                     transform: on ? 'scaleY(0.972)' : undefined,
@@ -470,7 +480,7 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
                   {/* 键前立面（白键前窄后宽立体感的收尾） */}
                   <div className="pointer-events-none absolute inset-x-[1.5px] bottom-0 h-[9%] rounded-b-[5px] bg-gradient-to-b from-black/[0.06] to-black/[0.16]" />
                   {k.label && (
-                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[9px] font-semibold tracking-wide text-[#a89f8c]">
+                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[9px] font-semibold tracking-wide text-[#b3ab97]">
                       {k.name}
                     </span>
                   )}
@@ -491,10 +501,10 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
                   WebkitTapHighlightColor: 'transparent',
                   borderRadius: '0 0 4px 4px',
                   background: isOn
-                    ? 'linear-gradient(180deg,#5a5262,#332f3c)'
-                    : 'linear-gradient(180deg,#44404d 0%,#1d1c25 72%,#37333f 100%)',
+                    ? 'linear-gradient(180deg,#6d5a6b,#3a3040)'
+                    : 'linear-gradient(180deg,#4a4652 0%,#232230 68%,#3c3947 100%)',
                   boxShadow:
-                    '0 4px 6px rgba(20,10,5,0.55), inset 1.5px 0 2px rgba(255,255,255,0.16), inset -1.5px 0 3px rgba(0,0,0,0.55), inset 0 -2.5px 2px rgba(255,255,255,0.14)',
+                    '0 3px 5px rgba(20,10,5,0.45), inset 1.5px 0 2px rgba(255,255,255,0.16), inset -1.5px 0 3px rgba(0,0,0,0.55), inset 0 -2.5px 2px rgba(255,255,255,0.14)',
                   transform: isOn ? 'scaleY(0.955)' : undefined,
                   transformOrigin: 'top',
                 }}
@@ -596,7 +606,7 @@ export default function InstrumentOverlay({
       />
       <div
         className={`pointer-events-auto mx-3 mb-[64px] flex flex-col gap-2 ${
-          kind === 'piano' ? 'h-[39%] max-h-[340px]' : 'h-[45%] max-h-[388px]'
+          kind === 'piano' ? 'h-[44%] max-h-[380px]' : 'h-[45%] max-h-[388px]'
         }`}
         onPointerDown={stop}
         onPointerMove={stop}

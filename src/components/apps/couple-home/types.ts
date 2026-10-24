@@ -1,5 +1,3 @@
-'use client';
-
 /**
  * 情侣小家 3D —— 类型定义（v5.3 四室一厅）
  *
@@ -237,6 +235,18 @@ export interface DoorPos {
 /** 女主发型：twin 双马尾 / high 高马尾 / bob 短发 / straight 黑长直 / wave 大波浪 */
 export type GirlHairStyle = 'twin' | 'high' | 'bob' | 'straight' | 'wave';
 
+/** 男生发型：smooth 顺滑短发 / fluffy 蓬松卷发 / middle 中分刘海 / spiky 活力刺猬 */
+export type BoyHairStyle = 'smooth' | 'fluffy' | 'middle' | 'spiky';
+
+/** 调色盘自选色：字段为 null/undefined = 用默认款色 */
+export interface WearTints {
+  hair?: string | null;
+  dress?: string | null;
+  top?: string | null;
+  bottom?: string | null;
+  shoes?: string | null;
+}
+
 /** 女主衣柜穿搭：dress ≥ 0 穿连衣裙（忽略 top/bottom），dress = -1 穿分体（上衣 + 裤/裙） */
 export interface GirlWear {
   hair: GirlHairStyle;
@@ -248,10 +258,44 @@ export interface GirlWear {
   bottom: number;
   /** 鞋子款号 */
   shoes: number;
+  /** 调色盘自选色（缺省字段 = 用默认款色） */
+  tints?: WearTints;
 }
 
 /** 默认穿搭：樱粉连衣裙 + 双马尾 + 棕色小皮鞋（与 v6.1 造型一致） */
 export const DEFAULT_WEAR: GirlWear = { hair: 'twin', dress: 0, top: 0, bottom: 0, shoes: 0 };
+
+/** 男生衣柜穿搭：发型 + 上衣 + 裤子 + 鞋子（款号对应 wardrobe-data 的 BOY_* 目录） */
+export interface BoyWear {
+  hair: BoyHairStyle;
+  top: number;
+  bottom: number;
+  shoes: number;
+  /** 调色盘自选色（缺省字段 = 用默认款色） */
+  tints?: WearTints;
+}
+
+/** 默认男生穿搭：顺滑短发 + 奶白连帽卫衣 + 藏蓝短裤 + 白色圆头鞋（与 v6.2 造型一致） */
+export const DEFAULT_BOY_WEAR: BoyWear = { hair: 'smooth', top: 0, bottom: 0, shoes: 0 };
+
+/** 清洗调色盘自选色：仅接受 #rrggbb（统一转小写）；全部无效/为空 → undefined */
+export function sanitizeTints(t: unknown): WearTints | undefined {
+  const o = (t ?? {}) as Partial<WearTints>;
+  const col = (v: unknown): string | null =>
+    typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : null;
+  const hair = col(o.hair);
+  const dress = col(o.dress);
+  const top = col(o.top);
+  const bottom = col(o.bottom);
+  const shoes = col(o.shoes);
+  const out: WearTints = {};
+  if (hair) out.hair = hair;
+  if (dress) out.dress = dress;
+  if (top) out.top = top;
+  if (bottom) out.bottom = bottom;
+  if (shoes) out.shoes = shoes;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 /** 归档非法数据 → 合法穿搭（防旧档/脏数据渲染崩溃） */
 export function sanitizeWear(w: unknown): GirlWear {
@@ -265,6 +309,22 @@ export function sanitizeWear(w: unknown): GirlWear {
     top: Math.min(3, Math.max(0, idx(o.top, 3, 0))),
     bottom: Math.min(3, Math.max(0, idx(o.bottom, 3, 0))),
     shoes: Math.min(3, Math.max(0, idx(o.shoes, 3, 0))),
+    tints: sanitizeTints(o.tints),
+  };
+}
+
+/** 归档非法数据 → 合法男生穿搭（款号钳 0..3，发型白名单，调色盘清洗） */
+export function sanitizeBoyWear(w: unknown): BoyWear {
+  const HAIRS: BoyHairStyle[] = ['smooth', 'fluffy', 'middle', 'spiky'];
+  const o = (w ?? {}) as Partial<BoyWear>;
+  const idx = (v: unknown) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.min(3, Math.max(0, Math.round(v))) : 0;
+  return {
+    hair: HAIRS.includes(o.hair as BoyHairStyle) ? (o.hair as BoyHairStyle) : 'smooth',
+    top: idx(o.top),
+    bottom: idx(o.bottom),
+    shoes: idx(o.shoes),
+    tints: sanitizeTints(o.tints),
   };
 }
 
@@ -278,6 +338,8 @@ export interface HomeState {
   night: boolean;
   /** 窗户开态（9 扇：客厅北×2 / 客厅西 / 卧室西 / 卧室南 / 厨房东 / 厨房南 / 卫生间北 / 卫生间东） */
   win?: boolean[];
+  /** 每扇窗是否存在（false = 已被收起；缺省 = 全部存在；编辑模式可收起、商店可装回） */
+  winExist?: boolean[];
   /** 每扇窗沿墙滑行坐标（undefined = 默认位） */
   winPos?: number[];
   /** 三扇门沿墙坐标（undefined = 默认位） */
@@ -323,6 +385,8 @@ export interface HomeState {
   outfit?: number;
   /** 「我」的衣柜穿搭（v6.2：发型 + 连衣裙/分体上下装 + 鞋子） */
   wear?: GirlWear;
+  /** 「对方」的衣柜穿搭（v6.3：男生发型 + 上衣/裤子/鞋子 + 调色盘） */
+  wear2?: BoyWear;
   /** 地板纹理：wood = 木纹条（默认）/ plain = 素色 / check = 大格瓷砖（全屋通用、颜色仍分房间） */
   floorTex?: 'plain' | 'wood' | 'check';
   /** 墙面纹理：dot = 碎花 / stripe = 细条纹（缺省素色，全屋通用、颜色仍分房间） */

@@ -49,7 +49,7 @@ import {
   resolveDoorPos,
   resolveWinPos,
 } from '../catalog';
-import type { CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode } from '../types';
+import type { BoyWear, CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode } from '../types';
 
 // ---------------- 对外 Props ----------------
 
@@ -84,6 +84,8 @@ export interface HomeSceneProps {
   /** 九扇窗开态 + 切换回调 */
   win?: boolean[];
   onToggleWin?: (i: number) => void;
+  /** 每扇窗是否存在（false = 已被收起不渲染） */
+  winExist?: boolean[];
   /** 每扇窗沿墙坐标 / 三扇门沿墙坐标 */
   winPos?: number[];
   doorPos?: { bed: number; kt: number; bath: number; bal?: number };
@@ -125,6 +127,8 @@ export interface HomeSceneProps {
   onWallTap?: (id: string) => void;
   /** 「我」的衣柜穿搭（发型 + 连衣裙/分体 + 鞋；v6.2） */
   wear?: GirlWear;
+  /** 「对方」的衣柜穿搭（发型 + 上衣/裤子 + 鞋；v6.3 男生换装） */
+  wear2?: BoyWear;
   /** 正在进行的家具动作（灶台蒸汽 / 乐器音符联动） */
   activeAct?: { type: CharAction['type']; itemId: string; active: boolean } | null;
   /** 音响放歌中（音箱上方飘音符） */
@@ -1204,8 +1208,8 @@ export default function HomeScene(props: HomeSceneProps) {
   const [quality, setQuality] = useState<SceneQuality>('high');
   const {
     items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge, fp, fpRef,
-    poseRef, actRef, carryRef, instRef, onFaucetTap, activeAct, mealTableId, floorTex, wallTex, wear,
-    win, onToggleWin, winPos, doorPos,
+    poseRef, actRef, carryRef, instRef, onFaucetTap, activeAct, mealTableId, floorTex, wallTex, wear, wear2,
+    win, onToggleWin, winExist, winPos, doorPos,
     floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, floorColK, wallColK, floorColB, wallColB,
     floorColBal, wallColBal,
     ceilCol, ceilColBed, ceilColK, ceilColB,
@@ -1354,6 +1358,7 @@ export default function HomeScene(props: HomeSceneProps) {
         onWallPointerDown={onWallPointerDown}
         win={win}
         onToggleWin={onToggleWin}
+        winExist={winExist}
         winPos={winPos}
         doorPos={doorPos}
         floorCol={floorCol}
@@ -1412,11 +1417,11 @@ export default function HomeScene(props: HomeSceneProps) {
       })}
 
       <CharChibi3D rt={meRT} who="me" hide={fp && mode === 'live'} poseRef={poseRef} carryRef={carryRef} wear={wear} />
-      <CharChibi3D rt={taRT} who="partner" />
+      <CharChibi3D rt={taRT} who="partner" wear2={wear2} />
       <BedNightLight poseRef={poseRef} meRT={meRT} />
-      <WeatherFX kind={weatherFx ?? 'clear'} win={win} winPos={winPos} />
-      <GlassRain kind={weatherFx ?? 'clear'} winPos={winPos} />
-      <SnowDeco kind={weatherFx ?? 'clear'} winPos={winPos} />
+      <WeatherFX kind={weatherFx ?? 'clear'} win={win} winExist={winExist} winPos={winPos} />
+      <GlassRain kind={weatherFx ?? 'clear'} winExist={winExist} winPos={winPos} />
+      <SnowDeco kind={weatherFx ?? 'clear'} winExist={winExist} winPos={winPos} />
       <Critters mode={mode} items={items} onCritterTap={onCritterTap} />
       <SpeakerNotes items={items} active={!!musicPlaying} />
       <EditCameraKick mode={mode} />
@@ -1538,10 +1543,12 @@ function makeSnowTexture(): THREE.CanvasTexture {
 function WeatherFX({
   kind,
   win,
+  winExist,
   winPos,
 }: {
   kind: 'rain' | 'snow' | 'clear';
   win?: boolean[];
+  winExist?: boolean[];
   winPos?: number[];
 }) {
   const rainTex = useMemo(() => makeRainTexture(), []);
@@ -1557,6 +1564,7 @@ function WeatherFX({
   return (
     <group>
       {WINS.map((w, i) => {
+        if (winExist && winExist[i] === false) return null; // 已收起的窗不挂雨雪
         const along = winPos?.[i] ?? w.def;
         const x = w.axis === 'z' ? along : w.at + w.side * 0.5;
         const z = w.axis === 'z' ? w.at + w.side * 0.5 : along;
@@ -1630,7 +1638,7 @@ function makeGlassRainTexture(): THREE.CanvasTexture {
 }
 
 /** G5 雨天玻璃水珠层：贴在每扇窗玻璃外表面，极缓慢下滑 */
-function GlassRain({ kind, winPos }: { kind: 'rain' | 'snow' | 'clear'; winPos?: number[] }) {
+function GlassRain({ kind, winExist, winPos }: { kind: 'rain' | 'snow' | 'clear'; winExist?: boolean[]; winPos?: number[] }) {
   const tex = useMemo(() => makeGlassRainTexture(), []);
   useFrame((_, dt) => {
     if (kind !== 'rain') return;
@@ -1640,6 +1648,7 @@ function GlassRain({ kind, winPos }: { kind: 'rain' | 'snow' | 'clear'; winPos?:
   return (
     <group>
       {WINS.map((w, i) => {
+        if (winExist && winExist[i] === false) return null; // 已收起的窗不挂水珠
         const along = winPos?.[i] ?? w.def;
         const x = w.axis === 'z' ? along : w.at + w.side * 0.44;
         const z = w.axis === 'z' ? w.at + w.side * 0.44 : along;
@@ -1655,10 +1664,11 @@ function GlassRain({ kind, winPos }: { kind: 'rain' | 'snow' | 'clear'; winPos?:
 }
 
 /** G5 雪天积雪：窗外窗台白沿 + 阳台地面薄雪（仅 snow 可见） */
-function SnowDeco({ kind, winPos }: { kind: 'rain' | 'snow' | 'clear'; winPos?: number[] }) {
+function SnowDeco({ kind, winExist, winPos }: { kind: 'rain' | 'snow' | 'clear'; winExist?: boolean[]; winPos?: number[] }) {
   return (
     <group visible={kind === 'snow'}>
       {WINS.map((w, i) => {
+        if (winExist && winExist[i] === false) return null; // 已收起的窗不留雪沿
         const along = winPos?.[i] ?? w.def;
         const x = w.axis === 'z' ? along : w.at + w.side * 0.56;
         const z = w.axis === 'z' ? w.at + w.side * 0.56 : along;

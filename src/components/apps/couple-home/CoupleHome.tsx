@@ -90,6 +90,7 @@ import {
   WALL_H,
   WALL_SLOTS,
   WINS,
+  WIN_NAMES,
   clampFurnToRooms,
   defaultHome,
   fetchRemote,
@@ -107,8 +108,8 @@ import {
 } from './catalog';
 import { sfx } from './sfx';
 import { getCachedThumb } from './scene/ShopThumbs';
-import type { CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, LayoutSnap, NoteEntry, RoomId } from './types';
-import { sanitizeWear } from './types';
+import type { BoyWear, CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, LayoutSnap, NoteEntry, RoomId } from './types';
+import { sanitizeBoyWear, sanitizeWear } from './types';
 import Wardrobe from './Wardrobe';
 
 /** 做饭小游戏（选菜谱→切菜/翻炒/装盘→上桌，v5.7 F5） */
@@ -458,6 +459,7 @@ let buySeq = 0;
 /** 装修快照：一次装修操作（放置/收起/移动/旋转/升降/换色/门窗调整）前的完整可编辑状态 */
 interface EditSnap {
   items: FurnitureItem[];
+  winExist?: boolean[];
   winPos?: number[];
   doorPos?: { bed: number; kt: number; bath: number; bal?: number };
   winCol?: string;
@@ -484,6 +486,19 @@ interface EditSnap {
 const HIST_MAX = 60;
 /** 连续手势合并时间窗（ms）：拖拽帧/快速连点并入栈顶同一步 */
 const HIST_COALESCE = 900;
+
+/** 编辑模式操作条：毛玻璃胶囊容器质感 */
+const EDIT_GLASS =
+  'border border-white/70 bg-white/55 shadow-[0_10px_28px_rgba(90,70,60,0.20)] backdrop-blur-2xl';
+/** 毛玻璃方向盘小圆钮（移动 · 按下泛绿） */
+const editDirBtn =
+  'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]';
+/** 同上（升降 · 按下泛蓝） */
+const editDirBtnBlue =
+  'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90 active:bg-[#e2edf3] active:text-[#4e7f95]';
+/** 同上（旋转 · 按下泛暖沙） */
+const editDirBtnAmber =
+  'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90 active:bg-[#f5efe2] active:text-[#8a7a54]';
 
 export default function CoupleHome({ close }: { close: () => void }) {
   // ---------------- 持久化状态 ----------------
@@ -513,10 +528,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [doorPos, setDoorPos] = useState<{ bed: number; kt: number; bath: number; bal?: number } | undefined>(pack.home.doorPos);
   const [fp, setFp] = useState<boolean>(!!pack.home.fp);
   const [nightAuto, setNightAuto] = useState<boolean>(pack.home.nightAuto !== false);
-  // v5.6：做饭一桌菜 / 地板墙面纹理；v6.2：衣柜穿搭（发型+连衣裙/分体+鞋）
+  // v5.6：做饭一桌菜 / 地板墙面纹理；v6.2：衣柜穿搭（发型+连衣裙/分体+鞋）；v6.3 男生穿搭
   const [wear, setWear] = useState<GirlWear>(() => sanitizeWear(pack.home.wear));
+  const [wear2, setWear2] = useState<BoyWear>(() => sanitizeBoyWear(pack.home.wear2));
   /** 衣柜弹窗（走到衣柜前弹出） */
   const [wardrobeOpen, setWardrobeOpen] = useState(false);
+  /** 九扇窗是否存在（false = 已被收起；编辑模式可收起，商店可装回） */
+  const [winExist, setWinExist] = useState<boolean[]>(() =>
+    [0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => pack.home.winExist?.[i] !== false),
+  );
   const [mealReady, setMealReady] = useState<boolean>(!!pack.home.mealReady);
   const [floorTex, setFloorTex] = useState<'plain' | 'wood' | 'check'>(pack.home.floorTex ?? 'wood');
   const [wallTex, setWallTex] = useState<'plain' | 'dot' | 'stripe'>(pack.home.wallTex ?? 'plain');
@@ -687,6 +707,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
   nightAutoRef.current = nightAuto;
   const wearRef = useRef(wear);
   wearRef.current = wear;
+  const wear2Ref = useRef(wear2);
+  wear2Ref.current = wear2;
+  const winExistRef = useRef(winExist);
+  winExistRef.current = winExist;
   const mealReadyRef = useRef(mealReady);
   mealReadyRef.current = mealReady;
   const floorTexRef = useRef(floorTex);
@@ -723,6 +747,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const takeSnap = useCallback(
     (): EditSnap => ({
       items: itemsRef.current.map((f) => ({ ...f, st: { ...f.st } })),
+      winExist: winExistRef.current.slice(),
       winPos: winPosRef.current ? winPosRef.current.slice() : undefined,
       doorPos: doorPosRef.current ? { ...doorPosRef.current } : undefined,
       winCol: winColRef.current,
@@ -786,6 +811,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       furniture: itemsRef.current,
       night: nightRef.current,
       win: winRef.current,
+      winExist: winExistRef.current,
       winPos: winPosRef.current,
       doorPos: doorPosRef.current,
       floorCol: floorColRef.current,
@@ -808,6 +834,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       fp: fpRef.current.on,
       nightAuto: nightAutoRef.current,
       wear: wearRef.current,
+      wear2: wear2Ref.current,
       mealReady: mealReadyRef.current,
       floorTex: floorTexRef.current,
       wallTex: wallTexRef.current,
@@ -867,6 +894,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setFp(!!h.fp);
     setNightAuto(h.nightAuto !== false);
     setWear(sanitizeWear(h.wear));
+    setWear2(sanitizeBoyWear(h.wear2));
+    setWinExist([0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => h.winExist?.[i] !== false));
     setMealReady(!!h.mealReady);
     setFloorTex(h.floorTex ?? 'wood');
     setWallTex(h.wallTex ?? 'plain');
@@ -1755,10 +1784,51 @@ export default function CoupleHome({ close }: { close: () => void }) {
     toast(victim ? `已收起「${CATALOG[victim.kind]?.name ?? victim.kind}」，撤销可找回` : '已收起家具');
   }, [selId, pushHistory, saveSoon, toast]);
 
+  /** 收起选中的窗户（编辑模式·门窗操作条；撤销可装回，商店「窗户」tab 也能再安装） */
+  const removeWinSel = useCallback(() => {
+    if (!selId?.startsWith('win-')) return;
+    const i = Number(selId.slice(4));
+    if (!Number.isInteger(i) || i < 0 || i >= WINS.length) return;
+    pushHistory(`win-del-${i}`);
+    setWinExist((prev) => {
+      const next = prev.slice();
+      next[i] = false;
+      return next;
+    });
+    sfx.remove();
+    setSelId(null);
+    setPaletteOpen(false);
+    saveSoon();
+    toast(`已收起${WIN_NAMES[i] ?? '窗户'}，商店「窗户」可装回来`);
+  }, [selId, pushHistory, saveSoon, toast]);
+
+  /** 商店「窗户」tab：把收起的窗装回默认位（一步可撤销） */
+  const installWin = useCallback(
+    (i: number) => {
+      if (i < 0 || i >= WINS.length) return;
+      pushHistory(`win-add-${i}`);
+      setWinExist((prev) => {
+        const next = prev.slice();
+        next[i] = true;
+        return next;
+      });
+      // 装回默认位（旧滑行位可能已被别的门窗占用）
+      setWinPos((prev) => {
+        const next = prev ? prev.slice() : WINS.map((ww) => ww.def);
+        next[i] = WINS[i].def;
+        return next;
+      });
+      sfx.place();
+      toast(`已安装${WIN_NAMES[i] ?? '窗户'}`);
+    },
+    [pushHistory, toast],
+  );
+
   /** 应用一份快照（撤销/重做共用）：整体回滚可编辑状态并清选择 */
   const applySnap = useCallback(
     (s: EditSnap) => {
       setItems(s.items);
+      setWinExist(s.winExist ? s.winExist.slice() : [0, 1, 2, 3, 4, 5, 6, 7, 8].map(() => true));
       setWinPos(s.winPos);
       setDoorPos(s.doorPos);
       setWinCol(s.winCol);
@@ -2670,11 +2740,13 @@ export default function CoupleHome({ close }: { close: () => void }) {
         instRef={instRef}
         onFaucetTap={onFaucetTap}
         wear={wear}
+        wear2={wear2}
         activeAct={charAction}
         mealTableId={mealTableId}
         floorTex={floorTex}
         wallTex={wallTex}
         win={win}
+        winExist={winExist}
         onToggleWin={toggleWin}
         winPos={winPos}
         doorPos={doorPos}
@@ -3015,7 +3087,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
         {/* 底部区 */}
         <div className="p-4 pb-6">
-          {/* 选中操作条（编辑模式·门窗：移动/换色，不可删除） */}
+          {/* 选中操作条（编辑模式·门窗：毛玻璃胶囊 · 移动/换色/收起窗户，门不可收起） */}
           <AnimatePresence>
             {mode === 'edit' && isWallSel && !shopOpen && !paletteOpen && (
               <motion.div
@@ -3025,17 +3097,18 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 exit={{ opacity: 0, y: 16 }}
                 className="pointer-events-auto mx-auto mb-3 w-fit"
               >
-                <div className="mx-auto mb-1.5 w-fit rounded-full bg-black/25 px-2.5 py-0.5 text-[11px] font-medium text-white/95 backdrop-blur-sm">
+                {/* 名字小签（毛玻璃胶囊） */}
+                <div className="mx-auto mb-2 w-fit rounded-full border border-white/40 bg-black/25 px-3.5 py-1 text-[11px] font-medium text-white/95 shadow-sm backdrop-blur-md">
                   {selWallName} · 拖动或方向键沿墙移动
                 </div>
-                <div className="flex items-center gap-1 rounded-2xl bg-white/90 p-1.5 shadow-lg backdrop-blur">
-                  {/* 四向微调（沿墙滑行） */}
-                  <div className="grid grid-cols-3 grid-rows-3 gap-px rounded-xl bg-[#efece3] p-1">
+                <div className={`flex items-center gap-1.5 rounded-full p-2 ${EDIT_GLASS}`}>
+                  {/* 四向微调（沿墙滑行）：毛玻璃圆形方向盘 */}
+                  <div className="grid grid-cols-3 grid-rows-3 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
                     <span />
                     <button
                       onClick={() => issueMoveCmd('up')}
                       aria-label="上移"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                      className={editDirBtn}
                     >
                       <ChevronUp className="h-4 w-4" />
                     </button>
@@ -3043,15 +3116,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     <button
                       onClick={() => issueMoveCmd('left')}
                       aria-label="左移"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                      className={editDirBtn}
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </button>
-                    <span className="flex h-7 w-7 items-center justify-center text-[9px] text-[#b8b5ac]">沿墙</span>
+                    <span className="flex h-9 w-9 items-center justify-center text-[9px] font-medium text-[#b8b5ac]">沿墙</span>
                     <button
                       onClick={() => issueMoveCmd('right')}
                       aria-label="右移"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                      className={editDirBtn}
                     >
                       <ChevronRight className="h-4 w-4" />
                     </button>
@@ -3059,35 +3132,48 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     <button
                       onClick={() => issueMoveCmd('down')}
                       aria-label="下移"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                      className={editDirBtn}
                     >
                       <ChevronDown className="h-4 w-4" />
                     </button>
                     <span />
                   </div>
+                  {/* 分隔点 */}
+                  <span className="mx-0.5 h-1.5 w-1.5 rounded-full bg-[#d8cfc4]/80" />
                   {/* 换色 */}
                   <button
                     onClick={() => setPaletteOpen(true)}
                     aria-label="给门窗换色"
                     title="换颜色"
-                    className={`${toolBtn} bg-[#f0e2ee] text-[#b07193] hover:bg-[#ead4e4]`}
+                    className={`${toolBtn} h-11 w-11 bg-[#f7e8f2]/85 text-[#b07193] ring-1 ring-white/80 hover:bg-[#f3dcea]/90`}
                   >
-                    <Droplet className="h-4 w-4" />
+                    <Droplet className="h-[18px] w-[18px]" />
                   </button>
+                  {/* 收起窗户（窗户可像家具一样删除；门不可） */}
+                  {selId?.startsWith('win-') && (
+                    <button
+                      onClick={removeWinSel}
+                      aria-label="收起窗户"
+                      title="收起这扇窗（商店「窗户」可装回）"
+                      className={`${toolBtn} h-11 w-11 bg-[#f9e3e8]/90 text-[#d4717f] ring-1 ring-white/80 hover:bg-[#f5d5dc]/95`}
+                    >
+                      <Trash2 className="h-[18px] w-[18px]" />
+                    </button>
+                  )}
                   {/* 取消选中 */}
                   <button
                     onClick={() => setSelId(null)}
                     aria-label="取消选中"
-                    className={`${toolBtn} bg-[#efeef0] text-[#8a8a90]`}
+                    className={`${toolBtn} h-11 w-11 bg-[#efeef0]/85 text-[#8a8a90] ring-1 ring-white/80`}
                   >
-                    <X className="h-4 w-4" />
+                    <X className="h-[18px] w-[18px]" />
                   </button>
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* 选中操作条（编辑模式·家具） */}
+          {/* 选中操作条（编辑模式·家具：毛玻璃胶囊 · 移动/升降/旋转/调色/收起） */}
           <AnimatePresence>
             {mode === 'edit' && selItem && selEntry && !shopOpen && !paletteOpen && (
               <motion.div
@@ -3097,20 +3183,20 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 exit={{ opacity: 0, y: 16 }}
                 className="pointer-events-auto mx-auto mb-3 w-fit"
               >
-                {/* 家具名小签 */}
-                <div className="mx-auto mb-1.5 w-fit rounded-full bg-black/25 px-2.5 py-0.5 text-[11px] font-medium text-white/95 backdrop-blur-sm">
+                {/* 家具名小签（毛玻璃胶囊） */}
+                <div className="mx-auto mb-2 w-fit rounded-full border border-white/40 bg-black/25 px-3.5 py-1 text-[11px] font-medium text-white/95 shadow-sm backdrop-blur-md">
                   {selEntry.name}
                 </div>
-                <div className="flex items-center gap-1 rounded-2xl bg-white/90 p-1.5 shadow-lg backdrop-blur">
-                  {/* 移动：四向按钮 + 中央「移动模式」开关
+                <div className={`flex items-center gap-1.5 rounded-full p-2 ${EDIT_GLASS}`}>
+                  {/* 移动：四向方向盘 + 中央「移动模式」开关
                      （两种搬运方式：① 点上下左右逐步微调 ② 开移动模式后按住画面拖动） */}
-                  <div className="grid grid-cols-3 grid-rows-3 gap-px rounded-xl bg-[#efece3] p-1">
+                  <div className="grid grid-cols-3 grid-rows-3 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
                     <span />
                     <button
                       onClick={() => issueMoveCmd('up')}
                       aria-label="上移一格"
                       title="上移一格"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                      className={editDirBtn}
                     >
                       <ChevronUp className="h-4 w-4" />
                     </button>
@@ -3119,7 +3205,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       onClick={() => issueMoveCmd('left')}
                       aria-label="左移一格"
                       title="左移一格"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                      className={editDirBtn}
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </button>
@@ -3129,17 +3215,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       title="移动模式（按住画面拖动搬运）"
                       className={
                         moveOn
-                          ? 'flex h-7 w-7 items-center justify-center rounded-lg bg-[#dff0e2] text-[#3f9a58] shadow-inner'
-                          : 'flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90'
+                          ? 'flex h-9 w-9 items-center justify-center rounded-full bg-[#cdeacd] text-[#2f7d4d] shadow-inner ring-1 ring-[#9ed4ae]'
+                          : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90'
                       }
                     >
-                      <Move className="h-3.5 w-3.5" />
+                      <Move className="h-4 w-4" />
                     </button>
                     <button
                       onClick={() => issueMoveCmd('right')}
                       aria-label="右移一格"
                       title="右移一格"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                      className={editDirBtn}
                     >
                       <ChevronRight className="h-4 w-4" />
                     </button>
@@ -3148,7 +3234,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       onClick={() => issueMoveCmd('down')}
                       aria-label="下移一格"
                       title="下移一格"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a8a86] shadow-sm transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]"
+                      className={editDirBtn}
                     >
                       <ChevronDown className="h-4 w-4" />
                     </button>
@@ -3156,12 +3242,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   </div>
 
                   {/* 升降：抬上桌 / 放回地（相框、小盆栽…） */}
-                  <div className="grid grid-rows-2 gap-px rounded-xl bg-[#efece3] p-1">
+                  <div className="grid grid-rows-2 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
                     <button
                       onClick={() => liftSel(1)}
                       aria-label="抬高一层（可放上桌面）"
                       title="抬高一层"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#7a8a96] shadow-sm transition active:scale-90 active:bg-[#e2edf3] active:text-[#4e7f95]"
+                      className={editDirBtnBlue}
                     >
                       <ChevronsUp className="h-4 w-4" />
                     </button>
@@ -3169,19 +3255,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       onClick={() => liftSel(-1)}
                       aria-label="放低一层（放回地面）"
                       title="放低一层"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#7a8a96] shadow-sm transition active:scale-90 active:bg-[#e2edf3] active:text-[#4e7f95]"
+                      className={editDirBtnBlue}
                     >
                       <ChevronsDown className="h-4 w-4" />
                     </button>
                   </div>
 
                   {/* 旋转：四宫格（上排 左转/右转，下排 下俯/上仰） */}
-                  <div className="grid grid-cols-2 grid-rows-2 gap-px rounded-xl bg-[#efece3] p-1">
+                  <div className="grid grid-cols-2 grid-rows-2 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
                     <button
                       onClick={() => rotateY(-1)}
                       aria-label="向左旋转 45°"
                       title="向左旋转"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a7a54] shadow-sm transition active:scale-90 active:bg-[#f5efe2]"
+                      className={editDirBtnAmber}
                     >
                       <RotateCcw className="h-4 w-4" />
                     </button>
@@ -3189,7 +3275,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       onClick={() => rotateY(1)}
                       aria-label="向右旋转 45°"
                       title="向右旋转"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a7a54] shadow-sm transition active:scale-90 active:bg-[#f5efe2]"
+                      className={editDirBtnAmber}
                     >
                       <RotateCw className="h-4 w-4" />
                     </button>
@@ -3197,7 +3283,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       onClick={() => tilt(-1)}
                       aria-label="向下旋转 15°"
                       title="向下旋转"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a7a54] shadow-sm transition active:scale-90 active:bg-[#f5efe2]"
+                      className={editDirBtnAmber}
                     >
                       <ChevronDown className="h-4 w-4" />
                     </button>
@@ -3205,37 +3291,39 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       onClick={() => tilt(1)}
                       aria-label="向上旋转 15°"
                       title="向上旋转"
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#8a7a54] shadow-sm transition active:scale-90 active:bg-[#f5efe2]"
+                      className={editDirBtnAmber}
                     >
                       <ChevronUp className="h-4 w-4" />
                     </button>
                   </div>
 
+                  {/* 分隔点 */}
+                  <span className="mx-0.5 h-1.5 w-1.5 rounded-full bg-[#d8cfc4]/80" />
                   {/* 调色 */}
                   <button
                     onClick={() => setPaletteOpen(true)}
                     aria-label="调色盘"
                     title="调色盘"
-                    className={`${toolBtn} bg-[#f0e2ee] text-[#b07193] hover:bg-[#ead4e4]`}
+                    className={`${toolBtn} h-11 w-11 bg-[#f7e8f2]/85 text-[#b07193] ring-1 ring-white/80 hover:bg-[#f3dcea]/90`}
                   >
-                    <Droplet className="h-4 w-4" />
+                    <Droplet className="h-[18px] w-[18px]" />
                   </button>
                   {/* 收起 */}
                   <button
                     onClick={removeSel}
                     aria-label="收起家具"
                     title="收起"
-                    className={`${toolBtn} bg-[#f9e3e8] text-[#d4717f] hover:bg-[#f5d5dc]`}
+                    className={`${toolBtn} h-11 w-11 bg-[#f9e3e8]/90 text-[#d4717f] ring-1 ring-white/80 hover:bg-[#f5d5dc]/95`}
                   >
-                    <Trash2 className="h-4 w-4" />
+                    <Trash2 className="h-[18px] w-[18px]" />
                   </button>
                   {/* 取消选中 */}
                   <button
                     onClick={() => setSelId(null)}
                     aria-label="取消选中"
-                    className={`${toolBtn} bg-[#efeef0] text-[#8a8a90]`}
+                    className={`${toolBtn} h-11 w-11 bg-[#efeef0]/85 text-[#8a8a90] ring-1 ring-white/80`}
                   >
-                    <X className="h-4 w-4" />
+                    <X className="h-[18px] w-[18px]" />
                   </button>
                 </div>
               </motion.div>
@@ -3252,16 +3340,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
             {/* 编辑工具（装修模式）：撤销 / 重做 / 地板墙色 / 商店（音效/视角已收进右上角 ⋮ 菜单） */}
             <div className="pointer-events-auto flex flex-col items-end gap-2">
               {mode === 'edit' && (
-                <div className="flex items-center gap-2">
+                <div className={`flex items-center gap-2 rounded-full p-1.5 ${EDIT_GLASS}`}>
                   {/* 撤销上一步装修操作（Ctrl+Z）：放置/收起/移动/旋转/升降/换色/门窗均可撤销 */}
                   <button
                     onClick={undo}
                     disabled={histLen.u === 0}
                     aria-label="撤销"
                     title="撤销上一步（Ctrl+Z）"
-                    className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 shadow-md backdrop-blur transition active:scale-95 disabled:opacity-40"
+                    className="flex h-11 w-11 items-center justify-center rounded-full bg-white/70 text-[#6a7a8a] shadow-sm ring-1 ring-white/70 transition active:scale-95 disabled:opacity-40"
                   >
-                    <Undo2 className="h-[18px] w-[18px] text-[#6a7a8a]" />
+                    <Undo2 className="h-[18px] w-[18px]" />
                   </button>
                   {/* 重做（取消上一次撤销）：Ctrl+Shift+Z / Ctrl+Y */}
                   <button
@@ -3269,20 +3357,29 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     disabled={histLen.r === 0}
                     aria-label="重做"
                     title="重做（Ctrl+Shift+Z / Ctrl+Y）"
-                    className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 shadow-md backdrop-blur transition active:scale-95 disabled:opacity-40"
+                    className="flex h-11 w-11 items-center justify-center rounded-full bg-white/70 text-[#6a7a8a] shadow-sm ring-1 ring-white/70 transition active:scale-95 disabled:opacity-40"
                   >
-                    <Redo2 className="h-[18px] w-[18px] text-[#6a7a8a]" />
+                    <Redo2 className="h-[18px] w-[18px]" />
                   </button>
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#d8cfc4]/80" />
                   <button
                     onClick={() => setRoomStyleOpen((o) => !o)}
-                    className="flex h-11 items-center gap-2 rounded-full bg-white/85 px-4 text-[13px] font-medium text-[#4a4a4e] shadow-md backdrop-blur transition active:scale-95"
+                    className={`flex h-11 items-center gap-2 rounded-full px-4 text-[13px] font-medium transition active:scale-95 ${
+                      roomStyleOpen
+                        ? 'bg-[#e8f2f7] text-[#4a7a95] shadow-inner ring-1 ring-[#bcdcea]'
+                        : 'bg-white/70 text-[#4a4a4e] shadow-sm ring-1 ring-white/70'
+                    }`}
                   >
                     <Paintbrush className="h-4 w-4 text-[#7fa8c9]" />
                     地板墙色
                   </button>
                   <button
                     onClick={() => setShopOpen((o) => !o)}
-                    className="flex h-11 items-center gap-2 rounded-full bg-white/85 px-4 text-[13px] font-medium text-[#4a4a4e] shadow-md backdrop-blur transition active:scale-95"
+                    className={`flex h-11 items-center gap-2 rounded-full px-4 text-[13px] font-medium transition active:scale-95 ${
+                      shopOpen
+                        ? 'bg-[#fdeef3] text-[#c96a8c] shadow-inner ring-1 ring-[#f3c2d3]'
+                        : 'bg-white/70 text-[#4a4a4e] shadow-sm ring-1 ring-white/70'
+                    }`}
                   >
                     <Store className="h-4 w-4 text-[#c99a5b]" />
                     商店
@@ -3320,12 +3417,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
         )}
       </AnimatePresence>
 
-      {/* ===== 我的衣柜（走到衣柜前弹出；上半屏透出小人实时试穿） ===== */}
+      {/* ===== 我的衣柜（走到衣柜前弹出；上半屏透出小人实时试穿；女生/男生都可换装） ===== */}
       <Wardrobe
         open={wardrobeOpen}
         wear={wear}
+        wear2={wear2}
         onChange={(w) => {
           setWear(w);
+          saveSoon();
+        }}
+        onChange2={(w) => {
+          setWear2(w);
           saveSoon();
         }}
         onClose={() => {
@@ -3797,8 +3899,18 @@ export default function CoupleHome({ close }: { close: () => void }) {
               </div>
             </div>
 
-            {/* 分类 tab（纯文字） */}
+            {/* 分类 tab（纯文字；首个 = 窗户专项 tab，收起的窗在这里装回） */}
             <div className="scrollbar-none flex gap-2 overflow-x-auto px-4 pb-2 pt-1">
+              <button
+                onClick={() => setShopTab('win')}
+                className={
+                  shopTab === 'win'
+                    ? 'shrink-0 rounded-full bg-[#8fbfa8] px-3 py-1 text-[12px] font-medium text-white'
+                    : 'shrink-0 rounded-full bg-[#f1efe9] px-3 py-1 text-[12px] text-[#8a8a86] transition active:scale-95'
+                }
+              >
+                窗户
+              </button>
               {SHOP_TABS.map((t) => (
                 <button
                   key={t.key}
@@ -3813,6 +3925,55 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 </button>
               ))}
             </div>
+
+            {/* 窗户 tab：九扇窗安装位（收起的窗可装回；编辑模式点窗也能收起） */}
+            {shopTab === 'win' && (
+              <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto px-4 pb-5 pt-1">
+                {WINS.map((w, i) => {
+                  const here = winExist[i] !== false;
+                  return (
+                    <div
+                      key={i}
+                      className="relative flex flex-col items-start gap-1 rounded-2xl bg-[#faf8f3] p-2 text-left shadow-sm ring-1 ring-[#efece2]"
+                    >
+                      {here && (
+                        <span className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-full bg-[#dff0e2] px-1.5 py-0.5 text-[9px] font-semibold leading-none text-[#3f9a58]">
+                          <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                          已装
+                        </span>
+                      )}
+                      {/* 窗户示意图标 */}
+                      <div
+                        className="flex h-16 w-full items-center justify-center rounded-xl"
+                        style={{ background: 'linear-gradient(180deg,#dff0f4 0%,#f2f7f4 100%)' }}
+                      >
+                        <svg viewBox="0 0 48 40" className="h-12 w-12" aria-hidden>
+                          <rect x="4" y="4" width="40" height="32" rx="2.5" fill="none" stroke={winCol ?? '#f0e7d4'} strokeWidth="4" />
+                          <rect x="8" y="8" width="32" height="24" rx="1.5" fill="#cde8f0" opacity={here ? 0.9 : 0.35} />
+                          <line x1="24" y1="8" x2="24" y2="32" stroke={winCol ?? '#f0e7d4'} strokeWidth="2.5" />
+                          <line x1="8" y1="20" x2="40" y2="20" stroke={winCol ?? '#f0e7d4'} strokeWidth="2.5" />
+                        </svg>
+                      </div>
+                      <span className="w-full truncate text-[11.5px] font-medium leading-tight text-[#4a4a4e]">
+                        {WIN_NAMES[i] ?? `窗户 ${i + 1}`}
+                      </span>
+                      {here ? (
+                        <span className="w-full rounded-full bg-[#f1efe9] py-1 text-center text-[11px] text-[#a8a8a4]">
+                          安装中
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => installWin(i)}
+                          className="w-full rounded-full bg-[#8fbfa8] py-1 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
+                        >
+                          + 安装
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* 套装 tab（F3 成套举放） / 商品网格（1:1 实物缩略图 + 已有数量角标；无限购买） */}
             {shopTab === 'set' ? (

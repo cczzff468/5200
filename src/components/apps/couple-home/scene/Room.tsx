@@ -1020,6 +1020,8 @@ export interface RoomProps {
   /** 九扇窗开态 */
   win?: boolean[];
   onToggleWin?: (i: number) => void;
+  /** 每扇窗是否存在（false = 已被用户收起不渲染；缺省 = 全部存在） */
+  winExist?: boolean[];
   /** 每扇窗沿墙坐标（缺省 = 默认位） */
   winPos?: number[];
   /** 三/四扇门沿墙坐标 */
@@ -1071,6 +1073,7 @@ export default function Room({
   onWallPointerDown,
   win,
   onToggleWin,
+  winExist,
   winPos,
   doorPos,
   floorCol,
@@ -1331,8 +1334,9 @@ export default function Room({
         hostBox={slabs.bal}
       />
 
-      {/* —— 九扇上悬窗（数据驱动，编辑模式可选中沿墙滑行） —— */}
+      {/* —— 九扇上悬窗（数据驱动，编辑模式可选中沿墙滑行/收起） —— */}
       {WINS.map((w, i) => {
+        if (winExist && winExist[i] === false) return null; // 已被收起的窗不渲染
         const along = winPos?.[i] ?? w.def;
         const pos: [number, number, number] =
           w.axis === 'z' ? [along, 1.5, w.at + w.side * 0.08] : [w.at + w.side * 0.08, 1.5, along];

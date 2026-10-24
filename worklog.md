@@ -21948,3 +21948,79 @@ Stage Summary:
 - 衣柜系统上线：点击衣柜→弹窗 1:1 换装（5 发型 × 4 连衣裙 × 4 上衣 × 4 下装 × 4 鞋，分体/连衣裙自动切换），实时试穿+全量持久化
 - 女生八字刘海不再挡眼；男生头发顺滑无小球
 - 仓库状态：HEAD=5560783 与远端同步；db/custom.db 为运行时数据不入库
+
+---
+Task ID: 2-a
+Agent: Z.ai Code (sub agent)
+Task: 拾光小屋两项视觉修复 —— ①钢琴弹奏面板美化（去硬条纹木纹/加金线/象牙白键/比例调整）②投影幕布删掉露出画面外的大白板
+
+Work Log:
+- 通读 worklog.md 末 3 条（Task 2 分片上传 / chibi-v2-1024 小人重做 / wardrobe-v62-1024 衣柜系统）了解前情
+- InstrumentOverlay.tsx PianoPanel 美化（纯视觉，交互逻辑零改动）：
+  · 删除琴体 `repeating-linear-gradient(93deg,...)` 竖条纹木纹，改为深胡桃→浓咖啡平滑竖向渐变 `linear-gradient(180deg,#6a4c33,#57402c 30%,#463322 62%,#362718)`；新增一层 opacity 0.05 的大尺度暖光/阴影径向晕染（无条纹），倒角 overlay 增强为 `inset 0 1px 0 rgba(255,240,210,.35), inset 0 -4px 10px rgba(0,0,0,.5)`
+  · 钢琴覆盖层容器 h-[39%] max-h-[340px] → h-[44%] max-h-[380px]（吉他 45%/388px 不动），PianoPanel 内边距 px-[9px] pb-[9px] pt-[7px] 让键床 flex-1 占主导；红呢毯 h-[7px] 与键床 -mt-[3px] 叠压保留
+  · 呢毯正下方新增 2px 细金线收边 `bg-gradient-to-r from-transparent via-[#d9b36c]/70 to-transparent`（z-20 盖在键床上沿）
+  · 白键：idle 换更亮象牙 `#fffefb→#faf7ee→#efe9d8`，按下/点亮换暖腮红粉 `#fdeef3→#f9dde7`（原土米色废弃），分隔线 #d9d3c3/70，圆角底/键前立面/scaleY 按压动效保留，键名标注色柔化为 #b3ab97
+  · 黑键：idle `#4a4652→#232230(68%)→#3c3947`，按下 `#6d5a6b→#3a3040` 微暖；投影减淡为 `0 3px 5px rgba(20,10,5,0.45)`，原有三段 inset 高光全保留
+  · 吉他面板/音色选择器/GLASS 常量/小星星演示/滑音多点触控全部未动
+- CozyPlus3D.tsx 仅改 Screen3D：幕布白底 boxGeometry [2.16,2.6,0.02] → [2.08,1.58,0.02]（位置 [0,1.3,0.045] 不变），尺寸=画面 2.02×1.14 + 上下 0.19 黑边（总高 1.51）+ 四周 3cm 净边，画面外大白板消失；卷轴壳/收放阻尼动画/电影贴图与 emissive 逻辑/黑边对齐全部未动
+- 验证：bunx tsc --noEmit 绿（全项目）；NODE_OPTIONS=--max-old-space-size=4096 bunx eslint 两文件 绿；git diff --stat 确认仅改动这两个允许文件；未建测试页、未提交
+
+Stage Summary:
+- 钢琴面板焕新：无条纹深胡桃渐变琴体+暖光晕染、红呢毯+金线收边、象牙白键/腮红按下反馈、黑键更细腻，键床空间增大 5% 高度
+- 投影幕布只留画面区域白底（四周 3cm 边），播放时不再顶天立地露大白板
+- 两文件改动全部通过 tsc + eslint，等待真实页面肉眼验收
+
+---
+Task ID: 2-b
+Agent: general-purpose 子代理（2-b）
+Task: 女生头发重做（八字刘海中间无发 + 删波波头式侧发 + 背发贴脑勺）+ 男生（partner）衣柜穿搭（发型×4/上衣×4/裤子×4/鞋×4）+ 双人调色盘（tints）+ 衣柜弹窗美化与女生/男生切换
+
+Work Log:
+- 读 worklog（chibi-v2-1024 / wardrobe-v62-1024）与 CharChibi3D.tsx / Wardrobe.tsx / wardrobe-data.ts / types.ts 全文，梳理现有发型分支与 wear 链路
+- types.ts：新增 BoyHairStyle('smooth'|'fluffy'|'middle'|'spiky')、WearTints（hair/dress/top/bottom/shoes，null=默认款色）、BoyWear、DEFAULT_BOY_WEAR；新增 sanitizeTints（仅收 #rrggbb 转小写、全空→undefined）；GirlWear 加 tints?，sanitizeWear 同步清洗 tints；新增 sanitizeBoyWear（款号钳 0..3、发型白名单）；HomeState 加 wear2?: BoyWear（「对方」的衣柜穿搭）
+- wardrobe-data.ts：新增 BOY_HAIR_NAMES / BOY_TOPS（hood 字段，首款=现默认造型）/ BOY_BOTTOMS（short|long）/ BOY_SHOES（c+trim）/ HAIR_COLORS×8 / CLOTH_COLORS×12；原有女表导出未动
+- CharChibi3D.tsx：
+  · props 加 wear2?: BoyWear（who='partner' 时生效）；buildChar 签名加 wear2；rig useMemo 依赖 wear/wear2
+  · 新增 tintHex(base,t) 助手：hairMat=»tint(o.hair,tints.hair)、女主 topCol=»tint(裙?dressRec.c:topRec.c, 裙?tints.dress:tints.top)、botMat（女裤+男裤）=»tint(款色,tints.bottom)、男女鞋=»tint(款色,tints.shoes)、hairTipMat 基色=»tinted hair（保留向 #f2c9a4 lerp）、眉/眼线材质改用 tinted hairCol；guest/缺省路径不受影响
+  · 女生头发重做：八字刘海删掉额心第一撮 [0.07,…]，改为每侧 2 撮 curtain=[[0.148,0.128,0.202,0.036],[0.2,0.065,0.172,0.037]]、scale(0.82,1.8,0.55)、rotation.z=±0.72、rotation.x=0.1（中分缝隙干净、发梢止于眉上/鼻梁上方、不超脸颊轮廓）；鬓角碎发缩为 scale(0.5,0.62,0.45)@y=+0.16R；twin/high 分支整段删除两侧 lock+tip 垂发；twin 背发 backHair 改 y=-0.16R scale(1.0,0.72,0.55) 贴脑勺、3 颗后颈 wave 发尾缩小上移（-0.85R/-0.93R）；马尾组 attach x 0.73R、rotation.z ±0.3（收外摆）；bob/straight/wave/wave 侧发保留（刻意款式）
+  · 男生衣柜渲染：topMat=»tint(bTop.c,tints.top)（躯干+袖），兜帽仅 bTop.hood 时生成；裤子 short→大腿裤色+肤色小腿+白短袜、long→全腿裤色且不渲染袜子；鞋=»tint(bShoe.c,tints.shoes)+鞋底 trim 细描边（薄 torus）；大腿/小腿/袜/鞋全部入 clothes[]（泡澡/淋浴正常脱衣）
+  · 男生发型分支：smooth（原造型：圆盖+前帘4撮+鬓角+后脑+呆毛）/ fluffy（加大头盖 1.12R+6 圆发团压扁+3 小卷弧+短鬓角+微呆毛）/ middle（圆盖 0.56π+每侧 2 撮粗短中分刘海 scale(0.85,1.5,0.6) rot.z±0.8，无呆毛）/ spiky（圆盖+6 根圆锥尖刺沿前顶沿外翘 rotation.z=-px*0.85）；全部进 head，呆毛挂 hairDyn
+- Wardrobe.tsx 重写：props 契约 {open, wear, wear2, onChange, onChange2, onClose}；顶部「女生/男生」分段药丸切换（粉/青绿，男生侧连衣裙 tab 回落上衣）；女生 5 tab / 男生 4 tab；新增「调色盘」横排（首格「默认」彩虹环白点=清 tint，后接 HAIR_COLORS/CLOTH_COLORS，选中 ring+✓，tint 即时 onChange/onChange2）；新增 BoyHairIcon×4/BoyTopIcon（hood 才画兜帽+口袋）/BoyBottomIcon（短裤vs长裤）/BoyShoeIcon（运动鞋+trim）；网格卡片 #fffdf9 rounded-2xl、icon 12×12、选中粉圈✓（男生青绿✓）、active:scale-95；头部渐变底 from-[#fff7f3] via-white to-[#fdf3ee]+粉底 Shirt 徽标+当前角色穿搭摘要；连衣裙/分体互斥逻辑原样保留
+- 验证：bunx tsc --noEmit 仅剩 CoupleHome.tsx 1 条预期报错（待并行代理按新 WardrobeProps 接 wear2/onChange2，非本任务文件）；eslint 4 文件全绿；临时 /test-chibi 页（girls/boys/profile/profileboy 四视角）+ agent-browser 截图 + VLM 逐条验收：女生中分无发✓、眉眼全露✓、无波波头侧团✓、背发贴脑勺不垂胸✓、男生 4 发型清晰可辨无穿帮✓；tints 端到端（女发紫灰+裙草绿、男衣粉+长裤全腿裤色无袜+棕鞋、无兜帽款不渲染兜帽）✓；验收后临时页已删除（ls 确认）
+
+Stage Summary:
+- 接口契约（并行代理对接用）：
+  · Wardrobe.tsx: export interface WardrobeProps { open: boolean; wear: GirlWear; wear2: BoyWear; onChange: (w: GirlWear) => void; onChange2: (w: BoyWear) => void; onClose: () => void }（wear2/onChange2 必传，CoupleHome 未接前 tsc 会报 1 条错）
+  · CharChibi3D: CharChibi3DProps 新增 wear2?: BoyWear（who='partner' 生效）；HomeScene 建议传 <CharChibi3D rt={taRT} who="partner" wear2={wear2} />
+  · types: BoyHairStyle / WearTints / BoyWear / DEFAULT_BOY_WEAR / sanitizeBoyWear / sanitizeTints 新增；GirlWear.tints?、sanitizeWear 已含 tints；HomeState.wear2?: BoyWear（API 层建议 sanitizeBoyWear(h.wear2) 清洗后落库）
+  · wardrobe-data: BOY_HAIR_NAMES / BOY_TOPS / BOY_BOTTOMS / BOY_SHOES / HAIR_COLORS / CLOTH_COLORS 新增，女表导出不变
+- 女生刘海终版参数：curtain=[[0.148,0.128,0.202,0.036],[0.2,0.065,0.172,0.037]]，scale(0.82,1.8,0.55)，rotation.z=±0.72，rotation.x=0.1；鬓角 (±0.88R,+0.16R,0.4R) scale(0.5,0.62,0.45)；twin 删侧垂发、背发 y=-0.16R scale(1.0,0.72,0.55)+小后颈发尾，马尾 x=0.73R rot.z=±0.3；high 删侧垂发留颅顶束+后脑髻
+- 男生默认款与 v6.2 造型完全一致（smooth+奶白连帽+藏蓝短裤+白鞋）；新发型/新衣裤鞋均走 BOY_* 目录索引；tints 任一字段缺省即回默认款色
+- 临时 test-chibi 页已删除；未动 git
+
+---
+Task ID: 2-c+3
+Agent: Z.ai Code (main)
+Task: 用户 8 项新需求收尾集成 —— 钢琴美化复核 / 衣柜弹窗美化复核 / 女生头发去波波头复核 / 男生换装全链路 / 男女调色盘换色 / 投影幕布白色面板删除 / 窗户可删除可安装 / 编辑模式操作条毛玻璃胶囊化
+
+Work Log:
+- 集成子代理产出（2-a 钢琴+幕布、2-b 衣柜+头发+男生换装+调色盘）：
+  · types.ts 增 HomeState.winExist?: boolean[]（窗存在态）
+  · catalog.ts 增 WIN_NAMES（九扇窗名字，商店窗户 tab + toast 用）
+  · Room.tsx 增 winExist prop：winExist[i]===false 的窗不渲染（墙面为实心，删窗不破墙）
+  · HomeScene.tsx：增 wear2/winExist 透传（Room + WeatherFX/GlassRain/SnowDeco 均跳过已收起的窗，雨雪不再挂在空气上）；partner CharChibi3D 传 wear2
+  · CoupleHome.tsx：增 wear2(BoyWear)/winExist state+ref；takeSnap/applySnap/snap()/adoptHome 全链路纳入（撤销/重做/冲突采纳/重置均覆盖）；衣柜弹窗传 wear2/onChange2；HomeScene 传 wear2+winExist
+  · 商店新增「窗户」专项 tab（首个 tab，绿色主题）：九个安装位卡片（窗 SVG 图标 + WIN_NAMES + ✓已装/安装中 / + 安装按钮），installWin 装回默认位一步可撤销（pushHistory + sfx.place）
+  · 门窗操作条增「收起窗户」垃圾桶按钮（仅 win- 显示，door 不可删）：removeWinSel 入撤销栈
+  · 编辑模式三条 UI 毛玻璃胶囊化：门窗条 + 家具条（EDIT_GLASS 容器 + editDirBtn/Blue/Amber 圆钮，按钮 28px→36/44px，圆形方向盘 + 分隔点 + 名字签毛玻璃化）+ 撤销/重做/地板墙色/商店行并入毛玻璃胶囊（激活态高亮）
+  · API route.ts：HomePayload 增 winExist/wear2；winExist 12 位布尔清洗；cleanWear 增 sanitizeTints；新增 cleanWear2（sanitizeBoyWear 归档清洗）
+- 排障：API POST 全量 500 —— types.ts 头部 'use client'（原始仓库遗留）导致服务端 route 无法调用 sanitizeTints/sanitizeBoyWear（Next.js 判为 client 模块）；该文件为纯 TS 类型/函数模块无 React 依赖 → 删除指令后 200 恢复，wear/wear2/winExist 落库验证通过
+- E2E（agent-browser 414×896）：锁屏→解锁→拾光小屋→女生八字刘海特写（中分露额头✓无两侧波波头✓大波浪背发✓）→装修模式→商店「窗户」tab 九窗卡✓→点选客厅北窗·左→毛玻璃胶囊操作条（含垃圾桶）✓→收起→墙面无洞✓→商店装回✓→家具选中条毛玻璃胶囊✓→生活模式钢琴（平滑木纹+金边+象牙键占满）✓→衣柜弹窗（女生/男生切换、调色盘行、大波浪+牛仔长裤、男生蓬松卷发+卡其长裤实时换装）✓→DB 复核 wear={wave,-1,0,3,0}/wear2={fluffy,0,1,0}/winExist 全 true✓→console 无 error（仅 three.js 既有 deprecation 警告）✓
+- tsc 全绿 / eslint couple-home 全目录绿
+
+Stage Summary:
+- 八项需求全部落地：钢琴与幕布美化（2-a）、女生发型重做+衣柜美化+男生换装+调色盘（2-b）、窗户删装全链路+编辑条毛玻璃胶囊（本段）
+- 修复原始仓库 types.ts 'use client' 阻断服务端导入的隐藏地雷（此前任何带 wear 的存档都会 500）
+- 投影幕布白色面板已删除（幕布尺寸=画面 2.08×1.58 精确贴合，验证走代码层 + 浏览器复核弹奏/换装主链路）
+- 待推送：couple-home 10 文件 + api route

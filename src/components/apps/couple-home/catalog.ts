@@ -259,6 +259,19 @@ export const WINS: WinDef[] = [
   { room: 'ba', axis: 'x', at: BATH_X1, side: -1, ry: -Math.PI / 2, def: 1.2, min: -1.6, max: 2.0 },
 ];
 
+/** 每扇窗的名字（编辑模式选中签 / 商店「窗户」tab 用；与 WINS 索引一一对应） */
+export const WIN_NAMES: string[] = [
+  '客厅北窗·左',
+  '客厅北窗·右',
+  '客厅西窗',
+  '卧室西窗',
+  '卧室南窗',
+  '厨房东窗',
+  '厨房南窗',
+  '卫生间北窗',
+  '卫生间东窗',
+];
+
 /** 门定义：axis/at 同 WinDef（门组落在墙中心线上） */
 export interface DoorDef {
   id: 'bed' | 'kt' | 'bath' | 'bal';
