@@ -21858,3 +21858,23 @@ Work Log:
 Stage Summary:
 - 上传通道已升级为分片上传，网关大请求体限制被彻底绕开；等待用户重新上传 小人男生.glb(71.3MB) / 小人女生.glb(73.8MB)
 - 文件落地目录：/home/z/my-project/upload-glb/
+
+---
+Task ID: 0
+Agent: Z.ai Code (主协调者)
+Task: 从 GitHub 拉取 cczzff468/5200 仓库到本地项目并跑通验证，准备后续功能修改
+
+Work Log:
+- git clone 直连报 GnuTLS TLS 错误，改用 GitHub API 下载 tarball（commit ace3484）解压
+- 同步全部项目文件到 /home/z/my-project（src/public/db/prisma/mini-services/scripts/tools/deploy/tests/examples 等，保留沙箱自身 skills 与 .zscripts）
+- bun install 补装 89 个依赖（three/@react-three/leaflet/web-push/speech-asr/idb/jsmediatags 等）
+- bun run db:push：schema 已同步，Prisma Client 生成成功
+- 启动 dev server（端口3000），GET / 200；instrumentation.ts 的 Edge Runtime 警告为已知误报（运行时 ncm-keeper 正常 spawn）
+- Agent Browser 端到端验证：锁屏→上滑解锁→主屏→信息App→打开小助手会话→发送消息→AI 回复（TTS 语音条）全流程通过；POST /api/chat 200；netease-api 音乐服务 200；无浏览器 console error
+- lint：eslint 全量通过（需 NODE_OPTIONS=--max-old-space-size=4096，默认内存会 OOM）
+- git：添加 origin（token 内嵌），配置 http.version=HTTP/1.1 解决 TLS 抖动，fetch + reset --soft 对齐 origin/main (ace3484)，恢复了被排除的 .e2e/skills/e2e-tmp，工作区除 db/custom.db（运行时数据）外与远端完全一致
+
+Stage Summary:
+- 仓库已就位并可运行：HEAD=origin/main(ace3484)，后续改动可直接 commit + push
+- 项目为「仿iOS AI聊天手机」：105 个 App 组件（微信/QQ模拟、视频通话、音乐、情侣小屋3D、外卖、朋友圈等），netease-api 等 mini-services 由 instrumentation 自动拉起
+- 等待用户提出具体修改/新增功能需求
