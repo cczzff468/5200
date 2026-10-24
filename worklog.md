@@ -22024,3 +22024,21 @@ Stage Summary:
 - 修复原始仓库 types.ts 'use client' 阻断服务端导入的隐藏地雷（此前任何带 wear 的存档都会 500）
 - 投影幕布白色面板已删除（幕布尺寸=画面 2.08×1.58 精确贴合，验证走代码层 + 浏览器复核弹奏/换装主链路）
 - 待推送：couple-home 10 文件 + api route
+---
+Task ID: v64-1024
+Agent: Z.ai Code (main)
+Task: 用户 5 项修复 —— ①编辑模式按钮重叠修复 ②女生头发重做 ③全色系调色盘 ④落地窗帘改布料（关闭全遮窗） ⑤音乐家具播放时隐藏全局迷你播放器
+
+Work Log:
+- 通读 worklog 末 4 条 + 双截图（编辑条按钮重叠 / 窗帘柱子现状），定位 6 文件
+- ① CoupleHome.tsx 编辑工具条重构：家具条单排 ≈480px 超出 414px 屏宽 → flex 挤压导致 rounded-full 胶囊背景变形重叠（用户截图1）→ 改双排布局：上排胶囊=移动方向盘/升降/旋转（全部 shrink-0），下排胶囊=调色/收起/取消；门窗条方向盘加 shrink-0；撤销/重做按钮 shrink-0，「地板墙色」「商店」加 whitespace-nowrap（修截图1文字换行「地板墙/色」「商/店」）
+- ② CharChibi3D.tsx 女生头发 v6.4 重做：八字刘海从每侧 2 撮粗球（糊成波波头）→ 每侧 3 撮修长水滴束 scale(0.6,2.05,0.55) rot.z±0.58，中分缝 |x|<0.07 全露额头，发梢止于眉尾/眼头上方；旧鬓角碎发团（波波头侧团）→ 龙须鬓发（每侧细胶囊+发梢挑染贴脸垂到下巴）；头盖 thetaLength 0.48π→0.46π 前缘再抬（额头顶多露一截）；双马尾：旧黄色圆球发绳（用户截图里的"小球"）→ 扎点小蝴蝶结 buildBowAt + 水滴发束（胶囊+中段波浪珠+挑染发梢），删除旧的两颗大蝴蝶结避免双份；大波浪侧发串收细（r 0.19~0.21→0.14~0.18、x 收拢 0.94~1.0R）、背发 scale 收窄防"波波头"轮廓
+- ③ wardrobe-data.ts 调色盘扩充：HAIR_COLORS 8→16（自然黑棕→奶茶金→幻彩紫蓝灰银），CLOTH_COLORS 12→24（粉/黄/绿/蓝/紫/中性六色系）；Wardrobe.tsx 新增「全色系」行：彩虹色相条（HUE_STRIP_BG 渐变、点击按 x 取 hue → 头发 hsl(h,46%,34%) 烟熏感 / 衣鞋 hsl(h,64%,68%) 马卡龙感，含 hexToHue/hslToHex 助手 + 键盘左右微调 + 当前色指示圈）+ 自定义取色器（input[type=color] 系统全色盘，什么颜色都有）；slider a11y 补 aria-valuenow/min/max
+- ④ Cozy3D.tsx Curtain3D 重写：旧 6 根胶囊柱（用户说"是柱子不是布"，柱间露窗）→ 每侧实体布艺帘片：布面主板 box 0.78×2.12 + 5 条压扁胶囊压褶（长短交替）+ 4 球波浪底摆 + 穿杆帘头；开合参数重校：open 收拢至 ±0.95/缩 0.3，closed 两片中线相接 ±0.39 → 合拢共 1.56m 全遮 1.5m 窗框；useFrame 加微风摆动 rotation.y sin
+- ⑤ 迷你播放器抑制：MusicGlobalMini.tsx useMiniPlayer store 增 suppress/setSuppress，visible 条件 && !suppress；CoupleHome.tsx 挂载期间 effect 同步 suppress = musicPlaying || !!inst（唱片机/八音盒/音箱点歌 + 钢琴/吉他弹奏界面打开），卸载/依赖变化自动复位 —— 音乐家具放歌时全局迷你播放器消失，退出小屋自动恢复
+- 排障：suppress effect 初版引用了后声明的 inst（TDZ 风险）→ 移到 inst 声明之后；E2E 摇杆要点：agent-browser 必须 down→move→hold→up（只 down+up 无 move 不产生方向）
+- E2E（agent-browser 414×896）：锁屏→解锁→拾光小屋→装修模式：家具条双排无重叠✓「地板墙色/商店」单行✓家具调色盘/撤销条正常✓；女生正面：中分露额头✓八字刘海斜扫✓眉眼全露✓双马尾粉蝴蝶结✓；衣柜弹窗：调色盘16色+全色系彩虹条+自定义按钮✓女生/男生切换✓（男生4tab）；点彩虹条→下装染薄荷青→选牛仔长裤切分体→3D实时染色✓→关弹窗→DB wear.tints={"bottom":"#79e2cb"} 落库✓；音乐App游客模式放歌→主屏迷你播放条出现✓→进拾光小屋（唱片机联动转）迷你播放条消失✓→退出主屏恢复✓；窗帘点击关闭→两片布中线相接全遮窗户✓；console 无 error（仅 three.js 既有 deprecation 警告）；tsc 全绿 / eslint 全绿
+
+Stage Summary:
+- 五项需求全部落地：编辑条双排毛玻璃胶囊（不再重叠）、女生发型 v6.4（中分八字刘海+龙须鬓+蝴蝶结双马尾，无波波头）、全色系调色盘（彩虹条+系统全色盘+32预设，男女衣服头发鞋全可染）、窗帘真布料（合拢全遮窗+微风摆动）、音乐家具放歌时全局迷你播放器自动隐藏
+- 改动 6 文件：CoupleHome.tsx / MusicGlobalMini.tsx / CharChibi3D.tsx / Cozy3D.tsx / Wardrobe.tsx / wardrobe-data.ts；db/custom.db 运行时数据不入库

@@ -83,9 +83,14 @@ interface MiniPlayerUiState {
   cycle: () => MiniMode;
   dock: MiniDock;
   setDock: (d: MiniDock) => void;
+  /** 场景压制（拾光小屋）：App 内音乐家具正在放歌时置 true，全局迷你播放器临时隐藏（挂载方负责复位） */
+  suppress: boolean;
+  setSuppress: (v: boolean) => void;
 }
 
 export const useMiniPlayer = create<MiniPlayerUiState>((set, get) => ({
+  suppress: false,
+  setSuppress: (v) => set({ suppress: v }),
   mode: 'bar',
   setMode: (m) => {
     try {
@@ -391,6 +396,7 @@ function GlobalMiniRecord({ layerRef }: { layerRef: React.RefObject<HTMLDivEleme
 export default function MusicGlobalMini() {
   const current = useMusic((s) => s.current);
   const mode = useMiniPlayer((s) => s.mode);
+  const suppress = useMiniPlayer((s) => s.suppress);
   const activeApp = useUI((s) => s.activeApp);
   const locked = useUI((s) => s.locked);
   const screenOff = useUI((s) => s.screenOff);
@@ -398,7 +404,8 @@ export default function MusicGlobalMini() {
   // 拖动约束参照层：整个手机壳内域（唱片只能在本屏内上下拖）
   const layerRef = useRef<HTMLDivElement | null>(null);
 
-  const visible = !!current && !locked && !screenOff && !switcherOpen && activeApp !== 'music';
+  // suppress：拾光小屋等场景内音乐家具（唱片机/八音盒/音箱/钢琴/吉他）正在放歌时压制迷你播放器
+  const visible = !!current && !locked && !screenOff && !switcherOpen && activeApp !== 'music' && !suppress;
 
   // 点击穿透修复（第二十轮反馈：点条身开播放页时，底下 App/图标也被打开）：
   // 点按 → 打开播放页 → activeApp='music' → visible 立即变 false；若此刻直接卸载，

@@ -80,12 +80,15 @@ export function Curtain3D({ col, open }: CozyProps) {
 
   useFrame((_, dt) => {
     const d = Math.min(dt, 0.05);
-    // open=true：收拢到两侧（30% 宽、x=±0.95）；false：合拢遮满（各盖到中线）
+    const t = performance.now() / 1000;
+    // open=true：收拢到两侧（30% 宽、x=±0.95）；false：两片布面在中线相接（各 0.78 宽 → 合拢共 1.56m，把窗户全部遮住）
     panels.current.forEach((g, i) => {
       if (!g) return;
       const s = i === 0 ? -1 : 1;
-      g.position.x = THREE.MathUtils.damp(g.position.x, s * (open ? 0.95 : 0.575), 5, d);
+      g.position.x = THREE.MathUtils.damp(g.position.x, s * (open ? 0.95 : 0.39), 5, d);
       g.scale.x = THREE.MathUtils.damp(g.scale.x, open ? 0.3 : 1, 5, d);
+      // 微风摆动（布料垂坠的轻柔呼吸感）
+      g.rotation.y = Math.sin(t * 0.9 + i * 1.7) * 0.012;
     });
   });
 
@@ -102,19 +105,38 @@ export function Curtain3D({ col, open }: CozyProps) {
           {mat(brass, 0.3, { metalness: 0.75 })}
         </mesh>
       ))}
-      {/* 左右两片布艺窗帘（每片 6 根竖向波浪条） */}
+      {/* 左右两片布艺窗帘（v6.4：实心布面替代旧款胶囊柱——合拢时是一整块不透窗的布，竖向压褶 + 波浪底摆 + 穿杆帘头） */}
       {[-1, 1].map((s, si) => (
-        <group key={s} ref={(g) => { panels.current[si] = g; }} position={[s * 0.575, 0, 0]}>
-          {[0, 1, 2, 3, 4, 5].map((i) => (
+        <group key={s} ref={(g) => { panels.current[si] = g; }} position={[s * 0.39, 0, 0]}>
+          {/* 布面主体（实心板，合拢时不透窗） */}
+          <mesh position={[0, 1.1, 0]} castShadow>
+            <boxGeometry args={[0.78, 2.12, 0.02]} />
+            {mat(fabric, 0.95)}
+          </mesh>
+          {/* 竖向压褶（压扁胶囊凸出布面，长短交替营造自然褶皱） */}
+          {[-0.29, -0.145, 0, 0.145, 0.29].map((px, i) => (
             <mesh
-              key={i}
-              position={[(i - 2.5) * 0.21, 1.12, i % 2 === 0 ? -0.016 : 0.016]}
-              castShadow={i === 0 || i === 5}
+              key={px}
+              position={[px, 1.09, 0.016]}
+              scale={[1, 1, 0.3]}
+              castShadow={i === 0 || i === 4}
             >
-              <capsuleGeometry args={[0.05, 2.08, 4, 10]} />
+              <capsuleGeometry args={[0.042, 2 - (i % 2) * 0.07, 4, 10]} />
+              {mat(fabric, 0.98)}
+            </mesh>
+          ))}
+          {/* 底摆微波浪（小球收边，布料垂感） */}
+          {[-0.26, -0.09, 0.09, 0.26].map((px, i) => (
+            <mesh key={px} position={[px, 0.048 + (i % 2) * 0.02, 0.014]}>
+              <sphereGeometry args={[0.036, 10, 8]} />
               {mat(fabric, 0.95)}
             </mesh>
           ))}
+          {/* 顶部穿杆帘头（盖住布面顶端与横杆衔接） */}
+          <mesh position={[0, 2.16, 0.008]} castShadow>
+            <boxGeometry args={[0.8, 0.1, 0.036]} />
+            {mat(fabric, 0.9)}
+          </mesh>
         </group>
       ))}
     </group>

@@ -80,21 +80,20 @@ export const BOY_SHOES: { name: string; c: string; trim: string }[] = [
   { name: '米色小短靴', c: '#c9a886', trim: '#ab8a68' },
 ];
 
-/** 发色调色盘（衣柜 UI 用） */
-export const HAIR_COLORS: string[] = ['#6b4a38', '#2f2b29', '#a97a5c', '#8a5a3c', '#c98d6b', '#4a3d52', '#7a6a8a', '#b8865f'];
+/** 发色调色盘（衣柜 UI 用 · v6.4 全色系扩充：自然发色 + 幻彩发色） */
+export const HAIR_COLORS: string[] = [
+  '#241d1a', '#3a2a22', '#5b3a28', '#6b4a38',
+  '#8a5a3c', '#a97a5c', '#c98d6b', '#b8865f',
+  '#d9b38c', '#e6c9a3', '#c9a8e8', '#7a6a8a',
+  '#4a3d52', '#6a7a95', '#c96a84', '#b8b8bc',
+];
 
-/** 服装调色盘（衣柜 UI 用） */
+/** 服装调色盘（衣柜 UI 用 · v6.4 全色系扩充：粉/黄/绿/蓝/紫/中性 六色系） */
 export const CLOTH_COLORS: string[] = [
-  '#f7c6d2',
-  '#c2e4d2',
-  '#f6dfb2',
-  '#dcc8ec',
-  '#f4b3c2',
-  '#9db8a2',
-  '#cdb69c',
-  '#aeb4b8',
-  '#f7f1e3',
-  '#46536b',
-  '#b06a5a',
-  '#e8a3b3',
+  '#f9c8d4', '#f29bb4', '#e56d92', '#c94f75',
+  '#f6dfb2', '#f2cf7e', '#e8b45c', '#e8925c',
+  '#c2e4d2', '#9fd8bd', '#7fc8ae', '#5da58a',
+  '#cfe6f2', '#9cc7ee', '#6a9ec9', '#46536b',
+  '#dcc8ec', '#c9a8e8', '#a87fc9', '#7a5a99',
+  '#f7f1e3', '#aeb4b8', '#5a5a5e', '#4a3f3d',
 ];

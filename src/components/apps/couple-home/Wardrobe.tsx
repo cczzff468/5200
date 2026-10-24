@@ -13,7 +13,7 @@
 
 import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, Shirt, X } from 'lucide-react';
+import { Check, Plus, Shirt, X } from 'lucide-react';
 import type { BoyHairStyle, GirlHairStyle, GirlWear, BoyWear, WearTints } from './types';
 import {
   BOY_BOTTOMS,
@@ -40,6 +40,39 @@ const TINT_SLOT: Record<WardTab, keyof WearTints> = {
   bottom: 'bottom',
   shoes: 'shoes',
 };
+
+/** HSL → #rrggbb（彩虹色相条选色用） */
+function hslToHex(h: number, s: number, l: number): string {
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const c = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(255 * c)
+      .toString(16)
+      .padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+/** 彩虹色相条背景（v6.4 全色系：40° 间隔 9 色渐变，尾首过渡自然） */
+const HUE_STRIP_BG =
+  'linear-gradient(90deg,#e86a6a,#e89a5a,#e8c95a,#a8d06a,#5abc8a,#5aaed0,#7a8ae8,#b07ae0,#e06ab8,#e86a6a)';
+
+/** #rrggbb → 色相 0..360（无彩色返回 0） */
+function hexToHue(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255;
+  const g = ((n >> 8) & 255) / 255;
+  const b = (n & 255) / 255;
+  const mx = Math.max(r, g, b);
+  const mn = Math.min(r, g, b);
+  if (mx === mn) return 0;
+  const d = mx - mn;
+  let h: number;
+  if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+  else if (mx === g) h = ((b - r) / d + 2) * 60;
+  else h = ((r - g) / d + 4) * 60;
+  return h;
+}
 
 const TABS_GIRL: { key: WardTab; label: string }[] = [
   { key: 'hair', label: '发型' },
@@ -542,7 +575,7 @@ export default function Wardrobe({ open, wear, wear2, onChange, onChange2, onClo
             </div>
 
             {/* 调色盘（当前分类槽位自选色；首格 = 还原默认） */}
-            <div className="flex items-center gap-2 px-4 pb-1">
+            <div className="flex items-center gap-2 px-4 pb-0.5">
               <span className="shrink-0 text-[11px] font-semibold text-[#b09a92]">调色盘</span>
               <div className="flex items-center gap-1.5 overflow-x-auto py-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 <button
@@ -571,6 +604,62 @@ export default function Wardrobe({ open, wear, wear2, onChange, onChange2, onClo
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* 全色系（v6.4）：彩虹色相条一键选色 + 自定义取色器（系统全色盘，什么颜色都有） */}
+            <div className="flex items-center gap-2 px-4 pb-1">
+              <span className="shrink-0 text-[11px] font-semibold text-[#b09a92]">全色系</span>
+              <div
+                role="slider"
+                tabIndex={0}
+                aria-label="彩虹色相条：点击选色相"
+                aria-valuenow={curTint ? Math.round(hexToHue(curTint)) : 0}
+                aria-valuemin={0}
+                aria-valuemax={360}
+                aria-valuetext={curTint ?? '默认'}
+                onClick={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+                  const hue = Math.round(ratio * 360);
+                  // 头发：偏深饱和（烟熏感）；衣服/鞋：明快马卡龙感
+                  const col =
+                    tab === 'hair' ? hslToHex(hue, 0.46, 0.34) : hslToHex(hue, 0.64, 0.68);
+                  setTint(col);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+                  const cur = curTint ?? (tab === 'hair' ? '#6b4a38' : '#f9c8d4');
+                  const step = e.key === 'ArrowRight' ? 18 : -18;
+                  const hue = (hexToHue(cur) + step + 360) % 360;
+                  setTint(tab === 'hair' ? hslToHex(hue, 0.46, 0.34) : hslToHex(hue, 0.64, 0.68));
+                }}
+                className="relative h-5 min-w-0 flex-1 cursor-pointer touch-none rounded-full ring-1 ring-black/10 transition active:scale-[0.98]"
+                style={{ background: HUE_STRIP_BG }}
+              >
+                {curTint && (
+                  <span
+                    className="pointer-events-none absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md"
+                    style={{
+                      left: `${(hexToHue(curTint) / 360) * 100}%`,
+                      backgroundColor: curTint,
+                    }}
+                  />
+                )}
+              </div>
+              <label
+                className="relative flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full transition active:scale-90"
+                style={{ background: 'conic-gradient(#ff5757,#ffb44d,#ffe14d,#7ade5a,#4db8ff,#a05aff,#ff5ac8,#ff5757)' }}
+                title="自定义颜色（全色盘）"
+              >
+                <input
+                  type="color"
+                  value={curTint ?? (tab === 'hair' ? '#6b4a38' : '#f9c8d4')}
+                  onChange={(e) => setTint(e.target.value)}
+                  aria-label="自定义颜色（系统全色盘）"
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                />
+                <Plus className="pointer-events-none h-3.5 w-3.5 text-white drop-shadow" strokeWidth={3} />
+              </label>
             </div>
 
             {/* 款式网格 */}

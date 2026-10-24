@@ -71,6 +71,7 @@ import Joystick from './Joystick';
 import InstrumentOverlay from './InstrumentOverlay';
 import { SongSheet } from './SongSheet';
 import { useMusic } from '@/lib/ios/music-store';
+import { useMiniPlayer } from '@/components/ios/MusicGlobalMini';
 import { localDB, genId } from '@/lib/ios/db';
 import { useWeatherSnapshot } from '../weather-core';
 import { addAlbum } from '@/lib/ios/album-store';
@@ -644,6 +645,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 乐器弹奏特写（吉他/钢琴：镜头推近 + 可弹奏覆盖层；ref 给 GameLoop 高频读） */
   const instRef = useRef<{ kind: 'piano' | 'guitar'; itemId: string } | null>(null);
   const [inst, setInst] = useState<{ kind: 'piano' | 'guitar'; itemId: string } | null>(null);
+  // 音乐家具（唱片机/八音盒/音箱点歌 + 钢琴/吉他弹奏）放歌时：压制全局迷你播放器（退出小屋自动复位）
+  useEffect(() => {
+    useMiniPlayer.getState().setSuppress(musicPlaying || !!inst);
+    return () => useMiniPlayer.getState().setSuppress(false);
+  }, [musicPlaying, inst]);
   /** 手持物（拿饮料/咖啡后杯子握在右手，可以端着到处逛；coffee = 咖啡冒热气款） */
   const carryRef = useRef({ cup: false, coffee: false });
   const [carryCup, setCarryCup] = useState(false);
@@ -3103,7 +3109,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 </div>
                 <div className={`flex items-center gap-1.5 rounded-full p-2 ${EDIT_GLASS}`}>
                   {/* 四向微调（沿墙滑行）：毛玻璃圆形方向盘 */}
-                  <div className="grid grid-cols-3 grid-rows-3 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
+                  <div className="grid shrink-0 grid-cols-3 grid-rows-3 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
                     <span />
                     <button
                       onClick={() => issueMoveCmd('up')}
@@ -3187,144 +3193,148 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 <div className="mx-auto mb-2 w-fit rounded-full border border-white/40 bg-black/25 px-3.5 py-1 text-[11px] font-medium text-white/95 shadow-sm backdrop-blur-md">
                   {selEntry.name}
                 </div>
-                <div className={`flex items-center gap-1.5 rounded-full p-2 ${EDIT_GLASS}`}>
-                  {/* 移动：四向方向盘 + 中央「移动模式」开关
-                     （两种搬运方式：① 点上下左右逐步微调 ② 开移动模式后按住画面拖动） */}
-                  <div className="grid grid-cols-3 grid-rows-3 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
-                    <span />
-                    <button
-                      onClick={() => issueMoveCmd('up')}
-                      aria-label="上移一格"
-                      title="上移一格"
-                      className={editDirBtn}
-                    >
-                      <ChevronUp className="h-4 w-4" />
-                    </button>
-                    <span />
-                    <button
-                      onClick={() => issueMoveCmd('left')}
-                      aria-label="左移一格"
-                      title="左移一格"
-                      className={editDirBtn}
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={toggleMove}
-                      aria-label="移动模式（按住画面拖动搬运）"
-                      title="移动模式（按住画面拖动搬运）"
-                      className={
-                        moveOn
-                          ? 'flex h-9 w-9 items-center justify-center rounded-full bg-[#cdeacd] text-[#2f7d4d] shadow-inner ring-1 ring-[#9ed4ae]'
-                          : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90'
-                      }
-                    >
-                      <Move className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => issueMoveCmd('right')}
-                      aria-label="右移一格"
-                      title="右移一格"
-                      className={editDirBtn}
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </button>
-                    <span />
-                    <button
-                      onClick={() => issueMoveCmd('down')}
-                      aria-label="下移一格"
-                      title="下移一格"
-                      className={editDirBtn}
-                    >
-                      <ChevronDown className="h-4 w-4" />
-                    </button>
-                    <span />
+                {/* 双排布局（单排超出屏宽会被挤压重叠）：上排 = 移动/升降/旋转，下排 = 调色/收起/取消 */}
+                <div className="flex flex-col items-center gap-1.5">
+                  <div className={`flex items-center gap-2 rounded-full p-2 ${EDIT_GLASS}`}>
+                    {/* 移动：四向方向盘 + 中央「移动模式」开关
+                       （两种搬运方式：① 点上下左右逐步微调 ② 开移动模式后按住画面拖动） */}
+                    <div className="grid shrink-0 grid-cols-3 grid-rows-3 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
+                      <span />
+                      <button
+                        onClick={() => issueMoveCmd('up')}
+                        aria-label="上移一格"
+                        title="上移一格"
+                        className={editDirBtn}
+                      >
+                        <ChevronUp className="h-4 w-4" />
+                      </button>
+                      <span />
+                      <button
+                        onClick={() => issueMoveCmd('left')}
+                        aria-label="左移一格"
+                        title="左移一格"
+                        className={editDirBtn}
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={toggleMove}
+                        aria-label="移动模式（按住画面拖动搬运）"
+                        title="移动模式（按住画面拖动搬运）"
+                        className={
+                          moveOn
+                            ? 'flex h-9 w-9 items-center justify-center rounded-full bg-[#cdeacd] text-[#2f7d4d] shadow-inner ring-1 ring-[#9ed4ae]'
+                            : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90'
+                        }
+                      >
+                        <Move className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => issueMoveCmd('right')}
+                        aria-label="右移一格"
+                        title="右移一格"
+                        className={editDirBtn}
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                      <span />
+                      <button
+                        onClick={() => issueMoveCmd('down')}
+                        aria-label="下移一格"
+                        title="下移一格"
+                        className={editDirBtn}
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </button>
+                      <span />
+                    </div>
+
+                    {/* 升降：抬上桌 / 放回地（相框、小盆栽…） */}
+                    <div className="grid shrink-0 grid-rows-2 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
+                      <button
+                        onClick={() => liftSel(1)}
+                        aria-label="抬高一层（可放上桌面）"
+                        title="抬高一层"
+                        className={editDirBtnBlue}
+                      >
+                        <ChevronsUp className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => liftSel(-1)}
+                        aria-label="放低一层（放回地面）"
+                        title="放低一层"
+                        className={editDirBtnBlue}
+                      >
+                        <ChevronsDown className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {/* 旋转：四宫格（上排 左转/右转，下排 下俯/上仰） */}
+                    <div className="grid shrink-0 grid-cols-2 grid-rows-2 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
+                      <button
+                        onClick={() => rotateY(-1)}
+                        aria-label="向左旋转 45°"
+                        title="向左旋转"
+                        className={editDirBtnAmber}
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => rotateY(1)}
+                        aria-label="向右旋转 45°"
+                        title="向右旋转"
+                        className={editDirBtnAmber}
+                      >
+                        <RotateCw className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => tilt(-1)}
+                        aria-label="向下旋转 15°"
+                        title="向下旋转"
+                        className={editDirBtnAmber}
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => tilt(1)}
+                        aria-label="向上旋转 15°"
+                        title="向上旋转"
+                        className={editDirBtnAmber}
+                      >
+                        <ChevronUp className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
 
-                  {/* 升降：抬上桌 / 放回地（相框、小盆栽…） */}
-                  <div className="grid grid-rows-2 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
+                  {/* 下排：调色 / 收起 / 取消 */}
+                  <div className={`flex items-center gap-1.5 rounded-full p-1.5 ${EDIT_GLASS}`}>
+                    {/* 调色 */}
                     <button
-                      onClick={() => liftSel(1)}
-                      aria-label="抬高一层（可放上桌面）"
-                      title="抬高一层"
-                      className={editDirBtnBlue}
+                      onClick={() => setPaletteOpen(true)}
+                      aria-label="调色盘"
+                      title="调色盘"
+                      className={`${toolBtn} h-10 w-10 bg-[#f7e8f2]/85 text-[#b07193] ring-1 ring-white/80 hover:bg-[#f3dcea]/90`}
                     >
-                      <ChevronsUp className="h-4 w-4" />
+                      <Droplet className="h-[17px] w-[17px]" />
                     </button>
+                    {/* 收起 */}
                     <button
-                      onClick={() => liftSel(-1)}
-                      aria-label="放低一层（放回地面）"
-                      title="放低一层"
-                      className={editDirBtnBlue}
+                      onClick={removeSel}
+                      aria-label="收起家具"
+                      title="收起"
+                      className={`${toolBtn} h-10 w-10 bg-[#f9e3e8]/90 text-[#d4717f] ring-1 ring-white/80 hover:bg-[#f5d5dc]/95`}
                     >
-                      <ChevronsDown className="h-4 w-4" />
+                      <Trash2 className="h-[17px] w-[17px]" />
                     </button>
-                  </div>
-
-                  {/* 旋转：四宫格（上排 左转/右转，下排 下俯/上仰） */}
-                  <div className="grid grid-cols-2 grid-rows-2 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
+                    {/* 取消选中 */}
                     <button
-                      onClick={() => rotateY(-1)}
-                      aria-label="向左旋转 45°"
-                      title="向左旋转"
-                      className={editDirBtnAmber}
+                      onClick={() => setSelId(null)}
+                      aria-label="取消选中"
+                      className={`${toolBtn} h-10 w-10 bg-[#efeef0]/85 text-[#8a8a90] ring-1 ring-white/80`}
                     >
-                      <RotateCcw className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => rotateY(1)}
-                      aria-label="向右旋转 45°"
-                      title="向右旋转"
-                      className={editDirBtnAmber}
-                    >
-                      <RotateCw className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => tilt(-1)}
-                      aria-label="向下旋转 15°"
-                      title="向下旋转"
-                      className={editDirBtnAmber}
-                    >
-                      <ChevronDown className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => tilt(1)}
-                      aria-label="向上旋转 15°"
-                      title="向上旋转"
-                      className={editDirBtnAmber}
-                    >
-                      <ChevronUp className="h-4 w-4" />
+                      <X className="h-[17px] w-[17px]" />
                     </button>
                   </div>
-
-                  {/* 分隔点 */}
-                  <span className="mx-0.5 h-1.5 w-1.5 rounded-full bg-[#d8cfc4]/80" />
-                  {/* 调色 */}
-                  <button
-                    onClick={() => setPaletteOpen(true)}
-                    aria-label="调色盘"
-                    title="调色盘"
-                    className={`${toolBtn} h-11 w-11 bg-[#f7e8f2]/85 text-[#b07193] ring-1 ring-white/80 hover:bg-[#f3dcea]/90`}
-                  >
-                    <Droplet className="h-[18px] w-[18px]" />
-                  </button>
-                  {/* 收起 */}
-                  <button
-                    onClick={removeSel}
-                    aria-label="收起家具"
-                    title="收起"
-                    className={`${toolBtn} h-11 w-11 bg-[#f9e3e8]/90 text-[#d4717f] ring-1 ring-white/80 hover:bg-[#f5d5dc]/95`}
-                  >
-                    <Trash2 className="h-[18px] w-[18px]" />
-                  </button>
-                  {/* 取消选中 */}
-                  <button
-                    onClick={() => setSelId(null)}
-                    aria-label="取消选中"
-                    className={`${toolBtn} h-11 w-11 bg-[#efeef0]/85 text-[#8a8a90] ring-1 ring-white/80`}
-                  >
-                    <X className="h-[18px] w-[18px]" />
-                  </button>
                 </div>
               </motion.div>
             )}
@@ -3347,7 +3357,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     disabled={histLen.u === 0}
                     aria-label="撤销"
                     title="撤销上一步（Ctrl+Z）"
-                    className="flex h-11 w-11 items-center justify-center rounded-full bg-white/70 text-[#6a7a8a] shadow-sm ring-1 ring-white/70 transition active:scale-95 disabled:opacity-40"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/70 text-[#6a7a8a] shadow-sm ring-1 ring-white/70 transition active:scale-95 disabled:opacity-40"
                   >
                     <Undo2 className="h-[18px] w-[18px]" />
                   </button>
@@ -3357,14 +3367,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     disabled={histLen.r === 0}
                     aria-label="重做"
                     title="重做（Ctrl+Shift+Z / Ctrl+Y）"
-                    className="flex h-11 w-11 items-center justify-center rounded-full bg-white/70 text-[#6a7a8a] shadow-sm ring-1 ring-white/70 transition active:scale-95 disabled:opacity-40"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/70 text-[#6a7a8a] shadow-sm ring-1 ring-white/70 transition active:scale-95 disabled:opacity-40"
                   >
                     <Redo2 className="h-[18px] w-[18px]" />
                   </button>
                   <span className="h-1.5 w-1.5 rounded-full bg-[#d8cfc4]/80" />
                   <button
                     onClick={() => setRoomStyleOpen((o) => !o)}
-                    className={`flex h-11 items-center gap-2 rounded-full px-4 text-[13px] font-medium transition active:scale-95 ${
+                    className={`flex h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-full px-4 text-[13px] font-medium transition active:scale-95 ${
                       roomStyleOpen
                         ? 'bg-[#e8f2f7] text-[#4a7a95] shadow-inner ring-1 ring-[#bcdcea]'
                         : 'bg-white/70 text-[#4a4a4e] shadow-sm ring-1 ring-white/70'
@@ -3375,7 +3385,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   </button>
                   <button
                     onClick={() => setShopOpen((o) => !o)}
-                    className={`flex h-11 items-center gap-2 rounded-full px-4 text-[13px] font-medium transition active:scale-95 ${
+                    className={`flex h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-full px-4 text-[13px] font-medium transition active:scale-95 ${
                       shopOpen
                         ? 'bg-[#fdeef3] text-[#c96a8c] shadow-inner ring-1 ring-[#f3c2d3]'
                         : 'bg-white/70 text-[#4a4a4e] shadow-sm ring-1 ring-white/70'
