@@ -5,14 +5,17 @@
  *
  * - 吉他：竖版六弦木纹指板（低音弦在左），点弦拨音、按住横扫 = 扫弦；
  *   指板下方独立一条毛玻璃和弦条 C/G/Am/F/Em：按住即「按弦」，此时扫弦弹出和弦把位（闷弦不发声）；
- * - 钢琴：C3→C6 三个完整八度（22 白键 + 15 黑键，2+3 真实排布），深胡桃木渐变琴体 + 键床上沿红呢毯 + 金线收边 +
- *   白键倒角阴影/键前立面/黑键斜面高光，多指和弦、滑音（glissando），《小星星》一键演示（播放中再点变停止）；
- * - 音色：标题条上的收缩式选择器（毛玻璃浮层向上弹出、选中打勾、点外部自动收起）；
- * - 整体毛玻璃简约风；覆盖层下沉（mb-64px）给 3D 小人让视野，面板外区域 pointer 穿透可转视角。
+ * - 钢琴（参考专业钢琴 App 深色舞台风重设计）：整体墨黑舞台 + 顶部工具条
+ *   （红点 =《小星星》演示开关，蓝色琴标 + 标题，FX 圆钮 = 音色选择，节拍器圆钮 = 100BPM 打拍，
+ *   ✕ = 结束演奏）+ 中部竖纹幕布舞台（弹奏时音符名气泡上浮）+ 底部真实感键床
+ *   （C3→C6 三个完整八度 22 白键 + 15 黑键，2+3 真实排布，象牙白键/亮面黑键）；
+ *   多指和弦、滑音（glissando）保留；
+ * - 音色：FX 圆钮弹出收缩式选择器（毛玻璃浮层向上弹出、选中打勾、点外部自动收起）；
+ * - 吉他不变：木纹指板 + 毛玻璃和弦条；覆盖层下沉（mb-64px）给 3D 小人让视野，面板外区域 pointer 穿透可转视角。
  */
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import { Check, ChevronDown, Music, X } from 'lucide-react';
+import { Check, ChevronDown, Gauge, Music, Piano as PianoIcon, X } from 'lucide-react';
 import {
   GUITAR_CHORDS,
   GUITAR_STRINGS,
@@ -21,6 +24,7 @@ import {
   TWINKLE,
   chordStringFreq,
   emitNote,
+  ensureAudio,
   type GuitarChord,
   type GuitarTimbre,
   onNote,
@@ -53,10 +57,13 @@ function TimbrePicker({
   options,
   value,
   onChange,
+  variant = 'pill',
 }: {
   options: { v: PianoTimbre | GuitarTimbre; label: string }[];
   value: PianoTimbre | GuitarTimbre;
   onChange: (v: PianoTimbre | GuitarTimbre) => void;
+  /** pill = 深色药丸（毛玻璃标题条用）；chip = 白描边圆形 FX 钮（钢琴深色工具条用） */
+  variant?: 'pill' | 'chip';
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -74,22 +81,44 @@ function TimbrePicker({
 
   return (
     <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        aria-label="切换音色"
-        onClick={() => setOpen((o) => !o)}
-        className="flex h-8 items-center gap-1 rounded-full bg-[#453e39]/85 px-3 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
-        style={{ WebkitTapHighlightColor: 'transparent' }}
-      >
-        {current?.label}
-        <ChevronDown
-          className={`h-3.5 w-3.5 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
-        />
-      </button>
+      {variant === 'chip' ? (
+        <button
+          type="button"
+          aria-label={`切换音色（当前${current?.label ?? ''}）`}
+          onClick={() => setOpen((o) => !o)}
+          className={`flex h-8 w-8 items-center justify-center rounded-full border-[1.5px] text-[10.5px] font-black tracking-wide transition active:scale-90 ${
+            open
+              ? 'border-[#f4b3c2] bg-[#f4b3c2]/20 text-[#f4b3c2]'
+              : 'border-white/75 bg-white/5 text-white'
+          }`}
+          style={{ WebkitTapHighlightColor: 'transparent' }}
+        >
+          FX
+        </button>
+      ) : (
+        <button
+          type="button"
+          aria-label="切换音色"
+          onClick={() => setOpen((o) => !o)}
+          className="flex h-8 items-center gap-1 rounded-full bg-[#453e39]/85 px-3 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
+          style={{ WebkitTapHighlightColor: 'transparent' }}
+        >
+          {current?.label}
+          <ChevronDown
+            className={`h-3.5 w-3.5 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+          />
+        </button>
+      )}
       {open && (
         <div
-          className={`absolute bottom-[calc(100%+10px)] right-0 z-40 min-w-[120px] rounded-2xl p-1 ${GLASS}`}
-          style={{ animation: 'instPopUp .16s ease-out both', transformOrigin: 'bottom right' }}
+          className={`absolute right-0 z-40 min-w-[120px] rounded-2xl p-1 ${GLASS} ${
+            // chip（钢琴深色工具条）面板 overflow-hidden → 向下弹进舞台区；pill（吉他毛玻璃条）保持向上弹
+            variant === 'chip' ? 'top-[calc(100%+10px)]' : 'bottom-[calc(100%+10px)]'
+          }`}
+          style={{
+            animation: 'instPopUp .16s ease-out both',
+            transformOrigin: variant === 'chip' ? 'top right' : 'bottom right',
+          }}
         >
           {options.map((o) => {
             const active = o.v === value;
@@ -336,9 +365,32 @@ function GuitarStage({ timbre }: { timbre: GuitarTimbre }) {
   );
 }
 
-// ---------------- 钢琴面板（真实钢琴：木纹琴体 + 红呢毯 + 三组八度键床） ----------------
+// ---------------- 钢琴舞台（深色舞台风：工具条 + 竖纹幕布 + 音符气泡 + 真实感键床） ----------------
 
-function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
+/** 键名 → 键中心横向位置（键床宽度百分比，音符气泡对齐用） */
+function keyCenterPct(name: string): number {
+  const wi = PIANO_WHITE.findIndex((k) => k.name === name);
+  if (wi >= 0) return ((wi + 0.5) / PIANO_WHITE.length) * 100;
+  const bk = PIANO_BLACK.find((b) => b.name === name);
+  if (bk) return ((bk.after + 1) / PIANO_WHITE.length) * 100;
+  return 50;
+}
+
+interface NoteBubble {
+  id: number;
+  label: string;
+  x: number;
+}
+
+function PianoStage({
+  timbre,
+  onTimbre,
+  onClose,
+}: {
+  timbre: PianoTimbre;
+  onTimbre: (v: PianoTimbre) => void;
+  onClose: () => void;
+}) {
   const [pressed, setPressed] = useState<string[]>([]);
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   // 滑音：按住拖动时经过新键也发声
@@ -346,10 +398,30 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
   // 外部音符（小星星演示等）点亮的键
   const [lit, setLit] = useState<string[]>([]);
   const litTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // 舞台上浮的音符气泡
+  const [bubbles, setBubbles] = useState<NoteBubble[]>([]);
+  const bubbleSeq = useRef(0);
+  const bubbleTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+
+  // 演示/弹奏期间读最新音色（effect 中同步，避免渲染期写 ref）
+  const timbreRef = useRef(timbre);
+  useEffect(() => {
+    timbreRef.current = timbre;
+  }, [timbre]);
+
+  const spawnBubble = useCallback((label: string) => {
+    const id = ++bubbleSeq.current;
+    setBubbles((b) => [...b.slice(-10), { id, label, x: keyCenterPct(label) }]);
+    const t = setTimeout(() => {
+      setBubbles((b) => b.filter((x) => x.id !== id));
+      bubbleTimers.current.delete(id);
+    }, 1080);
+    bubbleTimers.current.set(id, t);
+  }, []);
 
   const hit = useCallback(
     (name: string, freq: number) => {
-      pianoNote(freq, 1, timbre);
+      pianoNote(freq, 1, timbreRef.current);
       emitNote({ kind: 'piano', freq, name });
       setPressed((p) => (p.includes(name) ? p : [...p, name]));
       const old = timers.current.get(name);
@@ -362,10 +434,10 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
         }, 260),
       );
     },
-    [timbre],
+    [],
   );
 
-  // 音符事件点亮对应琴键（演示曲等，也覆盖另一处弹奏）
+  // 音符事件点亮对应琴键 + 上浮气泡（手弹经 emitNote 回路、演示曲同样点亮）
   useEffect(() => {
     return onNote((e) => {
       if (e.kind !== 'piano') return;
@@ -379,16 +451,84 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
           litTimers.current.delete(e.name);
         }, 300),
       );
+      spawnBubble(e.name);
     });
+  }, [spawnBubble]);
+
+  // —— 《小星星》演示（红点开关） ——
+  const [demoOn, setDemoOn] = useState(false);
+  const demoTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const stopDemo = useCallback(() => {
+    demoTimers.current.forEach(clearTimeout);
+    demoTimers.current = [];
+    setDemoOn(false);
   }, []);
 
-  // 卸载时清掉灯光定时器
+  const startDemo = useCallback(() => {
+    stopDemo();
+    setDemoOn(true);
+    let t = 0;
+    const ts: ReturnType<typeof setTimeout>[] = [];
+    for (const n of TWINKLE) {
+      const freq = NOTE_FREQ.get(n.name);
+      if (freq == null) continue;
+      const delay = t;
+      ts.push(
+        setTimeout(() => {
+          pianoNote(freq, 1, timbreRef.current);
+          emitNote({ kind: 'piano', freq, name: n.name });
+        }, delay),
+      );
+      t += twinkleTempoMs * n.beats;
+    }
+    ts.push(
+      setTimeout(() => {
+        demoTimers.current = [];
+        setDemoOn(false);
+      }, t + 400),
+    );
+    demoTimers.current = ts;
+  }, [stopDemo]);
+
+  // —— 节拍器（100BPM 短促打拍，WebAudio 合成，无音频文件） ——
+  const [metroOn, setMetroOn] = useState(false);
+  const metroInt = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!metroOn) return;
+    const tick = () => {
+      const ctx = ensureAudio();
+      if (!ctx) return;
+      const o = ctx.createOscillator();
+      const gn = ctx.createGain();
+      o.type = 'square';
+      o.frequency.value = 1500;
+      gn.gain.setValueAtTime(0.14, ctx.currentTime);
+      gn.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.045);
+      o.connect(gn);
+      gn.connect(ctx.destination);
+      o.start();
+      o.stop(ctx.currentTime + 0.05);
+    };
+    tick();
+    metroInt.current = setInterval(tick, 600); // ♩=100
+    return () => {
+      if (metroInt.current) clearInterval(metroInt.current);
+      metroInt.current = null;
+    };
+  }, [metroOn]);
+
+  // 卸载时清掉全部定时器
   useEffect(
     () => () => {
       litTimers.current.forEach((t) => clearTimeout(t));
       litTimers.current.clear();
       timers.current.forEach((t) => clearTimeout(t));
       timers.current.clear();
+      bubbleTimers.current.forEach((t) => clearTimeout(t));
+      bubbleTimers.current.clear();
+      demoTimers.current.forEach(clearTimeout);
+      demoTimers.current = [];
     },
     [],
   );
@@ -425,62 +565,116 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
   const unit = 100 / PIANO_WHITE.length; // 单个白键宽度百分比
 
   return (
-    <div
-      className="relative min-h-0 flex-1 overflow-hidden rounded-[22px] shadow-2xl ring-1 ring-black/40"
-      style={{
-        // 深胡桃/浓咖啡竖向渐变琴体（无细条纹，温润高级）
-        background: 'linear-gradient(180deg,#6a4c33 0%,#57402c 30%,#463322 62%,#362718 100%)',
-      }}
-    >
-      {/* 极淡的大尺度木色晕染（暖光在上、阴影沉底，整块木料的天然明暗，无条纹） */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        style={{
-          background:
-            'radial-gradient(120% 75% at 16% 0%, rgba(255,208,146,0.95) 0%, rgba(255,208,146,0) 55%), radial-gradient(150% 95% at 86% 100%, rgba(22,9,0,0.95) 0%, rgba(22,9,0,0) 58%)',
-          opacity: 0.05,
-        }}
-      />
-      {/* 琴体倒角：上缘一线暖木高光、下缘沉入阴影 */}
-      <div className="pointer-events-none absolute inset-0 z-30 rounded-[22px] shadow-[inset_0_1px_0_rgba(255,240,210,0.35),inset_0_-4px_10px_rgba(0,0,0,0.5)]" />
-      <div className="flex h-full flex-col px-[9px] pb-[9px] pt-[7px]">
-        {/* 键床上沿红色呢毯条 */}
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] bg-[#0a0a0c] shadow-2xl ring-1 ring-black/60">
+      {/* 顶部工具条：红点演示｜蓝色琴标·标题｜FX 音色｜节拍器｜结束 */}
+      <div className="flex h-11 shrink-0 items-center gap-2.5 border-b border-white/10 bg-gradient-to-b from-[#232327] to-[#131316] px-3">
+        <button
+          type="button"
+          aria-label={demoOn ? '停止小星星演示' : '播放小星星演示'}
+          onClick={() => (demoOn ? stopDemo() : startDemo())}
+          className="flex h-7 w-7 shrink-0 items-center justify-center transition active:scale-90"
+          style={{ WebkitTapHighlightColor: 'transparent' }}
+        >
+          <span
+            className={`block h-4 w-4 rounded-full bg-[#e14b41] shadow-[0_0_10px_rgba(225,75,65,0.55),inset_0_-2px_3px_rgba(0,0,0,0.35)] ${
+              demoOn ? 'animate-pulse ring-2 ring-white/70' : ''
+            }`}
+          />
+        </button>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <PianoIcon className="h-[18px] w-[18px] shrink-0 text-[#4f8ef7]" />
+          <span className="truncate text-[12px] font-semibold text-[#9a9aa2]">弹钢琴 · C3–C6</span>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          <TimbrePicker
+            variant="chip"
+            options={PIANO_TIMBRES}
+            value={timbre}
+            onChange={(v) => onTimbre(v as PianoTimbre)}
+          />
+          <button
+            type="button"
+            aria-label={metroOn ? '关闭节拍器' : '开启节拍器'}
+            aria-pressed={metroOn}
+            onClick={() => setMetroOn((m) => !m)}
+            className={`flex h-8 w-8 items-center justify-center rounded-full border-[1.5px] transition active:scale-90 ${
+              metroOn
+                ? 'border-[#f4b3c2] bg-[#f4b3c2]/20 text-[#f4b3c2] shadow-[0_0_10px_rgba(244,179,194,0.4)]'
+                : 'border-white/75 bg-white/5 text-white'
+            }`}
+            style={{ WebkitTapHighlightColor: 'transparent' }}
+          >
+            <Gauge className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="结束演奏"
+            className="flex h-8 w-8 items-center justify-center rounded-full border-[1.5px] border-white/75 bg-white/5 text-white transition active:scale-90"
+            style={{ WebkitTapHighlightColor: 'transparent' }}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+      {/* 中部舞台：竖纹幕布 + 顶部聚光 + 上浮音符气泡 */}
+      <div className="relative min-h-0 flex-1 overflow-hidden">
         <div
-          className="relative z-20 mx-[2px] h-[7px] shrink-0 rounded-[3px]"
+          className="absolute inset-0"
           style={{
-            background: 'linear-gradient(180deg,#cf5257 0%,#a32836 55%,#791b28 100%)',
-            boxShadow: 'inset 0 -2px 3px rgba(0,0,0,0.45), 0 1px 2px rgba(0,0,0,0.35)',
+            background:
+              'repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 16px, rgba(255,255,255,0.013) 30px, rgba(255,255,255,0.013) 46px)',
           }}
         />
-        {/* 呢毯下的细金线收边（优雅点睛） */}
-        <div className="relative z-20 mx-[2px] h-[2px] shrink-0 rounded-full bg-gradient-to-r from-transparent via-[#d9b36c]/70 to-transparent" />
-        {/* 键床（黑键后端塞进呢毯下） */}
-        <div className="relative -mt-[3px] min-h-0 flex-1">
-          {/* 22 白键：象牙渐变 + 左右倒角 + 键前立面 */}
+        <div
+          className="absolute inset-0"
+          style={{
+            background: 'radial-gradient(90% 70% at 50% -10%, rgba(255,255,255,0.09), transparent 62%)',
+          }}
+        />
+        {demoOn && (
+          <div className="absolute left-1/2 top-2.5 z-10 -translate-x-1/2 whitespace-nowrap rounded-full bg-white/10 px-3 py-1 text-[10.5px] font-semibold text-white/85 backdrop-blur-sm">
+            ♪ 小星星 演示中 · 点红点停止
+          </div>
+        )}
+        {bubbles.map((b) => (
+          <span
+            key={b.id}
+            className="note-bubble pointer-events-none absolute bottom-1.5 z-10 rounded-full border border-white/15 bg-white/10 px-2 py-0.5 text-[10px] font-bold text-white/90"
+            style={{ left: `${b.x}%` }}
+          >
+            {b.label}
+          </span>
+        ))}
+      </div>
+      {/* 键床：象牙白键 + 亮面黑键（2+3 真实排布） */}
+      <div className="relative h-[34%] min-h-[118px] shrink-0 border-t border-white/10 bg-[#050506]">
+        <div className="relative mx-[3px] h-full">
           <div className="absolute inset-0 flex">
             {PIANO_WHITE.map((k) => {
               const on = pressed.includes(k.name) || lit.includes(k.name);
               return (
                 <div
                   key={k.name}
-                  className="relative flex-1 touch-none border-r border-[#d9d3c3]/70 last:border-r-0"
+                  className="relative flex-1 touch-none border-r border-[#c9c6ba]/80 last:border-r-0"
                   style={{
                     WebkitTapHighlightColor: 'transparent',
-                    borderRadius: '0 0 5px 5px',
+                    borderRadius: '0 0 4px 4px',
                     background: on
-                      ? 'linear-gradient(180deg,#fdeef3 0%,#f9dde7 100%)'
-                      : 'linear-gradient(180deg,#fffefb 0%,#faf7ee 55%,#efe9d8 100%)',
-                    boxShadow:
-                      'inset -1.5px 0 2px -1px rgba(70,60,40,0.3), inset 1.5px 0 2px -1px rgba(255,255,255,0.9), inset 0 -4px 5px -3px rgba(70,60,40,0.42)',
-                    transform: on ? 'scaleY(0.972)' : undefined,
+                      ? 'linear-gradient(180deg,#ffe0ea 0%,#f9cfdd 100%)'
+                      : 'linear-gradient(180deg,#ffffff 0%,#f4f3ee 62%,#e7e5dc 100%)',
+                    boxShadow: on
+                      ? 'inset 0 2px 4px rgba(180,90,110,0.28), inset 0 -3px 4px -2px rgba(120,60,80,0.3)'
+                      : 'inset -1px 0 1.5px -1px rgba(60,55,40,0.35), inset 1px 0 1.5px -1px rgba(255,255,255,0.95), inset 0 -5px 6px -4px rgba(70,64,48,0.5)',
+                    transform: on ? 'scaleY(0.975)' : undefined,
                     transformOrigin: 'top',
                   }}
                   {...pressHandlers(k.name, k.freq)}
                 >
-                  {/* 键前立面（白键前窄后宽立体感的收尾） */}
-                  <div className="pointer-events-none absolute inset-x-[1.5px] bottom-0 h-[9%] rounded-b-[5px] bg-gradient-to-b from-black/[0.06] to-black/[0.16]" />
+                  {/* 键前立面 */}
+                  <div className="pointer-events-none absolute inset-x-[1.5px] bottom-0 h-[8%] rounded-b-[4px] bg-gradient-to-b from-black/[0.05] to-black/[0.15]" />
                   {k.label && (
-                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[9px] font-semibold tracking-wide text-[#b3ab97]">
+                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[8.5px] font-bold text-[#a8a496]">
                       {k.name}
                     </span>
                   )}
@@ -488,24 +682,24 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
               );
             })}
           </div>
-          {/* 15 黑键：2+3 真实排布，斜面高光 + 投影 */}
+          {/* 黑键：亮面质感，按下微沉 */}
           {PIANO_BLACK.map((b) => {
             const isOn = pressed.includes(b.name) || lit.includes(b.name);
             return (
               <div
                 key={b.name}
-                className="absolute top-0 z-10 h-[60%] touch-none"
+                className="absolute top-0 z-10 h-[58%] touch-none"
                 style={{
-                  left: `calc(${(b.after + 1) * unit}% - ${unit * 0.3}%)`,
-                  width: `${unit * 0.6}%`,
+                  left: `calc(${(b.after + 1) * unit}% - ${unit * 0.29}%)`,
+                  width: `${unit * 0.58}%`,
                   WebkitTapHighlightColor: 'transparent',
-                  borderRadius: '0 0 4px 4px',
+                  borderRadius: '0 0 3.5px 3.5px',
                   background: isOn
-                    ? 'linear-gradient(180deg,#6d5a6b,#3a3040)'
-                    : 'linear-gradient(180deg,#4a4652 0%,#232230 68%,#3c3947 100%)',
+                    ? 'linear-gradient(180deg,#4a4a54 0%,#26262e 100%)'
+                    : 'linear-gradient(180deg,#34343b 0%,#0e0e13 62%,#1f1f26 100%)',
                   boxShadow:
-                    '0 3px 5px rgba(20,10,5,0.45), inset 1.5px 0 2px rgba(255,255,255,0.16), inset -1.5px 0 3px rgba(0,0,0,0.55), inset 0 -2.5px 2px rgba(255,255,255,0.14)',
-                  transform: isOn ? 'scaleY(0.955)' : undefined,
+                    '0 3px 5px rgba(0,0,0,0.65), inset 0 2px 2px rgba(255,255,255,0.22), inset -1.5px 0 3px rgba(0,0,0,0.6), inset 0 -2px 2px rgba(255,255,255,0.1)',
+                  transform: isOn ? 'scaleY(0.96)' : undefined,
                   transformOrigin: 'top',
                 }}
                 {...pressHandlers(b.name, b.freq)}
@@ -514,6 +708,12 @@ function PianoPanel({ timbre }: { timbre: PianoTimbre }) {
           })}
         </div>
       </div>
+      <style
+        dangerouslySetInnerHTML={{
+          __html:
+            '@keyframes noteFloat{0%{transform:translate(-50%,8px);opacity:0}18%{opacity:1}100%{transform:translate(-50%,-46px);opacity:0}}.note-bubble{animation:noteFloat 1.05s ease-out both}',
+        }}
+      />
     </div>
   );
 }
@@ -533,61 +733,6 @@ export default function InstrumentOverlay({
   const [pianoTimbre, setPianoTimbre] = useState<PianoTimbre>('grand');
   const [guitarTimbre, setGuitarTimbre] = useState<GuitarTimbre>('acoustic');
   const timbre: PianoTimbre | GuitarTimbre = kind === 'piano' ? pianoTimbre : guitarTimbre;
-  // 演示曲定时器触发时读取最新音色（在 effect 中同步，避免渲染期写 ref）
-  const timbreRef = useRef(timbre);
-  useEffect(() => {
-    timbreRef.current = timbre;
-  }, [timbre]);
-
-  // —— 《小星星》演示（仅钢琴）——
-  const [demoOn, setDemoOn] = useState(false);
-  const demoTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
-
-  const stopDemo = useCallback(() => {
-    demoTimers.current.forEach(clearTimeout);
-    demoTimers.current = [];
-    setDemoOn(false);
-  }, []);
-
-  // 小星星：按拍 setTimeout 链排程（二分音符 = 2 拍），demoOn 防双开
-  const startDemo = useCallback(() => {
-    stopDemo();
-    setDemoOn(true);
-    let t = 0;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    for (const n of TWINKLE) {
-      const freq = NOTE_FREQ.get(n.name);
-      if (freq == null) continue;
-      const delay = t;
-      timers.push(
-        setTimeout(() => {
-          pianoNote(freq, 1, timbreRef.current as PianoTimbre);
-          emitNote({ kind: 'piano', freq, name: n.name });
-        }, delay),
-      );
-      t += twinkleTempoMs * n.beats;
-    }
-    // 曲终收尾
-    timers.push(
-      setTimeout(() => {
-        demoTimers.current = [];
-        setDemoOn(false);
-      }, t + 400),
-    );
-    demoTimers.current = timers;
-  }, [stopDemo]);
-
-  // 卸载：清掉演示定时器；切换乐器也要停演示曲
-  useEffect(
-    () => () => {
-      demoTimers.current.forEach(clearTimeout);
-      demoTimers.current = [];
-    },
-    [],
-  );
-  useEffect(() => {
-    return () => stopDemo();
-  }, [kind, stopDemo]);
 
   const pickTimbre = useCallback(
     (v: PianoTimbre | GuitarTimbre) => {
@@ -614,56 +759,36 @@ export default function InstrumentOverlay({
         onTouchStart={stop}
         onTouchMove={stop}
       >
-        {/* 标题条（毛玻璃）：左标题｜音色收缩选择 + 小星星（仅钢琴）+ 结束 */}
-        <div
-          className={`flex h-11 shrink-0 items-center justify-between gap-2 rounded-full pl-4 pr-1.5 ${GLASS}`}
-        >
-          <div className="flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-[#453e39]">
-            <Music className="h-4 w-4 shrink-0 text-[#d97f95]" />
-            <span className="truncate">{kind === 'piano' ? '弹钢琴 · C3–C6' : '弹吉他'}</span>
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            {kind === 'piano' && (
-              <button
-                type="button"
-                onClick={() => (demoOn ? stopDemo() : startDemo())}
-                className={`flex h-8 items-center gap-1 rounded-full px-3 text-[12px] font-semibold transition active:scale-95 ${
-                  demoOn ? 'bg-[#d97f95] text-white' : 'bg-[#453e39]/10 text-[#453e39]'
-                }`}
-                style={{ WebkitTapHighlightColor: 'transparent' }}
-              >
-                {demoOn ? (
-                  <>
-                    <span className="inline-block h-2 w-2 rounded-[2px] bg-current" />
-                    停止
-                  </>
-                ) : (
-                  <>
-                    <Music className="h-3 w-3" />
-                    小星星
-                  </>
-                )}
-              </button>
-            )}
-            <TimbrePicker
-              options={kind === 'piano' ? PIANO_TIMBRES : GUITAR_TIMBRES}
-              value={timbre}
-              onChange={pickTimbre}
-            />
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="结束演奏"
-              className="flex h-8 items-center gap-1 rounded-full bg-[#f4b3c2] px-3 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
-              style={{ WebkitTapHighlightColor: 'transparent' }}
+        {kind === 'piano' ? (
+          // 钢琴：深色舞台一体面板（工具条内含红点演示/FX 音色/节拍器/结束）
+          <PianoStage timbre={pianoTimbre} onTimbre={setPianoTimbre} onClose={onClose} />
+        ) : (
+          <>
+            {/* 标题条（毛玻璃）：左标题｜音色收缩选择 + 结束（吉他） */}
+            <div
+              className={`flex h-11 shrink-0 items-center justify-between gap-2 rounded-full pl-4 pr-1.5 ${GLASS}`}
             >
-              <X className="h-3.5 w-3.5" />
-              结束演奏
-            </button>
-          </div>
-        </div>
-        {/* 乐器本体（吉他 = 琴体 + 独立和弦条） */}
-        {kind === 'guitar' ? <GuitarStage timbre={guitarTimbre} /> : <PianoPanel timbre={pianoTimbre} />}
+              <div className="flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-[#453e39]">
+                <Music className="h-4 w-4 shrink-0 text-[#d97f95]" />
+                <span className="truncate">弹吉他</span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <TimbrePicker options={GUITAR_TIMBRES} value={timbre as GuitarTimbre} onChange={pickTimbre} />
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label="结束演奏"
+                  className="flex h-8 items-center gap-1 rounded-full bg-[#f4b3c2] px-3 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
+                  style={{ WebkitTapHighlightColor: 'transparent' }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                  结束演奏
+                </button>
+              </div>
+            </div>
+            <GuitarStage timbre={guitarTimbre} />
+          </>
+        )}
       </div>
     </div>
   );
