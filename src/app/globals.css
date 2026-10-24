@@ -1,0 +1,736 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+/* 淘宝/美团深色模式覆盖层（第六十七轮，scripts/gen-shop-dark-css.mjs 自动生成）：
+   仅在 .shop-dark 作用域（AppWindow 深色时挂给淘宝/美团）内生效 */
+@import "./shop-dark.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body {
+    height: 100%;
+    overscroll-behavior: none;
+  }
+  body {
+    @apply bg-background text-foreground;
+    /* 全局字体（Task 33-d）：--app-font-family 由设置「字体」页写入 documentElement，未设置时回退默认系统字体栈 */
+    font-family: var(--app-font-family, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Hiragino Sans GB',
+      'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif);
+    /* 全局字重（Task 34-a）：未显式设 font-medium/semibold 的文本生效；显式类的字重保持不变 */
+    font-weight: var(--app-font-weight, 400);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* 全局字体大小（Task 36 修订）：只缩放文字、不缩放界面框架。
+   旧方案（34-a）把 transform scale 打在手机屏容器上，「小」档连按钮/图标/布局一起缩小，
+   与「字体大小」语义不符，已废弃；新方案由设置页把倍率写入 :root 的 --app-font-scale
+   （lib/ios/fonts.ts applyAppFontScale），下方按项目内实际用到的 text-[Npx] / leading-[Npx]
+   任意值类逐档重写为 calc(原值 × 倍率)——行高跟随缩放避免大档位文字重叠，容器尺寸全部不变。
+   这些规则置于 @layer utilities 之外：未分层声明在 CSS 级联中恒胜过 Tailwind 的分层工具类，
+   无需 !important；LightningCSS 对 calc 乘法 + var 静态可验证，构建期不会丢弃。
+   新增字号/行高写法时在此同步补一条。 */
+.text-\[6\.5px\] { font-size: calc(6.5px * var(--app-font-scale, 1)); }
+.text-\[7px\] { font-size: calc(7px * var(--app-font-scale, 1)); }
+.text-\[9px\] { font-size: calc(9px * var(--app-font-scale, 1)); }
+.text-\[9\.5px\] { font-size: calc(9.5px * var(--app-font-scale, 1)); }
+.text-\[10px\] { font-size: calc(10px * var(--app-font-scale, 1)); }
+.text-\[10\.5px\] { font-size: calc(10.5px * var(--app-font-scale, 1)); }
+.text-\[11px\] { font-size: calc(11px * var(--app-font-scale, 1)); }
+.text-\[11\.5px\] { font-size: calc(11.5px * var(--app-font-scale, 1)); }
+.text-\[12px\] { font-size: calc(12px * var(--app-font-scale, 1)); }
+.text-\[12\.5px\] { font-size: calc(12.5px * var(--app-font-scale, 1)); }
+.text-\[13px\] { font-size: calc(13px * var(--app-font-scale, 1)); }
+.text-\[13\.5px\] { font-size: calc(13.5px * var(--app-font-scale, 1)); }
+.text-\[14px\] { font-size: calc(14px * var(--app-font-scale, 1)); }
+.text-\[14\.5px\] { font-size: calc(14.5px * var(--app-font-scale, 1)); }
+.text-\[15px\] { font-size: calc(15px * var(--app-font-scale, 1)); }
+.text-\[15\.5px\] { font-size: calc(15.5px * var(--app-font-scale, 1)); }
+.text-\[16px\] { font-size: calc(16px * var(--app-font-scale, 1)); }
+.text-\[16\.5px\] { font-size: calc(16.5px * var(--app-font-scale, 1)); }
+.text-\[17px\] { font-size: calc(17px * var(--app-font-scale, 1)); }
+.text-\[18px\] { font-size: calc(18px * var(--app-font-scale, 1)); }
+.text-\[19px\] { font-size: calc(19px * var(--app-font-scale, 1)); }
+.text-\[20px\] { font-size: calc(20px * var(--app-font-scale, 1)); }
+.text-\[21px\] { font-size: calc(21px * var(--app-font-scale, 1)); }
+.text-\[22px\] { font-size: calc(22px * var(--app-font-scale, 1)); }
+.text-\[23px\] { font-size: calc(23px * var(--app-font-scale, 1)); }
+.text-\[24px\] { font-size: calc(24px * var(--app-font-scale, 1)); }
+.text-\[25px\] { font-size: calc(25px * var(--app-font-scale, 1)); }
+.text-\[26px\] { font-size: calc(26px * var(--app-font-scale, 1)); }
+.text-\[28px\] { font-size: calc(28px * var(--app-font-scale, 1)); }
+.text-\[29px\] { font-size: calc(29px * var(--app-font-scale, 1)); }
+.text-\[30px\] { font-size: calc(30px * var(--app-font-scale, 1)); }
+.text-\[32px\] { font-size: calc(32px * var(--app-font-scale, 1)); }
+.text-\[34px\] { font-size: calc(34px * var(--app-font-scale, 1)); }
+.text-\[36px\] { font-size: calc(36px * var(--app-font-scale, 1)); }
+.text-\[38px\] { font-size: calc(38px * var(--app-font-scale, 1)); }
+.text-\[40px\] { font-size: calc(40px * var(--app-font-scale, 1)); }
+.text-\[42px\] { font-size: calc(42px * var(--app-font-scale, 1)); }
+.text-\[44px\] { font-size: calc(44px * var(--app-font-scale, 1)); }
+.text-\[46px\] { font-size: calc(46px * var(--app-font-scale, 1)); }
+.text-\[48px\] { font-size: calc(48px * var(--app-font-scale, 1)); }
+.text-\[52px\] { font-size: calc(52px * var(--app-font-scale, 1)); }
+.text-\[54px\] { font-size: calc(54px * var(--app-font-scale, 1)); }
+.text-\[64px\] { font-size: calc(64px * var(--app-font-scale, 1)); }
+.text-\[72px\] { font-size: calc(72px * var(--app-font-scale, 1)); }
+.text-\[88px\] { font-size: calc(88px * var(--app-font-scale, 1)); }
+.text-\[96px\] { font-size: calc(96px * var(--app-font-scale, 1)); }
+.text-\[112px\] { font-size: calc(112px * var(--app-font-scale, 1)); }
+.leading-\[9px\] { line-height: calc(9px * var(--app-font-scale, 1)); }
+.leading-\[10px\] { line-height: calc(10px * var(--app-font-scale, 1)); }
+.leading-\[12px\] { line-height: calc(12px * var(--app-font-scale, 1)); }
+.leading-\[13px\] { line-height: calc(13px * var(--app-font-scale, 1)); }
+.leading-\[14px\] { line-height: calc(14px * var(--app-font-scale, 1)); }
+.leading-\[16px\] { line-height: calc(16px * var(--app-font-scale, 1)); }
+.leading-\[17px\] { line-height: calc(17px * var(--app-font-scale, 1)); }
+.leading-\[18px\] { line-height: calc(18px * var(--app-font-scale, 1)); }
+.leading-\[19px\] { line-height: calc(19px * var(--app-font-scale, 1)); }
+.leading-\[20px\] { line-height: calc(20px * var(--app-font-scale, 1)); }
+.leading-\[22px\] { line-height: calc(22px * var(--app-font-scale, 1)); }
+.leading-\[36px\] { line-height: calc(36px * var(--app-font-scale, 1)); }
+.leading-\[40px\] { line-height: calc(40px * var(--app-font-scale, 1)); }
+.leading-\[46px\] { line-height: calc(46px * var(--app-font-scale, 1)); }
+/* placeholder 字号变体（世界书搜索框；placeholder: 前缀类选择器不同，需单独覆盖） */
+.placeholder\:text-\[16px\]::placeholder { font-size: calc(16px * var(--app-font-scale, 1)); }
+
+/* 隐藏滚动条（iOS 风格） */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* 细滚动条（深色内容区） */
+.thin-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.45);
+  border-radius: 4px;
+}
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 全局滚动条「滚动时才显示」（Task 40）：
+   手机内所有 App 滚动区默认滚动条完全透明（视觉隐藏），滚动时浮现 4px 细条，停止 ~0.9s 后隐去。
+   显隐由 PhoneShell 的全局捕获 scroll 监听控制：滚动容器被标记 data-scrolling="true"，
+   停止滚动后回 "false"。.no-scrollbar 与 [scrollbar-width:none] 等显式隐藏规则优先级更高，不受影响。 */
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+[data-scrolling='true']::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.3);
+}
+[data-scrolling='true']::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.45);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+[data-scrolling='true'] {
+  scrollbar-color: rgba(0, 0, 0, 0.3) transparent;
+}
+
+/* 主屏幕编辑模式：App 图标 / 小组件抖动 */
+@keyframes home-jiggle {
+  0%,
+  100% {
+    transform: rotate(-1.3deg) translateX(-0.6px);
+  }
+  50% {
+    transform: rotate(1.3deg) translateX(0.6px);
+  }
+}
+.home-jiggle {
+  animation: home-jiggle 0.32s ease-in-out infinite;
+}
+
+/* 文件夹展开面板：背景淡入 + 内容从中心弹出（iOS 风格） */
+@keyframes folder-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.folder-fade {
+  animation: folder-fade 0.22s ease-out both;
+}
+@keyframes folder-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.88);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.folder-pop {
+  animation: folder-pop 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* 压住入夹：目标图标自身的轻微缩放脉动（iOS 同款） */
+@keyframes merge-target-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.07);
+  }
+}
+.merge-target-pulse {
+  animation: merge-target-breathe 1.05s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 压住入夹：目标外围一圈呼吸的圆角方边框（贴图标轮廓，与缩放脉动同频呼吸） */
+@keyframes merge-target-ring {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.merge-target-ring {
+  position: absolute;
+  inset: -4px;
+  z-index: 5;
+  border-radius: 19px;
+  border: 2.5px solid rgba(255, 255, 255, 0.98);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  animation: merge-target-ring 1.05s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* 合并预览期间被拖 App 轻微收拢（iOS 同款：手指上的图标缩一点，目标图标呼吸脉动） */
+@keyframes merge-copy-shrink {
+  from {
+    transform: scale(1.08);
+  }
+  to {
+    transform: scale(0.92);
+  }
+}
+.merge-copy-shrink {
+  animation: merge-copy-shrink 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* 网易云音乐小组件：黑胶唱片缓慢旋转（播放中） */
+@keyframes netease-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 音乐小组件声波条律动（播放中每根条错峰缩放跳动，暂停时静止） */
+@keyframes music-wave {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  50% {
+    transform: scaleY(0.4);
+  }
+}
+
+/* 通话弹幕字幕：逐条弹跳入场（头像/名字下方实时字幕流，跳动特效——落下→弹起→回弹稳定） */
+@keyframes call-caption-in {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.85);
+  }
+  55% {
+    opacity: 1;
+    transform: translateY(-5px) scale(1.06);
+  }
+  78% {
+    transform: translateY(2px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.animate-call-caption {
+  animation: call-caption-in 0.42s cubic-bezier(0.26, 0.68, 0.44, 0.94) both;
+}
+
+/* 一起听音乐界面底部快聊输入条滑入 */
+@keyframes quick-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 全局迷你播放器悬浮唱片旋转（第十六轮反馈）：播放中旋转、暂停时 animationPlayState 暂停 */
+@keyframes mini-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* iOS 风格绿色滑杆（通知声音设置）：粗轨道 + #34C759 已选段 + 白色大圆钮带投影 */
+.ios-slider[data-slot='slider'] [data-slot='slider-track'] {
+  height: 6px;
+}
+.ios-slider[data-slot='slider'] [data-slot='slider-range'] {
+  background: #34c759;
+}
+.ios-slider[data-slot='slider'] [data-slot='slider-thumb'] {
+  height: 26px;
+  width: 26px;
+  border: none;
+  background: #fff;
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.22),
+    0 1px 1px rgba(0, 0, 0, 0.1);
+}
+.dark .ios-slider[data-slot='slider'] [data-slot='slider-thumb'] {
+  background: #fff;
+}
+
+/* 美团订单详情：配送小地图骑手沿商家→家的弧线按真实配送时间单向前进（关键帧已废弃：
+   位置改由 DeliveryMap 内联 style 按订单时间进度沿贝塞尔曲线 M 75 139 Q 241 92 443 177
+   （viewBox 500×208，preserveAspectRatio=none）实时插值，1s linear 过渡让逐秒刷新平滑） */
+.mt-rider {
+  transition:
+    left 1s linear,
+    top 1s linear;
+}
+
+/* 骑手形象立体颠簸（配合百分比轨迹巡航；投影由内联 drop-shadow 提供，无白边白环） */
+@keyframes mt-rider-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2.5deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(2.5deg);
+  }
+}
+.mt-rider-img {
+  animation: mt-rider-bob 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mt-rider-img {
+    animation: none;
+  }
+}
+
+/* ---------------- 情侣空间 App（couple-space）动效 ---------------- */
+/* 子页滑入（App 内全屏覆盖层） */
+@keyframes couple-sub-in {
+  from {
+    transform: translateX(36px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+/* 「每天想你」点击回弹 */
+@keyframes couple-pop-heart {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+/* 情侣轨迹地图虚线流动 */
+@keyframes couple-dash-flow {
+  to {
+    stroke-dashoffset: -64;
+  }
+}
+/* 「每天想你」点击涟漪扩散 */
+@keyframes couple-ripple-out {
+  from {
+    transform: scale(0.9);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+/* 三生石：星星闪烁 */
+@keyframes couple-twinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.75);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+/* 三生石：水晶光晕呼吸 */
+@keyframes couple-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+/* 名牌/装饰缓慢漂浮 */
+@keyframes couple-float-y {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+/* 爱情小树：云朵漂移 */
+@keyframes couple-cloud-drift {
+  from {
+    transform: translateX(-6%);
+  }
+  to {
+    transform: translateX(6%);
+  }
+}
+/* 三生石：流星划过 */
+@keyframes couple-shoot {
+  0% {
+    transform: translate(0, 0) rotate(24deg);
+    opacity: 0;
+  }
+  4% {
+    opacity: 0.95;
+  }
+  16% {
+    transform: translate(150px, 66px) rotate(24deg);
+    opacity: 0;
+  }
+  100% {
+    transform: translate(150px, 66px) rotate(24deg);
+    opacity: 0;
+  }
+}
+/* 三生石：星尘飘落 */
+@keyframes couple-fall {
+  0% {
+    transform: translateY(-10px);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.85;
+  }
+  82% {
+    opacity: 0.5;
+  }
+  100% {
+    transform: translateY(320px);
+    opacity: 0;
+  }
+}
+/* 未来情书：信纸 textarea 占位符颜色 */
+.letter-pad::placeholder {
+  opacity: 0.42;
+  font-weight: 300;
+}
+/* —— 第四十六轮 爱情塔罗（浅色毛玻璃风）—— */
+/* 洗牌：单张牌飞出再归位（外层定位，内层做位移旋转；--sx/--sy/--sr 每张随机） */
+@keyframes tarot-shuffle-card {
+  0% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  32% {
+    transform: translate(var(--sx), var(--sy)) rotate(var(--sr));
+  }
+  68% {
+    transform: translate(calc(var(--sx) * -0.55), calc(var(--sy) * -0.55)) rotate(calc(var(--sr) * -0.7));
+  }
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+}
+/* 牌堆呼吸光晕（浅色） */
+@keyframes tarot-pile-glow {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.1);
+  }
+}
+/* 当前待填牌位的虚线框呼吸 */
+@keyframes tarot-slot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(17, 24, 39, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(17, 24, 39, 0);
+  }
+}
+/* 牌落入牌位/卡面浮现 */
+@keyframes tarot-reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+/* 解读文字渐入上移 */
+@keyframes tarot-text-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* AI 解读加载：环旋转 */
+@keyframes tarot-halo-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* 长按洗牌提示呼吸 */
+@keyframes tarot-star-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [animation\:tarot-shuffle-card],
+  [animation\:tarot-pile-glow],
+  [animation\:tarot-slot-pulse],
+  [animation\:tarot-reveal-in],
+  [animation\:tarot-text-in],
+  [animation\:tarot-halo-spin],
+  [animation\:tarot-star-pulse] {
+    animation: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [animation\:couple-sub-in],
+  [animation\:couple-pop-heart],
+  [animation\:couple-ripple-out],
+  [animation\:couple-dash-flow],
+  [animation\:couple-twinkle],
+  [animation\:couple-glow-pulse],
+  [animation\:couple-float-y],
+  [animation\:couple-cloud-drift],
+  [animation\:couple-shoot],
+  [animation\:couple-fall] {
+    animation: none;
+  }
+}
+/* 第二十八轮情书：信封收信字样——容器宽度过小时（编辑器工具栏小按钮等）自动隐藏，防止挤爆 */
+@container (max-width: 72px) {
+  .letter-env-face {
+    display: none;
+  }
+}
+
+/* ---------------- 情侣小家动画 ---------------- */
+@keyframes char-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+@keyframes tv-flicker {
+  0%, 100% { opacity: 0.85; }
+  40% { opacity: 1; }
+  60% { opacity: 0.72; }
+  80% { opacity: 0.95; }
+}
+
+/* ===================== 情侣小家 2.5D ===================== */
+@keyframes char-bob {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-5px) rotate(-1.2deg); }
+}
+@keyframes ch-furn-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes ch-tv-play {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes ch-float-up {
+  0% { transform: translate(-50%, 0) scale(0.7); opacity: 0; }
+  15% { transform: translate(-50%, -12px) scale(1.1); opacity: 1; }
+  100% { transform: translate(-50%, -64px) scale(1); opacity: 0; }
+}
+@keyframes ch-twinkle-star {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.95; }
+}
+@keyframes ch-coin-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.25); }
+  100% { transform: scale(1); }
+}
+@keyframes ch-cloud-drift {
+  0% { transform: translateX(-8%); }
+  100% { transform: translateX(8%); }
+}
