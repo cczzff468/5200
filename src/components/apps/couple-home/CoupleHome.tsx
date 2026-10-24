@@ -2706,6 +2706,18 @@ export default function CoupleHome({ close }: { close: () => void }) {
   );
   // 底部按钮堆叠位置：与动作栏/端杯按钮错开
   const cupBarCls = charAction ? 'bottom-[254px]' : 'bottom-[196px]';
+
+  // —— v6.8 进屋过场：白光过渡（遮住 Canvas 首帧 → 与场景内推镜同步淡出） ——
+  const [whiteOn, setWhiteOn] = useState(true);
+  const [whiteGone, setWhiteGone] = useState(false);
+  useEffect(() => {
+    const t1 = setTimeout(() => setWhiteOn(false), 450);
+    const t2 = setTimeout(() => setWhiteGone(true), 2200);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, []);
   const tvBarCls = charAction
     ? carryCup
       ? 'bottom-[312px]'
@@ -4077,6 +4089,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
             // 失败（空串）也标记，避免死循环重试
             setThumbMap((m) => (m[kind] === url ? m : { ...m, [kind]: url }));
           }}
+        />
+      )}
+
+      {/* 进屋白光过渡（v6.8）：白屏遮首帧 → 淡出与开门推镜同步，纯视觉不拦截点击 */}
+      {!whiteGone && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 z-[90] bg-white transition-opacity duration-[1600ms] ease-out"
+          style={{ opacity: whiteOn ? 1 : 0 }}
         />
       )}
     </div>

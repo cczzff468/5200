@@ -633,10 +633,13 @@ function HouseDoor({
   onEditPointerDown,
   focusRef,
   hostBox,
+  introRef,
 }: {
   pos: [number, number];
   ry: number;
   open: boolean;
+  /** 进屋过场：on 期间门自动迎宾打开（不写用户保存的门开态） */
+  introRef?: RefObject<{ on: boolean }>;
   col?: string;
   night: boolean;
   /** 门牌标签（卧室/厨房/卫生间；空串不挂） */
@@ -674,7 +677,9 @@ function HouseDoor({
   useFrame((_, dt) => {
     if (!panel.current) return;
     // 关 = 与隔墙同面；开 = 向屋内（ry=0 → +z；ry=π/2 → +x 卫生间）摆开约 100°
-    panel.current.rotation.y = THREE.MathUtils.damp(panel.current.rotation.y, open ? -1.78 : 0, 6, dt);
+    // 进屋过场期间门自动迎宾打开（introRef.on），过场结束自动回位
+    const effOpen = open || introRef?.current?.on === true;
+    panel.current.rotation.y = THREE.MathUtils.damp(panel.current.rotation.y, effOpen ? -1.78 : 0, 6, dt);
   });
 
   const doorCol = col ?? '#f3efe6';
@@ -1062,6 +1067,8 @@ export interface RoomProps {
   floorTex?: 'plain' | 'wood' | 'check';
   /** 墙纸纹理（全屋通用，颜色仍分房间）：plain 素色（默认）/ dot 碎花 / stripe 细条纹 */
   wallTex?: 'plain' | 'dot' | 'stripe';
+  /** 进屋过场（v6.8）：on 期间卧室门/阳台门随推镜自动迎宾开合（不动用户保存的门开态） */
+  introRef?: RefObject<{ on: boolean }>;
 }
 
 export default function Room({
@@ -1103,6 +1110,7 @@ export default function Room({
   focusRef,
   floorTex = 'wood',
   wallTex = 'plain',
+  introRef,
 }: RoomProps) {
   const floorWoodTex = useMemo(() => makeFloorTexture(), []);
   const floorCheckTex = useMemo(() => makeFloorCheckerTexture(), []);
@@ -1280,6 +1288,7 @@ export default function Room({
         col={doorCol}
         night={night}
         sign="卧室"
+        introRef={introRef}
         onToggle={() => onToggleDoor?.()}
         editMode={!!editMode}
         selected={selWall === 'door-bed'}
@@ -1325,6 +1334,7 @@ export default function Room({
         col={doorCol}
         night={night}
         sign="阳台"
+        introRef={introRef}
         onToggle={() => onToggleBalconyDoor?.()}
         editMode={!!editMode}
         selected={selWall === 'door-bal'}

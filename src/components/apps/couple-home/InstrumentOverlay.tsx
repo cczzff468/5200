@@ -5,9 +5,9 @@
  *
  * - 吉他：竖版六弦木纹指板（低音弦在左），点弦拨音、按住横扫 = 扫弦；
  *   指板下方独立一条毛玻璃和弦条 C/G/Am/F/Em：按住即「按弦」，此时扫弦弹出和弦把位（闷弦不发声）；
- * - 钢琴（参考专业钢琴 App 深色舞台风重设计）：整体墨黑舞台 + 顶部工具条
- *   （红点 =《小星星》演示开关，蓝色琴标 + 标题，FX 圆钮 = 音色选择，节拍器圆钮 = 100BPM 打拍，
- *   ✕ = 结束演奏）+ 中部竖纹幕布舞台（弹奏时音符名气泡上浮）+ 底部真实感键床
+ * - 钢琴（v6.7 紧凑键床版）：墨黑面板 = 顶部工具条（红点 =《小星星》演示开关，蓝色琴标 + 标题，
+ *   FX 圆钮 = 音色选择，节拍器圆钮 = 100BPM 打拍，✕ = 结束演奏）+ 琴键床直接相贴
+ *   （v6.7 删中部幕布舞台；音符气泡改在键床上方上浮）
  *   （C3→C6 三个完整八度 22 白键 + 15 黑键，2+3 真实排布，象牙白键/亮面黑键）；
  *   多指和弦、滑音（glissando）保留；
  * - 音色：FX 圆钮弹出收缩式选择器（毛玻璃浮层向上弹出、选中打勾、点外部自动收起）；
@@ -617,38 +617,22 @@ function PianoStage({
           </button>
         </div>
       </div>
-      {/* 中部舞台：竖纹幕布 + 顶部聚光 + 上浮音符气泡 */}
-      <div className="relative min-h-0 flex-1 overflow-hidden">
-        <div
-          className="absolute inset-0"
-          style={{
-            background:
-              'repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 16px, rgba(255,255,255,0.013) 30px, rgba(255,255,255,0.013) 46px)',
-          }}
-        />
-        <div
-          className="absolute inset-0"
-          style={{
-            background: 'radial-gradient(90% 70% at 50% -10%, rgba(255,255,255,0.09), transparent 62%)',
-          }}
-        />
+      {/* 键床（v6.7：删中部幕布舞台，工具条与琴键直接相贴）：象牙白键 + 亮面黑键（2+3 真实排布）+ 键上音符气泡 */}
+      <div className="relative min-h-0 flex-1 border-t border-white/10 bg-[#050506]">
         {demoOn && (
-          <div className="absolute left-1/2 top-2.5 z-10 -translate-x-1/2 whitespace-nowrap rounded-full bg-white/10 px-3 py-1 text-[10.5px] font-semibold text-white/85 backdrop-blur-sm">
+          <div className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 whitespace-nowrap rounded-full bg-white/10 px-3 py-1 text-[10.5px] font-semibold text-white/85 backdrop-blur-sm">
             ♪ 小星星 演示中 · 点红点停止
           </div>
         )}
         {bubbles.map((b) => (
           <span
             key={b.id}
-            className="note-bubble pointer-events-none absolute bottom-1.5 z-10 rounded-full border border-white/15 bg-white/10 px-2 py-0.5 text-[10px] font-bold text-white/90"
+            className="note-bubble pointer-events-none absolute top-[30%] z-10 rounded-full border border-white/15 bg-white/10 px-2 py-0.5 text-[10px] font-bold text-white/90"
             style={{ left: `${b.x}%` }}
           >
             {b.label}
           </span>
         ))}
-      </div>
-      {/* 键床：象牙白键 + 亮面黑键（2+3 真实排布） */}
-      <div className="relative h-[34%] min-h-[118px] shrink-0 border-t border-white/10 bg-[#050506]">
         <div className="relative mx-[3px] h-full">
           <div className="absolute inset-0 flex">
             {PIANO_WHITE.map((k) => {
