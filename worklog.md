@@ -21901,3 +21901,28 @@ Stage Summary:
 - 拾光小屋小人方案终版：纯程序化 Q 版萌系情侣小人（零外部资产、零版权风险、共 ~1.1k 行）
 - 造型：女主双马尾粉裙 / 男主呆毛卫衣，萌系大眼+眨眼+腮红；全套姿势与道具保留
 - 仓库状态：HEAD=eaa5a81 与远端同步
+
+---
+Task ID: hud-hair-1024
+Agent: Z.ai Code (main)
+Task: 拾光小屋 HUD 精简（删天气预报/删邀请访客/新增右上角三点菜单/装修按钮移右上角）+ 女生小人头发美化
+
+Work Log:
+- CoupleHome.tsx：删除顶部天气胶囊与 weatherInfo/weatherCodeInfo（保留 useWeatherSnapshot 驱动窗外雨雪特效与夜晚自动开灯，天气联动不受影响）
+- 删除邀请访客全链路：UserPlus 顶部按钮、「邀请谁来做客?」底部面板、inviteOpen/inviteList/guest 状态、openInvite/inviteGuest/dismissGuest 处理器、guestRT ref、listContacts 导入；HomeScene.tsx 同步移除 guestRT/guestName props、GameLoop 访客漫游、访客 CharChibi3D 渲染（CharChibi3D 组件本身的 who="guest" 能力保留）
+- 新增右上角 ⋮（MoreVertical）更多菜单：切换白天/夜晚、昼夜跟随现实（含已开启徽标）、音效开关（已开/已关徽标）、视角第一/第三人称（含当前状态）；点任意项自动收起，点空白处（HUD 内透明关闭层）收起，模式切换时自动收起
+- 原散落按钮全部收进菜单：顶栏月亮/时钟按钮、生活模式右下角视角+音效按钮、装修模式撤销行内音效按钮
+- 装修小家/完成按钮从右下角移到顶栏右上角（粉/绿胶囊，h-10），与拍照、⋮、全屏并排
+- CharChibi3D.tsx 女主头发重做（经临时 test-chibi 四视角页迭代 5 版验证后删除该临时页）：
+  · 头盖发际线从 0.62π/俯仰-0.2 抬高到 0.52π/-0.12，不再压住眼睛，露出额头与眉毛
+  · 8 撮水滴形空气刘海从发际线垂下 + 两侧鬓角碎发衔接
+  · 双马尾保留验证过的胶囊主束，发梢改暖焦糖挑染（hairTipMat）
+  · 后脑披发从盖到脚踝的长蛋形收短为齐胸波波头 + 三颗波浪发尾
+  · 双层蝴蝶结×2（左大右小，双层翼+飘带）直接按球面摆位挂 hairDyn，反复调试避开空心头盖壳与马尾的遮挡（green marker A/B 定位法）
+  · 新增头顶小卷呆毛（torus 弧）+ 发丝 roughness 0.7→0.58 提升光泽
+- 验证：tsc 绿、eslint 绿；agent-browser 全流程（锁屏→解锁→拾光小屋）：⋮ 菜单四项交互✓（夜晚切换、音效关闭持久、第一/第三人称切换）、装修小家↔完成✓、无天气胶囊/无邀请按钮✓、persist POST /api/couple-home 200✓、全新浏览器会话 0 console error✓
+
+Stage Summary:
+- HUD 精简完成：顶部只剩 返回 + [装修小家][拍照][⋮][全屏]；三点菜单收纳时间/声音/视角
+- 女主发型终版：高发际线+水滴刘海+双马尾焦糖挑染+双蝴蝶结+小卷呆毛+齐胸波波背发
+- 仓库待推送：3 个源文件改动（db/custom.db 为运行时数据不入库提交）

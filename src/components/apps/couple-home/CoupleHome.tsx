@@ -40,6 +40,7 @@ import {
   Maximize,
   Minimize,
   Moon,
+  MoreVertical,
   Move,
   Music,
   Paintbrush,
@@ -56,7 +57,6 @@ import {
   Sun,
   Trash2,
   Tv,
-  UserPlus,
   Utensils,
   UtensilsCrossed,
   Users,
@@ -72,8 +72,7 @@ import InstrumentOverlay from './InstrumentOverlay';
 import { SongSheet } from './SongSheet';
 import { useMusic } from '@/lib/ios/music-store';
 import { localDB, genId } from '@/lib/ios/db';
-import { useWeatherSnapshot, weatherCodeInfo } from '../weather-core';
-import { listContacts } from '@/lib/ios/contacts-store';
+import { useWeatherSnapshot } from '../weather-core';
 import { addAlbum } from '@/lib/ios/album-store';
 import { readInviteMeta } from '@/lib/ios/couple-invite';
 import {
@@ -534,11 +533,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [thumbMap, setThumbMap] = useState<Record<string, string>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [full, setFull] = useState(false);
-  /** v5.7 拾光扩展面板：点歌 / 邀访客 / 五子棋 / 做饭小游戏 / 拍照模式 */
+  /** v5.7 拾光扩展面板：点歌 / 五子棋 / 做饭小游戏 / 拍照模式 */
   const [musicSheet, setMusicSheet] = useState(false);
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteList, setInviteList] = useState<{ id: string; name: string }[]>([]);
-  const [guest, setGuest] = useState<{ id: string; name: string } | null>(null);
+  /** 右上角 ⋮ 更多菜单：时间变化 / 声音开关 / 视角 */
+  const [moreOpen, setMoreOpen] = useState(false);
   const [chess, setChess] = useState<{ itemId: string } | null>(null);
   const [cookingGame, setCookingGame] = useState(false);
   // —— v6.1 G 系列：装修方案 / 留言板 / 三连小游戏 ——
@@ -625,8 +623,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 手持物（拿饮料/咖啡后杯子握在右手，可以端着到处逛；coffee = 咖啡冒热气款） */
   const carryRef = useRef({ cup: false, coffee: false });
   const [carryCup, setCarryCup] = useState(false);
-  /** 访客运行时（非持久化，会话级） */
-  const guestRT = useRef<CharRT | null>(null);
   /** 编辑模式缩放指令（HUD 按钮 → Canvas 内相机） */
   const zoomCmd = useRef({ v: 0, dir: 0 });
   /** 四向微调指令（HUD 方向按钮 → Canvas 内按视角方位换算） */
@@ -1484,40 +1480,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   // ==================== v5.7 拾光扩展功能 ====================
 
-  // —— F7 邀请访客 ——
-  const openInvite = useCallback(async () => {
-    setInviteOpen(true);
-    try {
-      const all = await listContacts();
-      setInviteList(
-        all
-          .filter((c) => c.kind !== 'user' && c.name?.trim())
-          .slice(0, 12)
-          .map((c) => ({ id: c.id, name: c.name.trim() })),
-      );
-    } catch {
-      setInviteList([]);
-    }
-  }, []);
-
-  const inviteGuest = useCallback(
-    (g: { id: string; name: string }) => {
-      guestRT.current = { x: -2.5, z: 2.2, heading: Math.PI, moving: false, target: null, nextWander: 1.2 };
-      setGuest(g);
-      setInviteOpen(false);
-      toast(`${g.name}来家里做客啦，快去打个招呼～`);
-    },
-    [toast],
-  );
-
-  const dismissGuest = useCallback(() => {
-    const name = guest?.name;
-    guestRT.current = null;
-    setGuest(null);
-    setInviteOpen(false);
-    if (name) toast(`送${name}到门口，记得常来玩呀～`);
-  }, [guest, toast]);
-
   // —— F6 拍照模式：快门 → 存进情侣相册 ——
   const photoBusy = useRef(false);
   const takePhoto = useCallback(async () => {
@@ -1747,13 +1709,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
     );
     toast('天黑了，帮你把灯打开啦～');
   }, [night, nightAuto, toast]);
-
-  // 天气面板信息（HUD 顶部小胶囊）
-  const weatherInfo = useMemo(() => {
-    if (!weather) return null;
-    const info = weatherCodeInfo(weather.current.code);
-    return { label: info.label, Icon: info.Icon, temp: Math.round(weather.current.temperature), city: weather.name };
-  }, [weather]);
 
   // ==================== 编辑操作 ====================
   const rotateY = useCallback(
@@ -2624,6 +2579,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
     return () => document.removeEventListener('fullscreenchange', onFs);
   }, []);
 
+  // 模式切换时收起右上角 ⋮ 菜单
+  useEffect(() => {
+    setMoreOpen(false);
+  }, [mode]);
+
   // 离开生活模式（进装修/商店全屏遮挡等）时收起乐器弹奏界面
   useEffect(() => {
     if (mode !== 'live' && instRef.current) {
@@ -2739,8 +2699,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
         onToggleKitchenDoor={toggleKitchenDoor}
         onToggleBathDoor={toggleBathDoor}
         onToggleBalconyDoor={toggleBalconyDoor}
-        guestRT={guestRT}
-        guestName={guest?.name ?? null}
         musicPlaying={musicPlaying}
         weatherFx={weatherFx}
         litLamps={litLampCount}
@@ -2772,28 +2730,35 @@ export default function CoupleHome({ close }: { close: () => void }) {
       {/* ===== HUD ===== */}
       {!photoMode && (
       <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">
+        {/* ⋮ 菜单打开时的空白关闭层（点菜单以外任意处收起） */}
+        {moreOpen && (
+          <div className="pointer-events-auto absolute inset-0 z-10" onClick={() => setMoreOpen(false)} aria-hidden="true" />
+        )}
+
         {/* 顶栏 */}
-        <div className="flex items-start justify-between p-3 pt-11">
-          <div className="flex items-start gap-2">
+        <div className="relative z-20 flex items-start justify-between p-3 pt-11">
+          <button
+            onClick={close}
+            aria-label="返回"
+            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+
+          <div className="flex items-center gap-2">
+            {/* 装修小家 / 完成（右上角入口） */}
             <button
-              onClick={close}
-              aria-label="返回"
-              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+              onClick={() => switchMode(mode === 'live' ? 'edit' : 'live')}
+              aria-label={mode === 'live' ? '装修小家' : '完成装修'}
+              className={
+                mode === 'live'
+                  ? 'pointer-events-auto flex h-10 items-center gap-1.5 rounded-full bg-[#f4b3c2] px-3.5 text-[13px] font-semibold text-white shadow-md shadow-[#f4b3c2]/40 transition active:scale-95'
+                  : 'pointer-events-auto flex h-10 items-center gap-1.5 rounded-full bg-[#8fce9e] px-3.5 text-[13px] font-semibold text-white shadow-md shadow-[#8fce9e]/40 transition active:scale-95'
+              }
             >
-              <ChevronLeft className="h-5 w-5" />
+              {mode === 'live' ? <Pencil className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+              {mode === 'live' ? '装修小家' : '完成'}
             </button>
-
-            {/* 天气胶囊（真实天气联动：城市 + 天气 + 温度） */}
-            {weatherInfo && (
-              <div className="pointer-events-auto flex h-10 items-center gap-1.5 rounded-full bg-white/75 px-3 shadow-sm backdrop-blur">
-                <weatherInfo.Icon className="h-4 w-4 text-[#7a8aa0]" />
-                <span className="text-[12px] font-semibold text-[#4a4a4e]">{weatherInfo.temp}°</span>
-                <span className="max-w-[64px] truncate text-[11px] text-[#8a8a90]">{weatherInfo.city}</span>
-              </div>
-            )}
-          </div>
-
-          <div className="flex gap-2">
             {/* 拍照模式（F6：隐藏 UI 摆拍，存情侣相册） */}
             <button
               onClick={() => setPhotoMode(true)}
@@ -2803,35 +2768,92 @@ export default function CoupleHome({ close }: { close: () => void }) {
             >
               <Camera className="h-[18px] w-[18px]" />
             </button>
-            {/* 邀请访客（F7：AI 联系人来家做客） */}
-            <button
-              onClick={openInvite}
-              aria-label="邀请访客"
-              title={guest ? `${guest.name}正在做客` : '邀请 AI 联系人来家里做客'}
-              className="pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
-            >
-              <UserPlus className="h-[18px] w-[18px]" />
-              {guest && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-white bg-[#7fc792]" />}
-            </button>
-            <button
-              onClick={toggleNight}
-              aria-label={night ? '切换白天' : '切换夜晚'}
-              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#7a6a4e] shadow-sm backdrop-blur transition active:scale-95"
-            >
-              {night ? <Moon className="h-[18px] w-[18px]" /> : <Sun className="h-[18px] w-[18px]" />}
-            </button>
-            <button
-              onClick={enableAutoNight}
-              aria-label="昼夜跟随真实时间"
-              title="昼夜跟随真实时间（19点~6点为夜晚）"
-              className={
-                nightAuto
-                  ? 'pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-[#3a3a3e]/80 text-[#ffd98f] shadow-sm backdrop-blur transition active:scale-95'
-                  : 'pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95'
-              }
-            >
-              <Clock className="h-[18px] w-[18px]" />
-            </button>
+            {/* ⋮ 更多菜单：时间变化 / 声音开关 / 视角 */}
+            <div className="pointer-events-auto relative">
+              <button
+                onClick={() => setMoreOpen((o) => !o)}
+                aria-label="更多设置"
+                aria-expanded={moreOpen}
+                title="更多设置"
+                className={
+                  moreOpen
+                    ? 'flex h-10 w-10 items-center justify-center rounded-full bg-[#3a3a3e]/80 text-white shadow-sm backdrop-blur transition active:scale-95'
+                    : 'flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95'
+                }
+              >
+                <MoreVertical className="h-[18px] w-[18px]" />
+              </button>
+              <AnimatePresence>
+                {moreOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -6, scale: 0.96 }}
+                    transition={{ type: 'spring', damping: 28, stiffness: 400 }}
+                    className="absolute right-0 top-12 z-50 w-[218px] origin-top-right overflow-hidden rounded-2xl bg-white/95 p-1.5 shadow-2xl ring-1 ring-black/5 backdrop-blur-xl"
+                  >
+                    {/* 时间变化：手动切白天 / 夜晚 */}
+                    <button
+                      onClick={() => {
+                        toggleNight();
+                        setMoreOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                    >
+                      {night ? <Moon className="h-4 w-4 shrink-0 text-[#8a7ab0]" /> : <Sun className="h-4 w-4 shrink-0 text-[#e0a458]" />}
+                      <span className="flex-1 text-left">{night ? '切换到白天' : '切换到夜晚'}</span>
+                      <span className="text-[11px] text-[#b0aeb4]">{night ? '夜晚' : '白天'}</span>
+                    </button>
+                    {/* 时间变化：昼夜跟随真实时间（19点~6点为夜晚） */}
+                    <button
+                      onClick={() => {
+                        enableAutoNight();
+                        setMoreOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                    >
+                      <Clock className="h-4 w-4 shrink-0 text-[#7fa8c9]" />
+                      <span className="flex-1 text-left">昼夜跟随现实</span>
+                      {nightAuto ? (
+                        <span className="rounded-full bg-[#dff0e2] px-2 py-0.5 text-[10px] font-semibold text-[#3f9a58]">已开启</span>
+                      ) : (
+                        <span className="text-[11px] text-[#b0aeb4]">关</span>
+                      )}
+                    </button>
+                    <div className="mx-2.5 my-1 h-px bg-[#f0eeea]" />
+                    {/* 声音开关 */}
+                    <button
+                      onClick={() => {
+                        toggleSfx();
+                        setMoreOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                    >
+                      {sfxOn ? <Volume2 className="h-4 w-4 shrink-0 text-[#6a8a6a]" /> : <VolumeX className="h-4 w-4 shrink-0 text-[#b09a9a]" />}
+                      <span className="flex-1 text-left">音效</span>
+                      {sfxOn ? (
+                        <span className="rounded-full bg-[#dff0e2] px-2 py-0.5 text-[10px] font-semibold text-[#3f9a58]">已开</span>
+                      ) : (
+                        <span className="rounded-full bg-[#f0eff1] px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90]">已关</span>
+                      )}
+                    </button>
+                    {/* 视角：第一 / 第三人称 */}
+                    <button
+                      onClick={() => {
+                        toggleFp();
+                        setMoreOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                    >
+                      {fp ? <Eye className="h-4 w-4 shrink-0 text-[#c99a5b]" /> : <Users className="h-4 w-4 shrink-0 text-[#c99a5b]" />}
+                      <span className="flex-1 text-left">视角</span>
+                      <span className="text-[11px] text-[#b0aeb4]">{fp ? '第一人称' : '第三人称'}</span>
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+            {/* 全屏 */}
             <button
               onClick={toggleFull}
               aria-label="全屏"
@@ -3224,34 +3246,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
             </div>
             <div className={mode === 'live' ? 'hidden' : 'flex-1'} />
 
-            {/* 模式切换 + 视角 + 商店 + 装修 */}
+            {/* 编辑工具（装修模式）：撤销 / 重做 / 地板墙色 / 商店（音效/视角已收进右上角 ⋮ 菜单） */}
             <div className="pointer-events-auto flex flex-col items-end gap-2">
-              {mode === 'live' && (
-                <button
-                  onClick={toggleFp}
-                  aria-label={fp ? '切换第三人称' : '切换第一人称'}
-                  title={fp ? '第三人称（跟随视角）' : '第一人称（小人就是自己）'}
-                  className={
-                    fp
-                      ? 'flex h-11 items-center gap-2 rounded-full bg-[#f2b3c2] px-4 text-[13px] font-semibold text-white shadow-md transition active:scale-95'
-                      : 'flex h-11 items-center gap-2 rounded-full bg-white/85 px-4 text-[13px] font-medium text-[#4a4a4e] shadow-md backdrop-blur transition active:scale-95'
-                  }
-                >
-                  {fp ? <Eye className="h-4 w-4" /> : <Users className="h-4 w-4" />}
-                  {fp ? '第一人称' : '第三人称'}
-                </button>
-              )}
-              {mode === 'live' && (
-                // E3 音效开关（与装修模式同款，共用 toggleSfx）
-                <button
-                  onClick={toggleSfx}
-                  aria-label="音效开关"
-                  title={sfxOn ? '关闭音效' : '开启音效'}
-                  className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 text-[#4a4a4e] shadow-md backdrop-blur transition active:scale-95"
-                >
-                  {sfxOn ? <Volume2 className="h-[18px] w-[18px]" /> : <VolumeX className="h-[18px] w-[18px]" />}
-                </button>
-              )}
               {mode === 'edit' && (
                 <div className="flex items-center gap-2">
                   {/* 撤销上一步装修操作（Ctrl+Z）：放置/收起/移动/旋转/升降/换色/门窗均可撤销 */}
@@ -3274,15 +3270,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   >
                     <Redo2 className="h-[18px] w-[18px] text-[#6a7a8a]" />
                   </button>
-                  {/* E3 音效开关（undo/redo 同排，地板墙色左侧；与生活模式共用 toggleSfx） */}
-                  <button
-                    onClick={toggleSfx}
-                    aria-label="音效开关"
-                    title={sfxOn ? '关闭音效' : '开启音效'}
-                    className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 shadow-md backdrop-blur transition active:scale-95"
-                  >
-                    {sfxOn ? <Volume2 className="h-[18px] w-[18px] text-[#6a7a8a]" /> : <VolumeX className="h-[18px] w-[18px] text-[#b09a9a]" />}
-                  </button>
                   <button
                     onClick={() => setRoomStyleOpen((o) => !o)}
                     className="flex h-11 items-center gap-2 rounded-full bg-white/85 px-4 text-[13px] font-medium text-[#4a4a4e] shadow-md backdrop-blur transition active:scale-95"
@@ -3299,26 +3286,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   </button>
                 </div>
               )}
-              <button
-                onClick={() => switchMode(mode === 'live' ? 'edit' : 'live')}
-                className={
-                  mode === 'live'
-                    ? 'flex h-12 items-center gap-2 rounded-full bg-[#f4b3c2] px-5 text-[14px] font-semibold text-white shadow-lg shadow-[#f4b3c2]/40 transition active:scale-95'
-                    : 'flex h-12 items-center gap-2 rounded-full bg-[#8fce9e] px-5 text-[14px] font-semibold text-white shadow-lg shadow-[#8fce9e]/40 transition active:scale-95'
-                }
-              >
-                {mode === 'live' ? (
-                  <>
-                    <Pencil className="h-4 w-4" />
-                    装修小家
-                  </>
-                ) : (
-                  <>
-                    <Check className="h-4 w-4" />
-                    完成
-                  </>
-                )}
-              </button>
             </div>
           </div>
         </div>
@@ -3446,67 +3413,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
       {/* ===== 小屋点歌（F3：音箱/黑胶/八音盒共用；搜歌 · 我的歌单 · 队列 —— v6.0 重构） ===== */}
       <SongSheet open={musicSheet} onClose={() => setMusicSheet(false)} onToast={toast} />
-
-      {/* ===== 邀请访客（F7：AI 联系人来家做客） ===== */}
-      <AnimatePresence>
-        {inviteOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="absolute inset-0 z-30 flex items-end justify-center bg-black/25 pb-6"
-            onClick={() => setInviteOpen(false)}
-          >
-            <motion.div
-              initial={{ y: 60, opacity: 0.8 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 50, opacity: 0 }}
-              transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-              className="pointer-events-auto w-full max-w-[320px] rounded-3xl bg-white/96 p-5 shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="mb-3 flex items-center justify-between">
-                <div>
-                  <span className="text-[15px] font-semibold text-[#3a3a3e]">🚪 邀请谁来做客？</span>
-                  {guest && <p className="mt-0.5 text-[11px] text-[#9a9a96]">现在 {guest.name} 正在屋里逛</p>}
-                </div>
-                <button
-                  onClick={() => setInviteOpen(false)}
-                  aria-label="关闭邀请面板"
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="scrollbar-none max-h-[46vh] overflow-y-auto">
-                {inviteList.length === 0 && <p className="py-6 text-center text-[12.5px] text-[#a8a8a4]">还没有 AI 联系人，先去「联系人」创建一个吧</p>}
-                {inviteList.map((c) => {
-                  const isCurrent = guest?.id === c.id;
-                  return (
-                    <button
-                      key={c.id}
-                      onClick={() => (isCurrent ? dismissGuest() : inviteGuest(c))}
-                      className="mb-2 flex w-full items-center gap-3 rounded-2xl bg-[#faf8f3] p-3 text-left ring-1 ring-[#efece2] transition active:scale-[0.98]"
-                    >
-                      <span className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-[#f6cdd6] to-[#dcd2ec] text-[15px] font-semibold text-white">
-                        {c.name.slice(0, 1)}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-[#3a3a3e]">{c.name}</span>
-                      <span
-                        className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold text-white ${
-                          isCurrent ? 'bg-[#e08a8a]' : 'bg-[#f2b3c2]'
-                        }`}
-                      >
-                        {isCurrent ? '送客出门' : '邀请'}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* ===== 调色盘面板（编辑模式：家具 / 门窗） ===== */}
       <AnimatePresence>

@@ -127,9 +127,6 @@ export interface HomeSceneProps {
   outfit?: number;
   /** 正在进行的家具动作（灶台蒸汽 / 乐器音符联动） */
   activeAct?: { type: CharAction['type']; itemId: string; active: boolean } | null;
-  /** 访客（邀请的 AI 联系人）：运行时 ref + 名牌（null = 无访客） */
-  guestRT?: RefObject<CharRT | null>;
-  guestName?: string | null;
   /** 音响放歌中（音箱上方飘音符） */
   musicPlaying?: boolean;
   /** 天气特效：rain 雨 / snow 雪 / clear 无（窗外粒子） */
@@ -350,7 +347,6 @@ function GameLoop({
   actRef,
   wallBoxes,
   instRef,
-  guestRT,
 }: {
   meRT: CharRT;
   taRT: CharRT;
@@ -375,8 +371,6 @@ function GameLoop({
   actRef: RefObject<CharAction | null>;
   /** 乐器弹奏特写（非 null = 镜头推近该乐器） */
   instRef?: RefObject<{ kind: 'piano' | 'guitar'; itemId: string } | null>;
-  /** 访客运行时（非 null = 有访客在屋里溜达） */
-  guestRT?: RefObject<CharRT | null>;
   /** 墙段碰撞盒（随门位重建；生活模式相机防钻墙钳制用） */
   wallBoxes: THREE.Box3[];
 }) {
@@ -487,9 +481,6 @@ function GameLoop({
 
     // partner 漫游（客厅内）
     wander(taRT, dt, itemsRef.current ?? []);
-    // 访客漫游（客厅内；非 null = 有访客）
-    const guest = guestRT?.current;
-    if (guest) wander(guest, dt * 0.92, itemsRef.current ?? []);
 
     clock.current += dt;
     const fpOn = fpRef.current?.on === true;
@@ -1219,7 +1210,7 @@ export default function HomeScene(props: HomeSceneProps) {
     floorColBal, wallColBal,
     ceilCol, ceilColBed, ceilColK, ceilColB,
     doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, onToggleDoor, onToggleKitchenDoor, onToggleBathDoor, onToggleBalconyDoor,
-    guestRT, guestName, musicPlaying, weatherFx, litLamps, onCritterTap,
+    musicPlaying, weatherFx, litLamps, onCritterTap,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
   } = props;
 
@@ -1422,9 +1413,6 @@ export default function HomeScene(props: HomeSceneProps) {
 
       <CharChibi3D rt={meRT} who="me" hide={fp && mode === 'live'} poseRef={poseRef} carryRef={carryRef} />
       <CharChibi3D rt={taRT} who="partner" />
-      {guestRT?.current && (
-        <CharChibi3D rt={guestRT.current} who="guest" guestName={guestName ?? undefined} />
-      )}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       <WeatherFX kind={weatherFx ?? 'clear'} win={win} winPos={winPos} />
       <GlassRain kind={weatherFx ?? 'clear'} winPos={winPos} />
@@ -1468,7 +1456,6 @@ export default function HomeScene(props: HomeSceneProps) {
         actRef={actRef}
         wallBoxes={wallBoxes}
         instRef={instRef}
-        guestRT={guestRT}
       />
       <PointerRig
         mode={mode}

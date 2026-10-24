@@ -9,7 +9,8 @@
  * - 约 2.2 头身：大圆头（微扁）+ 圆润短身短手短腿，无脖颈衔接的软萌轮廓；
  * - 脸：竖椭圆大眼睛（眼白+深棕瞳仁+双层高光+上眼线）、细弯眉、
  *   径向渐变腮红、小巧鼻子、微笑弧线嘴；随机眨眼 + 待机歪头；
- * - 发型：女主栗棕双马尾（粉蝴蝶结+发绳，马尾随步伐摇摆）+ 空气刘海 + 两侧垂发；
+ * - 发型：女主栗棕双马尾（双层粉蝴蝶结+发绳环，S 形波浪马尾+发尾挑染，随步伐摇摆）+ 七撮垂坠空气刘海 +
+ *   两侧内扣长发包脸 + 后脑披发波浪边 + 发顶三道光泽 + 头顶小卷呆毛；
  *   男主蓬松云朵黑发（头顶呆毛随弹跳晃动）+ 前帘刘海 + 鬓角；
  * - 服装：女主樱粉连衣裙（白心形胸饰 + 圆锥裙摆走路后飘）+ 白色过膝袜 + 圆头小皮鞋；
  *   男主奶白连帽卫衣（脑后兜帽）+ 藏蓝短裤 + 白色小袜 + 白色圆头鞋；
@@ -626,39 +627,62 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0): CharRig {
   head.add(hairDyn);
 
   if (isGirl) {
-    // 头盖
-    const cap = mesh(new THREE.SphereGeometry(P.headR * 1.07, 24, 20, 0, Math.PI * 2, 0, Math.PI * 0.62), hairMat, 0, P.headR * 0.05, -P.headR * 0.05, head);
-    cap.rotation.x = -0.2;
-    // 空气刘海（5 撮圆弧排列）
+    // 女主发丝更亮泽一点（低粗糙度 → 灯光下有柔和反光）
+    hairMat.roughness = 0.58;
+    // 发梢渐变色（暖焦糖色，比主发色亮一档：动漫系「发尾挑染」）
+    const hairTipMat = stdMat(`#${new THREE.Color(o.hair).lerp(new THREE.Color('#f2c9a4'), 0.5).getHexString()}`, 0.55);
+
+    // 头盖（发际线抬高到眉上方，不再压住眼睛）
+    const cap = mesh(new THREE.SphereGeometry(P.headR * 1.07, 24, 20, 0, Math.PI * 2, 0, Math.PI * 0.52), hairMat, 0, P.headR * 0.05, -P.headR * 0.05, head);
+    cap.rotation.x = -0.12;
+    // 空气刘海（6 撮水滴形发束从发际线垂下，中间低两侧高的自然弧）
     const bangs: [number, number, number, number][] = [
-      [-0.6, 0.5, 0.62, 0.165],
-      [-0.32, 0.58, 0.72, 0.185],
-      [0, 0.61, 0.76, 0.2],
-      [0.32, 0.58, 0.72, 0.185],
-      [0.6, 0.5, 0.62, 0.165],
+      [-0.63, 0.3, 0.82, 0.105],
+      [-0.45, 0.33, 0.87, 0.12],
+      [-0.27, 0.35, 0.91, 0.13],
+      [-0.09, 0.36, 0.93, 0.135],
+      [0.09, 0.36, 0.93, 0.135],
+      [0.27, 0.35, 0.91, 0.13],
+      [0.45, 0.33, 0.87, 0.12],
+      [0.63, 0.3, 0.82, 0.105],
     ];
     for (const [fx, fy, fz, fr] of bangs) {
-      const b = mesh(new THREE.SphereGeometry(P.headR * fr, 12, 10), hairMat, fx * P.headR, fy * P.headR, fz * P.headR, head);
-      b.scale.set(1.1, 0.72, 0.62);
+      const b = mesh(new THREE.SphereGeometry(P.headR * fr, 12, 12), hairMat, fx * P.headR, fy * P.headR, fz * P.headR, head);
+      b.scale.set(0.95, 1.45, 0.62);
     }
-    // 两侧垂发（贴脸长发束）
+    // 鬓角小碎发（衔接头盖侧缘与两侧垂发，挡住发际线空隙）
+    for (const sx of [-1, 1]) {
+      const tuft = mesh(new THREE.SphereGeometry(P.headR * 0.14, 10, 8), hairMat, P.headR * 0.88 * sx, P.headR * 0.05, P.headR * 0.4, head);
+      tuft.scale.set(0.8, 1.25, 0.62);
+      tuft.rotation.z = sx * 0.3;
+    }
+    // 两侧垂发（贴脸长发束，发梢挑染）
     for (const sx of [-1, 1]) {
       const lock = mesh(
-        new THREE.CapsuleGeometry(P.headR * 0.185, P.headR * 0.85, 6, 10),
+        new THREE.CapsuleGeometry(P.headR * 0.18, P.headR * 0.85, 6, 10),
         hairMat,
-        P.headR * 0.92 * sx,
-        -P.headR * 0.62,
-        P.headR * 0.22,
+        P.headR * 0.95 * sx,
+        -P.headR * 0.58,
+        P.headR * 0.26,
         head,
       );
       lock.rotation.z = sx * -0.07;
-      const tip = mesh(new THREE.SphereGeometry(P.headR * 0.16, 10, 8), hairMat, P.headR * 0.95 * sx, -P.headR * 1.16, P.headR * 0.26, head);
+      const tip = mesh(new THREE.SphereGeometry(P.headR * 0.16, 10, 8), hairTipMat, P.headR * 0.97 * sx, -P.headR * 1.12, P.headR * 0.29, head);
       tip.castShadow = false;
     }
-    // 后脑长发披背
-    const backHair = mesh(new THREE.SphereGeometry(P.headR, 18, 14), hairMat, 0, -P.headR * 0.5, -P.headR * 0.58, head);
-    backHair.scale.set(1.06, 1.42, 0.6);
-    // 双马尾（发绳 + 垂束 + 发梢；挂 hairDyn 做摆动）
+    // 后脑披发（齐胸长度的小波波头，轮廓收窄不再盖住全身）
+    const backHair = mesh(new THREE.SphereGeometry(P.headR, 18, 14), hairMat, 0, -P.headR * 0.35, -P.headR * 0.48, head);
+    backHair.scale.set(1.05, 1.0, 0.6);
+    // 发尾波浪边（三颗小圆弧勾出自然发尾）
+    for (const [wx, wy] of [
+      [-0.42, -1.2],
+      [0, -1.3],
+      [0.42, -1.2],
+    ] as const) {
+      const wave = mesh(new THREE.SphereGeometry(P.headR * 0.18, 10, 8), hairMat, wx * P.headR, wy * P.headR, -P.headR * 0.52, head);
+      wave.scale.set(1.05, 0.8, 0.62);
+    }
+    // 双马尾（发绳 + 垂束 + 挑染发梢；挂 hairDyn 做摆动）
     for (const sx of [-1, 1]) {
       const tail = new THREE.Group();
       tail.position.set(P.headR * 0.78 * sx, P.headR * 0.42, -P.headR * 0.42);
@@ -676,25 +700,41 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0): CharRig {
         tail,
       );
       strand.scale.set(1, 1, 0.92);
-      const tailTip = mesh(new THREE.SphereGeometry(P.headR * 0.17, 10, 8), hairMat, 0, -P.headR * 1.56, 0, tail);
+      const tailTip = mesh(new THREE.SphereGeometry(P.headR * 0.17, 10, 8), hairTipMat, 0, -P.headR * 1.56, 0, tail);
       tailTip.castShadow = false;
     }
-    // 左马尾蝴蝶结（两瓣 + 中心结）
-    const bow = new THREE.Group();
-    bow.position.set(-P.headR * 0.84, P.headR * 0.56, -P.headR * 0.34);
-    bow.rotation.set(0.3, 0.5, -0.5);
+    // 左马尾大蝴蝶结（双层翼 + 中心结 + 小飘带；直接按球面坐标摆位，贴在头侧马尾根上方）
     const bowMat = stdMat(o.bow, 0.55);
-    for (const sx of [-1, 1]) {
-      const wing = new THREE.Mesh(new THREE.SphereGeometry(P.headR * 0.13, 10, 8), bowMat);
-      wing.scale.set(1.25, 0.75, 0.55);
-      wing.position.set(0.115 * sx, 0.02 * sx, 0);
-      wing.castShadow = false;
-      bow.add(wing);
-    }
-    const knot = new THREE.Mesh(new THREE.SphereGeometry(P.headR * 0.058, 10, 8), bowMat);
-    knot.castShadow = false;
-    bow.add(knot);
-    hairDyn.add(bow);
+    const wingA = mesh(new THREE.SphereGeometry(P.headR * 0.145, 12, 10), bowMat, -P.headR * 1.0, P.headR * 0.78, -P.headR * 0.26, hairDyn);
+    wingA.scale.set(1.25, 0.85, 0.6);
+    wingA.rotation.z = 0.5;
+    wingA.castShadow = false;
+    const wingB = mesh(new THREE.SphereGeometry(P.headR * 0.13, 12, 10), bowMat, -P.headR * 0.8, P.headR * 0.8, -P.headR * 0.24, hairDyn);
+    wingB.scale.set(1.2, 0.8, 0.6);
+    wingB.rotation.z = 0.5;
+    wingB.castShadow = false;
+    const bowKnot = mesh(new THREE.SphereGeometry(P.headR * 0.06, 10, 8), bowMat, -P.headR * 0.9, P.headR * 0.76, -P.headR * 0.2, hairDyn);
+    bowKnot.castShadow = false;
+    const bowRib = mesh(new THREE.ConeGeometry(P.headR * 0.035, P.headR * 0.24, 8), bowMat, -P.headR * 0.92, P.headR * 0.6, -P.headR * 0.18, hairDyn);
+    bowRib.rotation.x = Math.PI;
+    bowRib.rotation.z = 0.25;
+    bowRib.castShadow = false;
+    // 右马尾小蝴蝶结（与左侧呼应，尺寸约七成）
+    const wingAS = mesh(new THREE.SphereGeometry(P.headR * 0.105, 12, 10), bowMat, P.headR * 0.98, P.headR * 0.8, -P.headR * 0.26, hairDyn);
+    wingAS.scale.set(1.25, 0.85, 0.6);
+    wingAS.rotation.z = -0.5;
+    wingAS.castShadow = false;
+    const wingBS = mesh(new THREE.SphereGeometry(P.headR * 0.095, 12, 10), bowMat, P.headR * 0.81, P.headR * 0.81, -P.headR * 0.24, hairDyn);
+    wingBS.scale.set(1.2, 0.8, 0.6);
+    wingBS.rotation.z = -0.5;
+    wingBS.castShadow = false;
+    const bowKnotS = mesh(new THREE.SphereGeometry(P.headR * 0.045, 10, 8), bowMat, P.headR * 0.9, P.headR * 0.77, -P.headR * 0.2, hairDyn);
+    bowKnotS.castShadow = false;
+    // 左马尾大蝴蝶结（双层翼 + 两条飘带，贴在头侧马尾根处）
+    // 头顶小卷呆毛（一撮可爱的小卷，随 hairDyn 摆动）
+    const curl = mesh(new THREE.TorusGeometry(P.headR * 0.075, P.headR * 0.02, 8, 16, Math.PI * 1.5), hairMat, 0.03 * P.headR, P.headR * 1.08, -0.02 * P.headR, hairDyn);
+    curl.rotation.set(0.5, 0.3, 0.6);
+    curl.castShadow = false;
   } else {
     // —— 男主：蓬松云朵黑发 ——
     const cap = mesh(new THREE.SphereGeometry(P.headR * 1.08, 24, 20, 0, Math.PI * 2, 0, Math.PI * 0.6), hairMat, 0, P.headR * 0.07, -P.headR * 0.04, head);
