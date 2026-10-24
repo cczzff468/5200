@@ -22,7 +22,6 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { OrbitControls, PerformanceMonitor } from '@react-three/drei';
 import Room, { buildWallBoxes } from './Room';
 import Furn3D from './Furn3D';
-import Char3D from './Char3D';
 import CharChibi3D from './CharChibi3D';
 import {
   BAL_X0,
@@ -1424,7 +1423,7 @@ export default function HomeScene(props: HomeSceneProps) {
       <CharChibi3D rt={meRT} who="me" hide={fp && mode === 'live'} poseRef={poseRef} carryRef={carryRef} />
       <CharChibi3D rt={taRT} who="partner" />
       {guestRT?.current && (
-        <Char3D rt={guestRT.current} who="guest" guestName={guestName ?? undefined} />
+        <CharChibi3D rt={guestRT.current} who="guest" guestName={guestName ?? undefined} />
       )}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       <WeatherFX kind={weatherFx ?? 'clear'} win={win} winPos={winPos} />

@@ -3,282 +3,779 @@
 /* eslint-disable react-hooks/immutability -- R3F 动画需要每帧原地修改 three 对象 */
 
 /**
- * 拾光小屋 3D —— Q版小人（一男一女 · 萌系大头）
+ * 拾光小屋 3D —— Q版萌系小人 v2（纯程序化建模，自研造型）
  *
- * - 资产来源：Suriyun 免费 Q 版角色（CC-BY，www.suriyun.com）：
- *   · 男主 M02（休闲装短发男孩）—— github.com/armaxst/MaxstARSDK_Unity_Sample 官方 Unity 示例包
- *   · 女主 Kazuko（Q版女孩，盔甲裙造型）—— github.com/CasterQi/yuanshen2 中的官方示例包
- *   FBX 经 FBX2glTF 离线转 GLB，动画轨道按同名骨骼合并进模型文件。
- * - chibi-nan.glb 男主（Idle/Walk/WalkL/WalkR/Sit/Jump/Victory/Dash/Alert）
- *   chibi-nv.glb 女主（Idle×4/Walk/Run/Sit/Jump/Cutepose/Bye/Cry/Rei/Angpose）
- * - 姿势映射：stand→Idle · 走路→Walk · 坐姿系→Sit · 躺床→Idle+整体放倒（头朝 -z）·
- *   泡澡→Sit · 做饭/淋浴/喝水→Idle；睡觉 Zzz / 泡澡泡泡 / 化妆星星 / 手持咖啡果汁
- *   为程序化点缀。待机一段时间会播放小彩蛋（男主 Victory/Alert，女主 Bye/Cutepose）。
- * - 朝向与移动由 GameLoop 每帧写 rt（与 Char3D/CharRealistic3D 同接口）。
+ * 设计目标「好看的头身比 + 精致的脸」：
+ * - 约 2.2 头身：大圆头（微扁）+ 圆润短身短手短腿，无脖颈衔接的软萌轮廓；
+ * - 脸：竖椭圆大眼睛（眼白+深棕瞳仁+双层高光+上眼线）、细弯眉、
+ *   径向渐变腮红、小巧鼻子、微笑弧线嘴；随机眨眼 + 待机歪头；
+ * - 发型：女主栗棕双马尾（粉蝴蝶结+发绳，马尾随步伐摇摆）+ 空气刘海 + 两侧垂发；
+ *   男主蓬松云朵黑发（头顶呆毛随弹跳晃动）+ 前帘刘海 + 鬓角；
+ * - 服装：女主樱粉连衣裙（白心形胸饰 + 圆锥裙摆走路后飘）+ 白色过膝袜 + 圆头小皮鞋；
+ *   男主奶白连帽卫衣（脑后兜帽）+ 藏蓝短裤 + 白色小袜 + 白色圆头鞋；
+ * - 骨架与姿势系统沿用 v5.4+：走路摆臂迈腿弹跳 / 呼吸 / 坐 / 躺 / 泡澡 / 淋浴 /
+ *   做饭 / 吃饭 / 喝东西 / 弹琴 / 弹吉他 / 化妆 / 照镜子 / 看书，全部阻尼过渡；
+ * - 道具：咖啡/冰饮（右手，站着会周期性举杯咪一口）、书（翻页）、Zzz、
+ *   泡澡/淋浴泡沫、化妆星星、访客头顶名牌；弹琴/扫弦手部随音符脉冲。
+ * - 朝向与移动由 GameLoop 每帧写 rt（与旧 Char3D 同接口，含 guest 访客）。
  */
 
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { useGLTF } from '@react-three/drei';
-import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { onNote } from '../instrument';
 import type { CharPose, CharRT } from '../types';
 
-const MODEL_FILE: Record<'me' | 'partner', string> = { me: 'chibi-nv', partner: 'chibi-nan' };
-
-/** 场景内目标身高（米）——Q版大头比例略矮 */
-const TARGET_H: Record<'me' | 'partner', number> = { me: 0.9, partner: 0.95 };
-
-/** 主动画（姿势驱动） */
-type MainClip = 'Idle' | 'Walk' | 'Sit' | 'Jump' | 'Run';
-function poseToMain(pose: CharPose, moving: boolean): MainClip {
-  switch (pose) {
-    case 'sit':
-    case 'eat':
-    case 'piano':
-    case 'guitar':
-    case 'makeup':
-    case 'mirror':
-    case 'read':
-    case 'bath':
-      return 'Sit';
-    case 'lie':
-      return 'Idle';
-    case 'cook':
-    case 'drink':
-    case 'shower':
-      return 'Idle';
-    default:
-      return moving ? 'Walk' : 'Idle';
-  }
+export interface CharChibi3DProps {
+  rt: CharRT;
+  who: 'me' | 'partner' | 'guest';
+  /** 隐藏（第一人称时隐藏「我」） */
+  hide?: boolean;
+  /** 姿势（「我」专属；partner/访客永远站立） */
+  poseRef?: RefObject<{ pose: CharPose; y: number }>;
+  /** 穿搭编号（衣柜换装；0=默认，1/2=换色套装；partner 固定 0） */
+  outfit?: number;
+  /** 手持物（true = 右手握小水杯，拿饮料/咖啡后端着到处逛；coffee = 咖啡款冒热气） */
+  carryRef?: RefObject<{ cup: boolean; coffee?: boolean }>;
+  /** 访客名牌（头顶浮名字牌；缺省不挂） */
+  guestName?: string;
 }
 
-/** 待机彩蛋：长时间站立时偶尔播放（女主/男主各自的小动作） */
-const IDLE_EXTRAS: Record<'me' | 'partner', string[]> = {
-  me: ['Bye', 'Cutepose', 'Idle2', 'Idle3', 'Rei'],
-  partner: ['Victory', 'Alert', 'Jump'],
+/** 穿搭色板：skin 肤色 / hair 发色 / top 上衣(裙) / bottom 短裤(男主) / sock 袜 / shoes 鞋 / bow 发饰 / blush 腮红 */
+interface Palette {
+  skin: string;
+  hair: string;
+  top: string;
+  bottom: string;
+  sock: string;
+  shoes: string;
+  bow: string;
+  blush: string;
+}
+
+const OUTFITS: Record<'me' | 'partner' | 'guest', Palette[]> = {
+  me: [
+    // 樱粉连衣裙（默认）
+    { skin: '#ffe9dc', hair: '#6b4a38', top: '#f7c6d2', bottom: '#f7c6d2', sock: '#ffffff', shoes: '#b06a5a', bow: '#f591ac', blush: '#f7a8b4' },
+    // 薄荷奶昔
+    { skin: '#ffe9dc', hair: '#6b4a38', top: '#c2e4d2', bottom: '#c2e4d2', sock: '#ffffff', shoes: '#8fae9c', bow: '#8fd0b4', blush: '#f7a8b4' },
+    // 奶油杏子
+    { skin: '#ffe9dc', hair: '#6b4a38', top: '#f6dfb2', bottom: '#f6dfb2', sock: '#fff8ee', shoes: '#c78d64', bow: '#f0b45c', blush: '#f7a8b4' },
+  ],
+  partner: [
+    // 奶油卫衣 + 藏蓝短裤（默认）
+    { skin: '#ffe4cf', hair: '#2f2b29', top: '#f7f1e3', bottom: '#46536b', sock: '#ffffff', shoes: '#fbfaf7', bow: '#f7f1e3', blush: '#f4b3aa' },
+    // 燕麦暖男
+    { skin: '#ffe4cf', hair: '#2f2b29', top: '#cdb69c', bottom: '#5d544a', sock: '#f6f2ea', shoes: '#fbfaf7', bow: '#cdb69c', blush: '#f4b3aa' },
+    // 雾蓝清爽
+    { skin: '#ffe4cf', hair: '#2f2b29', top: '#a8bccb', bottom: '#3e4d5c', sock: '#f4f8fa', shoes: '#fbfaf7', bow: '#a8bccb', blush: '#f4b3aa' },
+  ],
+  // 访客：按名牌哈希取色，同一人每次来访穿同色
+  guest: [
+    { skin: '#ffe9dc', hair: '#5a3a2e', top: '#e8b8b0', bottom: '#6a5a4e', sock: '#f4f2ee', shoes: '#fbfaf7', bow: '#e8b8b0', blush: '#f4b3aa' },
+    { skin: '#ffe4cf', hair: '#2e2e34', top: '#b8cec6', bottom: '#4a5568', sock: '#f6f5f2', shoes: '#fbfaf7', bow: '#b8cec6', blush: '#f4b3aa' },
+    { skin: '#ffe9dc', hair: '#6a4a30', top: '#cfc0e0', bottom: '#5a5a66', sock: '#f4ede4', shoes: '#fbfaf7', bow: '#cfc0e0', blush: '#f6b1b8' },
+    { skin: '#ffe4cf', hair: '#3a3230', top: '#e5c58e', bottom: '#4e5a52', sock: '#f6f5f2', shoes: '#fbfaf7', bow: '#e5c58e', blush: '#f4b3aa' },
+  ],
 };
 
-const SEATED: CharPose[] = ['sit', 'eat', 'piano', 'guitar', 'makeup', 'mirror', 'read'];
+/** Q版身材参数（约 2.2 头身，总高 ≈ 0.92m） */
+const P = {
+  hipY: 0.29,
+  thighLen: 0.13,
+  calfLen: 0.11,
+  thighR: 0.055,
+  calfR: 0.048,
+  legX: 0.08,
+  torsoY: 0.4,
+  torsoR: 0.16,
+  torsoLen: 0.11,
+  shoulderY: 0.49,
+  shoulderX: 0.175,
+  upperLen: 0.075,
+  upperR: 0.048,
+  foreLen: 0.07,
+  foreR: 0.04,
+  headY: 0.64,
+  headR: 0.26,
+  eyeR: 0.05,
+  eyeX: 0.098,
+  eyeY: -0.03,
+  shoeS: 0.058,
+};
 
-/** 姿势直接驱动的主动画集合 */
-const MAIN_CLIPS = new Set(['Idle', 'Walk', 'Sit', 'Jump', 'Run']);
-
-/** 手持小杯（咖啡带热气 / 果汁带吸管） */
-function buildCup(): { group: THREE.Group; coffee: THREE.Group; juice: THREE.Group; steam: THREE.Sprite } {
-  const group = new THREE.Group();
-  const coffee = new THREE.Group();
-  const cupBody = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.028, 0.022, 0.05, 12),
-    new THREE.MeshStandardMaterial({ color: '#f4f0ea', roughness: 0.7 }),
-  );
-  cupBody.position.y = 0.03;
-  const liquid = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.024, 0.02, 0.012, 12),
-    new THREE.MeshStandardMaterial({ color: '#6b4226', roughness: 0.4 }),
-  );
-  liquid.position.y = 0.052;
-  coffee.add(cupBody, liquid);
-  const cv = document.createElement('canvas');
-  cv.width = 64;
-  cv.height = 64;
-  const ctx = cv.getContext('2d')!;
-  const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
-  g.addColorStop(0, 'rgba(255,255,255,0.85)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 64, 64);
-  const steam = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, opacity: 0, depthWrite: false }));
-  steam.scale.setScalar(0.05);
-  steam.position.y = 0.09;
-  coffee.add(steam);
-  const juice = new THREE.Group();
-  const juiceCup = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.026, 0.022, 0.055, 12),
-    new THREE.MeshStandardMaterial({ color: '#f8e8ee', roughness: 0.5 }),
-  );
-  juiceCup.position.y = 0.032;
-  const juiceLiquid = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.023, 0.019, 0.02, 12),
-    new THREE.MeshStandardMaterial({ color: '#f2a7bc', roughness: 0.35 }),
-  );
-  juiceLiquid.position.y = 0.05;
-  const straw = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.004, 0.004, 0.085, 8),
-    new THREE.MeshStandardMaterial({ color: '#f6f5f2', roughness: 0.6 }),
-  );
-  straw.position.set(0.012, 0.075, 0);
-  straw.rotation.z = -0.18;
-  juice.add(juiceCup, juiceLiquid, straw);
-  group.add(coffee, juice);
-  return { group, coffee, juice, steam };
+interface CharRig {
+  root: THREE.Group;
+  lieWrap: THREE.Group;
+  armL: THREE.Group;
+  armR: THREE.Group;
+  foreL: THREE.Group;
+  foreR: THREE.Group;
+  legL: THREE.Group;
+  legR: THREE.Group;
+  kneeL: THREE.Group;
+  kneeR: THREE.Group;
+  head: THREE.Group;
+  eyeL: THREE.Group;
+  eyeR: THREE.Group;
+  hairDyn: THREE.Group;
+  skirt: THREE.Group | null;
+  hipY: number;
+  /** 泡澡时隐藏的衣物网格 */
+  clothes: THREE.Mesh[];
+  /** 泡澡素体（肤色躯干，平时隐藏） */
+  skinTorso: THREE.Mesh;
+  /** 泡澡/淋浴泡泡（脱衣遮挡，平时隐藏） */
+  foam: THREE.Group;
+  /** 睡觉 Zzz */
+  zzz: THREE.Group;
+  zzzSprites: THREE.Sprite[];
+  /** 化妆星星 */
+  spark: THREE.Group;
+  sparkSprites: THREE.Sprite[];
+  /** 手持小水杯 */
+  cup: THREE.Group;
+  cupCoffee: THREE.Mesh;
+  cupJuice: THREE.Mesh;
+  cupStraw: THREE.Mesh;
+  cupSteam: THREE.Sprite;
+  /** 看书的书 */
+  book: THREE.Group;
+  bookFlip: THREE.Group;
 }
 
-function makeZTex(): THREE.CanvasTexture {
+const stdMat = (c: string, rough = 0.8, extra?: Partial<THREE.MeshStandardMaterialParameters>) =>
+  new THREE.MeshStandardMaterial({ color: c, roughness: rough, metalness: 0, ...extra });
+
+/** 腮红径向渐变贴图（边缘柔化，比生硬圆片自然） */
+function makeBlushTexture(): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
   cv.width = 64;
   cv.height = 64;
   const ctx = cv.getContext('2d')!;
-  ctx.font = 'bold 44px sans-serif';
-  ctx.fillStyle = '#8fa8c8';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('Z', 32, 34);
+  const g = ctx.createRadialGradient(32, 32, 4, 32, 32, 30);
+  g.addColorStop(0, 'rgba(247,160,172,0.92)');
+  g.addColorStop(0.55, 'rgba(247,160,172,0.55)');
+  g.addColorStop(1, 'rgba(247,160,172,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
-function bubbleMat(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: '#eaf6ff', transparent: true, opacity: 0.55, roughness: 0.15, metalness: 0.05 });
+/** 化妆星星贴图（四角星光） */
+function makeSparkTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 96;
+  cv.height = 96;
+  const ctx = cv.getContext('2d')!;
+  const cx = 48;
+  const cy = 48;
+  const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, 42);
+  g.addColorStop(0, 'rgba(255,236,246,0.98)');
+  g.addColorStop(0.4, 'rgba(247,183,208,0.9)');
+  g.addColorStop(1, 'rgba(247,183,208,0)');
+  const star = (long: number, wide: number, rot: number) => {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot);
+    ctx.beginPath();
+    ctx.moveTo(0, -long);
+    ctx.quadraticCurveTo(wide, -wide, long, 0);
+    ctx.quadraticCurveTo(wide, wide, 0, long);
+    ctx.quadraticCurveTo(-wide, wide, -long, 0);
+    ctx.quadraticCurveTo(-wide, -wide, 0, -long);
+    ctx.fill();
+    ctx.restore();
+  };
+  ctx.fillStyle = g;
+  star(40, 7, 0);
+  star(24, 5, Math.PI / 4);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
-export interface CharChibi3DProps {
-  rt: CharRT;
-  who: 'me' | 'partner';
-  hide?: boolean;
-  poseRef?: RefObject<{ pose: CharPose; y: number }>;
-  /** 衣柜穿搭编号：Q版模型自带服装，保留接口兼容 */
-  outfit?: number;
-  carryRef?: RefObject<{ cup: boolean; coffee?: boolean }>;
+/** Zzz 字贴图 */
+function makeZzzTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 128;
+  const ctx = cv.getContext('2d')!;
+  ctx.font = '900 92px "PingFang SC", "Nunito", ui-rounded, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 16;
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = 'rgba(179,168,204,0.95)';
+  ctx.strokeText('Z', 64, 70);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('Z', 64, 70);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
 /**
- * Q版模型锚点（模型单位 ≈ 0.1 出头，按实测）：
- * Suriyun 站立 hips 约在身高 52%，坐姿 clip hips 约在身高 30%，蹲/泡澡用坐姿锚点。
+ * 组装 Q版小人（纯几何，无外部依赖）。
+ * 结构：root(起伏/前倾) → lieWrap(躺姿旋转) → [腿×2(髋→膝), 裙摆(女), 躯干, 臂×2(肩→肘), 头+脸+发]
  */
-const ANCHOR = {
-  hipsY: 0.52,
-  sitHipsY: 0.3,
-  lieLift: 0.09,
-};
+function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0): CharRig {
+  const pal = OUTFITS[who];
+  const o = pal[outfit % pal.length];
+  const g = new THREE.Group();
+  const clothes: THREE.Mesh[] = [];
+  const isGirl = who === 'me';
 
-export default function CharChibi3D({ rt, who, hide, poseRef, carryRef }: CharChibi3DProps) {
-  const holder = useRef<THREE.Group>(null);
-  const scaler = useRef<THREE.Group>(null);
-
-  const modelGltf = useGLTF(`/couple-home/${MODEL_FILE[who]}.glb`);
-
-  /** 组装：clone 模型 → 索引骨骼/clip → 效果挂件 */
-  const kit = useMemo(() => {
-    const root = new THREE.Group();
-    const scal = new THREE.Group();
-    root.add(scal);
-    const offs = new THREE.Group();
-    scal.add(offs);
-
-    const inst = skeletonClone(modelGltf.scene) as THREE.Group;
-    inst.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (mesh.isMesh) {
-        mesh.castShadow = true;
-        mesh.frustumCulled = false;
-      }
-    });
-    offs.add(inst);
-
-    // 身高测量与整体缩放
-    inst.updateMatrixWorld(true);
-    const bbox = new THREE.Box3().setFromObject(inst);
-    const H = Math.max(bbox.max.y - bbox.min.y, 0.1);
-    const scale = TARGET_H[who] / H;
-    scal.scale.setScalar(scale);
-
-    // Suriyun 模型面向 -z（Maya 导出惯例），内层转 180° 使其面向 +z（与 rt.heading 约定一致）
-    inst.rotation.y = Math.PI;
-
-    // 骨骼索引
-    const boneMap = new Map<string, THREE.Bone>();
-    inst.traverse((o) => {
-      if ((o as THREE.Bone).isBone) {
-        const n = o.name.toLowerCase();
-        if (!boneMap.has(n)) boneMap.set(n, o as THREE.Bone);
-      }
-    });
-
-    // 手持杯挂右手（scale 抵消整体缩放，杯子物理尺寸恒定）
-    const cup = buildCup();
-    cup.group.scale.setScalar(1 / Math.max(scale, 0.0001));
-    const handR = boneMap.get('wrist_r');
-    if (handR) {
-      cup.group.position.set(0, -0.02, 0.03);
-      handR.add(cup.group);
-    }
-
-    // Zzz / 泡泡 / 星星（offs 空间 = 模型单位）
-    const zTex = makeZTex();
-    const zzz = new THREE.Group();
-    const zzzSprites: THREE.Sprite[] = [];
-    for (let i = 0; i < 3; i++) {
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: zTex, transparent: true, opacity: 0, depthWrite: false }));
-      sp.scale.setScalar(0.085);
-      zzz.add(sp);
-      zzzSprites.push(sp);
-    }
-    offs.add(zzz);
-
-    const bubbles = new THREE.Group();
-    const bMat = bubbleMat();
-    const bGeo = new THREE.SphereGeometry(1, 10, 8);
-    for (let i = 0; i < 10; i++) {
-      const b = new THREE.Mesh(bGeo, bMat);
-      b.scale.setScalar(0.018 + (i % 3) * 0.008);
-      bubbles.add(b);
-    }
-    offs.add(bubbles);
-
-    const sparkTex = (() => {
-      const cv = document.createElement('canvas');
-      cv.width = 64;
-      cv.height = 64;
-      const ctx = cv.getContext('2d')!;
-      ctx.font = 'bold 40px sans-serif';
-      ctx.fillStyle = '#f6c1c9';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('✦', 32, 34);
-      const t = new THREE.CanvasTexture(cv);
-      t.colorSpace = THREE.SRGBColorSpace;
-      return t;
-    })();
-    const spark = new THREE.Group();
-    const sparkSprites: THREE.Sprite[] = [];
-    for (let i = 0; i < 5; i++) {
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: sparkTex, transparent: true, opacity: 0, depthWrite: false }));
-      sp.scale.setScalar(0.075);
-      spark.add(sp);
-      sparkSprites.push(sp);
-    }
-    offs.add(spark);
-
-    // 动画 clip 索引（GLB 内已按名字合并）
-    const clips: Record<string, THREE.AnimationClip | undefined> = {};
-    for (const c of modelGltf.animations) {
-      const n = c.name.toLowerCase();
-      if (!clips[n]) clips[n] = c;
-    }
-
-    return { root, offs, inst, boneMap, cup, zzz, zzzSprites, bubbles, spark, sparkSprites, clips, mixer: new THREE.AnimationMixer(inst), scale, H };
-  }, [who, modelGltf]);
-
-  const scene_ = useRef<{ clip: string | null; extraUntil: number; nextExtra: number }>({ clip: null, extraUntil: 0, nextExtra: 6 });
-
-  useEffect(() => {
-    return () => {
-      kit.mixer.stopAllAction();
-    };
-  }, [kit]);
-
-  const switchClip = (name: string, fade = 0.22) => {
-    if (scene_.current.clip === name) return;
-    const found = kit.clips[name.toLowerCase()];
-    if (!found) return;
-    scene_.current.clip = name;
-    const next = kit.mixer.clipAction(found);
-    next.setEffectiveWeight(1);
-    kit.mixer.stopAllAction();
-    next.reset().fadeIn(fade).play();
+  const mesh = (
+    geo: THREE.BufferGeometry,
+    m: THREE.Material,
+    x = 0,
+    y = 0,
+    z = 0,
+    parent: THREE.Object3D = g,
+  ) => {
+    const mm = new THREE.Mesh(geo, m);
+    mm.position.set(x, y, z);
+    mm.castShadow = true;
+    parent.add(mm);
+    return mm;
   };
+
+  // ---------- 躺姿包裹层 ----------
+  const lieWrap = new THREE.Group();
+  g.add(lieWrap);
+
+  const skinMat = stdMat(o.skin, 0.62);
+  const hairMat = stdMat(o.hair, 0.7);
+  const topMat = stdMat(o.top, 0.82);
+  const whiteMat = stdMat('#ffffff', 0.7);
+
+  // ---------- 腿（髋 pivot → 大腿 → 膝 pivot → 小腿 + 袜 + 圆头鞋） ----------
+  const legL = new THREE.Group();
+  const legR = new THREE.Group();
+  const kneeL = new THREE.Group();
+  const kneeR = new THREE.Group();
+  for (const [pivot, knee, sx] of [
+    [legL, kneeL, -1],
+    [legR, kneeR, 1],
+  ] as const) {
+    pivot.position.set(P.legX * sx, P.hipY, 0);
+    lieWrap.add(pivot);
+    // 大腿：女主裙下露肤 / 男主短裤
+    mesh(
+      new THREE.CapsuleGeometry(P.thighR, P.thighLen - P.thighR * 1.1, 6, 12),
+      isGirl ? skinMat : stdMat(o.bottom, 0.8),
+      0,
+      -P.thighLen / 2,
+      0,
+      pivot,
+    );
+    knee.position.set(0, -P.thighLen, 0);
+    pivot.add(knee);
+    // 小腿：女主白过膝袜 / 男主肤色
+    mesh(
+      new THREE.CapsuleGeometry(P.calfR, P.calfLen - P.calfR * 1.1, 6, 12),
+      isGirl ? stdMat(o.sock, 0.72) : skinMat,
+      0,
+      -P.calfLen / 2,
+      0,
+      knee,
+    );
+    // 男主短袜（脚踝上一小截白）
+    if (!isGirl) {
+      const sock = mesh(
+        new THREE.CylinderGeometry(P.calfR * 1.06, P.calfR * 1.1, 0.045, 10),
+        stdMat(o.sock, 0.72),
+        0,
+        -P.calfLen + 0.028,
+        0,
+        knee,
+      );
+      clothes.push(sock);
+    }
+    // 圆头小鞋（椭球，前伸）
+    const shoe = mesh(
+      new THREE.SphereGeometry(P.calfR * 1.12, 14, 12),
+      stdMat(o.shoes, 0.6),
+      0,
+      -P.calfLen - 0.006,
+      0.022,
+      knee,
+    );
+    shoe.scale.set(0.82, 0.62, 1.35);
+    clothes.push(shoe);
+  }
+
+  // ---------- 裙摆（女主）：圆锥裙，走路时后飘 ----------
+  let skirt: THREE.Group | null = null;
+  if (isGirl) {
+    skirt = new THREE.Group();
+    skirt.position.set(0, 0.36, 0);
+    lieWrap.add(skirt);
+    const cone = mesh(new THREE.ConeGeometry(0.205, 0.17, 20, 1, true), stdMat(o.top, 0.8), 0, -0.085, 0, skirt);
+    // 内侧也渲染（从下往上看不穿帮）
+    (cone.material as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
+    clothes.push(cone);
+    // 裙摆白边
+    const hem = mesh(new THREE.TorusGeometry(0.196, 0.009, 8, 24), whiteMat, 0, -0.158, 0, skirt);
+    hem.rotation.x = Math.PI / 2;
+    clothes.push(hem);
+  }
+
+  // ---------- 躯干（上衣）----------
+  const torso = mesh(new THREE.CapsuleGeometry(P.torsoR, P.torsoLen, 8, 18), topMat, 0, P.torsoY, 0, lieWrap);
+  clothes.push(torso);
+  // 男主兜帽（脑后半环）
+  if (!isGirl) {
+    const hood = mesh(new THREE.TorusGeometry(0.098, 0.038, 10, 18, Math.PI * 1.1), topMat, 0, P.torsoY + P.torsoLen / 2 + P.torsoR * 0.42, -P.torsoR * 0.55, lieWrap);
+    hood.rotation.x = Math.PI * 0.62;
+    hood.rotation.z = Math.PI * 0.45;
+    clothes.push(hood);
+  } else {
+    // 女主胸前小白心
+    const heart = new THREE.Group();
+    heart.position.set(0, P.torsoY + 0.075, P.torsoR + 0.008);
+    const hm = stdMat('#fff5f6', 0.6);
+    for (const sx of [-1, 1]) {
+      const lob = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), hm);
+      lob.position.set(0.012 * sx, 0.008, 0);
+      lob.castShadow = false;
+      heart.add(lob);
+    }
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.036, 10), hm);
+    tip.rotation.z = Math.PI;
+    tip.position.y = -0.012;
+    tip.castShadow = false;
+    heart.add(tip);
+    lieWrap.add(heart);
+  }
+  // 泡澡素体（肤色躯干，平时隐藏）
+  const skinTorso = mesh(new THREE.CapsuleGeometry(P.torsoR * 0.94, P.torsoLen, 8, 16), skinMat, 0, P.torsoY, 0, lieWrap);
+  skinTorso.visible = false;
+
+  // ---------- 泡澡/淋浴泡泡（脱衣遮挡，平时隐藏） ----------
+  const foam = new THREE.Group();
+  foam.visible = false;
+  lieWrap.add(foam);
+  const foamMat = new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.22, transparent: true, opacity: 0.94 });
+  const foamAdd = (x: number, y: number, z: number, r: number) => {
+    const fm = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), foamMat);
+    fm.position.set(x, y, z);
+    fm.castShadow = false;
+    foam.add(fm);
+  };
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    foamAdd(Math.cos(a) * (P.torsoR + 0.03), P.torsoY - P.torsoLen * 0.2 + (i % 2) * 0.04, Math.sin(a) * (P.torsoR + 0.03), 0.05 + (i % 3) * 0.013);
+  }
+  foamAdd(-P.torsoR * 0.7, P.torsoY + P.torsoLen * 0.4, P.torsoR * 0.6, 0.045);
+  foamAdd(P.torsoR * 0.7, P.torsoY + P.torsoLen * 0.4, P.torsoR * 0.6, 0.05);
+  foamAdd(-P.headR * 0.42, P.headY + P.headR * 0.72, P.headR * 0.18, 0.05);
+  foamAdd(P.headR * 0.46, P.headY + P.headR * 0.78, -P.headR * 0.12, 0.055);
+  foamAdd(0, P.headY + P.headR * 0.9, P.headR * 0.28, 0.045);
+
+  // ---------- 睡觉 Zzz（躺床时头在 -z 床头侧，从头上方飘起） ----------
+  const zzz = new THREE.Group();
+  zzz.visible = false;
+  g.add(zzz);
+  const zzzTex = makeZzzTexture();
+  const zzzSprites: THREE.Sprite[] = [];
+  for (let i = 0; i < 3; i++) {
+    const sm = new THREE.SpriteMaterial({ map: zzzTex, transparent: true, opacity: 0, depthWrite: false });
+    const sp = new THREE.Sprite(sm);
+    sp.scale.setScalar(0.1 + i * 0.04);
+    sp.position.set(0.15 + i * 0.03, 0.36 + i * 0.14, -(P.headY + 0.08 + i * 0.1));
+    zzz.add(sp);
+    zzzSprites.push(sp);
+  }
+
+  // ---------- 化妆星星 ----------
+  const spark = new THREE.Group();
+  spark.visible = false;
+  g.add(spark);
+  const sparkTex = makeSparkTexture();
+  const sparkSprites: THREE.Sprite[] = [];
+  for (let i = 0; i < 5; i++) {
+    const sm = new THREE.SpriteMaterial({ map: sparkTex, transparent: true, opacity: 0, depthWrite: false });
+    const sp = new THREE.Sprite(sm);
+    sp.scale.setScalar(0.09 + (i % 2) * 0.04);
+    spark.add(sp);
+    sparkSprites.push(sp);
+  }
+
+  // ---------- 手臂（肩 pivot → 上臂(袖) → 肘 pivot → 前臂(肤) + 圆手） ----------
+  const armL = new THREE.Group();
+  const armR = new THREE.Group();
+  const foreL = new THREE.Group();
+  const foreR = new THREE.Group();
+  for (const [pivot, fore, sx] of [
+    [armL, foreL, -1],
+    [armR, foreR, 1],
+  ] as const) {
+    pivot.position.set(P.shoulderX * sx, P.shoulderY, 0);
+    pivot.rotation.z = sx * 0.16; // 微微外张
+    lieWrap.add(pivot);
+    // 泡泡袖（肩头小球，女主）
+    if (isGirl) {
+      const puff = mesh(new THREE.SphereGeometry(P.upperR * 1.15, 12, 10), topMat, 0, -P.upperR * 0.2, 0, pivot);
+      clothes.push(puff);
+    }
+    const sleeve = mesh(
+      new THREE.CapsuleGeometry(P.upperR * (isGirl ? 0.8 : 1), P.upperLen, 6, 10),
+      topMat,
+      0,
+      -P.upperLen / 2 - P.upperR * 0.25,
+      0,
+      pivot,
+    );
+    clothes.push(sleeve);
+    fore.position.set(0, -P.upperLen - P.upperR * 0.45, 0);
+    pivot.add(fore);
+    mesh(
+      new THREE.CapsuleGeometry(P.foreR, P.foreLen, 6, 10),
+      skinMat,
+      0,
+      -P.foreLen / 2 - P.foreR * 0.2,
+      0,
+      fore,
+    );
+    // 圆手（比前臂略大的小球，萌感）
+    mesh(new THREE.SphereGeometry(P.foreR * 1.3, 12, 10), skinMat, 0, -P.foreLen - P.foreR * 0.7, 0, fore);
+  }
+
+  // ---------- 手持小水杯（挂右前臂手心，平时隐藏） ----------
+  const cup = new THREE.Group();
+  cup.visible = false;
+  const cupGlass = new THREE.MeshStandardMaterial({
+    color: '#cfeaf4',
+    roughness: 0.2,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 0.62,
+  });
+  const cupBody = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.024, 0.072, 12), cupGlass);
+  cupBody.castShadow = false;
+  cup.add(cupBody);
+  const cupJuice = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.021, 0.052, 12), stdMat('#f2b7c6', 0.35));
+  cupJuice.position.y = -0.004;
+  cupJuice.castShadow = false;
+  cup.add(cupJuice);
+  const cupStraw = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.085, 8), stdMat('#f4a7b9', 0.5));
+  cupStraw.position.set(0.012, 0.052, 0);
+  cupStraw.rotation.z = 0.18;
+  cupStraw.castShadow = false;
+  cup.add(cupStraw);
+  const cupCoffee = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.021, 0.05, 12), stdMat('#7a4a28', 0.4));
+  cupCoffee.position.y = -0.005;
+  cupCoffee.visible = false;
+  cup.add(cupCoffee);
+  const cupHandle = new THREE.Mesh(new THREE.TorusGeometry(0.014, 0.004, 6, 12), stdMat('#f7f5ef', 0.5));
+  cupHandle.position.set(-0.032, 0.003, 0);
+  cupHandle.castShadow = false;
+  cupCoffee.add(cupHandle);
+  const steamTex = (() => {
+    const cv = document.createElement('canvas');
+    cv.width = 64;
+    cv.height = 64;
+    const c2 = cv.getContext('2d')!;
+    const gr = c2.createRadialGradient(32, 32, 3, 32, 32, 30);
+    gr.addColorStop(0, 'rgba(255,255,255,0.75)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    c2.fillStyle = gr;
+    c2.fillRect(0, 0, 64, 64);
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
+  const cupSteam = new THREE.Sprite(new THREE.SpriteMaterial({ map: steamTex, transparent: true, opacity: 0, depthWrite: false }));
+  cupSteam.scale.setScalar(0.05);
+  cupSteam.position.set(0.004, 0.07, 0);
+  cup.add(cupSteam);
+  cup.position.set(0, -P.foreLen - P.foreR * 0.9, 0.03);
+  foreR.add(cup);
+
+  // ---------- 看书的书（封面+书页+翻页页角；仅 read 姿势可见） ----------
+  const book = new THREE.Group();
+  book.visible = false;
+  const bookCoverMat = stdMat(isGirl ? '#e8a3b3' : '#7a9ec2', 0.55);
+  const bookPaperMat = stdMat('#faf7f0', 0.85);
+  const coverL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.012, 0.14), bookCoverMat);
+  coverL.position.set(-0.05, 0, 0);
+  coverL.rotation.z = 0.12;
+  coverL.castShadow = false;
+  book.add(coverL);
+  const coverR = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.012, 0.14), bookCoverMat);
+  coverR.position.set(0.05, 0, 0);
+  coverR.rotation.z = -0.12;
+  coverR.castShadow = false;
+  book.add(coverR);
+  const pageL = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.016, 0.128), bookPaperMat);
+  pageL.position.set(-0.045, 0.012, 0);
+  pageL.rotation.z = 0.1;
+  book.add(pageL);
+  const pageR = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.016, 0.128), bookPaperMat);
+  pageR.position.set(0.045, 0.012, 0);
+  pageR.rotation.z = -0.1;
+  book.add(pageR);
+  const spine = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.02, 0.142), bookCoverMat);
+  spine.position.set(0, 0.006, 0);
+  book.add(spine);
+  const bookFlip = new THREE.Group();
+  bookFlip.position.set(0, 0.024, 0);
+  const flipMesh = new THREE.Mesh(new THREE.BoxGeometry(0.086, 0.003, 0.126), bookPaperMat);
+  flipMesh.position.x = 0.043;
+  flipMesh.castShadow = false;
+  bookFlip.add(flipMesh);
+  book.add(bookFlip);
+  book.position.set(0, 0.31, 0.23);
+  book.rotation.x = -0.42;
+  g.add(book);
+
+  // ---------- 头 + 脸 + 发型 ----------
+  const head = new THREE.Group();
+  head.position.set(0, P.headY, 0);
+  lieWrap.add(head);
+  // 大圆头（微扁更萌）
+  const skull = mesh(new THREE.SphereGeometry(P.headR, 28, 24), skinMat, 0, 0, 0, head);
+  skull.scale.set(1, 0.96, 0.97);
+
+  // —— 眼睛（竖椭圆大眼 + 双层高光 + 上眼线，可眨眼） ——
+  const eyeLG = new THREE.Group();
+  const eyeRG = new THREE.Group();
+  const eyeWhiteMat = stdMat('#ffffff', 0.25);
+  const pupilMat = stdMat('#453129', 0.3);
+  for (const [eg, sx] of [
+    [eyeLG, -1],
+    [eyeRG, 1],
+  ] as const) {
+    eg.position.set(P.eyeX * sx, P.eyeY, P.headR * 0.78);
+    head.add(eg);
+    // 眼白
+    const ew = new THREE.Mesh(new THREE.SphereGeometry(P.eyeR, 14, 12), eyeWhiteMat);
+    ew.scale.set(0.95, 1.28, 0.42);
+    ew.castShadow = false;
+    eg.add(ew);
+    // 瞳仁（深棕，偏内下）
+    const pu = new THREE.Mesh(new THREE.SphereGeometry(P.eyeR * 0.74, 12, 10), pupilMat);
+    pu.scale.set(0.9, 1.18, 0.4);
+    pu.position.set(-0.006 * sx, -0.006, 0.016);
+    pu.castShadow = false;
+    eg.add(pu);
+    // 大高光（上内侧）
+    const hi1 = new THREE.Mesh(new THREE.SphereGeometry(P.eyeR * 0.3, 8, 8), stdMat('#ffffff', 0.15));
+    hi1.position.set(0.016 * sx, 0.02, 0.036);
+    hi1.castShadow = false;
+    eg.add(hi1);
+    // 小高光（下外侧）
+    const hi2 = new THREE.Mesh(new THREE.SphereGeometry(P.eyeR * 0.16, 8, 8), stdMat('#ffffff', 0.15));
+    hi2.position.set(-0.019 * sx, -0.018, 0.032);
+    hi2.castShadow = false;
+    eg.add(hi2);
+    // 上眼线（细弧）
+    const lash = new THREE.Mesh(new THREE.TorusGeometry(P.eyeR * 1.02, 0.0075, 6, 16, Math.PI * 0.72), stdMat(o.hair, 0.5));
+    lash.rotation.z = Math.PI * 0.14;
+    lash.position.z = 0.008;
+    lash.castShadow = false;
+    eg.add(lash);
+  }
+
+  // —— 眉毛（细弯弧） ——
+  for (const sx of [-1, 1]) {
+    const brow = new THREE.Mesh(new THREE.TorusGeometry(0.031, 0.0058, 6, 14, Math.PI * 0.62), stdMat(o.hair, 0.55));
+    brow.position.set(P.eyeX * sx, P.eyeY + 0.085, P.headR * 0.84);
+    brow.rotation.z = Math.PI * (sx > 0 ? 0.19 : 0.19);
+    // 弧口朝下（拱眉）
+    brow.rotation.x = Math.PI;
+    brow.rotation.z = Math.PI * 0.81;
+    brow.castShadow = false;
+    head.add(brow);
+  }
+
+  // —— 腮红（径向渐变贴图，柔边） ——
+  const blushTex = makeBlushTexture();
+  for (const sx of [-1, 1]) {
+    const blush = new THREE.Mesh(
+      new THREE.CircleGeometry(0.052, 14),
+      new THREE.MeshBasicMaterial({ map: blushTex, transparent: true, depthWrite: false }),
+    );
+    blush.position.set((P.eyeX + 0.075) * sx, -0.095, P.headR * 0.72);
+    blush.rotation.y = sx * 0.5;
+    head.add(blush);
+  }
+
+  // —— 小鼻子 ——
+  const nose = mesh(new THREE.SphereGeometry(0.0085, 8, 8), stdMat('#f6c8b2', 0.6), 0, -0.062, P.headR * 0.97, head);
+  nose.castShadow = false;
+
+  // —— 嘴（微笑弧线） ——
+  const smile = mesh(
+    new THREE.TorusGeometry(0.032, 0.0072, 6, 16, Math.PI * 0.8),
+    stdMat(isGirl ? '#e08e8e' : '#c98a80', 0.6),
+    0,
+    -0.108,
+    P.headR * 0.9,
+    head,
+  );
+  smile.rotation.x = Math.PI * 0.06;
+  smile.rotation.z = Math.PI + Math.PI * 0.1;
+
+  // —— 发型 ——
+  const hairDyn = new THREE.Group(); // 动态发（马尾/呆毛）挂这里做摆动
+  head.add(hairDyn);
+
+  if (isGirl) {
+    // 头盖
+    const cap = mesh(new THREE.SphereGeometry(P.headR * 1.07, 24, 20, 0, Math.PI * 2, 0, Math.PI * 0.62), hairMat, 0, P.headR * 0.05, -P.headR * 0.05, head);
+    cap.rotation.x = -0.2;
+    // 空气刘海（5 撮圆弧排列）
+    const bangs: [number, number, number, number][] = [
+      [-0.6, 0.5, 0.62, 0.165],
+      [-0.32, 0.58, 0.72, 0.185],
+      [0, 0.61, 0.76, 0.2],
+      [0.32, 0.58, 0.72, 0.185],
+      [0.6, 0.5, 0.62, 0.165],
+    ];
+    for (const [fx, fy, fz, fr] of bangs) {
+      const b = mesh(new THREE.SphereGeometry(P.headR * fr, 12, 10), hairMat, fx * P.headR, fy * P.headR, fz * P.headR, head);
+      b.scale.set(1.1, 0.72, 0.62);
+    }
+    // 两侧垂发（贴脸长发束）
+    for (const sx of [-1, 1]) {
+      const lock = mesh(
+        new THREE.CapsuleGeometry(P.headR * 0.185, P.headR * 0.85, 6, 10),
+        hairMat,
+        P.headR * 0.92 * sx,
+        -P.headR * 0.62,
+        P.headR * 0.22,
+        head,
+      );
+      lock.rotation.z = sx * -0.07;
+      const tip = mesh(new THREE.SphereGeometry(P.headR * 0.16, 10, 8), hairMat, P.headR * 0.95 * sx, -P.headR * 1.16, P.headR * 0.26, head);
+      tip.castShadow = false;
+    }
+    // 后脑长发披背
+    const backHair = mesh(new THREE.SphereGeometry(P.headR, 18, 14), hairMat, 0, -P.headR * 0.5, -P.headR * 0.58, head);
+    backHair.scale.set(1.06, 1.42, 0.6);
+    // 双马尾（发绳 + 垂束 + 发梢；挂 hairDyn 做摆动）
+    for (const sx of [-1, 1]) {
+      const tail = new THREE.Group();
+      tail.position.set(P.headR * 0.78 * sx, P.headR * 0.42, -P.headR * 0.42);
+      tail.rotation.z = sx * 0.4; // 向外张开
+      tail.rotation.x = 0.16;
+      hairDyn.add(tail);
+      const tie = mesh(new THREE.SphereGeometry(P.headR * 0.085, 10, 8), stdMat(o.bow, 0.55), 0, 0, 0, tail);
+      tie.castShadow = false;
+      const strand = mesh(
+        new THREE.CapsuleGeometry(P.headR * 0.2, P.headR * 1.3, 6, 10),
+        hairMat,
+        0,
+        -P.headR * 0.82,
+        0,
+        tail,
+      );
+      strand.scale.set(1, 1, 0.92);
+      const tailTip = mesh(new THREE.SphereGeometry(P.headR * 0.17, 10, 8), hairMat, 0, -P.headR * 1.56, 0, tail);
+      tailTip.castShadow = false;
+    }
+    // 左马尾蝴蝶结（两瓣 + 中心结）
+    const bow = new THREE.Group();
+    bow.position.set(-P.headR * 0.84, P.headR * 0.56, -P.headR * 0.34);
+    bow.rotation.set(0.3, 0.5, -0.5);
+    const bowMat = stdMat(o.bow, 0.55);
+    for (const sx of [-1, 1]) {
+      const wing = new THREE.Mesh(new THREE.SphereGeometry(P.headR * 0.13, 10, 8), bowMat);
+      wing.scale.set(1.25, 0.75, 0.55);
+      wing.position.set(0.115 * sx, 0.02 * sx, 0);
+      wing.castShadow = false;
+      bow.add(wing);
+    }
+    const knot = new THREE.Mesh(new THREE.SphereGeometry(P.headR * 0.058, 10, 8), bowMat);
+    knot.castShadow = false;
+    bow.add(knot);
+    hairDyn.add(bow);
+  } else {
+    // —— 男主：蓬松云朵黑发 ——
+    const cap = mesh(new THREE.SphereGeometry(P.headR * 1.08, 24, 20, 0, Math.PI * 2, 0, Math.PI * 0.6), hairMat, 0, P.headR * 0.07, -P.headR * 0.04, head);
+    cap.rotation.x = -0.16;
+    // 云朵顶（6 球错落）
+    const puffs: [number, number, number, number][] = [
+      [-0.58, 0.72, -0.06, 0.27],
+      [-0.33, 0.84, -0.1, 0.31],
+      [-0.08, 0.9, -0.08, 0.33],
+      [0.16, 0.88, -0.1, 0.32],
+      [0.4, 0.8, -0.08, 0.3],
+      [0.6, 0.7, -0.05, 0.26],
+    ];
+    for (const [fx, fy, fz, fr] of puffs) {
+      const p = mesh(new THREE.SphereGeometry(P.headR * fr, 12, 10), hairMat, fx * P.headR, fy * P.headR, fz * P.headR, head);
+      p.scale.set(1.05, 0.9, 1);
+    }
+    // 前帘刘海
+    const fringe: [number, number, number][] = [
+      [-0.42, 0.48, 0.68],
+      [-0.14, 0.53, 0.74],
+      [0.14, 0.53, 0.74],
+      [0.42, 0.48, 0.68],
+    ];
+    for (const [fx, fy, fz] of fringe) {
+      const f = mesh(new THREE.SphereGeometry(P.headR * 0.16, 10, 8), hairMat, fx * P.headR, fy * P.headR, fz * P.headR, head);
+      f.scale.set(1.15, 0.62, 0.6);
+    }
+    // 鬓角
+    for (const sx of [-1, 1]) {
+      mesh(new THREE.SphereGeometry(P.headR * 0.16, 10, 8), hairMat, P.headR * 0.92 * sx, -P.headR * 0.1, -P.headR * 0.1, head);
+    }
+    // 后脑补发
+    const back = mesh(new THREE.SphereGeometry(P.headR * 0.99, 18, 12, 0, Math.PI * 2, Math.PI * 0.42, Math.PI * 0.44), hairMat, 0, 0, -P.headR * 0.04, head);
+    back.rotation.x = -0.08;
+    // 头顶呆毛（小锥 + 底球；挂 hairDyn 做弹跳）
+    const ahoge = new THREE.Group();
+    ahoge.position.set(0.06, P.headR * 1.02, 0.02);
+    hairDyn.add(ahoge);
+    const aBase = mesh(new THREE.SphereGeometry(0.022, 8, 8), hairMat, 0, 0, 0, ahoge);
+    aBase.castShadow = false;
+    const aCone = mesh(new THREE.ConeGeometry(0.02, 0.1, 8), hairMat, 0.012, 0.055, 0.008, ahoge);
+    aCone.rotation.z = -0.5;
+    aCone.rotation.x = 0.15;
+  }
+
+  return { root: g, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, eyeL: eyeLG, eyeR: eyeRG, hairDyn, skirt, hipY: P.hipY, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, cup, cupCoffee, cupJuice, cupStraw, cupSteam, book, bookFlip };
+}
+
+const dampN = THREE.MathUtils.damp;
+
+export default function CharChibi3D({ rt, who, hide, poseRef, outfit = 0, carryRef, guestName }: CharChibi3DProps) {
+  // 访客按名牌哈希固定取一套配色（同一人每次来访穿同色）
+  const guestOutfit = useMemo(() => {
+    if (who !== 'guest' || !guestName) return 0;
+    let h = 0;
+    for (let i = 0; i < guestName.length; i++) h = (h * 31 + guestName.charCodeAt(i)) >>> 0;
+    return h % 4;
+  }, [who, guestName]);
+  const effOutfit = who === 'guest' ? guestOutfit : outfit;
+  const rig = useMemo(() => buildChar(who, effOutfit), [who, effOutfit]);
+  const holder = useRef<THREE.Group>(null);
+  /** 音符事件（弹琴/扫弦的手部脉冲同步） */
+  const noteFx = useRef({ pianoSide: 1, pianoAt: 0, guitarAt: 0 });
+  useEffect(() => {
+    if (who !== 'me') return;
+    return onNote((e) => {
+      if (e.kind === 'piano') {
+        noteFx.current.pianoSide *= -1;
+        noteFx.current.pianoAt = performance.now();
+      } else {
+        noteFx.current.guitarAt = performance.now();
+      }
+    });
+  }, [who]);
+  /** 看书翻页计时 */
+  const flipAt = useRef(0);
+  /** 眨眼节律 */
+  const blink = useRef({ next: 2 + Math.random() * 2, at: -10 });
+  /** 待机歪头节律 */
+  const tilt = useRef({ next: 5 + Math.random() * 3, v: 0 });
 
   useFrame((state, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
@@ -289,111 +786,437 @@ export default function CharChibi3D({ rt, who, hide, poseRef, carryRef }: CharCh
     h.rotation.y = rt.heading;
 
     const t = state.clock.elapsedTime;
-    const pose: CharPose = poseRef?.current?.pose ?? 'stand';
+    const { root, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, eyeL, eyeR, hairDyn, skirt, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, hipY, cup, cupCoffee, cupJuice, cupStraw, cupSteam, book, bookFlip } = rig;
+    const pose: CharPose = who === 'me' ? (poseRef?.current?.pose ?? 'stand') : 'stand';
     const poseY = poseRef?.current?.y ?? 0;
-    const s = kit.scale;
-    const H = kit.H;
 
-    // 动画切换 + 每帧驱动（待机彩蛋：站立 8~16s 后偶尔播小动作）
-    const sc = scene_.current;
-    const main = poseToMain(pose, rt.moving);
-    const standing = main === 'Idle' && !rt.moving;
-    const extraPlaying = sc.clip !== null && !MAIN_CLIPS.has(sc.clip);
-
-    // 彩蛋结束 / 不再站立 → 切回主动画
-    if (extraPlaying && (!standing || t >= sc.extraUntil)) sc.clip = null;
-
-    // 站立且空闲 → 触发彩蛋
-    if (standing && !extraPlaying && sc.clip !== null && t >= sc.nextExtra) {
-      const pool = IDLE_EXTRAS[who].filter((n) => kit.clips[n.toLowerCase()]);
-      if (pool.length) {
-        const pick = pool[Math.floor(Math.random() * pool.length)];
-        const dur = kit.clips[pick.toLowerCase()]!.duration;
-        switchClip(pick, 0.25);
-        sc.extraUntil = t + dur + 0.6;
-        sc.nextExtra = sc.extraUntil + 10 + Math.random() * 12;
-      } else {
-        sc.nextExtra = t + 6;
-      }
+    // —— 眨眼（随机 2.5~5.5s 一次，120ms 完成） ——
+    const bl = blink.current;
+    if (t >= bl.next) {
+      bl.at = t;
+      bl.next = t + 2.5 + Math.random() * 3;
     }
+    const bph = t - bl.at;
+    const blinkScale = bph < 0.055 ? 1 - (bph / 0.055) * 0.94 : bph < 0.13 ? 0.06 + ((bph - 0.055) / 0.075) * 0.94 : 1;
+    eyeL.scale.y = blinkScale;
+    eyeR.scale.y = blinkScale;
 
-    if (sc.clip === null || (!extraPlaying && sc.clip !== main)) switchClip(main);
-    kit.mixer.update(dt);
-
-    // 姿势锚定：offs 位移（躺姿整体放倒 + 髋部回位）
-    const seated = SEATED.includes(pose);
-    let offY = 0;
-    let offZ = 0;
-    let rotX = 0;
-    if (pose === 'lie') {
-      rotX = -Math.PI / 2;
-      offY = poseY + ANCHOR.lieLift * H * s;
-      offZ = ANCHOR.hipsY * H * s;
-    } else if (pose === 'bath') {
-      offY = Math.max(0.02, poseY - ANCHOR.sitHipsY * H * s * 0.72);
-    } else if (pose === 'shower') {
-      offY = Math.max(0.02, poseY);
-    } else if (seated) {
-      offY = Math.max(0.02, poseY - ANCHOR.sitHipsY * H * s);
-    }
-    kit.offs.rotation.x = THREE.MathUtils.damp(kit.offs.rotation.x, rotX, 10, dt);
-    kit.offs.position.y = THREE.MathUtils.damp(kit.offs.position.y, offY, 9, dt);
-    kit.offs.position.z = THREE.MathUtils.damp(kit.offs.position.z, offZ, 9, dt);
-
-    // 手持杯
+    // —— 手持水杯 ——
     const carry = who === 'me' && carryRef?.current?.cup === true;
     const carryCoffee = carry && carryRef?.current?.coffee === true;
-    kit.cup.group.visible = carry && pose !== 'lie' && pose !== 'bath' && pose !== 'shower';
-    kit.cup.coffee.visible = carryCoffee;
-    kit.cup.juice.visible = carry && !carryCoffee;
+    cup.visible = carry && pose !== 'lie' && pose !== 'bath' && pose !== 'shower';
+    cupCoffee.visible = carryCoffee;
+    cupJuice.visible = !carryCoffee;
+    cupStraw.visible = !carryCoffee;
     if (carryCoffee) {
+      const sp = cupSteam.material as THREE.SpriteMaterial;
       const ph = (t * 0.55) % 1;
-      kit.cup.steam.position.y = 0.09 + ph * 0.05;
-      kit.cup.steam.scale.setScalar(0.04 + ph * 0.04);
-      (kit.cup.steam.material as THREE.SpriteMaterial).opacity = Math.sin(ph * Math.PI) * 0.6;
+      cupSteam.position.y = 0.06 + ph * 0.1;
+      cupSteam.scale.setScalar(0.04 + ph * 0.05);
+      sp.opacity = Math.sin(ph * Math.PI) * 0.6;
+    } else {
+      (cupSteam.material as THREE.SpriteMaterial).opacity = 0;
     }
-
-    // Zzz（躺床：offs 已放倒回位，头部朝 -z）
-    kit.zzz.visible = pose === 'lie';
-    if (pose === 'lie') {
-      kit.zzzSprites.forEach((sp, i) => {
-        const ph = (t * 0.42 + i * 0.34) % 1;
-        sp.position.set(0.05 * i, 0.52 * H + i * 0.11 * H + ph * 0.24 * H, -0.88 * H - i * 0.035 * H);
-        (sp.material as THREE.SpriteMaterial).opacity = Math.sin(ph * Math.PI) * 0.9;
-      });
+    // —— 看书翻页 ——
+    book.visible = pose === 'read';
+    if (pose === 'read') {
+      if (t - flipAt.current > 2.8) flipAt.current = t;
+      const fp = Math.min(1, Math.max(0, (t - flipAt.current) / 0.55));
+      bookFlip.rotation.z = fp < 1 ? -Math.PI * (1 - Math.cos(fp * Math.PI)) / 2 : 0;
     }
-
-    // 泡泡
-    const undressed = pose === 'bath' || pose === 'shower';
-    kit.bubbles.visible = undressed;
-    if (undressed) {
-      kit.bubbles.children.forEach((b, i) => {
-        const a = t * 0.9 + (i / kit.bubbles.children.length) * Math.PI * 2;
-        const rad = pose === 'bath' ? 0.26 : 0.3;
-        b.position.set(Math.cos(a) * rad * (0.7 + (i % 3) * 0.18), 0.42 * H + Math.sin(t * 1.6 + i * 1.7) * 0.09 + (i % 4) * 0.07, Math.sin(a) * rad * (0.7 + ((i + 1) % 3) * 0.18));
-      });
-    }
-
-    // 化妆星星
-    kit.spark.visible = pose === 'makeup';
+    // —— 化妆星星 ——
+    spark.visible = pose === 'makeup';
     if (pose === 'makeup') {
-      kit.sparkSprites.forEach((sp, i) => {
-        const a = t * 1.25 + (i / kit.sparkSprites.length) * Math.PI * 2;
-        sp.position.set(Math.cos(a) * 0.3, 1.02 * H + Math.sin(t * 2.1 + i * 1.4) * 0.055, Math.sin(a) * 0.3);
+      sparkSprites.forEach((sp, i) => {
+        const a = t * 1.25 + (i / sparkSprites.length) * Math.PI * 2;
+        sp.position.set(Math.cos(a) * 0.3, 0.78 + Math.sin(t * 2.1 + i * 1.4) * 0.055, Math.sin(a) * 0.3);
         (sp.material as THREE.SpriteMaterial).opacity = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * 3.2 + i * 1.9));
+      });
+    }
+    // —— 泡澡/淋浴脱衣 ——
+    const undressed = pose === 'bath' || pose === 'shower';
+    for (const m of clothes) m.visible = !undressed;
+    skinTorso.visible = undressed;
+    foam.visible = undressed;
+    // —— 睡觉 Zzz ——
+    zzz.visible = pose === 'lie';
+    if (pose === 'lie') {
+      zzzSprites.forEach((sp, i) => {
+        const ph = (t * 0.42 + i * 0.34) % 1;
+        sp.position.y = 0.36 + i * 0.14 + ph * 0.3;
+        (sp.material as THREE.SpriteMaterial).opacity = Math.sin(ph * Math.PI) * 0.95;
+      });
+    }
+
+    if (pose === 'stand') {
+      lieWrap.rotation.x = dampN(lieWrap.rotation.x, 0, 10, dt);
+      lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 10, dt);
+      if (rt.moving) {
+        // —— 走路：迈腿摆臂 + 大弹跳 + 头微晃 + 裙摆后飘 + 马尾/呆毛摇摆 ——
+        const s = Math.sin(t * 10);
+        legL.rotation.x = dampN(legL.rotation.x, s * 0.66, 22, dt);
+        legR.rotation.x = dampN(legR.rotation.x, -s * 0.66, 22, dt);
+        kneeL.rotation.x = dampN(kneeL.rotation.x, Math.max(0, -s) * 0.92, 22, dt);
+        kneeR.rotation.x = dampN(kneeR.rotation.x, Math.max(0, s) * 0.92, 22, dt);
+        armL.rotation.x = dampN(armL.rotation.x, -s * 0.6, 20, dt);
+        armL.rotation.z = dampN(armL.rotation.z, -0.16, 14, dt);
+        foreL.rotation.x = dampN(foreL.rotation.x, -0.38, 14, dt);
+        armR.rotation.z = dampN(armR.rotation.z, 0.16, 14, dt);
+        foreR.rotation.x = dampN(foreR.rotation.x, -0.38, 14, dt);
+        root.position.y = Math.abs(Math.sin(t * 10)) * 0.042;
+        root.rotation.x = dampN(root.rotation.x, 0.06, 12, dt);
+        root.rotation.z = dampN(root.rotation.z, s * 0.04, 14, dt);
+        head.rotation.x = dampN(head.rotation.x, 0.03, 12, dt);
+        head.rotation.z = dampN(head.rotation.z, -s * 0.05, 12, dt);
+        if (skirt) {
+          skirt.rotation.x = dampN(skirt.rotation.x, -0.14, 10, dt);
+          skirt.rotation.z = dampN(skirt.rotation.z, s * 0.05, 12, dt);
+        }
+        hairDyn.rotation.z = dampN(hairDyn.rotation.z, s * 0.07, 12, dt);
+        hairDyn.rotation.x = dampN(hairDyn.rotation.x, 0.05, 12, dt);
+        if (carry) {
+          armR.rotation.x = dampN(armR.rotation.x, -0.68, 14, dt);
+          armR.rotation.z = dampN(armR.rotation.z, 0.2, 12, dt);
+          foreR.rotation.x = dampN(foreR.rotation.x, -1.04, 14, dt);
+        } else {
+          armR.rotation.x = dampN(armR.rotation.x, s * 0.6, 20, dt);
+        }
+      } else {
+        // —— 待机：呼吸 + 手臂微晃 + 随机歪头 + 头发轻摆 ——
+        const tl = tilt.current;
+        if (t >= tl.next) {
+          tl.v = (Math.random() < 0.5 ? -1 : 1) * (0.05 + Math.random() * 0.07);
+          tl.next = t + 4 + Math.random() * 4;
+        }
+        legL.rotation.x = dampN(legL.rotation.x, 0, 10, dt);
+        legR.rotation.x = dampN(legR.rotation.x, 0, 10, dt);
+        kneeL.rotation.x = dampN(kneeL.rotation.x, 0, 10, dt);
+        kneeR.rotation.x = dampN(kneeR.rotation.x, 0, 10, dt);
+        armL.rotation.x = dampN(armL.rotation.x, Math.sin(t * 1.7) * 0.05, 8, dt);
+        armL.rotation.z = dampN(armL.rotation.z, -0.16, 10, dt);
+        foreL.rotation.x = dampN(foreL.rotation.x, -0.14, 8, dt);
+        armR.rotation.z = dampN(armR.rotation.z, 0.16, 10, dt);
+        foreR.rotation.x = dampN(foreR.rotation.x, -0.14, 8, dt);
+        root.position.y = Math.sin(t * 2.2) * 0.009 + 0.004;
+        root.rotation.x = dampN(root.rotation.x, 0, 10, dt);
+        root.rotation.z = dampN(root.rotation.z, 0, 10, dt);
+        head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
+        head.rotation.z = dampN(head.rotation.z, tl.v, 2.2, dt);
+        if (skirt) {
+          skirt.rotation.x = dampN(skirt.rotation.x, 0, 10, dt);
+          skirt.rotation.z = dampN(skirt.rotation.z, 0, 10, dt);
+        }
+        hairDyn.rotation.z = dampN(hairDyn.rotation.z, Math.sin(t * 1.3) * 0.03, 8, dt);
+        hairDyn.rotation.x = dampN(hairDyn.rotation.x, 0, 8, dt);
+        if (carry) {
+          // 站着端杯：周期性举到嘴边咪一小口再放回来
+          const ph = (t % 4.8) / 4.8;
+          const sip = ph > 0.52 ? Math.sin(((ph - 0.52) / 0.48) * Math.PI) : 0;
+          armR.rotation.x = dampN(armR.rotation.x, -0.28 - sip * 1.78, 9, dt);
+          armR.rotation.z = dampN(armR.rotation.z, 0.2, 10, dt);
+          foreR.rotation.x = dampN(foreR.rotation.x, -0.5 - sip * 0.72, 9, dt);
+          head.rotation.x = dampN(head.rotation.x, -sip * 0.16, 7, dt);
+        } else {
+          armR.rotation.x = dampN(armR.rotation.x, -Math.sin(t * 1.7) * 0.05, 8, dt);
+        }
+      }
+      return;
+    }
+
+    // —— 姿势（坐下 / 躺床 / 泡澡） ——
+    if (pose === 'lie') {
+      // 躺平：头朝家具 -z（床头/枕头侧），脸朝天
+      lieWrap.rotation.x = dampN(lieWrap.rotation.x, -Math.PI / 2, 8, dt);
+      lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 8, dt);
+      root.position.y = dampN(root.position.y, poseY + 0.07, 8, dt);
+      root.rotation.x = dampN(root.rotation.x, 0, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, 0, 8, dt);
+      legL.rotation.x = dampN(legL.rotation.x, 0.06, 8, dt);
+      legR.rotation.x = dampN(legR.rotation.x, -0.04, 8, dt);
+      kneeL.rotation.x = dampN(kneeL.rotation.x, 0.1, 8, dt);
+      kneeR.rotation.x = dampN(kneeR.rotation.x, 0.1, 8, dt);
+      armL.rotation.x = dampN(armL.rotation.x, 0.1, 8, dt);
+      armR.rotation.x = dampN(armR.rotation.x, 0.1, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, 0.35, 8, dt);
+      armR.rotation.z = dampN(armR.rotation.z, -0.35, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.15, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.15, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, 0, 8, dt);
+      root.position.y += Math.sin(t * 1.6) * 0.006;
+      return;
+    }
+
+    if (pose === 'shower') {
+      // —— 站姿淋浴：双臂抬搓头发 + 微微仰头 + 身体轻晃 ——
+      lieWrap.rotation.x = dampN(lieWrap.rotation.x, 0, 10, dt);
+      lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 10, dt);
+      root.position.y = dampN(root.position.y, Math.max(0.02, poseY), 9, dt);
+      root.rotation.x = dampN(root.rotation.x, 0, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, Math.sin(t * 1.4) * 0.035, 8, dt);
+      legL.rotation.x = dampN(legL.rotation.x, 0.03, 8, dt);
+      legR.rotation.x = dampN(legR.rotation.x, -0.03, 8, dt);
+      kneeL.rotation.x = dampN(kneeL.rotation.x, 0, 8, dt);
+      kneeR.rotation.x = dampN(kneeR.rotation.x, 0, 8, dt);
+      const washUp = -2.45 + Math.sin(t * 2.1) * 0.07;
+      armL.rotation.x = dampN(armL.rotation.x, washUp, 7, dt);
+      armR.rotation.x = dampN(armR.rotation.x, washUp + Math.sin(t * 2.3) * 0.06, 7, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.3, 7, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.3, 7, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.55, 7, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.62, 7, dt);
+      head.rotation.x = dampN(head.rotation.x, -0.16, 6, dt);
+      head.rotation.z = dampN(head.rotation.z, 0, 6, dt);
+      foam.children.forEach((f, i) => {
+        f.position.y += Math.sin(t * 2.2 + i * 1.3) * 0.00035;
+      });
+      return;
+    }
+
+    // —— v5.6 姿势（做饭 / 吃饭 / 喝东西 / 弹琴 / 弹吉他 / 化妆 / 照镜子 / 看书） ——
+    const standBase = () => {
+      lieWrap.rotation.x = dampN(lieWrap.rotation.x, 0, 10, dt);
+      lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 10, dt);
+      root.position.y = dampN(root.position.y, Math.sin(t * 2.2) * 0.009 + 0.004, 10, dt);
+      root.rotation.x = dampN(root.rotation.x, 0, 10, dt);
+      legL.rotation.x = dampN(legL.rotation.x, 0, 10, dt);
+      legR.rotation.x = dampN(legR.rotation.x, 0, 10, dt);
+      kneeL.rotation.x = dampN(kneeL.rotation.x, 0, 10, dt);
+      kneeR.rotation.x = dampN(kneeR.rotation.x, 0, 10, dt);
+      if (skirt) {
+        skirt.rotation.x = dampN(skirt.rotation.x, 0, 10, dt);
+        skirt.rotation.z = dampN(skirt.rotation.z, 0, 10, dt);
+      }
+      hairDyn.rotation.z = dampN(hairDyn.rotation.z, 0, 8, dt);
+      hairDyn.rotation.x = dampN(hairDyn.rotation.x, 0, 8, dt);
+    };
+    const sitBase = () => {
+      lieWrap.rotation.x = dampN(lieWrap.rotation.x, 0, 10, dt);
+      lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 10, dt);
+      root.position.y = dampN(root.position.y, Math.max(0.02, poseY - hipY), 9, dt);
+      root.rotation.x = dampN(root.rotation.x, 0.03, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, 0, 8, dt);
+      legL.rotation.x = dampN(legL.rotation.x, -1.55, 10, dt);
+      legR.rotation.x = dampN(legR.rotation.x, -1.55, 10, dt);
+      kneeL.rotation.x = dampN(kneeL.rotation.x, 1.48, 10, dt);
+      kneeR.rotation.x = dampN(kneeR.rotation.x, 1.48, 10, dt);
+      if (skirt) {
+        skirt.rotation.x = dampN(skirt.rotation.x, -0.08, 10, dt);
+        skirt.rotation.z = dampN(skirt.rotation.z, 0, 10, dt);
+      }
+      hairDyn.rotation.z = dampN(hairDyn.rotation.z, 0, 8, dt);
+      hairDyn.rotation.x = dampN(hairDyn.rotation.x, 0, 8, dt);
+    };
+
+    if (pose === 'cook') {
+      // —— 做饭：站灶台前，一手持铲推拉颠勺，一手叉腰，微前倾 ——
+      standBase();
+      root.rotation.x = dampN(root.rotation.x, 0.1, 8, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -1.02 + Math.sin(t * 5.2) * 0.3, 12, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.14, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.4 + Math.sin(t * 5.2 + 0.6) * 0.16, 12, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -0.22, 8, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.92, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.55, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, -0.12, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, 0, 8, dt);
+      return;
+    }
+    if (pose === 'eat') {
+      // —— 吃饭：坐餐桌边，一手循环舀饭送嘴 + 咀嚼 ——
+      sitBase();
+      const lift = Math.max(0, Math.sin(((t * 0.82) % 1) * Math.PI));
+      armR.rotation.x = dampN(armR.rotation.x, -0.5 - lift * 1.42, 14, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.16, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.5 - lift * 0.78, 14, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -0.35, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.18, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.85, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.14 - lift * 0.16, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 7) * 0.02, 10, dt);
+      return;
+    }
+    if (pose === 'drink') {
+      // —— 喝东西：站冰箱前举杯仰头咕咚咕咚 ——
+      standBase();
+      armR.rotation.x = dampN(armR.rotation.x, -2.02, 9, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.2, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.88, 9, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -0.08, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.12, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.14, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, -0.1 + Math.sin(t * 6) * 0.012, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, 0, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, Math.sin(t * 1.6) * 0.02, 8, dt);
+      return;
+    }
+    if (pose === 'piano') {
+      // —— 弹钢琴：坐琴凳，双臂前伸，前臂交替敲键；音符驱动对应侧手 ——
+      sitBase();
+      const nowMs = performance.now();
+      const sinceNote = nowMs - noteFx.current.pianoAt;
+      const pulse = sinceNote < 220 ? 1 - sinceNote / 220 : 0;
+      const noteSideL = noteFx.current.pianoSide > 0;
+      const kL = Math.max(Math.max(0, Math.sin(t * 5.4)) * 0.55, pulse * (noteSideL ? 1 : 0));
+      const kR = Math.max(Math.max(0, Math.sin(t * 5.4 + Math.PI)) * 0.55, pulse * (noteSideL ? 0 : 1));
+      armL.rotation.x = dampN(armL.rotation.x, -1.26, 10, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -1.26, 10, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.22, 8, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.22, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.44 - kL * 0.4, 20, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.44 - kR * 0.4, 20, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.18, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 2.6) * 0.03, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, Math.sin(t * 2.6) * 0.028, 8, dt);
+      return;
+    }
+    if (pose === 'guitar') {
+      // —— 弹吉他：站姿抱琴，一手扫弦一手按弦，扫弦音符驱动右手 ——
+      standBase();
+      const nowMs = performance.now();
+      const sinceStrum = nowMs - noteFx.current.guitarAt;
+      const strum = sinceStrum < 260 ? Math.sin((1 - sinceStrum / 260) * Math.PI) : 0;
+      armR.rotation.x = dampN(armR.rotation.x, -0.88, 10, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.34, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -1.12 + Math.sin(t * 7.2) * 0.16 - strum * 0.34, 22, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -0.78, 10, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.52, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.5, 10, dt);
+      head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 3.4) * 0.06, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, Math.sin(t * 3.4) * 0.035, 8, dt);
+      root.position.y = dampN(root.position.y, Math.abs(Math.sin(t * 3.4)) * 0.012 + 0.004, 10, dt);
+      return;
+    }
+    if (pose === 'read') {
+      // —— 看书：坐姿抱书，双手托书，偶尔翻页 ——
+      sitBase();
+      armL.rotation.x = dampN(armL.rotation.x, -1.08, 10, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -1.08, 10, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.3, 8, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.3, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.86, 10, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.86, 10, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.32, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 0.7) * 0.03, 8, dt);
+      book.position.y = 0.31 + Math.sin(t * 1.8) * 0.006;
+      return;
+    }
+    if (pose === 'makeup') {
+      // —— 化妆：坐梳妆台小凳，一手持粉扑轻拍脸颊，歪头照镜子 ——
+      sitBase();
+      armR.rotation.x = dampN(armR.rotation.x, -1.6 + Math.sin(t * 2.9) * 0.16, 12, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.3, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -1.02, 10, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -0.3, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.16, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.72, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.05, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 1.9) * 0.1, 8, dt);
+      return;
+    }
+    if (pose === 'mirror') {
+      // —— 照镜子：一手叉腰一手撩头发，左右打量自己 ——
+      standBase();
+      armL.rotation.x = dampN(armL.rotation.x, -0.2, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.98, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.6, 8, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -1.52 + Math.sin(t * 1.8) * 0.12, 9, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.34, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.92, 9, dt);
+      head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 1.4) * 0.12, 8, dt);
+      root.rotation.z = dampN(root.rotation.z, Math.sin(t * 0.9) * 0.04, 8, dt);
+      return;
+    }
+
+    // sit / bath：屈髋屈膝坐姿
+    lieWrap.rotation.x = dampN(lieWrap.rotation.x, 0, 10, dt);
+    lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 10, dt);
+    const baseY = pose === 'bath' ? poseY : Math.max(0.02, poseY - hipY);
+    root.position.y = dampN(root.position.y, baseY, 9, dt);
+    root.rotation.x = dampN(root.rotation.x, pose === 'bath' ? 0.12 : 0.03, 8, dt);
+    root.rotation.z = dampN(root.rotation.z, 0, 8, dt);
+    const thigh = pose === 'bath' ? -1.38 : -1.55;
+    legL.rotation.x = dampN(legL.rotation.x, thigh, 10, dt);
+    legR.rotation.x = dampN(legR.rotation.x, thigh, 10, dt);
+    kneeL.rotation.x = dampN(kneeL.rotation.x, -thigh * 0.95, 10, dt);
+    kneeR.rotation.x = dampN(kneeR.rotation.x, -thigh * 0.95, 10, dt);
+    const armX = pose === 'bath' ? -1.05 : -0.4;
+    armL.rotation.x = dampN(armL.rotation.x, armX, 9, dt);
+    armR.rotation.x = dampN(armR.rotation.x, armX, 9, dt);
+    armL.rotation.z = dampN(armL.rotation.z, -0.12, 8, dt);
+    armR.rotation.z = dampN(armR.rotation.z, 0.12, 8, dt);
+    foreL.rotation.x = dampN(foreL.rotation.x, pose === 'bath' ? -0.5 : -0.7, 9, dt);
+    foreR.rotation.x = dampN(foreR.rotation.x, pose === 'bath' ? -0.5 : -0.7, 9, dt);
+    head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
+    head.rotation.z = dampN(head.rotation.z, 0, 8, dt);
+    if (skirt) {
+      skirt.rotation.x = dampN(skirt.rotation.x, pose === 'bath' ? -0.12 : -0.08, 10, dt);
+      skirt.rotation.z = dampN(skirt.rotation.z, 0, 10, dt);
+    }
+    hairDyn.rotation.z = dampN(hairDyn.rotation.z, 0, 8, dt);
+    hairDyn.rotation.x = dampN(hairDyn.rotation.x, 0, 8, dt);
+    // 坐着端杯：右手把杯子端在胸前（只对 sit）
+    if (pose === 'sit' && carry) {
+      armR.rotation.x = dampN(armR.rotation.x, -1.02, 9, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.18, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.95, 9, dt);
+    }
+    // 泡澡轻轻晃悠
+    if (pose === 'bath') {
+      root.position.y += Math.sin(t * 2.4) * 0.006;
+      foam.children.forEach((f, i) => {
+        f.position.y += Math.sin(t * 2.2 + i * 1.3) * 0.00035;
       });
     }
   });
 
   return (
-    <group ref={holder}>
-      <group ref={scaler}>
-        <primitive object={kit.root} />
-      </group>
+    <group ref={holder} scale={1}>
+      <primitive object={rig.root} />
+      {/* 访客名牌：头顶浮名字牌 */}
+      {who === 'guest' && guestName && <GuestTag name={guestName} />}
     </group>
   );
 }
 
-// 预加载
-useGLTF.preload('/couple-home/chibi-nan.glb');
-useGLTF.preload('/couple-home/chibi-nv.glb');
+/** 访客头顶名牌（canvas 纹理） */
+function GuestTag({ name }: { name: string }) {
+  const tex = useMemo(() => {
+    const W = 256;
+    const H = 96;
+    const cv = document.createElement('canvas');
+    cv.width = W;
+    cv.height = H;
+    const ctx = cv.getContext('2d')!;
+    const r = 24;
+    ctx.fillStyle = 'rgba(255,253,248,0.94)';
+    ctx.strokeStyle = '#f2b3c2';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(r + 3, 3);
+    ctx.arcTo(W - 3, 3, W - 3, H - 3, r);
+    ctx.arcTo(W - 3, H - 3, 3, H - 3, r);
+    ctx.arcTo(3, H - 3, 3, 3, r);
+    ctx.arcTo(3, 3, W - 3, 3, r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#4a4a4e';
+    ctx.font = '600 46px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(name.slice(0, 6), W / 2, H / 2 + 3);
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }, [name]);
+  return (
+    <group position={[0, 1.08, 0]}>
+      <sprite scale={[0.5, 0.19, 1]}>
+        <spriteMaterial map={tex} transparent depthWrite={false} toneMapped={false} />
+      </sprite>
+    </group>
+  );
+}
