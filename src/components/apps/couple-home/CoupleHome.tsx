@@ -107,7 +107,9 @@ import {
 } from './catalog';
 import { sfx } from './sfx';
 import { getCachedThumb } from './scene/ShopThumbs';
-import type { CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, HomeMode, HomeState, LayoutSnap, NoteEntry, RoomId } from './types';
+import type { CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, LayoutSnap, NoteEntry, RoomId } from './types';
+import { sanitizeWear } from './types';
+import Wardrobe from './Wardrobe';
 
 /** 做饭小游戏（选菜谱→切菜/翻炒/装盘→上桌，v5.7 F5） */
 const CookingGame = dynamic(() => import('./CookingGame'), { ssr: false });
@@ -511,8 +513,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [doorPos, setDoorPos] = useState<{ bed: number; kt: number; bath: number; bal?: number } | undefined>(pack.home.doorPos);
   const [fp, setFp] = useState<boolean>(!!pack.home.fp);
   const [nightAuto, setNightAuto] = useState<boolean>(pack.home.nightAuto !== false);
-  // v5.6：穿搭 / 做饭一桌菜 / 地板墙面纹理
-  const [outfit, setOutfit] = useState<number>(pack.home.outfit ?? 0);
+  // v5.6：做饭一桌菜 / 地板墙面纹理；v6.2：衣柜穿搭（发型+连衣裙/分体+鞋）
+  const [wear, setWear] = useState<GirlWear>(() => sanitizeWear(pack.home.wear));
+  /** 衣柜弹窗（走到衣柜前弹出） */
+  const [wardrobeOpen, setWardrobeOpen] = useState(false);
   const [mealReady, setMealReady] = useState<boolean>(!!pack.home.mealReady);
   const [floorTex, setFloorTex] = useState<'plain' | 'wood' | 'check'>(pack.home.floorTex ?? 'wood');
   const [wallTex, setWallTex] = useState<'plain' | 'dot' | 'stripe'>(pack.home.wallTex ?? 'plain');
@@ -681,8 +685,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
   }, [fp]);
   const nightAutoRef = useRef(nightAuto);
   nightAutoRef.current = nightAuto;
-  const outfitRef = useRef(outfit);
-  outfitRef.current = outfit;
+  const wearRef = useRef(wear);
+  wearRef.current = wear;
   const mealReadyRef = useRef(mealReady);
   mealReadyRef.current = mealReady;
   const floorTexRef = useRef(floorTex);
@@ -803,7 +807,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       winCol: winColRef.current,
       fp: fpRef.current.on,
       nightAuto: nightAutoRef.current,
-      outfit: outfitRef.current,
+      wear: wearRef.current,
       mealReady: mealReadyRef.current,
       floorTex: floorTexRef.current,
       wallTex: wallTexRef.current,
@@ -862,7 +866,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setDoorPos(h.doorPos);
     setFp(!!h.fp);
     setNightAuto(h.nightAuto !== false);
-    setOutfit(h.outfit ?? 0);
+    setWear(sanitizeWear(h.wear));
     setMealReady(!!h.mealReady);
     setFloorTex(h.floorTex ?? 'wood');
     setWallTex(h.wallTex ?? 'plain');
@@ -1068,6 +1072,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
         prev.map((f) => (f.kind === 'tv' && f.st?.on ? { ...f, st: { ...f.st, on: false } } : f)),
       );
       toast('手柄一放，眼睛休息一下～');
+    } else if (act.type === 'dress') {
+      // 换装结束：衣柜门关上
+      off(act.itemId, { open: false });
     } else if (act.type === 'cook') {
       toast('好，先不做了～');
     } else if (act.type === 'play') {
@@ -1189,14 +1196,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
         toast('咖啡机喌哚喌哚煮咖啡…');
       } else if (type === 'dress') {
         turnOn({ open: true });
-        auto(1500, () => {
-          setOutfit((o) => (o + 1) % 3);
-          toast('换上新衣服，好看！');
+        auto(900, () => {
+          if (actRef.current?.type === 'dress') setWardrobeOpen(true);
         });
-        auto(2700, () => {
-          if (actRef.current?.type === 'dress') endAction();
-        });
-        toast('打开衣柜挑一挑…');
+        toast('衣柜门开啦，挑一身好看的～');
       } else if (type === 'eat') toast('开饭开饭，自己做的最香～');
       else if (type === 'play') {
         // 乐器弹奏：小人走向乐器摆姿势 + 镜头推近 + 可弹奏覆盖层（点弦/点键真实发声）
@@ -2666,7 +2669,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         carryRef={carryRef}
         instRef={instRef}
         onFaucetTap={onFaucetTap}
-        outfit={outfit}
+        wear={wear}
         activeAct={charAction}
         mealTableId={mealTableId}
         floorTex={floorTex}
@@ -2864,9 +2867,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
           </div>
         </div>
 
-        {/* 家具互动按钮（生活模式）：坐下/睡觉/泡澡 → 站起来/起床/出来 */}
+        {/* 家具互动按钮（生活模式）：坐下/睡觉/泡澡 → 站起来/起床/出来；衣柜弹窗打开时隐藏避免压住抽屉 */}
         <AnimatePresence>
-          {mode === 'live' && charAction && !(charAction.type === 'play' && inst) && (
+          {mode === 'live' && charAction && !wardrobeOpen && !(charAction.type === 'play' && inst) && (
             <motion.div
               key="action-bar"
               initial={{ opacity: 0, y: 14 }}
@@ -3316,6 +3319,21 @@ export default function CoupleHome({ close }: { close: () => void }) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* ===== 我的衣柜（走到衣柜前弹出；上半屏透出小人实时试穿） ===== */}
+      <Wardrobe
+        open={wardrobeOpen}
+        wear={wear}
+        onChange={(w) => {
+          setWear(w);
+          saveSoon();
+        }}
+        onClose={() => {
+          setWardrobeOpen(false);
+          sfx.tap();
+          if (actRef.current?.type === 'dress') endAction();
+        }}
+      />
 
       {/* ===== 五子棋对弈（棋盘桌 J7） ===== */}
       <AnimatePresence>

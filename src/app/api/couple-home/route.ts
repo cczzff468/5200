@@ -76,6 +76,8 @@ interface HomePayload {
   nightAuto?: boolean;
   /** 「我」的穿搭编号（衣柜换装） */
   outfit?: number;
+  /** 「我」的衣柜穿搭（v6.2：发型 + 连衣裙/分体 + 鞋） */
+  wear?: { hair?: string; dress?: number; top?: number; bottom?: number; shoes?: number };
   /** 做饭系统：一桌好菜已上桌 */
   mealReady?: boolean;
   /** 做饭小游戏：本次上桌的菜名 */
@@ -283,6 +285,7 @@ function normalizeHome(raw: unknown): HomePayload | null {
     fp: r.fp === true,
     nightAuto: r.nightAuto !== false,
     outfit: clampInt(r.outfit, 0, 9) ?? undefined,
+    ...cleanWear(r.wear),
     mealReady: r.mealReady === true,
     mealName: cleanStr(r.mealName, 16) || undefined,
     balconyDoorOpen: r.balconyDoorOpen === true,
@@ -292,6 +295,28 @@ function normalizeHome(raw: unknown): HomePayload | null {
     wallTex: typeof r.wallTex === 'string' && WALL_TEXES.has(r.wallTex) ? r.wallTex : undefined,
     act,
     ...cleanG1G8(r, photoCounter),
+  };
+}
+
+/** 女主衣柜穿搭清洗（v6.2）：发型白名单 + 款号钳制 */
+const HAIR_STYLES = new Set(['twin', 'high', 'bob', 'straight', 'wave']);
+function cleanWear(raw: unknown): Pick<HomePayload, 'wear'> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const w = raw as Record<string, unknown>;
+  const hair = typeof w.hair === 'string' && HAIR_STYLES.has(w.hair) ? w.hair : undefined;
+  const dress = clampInt(w.dress, -1, 8);
+  const top = clampInt(w.top, 0, 8);
+  const bottom = clampInt(w.bottom, 0, 8);
+  const shoes = clampInt(w.shoes, 0, 8);
+  if (hair == null && dress == null && top == null && bottom == null && shoes == null) return {};
+  return {
+    wear: {
+      hair: hair ?? 'twin',
+      dress: dress ?? 0,
+      top: top ?? 0,
+      bottom: bottom ?? 0,
+      shoes: shoes ?? 0,
+    },
   };
 }
 

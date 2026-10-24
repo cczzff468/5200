@@ -232,6 +232,42 @@ export interface DoorPos {
   bal?: number;
 }
 
+// ---------------- 女主衣柜（v6.2） ----------------
+
+/** 女主发型：twin 双马尾 / high 高马尾 / bob 短发 / straight 黑长直 / wave 大波浪 */
+export type GirlHairStyle = 'twin' | 'high' | 'bob' | 'straight' | 'wave';
+
+/** 女主衣柜穿搭：dress ≥ 0 穿连衣裙（忽略 top/bottom），dress = -1 穿分体（上衣 + 裤/裙） */
+export interface GirlWear {
+  hair: GirlHairStyle;
+  /** 连衣裙款号（-1 = 分体穿搭） */
+  dress: number;
+  /** 上衣款号（分体时生效） */
+  top: number;
+  /** 下装款号（分体时生效；0-1 裙 / 2 短裤 / 3 长裤） */
+  bottom: number;
+  /** 鞋子款号 */
+  shoes: number;
+}
+
+/** 默认穿搭：樱粉连衣裙 + 双马尾 + 棕色小皮鞋（与 v6.1 造型一致） */
+export const DEFAULT_WEAR: GirlWear = { hair: 'twin', dress: 0, top: 0, bottom: 0, shoes: 0 };
+
+/** 归档非法数据 → 合法穿搭（防旧档/脏数据渲染崩溃） */
+export function sanitizeWear(w: unknown): GirlWear {
+  const HAIRS: GirlHairStyle[] = ['twin', 'high', 'bob', 'straight', 'wave'];
+  const o = (w ?? {}) as Partial<GirlWear>;
+  const idx = (v: unknown, max: number, dflt: number) =>
+    typeof v === 'number' && Number.isFinite(v) && v >= -1 && v <= max ? Math.round(v) : dflt;
+  return {
+    hair: HAIRS.includes(o.hair as GirlHairStyle) ? (o.hair as GirlHairStyle) : 'twin',
+    dress: idx(o.dress, 3, 0) === -1 ? -1 : Math.min(3, Math.max(0, idx(o.dress, 3, 0))),
+    top: Math.min(3, Math.max(0, idx(o.top, 3, 0))),
+    bottom: Math.min(3, Math.max(0, idx(o.bottom, 3, 0))),
+    shoes: Math.min(3, Math.max(0, idx(o.shoes, 3, 0))),
+  };
+}
+
 /** 小家整体持久化数据（服务端 JSON 快照） */
 export interface HomeState {
   /** 数据版本：5 = 3D 时代（四室一厅靠增量迁移，不换版本号） */
@@ -285,6 +321,8 @@ export interface HomeState {
   act?: { type: CharAction['type']; itemId: string };
   /** 「我」的穿搭编号（衣柜换装；0=默认，1/2=换色套装） */
   outfit?: number;
+  /** 「我」的衣柜穿搭（v6.2：发型 + 连衣裙/分体上下装 + 鞋子） */
+  wear?: GirlWear;
   /** 地板纹理：wood = 木纹条（默认）/ plain = 素色 / check = 大格瓷砖（全屋通用、颜色仍分房间） */
   floorTex?: 'plain' | 'wood' | 'check';
   /** 墙面纹理：dot = 碎花 / stripe = 细条纹（缺省素色，全屋通用、颜色仍分房间） */

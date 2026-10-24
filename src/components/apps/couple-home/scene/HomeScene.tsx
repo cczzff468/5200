@@ -49,7 +49,7 @@ import {
   resolveDoorPos,
   resolveWinPos,
 } from '../catalog';
-import type { CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, HomeMode } from '../types';
+import type { CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode } from '../types';
 
 // ---------------- 对外 Props ----------------
 
@@ -123,8 +123,8 @@ export interface HomeSceneProps {
   onDragSelect: (id: string) => void;
   /** 编辑模式点选门窗（不开合） */
   onWallTap?: (id: string) => void;
-  /** 「我」的穿搭编号（衣柜换装） */
-  outfit?: number;
+  /** 「我」的衣柜穿搭（发型 + 连衣裙/分体 + 鞋；v6.2） */
+  wear?: GirlWear;
   /** 正在进行的家具动作（灶台蒸汽 / 乐器音符联动） */
   activeAct?: { type: CharAction['type']; itemId: string; active: boolean } | null;
   /** 音响放歌中（音箱上方飘音符） */
@@ -1204,7 +1204,7 @@ export default function HomeScene(props: HomeSceneProps) {
   const [quality, setQuality] = useState<SceneQuality>('high');
   const {
     items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge, fp, fpRef,
-    poseRef, actRef, carryRef, instRef, onFaucetTap, activeAct, mealTableId, floorTex, wallTex,
+    poseRef, actRef, carryRef, instRef, onFaucetTap, activeAct, mealTableId, floorTex, wallTex, wear,
     win, onToggleWin, winPos, doorPos,
     floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, floorColK, wallColK, floorColB, wallColB,
     floorColBal, wallColBal,
@@ -1411,7 +1411,7 @@ export default function HomeScene(props: HomeSceneProps) {
         );
       })}
 
-      <CharChibi3D rt={meRT} who="me" hide={fp && mode === 'live'} poseRef={poseRef} carryRef={carryRef} />
+      <CharChibi3D rt={meRT} who="me" hide={fp && mode === 'live'} poseRef={poseRef} carryRef={carryRef} wear={wear} />
       <CharChibi3D rt={taRT} who="partner" />
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       <WeatherFX kind={weatherFx ?? 'clear'} win={win} winPos={winPos} />
