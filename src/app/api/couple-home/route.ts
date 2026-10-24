@@ -72,8 +72,6 @@ interface HomePayload {
   doorPos?: { bed?: number; kt?: number; bath?: number; bal?: number };
   /** 第一人称视角 */
   fp?: boolean;
-  /** 小人画风 */
-  charStyle?: string;
   /** 昼夜跟随真实时间 */
   nightAuto?: boolean;
   /** 「我」的穿搭编号（衣柜换装） */
@@ -283,7 +281,6 @@ function normalizeHome(raw: unknown): HomePayload | null {
     ceilColK: cleanHex(r.ceilColK),
     ceilColB: cleanHex(r.ceilColB),
     fp: r.fp === true,
-    charStyle: r.charStyle === 'real' ? 'real' : r.charStyle === 'cartoon' ? 'cartoon' : undefined,
     nightAuto: r.nightAuto !== false,
     outfit: clampInt(r.outfit, 0, 9) ?? undefined,
     mealReady: r.mealReady === true,

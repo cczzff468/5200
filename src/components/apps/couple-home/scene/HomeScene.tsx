@@ -23,8 +23,7 @@ import { OrbitControls, PerformanceMonitor } from '@react-three/drei';
 import Room, { buildWallBoxes } from './Room';
 import Furn3D from './Furn3D';
 import Char3D from './Char3D';
-import CharKit3D from './CharKit3D';
-import CharCustom3D from './CharCustom3D';
+import CharChibi3D from './CharChibi3D';
 import {
   BAL_X0,
   BAL_X1,
@@ -73,8 +72,6 @@ export interface HomeSceneProps {
   /** 第一人称视角（true = 小人就是「我」） */
   fp?: boolean;
   fpRef: RefObject<{ on: boolean }>;
-  /** 小人画风（cartoon Q版 / real 拟真） */
-  charStyle?: 'cartoon' | 'real';
   /** 「我」的姿势 + 支撑面高度（坐下/睡觉/泡澡） */
   poseRef: RefObject<{ pose: CharPose; y: number }>;
   /** 正在执行的家具动作 */
@@ -1217,7 +1214,7 @@ export default function HomeScene(props: HomeSceneProps) {
   const [quality, setQuality] = useState<SceneQuality>('high');
   const {
     items, mode, night, selId, moveOn, meRT, taRT, joyRef, zoomCmd, moveCmd, onNudge, fp, fpRef,
-    charStyle, poseRef, actRef, carryRef, instRef, onFaucetTap, outfit, activeAct, mealTableId, floorTex, wallTex,
+    poseRef, actRef, carryRef, instRef, onFaucetTap, activeAct, mealTableId, floorTex, wallTex,
     win, onToggleWin, winPos, doorPos,
     floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, floorColK, wallColK, floorColB, wallColB,
     floorColBal, wallColBal,
@@ -1424,10 +1421,10 @@ export default function HomeScene(props: HomeSceneProps) {
         );
       })}
 
-      <CharCustom3D rt={meRT} who="me" hide={fp && mode === 'live'} style={charStyle} poseRef={poseRef} outfit={outfit} carryRef={carryRef} />
-      <CharCustom3D rt={taRT} who="partner" style={charStyle} />
+      <CharChibi3D rt={meRT} who="me" hide={fp && mode === 'live'} poseRef={poseRef} carryRef={carryRef} />
+      <CharChibi3D rt={taRT} who="partner" />
       {guestRT?.current && (
-        <Char3D rt={guestRT.current} who="guest" style={charStyle} guestName={guestName ?? undefined} />
+        <Char3D rt={guestRT.current} who="guest" guestName={guestName ?? undefined} />
       )}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       <WeatherFX kind={weatherFx ?? 'clear'} win={win} winPos={winPos} />

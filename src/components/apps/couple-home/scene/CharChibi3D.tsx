@@ -1,0 +1,399 @@
+'use client';
+
+/* eslint-disable react-hooks/immutability -- R3F 动画需要每帧原地修改 three 对象 */
+
+/**
+ * 拾光小屋 3D —— Q版小人（一男一女 · 萌系大头）
+ *
+ * - 资产来源：Suriyun 免费 Q 版角色（CC-BY，www.suriyun.com）：
+ *   · 男主 M02（休闲装短发男孩）—— github.com/armaxst/MaxstARSDK_Unity_Sample 官方 Unity 示例包
+ *   · 女主 Kazuko（Q版女孩，盔甲裙造型）—— github.com/CasterQi/yuanshen2 中的官方示例包
+ *   FBX 经 FBX2glTF 离线转 GLB，动画轨道按同名骨骼合并进模型文件。
+ * - chibi-nan.glb 男主（Idle/Walk/WalkL/WalkR/Sit/Jump/Victory/Dash/Alert）
+ *   chibi-nv.glb 女主（Idle×4/Walk/Run/Sit/Jump/Cutepose/Bye/Cry/Rei/Angpose）
+ * - 姿势映射：stand→Idle · 走路→Walk · 坐姿系→Sit · 躺床→Idle+整体放倒（头朝 -z）·
+ *   泡澡→Sit · 做饭/淋浴/喝水→Idle；睡觉 Zzz / 泡澡泡泡 / 化妆星星 / 手持咖啡果汁
+ *   为程序化点缀。待机一段时间会播放小彩蛋（男主 Victory/Alert，女主 Bye/Cutepose）。
+ * - 朝向与移动由 GameLoop 每帧写 rt（与 Char3D/CharRealistic3D 同接口）。
+ */
+
+import { useEffect, useMemo, useRef, type RefObject } from 'react';
+import * as THREE from 'three';
+import { useFrame } from '@react-three/fiber';
+import { useGLTF } from '@react-three/drei';
+import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import type { CharPose, CharRT } from '../types';
+
+const MODEL_FILE: Record<'me' | 'partner', string> = { me: 'chibi-nv', partner: 'chibi-nan' };
+
+/** 场景内目标身高（米）——Q版大头比例略矮 */
+const TARGET_H: Record<'me' | 'partner', number> = { me: 0.9, partner: 0.95 };
+
+/** 主动画（姿势驱动） */
+type MainClip = 'Idle' | 'Walk' | 'Sit' | 'Jump' | 'Run';
+function poseToMain(pose: CharPose, moving: boolean): MainClip {
+  switch (pose) {
+    case 'sit':
+    case 'eat':
+    case 'piano':
+    case 'guitar':
+    case 'makeup':
+    case 'mirror':
+    case 'read':
+    case 'bath':
+      return 'Sit';
+    case 'lie':
+      return 'Idle';
+    case 'cook':
+    case 'drink':
+    case 'shower':
+      return 'Idle';
+    default:
+      return moving ? 'Walk' : 'Idle';
+  }
+}
+
+/** 待机彩蛋：长时间站立时偶尔播放（女主/男主各自的小动作） */
+const IDLE_EXTRAS: Record<'me' | 'partner', string[]> = {
+  me: ['Bye', 'Cutepose', 'Idle2', 'Idle3', 'Rei'],
+  partner: ['Victory', 'Alert', 'Jump'],
+};
+
+const SEATED: CharPose[] = ['sit', 'eat', 'piano', 'guitar', 'makeup', 'mirror', 'read'];
+
+/** 姿势直接驱动的主动画集合 */
+const MAIN_CLIPS = new Set(['Idle', 'Walk', 'Sit', 'Jump', 'Run']);
+
+/** 手持小杯（咖啡带热气 / 果汁带吸管） */
+function buildCup(): { group: THREE.Group; coffee: THREE.Group; juice: THREE.Group; steam: THREE.Sprite } {
+  const group = new THREE.Group();
+  const coffee = new THREE.Group();
+  const cupBody = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.028, 0.022, 0.05, 12),
+    new THREE.MeshStandardMaterial({ color: '#f4f0ea', roughness: 0.7 }),
+  );
+  cupBody.position.y = 0.03;
+  const liquid = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.024, 0.02, 0.012, 12),
+    new THREE.MeshStandardMaterial({ color: '#6b4226', roughness: 0.4 }),
+  );
+  liquid.position.y = 0.052;
+  coffee.add(cupBody, liquid);
+  const cv = document.createElement('canvas');
+  cv.width = 64;
+  cv.height = 64;
+  const ctx = cv.getContext('2d')!;
+  const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+  g.addColorStop(0, 'rgba(255,255,255,0.85)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  const steam = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, opacity: 0, depthWrite: false }));
+  steam.scale.setScalar(0.05);
+  steam.position.y = 0.09;
+  coffee.add(steam);
+  const juice = new THREE.Group();
+  const juiceCup = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.026, 0.022, 0.055, 12),
+    new THREE.MeshStandardMaterial({ color: '#f8e8ee', roughness: 0.5 }),
+  );
+  juiceCup.position.y = 0.032;
+  const juiceLiquid = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.023, 0.019, 0.02, 12),
+    new THREE.MeshStandardMaterial({ color: '#f2a7bc', roughness: 0.35 }),
+  );
+  juiceLiquid.position.y = 0.05;
+  const straw = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.004, 0.004, 0.085, 8),
+    new THREE.MeshStandardMaterial({ color: '#f6f5f2', roughness: 0.6 }),
+  );
+  straw.position.set(0.012, 0.075, 0);
+  straw.rotation.z = -0.18;
+  juice.add(juiceCup, juiceLiquid, straw);
+  group.add(coffee, juice);
+  return { group, coffee, juice, steam };
+}
+
+function makeZTex(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 64;
+  cv.height = 64;
+  const ctx = cv.getContext('2d')!;
+  ctx.font = 'bold 44px sans-serif';
+  ctx.fillStyle = '#8fa8c8';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('Z', 32, 34);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function bubbleMat(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: '#eaf6ff', transparent: true, opacity: 0.55, roughness: 0.15, metalness: 0.05 });
+}
+
+export interface CharChibi3DProps {
+  rt: CharRT;
+  who: 'me' | 'partner';
+  hide?: boolean;
+  poseRef?: RefObject<{ pose: CharPose; y: number }>;
+  /** 衣柜穿搭编号：Q版模型自带服装，保留接口兼容 */
+  outfit?: number;
+  carryRef?: RefObject<{ cup: boolean; coffee?: boolean }>;
+}
+
+/**
+ * Q版模型锚点（模型单位 ≈ 0.1 出头，按实测）：
+ * Suriyun 站立 hips 约在身高 52%，坐姿 clip hips 约在身高 30%，蹲/泡澡用坐姿锚点。
+ */
+const ANCHOR = {
+  hipsY: 0.52,
+  sitHipsY: 0.3,
+  lieLift: 0.09,
+};
+
+export default function CharChibi3D({ rt, who, hide, poseRef, carryRef }: CharChibi3DProps) {
+  const holder = useRef<THREE.Group>(null);
+  const scaler = useRef<THREE.Group>(null);
+
+  const modelGltf = useGLTF(`/couple-home/${MODEL_FILE[who]}.glb`);
+
+  /** 组装：clone 模型 → 索引骨骼/clip → 效果挂件 */
+  const kit = useMemo(() => {
+    const root = new THREE.Group();
+    const scal = new THREE.Group();
+    root.add(scal);
+    const offs = new THREE.Group();
+    scal.add(offs);
+
+    const inst = skeletonClone(modelGltf.scene) as THREE.Group;
+    inst.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) {
+        mesh.castShadow = true;
+        mesh.frustumCulled = false;
+      }
+    });
+    offs.add(inst);
+
+    // 身高测量与整体缩放
+    inst.updateMatrixWorld(true);
+    const bbox = new THREE.Box3().setFromObject(inst);
+    const H = Math.max(bbox.max.y - bbox.min.y, 0.1);
+    const scale = TARGET_H[who] / H;
+    scal.scale.setScalar(scale);
+
+    // Suriyun 模型面向 -z（Maya 导出惯例），内层转 180° 使其面向 +z（与 rt.heading 约定一致）
+    inst.rotation.y = Math.PI;
+
+    // 骨骼索引
+    const boneMap = new Map<string, THREE.Bone>();
+    inst.traverse((o) => {
+      if ((o as THREE.Bone).isBone) {
+        const n = o.name.toLowerCase();
+        if (!boneMap.has(n)) boneMap.set(n, o as THREE.Bone);
+      }
+    });
+
+    // 手持杯挂右手（scale 抵消整体缩放，杯子物理尺寸恒定）
+    const cup = buildCup();
+    cup.group.scale.setScalar(1 / Math.max(scale, 0.0001));
+    const handR = boneMap.get('wrist_r');
+    if (handR) {
+      cup.group.position.set(0, -0.02, 0.03);
+      handR.add(cup.group);
+    }
+
+    // Zzz / 泡泡 / 星星（offs 空间 = 模型单位）
+    const zTex = makeZTex();
+    const zzz = new THREE.Group();
+    const zzzSprites: THREE.Sprite[] = [];
+    for (let i = 0; i < 3; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: zTex, transparent: true, opacity: 0, depthWrite: false }));
+      sp.scale.setScalar(0.085);
+      zzz.add(sp);
+      zzzSprites.push(sp);
+    }
+    offs.add(zzz);
+
+    const bubbles = new THREE.Group();
+    const bMat = bubbleMat();
+    const bGeo = new THREE.SphereGeometry(1, 10, 8);
+    for (let i = 0; i < 10; i++) {
+      const b = new THREE.Mesh(bGeo, bMat);
+      b.scale.setScalar(0.018 + (i % 3) * 0.008);
+      bubbles.add(b);
+    }
+    offs.add(bubbles);
+
+    const sparkTex = (() => {
+      const cv = document.createElement('canvas');
+      cv.width = 64;
+      cv.height = 64;
+      const ctx = cv.getContext('2d')!;
+      ctx.font = 'bold 40px sans-serif';
+      ctx.fillStyle = '#f6c1c9';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('✦', 32, 34);
+      const t = new THREE.CanvasTexture(cv);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    })();
+    const spark = new THREE.Group();
+    const sparkSprites: THREE.Sprite[] = [];
+    for (let i = 0; i < 5; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: sparkTex, transparent: true, opacity: 0, depthWrite: false }));
+      sp.scale.setScalar(0.075);
+      spark.add(sp);
+      sparkSprites.push(sp);
+    }
+    offs.add(spark);
+
+    // 动画 clip 索引（GLB 内已按名字合并）
+    const clips: Record<string, THREE.AnimationClip | undefined> = {};
+    for (const c of modelGltf.animations) {
+      const n = c.name.toLowerCase();
+      if (!clips[n]) clips[n] = c;
+    }
+
+    return { root, offs, inst, boneMap, cup, zzz, zzzSprites, bubbles, spark, sparkSprites, clips, mixer: new THREE.AnimationMixer(inst), scale, H };
+  }, [who, modelGltf]);
+
+  const scene_ = useRef<{ clip: string | null; extraUntil: number; nextExtra: number }>({ clip: null, extraUntil: 0, nextExtra: 6 });
+
+  useEffect(() => {
+    return () => {
+      kit.mixer.stopAllAction();
+    };
+  }, [kit]);
+
+  const switchClip = (name: string, fade = 0.22) => {
+    if (scene_.current.clip === name) return;
+    const found = kit.clips[name.toLowerCase()];
+    if (!found) return;
+    scene_.current.clip = name;
+    const next = kit.mixer.clipAction(found);
+    next.setEffectiveWeight(1);
+    kit.mixer.stopAllAction();
+    next.reset().fadeIn(fade).play();
+  };
+
+  useFrame((state, rawDt) => {
+    const dt = Math.min(rawDt, 0.05);
+    const h = holder.current;
+    if (!h) return;
+    h.visible = !hide;
+    h.position.set(rt.x, 0, rt.z);
+    h.rotation.y = rt.heading;
+
+    const t = state.clock.elapsedTime;
+    const pose: CharPose = poseRef?.current?.pose ?? 'stand';
+    const poseY = poseRef?.current?.y ?? 0;
+    const s = kit.scale;
+    const H = kit.H;
+
+    // 动画切换 + 每帧驱动（待机彩蛋：站立 8~16s 后偶尔播小动作）
+    const sc = scene_.current;
+    const main = poseToMain(pose, rt.moving);
+    const standing = main === 'Idle' && !rt.moving;
+    const extraPlaying = sc.clip !== null && !MAIN_CLIPS.has(sc.clip);
+
+    // 彩蛋结束 / 不再站立 → 切回主动画
+    if (extraPlaying && (!standing || t >= sc.extraUntil)) sc.clip = null;
+
+    // 站立且空闲 → 触发彩蛋
+    if (standing && !extraPlaying && sc.clip !== null && t >= sc.nextExtra) {
+      const pool = IDLE_EXTRAS[who].filter((n) => kit.clips[n.toLowerCase()]);
+      if (pool.length) {
+        const pick = pool[Math.floor(Math.random() * pool.length)];
+        const dur = kit.clips[pick.toLowerCase()]!.duration;
+        switchClip(pick, 0.25);
+        sc.extraUntil = t + dur + 0.6;
+        sc.nextExtra = sc.extraUntil + 10 + Math.random() * 12;
+      } else {
+        sc.nextExtra = t + 6;
+      }
+    }
+
+    if (sc.clip === null || (!extraPlaying && sc.clip !== main)) switchClip(main);
+    kit.mixer.update(dt);
+
+    // 姿势锚定：offs 位移（躺姿整体放倒 + 髋部回位）
+    const seated = SEATED.includes(pose);
+    let offY = 0;
+    let offZ = 0;
+    let rotX = 0;
+    if (pose === 'lie') {
+      rotX = -Math.PI / 2;
+      offY = poseY + ANCHOR.lieLift * H * s;
+      offZ = ANCHOR.hipsY * H * s;
+    } else if (pose === 'bath') {
+      offY = Math.max(0.02, poseY - ANCHOR.sitHipsY * H * s * 0.72);
+    } else if (pose === 'shower') {
+      offY = Math.max(0.02, poseY);
+    } else if (seated) {
+      offY = Math.max(0.02, poseY - ANCHOR.sitHipsY * H * s);
+    }
+    kit.offs.rotation.x = THREE.MathUtils.damp(kit.offs.rotation.x, rotX, 10, dt);
+    kit.offs.position.y = THREE.MathUtils.damp(kit.offs.position.y, offY, 9, dt);
+    kit.offs.position.z = THREE.MathUtils.damp(kit.offs.position.z, offZ, 9, dt);
+
+    // 手持杯
+    const carry = who === 'me' && carryRef?.current?.cup === true;
+    const carryCoffee = carry && carryRef?.current?.coffee === true;
+    kit.cup.group.visible = carry && pose !== 'lie' && pose !== 'bath' && pose !== 'shower';
+    kit.cup.coffee.visible = carryCoffee;
+    kit.cup.juice.visible = carry && !carryCoffee;
+    if (carryCoffee) {
+      const ph = (t * 0.55) % 1;
+      kit.cup.steam.position.y = 0.09 + ph * 0.05;
+      kit.cup.steam.scale.setScalar(0.04 + ph * 0.04);
+      (kit.cup.steam.material as THREE.SpriteMaterial).opacity = Math.sin(ph * Math.PI) * 0.6;
+    }
+
+    // Zzz（躺床：offs 已放倒回位，头部朝 -z）
+    kit.zzz.visible = pose === 'lie';
+    if (pose === 'lie') {
+      kit.zzzSprites.forEach((sp, i) => {
+        const ph = (t * 0.42 + i * 0.34) % 1;
+        sp.position.set(0.05 * i, 0.52 * H + i * 0.11 * H + ph * 0.24 * H, -0.88 * H - i * 0.035 * H);
+        (sp.material as THREE.SpriteMaterial).opacity = Math.sin(ph * Math.PI) * 0.9;
+      });
+    }
+
+    // 泡泡
+    const undressed = pose === 'bath' || pose === 'shower';
+    kit.bubbles.visible = undressed;
+    if (undressed) {
+      kit.bubbles.children.forEach((b, i) => {
+        const a = t * 0.9 + (i / kit.bubbles.children.length) * Math.PI * 2;
+        const rad = pose === 'bath' ? 0.26 : 0.3;
+        b.position.set(Math.cos(a) * rad * (0.7 + (i % 3) * 0.18), 0.42 * H + Math.sin(t * 1.6 + i * 1.7) * 0.09 + (i % 4) * 0.07, Math.sin(a) * rad * (0.7 + ((i + 1) % 3) * 0.18));
+      });
+    }
+
+    // 化妆星星
+    kit.spark.visible = pose === 'makeup';
+    if (pose === 'makeup') {
+      kit.sparkSprites.forEach((sp, i) => {
+        const a = t * 1.25 + (i / kit.sparkSprites.length) * Math.PI * 2;
+        sp.position.set(Math.cos(a) * 0.3, 1.02 * H + Math.sin(t * 2.1 + i * 1.4) * 0.055, Math.sin(a) * 0.3);
+        (sp.material as THREE.SpriteMaterial).opacity = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(t * 3.2 + i * 1.9));
+      });
+    }
+  });
+
+  return (
+    <group ref={holder}>
+      <group ref={scaler}>
+        <primitive object={kit.root} />
+      </group>
+    </group>
+  );
+}
+
+// 预加载
+useGLTF.preload('/couple-home/chibi-nan.glb');
+useGLTF.preload('/couple-home/chibi-nv.glb');

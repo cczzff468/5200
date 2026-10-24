@@ -279,8 +279,6 @@ export interface HomeState {
   winCol?: string;
   /** 第一人称视角（true = 小人就是「我」） */
   fp?: boolean;
-  /** 小人画风：cartoon = Q版卡通 / real = 拟真（默认 cartoon） */
-  charStyle?: 'cartoon' | 'real';
   /** 昼夜跟随真实时间（手动点太阳/月亮后变 false） */
   nightAuto?: boolean;
   /** 「我」正在进行的家具动作（重进页面恢复姿势；家具被删则忽略） */
@@ -456,9 +454,6 @@ export type CharPose =
   | 'makeup'
   | 'mirror'
   | 'read';
-
-/** 小人画风 */
-export type CharStyle = 'cartoon' | 'real';
 
 /** 小人正在执行的家具动作（走向家具 → 摆姿势） */
 export interface CharAction {

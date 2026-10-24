@@ -3,19 +3,17 @@
 /* eslint-disable react-hooks/immutability -- R3F 动画需要每帧原地修改 three 对象 */
 
 /**
- * 情侣小家 3D —— 自定义捏人角色（v7 专属小人）
+ * 拾光小屋 3D —— 写实小人（一男一女 · 亚洲面孔）
  *
- * - 资产：用户照片 AI 生成的高精度雕塑 → 自动绑骨（scripts/rig-custom.mjs）→
- *   custom-nan.glb（男主）/ custom-nv.glb（女主）。骨架命名/层级与 KayKit Rig_Medium
- *   完全一致（23 骨），因此可直接播放 KayKit 动画库。
- * - 骨骼差异处理：
- *     1) 位移轨道重映射（rest 锚定 + 按骨长比缩放）；hips/root 定死 rest，
- *      姿势高度改由本组件按姿态程序化控制（坐/躺/泡澡锚点）。
- *   2) 大臂做「以 their-idle 为基准的世界增量重定向」：
- *      corrected = (curWorld · theirIdleWorld⁻¹) · myBindWorld —— KayKit idle 的
- *      39° 外张手臂恰好映射到绑定方向（idle 零蒙皮变形），走/跑/挥手围绕绑定自然摆动。
- *   3) 前臂/手保持 clip 原值（保留手肘自然弯曲）。
- * - 效果与 CharKit3D 对齐：睡觉 Zzz / 泡澡泡泡 / 化妆星星 / 手持咖啡果汁。
+ * - 资产来源：Ara 3D Gen（github.com/olatunde85/3d-gen，MIT 代码 + CC0 资产），
+ *   基于 MakeHuman（CC0）生成写实人体：亚洲面孔混合 + 照片级皮肤贴图，
+ *   game rig（Mixamo 命名骨骼）+ 内嵌动画（Idle/Walk/Run/Wave/Crouch/Sit/Laugh/Cheer，
+ *   CMU 动捕（免费使用）与关键帧，已烘焙进 GLB）。
+ * - real-nan.glb 男主（休闲套装黑短发）/ real-nv.glb 女主（休闲套装高马尾）。
+ * - 姿势映射：stand→Idle · 走路→Walk · 坐姿系→Sit · 躺床→Idle+整体放倒（头朝 -z）·
+ *   泡澡→Crouch · 做饭/淋浴/喝水→Idle；睡觉 Zzz / 泡澡泡泡 / 化妆星星 / 手持咖啡果汁
+ *   为程序化点缀。
+ * - 朝向与移动由 GameLoop 每帧写 rt（与 Char3D 同接口）。
  */
 
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
@@ -24,36 +22,21 @@ import { useFrame } from '@react-three/fiber';
 import { useGLTF } from '@react-three/drei';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { CharPose, CharRT } from '../types';
-import rigNan from './char-custom-rig-nan.json';
-import rigNv from './char-custom-rig-nv.json';
 
-interface RigJson {
-  H: number;
-  minY: number;
-  anchors: Record<string, { hipY: number; hipZ: number; headZ: number; footY: number }>;
-  remap: Record<string, { rest: number[]; kay: number[]; k: number }>;
-  corr: Record<string, number[]>;
-  hierarchy: { name: string; parent: string | null }[];
-}
-const RIG_JSON: Record<'me' | 'partner', RigJson> = {
-  me: rigNv as unknown as RigJson,
-  partner: rigNan as unknown as RigJson,
-};
+const MODEL_FILE: Record<'me' | 'partner', string> = { me: 'real-nv', partner: 'real-nan' };
 
-const MODEL_FILE: Record<'me' | 'partner', string> = { me: 'custom-nv', partner: 'custom-nan' };
-const ANIM_FILES = ['anim-core', 'anim-movement', 'anim-sim', 'anim-tools', 'anim-ours'] as const;
+/** 场景内目标身高（米）——沿用 v5.4 以来的小人尺度（卡通 0.95 / 拟真 1.04） */
+const TARGET_H: Record<'me' | 'partner', number> = { me: 0.97, partner: 1.06 };
 
-/** 姿势 → clip（与 CharKit3D 语义一致） */
-interface ClipRef { name: string; file: (typeof ANIM_FILES)[number]; timeScale?: number }
-const CLIP = {
-  idle: { name: 'Idle_A', file: 'anim-core' } as ClipRef,
-  walk: { name: 'Walking_A', file: 'anim-movement', timeScale: 1.35 } as ClipRef,
-  sit: { name: 'Sit_Chair_Idle', file: 'anim-sim' } as ClipRef,
-  lie: { name: 'Lie_Idle', file: 'anim-sim' } as ClipRef,
-  floorSit: { name: 'Sit_Floor_Idle', file: 'anim-sim' } as ClipRef,
-  cook: { name: 'Working_B', file: 'anim-tools' } as ClipRef,
-  drink: { name: 'Use_Item', file: 'anim-core' } as ClipRef,
-  wave: { name: 'Waving', file: 'anim-sim' } as ClipRef,
+/** 姿势 → 动画名（对导出 GLB 内 clip 名做小写包含匹配） */
+interface ClipRef { key: 'idle' | 'walk' | 'sit' | 'crouch' | 'wave' | 'laugh'; timeScale?: number }
+const CLIP: Record<ClipRef['key'], ClipRef> = {
+  idle: { key: 'idle' },
+  walk: { key: 'walk', timeScale: 1.15 },
+  sit: { key: 'sit' },
+  crouch: { key: 'crouch' },
+  wave: { key: 'wave' },
+  laugh: { key: 'laugh' },
 };
 
 function poseToClip(pose: CharPose, moving: boolean): ClipRef {
@@ -67,30 +50,19 @@ function poseToClip(pose: CharPose, moving: boolean): ClipRef {
     case 'read':
       return CLIP.sit;
     case 'lie':
-      return CLIP.lie;
-    case 'bath':
-      return CLIP.floorSit;
-    case 'shower':
       return CLIP.idle;
+    case 'bath':
+    case 'shower':
+      return CLIP.crouch;
     case 'cook':
-      return CLIP.cook;
     case 'drink':
-      return CLIP.drink;
+      return CLIP.idle;
     default:
       return moving ? CLIP.walk : CLIP.idle;
   }
 }
 
 const SEATED: CharPose[] = ['sit', 'eat', 'piano', 'guitar', 'makeup', 'mirror', 'read'];
-
-/** KayKit idle 大臂的世界四元数（实测采样，重定向基准） */
-const THEIR_IDLE: Record<string, [number, number, number, number]> = {
-  upperarml: [-0.5099, -0.1255, -0.64, 0.5609],
-  upperarmr: [-0.457, 0.0592, 0.6315, 0.6236],
-};
-
-/** GLTFLoader 会把节点名中的 . [ ] : / 空格去掉（upperarm.l → upperarml） */
-const san = (s: string) => s.replace(/[\s.[\]:/]/g, '');
 
 /** 手持小杯（咖啡带热气 / 果汁带吸管） */
 function buildCup(): { group: THREE.Group; coffee: THREE.Group; juice: THREE.Group; steam: THREE.Sprite } {
@@ -161,40 +133,38 @@ function bubbleMat(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color: '#eaf6ff', transparent: true, opacity: 0.55, roughness: 0.15, metalness: 0.05 });
 }
 
-export interface CharCustom3DProps {
+export interface CharRealistic3DProps {
   rt: CharRT;
   who: 'me' | 'partner';
   hide?: boolean;
-  style?: 'cartoon' | 'real';
   poseRef?: RefObject<{ pose: CharPose; y: number }>;
-  /** 衣柜穿搭编号：自定义角色暂无换装，保留接口兼容 */
+  /** 衣柜穿搭编号：写实模型自带服装，保留接口兼容 */
   outfit?: number;
   carryRef?: RefObject<{ cup: boolean; coffee?: boolean }>;
 }
 
-export default function CharCustom3D({ rt, who, hide, style = 'cartoon', poseRef, carryRef }: CharCustom3DProps) {
+/** 写实模型是米制 A-pose；以下锚点按「模型身高比例」标定（实测导出 GLB 的 hips 烘焙值） */
+const ANCHOR = {
+  /** 站立 hips 高 / 身高（Idle clip 实测 0.955/1.76） */
+  hipsY: 0.545,
+  /** 坐姿 clip 的 hips 高 / 身高（Sit (passenger) 实测 0.499/1.76） */
+  sitHipsY: 0.284,
+  /** 蹲姿 clip 的 hips 高 / 身高（Crouch idle 实测 0.450/1.76） */
+  crouchHipsY: 0.256,
+  /** 躺倒时身体半厚（抬高避免穿模）/ 身高 */
+  lieLift: 0.07,
+};
+
+export default function CharRealistic3D({ rt, who, hide, poseRef, carryRef }: CharRealistic3DProps) {
   const holder = useRef<THREE.Group>(null);
   const scaler = useRef<THREE.Group>(null);
-  const rig = RIG_JSON[who];
-  const H = rig.H;
 
-  /* ---------- 资产加载 ---------- */
   const modelGltf = useGLTF(`/couple-home/${MODEL_FILE[who]}.glb`);
-  const animGltfs = {
-    'anim-core': useGLTF('/couple-home/kit/anim-core.glb'),
-    'anim-movement': useGLTF('/couple-home/kit/anim-movement.glb'),
-    'anim-sim': useGLTF('/couple-home/kit/anim-sim.glb'),
-    'anim-tools': useGLTF('/couple-home/kit/anim-tools.glb'),
-    'anim-ours': useGLTF('/couple-home/kit/anim-ours.glb'),
-  };
 
-  /** 组装：clone 模型 → 重映射动画 clip → 效果挂件 */
+  /** 组装：clone 模型 → 索引骨骼/clip → 效果挂件 */
   const kit = useMemo(() => {
-    const target = style === 'cartoon' ? 0.95 : 1.04;
-    const scale = target / H;
     const root = new THREE.Group();
     const scal = new THREE.Group();
-    scal.scale.setScalar(scale);
     root.add(scal);
     const offs = new THREE.Group();
     scal.add(offs);
@@ -209,34 +179,32 @@ export default function CharCustom3D({ rt, who, hide, style = 'cartoon', poseRef
     });
     offs.add(inst);
 
-    // 骨骼索引
+    // 身高测量与整体缩放（模型为米制 ≈1.6-1.8m）
+    inst.updateMatrixWorld(true);
+    const bbox = new THREE.Box3().setFromObject(inst);
+    const H = Math.max(bbox.max.y - bbox.min.y, 0.5);
+    const scale = TARGET_H[who] / H;
+    scal.scale.setScalar(scale);
+
+    // 骨骼索引（Mixamo 命名，GLTFLoader 保留原冒号名）
     const boneMap = new Map<string, THREE.Bone>();
     inst.traverse((o) => {
-      if ((o as THREE.Bone).isBone) boneMap.set(o.name, o as THREE.Bone);
+      if ((o as THREE.Bone).isBone) {
+        const n = o.name.replace(/^mixamorig:?/i, '').toLowerCase();
+        if (!boneMap.has(n)) boneMap.set(n, o as THREE.Bone);
+      }
     });
-
-    // 绑定姿态世界四元数（clone 刚出来 = rest，必须在任何动画更新前采样）
-    inst.updateMatrixWorld(true);
-    const myBind: Record<string, THREE.Quaternion> = {};
-    for (const n of Object.keys(THEIR_IDLE)) {
-      const b = boneMap.get(n);
-      if (b) myBind[n] = b.getWorldQuaternion(new THREE.Quaternion());
-    }
-    const theirIdleQ: Record<string, THREE.Quaternion> = {};
-    for (const [n, v] of Object.entries(THEIR_IDLE)) {
-      theirIdleQ[n] = new THREE.Quaternion(...v).normalize();
-    }
 
     // 手持杯挂右手（scale 抵消整体缩放，杯子物理尺寸恒定）
     const cup = buildCup();
     cup.group.scale.setScalar(1 / Math.max(scale, 0.0001));
-    const handR = boneMap.get('handr') ?? boneMap.get('hand.r');
+    const handR = boneMap.get('righthand');
     if (handR) {
       cup.group.position.set(0, -0.02, 0.03);
       handR.add(cup.group);
     }
 
-    // Zzz / 泡泡 / 星星（offs 空间 = 模型单位）
+    // Zzz / 泡泡 / 星星（offs 空间 = 模型单位，米）
     const zTex = makeZTex();
     const zzz = new THREE.Group();
     const zzzSprites: THREE.Sprite[] = [];
@@ -282,41 +250,25 @@ export default function CharCustom3D({ rt, who, hide, style = 'cartoon', poseRef
     }
     offs.add(spark);
 
-    // 重映射动画 clip：位移轨道 rest 锚定 + 骨长比缩放；hips/root 定死 rest
-    const remap: Record<string, { rest: number[]; kay: number[]; k: number }> = {};
-    for (const [k, v] of Object.entries(rig.remap)) remap[san(k)] = v;
-    const clips: THREE.AnimationClip[] = [];
-    for (const [, g] of Object.entries(animGltfs)) {
-      for (const src of g.animations) {
-        const c = src.clone();
-        for (const tr of c.tracks) {
-          if (!tr.name.endsWith('.position')) continue;
-          const bn = tr.name.slice(0, -9);
-          const r = remap[bn];
-          if (!r) continue;
-          const pinned = bn === 'hips' || bn === 'root';
-          for (let i = 0; i < tr.times.length; i++) {
-            if (pinned) {
-              tr.values[i * 3] = r.rest[0];
-              tr.values[i * 3 + 1] = r.rest[1];
-              tr.values[i * 3 + 2] = r.rest[2];
-            } else {
-              tr.values[i * 3] = r.rest[0] + (tr.values[i * 3] - r.kay[0]) * r.k;
-              tr.values[i * 3 + 1] = r.rest[1] + (tr.values[i * 3 + 1] - r.kay[1]) * r.k;
-              tr.values[i * 3 + 2] = r.rest[2] + (tr.values[i * 3 + 2] - r.kay[2]) * r.k;
-            }
-          }
-        }
-        clips.push(c);
-      }
-    }
-
-    const restHipsY = rig.remap['hips'] ? rig.remap['hips'].rest[1] : 0.617 * H;
-    return {
-      root, offs, inst, boneMap, myBind, theirIdleQ, cup, zzz, zzzSprites, bubbles, spark, sparkSprites,
-      clips, mixer: new THREE.AnimationMixer(inst), scale, restHipsY,
+    // 动画 clip 索引（小写包含匹配，取时长最长的避免 「walk」 匹配到 walk_back 等）
+    const findClip = (kw: string, exclude: string[] = []): THREE.AnimationClip | null => {
+      const hits = modelGltf.animations.filter((c) => {
+        const n = c.name.toLowerCase();
+        return n.includes(kw) && !exclude.some((e) => n.includes(e));
+      });
+      return hits.length ? hits.reduce((a, b) => (b.duration > a.duration ? b : a)) : null;
     };
-  }, [who, style]);
+    const clips: Partial<Record<ClipRef['key'], THREE.AnimationClip>> = {
+      idle: findClip('idle', ['crouch']) ?? findClip('idle') ?? undefined,
+      walk: findClip('walk', ['back']) ?? undefined,
+      sit: findClip('sit', ['seat', 'situp']) ?? findClip('sit') ?? undefined,
+      crouch: findClip('crouch') ?? undefined,
+      wave: findClip('wave') ?? undefined,
+      laugh: findClip('laugh') ?? undefined,
+    };
+
+    return { root, offs, inst, boneMap, cup, zzz, zzzSprites, bubbles, spark, sparkSprites, clips, mixer: new THREE.AnimationMixer(inst), scale, H };
+  }, [who, modelGltf]);
 
   const scene_ = useRef<{ clip: ClipRef | null }>({ clip: null });
 
@@ -327,30 +279,15 @@ export default function CharCustom3D({ rt, who, hide, style = 'cartoon', poseRef
   }, [kit]);
 
   const switchClip = (clip: ClipRef) => {
-    if (scene_.current.clip?.name === clip.name) return;
+    if (scene_.current.clip?.key === clip.key) return;
     scene_.current.clip = clip;
-    const found = kit.clips.filter((c) => c.name === clip.name);
-    if (!found.length) return;
-    const next = kit.mixer.clipAction(found[0]);
+    const found = kit.clips[clip.key];
+    if (!found) return;
+    const next = kit.mixer.clipAction(found);
     next.setEffectiveTimeScale(clip.timeScale ?? 1);
     next.setEffectiveWeight(1);
     kit.mixer.stopAllAction();
     next.reset().fadeIn(0.22).play();
-  };
-
-  /** 大臂重定向（以 their-idle 为基准的世界增量 → 我的绑定方向） */
-  const _pq = new THREE.Quaternion();
-  const _delta = new THREE.Quaternion();
-  const rebase = (boneName: string) => {
-    const bone = kit.boneMap.get(boneName);
-    const bind = kit.myBind[boneName];
-    const idle = kit.theirIdleQ[boneName];
-    if (!bone || !bind || !idle) return;
-    const parentW = bone.parent ? bone.parent.getWorldQuaternion(_pq.clone()) : new THREE.Quaternion();
-    const curW = parentW.clone().multiply(bone.quaternion);
-    const delta = curW.clone().multiply(idle.clone().invert());
-    const newW = delta.multiply(bind.clone());
-    bone.quaternion.copy(parentW.clone().invert().multiply(newW));
   };
 
   useFrame((state, rawDt) => {
@@ -365,45 +302,29 @@ export default function CharCustom3D({ rt, who, hide, style = 'cartoon', poseRef
     const pose: CharPose = poseRef?.current?.pose ?? 'stand';
     const poseY = poseRef?.current?.y ?? 0;
     const s = kit.scale;
-    const H = rig.H;
+    const H = kit.H;
 
     // 动画切换 + 每帧驱动
     switchClip(poseToClip(pose, rt.moving));
     kit.mixer.update(dt);
 
-    // 大臂重定向（躺姿身体水平，世界增量语义失效 → 跳过）
-    if (pose !== 'lie') {
-      rebase('upperarml');
-      rebase('upperarmr');
-    }
-
-    // 姿势锚定：hips 骨位置 + 整体偏移
-    const hips = kit.boneMap.get('hips');
+    // 姿势锚定：offs 位移（躺姿整体放倒 + 髋部回位）
     const seated = SEATED.includes(pose);
     let offY = 0;
     let offZ = 0;
-    if (hips) {
-      let hy = kit.restHipsY;
-      let hz = 0;
-      if (pose === 'lie') {
-        hy = 0.068 * H;
-        hz = 0.066 * H;
-        offY = poseY + 0.005;
-      } else if (pose === 'floorSit') {
-        hy = 0.1 * H;
-        offY = poseY;
-      } else if (pose === 'bath') {
-        hy = 0.1 * H;
-        offY = Math.max(0.02, poseY - 0.05 * s);
-      } else if (seated) {
-        offY = Math.max(0.02, poseY - kit.restHipsY * s);
-      } else if (rt.moving) {
-        // 走路小起伏（程序化，弥补被定死的 hips 位移轨道）
-        hy = kit.restHipsY + Math.abs(Math.sin(t * 7.5)) * 0.012 * H;
-      }
-      hips.position.y = THREE.MathUtils.damp(hips.position.y, hy, 10, dt);
-      hips.position.z = THREE.MathUtils.damp(hips.position.z, hz, 10, dt);
+    let rotX = 0;
+    if (pose === 'lie') {
+      rotX = -Math.PI / 2;
+      offY = poseY + ANCHOR.lieLift * H * s;
+      offZ = ANCHOR.hipsY * H * s;
+    } else if (pose === 'bath') {
+      offY = Math.max(0.02, poseY - ANCHOR.crouchHipsY * H * s);
+    } else if (pose === 'shower') {
+      offY = Math.max(0.02, poseY);
+    } else if (seated) {
+      offY = Math.max(0.02, poseY - ANCHOR.sitHipsY * H * s);
     }
+    kit.offs.rotation.x = THREE.MathUtils.damp(kit.offs.rotation.x, rotX, 10, dt);
     kit.offs.position.y = THREE.MathUtils.damp(kit.offs.position.y, offY, 9, dt);
     kit.offs.position.z = THREE.MathUtils.damp(kit.offs.position.z, offZ, 9, dt);
 
@@ -420,12 +341,12 @@ export default function CharCustom3D({ rt, who, hide, style = 'cartoon', poseRef
       (kit.cup.steam.material as THREE.SpriteMaterial).opacity = Math.sin(ph * Math.PI) * 0.6;
     }
 
-    // Zzz（躺床：头朝 -z，头部在 z≈-0.40H）
+    // Zzz（躺床：offs 已放倒回位，头部朝 -z ≈ -0.86H）
     kit.zzz.visible = pose === 'lie';
     if (pose === 'lie') {
       kit.zzzSprites.forEach((sp, i) => {
         const ph = (t * 0.42 + i * 0.34) % 1;
-        sp.position.set(0.05 * i, 0.46 * H + i * 0.11 * H + ph * 0.24 * H, -0.44 * H - i * 0.035 * H);
+        sp.position.set(0.05 * i, 0.52 * H + i * 0.11 * H + ph * 0.24 * H, -0.88 * H - i * 0.035 * H);
         (sp.material as THREE.SpriteMaterial).opacity = Math.sin(ph * Math.PI) * 0.9;
       });
     }
@@ -462,6 +383,5 @@ export default function CharCustom3D({ rt, who, hide, style = 'cartoon', poseRef
 }
 
 // 预加载
-useGLTF.preload('/couple-home/custom-nan.glb');
-useGLTF.preload('/couple-home/custom-nv.glb');
-for (const f of ANIM_FILES) useGLTF.preload(`/couple-home/kit/${f}.glb`);
+useGLTF.preload('/couple-home/real-nan.glb');
+useGLTF.preload('/couple-home/real-nv.glb');

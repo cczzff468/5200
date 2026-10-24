@@ -16,7 +16,6 @@ import dynamic from 'next/dynamic';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Armchair,
-  Baby,
   Bath,
   BedDouble,
   BookOpen,
@@ -60,7 +59,6 @@ import {
   UserPlus,
   Utensils,
   UtensilsCrossed,
-  UserRound,
   Users,
   Volume2,
   VolumeX,
@@ -110,7 +108,7 @@ import {
 } from './catalog';
 import { sfx } from './sfx';
 import { getCachedThumb } from './scene/ShopThumbs';
-import type { CharAction, CharPose, CharRT, CharStyle, FurnitureItem, FurnitureKind, HomeMode, HomeState, LayoutSnap, NoteEntry, RoomId } from './types';
+import type { CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, HomeMode, HomeState, LayoutSnap, NoteEntry, RoomId } from './types';
 
 /** 做饭小游戏（选菜谱→切菜/翻炒/装盘→上桌，v5.7 F5） */
 const CookingGame = dynamic(() => import('./CookingGame'), { ssr: false });
@@ -417,7 +415,13 @@ function anchorOf(type: CharAction['type'], item: FurnitureItem): CharAction | n
   const cos = Math.cos(ry0);
   const sin = Math.sin(ry0);
   const lx = an.dx ?? 0;
-  const lz = an.dz ?? 0;
+  let lz = an.dz ?? 0;
+  // 写实小人腿长（≈0.78×身高）：坐在座面锚点时大腿会伸进座垫深处。
+  // 坐姿系（sit/read）把锚点夹到座面前缘内 0.16m，让大腿探出前缘、小腿自然垂在沙发外。
+  if ((type === 'sit' || type === 'read') && !an.out) {
+    const fpD = entry?.fp?.[1] ?? 0;
+    lz = Math.min(lz, fpD / 2 - 0.16);
+  }
   const back = type === 'lie' ? -1.45 : type === 'bath' ? 0.95 : 0.55;
   const out: [number, number] = an.out ?? [lx, lz + back];
   return {
@@ -507,7 +511,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [winPos, setWinPos] = useState<number[] | undefined>(pack.home.winPos);
   const [doorPos, setDoorPos] = useState<{ bed: number; kt: number; bath: number; bal?: number } | undefined>(pack.home.doorPos);
   const [fp, setFp] = useState<boolean>(!!pack.home.fp);
-  const [charStyle, setCharStyle] = useState<CharStyle>(pack.home.charStyle === 'real' ? 'real' : 'cartoon');
   const [nightAuto, setNightAuto] = useState<boolean>(pack.home.nightAuto !== false);
   // v5.6：穿搭 / 做饭一桌菜 / 地板墙面纹理
   const [outfit, setOutfit] = useState<number>(pack.home.outfit ?? 0);
@@ -680,8 +683,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
   useEffect(() => {
     fpRef.current.on = fp;
   }, [fp]);
-  const charStyleRef = useRef(charStyle);
-  charStyleRef.current = charStyle;
   const nightAutoRef = useRef(nightAuto);
   nightAutoRef.current = nightAuto;
   const outfitRef = useRef(outfit);
@@ -805,7 +806,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
       doorCol: doorColRef.current,
       winCol: winColRef.current,
       fp: fpRef.current.on,
-      charStyle: charStyleRef.current,
       nightAuto: nightAutoRef.current,
       outfit: outfitRef.current,
       mealReady: mealReadyRef.current,
@@ -865,7 +865,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setWinPos(h.winPos);
     setDoorPos(h.doorPos);
     setFp(!!h.fp);
-    setCharStyle(h.charStyle === 'real' ? 'real' : 'cartoon');
     setNightAuto(h.nightAuto !== false);
     setOutfit(h.outfit ?? 0);
     setMealReady(!!h.mealReady);
@@ -2605,16 +2604,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
     return () => clearInterval(t);
   }, [nightAuto]);
 
-  /** 小人画风：Q版卡通 ↔ 拟真 */
-  const toggleCharStyle = useCallback(() => {
-    setCharStyle((s) => {
-      const next = s === 'cartoon' ? 'real' : 'cartoon';
-      toast(next === 'real' ? '换成拟真小人啦，还是很像你～' : '换回 Q 版卡通小人～');
-      return next;
-    });
-    saveSoon();
-  }, [saveSoon, toast]);
-
   const toggleFull = useCallback(async () => {
     try {
       if (document.fullscreenElement) {
@@ -2712,7 +2701,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
         onNudge={nudgeSel}
         fp={fp}
         fpRef={fpRef}
-        charStyle={charStyle}
         poseRef={poseRef}
         actRef={actRef}
         carryRef={carryRef}
@@ -3236,19 +3224,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
             </div>
             <div className={mode === 'live' ? 'hidden' : 'flex-1'} />
 
-            {/* 画风 + 模式切换 + 视角 + 商店 + 装修 */}
+            {/* 模式切换 + 视角 + 商店 + 装修 */}
             <div className="pointer-events-auto flex flex-col items-end gap-2">
-              {mode === 'live' && (
-                <button
-                  onClick={toggleCharStyle}
-                  aria-label={charStyle === 'cartoon' ? '切换拟真小人' : '切换卡通小人'}
-                  title={charStyle === 'cartoon' ? '换成拟真小人' : '换成 Q 版卡通小人'}
-                  className="flex h-11 items-center gap-2 rounded-full bg-white/85 px-4 text-[13px] font-medium text-[#4a4a4e] shadow-md backdrop-blur transition active:scale-95"
-                >
-                  {charStyle === 'cartoon' ? <Baby className="h-4 w-4 text-[#e78ba4]" /> : <UserRound className="h-4 w-4 text-[#8a7a54]" />}
-                  {charStyle === 'cartoon' ? '卡通小人' : '拟真小人'}
-                </button>
-              )}
               {mode === 'live' && (
                 <button
                   onClick={toggleFp}
