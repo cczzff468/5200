@@ -50,7 +50,7 @@ import {
   resolveWinPos,
   roomAt,
 } from '../catalog';
-import type { BoyWear, CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode, Pet2State, PetCareKind, PetCoat, PetState, PetWear, RoomId } from '../types';
+import type { BoyWear, CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode, HomeWeather, Pet2State, PetCareKind, PetCoat, PetState, PetWear, RoomId } from '../types';
 import { sfx } from '../sfx';
 import { buildBlockGrid, planRoute, type BlockGrid, type Pt } from './pathfind';
 import { companionStep, createCompanionRT, type CompanionCmd, type CompanionEvent, type CompanionRT, type PoseSlot } from './companion-rt';
@@ -139,8 +139,8 @@ export interface HomeSceneProps {
   activeAct?: { type: CharAction['type']; itemId: string; active: boolean } | null;
   /** 音响放歌中（音箱上方飘音符） */
   musicPlaying?: boolean;
-  /** 天气特效：rain 雨 / snow 雪 / clear 无（窗外粒子） */
-  weatherFx?: 'rain' | 'snow' | 'clear';
+  /** 天气特效：sunny 晴 / cloudy 多云 / overcast 阴 / rain 雨 / snow 雪（v9 室外世界全家桶） */
+  weatherFx?: HomeWeather;
   /** 宠物照顾指令队列（HUD 面板 → PetBuddy；seq 变化即触发新指令，v6.9） */
   petCmdRef?: RefObject<{ kind: PetCareKind; seq: number; carry?: boolean } | null>;
   /** 点宠物（打开状态面板回调） */
@@ -1283,25 +1283,39 @@ function EditCameraKick({ mode }: { mode: HomeMode }) {
 
 // ---------------- 灯光（昼夜 mix 平滑过渡） ----------------
 
-const DAY_BG = '#efe8da';
-const NIGHT_BG = '#24272f';
+/** v9 各天气天空底色（白天） */
+const SKY_DAY: Record<HomeWeather, string> = {
+  sunny: '#a8d8ef',
+  cloudy: '#ccd6dd',
+  overcast: '#b3bac2',
+  rain: '#8f98a1',
+  snow: '#e3eaf1',
+};
+/** v9 各天气天空底色（夜晚） */
+const SKY_NIGHT: Record<HomeWeather, string> = {
+  sunny: '#232733',
+  cloudy: '#20242c',
+  overcast: '#1b1e24',
+  rain: '#171a20',
+  snow: '#262b33',
+};
 const _TMP_C = /* @__PURE__ */ new THREE.Color();
+const _TMP_D = /* @__PURE__ */ new THREE.Color();
 const _WARM = /* @__PURE__ */ new THREE.Color(); // E7 夜晚开灯 → 环境光向暖色偏移的目标色
 const _COOL_C = /* @__PURE__ */ new THREE.Color(); // G5 雨天阴沉 → 环境/半球光向冷灰偏移的目标色
 
 /**
  * E2 昼夜平滑：mix 每帧向目标阻尼（0=白天 / 1=夜晚），驱动天空底色；
- * 全局灯照强度/颜色随 mix 渐变（见 Lights），窗内星空/墙色微差保持瞬切（感知权重低）。
+ * v9 天空颜色随天气联动（晴=天蓝、阴=灰、雨=深灰、雪=米白），天气切换也阻尼过渡不跳变。
  */
-function NightBlend({ night, mixRef }: { night: boolean; mixRef: RefObject<{ v: number }> }) {
+function NightBlend({ night, mixRef, weather = 'sunny' }: { night: boolean; mixRef: RefObject<{ v: number }>; weather?: HomeWeather }) {
   const scene = useThree((s) => s.scene);
-  const bg = useMemo(() => new THREE.Color(DAY_BG), []);
-  const tmp = useMemo(() => new THREE.Color(), []);
+  const cur = useRef(new THREE.Color(SKY_DAY.sunny));
   useFrame((_, dt) => {
     mixRef.current.v = THREE.MathUtils.damp(mixRef.current.v, night ? 1 : 0, 2.2, Math.min(dt, 0.05));
-    tmp.set(DAY_BG).lerp(_TMP_C.set(NIGHT_BG), mixRef.current.v);
-    bg.copy(tmp);
-    scene.background = bg;
+    _TMP_D.set(SKY_DAY[weather]).lerp(_TMP_C.set(SKY_NIGHT[weather]), mixRef.current.v);
+    cur.current.lerp(_TMP_D, Math.min(1, dt * 1.6));
+    scene.background = cur.current;
   });
   return null;
 }
@@ -1806,8 +1820,8 @@ function PetBuddy({
   petState?: PetState;
   /** 四扇门开态（跨房间漫游穿门用） */
   doorRef?: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive }>;
-  /** v8.3 天气（小剧场剧本：雨天躲屋檐） */
-  weatherFx?: 'rain' | 'snow' | 'clear';
+  /** v9 天气（小剧场剧本：雨天躲屋檐；晴/多云时追蝴蝶） */
+  weatherFx?: HomeWeather;
   /** v8.3 毛色 / 装扮 / 玩具球指令 */
   petCoat?: PetCoat;
   petWear?: PetWear;
@@ -3459,8 +3473,8 @@ export default function HomeScene(props: HomeSceneProps) {
 
   /** 任一投影仪开着（幕布放下放电影） */
   const projectorOn = items.some((f) => f.kind === 'projector' && f.st?.on);
-  /** G5 雨天氛围：rain 时环境光阴沉（内部换算传给 Lights，不进 Props 合同） */
-  const gloomy = weatherFx === 'rain';
+  /** G5 雨天/阴天氛围：环境光阴沉（内部换算传给 Lights，不进 Props 合同） */
+  const gloomy = weatherFx === 'rain' || weatherFx === 'overcast';
   /** 正坐着的家具（吊篮秋千摆幅加大） */
   const sittingId = activeAct?.active && activeAct.type === 'sit' ? activeAct.itemId : null;
 
@@ -3535,8 +3549,9 @@ export default function HomeScene(props: HomeSceneProps) {
         flipflops={2}
         onFallback={() => setQuality('low')}
       />
-      <NightBlend night={night} mixRef={nightMixRef} />
+      <NightBlend night={night} mixRef={nightMixRef} weather={weatherFx ?? 'sunny'} />
       <Lights night={night} mixRef={nightMixRef} quality={quality} litLamps={litLamps} gloomy={gloomy} />
+      <OutdoorWorld weather={weatherFx ?? 'sunny'} night={night} mixRef={nightMixRef} />
       <Room
         night={night}
         onFloorTap={onFloorTap}
@@ -3632,9 +3647,9 @@ export default function HomeScene(props: HomeSceneProps) {
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       {/* v8.0 3D 头顶对话气泡（用户/AI 消息挂在对应小人头顶） */}
       <HeadBubbles meRT={meRT} taRT={taRT} bubbleRef={bubbleRef} />
-      <WeatherFX kind={weatherFx ?? 'clear'} win={win} winExist={winExist} winPos={winPos} />
-      <GlassRain kind={weatherFx ?? 'clear'} winExist={winExist} winPos={winPos} />
-      <SnowDeco kind={weatherFx ?? 'clear'} winExist={winExist} winPos={winPos} />
+      <OutdoorPrecip kind={weatherFx ?? 'sunny'} />
+      <GlassRain kind={weatherFx ?? 'sunny'} winExist={winExist} winPos={winPos} />
+      <SnowDeco kind={weatherFx ?? 'sunny'} winExist={winExist} winPos={winPos} />
       <Critters mode={mode} items={items} onCritterTap={onCritterTap} />
       {/* v8.1 音箱/收音机开着也飘音符（陪伴小人放歌时同享） */}
       <SpeakerNotes
@@ -3704,112 +3719,297 @@ export default function HomeScene(props: HomeSceneProps) {
   );
 }
 
-// ---------------- 天气特效：窗外雨/雪（v5.7 F4 真实天气联动） ----------------
+// ---------------- v9 室外大世界：大地 / 太阳月亮星星 / 云朵 / 屋外雨雪（真实天气联动） ----------------
 
-/** 雨丝贴图（竖向细条纹，循环下滚） */
-function makeRainTexture(): THREE.CanvasTexture {
+/** 柔和云朵贴图（几团重叠的径向渐变白团） */
+function makeCloudTexture(): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
-  cv.width = 128;
-  cv.height = 256;
+  cv.width = 256;
+  cv.height = 128;
   const ctx = cv.getContext('2d')!;
-  ctx.clearRect(0, 0, 128, 256);
-  for (let i = 0; i < 60; i++) {
-    const x = Math.random() * 128;
-    const y = Math.random() * 256;
-    const len = 10 + Math.random() * 16;
-    ctx.strokeStyle = `rgba(190,214,235,${0.35 + Math.random() * 0.4})`;
-    ctx.lineWidth = 1 + Math.random();
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x - 2.5, y + len);
-    ctx.stroke();
-  }
-  const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(2, 3);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-/** 雪点贴图（圆形柔边白点） */
-function makeSnowTexture(): THREE.CanvasTexture {
-  const cv = document.createElement('canvas');
-  cv.width = 128;
-  cv.height = 256;
-  const ctx = cv.getContext('2d')!;
-  ctx.clearRect(0, 0, 128, 256);
-  for (let i = 0; i < 70; i++) {
-    const x = Math.random() * 128;
-    const y = Math.random() * 256;
-    const r = 1.6 + Math.random() * 2.8;
+  const puff = (x: number, y: number, r: number, a: number) => {
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0, `rgba(255,255,255,${a})`);
+    g.addColorStop(0.62, `rgba(255,255,255,${a * 0.55})`);
     g.addColorStop(1, 'rgba(255,255,255,0)');
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
-  }
+  };
+  puff(88, 74, 44, 0.95);
+  puff(132, 60, 52, 0.95);
+  puff(176, 76, 42, 0.9);
+  puff(112, 84, 40, 0.85);
+  puff(152, 88, 38, 0.8);
   const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(2, 3);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
+/** 光晕贴图（太阳/月亮通用：中心实心 + 大范围柔光） */
+function makeGlowTexture(core: string, glow: string): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 128;
+  const ctx = cv.getContext('2d')!;
+  const g = ctx.createRadialGradient(64, 64, 6, 64, 64, 62);
+  g.addColorStop(0, core);
+  g.addColorStop(0.24, core);
+  g.addColorStop(0.42, glow);
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** v9 各天气室外地面色（晴天草地 / 雪原 / 雨天湿地） */
+const GROUND_DAY: Record<HomeWeather, string> = {
+  sunny: '#9cc489',
+  cloudy: '#8fb283',
+  overcast: '#88967f',
+  rain: '#77896f',
+  snow: '#edf2f6',
+};
+
+/** 云朵调校：透明度 / 颜色 / 藏几朵（晴天云最少） */
+const CLOUD_TUNE: Record<HomeWeather, { op: number; tint: string; hide: number }> = {
+  sunny: { op: 0.85, tint: '#ffffff', hide: 4 },
+  cloudy: { op: 0.95, tint: '#ffffff', hide: 0 },
+  overcast: { op: 0.98, tint: '#a9afb8', hide: 0 },
+  rain: { op: 0.98, tint: '#787f88', hide: 0 },
+  snow: { op: 0.92, tint: '#dfe4ea', hide: 1 },
+};
+
+/** 房子占位盒（雨雪粒子排除屋内；含一点墙体余量） */
+const HOUSE_BX0 = -ROOM_X - 0.35;
+const HOUSE_BX1 = KTCH_X1 + 0.35;
+const HOUSE_BZ0 = -ROOM_Z - 0.35;
+const HOUSE_BZ1 = BAL_Z1 + 0.35;
+/** 房子中心（云/星/日月绕着它布置） */
+const HOUSE_CX = (KTCH_X1 - ROOM_X) / 2;
+const HOUSE_CZ = (BAL_Z1 - ROOM_Z) / 2;
+
 /**
- * 窗外天气幕帘：每扇窗户外侧挂一片循环滚动的雨/雪贴图（廉价高效，透过玻璃看雨最真）。
- * kind = 'clear' 时整组隐藏。
+ * v9 室外大世界（房子外面不再是一片白）：
+ * - 大地圆盘（草地/雪原/湿地随天气变、夜晚变暗）；
+ * - 晴天太阳光晕；夜晚月亮 + 满天星星（阴雨夜隐约）；
+ * - 一圈慢速漂移的云朵（阴雨变灰压低，晴天只剩几朵）。
+ * 全部悬在房外高空/远处 —— 透过窗户与无墙遮挡的第三人称视角自然可见。
  */
-function WeatherFX({
-  kind,
-  win,
-  winExist,
-  winPos,
+function OutdoorWorld({
+  weather,
+  mixRef,
 }: {
-  kind: 'rain' | 'snow' | 'clear';
-  win?: boolean[];
-  winExist?: boolean[];
-  winPos?: number[];
+  weather: HomeWeather;
+  night: boolean;
+  mixRef: RefObject<{ v: number }>;
 }) {
-  const rainTex = useMemo(() => makeRainTexture(), []);
-  const snowTex = useMemo(() => makeSnowTexture(), []);
-  useFrame((_, dt) => {
-    if (kind === 'clear') return;
-    const tex = kind === 'snow' ? snowTex : rainTex;
-    const speed = kind === 'snow' ? 0.055 : 0.29;
-    tex.offset.y = (tex.offset.y - dt * speed) % 1;
-    tex.offset.x = kind === 'snow' ? Math.sin(performance.now() / 2600) * 0.06 : 0;
+  const cloudTex = useMemo(() => makeCloudTexture(), []);
+  const sunTex = useMemo(() => makeGlowTexture('rgba(255,244,214,1)', 'rgba(255,214,140,0.55)'), []);
+  const moonTex = useMemo(() => makeGlowTexture('rgba(240,244,255,1)', 'rgba(200,214,255,0.4)'), []);
+  const cloudGrps = useRef<(THREE.Group | null)[]>([]);
+  /** 云朵实例（一次生成；每帧漂移 + 天气换色） */
+  const clouds = useMemo(
+    () =>
+      Array.from({ length: 9 }, (_, i) => ({
+        x: HOUSE_CX + Math.cos((i / 9) * Math.PI * 2 + 0.4 * Math.sin(i * 7.3)) * (12.5 + ((i * 37) % 11)),
+        y: 5.4 + ((i * 53) % 23) / 10,
+        z: HOUSE_CZ + Math.sin((i / 9) * Math.PI * 2 + 0.4 * Math.sin(i * 7.3)) * (10 + ((i * 37) % 9)),
+        s: 2.6 + ((i * 29) % 18) / 10,
+        spd: 0.1 + ((i * 17) % 10) / 70,
+        mat: new THREE.SpriteMaterial({ map: cloudTex, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false }),
+      })),
+    [cloudTex],
+  );
+  /** 星星（Points，夜里淡入 + 微闪） */
+  const stars = useMemo(() => {
+    const n = 170;
+    const pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const r = 20 + Math.random() * 9;
+      pos[i * 3] = HOUSE_CX + Math.cos(ang) * r;
+      pos[i * 3 + 1] = 3.8 + Math.random() * 9;
+      pos[i * 3 + 2] = HOUSE_CZ + Math.sin(ang) * r;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({ color: '#eef2ff', size: 0.12, transparent: true, opacity: 0, sizeAttenuation: true, depthWrite: false, toneMapped: false });
+    return { geo, mat };
+  }, []);
+  const groundMat = useRef<THREE.MeshStandardMaterial>(null);
+  const sunSp = useRef<THREE.Sprite>(null);
+  const moonSp = useRef<THREE.Sprite>(null);
+  const tmpC = useRef(new THREE.Color());
+  useFrame((state, rawDt) => {
+    const dt = Math.min(rawDt, 0.05);
+    const mix = mixRef.current.v;
+    const tune = CLOUD_TUNE[weather];
+    // —— 地面颜色（天气 × 昼夜变暗） ——
+    if (groundMat.current) {
+      tmpC.current.set(GROUND_DAY[weather]);
+      if (mix > 0) tmpC.current.multiplyScalar(1 - mix * 0.62);
+      groundMat.current.color.lerp(tmpC.current, Math.min(1, dt * 1.4));
+    }
+    // —— 太阳（晴天白天）/ 月亮 + 星星（夜晚；阴雨夜隐约） ——
+    if (sunSp.current) {
+      const m = sunSp.current.material as THREE.SpriteMaterial;
+      m.opacity = THREE.MathUtils.damp(m.opacity, Math.max(0, (1 - mix) * (weather === 'sunny' ? 1 : 0)), 2.2, dt);
+    }
+    if (moonSp.current) {
+      const m = moonSp.current.material as THREE.SpriteMaterial;
+      const clearF = weather === 'rain' || weather === 'overcast' ? 0.32 : 1;
+      m.opacity = THREE.MathUtils.damp(m.opacity, mix * clearF, 2.2, dt);
+    }
+    stars.mat.opacity = THREE.MathUtils.damp(stars.mat.opacity, mix * (weather === 'rain' || weather === 'overcast' ? 0.18 : 0.95), 2, dt);
+    stars.mat.size = 0.11 + Math.sin(state.clock.elapsedTime * 2.1) * 0.025;
+    // —— 云朵漂移 + 天气换色/换透明度 ——
+    for (let i = 0; i < clouds.length; i++) {
+      const c = clouds[i];
+      c.x += c.spd * dt;
+      if (c.x > HOUSE_CX + 27) c.x = HOUSE_CX - 27;
+      const g = cloudGrps.current[i];
+      if (g) {
+        g.position.set(c.x, c.y - (weather === 'rain' || weather === 'overcast' ? 0.9 : 0), c.z);
+      }
+      c.mat.opacity = THREE.MathUtils.damp(c.mat.opacity, i >= clouds.length - tune.hide ? 0 : tune.op, 1.8, dt);
+      c.mat.color.lerp(tmpC.current.set(tune.tint), Math.min(1, dt * 1.2));
+    }
   });
-  const activeTex = kind === 'snow' ? snowTex : kind === 'rain' ? rainTex : null;
   return (
     <group>
-      {WINS.map((w, i) => {
-        if (winExist && winExist[i] === false) return null; // 已收起的窗不挂雨雪
-        const along = winPos?.[i] ?? w.def;
-        const x = w.axis === 'z' ? along : w.at + w.side * 0.5;
-        const z = w.axis === 'z' ? w.at + w.side * 0.5 : along;
-        const ry = w.ry;
-        return (
-          <mesh key={i} position={[x, 1.55, z]} rotation={[0, ry, 0]} visible={kind !== 'clear'}>
-            <planeGeometry args={[1.9, 2.5]} />
-            {activeTex ? (
-              <meshBasicMaterial
-                map={activeTex}
-                transparent
-                opacity={kind === 'snow' ? 0.85 : 0.75}
-                depthWrite={false}
-                toneMapped={false}
-              />
-            ) : (
-              <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-            )}
-          </mesh>
-        );
-      })}
+      {/* 大地（房子外的草地/雪原圆盘，半径 34m） */}
+      <mesh position={[HOUSE_CX, -0.048, HOUSE_CZ]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[34, 48]} />
+        <meshStandardMaterial ref={groundMat} color={GROUND_DAY[weather]} roughness={1} />
+      </mesh>
+      {/* 太阳（晴天白天淡入） */}
+      <sprite ref={sunSp} position={[HOUSE_CX - 13, 8.8, HOUSE_CZ - 14]} scale={[4.8, 4.8, 1]}>
+        <spriteMaterial map={sunTex} transparent opacity={0} depthWrite={false} toneMapped={false} />
+      </sprite>
+      {/* 月亮（夜晚淡入） */}
+      <sprite ref={moonSp} position={[HOUSE_CX + 11, 8.4, HOUSE_CZ + 12]} scale={[3.5, 3.5, 1]}>
+        <spriteMaterial map={moonTex} transparent opacity={0} depthWrite={false} toneMapped={false} />
+      </sprite>
+      {/* 星空 */}
+      <points geometry={stars.geo} material={stars.mat} frustumCulled={false} />
+      {/* 云朵（一朵 = 3 片柔云 sprite，慢速漂移） */}
+      {clouds.map((c, i) => (
+        <group key={i} ref={(g) => { cloudGrps.current[i] = g; }}>
+          <sprite scale={[c.s * 1.9, c.s * 0.95, 1]} material={c.mat} />
+          <sprite scale={[c.s * 1.2, c.s * 0.72, 1]} material={c.mat} position={[c.s * 0.55, -c.s * 0.14, 0.01]} />
+          <sprite scale={[c.s * 1.05, c.s * 0.66, 1]} material={c.mat} position={[-c.s * 0.58, -c.s * 0.12, -0.01]} />
+        </group>
+      ))}
     </group>
+  );
+}
+
+/** 雨点贴图（细长竖条柔边） */
+function makeRainDropTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 32;
+  cv.height = 64;
+  const ctx = cv.getContext('2d')!;
+  const g = ctx.createLinearGradient(16, 0, 16, 64);
+  g.addColorStop(0, 'rgba(208,226,242,0)');
+  g.addColorStop(0.5, 'rgba(214,232,248,0.92)');
+  g.addColorStop(1, 'rgba(208,226,242,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(13, 4, 6, 56);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** 雪点贴图（柔边白点） */
+function makeSnowDotTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 32;
+  cv.height = 32;
+  const ctx = cv.getContext('2d')!;
+  const g = ctx.createRadialGradient(16, 16, 2, 16, 16, 14);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.7, 'rgba(255,255,255,0.5)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 32, 32);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** 在房子外的环带里随机取一点（屋内重采样最多 8 次，兜底放到北墙外） */
+function randOutdoorPoint(out: Float32Array, i: number): void {
+  for (let k = 0; k < 8; k++) {
+    const x = HOUSE_BX0 - 7 + Math.random() * (HOUSE_BX1 - HOUSE_BX0 + 14);
+    const z = HOUSE_BZ0 - 7 + Math.random() * (HOUSE_BZ1 - HOUSE_BZ0 + 14);
+    if (x < HOUSE_BX0 || x > HOUSE_BX1 || z < HOUSE_BZ0 || z > HOUSE_BZ1) {
+      out[i * 3] = x;
+      out[i * 3 + 2] = z;
+      return;
+    }
+  }
+  out[i * 3] = HOUSE_BX0 - 1 - Math.random() * 4;
+  out[i * 3 + 2] = HOUSE_BZ0 - 1 - Math.random() * 4;
+}
+
+/**
+ * v9 室外雨/雪粒子（真 3D 世界空间）：雨雪只落在房子外面的世界里 ——
+ * 透过窗户能看到外面下雨/飘雪，屋里绝不再飘雨点（旧「窗帘雨」已移除）。
+ */
+function OutdoorPrecip({ kind }: { kind: HomeWeather }) {
+  const snow = kind === 'snow';
+  const tex = useMemo(() => (snow ? makeSnowDotTexture() : makeRainDropTexture()), [snow]);
+  const pts = useMemo(() => {
+    const n = 460;
+    const pos = new Float32Array(n * 3);
+    const spd = new Float32Array(n);
+    const phase = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      randOutdoorPoint(pos, i);
+      pos[i * 3 + 1] = Math.random() * 5.4;
+      spd[i] = 0.85 + Math.random() * 0.5;
+      phase[i] = Math.random() * Math.PI * 2;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    return { geo, pos, spd, phase, n };
+  }, []);
+  useFrame((state, rawDt) => {
+    if (kind !== 'rain' && kind !== 'snow') return;
+    const dt = Math.min(rawDt, 0.05);
+    const { pos, spd, phase, n, geo } = pts;
+    const speed = snow ? 0.55 : 4.4;
+    const t = state.clock.elapsedTime;
+    for (let i = 0; i < n; i++) {
+      pos[i * 3 + 1] -= spd[i] * speed * dt;
+      if (snow) pos[i * 3] += Math.sin(t * 1.4 + phase[i]) * dt * 0.24;
+      if (pos[i * 3 + 1] < 0.04) {
+        pos[i * 3 + 1] = 5.2 + Math.random() * 0.6;
+        randOutdoorPoint(pos, i);
+      }
+    }
+    (geo.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+  });
+  if (kind !== 'rain' && kind !== 'snow') return null;
+  return (
+    <points geometry={pts.geo} frustumCulled={false}>
+      <pointsMaterial
+        key={snow ? 'snow' : 'rain'}
+        map={tex}
+        size={snow ? 0.13 : 0.2}
+        transparent
+        opacity={snow ? 0.85 : 0.62}
+        depthWrite={false}
+        sizeAttenuation
+        toneMapped={false}
+        color={snow ? '#ffffff' : '#cfe0ee'}
+      />
+    </points>
   );
 }
 
@@ -3861,7 +4061,7 @@ function makeGlassRainTexture(): THREE.CanvasTexture {
 }
 
 /** G5 雨天玻璃水珠层：贴在每扇窗玻璃外表面，极缓慢下滑 */
-function GlassRain({ kind, winExist, winPos }: { kind: 'rain' | 'snow' | 'clear'; winExist?: boolean[]; winPos?: number[] }) {
+function GlassRain({ kind, winExist, winPos }: { kind: HomeWeather; winExist?: boolean[]; winPos?: number[] }) {
   const tex = useMemo(() => makeGlassRainTexture(), []);
   useFrame((_, dt) => {
     if (kind !== 'rain') return;
@@ -3887,7 +4087,7 @@ function GlassRain({ kind, winExist, winPos }: { kind: 'rain' | 'snow' | 'clear'
 }
 
 /** G5 雪天积雪：窗外窗台白沿 + 阳台地面薄雪（仅 snow 可见） */
-function SnowDeco({ kind, winExist, winPos }: { kind: 'rain' | 'snow' | 'clear'; winExist?: boolean[]; winPos?: number[] }) {
+function SnowDeco({ kind, winExist, winPos }: { kind: HomeWeather; winExist?: boolean[]; winPos?: number[] }) {
   return (
     <group visible={kind === 'snow'}>
       {WINS.map((w, i) => {

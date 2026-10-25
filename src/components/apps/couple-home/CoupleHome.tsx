@@ -139,7 +139,7 @@ import {
 } from './companion-memory';
 import type { CompanionCmd, CompanionEvent } from './scene/companion-rt';
 import type { BubbleCmd } from './scene/HomeScene';
-import type { BoyWear, CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, LayoutSnap, NoteEntry, Pet2State, PetCareKind, PetCoat, PetState, PetWear, RoomId } from './types';
+import type { BoyWear, CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, HomeWeather, LayoutSnap, NoteEntry, Pet2State, PetCareKind, PetCoat, PetState, PetWear, RoomId } from './types';
 import { sanitizeBoyWear, sanitizeWear } from './types';
 import Wardrobe from './Wardrobe';
 
@@ -813,13 +813,20 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [photoMode, setPhotoMode] = useState(false);
   /** E3 音效开关（持久化在 sfx 模块内 localStorage，挂载时读回） */
   const [sfxOn, setSfxOn] = useState(true);
-  /** 天气（与天气 App 共享缓存）：rain/snow/clear 驱动窗外特效 + 夜晚自动开灯 */
+  /** 天气（与天气 App 共享缓存）：v9 五档天气驱动室外世界（晴/多云/阴/雨/雪）+ 夜晚自动开灯 */
   const weather = useWeatherSnapshot();
-  const weatherFx: 'rain' | 'snow' | 'clear' = useMemo(() => {
+  const weatherFx: HomeWeather = useMemo(() => {
     const c = weather?.current.code ?? 0;
     if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82) || (c >= 95 && c <= 99)) return 'rain';
     if ((c >= 71 && c <= 77) || c === 85 || c === 86) return 'snow';
-    return 'clear';
+    if (c === 0) {
+      // 万里无云 → 晴天；每 3 小时按时间块轮换一朵云，外面看起来是活的天
+      const blk = Math.floor(Date.now() / (3 * 3_600_000)) % 4;
+      return blk === 1 ? 'cloudy' : 'sunny';
+    }
+    if (c === 1 || c === 2) return 'cloudy'; // 少云/多云
+    if (c === 3 || c === 45 || c === 48) return 'overcast'; // 阴/雾
+    return 'cloudy';
   }, [weather]);
   /** 音乐 App 正在放歌（音箱飘音符 + 黑胶/八音盒跟播联动） */
   const musicPlaying = useMusic((s) => s.playing);
@@ -1703,7 +1710,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         holdingHands: companionStateRef.current === 'hold',
         hugging: companionStateRef.current === 'hug',
         night: nightRef.current,
-        weather: weatherFx === 'rain' ? '下雨' : weatherFx === 'snow' ? '下雪' : '晴',
+        weather: weatherFx === 'rain' ? '下雨' : weatherFx === 'snow' ? '下雪' : weatherFx === 'overcast' ? '阴天' : weatherFx === 'cloudy' ? '多云' : '晴（有太阳）',
         timeStr: now.toLocaleString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long', hour: '2-digit', minute: '2-digit' }),
         nearby,
         photoDesc,

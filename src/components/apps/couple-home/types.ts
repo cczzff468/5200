@@ -422,6 +422,9 @@ export interface HomeState {
  */
 export type PetCoat = 'cream' | 'orange' | 'gray' | 'cow' | (string & {});
 
+/** v9 小屋天气（真实天气 API + 时间变化共同驱动室外世界）：晴 / 多云 / 阴 / 雨 / 雪 */
+export type HomeWeather = 'sunny' | 'cloudy' | 'overcast' | 'rain' | 'snow';
+
 /** 宠物装扮（v8.3 B 选项：项圈颜色 / 小围巾 / 蝴蝶结；scarf/bow 为 null = 不戴，色值 = 戴+颜色） */
 export interface PetWear {
   /** 项圈颜色（#rrggbb；缺省 = 默认樱红 #e46a6a） */
