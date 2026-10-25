@@ -50,7 +50,13 @@ export interface CompanionCmd {
     | 'cook'
     | 'music'
     | 'door'
-    | 'eat';
+    | 'eat'
+    // —— v10 决策大脑扩展：跳舞/伸懒腰/浇花/看书/开关窗 ——
+    | 'dance'
+    | 'stretch'
+    | 'water'
+    | 'read'
+    | 'window';
   /** goto 的目标房间 */
   room?: RoomId;
   /** sit/lie/watch/lamp/play/cook/music/eat 的家具 id；door 的门 id（bed/kt/bath/bal） */
@@ -61,6 +67,8 @@ export interface CompanionCmd {
   dur?: number;
   /** v9 点歌：play/music 指定曲名（曲库见 ai-song.ts；缺省 = AI 即兴） */
   song?: string;
+  /** v10 window 开关窗：true = 开窗通风 / false = 关窗挡雨（缺省 = 关上开着的窗） */
+  open?: boolean;
 }
 
 /** 陪伴事件（状态机 → 宿主，用于记忆写入 / UI 提示 / 家具联动） */
@@ -180,14 +188,14 @@ function lerpAngle(cur: number, target: number, k: number): number {
  * 返回 null = 该家具不支持此动作。
  */
 export function companionAnchor(
-  kind: 'sit' | 'lie' | 'watch' | 'lamp' | 'play' | 'cook' | 'eat' | 'music',
+  kind: 'sit' | 'lie' | 'watch' | 'lamp' | 'play' | 'cook' | 'eat' | 'music' | 'read' | 'water',
   item: FurnitureItem,
 ): Anchor | null {
   const entry = CATALOG[item.kind];
   if (!entry) return null;
   const ry0 = item.ry ?? 0;
-  if (kind === 'lamp' || kind === 'music') {
-    // 走到灯/音响旁半步距离，面向它
+  if (kind === 'lamp' || kind === 'music' || kind === 'water') {
+    // 走到灯/音响/花盆旁半步距离，面向它
     const dz = entry.fp[1] / 2 + 0.5;
     return {
       tx: item.x + dz * Math.sin(ry0),
@@ -197,7 +205,7 @@ export function companionAnchor(
     };
   }
   const a =
-    kind === 'sit'
+    kind === 'sit' || kind === 'read'
       ? entry.acts.seat
       : kind === 'lie'
         ? entry.acts.sleep
@@ -303,6 +311,23 @@ function nearestStove(items: FurnitureItem[], from: Pt): FurnitureItem | null {
   for (const it of items) {
     if ((it.y ?? 0) > 0.45) continue;
     if (!CATALOG[it.kind]?.acts?.cook) continue;
+    const d = Math.hypot(it.x - from.x, it.z - from.z);
+    if (d < bd) {
+      bd = d;
+      best = it;
+    }
+  }
+  return best;
+}
+
+/** 找最近的花草（water：盆栽/花箱/花架/龟背竹/仙人掌/水培） */
+const PLANT_KINDS = new Set(['plant', 'plantSmall', 'flowerBox', 'flowerStand', 'monstera', 'cactus', 'hydro']);
+function nearestPlant(items: FurnitureItem[], from: Pt): FurnitureItem | null {
+  let best: FurnitureItem | null = null;
+  let bd = Infinity;
+  for (const it of items) {
+    if ((it.y ?? 0) > 0.45) continue;
+    if (!PLANT_KINDS.has(it.kind)) continue;
     const d = Math.hypot(it.x - from.x, it.z - from.z);
     if (d < bd) {
       bd = d;
@@ -452,6 +477,15 @@ function stickyDur(cmd: CompanionCmd, kind: CompanionCmd['kind']): number {
       return DUR_MUSIC[0] + Math.random() * (DUR_MUSIC[1] - DUR_MUSIC[0]);
     case 'eat':
       return DUR_EAT[0] + Math.random() * (DUR_EAT[1] - DUR_EAT[0]);
+    // —— v10 新动作 ——
+    case 'dance':
+      return 14 + Math.random() * 8;
+    case 'stretch':
+      return 4.5 + Math.random() * 2;
+    case 'water':
+      return 7 + Math.random() * 4;
+    case 'read':
+      return 30 + Math.random() * 25;
     default:
       return SIT_MIN + Math.random() * (SIT_MAX - SIT_MIN);
   }
@@ -497,6 +531,26 @@ export function companionStep(
     rt.sitUntil = 0;
     rt.anchor = null;
     rt.itemId = null;
+    // —— v10 原地动作：跳舞/伸懒腰（不需要走位，直接进粘性姿势） ——
+    if (cmd.kind === 'dance' || cmd.kind === 'stretch') {
+      ta.moving = false;
+      rt.phase = 'sit';
+      rt.actT = 0;
+      rt.sitUntil = rt.actT + stickyDur(cmd, cmd.kind);
+      partnerPose.pose = cmd.kind as CharPose;
+      partnerPose.y = 0;
+      onEvent({ ev: 'arrive', kind: cmd.kind, memo: cmd.memo });
+      return true;
+    }
+    // —— v10 开关窗：走到目标房间（缺省当前房间）空地 → 回报宿主开/关窗 ——
+    if (cmd.kind === 'window') {
+      const room = cmd.room ?? roomOf(ta.x, ta.z);
+      const dest = randPointInRoomFree(grid, room);
+      const route = planRoute(roomOf(ta.x, ta.z), room, doors);
+      rt.path = route ? [...route, dest] : (findPath(grid, { x: ta.x, z: ta.z }, dest) ?? []);
+      rt.target = dest;
+      return true;
+    }
     // —— 计算目标与路径 ——
     if (cmd.kind === 'come' || cmd.kind === 'hug' || cmd.kind === 'holdhand') {
       const dx = ta.x - me.x;
@@ -531,13 +585,14 @@ export function companionStep(
     } else {
       // sit/lie/watch/lamp/play/cook/music/eat：解析家具 + 锚点
       let item = cmd.itemId ? items.find((f) => f.id === cmd.itemId) ?? null : null;
-      if (cmd.kind === 'sit' && !item) item = nearestSeat(items, { x: ta.x, z: ta.z });
+      if ((cmd.kind === 'sit' || cmd.kind === 'read') && !item) item = nearestSeat(items, { x: ta.x, z: ta.z });
       if (cmd.kind === 'lie' && !item) item = nearestBed(items, { x: ta.x, z: ta.z });
       if (cmd.kind === 'watch') item = items.find((f) => f.kind === 'tv') ?? item;
       if (cmd.kind === 'play' && !item) item = nearestInstrument(items, { x: ta.x, z: ta.z });
       if (cmd.kind === 'music' && !item) item = nearestMusicBox(items, { x: ta.x, z: ta.z });
       if (cmd.kind === 'cook' && !item) item = nearestStove(items, { x: ta.x, z: ta.z });
       if (cmd.kind === 'eat' && !item) item = nearestDiningTable(items, { x: ta.x, z: ta.z });
+      if (cmd.kind === 'water' && !item) item = nearestPlant(items, { x: ta.x, z: ta.z });
       if (cmd.kind === 'lamp' && !item) {
         item =
           items.find((f) => CATALOG[f.kind]?.light && (f.y ?? 0) < 0.5) ??
@@ -564,7 +619,11 @@ export function companionStep(
                     ? 'cook'
                     : cmd.kind === 'eat'
                       ? 'eat'
-                      : 'sit',
+                      : cmd.kind === 'read'
+                        ? 'read'
+                        : cmd.kind === 'water'
+                          ? 'water'
+                          : 'sit',
         item,
       );
       if (!anchor) {
@@ -648,7 +707,9 @@ export function companionStep(
           cmd.kind === 'watch' ||
           cmd.kind === 'play' ||
           cmd.kind === 'cook' ||
-          cmd.kind === 'eat'
+          cmd.kind === 'eat' ||
+          cmd.kind === 'read' ||
+          cmd.kind === 'water'
         ) {
           const a = rt.anchor;
           if (a) {
@@ -669,7 +730,11 @@ export function companionStep(
                   ? 'cook'
                   : cmd.kind === 'eat'
                     ? 'eat'
-                    : 'sit';
+                    : cmd.kind === 'read'
+                      ? 'read'
+                      : cmd.kind === 'water'
+                        ? 'water'
+                        : 'sit';
           partnerPose.y = a?.y ?? 0;
           rt.phase = 'sit';
           rt.sitUntil = rt.actT + stickyDur(cmd, cmd.kind);
@@ -700,6 +765,9 @@ export function companionStep(
           rt.holdRoom = null;
           partnerPose.pose = 'holdhand';
           onEvent({ ev: 'holdStart', kind: 'holdhand', memo: cmd.memo });
+        } else if (cmd.kind === 'window') {
+          onEvent({ ev: 'arrive', kind: 'window', room: cmd.room, memo: cmd.memo ?? (cmd.open === true ? 'open' : 'close') });
+          toIdle(rt, partnerPose);
         } else if (cmd.kind === 'goto') {
           // 跨房间到位：回报（多步队列接续 / 自主行为记忆用）
           onEvent({ ev: 'arrive', kind: 'goto', room: cmd.room, memo: cmd.memo });

@@ -38,6 +38,8 @@ import {
   Gamepad2,
   Heart,
   HeartHandshake,
+  History,
+  Radio,
   Hand,
   ImagePlus,
   MessageCircle,
@@ -129,6 +131,26 @@ import { startWebSpeechSession, isWebSpeechSupported, type WebSpeechSession } fr
 import { speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
 import { type MemConvoTurn } from '@/lib/memory';
 import { buildCabinSystem, cabinChatTurn, parseAiReply, type CabinContext } from './companion-brain';
+import {
+  loadMind,
+  saveMind,
+  tickMind,
+  noteInteraction,
+  applyNeedEffect,
+  reinforceActivity,
+  reinforceWeight,
+  captureSpecialDay,
+  todaySpecial,
+  affinityLevelOf,
+  buildDecisionPrompt,
+  parseDecision,
+  decideLocally,
+  type CabinMind,
+  type DecisionCtx,
+  type DecisionResult,
+} from './cabin-mind';
+import { search as ncmSearch, songUrl as ncmSongUrl } from '@/lib/ios/music-api';
+import CabinHistorySheet from './CabinHistorySheet';
 import { playAiSongOnce, stopAiSong } from './ai-song';
 import {
   cabinAfterChatTurn,
@@ -257,6 +279,7 @@ const PET_TRICK_DEFS: { kind: PetCareKind; label: string; lvl: number; icon: Luc
   { kind: 'shake', label: '握手', lvl: 2, icon: Heart },
   { kind: 'spin', label: '转圈', lvl: 3, icon: RefreshCw },
   { kind: 'roll', label: '打滚', lvl: 5, icon: Circle },
+  { kind: 'dead', label: '装死', lvl: 7, icon: Moon },
 ];
 
 /** 宠物等级：1 + 陪伴天数/2 + 累计照顾次数/6（封顶 Lv.9） */
@@ -741,6 +764,36 @@ const editDirBtnAmber =
   'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90 active:bg-[#f5efe2] active:text-[#8a7a54]';
 
 // ---------------- v8.2 优化A：小屋聊天记录持久化（localStorage 按角色分档，退出重进上下文不丢） ----------------
+
+// ---------------- v10 C4 宠物日记（每天它干了啥，面板里翻阅） ----------------
+
+interface PetDiaryEntry {
+  ts: number;
+  text: string;
+}
+
+function loadPetDiary(): PetDiaryEntry[] {
+  try {
+    const raw = window.localStorage.getItem('cabin-pet-diary');
+    const j = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(j)
+      ? j.filter((e): e is PetDiaryEntry => !!e && typeof e === 'object' && typeof (e as PetDiaryEntry).ts === 'number' && typeof (e as PetDiaryEntry).text === 'string').slice(-60)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function addPetDiary(text: string): void {
+  try {
+    const list = loadPetDiary();
+    const day = new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
+    list.push({ ts: Date.now(), text: `[${day}] ${text}`.slice(0, 80) });
+    window.localStorage.setItem('cabin-pet-diary', JSON.stringify(list.slice(-60)));
+  } catch {
+    /* 隐私模式写不进就算了 */
+  }
+}
 
 /** 每个角色一份会话存档（LLM 上下文 + 记忆提取轮次） */
 interface CabinConvoSave {
@@ -1474,7 +1527,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 牵手中（UI 态：菜单变「松开」） */
   const [holdingUI, setHoldingUI] = useState(false);
   /** AI 主动请求弹窗（想要拥抱/牵手） */
-  const [request, setRequest] = useState<{ kind: 'hug' | 'holdhand'; at: number } | null>(null);
+  const [request, setRequest] = useState<
+    { kind: 'hug' | 'holdhand' | 'meal' | 'chat' | 'miss'; text?: string; at: number } | null
+  >(null);
+  /** 请求弹窗文案（v10 主动聊天/喊你吃饭/想你） */
   /** 上次主动请求处置时刻（冷却） */
   const requestCooldownRef = useRef(0);
   /** 自主行动调度（上次触发时刻） */
@@ -1483,6 +1539,32 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const togetherRef = useRef<'watch' | 'eat' | 'play' | null>(null);
   /** v8.2 优化C：陪伴小人夜里睡着（UI 态，驱动梦境气泡） */
   const [sleepingUi, setSleepingUi] = useState(false);
+  // ---------------- v10 决策大脑：内心状态 / 强化 / 真歌 / 对讲 / 历史面板 ----------------
+  /** TA 的内心状态（需求/情绪/甜度/闹脾气/强化/纪念日；按角色分档持久化） */
+  const mindRef = useRef<CabinMind | null>(null);
+  useEffect(() => {
+    mindRef.current = companion ? loadMind(companion.id) : null;
+  }, [companion?.id, companion]);
+  /** 最近一次自主活动（行为强化归因：被夸/被嫌弃记在它头上） */
+  const lastActRef = useRef<string>('');
+  /** 下次决策时间 */
+  const decideNextAtRef = useRef(Date.now() + 60_000);
+  /** B1 真歌播放器（网易云直链；null = 没在放） */
+  const realAudioRef = useRef<HTMLAudioElement | null>(null);
+  /** v10 E1 聊天记录回看面板 */
+  const [chatHistOpen, setChatHistOpen] = useState(false);
+  /** v10 C4 宠物日记面板 */
+  const [petDiaryOpen, setPetDiaryOpen] = useState(false);
+  /** v10 E2 连续语音对讲 */
+  const [intercomOn, setIntercomOn] = useState(false);
+  const intercomSessionRef = useRef<WebSpeechSession | null>(null);
+  const intercomAliveRef = useRef(false);
+  /** 上一次室外天气（变化沿触发联动） */
+  const prevWeatherRef = useRef<string>('');
+  /** 特殊日子当日已主动过（防重复） */
+  const specialDoneRef = useRef('');
+  /** ⋮ 菜单甜度刷新（决策心跳顺带触发） */
+  const [, setMindTick] = useState(0);
   /** beginAction 桥（定义在后文，事件回调先定义 → 用 ref 转发） */
   const beginActionRef = useRef<(type: CharAction['type'], item: FurnitureItem) => void>(() => {});
 
@@ -1495,6 +1577,59 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setSleepingUi(false); // 任何新指令都会把睡着的小人叫醒
   }, []);
 
+  // ---------------- v10 决策大脑：气泡/结算/真歌 帮手 ----------------
+
+  /** 头顶气泡（kind='thought' 渲染成想法气泡） */
+  const say = useCallback((text: string, hold?: number, kind?: 'thought') => {
+    bubbleRef.current.push({ who: 'ta', text, hold, ...(kind ? { kind } : {}) });
+  }, []);
+
+  /** 停掉真歌（B1） */
+  const stopRealSong = useCallback(() => {
+    const a = realAudioRef.current;
+    realAudioRef.current = null;
+    if (a) {
+      try {
+        a.pause();
+        a.src = '';
+      } catch {
+        /* 已释放 */
+      }
+    }
+  }, []);
+
+  /** B1 音箱放真歌：点歌名 → 网易云搜歌 → 直链播放；失败返回 false（调用方回落合成旋律） */
+  const playRealSong = useCallback(async (song?: string): Promise<boolean> => {
+    stopRealSong();
+    try {
+      const kw = (song ?? '').trim() || '轻音乐 纯音乐';
+      const res = await ncmSearch(kw, 1, 6);
+      const first = res.songs?.[0];
+      if (!first) return false;
+      const u = await ncmSongUrl(first.id, 'standard');
+      if (!u.url) return false;
+      const audio = new Audio(u.url);
+      audio.volume = 0.5;
+      audio.loop = true;
+      realAudioRef.current = audio;
+      await audio.play();
+      return true;
+    } catch {
+      return false;
+    }
+  }, [stopRealSong]);
+
+  /** 需求结算快捷方式（伴随活动） */
+  const settleMind = useCallback(
+    (effect: Partial<{ food: number; energy: number; mood: number; social: number }>, act?: string) => {
+      const m = mindRef.current;
+      if (!m || !companion) return;
+      applyNeedEffect(companion.id, m, effect);
+      if (act) lastActRef.current = act;
+    },
+    [companion],
+  );
+
   /** 陪伴事件（状态机 → 宿主）：状态镜像 + 多步队列接续 + 全事件记忆入库 */
   const onCompanionEvent = useCallback(
     (e: CompanionEvent) => {
@@ -1504,16 +1639,21 @@ export default function CoupleHome({ close }: { close: () => void }) {
           companionStateRef.current = e.memo === 'auto-night' ? 'sleeping' : 'lying';
           if (e.memo === 'auto-night') setSleepingUi(true);
         }
-        else if (e.kind === 'watch') companionStateRef.current = 'watching';
+        else if (e.kind === 'watch') { companionStateRef.current = 'watching'; settleMind({ mood: 7 }, 'watch'); }
         else if (e.kind === 'play') {
           companionStateRef.current = 'playing';
           setPartnerPlaying(e.itemId ?? null);
+          settleMind({ mood: 14, energy: -3 }, 'play');
           // v9 点歌出声：真实乐器音色弹奏（钢琴 grand / 吉他拨弦），音符可视化由 partnerPlayingId 联动
           const inst = itemsRef.current.find((f) => f.id === e.itemId);
           const played = playAiSongOnce(inst?.kind === 'guitar' ? 'guitar' : 'piano', e.song);
           toast(played === '即兴' ? `${companion?.name ?? 'TA'}即兴弹了一段小曲～` : `${companion?.name ?? 'TA'}弹起了《${played}》～`);
-        } else if (e.kind === 'cook') companionStateRef.current = 'cooking';
-        else if (e.kind === 'eat') companionStateRef.current = 'eating';
+        } else if (e.kind === 'cook') { companionStateRef.current = 'cooking'; settleMind({}, 'cook'); }
+        else if (e.kind === 'eat') { companionStateRef.current = 'eating'; settleMind({ food: 42, energy: 6, mood: 6 }, 'eat'); }
+        else if (e.kind === 'read') { companionStateRef.current = 'sitting'; settleMind({ mood: 6 }, 'read'); }
+        else if (e.kind === 'dance') { companionStateRef.current = 'playing'; settleMind({ mood: 14, energy: -4 }, 'dance'); }
+        else if (e.kind === 'stretch') { companionStateRef.current = 'near'; settleMind({ mood: 4, energy: 2 }, 'stretch'); }
+        else if (e.kind === 'water') { companionStateRef.current = 'playing'; settleMind({ mood: 6 }, 'water'); }
         else if (e.kind === 'lamp') {
           // 指令「打开灯」：小人走到灯旁 → 宿主点亮最近的落地灯/台灯
           const lamp = itemsRef.current.find((f) => CATALOG[f.kind]?.light && (f.y ?? 0) < 0.5 && !f.st?.on);
@@ -1542,15 +1682,33 @@ export default function CoupleHome({ close }: { close: () => void }) {
           // 自动开门发生在走路途中：不改变状态镜像（还是 walking）
           if (e.memo !== 'auto-open') companionStateRef.current = 'near';
         } else if (e.kind === 'music') {
-          // 指令「放歌」：走到音箱/唱片机前 → 打开它（音符飘出）+ 轻声八音盒旋律真的能听到，状态镜像为「唱歌」
+          // 指令「放歌」：走到音箱/唱片机前 → 打开它（音符飘出）+ 真歌播放（网易云直链，失败回落轻声八音盒）
           companionStateRef.current = 'singing';
+          settleMind({ mood: 12 }, 'music');
           const box = itemsRef.current.find((f) => f.id === e.itemId);
           if (box && !box.st?.on) {
             setItems((prev) => prev.map((f) => (f.id === box.id ? { ...f, st: { ...f.st, on: true } } : f)));
             saveSoon();
           }
-          playAiSongOnce('musicbox', e.song, { loop: true, vol: 0.3 });
+          void playRealSong(e.song).then((ok) => {
+            if (!ok) {
+              playAiSongOnce('musicbox', e.song, { loop: true, vol: 0.3 });
+              toast(`放了首《${e.song ?? '轻音乐'}》～（真歌源连不上，用八音盒代替啦）`);
+            } else {
+              toast(`音箱里放起了《${e.song ?? '一首好听的歌'}》，真的能听到哦～`);
+            }
+          });
           sfx.tap();
+        } else if (e.kind === 'window') {
+          // v10 B3 天气联动：TA 走到窗边开/关窗（memo = 'open' | 'close'；缺省关上开着的窗）
+          const open = e.memo === 'open';
+          const room = e.room ?? roomAt(taRT.current.x, taRT.current.z);
+          const IDX: Partial<Record<RoomId, number[]>> = { lr: [0, 1, 2], br: [3, 4], kt: [5, 6], ba: [7, 8] };
+          const targets = IDX[room] ?? [0, 1, 2];
+          setWin((prev) => prev.map((v, i) => (targets.includes(i) ? open : v)));
+          saveSoon();
+          toast(open ? '窗户打开，风进来啦～' : '窗户关上啦，雨淋不进来～');
+          companionStateRef.current = 'near';
         } else companionStateRef.current = 'near';
         // —— 记忆入库：用户指令成功执行（「用户让我去沙发上坐下」） ——
         if (companion && typeof e.memo === 'string' && e.memo.startsWith('cmd:')) {
@@ -1612,6 +1770,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
       } else if (e.ev === 'hugStart') {
         companionStateRef.current = 'hug';
         setHoldingUI(false);
+        // —— v10 内心结算：拥抱 = 甜甜的互动 ——
+        if (mindRef.current && companion) noteInteraction(companion.id, mindRef.current, { sweet: 5, social: 16, mood: 10 });
         // —— 物理动作记忆（关键）：拥抱成功 ——
         if (companion && e.memo === 'user-hug') {
           cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}在拾光小屋里主动拥抱了${companion.name}，TA 感觉很温暖。`, 'cabin-hug-user', { dedupeSeconds: 120 });
@@ -1623,6 +1783,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
         companionStateRef.current = 'hold';
         setHoldingUI(true);
         holdRoomRef.current = roomAt(taRT.current.x, taRT.current.z);
+        // —— v10 内心结算：牵手 = 亲密互动 ——
+        if (mindRef.current && companion) noteInteraction(companion.id, mindRef.current, { sweet: 4, social: 12, mood: 8 });
         // —— 物理动作记忆：牵手成功 ——
         if (companion && e.memo === 'user-hold') {
           cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}在拾光小屋里牵起了${companion.name}的手，十指相扣。`, 'cabin-hold-user', { dedupeSeconds: 120 });
@@ -1632,6 +1794,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         sfx.tap();
       } else if (e.ev === 'release' || e.ev === 'giveup') {
         stopAiSong(); // v9：弹奏/放歌结束或中断 → 停掉旋律（新动作不会和旧旋律叠在一起）
+        stopRealSong(); // v10：真歌也一并停掉
         // —— v8.1 完成时结算：做饭 → 一桌好菜上桌；放歌 → 关音箱；弹奏 → 清音符 ——
         if (e.ev === 'release' && e.memo === 'finish') {
           if (e.kind === 'cook') {
@@ -1639,6 +1802,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
             toast(`${companion?.name ?? 'TA'}做好了饭，一桌好菜上桌啦，去餐桌「开饭」吧～`);
             if (companion) {
               cabinEventMemory(companion.id, `${companion.name}在灶台前做了一顿饭，把菜端上了餐桌。`, 'cabin-cook', { dedupeSeconds: 300 });
+            }
+            // —— v10 A5 任务链：做完饭 → 喊你吃饭（用户不在旁/没在吃时弹主动请求） ——
+            const meRoom = roomAt(meRT.current.x, meRT.current.z);
+            const taRoom = roomAt(taRT.current.x, taRT.current.z);
+            if (Date.now() >= requestCooldownRef.current && !request) {
+              setRequest({ kind: 'meal', text: '饭好啦，快来趁热吃呀！', at: Date.now() });
+              say('饭好啦，快来趁热吃呀～', 5);
+              requestCooldownRef.current = Date.now() + 4 * 60_000;
+            } else if (meRoom !== taRoom) {
+              say('饭好啦，我在餐桌这边等你～', 5);
             }
           } else if (e.kind === 'music') {
             setItems((prev) =>
@@ -1649,6 +1822,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
             if (companion) {
               cabinBehaviorMemoryOncePerDay(companion.id, 'sleep-wake', `${companion.name}睡了一觉醒来，伸了个懒腰。`);
             }
+            // —— v10 需求结算：睡饱了 ——
+            settleMind({ energy: 70, mood: 8 });
           }
         }
         setPartnerPlaying(null);
@@ -1665,7 +1840,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         }
       }
     },
-    [issueCompanionCmd, toast, saveSoon, companion],
+    [issueCompanionCmd, toast, saveSoon, companion, settleMind, playRealSong, stopRealSong, say],
   );
 
   /** 进入小屋：拉联系人 + 恢复上次选定的陪伴角色（没有则弹选择列表） */
@@ -1827,12 +2002,28 @@ export default function CoupleHome({ close }: { close: () => void }) {
     [companion, meRT, taRT, myActivityText, charActivityText, weatherFx],
   );
 
-  /** 发送聊天（文字 / 麦克风转写 / 附照片）→ 气泡 + TTS + 动作执行 + 记忆入库 */
-  const sendChat = useCallback(async () => {
-    const text = chatText.trim();
+  /** 发送聊天（文字 / 麦克风转写 / 附照片 / 对讲机转写）→ 气泡 + TTS + 动作执行 + 记忆入库 */
+  const sendChat = useCallback(async (override?: string) => {
+    const text = (override ?? chatText).trim();
     if (!text || chatBusy || !companion) return;
     setChatText('');
     setChatBusy(true);
+    // —— v10 内心结算：聊天 = 互动（甜度+社交+想你衰减） ——
+    const m0 = mindRef.current;
+    if (m0 && companion) {
+      noteInteraction(companion.id, m0, { sweet: 1, social: 14, mood: 4 });
+      const dayLabel = captureSpecialDay(companion.id, m0, text);
+      if (dayLabel) {
+        toast(`TA 悄悄记下了：${dayLabel}`);
+        say('（在心里默默记下了这个日子）', 4, 'thought');
+      }
+      // —— v10 A9 闹脾气：好话哄一哄就和好 ——
+      if (m0.sulk.on && /对不起|别生气|不要生气|哄哄|原谅|爱你|想你|抱抱|我的错/.test(text)) {
+        noteInteraction(companion.id, m0, { sweet: 6, social: 20, mood: 14 });
+        say('……哼，这次就原谅你。下次不许再这么久不理我啦。', 6);
+        cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}哄了闹脾气的${companion.name}，TA 心软和好了。`, 'cabin-reconcile', { dedupeSeconds: 600 });
+      }
+    }
     const photoDesc = pendingPhotoRef.current;
     pendingPhotoRef.current = null;
     setPhotoChip(false);
@@ -1884,8 +2075,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
       // ⑦ 拦截动作块 → 寻路执行（多步排队；song 参数透传点歌）
       if (parsed.actions.length > 0) {
         const acts = parsed.actions.slice(0, 3);
-        companionQueueRef.current = acts.slice(1).map((a) => ({ kind: a.type as CompanionCmd['kind'], room: a.room, song: a.song, memo: 'ai-act' }));
-        issueCompanionCmd({ kind: acts[0].type as CompanionCmd['kind'], room: acts[0].room, song: acts[0].song, memo: 'ai-act' });
+        companionQueueRef.current = acts.slice(1).map((a) => ({ kind: a.type as CompanionCmd['kind'], room: a.room, song: a.song, open: a.open, memo: 'ai-act' }));
+        issueCompanionCmd({ kind: acts[0].type as CompanionCmd['kind'], room: acts[0].room, song: acts[0].song, open: acts[0].open, memo: 'ai-act' });
+        // —— v10 A10 行为强化：刚做完的事被夸/被嫌弃 → 记下来影响以后 ——
+        const m2 = mindRef.current;
+        if (m2 && companion && ['play', 'cook', 'music', 'eat', 'dance'].includes(lastActRef.current)) {
+          if (/好听|真好听|弹得|唱得|真棒|好厉害|好棒|好喜欢|喜欢你|谢谢你|真好吃|好香/.test(text)) {
+            reinforceActivity(companion.id, m2, lastActRef.current, true);
+          } else if (/难听|不好听|难吃|太吵|不好吃|吵死了/.test(text)) {
+            reinforceActivity(companion.id, m2, lastActRef.current, false);
+          }
+        }
       }
       // ⑧ 对话记忆入库（标准管线：碎片 → 核心 → 长期；scene=拾光小屋）
       cabinAfterChatTurn(companion.id, useSettings.getState().apiConfig, convoTurnsRef.current.slice(-12), {
@@ -1912,55 +2112,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
           const text = t.trim();
           if (text) {
             setChatText(text);
+            // 复用 sendChat（override 转写文本），单一管线
             setTimeout(() => {
-              // 复用 sendChat：直接带上转写文本再发一轮（chatText 闭包可能过期，走状态注入）
               setChatText('');
-              void (async () => {
-                if (!companion || chatBusy) return;
-                setChatBusy(true);
-                bubbleRef.current.push({ who: 'me', text, hold: 10 });
-                try {
-                  const memCtx = [text, ...convoRef.current.slice(-4).map((m) => m.content)].join(' ');
-                  const memoryBlock = cabinMemoryBlock(companion.id, memCtx, { user: ownerNameRef.current || null, peer: companion.name || null });
-                  const ctx = collectContext();
-                  const system = buildCabinSystem(companion, memoryBlock, ctx);
-                  const history = convoRef.current.slice(-12);
-                  const reply = await cabinChatTurn([{ role: 'system', content: system }, ...history, { role: 'user', content: text }], useSettings.getState().apiConfig);
-                  const parsed = parseAiReply(reply);
-                  convoRef.current.push({ role: 'user', content: text }, { role: 'assistant', content: parsed.raw });
-                  convoRef.current = convoRef.current.slice(-40);
-                  convoTurnsRef.current.push({ role: 'me', text }, { role: 'peer', text: parsed.msgs.join(' / ') || parsed.raw.slice(0, 120) || '（嗯）' });
-                  convoTurnsRef.current = convoTurnsRef.current.slice(-40);
-                  const msgs = parsed.msgs.length > 0 ? parsed.msgs : ['……'];
-                  for (const m of msgs) {
-                    const est = Math.min(14, 2.6 + m.replace(/\s/g, '').length / 3.2);
-                    bubbleRef.current.push({ who: 'ta', text: m, hold: voiceOnRef.current ? est + 1.2 : est });
-                    if (voiceOnRef.current) {
-                      try {
-                        await speakUserTts({ text: m, contactId: companion.id, volume: 1, speed: 1.02 });
-                      } catch {
-                        /* 静默 */
-                      }
-                    } else {
-                      await new Promise((r) => setTimeout(r, Math.min(3600, 900 + m.length * 70)));
-                    }
-                  }
-                  if (parsed.actions.length > 0) {
-                    const acts = parsed.actions.slice(0, 3);
-                    companionQueueRef.current = acts.slice(1).map((a) => ({ kind: a.type as CompanionCmd['kind'], room: a.room, memo: 'ai-act' }));
-                    issueCompanionCmd({ kind: acts[0].type as CompanionCmd['kind'], room: acts[0].room, memo: 'ai-act' });
-                  }
-                  cabinAfterChatTurn(companion.id, useSettings.getState().apiConfig, convoTurnsRef.current.slice(-12), {
-                    user: ownerNameRef.current || null,
-                    peer: companion.name || null,
-                  });
-                  saveCabinConvo(companion.id, convoRef.current, convoTurnsRef.current);
-                } catch (err) {
-                  toast(err instanceof Error && err.message ? `TA 没能回话：${err.message}` : 'TA 没能回话，稍后再试试');
-                } finally {
-                  setChatBusy(false);
-                }
-              })();
+              void sendChat(text);
             }, 350);
           }
         });
@@ -1979,7 +2134,50 @@ export default function CoupleHome({ close }: { close: () => void }) {
     micSessionRef.current = s;
     setMicOn(true);
     setChatText('');
-  }, [micOn, companion, chatBusy, collectContext, issueCompanionCmd, toast]);
+  }, [micOn, sendChat, toast]);
+
+  // ---------------- v10 E2 连续语音对讲：逐句自动发送 + 语音回复，免打字对讲机 ----------------
+
+  /** 对讲机开关：开 = 持续监听（每句定稿自动发送）；再点 = 关闭 */
+  const toggleIntercom = useCallback(() => {
+    if (intercomOn) {
+      intercomAliveRef.current = false;
+      const s = intercomSessionRef.current;
+      intercomSessionRef.current = null;
+      setIntercomOn(false);
+      setChatText('');
+      if (s) void s.stop();
+      toast('对讲模式已关');
+      return;
+    }
+    if (!isWebSpeechSupported()) {
+      toast('当前浏览器不支持语音识别～');
+      return;
+    }
+    if (micOn) {
+      // 与单次麦克风互斥：先关掉它
+      const ms = micSessionRef.current;
+      micSessionRef.current = null;
+      setMicOn(false);
+      if (ms) void ms.abort();
+    }
+    const s = startWebSpeechSession({
+      onPartial: (t) => setChatText(t),
+      onFinal: (t) => {
+        setChatText('');
+        void sendChat(t);
+      },
+    });
+    if (!s) {
+      toast('麦克风启动失败，检查一下权限～');
+      return;
+    }
+    intercomSessionRef.current = s;
+    intercomAliveRef.current = true;
+    setIntercomOn(true);
+    setChatText('');
+    toast('对讲模式已开：直接说话就好，TA 会听到的～');
+  }, [intercomOn, micOn, sendChat, toast]);
 
   /** 聊天输入附照片 → 识图模型转文字（「我现在在干嘛」的摄像头通道） */
   const onChatPhoto = useCallback(
@@ -2026,7 +2224,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     sfx.tap();
   }, [companion]);
 
-  /** 拥抱：小人走过来 → 双方拥抱（用户正坐着/躺着/抱着猫时先婉拒） */
+  /** 拥抱：小人走过来 → 双方拥抱（v10：TA 闹脾气时会先扭过头去，要哄） */
   const startHug = useCallback(() => {
     setPartnerMenuOpen(false);
     if (!companion) return;
@@ -2038,8 +2236,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
       toast('怀里还抱着小家伙呢，先放它下来吧～');
       return;
     }
+    const m = mindRef.current;
+    if (m?.sulk.on && !m.sulk.refusedOnce) {
+      m.sulk.refusedOnce = true;
+      saveMind(companion.id, m);
+      say('哼……谁让你这么久都不理我。', 5);
+      toast('TA 在闹小脾气呢，说句好听的哄哄 TA 吧～');
+      return;
+    }
     issueCompanionCmd({ kind: 'hug', memo: 'user-hug' });
-  }, [companion, issueCompanionCmd, toast]);
+  }, [companion, issueCompanionCmd, say, toast]);
 
   /** 牵手：小人走过来牵起手 → 之后 0.5m 跟随移动 */
   const startHoldHand = useCallback(() => {
@@ -2065,12 +2271,23 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   // ---------------- v8.0 模块五：AI 主动请求 + 自主行动 ----------------
 
-  /** 同意 TA 的请求 → 拥抱/牵手动画（记忆在 hugStart/holdStart 事件里写） */
+  /** 同意 TA 的请求 → 拥抱/牵手/来身边/去吃饭（记忆在 hugStart/holdStart 事件里写） */
   const acceptRequest = useCallback(() => {
     if (!request || !companion) return;
     const kind = request.kind;
     setRequest(null);
     requestCooldownRef.current = Date.now() + 8 * 60_000;
+    if (kind === 'meal') {
+      say('那快去餐桌吧，凉了就不好吃啦！', 5);
+      toast('去点餐桌上的「开饭」吧～');
+      return;
+    }
+    if (kind === 'chat' || kind === 'miss') {
+      // 想你/有话想说 → TA 走到你身边开口
+      if (mindRef.current) noteInteraction(companion.id, mindRef.current, { sweet: 3, social: 16, mood: 6 });
+      issueCompanionCmd({ kind: 'come', memo: 'ai-miss-yes' });
+      return;
+    }
     if (kind === 'hug') {
       // v9 拥抱不再因「坐着/躺着/在做事」而静默拒绝：TA 会走过来抱（坐着也抱得到）；只有抱着宠物时需要先放下
       if (carryPetRef.current) {
@@ -2088,17 +2305,24 @@ export default function CoupleHome({ close }: { close: () => void }) {
     issueCompanionCmd({ kind: 'holdhand', memo: 'ai-hold-yes' });
   }, [request, companion, issueCompanionCmd, toast]);
 
-  /** 拒绝 TA 的请求 → 记忆「有点失落」 + 头顶小情绪 */
+  /** 拒绝 TA 的请求 → 记忆「有点失落」 + 头顶小情绪（A3：心情/社交也会受伤） */
   const rejectRequest = useCallback(() => {
     if (!request || !companion) return;
     setRequest(null);
     requestCooldownRef.current = Date.now() + 8 * 60_000;
+    if (mindRef.current) {
+      applyNeedEffect(companion.id, mindRef.current, { mood: -8, social: -6 });
+    }
     if (request.kind === 'hug') {
       cabinEventMemory(companion.id, `${companion.name}想求个抱抱，但被${ownerNameRef.current || '主人'}拒绝了，有点失落。`, 'cabin-hug-reject', { dedupeSeconds: 600 });
       bubbleRef.current.push({ who: 'ta', text: '呜……那好吧。', hold: 4.5 });
-    } else {
+    } else if (request.kind === 'holdhand') {
       cabinEventMemory(companion.id, `${companion.name}想牵${ownerNameRef.current || '主人'}的手，但被拒绝了，有点小委屈。`, 'cabin-hold-reject', { dedupeSeconds: 600 });
       bubbleRef.current.push({ who: 'ta', text: '哦…那算了。', hold: 4.5 });
+    } else if (request.kind === 'meal') {
+      bubbleRef.current.push({ who: 'ta', text: '那我先帮你收着…饿了随时叫我哦。', hold: 5 });
+    } else {
+      bubbleRef.current.push({ who: 'ta', text: '……嗯，那你想聊的时候再叫我。', hold: 5 });
     }
   }, [request, companion]);
 
@@ -2126,6 +2350,106 @@ export default function CoupleHome({ close }: { close: () => void }) {
     const t = setTimeout(() => setRequest(null), 45_000);
     return () => clearTimeout(t);
   }, [request]);
+
+  // ---------------- v10 A1/A2/A6/A7/A8 决策循环：TA 自己决定接下来做什么 ----------------
+
+  /** 决策可用动作白名单（与 ACT 协议一致） */
+  const MIND_ACTS = 'come|goto|sit|lie|watch|lamp|hug|holdhand|free|play|cook|music|door|eat|dance|stretch|water|read|window';
+
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const m = mindRef.current;
+      if (!m || !companion) return;
+      tickMind(companion.id, m); // 心跳：需求衰减 + 情绪推进（每 30s）
+      setMindTick((t) => t + 1); // ⋮ 菜单甜度刷新
+      if (Date.now() < decideNextAtRef.current) return;
+      decideNextAtRef.current = Date.now() + 95_000 + Math.random() * 60_000;
+      if (modeRef.current !== 'live' || pickerOpen) return;
+      if (request || partnerMenuOpen || chatBusy) return;
+      const s = companionStateRef.current;
+      if ((s !== 'idle' && s !== 'near') || petCareRef.current || carryPetRef.current) return;
+      // —— A6 想你了：太长时间没互动 + 心情 missing → 主动撒娇弹窗（不占用决策） ——
+      if (m.mood === 'missing' && Date.now() >= requestCooldownRef.current && Math.random() < 0.6) {
+        requestCooldownRef.current = Date.now() + 6 * 60_000;
+        setRequest({ kind: 'miss', text: `有 ${Math.round(100 - m.needs.social)} 分想你`, at: Date.now() });
+        return;
+      }
+      void (async () => {
+        // —— A8 特别日子：当天第一次撞上 → 主动庆祝 ——
+        const special = todaySpecial(m);
+        if (special && specialDoneRef.current !== special) {
+          specialDoneRef.current = special;
+          say(`${special}！我一直记着呢，${special.includes('认识') ? '谢谢有你陪着我呀。' : '今天要开开心心的～'}`, 6);
+          cabinEventMemory(companion.id, `今天是${special}，${companion.name}主动提起并为${ownerNameRef.current || '主人'}庆祝。`, 'cabin-special-day', { dedupeSeconds: 3600 });
+          noteInteraction(companion.id, m, { sweet: 3, mood: 6 });
+        }
+        // —— A1 决策：大模型优先（贴人设、有想法），失败规则兜底（永远有得做） ——
+        const now = new Date();
+        const ctx: DecisionCtx = {
+          userName: ownerNameRef.current || '主人',
+          charName: companion.name,
+          myRoom: ROOM_NAMES[roomAt(meRT.current.x, meRT.current.z)],
+          charRoom: ROOM_NAMES[roomAt(taRT.current.x, taRT.current.z)],
+          charActivity: charActivityText(),
+          night: nightRef.current,
+          weather: weatherFx === 'rain' ? '下雨' : weatherFx === 'snow' ? '下雪' : weatherFx === 'overcast' ? '阴天' : weatherFx === 'cloudy' ? '多云' : '晴',
+          timeStr: now.toLocaleString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long', hour: '2-digit', minute: '2-digit' }),
+          minsSinceInteract: (Date.now() - m.lastInteract) / 60_000,
+        };
+        let result: DecisionResult | null = null;
+        try {
+          const reply = await cabinChatTurn([{ role: 'system', content: buildDecisionPrompt(m, ctx) }], useSettings.getState().apiConfig);
+          result = parseDecision(reply);
+        } catch {
+          /* 网络/模型失败 → 规则兜底 */
+        }
+        if (!result) result = decideLocally(m, nightRef.current);
+        // —— A7 想法气泡：决策透明（TA 为什么做这件事） ——
+        if (result.thought) say(result.thought, 4, 'thought');
+        for (const t of result.say) say(t, 5);
+        // —— 执行动作（闹脾气时过滤亲近动作） ——
+        const acts = result.actions
+          .filter((a) => new RegExp(`^(${MIND_ACTS})$`).test(a.type))
+          .filter((a) => !(m.sulk.on && (a.type === 'come' || a.type === 'hug' || a.type === 'holdhand')))
+          .slice(0, 3)
+          .map((a) => ({ kind: a.type as CompanionCmd['kind'], room: a.room as RoomId | undefined, song: a.song, dur: a.dur, memo: 'mind' }));
+        if (acts.length > 0) {
+          companionQueueRef.current = acts.slice(1);
+          issueCompanionCmd(acts[0]);
+        }
+        m.lastDecide = Date.now();
+        saveMind(companion.id, m);
+      })();
+    }, 30_000);
+    return () => clearInterval(iv);
+  }, [companion, request, partnerMenuOpen, chatBusy, pickerOpen, issueCompanionCmd, say, charActivityText, weatherFx]);
+
+  // ---------------- v10 B3 天气联动：下雨关窗 / 下雪点壁炉 / 雨停开窗 ----------------
+
+  useEffect(() => {
+    const prev = prevWeatherRef.current;
+    prevWeatherRef.current = weatherFx;
+    if (!prev || prev === weatherFx || !companion) return;
+    if (modeRef.current !== 'live') return;
+    const s = companionStateRef.current;
+    if ((s !== 'idle' && s !== 'near') || petCareRef.current || carryPetRef.current) return;
+    if (weatherFx === 'rain') {
+      say('下雨了！我去把窗关上。', 4.5, 'thought');
+      issueCompanionCmd({ kind: 'window', open: false, memo: 'close' });
+      cabinBehaviorMemoryOncePerDay(companion.id, 'rain-window', `下雨了，${companion.name}赶紧去把窗户关上，不让雨飘进屋里。`);
+    } else if (weatherFx === 'snow') {
+      const fp = itemsRef.current.find((f) => f.kind === 'fireplace' && !f.st?.on);
+      if (fp) {
+        setItems((p) => p.map((f) => (f.id === fp.id ? { ...f, st: { ...f.st, on: true } } : f)));
+        saveSoon();
+        say('下雪啦，把壁炉点上，屋里暖暖的～', 5);
+        cabinBehaviorMemoryOncePerDay(companion.id, 'snow-fire', `下雪了，${companion.name}点上了壁炉，屋里暖融融的。`);
+      }
+    } else if (prev === 'rain' && weatherFx === 'sunny') {
+      say('雨停啦，开窗透透气～', 4.5, 'thought');
+      issueCompanionCmd({ kind: 'window', open: true, memo: 'open' });
+    }
+  }, [weatherFx, companion, issueCompanionCmd, say, saveSoon]);
 
   /** 自主行动调度：空闲时按人设记忆走动/坐下/看电视/弹琴/做饭/放歌，夜里上床睡觉（已有 roam 漫游兜底） */
   useEffect(() => {
@@ -2355,6 +2679,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         shake: `伸手示意，${nm}跑过来要和你握手啦～`,
         spin: `打个转转的手势，${nm}准备表演啦～`,
         roll: `拍拍地板，${nm}跑来给你打个滚～`,
+        dead: `喊一声「砰！」，看${nm}会不会装死～`,
         ball: '',
       };
       toast(startMsg[kind]);
@@ -2441,7 +2766,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       else if (kind === 'hug') applyStats({ mo: 16, st: 2 }, true);
       else if (kind === 'summon') applyStats({ mo: 4 }, true);
       else if (kind === 'ball') applyStats({ mo: 8 }, true);
-      else if (kind === 'shake' || kind === 'spin' || kind === 'roll') applyStats({ mo: 9 }, true);
+      else if (kind === 'shake' || kind === 'spin' || kind === 'roll' || kind === 'dead') applyStats({ mo: 9 }, true);
       else applyStats({ cl: 18, st: 4 }, true);
       const lvlAfter = petLevelOf({ ...before, care: (before.care ?? 0) + 1 });
       if (lvlAfter > lvlBefore) {
@@ -2463,9 +2788,39 @@ export default function CoupleHome({ close }: { close: () => void }) {
         shake: '伸出小爪爪和你握手，太乖啦～',
         spin: '原地转了个圈圈，毛都转晕乎了～',
         roll: '咕噜噜打了个滚，露出软软的肚皮～',
+        dead: '「砰」的一声直接躺平装死，演技满分！',
         ball: '追着球跑了一圈又叼回来，玩得可开心啦～',
       };
       toast(doneMsg[kind]);
+      // —— v10 C2 训练系统：把戏每练一次熟练度 +1（记在宠物身上，跨会话累积） ——
+      if (kind === 'shake' || kind === 'spin' || kind === 'roll' || kind === 'dead') {
+        const bump = (tr: Record<string, number> | undefined): Record<string, number> => {
+          const t = { ...(tr ?? {}) };
+          t[kind] = (t[kind] ?? 0) + 1;
+          return t;
+        };
+        if (isCat) setPet((p) => ({ ...p, train: bump(p.train) }));
+        else setPets2((prev) => prev.map((p, j) => (j === idx ? { ...p, train: bump(p.train) } : p)));
+        const n = ((isCat ? petRef.current.train?.[kind] : pets2Ref.current[idx]?.train?.[kind]) ?? 0) + 1;
+        if (n % 5 === 0) toast(`${targetName}的「${doneMsg[kind] ? { shake: '握手', spin: '转圈', roll: '打滚', dead: '装死' }[kind] : ''}」熟练度 +1（已练 ${n} 次）～`);
+        // —— v10 C2 学会了会自己表演：熟练度够了，练完偶发自己再来一段 ——
+        if (n >= 3 && Math.random() < 0.4 && !petCareRef.current) {
+          const lvlNow = petLevelOf(before);
+          const pool = PET_TRICK_DEFS.filter((t) => t.kind !== kind && lvlNow >= t.lvl);
+          if (pool.length > 0) {
+            const pick = pool[Math.floor(Math.random() * pool.length)];
+            const tgt = activePetRef.current;
+            setTimeout(() => {
+              if (petCareRef.current || carryPetRef.current) return;
+              petSeq.current += 1;
+              petCmdRef.current = { kind: pick.kind, seq: petSeq.current, target: tgt };
+              toast(`${targetName}自己表演了一段${pick.label}！`);
+            }, 1600);
+          }
+        }
+      }
+      // —— v10 C4 宠物日记：照顾/把戏完成自动记一篇 ——
+      addPetDiary(`${targetName}：${doneMsg[kind]}`);
       saveSoon();
     },
     [toast, saveSoon],
@@ -4705,6 +5060,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <Heart className="h-2.5 w-2.5" />
                   领伙伴
                 </button>
+                <button
+                  onClick={() => {
+                    setPetDiaryOpen(true);
+                    sfx.tap();
+                  }}
+                  aria-label="翻翻宠物日记"
+                  className="flex h-6 shrink-0 items-center gap-0.5 rounded-full bg-[#e8b06a]/90 px-2 text-[9.5px] font-bold text-white shadow-sm transition active:scale-90"
+                >
+                  <BookOpen className="h-2.5 w-2.5" />
+                  日记
+                </button>
               </div>
 
               {/* v7.2 互动按钮（面板下方）：六种照顾动作 + v8.3 扔球/成长把戏，抱抱抱着时变「放下」 */}
@@ -4961,6 +5327,42 @@ export default function CoupleHome({ close }: { close: () => void }) {
                         <span className="rounded-full bg-[#f0eff1] px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90]">已关</span>
                       )}
                     </button>
+                    {/* v10 A3 甜度/情绪一览（只读） */}
+                    {(() => {
+                      const mind = mindRef.current;
+                      if (!mind) return null;
+                      const lv = affinityLevelOf(mind.affinity);
+                      const MOOD: Record<string, string> = { happy: '开心', content: '平静', low: '有点蔫', missing: '想你', sulking: '闹脾气' };
+                      const NEEDS = [
+                        { k: '饱腹', v: mind.needs.food, c: '#e8a06a' },
+                        { k: '精力', v: mind.needs.energy, c: '#7fa8c9' },
+                        { k: '心情', v: mind.needs.mood, c: '#e4a0a8' },
+                        { k: '想你', v: 100 - mind.needs.social, c: '#b89ad4' },
+                      ];
+                      return (
+                        <div className="mx-1 mt-1 rounded-xl bg-[#fdf6f3] px-3 py-2.5">
+                          <div className="flex items-center gap-2 text-[12px] font-semibold text-[#3a3a3e]">
+                            <Heart className="h-3.5 w-3.5 shrink-0 text-[#e88a9a]" />
+                            <span>TA 的心 · Lv.{lv.lv} {lv.title}</span>
+                            <span className="ml-auto text-[10.5px] font-normal text-[#c98a9a]">甜度 {Math.round(mind.affinity)} · {MOOD[mind.mood]}</span>
+                          </div>
+                          <div className="mt-2 grid grid-cols-4 gap-1.5">
+                            {NEEDS.map((n) => (
+                              <div key={n.k} className="rounded-lg bg-white/70 px-1.5 py-1 text-center ring-1 ring-white/80">
+                                <div className="text-[9.5px] text-[#a09a94]">{n.k}</div>
+                                <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-[#f0e8e2]">
+                                  <div className="h-full rounded-full transition-all" style={{ width: `${Math.round(n.v)}%`, background: n.c }} />
+                                </div>
+                                <div className="mt-0.5 text-[9px] font-semibold" style={{ color: n.c }}>{Math.round(n.v)}</div>
+                              </div>
+                            ))}
+                          </div>
+                          {mind.sulk.on && (
+                            <div className="mt-1.5 text-center text-[10.5px] text-[#c97a8a]">TA 正在闹小脾气，说句好听的哄哄 TA 吧～</div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {/* v8.0 换个TA：重弹陪伴角色选择列表 */}
                     <button
                       onClick={openPicker}
@@ -5137,6 +5539,33 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 >
                   <ImagePlus className="h-[17px] w-[17px]" />
                 </button>
+                {/* v10 E2 连续语音对讲：免打字对讲机模式 */}
+                <button
+                  onClick={toggleIntercom}
+                  aria-label={intercomOn ? '关闭对讲模式' : '开启对讲模式'}
+                  aria-pressed={intercomOn}
+                  title="对讲模式：连续说话，每句自动发送"
+                  className={
+                    intercomOn
+                      ? 'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#5aa58a] text-white shadow transition active:scale-90'
+                      : 'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8a837a] transition active:scale-90'
+                  }
+                >
+                  {intercomOn && <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-[#5aa58a]/35" />}
+                  <Radio className="h-[17px] w-[17px]" />
+                </button>
+                {/* v10 E1 聊天记录回看 */}
+                <button
+                  onClick={() => {
+                    setChatHistOpen(true);
+                    sfx.tap();
+                  }}
+                  aria-label="查看聊天记忆"
+                  title="和 TA 的聊天记忆"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8a837a] transition active:scale-90"
+                >
+                  <History className="h-[17px] w-[17px]" />
+                </button>
                 {/* 麦克风：点击说话，再点停止并自动发送 */}
                 <button
                   onClick={toggleMic}
@@ -5244,10 +5673,24 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 </div>
                 <p className="text-[15px] font-semibold text-[#3a3a3e]">
                   {companion.name}
-                  {request.kind === 'hug' ? '想要拥抱你' : '想牵牵你的手'}
+                  {request.kind === 'hug'
+                    ? '想要拥抱你'
+                    : request.kind === 'holdhand'
+                      ? '想牵牵你的手'
+                      : request.kind === 'meal'
+                        ? '喊你来吃饭'
+                        : request.kind === 'miss'
+                          ? '说 TA 想你了'
+                          : '有话想对你说'}
                 </p>
                 <p className="mb-4 mt-1 text-[11.5px] text-[#9a9a96]">
-                  {request.kind === 'hug' ? 'TA 张开了双臂，就站在你面前' : 'TA 朝你伸出了手'}
+                  {request.kind === 'hug'
+                    ? 'TA 张开了双臂，就站在你面前'
+                    : request.kind === 'holdhand'
+                      ? 'TA 朝你伸出了手'
+                      : request.kind === 'meal'
+                        ? '一桌好菜已经端上桌，就等你啦'
+                        : (request.text ?? '点同意，TA 就会走到你身边')}
                 </p>
                 <div className="flex gap-2">
                   <button
@@ -5270,6 +5713,66 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
         {/* 乐器弹奏覆盖层（吉他弦/钢琴键，点按真实发声） */}
         {inst && <InstrumentOverlay kind={inst.kind} onClose={closeInst} />}
+
+        {/* v10 E1 聊天记录回看面板 */}
+        <CabinHistorySheet open={chatHistOpen} onClose={() => setChatHistOpen(false)} charId={companion?.id ?? 'x'} charName={companion?.name ?? 'TA'} />
+
+        {/* v10 C4 宠物日记面板（毛玻璃抽屉，读 cabin-pet-diary） */}
+        <AnimatePresence>
+          {petDiaryOpen && (
+            <>
+              <motion.div
+                key="pet-diary-mask"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 z-[64] bg-black/25"
+                onClick={() => setPetDiaryOpen(false)}
+              />
+              <motion.div
+                key="pet-diary"
+                initial={{ y: '100%' }}
+                animate={{ y: 0 }}
+                exit={{ y: '100%' }}
+                transition={{ type: 'spring', damping: 30, stiffness: 320 }}
+                className="absolute inset-x-0 bottom-0 z-[66] mx-auto max-w-[430px] rounded-t-[26px] border border-white/60 bg-white/60 p-4 shadow-[0_-8px_40px_rgba(120,70,80,0.22)] backdrop-blur-2xl"
+                role="dialog"
+                aria-label="宠物日记"
+              >
+                <div className="mb-2 flex items-center">
+                  <p className="text-[14px] font-bold text-[#3a3a3e]">{activePetName}的日记</p>
+                  <button
+                    onClick={() => setPetDiaryOpen(false)}
+                    aria-label="关闭日记"
+                    className="ml-auto flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-[#8a837a] ring-1 ring-white/70 transition active:scale-90"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="max-h-[38vh] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-[4px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#e3c8d1]">
+                  {(() => {
+                    const list = loadPetDiary();
+                    if (list.length === 0) {
+                      return <p className="py-6 text-center text-[12px] text-[#b0a8a0]">日记还是空的，多陪陪它、照顾它，就会一篇篇写满啦～</p>;
+                    }
+                    return (
+                      <div className="flex flex-col gap-1.5">
+                        {list
+                          .slice()
+                          .reverse()
+                          .map((e, i) => (
+                            <div key={`${e.ts}-${i}`} className="rounded-2xl bg-white/75 px-3 py-2 text-[12px] leading-relaxed text-[#5a5a5e] ring-1 ring-white/70">
+                              {e.text}
+                            </div>
+                          ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
 
         {/* 编辑模式：缩放按钮（右缘中部） */}
         {mode === 'edit' && (

@@ -74,6 +74,8 @@ export interface WebSpeechSession {
 export function startWebSpeechSession(opts: {
   lang?: string;
   onPartial?: (text: string) => void;
+  /** 每句定稿回调（v10 对讲机模式：逐句自动发送） */
+  onFinal?: (text: string) => void;
 }): WebSpeechSession | null {
   if (typeof window === 'undefined') return null;
   const w = window as unknown as { SpeechRecognition?: SpeechRecognitionCtor; webkitSpeechRecognition?: SpeechRecognitionCtor };
@@ -115,7 +117,10 @@ export function startWebSpeechSession(opts: {
       const r = e.results[i];
       const t = r?.[0]?.transcript ?? '';
       if (r.isFinal) {
-        if (t.trim()) finals.push(t);
+        if (t.trim()) {
+          finals.push(t);
+          opts.onFinal?.(t.trim());
+        }
       } else {
         interim += t;
       }

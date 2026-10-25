@@ -1419,6 +1419,54 @@ export default function CharChibi3D({ rt, who, hide, poseRef, poseRef2, carryRef
       head.rotation.z = dampN(head.rotation.z, Math.sin(t * 1.6) * 0.04, 8, dt);
       return;
     }
+    if (pose === 'dance') {
+      // —— 跳舞（v10 决策大脑）：双臂上举随节拍摆动，踮脚轻跳，身子左右扭 ——
+      standBase();
+      const beat = Math.sin(t * 4.6);
+      const beat2 = Math.sin(t * 2.3);
+      armL.rotation.x = dampN(armL.rotation.x, -2.2, 10, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -2.2, 10, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.5 + beat * 0.42, 12, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.5 + beat * 0.42, 12, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.5 + beat * 0.24, 12, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.5 - beat * 0.24, 12, dt);
+      root.position.y = dampN(root.position.y, Math.abs(Math.sin(t * 4.6)) * 0.038, 12, dt);
+      root.rotation.z = dampN(root.rotation.z, beat2 * 0.075, 10, dt);
+      head.rotation.x = dampN(head.rotation.x, -0.06, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, -beat2 * 0.09, 10, dt);
+      return;
+    }
+    if (pose === 'stretch') {
+      // —— 伸懒腰（v10 决策大脑）：双臂高举过头 + 挺腰仰头，呼吸式使劲 ——
+      standBase();
+      const k = (Math.sin(t * 1.35) + 1) / 2;
+      armL.rotation.x = dampN(armL.rotation.x, -2.75, 8, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -2.75, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.14, 8, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.14, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.08, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.08, 8, dt);
+      root.rotation.x = dampN(root.rotation.x, -0.07 - k * 0.05, 8, dt);
+      root.position.y = dampN(root.position.y, k * 0.016, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, -0.2 - k * 0.1, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, 0, 8, dt);
+      return;
+    }
+    if (pose === 'water') {
+      // —— 浇花（v10 决策大脑）：双手前伸持壶，身体前倾随节奏倾斜壶口 ——
+      standBase();
+      const tilt = (Math.sin(t * 1.5) + 1) / 2;
+      root.rotation.x = dampN(root.rotation.x, 0.12, 9, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -1.28, 10, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -1.22, 10, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.3, 8, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.34, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.5 + tilt * 0.22, 10, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.46 + tilt * 0.22, 10, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.22, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 1.2) * 0.03, 8, dt);
+      return;
+    }
 
     if (pose === 'hug') {
       // —— 拥抱（v8.0 陪伴交互）：双臂前伸环抱 + 身体前倾 + 头轻靠，随呼吸轻晃 ——

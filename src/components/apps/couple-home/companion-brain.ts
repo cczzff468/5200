@@ -83,6 +83,8 @@ const ACT_RULES = [
   '  · cook：走到灶台前做一顿饭（做完菜会自动端上餐桌）；',
   '  · music：走到音箱/唱片机前放首歌（也可带 song 参数，同曲库）；door：把最近一扇关着的门打开；',
   '  · eat：坐到餐桌边吃饭（要等饭做好了才有得吃，做饭之后可以接 eat）；',
+  '  · dance：原地跳舞；stretch：伸懒腰；water：走到花盆/花箱旁浇花；read：找地方坐下看书；',
+  '  · window：走到窗边开/关窗（可带 open 参数：{"type":"window","open":false} 关窗挡雨 / true 开窗通风；不带 = 关上开着的窗）；',
   '  · hug：走过去拥抱用户；holdhand：牵起用户的手（之后会一直牵着）；free：停止动作、自由活动（也可以松开手）；',
   '- 例：用户说「去卧室等我」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"goto","room":"br"},{"type":"sit"}]}<<END>>（走过去坐下）；',
   '- 例：用户说「给我弹首钢琴曲」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"play"}]}<<END>>；',
@@ -182,7 +184,7 @@ export async function cabinChatTurn(
 /** 解析后的 AI 回复：多条气泡消息 + 拦截到的动作序列 */
 export interface ParsedReply {
   msgs: string[];
-  actions: { type: string; room?: RoomId; song?: string }[];
+  actions: { type: string; room?: RoomId; song?: string; open?: boolean }[];
   /** 原始全文（记忆提取用） */
   raw: string;
 }
@@ -194,8 +196,9 @@ const ACT_RE = /<<ACT>>([\s\S]*?)<<END>>/;
 const ACT_KINDS = new Set([
   'come', 'goto', 'sit', 'lie', 'watch', 'lamp', 'hug', 'holdhand', 'free',
   'play', 'cook', 'music', 'door', 'eat',
+  'dance', 'stretch', 'water', 'read', 'window',
 ]);
-const ROOM_IDS = new Set(['lr', 'br', 'kt', 'ba', 'bal']);
+const ROOM_IDS = new Set(['lr', 'br', 'kt', 'ba', 'bal', 'sr', 'yd']);
 
 /**
  * 拦截解析 AI 回复：
@@ -205,7 +208,7 @@ const ROOM_IDS = new Set(['lr', 'br', 'kt', 'ba', 'bal']);
  */
 export function parseAiReply(text: string): ParsedReply {
   const raw = text ?? '';
-  const actions: { type: string; room?: RoomId; song?: string }[] = [];
+  const actions: { type: string; room?: RoomId; song?: string; open?: boolean }[] = [];
   let body = raw;
   const m = ACT_RE.exec(raw);
   if (m) {
@@ -215,13 +218,14 @@ export function parseAiReply(text: string): ParsedReply {
       if (Array.isArray(parsed.actions)) {
         for (const a of parsed.actions) {
           if (!a || typeof a !== 'object') continue;
-          const rec = a as { type?: unknown; room?: unknown; song?: unknown };
+          const rec = a as { type?: unknown; room?: unknown; song?: unknown; open?: unknown };
           if (typeof rec.type !== 'string') continue;
           const t = rec.type.trim();
           if (!ACT_KINDS.has(t)) continue;
           const room = typeof rec.room === 'string' && ROOM_IDS.has(rec.room) ? (rec.room as RoomId) : undefined;
           const song = typeof rec.song === 'string' && rec.song.trim() ? rec.song.trim().slice(0, 24) : undefined;
-          actions.push({ type: t, ...(room ? { room } : {}), ...(song ? { song } : {}) });
+          const open = typeof rec.open === 'boolean' ? rec.open : undefined;
+          actions.push({ type: t, ...(room ? { room } : {}), ...(song ? { song } : {}), ...(open !== undefined ? { open } : {}) });
         }
       }
     } catch {

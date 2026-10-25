@@ -439,7 +439,7 @@ export interface PetWear {
   bow?: string | null;
 }
 
-/** 宠物成长/装扮持久化字段（v8.3：since 收养时间 / care 累计照顾次数 / coat 毛色 / wear 装扮） */
+/** 宠物成长/装扮持久化字段（v8.3：since 收养时间 / care 累计照顾次数 / coat 毛色 / wear 装扮；v10 C2：train 把戏训练次数） */
 export interface PetExtra {
   /** 收养时刻（毫秒；成长系统按陪伴天数升级） */
   since?: number;
@@ -449,6 +449,8 @@ export interface PetExtra {
   coat?: PetCoat;
   /** 装扮（项圈/围巾/蝴蝶结） */
   wear?: PetWear;
+  /** v10 C2 训练系统：把戏名（shake/spin/roll/dead）→ 练习次数（熟练度） */
+  train?: Record<string, number>;
 }
 
 /**
@@ -487,8 +489,8 @@ export interface PetState extends PetExtra {
   ts: number;
 }
 
-/** 宠物照顾动作种类（v7.0：+洗澡 / 抱抱 / 召唤；v8.3 成长解锁：+握手 / 转圈 / 打滚；+玩具球） */
-export type PetCareKind = 'pat' | 'feed' | 'water' | 'bath' | 'hug' | 'summon' | 'shake' | 'spin' | 'roll' | 'ball';
+/** 宠物照顾动作种类（v7.0：+洗澡 / 抱抱 / 召唤；v8.3 成长解锁：+握手 / 转圈 / 打滚；+玩具球；v10 C2：+装死训练） */
+export type PetCareKind = 'pat' | 'feed' | 'water' | 'bath' | 'hug' | 'summon' | 'shake' | 'spin' | 'roll' | 'ball' | 'dead';
 
 /** G1 装修方案快照（家具整组 + 各房间地板/墙色；不含照片 —— 相框照片不随方案备份，控制存档体积） */
 export interface LayoutSnap {
@@ -643,7 +645,11 @@ export type CharPose =
   | 'petcare'
   // —— v8.0 陪伴交互（拾光小屋）：拥抱 / 牵手（双方通用姿势） ——
   | 'hug'
-  | 'holdhand';
+  | 'holdhand'
+  // —— v10 决策大脑新姿势：跳舞 / 伸懒腰 / 浇花 ——
+  | 'dance'
+  | 'stretch'
+  | 'water';
 
 /** 小人正在执行的家具动作（走向家具 → 摆姿势） */
 export interface CharAction {

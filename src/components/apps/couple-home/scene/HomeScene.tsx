@@ -185,11 +185,13 @@ export interface HomeSceneProps {
   pets2?: Pet2State[];
 }
 
-/** v8.0 头顶气泡指令（who = 挂在谁头上；hold = 展示秒数，缺省按字数） */
+/** v8.0 头顶气泡指令（who = 挂在谁头上；hold = 展示秒数，缺省按字数；kind='thought' = 想法气泡） */
 export interface BubbleCmd {
   who: 'me' | 'ta';
   text: string;
   hold?: number;
+  /** v10 A7：thought = 想法气泡（云朵淡蓝描边 + 💭 前缀，决策透明） */
+  kind?: 'thought';
 }
 
 /** 生活模式视角俯仰范围：接近水平（低角仰视）↔ 近乎俯瞰（全方位拉动视角） */
@@ -1545,6 +1547,8 @@ const PET_CARE_DUR: Record<PetCareKind, number> = {
   pat: 2.0, feed: 4.2, water: 4.2, bath: 4.6, hug: 3.4, summon: 1.6,
   // v8.3 成长解锁的小把戏（握手/转圈/打滚）；ball 走独立通道（时长 0 不入 care 管线）
   shake: 3.0, spin: 3.4, roll: 3.6, ball: 0,
+  // v10 C2 训练系统新把戏：装死（侧倒四脚朝天）
+  dead: 3.8,
 };
 
 /** 走向小人速度（召唤 = 一叫就到，疾跑） */
@@ -1557,6 +1561,9 @@ const PET_COATS: Record<PetCoat, { body: string; head: string; tail: string }> =
   gray: { body: '#b3b7c1', head: '#c4c8d1', tail: '#a5a9b4' },
   cow: { body: '#f6f5f2', head: '#faf9f7', tail: '#efeeea' },
 };
+
+// ---------------- v10 C3 多宠社交：全屋宠物 rt 注册表（互相追逐/打招呼用） ----------------
+const PET_RT_REG = new Map<string, CharRT>();
 
 /** v8.3 小剧场贴图：蝴蝶（双粉翅）/ 萤火虫（暖光晕） */
 function makeTheaterTexture(kind: 'butterfly' | 'firefly'): THREE.CanvasTexture {
@@ -1860,6 +1867,8 @@ function PetBuddy({
   modeRef.current = mode;
   /** 漫游状态（同 CharRT：全屋随机遛弯，roam() 复用） */
   const rt = useRef<CharRT>({ x: -1.4, z: 1.5, heading: 2.2, moving: false, target: null, nextWander: 0 });
+  // v10 C3 多宠社交：注册自己 / 追逐兄弟宠物
+  const sibChase = useRef<{ id: string; until: number } | null>(null);
   const root = useRef<THREE.Group>(null);
   const tail = useRef<THREE.Group>(null);
   const earL = useRef<THREE.Group>(null);
@@ -1927,13 +1936,25 @@ function PetBuddy({
 
   // —— v8.3 小剧场（D：白天追蝴蝶 / 夜里扑萤火虫 / 雨天躲屋檐） ——
   const theater = useRef<{
-    kind: 'butterfly' | 'firefly' | 'rain' | null;
+    kind: 'butterfly' | 'firefly' | 'rain' | 'laser' | 'box' | 'mirror' | null;
     t: number;
     ax: number;
     az: number;
     pounced: number;
+    /** v10 C1 镜子惊吓：已跳过没有 */
+    scared?: boolean;
   }>({ kind: null, t: 0, ax: 0, az: 0, pounced: 0 });
+  /** v10 C1 纸箱：钻箱小剧场用（出现/隐藏） */
+  const boxRef = useRef<THREE.Group>(null);
+  const boxFade = useRef(0);
   const nextTheaterAt = useRef(14 + Math.random() * 10);
+  // v10 C3：把自己（猫）注册进宠物 rt 注册表（互相追逐用）
+  useEffect(() => {
+    PET_RT_REG.set('cat', rt.current);
+    return () => {
+      PET_RT_REG.delete('cat');
+    };
+  }, []);
   const bflySp = useRef<THREE.Sprite>(null);
   const flySp = useRef<(THREE.Sprite | null)[]>([null, null, null]);
   const flyBeat = useRef<number[]>([0, 1.3, 2.6]);
@@ -2266,6 +2287,10 @@ function PetBuddy({
           trickSpin.current += dt * ((Math.PI * 4) / PET_CARE_DUR.spin);
         } else if (c.kind === 'roll') {
           trickSpin.current += dt * ((Math.PI * 2) / PET_CARE_DUR.roll);
+        } else if (c.kind === 'dead') {
+          // v10 C2 装死：侧倒 0.75π（最后定格四脚朝天），配一声小哼哼
+          trickSpin.current += dt * ((Math.PI * 0.75) / PET_CARE_DUR.dead);
+          if (c.t < dt * 1.5) sfx.meow();
         }
         // 小人走远了 → 中断（抱抱/抱着贴在怀里不会超）
         if (c.kind !== 'hug' && Math.hypot(meRT.x - rt.current.x, meRT.z - rt.current.z) > 0.75) {
@@ -2366,23 +2391,25 @@ function PetBuddy({
         const th = theater.current;
         if (th.kind) {
           th.t += dt;
-          if (th.kind === 'butterfly') {
-            // 蝴蝶绕锚点翩翩飞，猫踮着步子追
-            const bx = th.ax + Math.sin(t * 1.7) * 0.5;
-            const bz = th.az + Math.cos(t * 1.3) * 0.5;
+          if (th.kind === 'butterfly' || th.kind === 'laser') {
+            // 蝴蝶绕锚点翩翩飞，猫踮着步子追；v10 C1 激光笔 = 红点高速乱窜（猫疯追）
+            const L = th.kind === 'laser';
+            const bx = th.ax + Math.sin(t * (L ? 3.6 : 1.7)) * (L ? 0.72 : 0.5);
+            const bz = th.az + Math.cos(t * (L ? 2.9 : 1.3)) * (L ? 0.72 : 0.5);
             if (bflySp.current) {
               bflySp.current.visible = true;
               bflySp.current.position.set(bx, 0.4 + Math.sin(t * 3.1) * 0.08, bz);
               bflySp.current.material.rotation = Math.sin(t * 9) * 0.5;
               const m = bflySp.current.material as THREE.SpriteMaterial;
               m.opacity = Math.min(1, th.t / 0.6) * (th.t > 7.4 ? Math.max(0, (8 - th.t) / 0.6) : 1);
-              bflySp.current.scale.setScalar(0.2);
+              bflySp.current.scale.setScalar(L ? 0.1 : 0.2);
+              m.color.set(L ? '#ff5a5a' : '#e8b7c4');
             }
             const dx = bx - rt.current.x;
             const dz = bz - rt.current.z;
             const d = Math.hypot(dx, dz);
             if (d > 0.3) {
-              const sp = 1.25 * dt;
+              const sp = (L ? 2.1 : 1.25) * dt;
               rt.current.x += (dx / d) * Math.min(sp, d);
               rt.current.z += (dz / d) * Math.min(sp, d);
               rt.current.moving = true;
@@ -2396,6 +2423,67 @@ function PetBuddy({
               th.kind = null;
               if (bflySp.current) bflySp.current.visible = false;
               rt.current.target = null;
+            }
+          } else if (th.kind === 'box') {
+            // —— v10 C1 钻纸箱：纸箱出现在旁边 → 钻进去窝一会儿 → 出来（箱子淡出） ——
+            if (boxRef.current) {
+              boxFade.current = Math.min(1, boxFade.current + dt * 2.2);
+              boxRef.current.visible = boxFade.current > 0.02;
+              boxRef.current.position.set(th.ax, 0, th.az);
+              boxRef.current.rotation.y = th.az * 1.7;
+              boxRef.current.scale.setScalar(Math.max(0.02, boxFade.current));
+            }
+            const dx2 = th.ax - rt.current.x;
+            const dz2 = th.az - rt.current.z;
+            const d2 = Math.hypot(dx2, dz2);
+            if (th.t < 3.2 && d2 > 0.34) {
+              rt.current.target = { x: th.ax, z: th.az };
+              rt.current.route = undefined;
+              rt.current.nextWander = Number.POSITIVE_INFINITY;
+              roamStep(rt.current, dt, itemsRef.current, doors, ROAM_CAT.speed * 1.25);
+            } else {
+              rt.current.target = null;
+              rt.current.moving = false;
+              rt.current.x = THREE.MathUtils.damp(rt.current.x, th.ax, 5, dt);
+              rt.current.z = THREE.MathUtils.damp(rt.current.z, th.az, 5, dt);
+            }
+            if (th.t > 9) {
+              th.kind = null;
+              rt.current.target = null;
+              rt.current.nextWander = performance.now() / 1000 + 2.5;
+            }
+          } else if (th.kind === 'mirror') {
+            // —— v10 C1 照镜子炸毛：凑近落地镜 → 认不出自己 → 猛地后跳 → 逃开 ——
+            const dx3 = th.ax - rt.current.x;
+            const dz3 = th.az - rt.current.z;
+            const d3 = Math.hypot(dx3, dz3);
+            if (!th.scared) {
+              if (d3 > 0.5) {
+                rt.current.target = { x: th.ax, z: th.az };
+                rt.current.route = undefined;
+                rt.current.nextWander = Number.POSITIVE_INFINITY;
+                roamStep(rt.current, dt, itemsRef.current, doors, ROAM_CAT.speed);
+              } else {
+                rt.current.target = null;
+                rt.current.moving = false;
+                th.scared = true;
+                hopY.current = 0.22;
+                sfx.meow();
+              }
+            } else {
+              const fx = rt.current.x - th.ax;
+              const fz = rt.current.z - th.az;
+              const fd = Math.max(0.001, Math.hypot(fx, fz));
+              rt.current.x += (fx / fd) * 1.5 * dt;
+              rt.current.z += (fz / fd) * 1.5 * dt;
+              rt.current.moving = true;
+              rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(fx, fz), Math.min(1, dt * 8));
+              collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
+            }
+            if (th.t > 6.5) {
+              th.kind = null;
+              rt.current.target = null;
+              rt.current.nextWander = performance.now() / 1000 + 3;
             }
           } else if (th.kind === 'firefly') {
             // 夜里萤火虫忽明忽暗地飘，猫蹲守着扑跳
@@ -2483,11 +2571,75 @@ function PetBuddy({
               th.ax = rt.current.x + (Math.random() - 0.5) * 1.6;
               th.az = rt.current.z + (Math.random() - 0.5) * 1.6;
             } else {
-              th.kind = 'butterfly';
-              th.t = 0;
-              th.ax = rt.current.x + (Math.random() - 0.5) * 1.4;
-              th.az = rt.current.z + (Math.random() - 0.5) * 1.4;
+              const roll = Math.random();
+              if (roll < 0.42) {
+                th.kind = 'butterfly';
+                th.t = 0;
+                th.ax = rt.current.x + (Math.random() - 0.5) * 1.4;
+                th.az = rt.current.z + (Math.random() - 0.5) * 1.4;
+              } else if (roll < 0.62) {
+                // v10 C1 激光笔：红点乱窜，猫疯追
+                th.kind = 'laser';
+                th.t = 0;
+                th.ax = rt.current.x + (Math.random() - 0.5) * 1.6;
+                th.az = rt.current.z + (Math.random() - 0.5) * 1.6;
+              } else if (roll < 0.8) {
+                // v10 C1 钻纸箱
+                th.kind = 'box';
+                th.t = 0;
+                th.scared = false;
+                th.ax = rt.current.x + (Math.random() < 0.5 ? -1 : 1) * (0.7 + Math.random() * 0.4);
+                th.az = rt.current.z + (Math.random() - 0.5) * 0.9;
+              } else {
+                // v10 C1 照镜子炸毛（家里有落地镜才演）
+                const mir = itemsRef.current.find((f) => f.kind === 'standingMirror' && (f.y ?? 0) < 0.45);
+                if (mir) {
+                  th.kind = 'mirror';
+                  th.t = 0;
+                  th.scared = false;
+                  const ry = mir.ry ?? 0;
+                  th.ax = mir.x + Math.sin(ry) * 0.55;
+                  th.az = mir.z + Math.cos(ry) * 0.55;
+                }
+              }
             }
+          }
+          // v10 C1 纸箱淡出收尾（剧场结束后缩没）
+          if (!th.kind && boxRef.current) {
+            boxFade.current = Math.max(0, boxFade.current - dt * 1.6);
+            boxRef.current.scale.setScalar(Math.max(0.02, boxFade.current));
+            if (boxFade.current <= 0.02) boxRef.current.visible = false;
+          }
+          // —— v10 C3 多宠社交：猫偶尔追着兄弟宠物跑（追上 = 开心跳一下冒爱心） ——
+          const nowS = performance.now() / 1000;
+          const sc = sibChase.current;
+          if (sc) {
+            const sib = PET_RT_REG.get(sc.id);
+            if (!sib || nowS > sc.until) {
+              sibChase.current = null;
+              rt.current.target = null;
+            } else {
+              const dxs = sib.x - rt.current.x;
+              const dzs = sib.z - rt.current.z;
+              const ds = Math.hypot(dxs, dzs);
+              if (ds > 0.42) {
+                rt.current.target = { x: sib.x, z: sib.z };
+                rt.current.route = undefined;
+                rt.current.nextWander = Number.POSITIVE_INFINITY;
+                roamStep(rt.current, dt, itemsRef.current, doors, ROAM_CAT.speed * 1.6);
+              } else {
+                rt.current.target = null;
+                rt.current.moving = false;
+                hopY.current = Math.max(hopY.current, 0.12);
+                heartT.current = heartT.current.map((v) => (v < nowS ? nowS + 0.05 + Math.random() * 0.3 : v));
+                sfx.meow();
+                sibChase.current = null;
+                rt.current.nextWander = nowS + 2.2;
+              }
+            }
+          } else if (PET_RT_REG.size > 1 && Math.random() < dt * 0.025) {
+            const ids = [...PET_RT_REG.keys()].filter((k) => k !== 'cat');
+            if (ids.length > 0) sibChase.current = { id: ids[Math.floor(Math.random() * ids.length)], until: nowS + 5.5 };
           }
           roam(rt.current, dt, itemsRef.current, doors, ROAM_CAT);
         }
@@ -2501,7 +2653,7 @@ function PetBuddy({
     const mv = rt.current.moving;
     const lift = hugLift.current;
     // v8.3 打滚：侧滚一周（沿 z 翻转 2π）+ 离地小弧；转圈：原地自转
-    const rolling = care.current?.kind === 'roll' ? trickSpin.current : 0;
+    const rolling = care.current?.kind === 'roll' || care.current?.kind === 'dead' ? trickSpin.current : 0;
     const spinning = care.current?.kind === 'spin' ? trickSpin.current : 0;
     if (se > 0.02 && !care.current) {
       // 睡觉：贴在窝中心 + 呼吸起伏（覆盖常规位置）
@@ -2954,6 +3106,17 @@ function PetBuddy({
     </group>
     {/* v8.3 小剧场精灵：蝴蝶（白天追）/ 萤火虫 ×3（夜里扑） */}
     <sprite ref={bflySp} material={bflyMat} visible={false} />
+    {/* v10 C1 钻纸箱小剧场：临时纸箱（出现/淡出由剧场驱动） */}
+    <group ref={boxRef} visible={false}>
+      <mesh castShadow>
+        <boxGeometry args={[0.52, 0.4, 0.46]} />
+        <meshStandardMaterial color="#d9b98a" roughness={0.95} transparent opacity={0.97} />
+      </mesh>
+      <mesh position={[0, 0.21, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[0.4, 0.36]} />
+        <meshBasicMaterial color="#8a6b4a" transparent opacity={0.55} depthWrite={false} />
+      </mesh>
+    </group>
     {[0, 1, 2].map((i) => (
       <sprite
         key={`fly-${i}`}
@@ -3589,10 +3752,11 @@ const BUBBLE_SS = 3;
  * 文字气泡贴图：白底圆角 + 樱粉描边 + 底部小尾巴 + 自动换行（15 字/行，最多 5 行，超出省略号）。
  * 纯 canvas 绘制不依赖 DOM；宽度按字符宽度估算（CJK 全宽 / 半角半宽）；3x 超采样保证高清。
  */
-function makeBubbleTexture(text: string): { tex: THREE.CanvasTexture; w: number; h: number } {
-  const hit = bubbleTexCache.get(text);
+function makeBubbleTexture(text: string, thought = false): { tex: THREE.CanvasTexture; w: number; h: number } {
+  const cacheKey = (thought ? '\u3031\u3031' : '') + text;
+  const hit = bubbleTexCache.get(cacheKey);
   if (hit) return hit;
-  const raw = text.replace(/\s+/g, ' ').trim().slice(0, 120);
+  const raw = (thought ? '\ud83d\udcad ' : '') + text.replace(/\s+/g, ' ').trim().slice(0, 120);
   const PER_LINE = 15;
   const lines: string[] = [];
   for (let i = 0; i < raw.length; i += PER_LINE) {
@@ -3611,10 +3775,11 @@ function makeBubbleTexture(text: string): { tex: THREE.CanvasTexture; w: number;
   const ctx = cv.getContext('2d')!;
   ctx.scale(SS, SS); // 之后的绘制全部用逻辑坐标，输出即 3x 高清
   const r = 18;
-  // 气泡主体（留出底部尾巴空间）
+  // 气泡主体（留出底部尾巴空间）；想法气泡 = 淡蓝云朵描边（与对话气泡区分）
   const bh = H - 18;
-  ctx.fillStyle = 'rgba(255,255,255,0.96)';
-  ctx.strokeStyle = 'rgba(240,180,196,0.95)';
+  ctx.fillStyle = thought ? 'rgba(246,250,255,0.95)' : 'rgba(255,255,255,0.96)';
+  ctx.strokeStyle = thought ? 'rgba(150,180,205,0.9)' : 'rgba(240,180,196,0.95)';
+  if (thought) ctx.setLineDash([9, 7]);
   ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.moveTo(r + 3, 3);
@@ -3625,10 +3790,12 @@ function makeBubbleTexture(text: string): { tex: THREE.CanvasTexture; w: number;
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
+  ctx.setLineDash([]);
   // 尾巴（指向下方小人）
   const tx = Math.min(W - 40, Math.max(40, W / 2));
-  ctx.fillStyle = 'rgba(255,255,255,0.96)';
-  ctx.strokeStyle = 'rgba(240,180,196,0.95)';
+  ctx.fillStyle = thought ? 'rgba(246,250,255,0.95)' : 'rgba(255,255,255,0.96)';
+  ctx.strokeStyle = thought ? 'rgba(150,180,205,0.9)' : 'rgba(240,180,196,0.95)';
+  if (thought) ctx.setLineDash([9, 7]);
   ctx.beginPath();
   ctx.moveTo(tx - 11, bh - 3);
   ctx.quadraticCurveTo(tx - 4, H - 6, tx - 2, H - 3);
@@ -3654,7 +3821,7 @@ function makeBubbleTexture(text: string): { tex: THREE.CanvasTexture; w: number;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
   const rec = { tex, w: W, h: H };
-  bubbleTexCache.set(text, rec);
+  bubbleTexCache.set(cacheKey, rec);
   if (bubbleTexCache.size > 60) {
     const oldest = bubbleTexCache.keys().next().value;
     if (oldest !== undefined) {
@@ -3697,7 +3864,7 @@ function HeadBubbles({
         q.splice(i, 1);
         i--;
         if (slot.own) slot.rec?.tex.dispose();
-        slot.rec = makeBubbleTexture(c.text);
+        slot.rec = makeBubbleTexture(c.text, c.kind === 'thought');
         slot.own = true;
         slot.total = c.hold ?? Math.min(12, 3.2 + c.text.replace(/\s/g, '').length * 0.16);
         slot.until = now + slot.total;
