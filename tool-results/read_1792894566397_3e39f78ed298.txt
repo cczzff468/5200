@@ -1,0 +1,780 @@
+     1→'use client';
+     2→
+     3→/**
+     4→ * 情侣小家 —— 乐器弹奏覆盖层（生活模式点击吉他/钢琴 → 镜头推近 + 可弹奏界面）
+     5→ *
+     6→ * - 吉他：竖版六弦木纹指板（低音弦在左），点弦拨音、按住横扫 = 扫弦；
+     7→ *   指板下方独立一条毛玻璃和弦条 C/G/Am/F/Em：按住即「按弦」，此时扫弦弹出和弦把位（闷弦不发声）；
+     8→ * - 钢琴（v6.7 紧凑键床版）：墨黑面板 = 顶部工具条（红点 =《小星星》演示开关，蓝色琴标 + 标题，
+     9→ *   FX 圆钮 = 音色选择，节拍器圆钮 = 100BPM 打拍，✕ = 结束演奏）+ 琴键床直接相贴
+    10→ *   （v6.7 删中部幕布舞台；音符气泡改在键床上方上浮）
+    11→ *   （C3→C6 三个完整八度 22 白键 + 15 黑键，2+3 真实排布，象牙白键/亮面黑键）；
+    12→ *   多指和弦、滑音（glissando）保留；
+    13→ * - 音色：FX 圆钮弹出收缩式选择器（毛玻璃浮层向上弹出、选中打勾、点外部自动收起）；
+    14→ * - 吉他不变：木纹指板 + 毛玻璃和弦条；覆盖层下沉（mb-64px）给 3D 小人让视野，面板外区域 pointer 穿透可转视角。
+    15→ */
+    16→
+    17→import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+    18→import { Check, ChevronDown, Gauge, Music, Piano as PianoIcon, X } from 'lucide-react';
+    19→import {
+    20→  GUITAR_CHORDS,
+    21→  GUITAR_STRINGS,
+    22→  PIANO_BLACK,
+    23→  PIANO_WHITE,
+    24→  TWINKLE,
+    25→  chordStringFreq,
+    26→  emitNote,
+    27→  ensureAudio,
+    28→  type GuitarChord,
+    29→  type GuitarTimbre,
+    30→  onNote,
+    31→  pianoNote,
+    32→  pluckString,
+    33→  type PianoTimbre,
+    34→  twinkleTempoMs,
+    35→} from './instrument';
+    36→
+    37→/** 音名 → 频率（演示曲排程用） */
+    38→const NOTE_FREQ = new Map<string, number>([...PIANO_WHITE, ...PIANO_BLACK].map((k) => [k.name, k.freq]));
+    39→
+    40→const PIANO_TIMBRES: { v: PianoTimbre; label: string }[] = [
+    41→  { v: 'grand', label: '钢琴' },
+    42→  { v: 'ep', label: '电钢' },
+    43→  { v: 'musicbox', label: '八音盒' },
+    44→];
+    45→const GUITAR_TIMBRES: { v: GuitarTimbre; label: string }[] = [
+    46→  { v: 'acoustic', label: '木吉他' },
+    47→  { v: 'ukulele', label: '尤克里里' },
+    48→];
+    49→
+    50→/** 毛玻璃公共质感（标题条 / 和弦条 / 音色浮层共用） */
+    51→const GLASS =
+    52→  'border border-white/60 bg-white/70 shadow-[0_8px_24px_rgba(60,40,30,0.18)] backdrop-blur-2xl';
+    53→
+    54→// ---------------- 音色收缩选择器（点开向上弹毛玻璃浮层，点外部自动收起） ----------------
+    55→
+    56→function TimbrePicker({
+    57→  options,
+    58→  value,
+    59→  onChange,
+    60→  variant = 'pill',
+    61→}: {
+    62→  options: { v: PianoTimbre | GuitarTimbre; label: string }[];
+    63→  value: PianoTimbre | GuitarTimbre;
+    64→  onChange: (v: PianoTimbre | GuitarTimbre) => void;
+    65→  /** pill = 深色药丸（毛玻璃标题条用）；chip = 白描边圆形 FX 钮（钢琴深色工具条用） */
+    66→  variant?: 'pill' | 'chip';
+    67→}) {
+    68→  const [open, setOpen] = useState(false);
+    69→  const rootRef = useRef<HTMLDivElement>(null);
+    70→  const current = options.find((o) => o.v === value);
+    71→
+    72→  // 点外部收起：捕获阶段监听，先于面板内 stopPropagation 生效
+    73→  useEffect(() => {
+    74→    if (!open) return;
+    75→    const close = (e: PointerEvent) => {
+    76→      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    77→    };
+    78→    document.addEventListener('pointerdown', close, true);
+    79→    return () => document.removeEventListener('pointerdown', close, true);
+    80→  }, [open]);
+    81→
+    82→  return (
+    83→    <div ref={rootRef} className="relative">
+    84→      {variant === 'chip' ? (
+    85→        <button
+    86→          type="button"
+    87→          aria-label={`切换音色（当前${current?.label ?? ''}）`}
+    88→          onClick={() => setOpen((o) => !o)}
+    89→          className={`flex h-8 w-8 items-center justify-center rounded-full border-[1.5px] text-[10.5px] font-black tracking-wide transition active:scale-90 ${
+    90→            open
+    91→              ? 'border-[#f4b3c2] bg-[#f4b3c2]/20 text-[#f4b3c2]'
+    92→              : 'border-white/75 bg-white/5 text-white'
+    93→          }`}
+    94→          style={{ WebkitTapHighlightColor: 'transparent' }}
+    95→        >
+    96→          FX
+    97→        </button>
+    98→      ) : (
+    99→        <button
+   100→          type="button"
+   101→          aria-label="切换音色"
+   102→          onClick={() => setOpen((o) => !o)}
+   103→          className="flex h-8 items-center gap-1 rounded-full bg-[#453e39]/85 px-3 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
+   104→          style={{ WebkitTapHighlightColor: 'transparent' }}
+   105→        >
+   106→          {current?.label}
+   107→          <ChevronDown
+   108→            className={`h-3.5 w-3.5 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+   109→          />
+   110→        </button>
+   111→      )}
+   112→      {open && (
+   113→        <div
+   114→          className={`absolute right-0 z-40 min-w-[120px] rounded-2xl p-1 ${GLASS} ${
+   115→            // chip（钢琴深色工具条）面板 overflow-hidden → 向下弹进舞台区；pill（吉他毛玻璃条）保持向上弹
+   116→            variant === 'chip' ? 'top-[calc(100%+10px)]' : 'bottom-[calc(100%+10px)]'
+   117→          }`}
+   118→          style={{
+   119→            animation: 'instPopUp .16s ease-out both',
+   120→            transformOrigin: variant === 'chip' ? 'top right' : 'bottom right',
+   121→          }}
+   122→        >
+   123→          {options.map((o) => {
+   124→            const active = o.v === value;
+   125→            return (
+   126→              <button
+   127→                key={o.v}
+   128→                type="button"
+   129→                onClick={() => {
+   130→                  onChange(o.v);
+   131→                  setOpen(false);
+   132→                }}
+   133→                className={`flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-[12.5px] transition active:scale-[0.97] ${
+   134→                  active
+   135→                    ? 'bg-[#f4b3c2]/30 font-semibold text-[#453e39]'
+   136→                    : 'text-[#453e39]/85 hover:bg-black/5'
+   137→                }`}
+   138→              >
+   139→                {o.label}
+   140→                {active && <Check className="h-3.5 w-3.5 shrink-0 text-[#d97f95]" />}
+   141→              </button>
+   142→            );
+   143→          })}
+   144→        </div>
+   145→      )}
+   146→    </div>
+   147→  );
+   148→}
+   149→
+   150→// ---------------- 吉他面板 ----------------
+   151→
+   152→function GuitarPanel({
+   153→  timbre,
+   154→  heldChord,
+   155→  heldChordRef,
+   156→}: {
+   157→  timbre: GuitarTimbre;
+   158→  heldChord: GuitarChord | null;
+   159→  heldChordRef: RefObject<GuitarChord | null>;
+   160→}) {
+   161→  const [vibing, setVibing] = useState<number[]>([]); // 正在抖动的弦
+   162→  const vibeTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+   163→  // 按住滑动扫弦：记录上一根被拨的弦，滑入新弦时再拨（每根弦每次按住只拨一次入列去重）
+   164→  const lastStrum = useRef<{ pid: number; idx: number }[]>([]);
+   165→
+   166→  // 弦抖动动效（回放/外部音符事件点亮时只动不发声）
+   167→  const flashString = useCallback((idx: number) => {
+   168→    setVibing((v) => (v.includes(idx) ? v : [...v, idx]));
+   169→    const old = vibeTimers.current.get(idx);
+   170→    if (old) clearTimeout(old);
+   171→    vibeTimers.current.set(
+   172→      idx,
+   173→      setTimeout(() => {
+   174→        setVibing((v) => v.filter((i) => i !== idx));
+   175→        vibeTimers.current.delete(idx);
+   176→      }, 520),
+   177→    );
+   178→  }, []);
+   179→
+   180→  const twang = useCallback(
+   181→    (idx: number) => {
+   182→      const chord = heldChordRef.current;
+   183→      const semi = chord ? chord.offsets[idx] : null;
+   184→      if (chord && semi === null) return; // 按和弦时该弦被左手闷住，不出声
+   185→      const freq = chordStringFreq(GUITAR_STRINGS[idx].freq, semi);
+   186→      pluckString(freq, 1, timbre);
+   187→      emitNote({
+   188→        kind: 'guitar',
+   189→        freq,
+   190→        name: chord ? `${chord.name}·${GUITAR_STRINGS[idx].name}` : GUITAR_STRINGS[idx].name,
+   191→      });
+   192→      flashString(idx);
+   193→    },
+   194→    [flashString, heldChordRef, timbre],
+   195→  );
+   196→
+   197→  // 音符事件（外部弹奏等）点亮就近开放弦
+   198→  useEffect(() => {
+   199→    return onNote((e) => {
+   200→      if (e.kind !== 'guitar') return;
+   201→      let best = 0;
+   202→      let bestD = Infinity;
+   203→      GUITAR_STRINGS.forEach((s, i) => {
+   204→        const d = Math.abs(Math.log(s.freq / e.freq));
+   205→        if (d < bestD) {
+   206→          bestD = d;
+   207→          best = i;
+   208→        }
+   209→      });
+   210→      flashString(best);
+   211→    });
+   212→  }, [flashString]);
+   213→
+   214→  const idxFromEvent = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+   215→    const rect = e.currentTarget.getBoundingClientRect();
+   216→    const x = e.clientX - rect.left;
+   217→    const w = rect.width / GUITAR_STRINGS.length;
+   218→    return Math.max(0, Math.min(GUITAR_STRINGS.length - 1, Math.floor(x / w)));
+   219→  }, []);
+   220→
+   221→  return (
+   222→    <div className="relative min-h-0 flex-1 overflow-hidden rounded-[26px] shadow-2xl">
+   223→      {/* 木纹指板 */}
+   224→      <div
+   225→        className="absolute inset-0"
+   226→        style={{
+   227→          background:
+   228→            'linear-gradient(180deg,#7a5230 0%,#6b4426 18%,#8a5f38 38%,#6b4426 62%,#5d3a20 82%,#4c2f1a 100%)',
+   229→        }}
+   230→      />
+   231→      {/* 品丝 + 品记 */}
+   232→      <div className="absolute inset-0">
+   233→        {[12, 28, 44, 60, 76, 90].map((top) => (
+   234→          <div
+   235→            key={top}
+   236→            className="absolute inset-x-0 h-[5px] rounded-full bg-gradient-to-b from-[#cfd4d8] via-[#9aa3ab] to-[#7c848c] shadow"
+   237→            style={{ top: `${top}%` }}
+   238→          />
+   239→        ))}
+   240→        {[20, 36, 52].map((top) => (
+   241→          <div
+   242→            key={top}
+   243→            className="absolute left-1/2 h-3.5 w-3.5 -translate-x-1/2 rounded-full bg-[#efe6d4]/90 shadow-inner"
+   244→            style={{ top: `${top}%` }}
+   245→          />
+   246→        ))}
+   247→      </div>
+   248→      {/* 六根弦（可拨/可扫） */}
+   249→      <div
+   250→        className="absolute inset-0 flex touch-none"
+   251→        style={{ WebkitTapHighlightColor: 'transparent' }}
+   252→        onPointerDown={(e) => {
+   253→          e.currentTarget.setPointerCapture?.(e.pointerId);
+   254→          const idx = idxFromEvent(e);
+   255→          twang(idx);
+   256→          lastStrum.current = [{ pid: e.pointerId, idx }];
+   257→        }}
+   258→        onPointerMove={(e) => {
+   259→          if (e.buttons === 0 && e.pointerType === 'mouse') return;
+   260→          if (!lastStrum.current.some((s) => s.pid === e.pointerId)) return;
+   261→          const idx = idxFromEvent(e);
+   262→          const mine = lastStrum.current.find((s) => s.pid === e.pointerId);
+   263→          if (mine && mine.idx !== idx) {
+   264→            twang(idx);
+   265→            mine.idx = idx;
+   266→          }
+   267→        }}
+   268→        onPointerUp={(e) => {
+   269→          lastStrum.current = lastStrum.current.filter((s) => s.pid !== e.pointerId);
+   270→        }}
+   271→        onPointerCancel={(e) => {
+   272→          lastStrum.current = lastStrum.current.filter((s) => s.pid !== e.pointerId);
+   273→        }}
+   274→      >
+   275→        {GUITAR_STRINGS.map((s, i) => (
+   276→          <div key={s.name + i} className="relative flex-1">
+   277→            {/* 弦体：低音弦缠丝金色 / 高音弦银亮，拨动时抖动 */}
+   278→            <div
+   279→              className="absolute left-1/2 top-0 h-full w-[3.5px] -translate-x-1/2 rounded-full"
+   280→              style={{
+   281→                background: s.wound
+   282→                  ? 'linear-gradient(90deg,#b98f3e,#f3dd9a 45%,#b98f3e)'
+   283→                  : 'linear-gradient(90deg,#9fa6ac,#f2f5f7 45%,#9fa6ac)',
+   284→                boxShadow: '0 0 4px rgba(0,0,0,0.45)',
+   285→                animation: vibing.includes(i) ? 'stringVibe 0.5s ease-out' : undefined,
+   286→              }}
+   287→            />
+   288→            {/* 弦枕环 */}
+   289→            <div className="absolute left-1/2 top-[3px] h-4 w-5 -translate-x-1/2 rounded-full border border-[#3a2a18]/60 bg-[#2a1d10]/50" />
+   290→            {/* 弦名 */}
+   291→            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-black/35 px-2 py-0.5 text-[11px] font-bold text-[#f5e9d2]">
+   292→              {s.name}
+   293→            </div>
+   294→          </div>
+   295→        ))}
+   296→      </div>
+   297→      {/* 已按和弦徽标（按住和弦条时显示，扫弦出和弦把位） */}
+   298→      {heldChord && (
+   299→        <div className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2 whitespace-nowrap rounded-full bg-black/30 px-3 py-1 text-[11px] font-semibold text-white/90 backdrop-blur-sm">
+   300→          已按 {heldChord.name} 和弦
+   301→        </div>
+   302→      )}
+   303→      <style
+   304→        dangerouslySetInnerHTML={{
+   305→          __html: `@keyframes stringVibe{0%{transform:translate(-50%,0) scaleX(1)}15%{transform:translate(-46%,0) scaleX(2.6)}30%{transform:translate(-54%,0) scaleX(.7)}45%{transform:translate(-47%,0) scaleX(2.2)}60%{transform:translate(-53%,0) scaleX(.85)}75%{transform:translate(-49%,0) scaleX(1.6)}100%{transform:translate(-50%,0) scaleX(1)}}`,
+   306→        }}
+   307→      />
+   308→    </div>
+   309→  );
+   310→}
+   311→
+   312→// ---------------- 吉他舞台：琴体 + 独立毛玻璃和弦条 ----------------
+   313→
+   314→function GuitarStage({ timbre }: { timbre: GuitarTimbre }) {
+   315→  // 按住的和弦：state 驱动 UI，ref 供扫弦时即时读取（多指：一手按和弦一手扫弦）
+   316→  const [heldChord, setHeldChord] = useState<GuitarChord | null>(null);
+   317→  const heldChordRef = useRef<GuitarChord | null>(null);
+   318→
+   319→  // 松开和弦：按住后任意位置 pointerup / pointercancel 都释放
+   320→  useEffect(() => {
+   321→    if (!heldChord) return;
+   322→    const release = () => {
+   323→      heldChordRef.current = null;
+   324→      setHeldChord(null);
+   325→    };
+   326→    window.addEventListener('pointerup', release);
+   327→    window.addEventListener('pointercancel', release);
+   328→    return () => {
+   329→      window.removeEventListener('pointerup', release);
+   330→      window.removeEventListener('pointercancel', release);
+   331→    };
+   332→  }, [heldChord]);
+   333→
+   334→  return (
+   335→    <>
+   336→      <GuitarPanel timbre={timbre} heldChord={heldChord} heldChordRef={heldChordRef} />
+   337→      {/* 和弦条：独立毛玻璃条，按住 chip =「按弦」，此时扫弦弹和弦把位 */}
+   338→      <div
+   339→        className={`flex h-11 shrink-0 items-center justify-center gap-2 rounded-2xl px-3 ${GLASS}`}
+   340→      >
+   341→        {GUITAR_CHORDS.map((c) => {
+   342→          const held = heldChord?.id === c.id;
+   343→          return (
+   344→            <button
+   345→              key={c.id}
+   346→              type="button"
+   347→              aria-label={`按住 ${c.name} 和弦`}
+   348→              className={`h-9 min-w-11 touch-none select-none rounded-full text-[13px] font-bold text-white shadow-md transition-all active:scale-95 ${
+   349→                held ? '-translate-y-1 ring-2 ring-white/90' : ''
+   350→              }`}
+   351→              style={{ backgroundColor: c.tint, WebkitTapHighlightColor: 'transparent' }}
+   352→              onPointerDown={(e) => {
+   353→                e.stopPropagation();
+   354→                e.preventDefault();
+   355→                heldChordRef.current = c;
+   356→                setHeldChord(c);
+   357→              }}
+   358→            >
+   359→              {c.name}
+   360→            </button>
+   361→          );
+   362→        })}
+   363→      </div>
+   364→    </>
+   365→  );
+   366→}
+   367→
+   368→// ---------------- 钢琴舞台（深色舞台风：工具条 + 竖纹幕布 + 音符气泡 + 真实感键床） ----------------
+   369→
+   370→/** 键名 → 键中心横向位置（键床宽度百分比，音符气泡对齐用） */
+   371→function keyCenterPct(name: string): number {
+   372→  const wi = PIANO_WHITE.findIndex((k) => k.name === name);
+   373→  if (wi >= 0) return ((wi + 0.5) / PIANO_WHITE.length) * 100;
+   374→  const bk = PIANO_BLACK.find((b) => b.name === name);
+   375→  if (bk) return ((bk.after + 1) / PIANO_WHITE.length) * 100;
+   376→  return 50;
+   377→}
+   378→
+   379→interface NoteBubble {
+   380→  id: number;
+   381→  label: string;
+   382→  x: number;
+   383→}
+   384→
+   385→function PianoStage({
+   386→  timbre,
+   387→  onTimbre,
+   388→  onClose,
+   389→}: {
+   390→  timbre: PianoTimbre;
+   391→  onTimbre: (v: PianoTimbre) => void;
+   392→  onClose: () => void;
+   393→}) {
+   394→  const [pressed, setPressed] = useState<string[]>([]);
+   395→  const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+   396→  // 滑音：按住拖动时经过新键也发声
+   397→  const lastKey = useRef<{ pid: number; key: string }[]>([]);
+   398→  // 外部音符（小星星演示等）点亮的键
+   399→  const [lit, setLit] = useState<string[]>([]);
+   400→  const litTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+   401→  // 舞台上浮的音符气泡
+   402→  const [bubbles, setBubbles] = useState<NoteBubble[]>([]);
+   403→  const bubbleSeq = useRef(0);
+   404→  const bubbleTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+   405→
+   406→  // 演示/弹奏期间读最新音色（effect 中同步，避免渲染期写 ref）
+   407→  const timbreRef = useRef(timbre);
+   408→  useEffect(() => {
+   409→    timbreRef.current = timbre;
+   410→  }, [timbre]);
+   411→
+   412→  const spawnBubble = useCallback((label: string) => {
+   413→    const id = ++bubbleSeq.current;
+   414→    setBubbles((b) => [...b.slice(-10), { id, label, x: keyCenterPct(label) }]);
+   415→    const t = setTimeout(() => {
+   416→      setBubbles((b) => b.filter((x) => x.id !== id));
+   417→      bubbleTimers.current.delete(id);
+   418→    }, 1080);
+   419→    bubbleTimers.current.set(id, t);
+   420→  }, []);
+   421→
+   422→  const hit = useCallback(
+   423→    (name: string, freq: number) => {
+   424→      pianoNote(freq, 1, timbreRef.current);
+   425→      emitNote({ kind: 'piano', freq, name });
+   426→      setPressed((p) => (p.includes(name) ? p : [...p, name]));
+   427→      const old = timers.current.get(name);
+   428→      if (old) clearTimeout(old);
+   429→      timers.current.set(
+   430→        name,
+   431→        setTimeout(() => {
+   432→          setPressed((p) => p.filter((n) => n !== name));
+   433→          timers.current.delete(name);
+   434→        }, 260),
+   435→      );
+   436→    },
+   437→    [],
+   438→  );
+   439→
+   440→  // 音符事件点亮对应琴键 + 上浮气泡（手弹经 emitNote 回路、演示曲同样点亮）
+   441→  useEffect(() => {
+   442→    return onNote((e) => {
+   443→      if (e.kind !== 'piano') return;
+   444→      setLit((l) => (l.includes(e.name) ? l : [...l, e.name]));
+   445→      const old = litTimers.current.get(e.name);
+   446→      if (old) clearTimeout(old);
+   447→      litTimers.current.set(
+   448→        e.name,
+   449→        setTimeout(() => {
+   450→          setLit((l) => l.filter((n) => n !== e.name));
+   451→          litTimers.current.delete(e.name);
+   452→        }, 300),
+   453→      );
+   454→      spawnBubble(e.name);
+   455→    });
+   456→  }, [spawnBubble]);
+   457→
+   458→  // —— 《小星星》演示（红点开关） ——
+   459→  const [demoOn, setDemoOn] = useState(false);
+   460→  const demoTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+   461→
+   462→  const stopDemo = useCallback(() => {
+   463→    demoTimers.current.forEach(clearTimeout);
+   464→    demoTimers.current = [];
+   465→    setDemoOn(false);
+   466→  }, []);
+   467→
+   468→  const startDemo = useCallback(() => {
+   469→    stopDemo();
+   470→    setDemoOn(true);
+   471→    let t = 0;
+   472→    const ts: ReturnType<typeof setTimeout>[] = [];
+   473→    for (const n of TWINKLE) {
+   474→      const freq = NOTE_FREQ.get(n.name);
+   475→      if (freq == null) continue;
+   476→      const delay = t;
+   477→      ts.push(
+   478→        setTimeout(() => {
+   479→          pianoNote(freq, 1, timbreRef.current);
+   480→          emitNote({ kind: 'piano', freq, name: n.name });
+   481→        }, delay),
+   482→      );
+   483→      t += twinkleTempoMs * n.beats;
+   484→    }
+   485→    ts.push(
+   486→      setTimeout(() => {
+   487→        demoTimers.current = [];
+   488→        setDemoOn(false);
+   489→      }, t + 400),
+   490→    );
+   491→    demoTimers.current = ts;
+   492→  }, [stopDemo]);
+   493→
+   494→  // —— 节拍器（100BPM 短促打拍，WebAudio 合成，无音频文件） ——
+   495→  const [metroOn, setMetroOn] = useState(false);
+   496→  const metroInt = useRef<ReturnType<typeof setInterval> | null>(null);
+   497→  useEffect(() => {
+   498→    if (!metroOn) return;
+   499→    const tick = () => {
+   500→      const ctx = ensureAudio();
+   501→      if (!ctx) return;
+   502→      const o = ctx.createOscillator();
+   503→      const gn = ctx.createGain();
+   504→      o.type = 'square';
+   505→      o.frequency.value = 1500;
+   506→      gn.gain.setValueAtTime(0.14, ctx.currentTime);
+   507→      gn.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.045);
+   508→      o.connect(gn);
+   509→      gn.connect(ctx.destination);
+   510→      o.start();
+   511→      o.stop(ctx.currentTime + 0.05);
+   512→    };
+   513→    tick();
+   514→    metroInt.current = setInterval(tick, 600); // ♩=100
+   515→    return () => {
+   516→      if (metroInt.current) clearInterval(metroInt.current);
+   517→      metroInt.current = null;
+   518→    };
+   519→  }, [metroOn]);
+   520→
+   521→  // 卸载时清掉全部定时器
+   522→  useEffect(
+   523→    () => () => {
+   524→      litTimers.current.forEach((t) => clearTimeout(t));
+   525→      litTimers.current.clear();
+   526→      timers.current.forEach((t) => clearTimeout(t));
+   527→      timers.current.clear();
+   528→      bubbleTimers.current.forEach((t) => clearTimeout(t));
+   529→      bubbleTimers.current.clear();
+   530→      demoTimers.current.forEach(clearTimeout);
+   531→      demoTimers.current = [];
+   532→    },
+   533→    [],
+   534→  );
+   535→
+   536→  /** 白键/黑键共用的按压手势（点按 + 按住滑键滑音 + 多指和弦） */
+   537→  const pressHandlers = useCallback(
+   538→    (name: string, freq: number) => ({
+   539→      onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+   540→        e.currentTarget.setPointerCapture?.(e.pointerId);
+   541→        hit(name, freq);
+   542→        lastKey.current = [
+   543→          ...lastKey.current.filter((s) => s.pid !== e.pointerId),
+   544→          { pid: e.pointerId, key: name },
+   545→        ];
+   546→      },
+   547→      onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+   548→        if (e.buttons === 0 && e.pointerType === 'mouse') return;
+   549→        const mine = lastKey.current.find((s) => s.pid === e.pointerId);
+   550→        if (mine && mine.key !== name) {
+   551→          hit(name, freq);
+   552→          mine.key = name;
+   553→        }
+   554→      },
+   555→      onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => {
+   556→        lastKey.current = lastKey.current.filter((s) => s.pid !== e.pointerId);
+   557→      },
+   558→      onPointerCancel: (e: React.PointerEvent<HTMLDivElement>) => {
+   559→        lastKey.current = lastKey.current.filter((s) => s.pid !== e.pointerId);
+   560→      },
+   561→    }),
+   562→    [hit],
+   563→  );
+   564→
+   565→  const unit = 100 / PIANO_WHITE.length; // 单个白键宽度百分比
+   566→
+   567→  return (
+   568→    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] bg-[#0a0a0c] shadow-2xl ring-1 ring-black/60">
+   569→      {/* 顶部工具条：红点演示｜蓝色琴标·标题｜FX 音色｜节拍器｜结束 */}
+   570→      <div className="flex h-11 shrink-0 items-center gap-2.5 border-b border-white/10 bg-gradient-to-b from-[#232327] to-[#131316] px-3">
+   571→        <button
+   572→          type="button"
+   573→          aria-label={demoOn ? '停止小星星演示' : '播放小星星演示'}
+   574→          onClick={() => (demoOn ? stopDemo() : startDemo())}
+   575→          className="flex h-7 w-7 shrink-0 items-center justify-center transition active:scale-90"
+   576→          style={{ WebkitTapHighlightColor: 'transparent' }}
+   577→        >
+   578→          <span
+   579→            className={`block h-4 w-4 rounded-full bg-[#e14b41] shadow-[0_0_10px_rgba(225,75,65,0.55),inset_0_-2px_3px_rgba(0,0,0,0.35)] ${
+   580→              demoOn ? 'animate-pulse ring-2 ring-white/70' : ''
+   581→            }`}
+   582→          />
+   583→        </button>
+   584→        <div className="flex min-w-0 items-center gap-1.5">
+   585→          <PianoIcon className="h-[18px] w-[18px] shrink-0 text-[#4f8ef7]" />
+   586→          <span className="truncate text-[12px] font-semibold text-[#9a9aa2]">弹钢琴 · C3–C6</span>
+   587→        </div>
+   588→        <div className="ml-auto flex shrink-0 items-center gap-2">
+   589→          <TimbrePicker
+   590→            variant="chip"
+   591→            options={PIANO_TIMBRES}
+   592→            value={timbre}
+   593→            onChange={(v) => onTimbre(v as PianoTimbre)}
+   594→          />
+   595→          <button
+   596→            type="button"
+   597→            aria-label={metroOn ? '关闭节拍器' : '开启节拍器'}
+   598→            aria-pressed={metroOn}
+   599→            onClick={() => setMetroOn((m) => !m)}
+   600→            className={`flex h-8 w-8 items-center justify-center rounded-full border-[1.5px] transition active:scale-90 ${
+   601→              metroOn
+   602→                ? 'border-[#f4b3c2] bg-[#f4b3c2]/20 text-[#f4b3c2] shadow-[0_0_10px_rgba(244,179,194,0.4)]'
+   603→                : 'border-white/75 bg-white/5 text-white'
+   604→            }`}
+   605→            style={{ WebkitTapHighlightColor: 'transparent' }}
+   606→          >
+   607→            <Gauge className="h-4 w-4" />
+   608→          </button>
+   609→          <button
+   610→            type="button"
+   611→            onClick={onClose}
+   612→            aria-label="结束演奏"
+   613→            className="flex h-8 w-8 items-center justify-center rounded-full border-[1.5px] border-white/75 bg-white/5 text-white transition active:scale-90"
+   614→            style={{ WebkitTapHighlightColor: 'transparent' }}
+   615→          >
+   616→            <X className="h-4 w-4" />
+   617→          </button>
+   618→        </div>
+   619→      </div>
+   620→      {/* 键床（v6.7：删中部幕布舞台，工具条与琴键直接相贴）：象牙白键 + 亮面黑键（2+3 真实排布）+ 键上音符气泡 */}
+   621→      <div className="relative min-h-0 flex-1 border-t border-white/10 bg-[#050506]">
+   622→        {demoOn && (
+   623→          <div className="pointer-events-none absolute left-1/2 top-2 z-20 -translate-x-1/2 whitespace-nowrap rounded-full bg-white/10 px-3 py-1 text-[10.5px] font-semibold text-white/85 backdrop-blur-sm">
+   624→            ♪ 小星星 演示中 · 点红点停止
+   625→          </div>
+   626→        )}
+   627→        {bubbles.map((b) => (
+   628→          <span
+   629→            key={b.id}
+   630→            className="note-bubble pointer-events-none absolute top-[30%] z-10 rounded-full border border-white/15 bg-white/10 px-2 py-0.5 text-[10px] font-bold text-white/90"
+   631→            style={{ left: `${b.x}%` }}
+   632→          >
+   633→            {b.label}
+   634→          </span>
+   635→        ))}
+   636→        <div className="relative mx-[3px] h-full">
+   637→          <div className="absolute inset-0 flex">
+   638→            {PIANO_WHITE.map((k) => {
+   639→              const on = pressed.includes(k.name) || lit.includes(k.name);
+   640→              return (
+   641→                <div
+   642→                  key={k.name}
+   643→                  className="relative flex-1 touch-none border-r border-[#c9c6ba]/80 last:border-r-0"
+   644→                  style={{
+   645→                    WebkitTapHighlightColor: 'transparent',
+   646→                    borderRadius: '0 0 4px 4px',
+   647→                    background: on
+   648→                      ? 'linear-gradient(180deg,#ffe0ea 0%,#f9cfdd 100%)'
+   649→                      : 'linear-gradient(180deg,#ffffff 0%,#f4f3ee 62%,#e7e5dc 100%)',
+   650→                    boxShadow: on
+   651→                      ? 'inset 0 2px 4px rgba(180,90,110,0.28), inset 0 -3px 4px -2px rgba(120,60,80,0.3)'
+   652→                      : 'inset -1px 0 1.5px -1px rgba(60,55,40,0.35), inset 1px 0 1.5px -1px rgba(255,255,255,0.95), inset 0 -5px 6px -4px rgba(70,64,48,0.5)',
+   653→                    transform: on ? 'scaleY(0.975)' : undefined,
+   654→                    transformOrigin: 'top',
+   655→                  }}
+   656→                  {...pressHandlers(k.name, k.freq)}
+   657→                >
+   658→                  {/* 键前立面 */}
+   659→                  <div className="pointer-events-none absolute inset-x-[1.5px] bottom-0 h-[8%] rounded-b-[4px] bg-gradient-to-b from-black/[0.05] to-black/[0.15]" />
+   660→                  {k.label && (
+   661→                    <span className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[8.5px] font-bold text-[#a8a496]">
+   662→                      {k.name}
+   663→                    </span>
+   664→                  )}
+   665→                </div>
+   666→              );
+   667→            })}
+   668→          </div>
+   669→          {/* 黑键：亮面质感，按下微沉 */}
+   670→          {PIANO_BLACK.map((b) => {
+   671→            const isOn = pressed.includes(b.name) || lit.includes(b.name);
+   672→            return (
+   673→              <div
+   674→                key={b.name}
+   675→                className="absolute top-0 z-10 h-[58%] touch-none"
+   676→                style={{
+   677→                  left: `calc(${(b.after + 1) * unit}% - ${unit * 0.29}%)`,
+   678→                  width: `${unit * 0.58}%`,
+   679→                  WebkitTapHighlightColor: 'transparent',
+   680→                  borderRadius: '0 0 3.5px 3.5px',
+   681→                  background: isOn
+   682→                    ? 'linear-gradient(180deg,#4a4a54 0%,#26262e 100%)'
+   683→                    : 'linear-gradient(180deg,#34343b 0%,#0e0e13 62%,#1f1f26 100%)',
+   684→                  boxShadow:
+   685→                    '0 3px 5px rgba(0,0,0,0.65), inset 0 2px 2px rgba(255,255,255,0.22), inset -1.5px 0 3px rgba(0,0,0,0.6), inset 0 -2px 2px rgba(255,255,255,0.1)',
+   686→                  transform: isOn ? 'scaleY(0.96)' : undefined,
+   687→                  transformOrigin: 'top',
+   688→                }}
+   689→                {...pressHandlers(b.name, b.freq)}
+   690→              />
+   691→            );
+   692→          })}
+   693→        </div>
+   694→      </div>
+   695→      <style
+   696→        dangerouslySetInnerHTML={{
+   697→          __html:
+   698→            '@keyframes noteFloat{0%{transform:translate(-50%,8px);opacity:0}18%{opacity:1}100%{transform:translate(-50%,-46px);opacity:0}}.note-bubble{animation:noteFloat 1.05s ease-out both}',
+   699→        }}
+   700→      />
+   701→    </div>
+   702→  );
+   703→}
+   704→
+   705→// ---------------- 覆盖层主体 ----------------
+   706→
+   707→export default function InstrumentOverlay({
+   708→  kind,
+   709→  onClose,
+   710→}: {
+   711→  kind: 'piano' | 'guitar';
+   712→  onClose: () => void;
+   713→}) {
+   714→  const stop = useCallback((e: React.SyntheticEvent) => e.stopPropagation(), []);
+   715→
+   716→  // 音色（钢琴/吉他各自记忆，切面板不丢）
+   717→  const [pianoTimbre, setPianoTimbre] = useState<PianoTimbre>('grand');
+   718→  const [guitarTimbre, setGuitarTimbre] = useState<GuitarTimbre>('acoustic');
+   719→  const timbre: PianoTimbre | GuitarTimbre = kind === 'piano' ? pianoTimbre : guitarTimbre;
+   720→
+   721→  const pickTimbre = useCallback(
+   722→    (v: PianoTimbre | GuitarTimbre) => {
+   723→      if (kind === 'piano') setPianoTimbre(v as PianoTimbre);
+   724→      else setGuitarTimbre(v as GuitarTimbre);
+   725→    },
+   726→    [kind],
+   727→  );
+   728→
+   729→  return (
+   730→    <div className="pointer-events-none absolute inset-0 z-30 flex flex-col justify-end">
+   731→      <style
+   732→        dangerouslySetInnerHTML={{
+   733→          __html: '@keyframes instPopUp{from{opacity:0;transform:translateY(8px) scale(.95)}to{opacity:1;transform:none}}',
+   734→        }}
+   735→      />
+   736→      <div
+   737→        className={`pointer-events-auto mx-3 mb-[64px] flex flex-col gap-2 ${
+   738→          kind === 'piano' ? 'h-[44%] max-h-[380px]' : 'h-[45%] max-h-[388px]'
+   739→        }`}
+   740→        onPointerDown={stop}
+   741→        onPointerMove={stop}
+   742→        onPointerUp={stop}
+   743→        onTouchStart={stop}
+   744→        onTouchMove={stop}
+   745→      >
+   746→        {kind === 'piano' ? (
+   747→          // 钢琴：深色舞台一体面板（工具条内含红点演示/FX 音色/节拍器/结束）
+   748→          <PianoStage timbre={pianoTimbre} onTimbre={setPianoTimbre} onClose={onClose} />
+   749→        ) : (
+   750→          <>
+   751→            {/* 标题条（毛玻璃）：左标题｜音色收缩选择 + 结束（吉他） */}
+   752→            <div
+   753→              className={`flex h-11 shrink-0 items-center justify-between gap-2 rounded-full pl-4 pr-1.5 ${GLASS}`}
+   754→            >
+   755→              <div className="flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-[#453e39]">
+   756→                <Music className="h-4 w-4 shrink-0 text-[#d97f95]" />
+   757→                <span className="truncate">弹吉他</span>
+   758→              </div>
+   759→              <div className="flex shrink-0 items-center gap-1.5">
+   760→                <TimbrePicker options={GUITAR_TIMBRES} value={timbre as GuitarTimbre} onChange={pickTimbre} />
+   761→                <button
+   762→                  type="button"
+   763→                  onClick={onClose}
+   764→                  aria-label="结束演奏"
+   765→                  className="flex h-8 items-center gap-1 rounded-full bg-[#f4b3c2] px-3 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
+   766→                  style={{ WebkitTapHighlightColor: 'transparent' }}
+   767→                >
+   768→                  <X className="h-3.5 w-3.5" />
+   769→                  结束演奏
+   770→                </button>
+   771→              </div>
+   772→            </div>
+   773→            <GuitarStage timbre={guitarTimbre} />
+   774→          </>
+   775→        )}
+   776→      </div>
+   777→    </div>
+   778→  );
+   779→}
+   780→

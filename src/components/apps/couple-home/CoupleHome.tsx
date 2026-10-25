@@ -7,8 +7,9 @@
  * - 编辑模式：上帝视角、拖拽移动（0.25m 吸附）、移动方式双轨：四向按钮微调 + 按住拖动/移动模式搬运、
  *   四宫格旋转（左转/右转 + 上仰/下俯）、每件家具调色盘、地板/墙壁自定义颜色、画面缩放、家具商店、昼夜切换；
  * - 金币系统已移除；
- * - 持久化：IndexedDB 即时缓存 + Prisma 服务端（rev 乐观并发，409 采纳服务端）；
- * - 全屏按钮（Fullscreen API，被拦截时降级提示）。
+ * - 持久化：IndexedDB 即时缓存 + Prisma 服务端（rev 乐观并发，409 采纳服务端）。
+ * - v7.0 小屋 HUD 精简：全屏按钮移除；相机按钮移到左上返回键下方；
+ *   宠物状态面板改为右上角头像唤出的毛玻璃卡片；抚摸/喂食/喂水/洗澡/抱抱/召唤六枚互动按钮独立到底部。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -35,11 +36,10 @@ import {
   Flame,
   Gamepad2,
   Heart,
+  HeartHandshake,
   ImagePlus,
   Laptop,
   Loader2,
-  Maximize,
-  Minimize,
   Moon,
   MoreVertical,
   Move,
@@ -190,6 +190,16 @@ function sanitizePet(raw?: PetState): PetState {
   };
   return decayPet(base);
 }
+
+/** 宠物互动按钮（v7.0 底部互动条）：六种照顾动作 */
+const PET_ACTIONS: { kind: PetCareKind; icon: LucideIcon; label: string; bg: string; fg: string }[] = [
+  { kind: 'pat', icon: PawPrint, label: '抚摸', bg: '#ffd9e2', fg: '#d96a86' },
+  { kind: 'feed', icon: UtensilsCrossed, label: '喂食', bg: '#ffe9c9', fg: '#c98a3e' },
+  { kind: 'water', icon: CupSoda, label: '喂水', bg: '#d4ecff', fg: '#4a90c9' },
+  { kind: 'bath', icon: Bath, label: '洗澡', bg: '#d9f2f7', fg: '#3e97b4' },
+  { kind: 'hug', icon: HeartHandshake, label: '抱抱', bg: '#ffe3ec', fg: '#d96a86' },
+  { kind: 'summon', icon: Sparkles, label: '召唤', bg: '#eae4fb', fg: '#8a7ab0' },
+];
 
 /**
  * 手机照片 → 居中裁到指定比例 → 压成 JPEG dataURL（几十 KB，可永久存在小家档案里）
@@ -588,7 +598,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [shopTab, setShopTab] = useState<string>('all');
   const [thumbMap, setThumbMap] = useState<Record<string, string>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [full, setFull] = useState(false);
   /** v5.7 拾光扩展面板：点歌 / 五子棋 / 做饭小游戏 / 拍照模式 */
   const [musicSheet, setMusicSheet] = useState(false);
   /** 右上角 ⋮ 更多菜单：时间变化 / 声音开关 / 视角 */
@@ -699,6 +708,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 状态面板开关 / 正在进行的照顾动作 / 改名弹层 */
   const [petPanel, setPetPanel] = useState(false);
   const [petCare, setPetCare] = useState<PetCareKind | null>(null);
+  /** 照顾中镜像（供 beginAction 等旧回调读取，不引入重依赖） */
+  const petCareRef = useRef<PetCareKind | null>(null);
+  useEffect(() => {
+    petCareRef.current = petCare;
+  }, [petCare]);
   const [petRenaming, setPetRenaming] = useState(false);
   const [petNameDraft, setPetNameDraft] = useState('');
   /** 宠物在线缓慢衰减（每 30s 结算一次；离线衰减在 sanitizePet 一次性追算） */
@@ -1136,7 +1150,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
       setPetCare(kind);
       setPetPanel(false);
       const nm = petRef.current.name ?? '团子';
-      toast(kind === 'pat' ? `${nm}屁颠屁颠跑过来了～` : kind === 'feed' ? `盛好猫粮，等${nm}过来吃啦～` : `倒好清水，叫${nm}来喝咯～`);
+      const startMsg: Record<PetCareKind, string> = {
+        pat: `${nm}屁颠屁颠跑过来了～`,
+        feed: `盛好猫粮，等${nm}过来吃啦～`,
+        water: `倒好清水，叫${nm}来喝咯～`,
+        bath: `烧好洗澡水，给${nm}搓个泡泡浴～`,
+        hug: `${nm}张开小爪爪要抱抱啦～`,
+        summon: `一声哨响，${nm}飞奔过来咯～`,
+      };
+      toast(startMsg[kind]);
     },
     [petCare, toast],
   );
@@ -1156,9 +1178,20 @@ export default function CoupleHome({ close }: { close: () => void }) {
         const bump = (v: number, d: number) => Math.min(100, Math.max(0, v + d));
         if (kind === 'pat') return { ...p, mo: bump(p.mo, 12), ts: Date.now() };
         if (kind === 'feed') return { ...p, st: bump(p.st, 22), mo: bump(p.mo, 4), ts: Date.now() };
+        if (kind === 'bath') return { ...p, cl: bump(p.cl, 26), mo: bump(p.mo, 6), ts: Date.now() };
+        if (kind === 'hug') return { ...p, mo: bump(p.mo, 16), st: bump(p.st, 2), ts: Date.now() };
+        if (kind === 'summon') return { ...p, mo: bump(p.mo, 4), ts: Date.now() };
         return { ...p, cl: bump(p.cl, 18), st: bump(p.st, 4), ts: Date.now() };
       });
-      toast(kind === 'pat' ? '摸得它咕噜咕噜，尾巴都要摇飞啦～' : kind === 'feed' ? '吃得肚皮圆滚滚，心满意足～' : '咕咚咕咚喝饱水，精神满满～');
+      const doneMsg: Record<PetCareKind, string> = {
+        pat: '摸得它咕噜咕噜，尾巴都要摇飞啦～',
+        feed: '吃得肚皮圆滚滚，心满意足～',
+        water: '咕咚咕咚喝饱水，精神满满～',
+        bath: '洗得香喷喷，毛茸茸亮晶晶～',
+        hug: '抱在怀里蹭蹭，它开心得直打呼噜～',
+        summon: `一叫就到，真是乖${petRef.current.name ?? '团子'}～`,
+      };
+      toast(doneMsg[kind]);
       saveSoon();
     },
     [toast, saveSoon],
@@ -1254,6 +1287,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
    *  淋浴/看电视/上网自动开水开机；躺床自动关灯；做饭/喝东西/换装定时自动完成。 */
   const beginAction = useCallback(
     (type: CharAction['type'], item: FurnitureItem) => {
+      // 宠物照顾中：不接新动作（避免抱起的小猫悬空去坐沙发的穿帮）
+      if (petCareRef.current) {
+        toast('正陪着小家伙呢，先照顾完它吧～');
+        return;
+      }
       // B3 阅读：锚点不在书架本身（书架没有 seat），先找最近可坐家具再入座
       if (type === 'read') {
         const seats = itemsRef.current.filter((f) => {
@@ -2764,29 +2802,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
     return () => clearInterval(t);
   }, [nightAuto]);
 
-  const toggleFull = useCallback(async () => {
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-        setFull(false);
-      } else {
-        await rootRef.current?.requestFullscreen();
-        setFull(true);
-      }
-    } catch {
-      toast('当前环境不支持全屏');
-    }
-  }, [toast]);
-
-  useEffect(() => {
-    const onFs = () => setFull(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', onFs);
-    return () => document.removeEventListener('fullscreenchange', onFs);
-  }, []);
-
-  // 模式切换时收起右上角 ⋮ 菜单
+  // 模式切换时收起右上角 ⋮ 菜单 / 宠物面板
   useEffect(() => {
     setMoreOpen(false);
+    setPetPanel(false);
+    setPetRenaming(false);
   }, [mode]);
 
   // 离开生活模式（进装修/商店全屏遮挡等）时收起乐器弹奏界面
@@ -2830,8 +2850,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
     () => items.reduce((n, f) => n + (CATALOG[f.kind]?.light && f.st?.on ? 1 : 0), 0),
     [items],
   );
-  // 底部按钮堆叠位置：与动作栏/端杯按钮错开
-  const cupBarCls = charAction ? 'bottom-[254px]' : 'bottom-[196px]';
+  // 底部按钮堆叠位置：与动作栏/端杯按钮错开（v7.0 底部互动条常驻 → 各条整体上移 76px）
+  const cupBarCls = charAction ? 'bottom-[330px]' : 'bottom-[272px]';
 
   // —— v6.8 进屋过场：白光过渡（遮住 Canvas 首帧 → 与场景内推镜同步淡出） ——
   const [whiteOn, setWhiteOn] = useState(true);
@@ -2846,11 +2866,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
   }, []);
   const tvBarCls = charAction
     ? carryCup
-      ? 'bottom-[312px]'
-      : 'bottom-[254px]'
+      ? 'bottom-[388px]'
+      : 'bottom-[330px]'
     : carryCup
-      ? 'bottom-[254px]'
-      : 'bottom-[196px]';
+      ? 'bottom-[330px]'
+      : 'bottom-[272px]';
 
   return (
     <div ref={rootRef} className="absolute inset-0 select-none overflow-hidden bg-[#efece4]">
@@ -2949,128 +2969,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
         </AnimatePresence>
       </div>
 
-      {/* ===== 宠物状态面板（v6.9：体力/清洁/心情 + 改名 + 照顾按钮） ===== */}
-      <AnimatePresence>
-        {petPanel && (
-          <motion.div
-            key="pet-panel"
-            initial={{ opacity: 0, y: 18, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 14, scale: 0.95 }}
-            transition={{ type: 'spring', damping: 26, stiffness: 320 }}
-            className="pointer-events-auto absolute bottom-[196px] left-1/2 z-30 w-[min(88%,344px)] -translate-x-1/2 rounded-[22px] bg-white/92 p-4 shadow-xl shadow-black/10 backdrop-blur-md"
-            role="dialog"
-            aria-label={`${pet.name ?? '团子'}状态面板`}
-          >
-            {/* 头部：头像 + 名字（可改） + 关闭 */}
-            <div className="mb-2.5 flex items-center gap-2.5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#fdf3e3] text-[20px] shadow-inner">
-                <PawPrint className="h-5 w-5 text-[#d9a05b]" />
-              </div>
-              {petRenaming ? (
-                <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                  <input
-                    autoFocus
-                    value={petNameDraft}
-                    onChange={(e) => setPetNameDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') commitPetName();
-                      if (e.key === 'Escape') setPetRenaming(false);
-                    }}
-                    maxLength={8}
-                    placeholder="给它起个名字"
-                    aria-label="宠物名字"
-                    className="h-8 min-w-0 flex-1 rounded-full border border-[#f0cfd8] bg-white px-3 text-[13px] font-semibold text-[#4a4a4e] outline-none placeholder:text-[#c9c2ba] focus:border-[#f4b3c2]"
-                  />
-                  <button
-                    onClick={commitPetName}
-                    aria-label="确认名字"
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#f4b3c2] text-white shadow-sm transition active:scale-90"
-                  >
-                    <Check className="h-4 w-4" />
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[15px] font-bold leading-tight text-[#4a4a4e]">{pet.name ?? '团子'}</div>
-                    <div className="text-[11px] leading-tight text-[#9a938a]">点我照顾它 · 名字也能改哦</div>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setPetNameDraft(pet.name ?? '团子');
-                      setPetRenaming(true);
-                    }}
-                    aria-label="给宠物改名"
-                    className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f6f1e8] text-[#a8927c] shadow-sm transition hover:bg-[#f0e7d8] active:scale-90"
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setPetPanel(false)}
-                    aria-label="关闭面板"
-                    className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f6f1e8] text-[#8a837a] shadow-sm transition hover:bg-[#f0e7d8] active:scale-90"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </>
-              )}
-            </div>
-
-            {/* 三条状态条：体力（蓝）/ 清洁（绿）/ 心情（橙） */}
-            <div className="flex flex-col gap-2">
-              {(
-                [
-                  { icon: Zap, label: '体力', val: pet.st, bar: '#4da3ff' },
-                  { icon: Droplet, label: '清洁', val: pet.cl, bar: '#5ec269' },
-                  { icon: Heart, label: '心情', val: pet.mo, bar: '#ff9f43' },
-                ] as { icon: LucideIcon; label: string; val: number; bar: string }[]
-              ).map(({ icon: Icon, label, val, bar }) => (
-                <div key={label} className="flex items-center gap-2.5">
-                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: `${bar}1f` }}>
-                    <Icon className="h-4 w-4" style={{ color: bar }} />
-                  </div>
-                  <span className="w-8 shrink-0 text-[13px] font-semibold text-[#5a554e]">{label}</span>
-                  <span className="w-7 shrink-0 text-right text-[14px] font-bold tabular-nums text-[#4a4a4e]">{val}</span>
-                  <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-[#eceae4]">
-                    <motion.div
-                      className="h-full rounded-full"
-                      initial={false}
-                      animate={{ width: `${val}%` }}
-                      transition={{ type: 'spring', damping: 30, stiffness: 200 }}
-                      style={{ backgroundColor: bar }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* 照顾按钮：抚摸 / 喂食 / 喂水（进行中锁定） */}
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              {(
-                [
-                  { kind: 'pat' as const, icon: PawPrint, label: '抚摸', bg: '#ffd9e2', fg: '#d96a86' },
-                  { kind: 'feed' as const, icon: UtensilsCrossed, label: '喂食', bg: '#ffe9c9', fg: '#c98a3e' },
-                  { kind: 'water' as const, icon: CupSoda, label: '喂水', bg: '#d4ecff', fg: '#4a90c9' },
-                ]
-              ).map(({ kind, icon: Icon, label, bg, fg }) => (
-                <button
-                  key={kind}
-                  onClick={() => startPetCare(kind)}
-                  disabled={!!petCare}
-                  aria-label={`${label}${pet.name ?? '团子'}`}
-                  className={`flex h-11 items-center justify-center gap-1.5 rounded-full text-[13px] font-bold shadow-sm transition active:scale-95 ${petCare ? 'opacity-40' : ''}`}
-                  style={{ backgroundColor: bg, color: fg }}
-                >
-                  <Icon className="h-4 w-4" />
-                  {label}
-                </button>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* ===== HUD ===== */}
       {!photoMode && (
       <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">
@@ -3079,15 +2977,155 @@ export default function CoupleHome({ close }: { close: () => void }) {
           <div className="pointer-events-auto absolute inset-0 z-10" onClick={() => setMoreOpen(false)} aria-hidden="true" />
         )}
 
+        {/* ===== 宠物状态面板（v7.0：右上角头像唤出 · 毛玻璃胶囊风） ===== */}
+        <AnimatePresence>
+          {petPanel && mode === 'live' && (
+            <motion.div
+              key="pet-panel"
+              initial={{ opacity: 0, y: -14, scale: 0.92 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 340 }}
+              className="pointer-events-auto absolute right-3 top-[104px] z-40 w-[min(78%,270px)] origin-top-right rounded-[26px] border border-white/60 bg-white/55 p-3.5 shadow-[0_16px_40px_rgba(90,60,50,0.18)] backdrop-blur-2xl"
+              role="dialog"
+              aria-label={`${pet.name ?? '团子'}状态面板`}
+            >
+              {/* 头部：头像 + 名字（可改） + 关闭 */}
+              <div className="mb-2 flex items-center gap-2">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fdf3e3] text-[18px] shadow-inner">
+                  <span aria-hidden="true">🐱</span>
+                </div>
+                {petRenaming ? (
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <input
+                      autoFocus
+                      value={petNameDraft}
+                      onChange={(e) => setPetNameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitPetName();
+                        if (e.key === 'Escape') setPetRenaming(false);
+                      }}
+                      maxLength={8}
+                      placeholder="给它起个名字"
+                      aria-label="宠物名字"
+                      className="h-8 min-w-0 flex-1 rounded-full border border-white/70 bg-white/75 px-3 text-[13px] font-semibold text-[#4a4a4e] outline-none placeholder:text-[#c9c2ba] focus:border-[#f4b3c2]"
+                    />
+                    <button
+                      onClick={commitPetName}
+                      aria-label="确认名字"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#f4b3c2]/90 text-white shadow-sm transition active:scale-90"
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[14.5px] font-bold leading-tight text-[#4a4a4e]">{pet.name ?? '团子'}</div>
+                      <div className="text-[10.5px] leading-tight text-[#9a938a]">互动按钮就在屏幕下方哦</div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setPetNameDraft(pet.name ?? '团子');
+                        setPetRenaming(true);
+                      }}
+                      aria-label="给宠物改名"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/60 text-[#a8927c] shadow-sm ring-1 ring-white/70 transition hover:bg-white/85 active:scale-90"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setPetPanel(false)}
+                      aria-label="关闭面板"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/60 text-[#8a837a] shadow-sm ring-1 ring-white/70 transition hover:bg-white/85 active:scale-90"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* 三条状态胶囊：体力（蓝）/ 清洁（绿）/ 心情（橙） */}
+              <div className="flex flex-col gap-1.5">
+                {(
+                  [
+                    { icon: Zap, label: '体力', val: pet.st, bar: '#4da3ff' },
+                    { icon: Droplet, label: '清洁', val: pet.cl, bar: '#5ec269' },
+                    { icon: Heart, label: '心情', val: pet.mo, bar: '#ff9f43' },
+                  ] as { icon: LucideIcon; label: string; val: number; bar: string }[]
+                ).map(({ icon: Icon, label, val, bar }) => (
+                  <div key={label} className="flex items-center gap-2 rounded-full bg-white/60 px-2.5 py-1.5 ring-1 ring-white/70">
+                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: `${bar}1f` }}>
+                      <Icon className="h-3.5 w-3.5" style={{ color: bar }} />
+                    </div>
+                    <span className="w-7 shrink-0 text-[12px] font-semibold text-[#5a554e]">{label}</span>
+                    <span className="w-6 shrink-0 text-right text-[13px] font-bold tabular-nums text-[#4a4a4e]">{val}</span>
+                    <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[#eceae4]">
+                      <motion.div
+                        className="h-full rounded-full"
+                        initial={false}
+                        animate={{ width: `${val}%` }}
+                        transition={{ type: 'spring', damping: 30, stiffness: 200 }}
+                        style={{ backgroundColor: bar }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ===== 宠物互动条（v7.0：独立在屏幕下方 · 毛玻璃 · 抚摸/喂食/喂水/洗澡/抱抱/召唤） ===== */}
+        <AnimatePresence>
+          {mode === 'live' && !wardrobeOpen && (
+            <motion.div
+              key="pet-bar"
+              initial={{ opacity: 0, y: 26 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+              className="absolute bottom-[152px] left-1/2 z-30 -translate-x-1/2"
+            >
+              <div className="pointer-events-auto grid grid-cols-3 gap-1.5 rounded-[24px] border border-white/55 bg-white/45 p-2 shadow-[0_12px_32px_rgba(90,60,50,0.16)] backdrop-blur-2xl">
+                {PET_ACTIONS.map(({ kind, icon: Icon, label, bg, fg }) => (
+                  <button
+                    key={kind}
+                    onClick={() => startPetCare(kind)}
+                    disabled={!!petCare}
+                    aria-label={`${label}${pet.name ?? '团子'}`}
+                    className={`flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[12.5px] font-bold shadow-sm ring-1 ring-white/60 transition active:scale-95 ${petCare ? 'opacity-40' : ''}`}
+                    style={{ backgroundColor: bg, color: fg }}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* 顶栏 */}
         <div className="relative z-20 flex items-start justify-between p-3 pt-11">
-          <button
-            onClick={close}
-            aria-label="返回"
-            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
+          {/* 左列：返回 + 拍照（v7.0 相机按钮移到返回键下方） */}
+          <div className="pointer-events-auto flex flex-col gap-2">
+            <button
+              onClick={close}
+              aria-label="返回"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <button
+              onClick={() => setPhotoMode(true)}
+              aria-label="拍照模式"
+              title="拍照模式"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+            >
+              <Camera className="h-[18px] w-[18px]" />
+            </button>
+          </div>
 
           <div className="flex items-center gap-2">
             {/* 装修小家 / 完成（右上角入口） */}
@@ -3102,15 +3140,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
             >
               {mode === 'live' ? <Pencil className="h-4 w-4" /> : <Check className="h-4 w-4" />}
               {mode === 'live' ? '装修小家' : '完成'}
-            </button>
-            {/* 拍照模式（F6：隐藏 UI 摆拍，存情侣相册） */}
-            <button
-              onClick={() => setPhotoMode(true)}
-              aria-label="拍照模式"
-              title="拍照模式"
-              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
-            >
-              <Camera className="h-[18px] w-[18px]" />
             </button>
             {/* ⋮ 更多菜单：时间变化 / 声音开关 / 视角 */}
             <div className="pointer-events-auto relative">
@@ -3197,13 +3226,21 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 )}
               </AnimatePresence>
             </div>
-            {/* 全屏 */}
+            {/* 宠物头像（v7.0，右上角最外侧）：点击唤出/收起状态面板；状态偏低时亮提醒小红点 */}
             <button
-              onClick={toggleFull}
-              aria-label="全屏"
-              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+              onClick={() => setPetPanel((v) => !v)}
+              aria-label={`${pet.name ?? '团子'}状态面板`}
+              aria-expanded={petPanel}
+              className={`pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-full shadow-sm backdrop-blur transition active:scale-95 ${
+                petPanel ? 'bg-[#fdf3e3] ring-2 ring-[#e46a6a]' : 'bg-[#fdf3e3] ring-2 ring-[#e46a6a]/60'
+              }`}
             >
-              {full ? <Minimize className="h-[18px] w-[18px]" /> : <Maximize className="h-[18px] w-[18px]" />}
+              <span aria-hidden="true" className="text-[19px] leading-none">
+                🐱
+              </span>
+              {(pet.st < 30 || pet.cl < 30 || pet.mo < 30) && (
+                <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full bg-[#ff7a59] ring-2 ring-white/90" />
+              )}
             </button>
           </div>
         </div>
@@ -3216,7 +3253,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
               initial={{ opacity: 0, y: 14 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 10 }}
-              className="absolute bottom-[196px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-2"
+              className="absolute bottom-[272px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-2"
             >
               {charAction.active && charAction.type === 'bath' && (
                 <button

@@ -1350,8 +1350,21 @@ function makeMeowTexture(): THREE.CanvasTexture {
 
 const PET_HEART_N = 4;
 
-/** 宠物照顾动作时长（到位后）：抚摸 / 吃饭 / 喝水 */
-const PET_CARE_DUR: Record<PetCareKind, number> = { pat: 2.0, feed: 4.2, water: 4.2 };
+/** 宠物照顾动作时长（到位后）：抚摸 / 吃饭 / 喝水 / 洗澡 / 抱抱 / 召唤 */
+const PET_CARE_DUR: Record<PetCareKind, number> = { pat: 2.0, feed: 4.2, water: 4.2, bath: 4.6, hug: 3.4, summon: 1.6 };
+
+/** 走向小人速度（召唤 = 一叫就到，疾跑） */
+const petWalkSpeed = (kind: PetCareKind) => (kind === 'summon' ? 1.75 : 0.85);
+
+/** 洗澡泡泡（附着在宠物身上；x,y,z,半径） */
+const PET_FOAM: [number, number, number, number][] = [
+  [0, 0.315, 0.05, 0.042],
+  [-0.075, 0.21, 0.015, 0.036],
+  [0.085, 0.2, -0.045, 0.033],
+  [0.01, 0.26, -0.1, 0.038],
+  [-0.045, 0.275, 0.075, 0.028],
+  [0.06, 0.29, 0.06, 0.024],
+];
 
 /**
  * 小屋宠物「团子」：奶油色小猫，生活模式常驻客厅溜达（复用 partner 漫游 AI，自动避开家具），
@@ -1401,6 +1414,10 @@ function PetBuddy({
   const care = useRef<{ kind: PetCareKind; phase: 'walk' | 'do'; t: number } | null>(null);
   /** 已消费的指令序号 */
   const lastSeq = useRef(-1);
+  /** 抱抱：被抱起的抬升（0→1 缓动，抱住时 ≈1，结束回落） */
+  const hugLift = useRef(0);
+  /** 洗澡泡泡组（bath do 阶段显示） */
+  const foamGrp = useRef<THREE.Group>(null);
 
   const heartTex = useMemo(() => makeHeartTexture(), []);
   const meowTex = useMemo(() => makeMeowTexture(), []);
@@ -1451,6 +1468,8 @@ function PetBuddy({
       g.visible = false;
       // 切装修/退出时照顾中断
       if (care.current) endCare(false);
+      hugLift.current = 0;
+      if (foamGrp.current) foamGrp.current.visible = false;
       return;
     }
     g.visible = true;
@@ -1474,7 +1493,7 @@ function PetBuddy({
       if (c.phase === 'walk') {
         c.t += dt; // 走路计时（到位后清零复用为互动计时）
         if (d > 0.34 && c.t < 9) {
-          const sp = 0.85 * dt;
+          const sp = petWalkSpeed(c.kind) * dt;
           rt.current.x += (dx / d) * Math.min(sp, d);
           rt.current.z += (dz / d) * Math.min(sp, d);
           rt.current.moving = true;
@@ -1493,24 +1512,43 @@ function PetBuddy({
           rt.current.target = null;
           c.phase = 'do';
           c.t = 0;
-          if (c.kind === 'pat') patIt();
+          // 摸头/抱抱/召唤到位：开心压扁 + 爱心 + 喵；洗澡到位：喵一声乖乖坐好
+          if (c.kind === 'pat' || c.kind === 'hug' || c.kind === 'summon') patIt();
+          else meow.current = 1.2;
           onPetEvent?.('arrive', c.kind);
         }
       } else {
         // —— do 阶段：面对面互动 ——
         rt.current.moving = false;
-        rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(-dx, -dz), Math.min(1, dt * 6));
-        // 小人转身面对宠物（蹲下伸手/递碗的朝向）
-        meRT.heading = lerpAngle(meRT.heading, Math.atan2(rt.current.x - meRT.x, rt.current.z - meRT.z), Math.min(1, dt * 6));
+        if (c.kind === 'hug') {
+          // 抱抱：宠物被搂进怀里 —— 贴到小人身前、抬升到胸口、朝向随小人（面朝外被抱着）
+          const hd = meRT.heading;
+          rt.current.x = THREE.MathUtils.lerp(rt.current.x, meRT.x + Math.sin(hd) * 0.15, Math.min(1, dt * 8));
+          rt.current.z = THREE.MathUtils.lerp(rt.current.z, meRT.z + Math.cos(hd) * 0.15, Math.min(1, dt * 8));
+          rt.current.heading = lerpAngle(rt.current.heading, hd, Math.min(1, dt * 8));
+          hugLift.current = Math.min(1, hugLift.current + dt * 2.6);
+          // 怀里蹭蹭：每隔 1.1s 再冒一串爱心
+          if (c.t % 1.1 < dt) {
+            const tn = performance.now() / 1000;
+            heartT.current = Array.from({ length: PET_HEART_N }, (_, i) => tn + 0.04 + i * 0.15);
+          }
+        } else {
+          hugLift.current = Math.max(0, hugLift.current - dt * 4);
+          rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(-dx, -dz), Math.min(1, dt * 6));
+          // 小人转身面对宠物（蹲下伸手/递碗/搓泡泡的朝向）
+          meRT.heading = lerpAngle(meRT.heading, Math.atan2(rt.current.x - meRT.x, rt.current.z - meRT.z), Math.min(1, dt * 6));
+        }
         c.t += dt;
-        // 小人走远了 → 中断
-        if (Math.hypot(meRT.x - rt.current.x, meRT.z - rt.current.z) > 0.75) {
+        // 小人走远了 → 中断（抱抱贴在怀里不会超）
+        if (c.kind !== 'hug' && Math.hypot(meRT.x - rt.current.x, meRT.z - rt.current.z) > 0.75) {
           endCare(false);
         } else if (c.t >= PET_CARE_DUR[c.kind]) {
           endCare(true);
         }
       }
     } else {
+      // 非照顾态：抱抱抬升归位（照顾刚结束/被打断时把怀里的小猫轻轻放回地面）
+      hugLift.current = Math.max(0, hugLift.current - dt * 4);
       petWander(rt.current, dt, itemsRef.current);
       // 卡死检测：朝目标走但位置 1.2s 没怎么动（被家具挡住）→ 清目标立刻重新选点
       const st = stuck.current;
@@ -1533,12 +1571,31 @@ function PetBuddy({
       }
     }
     const mv = rt.current.moving;
-    g.position.set(rt.current.x, mv ? Math.abs(Math.sin(t * 11)) * 0.03 : Math.sin(t * 2.1) * 0.006, rt.current.z);
+    const lift = hugLift.current;
+    g.position.set(
+      rt.current.x,
+      (mv ? Math.abs(Math.sin(t * 11)) * 0.03 : Math.sin(t * 2.1) * 0.006) + lift * (0.33 + Math.sin(t * 3.1) * 0.012),
+      rt.current.z,
+    );
     g.rotation.y = rt.current.heading;
+
+    // —— 洗澡泡泡（bath do 阶段显示：泡泡呼吸起伏 + 肥皂光泽） ——
+    if (foamGrp.current) {
+      const foamy = care.current?.phase === 'do' && care.current.kind === 'bath';
+      foamGrp.current.visible = foamy;
+      if (foamy) {
+        foamGrp.current.children.forEach((m, i) => {
+          m.scale.setScalar(0.8 + Math.sin(t * 6 + i * 1.7) * 0.22);
+          m.position.y = PET_FOAM[i][1] + Math.sin(t * 3 + i * 2.1) * 0.008;
+          const mm = (m as THREE.Mesh).material as THREE.MeshStandardMaterial;
+          mm.opacity = 0.72 + Math.sin(t * 5 + i) * 0.14;
+        });
+      }
+    }
 
     // —— 碗（喂食/喂水 do 阶段显示，摆在小人与宠物之间地面） ——
     if (bowl.current) {
-      const show = care.current?.phase === 'do' && care.current.kind !== 'pat';
+      const show = care.current?.phase === 'do' && (care.current.kind === 'feed' || care.current.kind === 'water');
       if (show && care.current) {
         const bx = (rt.current.x + meRT.x) / 2;
         const bz = (rt.current.z + meRT.z) / 2;
@@ -1558,9 +1615,9 @@ function PetBuddy({
       }
     }
 
-    // —— 吃/喝：低头啄食节拍（do 阶段且非抚摸） ——
+    // —— 吃/喝：低头啄食节拍（仅喂食/喂水的 do 阶段） ——
     if (headGrp.current) {
-      const eating = care.current?.phase === 'do' && care.current.kind !== 'pat';
+      const eating = care.current?.phase === 'do' && (care.current.kind === 'feed' || care.current.kind === 'water');
       if (eating) {
         headGrp.current.rotation.x = Math.max(0, Math.sin(t * 7.5)) * 0.34;
         headGrp.current.position.z = 0.068 + Math.max(0, Math.sin(t * 7.5)) * 0.02;
@@ -1726,6 +1783,15 @@ function PetBuddy({
       <sprite ref={meowSp} position={[0.18, 0.56, 0.05]} scale={[0.2, 0.15, 1]} visible={false}>
         <spriteMaterial map={meowTex} transparent depthWrite={false} />
       </sprite>
+      {/* 洗澡泡泡（bath do 阶段显示，肥皂光泽） */}
+      <group ref={foamGrp} visible={false}>
+        {PET_FOAM.map(([fx, fy, fz, fr], i) => (
+          <mesh key={i} position={[fx, fy, fz]}>
+            <sphereGeometry args={[fr, 10, 8]} />
+            <meshStandardMaterial color="#ffffff" roughness={0.25} transparent opacity={0.8} depthWrite={false} />
+          </mesh>
+        ))}
+      </group>
       {/* 点击热区（透明大球，盖住猫全身 + 富余，走动中也容易点中） */}
       <mesh position={[0, 0.22, 0.02]} onPointerDown={onDown}>
         <sphereGeometry args={[0.42, 12, 10]} />

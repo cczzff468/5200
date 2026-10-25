@@ -424,8 +424,8 @@ export interface PetState {
   ts: number;
 }
 
-/** 宠物照顾动作种类 */
-export type PetCareKind = 'pat' | 'feed' | 'water';
+/** 宠物照顾动作种类（v7.0：+洗澡 / 抱抱 / 召唤） */
+export type PetCareKind = 'pat' | 'feed' | 'water' | 'bath' | 'hug' | 'summon';
 
 /** G1 装修方案快照（家具整组 + 各房间地板/墙色；不含照片 —— 相框照片不随方案备份，控制存档体积） */
 export interface LayoutSnap {
