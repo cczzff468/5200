@@ -1,8 +1,7 @@
-/**
- * 拾光小屋 · 全屋 A* 网格寻路（v8.0 陪伴交互系统的物理层）
+/** 拾光小屋 · 全屋 A* 网格寻路（v8.0 陪伴交互系统的物理层）
  *
  * 设计目标（避坑要求：防穿墙 + 防穿透家具）：
- * - 0.2m 网格覆盖五房间（客厅/卫生间/卧室/厨房/阳台）与门洞；
+ * - 0.2m 网格覆盖七区域（客厅/卫生间/卧室/厨房/阳台 + v10 书房/花园）与门洞；
  * - 静态阻挡 = 墙段 AABB（Room.buildWallBoxes，含门洞缺口）+ 关闭的门洞补挡 + 家具脚印（膨胀 0.26 人身半径）；
  * - A* 8 方向（对角需两正交向可走，杜绝切角穿家具）→ 视线拉直（LOS 采样）输出稀疏路点；
  * - 目标点被挡时螺旋外扩找最近可站点（「走到沙发前」永远有解）。
@@ -21,10 +20,18 @@ import {
   BED_Z1,
   CATALOG,
   DOORS,
+  GARDEN_X0,
+  GARDEN_X1,
+  GARDEN_Z0,
+  GARDEN_Z1,
   KTCH_X1,
   ROOM_SPANS,
   ROOM_X,
   ROOM_Z,
+  SRDOOR_Z,
+  STUDY_X0,
+  STUDY_X1,
+  YDOOR_X,
   footprintOf,
   roomAt,
 } from '../catalog';
@@ -45,15 +52,18 @@ export interface Pt {
 
 // ---------------- 房间图跨房间规划（自 HomeScene v7.1 迁移） ----------------
 
-type DoorKey = 'bed' | 'kt' | 'bath' | 'bal';
+/** 门 key：老四扇（bed/kt/bath/bal）+ v10 固定门位新两扇（sr 书房木门 / yd 花园栅栏门） */
+export type DoorKey = 'bed' | 'kt' | 'bath' | 'bal' | 'sr' | 'yd';
 
 /** 房间邻接图（树：客厅为中心；val = 连接两房间的门） */
 export const ROOM_ADJ: Record<RoomId, Partial<Record<RoomId, DoorKey>>> = {
-  lr: { br: 'bed', kt: 'kt', ba: 'bath' },
+  lr: { br: 'bed', kt: 'kt', ba: 'bath', sr: 'sr' },
   br: { lr: 'bed', bal: 'bal' },
-  kt: { lr: 'kt' },
+  kt: { lr: 'kt', yd: 'yd' },
   ba: { lr: 'bath' },
   bal: { br: 'bal' },
+  sr: { lr: 'sr' },
+  yd: { kt: 'yd' },
 };
 
 /** 门两侧路点离墙距离（穿门走廊的「踏板点」，DOOR_PASS=0.3 取 0.5 更稳） */
@@ -64,6 +74,14 @@ export function doorPoints(d: DoorKey, along: number): { aSide: Pt; bSide: Pt } 
   if (d === 'bath') {
     // 客厅西 / 卫生间东（竖墙 x=BATH_X0）
     return { aSide: { x: BATH_X0 - DOOR_STEP, z: along }, bSide: { x: BATH_X0 + DOOR_STEP, z: along } };
+  }
+  if (d === 'sr') {
+    // 书房西 / 客厅东（竖墙 x=STUDY_X1 = -ROOM_X；aSide = 书房侧）
+    return { aSide: { x: STUDY_X1 - DOOR_STEP, z: along }, bSide: { x: STUDY_X1 + DOOR_STEP, z: along } };
+  }
+  if (d === 'yd') {
+    // 厨房北 / 花园南（北栅栏 z=GARDEN_Z0；aSide = 厨房/走廊侧，踏板点落在厨房南墙门洞内）
+    return { aSide: { x: along, z: GARDEN_Z0 - DOOR_STEP }, bSide: { x: along, z: GARDEN_Z0 + DOOR_STEP } };
   }
   // bed/kt：客厅北（z=BED_Z0）；bal：卧室北（z=BED_Z1）
   const wall = d === 'bal' ? BED_Z1 : BED_Z0;
@@ -99,8 +117,9 @@ export function planDoors(from: RoomId, to: RoomId): DoorKey[] | null {
   return null;
 }
 
-/** 生成跨房间路点：每扇门产出「进侧点 → 出侧点」；沿途任一门关着 → null（稍后再试） */
-export function planRoute(from: RoomId, to: RoomId, doors: Record<DoorKey, DoorGate>): Pt[] | null {
+/** 生成跨房间路点：每扇门产出「进侧点 → 出侧点」；沿途任一门关着 → null（稍后再试）。
+ *  doors 允许只传老四扇（Partial）：sr/yd 缺省视为关门，新房间不可达。 */
+export function planRoute(from: RoomId, to: RoomId, doors: Partial<Record<DoorKey, DoorGate>>): Pt[] | null {
   const seq = planDoors(from, to);
   if (seq === null) return null;
   const pts: Pt[] = [];
@@ -109,8 +128,15 @@ export function planRoute(from: RoomId, to: RoomId, doors: Record<DoorKey, DoorG
     const live = doors[d];
     if (!live?.open) return null;
     const { aSide, bSide } = doorPoints(d, live.along);
-    // 进/出方向：aSide 恒为「北/西侧房间」（bath：lr；bal：br；bed/kt：lr）——按 cur 是否在 a 侧分流
-    const curIsA = d === 'bath' ? cur === 'lr' : d === 'bal' ? cur === 'br' : cur === 'lr';
+    // 进/出方向：aSide 恒为「北/西侧房间」（bath：lr；bal：br；bed/kt：lr；sr：书房；yd：厨房）——按 cur 是否在 a 侧分流
+    const curIsA =
+      d === 'sr'
+        ? cur === 'sr'
+        : d === 'yd'
+          ? cur === 'kt'
+          : d === 'bal'
+            ? cur === 'br'
+            : cur === 'lr';
     pts.push(curIsA ? aSide : bSide, curIsA ? bSide : aSide);
     // 经 d 门从 cur 走到的下一个房间
     const nxt = (Object.entries(ROOM_ADJ[cur]).find(([, dd]) => dd === d)?.[0] ?? 'lr') as RoomId;
@@ -124,11 +150,13 @@ export function planRoute(from: RoomId, to: RoomId, doors: Record<DoorKey, DoorG
 /** 网格步长（米）：0.2 对 0.25 吸附家具更精细，全屋 ~3600 格 A* 毫秒级 */
 export const CELL = 0.2;
 
-/** 网格世界范围（盖五房间外扩 0.4） */
-const GRID_X0 = -ROOM_X - 0.4;
-const GRID_X1 = KTCH_X1 + 0.4;
+/**
+ * 网格世界范围（盖七区域外扩 0.4：客厅/卫生间/卧室/厨房/阳台 + v10 书房/花园）
+ */
+const GRID_X0 = STUDY_X0 - 0.4;
+const GRID_X1 = Math.max(KTCH_X1, GARDEN_X1) + 0.4;
 const GRID_Z0 = -ROOM_Z - 0.4;
-const GRID_Z1 = BAL_Z1 + 0.4;
+const GRID_Z1 = Math.max(BAL_Z1, GARDEN_Z1) + 0.4;
 
 /** 网格尺寸 */
 const GW = Math.ceil((GRID_X1 - GRID_X0) / CELL);
@@ -176,11 +204,13 @@ function blockBox(blocked: Uint8Array, x0: number, x1: number, z0: number, z1: n
 
 /**
  * 重建阻挡网格（HomeScene 在 items / 墙段 / 门态变化时调用，节流后毫秒级）：
- * - 墙段盒（buildWallBoxes 已含门洞缺口）膨胀 BODY_PAD；
- * - 关闭的门：门洞缺口处补一块「关门板」阻挡（开门 = 缺口可走）；
+ * - 墙段盒（buildWallBoxes 已含门洞缺口 + v10 书房三面外墙）膨胀 BODY_PAD；
+ * - 关闭的门：门洞缺口处补一块「关门板」阻挡（开门 = 缺口可走）；含可滑行四扇（DOORS 表）
+ *   与 v10 固定门位两扇（sr 书房门 / yd 花园栅栏门）；
+ * - 花园栅栏（半高不挡视线，但挡寻路出界）：四边细阻挡条，北边留门洞（开门 = 缺口可走）；
  * - 家具脚印：非 flat、y≤0.45（地上物）膨胀 BODY_PAD。
  */
-export function buildBlockGrid(items: FurnitureItem[], walls: THREE.Box3[], doors: Record<DoorKey, DoorGate>): BlockGrid {
+export function buildBlockGrid(items: FurnitureItem[], walls: THREE.Box3[], doors: Partial<Record<DoorKey, DoorGate>>): BlockGrid {
   const blocked = new Uint8Array(GW * GH);
   // ① 墙段（外扩身体半径）
   for (const b of walls) {
@@ -196,6 +226,20 @@ export function buildBlockGrid(items: FurnitureItem[], walls: THREE.Box3[], door
       blockBox(blocked, d.at - WALL_T, d.at + WALL_T, along - DOOR_HOLE_HALF, along + DOOR_HOLE_HALF);
     }
   }
+  // ②b v10 固定门位两扇（不在可滑行 DOORS 表）：关门 → 堵门洞
+  if (!doors.sr?.open) {
+    blockBox(blocked, STUDY_X1 - WALL_T, STUDY_X1, SRDOOR_Z - DOOR_HOLE_HALF, SRDOOR_Z + DOOR_HOLE_HALF);
+  }
+  if (!doors.yd?.open) {
+    blockBox(blocked, YDOOR_X - DOOR_HOLE_HALF, YDOOR_X + DOOR_HOLE_HALF, GARDEN_Z0 - WALL_T, GARDEN_Z0 + WALL_T);
+  }
+  // ②c 花园栅栏（挡寻路出界；北栅栏留门洞 x ∈ YDOOR_X ± DOOR_HOLE_HALF，开门 = 可穿）
+  const F_T = 0.05; // 栅栏阻挡半厚
+  blockBox(blocked, GARDEN_X0 - F_T, YDOOR_X - DOOR_HOLE_HALF, GARDEN_Z0 - F_T, GARDEN_Z0 + F_T); // 北栅栏·西段
+  blockBox(blocked, YDOOR_X + DOOR_HOLE_HALF, GARDEN_X1 + F_T, GARDEN_Z0 - F_T, GARDEN_Z0 + F_T); // 北栅栏·东段
+  blockBox(blocked, GARDEN_X0 - F_T, GARDEN_X1 + F_T, GARDEN_Z1 - F_T, GARDEN_Z1 + F_T); // 南栅栏
+  blockBox(blocked, GARDEN_X0 - F_T, GARDEN_X0 + F_T, GARDEN_Z0 - F_T, GARDEN_Z1 + F_T); // 西栅栏
+  blockBox(blocked, GARDEN_X1 - F_T, GARDEN_X1 + F_T, GARDEN_Z0 - F_T, GARDEN_Z1 + F_T); // 东栅栏
   // ③ 家具脚印
   for (const it of items) {
     const e = CATALOG[it.kind];
@@ -371,7 +415,7 @@ export function randPointInRoomFree(grid: BlockGrid, room: RoomId): Pt {
   return nearestFree(grid.blocked, (x0 + x1) / 2, (z0 + z1) / 2);
 }
 
-/** 当前所在房间（roomAt 包装：恒有值） */
+/** 当前所在房间（roomAt 包装：恒有值；含 v10 书房/花园） */
 export function roomOf(x: number, z: number): RoomId {
   return roomAt(x, z);
 }

@@ -29,6 +29,7 @@ import {
   roomOf,
   type BlockGrid,
   type DoorGate,
+  type DoorKey,
   type Pt,
 } from './pathfind';
 
@@ -329,14 +330,14 @@ function nearestDiningTable(items: FurnitureItem[], from: Pt): FurnitureItem | n
 
 /** 找最近一扇关着的门（door）；返回门 id（bed/kt/bath/bal） */
 function nearestClosedDoor(
-  doors: Record<'bed' | 'kt' | 'bath' | 'bal', DoorGate>,
+  doors: Partial<Record<DoorKey, DoorGate>>,
   from: Pt,
 ): 'bed' | 'kt' | 'bath' | 'bal' | null {
   let best: 'bed' | 'kt' | 'bath' | 'bal' | null = null;
   let bd = Infinity;
   (['bed', 'kt', 'bath', 'bal'] as const).forEach((k) => {
     const d = doors[k];
-    if (d.open) return;
+    if (!d || d.open) return;
     // 门中点近似：axis 'z' 墙门在 (along, at) —— 这里用along与from的粗略距离即可
     const dd = Math.abs(d.along - (Math.abs(d.along - from.x) < Math.abs(d.along - from.z) ? from.x : from.z));
     if (dd < bd) {
@@ -349,15 +350,16 @@ function nearestClosedDoor(
 
 /** v8.3 找身边 0.85m 内的关着的门（卡住自救开门用）：返回门 id 或 null */
 function closedDoorNear(
-  doors: Record<'bed' | 'kt' | 'bath' | 'bal', DoorGate>,
+  doors: Partial<Record<DoorKey, DoorGate>>,
   from: Pt,
   radius = 0.85,
 ): 'bed' | 'kt' | 'bath' | 'bal' | null {
   let best: 'bed' | 'kt' | 'bath' | 'bal' | null = null;
   let bd = Infinity;
   (['bed', 'kt', 'bath', 'bal'] as const).forEach((k) => {
-    if (doors[k].open) return;
-    const pts = doorPoints(k, doors[k].along);
+    const gate = doors[k];
+    if (!gate || gate.open) return;
+    const pts = doorPoints(k, gate.along);
     const d = Math.min(Math.hypot(pts.aSide.x - from.x, pts.aSide.z - from.z), Math.hypot(pts.bSide.x - from.x, pts.bSide.z - from.z));
     if (d < radius && d < bd) {
       bd = d;
@@ -466,7 +468,7 @@ export function companionStep(
   dt: number,
   items: FurnitureItem[],
   grid: BlockGrid,
-  doors: Record<'bed' | 'kt' | 'bath' | 'bal', DoorGate>,
+  doors: Partial<Record<DoorKey, DoorGate>>,
   partnerPose: PoseSlot,
   poseRef: PoseSlot,
   collide: (c: CharRT) => void,
@@ -514,13 +516,14 @@ export function companionStep(
       const key = (['bed', 'kt', 'bath', 'bal'] as const).includes(cmd.itemId as 'bed')
         ? (cmd.itemId as 'bed' | 'kt' | 'bath' | 'bal')
         : nearestClosedDoor(doors, { x: ta.x, z: ta.z });
-      if (!key || doors[key].open) {
+      const gate = key ? doors[key] : undefined;
+      if (!key || !gate || gate.open) {
         onEvent({ ev: 'giveup', kind: 'door', memo: cmd.memo ?? 'all-open' });
         toIdle(rt, partnerPose);
         return true;
       }
       rt.itemId = key;
-      const pts = doorPoints(key, doors[key].along);
+      const pts = doorPoints(key, gate.along);
       const here = roomOf(ta.x, ta.z);
       const p = roomOf(pts.aSide.x, pts.aSide.z) === here ? pts.aSide : pts.bSide;
       rt.target = p;

@@ -102,11 +102,49 @@ export const BAL_Z1 = BED_Z1 + 2.5;
 export const BAL_W = BAL_X1 - BAL_X0;
 export const BAL_D = BAL_Z1 - BAL_Z0;
 
-/** 四房间+阳台归属：北排东段=卫生间；z<隔墙=客厅；隔墙南、卧室东墙西=卧室；z 超过卧室南墙且在西侧=阳台；再东=厨房 */
+// ---------------- 书房（v10 扩建：客厅西侧 annex） ----------------
+
+/** 书房西缘（外墙） */
+export const STUDY_X0 = -8.5;
+/** 书房东缘（= 客厅西墙，共墙带门洞） */
+export const STUDY_X1 = -ROOM_X;
+/** 书房北缘（= 客厅北墙延长线） */
+export const STUDY_Z0 = -ROOM_Z;
+/** 书房南缘（= 客厅南墙延长线） */
+export const STUDY_Z1 = ROOM_Z;
+export const STUDY_W = STUDY_X1 - STUDY_X0;
+export const STUDY_D = STUDY_Z1 - STUDY_Z0;
+/**
+ * 书房门洞中心（客厅西墙 x=-ROOM_X 上，沿 z 滑不了、固定位）。
+ * 取 0.7 而非 0.3：避让客厅西壁已挂的投影幕布（fp 至 z=0.65）与壁炉
+ * （fp 自 z=1.11 起，外扩阻挡自 z=0.91 起）——门洞 [0.23, 1.17] 与两者都只余最小视觉搭接。
+ */
+export const SRDOOR_Z = 0.7;
+
+// ---------------- 花园（v10 扩建：厨房南侧露天） ----------------
+
+/** 花园西缘（= 阳台东墙延长线，栅栏） */
+export const GARDEN_X0 = BED_X1;
+/** 花园东缘（栅栏） */
+export const GARDEN_X1 = 8.5;
+/** 花园北缘（栅栏；厨房南墙 z=8 外侧留 0.5m 走廊接门洞） */
+export const GARDEN_Z0 = 8.5;
+/** 花园南缘（栅栏） */
+export const GARDEN_Z1 = 12.5;
+export const GARDEN_W = GARDEN_X1 - GARDEN_X0;
+export const GARDEN_D = GARDEN_Z1 - GARDEN_Z0;
+/** 花园栅栏门中心（北栅栏上，与厨房南墙新门洞对齐，沿 x 固定位） */
+export const YDOOR_X = 4.5;
+
+/** 六房间归属：北排西段=书房（x 越过客厅西墙）；北排东段=卫生间；z<隔墙=客厅；隔墙南、卧室东墙西=卧室；
+ * z 超过卧室南墙且在西侧=阳台；卧室东墙以东、厨房南墙外（z>8）=花园；其余东侧=厨房 */
 export function roomAt(x: number, z: number): RoomId {
-  if (z < BED_Z0) return x >= BATH_X0 ? 'ba' : 'lr';
+  if (z < BED_Z0) {
+    if (x < STUDY_X1 - WALL_T / 2) return 'sr';
+    return x >= BATH_X0 ? 'ba' : 'lr';
+  }
   if (x < BED_X1) return z > BED_Z1 + 0.01 ? 'bal' : 'br';
-  return 'kt';
+  return z > BED_Z1 ? 'yd' : 'kt';
 }
 
 /** 各房间随机落点范围（x0,x1,z0,z1，已内缩防贴墙） */
@@ -116,9 +154,19 @@ export const ROOM_SPANS: Record<RoomId, [number, number, number, number]> = {
   kt: [BED_X1 + 0.5, KTCH_X1 - 0.5, BED_Z0 + 0.5, BED_Z1 - 0.5],
   ba: [BATH_X0 + 0.5, BATH_X1 - 0.5, BATH_Z0 + 0.5, BATH_Z1 - 0.5],
   bal: [BAL_X0 + 0.5, BAL_X1 - 0.5, BAL_Z0 + 0.5, BAL_Z1 - 0.5],
+  sr: [STUDY_X0 + 0.5, STUDY_X1 - 0.5, STUDY_Z0 + 0.5, STUDY_Z1 - 0.5],
+  yd: [GARDEN_X0 + 0.5, GARDEN_X1 - 0.5, GARDEN_Z0 + 0.5, GARDEN_Z1 - 0.5],
 };
 
-export const ROOM_NAMES: Record<RoomId, string> = { lr: '客厅', br: '卧室', kt: '厨房', ba: '卫生间', bal: '阳台' };
+export const ROOM_NAMES: Record<RoomId, string> = {
+  lr: '客厅',
+  br: '卧室',
+  kt: '厨房',
+  ba: '卫生间',
+  bal: '阳台',
+  sr: '书房',
+  yd: '花园',
+};
 
 /** 家具在任意水平角下的占地 AABB（fp 未旋转脚印 × 旋转） */
 export function footprintOf(entry: CatalogEntry, ry: number): [number, number] {
@@ -128,7 +176,7 @@ export function footprintOf(entry: CatalogEntry, ry: number): [number, number] {
   return [w * c + d * s, w * s + d * c];
 }
 
-/** 家具四房间+阳台钳制：客厅/卧室/厨房/卫生间/阳台，不许骑墙 */
+/** 家具六房间钳制：客厅/卧室/厨房/卫生间/阳台/书房/花园，不许骑墙 */
 export function clampFurnToRooms(x: number, z: number, hw: number, hd: number): [number, number] {
   if (z < BED_Z0) {
     if (x >= BATH_X0) {
@@ -136,6 +184,13 @@ export function clampFurnToRooms(x: number, z: number, hw: number, hd: number): 
       return [
         Math.min(BATH_X1 - hw, Math.max(BATH_X0 + hw, x)),
         Math.min(BATH_Z1 - hd, Math.max(BATH_Z0 + hd, z)),
+      ];
+    }
+    if (x < STUDY_X1) {
+      // 书房（北排西段 v10；西/北/南外墙，东墙 = 客厅西墙共墙）
+      return [
+        Math.min(STUDY_X1 - hw, Math.max(STUDY_X0 + hw, x)),
+        Math.min(STUDY_Z1 - hd, Math.max(STUDY_Z0 + hd, z)),
       ];
     }
     // 客厅
@@ -156,6 +211,13 @@ export function clampFurnToRooms(x: number, z: number, hw: number, hd: number): 
     return [
       Math.min(BED_X1 - hw, Math.max(-ROOM_X + hw, x)),
       Math.min(BED_Z1 - hd, Math.max(BED_Z0 + hd, z)),
+    ];
+  }
+  if (z > BED_Z1) {
+    // 花园（厨房南侧露天 v10，栅栏内）
+    return [
+      Math.min(GARDEN_X1 - hw, Math.max(GARDEN_X0 + hw, x)),
+      Math.min(GARDEN_Z1 - hd, Math.max(GARDEN_Z0 + hd, z)),
     ];
   }
   // 厨房
@@ -185,9 +247,11 @@ export interface WallSlot {
 export const WALL_SLOTS: WallSlot[] = [
   // 客厅
   { room: 'lr', axis: 'z', at: -ROOM_Z + 0.07, from: -4.0, to: 4.0, ry: 0, avoid: [[-3.05, -1.35], [1.35, 3.05]] },
-  { room: 'lr', axis: 'x', at: -ROOM_X + 0.07, from: -2.6, to: 2.6, ry: Math.PI / 2, avoid: [[-2.45, -0.75]] },
+  { room: 'lr', axis: 'x', at: -ROOM_X + 0.07, from: -2.6, to: 2.6, ry: Math.PI / 2, avoid: [[-2.45, -0.75], [SRDOOR_Z - 0.55, SRDOOR_Z + 0.55]] },
   { room: 'lr', axis: 'x', at: ROOM_X - 0.07, from: -2.6, to: 2.6, ry: -Math.PI / 2 },
   { room: 'lr', axis: 'z', at: BED_Z0 - 0.07, from: -1.5, to: 1.9, ry: Math.PI },
+  // 书房（v10：西外墙挂画槽，避让装饰窗）
+  { room: 'sr', axis: 'x', at: STUDY_X0 + 0.07, from: -2.5, to: 2.5, ry: Math.PI / 2, avoid: [[-2.6, -1.0]] },
   // 卧室
   { room: 'br', axis: 'x', at: -ROOM_X + 0.07, from: 3.3, to: 4.5, ry: Math.PI / 2 },
   { room: 'br', axis: 'x', at: BED_X1 - 0.07, from: 3.5, to: 7.5, ry: -Math.PI / 2 },
@@ -1078,6 +1142,8 @@ export function defaultHome(): HomeState {
     doorOpen: false,
     kitchenDoorOpen: false,
     bathDoorOpen: false,
+    studyDoorOpen: false,
+    gardenGateOpen: false,
     furniture: [
       // —— 客厅·电视墙（北） ——
       F('tvStand', 0, -2.7),
@@ -1220,6 +1286,22 @@ export function defaultHome(): HomeState {
       F('flowerStand', 1.05, 9.7, { ry: -Math.PI / 2 }), // 花架靠东墙
       F('plant', 0.1, 9.8), // 大绿植
       F('doormat', -1.2, 8.45), // 阳台门垫
+
+      // —— 书房（客厅西侧 annex，v10 推门而入；门洞在东墙 z=0.7） ——
+      F('bookcase', -6.6, -2.7), // 开放书架靠北墙
+      F('desk', -8.02, -1.8, { ry: Math.PI / 2 }), // 书桌靠西墙（装饰窗下）
+      F('chair', -7.12, -1.8, { ry: -Math.PI / 2 }), // 座椅面朝书桌
+      F('lampTable', -8.05, -2.42, { y: 0.77 }), // 台灯摆上书桌（北端）
+      F('laptop', -7.98, -1.35, { y: 0.78, ry: Math.PI / 2 }), // 手提电脑摆上书桌（南端）
+      F('rug', -6.35, 0.6), // 圆地毯（门旁）
+      F('doormat', -4.85, 0.7, { ry: Math.PI / 2 }), // 书房门垫
+      F('plantSmall', -8.1, 2.55), // 西南角小多肉
+
+      // —— 花园（厨房南侧露天，v10；栅栏门在北栅栏 x=4.5） ——
+      F('flowerBox', 2.55, 8.82), // 花箱靠北栅栏（门洞西侧）
+      F('flowerBox', 6.9, 8.82), // 花箱靠北栅栏（门洞东侧）
+      F('loungeOutdoor', 5.6, 10.7, { ry: -0.5 }), // 户外躺椅（斜朝南）
+      F('plant', 7.95, 12.0), // 大绿植（东南角）
     ],
     chars: {
       me: { x: 0.15, z: 2.3, dir: 'up' },

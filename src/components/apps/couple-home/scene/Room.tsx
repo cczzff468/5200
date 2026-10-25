@@ -3,16 +3,17 @@
 /* eslint-disable react-hooks/immutability -- R3F/游戏循环需要原地修改 three 对象（墙体遮挡淡出每帧写 visible/材质） */
 
 /**
- * 情侣小家 3D —— 房屋外壳（v5.3 四室：客厅+卧室+厨房+卫生间）
+ * 情侣小家 3D —— 房屋外壳（v10 六室一园：客厅+卧室+厨房+卫生间+阳台 + 书房+花园）
  *
- * - 户型：客厅 9×6（北）+ 卧室 6×5（西南）+ 厨房 6×5（东南）+ 卫生间 4×5（厨房东侧），
- *   三道门洞（卧室门/厨房门在 z=3 南隔墙、卫生间门在 x=7.5 共墙），点击开门后小人可穿行；
+ * - 户型：客厅 9×6（北）+ 卧室 6×5（西南）+ 厨房 6×5（东南）+ 卫生间 4×6（客厅东侧）
+ *   + 阳台（卧室南侧）+ v10 书房 4×6（客厅西侧 annex，客厅西墙开书房门）+ v10 花园 7×4（厨房南侧露天，栅栏围合），
+ *   点击开门后小人可穿行；
  * - 门/窗数据驱动（catalog.DOORS / WINS）：编辑模式下点击 = 选中（可沿墙滑行/换颜色），不开合；
- *   生活模式下点击 = 开合；
- * - 天花板：四房间各一块，相机钻进屋子（低视角）才显示，俯瞰自动隐藏；颜色分开换；
+ *   生活模式下点击 = 开合；书房门/花园栅栏门为固定位新门（v10），编辑模式不可拖拽；
+ * - 天花板：房间各一块，相机钻进屋子（低视角）才显示，俯瞰自动隐藏；阳台/花园露天无顶；
  * - 墙壁：视线段遮挡淡出（方案A）——只隐藏「相机→对焦物」视线真正穿过的墙（slab 法 AABB 相交），
  *   材质 opacity 每帧阻尼淡入淡出（丝滑变透明而非硬切 visible）；门/窗/门梁与所在墙同隐同现；
- *   地板/墙色四房间分开自定义。
+ *   地板/墙色分房间自定义（书房随客厅同色系）。
  */
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
@@ -34,15 +35,25 @@ import {
   BED_Z1,
   DOOR_W,
   DOORS,
+  GARDEN_X0,
+  GARDEN_X1,
+  GARDEN_Z0,
+  GARDEN_Z1,
   KDOOR_X,
   KTCH_X1,
   ROOM_W,
   ROOM_D,
+  SRDOOR_Z,
+  STUDY_X0,
+  STUDY_X1,
+  STUDY_Z0,
+  STUDY_Z1,
   WINS,
   WALL_H,
   WALL_T,
   ROOM_X,
   ROOM_Z,
+  YDOOR_X,
 } from '../catalog';
 
 // ---------------- 地板/墙面纹理（E3：装修面板可选，颜色仍由材质 color 相乘生效） ----------------
@@ -300,8 +311,8 @@ interface WallDef {
   normal: THREE.Vector3;
   /** 是否画踢脚线（默认画） */
   baseboard?: boolean;
-  /** 归属房间：五房间分开换色（bal = 阳台 v5.7） */
-  room: 'lr' | 'br' | 'kt' | 'ba' | 'bal';
+  /** 归属房间：六房间分开换色（sr = 书房 v10，随客厅同色系回落） */
+  room: 'lr' | 'br' | 'kt' | 'ba' | 'bal' | 'sr';
 }
 
 /** 墙体世界 AABB（墙盒不旋转，中心±半尺寸） */
@@ -440,7 +451,8 @@ function useWallOcclusionFade(
 
 /**
  * 隔墙（带门洞）随门位动态重建：门挪 → 墙段跟随。
- * v5.4 户型：客厅 9×6（西北）+ 卫生间 4×6（客厅东侧）+ 卧室 6×5 / 厨房 6×5（南排）；
+ * v10 户型：客厅 9×6（西北）+ 卫生间 4×6（客厅东侧）+ 卧室 6×5 / 厨房 6×5（南排）
+ * + 书房 4×6（客厅西侧 annex，客厅西墙开书房门洞）+ 花园（厨房南墙开门洞通栅栏）；
  * 卫生间门开在客厅东墙（x=4.5），厨房东墙变外墙（无门洞）。
  */
 function buildWalls(doorBed: number, doorKt: number, doorBath: number, doorBal: number): WallDef[] {
@@ -450,10 +462,16 @@ function buildWalls(doorBed: number, doorKt: number, doorBath: number, doorBal: 
     { key: 'back', pos: [0, H / 2, -ROOM_Z - WALL_T / 2], size: [ROOM_W + WALL_T * 2, H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'lr' },
     { key: 'frontWest', pos: [(-ROOM_X - WALL_T + doorBed - DOOR_W / 2) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [doorBed - DOOR_W / 2 - (-ROOM_X - WALL_T), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'lr' },
     { key: 'frontEast', pos: [(doorBed + DOOR_W / 2 + BED_X1) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [BED_X1 - (doorBed + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'lr' },
-    { key: 'left', pos: [-ROOM_X - WALL_T / 2, H / 2, 0], size: [WALL_T, H, ROOM_D], normal: new THREE.Vector3(-1, 0, 0), room: 'lr' },
+    // 客厅西墙（= 书房东墙 v10：两段夹书房门洞，固定位 SRDOOR_Z）
+    { key: 'leftA', pos: [-ROOM_X - WALL_T / 2, H / 2, (-ROOM_Z - WALL_T / 2 + SRDOOR_Z - DOOR_W / 2) / 2], size: [WALL_T, H, SRDOOR_Z - DOOR_W / 2 - (-ROOM_Z - WALL_T / 2)], normal: new THREE.Vector3(-1, 0, 0), room: 'lr' },
+    { key: 'leftB', pos: [-ROOM_X - WALL_T / 2, H / 2, (SRDOOR_Z + DOOR_W / 2 + ROOM_Z + WALL_T / 2) / 2], size: [WALL_T, H, ROOM_Z + WALL_T / 2 - (SRDOOR_Z + DOOR_W / 2)], normal: new THREE.Vector3(-1, 0, 0), room: 'lr' },
     // 客厅东墙（= 卫生间西墙）：两段夹卫生间门洞
     { key: 'rightA', pos: [ROOM_X + WALL_T / 2, H / 2, (-ROOM_Z - WALL_T / 2 + doorBath - DOOR_W / 2) / 2], size: [WALL_T, H, doorBath - DOOR_W / 2 - (-ROOM_Z - WALL_T / 2)], normal: new THREE.Vector3(1, 0, 0), room: 'lr' },
     { key: 'rightB', pos: [ROOM_X + WALL_T / 2, H / 2, (doorBath + DOOR_W / 2 + ROOM_Z + WALL_T / 2) / 2], size: [WALL_T, H, ROOM_Z + WALL_T / 2 - (doorBath + DOOR_W / 2)], normal: new THREE.Vector3(1, 0, 0), room: 'lr' },
+    // —— 书房（v10：客厅西侧 annex；西/北/南三面外墙，东墙 = 上面 leftA/leftB 共墙） ——
+    { key: 'srNorth', pos: [(STUDY_X0 - WALL_T + STUDY_X1) / 2, H / 2, STUDY_Z0 - WALL_T / 2], size: [STUDY_X1 - (STUDY_X0 - WALL_T), H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'sr' },
+    { key: 'srSouth', pos: [(STUDY_X0 - WALL_T + STUDY_X1) / 2, H / 2, STUDY_Z1 + WALL_T / 2], size: [STUDY_X1 - (STUDY_X0 - WALL_T), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'sr' },
+    { key: 'srWest', pos: [STUDY_X0 - WALL_T / 2, H / 2, (STUDY_Z0 - WALL_T + STUDY_Z1 + WALL_T) / 2], size: [WALL_T, H, STUDY_Z1 - STUDY_Z0 + WALL_T * 2], normal: new THREE.Vector3(-1, 0, 0), room: 'sr' },
     // —— 卧室（隔墙南侧） ——
     { key: 'bedLeft', pos: [-ROOM_X - WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(-1, 0, 0), room: 'br' },
     // 卧室/厨房共墙
@@ -466,7 +484,9 @@ function buildWalls(doorBed: number, doorKt: number, doorBath: number, doorBal: 
     { key: 'ktNorthMain', pos: [(doorKt + DOOR_W / 2 + BATH_X1 + WALL_T) / 2, H / 2, BED_Z0 + WALL_T / 2], size: [BATH_X1 + WALL_T - (doorKt + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'kt' },
     // 厨房东墙（v5.4 变外墙，无门洞）
     { key: 'ktEast', pos: [KTCH_X1 + WALL_T / 2, H / 2, (BED_Z0 + BED_Z1) / 2], size: [WALL_T, H, BED_Z1 - BED_Z0], normal: new THREE.Vector3(1, 0, 0), room: 'kt' },
-    { key: 'ktSouth', pos: [(BED_X1 + KTCH_X1) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [KTCH_X1 - BED_X1 + WALL_T * 2, H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'kt' },
+    // 厨房南墙（v10：两段夹花园走廊门洞，固定位 YDOOR_X，通花园栅栏门）
+    { key: 'ktSouthW', pos: [(BED_X1 - WALL_T + YDOOR_X - DOOR_W / 2) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [YDOOR_X - DOOR_W / 2 - (BED_X1 - WALL_T), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'kt' },
+    { key: 'ktSouthE', pos: [(YDOOR_X + DOOR_W / 2 + KTCH_X1 + WALL_T) / 2, H / 2, BED_Z1 + WALL_T / 2], size: [KTCH_X1 + WALL_T - (YDOOR_X + DOOR_W / 2), H, WALL_T], normal: new THREE.Vector3(0, 0, 1), room: 'kt' },
     // —— 卫生间（客厅东侧；北墙带窗，东墙带窗，南墙由 ktNorthMain 延伸段覆盖） ——
     { key: 'bathNorth', pos: [(BATH_X0 + BATH_X1) / 2, H / 2, BATH_Z0 - WALL_T / 2], size: [BATH_X1 - BATH_X0, H, WALL_T], normal: new THREE.Vector3(0, 0, -1), room: 'ba' },
     { key: 'bathEast', pos: [BATH_X1 + WALL_T / 2, H / 2, (BATH_Z0 + BATH_Z1) / 2], size: [WALL_T, H, BATH_Z1 - BATH_Z0 + WALL_T * 2], normal: new THREE.Vector3(1, 0, 0), room: 'ba' },
@@ -974,6 +994,93 @@ function Window({
   );
 }
 
+// ---------------- 花园栅栏（v10：半高不挡视线；北面留门洞 + 栅栏门） ----------------
+
+const FENCE_H = 0.52;
+
+/** 一段栅栏：双横杆 + 等距立柱（木色；半高不参与墙体遮挡淡出） */
+function FenceRun({ from, to }: { from: [number, number]; to: [number, number] }) {
+  const [x0, z0] = from;
+  const [x1, z1] = to;
+  const len = Math.max(0.01, Math.hypot(x1 - x0, z1 - z0));
+  const ang = Math.atan2(x1 - x0, z1 - z0);
+  const n = Math.max(2, Math.round(len / 0.72) + 1);
+  const posts = Array.from({ length: n }, (_, i) => -len / 2 + (len / (n - 1)) * i);
+  return (
+    <group position={[(x0 + x1) / 2, 0, (z0 + z1) / 2]} rotation={[0, ang, 0]}>
+      {[0.14, FENCE_H * 0.78].map((y) => (
+        <mesh key={y} position={[0, y, 0]} castShadow>
+          <boxGeometry args={[0.05, 0.05, len]} />
+          <meshStandardMaterial color="#d9c7a2" roughness={0.85} />
+        </mesh>
+      ))}
+      {posts.map((p, i) => (
+        <mesh key={i} position={[0, FENCE_H / 2, p]} castShadow>
+          <boxGeometry args={[0.07, FENCE_H, 0.07]} />
+          <meshStandardMaterial color="#cdba90" roughness={0.9} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/** 花园四边栅栏 + 门柱（北面留门洞 x ∈ YDOOR_X ± DOOR_W/2） */
+function GardenFence() {
+  const gx = YDOOR_X - DOOR_W / 2;
+  const gxx = YDOOR_X + DOOR_W / 2;
+  return (
+    <group>
+      <FenceRun from={[GARDEN_X0, GARDEN_Z0]} to={[gx, GARDEN_Z0]} />
+      <FenceRun from={[gxx, GARDEN_Z0]} to={[GARDEN_X1, GARDEN_Z0]} />
+      <FenceRun from={[GARDEN_X0, GARDEN_Z1]} to={[GARDEN_X1, GARDEN_Z1]} />
+      <FenceRun from={[GARDEN_X0, GARDEN_Z0]} to={[GARDEN_X0, GARDEN_Z1]} />
+      <FenceRun from={[GARDEN_X1, GARDEN_Z0]} to={[GARDEN_X1, GARDEN_Z1]} />
+      {/* 门柱（门洞两侧，加粗） */}
+      {[gx, gxx].map((x) => (
+        <mesh key={x} position={[x, (FENCE_H + 0.14) / 2, GARDEN_Z0]} castShadow>
+          <boxGeometry args={[0.09, FENCE_H + 0.14, 0.09]} />
+          <meshStandardMaterial color="#c2ab84" roughness={0.85} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/** 花园栅栏门（铰链在门洞西柱，向花园内侧摆开；编辑模式点击不响应） */
+function GardenGate({ open, onToggle, editMode }: { open: boolean; onToggle: () => void; editMode: boolean }) {
+  const leaf = useRef<THREE.Group>(null);
+  useFrame((_, dt) => {
+    if (!leaf.current) return;
+    leaf.current.rotation.y = THREE.MathUtils.damp(leaf.current.rotation.y, open ? -1.5 : 0, 6, dt);
+  });
+  const W = DOOR_W - 0.06;
+  return (
+    <group position={[YDOOR_X - DOOR_W / 2 + 0.03, 0, GARDEN_Z0]}>
+      <group
+        ref={leaf}
+        onClick={(e) => {
+          if (e.delta > 8) return;
+          e.stopPropagation();
+          if (!editMode) onToggle();
+        }}
+      >
+        {[0.14, FENCE_H * 0.78].map((y) => (
+          <mesh key={y} position={[W / 2, y, 0]} castShadow>
+            <boxGeometry args={[W, 0.05, 0.045]} />
+            <meshStandardMaterial color="#d9c7a2" roughness={0.85} />
+          </mesh>
+        ))}
+        {[0.06, 0.34, 0.62, 0.9].map((t) => (
+          <mesh key={t} position={[W * (0.05 + t * 0.9), FENCE_H / 2, 0]} castShadow>
+            <boxGeometry args={[0.075, FENCE_H - 0.06, 0.032]} />
+            <meshStandardMaterial color="#e4d4b2" roughness={0.9} />
+          </mesh>
+        ))}
+      </group>
+    </group>
+  );
+}
+
 // ---------------- 天花板（四房间；相机钻进屋内才显示，俯瞰自动隐藏） ----------------
 
 function Ceiling({
@@ -1052,15 +1159,19 @@ export interface RoomProps {
   doorCol?: string;
   /** 窗框色（#rrggbb；缺省浅木白） */
   winCol?: string;
-  /** 卧室门 / 厨房门 / 卫生间门 / 阳台门开态 */
+  /** 卧室门 / 厨房门 / 卫生间门 / 阳台门 / 书房门 / 花园栅栏门开态 */
   doorOpen?: boolean;
   kitchenDoorOpen?: boolean;
   bathDoorOpen?: boolean;
   balconyDoorOpen?: boolean;
+  studyDoorOpen?: boolean;
+  gardenGateOpen?: boolean;
   onToggleDoor?: () => void;
   onToggleKitchenDoor?: () => void;
   onToggleBathDoor?: () => void;
   onToggleBalconyDoor?: () => void;
+  onToggleStudyDoor?: () => void;
+  onToggleGardenGateDoor?: () => void;
   /** 相机对焦物（生活模式=小人，编辑模式=轨道中心）；隔墙用它判断是否挡在镜头与对焦物之间 */
   focusRef?: RefObject<FocusPos>;
   /** 地板纹理（全屋通用，颜色仍分房间）：wood 木纹（默认）/ plain 素色 / check 大格瓷砖 */
@@ -1103,10 +1214,14 @@ export default function Room({
   kitchenDoorOpen,
   bathDoorOpen,
   balconyDoorOpen,
+  studyDoorOpen,
+  gardenGateOpen,
   onToggleDoor,
   onToggleKitchenDoor,
   onToggleBathDoor,
   onToggleBalconyDoor,
+  onToggleStudyDoor,
+  onToggleGardenGateDoor,
   focusRef,
   floorTex = 'wood',
   wallTex = 'plain',
@@ -1141,7 +1256,15 @@ export default function Room({
       kt: union('ktNorthWest', 'ktNorthMain'),
       bath: union('rightA', 'rightB'),
       bal: union('bedBackWest', 'bedBackEast'),
+      sr: union('leftA', 'leftB'),
+      ktSouth: union('ktSouthW', 'ktSouthE'),
     };
+  }, [walls]);
+
+  /** 书房西外墙剖面盒（装饰窗随墙同隐同现用） */
+  const srWestBox = useMemo(() => {
+    const w = walls.find((d) => d.key === 'srWest');
+    return w ? boxOf(w) : null;
   }, [walls]);
 
   /** 每扇窗所在墙的剖面盒（墙被视线穿过时窗随墙同隐，避免墙隐了窗浮空） */
@@ -1230,6 +1353,29 @@ export default function Room({
         />
       </mesh>
 
+      {/* v10 书房地板（随客厅同色系） */}
+      <mesh
+        position={[(STUDY_X0 + STUDY_X1) / 2, 0, (STUDY_Z0 + STUDY_Z1) / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        receiveShadow
+        onClick={floorTap}
+      >
+        <planeGeometry args={[STUDY_X1 - STUDY_X0, STUDY_Z1 - STUDY_Z0]} />
+        {floorMat(floorCol)}
+      </mesh>
+
+      {/* v10 花园草地（露天，不随室内地板材质） */}
+      <mesh
+        position={[(GARDEN_X0 + GARDEN_X1) / 2, 0, (GARDEN_Z0 + GARDEN_Z1) / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        receiveShadow
+        onClick={floorTap}
+      >
+        <planeGeometry args={[GARDEN_X1 - GARDEN_X0, GARDEN_Z1 - GARDEN_Z0]}
+        />
+        <meshStandardMaterial color={night ? '#5f7a55' : '#8fbf7f'} roughness={1} />
+      </mesh>
+
       {/* 地板外沿：浅灰围边（剖面观感） */}
       <mesh position={[0, -0.05, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[ROOM_W + 0.6, ROOM_D + 0.6]} />
@@ -1279,6 +1425,9 @@ export default function Room({
       <DoorLintel pos={[doorKt, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z0 + WALL_T / 2]} alongAxis="x" wallCol={wallColK} night={night} focusRef={focusRef} hostBox={slabs.kt} wallTexMap={wallMap ?? undefined} />
       <DoorLintel pos={[ROOM_X + WALL_T / 2, DOOR_H + (WALL_H - DOOR_H) / 2, doorBath]} alongAxis="z" wallCol={wallCol} night={night} focusRef={focusRef} hostBox={slabs.bath} wallTexMap={wallMap ?? undefined} />
       <DoorLintel pos={[doorBal, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z1 + WALL_T / 2]} alongAxis="x" wallCol={wallColBal ?? wallColBed} night={night} focusRef={focusRef} hostBox={slabs.bal} wallTexMap={wallMap ?? undefined} />
+      {/* v10：书房门头梁（客厅西墙）+ 花园走廊门头梁（厨房南墙） */}
+      <DoorLintel pos={[-ROOM_X - WALL_T / 2, DOOR_H + (WALL_H - DOOR_H) / 2, SRDOOR_Z]} alongAxis="z" wallCol={wallCol} night={night} focusRef={focusRef} hostBox={slabs.sr} wallTexMap={wallMap ?? undefined} />
+      <DoorLintel pos={[YDOOR_X, DOOR_H + (WALL_H - DOOR_H) / 2, BED_Z1 + WALL_T / 2]} alongAxis="x" wallCol={wallColK} night={night} focusRef={focusRef} hostBox={slabs.ktSouth} wallTexMap={wallMap ?? undefined} />
 
       {/* 四扇门（点击开合 / 编辑模式选中滑行；门牌挂门洞上方） */}
       <HouseDoor
@@ -1343,6 +1492,24 @@ export default function Room({
         focusRef={focusRef}
         hostBox={slabs.bal}
       />
+      {/* v10 书房门（客厅西墙固定位，点击开合；编辑模式不可拖拽） */}
+      <HouseDoor
+        pos={[-ROOM_X, SRDOOR_Z]}
+        ry={Math.PI / 2}
+        open={!!studyDoorOpen}
+        col={doorCol}
+        night={night}
+        sign="书房"
+        onToggle={() => onToggleStudyDoor?.()}
+        editMode={false}
+        selected={false}
+        onSelect={() => {}}
+        onEditPointerDown={() => {}}
+        focusRef={focusRef}
+        hostBox={slabs.sr}
+      />
+      {/* v10 花园栅栏门（北栅栏固定位） */}
+      <GardenGate open={!!gardenGateOpen} onToggle={() => onToggleGardenGateDoor?.()} editMode={!!editMode} />
 
       {/* —— 九扇上悬窗（数据驱动，编辑模式可选中沿墙滑行/收起） —— */}
       {WINS.map((w, i) => {
@@ -1374,6 +1541,8 @@ export default function Room({
       <Ceiling x0={-ROOM_X} x1={BED_X1} z0={BED_Z0} z1={BED_Z1} col={ceilColBed} night={night} />
       <Ceiling x0={BED_X1} x1={KTCH_X1} z0={BED_Z0} z1={BED_Z1} col={ceilColK} night={night} />
       <Ceiling x0={BATH_X0} x1={BATH_X1} z0={BATH_Z0} z1={BATH_Z1} col={ceilColB} night={night} />
+      {/* v10 书房天花板（随客厅色；花园露天无顶） */}
+      <Ceiling x0={STUDY_X0} x1={STUDY_X1} z0={STUDY_Z0} z1={STUDY_Z1} col={ceilCol} night={night} />
     </group>
   );
 }

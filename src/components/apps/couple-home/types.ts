@@ -173,8 +173,8 @@ export interface FurnitureItem {
   st: FurnitureState;
 }
 
-/** 房间标识（小人在哪个房间，商店家具就添到哪个房间；bal = 阳台 v5.7） */
-export type RoomId = 'lr' | 'br' | 'kt' | 'ba' | 'bal';
+/** 房间标识（小人在哪个房间，商店家具就添到哪个房间；bal = 阳台 v5.7；sr = 书房 / yd = 花园 v10 扩建） */
+export type RoomId = 'lr' | 'br' | 'kt' | 'ba' | 'bal' | 'sr' | 'yd';
 
 /** 家具状态（按需可选字段） */
 export interface FurnitureState {
@@ -399,6 +399,10 @@ export interface HomeState {
   mealName?: string;
   /** 阳台门开态（v5.7 阳台房间） */
   balconyDoorOpen?: boolean;
+  /** 书房门开态（v10 客厅西墙门洞；缺省 = 关） */
+  studyDoorOpen?: boolean;
+  /** 花园栅栏门开态（v10 花园北栅栏；缺省 = 关） */
+  gardenGateOpen?: boolean;
   /** 阳台地板/墙自定义色 */
   floorColBal?: string;
   wallColBal?: string;

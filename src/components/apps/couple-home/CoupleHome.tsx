@@ -825,6 +825,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [wallTex, setWallTex] = useState<'plain' | 'dot' | 'stripe'>(pack.home.wallTex ?? 'plain');
   // v5.7 拾光扩展：阳台门/色 + 好菜名 + 宠物
   const [balconyDoorOpen, setBalconyDoorOpen] = useState<boolean>(!!pack.home.balconyDoorOpen);
+  // v10 扩建：书房门 / 花园栅栏门
+  const [studyDoorOpen, setStudyDoorOpen] = useState<boolean>(!!pack.home.studyDoorOpen);
+  const [gardenGateOpen, setGardenGateOpen] = useState<boolean>(!!pack.home.gardenGateOpen);
   const [floorColBal, setFloorColBal] = useState<string | undefined>(pack.home.floorColBal);
   const [wallColBal, setWallColBal] = useState<string | undefined>(pack.home.wallColBal);
   const [mealName, setMealName] = useState<string | undefined>(pack.home.mealName);
@@ -1100,6 +1103,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
   wallTexRef.current = wallTex;
   const balconyDoorOpenRef = useRef(balconyDoorOpen);
   balconyDoorOpenRef.current = balconyDoorOpen;
+  const studyDoorOpenRef = useRef(studyDoorOpen);
+  studyDoorOpenRef.current = studyDoorOpen;
+  const gardenGateOpenRef = useRef(gardenGateOpen);
+  gardenGateOpenRef.current = gardenGateOpen;
   const floorColBalRef = useRef(floorColBal);
   floorColBalRef.current = floorColBal;
   const wallColBalRef = useRef(wallColBal);
@@ -1220,6 +1227,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
       floorTex: floorTexRef.current,
       wallTex: wallTexRef.current,
       balconyDoorOpen: balconyDoorOpenRef.current,
+      studyDoorOpen: studyDoorOpenRef.current,
+      gardenGateOpen: gardenGateOpenRef.current,
       floorColBal: floorColBalRef.current,
       wallColBal: wallColBalRef.current,
       mealName: mealNameRef.current,
@@ -1305,6 +1314,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setFloorTex(h.floorTex ?? 'wood');
     setWallTex(h.wallTex ?? 'plain');
     setBalconyDoorOpen(!!h.balconyDoorOpen);
+    setStudyDoorOpen(!!h.studyDoorOpen);
+    setGardenGateOpen(!!h.gardenGateOpen);
     setFloorColBal(h.floorColBal);
     setWallColBal(h.wallColBal);
     setMealName(h.mealName);
@@ -2163,7 +2174,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
           issueCompanionCmd({ kind: 'music', memo: 'auto' });
         }
       } else if (r < 0.84) {
-        const rooms: RoomId[] = ['lr', 'br', 'kt', 'ba', 'bal'];
+        const rooms: RoomId[] = ['lr', 'br', 'kt', 'ba', 'bal', 'sr', 'yd'];
         issueCompanionCmd({ kind: 'goto', room: rooms[Math.floor(Math.random() * rooms.length)], memo: 'auto' });
       }
       // 其余：交给既有 roam 漫游（跨房间溜达）
@@ -2967,15 +2978,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
     saveSoon();
   }, [charAction, saveSoon, toast]);
 
-  /** C1 换台（电视开着随时可按，不再依附「看电视」动作；频道 1→2→3 循环） */
+  /** C1 换台（电视开着随时可按，不再依附「看电视」动作；频道 1→…→6 循环，v10 新增天气/相册/喵喵台） */
   const cycleChannel = useCallback(() => {
     const tv = itemsRef.current.find((f) => f.kind === 'tv' && f.st?.on);
     if (!tv) return;
-    const next = (((tv.st?.channel ?? 1) % 3) + 1) as 1 | 2 | 3;
+    const next = (((tv.st?.channel ?? 1) % 6) + 1) as 1 | 2 | 3 | 4 | 5 | 6;
     setItems((prev) =>
       prev.map((f) => (f.id === tv.id ? { ...f, st: { ...f.st, on: true, channel: next } } : f)),
     );
-    toast(next === 1 ? '回到流光频道～' : next === 2 ? '换到啵啵新闻台～' : '换到拾光音乐台～');
+    const NAMES = ['流光频道', '啵啵新闻台', '拾光音乐台', '天气台', '风景相册台', '喵喵台'] as const;
+    toast(`换到${NAMES[next - 1]}～`);
     saveSoon();
   }, [saveSoon, toast]);
 
@@ -3709,6 +3721,28 @@ export default function CoupleHome({ close }: { close: () => void }) {
     saveSoon();
   }, [saveSoon, toast]);
 
+  /** v10 书房门：客厅西墙 → 书房 annex */
+  const toggleStudyDoor = useCallback(() => {
+    sfx.door();
+    setStudyDoorOpen((o) => {
+      const next = !o;
+      toast(next ? '书房门开啦，进去看会儿书～' : '书房门已关上');
+      return next;
+    });
+    saveSoon();
+  }, [saveSoon, toast]);
+
+  /** v10 花园栅栏门：厨房南墙外 → 露天花园 */
+  const toggleGardenGateDoor = useCallback(() => {
+    sfx.door();
+    setGardenGateOpen((o) => {
+      const next = !o;
+      toast(next ? '花园门开啦，去院子里透透气～' : '花园门已关上');
+      return next;
+    });
+    saveSoon();
+  }, [saveSoon, toast]);
+
   /** 编辑模式点选门窗（选中而非开合） */
   const onWallTap = useCallback(
     (id: string) => {
@@ -4307,6 +4341,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
         onToggleKitchenDoor={toggleKitchenDoor}
         onToggleBathDoor={toggleBathDoor}
         onToggleBalconyDoor={toggleBalconyDoor}
+        studyDoorOpen={studyDoorOpen}
+        gardenGateOpen={gardenGateOpen}
+        onToggleStudyDoor={toggleStudyDoor}
+        onToggleGardenGateDoor={toggleGardenGateDoor}
         musicPlaying={musicPlaying}
         weatherFx={weatherFx}
         litLamps={litLampCount}

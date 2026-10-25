@@ -209,3 +209,62 @@ Stage Summary:
 - 宠物毛色从 4 预设卡升级为「预设 4 卡（仅猫显示）+ 30 色全色系调色盘（猫狗兔通用）」，任意 #hex 毛色可正确渲染到头像（体色+脸部自动提亮）与搭配摘要
 - 新增 petKind 物种感知：预览 SVG（狗=垂耳+吻部 / 兔=长耳+圆脸，风格与猫头统一）与摘要行随物种显示
 - 关键文件：src/components/apps/couple-home/Wardrobe.tsx（唯一改动）；父组件后续传 petKind 即可接线（PetKind 类型已从 Wardrobe.tsx 导出）
+
+---
+Task ID: 10-b
+Agent: frontend-styling-expert
+Task: E1 小屋聊天记录回看面板（新文件 CabinHistorySheet.tsx）
+
+Work Log:
+- [新文件] src/components/apps/couple-home/CabinHistorySheet.tsx：底部抽屉毛玻璃胶囊回看面板，质感对齐 Wardrobe / 宠物状态面板（rounded-t-[26px] + border-white/60 + bg-white/55 + backdrop-blur-2xl + shadow-[0_-8px_40px_rgba(120,70,80,0.22)]）
+- [结构] 外壳组件 `if (!open) return null`；内层 HistorySheetInner 每次打开全新挂载（自动重读最新存档，惰性 useState 读档）；framer-motion spring（damping 30 / stiffness 320，与 Wardrobe 同参）y:'100%'→0 translate-y 滑入；遮罩 fixed inset-0 z-[65] bg-black/25 点击关闭，抽屉 fixed inset-x-0 bottom-0 z-[70] mx-auto max-w-[430px]
+- [头部] 标题「和{name}的聊天记忆」+ 右上圆形关闭钮（lucide-react X，白玻璃圆钮 ring+shadow）；信息行「共 N 条 · 最近聊天 new Date(ts).toLocaleString('zh-CN')」（ts 无值不显示时间）
+- [列表] max-h-[52vh] overflow-y-auto + webkit 细滚动条（[&::-webkit-scrollbar]:w-[4px] / thumb 圆角 bg-[#e3c8d1] / track 透明）；me=右侧粉调气泡 bg-[#fbdce6]/90 rounded-br-md、peer=左侧白玻璃气泡 bg-white/75 rounded-bl-md，max-w-[78%]、text-[13px] leading-relaxed、rounded-2xl、whitespace-pre-wrap；条目间 gap-2.5、容器 px-4 pb-3；空状态居中灰字「还没有聊天记忆，去和 TA 说说话吧～」
+- [数据] 读 localStorage `cabin-chat-${charId}`（与 CoupleHome 的 loadCabinConvo/saveCabinConvo 同 key 同结构），JSON.parse + 逐条 role('me'|'peer')/text 校验过滤，try/catch 兜底空数组；按存档顺序（时间正序）展示；挂载与清空后 useEffect scrollTop=scrollHeight 自动滚到底部
+- [清空] 底部居中「清空聊天记录」文字按钮（text-[#c98a9a] text-xs）→ window.confirm 确认 → localStorage.removeItem(key) + 清空列表（removeItem 也包 try/catch 防隐私模式）
+- [音效] import { sfx } from './sfx'：打开（挂载 effect）与清空点击各调一次 sfx.tap()
+- [验证] bunx tsc --noEmit（过滤 next.config）0 输出；bunx eslint CabinHistorySheet.tsx 0 问题 —— 首版在打开 effect 内同步 setTurns 被 react-hooks/set-state-in-effect 新规拦截，重构为「外壳条件渲染 + 内层惰性 useState 读档」结构后归零（无 any、无 setState-in-effect）；仅新增 CabinHistorySheet.tsx 一个文件，未动其他任何文件；未起 dev server、无 git 操作
+
+Stage Summary:
+- 小屋聊天记录回看面板落地：底部抽屉毛玻璃胶囊面板，回看 localStorage cabin-chat-<charId> 存档的 turns（me 右粉泡 / peer 左白泡、正序自动滚底）、头部「共 N 条 · 最近聊天时间」、一键清空（confirm + removeItem）、空状态文案、打开/清空 tap 音效
+- props 契约：export interface CabinHistorySheetProps { open: boolean; onClose: () => void; charId: string; charName: string }；CoupleHome 后续以 <CabinHistorySheet open onClose charId={companion.id} charName={companion.name} /> 接线（open=false 不渲染任何节点）
+- 数据 key 格式：`cabin-chat-${charId}`，JSON { convo: {role:'user'|'assistant',content:string}[], turns: {role:'me'|'peer',text:string}[], ts: number }（ts=最近聊天时间戳，展示只用 turns）
+- 关键文件：src/components/apps/couple-home/CabinHistorySheet.tsx（唯一改动，新文件）
+
+---
+Task ID: 10-c
+Agent: general-purpose（B2 电视真能看 · 频道内容升级）
+Task: TV3D 频道内容升级 —— 新增 4 天气台（实时联动室外天气）/ 5 风景相册台 / 6 喵喵台，保持 1/2/3 台不动
+
+Work Log:
+- [频道清单] TV3D makeScreenTexture 扩为 6 频道：1 流光云朵 / 2 啵啵新闻 / 3 音乐台（原样保留逐字节不动）/ 4 天气台 / 5 风景相册台 / 6 喵喵台；换台仍走 useMemo([channel]) 重建纹理 + useFrame 0.08s（~12fps）节流重绘，既有节拍不变
+- [频道4·天气台] 顶部 import { weatherBusGet } from './weather-bus'（只读不写），每帧 draw 里实时读取；上半屏按 weather 画动态动画：sunny=8 翼旋转光芒太阳（ctx.rotate(t*0.55)）+2 朵飘云、cloudy=5 朵两层飘云、overcast=6 朵灰云密布、rain=暗云+26 条斜落雨丝（斜率 0.32）+地面 5 组扩散涟漪、snow=云+24 片摇曳飘雪+3 座积雪椭圆；night（读总线 night）改深蓝夜空+月亮（光晕+陨石坑）+14 颗微闪星星（STARS 固定点位复用）；下半屏「天气预报 · 拾光气象台」圆角横幅（rrect 手绘）+ 大字天气名（晴/多云/阴/雨/雪，按天气配色 W_COLOR）+ 今日温度（W_TEMP 固定区间 [晴23~27/多云18~23/阴14~19/雨12~17/雪-3~2]，天气变化时 Math.random 重掷一次后闭包缓存稳定显示）；天气一变画面自动跟着变
+- [频道5·相册台] 4 张程序化风景 6s/张轮播、末尾 0.9s globalAlpha 淡入淡出（slides 数组闭包内建一次）：海滩日落（四段渐变天空+半沉太阳+太阳倒影波光 12 条闪烁横线+海面碎光）、雪山松林（双峰+背光面+雪顶+雪原+7 棵 pine 三层三角松树+微风飘雪）、樱花原野（3 棵 sakuraTree 四球粉冠+16 片摇摆飘落花瓣）、星空夜湖（深蓝星空 14 星微闪+月亮光晕+山影+月光倒影列+星星倒影短竖线）；右下角画迷你小相框角标（clip 内微缩风景）
+- [频道6·喵喵台] 草地渐变背景+小太阳+飘云+小草；奶油猫（#f5e6c8 圆头+三角耳+耳内粉+豆豆眼+w 嘴+腮红+背纹，ctx.scale(dir,1) 朝行进方向）7s 一趟左右往返走动+四腿摆动+小颠步，每 5s 扑跳一次（0.9s 正弦跳、影子同步缩小变淡）；旁边红色毛线球随行进方向滚动（rotate 纹路+拖线摆动）；头顶「喵~」白气泡 4.2s 循环出现约 1s（15% 淡入淡出）
+- [台标] 新增统一 badge() 小工具：右上角半透明深底（rgba(16,19,24,0.4)）圆角胶囊 + 白字，三新频道分别画「天气」「相册」「喵喵」；1/2/3 台保持原有左上文字台标不动
+- [性能] 全部可复用状态（STARS 点位/W_NAME/W_COLOR/W_TEMP/温度缓存/slides/rrect/cloud/drift/tri/pine/sakuraTree/四个场景函数）都在 makeScreenTexture 闭包内建一次，draw 里零 new 数组/对象，与既有 blobs 模式一致；tsc 通过（仅 next.config.ts 既有基线）；eslint TV3D.tsx 0 问题；另以 mock-ctx 冒烟脚本实测 6 频道 ×13 个时间点 + 天气 5 态×昼夜 全部 draw 无异常
+- [依赖说明] weather-bus.ts 仅 import weatherBusGet 未做任何修改；weatherBusSet 目前尚无调用方（本批次并行任务接线），总线默认 { weather:'sunny', night:false }，故接线前台 4 稳定显示晴天白天，不报错
+- [接线方式（供后续任务）] Furn3D.tsx:261 已有 <TV3D channel={item.st?.channel} /> 透传，家具 st.channel 存 1~6 即可换台；CoupleHome.tsx:2974 换台循环 ((x % 3) + 1) 需改为 % 6 以纳入新频道；HomeScene 按任务 10-a 方案调用 weatherBusSet(weatherFx, night) 后天气台即实时联动室外天气，无需 TV 侧再做接线
+
+Stage Summary:
+- 电视「真能看」：频道从 3 台扩到 6 台 —— 4 天气台实时读 weather-bus 总线（五档天气动画+昼夜星空+天气预报横幅）、5 风景相册台四景轮播淡入淡出、6 喵喵台奶油猫草地小剧场（走动/扑跳/毛线球/喵~气泡）；新频道统一右上角圆角台标，1/2/3 台逐字节不动
+- 关键文件：src/components/apps/couple-home/scene/TV3D.tsx（唯一改动，263→956 行）；weather-bus.ts 只 import 未修改
+
+---
+Task ID: 10-d（主控接手中断任务）+ 接线
+Agent: 主控 Agent（Z.ai Code）
+Task: B4 新房间扩建（书房 sr + 花园 yd）—— 子代理超时中断后由主控补完并全量接线
+
+Work Log:
+- [子代理遗留] 10-d 子代理完成 types.ts（RoomId+sr/yd、studyDoorOpen/gardenGateOpen）、catalog.ts（STUDY_*/GARDEN_* 常量、roomAt/ROOM_SPANS/ROOM_NAMES/clampFurnToRooms/WALL_SLOTS、defaultHome 书房+花园预置家具）、scene/pathfind.ts（DoorKey 六扇导出、ROOM_ADJ lr-sr/kt-yd、doorPoints sr/yd、planRoute Partial 化、buildBlockGrid 书房墙+花园栅栏阻挡+固定门位关门补挡、网格扩界）、scene/Room.tsx（书房三面外墙+客厅西墙两段夹门洞+厨房南墙两段夹花园走廊、FenceRun/GardenGate 栅栏组件）后超时；HomeScene/CoupleHome 接线与门板渲染缺失
+- [主控补完·Room.tsx] 书房门板 HouseDoor（客厅西墙 x=-ROOM_X, z=SRDOOR_Z, ry=π/2，点击开合）+ GardenGate 挂进渲染 + 书房/花园走廊 DoorLintel×2 + 书房地板/天花板 + 花园草地平面
+- [主控接线·HomeScene] collideAndClamp 扩 sr/yd 双门走廊（书房东墙/花园北栅栏，开门才可穿）；本地 DoorKey 改从 pathfind 导入六扇；doorRef/同步 effect/buildBlockGrid 加 sr/yd；doorsLive 及 PetBuddy/PetBuddy2 四处 doors 记录补 sr/yd；全部 collideAndClamp 调用点透传；ROOM_WEIGHTS 加 sr 1.2/yd 1.5（AI 与宠物会自己溜达去书房/花园）；props 加 studyDoorOpen/gardenGateOpen/onToggle*；HOUSE_BX0 扩到书房西缘（雨雪不进书房）；weatherBusSet(weatherFx, night) 接线（TV 天气台实时联动）
+- [主控接线·companion-rt] doors 参数 Partial<Record<DoorKey,DoorGate>> 化（goto sr/yd 走 ROOM_ADJ 自动可达）；nearestClosedDoor/closedDoorNeardoor 空值守卫
+- [主控接线·CoupleHome] studyDoorOpen/gardenGateOpen state/ref/snap/adoptHome/toggleStudyDoor/toggleGardenGateDoor（sfx.door + toast + saveSoon）→ HomeScene；自主行动 rooms 数组加 sr/yd；cycleChannel 1→6 循环（新增天气台/相册台/喵喵台 toast 名）
+- [并行成果] 10-b CabinHistorySheet.tsx（E1 聊天回看面板，待接线）、10-c TV3D 六频道（B2，1/2/3 保留 + 4 天气台读 weather-bus/5 风景相册/6 喵喵台）
+- [验证] bunx tsc --noEmit 过滤 next.config 0 输出；eslint 新增仅 CoupleHome 2 处（与既有 balconyDoorOpenRef.current=xx 完全同款基线模式，HomeScene/Room/companion-rt 0 新增）
+
+Stage Summary:
+- 七区域之家达成：客厅/卧室/厨房/卫生间/阳台 + 书房（书架/书桌/台灯/电脑/装饰窗）+ 花园（花箱/躺椅/栅栏/草地）；门全 DoorKey 化，A* 寻路/漫游/家具钳制/雨雪排除全适配；AI 指令「去书房/去花园」可直达；换台 6 频道；天气总线贯通
+- 待接线：CabinHistorySheet 面板（E1）、电视喵喵台等新频道的 AI 观看偏好（后续模块）
+- 关键文件：types.ts、catalog.ts、scene/pathfind.ts、scene/Room.tsx、scene/HomeScene.tsx、scene/companion-rt.ts、scene/weather-bus.ts（新）、CabinHistorySheet.tsx（新）、TV3D.tsx、CoupleHome.tsx

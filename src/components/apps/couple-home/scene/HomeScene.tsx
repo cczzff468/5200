@@ -52,7 +52,9 @@ import {
 } from '../catalog';
 import type { BoyWear, CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode, HomeWeather, Pet2State, PetCareKind, PetCoat, PetState, PetWear, RoomId } from '../types';
 import { sfx } from '../sfx';
-import { buildBlockGrid, planRoute, type BlockGrid, type Pt } from './pathfind';
+import { buildBlockGrid, planRoute, type BlockGrid, type DoorKey, type Pt } from './pathfind';
+import { SRDOOR_Z, STUDY_X0, STUDY_X1, STUDY_Z0, STUDY_Z1, YDOOR_X, GARDEN_X0, GARDEN_X1, GARDEN_Z0, GARDEN_Z1 } from '../catalog';
+import { weatherBusSet } from './weather-bus';
 import { companionStep, createCompanionRT, type CompanionCmd, type CompanionEvent, type CompanionRT, type PoseSlot } from './companion-rt';
 
 // ---------------- 对外 Props ----------------
@@ -111,15 +113,19 @@ export interface HomeSceneProps {
   ceilColBed?: string;
   ceilColK?: string;
   ceilColB?: string;
-  /** 三/四扇门开态 + 切换 */
+  /** 三/四扇门开态 + 切换（v10 +书房门/花园栅栏门） */
   doorOpen?: boolean;
   kitchenDoorOpen?: boolean;
   bathDoorOpen?: boolean;
   balconyDoorOpen?: boolean;
+  studyDoorOpen?: boolean;
+  gardenGateOpen?: boolean;
   onToggleDoor?: () => void;
   onToggleKitchenDoor?: () => void;
   onToggleBathDoor?: () => void;
   onToggleBalconyDoor?: () => void;
+  onToggleStudyDoor?: () => void;
+  onToggleGardenGateDoor?: () => void;
   /** 阳台地板/墙自定义色（v5.7） */
   floorColBal?: string;
   wallColBal?: string;
@@ -266,6 +272,7 @@ export interface DoorLive {
  * 小人 vs 家具 AABB（膨胀 0.2）推出 + 房间边界钳制（抬升家具不挡路）。
  * v5.7 五区：客厅（西北）/ 卫生间（客厅东侧）/ 卧室 / 厨房（南排）/ 阳台（卧室南侧）——
  * 隔墙挡路，只有「对应门开着且在门走廊内」才能穿过（partner 传全关门永远留在客厅）。
+ * v10 七区：+ 书房（客厅西侧 annex，客厅西墙门）+ 花园（厨房南侧露天，栅栏门）。
  */
 function collideAndClamp(
   c: CharRT,
@@ -274,6 +281,8 @@ function collideAndClamp(
   ktDoor: DoorLive,
   bathDoor: DoorLive,
   balDoor: DoorLive,
+  srDoor?: DoorLive,
+  ydDoor?: DoorLive,
 ) {
   for (const it of items) {
     const e = CATALOG[it.kind];
@@ -295,15 +304,20 @@ function collideAndClamp(
   const inKtCorr = ktDoor.open && Math.abs(c.x - ktDoor.along) < DOOR_PASS;
   const inBathCorr = bathDoor.open && Math.abs(c.z - bathDoor.along) < DOOR_PASS;
   const inBalCorr = balDoor.open && Math.abs(c.x - balDoor.along) < DOOR_PASS;
+  const inSrCorr = !!srDoor?.open && Math.abs(c.z - srDoor.along) < DOOR_PASS;
+  const inYdCorr = !!ydDoor?.open && Math.abs(c.x - ydDoor.along) < DOOR_PASS;
   if (c.z < BED_Z0) {
-    // —— 北排：客厅（西）+ 卫生间（客厅东墙以东） ——
-    if (c.x >= BATH_X0) {
+    if (c.x < -ROOM_X) {
+      // —— v10 书房（客厅西侧 annex）：东墙只有门走廊可穿，西/北/南为外墙 ——
+      c.x = clamp(c.x, STUDY_X0 + m, inSrCorr ? -ROOM_X + m : -ROOM_X - m);
+      c.z = clamp(c.z, STUDY_Z0 + m, STUDY_Z1 - m);
+    } else if (c.x >= BATH_X0) {
       // 卫生间：西墙只有门走廊可穿，东/北/南为外墙
       c.x = clamp(c.x, inBathCorr ? BATH_X0 - m : BATH_X0 + m, BATH_X1 - m);
       c.z = clamp(c.z, -ROOM_Z + m, ROOM_Z - m);
     } else {
-      // 客厅：东墙只有门走廊可穿；南隔墙两门走廊
-      c.x = clamp(c.x, -ROOM_X + m, inBathCorr ? BATH_X0 + m : BATH_X0 - m);
+      // 客厅：东/西墙只有门走廊可穿；南隔墙两门走廊
+      c.x = clamp(c.x, inSrCorr ? -ROOM_X - m : -ROOM_X + m, inBathCorr ? BATH_X0 + m : BATH_X0 - m);
       const zMax = inBedCorr || inKtCorr ? BED_Z0 + m : BED_Z0 - m;
       c.z = clamp(c.z, -ROOM_Z + m, zMax);
     }
@@ -318,18 +332,23 @@ function collideAndClamp(
       const zMax = inBalCorr ? BAL_Z1 - m : BED_Z1 - m;
       c.z = inBedCorr ? clamp(c.z, BED_Z0 - m, zMax) : clamp(c.z, BED_Z0 + m, zMax);
     }
+  } else if (c.z > BED_Z1) {
+    // —— v10 花园（厨房南侧露天）：栅栏围合，北栅栏只有门走廊可穿 ——
+    c.x = clamp(c.x, GARDEN_X0 + m, GARDEN_X1 - m);
+    c.z = inYdCorr ? clamp(c.z, BED_Z1 - m, GARDEN_Z1 - m) : clamp(c.z, GARDEN_Z0 + m, GARDEN_Z1 - m);
   } else {
-    // —— 厨房侧（北门通客厅；东墙 v5.4 起封闭） ——
+    // —— 厨房侧（北门通客厅；南墙 v10 有花园走廊门洞；东墙 v5.4 起封闭） ——
     c.x = clamp(c.x, BED_X1 + m, KTCH_X1 - m);
-    c.z = inKtCorr ? clamp(c.z, BED_Z0 - m, BED_Z1 - m) : clamp(c.z, BED_Z0 + m, BED_Z1 - m);
+    const zMax = inYdCorr ? GARDEN_Z0 + m : BED_Z1 - m;
+    c.z = inKtCorr ? clamp(c.z, BED_Z0 - m, zMax) : clamp(c.z, BED_Z0 + m, zMax);
   }
 }
 
 // ---------------- v7.1 跨房间漫游（房间图寻路已迁移 pathfind.ts，v8.0 与陪伴系统共用） ----------------
 
-type DoorKey = 'bed' | 'kt' | 'bath' | 'bal';
+// DoorKey 自 pathfind 导入（v10 六扇：bed/kt/bath/bal + sr 书房门 / yd 花园栅栏门）
 
-/** partner 漫游 AI（v7.1 升级：跨房间闲逛 —— 会开门穿过门走廊去卧室/厨房/卫生间/阳台） */
+/** partner 漫游 AI（v7.1 升级：跨房间闲逛 —— 会开门穿过门走廊去卧室/厨房/卫生间/阳台/书房/花园） */
 const CLOSED_DOOR: DoorLive = { open: false, along: 0 };
 
 /** 漫游手感参数（男生 = 溜达慢逛；猫 = 走走停停嗅探） */
@@ -342,13 +361,15 @@ interface RoamOpts {
 const ROAM_HUMAN: RoamOpts = { speed: 1.05, pauseMin: 2.5, pauseMax: 7.5 };
 const ROAM_CAT: RoamOpts = { speed: 0.85, pauseMin: 1.0, pauseMax: 3.4 };
 
-/** 房间随机权重：客厅最爱待，阳台/厨房/卫生间偶尔逛 */
+/** 房间随机权重：客厅最爱待，书房/花园新鲜去处，阳台/厨房/卫生间偶尔逛 */
 const ROOM_WEIGHTS: [RoomId, number][] = [
   ['lr', 4],
   ['br', 2],
   ['kt', 1.5],
   ['ba', 1],
   ['bal', 1.5],
+  ['sr', 1.2],
+  ['yd', 1.5],
 ];
 
 function pickRoom(): RoomId {
@@ -393,7 +414,7 @@ function roamStep(c: CharRT, dt: number, items: FurnitureItem[], doors: Record<D
   c.z += (dz / d) * Math.min(sp, d);
   c.moving = true;
   c.heading = lerpAngle(c.heading, Math.atan2(dx, dz), Math.min(1, dt * 8));
-  collideAndClamp(c, items, doors.bed, doors.kt, doors.bath, doors.bal);
+  collideAndClamp(c, items, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
 }
 
 /**
@@ -498,7 +519,7 @@ function GameLoop({
   modeRef: RefObject<HomeMode>;
   itemsRef: RefObject<FurnitureItem[]>;
   /** 每扇门开态 + 沿墙坐标（ref 高频读取；bal = 阳台门 v5.7） */
-  doorRef: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive }>;
+  doorRef: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive; sr?: DoorLive; yd?: DoorLive }>;
   /** 拖拽中 1:1 直接控制镜头（true 时不做惯性 lerp） */
   lookRef: RefObject<{ on: boolean }>;
   /** 相机对焦物（隔墙可见性用） */
@@ -628,6 +649,8 @@ function GameLoop({
         doorRef.current?.kt ?? CLOSED_DOOR,
         doorRef.current?.bath ?? CLOSED_DOOR,
         doorRef.current?.bal ?? CLOSED_DOOR,
+        doorRef.current?.sr ?? CLOSED_DOOR,
+        doorRef.current?.yd ?? CLOSED_DOOR,
       );
     }
 
@@ -638,6 +661,8 @@ function GameLoop({
       kt: dr2?.kt ?? CLOSED_DOOR,
       bath: dr2?.bath ?? CLOSED_DOOR,
       bal: dr2?.bal ?? CLOSED_DOOR,
+      sr: dr2?.sr ?? CLOSED_DOOR,
+      yd: dr2?.yd ?? CLOSED_DOOR,
     };
     const cmd = companionCmdRef?.current ?? null;
     if (cmd && cmd.seq !== compRT.lastSeq) compRT.cmd = cmd;
@@ -657,7 +682,7 @@ function GameLoop({
         doorsLive,
         partnerPoseRef.current,
         poseRef.current,
-        (c) => collideAndClamp(c, itemsRef.current ?? [], doorsLive.bed, doorsLive.kt, doorsLive.bath, doorsLive.bal),
+        (c) => collideAndClamp(c, itemsRef.current ?? [], doorsLive.bed, doorsLive.kt, doorsLive.bath, doorsLive.bal, doorsLive.sr, doorsLive.yd),
         joyMag,
         (e) => {
           evBox.e = e;
@@ -667,7 +692,7 @@ function GameLoop({
     }
     // partner 漫游（v7.1：跨房间闲逛 —— 开着门就去卧室/厨房/卫生间/阳台溜达；v8.0 陪伴接管时跳过）
     if (!handled) {
-      roam(taRT, dt, itemsRef.current ?? [], { bed: doorsLive.bed, kt: doorsLive.kt, bath: doorsLive.bath, bal: doorsLive.bal }, ROAM_HUMAN);
+      roam(taRT, dt, itemsRef.current ?? [], doorsLive, ROAM_HUMAN);
     }
 
     clock.current += dt;
@@ -1819,7 +1844,7 @@ function PetBuddy({
   /** 宠物状态（需求气泡：体力低=饿了 / 心情低=想喝水 / 清洁低=要洗澡） */
   petState?: PetState;
   /** 四扇门开态（跨房间漫游穿门用） */
-  doorRef?: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive }>;
+  doorRef?: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive; sr?: DoorLive; yd?: DoorLive }>;
   /** v9 天气（小剧场剧本：雨天躲屋檐；晴/多云时追蝴蝶） */
   weatherFx?: HomeWeather;
   /** v8.3 毛色 / 装扮 / 玩具球指令 */
@@ -1968,6 +1993,8 @@ function PetBuddy({
       kt: dr?.kt ?? CLOSED_DOOR,
       bath: dr?.bath ?? CLOSED_DOOR,
       bal: dr?.bal ?? CLOSED_DOOR,
+      sr: dr?.sr ?? CLOSED_DOOR,
+      yd: dr?.yd ?? CLOSED_DOOR,
     };
     const ang = Math.random() * Math.PI * 2;
     const dist = 1.1 + Math.random() * 1.3;
@@ -1979,7 +2006,7 @@ function PetBuddy({
       target: null,
       nextWander: 0,
     };
-    collideAndClamp(probe, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+    collideAndClamp(probe, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
     ball.current = { phase: 'fly', t: 0, from: { x: meRT.x, z: meRT.z }, to: { x: probe.x, z: probe.z }, bounce: 0 };
     fetching.current = null;
     // 睡觉/回窝被球叫醒
@@ -2075,6 +2102,8 @@ function PetBuddy({
       kt: dr?.kt ?? CLOSED_DOOR,
       bath: dr?.bath ?? CLOSED_DOOR,
       bal: dr?.bal ?? CLOSED_DOOR,
+      sr: dr?.sr ?? CLOSED_DOOR,
+      yd: dr?.yd ?? CLOSED_DOOR,
     };
 
     // —— v7.2 放下指令（seq 变化触发）：抱起时收到 on=false → 轻轻放到小人面前 ——
@@ -2092,7 +2121,7 @@ function PetBuddy({
           rt.current.moving = false;
           rt.current.target = null;
           rt.current.route = undefined;
-          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
           pat.current = 0.85;
           meow.current = 1.1;
           sfx.kiss();
@@ -2176,7 +2205,7 @@ function PetBuddy({
           rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 8));
           rt.current.target = null;
           rt.current.route = undefined;
-          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
         } else {
           // 到位：面对面停住，通知小人摆 petcare 姿势
           // （9s 超时兜底：被家具/关门卡住时，直接把宠物放到小人身边，保证照顾一定能完成）
@@ -2296,7 +2325,7 @@ function PetBuddy({
           rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 9));
           rt.current.target = null;
           rt.current.route = undefined;
-          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
         } else {
           rt.current.moving = false;
         }
@@ -2358,7 +2387,7 @@ function PetBuddy({
               rt.current.z += (dz / d) * Math.min(sp, d);
               rt.current.moving = true;
               rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 7));
-              collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+              collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
             } else {
               rt.current.moving = false;
               rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 5));
@@ -2391,7 +2420,7 @@ function PetBuddy({
               rt.current.z += (dz / d) * Math.min(sp, d);
               rt.current.moving = true;
               rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 6));
-              collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+              collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
             } else {
               rt.current.moving = false;
               rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 5));
@@ -2965,7 +2994,7 @@ function PetBuddy2({
   meRT: CharRT;
   /** 第一只猫的运行时 ref（追着玩用；每帧 PetBuddy 写入） */
   catRTRef?: RefObject<CharRT | null>;
-  doorRef?: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive }>;
+  doorRef?: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive; sr?: DoorLive; yd?: DoorLive }>;
   /** v9 照顾指令（target 路由：只有 target === petId 的指令本实例才接） */
   petCmdRef?: RefObject<{ kind: PetCareKind; seq: number; carry?: boolean; target?: string } | null>;
   petCarryCmdRef?: RefObject<{ on: boolean; seq: number; target?: string }>;
@@ -3049,6 +3078,8 @@ function PetBuddy2({
       kt: dr?.kt ?? CLOSED_DOOR,
       bath: dr?.bath ?? CLOSED_DOOR,
       bal: dr?.bal ?? CLOSED_DOOR,
+      sr: dr?.sr ?? CLOSED_DOOR,
+      yd: dr?.yd ?? CLOSED_DOOR,
     };
     const ang = Math.random() * Math.PI * 2;
     const dist = 1.1 + Math.random() * 1.3;
@@ -3060,7 +3091,7 @@ function PetBuddy2({
       target: null,
       nextWander: 0,
     };
-    collideAndClamp(probe, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+    collideAndClamp(probe, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
     ball.current = { phase: 'fly', t: 0, from: { x: meRT.x, z: meRT.z }, to: { x: probe.x, z: probe.z }, bounce: 0 };
     fetching.current = null;
     if (sleeping.current) {
@@ -3087,6 +3118,8 @@ function PetBuddy2({
       kt: dr?.kt ?? CLOSED_DOOR,
       bath: dr?.bath ?? CLOSED_DOOR,
       bal: dr?.bal ?? CLOSED_DOOR,
+      sr: dr?.sr ?? CLOSED_DOOR,
+      yd: dr?.yd ?? CLOSED_DOOR,
     };
 
     // —— 捕获新照顾指令（target 路由：只接自己的） ——
@@ -3115,7 +3148,7 @@ function PetBuddy2({
           rt.current.z = meRT.z + Math.cos(hd) * 0.42;
           rt.current.moving = false;
           rt.current.target = null;
-          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
           pat.current = 0.85;
           sndHappy();
           heartT.current = performance.now() / 1000;
@@ -3194,7 +3227,7 @@ function PetBuddy2({
           rt.current.moving = true;
           rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 8));
           rt.current.target = null;
-          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
         } else {
           // 9s 超时兜底：被卡住直接放到小人身边（照顾一定能完成）
           if (d > 0.5) {
@@ -3288,7 +3321,7 @@ function PetBuddy2({
         rt.current.moving = true;
         rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 9));
         rt.current.target = null;
-        collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+        collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
       } else {
         rt.current.moving = false;
       }
@@ -3302,7 +3335,7 @@ function PetBuddy2({
         if (bed) {
           rt.current.x = bed.x + 0.42 + (rt.current.x % 0.1);
           rt.current.z = bed.z + 0.2;
-          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
         }
       }
     } else {
@@ -3324,7 +3357,7 @@ function PetBuddy2({
           rt.current.z += (dz / d) * Math.min(sp, d);
           rt.current.moving = true;
           rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 9));
-          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
         } else {
           rt.current.moving = false;
           rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 6));
@@ -3732,7 +3765,8 @@ export default function HomeScene(props: HomeSceneProps) {
     floorCol, wallCol, doorCol, winCol, floorColBed, wallColBed, floorColK, wallColK, floorColB, wallColB,
     floorColBal, wallColBal,
     ceilCol, ceilColBed, ceilColK, ceilColB,
-    doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, onToggleDoor, onToggleKitchenDoor, onToggleBathDoor, onToggleBalconyDoor,
+    doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, studyDoorOpen, gardenGateOpen,
+    onToggleDoor, onToggleKitchenDoor, onToggleBathDoor, onToggleBalconyDoor, onToggleStudyDoor, onToggleGardenGateDoor,
     musicPlaying, weatherFx, litLamps, onCritterTap,
     petCmdRef, onPetTap, onPetEvent, petState, petCarryCmdRef,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
@@ -3758,6 +3792,8 @@ export default function HomeScene(props: HomeSceneProps) {
     kt: { open: !!kitchenDoorOpen, along: DOORS[1].def },
     bath: { open: !!bathDoorOpen, along: DOORS[2].def },
     bal: { open: !!balconyDoorOpen, along: DOORS[3].def },
+    sr: { open: !!studyDoorOpen, along: SRDOOR_Z },
+    yd: { open: !!gardenGateOpen, along: YDOOR_X },
   });
   useEffect(() => {
     modeRef.current = mode;
@@ -3774,7 +3810,9 @@ export default function HomeScene(props: HomeSceneProps) {
     doorRef.current.kt.open = !!kitchenDoorOpen;
     doorRef.current.bath.open = !!bathDoorOpen;
     doorRef.current.bal.open = !!balconyDoorOpen;
-  }, [doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen]);
+    doorRef.current.sr.open = !!studyDoorOpen;
+    doorRef.current.yd.open = !!gardenGateOpen;
+  }, [doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, studyDoorOpen, gardenGateOpen]);
   useEffect(() => {
     doorRef.current.bed.along = doorPos?.bed ?? DOORS[0].def;
     doorRef.current.kt.along = doorPos?.kt ?? DOORS[1].def;
@@ -3809,9 +3847,16 @@ export default function HomeScene(props: HomeSceneProps) {
         kt: dr?.kt ?? { open: false, along: DOORS[1].def },
         bath: dr?.bath ?? { open: false, along: DOORS[2].def },
         bal: dr?.bal ?? { open: false, along: DOORS[3].def },
+        sr: dr?.sr ?? { open: false, along: SRDOOR_Z },
+        yd: dr?.yd ?? { open: false, along: YDOOR_X },
       },
     );
-  }, [items, wallBoxes, doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, doorPos]);
+  }, [items, wallBoxes, doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, studyDoorOpen, gardenGateOpen, doorPos]);
+
+  // —— v10 天气总线：TV 天气台 / 花园等深层组件实时读取（避免 props 穿透） ——
+  useEffect(() => {
+    weatherBusSet(weatherFx ?? 'sunny', night);
+  }, [weatherFx, night]);
 
   /** 任一投影仪开着（幕布放下放电影） */
   const projectorOn = items.some((f) => f.kind === 'projector' && f.st?.on);
@@ -3926,10 +3971,14 @@ export default function HomeScene(props: HomeSceneProps) {
         kitchenDoorOpen={kitchenDoorOpen}
         bathDoorOpen={bathDoorOpen}
         balconyDoorOpen={balconyDoorOpen}
+        studyDoorOpen={studyDoorOpen}
+        gardenGateOpen={gardenGateOpen}
         onToggleDoor={onToggleDoor}
         onToggleKitchenDoor={onToggleKitchenDoor}
         onToggleBathDoor={onToggleBathDoor}
         onToggleBalconyDoor={onToggleBalconyDoor}
+        onToggleStudyDoor={onToggleStudyDoor}
+        onToggleGardenGateDoor={onToggleGardenGateDoor}
         focusRef={focusRef}
         floorTex={floorTex}
         wallTex={wallTex}
@@ -4144,7 +4193,7 @@ const CLOUD_TUNE: Record<HomeWeather, { op: number; tint: string; hide: number }
 };
 
 /** 房子占位盒（雨雪粒子排除屋内；含一点墙体余量） */
-const HOUSE_BX0 = -ROOM_X - 0.35;
+const HOUSE_BX0 = STUDY_X0 - 0.35;
 const HOUSE_BX1 = KTCH_X1 + 0.35;
 const HOUSE_BZ0 = -ROOM_Z - 0.35;
 const HOUSE_BZ1 = BAL_Z1 + 0.35;
