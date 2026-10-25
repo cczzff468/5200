@@ -38,6 +38,7 @@ import {
   Heart,
   HeartHandshake,
   ImagePlus,
+  ArrowDownToLine, // v7.2 抱抱→放下 图标
   Laptop,
   Loader2,
   Moon,
@@ -237,6 +238,47 @@ function CatFaceIcon({ className }: { className?: string }) {
       <path d="M14 37.5 Q24 41.5 34 37.5" fill="none" stroke="#e46a6a" strokeWidth="2.4" strokeLinecap="round" />
       <circle cx="24" cy="40.5" r="2.1" fill="#f4c34e" stroke="#d9a13c" strokeWidth="0.7" />
     </svg>
+  );
+}
+
+/**
+ * 宠物互动按钮（v7.2 面板下方 & 右侧竖条共用）：白玻璃胶囊 + 彩色图标 + 小字标签（无彩色底）。
+ * 抱抱按钮在「抱着」时变「放下」（图标 ArrowDownToLine），点一下即可把小猫放到地上。
+ */
+function PetActionButton({
+  kind,
+  icon: Icon,
+  label,
+  fg,
+  carrying,
+  disabled,
+  onClick,
+}: {
+  kind: PetCareKind;
+  icon: LucideIcon;
+  label: string;
+  fg: string;
+  carrying: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const isHug = kind === 'hug';
+  const dropped = isHug && carrying;
+  const Icn = dropped ? ArrowDownToLine : Icon;
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={dropped ? '放下宠物' : `${label}宠物`}
+      className={`flex h-11 w-11 flex-col items-center justify-center gap-0.5 rounded-full bg-white/70 shadow-md ring-1 ring-white/70 backdrop-blur-md transition active:scale-90 disabled:cursor-not-allowed ${
+        disabled && !dropped ? 'opacity-40' : ''
+      }`}
+    >
+      <Icn className="h-[17px] w-[17px]" style={{ color: fg }} />
+      <span className="text-[8.5px] font-bold leading-none" style={{ color: fg }}>
+        {dropped ? '放下' : label}
+      </span>
+    </button>
   );
 }
 
@@ -729,8 +771,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
     useMiniPlayer.getState().setSuppress(musicPlaying || !!inst);
     return () => useMiniPlayer.getState().setSuppress(false);
   }, [musicPlaying, inst]);
-  /** 手持物（拿饮料/咖啡后杯子握在右手，可以端着到处逛；coffee = 咖啡冒热气款） */
-  const carryRef = useRef({ cup: false, coffee: false });
+  /** 手持物（拿饮料/咖啡后杯子握在右手，可以端着到处逛；coffee = 咖啡冒热气款；pet = 怀里抱着小猫） */
+  const carryRef = useRef({ cup: false, coffee: false, pet: false });
   const [carryCup, setCarryCup] = useState(false);
   /** 编辑模式缩放指令（HUD 按钮 → Canvas 内相机） */
   const zoomCmd = useRef({ v: 0, dir: 0 });
@@ -741,8 +783,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [pet, setPet] = useState<PetState>(() => sanitizePet(pack.home.pet));
   const petRef = useRef(pet);
   petRef.current = pet;
-  /** 宠物照顾指令（面板按钮 → PetBuddy；seq 递增触发新指令） */
-  const petCmdRef = useRef<{ kind: PetCareKind; seq: number } | null>(null);
+  /** 宠物照顾指令（面板按钮 → PetBuddy；seq 递增触发新指令；carry=true 抱起模式） */
+  const petCmdRef = useRef<{ kind: PetCareKind; seq: number; carry?: boolean } | null>(null);
   const petSeq = useRef(0);
   /** 状态面板开关 / 正在进行的照顾动作 / 改名弹层 */
   const [petPanel, setPetPanel] = useState(false);
@@ -756,6 +798,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
   useEffect(() => {
     petCareRef.current = petCare;
   }, [petCare]);
+  // —— v7.2 抱抱 = 抱起/放下：抱着时可随意走动，按钮变「放下」 ——
+  /** 正抱着宠物（UI 态：抱抱按钮变「放下」） */
+  const [carrying, setCarrying] = useState(false);
+  /** 抱着镜像（供旧回调同步读取，免 useEffect 延迟） */
+  const carryPetRef = useRef(false);
+  /** 抱抱指令通道（on=true 抱起 / on=false 放下；seq 递增触发） */
+  const petCarryCmdRef = useRef({ on: false, seq: 0 });
+  const petCarrySeq = useRef(0);
   const [petRenaming, setPetRenaming] = useState(false);
   const [petNameDraft, setPetNameDraft] = useState('');
   /** 宠物在线缓慢衰减（每 30s 结算一次；离线衰减在 sanitizePet 一次性追算） */
@@ -1180,25 +1230,48 @@ export default function CoupleHome({ close }: { close: () => void }) {
   }, [toast, saveSoon]);
 
   // ---------------- 宠物照顾流程（v6.9） ----------------
-  /** 发起照顾：宠物走向小人 → 到位后小人蹲下伸手（摸头 / 递碗吃 / 递碗喝） */
+  /** 发起照顾：宠物走向小人 → 到位后互动（v7.2：抱抱 = 抱起怀抱随意走动，再点变「放下」） */
   const startPetCare = useCallback(
     (kind: PetCareKind) => {
       if (petCare) return; // 正在照顾中
+      const nm = petRef.current.name ?? '团子';
+      // —— 抱着态：抱抱按钮 = 放下；其他照顾动作先放下 ——
+      if (carryPetRef.current) {
+        if (kind === 'hug') {
+          petCarrySeq.current += 1;
+          petCarryCmdRef.current = { on: false, seq: petCarrySeq.current };
+          carryPetRef.current = false;
+          carryRef.current.pet = false;
+          setCarrying(false);
+          toast(`${nm}乖乖落地，又要去溜达啦～`);
+        } else {
+          toast(`先把${nm}放下来，再照顾它吧～`);
+        }
+        return;
+      }
       if (actRef.current) {
         toast('先把手头的事做完，再来照顾它吧');
+        return;
+      }
+      if (kind === 'hug') {
+        // 抱起流程：抱指令直接带 carry 标志 —— 宠物走到身边后纵身一跃进怀里（arrive 时正式抱起）
+        petSeq.current += 1;
+        petCmdRef.current = { kind, seq: petSeq.current, carry: true };
+        setPetCare(kind);
+        setPetPanel(false);
+        toast(`${nm}张开小爪爪要抱抱举高高啦～`);
         return;
       }
       petSeq.current += 1;
       petCmdRef.current = { kind, seq: petSeq.current };
       setPetCare(kind);
       setPetPanel(false);
-      const nm = petRef.current.name ?? '团子';
       const startMsg: Record<PetCareKind, string> = {
         pat: `${nm}屁颠屁颠跑过来了～`,
         feed: `盛好猫粮，等${nm}过来吃啦～`,
         water: `倒好清水，叫${nm}来喝咯～`,
         bath: `烧好洗澡水，给${nm}搓个泡泡浴～`,
-        hug: `${nm}张开小爪爪要抱抱啦～`,
+        hug: `${nm}张开小爪爪要抱抱举高高啦～`,
         summon: `一声哨响，${nm}飞奔过来咯～`,
       };
       toast(startMsg[kind]);
@@ -1206,17 +1279,42 @@ export default function CoupleHome({ close }: { close: () => void }) {
     [petCare, toast],
   );
 
-  /** 宠物事件：arrive 到位（小人摆 petcare 姿势）/ done 完成结算 / cancel 中断还原 */
+  /** 宠物事件：arrive 到位 / done 完成结算 / cancel 中断还原 / dropped 放下完成（v7.2 抱抱专用） */
   const onPetEvent = useCallback(
-    (ev: 'arrive' | 'done' | 'cancel', kind: PetCareKind) => {
+    (ev: 'arrive' | 'done' | 'cancel' | 'dropped', kind: PetCareKind) => {
       if (ev === 'arrive') {
+        if (kind === 'hug') {
+          // v7.2 抱起完成（抱抱 = 抱起模式）：站姿环抱（双臂收拢）+ 按钮解锁（抱抱变「放下」）+ 结算
+          poseRef.current.pose = 'stand';
+          poseRef.current.y = 0;
+          carryRef.current.pet = true;
+          carryPetRef.current = true;
+          setCarrying(true);
+          setPetCare(null);
+          const bump = (v: number, d: number) => Math.min(100, Math.max(0, v + d));
+          setPet((p) => ({ ...p, mo: bump(p.mo, 16), st: bump(p.st, 2), ts: Date.now() }));
+          toast(`${petRef.current.name ?? '团子'}抱在怀里啦，想去哪就去哪；再点一下「放下」把它放下来～`);
+          saveSoon();
+          return;
+        }
         poseRef.current.pose = 'petcare';
         poseRef.current.y = 0;
+        return;
+      }
+      if (ev === 'dropped') {
+        // 放下完成：复位照顾锁（抱着态的 UI 在 startPetCare 里已提前复位）
+        setPetCare(null);
         return;
       }
       if (poseRef.current.pose === 'petcare') poseRef.current.pose = 'stand';
       setPetCare(null);
       setPetBarOpen(false); // v7.1：照顾完成/中断后互动竖条自动收起
+      if (ev === 'cancel') {
+        // 中断时若还处于抱着态（切装修等）→ 复位抱抱 UI
+        carryPetRef.current = false;
+        carryRef.current.pet = false;
+        setCarrying(false);
+      }
       if (ev !== 'done') return;
       setPet((p) => {
         const bump = (v: number, d: number) => Math.min(100, Math.max(0, v + d));
@@ -1245,7 +1343,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const onPetTap = useCallback(() => {
     petTapAtRef.current = Date.now(); // 守卫：同一次点击的 up 阶段射线会落到地板/家具上，不能当作「点别处」关掉竖条
     setPetBarOpen((v) => !v);
-    setPetPanel(false);
+    setPetPanel(false); // 点宠物出竖条，状态面板同时收起（互不叠影）
   }, []);
 
   /** 确认改名（最长 8 字） */
@@ -1336,6 +1434,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
       // 宠物照顾中：不接新动作（避免抱起的小猫悬空去坐沙发的穿帮）
       if (petCareRef.current) {
         toast('正陪着小家伙呢，先照顾完它吧～');
+        return;
+      }
+      // v7.2 怀里还抱着小猫：先放下再干别的（坐下/躺床/泡澡都会穿帮）
+      if (carryPetRef.current) {
+        toast(`怀里还抱着${petRef.current.name ?? '团子'}呢，先把它放下来吧～`);
         return;
       }
       // B3 阅读：锚点不在书架本身（书架没有 seat），先找最近可坐家具再入座
@@ -1477,7 +1580,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
     (item: FurnitureItem) => {
       sfx.tap(); // E3：所有家具点按轻响（函数最前面，提前 return 分支也有声）
       const justPet = Date.now() - petTapAtRef.current < 450; // 刚点过宠物（up 配对落到家具上）
-      if (mode === 'live' && !justPet) setPetBarOpen(false); // v7.1：点别处（家具）互动竖条消失
+      if (mode === 'live' && !justPet) {
+        setPetBarOpen(false); // v7.1：点别处（家具）互动竖条消失
+        setPetPanel(false); // v7.2：点别处状态面板也收起
+      }
       const entry = CATALOG[item.kind];
       if (!entry) return;
 
@@ -2583,6 +2689,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setMoveOn(false);
     setPaletteOpen(false);
     setPetBarOpen(false); // v7.1：点别处（地面）互动竖条消失
+    setPetPanel(false); // v7.2：点别处状态面板也收起
   }, []);
 
   // ---------------- 商店 ----------------
@@ -3035,6 +3142,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         weatherFx={weatherFx}
         litLamps={litLampCount}
         petCmdRef={petCmdRef}
+        petCarryCmdRef={petCarryCmdRef}
         onPetTap={onPetTap}
         onPetEvent={onPetEvent}
         petState={pet}
@@ -3116,7 +3224,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[14.5px] font-bold leading-tight text-[#4a4a4e]">{pet.name ?? '团子'}</div>
-                      <div className="text-[10.5px] leading-tight text-[#9a938a]">点它就能打开互动按钮哦</div>
+                      <div className="text-[10.5px] leading-tight text-[#9a938a]">点下面的按钮照顾它吧～</div>
                     </div>
                     <button
                       onClick={() => {
@@ -3166,6 +3274,27 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   </div>
                 ))}
               </div>
+
+              {/* v7.2 互动按钮（面板下方）：六种照顾动作，抱抱抱着时变「放下」 */}
+              <div className="mt-2.5 h-px bg-white/60" aria-hidden="true" />
+              <div
+                className="mt-2 grid grid-cols-3 justify-items-center gap-1"
+                role="toolbar"
+                aria-label={`${pet.name ?? '团子'}互动按钮`}
+              >
+                {PET_ACTIONS.map(({ kind, icon: Icon, label, fg }) => (
+                  <PetActionButton
+                    key={kind}
+                    kind={kind}
+                    icon={Icon}
+                    label={label}
+                    fg={fg}
+                    carrying={carrying}
+                    disabled={!!petCare}
+                    onClick={() => startPetCare(kind)}
+                  />
+                ))}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -3186,18 +3315,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   aria-label={`${pet.name ?? '团子'}互动按钮`}
                 >
                   {PET_ACTIONS.map(({ kind, icon: Icon, label, fg }) => (
-                    <button
+                    <PetActionButton
                       key={kind}
-                      onClick={() => startPetCare(kind)}
+                      kind={kind}
+                      icon={Icon}
+                      label={label}
+                      fg={fg}
+                      carrying={carrying}
                       disabled={!!petCare}
-                      aria-label={`${label}${pet.name ?? '团子'}`}
-                      className={`flex h-11 w-11 flex-col items-center justify-center gap-0.5 rounded-full bg-white/70 shadow-md ring-1 ring-white/70 backdrop-blur-md transition active:scale-90 ${petCare ? 'opacity-40' : ''}`}
-                    >
-                      <Icon className="h-[17px] w-[17px]" style={{ color: fg }} />
-                      <span className="text-[8.5px] font-bold leading-none" style={{ color: fg }}>
-                        {label}
-                      </span>
-                    </button>
+                      onClick={() => startPetCare(kind)}
+                    />
                   ))}
                 </div>
               </motion.div>
@@ -3227,6 +3354,23 @@ export default function CoupleHome({ close }: { close: () => void }) {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* 宠物头像（v7.2 移到装修小家左侧 · 内联 SVG 猫头 · 白玻璃圆钮）：点击唤出/收起状态面板；状态偏低时亮提醒小红点 */}
+            <button
+              onClick={() => {
+                setPetPanel((v) => !v);
+                setPetBarOpen(false); // 面板与互动竖条互斥，不叠影
+              }}
+              aria-label={`${pet.name ?? '团子'}状态面板`}
+              aria-expanded={petPanel}
+              className={`pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-full bg-white/75 shadow-md ring-2 backdrop-blur transition active:scale-95 ${
+                petPanel ? 'ring-[#e46a6a]' : 'ring-[#f4b3c2]'
+              }`}
+            >
+              <CatFaceIcon className="h-7 w-7 drop-shadow-sm" />
+              {(pet.st < 30 || pet.cl < 30 || pet.mo < 30) && (
+                <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full bg-[#ff7a59] ring-2 ring-white/90" />
+              )}
+            </button>
             {/* 装修小家 / 完成（右上角入口） */}
             <button
               onClick={() => switchMode(mode === 'live' ? 'edit' : 'live')}
@@ -3325,20 +3469,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 )}
               </AnimatePresence>
             </div>
-            {/* 宠物头像（v7.1 美化：内联 SVG 猫头 · 白玻璃圆钮）：点击唤出/收起状态面板；状态偏低时亮提醒小红点 */}
-            <button
-              onClick={() => setPetPanel((v) => !v)}
-              aria-label={`${pet.name ?? '团子'}状态面板`}
-              aria-expanded={petPanel}
-              className={`pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-full bg-white/75 shadow-md ring-2 backdrop-blur transition active:scale-95 ${
-                petPanel ? 'ring-[#e46a6a]' : 'ring-[#f4b3c2]'
-              }`}
-            >
-              <CatFaceIcon className="h-7 w-7 drop-shadow-sm" />
-              {(pet.st < 30 || pet.cl < 30 || pet.mo < 30) && (
-                <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full bg-[#ff7a59] ring-2 ring-white/90" />
-              )}
-            </button>
           </div>
         </div>
 

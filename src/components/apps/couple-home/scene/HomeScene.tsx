@@ -78,7 +78,9 @@ export interface HomeSceneProps {
   /** 正在执行的家具动作 */
   actRef: RefObject<CharAction | null>;
   /** 手持物（true = 右手拿小水杯，拿饮料/咖啡后端着到处逛） */
-  carryRef?: RefObject<{ cup: boolean; coffee?: boolean }>;
+  carryRef?: RefObject<{ cup: boolean; coffee?: boolean; pet?: boolean }>;
+  /** v7.2 抱抱指令（on=true 抱起 / on=false 放下；seq 变化触发） */
+  petCarryCmdRef?: RefObject<{ on: boolean; seq: number }>;
   /** 乐器弹奏特写（非 null = 镜头推近该乐器；覆盖层 UI 发声） */
   instRef?: RefObject<{ kind: 'piano' | 'guitar'; itemId: string } | null>;
   /** 浴缸水龙头点击（放水/关水） */
@@ -138,11 +140,11 @@ export interface HomeSceneProps {
   /** 天气特效：rain 雨 / snow 雪 / clear 无（窗外粒子） */
   weatherFx?: 'rain' | 'snow' | 'clear';
   /** 宠物照顾指令队列（HUD 面板 → PetBuddy；seq 变化即触发新指令，v6.9） */
-  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number } | null>;
+  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number; carry?: boolean } | null>;
   /** 点宠物（打开状态面板回调） */
   onPetTap?: () => void;
-  /** 宠物照顾事件：arrive 到位（小人摆 petcare 姿势）/ done 完成 / cancel 中断 */
-  onPetEvent?: (ev: 'arrive' | 'done' | 'cancel', kind: PetCareKind) => void;
+  /** 宠物照顾事件：arrive 到位（小人摆 petcare 姿势）/ done 完成 / cancel 中断 / dropped 放下（v7.2 抱抱） */
+  onPetEvent?: (ev: 'arrive' | 'done' | 'cancel' | 'dropped', kind: PetCareKind) => void;
   /** 宠物状态（v7.1：需求气泡 —— 体力低=饿了 / 心情低=想喝水 / 清洁低=要洗澡） */
   petState?: PetState;
   /** 好菜上桌的餐桌 id（null = 没有饭菜） */
@@ -1701,6 +1703,7 @@ function PetBuddy({
   items,
   meRT,
   petCmdRef,
+  petCarryCmdRef,
   onPetTap,
   onPetEvent,
   night,
@@ -1710,9 +1713,11 @@ function PetBuddy({
   mode: HomeMode;
   items: FurnitureItem[];
   meRT: CharRT;
-  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number } | null>;
+  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number; carry?: boolean } | null>;
+  /** v7.2 抱抱指令（on=true 抱起 / on=false 放下；seq 变化触发） */
+  petCarryCmdRef?: RefObject<{ on: boolean; seq: number }>;
   onPetTap?: () => void;
-  onPetEvent?: (ev: 'arrive' | 'done' | 'cancel', kind: PetCareKind) => void;
+  onPetEvent?: (ev: 'arrive' | 'done' | 'cancel' | 'dropped', kind: PetCareKind) => void;
   /** 夜晚（回猫窝睡觉） */
   night?: boolean;
   /** 宠物状态（需求气泡：体力低=饿了 / 心情低=想喝水 / 清洁低=要洗澡） */
@@ -1741,10 +1746,14 @@ function PetBuddy({
   const meow = useRef(0);
   /** 爱心起飞时刻（每次摸头重排） */
   const heartT = useRef<number[]>([0, 0, 0, 0].map(() => -10));
-  /** 照顾中的动作（从 petCmdRef 捕获；phase: walk 走向小人 / do 就位互动） */
-  const care = useRef<{ kind: PetCareKind; phase: 'walk' | 'do'; t: number } | null>(null);
+  /** 照顾中的动作（从 petCmdRef 捕获；phase: walk 走向小人 / do 就位互动；carry=true 抱起模式不自动结束） */
+  const care = useRef<{ kind: PetCareKind; phase: 'walk' | 'do'; t: number; carry?: boolean } | null>(null);
   /** 已消费的指令序号 */
   const lastSeq = useRef(-1);
+  /** v7.2 抱抱抱起态：true = 被抱在怀里（跟随小人移动，不回窝不乱跑） */
+  const carrying = useRef(false);
+  /** 已消费的抱抱指令序号 */
+  const lastCarrySeq = useRef(0);
   /** 抱抱：被抱起的抬升（0→1 缓动，抱住时 ≈1，结束回落） */
   const hugLift = useRef(0);
   /** 洗澡泡泡组（bath do 阶段显示） */
@@ -1839,8 +1848,17 @@ function PetBuddy({
     if (!g) return;
     if (modeRef.current !== 'live') {
       g.visible = false;
-      // 切装修/退出时照顾中断
-      if (care.current) endCare(false);
+      // 切装修/退出时照顾中断；被抱着的小猫先轻轻放到小人面前
+      if (care.current) {
+        if (carrying.current) {
+          carrying.current = false;
+          const hd = meRT.heading;
+          rt.current.x = meRT.x + Math.sin(hd) * 0.42;
+          rt.current.z = meRT.z + Math.cos(hd) * 0.42;
+          onPetEvent?.('dropped', 'hug');
+        }
+        endCare(false);
+      }
       hugLift.current = 0;
       if (foamGrp.current) foamGrp.current.visible = false;
       return;
@@ -1852,7 +1870,7 @@ function PetBuddy({
     if (cmd && cmd.seq !== lastSeq.current) {
       lastSeq.current = cmd.seq;
       if (!care.current) {
-        care.current = { kind: cmd.kind, phase: 'walk', t: 0 };
+        care.current = { kind: cmd.kind, phase: 'walk', t: 0, carry: cmd.carry }; // v7.2 carry=true：抱起模式
         if (cmd.kind === 'summon') sfx.whistle(); // I：召唤哨声（一叫就到）
         // 夜晚被照顾：从窝里爬起来（照顾完歇一会儿再回去睡）
         if (sleeping.current || goBed.current) {
@@ -1873,6 +1891,34 @@ function PetBuddy({
       bath: dr?.bath ?? CLOSED_DOOR,
       bal: dr?.bal ?? CLOSED_DOOR,
     };
+
+    // —— v7.2 放下指令（seq 变化触发）：抱起时收到 on=false → 轻轻放到小人面前 ——
+    //   （抱起走 petCmdRef 的 carry 标志，无需独立 on=true 通道）
+    const cc = petCarryCmdRef?.current;
+    if (cc && !cc.on && cc.seq !== lastCarrySeq.current) {
+      lastCarrySeq.current = cc.seq;
+      if (care.current?.carry) {
+        if (carrying.current) {
+          // 放下：轻轻放到小人面前地上（碰撞检测防卡进家具）
+          carrying.current = false;
+          const hd = meRT.heading;
+          rt.current.x = meRT.x + Math.sin(hd) * 0.42;
+          rt.current.z = meRT.z + Math.cos(hd) * 0.42;
+          rt.current.moving = false;
+          rt.current.target = null;
+          rt.current.route = undefined;
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+          pat.current = 0.85;
+          meow.current = 1.1;
+          sfx.kiss();
+          const tn = performance.now() / 1000;
+          heartT.current = Array.from({ length: PET_HEART_N }, (_, i) => tn + 0.04 + i * 0.15);
+          rt.current.nextWander = performance.now() / 1000 + 1.6;
+        }
+        care.current = null;
+        onPetEvent?.('dropped', 'hug');
+      }
+    }
 
     // —— 漫游 / 照顾移动 ——
     const c = care.current;
@@ -1922,13 +1968,17 @@ function PetBuddy({
         rt.current.moving = false;
         if (c.kind === 'hug') {
           // 抱抱：宠物被搂进怀里 —— 贴到小人身前、抬升到胸口、朝向随小人（面朝外被抱着）
+          // v7.2 carry=true：正式抱起 —— 贴更近些（0.27 防穿模）、跟随更紧（dt*10），走到哪抱到哪，永不自动结束
           const hd = meRT.heading;
-          rt.current.x = THREE.MathUtils.lerp(rt.current.x, meRT.x + Math.sin(hd) * 0.15, Math.min(1, dt * 8));
-          rt.current.z = THREE.MathUtils.lerp(rt.current.z, meRT.z + Math.cos(hd) * 0.15, Math.min(1, dt * 8));
-          rt.current.heading = lerpAngle(rt.current.heading, hd, Math.min(1, dt * 8));
+          const off = c.carry ? 0.27 : 0.15;
+          const k = Math.min(1, dt * (c.carry ? 10 : 8));
+          rt.current.x = THREE.MathUtils.lerp(rt.current.x, meRT.x + Math.sin(hd) * off, k);
+          rt.current.z = THREE.MathUtils.lerp(rt.current.z, meRT.z + Math.cos(hd) * off, k);
+          rt.current.heading = lerpAngle(rt.current.heading, hd, k);
           hugLift.current = Math.min(1, hugLift.current + dt * 2.6);
-          // 怀里蹭蹭：每隔 1.1s 再冒一串爱心
-          if (c.t % 1.1 < dt) {
+          if (c.carry) carrying.current = true; // 抱起完成，进入怀抱跟随
+          // 怀里蹭蹭：每隔 1.1s 再冒一串爱心（抱着模式前 3.2s 冒完就安静窝着）
+          if (c.t % 1.1 < dt && (!c.carry || c.t < 3.2)) {
             const tn = performance.now() / 1000;
             heartT.current = Array.from({ length: PET_HEART_N }, (_, i) => tn + 0.04 + i * 0.15);
           }
@@ -1943,11 +1993,11 @@ function PetBuddy({
         else if (c.kind === 'water' && c.t % 0.7 < dt) sfx.sip();
         else if (c.kind === 'bath' && c.t % 2.4 < dt) sfx.bathWater();
         c.t += dt;
-        // 小人走远了 → 中断（抱抱贴在怀里不会超）
+        // 小人走远了 → 中断（抱抱/抱着贴在怀里不会超）
         if (c.kind !== 'hug' && Math.hypot(meRT.x - rt.current.x, meRT.z - rt.current.z) > 0.75) {
           endCare(false);
-        } else if (c.t >= PET_CARE_DUR[c.kind]) {
-          endCare(true);
+        } else if (!c.carry && c.t >= PET_CARE_DUR[c.kind]) {
+          endCare(true); // v7.2 抱着模式不自动结束 —— 等「放下」指令
         }
       }
     } else {
@@ -2068,10 +2118,12 @@ function PetBuddy({
     pat.current = Math.max(0, pat.current - dt / 0.95);
     const pp = pat.current;
     const sq = Math.sin(pp * Math.PI);
+    // v7.2 被抱着：软软地窝成团（用抱起抬升做平滑过渡）
+    const cs = carrying.current ? lift : 0;
     g.scale.set(
-      (1 + sq * 0.1) * (1 + se * 0.14),
-      (1 - sq * 0.14) * (1 - se * 0.34),
-      (1 + sq * 0.1) * (1 + se * 0.14),
+      (1 + sq * 0.1) * (1 + se * 0.14) * (1 + cs * 0.07),
+      (1 - sq * 0.14) * (1 - se * 0.34) * (1 - cs * 0.11),
+      (1 + sq * 0.1) * (1 + se * 0.14) * (1 + cs * 0.07),
     );
     const earBase = 0.26 * (1 - se);
     if (earL.current) earL.current.rotation.z = earBase + (pp > 0 ? Math.sin(t * 19) * 0.22 * pp : Math.sin(t * 1.8) * 0.03 * (1 - se));
@@ -2080,7 +2132,7 @@ function PetBuddy({
       const happy = care.current?.phase === 'do' ? 1 : 0;
       tail.current.rotation.y =
         (Math.sin(t * (mv ? 7 : 2.7)) * (mv ? 0.3 : 0.2) + sq * Math.sin(t * 15) * 0.55 + happy * Math.sin(t * 9) * 0.4) * (1 - se);
-      tail.current.rotation.x = -0.55 - se * 0.6; // 睡觉：尾巴卷贴身侧
+      tail.current.rotation.x = -0.55 - se * 0.6 - cs * 0.45; // 睡觉/被抱着：尾巴卷贴身侧
     }
 
     // —— 喵气泡 ——
@@ -2159,7 +2211,7 @@ function PetBuddy({
 
     // —— v7.1 小人表情联动（E：照顾时小人头顶冒爱心/星星；抱抱时双方冒笑脸） ——
     {
-      const careDo = care.current?.phase === 'do';
+      const careDo = care.current?.phase === 'do' && !(carrying.current && (care.current.t ?? 0) > 3.4); // v7.2 抱着：开头庆祝 3.4s 后安静窝着
       if (careDo && emoteBeat.current <= 0) {
         emoteBeat.current = 0.55;
         // 找一个已完成上一轮的槽位发射
@@ -2406,7 +2458,7 @@ export default function HomeScene(props: HomeSceneProps) {
     ceilCol, ceilColBed, ceilColK, ceilColB,
     doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, onToggleDoor, onToggleKitchenDoor, onToggleBathDoor, onToggleBalconyDoor,
     musicPlaying, weatherFx, litLamps, onCritterTap,
-    petCmdRef, onPetTap, onPetEvent, petState,
+    petCmdRef, onPetTap, onPetEvent, petState, petCarryCmdRef,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
   } = props;
 
@@ -2616,6 +2668,7 @@ export default function HomeScene(props: HomeSceneProps) {
         items={items}
         meRT={meRT}
         petCmdRef={petCmdRef}
+        petCarryCmdRef={petCarryCmdRef}
         onPetTap={onPetTap}
         onPetEvent={onPetEvent}
         night={night}

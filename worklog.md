@@ -96,3 +96,23 @@ Stage Summary:
 - 宠物交互第二轮升级完成：无 emoji 的 SVG 猫头入口、点宠物才出现的右侧竖向互动条（点别处/完成自动消失）、男生与宠物全屋跨房间漫游（房间图寻路+门走廊+卡死兜底）、猫窝家具+夜晚回窝 Zzz、头顶需求气泡、照顾时小人表情粒子、7 个萌系音效；女生齐刘海再加长；钢琴再缩窄
 - 关键修复：①点宠物 up 射线误关竖条（450ms 守卫）②猫窝落进沙发夹缝导致宠物卡死（badSpot 检测+pickSafe 迁移）③夜晚回窝被家具挡死（8s 传送兜底）
 - 关键文件：CoupleHome.tsx、scene/HomeScene.tsx、scene/CharChibi3D.tsx、scene/Furn3D.tsx、sfx.ts、types.ts、catalog.ts、InstrumentOverlay.tsx
+
+---
+Task ID: 5
+Agent: 主控 Agent（Z.ai Code）
+Task: v7.2 宠物头像移位 + 面板下方互动按钮 + 头发白点修复 + 抱抱=抱起随意走动/放下
+
+Work Log:
+- [头发白点] CharChibi3D：诊断确认为低多边形发壳（22×12 细分）+ 低粗糙度（女 0.58/男 0.7）导致的方向光逐面片高光闪烁（碎白点）；修复 = 粗糙度提高（女 0.78/男 0.85）+ 发壳细分 30×18 + 长直发/大波浪 LatheGeometry 26→34 段；白天/夜晚双光照 E2E 截图确认白点消失
+- [抱抱=抱起] types/HomeScene/CoupleHome：抱抱指令携带 carry 标志（petCmdRef {kind,seq,carry}）；PetBuddy care ref 增 carry 字段 —— walk 走向小人 → do 阶段贴身 0.27m + 抬升 0.33m（跟随更紧 dt*10）→ carrying=true 永不自动结束；开局 3.2s 冒爱心庆祝后安静窝着；表情粒子/笑脸同步 3.4s 门控；被抱时压扁窝团（scale 1.07/0.89）+ 尾巴卷贴身
+- [放下] petCarryCmdRef {on:false,seq} 独立通道：放下 = 放到小人面前 0.42m + collideAndClamp 防卡家具 + kiss/爱心 + 恢复漫游；抱起途中点放下 = 取消照顾原地释放；切装修模式自动放下（mode!=live 分支复用）
+- [怀抱手势] CharChibi3D carryRef 增 pet 字段：站立/走路双臂环抱（arm ±0.62/-1.42 + 走路轻颠）+ 低头看怀里（head 0.09），与端杯互斥（端杯逻辑 !petCarry 包裹）
+- [UI 状态机] CoupleHome：carrying state + carryPetRef 镜像；startPetCare 抱着态守卫（抱抱=放下 + toast，其他动作提示先放下）；onPetEvent 增 'dropped' 事件 + arrive(hug) 抱起完成（pose stand + 结算 mo+16/st+2 + 按钮解锁）；beginAction 抱着时拦截家具动作
+- [HUD] 右上角宠物头像移到「装修小家」按钮左侧（顺序：猫头像/装修小家/⋮）；宠物状态面板下方新增互动按钮区（分隔线 + grid 3×2 白玻璃圆钮，PetActionButton 复用组件）；抱抱按钮抱着时变「放下」（ArrowDownToLine 图标）；面板与右侧竖条互斥（点头像/点宠物互收）；点地板/家具同时收面板与竖条；面板提示文案改「点下面的按钮照顾它吧～」
+- [验证] tsc 通过（仅 next.config.ts 既有基线）；eslint 三文件 60 处与 git stash 基线完全一致（0 新增）
+- [验证] Agent Browser E2E（390×844）：右上角头像顺序✓；头像唤出面板+下方六按钮✓；抱抱全流程（宠物跑到身边→爱心→抱起）✓；摇杆抱着走动（镜头跟随平移）✓；按钮变「放下」+ 结算（心情 90→100/体力 88→90）✓；放下→猫落地+按钮恢复「抱抱」✓；点地板关面板✓；白天/夜晚头发无白点✓；控制台无 error（仅 three.js 既有弃用警告）
+- [验证环境说明] headless rAF 节流至 2fps → 游戏时间 10× 慢，宠物走路等待约 60-90s 现实时间（9s 超时兜底在真机为 9s）；抱起途中放下/装修自动放下两条路径经代码审查覆盖未单独实测
+
+Stage Summary:
+- 白点根因修复（材质高光闪烁而非粒子）；抱抱改为「抱起怀抱随意走动 + 放下」双态交互；互动按钮同时出现在面板下方与点宠物的右侧竖条；宠物头像移到装修小家左侧
+- 关键文件：CoupleHome.tsx、scene/HomeScene.tsx、scene/CharChibi3D.tsx

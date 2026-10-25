@@ -37,7 +37,7 @@ export interface CharChibi3DProps {
   /** 姿势（「我」专属；partner/访客永远站立） */
   poseRef?: RefObject<{ pose: CharPose; y: number }>;
   /** 手持物（true = 右手握小水杯，拿饮料/咖啡后端着到处逛；coffee = 咖啡款冒热气） */
-  carryRef?: RefObject<{ cup: boolean; coffee?: boolean }>;
+  carryRef?: RefObject<{ cup: boolean; coffee?: boolean; pet?: boolean }>; // v7.2 pet=true：怀里抱着小猫（双臂环抱）
   /** 访客名牌（头顶浮名字牌；缺省不挂） */
   guestName?: string;
   /** 女主衣柜穿搭（who = 'me' 时生效：发型 + 连衣裙/分体 + 鞋 + 调色盘） */
@@ -297,7 +297,9 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
 
   const skinMat = stdMat(o.skin, 0.62);
   const hairCol = tintHex(o.hair, GT?.hair);
-  const hairMat = stdMat(hairCol, 0.7);
+  // v7.2 粗糙度 0.85：太低（0.58~0.7）时低多边形发壳的每片平面各自反光，
+  // 灯下会闪出一片碎白点（用户截图反馈）；提高粗糙度后高光变成柔和整体亮部，不再有点点
+  const hairMat = stdMat(hairCol, 0.85);
   const topMat = stdMat(isGirl ? topCol : tintHex(bTop.c, BT?.top), 0.82);
   const botMat = stdMat(isGirl ? tintHex(botRec.c, GT?.bottom) : tintHex(bBot.c, BT?.bottom), 0.8); // 分体下装/男裤（自选色）
   const girlSockMat = stdMat('#ffffff', 0.72); // 女主白过膝袜
@@ -726,8 +728,8 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
   };
 
   if (isGirl) {
-    // 女主发丝更亮泽一点（低粗糙度 → 灯光下有柔和反光）
-    hairMat.roughness = 0.58;
+    // 女主发丝微光泽（0.78：保留一点柔光但不产生低多边形高光白点）
+    hairMat.roughness = 0.78;
     hairMat.side = THREE.DoubleSide; // 薄壳发片边缘从缝里看也不穿帮
 
     // —— v6.7「一体发壳」：球面薄片边贴边精确平铺（同一半径、共享边缘、零重叠 → 无 Z 抖动），
@@ -736,8 +738,9 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
     const d2r = (d: number) => (d * Math.PI) / 180;
     /** 球面发片：phi 起止（°，90°=正前）/ theta 起止（°，0°=头顶），同一半径 → 各片共享边缘成一整壳 */
     const shellPatch = (phi0: number, phi1: number, th0: number, th1: number, mat: THREE.Material) => {
+      // v7.2 细分 30×18（原 22×12）：法线过渡更细腻，配合高粗糙度彻底消除灯下白点
       const p = mesh(
-        new THREE.SphereGeometry(HR * 1.06, 22, 12, d2r(phi0), d2r(phi1 - phi0), d2r(th0), d2r(th1 - th0)),
+        new THREE.SphereGeometry(HR * 1.06, 30, 18, d2r(phi0), d2r(phi1 - phi0), d2r(th0), d2r(th1 - th0)),
         mat,
         0,
         0,
@@ -802,7 +805,7 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
             [0.66, -2.16], // 底缘
           ] as [number, number][]
         ).map(([r, y]) => new THREE.Vector2(r * HR, y * HR)),
-        26,
+        34,
       );
       const backHair = mesh(fall, hairMat, 0, 0, -HR * 0.4, head);
       backHair.scale.set(1, 1, 0.6);
@@ -824,7 +827,7 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
             [0.7, -2.2],
           ] as [number, number][]
         ).map(([r, y]) => new THREE.Vector2(r * HR, y * HR)),
-        26,
+        34,
       );
       { // 半径按 y 正弦调制：下摆呈大波浪卷边（两段频率叠加更蓬松自然）
         const pos = wavy.attributes.position;
@@ -1039,9 +1042,10 @@ export default function CharChibi3D({ rt, who, hide, poseRef, carryRef, guestNam
     eyeL.scale.y = blinkScale;
     eyeR.scale.y = blinkScale;
 
-    // —— 手持水杯 ——
+    // —— 手持水杯 / 怀抱小猫 ——
     const carry = who === 'me' && carryRef?.current?.cup === true;
     const carryCoffee = carry && carryRef?.current?.coffee === true;
+    const petCarry = who === 'me' && carryRef?.current?.pet === true; // v7.2 抱着宠物：双臂环抱，与端杯互斥
     cup.visible = carry && pose !== 'lie' && pose !== 'bath' && pose !== 'shower';
     cupCoffee.visible = carryCoffee;
     cupJuice.visible = !carryCoffee;
@@ -1101,6 +1105,16 @@ export default function CharChibi3D({ rt, who, hide, poseRef, carryRef, guestNam
         foreL.rotation.x = dampN(foreL.rotation.x, -0.38, 14, dt);
         armR.rotation.z = dampN(armR.rotation.z, 0.16, 14, dt);
         foreR.rotation.x = dampN(foreR.rotation.x, -0.38, 14, dt);
+        if (petCarry) {
+          // 怀抱小猫走路：双臂收拢环抱（随步子轻轻颠）
+          const sb = Math.sin(t * 10);
+          armL.rotation.x = dampN(armL.rotation.x, -0.62 + sb * 0.035, 12, dt);
+          armL.rotation.z = dampN(armL.rotation.z, -0.4, 12, dt);
+          foreL.rotation.x = dampN(foreL.rotation.x, -1.42, 12, dt);
+          armR.rotation.x = dampN(armR.rotation.x, -0.62 - sb * 0.035, 12, dt);
+          armR.rotation.z = dampN(armR.rotation.z, 0.4, 12, dt);
+          foreR.rotation.x = dampN(foreR.rotation.x, -1.42, 12, dt);
+        }
         root.position.y = Math.abs(Math.sin(t * 10)) * 0.042;
         root.rotation.x = dampN(root.rotation.x, 0.06, 12, dt);
         root.rotation.z = dampN(root.rotation.z, s * 0.04, 14, dt);
@@ -1112,12 +1126,14 @@ export default function CharChibi3D({ rt, who, hide, poseRef, carryRef, guestNam
         }
         hairDyn.rotation.z = dampN(hairDyn.rotation.z, s * 0.07, 12, dt);
         hairDyn.rotation.x = dampN(hairDyn.rotation.x, 0.05, 12, dt);
-        if (carry) {
-          armR.rotation.x = dampN(armR.rotation.x, -0.68, 14, dt);
-          armR.rotation.z = dampN(armR.rotation.z, 0.2, 12, dt);
-          foreR.rotation.x = dampN(foreR.rotation.x, -1.04, 14, dt);
-        } else {
-          armR.rotation.x = dampN(armR.rotation.x, s * 0.6, 20, dt);
+        if (!petCarry) {
+          if (carry) {
+            armR.rotation.x = dampN(armR.rotation.x, -0.68, 14, dt);
+            armR.rotation.z = dampN(armR.rotation.z, 0.2, 12, dt);
+            foreR.rotation.x = dampN(foreR.rotation.x, -1.04, 14, dt);
+          } else {
+            armR.rotation.x = dampN(armR.rotation.x, s * 0.6, 20, dt);
+          }
         }
       } else {
         // —— 待机：呼吸 + 手臂微晃 + 随机歪头 + 头发轻摆 ——
@@ -1130,15 +1146,26 @@ export default function CharChibi3D({ rt, who, hide, poseRef, carryRef, guestNam
         legR.rotation.x = dampN(legR.rotation.x, 0, 10, dt);
         kneeL.rotation.x = dampN(kneeL.rotation.x, 0, 10, dt);
         kneeR.rotation.x = dampN(kneeR.rotation.x, 0, 10, dt);
-        armL.rotation.x = dampN(armL.rotation.x, Math.sin(t * 1.7) * 0.05, 8, dt);
-        armL.rotation.z = dampN(armL.rotation.z, -0.16, 10, dt);
-        foreL.rotation.x = dampN(foreL.rotation.x, -0.14, 8, dt);
-        armR.rotation.z = dampN(armR.rotation.z, 0.16, 10, dt);
-        foreR.rotation.x = dampN(foreR.rotation.x, -0.14, 8, dt);
+        if (petCarry) {
+          // 怀抱小猫站定：双臂稳稳环住 + 低头看看怀里的小家伙
+          armL.rotation.x = dampN(armL.rotation.x, -0.62, 8, dt);
+          armL.rotation.z = dampN(armL.rotation.z, -0.4, 10, dt);
+          foreL.rotation.x = dampN(foreL.rotation.x, -1.42 + Math.sin(t * 2.2) * 0.03, 8, dt);
+          armR.rotation.x = dampN(armR.rotation.x, -0.62, 8, dt);
+          armR.rotation.z = dampN(armR.rotation.z, 0.4, 10, dt);
+          foreR.rotation.x = dampN(foreR.rotation.x, -1.42 - Math.sin(t * 2.2) * 0.03, 8, dt);
+          head.rotation.x = dampN(head.rotation.x, 0.09, 6, dt);
+        } else {
+          armL.rotation.x = dampN(armL.rotation.x, Math.sin(t * 1.7) * 0.05, 8, dt);
+          armL.rotation.z = dampN(armL.rotation.z, -0.16, 10, dt);
+          foreL.rotation.x = dampN(foreL.rotation.x, -0.14, 8, dt);
+          armR.rotation.z = dampN(armR.rotation.z, 0.16, 10, dt);
+          foreR.rotation.x = dampN(foreR.rotation.x, -0.14, 8, dt);
+        }
         root.position.y = Math.sin(t * 2.2) * 0.009 + 0.004;
         root.rotation.x = dampN(root.rotation.x, 0, 10, dt);
         root.rotation.z = dampN(root.rotation.z, 0, 10, dt);
-        head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
+        head.rotation.x = dampN(head.rotation.x, petCarry ? 0.09 : 0, 8, dt); // 抱着小猫：低头看看怀里
         head.rotation.z = dampN(head.rotation.z, tl.v, 2.2, dt);
         if (skirt) {
           skirt.rotation.x = dampN(skirt.rotation.x, 0, 10, dt);
@@ -1146,7 +1173,9 @@ export default function CharChibi3D({ rt, who, hide, poseRef, carryRef, guestNam
         }
         hairDyn.rotation.z = dampN(hairDyn.rotation.z, Math.sin(t * 1.3) * 0.03, 8, dt);
         hairDyn.rotation.x = dampN(hairDyn.rotation.x, 0, 8, dt);
-        if (carry) {
+        if (petCarry) {
+          // 怀里抱着小猫：不喝杯里的东西（双臂被占用，目标姿态已在上方环抱分支给定）
+        } else if (carry) {
           // 站着端杯：周期性举到嘴边咪一小口再放回来
           const ph = (t % 4.8) / 4.8;
           const sip = ph > 0.52 ? Math.sin(((ph - 0.52) / 0.48) * Math.PI) : 0;
