@@ -303,3 +303,27 @@ Stage Summary:
 - 拾光小屋 v10「有心的家」21 项全落地：TA 有了需求/情绪/甜度/作息/记忆强化/纪念日/脾气，每 1.5~2.5 分钟自己决定做什么（大模型优先+规则兜底），行动前冒想法气泡；会主动喊你吃饭/说想你；被冷落会闹脾气要哄；被夸的事更爱做；电视能看 6 个频道（天气台实时联动）、音箱能放真歌；新书房+花园可去；小剧场+训练+日记+多宠社交；对讲机免打语音对话 + 聊天记忆回看
 - 已知边界：B3 雷电闪白未做；决策循环大模型路径依赖 API 配置（无配置走 SDK 兜底也可用）；C3 兄弟追逐由猫侧发起（PetBuddy2 追猫为既有）
 - 关键文件：cabin-mind.ts（新）、companion-brain.ts、companion-memory.ts（未动）、scene/companion-rt.ts、scene/HomeScene.tsx、scene/CharChibi3D.tsx、scene/TV3D.tsx、CabinHistorySheet.tsx（新）、scene/weather-bus.ts（新）、CoupleHome.tsx、lib/ios/web-speech.ts、types.ts
+
+---
+Task ID: 11（v10.3 体验修复批次）
+Agent: 主控 Agent（Z.ai Code）
+Task: 修复用户实测反馈的 8 项问题——AI 睡觉跑屋外/同类锚点隐患、窗户跟真实景色、日记与聊天记录弹窗叉号失灵、语音输入无反应、TA 的心移到宠物头像左边、输入条按钮拆分、头顶气泡模糊、天花板透视与门/家具闪烁消失
+
+Work Log:
+- [睡觉跑屋外·根因] companion-rt.ts companionAnchor 直接把 AI 往家具 footprint 内的座位锚点寻路——锚点格被阻挡，永远进不了 remain<0.26 到位圈，卡死自救又落回同一个 nearestFree 点，表现为「卡在床边/屋外不躺床」。宿主 anchorOf 有 out 外围走位点而陪伴状态机没有
+- [修复①] companionAnchor 补齐 wx/wz 外围走位点（lie back=-1.45 / sit/read/eat back=+0.55，目录 an.out 优先如吊床），坐姿锚点夹座面前缘 0.16m 与宿主同口径；指令消费改「走到外围点→到位吸附锚点」两段式；卡死传送兜底改为「有锚点直落锚点本体」（保证一定躺到床上）；锚点动作到位圈放宽 0.22
+- [修复②气泡模糊] HomeScene：Q_DPR 上限 1.75→2（min(devicePixelRatio,2)）；BUBBLE_SS 3→4；气泡贴图 generateMipmaps=false + LinearFilter 直采（文字边缘不再被 mipmap 采样发虚）；重绘为 iOS 风磨砂白卡片（单一路径主体+尾巴防半透明双影、柔和投影、顶部高光、樱粉细描边、想法气泡虚线云朵描边保留）；Sprite 天生 billboard 恒面向相机
+- [修复③天花板] Room.tsx Ceiling 材质 side=DoubleSide + frustumCulled=false；墙体 mesh 同 DoubleSide+frustumCulled=false；HomeScene 第一人称 pitch 上限 1.3→1.15rad（贴墙根仰视不再看穿屋外），相机恒跟随被碰撞钳制的小人
+- [修复④门/家具闪烁] 新增 NoCull 组件每 0.5s 全场景 traverse 置 frustumCulled=false（覆盖异步 GLB/新家具，屏幕边缘与转角不再突然消失）；useWallOcclusionFade 加两道守卫：相机与对焦物距离<0.6m（第一人称/贴脸）不判遮挡、相机或对焦物本体在墙盒内不算穿过——只有视线段真正穿墙才淡出
+- [修复⑤窗随真实景色] Room.tsx 新 makeWeatherSkyTexture(weather,night) 十档缓存纹理：晴(蓝天帆船/星空月)、多云、阴、雨(乌云+斜雨丝)、雪(灰白+飘雪)×昼夜；Room 增加 weatherFx prop 由 HomeScene 透传；E2E 实测窗外雨丝与室外天气一致
+- [修复⑥弹窗叉号失灵·根因] 抽屉/遮罩挂在 pointer-events-none 的 HUD 层内且自身未显式开启 pointer-events-auto——点击全部穿透。CabinHistorySheet 遮罩+抽屉、宠物日记遮罩+抽屉全部补 pointer-events-auto；E2E 实测叉号关闭✓
+- [修复⑦语音输入无反应·根因] 原实现只依赖 Web Speech API（国产安卓浏览器识别引擎不可达=点麦克风没反应）。新增 src/lib/ios/cabin-voice.ts：MediaRecorder 录音→decodeAudioData→OfflineAudioContext 重采样 16k 单声道→WAV base64→复用 /api/phone/asr（内置 z-ai ASR 免配置）；麦克风按钮=录音兜底+WebSpeech 实时预览双通道（有结果用零等待的，没结果自动走服务端）；对讲模式改为「RMS 音量自动分段」服务端逐句识别（误触发<0.3s 丢弃、单段 12s 上限、静音 1.1s 收段），支持 WebSpeech 的浏览器仅挂实时预览不重复发送；卸载时释放麦克风/分段器
+- [修复⑧UI] 顶栏宠物头像左侧新增爱心按钮+独立「TA 的心」面板（Lv/甜度/情绪/四需求条/闹脾气提示，与宠物面板/⋮菜单互斥），⋮ 菜单保留入口行；输入条重组：对讲/聊天记忆/麦克风拆出输入胶囊，独立成排 44px 白玻璃圆钮（激活态绿色/红色脉冲保留），胶囊内只留 输入框+图+发送
+- [清理] 删除 Room.tsx 旧 makeDaySkyTexture/makeNightSkyTexture（已被 makeWeatherSkyTexture 托管）；移除 CoupleHome 未用的 intercomSessionRef
+- [验证] bunx tsc 0 错误；eslint CoupleHome 52=基线、HomeScene 19=基线、新文件 0 新增；agent-browser 390×844 实测：入口选择器✓、心面板开合✓、聊天记忆面板叉号关闭✓、输入条新布局✓、窗外雨丝与真实天气一致✓、聊天 502→SDK 兜底 200 且 TA 领命移动✓、第一人称抬头=完整天花板✓、麦克风按钮无权限提示不崩溃✓、控制台无运行时错误
+- [git] ffb4bb9 本地 commit；github push 仍不可达（沙箱网络），待用户网络可用时 push
+
+Stage Summary:
+- v10.3 修复批次完成：TA 上床睡觉有了代码级保证（外围走位→吸附→卡死直落锚点三重）；气泡文字 4x 超采样+关 mipmap+iOS 磨砂卡片；天花板/墙体 DoubleSide+全局 frustumCulled=false+遮挡贴脸守卫；窗景十档天气昼夜纹理；两个抽屉弹窗叉号复活；语音输入在不支持 Web Speech 的国产浏览器上走「录音→内置 ASR」兜底、对讲模式改为自动分段服务端识别；TA 的心独立入口+输入条按钮拆分
+- 已知边界：E2E 无法验证真机麦克风录音质量（无头无麦克风）；TA 躺床最终姿态的镜头级验证受走位限制未完成，由「传送直落锚点」兜底逻辑保证
+- 关键文件：scene/companion-rt.ts、scene/Room.tsx、scene/HomeScene.tsx、CoupleHome.tsx、CabinHistorySheet.tsx、lib/ios/cabin-voice.ts（新）
