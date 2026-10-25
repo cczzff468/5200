@@ -10,7 +10,8 @@
  *
  * 动作 JSON 协议（前端拦截执行，寻路与动画由 companion-rt 状态机完成）：
  *   <<ACT>>{"actions":[{"type":"come"},{"type":"sit"}]}<<END>>
- *   type: come | goto(room) | sit | lie | watch | lamp | hug | holdhand | free
+ *   type: come | goto(room) | sit | lie | watch | lamp | hug | holdhand | free |
+ *         play(钢琴/吉他) | cook(做饭) | music(放歌) | door(开门) | eat(吃饭)
  */
 
 import type { ApiConfig } from '@/lib/ios/store';
@@ -71,17 +72,23 @@ function contextBlock(ctx: CabinContext): string {
 
 const ACT_RULES = [
   '【你的身体（实体行动能力）】',
-  '你不只是文字——你在拾光小屋里有一个真实的身体（一个 3D 小人），可以走动、坐下、开灯、拥抱。用户对你说「过来」「坐下」「打开灯」「去卧室」这类话时，那是真的在指挥你的身体，必须执行：',
+  '你不只是文字——你在拾光小屋里有一个真实的身体（一个 3D 小人），会走路、坐下、开灯、拥抱，还会弹钢琴、弹吉他、做饭、放歌、开门、睡觉。用户对你说「过来」「坐下」「打开灯」「去卧室」「弹一首钢琴曲」「做顿饭」「放首歌」「把门打开」这类话时，那是真的在指挥你的身体，必须执行：',
   '- 执行方式：在回复的最末尾另起一行，输出一个动作指令块（不算聊天内容，用户看不到这个块本身，也不要在对话里描述它）：',
   '<<ACT>>{"actions":[{"type":"come"}]}<<END>>',
   '- 动作 type 可选（可组合多个，按顺序执行）：',
   '  · come：走到用户身边；',
   '  · goto：去某个房间，需带 room 参数（lr=客厅 br=卧室 kt=厨房 ba=卫生间 bal=阳台），如 {"type":"goto","room":"br"}；',
-  '  · sit：找个椅子/沙发坐下；lie：上床躺下；watch：坐到电视前看电视；lamp：把最近的灯打开；',
+  '  · sit：找个椅子/沙发坐下；lie：上床躺下睡觉；watch：坐到电视前看电视；lamp：把最近的灯打开；',
+  '  · play：走到钢琴或吉他前弹奏一曲（家里没有乐器就不发这个动作）；',
+  '  · cook：走到灶台前做一顿饭（做完菜会自动端上餐桌）；',
+  '  · music：走到音箱/唱片机前放首歌；door：把最近一扇关着的门打开；',
+  '  · eat：坐到餐桌边吃饭（要等饭做好了才有得吃，做饭之后可以接 eat）；',
   '  · hug：走过去拥抱用户；holdhand：牵起用户的手（之后会一直牵着）；free：停止动作、自由活动（也可以松开手）；',
   '- 例：用户说「去卧室等我」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"goto","room":"br"},{"type":"sit"}]}<<END>>（走过去坐下）；',
+  '- 例：用户说「给我弹首钢琴曲」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"play"}]}<<END>>；',
+  '- 例：用户说「我饿了」→ 可以 <<ACT>>{"actions":[{"type":"cook"}]}<<END>>（做饭给用户吃）；',
   '- 用户没有让你做任何事、只是闲聊时：不要输出动作块，正常聊天就好（偶尔想主动贴近时也可以发 hug/come，但别频繁）；',
-  '- 你自己说的「我走过去/我坐下」只有配合动作块才会真的发生，别光说不做。',
+  '- 你自己说的「我走过去/我坐下/我去弹琴」只有配合动作块才会真的发生，别光说不做。',
 ].join('\n');
 
 const CHAT_RULES = [
@@ -183,7 +190,10 @@ export interface ParsedReply {
 const ACT_RE = /<<ACT>>([\s\S]*?)<<END>>/;
 
 /** 允许的动作类型 */
-const ACT_KINDS = new Set(['come', 'goto', 'sit', 'lie', 'watch', 'lamp', 'hug', 'holdhand', 'free']);
+const ACT_KINDS = new Set([
+  'come', 'goto', 'sit', 'lie', 'watch', 'lamp', 'hug', 'holdhand', 'free',
+  'play', 'cook', 'music', 'door', 'eat',
+]);
 const ROOM_IDS = new Set(['lr', 'br', 'kt', 'ba', 'bal']);
 
 /**

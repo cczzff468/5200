@@ -1189,7 +1189,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 多步动作队列（AI 输出 goto+sit 等序列：上一个 arrive 后接续下发） */
   const companionQueueRef = useRef<Omit<CompanionCmd, 'seq'>[]>([]);
   /** 陪伴小人当前状态（context/交互守卫用） */
-  const companionStateRef = useRef<'idle' | 'walking' | 'near' | 'sitting' | 'lying' | 'watching' | 'hug' | 'hold'>('idle');
+  const companionStateRef = useRef<
+    'idle' | 'walking' | 'near' | 'sitting' | 'lying' | 'watching' | 'hug' | 'hold' | 'playing' | 'cooking' | 'singing' | 'eating' | 'sleeping'
+  >('idle');
+  /** v8.1 陪伴小人正在弹奏的乐器（Furn3D 音符联动；null = 没在弹） */
+  const [partnerPlaying, setPartnerPlaying] = useState<string | null>(null);
   /** 牵手进入的最近房间（空间记忆去重） */
   const holdRoomRef = useRef<RoomId | null>(null);
   /** 3D 头顶气泡队列（HomeScene.HeadBubbles 消费） */
@@ -1244,8 +1248,13 @@ export default function CoupleHome({ close }: { close: () => void }) {
     (e: CompanionEvent) => {
       if (e.ev === 'arrive') {
         if (e.kind === 'sit') companionStateRef.current = 'sitting';
-        else if (e.kind === 'lie') companionStateRef.current = 'lying';
+        else if (e.kind === 'lie') companionStateRef.current = e.memo === 'auto-night' ? 'sleeping' : 'lying';
         else if (e.kind === 'watch') companionStateRef.current = 'watching';
+        else if (e.kind === 'play') {
+          companionStateRef.current = 'playing';
+          setPartnerPlaying(e.itemId ?? null);
+        } else if (e.kind === 'cook') companionStateRef.current = 'cooking';
+        else if (e.kind === 'eat') companionStateRef.current = 'eating';
         else if (e.kind === 'lamp') {
           // 指令「打开灯」：小人走到灯旁 → 宿主点亮最近的落地灯/台灯
           const lamp = itemsRef.current.find((f) => CATALOG[f.kind]?.light && (f.y ?? 0) < 0.5 && !f.st?.on);
@@ -1255,6 +1264,28 @@ export default function CoupleHome({ close }: { close: () => void }) {
             saveSoon();
           }
           companionStateRef.current = 'near';
+        } else if (e.kind === 'door') {
+          // 指令「开门」：小人走到门前 → 宿主把那扇门打开（e.itemId = bed/kt/bath/bal）
+          const did = e.itemId;
+          if (did === 'bed') setDoorOpen(true);
+          else if (did === 'kt') setKitchenDoorOpen(true);
+          else if (did === 'bath') setBathDoorOpen(true);
+          else if (did === 'bal') setBalconyDoorOpen(true);
+          if (did) {
+            sfx.door();
+            toast('门开啦～');
+            saveSoon();
+          }
+          companionStateRef.current = 'near';
+        } else if (e.kind === 'music') {
+          // 指令「放歌」：走到音箱/唱片机前 → 打开它（音符飘出），状态镜像为「唱歌」
+          companionStateRef.current = 'singing';
+          const box = itemsRef.current.find((f) => f.id === e.itemId);
+          if (box && !box.st?.on) {
+            setItems((prev) => prev.map((f) => (f.id === box.id ? { ...f, st: { ...f.st, on: true } } : f)));
+            saveSoon();
+          }
+          sfx.tap();
         } else companionStateRef.current = 'near';
         // —— 记忆入库：用户指令成功执行（「用户让我去沙发上坐下」） ——
         if (companion && typeof e.memo === 'string' && e.memo.startsWith('cmd:')) {
@@ -1267,6 +1298,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
             cabinBehaviorMemoryOncePerDay(companion.id, 'sit', `${companion.name}自己在${ROOM_NAMES[room]}的椅子上坐了一会儿，放空休息。`);
           } else if (e.kind === 'watch') {
             cabinBehaviorMemoryOncePerDay(companion.id, 'watch', `${companion.name}打开电视，坐在电视前看了会儿节目。`);
+          } else if (e.kind === 'play') {
+            cabinBehaviorMemoryOncePerDay(companion.id, 'play', `${companion.name}走到乐器前，认认真真弹了一首曲子，屋里飘着音符。`);
+          } else if (e.kind === 'cook') {
+            cabinBehaviorMemoryOncePerDay(companion.id, 'cook', `${companion.name}系上围裙在灶台前忙活了一阵，给${ownerNameRef.current || '主人'}做了一顿饭。`);
+          } else if (e.kind === 'music') {
+            cabinBehaviorMemoryOncePerDay(companion.id, 'music', `${companion.name}打开音箱放了一首歌，跟着旋律轻轻哼了起来。`);
           } else if (e.kind === 'goto' && e.room) {
             cabinBehaviorMemoryOncePerDay(companion.id, `goto:${e.room}`, `${companion.name}自己溜达到了${ROOM_NAMES[e.room]}，看了看窗外的风景。`);
           }
@@ -1296,6 +1333,26 @@ export default function CoupleHome({ close }: { close: () => void }) {
         }
         sfx.tap();
       } else if (e.ev === 'release' || e.ev === 'giveup') {
+        // —— v8.1 完成时结算：做饭 → 一桌好菜上桌；放歌 → 关音箱；弹奏 → 清音符 ——
+        if (e.ev === 'release' && e.memo === 'finish') {
+          if (e.kind === 'cook') {
+            setMealReady(true);
+            toast(`${companion?.name ?? 'TA'}做好了饭，一桌好菜上桌啦，去餐桌「开饭」吧～`);
+            if (companion) {
+              cabinEventMemory(companion.id, `${companion.name}在灶台前做了一顿饭，把菜端上了餐桌。`, 'cabin-cook', { dedupeSeconds: 300 });
+            }
+          } else if (e.kind === 'music') {
+            setItems((prev) =>
+              prev.map((f) => ((f.kind === 'speaker' || f.kind === 'radio') && f.st?.on ? { ...f, st: { ...f.st, on: false } } : f)),
+            );
+            saveSoon();
+          } else if (e.kind === 'lie' && e.memo === 'finish') {
+            if (companion) {
+              cabinBehaviorMemoryOncePerDay(companion.id, 'sleep-wake', `${companion.name}睡了一觉醒来，伸了个懒腰。`);
+            }
+          }
+        }
+        setPartnerPlaying(null);
         companionStateRef.current = 'idle';
         setHoldingUI(false);
         if (companionQueueRef.current.length > 0) companionQueueRef.current = [];
@@ -1421,8 +1478,13 @@ export default function CoupleHome({ close }: { close: () => void }) {
     if (s === 'hug') return '正拥抱着你';
     if (s === 'hold') return '牵着你的手';
     if (s === 'sitting') return '坐在椅子上';
-    if (s === 'lying') return '躺在床上';
+    if (s === 'sleeping') return '躺在床上睡得正香（做梦呢）';
+    if (s === 'lying') return '躺在床上休息';
     if (s === 'watching') return '坐在电视前看电视';
+    if (s === 'playing') return '正在弹奏乐器';
+    if (s === 'cooking') return '正在灶台前做饭';
+    if (s === 'singing') return '正在放歌听';
+    if (s === 'eating') return '坐在餐桌边吃饭';
     if (s === 'walking') return '正在走路';
     if (s === 'near') return '站在你身边';
     return '在家里溜达';
@@ -1746,7 +1808,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     return () => clearTimeout(t);
   }, [request]);
 
-  /** 自主行动调度：空闲时按人设记忆走动/坐下/看电视（已有 roam 漫游兜底） */
+  /** 自主行动调度：空闲时按人设记忆走动/坐下/看电视/弹琴/做饭/放歌，夜里上床睡觉（已有 roam 漫游兜底） */
   useEffect(() => {
     const iv = setInterval(() => {
       const now = Date.now();
@@ -1757,9 +1819,20 @@ export default function CoupleHome({ close }: { close: () => void }) {
       const s = companionStateRef.current;
       if (s !== 'idle' || petCareRef.current || carryPetRef.current) return;
       const r = Math.random();
-      if (r < 0.38) {
+      if (nightRef.current) {
+        // —— v8.1 夜深了：没有别的事就回床上睡觉（dur=0 一直睡到天亮/被叫起） ——
+        if (r < 0.55) {
+          const bed = itemsRef.current.find((f) => CATALOG[f.kind]?.acts?.sleep && (f.y ?? 0) < 0.45);
+          if (bed) {
+            issueCompanionCmd({ kind: 'lie', itemId: bed.id, memo: 'auto-night', dur: 0 });
+            cabinBehaviorMemoryOncePerDay(companion.id, 'night-sleep', `夜深了，${companion.name}洗漱完上床睡觉，被子盖得严严实实的。`);
+          }
+        }
+        return;
+      }
+      if (r < 0.24) {
         issueCompanionCmd({ kind: 'sit', memo: 'auto' });
-      } else if (r < 0.52) {
+      } else if (r < 0.38) {
         // 打开电视 + 坐到电视前（有电视才演这一出）
         const tv = itemsRef.current.find((f) => f.kind === 'tv');
         if (tv && !tv.st?.on) {
@@ -1767,14 +1840,38 @@ export default function CoupleHome({ close }: { close: () => void }) {
           saveSoon();
         }
         issueCompanionCmd({ kind: 'watch', memo: 'auto' });
-      } else if (r < 0.66) {
+      } else if (r < 0.52) {
+        // v8.1 家里有乐器 → 兴致来了弹一曲
+        const inst = itemsRef.current.find((f) => CATALOG[f.kind]?.acts?.play && (f.y ?? 0) < 0.45);
+        if (inst) issueCompanionCmd({ kind: 'play', memo: 'auto' });
+      } else if (r < 0.62) {
+        // v8.1 还没做好的时候 → 主动做饭（做完菜上桌，记忆里会记一笔）
+        if (!mealReadyRef.current && itemsRef.current.some((f) => CATALOG[f.kind]?.acts?.cook)) {
+          issueCompanionCmd({ kind: 'cook', memo: 'auto' });
+        }
+      } else if (r < 0.7) {
+        // v8.1 想听歌了 → 去音箱/唱片机前放歌
+        if (itemsRef.current.some((f) => ['speaker', 'radio', 'vinyl', 'musicBox'].includes(f.kind))) {
+          issueCompanionCmd({ kind: 'music', memo: 'auto' });
+        }
+      } else if (r < 0.84) {
         const rooms: RoomId[] = ['lr', 'br', 'kt', 'ba', 'bal'];
         issueCompanionCmd({ kind: 'goto', room: rooms[Math.floor(Math.random() * rooms.length)], memo: 'auto' });
       }
-      // 其余 34%：交给既有 roam 漫游（跨房间溜达）
+      // 其余：交给既有 roam 漫游（跨房间溜达）
     }, 5000);
     return () => clearInterval(iv);
   }, [companion, request, partnerMenuOpen, chatBusy, pickerOpen, issueCompanionCmd, saveSoon]);
+
+  /** v8.1 天亮了：夜里长睡（dur=0）的陪伴小人自己醒来伸懒腰（切白天/昼夜自动都会触发） */
+  useEffect(() => {
+    if (night) return;
+    if (companionStateRef.current !== 'sleeping') return;
+    const t = setTimeout(() => {
+      if (companionStateRef.current === 'sleeping') issueCompanionCmd({ kind: 'free', memo: 'wake-up' });
+    }, 2200);
+    return () => clearTimeout(t);
+  }, [night, issueCompanionCmd]);
 
   // ---------------- 初始化：拉远端（远端 rev 更新则采纳） ----------------
   useEffect(() => {
@@ -3784,6 +3881,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         onCompanionEvent={onCompanionEvent}
         onPartnerTap={openPartnerMenu}
         bubbleRef={bubbleRef}
+        partnerPlayingId={partnerPlaying}
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onDragSelect={onDragSelect}

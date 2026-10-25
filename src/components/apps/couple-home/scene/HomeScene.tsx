@@ -167,6 +167,8 @@ export interface HomeSceneProps {
   onPartnerTap?: () => void;
   /** v8.0 3D 头顶气泡指令队列（CoupleHome push，HeadBubbles 消费） */
   bubbleRef?: RefObject<BubbleCmd[]>;
+  /** v8.1 陪伴小人正在弹奏的乐器家具 id（null = 没在弹；Furn3D 音符飘出联动） */
+  partnerPlayingId?: string | null;
 }
 
 /** v8.0 头顶气泡指令（who = 挂在谁头上；hold = 展示秒数，缺省按字数） */
@@ -2611,7 +2613,7 @@ export default function HomeScene(props: HomeSceneProps) {
     musicPlaying, weatherFx, litLamps, onCritterTap,
     petCmdRef, onPetTap, onPetEvent, petState, petCarryCmdRef,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
-    companionCmdRef, onCompanionEvent, onPartnerTap, bubbleRef,
+    companionCmdRef, onCompanionEvent, onPartnerTap, bubbleRef, partnerPlayingId,
   } = props;
 
   // —— v8.0 陪伴系统：状态机实例 / 小人姿势槽 / A* 阻挡网格（网格重建见下方 wallBoxes 之后） ——
@@ -2825,7 +2827,10 @@ export default function HomeScene(props: HomeSceneProps) {
             onTap={onFurnTap}
             onFaucetTap={onFaucetTap}
             cooking={activeAct?.type === 'cook' && activeAct.active && activeAct.itemId === item.id}
-            playing={activeAct?.type === 'play' && activeAct.active && activeAct.itemId === item.id}
+            playing={
+              (activeAct?.type === 'play' && activeAct.active && activeAct.itemId === item.id) ||
+              partnerPlayingId === item.id
+            }
             meal={!!mealTableId && mealTableId === item.id}
             projectorOn={projectorOn}
             sitting={sittingId === item.id}
@@ -2854,7 +2859,11 @@ export default function HomeScene(props: HomeSceneProps) {
       <GlassRain kind={weatherFx ?? 'clear'} winExist={winExist} winPos={winPos} />
       <SnowDeco kind={weatherFx ?? 'clear'} winExist={winExist} winPos={winPos} />
       <Critters mode={mode} items={items} onCritterTap={onCritterTap} />
-      <SpeakerNotes items={items} active={!!musicPlaying} />
+      {/* v8.1 音箱/收音机开着也飘音符（陪伴小人放歌时同享） */}
+      <SpeakerNotes
+        items={items}
+        active={!!musicPlaying || items.some((f) => (f.kind === 'speaker' || f.kind === 'radio') && f.st?.on)}
+      />
       <EditCameraKick mode={mode} />
       <ZoomPoker zoomCmd={zoomCmd} />
       <NudgePoker moveCmd={moveCmd} onNudge={onNudge} />
