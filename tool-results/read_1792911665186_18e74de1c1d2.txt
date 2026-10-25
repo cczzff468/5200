@@ -1,0 +1,725 @@
+     1→'use client';
+     2→
+     3→/**
+     4→ * 拾光小屋 —— 我的衣柜弹窗（v6.3：女生/男生双衣柜 + 调色盘）
+     5→ *
+     6→ * 走到衣柜前自动弹出（点家具「换套衣服」）。底部抽屉式：
+     7→ * 上半屏透出 3D 场景 → 小人实时试穿；下半屏顶部分角色切换（女生/男生），分类挑款：
+     8→ *   女生：发型（双马尾/高马尾/短发/长直发/大波浪） · 连衣裙 ×4 · 上衣 ×4 · 下装 · 鞋 ×4
+     9→ *   男生：发型（顺滑/蓬松/中分/刺猬） · 上衣 ×4 · 裤子 ×4 · 鞋 ×4
+    10→ * 「调色盘」行可给当前分类的服饰自选颜色（tints.*，默认色可一键还原）。
+    11→ * 女生选上衣/下装自动切成「分体穿搭」，选连衣裙切回「连衣裙穿搭」。
+    12→ */
+    13→
+    14→import { useMemo, useState } from 'react';
+    15→import { AnimatePresence, motion } from 'framer-motion';
+    16→import { Check, Plus, Shirt, X } from 'lucide-react';
+    17→import type { BoyHairStyle, GirlHairStyle, GirlWear, BoyWear, WearTints } from './types';
+    18→import {
+    19→  BOY_BOTTOMS,
+    20→  BOY_HAIR_NAMES,
+    21→  BOY_SHOES,
+    22→  BOY_TOPS,
+    23→  BOTTOMS,
+    24→  CLOTH_COLORS,
+    25→  DRESSES,
+    26→  HAIR_COLORS,
+    27→  HAIR_NAMES,
+    28→  SHOES,
+    29→  TOPS,
+    30→} from './wardrobe-data';
+    31→import { sfx } from './sfx';
+    32→
+    33→type WardTab = 'hair' | 'dress' | 'top' | 'bottom' | 'shoes';
+    34→
+    35→/** 当前分类对应的调色盘槽位 */
+    36→const TINT_SLOT: Record<WardTab, keyof WearTints> = {
+    37→  hair: 'hair',
+    38→  dress: 'dress',
+    39→  top: 'top',
+    40→  bottom: 'bottom',
+    41→  shoes: 'shoes',
+    42→};
+    43→
+    44→/** HSL → #rrggbb（彩虹色相条选色用） */
+    45→function hslToHex(h: number, s: number, l: number): string {
+    46→  const f = (n: number) => {
+    47→    const k = (n + h / 30) % 12;
+    48→    const c = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    49→    return Math.round(255 * c)
+    50→      .toString(16)
+    51→      .padStart(2, '0');
+    52→  };
+    53→  return `#${f(0)}${f(8)}${f(4)}`;
+    54→}
+    55→
+    56→/** 彩虹色相条背景（v6.4 全色系：40° 间隔 9 色渐变，尾首过渡自然） */
+    57→const HUE_STRIP_BG =
+    58→  'linear-gradient(90deg,#e86a6a,#e89a5a,#e8c95a,#a8d06a,#5abc8a,#5aaed0,#7a8ae8,#b07ae0,#e06ab8,#e86a6a)';
+    59→
+    60→/** #rrggbb → 色相 0..360（无彩色返回 0） */
+    61→function hexToHue(hex: string): number {
+    62→  const n = parseInt(hex.slice(1), 16);
+    63→  const r = ((n >> 16) & 255) / 255;
+    64→  const g = ((n >> 8) & 255) / 255;
+    65→  const b = (n & 255) / 255;
+    66→  const mx = Math.max(r, g, b);
+    67→  const mn = Math.min(r, g, b);
+    68→  if (mx === mn) return 0;
+    69→  const d = mx - mn;
+    70→  let h: number;
+    71→  if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+    72→  else if (mx === g) h = ((b - r) / d + 2) * 60;
+    73→  else h = ((r - g) / d + 4) * 60;
+    74→  return h;
+    75→}
+    76→
+    77→const TABS_GIRL: { key: WardTab; label: string }[] = [
+    78→  { key: 'hair', label: '发型' },
+    79→  { key: 'dress', label: '连衣裙' },
+    80→  { key: 'top', label: '上衣' },
+    81→  { key: 'bottom', label: '下装' },
+    82→  { key: 'shoes', label: '鞋子' },
+    83→];
+    84→
+    85→const TABS_BOY: { key: WardTab; label: string }[] = [
+    86→  { key: 'hair', label: '发型' },
+    87→  { key: 'top', label: '上衣' },
+    88→  { key: 'bottom', label: '裤子' },
+    89→  { key: 'shoes', label: '鞋子' },
+    90→];
+    91→
+    92→/** 通用小脸（八字刘海 + 眉眼 + 微笑），叠各发型特征 */
+    93→function FaceBase({ hair, bow }: { hair: string; bow: string }) {
+    94→  return (
+    95→    <g>
+    96→      {/* 八字刘海（中分两撇斜下扫） */}
+    97→      <path d="M24 13.5 q-9.5 1 -10.5 11.5 q3 -5.5 6.5 -6.5 q-1.5 4.5 -0.5 8 q2.5 -7.5 4.5 -13 z" fill={hair} />
+    98→      <path d="M24 13.5 q9.5 1 10.5 11.5 q-3 -5.5 -6.5 -6.5 q1.5 4.5 0.5 8 q-2.5 -7.5 -4.5 -13 z" fill={hair} />
+    99→      {/* 眉眼嘴 */}
+   100→      <circle cx="19.6" cy="27.2" r="1.5" fill="#4a3a30" />
+   101→      <circle cx="28.4" cy="27.2" r="1.5" fill="#4a3a30" />
+   102→      <path d="M22.6 31.2 q1.4 1.4 2.8 0" stroke="#e08e8e" strokeWidth="1.3" fill="none" strokeLinecap="round" />
+   103→      {/* 腮红 */}
+   104→      <circle cx="17.4" cy="29.8" r="1.7" fill="#f7a8b4" opacity="0.55" />
+   105→      <circle cx="30.6" cy="29.8" r="1.7" fill="#f7a8b4" opacity="0.55" />
+   106→      <circle cx="0" cy="0" r="0" fill={bow} />
+   107→    </g>
+   108→  );
+   109→}
+   110→
+   111→/** 男生小脸（碎刘海 + 眼嘴 + 腮红，无八字刘海） */
+   112→function BoyFace({ hair }: { hair: string }) {
+   113→  return (
+   114→    <g>
+   115→      <circle cx="19.8" cy="27.4" r="1.5" fill="#3a3230" />
+   116→      <circle cx="28.2" cy="27.4" r="1.5" fill="#3a3230" />
+   117→      <path d="M22.6 31.2 q1.4 1.4 2.8 0" stroke="#c98a80" strokeWidth="1.3" fill="none" strokeLinecap="round" />
+   118→      <circle cx="17.2" cy="30" r="1.7" fill="#f4b3aa" opacity="0.5" />
+   119→      <circle cx="30.8" cy="30" r="1.7" fill="#f4b3aa" opacity="0.5" />
+   120→      <circle cx="0" cy="0" r="0" fill={hair} />
+   121→    </g>
+   122→  );
+   123→}
+   124→
+   125→/** 发型缩略图标（女生） */
+   126→function HairIcon({ kind }: { kind: GirlHairStyle }) {
+   127→  const hair = '#6b4a38';
+   128→  const tip = '#a97a5c';
+   129→  const bow = '#f591ac';
+   130→  return (
+   131→    <svg viewBox="0 0 48 48" className="h-full w-full">
+   132→      {kind === 'high' && (
+   133→        <>
+   134→          <ellipse cx="27" cy="7.5" rx="5" ry="6.5" fill={hair} />
+   135→          <ellipse cx="27.6" cy="4.5" rx="3.4" ry="3" fill={tip} />
+   136→          <rect x="22.6" y="12.2" width="8.8" height="3.4" rx="1.7" fill={bow} />
+   137→        </>
+   138→      )}
+   139→      {/* 后发基底 */}
+   140→      {kind === 'twin' && (
+   141→        <>
+   142→          <ellipse cx="24" cy="24" rx="14" ry="14" fill={hair} />
+   143→          <ellipse cx="9.2" cy="28" rx="4.6" ry="9.5" fill={hair} />
+   144→          <ellipse cx="38.8" cy="28" rx="4.6" ry="9.5" fill={hair} />
+   145→          <ellipse cx="9.2" cy="35" rx="3" ry="2.4" fill={tip} />
+   146→          <ellipse cx="38.8" cy="35" rx="3" ry="2.4" fill={tip} />
+   147→          <circle cx="12.6" cy="19.5" r="2.5" fill={bow} />
+   148→          <circle cx="35.4" cy="19.5" r="2.5" fill={bow} />
+   149→        </>
+   150→      )}
+   151→      {kind === 'high' && <ellipse cx="24" cy="24" rx="13" ry="13" fill={hair} />}
+   152→      {kind === 'bob' && (
+   153→        <>
+   154→          <ellipse cx="24" cy="26" rx="14.6" ry="14.6" fill={hair} />
+   155→          <ellipse cx="24" cy="38.5" rx="12.4" ry="3" fill={hair} />
+   156→          <ellipse cx="15" cy="37.5" rx="2.6" ry="2.1" fill={tip} />
+   157→          <ellipse cx="33" cy="37.5" rx="2.6" ry="2.1" fill={tip} />
+   158→        </>
+   159→      )}
+   160→      {kind === 'straight' && (
+   161→        <>
+   162→          <ellipse cx="24" cy="24" rx="14" ry="14" fill={hair} />
+   163→          <path d="M11.5 22 q-3.5 14 -0.5 21 q4.5 1.6 6.5 -1 q-2.5 -11 -1.5 -19 z" fill={hair} />
+   164→          <path d="M36.5 22 q3.5 14 0.5 21 q-4.5 1.6 -6.5 -1 q2.5 -11 1.5 -19 z" fill={hair} />
+   165→          <ellipse cx="14.2" cy="42" rx="3.4" ry="1.8" fill={tip} />
+   166→          <ellipse cx="33.8" cy="42" rx="3.4" ry="1.8" fill={tip} />
+   167→        </>
+   168→      )}
+   169→      {kind === 'wave' && (
+   170→        <>
+   171→          <ellipse cx="24" cy="24" rx="14.2" ry="14.2" fill={hair} />
+   172→          <circle cx="11" cy="27" r="4.6" fill={hair} />
+   173→          <circle cx="12.6" cy="34.5" r="4.2" fill={hair} />
+   174→          <circle cx="15.5" cy="40.5" r="3.6" fill={hair} />
+   175→          <circle cx="37" cy="27" r="4.6" fill={hair} />
+   176→          <circle cx="35.4" cy="34.5" r="4.2" fill={hair} />
+   177→          <circle cx="32.5" cy="40.5" r="3.6" fill={hair} />
+   178→          <circle cx="15.5" cy="41.5" r="1.8" fill={tip} />
+   179→          <circle cx="32.5" cy="41.5" r="1.8" fill={tip} />
+   180→        </>
+   181→      )}
+   182→      {/* 脸 */}
+   183→      <circle cx="24" cy="26.5" r="11" fill="#ffe9dc" />
+   184→      <FaceBase hair={hair} bow={bow} />
+   185→    </svg>
+   186→  );
+   187→}
+   188→
+   189→/** 发型缩略图标（男生）：顺滑 / 蓬松 / 中分 / 刺猬 */
+   190→function BoyHairIcon({ kind }: { kind: BoyHairStyle }) {
+   191→  const hair = '#2f2b29';
+   192→  return (
+   193→    <svg viewBox="0 0 48 48" className="h-full w-full">
+   194→      {kind === 'smooth' && (
+   195→        <>
+   196→          <ellipse cx="24" cy="23.5" rx="13.4" ry="13.4" fill={hair} />
+   197→          <path d="M26 9.2 q2.6 -4.4 6 -3.6 q-3 1.8 -3.2 4.8 q-1.4 -0.9 -2.8 -1.2 z" fill={hair} />
+   198→        </>
+   199→      )}
+   200→      {kind === 'fluffy' && (
+   201→        <>
+   202→          <circle cx="15.8" cy="20.5" r="5.4" fill={hair} />
+   203→          <circle cx="21.4" cy="15.4" r="5.6" fill={hair} />
+   204→          <circle cx="28" cy="15.8" r="5.6" fill={hair} />
+   205→          <circle cx="33" cy="21" r="5" fill={hair} />
+   206→          <ellipse cx="24" cy="23" rx="13" ry="12" fill={hair} />
+   207→        </>
+   208→      )}
+   209→      {kind === 'middle' && (
+   210→        <>
+   211→          <ellipse cx="24" cy="23.5" rx="13.4" ry="13.4" fill={hair} />
+   212→        </>
+   213→      )}
+   214→      {kind === 'spiky' && (
+   215→        <>
+   216→          <path d="M11.5 26 l2 -8.5 3.4 3.2 1.8 -7.4 3.2 4.4 2 -7.5 2.6 6.2 2.6 -5.4 1.4 6.8 3.4 -3.4 0.6 8.6 q-11.5 -4 -23 3 z" fill={hair} />
+   217→        </>
+   218→      )}
+   219→      {/* 脸 */}
+   220→      <circle cx="24" cy="26.5" r="11" fill="#ffe4cf" />
+   221→      {/* 前发 */}
+   222→      {kind === 'smooth' && (
+   223→        <path d="M13.2 24.5 q1.5 -7.5 10.8 -8.5 q9.3 1 10.8 8.5 l-2.6 -1.4 -2.9 1.9 -3.2 -1.9 -3.3 2 -3.3 -2 -3.2 1.9 -2.9 -1.9 z" fill={hair} />
+   224→      )}
+   225→      {kind === 'fluffy' && (
+   226→        <>
+   227→          <circle cx="18" cy="17.6" r="3.6" fill={hair} />
+   228→          <circle cx="24.6" cy="15.8" r="3.8" fill={hair} />
+   229→          <circle cx="30.6" cy="18.2" r="3.4" fill={hair} />
+   230→        </>
+   231→      )}
+   232→      {kind === 'middle' && (
+   233→        <>
+   234→          <path d="M23.4 15 q-8.6 0.6 -10.4 9.6 q3.2 -4.6 6.8 -4.4 q-1.2 3.4 -0.4 6.2 q2.8 -6.2 4 -11.4 z" fill={hair} />
+   235→          <path d="M24.6 15 q8.6 0.6 10.4 9.6 q-3.2 -4.6 -6.8 -4.4 q1.2 3.4 0.4 6.2 q-2.8 -6.2 -4 -11.4 z" fill={hair} />
+   236→        </>
+   237→      )}
+   238→      <BoyFace hair={hair} />
+   239→    </svg>
+   240→  );
+   241→}
+   242→
+   243→/** 连衣裙缩略图标 */
+   244→function DressIcon({ i }: { i: number }) {
+   245→  const d = DRESSES[i];
+   246→  return (
+   247→    <svg viewBox="0 0 48 48" className="h-full w-full">
+   248→      <path d="M19.5 7.5 h9 l2.2 7 q4 2.2 4 6.5 l4.3 15.5 c-10 4.2 -19.8 4.2 -30 0 l4.3 -15.5 q0 -4.3 4 -6.5 z" fill={d.c} />
+   249→      <path d="M13.6 35.6 c10.4 4 10.4 4 20.8 0" stroke={d.trim} strokeWidth="2.2" fill="none" strokeLinecap="round" />
+   250→      <path d="M20.6 20.5 q3.4 2.2 6.8 0" stroke={d.trim} strokeWidth="2" fill="none" strokeLinecap="round" />
+   251→      <circle cx="24" cy="27" r="2" fill={d.trim} />
+   252→    </svg>
+   253→  );
+   254→}
+   255→
+   256→/** 上衣缩略图标（女生） */
+   257→function TopIcon({ i }: { i: number }) {
+   258→  const t = TOPS[i];
+   259→  return (
+   260→    <svg viewBox="0 0 48 48" className="h-full w-full">
+   261→      <path d="M16.5 9.5 l6.5 -3 q1 2.4 3 2.4 q2 0 3 -2.4 l6.5 3 4.5 6.5 -5.5 3.5 -1.5 -2.5 v19.5 h-19 v-19.5 l-1.5 2.5 -5.5 -3.5 z" fill={t.c} />
+   262→      {i === 0 && <path d="M19 10.5 q5 6.5 10 0" stroke="#e2d9c2" strokeWidth="1.8" fill="none" />}
+   263→      {i === 1 && <path d="M20 25 h8 M20 29 h8" stroke="#e8a9ba" strokeWidth="1.6" strokeLinecap="round" />}
+   264→      {i === 2 && <circle cx="29.5" cy="20" r="2.4" fill="#ffffff" opacity="0.85" />}
+   265→      {i === 3 && <path d="M14.5 17 l3 -1.6 M33.5 17 l-3 -1.6 M17 33 v3 M24 34 v3 M31 33 v3" stroke="#e3bd6d" strokeWidth="1.5" strokeLinecap="round" />}
+   266→    </svg>
+   267→  );
+   268→}
+   269→
+   270→/** 上衣缩略图标（男生）：T恤/针织/polos + 连帽款脑后兜帽 */
+   271→function BoyTopIcon({ i }: { i: number }) {
+   272→  const t = BOY_TOPS[i];
+   273→  return (
+   274→    <svg viewBox="0 0 48 48" className="h-full w-full">
+   275→      {t.hood && <path d="M16.5 13.8 q7.5 -7.2 15 0 q-1.6 5.6 -7.5 5.6 q-5.9 0 -7.5 -5.6 z" fill={t.c} stroke="#e3d9c4" strokeWidth="1" />}
+   276→      <path d="M16.5 9.5 l6.5 -3 q1 2.4 3 2.4 q2 0 3 -2.4 l6.5 3 4.5 6.5 -5.5 3.5 -1.5 -2.5 v19.5 h-19 v-19.5 l-1.5 2.5 -5.5 -3.5 z" fill={t.c} />
+   277→      {t.hood && (
+   278→        <>
+   279→          <path d="M19.5 11 q4.5 5.2 9 0" stroke="#e3d9c4" strokeWidth="1.6" fill="none" />
+   280→          <path d="M20 27.5 h8.5 a1.5 1.5 0 0 1 1.5 1.5 v4.5 h-11.5 v-4.5 a1.5 1.5 0 0 1 1.5 -1.5 z" fill="#e9dfc8" opacity="0.8" />
+   281→        </>
+   282→      )}
+   283→      {i === 1 && <path d="M17.5 22 q6.5 3.4 13 0 M19 27 h10" stroke="#b7a181" strokeWidth="1.5" fill="none" strokeLinecap="round" />}
+   284→      {i === 2 && <path d="M20.5 12.5 q3.5 2.6 7 0" stroke="#ffffff" strokeWidth="1.6" fill="none" strokeLinecap="round" />}
+   285→      {i === 3 && (
+   286→        <>
+   287→          <path d="M20.5 10.5 h7 l-1 2.8 h-5 z" fill="#87a68f" />
+   288→          <path d="M24 13.5 v5" stroke="#87a68f" strokeWidth="1.4" strokeLinecap="round" />
+   289→        </>
+   290→      )}
+   291→    </svg>
+   292→  );
+   293→}
+   294→
+   295→/** 下装缩略图标（女生） */
+   296→function BottomIcon({ i }: { i: number }) {
+   297→  const b = BOTTOMS[i];
+   298→  return (
+   299→    <svg viewBox="0 0 48 48" className="h-full w-full">
+   300→      {i === 0 && (
+   301→        <>
+   302→          <path d="M16 13 h16 l1.5 4 h-19 z" fill="#f0f0f0" />
+   303→          <path d="M14.5 17 h19 l5 17 c-9.5 4 -19.5 4 -29 0 z" fill={b.c} stroke="#ececec" strokeWidth="1" />
+   304→          <path d="M20 17.5 l-2.5 16 M24 17.5 v16.5 M28 17.5 l2.5 16" stroke="#e8e8e8" strokeWidth="1.4" />
+   305→        </>
+   306→      )}
+   307→      {i === 1 && (
+   308→        <>
+   309→          <path d="M16 13 h16 l1.5 4 h-19 z" fill="#eebfc9" />
+   310→          <path d="M14.5 17 h19 l5 17 c-9.5 4 -19.5 4 -29 0 z" fill={b.c} />
+   311→          <path d="M14 30.5 c10 3.8 10 3.8 20 0" stroke="#ffffff" strokeWidth="2" fill="none" strokeLinecap="round" />
+   312→        </>
+   313→      )}
+   314→      {i === 2 && <path d="M14.5 15 h19 l2.5 14.5 h-8 l-4 -8.5 -4 8.5 h-8 z" fill={b.c} />}
+   315→      {i === 3 && <path d="M14.5 13 h19 v6 l-1.5 17 h-6.5 l-1.5 -14 -1.5 14 h-6.5 l-1.5 -17 z" fill={b.c} />}
+   316→    </svg>
+   317→  );
+   318→}
+   319→
+   320→/** 裤子缩略图标（男生）：短裤 / 长裤 */
+   321→function BoyBottomIcon({ i }: { i: number }) {
+   322→  const b = BOY_BOTTOMS[i];
+   323→  return (
+   324→    <svg viewBox="0 0 48 48" className="h-full w-full">
+   325→      {b.kind === 'short' ? (
+   326→        <>
+   327→          <path d="M14.5 13.5 h19 v3 h-19 z" fill={b.c} opacity="0.72" />
+   328→          <path d="M14.5 16 h19 l2.6 15 h-8.1 l-4 -8.8 -4 8.8 h-8.1 z" fill={b.c} />
+   329→        </>
+   330→      ) : (
+   331→        <>
+   332→          <path d="M14.5 13.5 h19 v3 h-19 z" fill={b.c} opacity="0.72" />
+   333→          <path d="M14.5 16 h19 v4.5 l-1.6 16.5 h-6.6 l-1.4 -14.5 -1.4 14.5 h-6.6 l-1.6 -16.5 z" fill={b.c} />
+   334→        </>
+   335→      )}
+   336→      <path d="M22 16.5 h4 v2 h-4 z" fill="#ffffff" opacity="0.65" />
+   337→    </svg>
+   338→  );
+   339→}
+   340→
+   341→/** 鞋子缩略图标（女生） */
+   342→function ShoeIcon({ i }: { i: number }) {
+   343→  const s = SHOES[i];
+   344→  return (
+   345→    <svg viewBox="0 0 48 48" className="h-full w-full">
+   346→      {i !== 3 && (
+   347→        <>
+   348→          <path d="M8 31 q11 -1.5 17.5 -9.5 q3.5 4.5 9 6 q5.5 1.5 5.5 5 v2.5 h-32 z" fill={s.c} />
+   349→          <path d="M8 35 h32 v2.6 h-32 z" fill={s.trim} opacity="0.9" />
+   350→        </>
+   351→      )}
+   352→      {i === 1 && <circle cx="38" cy="31.5" r="3.4" fill={s.trim} />}
+   353→      {i === 2 && <path d="M27.5 24.5 q4 1.8 8 2.6" stroke={s.trim} strokeWidth="2" fill="none" strokeLinecap="round" />}
+   354→      {i === 3 && (
+   355→        <>
+   356→          <path d="M17 12 h11 v15.5 q7 1.5 9 5.5 v2 h-22 q-2 -12 2 -23 z" fill={s.c} />
+   357→          <path d="M15.5 20.5 h14" stroke={s.trim} strokeWidth="2.4" strokeLinecap="round" />
+   358→        </>
+   359→      )}
+   360→    </svg>
+   361→  );
+   362→}
+   363→
+   364→/** 鞋子缩略图标（男生）：运动鞋剪影 + 鞋底/鞋带配色 */
+   365→function BoyShoeIcon({ i }: { i: number }) {
+   366→  const s = BOY_SHOES[i];
+   367→  return (
+   368→    <svg viewBox="0 0 48 48" className="h-full w-full">
+   369→      <path d="M8 30.5 q11 -1.5 17.5 -9.5 q3.5 4.5 9 6 q5.5 1.5 5.5 5 v3 h-32 z" fill={s.c} />
+   370→      <path d="M8 35 h32 v2.6 h-32 z" fill={s.trim} />
+   371→      <path d="M25 22 l4.6 4.6 M28.6 19.8 l4.2 4.2" stroke={s.trim} strokeWidth="1.7" strokeLinecap="round" />
+   372→      {i === 3 && <path d="M15 21 h9" stroke={s.trim} strokeWidth="2.4" strokeLinecap="round" />}
+   373→      {i === 1 && <path d="M10 33.8 h28" stroke={s.trim} strokeWidth="1.2" opacity="0.7" />}
+   374→    </svg>
+   375→  );
+   376→}
+   377→
+   378→const HAIR_ORDER: GirlHairStyle[] = ['twin', 'high', 'bob', 'straight', 'wave'];
+   379→const BOY_HAIR_ORDER: BoyHairStyle[] = ['smooth', 'fluffy', 'middle', 'spiky'];
+   380→
+   381→export interface WardrobeProps {
+   382→  open: boolean;
+   383→  wear: GirlWear;
+   384→  wear2: BoyWear;
+   385→  onChange: (w: GirlWear) => void;
+   386→  onChange2: (w: BoyWear) => void;
+   387→  onClose: () => void;
+   388→}
+   389→
+   390→export default function Wardrobe({ open, wear, wear2, onChange, onChange2, onClose }: WardrobeProps) {
+   391→  const [char, setChar] = useState<'girl' | 'boy'>('girl');
+   392→  const [tab, setTab] = useState<WardTab>('hair');
+   393→  const inDressMode = wear.dress >= 0;
+   394→  const tabs = char === 'girl' ? TABS_GIRL : TABS_BOY;
+   395→
+   396→  /** 切换角色：保留当前分类（女生专属的连衣裙在男生侧回落到上衣） */
+   397→  const switchChar = (c: 'girl' | 'boy') => {
+   398→    if (c === char) return;
+   399→    sfx.tap();
+   400→    setChar(c);
+   401→    if (c === 'boy' && tab === 'dress') setTab('top');
+   402→  };
+   403→
+   404→  const items = useMemo(() => {
+   405→    if (char === 'boy') {
+   406→      if (tab === 'hair') return BOY_HAIR_ORDER.map((h) => ({ key: h, name: BOY_HAIR_NAMES[h] ?? h }));
+   407→      if (tab === 'top') return BOY_TOPS.map((t, i) => ({ key: String(i), name: t.name }));
+   408→      if (tab === 'bottom') return BOY_BOTTOMS.map((b, i) => ({ key: String(i), name: b.name }));
+   409→      return BOY_SHOES.map((s, i) => ({ key: String(i), name: s.name }));
+   410→    }
+   411→    if (tab === 'hair') return HAIR_ORDER.map((h) => ({ key: h, name: HAIR_NAMES[h] ?? h }));
+   412→    if (tab === 'dress') return DRESSES.map((d, i) => ({ key: String(i), name: d.name }));
+   413→    if (tab === 'top') return TOPS.map((t, i) => ({ key: String(i), name: t.name }));
+   414→    if (tab === 'bottom') return BOTTOMS.map((b, i) => ({ key: String(i), name: b.name }));
+   415→    return SHOES.map((s, i) => ({ key: String(i), name: s.name }));
+   416→  }, [char, tab]);
+   417→
+   418→  const isSel = (key: string) => {
+   419→    if (char === 'boy') {
+   420→      if (tab === 'hair') return wear2.hair === key;
+   421→      if (tab === 'top') return wear2.top === Number(key);
+   422→      if (tab === 'bottom') return wear2.bottom === Number(key);
+   423→      return wear2.shoes === Number(key);
+   424→    }
+   425→    if (tab === 'hair') return wear.hair === key;
+   426→    if (tab === 'dress') return inDressMode && wear.dress === Number(key);
+   427→    if (tab === 'top') return !inDressMode && wear.top === Number(key);
+   428→    if (tab === 'bottom') return !inDressMode && wear.bottom === Number(key);
+   429→    return wear.shoes === Number(key);
+   430→  };
+   431→
+   432→  const pick = (key: string) => {
+   433→    sfx.tap();
+   434→    if (char === 'boy') {
+   435→      if (tab === 'hair') onChange2({ ...wear2, hair: key as BoyHairStyle });
+   436→      else if (tab === 'top') onChange2({ ...wear2, top: Number(key) });
+   437→      else if (tab === 'bottom') onChange2({ ...wear2, bottom: Number(key) });
+   438→      else onChange2({ ...wear2, shoes: Number(key) });
+   439→      return;
+   440→    }
+   441→    if (tab === 'hair') onChange({ ...wear, hair: key as GirlHairStyle });
+   442→    else if (tab === 'dress') onChange({ ...wear, dress: Number(key) });
+   443→    else if (tab === 'top') onChange({ ...wear, dress: -1, top: Number(key) });
+   444→    else if (tab === 'bottom') onChange({ ...wear, dress: -1, bottom: Number(key) });
+   445→    else onChange({ ...wear, shoes: Number(key) });
+   446→  };
+   447→
+   448→  // —— 调色盘（当前角色 + 当前分类的槽位；null = 还原默认款色） ——
+   449→  const slot = TINT_SLOT[tab];
+   450→  const curTint = (char === 'girl' ? wear.tints?.[slot] : wear2.tints?.[slot]) ?? null;
+   451→  const paletteColors = tab === 'hair' ? HAIR_COLORS : CLOTH_COLORS;
+   452→
+   453→  const setTint = (col: string | null) => {
+   454→    sfx.tap();
+   455→    if (char === 'girl') {
+   456→      const t: WearTints = { ...(wear.tints ?? {}) };
+   457→      if (col) t[slot] = col;
+   458→      else delete t[slot];
+   459→      onChange({ ...wear, tints: Object.keys(t).length > 0 ? t : undefined });
+   460→    } else {
+   461→      const t: WearTints = { ...(wear2.tints ?? {}) };
+   462→      if (col) t[slot] = col;
+   463→      else delete t[slot];
+   464→      onChange2({ ...wear2, tints: Object.keys(t).length > 0 ? t : undefined });
+   465→    }
+   466→  };
+   467→
+   468→  // 当前角色穿搭摘要
+   469→  const summary =
+   470→    char === 'girl'
+   471→      ? inDressMode
+   472→        ? `连衣裙 · ${DRESSES[wear.dress]?.name ?? ''}`
+   473→        : `分体 · ${TOPS[wear.top]?.name ?? ''} + ${BOTTOMS[wear.bottom]?.name ?? ''}`
+   474→      : `${BOY_TOPS[wear2.top]?.name ?? ''} + ${BOY_BOTTOMS[wear2.bottom]?.name ?? ''}`;
+   475→
+   476→  return (
+   477→    <AnimatePresence>
+   478→      {open && (
+   479→        <motion.div
+   480→          key="wardrobe"
+   481→          className="absolute inset-0 z-40 flex flex-col justify-end"
+   482→          initial={{ opacity: 0 }}
+   483→          animate={{ opacity: 1 }}
+   484→          exit={{ opacity: 0 }}
+   485→        >
+   486→          {/* 背景半透明（点空白收起） */}
+   487→          <button aria-label="关闭衣柜" className="absolute inset-0 cursor-default bg-black/25" onClick={onClose} />
+   488→
+   489→          <motion.div
+   490→            className="relative flex max-h-[58%] flex-col overflow-hidden rounded-t-[26px] bg-gradient-to-b from-[#fff7f3] via-white to-[#fdf3ee] shadow-[0_-8px_40px_rgba(120,70,80,0.25)]"
+   491→            initial={{ y: '100%' }}
+   492→            animate={{ y: 0 }}
+   493→            exit={{ y: '100%' }}
+   494→            transition={{ type: 'spring', damping: 30, stiffness: 320 }}
+   495→          >
+   496→            {/* 把手 */}
+   497→            <div className="flex items-center justify-center pt-2.5">
+   498→              <div className="h-1.5 w-10 rounded-full bg-[#e8d5cd]" />
+   499→            </div>
+   500→
+   501→            {/* 标题 + 关闭 */}
+   502→            <div className="flex items-center justify-between px-4 pb-1.5 pt-1.5">
+   503→              <div className="flex items-center gap-2.5">
+   504→                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-[#f9b8ca] to-[#f28aa8] shadow-sm shadow-[#f4a7bc]/40">
+   505→                  <Shirt className="h-4 w-4 text-white" />
+   506→                </span>
+   507→                <div className="flex flex-col">
+   508→                  <span className="text-[16px] font-bold leading-tight text-[#4a3f3d]">我的衣柜</span>
+   509→                  <span className="max-w-[220px] truncate text-[10.5px] leading-tight text-[#b09a92]">{summary}</span>
+   510→                </div>
+   511→              </div>
+   512→              <button
+   513→                onClick={onClose}
+   514→                aria-label="关闭"
+   515→                className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f3e7e2] text-[#8a726c] transition active:scale-90"
+   516→              >
+   517→                <X className="h-4 w-4" />
+   518→              </button>
+   519→            </div>
+   520→
+   521→            {/* 角色切换（女生粉 / 男生青） */}
+   522→            <div className="px-4 pb-1.5">
+   523→              <div className="flex w-fit rounded-full bg-[#f6ebe6] p-0.5 shadow-inner">
+   524→                {(
+   525→                  [
+   526→                    ['girl', '女生'],
+   527→                    ['boy', '男生'],
+   528→                  ] as const
+   529→                ).map(([c, label]) => {
+   530→                  const on = char === c;
+   531→                  return (
+   532→                    <button
+   533→                      key={c}
+   534→                      onClick={() => switchChar(c)}
+   535→                      className={`flex h-7 items-center rounded-full px-4 text-[12px] font-bold transition active:scale-95 ${
+   536→                        on
+   537→                          ? c === 'girl'
+   538→                            ? 'bg-[#f4a7bc] text-white shadow-md shadow-[#f4a7bc]/40'
+   539→                            : 'bg-[#7fc8ae] text-white shadow-md shadow-[#7fc8ae]/40'
+   540→                          : 'text-[#a08a84]'
+   541→                      }`}
+   542→                    >
+   543→                      {label}
+   544→                    </button>
+   545→                  );
+   546→                })}
+   547→              </div>
+   548→            </div>
+   549→
+   550→            {/* 分类 Tab */}
+   551→            <div className="flex gap-1.5 overflow-x-auto px-4 pb-1.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+   552→              {tabs.map((t) => {
+   553→                const on = t.key === tab;
+   554→                const dim = char === 'girl' && (t.key === 'top' || t.key === 'bottom') && inDressMode;
+   555→                return (
+   556→                  <button
+   557→                    key={t.key}
+   558→                    onClick={() => {
+   559→                      sfx.tap();
+   560→                      setTab(t.key);
+   561→                    }}
+   562→                    className={`flex h-8 shrink-0 items-center gap-1 rounded-full px-3.5 text-[12.5px] font-semibold transition active:scale-95 ${
+   563→                      on
+   564→                        ? char === 'girl'
+   565→                          ? 'bg-[#f4a7bc] text-white shadow-md shadow-[#f4a7bc]/40'
+   566→                          : 'bg-[#7fc8ae] text-white shadow-md shadow-[#7fc8ae]/40'
+   567→                        : 'bg-white text-[#8a726c] shadow-sm ring-1 ring-[#f0e2dc]'
+   568→                    } ${dim && !on ? 'opacity-60' : ''}`}
+   569→                  >
+   570→                    {t.key !== 'hair' && <Shirt className="h-3 w-3" />}
+   571→                    {t.label}
+   572→                  </button>
+   573→                );
+   574→              })}
+   575→            </div>
+   576→
+   577→            {/* 调色盘（当前分类槽位自选色；首格 = 还原默认） */}
+   578→            <div className="flex items-center gap-2 px-4 pb-0.5">
+   579→              <span className="shrink-0 text-[11px] font-semibold text-[#b09a92]">调色盘</span>
+   580→              <div className="flex items-center gap-1.5 overflow-x-auto py-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+   581→                <button
+   582→                  onClick={() => setTint(null)}
+   583→                  aria-label="默认色"
+   584→                  className={`relative h-6 w-6 shrink-0 rounded-full transition active:scale-90 ${
+   585→                    curTint ? '' : 'ring-2 ring-[#f4a7bc] ring-offset-1'
+   586→                  }`}
+   587→                  style={{ background: 'conic-gradient(#f6a5b8,#f6d78a,#a7dcb8,#9cc7ee,#c9a8e8,#f6a5b8)' }}
+   588→                >
+   589→                  <span className="absolute inset-[3px] flex items-center justify-center rounded-full bg-white text-[8px] font-bold text-[#b09a92]">
+   590→                    A
+   591→                  </span>
+   592→                </button>
+   593→                {paletteColors.map((c) => (
+   594→                  <button
+   595→                    key={c}
+   596→                    onClick={() => setTint(c)}
+   597→                    aria-label={c}
+   598→                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition active:scale-90 ${
+   599→                      curTint === c ? 'ring-2 ring-[#e06a8c] ring-offset-1' : 'ring-1 ring-black/10'
+   600→                    }`}
+   601→                    style={{ backgroundColor: c }}
+   602→                  >
+   603→                    {curTint === c && <Check className="h-3 w-3 text-white drop-shadow" strokeWidth={3} />}
+   604→                  </button>
+   605→                ))}
+   606→              </div>
+   607→            </div>
+   608→
+   609→            {/* 全色系（v6.4）：彩虹色相条一键选色 + 自定义取色器（系统全色盘，什么颜色都有） */}
+   610→            <div className="flex items-center gap-2 px-4 pb-1">
+   611→              <span className="shrink-0 text-[11px] font-semibold text-[#b09a92]">全色系</span>
+   612→              <div
+   613→                role="slider"
+   614→                tabIndex={0}
+   615→                aria-label="彩虹色相条：点击选色相"
+   616→                aria-valuenow={curTint ? Math.round(hexToHue(curTint)) : 0}
+   617→                aria-valuemin={0}
+   618→                aria-valuemax={360}
+   619→                aria-valuetext={curTint ?? '默认'}
+   620→                onClick={(e) => {
+   621→                  const rect = e.currentTarget.getBoundingClientRect();
+   622→                  const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+   623→                  const hue = Math.round(ratio * 360);
+   624→                  // 头发：偏深饱和（烟熏感）；衣服/鞋：明快马卡龙感
+   625→                  const col =
+   626→                    tab === 'hair' ? hslToHex(hue, 0.46, 0.34) : hslToHex(hue, 0.64, 0.68);
+   627→                  setTint(col);
+   628→                }}
+   629→                onKeyDown={(e) => {
+   630→                  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+   631→                  const cur = curTint ?? (tab === 'hair' ? '#6b4a38' : '#f9c8d4');
+   632→                  const step = e.key === 'ArrowRight' ? 18 : -18;
+   633→                  const hue = (hexToHue(cur) + step + 360) % 360;
+   634→                  setTint(tab === 'hair' ? hslToHex(hue, 0.46, 0.34) : hslToHex(hue, 0.64, 0.68));
+   635→                }}
+   636→                className="relative h-5 min-w-0 flex-1 cursor-pointer touch-none rounded-full ring-1 ring-black/10 transition active:scale-[0.98]"
+   637→                style={{ background: HUE_STRIP_BG }}
+   638→              >
+   639→                {curTint && (
+   640→                  <span
+   641→                    className="pointer-events-none absolute top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md"
+   642→                    style={{
+   643→                      left: `${(hexToHue(curTint) / 360) * 100}%`,
+   644→                      backgroundColor: curTint,
+   645→                    }}
+   646→                  />
+   647→                )}
+   648→              </div>
+   649→              <label
+   650→                className="relative flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full transition active:scale-90"
+   651→                style={{ background: 'conic-gradient(#ff5757,#ffb44d,#ffe14d,#7ade5a,#4db8ff,#a05aff,#ff5ac8,#ff5757)' }}
+   652→                title="自定义颜色（全色盘）"
+   653→              >
+   654→                <input
+   655→                  type="color"
+   656→                  value={curTint ?? (tab === 'hair' ? '#6b4a38' : '#f9c8d4')}
+   657→                  onChange={(e) => setTint(e.target.value)}
+   658→                  aria-label="自定义颜色（系统全色盘）"
+   659→                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+   660→                />
+   661→                <Plus className="pointer-events-none h-3.5 w-3.5 text-white drop-shadow" strokeWidth={3} />
+   662→              </label>
+   663→            </div>
+   664→
+   665→            {/* 款式网格 */}
+   666→            <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 [scrollbar-width:thin]">
+   667→              {char === 'girl' && tab === 'dress' && (
+   668→                <p className="pb-1 pt-0.5 text-[11px] text-[#c2aca4]">穿上连衣裙会收起分体上衣和下装～</p>
+   669→              )}
+   670→              {char === 'girl' && (tab === 'top' || tab === 'bottom') && inDressMode && (
+   671→                <p className="pb-1 pt-0.5 text-[11px] text-[#c2aca4]">当前穿着连衣裙，挑选后会自动换成上下分体穿搭～</p>
+   672→              )}
+   673→              {char === 'girl' && tab === 'dress' && !inDressMode && (
+   674→                <p className="pb-1 pt-0.5 text-[11px] text-[#c2aca4]">当前穿分体，连衣裙配色在穿上连衣裙后生效～</p>
+   675→              )}
+   676→              <div className="grid grid-cols-4 gap-2.5">
+   677→                {items.map((it) => {
+   678→                  const sel = isSel(it.key);
+   679→                  return (
+   680→                    <button
+   681→                      key={it.key}
+   682→                      onClick={() => pick(it.key)}
+   683→                      className={`relative flex flex-col items-center gap-1 rounded-2xl px-1 pb-1.5 pt-2 transition active:scale-95 ${
+   684→                        sel ? 'bg-[#ffeef3] ring-2 ring-[#f4a7bc]' : 'bg-[#fffdf9] ring-1 ring-[#f0e4de]'
+   685→                      }`}
+   686→                    >
+   687→                      <div className="h-12 w-12">
+   688→                        {char === 'girl' && tab === 'hair' && <HairIcon kind={it.key as GirlHairStyle} />}
+   689→                        {char === 'girl' && tab === 'dress' && <DressIcon i={Number(it.key)} />}
+   690→                        {char === 'girl' && tab === 'top' && <TopIcon i={Number(it.key)} />}
+   691→                        {char === 'girl' && tab === 'bottom' && <BottomIcon i={Number(it.key)} />}
+   692→                        {char === 'girl' && tab === 'shoes' && <ShoeIcon i={Number(it.key)} />}
+   693→                        {char === 'boy' && tab === 'hair' && <BoyHairIcon kind={it.key as BoyHairStyle} />}
+   694→                        {char === 'boy' && tab === 'top' && <BoyTopIcon i={Number(it.key)} />}
+   695→                        {char === 'boy' && tab === 'bottom' && <BoyBottomIcon i={Number(it.key)} />}
+   696→                        {char === 'boy' && tab === 'shoes' && <BoyShoeIcon i={Number(it.key)} />}
+   697→                      </div>
+   698→                      <span
+   699→                        className={`text-[10.5px] leading-tight ${
+   700→                          sel ? (char === 'girl' ? 'font-bold text-[#e06a8c]' : 'font-bold text-[#3f9b7e]') : 'text-[#8a726c]'
+   701→                        }`}
+   702→                      >
+   703→                        {it.name}
+   704→                      </span>
+   705→                      {sel && (
+   706→                        <span
+   707→                          className={`absolute -right-1 -top-1 flex h-[18px] w-[18px] items-center justify-center rounded-full text-white shadow ${
+   708→                            char === 'girl' ? 'bg-[#f4a7bc]' : 'bg-[#7fc8ae]'
+   709→                          }`}
+   710→                        >
+   711→                          <Check className="h-3 w-3" strokeWidth={3} />
+   712→                        </span>
+   713→                      )}
+   714→                    </button>
+   715→                  );
+   716→                })}
+   717→              </div>
+   718→            </div>
+   719→          </motion.div>
+   720→        </motion.div>
+   721→      )}
+   722→    </AnimatePresence>
+   723→  );
+   724→}
+   725→
