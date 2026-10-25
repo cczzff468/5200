@@ -128,6 +128,7 @@ import { useSettings } from '@/lib/ios/store';
 import { type ContactRecord } from '@/lib/contacts';
 import { listContacts, ownerRealName } from '@/lib/ios/contacts-store';
 import { startWebSpeechSession, isWebSpeechSupported, type WebSpeechSession } from '@/lib/ios/web-speech';
+import { createVoiceSegmenter, startManualRecording, transcribeBlob, type ManualRecording, type VoiceSegmenter } from '@/lib/ios/cabin-voice';
 import { speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
 import { type MemConvoTurn } from '@/lib/memory';
 import { buildCabinSystem, cabinChatTurn, parseAiReply, type CabinContext } from './companion-brain';
@@ -1557,8 +1558,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [petDiaryOpen, setPetDiaryOpen] = useState(false);
   /** v10 E2 连续语音对讲 */
   const [intercomOn, setIntercomOn] = useState(false);
-  const intercomSessionRef = useRef<WebSpeechSession | null>(null);
   const intercomAliveRef = useRef(false);
+  /** v10.3 语音输入兜底：录音（Web Speech 没结果时走服务端 ASR）/ 对讲分段器 */
+  const micRecRef = useRef<{ rec: ManualRecording | null; stream: MediaStream } | null>(null);
+  const intercomSegRef = useRef<VoiceSegmenter | null>(null);
+  const intercomStreamRef = useRef<MediaStream | null>(null);
+  const intercomPreviewRef = useRef<WebSpeechSession | null>(null);
+  /** v10.3 TA 的心独立面板（顶栏爱心按钮） */
+  const [heartOpen, setHeartOpen] = useState(false);
   /** 上一次室外天气（变化沿触发联动） */
   const prevWeatherRef = useRef<string>('');
   /** 特殊日子当日已主动过（防重复） */
@@ -2101,83 +2108,150 @@ export default function CoupleHome({ close }: { close: () => void }) {
     }
   }, [chatText, chatBusy, companion, collectContext, issueCompanionCmd, toast]);
 
-  /** 麦克风开关：开 = Web Speech 实时转写进输入框；再点 = 停止并自动发送 */
+  /** 麦克风开关：开 = 录音 +（支持的浏览器）Web Speech 实时预览；再点 = 停止并自动发送。
+   *  v10.3：Web Speech 没结果（国产安卓无识别引擎）时自动回退录音 → 服务端 ASR，两头都不空转 */
   const toggleMic = useCallback(() => {
     if (micOn) {
       const s = micSessionRef.current;
       micSessionRef.current = null;
+      const recInfo = micRecRef.current;
+      micRecRef.current = null;
       setMicOn(false);
-      if (s) {
-        void s.stop().then((t) => {
-          const text = t.trim();
-          if (text) {
-            setChatText(text);
-            // 复用 sendChat（override 转写文本），单一管线
-            setTimeout(() => {
-              setChatText('');
-              void sendChat(text);
-            }, 350);
+      void (async () => {
+        let text = '';
+        // ① 先收 Web Speech（有的话零等待）
+        try {
+          if (s) text = (await s.stop()).trim();
+        } catch {
+          /* 实时识别失败 → 走录音兜底 */
+        }
+        // ② 没有结果 → 录音送服务端识别（内置 z-ai ASR，免配置）
+        if (!text && recInfo?.rec) {
+          try {
+            const blob = await recInfo.rec.stop();
+            text = await transcribeBlob(blob);
+          } catch (e) {
+            recInfo.stream.getTracks().forEach((t) => t.stop());
+            toast(e instanceof Error ? e.message : '语音识别失败，再试一次～');
+            return;
           }
-        });
+        }
+        recInfo?.stream.getTracks().forEach((t) => t.stop());
+        if (text) {
+          setChatText(text);
+          // 复用 sendChat（override 转写文本），单一管线
+          setTimeout(() => {
+            setChatText('');
+            void sendChat(text);
+          }, 350);
+        }
+      })();
+      return;
+    }
+    void (async () => {
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        toast('拿不到麦克风权限，检查一下浏览器设置～');
+        return;
       }
-      return;
-    }
-    if (!isWebSpeechSupported()) {
-      toast('当前浏览器不支持语音识别，打字告诉 TA 吧～');
-      return;
-    }
-    const s = startWebSpeechSession({ onPartial: (t) => setChatText(t) });
-    if (!s) {
-      toast('麦克风启动失败，检查一下权限～');
-      return;
-    }
-    micSessionRef.current = s;
-    setMicOn(true);
-    setChatText('');
+      // 录音兜底（Web Speech 不可用/无结果时的保底通道）+ 实时预览（支持才有）
+      const rec = startManualRecording(stream);
+      const wss = isWebSpeechSupported() ? startWebSpeechSession({ onPartial: (t) => setChatText(t) }) : null;
+      if (!rec && !wss) {
+        stream.getTracks().forEach((t) => t.stop());
+        toast('这台设备不支持语音输入，打字告诉 TA 吧～');
+        return;
+      }
+      micRecRef.current = { rec, stream };
+      micSessionRef.current = wss;
+      setMicOn(true);
+      setChatText('');
+      toast('在听…说完再点一下就发送');
+    })();
   }, [micOn, sendChat, toast]);
 
   // ---------------- v10 E2 连续语音对讲：逐句自动发送 + 语音回复，免打字对讲机 ----------------
 
-  /** 对讲机开关：开 = 持续监听（每句定稿自动发送）；再点 = 关闭 */
+  /** 对讲机开关：开 = 持续监听（v10.3：录音自动分段 + 服务端识别，国产浏览器也能用；
+   *  支持 Web Speech 的浏览器同时挂实时预览）；再点 = 关闭 */
   const toggleIntercom = useCallback(() => {
     if (intercomOn) {
       intercomAliveRef.current = false;
-      const s = intercomSessionRef.current;
-      intercomSessionRef.current = null;
+      const seg = intercomSegRef.current;
+      intercomSegRef.current = null;
+      const stream = intercomStreamRef.current;
+      intercomStreamRef.current = null;
+      const preview = intercomPreviewRef.current;
+      intercomPreviewRef.current = null;
       setIntercomOn(false);
       setChatText('');
-      if (s) void s.stop();
+      if (preview) preview.abort();
+      if (seg) void seg.stop();
+      if (stream) stream.getTracks().forEach((t) => t.stop());
       toast('对讲模式已关');
-      return;
-    }
-    if (!isWebSpeechSupported()) {
-      toast('当前浏览器不支持语音识别～');
       return;
     }
     if (micOn) {
       // 与单次麦克风互斥：先关掉它
       const ms = micSessionRef.current;
       micSessionRef.current = null;
+      const mr = micRecRef.current;
+      micRecRef.current = null;
       setMicOn(false);
-      if (ms) void ms.abort();
+      if (ms) ms.abort();
+      if (mr) {
+        mr.rec?.abort();
+        mr.stream.getTracks().forEach((t) => t.stop());
+      }
     }
-    const s = startWebSpeechSession({
-      onPartial: (t) => setChatText(t),
-      onFinal: (t) => {
-        setChatText('');
-        void sendChat(t);
-      },
-    });
-    if (!s) {
-      toast('麦克风启动失败，检查一下权限～');
-      return;
-    }
-    intercomSessionRef.current = s;
-    intercomAliveRef.current = true;
-    setIntercomOn(true);
-    setChatText('');
-    toast('对讲模式已开：直接说话就好，TA 会听到的～');
+    void (async () => {
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        toast('拿不到麦克风权限，检查一下浏览器设置～');
+        return;
+      }
+      const seg = createVoiceSegmenter({
+        stream,
+        onSegment: (blob) => {
+          void (async () => {
+            try {
+              const t = await transcribeBlob(blob);
+              if (t) {
+                setChatText('');
+                void sendChat(t);
+              }
+            } catch (e) {
+              toast(e instanceof Error ? e.message : '没听清，再试一次～');
+            }
+          })();
+        },
+      });
+      intercomPreviewRef.current = isWebSpeechSupported()
+        ? startWebSpeechSession({ onPartial: (t) => setChatText(t) })
+        : null;
+      intercomSegRef.current = seg;
+      intercomStreamRef.current = stream;
+      intercomAliveRef.current = true;
+      setIntercomOn(true);
+      setChatText('');
+      toast('对讲模式已开：直接说话就好，TA 会听到的～');
+    })();
   }, [intercomOn, micOn, sendChat, toast]);
+
+  /** v10.3 卸载时释放麦克风/分段器（对讲开着退出小屋不漏占用） */
+  useEffect(
+    () => () => {
+      micRecRef.current?.stream.getTracks().forEach((t) => t.stop());
+      intercomStreamRef.current?.getTracks().forEach((t) => t.stop());
+      intercomPreviewRef.current?.abort();
+      if (intercomSegRef.current) void intercomSegRef.current.stop();
+    },
+    [],
+  );
 
   /** 聊天输入附照片 → 识图模型转文字（「我现在在干嘛」的摄像头通道） */
   const onChatPhoto = useCallback(
@@ -5113,6 +5187,68 @@ export default function CoupleHome({ close }: { close: () => void }) {
           )}
         </AnimatePresence>
 
+        {/* ===== v10.3 TA 的心面板（顶栏爱心按钮唤出 · 毛玻璃胶囊风 · 与宠物面板同槽互斥） ===== */}
+        <AnimatePresence>
+          {heartOpen && mode === 'live' && (
+            <motion.div
+              key="heart-panel"
+              initial={{ opacity: 0, y: -14, scale: 0.92 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 340 }}
+              className="pointer-events-auto absolute right-3 top-[104px] z-40 w-[min(78%,270px)] origin-top-right rounded-[26px] border border-white/60 bg-white/55 p-4 shadow-[0_16px_40px_rgba(90,60,50,0.18)] backdrop-blur-2xl"
+              role="dialog"
+              aria-label="TA 的心面板"
+            >
+              <div className="mb-2 flex items-center gap-1.5">
+                <Heart className="h-4 w-4 shrink-0 text-[#e88a9a]" />
+                <p className="text-[14px] font-bold text-[#3a3a3e]">TA 的心</p>
+                <button
+                  onClick={() => setHeartOpen(false)}
+                  aria-label="关闭 TA 的心"
+                  className="ml-auto flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-[#8a837a] ring-1 ring-white/70 transition active:scale-90"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {(() => {
+                const mind = mindRef.current;
+                if (!mind) return <p className="py-5 text-center text-[12px] text-[#b0a8a0]">多和身边的 TA 相处一阵子，这里就会亮起来～</p>;
+                const lv = affinityLevelOf(mind.affinity);
+                const MOOD: Record<string, string> = { happy: '开心', content: '平静', low: '有点蔫', missing: '想你', sulking: '闹脾气' };
+                const NEEDS = [
+                  { k: '饱腹', v: mind.needs.food, c: '#e8a06a' },
+                  { k: '精力', v: mind.needs.energy, c: '#7fa8c9' },
+                  { k: '心情', v: mind.needs.mood, c: '#e4a0a8' },
+                  { k: '想你', v: 100 - mind.needs.social, c: '#b89ad4' },
+                ];
+                return (
+                  <div>
+                    <div className="flex items-center gap-2 text-[12.5px] font-semibold text-[#3a3a3e]">
+                      <span>Lv.{lv.lv} {lv.title}</span>
+                      <span className="ml-auto text-[10.5px] font-normal text-[#c98a9a]">甜度 {Math.round(mind.affinity)} · {MOOD[mind.mood]}</span>
+                    </div>
+                    <div className="mt-2 grid grid-cols-4 gap-1.5">
+                      {NEEDS.map((n) => (
+                        <div key={n.k} className="rounded-lg bg-white/70 px-1.5 py-1 text-center ring-1 ring-white/80">
+                          <div className="text-[9.5px] text-[#a09a94]">{n.k}</div>
+                          <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-[#f0e8e2]">
+                            <div className="h-full rounded-full transition-all" style={{ width: `${Math.round(n.v)}%`, background: n.c }} />
+                          </div>
+                          <div className="mt-0.5 text-[9px] font-semibold" style={{ color: n.c }}>{Math.round(n.v)}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {mind.sulk.on && (
+                      <div className="mt-2 text-center text-[10.5px] text-[#c97a8a]">TA 正在闹小脾气，说句好听的哄哄 TA 吧～</div>
+                    )}
+                  </div>
+                );
+              })()}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* ===== 宠物互动竖条（v7.1：点宠物才出现 · 点别处消失 · 右侧竖排 · 白玻璃圆钮无彩色底） ===== */}
         <AnimatePresence>
           {mode === 'live' && !wardrobeOpen && petBarOpen && (
@@ -5172,6 +5308,25 @@ export default function CoupleHome({ close }: { close: () => void }) {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* v10.3 TA 的心（宠物头像左侧独立按钮）：甜度/情绪/需求一览 */}
+            <button
+              onClick={() => {
+                setHeartOpen((o) => !o);
+                setPetPanel(false);
+                setMoreOpen(false);
+                sfx.tap();
+              }}
+              aria-label="TA 的心"
+              aria-expanded={heartOpen}
+              title="TA 的心：甜度 / 情绪 / 需求"
+              className={
+                heartOpen
+                  ? 'pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-[#e88a9a] text-white shadow-md backdrop-blur transition active:scale-95'
+                  : 'pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#e88a9a] shadow-sm backdrop-blur transition active:scale-95'
+              }
+            >
+              <Heart className="h-[18px] w-[18px]" />
+            </button>
             {/* v9 宠物头像（装修小家左侧 · 白玻璃圆钮）：点击轮换宠物（团子 → 领养的狗狗/兔兔 → 团子…）并唤出当前这只的状态面板；状态偏低时亮提醒小红点 */}
             <button
               onClick={() => {
@@ -5191,6 +5346,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   activePetRef.current = next;
                 }
                 setPetPanel(true);
+                setHeartOpen(false); // v10.3 与心面板互斥，不叠影
                 setPetBarOpen(false); // 面板与互动竖条互斥，不叠影
                 sfx.tap();
               }}
@@ -5232,7 +5388,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
             {/* ⋮ 更多菜单：时间变化 / 声音开关 / 视角 */}
             <div className="pointer-events-auto relative">
               <button
-                onClick={() => setMoreOpen((o) => !o)}
+                onClick={() => {
+                  setMoreOpen((o) => !o);
+                  setHeartOpen(false);
+                }}
                 aria-label="更多设置"
                 aria-expanded={moreOpen}
                 title="更多设置"
@@ -5327,42 +5486,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
                         <span className="rounded-full bg-[#f0eff1] px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90]">已关</span>
                       )}
                     </button>
-                    {/* v10 A3 甜度/情绪一览（只读） */}
-                    {(() => {
-                      const mind = mindRef.current;
-                      if (!mind) return null;
-                      const lv = affinityLevelOf(mind.affinity);
-                      const MOOD: Record<string, string> = { happy: '开心', content: '平静', low: '有点蔫', missing: '想你', sulking: '闹脾气' };
-                      const NEEDS = [
-                        { k: '饱腹', v: mind.needs.food, c: '#e8a06a' },
-                        { k: '精力', v: mind.needs.energy, c: '#7fa8c9' },
-                        { k: '心情', v: mind.needs.mood, c: '#e4a0a8' },
-                        { k: '想你', v: 100 - mind.needs.social, c: '#b89ad4' },
-                      ];
-                      return (
-                        <div className="mx-1 mt-1 rounded-xl bg-[#fdf6f3] px-3 py-2.5">
-                          <div className="flex items-center gap-2 text-[12px] font-semibold text-[#3a3a3e]">
-                            <Heart className="h-3.5 w-3.5 shrink-0 text-[#e88a9a]" />
-                            <span>TA 的心 · Lv.{lv.lv} {lv.title}</span>
-                            <span className="ml-auto text-[10.5px] font-normal text-[#c98a9a]">甜度 {Math.round(mind.affinity)} · {MOOD[mind.mood]}</span>
-                          </div>
-                          <div className="mt-2 grid grid-cols-4 gap-1.5">
-                            {NEEDS.map((n) => (
-                              <div key={n.k} className="rounded-lg bg-white/70 px-1.5 py-1 text-center ring-1 ring-white/80">
-                                <div className="text-[9.5px] text-[#a09a94]">{n.k}</div>
-                                <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-[#f0e8e2]">
-                                  <div className="h-full rounded-full transition-all" style={{ width: `${Math.round(n.v)}%`, background: n.c }} />
-                                </div>
-                                <div className="mt-0.5 text-[9px] font-semibold" style={{ color: n.c }}>{Math.round(n.v)}</div>
-                              </div>
-                            ))}
-                          </div>
-                          {mind.sulk.on && (
-                            <div className="mt-1.5 text-center text-[10.5px] text-[#c97a8a]">TA 正在闹小脾气，说句好听的哄哄 TA 吧～</div>
-                          )}
-                        </div>
-                      );
-                    })()}
+                    {/* v10.3 TA 的心：移到顶栏爱心按钮独立面板（此处保留入口行） */}
+                    <button
+                      onClick={() => {
+                        setHeartOpen(true);
+                        setMoreOpen(false);
+                        sfx.tap();
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                    >
+                      <Heart className="h-4 w-4 shrink-0 text-[#e88a9a]" />
+                      <span className="flex-1 text-left">TA 的心 · 甜度 / 情绪 / 需求</span>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-[#d8cfc4]" />
+                    </button>
                     {/* v8.0 换个TA：重弹陪伴角色选择列表 */}
                     <button
                       onClick={openPicker}
@@ -5502,7 +5638,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
           )}
         </AnimatePresence>
 
-        {/* ===== v8.0 聊天输入条（信息图标唤出：文字 / 麦克风 / 附照识图；消息进头顶气泡） ===== */}
+        {/* ===== v10.3 聊天输入条（文字胶囊 + 独立功能按钮排；消息进头顶气泡） =====
+            v10.3 重组：对讲 / 聊天记忆 / 麦克风 从输入胶囊拆出来，独立成排（44px 触控圆钮） */}
         <AnimatePresence>
           {mode === 'live' && chatOpen && companion && !pickerOpen && (
             <motion.div
@@ -5518,6 +5655,50 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   已附照片 · 发送时 TA 会看到照片内容
                 </div>
               )}
+              {/* v10.3 独立功能按钮排：对讲 / 聊天记忆 / 麦克风（44px 触控圆钮，白玻璃质感） */}
+              <div className="mb-1.5 flex items-center justify-end gap-1.5">
+                {/* v10 E2 连续语音对讲：免打字对讲机模式 */}
+                <button
+                  onClick={toggleIntercom}
+                  aria-label={intercomOn ? '关闭对讲模式' : '开启对讲模式'}
+                  aria-pressed={intercomOn}
+                  title="对讲模式：连续说话，每句自动发送"
+                  className={
+                    intercomOn
+                      ? 'relative flex h-11 w-11 items-center justify-center rounded-full bg-[#5aa58a] text-white shadow-md transition active:scale-90'
+                      : 'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/75 text-[#8a837a] shadow-md backdrop-blur-xl transition active:scale-90'
+                  }
+                >
+                  {intercomOn && <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-[#5aa58a]/35" />}
+                  <Radio className="h-[19px] w-[19px]" />
+                </button>
+                {/* v10 E1 聊天记录回看 */}
+                <button
+                  onClick={() => {
+                    setChatHistOpen(true);
+                    sfx.tap();
+                  }}
+                  aria-label="查看聊天记忆"
+                  title="和 TA 的聊天记忆"
+                  className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/75 text-[#8a837a] shadow-md backdrop-blur-xl transition active:scale-90"
+                >
+                  <History className="h-[19px] w-[19px]" />
+                </button>
+                {/* 麦克风：点击说话，再点停止并自动发送（v10.3 支持服务端 ASR 兜底） */}
+                <button
+                  onClick={toggleMic}
+                  aria-label={micOn ? '停止说话' : '开始说话'}
+                  aria-pressed={micOn}
+                  className={
+                    micOn
+                      ? 'relative flex h-11 w-11 items-center justify-center rounded-full bg-[#e46a6a] text-white shadow-md transition active:scale-90'
+                      : 'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/75 text-[#8a837a] shadow-md backdrop-blur-xl transition active:scale-90'
+                  }
+                >
+                  {micOn && <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-[#e46a6a]/35" />}
+                  <Mic className="h-[19px] w-[19px]" />
+                </button>
+              </div>
               <div className="flex items-center gap-1.5 rounded-full border border-white/70 bg-white/75 p-1.5 pl-3.5 shadow-[0_10px_28px_rgba(90,70,60,0.22)] backdrop-blur-xl">
                 <input
                   value={chatText}
@@ -5538,47 +5719,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8a837a] transition active:scale-90"
                 >
                   <ImagePlus className="h-[17px] w-[17px]" />
-                </button>
-                {/* v10 E2 连续语音对讲：免打字对讲机模式 */}
-                <button
-                  onClick={toggleIntercom}
-                  aria-label={intercomOn ? '关闭对讲模式' : '开启对讲模式'}
-                  aria-pressed={intercomOn}
-                  title="对讲模式：连续说话，每句自动发送"
-                  className={
-                    intercomOn
-                      ? 'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#5aa58a] text-white shadow transition active:scale-90'
-                      : 'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8a837a] transition active:scale-90'
-                  }
-                >
-                  {intercomOn && <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-[#5aa58a]/35" />}
-                  <Radio className="h-[17px] w-[17px]" />
-                </button>
-                {/* v10 E1 聊天记录回看 */}
-                <button
-                  onClick={() => {
-                    setChatHistOpen(true);
-                    sfx.tap();
-                  }}
-                  aria-label="查看聊天记忆"
-                  title="和 TA 的聊天记忆"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8a837a] transition active:scale-90"
-                >
-                  <History className="h-[17px] w-[17px]" />
-                </button>
-                {/* 麦克风：点击说话，再点停止并自动发送 */}
-                <button
-                  onClick={toggleMic}
-                  aria-label={micOn ? '停止说话' : '开始说话'}
-                  aria-pressed={micOn}
-                  className={
-                    micOn
-                      ? 'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#e46a6a] text-white shadow transition active:scale-90'
-                      : 'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8a837a] transition active:scale-90'
-                  }
-                >
-                  {micOn && <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-[#e46a6a]/35" />}
-                  <Mic className="h-[17px] w-[17px]" />
                 </button>
                 {/* 发送 */}
                 <button
@@ -5717,7 +5857,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
         {/* v10 E1 聊天记录回看面板 */}
         <CabinHistorySheet open={chatHistOpen} onClose={() => setChatHistOpen(false)} charId={companion?.id ?? 'x'} charName={companion?.name ?? 'TA'} />
 
-        {/* v10 C4 宠物日记面板（毛玻璃抽屉，读 cabin-pet-diary） */}
+        {/* v10 C4 宠物日记面板（毛玻璃抽屉，读 cabin-pet-diary；v10.3 补 pointer-events-auto：
+            抽屉挂在 pointer-events-none 的 HUD 层里，不显式开启点击会全部穿透 —— 叉号/遮罩点了没反应的原因） */}
         <AnimatePresence>
           {petDiaryOpen && (
             <>
@@ -5726,7 +5867,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute inset-0 z-[64] bg-black/25"
+                className="pointer-events-auto absolute inset-0 z-[64] bg-black/25"
                 onClick={() => setPetDiaryOpen(false)}
               />
               <motion.div
@@ -5735,7 +5876,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 animate={{ y: 0 }}
                 exit={{ y: '100%' }}
                 transition={{ type: 'spring', damping: 30, stiffness: 320 }}
-                className="absolute inset-x-0 bottom-0 z-[66] mx-auto max-w-[430px] rounded-t-[26px] border border-white/60 bg-white/60 p-4 shadow-[0_-8px_40px_rgba(120,70,80,0.22)] backdrop-blur-2xl"
+                className="pointer-events-auto absolute inset-x-0 bottom-0 z-[66] mx-auto max-w-[430px] rounded-t-[26px] border border-white/60 bg-white/60 p-4 shadow-[0_-8px_40px_rgba(120,70,80,0.22)] backdrop-blur-2xl"
                 role="dialog"
                 aria-label="宠物日记"
               >

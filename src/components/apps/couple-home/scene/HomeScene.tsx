@@ -805,9 +805,11 @@ function GameLoop({
     }
 
     if (fpOn) {
-      // —— 第一人称：相机就是小人的眼睛（走路轻微颠簸，视角 = az/pitch） ——
+      // —— 第一人称：相机就是小人的眼睛（走路轻微颠簸，视角 = az/pitch）；
+      //    v10.3 相机位置永跟随小人（小人本身被碰撞钳在屋内，相机不可能穿出墙体/天花板），
+      //    仰视上限收到 1.15rad（≈66°）：贴近墙根也不再看穿天花板外 —— 屋内抬头是天花板，屋外抬头是天空
       const az = azRef.current?.az ?? 0;
-      const pitch = clamp(pitchRef.current?.p ?? 0, -0.5, 1.3);
+      const pitch = clamp(pitchRef.current?.p ?? 0, -0.5, 1.15);
       const bob = meRT.moving ? Math.abs(Math.sin(clock.current * 9)) * 0.032 : 0;
       camera.position.set(meRT.x, eyeH + bob, meRT.z);
       const cp = Math.cos(pitch);
@@ -1349,10 +1351,10 @@ function NightBlend({ night, mixRef, weather = 'sunny' }: { night: boolean; mixR
 
 /** D4 画质档位：FPS 自适应降级（dpr 钳制 + 阴影分辨率/开关） */
 export type SceneQuality = 'high' | 'mid' | 'low';
-/** 档位 → Canvas dpr 区间 */
+/** 档位 → Canvas dpr 区间；v10.3 提高上限到 min(devicePixelRatio, 2)：高分屏文字/气泡不再发虚 */
 const Q_DPR: Record<SceneQuality, [number, number]> = {
-  high: [1, 1.75],
-  mid: [1, 1.35],
+  high: [1.35, 2],
+  mid: [1, 1.5],
   low: [0.85, 1],
 };
 /** 档位 → 主光阴影贴图边长（low = 整关阴影） */
@@ -3745,12 +3747,14 @@ function PetBuddy2({
 /** 气泡纹理缓存（同一文本复用；上限 60 条，超出丢最旧）；v9 记录逻辑尺寸供 sprite 缩放用 */
 const bubbleTexCache = new Map<string, { tex: THREE.CanvasTexture; w: number; h: number }>();
 
-/** v9 超采样倍率：canvas 按 3x 分辨率绘制，高分屏（dpr 2~3）上文字不再发虚 */
-const BUBBLE_SS = 3;
+/** v10.3 超采样倍率：canvas 按 4x 分辨率绘制，高分屏（dpr 2~3）上文字边缘锐利不发虚 */
+const BUBBLE_SS = 4;
 
 /**
- * 文字气泡贴图：白底圆角 + 樱粉描边 + 底部小尾巴 + 自动换行（15 字/行，最多 5 行，超出省略号）。
- * 纯 canvas 绘制不依赖 DOM；宽度按字符宽度估算（CJK 全宽 / 半角半宽）；3x 超采样保证高清。
+ * 文字气泡贴图：iOS 风白底圆角卡片 + 淡淡投影 + 樱粉细描边 + 底部小尾巴 + 自动换行
+ * （15 字/行，最多 5 行，超出省略号）。纯 canvas 绘制不依赖 DOM；宽度按字符宽度估算
+ * （CJK 全宽 / 半角半宽）；4x 超采样 + 关 mipmap（LinearFilter 直采）保证文字边缘锐利。
+ * 主体与尾巴合并为单一路径一次性填充/描边：半透明磨砂质感下不出现重叠双影。
  */
 function makeBubbleTexture(text: string, thought = false): { tex: THREE.CanvasTexture; w: number; h: number } {
   const cacheKey = (thought ? '\u3031\u3031' : '') + text;
@@ -3773,44 +3777,44 @@ function makeBubbleTexture(text: string, thought = false): { tex: THREE.CanvasTe
   cv.width = Math.ceil(W * SS);
   cv.height = Math.ceil(H * SS);
   const ctx = cv.getContext('2d')!;
-  ctx.scale(SS, SS); // 之后的绘制全部用逻辑坐标，输出即 3x 高清
-  const r = 18;
-  // 气泡主体（留出底部尾巴空间）；想法气泡 = 淡蓝云朵描边（与对话气泡区分）
-  const bh = H - 18;
-  ctx.fillStyle = thought ? 'rgba(246,250,255,0.95)' : 'rgba(255,255,255,0.96)';
-  ctx.strokeStyle = thought ? 'rgba(150,180,205,0.9)' : 'rgba(240,180,196,0.95)';
-  if (thought) ctx.setLineDash([9, 7]);
-  ctx.lineWidth = 4;
+  ctx.scale(SS, SS); // 之后的绘制全部用逻辑坐标，输出即 4x 高清
+  const r = 20;
+  const bh = H - 18; // 气泡主体底边（留出尾巴）
+  const tx = Math.min(W - 44, Math.max(44, W / 2)); // 尾巴尖水平位置
+  const stroke = thought ? 'rgba(150,180,205,0.85)' : 'rgba(242,183,199,0.9)';
+  // —— iOS 风磨砂卡片：主体+尾巴单一路径，一次性填（带柔和投影）+ 细描边 ——
+  ctx.save();
+  ctx.shadowColor = 'rgba(120,80,95,0.20)';
+  ctx.shadowBlur = 14;
+  ctx.shadowOffsetY = 5;
   ctx.beginPath();
-  ctx.moveTo(r + 3, 3);
-  ctx.arcTo(W - 3, 3, W - 3, bh - 3, r);
-  ctx.arcTo(W - 3, bh - 3, 3, bh - 3, r);
-  ctx.arcTo(3, bh - 3, 3, 3, r);
-  ctx.arcTo(3, 3, W - 3, 3, r);
+  ctx.moveTo(r, 3);
+  ctx.arcTo(W - 3, 3, W - 3, bh, r); // 顶边 + 右上角
+  ctx.arcTo(W - 3, bh, tx + 12, bh, r); // 右边 + 右下角（沿底边向左）
+  ctx.lineTo(tx + 12, bh); // 底边走到尾巴右根
+  ctx.quadraticCurveTo(tx + 5, H - 7, tx - 1, H - 3); // 尾巴右侧收到尖
+  ctx.quadraticCurveTo(tx - 5, H - 7, tx - 12, bh); // 尾巴左侧收回
+  ctx.lineTo(r, bh); // 底边剩余段
+  ctx.arcTo(3, bh, 3, 3, r); // 左下角
+  ctx.arcTo(3, 3, W - 3, 3, r); // 左边 + 左上角
   ctx.closePath();
+  ctx.fillStyle = thought ? 'rgba(246,250,255,0.92)' : 'rgba(255,255,255,0.88)';
   ctx.fill();
+  ctx.restore();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = stroke;
+  if (thought) ctx.setLineDash([9, 7]);
   ctx.stroke();
   ctx.setLineDash([]);
-  // 尾巴（指向下方小人）
-  const tx = Math.min(W - 40, Math.max(40, W / 2));
-  ctx.fillStyle = thought ? 'rgba(246,250,255,0.95)' : 'rgba(255,255,255,0.96)';
-  ctx.strokeStyle = thought ? 'rgba(150,180,205,0.9)' : 'rgba(240,180,196,0.95)';
-  if (thought) ctx.setLineDash([9, 7]);
+  // 顶部高光（磨砂玻璃的「光边」）
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(tx - 11, bh - 3);
-  ctx.quadraticCurveTo(tx - 4, H - 6, tx - 2, H - 3);
-  ctx.quadraticCurveTo(tx + 3, H - 8, tx + 11, bh - 3);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(tx - 11, bh - 3);
-  ctx.quadraticCurveTo(tx - 4, H - 6, tx - 2, H - 3);
-  ctx.quadraticCurveTo(tx + 3, H - 8, tx + 11, bh - 3);
+  ctx.moveTo(r + 6, 5.5);
+  ctx.lineTo(W - r - 6, 5.5);
   ctx.stroke();
-  ctx.fillStyle = 'rgba(255,255,255,1)';
-  ctx.fillRect(tx - 9, bh - 5, 18, 4); // 盖掉尾巴根部的描边线
   // 文本
-  ctx.fillStyle = '#4a4a4e';
+  ctx.fillStyle = '#43434a';
   ctx.font = '600 30px "PingFang SC", "Nunito", ui-rounded, "Microsoft YaHei", system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -3819,6 +3823,10 @@ function makeBubbleTexture(text: string, thought = false): { tex: THREE.CanvasTe
   });
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
+  // v10.3 关 mipmap + Linear 直采：文字边缘不再被多级纹理采样模糊
+  tex.generateMipmaps = false;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
   tex.anisotropy = 4;
   const rec = { tex, w: W, h: H };
   bubbleTexCache.set(cacheKey, rec);
@@ -3912,6 +3920,24 @@ function HeadBubbles({
 }
 
 // ---------------- Canvas 主体 ----------------
+
+/**
+ * v10.3 全局禁用视锥体裁剪（frustumCulled=false）：门/家具/GLB/精灵在屏幕边缘与
+ * 转角瞬间不再突然消失（用户实测「靠近门时门会莫名消失」）。每 0.5s 扫一遍场景，
+ * 覆盖异步加载的 GLB 与新放置的家具；全场景遍历 ≈几百对象，开销可忽略。
+ */
+function NoCull() {
+  const { scene } = useThree();
+  const tick = useRef(0);
+  useFrame(() => {
+    if (tick.current++ % 30 !== 0) return;
+    scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if ((m.isMesh || (o as THREE.Sprite).isSprite) && m.frustumCulled) m.frustumCulled = false;
+    });
+  });
+  return null;
+}
 
 /** 进屋过场状态（相机推镜路径缓存） */
 interface IntroState {
@@ -4103,6 +4129,7 @@ export default function HomeScene(props: HomeSceneProps) {
         flipflops={2}
         onFallback={() => setQuality('low')}
       />
+      <NoCull />
       <NightBlend night={night} mixRef={nightMixRef} weather={weatherFx ?? 'sunny'} />
       <Lights night={night} mixRef={nightMixRef} quality={quality} litLamps={litLamps} gloomy={gloomy} />
       <OutdoorWorld weather={weatherFx ?? 'sunny'} night={night} mixRef={nightMixRef} />
@@ -4150,6 +4177,7 @@ export default function HomeScene(props: HomeSceneProps) {
         floorTex={floorTex}
         wallTex={wallTex}
         introRef={introRef}
+        weatherFx={weatherFx}
       />
       {mode === 'edit' && <EditGrid />}
       <DragAid modeRef={modeRef} dragRef={dragRef} itemsRef={itemsRef} />

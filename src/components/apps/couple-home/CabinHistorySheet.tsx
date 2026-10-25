@@ -97,12 +97,13 @@ function HistorySheetInner({ onClose, charId, charName }: Omit<CabinHistorySheet
 
   return (
     <>
-      {/* 背景遮罩：点击关闭 */}
-      <button aria-label="关闭聊天记忆" className="fixed inset-0 z-[65] cursor-default bg-black/25" onClick={onClose} />
+      {/* 背景遮罩：点击关闭（v10.3 补 pointer-events-auto：面板挂在 pointer-events-none 的
+          HUD 层里，不显式开启点击会全部穿透 —— 叉号/遮罩点了没反应的原因） */}
+      <button aria-label="关闭聊天记忆" className="pointer-events-auto fixed inset-0 z-[65] cursor-default bg-black/25" onClick={onClose} />
 
       {/* 底部抽屉（translate-y 滑入） */}
       <motion.div
-        className="fixed inset-x-0 bottom-0 z-[70] mx-auto max-w-[430px]"
+        className="pointer-events-auto fixed inset-x-0 bottom-0 z-[70] mx-auto max-w-[430px]"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
         transition={{ type: 'spring', damping: 30, stiffness: 320 }}

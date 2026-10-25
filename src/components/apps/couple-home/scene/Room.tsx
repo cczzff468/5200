@@ -19,6 +19,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
+import type { HomeWeather } from '../types';
 import {
   BAL_X0,
   BAL_X1,
@@ -194,31 +195,36 @@ function makeWallStripeTexture(): THREE.CanvasTexture {
 
 // ---------------- 窗外风景纹理 ----------------
 
-/** 白天：蓝天渐变 + 云朵 + 两只小帆船（呼应「拾光小屋」图标） */
-function makeDaySkyTexture(): THREE.CanvasTexture {
-  const W = 256;
-  const H = 192;
-  const cv = document.createElement('canvas');
-  cv.width = W;
-  cv.height = H;
-  const ctx = cv.getContext('2d')!;
+// ---------------- 窗外天空（v10.3：跟随室外天气 × 昼夜，按 (weather,night) 缓存） ----------------
+
+/** 天空纹理缓存（同一天气+昼夜复用一张） */
+const skyTexCache = new Map<string, THREE.CanvasTexture>();
+
+/** 画布底：竖向渐变 */
+function skyGradient(ctx: CanvasRenderingContext2D, W: number, H: number, top: string, mid: string, bottom: string): void {
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#a7cfec');
-  g.addColorStop(0.62, '#c8e4f4');
-  g.addColorStop(1, '#eef7f2');
+  g.addColorStop(0, top);
+  g.addColorStop(0.62, mid);
+  g.addColorStop(1, bottom);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
-  // 云
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  for (const [cx, cy, r] of [[52, 44, 16], [76, 50, 12], [186, 30, 13], [204, 36, 9]] as const) {
+}
+
+/** 云朵团（晕开的多圆组合） */
+function skyCloud(ctx: CanvasRenderingContext2D, cx: number, cy: number, s: number, alpha: number): void {
+  ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+  for (const [dx, dy, r] of [[-18, 2, 11], [0, -6, 14], [18, 2, 11], [-8, 6, 9], [8, 6, 9]] as const) {
     ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.arc(cx + dx * s, cy + dy * s, r * s, 0, Math.PI * 2);
     ctx.fill();
   }
-  // 海平线
-  ctx.fillStyle = '#9fc6d8';
+}
+
+/** 海面 + 波光（复用白天的海平线质感，颜色随天气变化） */
+function skySea(ctx: CanvasRenderingContext2D, W: number, H: number, col: string, wave: string): void {
+  ctx.fillStyle = col;
   ctx.fillRect(0, H * 0.72, W, H * 0.28);
-  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.strokeStyle = wave;
   ctx.lineWidth = 2;
   for (const y of [H * 0.78, H * 0.86, H * 0.93]) {
     ctx.beginPath();
@@ -226,70 +232,142 @@ function makeDaySkyTexture(): THREE.CanvasTexture {
     ctx.quadraticCurveTo(W * 0.5, y - 4, W * 0.92, y);
     ctx.stroke();
   }
-  // 小帆船 ×2
-  const boat = (bx: number, by: number, s: number) => {
-    ctx.fillStyle = '#d97f6f';
-    ctx.beginPath();
-    ctx.moveTo(bx - 14 * s, by);
-    ctx.lineTo(bx + 14 * s, by);
-    ctx.lineTo(bx + 8 * s, by + 7 * s);
-    ctx.lineTo(bx - 8 * s, by + 7 * s);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#f2e6c8';
-    ctx.beginPath();
-    ctx.moveTo(bx, by - 16 * s);
-    ctx.lineTo(bx, by - 1 * s);
-    ctx.lineTo(bx - 11 * s, by - 1 * s);
-    ctx.closePath();
-    ctx.fill();
-  };
-  boat(W * 0.3, H * 0.7, 1);
-  boat(W * 0.74, H * 0.66, 0.8);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
 }
 
-/** 夜晚：深蓝星空 + 月亮 */
-function makeNightSkyTexture(): THREE.CanvasTexture {
+/**
+ * v10.3 窗外真实景色：五档天气 × 昼夜 ——
+ * 晴（蓝天白云帆船/星空月）、多云（云多天沉）、阴（灰白天幕）、雨（乌云斜雨丝）、雪（灰白飘雪）。
+ */
+function makeWeatherSkyTexture(weather: HomeWeather, night: boolean): THREE.CanvasTexture {
+  const key = `${weather}-${night ? 'n' : 'd'}`;
+  const hit = skyTexCache.get(key);
+  if (hit) return hit;
   const W = 256;
   const H = 192;
   const cv = document.createElement('canvas');
   cv.width = W;
   cv.height = H;
   const ctx = cv.getContext('2d')!;
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#1c2748');
-  g.addColorStop(0.62, '#2c3a63');
-  g.addColorStop(1, '#3d4a72');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-  // 星星
-  ctx.fillStyle = '#e8eeff';
-  for (let i = 0; i < 42; i++) {
-    const x = Math.random() * W;
-    const y = Math.random() * H * 0.68;
-    const r = Math.random() * 1.4 + 0.4;
-    ctx.globalAlpha = 0.4 + Math.random() * 0.6;
+  if (weather === 'sunny' && !night) {
+    // 白天晴：沿用经典蓝天白云帆船
+    skyGradient(ctx, W, H, '#a7cfec', '#c8e4f4', '#eef7f2');
+    for (const [cx, cy, r] of [[52, 44, 16], [76, 50, 12], [186, 30, 13], [204, 36, 9]] as const) {
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    skySea(ctx, W, H, '#9fc6d8', 'rgba(255,255,255,0.5)');
+    const boat = (bx: number, by: number, s: number) => {
+      ctx.fillStyle = '#d97f6f';
+      ctx.beginPath();
+      ctx.moveTo(bx - 14 * s, by);
+      ctx.lineTo(bx + 14 * s, by);
+      ctx.lineTo(bx + 8 * s, by + 7 * s);
+      ctx.lineTo(bx - 8 * s, by + 7 * s);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#f2e6c8';
+      ctx.beginPath();
+      ctx.moveTo(bx, by - 16 * s);
+      ctx.lineTo(bx, by - 1 * s);
+      ctx.lineTo(bx - 11 * s, by - 1 * s);
+      ctx.closePath();
+      ctx.fill();
+    };
+    boat(W * 0.3, H * 0.7, 1);
+    boat(W * 0.74, H * 0.66, 0.8);
+  } else if (weather === 'sunny' && night) {
+    // 晴夜：深蓝星空 + 月亮（沿用经典夜空）
+    skyGradient(ctx, W, H, '#17263f', '#22345a', '#2c4066');
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    for (let i = 0; i < 42; i++) {
+      const x = (i * 73) % W;
+      const y = (i * 41) % (H * 0.72);
+      ctx.globalAlpha = 0.35 + ((i * 29) % 60) / 100;
+      ctx.fillRect(x, y, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#f4ecc8';
     ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.arc(W * 0.76, H * 0.24, 15, 0, Math.PI * 2);
     ctx.fill();
-  }
-  ctx.globalAlpha = 1;
-  // 月亮
-  ctx.fillStyle = '#f7f0d8';
-  ctx.beginPath();
-  ctx.arc(W * 0.72, H * 0.26, 15, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = 'rgba(220,214,190,0.5)';
-  for (const [mx, my, mr] of [[W * 0.69, H * 0.24, 3.4], [W * 0.75, H * 0.29, 2.4]] as const) {
+    ctx.fillStyle = '#d9d0a8';
     ctx.beginPath();
-    ctx.arc(mx, my, mr, 0, Math.PI * 2);
+    ctx.arc(W * 0.76 - 5, H * 0.24 - 3, 4, 0, Math.PI * 2);
+    ctx.arc(W * 0.76 + 6, H * 0.24 + 4, 3, 0, Math.PI * 2);
     ctx.fill();
+    skySea(ctx, W, H, '#1d2c48', 'rgba(160,190,230,0.28)');
+  } else {
+    // 其余天气：按档配色
+    const P: Record<string, { top: string; mid: string; bot: string; sea: string; wave: string; cloud: number; clouds: [number, number, number][] }> = {
+      cloudy: {
+        top: '#8fb2c9', mid: '#a9c2d2', bot: '#cfdde2', sea: '#7fa3b5', wave: 'rgba(255,255,255,0.35)', cloud: 0.92,
+        clouds: [[40, 38, 1.2], [96, 52, 0.9], [150, 30, 1.1], [206, 48, 0.8]],
+      },
+      overcast: {
+        top: '#9aa0a6', mid: '#adb2b6', bot: '#c5c8ca', sea: '#8d969c', wave: 'rgba(255,255,255,0.22)', cloud: 0.75,
+        clouds: [[60, 34, 1.7], [140, 52, 1.4], [210, 30, 1.5]],
+      },
+      rain: {
+        top: '#5c6670', mid: '#6d7883', bot: '#848d96', sea: '#57626c', wave: 'rgba(200,220,235,0.2)', cloud: 0.5,
+        clouds: [[50, 30, 1.8], [130, 46, 1.5], [208, 26, 1.6]],
+      },
+      snow: {
+        top: '#aeb6c2', mid: '#c3cad3', bot: '#dde2e8', sea: '#b8c4cf', wave: 'rgba(255,255,255,0.4)', cloud: 0.85,
+        clouds: [[70, 34, 1.5], [160, 48, 1.2], [215, 30, 1.3]],
+      },
+    };
+    const p = P[weather === 'cloudy' ? 'cloudy' : weather === 'overcast' ? 'overcast' : weather === 'rain' ? 'rain' : 'snow'];
+    if (night) {
+      // 夜晚各天气：压暗 + 少量星（阴雨雪夜基本无星）
+      const NP: Record<string, [string, string, string, string]> = {
+        cloudy: ['#1c2733', '#28384a', '#33475c', '#22344a'],
+        overcast: ['#22262b', '#2c3238', '#384048', '#2a323a'],
+        rain: ['#171b21', '#20262d', '#2a323b', '#1e2831'],
+        snow: ['#252c36', '#333c48', '#454f5c', '#303a46'],
+      };
+      const np = NP[weather === 'cloudy' ? 'cloudy' : weather === 'overcast' ? 'overcast' : weather === 'rain' ? 'rain' : 'snow'];
+      skyGradient(ctx, W, H, np[0], np[1], np[2]);
+      if (weather === 'cloudy') {
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        for (let i = 0; i < 16; i++) ctx.fillRect((i * 97) % W, (i * 53) % (H * 0.6), 2, 2);
+      }
+      skySea(ctx, W, H, np[3], 'rgba(160,190,230,0.16)');
+    } else {
+      skyGradient(ctx, W, H, p.top, p.mid, p.bot);
+      skySea(ctx, W, H, p.sea, p.wave);
+    }
+    for (const [cx, cy, s] of p.clouds) skyCloud(ctx, cx, cy, s, night ? Math.min(0.32, p.cloud * 0.4) : p.cloud);
+    // 雨天：斜雨丝（亮夜都画，夜里更淡）
+    if (weather === 'rain') {
+      ctx.strokeStyle = night ? 'rgba(190,210,230,0.3)' : 'rgba(225,238,248,0.55)';
+      ctx.lineWidth = 1.4;
+      for (let i = 0; i < 46; i++) {
+        const x = (i * 61) % (W + 30) - 15;
+        const y = (i * 89) % H;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - 5, y + 13);
+        ctx.stroke();
+      }
+    }
+    // 雪天：飘雪点
+    if (weather === 'snow') {
+      ctx.fillStyle = night ? 'rgba(235,242,250,0.75)' : 'rgba(255,255,255,0.92)';
+      for (let i = 0; i < 64; i++) {
+        const x = (i * 83) % W;
+        const y = (i * 47) % H;
+        const r = 1.2 + ((i * 13) % 10) / 6;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
+  skyTexCache.set(key, tex);
   return tex;
 }
 
@@ -361,6 +439,15 @@ const _matBase = new WeakMap<THREE.Material, { o: number; t: boolean; d: boolean
 const _rayBase = new WeakMap<THREE.Mesh, THREE.Mesh['raycast']>();
 const _noopRaycast = () => {};
 
+/** 点是否在 AABB 内（含边界外扩 0.01） */
+function pointInBox(p: THREE.Vector3, b: THREE.Box3): boolean {
+  return (
+    p.x > b.min.x - 0.01 && p.x < b.max.x + 0.01 &&
+    p.y > b.min.y - 0.01 && p.y < b.max.y + 0.01 &&
+    p.z > b.min.z - 0.01 && p.z < b.max.z + 0.01
+  );
+}
+
 /**
  * 墙体遮挡淡出（方案 A 核心）：
  * - 遮挡判定 = 「相机→对焦物」视线段是否穿过墙体 AABB（boxes 任一命中即挡）；
@@ -384,10 +471,16 @@ function useWallOcclusionFade(
     const f = focusRef?.current;
     _focusP.set(f?.x ?? 0, 1, f?.z ?? 2.4);
     let blocked = false;
-    for (const b of boxes) {
-      if (segHitsBox(camera.position, _focusP, b)) {
-        blocked = true;
-        break;
+    // v10.3 守卫①：相机与对焦物几乎重合（第一人称 / 贴脸特写）→ 视线段没有「中间」可言，
+    // 任何墙都不算遮挡（修「走近门时门莫名消失」：以前相机路过门洞/贴墙就被判遮挡）
+    if (camera.position.distanceTo(_focusP) > 0.6) {
+      for (const b of boxes) {
+        // v10.3 守卫②：相机/对焦物本体在墙盒内不算被挡 —— 只有视线段真正「穿过」墙体才淡出
+        if (pointInBox(camera.position, b) || pointInBox(_focusP, b)) continue;
+        if (segHitsBox(camera.position, _focusP, b)) {
+          blocked = true;
+          break;
+        }
       }
     }
     const dt = Math.min(rawDt, 0.05);
@@ -534,10 +627,10 @@ function Wall({ def, night, wallCol, wallTexMap, focusRef }: { def: WallDef; nig
 
   return (
     <group ref={ref}>
-      {/* 墙体：暖白（支持用户自定义色 + 墙纸纹理） */}
-      <mesh position={def.pos} castShadow receiveShadow>
+      {/* 墙体：暖白（支持用户自定义色 + 墙纸纹理）；v10.3 DoubleSide 双面渲染，贴墙仰视/特写不再背面消失 */}
+      <mesh position={def.pos} castShadow receiveShadow frustumCulled={false}>
         <boxGeometry args={def.size} />
-        <meshStandardMaterial color={wallCol ?? (night ? '#e9e4d8' : '#f7f3ec')} map={wallTexMap} roughness={0.95} />
+        <meshStandardMaterial color={wallCol ?? (night ? '#e9e4d8' : '#f7f3ec')} map={wallTexMap} roughness={0.95} side={THREE.DoubleSide} />
       </mesh>
       {/* 踢脚线：浅灰（内侧面贴墙） */}
       {def.baseboard !== false && (
@@ -811,6 +904,7 @@ function Window({
   night,
   open,
   col,
+  weatherFx = 'sunny',
   onToggle,
   editMode,
   selected,
@@ -824,6 +918,8 @@ function Window({
   night: boolean;
   open: boolean;
   col?: string;
+  /** v10.3 窗外真实景色：跟随室外天气（晴/多云/阴/雨/雪 × 昼夜） */
+  weatherFx?: HomeWeather;
   onToggle: () => void;
   editMode: boolean;
   selected: boolean;
@@ -838,7 +934,7 @@ function Window({
   const root = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
 
-  const skyTex = useMemo(() => (night ? makeNightSkyTexture() : makeDaySkyTexture()), [night]);
+  const skyTex = useMemo(() => makeWeatherSkyTexture(weatherFx, night), [weatherFx, night]);
   const frameCol = col ?? '#f0e7d4';
 
   // 窗遮挡盒：窗框范围；视线穿窗或穿所在墙 → 窗淡出
@@ -1110,9 +1206,9 @@ function Ceiling({
     ref.current.visible = inside && camera.position.y < WALL_H - 0.12;
   });
   return (
-    <mesh ref={ref} position={[(x0 + x1) / 2, WALL_H, (z0 + z1) / 2]} rotation={[Math.PI / 2, 0, 0]}>
+    <mesh ref={ref} position={[(x0 + x1) / 2, WALL_H, (z0 + z1) / 2]} rotation={[Math.PI / 2, 0, 0]} frustumCulled={false}>
       <planeGeometry args={[x1 - x0, z1 - z0]} />
-      <meshStandardMaterial color={col ?? (night ? '#e0ddd4' : '#fbf9f3')} roughness={0.96} />
+      <meshStandardMaterial color={col ?? (night ? '#e0ddd4' : '#fbf9f3')} roughness={0.96} side={THREE.DoubleSide} />
     </mesh>
   );
 }
@@ -1180,6 +1276,8 @@ export interface RoomProps {
   wallTex?: 'plain' | 'dot' | 'stripe';
   /** 进屋过场（v6.8）：on 期间卧室门/阳台门随推镜自动迎宾开合（不动用户保存的门开态） */
   introRef?: RefObject<{ on: boolean }>;
+  /** v10.3 室外天气：窗景联动（晴/多云/阴/雨/雪） */
+  weatherFx?: HomeWeather;
 }
 
 export default function Room({
@@ -1226,6 +1324,7 @@ export default function Room({
   floorTex = 'wood',
   wallTex = 'plain',
   introRef,
+  weatherFx = 'sunny',
 }: RoomProps) {
   const floorWoodTex = useMemo(() => makeFloorTexture(), []);
   const floorCheckTex = useMemo(() => makeFloorCheckerTexture(), []);
@@ -1525,6 +1624,7 @@ export default function Room({
             night={night}
             open={win?.[i] ?? false}
             col={winCol}
+            weatherFx={weatherFx}
             onToggle={() => onToggleWin?.(i)}
             editMode={!!editMode}
             selected={selWall === `win-${i}`}

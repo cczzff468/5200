@@ -97,6 +97,10 @@ interface Anchor {
   tz: number;
   ry: number;
   y: number;
+  /** v10.3 外围走位点（家具脚印之外的落脚点）：坐/躺类锚点在床/沙发 footprint 内部，
+   *  直接往锚点寻路永远进不了到位圈（卡在家具边）——先走到外围点再吸附上锚点 */
+  wx?: number;
+  wz?: number;
 }
 
 /** 状态机内部状态（HomeScene 持有一个实例） */
@@ -185,6 +189,9 @@ function lerpAngle(cur: number, target: number, k: number): number {
 /**
  * 家具动作锚点（sit/lie/watch/lamp/play/cook/eat 落点与朝向；music 与 lamp 同款站位）。
  * 与 CoupleHome.anchorOf 同口径的精简版 —— 只服务陪伴小人。
+ * v10.3：补齐宿主版的 out 外围走位点（wx/wz）—— 坐/躺类锚点在床/沙发 footprint 内部，
+ * 直接往锚点寻路永远进不了到位圈（卡在家具边，表现为「不躺床/坐沙发卡住」）；
+ * 先走到外围落脚点，到位后再吸附上锚点（与宿主小人两段式同口径）。
  * 返回 null = 该家具不支持此动作。
  */
 export function companionAnchor(
@@ -217,22 +224,32 @@ export function companionAnchor(
               ? entry.acts.cook
               : entry.acts.eat;
   if (!a) return null;
-  const an = a as { y: number; dx?: number; dz?: number; ryOff?: number };
+  const an = a as { y: number; dx?: number; dz?: number; ryOff?: number; out?: [number, number] };
   // watch/play/cook/eat 都是「面向家具」的动作：朝向 = 家具朝向 + π（与宿主 FACE_ACTS 同口径）
   const ry = ry0 + (an.ryOff ?? 0) + (kind === 'watch' || kind === 'play' || kind === 'cook' || kind === 'eat' ? Math.PI : 0);
   const cos = Math.cos(ry0);
   const sin = Math.sin(ry0);
   const lx = an.dx ?? 0;
   let lz = an.dz ?? 0;
-  if (kind === 'sit' && an.dz == null) {
-    // 无锚点 dz 的坐具兜底：坐在家具中心偏前缘
-    lz = entry.fp[1] / 2 - 0.12;
+  if ((kind === 'sit' || kind === 'read') && !an.out) {
+    // 与宿主 anchorOf 同口径：坐姿锚点夹到座面前缘内 0.16m（大腿探出前缘不穿模）
+    lz = Math.min(lz, (entry.fp[1] ?? 0) / 2 - 0.16);
+  }
+  // v10.3 外围走位点：坐/躺/吃饭（座位类）需要先走到家具外；目录里带了 out（如吊床）优先用
+  let wx: number | undefined;
+  let wz: number | undefined;
+  if (kind === 'sit' || kind === 'lie' || kind === 'read' || kind === 'eat') {
+    const back = kind === 'lie' ? -1.45 : 0.55;
+    const out = an.out ?? [lx, lz + back];
+    wx = item.x + out[0] * cos + out[1] * sin;
+    wz = item.z - out[0] * sin + out[1] * cos;
   }
   return {
     tx: item.x + lx * cos + lz * sin,
     tz: item.z - lx * sin + lz * cos,
     ry,
     y: a.y ?? 0,
+    ...(wx !== undefined && wz !== undefined ? { wx, wz } : {}),
   };
 }
 
@@ -633,8 +650,12 @@ export function companionStep(
       }
       rt.anchor = anchor;
       rt.itemId = item.id;
-      rt.target = { x: anchor.tx, z: anchor.tz };
-      rt.path = findPath(grid, { x: ta.x, z: ta.z }, { x: anchor.tx, z: anchor.tz }) ?? [];
+      // v10.3：座位类动作先走到家具外的外围点（wx/wz），到位后吸附上锚点；
+      // 直接寻路到 footprint 内的锚点会卡在家具边缘永远到不了
+      const gx = anchor.wx ?? anchor.tx;
+      const gz = anchor.wz ?? anchor.tz;
+      rt.target = { x: gx, z: gz };
+      rt.path = findPath(grid, { x: ta.x, z: ta.z }, { x: gx, z: gz }) ?? [];
     }
     return true;
   }
@@ -678,8 +699,12 @@ export function companionStep(
             rt.stuckZ = ta.z;
             rt.path = findPath(grid, { x: ta.x, z: ta.z }, t0) ?? [];
           } else if (rt.stuckTotal > 3) {
-            // ③ 传送兜底：落到目标点最近可达格 —— 视觉上瞬移一小步，但任务一定完成
-            const spot = nearestFree(grid.blocked, t0.x, t0.z);
+            // ③ 传送兜底：座位类动作（有锚点）直接落到锚点本体 —— 上床/上沙发本来就吸附在
+            //    锚点上，外围点被相邻家具挡死时也能保证「一定躺到床上」；
+            //    其余指令落到目标点最近可达格 —— 视觉上瞬移一小步，但任务一定完成
+            const spot = rt.anchor
+              ? { x: rt.anchor.tx, z: rt.anchor.tz }
+              : nearestFree(grid.blocked, t0.x, t0.z);
             ta.x = spot.x;
             ta.z = spot.z;
             ta.moving = false;
@@ -694,7 +719,9 @@ export function companionStep(
         }
       }
       const remain = Math.hypot(t0.x - ta.x, t0.z - ta.z);
-      if (remain < ARRIVE + 0.06) {
+      // v10.3：座位类目标（锚点在外围点附近，可能被相邻家具挤得略偏）放宽到位圈到 0.42
+      const arriveR = rt.anchor ? ARRIVE + 0.22 : ARRIVE + 0.06;
+      if (remain < arriveR) {
         // —— 到位：按指令分流 ——
         ta.moving = false;
         rt.stuckT = 0;
