@@ -392,3 +392,22 @@ Stage Summary:
 - 双人睡觉叠压根修：先睡者不动（居中），后上床者自动横移到床另一侧（局部 X ±0.45），两种先后顺序、走路中变卦、卡死传送兜底三条路径全部覆盖；牵手躺床自动松手防卡抖 + 不再挡夜里同床调度；夜里 TA 优先去宿主正睡的床
 - 改动文件：scene/companion-rt.ts（886→930 行）、CoupleHome.tsx（7531→7560 行）；未触碰 catalog/types/HomeScene
 - 已 commit + push origin main
+
+---
+Task ID: 13
+Agent: 主控 Agent（Z.ai Code）
+Task: 从 GitHub 拉取 cczzff468/5200 仓库最新代码到全新沙箱并跑通端到端验证
+
+Work Log:
+- git clone（带 token）拉取 cczzff468/5200 main 分支至 /tmp/repo-5200，最新提交 3be7aaf（v12.1 双人睡觉叠压根修）
+- rsync 同步全部内容至 /home/z/my-project（含 .git 历史与 origin remote；排除 .env/node_modules/skills/dev.log/upload/download 挂载点）
+- origin remote 已配置 token 鉴权（github_pat_...），分支 main 与 origin/main 同步，可直接 push
+- bun install 安装 401 个依赖；prisma generate + db push（数据库已同步，复用仓库自带 db/custom.db）
+- 开发服务器（端口 3000）自动启动，GET / 200，instrumentation Edge 警告为仓库既有基线
+- Agent Browser 端到端验证（390x844）：锁屏渲染✓ → 上滑解锁✓ → 主屏三页滑动✓ → 拾光小屋 3D 场景渲染✓ → 联系人创建 AI 角色「小雪」✓ → 角色入住小屋✓ → AI 主动行为（拥抱请求/晚安气泡）✓ → LLM 聊天回复端到端✓（语音气泡正常显示）
+- 控制台零错误；dev.log 显示 CoupleHome 状态正常读写持久化；lint 因项目体量大超时（仓库既有基线 61 处警告，未新增代码）
+
+Stage Summary:
+- 仓库代码已完整拉取并在本地运行，等待用户提出修改/新增功能需求
+- git push 通道已就绪（origin + token），修改完成后可直接推送
+- 关键路径：src/components/apps/CoupleHome.tsx、src/components/ios/、src/app/page.tsx（手机壳入口）
