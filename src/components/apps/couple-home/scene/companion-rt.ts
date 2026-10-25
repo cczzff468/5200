@@ -336,6 +336,26 @@ function nearestClosedDoor(
   return best;
 }
 
+/** v8.3 找身边 0.85m 内的关着的门（卡住自救开门用）：返回门 id 或 null */
+function closedDoorNear(
+  doors: Record<'bed' | 'kt' | 'bath' | 'bal', DoorGate>,
+  from: Pt,
+  radius = 0.85,
+): 'bed' | 'kt' | 'bath' | 'bal' | null {
+  let best: 'bed' | 'kt' | 'bath' | 'bal' | null = null;
+  let bd = Infinity;
+  (['bed', 'kt', 'bath', 'bal'] as const).forEach((k) => {
+    if (doors[k].open) return;
+    const pts = doorPoints(k, doors[k].along);
+    const d = Math.min(Math.hypot(pts.aSide.x - from.x, pts.aSide.z - from.z), Math.hypot(pts.bSide.x - from.x, pts.bSide.z - from.z));
+    if (d < radius && d < bd) {
+      bd = d;
+      best = k;
+    }
+  });
+  return best;
+}
+
 /** 朝某点走一步（含碰撞回推；返回是否已到 stop 距离内） */
 function stepToward(
   c: CharRT,
@@ -570,9 +590,19 @@ export function companionStep(
             rt.stuckZ = ta.z;
             rt.path = findPath(grid, { x: ta.x, z: ta.z }, t0) ?? [];
           } else {
-            onEvent({ ev: 'giveup', kind: cmd.kind, itemId: rt.itemId ?? undefined, memo: cmd.memo });
-            toIdle(rt, partnerPose);
-            return true;
+            // v8.3 卡住自救：身边有关着的门 → 自己开门（回报宿主开哪扇），门开后重算路径接着走
+            const gate = closedDoorNear(doors, { x: ta.x, z: ta.z });
+            if (gate) {
+              onEvent({ ev: 'arrive', kind: 'door', itemId: gate, memo: 'auto-open' });
+              rt.repathed = false; // 门开了允许再重算一次路径
+              rt.stuckT = 0;
+              rt.stuckX = ta.x;
+              rt.stuckZ = ta.z;
+            } else {
+              onEvent({ ev: 'giveup', kind: cmd.kind, itemId: rt.itemId ?? undefined, memo: cmd.memo });
+              toIdle(rt, partnerPose);
+              return true;
+            }
           }
         }
       }

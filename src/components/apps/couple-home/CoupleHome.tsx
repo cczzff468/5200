@@ -1404,7 +1404,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
           }
           companionStateRef.current = 'near';
         } else if (e.kind === 'door') {
-          // 指令「开门」：小人走到门前 → 宿主把那扇门打开（e.itemId = bed/kt/bath/bal）
+          // 指令「开门」或走路被关着的门挡住（memo=auto-open 自救开门）→ 宿主把那扇门打开
           const did = e.itemId;
           if (did === 'bed') setDoorOpen(true);
           else if (did === 'kt') setKitchenDoorOpen(true);
@@ -1412,10 +1412,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
           else if (did === 'bal') setBalconyDoorOpen(true);
           if (did) {
             sfx.door();
-            toast('门开啦～');
-            saveSoon();
+            if (e.memo === 'auto-open') {
+              toast(`${companion?.name ?? 'TA'}把门推开，自己走进去了～`);
+            } else {
+              toast('门开啦～');
+              saveSoon();
+            }
           }
-          companionStateRef.current = 'near';
+          // 自动开门发生在走路途中：不改变状态镜像（还是 walking）
+          if (e.memo !== 'auto-open') companionStateRef.current = 'near';
         } else if (e.kind === 'music') {
           // 指令「放歌」：走到音箱/唱片机前 → 打开它（音符飘出），状态镜像为「唱歌」
           companionStateRef.current = 'singing';
@@ -1980,7 +1985,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
       if (request || partnerMenuOpen || chatBusy) return;
       if (Date.now() < requestCooldownRef.current) return;
       const s = companionStateRef.current;
-      if (s === 'hug' || s === 'hold' || s === 'walking') return;
+      // v8.3 修正：只有 TA 真的空闲（站着/刚走到身边）才会撒娇；弹琴/做饭/吃饭/睡觉/走路中不打扰
+      if (s !== 'idle' && s !== 'near') return;
       if (petCareRef.current || carryPetRef.current) return;
       if (Math.random() < 0.45) {
         requestCooldownRef.current = Date.now() + 5 * 60_000;
