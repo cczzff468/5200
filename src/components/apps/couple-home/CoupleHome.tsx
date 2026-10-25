@@ -1949,20 +1949,22 @@ export default function CoupleHome({ close }: { close: () => void }) {
     const kind = request.kind;
     setRequest(null);
     requestCooldownRef.current = Date.now() + 8 * 60_000;
-    if (poseRef.current.pose !== 'stand' || actRef.current || carryPetRef.current) {
-      // 现在没空：按拒绝记（TA 会小失落）
-      if (kind === 'hug') {
-        cabinEventMemory(companion.id, `${companion.name}想求个抱抱，但${ownerNameRef.current || '主人'}当时正忙着，没抱成。`, 'cabin-hug-reject', { dedupeSeconds: 600 });
-        bubbleRef.current.push({ who: 'ta', text: '那你先忙…我等会儿再来求抱抱。', hold: 5 });
-      } else {
-        cabinEventMemory(companion.id, `${companion.name}想牵${ownerNameRef.current || '主人'}的手，但${ownerNameRef.current || '主人'}正忙着。`, 'cabin-hold-reject', { dedupeSeconds: 600 });
-        bubbleRef.current.push({ who: 'ta', text: '好吧…那你先忙～', hold: 5 });
+    if (kind === 'hug') {
+      // v9 拥抱不再因「坐着/躺着/在做事」而静默拒绝：TA 会走过来抱（坐着也抱得到）；只有抱着宠物时需要先放下
+      if (carryPetRef.current) {
+        toast('怀里还抱着小家伙呢，先放它下来再抱抱吧～');
+        return;
       }
+      issueCompanionCmd({ kind: 'hug', memo: 'ai-hug-yes' });
       return;
     }
-    if (kind === 'hug') issueCompanionCmd({ kind: 'hug', memo: 'ai-hug-yes' });
-    else issueCompanionCmd({ kind: 'holdhand', memo: 'ai-hold-yes' });
-  }, [request, companion, issueCompanionCmd]);
+    // 牵手需要一起走路：站不起来就温和提示（不记拒绝）
+    if (poseRef.current.pose !== 'stand' || actRef.current || carryPetRef.current) {
+      toast('先站起来，才好牵手去散步呀～');
+      return;
+    }
+    issueCompanionCmd({ kind: 'holdhand', memo: 'ai-hold-yes' });
+  }, [request, companion, issueCompanionCmd, toast]);
 
   /** 拒绝 TA 的请求 → 记忆「有点失落」 + 头顶小情绪 */
   const rejectRequest = useCallback(() => {
@@ -4316,6 +4318,29 @@ export default function CoupleHome({ close }: { close: () => void }) {
           <div className="pointer-events-auto absolute inset-0 z-10" onClick={() => setMoreOpen(false)} aria-hidden="true" />
         )}
 
+        {/* v9 信息图标（💬）移到右下角：点击弹出/收起下方聊天输入框（对话进头顶气泡 + TTS） */}
+        {mode === 'live' && companion && !pickerOpen && (
+          <button
+            onClick={() => {
+              setChatOpen((v) => !v);
+              if (chatOpen && micOn) toggleMic();
+            }}
+            aria-label="和TA聊天"
+            aria-expanded={chatOpen}
+            title="和TA聊天"
+            className={`pointer-events-auto absolute bottom-[74px] right-4 z-30 flex h-12 w-12 items-center justify-center rounded-full shadow-lg backdrop-blur transition active:scale-95 ${
+              chatOpen ? 'bg-[#3a3a3e]/85 text-white' : 'bg-white/80 text-[#5a5a5e]'
+            }`}
+          >
+            <MessageCircle className="h-5 w-5" />
+            {chatOpen && (
+              <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-[#e46a6a] text-[9px] font-bold text-white ring-2 ring-white/80">
+                <X className="h-2.5 w-2.5" />
+              </span>
+            )}
+          </button>
+        )}
+
         {/* ===== 宠物状态面板（v7.0：右上角头像唤出 · 毛玻璃胶囊风） ===== */}
         <AnimatePresence>
           {petPanel && mode === 'live' && (
@@ -4368,7 +4393,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                         </span>
                       </div>
                       <div className="text-[10.5px] leading-tight text-[#9a938a]">
-                        陪伴第 {petGap.days + 1} 天 · 点下面的按钮照顾它吧
+                        陪伴第 {petGap.days + 1} 天
                       </div>
                     </div>
                     {/* v8.3 装扮（衣柜宠物栏） */}
@@ -4557,21 +4582,6 @@ export default function CoupleHome({ close }: { close: () => void }) {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* v8.0 信息图标（💬）：点击弹出/收起下方聊天输入框（对话进头顶气泡 + TTS） */}
-            <button
-              onClick={() => {
-                setChatOpen((v) => !v);
-                if (chatOpen && micOn) toggleMic();
-              }}
-              aria-label="和TA聊天"
-              aria-expanded={chatOpen}
-              title="和TA聊天"
-              className={`pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full shadow-md backdrop-blur transition active:scale-95 ${
-                chatOpen ? 'bg-[#3a3a3e]/80 text-white' : 'bg-white/75 text-[#5a5a5e]'
-              }`}
-            >
-              <MessageCircle className="h-[18px] w-[18px]" />
-            </button>
             {/* 宠物头像（v7.2 移到装修小家左侧 · 内联 SVG 猫头 · 白玻璃圆钮）：点击唤出/收起状态面板；状态偏低时亮提醒小红点 */}
             <button
               onClick={() => {

@@ -11,7 +11,7 @@
  *   holdhand 牵手（走过来 → 牵手姿势 → 0.5m 距离跟随移动，防穿模）。
  *
  * 移动全部走 A* 网格寻路（pathfind.findPath）+ 每帧 collideAndClamp（宿主注入），
- * 卡死自动重算路径一次、再失败放弃并回报 giveup —— 绝不穿墙、绝不卡进家具。
+ * 卡死自救阶梯：开门 → 重算路径×2 → 传送兜底 —— 绝不穿墙、绝不卡进家具、绝不「找不到路就不做」。
  *
  * 纯逻辑模块：不 import three / R3F，由 HomeScene.GameLoop 每帧调用 companionStep()。
  * 坐/躺/弹奏/做饭等为粘性姿势（默认 25~55s 自起；cmd.dur 可指定，0 = 保持到被叫起），
@@ -23,6 +23,7 @@ import type { CharPose, CharRT, FurnitureItem, RoomId } from '../types';
 import {
   doorPoints,
   findPath,
+  nearestFree,
   planRoute,
   randPointInRoomFree,
   roomOf,
@@ -99,11 +100,15 @@ export interface CompanionRT {
   /** 当前动作的家具锚点 / 家具 id */
   anchor: Anchor | null;
   itemId: string | null;
-  /** 卡死检测（0.9s 位移 < 0.05 → 重算一次路径，再卡 → giveup） */
+  /** 卡死检测（0.9s 位移 < 0.05 → 开门自救/重算路径；长时间卡死 → 传送兜底） */
   stuckT: number;
   stuckX: number;
   stuckZ: number;
   repathed: boolean;
+  /** v9 自救阶梯：已重算路径次数（最多 2 次） */
+  repaths: number;
+  /** v9 本段连续卡死总时长（秒；> 3s 触发传送兜底，绝不「找不到路就不做」） */
+  stuckTotal: number;
   /** 计时器（hug 时长 / hold 重算节流 / 坐姿保持） */
   actT: number;
   /** sit 粘性姿势到点（clock 秒；到点自行起身；Infinity = 保持到被叫起） */
@@ -128,6 +133,8 @@ export function createCompanionRT(): CompanionRT {
     stuckX: 0,
     stuckZ: 0,
     repathed: false,
+    repaths: 0,
+    stuckTotal: 0,
     actT: 0,
     sitUntil: 0,
     holdAt: 0,
@@ -415,6 +422,8 @@ function toIdle(rt: CompanionRT, partnerPose: PoseSlot): void {
   rt.itemId = null;
   rt.stuckT = 0;
   rt.repathed = false;
+  rt.repaths = 0;
+  rt.stuckTotal = 0;
   rt.sitUntil = 0;
   partnerPose.pose = 'stand';
   partnerPose.y = 0;
@@ -477,6 +486,8 @@ export function companionStep(
     rt.actT = 0;
     rt.stuckT = 0;
     rt.repathed = false;
+    rt.repaths = 0;
+    rt.stuckTotal = 0;
     rt.sitUntil = 0;
     rt.anchor = null;
     rt.itemId = null;
@@ -574,35 +585,45 @@ export function companionStep(
       }
       const done = followPath(ta, rt.path, dt, collide);
       if (!done) stepToward(ta, t0.x, t0.z, ARRIVE, dt, WALK_SPEED, collide);
-      // —— 卡死检测：0.9s 位移 < 0.05 → 重算一次路径；再卡 → 放弃 ——
+      // —— 卡死检测：0.9s 位移 < 0.05 → 自救阶梯（开门 → 重算×2 → 传送兜底，绝不放弃任务） ——
       const moved = Math.hypot(ta.x - rt.stuckX, ta.z - rt.stuckZ);
       if (moved > 0.05) {
         rt.stuckT = 0;
+        rt.stuckTotal = 0;
         rt.stuckX = ta.x;
         rt.stuckZ = ta.z;
       } else {
         rt.stuckT += dt;
+        rt.stuckTotal += dt;
         if (rt.stuckT > 0.9) {
-          if (!rt.repathed) {
-            rt.repathed = true;
+          // ① 身边有关着的门 → 自己开门（回报宿主开哪扇），门开后重算路径接着走
+          const gate = closedDoorNear(doors, { x: ta.x, z: ta.z });
+          if (gate) {
+            onEvent({ ev: 'arrive', kind: 'door', itemId: gate, memo: 'auto-open' });
+            rt.repathed = false; // 门开了允许再重算一次路径
+            rt.stuckT = 0;
+            rt.stuckX = ta.x;
+            rt.stuckZ = ta.z;
+          } else if (rt.repaths < 2) {
+            // ② 重算路径（最多 2 次：等门开/等家具状态刷新后常常就通了）
+            rt.repaths += 1;
             rt.stuckT = 0;
             rt.stuckX = ta.x;
             rt.stuckZ = ta.z;
             rt.path = findPath(grid, { x: ta.x, z: ta.z }, t0) ?? [];
-          } else {
-            // v8.3 卡住自救：身边有关着的门 → 自己开门（回报宿主开哪扇），门开后重算路径接着走
-            const gate = closedDoorNear(doors, { x: ta.x, z: ta.z });
-            if (gate) {
-              onEvent({ ev: 'arrive', kind: 'door', itemId: gate, memo: 'auto-open' });
-              rt.repathed = false; // 门开了允许再重算一次路径
-              rt.stuckT = 0;
-              rt.stuckX = ta.x;
-              rt.stuckZ = ta.z;
-            } else {
-              onEvent({ ev: 'giveup', kind: cmd.kind, itemId: rt.itemId ?? undefined, memo: cmd.memo });
-              toIdle(rt, partnerPose);
-              return true;
-            }
+          } else if (rt.stuckTotal > 3) {
+            // ③ 传送兜底：落到目标点最近可达格 —— 视觉上瞬移一小步，但任务一定完成
+            const spot = nearestFree(grid.blocked, t0.x, t0.z);
+            ta.x = spot.x;
+            ta.z = spot.z;
+            ta.moving = false;
+            rt.path = [];
+            rt.stuckT = 0;
+            rt.stuckTotal = 0;
+            rt.repaths = 0;
+            rt.repathed = false;
+            rt.stuckX = ta.x;
+            rt.stuckZ = ta.z;
           }
         }
       }
@@ -611,6 +632,9 @@ export function companionStep(
         // —— 到位：按指令分流 ——
         ta.moving = false;
         rt.stuckT = 0;
+        rt.stuckTotal = 0;
+        rt.repaths = 0;
+        rt.repathed = false;
         if (
           cmd.kind === 'sit' ||
           cmd.kind === 'lie' ||
@@ -695,7 +719,11 @@ export function companionStep(
       const dz = me.z - ta.z;
       const d = Math.hypot(dx, dz);
       if (d > HUG_DIST + 0.08) stepToward(ta, me.x, me.z, HUG_DIST, dt, WALK_SPEED * 1.2, collide);
-      else ta.moving = false;
+      else {
+        ta.moving = false;
+        // v9 面对面抱抱：贴身后用户也转身面向 TA（双向对视，不再抱后背）
+        me.heading = lerpAngle(me.heading, Math.atan2(ta.x - me.x, ta.z - me.z), Math.min(1, dt * 5));
+      }
       ta.heading = Math.atan2(dx, dz);
       if (joyMag > 0.3 || rt.actT > HUG_MAX || d > 1.3) {
         partnerPose.pose = 'stand';

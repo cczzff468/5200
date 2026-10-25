@@ -3190,14 +3190,17 @@ function PetBuddy2({
 
 // ---------------- v8.0 3D 头顶对话气泡（用户/AI 消息，投影为 billboard sprite） ----------------
 
-/** 气泡纹理缓存（同一文本复用；上限 60 条，超出丢最旧） */
-const bubbleTexCache = new Map<string, THREE.CanvasTexture>();
+/** 气泡纹理缓存（同一文本复用；上限 60 条，超出丢最旧）；v9 记录逻辑尺寸供 sprite 缩放用 */
+const bubbleTexCache = new Map<string, { tex: THREE.CanvasTexture; w: number; h: number }>();
+
+/** v9 超采样倍率：canvas 按 3x 分辨率绘制，高分屏（dpr 2~3）上文字不再发虚 */
+const BUBBLE_SS = 3;
 
 /**
  * 文字气泡贴图：白底圆角 + 樱粉描边 + 底部小尾巴 + 自动换行（15 字/行，最多 5 行，超出省略号）。
- * 纯 canvas 绘制不依赖 DOM；宽度按字符宽度估算（CJK 全宽 / 半角半宽）。
+ * 纯 canvas 绘制不依赖 DOM；宽度按字符宽度估算（CJK 全宽 / 半角半宽）；3x 超采样保证高清。
  */
-function makeBubbleTexture(text: string): THREE.CanvasTexture {
+function makeBubbleTexture(text: string): { tex: THREE.CanvasTexture; w: number; h: number } {
   const hit = bubbleTexCache.get(text);
   if (hit) return hit;
   const raw = text.replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -3212,10 +3215,12 @@ function makeBubbleTexture(text: string): THREE.CanvasTexture {
   const lineW = lines.map((l) => [...l].reduce((s, ch) => s + charW(ch), 0));
   const W = Math.min(560, Math.max(170, Math.max(...lineW) + 52));
   const H = lines.length * 40 + 40 + 18; // 行高×行数 + 上下内边距 + 尾巴
+  const SS = BUBBLE_SS;
   const cv = document.createElement('canvas');
-  cv.width = Math.ceil(W);
-  cv.height = H;
+  cv.width = Math.ceil(W * SS);
+  cv.height = Math.ceil(H * SS);
   const ctx = cv.getContext('2d')!;
+  ctx.scale(SS, SS); // 之后的绘制全部用逻辑坐标，输出即 3x 高清
   const r = 18;
   // 气泡主体（留出底部尾巴空间）
   const bh = H - 18;
@@ -3224,15 +3229,15 @@ function makeBubbleTexture(text: string): THREE.CanvasTexture {
   ctx.lineWidth = 4;
   ctx.beginPath();
   ctx.moveTo(r + 3, 3);
-  ctx.arcTo(cv.width - 3, 3, cv.width - 3, bh - 3, r);
-  ctx.arcTo(cv.width - 3, bh - 3, 3, bh - 3, r);
+  ctx.arcTo(W - 3, 3, W - 3, bh - 3, r);
+  ctx.arcTo(W - 3, bh - 3, 3, bh - 3, r);
   ctx.arcTo(3, bh - 3, 3, 3, r);
-  ctx.arcTo(3, 3, cv.width - 3, 3, r);
+  ctx.arcTo(3, 3, W - 3, 3, r);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
   // 尾巴（指向下方小人）
-  const tx = Math.min(cv.width - 40, Math.max(40, cv.width / 2));
+  const tx = Math.min(W - 40, Math.max(40, W / 2));
   ctx.fillStyle = 'rgba(255,255,255,0.96)';
   ctx.strokeStyle = 'rgba(240,180,196,0.95)';
   ctx.beginPath();
@@ -3254,19 +3259,21 @@ function makeBubbleTexture(text: string): THREE.CanvasTexture {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   lines.forEach((l, i) => {
-    ctx.fillText(l, cv.width / 2, 24 + i * 40 + 20);
+    ctx.fillText(l, W / 2, 24 + i * 40 + 20);
   });
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
-  bubbleTexCache.set(text, tex);
+  tex.anisotropy = 4;
+  const rec = { tex, w: W, h: H };
+  bubbleTexCache.set(text, rec);
   if (bubbleTexCache.size > 60) {
     const oldest = bubbleTexCache.keys().next().value;
     if (oldest !== undefined) {
-      bubbleTexCache.get(oldest)?.dispose();
+      bubbleTexCache.get(oldest)?.tex.dispose();
       bubbleTexCache.delete(oldest);
     }
   }
-  return tex;
+  return rec;
 }
 
 /**
@@ -3286,8 +3293,8 @@ function HeadBubbles({
   const spMe = useRef<THREE.Sprite>(null);
   const spTa = useRef<THREE.Sprite>(null);
   const slots = useRef({
-    me: { tex: null as THREE.CanvasTexture | null, own: false, until: 0, total: 1 },
-    ta: { tex: null as THREE.CanvasTexture | null, own: false, until: 0, total: 1 },
+    me: { rec: null as { tex: THREE.CanvasTexture; w: number; h: number } | null, own: false, until: 0, total: 1 },
+    ta: { rec: null as { tex: THREE.CanvasTexture; w: number; h: number } | null, own: false, until: 0, total: 1 },
   });
   useFrame((st) => {
     const now = st.clock.elapsedTime;
@@ -3297,18 +3304,18 @@ function HeadBubbles({
       for (let i = 0; i < q.length; i++) {
         const c = q[i];
         const slot = slots.current[c.who];
-        if (slot.tex && now < slot.until) continue; // 该小人正在展示：排队等
+        if (slot.rec && now < slot.until) continue; // 该小人正在展示：排队等
         q.splice(i, 1);
         i--;
-        if (slot.own) slot.tex?.dispose();
-        slot.tex = makeBubbleTexture(c.text);
+        if (slot.own) slot.rec?.tex.dispose();
+        slot.rec = makeBubbleTexture(c.text);
         slot.own = true;
         slot.total = c.hold ?? Math.min(12, 3.2 + c.text.replace(/\s/g, '').length * 0.16);
         slot.until = now + slot.total;
         const sp = c.who === 'me' ? spMe.current : spTa.current;
         if (sp) {
           const m = sp.material as THREE.SpriteMaterial;
-          m.map = slot.tex;
+          m.map = slot.rec.tex;
           m.needsUpdate = true;
         }
         break; // 每帧每小人只接一条
@@ -3320,7 +3327,7 @@ function HeadBubbles({
       const slot = slots.current[who];
       if (!sp) continue;
       const remain = slot.until - now;
-      const on = !!slot.tex && remain > 0;
+      const on = !!slot.rec && remain > 0;
       sp.visible = on;
       if (!on) continue;
       const pos = who === 'me' ? meRT : taRT;
@@ -3329,10 +3336,11 @@ function HeadBubbles({
       const fadeOut = Math.min(1, remain / 0.5);
       const m = sp.material as THREE.SpriteMaterial;
       m.opacity = Math.min(fadeIn, fadeOut);
-      sp.position.set(pos.x, 1.38 + Math.sin(now * 2.1) * 0.014, pos.z + 0.04);
-      const img = slot.tex!.image as HTMLCanvasElement;
-      const wS = Math.min(1.7, img.width * 0.003);
-      sp.scale.set(wS, wS * (img.height / img.width), 1);
+      sp.position.set(pos.x, 1.42 + Math.sin(now * 2.1) * 0.014, pos.z + 0.04);
+      const rec = slot.rec!;
+      // v9：用逻辑尺寸算缩放（纹理本身是 3x 超采样，直接用 image.width 会放大 3 倍）
+      const wS = Math.min(1.95, rec.w * 0.0034);
+      sp.scale.set(wS, wS * (rec.h / rec.w), 1);
     }
   });
   return (

@@ -190,3 +190,22 @@ Stage Summary:
 - 优化项 A-D 全落地：小屋聊天退出重进不丢、牵手双人电影镜头、夜里睡觉冒梦话（可回应）、「一起看电视/吃饭/弹琴」双向同步
 - 衣柜弹窗毛玻璃胶囊美化 + 新增宠物栏（换毛色/项圈/围巾/蝴蝶结）；宠物系统：玩具球扔捡、第二只宠物（狗/兔）、小剧场（蝶/萤火虫/雨躲）、成长等级解锁把戏
 - 关键文件：companion-rt.ts、companion-brain.ts、CoupleHome.tsx、scene/HomeScene.tsx、Wardrobe.tsx、types.ts、sfx.ts、scene/pathfind.ts（doorPoints 复用）
+
+---
+Task ID: 9-b
+Agent: frontend-styling-expert
+Task: 衣柜宠物毛色调色盘 + 物种感知预览
+
+Work Log:
+- [调色盘] Wardrobe.tsx 新增 PALETTE_COLORS 30 色板（樱红/桃红/粉红/樱粉/玫紫/橘橙/杏橘/鹅黄/奶黄/嫩绿/薄荷/青碧/天蓝/雾蓝/宝蓝/淡紫/藕紫/奶油/奶白/雪白/杏色/淡粉/淡绿/淡蓝/米白/米棕/浅棕/棕褐/深棕/炭黑，含 4 预设同款 hex 便于狗兔取用同色调）
+- [调色盘] 宠物栏毛色区改为「猫：4 预设快速卡（奶油/橘/烟灰/奶牛，MiniCatIcon 不变）+ 全色系调色盘；狗/兔：只显示调色盘」；调色盘 flex-wrap 网格 30 枚 h-6 w-6 圆点（复用 PetSwatches 色板风格：选中 ring-2 ring-[#e8b06a] ring-offset-1 + Check，未选 ring-1 ring-black/10；浅色自动深色 Check——isLightHex 亮度>205 判定），点击 sfx.tap() + onPetChange({ coat: '#hex' })，aria-label「毛色 ×色名」
+- [hex 毛色渲染] 新增 coatIconColors()：预设名查 PET_COAT_COLORS；任意 #rrggbb 直接当体色 + 脸部 lightenHex(0.16) 提亮；非法值回落奶油 —— CatHead 改走该函数（修复 Record<PetCoat> 索引对 hex 返回 undefined 的运行时隐患）；新增 lightenHex/shadeHex/isLightHex/HEX_RE 工具
+- [物种感知] 新增可选 prop petKind?: 'cat'|'dog'|'rabbit'（export type PetKind 从 Wardrobe 导出供父组件接线；缺省 'cat'）；PetHeadPreview 增 kind 参数：cat=CatHead 沿用、dog=新 DogHead（垂耳 shadeHex 深一档 + 吻部 + 深色鼻头）、rabbit=新 RabbitHead（长耳 + 耳内粉 + 圆脸），48×48 坐标系与豆豆眼/w 嘴/腮红风格与猫头一致；项圈/铃铛/围巾/蝴蝶结三物种共用
+- [物种感知] 摘要行随物种：cat+预设=奶油猫/橘猫/灰猫/奶牛猫；任意 #hex=调色盘色名（不在盘内则「自定义色」）+ 小猫/小狗/小兔子；狗兔套预设名=基础名+物种（PET_COAT_BASE 表，如「奶油小狗」）；标题 summary 与栏内摘要行同步生效
+- [布局] 预设卡 grid 包进 kind === 'cat' 条件；「全色系调色盘」小标题仅猫显示（狗兔为「毛色」标题直连色板）；项圈/围巾/蝴蝶结栏与毛玻璃胶囊风格零改动
+- [验证] bunx tsc --noEmit 过滤 next.config 后 0 输出（Wardrobe 相关 0 错误）；bunx eslint Wardrobe.tsx 0 问题；仅改 Wardrobe.tsx（1053→1255 行），未动 types.ts 及其他任何文件；未跑 dev server、未做 git 操作
+
+Stage Summary:
+- 宠物毛色从 4 预设卡升级为「预设 4 卡（仅猫显示）+ 30 色全色系调色盘（猫狗兔通用）」，任意 #hex 毛色可正确渲染到头像（体色+脸部自动提亮）与搭配摘要
+- 新增 petKind 物种感知：预览 SVG（狗=垂耳+吻部 / 兔=长耳+圆脸，风格与猫头统一）与摘要行随物种显示
+- 关键文件：src/components/apps/couple-home/Wardrobe.tsx（唯一改动）；父组件后续传 petKind 即可接线（PetKind 类型已从 Wardrobe.tsx 导出）

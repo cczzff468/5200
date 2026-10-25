@@ -7,7 +7,7 @@
  * 上半屏透出 3D 场景 → 小人实时试穿；下半屏顶部分角色切换（女生/男生/宠物），分类挑款：
  *   女生：发型（双马尾/高马尾/短发/长直发/大波浪） · 连衣裙 ×4 · 上衣 ×4 · 下装 · 鞋 ×4
  *   男生：发型（顺滑/蓬松/中分/刺猬） · 上衣 ×4 · 裤子 ×4 · 鞋 ×4
- *   宠物：毛色（奶油/橘子/烟灰/奶牛）+ 项圈颜色 / 小围巾 / 蝴蝶结（v8.3）
+ *   宠物：毛色（预设 4 卡 + 全色系调色盘 30 色 · 物种感知预览）+ 项圈颜色 / 小围巾 / 蝴蝶结（v8.3→v9）
  * 「调色盘」行可给当前分类的服饰自选颜色（tints.*，默认色可一键还原）。
  * 女生选上衣/下装自动切成「分体穿搭」，选连衣裙切回「连衣裙穿搭」。
  */
@@ -68,6 +68,23 @@ const PET_COAT_NAMES: Record<PetCoat, string> = {
   cow: '奶牛猫',
 };
 
+/** 预设毛色基础名（狗/兔套用时拼物种后缀，如「奶油小狗」） */
+const PET_COAT_BASE: Record<string, string> = {
+  cream: '奶油',
+  orange: '橘子',
+  gray: '烟灰',
+  cow: '奶牛',
+};
+
+/** 宠物物种（v9：衣柜预览/摘要随物种显示；毛色预设卡仅猫有） */
+export type PetKind = 'cat' | 'dog' | 'rabbit';
+
+const PET_KIND_NAMES: Record<PetKind, string> = {
+  cat: '小猫',
+  dog: '小狗',
+  rabbit: '小兔子',
+};
+
 /** 配饰色板色 → 摘要色名（未知色回落「彩色」） */
 const PET_COLOR_NAMES: Record<string, string> = {
   '#e46a6a': '樱红',
@@ -83,6 +100,40 @@ const PET_COLOR_NAMES: Record<string, string> = {
 
 /** 项圈/围巾/蝴蝶结共用色板（默认樱红 + 服装色板前 8 色） */
 const PET_SWATCHES: string[] = ['#e46a6a', ...CLOTH_COLORS.slice(0, 8)];
+
+/** 全色系调色盘（v9：30 色毛色板 —— 红橙黄绿青蓝紫粉 + 棕黑白灰，色色鲜明可辨） */
+const PALETTE_COLORS: { c: string; n: string }[] = [
+  { c: '#e46a6a', n: '樱红' },
+  { c: '#e56d92', n: '桃红' },
+  { c: '#f29bb4', n: '粉红' },
+  { c: '#f4a7bc', n: '樱粉' },
+  { c: '#d98bb0', n: '玫紫' },
+  { c: '#f08c5a', n: '橘橙' },
+  { c: '#f0b878', n: '杏橘' },
+  { c: '#f4c95d', n: '鹅黄' },
+  { c: '#f6dfb2', n: '奶黄' },
+  { c: '#a8d47f', n: '嫩绿' },
+  { c: '#6fbf92', n: '薄荷' },
+  { c: '#5bb8ad', n: '青碧' },
+  { c: '#7fc8e8', n: '天蓝' },
+  { c: '#8ba7d6', n: '雾蓝' },
+  { c: '#6a8fd8', n: '宝蓝' },
+  { c: '#a48bc2', n: '淡紫' },
+  { c: '#e8d5f2', n: '藕紫' },
+  { c: '#fbf3e6', n: '奶油' },
+  { c: '#f6f5f2', n: '奶白' },
+  { c: '#ffffff', n: '雪白' },
+  { c: '#fbd9c2', n: '杏色' },
+  { c: '#ffe1ec', n: '淡粉' },
+  { c: '#e2f0d9', n: '淡绿' },
+  { c: '#d6e6f2', n: '淡蓝' },
+  { c: '#e8e2d8', n: '米白' },
+  { c: '#c9b8a0', n: '米棕' },
+  { c: '#a8927c', n: '浅棕' },
+  { c: '#8a7060', n: '棕褐' },
+  { c: '#6b5a4e', n: '深棕' },
+  { c: '#4a4a4e', n: '炭黑' },
+];
 
 /** HSL → #rrggbb（彩虹色相条选色用） */
 function hslToHex(h: number, s: number, l: number): string {
@@ -115,6 +166,43 @@ function hexToHue(hex: string): number {
   else if (mx === g) h = ((b - r) / d + 2) * 60;
   else h = ((r - g) / d + 4) * 60;
   return h;
+}
+
+/** #rrggbb 提亮（v9：调色盘任意色当毛色时，脸部用亮一档同色） */
+function lightenHex(hex: string, amt = 0.16): string {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (v: number) => Math.round(v + (255 - v) * amt);
+  const r = ch((n >> 16) & 255);
+  const g = ch((n >> 8) & 255);
+  const b = ch(n & 255);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+/** #rrggbb 加深（v9：狗垂耳用同系深一档） */
+function shadeHex(hex: string, amt = 0.16): string {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (v: number) => Math.max(0, Math.round(v * (1 - amt)));
+  const r = ch((n >> 16) & 255);
+  const g = ch((n >> 8) & 255);
+  const b = ch(n & 255);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+/** 亮色判定（v9：白/奶油等浅色板选中时 Check 用深色才看得清） */
+function isLightHex(hex: string): boolean {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  return 0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) > 205;
+}
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+/** 毛色 → 头像用色：预设查表；任意 #rrggbb 直接当体色（脸部提亮一档）；未知预设回落奶油 */
+function coatIconColors(coat: PetCoat): { body: string; face: string } {
+  if (coat === 'cream' || coat === 'orange' || coat === 'gray' || coat === 'cow') return PET_COAT_COLORS[coat];
+  if (HEX_RE.test(coat)) return { body: coat, face: lightenHex(coat) };
+  return PET_COAT_COLORS.cream;
 }
 
 const TABS_GIRL: { key: WardTab; label: string }[] = [
@@ -422,7 +510,7 @@ function BoyShoeIcon({ i }: { i: number }) {
 
 /** 猫头共用部件（48×48 坐标系：三角耳 + 圆脸 + 奶牛斑块 + 豆豆眼 + 粉鼻 w 嘴 + 腮红） */
 function CatHead({ coat }: { coat: PetCoat }) {
-  const c = PET_COAT_COLORS[coat];
+  const c = coatIconColors(coat);
   return (
     <g>
       {/* 三角耳 + 耳内粉 */}
@@ -464,7 +552,70 @@ function CatHead({ coat }: { coat: PetCoat }) {
   );
 }
 
-/** 迷你猫脸图标（毛色卡用，跟随毛色） */
+/** 狗头部件（v9：垂耳 + 吻部，坐标系/五官风格与 CatHead 一致） */
+function DogHead({ coat }: { coat: PetCoat }) {
+  const c = coatIconColors(coat);
+  const ear = shadeHex(c.body);
+  return (
+    <g>
+      {/* 圆脸 */}
+      <circle cx="24" cy="27" r="12.2" fill={c.face} />
+      {/* 垂耳（两侧下垂，盖住脸颊边缘） */}
+      <ellipse cx="12.6" cy="21.5" rx="4.7" ry="9.6" transform="rotate(10 12.6 21.5)" fill={ear} />
+      <ellipse cx="35.4" cy="21.5" rx="4.7" ry="9.6" transform="rotate(-10 35.4 21.5)" fill={ear} />
+      {/* 吻部 */}
+      <ellipse cx="24" cy="32.2" rx="5.7" ry="4.2" fill={lightenHex(c.face, 0.45)} />
+      {/* 豆豆眼 */}
+      <circle cx="19.2" cy="25.8" r="1.6" fill="#4a3a30" />
+      <circle cx="28.8" cy="25.8" r="1.6" fill="#4a3a30" />
+      {/* 深色鼻头 + w 嘴 */}
+      <path d="M22.5 29.5 h3 l-1.5 2 z" fill="#5a4440" />
+      <path
+        d="M24 31.7 v1 M24 32.7 q-1.2 1.2 -2.3 0.3 M24 32.7 q1.2 1.2 2.3 0.3"
+        stroke="#8a6a5e"
+        strokeWidth="1.1"
+        fill="none"
+        strokeLinecap="round"
+      />
+      {/* 腮红 */}
+      <circle cx="15.8" cy="30" r="1.8" fill="#f7a8b4" opacity="0.55" />
+      <circle cx="32.2" cy="30" r="1.8" fill="#f7a8b4" opacity="0.55" />
+    </g>
+  );
+}
+
+/** 兔头部件（v9：长耳 + 圆脸，坐标系/五官风格与 CatHead 一致） */
+function RabbitHead({ coat }: { coat: PetCoat }) {
+  const c = coatIconColors(coat);
+  return (
+    <g>
+      {/* 长耳（耳根藏在脸后）+ 耳内粉 */}
+      <ellipse cx="17.2" cy="10.8" rx="3.5" ry="9.8" transform="rotate(-9 17.2 10.8)" fill={c.body} />
+      <ellipse cx="30.8" cy="10.8" rx="3.5" ry="9.8" transform="rotate(9 30.8 10.8)" fill={c.body} />
+      <ellipse cx="17.2" cy="11.8" rx="1.7" ry="6.2" transform="rotate(-9 17.2 10.8)" fill="#f6c2ca" />
+      <ellipse cx="30.8" cy="11.8" rx="1.7" ry="6.2" transform="rotate(9 30.8 10.8)" fill="#f6c2ca" />
+      {/* 圆脸 */}
+      <circle cx="24" cy="27.5" r="12.3" fill={c.face} />
+      {/* 豆豆眼 */}
+      <circle cx="19.2" cy="26.4" r="1.6" fill="#4a3a30" />
+      <circle cx="28.8" cy="26.4" r="1.6" fill="#4a3a30" />
+      {/* 粉鼻 + w 嘴 */}
+      <path d="M22.9 30 h2.2 l-1.1 1.5 z" fill="#e8918f" />
+      <path
+        d="M24 31.7 q-1 1.6 -2.3 0.9 M24 31.7 q1 1.6 2.3 0.9"
+        stroke="#8a6a5e"
+        strokeWidth="1.1"
+        fill="none"
+        strokeLinecap="round"
+      />
+      {/* 腮红 */}
+      <circle cx="16" cy="30.2" r="1.8" fill="#f7a8b4" opacity="0.55" />
+      <circle cx="32" cy="30.2" r="1.8" fill="#f7a8b4" opacity="0.55" />
+    </g>
+  );
+}
+
+/** 迷你猫脸图标（毛色预设卡用，跟随毛色） */
 function MiniCatIcon({ coat }: { coat: PetCoat }) {
   return (
     <svg viewBox="0 0 48 48" className="h-full w-full">
@@ -473,12 +624,14 @@ function MiniCatIcon({ coat }: { coat: PetCoat }) {
   );
 }
 
-/** 宠物栏预览：猫头 + 项圈铃铛，围巾/蝴蝶结按装扮显示 */
-function PetHeadPreview({ coat, wear }: { coat: PetCoat; wear: PetWear }) {
+/** 宠物栏预览：随物种显示头型（猫/狗/兔）+ 项圈铃铛，围巾/蝴蝶结按装扮显示 */
+function PetHeadPreview({ coat, wear, kind = 'cat' }: { coat: PetCoat; wear: PetWear; kind?: PetKind }) {
   const collar = wear.collar ?? '#e46a6a';
   return (
     <svg viewBox="0 0 48 52" className="h-full w-full">
-      <CatHead coat={coat} />
+      {kind === 'cat' && <CatHead coat={coat} />}
+      {kind === 'dog' && <DogHead coat={coat} />}
+      {kind === 'rabbit' && <RabbitHead coat={coat} />}
       {/* 小围巾（系在下巴下方） */}
       {wear.scarf && <path d="M17.8 40.6 L30.2 40.6 L27.6 49.4 q-3.6 1.5 -7.2 0 z" fill={wear.scarf} />}
       {/* 项圈 + 金铃铛 */}
@@ -540,8 +693,10 @@ export interface WardrobeProps {
   onClose: () => void;
   /** 宠物装扮（v8.3：项圈/围巾/蝴蝶结；项圈缺省 = 樱红 #e46a6a） */
   petWear?: PetWear;
-  /** 宠物毛色（缺省 = 奶油猫） */
+  /** 宠物毛色（缺省 = 奶油猫；v9 支持任意 #rrggbb） */
   petCoat?: PetCoat;
+  /** 宠物物种（v9：预览/摘要随物种显示，毛色预设卡仅猫显示；缺省 = 猫） */
+  petKind?: PetKind;
   /** 宠物换装回调（patch 只带变更的字段） */
   onPetChange?: (patch: { coat?: PetCoat; wear?: PetWear }) => void;
   /** 首次打开默认选中的角色栏 */
@@ -557,6 +712,7 @@ export default function Wardrobe({
   onClose,
   petWear,
   petCoat,
+  petKind,
   onPetChange,
   initialChar,
 }: WardrobeProps) {
@@ -637,11 +793,23 @@ export default function Wardrobe({
     }
   };
 
-  // —— 宠物装扮（v8.3：缺省 = 奶油猫 + 樱红项圈；scarf/bow 为 null = 不戴） ——
+  // —— 宠物装扮（v8.3：缺省 = 奶油猫 + 樱红项圈；scarf/bow 为 null = 不戴；v9 物种感知） ——
   const pw: PetWear = petWear ?? {};
   const curCoat: PetCoat = petCoat ?? 'cream';
   const curCollar = pw.collar ?? '#e46a6a';
-  const petParts = [PET_COAT_NAMES[curCoat], `${PET_COLOR_NAMES[curCollar] ?? '彩色'}项圈`];
+  const kind: PetKind = petKind ?? 'cat';
+  const kindName = PET_KIND_NAMES[kind];
+  // 毛色摘要：猫用预设名（奶油猫…）；任意 #hex 用调色盘色名/「自定义色」+ 物种；狗兔用基础名+物种
+  const coatIsHex = HEX_RE.test(curCoat);
+  const coatLabel =
+    kind === 'cat' && !coatIsHex && PET_COAT_NAMES[curCoat]
+      ? PET_COAT_NAMES[curCoat]
+      : coatIsHex
+        ? `${PALETTE_COLORS.find((p) => p.c.toLowerCase() === curCoat.toLowerCase())?.n ?? '自定义色'}${kindName}`
+        : PET_COAT_BASE[curCoat]
+          ? `${PET_COAT_BASE[curCoat]}${kindName}`
+          : kindName;
+  const petParts = [coatLabel, `${PET_COLOR_NAMES[curCollar] ?? '彩色'}项圈`];
   if (pw.scarf) petParts.push('戴围巾');
   if (pw.bow) petParts.push('戴蝴蝶结');
   const petSummary = petParts.join(' · ');
@@ -733,46 +901,81 @@ export default function Wardrobe({
               </div>
             </div>
 
-            {/* 宠物栏（v8.3：毛色 + 项圈/围巾/蝴蝶结） */}
+            {/* 宠物栏（v8.3 毛色/配饰 + v9 调色盘/物种感知） */}
             {char === 'pet' && (
               <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3 [scrollbar-width:thin]">
-                {/* 小猫预览 + 搭配摘要 */}
+                {/* 宠物预览（随物种） + 搭配摘要 */}
                 <div className="flex items-center gap-2.5 pb-2 pt-0.5">
                   <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white/60 p-0.5 shadow-sm ring-1 ring-white/70">
-                    <PetHeadPreview coat={curCoat} wear={pw} />
+                    <PetHeadPreview coat={curCoat} wear={pw} kind={kind} />
                   </div>
                   <span className="text-[11.5px] leading-snug text-[#8a726c]">{petSummary}</span>
                 </div>
 
-                {/* 毛色（4 款：奶油/橘子/烟灰/奶牛） */}
-                <p className="pb-1 text-[11px] font-semibold text-[#b09a92]">毛色</p>
-                <div className="grid grid-cols-4 gap-2.5">
-                  {PET_COATS.map((pc) => {
-                    const sel = curCoat === pc.key;
+                {/* 毛色（猫：4 款预设卡 + 全色系调色盘；狗/兔：无奶牛斑概念，只显示调色盘） */}
+                {kind === 'cat' ? (
+                  <>
+                    <p className="pb-1 text-[11px] font-semibold text-[#b09a92]">毛色</p>
+                    <div className="grid grid-cols-4 gap-2.5">
+                      {PET_COATS.map((pc) => {
+                        const sel = curCoat === pc.key;
+                        return (
+                          <button
+                            key={pc.key}
+                            onClick={() => {
+                              sfx.tap();
+                              onPetChange?.({ coat: pc.key });
+                            }}
+                            aria-label={`毛色 ${pc.name}`}
+                            className={`relative flex flex-col items-center gap-1 rounded-2xl px-1 pb-1.5 pt-2 transition active:scale-95 ${
+                              sel ? 'bg-white/75 ring-2 ring-[#e8b06a]' : 'bg-white/45 ring-1 ring-white/70'
+                            }`}
+                          >
+                            <div className="h-12 w-12">
+                              <MiniCatIcon coat={pc.key} />
+                            </div>
+                            <span
+                              className={`text-[10.5px] leading-tight ${sel ? 'font-bold text-[#b5822e]' : 'text-[#8a726c]'}`}
+                            >
+                              {pc.name}
+                            </span>
+                            {sel && (
+                              <span className="absolute -right-1 -top-1 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[#e8b06a] text-white shadow">
+                                <Check className="h-3 w-3" strokeWidth={3} />
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="pb-1 pt-2.5 text-[11px] font-semibold text-[#b09a92]">全色系调色盘</p>
+                  </>
+                ) : (
+                  <p className="pb-1 text-[11px] font-semibold text-[#b09a92]">毛色</p>
+                )}
+
+                {/* 全色系调色盘（v9：30 色网格，任意 #hex 毛色，猫狗兔通用） */}
+                <div className="flex flex-wrap gap-[7px] rounded-2xl bg-white/45 px-2.5 py-2.5 ring-1 ring-white/70">
+                  {PALETTE_COLORS.map((p) => {
+                    const sel = curCoat === p.c;
                     return (
                       <button
-                        key={pc.key}
+                        key={p.c}
                         onClick={() => {
                           sfx.tap();
-                          onPetChange?.({ coat: pc.key });
+                          onPetChange?.({ coat: p.c });
                         }}
-                        aria-label={`毛色 ${pc.name}`}
-                        className={`relative flex flex-col items-center gap-1 rounded-2xl px-1 pb-1.5 pt-2 transition active:scale-95 ${
-                          sel ? 'bg-white/75 ring-2 ring-[#e8b06a]' : 'bg-white/45 ring-1 ring-white/70'
+                        aria-label={`毛色 ${p.n}`}
+                        className={`flex h-6 w-6 items-center justify-center rounded-full transition active:scale-90 ${
+                          sel ? 'ring-2 ring-[#e8b06a] ring-offset-1' : 'ring-1 ring-black/10'
                         }`}
+                        style={{ backgroundColor: p.c }}
                       >
-                        <div className="h-12 w-12">
-                          <MiniCatIcon coat={pc.key} />
-                        </div>
-                        <span
-                          className={`text-[10.5px] leading-tight ${sel ? 'font-bold text-[#b5822e]' : 'text-[#8a726c]'}`}
-                        >
-                          {pc.name}
-                        </span>
                         {sel && (
-                          <span className="absolute -right-1 -top-1 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-[#e8b06a] text-white shadow">
-                            <Check className="h-3 w-3" strokeWidth={3} />
-                          </span>
+                          <Check
+                            className={`h-3 w-3 drop-shadow ${isLightHex(p.c) ? 'text-[#8a726c]' : 'text-white'}`}
+                            strokeWidth={3}
+                          />
                         )}
                       </button>
                     );

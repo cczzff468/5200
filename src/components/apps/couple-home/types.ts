@@ -410,12 +410,17 @@ export interface HomeState {
   notesSeen?: { me?: number; partner?: number };
   /** 宠物「团子」状态（v6.9：名字 + 体力/清洁/心情，跨会话持久化） */
   pet?: PetState;
-  /** v8.3 第二只宠物（小狗/小兔子，C 选项；null/undefined = 还没领） */
+  /** v8.3 第二只宠物（小狗/小兔子，C 选项；null/undefined = 还没领；v9 兼容字段 = pets2[0]） */
   pet2?: Pet2State;
+  /** v9 领养宠物全家福（可领养无数只；pet2 为首只的兼容镜像） */
+  pets2?: Pet2State[];
 }
 
-/** 宠物毛色（v8.3 G 选项：奶油猫之外可选橘猫/灰猫/奶牛猫） */
-export type PetCoat = 'cream' | 'orange' | 'gray' | 'cow';
+/**
+ * 宠物毛色：v8.3 G 选项四预设（奶油/橘/灰/奶牛）之外，
+ * v9 调色盘支持任意 #rrggbb（`string & {}` 保留字面量提示，预设名照常工作）。
+ */
+export type PetCoat = 'cream' | 'orange' | 'gray' | 'cow' | (string & {});
 
 /** 宠物装扮（v8.3 B 选项：项圈颜色 / 小围巾 / 蝴蝶结；scarf/bow 为 null = 不戴，色值 = 戴+颜色） */
 export interface PetWear {
@@ -439,12 +444,24 @@ export interface PetExtra {
   wear?: PetWear;
 }
 
-/** 第二只宠物（小狗/小兔子） */
-export interface Pet2State {
+/**
+ * 领养宠物（小狗/小兔子；v9 起可领养无数只，存进 HomeState.pets2 数组）。
+ * v9 全功能化：与「团子」同权 —— 体力/清洁/心情 + 成长 + 毛色/装扮全量支持
+ * （可选字段向后兼容旧存档：缺省时用默认值补齐）。
+ */
+export interface Pet2State extends PetExtra {
   kind: 'dog' | 'rabbit';
   name?: string;
   /** 收养时刻 */
   since?: number;
+  /** 体力（喂食回复；缺省 88） */
+  st?: number;
+  /** 清洁（喂水回复；缺省 88） */
+  cl?: number;
+  /** 心情（抚摸回复；缺省 90） */
+  mo?: number;
+  /** 最后结算时间戳（毫秒；离线衰减用） */
+  ts?: number;
 }
 
 /** 宠物状态（体力/清洁/心情 0~100，ts = 最后结算时间戳，用于离线衰减；v8.3 继承成长/毛色/装扮字段） */
