@@ -1,0 +1,702 @@
+  3151→        onDragMove={onDragMove}
+  3152→        onDragEnd={onDragEnd}
+  3153→        onDragSelect={onDragSelect}
+  3154→        onWallTap={onWallTap}
+  3155→      />
+  3156→
+  3157→      {/* Toast（含拍照模式 —— 拍照时 HUD 隐藏，toast 仍需可见） */}
+  3158→      <div className="pointer-events-none absolute left-1/2 top-24 z-40 flex -translate-x-1/2 flex-col items-center gap-1.5">
+  3159→        <AnimatePresence>
+  3160→          {toasts.map((t) => (
+  3161→            <motion.div
+  3162→              key={t.id}
+  3163→              initial={{ opacity: 0, y: -8, scale: 0.95 }}
+  3164→              animate={{ opacity: 1, y: 0, scale: 1 }}
+  3165→              exit={{ opacity: 0, y: -6, scale: 0.95 }}
+  3166→              className="rounded-full bg-[#3a3a3e]/85 px-3.5 py-1.5 text-[12px] text-white shadow-lg backdrop-blur-sm"
+  3167→            >
+  3168→              {t.msg}
+  3169→            </motion.div>
+  3170→          ))}
+  3171→        </AnimatePresence>
+  3172→      </div>
+  3173→
+  3174→      {/* ===== HUD ===== */}
+  3175→      {!photoMode && (
+  3176→      <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">
+  3177→        {/* ⋮ 菜单打开时的空白关闭层（点菜单以外任意处收起） */}
+  3178→        {moreOpen && (
+  3179→          <div className="pointer-events-auto absolute inset-0 z-10" onClick={() => setMoreOpen(false)} aria-hidden="true" />
+  3180→        )}
+  3181→
+  3182→        {/* ===== 宠物状态面板（v7.0：右上角头像唤出 · 毛玻璃胶囊风） ===== */}
+  3183→        <AnimatePresence>
+  3184→          {petPanel && mode === 'live' && (
+  3185→            <motion.div
+  3186→              key="pet-panel"
+  3187→              initial={{ opacity: 0, y: -14, scale: 0.92 }}
+  3188→              animate={{ opacity: 1, y: 0, scale: 1 }}
+  3189→              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+  3190→              transition={{ type: 'spring', damping: 26, stiffness: 340 }}
+  3191→              className="pointer-events-auto absolute right-3 top-[104px] z-40 w-[min(78%,270px)] origin-top-right rounded-[26px] border border-white/60 bg-white/55 p-3.5 shadow-[0_16px_40px_rgba(90,60,50,0.18)] backdrop-blur-2xl"
+  3192→              role="dialog"
+  3193→              aria-label={`${pet.name ?? '团子'}状态面板`}
+  3194→            >
+  3195→              {/* 头部：头像（v7.1 SVG 猫头）+ 名字（可改） + 关闭 */}
+  3196→              <div className="mb-2 flex items-center gap-2">
+  3197→                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#fdf6ec] shadow-inner ring-1 ring-[#eadbc4]/60">
+  3198→                  <CatFaceIcon className="h-8 w-8" />
+  3199→                </div>
+  3200→                {petRenaming ? (
+  3201→                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+  3202→                    <input
+  3203→                      autoFocus
+  3204→                      value={petNameDraft}
+  3205→                      onChange={(e) => setPetNameDraft(e.target.value)}
+  3206→                      onKeyDown={(e) => {
+  3207→                        if (e.key === 'Enter') commitPetName();
+  3208→                        if (e.key === 'Escape') setPetRenaming(false);
+  3209→                      }}
+  3210→                      maxLength={8}
+  3211→                      placeholder="给它起个名字"
+  3212→                      aria-label="宠物名字"
+  3213→                      className="h-8 min-w-0 flex-1 rounded-full border border-white/70 bg-white/75 px-3 text-[13px] font-semibold text-[#4a4a4e] outline-none placeholder:text-[#c9c2ba] focus:border-[#f4b3c2]"
+  3214→                    />
+  3215→                    <button
+  3216→                      onClick={commitPetName}
+  3217→                      aria-label="确认名字"
+  3218→                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#f4b3c2]/90 text-white shadow-sm transition active:scale-90"
+  3219→                    >
+  3220→                      <Check className="h-4 w-4" />
+  3221→                    </button>
+  3222→                  </div>
+  3223→                ) : (
+  3224→                  <>
+  3225→                    <div className="min-w-0 flex-1">
+  3226→                      <div className="truncate text-[14.5px] font-bold leading-tight text-[#4a4a4e]">{pet.name ?? '团子'}</div>
+  3227→                      <div className="text-[10.5px] leading-tight text-[#9a938a]">点下面的按钮照顾它吧～</div>
+  3228→                    </div>
+  3229→                    <button
+  3230→                      onClick={() => {
+  3231→                        setPetNameDraft(pet.name ?? '团子');
+  3232→                        setPetRenaming(true);
+  3233→                      }}
+  3234→                      aria-label="给宠物改名"
+  3235→                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/60 text-[#a8927c] shadow-sm ring-1 ring-white/70 transition hover:bg-white/85 active:scale-90"
+  3236→                    >
+  3237→                      <Pencil className="h-3.5 w-3.5" />
+  3238→                    </button>
+  3239→                    <button
+  3240→                      onClick={() => setPetPanel(false)}
+  3241→                      aria-label="关闭面板"
+  3242→                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/60 text-[#8a837a] shadow-sm ring-1 ring-white/70 transition hover:bg-white/85 active:scale-90"
+  3243→                    >
+  3244→                      <X className="h-4 w-4" />
+  3245→                    </button>
+  3246→                  </>
+  3247→                )}
+  3248→              </div>
+  3249→
+  3250→              {/* 三条状态胶囊：体力（蓝）/ 清洁（绿）/ 心情（橙） */}
+  3251→              <div className="flex flex-col gap-1.5">
+  3252→                {(
+  3253→                  [
+  3254→                    { icon: Zap, label: '体力', val: pet.st, bar: '#4da3ff' },
+  3255→                    { icon: Droplet, label: '清洁', val: pet.cl, bar: '#5ec269' },
+  3256→                    { icon: Heart, label: '心情', val: pet.mo, bar: '#ff9f43' },
+  3257→                  ] as { icon: LucideIcon; label: string; val: number; bar: string }[]
+  3258→                ).map(({ icon: Icon, label, val, bar }) => (
+  3259→                  <div key={label} className="flex items-center gap-2 rounded-full bg-white/60 px-2.5 py-1.5 ring-1 ring-white/70">
+  3260→                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: `${bar}1f` }}>
+  3261→                      <Icon className="h-3.5 w-3.5" style={{ color: bar }} />
+  3262→                    </div>
+  3263→                    <span className="w-7 shrink-0 text-[12px] font-semibold text-[#5a554e]">{label}</span>
+  3264→                    <span className="w-6 shrink-0 text-right text-[13px] font-bold tabular-nums text-[#4a4a4e]">{val}</span>
+  3265→                    <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[#eceae4]">
+  3266→                      <motion.div
+  3267→                        className="h-full rounded-full"
+  3268→                        initial={false}
+  3269→                        animate={{ width: `${val}%` }}
+  3270→                        transition={{ type: 'spring', damping: 30, stiffness: 200 }}
+  3271→                        style={{ backgroundColor: bar }}
+  3272→                      />
+  3273→                    </div>
+  3274→                  </div>
+  3275→                ))}
+  3276→              </div>
+  3277→
+  3278→              {/* v7.2 互动按钮（面板下方）：六种照顾动作，抱抱抱着时变「放下」 */}
+  3279→              <div className="mt-2.5 h-px bg-white/60" aria-hidden="true" />
+  3280→              <div
+  3281→                className="mt-2 grid grid-cols-3 justify-items-center gap-1"
+  3282→                role="toolbar"
+  3283→                aria-label={`${pet.name ?? '团子'}互动按钮`}
+  3284→              >
+  3285→                {PET_ACTIONS.map(({ kind, icon: Icon, label, fg }) => (
+  3286→                  <PetActionButton
+  3287→                    key={kind}
+  3288→                    kind={kind}
+  3289→                    icon={Icon}
+  3290→                    label={label}
+  3291→                    fg={fg}
+  3292→                    carrying={carrying}
+  3293→                    disabled={!!petCare}
+  3294→                    onClick={() => startPetCare(kind)}
+  3295→                  />
+  3296→                ))}
+  3297→              </div>
+  3298→            </motion.div>
+  3299→          )}
+  3300→        </AnimatePresence>
+  3301→
+  3302→        {/* ===== 宠物互动竖条（v7.1：点宠物才出现 · 点别处消失 · 右侧竖排 · 白玻璃圆钮无彩色底） ===== */}
+  3303→        <AnimatePresence>
+  3304→          {mode === 'live' && !wardrobeOpen && petBarOpen && (
+  3305→            <div key="pet-bar-wrap" className="absolute right-3 top-1/2 z-30 -translate-y-1/2">
+  3306→              <motion.div
+  3307→                initial={{ opacity: 0, x: 24, scale: 0.9 }}
+  3308→                animate={{ opacity: 1, x: 0, scale: 1 }}
+  3309→                exit={{ opacity: 0, x: 20, scale: 0.92 }}
+  3310→                transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+  3311→              >
+  3312→                <div
+  3313→                  className="pointer-events-auto flex flex-col items-center gap-2"
+  3314→                  role="toolbar"
+  3315→                  aria-label={`${pet.name ?? '团子'}互动按钮`}
+  3316→                >
+  3317→                  {PET_ACTIONS.map(({ kind, icon: Icon, label, fg }) => (
+  3318→                    <PetActionButton
+  3319→                      key={kind}
+  3320→                      kind={kind}
+  3321→                      icon={Icon}
+  3322→                      label={label}
+  3323→                      fg={fg}
+  3324→                      carrying={carrying}
+  3325→                      disabled={!!petCare}
+  3326→                      onClick={() => startPetCare(kind)}
+  3327→                    />
+  3328→                  ))}
+  3329→                </div>
+  3330→              </motion.div>
+  3331→            </div>
+  3332→          )}
+  3333→        </AnimatePresence>
+  3334→
+  3335→        {/* 顶栏 */}
+  3336→        <div className="relative z-20 flex items-start justify-between p-3 pt-11">
+  3337→          {/* 左列：返回 + 拍照（v7.0 相机按钮移到返回键下方） */}
+  3338→          <div className="pointer-events-auto flex flex-col gap-2">
+  3339→            <button
+  3340→              onClick={close}
+  3341→              aria-label="返回"
+  3342→              className="flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+  3343→            >
+  3344→              <ChevronLeft className="h-5 w-5" />
+  3345→            </button>
+  3346→            <button
+  3347→              onClick={() => setPhotoMode(true)}
+  3348→              aria-label="拍照模式"
+  3349→              title="拍照模式"
+  3350→              className="flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+  3351→            >
+  3352→              <Camera className="h-[18px] w-[18px]" />
+  3353→            </button>
+  3354→          </div>
+  3355→
+  3356→          <div className="flex items-center gap-2">
+  3357→            {/* 宠物头像（v7.2 移到装修小家左侧 · 内联 SVG 猫头 · 白玻璃圆钮）：点击唤出/收起状态面板；状态偏低时亮提醒小红点 */}
+  3358→            <button
+  3359→              onClick={() => {
+  3360→                setPetPanel((v) => !v);
+  3361→                setPetBarOpen(false); // 面板与互动竖条互斥，不叠影
+  3362→              }}
+  3363→              aria-label={`${pet.name ?? '团子'}状态面板`}
+  3364→              aria-expanded={petPanel}
+  3365→              className={`pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-full bg-white/75 shadow-md ring-2 backdrop-blur transition active:scale-95 ${
+  3366→                petPanel ? 'ring-[#e46a6a]' : 'ring-[#f4b3c2]'
+  3367→              }`}
+  3368→            >
+  3369→              <CatFaceIcon className="h-7 w-7 drop-shadow-sm" />
+  3370→              {(pet.st < 30 || pet.cl < 30 || pet.mo < 30) && (
+  3371→                <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full bg-[#ff7a59] ring-2 ring-white/90" />
+  3372→              )}
+  3373→            </button>
+  3374→            {/* 装修小家 / 完成（右上角入口） */}
+  3375→            <button
+  3376→              onClick={() => switchMode(mode === 'live' ? 'edit' : 'live')}
+  3377→              aria-label={mode === 'live' ? '装修小家' : '完成装修'}
+  3378→              className={
+  3379→                mode === 'live'
+  3380→                  ? 'pointer-events-auto flex h-10 items-center gap-1.5 rounded-full bg-[#f4b3c2] px-3.5 text-[13px] font-semibold text-white shadow-md shadow-[#f4b3c2]/40 transition active:scale-95'
+  3381→                  : 'pointer-events-auto flex h-10 items-center gap-1.5 rounded-full bg-[#8fce9e] px-3.5 text-[13px] font-semibold text-white shadow-md shadow-[#8fce9e]/40 transition active:scale-95'
+  3382→              }
+  3383→            >
+  3384→              {mode === 'live' ? <Pencil className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+  3385→              {mode === 'live' ? '装修小家' : '完成'}
+  3386→            </button>
+  3387→            {/* ⋮ 更多菜单：时间变化 / 声音开关 / 视角 */}
+  3388→            <div className="pointer-events-auto relative">
+  3389→              <button
+  3390→                onClick={() => setMoreOpen((o) => !o)}
+  3391→                aria-label="更多设置"
+  3392→                aria-expanded={moreOpen}
+  3393→                title="更多设置"
+  3394→                className={
+  3395→                  moreOpen
+  3396→                    ? 'flex h-10 w-10 items-center justify-center rounded-full bg-[#3a3a3e]/80 text-white shadow-sm backdrop-blur transition active:scale-95'
+  3397→                    : 'flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95'
+  3398→                }
+  3399→              >
+  3400→                <MoreVertical className="h-[18px] w-[18px]" />
+  3401→              </button>
+  3402→              <AnimatePresence>
+  3403→                {moreOpen && (
+  3404→                  <motion.div
+  3405→                    initial={{ opacity: 0, y: -8, scale: 0.95 }}
+  3406→                    animate={{ opacity: 1, y: 0, scale: 1 }}
+  3407→                    exit={{ opacity: 0, y: -6, scale: 0.96 }}
+  3408→                    transition={{ type: 'spring', damping: 28, stiffness: 400 }}
+  3409→                    className="absolute right-0 top-12 z-50 w-[218px] origin-top-right overflow-hidden rounded-2xl bg-white/95 p-1.5 shadow-2xl ring-1 ring-black/5 backdrop-blur-xl"
+  3410→                  >
+  3411→                    {/* 时间变化：手动切白天 / 夜晚 */}
+  3412→                    <button
+  3413→                      onClick={() => {
+  3414→                        toggleNight();
+  3415→                        setMoreOpen(false);
+  3416→                      }}
+  3417→                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+  3418→                    >
+  3419→                      {night ? <Moon className="h-4 w-4 shrink-0 text-[#8a7ab0]" /> : <Sun className="h-4 w-4 shrink-0 text-[#e0a458]" />}
+  3420→                      <span className="flex-1 text-left">{night ? '切换到白天' : '切换到夜晚'}</span>
+  3421→                      <span className="text-[11px] text-[#b0aeb4]">{night ? '夜晚' : '白天'}</span>
+  3422→                    </button>
+  3423→                    {/* 时间变化：昼夜跟随真实时间（19点~6点为夜晚） */}
+  3424→                    <button
+  3425→                      onClick={() => {
+  3426→                        enableAutoNight();
+  3427→                        setMoreOpen(false);
+  3428→                      }}
+  3429→                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+  3430→                    >
+  3431→                      <Clock className="h-4 w-4 shrink-0 text-[#7fa8c9]" />
+  3432→                      <span className="flex-1 text-left">昼夜跟随现实</span>
+  3433→                      {nightAuto ? (
+  3434→                        <span className="rounded-full bg-[#dff0e2] px-2 py-0.5 text-[10px] font-semibold text-[#3f9a58]">已开启</span>
+  3435→                      ) : (
+  3436→                        <span className="text-[11px] text-[#b0aeb4]">关</span>
+  3437→                      )}
+  3438→                    </button>
+  3439→                    <div className="mx-2.5 my-1 h-px bg-[#f0eeea]" />
+  3440→                    {/* 声音开关 */}
+  3441→                    <button
+  3442→                      onClick={() => {
+  3443→                        toggleSfx();
+  3444→                        setMoreOpen(false);
+  3445→                      }}
+  3446→                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+  3447→                    >
+  3448→                      {sfxOn ? <Volume2 className="h-4 w-4 shrink-0 text-[#6a8a6a]" /> : <VolumeX className="h-4 w-4 shrink-0 text-[#b09a9a]" />}
+  3449→                      <span className="flex-1 text-left">音效</span>
+  3450→                      {sfxOn ? (
+  3451→                        <span className="rounded-full bg-[#dff0e2] px-2 py-0.5 text-[10px] font-semibold text-[#3f9a58]">已开</span>
+  3452→                      ) : (
+  3453→                        <span className="rounded-full bg-[#f0eff1] px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90]">已关</span>
+  3454→                      )}
+  3455→                    </button>
+  3456→                    {/* 视角：第一 / 第三人称 */}
+  3457→                    <button
+  3458→                      onClick={() => {
+  3459→                        toggleFp();
+  3460→                        setMoreOpen(false);
+  3461→                      }}
+  3462→                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+  3463→                    >
+  3464→                      {fp ? <Eye className="h-4 w-4 shrink-0 text-[#c99a5b]" /> : <Users className="h-4 w-4 shrink-0 text-[#c99a5b]" />}
+  3465→                      <span className="flex-1 text-left">视角</span>
+  3466→                      <span className="text-[11px] text-[#b0aeb4]">{fp ? '第一人称' : '第三人称'}</span>
+  3467→                    </button>
+  3468→                  </motion.div>
+  3469→                )}
+  3470→              </AnimatePresence>
+  3471→            </div>
+  3472→          </div>
+  3473→        </div>
+  3474→
+  3475→        {/* 家具互动按钮（生活模式）：坐下/睡觉/泡澡 → 站起来/起床/出来；衣柜弹窗打开时隐藏避免压住抽屉 */}
+  3476→        <AnimatePresence>
+  3477→          {mode === 'live' && charAction && !wardrobeOpen && !(charAction.type === 'play' && inst) && (
+  3478→            <motion.div
+  3479→              key="action-bar"
+  3480→              initial={{ opacity: 0, y: 14 }}
+  3481→              animate={{ opacity: 1, y: 0 }}
+  3482→              exit={{ opacity: 0, y: 10 }}
+  3483→              className="absolute bottom-[272px] left-1/2 z-20 flex -translate-x-1/2 items-center gap-2"
+  3484→            >
+  3485→              {charAction.active && charAction.type === 'bath' && (
+  3486→                <button
+  3487→                  onClick={toggleBathWater}
+  3488→                  aria-label="浴缸放水/关水"
+  3489→                  className="pointer-events-auto flex h-12 items-center gap-2 whitespace-nowrap rounded-full bg-[#a8d4e6] px-5 text-[14px] font-semibold text-white shadow-lg transition active:scale-95"
+  3490→                >
+  3491→                  <Droplet className="h-[18px] w-[18px]" />
+  3492→                  放水
+  3493→                </button>
+  3494→              )}
+  3495→              <motion.button
+  3496→                key={`${charAction.itemId}-${charAction.active}`}
+  3497→                initial={{ opacity: 0, scale: 0.92 }}
+  3498→                animate={{ opacity: 1, scale: 1 }}
+  3499→                exit={{ opacity: 0, scale: 0.94 }}
+  3500→                transition={{ type: 'spring', damping: 24, stiffness: 340 }}
+  3501→                onClick={() => {
+  3502→                  if (!charAction.active) {
+  3503→                    const it = itemsRef.current.find((f) => f.id === charAction.itemId);
+  3504→                    if (it) beginAction(charAction.type, it);
+  3505→                  } else {
+  3506→                    endAction();
+  3507→                  }
+  3508→                }}
+  3509→                className={
+  3510→                  charAction.active
+  3511→                    ? 'pointer-events-auto flex h-12 items-center gap-2 rounded-full bg-[#3a3a3e]/85 px-6 text-[14px] font-semibold text-white shadow-xl backdrop-blur transition active:scale-95'
+  3512→                    : 'pointer-events-auto flex h-12 items-center gap-2 rounded-full bg-[#f4b3c2] px-6 text-[14px] font-semibold text-white shadow-lg shadow-[#f4b3c2]/40 transition active:scale-95'
+  3513→                }
+  3514→              >
+  3515→                {charAction.type === 'sit' ? (
+  3516→                  <Armchair className="h-[18px] w-[18px]" />
+  3517→                ) : charAction.type === 'lie' ? (
+  3518→                  <BedDouble className="h-[18px] w-[18px]" />
+  3519→                ) : charAction.type === 'bath' ? (
+  3520→                  <Bath className="h-[18px] w-[18px]" />
+  3521→                ) : charAction.type === 'shower' ? (
+  3522→                  <ShowerHead className="h-[18px] w-[18px]" />
+  3523→                ) : charAction.type === 'watch' ? (
+  3524→                  <Tv className="h-[18px] w-[18px]" />
+  3525→                ) : charAction.type === 'cook' ? (
+  3526→                  <UtensilsCrossed className="h-[18px] w-[18px]" />
+  3527→                ) : charAction.type === 'eat' ? (
+  3528→                  <Utensils className="h-[18px] w-[18px]" />
+  3529→                ) : charAction.type === 'drink' ? (
+  3530→                  <CupSoda className="h-[18px] w-[18px]" />
+  3531→                ) : charAction.type === 'coffee' ? (
+  3532→                  <Coffee className="h-[18px] w-[18px]" />
+  3533→                ) : charAction.type === 'read' ? (
+  3534→                  <BookOpen className="h-[18px] w-[18px]" />
+  3535→                ) : charAction.type === 'dress' ? (
+  3536→                  <Shirt className="h-[18px] w-[18px]" />
+  3537→                ) : charAction.type === 'play' ? (
+  3538→                  <Music className="h-[18px] w-[18px]" />
+  3539→                ) : charAction.type === 'makeup' || charAction.type === 'mirror' ? (
+  3540→                  <Sparkles className="h-[18px] w-[18px]" />
+  3541→                ) : charAction.type === 'game' ? (
+  3542→                  <Gamepad2 className="h-[18px] w-[18px]" />
+  3543→                ) : charAction.type === 'hotpot' ? (
+  3544→                  <UtensilsCrossed className="h-[18px] w-[18px]" />
+  3545→                ) : (
+  3546→                  <Laptop className="h-[18px] w-[18px]" />
+  3547→                )}
+  3548→                {ACT_LABELS[charAction.type][charAction.active ? 1 : 0]}
+  3549→              </motion.button>
+  3550→            </motion.div>
+  3551→          )}
+  3552→        </AnimatePresence>
+  3553→
+  3554→        {/* 电视开着：随时换台（看电视不再是动作，小人自由走动） */}
+  3555→        <AnimatePresence>
+  3556→          {mode === 'live' && tvOn && !inst && (
+  3557→            <motion.div
+  3558→              key="tv-bar"
+  3559→              initial={{ opacity: 0, y: 14 }}
+  3560→              animate={{ opacity: 1, y: 0 }}
+  3561→              exit={{ opacity: 0, y: 10 }}
+  3562→              className={`absolute left-1/2 z-20 -translate-x-1/2 ${tvBarCls}`}
+  3563→            >
+  3564→              <button
+  3565→                onClick={cycleChannel}
+  3566→                aria-label="电视换台"
+  3567→                className="pointer-events-auto flex h-12 items-center gap-2 whitespace-nowrap rounded-full bg-[#f4b3c2] px-5 text-[14px] font-semibold text-white shadow-lg transition active:scale-95"
+  3568→              >
+  3569→                <Tv className="h-[18px] w-[18px]" />
+  3570→                换台
+  3571→              </button>
+  3572→            </motion.div>
+  3573→          )}
+  3574→        </AnimatePresence>
+  3575→
+  3576→        {/* 端着饮料：随时放下（拿饮料不再锁人，杯子握在手里到处逛） */}
+  3577→        <AnimatePresence>
+  3578→          {mode === 'live' && carryCup && (
+  3579→            <motion.div
+  3580→              key="cup-bar"
+  3581→              initial={{ opacity: 0, y: 14 }}
+  3582→              animate={{ opacity: 1, y: 0 }}
+  3583→              exit={{ opacity: 0, y: 10 }}
+  3584→              className={`absolute left-1/2 z-20 -translate-x-1/2 ${cupBarCls}`}
+  3585→            >
+  3586→              <button
+  3587→                onClick={dropCup}
+  3588→                aria-label="放下杯子"
+  3589→                className="pointer-events-auto flex h-12 items-center gap-2 whitespace-nowrap rounded-full bg-[#a8d4e6] px-5 text-[14px] font-semibold text-white shadow-lg transition active:scale-95"
+  3590→              >
+  3591→                <CupSoda className="h-[18px] w-[18px]" />
+  3592→                放下杯子
+  3593→              </button>
+  3594→            </motion.div>
+  3595→          )}
+  3596→        </AnimatePresence>
+  3597→
+  3598→        {/* 乐器弹奏覆盖层（吉他弦/钢琴键，点按真实发声） */}
+  3599→        {inst && <InstrumentOverlay kind={inst.kind} onClose={closeInst} />}
+  3600→
+  3601→        {/* 编辑模式：缩放按钮（右缘中部） */}
+  3602→        {mode === 'edit' && (
+  3603→          <div className="pointer-events-auto absolute right-3 top-1/2 z-10 flex -translate-y-1/2 flex-col gap-2">
+  3604→            <button
+  3605→              onClick={() => zoom(1)}
+  3606→              aria-label="放大画面"
+  3607→              className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 text-[#5a5a5e] shadow-md backdrop-blur transition active:scale-95"
+  3608→            >
+  3609→              <ZoomIn className="h-5 w-5" />
+  3610→            </button>
+  3611→            <button
+  3612→              onClick={() => zoom(-1)}
+  3613→              aria-label="缩小画面"
+  3614→              className="flex h-11 w-11 items-center justify-center rounded-full bg-white/85 text-[#5a5a5e] shadow-md backdrop-blur transition active:scale-95"
+  3615→            >
+  3616→              <ZoomOut className="h-5 w-5" />
+  3617→            </button>
+  3618→          </div>
+  3619→        )}
+  3620→
+  3621→        {/* 底部区 */}
+  3622→        <div className="p-4 pb-6">
+  3623→          {/* 选中操作条（编辑模式·门窗：毛玻璃胶囊 · 移动/换色/收起窗户，门不可收起） */}
+  3624→          <AnimatePresence>
+  3625→            {mode === 'edit' && isWallSel && !shopOpen && !paletteOpen && (
+  3626→              <motion.div
+  3627→                key={selId}
+  3628→                initial={{ opacity: 0, y: 16 }}
+  3629→                animate={{ opacity: 1, y: 0 }}
+  3630→                exit={{ opacity: 0, y: 16 }}
+  3631→                className="pointer-events-auto mx-auto mb-3 w-fit"
+  3632→              >
+  3633→                {/* 名字小签（毛玻璃胶囊） */}
+  3634→                <div className="mx-auto mb-2 w-fit rounded-full border border-white/40 bg-black/25 px-3.5 py-1 text-[11px] font-medium text-white/95 shadow-sm backdrop-blur-md">
+  3635→                  {selWallName} · 拖动或方向键沿墙移动
+  3636→                </div>
+  3637→                <div className={`flex items-center gap-1.5 rounded-full p-2 ${EDIT_GLASS}`}>
+  3638→                  {/* 四向微调（沿墙滑行）：毛玻璃圆形方向盘 */}
+  3639→                  <div className="grid shrink-0 grid-cols-3 grid-rows-3 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
+  3640→                    <span />
+  3641→                    <button
+  3642→                      onClick={() => issueMoveCmd('up')}
+  3643→                      aria-label="上移"
+  3644→                      className={editDirBtn}
+  3645→                    >
+  3646→                      <ChevronUp className="h-4 w-4" />
+  3647→                    </button>
+  3648→                    <span />
+  3649→                    <button
+  3650→                      onClick={() => issueMoveCmd('left')}
+  3651→                      aria-label="左移"
+  3652→                      className={editDirBtn}
+  3653→                    >
+  3654→                      <ChevronLeft className="h-4 w-4" />
+  3655→                    </button>
+  3656→                    <span className="flex h-9 w-9 items-center justify-center text-[9px] font-medium text-[#b8b5ac]">沿墙</span>
+  3657→                    <button
+  3658→                      onClick={() => issueMoveCmd('right')}
+  3659→                      aria-label="右移"
+  3660→                      className={editDirBtn}
+  3661→                    >
+  3662→                      <ChevronRight className="h-4 w-4" />
+  3663→                    </button>
+  3664→                    <span />
+  3665→                    <button
+  3666→                      onClick={() => issueMoveCmd('down')}
+  3667→                      aria-label="下移"
+  3668→                      className={editDirBtn}
+  3669→                    >
+  3670→                      <ChevronDown className="h-4 w-4" />
+  3671→                    </button>
+  3672→                    <span />
+  3673→                  </div>
+  3674→                  {/* 分隔点 */}
+  3675→                  <span className="mx-0.5 h-1.5 w-1.5 rounded-full bg-[#d8cfc4]/80" />
+  3676→                  {/* 换色 */}
+  3677→                  <button
+  3678→                    onClick={() => setPaletteOpen(true)}
+  3679→                    aria-label="给门窗换色"
+  3680→                    title="换颜色"
+  3681→                    className={`${toolBtn} h-11 w-11 bg-[#f7e8f2]/85 text-[#b07193] ring-1 ring-white/80 hover:bg-[#f3dcea]/90`}
+  3682→                  >
+  3683→                    <Droplet className="h-[18px] w-[18px]" />
+  3684→                  </button>
+  3685→                  {/* 收起窗户（窗户可像家具一样删除；门不可） */}
+  3686→                  {selId?.startsWith('win-') && (
+  3687→                    <button
+  3688→                      onClick={removeWinSel}
+  3689→                      aria-label="收起窗户"
+  3690→                      title="收起这扇窗（商店「窗户」可装回）"
+  3691→                      className={`${toolBtn} h-11 w-11 bg-[#f9e3e8]/90 text-[#d4717f] ring-1 ring-white/80 hover:bg-[#f5d5dc]/95`}
+  3692→                    >
+  3693→                      <Trash2 className="h-[18px] w-[18px]" />
+  3694→                    </button>
+  3695→                  )}
+  3696→                  {/* 取消选中 */}
+  3697→                  <button
+  3698→                    onClick={() => setSelId(null)}
+  3699→                    aria-label="取消选中"
+  3700→                    className={`${toolBtn} h-11 w-11 bg-[#efeef0]/85 text-[#8a8a90] ring-1 ring-white/80`}
+  3701→                  >
+  3702→                    <X className="h-[18px] w-[18px]" />
+  3703→                  </button>
+  3704→                </div>
+  3705→              </motion.div>
+  3706→            )}
+  3707→          </AnimatePresence>
+  3708→
+  3709→          {/* 选中操作条（编辑模式·家具：毛玻璃胶囊 · 移动/升降/旋转/调色/收起） */}
+  3710→          <AnimatePresence>
+  3711→            {mode === 'edit' && selItem && selEntry && !shopOpen && !paletteOpen && (
+  3712→              <motion.div
+  3713→                key={selItem.id}
+  3714→                initial={{ opacity: 0, y: 16 }}
+  3715→                animate={{ opacity: 1, y: 0 }}
+  3716→                exit={{ opacity: 0, y: 16 }}
+  3717→                className="pointer-events-auto mx-auto mb-3 w-fit"
+  3718→              >
+  3719→                {/* 家具名小签（毛玻璃胶囊） */}
+  3720→                <div className="mx-auto mb-2 w-fit rounded-full border border-white/40 bg-black/25 px-3.5 py-1 text-[11px] font-medium text-white/95 shadow-sm backdrop-blur-md">
+  3721→                  {selEntry.name}
+  3722→                </div>
+  3723→                {/* 双排布局（单排超出屏宽会被挤压重叠）：上排 = 移动/升降/旋转，下排 = 调色/收起/取消 */}
+  3724→                <div className="flex flex-col items-center gap-1.5">
+  3725→                  <div className={`flex items-center gap-2 rounded-full p-2 ${EDIT_GLASS}`}>
+  3726→                    {/* 移动：四向方向盘 + 中央「移动模式」开关
+  3727→                       （两种搬运方式：① 点上下左右逐步微调 ② 开移动模式后按住画面拖动） */}
+  3728→                    <div className="grid shrink-0 grid-cols-3 grid-rows-3 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
+  3729→                      <span />
+  3730→                      <button
+  3731→                        onClick={() => issueMoveCmd('up')}
+  3732→                        aria-label="上移一格"
+  3733→                        title="上移一格"
+  3734→                        className={editDirBtn}
+  3735→                      >
+  3736→                        <ChevronUp className="h-4 w-4" />
+  3737→                      </button>
+  3738→                      <span />
+  3739→                      <button
+  3740→                        onClick={() => issueMoveCmd('left')}
+  3741→                        aria-label="左移一格"
+  3742→                        title="左移一格"
+  3743→                        className={editDirBtn}
+  3744→                      >
+  3745→                        <ChevronLeft className="h-4 w-4" />
+  3746→                      </button>
+  3747→                      <button
+  3748→                        onClick={toggleMove}
+  3749→                        aria-label="移动模式（按住画面拖动搬运）"
+  3750→                        title="移动模式（按住画面拖动搬运）"
+  3751→                        className={
+  3752→                          moveOn
+  3753→                            ? 'flex h-9 w-9 items-center justify-center rounded-full bg-[#cdeacd] text-[#2f7d4d] shadow-inner ring-1 ring-[#9ed4ae]'
+  3754→                            : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90'
+  3755→                        }
+  3756→                      >
+  3757→                        <Move className="h-4 w-4" />
+  3758→                      </button>
+  3759→                      <button
+  3760→                        onClick={() => issueMoveCmd('right')}
+  3761→                        aria-label="右移一格"
+  3762→                        title="右移一格"
+  3763→                        className={editDirBtn}
+  3764→                      >
+  3765→                        <ChevronRight className="h-4 w-4" />
+  3766→                      </button>
+  3767→                      <span />
+  3768→                      <button
+  3769→                        onClick={() => issueMoveCmd('down')}
+  3770→                        aria-label="下移一格"
+  3771→                        title="下移一格"
+  3772→                        className={editDirBtn}
+  3773→                      >
+  3774→                        <ChevronDown className="h-4 w-4" />
+  3775→                      </button>
+  3776→                      <span />
+  3777→                    </div>
+  3778→
+  3779→                    {/* 升降：抬上桌 / 放回地（相框、小盆栽…） */}
+  3780→                    <div className="grid shrink-0 grid-rows-2 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
+  3781→                      <button
+  3782→                        onClick={() => liftSel(1)}
+  3783→                        aria-label="抬高一层（可放上桌面）"
+  3784→                        title="抬高一层"
+  3785→                        className={editDirBtnBlue}
+  3786→                      >
+  3787→                        <ChevronsUp className="h-4 w-4" />
+  3788→                      </button>
+  3789→                      <button
+  3790→                        onClick={() => liftSel(-1)}
+  3791→                        aria-label="放低一层（放回地面）"
+  3792→                        title="放低一层"
+  3793→                        className={editDirBtnBlue}
+  3794→                      >
+  3795→                        <ChevronsDown className="h-4 w-4" />
+  3796→                      </button>
+  3797→                    </div>
+  3798→
+  3799→                    {/* 旋转：四宫格（上排 左转/右转，下排 下俯/上仰） */}
+  3800→                    <div className="grid shrink-0 grid-cols-2 grid-rows-2 gap-0.5 rounded-full bg-white/40 p-1.5 ring-1 ring-white/70">
+  3801→                      <button
+  3802→                        onClick={() => rotateY(-1)}
+  3803→                        aria-label="向左旋转 45°"
+  3804→                        title="向左旋转"
+  3805→                        className={editDirBtnAmber}
+  3806→                      >
+  3807→                        <RotateCcw className="h-4 w-4" />
+  3808→                      </button>
+  3809→                      <button
+  3810→                        onClick={() => rotateY(1)}
+  3811→                        aria-label="向右旋转 45°"
+  3812→                        title="向右旋转"
+  3813→                        className={editDirBtnAmber}
+  3814→                      >
+  3815→                        <RotateCw className="h-4 w-4" />
+  3816→                      </button>
+  3817→                      <button
+  3818→                        onClick={() => tilt(-1)}
+  3819→                        aria-label="向下旋转 15°"
+  3820→                        title="向下旋转"
+  3821→                        className={editDirBtnAmber}
+  3822→                      >
+  3823→                        <ChevronDown className="h-4 w-4" />
+  3824→                      </button>
+  3825→                      <button
+  3826→                        onClick={() => tilt(1)}
+  3827→                        aria-label="向上旋转 15°"
+  3828→                        title="向上旋转"
+  3829→                        className={editDirBtnAmber}
+  3830→                      >
+  3831→                        <ChevronUp className="h-4 w-4" />
+  3832→                      </button>
+  3833→                    </div>
+  3834→                  </div>
+  3835→
+  3836→                  {/* 下排：调色 / 收起 / 取消 */}
+  3837→                  <div className={`flex items-center gap-1.5 rounded-full p-1.5 ${EDIT_GLASS}`}>
+  3838→                    {/* 调色 */}
+  3839→                    <button
+  3840→                      onClick={() => setPaletteOpen(true)}
+  3841→                      aria-label="调色盘"
+  3842→                      title="调色盘"
+  3843→                      className={`${toolBtn} h-10 w-10 bg-[#f7e8f2]/85 text-[#b07193] ring-1 ring-white/80 hover:bg-[#f3dcea]/90`}
+  3844→                    >
+  3845→                      <Droplet className="h-[17px] w-[17px]" />
+  3846→                    </button>
+  3847→                    {/* 收起 */}
+  3848→                    <button
+  3849→                      onClick={removeSel}
+  3850→                      aria-label="收起家具"
+
+[showing lines 3151-3850 of 4643; use offset=3851 with limit to continue reading]
