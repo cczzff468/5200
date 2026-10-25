@@ -34,6 +34,7 @@ import {
   Eye,
   Flame,
   Gamepad2,
+  Heart,
   ImagePlus,
   Laptop,
   Loader2,
@@ -44,6 +45,7 @@ import {
   Move,
   Music,
   Paintbrush,
+  PawPrint,
   Pencil,
   Puzzle,
   RotateCcw,
@@ -63,6 +65,7 @@ import {
   Volume2,
   VolumeX,
   X,
+  Zap,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -109,7 +112,7 @@ import {
 } from './catalog';
 import { sfx } from './sfx';
 import { getCachedThumb } from './scene/ShopThumbs';
-import type { BoyWear, CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, LayoutSnap, NoteEntry, RoomId } from './types';
+import type { BoyWear, CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, LayoutSnap, NoteEntry, PetCareKind, PetState, RoomId } from './types';
 import { sanitizeBoyWear, sanitizeWear } from './types';
 import Wardrobe from './Wardrobe';
 
@@ -159,6 +162,34 @@ const PHOTO_ASPECTS: Record<string, number> = {
   photoWallWide: 1.0 / 0.6,
   polaroid: 1,
 };
+
+// ---------------- 宠物「团子」状态（v6.9） ----------------
+
+const clamp01x = (v: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, v));
+
+/** 随真实时间衰减：体力 -4/h、清洁 -3/h、心情 -6/h（最多追算 48h，回访不会一贫如洗） */
+function decayPet(p: PetState, now = Date.now()): PetState {
+  const h = Math.max(0, Math.min(48, (now - p.ts) / 3.6e6));
+  return {
+    name: p.name,
+    st: Math.round(clamp01x(p.st - h * 4)),
+    cl: Math.round(clamp01x(p.cl - h * 3)),
+    mo: Math.round(clamp01x(p.mo - h * 6)),
+    ts: now,
+  };
+}
+
+/** 读档/默认清洗：缺省值 + 名字截断 + 按最后结算时间补衰减 */
+function sanitizePet(raw?: PetState): PetState {
+  const base: PetState = {
+    name: (raw?.name || '团子').slice(0, 8),
+    st: raw?.st ?? 88,
+    cl: raw?.cl ?? 80,
+    mo: raw?.mo ?? 90,
+    ts: raw?.ts ?? Date.now(),
+  };
+  return decayPet(base);
+}
 
 /**
  * 手机照片 → 居中裁到指定比例 → 压成 JPEG dataURL（几十 KB，可永久存在小家档案里）
@@ -658,6 +689,29 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 四向微调指令（HUD 方向按钮 → Canvas 内按视角方位换算） */
   const moveCmd = useRef({ v: 0, dir: 'up' as 'up' | 'down' | 'left' | 'right' });
 
+  // ---------------- 宠物「团子」（v6.9：体力/清洁/心情 + 改名，持久化在 HomeState.pet） ----------------
+  const [pet, setPet] = useState<PetState>(() => sanitizePet(pack.home.pet));
+  const petRef = useRef(pet);
+  petRef.current = pet;
+  /** 宠物照顾指令（面板按钮 → PetBuddy；seq 递增触发新指令） */
+  const petCmdRef = useRef<{ kind: PetCareKind; seq: number } | null>(null);
+  const petSeq = useRef(0);
+  /** 状态面板开关 / 正在进行的照顾动作 / 改名弹层 */
+  const [petPanel, setPetPanel] = useState(false);
+  const [petCare, setPetCare] = useState<PetCareKind | null>(null);
+  const [petRenaming, setPetRenaming] = useState(false);
+  const [petNameDraft, setPetNameDraft] = useState('');
+  /** 宠物在线缓慢衰减（每 30s 结算一次；离线衰减在 sanitizePet 一次性追算） */
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setPet((p) => {
+        const next = decayPet(p);
+        return next.st === p.st && next.cl === p.cl && next.mo === p.mo ? p : next;
+      });
+    }, 30000);
+    return () => clearInterval(iv);
+  }, []);
+
   // ---------------- 同步 refs（快照用） ----------------
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -851,6 +905,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
       layouts: layoutsRef.current,
       notes: notesRef.current,
       notesSeen: notesSeenRef.current,
+      // 宠物状态（v6.9：名字 + 体力/清洁/心情，跨会话延续）
+      pet: { ...petRef.current, ts: Date.now() },
       // 正在进行的家具动作（已摆好姿势才存，重进页面接着坐/睡/泡/淋浴/看电视/上网；
       // 自动结束型不存 —— 重进后重新发起即可）
       act: (() => {
@@ -902,6 +958,18 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setWear(sanitizeWear(h.wear));
     setWear2(sanitizeBoyWear(h.wear2));
     setWinExist([0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => h.winExist?.[i] !== false));
+    // 宠物状态合并（v6.9）：照顾加成只增不减，取两侧较高值 ——
+    // 避免在途旧档案的冲突采纳/延迟回滚把刚喂完的体力「弹回」旧值
+    setPet((prev) => {
+      const inc = sanitizePet(h.pet);
+      return {
+        name: prev.name && prev.name !== '团子' ? prev.name : inc.name || prev.name,
+        st: Math.max(prev.st, inc.st),
+        cl: Math.max(prev.cl, inc.cl),
+        mo: Math.max(prev.mo, inc.mo),
+        ts: Date.now(),
+      };
+    });
     setMealReady(!!h.mealReady);
     setFloorTex(h.floorTex ?? 'wood');
     setWallTex(h.wallTex ?? 'plain');
@@ -1053,6 +1121,64 @@ export default function CoupleHome({ close }: { close: () => void }) {
     }, 1000);
     return () => clearInterval(t);
   }, [toast, saveSoon]);
+
+  // ---------------- 宠物照顾流程（v6.9） ----------------
+  /** 发起照顾：宠物走向小人 → 到位后小人蹲下伸手（摸头 / 递碗吃 / 递碗喝） */
+  const startPetCare = useCallback(
+    (kind: PetCareKind) => {
+      if (petCare) return; // 正在照顾中
+      if (actRef.current) {
+        toast('先把手头的事做完，再来照顾它吧');
+        return;
+      }
+      petSeq.current += 1;
+      petCmdRef.current = { kind, seq: petSeq.current };
+      setPetCare(kind);
+      setPetPanel(false);
+      const nm = petRef.current.name ?? '团子';
+      toast(kind === 'pat' ? `${nm}屁颠屁颠跑过来了～` : kind === 'feed' ? `盛好猫粮，等${nm}过来吃啦～` : `倒好清水，叫${nm}来喝咯～`);
+    },
+    [petCare, toast],
+  );
+
+  /** 宠物事件：arrive 到位（小人摆 petcare 姿势）/ done 完成结算 / cancel 中断还原 */
+  const onPetEvent = useCallback(
+    (ev: 'arrive' | 'done' | 'cancel', kind: PetCareKind) => {
+      if (ev === 'arrive') {
+        poseRef.current.pose = 'petcare';
+        poseRef.current.y = 0;
+        return;
+      }
+      if (poseRef.current.pose === 'petcare') poseRef.current.pose = 'stand';
+      setPetCare(null);
+      if (ev !== 'done') return;
+      setPet((p) => {
+        const bump = (v: number, d: number) => Math.min(100, Math.max(0, v + d));
+        if (kind === 'pat') return { ...p, mo: bump(p.mo, 12), ts: Date.now() };
+        if (kind === 'feed') return { ...p, st: bump(p.st, 22), mo: bump(p.mo, 4), ts: Date.now() };
+        return { ...p, cl: bump(p.cl, 18), st: bump(p.st, 4), ts: Date.now() };
+      });
+      toast(kind === 'pat' ? '摸得它咕噜咕噜，尾巴都要摇飞啦～' : kind === 'feed' ? '吃得肚皮圆滚滚，心满意足～' : '咕咚咕咚喝饱水，精神满满～');
+      saveSoon();
+    },
+    [toast, saveSoon],
+  );
+
+  /** 点宠物：开/关状态面板 */
+  const onPetTap = useCallback(() => {
+    setPetPanel((v) => !v);
+  }, []);
+
+  /** 确认改名（最长 8 字） */
+  const commitPetName = useCallback(() => {
+    const name = petNameDraft.trim().slice(0, 8);
+    if (name) {
+      setPet((p) => ({ ...p, name }));
+      toast(`它以后就叫「${name}」啦！`);
+      saveSoon();
+    }
+    setPetRenaming(false);
+  }, [petNameDraft, toast, saveSoon]);
 
   // ---------------- 家具交互（生活模式） ----------------
 
@@ -2795,6 +2921,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
         musicPlaying={musicPlaying}
         weatherFx={weatherFx}
         litLamps={litLampCount}
+        petCmdRef={petCmdRef}
+        onPetTap={onPetTap}
+        onPetEvent={onPetEvent}
         onFloorTap={onFloorTap}
         onFurnTap={onFurnTap}
         onDragMove={onDragMove}
@@ -2819,6 +2948,128 @@ export default function CoupleHome({ close }: { close: () => void }) {
           ))}
         </AnimatePresence>
       </div>
+
+      {/* ===== 宠物状态面板（v6.9：体力/清洁/心情 + 改名 + 照顾按钮） ===== */}
+      <AnimatePresence>
+        {petPanel && (
+          <motion.div
+            key="pet-panel"
+            initial={{ opacity: 0, y: 18, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 14, scale: 0.95 }}
+            transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+            className="pointer-events-auto absolute bottom-[196px] left-1/2 z-30 w-[min(88%,344px)] -translate-x-1/2 rounded-[22px] bg-white/92 p-4 shadow-xl shadow-black/10 backdrop-blur-md"
+            role="dialog"
+            aria-label={`${pet.name ?? '团子'}状态面板`}
+          >
+            {/* 头部：头像 + 名字（可改） + 关闭 */}
+            <div className="mb-2.5 flex items-center gap-2.5">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#fdf3e3] text-[20px] shadow-inner">
+                <PawPrint className="h-5 w-5 text-[#d9a05b]" />
+              </div>
+              {petRenaming ? (
+                <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <input
+                    autoFocus
+                    value={petNameDraft}
+                    onChange={(e) => setPetNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitPetName();
+                      if (e.key === 'Escape') setPetRenaming(false);
+                    }}
+                    maxLength={8}
+                    placeholder="给它起个名字"
+                    aria-label="宠物名字"
+                    className="h-8 min-w-0 flex-1 rounded-full border border-[#f0cfd8] bg-white px-3 text-[13px] font-semibold text-[#4a4a4e] outline-none placeholder:text-[#c9c2ba] focus:border-[#f4b3c2]"
+                  />
+                  <button
+                    onClick={commitPetName}
+                    aria-label="确认名字"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#f4b3c2] text-white shadow-sm transition active:scale-90"
+                  >
+                    <Check className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[15px] font-bold leading-tight text-[#4a4a4e]">{pet.name ?? '团子'}</div>
+                    <div className="text-[11px] leading-tight text-[#9a938a]">点我照顾它 · 名字也能改哦</div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setPetNameDraft(pet.name ?? '团子');
+                      setPetRenaming(true);
+                    }}
+                    aria-label="给宠物改名"
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f6f1e8] text-[#a8927c] shadow-sm transition hover:bg-[#f0e7d8] active:scale-90"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setPetPanel(false)}
+                    aria-label="关闭面板"
+                    className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f6f1e8] text-[#8a837a] shadow-sm transition hover:bg-[#f0e7d8] active:scale-90"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* 三条状态条：体力（蓝）/ 清洁（绿）/ 心情（橙） */}
+            <div className="flex flex-col gap-2">
+              {(
+                [
+                  { icon: Zap, label: '体力', val: pet.st, bar: '#4da3ff' },
+                  { icon: Droplet, label: '清洁', val: pet.cl, bar: '#5ec269' },
+                  { icon: Heart, label: '心情', val: pet.mo, bar: '#ff9f43' },
+                ] as { icon: LucideIcon; label: string; val: number; bar: string }[]
+              ).map(({ icon: Icon, label, val, bar }) => (
+                <div key={label} className="flex items-center gap-2.5">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: `${bar}1f` }}>
+                    <Icon className="h-4 w-4" style={{ color: bar }} />
+                  </div>
+                  <span className="w-8 shrink-0 text-[13px] font-semibold text-[#5a554e]">{label}</span>
+                  <span className="w-7 shrink-0 text-right text-[14px] font-bold tabular-nums text-[#4a4a4e]">{val}</span>
+                  <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-[#eceae4]">
+                    <motion.div
+                      className="h-full rounded-full"
+                      initial={false}
+                      animate={{ width: `${val}%` }}
+                      transition={{ type: 'spring', damping: 30, stiffness: 200 }}
+                      style={{ backgroundColor: bar }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* 照顾按钮：抚摸 / 喂食 / 喂水（进行中锁定） */}
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              {(
+                [
+                  { kind: 'pat' as const, icon: PawPrint, label: '抚摸', bg: '#ffd9e2', fg: '#d96a86' },
+                  { kind: 'feed' as const, icon: UtensilsCrossed, label: '喂食', bg: '#ffe9c9', fg: '#c98a3e' },
+                  { kind: 'water' as const, icon: CupSoda, label: '喂水', bg: '#d4ecff', fg: '#4a90c9' },
+                ]
+              ).map(({ kind, icon: Icon, label, bg, fg }) => (
+                <button
+                  key={kind}
+                  onClick={() => startPetCare(kind)}
+                  disabled={!!petCare}
+                  aria-label={`${label}${pet.name ?? '团子'}`}
+                  className={`flex h-11 items-center justify-center gap-1.5 rounded-full text-[13px] font-bold shadow-sm transition active:scale-95 ${petCare ? 'opacity-40' : ''}`}
+                  style={{ backgroundColor: bg, color: fg }}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ===== HUD ===== */}
       {!photoMode && (

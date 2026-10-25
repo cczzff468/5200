@@ -9,8 +9,8 @@
  * - 约 2.2 头身：大圆头（微扁）+ 圆润短身短手短腿，无脖颈衔接的软萌轮廓；
  * - 脸：竖椭圆大眼睛（眼白+深棕瞳仁+双层高光+上眼线）、细弯眉、
  *   径向渐变腮红、小巧鼻子、微笑弧线嘴；随机眨眼 + 待机歪头；
- * - 发型（女主衣柜 v6.6 一体发壳）：双马尾 / 高马尾 / 短发 / 长直发 / 大波浪，
- *   球面贴片拼成一整片顺滑头发：额心中分全露、八字刘海斜扫眉尾、脸侧无垂发、马尾全在脑后；
+ * - 发型（女主衣柜 v6.7 一体发壳）：双马尾 / 高马尾 / 短发 / 长直发 / 大波浪，
+ *   球面贴片拼成一整片顺滑头发：齐刘海压眉一条线、脸侧无垂发、马尾全在脑后；
  *   男主衣柜 v6.3：顺滑短发 / 蓬松卷发 / 中分刘海 / 活力刺猬；
  * - 服装（女主 v6.2 + 男生 v6.3 + 调色盘）：连衣裙 ×4 / 分体上衣 ×4 / 半裙·短裤·长裤 / 鞋 ×4，
  *   男生上衣/裤子/鞋 ×4，hair/dress/top/bottom/shoes 均可自选色（wear.tints / wear2.tints），
@@ -729,14 +729,9 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
     // 女主发丝更亮泽一点（低粗糙度 → 灯光下有柔和反光）
     hairMat.roughness = 0.58;
     hairMat.side = THREE.DoubleSide; // 薄壳发片边缘从缝里看也不穿帮
-    // 发梢渐变色（暖焦糖色，比主发色亮一档：动漫系「发尾挑染」；自选发色时同步跟随）
-    const hairTipMat = stdMat(`#${new THREE.Color(hairCol).lerp(new THREE.Color('#f2c9a4'), 0.5).getHexString()}`, 0.55);
 
-    // —— v6.6「一体发壳」彻底重做（v6.6b 无重叠平铺版）：
-    //   旧版用几十颗发束/填充带拼头发，叠出「蘑菇头 + 面条侧发」；新版改用一组贴合头型的
-    //   球面薄片**边贴边精确平铺**（同一半径、共享边缘、零重叠 → 无 Z 抖动无缝衔接），
-    //   拼成一整片顺滑头发：额心中分全露、发梢沿眉尾斜扫向太阳穴、脸侧无任何垂发、
-    //   马尾全在脑后不挡肩不挡胸。薄片一律不投影（避免薄片自阴影/在额头投出脏斑）。
+    // —— v6.7「一体发壳」：球面薄片边贴边精确平铺（同一半径、共享边缘、零重叠 → 无 Z 抖动），
+    //   拼成一整片顺滑头发 + 脑后宽发幕/马尾造型。薄片一律不投影（避免薄片自阴影/在额头投出脏斑）。
     const HR = P.headR;
     const d2r = (d: number) => (d * Math.PI) / 180;
     /** 球面发片：phi 起止（°，90°=正前）/ theta 起止（°，0°=头顶），同一半径 → 各片共享边缘成一整壳 */
@@ -754,20 +749,18 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
     };
 
     // —— 平铺：theta 0→57 头顶穹顶（两个半片拼整圆，避免全周接缝自重叠），phi 0→360 依次为
-    //   后脑补缝｜左耳后｜左刘海×3｜【中分露额 82~98】｜右刘海×3｜右耳后｜后脑 ——
-    shellPatch(0, 180, 0, 57, hairMat); // 头顶穹顶（前缘 57° 露出额头）
+    //   后脑补缝｜左耳后｜左齐刘海｜右齐刘海｜右耳后｜后脑 ——
+    shellPatch(0, 180, 0, 57, hairMat); // 头顶穹顶（前缘 57° 接刘海）
     shellPatch(180, 360, 0, 57, hairMat); // 头顶穹顶后半
     shellPatch(0, 4, 57, 100, hairMat); // 后脑补缝（跨 360° 补左耳后与后脑接缝）
     shellPatch(176, 360, 57, 100, hairMat); // 后脑大片区（含后颈上方）
     shellPatch(158, 176, 57, 98, hairMat); // 右耳后侧发（贴头型垂到下颌，绝不前伸挡脸）
     shellPatch(4, 22, 57, 98, hairMat); // 左耳后侧发
+    // v6.7 齐刘海：额头整片覆盖（无中分缝），中央一条直线压在眉上，两侧顺脸颊微降包住额角
     const BANGS: [number, number, number, number][] = [
-      [86, 118, 57, 72], // 右内片：中分旁，发梢轻掠眉顶
-      [118, 136, 57, 78], // 右中片：眉尾斜扫
-      [136, 158, 57, 86], // 右外片：太阳穴收笔（眼外侧，不遮瞳）
-      [62, 94, 57, 72], // 左内片
-      [44, 62, 57, 78], // 左中片
-      [22, 44, 57, 86], // 左外片
+      [22, 62, 57, 86], // 左齐刘海：外侧顺到鬓角
+      [62, 118, 57, 76], // 中央齐刘海：直线压眉
+      [118, 158, 57, 86], // 右齐刘海
     ];
     for (const [a0, a1, t0, t1] of BANGS) shellPatch(a0, a1, t0, t1, hairMat);
 
@@ -783,73 +776,69 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
       tie.castShadow = false;
       const strand = mesh(HAIR_LOCK_GEO, hairMat, 0, 0, 0, tail);
       strand.scale.set(HR * 0.4, HR * 2.0, HR * 0.34);
-      const tailTip = mesh(HAIR_LOCK_GEO, hairTipMat, 0, -HR * 1.58, 0.005, tail);
-      tailTip.scale.set(HR * 0.22, HR * 0.7, HR * 0.19);
-      tailTip.castShadow = false;
       buildBowAt(tail, 0, HR * 0.02, HR * 0.03, -1, 0.9, bowCol);
     } else if (W.hair === 'bob') {
-      // 短发波波头：发壳下缘续一圈齐下颌的圆弧下摆（同半径续接，圆滑内扣不遮脸）+ 内扣发梢
-      shellPatch(130, 158, 80, 114, hairMat); // 右颊侧（眼外框到腮）
-      shellPatch(22, 50, 80, 114, hairMat); // 左颊侧
+      // 短发波波头：发壳下缘续一圈齐下颌的圆弧下摆（同半径续接，圆滑内扣不遮脸）；
+      // v6.7 发梢小球删除 —— 下摆本身即为干净齐边
+      shellPatch(130, 158, 86, 114, hairMat); // 右颊侧（刘海缘到腮）
+      shellPatch(22, 50, 86, 114, hairMat); // 左颊侧
       shellPatch(158, 176, 98, 116, hairMat); // 右下摆
       shellPatch(4, 22, 98, 116, hairMat); // 左下摆
       shellPatch(176, 364, 100, 116, hairMat); // 后脑下摆（跨 360° 补齐左接缝）
-      for (const [wx, wy] of [
-        [-0.6, -0.92],
-        [-0.2, -1.0],
-        [0.2, -1.0],
-        [0.6, -0.92],
-      ] as const) {
-        const tip = mesh(HAIR_LOCK_GEO, hairTipMat, wx * HR, wy * HR, -HR * 0.52, head);
-        tip.scale.set(HR * 0.14, HR * 0.4, HR * 0.12);
-        tip.rotation.x = Math.PI; // 发梢朝上 = 内扣
-        tip.castShadow = false;
-      }
     } else if (W.hair === 'straight') {
-      // 长直发：脑后一条顺直长发片（垂到腰，在发壳后方不穿模）+ 耳后两条细发束，发尾平齐挑染
-      const backHair = mesh(new THREE.CapsuleGeometry(HR * 0.24, HR * 1.55, 8, 14), hairMat, 0, -HR, -HR * 0.78, head);
-      backHair.scale.set(1.35, 1, 0.42);
+      // 长直发（v6.7 重做）：脑后宽发幕（车床曲面，宽度覆盖整个后脑 → 背后看不再露头皮）
+      // 平滑垂到腰际，与发壳下缘无缝衔接；发梢小球删除，发缘平齐收笔
+      const fall = new THREE.LatheGeometry(
+        (
+          [
+            [0.55, 0.3], // 顶部收口（藏进头内）
+            [0.98, -0.05],
+            [1.06, -0.28], // 与发壳下缘（θ≈100°, r≈1.04）衔接并略超出
+            [1.07, -0.5],
+            [1.02, -0.95],
+            [0.95, -1.4],
+            [0.88, -1.78],
+            [0.8, -2.06],
+            [0.66, -2.16], // 底缘
+          ] as [number, number][]
+        ).map(([r, y]) => new THREE.Vector2(r * HR, y * HR)),
+        26,
+      );
+      const backHair = mesh(fall, hairMat, 0, 0, -HR * 0.4, head);
+      backHair.scale.set(1, 1, 0.6);
       backHair.castShadow = false;
-      const backTip = mesh(HAIR_LOCK_GEO, hairTipMat, 0, -HR * 1.94, -HR * 0.78, head);
-      backTip.scale.set(HR * 0.5, HR * 0.42, HR * 0.22);
-      backTip.castShadow = false;
-      for (const sx of [-1, 1]) {
-        const lock = mesh(HAIR_LOCK_GEO, hairMat, HR * 0.72 * sx, -HR * 0.35, -HR * 0.42, head);
-        lock.scale.set(HR * 0.17, HR * 1.45, HR * 0.15);
-        lock.rotation.z = sx * 0.06;
-        lock.castShadow = false;
-        const lockTip = mesh(HAIR_LOCK_GEO, hairTipMat, HR * 0.76 * sx, -HR * 1.62, -HR * 0.41, head);
-        lockTip.scale.set(HR * 0.1, HR * 0.4, HR * 0.09);
-        lockTip.castShadow = false;
-      }
     } else if (W.hair === 'wave') {
-      // 大波浪：脑后蓬松长发 + 两侧各两束交错水滴（S 走向，垂在肩后）+ 波浪挑染发尾
-      const backHair = mesh(new THREE.CapsuleGeometry(HR * 0.26, HR * 1.5, 8, 14), hairMat, 0, -HR * 0.92, -HR * 0.76, head);
-      backHair.scale.set(1.5, 1, 0.5);
+      // 大波浪（v6.7 重做）：脑后蓬松宽发幕 + 顶点沿高度做正弦起伏 → 发缘呈波浪卷曲轮廓；
+      // 发梢小球删除，背后全覆盖不露头皮
+      const wavy = new THREE.LatheGeometry(
+        (
+          [
+            [0.55, 0.3],
+            [1.0, -0.05],
+            [1.09, -0.3],
+            [1.11, -0.55],
+            [1.06, -1.0],
+            [0.99, -1.45],
+            [0.93, -1.85],
+            [0.86, -2.1],
+            [0.7, -2.2],
+          ] as [number, number][]
+        ).map(([r, y]) => new THREE.Vector2(r * HR, y * HR)),
+        26,
+      );
+      { // 半径按 y 正弦调制：下摆呈大波浪卷边（两段频率叠加更蓬松自然）
+        const pos = wavy.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+          const y = pos.getY(i);
+          const k = 1 + Math.sin(y * 21 / HR) * 0.032 + Math.sin(y * 8.5 / HR + 1.7) * 0.022;
+          pos.setX(i, pos.getX(i) * k);
+          pos.setZ(i, pos.getZ(i) * k);
+        }
+        pos.needsUpdate = true;
+      }
+      const backHair = mesh(wavy, hairMat, 0, 0, -HR * 0.4, head);
+      backHair.scale.set(1, 1, 0.64);
       backHair.castShadow = false;
-      for (const [wx, wy, wz] of [
-        [-0.5, -1.85, -0.78],
-        [0, -1.98, -0.8],
-        [0.5, -1.85, -0.78],
-      ] as const) {
-        const wave = mesh(HAIR_LOCK_GEO, hairTipMat, wx * HR, wy * HR, wz * HR, head);
-        wave.scale.set(HR * 0.2, HR * 0.42, HR * 0.16);
-        wave.castShadow = false;
-      }
-      for (const sx of [-1, 1]) {
-        const up = mesh(HAIR_LOCK_GEO, hairMat, HR * 0.8 * sx, -HR * 0.22, -HR * 0.3, head);
-        up.scale.set(HR * 0.2, HR * 1.05, HR * 0.18);
-        up.rotation.z = sx * 0.12;
-        up.rotation.y = -sx * 0.25;
-        up.castShadow = false;
-        const low = mesh(HAIR_LOCK_GEO, hairMat, HR * 0.9 * sx, -HR * 1.0, -HR * 0.34, head);
-        low.scale.set(HR * 0.18, HR * 0.95, HR * 0.16);
-        low.rotation.z = sx * -0.1;
-        low.castShadow = false;
-        const lowTip = mesh(HAIR_LOCK_GEO, hairTipMat, HR * 0.95 * sx, -HR * 1.75, -HR * 0.33, head);
-        lowTip.scale.set(HR * 0.1, HR * 0.38, HR * 0.085);
-        lowTip.castShadow = false;
-      }
     } else {
       // 双马尾（默认）：脑后两侧两束水滴马尾（垂在背后，不挡脸不挡胸）+ 扎点小蝴蝶结 + 小呆毛
       for (const sx of [-1, 1]) {
@@ -861,9 +850,6 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
         buildBowAt(tail, 0, HR * 0.02, HR * 0.02, sx, 0.7, bowCol);
         const strand = mesh(HAIR_LOCK_GEO, hairMat, 0, 0, 0, tail);
         strand.scale.set(HR * 0.3, HR * 1.5, HR * 0.26);
-        const tailTip = mesh(HAIR_LOCK_GEO, hairTipMat, HR * 0.03 * sx, -HR * 1.24, 0.01, tail);
-        tailTip.scale.set(HR * 0.16, HR * 0.5, HR * 0.14);
-        tailTip.castShadow = false;
       }
       const curl = mesh(new THREE.TorusGeometry(HR * 0.075, HR * 0.02, 8, 16, Math.PI * 1.5), hairMat, HR * 0.03, HR * 1.06, -HR * 0.02, hairDyn);
       curl.rotation.set(0.5, 0.3, 0.6);
@@ -1379,6 +1365,25 @@ export default function CharChibi3D({ rt, who, hide, poseRef, carryRef, guestNam
       head.rotation.x = dampN(head.rotation.x, 0, 8, dt);
       head.rotation.z = dampN(head.rotation.z, Math.sin(t * 1.4) * 0.12, 8, dt);
       root.rotation.z = dampN(root.rotation.z, Math.sin(t * 0.9) * 0.04, 8, dt);
+      return;
+    }
+    if (pose === 'petcare') {
+      // —— 照顾宠物（v6.9）：屈膝微蹲 + 右手前伸向下（摸头/递碗），手随节奏轻摆 ——
+      standBase();
+      root.position.y = dampN(root.position.y, -0.055 + Math.sin(t * 2.2) * 0.005, 9, dt);
+      root.rotation.x = dampN(root.rotation.x, 0.06, 8, dt);
+      legL.rotation.x = dampN(legL.rotation.x, -0.52, 9, dt);
+      legR.rotation.x = dampN(legR.rotation.x, -0.52, 9, dt);
+      kneeL.rotation.x = dampN(kneeL.rotation.x, 0.5, 9, dt);
+      kneeR.rotation.x = dampN(kneeR.rotation.x, 0.5, 9, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -1.14 + Math.sin(t * 3.2) * 0.1, 9, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.18, 8, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.34 + Math.sin(t * 3.2 + 0.9) * 0.12, 9, dt);
+      armL.rotation.x = dampN(armL.rotation.x, -0.18, 8, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.3, 8, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -0.5, 8, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.2, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, Math.sin(t * 1.6) * 0.04, 8, dt);
       return;
     }
 

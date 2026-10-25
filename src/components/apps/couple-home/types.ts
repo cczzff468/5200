@@ -406,7 +406,26 @@ export interface HomeState {
   notes?: NoteEntry[];
   /** G8 各自身份最后已读时间戳（毫秒）；进门提醒未读便签用 */
   notesSeen?: { me?: number; partner?: number };
+  /** 宠物「团子」状态（v6.9：名字 + 体力/清洁/心情，跨会话持久化） */
+  pet?: PetState;
 }
+
+/** 宠物状态（体力/清洁/心情 0~100，ts = 最后结算时间戳，用于离线衰减） */
+export interface PetState {
+  /** 名字（最长 8 字，默认「团子」） */
+  name?: string;
+  /** 体力（喂食回复） */
+  st: number;
+  /** 清洁（喂水回复） */
+  cl: number;
+  /** 心情（抚摸回复） */
+  mo: number;
+  /** 最后结算时间戳（毫秒） */
+  ts: number;
+}
+
+/** 宠物照顾动作种类 */
+export type PetCareKind = 'pat' | 'feed' | 'water';
 
 /** G1 装修方案快照（家具整组 + 各房间地板/墙色；不含照片 —— 相框照片不随方案备份，控制存档体积） */
 export interface LayoutSnap {
@@ -555,7 +574,8 @@ export type CharPose =
   | 'guitar'
   | 'makeup'
   | 'mirror'
-  | 'read';
+  | 'read'
+  | 'petcare';
 
 /** 小人正在执行的家具动作（走向家具 → 摆姿势） */
 export interface CharAction {

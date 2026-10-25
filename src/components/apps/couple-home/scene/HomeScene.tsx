@@ -49,7 +49,7 @@ import {
   resolveDoorPos,
   resolveWinPos,
 } from '../catalog';
-import type { BoyWear, CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode } from '../types';
+import type { BoyWear, CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode, PetCareKind } from '../types';
 
 // ---------------- 对外 Props ----------------
 
@@ -135,6 +135,12 @@ export interface HomeSceneProps {
   musicPlaying?: boolean;
   /** 天气特效：rain 雨 / snow 雪 / clear 无（窗外粒子） */
   weatherFx?: 'rain' | 'snow' | 'clear';
+  /** 宠物照顾指令队列（HUD 面板 → PetBuddy；seq 变化即触发新指令，v6.9） */
+  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number } | null>;
+  /** 点宠物（打开状态面板回调） */
+  onPetTap?: () => void;
+  /** 宠物照顾事件：arrive 到位（小人摆 petcare 姿势）/ done 完成 / cancel 中断 */
+  onPetEvent?: (ev: 'arrive' | 'done' | 'cancel', kind: PetCareKind) => void;
   /** 好菜上桌的餐桌 id（null = 没有饭菜） */
   mealTableId?: string | null;
   /** 地板纹理（全屋通用）：wood 木纹（默认）/ plain 素色 / check 瓷砖 */
@@ -1344,11 +1350,30 @@ function makeMeowTexture(): THREE.CanvasTexture {
 
 const PET_HEART_N = 4;
 
+/** 宠物照顾动作时长（到位后）：抚摸 / 吃饭 / 喝水 */
+const PET_CARE_DUR: Record<PetCareKind, number> = { pat: 2.0, feed: 4.2, water: 4.2 };
+
 /**
  * 小屋宠物「团子」：奶油色小猫，生活模式常驻客厅溜达（复用 partner 漫游 AI，自动避开家具），
- * 走路颠步 + 尾巴摆动；点它 = 摸头：爱心上浮 + 「喵~」气泡 + 开心压扁回弹 + 耳朵抖动 + 尾巴快摇。
+ * 走路颠步 + 尾巴摆动；点它 = 打开状态面板 + 开心小反应。
+ * v6.9 照顾指令（petCmdRef）：抚摸 → 宠物走到小人身边，小人伸手摸头；
+ * 喂食/喂水 → 宠物走到小人面前，小人蹲下递碗，宠物低头吃/喝，碗随后消失。
  */
-function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
+function PetBuddy({
+  mode,
+  items,
+  meRT,
+  petCmdRef,
+  onPetTap,
+  onPetEvent,
+}: {
+  mode: HomeMode;
+  items: FurnitureItem[];
+  meRT: CharRT;
+  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number } | null>;
+  onPetTap?: () => void;
+  onPetEvent?: (ev: 'arrive' | 'done' | 'cancel', kind: PetCareKind) => void;
+}) {
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const modeRef = useRef(mode);
@@ -1360,6 +1385,10 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
   const earL = useRef<THREE.Group>(null);
   const earR = useRef<THREE.Group>(null);
   const meowSp = useRef<THREE.Sprite>(null);
+  /** 吃/喝时低头点头的头部（进食节拍） */
+  const headGrp = useRef<THREE.Group>(null);
+  /** 喂食/喂水的碗（独立世界坐标组，摆在小人与宠物之间） */
+  const bowl = useRef<THREE.Group>(null);
   /** 摸头余韵（1→0） */
   const pat = useRef(0);
   /** 喵气泡剩余时间 */
@@ -1368,6 +1397,10 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
   const heartT = useRef<number[]>([0, 0, 0, 0].map(() => -10));
   /** 卡死检测：有目标但长时间挪不动（被家具挡住）→ 立刻换目标 */
   const stuck = useRef({ x: -1.4, z: 1.5, t: 0 });
+  /** 照顾中的动作（从 petCmdRef 捕获；phase: walk 走向小人 / do 就位互动） */
+  const care = useRef<{ kind: PetCareKind; phase: 'walk' | 'do'; t: number } | null>(null);
+  /** 已消费的指令序号 */
+  const lastSeq = useRef(-1);
 
   const heartTex = useMemo(() => makeHeartTexture(), []);
   const meowTex = useMemo(() => makeMeowTexture(), []);
@@ -1393,8 +1426,20 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
     (e: ThreeEvent<PointerEvent>) => {
       e.stopPropagation();
       patIt();
+      onPetTap?.();
     },
-    [patIt],
+    [patIt, onPetTap],
+  );
+
+  /** 结束照顾（done=正常完成，cancel=中断）：回调后清碗清状态 */
+  const endCare = useCallback(
+    (done: boolean) => {
+      const k = care.current?.kind;
+      care.current = null;
+      if (bowl.current) bowl.current.visible = false;
+      if (k && onPetEvent) onPetEvent(done ? 'done' : 'cancel', k);
+    },
+    [onPetEvent],
   );
 
   useFrame((state, rawDt) => {
@@ -1404,34 +1449,126 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
     if (!g) return;
     if (modeRef.current !== 'live') {
       g.visible = false;
+      // 切装修/退出时照顾中断
+      if (care.current) endCare(false);
       return;
     }
     g.visible = true;
 
-    // —— 漫游（宠物专用 AI：短距随机目标 + 走走停停 + 卡住即刻换向） ——
-    petWander(rt.current, dt, itemsRef.current);
-    // 卡死检测：朝目标走但位置 1.2s 没怎么动（被家具挡住）→ 清目标立刻重新选点
-    const st = stuck.current;
-    if (rt.current.moving) {
-      if (Math.hypot(rt.current.x - st.x, rt.current.z - st.z) > 0.06) {
-        st.x = rt.current.x;
-        st.z = rt.current.z;
-        st.t = t;
-      } else if (t - st.t > 1.2) {
-        rt.current.target = null;
-        rt.current.nextWander = 0;
-        st.t = t;
-        st.x = rt.current.x;
-        st.z = rt.current.z;
+    // —— 捕获新照顾指令（seq 变化即触发） ——
+    const cmd = petCmdRef?.current;
+    if (cmd && cmd.seq !== lastSeq.current) {
+      lastSeq.current = cmd.seq;
+      if (!care.current) care.current = { kind: cmd.kind, phase: 'walk', t: 0 };
+    }
+
+    // —— 漫游 / 照顾移动 ——
+    const c = care.current;
+    if (c) {
+      // 目标：小人当前位置（钳制在客厅范围内）
+      const cx = THREE.MathUtils.clamp(meRT.x, -ROOM_X + 0.7, ROOM_X - 0.7);
+      const cz = THREE.MathUtils.clamp(meRT.z, -ROOM_Z + 0.7, ROOM_Z - 0.9);
+      const dx = cx - rt.current.x;
+      const dz = cz - rt.current.z;
+      const d = Math.hypot(dx, dz);
+      if (c.phase === 'walk') {
+        c.t += dt; // 走路计时（到位后清零复用为互动计时）
+        if (d > 0.34 && c.t < 9) {
+          const sp = 0.85 * dt;
+          rt.current.x += (dx / d) * Math.min(sp, d);
+          rt.current.z += (dz / d) * Math.min(sp, d);
+          rt.current.moving = true;
+          rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 8));
+          rt.current.target = null;
+          collideAndClamp(rt.current, itemsRef.current, CLOSED_DOOR, CLOSED_DOOR, CLOSED_DOOR, CLOSED_DOOR);
+        } else {
+          // 到位：面对面停住，通知小人摆 petcare 姿势
+          // （9s 超时兜底：被家具卡住/小人在别的房间时，直接把宠物放到小人身边，保证照顾一定能完成）
+          if (d > 0.5) {
+            const inv = 1 / Math.max(0.001, d);
+            rt.current.x = THREE.MathUtils.clamp(cx - dx * inv * 0.45, -ROOM_X + 0.7, ROOM_X - 0.7);
+            rt.current.z = THREE.MathUtils.clamp(cz - dz * inv * 0.45, -ROOM_Z + 0.7, ROOM_Z - 0.9);
+          }
+          rt.current.moving = false;
+          rt.current.target = null;
+          c.phase = 'do';
+          c.t = 0;
+          if (c.kind === 'pat') patIt();
+          onPetEvent?.('arrive', c.kind);
+        }
+      } else {
+        // —— do 阶段：面对面互动 ——
+        rt.current.moving = false;
+        rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(-dx, -dz), Math.min(1, dt * 6));
+        // 小人转身面对宠物（蹲下伸手/递碗的朝向）
+        meRT.heading = lerpAngle(meRT.heading, Math.atan2(rt.current.x - meRT.x, rt.current.z - meRT.z), Math.min(1, dt * 6));
+        c.t += dt;
+        // 小人走远了 → 中断
+        if (Math.hypot(meRT.x - rt.current.x, meRT.z - rt.current.z) > 0.75) {
+          endCare(false);
+        } else if (c.t >= PET_CARE_DUR[c.kind]) {
+          endCare(true);
+        }
       }
     } else {
-      st.x = rt.current.x;
-      st.z = rt.current.z;
-      st.t = t;
+      petWander(rt.current, dt, itemsRef.current);
+      // 卡死检测：朝目标走但位置 1.2s 没怎么动（被家具挡住）→ 清目标立刻重新选点
+      const st = stuck.current;
+      if (rt.current.moving) {
+        if (Math.hypot(rt.current.x - st.x, rt.current.z - st.z) > 0.06) {
+          st.x = rt.current.x;
+          st.z = rt.current.z;
+          st.t = t;
+        } else if (t - st.t > 1.2) {
+          rt.current.target = null;
+          rt.current.nextWander = 0;
+          st.t = t;
+          st.x = rt.current.x;
+          st.z = rt.current.z;
+        }
+      } else {
+        st.x = rt.current.x;
+        st.z = rt.current.z;
+        st.t = t;
+      }
     }
     const mv = rt.current.moving;
     g.position.set(rt.current.x, mv ? Math.abs(Math.sin(t * 11)) * 0.03 : Math.sin(t * 2.1) * 0.006, rt.current.z);
     g.rotation.y = rt.current.heading;
+
+    // —— 碗（喂食/喂水 do 阶段显示，摆在小人与宠物之间地面） ——
+    if (bowl.current) {
+      const show = care.current?.phase === 'do' && care.current.kind !== 'pat';
+      if (show && care.current) {
+        const bx = (rt.current.x + meRT.x) / 2;
+        const bz = (rt.current.z + meRT.z) / 2;
+        const dir = Math.atan2(meRT.x - rt.current.x, meRT.z - rt.current.z);
+        // 碗往小人方向挪 0.18m：小人手够得着、宠物低头吃得着
+        bowl.current.position.set(bx + Math.sin(dir) * 0.18, 0.022 + Math.sin(Math.min(1, care.current.t * 5) * Math.PI) * 0.02, bz + Math.cos(dir) * 0.18);
+        bowl.current.rotation.y = dir;
+        bowl.current.visible = true;
+        bowl.current.scale.setScalar(Math.min(1, care.current.t * 5) * 0.98 + 0.02);
+        // 内容物随动作换色：喂食 = 猫粮棕 + 小鱼饼干；喂水 = 清水蓝
+        const content = bowl.current.getObjectByName('bowl-content') as THREE.Mesh | undefined;
+        const fish = bowl.current.getObjectByName('bowl-fish') as THREE.Mesh | undefined;
+        if (content) (content.material as THREE.MeshStandardMaterial).color.set(care.current.kind === 'water' ? '#8ec9ea' : '#c98d5e');
+        if (fish) fish.visible = care.current.kind === 'feed';
+      } else {
+        bowl.current.visible = false;
+      }
+    }
+
+    // —— 吃/喝：低头啄食节拍（do 阶段且非抚摸） ——
+    if (headGrp.current) {
+      const eating = care.current?.phase === 'do' && care.current.kind !== 'pat';
+      if (eating) {
+        headGrp.current.rotation.x = Math.max(0, Math.sin(t * 7.5)) * 0.34;
+        headGrp.current.position.z = 0.068 + Math.max(0, Math.sin(t * 7.5)) * 0.02;
+      } else {
+        headGrp.current.rotation.x = 0;
+        headGrp.current.position.z = 0.068;
+      }
+    }
 
     // —— 摸头余韵：压扁回弹 + 耳朵抖 + 尾巴快摇 ——
     pat.current = Math.max(0, pat.current - dt / 0.95);
@@ -1441,7 +1578,9 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
     if (earL.current) earL.current.rotation.z = 0.26 + (pp > 0 ? Math.sin(t * 19) * 0.22 * pp : Math.sin(t * 1.8) * 0.03);
     if (earR.current) earR.current.rotation.z = -0.26 - (pp > 0 ? Math.sin(t * 19 + 1.2) * 0.22 * pp : Math.sin(t * 1.6 + 1) * 0.03);
     if (tail.current) {
-      tail.current.rotation.y = Math.sin(t * (mv ? 7 : 2.7)) * (mv ? 0.3 : 0.2) + sq * Math.sin(t * 15) * 0.55;
+      const happy = care.current?.phase === 'do' ? 1 : 0;
+      tail.current.rotation.y =
+        Math.sin(t * (mv ? 7 : 2.7)) * (mv ? 0.3 : 0.2) + sq * Math.sin(t * 15) * 0.55 + happy * Math.sin(t * 9) * 0.4;
     }
 
     // —— 喵气泡 ——
@@ -1476,19 +1615,21 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
   });
 
   return (
+    <>
     <group ref={root} position={[-1.4, 0, 1.5]}>
       {/* 身体（奶油面包团） */}
       <mesh castShadow position={[0, 0.135, -0.012]} scale={[1, 0.8, 1.22]}>
         <sphereGeometry args={[0.135, 18, 14]} />
         <meshStandardMaterial color="#fbf3e6" roughness={0.86} />
       </mesh>
-      {/* 头 */}
-      <mesh castShadow position={[0, 0.272, 0.068]}>
-        <sphereGeometry args={[0.118, 20, 16]} />
-        <meshStandardMaterial color="#fdf8ee" roughness={0.86} />
-      </mesh>
+      {/* 头（低头啄食节拍用 group 包裹） */}
+      <group ref={headGrp} position={[0, 0.272, 0.068]}>
+        <mesh castShadow position={[0, 0, 0]}>
+          <sphereGeometry args={[0.118, 20, 16]} />
+          <meshStandardMaterial color="#fdf8ee" roughness={0.86} />
+        </mesh>
       {/* 耳朵（外耳 + 粉内耳） */}
-      <group ref={earL} position={[-0.063, 0.375, 0.05]} rotation={[-0.1, 0, 0.26]}>
+      <group ref={earL} position={[-0.063, 0.103, -0.018]} rotation={[-0.1, 0, 0.26]}>
         <mesh castShadow>
           <coneGeometry args={[0.038, 0.064, 10]} />
           <meshStandardMaterial color="#fdf8ee" roughness={0.86} />
@@ -1498,7 +1639,7 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
           <meshStandardMaterial color="#f6c2ca" roughness={0.8} />
         </mesh>
       </group>
-      <group ref={earR} position={[0.063, 0.375, 0.05]} rotation={[-0.1, 0, -0.26]}>
+      <group ref={earR} position={[0.063, 0.103, -0.018]} rotation={[-0.1, 0, -0.26]}>
         <mesh castShadow>
           <coneGeometry args={[0.038, 0.064, 10]} />
           <meshStandardMaterial color="#fdf8ee" roughness={0.86} />
@@ -1510,7 +1651,7 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
       </group>
       {/* 黑豆眼 + 高光 */}
       {[-1, 1].map((sx) => (
-        <group key={sx} position={[0.046 * sx, 0.286, 0.172]}>
+        <group key={sx} position={[0.046 * sx, 0.014, 0.104]}>
           <mesh>
             <sphereGeometry args={[0.0145, 10, 8]} />
             <meshStandardMaterial color="#3a3230" roughness={0.25} />
@@ -1522,12 +1663,12 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
         </group>
       ))}
       {/* 粉鼻子 + 腮红 */}
-      <mesh position={[0, 0.256, 0.182]}>
+      <mesh position={[0, -0.016, 0.114]}>
         <sphereGeometry args={[0.009, 8, 8]} />
         <meshStandardMaterial color="#e89aa4" roughness={0.5} />
       </mesh>
       {[-1, 1].map((sx) => (
-        <mesh key={sx} position={[0.077 * sx, 0.25, 0.152]} scale={[1, 0.62, 0.4]}>
+        <mesh key={sx} position={[0.077 * sx, -0.022, 0.084]} scale={[1, 0.62, 0.4]}>
           <sphereGeometry args={[0.014, 8, 8]} />
           <meshBasicMaterial color="#f6bfc6" transparent opacity={0.75} />
         </mesh>
@@ -1539,11 +1680,12 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
         [1, 0.012],
         [1, -0.012],
       ].map(([sx, dy], i) => (
-        <mesh key={i} position={[0.098 * sx, 0.252 + dy, 0.155]} rotation={[0, sx * 0.25, sx * (1.42 + dy * 4)]}>
+        <mesh key={i} position={[0.098 * sx, -0.02 + dy, 0.087]} rotation={[0, sx * 0.25, sx * (1.42 + dy * 4)]}>
           <cylinderGeometry args={[0.0016, 0.0016, 0.055, 5]} />
           <meshBasicMaterial color="#ffffff" transparent opacity={0.85} />
         </mesh>
       ))}
+      </group>
       {/* 四只小爪 */}
       {[
         [-0.062, 0.115],
@@ -1584,12 +1726,30 @@ function PetBuddy({ mode, items }: { mode: HomeMode; items: FurnitureItem[] }) {
       <sprite ref={meowSp} position={[0.18, 0.56, 0.05]} scale={[0.2, 0.15, 1]} visible={false}>
         <spriteMaterial map={meowTex} transparent depthWrite={false} />
       </sprite>
-      {/* 点击热区（透明大球，盖住猫全身 + 富余，走动中也容易点中摸头） */}
+      {/* 点击热区（透明大球，盖住猫全身 + 富余，走动中也容易点中） */}
       <mesh position={[0, 0.22, 0.02]} onPointerDown={onDown}>
         <sphereGeometry args={[0.42, 12, 10]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
     </group>
+    {/* 喂食/喂水的碗（世界坐标，摆在小人与宠物之间） */}
+    <group ref={bowl} visible={false}>
+      <mesh castShadow position={[0, 0.012, 0]}>
+        <cylinderGeometry args={[0.075, 0.058, 0.044, 16]} />
+        <meshStandardMaterial color="#f2a9b8" roughness={0.5} />
+      </mesh>
+      {/* 内容物（food 棕色粮 / water 蓝色水，运行时换色） */}
+      <mesh position={[0, 0.034, 0]} name="bowl-content">
+        <cylinderGeometry args={[0.058, 0.05, 0.014, 16]} />
+        <meshStandardMaterial color="#c98d5e" roughness={0.7} />
+      </mesh>
+      {/* 小鱼饼干（喂食时的点缀） */}
+      <mesh position={[0.02, 0.045, 0.01]} rotation={[0, 0.5, 0]} name="bowl-fish">
+        <capsuleGeometry args={[0.012, 0.03, 4, 8]} />
+        <meshStandardMaterial color="#e8b45c" roughness={0.6} />
+      </mesh>
+    </group>
+    </>
   );
 }
 
@@ -1616,6 +1776,7 @@ export default function HomeScene(props: HomeSceneProps) {
     ceilCol, ceilColBed, ceilColK, ceilColB,
     doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, onToggleDoor, onToggleKitchenDoor, onToggleBathDoor, onToggleBalconyDoor,
     musicPlaying, weatherFx, litLamps, onCritterTap,
+    petCmdRef, onPetTap, onPetEvent,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
   } = props;
 
@@ -1820,7 +1981,7 @@ export default function HomeScene(props: HomeSceneProps) {
 
       <CharChibi3D rt={meRT} who="me" hide={fp && mode === 'live'} poseRef={poseRef} carryRef={carryRef} wear={wear} />
       <CharChibi3D rt={taRT} who="partner" wear2={wear2} />
-      <PetBuddy mode={mode} items={items} />
+      <PetBuddy mode={mode} items={items} meRT={meRT} petCmdRef={petCmdRef} onPetTap={onPetTap} onPetEvent={onPetEvent} />
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       <WeatherFX kind={weatherFx ?? 'clear'} win={win} winExist={winExist} winPos={winPos} />
       <GlassRain kind={weatherFx ?? 'clear'} winExist={winExist} winPos={winPos} />
