@@ -144,3 +144,49 @@ Stage Summary:
 - 拾光小屋完整陪伴交互系统落地：选人入口 → 头顶气泡对话（TTS+麦克风+识图+多消息）→ 物理指令 A* 寻路执行 → 拥抱/牵手/跟随 → AI 主动请求 → 自主行动 → 六类事件全部入角色记忆库并跨 App 互通
 - 关键文件：scene/pathfind.ts、scene/companion-rt.ts、scene/HomeScene.tsx、scene/CharChibi3D.tsx、companion-brain.ts、companion-memory.ts、CoupleHome.tsx、lib/memory-core.ts、lib/ios/accounts.ts
 - 待用户反馈的后续优化清单已随回复输出（室内语音质检/牵手镜头/聊天记录持久化/记忆库场景标签筛选等）
+
+---
+Task ID: 7
+Agent: frontend-styling-expert
+Task: 衣柜弹窗毛玻璃胶囊美化 + 新增「宠物」栏（毛色/项圈/围巾/蝴蝶结）
+
+Work Log:
+- [毛玻璃] Wardrobe.tsx 抽屉容器：奶油渐变底（from-[#fff7f3] via-white to-[#fdf3ee]）→ border-white/60 + bg-white/55 + backdrop-blur-2xl + shadow-[0_-8px_40px_rgba(120,70,80,0.22)]（rounded-t-[26px] 保留，质感对齐宠物状态面板）
+- [毛玻璃] 角色切换胶囊组容器 bg-[#f6ebe6] → bg-white/50 + ring-1 ring-white/70；选中胶囊改 /90 透明度（女生 #f4a7bc/90、男生 #7fc8ae/90，白字与投影保留）
+- [毛玻璃] 分类 Tab 胶囊：未选中 bg-white + ring-[#f0e2dc] → bg-white/60 + ring-white/70；选中同上 /90；款式网格卡片：选中 bg-[#ffeef3] → bg-white/75（ring-2 ring-[#f4a7bc] 不变）、未选中 bg-[#fffdf9] → bg-white/45 + ring-white/70；调色盘/全色系外框、把手、标题、关闭按钮、summary 均保留
+- [宠物] WardrobeProps 新增四个可选 props：petWear/petCoat/onPetChange({coat?,wear?})/initialChar（import type { PetCoat, PetWear } from './types'）；char state 扩为 'girl'|'boy'|'pet'，初始值 initialChar ?? 'girl'（useState 只初始一次）
+- [宠物] 角色切换扩三档：新增「宠物」胶囊，选中 bg-[#e8b06a]/90 text-white + 同色投影；switchChar 支持 pet（不重置 tab，切回 girl/boy 时原 tab 保持有效）
+- [宠物] pet 分支渲染：宠物专属滚动容器替换分类 Tab/调色盘/全色系/款式网格四块（各自包 char !== 'pet' 条件）；顶部小猫预览（内联 SVG PetHeadPreview：猫头+项圈金铃铛+围巾/蝴蝶结随装扮实时显隐）+ 摘要行「奶油猫 · 樱红项圈 · 戴围巾」格式（标题 summary 在宠物态同步显示该文案）
+- [宠物] 毛色栏：grid-cols-4 四卡（奶油/橘子/烟灰/奶牛）各含 MiniCatIcon 迷你猫脸 SVG（48×48：三角耳+耳内粉 #f6c2ca+圆脸+豆豆眼+粉鼻+w 嘴+腮红，奶牛加两块不规则深灰 #3f3f44 斑块，CatHead 共用部件）；选中 ring-2 ring-[#e8b06a] + 杏黄角标；点击 onPetChange({ coat })
+- [宠物] 项圈栏：色板 = 默认樱红 #e46a6a + CLOTH_COLORS 前 8 色（PetSwatches 共用组件），当前色 ring-2 ring-[#e8b06a] + Check，点击 onPetChange({ wear: { ...petWear, collar } })
+- [宠物] 小围巾/蝴蝶结栏：各一行「戴上/不戴」白玻璃胶囊切换（戴上写默认色 #e8927c/#f4a7bc，不戴写 null）+ 戴上时同款式板换色；摘要联动「戴围巾/戴蝴蝶结」
+- [宠物] 全部宠物按钮 sfx.tap() + aria-label（毛色卡/色板/四枚切换钮）；色板 aria 带色名（樱红/樱粉…）
+- [验证] bunx tsc --noEmit 过滤 next.config.ts 后 0 输出；既有 HAIR_NAMES[h] 等字节级完好（od 抽查，避开环境显示丢 [h 的坑）；仅改 Wardrobe.tsx（725→1052 行），无新依赖
+- [说明] CoupleHome/types.ts 的未提交改动来自本任务流水线其他并行任务，本任务未触碰；parent 接线（传 petWear/petCoat/onPetChange/initialChar）由后续任务完成，四个 props 均可选、当前调用方式向后兼容
+
+Stage Summary:
+- 衣柜抽屉整体升级毛玻璃胶囊风（容器/角色胶囊/分类 Tab/款式卡四层），功能与文案零变更
+- 新增第三角色栏「宠物」：毛色四款迷你猫脸卡 + 项圈色板 + 围巾/蝴蝶结「戴上/不戴」胶囊与同款式板，实时 SVG 预览 + 搭配摘要，patch 式 onPetChange 回调待父组件接入
+- 关键文件：src/components/apps/couple-home/Wardrobe.tsx（唯一改动）
+
+---
+Task ID: 8
+Agent: 主控 Agent（Z.ai Code）
+Task: v8.1~v8.3 —— AI 小人生活技能全家桶（钢琴/吉他/放歌/开灯/做饭/开门/睡觉/吃饭）+ 优化项 A-D + 衣柜毛玻璃美化 + 宠物全家桶（换装/毛色/玩具球/第二只宠物/小剧场/成长系统）
+
+Work Log:
+- [v8.1 commit 813658a] companion-rt：新增 play/cook/music/door/eat 指令（乐器锚点/灶台/发声设备站位/关门走点/餐桌），粘性姿势 cmd.dur（0=长睡到天亮）；companion-brain：ACT 协议扩 5 类 + 提示词示例；CoupleHome：事件结算（cook finish→一桌好菜上桌、music finish→关音箱、天亮→长睡自醒）、自主行动调度扩弹琴/做饭/放歌/夜睡、charActivityText 全量映射；HomeScene：partnerPlayingId 联动 Furn3D 音符 + 音箱/收音机开着也飘音符
+- [v8.2 commit bede097] 优化A 聊天持久化：cabin-chat-<id> localStorage 按角色分档（选人恢复/换人封存/每轮落盘，上限40条）；优化B 牵手专属镜头：GameLoop hold 阶段镜头拉远 dist≥10.9 + 两人中点 + pitch≤0.74（不写回用户 ref，松手恢复）；优化C 夜睡做梦：夜里自主上床（dur=0）+ 头顶 9~17s 冒梦话气泡（聊天可回应）+ 天亮自醒；优化D 一起做动作：AI 回应「一起/陪」+watch/eat/play → TA 到位后招呼用户同步入座（弹琴用另一件乐器防抢琴凳），反向用户开始 watch/eat 时空闲 TA 自动凑过来
+- [Task 7 子代理] Wardrobe.tsx：毛玻璃胶囊重做（容器/胶囊组/Tab/卡片全换 bg-white/55+backdrop-blur-2xl 质感）+ 新增「宠物」栏（毛色 4 卡带迷你猫脸 SVG / 项圈色板 / 围巾/蝴蝶结 开关+色板 / initialChar 预设）
+- [v8.3 commit 52e32e4] types：PetCoat/PetWear/PetExtra/Pet2State + PetCareKind+shake/spin/roll/ball + HomeState.pet2；PetBuddy：四色毛色（奶牛带三块斑块）/项圈色/围巾/蝴蝶结 meshes、握手（右前爪 ref 抬爪挥）/转圈（自转 4π）/打滚（侧翻 2π+离地弧）把戏动画、玩具球状态机（抛物线+落地弹跳+叼回主人脚边+mo+8）、小剧场（白天蝴蝶精灵绕飞猫追 8s / 夜里三只萤火虫飘+蹲守扑跳 / 雨天走到沙发旁趴 10s）、PetBuddy2 第二只宠物（小狗垂耳摇尾/兔子长耳蹦跳，追猫玩 9~17s 一次、摸摸汪汪&噔噔、夜里蜷窝边睡）；CoupleHome：成长系统（Lv1~9 = 1+天数/2+照顾/6，握手Lv2/转圈Lv3/打滚Lv5 解锁，面板 Lv 徽章+陪伴天数+升级进度+升级 toast）、扔球/把戏按钮（面板 3×4 + 右侧竖条）、领伙伴弹窗（小狗/小兔子）、装扮按钮直开衣柜宠物栏；sfx：whoosh/pop/bark/boing 四音效
+- [E2E 修复 commit 2244aa9] ①TA 走路被关着的门挡住→重算失败时自动开门自救（closedDoorNear 0.85m + auto-open 事件 + 宿主开门+「把门推开」文案，repathed 复位续走）②主动请求守卫改 idle/near 才触发（弹琴/做饭/睡觉中不再弹窗打断）
+- [验证] tsc 0 错误；eslint couple-home 新增仅 2 处与全仓既有 itemsRef.current=items 同款模式（基线 CoupleHome 42/HomeScene 14 不变）
+- [验证] Agent Browser E2E（390×844）：入口选人✓；宠物面板 Lv.1 徽章/陪伴第1天/成长进度/领伙伴/扔球+三把戏锁定✓；扔球抛出✓；衣柜毛玻璃+宠物栏（橘子毛色/围巾/蝴蝶结即时生效，3D 猫变橘色目视）✓；领养小狗进场✓；小剧场蝴蝶出现猫在追✓；AI 对话两条回复均带 <<ACT>>（play / goto br+play）✓；走路→卡门→自动开门→进卧室→坐下弹奏 全链路目视✓；AI 主动请求弹窗两次（牵手版/拥抱版）+拒绝路径✓；聊天存档 localStorage 落盘✓；控制台无 error（仅无上游 API 的预期兜底告警）
+- [验证环境说明] headless rAF 2fps（真机 60fps 正常）：TTS 出声、牵手镜头过渡、把戏动画（需 Lv2）、夜睡梦话、雨天躲屋檐为代码审查覆盖；球抛物线/捡球完整回环因 10× 慢速未等完全程
+- [git] push 依旧不可达（沙箱无 github 权限），4 个 commit 全部在本地：813658a / bede097 / 52e32e4 / 2244aa9
+
+Stage Summary:
+- AI 小人现在会：弹钢琴/吉他（音符飘出）、做饭（做完菜真上桌可开饭）、放歌（音箱/唱片机开+音符）、开灯、开门（含被门挡住自己开）、上床长睡+做梦说梦话、吃饭；用户一句话即可指挥，全事件入角色记忆库
+- 优化项 A-D 全落地：小屋聊天退出重进不丢、牵手双人电影镜头、夜里睡觉冒梦话（可回应）、「一起看电视/吃饭/弹琴」双向同步
+- 衣柜弹窗毛玻璃胶囊美化 + 新增宠物栏（换毛色/项圈/围巾/蝴蝶结）；宠物系统：玩具球扔捡、第二只宠物（狗/兔）、小剧场（蝶/萤火虫/雨躲）、成长等级解锁把戏
+- 关键文件：companion-rt.ts、companion-brain.ts、CoupleHome.tsx、scene/HomeScene.tsx、Wardrobe.tsx、types.ts、sfx.ts、scene/pathfind.ts（doorPoints 复用）
