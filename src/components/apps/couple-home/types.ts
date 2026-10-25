@@ -467,8 +467,10 @@ export interface Pet2State extends PetExtra {
   ts?: number;
 }
 
-/** 宠物状态（体力/清洁/心情 0~100，ts = 最后结算时间戳，用于离线衰减；v8.3 继承成长/毛色/装扮字段） */
+/** 宠物状态（体力/清洁/心情 0~100，ts = 最后结算时间戳，用于离线衰减；v8.3 继承成长/毛色/装扮字段；v9 kind 供统一面板渲染） */
 export interface PetState extends PetExtra {
+  /** 物种（v9：猫缺省；领养宠物为 dog/rabbit，统一面板渲染用） */
+  kind?: 'cat' | 'dog' | 'rabbit';
   /** 名字（最长 8 字，默认「团子」） */
   name?: string;
   /** 体力（喂食回复） */

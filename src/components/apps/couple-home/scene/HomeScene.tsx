@@ -82,7 +82,7 @@ export interface HomeSceneProps {
   /** 手持物（true = 右手拿小水杯，拿饮料/咖啡后端着到处逛） */
   carryRef?: RefObject<{ cup: boolean; coffee?: boolean; pet?: boolean }>;
   /** v7.2 抱抱指令（on=true 抱起 / on=false 放下；seq 变化触发） */
-  petCarryCmdRef?: RefObject<{ on: boolean; seq: number }>;
+  petCarryCmdRef?: RefObject<{ on: boolean; seq: number; target?: string }>;
   /** 乐器弹奏特写（非 null = 镜头推近该乐器；覆盖层 UI 发声） */
   instRef?: RefObject<{ kind: 'piano' | 'guitar'; itemId: string } | null>;
   /** 浴缸水龙头点击（放水/关水） */
@@ -142,11 +142,11 @@ export interface HomeSceneProps {
   /** 天气特效：sunny 晴 / cloudy 多云 / overcast 阴 / rain 雨 / snow 雪（v9 室外世界全家桶） */
   weatherFx?: HomeWeather;
   /** 宠物照顾指令队列（HUD 面板 → PetBuddy；seq 变化即触发新指令，v6.9） */
-  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number; carry?: boolean } | null>;
-  /** 点宠物（打开状态面板回调） */
-  onPetTap?: () => void;
-  /** 宠物照顾事件：arrive 到位（小人摆 petcare 姿势）/ done 完成 / cancel 中断 / dropped 放下（v7.2 抱抱） */
-  onPetEvent?: (ev: 'arrive' | 'done' | 'cancel' | 'dropped', kind: PetCareKind) => void;
+  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number; carry?: boolean; target?: string } | null>;
+  /** 点宠物（打开状态面板回调；v9 带宠物 id —— 'cat' / 'p2:<i>'） */
+  onPetTap?: (petId?: string) => void;
+  /** 宠物照顾事件：arrive 到位（小人摆 petcare 姿势）/ done 完成 / cancel 中断 / dropped 放下；v9 带宠物 id 路由 */
+  onPetEvent?: (ev: 'arrive' | 'done' | 'cancel' | 'dropped', kind: PetCareKind, petId?: string) => void;
   /** 宠物状态（v7.1：需求气泡 —— 体力低=饿了 / 心情低=想喝水 / 清洁低=要洗澡） */
   petState?: PetState;
   /** 好菜上桌的餐桌 id（null = 没有饭菜） */
@@ -173,10 +173,10 @@ export interface HomeSceneProps {
   petCoat?: PetCoat;
   /** v8.3 宠物装扮（项圈颜色/围巾/蝴蝶结） */
   petWear?: PetWear;
-  /** v8.3 第二只宠物（小狗/小兔子；undefined = 还没领） */
-  pet2?: Pet2State;
-  /** v8.3 玩具球扔球指令（seq 变化 = 扔一次） */
-  petBallCmdRef?: RefObject<{ seq: number }>;
+  /** v8.3 玩具球扔球指令（seq 变化 = 扔一次；v9 target 路由到对应宠物） */
+  petBallCmdRef?: RefObject<{ seq: number; target?: string }>;
+  /** v9 领养宠物全家福（小狗/小兔子，可无数只；每只全功能：照顾/抱抱/扔球/把戏/装扮） */
+  pets2?: Pet2State[];
 }
 
 /** v8.0 头顶气泡指令（who = 挂在谁头上；hold = 展示秒数，缺省按字数） */
@@ -1809,11 +1809,11 @@ function PetBuddy({
   mode: HomeMode;
   items: FurnitureItem[];
   meRT: CharRT;
-  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number; carry?: boolean } | null>;
-  /** v7.2 抱抱指令（on=true 抱起 / on=false 放下；seq 变化触发） */
-  petCarryCmdRef?: RefObject<{ on: boolean; seq: number }>;
-  onPetTap?: () => void;
-  onPetEvent?: (ev: 'arrive' | 'done' | 'cancel' | 'dropped', kind: PetCareKind) => void;
+  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number; carry?: boolean; target?: string } | null>;
+  /** v7.2 抱抱指令（on=true 抱起 / on=false 放下；seq 变化触发；v9 target 路由） */
+  petCarryCmdRef?: RefObject<{ on: boolean; seq: number; target?: string }>;
+  onPetTap?: (petId?: string) => void;
+  onPetEvent?: (ev: 'arrive' | 'done' | 'cancel' | 'dropped', kind: PetCareKind, petId?: string) => void;
   /** 夜晚（回猫窝睡觉） */
   night?: boolean;
   /** 宠物状态（需求气泡：体力低=饿了 / 心情低=想喝水 / 清洁低=要洗澡） */
@@ -1825,7 +1825,7 @@ function PetBuddy({
   /** v8.3 毛色 / 装扮 / 玩具球指令 */
   petCoat?: PetCoat;
   petWear?: PetWear;
-  petBallCmdRef?: RefObject<{ seq: number }>;
+  petBallCmdRef?: RefObject<{ seq: number; target?: string }>;
   /** v8.3 把自己的运行时暴露给第二只宠物（追着玩用） */
   petRTRef?: RefObject<CharRT | null>;
 }) {
@@ -2050,9 +2050,9 @@ function PetBuddy({
     g.visible = true;
     if (petRTRef) petRTRef.current = rt.current;
 
-    // —— 捕获新照顾指令（seq 变化即触发；睡觉中被叫醒） ——
+    // —— 捕获新照顾指令（seq 变化即触发；v9 target 路由：只有 target 为空（旧入口）或 'cat' 才接；睡觉中被叫醒） ——
     const cmd = petCmdRef?.current;
-    if (cmd && cmd.seq !== lastSeq.current) {
+    if (cmd && cmd.seq !== lastSeq.current && (!cmd.target || cmd.target === 'cat')) {
       lastSeq.current = cmd.seq;
       if (!care.current) {
         care.current = { kind: cmd.kind, phase: 'walk', t: 0, carry: cmd.carry }; // v7.2 carry=true：抱起模式
@@ -2080,7 +2080,7 @@ function PetBuddy({
     // —— v7.2 放下指令（seq 变化触发）：抱起时收到 on=false → 轻轻放到小人面前 ——
     //   （抱起走 petCmdRef 的 carry 标志，无需独立 on=true 通道）
     const cc = petCarryCmdRef?.current;
-    if (cc && !cc.on && cc.seq !== lastCarrySeq.current) {
+    if (cc && !cc.on && cc.seq !== lastCarrySeq.current && (!cc.target || cc.target === 'cat')) {
       lastCarrySeq.current = cc.seq;
       if (care.current?.carry) {
         if (carrying.current) {
@@ -2107,7 +2107,7 @@ function PetBuddy({
 
     // —— v8.3 扔球指令（seq 变化 = 扔一次；照顾中/被抱着时不接） ——
     const bc = petBallCmdRef?.current;
-    if (bc && bc.seq !== lastBallSeq.current) {
+    if (bc && bc.seq !== lastBallSeq.current && (!bc.target || bc.target === 'cat')) {
       lastBallSeq.current = bc.seq;
       if (!care.current && !carrying.current) throwBall();
     }
@@ -2946,23 +2946,41 @@ function PetBuddy2({
   items,
   night,
   buddy,
+  petId,
+  meRT,
   catRTRef,
   doorRef,
+  petCmdRef,
+  petCarryCmdRef,
+  petBallCmdRef,
+  onCareEvent,
+  onPetTap,
 }: {
   mode: HomeMode;
   items: FurnitureItem[];
   night?: boolean;
   buddy: Pet2State;
+  /** v9 宠物 id（'p2:<i>'；照顾指令/事件都带它路由到对应宠物状态） */
+  petId: string;
+  meRT: CharRT;
   /** 第一只猫的运行时 ref（追着玩用；每帧 PetBuddy 写入） */
   catRTRef?: RefObject<CharRT | null>;
   doorRef?: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive }>;
+  /** v9 照顾指令（target 路由：只有 target === petId 的指令本实例才接） */
+  petCmdRef?: RefObject<{ kind: PetCareKind; seq: number; carry?: boolean; target?: string } | null>;
+  petCarryCmdRef?: RefObject<{ on: boolean; seq: number; target?: string }>;
+  petBallCmdRef?: RefObject<{ seq: number; target?: string }>;
+  /** 照顾事件（arrive/done/cancel/dropped；宿主按 petId 结算对应宠物状态） */
+  onCareEvent?: (ev: 'arrive' | 'done' | 'cancel' | 'dropped', kind: PetCareKind, petId: string) => void;
+  /** 点到它（宿主：把互动竖条切到这只） */
+  onPetTap?: (petId: string) => void;
 }) {
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const isDog = buddy.kind === 'dog';
-  const rt = useRef<CharRT>({ x: 1.2, z: 2.2, heading: 1.2, moving: false, target: null, nextWander: 0 });
+  const rt = useRef<CharRT>({ x: 1.2 + Math.random() * 0.6, z: 2.6 + Math.random() * 0.6, heading: 1.2, moving: false, target: null, nextWander: 0 });
   const root = useRef<THREE.Group>(null);
   const tail = useRef<THREE.Group | THREE.Mesh>(null);
   /** 追猫玩剩余时间 / 下次发起时刻 */
@@ -2981,6 +2999,77 @@ function PetBuddy2({
   /** 夜晚蜷在猫窝边睡觉 */
   const sleeping = useRef(false);
   const zzzEase = useRef(0);
+  // —— v9 全功能照顾引擎（与团子同权）：care 走位/互动 + 抱起跟随 + 扔球捡球 + 把戏 ——
+  /** 照顾中的动作（phase: walk 走向小人 / do 就位互动；carry=true 抱起模式） */
+  const care = useRef<{ kind: PetCareKind; phase: 'walk' | 'do'; t: number; carry?: boolean } | null>(null);
+  const lastSeq = useRef(-1);
+  const carrying = useRef(false);
+  const lastCarrySeq = useRef(0);
+  /** 抱起抬升缓动（0→1） */
+  const hugLift = useRef(0);
+  /** 把戏累计角度（转圈 4π / 打滚 2π）+ 握手摆动相位 */
+  const trickSpin = useRef(0);
+  const trickShake = useRef(0);
+  /** 扔球状态机 */
+  const ballGrp = useRef<THREE.Group>(null);
+  const ball = useRef<{ phase: 'hidden' | 'fly' | 'rest' | 'carried'; t: number; from: Pt; to: Pt; bounce: number }>({
+    phase: 'hidden',
+    t: 0,
+    from: { x: 0, z: 0 },
+    to: { x: 0, z: 0 },
+    bounce: 0,
+  });
+  const lastBallSeq = useRef(0);
+  const fetching = useRef<'chase' | 'return' | null>(null);
+  /** 摸它时的小音效（狗汪汪 / 兔子噔噔） */
+  const sndHappy = useCallback(() => {
+    if (isDog) sfx.bark();
+    else sfx.boing();
+  }, [isDog]);
+
+  /** 结束照顾（done=正常完成，cancel=中断） */
+  const endCare = useCallback(
+    (done: boolean) => {
+      const k = care.current?.kind;
+      care.current = null;
+      carrying.current = false;
+      trickSpin.current = 0;
+      trickShake.current = 0;
+      if (k) onCareEvent?.(done ? 'done' : 'cancel', k, petId);
+      rt.current.nextWander = performance.now() / 1000 + 1.2;
+    },
+    [onCareEvent, petId],
+  );
+
+  /** v9 扔球：从主人手上抛物线飞到同房间随机点（推出家具/钳回房间），随后它自动去捡 */
+  const throwBall = useCallback(() => {
+    const dr = doorRef?.current;
+    const doors = {
+      bed: dr?.bed ?? CLOSED_DOOR,
+      kt: dr?.kt ?? CLOSED_DOOR,
+      bath: dr?.bath ?? CLOSED_DOOR,
+      bal: dr?.bal ?? CLOSED_DOOR,
+    };
+    const ang = Math.random() * Math.PI * 2;
+    const dist = 1.1 + Math.random() * 1.3;
+    const probe: CharRT = {
+      x: meRT.x + Math.sin(ang) * dist,
+      z: meRT.z + Math.cos(ang) * dist,
+      heading: 0,
+      moving: false,
+      target: null,
+      nextWander: 0,
+    };
+    collideAndClamp(probe, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+    ball.current = { phase: 'fly', t: 0, from: { x: meRT.x, z: meRT.z }, to: { x: probe.x, z: probe.z }, bounce: 0 };
+    fetching.current = null;
+    if (sleeping.current) {
+      sleeping.current = false;
+      rt.current.target = null;
+      rt.current.nextWander = performance.now() / 1000 + 4;
+    }
+    sfx.whoosh();
+  }, [meRT, doorRef]);
 
   useFrame((state, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
@@ -2999,7 +3088,211 @@ function PetBuddy2({
       bath: dr?.bath ?? CLOSED_DOOR,
       bal: dr?.bal ?? CLOSED_DOOR,
     };
-    if (night) {
+
+    // —— 捕获新照顾指令（target 路由：只接自己的） ——
+    const cmd = petCmdRef?.current;
+    if (cmd && cmd.seq !== lastSeq.current && (!cmd.target || cmd.target === petId)) {
+      lastSeq.current = cmd.seq;
+      if (!care.current) {
+        care.current = { kind: cmd.kind, phase: 'walk', t: 0, carry: cmd.carry };
+        if (cmd.kind === 'summon') sfx.whistle();
+        if (sleeping.current) {
+          sleeping.current = false;
+          rt.current.target = null;
+          rt.current.nextWander = performance.now() / 1000 + 4;
+        }
+      }
+    }
+    // —— 放下指令（抱着时收到 on=false → 轻轻放到小人面前） ——
+    const cc = petCarryCmdRef?.current;
+    if (cc && !cc.on && cc.seq !== lastCarrySeq.current && (!cc.target || cc.target === petId)) {
+      lastCarrySeq.current = cc.seq;
+      if (care.current?.carry) {
+        if (carrying.current) {
+          carrying.current = false;
+          const hd = meRT.heading;
+          rt.current.x = meRT.x + Math.sin(hd) * 0.42;
+          rt.current.z = meRT.z + Math.cos(hd) * 0.42;
+          rt.current.moving = false;
+          rt.current.target = null;
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+          pat.current = 0.85;
+          sndHappy();
+          heartT.current = performance.now() / 1000;
+          rt.current.nextWander = performance.now() / 1000 + 1.6;
+        }
+        care.current = null;
+        onCareEvent?.('dropped', 'hug', petId);
+      }
+    }
+    // —— 扔球指令（seq 变化 = 扔一次；只接自己的；照顾中/被抱着时不接） ——
+    const bc = petBallCmdRef?.current;
+    if (bc && bc.seq !== lastBallSeq.current && (!bc.target || bc.target === petId)) {
+      lastBallSeq.current = bc.seq;
+      if (!care.current && !carrying.current) throwBall();
+    }
+
+    // —— 球物理（抛物线 → 落地轻弹 → 等它来叼；叼着时贴在嘴前） ——
+    if (ballGrp.current) {
+      const b = ball.current;
+      if (b.phase === 'fly') {
+        b.t += dt / 0.85;
+        if (b.t >= 1) {
+          b.t = 0;
+          b.phase = 'rest';
+          b.bounce = 2;
+          if (!fetching.current && !care.current && !carrying.current && modeRef.current === 'live') {
+            fetching.current = 'chase';
+          }
+        }
+      } else if (b.phase === 'rest' && b.bounce > 0) {
+        b.t += dt;
+        if (b.t > 0.34) {
+          b.t = 0;
+          b.bounce -= 1;
+        }
+      }
+      const bg = ballGrp.current;
+      if (b.phase === 'hidden') {
+        bg.visible = false;
+      } else if (b.phase === 'fly') {
+        bg.visible = true;
+        const k = Math.min(1, b.t);
+        bg.position.set(
+          THREE.MathUtils.lerp(b.from.x, b.to.x, k),
+          0.055 + Math.sin(Math.PI * k) * 0.72,
+          THREE.MathUtils.lerp(b.from.z, b.to.z, k),
+        );
+        bg.rotation.z -= dt * 13;
+        bg.rotation.x += dt * 5;
+      } else if (b.phase === 'carried') {
+        bg.visible = true;
+        bg.position.set(rt.current.x + Math.sin(rt.current.heading) * 0.17, 0.13, rt.current.z + Math.cos(rt.current.heading) * 0.17);
+        bg.rotation.z += dt * 2;
+      } else {
+        bg.visible = true;
+        const hop = b.bounce > 0 ? Math.sin(Math.PI * Math.min(1, b.t / 0.34)) * 0.09 * b.bounce : 0;
+        bg.position.set(b.to.x, 0.055 + hop, b.to.z);
+      }
+    }
+
+    // —— 漫游 / 照顾移动 / 夜睡 ——
+    const c = care.current;
+    const nightNow = !!night && !!itemsRef.current.find((f) => f.kind === 'petBed' && (f.y ?? 0) < 0.45);
+    if (c) {
+      const cx = meRT.x;
+      const cz = meRT.z;
+      const dx = cx - rt.current.x;
+      const dz = cz - rt.current.z;
+      const d = Math.hypot(dx, dz);
+      if (c.phase === 'walk') {
+        c.t += dt;
+        if (d > 0.34 && c.t < 9) {
+          const sp = petWalkSpeed(c.kind) * dt;
+          rt.current.x += (dx / d) * Math.min(sp, d);
+          rt.current.z += (dz / d) * Math.min(sp, d);
+          rt.current.moving = true;
+          rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 8));
+          rt.current.target = null;
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+        } else {
+          // 9s 超时兜底：被卡住直接放到小人身边（照顾一定能完成）
+          if (d > 0.5) {
+            const inv = 1 / Math.max(0.001, d);
+            rt.current.x = cx - dx * inv * 0.45;
+            rt.current.z = cz - dz * inv * 0.45;
+          }
+          rt.current.moving = false;
+          c.phase = 'do';
+          c.t = 0;
+          if (c.kind === 'pat' || c.kind === 'summon' || c.kind === 'hug') {
+            pat.current = 1;
+            hopY.current = 0.12;
+            sndHappy();
+            if (c.kind === 'hug') sfx.kiss();
+          } else {
+            sndHappy();
+          }
+          heartT.current = performance.now() / 1000;
+          onCareEvent?.('arrive', c.kind, petId);
+        }
+      } else {
+        // —— do 阶段：面对面互动 ——
+        rt.current.moving = false;
+        if (c.kind === 'hug') {
+          const hd = meRT.heading;
+          const off = c.carry ? 0.27 : 0.16;
+          const k = Math.min(1, dt * (c.carry ? 10 : 8));
+          rt.current.x = THREE.MathUtils.lerp(rt.current.x, meRT.x + Math.sin(hd) * off, k);
+          rt.current.z = THREE.MathUtils.lerp(rt.current.z, meRT.z + Math.cos(hd) * off, k);
+          rt.current.heading = lerpAngle(rt.current.heading, hd, k);
+          hugLift.current = Math.min(1, hugLift.current + dt * 2.6);
+          if (c.carry) carrying.current = true;
+          if (c.t % 1.1 < dt && (!c.carry || c.t < 3.2)) heartT.current = performance.now() / 1000;
+        } else {
+          hugLift.current = Math.max(0, hugLift.current - dt * 4);
+          rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(-dx, -dz), Math.min(1, dt * 6));
+          meRT.heading = lerpAngle(meRT.heading, Math.atan2(rt.current.x - meRT.x, rt.current.z - meRT.z), Math.min(1, dt * 6));
+        }
+        // 互动节拍音效
+        if (c.kind === 'feed' && c.t % 0.55 < dt) sfx.crunch();
+        else if (c.kind === 'water' && c.t % 0.7 < dt) sfx.sip();
+        else if (c.kind === 'bath' && c.t % 2.4 < dt) sfx.bathWater();
+        c.t += dt;
+        // —— 成长把戏：握手（小跳 + 摆头）/ 转圈（原地转两圈）/ 打滚（侧滚一周） ——
+        if (c.kind === 'shake') {
+          trickShake.current = Math.sin(c.t * 9) * 0.24;
+          if (c.t % 0.5 < dt) hopY.current = 0.09;
+        } else if (c.kind === 'spin') {
+          trickSpin.current += dt * ((Math.PI * 4) / PET_CARE_DUR.spin);
+        } else if (c.kind === 'roll') {
+          trickSpin.current += dt * ((Math.PI * 2) / PET_CARE_DUR.roll);
+        }
+        if (c.kind !== 'hug' && Math.hypot(meRT.x - rt.current.x, meRT.z - rt.current.z) > 0.75) {
+          endCare(false);
+        } else if (!c.carry && c.t >= PET_CARE_DUR[c.kind]) {
+          endCare(true);
+        }
+      }
+    } else if (fetching.current) {
+      // —— 捡球任务：追球 → 叼住 → 送回主人脚边 ——
+      sleeping.current = false;
+      const b = ball.current;
+      const tx = b.phase === 'carried' ? meRT.x : b.to.x;
+      const tz = b.phase === 'carried' ? meRT.z : b.to.z;
+      const dx = tx - rt.current.x;
+      const dz = tz - rt.current.z;
+      const d = Math.hypot(dx, dz);
+      if (fetching.current === 'chase' && b.phase === 'rest' && d < 0.26) {
+        b.phase = 'carried';
+        fetching.current = 'return';
+        sfx.pop();
+      } else if (fetching.current === 'return' && d < 0.6) {
+        const hd = meRT.heading;
+        b.phase = 'rest';
+        b.to = { x: meRT.x + Math.sin(hd) * 0.42, z: meRT.z + Math.cos(hd) * 0.42 };
+        b.t = 0;
+        b.bounce = 0;
+        fetching.current = null;
+        rt.current.target = null;
+        rt.current.moving = false;
+        pat.current = 0.85;
+        sndHappy();
+        heartT.current = performance.now() / 1000;
+        rt.current.nextWander = performance.now() / 1000 + 2;
+        onCareEvent?.('done', 'ball', petId);
+      } else if (d > 0.02) {
+        const sp = (fetching.current === 'chase' ? 2.0 : 1.8) * dt;
+        rt.current.x += (dx / d) * Math.min(sp, d);
+        rt.current.z += (dz / d) * Math.min(sp, d);
+        rt.current.moving = true;
+        rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 9));
+        rt.current.target = null;
+        collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+      } else {
+        rt.current.moving = false;
+      }
+    } else if (nightNow && !carrying.current) {
       // 夜晚：蜷在猫窝边睡（无窝就地睡）
       if (!sleeping.current) {
         sleeping.current = true;
@@ -3007,7 +3300,7 @@ function PetBuddy2({
         rt.current.target = null;
         const bed = itemsRef.current.find((f) => f.kind === 'petBed' && (f.y ?? 0) < 0.45);
         if (bed) {
-          rt.current.x = bed.x + 0.42;
+          rt.current.x = bed.x + 0.42 + (rt.current.x % 0.1);
           rt.current.z = bed.z + 0.2;
           collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
         }
@@ -3017,7 +3310,7 @@ function PetBuddy2({
         sleeping.current = false;
         rt.current.nextWander = performance.now() / 1000 + 1.5;
       }
-      // 追猫玩（两只一起疯）：每 9~17s 发起一次 3.5s 的追追
+      // 追猫玩（每 9~17s 一次 3.5s 追追）
       const cat = catRTRef?.current ?? null;
       nextChaseAt.current -= dt;
       if (chaseT.current > 0 && cat) {
@@ -3051,16 +3344,24 @@ function PetBuddy2({
     const pp = pat.current;
     hopY.current = Math.max(0, hopY.current - dt * 0.7);
     const mv = rt.current.moving;
-    // 兔兔蹦跳感更强（小狗小跑）
     const hopAmp = isDog ? 0.022 : 0.05;
+    // 被抱着：贴在怀里抬到胸口；否则地面 + 走路小跳
+    const carryY = carrying.current ? 0.34 + hugLift.current * 0.14 : 0;
     g.position.set(
       rt.current.x,
-      (mv ? Math.abs(Math.sin(t * (isDog ? 10 : 8))) * hopAmp : Math.sin(t * 2) * 0.005) + hopY.current + se2 * 0.02,
+      (mv ? Math.abs(Math.sin(t * (isDog ? 10 : 8))) * hopAmp : Math.sin(t * 2) * 0.005) + hopY.current + se2 * 0.02 + carryY,
       rt.current.z,
     );
-    g.rotation.y = rt.current.heading;
+    // 把戏姿态：转圈/打滚累计角 + 握手小侧倾
+    g.rotation.y = rt.current.heading + trickSpin.current;
+    g.rotation.z = c?.kind === 'roll' ? trickSpin.current : trickShake.current;
     const sq = Math.sin(pp * Math.PI);
-    g.scale.set((1 + sq * 0.1) * (1 + se2 * 0.12), (1 - sq * 0.14) * (1 - se2 * 0.3), (1 + sq * 0.1) * (1 + se2 * 0.12));
+    const squash = c?.kind === 'roll' ? 1 : 0;
+    g.scale.set(
+      (1 + sq * 0.1) * (1 + se2 * 0.12) * (1 + squash * 0.06),
+      (1 - sq * 0.14) * (1 - se2 * 0.3) * (1 - squash * 0.22),
+      (1 + sq * 0.1) * (1 + se2 * 0.12) * (1 + squash * 0.06),
+    );
     if (tail.current) tail.current.rotation.z = Math.sin(t * (mv ? 13 : 5)) * 0.4 * (1 - se2);
     // 摸摸爱心
     if (heartSp.current) {
@@ -3084,17 +3385,26 @@ function PetBuddy2({
       pat.current = 1;
       hopY.current = 0.14;
       heartT.current = performance.now() / 1000;
-      if (isDog) sfx.bark();
-      else sfx.boing();
+      sndHappy();
+      onPetTap?.(petId);
     },
-    [isDog],
+    [sndHappy, onPetTap, petId],
   );
 
-  const body = isDog ? '#e8d3ae' : '#f8f6f2';
-  const body2 = isDog ? '#d9bd90' : '#eeece7';
-  const earC = isDog ? '#b98d5e' : '#f3c9d4';
+  // v9 毛色（调色盘任意色）/ 装扮（项圈/围巾/蝴蝶结）——与团子同权
+  const body = typeof buddy.coat === 'string' && buddy.coat.startsWith('#') ? buddy.coat : isDog ? '#e8d3ae' : '#f8f6f2';
+  const shade = (hex: string, f: number) => {
+    const n = parseInt(hex.slice(1), 16);
+    const r = Math.min(255, Math.max(0, Math.round(((n >> 16) & 255) * f)));
+    const gg = Math.min(255, Math.max(0, Math.round(((n >> 8) & 255) * f)));
+    const b = Math.min(255, Math.max(0, Math.round((n & 255) * f)));
+    return `#${((r << 16) | (gg << 8) | b).toString(16).padStart(6, '0')}`;
+  };
+  const body2 = shade(body, 0.88);
+  const earC = isDog ? shade(body, 0.72) : '#f3c9d4';
+  const collarC = buddy.wear?.collar ?? '#e46a6a';
   return (
-    <group ref={root} position={[1.2, 0, 2.2]}>
+    <group ref={root} position={[rt.current.x, 0, rt.current.z]}>
       {/* 身体 */}
       <mesh castShadow position={[0, 0.13, -0.02]} scale={[1, 0.82, 1.24]}>
         <sphereGeometry args={[0.125, 18, 14]} />
@@ -3166,6 +3476,31 @@ function PetBuddy2({
           </mesh>
         ))}
       </group>
+      {/* v9 装扮：项圈（脖子一圈）/ 小围巾 / 蝴蝶结（耳边） */}
+      <mesh position={[0, 0.185, 0.02]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.085, 0.012, 8, 18]} />
+        <meshStandardMaterial color={collarC} roughness={0.5} />
+      </mesh>
+      {typeof buddy.wear?.scarf === 'string' && (
+        <mesh position={[0, 0.15, 0.03]} rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[0.09, 0.02, 8, 18]} />
+          <meshStandardMaterial color={buddy.wear.scarf} roughness={0.95} />
+        </mesh>
+      )}
+      {typeof buddy.wear?.bow === 'string' && (
+        <group position={[0.075, 0.34, 0.04]} rotation={[0, 0, 0.5]}>
+          {[-1, 1].map((sx) => (
+            <mesh key={sx} position={[0.024 * sx, 0, 0]} scale={[0.9, 0.6, 0.5]}>
+              <sphereGeometry args={[0.02, 8, 8]} />
+              <meshStandardMaterial color={buddy.wear!.bow!} roughness={0.85} />
+            </mesh>
+          ))}
+          <mesh>
+            <sphereGeometry args={[0.011, 8, 8]} />
+            <meshStandardMaterial color={shade(buddy.wear!.bow!, 0.8)} roughness={0.85} />
+          </mesh>
+        </group>
+      )}
       {/* 四只小爪 */}
       {[
         [-0.055, 0.1],
@@ -3192,6 +3527,13 @@ function PetBuddy2({
           <meshStandardMaterial color="#ffffff" roughness={0.9} />
         </mesh>
       )}
+      {/* v9 玩具球（它自己的捡球通道） */}
+      <group ref={ballGrp} visible={false}>
+        <mesh castShadow>
+          <sphereGeometry args={[0.055, 14, 12]} />
+          <meshStandardMaterial color={isDog ? '#f0a068' : '#f4a7bc'} roughness={0.5} />
+        </mesh>
+      </group>
       {/* 摸摸爱心 + 点击热区 */}
       <sprite ref={heartSp} material={heartMat} visible={false} />
       <mesh position={[0, 0.2, 0.02]} onPointerDown={onDown}>
@@ -3395,7 +3737,7 @@ export default function HomeScene(props: HomeSceneProps) {
     petCmdRef, onPetTap, onPetEvent, petState, petCarryCmdRef,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
     companionCmdRef, onCompanionEvent, onPartnerTap, bubbleRef, partnerPlayingId,
-    petCoat, petWear, pet2, petBallCmdRef,
+    petCoat, petWear, pets2, petBallCmdRef,
   } = props;
 
   // —— v8.0 陪伴系统：状态机实例 / 小人姿势槽 / A* 阻挡网格（网格重建见下方 wallBoxes 之后） ——
@@ -3643,7 +3985,25 @@ export default function HomeScene(props: HomeSceneProps) {
         petRTRef={catRTRef}
       />
       {/* v8.3 第二只宠物（小狗/小兔子）：追着猫玩，摸摸会开心 */}
-      {pet2 && mode === 'live' && <PetBuddy2 mode={mode} items={items} night={night} buddy={pet2} catRTRef={catRTRef} doorRef={doorRef} />}
+      {/* v9 领养宠物全家福：每只都是全功能（照顾/抱抱/扔球/把戏/装扮），互不干扰 */}
+      {(pets2 ?? []).map((b, i) => (
+        <PetBuddy2
+          key={`${b.kind}-${i}`}
+          mode={mode}
+          items={items}
+          night={night}
+          buddy={b}
+          petId={`p2:${i}`}
+          meRT={meRT}
+          catRTRef={catRTRef}
+          doorRef={doorRef}
+          petCmdRef={petCmdRef}
+          petCarryCmdRef={petCarryCmdRef}
+          petBallCmdRef={petBallCmdRef}
+          onCareEvent={onPetEvent}
+          onPetTap={onPetTap}
+        />
+      ))}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       {/* v8.0 3D 头顶对话气泡（用户/AI 消息挂在对应小人头顶） */}
       <HeadBubbles meRT={meRT} taRT={taRT} bubbleRef={bubbleRef} />
