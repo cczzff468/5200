@@ -2852,7 +2852,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
       if (nightRef.current) {
         // —— v8.1 夜深了：没有别的事就回床上睡觉（dur=0 一直睡到天亮/被叫起） ——
         if (r < 0.55) {
-          const bed = itemsRef.current.find((f) => CATALOG[f.kind]?.acts?.sleep && (f.y ?? 0) < 0.45);
+          // v12 双人同床：宿主已经睡在某张床上 → TA 优先去同一张床（上床后自动两侧睡），
+          // 不再各睡各的；宿主没睡才按原来的方式挑第一张床
+          const meLying = poseRef.current?.pose === 'lie';
+          const bed =
+            (meLying &&
+              itemsRef.current.find(
+                (f) =>
+                  CATALOG[f.kind]?.acts?.sleep &&
+                  (f.y ?? 0) < 0.45 &&
+                  Math.hypot(meRT.current.x - f.x, meRT.current.z - f.z) < 1.6,
+              )) ||
+            itemsRef.current.find((f) => CATALOG[f.kind]?.acts?.sleep && (f.y ?? 0) < 0.45) ||
+            null;
           if (bed) {
             issueCompanionCmd({ kind: 'lie', itemId: bed.id, memo: 'auto-night', dur: 0 });
             cabinBehaviorMemoryOncePerDay(companion.id, 'night-sleep', `夜深了，${companion.name}洗漱完上床睡觉，被子盖得严严实实的。`);
@@ -3363,6 +3375,25 @@ export default function CoupleHome({ close }: { close: () => void }) {
       }
       const act = anchorOf(type, item);
       if (!act) return;
+      // v12 双人床两侧睡：TA 已经躺在这张床上 → 我上床时横移到另一侧（局部 X ±0.45），
+      // 肩并肩同床头，不再吸附到同一个锚点上把 TA 整个压住（或被 TA 压住）
+      if (type === 'lie') {
+        const st = companionStateRef.current;
+        if (st === 'sleeping' || st === 'lying') {
+          const c = Math.cos(item.ry ?? 0);
+          const s = Math.sin(item.ry ?? 0);
+          const dxw = taRT.current.x - item.x;
+          const dzw = taRT.current.z - item.z;
+          if (Math.hypot(dxw, dzw) < 1.6) {
+            const lxTa = dxw * c - dzw * s; // TA 在床局部坐标的横向位置
+            const off = lxTa >= 0 ? -0.45 : 0.45; // TA 居中/偏 +X → 我睡 -X 侧；反之 +X 侧
+            act.tx += off * c;
+            act.tz += off * -s;
+            if (act.ox !== undefined) act.ox += off * c; // 外围走位点同步横移（从床头侧绕进来落点一致）
+            if (act.oz !== undefined) act.oz += off * -s;
+          }
+        }
+      }
       actRef.current = act;
       setCharAction((prev) => (prev ? { ...prev, active: true } : { type, itemId: item.id, active: true }));
       const turnOn = (patch: FurnitureItem['st']) =>

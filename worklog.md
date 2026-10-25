@@ -374,3 +374,21 @@ Stage Summary:
 - v11 场景组 7 项全落地：雨天每 8~22s 真实双闪（窗白 + 屋内瞬亮 + 延迟雷声）；纯合成环境白噪音引擎（雨/炉火/雪夜风，1s 渐变幂等切换）；四季外观（草地/花园/窗景/季节粒子/冬季积雪白边全联动真实日期）；灯具色温随昼夜 ~1s 渐变（st.lc 最高优先）+ 拥抱暖光光环脉冲；宠物按住屏幕追指尖（多宠延迟错开、低优先级不抢戏）；宠物成长 Lv1~9 体型 0.62→1.0 平滑缩放；猫窝 st.bedColor 换色；长按陪伴小人 ≥550ms 检测（suppress 防误触）
 - 接口契约四条全部按钉死签名实现（HomeSceneProps 两 prop / BubbleCmd kind 扩展 / sfx.thunder+ambient+ambientCurrent / weather-bus.seasonNow），已与 12-c 的 CoupleHome 接线共同通过全量 tsc
 - 关键文件：scene/HomeScene.tsx（5014→5418）、scene/Room.tsx（1648→1742）、scene/CharChibi3D.tsx（1639→1689）、scene/Furn3D.tsx（758→779）、sfx.ts（513→761）、scene/weather-bus.ts（22→39）
+
+---
+Task ID: 12-sleep
+Agent: Z.ai 主控（双人睡觉专项修复）
+Task: 修复「两个人睡觉」叠压问题——玩家与 TA 先后上床吸附到同一个 sleep 锚点（dx=0, dz=0.2），两人完全重叠（截图表现为 TA 身下压着玩家只露出粉色圆头）；连带排查牵手躺床卡抖、夜里选床不认人等同源问题
+
+Work Log:
+- [根因] 床类家具（粉白双人床 fp[1.91,2.25]）目录 sleep 锚点全场唯一（dx=0, dz=0.2）：宿主端 anchorOf 与陪伴端 companionAnchor('lie') 都吸到同一点；谁后上床谁压住先睡的人（CharChibi3D 躺姿 y 同为 0.47 无横向错位）
+- [修复1 companion-rt.ts] 新增 BED_SHARE_OFF=0.45 + lieShareOffset(item, me, meLying)（宿主躺且在 1.6m 内 → 按宿主床局部 X 位置取另一侧：lxMe>=0 给 -0.45，否则 +0.45）+ sleepSpot(item, me, meLying)（companionAnchor('lie') 基础上加横向偏移，旋转口径与锚点一致 d·cos/-d·sin）；三处接入：①到位吸附（case 'walk' arrive 吸附前重查 poseRef.pose==='"lie"'，走路途中宿主躺下也避让）②卡死传送兜底（stuckTotal>3 传送同样走 sleepSpot，保证「一定躺到床上」且不叠人）③牵手 case 'hold' 开头：宿主躺下自动松手（memo 'host-sleep'，床半深 1.1m+ 使 0.5m 牵手距离在床外永远够不着 → 原版会贴床沿卡抖一整晚且 phase!=='idle' 挡住夜里上床调度）
+- [修复2 CoupleHome.tsx] 玩家上床同样避让：家具确认按钮 handler（anchorOf('lie') 之后）检查 companionStateRef ∈ {sleeping, lying} 且 taRT 距该床 <1.6m → act.tx/tz 与 ox/oz 按床局部 X 横移 ±0.45 到 TA 另一侧（ox/oz 可选字段做了 undefined 守卫）
+- [修复3 CoupleHome.tsx] 夜里自主上床选床：宿主已躺（poseRef.pose==='lie'）→ 优先选宿主正睡的那张床（<1.6m 命中），TA 上床后由修复1 自动两侧睡；宿主没睡才回落原来的「第一张床」
+- [E2E 390x844 浏览器实测] 注入测试 char 联系人进入小屋：①顺序 A（TA 先睡）——TA 自主躺床中央，玩家点床「睡觉」→ 两小人并肩、中间隔着小猪玩偶，无叠压（截图 v12_15）；②顺序 B（玩家先睡）——点 TA 拥抱叫离床，玩家躺床中央，聊天「你也上床睡觉吧」→ TA 走到床自动睡另一侧，头同端身分开（截图 v12_23）；③「起床」起身干净、TA 继续睡；④控制台零新增错误；eslint：companion-rt.ts 0 问题，CoupleHome.tsx 52 = 既有基线（改动前 53，零新增）；dev.log 仅既有 instrumentation.ts 噪音，编译 ✓
+- [验证注意] bun run lint 全量会被超大文件（couple-space.tsx >500KB）OOM SIGKILL，需按文件 bunx eslint 代替
+
+Stage Summary:
+- 双人睡觉叠压根修：先睡者不动（居中），后上床者自动横移到床另一侧（局部 X ±0.45），两种先后顺序、走路中变卦、卡死传送兜底三条路径全部覆盖；牵手躺床自动松手防卡抖 + 不再挡夜里同床调度；夜里 TA 优先去宿主正睡的床
+- 改动文件：scene/companion-rt.ts（886→930 行）、CoupleHome.tsx（7531→7560 行）；未触碰 catalog/types/HomeScene
+- 已 commit + push origin main

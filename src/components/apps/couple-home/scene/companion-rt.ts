@@ -287,6 +287,35 @@ function nearestBed(items: FurnitureItem[], from: Pt): FurnitureItem | null {
   return best;
 }
 
+// —— v12 双人床两侧睡：床的 sleep 锚点全场只有一个（dx=0），宿主与陪伴小人先后上床
+//    会吸附到同一个点，两个人完全叠在一起（上面的人把下面的人整个压住，只露出一只头）。
+//    规则：一方已躺在床上时，后上床的一方横移到床的另一侧（局部 X ±0.45），肩并肩、同床头。
+const BED_SHARE_OFF = 0.45;
+
+/** 宿主已躺在这张床上时，陪伴小人该睡哪一侧（返回局部 X 偏移；0 = 宿主没在这张床上/没躺） */
+function lieShareOffset(item: FurnitureItem, me: CharRT, meLying: boolean): number {
+  if (!meLying) return 0;
+  const dxw = me.x - item.x;
+  const dzw = me.z - item.z;
+  if (Math.hypot(dxw, dzw) > 1.6) return 0; // 宿主不在这张床上（可能睡了别的床/沙发床）
+  const c = Math.cos(item.ry ?? 0);
+  const s = Math.sin(item.ry ?? 0);
+  const lxMe = dxw * c - dzw * s; // 宿主在床局部坐标的横向位置
+  // 宿主居中（独自先睡）或偏 +X 侧 → TA 睡 -X 侧；宿主偏 -X 侧 → TA 睡 +X 侧
+  return lxMe >= 0 ? -BED_SHARE_OFF : BED_SHARE_OFF;
+}
+
+/** 陪伴小人在某张床上的最终躺点（含同床避让；只算脚点，朝向/高度沿用锚点） */
+function sleepSpot(item: FurnitureItem, me: CharRT, meLying: boolean): { x: number; z: number } {
+  const a = companionAnchor('lie', item);
+  if (!a) return { x: item.x, z: item.z };
+  const off = lieShareOffset(item, me, meLying);
+  const c = Math.cos(item.ry ?? 0);
+  const s = Math.sin(item.ry ?? 0);
+  // 局部 X 位移 d → 世界偏移 (d·cos, -d·sin)（与 companionAnchor 同一套旋转口径）
+  return { x: a.tx + off * c, z: a.tz - off * s };
+}
+
 /** 找最近的乐器（play：优先钢琴，其次吉他） */
 function nearestInstrument(items: FurnitureItem[], from: Pt): FurnitureItem | null {
   let best: FurnitureItem | null = null;
@@ -702,9 +731,13 @@ export function companionStep(
             // ③ 传送兜底：座位类动作（有锚点）直接落到锚点本体 —— 上床/上沙发本来就吸附在
             //    锚点上，外围点被相邻家具挡死时也能保证「一定躺到床上」；
             //    其余指令落到目标点最近可达格 —— 视觉上瞬移一小步，但任务一定完成
-            const spot = rt.anchor
-              ? { x: rt.anchor.tx, z: rt.anchor.tz }
-              : nearestFree(grid.blocked, t0.x, t0.z);
+            //    v12：躺床传送同样走 sleepSpot（宿主已躺 → 传到另一侧，不叠人）
+            const bedIt = cmd.kind === 'lie' ? items.find((f) => f.id === rt.itemId) ?? null : null;
+            const spot = bedIt
+              ? sleepSpot(bedIt, me, poseRef.pose === 'lie')
+              : rt.anchor
+                ? { x: rt.anchor.tx, z: rt.anchor.tz }
+                : nearestFree(grid.blocked, t0.x, t0.z);
             ta.x = spot.x;
             ta.z = spot.z;
             ta.moving = false;
@@ -740,8 +773,17 @@ export function companionStep(
         ) {
           const a = rt.anchor;
           if (a) {
-            ta.x = a.tx;
-            ta.z = a.tz;
+            if (cmd.kind === 'lie') {
+              // v12 双人床两侧睡：吸附瞬间再确认一次宿主是否已躺在床上（走路途中躺下也算），
+              // 已躺 → 吸附到另一侧，绝不与宿主叠在同一个点上
+              const bedIt = items.find((f) => f.id === rt.itemId) ?? null;
+              const spot = bedIt ? sleepSpot(bedIt, me, poseRef.pose === 'lie') : { x: a.tx, z: a.tz };
+              ta.x = spot.x;
+              ta.z = spot.z;
+            } else {
+              ta.x = a.tx;
+              ta.z = a.tz;
+            }
             ta.heading = a.ry;
           }
           // play 按乐器分流姿势：钢琴坐姿 / 吉他站姿
@@ -837,6 +879,14 @@ export function companionStep(
     }
     case 'hold': {
       // —— 牵手跟随：保持 0.5m 距离 + 防穿模；进新房间回报 room 事件 ——
+      // v12：宿主躺下睡觉 → 自动松手。床的脚印很大（半深 1.1m+），0.5m 牵手距离
+      // 在床外永远够不着，TA 会贴着床沿卡抖一整晚，也没法再去上床睡觉。
+      if (poseRef.pose === 'lie') {
+        partnerPose.pose = 'stand';
+        onEvent({ ev: 'release', kind: 'holdhand', memo: 'host-sleep' });
+        toIdle(rt, partnerPose);
+        return true;
+      }
       rt.actT += dt;
       const dx = me.x - ta.x;
       const dz = me.z - ta.z;
