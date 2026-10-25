@@ -812,6 +812,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const [petBarOpen, setPetBarOpen] = useState(false);
   /** 最近一次点宠物的时刻（ms）：down 命中宠物后，同一次点击的 up 射线会落到地板/家具上，用它区分「真点别处」 */
   const petTapAtRef = useRef(0);
+  /** v8.0 同款守卫：down 命中陪伴小人后，同一次点击的 up 射线不能当作「点别处」关菜单 */
+  const partnerTapAtRef = useRef(0);
   const [petCare, setPetCare] = useState<PetCareKind | null>(null);
   /** 照顾中镜像（供 beginAction 等旧回调读取，不引入重依赖） */
   const petCareRef = useRef<PetCareKind | null>(null);
@@ -1638,8 +1640,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   /** 点陪伴小人 → 环形菜单（生活模式） */
   const openPartnerMenu = useCallback(() => {
+    partnerTapAtRef.current = Date.now(); // 守卫：同一次点击的 up 射线会落到地板/家具上，不能当作「点别处」
     if (modeRef.current !== 'live' || !companion) return;
-    setPartnerMenuOpen(true);
+    setPartnerMenuOpen((v) => !v);
     setPetBarOpen(false);
     setPetPanel(false);
     sfx.tap();
@@ -2205,7 +2208,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
     (item: FurnitureItem) => {
       sfx.tap(); // E3：所有家具点按轻响（函数最前面，提前 return 分支也有声）
       const justPet = Date.now() - petTapAtRef.current < 450; // 刚点过宠物（up 配对落到家具上）
-      if (mode === 'live' && !justPet) {
+      const justPartner = Date.now() - partnerTapAtRef.current < 450; // v8.0：刚点过陪伴小人
+      if (mode === 'live' && !justPet && !justPartner) {
         setPetBarOpen(false); // v7.1：点别处（家具）互动竖条消失
         setPetPanel(false); // v7.2：点别处状态面板也收起
         setPartnerMenuOpen(false); // v8.0：陪伴菜单也收起
@@ -3311,6 +3315,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   const onFloorTap = useCallback(() => {
     if (Date.now() - petTapAtRef.current < 450) return; // 刚点过宠物（up 配对落地），不算「点别处」
+    if (Date.now() - partnerTapAtRef.current < 450) return; // v8.0：刚点过陪伴小人（up 配对落地），不算「点别处」
     setSelId(null);
     setMoveOn(false);
     setPaletteOpen(false);

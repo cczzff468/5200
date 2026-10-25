@@ -116,3 +116,31 @@ Work Log:
 Stage Summary:
 - 白点根因修复（材质高光闪烁而非粒子）；抱抱改为「抱起怀抱随意走动 + 放下」双态交互；互动按钮同时出现在面板下方与点宠物的右侧竖条；宠物头像移到装修小家左侧
 - 关键文件：CoupleHome.tsx、scene/HomeScene.tsx、scene/CharChibi3D.tsx
+
+---
+Task ID: 6
+Agent: 主控 Agent（Z.ai Code）
+Task: 3D 拾光小屋 · 完整陪伴交互系统（入口配置 / 3D头顶气泡对话+TTS / A*寻路指令执行 / 拥抱牵手 / AI主动请求与自主行动 / 记忆系统全面接入）
+
+Work Log:
+- [模块一·场景基础 commit 224020d] pathfind.ts 新建：0.2m 全屋 A* 网格寻路（墙段盒+关门洞补挡+家具脚印三重阻挡、对角防切角、视线拉直、目标被挡螺旋找近点、不可达返回 null）；房间图 planRoute/planDoors/doorPoints 自 HomeScene 迁出共用
+- [模块一] companion-rt.ts 新建：陪伴小人状态机（come/goto/sit/lie/watch/lamp/free + hug + holdhand）；A* 路点跟随+collideAndClamp 注入；卡死 0.9s 重算一次后 giveup 回报；坐/躺粘性 25~55s 自起；牵手 0.5m 跟随（远=直奔+节流 A* 绕障、近=退半步防穿模、进新房间回报 room 事件）
+- [模块一] CharChibi3D：新增 hug（双臂环抱前倾）/holdhand（牵手步行双态）姿势；partner 姿势通道 poseRef2；点击热区 onTap（透明大球 stopPropagation）
+- [模块一] HomeScene：GameLoop 陪伴优先于漫游；A* 阻挡网格随 items/门态/门位重建；HeadBubbles 组件（canvas 气泡纹理缓存、每人一槽排队、淡入淡出、跟随头顶）
+- [模块二 commit e5ce5d1] companion-brain.ts：buildCabinSystem（persona 七要素 channel=拾光小屋 + 实体行动 JSON 协议 <<ACT>>{actions}<<END>> + 聊天方式 + 记忆块 + 实时情境【我在干嘛/房间/牵手/昼夜/天气/时间/附近家具/照片识图】）；cabinChatTurn（/api/chat 代理→失败 forceSdk 重试）；parseAiReply（动作块拦截+按行拆 1~10 条气泡）
+- [模块二] companion-memory.ts：cabinEventMemory（sourceTag 去重直写事件碎片）/ cabinBehaviorMemoryOncePerDay（同类一天一次）/ cabinRecentInteractions（最近物理互动摘要）/ cabinMemoryBlock（memChatRecallBlock 标准召回+摘要注入）/ cabinAfterChatTurn（memAfterAiTurn 标准管线 scene=拾光小屋）
+- [模块二] MemApp/AccountApp 新增 'cabin'（MEM_APP_LABEL=拾光小屋；DEFAULT_APPS/LOGIN_HIST_KEY/FORCE_LOGIN_KEY/ACCOUNT_APP_NAMES 补齐；proactive-msg avatarApp cast）
+- [模块二] CoupleHome：进入弹联系人选择列表（localStorage 记忆、⋮ 菜单「换个TA陪伴」重弹）；右上角 💬 信息图标→底部聊天输入条（文字/麦克风 Web Speech 实时转写再点自动发送/附照片走设置里识图模型 /api/vision）；AI 多条回复逐条气泡（用户消息 10s 淡出）+ 小人声音开关开启时角色音色 TTS 逐句播报（speakUserTts）+ 关闭时按阅读节奏排队
+- [模块三] 点小人环形菜单【拥抱】【牵手】（牵手中=【松开】）：拥抱走过来→双方 hug 姿势→用户走动/6s 自动松开；牵手→0.5m 跟随；AI 主动请求弹窗「××想要拥抱你/想牵牵你的手」（同意→动画+记忆、拒绝→失落记忆+头顶小情绪气泡、45s 自收回）；自主行动调度（坐下/开电视看节目/去别的房间，记忆同类一天一次）
+- [模块三] 全事件记忆：拥抱（user/ai 两视角）、牵手、指令执行（「主人让阿澄××，TA 照做了」）、主动请求同意/拒绝、牵手进新房间空间记忆（「主人牵着阿澄的手，把TA带到了××」）、自主行为（一天一次）
+- [修复 E2E 发现] 点小人环形菜单被同一次点击 up 射线立即关闭（v7.1 宠物竖条同款 bug）→ partnerTapAtRef 450ms 守卫（onFloorTap/onFurnTap 双入口过滤）
+- [验证] tsc 通过（仅 next.config.ts 既有基线）；eslint CoupleHome 47 处与基线完全一致（0 新增），新文件 pathfind/companion-rt/companion-brain/companion-memory 0 问题
+- [验证] Agent Browser E2E（390×844）：入口联系人选择弹窗✓（创建「阿澄·恋人」后选定）；💬 图标+聊天输入条（含麦克风/拍照/发送/忙碌态）✓；用户消息头顶气泡（10s 淡出）✓；无 API 配置时 /api/chat 上游失败→SDK 兜底回复成功✓；AI 多条气泡逐条排队展示✓；「过来陪我坐到沙发上」→阿澄走位坐下并回复「刚坐到沙发上」✓；AI 主动请求弹窗两次触发✓（拒绝→头顶「呜……那好吧。」情绪气泡✓）；自主行动（自动开电视+坐电视前）✓；⋮ 菜单「小人声音 已关→已开」「换个TA陪伴 阿澄」✓；昼夜自动切换不受影响✓；换台等既有功能无回归✓
+- [验证] 记忆库 IndexedDB 直查：app='cabin' 碎片已入库——「阿澄打开电视，坐在电视前看了会儿节目。」(cabin-auto:watch)、「阿澄想求个抱抱，但被主人拒绝了，有点失落。」(cabin-hug-reject)；互通开关下微信/QQ/信息/电话可召回
+- [验证环境说明] headless rAF 节流 2fps → 走位/拥抱动画时长 10× 慢，环形菜单点选在移动目标上无法稳定命中（守卫修复后机制与 v7.1 宠物点击同源，真机 60fps 验证）；TTS 出声无法在 headless 采证（链路复用既有 speakUserTts 已验证实现）
+- [说明] git push 无远程仓库（沙箱不可达 github）——三个模块 commit 均在本地（224020d / e5ce5d1 / 本次），用户网络可用时可自行推送
+
+Stage Summary:
+- 拾光小屋完整陪伴交互系统落地：选人入口 → 头顶气泡对话（TTS+麦克风+识图+多消息）→ 物理指令 A* 寻路执行 → 拥抱/牵手/跟随 → AI 主动请求 → 自主行动 → 六类事件全部入角色记忆库并跨 App 互通
+- 关键文件：scene/pathfind.ts、scene/companion-rt.ts、scene/HomeScene.tsx、scene/CharChibi3D.tsx、companion-brain.ts、companion-memory.ts、CoupleHome.tsx、lib/memory-core.ts、lib/ios/accounts.ts
+- 待用户反馈的后续优化清单已随回复输出（室内语音质检/牵手镜头/聊天记录持久化/记忆库场景标签筛选等）
