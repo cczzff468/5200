@@ -1,5 +1,5 @@
 /**
- * 拾光小屋 · 语音输入兜底层（v10.3）
+ * 拾光小屋 · 语音输入兜底层（v10.3 / v11 接入设置里的 SenseVoice 模型）
  *
  * 背景：原来的语音输入只依赖 Web Speech API（浏览器内置识别），而国产安卓浏览器 /
  * WebView 里基本不可用（识别引擎走的 Google 服务不可达，甚至没有该 API），
@@ -8,7 +8,11 @@
  * 本模块提供与浏览器无关的本地兜底链路：
  * 1. startManualRecording —— MediaRecorder 录音（按住说话的一次性录音）；
  * 2. blobToWav16kBase64 —— 录音解码 → 重采样 16kHz 单声道 → WAV → base64；
- * 3. transcribeBlob —— POST /api/phone/asr（内置 z-ai ASR，免用户配置）→ 文本；
+ * 3. transcribeBlob —— 识别优先级链（v11）：
+ *    ① 设置 App 已下载的 SenseVoice 端侧模型（offline-asr，断网可用、零配置零等待）；
+ *    ② 设置 App 配置的云端 STT（stt-client → /api/stt，OpenAI 兼容服务商）；
+ *    ③ 内置 z-ai ASR（POST /api/phone/asr，免配置服务端兑底）；
+ *    麦克风按钮与连续对讲共用本函数，一处接入全部生效；
  * 4. createVoiceSegmenter —— 连续对讲的自动分段：RMS 音量检测，
  *    检测到说话自动开录，静音 ~1.1s 自动收段 → onSegment(blob) → 逐句识别发送。
  *
@@ -17,6 +21,8 @@
  */
 
 import { pickRecorderMime } from './audio-utils';
+import { isOfflineAsrReady, offlineAsrTranscribe } from './offline-asr';
+import { isSttReady, transcribeAudioBlob } from './stt-client';
 
 // ---------------- WAV 编码（16kHz 单声道 16bit PCM） ----------------
 
@@ -88,8 +94,39 @@ export async function blobToWav16kBase64(blob: Blob): Promise<string> {
 
 // ---------------- 服务端识别 ----------------
 
-/** 录音 → 服务端 ASR（内置 z-ai 识别，无需用户配置）→ 文本；空结果/失败抛错 */
+/**
+ * 录音 → 识别 → 文本；空结果/失败抛错（调用方提示「没听清」）。
+ *
+ * v11 识别优先级链（接入设置 App 的 SenseVoice 模型）：
+ * ① SenseVoice 端侧模型（设置里下载后就绪即用：断网可用、零成本、无外发流量）；
+ * ② 用户在设置里配置的云端 STT（OpenAI 兼容 /audio/transcriptions，经 /api/stt 代理）；
+ * ③ 内置 z-ai ASR（/api/phone/asr，免配置服务端兑底）。
+ * 三级全失败才抛错 —— 只要有任何一路可用，语音输入就不再是「没反应」。
+ */
 export async function transcribeBlob(blob: Blob): Promise<string> {
+  // ① SenseVoice 端侧模型（设置 App → 语音识别 STT → 离线识别；失败静默降级）
+  if (isOfflineAsrReady()) {
+    try {
+      const localText = await offlineAsrTranscribe(blob);
+      const t = localText.trim();
+      // 过滤纯符号输出（静音/噪声的典型误识别）
+      if (t && !/^[#\s*_\-.,!?~。？！，、…—·]+$/.test(t)) return t;
+    } catch {
+      // 端侧引擎失败（初始化中/解码异常/超时）：静默降级下一级
+    }
+  }
+
+  // ② 用户配置的云端 STT（内部同样先端侧后云端；此处仅在其就绪时调用）
+  if (isSttReady()) {
+    try {
+      const cloudText = await transcribeAudioBlob(blob);
+      if (cloudText) return cloudText;
+    } catch {
+      // 云端失败：降级内置兑底
+    }
+  }
+
+  // ③ 内置 z-ai ASR 兑底（免配置，服务端转发）
   const audioBase64 = await blobToWav16kBase64(blob);
   const res = await fetch('/api/phone/asr', {
     method: 'POST',

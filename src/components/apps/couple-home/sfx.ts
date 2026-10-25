@@ -45,9 +45,10 @@ function getAudioContext(): { ctx: AudioContext; master: GainNode } | null {
   }
 }
 
-/** 写持久化开关（即时生效，不销毁 context） */
+/** 写持久化开关（即时生效，不销毁 context；关掉时连环境音一起停） */
 function setEnabled(on: boolean): void {
   enabled = on;
+  if (!on) stopAmbientNow(); // 总开关关闭：环境白噪音一并全停
   try {
     localStorage.setItem(STORE_KEY, on ? '1' : '0');
   } catch {
@@ -488,6 +489,249 @@ function playBoing(): void {
   osc.stop(t + dur + 0.02);
 }
 
+// ---------------- v11 G1 雷声 / G2 环境白噪音引擎（纯 Web Audio 合成，禁外部音频文件） ----------------
+
+/** 布朗噪声段（积分白噪声，能量偏低频； Thunder rumble / 壁炉底噪用） */
+function brownBuf(c: AudioContext, dur: number): AudioBuffer {
+  const len = Math.max(1, Math.floor(c.sampleRate * dur));
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const ch = buf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < len; i++) {
+    const w = Math.random() * 2 - 1;
+    last = (last + 0.02 * w) / 1.02;
+    ch[i] = last * 3.5;
+  }
+  return buf;
+}
+
+/**
+ * 雷声：开头短促「crack」劈裂 + 低频 rumble 2.5~3s 指数衰减，随机音量 0.5~0.8。
+ * 纯合成：crack = 高通白噪 0.12s 速衰；rumble = 布朗噪低通 60→140Hz 扫频 + 慢 LFO 起伏。
+ */
+function playThunder(): void {
+  if (!enabled) return;
+  const a = getAudioContext();
+  if (!a) return;
+  const { ctx: c, master: out } = a;
+  const t = c.currentTime;
+  const vol = 0.5 + Math.random() * 0.3; // 随机音量 0.5~0.8
+  const dur = 2.5 + Math.random() * 0.5;
+  const bus = c.createGain();
+  bus.gain.value = vol;
+  bus.connect(out);
+  // —— 开头 crack：短促宽频劈裂（高通 700Hz 白噪 0.1s 速衰 + 低频 body 一点） ——
+  const crack = c.createBufferSource();
+  crack.buffer = noiseBuf(c, 0.14);
+  const hp = c.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 700;
+  const cg = c.createGain();
+  cg.gain.setValueAtTime(0.9, t);
+  cg.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
+  crack.connect(hp).connect(cg).connect(bus);
+  crack.start(t);
+  crack.stop(t + 0.15);
+  // —— rumble：布朗噪低通扫频，指数衰减拖尾 ——
+  const rum = c.createBufferSource();
+  rum.buffer = brownBuf(c, dur);
+  rum.loop = true;
+  const lp = c.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(150, t);
+  lp.frequency.exponentialRampToValueAtTime(70, t + dur);
+  lp.Q.value = 0.6;
+  const rg = c.createGain();
+  rg.gain.setValueAtTime(0.0001, t);
+  rg.gain.exponentialRampToValueAtTime(1.0, t + 0.06); // 起音紧跟 crack
+  rg.gain.exponentialRampToValueAtTime(0.55, t + 0.5);
+  rg.gain.exponentialRampToValueAtTime(0.001, t + dur); // 指数衰减拖尾
+  // 慢 LFO：隆隆声忽强忽弱的翻滚感
+  const lfo = c.createOscillator();
+  lfo.frequency.value = 2.3 + Math.random();
+  const lfoG = c.createGain();
+  lfoG.gain.value = 0.14;
+  lfo.connect(lfoG).connect(rg.gain);
+  rum.connect(lp).connect(rg).connect(bus);
+  rum.start(t);
+  rum.stop(t + dur + 0.05);
+  lfo.start(t);
+  lfo.stop(t + dur + 0.05);
+}
+
+/** 环境音种类（null = 全停） */
+type AmbientKind = 'rain' | 'fire' | 'wind';
+
+/** 环境音相对增益（最终响度 = 本值 × master 0.14 ≈ 0.14，落在柔和的 0.12~0.16 区间、不盖 TTS） */
+const AMBIENT_VOL = 1.0;
+
+/** 环境音引擎状态：当前种类 + 运行中的节点组 */
+const ambient = {
+  kind: null as AmbientKind | null,
+  nodes: null as { out: GainNode; srcs: AudioBufferSourceNode[]; extras: AudioScheduledSourceNode[] } | null,
+};
+
+/** 立即停掉正在播的环境音（0.4s 快速淡出防爆音） */
+function stopAmbientNow(): void {
+  const a = ctx && master ? { ctx, master } : null;
+  const n = ambient.nodes;
+  ambient.nodes = null;
+  ambient.kind = null;
+  if (!a || !n) return;
+  const { ctx: c } = a;
+  const t = c.currentTime;
+  try {
+    n.out.gain.cancelScheduledValues(t);
+    n.out.gain.setValueAtTime(n.out.gain.value, t);
+    n.out.gain.linearRampToValueAtTime(0.0001, t + 0.4);
+  } catch {
+    /* 已停止就算了 */
+  }
+  setTimeout(() => {
+    for (const s of n.srcs) {
+      try {
+        s.stop();
+      } catch {
+        /* noop */
+      }
+    }
+    for (const s of n.extras) {
+      try {
+        s.stop();
+      } catch {
+        /* noop */
+      }
+    }
+    try {
+      n.out.disconnect();
+    } catch {
+      /* noop */
+    }
+  }, 460);
+}
+
+/** 生成「柴火噼啪」稀疏爆点循环 buffer：绝大多数静音 + 随机短促爆点 */
+function crackleBuf(c: AudioContext, dur: number): AudioBuffer {
+  const len = Math.max(1, Math.floor(c.sampleRate * dur));
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const ch = buf.getChannelData(0);
+  const pops = 26;
+  for (let p = 0; p < pops; p++) {
+    const at = Math.floor(Math.random() * (len - 900));
+    const amp = 0.25 + Math.random() * 0.75;
+    const n = 60 + Math.floor(Math.random() * 240);
+    for (let i = 0; i < n; i++) {
+      ch[at + i] += (Math.random() * 2 - 1) * amp * Math.exp(-i / (n * 0.22));
+    }
+  }
+  return buf;
+}
+
+/**
+ * G2 环境白噪音切换（循环合成、~1s 渐变、总音量柔和 0.12~0.16）：
+ * rain=雨声 / fire=壁炉柴火 / wind=雪夜风声 / null=全停；同 kind 幂等。
+ */
+function playAmbient(kind: AmbientKind | null): void {
+  if (kind !== null && kind === ambient.kind) return; // 同 kind 幂等（已在放就不再重建）
+  stopAmbientNow();
+  ambient.kind = kind;
+  if (!kind) return;
+  if (!enabled) {
+    ambient.kind = null; // 总开关关着：视为没在放（ambientCurrent 同步为 null，开关重开后可正常起播）
+    return;
+  }
+  const a = getAudioContext();
+  if (!a) return;
+  const { ctx: c, master: out } = a;
+  const t = c.currentTime;
+  const bus = c.createGain();
+  bus.gain.setValueAtTime(0.0001, t);
+  bus.gain.linearRampToValueAtTime(AMBIENT_VOL, t + 1.0); // ~1s 渐入
+  bus.connect(out);
+  const srcs: AudioBufferSourceNode[] = [];
+  const extras: AudioScheduledSourceNode[] = [];
+  if (kind === 'rain') {
+    // 雨声：白噪 → 高通 350 → 低通 2600 的沙沙声 + 微微起伏
+    const src = c.createBufferSource();
+    src.buffer = noiseBuf(c, 2.4);
+    src.loop = true;
+    const hp = c.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 380;
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 2500;
+    const g = c.createGain();
+    g.gain.value = 0.9;
+    const lfo = c.createOscillator();
+    lfo.frequency.value = 0.11;
+    const lfoG = c.createGain();
+    lfoG.gain.value = 0.08;
+    lfo.connect(lfoG).connect(g.gain);
+    src.connect(hp).connect(lp).connect(g).connect(bus);
+    src.start(t);
+    lfo.start(t);
+    srcs.push(src);
+    extras.push(lfo);
+  } else if (kind === 'fire') {
+    // 壁炉：布朗噪低通 320 的暖底噪 + 稀疏噼啪爆点（高通）
+    const src = c.createBufferSource();
+    src.buffer = brownBuf(c, 3);
+    src.loop = true;
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 340;
+    const g = c.createGain();
+    g.gain.value = 0.95;
+    src.connect(lp).connect(g).connect(bus);
+    src.start(t);
+    const crk = c.createBufferSource();
+    crk.buffer = crackleBuf(c, 4.5);
+    crk.loop = true;
+    const hp = c.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 1700;
+    const cg = c.createGain();
+    cg.gain.value = 0.3;
+    crk.connect(hp).connect(cg).connect(bus);
+    crk.start(t);
+    srcs.push(src, crk);
+  } else {
+    // 雪夜风声：白噪带通扫频（0.06Hz 在 260↔720Hz 间摆）+ 音量慢起伏
+    const src = c.createBufferSource();
+    src.buffer = noiseBuf(c, 3);
+    src.loop = true;
+    const bp = c.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 1.6;
+    bp.frequency.value = 480;
+    const sweep = c.createOscillator();
+    sweep.frequency.value = 0.06;
+    const sweepG = c.createGain();
+    sweepG.gain.value = 230;
+    sweep.connect(sweepG).connect(bp.frequency);
+    const g = c.createGain();
+    g.gain.value = 1.0;
+    const gust = c.createOscillator();
+    gust.frequency.value = 0.045;
+    const gustG = c.createGain();
+    gustG.gain.value = 0.22;
+    gust.connect(gustG).connect(g.gain);
+    src.connect(bp).connect(g).connect(bus);
+    src.start(t);
+    sweep.start(t);
+    gust.start(t);
+    srcs.push(src);
+    extras.push(sweep, gust);
+  }
+  ambient.nodes = { out: bus, srcs, extras };
+}
+
+/** 查询当前环境音（null = 没在放） */
+function ambientCurrent(): AmbientKind | null {
+  return ambient.kind;
+}
+
 /** 音效单例（CoupleHome 全屋接线用；每个函数内部自带开关检查） */
 export const sfx = {
   tap: playTap,
@@ -508,6 +752,10 @@ export const sfx = {
   pop: playPop,
   bark: playBark,
   boing: playBoing,
+  // v11 G1 雷声 / G2 环境白噪音引擎
+  thunder: playThunder,
+  ambient: playAmbient,
+  ambientCurrent,
   setEnabled,
   isEnabled,
 } as const;

@@ -327,3 +327,50 @@ Stage Summary:
 - v10.3 修复批次完成：TA 上床睡觉有了代码级保证（外围走位→吸附→卡死直落锚点三重）；气泡文字 4x 超采样+关 mipmap+iOS 磨砂卡片；天花板/墙体 DoubleSide+全局 frustumCulled=false+遮挡贴脸守卫；窗景十档天气昼夜纹理；两个抽屉弹窗叉号复活；语音输入在不支持 Web Speech 的国产浏览器上走「录音→内置 ASR」兜底、对讲模式改为自动分段服务端识别；TA 的心独立入口+输入条按钮拆分
 - 已知边界：E2E 无法验证真机麦克风录音质量（无头无麦克风）；TA 躺床最终姿态的镜头级验证受走位限制未完成，由「传送直落锚点」兜底逻辑保证
 - 关键文件：scene/companion-rt.ts、scene/Room.tsx、scene/HomeScene.tsx、CoupleHome.tsx、CabinHistorySheet.tsx、lib/ios/cabin-voice.ts（新）
+
+---
+Task ID: 12-c
+Agent: general-purpose（UI/逻辑组）
+Task: v11 UI/逻辑组 —— F1 梦境 / F2 TA 的日记 / G2 环境音开关 / H3 猫窝装修 / I1 互动轮盘 / I2 里程碑 / I3 早安晚安
+
+Work Log:
+- [F1 梦境·cabin-mind.ts 304-381] 新增 dayStr()（本地自然日 YYYY-MM-DD）/ loadDream / saveDream（localStorage cabin-dream-<charId> = {date,text,told}）/ buildDreamText：10 个主题模板（花园/弹琴/宠物/做饭/牵手/拥抱/雨雪/电视/书/床）+ 8 个兜底模板，用 cabinRecentInteractions 最近记忆碎片做主题命中优先匹配，随机选 1~2 段拼装（40% 概率追加尾梦）
+- [F1 讲梦·CoupleHome 2683-2737] 30s 心跳（决策 effect 内、决策节拍之前）新增「每日巡检」段：TA 长睡中（companionStateRef='sleeping' 或夜里 'lying'+night）且当天梦未生成 → 存梦；早上 6~10 点 TA 醒着且梦存在未讲（容许跨 1 天的 23 点后生成的梦）→ taProactiveSay 主动讲梦（头顶气泡 + 聊天面板 turns 插入 peer 消息 + convoRef 上下文 + saveCabinConvo 落盘 + toast）+ noteInteraction 甜度+1/心情+4 + cabinEventMemory「TA 把昨晚的梦讲给主人听」+ 标记 told
+- [F2 日记·新文件 ta-diary.ts] TaDiaryEntry {date,text,mood} / TaDiaryCtx {name,actions,weather,mood,chatLines} / loadTaDiary / clearTaDiary / ensureTodayDiary（当天没写才写，cabin-ta-diary-<charId> 上限 60 条，正文截 160 字）；模板 5 开头句 + 3 空闲兜底句 + 5 组心情收尾句（happy/content/low/missing/sulking 各有文案），actions 非空拼「今天我××，××。」+ 聊天句数句
+- [F2 素材与时机·CoupleHome] noteTaAction（1710-1716，跨天自动重置/同日去重/上限 12 条）挂在事件结算处：弹琴/看电视/放歌/吃饭/跳舞/看书/浇花/夜睡/做饭完成/拥抱/牵手/照顾宠物/被摸头/被投喂/被挠痒/聊天；taChatCountRef 在 sendChat +1、日记落盘后清零；心跳每天首次触发 ensureTodayDiary（weather 由 weatherFx 映射，mood 取 m.mood）
+- [F2 面板·新文件 TaDiarySheet.tsx] 结构/样式抄 CabinHistorySheet：外壳 open=false 不渲染 + 内层惰性读档；遮罩 fixed z-[65] bg-black/25 + 抽屉 fixed z-[70] mx-auto max-w-[430px] rounded-t-[26px] + bg-white/55 + backdrop-blur-2xl + spring（damping 30/stiffness 320）；遮罩与抽屉都显式 pointer-events-auto（v10.3 穿透教训）；倒序列表（日期 + 心情徽章 + 正文）+ 空状态 + 清空 confirm + sfx.tap；入口 =「TA 的心」面板底部按钮 + ⋮ 菜单「TA 的日记」行，CoupleHome 6384-6385 接线
+- [G2 环境音·CoupleHome 810-815/2094-2108/2828-2839] sfxAmbient = sfx as unknown as {ambient?/ambientCurrent?} 防御式包装（12-b 未实现时 ?. 静默 no-op，绝不崩）；ambientOn 默认开（localStorage cabin-ambient-on）；联动 effect 依赖 [weatherFx, fireOn, ambientOn]：rain→'rain'、snow→'wind'、非雨雪且壁炉开着（items 中 kind==='fireplace' && st.on）→'fire'、否则 null；关 = 恒 null；卸载 effect 返回 ambient(null) 必停；⋮ 菜单新增「环境音效」行（样式抄「小人声音」行，Waves 图标）
+- [H3 猫窝装修·CoupleHome 4261-4274/6547-6578/6711-6727] 装修模式家具工具条对 selItem.kind==='petBed' 追加「换窝的颜色」按钮 → 弹 12 精选色横排小色板 pop（樱粉/奶油/天蓝/薄荷/鹅黄/杏橘/藕紫/雾蓝/奶白/浅棕/玫紫/炭黑，选中 ring-2 ring-[#e8b06a]，玻璃胶囊 backdrop-blur-xl，spring 弹出）；applyBedColor 走 pushHistory（可撤销）+ 写 item.st.bedColor + saveSoon + toast「窝的颜色换好啦，小家伙可喜欢了～」+ sfx.tap；点家具/开调色盘时同步收起色板；petBed 为 decor 类通用拖拽（HomeScene moving={moveOn && selId===item.id}），装修挪窝天然可用；渲染消费 bedColor 由 12-b 在 Furn3D 侧完成
+- [I1 互动轮盘·CoupleHome 2527-2604/6243-6319] 长按回调 openPartnerRing 挂 HomeScene onPartnerLongPress（5125-5126 同时传 petGrowLv={actLv} 宠物成长等级）；轮盘 = 屏幕中下方半圆弧 3 枚白玻璃圆钮（摸头=Hand/喂食=UtensilsCrossed/挠痒痒=Feather，lucide 图标禁 emoji）+ 中下 X 关闭 + 透明全屏遮罩点击关闭，framer-motion spring 弹入（22/380 + 逐钮 stagger）；摸头：TA 空闲（companionStateRef idle/near 且无照顾/抱宠）→ bubbleRef push {kind:'love'}「最喜欢摸摸头了～」+ 甜度+3/心情+6 + 记忆，忙碌 toast「TA 正忙着呢，等 TA 一下～」；喂食：找到餐桌（CATALOG acts.eat）→ issueCompanionCmd eat + love 气泡「谢谢投喂！」+ 记忆（饱腹+42 由 eat 到位既有 settleMind 统一结算不重复加），无餐桌 toast 指路；挠痒痒：空闲 → love 气泡「哈哈哈…好痒～哈哈哈」+ 心情+10 + 记忆；短按 partnerMenuOpen（拥抱/牵手）不受影响，长按才弹轮盘
+- [I2 里程碑·CoupleHome 834-890/5601-5658] cabin-stats-<charId> = {since,chatLines,meals,hugs,holds,petCares}（since 缺省=首次写入）；累加点：sendChat(+chatLines)、cook release finish(+meals)、hugStart(+hugs)、holdStart(+holds)、onPetEvent done(+petCares)；⋮ 菜单「我们的里程碑」→ 心面板同款毛玻璃面板（打开瞬间从 statsRef 拷快照进 state，避免渲染期读 ref 新增 eslint 告警），2×3 大数字卡片：在一起 X 天（since 起算自然日）/聊了 N 句/做了 M 顿饭/拥抱 X 次/牵手 X 次/照顾宠物 N 次
+- [I3 早安晚安·cabin-mind.ts 383-418 + CoupleHome 2724-2737] cabin-greet-<charId> = {date,morning,night}；心跳：06~10 点 TA 非睡且当天未早安 → taProactiveSay「早上好呀…昨晚睡得好吗？我可是梦见你了哦。」+ 记忆 + 甜度+1；23~01 点且未催 →「夜深了哦…要不要早点休息？」；每天各一次（跨天自动重置）
+- [types 适配] 主控已在 types.ts 加 PetCareKind+='tickle' 与 FurnitureState.bedColor —— CoupleHome 两处 Record<PetCareKind,string>（startMsg/doneMsg）补 tickle 文案 + applyStats 增加 tickle 分支（心情+12）；Furn3D 渲染 bedColor 由 12-b 完成
+- [自检] bunx tsc --noEmit 过滤 next.config 后 0 输出（12-b 的 onPartnerLongPress/petGrowLv/BubbleCmd 'love' 已在并行工作区落地，无并行时序错误需排除）；eslint 四文件：CoupleHome 52 = 既有基线（本轮新增的渲染期读 statsRef 已改为事件处理器拷快照归零）、cabin-mind/ta-diary/TaDiarySheet 均 0 新增；未起 dev server、未 commit（工作区另有 12-b 的场景层改动，未触碰其文件）
+- [接口消费] ①<HomeScene onPartnerLongPress={openPartnerRing} petGrowLv={actLv}>；②bubbleRef push kind:'love' ×3（摸头/喂食/挠痒痒）；③sfxAmbient.ambient?.('rain'|'wind'|'fire'|null) 全程防御式 ?. 调用
+
+Stage Summary:
+- v11 UI/逻辑组 7 项全落地：TA 夜里长睡自动做梦、早上主动讲梦（好感+1）；每天自己写一篇日记（「TA 的心」面板 + ⋮ 菜单双入口的毛玻璃抽屉可翻阅/清空）；⋮ 菜单「环境音效」开关随天气/壁炉智能切换雨声/风雪/炉火（防御式 API）；装修模式点猫窝可从 12 色精选盘换窝色（可撤销）；长按 TA 弹半圆互动轮盘（摸头/喂食/挠痒痒，love 气泡 + 心情/甜度结算 + 忙碌守卫）；「我们的里程碑」大数字面板记录在一起天数/聊天/做饭/拥抱/牵手/照顾宠物；早安晚安每天各主动问候一次
+- 关键文件：CoupleHome.tsx（6964→7530）、cabin-mind.ts（493→609）、ta-diary.ts（新 133 行）、TaDiarySheet.tsx（新 132 行）；未改动 scene/、sfx.ts、types.ts、Wardrobe.tsx 等禁改文件
+
+---
+Task ID: 12-b
+Agent: general-purpose（场景组）
+Task: v11 场景组 —— G1 雷电闪白 / G2 环境白噪音引擎 / G3 四季外观 / G4 灯光氛围 / H1 逗宠手指 / H2 宠物成长体型 / 猫窝换色渲染 / 长按检测
+
+Work Log:
+- [契约] HomeSceneProps 新增 onPartnerLongPress?（生活模式长按陪伴小人 ≥550ms 触发一次，装修模式置 undefined 门控）与 petGrowLv?（1~9 缺省 1）；BubbleCmd.kind 扩为 'thought' | 'love'；与 12-c 的接线（onPartnerLongPress={openPartnerRing} / petGrowLv={actLv} / kind:'love' / sfx.ambient 防御式调用）经全量 tsc 验证吻合
+- [G1 雷电] HomeScene 雷电调度器（useEffect + setTimeout 链，state flashRaw && lightningOn 逻辑门控避免 effect 内同步 setState 触发 lint）：weatherFx==='rain' 且 live 模式，随机 8~22s 一次「主闪 0.12s → 熄 0.18s → 二闪 0.1s」真实双闪，切天气/退出 live/卸载全清理；三效果 = ① Room 新 prop lightning → Window 玻璃前白色闪光平面（z=-0.042，opacity damp 34/16 快亮慢灭）② LightningPulse 独立加法 ambientLight（#dfe9ff，intensity damp →1.55，不干扰 Lights 昼夜 damp 目标）③ sfx.thunder() 延迟 0.5~1.8s
+- [G2 音效] sfx.ts 新增 playThunder（开头高通白噪 crack 0.13s + 布朗噪低通 150→70Hz rumble 2.5~3s 指数衰减 + 2.3Hz LFO 翻滚感，随机音量 0.5~0.8）+ 环境音引擎 playAmbient/ambientCurrent：rain=白噪高通380→低通2500 沙沙声+微起伏 / fire=布朗噪低通340 暖底噪+crackleBuf 稀疏噼啪爆点循环 / wind=带通 Q1.6 由 0.06Hz LFO 扫频 480±230Hz+阵风起伏 / null=全停；同 kind 幂等；切换旧链 0.4s 淡出+新链 1s 渐入；总线经 master 0.14 输出总响度 ≈0.14（柔和 0.12~0.16 区间）；setEnabled(false) 连环境音一起停（ambientCurrent 同步归 null）；纯 Web Audio 合成零资产零新依赖
+- [G3 四季] weather-bus.ts 新增 export Season + seasonNow(date?)（3-5春/6-8夏/9-11秋/12-2冬）；HomeScene useMemo 取一次 season 透传全家：① OutdoorWorld 大地色改 SEASON_GROUND（春 #a6d18c 嫩绿/夏 #7dbb67 浓绿/秋 #c9a95f 枯黄/冬 #e6ecf2 薄雪底），雪天仍全雪原、雨/阴按旧比例压暗 ② OutdoorPrecip 扩 4 模式：非雨雪时春=樱花瓣（makePetalTexture 粉柔边，speed0.75 sway0.34）/秋=橙落叶（makeLeafTexture sway0.42），雨雪优先、同 randOutdoorPoint 只落屋外 ③ Room 窗景 makeWeatherSkyTexture 加 season 参数（缓存键+季节），春撒樱粉花瓣/秋撒橙叶/冬非雨雪天加薄雪点 ④ Room 花园草地四季色（夜晚压暗 0.55 同旧版） ⑤ 冬/雪天外墙顶沿积雪白边 WinterSnowTrim（14 面外墙 key 过滤，WALL_H+0.024 薄雪条）+ SnowDeco 窗沿白沿/阳台薄雪扩 winter 常驻
+- [G4 灯光] ① Furn3D 灯具色温：lampTint 共享 Color 实例（灯罩 emissive 挂同一实例 + pointLight ref copy），useFrame lerp(k=3.2/s ≈1s) 目标 = st.lc 最高优先 → 无 lc 时暖白灯具族（#ffd9a0/#ffe6a8）夜 #ffc27a/昼 #fff4e0，火焰/星空等特殊色保持目录原色不被洗白 ② 拥抱暖光：HomeScene 包装 onCompanionEvent（ref 转发避免渲染期写 ref），hugStart 事件在两人中点写 hugPulseRef → HugWarmPulse 组件 RingGeometry 暖色光环（1.4s 扩散 0.25→1.6 + 上升 + sin 淡出，AdditiveBlending）+ PointLight 0→1.2→0 脉冲，结束自动清理
+- [H1 逗宠手指] 模块级 petFingerRef {x,z,t} + PetFingerTracker（canvas pointerdown/pointermove 按住中射线投 y=0 地板平面，仅 live 模式写）；PetBuddy/PetBuddy2 useFrame 空闲分支接入：指尖新鲜（<2s）且无照顾/捡球/小剧场/夜晚回窝占用才追（复用 dx/dz 直移 + collideAndClamp，速度 ROAM_CAT×1.3），距 <0.28m 停住小幅扑跳（猫偶喵一声/狗兔偶应一声）；PetBuddy2 带 0~400ms 随机延迟；追指尖期暂停漫游与剧场倒计时，停更 2s 后自动恢复；激光笔等小剧场进行中走原分支不响应指尖
+- [H2 成长体型] PetBuddy/PetBuddy2 根 group scale：目标 = 0.62+(clamp(lv)-1)/8×0.38，每帧 lerp 0.03 平滑过渡，乘算进既有压扁(sq)/睡觉(se)/抱起(cs)/躲雨(rr)缩放链不覆盖；抱抱抬升/照顾锚点未动
+- [猫窝换色] Furn3D PetBed3D 加 bedColor prop（item.st?.bedColor，/#^[0-9a-fA-F]{6}$/ 校验），外壳软环/外壁/窝底用该色，内垫奶油/白珠缝线/毛线球保留；非法值回落 item.col/默认樱粉；交互走 Furn3D 外层 handlers 不受影响
+- [长按检测] CharChibi3D 新增 onLongPress? prop：热区 pointerdown 起 550ms 计时，pointerup/pointerleave/移动超 12px 取消；触发后置 suppress，本轮 pointerup 不再触发 onTap；onTap 语义由 down 改为 up 触发（长按不被误判）；热区渲染条件 onTap||onLongPress，卸载清理计时器；HomeScene 给 TA 的 CharChibi3D 接 onLongPress={mode==='live' ? onPartnerLongPress : undefined}，发型/姿势等其余代码零改动
+- [修复] PET_CARE_DUR 补 tickle: 2.8（主控 PetCareKind += 'tickle' 引起的基线 tsc 错误，场景侧闭环）；HomeScene 新代码按 lint 新规重构（雷电 state 门控 + onCompanionEvent ref 转发）零新增告警
+- [验证] bunx tsc --noEmit 过滤 next.config 0 输出；eslint 六文件 19 problems = 既有基线（全在 HomeScene react-hooks/refs 旧代码），Room/sfx/CharChibi3D/Furn3D/weather-bus 0 新增；未 commit、未起 dev server
+
+Stage Summary:
+- v11 场景组 7 项全落地：雨天每 8~22s 真实双闪（窗白 + 屋内瞬亮 + 延迟雷声）；纯合成环境白噪音引擎（雨/炉火/雪夜风，1s 渐变幂等切换）；四季外观（草地/花园/窗景/季节粒子/冬季积雪白边全联动真实日期）；灯具色温随昼夜 ~1s 渐变（st.lc 最高优先）+ 拥抱暖光光环脉冲；宠物按住屏幕追指尖（多宠延迟错开、低优先级不抢戏）；宠物成长 Lv1~9 体型 0.62→1.0 平滑缩放；猫窝 st.bedColor 换色；长按陪伴小人 ≥550ms 检测（suppress 防误触）
+- 接口契约四条全部按钉死签名实现（HomeSceneProps 两 prop / BubbleCmd kind 扩展 / sfx.thunder+ambient+ambientCurrent / weather-bus.seasonNow），已与 12-c 的 CoupleHome 接线共同通过全量 tsc
+- 关键文件：scene/HomeScene.tsx（5014→5418）、scene/Room.tsx（1648→1742）、scene/CharChibi3D.tsx（1639→1689）、scene/Furn3D.tsx（758→779）、sfx.ts（513→761）、scene/weather-bus.ts（22→39）

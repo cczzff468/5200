@@ -301,6 +301,122 @@ export function todaySpecial(m: CabinMind, now = new Date()): string | null {
   return null;
 }
 
+// ---------------- v11 F1 梦境系统（夜里长睡生成，早上主动讲） ----------------
+
+/** 一条梦：date = 生成当天（自然日 YYYY-MM-DD）；told = 早上有没有讲给主人听 */
+export interface CabinDream {
+  date: string;
+  text: string;
+  told: boolean;
+}
+
+/** 自然日字符串（本地时区 YYYY-MM-DD，梦境/日记/问候统一用它对齐「天」） */
+export function dayStr(now = new Date()): string {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+const DREAM_KEY = (id: string) => `cabin-dream-${id}`;
+
+export function loadDream(id: string): CabinDream | null {
+  try {
+    const raw = window.localStorage.getItem(DREAM_KEY(id));
+    if (!raw) return null;
+    const j = JSON.parse(raw) as Partial<CabinDream>;
+    if (!j || typeof j.date !== 'string' || typeof j.text !== 'string') return null;
+    return { date: j.date, text: j.text, told: !!j.told };
+  } catch {
+    return null;
+  }
+}
+
+export function saveDream(id: string, d: CabinDream): void {
+  try {
+    window.localStorage.setItem(DREAM_KEY(id), JSON.stringify(d));
+  } catch {
+    /* 隐私模式写不进就算了 */
+  }
+}
+
+/** 梦境模板（12 个，按素材主题优先匹配，随机选 1~2 拼装） */
+const DREAM_TEMPLATES: { theme: RegExp; text: (owner: string, pet: string) => string }[] = [
+  { theme: /花园|花草|浇/, text: (o) => `梦见和${o}在花园追一只白色蝴蝶，追着追着就一起飞起来了…` },
+  { theme: /弹|琴|曲|歌|唱/, text: (o) => `梦见钢琴自己弹起歌来，整个屋子都跟着亮晶晶的，${o}在旁边轻轻打着拍子…` },
+  { theme: /猫|宠物|照顾|喂|窝/, text: (_o, p) => `梦见${p}长出一对小翅膀，驮着我在云朵之间散步…` },
+  { theme: /做饭|饭|吃|厨/, text: (o) => `梦见${o}做的菜会发光，吃一口就暖到了心里…` },
+  { theme: /牵手|散步|走/, text: (o) => `梦见和${o}牵手走过一条长长的樱花道，花瓣落满了头发…` },
+  { theme: /拥抱|抱/, text: (o) => `梦见${o}的怀抱软软的，像一大团棉花糖，怎么靠都不想醒…` },
+  { theme: /雨|窗|雪|壁炉/, text: (o) => `梦见下雨天和${o}挤在一把小伞下，听雨点嗒嗒嗒地唱歌…` },
+  { theme: /电视|看/, text: (o) => `梦见和${o}一起掉进了电视里，在节目里冒险了一整晚…` },
+  { theme: /书|看/, text: (o) => `梦见书里的插图都活了起来，拉着${o}一起在故事里散步…` },
+  { theme: /睡|床|梦/, text: (o) => `梦见床变成了一艘小船，载着我和${o}在星星中间漂啊漂…` },
+];
+
+const DREAM_FALLBACK: ((owner: string, pet: string) => string)[] = [
+  (o) => `梦见和${o}在花园追一只白色蝴蝶，跑着跑着就飞起来了…`,
+  () => `梦见钢琴自己弹起歌来，音符落在地板上开出了小花…`,
+  (o) => `梦见${o}变成了一只大猫，窝在腿上怎么都赶不走…`,
+  (o) => `梦见我们一起去海边捡贝壳，浪花追着脚丫跑…`,
+  (_o, p) => `梦见下了一场糖果雨，我和${p}张着嘴接了满满一捧…`,
+  (o) => `梦见家里的沙发变成了云朵，${o}一坐上来就飘啊飘…`,
+  (o) => `梦见月亮掉进了浴缸，泡澡的时候满天星星围着打转…`,
+  (o) => `梦见${o}教我放风筝，风筝带着我们俩飞过了屋顶…`,
+];
+
+/** 从最近记忆素材 + 随机模板拼一条梦（素材命中主题就优先用同主题的模板） */
+export function buildDreamText(opts: { owner: string; recent?: string[]; petName?: string }): string {
+  const owner = opts.owner || '主人';
+  const pet = opts.petName || '小家伙';
+  const material = (opts.recent ?? []).join(' ');
+  const themed = material ? DREAM_TEMPLATES.filter((t) => t.theme.test(material)) : [];
+  const pool = themed.length > 0 ? themed.map((t) => t.text) : DREAM_FALLBACK;
+  const pick = (): string => pool[Math.floor(Math.random() * pool.length)](owner, pet);
+  // 主梦 + 40% 概率再拼一小段尾梦（1~2 段拼装）
+  const main = pick();
+  if (Math.random() < 0.4) {
+    let extra = pick();
+    if (extra === main) extra = DREAM_FALLBACK[Math.floor(Math.random() * DREAM_FALLBACK.length)](owner, pet);
+    return `${main.replace(/…$/, '')}，醒来前还梦见${extra.replace(/^梦见/, '')}`;
+  }
+  return main;
+}
+
+// ---------------- v11 I3 早安 / 晚安问候（每天各一次） ----------------
+
+export interface CabinGreet {
+  /** 自然日 YYYY-MM-DD */
+  date: string;
+  /** 今早安过没有 */
+  morning: boolean;
+  /** 今晚催过没有 */
+  night: boolean;
+}
+
+const GREET_KEY = (id: string) => `cabin-greet-${id}`;
+
+export function loadGreet(id: string): CabinGreet {
+  try {
+    const raw = window.localStorage.getItem(GREET_KEY(id));
+    if (raw) {
+      const j = JSON.parse(raw) as Partial<CabinGreet>;
+      if (j && typeof j.date === 'string') {
+        return { date: j.date, morning: !!j.morning, night: !!j.night };
+      }
+    }
+  } catch {
+    /* 坏档按今天未问候处理 */
+  }
+  return { date: dayStr(), morning: false, night: false };
+}
+
+/** 问候落盘（date 不是今天则按今天的全新一天覆盖） */
+export function saveGreet(id: string, g: CabinGreet): void {
+  try {
+    window.localStorage.setItem(GREET_KEY(id), JSON.stringify(g));
+  } catch {
+    /* 隐私模式写不进就算了 */
+  }
+}
+
 // ---------------- A4 作息日程表 ----------------
 
 export interface ScheduleSlot {

@@ -68,6 +68,9 @@ export interface Furn3DProps {
   sitting?: boolean;
 }
 
+/** G4 色温渐变只作用于普通暖白灯具（台灯/落地灯/吊灯等）；火焰/星空等特殊色保持目录原色 */
+const WARM_LAMP_FAMILY = new Set(['#ffd9a0', '#ffe6a8']);
+
 /** useGLTF 之外的轻量加载钩子（不依赖 suspense；tint 变化时重新克隆） */
 function useFurnModel(
   url: string | undefined,
@@ -122,6 +125,10 @@ export default function Furn3D({
   const model = useAlt ? alt ?? primary : primary;
 
   // 灯罩发光（toggle 家具材质已克隆，可独立调光）
+  // v11 G4 开灯色温：灯罩 emissive 共享同一 Color 实例，useFrame 阻尼它 → 昼夜切换 ~1s 渐变
+  const lampTint = useMemo(() => new THREE.Color('#ffc27a'), []);
+  const lampLight = useRef<THREE.PointLight>(null);
+  const lampTarget = useMemo(() => new THREE.Color(), []);
   useEffect(() => {
     if (!model || !entry.acts?.toggle) return;
     const on = !!item.st?.on;
@@ -131,12 +138,22 @@ export default function Furn3D({
       const mats = Array.isArray(m.material) ? m.material : [m.material];
       for (const mat of mats as THREE.MeshStandardMaterial[]) {
         if (mat.name === 'lamp' || mat.name === 'glass') {
-          mat.emissive = new THREE.Color('#ffd98f');
+          mat.emissive = lampTint; // 共享实例：每帧阻尼 lampTint 即全部灯罩同步渐变
           mat.emissiveIntensity = on ? (night ? 1.8 : 0.9) : 0;
         }
       }
     });
-  }, [model, entry.acts?.toggle, item.st?.on, night]);
+  }, [model, entry.acts?.toggle, item.st?.on, night, lampTint]);
+  // G4 色温目标：st.lc 用户自选光色最高优先；无 lc 时普通暖白灯具随昼夜
+  // （夜 #ffc27a 深暖黄 / 昼 #fff4e0 中性白）；火焰/星空等特殊色灯具保持目录原色不被洗白
+  useFrame((_, rawDt) => {
+    const base = entry.light?.color ?? '#ffd9a0';
+    const lc = item.st?.lc;
+    const target = lc ?? (WARM_LAMP_FAMILY.has(base) ? (night ? '#ffc27a' : '#fff4e0') : base);
+    lampTarget.set(target);
+    lampTint.lerp(lampTarget, Math.min(1, rawDt * 3.2)); // ~1s 渐变到目标色温
+    if (lampLight.current) lampLight.current.color.copy(lampTint);
+  });
 
   // playful 点击 → 弹跳
   useEffect(() => {
@@ -260,8 +277,8 @@ export default function Furn3D({
         {/* 电视（程序化美颜大屏） */}
         {isTV && <TV3D on={!!item.st?.on} night={night} col={item.col} channel={item.st?.channel} />}
 
-        {/* 奶油猫窝（程序化软萌圆窝：外圈软边 + 内垫 + 毛线球，v7.1 宠物小窝） */}
-        {entry.kind === 'petBed' && <PetBed3D col={item.col} />}
+        {/* 奶油猫窝（程序化软萌圆窝：外圈软边 + 内垫 + 毛线球，v7.1 宠物小窝；v11 st.bedColor 换外壳色） */}
+        {entry.kind === 'petBed' && <PetBed3D col={item.col} bedColor={item.st?.bedColor} />}
 
         {/* 立体壁挂空调（程序化建模：导风板摆动 + 冷风丝） */}
         {entry.kind === 'aircon' && <Aircon3D on={!!item.st?.on} night={night} col={item.col} />}
@@ -368,11 +385,12 @@ export default function Furn3D({
         {entry.kind === 'diningTable' && meal && <MealDish />}
       </group>
 
-      {/* 灯光（开着才亮；夜晚更暖；lc = 用户自选光色优先，E7） */}
+      {/* 灯光（开着才亮；夜晚更暖；lc = 用户自选光色优先，E7；v11 G4 无 lc 时色温随昼夜 ~1s 渐变） */}
       {entry.light && item.st?.on && modelSize && (
         <pointLight
+          ref={lampLight}
           position={[0, entry.light.y, 0]}
-          color={item.st?.lc ?? entry.light.color ?? '#ffd9a0'}
+          color="#ffc27a"
           intensity={(entry.light.intensity ?? 1) * (night ? 1.5 : 0.55)}
           distance={5.5}
           decay={2}
@@ -707,10 +725,13 @@ function MealDish() {
  * 猫窝建模（世界尺度，脚印 fp [0.66, 0.58]）：
  * - 椭圆软外壳（压扁圆环感：两圈 lathe 式圆管拼软边）+ 奶油内垫 + 缝线小窝底；
  * - 一颗粉色毛线球 + 拖出的毛线点缀（萌系装饰）；
+ * - v11 换色渲染：bedColor（st.bedColor #rrggbb）优先 → 外壳/外壁/窝底用该色，
+ *   内垫奶油、白珠缝线、毛线球等细节保留；非法值回落 col / 默认樱粉；
  * - 无交互（点击弹跳由 Furn3D 的 playful 统一处理）。
  */
-export function PetBed3D({ col }: { col?: string }) {
-  const shell = col || '#f6d8dd'; // 外壳：用户调色优先，默认樱粉奶油
+const BED_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+export function PetBed3D({ col, bedColor }: { col?: string; bedColor?: string }) {
+  const shell = BED_COLOR_RE.test(bedColor ?? '') ? bedColor! : col || '#f6d8dd'; // 外壳：v11 床色优先，其次用户调色，默认樱粉奶油
   return (
     <group>
       {/* 外壳软边（椭圆环：管状环压扁） */}

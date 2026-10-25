@@ -48,6 +48,8 @@ export interface CharChibi3DProps {
   wear2?: BoyWear;
   /** 点击热区（v8.0：点小人触发回调，如拥抱/牵手环形菜单；不传不建热区） */
   onTap?: () => void;
+  /** v11 长按热区（生活模式长按陪伴小人 ≥550ms 触发一次；触发后本轮抬起不再触发 onTap） */
+  onLongPress?: () => void;
 }
 
 /** 穿搭色板：skin 肤色 / hair 发色 / top 上衣(裙) / bottom 短裤(男主) / sock 袜 / shoes 鞋 / bow 发饰 / blush 腮红 */
@@ -987,7 +989,22 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
 
 const dampN = THREE.MathUtils.damp;
 
-export default function CharChibi3D({ rt, who, hide, poseRef, poseRef2, carryRef, guestName, wear, wear2, onTap }: CharChibi3DProps) {
+export default function CharChibi3D({ rt, who, hide, poseRef, poseRef2, carryRef, guestName, wear, wear2, onTap, onLongPress }: CharChibi3DProps) {
+  // v11 长按检测状态：pointerdown 起 550ms 计时；期间抬起 / 移出热区 / 移动超阈值取消；
+  // 长按已触发则置 suppress，本轮 pointerup 不再触发 onTap
+  const pressRef = useRef<{ timer: number | null; x: number; y: number; suppress: boolean }>({
+    timer: null,
+    x: 0,
+    y: 0,
+    suppress: false,
+  });
+  const clearPress = () => {
+    if (pressRef.current.timer !== null) {
+      window.clearTimeout(pressRef.current.timer);
+      pressRef.current.timer = null;
+    }
+  };
+  useEffect(() => clearPress, []);
   // 访客按名牌哈希固定取一套配色（同一人每次来访穿同色）
   const guestOutfit = useMemo(() => {
     if (who !== 'guest' || !guestName) return 0;
@@ -1581,13 +1598,46 @@ export default function CharChibi3D({ rt, who, hide, poseRef, poseRef2, carryRef
       <primitive object={rig.root} />
       {/* 访客名牌：头顶浮名字牌 */}
       {who === 'guest' && guestName && <GuestTag name={guestName} />}
-      {/* v8.0 点击热区（透明大球，盖住小人全身 + 富余；点小人 → 拥抱/牵手环形菜单） */}
-      {onTap && (
+      {/* v8.0 点击热区（透明大球，盖住小人全身 + 富余；点小人 → 拥抱/牵手环形菜单）
+          v11 长按：按下 550ms 触发 onLongPress（生活模式陪伴小人专属）；期间移出/拖动/抬起取消，
+          触发过长按后本轮抬起不再触发 onTap */}
+      {(onTap || onLongPress) && (
         <mesh
           position={[0, 0.52, 0]}
           onPointerDown={(e) => {
             e.stopPropagation();
-            onTap();
+            clearPress();
+            pressRef.current.x = e.nativeEvent.clientX;
+            pressRef.current.y = e.nativeEvent.clientY;
+            pressRef.current.suppress = false;
+            if (onLongPress) {
+              pressRef.current.timer = window.setTimeout(() => {
+                pressRef.current.timer = null;
+                pressRef.current.suppress = true; // 本轮抬起不再触发 onTap
+                onLongPress();
+              }, 550);
+            }
+          }}
+          onPointerUp={() => {
+            const wasLong = pressRef.current.suppress;
+            clearPress();
+            pressRef.current.suppress = false;
+            if (onTap && !wasLong) onTap();
+          }}
+          onPointerLeave={() => {
+            // 移出热区：长按计时取消
+            clearPress();
+            pressRef.current.suppress = false;
+          }}
+          onPointerMove={(e) => {
+            if (pressRef.current.timer === null) return;
+            const dx = e.nativeEvent.clientX - pressRef.current.x;
+            const dy = e.nativeEvent.clientY - pressRef.current.y;
+            if (dx * dx + dy * dy > 144) {
+              // 移动超阈值（≈12px）：视为拖动视角，取消长按
+              clearPress();
+              pressRef.current.suppress = false;
+            }
           }}
         >
           <sphereGeometry args={[0.58, 12, 10]} />

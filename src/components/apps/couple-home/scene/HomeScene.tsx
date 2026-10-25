@@ -54,7 +54,7 @@ import type { BoyWear, CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem
 import { sfx } from '../sfx';
 import { buildBlockGrid, planRoute, type BlockGrid, type DoorKey, type Pt } from './pathfind';
 import { SRDOOR_Z, STUDY_X0, STUDY_X1, STUDY_Z0, STUDY_Z1, YDOOR_X, GARDEN_X0, GARDEN_X1, GARDEN_Z0, GARDEN_Z1 } from '../catalog';
-import { weatherBusSet } from './weather-bus';
+import { weatherBusSet, seasonNow, type Season } from './weather-bus';
 import { companionStep, createCompanionRT, type CompanionCmd, type CompanionEvent, type CompanionRT, type PoseSlot } from './companion-rt';
 
 // ---------------- 对外 Props ----------------
@@ -183,15 +183,19 @@ export interface HomeSceneProps {
   petBallCmdRef?: RefObject<{ seq: number; target?: string }>;
   /** v9 领养宠物全家福（小狗/小兔子，可无数只；每只全功能：照顾/抱抱/扔球/把戏/装扮） */
   pets2?: Pet2State[];
+  /** v11 长按陪伴小人 ≥550ms 触发一次（生活模式；透传给 TA 的 CharChibi3D 热区） */
+  onPartnerLongPress?: () => void;
+  /** v11 宠物成长等级 1~9（缺省 1）：驱动全部宠物体型缩放 Lv1=0.62 → Lv9=1.0 */
+  petGrowLv?: number;
 }
 
-/** v8.0 头顶气泡指令（who = 挂在谁头上；hold = 展示秒数，缺省按字数；kind='thought' = 想法气泡） */
+/** v8.0 头顶气泡指令（who = 挂在谁头上；hold = 展示秒数，缺省按字数；kind='thought' 想法泡 / 'love' 摸头爱心泡） */
 export interface BubbleCmd {
   who: 'me' | 'ta';
   text: string;
   hold?: number;
-  /** v10 A7：thought = 想法气泡（云朵淡蓝描边 + 💭 前缀，决策透明） */
-  kind?: 'thought';
+  /** v10 A7：thought = 想法气泡（云朵淡蓝描边 + 💭 前缀）；v11：love = 摸头专属爱心气泡（粉描边 + 顶部小爱心装饰） */
+  kind?: 'thought' | 'love';
 }
 
 /** 生活模式视角俯仰范围：接近水平（低角仰视）↔ 近乎俯瞰（全方位拉动视角） */
@@ -1482,6 +1486,85 @@ function BedNightLight({ poseRef, meRT }: { poseRef: RefObject<{ pose: CharPose;
   return <pointLight ref={light} color="#ffd9a0" intensity={0} distance={2.6} decay={2} />;
 }
 
+/**
+ * v11 G1 雷电室内瞬亮：闪电窗口期环境光短暂脉冲（独立加法灯，不干扰 Lights 的昼夜 damp 目标）。
+ * lit 由 HomeScene 的雷电调度器（state）驱动 —— 主闪 0.12s → 熄 0.18s → 二闪 0.1s。
+ */
+function LightningPulse({ lit }: { lit: boolean }) {
+  const pulse = useRef<THREE.AmbientLight>(null);
+  useFrame((_, rawDt) => {
+    const l = pulse.current;
+    if (!l) return;
+    const d = Math.min(rawDt, 0.05);
+    // 亮起极快（~50ms 全亮）、熄灭稍缓（真实的视觉暂留）
+    l.intensity = THREE.MathUtils.damp(l.intensity, lit ? 1.55 : 0, lit ? 34 : 13, d);
+  });
+  return <ambientLight ref={pulse} color="#dfe9ff" intensity={0} />;
+}
+
+// ---------------- v11 G4 抱抱暖光脉冲（companion hugStart 事件触发） ----------------
+
+/** 拥抱脉冲请求（HomeScene 在 hugStart 事件时写入；HugWarmPulse 每帧消费一次） */
+interface HugPulseReq {
+  x: number;
+  z: number;
+}
+
+/**
+ * 抱抱暖光脉冲：两人中点地面一圈暖色光环（RingGeometry 水平扩散上升淡出 ~1.4s，
+ * AdditiveBlending）+ 一颗临时暖色 PointLight 0→1.2→0 脉冲，结束自动清理（visible=false / intensity=0）。
+ */
+function HugWarmPulse({ reqRef }: { reqRef: RefObject<HugPulseReq | null> }) {
+  const ring = useRef<THREE.Mesh>(null);
+  const light = useRef<THREE.PointLight>(null);
+  const act = useRef({ x: 0, z: 0, t: -10 });
+  const DUR = 1.4;
+  useFrame((state) => {
+    const now = state.clock.elapsedTime;
+    const req = reqRef.current;
+    if (req) {
+      act.current = { x: req.x, z: req.z, t: now };
+      reqRef.current = null;
+    }
+    const a = act.current;
+    const age = now - a.t;
+    const mesh = ring.current;
+    const li = light.current;
+    if (!mesh || age < 0 || age > DUR) {
+      if (mesh) mesh.visible = false;
+      if (li) li.intensity = 0;
+      return;
+    }
+    const k = age / DUR;
+    mesh.visible = true;
+    mesh.position.set(a.x, 0.035 + k * 0.52, a.z);
+    const s = 0.25 + k * 1.35;
+    mesh.scale.set(s, s, s);
+    (mesh.material as THREE.MeshBasicMaterial).opacity = Math.sin(k * Math.PI) * 0.75;
+    if (li) {
+      li.position.set(a.x, 0.5, a.z);
+      li.intensity = Math.sin(k * Math.PI) * 1.2;
+    }
+  });
+  return (
+    <group>
+      <mesh ref={ring} rotation={[-Math.PI / 2, 0, 0]} visible={false} frustumCulled={false}>
+        <ringGeometry args={[0.55, 0.8, 40]} />
+        <meshBasicMaterial
+          color="#ffb98a"
+          transparent
+          opacity={0}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          side={THREE.DoubleSide}
+          toneMapped={false}
+        />
+      </mesh>
+      <pointLight ref={light} color="#ffc08a" intensity={0} distance={3.4} decay={2} />
+    </group>
+  );
+}
+
 // ---------------- G6 小屋宠物：会溜达的小猫（点它 = 摸头：爱心 + 喵~ + 压扁回弹） ----------------
 
 /** 爱心贴图（粉渐变，柔边） */
@@ -1551,6 +1634,8 @@ const PET_CARE_DUR: Record<PetCareKind, number> = {
   shake: 3.0, spin: 3.4, roll: 3.6, ball: 0,
   // v10 C2 训练系统新把戏：装死（侧倒四脚朝天）
   dead: 3.8,
+  // v11 主控加的挠痒痒（PetCareKind += 'tickle'）
+  tickle: 2.8,
 };
 
 /** 走向小人速度（召唤 = 一叫就到，疾跑） */
@@ -1566,6 +1651,56 @@ const PET_COATS: Record<PetCoat, { body: string; head: string; tail: string }> =
 
 // ---------------- v10 C3 多宠社交：全屋宠物 rt 注册表（互相追逐/打招呼用） ----------------
 const PET_RT_REG = new Map<string, CharRT>();
+
+// ---------------- v11 H1 逗宠手指：生活模式按住屏幕划动 → 宠物追指尖 ----------------
+/** 指尖地板落点（模块级共享：PetFingerTracker 写入 / PetBuddy·PetBuddy2 读取；
+ *  t = Date.now() 时间戳，2s 不更新视为失效恢复漫游；null = 无手指） */
+const petFingerRef: { current: { x: number; z: number; t: number } | null } = { current: null };
+
+/** 指尖追踪器：把按住中的指针落点射线投到地板平面（y=0），写入 petFingerRef */
+function PetFingerTracker({ modeRef }: { modeRef: RefObject<HomeMode> }) {
+  const { camera, gl } = useThree();
+  useEffect(() => {
+    const el = gl.domElement;
+    const ray = new THREE.Raycaster();
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const hit = new THREE.Vector3();
+    const ndc = new THREE.Vector2();
+    let pid = -1;
+    const toFloor = (e: PointerEvent) => {
+      if (modeRef.current !== 'live') return; // 装修/其它模式不响应
+      const r = el.getBoundingClientRect();
+      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      if (ray.ray.intersectPlane(plane, hit)) {
+        petFingerRef.current = { x: hit.x, z: hit.z, t: Date.now() };
+      }
+    };
+    const down = (e: PointerEvent) => {
+      pid = e.pointerId;
+      toFloor(e);
+    };
+    const move = (e: PointerEvent) => {
+      if (pid < 0 || e.pointerId !== pid) return;
+      toFloor(e);
+    };
+    const up = (e: PointerEvent) => {
+      if (e.pointerId === pid) pid = -1; // 抬起后落点留在原地，2s 新鲜窗口过后自动恢复漫游
+    };
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    return () => {
+      el.removeEventListener('pointerdown', down);
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      pid = -1;
+    };
+  }, [camera, gl, modeRef]);
+  return null;
+}
 
 /** v8.3 小剧场贴图：蝴蝶（双粉翅）/ 萤火虫（暖光晕） */
 function makeTheaterTexture(kind: 'butterfly' | 'firefly'): THREE.CanvasTexture {
@@ -1839,6 +1974,7 @@ function PetBuddy({
   petWear,
   petBallCmdRef,
   petRTRef,
+  petGrowLv = 1,
 }: {
   mode: HomeMode;
   items: FurnitureItem[];
@@ -1862,6 +1998,8 @@ function PetBuddy({
   petBallCmdRef?: RefObject<{ seq: number; target?: string }>;
   /** v8.3 把自己的运行时暴露给第二只宠物（追着玩用） */
   petRTRef?: RefObject<CharRT | null>;
+  /** v11 成长等级 1~9（体型缩放 0.62→1.0，共享全屋同一等级） */
+  petGrowLv?: number;
 }) {
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -1968,6 +2106,10 @@ function PetBuddy({
   /** 小剧场扑跳高度（萤火虫 pounce）/ 雨天躲雨趴下的软弱感 */
   const hopY = useRef(0);
   const rainRest = useRef(0);
+  // —— v11 H1 逗宠手指：到位后的小幅扑跳节拍 ——
+  const fingerHopT = useRef(0);
+  // —— v11 H2 成长体型：目标缩放随 petGrowLv，每帧 0.03 lerp 平滑过渡（不瞬跳） ——
+  const grow = useRef(0.62 + ((Math.min(9, Math.max(1, petGrowLv)) - 1) / 8) * 0.38);
 
   const heartTex = useMemo(() => makeHeartTexture(), []);
   const meowTex = useMemo(() => makeMeowTexture(), []);
@@ -2551,6 +2693,37 @@ function PetBuddy({
           }
         } else {
           rainRest.current = THREE.MathUtils.damp(rainRest.current, 0, 3, dt);
+          // —— v11 H1 逗宠手指：按住屏幕划动 → 追指尖（1.3×速度，距 <0.28m 停住小幅扑跳）；
+  //    低于照顾/捡球/小剧场/夜晚回窝全部优先级（小剧场进行中走上面 th.kind 分支不响应指尖） ——
+          const fg = petFingerRef.current;
+          if (fg && Date.now() - fg.t < 2000) {
+            const fdx = fg.x - rt.current.x;
+            const fdz = fg.z - rt.current.z;
+            const fd = Math.hypot(fdx, fdz);
+            if (fd > 0.28) {
+              const sp = ROAM_CAT.speed * 1.3 * dt;
+              rt.current.x += (fdx / fd) * Math.min(sp, fd);
+              rt.current.z += (fdz / fd) * Math.min(sp, fd);
+              rt.current.moving = true;
+              rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(fdx, fdz), Math.min(1, dt * 9));
+              rt.current.target = null;
+              rt.current.route = undefined;
+              collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
+            } else {
+              rt.current.moving = false;
+              rt.current.target = null;
+              rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(fdx, fdz), Math.min(1, dt * 5));
+              // 到指尖旁：小幅扑跳撒娇（偶尔应一声喵）
+              fingerHopT.current -= dt;
+              if (fingerHopT.current <= 0) {
+                fingerHopT.current = 1.3 + Math.random() * 0.9;
+                hopY.current = Math.max(hopY.current, 0.12);
+                if (Math.random() < 0.3) sfx.meow();
+              }
+            }
+            // 指尖新鲜期内暂停漫游与剧场倒计时，停更 2s 后很快恢复漫游
+            rt.current.nextWander = performance.now() / 1000 + 0.35;
+          } else {
           // 触发新剧场（30~60s 一次；照顾/捡球/睡觉时不打扰）
           nextTheaterAt.current -= dt;
           if (nextTheaterAt.current <= 0) {
@@ -2644,6 +2817,7 @@ function PetBuddy({
             if (ids.length > 0) sibChase.current = { id: ids[Math.floor(Math.random() * ids.length)], until: nowS + 5.5 };
           }
           roam(rt.current, dt, itemsRef.current, doors, ROAM_CAT);
+          }
         }
       }
       // 夜晚且已在睡：安睡不动（等天亮/照顾指令唤醒）
@@ -2651,6 +2825,11 @@ function PetBuddy({
     // —— 睡觉入梦缓动（趴下缩成团 0→1） ——
     sleepEase.current = THREE.MathUtils.damp(sleepEase.current, sleeping.current ? 1 : 0, 3.2, dt);
     const se = sleeping.current || sleepEase.current > 0.02 ? sleepEase.current : 0;
+
+    // —— v11 H2 成长体型：目标缩放随 petGrowLv（Lv1 幼年 0.62 → Lv9 成年 1.0），每帧 0.03 lerp 平滑过渡（乘算进下面的压扁/睡觉缩放，不覆盖） ——
+    const growTarget = 0.62 + ((Math.min(9, Math.max(1, Math.round(petGrowLv))) - 1) / 8) * 0.38;
+    grow.current = THREE.MathUtils.lerp(grow.current, growTarget, 0.03);
+    const gw = grow.current;
 
     const mv = rt.current.moving;
     const lift = hugLift.current;
@@ -2735,9 +2914,9 @@ function PetBuddy({
     const cs = carrying.current ? lift : 0;
     const rr = rainRest.current;
     g.scale.set(
-      (1 + sq * 0.1) * (1 + se * 0.14) * (1 + cs * 0.07) * (1 + rr * 0.06),
-      (1 - sq * 0.14) * (1 - se * 0.34) * (1 - cs * 0.11) * (1 - rr * 0.18),
-      (1 + sq * 0.1) * (1 + se * 0.14) * (1 + cs * 0.07) * (1 + rr * 0.06),
+      (1 + sq * 0.1) * (1 + se * 0.14) * (1 + cs * 0.07) * (1 + rr * 0.06) * gw,
+      (1 - sq * 0.14) * (1 - se * 0.34) * (1 - cs * 0.11) * (1 - rr * 0.18) * gw,
+      (1 + sq * 0.1) * (1 + se * 0.14) * (1 + cs * 0.07) * (1 + rr * 0.06) * gw,
     );
     const earBase = 0.26 * (1 - se);
     if (earL.current) earL.current.rotation.z = earBase + (pp > 0 ? Math.sin(t * 19) * 0.22 * pp : Math.sin(t * 1.8) * 0.03 * (1 - se));
@@ -3149,6 +3328,7 @@ function PetBuddy2({
   petBallCmdRef,
   onCareEvent,
   onPetTap,
+  petGrowLv = 1,
 }: {
   mode: HomeMode;
   items: FurnitureItem[];
@@ -3168,6 +3348,8 @@ function PetBuddy2({
   onCareEvent?: (ev: 'arrive' | 'done' | 'cancel' | 'dropped', kind: PetCareKind, petId: string) => void;
   /** 点到它（宿主：把互动竖条切到这只） */
   onPetTap?: (petId: string) => void;
+  /** v11 成长等级 1~9（体型缩放 0.62→1.0，与第一只猫共享同一等级） */
+  petGrowLv?: number;
 }) {
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -3220,6 +3402,11 @@ function PetBuddy2({
     if (isDog) sfx.bark();
     else sfx.boing();
   }, [isDog]);
+  // —— v11 H1 逗宠手指：0~400ms 随机延迟（多宠错开更自然）+ 到位后扑跳节拍 ——
+  const fingerDelay = useRef(Math.random() * 400);
+  const fingerHopT2 = useRef(0);
+  // —— v11 H2 成长体型（与第一只猫共享同一 petGrowLv） ——
+  const grow = useRef(0.62 + ((Math.min(9, Math.max(1, petGrowLv)) - 1) / 8) * 0.38);
 
   /** 结束照顾（done=正常完成，cancel=中断） */
   const endCare = useCallback(
@@ -3508,6 +3695,36 @@ function PetBuddy2({
         sleeping.current = false;
         rt.current.nextWander = performance.now() / 1000 + 1.5;
       }
+      // —— v11 H1 逗宠手指：同样追指尖（带 0~400ms 随机延迟更自然）；照顾/捡球/夜晚回窝优先 ——
+      const fg = petFingerRef.current;
+      const fAge = fg ? Date.now() - fg.t - fingerDelay.current : Number.POSITIVE_INFINITY;
+      if (fg && fAge >= 0 && fAge < 2000) {
+        const fdx = fg.x - rt.current.x;
+        const fdz = fg.z - rt.current.z;
+        const fd = Math.hypot(fdx, fdz);
+        if (fd > 0.28) {
+          const sp = ROAM_CAT.speed * 1.3 * dt;
+          rt.current.x += (fdx / fd) * Math.min(sp, fd);
+          rt.current.z += (fdz / fd) * Math.min(sp, fd);
+          rt.current.moving = true;
+          rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(fdx, fdz), Math.min(1, dt * 9));
+          rt.current.target = null;
+          rt.current.route = undefined;
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal, doors.sr, doors.yd);
+        } else {
+          rt.current.moving = false;
+          rt.current.target = null;
+          rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(fdx, fdz), Math.min(1, dt * 5));
+          fingerHopT2.current -= dt;
+          if (fingerHopT2.current <= 0) {
+            fingerHopT2.current = 1.5 + Math.random() * 1.1;
+            hopY.current = Math.max(hopY.current, 0.1);
+            if (Math.random() < 0.2) sndHappy();
+          }
+        }
+        rt.current.nextWander = performance.now() / 1000 + 0.35;
+        nextChaseAt.current = Math.max(nextChaseAt.current, 3);
+      } else {
       // 追猫玩（每 9~17s 一次 3.5s 追追）
       const cat = catRTRef?.current ?? null;
       nextChaseAt.current -= dt;
@@ -3535,8 +3752,13 @@ function PetBuddy2({
         }
         roam(rt.current, dt, itemsRef.current, doors, ROAM_CAT);
       }
+      }
     }
     zzzEase.current = THREE.MathUtils.damp(zzzEase.current, sleeping.current ? 1 : 0, 3, dt);
+    // —— v11 H2 成长体型：与第一只猫同一 petGrowLv，每帧 0.03 lerp 平滑过渡（乘算进压扁/睡觉缩放） ——
+    const growTarget2 = 0.62 + ((Math.min(9, Math.max(1, Math.round(petGrowLv))) - 1) / 8) * 0.38;
+    grow.current = THREE.MathUtils.lerp(grow.current, growTarget2, 0.03);
+    const gw2 = grow.current;
     const se2 = zzzEase.current;
     pat.current = Math.max(0, pat.current - dt / 0.9);
     const pp = pat.current;
@@ -3556,9 +3778,9 @@ function PetBuddy2({
     const sq = Math.sin(pp * Math.PI);
     const squash = c?.kind === 'roll' ? 1 : 0;
     g.scale.set(
-      (1 + sq * 0.1) * (1 + se2 * 0.12) * (1 + squash * 0.06),
-      (1 - sq * 0.14) * (1 - se2 * 0.3) * (1 - squash * 0.22),
-      (1 + sq * 0.1) * (1 + se2 * 0.12) * (1 + squash * 0.06),
+      (1 + sq * 0.1) * (1 + se2 * 0.12) * (1 + squash * 0.06) * gw2,
+      (1 - sq * 0.14) * (1 - se2 * 0.3) * (1 - squash * 0.22) * gw2,
+      (1 + sq * 0.1) * (1 + se2 * 0.12) * (1 + squash * 0.06) * gw2,
     );
     if (tail.current) tail.current.rotation.z = Math.sin(t * (mv ? 13 : 5)) * 0.4 * (1 - se2);
     // 摸摸爱心
@@ -3750,14 +3972,20 @@ const bubbleTexCache = new Map<string, { tex: THREE.CanvasTexture; w: number; h:
 /** v10.3 超采样倍率：canvas 按 4x 分辨率绘制，高分屏（dpr 2~3）上文字边缘锐利不发虚 */
 const BUBBLE_SS = 4;
 
+/** 气泡样式：plain = iOS 磨砂白卡片（默认）/ thought = 想法泡（云朵虚线蓝描边 + 💭）/ love = 爱心泡（粉描边 + 顶部小爱心装饰） */
+type BubbleStyle = 'plain' | 'thought' | 'love';
+
 /**
  * 文字气泡贴图：iOS 风白底圆角卡片 + 淡淡投影 + 樱粉细描边 + 底部小尾巴 + 自动换行
  * （15 字/行，最多 5 行，超出省略号）。纯 canvas 绘制不依赖 DOM；宽度按字符宽度估算
  * （CJK 全宽 / 半角半宽）；4x 超采样 + 关 mipmap（LinearFilter 直采）保证文字边缘锐利。
  * 主体与尾巴合并为单一路径一次性填充/描边：半透明磨砂质感下不出现重叠双影。
+ * v11 love 样式：粉色描边 + 顶部画一颗小爱心装饰，其余卡片样式不变（顶部多留一行高度给爱心）。
  */
-function makeBubbleTexture(text: string, thought = false): { tex: THREE.CanvasTexture; w: number; h: number } {
-  const cacheKey = (thought ? '\u3031\u3031' : '') + text;
+function makeBubbleTexture(text: string, style: BubbleStyle = 'plain'): { tex: THREE.CanvasTexture; w: number; h: number } {
+  const thought = style === 'thought';
+  const love = style === 'love';
+  const cacheKey = (thought ? '\u3031\u3031' : love ? '\u3032\u3032' : '') + text;
   const hit = bubbleTexCache.get(cacheKey);
   if (hit) return hit;
   const raw = (thought ? '\ud83d\udcad ' : '') + text.replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -3771,7 +3999,8 @@ function makeBubbleTexture(text: string, thought = false): { tex: THREE.CanvasTe
   const charW = (ch: string) => (ch.charCodeAt(0) > 0x2e7f ? 30 : 16);
   const lineW = lines.map((l) => [...l].reduce((s, ch) => s + charW(ch), 0));
   const W = Math.min(560, Math.max(170, Math.max(...lineW) + 52));
-  const H = lines.length * 40 + 40 + 18; // 行高×行数 + 上下内边距 + 尾巴
+  const padTop = love ? 20 : 0; // love：顶部多留一条给小爱心装饰
+  const H = lines.length * 40 + 40 + 18 + padTop; // 行高×行数 + 上下内边距 + 尾巴
   const SS = BUBBLE_SS;
   const cv = document.createElement('canvas');
   cv.width = Math.ceil(W * SS);
@@ -3781,7 +4010,7 @@ function makeBubbleTexture(text: string, thought = false): { tex: THREE.CanvasTe
   const r = 20;
   const bh = H - 18; // 气泡主体底边（留出尾巴）
   const tx = Math.min(W - 44, Math.max(44, W / 2)); // 尾巴尖水平位置
-  const stroke = thought ? 'rgba(150,180,205,0.85)' : 'rgba(242,183,199,0.9)';
+  const stroke = love ? 'rgba(246,140,170,0.95)' : thought ? 'rgba(150,180,205,0.85)' : 'rgba(242,183,199,0.9)';
   // —— iOS 风磨砂卡片：主体+尾巴单一路径，一次性填（带柔和投影）+ 细描边 ——
   ctx.save();
   ctx.shadowColor = 'rgba(120,80,95,0.20)';
@@ -3813,13 +4042,29 @@ function makeBubbleTexture(text: string, thought = false): { tex: THREE.CanvasTe
   ctx.moveTo(r + 6, 5.5);
   ctx.lineTo(W - r - 6, 5.5);
   ctx.stroke();
+  // v11 love：顶部居中小爱心装饰（粉渐变，不影响卡片其余样式）
+  if (love) {
+    const hx = W / 2;
+    const hy = 17;
+    const hg = ctx.createLinearGradient(hx, hy - 8, hx, hy + 8);
+    hg.addColorStop(0, '#ff9db4');
+    hg.addColorStop(1, '#f76e92');
+    ctx.fillStyle = hg;
+    ctx.beginPath();
+    ctx.moveTo(hx, hy + 8);
+    ctx.bezierCurveTo(hx - 11, hy, hx - 9, hy - 8, hx - 4, hy - 8);
+    ctx.bezierCurveTo(hx - 1, hy - 8, hx, hy - 5.5, hx, hy - 4);
+    ctx.bezierCurveTo(hx, hy - 5.5, hx + 1, hy - 8, hx + 4, hy - 8);
+    ctx.bezierCurveTo(hx + 9, hy - 8, hx + 11, hy, hx, hy + 8);
+    ctx.fill();
+  }
   // 文本
   ctx.fillStyle = '#43434a';
   ctx.font = '600 30px "PingFang SC", "Nunito", ui-rounded, "Microsoft YaHei", system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   lines.forEach((l, i) => {
-    ctx.fillText(l, W / 2, 24 + i * 40 + 20);
+    ctx.fillText(l, W / 2, 24 + padTop + i * 40 + 20);
   });
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -3872,7 +4117,7 @@ function HeadBubbles({
         q.splice(i, 1);
         i--;
         if (slot.own) slot.rec?.tex.dispose();
-        slot.rec = makeBubbleTexture(c.text, c.kind === 'thought');
+        slot.rec = makeBubbleTexture(c.text, c.kind === 'thought' ? 'thought' : c.kind === 'love' ? 'love' : 'plain');
         slot.own = true;
         slot.total = c.hold ?? Math.min(12, 3.2 + c.text.replace(/\s/g, '').length * 0.16);
         slot.until = now + slot.total;
@@ -3965,6 +4210,7 @@ export default function HomeScene(props: HomeSceneProps) {
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
     companionCmdRef, onCompanionEvent, onPartnerTap, bubbleRef, partnerPlayingId,
     petCoat, petWear, pets2, petBallCmdRef,
+    onPartnerLongPress, petGrowLv,
   } = props;
 
   // —— v8.0 陪伴系统：状态机实例 / 小人姿势槽 / A* 阻挡网格（网格重建见下方 wallBoxes 之后） ——
@@ -3973,6 +4219,69 @@ export default function HomeScene(props: HomeSceneProps) {
   const gridRef = useRef<{ grid: BlockGrid | null }>({ grid: null });
   /** v8.3 第一只猫的运行时（PetBuddy 每帧写入 → 第二只宠物追着玩用） */
   const catRTRef = useRef<CharRT | null>(null);
+
+  // —— v11 G3 四季：真实日期月份（每次挂载取一次；可传 date 测试） ——
+  const season = useMemo(() => seasonNow(), []);
+  // —— v11 G1 雷电闪白：weatherFx==='rain' 且生活模式时随机 8~22s 一次双闪（主闪 0.12s → 熄 0.18s → 二闪 0.1s）+ 延迟雷声 ——
+  const [flashRaw, setFlashRaw] = useState(false);
+  const lightningOn = mode === 'live' && weatherFx === 'rain';
+  const lightning = flashRaw && lightningOn; // 天气/模式切走时由逻辑门控立即熄灭（避免 effect 内同步 setState）
+  useEffect(() => {
+    if (!lightningOn) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let thunderT: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      if (!alive) return;
+      timer = setTimeout(fire, 8000 + Math.random() * 14000);
+    };
+    const fire = () => {
+      if (!alive) return;
+      // 真实双闪：主闪 0.12s → 熄 0.18s → 二闪 0.1s → 结束重新排下一道
+      setFlashRaw(true);
+      timer = setTimeout(() => {
+        if (!alive) return;
+        setFlashRaw(false);
+        timer = setTimeout(() => {
+          if (!alive) return;
+          setFlashRaw(true);
+          timer = setTimeout(() => {
+            if (!alive) return;
+            setFlashRaw(false);
+            schedule();
+          }, 100);
+        }, 180);
+      }, 120);
+      // 雷声：闪电触发后延迟 0.5~1.8s（远近感）
+      thunderT = setTimeout(() => sfx.thunder(), 500 + Math.random() * 1300);
+    };
+    // 异步复位残留的闪状态（上次 rain 中途卸载可能停在 lit）
+    const kickoff = setTimeout(() => {
+      if (alive) setFlashRaw(false);
+    }, 0);
+    schedule();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+      if (thunderT) clearTimeout(thunderT);
+      clearTimeout(kickoff);
+    };
+  }, [lightningOn]);
+  // —— v11 G4 抱抱暖光脉冲：陪伴状态机 hugStart 事件 → 两人中点触发一圈暖色光环 ——
+  const hugPulseRef = useRef<HugPulseReq | null>(null);
+  const onCompEvRef = useRef(onCompanionEvent);
+  useEffect(() => {
+    onCompEvRef.current = onCompanionEvent;
+  });
+  const handleCompanionEvent = useCallback(
+    (e: CompanionEvent) => {
+      if (e.ev === 'hugStart') {
+        hugPulseRef.current = { x: (meRT.x + taRT.x) / 2, z: (meRT.z + taRT.z) / 2 };
+      }
+      onCompEvRef.current?.(e);
+    },
+    [meRT, taRT],
+  );
 
   const modeRef = useRef<HomeMode>(mode);
   const itemsRef = useRef<FurnitureItem[]>(items);
@@ -4132,7 +4441,11 @@ export default function HomeScene(props: HomeSceneProps) {
       <NoCull />
       <NightBlend night={night} mixRef={nightMixRef} weather={weatherFx ?? 'sunny'} />
       <Lights night={night} mixRef={nightMixRef} quality={quality} litLamps={litLamps} gloomy={gloomy} />
-      <OutdoorWorld weather={weatherFx ?? 'sunny'} night={night} mixRef={nightMixRef} />
+      {/* v11 G1 雷电室内瞬亮（独立加法环境光脉冲）+ H1 指尖追踪 + G4 抱抱暖光脉冲 */}
+      <LightningPulse lit={lightning} />
+      <PetFingerTracker modeRef={modeRef} />
+      <HugWarmPulse reqRef={hugPulseRef} />
+      <OutdoorWorld weather={weatherFx ?? 'sunny'} night={night} mixRef={nightMixRef} season={season} />
       <Room
         night={night}
         onFloorTap={onFloorTap}
@@ -4178,6 +4491,8 @@ export default function HomeScene(props: HomeSceneProps) {
         wallTex={wallTex}
         introRef={introRef}
         weatherFx={weatherFx}
+        lightning={lightning}
+        season={season}
       />
       {mode === 'edit' && <EditGrid />}
       <DragAid modeRef={modeRef} dragRef={dragRef} itemsRef={itemsRef} />
@@ -4210,7 +4525,15 @@ export default function HomeScene(props: HomeSceneProps) {
       })}
 
       <CharChibi3D rt={meRT} who="me" hide={fp && mode === 'live'} poseRef={poseRef} carryRef={carryRef} wear={wear} />
-      <CharChibi3D rt={taRT} who="partner" wear2={wear2} poseRef2={partnerPoseRef} onTap={onPartnerTap} />
+      {/* v11 长按陪伴小人（生活模式）→ onPartnerLongPress */}
+      <CharChibi3D
+        rt={taRT}
+        who="partner"
+        wear2={wear2}
+        poseRef2={partnerPoseRef}
+        onTap={onPartnerTap}
+        onLongPress={mode === 'live' ? onPartnerLongPress : undefined}
+      />
       <PetBuddy
         mode={mode}
         items={items}
@@ -4227,6 +4550,7 @@ export default function HomeScene(props: HomeSceneProps) {
         petWear={petWear}
         petBallCmdRef={petBallCmdRef}
         petRTRef={catRTRef}
+        petGrowLv={petGrowLv}
       />
       {/* v8.3 第二只宠物（小狗/小兔子）：追着猫玩，摸摸会开心 */}
       {/* v9 领养宠物全家福：每只都是全功能（照顾/抱抱/扔球/把戏/装扮），互不干扰 */}
@@ -4246,14 +4570,15 @@ export default function HomeScene(props: HomeSceneProps) {
           petBallCmdRef={petBallCmdRef}
           onCareEvent={onPetEvent}
           onPetTap={onPetTap}
+          petGrowLv={petGrowLv}
         />
       ))}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       {/* v8.0 3D 头顶对话气泡（用户/AI 消息挂在对应小人头顶） */}
       <HeadBubbles meRT={meRT} taRT={taRT} bubbleRef={bubbleRef} />
-      <OutdoorPrecip kind={weatherFx ?? 'sunny'} />
+      <OutdoorPrecip kind={weatherFx ?? 'sunny'} season={season} />
       <GlassRain kind={weatherFx ?? 'sunny'} winExist={winExist} winPos={winPos} />
-      <SnowDeco kind={weatherFx ?? 'sunny'} winExist={winExist} winPos={winPos} />
+      <SnowDeco kind={weatherFx ?? 'sunny'} winExist={winExist} winPos={winPos} winter={season === 'winter'} />
       <Critters mode={mode} items={items} onCritterTap={onCritterTap} />
       {/* v8.1 音箱/收音机开着也飘音符（陪伴小人放歌时同享） */}
       <SpeakerNotes
@@ -4300,7 +4625,7 @@ export default function HomeScene(props: HomeSceneProps) {
         introRef={introRef}
         compRT={compRT.current}
         companionCmdRef={companionCmdRef}
-        onCompanionEvent={onCompanionEvent}
+        onCompanionEvent={handleCompanionEvent}
         gridRef={gridRef}
         partnerPoseRef={partnerPoseRef}
       />
@@ -4369,13 +4694,21 @@ function makeGlowTexture(core: string, glow: string): THREE.CanvasTexture {
   return tex;
 }
 
-/** v9 各天气室外地面色（晴天草地 / 雪原 / 雨天湿地） */
+/** v9 各天气室外地面色（雪原 / 雨天湿地；草地色 v11 起改由 SEASON_GROUND 按季节驱动） */
 const GROUND_DAY: Record<HomeWeather, string> = {
   sunny: '#9cc489',
   cloudy: '#8fb283',
   overcast: '#88967f',
   rain: '#77896f',
   snow: '#edf2f6',
+};
+
+/** v11 G3 四季室外草地色：春嫩绿 / 夏浓绿 / 秋枯黄 / 冬薄雪覆地（雪天仍全雪原） */
+const SEASON_GROUND: Record<Season, string> = {
+  spring: '#a6d18c',
+  summer: '#7dbb67',
+  autumn: '#c9a95f',
+  winter: '#e6ecf2',
 };
 
 /** 云朵调校：透明度 / 颜色 / 藏几朵（晴天云最少） */
@@ -4406,10 +4739,13 @@ const HOUSE_CZ = (BAL_Z1 - ROOM_Z) / 2;
 function OutdoorWorld({
   weather,
   mixRef,
+  season = 'summer',
 }: {
   weather: HomeWeather;
   night: boolean;
   mixRef: RefObject<{ v: number }>;
+  /** v11 G3 季节（草地四季色） */
+  season?: Season;
 }) {
   const cloudTex = useMemo(() => makeCloudTexture(), []);
   const sunTex = useMemo(() => makeGlowTexture('rgba(255,244,214,1)', 'rgba(255,214,140,0.55)'), []);
@@ -4452,9 +4788,15 @@ function OutdoorWorld({
     const dt = Math.min(rawDt, 0.05);
     const mix = mixRef.current.v;
     const tune = CLOUD_TUNE[weather];
-    // —— 地面颜色（天气 × 昼夜变暗） ——
+    // —— 地面颜色（v11 四季草地 × 天气压暗 × 昼夜变暗） ——
     if (groundMat.current) {
-      tmpC.current.set(GROUND_DAY[weather]);
+      if (weather === 'snow') {
+        tmpC.current.set(GROUND_DAY.snow); // 雪天仍全雪原
+      } else {
+        tmpC.current.set(SEASON_GROUND[season]);
+        if (weather === 'rain') tmpC.current.multiplyScalar(0.8); // 雨天湿地压暗（沿用旧比例）
+        else if (weather === 'overcast') tmpC.current.multiplyScalar(0.88);
+      }
       if (mix > 0) tmpC.current.multiplyScalar(1 - mix * 0.62);
       groundMat.current.color.lerp(tmpC.current, Math.min(1, dt * 1.4));
     }
@@ -4485,10 +4827,10 @@ function OutdoorWorld({
   });
   return (
     <group>
-      {/* 大地（房子外的草地/雪原圆盘，半径 34m） */}
+      {/* 大地（房子外的草地/雪原圆盘，半径 34m；v11 草地随四季换色） */}
       <mesh position={[HOUSE_CX, -0.048, HOUSE_CZ]} rotation={[-Math.PI / 2, 0, 0]}>
         <circleGeometry args={[34, 48]} />
-        <meshStandardMaterial ref={groundMat} color={GROUND_DAY[weather]} roughness={1} />
+        <meshStandardMaterial ref={groundMat} color={weather === 'snow' ? GROUND_DAY.snow : SEASON_GROUND[season]} roughness={1} />
       </mesh>
       {/* 太阳（晴天白天淡入） */}
       <sprite ref={sunSp} position={[HOUSE_CX - 13, 8.8, HOUSE_CZ - 14]} scale={[4.8, 4.8, 1]}>
@@ -4546,6 +4888,44 @@ function makeSnowDotTexture(): THREE.CanvasTexture {
   return tex;
 }
 
+/** v11 G3 樱花瓣贴图（粉色小圆片，柔边） */
+function makePetalTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 32;
+  cv.height = 32;
+  const ctx = cv.getContext('2d')!;
+  const g = ctx.createRadialGradient(16, 14, 1, 16, 16, 13);
+  g.addColorStop(0, 'rgba(252,216,228,1)');
+  g.addColorStop(0.65, 'rgba(248,186,206,0.9)');
+  g.addColorStop(1, 'rgba(248,186,206,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(16, 16, 12, 8, 0.6, 0, Math.PI * 2);
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** v11 G3 落叶贴图（橙色小叶片） */
+function makeLeafTexture(): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 32;
+  cv.height = 32;
+  const ctx = cv.getContext('2d')!;
+  const g = ctx.createRadialGradient(15, 14, 1, 16, 16, 13);
+  g.addColorStop(0, 'rgba(238,178,96,1)');
+  g.addColorStop(0.65, 'rgba(222,146,62,0.92)');
+  g.addColorStop(1, 'rgba(222,146,62,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(16, 16, 12, 7, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 /** 在房子外的环带里随机取一点（屋内重采样最多 8 次，兜底放到北墙外） */
 function randOutdoorPoint(out: Float32Array, i: number): void {
   for (let k = 0; k < 8; k++) {
@@ -4564,10 +4944,32 @@ function randOutdoorPoint(out: Float32Array, i: number): void {
 /**
  * v9 室外雨/雪粒子（真 3D 世界空间）：雨雪只落在房子外面的世界里 ——
  * 透过窗户能看到外面下雨/飘雪，屋里绝不再飘雨点（旧「窗帘雨」已移除）。
+ * v11 G3 季节粒子：非雨雪时春飘樱花瓣 / 秋飘橙落叶（复用同一套粒子机制，同样只落屋外；雨雪优先）。
  */
-function OutdoorPrecip({ kind }: { kind: HomeWeather }) {
-  const snow = kind === 'snow';
-  const tex = useMemo(() => (snow ? makeSnowDotTexture() : makeRainDropTexture()), [snow]);
+function OutdoorPrecip({ kind, season = 'summer' }: { kind: HomeWeather; season?: Season }) {
+  const mode: 'rain' | 'snow' | 'petal' | 'leaf' | null =
+    kind === 'rain'
+      ? 'rain'
+      : kind === 'snow'
+        ? 'snow'
+        : season === 'spring'
+          ? 'petal'
+          : season === 'autumn'
+            ? 'leaf'
+            : null;
+  const tex = useMemo(
+    () =>
+      mode === 'snow'
+        ? makeSnowDotTexture()
+        : mode === 'rain'
+          ? makeRainDropTexture()
+          : mode === 'petal'
+            ? makePetalTexture()
+            : mode === 'leaf'
+              ? makeLeafTexture()
+              : null,
+    [mode],
+  );
   const pts = useMemo(() => {
     const n = 460;
     const pos = new Float32Array(n * 3);
@@ -4584,14 +4986,15 @@ function OutdoorPrecip({ kind }: { kind: HomeWeather }) {
     return { geo, pos, spd, phase, n };
   }, []);
   useFrame((state, rawDt) => {
-    if (kind !== 'rain' && kind !== 'snow') return;
+    if (!mode) return;
     const dt = Math.min(rawDt, 0.05);
     const { pos, spd, phase, n, geo } = pts;
-    const speed = snow ? 0.55 : 4.4;
+    const speed = mode === 'rain' ? 4.4 : mode === 'snow' ? 0.55 : 0.75; // 花瓣/落叶缓落
+    const sway = mode === 'petal' ? 0.34 : mode === 'leaf' ? 0.42 : mode === 'snow' ? 0.24 : 0;
     const t = state.clock.elapsedTime;
     for (let i = 0; i < n; i++) {
       pos[i * 3 + 1] -= spd[i] * speed * dt;
-      if (snow) pos[i * 3] += Math.sin(t * 1.4 + phase[i]) * dt * 0.24;
+      pos[i * 3] += Math.sin(t * 1.4 + phase[i]) * dt * sway;
       if (pos[i * 3 + 1] < 0.04) {
         pos[i * 3 + 1] = 5.2 + Math.random() * 0.6;
         randOutdoorPoint(pos, i);
@@ -4599,19 +5002,19 @@ function OutdoorPrecip({ kind }: { kind: HomeWeather }) {
     }
     (geo.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
   });
-  if (kind !== 'rain' && kind !== 'snow') return null;
+  if (!mode || !tex) return null;
   return (
     <points geometry={pts.geo} frustumCulled={false}>
       <pointsMaterial
-        key={snow ? 'snow' : 'rain'}
+        key={mode}
         map={tex}
-        size={snow ? 0.13 : 0.2}
+        size={mode === 'snow' ? 0.13 : mode === 'rain' ? 0.2 : mode === 'petal' ? 0.115 : 0.125}
         transparent
-        opacity={snow ? 0.85 : 0.62}
+        opacity={mode === 'rain' ? 0.62 : mode === 'snow' ? 0.85 : 0.9}
         depthWrite={false}
         sizeAttenuation
         toneMapped={false}
-        color={snow ? '#ffffff' : '#cfe0ee'}
+        color={mode === 'rain' ? '#cfe0ee' : mode === 'petal' ? '#f9c9d8' : mode === 'leaf' ? '#e8a05a' : '#ffffff'}
       />
     </points>
   );
@@ -4690,10 +5093,11 @@ function GlassRain({ kind, winExist, winPos }: { kind: HomeWeather; winExist?: b
   );
 }
 
-/** G5 雪天积雪：窗外窗台白沿 + 阳台地面薄雪（仅 snow 可见） */
-function SnowDeco({ kind, winExist, winPos }: { kind: HomeWeather; winExist?: boolean[]; winPos?: number[] }) {
+/** G5 雪天积雪 + v11 G3 冬季：窗外窗台白沿 + 阳台地面薄雪（snow 天气或冬季常驻薄雪底） */
+function SnowDeco({ kind, winExist, winPos, winter = false }: { kind: HomeWeather; winExist?: boolean[]; winPos?: number[]; winter?: boolean }) {
+  const on = kind === 'snow' || winter;
   return (
-    <group visible={kind === 'snow'}>
+    <group visible={on}>
       {WINS.map((w, i) => {
         if (winExist && winExist[i] === false) return null; // 已收起的窗不留雪沿
         const along = winPos?.[i] ?? w.def;

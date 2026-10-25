@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import type { HomeWeather } from '../types';
+import { seasonNow, type Season } from './weather-bus';
 import {
   BAL_X0,
   BAL_X1,
@@ -237,9 +238,10 @@ function skySea(ctx: CanvasRenderingContext2D, W: number, H: number, col: string
 /**
  * v10.3 窗外真实景色：五档天气 × 昼夜 ——
  * 晴（蓝天白云帆船/星空月）、多云（云多天沉）、阴（灰白天幕）、雨（乌云斜雨丝）、雪（灰白飘雪）。
+ * v11 G3 四季：春撒樱粉花瓣 / 秋撒橙落叶 / 冬（非雪天）加薄雪点 —— 跟随真实季节。
  */
-function makeWeatherSkyTexture(weather: HomeWeather, night: boolean): THREE.CanvasTexture {
-  const key = `${weather}-${night ? 'n' : 'd'}`;
+function makeWeatherSkyTexture(weather: HomeWeather, night: boolean, season: Season = seasonNow()): THREE.CanvasTexture {
+  const key = `${weather}-${night ? 'n' : 'd'}-${season}`;
   const hit = skyTexCache.get(key);
   if (hit) return hit;
   const W = 256;
@@ -363,6 +365,29 @@ function makeWeatherSkyTexture(weather: HomeWeather, night: boolean): THREE.Canv
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
       }
+    }
+  }
+  // v11 G3 四季窗景点缀：春樱粉花瓣 / 秋橙落叶 / 冬薄雪点（雨雪天自带粒子，不再叠加）
+  if (season === 'spring' && weather !== 'rain' && weather !== 'snow') {
+    ctx.fillStyle = 'rgba(248,196,214,0.85)';
+    for (let i = 0; i < 12; i++) {
+      ctx.beginPath();
+      ctx.ellipse((i * 97 + 31) % W, (i * 53 + 17) % (H * 0.66), 2.6, 1.5, i * 0.9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (season === 'autumn' && weather !== 'rain' && weather !== 'snow') {
+    ctx.fillStyle = 'rgba(226,150,70,0.8)';
+    for (let i = 0; i < 12; i++) {
+      ctx.beginPath();
+      ctx.ellipse((i * 89 + 23) % W, (i * 61 + 13) % (H * 0.66), 2.8, 1.4, i * 1.3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (season === 'winter' && weather !== 'snow' && weather !== 'rain') {
+    ctx.fillStyle = night ? 'rgba(235,242,250,0.55)' : 'rgba(255,255,255,0.75)';
+    for (let i = 0; i < 30; i++) {
+      ctx.beginPath();
+      ctx.arc((i * 83) % W, (i * 47) % (H * 0.7), 1 + ((i * 13) % 8) / 5, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
   const tex = new THREE.CanvasTexture(cv);
@@ -897,7 +922,8 @@ function HouseDoor({
 
 // ---------------- 窗户（上悬窗，向外上方打开；编辑模式点击=选中） ----------------
 
-/** 窗：窗框（四边条，winCol 可自定义）+ 整扇上悬窗扇（顶部铰链，底部向外上翻） */
+/** 窗：窗框（四边条，winCol 可自定义）+ 整扇上悬窗扇（顶部铰链，底部向外上翻）
+ *  v11 G1 雷电闪白：玻璃前叠白色闪光平面（lightning 窗口期快速亮起）；G3 窗景随季节点缀 */
 function Window({
   position,
   rotationY,
@@ -905,6 +931,8 @@ function Window({
   open,
   col,
   weatherFx = 'sunny',
+  lightning = false,
+  season,
   onToggle,
   editMode,
   selected,
@@ -920,6 +948,10 @@ function Window({
   col?: string;
   /** v10.3 窗外真实景色：跟随室外天气（晴/多云/阴/雨/雪 × 昼夜） */
   weatherFx?: HomeWeather;
+  /** v11 G1 雷电闪白：true = 闪电窗口期（窗外白亮 + 玻璃闪光） */
+  lightning?: boolean;
+  /** v11 G3 季节（窗景纹理点缀） */
+  season?: Season;
   onToggle: () => void;
   editMode: boolean;
   selected: boolean;
@@ -932,9 +964,10 @@ function Window({
   const glow = useRef<THREE.PointLight>(null);
   const sashPivot = useRef<THREE.Group>(null);
   const root = useRef<THREE.Group>(null);
+  const flash = useRef<THREE.Mesh>(null);
   const [hovered, setHovered] = useState(false);
 
-  const skyTex = useMemo(() => makeWeatherSkyTexture(weatherFx, night), [weatherFx, night]);
+  const skyTex = useMemo(() => makeWeatherSkyTexture(weatherFx, night, season ?? seasonNow()), [weatherFx, night, season]);
   const frameCol = col ?? '#f0e7d4';
 
   // 窗遮挡盒：窗框范围；视线穿窗或穿所在墙 → 窗淡出
@@ -965,6 +998,12 @@ function Window({
         5,
         dt,
       );
+    }
+    // G1 雷电闪白：闪电窗口期玻璃前的白幕快速亮起（窗口结束快速熄灭）
+    if (flash.current) {
+      const fm = flash.current.material as THREE.MeshBasicMaterial;
+      fm.opacity = THREE.MathUtils.damp(fm.opacity, lightning ? 0.82 : 0, lightning ? 34 : 16, Math.min(dt, 0.05));
+      if (flash.current.visible !== fm.opacity > 0.012) flash.current.visible = fm.opacity > 0.012;
     }
   });
 
@@ -1004,6 +1043,11 @@ function Window({
       <mesh position={[0, 0, -0.045]}>
         <planeGeometry args={[1.36, 1.14]} />
         <meshBasicMaterial map={skyTex} toneMapped={false} />
+      </mesh>
+      {/* G1 雷电闪白：风景前的白色闪光平面（lightning 窗口期 opacity 阻尼亮起） */}
+      <mesh ref={flash} position={[0, 0, -0.042]} visible={false} frustumCulled={false}>
+        <planeGeometry args={[1.38, 1.16]} />
+        <meshBasicMaterial color="#f2f7ff" transparent opacity={0} depthWrite={false} toneMapped={false} />
       </mesh>
 
       {/* 窗框（四边条，中空露出风景；winCol 自定义色） */}
@@ -1093,6 +1137,28 @@ function Window({
 // ---------------- 花园栅栏（v10：半高不挡视线；北面留门洞 + 栅栏门） ----------------
 
 const FENCE_H = 0.52;
+
+/** v11 G3 冬季屋面积雪白边：外圈外墙顶沿一条薄雪（无独立外屋顶 mesh，给外墙顶部画白） */
+const EXTERIOR_WALL_KEYS = new Set([
+  'back', 'srNorth', 'srSouth', 'srWest', 'bedLeft', 'bedRight',
+  'ktNorthWest', 'ktNorthMain', 'ktEast', 'ktSouthW', 'ktSouthE',
+  'bathNorth', 'bathEast', 'balWest',
+]);
+
+function WinterSnowTrim({ walls }: { walls: WallDef[] }) {
+  return (
+    <group>
+      {walls
+        .filter((w) => EXTERIOR_WALL_KEYS.has(w.key))
+        .map((w) => (
+          <mesh key={w.key} position={[w.pos[0], WALL_H + 0.024, w.pos[2]]} castShadow>
+            <boxGeometry args={[w.size[0] * 0.998 + 0.03, 0.048, w.size[2] * 0.998 + 0.03]} />
+            <meshStandardMaterial color="#f3f7fb" roughness={1} />
+          </mesh>
+        ))}
+    </group>
+  );
+}
 
 /** 一段栅栏：双横杆 + 等距立柱（木色；半高不参与墙体遮挡淡出） */
 function FenceRun({ from, to }: { from: [number, number]; to: [number, number] }) {
@@ -1278,6 +1344,10 @@ export interface RoomProps {
   introRef?: RefObject<{ on: boolean }>;
   /** v10.3 室外天气：窗景联动（晴/多云/阴/雨/雪） */
   weatherFx?: HomeWeather;
+  /** v11 G1 雷电闪白：true = 闪电窗口期（窗户闪白） */
+  lightning?: boolean;
+  /** v11 G3 季节：窗景点缀 / 花园草地四季色 / 冬季屋面积雪白边（缺省按真实日期） */
+  season?: Season;
 }
 
 export default function Room({
@@ -1325,6 +1395,8 @@ export default function Room({
   wallTex = 'plain',
   introRef,
   weatherFx = 'sunny',
+  lightning = false,
+  season,
 }: RoomProps) {
   const floorWoodTex = useMemo(() => makeFloorTexture(), []);
   const floorCheckTex = useMemo(() => makeFloorCheckerTexture(), []);
@@ -1389,6 +1461,23 @@ export default function Room({
       roughness={0.9}
     />
   );
+
+  /** v11 G3 当前季节（缺省按真实日期；驱动窗景点缀/花园草地/积雪白边） */
+  const effSeason = season ?? seasonNow();
+  /** v11 G3 花园草地四季色（夜晚压暗同旧版比例） */
+  const gardenCol = useMemo(() => {
+    const c = new THREE.Color(
+      effSeason === 'spring'
+        ? '#9ed184'
+        : effSeason === 'summer'
+          ? '#8fbf7f'
+          : effSeason === 'autumn'
+            ? '#c2a55e'
+            : '#e3eaf0',
+    );
+    if (night) c.multiplyScalar(0.55);
+    return `#${c.getHexString()}`;
+  }, [effSeason, night]);
 
   const floorTap = (e: { delta: number; stopPropagation: () => void }) => {
     if (e.delta > 8) return;
@@ -1463,7 +1552,7 @@ export default function Room({
         {floorMat(floorCol)}
       </mesh>
 
-      {/* v10 花园草地（露天，不随室内地板材质） */}
+      {/* v10 花园草地（露天，不随室内地板材质；v11 随四季换色） */}
       <mesh
         position={[(GARDEN_X0 + GARDEN_X1) / 2, 0, (GARDEN_Z0 + GARDEN_Z1) / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -1472,7 +1561,7 @@ export default function Room({
       >
         <planeGeometry args={[GARDEN_X1 - GARDEN_X0, GARDEN_Z1 - GARDEN_Z0]}
         />
-        <meshStandardMaterial color={night ? '#5f7a55' : '#8fbf7f'} roughness={1} />
+        <meshStandardMaterial color={gardenCol} roughness={1} />
       </mesh>
 
       {/* 地板外沿：浅灰围边（剖面观感） */}
@@ -1610,7 +1699,7 @@ export default function Room({
       {/* v10 花园栅栏门（北栅栏固定位） */}
       <GardenGate open={!!gardenGateOpen} onToggle={() => onToggleGardenGateDoor?.()} editMode={!!editMode} />
 
-      {/* —— 九扇上悬窗（数据驱动，编辑模式可选中沿墙滑行/收起） —— */}
+      {/* —— 九扇上悬窗（数据驱动，编辑模式可选中沿墙滑行/收起；v11 雷电闪白 + 四季窗景） —— */}
       {WINS.map((w, i) => {
         if (winExist && winExist[i] === false) return null; // 已被收起的窗不渲染
         const along = winPos?.[i] ?? w.def;
@@ -1625,6 +1714,8 @@ export default function Room({
             open={win?.[i] ?? false}
             col={winCol}
             weatherFx={weatherFx}
+            lightning={lightning}
+            season={effSeason}
             onToggle={() => onToggleWin?.(i)}
             editMode={!!editMode}
             selected={selWall === `win-${i}`}
@@ -1643,6 +1734,9 @@ export default function Room({
       <Ceiling x0={BATH_X0} x1={BATH_X1} z0={BATH_Z0} z1={BATH_Z1} col={ceilColB} night={night} />
       {/* v10 书房天花板（随客厅色；花园露天无顶） */}
       <Ceiling x0={STUDY_X0} x1={STUDY_X1} z0={STUDY_Z0} z1={STUDY_Z1} col={ceilCol} night={night} />
+
+      {/* v11 G3 冬季/雪天：外圈外墙顶沿积雪白边 */}
+      {(weatherFx === 'snow' || effSeason === 'winter') && <WinterSnowTrim walls={walls} />}
     </group>
   );
 }

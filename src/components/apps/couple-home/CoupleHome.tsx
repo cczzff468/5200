@@ -34,6 +34,7 @@ import {
   CupSoda,
   Droplet,
   Eye,
+  Feather, // v11 I1 互动轮盘：挠痒痒
   Flame,
   Gamepad2,
   Heart,
@@ -73,6 +74,7 @@ import {
   Users,
   Volume2,
   VolumeX,
+  Waves, // v11 G2 环境音效
   X,
   Zap,
   ZoomIn,
@@ -133,6 +135,12 @@ import { speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
 import { type MemConvoTurn } from '@/lib/memory';
 import { buildCabinSystem, cabinChatTurn, parseAiReply, type CabinContext } from './companion-brain';
 import {
+  buildDreamText,
+  dayStr,
+  loadDream,
+  loadGreet,
+  saveDream,
+  saveGreet,
   loadMind,
   saveMind,
   tickMind,
@@ -158,8 +166,11 @@ import {
   cabinBehaviorMemoryOncePerDay,
   cabinEventMemory,
   cabinMemoryBlock,
+  cabinRecentInteractions,
   setMemScopeForApp,
 } from './companion-memory';
+import { ensureTodayDiary } from './ta-diary';
+import TaDiarySheet from './TaDiarySheet';
 import type { CompanionCmd, CompanionEvent } from './scene/companion-rt';
 import type { BubbleCmd } from './scene/HomeScene';
 import type { BoyWear, CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, HomeWeather, LayoutSnap, NoteEntry, Pet2State, PetCareKind, PetCoat, PetState, PetWear, RoomId } from './types';
@@ -794,6 +805,88 @@ function addPetDiary(text: string): void {
   } catch {
     /* 隐私模式写不进就算了 */
   }
+}
+
+// ---------------- v11 G2 环境白噪音（sfx 环境音 API 防御式包装：12-b 未落地时静默 no-op） ----------------
+
+const sfxAmbient = sfx as unknown as {
+  ambient?: (k: 'rain' | 'fire' | 'wind' | null) => void;
+  ambientCurrent?: () => 'rain' | 'fire' | 'wind' | null;
+};
+
+// ---------------- v11 H3 猫窝换色：12 个精选色 ----------------
+
+const PET_BED_COLORS: { name: string; hex: string }[] = [
+  { name: '樱粉', hex: '#f4c2ce' },
+  { name: '奶油', hex: '#f5e6c8' },
+  { name: '天蓝', hex: '#a8d8e8' },
+  { name: '薄荷', hex: '#bfe3d0' },
+  { name: '鹅黄', hex: '#f7e3a1' },
+  { name: '杏橘', hex: '#f5c9a2' },
+  { name: '藕紫', hex: '#d8c3e0' },
+  { name: '雾蓝', hex: '#b8c6dd' },
+  { name: '奶白', hex: '#f7f3ea' },
+  { name: '浅棕', hex: '#d9bfa8' },
+  { name: '玫紫', hex: '#c98bb9' },
+  { name: '炭黑', hex: '#4a4a50' },
+];
+
+// ---------------- v11 I2 里程碑统计（在一起天数/聊天/做饭/拥抱/牵手/照顾宠物） ----------------
+
+interface CabinStats {
+  /** 开始记录（≈在一起）的时间戳；缺省 = 首次写入时间 */
+  since: number;
+  chatLines: number;
+  meals: number;
+  hugs: number;
+  holds: number;
+  petCares: number;
+}
+
+const STATS_KEY = (id: string) => `cabin-stats-${id}`;
+
+function loadCabinStats(id: string): CabinStats {
+  try {
+    const raw = window.localStorage.getItem(STATS_KEY(id));
+    if (raw) {
+      const j = JSON.parse(raw) as Partial<CabinStats>;
+      const since = typeof j.since === 'number' && j.since > 0 ? j.since : Date.now();
+      const num = (v: unknown) => (typeof v === 'number' && v > 0 ? Math.floor(v) : 0);
+      return {
+        since,
+        chatLines: num(j.chatLines),
+        meals: num(j.meals),
+        hugs: num(j.hugs),
+        holds: num(j.holds),
+        petCares: num(j.petCares),
+      };
+    }
+  } catch {
+    /* 坏档按新档处理 */
+  }
+  return { since: Date.now(), chatLines: 0, meals: 0, hugs: 0, holds: 0, petCares: 0 };
+}
+
+/** 里程碑累加（delta 传正数增量），返回落盘后的最新档（调用方同步进 statsRef） */
+function bumpCabinStats(
+  id: string,
+  delta: Partial<Record<'chatLines' | 'meals' | 'hugs' | 'holds' | 'petCares', number>>,
+): CabinStats {
+  const cur = loadCabinStats(id);
+  const next: CabinStats = {
+    since: cur.since,
+    chatLines: cur.chatLines + (delta.chatLines ?? 0),
+    meals: cur.meals + (delta.meals ?? 0),
+    hugs: cur.hugs + (delta.hugs ?? 0),
+    holds: cur.holds + (delta.holds ?? 0),
+    petCares: cur.petCares + (delta.petCares ?? 0),
+  };
+  try {
+    window.localStorage.setItem(STATS_KEY(id), JSON.stringify(next));
+  } catch {
+    /* 隐私模式写不进就算了 */
+  }
+  return next;
 }
 
 /** 每个角色一份会话存档（LLM 上下文 + 记忆提取轮次） */
@@ -1540,6 +1633,38 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const togetherRef = useRef<'watch' | 'eat' | 'play' | null>(null);
   /** v8.2 优化C：陪伴小人夜里睡着（UI 态，驱动梦境气泡） */
   const [sleepingUi, setSleepingUi] = useState(false);
+  // ---------------- v11：互动轮盘 / 日记 / 里程碑 / 环境音 / 猫窝换色 ----------------
+  /** v11 I1 长按 TA 弹出的互动轮盘（摸头/喂食/挠痒痒；短按仍是拥抱/牵手菜单） */
+  const [ringOpen, setRingOpen] = useState(false);
+  /** v11 F2 TA 的日记抽屉 */
+  const [taDiaryOpen, setTaDiaryOpen] = useState(false);
+  /** v11 I2 里程碑面板 */
+  const [statsOpen, setStatsOpen] = useState(false);
+  /** v11 I2 打开面板那一刻的快照（事件处理器里从 statsRef 拷入，避免渲染期读 ref） */
+  const [statsSnap, setStatsSnap] = useState<CabinStats | null>(null);
+  /** v11 I2 里程碑数据（since = 首次记录时间；事件处累加，面板打开时拷成快照展示） */
+  const statsRef = useRef<CabinStats | null>(null);
+  useEffect(() => {
+    statsRef.current = companion ? loadCabinStats(companion.id) : null;
+  }, [companion?.id, companion]);
+  /** v11 F2 日记素材：今天 TA 做过的事（跨天自动重置，同一天去重） */
+  const taDayActionsRef = useRef<{ date: string; items: string[] }>({ date: '', items: [] });
+  /** v11 F2 日记素材：今天和主人聊的句数（日记落盘后清零） */
+  const taChatCountRef = useRef(0);
+  /** v11 G2 环境白噪音开关（⋮ 菜单；默认开；sfx.ambient 防御式调用，未实现时 no-op） */
+  const [ambientOn, setAmbientOn] = useState(() => {
+    try {
+      return typeof window === 'undefined' || window.localStorage.getItem('cabin-ambient-on') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  const ambientOnRef = useRef(ambientOn);
+  useEffect(() => {
+    ambientOnRef.current = ambientOn;
+  }, [ambientOn]);
+  /** v11 H3 猫窝换色小色板（装修模式选中猫窝时弹出） */
+  const [bedColorOpen, setBedColorOpen] = useState(false);
   // ---------------- v10 决策大脑：内心状态 / 强化 / 真歌 / 对讲 / 历史面板 ----------------
   /** TA 的内心状态（需求/情绪/甜度/闹脾气/强化/纪念日；按角色分档持久化） */
   const mindRef = useRef<CabinMind | null>(null);
@@ -1584,12 +1709,31 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setSleepingUi(false); // 任何新指令都会把睡着的小人叫醒
   }, []);
 
+  /** v11 F2 日记素材：记一件 TA 今天做的事（跨天自动重置，同一天去重防刷屏） */
+  const noteTaAction = useCallback((text: string) => {
+    const day = dayStr();
+    const cur = taDayActionsRef.current;
+    if (cur.date !== day) taDayActionsRef.current = { date: day, items: [text] };
+    else if (!cur.items.includes(text) && cur.items.length < 12) cur.items.push(text);
+  }, []);
+
   // ---------------- v10 决策大脑：气泡/结算/真歌 帮手 ----------------
 
   /** 头顶气泡（kind='thought' 渲染成想法气泡） */
   const say = useCallback((text: string, hold?: number, kind?: 'thought') => {
     bubbleRef.current.push({ who: 'ta', text, hold, ...(kind ? { kind } : {}) });
   }, []);
+
+  /** v11 TA 主动开口（讲梦/早安晚安）：头顶气泡 + 聊天面板插入一条 + 会话存档落盘 */
+  const taProactiveSay = useCallback(
+    (text: string) => {
+      say(text, 7);
+      convoTurnsRef.current = [...convoTurnsRef.current, { role: 'peer' as const, text }].slice(-40);
+      convoRef.current = [...convoRef.current, { role: 'assistant' as const, content: text }].slice(-40);
+      if (companion) saveCabinConvo(companion.id, convoRef.current, convoTurnsRef.current);
+    },
+    [companion, say],
+  );
 
   /** 停掉真歌（B1） */
   const stopRealSong = useCallback(() => {
@@ -1644,23 +1788,27 @@ export default function CoupleHome({ close }: { close: () => void }) {
         if (e.kind === 'sit') companionStateRef.current = 'sitting';
         else if (e.kind === 'lie') {
           companionStateRef.current = e.memo === 'auto-night' ? 'sleeping' : 'lying';
-          if (e.memo === 'auto-night') setSleepingUi(true);
+          if (e.memo === 'auto-night') {
+            setSleepingUi(true);
+            noteTaAction('早早钻进了被窝');
+          }
         }
-        else if (e.kind === 'watch') { companionStateRef.current = 'watching'; settleMind({ mood: 7 }, 'watch'); }
+        else if (e.kind === 'watch') { companionStateRef.current = 'watching'; settleMind({ mood: 7 }, 'watch'); noteTaAction('看了一会儿电视'); }
         else if (e.kind === 'play') {
           companionStateRef.current = 'playing';
           setPartnerPlaying(e.itemId ?? null);
           settleMind({ mood: 14, energy: -3 }, 'play');
+          noteTaAction('弹了一首曲子');
           // v9 点歌出声：真实乐器音色弹奏（钢琴 grand / 吉他拨弦），音符可视化由 partnerPlayingId 联动
           const inst = itemsRef.current.find((f) => f.id === e.itemId);
           const played = playAiSongOnce(inst?.kind === 'guitar' ? 'guitar' : 'piano', e.song);
           toast(played === '即兴' ? `${companion?.name ?? 'TA'}即兴弹了一段小曲～` : `${companion?.name ?? 'TA'}弹起了《${played}》～`);
         } else if (e.kind === 'cook') { companionStateRef.current = 'cooking'; settleMind({}, 'cook'); }
-        else if (e.kind === 'eat') { companionStateRef.current = 'eating'; settleMind({ food: 42, energy: 6, mood: 6 }, 'eat'); }
-        else if (e.kind === 'read') { companionStateRef.current = 'sitting'; settleMind({ mood: 6 }, 'read'); }
-        else if (e.kind === 'dance') { companionStateRef.current = 'playing'; settleMind({ mood: 14, energy: -4 }, 'dance'); }
+        else if (e.kind === 'eat') { companionStateRef.current = 'eating'; settleMind({ food: 42, energy: 6, mood: 6 }, 'eat'); noteTaAction('吃了一顿饭'); }
+        else if (e.kind === 'read') { companionStateRef.current = 'sitting'; settleMind({ mood: 6 }, 'read'); noteTaAction('看了会儿书'); }
+        else if (e.kind === 'dance') { companionStateRef.current = 'playing'; settleMind({ mood: 14, energy: -4 }, 'dance'); noteTaAction('跳了一段舞'); }
         else if (e.kind === 'stretch') { companionStateRef.current = 'near'; settleMind({ mood: 4, energy: 2 }, 'stretch'); }
-        else if (e.kind === 'water') { companionStateRef.current = 'playing'; settleMind({ mood: 6 }, 'water'); }
+        else if (e.kind === 'water') { companionStateRef.current = 'playing'; settleMind({ mood: 6 }, 'water'); noteTaAction('浇了浇花'); }
         else if (e.kind === 'lamp') {
           // 指令「打开灯」：小人走到灯旁 → 宿主点亮最近的落地灯/台灯
           const lamp = itemsRef.current.find((f) => CATALOG[f.kind]?.light && (f.y ?? 0) < 0.5 && !f.st?.on);
@@ -1692,6 +1840,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
           // 指令「放歌」：走到音箱/唱片机前 → 打开它（音符飘出）+ 真歌播放（网易云直链，失败回落轻声八音盒）
           companionStateRef.current = 'singing';
           settleMind({ mood: 12 }, 'music');
+          noteTaAction('放了首歌');
           const box = itemsRef.current.find((f) => f.id === e.itemId);
           if (box && !box.st?.on) {
             setItems((prev) => prev.map((f) => (f.id === box.id ? { ...f, st: { ...f.st, on: true } } : f)));
@@ -1779,6 +1928,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
         setHoldingUI(false);
         // —— v10 内心结算：拥抱 = 甜甜的互动 ——
         if (mindRef.current && companion) noteInteraction(companion.id, mindRef.current, { sweet: 5, social: 16, mood: 10 });
+        // —— v11 I2 里程碑 + F2 日记素材 ——
+        if (companion) {
+          statsRef.current = bumpCabinStats(companion.id, { hugs: 1 });
+          noteTaAction('和主人抱抱了');
+        }
         // —— 物理动作记忆（关键）：拥抱成功 ——
         if (companion && e.memo === 'user-hug') {
           cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}在拾光小屋里主动拥抱了${companion.name}，TA 感觉很温暖。`, 'cabin-hug-user', { dedupeSeconds: 120 });
@@ -1792,6 +1946,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
         holdRoomRef.current = roomAt(taRT.current.x, taRT.current.z);
         // —— v10 内心结算：牵手 = 亲密互动 ——
         if (mindRef.current && companion) noteInteraction(companion.id, mindRef.current, { sweet: 4, social: 12, mood: 8 });
+        // —— v11 I2 里程碑 + F2 日记素材 ——
+        if (companion) {
+          statsRef.current = bumpCabinStats(companion.id, { holds: 1 });
+          noteTaAction('和主人牵手散步了');
+        }
         // —— 物理动作记忆：牵手成功 ——
         if (companion && e.memo === 'user-hold') {
           cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}在拾光小屋里牵起了${companion.name}的手，十指相扣。`, 'cabin-hold-user', { dedupeSeconds: 120 });
@@ -1809,7 +1968,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
             toast(`${companion?.name ?? 'TA'}做好了饭，一桌好菜上桌啦，去餐桌「开饭」吧～`);
             if (companion) {
               cabinEventMemory(companion.id, `${companion.name}在灶台前做了一顿饭，把菜端上了餐桌。`, 'cabin-cook', { dedupeSeconds: 300 });
+              statsRef.current = bumpCabinStats(companion.id, { meals: 1 }); // v11 I2 里程碑
             }
+            noteTaAction('做了一顿饭'); // v11 F2 日记素材
             // —— v10 A5 任务链：做完饭 → 喊你吃饭（用户不在旁/没在吃时弹主动请求） ——
             const meRoom = roomAt(meRT.current.x, meRT.current.z);
             const taRoom = roomAt(taRT.current.x, taRT.current.z);
@@ -1847,7 +2008,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         }
       }
     },
-    [issueCompanionCmd, toast, saveSoon, companion, settleMind, playRealSong, stopRealSong, say],
+    [issueCompanionCmd, toast, saveSoon, companion, settleMind, playRealSong, stopRealSong, say, noteTaAction],
   );
 
   /** 进入小屋：拉联系人 + 恢复上次选定的陪伴角色（没有则弹选择列表） */
@@ -1926,6 +2087,22 @@ export default function CoupleHome({ close }: { close: () => void }) {
       }
       if (!next) stopSpeaking();
       toast(next ? '小人声音已开，TA 会开口说话啦～' : '小人声音已关，只显示文字气泡');
+      return next;
+    });
+  }, [toast]);
+
+  /** v11 G2 环境音效开关（⋮ 菜单；开 = 跟天气/壁炉智能联动；防御式调 sfx.ambient，未实现时静默 no-op） */
+  const toggleAmbient = useCallback(() => {
+    setAmbientOn((on) => {
+      const next = !on;
+      ambientOnRef.current = next;
+      try {
+        window.localStorage.setItem('cabin-ambient-on', next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      if (!next) sfxAmbient.ambient?.(null); // 关 = 恒静
+      toast(next ? '环境音效已开：雨声/风雪/炉火会跟着天气走～' : '环境音效已关，屋子安静下来了');
       return next;
     });
   }, [toast]);
@@ -2015,6 +2192,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
     if (!text || chatBusy || !companion) return;
     setChatText('');
     setChatBusy(true);
+    // —— v11 I2 里程碑：聊天句数 +1；F2 日记素材 ——
+    statsRef.current = bumpCabinStats(companion.id, { chatLines: 1 });
+    taChatCountRef.current += 1;
+    noteTaAction('和主人聊了会儿天');
     // —— v10 内心结算：聊天 = 互动（甜度+社交+想你衰减） ——
     const m0 = mindRef.current;
     if (m0 && companion) {
@@ -2106,7 +2287,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     } finally {
       setChatBusy(false);
     }
-  }, [chatText, chatBusy, companion, collectContext, issueCompanionCmd, toast]);
+  }, [chatText, chatBusy, companion, collectContext, issueCompanionCmd, noteTaAction, toast]);
 
   /** 麦克风开关：开 = 录音 +（支持的浏览器）Web Speech 实时预览；再点 = 停止并自动发送。
    *  v10.3：Web Speech 没结果（国产安卓无识别引擎）时自动回退录音 → 服务端 ASR，两头都不空转 */
@@ -2343,6 +2524,68 @@ export default function CoupleHome({ close }: { close: () => void }) {
     toast('松开了手，TA 又可以自由溜达啦～');
   }, [issueCompanionCmd, toast]);
 
+  // ---------------- v11 I1 长按互动轮盘（摸头 / 喂食 / 挠痒痒；场景层区分短按=拥抱牵手菜单 / 长按=轮盘） ----------------
+
+  /** TA 是否空闲（轮盘互动守卫：走路/做事/睡觉/照顾宠物中都算忙） */
+  const taIdleForRing = useCallback(() => {
+    const s = companionStateRef.current;
+    return (s === 'idle' || s === 'near') && !petCareRef.current && !carryPetRef.current;
+  }, []);
+
+  /** 长按 TA → 弹轮盘（HomeScene onPartnerLongPress） */
+  const openPartnerRing = useCallback(() => {
+    partnerTapAtRef.current = Date.now(); // 同款守卫：同一次点击的 up 射线不当成「点别处」
+    if (modeRef.current !== 'live' || !companion) return;
+    setPartnerMenuOpen(false);
+    setRingOpen(true);
+    sfx.tap();
+  }, [companion]);
+
+  /** 摸头：空闲 → love 气泡 + 甜度/心情 + 记忆；忙碌 → toast */
+  const ringPat = useCallback(() => {
+    setRingOpen(false);
+    if (!companion) return;
+    if (!taIdleForRing()) {
+      toast('TA 正忙着呢，等 TA 一下～');
+      return;
+    }
+    bubbleRef.current.push({ who: 'ta', text: '最喜欢摸摸头了～', kind: 'love' });
+    if (mindRef.current) noteInteraction(companion.id, mindRef.current, { sweet: 3, social: 0, mood: 6 });
+    cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}摸了摸${companion.name}的头，TA 眯起眼睛很享受。`, 'cabin-ring-pat', { dedupeSeconds: 120 });
+    noteTaAction('被主人摸了摸头');
+    sfx.tap();
+  }, [companion, taIdleForRing, toast, noteTaAction]);
+
+  /** 喂食：TA 走到餐桌吃饭（饱腹 +42 由 eat 到位的既有结算统一给，不重复加） */
+  const ringFeed = useCallback(() => {
+    setRingOpen(false);
+    if (!companion) return;
+    const table = itemsRef.current.find((f) => CATALOG[f.kind]?.acts?.eat && (f.y ?? 0) < 0.45);
+    if (!table) {
+      toast('家里还没有餐桌呢，先去商店买一张吧～');
+      return;
+    }
+    bubbleRef.current.push({ who: 'ta', text: '谢谢投喂！', kind: 'love' });
+    issueCompanionCmd({ kind: 'eat', itemId: table.id, memo: 'user-feed' });
+    cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}投喂了${companion.name}，TA 吃得津津有味。`, 'cabin-ring-feed', { dedupeSeconds: 120 });
+    noteTaAction('被主人投喂了一顿');
+  }, [companion, issueCompanionCmd, noteTaAction]);
+
+  /** 挠痒痒：空闲 → 笑作一团 + 心情 +10 + 记忆；忙碌 → toast */
+  const ringTickle = useCallback(() => {
+    setRingOpen(false);
+    if (!companion) return;
+    if (!taIdleForRing()) {
+      toast('TA 正忙着呢，等 TA 一下～');
+      return;
+    }
+    bubbleRef.current.push({ who: 'ta', text: '哈哈哈…好痒～哈哈哈', kind: 'love' });
+    if (mindRef.current) applyNeedEffect(companion.id, mindRef.current, { mood: 10 });
+    cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}挠了挠${companion.name}的痒痒，TA 笑得直不起腰。`, 'cabin-ring-tickle', { dedupeSeconds: 120 });
+    noteTaAction('被主人挠了痒痒');
+    sfx.tap();
+  }, [companion, taIdleForRing, toast, noteTaAction]);
+
   // ---------------- v8.0 模块五：AI 主动请求 + 自主行动 ----------------
 
   /** 同意 TA 的请求 → 拥抱/牵手/来身边/去吃饭（记忆在 hugStart/holdStart 事件里写） */
@@ -2436,6 +2679,63 @@ export default function CoupleHome({ close }: { close: () => void }) {
       if (!m || !companion) return;
       tickMind(companion.id, m); // 心跳：需求衰减 + 情绪推进（每 30s）
       setMindTick((t) => t + 1); // ⋮ 菜单甜度刷新
+
+      // —— v11 F1/F2/I3 每日心跳：梦境生成 · TA 日记 · 早安晚安（不占决策节拍，每 30s 巡检各自「当天是否已完成」） ——
+      const nowH = new Date();
+      const today = dayStr(nowH);
+      const hour = nowH.getHours();
+      const stNow = companionStateRef.current;
+      const taAsleep = stNow === 'sleeping' || stNow === 'lying';
+      const dreamNow = loadDream(companion.id);
+      // F1 ① 长睡中且今天还没生成梦 → 从记忆素材拼一条梦存起来（夜里 lie 长睡两种镜像都算；白天补睡不算）
+      const taLongSleep = stNow === 'sleeping' || (stNow === 'lying' && nightRef.current);
+      if (taLongSleep && (!dreamNow || dreamNow.date !== today)) {
+        saveDream(companion.id, {
+          date: today,
+          text: buildDreamText({
+            owner: ownerNameRef.current || '主人',
+            recent: cabinRecentInteractions(companion.id, 5),
+            petName: petRef.current.name ?? '小家伙',
+          }),
+          told: false,
+        });
+      }
+      // F1 ② 早上 6~10 点 TA 醒着 → 主动讲梦（好感/甜度 +1，讲过标记 told）
+      if (!taAsleep && hour >= 6 && hour < 10 && dreamNow && !dreamNow.told) {
+        const dreamGap = (Date.parse(today) - Date.parse(dreamNow.date)) / 86_400_000;
+        if (dreamGap >= 0 && dreamGap <= 1) {
+          saveDream(companion.id, { ...dreamNow, told: true });
+          taProactiveSay(`我做了一个梦！${dreamNow.text}`);
+          noteInteraction(companion.id, m, { sweet: 1, social: 0, mood: 4 });
+          cabinEventMemory(companion.id, `${companion.name}把昨晚的梦讲给${ownerNameRef.current || '主人'}听。`, 'cabin-dream-told', { dedupeSeconds: 300 });
+          toast(`${companion.name}跟你讲了 TA 昨晚的梦～`);
+        }
+      }
+      // F2 日记：每天首次心跳写一篇（当天没写过才写；actions = 截至此刻的事）
+      const wroteDiary = ensureTodayDiary(companion.id, {
+        name: companion.name,
+        actions: taDayActionsRef.current.date === today ? [...taDayActionsRef.current.items] : [],
+        weather: weatherFx === 'rain' ? '下雨' : weatherFx === 'snow' ? '下雪' : weatherFx === 'overcast' ? '阴天' : weatherFx === 'cloudy' ? '多云' : '晴',
+        mood: m.mood,
+        chatLines: taChatCountRef.current,
+      });
+      if (wroteDiary) taChatCountRef.current = 0;
+      // I3 早安晚安：每天各一次（早安 6~10 点 / 晚安 23~01 点，都在 TA 醒着时）
+      const g = loadGreet(companion.id);
+      const gToday = g.date === today ? g : { date: today, morning: false, night: false };
+      if (hour >= 6 && hour < 10 && !gToday.morning && !taAsleep) {
+        gToday.morning = true;
+        saveGreet(companion.id, gToday);
+        taProactiveSay(`早上好呀，${ownerNameRef.current || '主人'}…昨晚睡得好吗？我可是梦见你了哦。`);
+        cabinEventMemory(companion.id, `${companion.name}早上主动和${ownerNameRef.current || '主人'}道了早安。`, 'cabin-greet-morning', { dedupeSeconds: 300 });
+        noteInteraction(companion.id, m, { sweet: 1, social: 0, mood: 3 });
+      } else if ((hour >= 23 || hour < 1) && !gToday.night && !taAsleep) {
+        gToday.night = true;
+        saveGreet(companion.id, gToday);
+        taProactiveSay('夜深了哦…要不要早点休息？我会看着屋子等你上床的。');
+        cabinEventMemory(companion.id, `${companion.name}夜里提醒${ownerNameRef.current || '主人'}早点休息。`, 'cabin-greet-night', { dedupeSeconds: 300 });
+      }
+
       if (Date.now() < decideNextAtRef.current) return;
       decideNextAtRef.current = Date.now() + 95_000 + Math.random() * 60_000;
       if (modeRef.current !== 'live' || pickerOpen) return;
@@ -2496,7 +2796,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       })();
     }, 30_000);
     return () => clearInterval(iv);
-  }, [companion, request, partnerMenuOpen, chatBusy, pickerOpen, issueCompanionCmd, say, charActivityText, weatherFx]);
+  }, [companion, request, partnerMenuOpen, chatBusy, pickerOpen, issueCompanionCmd, say, charActivityText, weatherFx, taProactiveSay, toast]);
 
   // ---------------- v10 B3 天气联动：下雨关窗 / 下雪点壁炉 / 雨停开窗 ----------------
 
@@ -2524,6 +2824,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
       issueCompanionCmd({ kind: 'window', open: true, memo: 'open' });
     }
   }, [weatherFx, companion, issueCompanionCmd, say, saveSoon]);
+
+  // ---------------- v11 G2 环境白噪音：雨声/风雪/炉火 智能联动（⋮ 菜单开关；sfx.ambient 防御式调用） ----------------
+
+  /** 壁炉开着（联动 'fire'；天气沿与壁炉开关沿两处都靠本 effect 的依赖变化触发） */
+  const fireOn = items.some((f) => f.kind === 'fireplace' && f.st?.on);
+  useEffect(() => {
+    if (!ambientOnRef.current) return; // 关 = 恒静（toggle 时已显式置 null）
+    if (weatherFx === 'rain') sfxAmbient.ambient?.('rain');
+    else if (weatherFx === 'snow') sfxAmbient.ambient?.('wind');
+    else if (fireOn) sfxAmbient.ambient?.('fire');
+    else sfxAmbient.ambient?.(null);
+  }, [weatherFx, fireOn, ambientOn]);
+  useEffect(() => () => sfxAmbient.ambient?.(null), []); // 卸载必停
 
   /** 自主行动调度：空闲时按人设记忆走动/坐下/看电视/弹琴/做饭/放歌，夜里上床睡觉（已有 roam 漫游兜底） */
   useEffect(() => {
@@ -2754,6 +3067,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         spin: `打个转转的手势，${nm}准备表演啦～`,
         roll: `拍拍地板，${nm}跑来给你打个滚～`,
         dead: `喊一声「砰！」，看${nm}会不会装死～`,
+        tickle: `伸出手指逗${nm}，准备挠痒痒啦～`,
         ball: '',
       };
       toast(startMsg[kind]);
@@ -2829,6 +3143,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
         setCarrying(false);
       }
       if (ev !== 'done') return;
+      // —— v11 I2 里程碑：照顾宠物 +1；F2 日记素材 ——
+      if (companion) {
+        statsRef.current = bumpCabinStats(companion.id, { petCares: 1 });
+        noteTaAction('照顾了小家伙们');
+      }
       // v8.3 成长系统：每次照顾/互动 +1 经验（v9 按宠物各自计）；升级时弹解锁提示
       const before: PetState = isCat
         ? petRef.current
@@ -2839,6 +3158,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       else if (kind === 'bath') applyStats({ cl: 26, mo: 6 }, true);
       else if (kind === 'hug') applyStats({ mo: 16, st: 2 }, true);
       else if (kind === 'summon') applyStats({ mo: 4 }, true);
+      else if (kind === 'tickle') applyStats({ mo: 12 }, true); // v11 types.ts 新增 tickle：心情向结算
       else if (kind === 'ball') applyStats({ mo: 8 }, true);
       else if (kind === 'shake' || kind === 'spin' || kind === 'roll' || kind === 'dead') applyStats({ mo: 9 }, true);
       else applyStats({ cl: 18, st: 4 }, true);
@@ -2863,6 +3183,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         spin: '原地转了个圈圈，毛都转晕乎了～',
         roll: '咕噜噜打了个滚，露出软软的肚皮～',
         dead: '「砰」的一声直接躺平装死，演技满分！',
+        tickle: '被挠得咯咯直叫，尾巴乱甩停不下来～',
         ball: '追着球跑了一圈又叼回来，玩得可开心啦～',
       };
       toast(doneMsg[kind]);
@@ -2897,7 +3218,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       addPetDiary(`${targetName}：${doneMsg[kind]}`);
       saveSoon();
     },
-    [toast, saveSoon],
+    [toast, saveSoon, companion, noteTaAction],
   );
 
   /** 点宠物（v7.1）：开/关底部互动竖条；v9 带宠物 id —— 点领养宠物自动把互动目标切到它 */
@@ -3192,6 +3513,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         // 选中（正在逛商店时点家具 → 收起抽屉露出操作栏）
         setShopOpen(false);
         setPaletteOpen(false);
+        setBedColorOpen(false); // v11：猫窝换色小色板也一并收起
         setSelId((s) => (s === item.id ? null : item.id));
         return;
       }
@@ -3935,6 +4257,19 @@ export default function CoupleHome({ close }: { close: () => void }) {
       saveSoon();
     },
     [selId, saveSoon],
+  );
+
+  /** v11 H3 猫窝换色：写 item.st.bedColor（场景层 Furn3D 猫窝渲染消费该字段），带撤销快照 */
+  const applyBedColor = useCallback(
+    (hex: string) => {
+      if (!selId) return;
+      pushHistory();
+      setItems((prev) => prev.map((f) => (f.id === selId ? { ...f, st: { ...f.st, bedColor: hex } } : f)));
+      sfx.tap();
+      toast('窝的颜色换好啦，小家伙可喜欢了～');
+      saveSoon();
+    },
+    [selId, pushHistory, toast, saveSoon],
   );
 
   const toggleMove = useCallback(() => {
@@ -4787,6 +5122,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
         companionCmdRef={companionCmdRef}
         onCompanionEvent={onCompanionEvent}
         onPartnerTap={openPartnerMenu}
+        onPartnerLongPress={openPartnerRing}
+        petGrowLv={actLv}
         bubbleRef={bubbleRef}
         partnerPlayingId={partnerPlaying}
         petCoat={activePetObj.coat}
@@ -5242,6 +5579,77 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     {mind.sulk.on && (
                       <div className="mt-2 text-center text-[10.5px] text-[#c97a8a]">TA 正在闹小脾气，说句好听的哄哄 TA 吧～</div>
                     )}
+                    {/* v11 F2 日记入口：TA 每天悄悄写一篇 */}
+                    <button
+                      onClick={() => {
+                        setHeartOpen(false);
+                        setTaDiaryOpen(true);
+                        sfx.tap();
+                      }}
+                      className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-full bg-white/75 py-2 text-[11.5px] font-semibold text-[#a8768a] ring-1 ring-white/80 transition active:scale-95"
+                    >
+                      <BookOpen className="h-3.5 w-3.5" />
+                      TA 的日记
+                    </button>
+                  </div>
+                );
+              })()}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ===== v11 I2 我们的里程碑面板（⋮ 菜单唤出 · 毛玻璃胶囊风 · 与心面板同款） ===== */}
+        <AnimatePresence>
+          {statsOpen && mode === 'live' && (
+            <motion.div
+              key="stats-panel"
+              initial={{ opacity: 0, y: -14, scale: 0.92 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 340 }}
+              className="pointer-events-auto absolute right-3 top-[104px] z-40 w-[min(84%,290px)] origin-top-right rounded-[26px] border border-white/60 bg-white/55 p-4 shadow-[0_16px_40px_rgba(90,60,50,0.18)] backdrop-blur-2xl"
+              role="dialog"
+              aria-label="我们的里程碑面板"
+            >
+              <div className="mb-2 flex items-center gap-1.5">
+                <Sparkles className="h-4 w-4 shrink-0 text-[#b89ad4]" />
+                <p className="text-[14px] font-bold text-[#3a3a3e]">我们的里程碑</p>
+                <button
+                  onClick={() => setStatsOpen(false)}
+                  aria-label="关闭我们的里程碑"
+                  className="ml-auto flex h-8 w-8 items-center justify-center rounded-full bg-white/80 text-[#8a837a] ring-1 ring-white/70 transition active:scale-90"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              {(() => {
+                const stats = statsSnap;
+                if (!stats) return <p className="py-5 text-center text-[12px] text-[#b0a8a0]">选定陪伴的 TA 之后，这里就会开始记账啦～</p>;
+                const days = Math.max(1, Math.floor((Date.now() - stats.since) / 86_400_000) + 1);
+                const CARDS: { k: string; v: number; unit: string; c: string; Icon: LucideIcon }[] = [
+                  { k: '在一起', v: days, unit: '天', c: '#e88a9a', Icon: Heart },
+                  { k: '聊了', v: stats.chatLines, unit: '句', c: '#7fa8c9', Icon: MessageCircle },
+                  { k: '做了', v: stats.meals, unit: '顿饭', c: '#e8a06a', Icon: UtensilsCrossed },
+                  { k: '拥抱', v: stats.hugs, unit: '次', c: '#e4a0a8', Icon: HeartHandshake },
+                  { k: '牵手', v: stats.holds, unit: '次', c: '#b89ad4', Icon: Hand },
+                  { k: '照顾宠物', v: stats.petCares, unit: '次', c: '#8fce9e', Icon: PawPrint },
+                ];
+                return (
+                  <div className="grid grid-cols-2 gap-2">
+                    {CARDS.map(({ k, v, unit, c, Icon }) => (
+                      <div key={k} className="rounded-2xl bg-white/70 px-2.5 py-2 ring-1 ring-white/80">
+                        <div className="flex items-center gap-1 text-[10px] text-[#a09a94]">
+                          <Icon className="h-3 w-3 shrink-0" style={{ color: c }} />
+                          {k}
+                        </div>
+                        <div className="mt-0.5 flex items-baseline gap-0.5">
+                          <span className="text-[20px] font-bold leading-none" style={{ color: c }}>
+                            {v}
+                          </span>
+                          <span className="text-[10px] text-[#a09a94]">{unit}</span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 );
               })()}
@@ -5485,6 +5893,50 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       ) : (
                         <span className="rounded-full bg-[#f0eff1] px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90]">已关</span>
                       )}
+                    </button>
+                    {/* v11 G2 环境音效开关：开 = 跟天气/壁炉智能联动（雨→雨声 / 雪→风声 / 壁炉→炉火），关 = 恒静 */}
+                    <div className="mx-2.5 my-1 h-px bg-[#f0eeea]" />
+                    <button
+                      onClick={() => {
+                        toggleAmbient();
+                        setMoreOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                    >
+                      <Waves className="h-4 w-4 shrink-0 text-[#6a9ab0]" />
+                      <span className="flex-1 text-left">环境音效</span>
+                      {ambientOn ? (
+                        <span className="rounded-full bg-[#dff0e2] px-2 py-0.5 text-[10px] font-semibold text-[#3f9a58]">已开</span>
+                      ) : (
+                        <span className="rounded-full bg-[#f0eff1] px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90]">已关</span>
+                      )}
+                    </button>
+                    {/* v11 F2 TA 的日记：TA 每天自己写一篇，抽屉翻阅 */}
+                    <button
+                      onClick={() => {
+                        setTaDiaryOpen(true);
+                        setMoreOpen(false);
+                        sfx.tap();
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                    >
+                      <BookOpen className="h-4 w-4 shrink-0 text-[#c9a58a]" />
+                      <span className="flex-1 text-left">TA 的日记</span>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-[#d8cfc4]" />
+                    </button>
+                    {/* v11 I2 我们的里程碑：在一起天数/聊天/做饭/拥抱/牵手/照顾宠物 */}
+                    <button
+                      onClick={() => {
+                        setStatsSnap(companion ? { ...(statsRef.current ?? loadCabinStats(companion.id)) } : null);
+                        setStatsOpen(true);
+                        setMoreOpen(false);
+                        sfx.tap();
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                    >
+                      <Sparkles className="h-4 w-4 shrink-0 text-[#b89ad4]" />
+                      <span className="flex-1 text-left">我们的里程碑</span>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-[#d8cfc4]" />
                     </button>
                     {/* v10.3 TA 的心：移到顶栏爱心按钮独立面板（此处保留入口行） */}
                     <button
@@ -5789,6 +6241,78 @@ export default function CoupleHome({ close }: { close: () => void }) {
           )}
         </AnimatePresence>
 
+        {/* ===== v11 I1 长按 TA 的互动轮盘（屏幕中下方半圆弧 · 白玻璃圆钮 · spring 弹入；点其他区域关闭） ===== */}
+        {mode === 'live' && ringOpen && companion && (
+          <button aria-label="关闭互动轮盘" className="pointer-events-auto absolute inset-0 z-[61]" onClick={() => setRingOpen(false)} />
+        )}
+        <AnimatePresence>
+          {mode === 'live' && ringOpen && companion && (
+            <motion.div
+              key="partner-ring"
+              initial={{ opacity: 0, scale: 0.7, y: 18 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.85, y: 12 }}
+              transition={{ type: 'spring', damping: 22, stiffness: 380 }}
+              className="pointer-events-none absolute bottom-[214px] left-1/2 z-[62] -translate-x-1/2"
+              role="menu"
+              aria-label={`${companion.name}互动轮盘`}
+            >
+              <div className="relative h-[148px] w-[224px]">
+                  {/* 摸头（左下） */}
+                  <motion.button
+                    initial={{ scale: 0.4, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: 'spring', damping: 20, stiffness: 420, delay: 0.03 }}
+                    onClick={ringPat}
+                    role="menuitem"
+                    aria-label="摸摸头"
+                    className="pointer-events-auto absolute bottom-0 left-0 flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-full border border-white/70 bg-white/75 text-[#6a5a62] shadow-[0_10px_26px_rgba(90,70,60,0.22)] backdrop-blur-xl transition active:scale-90"
+                  >
+                    <Hand className="h-[19px] w-[19px] text-[#e8a3b3]" />
+                    <span className="text-[10px] font-semibold">摸头</span>
+                  </motion.button>
+                  {/* 喂食（中上） */}
+                  <motion.button
+                    initial={{ scale: 0.4, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: 'spring', damping: 20, stiffness: 420, delay: 0.06 }}
+                    onClick={ringFeed}
+                    role="menuitem"
+                    aria-label="投喂食物"
+                    className="pointer-events-auto absolute left-1/2 top-0 flex h-16 w-16 -translate-x-1/2 flex-col items-center justify-center gap-0.5 rounded-full border border-white/70 bg-white/75 text-[#6a5a62] shadow-[0_10px_26px_rgba(90,70,60,0.22)] backdrop-blur-xl transition active:scale-90"
+                  >
+                    <UtensilsCrossed className="h-[19px] w-[19px] text-[#e0a458]" />
+                    <span className="text-[10px] font-semibold">喂食</span>
+                  </motion.button>
+                  {/* 挠痒痒（右下） */}
+                  <motion.button
+                    initial={{ scale: 0.4, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: 'spring', damping: 20, stiffness: 420, delay: 0.09 }}
+                    onClick={ringTickle}
+                    role="menuitem"
+                    aria-label="挠痒痒"
+                    className="pointer-events-auto absolute bottom-0 right-0 flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-full border border-white/70 bg-white/75 text-[#6a5a62] shadow-[0_10px_26px_rgba(90,70,60,0.22)] backdrop-blur-xl transition active:scale-90"
+                  >
+                    <Feather className="h-[19px] w-[19px] text-[#b89ad4]" />
+                    <span className="text-[10px] font-semibold">挠痒痒</span>
+                  </motion.button>
+                  {/* 关闭（中下小圆钮） */}
+                  <motion.button
+                    initial={{ scale: 0.4, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: 'spring', damping: 20, stiffness: 420, delay: 0.12 }}
+                    onClick={() => setRingOpen(false)}
+                    aria-label="关闭轮盘"
+                    className="pointer-events-auto absolute bottom-1.5 left-1/2 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full bg-white/70 text-[#8a8a90] ring-1 ring-white/80 transition active:scale-90"
+                  >
+                    <X className="h-4 w-4" />
+                  </motion.button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* ===== v8.0 AI 主动请求弹窗（「××想要拥抱你」：同意 / 拒绝） ===== */}
         <AnimatePresence>
           {request && companion && (
@@ -5856,6 +6380,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
         {/* v10 E1 聊天记录回看面板 */}
         <CabinHistorySheet open={chatHistOpen} onClose={() => setChatHistOpen(false)} charId={companion?.id ?? 'x'} charName={companion?.name ?? 'TA'} />
+
+        {/* v11 F2 TA 的日记面板（毛玻璃抽屉，读 cabin-ta-diary-<charId>） */}
+        <TaDiarySheet open={taDiaryOpen} onClose={() => setTaDiaryOpen(false)} charId={companion?.id ?? 'x'} charName={companion?.name ?? 'TA'} />
 
         {/* v10 C4 宠物日记面板（毛玻璃抽屉，读 cabin-pet-diary；v10.3 补 pointer-events-auto：
             抽屉挂在 pointer-events-none 的 HUD 层里，不显式开启点击会全部穿透 —— 叉号/遮罩点了没反应的原因） */}
@@ -6023,7 +6550,35 @@ export default function CoupleHome({ close }: { close: () => void }) {
             )}
           </AnimatePresence>
 
-          {/* 选中操作条（编辑模式·家具：毛玻璃胶囊 · 移动/升降/旋转/调色/收起） */}
+          {/* 选中操作条（编辑模式·家具：毛玻璃胶囊 · 移动/升降/旋转/调色/收起；猫窝额外有「换窝色」小色板） */}
+          <AnimatePresence>
+            {/* v11 H3 猫窝换色小色板（12 精选色横排 · 选中猫窝时弹出） */}
+            {mode === 'edit' && bedColorOpen && selItem?.kind === 'petBed' && !shopOpen && !paletteOpen && (
+              <motion.div
+                key="bed-color-pop"
+                initial={{ opacity: 0, y: 10, scale: 0.94 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                transition={{ type: 'spring', damping: 26, stiffness: 360 }}
+                className="pointer-events-auto mx-auto mb-2 w-fit"
+              >
+                <div className="flex max-w-[95vw] items-center gap-2 overflow-x-auto rounded-full border border-white/60 bg-white/85 p-2.5 shadow-[0_12px_30px_rgba(90,70,60,0.24)] backdrop-blur-xl">
+                  {PET_BED_COLORS.map((c) => (
+                    <button
+                      key={c.hex}
+                      onClick={() => applyBedColor(c.hex)}
+                      aria-label={`窝换成${c.name}`}
+                      title={c.name}
+                      className={`h-6 w-6 shrink-0 rounded-full transition active:scale-90 ${
+                        selItem.st?.bedColor === c.hex ? 'ring-2 ring-[#e8b06a] ring-offset-1' : 'ring-1 ring-black/10'
+                      }`}
+                      style={{ background: c.hex }}
+                    />
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
           <AnimatePresence>
             {mode === 'edit' && selItem && selEntry && !shopOpen && !paletteOpen && (
               <motion.div
@@ -6150,7 +6705,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     </div>
                   </div>
 
-                  {/* 下排：调色 / 收起 / 取消 */}
+                  {/* 下排：调色 / 换窝色（仅猫窝）/ 收起 / 取消 */}
                   <div className={`flex items-center gap-1.5 rounded-full p-1.5 ${EDIT_GLASS}`}>
                     {/* 调色 */}
                     <button
@@ -6161,6 +6716,17 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     >
                       <Droplet className="h-[17px] w-[17px]" />
                     </button>
+                    {/* v11 H3 换窝色（仅猫窝显示）：弹出 12 精选色小色板 */}
+                    {selItem.kind === 'petBed' && (
+                      <button
+                        onClick={() => setBedColorOpen((o) => !o)}
+                        aria-label="换窝的颜色"
+                        title="换窝的颜色"
+                        className={`${toolBtn} h-10 w-10 bg-[#fdeef3]/90 text-[#c98ba9] ring-1 ring-white/80 hover:bg-[#f9e2ea]/95`}
+                      >
+                        <Heart className="h-[17px] w-[17px]" />
+                      </button>
+                    )}
                     {/* 收起 */}
                     <button
                       onClick={removeSel}

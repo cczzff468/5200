@@ -208,6 +208,8 @@ export interface FurnitureState {
   lc?: string;
   /** 娃娃机：上次抓中时间戳（Date.now()，冷却用） */
   lastClaw?: number;
+  /** 猫窝自选窝色（#rrggbb；H3 宠物小窝装修：undefined = 目录默认樱粉） */
+  bedColor?: string;
 }
 
 /** 小人身份（guest = 邀请来做客的 AI 联系人，v5.7） */
@@ -489,8 +491,8 @@ export interface PetState extends PetExtra {
   ts: number;
 }
 
-/** 宠物照顾动作种类（v7.0：+洗澡 / 抱抱 / 召唤；v8.3 成长解锁：+握手 / 转圈 / 打滚；+玩具球；v10 C2：+装死训练） */
-export type PetCareKind = 'pat' | 'feed' | 'water' | 'bath' | 'hug' | 'summon' | 'shake' | 'spin' | 'roll' | 'ball' | 'dead';
+/** 宠物照顾动作种类（v7.0：+洗澡 / 抱抱 / 召唤；v8.3 成长解锁：+握手 / 转圈 / 打滚；+玩具球；v10 C2：+装死训练；v11 I1：+挠痒痒） */
+export type PetCareKind = 'pat' | 'feed' | 'water' | 'bath' | 'hug' | 'summon' | 'shake' | 'spin' | 'roll' | 'ball' | 'dead' | 'tickle';
 
 /** G1 装修方案快照（家具整组 + 各房间地板/墙色；不含照片 —— 相框照片不随方案备份，控制存档体积） */
 export interface LayoutSnap {
