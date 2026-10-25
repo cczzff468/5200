@@ -67,3 +67,32 @@ Work Log:
 Stage Summary:
 - 女主齐刘海精修完成（眼上方直线齐缘、两侧同高）；小屋 HUD 完成用户要求重排；宠物系统新增洗澡/抱抱/召唤三种互动（动画+结算+文案完整）；钢琴弹奏面板上下收窄
 - 关键文件：scene/CharChibi3D.tsx、scene/HomeScene.tsx、CoupleHome.tsx、types.ts、InstrumentOverlay.tsx
+
+---
+Task ID: 4
+Agent: 主控 Agent（Z.ai Code）
+Task: v7.1 宠物系统升级 —— 头像 SVG 美化 + 互动竖条重做（点宠物才出现）+ 男生/宠物跨房间漫游 + 猫窝夜睡 + 需求气泡 + 表情联动 + 刘海加长 + 钢琴再缩窄 + 萌系音效
+
+Work Log:
+- [HUD] CoupleHome：右上角宠物头像由 🐱 emoji 改为内联 SVG 猫头 CatFaceIcon（奶油脸+耳内廓+豆豆眼+w 嘴+腮红+胡须+红项圈金铃铛，与 3D 猫同配色），白玻璃圆钮粉环；状态面板头部头像同步替换
+- [HUD] 互动条重做：底部毛玻璃 grid → 屏幕右侧竖排（right-3 top-1/2），六按钮改白玻璃圆钮（bg-white/70+ring+backdrop-blur，无彩色底），彩色图标+9px 小字；PET_ACTIONS 删 bg 字段
+- [HUD] 交互逻辑：onPetTap 改为切换 petBarOpen（不再弹状态面板，面板只由头像唤出）；onFloorTap/onFurnTap 点别处收竖条；照顾完成/中断自动收起（onPetEvent done/cancel）；新增 petTapAtRef 450ms 守卫——修复「down 点中宠物开条 → up 射线落到地板/家具触发关闭」的闪烁 bug
+- [场景] 跨房间漫游系统（HomeScene）：ROOM_ADJ 房间邻接图（lr-br/kt/ba、br-bal 树形）+ planDoors BFS + planRoute 门走廊双路点（DOOR_STEP=0.5，bed/kt/bal 横墙、bath 竖墙）+ roamStep 直线走+collideAndClamp 真实门态 + roam() 权重选房间（lr4/br2/kt1.5/ba1/bal1.5）+ WeakMap 卡死检测（0.9s 位移<0.05 放弃重选）；wander/petWander 删除
+- [场景] GameLoop 男生 partner 漫游接 roam(doorRef)，开着门就跨房间闲逛（E2E 观察到男生在客厅/厨房/门口多个位置移动）
+- [场景] PetBuddy 夜晚回窝：找 items 里 petBed → planRoute/roamStep 走向窝 → 蜷成团（sleepEase 缓动：scale 压扁 0.66/1.14、头埋 0.55rad、耳朵放平、尾巴卷身、呼吸起伏）→ Zzz sprite 循环上浮（2.2s 周期，手绘三连 Z 贴图）；天亮/照顾指令唤醒；8s 走不到窝 → 传送进窝兜底（修复被家具夹住永远到不了窝的 bug）
+- [场景] 猫窝夹缝迁移（CoupleHome 补植 effect 重写）：badSpot=周围 0.35m 内有家具 AABB（footprintOf 旋转脚印）→ 挪到 pickSafe()（客厅随机 60 次开阔点，fallback 西北角固定点）；修复 findSpot 把窝随机进沙发-墙夹缝导致宠物卡死出不来
+- [场景] 猫窝建模：Furn3D 新增 petBed 分支 + PetBed3D 程序化组件（樱粉外壳圆环+外壁+奶油内垫+白珠缝线+毛线球+拖线）；CATALOG 加 petBed（fp 0.66×0.58，decor 类，playful 弹跳）；types.ts FurnitureKind + 'petBed'；defaultHome 预置一个
+- [场景] 需求气泡（D）：makeNeedTexture 手绘三款（饭碗热气/水滴/泡泡圈），宠物头顶 0.6m 并排浮动；体力<30=饿了、心情<30=想喝水、清洁<30=要洗澡；睡觉/照顾中隐藏；map 运行时切换+needsUpdate
+- [场景] 小人表情联动（E）：4 颗爱心/星星交替 sprite（makeStarTexture 金星）跟随 meRT 头顶（1.02+age*0.3）上浮，do 阶段每 0.55s 冒一颗；抱抱时额外大笑脸（makeSmileTexture 弯眼+弧嘴+腮红）周期 1.6s
+- [音效] sfx.ts 新增 7 个纯合成音效：purr 呼噜（62Hz sawtooth+24Hz LFO 颤动 1.1s）、crunch 咔嚓（双段 1900Hz 高通噪声）、sip 咕咚（双下滑水泡）、bathWater 流水（2.2s 带通噪声起伏）、kiss 咂嘴（340→880→420 圆润滑音）、whistle 召唤哨（双连上滑）、meow 喵叫（620→900→480 triangle+13Hz 颤音）；接线：摸头/进窝 purr、到位 kiss/meow、do 节拍 crunch/sip/bathWater、召唤指令 whistle
+- [发型] CharChibi3D 齐刘海加长：三片 BANGS 下缘 θ81°→85°（bob 侧片上缘同步 85° 衔接），更长的齐刘海仍不遮眼
+- [钢琴] InstrumentOverlay 钢琴容器 h-[34%] max-h-280 → h-[27%] max-h-218（键床 flex-1 自适应同步变窄）
+- [验证] tsc 通过（仅 next.config.ts 既有基线错误）；eslint couple-home 63 处与 git stash 基线完全一致（0 新增）
+- [验证] Agent Browser E2E（390×844）：SVG 猫头头像 ✓、点头像弹毛玻璃面板（面板内 SVG 头像）✓、互动竖条右侧竖排白玻璃圆钮 ✓、喂食全流程（按钮锁定→宠物走来→体力 88→100→自动收起）✓、点地板/点家具竖条消失 ✓、猫窝渲染+补植/迁移 ✓、男生跨房间漫游多处目击 ✓、夜晚模式+回窝逻辑 ✓；控制台无 error/warn（errors 面板仅 HMR 重连空噪音）
+- [验证环境说明] headless rAF 节流至 2fps（dt clamp 0.05 → 游戏时间 10× 慢），瞬态动画（爱心/星星/笑脸/Zzz/需求气泡出现帧）与音效无法在该环境采证，逻辑均已代码审查确认；真机 60fps 下正常
+- [清理] 删除 E2E 临时 window.__petDebug 钩子；agent-browser 会话关闭
+
+Stage Summary:
+- 宠物交互第二轮升级完成：无 emoji 的 SVG 猫头入口、点宠物才出现的右侧竖向互动条（点别处/完成自动消失）、男生与宠物全屋跨房间漫游（房间图寻路+门走廊+卡死兜底）、猫窝家具+夜晚回窝 Zzz、头顶需求气泡、照顾时小人表情粒子、7 个萌系音效；女生齐刘海再加长；钢琴再缩窄
+- 关键修复：①点宠物 up 射线误关竖条（450ms 守卫）②猫窝落进沙发夹缝导致宠物卡死（badSpot 检测+pickSafe 迁移）③夜晚回窝被家具挡死（8s 传送兜底）
+- 关键文件：CoupleHome.tsx、scene/HomeScene.tsx、scene/CharChibi3D.tsx、scene/Furn3D.tsx、sfx.ts、types.ts、catalog.ts、InstrumentOverlay.tsx

@@ -136,7 +136,9 @@ export type FurnitureKind =
   | 'cakeStand'
   // ---- v6.1 留言板 + 娃娃机（G8 共享留言板 / G10 抓娃娃） ----
   | 'clawMachine'
-  | 'noteBoard';
+  | 'noteBoard'
+  // ---- v7.1 宠物小窝（猫窝：夜晚宠物自己回去睡觉） ----
+  | 'petBed';
 
 /** 家具分类（商店栏的 tab；set = 成套摆放 F3） */
 export type FurnCategory =
@@ -552,9 +554,11 @@ export interface CharRT {
   /** 朝向弧度（atan2(vx, vz)，0 = 面 +z） */
   heading: number;
   moving: boolean;
-  /** 漫游目标（partner 用） */
+  /** 漫游目标（partner/宠物用） */
   target: { x: number; z: number } | null;
   nextWander: number;
+  /** 跨房间路径点（v7.1：穿门走廊的中间路点，走完一个 shift 一个；空/缺省 = 直线走向 target） */
+  route?: { x: number; z: number }[];
 }
 
 /**

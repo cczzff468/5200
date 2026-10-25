@@ -191,15 +191,54 @@ function sanitizePet(raw?: PetState): PetState {
   return decayPet(base);
 }
 
-/** 宠物互动按钮（v7.0 底部互动条）：六种照顾动作 */
-const PET_ACTIONS: { kind: PetCareKind; icon: LucideIcon; label: string; bg: string; fg: string }[] = [
-  { kind: 'pat', icon: PawPrint, label: '抚摸', bg: '#ffd9e2', fg: '#d96a86' },
-  { kind: 'feed', icon: UtensilsCrossed, label: '喂食', bg: '#ffe9c9', fg: '#c98a3e' },
-  { kind: 'water', icon: CupSoda, label: '喂水', bg: '#d4ecff', fg: '#4a90c9' },
-  { kind: 'bath', icon: Bath, label: '洗澡', bg: '#d9f2f7', fg: '#3e97b4' },
-  { kind: 'hug', icon: HeartHandshake, label: '抱抱', bg: '#ffe3ec', fg: '#d96a86' },
-  { kind: 'summon', icon: Sparkles, label: '召唤', bg: '#eae4fb', fg: '#8a7ab0' },
+/** 宠物互动按钮（v7.1 右侧竖条）：六种照顾动作（bg 已废弃 —— 按钮无彩色底，仅保留彩色图标） */
+const PET_ACTIONS: { kind: PetCareKind; icon: LucideIcon; label: string; fg: string }[] = [
+  { kind: 'pat', icon: PawPrint, label: '抚摸', fg: '#d96a86' },
+  { kind: 'feed', icon: UtensilsCrossed, label: '喂食', fg: '#c98a3e' },
+  { kind: 'water', icon: CupSoda, label: '喂水', fg: '#4a90c9' },
+  { kind: 'bath', icon: Bath, label: '洗澡', fg: '#3e97b4' },
+  { kind: 'hug', icon: HeartHandshake, label: '抱抱', fg: '#d96a86' },
+  { kind: 'summon', icon: Sparkles, label: '召唤', fg: '#8a7ab0' },
 ];
+
+/**
+ * 猫头图标（v7.1 内联 SVG，替代 emoji）：奶油猫头 + 耳朵内廓 + 豆豆眼 + 粉鼻 + w 嘴 + 腮红 + 红项圈金铃铛，
+ * 与 3D 小猫同款配色；HUD 头像与状态面板共用。
+ */
+function CatFaceIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 48 48" className={className} aria-hidden="true" focusable="false">
+      {/* 耳朵（先画，压在头后） */}
+      <path d="M10 20 Q6.5 8 8.5 6.5 Q10.5 5.5 19 12.5 Z" fill="#fdf8ee" stroke="#eadbc4" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M38 20 Q41.5 8 39.5 6.5 Q37.5 5.5 29 12.5 Z" fill="#fdf8ee" stroke="#eadbc4" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M11 16.5 Q9.5 10 10.5 9 Q11.5 8.5 16 12.5 Z" fill="#f6c2ca" />
+      <path d="M37 16.5 Q38.5 10 37.5 9 Q36.5 8.5 32 12.5 Z" fill="#f6c2ca" />
+      {/* 脸（奶油圆） */}
+      <ellipse cx="24" cy="26.5" rx="16" ry="13.5" fill="#fdf8ee" stroke="#eadbc4" strokeWidth="1.4" />
+      {/* 豆豆眼 + 高光 */}
+      <ellipse cx="17.5" cy="25" rx="2.1" ry="2.5" fill="#3a3230" />
+      <ellipse cx="30.5" cy="25" rx="2.1" ry="2.5" fill="#3a3230" />
+      <circle cx="18.2" cy="24.2" r="0.7" fill="#ffffff" />
+      <circle cx="31.2" cy="24.2" r="0.7" fill="#ffffff" />
+      {/* 粉鼻 + w 嘴 */}
+      <path d="M22.4 30.4 L25.6 30.4 L24 32.2 Z" fill="#e89aa4" />
+      <path d="M24 32.2 Q24 33.8 22.2 33.8 M24 32.2 Q24 33.8 25.8 33.8" fill="none" stroke="#c98d7e" strokeWidth="1.1" strokeLinecap="round" />
+      {/* 腮红 */}
+      <ellipse cx="12.5" cy="29.5" rx="2.6" ry="1.7" fill="#f6bfc6" opacity="0.8" />
+      <ellipse cx="35.5" cy="29.5" rx="2.6" ry="1.7" fill="#f6bfc6" opacity="0.8" />
+      {/* 胡须 */}
+      <g stroke="#d9c9b4" strokeWidth="1" strokeLinecap="round">
+        <path d="M7.5 24.5 L3.5 23.5" />
+        <path d="M7.5 27.5 L3.5 28.5" />
+        <path d="M40.5 24.5 L44.5 23.5" />
+        <path d="M40.5 27.5 L44.5 28.5" />
+      </g>
+      {/* 红项圈 + 金铃铛（呼应 3D 小猫） */}
+      <path d="M14 37.5 Q24 41.5 34 37.5" fill="none" stroke="#e46a6a" strokeWidth="2.4" strokeLinecap="round" />
+      <circle cx="24" cy="40.5" r="2.1" fill="#f4c34e" stroke="#d9a13c" strokeWidth="0.7" />
+    </svg>
+  );
+}
 
 /**
  * 手机照片 → 居中裁到指定比例 → 压成 JPEG dataURL（几十 KB，可永久存在小家档案里）
@@ -707,6 +746,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const petSeq = useRef(0);
   /** 状态面板开关 / 正在进行的照顾动作 / 改名弹层 */
   const [petPanel, setPetPanel] = useState(false);
+  /** v7.1 宠物互动竖条开关：点击宠物才出现，点击别处（地面/家具）或照顾完成后自动收起 */
+  const [petBarOpen, setPetBarOpen] = useState(false);
+  /** 最近一次点宠物的时刻（ms）：down 命中宠物后，同一次点击的 up 射线会落到地板/家具上，用它区分「真点别处」 */
+  const petTapAtRef = useRef(0);
   const [petCare, setPetCare] = useState<PetCareKind | null>(null);
   /** 照顾中镜像（供 beginAction 等旧回调读取，不引入重依赖） */
   const petCareRef = useRef<PetCareKind | null>(null);
@@ -1173,6 +1216,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       }
       if (poseRef.current.pose === 'petcare') poseRef.current.pose = 'stand';
       setPetCare(null);
+      setPetBarOpen(false); // v7.1：照顾完成/中断后互动竖条自动收起
       if (ev !== 'done') return;
       setPet((p) => {
         const bump = (v: number, d: number) => Math.min(100, Math.max(0, v + d));
@@ -1197,9 +1241,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
     [toast, saveSoon],
   );
 
-  /** 点宠物：开/关状态面板 */
+  /** 点宠物（v7.1）：开/关底部互动竖条（不再弹右上角状态面板 —— 面板只由宠物头像唤出） */
   const onPetTap = useCallback(() => {
-    setPetPanel((v) => !v);
+    petTapAtRef.current = Date.now(); // 守卫：同一次点击的 up 阶段射线会落到地板/家具上，不能当作「点别处」关掉竖条
+    setPetBarOpen((v) => !v);
+    setPetPanel(false);
   }, []);
 
   /** 确认改名（最长 8 字） */
@@ -1430,6 +1476,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const onFurnTap = useCallback(
     (item: FurnitureItem) => {
       sfx.tap(); // E3：所有家具点按轻响（函数最前面，提前 return 分支也有声）
+      const justPet = Date.now() - petTapAtRef.current < 450; // 刚点过宠物（up 配对落到家具上）
+      if (mode === 'live' && !justPet) setPetBarOpen(false); // v7.1：点别处（家具）互动竖条消失
       const entry = CATALOG[item.kind];
       if (!entry) return;
 
@@ -2530,9 +2578,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
   );
 
   const onFloorTap = useCallback(() => {
+    if (Date.now() - petTapAtRef.current < 450) return; // 刚点过宠物（up 配对落地），不算「点别处」
     setSelId(null);
     setMoveOn(false);
     setPaletteOpen(false);
+    setPetBarOpen(false); // v7.1：点别处（地面）互动竖条消失
   }, []);
 
   // ---------------- 商店 ----------------
@@ -2595,6 +2645,49 @@ export default function CoupleHome({ close }: { close: () => void }) {
     },
     [clawFor, pushHistory, findSpot, toast, saveSoon],
   );
+
+  // —— v7.1 宠物小窝：旧存档没有猫窝时自动补一个；已有的窝若被家具/墙夹住（缝隙太窄猫会卡死出不来）则挪到开阔点 ——
+  useEffect(() => {
+    const beds = itemsRef.current.filter((f) => f.kind === 'petBed' && (f.y ?? 0) < 0.45);
+    /** 猫窝需要周围 0.35m 的「起身空间」，贴缝会导致宠物醒来后被钳制卡死 */
+    const badSpot = (x: number, z: number, selfId: string | null) =>
+      itemsRef.current.some((it) => {
+        if (it.id === selfId || (it.y ?? 0) > 0.45) return false;
+        const ce = CATALOG[it.kind];
+        if (!ce) return false;
+        const [w, d] = CATALOG['petBed'].fp;
+        const [cw, cd] = footprintOf(ce, it.ry ?? 0);
+        return Math.abs(it.x - x) < w / 2 + cw / 2 + 0.35 && Math.abs(it.z - z) < d / 2 + cd / 2 + 0.35;
+      });
+    /** 在客厅挑一个四周开阔的落点（随机重试，失败退回西北角固定点） */
+    const pickSafe = (): { x: number; z: number } => {
+      const [x0, x1, z0, z1] = ROOM_SPANS.lr;
+      for (let i = 0; i < 60; i++) {
+        const x = Math.round((x0 + Math.random() * (x1 - x0)) * 4) / 4;
+        const z = Math.round((z0 + Math.random() * (z1 - z0)) * 4) / 4;
+        if (!badSpot(x, z, null)) return { x, z };
+      }
+      return { x: -3.42, z: -1.42 };
+    };
+    const bed = beds[0];
+    if (bed) {
+      // 已有窝：夹缝里的窝 → 搬到开阔处（一次性迁移，保存后不再触发）
+      if (badSpot(bed.x, bed.z, bed.id)) {
+        const spot = pickSafe();
+        setItems((prev) => prev.map((f) => (f.id === bed.id ? { ...f, x: spot.x, z: spot.z } : f)));
+        saveSoon();
+      }
+      return;
+    }
+    // 没有窝：补植一个
+    const spot = pickSafe();
+    setItems((prev) => [
+      ...prev,
+      { id: `petBed-auto-${Date.now().toString(36)}-${++buySeq}`, kind: 'petBed', x: spot.x, z: spot.z, ry: 0.5, st: {} } as FurnitureItem,
+    ]);
+    saveSoon();
+    // 仅挂载时检查一次（刻意不依赖外层状态，避免随 items 变化重复触发）
+  }, []);
 
   /** 在指定房间找一段空墙面（避开已挂件/高家具/窗户门洞；返回贴墙坐标与朝向） */
   const findWallSpot = useCallback(
@@ -2944,6 +3037,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         petCmdRef={petCmdRef}
         onPetTap={onPetTap}
         onPetEvent={onPetEvent}
+        petState={pet}
         onFloorTap={onFloorTap}
         onFurnTap={onFurnTap}
         onDragMove={onDragMove}
@@ -2990,10 +3084,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
               role="dialog"
               aria-label={`${pet.name ?? '团子'}状态面板`}
             >
-              {/* 头部：头像 + 名字（可改） + 关闭 */}
+              {/* 头部：头像（v7.1 SVG 猫头）+ 名字（可改） + 关闭 */}
               <div className="mb-2 flex items-center gap-2">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#fdf3e3] text-[18px] shadow-inner">
-                  <span aria-hidden="true">🐱</span>
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#fdf6ec] shadow-inner ring-1 ring-[#eadbc4]/60">
+                  <CatFaceIcon className="h-8 w-8" />
                 </div>
                 {petRenaming ? (
                   <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -3022,7 +3116,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   <>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[14.5px] font-bold leading-tight text-[#4a4a4e]">{pet.name ?? '团子'}</div>
-                      <div className="text-[10.5px] leading-tight text-[#9a938a]">互动按钮就在屏幕下方哦</div>
+                      <div className="text-[10.5px] leading-tight text-[#9a938a]">点它就能打开互动按钮哦</div>
                     </div>
                     <button
                       onClick={() => {
@@ -3076,33 +3170,38 @@ export default function CoupleHome({ close }: { close: () => void }) {
           )}
         </AnimatePresence>
 
-        {/* ===== 宠物互动条（v7.0：独立在屏幕下方 · 毛玻璃 · 抚摸/喂食/喂水/洗澡/抱抱/召唤） ===== */}
+        {/* ===== 宠物互动竖条（v7.1：点宠物才出现 · 点别处消失 · 右侧竖排 · 白玻璃圆钮无彩色底） ===== */}
         <AnimatePresence>
-          {mode === 'live' && !wardrobeOpen && (
-            <motion.div
-              key="pet-bar"
-              initial={{ opacity: 0, y: 26 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
-              className="absolute bottom-[152px] left-1/2 z-30 -translate-x-1/2"
-            >
-              <div className="pointer-events-auto grid grid-cols-3 gap-1.5 rounded-[24px] border border-white/55 bg-white/45 p-2 shadow-[0_12px_32px_rgba(90,60,50,0.16)] backdrop-blur-2xl">
-                {PET_ACTIONS.map(({ kind, icon: Icon, label, bg, fg }) => (
-                  <button
-                    key={kind}
-                    onClick={() => startPetCare(kind)}
-                    disabled={!!petCare}
-                    aria-label={`${label}${pet.name ?? '团子'}`}
-                    className={`flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[12.5px] font-bold shadow-sm ring-1 ring-white/60 transition active:scale-95 ${petCare ? 'opacity-40' : ''}`}
-                    style={{ backgroundColor: bg, color: fg }}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </motion.div>
+          {mode === 'live' && !wardrobeOpen && petBarOpen && (
+            <div key="pet-bar-wrap" className="absolute right-3 top-1/2 z-30 -translate-y-1/2">
+              <motion.div
+                initial={{ opacity: 0, x: 24, scale: 0.9 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 20, scale: 0.92 }}
+                transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+              >
+                <div
+                  className="pointer-events-auto flex flex-col items-center gap-2"
+                  role="toolbar"
+                  aria-label={`${pet.name ?? '团子'}互动按钮`}
+                >
+                  {PET_ACTIONS.map(({ kind, icon: Icon, label, fg }) => (
+                    <button
+                      key={kind}
+                      onClick={() => startPetCare(kind)}
+                      disabled={!!petCare}
+                      aria-label={`${label}${pet.name ?? '团子'}`}
+                      className={`flex h-11 w-11 flex-col items-center justify-center gap-0.5 rounded-full bg-white/70 shadow-md ring-1 ring-white/70 backdrop-blur-md transition active:scale-90 ${petCare ? 'opacity-40' : ''}`}
+                    >
+                      <Icon className="h-[17px] w-[17px]" style={{ color: fg }} />
+                      <span className="text-[8.5px] font-bold leading-none" style={{ color: fg }}>
+                        {label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </motion.div>
+            </div>
           )}
         </AnimatePresence>
 
@@ -3226,18 +3325,16 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 )}
               </AnimatePresence>
             </div>
-            {/* 宠物头像（v7.0，右上角最外侧）：点击唤出/收起状态面板；状态偏低时亮提醒小红点 */}
+            {/* 宠物头像（v7.1 美化：内联 SVG 猫头 · 白玻璃圆钮）：点击唤出/收起状态面板；状态偏低时亮提醒小红点 */}
             <button
               onClick={() => setPetPanel((v) => !v)}
               aria-label={`${pet.name ?? '团子'}状态面板`}
               aria-expanded={petPanel}
-              className={`pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-full shadow-sm backdrop-blur transition active:scale-95 ${
-                petPanel ? 'bg-[#fdf3e3] ring-2 ring-[#e46a6a]' : 'bg-[#fdf3e3] ring-2 ring-[#e46a6a]/60'
+              className={`pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-full bg-white/75 shadow-md ring-2 backdrop-blur transition active:scale-95 ${
+                petPanel ? 'ring-[#e46a6a]' : 'ring-[#f4b3c2]'
               }`}
             >
-              <span aria-hidden="true" className="text-[19px] leading-none">
-                🐱
-              </span>
+              <CatFaceIcon className="h-7 w-7 drop-shadow-sm" />
               {(pet.st < 30 || pet.cl < 30 || pet.mo < 30) && (
                 <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full bg-[#ff7a59] ring-2 ring-white/90" />
               )}

@@ -735,7 +735,7 @@ export default function InstrumentOverlay({
       />
       <div
         className={`pointer-events-auto mx-3 mb-[64px] flex flex-col gap-2 ${
-          kind === 'piano' ? 'h-[34%] max-h-[280px]' : 'h-[45%] max-h-[388px]'
+          kind === 'piano' ? 'h-[27%] max-h-[218px]' : 'h-[45%] max-h-[388px]'
         }`}
         onPointerDown={stop}
         onPointerMove={stop}

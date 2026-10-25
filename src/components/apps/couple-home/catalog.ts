@@ -925,6 +925,12 @@ export const CATALOG: Record<string, CatalogEntry> = {
     // 点击打开留言面板（给 TA 留言 / 待办）
     acts: {},
   },
+  // ---- v7.1 宠物小窝（程序化建模；夜晚团子自己回窝睡觉 + Zzz） ----
+  petBed: {
+    kind: 'petBed', name: '奶油猫窝', cat: 'decor', fp: [0.66, 0.58],
+    // 纯装饰（无交互）；宠物夜晚自动寻路回窝蜷成团睡觉
+    acts: { playful: true },
+  },
 };
 
 // ---------------- 成套摆放（F3：一键把一组家具按预设相对位放进房间） ----------------
@@ -1107,6 +1113,7 @@ export function defaultHome(): HomeState {
       F('coatRack', -3.55, 2.5),
       F('trashcan', -3.62, -2.58),
       F('fan', 3.7, 1.75, { ry: -2.4 }), // 落地风扇
+      F('petBed', -3.42, -1.42, { ry: 0.5 }), // 奶油猫窝（西侧书桌旁角落：团子的固定小床）
       F('chandelier', 0, 0.2, { y: WALL_H - 0.04 }), // 客厅吊灯
       F('socket', ROOM_X - 0.07, -0.9, { y: 0.38, ry: -Math.PI / 2 }), // 客厅东壁插座
 

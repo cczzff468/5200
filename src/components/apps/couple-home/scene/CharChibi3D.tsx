@@ -756,11 +756,11 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
     shellPatch(176, 360, 57, 100, hairMat); // 后脑大片区（含后颈上方）
     shellPatch(158, 176, 57, 98, hairMat); // 右耳后侧发（贴头型垂到下颌，绝不前伸挡脸）
     shellPatch(4, 22, 57, 98, hairMat); // 左耳后侧发
-    // v7.0 齐刘海：额头整片覆盖（无中分缝），三片下缘同高 → 一条直线齐到眼睛上缘（不压眉、不遮眼），两侧包住额角同样齐平
+    // v7.1 齐刘海：额头整片覆盖（无中分缝），三片下缘同高 → 一条直线齐到眼上再垂长一截（θ85°，仍不遮眼），两侧包住额角同样齐平
     const BANGS: [number, number, number, number][] = [
-      [22, 62, 57, 81], // 左齐刘海：与中央同高（θ81° ≈ 眼睛上缘之上）
-      [62, 118, 57, 81], // 中央齐刘海：直线切在眼上
-      [118, 158, 57, 81], // 右齐刘海：与中央同高
+      [22, 62, 57, 85], // 左齐刘海：与中央同长（θ85° ≈ 眼上缘再往下垂长一点）
+      [62, 118, 57, 85], // 中央齐刘海：直线切在眼上偏下
+      [118, 158, 57, 85], // 右齐刘海：与中央同长
     ];
     for (const [a0, a1, t0, t1] of BANGS) shellPatch(a0, a1, t0, t1, hairMat);
 
@@ -779,9 +779,9 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
       buildBowAt(tail, 0, HR * 0.02, HR * 0.03, -1, 0.9, bowCol);
     } else if (W.hair === 'bob') {
       // 短发波波头：发壳下缘续一圈齐下颌的圆弧下摆（同半径续接，圆滑内扣不遮脸）；
-      // v6.7 发梢小球删除 —— 下摆本身即为干净齐边；v7.0 侧片上缘随齐刘海缘（θ81°）衔接
-      shellPatch(130, 158, 81, 114, hairMat); // 右颊侧（刘海缘到腮）
-      shellPatch(22, 50, 81, 114, hairMat); // 左颊侧
+      // v6.7 发梢小球删除 —— 下摆本身即为干净齐边；v7.1 侧片上缘随加长后的齐刘海缘（θ85°）衔接
+      shellPatch(130, 158, 85, 114, hairMat); // 右颊侧（刘海缘到腮）
+      shellPatch(22, 50, 85, 114, hairMat); // 左颊侧
       shellPatch(158, 176, 98, 116, hairMat); // 右下摆
       shellPatch(4, 22, 98, 116, hairMat); // 左下摆
       shellPatch(176, 364, 100, 116, hairMat); // 后脑下摆（跨 360° 补齐左接缝）

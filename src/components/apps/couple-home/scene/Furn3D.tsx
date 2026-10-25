@@ -260,6 +260,9 @@ export default function Furn3D({
         {/* 电视（程序化美颜大屏） */}
         {isTV && <TV3D on={!!item.st?.on} night={night} col={item.col} channel={item.st?.channel} />}
 
+        {/* 奶油猫窝（程序化软萌圆窝：外圈软边 + 内垫 + 毛线球，v7.1 宠物小窝） */}
+        {entry.kind === 'petBed' && <PetBed3D col={item.col} />}
+
         {/* 立体壁挂空调（程序化建模：导风板摆动 + 冷风丝） */}
         {entry.kind === 'aircon' && <Aircon3D on={!!item.st?.on} night={night} col={item.col} />}
 
@@ -693,6 +696,62 @@ function MealDish() {
       <mesh position={[0.3, 0.062, -0.18]}>
         <cylinderGeometry args={[0.06, 0.06, 0.012, 14]} />
         <meshStandardMaterial color="#e8b04c" roughness={0.3} />
+      </mesh>
+    </group>
+  );
+}
+
+// ---------------- v7.1 宠物小窝：奶油猫窝（程序化软萌圆窝） ----------------
+
+/**
+ * 猫窝建模（世界尺度，脚印 fp [0.66, 0.58]）：
+ * - 椭圆软外壳（压扁圆环感：两圈 lathe 式圆管拼软边）+ 奶油内垫 + 缝线小窝底；
+ * - 一颗粉色毛线球 + 拖出的毛线点缀（萌系装饰）；
+ * - 无交互（点击弹跳由 Furn3D 的 playful 统一处理）。
+ */
+export function PetBed3D({ col }: { col?: string }) {
+  const shell = col || '#f6d8dd'; // 外壳：用户调色优先，默认樱粉奶油
+  return (
+    <group>
+      {/* 外壳软边（椭圆环：管状环压扁） */}
+      <mesh castShadow position={[0, 0.055, 0]} scale={[1, 0.62, 0.88]} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[0.25, 0.085, 12, 28]} />
+        <meshStandardMaterial color={shell} roughness={0.92} />
+      </mesh>
+      {/* 外壁围一圈（浅碗壁：下半圆柱 + 内收） */}
+      <mesh castShadow position={[0, 0.05, 0]} scale={[1, 1, 0.88]}>
+        <cylinderGeometry args={[0.29, 0.24, 0.1, 24, 1, true]} />
+        <meshStandardMaterial color={shell} roughness={0.92} side={THREE.DoubleSide} />
+      </mesh>
+      {/* 窝底 */}
+      <mesh receiveShadow position={[0, 0.005, 0]} scale={[1, 1, 0.88]}>
+        <cylinderGeometry args={[0.29, 0.27, 0.014, 24]} />
+        <meshStandardMaterial color={shell} roughness={0.92} />
+      </mesh>
+      {/* 内垫（奶油白绒垫，微微凸起） */}
+      <mesh receiveShadow castShadow position={[0, 0.028, 0]} scale={[1, 1, 0.88]}>
+        <sphereGeometry args={[0.235, 20, 10, 0, Math.PI * 2, Math.PI * 0.42, Math.PI * 0.58]} />
+        <meshStandardMaterial color="#fdf6ea" roughness={0.96} />
+      </mesh>
+      {/* 缝线点缀（内垫边缘一圈小球珠） */}
+      {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => {
+        const a = (i / 8) * Math.PI * 2;
+        return (
+          <mesh key={i} position={[Math.cos(a) * 0.215, 0.052, Math.sin(a) * 0.19]}>
+            <sphereGeometry args={[0.011, 6, 6]} />
+            <meshStandardMaterial color="#ffffff" roughness={0.85} />
+          </mesh>
+        );
+      })}
+      {/* 毛线球（窝沿上） */}
+      <mesh castShadow position={[0.21, 0.115, 0.13]}>
+        <sphereGeometry args={[0.032, 10, 8]} />
+        <meshStandardMaterial color="#eaa4b4" roughness={0.85} />
+      </mesh>
+      {/* 拖出的毛线（小弯钩） */}
+      <mesh position={[0.15, 0.012, 0.2]} rotation={[-Math.PI / 2, 0, 0.9]}>
+        <torusGeometry args={[0.05, 0.006, 6, 16, Math.PI * 1.2]} />
+        <meshStandardMaterial color="#eaa4b4" roughness={0.85} />
       </mesh>
     </group>
   );
