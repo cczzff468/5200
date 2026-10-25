@@ -579,7 +579,10 @@ export type CharPose =
   | 'makeup'
   | 'mirror'
   | 'read'
-  | 'petcare';
+  | 'petcare'
+  // —— v8.0 陪伴交互（拾光小屋）：拥抱 / 牵手（双方通用姿势） ——
+  | 'hug'
+  | 'holdhand';
 
 /** 小人正在执行的家具动作（走向家具 → 摆姿势） */
 export interface CharAction {

@@ -36,6 +36,8 @@ export interface CharChibi3DProps {
   hide?: boolean;
   /** 姿势（「我」专属；partner/访客永远站立） */
   poseRef?: RefObject<{ pose: CharPose; y: number }>;
+  /** 陪伴小人姿势（v8.0 who='partner' 时生效：拥抱/牵手/坐下等由 companion-rt 写入） */
+  poseRef2?: RefObject<{ pose: CharPose; y: number }>;
   /** 手持物（true = 右手握小水杯，拿饮料/咖啡后端着到处逛；coffee = 咖啡款冒热气） */
   carryRef?: RefObject<{ cup: boolean; coffee?: boolean; pet?: boolean }>; // v7.2 pet=true：怀里抱着小猫（双臂环抱）
   /** 访客名牌（头顶浮名字牌；缺省不挂） */
@@ -44,6 +46,8 @@ export interface CharChibi3DProps {
   wear?: GirlWear;
   /** 男生衣柜穿搭（who = 'partner' 时生效：发型 + 上衣/裤子/鞋 + 调色盘） */
   wear2?: BoyWear;
+  /** 点击热区（v8.0：点小人触发回调，如拥抱/牵手环形菜单；不传不建热区） */
+  onTap?: () => void;
 }
 
 /** 穿搭色板：skin 肤色 / hair 发色 / top 上衣(裙) / bottom 短裤(男主) / sock 袜 / shoes 鞋 / bow 发饰 / blush 腮红 */
@@ -983,7 +987,7 @@ function buildChar(who: 'me' | 'partner' | 'guest', outfit = 0, wear?: GirlWear,
 
 const dampN = THREE.MathUtils.damp;
 
-export default function CharChibi3D({ rt, who, hide, poseRef, carryRef, guestName, wear, wear2 }: CharChibi3DProps) {
+export default function CharChibi3D({ rt, who, hide, poseRef, poseRef2, carryRef, guestName, wear, wear2, onTap }: CharChibi3DProps) {
   // 访客按名牌哈希固定取一套配色（同一人每次来访穿同色）
   const guestOutfit = useMemo(() => {
     if (who !== 'guest' || !guestName) return 0;
@@ -1028,8 +1032,8 @@ export default function CharChibi3D({ rt, who, hide, poseRef, carryRef, guestNam
 
     const t = state.clock.elapsedTime;
     const { root, lieWrap, armL, armR, foreL, foreR, legL, legR, kneeL, kneeR, head, eyeL, eyeR, hairDyn, skirt, clothes, skinTorso, foam, zzz, zzzSprites, spark, sparkSprites, hipY, cup, cupCoffee, cupJuice, cupStraw, cupSteam, book, bookFlip } = rig;
-    const pose: CharPose = who === 'me' ? (poseRef?.current?.pose ?? 'stand') : 'stand';
-    const poseY = poseRef?.current?.y ?? 0;
+    const pose: CharPose = who === 'me' ? (poseRef?.current?.pose ?? 'stand') : who === 'partner' ? (poseRef2?.current?.pose ?? 'stand') : 'stand';
+    const poseY = who === 'me' ? (poseRef?.current?.y ?? 0) : (poseRef2?.current?.y ?? 0);
 
     // —— 眨眼（随机 2.5~5.5s 一次，120ms 完成） ——
     const bl = blink.current;
@@ -1416,6 +1420,72 @@ export default function CharChibi3D({ rt, who, hide, poseRef, carryRef, guestNam
       return;
     }
 
+    if (pose === 'hug') {
+      // —— 拥抱（v8.0 陪伴交互）：双臂前伸环抱 + 身体前倾 + 头轻靠，随呼吸轻晃 ——
+      standBase();
+      root.rotation.x = dampN(root.rotation.x, 0.09, 9, dt);
+      const sway = Math.sin(t * 2.1) * 0.02;
+      armL.rotation.x = dampN(armL.rotation.x, -1.32, 9, dt);
+      armL.rotation.z = dampN(armL.rotation.z, -0.42 + sway, 9, dt);
+      foreL.rotation.x = dampN(foreL.rotation.x, -1.36, 9, dt);
+      armR.rotation.x = dampN(armR.rotation.x, -1.32, 9, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.42 - sway, 9, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -1.36, 9, dt);
+      head.rotation.x = dampN(head.rotation.x, 0.1, 8, dt);
+      head.rotation.z = dampN(head.rotation.z, sway * 1.4, 8, dt);
+      root.position.y = dampN(root.position.y, Math.sin(t * 2.2) * 0.007 + 0.004, 10, dt);
+      return;
+    }
+    if (pose === 'holdhand') {
+      // —— 牵手（v8.0 陪伴交互）：右手抬起伸向用户（牵着），左手/腿随走摆或待机 ——
+      lieWrap.rotation.x = dampN(lieWrap.rotation.x, 0, 10, dt);
+      lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 10, dt);
+      // 被牵住的手臂：抬起朝向用户侧（牵手姿势恒定，走路也牵着）
+      armR.rotation.x = dampN(armR.rotation.x, -0.92, 10, dt);
+      armR.rotation.z = dampN(armR.rotation.z, 0.52, 10, dt);
+      foreR.rotation.x = dampN(foreR.rotation.x, -0.26, 10, dt);
+      if (rt.moving) {
+        // —— 牵手同行：迈腿 + 自由手臂摆 + 小弹跳（牵手手稳稳抬起） ——
+        const s = Math.sin(t * 10);
+        legL.rotation.x = dampN(legL.rotation.x, s * 0.62, 22, dt);
+        legR.rotation.x = dampN(legR.rotation.x, -s * 0.62, 22, dt);
+        kneeL.rotation.x = dampN(kneeL.rotation.x, Math.max(0, -s) * 0.86, 22, dt);
+        kneeR.rotation.x = dampN(kneeR.rotation.x, Math.max(0, s) * 0.86, 22, dt);
+        armL.rotation.x = dampN(armL.rotation.x, -s * 0.52, 20, dt);
+        armL.rotation.z = dampN(armL.rotation.z, -0.16, 14, dt);
+        foreL.rotation.x = dampN(foreL.rotation.x, -0.36, 14, dt);
+        root.position.y = Math.abs(Math.sin(t * 10)) * 0.034;
+        root.rotation.x = dampN(root.rotation.x, 0.05, 12, dt);
+        root.rotation.z = dampN(root.rotation.z, s * 0.035, 14, dt);
+        head.rotation.x = dampN(head.rotation.x, 0.02, 12, dt);
+        head.rotation.z = dampN(head.rotation.z, -s * 0.04, 12, dt);
+        if (skirt) {
+          skirt.rotation.x = dampN(skirt.rotation.x, -0.13, 10, dt);
+          skirt.rotation.z = dampN(skirt.rotation.z, s * 0.05, 12, dt);
+        }
+        hairDyn.rotation.z = dampN(hairDyn.rotation.z, s * 0.07, 12, dt);
+        hairDyn.rotation.x = dampN(hairDyn.rotation.x, 0.05, 12, dt);
+      } else {
+        // —— 牵手站定：面向用户 + 满足轻晃 ——
+        legL.rotation.x = dampN(legL.rotation.x, 0, 10, dt);
+        legR.rotation.x = dampN(legR.rotation.x, 0, 10, dt);
+        kneeL.rotation.x = dampN(kneeL.rotation.x, 0, 10, dt);
+        kneeR.rotation.x = dampN(kneeR.rotation.x, 0, 10, dt);
+        armL.rotation.x = dampN(armL.rotation.x, Math.sin(t * 1.7) * 0.05, 8, dt);
+        armL.rotation.z = dampN(armL.rotation.z, -0.16, 10, dt);
+        foreL.rotation.x = dampN(foreL.rotation.x, -0.14, 8, dt);
+        root.position.y = Math.sin(t * 2.2) * 0.009 + 0.004;
+        root.rotation.x = dampN(root.rotation.x, 0.02, 10, dt);
+        root.rotation.z = dampN(root.rotation.z, 0, 10, dt);
+        head.rotation.x = dampN(head.rotation.x, 0.03, 8, dt);
+        head.rotation.z = dampN(head.rotation.z, Math.sin(t * 1.5) * 0.05, 10, dt);
+        if (skirt) skirt.rotation.z = dampN(skirt.rotation.z, 0, 10, dt);
+        hairDyn.rotation.z = dampN(hairDyn.rotation.z, 0, 8, dt);
+        hairDyn.rotation.x = dampN(hairDyn.rotation.x, 0, 8, dt);
+      }
+      return;
+    }
+
     // sit / bath：屈髋屈膝坐姿
     lieWrap.rotation.x = dampN(lieWrap.rotation.x, 0, 10, dt);
     lieWrap.rotation.y = dampN(lieWrap.rotation.y, 0, 10, dt);
@@ -1463,6 +1533,19 @@ export default function CharChibi3D({ rt, who, hide, poseRef, carryRef, guestNam
       <primitive object={rig.root} />
       {/* 访客名牌：头顶浮名字牌 */}
       {who === 'guest' && guestName && <GuestTag name={guestName} />}
+      {/* v8.0 点击热区（透明大球，盖住小人全身 + 富余；点小人 → 拥抱/牵手环形菜单） */}
+      {onTap && (
+        <mesh
+          position={[0, 0.52, 0]}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            onTap();
+          }}
+        >
+          <sphereGeometry args={[0.58, 12, 10]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      )}
     </group>
   );
 }

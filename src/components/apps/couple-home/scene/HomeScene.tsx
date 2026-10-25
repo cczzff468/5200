@@ -52,6 +52,8 @@ import {
 } from '../catalog';
 import type { BoyWear, CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode, PetCareKind, PetState, RoomId } from '../types';
 import { sfx } from '../sfx';
+import { buildBlockGrid, planRoute, type BlockGrid, type Pt } from './pathfind';
+import { companionStep, createCompanionRT, type CompanionCmd, type CompanionEvent, type CompanionRT, type PoseSlot } from './companion-rt';
 
 // ---------------- 对外 Props ----------------
 
@@ -157,6 +159,21 @@ export interface HomeSceneProps {
   litLamps?: number;
   /** G3 彩蛋小生物：点击惊飞回调（kind = 蝴蝶/小鸟） */
   onCritterTap?: (kind: 'butterfly' | 'bird') => void;
+  /** v8.0 陪伴指令通道（CoupleHome 发起；seq 变化即触发新指令） */
+  companionCmdRef?: RefObject<CompanionCmd | null>;
+  /** v8.0 陪伴事件（状态机 → 宿主：到位/拥抱开始/牵手开始/释放/放弃/进新房间） */
+  onCompanionEvent?: (e: CompanionEvent) => void;
+  /** v8.0 点陪伴小人（拥抱/牵手环形菜单；生活模式） */
+  onPartnerTap?: () => void;
+  /** v8.0 3D 头顶气泡指令队列（CoupleHome push，HeadBubbles 消费） */
+  bubbleRef?: RefObject<BubbleCmd[]>;
+}
+
+/** v8.0 头顶气泡指令（who = 挂在谁头上；hold = 展示秒数，缺省按字数） */
+export interface BubbleCmd {
+  who: 'me' | 'ta';
+  text: string;
+  hold?: number;
 }
 
 /** 生活模式视角俯仰范围：接近水平（低角仰视）↔ 近乎俯瞰（全方位拉动视角） */
@@ -298,85 +315,12 @@ function collideAndClamp(
   }
 }
 
-/** partner 漫游 AI（v7.1 升级：跨房间闲逛 —— 会开门穿过门走廊去卧室/厨房/卫生间/阳台） */
-const CLOSED_DOOR: DoorLive = { open: false, along: 0 };
-
-// ---------------- v7.1 跨房间漫游（房间图寻路 + 门走廊路点） ----------------
+// ---------------- v7.1 跨房间漫游（房间图寻路已迁移 pathfind.ts，v8.0 与陪伴系统共用） ----------------
 
 type DoorKey = 'bed' | 'kt' | 'bath' | 'bal';
-type Pt = { x: number; z: number };
 
-/** 房间邻接图（树：客厅为中心；val = 连接两房间的门） */
-const ROOM_ADJ: Record<RoomId, Partial<Record<RoomId, DoorKey>>> = {
-  lr: { br: 'bed', kt: 'kt', ba: 'bath' },
-  br: { lr: 'bed', bal: 'bal' },
-  kt: { lr: 'kt' },
-  ba: { lr: 'bath' },
-  bal: { br: 'bal' },
-};
-
-/** 门两侧路点离墙距离（穿门走廊的「踏板点」，DOOR_PASS=0.3 取 0.5 更稳） */
-const DOOR_STEP = 0.5;
-
-/** 门两侧的通行路点：aSide = 门北/西侧房间、bSide = 门南/东侧房间 */
-function doorPoints(d: DoorKey, along: number): { aSide: Pt; bSide: Pt } {
-  if (d === 'bath') {
-    // 客厅西 / 卫生间东（竖墙 x=BATH_X0）
-    return { aSide: { x: BATH_X0 - DOOR_STEP, z: along }, bSide: { x: BATH_X0 + DOOR_STEP, z: along } };
-  }
-  // bed/kt：客厅北（z=BED_Z0）；bal：卧室北（z=BED_Z1）
-  const wall = d === 'bal' ? BED_Z1 : BED_Z0;
-  return { aSide: { x: along, z: wall - DOOR_STEP }, bSide: { x: along, z: wall + DOOR_STEP } };
-}
-
-/** BFS：from → to 的门序列（房间图是树，最多 3 扇门；不可达 = null 不可能发生） */
-function planDoors(from: RoomId, to: RoomId): DoorKey[] | null {
-  if (from === to) return [];
-  const prev = new Map<RoomId, { r: RoomId; d: DoorKey }>();
-  const q: RoomId[] = [from];
-  const seen = new Set<RoomId>([from]);
-  while (q.length) {
-    const cur = q.shift()!;
-    for (const [nb, d] of Object.entries(ROOM_ADJ[cur])) {
-      const nxt = nb as RoomId;
-      if (seen.has(nxt)) continue;
-      seen.add(nxt);
-      prev.set(nxt, { r: cur, d: d as DoorKey });
-      if (nxt === to) {
-        const doors: DoorKey[] = [];
-        let node: RoomId = to;
-        while (node !== from) {
-          const p = prev.get(node)!;
-          doors.unshift(p.d);
-          node = p.r;
-        }
-        return doors;
-      }
-      q.push(nxt);
-    }
-  }
-  return null;
-}
-
-/** 生成跨房间路点：每扇门产出「进侧点 → 出侧点」；沿途任一门关着 → null（稍后再试） */
-function planRoute(from: RoomId, to: RoomId, doors: Record<DoorKey, DoorLive>): Pt[] | null {
-  const seq = planDoors(from, to);
-  if (seq === null) return null;
-  const pts: Pt[] = [];
-  let cur = from;
-  for (const d of seq) {
-    const live = doors[d];
-    if (!live?.open) return null;
-    const { aSide, bSide } = doorPoints(d, live.along);
-    // 进/出方向：aSide 恒为「北/西侧房间」（bath：lr；bal：br；bed/kt：lr）——按 cur 是否在 a 侧分流
-    const curIsA = d === 'bath' ? cur === 'lr' : d === 'bal' ? cur === 'br' : cur === 'lr';
-    pts.push(curIsA ? aSide : bSide, curIsA ? bSide : aSide);
-    // 经 d 门从 cur 走到的下一个房间
-    const nxt = (Object.entries(ROOM_ADJ[cur]).find(([, dd]) => dd === d)?.[0] ?? 'lr') as RoomId;
-    cur = nxt;
-  }
-  return pts;
-}
+/** partner 漫游 AI（v7.1 升级：跨房间闲逛 —— 会开门穿过门走廊去卧室/厨房/卫生间/阳台） */
+const CLOSED_DOOR: DoorLive = { open: false, along: 0 };
 
 /** 漫游手感参数（男生 = 溜达慢逛；猫 = 走走停停嗅探） */
 interface RoamOpts {
@@ -528,6 +472,11 @@ function GameLoop({
   wallBoxes,
   instRef,
   introRef,
+  compRT,
+  companionCmdRef,
+  onCompanionEvent,
+  gridRef,
+  partnerPoseRef,
 }: {
   meRT: CharRT;
   taRT: CharRT;
@@ -556,6 +505,16 @@ function GameLoop({
   wallBoxes: THREE.Box3[];
   /** v6.8 进屋过场状态（相机推镜时间轴） */
   introRef?: RefObject<IntroState>;
+  /** v8.0 陪伴状态机实例（HomeScene 持有） */
+  compRT: CompanionRT;
+  /** v8.0 陪伴指令通道（CoupleHome 发起） */
+  companionCmdRef?: RefObject<CompanionCmd | null>;
+  /** v8.0 陪伴事件回调 */
+  onCompanionEvent?: (e: CompanionEvent) => void;
+  /** v8.0 A* 阻挡网格容器（HomeScene useEffect 重建） */
+  gridRef: RefObject<{ grid: BlockGrid | null }>;
+  /** v8.0 陪伴小人姿势槽（companion-rt 写入） */
+  partnerPoseRef: RefObject<PoseSlot>;
 }) {
   const { camera } = useThree();
   const controls = useThree((s) => s.controls) as unknown as { target?: THREE.Vector3 } | null;
@@ -662,10 +621,43 @@ function GameLoop({
       );
     }
 
-    // partner 漫游（v7.1：跨房间闲逛 —— 开着门就去卧室/厨房/卫生间/阳台溜达）
-    const dr = doorRef.current;
-    if (dr) {
-      roam(taRT, dt, itemsRef.current ?? [], { bed: dr.bed, kt: dr.kt, bath: dr.bath, bal: dr.bal ?? CLOSED_DOOR }, ROAM_HUMAN);
+    // —— v8.0 陪伴状态机优先：有指令（拥抱/牵手/坐下/过来…）时接管 partner，否则漫游 ——
+    const dr2 = doorRef.current;
+    const doorsLive = {
+      bed: dr2?.bed ?? CLOSED_DOOR,
+      kt: dr2?.kt ?? CLOSED_DOOR,
+      bath: dr2?.bath ?? CLOSED_DOOR,
+      bal: dr2?.bal ?? CLOSED_DOOR,
+    };
+    const cmd = companionCmdRef?.current ?? null;
+    if (cmd && cmd.seq !== compRT.lastSeq) compRT.cmd = cmd;
+    const grid = gridRef.current?.grid ?? null;
+    const j = joyRef.current ?? { dx: 0, dy: 0 };
+    const joyMag = Math.hypot(j.dx, j.dy);
+    let handled = false;
+    if (grid) {
+      const evBox: { e: CompanionEvent | null } = { e: null };
+      handled = companionStep(
+        taRT,
+        meRT,
+        compRT,
+        dt,
+        itemsRef.current ?? [],
+        grid,
+        doorsLive,
+        partnerPoseRef.current,
+        poseRef.current,
+        (c) => collideAndClamp(c, itemsRef.current ?? [], doorsLive.bed, doorsLive.kt, doorsLive.bath, doorsLive.bal),
+        joyMag,
+        (e) => {
+          evBox.e = e;
+        },
+      );
+      if (evBox.e) onCompanionEvent?.(evBox.e);
+    }
+    // partner 漫游（v7.1：跨房间闲逛 —— 开着门就去卧室/厨房/卫生间/阳台溜达；v8.0 陪伴接管时跳过）
+    if (!handled) {
+      roam(taRT, dt, itemsRef.current ?? [], { bed: doorsLive.bed, kt: doorsLive.kt, bath: doorsLive.bath, bal: doorsLive.bal }, ROAM_HUMAN);
     }
 
     clock.current += dt;
@@ -2435,6 +2427,165 @@ function PetBuddy({
   );
 }
 
+// ---------------- v8.0 3D 头顶对话气泡（用户/AI 消息，投影为 billboard sprite） ----------------
+
+/** 气泡纹理缓存（同一文本复用；上限 60 条，超出丢最旧） */
+const bubbleTexCache = new Map<string, THREE.CanvasTexture>();
+
+/**
+ * 文字气泡贴图：白底圆角 + 樱粉描边 + 底部小尾巴 + 自动换行（15 字/行，最多 5 行，超出省略号）。
+ * 纯 canvas 绘制不依赖 DOM；宽度按字符宽度估算（CJK 全宽 / 半角半宽）。
+ */
+function makeBubbleTexture(text: string): THREE.CanvasTexture {
+  const hit = bubbleTexCache.get(text);
+  if (hit) return hit;
+  const raw = text.replace(/\s+/g, ' ').trim().slice(0, 120);
+  const PER_LINE = 15;
+  const lines: string[] = [];
+  for (let i = 0; i < raw.length; i += PER_LINE) {
+    lines.push(raw.slice(i, i + PER_LINE));
+    if (lines.length >= 5) break;
+  }
+  if (raw.length > PER_LINE * 5) lines[4] = `${lines[4].slice(0, PER_LINE - 1)}…`;
+  const charW = (ch: string) => (ch.charCodeAt(0) > 0x2e7f ? 30 : 16);
+  const lineW = lines.map((l) => [...l].reduce((s, ch) => s + charW(ch), 0));
+  const W = Math.min(560, Math.max(170, Math.max(...lineW) + 52));
+  const H = lines.length * 40 + 40 + 18; // 行高×行数 + 上下内边距 + 尾巴
+  const cv = document.createElement('canvas');
+  cv.width = Math.ceil(W);
+  cv.height = H;
+  const ctx = cv.getContext('2d')!;
+  const r = 18;
+  // 气泡主体（留出底部尾巴空间）
+  const bh = H - 18;
+  ctx.fillStyle = 'rgba(255,255,255,0.96)';
+  ctx.strokeStyle = 'rgba(240,180,196,0.95)';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(r + 3, 3);
+  ctx.arcTo(cv.width - 3, 3, cv.width - 3, bh - 3, r);
+  ctx.arcTo(cv.width - 3, bh - 3, 3, bh - 3, r);
+  ctx.arcTo(3, bh - 3, 3, 3, r);
+  ctx.arcTo(3, 3, cv.width - 3, 3, r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // 尾巴（指向下方小人）
+  const tx = Math.min(cv.width - 40, Math.max(40, cv.width / 2));
+  ctx.fillStyle = 'rgba(255,255,255,0.96)';
+  ctx.strokeStyle = 'rgba(240,180,196,0.95)';
+  ctx.beginPath();
+  ctx.moveTo(tx - 11, bh - 3);
+  ctx.quadraticCurveTo(tx - 4, H - 6, tx - 2, H - 3);
+  ctx.quadraticCurveTo(tx + 3, H - 8, tx + 11, bh - 3);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(tx - 11, bh - 3);
+  ctx.quadraticCurveTo(tx - 4, H - 6, tx - 2, H - 3);
+  ctx.quadraticCurveTo(tx + 3, H - 8, tx + 11, bh - 3);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,1)';
+  ctx.fillRect(tx - 9, bh - 5, 18, 4); // 盖掉尾巴根部的描边线
+  // 文本
+  ctx.fillStyle = '#4a4a4e';
+  ctx.font = '600 30px "PingFang SC", "Nunito", ui-rounded, "Microsoft YaHei", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  lines.forEach((l, i) => {
+    ctx.fillText(l, cv.width / 2, 24 + i * 40 + 20);
+  });
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  bubbleTexCache.set(text, tex);
+  if (bubbleTexCache.size > 60) {
+    const oldest = bubbleTexCache.keys().next().value;
+    if (oldest !== undefined) {
+      bubbleTexCache.get(oldest)?.dispose();
+      bubbleTexCache.delete(oldest);
+    }
+  }
+  return tex;
+}
+
+/**
+ * 头顶气泡渲染（ billboard sprite，跟随 me/ta 小人）：
+ * CoupleHome 向 bubbleRef 队列 push {who, text, hold}，本组件逐条消费 ——
+ * 淡入 0.25s → 保持 hold 秒（缺省按字数 3.2+0.16/字，封顶 12s）→ 淡出 0.5s。
+ */
+function HeadBubbles({
+  meRT,
+  taRT,
+  bubbleRef,
+}: {
+  meRT: CharRT;
+  taRT: CharRT;
+  bubbleRef?: RefObject<BubbleCmd[]>;
+}) {
+  const spMe = useRef<THREE.Sprite>(null);
+  const spTa = useRef<THREE.Sprite>(null);
+  const slots = useRef({
+    me: { tex: null as THREE.CanvasTexture | null, own: false, until: 0, total: 1 },
+    ta: { tex: null as THREE.CanvasTexture | null, own: false, until: 0, total: 1 },
+  });
+  useFrame((st) => {
+    const now = st.clock.elapsedTime;
+    // —— 消费队列（每人一个槽：空/到期才接新气泡，一次最多接一条防跳变） ——
+    const q = bubbleRef?.current;
+    if (q && q.length > 0) {
+      for (let i = 0; i < q.length; i++) {
+        const c = q[i];
+        const slot = slots.current[c.who];
+        if (slot.tex && now < slot.until) continue; // 该小人正在展示：排队等
+        q.splice(i, 1);
+        i--;
+        if (slot.own) slot.tex?.dispose();
+        slot.tex = makeBubbleTexture(c.text);
+        slot.own = true;
+        slot.total = c.hold ?? Math.min(12, 3.2 + c.text.replace(/\s/g, '').length * 0.16);
+        slot.until = now + slot.total;
+        const sp = c.who === 'me' ? spMe.current : spTa.current;
+        if (sp) {
+          const m = sp.material as THREE.SpriteMaterial;
+          m.map = slot.tex;
+          m.needsUpdate = true;
+        }
+        break; // 每帧每小人只接一条
+      }
+    }
+    // —— 位置 / 缩放 / 透明度 ——
+    for (const who of ['me', 'ta'] as const) {
+      const sp = who === 'me' ? spMe.current : spTa.current;
+      const slot = slots.current[who];
+      if (!sp) continue;
+      const remain = slot.until - now;
+      const on = !!slot.tex && remain > 0;
+      sp.visible = on;
+      if (!on) continue;
+      const pos = who === 'me' ? meRT : taRT;
+      const age = slot.total - remain;
+      const fadeIn = Math.min(1, age / 0.25);
+      const fadeOut = Math.min(1, remain / 0.5);
+      const m = sp.material as THREE.SpriteMaterial;
+      m.opacity = Math.min(fadeIn, fadeOut);
+      sp.position.set(pos.x, 1.38 + Math.sin(now * 2.1) * 0.014, pos.z + 0.04);
+      const img = slot.tex!.image as HTMLCanvasElement;
+      const wS = Math.min(1.7, img.width * 0.003);
+      sp.scale.set(wS, wS * (img.height / img.width), 1);
+    }
+  });
+  return (
+    <>
+      <sprite ref={spMe} visible={false}>
+        <spriteMaterial transparent depthWrite={false} toneMapped={false} opacity={0} />
+      </sprite>
+      <sprite ref={spTa} visible={false}>
+        <spriteMaterial transparent depthWrite={false} toneMapped={false} opacity={0} />
+      </sprite>
+    </>
+  );
+}
+
 // ---------------- Canvas 主体 ----------------
 
 /** 进屋过场状态（相机推镜路径缓存） */
@@ -2460,7 +2611,13 @@ export default function HomeScene(props: HomeSceneProps) {
     musicPlaying, weatherFx, litLamps, onCritterTap,
     petCmdRef, onPetTap, onPetEvent, petState, petCarryCmdRef,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
+    companionCmdRef, onCompanionEvent, onPartnerTap, bubbleRef,
   } = props;
+
+  // —— v8.0 陪伴系统：状态机实例 / 小人姿势槽 / A* 阻挡网格（网格重建见下方 wallBoxes 之后） ——
+  const compRT = useRef<CompanionRT>(createCompanionRT());
+  const partnerPoseRef = useRef<PoseSlot>({ pose: 'stand', y: 0 });
+  const gridRef = useRef<{ grid: BlockGrid | null }>({ grid: null });
 
   const modeRef = useRef<HomeMode>(mode);
   const itemsRef = useRef<FurnitureItem[]>(items);
@@ -2512,6 +2669,21 @@ export default function HomeScene(props: HomeSceneProps) {
       ),
     [doorPos?.bed, doorPos?.kt, doorPos?.bath, doorPos?.bal],
   );
+
+  // —— v8.0 A* 阻挡网格重建：items / 墙段（门位）/ 门开态任一变化 → 重建（毫秒级） ——
+  useEffect(() => {
+    const dr = doorRef.current;
+    gridRef.current.grid = buildBlockGrid(
+      items,
+      wallBoxes,
+      {
+        bed: dr?.bed ?? { open: false, along: DOORS[0].def },
+        kt: dr?.kt ?? { open: false, along: DOORS[1].def },
+        bath: dr?.bath ?? { open: false, along: DOORS[2].def },
+        bal: dr?.bal ?? { open: false, along: DOORS[3].def },
+      },
+    );
+  }, [items, wallBoxes, doorOpen, kitchenDoorOpen, bathDoorOpen, balconyDoorOpen, doorPos]);
 
   /** 任一投影仪开着（幕布放下放电影） */
   const projectorOn = items.some((f) => f.kind === 'projector' && f.st?.on);
@@ -2662,7 +2834,7 @@ export default function HomeScene(props: HomeSceneProps) {
       })}
 
       <CharChibi3D rt={meRT} who="me" hide={fp && mode === 'live'} poseRef={poseRef} carryRef={carryRef} wear={wear} />
-      <CharChibi3D rt={taRT} who="partner" wear2={wear2} />
+      <CharChibi3D rt={taRT} who="partner" wear2={wear2} poseRef2={partnerPoseRef} onTap={onPartnerTap} />
       <PetBuddy
         mode={mode}
         items={items}
@@ -2676,6 +2848,8 @@ export default function HomeScene(props: HomeSceneProps) {
         doorRef={doorRef}
       />
       <BedNightLight poseRef={poseRef} meRT={meRT} />
+      {/* v8.0 3D 头顶对话气泡（用户/AI 消息挂在对应小人头顶） */}
+      <HeadBubbles meRT={meRT} taRT={taRT} bubbleRef={bubbleRef} />
       <WeatherFX kind={weatherFx ?? 'clear'} win={win} winExist={winExist} winPos={winPos} />
       <GlassRain kind={weatherFx ?? 'clear'} winExist={winExist} winPos={winPos} />
       <SnowDeco kind={weatherFx ?? 'clear'} winExist={winExist} winPos={winPos} />
@@ -2719,6 +2893,11 @@ export default function HomeScene(props: HomeSceneProps) {
         wallBoxes={wallBoxes}
         instRef={instRef}
         introRef={introRef}
+        compRT={compRT.current}
+        companionCmdRef={companionCmdRef}
+        onCompanionEvent={onCompanionEvent}
+        gridRef={gridRef}
+        partnerPoseRef={partnerPoseRef}
       />
       <PointerRig
         mode={mode}
