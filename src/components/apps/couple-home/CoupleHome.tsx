@@ -28,6 +28,7 @@ import {
   ChevronUp,
   ChevronsDown,
   ChevronsUp,
+  Circle,
   Clock,
   Coffee,
   CupSoda,
@@ -53,6 +54,7 @@ import {
   PawPrint,
   Pencil,
   Puzzle,
+  RefreshCw, // v8.3 宠物转圈把戏
   RotateCcw,
   RotateCw,
   Undo2,
@@ -73,6 +75,9 @@ import {
   Zap,
   ZoomIn,
   ZoomOut,
+  Dog, // v8.3 第二只宠物
+  Rabbit, // v8.3 第二只宠物
+  Lock, // v8.3 未解锁把戏
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import Joystick from './Joystick';
@@ -133,7 +138,7 @@ import {
 } from './companion-memory';
 import type { CompanionCmd, CompanionEvent } from './scene/companion-rt';
 import type { BubbleCmd } from './scene/HomeScene';
-import type { BoyWear, CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, LayoutSnap, NoteEntry, PetCareKind, PetState, RoomId } from './types';
+import type { BoyWear, CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, LayoutSnap, NoteEntry, Pet2State, PetCareKind, PetCoat, PetState, PetWear, RoomId } from './types';
 import { sanitizeBoyWear, sanitizeWear } from './types';
 import Wardrobe from './Wardrobe';
 
@@ -197,6 +202,11 @@ function decayPet(p: PetState, now = Date.now()): PetState {
     cl: Math.round(clamp01x(p.cl - h * 3)),
     mo: Math.round(clamp01x(p.mo - h * 6)),
     ts: now,
+    // v8.3 成长/毛色/装扮字段原样透传（衰减不丢档）
+    since: p.since,
+    care: p.care,
+    coat: p.coat,
+    wear: p.wear,
   };
 }
 
@@ -208,8 +218,42 @@ function sanitizePet(raw?: PetState): PetState {
     cl: raw?.cl ?? 80,
     mo: raw?.mo ?? 90,
     ts: raw?.ts ?? Date.now(),
+    since: raw?.since ?? Date.now(), // v8.3 成长系统：默认从现在开始陪伴
+    care: raw?.care ?? 0,
+    coat: raw?.coat,
+    wear: raw?.wear,
   };
   return decayPet(base);
+}
+
+/** 宠物毛色清洗（白名单） */
+function sanitizePet2(raw?: Pet2State): Pet2State | undefined {
+  if (!raw || (raw.kind !== 'dog' && raw.kind !== 'rabbit')) return undefined;
+  return { kind: raw.kind, name: raw.name?.slice(0, 8), since: raw.since ?? Date.now() };
+}
+
+// ---------------- v8.3 成长系统（F：陪伴天数 + 照顾次数 → 等级解锁小把戏） ----------------
+
+/** 成长解锁的小把戏（达到 Lv 后出现在互动按钮里） */
+const PET_TRICK_DEFS: { kind: PetCareKind; label: string; lvl: number; icon: LucideIcon }[] = [
+  { kind: 'shake', label: '握手', lvl: 2, icon: Heart },
+  { kind: 'spin', label: '转圈', lvl: 3, icon: RefreshCw },
+  { kind: 'roll', label: '打滚', lvl: 5, icon: Circle },
+];
+
+/** 宠物等级：1 + 陪伴天数/2 + 累计照顾次数/6（封顶 Lv.9） */
+function petLevelOf(p: PetState): number {
+  const days = Math.max(0, Math.floor((Date.now() - (p.since ?? Date.now())) / 864e5));
+  return Math.min(9, 1 + Math.floor(days / 2) + Math.floor((p.care ?? 0) / 6));
+}
+
+/** 当前等级到下一级还差几次照顾（升级进度用） */
+function petLevelGap(p: PetState): { days: number; lvl: number; inLvl: number; need: number } {
+  const days = Math.max(0, Math.floor((Date.now() - (p.since ?? Date.now())) / 864e5));
+  const score = days / 2 + (p.care ?? 0) / 6;
+  const lvl = Math.min(9, 1 + Math.floor(score));
+  const inLvl = Math.min(1, score - Math.floor(score));
+  return { days, lvl, inLvl, need: Math.max(1, Math.ceil((1 - inLvl) * 6)) };
 }
 
 /** 宠物互动按钮（v7.1 右侧竖条）：六种照顾动作（bg 已废弃 —— 按钮无彩色底，仅保留彩色图标） */
@@ -845,6 +889,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
   // ---------------- 宠物「团子」（v6.9：体力/清洁/心情 + 改名，持久化在 HomeState.pet） ----------------
   const [pet, setPet] = useState<PetState>(() => sanitizePet(pack.home.pet));
   const petRef = useRef(pet);
+  /** v8.3 第二只宠物（小狗/小兔子；undefined = 还没领） */
+  const [pet2, setPet2] = useState<Pet2State | undefined>(() => sanitizePet2(pack.home.pet2));
+  const pet2Ref = useRef(pet2);
+  useEffect(() => {
+    pet2Ref.current = pet2;
+  }, [pet2]);
+  /** v8.3 领养弹窗 + 衣柜预设「宠物」栏 */
+  const [adoptOpen, setAdoptOpen] = useState(false);
+  const [wardrobeChar, setWardrobeChar] = useState<'girl' | 'boy' | 'pet'>('girl');
   petRef.current = pet;
   /** 宠物照顾指令（面板按钮 → PetBuddy；seq 递增触发新指令；carry=true 抱起模式） */
   const petCmdRef = useRef<{ kind: PetCareKind; seq: number; carry?: boolean } | null>(null);
@@ -871,6 +924,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
   /** 抱抱指令通道（on=true 抱起 / on=false 放下；seq 递增触发） */
   const petCarryCmdRef = useRef({ on: false, seq: 0 });
   const petCarrySeq = useRef(0);
+  /** v8.3 玩具球扔球指令（seq 递增 = 扔一次） */
+  const petBallCmdRef = useRef({ seq: 0 });
+  const petBallSeq = useRef(0);
   const [petRenaming, setPetRenaming] = useState(false);
   const [petNameDraft, setPetNameDraft] = useState('');
   /** 宠物在线缓慢衰减（每 30s 结算一次；离线衰减在 sanitizePet 一次性追算） */
@@ -1079,6 +1135,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
       notesSeen: notesSeenRef.current,
       // 宠物状态（v6.9：名字 + 体力/清洁/心情，跨会话延续）
       pet: { ...petRef.current, ts: Date.now() },
+      // v8.3 第二只宠物
+      pet2: pet2Ref.current ? { ...pet2Ref.current } : undefined,
       // 正在进行的家具动作（已摆好姿势才存，重进页面接着坐/睡/泡/淋浴/看电视/上网；
       // 自动结束型不存 —— 重进后重新发起即可）
       act: (() => {
@@ -1140,8 +1198,15 @@ export default function CoupleHome({ close }: { close: () => void }) {
         cl: Math.max(prev.cl, inc.cl),
         mo: Math.max(prev.mo, inc.mo),
         ts: Date.now(),
+        // v8.3 成长/毛色/装扮：收养时间取更早（陪伴天数只多不少），照顾次数取较多，装扮/毛色远端有就用远端
+        since: Math.min(prev.since ?? Date.now(), inc.since ?? Date.now()),
+        care: Math.max(prev.care ?? 0, inc.care ?? 0),
+        coat: inc.coat ?? prev.coat,
+        wear: inc.wear ?? prev.wear,
       };
     });
+    // v8.3 第二只宠物（远端有就用远端）
+    setPet2((prev) => sanitizePet2(h.pet2) ?? prev);
     setMealReady(!!h.mealReady);
     setFloorTex(h.floorTex ?? 'wood');
     setWallTex(h.wallTex ?? 'plain');
@@ -1212,6 +1277,27 @@ export default function CoupleHome({ close }: { close: () => void }) {
   );
 
   const saveSoon = useCallback(() => schedulePush(), [schedulePush]);
+
+  /** v8.3 领养第二只宠物（小狗/小兔子） */
+  const adoptPet2 = useCallback(
+    (kind: 'dog' | 'rabbit') => {
+      setPet2({ kind, name: kind === 'dog' ? '旺财' : '雪球', since: Date.now() });
+      setAdoptOpen(false);
+      setPetPanel(false);
+      sfx.pop();
+      toast(kind === 'dog' ? '小狗摇着尾巴进家门啦，快去摸摸它～' : '小兔子一蹦一蹦地住进来啦，软软的～');
+      saveSoon();
+    },
+    [toast, saveSoon],
+  );
+  /** v8.3 衣柜改宠物毛色/装扮（宠物栏） */
+  const changePetLook = useCallback(
+    (patch: { coat?: PetCoat; wear?: PetWear }) => {
+      setPet((p) => ({ ...p, coat: patch.coat ?? p.coat, wear: patch.wear ?? p.wear }));
+      saveSoon();
+    },
+    [saveSoon],
+  );
 
   // ================================================================
   // v8.0 陪伴交互系统（拾光小屋 × AI 角色）：
@@ -2084,12 +2170,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
   }, [toast, saveSoon]);
 
   // ---------------- 宠物照顾流程（v6.9） ----------------
-  /** 发起照顾：宠物走向小人 → 到位后互动（v7.2：抱抱 = 抱起怀抱随意走动，再点变「放下」） */
+  /** 发起照顾：宠物走向小人 → 到位后互动（v7.2：抱抱 = 抱起怀抱随意走动，再点变「放下」；v8.3：扔球/小把戏） */
   const startPetCare = useCallback(
     (kind: PetCareKind) => {
       if (petCare) return; // 正在照顾中
       const nm = petRef.current.name ?? '团子';
-      // —— 抱着态：抱抱按钮 = 放下；其他照顾动作先放下 ——
+      // —— 抱着态：抱抱按钮 = 放下；其他照顾动作先放下（扔球也不行，怀里的猫够不着地上的球） ——
       if (carryPetRef.current) {
         if (kind === 'hug') {
           petCarrySeq.current += 1;
@@ -2101,6 +2187,13 @@ export default function CoupleHome({ close }: { close: () => void }) {
         } else {
           toast(`先把${nm}放下来，再照顾它吧～`);
         }
+        return;
+      }
+      // —— v8.3 扔球（A）：独立指令通道（不走 care 走位管线；球出手后猫自己去追去叼） ——
+      if (kind === 'ball') {
+        petBallSeq.current += 1;
+        petBallCmdRef.current = { seq: petBallSeq.current };
+        toast(`把球扔出去啦，看${nm}冲鸭～`);
         return;
       }
       if (actRef.current) {
@@ -2127,6 +2220,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
         bath: `烧好洗澡水，给${nm}搓个泡泡浴～`,
         hug: `${nm}张开小爪爪要抱抱举高高啦～`,
         summon: `一声哨响，${nm}飞奔过来咯～`,
+        shake: `伸手示意，${nm}跑过来要和你握手啦～`,
+        spin: `打个转转的手势，${nm}准备表演啦～`,
+        roll: `拍拍地板，${nm}跑来给你打个滚～`,
+        ball: '',
       };
       toast(startMsg[kind]);
     },
@@ -2170,15 +2267,30 @@ export default function CoupleHome({ close }: { close: () => void }) {
         setCarrying(false);
       }
       if (ev !== 'done') return;
+      // v8.3 成长系统：每次照顾/互动 +1 经验；升级时弹解锁提示（宠物玩具球也是一次开心互动）
+      const lvlBefore = petLevelOf(petRef.current);
       setPet((p) => {
         const bump = (v: number, d: number) => Math.min(100, Math.max(0, v + d));
-        if (kind === 'pat') return { ...p, mo: bump(p.mo, 12), ts: Date.now() };
-        if (kind === 'feed') return { ...p, st: bump(p.st, 22), mo: bump(p.mo, 4), ts: Date.now() };
-        if (kind === 'bath') return { ...p, cl: bump(p.cl, 26), mo: bump(p.mo, 6), ts: Date.now() };
-        if (kind === 'hug') return { ...p, mo: bump(p.mo, 16), st: bump(p.st, 2), ts: Date.now() };
-        if (kind === 'summon') return { ...p, mo: bump(p.mo, 4), ts: Date.now() };
-        return { ...p, cl: bump(p.cl, 18), st: bump(p.st, 4), ts: Date.now() };
+        const grown = { ...p, care: (p.care ?? 0) + 1, ts: Date.now() };
+        if (kind === 'pat') return { ...grown, mo: bump(grown.mo, 12) };
+        if (kind === 'feed') return { ...grown, st: bump(grown.st, 22), mo: bump(grown.mo, 4) };
+        if (kind === 'bath') return { ...grown, cl: bump(grown.cl, 26), mo: bump(grown.mo, 6) };
+        if (kind === 'hug') return { ...grown, mo: bump(grown.mo, 16), st: bump(grown.st, 2) };
+        if (kind === 'summon') return { ...grown, mo: bump(grown.mo, 4) };
+        if (kind === 'ball') return { ...grown, mo: bump(grown.mo, 8) };
+        if (kind === 'shake' || kind === 'spin' || kind === 'roll') return { ...grown, mo: bump(grown.mo, 9) };
+        return { ...grown, cl: bump(grown.cl, 18), st: bump(grown.st, 4) };
       });
+      const lvlAfter = petLevelOf({ ...petRef.current, care: (petRef.current.care ?? 0) + 1 });
+      if (lvlAfter > lvlBefore) {
+        sfx.whistle();
+        const unlocked = PET_TRICK_DEFS.filter((t) => t.lvl === lvlAfter).map((t) => t.label);
+        toast(
+          unlocked.length > 0
+            ? `${petRef.current.name ?? '团子'}升到 Lv.${lvlAfter} 啦！解锁新动作：${unlocked.join('、')}～`
+            : `${petRef.current.name ?? '团子'}升到 Lv.${lvlAfter} 啦，越来越有默契了～`,
+        );
+      }
       const doneMsg: Record<PetCareKind, string> = {
         pat: '摸得它咕噜咕噜，尾巴都要摇飞啦～',
         feed: '吃得肚皮圆滚滚，心满意足～',
@@ -2186,6 +2298,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
         bath: '洗得香喷喷，毛茸茸亮晶晶～',
         hug: '抱在怀里蹭蹭，它开心得直打呼噜～',
         summon: `一叫就到，真是乖${petRef.current.name ?? '团子'}～`,
+        shake: '伸出小爪爪和你握手，太乖啦～',
+        spin: '原地转了个圈圈，毛都转晕乎了～',
+        roll: '咕噜噜打了个滚，露出软软的肚皮～',
+        ball: '追着球跑了一圈又叼回来，玩得可开心啦～',
       };
       toast(doneMsg[kind]);
       saveSoon();
@@ -3928,6 +4044,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   /** 电视开着（生活模式随时换台，看电视不再锁人） */
   const tvOn = items.some((f) => f.kind === 'tv' && f.st?.on);
+  // v8.3 成长系统：等级 + 升级进度（面板徽章 / 把戏按钮解锁门控）
+  const petLv = petLevelOf(pet);
+  const petGap = petLevelGap(pet);
   /** E7 点亮的灯具数（传给场景侧做环境光加成，灯越多屋里越暖） */
   const litLampCount = useMemo(
     () => items.reduce((n, f) => n + (CATALOG[f.kind]?.light && f.st?.on ? 1 : 0), 0),
@@ -4036,11 +4155,65 @@ export default function CoupleHome({ close }: { close: () => void }) {
         onPartnerTap={openPartnerMenu}
         bubbleRef={bubbleRef}
         partnerPlayingId={partnerPlaying}
+        petCoat={pet.coat}
+        petWear={pet.wear}
+        pet2={pet2}
+        petBallCmdRef={petBallCmdRef}
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onDragSelect={onDragSelect}
         onWallTap={onWallTap}
       />
+
+      {/* ===== v8.3 第二只宠物领养弹窗（小狗 / 小兔子 二选一） ===== */}
+      <AnimatePresence>
+        {adoptOpen && (
+          <motion.div
+            key="pet2-adopt"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="pointer-events-auto absolute inset-0 z-[70] flex items-center justify-center bg-black/25 p-6"
+            role="dialog"
+            aria-label="领养新伙伴"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 14 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.94, y: 10 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+              className="w-full max-w-[290px] rounded-3xl border border-white/60 bg-white/90 p-5 text-center shadow-2xl backdrop-blur-xl"
+            >
+              <p className="text-[15px] font-semibold text-[#3a3a3e]">带一只新伙伴回家？</p>
+              <p className="mb-4 mt-1 text-[11.5px] text-[#9a9a96]">它会和小家伙一起追着玩～</p>
+              <div className="mb-3 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => adoptPet2('dog')}
+                  className="flex flex-col items-center gap-1.5 rounded-2xl bg-white/70 px-3 py-3.5 ring-1 ring-[#f0e2dc] transition active:scale-95"
+                >
+                  <Dog className="h-7 w-7 text-[#c99a5b]" />
+                  <span className="text-[12.5px] font-semibold text-[#5a554e]">小狗</span>
+                  <span className="text-[10px] text-[#b0a8a0]">摇尾巴·爱追球</span>
+                </button>
+                <button
+                  onClick={() => adoptPet2('rabbit')}
+                  className="flex flex-col items-center gap-1.5 rounded-2xl bg-white/70 px-3 py-3.5 ring-1 ring-[#f0e2dc] transition active:scale-95"
+                >
+                  <Rabbit className="h-7 w-7 text-[#e8a3b3]" />
+                  <span className="text-[12.5px] font-semibold text-[#5a554e]">小兔子</span>
+                  <span className="text-[10px] text-[#b0a8a0]">蹦蹦跳·软软的</span>
+                </button>
+              </div>
+              <button
+                onClick={() => setAdoptOpen(false)}
+                className="h-10 w-full rounded-full bg-[#f1efe9] text-[13px] font-semibold text-[#8a8a86] transition active:scale-95"
+              >
+                再想想
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ===== v8.0 陪伴角色选择（进入小屋弹联系人列表；⋮ 菜单「换个TA」再弹） ===== */}
       <AnimatePresence>
@@ -4181,9 +4354,31 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 ) : (
                   <>
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-[14.5px] font-bold leading-tight text-[#4a4a4e]">{pet.name ?? '团子'}</div>
-                      <div className="text-[10.5px] leading-tight text-[#9a938a]">点下面的按钮照顾它吧～</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-[14.5px] font-bold leading-tight text-[#4a4a4e]">{pet.name ?? '团子'}</span>
+                        {/* v8.3 成长徽章：Lv + 陪伴天数 */}
+                        <span className="shrink-0 rounded-full bg-[#f7e8c8] px-1.5 py-0.5 text-[9px] font-bold leading-none text-[#a8762a] ring-1 ring-[#ecd9a8]">
+                          Lv.{petLv}
+                        </span>
+                      </div>
+                      <div className="text-[10.5px] leading-tight text-[#9a938a]">
+                        陪伴第 {petGap.days + 1} 天 · 点下面的按钮照顾它吧
+                      </div>
                     </div>
+                    {/* v8.3 装扮（衣柜宠物栏） */}
+                    <button
+                      onClick={() => {
+                        setWardrobeChar('pet');
+                        setWardrobeOpen(true);
+                        setPetPanel(false);
+                        sfx.tap();
+                      }}
+                      aria-label="给宠物装扮"
+                      title="毛色/围巾/蝴蝶结"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/60 text-[#c99a5b] shadow-sm ring-1 ring-white/70 transition hover:bg-white/85 active:scale-90"
+                    >
+                      <Paintbrush className="h-3.5 w-3.5" />
+                    </button>
                     <button
                       onClick={() => {
                         setPetNameDraft(pet.name ?? '团子');
@@ -4233,13 +4428,38 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 ))}
               </div>
 
-              {/* v7.2 互动按钮（面板下方）：六种照顾动作，抱抱抱着时变「放下」 */}
+              {/* v8.3 成长进度（到下一级还差几次照顾） + 领养第二只宠物 */}
+              <div className="mt-2 flex items-center gap-2 rounded-full bg-white/60 px-2.5 py-1.5 ring-1 ring-white/70">
+                <span className="shrink-0 text-[10.5px] font-semibold text-[#a8762a]">成长</span>
+                <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[#eceae4]">
+                  <motion.div
+                    className="h-full rounded-full bg-[#e8b06a]"
+                    initial={false}
+                    animate={{ width: `${Math.round(petGap.inLvl * 100)}%` }}
+                    transition={{ type: 'spring', damping: 30, stiffness: 200 }}
+                  />
+                </div>
+                <span className="shrink-0 text-[9.5px] text-[#b0a8a0]">再照顾 {petGap.need} 次升级</span>
+                {!pet2 && (
+                  <button
+                    onClick={() => setAdoptOpen(true)}
+                    aria-label="领养第二只宠物"
+                    className="flex h-6 shrink-0 items-center gap-0.5 rounded-full bg-[#f4b3c2]/90 px-2 text-[9.5px] font-bold text-white shadow-sm transition active:scale-90"
+                  >
+                    <Heart className="h-2.5 w-2.5" />
+                    领伙伴
+                  </button>
+                )}
+              </div>
+
+              {/* v7.2 互动按钮（面板下方）：六种照顾动作 + v8.3 扔球/成长把戏，抱抱抱着时变「放下」 */}
               <div className="mt-2.5 h-px bg-white/60" aria-hidden="true" />
               <div
                 className="mt-2 grid grid-cols-3 justify-items-center gap-1"
                 role="toolbar"
                 aria-label={`${pet.name ?? '团子'}互动按钮`}
               >
+                <PetActionButton kind="ball" icon={Circle} label="扔球" fg="#4a90c9" carrying={carrying} disabled={!!petCare} onClick={() => startPetCare('ball')} />
                 {PET_ACTIONS.map(({ kind, icon: Icon, label, fg }) => (
                   <PetActionButton
                     key={kind}
@@ -4252,6 +4472,21 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     onClick={() => startPetCare(kind)}
                   />
                 ))}
+                {PET_TRICK_DEFS.map(({ kind, icon: Icon, label, lvl }) =>
+                  petLv >= lvl ? (
+                    <PetActionButton key={kind} kind={kind} icon={Icon} label={label} fg="#8a7ab0" carrying={carrying} disabled={!!petCare} onClick={() => startPetCare(kind)} />
+                  ) : (
+                    <button
+                      key={kind}
+                      disabled
+                      aria-label={`${label}（Lv.${lvl} 解锁）`}
+                      className="flex h-[52px] w-[52px] flex-col items-center justify-center gap-0.5 rounded-full bg-white/35 opacity-60 ring-1 ring-white/60"
+                    >
+                      <Lock className="h-4 w-4 text-[#b0a8a0]" />
+                      <span className="text-[8.5px] leading-none text-[#b0a8a0]">Lv.{lvl}</span>
+                    </button>
+                  ),
+                )}
               </div>
             </motion.div>
           )}
@@ -4272,6 +4507,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                   role="toolbar"
                   aria-label={`${pet.name ?? '团子'}互动按钮`}
                 >
+                  <PetActionButton kind="ball" icon={Circle} label="扔球" fg="#4a90c9" carrying={carrying} disabled={!!petCare} onClick={() => startPetCare('ball')} />
                   {PET_ACTIONS.map(({ kind, icon: Icon, label, fg }) => (
                     <PetActionButton
                       key={kind}
@@ -4283,6 +4519,9 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       disabled={!!petCare}
                       onClick={() => startPetCare(kind)}
                     />
+                  ))}
+                  {PET_TRICK_DEFS.filter((t) => petLv >= t.lvl).map(({ kind, icon: Icon, label }) => (
+                    <PetActionButton key={kind} kind={kind} icon={Icon} label={label} fg="#8a7ab0" carrying={carrying} disabled={!!petCare} onClick={() => startPetCare(kind)} />
                   ))}
                 </div>
               </motion.div>
@@ -5126,6 +5365,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
         open={wardrobeOpen}
         wear={wear}
         wear2={wear2}
+        initialChar={wardrobeChar}
+        petCoat={pet.coat}
+        petWear={pet.wear}
+        onPetChange={changePetLook}
         onChange={(w) => {
           setWear(w);
           saveSoon();

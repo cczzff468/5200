@@ -50,7 +50,7 @@ import {
   resolveWinPos,
   roomAt,
 } from '../catalog';
-import type { BoyWear, CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode, PetCareKind, PetState, RoomId } from '../types';
+import type { BoyWear, CatalogEntry, CharAction, CharPose, CharRT, FurnitureItem, GirlWear, HomeMode, Pet2State, PetCareKind, PetCoat, PetState, PetWear, RoomId } from '../types';
 import { sfx } from '../sfx';
 import { buildBlockGrid, planRoute, type BlockGrid, type Pt } from './pathfind';
 import { companionStep, createCompanionRT, type CompanionCmd, type CompanionEvent, type CompanionRT, type PoseSlot } from './companion-rt';
@@ -169,6 +169,14 @@ export interface HomeSceneProps {
   bubbleRef?: RefObject<BubbleCmd[]>;
   /** v8.1 陪伴小人正在弹奏的乐器家具 id（null = 没在弹；Furn3D 音符飘出联动） */
   partnerPlayingId?: string | null;
+  /** v8.3 宠物毛色（缺省奶油猫） */
+  petCoat?: PetCoat;
+  /** v8.3 宠物装扮（项圈颜色/围巾/蝴蝶结） */
+  petWear?: PetWear;
+  /** v8.3 第二只宠物（小狗/小兔子；undefined = 还没领） */
+  pet2?: Pet2State;
+  /** v8.3 玩具球扔球指令（seq 变化 = 扔一次） */
+  petBallCmdRef?: RefObject<{ seq: number }>;
 }
 
 /** v8.0 头顶气泡指令（who = 挂在谁头上；hold = 展示秒数，缺省按字数） */
@@ -1494,10 +1502,80 @@ function makeMeowTexture(): THREE.CanvasTexture {
 const PET_HEART_N = 4;
 
 /** 宠物照顾动作时长（到位后）：抚摸 / 吃饭 / 喝水 / 洗澡 / 抱抱 / 召唤 */
-const PET_CARE_DUR: Record<PetCareKind, number> = { pat: 2.0, feed: 4.2, water: 4.2, bath: 4.6, hug: 3.4, summon: 1.6 };
+const PET_CARE_DUR: Record<PetCareKind, number> = {
+  pat: 2.0, feed: 4.2, water: 4.2, bath: 4.6, hug: 3.4, summon: 1.6,
+  // v8.3 成长解锁的小把戏（握手/转圈/打滚）；ball 走独立通道（时长 0 不入 care 管线）
+  shake: 3.0, spin: 3.4, roll: 3.6, ball: 0,
+};
 
 /** 走向小人速度（召唤 = 一叫就到，疾跑） */
-const petWalkSpeed = (kind: PetCareKind) => (kind === 'summon' ? 1.75 : 0.85);
+const petWalkSpeed = (kind: PetCareKind) => (kind === 'summon' ? 1.75 : kind === 'ball' ? 0 : 0.95);
+
+/** v8.3 宠物毛色（G 选项）：身体/头部主色；cow = 奶牛斑 */
+const PET_COATS: Record<PetCoat, { body: string; head: string; tail: string }> = {
+  cream: { body: '#fbf3e6', head: '#fdf8ee', tail: '#f7ede0' },
+  orange: { body: '#f0b878', head: '#f6cd94', tail: '#e8a95f' },
+  gray: { body: '#b3b7c1', head: '#c4c8d1', tail: '#a5a9b4' },
+  cow: { body: '#f6f5f2', head: '#faf9f7', tail: '#efeeea' },
+};
+
+/** v8.3 小剧场贴图：蝴蝶（双粉翅）/ 萤火虫（暖光晕） */
+function makeTheaterTexture(kind: 'butterfly' | 'firefly'): THREE.CanvasTexture {
+  const cv = document.createElement('canvas');
+  cv.width = 96;
+  cv.height = 96;
+  const ctx = cv.getContext('2d')!;
+  if (kind === 'butterfly') {
+    ctx.translate(48, 48);
+    // 双翅（上下两瓣）
+    for (const s of [-1, 1]) {
+      ctx.save();
+      ctx.scale(s, 1);
+      ctx.fillStyle = '#f7a8c4';
+      ctx.beginPath();
+      ctx.ellipse(20, -12, 19, 15, -0.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fbd0e0';
+      ctx.beginPath();
+      ctx.ellipse(16, 12, 14, 11, 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath();
+      ctx.ellipse(22, -14, 6, 4, -0.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    // 身体 + 触角
+    ctx.strokeStyle = '#7a5a4a';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, -22);
+    ctx.lineTo(0, 18);
+    ctx.stroke();
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -20);
+    ctx.quadraticCurveTo(-8, -30, -12, -28);
+    ctx.moveTo(0, -20);
+    ctx.quadraticCurveTo(8, -30, 12, -28);
+    ctx.stroke();
+  } else {
+    // 萤火虫：中心亮点 + 柔和光晕
+    const g = ctx.createRadialGradient(48, 48, 2, 48, 48, 44);
+    g.addColorStop(0, 'rgba(255,244,190,1)');
+    g.addColorStop(0.28, 'rgba(255,232,140,0.85)');
+    g.addColorStop(1, 'rgba(255,220,110,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 96, 96);
+    ctx.fillStyle = '#6b5a3a';
+    ctx.beginPath();
+    ctx.ellipse(48, 52, 5, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 /** v7.1 需求气泡种类：饿了 / 想喝水 / 要洗澡（D：状态低时宠物头顶冒泡更直观） */
 type PetNeed = 'hungry' | 'thirsty' | 'bath';
@@ -1708,6 +1786,11 @@ function PetBuddy({
   night,
   petState,
   doorRef,
+  weatherFx,
+  petCoat = 'cream',
+  petWear,
+  petBallCmdRef,
+  petRTRef,
 }: {
   mode: HomeMode;
   items: FurnitureItem[];
@@ -1723,6 +1806,14 @@ function PetBuddy({
   petState?: PetState;
   /** 四扇门开态（跨房间漫游穿门用） */
   doorRef?: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive }>;
+  /** v8.3 天气（小剧场剧本：雨天躲屋檐） */
+  weatherFx?: 'rain' | 'snow' | 'clear';
+  /** v8.3 毛色 / 装扮 / 玩具球指令 */
+  petCoat?: PetCoat;
+  petWear?: PetWear;
+  petBallCmdRef?: RefObject<{ seq: number }>;
+  /** v8.3 把自己的运行时暴露给第二只宠物（追着玩用） */
+  petRTRef?: RefObject<CharRT | null>;
 }) {
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -1781,6 +1872,41 @@ function PetBuddy({
   const smileSp = useRef<THREE.Sprite>(null);
   const smileT = useRef(0);
 
+  // —— v8.3 玩具球（A：扔出去 → 猫追着跑叼回来） ——
+  const ballGrp = useRef<THREE.Group>(null);
+  /** 球状态机：hidden 藏着 / fly 抛物线飞行 / rest 落地等猫 / carried 猫叼着 */
+  const ball = useRef<{ phase: 'hidden' | 'fly' | 'rest' | 'carried'; t: number; from: Pt; to: Pt; bounce: number }>({
+    phase: 'hidden',
+    t: 0,
+    from: { x: 0, z: 0 },
+    to: { x: 0, z: 0 },
+    bounce: 0,
+  });
+  const lastBallSeq = useRef(0);
+  /** 猫的捡球任务：chase 追球 / return 叼回主人身边 */
+  const fetching = useRef<'chase' | 'return' | null>(null);
+
+  // —— v8.3 小剧场（D：白天追蝴蝶 / 夜里扑萤火虫 / 雨天躲屋檐） ——
+  const theater = useRef<{
+    kind: 'butterfly' | 'firefly' | 'rain' | null;
+    t: number;
+    ax: number;
+    az: number;
+    pounced: number;
+  }>({ kind: null, t: 0, ax: 0, az: 0, pounced: 0 });
+  const nextTheaterAt = useRef(14 + Math.random() * 10);
+  const bflySp = useRef<THREE.Sprite>(null);
+  const flySp = useRef<(THREE.Sprite | null)[]>([null, null, null]);
+  const flyBeat = useRef<number[]>([0, 1.3, 2.6]);
+
+  // —— v8.3 成长把戏（F：握手/转圈/打滚动画用） ——
+  const pawFR = useRef<THREE.Mesh>(null);
+  /** 转圈/打滚的累计角度（do 阶段推进，结束归零） */
+  const trickSpin = useRef(0);
+  /** 小剧场扑跳高度（萤火虫 pounce）/ 雨天躲雨趴下的软弱感 */
+  const hopY = useRef(0);
+  const rainRest = useRef(0);
+
   const heartTex = useMemo(() => makeHeartTexture(), []);
   const meowTex = useMemo(() => makeMeowTexture(), []);
   const starTex = useMemo(() => makeStarTexture(), []);
@@ -1809,6 +1935,49 @@ function PetBuddy({
     () => new THREE.SpriteMaterial({ map: smileTex, transparent: true, opacity: 0, depthWrite: false }),
     [smileTex],
   );
+  const bflyTex = useMemo(() => makeTheaterTexture('butterfly'), []);
+  const flyTex = useMemo(() => makeTheaterTexture('firefly'), []);
+  const bflyMat = useMemo(
+    () => new THREE.SpriteMaterial({ map: bflyTex, transparent: true, opacity: 0, depthWrite: false }),
+    [bflyTex],
+  );
+  const flyMats = useMemo(
+    () => Array.from({ length: 3 }, () => new THREE.SpriteMaterial({ map: flyTex, transparent: true, opacity: 0, depthWrite: false })),
+    [flyTex],
+  );
+
+  /** v8.3 扔球（A）：从主人手上抛物线飞到同房间随机点（推出家具/钳回房间），随后猫自动去捡 */
+  const throwBall = useCallback(() => {
+    const dr = doorRef?.current;
+    const doors = {
+      bed: dr?.bed ?? CLOSED_DOOR,
+      kt: dr?.kt ?? CLOSED_DOOR,
+      bath: dr?.bath ?? CLOSED_DOOR,
+      bal: dr?.bal ?? CLOSED_DOOR,
+    };
+    const ang = Math.random() * Math.PI * 2;
+    const dist = 1.1 + Math.random() * 1.3;
+    const probe: CharRT = {
+      x: meRT.x + Math.sin(ang) * dist,
+      z: meRT.z + Math.cos(ang) * dist,
+      heading: 0,
+      moving: false,
+      target: null,
+      nextWander: 0,
+    };
+    collideAndClamp(probe, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+    ball.current = { phase: 'fly', t: 0, from: { x: meRT.x, z: meRT.z }, to: { x: probe.x, z: probe.z }, bounce: 0 };
+    fetching.current = null;
+    // 睡觉/回窝被球叫醒
+    if (sleeping.current || goBed.current) {
+      sleeping.current = false;
+      goBed.current = false;
+      rt.current.target = null;
+      rt.current.route = undefined;
+      rt.current.nextWander = performance.now() / 1000 + 4;
+    }
+    sfx.whoosh();
+  }, [meRT, doorRef]);
 
   /** 摸头！ */
   const patIt = useCallback(() => {
@@ -1834,6 +2003,8 @@ function PetBuddy({
     (done: boolean) => {
       const k = care.current?.kind;
       care.current = null;
+      trickSpin.current = 0; // v8.3 把戏复位
+      if (pawFR.current) pawFR.current.rotation.x = 0;
       if (bowl.current) bowl.current.visible = false;
       if (k && onPetEvent) onPetEvent(done ? 'done' : 'cancel', k);
     },
@@ -1863,6 +2034,7 @@ function PetBuddy({
       return;
     }
     g.visible = true;
+    if (petRTRef) petRTRef.current = rt.current;
 
     // —— 捕获新照顾指令（seq 变化即触发；睡觉中被叫醒） ——
     const cmd = petCmdRef?.current;
@@ -1916,6 +2088,58 @@ function PetBuddy({
         }
         care.current = null;
         onPetEvent?.('dropped', 'hug');
+      }
+    }
+
+    // —— v8.3 扔球指令（seq 变化 = 扔一次；照顾中/被抱着时不接） ——
+    const bc = petBallCmdRef?.current;
+    if (bc && bc.seq !== lastBallSeq.current) {
+      lastBallSeq.current = bc.seq;
+      if (!care.current && !carrying.current) throwBall();
+    }
+
+    // —— v8.3 球物理（抛物线 → 落地轻弹 → 等猫来叼；被叼着时贴在猫嘴前） ——
+    if (ballGrp.current) {
+      const b = ball.current;
+      if (b.phase === 'fly') {
+        b.t += dt / 0.85;
+        if (b.t >= 1) {
+          b.t = 0;
+          b.phase = 'rest';
+          b.bounce = 2;
+          if (!fetching.current && !care.current && !carrying.current && modeRef.current === 'live') {
+            fetching.current = 'chase';
+          }
+        }
+      } else if (b.phase === 'rest' && b.bounce > 0) {
+        // 落地小弹跳（两次，一次比一次低）
+        b.t += dt;
+        if (b.t > 0.34) {
+          b.t = 0;
+          b.bounce -= 1;
+        }
+      }
+      const bg = ballGrp.current;
+      if (b.phase === 'hidden') {
+        bg.visible = false;
+      } else if (b.phase === 'fly') {
+        bg.visible = true;
+        const k = Math.min(1, b.t);
+        bg.position.set(
+          THREE.MathUtils.lerp(b.from.x, b.to.x, k),
+          0.055 + Math.sin(Math.PI * k) * 0.72,
+          THREE.MathUtils.lerp(b.from.z, b.to.z, k),
+        );
+        bg.rotation.z -= dt * 13;
+        bg.rotation.x += dt * 5;
+      } else if (b.phase === 'carried') {
+        bg.visible = true;
+        bg.position.set(rt.current.x + Math.sin(rt.current.heading) * 0.17, 0.13, rt.current.z + Math.cos(rt.current.heading) * 0.17);
+        bg.rotation.z += dt * 2;
+      } else {
+        bg.visible = true;
+        const hop = b.bounce > 0 ? Math.sin(Math.PI * Math.min(1, b.t / 0.34)) * 0.09 * b.bounce : 0;
+        bg.position.set(b.to.x, 0.055 + hop, b.to.z);
       }
     }
 
@@ -1992,6 +2216,14 @@ function PetBuddy({
         else if (c.kind === 'water' && c.t % 0.7 < dt) sfx.sip();
         else if (c.kind === 'bath' && c.t % 2.4 < dt) sfx.bathWater();
         c.t += dt;
+        // —— v8.3 成长把戏：握手（抬右前爪挥）/ 转圈（原地转两圈）/ 打滚（侧滚一周） ——
+        if (c.kind === 'shake' && pawFR.current) {
+          pawFR.current.rotation.x = -1.1 + Math.sin(c.t * 9) * 0.32;
+        } else if (c.kind === 'spin') {
+          trickSpin.current += dt * ((Math.PI * 4) / PET_CARE_DUR.spin);
+        } else if (c.kind === 'roll') {
+          trickSpin.current += dt * ((Math.PI * 2) / PET_CARE_DUR.roll);
+        }
         // 小人走远了 → 中断（抱抱/抱着贴在怀里不会超）
         if (c.kind !== 'hug' && Math.hypot(meRT.x - rt.current.x, meRT.z - rt.current.z) > 0.75) {
           endCare(false);
@@ -2006,7 +2238,55 @@ function PetBuddy({
       const bedItem = itemsRef.current.find((f) => f.kind === 'petBed' && (f.y ?? 0) < 0.45);
       bedPos.current = bedItem ? { x: bedItem.x, z: bedItem.z } : null;
       const nightNow = !!night && !!bedPos.current;
-      if (nightNow && !sleeping.current) {
+      if (fetching.current) {
+        // —— v8.3 捡球任务（A）：追球 → 叼住 → 送回主人脚边（优先级最高，睡觉也唤醒） ——
+        sleeping.current = false;
+        goBed.current = false;
+        theater.current.kind = null;
+        if (bflySp.current) bflySp.current.visible = false;
+        flySp.current.forEach((sp) => {
+          if (sp) sp.visible = false;
+        });
+        const b = ball.current;
+        const tx = b.phase === 'carried' ? meRT.x : b.to.x;
+        const tz = b.phase === 'carried' ? meRT.z : b.to.z;
+        const dx = tx - rt.current.x;
+        const dz = tz - rt.current.z;
+        const d = Math.hypot(dx, dz);
+        if (fetching.current === 'chase' && b.phase === 'rest' && d < 0.26) {
+          b.phase = 'carried';
+          fetching.current = 'return';
+          sfx.pop();
+        } else if (fetching.current === 'return' && d < 0.6) {
+          // 叼回来：轻轻放到主人脚边 + 撒娇求夸
+          const hd = meRT.heading;
+          b.phase = 'rest';
+          b.to = { x: meRT.x + Math.sin(hd) * 0.42, z: meRT.z + Math.cos(hd) * 0.42 };
+          b.t = 0;
+          b.bounce = 0;
+          fetching.current = null;
+          rt.current.target = null;
+          rt.current.moving = false;
+          pat.current = 0.85;
+          meow.current = 1.1;
+          sfx.kiss();
+          const tn = performance.now() / 1000;
+          heartT.current = Array.from({ length: PET_HEART_N }, (_, i) => tn + 0.04 + i * 0.15);
+          rt.current.nextWander = performance.now() / 1000 + 2;
+          onPetEvent?.('done', 'ball');
+        } else if (d > 0.02) {
+          const sp = (fetching.current === 'chase' ? 2.0 : 1.8) * dt;
+          rt.current.x += (dx / d) * Math.min(sp, d);
+          rt.current.z += (dz / d) * Math.min(sp, d);
+          rt.current.moving = true;
+          rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 9));
+          rt.current.target = null;
+          rt.current.route = undefined;
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+        } else {
+          rt.current.moving = false;
+        }
+      } else if (nightNow && !sleeping.current) {
         if (!goBed.current) {
           goBed.current = true;
           goBedT.current = t;
@@ -2039,7 +2319,135 @@ function PetBuddy({
         sleeping.current = false;
         goBed.current = false;
         if (rt.current.nextWander === Number.POSITIVE_INFINITY) rt.current.nextWander = performance.now() / 1000 + 1.2;
-        roam(rt.current, dt, itemsRef.current, doors, ROAM_CAT);
+        // —— v8.3 小剧场（D）：空闲时白天追蝴蝶 / 夜里扑萤火虫 / 雨天躲屋檐 ——
+        const th = theater.current;
+        if (th.kind) {
+          th.t += dt;
+          if (th.kind === 'butterfly') {
+            // 蝴蝶绕锚点翩翩飞，猫踮着步子追
+            const bx = th.ax + Math.sin(t * 1.7) * 0.5;
+            const bz = th.az + Math.cos(t * 1.3) * 0.5;
+            if (bflySp.current) {
+              bflySp.current.visible = true;
+              bflySp.current.position.set(bx, 0.4 + Math.sin(t * 3.1) * 0.08, bz);
+              bflySp.current.material.rotation = Math.sin(t * 9) * 0.5;
+              const m = bflySp.current.material as THREE.SpriteMaterial;
+              m.opacity = Math.min(1, th.t / 0.6) * (th.t > 7.4 ? Math.max(0, (8 - th.t) / 0.6) : 1);
+              bflySp.current.scale.setScalar(0.2);
+            }
+            const dx = bx - rt.current.x;
+            const dz = bz - rt.current.z;
+            const d = Math.hypot(dx, dz);
+            if (d > 0.3) {
+              const sp = 1.25 * dt;
+              rt.current.x += (dx / d) * Math.min(sp, d);
+              rt.current.z += (dz / d) * Math.min(sp, d);
+              rt.current.moving = true;
+              rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 7));
+              collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+            } else {
+              rt.current.moving = false;
+              rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 5));
+            }
+            if (th.t > 8) {
+              th.kind = null;
+              if (bflySp.current) bflySp.current.visible = false;
+              rt.current.target = null;
+            }
+          } else if (th.kind === 'firefly') {
+            // 夜里萤火虫忽明忽暗地飘，猫蹲守着扑跳
+            flySp.current.forEach((sp, i) => {
+              if (!sp) return;
+              sp.visible = true;
+              const ph = t * 0.8 + flyBeat.current[i];
+              sp.position.set(
+                th.ax + Math.sin(ph) * (0.5 + i * 0.22),
+                0.45 + Math.sin(ph * 1.7) * 0.1,
+                th.az + Math.cos(ph * 0.9) * (0.45 + i * 0.18),
+              );
+              (sp.material as THREE.SpriteMaterial).opacity = Math.min(1, th.t / 0.8) * (0.72 + Math.sin(ph * 5) * 0.28);
+              sp.scale.setScalar(0.12);
+            });
+            const dx = th.ax - rt.current.x;
+            const dz = th.az - rt.current.z;
+            const d = Math.hypot(dx, dz);
+            if (d > 0.55) {
+              const sp = 0.9 * dt;
+              rt.current.x += (dx / d) * Math.min(sp, d);
+              rt.current.z += (dz / d) * Math.min(sp, d);
+              rt.current.moving = true;
+              rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 6));
+              collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+            } else {
+              rt.current.moving = false;
+              rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 5));
+              th.pounced -= dt;
+              if (th.pounced <= 0) {
+                th.pounced = 2.6;
+                hopY.current = 0.16;
+                sfx.pop();
+              }
+            }
+            if (th.t > 10) {
+              th.kind = null;
+              flySp.current.forEach((sp) => {
+                if (sp) sp.visible = false;
+              });
+              rt.current.target = null;
+            }
+          } else {
+            // —— 雨天：走到沙发/柜子旁的「屋檐下」趴一会儿 ——
+            const dx = th.ax - rt.current.x;
+            const dz = th.az - rt.current.z;
+            const d = Math.hypot(dx, dz);
+            rainRest.current = THREE.MathUtils.damp(rainRest.current, d < 0.3 ? 1 : 0, 3, dt);
+            if (d > 0.28) {
+              rt.current.target = { x: th.ax, z: th.az };
+              rt.current.route = undefined;
+              rt.current.nextWander = Number.POSITIVE_INFINITY;
+              roamStep(rt.current, dt, itemsRef.current, doors, ROAM_CAT.speed);
+            } else {
+              rt.current.target = null;
+              rt.current.moving = false;
+            }
+            if (th.t > 10) {
+              th.kind = null;
+              rt.current.target = null;
+              rt.current.nextWander = performance.now() / 1000 + 2;
+            }
+          }
+        } else {
+          rainRest.current = THREE.MathUtils.damp(rainRest.current, 0, 3, dt);
+          // 触发新剧场（30~60s 一次；照顾/捡球/睡觉时不打扰）
+          nextTheaterAt.current -= dt;
+          if (nextTheaterAt.current <= 0) {
+            nextTheaterAt.current = 30 + Math.random() * 30;
+            if (weatherFx === 'rain') {
+              const sh = itemsRef.current.find(
+                (f) => (f.kind === 'sofa' || f.kind === 'sofaLong' || f.kind === 'bookcase' || f.kind === 'sideTable') && (f.y ?? 0) < 0.45,
+              );
+              if (sh) {
+                th.kind = 'rain';
+                th.t = 0;
+                const fpw = CATALOG[sh.kind]?.fp?.[0] ?? 0.6;
+                th.ax = sh.x + fpw / 2 + 0.3;
+                th.az = sh.z;
+              }
+            } else if (night) {
+              th.kind = 'firefly';
+              th.t = 0;
+              th.pounced = 1.2;
+              th.ax = rt.current.x + (Math.random() - 0.5) * 1.6;
+              th.az = rt.current.z + (Math.random() - 0.5) * 1.6;
+            } else {
+              th.kind = 'butterfly';
+              th.t = 0;
+              th.ax = rt.current.x + (Math.random() - 0.5) * 1.4;
+              th.az = rt.current.z + (Math.random() - 0.5) * 1.4;
+            }
+          }
+          roam(rt.current, dt, itemsRef.current, doors, ROAM_CAT);
+        }
       }
       // 夜晚且已在睡：安睡不动（等天亮/照顾指令唤醒）
     }
@@ -2049,6 +2457,9 @@ function PetBuddy({
 
     const mv = rt.current.moving;
     const lift = hugLift.current;
+    // v8.3 打滚：侧滚一周（沿 z 翻转 2π）+ 离地小弧；转圈：原地自转
+    const rolling = care.current?.kind === 'roll' ? trickSpin.current : 0;
+    const spinning = care.current?.kind === 'spin' ? trickSpin.current : 0;
     if (se > 0.02 && !care.current) {
       // 睡觉：贴在窝中心 + 呼吸起伏（覆盖常规位置）
       g.position.set(
@@ -2059,11 +2470,17 @@ function PetBuddy({
     } else {
       g.position.set(
         rt.current.x,
-        (mv ? Math.abs(Math.sin(t * 11)) * 0.03 : Math.sin(t * 2.1) * 0.006) + lift * (0.33 + Math.sin(t * 3.1) * 0.012),
+        (mv ? Math.abs(Math.sin(t * 11)) * 0.03 : Math.sin(t * 2.1) * 0.006) +
+          lift * (0.33 + Math.sin(t * 3.1) * 0.012) +
+          hopY.current +
+          (rolling ? Math.abs(Math.sin(Math.min(rolling, Math.PI * 2))) * 0.055 : 0),
         rt.current.z,
       );
     }
-    g.rotation.y = rt.current.heading;
+    g.rotation.y = rt.current.heading + spinning;
+    g.rotation.z = rolling;
+    // v8.3 扑跳高度衰减 + 躲雨趴伏缓动
+    hopY.current = Math.max(0, hopY.current - dt * 0.55);
 
     // —— 洗澡泡泡（bath do 阶段显示：泡泡呼吸起伏 + 肥皂光泽） ——
     if (foamGrp.current) {
@@ -2119,10 +2536,11 @@ function PetBuddy({
     const sq = Math.sin(pp * Math.PI);
     // v7.2 被抱着：软软地窝成团（用抱起抬升做平滑过渡）
     const cs = carrying.current ? lift : 0;
+    const rr = rainRest.current;
     g.scale.set(
-      (1 + sq * 0.1) * (1 + se * 0.14) * (1 + cs * 0.07),
-      (1 - sq * 0.14) * (1 - se * 0.34) * (1 - cs * 0.11),
-      (1 + sq * 0.1) * (1 + se * 0.14) * (1 + cs * 0.07),
+      (1 + sq * 0.1) * (1 + se * 0.14) * (1 + cs * 0.07) * (1 + rr * 0.06),
+      (1 - sq * 0.14) * (1 - se * 0.34) * (1 - cs * 0.11) * (1 - rr * 0.18),
+      (1 + sq * 0.1) * (1 + se * 0.14) * (1 + cs * 0.07) * (1 + rr * 0.06),
     );
     const earBase = 0.26 * (1 - se);
     if (earL.current) earL.current.rotation.z = earBase + (pp > 0 ? Math.sin(t * 19) * 0.22 * pp : Math.sin(t * 1.8) * 0.03 * (1 - se));
@@ -2252,25 +2670,45 @@ function PetBuddy({
     }
   });
 
+  const coatC = PET_COATS[petCoat] ?? PET_COATS.cream;
+  const isCow = petCoat === 'cow';
+
   return (
     <>
     <group ref={root} position={[-1.4, 0, 1.5]}>
-      {/* 身体（奶油面包团） */}
+      {/* 身体（面包团；v8.3 毛色可选） */}
       <mesh castShadow position={[0, 0.135, -0.012]} scale={[1, 0.8, 1.22]}>
         <sphereGeometry args={[0.135, 18, 14]} />
-        <meshStandardMaterial color="#fbf3e6" roughness={0.86} />
+        <meshStandardMaterial color={coatC.body} roughness={0.86} />
       </mesh>
+      {/* v8.3 奶牛斑（coat=cow 时显示的三块深灰斑） */}
+      {isCow && (
+        <>
+          <mesh position={[-0.07, 0.17, -0.03]} scale={[1, 0.72, 1.3]}>
+            <sphereGeometry args={[0.052, 10, 8]} />
+            <meshStandardMaterial color="#3f3f44" roughness={0.9} />
+          </mesh>
+          <mesh position={[0.075, 0.1, 0.05]} scale={[0.9, 0.6, 1.2]}>
+            <sphereGeometry args={[0.046, 10, 8]} />
+            <meshStandardMaterial color="#3f3f44" roughness={0.9} />
+          </mesh>
+          <mesh position={[0.03, 0.24, 0.02]} scale={[1.2, 0.5, 0.9]}>
+            <sphereGeometry args={[0.04, 10, 8]} />
+            <meshStandardMaterial color="#3f3f44" roughness={0.9} />
+          </mesh>
+        </>
+      )}
       {/* 头（低头啄食节拍用 group 包裹） */}
       <group ref={headGrp} position={[0, 0.272, 0.068]}>
         <mesh castShadow position={[0, 0, 0]}>
           <sphereGeometry args={[0.118, 20, 16]} />
-          <meshStandardMaterial color="#fdf8ee" roughness={0.86} />
+          <meshStandardMaterial color={coatC.head} roughness={0.86} />
         </mesh>
       {/* 耳朵（外耳 + 粉内耳） */}
       <group ref={earL} position={[-0.063, 0.103, -0.018]} rotation={[-0.1, 0, 0.26]}>
         <mesh castShadow>
           <coneGeometry args={[0.038, 0.064, 10]} />
-          <meshStandardMaterial color="#fdf8ee" roughness={0.86} />
+          <meshStandardMaterial color={coatC.head} roughness={0.86} />
         </mesh>
         <mesh position={[0, -0.006, 0.014]} scale={[0.58, 0.62, 0.5]}>
           <coneGeometry args={[0.038, 0.064, 10]} />
@@ -2280,7 +2718,7 @@ function PetBuddy({
       <group ref={earR} position={[0.063, 0.103, -0.018]} rotation={[-0.1, 0, -0.26]}>
         <mesh castShadow>
           <coneGeometry args={[0.038, 0.064, 10]} />
-          <meshStandardMaterial color="#fdf8ee" roughness={0.86} />
+          <meshStandardMaterial color={coatC.head} roughness={0.86} />
         </mesh>
         <mesh position={[0, -0.006, 0.014]} scale={[0.58, 0.62, 0.5]}>
           <coneGeometry args={[0.038, 0.064, 10]} />
@@ -2324,38 +2762,68 @@ function PetBuddy({
         </mesh>
       ))}
       </group>
-      {/* 四只小爪 */}
+      {/* 四只小爪（右前爪 ref：握手把戏抬爪用） */}
       {[
         [-0.062, 0.115],
         [0.062, 0.115],
         [-0.068, -0.075],
         [0.068, -0.075],
       ].map(([px, pz], i) => (
-        <mesh key={i} castShadow position={[px, 0.033, pz]}>
+        <mesh key={i} ref={i === 1 ? pawFR : undefined} castShadow position={[px, 0.033, pz]} rotation={[0, 0, 0]}>
           <sphereGeometry args={[0.034, 10, 8]} />
-          <meshStandardMaterial color="#fdf8ee" roughness={0.86} />
+          <meshStandardMaterial color={coatC.head} roughness={0.86} />
         </mesh>
       ))}
       {/* 尾巴（摆动） */}
       <group ref={tail} position={[0, 0.13, -0.16]} rotation={[-0.55, 0, 0]}>
         <mesh castShadow position={[0, 0.062, 0]} rotation={[0.42, 0, 0]}>
           <capsuleGeometry args={[0.02, 0.115, 6, 10]} />
-          <meshStandardMaterial color="#fbf3e6" roughness={0.86} />
+          <meshStandardMaterial color={coatC.body} roughness={0.86} />
         </mesh>
         <mesh position={[0, 0.128, 0.045]}>
           <sphereGeometry args={[0.023, 10, 8]} />
-          <meshStandardMaterial color="#f7ede0" roughness={0.86} />
+          <meshStandardMaterial color={coatC.tail} roughness={0.86} />
         </mesh>
       </group>
-      {/* 项圈 + 金铃铛 */}
+      {/* 项圈（颜色自选）+ 金铃铛 */}
       <mesh position={[0, 0.206, 0.088]} rotation={[1.22, 0, 0]}>
         <torusGeometry args={[0.076, 0.0105, 8, 18]} />
-        <meshStandardMaterial color="#e46a6a" roughness={0.55} />
+        <meshStandardMaterial color={petWear?.collar ?? '#e46a6a'} roughness={0.55} />
       </mesh>
       <mesh position={[0, 0.182, 0.155]}>
         <sphereGeometry args={[0.016, 10, 8]} />
         <meshStandardMaterial color="#f4c34e" roughness={0.3} metalness={0.55} />
       </mesh>
+      {/* v8.3 小围巾（戴上时显示：脖圈 + 垂下的小巾角） */}
+      {petWear?.scarf && (
+        <>
+          <mesh position={[0, 0.178, 0.07]} rotation={[1.3, 0, 0]}>
+            <torusGeometry args={[0.072, 0.014, 8, 18]} />
+            <meshStandardMaterial color={petWear.scarf} roughness={0.85} />
+          </mesh>
+          <mesh position={[0, 0.132, 0.128]} rotation={[0.28, 0, 0.12]}>
+            <capsuleGeometry args={[0.013, 0.05, 4, 8]} />
+            <meshStandardMaterial color={petWear.scarf} roughness={0.85} />
+          </mesh>
+        </>
+      )}
+      {/* v8.3 蝴蝶结（戴上时别在左耳根） */}
+      {petWear?.bow && (
+        <group position={[-0.072, 0.196, 0.028]} rotation={[0.2, 0, 0.5]}>
+          <mesh rotation={[0, 0, 0.6]} scale={[1, 0.62, 0.6]}>
+            <sphereGeometry args={[0.022, 10, 8]} />
+            <meshStandardMaterial color={petWear.bow} roughness={0.6} />
+          </mesh>
+          <mesh position={[0.026, 0.012, 0]} rotation={[0, 0, -0.6]} scale={[1, 0.62, 0.6]}>
+            <sphereGeometry args={[0.022, 10, 8]} />
+            <meshStandardMaterial color={petWear.bow} roughness={0.6} />
+          </mesh>
+          <mesh scale={[0.55, 0.55, 0.55]}>
+            <sphereGeometry args={[0.014, 8, 8]} />
+            <meshStandardMaterial color={petWear.bow} roughness={0.55} />
+          </mesh>
+        </group>
+      )}
       {/* 摸头爱心（上浮粒子） */}
       {Array.from({ length: PET_HEART_N }, (_, i) => (
         <sprite key={i} material={heartMats[i]} visible={false} userData={{ petHeart: i }} />
@@ -2430,7 +2898,293 @@ function PetBuddy({
       material={smileMat}
       visible={false}
     />
+    {/* v8.3 玩具球（扔出 → 猫追着叼回来；粉白双色小球） */}
+    <group ref={ballGrp} visible={false}>
+      <mesh castShadow>
+        <sphereGeometry args={[0.055, 14, 12]} />
+        <meshStandardMaterial color="#fdfdfb" roughness={0.4} />
+      </mesh>
+      <mesh rotation={[0.4, 0, 0.9]}>
+        <torusGeometry args={[0.054, 0.012, 8, 20]} />
+        <meshStandardMaterial color="#f2a9b8" roughness={0.45} />
+      </mesh>
+    </group>
+    {/* v8.3 小剧场精灵：蝴蝶（白天追）/ 萤火虫 ×3（夜里扑） */}
+    <sprite ref={bflySp} material={bflyMat} visible={false} />
+    {[0, 1, 2].map((i) => (
+      <sprite
+        key={`fly-${i}`}
+        material={flyMats[i]}
+        visible={false}
+        ref={(el) => {
+          flySp.current[i] = el;
+        }}
+      />
+    ))}
     </>
+  );
+}
+
+// ---------------- v8.3 第二只宠物（C 选项：小狗 / 小兔子；追着第一只猫玩 + 摸摸反应 + 夜里蜷窝边睡） ----------------
+
+function PetBuddy2({
+  mode,
+  items,
+  night,
+  buddy,
+  catRTRef,
+  doorRef,
+}: {
+  mode: HomeMode;
+  items: FurnitureItem[];
+  night?: boolean;
+  buddy: Pet2State;
+  /** 第一只猫的运行时 ref（追着玩用；每帧 PetBuddy 写入） */
+  catRTRef?: RefObject<CharRT | null>;
+  doorRef?: RefObject<{ bed: DoorLive; kt: DoorLive; bath: DoorLive; bal?: DoorLive }>;
+}) {
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const isDog = buddy.kind === 'dog';
+  const rt = useRef<CharRT>({ x: 1.2, z: 2.2, heading: 1.2, moving: false, target: null, nextWander: 0 });
+  const root = useRef<THREE.Group>(null);
+  const tail = useRef<THREE.Group | THREE.Mesh>(null);
+  /** 追猫玩剩余时间 / 下次发起时刻 */
+  const chaseT = useRef(0);
+  const nextChaseAt = useRef(9 + Math.random() * 8);
+  /** 摸摸余韵 / 开心跳 / 爱心 */
+  const pat = useRef(0);
+  const hopY = useRef(0);
+  const heartSp = useRef<THREE.Sprite>(null);
+  const heartT = useRef(-10);
+  const heartTex = useMemo(() => makeHeartTexture(), []);
+  const heartMat = useMemo(
+    () => new THREE.SpriteMaterial({ map: heartTex, transparent: true, opacity: 0, depthWrite: false }),
+    [heartTex],
+  );
+  /** 夜晚蜷在猫窝边睡觉 */
+  const sleeping = useRef(false);
+  const zzzEase = useRef(0);
+
+  useFrame((state, rawDt) => {
+    const dt = Math.min(rawDt, 0.05);
+    const t = state.clock.elapsedTime;
+    const g = root.current;
+    if (!g) return;
+    if (modeRef.current !== 'live') {
+      g.visible = false;
+      return;
+    }
+    g.visible = true;
+    const dr = doorRef?.current;
+    const doors = {
+      bed: dr?.bed ?? CLOSED_DOOR,
+      kt: dr?.kt ?? CLOSED_DOOR,
+      bath: dr?.bath ?? CLOSED_DOOR,
+      bal: dr?.bal ?? CLOSED_DOOR,
+    };
+    if (night) {
+      // 夜晚：蜷在猫窝边睡（无窝就地睡）
+      if (!sleeping.current) {
+        sleeping.current = true;
+        rt.current.moving = false;
+        rt.current.target = null;
+        const bed = itemsRef.current.find((f) => f.kind === 'petBed' && (f.y ?? 0) < 0.45);
+        if (bed) {
+          rt.current.x = bed.x + 0.42;
+          rt.current.z = bed.z + 0.2;
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+        }
+      }
+    } else {
+      if (sleeping.current) {
+        sleeping.current = false;
+        rt.current.nextWander = performance.now() / 1000 + 1.5;
+      }
+      // 追猫玩（两只一起疯）：每 9~17s 发起一次 3.5s 的追追
+      const cat = catRTRef?.current ?? null;
+      nextChaseAt.current -= dt;
+      if (chaseT.current > 0 && cat) {
+        chaseT.current -= dt;
+        const dx = cat.x - rt.current.x;
+        const dz = cat.z - rt.current.z;
+        const d = Math.hypot(dx, dz);
+        if (d > 0.42) {
+          const sp = 1.5 * dt;
+          rt.current.x += (dx / d) * Math.min(sp, d);
+          rt.current.z += (dz / d) * Math.min(sp, d);
+          rt.current.moving = true;
+          rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 9));
+          collideAndClamp(rt.current, itemsRef.current, doors.bed, doors.kt, doors.bath, doors.bal);
+        } else {
+          rt.current.moving = false;
+          rt.current.heading = lerpAngle(rt.current.heading, Math.atan2(dx, dz), Math.min(1, dt * 6));
+        }
+      } else {
+        chaseT.current = 0;
+        if (nextChaseAt.current <= 0 && cat) {
+          nextChaseAt.current = 9 + Math.random() * 8;
+          chaseT.current = 3.5;
+        }
+        roam(rt.current, dt, itemsRef.current, doors, ROAM_CAT);
+      }
+    }
+    zzzEase.current = THREE.MathUtils.damp(zzzEase.current, sleeping.current ? 1 : 0, 3, dt);
+    const se2 = zzzEase.current;
+    pat.current = Math.max(0, pat.current - dt / 0.9);
+    const pp = pat.current;
+    hopY.current = Math.max(0, hopY.current - dt * 0.7);
+    const mv = rt.current.moving;
+    // 兔兔蹦跳感更强（小狗小跑）
+    const hopAmp = isDog ? 0.022 : 0.05;
+    g.position.set(
+      rt.current.x,
+      (mv ? Math.abs(Math.sin(t * (isDog ? 10 : 8))) * hopAmp : Math.sin(t * 2) * 0.005) + hopY.current + se2 * 0.02,
+      rt.current.z,
+    );
+    g.rotation.y = rt.current.heading;
+    const sq = Math.sin(pp * Math.PI);
+    g.scale.set((1 + sq * 0.1) * (1 + se2 * 0.12), (1 - sq * 0.14) * (1 - se2 * 0.3), (1 + sq * 0.1) * (1 + se2 * 0.12));
+    if (tail.current) tail.current.rotation.z = Math.sin(t * (mv ? 13 : 5)) * 0.4 * (1 - se2);
+    // 摸摸爱心
+    if (heartSp.current) {
+      const age = t - heartT.current;
+      const m = heartSp.current.material as THREE.SpriteMaterial;
+      if (age > 0 && age < 1.1) {
+        heartSp.current.visible = true;
+        heartSp.current.position.set(0.02, 0.52 + age * 0.3, 0.12);
+        m.opacity = Math.min(age / 0.12, 1) * (1 - (age - 0.12) / 0.98);
+        heartSp.current.scale.setScalar(0.1);
+      } else {
+        heartSp.current.visible = false;
+      }
+    }
+  });
+
+  const onDown = useCallback(
+    (e: ThreeEvent<PointerEvent>) => {
+      e.stopPropagation();
+      if (modeRef.current !== 'live') return;
+      pat.current = 1;
+      hopY.current = 0.14;
+      heartT.current = performance.now() / 1000;
+      if (isDog) sfx.bark();
+      else sfx.boing();
+    },
+    [isDog],
+  );
+
+  const body = isDog ? '#e8d3ae' : '#f8f6f2';
+  const body2 = isDog ? '#d9bd90' : '#eeece7';
+  const earC = isDog ? '#b98d5e' : '#f3c9d4';
+  return (
+    <group ref={root} position={[1.2, 0, 2.2]}>
+      {/* 身体 */}
+      <mesh castShadow position={[0, 0.13, -0.02]} scale={[1, 0.82, 1.24]}>
+        <sphereGeometry args={[0.125, 18, 14]} />
+        <meshStandardMaterial color={body} roughness={0.88} />
+      </mesh>
+      {/* 头 */}
+      <group position={[0, 0.26, 0.075]}>
+        <mesh castShadow>
+          <sphereGeometry args={[0.105, 18, 14]} />
+          <meshStandardMaterial color={body} roughness={0.88} />
+        </mesh>
+        {isDog ? (
+          <>
+            {/* 吻部 + 黑鼻头 */}
+            <mesh position={[0, -0.02, 0.09]} scale={[1, 0.8, 0.9]}>
+              <sphereGeometry args={[0.05, 12, 10]} />
+              <meshStandardMaterial color={body2} roughness={0.88} />
+            </mesh>
+            <mesh position={[0, -0.008, 0.135]}>
+              <sphereGeometry args={[0.017, 8, 8]} />
+              <meshStandardMaterial color="#3a3230" roughness={0.4} />
+            </mesh>
+          </>
+        ) : (
+          <mesh position={[0, -0.012, 0.098]}>
+            <sphereGeometry args={[0.011, 8, 8]} />
+            <meshStandardMaterial color="#e89aa4" roughness={0.5} />
+          </mesh>
+        )}
+        {/* 耳朵：小狗 = 两侧垂耳；兔子 = 长立耳（内耳粉） */}
+        {isDog ? (
+          <>
+            <mesh castShadow position={[-0.082, 0.03, -0.01]} rotation={[0, 0, 0.5]} scale={[0.6, 1.35, 0.55]}>
+              <sphereGeometry args={[0.045, 10, 8]} />
+              <meshStandardMaterial color={earC} roughness={0.9} />
+            </mesh>
+            <mesh castShadow position={[0.082, 0.03, -0.01]} rotation={[0, 0, -0.5]} scale={[0.6, 1.35, 0.55]}>
+              <sphereGeometry args={[0.045, 10, 8]} />
+              <meshStandardMaterial color={earC} roughness={0.9} />
+            </mesh>
+          </>
+        ) : (
+          <>
+            {[-1, 1].map((sx) => (
+              <group key={sx} position={[0.038 * sx, 0.112, -0.005]} rotation={[-0.08, 0, -0.13 * sx]}>
+                <mesh castShadow>
+                  <capsuleGeometry args={[0.021, 0.075, 4, 8]} />
+                  <meshStandardMaterial color={body} roughness={0.88} />
+                </mesh>
+                <mesh position={[0, 0, 0.016]} scale={[0.5, 0.9, 0.4]}>
+                  <capsuleGeometry args={[0.021, 0.075, 4, 8]} />
+                  <meshStandardMaterial color={earC} roughness={0.85} />
+                </mesh>
+              </group>
+            ))}
+          </>
+        )}
+        {/* 豆豆眼 + 腮红 */}
+        {[-1, 1].map((sx) => (
+          <mesh key={`e${sx}`} position={[0.04 * sx, 0.012, 0.09]}>
+            <sphereGeometry args={[0.013, 8, 8]} />
+            <meshStandardMaterial color="#3a3230" roughness={0.25} />
+          </mesh>
+        ))}
+        {[-1, 1].map((sx) => (
+          <mesh key={`c${sx}`} position={[0.068 * sx, -0.02, 0.07]} scale={[1, 0.62, 0.4]}>
+            <sphereGeometry args={[0.013, 8, 8]} />
+            <meshBasicMaterial color="#f6bfc6" transparent opacity={0.7} />
+          </mesh>
+        ))}
+      </group>
+      {/* 四只小爪 */}
+      {[
+        [-0.055, 0.1],
+        [0.055, 0.1],
+        [-0.06, -0.07],
+        [0.06, -0.07],
+      ].map(([px, pz], i) => (
+        <mesh key={i} castShadow position={[px, 0.03, pz]}>
+          <sphereGeometry args={[0.03, 10, 8]} />
+          <meshStandardMaterial color={body} roughness={0.88} />
+        </mesh>
+      ))}
+      {/* 尾巴：小狗 = 翘尾快摇；兔子 = 小圆尾 */}
+      {isDog ? (
+        <group ref={tail} position={[0, 0.16, -0.15]} rotation={[0.7, 0, 0]}>
+          <mesh castShadow position={[0, 0.05, 0]} rotation={[0.5, 0, 0]}>
+            <capsuleGeometry args={[0.017, 0.08, 4, 8]} />
+            <meshStandardMaterial color={body2} roughness={0.88} />
+          </mesh>
+        </group>
+      ) : (
+        <mesh ref={tail} castShadow position={[0, 0.13, -0.15]}>
+          <sphereGeometry args={[0.028, 10, 8]} />
+          <meshStandardMaterial color="#ffffff" roughness={0.9} />
+        </mesh>
+      )}
+      {/* 摸摸爱心 + 点击热区 */}
+      <sprite ref={heartSp} material={heartMat} visible={false} />
+      <mesh position={[0, 0.2, 0.02]} onPointerDown={onDown}>
+        <sphereGeometry args={[0.4, 12, 10]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+    </group>
   );
 }
 
@@ -2619,12 +3373,15 @@ export default function HomeScene(props: HomeSceneProps) {
     petCmdRef, onPetTap, onPetEvent, petState, petCarryCmdRef,
     onFloorTap, onFurnTap, onDragEnd, onDragMove, onDragSelect, onWallTap,
     companionCmdRef, onCompanionEvent, onPartnerTap, bubbleRef, partnerPlayingId,
+    petCoat, petWear, pet2, petBallCmdRef,
   } = props;
 
   // —— v8.0 陪伴系统：状态机实例 / 小人姿势槽 / A* 阻挡网格（网格重建见下方 wallBoxes 之后） ——
   const compRT = useRef<CompanionRT>(createCompanionRT());
   const partnerPoseRef = useRef<PoseSlot>({ pose: 'stand', y: 0 });
   const gridRef = useRef<{ grid: BlockGrid | null }>({ grid: null });
+  /** v8.3 第一只猫的运行时（PetBuddy 每帧写入 → 第二只宠物追着玩用） */
+  const catRTRef = useRef<CharRT | null>(null);
 
   const modeRef = useRef<HomeMode>(mode);
   const itemsRef = useRef<FurnitureItem[]>(items);
@@ -2856,7 +3613,14 @@ export default function HomeScene(props: HomeSceneProps) {
         night={night}
         petState={petState}
         doorRef={doorRef}
+        weatherFx={weatherFx}
+        petCoat={petCoat}
+        petWear={petWear}
+        petBallCmdRef={petBallCmdRef}
+        petRTRef={catRTRef}
       />
+      {/* v8.3 第二只宠物（小狗/小兔子）：追着猫玩，摸摸会开心 */}
+      {pet2 && mode === 'live' && <PetBuddy2 mode={mode} items={items} night={night} buddy={pet2} catRTRef={catRTRef} doorRef={doorRef} />}
       <BedNightLight poseRef={poseRef} meRT={meRT} />
       {/* v8.0 3D 头顶对话气泡（用户/AI 消息挂在对应小人头顶） */}
       <HeadBubbles meRT={meRT} taRT={taRT} bubbleRef={bubbleRef} />

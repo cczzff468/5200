@@ -391,6 +391,103 @@ function playMeow(): void {
   vib.stop(t + dur + 0.02);
 }
 
+/** v8.3 扔球嗖（带通噪声短上扫 0.22s）——球出手 */
+function playWhoosh(): void {
+  if (!enabled) return;
+  const a = getAudioContext();
+  if (!a) return;
+  const { ctx: c, master: out } = a;
+  const t = c.currentTime;
+  const dur = 0.22;
+  const len = Math.max(1, Math.floor(c.sampleRate * dur));
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  const filter = c.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.Q.value = 1.4;
+  filter.frequency.setValueAtTime(600, t);
+  filter.frequency.exponentialRampToValueAtTime(2600, t + dur);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.55, t + 0.05);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  src.connect(filter).connect(g).connect(out);
+  src.start(t);
+  src.stop(t + dur + 0.02);
+}
+
+/** v8.3 接住啵（短促 pop 380→180Hz 0.07s）——球被叼住/放下 */
+function playPop(): void {
+  if (!enabled) return;
+  const a = getAudioContext();
+  if (!a) return;
+  const { ctx: c, master: out } = a;
+  const t = c.currentTime;
+  const osc = c.createOscillator();
+  const g = c.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(380, t);
+  osc.frequency.exponentialRampToValueAtTime(180, t + 0.07);
+  g.gain.setValueAtTime(0.9, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+  osc.connect(g).connect(out);
+  osc.start(t);
+  osc.stop(t + 0.09);
+}
+
+/** v8.3 小狗汪汪（两声短促 square 300→180Hz）——摸小狗 */
+function playBark(): void {
+  if (!enabled) return;
+  const a = getAudioContext();
+  if (!a) return;
+  const { ctx: c, master: out } = a;
+  const t = c.currentTime;
+  for (const [dt0, f0, d] of [
+    [0, 320, 0.09],
+    [0.14, 280, 0.11],
+  ] as [number, number, number][]) {
+    const osc = c.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(f0, t + dt0);
+    osc.frequency.exponentialRampToValueAtTime(170, t + dt0 + d);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t + dt0);
+    g.gain.exponentialRampToValueAtTime(0.3, t + dt0 + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dt0 + d);
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 1200;
+    osc.connect(lp).connect(g).connect(out);
+    osc.start(t + dt0);
+    osc.stop(t + dt0 + d + 0.02);
+  }
+}
+
+/** v8.3 兔兔噔（sine 220→520→330 弹跳滑音 0.18s）——摸兔子 */
+function playBoing(): void {
+  if (!enabled) return;
+  const a = getAudioContext();
+  if (!a) return;
+  const { ctx: c, master: out } = a;
+  const t = c.currentTime;
+  const dur = 0.18;
+  const osc = c.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(220, t);
+  osc.frequency.exponentialRampToValueAtTime(520, t + 0.07);
+  osc.frequency.exponentialRampToValueAtTime(330, t + dur);
+  const g = c.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.45, t + 0.03);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  osc.connect(g).connect(out);
+  osc.start(t);
+  osc.stop(t + dur + 0.02);
+}
+
 /** 音效单例（CoupleHome 全屋接线用；每个函数内部自带开关检查） */
 export const sfx = {
   tap: playTap,
@@ -406,6 +503,11 @@ export const sfx = {
   kiss: playKiss,
   whistle: playWhistle,
   meow: playMeow,
+  // v8.3 玩具球 / 第二只宠物
+  whoosh: playWhoosh,
+  pop: playPop,
+  bark: playBark,
+  boing: playBoing,
   setEnabled,
   isEnabled,
 } as const;

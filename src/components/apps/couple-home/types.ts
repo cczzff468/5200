@@ -410,10 +410,45 @@ export interface HomeState {
   notesSeen?: { me?: number; partner?: number };
   /** 宠物「团子」状态（v6.9：名字 + 体力/清洁/心情，跨会话持久化） */
   pet?: PetState;
+  /** v8.3 第二只宠物（小狗/小兔子，C 选项；null/undefined = 还没领） */
+  pet2?: Pet2State;
 }
 
-/** 宠物状态（体力/清洁/心情 0~100，ts = 最后结算时间戳，用于离线衰减） */
-export interface PetState {
+/** 宠物毛色（v8.3 G 选项：奶油猫之外可选橘猫/灰猫/奶牛猫） */
+export type PetCoat = 'cream' | 'orange' | 'gray' | 'cow';
+
+/** 宠物装扮（v8.3 B 选项：项圈颜色 / 小围巾 / 蝴蝶结；scarf/bow 为 null = 不戴，色值 = 戴+颜色） */
+export interface PetWear {
+  /** 项圈颜色（#rrggbb；缺省 = 默认樱红 #e46a6a） */
+  collar?: string;
+  /** 小围巾（null = 不戴；色值 = 戴上） */
+  scarf?: string | null;
+  /** 蝴蝶结（null = 不戴；色值 = 戴上，戴在耳边） */
+  bow?: string | null;
+}
+
+/** 宠物成长/装扮持久化字段（v8.3：since 收养时间 / care 累计照顾次数 / coat 毛色 / wear 装扮） */
+export interface PetExtra {
+  /** 收养时刻（毫秒；成长系统按陪伴天数升级） */
+  since?: number;
+  /** 累计照顾/互动次数（升级经验） */
+  care?: number;
+  /** 毛色（缺省 = 奶油猫） */
+  coat?: PetCoat;
+  /** 装扮（项圈/围巾/蝴蝶结） */
+  wear?: PetWear;
+}
+
+/** 第二只宠物（小狗/小兔子） */
+export interface Pet2State {
+  kind: 'dog' | 'rabbit';
+  name?: string;
+  /** 收养时刻 */
+  since?: number;
+}
+
+/** 宠物状态（体力/清洁/心情 0~100，ts = 最后结算时间戳，用于离线衰减；v8.3 继承成长/毛色/装扮字段） */
+export interface PetState extends PetExtra {
   /** 名字（最长 8 字，默认「团子」） */
   name?: string;
   /** 体力（喂食回复） */
@@ -426,8 +461,8 @@ export interface PetState {
   ts: number;
 }
 
-/** 宠物照顾动作种类（v7.0：+洗澡 / 抱抱 / 召唤） */
-export type PetCareKind = 'pat' | 'feed' | 'water' | 'bath' | 'hug' | 'summon';
+/** 宠物照顾动作种类（v7.0：+洗澡 / 抱抱 / 召唤；v8.3 成长解锁：+握手 / 转圈 / 打滚；+玩具球） */
+export type PetCareKind = 'pat' | 'feed' | 'water' | 'bath' | 'hug' | 'summon' | 'shake' | 'spin' | 'roll' | 'ball';
 
 /** G1 装修方案快照（家具整组 + 各房间地板/墙色；不含照片 —— 相框照片不随方案备份，控制存档体积） */
 export interface LayoutSnap {
