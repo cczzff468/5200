@@ -268,3 +268,38 @@ Stage Summary:
 - 七区域之家达成：客厅/卧室/厨房/卫生间/阳台 + 书房（书架/书桌/台灯/电脑/装饰窗）+ 花园（花箱/躺椅/栅栏/草地）；门全 DoorKey 化，A* 寻路/漫游/家具钳制/雨雪排除全适配；AI 指令「去书房/去花园」可直达；换台 6 频道；天气总线贯通
 - 待接线：CabinHistorySheet 面板（E1）、电视喵喵台等新频道的 AI 观看偏好（后续模块）
 - 关键文件：types.ts、catalog.ts、scene/pathfind.ts、scene/Room.tsx、scene/HomeScene.tsx、scene/companion-rt.ts、scene/weather-bus.ts（新）、CabinHistorySheet.tsx（新）、TV3D.tsx、CoupleHome.tsx
+
+---
+Task ID: 10-a/10-e/10-f/10-g
+Agent: 主控 Agent（Z.ai Code）
+Task: v10.2 「有心的家」——AI 决策大脑全家桶（用户选定 21 项：A1~A10 全部 + B1~B4 + C1~C4 + E1/E2/E4）
+
+Work Log:
+- [A1 决策循环] CoupleHome 30s 心跳：tickMind（衰减+情绪推进）→ 到点（95~155s 抖动）且 TA 空闲时自动决策——buildDecisionPrompt（内心/甜度/作息/强化/特别日子/情境）→ cabinChatTurn 大模型决策 → parseDecision（thought/say/actions）→ 失败 decideLocally 规则兜底（永远有得做）；闹脾气时自动过滤 come/hug/holdhand
+- [A2 需求] cabin-mind.ts 四需求（饱腹-9/精力-7/心情-6/社交-8 每小时）在线心跳+离线补算衰减；事件结算：吃饭+42饱腹、睡觉醒来+70精力、弹琴/跳舞+14心情、被拒绝-8心情 等
+- [A3 情绪甜度] 情绪机 happy/content/low/missing/sulking（由需求与互动推导）；甜度 Lv.1~6（渐渐熟悉→命中注定）；⋮ 菜单新增「TA 的心」面板（等级/甜度/情绪/四条需求条实时渲染，仅_decision 心跳刷新）
+- [A4 作息] scheduleSlot 按小时作息表（三餐/午休/午后练琴/花园/晚间电视/23点睡觉/周末赖床），决策 prompt 注入 + 本地兜底直接执行
+- [A5 任务链] cook 完成 → mealReady 上桌 → 「饭好啦快来吃」气泡 + meal 主动请求弹窗（4 分钟冷却）→ 不在旁时气泡指路
+- [A6 主动聊天] 请求弹窗扩 5 类（hug/holdhand/meal/chat/miss）：想你了（mood=missing 60% 触发）/喊你吃饭/有话想说；同意 → TA 走到你身边；拒绝 → 情绪受伤 + 各自回应文案
+- [A7 想法气泡] BubbleCmd 加 kind='thought'；makeBubbleTexture 想法样式（淡蓝云朵虚线描边 + 💭 前缀 + 独立缓存键）；决策/天气联动/记日子时冒泡
+- [A8 纪念日] captureSpecialDay 聊天正则抓生日/考试/纪念日（MM-DD 或 7 天后）去重入库 + 每月相识小纪念日；决策循环当天首次撞上主动庆祝 + 入记忆
+- [A9 闹脾气] 冷落>25min 22% 概率闹脾气（40min 自愈）：第一次拥抱被扭头拒绝（要哄）；聊天含对不起/哄哄/原谅/爱你 → 和好剧情 + 记忆；决策期间远离用户
+- [A10 行为强化] 聊天正则识别夸/嫌 → reinforceActivity（play/cook/music/eat/dance 归因 lastAct）；权重 0.4~2.2 反哺决策池与 prompt 经验块
+- [B1 真歌] music 到位 → ncmSearch 点歌名 → songUrl 直链 Audio 循环播放（音量 0.5）；失败回落八音盒合成 + toast 说明；release/free 统一停（stopRealSong）
+- [B2 电视] TV3D 六频道（子代理 10-c）：4 天气台（weather-bus 实时晴雨雪昼夜）/5 风景相册台/6 喵喵台；CoupleHome cycleChannel %6 + 台名 toast
+- [B3 天气联动] weatherFx 变化沿：下雨 → TA 走去关窗（window 指令 + 记忆）；下雪 → 点壁炉 + 暖融融；雨停 → 开窗透气；window 到位宿主按房间映射关/开对应窗（lr[0-2]/br[3-4]/kt[5-6]/ba[7-8]）。雷电闪白未做（其余全落地）
+- [C1 小剧场] PetBuddy 剧场扩 3 种：激光笔（红点 sprite 高速乱窜猫疯追）/钻纸箱（临时纸箱 mesh 出现→钻入窝 6s→淡出）/照镜子炸毛（凑近 standingMirror→后跳逃开）；白天 42% 蝴蝶/20% 激光/18% 纸箱/20% 镜子
+- [C2 训练] PetCareKind + dead（Lv.7 解锁，侧倒 0.75π 装死动画）；PetExtra.train 熟练度按把戏计数（跨会话）；每 5 次 toast 熟练度；n≥3 后 40% 概率练完自己表演另一段把戏
+- [C3 多宠社交] PET_RT_REG 全屋宠物 rt 注册表；猫 2.5%/帧概率追兄弟宠物 → 追上跳一下冒爱心喵一声；宠物间互相可达
+- [C4 宠物日记] addPetDiary（cabin-pet-diary 上限 60 条）；照顾/把戏完成自动记一篇；面板成长行新增「日记」按钮 → 毛玻璃抽屉倒序翻阅 + 空状态
+- [E1 回看面板] 子代理 10-b CabinHistorySheet.tsx（底部抽屉毛玻璃、正序自动滚底、清空 confirm）；输入条新增 History 按钮
+- [E2 对讲机] web-speech.ts 加 onFinal 逐句定稿回调；sendChat 支持 override 文本（麦克风复用同管线）；输入条新增对讲按钮（绿色脉冲，与单次麦克风互斥，连续监听自动发送 + TTS 回复）
+- [E4 新动作] CompanionCmd + dance/stretch/water/read/window；companion-rt：dance/stretch 原地粘性姿势、water 找最近花草（7 类 PLANT_KINDS）站位、read 坐下看书、window 走到目标房间回报开关窗；CharChibi3D 新增三套姿势动画（跳舞节拍摆臂踮脚/伸懒腰呼吸使劲/浇花前倾倾壶）
+- [E2E·Agent Browser 390×844] 直写 IndexedDB 建「阿澄·恋人」→ 进小屋：入口选择✓、3D 场景/宠物/猫窝渲染✓、右下角 💬 聊天条✓；发消息 → 上游失败 SDK 兜底重试 → TA 真的走过来✓；E1 聊天记忆面板（空态+清空）✓；E2/对讲/历史按钮就位✓；⋮「TA 的心」面板（Lv.1 渐渐熟悉/甜度 3/开心/饱腹 77 精力 82 心情 89 想你 5 实时衰减）✓；A6 主动请求弹窗「阿澄想牵牵你的手」→ 同意必行动✓；书房门点击开合 toast✓；客厅西墙视线遮挡淡出✓；B1 小屋点歌面板✓；宠物面板（Lv/成长/日记按钮/把戏 Lv.7 装死锁位）✓；C4 日记抽屉空态✓；cabin-mind localStorage 持久化（needs 衰减数值/mood=happy/affinity=3）✓；决策循环被牵手态正确抑制✓；控制台无错误（仅预期上游失败告警）
+- [lint/tsc] bunx tsc 0 错误（过滤 next.config 既有基线）；CoupleHome 52 vs 基线 50（+2 = 新门状态 ref，与既有 balconyDoorOpenRef 同款仓库惯例）；HomeScene 19 vs 20、其余文件 0 新增
+- [git] v10.1（42c7b2c）+ v10.2（29f8dbf）两个 commit 在本地；沙箱不可达 github，push 待用户网络可用时执行
+
+Stage Summary:
+- 拾光小屋 v10「有心的家」21 项全落地：TA 有了需求/情绪/甜度/作息/记忆强化/纪念日/脾气，每 1.5~2.5 分钟自己决定做什么（大模型优先+规则兜底），行动前冒想法气泡；会主动喊你吃饭/说想你；被冷落会闹脾气要哄；被夸的事更爱做；电视能看 6 个频道（天气台实时联动）、音箱能放真歌；新书房+花园可去；小剧场+训练+日记+多宠社交；对讲机免打语音对话 + 聊天记忆回看
+- 已知边界：B3 雷电闪白未做；决策循环大模型路径依赖 API 配置（无配置走 SDK 兜底也可用）；C3 兄弟追逐由猫侧发起（PetBuddy2 追猫为既有）
+- 关键文件：cabin-mind.ts（新）、companion-brain.ts、companion-memory.ts（未动）、scene/companion-rt.ts、scene/HomeScene.tsx、scene/CharChibi3D.tsx、scene/TV3D.tsx、CabinHistorySheet.tsx（新）、scene/weather-bus.ts（新）、CoupleHome.tsx、lib/ios/web-speech.ts、types.ts
