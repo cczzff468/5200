@@ -431,6 +431,10 @@ export function companionStep(
           rt.holdRoom = null;
           partnerPose.pose = 'holdhand';
           onEvent({ ev: 'holdStart', kind: 'holdhand', memo: cmd.memo });
+        } else if (cmd.kind === 'goto') {
+          // 跨房间到位：回报（多步队列接续 / 自主行为记忆用）
+          onEvent({ ev: 'arrive', kind: 'goto', room: cmd.room, memo: cmd.memo });
+          toIdle(rt, partnerPose);
         } else {
           toIdle(rt, partnerPose);
         }

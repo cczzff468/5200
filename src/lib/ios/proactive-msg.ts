@@ -24,7 +24,7 @@ import { genId } from './db';
 import { kvGet, kvSet, kvDel, kvGetRaw, kvSetRaw } from './idb-kv';
 import { getActiveAccountIdFor, scopedKvKey, type AccountApp } from './accounts';
 import { listContacts, ownerProfileFor, cachedOwnerName } from './contacts-store';
-import { avatarFor, type ContactRecord } from '@/lib/contacts';
+import { avatarFor, type ContactAvatarApp, type ContactRecord } from '@/lib/contacts';
 import { buildPersonaSystemPrompt } from './persona';
 import { buildNpcPromptExtra } from './npc-bond';
 import { loadBlock } from './block-state';
@@ -914,7 +914,7 @@ async function deliverProactiveMsg(app: ProactiveApp, contact: ContactRecord, te
         sessionKey,
         app: notifyApp,
         title: contact.name,
-        avatar: avatarFor(contact, avatarApp),
+        avatar: avatarFor(contact, avatarApp as ContactAvatarApp),
         body: m.content,
         target: { app: notifyApp, contactId: cid },
       });

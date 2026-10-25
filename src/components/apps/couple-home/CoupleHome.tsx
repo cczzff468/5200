@@ -37,7 +37,11 @@ import {
   Gamepad2,
   Heart,
   HeartHandshake,
+  Hand,
   ImagePlus,
+  MessageCircle,
+  Mic,
+  SendHorizontal,
   ArrowDownToLine, // v7.2 抱抱→放下 图标
   Laptop,
   Loader2,
@@ -113,6 +117,22 @@ import {
 } from './catalog';
 import { sfx } from './sfx';
 import { getCachedThumb } from './scene/ShopThumbs';
+import { useSettings } from '@/lib/ios/store';
+import { type ContactRecord } from '@/lib/contacts';
+import { listContacts, ownerRealName } from '@/lib/ios/contacts-store';
+import { startWebSpeechSession, isWebSpeechSupported, type WebSpeechSession } from '@/lib/ios/web-speech';
+import { speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
+import { type MemConvoTurn } from '@/lib/memory';
+import { buildCabinSystem, cabinChatTurn, parseAiReply, type CabinContext } from './companion-brain';
+import {
+  cabinAfterChatTurn,
+  cabinBehaviorMemoryOncePerDay,
+  cabinEventMemory,
+  cabinMemoryBlock,
+  setMemScopeForApp,
+} from './companion-memory';
+import type { CompanionCmd, CompanionEvent } from './scene/companion-rt';
+import type { BubbleCmd } from './scene/HomeScene';
 import type { BoyWear, CharAction, CharPose, CharRT, FurnitureItem, FurnitureKind, GirlWear, HomeMode, HomeState, LayoutSnap, NoteEntry, PetCareKind, PetState, RoomId } from './types';
 import { sanitizeBoyWear, sanitizeWear } from './types';
 import Wardrobe from './Wardrobe';
@@ -1148,6 +1168,611 @@ export default function CoupleHome({ close }: { close: () => void }) {
 
   const saveSoon = useCallback(() => schedulePush(), [schedulePush]);
 
+  // ================================================================
+  // v8.0 陪伴交互系统（拾光小屋 × AI 角色）：
+  // 入口联系人选择 → 对话（头顶气泡 + TTS + 麦克风）→ 物理指令（A* 寻路）→
+  // 拥抱/牵手 → 主动请求 → 自主行动 → 全事件记忆入库（见 companion-memory/brain）
+  // ================================================================
+
+  /** 选定的陪伴角色（联系人；null = 尚未选择 → 弹选择列表） */
+  const [companion, setCompanion] = useState<ContactRecord | null>(null);
+  /** 联系人列表（选择弹窗数据） */
+  const [contacts, setContacts] = useState<ContactRecord[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  /** 机主真实名字（人设/记忆视角统一用） */
+  const ownerNameRef = useRef('');
+  /** 陪伴指令通道（UI → HomeScene 状态机；seq 递增触发） */
+  const companionCmdRef = useRef<CompanionCmd | null>(null);
+  const companionSeq = useRef(0);
+  /** 多步动作队列（AI 输出 goto+sit 等序列：上一个 arrive 后接续下发） */
+  const companionQueueRef = useRef<Omit<CompanionCmd, 'seq'>[]>([]);
+  /** 陪伴小人当前状态（context/交互守卫用） */
+  const companionStateRef = useRef<'idle' | 'walking' | 'near' | 'sitting' | 'lying' | 'watching' | 'hug' | 'hold'>('idle');
+  /** 牵手进入的最近房间（空间记忆去重） */
+  const holdRoomRef = useRef<RoomId | null>(null);
+  /** 3D 头顶气泡队列（HomeScene.HeadBubbles 消费） */
+  const bubbleRef = useRef<BubbleCmd[]>([]);
+  /** 聊天输入框开合 / 文本 / 发送中 */
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatText, setChatText] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  /** 麦克风（Web Speech 实时识别：开 = 说话中，再点 = 停止并自动发送） */
+  const [micOn, setMicOn] = useState(false);
+  const micSessionRef = useRef<WebSpeechSession | null>(null);
+  /** 小人声音开关（⋮ 菜单；持久化 localStorage；关 = 只显示气泡不说话） */
+  const [voiceOn, setVoiceOn] = useState(() => {
+    try {
+      return typeof window !== 'undefined' && window.localStorage.getItem('cabin-voice-on') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const voiceOnRef = useRef(voiceOn);
+  useEffect(() => {
+    voiceOnRef.current = voiceOn;
+  }, [voiceOn]);
+  /** 待发送照片（识图描述注入本轮情境） */
+  const pendingPhotoRef = useRef<string | null>(null);
+  const [photoChip, setPhotoChip] = useState(false);
+  const chatPhotoInputRef = useRef<HTMLInputElement>(null);
+  /** 会话上下文（LLM 消息）与记忆提取轮次 */
+  const convoRef = useRef<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  const convoTurnsRef = useRef<MemConvoTurn[]>([]);
+  /** 点陪伴小人弹出的环形菜单（拥抱/牵手/松开） */
+  const [partnerMenuOpen, setPartnerMenuOpen] = useState(false);
+  /** 牵手中（UI 态：菜单变「松开」） */
+  const [holdingUI, setHoldingUI] = useState(false);
+  /** AI 主动请求弹窗（想要拥抱/牵手） */
+  const [request, setRequest] = useState<{ kind: 'hug' | 'holdhand'; at: number } | null>(null);
+  /** 上次主动请求处置时刻（冷却） */
+  const requestCooldownRef = useRef(0);
+  /** 自主行动调度（上次触发时刻） */
+  const autoNextAtRef = useRef(Date.now() + 50_000);
+
+  /** 下发陪伴指令（seq 递增；状态机在 HomeScene.GameLoop 消费） */
+  const issueCompanionCmd = useCallback((cmd: Omit<CompanionCmd, 'seq'>) => {
+    companionSeq.current += 1;
+    companionCmdRef.current = { ...cmd, seq: companionSeq.current };
+    if (cmd.kind !== 'free') companionStateRef.current = 'walking';
+    else companionStateRef.current = 'idle';
+  }, []);
+
+  /** 陪伴事件（状态机 → 宿主）：状态镜像 + 多步队列接续 + 全事件记忆入库 */
+  const onCompanionEvent = useCallback(
+    (e: CompanionEvent) => {
+      if (e.ev === 'arrive') {
+        if (e.kind === 'sit') companionStateRef.current = 'sitting';
+        else if (e.kind === 'lie') companionStateRef.current = 'lying';
+        else if (e.kind === 'watch') companionStateRef.current = 'watching';
+        else if (e.kind === 'lamp') {
+          // 指令「打开灯」：小人走到灯旁 → 宿主点亮最近的落地灯/台灯
+          const lamp = itemsRef.current.find((f) => CATALOG[f.kind]?.light && (f.y ?? 0) < 0.5 && !f.st?.on);
+          if (lamp) {
+            setItems((prev) => prev.map((f) => (f.id === lamp.id ? { ...f, st: { ...f.st, on: true } } : f)));
+            toast('灯亮起来啦，暖暖的～');
+            saveSoon();
+          }
+          companionStateRef.current = 'near';
+        } else companionStateRef.current = 'near';
+        // —— 记忆入库：用户指令成功执行（「用户让我去沙发上坐下」） ——
+        if (companion && typeof e.memo === 'string' && e.memo.startsWith('cmd:')) {
+          cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}让${companion.name}${e.memo.slice(4)}，TA 照做了。`, 'cabin-cmd', { dedupeSeconds: 120 });
+        }
+        // —— 自主行为记忆（同类一天只记一次，防刷屏） ——
+        if (companion && e.memo === 'auto') {
+          const room = roomAt(taRT.current.x, taRT.current.z);
+          if (e.kind === 'sit') {
+            cabinBehaviorMemoryOncePerDay(companion.id, 'sit', `${companion.name}自己在${ROOM_NAMES[room]}的椅子上坐了一会儿，放空休息。`);
+          } else if (e.kind === 'watch') {
+            cabinBehaviorMemoryOncePerDay(companion.id, 'watch', `${companion.name}打开电视，坐在电视前看了会儿节目。`);
+          } else if (e.kind === 'goto' && e.room) {
+            cabinBehaviorMemoryOncePerDay(companion.id, `goto:${e.room}`, `${companion.name}自己溜达到了${ROOM_NAMES[e.room]}，看了看窗外的风景。`);
+          }
+        }
+        // AI 多步动作队列：上一个到位 → 接续下发下一个
+        const next = companionQueueRef.current.shift();
+        if (next) setTimeout(() => issueCompanionCmd(next), 400);
+      } else if (e.ev === 'hugStart') {
+        companionStateRef.current = 'hug';
+        setHoldingUI(false);
+        // —— 物理动作记忆（关键）：拥抱成功 ——
+        if (companion && e.memo === 'user-hug') {
+          cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}在拾光小屋里主动拥抱了${companion.name}，TA 感觉很温暖。`, 'cabin-hug-user', { dedupeSeconds: 120 });
+        } else if (companion && e.memo === 'ai-hug-yes') {
+          cabinEventMemory(companion.id, `${companion.name}主动求抱抱，${ownerNameRef.current || '主人'}答应了，TA 开心极了。`, 'cabin-hug-ai', { dedupeSeconds: 120 });
+        }
+        sfx.kiss();
+      } else if (e.ev === 'holdStart') {
+        companionStateRef.current = 'hold';
+        setHoldingUI(true);
+        holdRoomRef.current = roomAt(taRT.current.x, taRT.current.z);
+        // —— 物理动作记忆：牵手成功 ——
+        if (companion && e.memo === 'user-hold') {
+          cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}在拾光小屋里牵起了${companion.name}的手，十指相扣。`, 'cabin-hold-user', { dedupeSeconds: 120 });
+        } else if (companion && e.memo === 'ai-hold-yes') {
+          cabinEventMemory(companion.id, `${companion.name}主动想牵手，${ownerNameRef.current || '主人'}答应了。`, 'cabin-hold-ai', { dedupeSeconds: 120 });
+        }
+        sfx.tap();
+      } else if (e.ev === 'release' || e.ev === 'giveup') {
+        companionStateRef.current = 'idle';
+        setHoldingUI(false);
+        if (companionQueueRef.current.length > 0) companionQueueRef.current = [];
+      } else if (e.ev === 'room') {
+        // —— 空间记忆：用户牵着我的手，带我去了×× ——
+        holdRoomRef.current = e.room ?? null;
+        if (companion && e.room) {
+          cabinEventMemory(companion.id, `${ownerNameRef.current || '主人'}牵着${companion.name}的手，把 TA 带到了${ROOM_NAMES[e.room]}。`, `cabin-hold-room:${e.room}`, { dedupeSeconds: 600 });
+        }
+      }
+    },
+    [issueCompanionCmd, toast, saveSoon, companion],
+  );
+
+  /** 进入小屋：拉联系人 + 恢复上次选定的陪伴角色（没有则弹选择列表） */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [all, myName] = await Promise.all([listContacts(), ownerRealName()]);
+        if (!alive) return;
+        setContacts(all);
+        ownerNameRef.current = myName || useSettings.getState().profile.name || '主人';
+        let savedId = '';
+        try {
+          savedId = window.localStorage.getItem('cabin-companion-id') ?? '';
+        } catch {
+          /* ignore */
+        }
+        const saved = savedId ? all.find((c) => c.id === savedId) : null;
+        if (saved && saved.kind === 'char') {
+          setCompanion(saved);
+        } else {
+          setPickerOpen(true);
+        }
+      } catch {
+        if (alive) setPickerOpen(true);
+      } finally {
+        if (alive) setContacts((list) => list);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** 选定陪伴角色（记忆作用域按小屋账号落位） */
+  const chooseCompanion = useCallback(
+    (c: ContactRecord) => {
+      setCompanion(c);
+      setPickerOpen(false);
+      convoRef.current = [];
+      convoTurnsRef.current = [];
+      try {
+        window.localStorage.setItem('cabin-companion-id', c.id);
+      } catch {
+        /* ignore */
+      }
+      setMemScopeForApp('cabin');
+      toast(`${c.name}走进了你搭的小家，点击右上角 💬 和 TA 说话吧～`);
+    },
+    [toast],
+  );
+
+  /** 切换角色（⋮ 菜单）：弹回选择列表并挂断当前语音 */
+  const openPicker = useCallback(() => {
+    stopSpeaking();
+    setPickerOpen(true);
+    setMoreOpen(false);
+  }, []);
+
+  /** 小人声音开关（⋮ 菜单） */
+  const toggleVoice = useCallback(() => {
+    setVoiceOn((on) => {
+      const next = !on;
+      voiceOnRef.current = next;
+      try {
+        window.localStorage.setItem('cabin-voice-on', next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      if (!next) stopSpeaking();
+      toast(next ? '小人声音已开，TA 会开口说话啦～' : '小人声音已关，只显示文字气泡');
+      return next;
+    });
+  }, [toast]);
+
+  /** 小人正在做的事（情境注入；pose/act/carry 镜像） */
+  const myActivityText = useCallback((): string => {
+    if (carryPetRef.current) return '怀里抱着小猫';
+    const pose = poseRef.current.pose;
+    if (actRef.current?.arrived) {
+      const t = actRef.current.type;
+      const label: Partial<Record<CharAction['type'], string>> = {
+        sit: '坐着休息',
+        lie: '躺在床上睡觉',
+        bath: '在浴缸里泡澡',
+        shower: '在淋浴',
+        watch: '坐在电视前看电视',
+        work: '用电脑上网',
+        cook: '在灶台前做饭',
+        eat: '在餐桌边吃饭',
+        drink: '端着一杯冰饮',
+        coffee: '端着一杯热咖啡',
+        read: '坐着看书',
+        play: actRef.current.pose === 'guitar' ? '抱着吉他弹奏' : '在弹钢琴',
+        makeup: '在梳妆台前化妆',
+        mirror: '在照镜子',
+        game: '在打游戏',
+        hotpot: '在吃火锅',
+        dress: '在衣柜前换衣服',
+      };
+      if (label[t]) return label[t] as string;
+    }
+    if (meRT.current.moving) return '在屋里走来走去';
+    if (pose === 'sit') return '坐着';
+    return '站着放空';
+  }, [meRT, poseRef, actRef]);
+
+  /** 陪伴小人正在做的事（事件镜像 companionStateRef） */
+  const charActivityText = useCallback((): string => {
+    const s = companionStateRef.current;
+    if (s === 'hug') return '正拥抱着你';
+    if (s === 'hold') return '牵着你的手';
+    if (s === 'sitting') return '坐在椅子上';
+    if (s === 'lying') return '躺在床上';
+    if (s === 'watching') return '坐在电视前看电视';
+    if (s === 'walking') return '正在走路';
+    if (s === 'near') return '站在你身边';
+    return '在家里溜达';
+  }, []);
+
+  /** 采集实时情境（每轮对话现场组装 → AI 知道「我现在在干嘛」） */
+  const collectContext = useCallback(
+    (photoDesc?: string): CabinContext => {
+      const meRoom = ROOM_NAMES[roomAt(meRT.current.x, meRT.current.z)];
+      const taRoom = ROOM_NAMES[roomAt(taRT.current.x, taRT.current.z)];
+      const nearby = itemsRef.current
+        .filter((f) => (f.y ?? 0) < 0.9 && Math.hypot(f.x - taRT.current.x, f.z - taRT.current.z) < 1.35)
+        .slice(0, 5)
+        .map((f) => CATALOG[f.kind]?.name ?? f.kind);
+      const now = new Date();
+      return {
+        userName: ownerNameRef.current || '主人',
+        charName: companion?.name ?? 'TA',
+        myRoom: meRoom,
+        charRoom: taRoom,
+        myActivity: myActivityText(),
+        charActivity: charActivityText(),
+        holdingHands: companionStateRef.current === 'hold',
+        hugging: companionStateRef.current === 'hug',
+        night: nightRef.current,
+        weather: weatherFx === 'rain' ? '下雨' : weatherFx === 'snow' ? '下雪' : '晴',
+        timeStr: now.toLocaleString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long', hour: '2-digit', minute: '2-digit' }),
+        nearby,
+        photoDesc,
+      };
+    },
+    [companion, meRT, taRT, myActivityText, charActivityText, weatherFx],
+  );
+
+  /** 发送聊天（文字 / 麦克风转写 / 附照片）→ 气泡 + TTS + 动作执行 + 记忆入库 */
+  const sendChat = useCallback(async () => {
+    const text = chatText.trim();
+    if (!text || chatBusy || !companion) return;
+    setChatText('');
+    setChatBusy(true);
+    const photoDesc = pendingPhotoRef.current;
+    pendingPhotoRef.current = null;
+    setPhotoChip(false);
+    // ① 用户消息 → 我的小人头顶气泡（10 秒淡出）
+    bubbleRef.current.push({ who: 'me', text, hold: 10 });
+    try {
+      // ② 记忆召回 + 情境 + 人设 → system
+      const memCtx = [text, ...convoRef.current.slice(-4).map((m) => m.content)].join(' ');
+      const memoryBlock = cabinMemoryBlock(companion.id, memCtx, {
+        user: ownerNameRef.current || null,
+        peer: companion.name || null,
+      });
+      const ctx = collectContext(photoDesc ?? undefined);
+      const system = buildCabinSystem(companion, memoryBlock, ctx);
+      // ③ 会话上下文（最近 12 条）
+      const history = convoRef.current.slice(-12);
+      const userContent = photoDesc ? `${text}\n（随消息发来一张照片：${photoDesc}）` : text;
+      // ④ 请求 AI
+      const reply = await cabinChatTurn([{ role: 'system', content: system }, ...history, { role: 'user', content: userContent }], useSettings.getState().apiConfig);
+      const parsed = parseAiReply(reply);
+      // ⑤ 记录会话（LLM 上下文 + 记忆提取轮次）
+      convoRef.current.push({ role: 'user', content: userContent }, { role: 'assistant', content: parsed.raw });
+      convoRef.current = convoRef.current.slice(-40);
+      convoTurnsRef.current.push(
+        { role: 'me', text },
+        ...(parsed.msgs.length > 0 ? [{ role: 'peer' as const, text: parsed.msgs.join(' / ') }] : [{ role: 'peer' as const, text: parsed.raw.replace(/<<[\s\S]*?>>/g, '').trim() || '（笑了笑）' }]),
+      );
+      convoTurnsRef.current = convoTurnsRef.current.slice(-40);
+      // ⑥ AI 消息逐条：头顶气泡 + （开声音时）TTS 播报
+      const msgs = parsed.msgs.length > 0 ? parsed.msgs : ['……'];
+      for (const m of msgs) {
+        const est = Math.min(14, 2.6 + m.replace(/\s/g, '').length / 3.2);
+        bubbleRef.current.push({ who: 'ta', text: m, hold: voiceOnRef.current ? est + 1.2 : est });
+        if (voiceOnRef.current) {
+          try {
+            await speakUserTts({ text: m, contactId: companion.id, volume: 1, speed: 1.02 });
+          } catch {
+            // TTS 失败静默（文字气泡已展示）
+          }
+        } else {
+          await new Promise((r) => setTimeout(r, Math.min(3600, 900 + m.length * 70)));
+        }
+      }
+      // ⑦ 拦截动作块 → 寻路执行（多步排队）
+      if (parsed.actions.length > 0) {
+        const acts = parsed.actions.slice(0, 3);
+        companionQueueRef.current = acts.slice(1).map((a) => ({ kind: a.type as CompanionCmd['kind'], room: a.room, memo: 'ai-act' }));
+        issueCompanionCmd({ kind: acts[0].type as CompanionCmd['kind'], room: acts[0].room, memo: 'ai-act' });
+      }
+      // ⑧ 对话记忆入库（标准管线：碎片 → 核心 → 长期；scene=拾光小屋）
+      cabinAfterChatTurn(companion.id, useSettings.getState().apiConfig, convoTurnsRef.current.slice(-12), {
+        user: ownerNameRef.current || null,
+        peer: companion.name || null,
+      });
+    } catch (err) {
+      toast(err instanceof Error && err.message ? `TA 没能回话：${err.message}` : 'TA 没能回话，稍后再试试');
+    } finally {
+      setChatBusy(false);
+    }
+  }, [chatText, chatBusy, companion, collectContext, issueCompanionCmd, toast]);
+
+  /** 麦克风开关：开 = Web Speech 实时转写进输入框；再点 = 停止并自动发送 */
+  const toggleMic = useCallback(() => {
+    if (micOn) {
+      const s = micSessionRef.current;
+      micSessionRef.current = null;
+      setMicOn(false);
+      if (s) {
+        void s.stop().then((t) => {
+          const text = t.trim();
+          if (text) {
+            setChatText(text);
+            setTimeout(() => {
+              // 复用 sendChat：直接带上转写文本再发一轮（chatText 闭包可能过期，走状态注入）
+              setChatText('');
+              void (async () => {
+                if (!companion || chatBusy) return;
+                setChatBusy(true);
+                bubbleRef.current.push({ who: 'me', text, hold: 10 });
+                try {
+                  const memCtx = [text, ...convoRef.current.slice(-4).map((m) => m.content)].join(' ');
+                  const memoryBlock = cabinMemoryBlock(companion.id, memCtx, { user: ownerNameRef.current || null, peer: companion.name || null });
+                  const ctx = collectContext();
+                  const system = buildCabinSystem(companion, memoryBlock, ctx);
+                  const history = convoRef.current.slice(-12);
+                  const reply = await cabinChatTurn([{ role: 'system', content: system }, ...history, { role: 'user', content: text }], useSettings.getState().apiConfig);
+                  const parsed = parseAiReply(reply);
+                  convoRef.current.push({ role: 'user', content: text }, { role: 'assistant', content: parsed.raw });
+                  convoRef.current = convoRef.current.slice(-40);
+                  convoTurnsRef.current.push({ role: 'me', text }, { role: 'peer', text: parsed.msgs.join(' / ') || parsed.raw.slice(0, 120) || '（嗯）' });
+                  convoTurnsRef.current = convoTurnsRef.current.slice(-40);
+                  const msgs = parsed.msgs.length > 0 ? parsed.msgs : ['……'];
+                  for (const m of msgs) {
+                    const est = Math.min(14, 2.6 + m.replace(/\s/g, '').length / 3.2);
+                    bubbleRef.current.push({ who: 'ta', text: m, hold: voiceOnRef.current ? est + 1.2 : est });
+                    if (voiceOnRef.current) {
+                      try {
+                        await speakUserTts({ text: m, contactId: companion.id, volume: 1, speed: 1.02 });
+                      } catch {
+                        /* 静默 */
+                      }
+                    } else {
+                      await new Promise((r) => setTimeout(r, Math.min(3600, 900 + m.length * 70)));
+                    }
+                  }
+                  if (parsed.actions.length > 0) {
+                    const acts = parsed.actions.slice(0, 3);
+                    companionQueueRef.current = acts.slice(1).map((a) => ({ kind: a.type as CompanionCmd['kind'], room: a.room, memo: 'ai-act' }));
+                    issueCompanionCmd({ kind: acts[0].type as CompanionCmd['kind'], room: acts[0].room, memo: 'ai-act' });
+                  }
+                  cabinAfterChatTurn(companion.id, useSettings.getState().apiConfig, convoTurnsRef.current.slice(-12), {
+                    user: ownerNameRef.current || null,
+                    peer: companion.name || null,
+                  });
+                } catch (err) {
+                  toast(err instanceof Error && err.message ? `TA 没能回话：${err.message}` : 'TA 没能回话，稍后再试试');
+                } finally {
+                  setChatBusy(false);
+                }
+              })();
+            }, 350);
+          }
+        });
+      }
+      return;
+    }
+    if (!isWebSpeechSupported()) {
+      toast('当前浏览器不支持语音识别，打字告诉 TA 吧～');
+      return;
+    }
+    const s = startWebSpeechSession({ onPartial: (t) => setChatText(t) });
+    if (!s) {
+      toast('麦克风启动失败，检查一下权限～');
+      return;
+    }
+    micSessionRef.current = s;
+    setMicOn(true);
+    setChatText('');
+  }, [micOn, companion, chatBusy, collectContext, issueCompanionCmd, toast]);
+
+  /** 聊天输入附照片 → 识图模型转文字（「我现在在干嘛」的摄像头通道） */
+  const onChatPhoto = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const f = e.target.files?.[0];
+      e.target.value = '';
+      if (!f) return;
+      const vc = useSettings.getState().visionConfig;
+      if (!vc.baseUrl.trim()) {
+        toast('先到「设置 › 识图模型」配好，TA 才能看懂照片～');
+        return;
+      }
+      try {
+        const dataUrl = await compressPhoto(f, 1, 640, 0.72);
+        const res = await fetch('/api/vision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ images: [dataUrl], config: { baseUrl: vc.baseUrl, apiKey: vc.apiKey, model: vc.model } }),
+          signal: AbortSignal.timeout(45_000),
+        });
+        if (!res.ok) throw new Error('识图失败');
+        const j = (await res.json()) as { desc?: string };
+        if (j.desc) {
+          pendingPhotoRef.current = j.desc.trim().slice(0, 300);
+          setPhotoChip(true);
+          toast('照片看懂啦，发送消息时 TA 就知道了～');
+        } else throw new Error('没看出内容');
+      } catch {
+        toast('照片没看懂，再试一次？');
+      }
+    },
+    [toast],
+  );
+
+  // ---------------- v8.0 模块四：点击交互（拥抱 / 牵手 / 松开） ----------------
+
+  /** 点陪伴小人 → 环形菜单（生活模式） */
+  const openPartnerMenu = useCallback(() => {
+    if (modeRef.current !== 'live' || !companion) return;
+    setPartnerMenuOpen(true);
+    setPetBarOpen(false);
+    setPetPanel(false);
+    sfx.tap();
+  }, [companion]);
+
+  /** 拥抱：小人走过来 → 双方拥抱（用户正坐着/躺着/抱着猫时先婉拒） */
+  const startHug = useCallback(() => {
+    setPartnerMenuOpen(false);
+    if (!companion) return;
+    if (poseRef.current.pose !== 'stand' || actRef.current) {
+      toast('先站起来，才能好好抱抱呀～');
+      return;
+    }
+    if (carryPetRef.current) {
+      toast('怀里还抱着小家伙呢，先放它下来吧～');
+      return;
+    }
+    issueCompanionCmd({ kind: 'hug', memo: 'user-hug' });
+  }, [companion, issueCompanionCmd, toast]);
+
+  /** 牵手：小人走过来牵起手 → 之后 0.5m 跟随移动 */
+  const startHoldHand = useCallback(() => {
+    setPartnerMenuOpen(false);
+    if (!companion) return;
+    if (poseRef.current.pose !== 'stand' || actRef.current) {
+      toast('先站起来，才好牵手去散步呀～');
+      return;
+    }
+    if (carryPetRef.current) {
+      toast('先把小家伙放下来，再牵手吧～');
+      return;
+    }
+    issueCompanionCmd({ kind: 'holdhand', memo: 'user-hold' });
+  }, [companion, issueCompanionCmd, toast]);
+
+  /** 松开手：解除跟随（环形菜单 / 牵手按钮） */
+  const releaseHold = useCallback(() => {
+    setPartnerMenuOpen(false);
+    issueCompanionCmd({ kind: 'free', memo: 'release' });
+    toast('松开了手，TA 又可以自由溜达啦～');
+  }, [issueCompanionCmd, toast]);
+
+  // ---------------- v8.0 模块五：AI 主动请求 + 自主行动 ----------------
+
+  /** 同意 TA 的请求 → 拥抱/牵手动画（记忆在 hugStart/holdStart 事件里写） */
+  const acceptRequest = useCallback(() => {
+    if (!request || !companion) return;
+    const kind = request.kind;
+    setRequest(null);
+    requestCooldownRef.current = Date.now() + 8 * 60_000;
+    if (poseRef.current.pose !== 'stand' || actRef.current || carryPetRef.current) {
+      // 现在没空：按拒绝记（TA 会小失落）
+      if (kind === 'hug') {
+        cabinEventMemory(companion.id, `${companion.name}想求个抱抱，但${ownerNameRef.current || '主人'}当时正忙着，没抱成。`, 'cabin-hug-reject', { dedupeSeconds: 600 });
+        bubbleRef.current.push({ who: 'ta', text: '那你先忙…我等会儿再来求抱抱。', hold: 5 });
+      } else {
+        cabinEventMemory(companion.id, `${companion.name}想牵${ownerNameRef.current || '主人'}的手，但${ownerNameRef.current || '主人'}正忙着。`, 'cabin-hold-reject', { dedupeSeconds: 600 });
+        bubbleRef.current.push({ who: 'ta', text: '好吧…那你先忙～', hold: 5 });
+      }
+      return;
+    }
+    if (kind === 'hug') issueCompanionCmd({ kind: 'hug', memo: 'ai-hug-yes' });
+    else issueCompanionCmd({ kind: 'holdhand', memo: 'ai-hold-yes' });
+  }, [request, companion, issueCompanionCmd]);
+
+  /** 拒绝 TA 的请求 → 记忆「有点失落」 + 头顶小情绪 */
+  const rejectRequest = useCallback(() => {
+    if (!request || !companion) return;
+    setRequest(null);
+    requestCooldownRef.current = Date.now() + 8 * 60_000;
+    if (request.kind === 'hug') {
+      cabinEventMemory(companion.id, `${companion.name}想求个抱抱，但被${ownerNameRef.current || '主人'}拒绝了，有点失落。`, 'cabin-hug-reject', { dedupeSeconds: 600 });
+      bubbleRef.current.push({ who: 'ta', text: '呜……那好吧。', hold: 4.5 });
+    } else {
+      cabinEventMemory(companion.id, `${companion.name}想牵${ownerNameRef.current || '主人'}的手，但被拒绝了，有点小委屈。`, 'cabin-hold-reject', { dedupeSeconds: 600 });
+      bubbleRef.current.push({ who: 'ta', text: '哦…那算了。', hold: 4.5 });
+    }
+  }, [request, companion]);
+
+  /** 主动请求调度：不操作时每 30s 评估一次（45% 机会，8 分钟冷却，45s 自动消失） */
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (!companion || modeRef.current !== 'live' || pickerOpen) return;
+      if (request || partnerMenuOpen || chatBusy) return;
+      if (Date.now() < requestCooldownRef.current) return;
+      const s = companionStateRef.current;
+      if (s === 'hug' || s === 'hold' || s === 'walking') return;
+      if (petCareRef.current || carryPetRef.current) return;
+      if (Math.random() < 0.45) {
+        requestCooldownRef.current = Date.now() + 5 * 60_000;
+        setRequest({ kind: Math.random() < 0.62 ? 'hug' : 'holdhand', at: Date.now() });
+      }
+    }, 30_000);
+    return () => clearInterval(iv);
+  }, [companion, request, partnerMenuOpen, chatBusy, pickerOpen]);
+
+  /** 请求弹窗 45s 自动消失（不表态 → 不记拒绝，TA 自己收回） */
+  useEffect(() => {
+    if (!request) return;
+    const t = setTimeout(() => setRequest(null), 45_000);
+    return () => clearTimeout(t);
+  }, [request]);
+
+  /** 自主行动调度：空闲时按人设记忆走动/坐下/看电视（已有 roam 漫游兜底） */
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const now = Date.now();
+      if (now < autoNextAtRef.current) return;
+      autoNextAtRef.current = now + 40_000 + Math.random() * 40_000;
+      if (!companion || modeRef.current !== 'live' || pickerOpen) return;
+      if (request || partnerMenuOpen || chatBusy) return;
+      const s = companionStateRef.current;
+      if (s !== 'idle' || petCareRef.current || carryPetRef.current) return;
+      const r = Math.random();
+      if (r < 0.38) {
+        issueCompanionCmd({ kind: 'sit', memo: 'auto' });
+      } else if (r < 0.52) {
+        // 打开电视 + 坐到电视前（有电视才演这一出）
+        const tv = itemsRef.current.find((f) => f.kind === 'tv');
+        if (tv && !tv.st?.on) {
+          setItems((prev) => prev.map((f) => (f.kind === 'tv' ? { ...f, st: { ...f.st, on: true } } : f)));
+          saveSoon();
+        }
+        issueCompanionCmd({ kind: 'watch', memo: 'auto' });
+      } else if (r < 0.66) {
+        const rooms: RoomId[] = ['lr', 'br', 'kt', 'ba', 'bal'];
+        issueCompanionCmd({ kind: 'goto', room: rooms[Math.floor(Math.random() * rooms.length)], memo: 'auto' });
+      }
+      // 其余 34%：交给既有 roam 漫游（跨房间溜达）
+    }, 5000);
+    return () => clearInterval(iv);
+  }, [companion, request, partnerMenuOpen, chatBusy, pickerOpen, issueCompanionCmd, saveSoon]);
+
   // ---------------- 初始化：拉远端（远端 rev 更新则采纳） ----------------
   useEffect(() => {
     let alive = true;
@@ -1583,6 +2208,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
       if (mode === 'live' && !justPet) {
         setPetBarOpen(false); // v7.1：点别处（家具）互动竖条消失
         setPetPanel(false); // v7.2：点别处状态面板也收起
+        setPartnerMenuOpen(false); // v8.0：陪伴菜单也收起
       }
       const entry = CATALOG[item.kind];
       if (!entry) return;
@@ -2690,6 +3316,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     setPaletteOpen(false);
     setPetBarOpen(false); // v7.1：点别处（地面）互动竖条消失
     setPetPanel(false); // v7.2：点别处状态面板也收起
+    setPartnerMenuOpen(false); // v8.0：点别处陪伴菜单也收起
   }, []);
 
   // ---------------- 商店 ----------------
@@ -3148,11 +3775,85 @@ export default function CoupleHome({ close }: { close: () => void }) {
         petState={pet}
         onFloorTap={onFloorTap}
         onFurnTap={onFurnTap}
+        companionCmdRef={companionCmdRef}
+        onCompanionEvent={onCompanionEvent}
+        onPartnerTap={openPartnerMenu}
+        bubbleRef={bubbleRef}
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
         onDragSelect={onDragSelect}
         onWallTap={onWallTap}
       />
+
+      {/* ===== v8.0 陪伴角色选择（进入小屋弹联系人列表；⋮ 菜单「换个TA」再弹） ===== */}
+      <AnimatePresence>
+        {pickerOpen && (
+          <motion.div
+            key="companion-picker"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[80] flex items-center justify-center bg-black/35 p-6"
+          >
+            <motion.div
+              initial={{ scale: 0.92, y: 14 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 8 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+              className="w-full max-w-[320px] rounded-3xl bg-white/95 p-4 shadow-2xl backdrop-blur-xl"
+            >
+              <div className="mb-1 text-center text-[15.5px] font-semibold text-[#3a3a3e]">谁陪你住进拾光小屋？</div>
+              <p className="mb-3 text-center text-[11px] leading-snug text-[#9a9a96]">
+                TA 会成为小家里的 3D 小人：陪你聊天散步、听你指挥、求抱抱，
+                <br />
+                还会用 TA 在设置里绑定的聊天 / 识图 / 语音模型
+              </p>
+              <div className="scrollbar-none flex max-h-[44vh] flex-col gap-2 overflow-y-auto">
+                {contacts.filter((c) => c.kind === 'char').length === 0 && (
+                  <p className="py-7 text-center text-[12px] leading-relaxed text-[#a8a8a4]">
+                    还没有 AI 角色联系人
+                    <br />
+                    先去「联系人」App 创建一个吧
+                  </p>
+                )}
+                {contacts
+                  .filter((c) => c.kind === 'char')
+                  .map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => chooseCompanion(c)}
+                      className="flex items-center gap-3 rounded-2xl bg-[#faf8f3] p-2.5 text-left ring-1 ring-[#efece2] transition active:scale-[0.98]"
+                    >
+                      {c.avatar ? (
+                        <img src={c.avatar} alt={c.name} className="h-10 w-10 shrink-0 rounded-full object-cover ring-1 ring-black/5" />
+                      ) : (
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#f6cdd6] to-[#dcd2ec] text-[15px] font-bold text-white">
+                          {c.name.slice(0, 1)}
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13.5px] font-semibold text-[#3a3a3e]">{c.name}</span>
+                        <span className="block truncate text-[10.5px] text-[#a8a8a4]">{c.relation || 'AI 角色'}</span>
+                      </span>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-[#d8cfc4]" />
+                    </button>
+                  ))}
+              </div>
+              {companion && (
+                <button
+                  onClick={() => setPickerOpen(false)}
+                  className="mt-3 w-full rounded-full bg-[#f1efe9] py-2 text-[12.5px] font-medium text-[#8a8a86] transition active:scale-95"
+                >
+                  取消（继续和{companion.name}在一起）
+                </button>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ===== v8.0 聊天附照（识图）隐藏文件选择 ===== */}
+      <input ref={chatPhotoInputRef} type="file" accept="image/*" className="hidden" onChange={onChatPhoto} />
 
       {/* Toast（含拍照模式 —— 拍照时 HUD 隐藏，toast 仍需可见） */}
       <div className="pointer-events-none absolute left-1/2 top-24 z-40 flex -translate-x-1/2 flex-col items-center gap-1.5">
@@ -3354,6 +4055,21 @@ export default function CoupleHome({ close }: { close: () => void }) {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* v8.0 信息图标（💬）：点击弹出/收起下方聊天输入框（对话进头顶气泡 + TTS） */}
+            <button
+              onClick={() => {
+                setChatOpen((v) => !v);
+                if (chatOpen && micOn) toggleMic();
+              }}
+              aria-label="和TA聊天"
+              aria-expanded={chatOpen}
+              title="和TA聊天"
+              className={`pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full shadow-md backdrop-blur transition active:scale-95 ${
+                chatOpen ? 'bg-[#3a3a3e]/80 text-white' : 'bg-white/75 text-[#5a5a5e]'
+              }`}
+            >
+              <MessageCircle className="h-[18px] w-[18px]" />
+            </button>
             {/* 宠物头像（v7.2 移到装修小家左侧 · 内联 SVG 猫头 · 白玻璃圆钮）：点击唤出/收起状态面板；状态偏低时亮提醒小红点 */}
             <button
               onClick={() => {
@@ -3464,6 +4180,32 @@ export default function CoupleHome({ close }: { close: () => void }) {
                       {fp ? <Eye className="h-4 w-4 shrink-0 text-[#c99a5b]" /> : <Users className="h-4 w-4 shrink-0 text-[#c99a5b]" />}
                       <span className="flex-1 text-left">视角</span>
                       <span className="text-[11px] text-[#b0aeb4]">{fp ? '第一人称' : '第三人称'}</span>
+                    </button>
+                    {/* v8.0 小人声音开关：开 = 男生小人开口说话（TTS 播报），关 = 只显示文字气泡 */}
+                    <div className="mx-2.5 my-1 h-px bg-[#f0eeea]" />
+                    <button
+                      onClick={() => {
+                        toggleVoice();
+                        setMoreOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                    >
+                      {voiceOn ? <Volume2 className="h-4 w-4 shrink-0 text-[#6a8a6a]" /> : <VolumeX className="h-4 w-4 shrink-0 text-[#b09a9a]" />}
+                      <span className="flex-1 text-left">小人声音</span>
+                      {voiceOn ? (
+                        <span className="rounded-full bg-[#dff0e2] px-2 py-0.5 text-[10px] font-semibold text-[#3f9a58]">已开</span>
+                      ) : (
+                        <span className="rounded-full bg-[#f0eff1] px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90]">已关</span>
+                      )}
+                    </button>
+                    {/* v8.0 换个TA：重弹陪伴角色选择列表 */}
+                    <button
+                      onClick={openPicker}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                    >
+                      <Heart className="h-4 w-4 shrink-0 text-[#e8a3b3]" />
+                      <span className="flex-1 text-left">换个TA陪伴</span>
+                      <span className="truncate text-[11px] text-[#b0aeb4]">{companion?.name ?? '未选择'}</span>
                     </button>
                   </motion.div>
                 )}
@@ -3591,6 +4333,174 @@ export default function CoupleHome({ close }: { close: () => void }) {
                 <CupSoda className="h-[18px] w-[18px]" />
                 放下杯子
               </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ===== v8.0 聊天输入条（信息图标唤出：文字 / 麦克风 / 附照识图；消息进头顶气泡） ===== */}
+        <AnimatePresence>
+          {mode === 'live' && chatOpen && companion && !pickerOpen && (
+            <motion.div
+              key="chat-bar"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 12 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 340 }}
+              className="pointer-events-auto absolute bottom-[152px] left-1/2 z-30 w-[min(88%,352px)] -translate-x-1/2"
+            >
+              {photoChip && (
+                <div className="mx-auto mb-1.5 w-fit rounded-full bg-white/80 px-3 py-1 text-[10.5px] text-[#b07193] shadow-sm ring-1 ring-white/70 backdrop-blur">
+                  已附照片 · 发送时 TA 会看到照片内容
+                </div>
+              )}
+              <div className="flex items-center gap-1.5 rounded-full border border-white/70 bg-white/75 p-1.5 pl-3.5 shadow-[0_10px_28px_rgba(90,70,60,0.22)] backdrop-blur-xl">
+                <input
+                  value={chatText}
+                  onChange={(e) => setChatText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) void sendChat();
+                  }}
+                  placeholder={micOn ? '在听…请说话' : `跟${companion.name}说点什么…`}
+                  disabled={chatBusy}
+                  aria-label="和小屋里的TA聊天"
+                  className="h-9 min-w-0 flex-1 bg-transparent text-[13.5px] text-[#3a3a3e] outline-none placeholder:text-[#b8b2aa] disabled:opacity-50"
+                />
+                {/* 附照片（识图模型转文字注入情境） */}
+                <button
+                  onClick={() => chatPhotoInputRef.current?.click()}
+                  aria-label="发一张照片"
+                  title="发一张照片（识图）"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8a837a] transition active:scale-90"
+                >
+                  <ImagePlus className="h-[17px] w-[17px]" />
+                </button>
+                {/* 麦克风：点击说话，再点停止并自动发送 */}
+                <button
+                  onClick={toggleMic}
+                  aria-label={micOn ? '停止说话' : '开始说话'}
+                  aria-pressed={micOn}
+                  className={
+                    micOn
+                      ? 'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#e46a6a] text-white shadow transition active:scale-90'
+                      : 'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8a837a] transition active:scale-90'
+                  }
+                >
+                  {micOn && <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-[#e46a6a]/35" />}
+                  <Mic className="h-[17px] w-[17px]" />
+                </button>
+                {/* 发送 */}
+                <button
+                  onClick={() => void sendChat()}
+                  disabled={!chatText.trim() || chatBusy}
+                  aria-label="发送"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#f4b3c2] text-white shadow transition active:scale-90 disabled:opacity-40"
+                >
+                  {chatBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ===== v8.0 陪伴小人环形菜单（点小人弹出：拥抱 / 牵手（牵手中=松开）） ===== */}
+        <AnimatePresence>
+          {mode === 'live' && partnerMenuOpen && companion && (
+            <motion.div
+              key="partner-menu"
+              initial={{ opacity: 0, scale: 0.9, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 6 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 340 }}
+              className="pointer-events-auto absolute bottom-[224px] left-1/2 z-30 -translate-x-1/2"
+              role="menu"
+              aria-label={`${companion.name}互动菜单`}
+            >
+              <div className="flex items-center gap-2 rounded-full border border-white/70 bg-white/85 p-2 shadow-[0_12px_30px_rgba(90,70,60,0.24)] backdrop-blur-xl">
+                {holdingUI ? (
+                  <button
+                    onClick={releaseHold}
+                    role="menuitem"
+                    className="flex h-11 items-center gap-1.5 whitespace-nowrap rounded-full bg-[#3a3a3e]/85 px-5 text-[13.5px] font-semibold text-white shadow transition active:scale-95"
+                  >
+                    <Hand className="h-[17px] w-[17px]" />
+                    松开手
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={startHug}
+                      role="menuitem"
+                      className="flex h-11 items-center gap-1.5 whitespace-nowrap rounded-full bg-[#f4b3c2] px-5 text-[13.5px] font-semibold text-white shadow-md shadow-[#f4b3c2]/40 transition active:scale-95"
+                    >
+                      <Heart className="h-[17px] w-[17px]" />
+                      拥抱
+                    </button>
+                    <button
+                      onClick={startHoldHand}
+                      role="menuitem"
+                      className="flex h-11 items-center gap-1.5 whitespace-nowrap rounded-full bg-[#a8d4e6] px-5 text-[13.5px] font-semibold text-white shadow-md shadow-[#a8d4e6]/40 transition active:scale-95"
+                    >
+                      <Hand className="h-[17px] w-[17px]" />
+                      牵手
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={() => setPartnerMenuOpen(false)}
+                  aria-label="关闭菜单"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/70 text-[#8a8a90] ring-1 ring-white/80 transition active:scale-90"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ===== v8.0 AI 主动请求弹窗（「××想要拥抱你」：同意 / 拒绝） ===== */}
+        <AnimatePresence>
+          {request && companion && (
+            <motion.div
+              key="ai-request"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="pointer-events-auto absolute inset-0 z-[70] flex items-center justify-center bg-black/25 p-6"
+              role="dialog"
+              aria-label={`${companion.name}的请求`}
+            >
+              <motion.div
+                initial={{ scale: 0.9, y: 14 }}
+                animate={{ scale: 1, y: 0 }}
+                exit={{ scale: 0.94, y: 10 }}
+                transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+                className="w-full max-w-[290px] rounded-3xl bg-white/95 p-5 text-center shadow-2xl backdrop-blur-xl"
+              >
+                <div className="mx-auto mb-2.5 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-[#f6cdd6] to-[#dcd2ec] text-[20px] font-bold text-white shadow-inner">
+                  {companion.name.slice(0, 1)}
+                </div>
+                <p className="text-[15px] font-semibold text-[#3a3a3e]">
+                  {companion.name}
+                  {request.kind === 'hug' ? '想要拥抱你' : '想牵牵你的手'}
+                </p>
+                <p className="mb-4 mt-1 text-[11.5px] text-[#9a9a96]">
+                  {request.kind === 'hug' ? 'TA 张开了双臂，就站在你面前' : 'TA 朝你伸出了手'}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={rejectRequest}
+                    className="h-11 flex-1 rounded-full bg-[#f1efe9] text-[13.5px] font-semibold text-[#8a8a86] transition active:scale-95"
+                  >
+                    拒绝
+                  </button>
+                  <button
+                    onClick={acceptRequest}
+                    className="h-11 flex-1 rounded-full bg-[#f4b3c2] text-[13.5px] font-semibold text-white shadow-md shadow-[#f4b3c2]/40 transition active:scale-95"
+                  >
+                    同意
+                  </button>
+                </div>
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
