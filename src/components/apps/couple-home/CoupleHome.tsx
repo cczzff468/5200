@@ -129,6 +129,7 @@ import { startWebSpeechSession, isWebSpeechSupported, type WebSpeechSession } fr
 import { speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
 import { type MemConvoTurn } from '@/lib/memory';
 import { buildCabinSystem, cabinChatTurn, parseAiReply, type CabinContext } from './companion-brain';
+import { playAiSongOnce, stopAiSong } from './ai-song';
 import {
   cabinAfterChatTurn,
   cabinBehaviorMemoryOncePerDay,
@@ -1392,6 +1393,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
         else if (e.kind === 'play') {
           companionStateRef.current = 'playing';
           setPartnerPlaying(e.itemId ?? null);
+          // v9 点歌出声：真实乐器音色弹奏（钢琴 grand / 吉他拨弦），音符可视化由 partnerPlayingId 联动
+          const inst = itemsRef.current.find((f) => f.id === e.itemId);
+          const played = playAiSongOnce(inst?.kind === 'guitar' ? 'guitar' : 'piano', e.song);
+          toast(played === '即兴' ? `${companion?.name ?? 'TA'}即兴弹了一段小曲～` : `${companion?.name ?? 'TA'}弹起了《${played}》～`);
         } else if (e.kind === 'cook') companionStateRef.current = 'cooking';
         else if (e.kind === 'eat') companionStateRef.current = 'eating';
         else if (e.kind === 'lamp') {
@@ -1422,13 +1427,14 @@ export default function CoupleHome({ close }: { close: () => void }) {
           // 自动开门发生在走路途中：不改变状态镜像（还是 walking）
           if (e.memo !== 'auto-open') companionStateRef.current = 'near';
         } else if (e.kind === 'music') {
-          // 指令「放歌」：走到音箱/唱片机前 → 打开它（音符飘出），状态镜像为「唱歌」
+          // 指令「放歌」：走到音箱/唱片机前 → 打开它（音符飘出）+ 轻声八音盒旋律真的能听到，状态镜像为「唱歌」
           companionStateRef.current = 'singing';
           const box = itemsRef.current.find((f) => f.id === e.itemId);
           if (box && !box.st?.on) {
             setItems((prev) => prev.map((f) => (f.id === box.id ? { ...f, st: { ...f.st, on: true } } : f)));
             saveSoon();
           }
+          playAiSongOnce('musicbox', e.song, { loop: true, vol: 0.3 });
           sfx.tap();
         } else companionStateRef.current = 'near';
         // —— 记忆入库：用户指令成功执行（「用户让我去沙发上坐下」） ——
@@ -1510,6 +1516,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
         }
         sfx.tap();
       } else if (e.ev === 'release' || e.ev === 'giveup') {
+        stopAiSong(); // v9：弹奏/放歌结束或中断 → 停掉旋律（新动作不会和旧旋律叠在一起）
         // —— v8.1 完成时结算：做饭 → 一桌好菜上桌；放歌 → 关音箱；弹奏 → 清音符 ——
         if (e.ev === 'release' && e.memo === 'finish') {
           if (e.kind === 'cook') {
@@ -1759,11 +1766,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
           await new Promise((r) => setTimeout(r, Math.min(3600, 900 + m.length * 70)));
         }
       }
-      // ⑦ 拦截动作块 → 寻路执行（多步排队）
+      // ⑦ 拦截动作块 → 寻路执行（多步排队；song 参数透传点歌）
       if (parsed.actions.length > 0) {
         const acts = parsed.actions.slice(0, 3);
-        companionQueueRef.current = acts.slice(1).map((a) => ({ kind: a.type as CompanionCmd['kind'], room: a.room, memo: 'ai-act' }));
-        issueCompanionCmd({ kind: acts[0].type as CompanionCmd['kind'], room: acts[0].room, memo: 'ai-act' });
+        companionQueueRef.current = acts.slice(1).map((a) => ({ kind: a.type as CompanionCmd['kind'], room: a.room, song: a.song, memo: 'ai-act' }));
+        issueCompanionCmd({ kind: acts[0].type as CompanionCmd['kind'], room: acts[0].room, song: acts[0].song, memo: 'ai-act' });
       }
       // ⑧ 对话记忆入库（标准管线：碎片 → 核心 → 长期；scene=拾光小屋）
       cabinAfterChatTurn(companion.id, useSettings.getState().apiConfig, convoTurnsRef.current.slice(-12), {

@@ -58,6 +58,8 @@ export interface CompanionCmd {
   memo?: string;
   /** 粘性姿势时长（秒）；0 = 保持到被叫起（夜里睡觉）；缺省按姿势默认随机 */
   dur?: number;
+  /** v9 点歌：play/music 指定曲名（曲库见 ai-song.ts；缺省 = AI 即兴） */
+  song?: string;
 }
 
 /** 陪伴事件（状态机 → 宿主，用于记忆写入 / UI 提示 / 家具联动） */
@@ -70,6 +72,8 @@ export interface CompanionEvent {
   room?: RoomId;
   /** 宿主下发指令时带的备注 */
   memo?: string;
+  /** v9 点歌：play/music 到位事件带回曲名（宿主真正出声演奏） */
+  song?: string;
 }
 
 /** 小人姿势槽（宿主持有 ref；本模块直接写入） */
@@ -667,10 +671,10 @@ export function companionStep(
           rt.phase = 'sit';
           rt.sitUntil = rt.actT + stickyDur(cmd, cmd.kind);
           rt.actT = 0;
-          onEvent({ ev: 'arrive', kind: cmd.kind, itemId: rt.itemId ?? undefined, memo: cmd.memo });
+          onEvent({ ev: 'arrive', kind: cmd.kind, itemId: rt.itemId ?? undefined, memo: cmd.memo, song: cmd.song });
         } else if (cmd.kind === 'lamp' || cmd.kind === 'music') {
           if (rt.anchor) ta.heading = rt.anchor.ry;
-          onEvent({ ev: 'arrive', kind: cmd.kind, itemId: rt.itemId ?? undefined, memo: cmd.memo });
+          onEvent({ ev: 'arrive', kind: cmd.kind, itemId: rt.itemId ?? undefined, memo: cmd.memo, song: cmd.song });
           toIdle(rt, partnerPose);
         } else if (cmd.kind === 'door') {
           if (rt.target) ta.heading = Math.atan2(rt.target.x - ta.x, rt.target.z - ta.z + 0.6);

@@ -11,7 +11,7 @@
  * 动作 JSON 协议（前端拦截执行，寻路与动画由 companion-rt 状态机完成）：
  *   <<ACT>>{"actions":[{"type":"come"},{"type":"sit"}]}<<END>>
  *   type: come | goto(room) | sit | lie | watch | lamp | hug | holdhand | free |
- *         play(钢琴/吉他) | cook(做饭) | music(放歌) | door(开门) | eat(吃饭)
+ *         play(钢琴/吉他，可带 song 点歌) | cook(做饭) | music(放歌，可带 song) | door(开门) | eat(吃饭)
  */
 
 import type { ApiConfig } from '@/lib/ios/store';
@@ -79,13 +79,14 @@ const ACT_RULES = [
   '  · come：走到用户身边；',
   '  · goto：去某个房间，需带 room 参数（lr=客厅 br=卧室 kt=厨房 ba=卫生间 bal=阳台），如 {"type":"goto","room":"br"}；',
   '  · sit：找个椅子/沙发坐下；lie：上床躺下睡觉；watch：坐到电视前看电视；lamp：把最近的灯打开；',
-  '  · play：走到钢琴或吉他前弹奏一曲（家里没有乐器就不发这个动作）；',
+  '  · play：走到钢琴或吉他前弹奏一曲（家里没有乐器就不发这个动作）；可带 song 参数点歌，曲库只有这几首：小星星、两只老虎、生日快乐、欢乐颂、小蜜蜂、茉莉花 —— 用户说「弹个小星星」→ {"type":"play","song":"小星星"}；用户点的歌不在曲库里时，选风格最接近的一首，并在回复里自然地说出你弹的曲名；不带 song 就是随性即兴；',
   '  · cook：走到灶台前做一顿饭（做完菜会自动端上餐桌）；',
-  '  · music：走到音箱/唱片机前放首歌；door：把最近一扇关着的门打开；',
+  '  · music：走到音箱/唱片机前放首歌（也可带 song 参数，同曲库）；door：把最近一扇关着的门打开；',
   '  · eat：坐到餐桌边吃饭（要等饭做好了才有得吃，做饭之后可以接 eat）；',
   '  · hug：走过去拥抱用户；holdhand：牵起用户的手（之后会一直牵着）；free：停止动作、自由活动（也可以松开手）；',
   '- 例：用户说「去卧室等我」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"goto","room":"br"},{"type":"sit"}]}<<END>>（走过去坐下）；',
   '- 例：用户说「给我弹首钢琴曲」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"play"}]}<<END>>；',
+  '- 例：用户说「弹个小星星听」→ 回复末尾输出 <<ACT>>{"actions":[{"type":"play","song":"小星星"}]}<<END>>（曲名必须是曲库里的）；',
   '- 例：用户说「我饿了」→ 可以 <<ACT>>{"actions":[{"type":"cook"}]}<<END>>（做饭给用户吃）；',
   '- 用户没有让你做任何事、只是闲聊时：不要输出动作块，正常聊天就好（偶尔想主动贴近时也可以发 hug/come，但别频繁）；',
   '- 你自己说的「我走过去/我坐下/我去弹琴」只有配合动作块才会真的发生，别光说不做。',
@@ -181,7 +182,7 @@ export async function cabinChatTurn(
 /** 解析后的 AI 回复：多条气泡消息 + 拦截到的动作序列 */
 export interface ParsedReply {
   msgs: string[];
-  actions: { type: string; room?: RoomId }[];
+  actions: { type: string; room?: RoomId; song?: string }[];
   /** 原始全文（记忆提取用） */
   raw: string;
 }
@@ -204,7 +205,7 @@ const ROOM_IDS = new Set(['lr', 'br', 'kt', 'ba', 'bal']);
  */
 export function parseAiReply(text: string): ParsedReply {
   const raw = text ?? '';
-  const actions: { type: string; room?: RoomId }[] = [];
+  const actions: { type: string; room?: RoomId; song?: string }[] = [];
   let body = raw;
   const m = ACT_RE.exec(raw);
   if (m) {
@@ -214,12 +215,13 @@ export function parseAiReply(text: string): ParsedReply {
       if (Array.isArray(parsed.actions)) {
         for (const a of parsed.actions) {
           if (!a || typeof a !== 'object') continue;
-          const rec = a as { type?: unknown; room?: unknown };
+          const rec = a as { type?: unknown; room?: unknown; song?: unknown };
           if (typeof rec.type !== 'string') continue;
           const t = rec.type.trim();
           if (!ACT_KINDS.has(t)) continue;
           const room = typeof rec.room === 'string' && ROOM_IDS.has(rec.room) ? (rec.room as RoomId) : undefined;
-          actions.push(room ? { type: t, room } : { type: t });
+          const song = typeof rec.song === 'string' && rec.song.trim() ? rec.song.trim().slice(0, 24) : undefined;
+          actions.push({ type: t, ...(room ? { room } : {}), ...(song ? { song } : {}) });
         }
       }
     } catch {
