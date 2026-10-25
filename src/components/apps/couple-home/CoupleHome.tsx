@@ -643,6 +643,49 @@ const editDirBtnBlue =
 const editDirBtnAmber =
   'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90 active:bg-[#f5efe2] active:text-[#8a7a54]';
 
+// ---------------- v8.2 优化A：小屋聊天记录持久化（localStorage 按角色分档，退出重进上下文不丢） ----------------
+
+/** 每个角色一份会话存档（LLM 上下文 + 记忆提取轮次） */
+interface CabinConvoSave {
+  convo: { role: 'user' | 'assistant'; content: string }[];
+  turns: { role: 'me' | 'peer'; text: string }[];
+  ts: number;
+}
+
+const CONVO_SAVE_LIMIT = 40;
+
+function loadCabinConvo(id: string): CabinConvoSave {
+  try {
+    const raw = window.localStorage.getItem(`cabin-chat-${id}`);
+    if (!raw) return { convo: [], turns: [], ts: 0 };
+    const j = JSON.parse(raw) as Partial<CabinConvoSave>;
+    const convo = Array.isArray(j.convo)
+      ? j.convo
+          .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+          .slice(-CONVO_SAVE_LIMIT)
+      : [];
+    const turns = Array.isArray(j.turns)
+      ? j.turns.filter((m) => m && (m.role === 'me' || m.role === 'peer') && typeof m.text === 'string').slice(-CONVO_SAVE_LIMIT)
+      : [];
+    return { convo, turns, ts: typeof j.ts === 'number' ? j.ts : 0 };
+  } catch {
+    return { convo: [], turns: [], ts: 0 };
+  }
+}
+
+function saveCabinConvo(
+  id: string,
+  convo: { role: 'user' | 'assistant'; content: string }[],
+  turns: { role: 'me' | 'peer'; text: string }[],
+): void {
+  try {
+    const data: CabinConvoSave = { convo: convo.slice(-CONVO_SAVE_LIMIT), turns: turns.slice(-CONVO_SAVE_LIMIT), ts: Date.now() };
+    window.localStorage.setItem(`cabin-chat-${id}`, JSON.stringify(data));
+  } catch {
+    /* 写不进就算了（隐私模式） */
+  }
+}
+
 export default function CoupleHome({ close }: { close: () => void }) {
   // ---------------- 持久化状态 ----------------
   const [pack] = useState<HomePersist>(() => loadCache() ?? { home: defaultHome(), rev: 0 });
@@ -1234,6 +1277,12 @@ export default function CoupleHome({ close }: { close: () => void }) {
   const requestCooldownRef = useRef(0);
   /** 自主行动调度（上次触发时刻） */
   const autoNextAtRef = useRef(Date.now() + 50_000);
+  /** v8.2 优化D「一起做动作」：AI 回复带 watch/eat/play 且用户说了「一起/陪」→ 到位后招呼用户同步入座 */
+  const togetherRef = useRef<'watch' | 'eat' | 'play' | null>(null);
+  /** v8.2 优化C：陪伴小人夜里睡着（UI 态，驱动梦境气泡） */
+  const [sleepingUi, setSleepingUi] = useState(false);
+  /** beginAction 桥（定义在后文，事件回调先定义 → 用 ref 转发） */
+  const beginActionRef = useRef<(type: CharAction['type'], item: FurnitureItem) => void>(() => {});
 
   /** 下发陪伴指令（seq 递增；状态机在 HomeScene.GameLoop 消费） */
   const issueCompanionCmd = useCallback((cmd: Omit<CompanionCmd, 'seq'>) => {
@@ -1241,6 +1290,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
     companionCmdRef.current = { ...cmd, seq: companionSeq.current };
     if (cmd.kind !== 'free') companionStateRef.current = 'walking';
     else companionStateRef.current = 'idle';
+    setSleepingUi(false); // 任何新指令都会把睡着的小人叫醒
   }, []);
 
   /** 陪伴事件（状态机 → 宿主）：状态镜像 + 多步队列接续 + 全事件记忆入库 */
@@ -1248,7 +1298,10 @@ export default function CoupleHome({ close }: { close: () => void }) {
     (e: CompanionEvent) => {
       if (e.ev === 'arrive') {
         if (e.kind === 'sit') companionStateRef.current = 'sitting';
-        else if (e.kind === 'lie') companionStateRef.current = e.memo === 'auto-night' ? 'sleeping' : 'lying';
+        else if (e.kind === 'lie') {
+          companionStateRef.current = e.memo === 'auto-night' ? 'sleeping' : 'lying';
+          if (e.memo === 'auto-night') setSleepingUi(true);
+        }
         else if (e.kind === 'watch') companionStateRef.current = 'watching';
         else if (e.kind === 'play') {
           companionStateRef.current = 'playing';
@@ -1311,6 +1364,39 @@ export default function CoupleHome({ close }: { close: () => void }) {
         // AI 多步动作队列：上一个到位 → 接续下发下一个
         const next = companionQueueRef.current.shift();
         if (next) setTimeout(() => issueCompanionCmd(next), 400);
+        // —— v8.2 优化D「一起做动作」：AI 回应了「一起看电视/吃饭/弹琴」 → TA 到位后招呼用户同步入座 ——
+        if (
+          togetherRef.current &&
+          (e.kind === togetherRef.current || (togetherRef.current === 'play' && e.kind === 'play')) &&
+          (e.kind === 'watch' || e.kind === 'eat' || e.kind === 'play') &&
+          e.itemId
+        ) {
+          const tk = togetherRef.current;
+          togetherRef.current = null;
+          const item = itemsRef.current.find((f) => f.id === e.itemId);
+          if (item) {
+            if (tk === 'eat' && !mealReadyRef.current) {
+              toast('菜还没上桌，等做好了再一起吃呀～');
+            } else if (tk === 'play') {
+              // 弹琴：用户用「另一件」乐器（同一张琴凳坐不下）
+              const other = itemsRef.current.find(
+                (f) => f.id !== item.id && CATALOG[f.kind]?.acts?.play && (f.y ?? 0) < 0.45,
+              );
+              if (other && poseRef.current.pose === 'stand' && !actRef.current && !carryPetRef.current) {
+                setTimeout(() => beginActionRef.current('play', other), 900);
+              } else {
+                toast(`${companion?.name ?? 'TA'}先为你弹一首，听完再点另一件乐器合奏吧～`);
+              }
+            } else if (poseRef.current.pose === 'stand' && !actRef.current && !carryPetRef.current) {
+              setTimeout(() => {
+                const it = itemsRef.current.find((f) => f.id === item.id);
+                if (it) beginActionRef.current(tk, it);
+              }, 900);
+            } else {
+              toast(`${companion?.name ?? 'TA'}已经入座啦，点同款家具加入 TA 吧～`);
+            }
+          }
+        }
       } else if (e.ev === 'hugStart') {
         companionStateRef.current = 'hug';
         setHoldingUI(false);
@@ -1355,6 +1441,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
         setPartnerPlaying(null);
         companionStateRef.current = 'idle';
         setHoldingUI(false);
+        togetherRef.current = null;
+        setSleepingUi(false);
         if (companionQueueRef.current.length > 0) companionQueueRef.current = [];
       } else if (e.ev === 'room') {
         // —— 空间记忆：用户牵着我的手，带我去了×× ——
@@ -1404,17 +1492,24 @@ export default function CoupleHome({ close }: { close: () => void }) {
     (c: ContactRecord) => {
       setCompanion(c);
       setPickerOpen(false);
-      convoRef.current = [];
-      convoTurnsRef.current = [];
+      // v8.2 优化A 聊天记录持久化：换人先封存上一任，再载入 TA 的历史会话（退出重进上下文不丢）
+      if (companion) saveCabinConvo(companion.id, convoRef.current, convoTurnsRef.current);
+      const saved = loadCabinConvo(c.id);
+      convoRef.current = saved.convo;
+      convoTurnsRef.current = saved.turns;
       try {
         window.localStorage.setItem('cabin-companion-id', c.id);
       } catch {
         /* ignore */
       }
       setMemScopeForApp('cabin');
-      toast(`${c.name}走进了你搭的小家，点击右上角 💬 和 TA 说话吧～`);
+      toast(
+        saved.convo.length > 0
+          ? `${c.name}回来了，还记得上次聊到哪儿～ 点击右上角 💬 继续聊`
+          : `${c.name}走进了你搭的小家，点击右上角 💬 和 TA 说话吧～`,
+      );
     },
-    [toast],
+    [toast, companion],
   );
 
   /** 切换角色（⋮ 菜单）：弹回选择列表并挂断当前语音 */
@@ -1545,6 +1640,11 @@ export default function CoupleHome({ close }: { close: () => void }) {
       // ④ 请求 AI
       const reply = await cabinChatTurn([{ role: 'system', content: system }, ...history, { role: 'user', content: userContent }], useSettings.getState().apiConfig);
       const parsed = parseAiReply(reply);
+      // v8.2 优化D：用户说了「一起/陪」且回复带 看电视/吃饭/弹琴 → TA 到位后同步招呼
+      if (/一起|陪我|陪我一起/.test(text) && parsed.actions.some((a) => ['watch', 'eat', 'play'].includes(a.type))) {
+        const first = parsed.actions.find((a) => ['watch', 'eat', 'play'].includes(a.type));
+        togetherRef.current = first?.type as 'watch' | 'eat' | 'play';
+      }
       // ⑤ 记录会话（LLM 上下文 + 记忆提取轮次）
       convoRef.current.push({ role: 'user', content: userContent }, { role: 'assistant', content: parsed.raw });
       convoRef.current = convoRef.current.slice(-40);
@@ -1579,6 +1679,8 @@ export default function CoupleHome({ close }: { close: () => void }) {
         user: ownerNameRef.current || null,
         peer: companion.name || null,
       });
+      // v8.2 优化A：会话存档落盘（退出重进接着聊）
+      saveCabinConvo(companion.id, convoRef.current, convoTurnsRef.current);
     } catch (err) {
       toast(err instanceof Error && err.message ? `TA 没能回话：${err.message}` : 'TA 没能回话，稍后再试试');
     } finally {
@@ -1639,6 +1741,7 @@ export default function CoupleHome({ close }: { close: () => void }) {
                     user: ownerNameRef.current || null,
                     peer: companion.name || null,
                   });
+                  saveCabinConvo(companion.id, convoRef.current, convoTurnsRef.current);
                 } catch (err) {
                   toast(err instanceof Error && err.message ? `TA 没能回话：${err.message}` : 'TA 没能回话，稍后再试试');
                 } finally {
@@ -1872,6 +1975,32 @@ export default function CoupleHome({ close }: { close: () => void }) {
     }, 2200);
     return () => clearTimeout(t);
   }, [night, issueCompanionCmd]);
+
+  /** v8.2 优化C 小人睡觉做梦：夜里 TA 睡着后，头顶隔一会儿冒一句梦话（点击 💬 回话，TA 会梦呓着接下去） */
+  useEffect(() => {
+    if (!sleepingUi || !companion) return;
+    const dreams = [
+      '唔……梦到我们一起去看海了，浪花凉凉的……',
+      '（咂咂嘴）唔嘿嘿……这个梦里的蛋糕好好吃……',
+      '（抱着被子蹭了蹭）唔……别走嘛，再陪我玩一会儿……',
+      '（咿咿呀呀）梦到捡到一只小猫，它冲我喵喵叫……',
+      '（翻了个身）明天……明天要一起去放风筝的……',
+      '（嘴角上扬）唔……梦里你牵着我的手，走过好长一条街……',
+      '（小声）枕头软软的……像云朵一样……',
+    ];
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const dreamOnce = () => {
+      if (!alive) return;
+      bubbleRef.current.push({ who: 'ta', text: dreams[Math.floor(Math.random() * dreams.length)], hold: 6.5 });
+      timer = setTimeout(dreamOnce, 24_000 + Math.random() * 26_000);
+    };
+    timer = setTimeout(dreamOnce, 9_000 + Math.random() * 8_000);
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [sleepingUi, companion]);
 
   // ---------------- 初始化：拉远端（远端 rev 更新则采纳） ----------------
   useEffect(() => {
@@ -2286,6 +2415,31 @@ export default function CoupleHome({ close }: { close: () => void }) {
     },
     [toast, saveSoon, endAction],
   );
+  // v8.2 beginAction 桥赋值（onCompanionEvent 等先定义的回调经 beginActionRef 转发）
+  beginActionRef.current = beginAction;
+
+  /** v8.2 优化D「一起做动作」反向版：用户开始 看电视/开饭 时，空闲的 TA 过来一起（演奏是单人乐器，不凑） */
+  useEffect(() => {
+    if (!charAction || charAction.active) return;
+    const type = charAction.type;
+    if (type !== 'watch' && type !== 'eat') return;
+    if (type === 'eat' && !mealReady) return;
+    if (!companion || petCare || carrying || holdingUI) return;
+    if (companionStateRef.current !== 'idle') return;
+    const t = setTimeout(() => {
+      if (companionStateRef.current !== 'idle') return;
+      const it = itemsRef.current.find((f) => f.id === charAction.itemId);
+      if (!it) return;
+      if (type === 'eat') {
+        const table = itemsRef.current.find((f) => f.kind === 'diningTable' && CATALOG[f.kind]?.acts?.eat);
+        if (table) issueCompanionCmd({ kind: 'eat', itemId: table.id, memo: 'join' });
+      } else {
+        issueCompanionCmd({ kind: type, itemId: it.id, memo: 'join' });
+      }
+      toast(`${companion?.name ?? 'TA'}也凑过来一起啦～`);
+    }, 1400);
+    return () => clearTimeout(t);
+  }, [charAction, companion, petCare, carrying, holdingUI, mealReady, issueCompanionCmd, toast]);
 
   /** 好菜所在餐桌（做饭完成后第一张餐桌；无餐桌则不上桌） */
   const mealTableId = useMemo(() => {

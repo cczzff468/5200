@@ -789,11 +789,16 @@ function GameLoop({
       }
     } else {
       // —— 第三人称跟随（球坐标：方位角 az / 俯仰 pitch / 距离 dist） ——
-      const pitch = pitchRef.current?.p ?? 0.92;
-      const dist = distRef.current?.d ?? 8.8;
+      // v8.2 优化B 牵手专属镜头：牵手时镜头拉远 + 中心取两人中点 + 视角压平（双人同行构图）；
+      // 不写回 dist/pitch ref，松手后自动恢复用户自己的视角
+      const holding = compRT.phase === 'hold';
+      const pitch = holding ? Math.min(pitchRef.current?.p ?? 0.92, 0.74) : (pitchRef.current?.p ?? 0.92);
+      const dist = holding ? Math.max(distRef.current?.d ?? 8.8, 10.9) : (distRef.current?.d ?? 8.8);
+      const cx = holding ? (meRT.x + taRT.x) / 2 : meRT.x;
+      const cz = holding ? (meRT.z + taRT.z) / 2 : meRT.z;
       const cy = Math.sin(pitch) * dist;
       const ch = Math.cos(pitch) * dist;
-      desired.current.set(meRT.x + Math.sin(az) * ch, cy + 0.55, meRT.z + Math.cos(az) * ch);
+      desired.current.set(cx + Math.sin(az) * ch, cy + 0.55, cz + Math.cos(az) * ch);
       // 方案 B 兕底：轨道目标点先推出墙体盒，低俯仰/近距离不再字面穿墙
       pushCameraOutWalls(desired.current, wallBoxes);
 
@@ -803,9 +808,9 @@ function GameLoop({
       } else {
         const rate = catchUp.current > 0 ? 9 : 5;
         if (catchUp.current > 0) catchUp.current -= dt;
-        camera.position.lerp(desired.current, 1 - Math.exp(-dt * rate));
+        camera.position.lerp(desired.current, 1 - Math.exp(-dt * (holding ? 2.6 : rate)));
       }
-      lookAt.current.set(meRT.x, 1.0, meRT.z);
+      lookAt.current.set(cx, holding ? 0.9 : 1.0, cz);
       camera.lookAt(lookAt.current);
       const cam = camera as THREE.PerspectiveCamera;
       if (cam.isPerspectiveCamera && cam.fov !== 48) {
