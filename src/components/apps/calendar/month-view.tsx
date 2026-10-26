@@ -4,7 +4,7 @@
  * 主页：月历 + 当日安排（Task 16-d 小米化）。
  * 公共头部（返回/图标/标题「2026/10」/默认视图下拉/搜索/更多）+ 五视图切换胶囊（选中「月」）；
  * 星期表头（周日开头）+ 小米风格月格（今天红方块+底红条、休/班角标、节日红字、日程色点）；
- * 网格下方「选中日期 + 农历 + 当日日程列表」；左右滑动切月。
+ * 网格下方「选中日期 + 农历 + 当日日程列表」；横滑切月、**纵向下滑进下月 / 上滑进上月**（Task 18-c）。
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -49,8 +49,9 @@ export function MonthView({
   onOpenEvent: (ev: NormalizedEvent) => void;
 }) {
   const today = todayKey();
-  const touchX = useRef<number | null>(null);
-  const [slideDir, setSlideDir] = useState(1);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  /** 切月动画方向（axis x = 横滑左右入场；axis y = 纵向上/下入场） */
+  const [slide, setSlide] = useState<{ axis: 'x' | 'y'; dir: number }>({ axis: 'x', dir: 1 });
 
   // 月网格日程色点：仅统计本日开始的事件，避免重复展开开销过大
   const dotFor = useMemo(() => {
@@ -77,8 +78,8 @@ export function MonthView({
   );
 
   const shift = useCallback(
-    (delta: number) => {
-      setSlideDir(delta);
+    (delta: number, axis: 'x' | 'y' = 'x') => {
+      setSlide({ axis, dir: delta });
       onShiftMonth(delta);
     },
     [onShiftMonth]
@@ -96,21 +97,32 @@ export function MonthView({
         onNew={onNew}
       />
 
-      {/* 月网格（支持左右滑动切月） */}
+      {/* 月网格（横滑切月；下滑进下月 / 上滑进上月，主轴判定避免斜滑误触） */}
       <div
         key={`${viewYM.y}-${viewYM.m}`}
-        className={`shrink-0 px-2 pt-1.5 ${
-          slideDir >= 0 ? 'animate-in fade-in slide-in-from-right-3 duration-200' : 'animate-in fade-in slide-in-from-left-3 duration-200'
+        className={`shrink-0 px-2 pt-1.5 animate-in fade-in duration-200 ${
+          slide.axis === 'x'
+            ? slide.dir >= 0
+              ? 'slide-in-from-right-3'
+              : 'slide-in-from-left-3'
+            : slide.dir >= 0
+              ? 'slide-in-from-top-3'
+              : 'slide-in-from-bottom-3'
         }`}
         onTouchStart={(e) => {
-          touchX.current = e.touches[0]?.clientX ?? null;
+          const t = e.touches[0];
+          touchStart.current = t ? { x: t.clientX, y: t.clientY } : null;
         }}
         onTouchEnd={(e) => {
-          const start = touchX.current;
-          touchX.current = null;
-          if (start === null) return;
-          const dx = (e.changedTouches[0]?.clientX ?? 0) - start;
-          if (Math.abs(dx) >= 56) shift(dx < 0 ? 1 : -1);
+          const start = touchStart.current;
+          touchStart.current = null;
+          const t = e.changedTouches[0];
+          if (!start || !t) return;
+          const dx = t.clientX - start.x;
+          const dy = t.clientY - start.y;
+          // 主轴判定：横向位移占优 → 切月（左=下月）；纵向占优 → 下滑=下月、上滑=上月
+          if (Math.abs(dx) >= 56 && Math.abs(dx) > Math.abs(dy)) shift(dx < 0 ? 1 : -1, 'x');
+          else if (Math.abs(dy) >= 56 && Math.abs(dy) > Math.abs(dx)) shift(dy > 0 ? 1 : -1, 'y');
         }}
       >
         <DayGrid

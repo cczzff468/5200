@@ -3,9 +3,11 @@
 /**
  * 语音消息气泡（微信 / QQ / 信息 / 两端群聊共用）：
  * - 微信（theme='wx'）：**真机同款「时长 + 喇叭」气泡**——无圆形播放钮、无波形条，
- *   我方绿气泡「5″ 喇叭」（时长在左、喇叭口朝左对着时长）/ 对方白气泡「喇叭 5″」（镜像）；
- *   气泡宽度随时长伸缩（1s→80px、每秒 +4px、60s 封顶约 300px）；播放中喇叭的两道声波
- *   弧线交替闪动（约 420ms 互换，播完恢复静态常亮）；点击气泡任意处播放/暂停
+ *   我方绿气泡「5″ 喇叭」（时长在左、喇叭在右，**内容整体贴尾巴一侧右对齐**，真机截图测量
+ *   右边距≈15px）/ 对方白气泡镜像（喇叭在左、时长在右、贴左对齐）；喇叭图标 = 实心小三角
+ *   锥体（尾巴一侧尖朝外）+ 三道声波弧线向时长方向辐射（高瘦扇形，真机同款）；气泡宽度随时长
+ *   伸缩（1s→86px、每秒 +4px、60s 封顶约 300px）；播放中喇叭的三道声波弧线交替闪动
+ *   （约 420ms 互换，播完恢复静态常亮）；点击气泡任意处播放/暂停
  *   （全局单例：新播自动停旧，也停 TTS 朗读）
  * - QQ / 信息：圆形播放钮（**三角/暂停图标，与 QQ 一致**）+ **随宽度伸缩的录音波形条**
  *   （voice.wave，播放中按进度逐根点亮，播放完成恢复默认）+ **固定在气泡右侧的时长**；
@@ -138,56 +140,62 @@ function VoiceWaveBars({ wave, active, playing, progress, count }: { wave: numbe
 }
 
 /**
- * 微信语音喇叭图标（真机同款：实心小喇叭 + 两道声波弧线，单色跟随气泡文字色）。
- * flip = true 水平镜像（我方绿气泡：喇叭口朝左、朝向左侧的时长文字；对方气泡口朝右）。
- * playing 时两道弧线 opacity 交替闪动（interval 驱动，~420ms 互换一次），停止恢复静态常亮。
+ * 微信语音喇叭图标（真机同款，按 1080px 真机截图像素描摹重绘，viewBox 29×42 = 真机图标 1:1）：
+ * 实心小三角（喇叭锥体，靠尾巴一侧、尖角朝外）+ 三道声波弧线自三角后方（圆心 23,20.5）
+ * 向时长文字方向辐射，最外弧几乎撑满图标全高（真机扇形高瘦）；笔画粗约为图标高 9.5%。
+ * flip = true 水平镜像（对方白气泡：尾巴在左 → 三角在左尖朝左、弧线朝右）。
+ * playing 时三道弧线由内向外轮流闪动（interval 驱动，~420ms 互换），停止恢复静态常亮。
  */
-function WxVoiceGlyph({ size = 18, flip = false, playing = false }: { size?: number; flip?: boolean; playing?: boolean }) {
+function WxVoiceGlyph({ size = 17, flip = false, playing = false }: { size?: number; flip?: boolean; playing?: boolean }) {
   const [alt, setAlt] = useState(false);
   useEffect(() => {
     if (!playing) return; // 停止时不读 alt（静态常亮），无需复位
     const timer = window.setInterval(() => setAlt((v) => !v), 420);
     return () => window.clearInterval(timer);
   }, [playing]);
-  // 播放中两道弧交替闪（一亮一暗互换）；静止时常亮且比喇叭主体淡一档（真机声波弧更浅）
-  const near = playing ? (alt ? 1 : 0.15) : 0.8;
-  const far = playing ? (alt ? 0.15 : 1) : 0.62;
+  // 播放中三道弧由内向外轮流闪（真机播放动效）；静止时常亮且越远越淡（真机层次）
+  const o1 = playing ? (alt ? 1 : 0.18) : 0.9;
+  const o2 = playing ? (!alt ? 1 : 0.18) : 0.66;
+  const o3 = playing ? 0.3 : 0.44;
   return (
     <svg
-      viewBox="0 0 24 24"
-      width={size}
+      viewBox="0 0 29 42"
+      width={(size * 29) / 42}
       height={size}
       fill="none"
       stroke="currentColor"
-      strokeWidth={2}
+      strokeWidth={4}
       strokeLinecap="round"
       aria-hidden="true"
       style={{ transform: flip ? 'scaleX(-1)' : undefined }}
       className="shrink-0"
     >
-      {/* 实心喇叭主体（口朝右；flip 后朝左对着时长文字） */}
+      {/* 三道声波弧线（圆心 23,20.5 在三角锥体后方，向左辐射；播放中交替闪动） */}
+      <path d="M16.98 13.8 A9 9 0 0 0 16.98 27.2" style={{ opacity: o1 }} className="transition-opacity duration-150" />
+      <path d="M14.29 7.08 A16 16 0 0 0 14.29 33.92" style={{ opacity: o2 }} className="transition-opacity duration-150" />
+      <path d="M12.9 0 A23 23 0 0 0 12.9 41" style={{ opacity: o3 }} className="transition-opacity duration-150" />
+      {/* 实心小三角喇叭锥体（尖角朝右 = 朝尾巴一侧；flip 后朝左） */}
       <path
-        d="M5.2 9.3 h2.5 l3.7 -3.15 a0.72 0.72 0 0 1 1.2 0.55 v10.6 a0.72 0.72 0 0 1 -1.2 0.55 l-3.7 -3.15 H5.2 a0.85 0.85 0 0 1 -0.85 -0.85 v-3.7 a0.85 0.85 0 0 1 0.85 -0.85 Z"
+        d="M19.5 15.5 L28.5 21.5 L19.5 27.5 Z"
         fill="currentColor"
-        stroke="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinejoin="round"
       />
-      {/* 两道声波弧线（播放中交替闪动） */}
-      <path d="M15.5 9.4 a3.9 3.9 0 0 1 0 5.2" style={{ opacity: near }} className="transition-opacity duration-150" />
-      <path d="M18 7.4 a6 6 0 0 1 0 9.2" style={{ opacity: far }} className="transition-opacity duration-150" />
     </svg>
   );
 }
 
 /**
- * 微信真机同款时长文字：数字 17px，后缀 ′/″ 上标小字（真机「3″」撇号悬在数字肩部）。
+ * 微信真机同款时长文字：数字 16px，后缀 ′/″ 缩小悬在数字肩部（真机「3″」撇号约数字高 1/3、顶部对齐）。
  * voiceDurationLabel 返回如 3″ / 1′05″，逐字符拆分：数字正常大小，撇号缩小上提。
  */
 function WxDuration({ label }: { label: string }) {
   return (
-    <span className="shrink-0 whitespace-nowrap text-[17px] leading-none tabular-nums">
+    <span className="shrink-0 whitespace-nowrap text-[16px] leading-none tabular-nums">
       {[...label].map((ch, i) =>
         ch === '′' || ch === '″' ? (
-          <span key={i} className="ml-[1px] text-[11.5px] leading-none" style={{ verticalAlign: '0.42em' }}>
+          <span key={i} className="ml-[1.5px] text-[9.5px] leading-none" style={{ verticalAlign: '0.44em' }}>
             {ch}
           </span>
         ) : (
@@ -220,7 +228,7 @@ export function VoiceMsgBubble({
   const isActive = activeId === msgId;
   const isPlaying = isActive && playing;
   const label = voiceDurationLabel(voice.duration);
-  /** 气泡宽度随时长动态变化：微信 80 基础 + 4px/秒封顶 300；QQ/信息 60 基础 + 3px/秒封顶 240 */
+  /** 气泡宽度随时长动态变化：微信 86 基础 + 4px/秒封顶 300；QQ/信息 60 基础 + 3px/秒封顶 240 */
   const width = isWx ? wxBubbleWidth(voice.duration) : bubbleWidth(voice.duration);
   /** 波形条数随宽度伸缩（仅 QQ/信息端有波形） */
   const bars = isWx ? 0 : barCountFor(bubbleWidth(voice.duration), label);
@@ -231,9 +239,9 @@ export function VoiceMsgBubble({
       ? 'bg-[#007AFF] text-white'
       : 'bg-[#0099FF] text-white';
 
-  /** 圆角与各端文本气泡同规格：微信 12px（真机绿/白气泡同款圆角）、QQ 12px、信息 18px（iOS 圆气泡） */
+  /** 圆角与各端文本气泡同规格：微信 5px（与 wx 文本气泡 rounded-[5px] 一致、真机同款小圆角）、QQ 12px、信息 18px */
   const bubbleCls = isWx
-    ? `relative rounded-[12px] ${mine ? t.own : t.peer}`
+    ? `relative rounded-[5px] ${mine ? t.own : t.peer}`
     : theme === 'im'
       ? `rounded-[18px] ${mine ? 'text-white' : t.peer}`
       : `rounded-[12px] ${mine ? 'text-white' : t.peer}`;
@@ -250,29 +258,33 @@ export function VoiceMsgBubble({
           voicePlayer.toggle(msgId, voice.url, voice.localText, { synth: voice.synth, contactId: voice.contactId });
         }}
         className={`flex select-none items-center transition-transform active:scale-[0.98] ${bubbleCls} ${
-          isWx ? 'h-[44px] gap-[5px] px-[10px]' : 'h-[40px] gap-[4px] px-[6px]'
+          isWx
+            ? `h-[44px] gap-[8px] ${mine ? 'justify-end pl-3 pr-[15px]' : 'justify-start pl-[15px] pr-3'}`
+            : 'h-[40px] gap-[4px] px-[6px]'
         }`}
         style={{ width, ...style }}
       >
-        {/* 微信同款小尾巴（指向发送者一侧，带圆角的斜切三角，真机弧形尾） */}
+        {/* 微信同款小尾巴（与 wx 文本气泡同规格：8px 斜切三角、悬在气泡上沿下方） */}
         {isWx && (
           <span
             aria-hidden="true"
-            className={`absolute top-[14px] h-[10px] w-[10px] rotate-45 rounded-[2px] ${
-              mine ? '-right-[3.5px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3.5px] bg-white dark:bg-[#1E1E1E]'
+            className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
+              mine ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]' : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
             }`}
           />
         )}
         {isWx ? (
-          /* 微信真机同款：时长 + 喇叭（我方「时长在左、喇叭口朝左」；对方镜像）——无播放钮无波形 */
+          /* 微信真机同款：内容贴尾巴一侧对齐（我方右对齐「时长在左、喇叭在右」，对方镜像）——
+             真机截图测量：右边距≈15px、左边距≈46px，时长+喇叭整体靠右；无播放钮无波形。
+             字形基准 = 我方样式（弧线朝左辐射 + 三角尖朝右朝尾巴），对方镜像 flip */
           mine ? (
             <>
               <WxDuration label={label} />
-              <WxVoiceGlyph size={20} playing={isPlaying} flip />
+              <WxVoiceGlyph size={17} playing={isPlaying} />
             </>
           ) : (
             <>
-              <WxVoiceGlyph size={20} playing={isPlaying} />
+              <WxVoiceGlyph size={17} playing={isPlaying} flip />
               <WxDuration label={label} />
             </>
           )

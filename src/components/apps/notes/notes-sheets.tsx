@@ -148,7 +148,7 @@ export function NewFolderSheet({
             }
           />
           <div className="px-4 pb-5 pt-1">
-            <div className="flex h-11 items-center rounded-[10px] bg-[#eeece8] px-3 dark:bg-white/[0.09]">
+            <div className="flex h-11 items-center rounded-[10px] bg-[#E9E8ED] px-3 dark:bg-white/[0.09]">
               <input
                 ref={inputRef}
                 value={name}

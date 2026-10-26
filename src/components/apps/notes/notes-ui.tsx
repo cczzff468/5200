@@ -15,6 +15,7 @@ import {
   FolderInput,
   FolderPlus,
   Lock,
+  MoreHorizontal,
   Pin,
   Search,
   SquarePen,
@@ -25,6 +26,7 @@ import {
   CARD_CLS,
   MUTED_META_CLS,
   MUTED_TEXT_CLS,
+  SEARCH_BG,
   WARM_RED,
   displayPreview,
   displayTitle,
@@ -39,6 +41,22 @@ import { useLongPress } from '@/hooks/use-long-press';
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
 
 // ---------------- 导航按钮 / 标题 ----------------
+
+/** 右上金圈⋯按钮（设计稿：细金圆环包三点，iOS 备忘录同款） */
+export function GoldMoreButton({ onClick, label = '更多操作' }: { onClick: () => void; label?: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-haspopup="menu"
+      onClick={onClick}
+      className="flex h-[30px] w-[30px] items-center justify-center rounded-full border-[1.5px] transition-opacity active:opacity-50"
+      style={{ borderColor: 'var(--notes-gold)', color: 'var(--notes-gold)' }}
+    >
+      <MoreHorizontal className="h-[17px] w-[17px]" strokeWidth={2.6} />
+    </button>
+  );
+}
 
 /** 顶部导航金色文字按钮（设计稿：三段式导航，文字按钮取金色） */
 export function GoldNavButton({
@@ -227,15 +245,16 @@ export function SearchBox({
     </>
   );
   const cls =
-    'flex h-9 items-center gap-2 rounded-[10px] bg-[#eeece8] px-3 dark:bg-white/[0.09]';
+    'flex h-9 items-center gap-2 rounded-[10px] px-3';
+  const bgStyle = { backgroundColor: SEARCH_BG };
   if (tappable) {
     return (
-      <button type="button" aria-label="打开搜索" onClick={onTap} className={`${cls} w-full text-left`}>
+      <button type="button" aria-label="打开搜索" onClick={onTap} className={`${cls} w-full text-left dark:bg-white/[0.09]`} style={bgStyle}>
         {inner}
       </button>
     );
   }
-  return <div className={cls}>{inner}</div>;
+  return <div className={cls} style={bgStyle}>{inner}</div>;
 }
 
 // ---------------- 勾选圆（金色） ----------------
@@ -270,7 +289,7 @@ export function CheckCircle({
       style={
         checked
           ? { width: size, height: size, backgroundColor: 'var(--notes-gold)', border: 'none' }
-          : { width: size, height: size, border: '1.5px solid rgba(184,134,11,0.55)', backgroundColor: 'transparent' }
+          : { width: size, height: size, border: '1.5px solid rgba(204,174,84,0.6)', backgroundColor: 'transparent' }
       }
     >
       {checked && <Check className="text-white" style={{ width: size * 0.6, height: size * 0.6 }} strokeWidth={3} />}
@@ -280,7 +299,7 @@ export function CheckCircle({
 
 // ---------------- 底部工具栏 ----------------
 
-/** 页面底部玻璃工具栏：左 = 新建文件夹，右 = 金色圆角方块新建笔记（设计稿样式） */
+/** 页面底部玻璃工具栏：左 = 新建文件夹、右 = 金色描边新建笔记（设计稿：两枚金色线性图标） */
 export function BottomToolbar({
   onNewFolder,
   onCompose,
@@ -304,10 +323,10 @@ export function BottomToolbar({
           type="button"
           onClick={onCompose}
           aria-label="新建备忘录"
-          className="flex h-10 w-10 items-center justify-center rounded-[12px] text-white shadow-[0_3px_10px_rgba(184,134,11,0.4)] transition-transform active:scale-90"
-          style={{ backgroundColor: 'var(--notes-gold)' }}
+          className="flex h-11 w-11 items-center justify-center rounded-full transition-transform active:scale-90"
+          style={{ color: 'var(--notes-gold)' }}
         >
-          <SquarePen className="h-[19px] w-[19px]" strokeWidth={2.2} />
+          <SquarePen className="h-[22px] w-[22px]" strokeWidth={1.9} />
         </button>
       </div>
     </div>
@@ -440,7 +459,9 @@ export function EmptyHint({ icon, title, hint }: { icon: ReactNode; title: strin
 
 /**
  * 列表卡片：白底圆角，标题粗体 + 锁🔒/图钉，摘要灰字 1 行，「时间 · 文件夹名」。
- * 形态：normal（点击打开/长按操作）、check（批量选择圆）、trash（回收站灰卡：文件夹 · 删除时间）。
+ * 形态：normal（独立白卡，搜索结果/收藏夹用）、row（分组合并容器内的裸行，由外层白卡提供
+ * 底色圆角、行间用内缩分隔线，设计稿 iOS 内嵌分组样式）、check（批量选择圆）、
+ * trash（回收站灰卡：文件夹 · 删除时间）。
  */
 export function NoteCard({
   note,
@@ -454,7 +475,7 @@ export function NoteCard({
 }: {
   note: NoteRecord;
   folders: FolderInfo[];
-  variant?: 'normal' | 'check' | 'trash';
+  variant?: 'normal' | 'row' | 'check' | 'trash';
   /** 搜索关键词（命中处高亮，空 = 不高亮） */
   query?: string;
   checked?: boolean;
@@ -500,7 +521,7 @@ export function NoteCard({
         <span className="min-w-0 flex-1 truncate text-[15.5px] font-semibold leading-snug text-foreground">
           {title}
         </span>
-        {note.pinned === true && variant === 'normal' && (
+        {note.pinned === true && variant !== 'trash' && (
           <Pin
             className="h-3.5 w-3.5 shrink-0"
             strokeWidth={2.2}
@@ -526,7 +547,20 @@ export function NoteCard({
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full select-none rounded-[12px] bg-[#f2f0ec] p-3.5 text-left shadow-[0_1px_3px_rgba(80,65,40,0.05)] ring-1 ring-black/[0.03] transition-opacity active:opacity-70 dark:bg-white/[0.04] dark:ring-white/[0.06]"
+        className="flex w-full select-none rounded-[12px] bg-[#ECEBEF] p-3.5 text-left shadow-[0_1px_3px_rgba(80,65,40,0.05)] ring-1 ring-black/[0.03] transition-opacity active:opacity-70 dark:bg-white/[0.04] dark:ring-white/[0.06]"
+      >
+        {body}
+      </button>
+    );
+  }
+
+  if (variant === 'row') {
+    return (
+      <button
+        type="button"
+        {...lp}
+        onClick={onOpen}
+        className="flex w-full select-none px-4 py-[11px] text-left transition-colors active:bg-black/[0.035] dark:active:bg-white/[0.05]"
       >
         {body}
       </button>
@@ -538,7 +572,7 @@ export function NoteCard({
       type="button"
       {...lp}
       onClick={onOpen}
-      className={`${CARD_CLS} flex w-full select-none text-left transition-opacity active:opacity-70`}
+      className={`${CARD_CLS} flex w-full select-none px-4 py-[11px] text-left transition-opacity active:opacity-70`}
     >
       {body}
     </button>

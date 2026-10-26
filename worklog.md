@@ -523,3 +523,24 @@ Stage Summary:
 - 六项反馈全部落地：真机微信语音气泡（12px 圆角/弧形尾/17px 时长上标撇号/20px 喇叭）、转文字白色大气泡面板、输入框 4px 圆角、备忘录软亮金配色、两处冗余文字删除、右上⋯圆形按钮
 - 日历小米化五视图（16-d）一并入库；tsc/eslint/E2E 全绿
 - 待提交：calendar/ 重构、notes/ 重构、voice-bubble/wechat/wx-group/music VIP（上一轮 16-a/16-b 累积）合并为本轮提交
+
+---
+Task ID: 18
+Agent: Z.ai 主控（Z.ai Code）
+Task: 用户第三轮反馈——语音气泡再贴真机重绘 / 备忘录按设计稿再美化（背景·图标·位置）/ 日历下滑进下月下年
+
+Work Log:
+- [语音气泡·素描式重绘 voice-bubble.tsx] 用 Python 对真机截图（upload/Screenshot_20261026_085301.jpg，1080px）逐像素测量后重做 wx 语音气泡：①喇叭图标按真机 1:1 素描（viewBox 29×42=真机图标 29×42px）——实心小三角锥体（靠尾巴侧尖朝外）+ 三道声波弧线自三角后方（圆心 23,20.5）向时长方向辐射、最外弧几乎撑满全高、笔画 4/42≈真机 9.5%，彻底替换旧「喇叭形+2弧」；方向修正：基准字形=我方样式（弧左+三角右▶），我方不 flip、对方 flip（修掉上一版镜像反了的回归）②内容对齐改为真机同款「贴尾巴一侧」：我方 justify-end（右边距 15px，真机测量 38/240=15.8%）、对方镜像贴左 ③圆角 12→5px（与 wx 文本气泡 rounded-[5px] 一致，真机测量 R≈9.5px/108px 高）④尾巴改与文本气泡同规格（8px 斜切、top-11px）⑤时长 17→16px、撇号 11.5→9.5px（真机撇号≈数字高 1/3 悬肩部）⑥喇叭 17px 高瘦形（真机 42/108=39%）、gap 5→8px；气泡宽公式 86+(d-1)×4 保留（3″=94≈真机 92）
+- [备忘录·背景] notes-shared.tsx：BG_WARM #FAF9F7→#F3F2F8（设计稿采样薰衣草灰）；新增 SEARCH_BG=#E9E8ED 常量；GOLD_LIGHT #C9A227→#CCAE54（设计稿图标采样软金）；搜索框/查找条/新建文件夹输入框全部换 #E9E8ED；编辑器根/头部/查找条/锁定遮罩 bg-background→bg-[#F3F2F8]（深色模式保留 background）；回收站灰卡 #f2f0ec→#ECEBEF；查找高亮/勾选圆描边/日期胶囊统一新金色 rgba(204,174,84,*)
+- [备忘录·图标] 文件夹行 FolderClosed 改实心填充（fill=currentColor strokeWidth 1.2，设计稿实心金文件夹）；「最近删除」垃圾桶改金色（旧暖红不符合设计稿）；右上⋯改 GoldMoreButton 新组件——金色细圆环 30px 包三点（设计稿同款，FoldersPage/ListPage 两处）；底部工具栏新建按钮由「金底白笔方块」改金色描边 SquarePen 线性图标（设计稿两枚金色线性图标）；编辑器「完成」由白胶囊改纯金色文字（设计稿）；日期胶囊加 > 尾箭头+浅金底
+- [备忘录·位置] ①「最近删除」从文件夹卡中拆出为独立白卡（设计稿 01 页同款分离布局）②列表页同组备忘录合并进同一张白卡容器（GROUP_CARD）+ 行间 left-4 内缩分隔线（iOS 内嵌分组样式，NoteCard 新增 row 形态：无自带卡壳、px-4 py-[11px]）③修复 normal 形态卡片零内边距的旧问题（补 px-4 py-[11px]）④文件夹卡行间分隔线改内缩至文字起点（left-[50px]）
+- [日历·下滑手势] month-view.tsx：触摸改起点{ x, y }记录+主轴判定（|dx|>|dy| 横滑切月，|dy|>|dx| 纵滑：下滑=下月、上滑=上月，阈值 56px），切月动画扩 slide{x,y,dir} 状态（纵滑用 slide-in-from-top/bottom-3）；year-view.tsx：同主轴判定下滑=下一年/上滑=上一年，滚动容器加 ref——内容可滚动时让位原生滚动（下滑仅在 scrollTop≤2 或不可滚时接管、上滑仅在到底或不可滚时接管），换年时 scrollTop 归零
+- [验证·tsc] bunx tsc --noEmit 仅 next.config.ts 既有基线，0 新增
+- [验证·eslint] 全部 8 个改动文件 0 问题
+- [验证·E2E agent-browser 390×844] 语音气泡：临时预览页渲染我方 3″/12″+对方 4″+文本气泡对照——与真机参考图并排比对（图标形状/右对齐/圆角/尾巴/时长比例一致，中途发现并修复 flip 方向反了的回归）；备忘录实机走查：文件夹页（薰衣草灰底+实心金文件夹+独立最近删除卡+金圈⋯+描边新建钮）→列表页（两测试笔记合入单卡+内缩分隔线+卡片内边距正常）→编辑器（金文字完成+底栏 5 金图标）→回收站空态；测试数据已用选择模式+永久删除清空；日历：月视图下滑 2026/10→2026/11 ✓ 上滑返回 ✓ 横滑回归 2028/10→2028/11 ✓ 年视图下滑 2026→2027 ✓ 横滑 2027→2028 ✓；主页面 GET 200、0 页面错误；dev.log 仅既有 instrumentation Edge 基线警告
+- [清理] 临时预览页 src/app/e2e-preview 已删除未入库；未触碰 CoupleHome.tsx / HomeScene 通知钩子 / memory 管线；未重启 dev server / 未 build
+
+Stage Summary:
+- 三项第三轮反馈全部落地：微信语音气泡按真机像素级重绘（素描式喇叭图标+贴尾巴对齐+5px 圆角，与 App 内文本气泡同规格）；备忘录薰衣草灰 #F3F2F8 底+软金 #CCAE54+实心金文件夹+独立最近删除卡+iOS 内嵌分组列表+金圈⋯钮；日历新增纵向下滑进下月/下一年手势（与横滑共存、主轴判定防斜滑误触、滚动区让位原生滚动）
+- 已知既有问题（非本轮引入）：NoteCard check 形态 button 嵌套 button 的 dev 警告（Task 17 之前即存在，本轮未触碰该形态）
+- 关键文件：src/components/apps/voice-bubble.tsx、notes/{notes-shared,notes-ui,notes-pages,notes-editor,notes-sheets}.tsx、calendar/{month-view,year-view}.tsx

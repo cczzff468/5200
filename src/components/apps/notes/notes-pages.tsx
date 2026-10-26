@@ -10,16 +10,16 @@
  */
 
 import { useMemo, useState } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import {
   ChevronRight,
   FolderClosed,
-  MoreHorizontal,
   NotebookPen,
   Trash2,
 } from 'lucide-react';
 import type { NoteRecord } from '@/lib/ios/db';
 import {
+  BG_WARM,
   FOLDER_ALL,
   FOLDER_DEFAULT,
   FOLDER_TRASH,
@@ -32,6 +32,7 @@ import {
 import {
   BottomToolbar,
   EmptyHint,
+  GoldMoreButton,
   GoldNavButton,
   GroupHeader,
   NoteCard,
@@ -40,6 +41,20 @@ import {
   SheetCard,
   SheetShell,
 } from './notes-ui';
+
+/** 白色分组容器卡（设计稿：白底圆角 14 + 极浅描边投影，iOS 内嵌分组样式） */
+const GROUP_CARD =
+  'overflow-hidden rounded-[14px] bg-white shadow-[0_1px_3px_rgba(80,65,40,0.06)] ring-1 ring-black/[0.035] dark:bg-white/[0.06] dark:shadow-none dark:ring-white/[0.08]';
+
+/** 行间内缩分隔线（起始位置由调用方指定，与行内文字对齐） */
+function RowDivider({ left }: { left: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`absolute inset-y-0 ${left} right-0 top-0 h-px bg-black/[0.05] dark:bg-white/[0.06]`}
+    />
+  );
+}
 
 /** 页面公共外壳：三段式导航（金色文字按钮）+ 大标题 + 可滚动内容 */
 function PageShell({
@@ -59,7 +74,7 @@ function PageShell({
 }) {
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 bg-[#FAF9F7]/90 px-4 pt-[54px] backdrop-blur-xl dark:bg-background/85">
+      <div className="shrink-0 px-4 pt-[54px] backdrop-blur-xl" style={{ backgroundColor: BG_WARM }}>
         <div className="flex h-12 items-center justify-between">
           <div className="flex min-w-[68px] items-center">{navLeft}</div>
           <div className="flex min-w-[68px] items-center justify-end">{navRight}</div>
@@ -109,29 +124,11 @@ export function FoldersPage({
   const countOf = (id: string) =>
     id === FOLDER_ALL ? liveNotes.length : liveNotes.filter((n) => (n.folder ?? FOLDER_DEFAULT) === id).length;
 
-  const rows: { id: string; name: string; icon: ReactNode; iconColor?: string; removable?: boolean }[] = [
-    {
-      id: FOLDER_ALL,
-      name: '全部备忘录',
-      icon: <FolderClosed className="h-[21px] w-[21px]" strokeWidth={1.8} />,
-    },
-    {
-      id: FOLDER_DEFAULT,
-      name: '备忘录',
-      icon: <FolderClosed className="h-[21px] w-[21px]" strokeWidth={1.8} />,
-    },
-    ...folders.map((f) => ({
-      id: f.id,
-      name: f.name,
-      icon: <FolderClosed className="h-[21px] w-[21px]" strokeWidth={1.8} />,
-      removable: true,
-    })),
-    {
-      id: FOLDER_TRASH,
-      name: '最近删除',
-      icon: <Trash2 className="h-[21px] w-[21px]" strokeWidth={1.8} />,
-      iconColor: WARM_RED,
-    },
+  /** 文件夹行（不含最近删除——设计稿中它是独立白卡） */
+  const rows: { id: string; name: string; removable?: boolean }[] = [
+    { id: FOLDER_ALL, name: '全部备忘录' },
+    { id: FOLDER_DEFAULT, name: '备忘录' },
+    ...folders.map((f) => ({ id: f.id, name: f.name, removable: true })),
   ];
 
   return (
@@ -143,18 +140,8 @@ export function FoldersPage({
             /* 编辑模式：右上「完成」退出（同 iOS 备忘录编辑态） */
             <GoldNavButton label="完成" onClick={() => setEditMode(false)} />
           ) : (
-            /* 常态：右上圆形三点按钮（同 iOS 备忘录，用户指定样式）→ 菜单进编辑模式 */
-            <button
-              type="button"
-              aria-label="更多操作"
-              aria-expanded={moreOpen}
-              data-testid="notes-folders-more"
-              onClick={() => setMoreOpen(true)}
-              className="flex h-9 w-9 items-center justify-center rounded-full transition-opacity active:opacity-50"
-              style={{ color: 'var(--notes-gold)' }}
-            >
-              <MoreHorizontal className="h-6 w-6" strokeWidth={2.2} />
-            </button>
+            /* 常态：右上金圈三点按钮（用户指定样式）→ 菜单进编辑模式 */
+            <GoldMoreButton onClick={() => setMoreOpen(true)} />
           )
         }
         title="文件夹"
@@ -164,9 +151,9 @@ export function FoldersPage({
             <SearchBox tappable onTap={onOpenSearch} />
           </div>
 
-          <div className={`mt-5 overflow-hidden rounded-[14px] bg-white shadow-[0_1px_3px_rgba(80,65,40,0.06)] ring-1 ring-black/[0.035] dark:bg-white/[0.06] dark:ring-white/[0.08]`}>
+          <div className={`mt-5 ${GROUP_CARD}`}>
             {rows.map((r, i) => {
-              const count = r.id === FOLDER_TRASH ? trashCount : countOf(r.id);
+              const count = countOf(r.id);
               const inner = (
                 <>
                   {editMode && r.removable ? (
@@ -189,32 +176,50 @@ export function FoldersPage({
                   ) : (
                     <span className="w-6 shrink-0" />
                   )}
-                  <span className="flex shrink-0 items-center" style={{ color: r.iconColor ?? 'var(--notes-gold)' }}>
-                    {r.icon}
+                  {/* 设计稿：实心金色文件夹图标 */}
+                  <span className="flex shrink-0 items-center" style={{ color: 'var(--notes-gold)' }}>
+                    <FolderClosed className="h-[21px] w-[21px]" fill="currentColor" strokeWidth={1.2} />
                   </span>
                   <span className="min-w-0 flex-1 truncate text-[16px] text-foreground">{r.name}</span>
                   <span className={`shrink-0 text-[14px] ${MUTED_META_CLS}`}>{count}</span>
                   <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c4bd]" strokeWidth={2.2} />
                 </>
               );
-              const rowCls = `flex min-h-[52px] items-center gap-3 px-3.5 text-left ${
-                i > 0 ? 'border-t border-black/[0.05] dark:border-white/[0.06]' : ''
-              }`;
-              return editMode && r.removable ? (
-                <div key={r.id} className={rowCls}>
-                  {inner}
+              const rowCls = 'flex min-h-[52px] items-center gap-3 px-3.5 text-left';
+              return (
+                <div key={r.id} className="relative">
+                  {i > 0 && <RowDivider left="left-[50px]" />}
+                  {editMode && r.removable ? (
+                    <div className={rowCls}>{inner}</div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onOpenFolder(r.id)}
+                      className={`${rowCls} w-full transition-colors active:bg-black/[0.03] dark:active:bg-white/[0.05]`}
+                    >
+                      {inner}
+                    </button>
+                  )}
                 </div>
-              ) : (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => onOpenFolder(r.id)}
-                  className={`${rowCls} w-full transition-colors active:bg-black/[0.03] dark:active:bg-white/[0.05]`}
-                >
-                  {inner}
-                </button>
               );
             })}
+          </div>
+
+          {/* 最近删除：设计稿中独立于文件夹列表之外的白卡（金色垃圾桶线性图标） */}
+          <div className={`mt-3.5 ${GROUP_CARD}`}>
+            <button
+              type="button"
+              onClick={() => onOpenFolder(FOLDER_TRASH)}
+              className="flex min-h-[52px] w-full items-center gap-3 px-3.5 text-left transition-colors active:bg-black/[0.03] dark:active:bg-white/[0.05]"
+            >
+              <span className="w-6 shrink-0" />
+              <span className="flex shrink-0 items-center" style={{ color: 'var(--notes-gold)' }}>
+                <Trash2 className="h-[21px] w-[21px]" strokeWidth={1.8} />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[16px] text-foreground">最近删除</span>
+              <span className={`shrink-0 text-[14px] ${MUTED_META_CLS}`}>{trashCount}</span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c4bd]" strokeWidth={2.2} />
+            </button>
           </div>
         </div>
       </PageShell>
@@ -363,15 +368,7 @@ export function ListPage({
               onClick={exitSelect}
             />
           ) : (
-            <button
-              type="button"
-              aria-label="更多操作"
-              onClick={() => setMoreOpen(true)}
-              className="flex h-9 w-9 items-center justify-center rounded-full transition-opacity active:opacity-50"
-              style={{ color: 'var(--notes-gold)' }}
-            >
-              <MoreHorizontal className="h-6 w-6" strokeWidth={2.2} />
-            </button>
+            <GoldMoreButton onClick={() => setMoreOpen(true)} />
           )
         }
         title={selectMode ? `已选择 ${selIds.size} 条` : folderName}
@@ -402,17 +399,21 @@ export function ListPage({
             </div>
           ) : (
             groups.map((g) => (
-              <div key={g.key} className={g.pinnedSection ? 'mt-4' : 'mt-4'}>
+              <div key={g.key} className="mt-4">
                 <GroupHeader label={g.label} pinned={g.pinnedSection} />
-                <div className="flex flex-col gap-2">
-                  {g.notes.map((n) => (
-                    <NoteCard
-                      key={n.id}
-                      note={n}
-                      folders={folders}
-                      onOpen={() => onOpenNote(n)}
-                      onLongPress={() => onNoteActions(n)}
-                    />
+                {/* 设计稿：同组备忘录合入同一张白卡（iOS 内嵌分组），行间内缩分隔线 */}
+                <div className={GROUP_CARD}>
+                  {g.notes.map((n, i) => (
+                    <div key={n.id} className="relative">
+                      {i > 0 && <RowDivider left="left-4" />}
+                      <NoteCard
+                        note={n}
+                        folders={folders}
+                        variant="row"
+                        onOpen={() => onOpenNote(n)}
+                        onLongPress={() => onNoteActions(n)}
+                      />
+                    </div>
                   ))}
                 </div>
               </div>

@@ -19,6 +19,7 @@ import {
   Bold,
   CalendarDays,
   ChevronLeft,
+  ChevronRight,
   CircleCheck,
   Italic,
   Link2,
@@ -54,8 +55,8 @@ const EMOJIS = [
 
 /** 查找高亮标记属性（还原原文时识别用） */
 const FIND_ATTR = 'data-nfind';
-const FIND_MARK_STYLE = 'rgba(201,151,28,0.28)';
-const FIND_ACTIVE_STYLE = 'rgba(201,151,28,0.95)';
+const FIND_MARK_STYLE = 'rgba(204,174,84,0.32)';
+const FIND_ACTIVE_STYLE = 'rgba(204,174,84,0.95)';
 
 export function NoteEditor({
   note,
@@ -456,9 +457,9 @@ export function NoteEditor({
   const goldStyle = { color: 'var(--notes-gold)' } as CSSProperties;
 
   return (
-    <div className="relative flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
+    <div className="relative flex h-full w-full flex-col overflow-hidden bg-[#F3F2F8] text-foreground dark:bg-background">
       {/* 顶部导航：< 文件夹名 + 撤销/重做 + 完成 */}
-      <div className="shrink-0 bg-background/80 pt-[54px] backdrop-blur-xl">
+      <div className="shrink-0 bg-[#F3F2F8]/80 pt-[54px] backdrop-blur-xl dark:bg-background/80">
         <div className="flex h-11 items-center justify-between px-4">
           <button
             type="button"
@@ -498,7 +499,7 @@ export function NoteEditor({
             <button
               type="button"
               onClick={handleDone}
-              className="ml-1.5 rounded-full bg-white/70 px-4 py-1.5 text-[15px] font-medium shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] dark:bg-white/[0.08] dark:ring-white/[0.1]"
+              className="ml-1.5 text-[16px] font-medium transition-opacity active:opacity-50"
               style={goldStyle}
             >
               完成
@@ -509,9 +510,9 @@ export function NoteEditor({
 
       {/* 查找条（🔍 打开）：关键词 + 命中计数 + 上下跳转 + 关闭 */}
       {find !== null && (
-        <div className="shrink-0 border-b border-black/[0.05] bg-background/90 px-4 py-2 backdrop-blur-xl dark:border-white/[0.06]">
+        <div className="shrink-0 border-b border-black/[0.05] bg-[#F3F2F8]/90 px-4 py-2 backdrop-blur-xl dark:border-white/[0.06] dark:bg-background/90">
           <div className="flex items-center gap-2">
-            <div className="flex h-9 flex-1 items-center gap-2 rounded-[10px] bg-[#eeece8] px-3 dark:bg-white/[0.09]">
+            <div className="flex h-9 flex-1 items-center gap-2 rounded-[10px] bg-[#E9E8ED] px-3 dark:bg-white/[0.09]">
               <Search className="h-4 w-4 shrink-0 text-[#b8b2aa]" strokeWidth={2.2} />
               <input
                 value={find.q}
@@ -604,7 +605,7 @@ export function NoteEditor({
               className="min-h-[160px] break-words text-[17px] leading-[1.6] text-foreground outline-none"
             />
             {locked && !unlocked && (
-              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-[12px] bg-background/85 backdrop-blur-sm">
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-[12px] bg-[#F3F2F8]/85 backdrop-blur-sm dark:bg-background/85">
                 <Lock className="h-8 w-8" strokeWidth={1.6} style={goldStyle} />
                 <div className="text-[15px] text-[#8e8880] dark:text-[#a8a29a]">此备忘录已锁定</div>
                 <button
@@ -636,7 +637,7 @@ export function NoteEditor({
                       style={
                         item.done
                           ? { backgroundColor: 'var(--notes-gold)', borderColor: 'var(--notes-gold)' }
-                          : { borderColor: 'rgba(184,134,11,0.55)' }
+                          : { borderColor: 'rgba(204,174,84,0.6)' }
                       }
                     >
                       {item.done && (
@@ -690,17 +691,18 @@ export function NoteEditor({
             </div>
           )}
 
-          {/* 日历关联胶囊：📅 10月23日，星期五 → 点按跳日历 App */}
+          {/* 日历关联胶囊：📅 10月23日，星期五 > → 点按跳日历 App（设计稿浅黄底金描胶囊） */}
           {capsuleText && (
             <button
               type="button"
               onClick={onOpenCalendar}
               aria-label={`打开日历查看 ${capsuleText}`}
-              className="mt-5 flex items-center gap-1.5 rounded-full px-3.5 py-[7px] text-[13px] font-medium transition-transform active:scale-[0.97]"
-              style={{ backgroundColor: 'rgba(201,151,28,0.14)', color: 'var(--notes-gold)' }}
+              className="mt-5 flex items-center gap-1.5 rounded-[10px] px-3.5 py-[8px] text-[13px] font-medium transition-transform active:scale-[0.97]"
+              style={{ backgroundColor: 'rgba(224,182,50,0.2)', color: 'var(--notes-gold)' }}
             >
               <CalendarDays className="h-[15px] w-[15px]" strokeWidth={2} />
               <span className="max-w-[240px] truncate">{capsuleText}</span>
+              <ChevronRight className="h-3.5 w-3.5" strokeWidth={2.4} />
             </button>
           )}
         </div>
@@ -828,7 +830,7 @@ export function NoteEditor({
                     if (e.target.value) setLinkDateOnly(e.target.value);
                   }}
                   aria-label="选择关联日期"
-                  className="ml-auto rounded-[8px] bg-[#eeece8] px-2 py-1 text-[13px] text-foreground outline-none dark:bg-white/[0.09]"
+                  className="ml-auto rounded-[8px] bg-[#E9E8ED] px-2 py-1 text-[13px] text-foreground outline-none dark:bg-white/[0.09]"
                 />
               </div>
             </div>
@@ -896,7 +898,7 @@ function ToolBtn({
       onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] transition-all active:scale-90 ${
-        active ? 'bg-[rgba(201,151,28,0.14)]' : ''
+        active ? 'bg-[rgba(224,182,50,0.2)]' : ''
       }`}
       style={{ color: 'var(--notes-gold)' }}
     >

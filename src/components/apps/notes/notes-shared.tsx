@@ -19,14 +19,16 @@ import type { ReactNode } from 'react';
 import type { NoteChecklistItem, NoteRecord } from '@/lib/ios/db';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 
-// ---------------- 视觉常量（对照设计稿：暖白底 + 亮金主色） ----------------
+// ---------------- 视觉常量（对照设计稿：蓳衣草灰底 + 软亮金主色） ----------------
 
-/** 主金色（浅色模式）：设计稿软亮金（比旧 #B8860B 更亮更柔，贴近设计稿文件夹图标色） */
-export const GOLD_LIGHT = '#C9A227';
+/** 主金色（浅色模式）：设计稿文件夹图标采样软金（#CCAE54，比旧 #C9A227 更亮更柔） */
+export const GOLD_LIGHT = '#CCAE54';
 /** 主金色（深色模式）：微亮暖金 */
 export const GOLD_DARK = '#D6B25C';
-/** 暖白页面背景（设计稿 #FAF9F7 类） */
-export const BG_WARM = '#FAF9F7';
+/** 页面背景（设计稿采样 #F3F2F8 蓳衣草灰，比旧暖白 #FAF9F7 更灰更冷） */
+export const BG_WARM = '#F3F2F8';
+/** 搜索框底色（设计稿采样 #E9E8ED） */
+export const SEARCH_BG = '#E9E8ED';
 /** 回收站等破坏性/警示行的暖红（「红金色」） */
 export const WARM_RED = '#C25E4C';
 
@@ -366,7 +368,7 @@ export function Hi({ text, q }: { text: string; q: string }): ReactNode {
       <mark
         key={k++}
         className="rounded-[3px] px-0.5 text-foreground"
-        style={{ backgroundColor: 'rgba(201,162,39,0.24)' }}
+        style={{ backgroundColor: 'rgba(204,174,84,0.28)' }}
       >
         {t.slice(idx, idx + query.length)}
       </mark>
