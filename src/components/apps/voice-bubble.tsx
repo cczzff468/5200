@@ -7,7 +7,8 @@
  *   ③ 圆角 4px（微信气泡微圆角，非大圆角）；④ 尾巴用 CSS 伪元素 ::before 绘制
  *   （10px 正方形 rotate(45deg)、background-color: inherit 与气泡同色、菱形中心悬在
  *   top 18px＝垂直居中偏上、紧贴气泡左/右边缘，见 globals.css .wx-voice-bubble）；
- *   ⑤ 内部 flex + items-center + justify-between + padding 0 12px；
+ *   ⑤ 内部 flex + items-center + **数字与图标聚拢**（第八轮反馈：时长数字无论多久都紧贴声波图标，
+ *   真机同款——内容聚在尾巴一侧，剩余宽度留白在远端随时长增长；数字与图标间距固定 8px）
  *   ⑥ 喇叭锥体在左 + 用户指定现成 SVG 声波在右（18×18，**两侧同形不镜像**——真机
  *   截图确认收/发气泡图标完全一致，只是位置贴尾巴一侧：对方图标在左、我方图标在右），
  *   播放中三道弧线按 CSS 动画波纹闪烁（globals.css @keyframes wx-voice-arc-blink），停止静态；
@@ -238,12 +239,15 @@ export function VoiceMsgBubble({
           voicePlayer.toggle(msgId, voice.url, voice.localText, { synth: voice.synth, contactId: voice.contactId });
         }}
         className={`flex select-none items-center transition-transform active:scale-[0.98] ${bubbleCls} ${
-          isWx ? 'justify-between' : 'h-[40px] gap-[4px] px-[6px]'
+          isWx
+            ? /* 第八轮反馈：数字聚拢贴图标（真机同款），不再 justify-between 两端撑开 */
+              `gap-[8px] ${mine ? 'justify-end' : 'justify-start'}`
+            : 'h-[40px] gap-[4px] px-[6px]'
         }`}
         style={{ width, ...style }}
       >
         {isWx ? (
-          /* 微信真机同款：图标贴尾巴一侧、时长在远端，两端 space-between 撑开（用户指定布局）。
+          /* 微信真机同款：图标贴尾巴一侧、时长紧挨图标（固定 8px 间距），剩余宽度留白在远端（真机同款聚拢布局）。
              字形两侧同形不镜像（真机确认）：弧线在左、锥体朝右 ▶ */
           mine ? (
             <>

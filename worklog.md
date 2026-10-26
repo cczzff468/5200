@@ -645,3 +645,44 @@ Stage Summary:
 - 在远端基线（另一环境第六轮实现）之上补齐用户本轮明确要求的四点：红包卡尾巴+标签同色、亲属卡尾巴、语音气泡菱形化（小一号+拉开间距）、[帮你买] 删除挑宝贝确认卡改为直接下单即时送达并以礼物卡送进聊天（点卡开收礼弹窗+宝贝落礼物页）
 - 基线既有优势保留：收礼弹窗（已收下持久化）、礼物卡 206×84、订单即时签收直进礼物页、挑品相关度打分、[送礼物] AI 主动送礼
 - 关键文件：wechat.tsx（RpBubble/FamilyBubble+调用点）、voice-bubble.tsx（WxVoiceIcon）、tb-ai-engage.ts（tb-order-draft 执行器+ctx 规则分流）
+
+---
+Task ID: 24
+Agent: Z.ai 主控（Z.ai Code）
+Task: 用户第七轮反馈——四类卡片圆角改小 / 礼物页删说明文字+送出即消失 / 修 AI 礼物方向混淆（把我送的说他送的）/ 语音菱形大一点点 / 领取提示补齐（AI 收下礼物要有提示、我领亲属卡要有提示、双方领礼物都要提示）
+
+Work Log:
+- [卡片圆角] 转账 TrBubble 8px / 红包 RpBubble 8px / 亲属卡 FamilyBubble 10px / 礼物卡 WxGiftCardBubble 8px → 统一 **4px**（用户：圆角有点圆；凭据卡复用 TrBubble 自动跟随）
+- [礼物页清理] WxGiftPicker 删副标题「送你一份心意·挑一件收到的宝贝送给 TA」与列表头「已确认收货的淘宝宝贝·点送出…」（页面只留标题+清单）
+- [送出即消失] taobao-store TbOrder 新增 giftedAt + tbMarkOrderGifted（幂等标记）；wechat.tsx 礼物 onSend 送出前打标（拉黑拦截之后，防「标记了但没发出」）；Picker 过滤 giftedAt（淘宝订单列表不受影响）
+- [AI 方向修复·根因] giftcard 的 AI 历史序列化两分支主语**正好写反**：me 消息进 user 角色（「你」=AI）却写「你送出」→ AI 以为是自己送的；peer 消息进 assistant 角色却写「凡凡送你」→ 改为：me→`[礼物卡片 ID:x]（${meAddrName}送你「name」，待你收下）`、peer→`（你送出「name」，待${meAddrName}收下）`，并带礼物 ID
+- [AI 收下礼物] chat-rich 新增动作 **[收下礼物卡:礼物ID]**（RichActionKind 'gift-accept'，ACTION_RE/ACTION_TAIL/OPEN_TAIL×2 全部登记且置于「收礼物/收下礼物」之前防抢先匹配；actionVerb→claim）；PendingCardInfo 增 'gift'，wxCollectPendingCards 未收下礼物卡进待处理清单，buildActionRules 教学标记；wxApplyAiActions 增 giftcard 分支（accepted=true + 通知行「XX收下了你的礼物」）；wxCardStateLabel 增 giftcard 分支（待收下/已收下）+ **wxCardIsFinal 豁免「待收下」**（否则礼物卡被当终态永远不可处理）
+- [领取提示补齐] WxNoticeData/WxNoticeRow 增 'gift' 图标（蓝金渐变礼物盒）；我收下 AI 礼物 → 通知行「你收下了XX送的礼物」+ toast；我领亲属卡 claimFamily → 通知行「你收下了XX的亲属卡」（此前只有 toast）；核对 AI 侧既有提示：红包=通知行✓、转账=凭据卡✓、亲属卡=通知行✓
+- [语音菱形] voice-bubble WxVoiceIcon 菱形 4.4×6.4 → **5.2×7.6**（M6.6 8.2 L9.2 12 L6.6 15.8 L4 12 Z，右尖与内弧保持 2.8 单位间距）
+- [礼物卡已收下行] WxGiftCardBubble accepted 时标题下加「已收下」小字（真机参考图双行同款）
+- [验证] tsc 0 新增；eslint 改动文件 0 问题；E2E 实机：四卡 4px 圆角、礼物页清爽、送出→列表消失、AI [收下礼物卡] 即时收下+通知行、我收礼物通知行、亲属卡领取通知行、语音菱形 ✓
+
+Stage Summary:
+- 四类资金/礼物卡片圆角统一 4px；礼物页极简化且送出的宝贝不可重送
+- AI 礼物方向根修（序列化主语换位 bug）+ 全新 [收下礼物卡] 动作让 AI 真实收礼；双向领取提示（礼物×2、亲属卡×1）齐备
+- 关键文件：wechat.tsx、wx-gift.tsx、chat-rich.ts、taobao-store.ts、voice-bubble.tsx
+
+---
+Task ID: 25
+Agent: Z.ai 主控（Z.ai Code）
+Task: 用户第八轮反馈——礼物卡再美化+收下变灰 / 红包转账亲属卡方向混淆根修（他说他领了我的红包、把我的亲属卡说成他发的）/ 语音气泡数字聚拢贴图标 / 排查修复「加好友后无限自我介绍复读机」
+
+Work Log:
+- [排查·自我介绍死循环] 全链路核查：①persona.ts 七要素人设无任何「请自我介绍」注入；②好友申请通过链路（wechat.tsx 14214-14280 主号 / friend-state.ts processAltAccount 小号）欢迎回复均为一次性落盘，无常驻指令；③每轮历史正常带最近消息（无丢失）；④本仓实机复现：新注册角色 + 加好友后发「daddy」→ AI 自然回应「你怎么突然叫我daddy啦😌是不是想我啦？」**无法复现循环**。判定为模型行为兜底问题（新好友+空记忆+超纲输入时模型复读报家门）→ 防御性修复
+- [防复读修复·通用] persona.ts 禁止事项新增：自我介绍只在刚认识自然带出一次，绝不在每轮回复里重复报家门；每轮必须先正面回应对方这条消息本身，不能自顾自重新介绍/把话题拉回初次见面（全 App 共用：微信/QQ/信息/电话）
+- [方向混淆·根因] 红包/转账/亲属卡的 AI 历史序列化**无方向信息**（`[红包 ID:x ¥88，待领取]` 分不清谁发的）→ 全部加显式名字方向：`（${meAddrName}发给${peer.name}）`/`（${peer.name}发给${meAddrName}）`（转账=转给、亲属卡=送给）；凭据卡仍走 credentialTransferText 既有显式句式
+- [说领了必须真领] buildActionRules 动作与说话规则追加：正文说「领取了/收下了/收款了」必须同一回复输出对应标记（系统只认标记，光嘴上说卡片停在待领取），没输出标记就别说已领（修用户实测「红包我领啦」但卡一直待领取）
+- [礼物卡美化+变灰] WxGiftCardBubble：蝴蝶结 scale 0.85→**1.08**、竖丝带 2.5→2px（更精致）；accepted 时整卡 grayscale(0.55)+brightness(0.97) 变灰（真机已收下图同款）+ 既有「已收下」小字保留
+- [语音气泡数字] 布局 justify-between（两端撑开、时长漂在远端）→ **数字聚拢贴图标**（真机同款）：gap 固定 8px、内容聚尾巴一侧、留白在远端随时长增长（mine=justify-end / peer=justify-start）
+- [验证] tsc 0 新增；eslint 0 问题；E2E 实机全链路：AI 主动转账 ¥500→我收款入零钱→发红包 ¥88→**AI 真实输出领取动作**（卡变灰+通知行「凡凡领取了你的红包」）+ 我领取通知行 ✓；要求买玩偶→[帮你买] 直购**毛绒玩偶（非手机）**→礼物卡直送（大蝴蝶结/4px）→我收下（灰卡+已收下+「你收下了凡凡送的礼物」蓝礼物图标）✓；礼物页送出同一玩偶→AI 即收（「凡凡收下了你的礼物」）+礼物页变空态（不再可送）✓；AI 发亲属卡「给小柚的亲属卡」方向正确→我领取→「你收下了凡凡的亲属卡」✓；语音气泡 1″/3″ 数字均聚拢贴图标 ✓；控制台 0 新增错误
+
+Stage Summary:
+- 资金卡片方向混淆根修（序列化带名字方向）+ 「说领必带标记」纪律写入提示词；礼物卡美化+双向收下状态可视化（灰卡/已收下/通知行）
+- 自我介绍死循环：排查确认无注入逻辑（四项逐一核查+实机复现阴性），按用户要求加通用防复读禁令兜底
+- 语音气泡回归真机聚拢布局（数字始终贴声波图标、间距固定 8px）
+- 关键文件：persona.ts、wechat.tsx、chat-rich.ts、wx-gift.tsx、voice-bubble.tsx

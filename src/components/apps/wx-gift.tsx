@@ -102,6 +102,7 @@ export function WxGiftCardBubble({
       aria-label={`礼物卡片：${gift.name}，点击查看`}
       onClick={onClick}
       className="relative block h-[84px] w-[206px] cursor-pointer text-left shadow-[0_5px_16px_rgba(0,0,0,0.14)] transition-transform duration-150 active:scale-[0.97]"
+      style={gift.accepted ? { filter: 'grayscale(0.55) brightness(0.97)' } : undefined}
     >
       {/* 小尾巴：菱形凸出卡外（不被裁剪），尖角处带一点点圆弧（3px），颜色取卡身右上同段渐变 */}
       <span
@@ -124,10 +125,10 @@ export function WxGiftCardBubble({
         {/* 竖丝带：全高金色细线 + 中部 X 交叉蝴蝶结（随卡片缩小同步左移/缩小） */}
         <span
           aria-hidden="true"
-          className="absolute bottom-0 top-0 w-[2.5px]"
+          className="absolute bottom-0 top-0 w-[2px]"
           style={{ left: 36, background: `linear-gradient(180deg, ${CARD_GOLD} 0%, ${CARD_GOLD_SOFT} 60%, rgba(233,201,139,0.55) 100%)` }}
         />
-        <span aria-hidden="true" className="absolute top-1/2" style={{ left: 37.5, transform: 'translate(-50%, -50%) scale(0.85)' }}>
+        <span aria-hidden="true" className="absolute top-1/2" style={{ left: 37.5, transform: 'translate(-50%, -50%) scale(1.08)' }}>
           <RibbonBow />
         </span>
 

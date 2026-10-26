@@ -6662,15 +6662,17 @@ function ChatPage({
                 : // fix3-c #3：AI 自己发的无 sid 表情带显式主语（assistant 消息里「你」=AI 本身），不再与「对方（用户）消息」的规则文案冲突
                   `[你发送了表情：${m.stk.meaning || '无描述'}]`
             : m.kind === 'redpacket' && m.rp
-              ? `[红包 ID:${m.rp.cid ?? m.id} ¥${m.rp.amount} "${m.rp.blessing}"，${wxCardStateLabel(m, actorNames)}]`
+              ? // 第八轮反馈：序列化带显式方向（名字，不用代词）——此前「待领取」分不清谁发的，
+                // AI 会把机主发的红包说成自己发的/自己领的（用户实测复读「你给我发的红包我领啦」主语混乱）
+                `[红包 ID:${m.rp.cid ?? m.id} ¥${m.rp.amount} "${m.rp.blessing}"（${m.role === 'me' ? `${meAddrName}发给${peer.name}` : `${peer.name}发给${meAddrName}`}），${wxCardStateLabel(m, actorNames)}]`
               : m.kind === 'transfer' && m.tr && !m.content && (m.tr.receiptOf || m.tr.refundedBy)
               ? // fix3-c #1：凭据卡不能按普通转账卡序列化——role=assistant 会让 AI 把「对方收了我的款」
                 // 读成「我转账已到账」、把「我退了对方的款」读成「我发的款被退回」（资金方向伪造），改显式主语句式
                 credentialTransferText(m)
               : m.kind === 'transfer' && m.tr
-                ? `[转账 ID:${m.tr.cid ?? m.id} ¥${m.tr.amount}${m.tr.note ? ` "${m.tr.note}"` : ''}，${wxCardStateLabel(m, actorNames)}]`
+                ? `[转账 ID:${m.tr.cid ?? m.id} ¥${m.tr.amount}${m.tr.note ? ` "${m.tr.note}"` : ''}（${m.role === 'me' ? `${meAddrName}转给${peer.name}` : `${peer.name}转给${meAddrName}`}），${wxCardStateLabel(m, actorNames)}]`
                 : m.kind === 'family' && m.fam
-                  ? `[亲属卡 ID:${m.fam.cid ?? m.id} 每月额度¥${m.fam.monthlyLimit}，${wxCardStateLabel(m, actorNames)}]`
+                  ? `[亲属卡 ID:${m.fam.cid ?? m.id} 每月额度¥${m.fam.monthlyLimit}（${m.role === 'me' ? `${meAddrName}送给${peer.name}` : `${peer.name}送给${meAddrName}`}），${wxCardStateLabel(m, actorNames)}]`
                   : m.kind === 'groupcard' && m.gcard
                     ? `[群聊邀请卡片：${m.gcard.name}（${m.gcard.inviterName || '群友'}邀请${m.gcard.memberNames?.length ? `，成员：${m.gcard.memberNames.join('、')}` : ''}），${m.gcard.status === 'pending' ? '待处理' : m.gcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
                     : m.kind === 'mtpay' && m.mtpay
