@@ -686,3 +686,27 @@ Stage Summary:
 - 自我介绍死循环：排查确认无注入逻辑（四项逐一核查+实机复现阴性），按用户要求加通用防复读禁令兜底
 - 语音气泡回归真机聚拢布局（数字始终贴声波图标、间距固定 8px）
 - 关键文件：persona.ts、wechat.tsx、chat-rich.ts、wx-gift.tsx、voice-bubble.tsx
+
+---
+Task ID: 26
+Agent: Z.ai 主控（Z.ai Code）
+Task: 沙箱重置灾难恢复（预览不显示根因）+ 重做第九轮全部改动 + 第十轮反馈（我方语音气泡镜像 5″圆弧菱形 / QQ恋人标识用用户素材图+清晰无白边 / 网易云VIP徽章1:1重制 / QQ消息列表名字后也显示标识）
+
+Work Log:
+- [灾难恢复] 本会话沙箱被重置（src 回到初始脚手架、浏览器 IndexedDB 清空）→「预览不显示」根因即此。git fetch origin（origin/main HEAD=2fee5cc 第八轮全量）→ 备份 .env → reset --hard origin/main → bun install → 重启 dev server；误删的 6 张用户参考图（upload/IMG_20261026_2*.jpg 等，在脚手架 Initial commit 中被跟踪）从 6131c13 对象库 checkout 恢复；后遇 upload/ 被网关同步持续改写导致 stash 冲突，改用 git checkout stash@{0} -- src/ upload/ 精准恢复
+- [素材抠底] 用户参考图处理（PIL 洪泛填充）：徽章（粉爱心+黄蝴蝶结+蓝底座）→ public/qq-couple-badge.png、钥匙（粉翅膀心形）→ public/qq-couple-key.png（边缘羽化仅作用于透明邻接像素，保住徽章内部白色高光；96px 优化后各 ~12KB）
+- [共享清单库] 新建 src/lib/ios/couple-hundred.ts（HUNDRED_LIST 105 项程序化提取）；couple-space.tsx 删本地常量改 import（HUNDRED_KIND_MAP 按索引对应不受影响）
+- [想他几天] couple-space.tsx 新增 missStreakOf（连续打卡计数：今天未打则从昨天回数，missYouByDay>0 ∪ missMadeUp）；首页 missDays 用它替代 daysSince(missSince)——不点不涨、断签清零、点击当天 +1；MissYouPage.myStreak 共用同一计数
+- [100件小事按经历] couple-ai.ts aiTickHundred 重写：从 HUNDRED_LIST 未完成项里由 LLM 结合记忆碎片（memChatRecallBlock）+最近聊天挑「真实经历过」的一件（输出 idx/desc/place，无匹配输出 -1 绝不硬凑）；写 hundredItems（保留已有 img、byTa）+ hundred + aiHundred + aiHundredDay（每天最多一件）+ coupleRemember + 通知
+- [自主决策] 废除固定毫秒级时刻表（22000~238000ms 十连发）：AUTONOMY_BEHAVIORS 菜单（mood/quiz/impress/hundred/anniv/pact/comment/exam/letter/album，各带当日 guard）+ autonomyDecide（LLM 结合人设/时段/记忆/聊天可输出 none 绝不硬凑）+ 额度每天 2 件（localStorage couple-autonomy-quota 持久化防刷新重置）+ 首次唤醒 25~90s、链式 150~330s、成功才扣额度；想你/浇树保留独立随机延时
+- [QQ恋人标识] couple-invite.ts 新增 isCoupleActiveWith + useCoupleBadgeOn（useSyncExternalStore 订阅 COUPLE_STATE_EVENT）；新建 couple-mark.tsx CoupleMark（徽章+钥匙 <img>，徽章在前钥匙在后）；qq.tsx 聊天页标题（qq-chat-title 后）与消息列表会话行（row.name 后）接入；couple-space resetAll 解除时 dispatchStateEvent 让标识即时消失
+- [语音气泡] voice-bubble.tsx：WxDuration #999→text-current（浅色模式纯黑，第九轮）；WxVoiceIcon 加 mirrored prop（scaleX(-1)）——我方气泡 = 时长5″→圆弧→菱形贴右缘（用户指定顺序），对方保持菱形→圆弧→时长，两侧镜像
+- [礼物蝴蝶结] wx-gift.tsx RibbonBow 重画：描边交叉线稿 → 实心金缎带双环耳+深色内折线+中央方结（真机同款实心款）
+- [网易云VIP] music-mine.tsx VipBadge 1:1 重制：大号黑胶唱片 17×17 溢出 13.5px 胶囊（压左端 6px）——VIP=黑唱片+红标+白字「VIP·叁」、SVIP=金唱片+深棕标金环+金字「SVIP·肆」（level 中文数字沿用 cnNum）；SVG 渐变盘面+纹路+左上高光
+- [验证] tsc 0 新增；eslint 改动文件 0 问题（music-mine 4 个 set-state-in-effect error 为基线既有，stash 对照确认）；E2E 实机 390×844 全绿：微信登录→加好友→注入语音消息→我方绿气泡「5″(黑)→圆弧→菱形」/对方白气泡「菱形→圆弧→3″」✓；QQ 登录→加好友→恋人空间 QQ 渠道邀请→AI 自动接受→消息列表与聊天页名字后徽章+钥匙 ✓；每天想你打卡（种子数据昨天连续 2 天 vs 旧逻辑 3 天、点击后 +1 到 3）✓；AI 自主决策实跑（自主写情书进 QQ 会话+自主想你打卡）✓；网易云 SVIP 金唱片/VIP 红唱片两款 ✓；100件小事页面无回归 ✓；解除恋人关系→QQ 徽章即时消失 ✓；dev.log 无新增错误
+
+Stage Summary:
+- 「预览不显示」根因为沙箱重置非代码问题，已从 GitHub 恢复全部代码与测试数据并重启
+- 第九轮全部改动（时长黑字/想你打卡/100件小事按经历/AI自主决策/QQ徽章）在新沙箱重建并实机验证通过
+- 第十轮：我方语音气泡镜像（5″圆弧菱形）、QQ标识换用户素材图（无白边）、消息列表同样显示标识、网易云 VIP 徽章 1:1 重制、礼物卡蝴蝶结实心化
+- 关键文件：couple-hundred.ts(新)、couple-mark.tsx(新)、public/qq-couple-{badge,key}.png(新)、couple-ai.ts、couple-invite.ts、couple-space.tsx、qq.tsx、voice-bubble.tsx、wx-gift.tsx、music-mine.tsx

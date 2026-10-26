@@ -103,11 +103,13 @@ import {
   sendMyInvite,
   aiInvitesMe,
   acceptIncomingInvite,
+  dispatchStateEvent,
   COUPLE_CARD_EVENT,
   type CoupleChannel,
   type CoupleInviteMeta,
 } from '@/lib/ios/couple-invite';
 import { aiAnswerWithMe, aiCommentOnPhoto, aiCommentOnPhotoLazy, aiDecideCouplePhoto, aiReplyPickForLevel, aiReplyVerdict, aiStatusPick, aiTickTrail, aiTrailFeed, aiZodiacReading, coupleMemoryDiff, coupleRemember, genReplyLevels, pokeTaDiary, rememberStatusExam, runCoupleAiTick, scheduleAiReply, syncLocFromContacts, trailSortMs, isGenPhoto, isTextPhoto, photoSrc, type CouplePhotoEntry, type CoupleTextPhoto, type CoupleTrailRec, type DynReplyLevel } from '@/lib/ios/couple-ai';
+import { HUNDRED_LIST } from '@/lib/ios/couple-hundred';
 import { consumePendingPactOpen, COUPLE_PACT_NAV_EVENT, patchPactCardsWhere, peekPendingPactOpen, scheduleAiPactDecision, sendPactCard } from '@/lib/ios/couple-pact-share';
 import { consumePendingExamOpen, COUPLE_EXAM_NAV_EVENT, peekPendingExamOpen, scheduleAiExamAnswer, sendExamCard } from '@/lib/ios/couple-exam-share';
 import { consumePendingLetterOpen, COUPLE_LETTER_NAV_EVENT, peekPendingLetterOpen, scheduleAiLetterFeedback, sendLetterCard } from '@/lib/ios/couple-letter-share';
@@ -430,29 +432,6 @@ const QUIZ_POOL = [
 ];
 
 /** 100 件小事清单（前 5 项与参考图一致：用情侣头像/一起看电影/第一次合照的照片/互穿对方衣服拍照/连麦睡觉） */
-const HUNDRED_LIST: string[] = [
-  '用情侣头像', '一起看电影', '第一次合照的照片', '互穿对方衣服拍照', '连麦睡觉',
-  '一起看一次日出', '一起看一次日落', '牵手压马路一小时', '雨天共撑一把伞', '一起做一顿晚饭',
-  '一起洗一次碗', '互相喂对方吃水果', '一起看电影看到片尾字幕', '一起唱一首歌', '给对方唱一首歌',
-  '一起逛街买情侣装', '穿情侣装拍合照', '一起拍大头贴', '互相拍一张最丑的照片', '一起敷面膜',
-  '帮对方吹头发', '帮对方剪指甲', '一起泡脚聊天', '冬天互暖对方的手', '一起堆雪人',
-  '夏天一起吃同一支冰淇淋', '一起吃火锅', '一起吃路边摊', '为对方做一次早餐', '一起熬夜跨年',
-  '跨年时一起倒数', '一起放烟花', '一起放孔明灯', '一起去看海', '一起踩浪花',
-  '一起捡贝壳', '一起爬山看云海', '一起露营看星星', '一起数流星并许愿', '一起去看极光',
-  '一起坐一次摩天轮', '一起坐旋转木马', '一起去游乐园疯玩一天', '一起坐过山车', '一起逛美术馆',
-  '一起逛博物馆', '一起去图书馆看书', '一起逛书店各挑一本书', '一起看一次展览', '一起去看演唱会',
-  '一起看话剧', '一起K歌到尽兴', '一起跳舞（哪怕很笨拙）', '一起淋一次雨（然后喝姜汤）', '一起打雪仗',
-  '一起放风筝', '一起骑双人自行车', '一起划船', '一起钓鱼', '一起看一次樱花',
-  '秋天一起踩落叶', '一起种一盆植物', '给它取名字并养大', '一起养一只宠物', '给宠物过生日',
-  '一起给未来写一封信', '写给对方一封手写信', '互送礼物不告诉价格', '为对方准备一次惊喜', '藏一个小纸条被对方发现',
-  '记住对方的鞋码和口味', '生病时照顾对方一次', '吵架后先低头哄对方', '一起制定恋爱条约', '一起存一个梦想基金',
-  '一起攒钱旅行', '一起计划蜜月路线', '一起看对方的童年照片', '讲一件自己的糗事', '交换一个童年秘密',
-  '一起回对方的母校', '见对方的好朋友', '一起给爸妈打电话', '一起做年度总结', '一起拍 vlog 记录一天',
-  '剪一个只属于你们的视频', '一起玩双人游戏通关', '一起拼一副 1000 片拼图', '一起搭一次积木', '一起玩真心话大冒险',
-  '猜对方今天的心情', '一起早起晨跑一次', '一起做一次运动', '教对方一项自己的特长', '学一项对方喜欢的技能',
-  '一起学做对方家乡菜', '一起过一次对方传统节日', '生日零点第一句说生日快乐', '一起庆祝每个 14 号', '一起写恋爱日记',
-  '在老地方重游一次', '拍十年之约的合照', '一起挑一枚戒指', '说一次正式的「我爱你」', '一起白头（正在完成中）',
-];
 
 /** 恋爱水平考试·官方模板卷（第十五轮重做，参考图4/5/6：官方推荐题库 + 试卷预览 + 喊他来答题） */
 interface ExamTplQ {
@@ -787,6 +766,23 @@ function daysSince(anniv: string | null): number | null {
   const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const diff = Math.floor((base.getTime() - t.getTime()) / 86400000) + 1;
   return diff >= 1 ? diff : 1;
+}
+
+/** 每天想你连续打卡天数（第九轮：点击「每天想你」当天才 +1，不点不涨、断签清零重计）：
+ *  从今天往回逐日数 missYouByDay>0 或 missMadeUp 的连续天数；今天还没打卡则从昨天起算
+ *  （避免早上打开归零——昨天的连续还成立，今天点一下就会涨到新连续） */
+export function missStreakOf(s: Pick<CoupleState, 'missYouByDay' | 'missMadeUp'>): number {
+  const madeUp = new Set(s.missMadeUp || []);
+  const hit = (k: string) => (s.missYouByDay?.[k] || 0) > 0 || madeUp.has(k);
+  const d = new Date();
+  if (!hit(todayKey(d))) d.setDate(d.getDate() - 1);
+  let n = 0;
+  for (;;) {
+    if (!hit(todayKey(d))) break;
+    n += 1;
+    d.setDate(d.getDate() - 1);
+  }
+  return n;
 }
 
 function fmtDate(ms: number): string {
@@ -1174,11 +1170,13 @@ export default function CoupleSpaceApp() {
     });
   }, []);
 
-  /** 解除关系：清空全部数据回到邀请页（设置页入口） */
+  /** 解除关系：清空全部数据回到邀请页（设置页入口）；广播状态事件——QQ 聊天页/会话列表
+   *  的恋人标识（徽章+钥匙）监听该事件即时消失（第九轮） */
   const resetAll = useCallback(() => {
     kvSet(STATE_KEY, defaultState());
     setState(defaultState());
     setSub(null);
+    dispatchStateEvent();
   }, []);
 
   /** 首次进入：预填「我」的信息卡资料 + 联系人第一位 AI 角色作为恋人；记录登录 + 生成情侣号；
@@ -1231,8 +1229,9 @@ export default function CoupleSpaceApp() {
 
   const days = daysSince(state.anniversary);
   const homeBgSrc = state.homeBg || '/couple-home-bg.png';
-  /** 「想他/想我」天数：首次点击每天想那一天起算 */
-  const missDays = state.missSince ? daysSince(state.missSince) : null;
+  /** 「想他/想我」天数（第九轮：连续打卡天数——点了每天想那一天才 +1，不点不涨；
+   *  首次点击当天起 missSince 非空才展示徽标） */
+  const missDays = state.missSince ? missStreakOf(state) : null;
 
   /** 每天想你 +1（首次点击记录 missSince，之后首页大圆消失改为头像下想念天数） */
   const tapMissYou = useCallback(() => {
@@ -11343,19 +11342,8 @@ function MissYouPage({ state, patch, tapMissYou, showToast, close }: { state: Co
   const madeUp = new Set(state.missMadeUp || []);
   const hit = (k: string) => (state.missYouByDay[k] || 0) > 0 || madeUp.has(k);
 
-  /** 我连续想他：从今天（若今天未打卡则从昨天）往回连续计数 */
-  const myStreak = useMemo(() => {
-    let n = 0;
-    const start = new Date();
-    if (!hit(todayKey(start))) start.setDate(start.getDate() - 1);
-    for (;;) {
-      if (!hit(todayKey(start))) break;
-      n += 1;
-      start.setDate(start.getDate() - 1);
-    }
-    return n;
-     
-  }, [state.missYouByDay, state.missMadeUp]);
+  /** 我连续想他（第九轮：与首页徽标共用同一计数——连续打卡，点了当天才 +1） */
+  const myStreak = useMemo(() => missStreakOf(state), [state.missYouByDay, state.missMadeUp]);
   /** TA（AI）连续想我：从今天（若今天未打卡则从昨天）往回连续计数（第九轮：AI 每天想你） */
   const taHit = (k: string) => (state.taMissYouByDay?.[k] ?? 0) > 0;
   const taStreak = useMemo(() => {

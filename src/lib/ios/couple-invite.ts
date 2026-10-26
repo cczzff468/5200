@@ -21,6 +21,7 @@
  *   无需打开聊天页。
  */
 
+import { useCallback, useSyncExternalStore } from 'react';
 import { kvGet, kvSet, kvGetScoped, kvSetScoped } from './idb-kv';
 import { genId } from './db';
 import { getContact, listContacts, ownerProfileFor } from './contacts-store';
@@ -501,4 +502,34 @@ function hasPartner(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * 恋人标识（第九轮）：与该联系人的恋人空间关系是否处于「已建立」状态。
+ * QQ 聊天页标题/会话列表名字后的恋人图标（徽章+钥匙）显隐共用这一个判定——
+ * 解除恋人空间（resetAll）后 readInviteMeta 的 partnerContactId 清空 → 图标即时消失。
+ */
+export function isCoupleActiveWith(contactId: string): boolean {
+  if (!contactId) return false;
+  try {
+    const meta = readInviteMeta();
+    if (!meta.partnerContactId || meta.partnerContactId !== contactId) return false;
+    return hasPartner();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 恋人标识显隐 hook（第九轮）：useSyncExternalStore 订阅 COUPLE_STATE_EVENT——开通恋人空间
+ * 图标即时出现、解除后即时消失（跨组件同步，无需刷新页面；快照为原始布尔值，天然稳定）。
+ */
+export function useCoupleBadgeOn(contactId: string | null | undefined): boolean {
+  const id = contactId ?? '';
+  const subscribe = useCallback((onStoreChange: () => void) => {
+    window.addEventListener(COUPLE_STATE_EVENT, onStoreChange);
+    return () => window.removeEventListener(COUPLE_STATE_EVENT, onStoreChange);
+  }, []);
+  const getSnapshot = useCallback(() => (id ? isCoupleActiveWith(id) : false), [id]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

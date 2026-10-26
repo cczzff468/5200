@@ -52,32 +52,39 @@ const CARD_STARS: Array<[number, number, number, number]> = [
 ];
 
 /**
- * 金色蝴蝶结（第 21 轮按参考图重画：**X 交叉双环**——两环耳经中心交叉、中心小结，
- * 竖丝带线从卡片顶贯穿到底、结扎在垂直居中处，与真机「丝带绕卡一周」一致）
+ * 金色蝴蝶结（第十轮重画：**实心款**——真机蝴蝶结是实心金缎带，不是描边线稿）：
+ * 两片饱满的缎带环耳在中心收拢 + 中央小方结，环耳带一道深色内折线出体积感；
+ * 竖丝带线从卡片顶贯穿到底、结扎在垂直居中处，与真机「丝带绕卡一周」一致
  */
 function RibbonBow() {
   return (
-    <svg width="40" height="26" viewBox="0 0 40 26" fill="none" aria-hidden="true" className="block">
-      {/* 左环耳（颈自中心向右上挑，环身落左上，与右环呈 X 交叉） */}
+    <svg width="42" height="26" viewBox="0 0 42 26" fill="none" aria-hidden="true" className="block">
+      {/* 左环耳：饱满缎带环（实心金），内折线压出立体感 */}
       <path
-        d="M19 13 C21.5 6, 13 2.5, 7.5 6.5 C3.5 9.5, 6 15, 11.5 15.2 C14.5 15.3, 17.5 14.5, 19 13 Z"
-        fill="rgba(242,217,166,0.14)"
-        stroke={CARD_GOLD_SOFT}
-        strokeWidth="1.7"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        d="M20 13.2 C21.6 7.4, 15.4 3.4, 9.6 4.6 C4.4 5.7, 2.8 11.2, 6.6 14.6 C9.8 17.4, 15.4 17.4, 18.4 15.6 C19.4 15, 19.8 14.2, 20 13.2 Z"
+        fill={CARD_GOLD}
       />
-      {/* 右环耳（镜像交叉） */}
       <path
-        d="M21 13 C18.5 6, 27 2.5, 32.5 6.5 C36.5 9.5, 34 15, 28.5 15.2 C25.5 15.3, 22.5 14.5, 21 13 Z"
-        fill="rgba(242,217,166,0.14)"
-        stroke={CARD_GOLD_SOFT}
-        strokeWidth="1.7"
+        d="M18.9 13.6 C17.6 12.2, 15.2 10.9, 11.8 10.7 C9.2 10.55, 7.1 11.2, 5.9 12.1"
+        stroke="#D9B87E"
+        strokeWidth="1.1"
         strokeLinecap="round"
-        strokeLinejoin="round"
+        fill="none"
       />
-      {/* 中心小结 */}
-      <rect x="17.2" y="10.6" width="5.6" height="4.8" rx="1.4" fill={CARD_GOLD_SOFT} />
+      {/* 右环耳（镜像） */}
+      <path
+        d="M22 13.2 C20.4 7.4, 26.6 3.4, 32.4 4.6 C37.6 5.7, 39.2 11.2, 35.4 14.6 C32.2 17.4, 26.6 17.4, 23.6 15.6 C22.6 15, 22.2 14.2, 22 13.2 Z"
+        fill={CARD_GOLD}
+      />
+      <path
+        d="M23.1 13.6 C24.4 12.2, 26.8 10.9, 30.2 10.7 C32.8 10.55, 34.9 11.2, 36.1 12.1"
+        stroke="#D9B87E"
+        strokeWidth="1.1"
+        strokeLinecap="round"
+        fill="none"
+      />
+      {/* 中央小结（实心，盖住两耳交汇处） */}
+      <rect x="18.4" y="10.4" width="5.2" height="5.2" rx="1.5" fill={CARD_GOLD_SOFT} />
     </svg>
   );
 }

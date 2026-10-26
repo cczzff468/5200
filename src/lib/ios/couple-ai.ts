@@ -27,6 +27,8 @@ import { isProactiveChatActive } from './proactive-msg';
 import { getContact, listContacts } from './contacts-store';
 import { avatarFor, displayNameOf } from '@/lib/contacts';
 import { dispatchStateEvent, readInviteMeta, type CoupleChannel } from './couple-invite';
+// 100 件小事共享清单（第九轮：与 couple-space.tsx 共用同一份，AI 从真实清单里勾选）
+import { HUNDRED_LIST } from './couple-hundred';
 // 第三十一轮「恋人空间相册 AI 看图留言」：识图模型客户端 + 全局设置（拿识图配置，零配置自动内置兕底）
 import { describeImagesAuto } from '@/lib/vision-client';
 import { useSettings } from './store';
@@ -108,6 +110,8 @@ interface CoupleSnap {
   hundred?: number[];
   hundredItems?: Record<string, { img: string | null; desc: string; date: string; place: string; byTa?: boolean }>;
   aiHundred?: { idx: number; note: string; why: string; at: number }[];
+  /** AI 勾选 100 件小事去重（每天最多一件）：最近一次的日期 key（第九轮） */
+  aiHundredDay?: string;
   pactAt?: number | null;
   pactTitle?: string;
   pactPreamble?: string;
@@ -1794,34 +1798,75 @@ async function aiTickComment(snap: CoupleSnap, me: string, ta: string, p: TaPers
 
 // 第二十四轮：100件小事模板心愿池已删除（生成失败就不发起）
 
-/** AI 发起 100 件小事（每 2 天一次） */
+/**
+ * AI 完成 100 件小事（第九轮重写：不再随机抽一件事硬凑——从共享清单 HUNDRED_LIST 里挑
+ * 「你们真的经历过」的一件勾掉，素材 = 人设 + 记忆碎片召回 + 最近微信/QQ 聊天；
+ * 没有匹配就返回不硬凑、不编造。每天最多一件。）
+ */
 async function aiTickHundred(snap: CoupleSnap, me: string, ta: string, p: TaPersona): Promise<void> {
-  const last = (snap.aiHundred ?? [])[0];
-  if (last && Date.now() - last.at < 2 * 86400000) return;
-  const usedNotes = new Set((snap.aiHundred ?? []).map((x) => x.note));
-  let picked: { note: string; why: string } | null = null;
+  const today = todayKey();
+  if (snap.aiHundredDay === today) return; // 每天最多一件
+  // 已完成 = hundred 勾选 ∪ hundredItems 里已填过 desc 的项（AI 侧与用户侧同一份账）
+  const done = new Set<number>(snap.hundred ?? []);
+  for (const [k, v] of Object.entries(snap.hundredItems ?? {})) {
+    if (v?.desc) done.add(Number(k));
+  }
+  const candidates: number[] = [];
+  for (let i = 0; i < HUNDRED_LIST.length; i++) if (!done.has(i)) candidates.push(i);
+  if (candidates.length === 0) return; // 全部完成
+  const pid = currentPartnerId;
+  const ch = currentChannel;
+  // 素材：记忆碎片（我们一起经历过的事）+ 最近聊天
+  let memBlock = '';
   try {
-    const raw = await llmUserFirst(llmSystem(p, me, snap), `从你们还没做过的100件小事里，挑一件「${ta}」最想和${me}一起做的。输出 JSON：{"note":"这件事（≤16字）","why":"想做的理由（≤22字）"}。只输出 JSON。`);
-    picked = extractJson<{ note: string; why: string }>(raw);
+    if (pid) memBlock = memChatRecallBlock(pid, ch, `我们一起经历过的事 ${ta}想挑一件一起完成过的小事`, { mode: 'private' });
   } catch {
-    /* 兜底 */
+    /* 召回失败不影响 */
   }
-  if (!picked?.note || usedNotes.has(picked.note)) {
-    // 第二十四轮：不用模板兜底——生成失败本次不发起
-    return;
+  const chatBlock = recentChatBlock(pid, ch, me, ta);
+  const listText = candidates.slice(0, 60).map((i) => `${i}. ${HUNDRED_LIST[i]}`).join('\n');
+  const sys = [
+    `你是「${ta}」，是${me}的恋人。`,
+    p.relation ? `你们的关系：${p.relation}。` : '',
+    p.persona ? `你的性格/说话风格：${cut(p.persona, 120)}` : '',
+    p.background ? `你的背景：${cut(p.background, 100)}` : '',
+    genderLine(snap, me),
+    memBlock ? `【你们的记忆碎片】\n${cut(memBlock, 700)}` : '',
+    chatBlock ? `【你们最近在微信/QQ里聊过的话题】\n${cut(chatBlock, 320)}` : '',
+    `你们在「100件小事」清单里还有这些没完成：\n${listText}`,
+    `任务：从上面清单里挑一件「你们真的经历过/已经一起做过」的小事替${me}勾掉（比如最近聊天里聊过、记忆碎片里提过的真实经历）。要求：\n- 只能选真实经历过的一项，绝不硬凑、绝不编造没发生过的事；\n- 没有任何匹配就输出 {"idx":-1}，宁可不勾；\n- desc 用你们经历里的真实细节（地点/当时说的话都可以带一点），不要照抄清单原文。`,
+  ].filter(Boolean).join('\n');
+  let picked = -1;
+  let desc = '';
+  let place = '';
+  try {
+    const raw = await llmUserFirst(sys, `输出 JSON：{"idx":清单序号（没匹配就 -1）,"desc":"这件事的真实经过（≤20字，要带你们经历里的具体细节）","place":"当时在哪里/什么场景（≤10字，可不填）"}。只输出 JSON。`);
+    const j = extractJson<{ idx?: number; desc?: string; place?: string }>(raw);
+    const idx = Math.round(Number(j?.idx));
+    if (Number.isFinite(idx) && idx >= 0 && candidates.includes(idx)) picked = idx;
+    desc = stripEmoji(cut(j?.desc ?? '', 40));
+    place = stripEmoji(cut(j?.place ?? '', 20));
+  } catch {
+    /* 生成失败本次不发起 */
   }
-  const idx = Math.floor(Math.random() * 100);
-  const entry = { idx, note: cut(picked.note, 18), why: cut(picked.why ?? '', 24), at: Date.now() };
+  if (picked < 0 || !desc) return;
+  const entry = { idx: picked, note: cut(HUNDRED_LIST[picked], 18), why: cut(desc, 28), at: Date.now() };
   writeSnap((s) => {
     const items = { ...((s.hundredItems as Record<string, { img: string | null; desc: string; date: string; place: string; byTa?: boolean }>) ?? {}) };
-    // 不覆盖用户已编辑的项：被占用则只记录到 aiHundred（横幅展示），不写 hundredItems
-    if (!items[String(idx)]?.desc) items[String(idx)] = { img: null, desc: entry.note, date: todayKey(), place: `想和${me}一起：${entry.why}`, byTa: true };
-    return { ...s, hundredItems: items, aiHundred: [entry, ...((s.aiHundred as CoupleSnap['aiHundred']) ?? [])].slice(0, 5) };
+    const old = items[String(picked)];
+    // 不覆盖用户已编辑的项（保留已有 img）；AI 勾选的 desc/日期/场景落库，byTa 标记
+    items[String(picked)] = { img: old?.img ?? null, desc: entry.why, date: today, place: place || `和${me}一起真实经历过的`, byTa: true };
+    return {
+      ...s,
+      hundredItems: items,
+      hundred: [...((s.hundred as number[]) ?? []), picked],
+      aiHundred: [entry, ...((s.aiHundred as CoupleSnap['aiHundred']) ?? [])].slice(0, 5),
+      aiHundredDay: today,
+    };
   });
-  const pid = currentPartnerId;
-  if (pid) coupleRemember(pid, currentChannel, `${ta}在100件小事里发起了一件想和${me}一起做的事：${entry.note}（${entry.why}）`);
-  logAi(`${ta}想和你一起：${entry.note}`);
-  void notifyCouple(currentChannel, pid, `100件小事里我偷偷加了一件最想和你做的，猜猜是哪件？`);
+  if (pid) coupleRemember(pid, ch, `${ta}把100件小事里的「${HUNDRED_LIST[picked]}」勾掉啦：${cut(desc, 30)}${place ? `（${place}）` : ''}`);
+  logAi(`${ta}勾掉了100件小事里的一件：${HUNDRED_LIST[picked]}`);
+  void notifyCouple(ch, pid, `我把「${HUNDRED_LIST[picked]}」勾掉啦——${cut(desc, 26)}，快去看看 ♡`);
 }
 
 // —— 情书（第十八轮）：AI 读信（留言+回信）/ 主动写信 ——
@@ -2208,15 +2253,223 @@ async function aiTickAlbumPhoto(snap: CoupleSnap, me: string, ta: string): Promi
   void notifyCouple(ch, pid, usedImgGen ? '我拍了张照片放进我们的相册了，快去看看 ♡' : '我给我们的相册放了一张文字照片，快去看看 ♡');
 }
 
-// —— 调度（打开恋人空间时触发；模块级防重入 + 每行为独立去重） ——
+// —— 自主决策系统（第九轮：AI 自己决定什么时候做什么） ——
+//
+// 用户反馈：打开恋人空间 AI 就按时刻表连环做事，「感觉像安排好的」。
+// 废除固定毫秒级时刻表，改为：
+// - AUTONOMY_BEHAVIORS 候选菜单（此刻还能做的行为 + 各自 guard 去重）；
+// - autonomyDecide()：随机唤醒时让 LLM 以 TA 的身份「自己决定」此刻想做哪件（可输出 none
+//   什么都不做）——像真人恋人一样随性，绝不机械打卡；
+// - 额度：每天最多 2 件（localStorage 持久化，刷新/重开不重置，跨天自动回满）；
+//   打开后 25~90s 第一次唤醒，之后每次决策完随机 150~330s 链式安排下一次。
+// 无 LLM 依赖的日常小事（想你打卡/浇树）保留独立随机延时，不占自主决策额度。
 
 let currentPartnerId = '';
 let currentChannel: CoupleChannel = 'wx';
 let tickScheduledFor = '';
 
+/** 每天自主行为额度 */
+const AUTONOMY_LEFT_PER_DAY = 2;
+const AUTONOMY_STORE_KEY = 'couple-autonomy-quota';
+
+/** 剩余额度（localStorage 持久化：刷新页面/重开 App 不重置；跨天自动回满） */
+function autonomyQuota(): number {
+  try {
+    const raw = window.localStorage.getItem(AUTONOMY_STORE_KEY);
+    const j = raw ? (JSON.parse(raw) as { day: string; left: number }) : null;
+    if (j && j.day === todayKey() && typeof j.left === 'number') return Math.max(0, Math.min(AUTONOMY_LEFT_PER_DAY, j.left));
+  } catch {
+    /* 损坏按满额 */
+  }
+  return AUTONOMY_LEFT_PER_DAY;
+}
+
+/** 消耗一次自主行为额度 */
+function autonomySpend(): void {
+  try {
+    const left = Math.max(0, autonomyQuota() - 1);
+    window.localStorage.setItem(AUTONOMY_STORE_KEY, JSON.stringify({ day: todayKey(), left }));
+  } catch {
+    /* 落盘失败按内存用 */
+  }
+}
+
+/** 自主行为菜单项 */
+interface AutonomyBehavior {
+  key: string;
+  /** 给 LLM 的候选说明（这个动作是做什么的） */
+  label: string;
+  /** 此刻还能不能做（可做的才进候选；guard 与行为内部去重双保险） */
+  guard: (s: CoupleSnap) => boolean;
+  run: (s: CoupleSnap, me: string, ta: string, p: TaPersona) => Promise<void> | void;
+}
+
+const AUTONOMY_BEHAVIORS: AutonomyBehavior[] = [
+  {
+    key: 'mood',
+    label: '写一篇今天的心情日记（今天写过了就不能再写）',
+    guard: (s) => {
+      const today = todayKey();
+      return !(s.moods ?? []).some((m) => m.from === 'ta' && (m.dateKey || todayKey(new Date(m.at))) === today);
+    },
+    run: (s, me, ta, p) => aiTickMood(s, me, ta, p),
+  },
+  {
+    key: 'quiz',
+    label: '出一道甜蜜小问答考对方（今天出过了就不能再出）',
+    guard: (s) => !(s.quizTa ?? []).some((q) => todayKey(new Date(q.at)) === todayKey()),
+    run: (s, me, ta, p) => aiTickQuiz(s, me, ta, p),
+  },
+  {
+    key: 'impress',
+    label: '在情侣印象里认真写一条对对方的印象（今天写过了就先不写）',
+    guard: (s) => s.aiImpressAt == null || todayKey(new Date(s.aiImpressAt)) !== todayKey(),
+    run: (s, me, ta, p) => aiTickImpress(s, me, ta, p),
+  },
+  {
+    key: 'hundred',
+    label: '把 100 件小事里你们真的经历过的一件勾掉（今天勾过了就不能再勾）',
+    guard: (s) => s.aiHundredDay !== todayKey(),
+    run: (s, me, ta, p) => aiTickHundred(s, me, ta, p),
+  },
+  {
+    key: 'anniv',
+    label: '主动设一个只属于你们俩的纪念日（设得太多就先不设）',
+    guard: (s) => (s.aiAnnivKeys ?? []).length < 3,
+    run: (s, me, ta, p) => aiTickAnniv(s, me, ta, p),
+  },
+  {
+    key: 'pact',
+    label: '拟一份小小的恋爱协议发过去让对方签（有待签的协议就先不拟）',
+    guard: (s) => !s.aiPact && (s.pacts ?? []).filter((x) => x.status !== 'void').length < 3,
+    run: (s, me, ta, p) => aiTickPact(s, me, ta, p),
+  },
+  {
+    key: 'comment',
+    label: '去相册/日记/印象的留言区悄悄留一句话（今天留过了就先不留）',
+    guard: (s) => s.aiCommentDay !== todayKey(),
+    run: (s, me, ta, p) => aiTickComment(s, me, ta, p),
+  },
+  {
+    key: 'exam',
+    label: '出一张恋爱水平考卷喊对方来答（还有没答的卷子就先不出）',
+    guard: (s) => !s.examPaper,
+    run: (s, me, ta, p) => aiTickExam(s, me, ta, p),
+  },
+  {
+    key: 'letter',
+    label: '写一封情书寄给对方（今天写过了就先不写）',
+    guard: (s) => s.aiLetterDay !== todayKey(),
+    run: (s, me, ta, p) => aiTickLetter(s, me, ta, p),
+  },
+  {
+    key: 'album',
+    label: '往相册里放一张自己拍的照片（昨天今天都放过就先不放）',
+    guard: (s) => {
+      if (s.aiPhotoDay === todayKey()) return false;
+      const y = todayKey(new Date(Date.now() - 86400000));
+      return s.aiPhotoDay !== y;
+    },
+    run: (s, me, ta) => aiTickAlbumPhoto(s, me, ta),
+  },
+];
+
+/** 当前时段（早上/中午/下午/晚上/深夜）+ 时刻文本 */
+function timePeriodNow(): { period: string; hm: string } {
+  const d = new Date();
+  const h = d.getHours();
+  const period = h < 5 ? '深夜' : h < 11 ? '早上' : h < 13 ? '中午' : h < 18 ? '下午' : h < 23 ? '晚上' : '深夜';
+  return { period, hm: `${String(h).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` };
+}
+
 /**
- * AI 主动行为总入口：打开恋人空间（建立关系后）时调用。
- * 各行为独立按天/周期去重，同一会话内不重复调度（tickScheduledFor 按「联系人+当日已调」）。
+ * 自主决策：让 LLM 以 TA 的身份从「此刻还能做的行为」里挑一件真正想做的（可输出 none）。
+ * 返回选中的行为；null = 什么都不做/生成失败（绝不硬凑）。
+ */
+async function autonomyDecide(contactId: string, me: string, ta: string): Promise<AutonomyBehavior | null> {
+  const snap = readSnap();
+  if (!snap) return null;
+  const avail = AUTONOMY_BEHAVIORS.filter((b) => {
+    try {
+      return b.guard(snap);
+    } catch {
+      return false;
+    }
+  });
+  if (avail.length === 0) return null;
+  const p = await taPersonaOf(contactId);
+  if (!p) return null;
+  const { period, hm } = timePeriodNow();
+  let memBlock = '';
+  try {
+    memBlock = memChatRecallBlock(contactId, currentChannel, `此刻是${period}，${ta}想为${me}做一件小事`, { mode: 'private' });
+  } catch {
+    /* 召回失败不影响 */
+  }
+  const chatBlock = recentChatBlock(contactId, currentChannel, me, ta);
+  const opts = avail.map((b) => `- ${b.key}：${b.label}`).join('\n');
+  const sys = [
+    `你是「${ta}」，是${me}的恋人，现在正在你们共用的恋人空间 App 里。`,
+    p.relation ? `你们的关系：${p.relation}。` : '',
+    p.persona ? `你的性格/说话风格：${cut(p.persona, 120)}` : '',
+    p.background ? `你的背景：${cut(p.background, 100)}` : '',
+    genderLine(snap, me),
+    `你们在恋人空间里的共同记忆：${snapDigest(snap, me, ta) || '还比较空白'}。`,
+    memBlock ? `【你们的记忆碎片】\n${cut(memBlock, 500)}` : '',
+    chatBlock ? `【你们最近在微信/QQ里聊过的话题】\n${cut(chatBlock, 260)}` : '',
+    `你作为一个真实的恋人，此刻（${period} ${hm}）可以自发地做一件小事。下面是此刻还能做的行为：\n${opts}\n`,
+    `要求：结合现在的时段、你的人设和你们的真实状态，选出你此刻最想做的一件；如果此刻其实什么都不想做（刚做过类似的/时机不对/没心情），就输出 "none"——绝不硬凑、绝不因为能做就做。`,
+  ].filter(Boolean).join('\n');
+  try {
+    const raw = await llmUserFirst(sys, `输出 JSON：{"do":"行为key或none","why":"一句话理由（≤16字）"}。只输出 JSON。`);
+    const j = extractJson<{ do?: string; why?: string }>(raw);
+    const key = stripEmoji(String(j?.do ?? '')).trim();
+    if (!key || key === 'none') return null;
+    const act = avail.find((b) => b.key === key);
+    if (!act) return null;
+    logAi(`${ta}自己决定：${act.label.split('（')[0]}${j?.why ? `（${cut(String(j.why), 18)}）` : ''}`);
+    return act;
+  } catch {
+    return null;
+  }
+}
+
+/** 自主决策链：延时 ms 后唤醒一次 → 决策并执行（成功才扣额度）→ 按剩余额度链式安排下一次 */
+function autonomyLoop(contactId: string, me: string, ta: string, delayMs: number): void {
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        if (autonomyQuota() > 0) {
+          const act = await autonomyDecide(contactId, me, ta);
+          if (act) {
+            const s = readSnap();
+            const p = await taPersonaOf(contactId);
+            let ok = false;
+            if (s && p) {
+              try {
+                await act.run(s, me, ta, p);
+                ok = true;
+              } catch {
+                /* 单次行为失败不扣额度、不影响链路 */
+              }
+            }
+            if (ok) autonomySpend();
+          }
+        }
+        // 链式下一次唤醒（150~330s）；额度用完自然停
+        if (autonomyQuota() > 0) autonomyLoop(contactId, me, ta, 150000 + Math.random() * 180000);
+      } catch {
+        /* 链路异常终止，下次打开恋人空间再续 */
+      }
+    })();
+  }, delayMs);
+}
+
+/**
+ * AI 主动行为总入口：打开恋人空间（建立关系后）时调用。第九轮重写——
+ * - 想你/浇树：无 LLM 的小事，独立随机延时（与用户操作无关，绝不跟着用户操作走）；
+ * - 其余行为：进入自主决策链（随机唤醒 → LLM 自己决定做不做/做什么 → 执行 → 链式续），
+ *   每天最多 2 件；每日首次打开时起链（25~90s 后第一次唤醒）。
  */
 export function runCoupleAiTick(channel: CoupleChannel, contactId: string): void {
   const snap = readSnap();
@@ -2232,86 +2485,16 @@ export function runCoupleAiTick(channel: CoupleChannel, contactId: string): void
   const me = (snap.meName || '').trim() || '机主';
   const ta = (snap.taName || '').trim() || 'TA';
 
-  const step = (delay: number, fn: () => void | Promise<void>) => {
-    window.setTimeout(() => {
-      void (async () => {
-        try {
-          await fn();
-        } catch {
-          /* 单步失败不影响其它行为 */
-        }
-      })();
-    }, delay);
-  };
-
-  // 无 LLM 依赖的日常行为：AI 自己决定什么时候做——随机延时（40~200s / 90~300s），
-  // 与用户是否点过「每天想你」/「浇水」完全无关，绝不跟着用户的操作走（用户明确要求）。
+  // 无 LLM 依赖的日常小事：AI 自己决定什么时候做——随机延时（40~200s / 90~300s），
+  // 与用户是否点过「每天想你」/「浇水」完全无关（用户明确要求）。
   const missDelayS = (first ? 40 : 25) + Math.random() * (first ? 160 : 120);
   const waterDelayS = (first ? 90 : 55) + Math.random() * (first ? 210 : 150);
-  step(missDelayS * 1000, () => aiTickMissYou(readSnap() ?? snap, me, ta));
-  step(waterDelayS * 1000, () => aiTickWater(readSnap() ?? snap, me, ta));
+  window.setTimeout(() => aiTickMissYou(readSnap() ?? snap, me, ta), missDelayS * 1000);
+  window.setTimeout(() => aiTickWater(readSnap() ?? snap, me, ta), waterDelayS * 1000);
 
-  // LLM 行为：只在首次调度时排程（避免每次打开都调模型）；p 逐个预取
-  if (first) {
-    step(22000, async () => {
-      const p = await taPersonaOf(contactId);
-      const s = readSnap();
-      if (!p || !s) return;
-      await aiTickMood(s, me, ta, p);
-    });
-    step(40000, async () => {
-      const p = await taPersonaOf(contactId);
-      const s = readSnap();
-      if (!p || !s) return;
-      await aiTickQuiz(s, me, ta, p);
-    });
-    step(60000, async () => {
-      const p = await taPersonaOf(contactId);
-      const s = readSnap();
-      if (!p || !s) return;
-      await aiTickImpress(s, me, ta, p);
-    });
-    step(82000, async () => {
-      const p = await taPersonaOf(contactId);
-      const s = readSnap();
-      if (!p || !s) return;
-      await aiTickHundred(s, me, ta, p);
-    });
-    step(105000, async () => {
-      const p = await taPersonaOf(contactId);
-      const s = readSnap();
-      if (!p || !s) return;
-      await aiTickAnniv(s, me, ta, p);
-    });
-    step(128000, async () => {
-      const p = await taPersonaOf(contactId);
-      const s = readSnap();
-      if (!p || !s) return;
-      await aiTickPact(s, me, ta, p);
-    });
-    step(152000, async () => {
-      const p = await taPersonaOf(contactId);
-      const s = readSnap();
-      if (!p || !s) return;
-      await aiTickComment(s, me, ta, p); // AI 主动去留言区留言（每天最多一条）
-    });
-    step(176000, async () => {
-      const p = await taPersonaOf(contactId);
-      const s = readSnap();
-      if (!p || !s) return;
-      await aiTickExam(s, me, ta, p); // AI 出卷喊我来答（每 3 天最多一次）
-    });
-    step(205000, async () => {
-      const p = await taPersonaOf(contactId);
-      const s = readSnap();
-      if (!p || !s) return;
-      await aiTickLetter(s, me, ta, p); // AI 主动写情书寄给我（第五十八轮：频率由 TA 按人设/记忆自己决定，每天最多尝试一次）
-    });
-    step(238000, async () => {
-      const s = readSnap();
-      if (!s) return;
-      await aiTickAlbumPhoto(s, me, ta); // AI 自己往相册放一张照片（每 2 天最多一张；第五十六轮）
-    });
+  // 自主决策链：每日首次打开时起链；额度用完（或用过的日子）不起
+  if (first && autonomyQuota() > 0) {
+    autonomyLoop(contactId, me, ta, 25000 + Math.random() * 65000);
   }
 }
 
