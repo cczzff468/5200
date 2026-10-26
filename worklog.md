@@ -627,3 +627,21 @@ Stage Summary:
 - 语音图标：弧线纯黑 + 播放时从前往后逐个出现（0.55s 半拍交错循环）+ 锥体弧线拉开 1.5px 间距；转文字白面板 4px 圆角
 - AI 代买双修：挑品按聊天相关度前置（玩偶≠手机）+ 付款后跳过物流直接送达（即时已签收、直进礼物页）
 - 关键文件：wechat.tsx、wx-gift.tsx、voice-bubble.tsx、globals.css、tb-ai-engage.ts、taobao-store.ts、tb-draft-card.tsx
+
+---
+Task ID: 23
+Agent: Z.ai 主控（Z.ai Code）
+Task: 同步远端基线 aaf6c70（另一环境第六轮实现快照）并补齐用户本轮明确提出但基线遗漏的四点
+
+Work Log:
+- git push 时发现远端新增 30c5d07（另一环境的第六轮实现：礼物全链路/收礼弹窗/礼物卡 206×84/arc-seq 播放动画/转账礼物卡尾巴/挑品相关度前置/AI代买直送即时签收）+ 合并提交 aaf6c70（声明基线以该环境实现为准）→ 尊重基线：git reset --hard origin/main（本地 04b04a7 实现保留在 reflog）
+- 基线缺口核对（对照用户第六轮原话）：①红包卡无尾巴且「红包」标签仍有 bg-black/[0.08] 暗色条 ②亲属卡无尾巴无 fromMe ③语音气泡仍为锥体三角形（用户要求改菱形变小+与弧线拉开）④[帮你买] 仍是「帮你挑的宝贝」草稿确认卡（用户要求删除挑物品功能直接买）
+- [红包/亲属卡尾巴 wechat.tsx] 照基线转账卡双层结构模式补齐：button(overflow-visible+filter) > rotate-45 菱形尾巴（13×13、尖角圆弧 borderRadius 2px/3px、红包 #EC5A42 渐变同段取色/亲属卡 白|dark#1E1E1E）+ 内层 overflow-hidden rounded 卡身；红包标签删暗色条与卡身同色；两卡新增 fromMe prop + 调用点传 m.role==='me'
+- [语音菱形 voice-bubble.tsx] 基线 24×24 viewBox 锥体 M5.4 7.8 L10 12 L5.4 16.2（4.6×8.4、距内弧 2）→ 菱形 M6.8 8.8 L9 12 L6.8 15.2 L4.6 12 Z（4.4×6.4 小一号、右尖 x=9 距内弧 x=12 拉开至 3）
+- [AI直购直送 tb-ai-engage.ts] [帮你买] 语义重写：删除草稿确认卡（tbCreateAiDraft 不再新建，存量 tbdraft 渲染保留兼容）→ 立即按店建单 + AI 逐单付款 + tbInstantCompleteAiOrder 即时送达（宝贝同步落进礼物页已收货列表，复用基线机制）+ 聊天发 giftcard（基线 WxGiftData 结构：id=订单 id/countLabel 共N件/shop/accepted）→ 点卡开基线收礼弹窗；QQ 端回退 sys 提示仅微信支持；ctx 规则按 app 分流（QQ 端不注入 [帮你买]/[送礼物] 教学避免空承诺）；【品类必须贴合】条款沿用基线相关度前置
+- [验证] tsc 0 新增；eslint 全部改动文件 0 问题；临时预览页 E2E：红包两侧尾巴+标签同色 ✓、转账/亲属卡尾巴 ✓、语音菱形+黑弧+间距 ✓、执行器直测 [帮你买:p-toy-1] → 直接返回 giftcard（基线结构）+ 订单 status=completed（即时送达）+ 无确认卡 ✓；预览页已删除未入库
+
+Stage Summary:
+- 在远端基线（另一环境第六轮实现）之上补齐用户本轮明确要求的四点：红包卡尾巴+标签同色、亲属卡尾巴、语音气泡菱形化（小一号+拉开间距）、[帮你买] 删除挑宝贝确认卡改为直接下单即时送达并以礼物卡送进聊天（点卡开收礼弹窗+宝贝落礼物页）
+- 基线既有优势保留：收礼弹窗（已收下持久化）、礼物卡 206×84、订单即时签收直进礼物页、挑品相关度打分、[送礼物] AI 主动送礼
+- 关键文件：wechat.tsx（RpBubble/FamilyBubble+调用点）、voice-bubble.tsx（WxVoiceIcon）、tb-ai-engage.ts（tb-order-draft 执行器+ctx 规则分流）

@@ -2354,33 +2354,41 @@ function FamGlyph({ size = 42 }: { size?: number }) {
 }
 
 /** 亲属卡聊天卡片（图①：白底 + 黄圆图标 + 「给C的亲属卡/待对方领取」+ 右侧淡黄星球轨道装饰 + 左下「亲属卡」；领取/退回后卡片颜色变灰） */
-function FamilyBubble({ title, sub, settled, onClick }: { title: string; sub: string; settled: boolean; onClick: () => void }) {
+export function FamilyBubble({ title, sub, settled, fromMe, onClick }: { title: string; sub: string; settled: boolean; fromMe?: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       data-testid="wx-fc-bubble"
       onClick={onClick}
-      className="relative block w-[206px] overflow-hidden rounded-[10px] bg-white text-left shadow-sm transition-all duration-300 active:brightness-[0.97] dark:bg-[#1E1E1E]"
+      className="relative block w-[206px] text-left shadow-sm transition-all duration-300 active:brightness-[0.97]"
       style={{ filter: settled ? 'grayscale(0.62) brightness(0.97)' : undefined }}
       aria-label={`${title}（${sub}）`}
     >
-      <span aria-hidden="true" className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-[#FBF0C4] dark:bg-[#3B3722]" />
+      {/* 小尾巴：白卡同色菱形（与红包/转账/礼物卡同轮统一），尖角处带一点圆弧 */}
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute -right-3 top-4 h-[82px] w-[150px] -rotate-[24deg] rounded-[50%] border-[3px] border-[#F6DFA2] dark:border-[#4A4426]"
+        className={`absolute top-[11px] h-[13px] w-[13px] rotate-45 bg-white dark:bg-[#1E1E1E] ${fromMe === false ? '-left-[3px]' : '-right-[3px]'}`}
+        style={{ borderRadius: fromMe === false ? '2px 2px 2px 3px' : '2px 3px 2px 2px' }}
       />
-      <span className="relative flex items-center gap-2.5 px-3 pb-1.5 pt-3">
-        <FamGlyph size={42} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[16px] font-medium leading-snug text-[#574423] dark:text-[#E6D6AE]" data-testid="wx-fc-bubble-title">
-            {title}
-          </span>
-          <span className="mt-0.5 block truncate text-[13px] text-[#BCA678] dark:text-[#9A8B62]" data-testid="wx-fc-bubble-status">
-            {sub}
+      <span className="relative block overflow-hidden rounded-[10px] bg-white dark:bg-[#1E1E1E]">
+        <span aria-hidden="true" className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-[#FBF0C4] dark:bg-[#3B3722]" />
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -right-3 top-4 h-[82px] w-[150px] -rotate-[24deg] rounded-[50%] border-[3px] border-[#F6DFA2] dark:border-[#4A4426]"
+        />
+        <span className="relative flex items-center gap-2.5 px-3 pb-1.5 pt-3">
+          <FamGlyph size={42} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[16px] font-medium leading-snug text-[#574423] dark:text-[#E6D6AE]" data-testid="wx-fc-bubble-title">
+              {title}
+            </span>
+            <span className="mt-0.5 block truncate text-[13px] text-[#BCA678] dark:text-[#9A8B62]" data-testid="wx-fc-bubble-status">
+              {sub}
+            </span>
           </span>
         </span>
+        <span className="relative block px-3 pb-2 pt-2 text-[12px] text-black/30 dark:text-white/30">亲属卡</span>
       </span>
-      <span className="relative block px-3 pb-2 pt-2 text-[12px] text-black/30 dark:text-white/30">亲属卡</span>
     </button>
   );
 }
@@ -4089,31 +4097,40 @@ export function TransferCompose({
 
 /** 红包聊天卡片（红橙渐变，底部「红包」条；与转账卡同宽 206px；未领取点击弹「開」，已领取进详情）。
  *  单聊/群聊共用同一套卡片组件（群聊传入群红包的祝福语/进度文案） */
-export function RpBubble({ blessing, sub, settled, onClick }: { blessing: string; sub: string; settled: boolean; onClick: () => void }) {
+export function RpBubble({ blessing, sub, settled, fromMe, onClick }: { blessing: string; sub: string; settled: boolean; fromMe?: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       data-testid="wx-rp-bubble"
       onClick={onClick}
-      className="relative block w-[206px] overflow-hidden rounded-[8px] text-left shadow-sm transition-all duration-300 active:brightness-95"
+      className="relative block w-[206px] text-left shadow-sm transition-all duration-300 active:brightness-95"
       style={{
-        background: 'linear-gradient(135deg, #F2694C, #E94E38)',
         // 领取/退还/拒收后卡片颜色变灰（对照真实微信：已领取的红包封面褪色）
         filter: settled ? 'grayscale(0.62) brightness(0.97)' : undefined,
       }}
       aria-label={`红包 ${blessing}（${sub}）`}
     >
-      <span aria-hidden="true" className="pointer-events-none absolute -right-6 -top-10 h-24 w-24 rounded-full bg-white/10" />
-      <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
-        <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border-2 border-white/90 bg-white/15" aria-hidden="true">
-          <span className="text-[20px] font-semibold leading-none text-white">¥</span>
+      {/* 小尾巴：菱形凸出卡外（不被裁剪，与转账卡同款双层结构），尖角处带一点圆弧，颜色取卡身右上同段渐变 */}
+      <span
+        aria-hidden="true"
+        className={`absolute top-[11px] h-[13px] w-[13px] rotate-45 bg-[#EC5A42] ${fromMe === false ? '-left-[3px]' : '-right-[3px]'}`}
+        style={{ borderRadius: fromMe === false ? '2px 2px 2px 3px' : '2px 3px 2px 2px' }}
+      />
+      {/* 卡身：圆角 + overflow-hidden 只裁内容层（渐变/高光/底部标签），不再裁掉尾巴 */}
+      <span className="relative block overflow-hidden rounded-[8px]" style={{ background: 'linear-gradient(135deg, #F2694C, #E94E38)' }}>
+        <span aria-hidden="true" className="pointer-events-none absolute -right-6 -top-10 h-24 w-24 rounded-full bg-white/10" />
+        <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
+          <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border-2 border-white/90 bg-white/15" aria-hidden="true">
+            <span className="text-[20px] font-semibold leading-none text-white">¥</span>
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[15px] leading-snug text-white">{blessing}</span>
+            <span className="mt-0.5 block text-[11px] text-white/85">{sub}</span>
+          </span>
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[15px] leading-snug text-white">{blessing}</span>
-          <span className="mt-0.5 block text-[11px] text-white/85">{sub}</span>
-        </span>
+        {/* 「红包」标签：背景与卡身同色（去掉黑蒙层，仅保留文字，与转账卡同轮处理） */}
+        <span className="relative block px-3 py-[5px] text-[12px] text-white/90">红包</span>
       </span>
-      <span className="relative block bg-black/[0.08] px-3 py-[5px] text-[12px] text-white/90">红包</span>
     </button>
   );
 }
@@ -8729,6 +8746,7 @@ function ChatPage({
                   blessing={m.rp.blessing}
                   sub={m.rp.status === 'returned' ? '已退回' : m.rp.status === 'rejected' ? '已拒收' : m.rp.opened ? '已领取' : '待领取'}
                   settled={m.rp.opened || Boolean(m.rp.status)}
+                  fromMe={m.role === 'me'}
                   onClick={() => {
                     // 自己发的红包不能领：直接进详情；已到终态进详情；对方发的未处理弹「開」
                     if (m.rp?.opened || m.rp?.status) setDetailId(m.id);
@@ -8771,6 +8789,7 @@ function ChatPage({
                   title={`给${m.role === 'me' ? peer.name : me.name}的亲属卡`}
                   sub={m.fam.rejected ? '已退回' : m.fam.claimed ? (m.role === 'me' ? '对方已领取' : '已领取') : m.role === 'me' ? '待对方领取' : '待你领取'}
                   settled={m.fam.claimed === true || m.fam.rejected === true}
+                  fromMe={m.role === 'me'}
                   onClick={() => (m.role === 'me' ? openFamilyDetail(m.id) : setDetailId(m.id))}
                 />
               ) : m.kind === 'mtpay' && m.mtpay ? (
