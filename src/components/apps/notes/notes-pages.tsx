@@ -42,9 +42,8 @@ import {
   SheetShell,
 } from './notes-ui';
 
-/** 白色分组容器卡（设计稿：白底圆角 14 + 极浅描边投影，iOS 内嵌分组样式） */
-const GROUP_CARD =
-  'overflow-hidden rounded-[14px] bg-white shadow-[0_1px_3px_rgba(80,65,40,0.06)] ring-1 ring-black/[0.035] dark:bg-white/[0.06] dark:shadow-none dark:ring-white/[0.08]';
+/** 白色分组容器卡（用户反馈：素白面板，去掉灰色边框与阴影） */
+const GROUP_CARD = 'overflow-hidden rounded-[14px] bg-white dark:bg-white/[0.06]';
 
 /** 行间内缩分隔线（起始位置由调用方指定，与行内文字对齐） */
 function RowDivider({ left }: { left: string }) {
@@ -74,7 +73,7 @@ function PageShell({
 }) {
   return (
     <div className="flex h-full flex-col">
-      <div className="shrink-0 px-4 pt-[54px] backdrop-blur-xl" style={{ backgroundColor: BG_WARM }}>
+      <div className="shrink-0 px-4 pt-[46px] backdrop-blur-xl" style={{ backgroundColor: BG_WARM }}>
         <div className="flex h-12 items-center justify-between">
           <div className="flex min-w-[68px] items-center">{navLeft}</div>
           <div className="flex min-w-[68px] items-center justify-end">{navRight}</div>
@@ -83,7 +82,7 @@ function PageShell({
           type="button"
           onClick={onTitleClick}
           disabled={!onTitleClick}
-          className="mt-1 block w-full text-left"
+          className="mt-0.5 block w-full text-left"
         >
           <div className="text-[30px] font-bold leading-tight tracking-tight text-foreground">{title}</div>
           {sub && <div className={`mt-0.5 text-[13px] ${MUTED_META_CLS}`}>{sub}</div>}
@@ -173,10 +172,11 @@ export function FoldersPage({
                         <path d="M2 6h8" />
                       </svg>
                     </button>
-                  ) : (
+                  ) : editMode ? (
+                    /* 编辑模式下不可删的内置行保留同宽空位，与可删行对齐 */
                     <span className="w-6 shrink-0" />
-                  )}
-                  {/* 设计稿：实心金色文件夹图标 */}
+                  ) : null}
+                  {/* 常态无空位：图标紧贴卡片左缘（用户反馈「图标应该挨着边缘」）；实心金色文件夹 */}
                   <span className="flex shrink-0 items-center" style={{ color: 'var(--notes-gold)' }}>
                     <FolderClosed className="h-[21px] w-[21px]" fill="currentColor" strokeWidth={1.2} />
                   </span>
@@ -185,10 +185,11 @@ export function FoldersPage({
                   <ChevronRight className="h-4 w-4 shrink-0 text-[#c9c4bd]" strokeWidth={2.2} />
                 </>
               );
-              const rowCls = 'flex min-h-[52px] items-center gap-3 px-3.5 text-left';
+              const rowCls = 'flex min-h-[52px] items-center gap-3 px-4 text-left';
               return (
                 <div key={r.id} className="relative">
-                  {i > 0 && <RowDivider left="left-[50px]" />}
+                  {/* 分隔线与文字起点对齐（px-4 16 + 图标 21 + gap 12 = 49） */}
+                  {i > 0 && <RowDivider left="left-[49px]" />}
                   {editMode && r.removable ? (
                     <div className={rowCls}>{inner}</div>
                   ) : (
@@ -210,9 +211,9 @@ export function FoldersPage({
             <button
               type="button"
               onClick={() => onOpenFolder(FOLDER_TRASH)}
-              className="flex min-h-[52px] w-full items-center gap-3 px-3.5 text-left transition-colors active:bg-black/[0.03] dark:active:bg-white/[0.05]"
+              className="flex min-h-[52px] w-full items-center gap-3 px-4 text-left transition-colors active:bg-black/[0.03] dark:active:bg-white/[0.05]"
             >
-              <span className="w-6 shrink-0" />
+              {/* 常态无空位：图标紧贴卡片左缘；金色垃圾桶线性图标 */}
               <span className="flex shrink-0 items-center" style={{ color: 'var(--notes-gold)' }}>
                 <Trash2 className="h-[21px] w-[21px]" strokeWidth={1.8} />
               </span>

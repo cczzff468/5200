@@ -46,6 +46,9 @@ export function CalChrome({
   const [viewMenu, setViewMenu] = useState(false);
   const [moreMenu, setMoreMenu] = useState(false);
   const yearOnly = m === undefined;
+  /** 仅当正在查看真实当前月时月份红字；滑到其它月份恢复黑色（用户反馈） */
+  const now = new Date();
+  const isNowMonth = !yearOnly && y === now.getFullYear() && m === now.getMonth();
 
   return (
     <div className="shrink-0">
@@ -82,7 +85,7 @@ export function CalChrome({
                 <span className="text-[24px] font-bold tracking-tight" style={{ color: TEXT }}>
                   {y}/
                 </span>
-                <span className="text-[24px] font-bold tracking-tight" style={{ color: ACCENT }}>
+                <span className="text-[24px] font-bold tracking-tight" style={{ color: isNowMonth ? ACCENT : TEXT }}>
                   {pad2(m + 1)}
                 </span>
               </span>

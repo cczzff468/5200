@@ -544,3 +544,27 @@ Stage Summary:
 - 三项第三轮反馈全部落地：微信语音气泡按真机像素级重绘（素描式喇叭图标+贴尾巴对齐+5px 圆角，与 App 内文本气泡同规格）；备忘录薰衣草灰 #F3F2F8 底+软金 #CCAE54+实心金文件夹+独立最近删除卡+iOS 内嵌分组列表+金圈⋯钮；日历新增纵向下滑进下月/下一年手势（与横滑共存、主轴判定防斜滑误触、滚动区让位原生滚动）
 - 已知既有问题（非本轮引入）：NoteCard check 形态 button 嵌套 button 的 dev 警告（Task 17 之前即存在，本轮未触碰该形态）
 - 关键文件：src/components/apps/voice-bubble.tsx、notes/{notes-shared,notes-ui,notes-pages,notes-editor,notes-sheets}.tsx、calendar/{month-view,year-view}.tsx
+
+---
+Task ID: 19
+Agent: Z.ai 主控（Z.ai Code）
+Task: 用户第四轮反馈——语音气泡严格按用户参数 1:1 复刻 / 备忘录标签上移+图标贴边+素白卡+删「保存在此浏览器」/ 日历红月仅限当前月+下滑手势扩区
+
+Work Log:
+- [语音气泡·严格按用户参数重写 voice-bubble.tsx] ①高度固定 42px（旧 44）②宽度公式 width = 65 + 时长×2.25、60s 封顶 200px（用户指定，替换旧 86+(d-1)×4）③圆角 12→4px（微信微圆角）④尾巴改 CSS 伪元素 ::before（globals.css .wx-voice-bubble）：10px 正方形 rotate(45deg)、background-color: inherit 与气泡同色（深色模式自动跟随）、菱形中心 top 18px＝42px 气泡垂直居中偏上、紧贴左/右边缘（接收方 tail-left、发送方 tail-right）⑤内部 flex + items-center + justify-between + px-3（用户指定 space-between + padding 0 12px）⑥喇叭图标 18×18 撑满重绘：三道声波弧线（外弧近满高、弧距均匀、stroke 2.1）+ 实心锥体▶（高 1/3）；**两侧字形完全相同不镜像**（本轮真机白/绿两张截图确认：白气泡与绿气泡图标同为「弧左+锥右」，仅位置贴尾巴侧——旧版对 peer flip 是错的，已修）⑦时长 13px #999 纯文本「2″」（替换旧 16px 撇号悬肩组件）⑧配色按用户指定：对方 #FFFFFF/我方 #95EC69、文字图标 #000；真机色差：白气泡图标偏灰（tail-left 锥 .85/弧 .55/.4/.26）、绿气泡近黑（tail-right 锥 1/弧 1/.85/.7）⑨播放中弧线 CSS 动画 wx-voice-arc-blink 0.9s 由内向外轮流跳动（stagger 0.12s）+ prefers-reduced-motion 降级；QQ/信息端零改动
+- [备忘录·标题上移 notes-pages.tsx PageShell] pt-[54px]→pt-[46px] + 标题 mt-1→mt-0.5（大标题整体上移约 12px，四页统一生效）
+- [备忘录·图标贴边] 文件夹行/最近删除行删除常态下的 w-6 空位 span（旧：24px 空位+12px gap 使图标距卡缘 50px；现 px-4 直接着陆 16px＝「挨着边缘」）；编辑模式下可删行显示红减号钮、内置行保留空位对齐；行 padding px-3.5→px-4；行分隔线 left-[50px]→left-[49px] 与文字起点对齐
+- [备忘录·素白面板] GROUP_CARD（文件夹页+列表分组卡）与 CARD_CLS（笔记卡）删除 ring-1 ring-black/[0.035] 灰边框与 shadow 投影 → 纯白圆角卡（用户：白色面板素一点，边框灰色删除）
+- [备忘录·删文案] notes-editor.tsx 时间行「2026年10月26日 05:37 · 保存在此浏览器」→ 仅保留时间
+- [日历·红月仅当前月 chrome.tsx] 标题「2026/10」月份段颜色改条件渲染：isNowMonth（y/m === 真实当前年月）→ ACCENT 红，否则 TEXT 黑——滑到其它月份不再红，滑回当月恢复红
+- [日历·下滑手势扩区 month-view.tsx] 滑动区从「仅月格」扩为「月格+当日行+日程列表」整片容器（用户上次可能滑在列表区无响应）；主轴判定 + 阈值 56→48px；纵向手势让位原生滚动（listRef 记录触摸前后 scrollTop：滚动量>4 或未到顶/底则不接管）；横滑切月回归
+- [验证·tsc] bunx tsc --noEmit 仅 next.config.ts 既有基线，0 新增；eslint 全部 7 个改动文件 0 问题
+- [验证·气泡预览页] 临时 /e2e-preview 渲染对方 2″+我方 3″/25″+文本气泡对照：与真机截图并排像素对比迭代 2 轮（第 1 版字形偏小→撑满 18px 重构；锥体 44%→33%）；播放/暂停点击弧线动画生效（截图对比外弧明暗交替）；尾巴方向/同色/尖角正确；验证后临时页已删除
+- [验证·实机 E2E 390×844] 锁屏鼠标拖拽解锁（锁屏为 Pointer 事件）→ 备忘录：大标题上移✓、文件夹图标贴边✓、白卡无灰边✓、金圈⋯在位✓；新建备忘录「购物清单」→ 编辑器时间行无「保存在此浏览器」✓ 保存后计数 1✓；日历：标题 2026/10 红月✓ → 下滑（TouchEvent 派发）进 2026/11 且「11」黑色✓ → 上滑回 10 月红色恢复✓ → 横滑 10→11 回归✓ → 列表区下滑 11→12（黑）✓ → 年视图下滑 2026→2027✓；控制台 0 错误（仅 HMR 噪音）；dev.log 仅既有 netease-api instrumentation 基线警告
+- [约束遵守] 未触碰 CoupleHome.tsx / HomeScene 通知钩子 / memory 管线；dev server 未重启、未 build；临时预览页已删除未入库
+
+Stage Summary:
+- 微信语音气泡第四轮按用户给定 CSS 参数逐条 1:1 落地（42px 高 / 65+d×2.25 封顶 200 宽 / 4px 圆角 / ::before 伪元素同色尾巴 top18 / flex space-between px12 / 18×18 图标两侧同形 / 13px #999 时长 / FFF·95EC69 配色），并修正旧版 peer 镜像错误
+- 备忘录四页：大标题上移、文件夹与最近删除图标紧贴卡缘、白卡去灰边去阴影、编辑器删「保存在此浏览器」
+- 日历：标题红月仅限真实当前月（其它月黑色、回来恢复红）+ 下滑切下月手势扩至整片内容区（滚动让位）+ 年视图下滑切年保持可用
+- 关键文件：src/components/apps/voice-bubble.tsx、src/app/globals.css、notes/{notes-pages,notes-shared,notes-editor}.tsx、calendar/{chrome,month-view}.tsx

@@ -3,7 +3,7 @@
 /**
  * 备忘录编辑器（金色重构版，页3）：
  * - 导航：< 文件夹名 + 撤销/重做 + 完成（金色）
- * - 时间行（2026年10月23日 09:10 · 保存在此浏览器）+ 大字标题 + 富文本正文（contentEditable HTML）
+ * - 时间行（2026年10月23日 09:10）+ 大字标题 + 富文本正文（contentEditable HTML）
  * - 结构化清单「今天的重点」：金色勾选圆列表，可增删项/勾选/回车续项
  * - 日历关联胶囊：📅 10月23日，星期五（linkDate/linkedEventId），点按跳日历 App；
  *   工具栏 📅 打开关联抽屉（选日期 / 关联到日历日程）
@@ -576,9 +576,7 @@ export function NoteEditor({
             disabled={locked && !unlocked}
             className="w-full border-none bg-transparent text-[24px] font-bold leading-snug text-foreground outline-none placeholder:text-[#b8b2aa]/60"
           />
-          <div className="mt-1 text-[12px] text-[#b8b2aa] dark:text-[#77716b]">
-            {formatFull(savedAt)} · 保存在此浏览器
-          </div>
+          <div className="mt-1 text-[12px] text-[#b8b2aa] dark:text-[#77716b]">{formatFull(savedAt)}</div>
 
           <div className="mb-3 mt-3 border-t border-border/60" />
 

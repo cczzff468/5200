@@ -37,9 +37,8 @@ export const MUTED_META_CLS = 'text-[#B8B2AA] dark:text-[#77716b]';
 /** 次要文字（浅色）：摘要正文灰（比元信息深一档保证可读） */
 export const MUTED_TEXT_CLS = 'text-[#8e8880] dark:text-[#a8a29a]';
 
-/** 白卡：白底圆角 12px + 极浅描边投影（设计稿卡片风格） */
-export const CARD_CLS =
-  'rounded-[12px] bg-white shadow-[0_1px_3px_rgba(80,65,40,0.06)] ring-1 ring-black/[0.035] dark:bg-white/[0.06] dark:shadow-none dark:ring-white/[0.08]';
+/** 白卡：白底圆角 12px（用户反馈：素白面板，去掉灰色边框与阴影） */
+export const CARD_CLS = 'rounded-[12px] bg-white dark:bg-white/[0.06]';
 
 // ---------------- 内置文件夹 ----------------
 

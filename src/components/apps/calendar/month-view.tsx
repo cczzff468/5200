@@ -4,7 +4,8 @@
  * 主页：月历 + 当日安排（Task 16-d 小米化）。
  * 公共头部（返回/图标/标题「2026/10」/默认视图下拉/搜索/更多）+ 五视图切换胶囊（选中「月」）；
  * 星期表头（周日开头）+ 小米风格月格（今天红方块+底红条、休/班角标、节日红字、日程色点）；
- * 网格下方「选中日期 + 农历 + 当日日程列表」；横滑切月、**纵向下滑进下月 / 上滑进上月**（Task 18-c）。
+ * 网格下方「选中日期 + 农历 + 当日日程列表」；横滑切月、**纵向下滑进下月 / 上滑进上月**
+ * （Task 18-c 首版仅月格，本轮扩至月格+当日行+日程列表整片区域，日程列表可滚动时让位原生滚动）；
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -50,6 +51,9 @@ export function MonthView({
 }) {
   const today = todayKey();
   const touchStart = useRef<{ x: number; y: number } | null>(null);
+  /** 日程列表滚动容器（纵向手势让位原生滚动的判定依据） */
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const listScrollAtStart = useRef(0);
   /** 切月动画方向（axis x = 横滑左右入场；axis y = 纵向上/下入场） */
   const [slide, setSlide] = useState<{ axis: 'x' | 'y'; dir: number }>({ axis: 'x', dir: 1 });
 
@@ -97,7 +101,40 @@ export function MonthView({
         onNew={onNew}
       />
 
-      {/* 月网格（横滑切月；下滑进下月 / 上滑进上月，主轴判定避免斜滑误触） */}
+      {/* 月格 + 当日行 + 日程列表整片为滑动区：横滑切月；下滑进下月（如 10 月→11 月）/
+          上滑进上月，主轴判定避免斜滑误触；列表可滚动且手势期间发生了滚动时让位 */}
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        onTouchStart={(e) => {
+          const t = e.touches[0];
+          touchStart.current = t ? { x: t.clientX, y: t.clientY } : null;
+          listScrollAtStart.current = listRef.current?.scrollTop ?? 0;
+        }}
+        onTouchEnd={(e) => {
+          const start = touchStart.current;
+          touchStart.current = null;
+          const t = e.changedTouches[0];
+          if (!start || !t) return;
+          const dx = t.clientX - start.x;
+          const dy = t.clientY - start.y;
+          const el = listRef.current;
+          const scrolled = el ? Math.abs(el.scrollTop - listScrollAtStart.current) > 4 : false;
+          const canScroll = el ? el.scrollHeight - el.clientHeight > 4 : false;
+          const atTop = el ? el.scrollTop <= 2 : true;
+          const atBottom = el ? el.scrollTop + el.clientHeight >= el.scrollHeight - 2 : true;
+          // 主轴判定：横向位移占优 → 切月（左=下月）；纵向占优 → 下滑=下月、上滑=上月
+          if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy)) shift(dx < 0 ? 1 : -1, 'x');
+          else if (Math.abs(dy) >= 48 && Math.abs(dy) > Math.abs(dx) && !scrolled) {
+            if (dy > 0) {
+              // 下滑 = 下月：仅在列表无可滚动余量或已滚到顶时接管（不与原生滚动冲突）
+              if (!canScroll || atTop) shift(1, 'y');
+            } else if (!canScroll || atBottom) {
+              shift(-1, 'y');
+            }
+          }
+        }}
+      >
+      {/* 月网格（动画容器保留在滑动区内） */}
       <div
         key={`${viewYM.y}-${viewYM.m}`}
         className={`shrink-0 px-2 pt-1.5 animate-in fade-in duration-200 ${
@@ -109,21 +146,6 @@ export function MonthView({
               ? 'slide-in-from-top-3'
               : 'slide-in-from-bottom-3'
         }`}
-        onTouchStart={(e) => {
-          const t = e.touches[0];
-          touchStart.current = t ? { x: t.clientX, y: t.clientY } : null;
-        }}
-        onTouchEnd={(e) => {
-          const start = touchStart.current;
-          touchStart.current = null;
-          const t = e.changedTouches[0];
-          if (!start || !t) return;
-          const dx = t.clientX - start.x;
-          const dy = t.clientY - start.y;
-          // 主轴判定：横向位移占优 → 切月（左=下月）；纵向占优 → 下滑=下月、上滑=上月
-          if (Math.abs(dx) >= 56 && Math.abs(dx) > Math.abs(dy)) shift(dx < 0 ? 1 : -1, 'x');
-          else if (Math.abs(dy) >= 56 && Math.abs(dy) > Math.abs(dx)) shift(dy > 0 ? 1 : -1, 'y');
-        }}
       >
         <DayGrid
           y={viewYM.y}
@@ -169,8 +191,8 @@ export function MonthView({
         </div>
       </div>
 
-      {/* 当日日程列表 */}
-      <div className="thin-scrollbar mt-2 min-h-0 flex-1 overflow-y-auto px-4 pb-1">
+      {/* 当日日程列表（在滑动区内；可滚动时纵向手势让位原生滚动） */}
+      <div ref={listRef} className="thin-scrollbar mt-2 min-h-0 flex-1 overflow-y-auto px-4 pb-1">
         {selectedEvents.length === 0 ? (
           <div className="flex h-20 flex-col items-center justify-center gap-1" style={{ color: TEXT_3 }}>
             <span className="text-[13px]">这一天还没有日程</span>
@@ -185,6 +207,7 @@ export function MonthView({
             </div>
           </Card>
         )}
+      </div>
       </div>
     </div>
   );
