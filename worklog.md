@@ -568,3 +568,21 @@ Stage Summary:
 - 备忘录四页：大标题上移、文件夹与最近删除图标紧贴卡缘、白卡去灰边去阴影、编辑器删「保存在此浏览器」
 - 日历：标题红月仅限真实当前月（其它月黑色、回来恢复红）+ 下滑切下月手势扩至整片内容区（滚动让位）+ 年视图下滑切年保持可用
 - 关键文件：src/components/apps/voice-bubble.tsx、src/app/globals.css、notes/{notes-pages,notes-shared,notes-editor}.tsx、calendar/{chrome,month-view}.tsx
+
+---
+Task ID: 20
+Agent: Z.ai 主控（Z.ai Code）
+Task: 新沙箱会话重新拉取 GitHub 仓库并完整部署运行（用户准备提修改/新增需求）
+
+Work Log:
+- git clone https://github.com/cczzff468/5200.git（内嵌 PAT）→ /home/z/repo-5200（main 分支，最新提交 9872852 第19轮）
+- 同步 src/public/prisma/db/scripts/mini-services/tools/deploy/examples/tests/download/agent-ctx/upload 及全部根配置到 /home/z/my-project（upload 为挂载点只同步内容），并挂载仓库 .git 到 my-project、配置带 PAT 的 origin remote
+- bun install 927 包；prisma generate 首次因 schema-engine 下载失败（binaries.prisma.sh 被 Node fetch 层拦截，curl 实际可达），用 env -u 代理变量重跑 generate + db push 成功（Prisma Client v6.19.3，运行时查询验证通过）
+- 启动 dev server（端口 3000），instrumentation 自动拉起 ncm-keeper 守护 netease-api(3010)
+- Agent Browser E2E：锁屏渲染✓ → 上滑解锁主屏✓（天气小组件/全部图标/dock）→ 信息 App✓ → 进入 AI 助手会话发「在吗」→ 已送达 + AI 回复 3″ TTS 语音气泡✓（POST /api/chat 200）
+- 页面零错误、控制台零新增错误（instrumentation Edge 警告为仓库既有基线噪音）
+
+Stage Summary:
+- 项目已完整部署且端到端可交互：AI Phone（Next.js 16.4.3 + Turbopack + TS + Tailwind 4 + Prisma/SQLite 6.19.3）
+- git 已就绪：origin=cczzff468/5200（PAT 内嵌），后续修改完成可直接 commit + push origin main
+- 等待用户提出具体修改/新增功能需求
