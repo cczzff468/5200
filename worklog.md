@@ -568,3 +568,27 @@ Stage Summary:
 - 备忘录四页：大标题上移、文件夹与最近删除图标紧贴卡缘、白卡去灰边去阴影、编辑器删「保存在此浏览器」
 - 日历：标题红月仅限真实当前月（其它月黑色、回来恢复红）+ 下滑切下月手势扩至整片内容区（滚动让位）+ 年视图下滑切年保持可用
 - 关键文件：src/components/apps/voice-bubble.tsx、src/app/globals.css、notes/{notes-pages,notes-shared,notes-editor}.tsx、calendar/{chrome,month-view}.tsx
+
+---
+Task ID: 20
+Agent: Z.ai 主控（Z.ai Code）
+Task: 用户第五轮反馈——日历上滑上月/下滑下月补强 / 语音气泡按最新真机截图逐像素重制 / 加号面板「快递」改「礼物」/ 深蓝星空礼物卡 1:1 真机样式 + 礼物选择页 + 礼物详情页
+
+Work Log:
+- [真机测量] 用 Python 对最新截图（upload/Screenshot_20261026_134441.jpg，1080px）逐像素扫描：气泡高 100px、3″=232px、11″=403px → 换算 42px 高气泡：宽 = 79.5+(时长-1)×9（3″≈97.5/11″≈169.5）；图标 30×42（占气泡高 40%）= **两道声波弧线 + 实心小三角 ▶**（ASCII 逐行扫描确认：外弧 y1→43 R29.45、内弧 y8→35 R20.7、三角 x22→31 高 26%、笔画 4.5）；时长数字 cap 高 23px→14px 字号、**近黑非 #999**、″ 上标悬肩；内容贴尾聚集（11″ 气泡右侧留白 33px、时长紧贴图标间距 6px，远端大片留白——真机非 space-between）；尾巴 30×14.5/100 高、顶点在气泡垂直正中（y=613/564-662）；配色 #95EC69（取色 rgb(149,236,105) 精确命中）
+- [语音气泡 voice-bubble.tsx] 宽公式 65+d×2.25 封顶 200 → **79.5+(d-1)×9 封顶 300**；图标重绘 18×18 三弧+锥 → **12.5×17 viewBox 31×42 两弧+▶**（我方弧左▶右、对方 scaleX(-1) 镜像 ◀右弧——094208 白/绿对照确认互为镜像，修正第 19 轮「不镜像」结论）；WxDuration 13px #999 → 14px 近黑 + ″ 9.5px 上标；布局 justify-between px-3 → **贴尾聚集**（我方 justify-end pr-14 时长左图标右贴尾 / 对方镜像）；globals.css 尾巴 rotate(45) 菱形 top18 → **clip-path 细长三角 13×6、top 50% 垂直居中、background-color: inherit**；弧线透明度层级与 wx-voice-arc-blink 动画收敛为两弧（stagger 0.12s + reduced-motion 降级保留）
+- [日历 month-view.tsx] 触摸终点判定抽为 onSwipeEnd（useCallback），**onTouchCancel 也按终点判定**（防真机系统接管手势后滑动丢失）；阈值 48→40px；下滑=下月/上滑=上月/横滑回归逻辑与滚动让位不变
+- [加号面板 wechat.tsx] 「快递」→「礼物」（key 'gift'，自绘 GiftBoxIcon 礼盒蝴蝶结线性 SVG——安装版 lucide 无 Gifts）；compose 联合类型 + PlusAction 加 'gift'；移除 TbExpressPicker 页与 tbCreateOrderShare/Package 无用导入（淘宝订单分享卡 tbshare 渲染与 AI 联动不受影响）
+- [礼物全链路 wx-gift.tsx 新文件] ①GIFT_CATALOG 6 件礼物（AI 生图存 public/gifts/ 共 202KB：四叶草小狗钥匙扣=用户截图同款/永生花小熊/垂耳兔/星愿手链/香薰蜡烛/星空投影灯）②WxGiftPicker 礼物选择页（2 列商品卡+金棕「送这份」）③**WxGiftCard 深蓝星空礼物卡**：238×101px（真机 658×279@1080 → ×0.361）、底色 #164281（真机取色 rgb(22,66,129)）、金蝴蝶结双环+垂带 SVG、纵向丝带渐变线（底 78% 渐隐）、金字「送你一份心意」#EDD3A4 17px、左下白字「礼物」、24 颗确定性星点+3 颗✦星芒、右尾细三角（12×6，顶点在卡高 19%=真机 111/279）④WxGiftDetailPage 礼物详情页（真机截图 3 同款：暖奶油底 #F7F1E6/送礼人抬头/白卡商品信息「四叶草小狗1个ⓘ/礼物详情」蓝链/「礼物待收下·24小时内未收下将自动退款」卡+查看礼物订单/底部「大家都在送的礼物›」）
+- [发送流程 wechat.tsx] WxMsg kind 加 'giftcard' + gift 数据字段；sendGift 与文字图片卡片同口径四路（自己/分句/流式中排队/普通触发 AI 回合，extra 消息进上下文）；渲染分支 `<div {...bubblePress}><WxGiftCard/></div>`；giftDetail state + 详情浮层（giftById 兜底）；AI 上下文序列化分支「[礼物卡片]我通过微信礼物送了「礼物名」，一份心意，请自然回应」
+- [验证·tsc] bunx tsc --noEmit 仅 next.config.ts 既有基线，0 新增（中途修 1 处 onSwipeEnd 参数类型 React.TouchEvent）
+- [验证·eslint] 全部 4 个改动文件 0 问题（全量 lint 被沙箱 4GB 内存墙 SIGKILL，为既有现象）
+- [验证·气泡预览页] 临时 /e2e-preview 渲染对方 4″+我方 3″/11″/25″+文本气泡对照：放大裁剪比对真机——图标 `((▶`（绿）/`◀))`（白）镜像正确、时长黑字上标″、内容右聚、尾巴居中、3″≈97px/11″≈169px 与真机 232/403@100 换算一致
+- [验证·实机 E2E 390×844] IndexedDB 播种 user+char 联系人 → 微信登录 → 小柚聊天 → 加号面板最后一项=「礼物」礼盒图标 ✓ → 礼物选择页 6 图全渲染 ✓ → 送四叶草小狗 → **深蓝星空卡上屏**（蝴蝶结/丝带线/星点/金字/礼物/右尾全要素）→ AI「正在输入中」→ 回复语音 1″+5″（新图标白气泡镜像）+ 文本「收到你的礼物啦～这个四叶草小狗钥匙扣好可爱啊！」（**AI 上下文识别礼物成功**）→ 点卡进详情页（暖奶油底+白卡两段+大家都在送的礼物，与真机截图 3 对照一致）；日历：标题 2026/10 红（rgb(229,73,60)）→ 下滑 11（黑 rgb(41,36,31)）✓ → 上滑回 10（红恢复）✓ → 横滑右 10→09→左回 10 四向回归 ✓；控制台 0 新增错误（button 嵌套警告为备忘录 NoteCard Task 18 前既有问题；month-view 瞬时报错为编辑中途 HMR 态，最终编译全绿）
+- [清理] 临时预览页已删除未入库；未触碰 CoupleHome.tsx / HomeScene 通知钩子 / memory 管线；dev server 未重启、未 build
+
+Stage Summary:
+- 微信语音气泡第三轮重制：宽度/图标字形/时长颜色布局/尾巴全部改为对最新真机截图逐像素测量值（79.5+(d-1)×9、两弧+▶、14px 近黑、贴尾聚集、居中三角尾），收发镜像修正
+- 日历下滑进下月/上滑进上月补强（touchcancel 兜底+阈值 40px），红月仅真实当前月验证通过
+- 加号面板「快递」→「礼物」：礼物选择页（6 件 AI 生图商品）→ 深蓝星空「送你一份心意」礼物卡 1:1 真机样式 → 点卡进真机同款礼物详情页，AI 能识别礼物并自然回应
+- 关键文件：src/components/apps/voice-bubble.tsx、src/app/globals.css、src/components/apps/wx-gift.tsx（新）、src/components/apps/wechat.tsx、src/components/apps/calendar/month-view.tsx、public/gifts/*.jpg（新 6 图）

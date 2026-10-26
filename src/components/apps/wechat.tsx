@@ -38,7 +38,6 @@ import {
   Phone,
   Pin,
   PinOff,
-  Package,
   Plus,
   QrCode,
   Radar,
@@ -92,8 +91,9 @@ import { MtPayBubble, MtProxyDetailPage } from './mt-proxy-detail';
 import { MT_PROXY_CARD_EVENT } from '@/lib/ios/mt-proxy-pay';
 import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
 import { MtShareBubble } from './mt-share-card';
-import { TbPayBubble, TbProxyDetailPage, TbShareBubble, TbExpressPicker } from './tb-share-cards';
-import { TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT, tbGetProxy, tbProxyHistoryLine, tbProxyMeHistoryLine, tbReshareProxy, tbCreateOrderShare, stripTbEchoText } from '@/lib/ios/tb-share-proxy';
+import { TbPayBubble, TbProxyDetailPage, TbShareBubble } from './tb-share-cards';
+import { WxGiftCard, WxGiftDetailPage, WxGiftPicker, GiftBoxIcon, giftById, type GiftItem } from './wx-gift';
+import { TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT, tbGetProxy, tbProxyHistoryLine, tbProxyMeHistoryLine, tbReshareProxy, stripTbEchoText } from '@/lib/ios/tb-share-proxy';
 import { tbShareHistoryLine } from '@/lib/ios/tb-share-proxy';
 import { TbDraftBubble } from './tb-draft-card';
 import { applyTbEngageAction, buildTbEngageCtx, isTbEngageActionKind, tbDraftHistoryLine } from '@/lib/ios/tb-ai-engage';
@@ -438,7 +438,7 @@ interface WxMsg {
   time: number;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；relcard = 亲密关系卡片（恋人空间邀请卡/成功卡）；
    *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片；tbpay = 淘宝代付卡片（请求/完成）；tbshare = 淘宝订单分享动态卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard' | 'pactcard' | 'examcard' | 'lettercard';
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard' | 'pactcard' | 'examcard' | 'lettercard' | 'giftcard';
   rp?: WxRpData;
   tr?: WxTrData;
   notice?: WxNoticeData;
@@ -507,6 +507,9 @@ interface WxMsg {
   tbpay?: { pid: string; role: 'req' | 'done' };
   /** 淘宝订单分享动态卡片（kind='tbshare'）：sid = 分享快照（tb-share:<sid>），状态时间线实时跟订单走 */
   tbshare?: { sid: string };
+  /** 微信礼物卡数据（kind='giftcard'，第二十轮反馈）：深蓝星空礼物卡（加号面板「礼物」发出），
+   *  gid = 礼物目录 id（wx-gift.tsx GIFT_CATALOG），点卡进礼物详情页 */
+  gift?: { gid: string; name: string; img: string; price?: number };
   /** 美团 AI 代点外卖草稿卡（kind='mtdraft'）：did = 草稿（mt-draft:<did>），确认后创建待支付订单 */
   mtdraft?: { did: string };
   /** 淘宝 AI 代买草稿卡（kind='tbdraft'）：did = 草稿（tb-draft:<did>），确认后 AI 付款下单 */
@@ -3611,7 +3614,7 @@ function WxFcManagePage({
 
 // ---------------- 聊天加号面板 + 红包/转账（对照用户微信截图 1:1） ----------------
 
-type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'offline' | 'textcard' | 'together' | 'express';
+type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'offline' | 'textcard' | 'together' | 'express' | 'gift';
 
 /**
  * 「文字图片」弹层（加号面板「文字图片」入口；Task 13 卡片版，无生图依赖）。
@@ -3704,7 +3707,7 @@ function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
     { key: 'offline', label: '线下', icon: <Star className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'textcard', label: '文字图片', icon: <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'together', label: '一起听', icon: <Headphones className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
-    { key: 'express', label: '快递', icon: <Package className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
+    { key: 'gift', label: '礼物', icon: <GiftBoxIcon /> },
   ];
   return (
     <div
@@ -4861,7 +4864,9 @@ function ChatPage({
   /** 单聊 @ 提及：键入 @ 唤起联系人浮层，点选后替换该 @ 并插入「@名字 」（与群聊同款交互） */
   const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置/文字图片功能页（相机/图片直接调起手机原生能力） */
-  const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | 'textcard' | 'express' | null>(null);
+  const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | 'textcard' | 'express' | 'gift' | null>(null);
+  /** 正在查看详情的礼物卡消息（kind='giftcard'；点深蓝星空礼物卡进入） */
+  const [giftDetail, setGiftDetail] = useState<WxMsg | null>(null);
   /** 手动「文字图片」状态（Task 14 卡片版，以「我」的身份发出）：loading / 错误信息（弹层内展示，失败不影响聊天） */
   const [cardBusy, setCardBusy] = useState(false);
   const [cardError, setCardError] = useState('');
@@ -4935,6 +4940,47 @@ function ChatPage({
     } finally {
       setCardBusy(false);
     }
+  };
+
+  /**
+   * 礼物（第二十轮反馈）：加号面板「礼物」→ 选定礼物 → 深蓝星空礼物卡进聊天（wx-gift.tsx 渲染），
+   * 照常触发 AI 回合（卡片进上下文，AI 自然回应这份心意）；发送链路与文字图片卡片同口径
+   * （自己/分句/流式中/普通四路）
+   */
+  const sendGift = (g: GiftItem) => {
+    // 40-a 拉黑拦截：被角色拉黑后不能发送任何消息
+    if (loadBlock('wx', peer.id).byChar) {
+      onToast('对方已将你拉黑，无法发送');
+      setCompose(null);
+      return;
+    }
+    const giftMsg: WxMsg = {
+      id: uid(),
+      role: 'me',
+      content: `[礼物]送你一份心意：「${g.name}」（微信礼物，请收下呀）`,
+      time: Date.now(),
+      kind: 'giftcard' as const,
+      gift: { gid: g.id, name: g.name, img: g.img, price: g.price },
+    };
+    setCompose(null);
+    if (peer.id === me.id) {
+      // 给自己发消息：「我」详情页「发消息」入口只记录不触发 AI 回复
+      setMsgs((prev) => [...prev, giftMsg]);
+    } else if (sentenceSend) {
+      // 分句发送开启：只入列不触发回复
+      setMsgs((prev) => [...prev, giftMsg]);
+      setPendingDispatch(true);
+      markPendingBatch(sessionKey, true);
+    } else if (isChatStreaming(sessionKey) || isAiDelivering(sessionKey)) {
+      // 对方正在回复：照常上屏并排队补跑
+      setMsgs((prev) => [...prev, giftMsg]);
+      markDeliverBoundary(sessionKey, giftMsg.id);
+      wxQueueAdd(peer.id);
+    } else {
+      setMsgs((prev) => [...prev, giftMsg]);
+      window.setTimeout(() => runAiTurnRef.current?.(null, [giftMsg]), 80);
+    }
+    onToast(`已把「${g.name}」送给${peer.nickname || peer.name}`);
   };
 
   /**
@@ -6611,7 +6657,9 @@ function ChatPage({
                                 : tbProxyHistoryLine(m.tbpay.pid, m.tbpay.role, m.role === 'me' ? meAddrName : peer.name)
                             : m.kind === 'tbshare' && m.tbshare
                               ? tbShareHistoryLine(m.tbshare.sid)
-                              : m.kind === 'tbdraft' && m.tbdraft
+                              : m.kind === 'giftcard' && m.gift
+                                ? `[礼物卡片]${m.role === 'me' ? '我' : peer.name}通过微信礼物送了「${m.gift.name}」，一份心意，请自然回应`
+                                : m.kind === 'tbdraft' && m.tbdraft
                                 ? tbDraftHistoryLine(m.tbdraft.did)
                                 : m.kind === 'relcard' && m.relcard
                                   ? `[亲密关系卡片：${m.relcard.stage === 'invite' ? `${m.relcard.fromName}邀请${m.relcard.toName}建立情侣关系` : `${m.relcard.fromName}已同意，双方成功建立情侣关系`}，${m.relcard.status === 'pending' ? '待处理' : m.relcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
@@ -8298,11 +8346,11 @@ function ChatPage({
       setTgPickOpen(true);
       return;
     }
-    if (a === 'express') {
-      // 快递（第七十一轮）：加号面板「快递」入口——列出已确认收货的淘宝订单，可分享给当前聊天好友
+    if (a === 'gift') {
+      // 礼物（第二十轮反馈）：加号面板「快递」改「礼物」——内置礼物目录，选中后深蓝星空礼物卡发进聊天
       setPlusOpen(false);
       setStickerOpen(false);
-      setCompose('express');
+      setCompose('gift');
       return;
     }
     const label: Record<string, string> = {};
@@ -8745,6 +8793,11 @@ function ChatPage({
                 /* 美团订单分享动态卡片（订单详情右上角分享；状态时间线实时跟订单走；AI 请客卡 role peer 箭头指左） */
                 <div {...bubblePress}>
                   <MtShareBubble sid={m.mtshare.sid} side={m.role === 'me' ? 'right' : 'left'} />
+                </div>
+              ) : m.kind === 'giftcard' && m.gift ? (
+                /* 微信礼物卡（第二十轮反馈：加号面板「礼物」发出；深蓝星空卡 1:1 真机样式；点卡进礼物详情） */
+                <div {...bubblePress}>
+                  <WxGiftCard side={m.role === 'me' ? 'right' : 'left'} onClick={() => setGiftDetail(m)} />
                 </div>
               ) : m.kind === 'tbpay' && m.tbpay ? (
                 /* 淘宝找人代付卡片（淘宝收银台发请求卡；好友 AI 代付后完成卡回聊天；AI 请机主代付的请求卡箭头指左）；点卡进代付详情 */
@@ -9370,22 +9423,12 @@ function ChatPage({
           onSubmit={(t) => void submitTextCard(t)}
         />
       )}
-      {/* 快递页（加号面板「快递」入口）：列出已确认收货的淘宝订单 → 分享给当前聊天好友 */}
-      {compose === 'express' && (
-        <TbExpressPicker
+      {/* 礼物页（加号面板「礼物」入口，第二十轮反馈快递改礼物）：内置礼物目录 → 深蓝星空礼物卡发进当前聊天 */}
+      {compose === 'gift' && (
+        <WxGiftPicker
+          peerName={peer.nickname || peer.name}
           onBack={() => setCompose(null)}
-          onShare={(order) => {
-            void tbCreateOrderShare({ order, idp: 'wx', contactId: peer.id, fromName: me.name })
-              .then((res) => {
-                if (res.ok) {
-                  setCompose(null);
-                  onToast(`已把「${order.shopName}」的快递分享给${res.share.contactName}`);
-                } else {
-                  onToast(res.error);
-                }
-              })
-              .catch(() => onToast('分享失败，请重试'));
-          }}
+          onSend={sendGift}
         />
       )}
       {/* 一起听选歌弹层（第二十四轮）：选歌 → 我方发邀请卡进聊天，AI 接受后双方发同意卡并建会话 */}
@@ -9789,6 +9832,22 @@ function ChatPage({
       {/* 美团找人代付详情页（聊天内打开：好友视角可立即代付） */}
       {proxyPid && <MtProxyDetailPage pid={proxyPid} canPay onBack={() => setProxyPid(null)} onToast={onToast} />}
       {tbProxyPid && <TbProxyDetailPage pid={tbProxyPid} canPay onBack={() => setTbProxyPid(null)} onToast={onToast} />}
+      {/* 礼物详情页（点深蓝星空礼物卡进入；真机同款暖奶油底 + 白卡两段） */}
+      {giftDetail?.gift && (
+        <WxGiftDetailPage
+          senderName={giftDetail.role === 'me' ? me.name : peer.name}
+          gift={
+            giftById(giftDetail.gift.gid) ?? {
+              id: giftDetail.gift.gid,
+              name: giftDetail.gift.name,
+              price: giftDetail.gift.price ?? 0,
+              img: giftDetail.gift.img,
+              unit: '礼物1件',
+            }
+          }
+          onBack={() => setGiftDetail(null)}
+        />
+      )}
 
       {/* 亲属卡详情页：我发的 → 管理详情（图③）；对方发的 → 领取页（图②） */}
       {detailMsg?.kind === 'family' && detailMsg.fam && (detailMsg.role === 'me' ? (

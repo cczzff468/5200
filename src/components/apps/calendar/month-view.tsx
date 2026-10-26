@@ -5,7 +5,8 @@
  * 公共头部（返回/图标/标题「2026/10」/默认视图下拉/搜索/更多）+ 五视图切换胶囊（选中「月」）；
  * 星期表头（周日开头）+ 小米风格月格（今天红方块+底红条、休/班角标、节日红字、日程色点）；
  * 网格下方「选中日期 + 农历 + 当日日程列表」；横滑切月、**纵向下滑进下月 / 上滑进上月**
- * （Task 18-c 首版仅月格，本轮扩至月格+当日行+日程列表整片区域，日程列表可滚动时让位原生滚动）；
+ * （第 20 轮补强：触摸 cancel 也按手势终点判定防系统接管后丢失；阈值 48→40px；
+ * 日程列表可滚动时让位原生滚动）
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -89,6 +90,34 @@ export function MonthView({
     [onShiftMonth]
   );
 
+  /** 触摸终点判定（touchend / touchcancel 共用）：cancel 也按终点判定，防系统接管手势后滑动丢失 */
+  const onSwipeEnd = useCallback(
+    (e: React.TouchEvent) => {
+      const start = touchStart.current;
+      touchStart.current = null;
+      const t = e.changedTouches[0];
+      if (!start || !t) return;
+      const dx = t.clientX - start.x;
+      const dy = t.clientY - start.y;
+      const el = listRef.current;
+      const scrolled = el ? Math.abs(el.scrollTop - listScrollAtStart.current) > 4 : false;
+      const canScroll = el ? el.scrollHeight - el.clientHeight > 4 : false;
+      const atTop = el ? el.scrollTop <= 2 : true;
+      const atBottom = el ? el.scrollTop + el.clientHeight >= el.scrollHeight - 2 : true;
+      // 主轴判定：横向位移占优 → 切月（左=下月）；纵向占优 → 下滑=下月、上滑=上月
+      if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy)) shift(dx < 0 ? 1 : -1, 'x');
+      else if (Math.abs(dy) >= 40 && Math.abs(dy) > Math.abs(dx) && !scrolled) {
+        if (dy > 0) {
+          // 下滑 = 下月：仅在列表无可滚动余量或已滚到顶时接管（不与原生滚动冲突）
+          if (!canScroll || atTop) shift(1, 'y');
+        } else if (!canScroll || atBottom) {
+          shift(-1, 'y');
+        }
+      }
+    },
+    [shift]
+  );
+
   return (
     <div className="flex h-full flex-col pt-[54px]">
       <CalChrome
@@ -110,29 +139,8 @@ export function MonthView({
           touchStart.current = t ? { x: t.clientX, y: t.clientY } : null;
           listScrollAtStart.current = listRef.current?.scrollTop ?? 0;
         }}
-        onTouchEnd={(e) => {
-          const start = touchStart.current;
-          touchStart.current = null;
-          const t = e.changedTouches[0];
-          if (!start || !t) return;
-          const dx = t.clientX - start.x;
-          const dy = t.clientY - start.y;
-          const el = listRef.current;
-          const scrolled = el ? Math.abs(el.scrollTop - listScrollAtStart.current) > 4 : false;
-          const canScroll = el ? el.scrollHeight - el.clientHeight > 4 : false;
-          const atTop = el ? el.scrollTop <= 2 : true;
-          const atBottom = el ? el.scrollTop + el.clientHeight >= el.scrollHeight - 2 : true;
-          // 主轴判定：横向位移占优 → 切月（左=下月）；纵向占优 → 下滑=下月、上滑=上月
-          if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy)) shift(dx < 0 ? 1 : -1, 'x');
-          else if (Math.abs(dy) >= 48 && Math.abs(dy) > Math.abs(dx) && !scrolled) {
-            if (dy > 0) {
-              // 下滑 = 下月：仅在列表无可滚动余量或已滚到顶时接管（不与原生滚动冲突）
-              if (!canScroll || atTop) shift(1, 'y');
-            } else if (!canScroll || atBottom) {
-              shift(-1, 'y');
-            }
-          }
-        }}
+        onTouchEnd={onSwipeEnd}
+        onTouchCancel={onSwipeEnd}
       >
       {/* 月网格（动画容器保留在滑动区内） */}
       <div
