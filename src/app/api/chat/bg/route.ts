@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import webpush from 'web-push';
-import { getVapidKeys, readPushJson, writePushJson } from '@/lib/server/push-store';
+import { pushToAllSubscribers } from '@/lib/server/push-send';
 import { broadcastEvent } from '@/lib/server/event-bus';
 
 /**
@@ -165,57 +164,17 @@ function enqueue(sessionKey: string, texts: string[], single: boolean, title: st
     title: title || meta?.title || '',
     at: item.createdAt,
   });
-  // ② Web Push：页面已关/已冻结时的系统通知（带角色头像）
-  void pushToSubscribers(sessionKey, texts, title, meta?.avatar);
+  // ② Web Push：页面已关/已冻结时的系统通知（带角色头像；发送/失效清理在 push-send 内）
+  void pushToAllSubscribers(
+    { title: title || meta?.title || appDefaultName(sessionKey), ...(meta?.avatar ? { icon: meta.avatar } : {}) },
+    texts,
+  );
   return item;
 }
 
-/* ---------------- Web Push（每条消息一条系统通知；失败静默） ----------------
- * 存储统一走 /lib/server/push-store（双路径：.data → /tmp 兑底只读 FS；VAPID 优先环境变量） */
-
-interface PushSubLike {
-  endpoint?: unknown;
-  [k: string]: unknown;
-}
-
-async function pushToSubscribers(sessionKey: string, texts: string[], title: string, avatar?: string): Promise<void> {
-  try {
-    const vapid = await getVapidKeys();
-    if (!vapid) return;
-    const subs = await readPushJson<PushSubLike[]>('push-subs.json', []);
-    if (!Array.isArray(subs) || subs.length === 0) return;
-    const meta = sessionMetas.get(sessionKey);
-    const notifyTitle = title || meta?.title || appDefaultName(sessionKey);
-    // 角色头像（客户端压缩后的 dataURL，≤2600 字符）：sw.js push 处理器用它作通知 icon ——
-    // 页面完全关闭时弹出的离线通知也能显示头像（超长/缺失时不带 icon，浏览器用默认图标）
-    const icon = typeof avatar === 'string' && avatar.startsWith('data:image/') && avatar.length <= AVATAR_MAX_CHARS ? avatar : undefined;
-    const alive: PushSubLike[] = [];
-    await Promise.all(
-      subs.map(async (sub) => {
-        try {
-          if (typeof sub.endpoint !== 'string') return;
-          alive.push(sub);
-          // 每条消息一条系统通知（tag 唯一 → 不互相替换）
-          for (let i = 0; i < texts.length; i++) {
-            const preview = texts[i].replace(/\s+/g, ' ').trim().slice(0, 120);
-            await webpush.sendNotification(
-              sub as unknown as Parameters<typeof webpush.sendNotification>[0],
-              JSON.stringify({ title: notifyTitle, body: preview, tag: `bg-${Date.now().toString(36)}-${i}`, url: '/', ...(icon ? { icon } : {}) }),
-              { vapidDetails: { subject: 'mailto:bg-reply@ios-phone.local', publicKey: vapid.publicKey, privateKey: vapid.privateKey } },
-            );
-          }
-        } catch (err) {
-          const e = err as { statusCode?: number };
-          // 404/410 = 订阅已失效 → 剔除
-          if (e?.statusCode !== 404 && e?.statusCode !== 410) alive.push(sub);
-        }
-      }),
-    );
-    await writePushJson('push-subs.json', alive);
-  } catch {
-    // 推送失败不影响 pending 队列（重开网页仍能拉到）
-  }
-}
+/* ---------------- Web Push ----------------
+ * 发送实现已抽到 /lib/server/push-send（全订阅广播 + 404/410 失效清理），
+ * 供本路由与未来其他「服务端产生对方消息」的路径共用；存储在 /lib/server/push-store。 */
 
 /* ---------------- 服务端生成（复用 /api/chat 全链路：上游代理 + SDK 兜底） ---------------- */
 

@@ -411,3 +411,74 @@ Stage Summary:
 - 仓库代码已完整拉取并在本地运行，等待用户提出修改/新增功能需求
 - git push 通道已就绪（origin + token），修改完成后可直接推送
 - 关键路径：src/components/apps/CoupleHome.tsx、src/components/ios/、src/app/page.tsx（手机壳入口）
+
+---
+Task ID: 14-a
+Agent: fullstack-dev（PWA/推送组）
+Task: C1 PWA 可安装 + C2 TA 主动消息系统推送（切后台也能收到）
+
+Work Log:
+- [审计] 推送链路全景：/api/push（VAPID 下发/订阅增删）+ /lib/server/push-store（双路径存储）+ /sw.js（push/notificationclick）+ push-client（订阅链路，需权限 granted 才注册 SW）+ island-notify（隐藏页系统通知/订阅触发点）+ settings.tsx 通知页（开关/订阅诊断/测试通知，已完备）
+- [审计·C2] TA 主动消息三条产线：①服务端 /api/chat/bg（pagehide 接力，唯一服务端产出方，已带 web-push）②客户端 wx/qq/sms 主动消息（ProactiveMsgWatcher 每 5s tick → proactive-msg.ts → island-notify，隐藏时已有系统通知路径）③小屋 TA 主动说话（CoupleHome taProactiveSay/决策气泡 → bubbleRef → HomeScene.HeadBubbles，隐藏时无任何通知）；/api/events 仅 SSE 总线不产消息
+- [C1·新文件 public/manifest.json] name/short_name/start_url=/ scope=/ display=standalone orientation=portrait 白底白主题 + icons 192(any)/512(any)/maskable-512(maskable)
+- [C1·layout.tsx] metadata 增 manifest:"/manifest.json"；icons 改本地 /icons/pwa/icon-192+512（去外网 CDN logo.svg）+ apple=apple-touch-icon.png；appleWebApp{capable,statusBarStyle:black-translucent,title:"AI Phone"}；body 内挂 <SwRegister/>
+- [C1·新文件 src/components/ios/SwRegister.tsx] 'use client' 启动即注册 SW：复用 system-notify 的 ensureSwRegistration（与推送订阅/系统通知共用同一注册口 + Promise 缓存，无双注册竞态）；此前仅权限 granted 后才注册 → 权限默认态下 SW 永不注册、PWA 不可装；iframe/不支持环境失败静默
+- [C2·新文件 src/lib/server/push-send.ts] 抽公共发送工具 pushToAllSubscribers(envelope, bodies)：全订阅广播、每条 body 一条通知（tag 唯一不互相替换）、body 预览折叠空白截 120、icon 仅收 data:image/ 且 ≤2600 字符（超限丢弃防超 4KB payload）、404/410 失效订阅自动剔除写回、无 VAPID/无订阅/失败全静默——供 chat/bg 与未来服务端主动消息路径共用
+- [C2·重构 api/chat/bg/route.ts] 删内联 webpush 循环/PushSubLike/pushToSubscribers 及 web-push、push-store 直接依赖，enqueue 改调 pushToAllSubscribers（title=meta.title||appDefaultName，icon=meta.avatar），行为逐字节等价（逐条通知/tag 格式/头像上限/404/410 清理全保留）
+- [C2·新文件 src/components/apps/couple-home/scene/cabin-notify.ts] 小屋 TA 隐藏页通知帮手 notifyTaBubbleIfHidden：仅 document.hidden 时投递；总闸 isSysNotifyEnabled（设置›通知）+ Notification.permission 双检查；角色名/头像经 localStorage cabin-companion-id → contacts-store 单飞解析（会话内缓存，失败回退「TA」无头像）；走 system-notify 的 showSystemNotification（SW 通道优先 + 页面构造器兜底），tag 唯一
+- [C2·HomeScene.tsx 挂钩] HeadBubbles 消费队列处：who==='ta' 且非 thought/love 气泡 → notifyTaBubbleIfHidden(text)（CoupleHome.tsx 禁改，故在共同下游挂钩；可见时函数内部 no-op 零开销，仅说话气泡出队时触发非每帧）
+- [C2·设置开关确认] settings.tsx 通知页已有完整「推送通知」开关（开启→requestPermission+setupPushSubscription(force)/关闭→teardown+DELETE 清除，持久化 ios-sys-notify-enabled），无需新增，审计记录在案
+- [验证·tsc] bunx tsc --noEmit 仅剩 next.config.ts 既有基线错误（0 新增）
+- [验证·eslint] 新文件（SwRegister/push-send/cabin-notify）+ layout/api 改动文件 0 问题；HomeScene 19 problems = 既有基线（12-b 记录同数）；未跑全量 lint（仓库体量大会 OOM，沿用按文件口径）
+- [验证·curl] /manifest.json 200 且内容正确；/api/push 返回 VAPID 公钥（BPoB…GzO4…）；4 个 PWA 图标 200；POST /api/chat/bg deliver 冒烟 {ok,queued:1} + GET 拉到消息 + consume 清态——重构后路由行为正常（无订阅者时推送静默跳过）
+- [验证·agent-browser 390×844] link[rel=manifest]=/manifest.json ✓；apple-touch-icon/title/status-bar-style meta ✓（Next 16 渲染 mobile-web-app-capable 为现代标准名）；navigator.serviceWorker.controller=true 且 getRegistrations=1、scope=/、active=activated ✓；页面 0 error，console 仅 HMR 噪音
+- [约束遵守] 未改 CoupleHome.tsx / memory.ts / memory-bank.tsx；未重启 dev server / 未 build / 未 commit
+
+Stage Summary:
+- PWA 可安装达成：manifest.json + 本地图标全家桶（含 maskable/apple）+ appleWebApp 元数据 + 启动即注册 SW（修复「权限默认态下 SW 永不注册」导致浏览器判不可安装的缺口）
+- TA 主动消息三产线全通「切后台能收到」：服务端接力（api/chat/bg → 抽出的 push-send 广播推送+失效清理）、客户端三端主动消息（既有 island-notify 隐藏通知路径，SW 注册兜底后更稳）、小屋 TA 说话（HeadBubbles → cabin-notify 隐藏页系统通知，角色名/头像解析）
+- 公共资产：/lib/server/push-send.ts（服务端推送唯一出口）+ /scene/cabin-notify.ts（小屋通知帮手）+ SwRegister.tsx（启动注册器）
+- 遗留：iOS 主屏 PWA 的 Web Push 需 iOS≥16.4 且用户「添加到主屏幕」后自独立窗口授权，属平台限制；设置页开关已存在故 C2.3 零改动
+
+---
+Task ID: 14-b
+Agent: Z.ai 全栈开发代理（14-b）
+Task: B1 长期记忆图谱（用户画像事实层：提取/注入/记忆库第五Tab）
+
+Work Log:
+- [数据层] memory-core.ts：新增 MemProfileCategory（like/dislike/habit/identity/date）+ MEM_PROFILE_CATEGORIES（固定顺序 身份→喜好→忌讳→习惯→重要日子）+ MEM_PROFILE_CATEGORY_LABEL + MemProfileFact（id/contactId/category/topic/content/sourceFragmentIds?/weight/createdAt/updatedAt/editedAt?）
+- [数据层] memory.ts：mem-profile:<cid> 存储键（IndexedDB kv，与三层记忆同层 + 账号作用域后缀）；memPurgeContact 级联清理；API = listProfileFacts / upsertProfileFact（同 contactId+category+topic 归一化键更新覆盖：保留最早 createdAt、权重 higherWeight、来源碎片合并去重留 8 个；跨类别翻转合并——同 topic 在其他分类已存在视为演进改写 category，防「辣·能吃微辣→不怎么碰辣」矛盾并存；editedAt 手动编辑保护）/ updateProfileFact / deleteProfileFact / profileRecallBlock（五类分组紧凑行「- 忌讳：不吃香菜」，权重→updatedAt 取前 20 条 + 1100 字符预算，空返回 ''）
+- [提取层] 新 route src/app/api/memory/profile/route.ts：POST {conversation,userName,peerName,existing?,config?} → {facts:[{category,topic,content,weight}]}（0-6 条）；completeWithFallback 模式（用户 API 配置优先 → z-ai-web-dev-sdk 兜底）；prompt 只提取稳定事实五类、topic=合并键（同一事物沿用旧 topic）、content 自含主语 25 字内、一次性事件/临时安排忽略、禁代称
+- [提取层] memory.ts：callMemoryApi op 扩 'profile'；memAfterAiTurn 异步管线（核心总结后、长期总结前）挂钩 memProfileAutoExtract——与碎片提取同一节奏触发，独立 profileInflight 防并发，失败 console.warn 完全静默；手动入口 memProfileExtractNow（memMostRecentApp 取最近对话，错误抛给 UI toast）
+- [注入层] chat.tsx：memoryBlock 之后 profileBlock = profileRecallBlock(memContactId)，baseSys 数组并列注入（画像空时零成本）
+- [注入层] companion-memory.ts cabinMemoryBlock：memChatRecallBlock 召回块后追加 profileRecallBlock（TA 在小屋也知道画像）；CoupleHome.tsx 零改动（cabinMemoryBlock 被其调用自动生效）
+- [UI 层] memory-bank.tsx：MemTab 加 'profile'，tabs 加 Fingerprint「画像图谱」，Dock grid-cols-4→5，统计行加「N 条画像」胶囊；ProfileTab = 顶部「立即提取画像」（loading 态 + memProfileExtractNow + toast 新增/更新条数）+ 五类分组卡片（条数徽章、空组不渲染、max-h-96 overflow-y-auto 细滚动条、空态）；ProfileFactRow = topic+content+手动/重要/来源碎片徽章+更新时间，行内编辑（textarea 保存→手动徽章，自动提取不再覆盖）+ 两步删除确认；既有四 Tab 行为零改动
+- [验证] bunx tsc --noEmit：仅 next.config.ts(15,5) 既有基线错误，0 新增；eslint 全部改动文件 0 新增（chat.tsx 15 处/memory-bank 1 处均与 HEAD stash 对比一致）
+- [验证] curl POST /api/memory/profile 两场景：无 existing 提取 4 条（熬夜/香菜 high/辣/生日 high）；带 existing 时模型沿用旧 topic「辣」输出 dislike「不怎么碰辣」（更新对照生效）
+- [验证] agent-browser 390×844 E2E：解锁→记忆库→5 Tab→画像空态→IndexedDB 播种小雪+聊天记录→「立即提取画像」→五类分组 6 条落库（香菜=重要）→行内编辑（手动徽章）→删除川菜（组自动隐藏）→二次提取（手动编辑未被覆盖、同 topic 合并无堆叠、createdAt 保留）→信息 App 问「明天中午吃什么」→ AI 回复「微辣，不要香菜，正好你也喜欢」（注入端到端生效）；控制台无错误；dev.log 出现 POST /api/memory/profile 200 in 4.1s
+
+Stage Summary:
+- 三层记忆之上新增结构化画像事实层并全链路打通：对话按既有提取频率自动归纳「喜好/忌讳/习惯/身份/重要日子」稳定事实（同 topic 演进覆盖不堆叠、手动编辑保护、60 条容量淘汰）→ 聊天 system 按五类分组紧凑注入（信息端 + 拾光小屋）→ 记忆库第五 Tab 可视化管理（立即提取/行内编辑/删除）
+- E2E 证明画像引用效果：AI 回复自然带出「微辣，不要香菜」；提取失败静默降级绝不阻塞聊天；CoupleHome.tsx 未触碰
+- 关键文件：src/lib/memory-core.ts、src/lib/memory.ts、src/app/api/memory/profile/route.ts（新）、src/components/apps/chat.tsx、src/components/apps/couple-home/companion-memory.ts、src/components/apps/memory-bank.tsx
+
+---
+Task ID: 15
+Agent: 主控 Agent（Z.ai Code，接手超时子代理收尾）
+Task: C3 CoupleHome.tsx 巨型组件拆分（行为零变化）
+
+Work Log:
+- 子代理执行中超时，但已完成主体拆分：CoupleHome.tsx 7561 → 5336 行（-2225 行，-29%），超时前未来得及写 worklog
+- 新增 panels/ 12 个面板模块 + lib/ 2 个基础模块（共 14 个新文件，3664 行）：
+  - lib/home-core.tsx(618)：共享核心容器；lib/cabin-storage.ts(148)：小屋存储
+  - panels/：TopBar(315)/ChatBar(140)/QuickBars(199)/EditBars(489)/StatusPanels(429)/StylePanels(463)/ShopDrawer(277)/PartnerOverlays(269)/AdoptDialog(89)/PetDiarySheet/CompanionPicker/PetActionBar
+- 修复子代理遗留的 1 处类型错误：ShopDrawer.tsx 的 getCachedThumb 误从 '../catalog' 导入 → 改回 '../scene/ShopThumbs'（与原主文件一致）
+- tsc --noEmit：仅 next.config.ts 既有基线错误，0 新增
+- eslint panels/ + lib/：0 问题
+- agent-browser E2E（390x844）：3D 场景渲染✓ / 宠物面板（体力87/清洁79/心情88+9 动作按钮）✓ / 装修商店（7 区域俯视+分类商店+缩略图）✓ / 聊天三轮往返（历史面板铁证：3 问 3 答）✓ / 控制台零错误
+- 14-a 在 HomeScene 加的 notifyTaBubbleIfHidden 钩子与 14-b 画像注入均原样保留
+
+Stage Summary:
+- CoupleHome.tsx 7561→5336 行，拆出 14 个单一职责子模块，行为零变化（E2E 全链路验证）
+- 主文件仍保留编排职责（state/回调中枢），后续继续抽取可再降（本轮达成 8~10+ 子模块目标）
+- 关键文件：src/components/apps/couple-home/CoupleHome.tsx、panels/*、lib/*

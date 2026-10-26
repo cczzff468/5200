@@ -146,6 +146,52 @@ export interface MemLongTerm {
   supersededBy?: string;
 }
 
+// ---------------- 画像图谱（用户画像事实层，Task 14-b B1） ----------------
+
+/**
+ * 画像事实分类（五类稳定事实）：
+ * like=喜好 / dislike=忌讳 / habit=习惯 / identity=身份 / date=重要日子
+ */
+export type MemProfileCategory = 'like' | 'dislike' | 'habit' | 'identity' | 'date';
+
+/** 分类固定顺序（注入分组与 UI 分组共用：身份最前、重要日子最后） */
+export const MEM_PROFILE_CATEGORIES: MemProfileCategory[] = ['identity', 'like', 'dislike', 'habit', 'date'];
+
+/** 分类中文标签（注入行前缀与 UI 分组标题共用，如「忌讳：不吃香菜」） */
+export const MEM_PROFILE_CATEGORY_LABEL: Record<MemProfileCategory, string> = {
+  like: '喜好',
+  dislike: '忌讳',
+  habit: '习惯',
+  identity: '身份',
+  date: '重要日子',
+};
+
+/**
+ * 画像事实：三层记忆（碎片→核心→长期）之上的结构化「用户画像」条目——
+ * 让 TA 在聊天中自然引用用户习惯/喜好/忌讳（如「你不是不吃香菜嘛」）。
+ * - 合并去重键 = contactId + category + topic：同 topic 的新事实【更新覆盖】旧事实
+ *   （保留最早 createdAt 与来源），而非无限堆叠——「不吃香菜 → 现在能吃一点」是同一条的演进；
+ * - topic 是 1~6 字关键词（如「香菜」「熬夜」「生日」），content 是一句自含主语的陈述；
+ * - sourceFragmentIds 记录来源碎片 id（回答「你怎么知道的」），weight 控制注入优先级与淘汰顺序。
+ */
+export interface MemProfileFact {
+  id: string;
+  contactId: string;
+  category: MemProfileCategory;
+  /** 合并去重键（1~6 字关键词，如「香菜」「熬夜」「生日」） */
+  topic: string;
+  /** 一句话陈述（自含主语，如「不吃香菜」「熬夜到凌晨 1 点」） */
+  content: string;
+  /** 来源碎片 id（追溯：这条画像从哪些记忆碎片归纳而来） */
+  sourceFragmentIds?: string[];
+  /** 注入优先级（高权重先注入；容量淘汰时低权重先出） */
+  weight: MemWeight;
+  createdAt: number;
+  updatedAt: number;
+  /** 用户手动编辑过（此后自动提取不再覆盖 content，与三层记忆 timeEditedAt 同一保护精神） */
+  editedAt?: number;
+}
+
 /** 每联系人记忆设置 */
 export interface MemSettings {
   /** 对话总结频率：累计多少条消息（双方消息都算）自动提取一次记忆碎片；跨 App 互通开时四端合并计算 */

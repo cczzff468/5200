@@ -56,6 +56,7 @@ import { buildBlockGrid, planRoute, type BlockGrid, type DoorKey, type Pt } from
 import { SRDOOR_Z, STUDY_X0, STUDY_X1, STUDY_Z0, STUDY_Z1, YDOOR_X, GARDEN_X0, GARDEN_X1, GARDEN_Z0, GARDEN_Z1 } from '../catalog';
 import { weatherBusSet, seasonNow, type Season } from './weather-bus';
 import { companionStep, createCompanionRT, type CompanionCmd, type CompanionEvent, type CompanionRT, type PoseSlot } from './companion-rt';
+import { notifyTaBubbleIfHidden } from './cabin-notify';
 
 // ---------------- 对外 Props ----------------
 
@@ -4116,6 +4117,9 @@ function HeadBubbles({
         if (slot.rec && now < slot.until) continue; // 该小人正在展示：排队等
         q.splice(i, 1);
         i--;
+        // 页面切后台时 TA 的说话气泡（非想法/爱心泡）补一条系统通知（微信式；cabin-notify 内部自带
+        // 可见性/总闸/授权检查，可见时 no-op）——宿主 CoupleHome 禁改期在共同下游挂钩
+        if (c.who === 'ta' && !c.kind) notifyTaBubbleIfHidden(c.text);
         if (slot.own) slot.rec?.tex.dispose();
         slot.rec = makeBubbleTexture(c.text, c.kind === 'thought' ? 'thought' : c.kind === 'love' ? 'love' : 'plain');
         slot.own = true;

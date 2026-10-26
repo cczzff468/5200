@@ -53,6 +53,8 @@ import {
   MEM_APP_LABEL,
   MEM_INTERVAL_OPTIONS,
   MEM_LONG_OPTIONS,
+  MEM_PROFILE_CATEGORIES,
+  MEM_PROFILE_CATEGORY_LABEL,
   MEM_STALE_PAT,
   MEM_THRESHOLD_OPTIONS,
   MEM_TIME_RANGE_YEARS,
@@ -76,6 +78,8 @@ import {
   type MemFragment,
   type MemLongTerm,
   type MemNames,
+  type MemProfileCategory,
+  type MemProfileFact,
   type MemSettings,
   type MemWeight,
 } from './memory-core';
@@ -88,6 +92,8 @@ export {
   MEM_FORGET_OPTIONS,
   MEM_INTERVAL_OPTIONS,
   MEM_LONG_OPTIONS,
+  MEM_PROFILE_CATEGORIES,
+  MEM_PROFILE_CATEGORY_LABEL,
   MEM_THRESHOLD_OPTIONS,
   MEM_TIME_RANGE_YEARS,
   SIMILAR_MERGE_THRESHOLD,
@@ -111,6 +117,8 @@ export {
   type MemFragment,
   type MemLongTerm,
   type MemNames,
+  type MemProfileCategory,
+  type MemProfileFact,
   type MemSettings,
   type MemWeight,
 } from './memory-core';
@@ -175,6 +183,8 @@ const MEM_RECALL_BUDGET = 6000;
 /** 核心记忆存储键（沿用历史 ltm 键名，语义为核心层，避免旧数据迁移） */
 const coreKey = (contactId: string) => scoped(`mem-ltm:${contactId}`);
 const longKey = (contactId: string) => scoped(`mem-long:${contactId}`);
+/** 画像图谱存储键（Task 14-b B1：用户画像事实层，与三层记忆同层持久化） */
+const profileKey = (contactId: string) => scoped(`mem-profile:${contactId}`);
 // C10：设置随账号作用域化（此前跨账号共享——小号侧改提取频率/互通开关会覆盖大号配置；
 // 主账号 main 无后缀 = 存量键不变，小号首次读取走新键回落默认值）
 const settingsKey = (contactId: string) => scoped(`mem-settings:${contactId}`);
@@ -574,7 +584,7 @@ export function memPurgeContact(contactId: string): void {
     const accountIds = [MAIN_ACCOUNT_ID, ...getAccounts().filter((a) => a && a.kind !== 'main').map((a) => a.id)];
     for (const accId of accountIds) {
       const sfx = accId === MAIN_ACCOUNT_ID ? '' : `--${accId}`;
-      for (const base of [`mem-frag:${contactId}`, `mem-ltm:${contactId}`, `mem-long:${contactId}`]) {
+      for (const base of [`mem-frag:${contactId}`, `mem-ltm:${contactId}`, `mem-long:${contactId}`, `mem-profile:${contactId}`]) {
         const k = `${base}${sfx}`;
         kvDelRaw(k);
         window.localStorage.removeItem(base); // 旧裸键兼容清扫
@@ -1706,7 +1716,7 @@ function normalizeExtract(res: ExtractApiResult): ExtractItem[] {
 }
 
 async function callMemoryApi<T extends ExtractApiResult & SummarizeApiResult>(
-  op: 'extract' | 'summarize',
+  op: 'extract' | 'summarize' | 'profile',
   body: Record<string, unknown>,
   apiConfig: ApiConfig
 ): Promise<T> {
@@ -2235,6 +2245,13 @@ export function memAfterAiTurn(
       } catch (err) {
         console.warn('[memory] 自动总结核心记忆失败（下个窗口重试）', err);
       }
+      // 画像图谱提取（Task 14-b B1）：与碎片提取同一节奏（本窗口 convo 已评估充足），
+      // 归纳用户稳定画像（喜好/忌讳/习惯/身份/重要日子）；失败完全静默，绝不影响聊天
+      try {
+        await memProfileAutoExtract(contactId, convo, apiConfig, names);
+      } catch (err) {
+        console.warn('[memory] 画像提取失败（静默跳过）', err);
+      }
       // 长期总结与核心总结相互独立：核心达到长期阈值即触发（失败下个窗口重试）
       try {
         await maybeAutoLongSummarize(contactId, apiConfig, names, opts?.group?.memberNames);
@@ -2471,6 +2488,303 @@ export async function memSummarizeLongNow(contactId: string, apiConfig: ApiConfi
     return { consumed: long.coreCount };
   } finally {
     inflight.delete(guard);
+  }
+}
+
+// ---------------- 画像图谱（用户画像事实层，Task 14-b B1） ----------------
+
+/**
+ * 画像图谱：三层记忆（碎片→核心→长期）之上的结构化「用户画像」事实层。
+ * - 存储：mem-profile:<contactId>（IndexedDB kv，与三层记忆同层、同账号作用域后缀）；
+ * - 提取：随 memAfterAiTurn 管线按现有提取频率触发（调 /api/memory/profile 服务端 LLM），
+ *   只归纳稳定事实（喜好/忌讳/习惯/身份/重要日子），一次性事件/临时安排一律忽略；
+ * - 合并：同 contactId+category+topic（归一化后）→ 更新覆盖旧 content（保留最早 createdAt），
+ *   而非无限堆叠；单联系人上限 60 条，超出按「低权重 → updatedAt 最旧」淘汰；
+ * - 注入：profileRecallBlock 按分类分组紧凑列出，与 memChatRecallBlock 召回块并列注入 system；
+ * - 失败静默：画像提取是增强能力，任何失败都不影响聊天主流程。
+ */
+
+/** 单联系人画像事实容量上限：超出按「低权重 → updatedAt 最旧」淘汰（防只增不减） */
+const MEM_PROFILE_CAP = 60;
+
+/** 画像注入上限与字符预算（facts 多时按 权重→updatedAt 取前 N 条，防止 token 失控） */
+const MEM_PROFILE_RECALL_MAX = 20;
+const MEM_PROFILE_RECALL_BUDGET = 1100;
+
+/** 画像权重淘汰序（低权重先淘汰）：与 weightEvictRank 同口径 */
+function profileWeightRank(w: MemWeight): number {
+  return w === 'high' ? 2 : w === 'low' ? 0 : 1;
+}
+
+function readProfileFacts(contactId: string): MemProfileFact[] {
+  const raw = readJSON<MemProfileFact[]>(profileKey(contactId));
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (f) =>
+      f &&
+      typeof f.id === 'string' &&
+      typeof f.content === 'string' &&
+      typeof f.topic === 'string' &&
+      MEM_PROFILE_CATEGORIES.includes(f.category)
+  );
+}
+
+/** 该联系人的全部画像事实（管理视图用：按分类固定顺序分组，组内 updatedAt 倒序） */
+export function listProfileFacts(contactId: string): MemProfileFact[] {
+  const rank = (c: MemProfileCategory) => MEM_PROFILE_CATEGORIES.indexOf(c);
+  return readProfileFacts(contactId).sort(
+    (a, b) => rank(a.category) - rank(b.category) || b.updatedAt - a.updatedAt
+  );
+}
+
+/** topic 归一化（合并去重键）：去空白 + 小写——「香菜」「 香菜 」「香菜 」同键 */
+function profileTopicKey(category: string, topic: string): string {
+  return `${category}::${topic.replace(/\s+/g, '').toLowerCase()}`;
+}
+
+/** 画像事实写入入参（自动提取与手动整理共用；weight 缺省 normal） */
+export interface ProfileFactInput {
+  category: MemProfileCategory;
+  topic: string;
+  content: string;
+  weight?: MemWeight;
+  /** 来源碎片 id（自动提取时由调用方透传，追溯「这条画像从哪些碎片归纳而来」） */
+  sourceFragmentIds?: string[];
+}
+
+/**
+ * 写入/合并一条画像事实：
+ * - 同 contactId + category + topic（归一化后）→ 更新覆盖旧 content（保留最早 createdAt、
+ *   权重取高、来源碎片合并去重、刷新 updatedAt）；用户手动编辑过（editedAt）的事实
+ *   自动提取不再覆盖 content（与三层记忆 timeEditedAt 同一保护精神）；
+ * - 不存在 → 新增；写入后超出 MEM_PROFILE_CAP 时按「低权重 → updatedAt 最旧」淘汰。
+ * 返回 { fact, merged }：merged=true 表示走了更新覆盖（UI 提示「已更新」用）。
+ */
+export function upsertProfileFact(
+  contactId: string,
+  input: ProfileFactInput
+): { fact: MemProfileFact; merged: boolean } | null {
+  if (!contactId) return null;
+  if (!MEM_PROFILE_CATEGORIES.includes(input.category)) return null;
+  const topic = (input.topic ?? '').trim().slice(0, 12);
+  const content = (input.content ?? '').trim().slice(0, 60);
+  if (!topic || !content) return null;
+  const now = Date.now();
+  const list = readProfileFacts(contactId);
+  const key = profileTopicKey(input.category, topic);
+  let idx = list.findIndex((f) => profileTopicKey(f.category, f.topic) === key);
+  if (idx < 0) {
+    // 跨类别翻转合并（忌口变化：like「辣·能吃微辣」→ dislike「辣·不怎么碰辣」）：
+    // 同 topic 在别的分类下已存在 → 视为同一事物的演进，更新那条并改写 category，
+    // 避免同关键词新旧两条矛盾画像并存（topic 精确到事物关键词，跨类同键几乎必为演进）
+    idx = list.findIndex((f) => f.topic.replace(/\s+/g, '').toLowerCase() === topic.replace(/\s+/g, '').toLowerCase());
+    if (idx >= 0) list[idx].category = input.category;
+  }
+  if (idx >= 0) {
+    const hit = list[idx];
+    if (hit.editedAt == null) hit.content = content; // 手动编辑过：只刷新时间不覆盖内容
+    hit.weight = higherWeight(hit.weight, input.weight ?? 'normal');
+    hit.updatedAt = now;
+    if (input.sourceFragmentIds?.length) {
+      const mergedIds = Array.from(new Set([...(hit.sourceFragmentIds ?? []), ...input.sourceFragmentIds]));
+      hit.sourceFragmentIds = mergedIds.slice(-8); // 只留最近 8 个来源，防无限膨胀
+    }
+    writeJSON(profileKey(contactId), list);
+    return { fact: hit, merged: true };
+  }
+  const fact: MemProfileFact = {
+    id: uid(),
+    contactId,
+    category: input.category,
+    topic,
+    content,
+    weight: input.weight ?? 'normal',
+    createdAt: now,
+    updatedAt: now,
+    ...(input.sourceFragmentIds?.length ? { sourceFragmentIds: input.sourceFragmentIds.slice(-8) } : {}),
+  };
+  list.push(fact);
+  if (list.length > MEM_PROFILE_CAP) {
+    // 容量淘汰：排序副本算出淘汰集合，过滤后写回（不改变原数组相对顺序的书写习惯）
+    const byEvict = [...list].sort(
+      (a, b) => profileWeightRank(a.weight) - profileWeightRank(b.weight) || a.updatedAt - b.updatedAt
+    );
+    const evict = new Set(byEvict.slice(0, list.length - MEM_PROFILE_CAP).map((f) => f.id));
+    writeJSON(profileKey(contactId), list.filter((f) => !evict.has(f.id)));
+  } else {
+    writeJSON(profileKey(contactId), list);
+  }
+  return { fact, merged: false };
+}
+
+/** 手动编辑画像事实内容（编辑后自动提取不再覆盖该条 content） */
+export function updateProfileFact(contactId: string, id: string, content: string): boolean {
+  const list = readProfileFacts(contactId);
+  const hit = list.find((f) => f.id === id);
+  const t = content.trim().slice(0, 80);
+  if (!hit || !t) return false;
+  hit.content = t;
+  hit.editedAt = Date.now();
+  hit.updatedAt = hit.editedAt;
+  writeJSON(profileKey(contactId), list);
+  return true;
+}
+
+export function deleteProfileFact(contactId: string, id: string): boolean {
+  const list = readProfileFacts(contactId);
+  const next = list.filter((f) => f.id !== id);
+  if (next.length === list.length) return false;
+  writeJSON(profileKey(contactId), next);
+  return true;
+}
+
+/**
+ * 画像注入块（聊天 system 用，与 memChatRecallBlock 召回块并列注入）：
+ * 按分类分组、每条一行紧凑列出（如「- 忌讳：不吃香菜」「- 习惯：熬夜到凌晨 1 点」），
+ * 让 TA 在聊天中自然引用用户习惯/喜好/忌讳（「你不是不吃香菜嘛」）。
+ * - facts 多时先按 权重→updatedAt 取前 MEM_PROFILE_RECALL_MAX 条，字符预算兜底裁剪；
+ * - 无事实/任何异常返回空串（注入处 filter(Boolean)，零成本零风险）。
+ */
+export function profileRecallBlock(contactId: string): string {
+  try {
+    if (!contactId) return '';
+    const picked = readProfileFacts(contactId)
+      .sort((a, b) => profileWeightRank(b.weight) - profileWeightRank(a.weight) || b.updatedAt - a.updatedAt)
+      .slice(0, MEM_PROFILE_RECALL_MAX);
+    if (picked.length === 0) return '';
+    const lines: string[] = [
+      '【你了解的用户画像（长期稳定的事实；聊天时自然运用：记得对方的喜好/忌讳/习惯/身份/重要日子，比如点菜时想起忌口、问候时想起作息；不要逐条罗列复述，也不要说「资料」「档案」这类话）】',
+    ];
+    let budget = MEM_PROFILE_RECALL_BUDGET;
+    for (const cat of MEM_PROFILE_CATEGORIES) {
+      for (const f of picked.filter((x) => x.category === cat)) {
+        const row = `- ${MEM_PROFILE_CATEGORY_LABEL[cat]}：${f.content}`;
+        if (row.length + 1 > budget) continue; // 预算兜底（正常到不了：条数闸已拦住大半）
+        budget -= row.length + 1;
+        lines.push(row);
+      }
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+  } catch {
+    return '';
+  }
+}
+
+// 画像提取（服务端 LLM：/api/memory/profile）
+
+/** profile 接口返回的单条画像事实（归一化前） */
+interface ProfileApiItem {
+  category?: unknown;
+  topic?: unknown;
+  content?: unknown;
+  weight?: unknown;
+}
+
+interface ProfileApiResult {
+  facts?: ProfileApiItem[];
+  error?: string;
+}
+
+/** 防并发：同一联系人画像提取进行中时跳过新触发（独立于三层总结的 inflight） */
+const profileInflight = new Set<string>();
+
+/** 归一化 profile 接口返回：非法分类/空白 topic/content 丢弃，单次最多 6 条 */
+function normalizeProfileFacts(res: ProfileApiResult): ProfileFactInput[] {
+  const raw = Array.isArray(res.facts) ? res.facts : [];
+  const out: ProfileFactInput[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== 'object') continue;
+    const o = x as ProfileApiItem;
+    const topic = typeof o.topic === 'string' ? o.topic.trim().slice(0, 12) : '';
+    const content = typeof o.content === 'string' ? o.content.trim().slice(0, 60) : '';
+    if (!topic || !content) continue;
+    if (
+      typeof o.category !== 'string' ||
+      !MEM_PROFILE_CATEGORIES.includes(o.category as MemProfileCategory)
+    )
+      continue;
+    out.push({
+      category: o.category as MemProfileCategory,
+      topic,
+      content,
+      weight: o.weight === 'high' || o.weight === 'low' || o.weight === 'normal' ? o.weight : autoWeight(content),
+    });
+  }
+  return out.slice(0, 6);
+}
+
+/** 画像提取请求体（自动与手动共用）：已画像作为「更新对照」传给模型，同一事物的变化沿用旧 topic 才能覆盖旧值 */
+function profileRequestBody(contactId: string, convo: MemConvoTurn[], names?: MemNames | null): Record<string, unknown> {
+  const existing = readProfileFacts(contactId)
+    .slice(-40)
+    .map((f) => ({ category: f.category, topic: f.topic, content: f.content }));
+  return {
+    conversation: convo.slice(-30),
+    ...(existing.length > 0 ? { existing } : {}),
+    ...namesOf(names),
+  };
+}
+
+/**
+ * 画像自动提取（memAfterAiTurn 管线挂钩）：按现有提取频率（提取窗口触发时）调一次
+ * /api/memory/profile，从最近对话归纳用户稳定画像并合并入库。
+ * 失败抛错由调用方 console.warn 静默——画像提取是增强能力，绝不阻塞聊天。
+ * 返回写入条数（新增+更新）。
+ */
+async function memProfileAutoExtract(
+  contactId: string,
+  convo: MemConvoTurn[],
+  apiConfig: ApiConfig,
+  names?: MemNames | null
+): Promise<number> {
+  if (!contactId || convo.length < 4) return 0;
+  const guard = `${contactId}:profile`;
+  if (profileInflight.has(guard)) return 0;
+  profileInflight.add(guard);
+  try {
+    const res = await callMemoryApi<ProfileApiResult>('profile', profileRequestBody(contactId, convo, names), apiConfig);
+    const items = normalizeProfileFacts(res);
+    let n = 0;
+    for (const it of items) {
+      if (upsertProfileFact(contactId, it)) n++;
+    }
+    return n;
+  } finally {
+    profileInflight.delete(guard);
+  }
+}
+
+/**
+ * 手动「立即提取画像」（记忆库画像 Tab 按钮）：取该联系人最近有对话的 App，当场归纳画像事实。
+ * 与 memExtractNow 同款交互：没有可用对话/提炼不出内容时抛错（UI toast 显示）。
+ */
+export async function memProfileExtractNow(
+  contactId: string,
+  apiConfig: ApiConfig,
+  names?: MemNames | null
+): Promise<{ added: number; merged: number }> {
+  const guard = `${contactId}:profile-manual`;
+  if (profileInflight.has(guard)) throw new Error('正在提取画像，请稍候');
+  profileInflight.add(guard);
+  try {
+    const recent = memMostRecentApp(contactId);
+    if (!recent || recent.convo.length < 2) throw new Error('当前没有可总结的对话，先去和TA聊聊吧');
+    const res = await callMemoryApi<ProfileApiResult>('profile', profileRequestBody(contactId, recent.convo, names), apiConfig);
+    const items = normalizeProfileFacts(res);
+    if (items.length === 0) throw new Error('这次对话没有提炼出新的画像事实');
+    let added = 0;
+    let merged = 0;
+    for (const it of items) {
+      const r = upsertProfileFact(contactId, it);
+      if (r) {
+        if (r.merged) merged++;
+        else added++;
+      }
+    }
+    if (added === 0 && merged === 0) throw new Error('这次对话没有提炼出新的画像事实');
+    return { added, merged };
+  } finally {
+    profileInflight.delete(guard);
   }
 }
 

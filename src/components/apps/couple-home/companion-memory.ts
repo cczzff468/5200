@@ -18,6 +18,7 @@ import {
   memAddEventFragment,
   memAfterAiTurn,
   memChatRecallBlock,
+  profileRecallBlock,
   setMemScopeForApp,
   type MemConvoTurn,
   type MemNames,
@@ -101,15 +102,19 @@ export function cabinRecentInteractions(contactId: string, limit = 6): string[] 
 /**
  * 组装小屋记忆注入块（每轮对话 system 用）：
  * ① memChatRecallBlock 标准召回（长期/核心/碎片三层 + 互通开关）；
- * ② 最近物理互动摘要（拥抱/牵手/指令/自主行为，让 AI 记得刚才发生的事）。
+ * ② 画像图谱注入（Task 14-b B1）：用户画像事实层（喜好/忌讳/习惯/身份/重要日子），
+ *    TA 在小屋聊天也知道这些（「你不是不吃香菜嘛」）；
+ * ③ 最近物理互动摘要（拥抱/牵手/指令/自主行为，让 AI 记得刚才发生的事）。
  */
 export function cabinMemoryBlock(contactId: string, contextText: string, names?: MemNames | null): string {
   try {
     const recall = memChatRecallBlock(contactId, CABIN_APP, contextText);
+    const profile = profileRecallBlock(contactId);
     const recent = cabinRecentInteractions(contactId, 6);
-    if (!recall.trim() && recent.length === 0) return '';
+    if (!recall.trim() && !profile.trim() && recent.length === 0) return '';
     const lines: string[] = [];
     if (recall.trim()) lines.push(recall.trim());
+    if (profile.trim()) lines.push(profile.trim());
     if (recent.length > 0) {
       lines.push(
         '【最近你们在拾光小屋里亲身发生的事（好好记得，可以自然提起）】',

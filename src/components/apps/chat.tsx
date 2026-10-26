@@ -87,7 +87,7 @@ import {
 import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { kvDel, kvGet, kvSet, kvSetDebounced } from '@/lib/ios/idb-kv';
-import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memRecallBlock, memSummarizeCallNow, setMemScopeForApp } from '@/lib/memory';
+import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memRecallBlock, memSummarizeCallNow, profileRecallBlock, setMemScopeForApp } from '@/lib/memory';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import { ProactiveMsgPage } from './proactive-msg-page';
@@ -1792,6 +1792,9 @@ function ChatView({
           }
         )
       : '';
+    // 画像图谱注入（Task 14-b B1）：用户画像事实层（喜好/忌讳/习惯/身份/重要日子），与记忆召回块并列注入——
+    // 让 TA 在聊天中自然引用用户习惯（「你不是不吃香菜嘛」）；无画像事实时为空串，join 后零成本
+    const profileBlock = memContactId ? profileRecallBlock(memContactId) : '';
     // 社交动态感知（四）：互通开关打开时把朋友圈/QQ动态注入 system（信息 App 无自有平台，
     // 关闭时不注入——动态属于社交平台，不属于短信）；用户广播动态首次被看到时懒写入该角色记忆
     const momentsBlock = memContactId
@@ -1826,6 +1829,8 @@ function ChatView({
       ...(wbBlocks ? [wbBlocks.beforeSystem] : []),
       charBlock,
       memoryBlock,
+      // 画像图谱（Task 14-b B1）：用户画像事实层，紧随记忆召回块并列注入
+      profileBlock,
       // 40-b 跨 App 环境感知：当前 App 记忆 → 其他 App 最近 10 条 → 群聊最近 10 条（长期/核心在 memoryBlock 内）
       crossCtxRef.current.crossAppBlock,
       crossCtxRef.current.groupBlock,

@@ -22,6 +22,9 @@
  *   跨 App 互通开关（默认开）、「立即总结」按所选粒度手动执行（碎片/碎片→核心/核心→长期/全部）、
  *   「修复旧记忆视角」（旧版「对方/用户」代称→真实名字）、「整理重复记忆」（相似记忆去重合并）、
  *   「召回预览」（长期→核心→碎片注入顺序预览）；本页全部按钮为长方形（圆角矩形）
+ * - Tab5 画像图谱（Task 14-b B1，用户画像事实层）：从最近对话自动归纳的稳定画像事实
+ *   （喜好/忌讳/习惯/身份/重要日子五类，同 topic 更新覆盖而非堆叠）；顶部「立即提取画像」手动触发；
+ *   按五类分组的卡片列表（条数徽章），支持行内编辑与删除；长列表 max-h + 细滚动条
  * - 数据按联系人 ID 隔离（localStorage 持久化，重启保留）；
  *   互通开 = QQ/微信/信息/电话四端共享该联系人记忆；关 = 各端只用自己来源的记忆
  */
@@ -34,6 +37,7 @@ import {
   ChevronRight,
   Clock,
   Combine,
+  Fingerprint,
   Gem,
   Info,
   Landmark,
@@ -58,7 +62,7 @@ import { listContacts, ownerRealNameFor } from '@/lib/ios/contacts-store';
 import { isPersonGoneEverywhere } from '@/lib/ios/friend-state';
 import { getGroup } from '@/lib/ios/groups';
 import { displayNameOf, type ContactRecord } from '@/lib/contacts';
-import { useSettings } from '@/lib/ios/store';
+import { useSettings, type ApiConfig } from '@/lib/ios/store';
 import {
   DEFAULT_MEM_SETTINGS,
   MEM_APP_LABEL,
@@ -66,11 +70,14 @@ import {
   MEM_FORGET_OPTIONS,
   MEM_INTERVAL_OPTIONS,
   MEM_LONG_OPTIONS,
+  MEM_PROFILE_CATEGORIES,
+  MEM_PROFILE_CATEGORY_LABEL,
   MEM_THRESHOLD_OPTIONS,
   archivedFragmentCount,
   deleteCore,
   deleteFragment,
   deleteLongTerm,
+  deleteProfileFact,
   expiredFragmentCount,
   fadeState,
   getMemSettings,
@@ -78,6 +85,8 @@ import {
   listCores,
   listFragments,
   listLongTerm,
+  listProfileFacts,
+  memProfileExtractNow,
   memSweepExpiry,
   memTimeLabel,
   memDedupeNow,
@@ -100,12 +109,15 @@ import {
   updateFragmentTime,
   updateLongTerm,
   updateLongTermTime,
+  updateProfileFact,
   type FadeState,
   type MemApp,
   type MemCore,
   type MemForget,
   type MemFragment,
   type MemLongTerm,
+  type MemNames,
+  type MemProfileFact,
   type MemSettings,
   type MemTimePatch,
   type MemWeight,
@@ -172,8 +184,8 @@ const CARD_CLS =
 const INK =
   'bg-neutral-200 text-neutral-800 ring-1 ring-black/[0.06] dark:bg-neutral-600 dark:text-neutral-50 dark:ring-white/[0.08]';
 
-/** 每联系人记忆详情（四 Tab） */
-type MemTab = 'frag' | 'ltm' | 'long' | 'set';
+/** 每联系人记忆详情（五 Tab） */
+type MemTab = 'frag' | 'ltm' | 'long' | 'profile' | 'set';
 
 /** 记忆库只管理「别人」的记忆：user 是机主本人，不需要给自己记记忆（列表/统计一并排除）。
  *  删好友可见性门控：被删好友（微信/QQ 两端都不再是好友且有过删除）的记忆条目隐藏——
@@ -444,6 +456,8 @@ function MemoryDetail({
   const frags = useMemo(() => (rev >= 0 ? listFragments(contact.id) : []), [contact.id, rev]);
   const cores = useMemo(() => (rev >= 0 ? listCores(contact.id) : []), [contact.id, rev]);
   const longs = useMemo(() => (rev >= 0 ? listLongTerm(contact.id) : []), [contact.id, rev]);
+  // 画像图谱（Task 14-b B1）：与三层记忆同款 rev 快照刷新（后台自动提取落库后列表自己更新）
+  const facts = useMemo(() => (rev >= 0 ? listProfileFacts(contact.id) : []), [contact.id, rev]);
   const settings = useMemo(
     () => (rev >= 0 ? getMemSettings(contact.id) : DEFAULT_MEM_SETTINGS),
     [contact.id, rev]
@@ -520,6 +534,7 @@ function MemoryDetail({
     ['frag', Layers, '记忆碎片'],
     ['ltm', Gem, '核心记忆'],
     ['long', Landmark, '长期记忆'],
+    ['profile', Fingerprint, '画像图谱'],
     ['set', Settings2, '设置'],
   ];
 
@@ -563,6 +578,9 @@ function MemoryDetail({
           <span className="inline-flex items-center gap-1 rounded-full bg-white/60 px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:text-white/55 dark:ring-white/[0.1]">
             <Landmark className="h-3 w-3" /> {longs.length} 条长期
           </span>
+          <span className="inline-flex items-center gap-1 rounded-full bg-white/60 px-2.5 py-[3px] text-[12px] font-medium text-black/55 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:text-white/55 dark:ring-white/[0.1]">
+            <Fingerprint className="h-3 w-3" /> {facts.length} 条画像
+          </span>
           <span
             data-testid="mem-share-state"
             className={`inline-flex items-center gap-1 rounded-full px-2.5 py-[3px] text-[12px] font-medium ${
@@ -605,6 +623,16 @@ function MemoryDetail({
           )}
           {tab === 'ltm' && <CoreTab contactId={contact.id} cores={cores} refresh={refresh} showToast={showToast} />}
           {tab === 'long' && <LongTab contactId={contact.id} longs={longs} refresh={refresh} showToast={showToast} />}
+          {tab === 'profile' && (
+            <ProfileTab
+              contactId={contact.id}
+              facts={facts}
+              apiConfig={apiConfig}
+              memNames={memNames}
+              refresh={refresh}
+              showToast={showToast}
+            />
+          )}
           {tab === 'set' && (
             <SetTab
               contactId={contact.id}
@@ -619,7 +647,7 @@ function MemoryDetail({
 
       {/* 底部悬浮胶囊 Dock：毛玻璃 + 选中白底浮起；仅图标 + 文字，无数字 */}
       <nav
-        className={`absolute inset-x-5 bottom-[calc(12px+env(safe-area-inset-bottom))] z-20 grid grid-cols-4 gap-1 rounded-[26px] p-1.5 shadow-[0_10px_30px_-10px_rgba(20,18,14,0.3)] ring-1 ring-black/[0.05] ${DOCK_GLASS} dark:ring-white/[0.08]`}
+        className={`absolute inset-x-5 bottom-[calc(12px+env(safe-area-inset-bottom))] z-20 grid grid-cols-5 gap-1 rounded-[26px] p-1.5 shadow-[0_10px_30px_-10px_rgba(20,18,14,0.3)] ring-1 ring-black/[0.05] ${DOCK_GLASS} dark:ring-white/[0.08]`}
         role="tablist"
         aria-label="记忆分类"
       >
@@ -1026,6 +1054,236 @@ function LongTab({
           />
         );
       })}
+    </div>
+  );
+}
+
+// ---------------- Tab 5：画像图谱（用户画像事实层，Task 14-b B1） ----------------
+
+/**
+ * 画像事实行（档案风小卡）：topic 标题 + 一句话陈述 + 更新时间/来源徽章，
+ * 行内编辑（内容）与两步删除确认；手动编辑过的条目带「手动」徽标（自动提取不再覆盖）。
+ */
+function ProfileFactRow({
+  contactId,
+  fact,
+  refresh,
+  showToast,
+}: {
+  contactId: string;
+  fact: MemProfileFact;
+  refresh: () => void;
+  showToast: (m: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(fact.content);
+  const [confirmDel, setConfirmDel] = useState(false);
+
+  return (
+    <div
+      data-testid={`mem-profile-${fact.id}`}
+      className="rounded-[16px] bg-white/50 p-3 shadow-sm ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.06] dark:ring-white/[0.09]"
+    >
+      {editing ? (
+        <>
+          <p className="text-[13px] font-semibold">{fact.topic}</p>
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={2}
+            maxLength={80}
+            aria-label="编辑画像事实内容"
+            className="mt-1.5 w-full resize-none rounded-xl bg-black/[0.04] p-2.5 text-[13.5px] leading-relaxed outline-none ring-1 ring-black/[0.08] focus:ring-neutral-900/35 dark:bg-white/[0.06] dark:ring-white/[0.12] dark:focus:ring-white/40"
+          />
+          <p className="mt-1 text-[10.5px] text-black/35 dark:text-white/35">
+            手动编辑后，自动提取不再覆盖这条画像
+          </p>
+          <div className="mt-1.5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                setDraft(fact.content);
+              }}
+              className="rounded-full px-3 py-1 text-[12.5px] text-black/50 active:bg-black/5 dark:text-white/50 dark:active:bg-white/10"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              data-testid={`mem-profile-${fact.id}-save`}
+              onClick={() => {
+                const t = draft.trim();
+                if (t && updateProfileFact(contactId, fact.id, t)) {
+                  refresh();
+                  showToast('画像事实已更新');
+                }
+                setEditing(false);
+              }}
+              className={`flex items-center gap-1 rounded-full px-3 py-1 text-[12.5px] font-medium active:opacity-80 ${INK}`}
+            >
+              <Check className="h-[13px] w-[13px]" /> 保存
+            </button>
+          </div>
+        </>
+      ) : confirmDel ? (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[12px] text-black/55 dark:text-white/55">删除「{fact.topic}」这条画像？</span>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setConfirmDel(false)}
+              className="rounded-full px-2.5 py-1 text-[12.5px] text-black/50 active:bg-black/5 dark:text-white/50 dark:active:bg-white/10"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              data-testid={`mem-profile-${fact.id}-del-confirm`}
+              onClick={() => {
+                deleteProfileFact(contactId, fact.id);
+                refresh();
+                showToast('画像事实已删除');
+              }}
+              className={`rounded-full px-3 py-1 text-[12.5px] font-medium active:opacity-80 ${INK}`}
+            >
+              删除
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-semibold leading-snug">{fact.topic}</p>
+              <p className="mt-0.5 whitespace-pre-wrap break-words text-[13.5px] leading-relaxed">{fact.content}</p>
+            </div>
+            <div className="-mr-1 flex shrink-0 items-center">
+              <button
+                type="button"
+                aria-label="编辑画像事实"
+                onClick={() => {
+                  setDraft(fact.content);
+                  setEditing(true);
+                }}
+                className="grid h-7 w-7 place-items-center rounded-full text-black/30 transition-colors active:bg-black/[0.06] active:text-black/70 dark:text-white/30 dark:active:bg-white/[0.1] dark:active:text-white/70"
+              >
+                <Pencil className="h-[14px] w-[14px]" strokeWidth={1.8} />
+              </button>
+              <button
+                type="button"
+                aria-label="删除画像事实"
+                onClick={() => setConfirmDel(true)}
+                className="grid h-7 w-7 place-items-center rounded-full text-black/30 transition-colors active:bg-black/[0.06] active:text-black/70 dark:text-white/30 dark:active:bg-white/[0.1] dark:active:text-white/70"
+              >
+                <Trash2 className="h-[14px] w-[14px]" strokeWidth={1.8} />
+              </button>
+            </div>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-black/40 dark:text-white/40">
+            {fact.editedAt != null && <ManualTimeBadge />}
+            {fact.weight === 'high' && <WeightBadge weight="high" />}
+            {!!fact.sourceFragmentIds?.length && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-black/[0.05] px-1.5 py-[1px] text-[10.5px] font-medium text-black/45 dark:bg-white/[0.08] dark:text-white/45">
+                来自 {fact.sourceFragmentIds.length} 条碎片
+              </span>
+            )}
+            <span>更新于 {relTime(fact.updatedAt)}</span>
+            <span aria-hidden="true">·</span>
+            <span className="tabular-nums">{fmtTime(fact.createdAt)} 建立</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** 画像图谱 Tab：按五类分组的卡片列表 + 顶部「立即提取画像」（长列表 max-h + 细滚动条） */
+function ProfileTab({
+  contactId,
+  facts,
+  apiConfig,
+  memNames,
+  refresh,
+  showToast,
+}: {
+  contactId: string;
+  facts: MemProfileFact[];
+  apiConfig: ApiConfig;
+  memNames: MemNames;
+  refresh: () => void;
+  showToast: (m: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  /** 顶部「立即提取画像」：取该联系人最近对话当场归纳画像事实（与三层「立即总结」同款交互） */
+  const extractNow = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await memProfileExtractNow(contactId, apiConfig, memNames);
+      const parts: string[] = [];
+      if (res.added > 0) parts.push(`新增 ${res.added} 条`);
+      if (res.merged > 0) parts.push(`更新 ${res.merged} 条`);
+      showToast(`画像提取完成：${parts.join('，')}`);
+      refresh();
+    } catch (err) {
+      showToast(err instanceof Error && err.message ? err.message : '提取失败，请稍后再试');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 按 MEM_PROFILE_CATEGORIES 固定顺序分组（身份→喜好→忌讳→习惯→重要日子），空组不渲染
+  const groups = MEM_PROFILE_CATEGORIES.map((cat) => ({
+    cat,
+    items: facts.filter((f) => f.category === cat),
+  }));
+
+  return (
+    <div>
+      {/* 顶部「立即提取画像」：与三层 Tab 右上角「立即总结」同款按钮样式 */}
+      <div className="flex items-center justify-end pb-2">
+        <button
+          type="button"
+          data-testid="mem-profile-extract"
+          onClick={() => void extractNow()}
+          disabled={busy}
+          className="flex h-8 items-center gap-1.5 rounded-full bg-white/60 px-3 text-[12.5px] font-medium text-neutral-700 shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition active:scale-[0.96] disabled:opacity-50 dark:bg-white/[0.08] dark:text-neutral-200 dark:ring-white/[0.1]"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Fingerprint className="h-3.5 w-3.5" strokeWidth={1.9} />}
+          {busy ? '正在提取…' : '立即提取画像'}
+        </button>
+      </div>
+      {facts.length === 0 ? (
+        <EmptyState
+          icon={<Fingerprint className="h-8 w-8" strokeWidth={1.5} />}
+          text="还没有用户画像。聊满一定轮数后会自动归纳（喜好/忌讳/习惯/身份/重要日子），也可点上方「立即提取画像」马上生成。"
+        />
+      ) : (
+        <div className="max-h-96 space-y-3.5 overflow-y-auto pr-0.5 [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-black/15 [&::-webkit-scrollbar-track]:bg-transparent dark:[&::-webkit-scrollbar-thumb]:bg-white/15">
+          {groups.map(({ cat, items }) =>
+            items.length === 0 ? null : (
+              <section key={cat} aria-label={MEM_PROFILE_CATEGORY_LABEL[cat]}>
+                <h4 className="flex items-center gap-1.5 px-1 pb-1.5 text-[13px] font-semibold text-black/55 dark:text-white/55">
+                  {MEM_PROFILE_CATEGORY_LABEL[cat]}
+                  <span
+                    data-testid={`mem-profile-count-${cat}`}
+                    className="rounded-full bg-black/[0.05] px-1.5 py-[1px] text-[10.5px] font-medium tabular-nums text-black/45 dark:bg-white/[0.08] dark:text-white/45"
+                  >
+                    {items.length}
+                  </span>
+                </h4>
+                <div className="space-y-2">
+                  {items.map((f) => (
+                    <ProfileFactRow key={f.id} contactId={contactId} fact={f} refresh={refresh} showToast={showToast} />
+                  ))}
+                </div>
+              </section>
+            )
+          )}
+        </div>
+      )}
     </div>
   );
 }
