@@ -34,6 +34,7 @@ import {
 import { useMusic, getGuestProfile, getGuestAvatar, exitGuestMode } from '@/lib/ios/music-store';
 import { useUI } from '@/lib/ios/store';
 import { CoverImg, EmptyBlock, LoadingBlock, SectionTitle, fmtPlayCount } from './music-shared';
+import { VipBadge } from './music-vip-badge';
 
 /** 洗牌（Fisher–Yates）——下拉刷新时让各区块内容轮换，看起来真的「更新」了 */
 function shuffle<T>(arr: T[]): T[] {
@@ -500,11 +501,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
                     {s.artists?.map((a) => a.name).join('/')}
                   </p>
                 </div>
-                {s.fee === 1 && (
-                  <span className="shrink-0 rounded-[3px] border border-[#C20C0C]/50 px-1 text-[9px] leading-[14px] text-[#C20C0C]">
-                    VIP
-                  </span>
-                )}
+                {s.fee === 1 && <VipBadge />}
               </button>
             ))}
           </div>
@@ -533,11 +530,7 @@ export function MusicHome({ onSettings }: { onSettings: () => void }) {
                   {s.artists?.map((a) => a.name).join('/')}
                 </p>
               </div>
-              {s.fee === 1 && (
-                <span className="shrink-0 rounded-[3px] border border-[#C20C0C]/50 px-1 text-[9px] leading-[14px] text-[#C20C0C]">
-                  VIP
-                </span>
-              )}
+              {s.fee === 1 && <VipBadge />}
             </button>
           ))}
         </div>

@@ -45,6 +45,13 @@ export interface MusicRecord {
   lyrics?: string;
 }
 
+/** 备忘录结构化清单项（金色重构版）：勾选圆列表，与正文 HTML 相互独立存储 */
+export interface NoteChecklistItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
 export interface NoteRecord {
   id: string;
   title: string;
@@ -53,8 +60,26 @@ export interface NoteRecord {
   updatedAt: number;
   /** 置顶（金色版备忘录新增可选字段，IndexedDB 无需升版本） */
   pinned?: boolean;
-  /** 分类：''=无分类 */
+  /** 分类：''=无分类（旧版字段，保留兼容；新版按 folder 归档，旧数据的 category 仅存不展示） */
   category?: '' | 'personal' | 'work';
+  /**
+   * 所属文件夹 id（金色重构版）：'default'=内置「备忘录」默认夹，自定义文件夹为生成 id。
+   * 缺省 = 归入「备忘录」默认夹（旧数据向后兼容）；「全部备忘录」为聚合视图不落该字段。
+   */
+  folder?: string;
+  /** 锁定标记：列表隐藏摘要并显示锁图标，编辑器需先解锁查看（iOS 语义的轻量实现） */
+  locked?: boolean;
+  /** 最近删除：进入回收站的时间戳；有此字段 = 已删除，仅出现在「最近删除」，恢复时清除 */
+  deletedAt?: number;
+  /** 结构化清单（编辑器「今天的重点」勾选列表）；缺省/空数组 = 无清单 */
+  checklist?: NoteChecklistItem[];
+  /**
+   * 关联日历日程 id（events 表记录 id，与日历代理对齐的同名字段）；
+   * 与 linkDate 同存，日程被删后按 linkDate 兜底显示。
+   */
+  linkedEventId?: string;
+  /** 关联日期 'YYYY-MM-DD'（与日历代理对齐的同名字段）；编辑器显示金色日期胶囊，点按跳日历 App */
+  linkDate?: string;
 }
 
 export interface CalendarEventRecord {
@@ -73,6 +98,24 @@ export interface CalendarEventRecord {
    * 旧记录无此字段 = 不重复；IndexedDB 新增可选字段无需升版本。
    */
   repeat?: number[];
+  /**
+   * 地点（Task 16-b 珊瑚红重构可选字段；旧数据无此字段视为未填写）。
+   */
+  location?: string;
+  /**
+   * 日程颜色 key（可选）：purple/blue/yellow/orange/teal/green/red/lime/olive/brown/pink，
+   * 缺省 = purple（紫色）。色值表见 calendar/shared.tsx。
+   */
+  color?: string;
+  /** 结束日期 YYYY-MM-DD（可选，跨天日程；缺省 = 同 date 单日） */
+  endDate?: string;
+  /**
+   * 重复规则（可选）：none/daily/weekly/monthly/yearly；
+   * 旧数据无此字段时按 repeat 数组推导（7 天=每天、单 weekday=每周，其余按 weekday 展开兼容）。
+   */
+  repeatRule?: 'none' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+  /** 提醒（可选）：none/atStart/m5/m15/m30/h1/d1，缺省 = m15（提前 15 分钟） */
+  alert?: 'none' | 'atStart' | 'm5' | 'm15' | 'm30' | 'h1' | 'd1';
 }
 
 export interface ChatSessionRecord {

@@ -8408,8 +8408,9 @@ function ChatPage({
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />
       )}
       {/* 顶栏：与消息区/底部输入栏同色（微信灰，非白）；多选模式下变为「取消 + 已选计数」操作栏
-          第三十四轮：pt-54→pt-48（顶部再往上移一点，仍避开 54px 状态栏内容区不重叠） */}
-      <div className="relative z-10 shrink-0 bg-[#EDEDED] pt-[48px] dark:bg-[#111111]">
+          第三十四轮：pt-54→pt-48（顶部再往上移一点，仍避开 54px 状态栏内容区不重叠）
+          第三十六轮：pt-48→pt-42（再上移 6px，灵动岛/状态栏下方留白更紧凑；群聊会话页同步） */}
+      <div className="relative z-10 shrink-0 bg-[#EDEDED] pt-[42px] dark:bg-[#111111]">
         {selectMode ? (
           fwdFlow === 'choose' ? (
             /* 转发勾选模式顶栏（对照原生微信多选转发：取消 + 已选择计数 + 搜索） */
@@ -9202,11 +9203,7 @@ function ChatPage({
               className="shrink-0 active:opacity-70"
             >
               <span
-                className={`flex h-[30px] w-[30px] items-center justify-center rounded-full border-[1.5px] transition-colors active:bg-black/[0.05] dark:active:bg-white/10 ${
-                  voiceMode
-                    ? 'border-[#07C160]/70 bg-[#07C160]/[0.08] text-[#07C160]'
-                    : 'border-black/85 text-black/90 dark:border-white/70 dark:text-white/90'
-                }`}
+                className="flex h-[30px] w-[30px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 transition-colors active:bg-black/[0.05] dark:border-white/70 dark:text-white/90 dark:active:bg-white/10"
               >
                 {/* 键盘模式 → 声波图标（点按进语音）；语音模式 → 键盘图标（点按切回键盘） */}
                 {voiceMode ? <KeyboardGlyph size={17} /> : <VoiceWaveGlyph size={19} />}
@@ -9245,7 +9242,7 @@ function ChatPage({
                   placeholder={ttsSend ? '输入文字，发送后转为语音' : ''}
                   placeholderClass="pl-1 pt-[6px] text-[16px] leading-[22px] text-black/30 dark:text-white/30"
                   testId="wx-chat-input"
-                  className="block max-h-[132px] min-h-[34px] w-full overflow-y-auto rounded-[8px] bg-white py-[6px] pl-3 pr-11 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 dark:bg-[#232323] dark:shadow-none"
+                  className="block max-h-[132px] min-h-[34px] w-full overflow-y-auto rounded-[4px] bg-white py-[6px] pl-3 pr-11 text-[16px] leading-[22px] caret-[#07C160] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] outline-none transition-all duration-200 selection:bg-[#07C160]/20 dark:bg-[#232323] dark:shadow-none"
                 />
                 {/* 文字转语音开关（第三十二轮：图标改麦克风——与微信参考图一致的输入框内右侧灰麦克风；
                     开启后输入文字发送为语音气泡（本地仿真）；切到「按住说话」模式时随输入框一起隐藏） */}

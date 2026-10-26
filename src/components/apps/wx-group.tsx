@@ -4944,8 +4944,8 @@ export function WxGroupChatPage({
       {bg.mode !== 'default' && (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />
       )}
-      {/* 顶栏：与消息区/输入栏同色无边框（同私聊）；多选模式下变为「取消 + 已选计数」操作栏（与单聊一致） */}
-      <div className="relative z-10 shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
+      {/* 顶栏：与消息区/输入栏同色无边框（同私聊，pt 与私聊会话页保持一致）；多选模式下变为「取消 + 已选计数」操作栏（与单聊一致） */}
+      <div className="relative z-10 shrink-0 bg-[#EDEDED] pt-[42px] dark:bg-[#111111]">
         {selectMode ? (
           <div className="flex h-11 items-center px-2">
             <button type="button" data-testid="wx-grp-select-cancel" onClick={exitSelect} className="flex items-center px-1 text-[16px] active:opacity-50">

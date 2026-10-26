@@ -36,6 +36,7 @@ import {
   playlistCreate,
   type NcmSong,
 } from '@/lib/ios/music-api';
+import { VipBadge } from './music-vip-badge';
 
 // ---------------- 格式化 ----------------
 
@@ -175,11 +176,7 @@ export function SongRow({
             {showAlbum && songAlbumText(song) ? ` · ${songAlbumText(song)}` : ''}
           </div>
         </div>
-        {song.fee === 1 && (
-          <span className="shrink-0 rounded-[3px] border border-[#C20C0C]/50 px-1 text-[9px] leading-[14px] text-[#C20C0C]">
-            VIP
-          </span>
-        )}
+        {song.fee === 1 && <VipBadge />}
         {onMore ? (
           <span
             role="button"

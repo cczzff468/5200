@@ -482,3 +482,44 @@ Stage Summary:
 - CoupleHome.tsx 7561→5336 行，拆出 14 个单一职责子模块，行为零变化（E2E 全链路验证）
 - 主文件仍保留编排职责（state/回调中枢），后续继续抽取可再降（本轮达成 8~10+ 子模块目标）
 - 关键文件：src/components/apps/couple-home/CoupleHome.tsx、panels/*、lib/*
+
+---
+Task ID: 16-d
+Agent: full-stack-developer（日历小米化，超时由主控收尾验证）
+Task: 日历 App 按「小米日历」参考截图（upload/IMG_20261026_100021.jpg）重构为五视图结构
+
+Work Log:
+- [公共框架 chrome.tsx 新增] CalChrome 头部（BackToHome + 白底圆角红日历小图标 + 标题「2026/10」月份红字 + 「默认视图▾」五视图下拉 + 画中画/搜索/⋮红点徽章菜单）+ 五视图切换胶囊（年/月/周/日/日程，灰轨道白胶囊选中态）；CalFab 右下 52px 红色新建钮
+- [shared.tsx] WEEKDAY_HEADER 改周日开头；HOLIDAYS 法定节假日表（2025/2026/2027 休/班）+ holidayOf()；lunarBadge 初一月名标红
+- [month-view] 小米式月格：今天=红圆角方块白字+农历红+底部红条；休/班角标；节日/节气红字；周日开头；保留选中日事件列表与滑动切月；移除旧 BottomBar
+- [week-day-view.tsx 新增] 周条（今天红方块/休日角标/节日红字）+ 0-23 时时间网格（每小时 52px 可滚动+当前时刻红线红字）+ 日程块（colorHex 实色圆角块/全天通栏条/重叠均分）+ 空白格点击新建 + FAB；周/日共用一个组件两种列数
+- [agenda-view.tsx 新增] 从选中日起 90 天按日分组日程列表（日期头+农历+EventRow 卡片），空态「暂无日程」+ FAB
+- [year-view] 头部「2026」大字 + 红色「－ 丙午马年 － 农历九月十七」+ 12 月大数字迷你网格（今天红圆点/周末浅红）
+- [event-form] 小米化：取消/完成改小米蓝 #3478F6、「添加」改「完成」、分类胶囊（个人/工作/生日/倒数日↔EVENT_COLORS blue/red/yellow/green + ⋮ 进颜色页）、提醒方式通知/闹钟单选（本地态）、placeholder「试着输入"明晚 7 点聚餐"」、浅灰底白卡
+- [index.tsx] Page 扩 'week'|'day'|'agenda' 路由；视图状态复用 viewYM/selectedKey
+- [验证·主控接手] bunx tsc --noEmit 0 新增（仅 next.config 基线）；eslint calendar 0 问题；playwright E2E 七步全过：月/年/周/日/日程五视图截图 + FAB 新建「测试日程：晚上聚餐」→ 日程列表出现该日程 + toast「已添加日程」，控制台 0 错误（截图 /home/z/.e2e-tmp/cal-1~7.png）
+
+Stage Summary:
+- 日历 App 完成小米化五视图重构：头部/胶囊/月格（休班角标+今天红方块红条）/周条+时间网格（红线+日程块）/日程列表/年视图红干支行/小米蓝表单
+- 环境注记：沙箱 4GB 内存墙导致 chrome 渲染进程反复 OOM、dev server 导航流间歇性挂起（curl 正常）；重启 dev server 后恢复，全部 E2E 通过——后续遇全屏黑屏/加载卡死先重启 dev server
+- 关键文件：src/components/apps/calendar/{chrome,week-day-view,agenda-view}.tsx（新）+ {index,shared,month-view,year-view,widgets,event-form}.tsx（改）；临时验证页 src/app/e2e-preview 已删除未入库
+
+---
+Task ID: 17
+Agent: Z.ai 主控（Z.ai Code）
+Task: 用户第二轮反馈修复——微信语音气泡/转文字白面板/输入框圆角/备忘录颜色与文字删除/⋯圆钮
+
+Work Log:
+- [语音气泡真机化 voice-bubble.tsx] 对照真实微信截图（upload/Screenshot_20261026_094208/085301.jpg 裁剪放大确认图标与比例）：圆角 5px→12px（真机绿/白气泡同款）；尾巴 8px→10px 带 2px 圆角（真机弧形尾）；时长字号 15→17px 且 ′/″ 后缀缩小上提（新 WxDuration 组件，撇号悬在数字肩部同真机）；喇叭图标 18→20px、静态声波弧比喇叭主体淡一档（真机层次）；气泡宽度 80→86 基数（3″≈94px 同真机比例）
+- [转文字白面板] wx 端改为真机同款「气泡下方白色圆角大气泡」：扁平纯白无描边阴影、16px 大字近黑（#000/82）、rounded-12、mt-8px；QQ/信息端维持原轻量小面板；文字色 token 更新
+- [输入框圆角 wechat.tsx] wx-chat-input rounded-8px→4px（用户：输入文字那里圆角有点圆）
+- [备忘录配色 notes-shared.tsx] GOLD_LIGHT #B8860B→#C9A227（设计稿采样软亮金，图标列坐标采样 #C8A850 系）、GOLD_DARK #C9971C→#D6B25C、搜索高亮底色同步
+- [备忘录文字删除 notes-pages.tsx] 删除「在我的小手机上」分组标签与文件夹页底部「保存在此浏览器 · N 个文件夹」；编辑器内时间行「· 保存在此浏览器」按设计稿保留
+- [右上编辑→圆钮] FoldersPage 常态右上改金色圆形三点按钮（同 ListPage 规格）→ 菜单「编辑文件夹」进编辑模式；编辑模式右上变「完成」文本钮（iOS 编辑态语义）
+- [验证] bunx tsc --noEmit 0 新增；eslint（voice-bubble/wechat/notes 全部改动文件）0 问题；playwright 全链路：语音气泡+转文字面板截图（绿 3″+白 4″+白面板，与参考图逐项一致，/tmp/prev-bubble.png）；完整 App E2E 解锁→备忘录（⋯圆钮在位、「在我的小手机上」「保存在此浏览器」已消失、金色更新、编辑文件夹菜单可开，full-3/4 截图）；微信语音气泡为隔离页同组件验证；全流程控制台 0 错误
+- [遗留] 微信 App 登录页在全新浏览器 Profile 下需注册手机号（数据门槛非代码问题），真实会话内气泡/面板由组件级截图替代验证；.e2e-16a/ 与 agent-ctx/ 保持不入库
+
+Stage Summary:
+- 六项反馈全部落地：真机微信语音气泡（12px 圆角/弧形尾/17px 时长上标撇号/20px 喇叭）、转文字白色大气泡面板、输入框 4px 圆角、备忘录软亮金配色、两处冗余文字删除、右上⋯圆形按钮
+- 日历小米化五视图（16-d）一并入库；tsc/eslint/E2E 全绿
+- 待提交：calendar/ 重构、notes/ 重构、voice-bubble/wechat/wx-group/music VIP（上一轮 16-a/16-b 累积）合并为本轮提交
