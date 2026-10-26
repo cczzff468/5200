@@ -83,9 +83,8 @@ function RibbonBow() {
 }
 
 /** 礼物卡片气泡（深蓝星空 + 金丝带蝴蝶结 + 送你一份心意，真机参考图；side 决定尾巴指向头像侧）。
- *  第 22 轮（用户反馈）：①尺寸 252×100→**206×84**、圆角 12→**8px**，与转账卡片同规格；
- *  ②**小尾巴真正露出**（旧版被 overflow-hidden 裁掉）——外层无裁剪 + 内层内容圆角裁剪双层结构，
- *  菱形尾巴凸出卡外、尖角处 3px 圆弧（与转账卡同画法）；③内部丝带/蝴蝶结/标题按新尺寸等比缩小 */
+ *  第 23 轮（用户反馈）：①圆角 8→**4px**（转账/红包/亲属卡同轮统一，用户：卡片圆角有点圆）；
+ *  ②已收下后标题下方加「已收下」小字（真机参考图同款双行）；尾巴双层结构画法不变 */
 export function WxGiftCardBubble({
   gift,
   side,
@@ -112,7 +111,7 @@ export function WxGiftCardBubble({
       />
       {/* 卡身：圆角 + overflow-hidden 只裁内容层（星空/丝带/文案），不再裁掉尾巴 */}
       <span
-        className="relative block h-full w-full overflow-hidden rounded-[8px]"
+        className="relative block h-full w-full overflow-hidden rounded-[4px]"
         style={{ background: 'linear-gradient(160deg, #4467B4 0%, #2C4E92 46%, #20396E 100%)' }}
       >
         {/* 星空细碎白点 */}
@@ -132,12 +131,13 @@ export function WxGiftCardBubble({
           <RibbonBow />
         </span>
 
-        {/* 居中金色标题（真机同款文案） */}
+        {/* 居中金色标题（真机同款文案；已收下后加「已收下」小字第二行，真机参考图同款） */}
         <span
-          className="absolute inset-y-0 flex items-center justify-center text-[16px] font-semibold tracking-[0.5px]"
+          className="absolute inset-y-0 flex flex-col items-center justify-center text-center"
           style={{ left: 56, right: 5, color: CARD_GOLD }}
         >
-          送你一份心意
+          <span className="text-[16px] font-semibold tracking-[0.5px]">送你一份心意</span>
+          {gift.accepted && <span className="mt-[3px] text-[12px] font-medium tracking-[1px] text-white/90">已收下</span>}
         </span>
 
         {/* 左下角「礼物」标签 */}
@@ -147,7 +147,9 @@ export function WxGiftCardBubble({
   );
 }
 
-/** 礼物选择页（加号面板「礼物」入口）：奶油金色调 + **淘宝已确认收货订单**列表，点「送出」发卡进当前聊天 */
+/** 礼物选择页（加号面板「礼物」入口）：奶油金色调 + **淘宝已确认收货订单**列表（已送出作礼物的不再出现），点「送出」发卡进当前聊天。
+ *  第 23 轮（用户反馈）：①删副标题与「已确认收货的淘宝宝贝…」列表头说明（页面只留标题+清单）；
+ *  ②**送出去的礼物从列表消失**——送出时订单打 giftedAt 标记，这里过滤（淘宝订单列表仍正常显示） */
 export function WxGiftPicker({
   onBack,
   onSend,
@@ -156,7 +158,8 @@ export function WxGiftPicker({
   /** 选中订单 → 父组件负责落礼物消息 + toast + 关页（+触发 AI 回合） */
   onSend: (order: TbOrder) => void;
 }) {
-  const orders = tbCompletedOrders();
+  // 已送出作礼物的订单不再出现在列表（giftedAt 由送出时写入；票务单等无标记的照常可选）
+  const orders = tbCompletedOrders().filter((o) => !o.giftedAt);
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col" data-testid="wx-gift-picker" style={{ background: 'linear-gradient(180deg, #FDF6E7 0%, #F7EDD8 100%)' }}>
@@ -168,10 +171,9 @@ export function WxGiftPicker({
           </button>
           <p className="text-[17px] font-semibold" style={{ color: '#7A5C30' }}>礼物</p>
         </div>
-        <p className="pb-1 pt-0.5 text-center text-[11.5px]" style={{ color: 'rgba(160,124,66,0.55)' }}>送你一份心意 · 挑一件收到的宝贝送给 TA</p>
       </div>
 
-      {/* 已收货订单列表 */}
+      {/* 已收货订单列表（无说明文案，用户要求页面只留清单） */}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-6 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {orders.length === 0 ? (
           <div className="grid h-full place-items-center">
@@ -188,7 +190,6 @@ export function WxGiftPicker({
           </div>
         ) : (
           <div className="space-y-2.5">
-            <p className="px-1 pb-1 pt-1 text-[11.5px]" style={{ color: 'rgba(160,124,66,0.55)' }}>已确认收货的淘宝宝贝 · 点「送出」作为礼物发给 TA</p>
             {orders.map((o) => {
               const first = o.items[0];
               const qty = o.items.reduce((n, it) => n + it.qty, 0);

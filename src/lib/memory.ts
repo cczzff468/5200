@@ -2997,12 +2997,16 @@ interface RawishMsg {
  * 字段缺失/旧数据/解析异常时回退现有裸标签，绝不抛错。群聊侧富标签口径（memGroupMsgText）已正确，勿动。
  */
 function cardLabel(m: RawishMsg): string | null {
-  // 礼物卡片（第 20 轮）：带礼物名与收下状态进记忆（快照字段随消息落库，读取走宽松 Record 兼容）
+  // 礼物卡片（第 20 轮；第七轮补方向）：带礼物名、送礼方向与收下状态进记忆
+  //（此前无方向，沉淀的记忆分不清谁送谁，AI 会把机主送的礼物说成自己送的）
   if (m.kind === 'giftcard') {
     const g = (m as Record<string, unknown>).gift;
     const name = g && typeof g === 'object' && typeof (g as Record<string, unknown>).name === 'string' ? (g as Record<string, unknown>).name as string : '';
     const accepted = !!(g && typeof g === 'object' && (g as Record<string, unknown>).accepted);
-    return name ? `[礼物 ${name}，${accepted ? '已收下' : '待收下'}]` : '[礼物]';
+    if (!name) return '[礼物]';
+    return m.role === 'me'
+      ? `[礼物 ${name}，我送的，对方${accepted ? '已收下' : '待收下'}]`
+      : `[礼物 ${name}，TA送的，我${accepted ? '已收下' : '待收下'}]`;
   }
   const bare =
     m.kind === 'redpacket' ? '[红包]' : m.kind === 'transfer' ? '[转账]' : m.kind === 'family' ? '[亲属卡]' : null;

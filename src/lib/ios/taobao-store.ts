@@ -567,6 +567,8 @@ export interface TbOrder {
   aiPickup?: { contactId: string; contactName: string; app: 'wx' | 'qq'; kind: 'gift' | 'favor' };
   /** 主动代付参与标记（tbEngageTick：每单只主动问过一次，防噪） */
   aiAsked?: boolean;
+  /** 已作为礼物送出（第七轮反馈：礼物页送出后从列表消失，不能再送第二次）；淘宝订单列表不受影响 */
+  giftedAt?: number;
   /** 用户自建订单元数据（淘宝首页「创建订单」入库；有值 = 自建单：类型/优惠券/规格选项组） */
   custom?: OrderCustomMeta;
 }
@@ -616,6 +618,24 @@ export function tbSaveOrders(uid: string, list: TbOrder[]): void {
 
 export function tbOrderById(uid: string, id: string): TbOrder | undefined {
   return tbLoadOrders(uid).find((o) => o.id === id);
+}
+
+/** 标记订单已作为礼物送出（微信礼物页过滤用；幂等，已标记不重写）：
+ *  当前登录淘宝账号下定位订单，找不到/未登录静默忽略（送礼链路不因存储异常阻断） */
+export function tbMarkOrderGifted(orderId: string): void {
+  try {
+    const s = tbGetSession();
+    if (!s) return;
+    const uid = tbUidOf(s);
+    const list = tbLoadOrders(uid);
+    if (!list.some((o) => o.id === orderId && !o.giftedAt)) return;
+    tbSaveOrders(
+      uid,
+      list.map((o) => (o.id === orderId && !o.giftedAt ? { ...o, giftedAt: Date.now() } : o)),
+    );
+  } catch {
+    /* 忽略 */
+  }
 }
 
 /** 包裹是否已到驿站（最后一节点 = 菜鸟驿站）：一键取件/AI 取件/分享卡确认收货的公共判定 */

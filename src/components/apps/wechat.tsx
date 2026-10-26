@@ -98,6 +98,7 @@ import { TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT, tbGetProxy, tbProxyHistoryLin
 import { tbShareHistoryLine } from '@/lib/ios/tb-share-proxy';
 import { TbDraftBubble } from './tb-draft-card';
 import { applyTbEngageAction, buildTbEngageCtx, isTbEngageActionKind, tbDraftHistoryLine } from '@/lib/ios/tb-ai-engage';
+import { tbMarkOrderGifted } from '@/lib/ios/taobao-store';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import {
   abortStreamsByPrefix,
@@ -401,10 +402,10 @@ interface WxTrData {
   cid?: string;
 }
 
-/** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账/亲属卡）：居中灰字 + 彩色尾词 */
+/** 聊天中的系统通知行（对方领取/退回/拒收了你的红包/转账/亲属卡、收下了你的礼物）：居中灰字 + 彩色尾词 */
 interface WxNoticeData {
-  /** 小图标：rp=红红包 / tr=橙转账 / fam=金亲属卡 */
-  icon: 'rp' | 'tr' | 'fam';
+  /** 小图标：rp=红红包 / tr=橙转账 / fam=金亲属卡 / gift=蓝金礼物（第七轮反馈新增） */
+  icon: 'rp' | 'tr' | 'fam' | 'gift';
   /** 主体文案（不含尾词），如「晚晴宝领取了你的」 */
   pre: string;
   /** 尾词高亮：「红包」/「转账」/「亲属卡」 */
@@ -1579,13 +1580,17 @@ function wxCardStateLabel(m: WxMsg, names?: WxCardActorNames): string {
     }
     return '待领取';
   }
+  // 礼物卡（第七轮反馈）：待收下/已收下——终态判定与待处理清单、AI 收下动作共用
+  if (m.kind === 'giftcard' && m.gift) {
+    return m.gift.accepted ? '已收下' : '待收下';
+  }
   return '';
 }
 
-/** 卡片是否已到终态（领取/收款/退还/拒收都算；终态后不可重复处理） */
+/** 卡片是否已到终态（领取/收款/退还/拒收/礼物收下都算；终态后不可重复处理；礼物「待收下」不算终态） */
 function wxCardIsFinal(m: WxMsg): boolean {
   const label = wxCardStateLabel(m);
-  return label !== '待领取' && label !== '待收款';
+  return label !== '待领取' && label !== '待收款' && label !== '待收下';
 }
 
 /** 拍一拍系统行的 AI 上下文序列化（Task 30）：按双方名字显式拼接（文案 = 拍一拍后缀，原样拼在句尾），
@@ -1596,7 +1601,7 @@ function wxPatHistoryLine(pat: NonNullable<WxMsg['sys']>['pat'], meName: string,
   return `[${peerName}拍了拍${meName}${suffix}]`;
 }
 
-/** 收集「我发给 AI 的、待处理」的红包/转账/亲属卡（生成 system 待处理清单） */
+/** 收集「我发给 AI 的、待处理」的红包/转账/亲属卡/礼物卡（生成 system 待处理清单） */
 function wxCollectPendingCards(msgs: WxMsg[]): PendingCardInfo[] {
   return msgs
     // 审计 #19：已撤回的待领取卡不进 AI 待处理清单（撤回即用户收回，AI 不应再领取/收款/拒收）
@@ -1610,6 +1615,10 @@ function wxCollectPendingCards(msgs: WxMsg[]): PendingCardInfo[] {
       }
       if (m.kind === 'family' && m.fam) {
         return { id: m.fam.cid ?? m.id, kind: 'family', amount: m.fam.monthlyLimit, label: `每月额度，${m.fam.message || '无留言'}` };
+      }
+      // 礼物卡（第七轮反馈）：未收下的进待处理清单，AI 用 [收下礼物卡:礼物ID] 收下
+      if (m.kind === 'giftcard' && m.gift) {
+        return { id: m.gift.id, kind: 'gift', label: `礼物「${m.gift.name}」${m.gift.countLabel}` };
       }
       return null;
     })
@@ -1736,7 +1745,9 @@ function wxApplyAiActions(
         m.role === 'me' &&
         ((m.kind === 'redpacket' && (m.rp?.cid === a.targetId || m.id === a.targetId)) ||
           (m.kind === 'transfer' && (m.tr?.cid === a.targetId || m.id === a.targetId)) ||
-          (m.kind === 'family' && (m.fam?.cid === a.targetId || m.id === a.targetId)))
+          (m.kind === 'family' && (m.fam?.cid === a.targetId || m.id === a.targetId)) ||
+          // 礼物卡（第七轮反馈）：[收下礼物卡:礼物ID]——礼物 id 随消息落库，兼容消息 id 匹配
+          (m.kind === 'giftcard' && !!m.gift && (m.gift.id === a.targetId || m.id === a.targetId)))
     );
   for (const a of actions) {
     const idx = matchIdx(a);
@@ -1809,6 +1820,14 @@ function wxApplyAiActions(
         if (fcIdx < 0) fcIdx = fcOut.findIndex((f) => f.friendId === peer.id && f.status === 'pending');
         if (fcIdx >= 0) saveFamilyCards(fcOut.map((f, i) => (i === fcIdx ? { ...f, status: 'returned' as const } : f)));
         notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'fam', pre: `${peer.name}拒收了你的`, accent: '亲属卡' } });
+      }
+    } else if (m.kind === 'giftcard' && m.gift) {
+      // 礼物卡（第七轮反馈）：AI 用 [收下礼物卡:礼物ID] 收下机主送的礼物——卡片置已收下
+      // （持久化在消息上，重开收礼弹窗按钮变「已收下」）+ 通知行「XX收下了你的礼物」（与红包/亲属卡同款）
+      const gift = m.gift;
+      if (verb === 'claim') {
+        next[idx] = { ...m, content: `[礼物卡片]（${peer.name}已收下）`, gift: { ...gift, accepted: true } };
+        notices.push({ id: uid(), role: 'peer', content: '', time, kind: 'notice', notice: { icon: 'gift', pre: `${peer.name}收下了你的`, accent: '礼物' } });
       }
     } else {
       continue;
@@ -2370,7 +2389,7 @@ export function FamilyBubble({ title, sub, settled, fromMe, onClick }: { title: 
         className={`absolute top-[11px] h-[13px] w-[13px] rotate-45 bg-white dark:bg-[#1E1E1E] ${fromMe === false ? '-left-[3px]' : '-right-[3px]'}`}
         style={{ borderRadius: fromMe === false ? '2px 2px 2px 3px' : '2px 3px 2px 2px' }}
       />
-      <span className="relative block overflow-hidden rounded-[10px] bg-white dark:bg-[#1E1E1E]">
+      <span className="relative block overflow-hidden rounded-[4px] bg-white dark:bg-[#1E1E1E]">
         <span aria-hidden="true" className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-[#FBF0C4] dark:bg-[#3B3722]" />
         <span
           aria-hidden="true"
@@ -4117,7 +4136,7 @@ export function RpBubble({ blessing, sub, settled, fromMe, onClick }: { blessing
         style={{ borderRadius: fromMe === false ? '2px 2px 2px 3px' : '2px 3px 2px 2px' }}
       />
       {/* 卡身：圆角 + overflow-hidden 只裁内容层（渐变/高光/底部标签），不再裁掉尾巴 */}
-      <span className="relative block overflow-hidden rounded-[8px]" style={{ background: 'linear-gradient(135deg, #F2694C, #E94E38)' }}>
+      <span className="relative block overflow-hidden rounded-[4px]" style={{ background: 'linear-gradient(135deg, #F2694C, #E94E38)' }}>
         <span aria-hidden="true" className="pointer-events-none absolute -right-6 -top-10 h-24 w-24 rounded-full bg-white/10" />
         <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
           <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border-2 border-white/90 bg-white/15" aria-hidden="true">
@@ -4167,7 +4186,7 @@ export function TrBubble({ amount, status, received, refunded, fromMe, note, set
         style={{ borderRadius: fromMe ? '2px 3px 2px 2px' : '2px 2px 2px 3px' }}
       />
       {/* 卡身：圆角 + overflow-hidden 只裁内容层（渐变/高光/底部标签），不再裁掉尾巴 */}
-      <span className="relative block overflow-hidden rounded-[8px]" style={{ background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)' }}>
+      <span className="relative block overflow-hidden rounded-[4px]" style={{ background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)' }}>
         <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
           <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border-2 border-white/90" aria-hidden="true">
             {refunded ? <Undo2 className="h-5 w-5 text-white" strokeWidth={2.2} /> : received ? <Check className="h-5 w-5 text-white" strokeWidth={2.4} /> : <ArrowLeftRight className="h-5 w-5 text-white" strokeWidth={2} />}
@@ -4248,8 +4267,9 @@ export function WxGroupCardBubble({
   );
 }
 
-/** 聊天系统通知行（截图参考：居中小图标 + 灰字 + 金色尾词，如「xx领取了你的红包」；单聊/群聊共用） */
-export function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; pre: string; accent: string }) {
+/** 聊天系统通知行（截图参考：居中小图标 + 灰字 + 金色尾词，如「xx领取了你的红包」；单聊/群聊共用）。
+ *  第七轮反馈新增 gift 图标（蓝金礼物盒）：「XX收下了你的礼物 / 你收下了XX送的礼物」 */
+export function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam' | 'gift'; pre: string; accent: string }) {
   return (
     <div className="flex justify-center py-1.5" data-testid="wx-notice-row">
       <span className="flex max-w-[86%] items-center gap-1.5 text-[13px] text-black/45 dark:text-white/45">
@@ -4268,6 +4288,14 @@ export function WxNoticeRow({ icon, pre, accent }: { icon: 'rp' | 'tr' | 'fam'; 
             style={{ background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)' }}
           >
             <ArrowLeftRight className="h-[10px] w-[10px] text-white" strokeWidth={2.6} />
+          </span>
+        ) : icon === 'gift' ? (
+          <span
+            aria-hidden="true"
+            className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[4px]"
+            style={{ background: 'linear-gradient(135deg, #4467B4, #2C4E92)' }}
+          >
+            <Gift className="h-[10px] w-[10px] text-[#F2D9A6]" strokeWidth={2.4} />
           </span>
         ) : (
           <span
@@ -6664,11 +6692,14 @@ function ChatPage({
                                 ? tbDraftHistoryLine(m.tbdraft.did)
                                 : m.kind === 'relcard' && m.relcard
                                   ? `[亲密关系卡片：${m.relcard.stage === 'invite' ? `${m.relcard.fromName}邀请${m.relcard.toName}建立情侣关系` : `${m.relcard.fromName}已同意，双方成功建立情侣关系`}，${m.relcard.status === 'pending' ? '待处理' : m.relcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
-                                // 礼物卡片（第 20 轮）：AI 知道谁送了什么、对方收下没有（可自然道谢/追问喜好）
+                                // 礼物卡片（第七轮反馈重写主语，修「AI 把机主送的礼物说成自己送的」）：
+                                // me 消息进 user 角色（「我」=机主、「你」=AI）→ 用机主称呼名做主语：「XX送你「…」」=
+                                // 机主把礼物送给 AI；peer 消息进 assistant 角色（「你」=AI 自己）→ 「你送出…」。
+                                // 两侧都带礼物 ID（待处理清单同源），AI 凭 [收下礼物卡:ID] 收下机主送的礼物
                                 : m.kind === 'giftcard' && m.gift
                                   ? m.role === 'me'
-                                    ? `[礼物卡片]（你送出「${m.gift.name}」${m.gift.countLabel}，${m.gift.accepted ? '对方已收下' : '待对方收下'}）`
-                                    : `[礼物卡片]（${peer.name}送你「${m.gift.name}」${m.gift.countLabel}，${m.gift.accepted ? '你已收下' : '待你收下'}）`
+                                    ? `[礼物卡片 ID:${m.gift.id}]（${meAddrName}送你「${m.gift.name}」${m.gift.countLabel}，${m.gift.accepted ? '你已收下' : '待你收下'}）`
+                                    : `[礼物卡片 ID:${m.gift.id}]（你送出「${m.gift.name}」${m.gift.countLabel}，${m.gift.accepted ? `${meAddrName}已收下` : `待${meAddrName}收下`}）`
                                 // 拍一拍系统行（Task 30）：按双方名字显式序列化（文案后缀原样拼接），AI 无主语歧义——
                                 // 「凡凡拍了拍小柚的小脑袋」= 对方拍了你；「小柚拍了拍凡凡的小脸蛋」= 你（AI）拍过对方
                                 : m.kind === 'sys' && m.sys?.pat
@@ -8261,7 +8292,12 @@ function ChatPage({
     const m = msgs.find((x) => x.id === id);
     if (!m?.fam || m.fam.claimed) return;
     const now = Date.now();
-    setMsgs((prev) => prev.map((x) => (x.id === id && x.fam ? { ...x, fam: { ...x.fam, claimed: true, claimedAt: now } } : x)));
+    // 领取提示行（第七轮反馈：此前领取后无任何聊天内提示，只有 toast）——与红包领取同款居中通知行
+    const notice: WxMsg = { id: uid(), role: 'peer', content: '', time: now, kind: 'notice', notice: { icon: 'fam', pre: `你收下了${peer.name}的`, accent: '亲属卡' } };
+    setMsgs((prev) => [
+      ...prev.map((x) => (x.id === id && x.fam ? { ...x, fam: { ...x.fam, claimed: true, claimedAt: now } } : x)),
+      notice,
+    ]);
     const list = loadFamilyCardsIn();
     if (!list.some((f) => f.msgId === m.id)) {
       saveFamilyCardsIn([
@@ -9444,6 +9480,8 @@ function ChatPage({
             }
             const first = order.items[0];
             const qty = order.items.reduce((n, it) => n + it.qty, 0);
+            // 第七轮反馈：送出即从礼物页消失（订单打 giftedAt 标记，列表过滤；不能同一件宝贝送两次）
+            tbMarkOrderGifted(order.id);
             const msg: WxMsg = {
               id: uid(),
               role: 'me',
@@ -9473,7 +9511,11 @@ function ChatPage({
           gift={giftViewMsg.gift}
           senderName={giftViewMsg.role === 'me' ? me.realName || me.name : peer.nickname || peer.name}
           onAccept={() => {
-            setMsgs((prev) => prev.map((x) => (x.id === giftViewMsg.id && x.gift ? { ...x, gift: { ...x.gift, accepted: true } } : x)));
+            // 第七轮反馈：收下礼物 → 聊天通知行「你收下了XX送的礼物」（与红包领取同款）+ toast
+            setMsgs((prev) => [
+              ...prev.map((x) => (x.id === giftViewMsg.id && x.gift ? { ...x, gift: { ...x.gift, accepted: true } } : x)),
+              { id: uid(), role: 'peer', content: '', time: Date.now(), kind: 'notice', notice: { icon: 'gift', pre: `你收下了${peer.nickname || peer.name}送的`, accent: '礼物' } } as WxMsg,
+            ]);
             onToast('已收下礼物');
           }}
           onClose={() => setGiftViewId(null)}

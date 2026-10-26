@@ -167,9 +167,9 @@ function WxVoiceIcon({ playing = false }: { playing?: boolean }) {
       aria-hidden="true"
       className="wx-voice-wave shrink-0"
     >
-      {/* 实心菱形（第二十二轮用户反馈：三角形改菱形、比原锥体 4.6×8.4 小一号 4.4×6.4、
-          与内弧拉开间距 3px（原 2px）：右尖 x=9 → 内弧 x=12） */}
-      <path className="wx-cone" d="M6.8 8.8 L9 12 L6.8 15.2 L4.6 12 Z" fill="currentColor" stroke="none" />
+      {/* 实心菱形（第二十三轮用户反馈：比上一版 4.4×6.4 大一点点 → 5.2×7.6；
+          右尖 x=9.2 与内弧 x=12 仍保持 2.8 单位间距，不贴回弧线） */}
+      <path className="wx-cone" d="M6.6 8.2 L9.2 12 L6.6 15.8 L4 12 Z" fill="currentColor" stroke="none" />
       {/* 两道声波弧线（用户 SVG 原样保留中弧+外弧；播放中从前往后一个一个出现） */}
       <path className="wx-arc wx-arc-2" d="M12 7 Q 16 12 12 17" />
       <path className="wx-arc wx-arc-3" d="M16 4 Q 22 12 16 20" />
