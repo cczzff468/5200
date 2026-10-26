@@ -4123,7 +4123,11 @@ export function RpBubble({ blessing, sub, settled, onClick }: { blessing: string
  *  待收款中：有转账留言时状态行优先显示留言（没写留言才显示状态文案）；
  *  终态（已收款/已退还/已拒收）：不再显示留言，改回显示原状态文案（用户需求：退还接收以后不要显示留言）；
  *  收款/退还/拒收后卡片颜色变灰（对照真实微信：终态卡褪色），退还卡圆图标换成↩。
- *  单聊/群聊共用同一套卡片组件（群聊传入群转账的状态文案） */
+ *  单聊/群聊共用同一套卡片组件（群聊传入群转账的状态文案）
+ *  第 22 轮（用户反馈）：①**小尾巴真正露出来**——旧版尾巴画在 overflow-hidden 容器内被整片裁掉，
+ *  现改为「外层无裁剪 + 内层内容圆角裁剪」双层结构，菱形尾巴凸出卡外（真机同款）；
+ *  ②尾巴尖尖**不要那么尖**——尖角那颗圆角 3px（rotate(45deg) 后 TR=右侧尖 / BL=左侧尖）；
+ *  ③底部「转账」标签背景改**与卡身同色**（去掉黑色蒙层） */
 export function TrBubble({ amount, status, received, refunded, fromMe, note, settled, onClick }: { amount: number; status: string; received: boolean; refunded: boolean; fromMe: boolean; note?: string; settled?: boolean; onClick: () => void }) {
   // 终态（已收款/已退还/已拒收）→ 显示原状态文案；待收款中 → 有留言显示留言、没写留言显示状态文案
   const line = !settled && note && note.trim() ? note : status;
@@ -4132,27 +4136,35 @@ export function TrBubble({ amount, status, received, refunded, fromMe, note, set
       type="button"
       data-testid="wx-tr-bubble"
       onClick={onClick}
-      className="relative block w-[206px] overflow-hidden rounded-[8px] text-left shadow-sm transition-all duration-300 active:brightness-95"
+      className="relative block w-[206px] text-left shadow-sm transition-all duration-300 active:brightness-95"
       style={{
-        background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)',
         // 收款/退还/拒收后卡片颜色变灰（对照真实微信：已收款与已退还的转账卡都褪色）
         filter: received || refunded ? 'grayscale(0.62) brightness(0.97)' : undefined,
       }}
       aria-label={`转账 ¥${fmtMoney(amount)}${received ? '（已收款）' : refunded ? '（已退还）' : ''}`}
     >
-      <span aria-hidden="true" className={`absolute top-[11px] h-[13px] w-[13px] rotate-45 rounded-[2px] bg-[#F2A233] ${fromMe ? '-right-[3px]' : '-left-[3px]'}`} />
-      <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
-        <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border-2 border-white/90" aria-hidden="true">
-          {refunded ? <Undo2 className="h-5 w-5 text-white" strokeWidth={2.2} /> : received ? <Check className="h-5 w-5 text-white" strokeWidth={2.4} /> : <ArrowLeftRight className="h-5 w-5 text-white" strokeWidth={2} />}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[17px] font-semibold leading-tight text-white">¥{fmtMoney(amount)}</span>
-          <span className="mt-0.5 block truncate text-[13px] text-white/95" data-testid="wx-tr-bubble-status">
-            {line}
+      {/* 小尾巴：菱形凸出卡外（不被裁剪），尖角处带一点点圆弧（3px），颜色取卡身右上同段渐变 */}
+      <span
+        aria-hidden="true"
+        className={`absolute top-[11px] h-[13px] w-[13px] rotate-45 bg-[#F2A233] ${fromMe ? '-right-[3px]' : '-left-[3px]'}`}
+        style={{ borderRadius: fromMe ? '2px 3px 2px 2px' : '2px 2px 2px 3px' }}
+      />
+      {/* 卡身：圆角 + overflow-hidden 只裁内容层（渐变/高光/底部标签），不再裁掉尾巴 */}
+      <span className="relative block overflow-hidden rounded-[8px]" style={{ background: 'linear-gradient(135deg, #F6AC3D, #EF9A2E)' }}>
+        <span className="relative flex items-center gap-2.5 px-3 pb-2.5 pt-3">
+          <span className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full border-2 border-white/90" aria-hidden="true">
+            {refunded ? <Undo2 className="h-5 w-5 text-white" strokeWidth={2.2} /> : received ? <Check className="h-5 w-5 text-white" strokeWidth={2.4} /> : <ArrowLeftRight className="h-5 w-5 text-white" strokeWidth={2} />}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[17px] font-semibold leading-tight text-white">¥{fmtMoney(amount)}</span>
+            <span className="mt-0.5 block truncate text-[13px] text-white/95" data-testid="wx-tr-bubble-status">
+              {line}
+            </span>
           </span>
         </span>
+        {/* 「转账」标签：背景与卡身同色（第 22 轮去掉黑蒙层，仅保留文字） */}
+        <span className="relative block px-3 py-[4px] text-[12px] text-white/90">转账</span>
       </span>
-      <span className="relative block bg-black/[0.06] px-3 py-[4px] text-[12px] text-white/90">转账</span>
     </button>
   );
 }
@@ -6638,8 +6650,8 @@ function ChatPage({
                                 // 礼物卡片（第 20 轮）：AI 知道谁送了什么、对方收下没有（可自然道谢/追问喜好）
                                 : m.kind === 'giftcard' && m.gift
                                   ? m.role === 'me'
-                                    ? `[礼物卡片]（你送出${m.gift.bless}，${m.gift.countLabel}，${m.gift.accepted ? '对方已收下' : '待对方收下'}）`
-                                    : `[礼物卡片]（${peer.name}送你${m.gift.bless}，${m.gift.countLabel}，${m.gift.accepted ? '你已收下' : '待你收下'}）`
+                                    ? `[礼物卡片]（你送出「${m.gift.name}」${m.gift.countLabel}，${m.gift.accepted ? '对方已收下' : '待对方收下'}）`
+                                    : `[礼物卡片]（${peer.name}送你「${m.gift.name}」${m.gift.countLabel}，${m.gift.accepted ? '你已收下' : '待你收下'}）`
                                 // 拍一拍系统行（Task 30）：按双方名字显式序列化（文案后缀原样拼接），AI 无主语歧义——
                                 // 「凡凡拍了拍小柚的小脑袋」= 对方拍了你；「小柚拍了拍凡凡的小脸蛋」= 你（AI）拍过对方
                                 : m.kind === 'sys' && m.sys?.pat
@@ -9400,27 +9412,37 @@ function ChatPage({
           onSubmit={(t) => void submitTextCard(t)}
         />
       )}
-      {/* 礼物页（加号面板「礼物」入口，替代原快递页）：选礼物 → 蓝金星空礼物卡发进当前聊天 */}
+      {/* 礼物页（加号面板「礼物」入口）：**淘宝已确认收货订单**作为礼物（用户：收到货的东西放在礼物界面）
+          → 挑一件以蓝金星空礼物卡发给 AI；AI 也可买淘宝商品送回礼物卡（tb-ai-engage [送礼物:商品id]） */}
       {compose === 'gift' && (
         <WxGiftPicker
           onBack={() => setCompose(null)}
-          onSend={(g) => {
+          onSend={(order) => {
             // 拉黑拦截（与红包同口径）：被角色拉黑后礼物发不出（不落库不触发 AI）
             if (loadBlock('wx', peer.id).byChar) {
               onToast('对方已将你拉黑，无法发送');
               return;
             }
+            const first = order.items[0];
+            const qty = order.items.reduce((n, it) => n + it.qty, 0);
             const msg: WxMsg = {
               id: uid(),
               role: 'me',
               content: '',
               time: Date.now(),
               kind: 'giftcard',
-              gift: { id: g.id, name: g.name, countLabel: g.countLabel, bless: g.bless, image: g.image, accepted: false },
+              gift: {
+                id: order.id,
+                name: first?.title ?? order.shopName,
+                countLabel: qty > 1 ? `共 ${qty} 件` : '共 1 件',
+                image: first?.img ?? '/goods/shop-gift.webp',
+                shop: order.shopName,
+                accepted: false,
+              },
             };
             setMsgs((prev) => [...prev, msg]);
             setCompose(null);
-            onToast(`已把「${g.name}」送给${peer.name}`);
+            onToast(`已把「${msg.gift?.name ?? '礼物'}」送给${peer.name}`);
             if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
           }}
         />

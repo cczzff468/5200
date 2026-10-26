@@ -586,3 +586,44 @@ Stage Summary:
 - 项目已完整部署且端到端可交互：AI Phone（Next.js 16.4.3 + Turbopack + TS + Tailwind 4 + Prisma/SQLite 6.19.3）
 - git 已就绪：origin=cczzff468/5200（PAT 内嵌），后续修改完成可直接 commit + push origin main
 - 等待用户提出具体修改/新增功能需求
+
+---
+Task ID: 21
+Agent: Z.ai 主控（Z.ai Code）
+Task: 用户第五轮需求——语音气泡声波改用用户 SVG（18×18、播放 @keyframes 波纹）+ 加号面板「快递」改「礼物」+ 礼物卡片按真机参考图重做（本会话上下文耗尽前完成实现，本轮一并验证入库）
+
+Work Log:
+- [语音图标] voice-bubble.tsx：微信语音图标重构为 18×18 单 SVG——删除最左小弧，实心锥体（▶）+ 用户指定两道声波弧（中弧/外弧原样保留）；收/发两侧字形完全相同不镜像（真机确认）；播放中弧线 CSS 动画（globals.css），停止静态
+- [礼物·入口] 加号面板「快递」改「礼物」（wx-plus-gift），礼物来源 = 淘宝已确认收货订单（WxGiftPicker 奶油金选择页）
+- [礼物·卡片] wx-gift.tsx 新建：WxGiftCardBubble（深蓝星空渐变 + 细碎白星 + 金色竖丝带 X 交叉蝴蝶结 + 「送你一份心意」+ 左下「礼物」）+ WxGiftReceiveSheet 收礼弹窗（收下后持久化已收下）
+- [礼物·AI 联动] chat-rich.ts 新增 [送礼物:商品id]/[买个礼物送你] 等标记（tb-gift-send，仅微信端落地）；tb-ai-engage.ts 执行器把礼物以 giftcard 消息送进聊天 + 事件记忆
+- [转账/礼物凭据文本] wechat.tsx 礼物卡片 AI 历史序列化改带商品名「「商品名」」
+
+Stage Summary:
+- 礼物功能全链路上线：淘宝收货订单 → 礼物页挑选 → 蓝金星空礼物卡 → 收礼弹窗收下；AI 也可主动 [送礼物] 回礼
+- 语音气泡声波替换为用户指定 SVG（锥体 + 两道弧），播放态 CSS 波纹动画
+- 关键文件：voice-bubble.tsx、wx-gift.tsx（新建）、wechat.tsx、chat-rich.ts、tb-ai-engage.ts、globals.css
+
+---
+Task ID: 22
+Agent: Z.ai 主控（Z.ai Code）
+Task: 用户第六轮反馈——转账/礼物卡片小尾巴露出+尖角圆弧 / 转账标签背景同色 / 礼物卡缩小对齐转账卡 / 声波弧线改黑+播放从前往后逐个出现+锥体弧线拉开间距 / 转文字白面板圆角对齐气泡 / AI 代买不用等物流直接送达 / 修「要玩偶给手机」错品推荐
+
+Work Log:
+- [转账卡片·小尾巴] wechat.tsx TrBubble：旧版尾巴画在 overflow-hidden 容器内被整片裁掉（用户看不到尾巴）→ 改「外层无裁剪 + 内层内容 overflow-hidden rounded-[8px]」双层结构，菱形尾巴凸出卡外约 6px（真机同款）；尾巴尖角带 3px 圆弧（rotate(45deg) 后 TR=右侧尖角 / BL=左侧尖角，按 fromMe 分侧设 borderRadius '2px 3px 2px 2px' / '2px 2px 2px 3px'）
+- [转账卡片·标签] 底部「转账」标签去掉 bg-black/[0.06] 黑色蒙层 → 背景与卡身同色（仅保留 12px 白字）
+- [礼物卡片·对齐转账卡] wx-gift.tsx WxGiftCardBubble：252×100/12px 圆角 → **206×84/8px 圆角**（与转账卡同规格）；尾巴同画法露出（#2C4E92、尖角 3px 圆弧）；丝带 x 44→36、蝴蝶结 scale 0.85、标题 17→16px、标签 13→12.5px 等比缩小
+- [语音·弧线黑色] globals.css：.wx-arc-2/.wx-arc-3 静态不透明度改 1（白气泡旧 0.4/0.26 灰度衰减删除）——两道弧线纯黑 rgb(0,0,0)；锥体保持白气泡 .85/绿气泡 1
+- [语音·逐个出现动画] @keyframes wx-voice-arc-seq（0% opacity 0 → 32% opacity 1 → 100% 持续）：内弧 1.1s infinite、外弧 delay 0.55s infinite——播放时弧线从前往后（锥体侧→外侧）一个一个出现、循环波纹；prefers-reduced-motion 降级
+- [语音·锥体与弧线间距] voice-bubble.tsx SVG 锥体 M6.8/11.4 → M5.4/10.0（右缘距内弧 12 约 2 个 viewBox 单位 ≈1.5px，用户「分开一点点」）
+- [转文字面板] 微信端转文字白面板圆角 12px → 4px 与语音气泡同规格（QQ/信息端不变）
+- [AI 代买·直送] taobao-store.ts 新增 tbInstantCompleteAiOrder（付款后跳过物流链路直接置已完成 + 补直送轨迹节点）；tb-ai-engage.ts tbConfirmAiDraft：AI 逐单付款成功后立即直送（同步调用防时序问题）、分享卡文案「帮你挑好啦，直接买下送到你手上了~」、记忆「已直接送到TA手上（不用等物流）」；tb-draft-card.tsx 确认 toast 带「宝贝直接送到你手上」——完成后订单同步落进礼物页（已收货订单）
+- [AI 代买·挑品修正] catalogBlock(recentTexts) 重写：按「商品标题中文 2-gram/英文词在最近聊天文本的命中数」打分，命中商品前置成【与机主正在聊的相关商品】（上限 8 条），基础多品类抽样降为 14 条；挑品纪律写进目录标题与 [帮你买] 规则（贴合机主所说、没有就直说、绝不拿手机数码凑数）
+- [验证·tsc/eslint] tsc --noEmit 仅 next.config.ts 既有基线 0 新增；eslint 7 个改动文件 0 问题
+- [验证·E2E 实机 390×844] 仓内模拟：种用户/角色联系人 → 微信登录 → 小耳朵会话：①发「买安抚玩偶毛绒玩具」→ AI 追问后发 [帮你买:p-toy-1] 代买卡「安抚玩偶毛绒玩具女生睡觉抱枕 可爱兔子公仔…」¥35（**不是手机**，相关度前置生效）②点「确认，让TA买」→ 卡内时间线立即「✓已签收 09:17 交易成功」（**无物流等待**）、AI 订单分享卡同步已签收、订单落进礼物页 ③语音气泡播放：arc-2/arc-3 均 wx-voice-arc-seq、外弧 delay 0.55s、stroke rgb(0,0,0)，连续采样 [0.38,1.00]/[1.00,0.14]/[1.00,0.76]/[0.52,1.00] 证明弧线从前往后逐个浮现 ④长按转文字 → 白面板 borderRadius 4px ⑤AI 转 ¥520 → 转账卡左尾巴凸出 6px（borderRadius 2/2/2/3）、标签背景 rgba(0,0,0,0) 与卡身同色 ⑥礼物页送出已收货订单 → 礼物卡 206×84/8px/右尾巴（2px 3px 2px 2px、#2C4E92）→ 点卡开收礼弹窗正常 ⑦控制台 0 新增错误
+
+Stage Summary:
+- 转账/礼物卡片小尾巴按真机露出且尖角带圆弧；礼物卡尺寸圆角与转账卡统一（206 宽/8px）
+- 语音图标：弧线纯黑 + 播放时从前往后逐个出现（0.55s 半拍交错循环）+ 锥体弧线拉开 1.5px 间距；转文字白面板 4px 圆角
+- AI 代买双修：挑品按聊天相关度前置（玩偶≠手机）+ 付款后跳过物流直接送达（即时已签收、直进礼物页）
+- 关键文件：wechat.tsx、wx-gift.tsx、voice-bubble.tsx、globals.css、tb-ai-engage.ts、taobao-store.ts、tb-draft-card.tsx

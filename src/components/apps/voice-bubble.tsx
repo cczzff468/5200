@@ -144,40 +144,35 @@ function VoiceWaveBars({ wave, active, playing, progress, count }: { wave: numbe
 }
 
 /**
- * 微信语音喇叭图标：实心锥体（▶ 朝右）在左 + **用户指定现成 SVG 声波**（第 20 轮）在右，
- * 18×18（viewBox 0 0 24 24，三道 Q 曲线弧、stroke-width 2、圆头端点）。
+ * 微信语音图标（第 22 轮）：实心锥体（三角形）在最左 + 两道声波弧，18×18 单 SVG。
+ * 第 22 轮调整：①锥体与两道弧**分开一点点**（锥体右缘距内弧约 2 个 viewBox 单位≈1.5px）；
+ * ②两道弧线**改纯黑**（globals.css 去掉灰度衰减，静态不透明度 1）；
+ * ③播放中弧线**从前往后一个一个出现**（globals.css wx-voice-arc-seq：内弧先亮、外弧后亮，循环）。
  * **收/发两侧字形完全相同、不做镜像**（真机截图确认：白气泡与绿气泡的
- * 图标一致，只是图标贴尾巴一侧摆放——对方在左、我方在右）。颜色差异也按真机：
- * 白气泡图标整体偏灰（.wx-voice-tail-left 上色），绿气泡图标近黑（.wx-voice-tail-right）。
- * playing 时三道弧线加 CSS 动画（globals.css wx-voice-arc-blink：透明度波纹闪烁、由内向外依次），
- * 停止恢复静态。
+ * 图标一致，只是图标贴尾巴一侧摆放——对方在左、我方在右）。
  */
 function WxVoiceIcon({ playing = false }: { playing?: boolean }) {
   return (
-    <span className="flex shrink-0 items-center gap-[2.5px]" aria-hidden="true">
-      {/* 实心喇叭锥体（尖朝右 ▶，指向右侧声波；高约 44% 声波图标） */}
-      <svg viewBox="0 0 8 10" width={8} height={10} fill="none" className="wx-cone shrink-0">
-        <path d="M1.2 0.9 L7 5 L1.2 9.1 Z" fill="currentColor" />
-      </svg>
-      {/* 声波（用户提供的现成 SVG 代码原样使用，18×18）：三道 Q 曲线弧、stroke-width 2、圆头端点；
-          stroke 用 currentColor 适配两端配色（绿气泡近黑 / 白气泡偏灰，与真机一致）；
-          播放中三道弧线加 wx-voice-arc-blink 波纹闪烁动画（globals.css），停止时静态显示 */}
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 24 24"
-        width={18}
-        height={18}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        className="wx-voice-wave shrink-0"
-      >
-        <path className="wx-arc wx-arc-1" d="M8 10 Q 10 12 8 14" />
-        <path className="wx-arc wx-arc-2" d="M12 7 Q 16 12 12 17" />
-        <path className="wx-arc wx-arc-3" d="M16 4 Q 22 12 16 20" />
-      </svg>
-    </span>
+    /* 第 22 轮：单个 SVG 18×18——实心锥体在最左（与弧线拉开一点点间距），
+       两道弧线为用户 SVG 后两道原样保留；播放中弧线从前往后一个一个出现（globals.css），停止静态 */
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      width={18}
+      height={18}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      aria-hidden="true"
+      className="wx-voice-wave shrink-0"
+    >
+      {/* 实心喇叭锥体（三角形，与弧线拉开一点点间距：右缘 x=10 → 内弧 x=12） */}
+      <path className="wx-cone" d="M5.4 7.8 L10 12 L5.4 16.2 Z" fill="currentColor" stroke="none" />
+      {/* 两道声波弧线（用户 SVG 原样保留中弧+外弧；播放中从前往后一个一个出现） */}
+      <path className="wx-arc wx-arc-2" d="M12 7 Q 16 12 12 17" />
+      <path className="wx-arc wx-arc-3" d="M16 4 Q 22 12 16 20" />
+    </svg>
   );
 }
 
@@ -281,8 +276,8 @@ export function VoiceMsgBubble({
         )}
       </button>
       {/* 转文字结果：识别中提示 / 已完成的结果（长按菜单「复制」可复制）。微信端为真机同款
-          「气泡下方白色圆角大气泡」——扁平纯白、大字号、无描边阴影（用户参考截图样式）；
-          QQ / 信息端维持此前的轻量小面板 */}
+          「气泡下方白色面板」——扁平纯白、大字号、无描边阴影，第 22 轮圆角改 4px 与语音气泡同规格
+          （用户：白面板圆角和气泡一样大小）；QQ / 信息端维持此前的轻量小面板 */}
       {voice.stt === 'pending' && (
         <span className="mt-[3px] px-1 text-[12px] leading-[1.4] opacity-50" data-testid="voice-stt-pending">
           转文字中…
@@ -293,7 +288,7 @@ export function VoiceMsgBubble({
           data-testid="voice-transcript"
           className={
             isWx
-              ? `mt-[8px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[12px] bg-white px-[14px] py-[10px] text-[16px] leading-[1.55] dark:bg-[#2C2C2C] ${
+              ? `mt-[8px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[4px] bg-white px-[14px] py-[10px] text-[16px] leading-[1.55] dark:bg-[#2C2C2C] ${
                   mine ? t.ownTranscript : t.peerTranscript
                 }`
               : `mt-[5px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[8px] bg-white px-[12px] py-[10px] text-[12.5px] leading-[1.55] shadow-[0_1px_4px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.05] dark:bg-[#2C2C2C] dark:ring-white/[0.07] ${

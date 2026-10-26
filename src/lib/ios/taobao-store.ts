@@ -881,6 +881,25 @@ export function tbConfirmReceive(uid: string, id: string): boolean {
   return true;
 }
 
+/**
+ * AI 代买直送（第 22 轮，用户：AI 买东西不用等发货，挑好直接送到手上）：
+ * AI 代买的订单付款成功后立即跳过物流链路（待发货→已发货→驿站→取件），直接置为已完成。
+ * 已完成/已取消的单不动；track 补一条直送节点防物流页空轨迹。
+ */
+export function tbInstantCompleteAiOrder(uid: string, id: string): boolean {
+  const list = tbLoadOrders(uid);
+  const hit = list.find((x) => x.id === id);
+  if (!hit || hit.status === 'completed' || hit.status === 'cancelled') return false;
+  const now = Date.now();
+  hit.status = 'completed';
+  hit.paidAt = hit.paidAt ?? now;
+  hit.shipAt = hit.shipAt ?? now;
+  hit.completedAt = now;
+  if (hit.track.length === 0) hit.track = [{ text: '宝贝已由好友直接送到你手上', at: now }];
+  tbSaveOrders(uid, list);
+  return true;
+}
+
 /** 取消订单（仅待付款） */
 export function tbCancelOrder(uid: string, id: string, reason: string): boolean {
   const o = tbOrderById(uid, id);

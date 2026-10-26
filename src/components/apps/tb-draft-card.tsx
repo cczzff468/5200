@@ -5,7 +5,8 @@
  * - AI 输出 [帮你买:商品id|数量?,商品id|数量?,...] 后生成草稿（tb-draft:<did>），卡片实时读 kv；
  *   支持多商品（最多 5 件，跨店会分包裹）；
  * - pending：商品列表 + 店铺 + 数量 + 预估合计 +【确认，让TA买】（→ 按店分组建单 + AI 逐单付款
- *   + 每单一张订单分享卡回聊天）与【不了谢谢】（→ 草稿取消）两个按钮；
+ *   + 付款后**直接送达**（第 22 轮：跳过物流立即已完成）+ 每单一张订单分享卡回聊天）
+ *   与【不了谢谢】（→ 草稿取消）两个按钮；
  * - confirmed：实时跟订单走——内嵌五段实时状态时间线（与订单分享卡同渲染件，监听
  *   tb-orders-changed + 逐秒 tick，发货/物流/签收自动推进；多店多单时跟首单+提示分包裹）
  *   +【查看订单】（跨 App 进淘宝详情）；
@@ -79,7 +80,7 @@ export function TbDraftBubble({
         onToast?.(res.error);
         return;
       }
-      onToast?.(`已下单 ¥${fmt2(res.total)}，${d.charName}已付款`);
+      onToast?.(`已下单 ¥${fmt2(res.total)}，${d.charName}已付款，宝贝直接送到你手上`);
     } finally {
       setBusy(false);
     }
