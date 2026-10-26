@@ -262,6 +262,7 @@ function altDigestEntryOf(raw: unknown, peer: string, appLabel: string): AltDige
       const cardText = (m.card as { text?: unknown } | undefined)?.text;
       text = typeof cardText === 'string' && cardText.trim() ? `[文字图片]（卡片上写着：${cardText.trim()}）` : '[文字图片]';
     } else if (kind === 'redpacket') text = '[红包]';
+    else if (kind === 'giftcard') text = '[礼物]';
     else if (kind === 'transfer') text = '[转账]';
     else if (kind === 'location') text = '[位置]';
     else if (kind === 'forward') text = '[转发消息]';

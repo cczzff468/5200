@@ -8,9 +8,9 @@
  *   （10px 正方形 rotate(45deg)、background-color: inherit 与气泡同色、菱形中心悬在
  *   top 18px＝垂直居中偏上、紧贴气泡左/右边缘，见 globals.css .wx-voice-bubble）；
  *   ⑤ 内部 flex + items-center + justify-between + padding 0 12px；
- *   ⑥ 喇叭图标 18×18（三道声波弧线在左 + 实心锥体朝右 ▶，**两侧同形不镜像**——真机
+ *   ⑥ 喇叭锥体在左 + 用户指定现成 SVG 声波在右（18×18，**两侧同形不镜像**——真机
  *   截图确认收/发气泡图标完全一致，只是位置贴尾巴一侧：对方图标在左、我方图标在右），
- *   播放中三道弧线按 CSS 动画由内向外轮流跳动（globals.css @keyframes wx-voice-arc-blink）；
+ *   播放中三道弧线按 CSS 动画波纹闪烁（globals.css @keyframes wx-voice-arc-blink），停止静态；
  *   ⑦ 时长 13px、#999，只显示数字 + ″（如 2″）；⑧ 颜色：对方 #FFFFFF / 我方 #95EC69，
  *   文字与图标 #000（深色模式保留既有暗色映射）。点击气泡任意处播放/暂停
  *   （全局单例：新播自动停旧，也停 TTS 朗读）
@@ -144,30 +144,40 @@ function VoiceWaveBars({ wave, active, playing, progress, count }: { wave: numbe
 }
 
 /**
- * 微信语音喇叭图标（18×18 撑满，真机同款字形，按真机截图 29:42 比例重构）：
- * 三道声波弧线在左（外弧近满高、弧距均匀、由内向外渐淡）+ 实心锥体在右（尖朝右 ▶，
- * 高约 45%）。**收/发两侧字形完全相同、不做镜像**（真机截图确认：白气泡与绿气泡的
+ * 微信语音喇叭图标：实心锥体（▶ 朝右）在左 + **用户指定现成 SVG 声波**（第 20 轮）在右，
+ * 18×18（viewBox 0 0 24 24，三道 Q 曲线弧、stroke-width 2、圆头端点）。
+ * **收/发两侧字形完全相同、不做镜像**（真机截图确认：白气泡与绿气泡的
  * 图标一致，只是图标贴尾巴一侧摆放——对方在左、我方在右）。颜色差异也按真机：
  * 白气泡图标整体偏灰（.wx-voice-tail-left 上色），绿气泡图标近黑（.wx-voice-tail-right）。
- * playing 时三道弧线由 CSS 动画由内向外轮流跳动（globals.css wx-voice-arc-blink），停止恢复静态。
+ * playing 时三道弧线加 CSS 动画（globals.css wx-voice-arc-blink：透明度波纹闪烁、由内向外依次），
+ * 停止恢复静态。
  */
 function WxVoiceIcon({ playing = false }: { playing?: boolean }) {
   return (
-    <svg
-      viewBox="0 0 18 18"
-      width={18}
-      height={18}
-      fill="none"
-      aria-hidden="true"
-      className="wx-voice-icon shrink-0"
-    >
-      {/* 三道声波弧线（外弧近满高 1→17；播放中依次跳动） */}
-      <path className="wx-arc wx-arc-1" d="M10.9 5.5 A3.5 3.5 0 0 0 10.9 12.5" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" />
-      <path className="wx-arc wx-arc-2" d="M9.9 3 A6 6 0 0 0 9.9 15" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" />
-      <path className="wx-arc wx-arc-3" d="M8.5 1 A8 8 0 0 0 8.5 17" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" />
-      {/* 实心喇叭锥体（尖角朝右 ▶，高约 1/3 气泡图标，与真机一致） */}
-      <path className="wx-cone" d="M11.4 6 L17.4 9 L11.4 12 Z" fill="currentColor" />
-    </svg>
+    <span className="flex shrink-0 items-center gap-[2.5px]" aria-hidden="true">
+      {/* 实心喇叭锥体（尖朝右 ▶，指向右侧声波；高约 44% 声波图标） */}
+      <svg viewBox="0 0 8 10" width={8} height={10} fill="none" className="wx-cone shrink-0">
+        <path d="M1.2 0.9 L7 5 L1.2 9.1 Z" fill="currentColor" />
+      </svg>
+      {/* 声波（用户提供的现成 SVG 代码原样使用，18×18）：三道 Q 曲线弧、stroke-width 2、圆头端点；
+          stroke 用 currentColor 适配两端配色（绿气泡近黑 / 白气泡偏灰，与真机一致）；
+          播放中三道弧线加 wx-voice-arc-blink 波纹闪烁动画（globals.css），停止时静态显示 */}
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        width={18}
+        height={18}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        className="wx-voice-wave shrink-0"
+      >
+        <path className="wx-arc wx-arc-1" d="M8 10 Q 10 12 8 14" />
+        <path className="wx-arc wx-arc-2" d="M12 7 Q 16 12 12 17" />
+        <path className="wx-arc wx-arc-3" d="M16 4 Q 22 12 16 20" />
+      </svg>
+    </span>
   );
 }
 

@@ -92,7 +92,8 @@ import { MtPayBubble, MtProxyDetailPage } from './mt-proxy-detail';
 import { MT_PROXY_CARD_EVENT } from '@/lib/ios/mt-proxy-pay';
 import { MT_SHARE_CARD_EVENT } from '@/lib/ios/mt-order-share';
 import { MtShareBubble } from './mt-share-card';
-import { TbPayBubble, TbProxyDetailPage, TbShareBubble, TbExpressPicker } from './tb-share-cards';
+import { TbPayBubble, TbProxyDetailPage, TbShareBubble } from './tb-share-cards';
+import { WxGiftCardBubble, WxGiftPicker, WxGiftReceiveSheet, type WxGiftData } from './wx-gift';
 import { TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT, tbGetProxy, tbProxyHistoryLine, tbProxyMeHistoryLine, tbReshareProxy, tbCreateOrderShare, stripTbEchoText } from '@/lib/ios/tb-share-proxy';
 import { tbShareHistoryLine } from '@/lib/ios/tb-share-proxy';
 import { TbDraftBubble } from './tb-draft-card';
@@ -438,8 +439,11 @@ interface WxMsg {
   time: number;
   /** 消息类型：默认 text；红包/转账/亲属卡为卡片消息；image 图片；location 位置卡片；sticker 表情包；notice = 红包领取通知；forward = 转发卡片；groupcard = 群聊邀请卡片；relcard = 亲密关系卡片（恋人空间邀请卡/成功卡）；
    *  sys = 拉黑等系统提示（居中灰字胶囊，不进 AI 上下文）；blockreq = 角色发起的「申请解除拉黑」卡片；voice = 语音消息（voice 字段存音频/波形/时长/转写）；call = 语音通话卡片（call 字段存状态/时长/方向）；textcard = 文字图片卡片；mtpay = 美团找人代付卡片（请求/完成）；mtshare = 美团订单分享动态卡片；tbpay = 淘宝代付卡片（请求/完成）；tbshare = 淘宝订单分享动态卡片 */
-  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard' | 'pactcard' | 'examcard' | 'lettercard';
+  kind?: 'text' | 'redpacket' | 'transfer' | 'notice' | 'family' | 'image' | 'location' | 'sticker' | 'forward' | 'groupcard' | 'sys' | 'blockreq' | 'voice' | 'call' | 'textcard' | 'song' | 'mtpay' | 'mtshare' | 'mtdraft' | 'tbpay' | 'tbshare' | 'tbdraft' | 'relcard' | 'pactcard' | 'examcard' | 'lettercard' | 'giftcard';
   rp?: WxRpData;
+  /** 礼物卡片数据（kind='giftcard'，第 20 轮替代原「快递」入口）：礼物快照随消息落库，
+   *  accepted = 收礼弹窗里已点「收下礼物」（持久化，重开弹窗仍显示已收下） */
+  gift?: WxGiftData;
   tr?: WxTrData;
   notice?: WxNoticeData;
   fam?: WxFamData;
@@ -1119,6 +1123,7 @@ function readPreview(contactId: string): { text: string; time: number } {
   if (!last) return { text: '', time: 0 };
   if (last.recalled) return { text: last.role === 'me' ? '你撤回一条消息' : '对方撤回一条消息', time: last.time };
   if (last.kind === 'redpacket') return { text: '[微信红包]', time: last.time };
+  if (last.kind === 'giftcard') return { text: '[礼物]', time: last.time };
   if (last.kind === 'transfer') return { text: '[转账]', time: last.time };
   if (last.kind === 'family') return { text: '[亲属卡]', time: last.time };
   if (last.kind === 'image') return { text: '[图片]', time: last.time };
@@ -3611,7 +3616,7 @@ function WxFcManagePage({
 
 // ---------------- 聊天加号面板 + 红包/转账（对照用户微信截图 1:1） ----------------
 
-type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'offline' | 'textcard' | 'together' | 'express';
+type PlusAction = 'camera' | 'image' | 'voicecall' | 'videocall' | 'redpacket' | 'transfer' | 'location' | 'offline' | 'textcard' | 'together' | 'gift';
 
 /**
  * 「文字图片」弹层（加号面板「文字图片」入口；Task 13 卡片版，无生图依赖）。
@@ -3691,6 +3696,17 @@ function WxTextCardSheet({
   );
 }
 
+/** 红包图标（线描红信封：矩形 + 封口弧 + 圆形封印，替换与「礼物」撞形的 Gift 图标） */
+function RedPacketIcon() {
+  return (
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="4" y="3" width="16" height="18" rx="2.5" />
+      <path d="M4 6.5 C7.5 9.5, 16.5 9.5, 20 6.5" />
+      <circle cx="12" cy="13.5" r="2.6" />
+    </svg>
+  );
+}
+
 /** 加号面板（输入栏下方弹出，输入框跟随保留在面板上方） */
 function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
   const items: Array<{ key: PlusAction; label: string; icon: React.ReactNode }> = [
@@ -3698,13 +3714,13 @@ function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
     { key: 'image', label: '图片', icon: <ImageIcon className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'voicecall', label: '语音通话', icon: <Phone className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'videocall', label: '视频通话', icon: <Video className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
-    { key: 'redpacket', label: '红包', icon: <Gift className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
+    { key: 'redpacket', label: '红包', icon: <RedPacketIcon /> },
     { key: 'transfer', label: '转账', icon: <ArrowLeftRight className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'location', label: '位置', icon: <MapPin className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'offline', label: '线下', icon: <Star className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'textcard', label: '文字图片', icon: <Sparkles className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
     { key: 'together', label: '一起听', icon: <Headphones className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
-    { key: 'express', label: '快递', icon: <Package className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
+    { key: 'gift', label: '礼物', icon: <Gift className="h-[25px] w-[25px]" strokeWidth={1.6} /> },
   ];
   return (
     <div
@@ -4861,7 +4877,7 @@ function ChatPage({
   /** 单聊 @ 提及：键入 @ 唤起联系人浮层，点选后替换该 @ 并插入「@名字 」（与群聊同款交互） */
   const [atOpen, setAtOpen] = useState(false);
   /** 红包/转账发送页 + 位置/文字图片功能页（相机/图片直接调起手机原生能力） */
-  const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | 'textcard' | 'express' | null>(null);
+  const [compose, setCompose] = useState<'redpacket' | 'transfer' | 'location' | 'textcard' | 'gift' | null>(null);
   /** 手动「文字图片」状态（Task 14 卡片版，以「我」的身份发出）：loading / 错误信息（弹层内展示，失败不影响聊天） */
   const [cardBusy, setCardBusy] = useState(false);
   const [cardError, setCardError] = useState('');
@@ -5007,6 +5023,8 @@ function ChatPage({
   const [stickerOpen, setStickerOpen] = useState(false);
   /** 正在查看详情的位置消息 id */
   const [locViewId, setLocViewId] = useState<string | null>(null);
+  /** 收礼弹窗正在查看的礼物消息 id（第 20 轮，点礼物卡片唤起） */
+  const [giftViewId, setGiftViewId] = useState<string | null>(null);
   /** runAiTurn 的稳定引用：发红包/转账（execRedPacket 等定义在 runAiTurn 之前）也要触发 AI 回复，用 ref 中转 */
   const runAiTurnRef = useRef<((userMsg: WxMsg | null, extra?: WxMsg[], sysEvent?: string, baseMsgs?: WxMsg[]) => void) | null>(null);
   /** 聊天设置页（右上角 ··· 进入）：信息卡片/置顶/免打扰/查找聊天记录/回复条数/聊天背景 */
@@ -5116,6 +5134,8 @@ function ChatPage({
   const receiveMsg = receiveId ? msgs.find((m) => m.id === receiveId) ?? null : null;
   const detailMsg = detailId ? msgs.find((m) => m.id === detailId) ?? null : null;
   const locViewMsg = locViewId ? msgs.find((m) => m.id === locViewId) ?? null : null;
+  /** 收礼弹窗（第 20 轮）：点礼物卡片唤起，收下状态随消息持久化 */
+  const giftViewMsg = giftViewId ? msgs.find((m) => m.id === giftViewId && m.gift) ?? null : null;
 
   // 本地持久化：流式中的 AI 回复不进本地 msgs（在全局 store 里），msgs 只含已落盘内容，直接保存
   useEffect(() => {
@@ -6517,7 +6537,7 @@ function ChatPage({
         (m) =>
           // 图片以 [图片] 占位、语音以转写文本/占位、位置以完整位置文本进入历史（本轮图片实际内容由识图模型描述追加在末尾）；
           // 拍一拍系统行（Task 30）也进历史：AI 要知道被拍/拍过谁与文案（按双方名字序列化，无主语歧义）
-          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'relcard' || m.kind === 'pactcard' || m.kind === 'examcard' || m.kind === 'lettercard' || m.kind === 'location' || m.kind === 'song' || (m.kind === 'sys' && !!m.sys?.pat)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
+          (!m.recalled && ((m.content || m.kind === 'sticker' || m.kind === 'image' || m.kind === 'textcard' || m.kind === 'voice' || m.kind === 'call' || m.kind === 'redpacket' || m.kind === 'transfer' || m.kind === 'family' || m.kind === 'groupcard' || m.kind === 'relcard' || m.kind === 'pactcard' || m.kind === 'examcard' || m.kind === 'lettercard' || m.kind === 'giftcard' || m.kind === 'location' || m.kind === 'song' || (m.kind === 'sys' && !!m.sys?.pat)) && !m.content.startsWith('〔') && !m.content.startsWith('（AI'))) as boolean
       )
       .slice(-20)
       .map((m) => {
@@ -6615,6 +6635,11 @@ function ChatPage({
                                 ? tbDraftHistoryLine(m.tbdraft.did)
                                 : m.kind === 'relcard' && m.relcard
                                   ? `[亲密关系卡片：${m.relcard.stage === 'invite' ? `${m.relcard.fromName}邀请${m.relcard.toName}建立情侣关系` : `${m.relcard.fromName}已同意，双方成功建立情侣关系`}，${m.relcard.status === 'pending' ? '待处理' : m.relcard.status === 'accepted' ? '已接受' : '已拒绝'}]`
+                                // 礼物卡片（第 20 轮）：AI 知道谁送了什么、对方收下没有（可自然道谢/追问喜好）
+                                : m.kind === 'giftcard' && m.gift
+                                  ? m.role === 'me'
+                                    ? `[礼物卡片]（你送出${m.gift.bless}，${m.gift.countLabel}，${m.gift.accepted ? '对方已收下' : '待对方收下'}）`
+                                    : `[礼物卡片]（${peer.name}送你${m.gift.bless}，${m.gift.countLabel}，${m.gift.accepted ? '你已收下' : '待你收下'}）`
                                 // 拍一拍系统行（Task 30）：按双方名字显式序列化（文案后缀原样拼接），AI 无主语歧义——
                                 // 「凡凡拍了拍小柚的小脑袋」= 对方拍了你；「小柚拍了拍凡凡的小脸蛋」= 你（AI）拍过对方
                                 : m.kind === 'sys' && m.sys?.pat
@@ -8298,11 +8323,11 @@ function ChatPage({
       setTgPickOpen(true);
       return;
     }
-    if (a === 'express') {
-      // 快递（第七十一轮）：加号面板「快递」入口——列出已确认收货的淘宝订单，可分享给当前聊天好友
+    if (a === 'gift') {
+      // 礼物（第 20 轮，替代原「快递」入口）：选一份礼物，以蓝金星空礼物卡发进当前聊天
       setPlusOpen(false);
       setStickerOpen(false);
-      setCompose('express');
+      setCompose('gift');
       return;
     }
     const label: Record<string, string> = {};
@@ -8765,6 +8790,11 @@ function ChatPage({
                 /* 美团 AI 代点外卖草稿卡（AI [帮点外卖] 生成；机主确认后创建待支付订单并跳收银台） */
                 <div {...bubblePress}>
                   <MtDraftBubble did={m.mtdraft.did} onToast={onToast} />
+                </div>
+              ) : m.kind === 'giftcard' && m.gift ? (
+                /* 礼物卡片（加号面板「礼物」发出，第 20 轮）：蓝金星空卡，点卡开收礼弹窗（收下后按钮置已收下） */
+                <div {...bubblePress}>
+                  <WxGiftCardBubble gift={m.gift} side={m.role === 'me' ? 'right' : 'left'} onClick={() => setGiftViewId(m.id)} />
                 </div>
               ) : m.kind === 'image' && m.img && stackHead.has(i) && !expandedStacks.has(m.id) ? (
                 /* 照片堆叠卡片（连续 ≥4 张的折叠态）：左「展开 N」胶囊 + 主图右侧扇形露边；左滑下一张/右滑上一张、点击开大图。
@@ -9370,22 +9400,42 @@ function ChatPage({
           onSubmit={(t) => void submitTextCard(t)}
         />
       )}
-      {/* 快递页（加号面板「快递」入口）：列出已确认收货的淘宝订单 → 分享给当前聊天好友 */}
-      {compose === 'express' && (
-        <TbExpressPicker
+      {/* 礼物页（加号面板「礼物」入口，替代原快递页）：选礼物 → 蓝金星空礼物卡发进当前聊天 */}
+      {compose === 'gift' && (
+        <WxGiftPicker
           onBack={() => setCompose(null)}
-          onShare={(order) => {
-            void tbCreateOrderShare({ order, idp: 'wx', contactId: peer.id, fromName: me.name })
-              .then((res) => {
-                if (res.ok) {
-                  setCompose(null);
-                  onToast(`已把「${order.shopName}」的快递分享给${res.share.contactName}`);
-                } else {
-                  onToast(res.error);
-                }
-              })
-              .catch(() => onToast('分享失败，请重试'));
+          onSend={(g) => {
+            // 拉黑拦截（与红包同口径）：被角色拉黑后礼物发不出（不落库不触发 AI）
+            if (loadBlock('wx', peer.id).byChar) {
+              onToast('对方已将你拉黑，无法发送');
+              return;
+            }
+            const msg: WxMsg = {
+              id: uid(),
+              role: 'me',
+              content: '',
+              time: Date.now(),
+              kind: 'giftcard',
+              gift: { id: g.id, name: g.name, countLabel: g.countLabel, bless: g.bless, image: g.image, accepted: false },
+            };
+            setMsgs((prev) => [...prev, msg]);
+            setCompose(null);
+            onToast(`已把「${g.name}」送给${peer.name}`);
+            if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
           }}
+        />
+      )}
+      {/* 收礼弹窗（第 20 轮，真机同款）：点礼物卡片唤起——奶油金面板（送礼物/礼物大图/金色祝福语/收下礼物）+ 下方 ✕；
+          收下后写回消息（gift.accepted 持久化），重开弹窗按钮仍显示已收下 */}
+      {giftViewMsg?.gift && (
+        <WxGiftReceiveSheet
+          gift={giftViewMsg.gift}
+          senderName={giftViewMsg.role === 'me' ? me.realName || me.name : peer.nickname || peer.name}
+          onAccept={() => {
+            setMsgs((prev) => prev.map((x) => (x.id === giftViewMsg.id && x.gift ? { ...x, gift: { ...x.gift, accepted: true } } : x)));
+            onToast('已收下礼物');
+          }}
+          onClose={() => setGiftViewId(null)}
         />
       )}
       {/* 一起听选歌弹层（第二十四轮）：选歌 → 我方发邀请卡进聊天，AI 接受后双方发同意卡并建会话 */}
@@ -9458,6 +9508,7 @@ function ChatPage({
                 else if (kind === 'voice') text = m.voice?.transcript?.trim() || '[语音]';
                 else if (kind === 'redpacket') text = '[红包]';
                 else if (kind === 'transfer') text = '[转账]';
+                else if (kind === 'giftcard') text = '[礼物]';
                 else if (kind === 'family') text = '[亲属卡]';
                 else if (kind === 'location') text = `[位置] ${m.loc?.name ?? ''}`;
                 else if (kind === 'call') text = '[语音通话]';

@@ -735,7 +735,7 @@
   100% { transform: translateX(8%); }
 }
 
-/* ───────── 微信语音气泡（voice-bubble.tsx）：伪元素小尾巴 + 播放中弧线跳动（用户指定 1:1 复刻参数） ───────── */
+/* ───────── 微信语音气泡（voice-bubble.tsx）：伪元素小尾巴 + 播放中声波波纹闪烁（第 20 轮：声波改为用户指定现成 SVG 18×18） ───────── */
 .wx-voice-bubble::before {
   content: '';
   position: absolute;
@@ -751,7 +751,7 @@
 .wx-voice-tail-right::before {
   right: -4px; /* 发送方：尾巴紧贴气泡最右侧 */
 }
-/* 静态声波弧线/锥体着色（真机：白气泡图标整体偏灰、绿气泡图标近黑） */
+/* 静态声波弧线/锥体着色（真机：白气泡图标整体偏灰、绿气泡图标近黑；wx-arc-1=最内小弧 → wx-arc-3=最外大弧） */
 .wx-voice-tail-left .wx-cone { opacity: 0.85; }
 .wx-voice-tail-left .wx-arc-1 { opacity: 0.55; }
 .wx-voice-tail-left .wx-arc-2 { opacity: 0.4; }
@@ -760,14 +760,14 @@
 .wx-voice-tail-right .wx-arc-1 { opacity: 1; }
 .wx-voice-tail-right .wx-arc-2 { opacity: 0.85; }
 .wx-voice-tail-right .wx-arc-3 { opacity: 0.7; }
-/* 播放中：三道弧线由内向外轮流跳动 */
+/* 播放中：三道弧线由内向外依次闪烁（透明度波纹效果，用户指定 @keyframes 一闪一闪） */
 @keyframes wx-voice-arc-blink {
-  0%, 100% { opacity: 0.2; }
-  45% { opacity: 1; }
+  0%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
 }
 .wx-voice-playing .wx-arc-1 { animation: wx-voice-arc-blink 0.9s ease-in-out infinite; }
-.wx-voice-playing .wx-arc-2 { animation: wx-voice-arc-blink 0.9s ease-in-out 0.12s infinite; }
-.wx-voice-playing .wx-arc-3 { animation: wx-voice-arc-blink 0.9s ease-in-out 0.24s infinite; }
+.wx-voice-playing .wx-arc-2 { animation: wx-voice-arc-blink 0.9s ease-in-out 0.15s infinite; }
+.wx-voice-playing .wx-arc-3 { animation: wx-voice-arc-blink 0.9s ease-in-out 0.3s infinite; }
 @media (prefers-reduced-motion: reduce) {
   .wx-voice-playing .wx-arc-1,
   .wx-voice-playing .wx-arc-2,

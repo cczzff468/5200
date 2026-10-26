@@ -5,7 +5,8 @@
  * 公共头部（返回/图标/标题「2026/10」/默认视图下拉/搜索/更多）+ 五视图切换胶囊（选中「月」）；
  * 星期表头（周日开头）+ 小米风格月格（今天红方块+底红条、休/班角标、节日红字、日程色点）；
  * 网格下方「选中日期 + 农历 + 当日日程列表」；横滑切月、**纵向下滑进下月 / 上滑进上月**
- * （Task 18-c 首版仅月格，本轮扩至月格+当日行+日程列表整片区域，日程列表可滚动时让位原生滚动）；
+ * （第 20 轮修复：此前只要日程列表可滚动，任意区域的纵向手势都会被误拦——现在只有手势起点
+ * 落在日程列表内才让位原生滚动，月格/当日行/空白区上下滑始终直接切月，列表内边界时接管）；
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
@@ -50,7 +51,7 @@ export function MonthView({
   onOpenEvent: (ev: NormalizedEvent) => void;
 }) {
   const today = todayKey();
-  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const touchStart = useRef<{ x: number; y: number; inList: boolean } | null>(null);
   /** 日程列表滚动容器（纵向手势让位原生滚动的判定依据） */
   const listRef = useRef<HTMLDivElement | null>(null);
   const listScrollAtStart = useRef(0);
@@ -102,13 +103,17 @@ export function MonthView({
       />
 
       {/* 月格 + 当日行 + 日程列表整片为滑动区：横滑切月；下滑进下月（如 10 月→11 月）/
-          上滑进上月，主轴判定避免斜滑误触；列表可滚动且手势期间发生了滚动时让位 */}
+          上滑进上月；只有手势起点落在日程列表内才让位原生滚动（列表可滚动且发生滚动/未到边界时），
+          月格与当日行区域的纵向手势始终直接切月（用户反馈：有日程时月格滑动被误拦） */}
       <div
         className="flex min-h-0 flex-1 flex-col"
         onTouchStart={(e) => {
           const t = e.touches[0];
-          touchStart.current = t ? { x: t.clientX, y: t.clientY } : null;
-          listScrollAtStart.current = listRef.current?.scrollTop ?? 0;
+          const el = listRef.current;
+          touchStart.current = t
+            ? { x: t.clientX, y: t.clientY, inList: !!(el && t.target instanceof Node && el.contains(t.target)) }
+            : null;
+          listScrollAtStart.current = el?.scrollTop ?? 0;
         }}
         onTouchEnd={(e) => {
           const start = touchStart.current;
@@ -118,15 +123,16 @@ export function MonthView({
           const dx = t.clientX - start.x;
           const dy = t.clientY - start.y;
           const el = listRef.current;
-          const scrolled = el ? Math.abs(el.scrollTop - listScrollAtStart.current) > 4 : false;
-          const canScroll = el ? el.scrollHeight - el.clientHeight > 4 : false;
+          // 仅「起点在日程列表内」的手势才参与原生滚动让位判定；月格/当日行始终直接切月
+          const scrolled = start.inList && el ? Math.abs(el.scrollTop - listScrollAtStart.current) > 4 : false;
+          const canScroll = start.inList && el ? el.scrollHeight - el.clientHeight > 4 : false;
           const atTop = el ? el.scrollTop <= 2 : true;
           const atBottom = el ? el.scrollTop + el.clientHeight >= el.scrollHeight - 2 : true;
           // 主轴判定：横向位移占优 → 切月（左=下月）；纵向占优 → 下滑=下月、上滑=上月
           if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy)) shift(dx < 0 ? 1 : -1, 'x');
           else if (Math.abs(dy) >= 48 && Math.abs(dy) > Math.abs(dx) && !scrolled) {
             if (dy > 0) {
-              // 下滑 = 下月：仅在列表无可滚动余量或已滚到顶时接管（不与原生滚动冲突）
+              // 下滑 = 下月：列表内手势仅在无可滚动余量或已滚到顶时接管（不与原生滚动冲突）
               if (!canScroll || atTop) shift(1, 'y');
             } else if (!canScroll || atBottom) {
               shift(-1, 'y');
