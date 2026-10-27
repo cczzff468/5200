@@ -1,6 +1,13 @@
 'use client';
 
 import { create } from 'zustand';
+import {
+  DEFAULT_BUBBLE_STYLE,
+  normalizeBubbleSchemes,
+  normalizeBubbleStyle,
+  type BubbleScheme,
+  type BubbleStyleConfig,
+} from './bubble-style';
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
@@ -353,12 +360,20 @@ interface SettingsState {
   islandPersistent: boolean;
   /** 全局字重（400=标准；300/400/500/600，未显式设 font-weight 的文本生效） */
   appFontWeight: number;
+  /** 聊天气泡装扮（第十七轮：mine=我的气泡 / theirs=TA的气泡，两侧独立；持久化 settings.bubbleStyle，微信/QQ 聊天实时跟随） */
+  bubbleStyle: BubbleStyleConfig;
+  /** 「我的气泡」收藏夹已命名方案（持久化 settings.bubbleSchemes） */
+  bubbleSchemes: BubbleScheme[];
   loaded: boolean;
 
   /** 设置主屏图标风格（立即持久化；HomeScreen/多任务实时响应） */
   setIconStyle: (s: IconStyle) => void;
   /** 设置商品图样式（立即持久化；淘宝/美团全部图位实时响应） */
   setGoodsImgStyle: (s: GoodsImgStyle) => void;
+  /** 设置聊天气泡装扮（立即持久化；微信/QQ 聊天气泡实时响应） */
+  setBubbleStyle: (cfg: BubbleStyleConfig) => void;
+  /** 替换「我的气泡」收藏夹列表（立即持久化） */
+  setBubbleSchemes: (list: BubbleScheme[]) => void;
 
   load: () => Promise<void>;
   /** 锁屏总开关：关闭时同时停用密码并立即回到主屏幕 */
@@ -433,12 +448,14 @@ export const useSettings = create<SettingsState>((set, get) => ({
   islandPersistent: true,
   iconStyle: 'real',
   goodsImgStyle: 'cartoon',
+  bubbleStyle: { ...DEFAULT_BUBBLE_STYLE, mine: { ...DEFAULT_BUBBLE_STYLE.mine }, theirs: { ...DEFAULT_BUBBLE_STYLE.theirs } },
+  bubbleSchemes: [],
   loaded: false,
 
   load: async () => {
     if (get().loaded) return;
     try {
-      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec, islandPersistentRec] = await Promise.all([
+      const [themeRec, wallpaperRec, lockWallpaperRec, apiRec, presetsRec, visionRec, visionPresetsRec, lockRec, profileRec, iconsRec, ttsRec, sttRec, imgGenRec, imgGenPresetsRec, fontRec, fontScaleRec, fontWeightRec, statusBarRec, iconStyleRec, goodsImgStyleRec, themeResetRec, islandPersistentRec, bubbleStyleRec, bubbleSchemesRec] = await Promise.all([
         localDB.get('settings', 'theme'),
         localDB.get('settings', 'wallpaper'),
         localDB.get('settings', 'lockWallpaper'),
@@ -461,6 +478,8 @@ export const useSettings = create<SettingsState>((set, get) => ({
         localDB.get('settings', 'goodsImgStyle'),
         localDB.get('settings', 'themeDefaultLight'),
         localDB.get('settings', 'islandPersistent'),
+        localDB.get('settings', 'bubbleStyle'),
+        localDB.get('settings', 'bubbleSchemes'),
       ]);
 
       // 性能：八个含密文信封的字段并行解密（getKey 并发单飞，密钥只读一次 IDB）——
@@ -771,6 +790,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
         islandPersistent: typeof islandPersistentRec?.value === 'boolean' ? islandPersistentRec.value : true,
         iconStyle,
         goodsImgStyle,
+        // 聊天气泡装扮 + 收藏夹：无记录/脏数据回默认（normalize 内部校验 kind/color/结构）
+        bubbleStyle: normalizeBubbleStyle(bubbleStyleRec?.value),
+        bubbleSchemes: normalizeBubbleSchemes(bubbleSchemesRec?.value),
         loaded: true,
       });
       // 锁屏被用户关闭：本次开机直接进主屏幕（跳过锁屏）
@@ -808,6 +830,18 @@ export const useSettings = create<SettingsState>((set, get) => ({
   setGoodsImgStyle: (s) => {
     set({ goodsImgStyle: s });
     void localDB.put('settings', { key: 'goodsImgStyle', value: s });
+  },
+
+  setBubbleStyle: (cfg) => {
+    const safe = normalizeBubbleStyle(cfg);
+    set({ bubbleStyle: safe });
+    void localDB.put('settings', { key: 'bubbleStyle', value: safe });
+  },
+
+  setBubbleSchemes: (list) => {
+    const safe = normalizeBubbleSchemes(list);
+    set({ bubbleSchemes: safe });
+    void localDB.put('settings', { key: 'bubbleSchemes', value: safe });
   },
 
   setAppFont: (id) => {

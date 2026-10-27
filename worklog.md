@@ -961,3 +961,25 @@ Stage Summary:
 - 推送命令：git push -u origin main（remote 已含 PAT）
 - 环境限制备忘：git fetch/push 直连 github.com 大对象传输可能超时（clone 本次成功，push 351MB 需实测；若超时可考虑浅推送或分批）
 - 等待用户明确本轮要修改/新增的功能需求
+
+---
+Task ID: 18
+Agent: 主控 Agent（Z.ai Code）
+Task: 第十七轮 —— 聊天气泡装扮系统（QQ/微信双入口 + 四种样式 + 双侧独立配色 + 全色彩盘 + 收藏夹持久化）
+
+Work Log:
+- [核心库] 新增 src/lib/ios/bubble-style.ts：BubbleStyleKind（default/rainbow/frosted/glass）/BubbleSideStyle/BubbleStyleConfig/BubbleScheme 类型 + RAINBOW_COLORS 七彩色板 + hex/rgb/hsl/yiq 颜色工具 + normalizeBubbleStyle(Schemes) 读回校验 + bubbleVisual(side,cfg,msgIndex,app) 气泡视觉引擎（七彩=消息序号 %7 循环取色；毛玻璃=rgba 0.52-0.55 底 + backdrop-blur(18px) + 白描边；玻璃=四段斜向渐变 + blur(14px) saturate(160%) + inset 内高光反光条；default+自定义色=纯色；文字色 YIQ 亮度自动黑白；原生默认零覆盖直通）
+- [store] store.ts：SettingsState 增 bubbleStyle/bubbleSchemes + setBubbleStyle/setBubbleSchemes（写穿 IndexedDB settings 键）+ load() Promise.all 增两键读回（normalize 校验，脏数据回默认）
+- [设置页] 新增 src/components/apps/bubble-style-settings.tsx（约 560 行，毛玻璃胶囊风）：顶部实时预览卡（4 条模拟消息+彩色光斑层显模糊效果+头像圆点，所见即所得）→【我的气泡/TA的气泡】分段切换（motion layoutId 滑块，选色只应用当前侧）→ 样式四格（每格迷你双泡真实渲染预览+选中 accent 环+Check）→ 全色彩盘（HSL 三滑条：色相彩虹轨道/饱和度/明度，thumb 底色随当前色，预设 24 色板，恢复默认色按钮；七彩时禁用置灰+提示）→【保存当前设置】accent 渐变胶囊 → 命名弹窗（毛玻璃卡+迷你效果预览+输入框 maxLength16）→「我的气泡」收藏夹（缩略图卡=迷你双泡+方案名+两侧样式/色值摘要+使用中徽章+应用按钮+删除按钮；空态虚线卡）。QQ 蓝 #0099FF / 微信绿 #07C160 accent 随宿主 App
+- [QQ 入口] qq.tsx：MainRoute 增 {page:'dress'}；MeDrawer 增 onOpenDress prop（个性装扮行由 toast 占位改为进入设置页）；SettingsPage 增 onOpenDress（个性装扮与特权外显行同步接通）；渲染分支加 BubbleStylePage
+- [微信入口] wechat.tsx：Page 增 'look'|'dress'；新增 WxLookPage 看一看页（顶部聊天气泡装扮渐变特色卡 + 五彩迷你气泡示意 + 4 条轻量内容流占位）；发现页「看一看」行由 toast 占位改为 setPage('look')；look→dress 渲染分支
+- [气泡渲染] 微信 ChatPage：订阅 bubbleStyle + map 回调内 bvis = bubbleVisual(...)，文字气泡 className/style/小三角全覆盖（三角颜色与 backdrop-filter 跟随气泡本体）；QQ ChatPage：同样接入，另覆盖语音气泡（原内联 #0099FF 处），我方蓝色改走 bvis 通道
+- [E2E] Agent Browser 全链路验证（390×844）：QQ 登录（种 user 档案）→ 动态tab→头像→抽屉→个性装扮→设置页 ✓；七彩选中（预览卡 ME 侧 rgb(255,149,0)橙/index1、rgb(52,199,89)绿/index3 序号递增循环）✓；TA 侧毛玻璃（rgba(255,255,255,0.55)+blur(18px)+白描边）✓；预设色板紫色→TA 变 rgba(175,82,222,0.52) 紫毛玻璃 ✓；保存命名「TA的猛男紫」→收藏夹 1 套 ✓；刷新持久化（方案+装扮状态全保留）✓；QQ 聊天页实测（TA=紫毛玻璃+blur、ME=橙/绿/蓝七彩循环）✓；微信登录→发现→看一看→装扮入口→设置页（微信绿 accent+方案同步显示）✓；微信聊天页实测同款生效（跨 App 全局装扮同步）✓；恢复默认（ME 侧回微信原生绿 #95EC69）✓；收藏夹一键应用（使用中徽章）+删除（回空态）✓；控制台无错误
+- [踩坑记录] ①bubble-style.ts 注释里「bg-*/text-*」的 */ 提前终止块注释致 SWC 语法错→QQ App 静默崩溃（tsc 通过但 Turbopack 缓存坏模块），修复注释后 console 历史残留误导排查，最终清 console 复测确认恢复；②QQ 消息页点头像=closeApp（产品行为），开抽屉须从联系人/动态 tab 头像或消息页右滑；③微信 ChatPage 空会话挂载后 effect 会把空 msgs 写回 kv 覆盖后插入的数据——种消息须在挂载前插入+刷新让 memStore 注水；④agent-browser 的 @ref 在 React 重渲后错位（误点关闭 QQ），改用语义 selector + dispatchEvent 稳定
+- [验证] tsc 0 新增错误（仅 next.config.ts/proactive-msg.ts 既有基线）；变更文件 eslint 0 错误（全量 lint OOM 为仓库既有现象：couple-space.tsx 等 >500KB 大文件）
+
+Stage Summary:
+- 聊天气泡装扮系统完整落地：QQ（个人抽屉›个性装扮 + 设置›个性装扮与特权外显）与微信（发现›看一看›聊天气泡装扮）双入口共享设置页，装扮全局同步两 App 聊天
+- 四种样式（默认纯色/七彩循环/毛玻璃/玻璃反光）+ 我的/TA 双侧独立配色（HSL 全色彩盘+24 预设色）+ 命名收藏夹（缩略图卡一键应用/删除，IndexedDB 持久化）
+- 七彩循环按消息序号递增取色（渲染稳定，发新消息自动换色）；气泡全部内联 style/backdrop-filter 实现，零全局 CSS 污染，深浅色模式原生兼容
+- 关键新文件：src/lib/ios/bubble-style.ts、src/components/apps/bubble-style-settings.tsx；改动：store.ts、qq.tsx、wechat.tsx

@@ -236,6 +236,8 @@ import {
   type MomentRepostRef, markMomentAutoAttempt } from '@/lib/moments';
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, PostMoreMenu, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
+import { BubbleStylePage } from './bubble-style-settings';
+import { bubbleVisual } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -3096,6 +3098,8 @@ function ChatPage({
     return () => window.removeEventListener(VOICE_PLAY_ERROR_EVENT, onVoicePlayError);
   }, [onToast]);
   const apiConfig = useSettings((s) => s.apiConfig);
+  // 第十七轮聊天气泡装扮：订阅全局配置（装扮页修改 → 聊天气泡实时跟随）
+  const bubbleStyle = useSettings((s) => s.bubbleStyle);
   const [msgs, setMsgs] = useState<QQMsg[]>(() => loadMsgs(peer.id));
   // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
   // 每轮 AI 回合开头再异步刷新一次；回合内同步读最近一次构建结果（systemFull 拼装是同步的）
@@ -6798,6 +6802,8 @@ function ChatPage({
           if (m.error) return null;
           const showTime = i === 0 || m.time - msgs[i - 1].time > 5 * 60_000;
           const mine = m.role === 'me';
+          // 第十七轮聊天气泡装扮：按消息序号计算本条气泡视觉（七彩=序号递增循环取色；原生默认时零覆盖直通）
+          const bvis = bubbleVisual(mine ? 'mine' : 'theirs', bubbleStyle, i, 'qq');
           // #38 拼手气红包（count>1）未领完不算结算：领完/退回/拒收/过期才收起「開」入口（与 cardIsFinal 同口径）
           const rpSettled = m.kind === 'redpacket' && m.packet ? Boolean(m.packet.status) || Boolean(m.packet.expired) || (m.packet.claims ?? []).length >= (m.packet.count ?? 1) : false;
           const rpClaimedByMe = m.kind === 'redpacket' && m.packet ? (m.packet.claims ?? []).some((c) => c.name === me.name) : false;
@@ -7164,7 +7170,7 @@ function ChatPage({
                       voice={m.voice}
                       side={m.role}
                       theme="qq"
-                      style={m.role === 'me' ? { backgroundColor: '#0099FF' } : undefined}
+                      style={bvis.override ? bvis.style : m.role === 'me' ? { backgroundColor: '#0099FF' } : undefined}
                     />
                   </div>
                 ) : (
@@ -7172,14 +7178,16 @@ function ChatPage({
                     <div
                       {...bubblePress}
                       className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[10px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
-                        mine
+                        bvis.override
+                          ? bvis.className
+                          : mine
                           ? 'text-white'
                           : // 错误占位消息红字提示（与 chat.tsx 同款：〔消息发送失败…〕/〔对方暂时没有回复…〕）
                             m.error
                             ? 'bg-white text-[#FF3B30] dark:bg-[#2A2C31] dark:text-[#FF6B6B]'
                             : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
                       }`}
-                      style={mine ? { backgroundColor: '#0099FF' } : undefined}
+                      style={bvis.override ? bvis.style : mine ? { backgroundColor: '#0099FF' } : undefined}
                     >
                       {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方） */}
                       {m.quote && (() => {
@@ -12164,6 +12172,7 @@ function MeDrawer({
   onOpenStickers,
   onOpenFavorites,
   onOpenSettings,
+  onOpenDress,
   onOpenAlbum,
   onPatchUser,
   onToast,
@@ -12175,6 +12184,8 @@ function MeDrawer({
   onOpenStickers: () => void;
   onOpenFavorites: () => void;
   onOpenSettings: () => void;
+  /** 第十七轮：个性装扮 → 聊天气泡装扮设置页 */
+  onOpenDress: () => void;
   onOpenAlbum: () => void;
   onPatchUser: (patch: Partial<QQUser>) => void;
   onToast: (m: string) => void;
@@ -12229,7 +12240,7 @@ function MeDrawer({
     { icon: <Star className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '收藏', onClick: () => { close(); window.setTimeout(onOpenFavorites, 240); } },
     { icon: <Smile className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '表情', onClick: () => { close(); window.setTimeout(onOpenStickers, 240); } },
     { icon: <Wallet className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '钱包', onClick: () => { close(); window.setTimeout(onOpenWallet, 240); } },
-    { icon: <Shirt className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '个性装扮', onClick: () => onToast('个性装扮暂未开放') },
+    { icon: <Shirt className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '个性装扮', onClick: () => { close(); window.setTimeout(onOpenDress, 240); } },
   ];
   const rowColors = ['#F5B90F', '#3BA0FF', '#3BA0FF', '#3BA0FF', '#F0479C'];
 
@@ -14280,12 +14291,15 @@ function SettingsPage({
   me,
   onBack,
   onOpenSecurity,
+  onOpenDress,
   onLogout,
   onToast,
 }: {
   me: QQUser;
   onBack: () => void;
   onOpenSecurity: () => void;
+  /** 第十七轮：个性装扮与特权外显 → 聊天气泡装扮设置页 */
+  onOpenDress: () => void;
   onLogout: () => void;
   onToast: (m: string) => void;
 }) {
@@ -14308,7 +14322,7 @@ function SettingsPage({
   const rows: { icon: React.ReactNode; color: string; label: string; hint?: string; onClick?: () => void; testid?: string }[] = [
     { icon: <Bell className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '消息通知', onClick: () => onToast('消息通知暂未开放') },
     { icon: <SlidersHorizontal className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '模式选择', hint: '普通模式', onClick: () => onToast('模式选择暂未开放') },
-    { icon: <Shirt className="h-5 w-5" strokeWidth={1.9} />, color: '#F0479C', label: '个性装扮与特权外显', onClick: () => onToast('个性装扮暂未开放') },
+    { icon: <Shirt className="h-5 w-5" strokeWidth={1.9} />, color: '#F0479C', label: '个性装扮与特权外显', onClick: onOpenDress },
     { icon: <Sparkles className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '头像双击动作', hint: clapShown, onClick: openClap, testid: 'qq-settings-clap' },
     { icon: <Settings className="h-5 w-5" strokeWidth={1.9} />, color: '#3BA0FF', label: '通用', onClick: () => onToast('通用设置暂未开放') },
   ];
@@ -16738,6 +16752,7 @@ type MainRoute =
   | { page: 'zone-compose'; /** 与 zone 同源（写说说返回时保留「我的空间」语境） */ scope?: 'mine'; from?: 'profile' }
   | { page: 'zone-notices' }
   | { page: 'momentsSettings' }
+  | { page: 'dress' }
   | { page: 'settings' }
   | { page: 'security' }
   | { page: 'stickers' }
@@ -17356,6 +17371,8 @@ function MainScreen({
           onReply={replyToQqNotice}
           renderAvatar={(src, name, size) => <QqAvatar src={src} alt={name} size={size} />}
         />
+      ) : route.page === 'dress' ? (
+        <BubbleStylePage app="qq" onBack={() => openTabs('消息')} onToast={showToast} />
       ) : route.page === 'momentsSettings' ? (
         <MomentsSettingsPage
           app="qq"
@@ -17377,6 +17394,7 @@ function MainScreen({
           me={me}
           onBack={() => openTabs('消息')}
           onOpenSecurity={() => setRoute({ page: 'security' })}
+          onOpenDress={() => setRoute({ page: 'dress' })}
           onLogout={onLogout}
           onToast={showToast}
         />
@@ -17541,6 +17559,10 @@ function MainScreen({
           onOpenWallet={() => setRoute({ page: 'wallet' })}
           onOpenStickers={() => setRoute({ page: 'stickers' })}
           onOpenFavorites={() => setRoute({ page: 'favorites' })}
+          onOpenDress={() => {
+            setDrawerOpen(false);
+            setRoute({ page: 'dress' });
+          }}
           onOpenAlbum={() => {
             setDrawerOpen(false);
             setRoute({ page: 'album', albumContactId: me.id, albumTitle: '我的相册' });

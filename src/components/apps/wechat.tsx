@@ -60,6 +60,7 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
+  Palette,
 } from 'lucide-react';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
@@ -226,6 +227,8 @@ import {
   markMomentAutoAttempt } from '@/lib/moments';
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
+import { BubbleStylePage } from './bubble-style-settings';
+import { bubbleVisual } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
 // 第三十四轮：添加账号弹层（AccountAddSheet）删除——「添加账号」改为直接用账号密码登录（LoginScreen）
@@ -4863,6 +4866,8 @@ function ChatPage({
     return () => window.removeEventListener(VOICE_PLAY_ERROR_EVENT, onErr);
   }, [onToast]);
   const apiConfig = useSettings((s) => s.apiConfig);
+  // 第十七轮聊天气泡装扮：订阅全局配置（装扮页修改 → 聊天气泡实时跟随）
+  const bubbleStyle = useSettings((s) => s.bubbleStyle);
   const [msgs, setMsgs] = useState<WxMsg[]>(() => loadMsgs(peer.id));
   // 40-b 跨 App 环境感知：会话打开即预热（其他三个 App 最近原始消息 + 共同群近况），
   // 每轮 AI 回合开头再异步刷新一次；回合内同步读最近一次构建结果（systemFull 拼装是同步的）——
@@ -8698,6 +8703,8 @@ function ChatPage({
           // 动作描写开启时气泡正文（剥离描写并整理空白；actView 为 null 时保持原文）
           const actBody = actView && actView.text ? actView.text : null;
           const bubbleContent = actBody ?? m.content;
+          // 第十七轮聊天气泡装扮：按消息序号计算本条气泡视觉（七彩=序号递增循环取色；原生默认时零覆盖直通）
+          const bvis = bubbleVisual(m.role === 'me' ? 'mine' : 'theirs', bubbleStyle, i, 'wx');
           // 空白气泡防御：对方纯文本消息清洗后没有任何可见内容（历史脏数据/空段/纯不可见字符）
           // → 整行不渲染气泡（与「整条只有动作描写」同分支：多选模式保留勾选圈行，其余渲染为空）
           const bubbleBlank =
@@ -9133,19 +9140,27 @@ function ChatPage({
                   <div
                     {...bubblePress}
                     className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[5px] px-3 py-2 text-[16px] leading-[1.45] ${
-                      m.role === 'me'
+                      bvis.override
+                        ? bvis.className
+                        : m.role === 'me'
                         ? 'bg-[#95EC69] text-black dark:bg-[#3EB575] dark:text-black'
                         : 'bg-white text-black dark:bg-[#1E1E1E] dark:text-white'
                     }`}
+                    style={bvis.override ? bvis.style : undefined}
                   >
-                    {/* 气泡小三角（微信同款） */}
+                    {/* 气泡小三角（微信同款；装扮生效时颜色/滤镜跟随气泡本体） */}
                     <span
                       aria-hidden="true"
                       className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
-                        m.role === 'me'
+                        bvis.override
+                          ? m.role === 'me'
+                            ? '-right-[3px]'
+                            : '-left-[3px]'
+                          : m.role === 'me'
                           ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]'
                           : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
                       }`}
+                      style={bvis.override ? bvis.tail : undefined}
                     />
                     {bubbleContent ? (
                       /* 文字消息：内置表情代码 [微笑] 还原为内联小图（混排小图/纯表情大图，真机同款） */
@@ -13233,7 +13248,96 @@ type Page =
   | 'album'
   | 'search'
   | 'momentsSettings'
-  | 'accountSwitch';
+  | 'accountSwitch'
+  | 'look'
+  | 'dress';
+
+// ---------------- 看一看页（发现页 › 看一看：顶部「聊天气泡装扮」入口 + 轻量内容流） ----------------
+
+/** 看一看轻量内容流（占位卡：标题 + 来源 + 摘要灰条） */
+const LOOK_FEED: { title: string; source: string }[] = [
+  { title: '两个人最舒服的相处方式，是「分享欲」一直在', source: '情感研究所' },
+  { title: '把日常拍成电影感：手机光影小技巧合集', source: '摄影日记' },
+  { title: '今天也要好好吃饭：一周家常菜单灵感', source: '下厨房生活家' },
+  { title: '那些藏在聊天记录里的小心动', source: '夜谈心' },
+];
+
+function WxLookPage({ onBack, onOpenDress, onToast }: { onBack: () => void; onOpenDress: () => void; onToast: (m: string) => void }) {
+  return (
+    <div className="absolute inset-0 z-20 flex flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-look-page">
+      <div className="shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
+        <div className="flex h-11 items-center px-2">
+          <button type="button" aria-label="返回" data-testid="wx-look-back" onClick={onBack} className="active:opacity-60">
+            <ChevronLeft className="h-7 w-7" strokeWidth={2} />
+          </button>
+          <div className="flex-1 text-center text-[17px] font-medium">看一看</div>
+          <span className="w-[46px]" />
+        </div>
+      </div>
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-2">
+        {/* 聊天气泡装扮入口（第十七轮）：渐变特色卡 */}
+        <button
+          type="button"
+          data-testid="wx-look-dress-entry"
+          onClick={onOpenDress}
+          className="relative w-full overflow-hidden rounded-[16px] p-4 text-left shadow-[0_8px_24px_rgba(7,193,96,0.28)] ring-1 ring-white/60 transition-transform active:scale-[0.98]"
+          style={{ background: 'linear-gradient(120deg, #07C160 0%, #05A653 58%, #04934A 100%)' }}
+        >
+          <span aria-hidden="true" className="absolute -right-5 -top-7 h-24 w-24 rounded-full bg-white/15 blur-xl" />
+          <span aria-hidden="true" className="absolute -bottom-8 right-10 h-20 w-20 rounded-full bg-[#FFCC00]/25 blur-xl" />
+          <div className="relative flex items-center gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[13px] bg-white/20 ring-1 ring-white/40 backdrop-blur-md">
+              <Palette className="h-6 w-6 text-white" strokeWidth={2} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[16.5px] font-bold text-white">聊天气泡装扮</p>
+              <p className="mt-0.5 text-[12.5px] leading-tight text-white/85">七彩 / 毛玻璃 / 玻璃 · 我的与TA的独立配色</p>
+            </div>
+            <ChevronRight className="h-5 w-5 shrink-0 text-white/85" aria-hidden="true" />
+          </div>
+          {/* 三枚迷你气泡示意 */}
+          <div className="relative mt-3 flex items-center gap-1.5">
+            <span className="rounded-full bg-[#FF3B30] px-2.5 py-[3px] text-[10.5px] font-semibold text-white">早</span>
+            <span className="rounded-full bg-[#FFCC00] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">上</span>
+            <span className="rounded-full bg-[#34C759] px-2.5 py-[3px] text-[10.5px] font-semibold text-white">好</span>
+            <span className="rounded-full bg-[#3D9BFF] px-2.5 py-[3px] text-[10.5px] font-semibold text-white">呀</span>
+            <span className="rounded-full bg-[#AF52DE] px-2.5 py-[3px] text-[10.5px] font-semibold text-white">~</span>
+            <span className="ml-auto rounded-full bg-white/20 px-2 py-[3px] text-[10.5px] text-white ring-1 ring-white/40 backdrop-blur-md">去装扮</span>
+          </div>
+        </button>
+
+        {/* 轻量内容流 */}
+        <p className="mb-2 mt-5 px-1 text-[12.5px] font-medium text-black/40 dark:text-white/40">大家都在看</p>
+        <div className="space-y-2.5">
+          {LOOK_FEED.map((f, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onToast('内容即将上线')}
+              className="flex w-full items-center gap-3 rounded-[14px] bg-white p-3 text-left ring-1 ring-black/[0.04] transition-transform active:scale-[0.98] dark:bg-[#1B1B1B] dark:ring-white/[0.06]"
+            >
+              <span className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-[#DFEBE3] to-[#C9E4D5] dark:from-[#22302A] dark:to-[#1A2621]">
+                <span className="text-[20px]" aria-hidden="true">
+                  {['♡', '✧', '❋', '☾'][i % 4]}
+                </span>
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[15px] font-medium leading-snug">{f.title}</span>
+                <span className="mt-1.5 flex items-center gap-2">
+                  <span className="h-[6px] w-[6px] rounded-full bg-black/15 dark:bg-white/20" aria-hidden="true" />
+                  <span className="h-[6px] w-[76px] rounded-full bg-black/[0.08] dark:bg-white/10" aria-hidden="true" />
+                  <span className="text-[11.5px] text-black/40 dark:text-white/40">{f.source}</span>
+                </span>
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 // ---------------- 搜索页（对照微信真机：返回 + 搜索框「搜索本地或网络结果」+ 最近在搜 + 本地/网络结果） ----------------
 
@@ -14914,6 +15018,15 @@ function MainScreen({
     );
   if (page === 'services') return <WxServices friends={friends} myRealName={myRealName} onExit={() => setPage('main')} />;
   if (page === 'stickers') return <WxStickersPage onBack={() => setPage('main')} onToast={showToast} />;
+  if (page === 'look')
+    return (
+      <WxLookPage
+        onBack={() => setPage('main')}
+        onOpenDress={() => setPage('dress')}
+        onToast={showToast}
+      />
+    );
+  if (page === 'dress') return <BubbleStylePage app="wx" onBack={() => setPage('look')} onToast={showToast} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'album') {
     // 我的主页「相册」入口：当前用户自己的相册（可增删改）
@@ -15339,7 +15452,7 @@ function MainScreen({
               <WxMenuRow
                 first
                 label="看一看"
-                onClick={() => showToast('「看一看」暂未开放')}
+                onClick={() => setPage('look')}
                 icon={<WxIcStories />}
               />
               <WxMenuRow
