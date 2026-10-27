@@ -983,3 +983,25 @@ Stage Summary:
 - 四种样式（默认纯色/七彩循环/毛玻璃/玻璃反光）+ 我的/TA 双侧独立配色（HSL 全色彩盘+24 预设色）+ 命名收藏夹（缩略图卡一键应用/删除，IndexedDB 持久化）
 - 七彩循环按消息序号递增取色（渲染稳定，发新消息自动换色）；气泡全部内联 style/backdrop-filter 实现，零全局 CSS 污染，深浅色模式原生兼容
 - 关键新文件：src/lib/ios/bubble-style.ts、src/components/apps/bubble-style-settings.tsx；改动：store.ts、qq.tsx、wechat.tsx
+
+---
+Task ID: migration-0
+Agent: main-agent (Z.ai Code)
+Task: 从 GitHub 拉取 cczzff468/5200 仓库并完整迁移到当前沙箱环境，恢复可开发状态
+
+Work Log:
+- 克隆 https://github.com/cczzff468/5200.git 到 /home/z/repo-5200（备份保留）
+- 停止沙箱原脚手架 dev server，清理脚手架代码（src/prisma/public/mini-services 等）
+- 完整复制仓库内容（含 .git 历史，17 轮迭代记录）到 /home/z/my-project
+- bun install 安装全部依赖（401 包，含 three/@react-three/*/idb/leaflet/web-push/speech-asr 等新增依赖）
+- bun run db:generate + db:push：Prisma Client 生成成功，custom.db schema 已同步（仓库自带数据完整保留）
+- mini-services/netease-api 单独 bun install（694 包）
+- 配置 git remote origin（嵌入 PAT，可直接 git push 推送回 GitHub），分支 main
+- 后台启动 dev server（Next 16.4.3 Turbopack，port 3000），instrumentation 自动拉起 ncm-keeper（netease-api :3010 正常）
+
+Stage Summary:
+- 迁移完成，应用全功能恢复：锁屏渲染正常（时间/农历/天气/电池/日历小组件）、上滑解锁正常、主屏正常、设置 App 打开正常、/api/weather 返回 200
+- 浏览器 0 error / 0 console error；dev.log 仅存已知的 instrumentation Edge Runtime 无害警告（仓库设计如此）
+- netease-api(3010) 常驻运行；数据库 db/custom.db 携带历史数据
+- git：origin 已配置 PAT，main 分支与远端同步，可直接 commit + push
+- 待用户明确下一轮要修改/新增的功能需求
