@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react';
 import { Bike, Check, ChevronRight, CircleCheck, Clock as ClockIcon, ShieldCheck, Store } from 'lucide-react';
 import { FoodImg } from './mt-food-img';
+import { mtProductImgOverride } from '@/lib/ios/meituan-data';
 import { mtGetShare, mtShareOrderOf, mtShareStagesOf, type MtOrderShare } from '@/lib/ios/mt-order-share';
 import type { MtOrder } from '@/lib/ios/meituan-store';
 import { navigateToChatSession } from '@/lib/ios/island-notify';
@@ -181,7 +182,7 @@ export function MtShareBubble({ sid, side = 'right' }: { sid: string; side?: 'le
 
       {/* 买的什么（商品行，最多 2 行 + 汇总） */}
       <span className="relative mt-1.5 flex items-center gap-2 rounded-[10px] bg-[#F8F8F8] px-2 py-2">
-        <FoodImg src={share.items[0]?.img ?? share.merchantImg} emoji={share.items[0]?.emoji ?? share.merchantEmoji} className="h-9 w-9 shrink-0 rounded-md" />
+        <FoodImg src={(share.items[0]?.dishId ? mtProductImgOverride(share.items[0].dishId) : null) ?? share.items[0]?.img ?? share.merchantImg} emoji={share.items[0]?.emoji ?? share.merchantEmoji} className="h-9 w-9 shrink-0 rounded-md" />
         <span className="min-w-0 flex-1">
           {share.items.slice(0, 2).map((it, i) => (
             <span key={i} className="block truncate text-[12px] leading-[1.5] text-black/75">

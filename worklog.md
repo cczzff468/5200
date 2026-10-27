@@ -787,3 +787,25 @@ Stage Summary:
 - 第十三轮全部落地：AI 买不到就自创（淘宝宝贝级/美团店级+菜品级）+ 决策额度不再空耗 + 美团冷却彻底删除 + 兜底保送到（淘宝+美团双端）
 - 关键决策：兜底触发从「AI承诺才买」放宽为「机主明确要买且 AI 未婉拒」（用户核心诉求是必须送到）；自创商品用本地启发式（不阻塞同步执行链），图走本地卡图按关键词映射
 - 遗留选项清单已列给用户：QQ端礼物卡/帮你买/送礼物补齐方案、QQ亲属卡、自主额度2次/天是否上调、自主链刷新断链、QQ端教学矛盾（承诺纪律vs执行器拒绝）
+
+---
+Task ID: 14
+Agent: Z.ai Code (main)
+Task: 第十四轮反馈（用户三选项）——①自主决策额度每天2件→5件 ②自主决策链刷新即断→手机开机常驻调度 ③AI自创商品用真图（走设置→图像生成）
+
+Work Log:
+- [额度5件] couple-ai.ts AUTONOMY_LEFT_PER_DAY 2→5 + 相关注释同步（恋人人更勤快）
+- [常驻调度] 新建 src/components/ios/CoupleResidentWatcher.tsx（PhoneShell dynamic 挂载，模式与 ProactiveMsgWatcher 同款）：首跳10s+每60s自检，读 invite meta → runCoupleAiTick（内部按联系人+日期幂等：同日重复调用只补挂无核定时器；跨天 schedKey 变化自动起新链）→ 刷新/重开手机自动续链，不再依赖先打开恋人空间；PhoneShell.tsx 挂载点+注释
+- [AI自创商品真图] 新建 src/lib/ios/ai-product-img.ts：fireAiProductImg(kind,id,name) fire-and-forget——「设置›图像生成」当前配置/预设优先（generateFreePhoto 同管线），未配置兜底新路由 /api/ai-product-img（服务端 z-ai SDK 文生图1024，开箱即真图）；同名去重（跨回合重复创建不重复烧图）+并发上限2排队；成功写既有覆盖管线（tbSetProductImg/mtSetProductImg/AI店门头 mutate+重注册，全部自动持久化）+广播 AI_PRODUCT_IMG_EVENT；卡通图兜底永不阻塞下单主链路
+- [触发点] tb-ai-engage.ts ensureTbProductAi → fireAiProductImg('tb')；mt-ai-engage.ts ensureDish → ('mt-dish')、ensureMerchantForAi → ('mt-cover')
+- [渲染点实时升级] taobao-data.ts/meituan-data.ts 导出 tb/mtProductImgOverride 读覆盖；taobao-store.ts 新增 tbGiftLiveImg（礼物卡 tb:pid/订单id→首件→覆盖）；wx-gift.tsx 礼物弹窗大图+礼物页列表图实时解析；tb-draft-card.tsx 商品行/mt-draft-card.tsx 菜品行按 id 解析覆盖；wechat.tsx 聊天页+taobao.tsx/meituan.tsx 根组件监听 AI_PRODUCT_IMG_EVENT 轻量重渲染（快照消息不改写）
+- [订单图回填bug修复] meituan-store.ts mtBackfillOrderImgs 原只查种子表 MT_MERCHANTS——AI 自创店（aimt-*）/AI补菜（aidish-*）的订单永远回填不到真图；改 mtMerchantOf+mtDealOf，且 AI 店/AI 菜订单始终跟随最新生成图（下单瞬间真图未生成完的快照也要升级），种子店种子菜保持快照优先语义不变
+- [美团分享卡升级] mt-order-share.ts MtShareItem 增加 dishId（构建+解析透传）；mt-share-card.tsx 首商品图按 dishId 实时解析覆盖
+- [E2E实测 390×844] 重建测试环境（联系人建 USER小柚/CHAR凡凡+互加好友+微信/QQ凭据）→ 淘宝/美团均登录 → 「帮我买草莓造型夜灯」：AI 自创宝贝→礼物卡→收下→弹窗 188px 写实草莓真图（/api/ai-product-img 200 28s）→淘宝搜索/详情页全屏真图；「点蒜蓉小龙虾外卖」：AI 自主开店下单（好友代付语义正确）→2单全部显示小龙虾写实真图（回填修复后）；聊天订单卡时间线推进+官方保障+已买单正常
+- [常驻调度实测] 绑定恋人空间（凡凡主动邀请+我方发邀双向通）→ 刷新页面后【不打开恋人空间】等150s：couple-autonomy-quota {left:5→4}（自主完成1件）→再等200s left→3（链式150~330s续接成功）——刷新即断问题根治实锤
+- eslint 改动文件全部 0 问题（三大组件 SIGKILL 内存受限，以 dev 编译+实机跑通为准）
+
+Stage Summary:
+- 第十四轮三项全部落地并实机验证：额度5件、开机常驻调度（刷新不断链）、AI自创商品/菜品/门头自动生成写实真图（设置›图像生成优先+服务端SDK兜底开箱即用）
+- 顺手修复2个真图可达性 bug：美团订单图回填只查种子表（AI店订单永远emoji）、分享卡无 dishId 无法实时升级
+- 关键文件：ai-product-img.ts(新)、/api/ai-product-img/route.ts(新)、CoupleResidentWatcher.tsx(新)、couple-ai.ts、PhoneShell.tsx、tb-ai-engage.ts、mt-ai-engage.ts、taobao-data.ts、meituan-data.ts、meituan-store.ts、taobao-store.ts、wx-gift.tsx、tb-draft-card.tsx、mt-draft-card.tsx、mt-order-share.ts、mt-share-card.tsx、wechat.tsx、taobao.tsx、meituan.tsx

@@ -19,6 +19,7 @@ import { TbImg } from './tb-img';
 import { TbShareTimeline } from './tb-share-cards';
 import { TB_DRAFT_EVENT, tbConfirmAiDraft, tbDeclineAiDraft, tbDraftEstimate, tbGetDraft } from '@/lib/ios/tb-ai-engage';
 import { tbLoadOrders, type TbOrder } from '@/lib/ios/taobao-store';
+import { tbProductImgOverride } from '@/lib/ios/taobao-data';
 import { navigateToChatSession } from '@/lib/ios/island-notify';
 
 const fmt2 = (n: number): string => {
@@ -118,7 +119,7 @@ export function TbDraftBubble({
       <div className="mt-2 space-y-1.5">
         {d.items.map((it) => (
           <div key={it.pid} className="flex items-center gap-2 rounded-[10px] bg-[#FAFAFB] p-2">
-            <TbImg src={it.img} alt={it.title} cap={it.title} className="h-10 w-10 shrink-0 rounded-md" />
+            <TbImg src={tbProductImgOverride(it.pid) ?? it.img} alt={it.title} cap={it.title} className="h-10 w-10 shrink-0 rounded-md" />
             <div className="min-w-0 flex-1">
               <p className="line-clamp-2 text-[12.5px] leading-[17px] text-black/80">{it.title}</p>
               <p className="mt-0.5 text-[10.5px] text-black/35">{multiShop ? `${it.shopName} · ` : ''}×{it.qty}</p>

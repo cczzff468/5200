@@ -16,7 +16,8 @@
 
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { tbCompletedOrders } from '@/lib/ios/tb-share-proxy';
-import type { TbOrder } from '@/lib/ios/taobao-store';
+import { tbGiftLiveImg, type TbOrder } from '@/lib/ios/taobao-store';
+import { tbProductImgOverride } from '@/lib/ios/taobao-data';
 
 /** 礼物快照（随消息落库；淘宝来源 = 已收货订单的首商品） */
 export interface WxGiftData {
@@ -204,7 +205,7 @@ export function WxGiftPicker({
               return (
                 <div key={o.id} className="rounded-2xl bg-white p-3 shadow-[0_2px_10px_rgba(122,92,48,0.06)]" data-testid={`wx-gift-item-${o.id}`}>
                   <div className="flex items-center gap-2.5">
-                    <img src={first?.img} alt={first?.title ?? ''} className="h-[52px] w-[52px] shrink-0 rounded-lg object-cover" />
+                    <img src={first?.pid ? tbProductImgOverride(first.pid) ?? first.img : first?.img} alt={first?.title ?? ''} className="h-[52px] w-[52px] shrink-0 rounded-lg object-cover" />
                     <div className="min-w-0 flex-1">
                       <p className="line-clamp-1 text-[13px] font-medium leading-[18px] text-[#5C4526]">{first?.title ?? '宝贝'}</p>
                       <p className="mt-0.5 truncate text-[11px]" style={{ color: 'rgba(160,124,66,0.6)' }}>
@@ -261,7 +262,7 @@ export function WxGiftReceiveSheet({
         <p className="text-[15px] font-medium" style={{ color: '#C9A063' }}>{senderName}送的礼物</p>
         <p className="mt-1 text-[17px] font-medium" style={{ color: '#C9A063' }}>送你一份心意</p>
 
-        <img src={gift.image} alt={gift.name} className="mx-auto mt-5 h-[188px] w-[188px] rounded-[12px] object-cover" />
+        <img src={tbGiftLiveImg(gift.id, gift.image)} alt={gift.name} className="mx-auto mt-5 h-[188px] w-[188px] rounded-[12px] object-cover" />
 
         <button
           type="button"

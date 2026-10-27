@@ -30,6 +30,7 @@
  * - 隔离：草稿按美团 uid + 角色双写；记忆按角色 contactId（既有机制）；不涉及真实资金。
  */
 import { kvGet, kvSet } from './idb-kv';
+import { fireAiProductImg } from './ai-product-img';
 import { getContact, listContacts, ownerProfileFor, cachedOwnerName, cachedContactRealName } from './contacts-store';
 import { avatarFor, type ContactRecord } from '../contacts';
 import { getMemSettings } from '@/lib/memory';
@@ -246,6 +247,13 @@ function ensureDish(merchant: MtMerchant, name: string): MtDish {
     monthSale: 12 + Math.floor(Math.random() * 87),
   };
   mtRegisterAiDish(merchant.id, dish);
+  // 第十四轮：AI 自创菜品自动生成写实美食图（设置›图像生成优先，内置服务端兜底；
+  // fire-and-forget 不阻塞下单，成功后覆盖管线落库+广播事件，菜单/订单即时换真图）
+  try {
+    fireAiProductImg('mt-dish', dish.id, clean);
+  } catch {
+    /* 生图调度失败不影响本次下单 */
+  }
   return dish;
 }
 
@@ -316,6 +324,12 @@ function ensureMerchantForAi(idOrName: string): MtMerchant | null {
     mtRegisterAiMerchant(merchant);
   } catch {
     /* 持久化失败不影响本次下单 */
+  }
+  // 第十四轮：AI 自主入驻的店自动生成写实门头图（同上 fire-and-forget）
+  try {
+    fireAiProductImg('mt-cover', merchant.id, name);
+  } catch {
+    /* 生图调度失败不影响本次下单 */
   }
   return merchant;
 }

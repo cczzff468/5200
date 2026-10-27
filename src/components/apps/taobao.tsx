@@ -112,6 +112,7 @@ import {
   type TbProduct,
   type TbShop,
 } from '@/lib/ios/taobao-data';
+import { AI_PRODUCT_IMG_EVENT } from '@/lib/ios/ai-product-img';
 import {
   TB_CC_SEEDS,
   TB_COUPON_SEEDS,
@@ -7779,6 +7780,8 @@ function TbShareOrderSheet({
 export default function TaobaoApp() {
   const [booting, setBooting] = useState(true);
   const [session, setSession] = useState<TbSession | null>(null);
+  // AI 自创商品真图就绪刷新钟（仅触发重渲染，值本身不参与渲染）
+  const [, setAiImgTick] = useState(0);
   const [page, setPage] = useState<TbPage>('main');
   const [tab, setTab] = useState<TbTab>('home');
   const [cartCount, setCartCount] = useState(0);
@@ -7855,6 +7858,14 @@ export default function TaobaoApp() {
     };
     window.addEventListener(ISLAND_NAV_EVENT, onNav);
     return () => window.removeEventListener(ISLAND_NAV_EVENT, onNav);
+  }, []);
+
+  // AI 自创宝贝真图生成完成（第十四轮）：商品图渲染时实时读覆盖，真图落库广播事件 →
+  // 根组件计一次刷新钟，打开中的搜索/详情/订单页立即从卡通图升级成真图（无覆盖时不重复渲染）
+  useEffect(() => {
+    const fn = () => setAiImgTick((t) => t + 1);
+    window.addEventListener(AI_PRODUCT_IMG_EVENT, fn);
+    return () => window.removeEventListener(AI_PRODUCT_IMG_EVENT, fn);
   }, []);
 
   // 头像/昵称跟随全局账号信息（与美团同款）：联系人 App / 微信 / QQ 里改头像、改昵称保存后，

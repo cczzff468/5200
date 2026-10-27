@@ -22,6 +22,7 @@ import {
   tbShopIdForTag,
   tbRegisterCustomProduct,
   tbUnregisterCustomProduct,
+  tbProductImgOverride,
   TB_SHOPS,
   type TbProduct,
   type TbShop,
@@ -618,6 +619,26 @@ export function tbSaveOrders(uid: string, list: TbOrder[]): void {
 
 export function tbOrderById(uid: string, id: string): TbOrder | undefined {
   return tbLoadOrders(uid).find((o) => o.id === id);
+}
+
+/**
+ * 礼物卡真图实时解析（第十四轮）：礼物 image 是发出瞬间的快照——AI 自创宝贝的写真图
+ * 生成较慢（数秒～数十秒），落库后卡片要能升级：AI 送（gift.id = `tb:商品id`）直接查
+ * 商品图覆盖；订单送礼（gift.id = 订单 id）查首件商品的覆盖；无覆盖回退快照。
+ */
+export function tbGiftLiveImg(giftId: string, fallback: string): string {
+  try {
+    let pid = giftId.startsWith('tb:') ? giftId.slice(3) : '';
+    if (!pid) {
+      const s = tbGetSession();
+      if (!s) return fallback;
+      pid = tbOrderById(tbUidOf(s), giftId)?.items[0]?.pid ?? '';
+    }
+    if (!pid) return fallback;
+    return tbProductImgOverride(pid) ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 /** 标记订单已作为礼物送出（微信礼物页过滤用；幂等，已标记不重写）：

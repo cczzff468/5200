@@ -14,7 +14,7 @@ import { accLs, getActiveAccountFor, isForceLoginWallActive } from '@/lib/ios/ac
 import { getContact, listContacts } from '@/lib/ios/contacts-store';
 import type { ContactRecord } from '@/lib/contacts';
 import { avatarFor } from '@/lib/contacts';
-import { MT_COUPON_SEED, MT_COUPON_TYPE_LABEL, MT_GOD_CLAIMS, MT_DEALS, MT_MERCHANTS, mtDishesOf, mtImg, type MtCouponSeed, type MtCouponType, type MtMerchant, type MtShopCouponDef } from './meituan-data';
+import { MT_COUPON_SEED, MT_COUPON_TYPE_LABEL, MT_GOD_CLAIMS, MT_DEALS, MT_MERCHANTS, mtDealOf, mtDishesOf, mtImg, mtMerchantOf, type MtCouponSeed, type MtCouponType, type MtMerchant, type MtShopCouponDef } from './meituan-data';
 import type { OrderCustomMeta } from './order-custom';
 import { normalizeOrderCustom } from './order-custom';
 
@@ -588,17 +588,24 @@ export function mtLoadOrders(uid: string): MtOrder[] {
   ));
 }
 
-/** 订单图片补全（需求「订单所有的图片补充完整」）：历史订单缺图时按 商品图→团购图→商家图 逐级回填 */
+/** 订单图片补全（需求「订单所有的图片补充完整」）：历史订单缺图时按 商品图→团购图→商家图 逐级回填。
+ *  第十四轮修复：商家查找改 mtMerchantOf（AI 自主入驻的 aimt-* 店也在注册表里）——
+ *  原先只查种子表，AI 自创店/自创菜的单永远回填不到图（真图生成完成后订单里还是 emoji） */
 function mtBackfillOrderImgs(o: MtOrder): MtOrder {
-  const merchant = MT_MERCHANTS.find((m) => m.id === o.merchantId);
+  const merchant = mtMerchantOf(o.merchantId);
   const dishes = merchant ? mtDishesOf(merchant) : [];
+  /** AI 自主入驻的店（aimt-*）或 AI 自主补的菜（aidish-*）：菜品图是真图管线自动生成的
+   *  （第十四轮），始终跟随最新覆盖——下单瞬间真图还没生成完、item.img 是当时的空/卡通
+   *  快照，不能因「有图」就跳过升级（种子店种子菜仍保持快照优先，不动既有语义） */
+  const aiImgFollow = merchant?.id.startsWith('aimt-') === true || dishes.some((d) => d.id.startsWith('aidish-'));
   let itemsChanged = false;
   const items = o.items.map((it) => {
-    if (it.img) return it;
     const dish = dishes.find((d) => d.id === it.dishId);
-    const deal = MT_DEALS.find((d) => d.id === it.dishId);
-    const img = dish?.img ?? deal?.img ?? merchant?.cover;
-    if (!img) return it;
+    const isAiDish = dish?.id.startsWith('aidish-') ?? false;
+    if (!aiImgFollow && !isAiDish && it.img) return it;
+    const deal = dish ? undefined : mtDealOf(it.dishId);
+    const img = dish?.img ?? it.img ?? deal?.img ?? merchant?.cover;
+    if (!img || img === it.img) return it;
     itemsChanged = true;
     return { ...it, img };
   });

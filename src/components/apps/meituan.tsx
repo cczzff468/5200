@@ -160,6 +160,7 @@ import {
   type MtDish,
   type MtMerchant,
 } from '@/lib/ios/meituan-data';
+import { AI_PRODUCT_IMG_EVENT } from '@/lib/ios/ai-product-img';
 import { kvGet, kvSet } from '@/lib/ios/idb-kv';
 import type { FunDeal, FunHotel, FunMovie, FunRoom, FunVenue } from '@/app/api/mt-fun/route';
 import TravelChannelPage from './meituan-travel';
@@ -12380,6 +12381,8 @@ function RateSheet({ order, onClose, onToast }: { order: MtOrder; onClose: () =>
 export default function MeituanApp() {
   const [booting, setBooting] = useState(true);
   const [session, setSession] = useState<MtSession | null>(null);
+  // AI 自创商品真图就绪刷新钟（仅触发重渲染，值本身不参与渲染）
+  const [, setAiImgTick] = useState(0);
   const [page, setPage] = useState<Page>('main');
   const [tab, setTab] = useState<Tab>('home');
   const [merchantId, setMerchantId] = useState<string | null>(null);
@@ -12427,6 +12430,14 @@ export default function MeituanApp() {
   // AI 商家/团购注册表恢复（Task 46：幂等；详情页/搜索等直访 AI 条目时无感命中）
   useEffect(() => {
     mtRestoreAiRegistry();
+  }, []);
+
+  // AI 自创菜品/门头真图生成完成（第十四轮）：图片渲染时实时读覆盖，真图落库广播事件 →
+  // 根组件计一次刷新钟，打开中的首页/商家页/订单页立即从卡通图升级成真图
+  useEffect(() => {
+    const fn = () => setAiImgTick((t) => t + 1);
+    window.addEventListener(AI_PRODUCT_IMG_EVENT, fn);
+    return () => window.removeEventListener(AI_PRODUCT_IMG_EVENT, fn);
   }, []);
 
   // 启动：恢复登录态（资料跟随全局账号）+ 消费灵动岛通知点击跳转（订单详情）

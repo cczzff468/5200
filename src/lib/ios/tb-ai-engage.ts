@@ -35,6 +35,7 @@ import { pushChatNotification } from './island-notify';
 import { wxUnreads, qqUnreads } from '@/lib/unread-store';
 import { getActiveAccountIdFor, getActiveAccountFor, type AccountApp } from './accounts';
 import { productById, shopById, tbSearchPool, tbShopIdForTag, type TbCatId, type TbProduct } from './taobao-data';
+import { fireAiProductImg } from './ai-product-img';
 import {
   tbArrivedAtStation,
   tbConfirmReceive,
@@ -824,6 +825,13 @@ function ensureTbProductAi(name: string, uid: string): TbProduct {
     tbPersistAiProducts(uid, [p]); // 注册进运行时注册表 + 按 uid 持久化（刷新恢复）
   } catch {
     /* 持久化失败不影响本次下单 */
+  }
+  // 第十四轮：AI 自创宝贝自动生成写实真图（设置›图像生成模型优先，内置服务端兜底；
+  // fire-and-forget 不阻塞下单，成功后覆盖管线落库+广播事件，全渲染点即时换真图）
+  try {
+    fireAiProductImg('tb', p.id, clean);
+  } catch {
+    /* 生图调度失败不影响本次下单 */
   }
   return p;
 }

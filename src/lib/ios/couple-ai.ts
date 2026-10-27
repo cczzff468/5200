@@ -2260,16 +2260,17 @@ async function aiTickAlbumPhoto(snap: CoupleSnap, me: string, ta: string): Promi
 // - AUTONOMY_BEHAVIORS 候选菜单（此刻还能做的行为 + 各自 guard 去重）；
 // - autonomyDecide()：随机唤醒时让 LLM 以 TA 的身份「自己决定」此刻想做哪件（可输出 none
 //   什么都不做）——像真人恋人一样随性，绝不机械打卡；
-// - 额度：每天最多 2 件（localStorage 持久化，刷新/重开不重置，跨天自动回满）；
-//   打开后 25~90s 第一次唤醒，之后每次决策完随机 150~330s 链式安排下一次。
+// - 额度：每天最多 5 件（第十四轮用户反馈 2→5，恋人更勤快；localStorage 持久化，
+//   刷新/重开不重置，跨天自动回满）；开机即起链（CoupleResidentWatcher 常驻调度，
+//   不用打开恋人空间），25~90s 第一次唤醒，之后每次决策完随机 150~330s 链式安排下一次。
 // 无 LLM 依赖的日常小事（想你打卡/浇树）保留独立随机延时，不占自主决策额度。
 
 let currentPartnerId = '';
 let currentChannel: CoupleChannel = 'wx';
 let tickScheduledFor = '';
 
-/** 每天自主行为额度 */
-const AUTONOMY_LEFT_PER_DAY = 2;
+/** 每天自主行为额度（第十四轮用户反馈：2 → 5，恋人更勤快） */
+const AUTONOMY_LEFT_PER_DAY = 5;
 const AUTONOMY_STORE_KEY = 'couple-autonomy-quota';
 
 /** 剩余额度（localStorage 持久化：刷新页面/重开 App 不重置；跨天自动回满） */
@@ -2482,7 +2483,8 @@ function autonomyLoop(contactId: string, me: string, ta: string, delayMs: number
  * AI 主动行为总入口：打开恋人空间（建立关系后）时调用。第九轮重写——
  * - 想你/浇树：无 LLM 的小事，独立随机延时（与用户操作无关，绝不跟着用户操作走）；
  * - 其余行为：进入自主决策链（随机唤醒 → LLM 自己决定做不做/做什么 → 执行 → 链式续），
- *   每天最多 2 件；每日首次打开时起链（25~90s 后第一次唤醒）。
+ *   每天最多 5 件；开机即起链（PhoneShell 常驻挂 CoupleResidentWatcher，第十四轮起
+ *   不再依赖打开恋人空间——刷新/重开手机都会自动续链），首次唤醒 25~90s。
  */
 export function runCoupleAiTick(channel: CoupleChannel, contactId: string): void {
   const snap = readSnap();

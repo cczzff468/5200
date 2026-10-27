@@ -282,6 +282,7 @@ import {
   decideCoupleCard as decideCoupleCardAction,
   type CoupleRelCardData,
 } from '@/lib/ios/couple-invite';
+import { AI_PRODUCT_IMG_EVENT } from '@/lib/ios/ai-product-img';
 import {
   DEFAULT_STICKER_GROUP_ID,
   extractMeaningFromUrl,
@@ -5450,6 +5451,15 @@ function ChatPage({
     window.addEventListener(COUPLE_CARD_EVENT, onCoupleCard);
     return () => window.removeEventListener(COUPLE_CARD_EVENT, onCoupleCard);
   }, [peer.id]);
+
+  /** AI 自创商品真图生成完成监听（第十四轮）：礼物卡/代买草稿卡的图片渲染时实时解析
+   *  最新图覆盖（tbProductImgOverride/tbGiftLiveImg），生图落库后广播事件 → 这里浅拷贝
+   *  消息数组触发一次轻量重渲染，打开中的聊天卡片立即从卡通图升级成真图（不改写消息） */
+  useEffect(() => {
+    const fn = () => setMsgs((prev) => [...prev]);
+    window.addEventListener(AI_PRODUCT_IMG_EVENT, fn);
+    return () => window.removeEventListener(AI_PRODUCT_IMG_EVENT, fn);
+  }, []);
 
   /** 过期清算后的落盘合并（存储为权威）：既有消息以落盘版本覆盖（卡片过期终态），落盘新增的
    *  过期通知行追加进来；按创建时间排序。与上方投递 tick 同一套合并模式，不丢本地新消息 */

@@ -478,6 +478,12 @@ function productImgMap(): Record<string, string> {
   return productImgCache;
 }
 
+/** 读商品图覆盖（礼物弹窗/草稿卡等快照渲染点实时升级真图用；无覆盖返回 null） */
+export function tbProductImgOverride(pid: string): string | null {
+  const ov = productImgMap()[pid];
+  return typeof ov === 'string' && ov.startsWith('data:image/') ? ov : null;
+}
+
 /** 写商品图覆盖（商品详情页点击图片生成成功后调用；mutate + 持久化，所有渲染点即时生效） */
 export function tbSetProductImg(pid: string, src: string): void {
   const map = productImgMap();

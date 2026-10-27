@@ -19,6 +19,7 @@ import { FoodImg } from './mt-food-img';
 import { MtOrderTimeline } from './mt-share-card';
 import { MT_DRAFT_EVENT, mtConfirmAiDraft, mtDeclineAiDraft, mtGetDraft } from '@/lib/ios/mt-ai-engage';
 import { mtLoadOrders, type MtOrder } from '@/lib/ios/meituan-store';
+import { mtProductImgOverride } from '@/lib/ios/meituan-data';
 import { navigateToChatSession } from '@/lib/ios/island-notify';
 
 const fmt2 = (n: number): string => {
@@ -118,7 +119,7 @@ export function MtDraftBubble({
       <div className="mt-2 space-y-1.5 rounded-[10px] bg-[#FAFAFB] p-2">
         {d.items.map((it, i) => (
           <div key={i} className="flex items-center gap-2">
-            <FoodImg src={it.img} emoji={it.emoji} className="h-8 w-8 shrink-0 rounded-md" />
+            <FoodImg src={(it.dishId ? mtProductImgOverride(it.dishId) : null) ?? it.img} emoji={it.emoji} className="h-8 w-8 shrink-0 rounded-md" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-[12.5px] text-black/80">{it.name}</p>
               <p className="text-[10.5px] text-black/35">×{it.qty}</p>

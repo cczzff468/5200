@@ -23,6 +23,8 @@ export interface MtShareItem {
   spec?: string;
   emoji?: string;
   img?: string;
+  /** 菜品 id（第十四轮：分享卡渲染时用它实时解析 AI 自创菜的真图覆盖） */
+  dishId?: string;
 }
 
 /** 订单分享快照（静态部分；状态时间线动态推导，不入快照） */
@@ -100,6 +102,7 @@ export function mtGetShare(sid: string): MtOrderShare | null {
           spec: typeof i.spec === 'string' && i.spec ? i.spec : undefined,
           emoji: typeof i.emoji === 'string' ? i.emoji : undefined,
           img: typeof i.img === 'string' ? i.img : undefined,
+          dishId: typeof i.dishId === 'string' && i.dishId ? i.dishId : undefined,
         }))
       : [],
     note: typeof s.note === 'string' && s.note ? s.note : undefined,
@@ -210,7 +213,7 @@ export async function mtCreateOrderShare(opts: MtCreateShareOpts): Promise<MtCre
     merchantImg: order.merchantImg,
     amount: order.total,
     itemCount: order.items.reduce((s, i) => s + i.qty, 0),
-    items: order.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price, spec: i.spec, emoji: i.emoji, img: i.img })),
+    items: order.items.map((i) => ({ name: i.name, qty: i.qty, price: i.price, spec: i.spec, emoji: i.emoji, img: i.img, dishId: i.dishId })),
     note: order.note,
     createdAt: Date.now(),
     ...(opts.paidBy ? { paidBy: opts.paidBy } : {}),

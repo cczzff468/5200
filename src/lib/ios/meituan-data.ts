@@ -1600,6 +1600,12 @@ function mutateDishImg(dishId: string, src: string): boolean {
   return false;
 }
 
+/** 读商品图覆盖（美团代点草稿卡等快照渲染点实时升级真图用；无覆盖返回 null） */
+export function mtProductImgOverride(dishId: string): string | null {
+  const ov = productImgMap()[dishId];
+  return typeof ov === 'string' && ov.startsWith('data:image/') ? ov : null;
+}
+
 /** 写商品图覆盖（商品详情界面点击图片生成成功后调用；mutate + 持久化，所有渲染点即时生效） */
 export function mtSetProductImg(dishId: string, src: string): void {
   const map = productImgMap();
