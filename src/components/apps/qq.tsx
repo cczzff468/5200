@@ -169,7 +169,10 @@ import type { CouplePactCardData } from '@/lib/ios/couple-pact-share';
 import type { CoupleExamCardData } from '@/lib/ios/couple-exam-share';
 import {
   COUPLE_CARD_EVENT,
+  COUPLE_STATE_EVENT,
   decideCoupleCard as decideCoupleCardAction,
+  readInviteMeta,
+  sendMyInvite,
   type CoupleRelCardData,
 } from '@/lib/ios/couple-invite';
 import { TbDraftBubble } from './tb-draft-card';
@@ -359,6 +362,7 @@ import {
 } from '@/lib/ios/group-social';
 import { BatchStickerSheet, makeStickerGroup, StickerGroupBar, StickerGroupManageSheet, StickerMeaningPicker } from '@/components/apps/sticker-batch';
 import { StickerSearchSheet } from './sticker-search-sheet';
+import { useWeatherSnapshot, weatherCodeInfo } from './weather-core';
 import type { BatchDraftItem } from '@/components/apps/sticker-batch';
 import { useUnreadMap, qqUnreads as qqUnreadStore } from '@/lib/unread-store';
 import { useChatFlags, NO_FLAGS, qqChatFlags as qqChatFlagsStore } from '@/lib/chat-flags';
@@ -6763,14 +6767,6 @@ function ChatPage({
         </div>
         <button
           type="button"
-          aria-label="聊天精灵"
-          className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5"
-          onClick={() => onToast('聊天精灵暂未开放')}
-        >
-          <PenguinMark size={26} />
-        </button>
-        <button
-          type="button"
           aria-label="聊天设置"
           data-testid="qq-chat-menu"
           className="grid h-9 w-9 place-items-center rounded-full active:bg-black/5"
@@ -9847,6 +9843,82 @@ function PaySettingsPage({ onBack, onToast }: { onBack: () => void; onToast: (m:
 
 // ---------------- 好友标识页（聊天页消息区左滑进入） ----------------
 
+/** 情侣卡等级阶梯（密友值 → Lv；5000 分对应 Lv3，对照真机截图） */
+const COUPLE_LV_STEPS = [0, 1500, 5000, 12000, 25000, 50000, 100000, 200000, 500000];
+
+function coupleLvOf(points: number): { lv: number; pct: number; need: number } {
+  let lv = 1;
+  for (let i = 0; i < COUPLE_LV_STEPS.length; i++) {
+    if (points >= COUPLE_LV_STEPS[i]) lv = i + 1;
+  }
+  const lo = COUPLE_LV_STEPS[lv - 1] ?? 0;
+  const hi = COUPLE_LV_STEPS[lv] ?? lo * 2 + 10000;
+  const pct = Math.max(3, Math.min(100, Math.round(((points - lo) / (hi - lo)) * 100)));
+  const need = Math.max(1, hi - points);
+  return { lv, pct, need };
+}
+
+/** 恋人空间纪念日 → 已绑定天数（含当天，最小 1） */
+function coupleBoundDays(anniv: string | null): number {
+  if (!anniv) return 1;
+  const t = new Date(`${anniv}T00:00:00`);
+  if (Number.isNaN(t.getTime())) return 1;
+  const now = new Date();
+  const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diff = Math.floor((base.getTime() - t.getTime()) / 86400000) + 1;
+  return diff >= 1 ? diff : 1;
+}
+
+/** 读恋人空间全局状态里与该好友的绑定情况（bound=已绑定 days=已绑定天数 pending=邀请待接受） */
+function readCoupleBondInfo(peerId: string): { bound: boolean; days: number; pending: boolean } {
+  try {
+    const s = kvGet<Record<string, unknown>>('couple-space:state') ?? {};
+    const meta = readInviteMeta();
+    const bound = s.accepted === true && meta.partnerContactId === peerId;
+    const pending = !bound && !!meta.pendingInvite && meta.pendingInvite.contactId === peerId;
+    return { bound, days: bound ? coupleBoundDays(typeof s.anniversary === 'string' ? s.anniversary : null) : 0, pending };
+  } catch {
+    return { bound: false, days: 0, pending: false };
+  }
+}
+
+/** 情侣卡右侧 3D 装饰：粉渐变立体爱心 + 黄蝴蝶结 + 蓝色光环托底（对照用户参考图） */
+function CoupleHeartMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 100 100" className={className} aria-hidden="true">
+      <defs>
+        <radialGradient id="cch-heart" cx="35%" cy="28%" r="85%">
+          <stop offset="0" stopColor="#FFC4DB" />
+          <stop offset="0.45" stopColor="#FF7EB0" />
+          <stop offset="1" stopColor="#E34A8B" />
+        </radialGradient>
+        <linearGradient id="cch-ring" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#8FD0FF" />
+          <stop offset="1" stopColor="#3D9BE0" />
+        </linearGradient>
+        <linearGradient id="cch-bow" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#FFE08A" />
+          <stop offset="1" stopColor="#F0AE30" />
+        </linearGradient>
+      </defs>
+      {/* 蓝色光环托底 */}
+      <ellipse cx="50" cy="82" rx="31" ry="8.5" fill="none" stroke="url(#cch-ring)" strokeWidth="5" strokeLinecap="round" />
+      {/* 立体爱心 */}
+      <path d="M50 76 C22 58 14 40 24 28 C31.5 19.5 45 21 50 33 C55 21 68.5 19.5 76 28 C86 40 78 58 50 76 Z" fill="url(#cch-heart)" />
+      {/* 心身高光（左大右小，营造 3D 光泽） */}
+      <ellipse cx="35" cy="36" rx="9" ry="5.5" fill="#fff" opacity="0.55" transform="rotate(-25 35 36)" />
+      <ellipse cx="63" cy="31" rx="4" ry="2.5" fill="#fff" opacity="0.35" transform="rotate(-25 63 31)" />
+      {/* 黄蝴蝶结（心右上角）+ 垂下的丝带尾 */}
+      <g transform="translate(66 18)">
+        <path d="M0 2 C-13 -7 -27 -5 -25 3 C-23.5 9.5 -10 9 0 3.5 Z" fill="url(#cch-bow)" />
+        <path d="M0 2 C13 -7 27 -5 25 3 C23.5 9.5 10 9 0 3.5 Z" fill="url(#cch-bow)" />
+        <circle cx="0" cy="2.5" r="5" fill="#FFD34E" stroke="#E8A62E" strokeWidth="1" />
+      </g>
+      <path d="M64 24 C60 34 58 42 59 50" fill="none" stroke="#F0AE30" strokeWidth="3" strokeLinecap="round" opacity="0.9" />
+    </svg>
+  );
+}
+
 function FriendBondPage({
   me,
   peer,
@@ -9865,6 +9937,41 @@ function FriendBondPage({
   const days = bondDays(stat);
   // 我们的DNA弹窗（summary=聊天小结 / common=共同属性 / timeline=友谊时间线，对照 QQ 真机）
   const [dnaModal, setDnaModal] = useState<null | 'summary' | 'common' | 'timeline'>(null);
+  // 用户第九轮：恋人空间绑定状态（邀请卡同意后本页上半部分变情侣关系卡；AI 在别处接受时实时刷新）
+  const [bondTick, setBondTick] = useState(0);
+  const [bindBusy, setBindBusy] = useState(false);
+  useEffect(() => {
+    const h = () => setBondTick((t) => t + 1);
+    window.addEventListener(COUPLE_STATE_EVENT, h);
+    return () => window.removeEventListener(COUPLE_STATE_EVENT, h);
+  }, []);
+  const couple = useMemo(() => readCoupleBondInfo(peer.id), [peer.id, bondTick]);
+  const coupleLv = coupleLvOf(stat.points);
+  /** 点「去绑定专属关系」→ 给 TA 发恋人空间邀请卡（couple-invite 管线：AI 延时接受 → 回成功卡 → 建立关系） */
+  const onBindRelation = async () => {
+    if (bindBusy) return;
+    setBindBusy(true);
+    try {
+      const r = await sendMyInvite('qq', peer.id);
+      if (!r.ok) {
+        onToast(r.error);
+        return;
+      }
+      onToast(`邀请已发送，等${peer.name}回应`);
+      setBondTick((t) => t + 1);
+      // 回聊天页看邀请卡（TA 稍后回成功卡，再左滑回来上半部分就是情侣卡）
+      window.setTimeout(() => onBack(), 700);
+    } finally {
+      setBindBusy(false);
+    }
+  };
+  /** 「情侣空间 >」入口 → 切到恋人空间 App（与考试卡/情书卡同款导航） */
+  const openCoupleSpace = () => {
+    const ui = useUI.getState();
+    if (ui.locked) return;
+    if (ui.activeApp && ui.activeApp !== 'couple') ui.switchToApp('couple');
+    else if (!ui.activeApp && ui.phase === 'closed') ui.openApp('couple');
+  };
   const sinceDate = new Date(stat.since);
   const nowDate = new Date();
   const fmtMY = (d: Date) => `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -9906,7 +10013,78 @@ function FriendBondPage({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-8" data-testid="qq-bond-body">
-        {/* 密友卡（对照真机截图再缩小一档：左上成为好友N天+密友值，中央同心圆波纹+双头像+蓝心跳线，底部去绑定专属关系；四周幸运物图标不要） */}
+        {/* 用户第九轮：邀请卡同意后 → 上半部分换情侣关系卡（神仙眷侣/Lv/已绑定天数/情侣空间入口/3D爱心/双头像/密友值进度条，对照用户参考图） */}
+        {couple.bound ? (
+          <div
+            data-testid="qq-bond-couple-card"
+            className="relative mt-1 overflow-hidden rounded-[20px] bg-gradient-to-br from-[#C84DFF] via-[#E06FF2] to-[#FF8FC4] px-4 pb-5 pt-5 dark:from-[#6E2BA8] dark:via-[#8E3AA8] dark:to-[#B84E86]"
+          >
+            {/* 氛围光斑 */}
+            <div aria-hidden="true" className="absolute -right-10 -top-12 h-36 w-36 rounded-full bg-white/25 blur-2xl" />
+            <div aria-hidden="true" className="absolute -left-8 bottom-10 h-28 w-28 rounded-full bg-[#FFD9EC]/45 blur-2xl" />
+
+            {/* 上半：左侧标题/天数/入口，右侧 3D 爱心装饰 */}
+            <div className="relative flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <p className="text-[22px] font-bold leading-none text-white drop-shadow-[0_1px_3px_rgba(160,40,110,0.28)]">神仙眷侣</p>
+                  <span
+                    data-testid="qq-bond-couple-lv"
+                    className="rounded-[6px] border border-white/85 px-1.5 py-[3px] text-[11px] font-semibold leading-none text-white"
+                  >
+                    Lv{coupleLv.lv}
+                  </span>
+                </div>
+                <p className="mt-2 text-[13px] text-white/85" data-testid="qq-bond-couple-days">
+                  已绑定 {couple.days} 天
+                </p>
+                <button
+                  type="button"
+                  data-testid="qq-bond-couple-space"
+                  onClick={openCoupleSpace}
+                  className="mt-3 flex h-8 items-center gap-0.5 rounded-full bg-black/25 pl-3.5 pr-3 text-[13px] font-medium text-white backdrop-blur-sm active:bg-black/40"
+                >
+                  情侣空间
+                  <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+              <CoupleHeartMark className="h-[92px] w-[92px] shrink-0 drop-shadow-[0_6px_14px_rgba(150,30,100,0.35)]" />
+            </div>
+
+            {/* 中部：双头像（微重叠，白环） */}
+            <div className="relative mt-4 flex items-center justify-center">
+              <span className="z-10 -mr-2.5 grid h-[46px] w-[46px] place-items-center overflow-hidden rounded-full bg-white/30 shadow-[0_4px_12px_rgba(120,30,90,0.30)] ring-[2.5px] ring-white/95">
+                <QqAvatar src={me.avatar} alt={me.name} size={46} />
+              </span>
+              <span className="grid h-[46px] w-[46px] place-items-center overflow-hidden rounded-full bg-white/30 shadow-[0_4px_12px_rgba(120,30,90,0.30)] ring-[2.5px] ring-white/95">
+                <QqAvatar src={peer.avatar} alt={peer.name} size={46} />
+              </span>
+            </div>
+            <p className="relative mt-2 text-center text-[13px] font-medium text-white/95" data-testid="qq-bond-couple-points">
+              密友值 {stat.points} 分
+            </p>
+
+            {/* 底部：升级进度条 + 心形滑块（对照参考图：滑块停在当前分数处） */}
+            <div className="relative mt-2.5">
+              <div className="h-[7px] overflow-visible rounded-full bg-white/30">
+                <div className="h-full rounded-full bg-gradient-to-r from-white/80 to-white" style={{ width: `${coupleLv.pct}%` }} />
+              </div>
+              <span
+                aria-hidden="true"
+                className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
+                style={{ left: `${Math.max(5, Math.min(95, coupleLv.pct))}%` }}
+              >
+                <svg viewBox="0 0 24 24" className="h-[19px] w-[19px] drop-shadow-[0_2px_4px_rgba(150,30,100,0.4)]">
+                  <path d="M12 21C4 15 1.5 10.5 4 7c2-2.8 6-2.2 8 1 2-3.2 6-3.8 8-1 2.5 3.5 0 9-8 14Z" fill="#FF5C9E" stroke="#fff" strokeWidth="1.6" />
+                </svg>
+              </span>
+            </div>
+            <p className="relative mt-2.5 text-center text-[10.5px] text-white/75">
+              再得 {coupleLv.need} 分升级 Lv{coupleLv.lv + 1}
+            </p>
+          </div>
+        ) : (
+        // 密友卡（对照真机截图再缩小一档：左上成为好友N天+密友值，中央同心圆波纹+双头像+蓝心跳线，底部去绑定专属关系；四周幸运物图标不要）
         <div
           className="relative mt-1 overflow-hidden rounded-[20px] bg-gradient-to-br from-[#EAE6FB] via-[#F3E1F6] to-[#DCE3FB] px-4 pb-5 pt-5 dark:from-[#38304A] dark:via-[#3B2E43] dark:to-[#26314B]"
           data-testid="qq-bond-card"
@@ -9972,19 +10150,31 @@ function FriendBondPage({
             </div>
           </div>
 
-          {/* 底部：去绑定专属关系（蓝色文字链接，对照截图） */}
+          {/* 底部：去绑定专属关系（蓝色文字链接；用户第九轮：真发恋人空间邀请卡，AI 同意后本卡升级为情侣关系卡） */}
           <div className="relative flex justify-center">
-            <button
-              type="button"
-              data-testid="qq-bond-bind"
-              onClick={() => onToast('专属关系暂未开放')}
-              className="mt-0.5 flex items-center text-[16px] font-medium text-[#3D6EF6] active:opacity-70 dark:text-[#7FA0FF]"
-            >
-              去绑定专属关系
-              <ChevronRight className="h-[18px] w-[18px]" aria-hidden="true" />
-            </button>
+            {couple.pending ? (
+              <div
+                data-testid="qq-bond-bind-pending"
+                className="mt-0.5 flex items-center gap-1.5 text-[15px] font-medium text-black/40 dark:text-white/40"
+              >
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#3D6EF6]" aria-hidden="true" />
+                邀请已发出，等TA接受…
+              </div>
+            ) : (
+              <button
+                type="button"
+                data-testid="qq-bond-bind"
+                onClick={() => void onBindRelation()}
+                disabled={bindBusy}
+                className="mt-0.5 flex items-center text-[16px] font-medium text-[#3D6EF6] active:opacity-70 disabled:opacity-50 dark:text-[#7FA0FF]"
+              >
+                {bindBusy ? '正在发送邀请…' : '去绑定专属关系'}
+                <ChevronRight className="h-[18px] w-[18px]" aria-hidden="true" />
+              </button>
+            )}
           </div>
         </div>
+        )}
 
         {/* 我们的DNA（对照 QQ 真机截图：聊天小结 / 共同属性 / 友谊时间线 三卡；整体缩小一档） */}
         <p className="px-1 pb-1.5 pt-3 text-[14px] font-medium text-black/75 dark:text-white/75">我们的DNA</p>
@@ -12007,6 +12197,8 @@ function MeDrawer({
   const [signDraft, setSignDraft] = useState(me.persona ?? '');
   /** 切换账号弹出卡片（对照截图样式）：胶囊按钮点开，点外面/再点关闭 */
   const [accCardOpen, setAccCardOpen] = useState(false);
+  /** 用户第九轮：天气城市按钮跟随天气 App（城市名/温度/实况图标，与天气 App 共享快照） */
+  const weather = useWeatherSnapshot();
   useEffect(() => {
     const raf = requestAnimationFrame(() => setShown(true));
     return () => cancelAnimationFrame(raf);
@@ -12227,16 +12419,29 @@ function MeDrawer({
         </div>
         </div>
 
-        {/* 底部：设置 / 夜间 / 天气城市（固定在抽屉底部，不随内容滚动） */}
-        <div className="shrink-0 px-5 pb-[44px] pt-3">
-          <div className="flex items-center justify-around border-t border-black/[0.05] pt-3 dark:border-white/[0.06]">
+        {/* 底部：设置 / 夜间 / 天气城市（固定在抽屉底部；用户第九轮：按钮上下变小+整体下移，城市跟随天气 App：城市名+温度+实况图标） */}
+        <div className="shrink-0 px-5 pb-[34px] pt-4">
+          <div className="flex items-start justify-around border-t border-black/[0.05] pt-3.5 dark:border-white/[0.06]">
             {[
-              { icon: <Settings className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '设置', fn: onOpenSettings, testid: 'qq-drawer-settings' },
-              { icon: <Moon className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '夜间', fn: () => onToast('夜间模式跟随系统设置'), testid: 'qq-drawer-night' },
-              { icon: <CloudSun className="h-[22px] w-[22px]" strokeWidth={1.9} />, label: '濮阳', fn: () => onToast('天气详见「天气」App'), testid: 'qq-drawer-weather' },
+              { icon: <Settings className="h-[19px] w-[19px]" strokeWidth={1.9} />, label: '设置', sub: null, fn: onOpenSettings, testid: 'qq-drawer-settings' },
+              { icon: <Moon className="h-[19px] w-[19px]" strokeWidth={1.9} />, label: '夜间', sub: null, fn: () => onToast('夜间模式跟随系统设置'), testid: 'qq-drawer-night' },
+              {
+                icon: weather ? (
+                  (() => {
+                    const WxIcon = weatherCodeInfo(weather.current.code).Icon;
+                    return <WxIcon className="h-[19px] w-[19px]" strokeWidth={1.9} />;
+                  })()
+                ) : (
+                  <CloudSun className="h-[19px] w-[19px]" strokeWidth={1.9} />
+                ),
+                label: weather?.name?.trim() || '天气',
+                sub: weather ? `${Math.round(weather.current.temperature)}° ${weatherCodeInfo(weather.current.code).label}` : null,
+                fn: () => onToast('天气详见「天气」App'),
+                testid: 'qq-drawer-weather',
+              },
             ].map((b) => (
               <button
-                key={b.label}
+                key={b.testid}
                 type="button"
                 data-testid={b.testid}
                 onClick={() => {
@@ -12247,10 +12452,13 @@ function MeDrawer({
                     b.fn();
                   }
                 }}
-                className="flex w-16 flex-col items-center gap-1 text-black/60 active:opacity-60 dark:text-white/60"
+                className="flex w-16 flex-col items-center gap-[3px] text-black/60 active:opacity-60 dark:text-white/60"
               >
                 {b.icon}
-                <span className="text-[12px]">{b.label}</span>
+                <span className="text-[11px] leading-none">{b.label}</span>
+                <span className="h-[13px] text-[10px] leading-[13px] text-black/40 dark:text-white/40">
+                  {b.sub ?? '\u00A0'}
+                </span>
               </button>
             ))}
           </div>
@@ -16900,9 +17108,9 @@ function MainScreen({
   }, [unreads]);
 
   const TAB_DEFS: { id: '消息' | '联系人' | '动态'; label: string; icon: React.ReactNode }[] = [
-    { id: '消息', label: '消息', icon: <Bell className="h-[26px] w-[26px]" strokeWidth={1.9} aria-hidden="true" /> },
-    { id: '联系人', label: '联系人', icon: <User className="h-[26px] w-[26px]" strokeWidth={1.9} aria-hidden="true" /> },
-    { id: '动态', label: '动态', icon: <Star className="h-[26px] w-[26px]" strokeWidth={1.9} aria-hidden="true" /> },
+    { id: '消息', label: '消息', icon: <Bell className="h-[21px] w-[21px]" strokeWidth={1.9} aria-hidden="true" /> },
+    { id: '联系人', label: '联系人', icon: <User className="h-[21px] w-[21px]" strokeWidth={1.9} aria-hidden="true" /> },
+    { id: '动态', label: '动态', icon: <Star className="h-[21px] w-[21px]" strokeWidth={1.9} aria-hidden="true" /> },
   ];
 
   return (
@@ -17289,9 +17497,9 @@ function MainScreen({
             )}
           </div>
 
-          {/* 底部 tab（pb 预留底部横杠安全区，同微信 TabBar） */}
-          <div className="shrink-0 border-t border-black/[0.05] bg-white pb-[16px] dark:border-white/[0.06] dark:bg-[#1B1C1F]">
-          <nav className="flex h-[52px] items-stretch" aria-label="QQ 标签">
+          {/* 底部 tab（pb 预留底部横杠安全区，同微信 TabBar；用户第九轮：上下收紧变小一档） */}
+          <div className="shrink-0 border-t border-black/[0.05] bg-white pb-[12px] dark:border-white/[0.06] dark:bg-[#1B1C1F]">
+          <nav className="flex h-[44px] items-stretch" aria-label="QQ 标签">
             {TAB_DEFS.map((t) => {
               const active = !staleGroupRoute && route.page === 'tabs' && route.tab === t.id;
               return (
@@ -17301,7 +17509,7 @@ function MainScreen({
                   data-testid={`qq-tab-${t.id}`}
                   onClick={() => setRoute({ page: 'tabs', tab: t.id })}
                   aria-label={t.label}
-                  className={`flex flex-1 flex-col items-center justify-center gap-0.5 ${active ? TAB_ACTIVE : 'text-black/55 dark:text-white/55'}`}
+                  className={`flex flex-1 flex-col items-center justify-center gap-[3px] ${active ? TAB_ACTIVE : 'text-black/55 dark:text-white/55'}`}
                 >
                   <span className={`relative ${active ? '[&>svg]:fill-current' : ''}`}>
                     {t.icon}
@@ -17309,7 +17517,7 @@ function MainScreen({
                       <span
                         data-testid="qq-tab-badge-消息"
                         aria-label={`${totalUnread} 条未读`}
-                        className="absolute -right-[10px] -top-[6px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#F5455C] px-[4px] text-[11px] font-semibold leading-none text-white ring-2 ring-white dark:ring-[#1B1C1F]"
+                        className="absolute -right-[10px] -top-[6px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#F5455C] px-[4px] text-[10px] font-semibold leading-none text-white ring-2 ring-white dark:ring-[#1B1C1F]"
                       >
                         {totalUnread > 99 ? '99+' : totalUnread}
                       </span>
@@ -17318,7 +17526,7 @@ function MainScreen({
                       <span
                         data-testid="qq-tab-badge-动态"
                         aria-label={`空间动态 ${qqNoticeBadge.count} 条新消息`}
-                        className="absolute -right-[10px] -top-[6px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-[#F5455C] px-[4px] text-[11px] font-semibold leading-none text-white ring-2 ring-white dark:ring-[#1B1C1F]"
+                        className="absolute -right-[10px] -top-[6px] flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-[#F5455C] px-[4px] text-[10px] font-semibold leading-none text-white ring-2 ring-white dark:ring-[#1B1C1F]"
                       >
                         {qqNoticeBadge.count > 99 ? '99+' : qqNoticeBadge.count}
                       </span>

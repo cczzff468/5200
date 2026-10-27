@@ -704,3 +704,25 @@ Stage Summary:
 - 环境完全就绪：代码与 GitHub main 同步、推送凭据已配置（新 PAT）、dev server + ncm 服务运行中
 - 项目状态：AI Phone 仿 iOS 智能助手（25 轮迭代基线），预览面板可直接访问
 - 等待用户指定本轮要修改/添加的具体功能
+
+---
+Task ID: 27
+Agent: 主控 Agent（Z.ai Code）
+Task: 用户第九轮反馈——8 项 UI/功能改造（拾光小屋宠物头像+毛玻璃胶囊 / 日历红点 / QQ tab / 抽屉三按钮+天气 / 精灵图标 / 左滑页情侣绑定全链路）
+
+Work Log:
+- [拾光小屋] TopBar.tsx：右上角四按钮（TA的心/宠物头像/装修小家/⋮）收进一颗毛玻璃胶囊（rounded-full 边框白60% + bg-white/40 + backdrop-blur-2xl + 暖阴影）；宠物头像重做——奶油径向渐变底(#fffdf9→#f8e2c4) + 粉丝环2.5px + 顶部玻璃高光斑 + 暖色双层投影 + 图标放大8px带暖色drop-shadow
+- [日历] chrome.tsx：右上角 ⋮ 按钮的 ACCENT 红点删除
+- [QQ tab] 底部导航上下收紧一档：nav h-[52px]→h-[44px]、图标 26px→21px、安全区 pb-[16px]→pb-[12px]、角标 19px→18px
+- [QQ 抽屉] 三按钮（设置/夜间/天气城市）上下变小+整体下移：图标 22px→19px、gap 4px→3px、文字 12px→11px、pb-[44px]→pb-[34px]+pt-3→pt-4；天气按钮改跟随天气 App（useWeatherSnapshot）：城市名（天气App当前城市）+ 下方温度+天气（如「北京 10° 晴」）+ 图标按实况天气码切换（weatherCodeInfo）
+- [QQ 聊天] 顶部「聊天精灵」PenguinMark 图标按钮删除（组件保留，关联QQ号页还在用）
+- [左滑页·情侣绑定] FriendBondPage 大改：
+  · 「去绑定专属关系」从 toast 变真发恋人空间邀请卡（sendMyInvite('qq', peer.id)→couple-invite 管线：邀请卡落会话→AI 延时接受→回成功卡→sys 行→建立关系）；pending 时按钮变「邀请已发出，等TA接受…」脉动提示；发送成功 toast+自动回聊天页看卡
+  · 绑定后上半部分密友卡整体替换为情侣关系卡（对照用户参考图）：紫粉渐变背景(#C84DFF→#FF8FC4) + 白色大标题「神仙眷侣」+ 白描边 Lv 徽章（密友值阶梯 0/1500/5000/12000…→Lv，5000分=Lv3 与参考图一致）+「已绑定 N 天」（恋人空间纪念日）+ 半透明深色胶囊「情侣空间 >」（点击切恋人空间 App，与考试卡/情书卡同款导航）+ 右侧自绘 3D 爱心（径向渐变+高光）配黄蝴蝶结丝带尾+蓝色光环托底 + 双头像微重叠白环 + 「密友值 X 分」+ 升级进度条（白渐变填充+粉心滑块停在当前分数处+「再得 N 分升级」）
+  · 订阅 COUPLE_STATE_EVENT：AI 在别处接受时页面实时刷新换卡
+- [新增依赖] qq.tsx 导入 useWeatherSnapshot/weatherCodeInfo（./weather-core）、COUPLE_STATE_EVENT/readInviteMeta/sendMyInvite（couple-invite）
+- [验证] tsc 0 新增（仅 next.config.ts 既有基线）；eslint 0 问题（qq.tsx 17800 行需 6G 堆跑通）；Agent Browser 全链路 E2E：种子QQ账号(88888888/123456)+AI好友凡凡→登录→抽屉三按钮「北京 10° 晴」跟随天气App+紧凑下移→聊天页无精灵图标→左滑「去绑定专属关系」→聊天页邀请卡「等待对方接受」→AI 8秒后回成功卡+sys行→再左滑上半部分=情侣关系卡（神仙眷侣Lv1/已绑定1天/情侣空间入口/3D爱心蝴蝶结/双头像/密友值进度条心形滑块）→「情侣空间>」成功跳转恋人空间App（柚子♥凡凡 已相恋1天）；日历⋮无红点；拾光小屋毛玻璃胶囊+美化宠物头像 VLM 确认；QQ tab 44px/21px/12px；控制台零新增错误
+
+Stage Summary:
+- 8 项全部落地并 E2E 验证通过；QQ 左滑页情侣绑定全链路（邀请卡→AI接受→成功卡→情侣关系卡→恋人空间跳转）为本轮核心新增
+- 关键文件：qq.tsx（FriendBondPage/MeDrawer/TAB_DEFS/聊天顶栏）、couple-home/panels/TopBar.tsx、calendar/chrome.tsx

@@ -119,7 +119,8 @@ export default function TopBar({
         </button>
       </div>
 
-      <div className="flex items-center gap-2">
+      {/* v12 毛玻璃胶囊：TA的心 / 宠物头像 / 装修小家 / ⋮ 一整排按钮同住一颗胶囊（用户第九轮） */}
+      <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/60 bg-white/40 p-1 shadow-[0_12px_32px_rgba(90,60,50,0.16)] backdrop-blur-2xl">
         {/* v10.3 TA 的心（宠物头像左侧独立按钮）：甜度/情绪/需求一览 */}
         <button
           onClick={onToggleHeart}
@@ -128,30 +129,35 @@ export default function TopBar({
           title="TA 的心：甜度 / 情绪 / 需求"
           className={
             heartOpen
-              ? 'pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-[#e88a9a] text-white shadow-md backdrop-blur transition active:scale-95'
-              : 'pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#e88a9a] shadow-sm backdrop-blur transition active:scale-95'
+              ? 'flex h-9 w-9 items-center justify-center rounded-full bg-[#e88a9a] text-white shadow-sm transition active:scale-90'
+              : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/65 text-[#e88a9a] shadow-sm ring-1 ring-white/70 transition hover:bg-white/90 active:scale-90'
           }
         >
-          <Heart className="h-[18px] w-[18px]" />
+          <Heart className="h-[17px] w-[17px]" />
         </button>
-        {/* v9 宠物头像（装修小家左侧 · 白玻璃圆钮）：点击轮换宠物（团子 → 领养的狗狗/兔兔 → 团子…）并唤出当前这只的状态面板；状态偏低时亮提醒小红点 */}
+        {/* v12 宠物头像美化（用户第九轮）：奶油径向渐变底 + 粉丝细环 + 顶部光泽 + 暖色投影；点击轮换宠物并唤出状态面板 */}
         <button
           onClick={onRotatePet}
           aria-label={`${activePetName}状态面板（点按切换宠物）`}
           aria-expanded={petPanel}
-          className={`pointer-events-auto relative flex h-10 w-10 items-center justify-center rounded-full bg-white/75 shadow-md ring-2 backdrop-blur transition active:scale-95 ${
+          className={`relative flex h-11 w-11 items-center justify-center rounded-full bg-[radial-gradient(circle_at_32%_26%,#fffdf9_0%,#fdf3e0_52%,#f8e2c4_100%)] shadow-[0_3px_10px_rgba(228,106,106,0.30),inset_0_-2px_5px_rgba(214,150,90,0.20)] ring-[2.5px] transition active:scale-95 ${
             petPanel ? 'ring-[#e46a6a]' : 'ring-[#f4b3c2]'
           }`}
         >
+          {/* 顶部玻璃光泽（小高光斑） */}
+          <span
+            aria-hidden="true"
+            className="absolute left-[16%] top-[9%] h-[26%] w-[38%] -rotate-[18deg] rounded-full bg-white/75 blur-[1.5px]"
+          />
           {activePetIdx < 0 ? (
-            <CatFaceIcon className="h-7 w-7 drop-shadow-sm" />
+            <CatFaceIcon className="relative h-8 w-8 drop-shadow-[0_1.5px_2px_rgba(190,140,90,0.38)]" />
           ) : activePetObj.kind === 'dog' ? (
-            <DogFaceIcon className="h-7 w-7 drop-shadow-sm" />
+            <DogFaceIcon className="relative h-8 w-8 drop-shadow-[0_1.5px_2px_rgba(170,130,80,0.38)]" />
           ) : (
-            <RabbitFaceIcon className="h-7 w-7 drop-shadow-sm" />
+            <RabbitFaceIcon className="relative h-8 w-8 drop-shadow-[0_1.5px_2px_rgba(190,140,90,0.38)]" />
           )}
           {petsCount > 0 && (
-            <span aria-hidden="true" className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#e8b06a] px-0.5 text-[8.5px] font-bold leading-none text-white ring-2 ring-white/90">
+            <span aria-hidden="true" className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#e8b06a] px-0.5 text-[8.5px] font-bold leading-none text-white ring-2 ring-white/95 shadow-[0_2px_5px_rgba(220,160,90,0.45)]">
               {petsCount + 1}
             </span>
           )}
@@ -159,21 +165,21 @@ export default function TopBar({
             <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full bg-[#ff7a59] ring-2 ring-white/90" />
           )}
         </button>
-        {/* 装修小家 / 完成（右上角入口） */}
+        {/* 装修小家 / 完成（胶囊内紧凑版） */}
         <button
           onClick={onSwitchMode}
           aria-label={mode === 'live' ? '装修小家' : '完成装修'}
           className={
             mode === 'live'
-              ? 'pointer-events-auto flex h-10 items-center gap-1.5 rounded-full bg-[#f4b3c2] px-3.5 text-[13px] font-semibold text-white shadow-md shadow-[#f4b3c2]/40 transition active:scale-95'
-              : 'pointer-events-auto flex h-10 items-center gap-1.5 rounded-full bg-[#8fce9e] px-3.5 text-[13px] font-semibold text-white shadow-md shadow-[#8fce9e]/40 transition active:scale-95'
+              ? 'flex h-9 items-center gap-1.5 rounded-full bg-[#f4b3c2] px-3 text-[12.5px] font-semibold text-white shadow-md shadow-[#f4b3c2]/40 transition active:scale-95'
+              : 'flex h-9 items-center gap-1.5 rounded-full bg-[#8fce9e] px-3 text-[12.5px] font-semibold text-white shadow-md shadow-[#8fce9e]/40 transition active:scale-95'
           }
         >
-          {mode === 'live' ? <Pencil className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+          {mode === 'live' ? <Pencil className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
           {mode === 'live' ? '装修小家' : '完成'}
         </button>
         {/* ⋮ 更多菜单：时间变化 / 声音开关 / 视角 */}
-        <div className="pointer-events-auto relative">
+        <div className="relative">
           <button
             onClick={onToggleMore}
             aria-label="更多设置"
@@ -181,11 +187,11 @@ export default function TopBar({
             title="更多设置"
             className={
               moreOpen
-                ? 'flex h-10 w-10 items-center justify-center rounded-full bg-[#3a3a3e]/80 text-white shadow-sm backdrop-blur transition active:scale-95'
-                : 'flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95'
+                ? 'flex h-9 w-9 items-center justify-center rounded-full bg-[#3a3a3e]/80 text-white shadow-sm transition active:scale-95'
+                : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/65 text-[#5a5a5e] shadow-sm ring-1 ring-white/70 transition hover:bg-white/90 active:scale-95'
             }
           >
-            <MoreVertical className="h-[18px] w-[18px]" />
+            <MoreVertical className="h-[17px] w-[17px]" />
           </button>
           <AnimatePresence>
             {moreOpen && (

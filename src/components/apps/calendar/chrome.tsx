@@ -115,11 +115,6 @@ export function CalChrome({
             style={{ color: TEXT }}
           >
             <MoreVertical className="h-[18px] w-[18px]" strokeWidth={2.1} />
-            <span
-              aria-hidden="true"
-              className="absolute right-[5px] top-[5px] h-1 w-1 rounded-full"
-              style={{ backgroundColor: ACCENT }}
-            />
           </button>
         </div>
 
