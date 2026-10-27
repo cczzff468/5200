@@ -3,11 +3,13 @@
  * ---------------------------------------------------------------------------
  * 四种内置样式（样式对两侧同时生效，不再区分 TA/我）：
  *  - default  纯色气泡（无自定义色 = 跟随 App 原生配色；微信我方绿 / QQ 我方蓝）
- *             自定义色后：大圆角矩形 + 左上/右上弯钩小尾巴（参考图同款）
+ *             自定义色后：仅换底色/文字色，圆角不覆盖——与各 App 原生气泡完全一致
+ *             （用户指定：微信改色后圆角不能变圆，须和默认一样）
  *  - rainbow  七彩气泡：每条消息按序号在参考图 9 色间循环取色
- *             （亮黄→青柠→杏色→青色→粉色→薰衣草→灰褐→琥珀→珊瑚）
+ *             （亮黄→青柠→杏色→青色→粉色→薰衣草→灰褐→琥珀→珊瑚）；圆角同原生
  *  - frosted  毛玻璃：胶囊形（椭圆）无尾巴 + backdrop-filter 高斯模糊 + 细白描边
- *  - liquid   液态气泡：胶囊形（椭圆）无尾巴 + 流动高光扫过 + 折射边缘（.bub-liquid）
+ *  - liquid   液态气泡：透明玻璃材质（.bub-liquid）——胶囊形无尾巴 + 透明玻璃底 +
+ *             高斯模糊提饱和 + 顶部月牙高光 + 流动光泽；文字色随深浅色模式自适应
  *
  * 微信 / QQ 两 App 装扮完全隔离（wx / qq 各持 { kind, mineColor, theirsColor }），
  * 在微信里选的样式不影响 QQ，反之亦然。
@@ -304,13 +306,14 @@ export function bubbleVisual(
 
   if (kind === 'rainbow') {
     // 七彩：参考图 9 色按消息序号循环；尾巴按 App —— 微信保持原生小三角（随色），
-    // QQ 用参考图同款弯钩（QQ 原生无尾巴，装扮后才有）
+    // QQ 用参考图同款弯钩（QQ 原生无尾巴，装扮后才有）。
+    // 圆角不覆盖：保留宿主原生 rounded-* 类（微信文本 5px / 语音 4px、QQ 10px / 12px）
     const idx = ((msgIndex % RAINBOW_COLORS.length) + RAINBOW_COLORS.length) % RAINBOW_COLORS.length;
     const c = RAINBOW_COLORS[idx];
     return {
       override: true,
       className: '',
-      style: { backgroundColor: c, borderRadius: '14px', color: yiqTextOn(c) },
+      style: { backgroundColor: c, color: yiqTextOn(c) },
       tail: app === 'wx' ? 'native' : 'hook',
       tailColor: c,
     };
@@ -337,9 +340,11 @@ export function bubbleVisual(
   }
 
   if (kind === 'liquid') {
-    // 液态气泡（第十八轮修订）：极透明冰玻璃（参考图 IMG_20261027_163645）——
-    // 胶囊形无尾巴；默认 = 深色冰玻璃底（.bub-liquid 全局类，白字）；
-    // 自定义色 = 该色极低透明度渐变（α 0.30↔0.14，背景几乎完全透出，只留一层色膜）
+    // 液态气泡（第十八轮再修订）：透明玻璃材质（用户指定）——胶囊形无尾巴。
+    // 底色与文字色全部交给 .bub-liquid 全局类：透明玻璃底 + 模糊 + 高光，
+    // 文字色随深浅色模式自适应（浅色黑字 / 深色白字）；
+    // 自定义色 = 内联覆盖为该色低透明度渐变（α 0.30↔0.14，背景透出只留色膜），
+    // 文字色仍走 CSS 自适应（极低透明度下按页面底色读字才准确）
     const base = color;
     return {
       override: true,
@@ -348,20 +353,20 @@ export function bubbleVisual(
         ? {
             borderRadius: '999px',
             background: `linear-gradient(165deg, ${withAlpha(base, 0.30)} 0%, ${withAlpha(base, 0.14)} 45%, ${withAlpha(base, 0.20)} 75%, ${withAlpha(base, 0.28)} 100%)`,
-            color: yiqTextOn(base),
           }
-        : { borderRadius: '999px', color: '#FFFFFF' },
+        : { borderRadius: '999px' },
       tail: 'none',
       tailColor: '',
     };
   }
 
-  // default + 自定义色：参考图同款大圆角纯色气泡；尾巴按 App ——
-  // 微信保持原生小三角（随色，用户指定不变），QQ 用弯钩尾巴
+  // default + 自定义色：仅换底色/文字色；圆角不覆盖——保留宿主原生 rounded-* 类
+  // （微信文本 5px / 语音 4px、QQ 10px / 12px），改色后圆角与默认气泡完全一致（用户指定）。
+  // 尾巴按 App —— 微信保持原生小三角（随色，用户指定不变），QQ 用弯钩尾巴
   return {
     override: true,
     className: '',
-    style: { backgroundColor: color, borderRadius: '14px', color: yiqTextOn(color as string) },
+    style: { backgroundColor: color, color: yiqTextOn(color as string) },
     tail: app === 'wx' ? 'native' : 'hook',
     tailColor: color as string,
   };
