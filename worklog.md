@@ -1005,3 +1005,23 @@ Stage Summary:
 - netease-api(3010) 常驻运行；数据库 db/custom.db 携带历史数据
 - git：origin 已配置 PAT，main 分支与远端同步，可直接 commit + push
 - 待用户明确下一轮要修改/新增的功能需求
+
+---
+Task ID: 18-r2
+Agent: Z.ai Code (main)
+Task: 第十八轮反馈修订二 —— 液态玻璃去高光去闪光 + 毛玻璃/液态材质区分 + QQ 尾巴末尾细如线 + 气泡样式页/看一看页美化简约
+
+Work Log:
+- [液态玻璃] globals.css .bub-liquid 重写：删除 ::before 月牙高光与 ::after 流动扫光动画（用户指定）；改为纯静态透明清玻璃——白色系极透明渐变底（α 0.34/0.10/0.20）+ blur(10px) saturate(160%) + 细白玻璃描边；深色模式 .dark 变体（更透 + 白字）
+- [毛玻璃区分] bubbleVisual frosted 分支重做：奶白磨砂质感——rgba 白 0.68（自定义色 0.62 奶化）+ blur(20px) + 无描边无 inset 高光（磨砂面哑光漫反射）；与液态形成「奶白厚重雾面 vs 透明清玻璃勾边」的明显对比
+- [QQ 尾巴] BUBBLE_TAIL_PATH 终版重设计（用户指定末尾细如线）：外缘掠过弯峰后以近水平切向逼近尖点 (0.33, 2.02)，内缘同样近水平离开——两缘在尖端汇成 ~25° 针尖且末尾 1.5 单位保持 ≈1 单位厚；cairosvg 离线像素验证收敛 0→0.5u→1.0u→1.4u；实机像素验证 7→6→5→4→3→2→2→0px 平滑收敛，VLM 确认「末端细如一条线、过渡自然、根部宽」
+- [气泡样式页] bubble-style-settings.tsx 全页重写为扁平简约：导航改 large=false 居中标题 + 删右上角平台徽章（用户指定）；预览卡去渐变光环改素色卡+轻光斑；样式四格去重阴影改白卡+发丝描边+accent 环；颜色区/收藏夹/命名弹窗全部降视觉噪音；保存按钮渐变改纯色
+- [看一看页] wechat.tsx WxLookPage 重写：绿色渐变特色卡 → 白卡+柔绿圆形图标+五枚迷你七彩胶囊；内容流改分组列表（分割线行，去 emoji 图标块）；页头标题绝对居中
+- [E2E] agent-browser 全链路：解锁（锁屏 pointer 序列）→ 主屏翻页 2 次（grid 空白处 pointer 序列）→ 微信（icon tap 需 pointerdown/up+click 三连）→ 发现→看一看（白卡+4 行列表）→装扮入口→设置页（QQ 侧 title-center=195 精确居中、右上空）→液态（::before/::after content 均为 none、透明玻璃底+blur10+白描边）→毛玻璃（rgba 255,0.68+blur20+无边框）→QQ 登录（协议勾选+账密）→动态tab→头像→抽屉→个性装扮→默认+橙色→预览 5 尾巴新路径→发消息实测尾巴
+- [踩坑] ①主屏 icon 点击必须 pointerdown+pointerup+click 三连派发（React 合成事件吞裸 click）；②多任务切换器：底部 72px 边缘带 pointerdown + 上滑 18px 开启，卡片上滑 -100px 关闭 App；③document.body.innerText 含隐藏层（主屏常驻 DOM）——状态判断必须用 elementFromPoint 视觉检测；④agent-browser find 的 name 匹配会命中陈旧 ref
+- [质量] tsc 仅剩 proactive-msg.ts 既有基线错误；eslint 改动文件 0 问题；浏览器 errors/console 零错误；dev.log 仅 instrumentation 既有警告
+
+Stage Summary:
+- 六项反馈全部落地：液态玻璃无高光无闪光（纯透明清玻璃）、毛玻璃奶白磨砂与液态明显区分、QQ 尾巴末尾真·细如线（针尖几何+像素级验证）、气泡样式页标题居中+删平台标签+扁平简约、看一看页白卡简约
+- 关键文件：src/lib/ios/bubble-style.ts（BUBBLE_TAIL_PATH 终版+frosted/liquid 材质）、src/app/globals.css（.bub-liquid 重写）、src/components/apps/bubble-style-settings.tsx（全页简约化重写）、src/components/apps/wechat.tsx（WxLookPage 重写）
+- 方法论沉淀：SVG 细尖设计要先离线 cairosvg 渲染做像素列宽分析（VLM 对小尺寸渲染的尖端判断不可靠，像素数据才可信）；app 内验证用 PIL 按列扫描实际屏幕像素

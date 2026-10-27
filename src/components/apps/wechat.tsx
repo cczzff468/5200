@@ -13274,72 +13274,60 @@ const LOOK_FEED: { title: string; source: string }[] = [
 
 function WxLookPage({ onBack, onOpenDress, onToast }: { onBack: () => void; onOpenDress: () => void; onToast: (m: string) => void }) {
   return (
-    <div className="absolute inset-0 z-20 flex flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white" data-testid="wx-look-page">
-      <div className="shrink-0 bg-[#EDEDED] pt-[54px] dark:bg-[#111111]">
-        <div className="flex h-11 items-center px-2">
+    <div className="absolute inset-0 z-20 flex flex-col bg-[#F6F7F9] text-black dark:bg-[#111214] dark:text-white" data-testid="wx-look-page">
+      <div className="shrink-0 bg-[#F6F7F9] pt-[54px] dark:bg-[#111214]">
+        <div className="relative flex h-11 items-center px-2">
           <button type="button" aria-label="返回" data-testid="wx-look-back" onClick={onBack} className="active:opacity-60">
             <ChevronLeft className="h-7 w-7" strokeWidth={2} />
           </button>
-          <div className="flex-1 text-center text-[17px] font-medium">看一看</div>
-          <span className="w-[46px]" />
+          <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[17px] font-semibold">看一看</div>
         </div>
       </div>
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-2">
-        {/* 聊天气泡装扮入口（第十七轮）：渐变特色卡 */}
+        {/* 聊天气泡装扮入口（第十八轮再修订 · 扁平简约）：白卡 + 柔绿图标 + 迷你七彩示意 */}
         <button
           type="button"
           data-testid="wx-look-dress-entry"
           onClick={onOpenDress}
-          className="relative w-full overflow-hidden rounded-[16px] p-4 text-left shadow-[0_8px_24px_rgba(7,193,96,0.28)] ring-1 ring-white/60 transition-transform active:scale-[0.98]"
-          style={{ background: 'linear-gradient(120deg, #07C160 0%, #05A653 58%, #04934A 100%)' }}
+          className="w-full rounded-[16px] bg-white p-4 text-left ring-1 ring-black/[0.05] transition-transform active:scale-[0.98] dark:bg-[#1B1D21] dark:ring-white/[0.07]"
         >
-          <span aria-hidden="true" className="absolute -right-5 -top-7 h-24 w-24 rounded-full bg-white/15 blur-xl" />
-          <span aria-hidden="true" className="absolute -bottom-8 right-10 h-20 w-20 rounded-full bg-[#FFCC00]/25 blur-xl" />
-          <div className="relative flex items-center gap-3">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[13px] bg-white/20 ring-1 ring-white/40 backdrop-blur-md">
-              <Palette className="h-6 w-6 text-white" strokeWidth={2} />
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#07C160]/12 dark:bg-[#07C160]/18">
+              <Palette className="h-5 w-5 text-[#07C160]" strokeWidth={2} />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-[16.5px] font-bold text-white">聊天气泡装扮</p>
-              <p className="mt-0.5 text-[12.5px] leading-tight text-white/85">七彩 / 毛玻璃 / 液态 · 微信装扮独立</p>
+              <p className="text-[16px] font-semibold">聊天气泡装扮</p>
+              <p className="mt-0.5 text-[12.5px] leading-tight text-black/45 dark:text-white/45">默认 · 七彩 · 毛玻璃 · 液态玻璃</p>
             </div>
-            <ChevronRight className="h-5 w-5 shrink-0 text-white/85" aria-hidden="true" />
+            <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
           </div>
-          {/* 三枚迷你气泡示意（七彩参考图色板） */}
-          <div className="relative mt-3 flex items-center gap-1.5">
+          {/* 五枚迷你气泡示意（七彩参考图色板 · 扁平小胶囊） */}
+          <div className="mt-3 flex items-center gap-1.5 pl-[52px]">
             <span className="rounded-full bg-[#FFEB00] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">早</span>
             <span className="rounded-full bg-[#B9F000] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">上</span>
             <span className="rounded-full bg-[#46EAEB] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">好</span>
             <span className="rounded-full bg-[#FE91A6] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">呀</span>
             <span className="rounded-full bg-[#E19EFF] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">~</span>
-            <span className="ml-auto rounded-full bg-white/20 px-2 py-[3px] text-[10.5px] text-white ring-1 ring-white/40 backdrop-blur-md">去装扮</span>
           </div>
         </button>
 
-        {/* 轻量内容流 */}
-        <p className="mb-2 mt-5 px-1 text-[12.5px] font-medium text-black/40 dark:text-white/40">大家都在看</p>
-        <div className="space-y-2.5">
+        {/* 轻量内容流（简约列表：标题 + 来源） */}
+        <p className="mb-2 mt-6 px-1 text-[12.5px] font-medium text-black/40 dark:text-white/40">大家都在看</p>
+        <div className="overflow-hidden rounded-[16px] bg-white ring-1 ring-black/[0.05] dark:bg-[#1B1D21] dark:ring-white/[0.07]">
           {LOOK_FEED.map((f, i) => (
             <button
               key={i}
               type="button"
               onClick={() => onToast('内容即将上线')}
-              className="flex w-full items-center gap-3 rounded-[14px] bg-white p-3 text-left ring-1 ring-black/[0.04] transition-transform active:scale-[0.98] dark:bg-[#1B1B1B] dark:ring-white/[0.06]"
+              className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors active:bg-black/[0.03] dark:active:bg-white/[0.04] ${
+                i > 0 ? 'border-t border-black/[0.04] dark:border-white/[0.06]' : ''
+              }`}
             >
-              <span className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-[#DFEBE3] to-[#C9E4D5] dark:from-[#22302A] dark:to-[#1A2621]">
-                <span className="text-[20px]" aria-hidden="true">
-                  {['♡', '✧', '❋', '☾'][i % 4]}
-                </span>
-              </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[15px] font-medium leading-snug">{f.title}</span>
-                <span className="mt-1.5 flex items-center gap-2">
-                  <span className="h-[6px] w-[6px] rounded-full bg-black/15 dark:bg-white/20" aria-hidden="true" />
-                  <span className="h-[6px] w-[76px] rounded-full bg-black/[0.08] dark:bg-white/10" aria-hidden="true" />
-                  <span className="text-[11.5px] text-black/40 dark:text-white/40">{f.source}</span>
-                </span>
+                <span className="block truncate text-[14.5px] font-medium leading-snug">{f.title}</span>
+                <span className="mt-1 block truncate text-[11.5px] text-black/35 dark:text-white/35">{f.source}</span>
               </span>
-              <ChevronRight className="h-4 w-4 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
+              <ChevronRight className="h-4 w-4 shrink-0 text-black/20 dark:text-white/20" aria-hidden="true" />
             </button>
           ))}
         </div>

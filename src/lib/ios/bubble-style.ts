@@ -7,9 +7,9 @@
  *             （用户指定：微信改色后圆角不能变圆，须和默认一样）
  *  - rainbow  七彩气泡：每条消息按序号在参考图 9 色间循环取色
  *             （亮黄→青柠→杏色→青色→粉色→薰衣草→灰褐→琥珀→珊瑚）；圆角同原生
- *  - frosted  毛玻璃：胶囊形（椭圆）无尾巴 + backdrop-filter 高斯模糊 + 细白描边
- *  - liquid   液态气泡：透明玻璃材质（.bub-liquid）——胶囊形无尾巴 + 透明玻璃底 +
- *             高斯模糊提饱和 + 顶部月牙高光 + 流动光泽；文字色随深浅色模式自适应
+ *  - frosted  毛玻璃：胶囊形无尾巴 + 奶白磨砂质感（厚重雾面、几乎不透底、无描边光）
+ *  - liquid   液态玻璃：胶囊形无尾巴 + 透明清玻璃（背景清晰透出、细白玻璃描边、
+ *             无高光无闪光——用户指定；文字色随深浅色模式自适应）
  *
  * 微信 / QQ 两 App 装扮完全隔离（wx / qq 各持 { kind, mineColor, theirsColor }），
  * 在微信里选的样式不影响 QQ，反之亦然。
@@ -81,12 +81,14 @@ export const DEFAULT_BUBBLE_STYLE: BubbleStyleConfig = {
 };
 
 /**
- * 弯钩小尾巴 SVG path（viewBox 0 0 11 14）——参考图同款「水滴弯钩」第十八轮修订版：
- * 尖端更细（末尾收敛成窄尖，参考图同款）；尖端在左上指向头像方向，
- * 外缘凸弧向下掠入气泡本体，右缘直线藏在气泡身下（宿主定位时横向重叠 2px 保证无缝）。
+ * 弯钩小尾巴 SVG path（viewBox 0 0 11 14）——参考图同款「水滴弯钩」第十八轮终版：
+ * 末尾细如线（用户指定）——外缘掠过顶部弯峰后向下前铺，以近乎水平的切向
+ * 逼近尖点 (0.33, 2.02)；内缘以同样近乎水平的切向离开尖点——两侧在尖端
+ * 汇成约 25° 的针尖，且末端 1.5 单位保持 ≈1 单位厚（渲染约 1px 细线）。
+ * 根部宽阔（右缘 3.7→12.6 藏在气泡身下，宿主定位横向重叠 2px 无缝）。
  */
 export const BUBBLE_TAIL_PATH =
-  'M11 3.4 C7.8 1.5 4 0.5 2.2 0.9 C1 1.15 0.7 2 1.5 2.6 C3.5 4.6 7.5 8.6 11 12.6 Z';
+  'M11 3.7 C8.2 1.85 5.2 0.6 3 0.78 C1.55 0.92 0.7 1.18 0.55 1.55 C0.45 1.8 0.4 1.9 0.33 2.02 C0.62 2.18 1.05 2.4 1.6 2.72 C3.2 3.85 6.6 7.6 11 12.6 Z';
 
 /** 预设色板（全色彩盘快捷区：参考图 9 色打头 + 常用色补充，共 24 色） */
 export const PRESET_SWATCHES: readonly string[] = [
@@ -320,18 +322,19 @@ export function bubbleVisual(
   }
 
   if (kind === 'frosted') {
-    // 毛玻璃：胶囊形（椭圆）无尾巴 + 半透明底 + 高斯模糊 + 细白描边
+    // 毛玻璃（第十八轮再修订）：奶白磨砂胶囊 —— 厚重雾面（高透明度白底几乎不透底）、
+    // 强高斯模糊、无描边无高光（磨砂面是哑光的，漫反射不聚光）；
+    // 自定义色 = 磨砂彩色玻璃（0.62 透明度奶化）；与液态玻璃的「透明清玻璃」明显区分
     const base = color ?? '#FFFFFF';
     return {
       override: true,
       className: '',
       style: {
         borderRadius: '999px',
-        backgroundColor: withAlpha(base, color ? 0.5 : 0.55),
-        backdropFilter: 'blur(18px)',
-        WebkitBackdropFilter: 'blur(18px)',
-        border: '1px solid rgba(255, 255, 255, 0.5)',
-        boxShadow: '0 4px 16px rgba(31, 35, 41, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.4)',
+        backgroundColor: withAlpha(base, color ? 0.62 : 0.68),
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
+        boxShadow: '0 4px 14px rgba(31, 35, 41, 0.10)',
         color: color ? yiqTextOn(color) : '#111111',
       },
       tail: 'none',
@@ -340,11 +343,10 @@ export function bubbleVisual(
   }
 
   if (kind === 'liquid') {
-    // 液态气泡（第十八轮再修订）：透明玻璃材质（用户指定）——胶囊形无尾巴。
-    // 底色与文字色全部交给 .bub-liquid 全局类：透明玻璃底 + 模糊 + 高光，
-    // 文字色随深浅色模式自适应（浅色黑字 / 深色白字）；
-    // 自定义色 = 内联覆盖为该色低透明度渐变（α 0.30↔0.14，背景透出只留色膜），
-    // 文字色仍走 CSS 自适应（极低透明度下按页面底色读字才准确）
+    // 液态玻璃（第十八轮再修订）：透明清玻璃（用户指定去高光去闪光）——胶囊形无尾巴。
+    // 底色与文字色全部交给 .bub-liquid 全局类：极透明玻璃底 + 轻模糊 + 细白玻璃描边，
+    // 无伪元素高光/扫光；文字色随深浅色模式自适应；
+    // 自定义色 = 内联覆盖为该色低透明度渐变（α 0.28↔0.12，背景清晰透出只留色膜）
     const base = color;
     return {
       override: true,
@@ -352,7 +354,7 @@ export function bubbleVisual(
       style: base
         ? {
             borderRadius: '999px',
-            background: `linear-gradient(165deg, ${withAlpha(base, 0.30)} 0%, ${withAlpha(base, 0.14)} 45%, ${withAlpha(base, 0.20)} 75%, ${withAlpha(base, 0.28)} 100%)`,
+            background: `linear-gradient(165deg, ${withAlpha(base, 0.28)} 0%, ${withAlpha(base, 0.12)} 45%, ${withAlpha(base, 0.18)} 75%, ${withAlpha(base, 0.25)} 100%)`,
           }
         : { borderRadius: '999px' },
       tail: 'none',
