@@ -1044,3 +1044,28 @@ Stage Summary:
 - 五项反馈全部落地：毛玻璃（0.86 乳白不透明+blur24）vs 液态（0.24 极淡亮膜+brightness1.12）一眼可辨、液态透亮（brightness 提亮玻璃内背景）、胶囊上下瘦身（文本 padding 6px/语音高 34px）、QQ 纯色/七彩 14px 圆角（微信不变）、设置页图标底托+质感副标题+渐变预览
 - 关键文件：src/lib/ios/bubble-style.ts（frosted/liquid 材质+胶囊瘦身+QQ 圆角）、src/app/globals.css（.bub-liquid 透亮化）、src/components/apps/voice-bubble.tsx（capsule 检测+34px）、src/components/apps/bubble-style-settings.tsx（KIND_CAPTIONS+卡片美化）
 - 设计决策：QQ 圆角取 14px 而非 16px——几何计算尾巴接缝（尾巴右缘 +2px vs 圆角内缩 x_edge，14px 时全段无缺口，16px 顶部有 0.5px 缝）
+
+---
+Task ID: 19-r2
+Agent: Z.ai Code (main)
+Task: 第十九轮修订二 —— QQ 弯钩尾巴与头像垂直平行 + 毛玻璃气泡删除重做 + 液态玻璃删白描边再透明
+
+Work Log:
+- [尾巴平行] VLM 分析用户截图确认问题：引用高气泡的弯钩尾巴固定 top:4 悬在气泡顶部，而头像 items-end 底对齐在气泡中下部，两者严重错位
+- [尾巴平行] 几何推导：消息行 items-end（头像底对齐），40px 头像中心 = 气泡底上方 20px；BubbleTail top 支持 string（CSS calc），qq.tsx 传 calc(100% - 26.5px)（SVG 高 13px 中心 6.5px）→ 尾巴中心精确落在头像中心线；短气泡时 ≈7.5px 仍贴近上部（与旧参考图几乎一致），高引用气泡精确对齐
+- [尾巴平行] 设置页预览同步：PreviewBubble 尾巴 calc(100% - 19.5px)（26px 头像点中心 13px + 6.5px）；wechat.tsx hook 防御分支同步
+- [毛玻璃重做] 根因分析：素色聊天背景 #F5F6F7 上任何白色半透磨砂都读作「死白胶囊」（0.62 白叠 #F5F6F7 ≈ #FCFCFC），与原生白泡无异——用户连续三轮不满意的本质
+- [毛玻璃重做] 新增 .bub-frosted 全局类（globals.css）：真实磨砂三要素 = ① 奶白半透底 0.62 白（彩色背景漫射透出）② feTurbulence 分形噪点磨砂颗粒纹理（140px 无缝平铺、灰度 5.5%——素底上也有 satin 质地）③ 柔和悬浮投影 0 5px 16px rgba(31,35,41,0.10)（投影≠高光：此前删高光时误删投影导致死白，本轮恢复）；blur(22px) saturate(140%)；无描边无光泽高光
+- [毛玻璃重做] bubbleVisual frosted 分支改输出 className:'bub-frosted'（默认无内联底色走类 0.62 白；自定义色内联 withAlpha(color,0.55) 覆盖底色、颗粒纹理保留、yiqTextOn 文字色）；高度 34px（padding 5+5 + 行盒 24）
+- [液态玻璃] globals.css .bub-liquid：删 border 1px rgba(255,255,255,0.45)（用户指定）；白膜再降 α 0.16/0.04/0.10 → 0.10/0.02/0.06（更透明）；dark 变体 0.06/0.01/0.04；padding 4→5px 补描边删除后的 2px 保持 34px
+- [液态玻璃] bubbleVisual liquid 分支自定义色渐变 α 0.16/0.05/0.10/0.14 → 0.10/0.03/0.06/0.09；padding 4→5px
+- [文案] KIND_CAPTIONS：毛玻璃「奶白磨砂 · 隐约透底」、液态「清透水膜 · 透底」
+- [E2E] 种子环境复用（晚晚会话 9 条消息：3 引用块 + 2 语音 + 4 文本）：①尾巴对齐实测 3 条 hook 尾巴 tailCenter−avatarCenter = 0px（含 89px 高引用气泡）✓ VLM 确认「尾巴始终对齐头像中心、无悬空」②毛玻璃实测 .bub-frosted 9 处（bg 0.62 白 + 噪点 data-URI + shadow + 高 34px）✓ VLM 确认「磨砂颗粒质感+柔和投影+玻璃板观感+与原生白泡明显区分+文字清晰」③液态实测 border 0px + 白膜 0.10 + 无 brightness + 高 34px ✓ VLM 确认「无描边、非常透、与毛玻璃明显不同」④设置页：预览磨砂质感+尾巴与头像点平行+副标题新文案+标题居中 ✓ ⑤浏览器 errors/console 零错误
+- [新截图] upload/Screenshot_20261027_195418.jpg（语音气泡尾巴居中指向头像）与本轮尾巴平行方向一致，无需额外改动
+- [质量] tsc 仅 proactive-msg.ts 既有基线；eslint 六个改动文件 0 问题；commit bfb8a08（push 后台重试中，首推 120s 超时为环境已知限制）
+
+Stage Summary:
+- 三项反馈全部落地：QQ 弯钩尾巴中心 = 头像中心线（calc(100% - 26.5px)，实测差 0px）、毛玻璃删重做（磨砂颗粒纹理+奶白半透+悬浮投影的玻璃板质感，素底上可辨识）、液态无边框更透明（0.10 水膜）
+- 关键文件：bubble-tail.tsx（top 支持 CSS calc）、qq.tsx/wechat.tsx/bubble-style-settings.tsx（尾巴定位）、globals.css（.bub-frosted 新类 + .bub-liquid 去边框）、bubble-style.ts（frosted/liquid 分支重写）
+- 设计决策：①尾巴平行用「距底 20px」而非「50%」——因为消息行 items-end 头像底对齐，距底 20px 恒等于头像中心，短/高气泡通吃；②投影恢复：投影（boxShadow 悬浮深度）≠ 高光（光泽反光），此前删高光连投影误删是「死白」根因之一；③磨砂颗粒 feTurbulence data-URI 是素色背景下毛玻璃可辨识的关键
+- 素色背景教训：白色半透玻璃在浅色素底上必然趋同于背景色，玻璃风格必须自带可辨识信号（颗粒/投影/描边），只靠 backdrop-filter 在素底上不可见
