@@ -85,35 +85,52 @@ export function cnNum(n: number): string {
 }
 
 /**
- * VIP 徽章（第十二轮：唱片直接用用户截图原像素抠底 —— public/music-vip-disc-{vip,svip}.png，
- * 圆形 alpha 无白边）+ CSS 黑胶囊 + 动态等级文字（其他不变，就数字变）。
- * - VIP：黑胶唱片（红色唱片标）+ 暖黑胶囊白字「VIP·叁」；
- * - SVIP：金胶唱片 + 深棕胶囊金字「SVIP·肆」；
- * 唱片压在胶囊左端上（z 浮于胶囊），尺寸比例按截图实测（VIP 盘 16px / SVIP 盘 19px，胶囊 13.5px）。
+ * VIP 徽章（第十四轮：双盘重抠 + 按各自参考截图实测微调）。
+ * 唱片：用户截图原像素抠底 —— public/music-vip-disc-{vip,svip}.png：
+ * - VIP 284px 大黑胶（新截图重抠+内缩 0.75px 防边缘污染；**盘面整体压暗 ×0.78**——用户反馈深色
+ *   资料页上原灰盘面像一圈白晕，压暗后黑胶感回归、无白晕）；
+ * - SVIP 92px 金胶（用户新横条参考图重抠：金渐变盘面+黑外环+深金标签+中心孔）。
+ * 布局（按各自参考实测等比换算，胶囊高 13.5px）：
+ * - VIP 参考（Ø285/胶囊222→0.78）：盘 17.3px；SVIP 参考（Ø93.5/胶囊74→0.79）：盘 17px；
+ * - 胶囊左端**凹弧**（圆心=唱片圆心、半径 10px，与盘缘留 VIP 1.35 / SVIP 1.5px 间隙）；
+ * - 文字 9px：VIP 米白 #EDE6DD / SVIP 金 #F4E8D0（横条实测 244,232,208）；
+ *   胶囊底 VIP #302B28 / SVIP #3D3533（横条实测 61,53,51）；内边距 VIP 4.8/5.2、SVIP 5.4/6。
  * level<1 只显示 VIP。
  */
 export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
   const svip = type === 'svip';
-  const disc = svip ? 19 : 16;
+  const DISC = svip ? 17 : 17.3; // 唱片直径（各自参考实测比例）
+  const ARC = 10; // 胶囊左端凹弧半径，圆心=唱片圆心
+  // 胶囊盒左缘 = 唱片半径 - √(ARC²-(H/2)²)=±7.38 → 盒左缘落在唱片盒内 1.12/1.27px
+  const pillInset = DISC / 2 - 7.38;
+  const pillMl = pillInset - DISC;
+  // mask：唱片圆心在胶囊盒左缘右侧 7.38px；圆内透明（挖出凹弧）、圆外不透明
+  const maskCss = `radial-gradient(circle ${ARC}px at ${(DISC / 2 + pillMl) * -1}px 50%, transparent ${ARC - 0.15}px, #000 ${ARC}px)`;
   return (
     <span className="relative flex shrink-0 items-center" data-testid="music-mine-vip">
-      {/* 用户截图原像素唱片（圆形抠底无白边），垂直溢出胶囊，右端压进胶囊 5px */}
-      <span className="relative z-10 -mr-[5px] shrink-0" style={{ width: disc, height: disc }}>
-        <img
-          src={svip ? '/music-vip-disc-svip.png' : '/music-vip-disc-vip.png'}
-          alt=""
-          width={disc}
-          height={disc}
-          draggable={false}
-          className="select-none"
-        />
-      </span>
-      {/* 黑胶囊：右侧文字（VIP 白字 / SVIP 金字），高度 13.5px，数字跟随等级动态变化 */}
+      {/* 用户截图原像素唱片（圆形抠底无白边），上下微溢出胶囊 */}
+      <img
+        src={svip ? '/music-vip-disc-svip.png' : '/music-vip-disc-vip.png'}
+        alt=""
+        width={DISC}
+        height={DISC}
+        draggable={false}
+        className="shrink-0 select-none"
+        style={{ width: DISC, height: DISC }}
+      />
+      {/* 深色胶囊：左端凹弧（radial-gradient mask 挖空唱片+间隙区域），右端全圆角 */}
       <span
-        className={`flex h-[13.5px] items-center rounded-full pl-[9px] pr-[5px] ${svip ? 'bg-[#362E2B]' : 'bg-[#3D3634]'}`}
+        className={`flex h-[13.5px] shrink-0 items-center ${svip ? 'pl-[5.4px] pr-[6px]' : 'pl-[4.8px] pr-[5.2px]'}`}
+        style={{
+          marginLeft: pillMl,
+          borderRadius: '0 999px 999px 0',
+          background: svip ? '#3D3533' : '#302B28',
+          WebkitMaskImage: maskCss,
+          maskImage: maskCss,
+        }}
       >
         <span
-          className={`text-[11px] font-bold leading-none tracking-[0.01em] ${svip ? 'text-[#FBF2DC]' : 'text-[#F8F3F1]'}`}
+          className={`text-[9px] font-bold leading-none ${svip ? 'text-[#F4E8D0]' : 'text-[#EDE6DD]'}`}
         >
           {svip ? 'SVIP' : 'VIP'}
           {level >= 1 && <span className="font-bold">·{cnNum(level)}</span>}
@@ -440,9 +457,17 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </button>
         </div>
 
-        {/* 昵称 + VIP 徽章 */}
+        {/* 昵称 + VIP 徽章（SVIP 昵称变金色——网易云同款：黑胶SVIP 用户名金色展示） */}
         <div className="mt-2 flex items-center justify-center gap-2 px-6">
-          <h2 className="max-w-[62%] truncate text-[21px] font-bold" data-testid="music-mine-nickname">
+          <h2
+            className={`max-w-[62%] truncate bg-clip-text text-[21px] font-bold ${
+              // 登录账号是黑胶SVIP，或游客资料选择了 SVIP → 金色昵称
+              (loginUid ? loginVip?.isVip && loginVip.type === 'svip' : guest.vipType === 'svip')
+                ? 'text-transparent [background-image:linear-gradient(180deg,#FFE9B0_0%,#F5CE72_45%,#D9A648_100%)]'
+                : 'text-white'
+            }`}
+            data-testid="music-mine-nickname"
+          >
             {name}
           </h2>
           {loginUid ? (
