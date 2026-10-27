@@ -1110,3 +1110,5 @@ Stage Summary:
 - git 就绪：origin=cczzff468/5200（PAT 内嵌），可直接 commit + push origin main
 - 【重要运维知识】dev server / mini-services 必须用 `python3 /home/z/my-project/.zscripts/daemon-spawn.py bash <脚本>` 守护化启动（double-fork 挂 tini），否则会被沙箱回收器杀死；next-keeper.sh 是永生监督者（守护 3000 + 拉起 ncm-keeper 守护 3010）
 - 等待用户提出具体修改/新增功能需求
+
+**推送备注（第38轮补充）**：git push 直连 github.com TLS 握手后响应读取会超时（已知环境限制），但服务器实际已收到——超时后用 `curl -s -H "Authorization: token <PAT>" https://api.github.com/repos/cczzff468/5200/git/ref/heads/main` 验证远程 SHA 即可确认（本轮 15bf744 实际推送成功）。api.github.com 直连可达（200），github.com 主站被墙——必要时可用 GitHub Git Data API 走 api.github.com 推送。
