@@ -1069,3 +1069,25 @@ Stage Summary:
 - 关键文件：bubble-tail.tsx（top 支持 CSS calc）、qq.tsx/wechat.tsx/bubble-style-settings.tsx（尾巴定位）、globals.css（.bub-frosted 新类 + .bub-liquid 去边框）、bubble-style.ts（frosted/liquid 分支重写）
 - 设计决策：①尾巴平行用「距底 20px」而非「50%」——因为消息行 items-end 头像底对齐，距底 20px 恒等于头像中心，短/高气泡通吃；②投影恢复：投影（boxShadow 悬浮深度）≠ 高光（光泽反光），此前删高光连投影误删是「死白」根因之一；③磨砂颗粒 feTurbulence data-URI 是素色背景下毛玻璃可辨识的关键
 - 素色背景教训：白色半透玻璃在浅色素底上必然趋同于背景色，玻璃风格必须自带可辨识信号（颗粒/投影/描边），只靠 backdrop-filter 在素底上不可见
+---
+Task ID: 20
+Agent: Z.ai Code (main)
+Task: 第二十轮 —— 毛玻璃语音气泡白色菱形修复（语音/文字气泡统一）+ QQ 弯钩尾巴改为与头像顶端平行
+
+Work Log:
+- [根因定位] VLM 三轮分析用户截图（4x/6x 放大）确认：截图为微信毛玻璃样式下的对方语音气泡，气泡内部左侧有一块独立的大号白色实心菱形（旋转 45° 正方形）——即 globals.css 的 .wx-voice-bubble::before 伪元素尾巴。根因：::before 基础规则写在 .wx-voice-bubble 上、tail 类只补 left/right 定位；毛玻璃/液态装扮 hideTail 去掉 tail 类后 ::before 仍然生成，只是没有 left/right → 绝对定位元素落在静态位置（flex 首子项位、top:13px），变成气泡内部左上角一块悬浮白菱形（background-color:inherit 继承 0.62 白、无 blur 无噪点）。这就是「语音气泡和文字气泡不一样」的全部原因
+- [修复①菱形] globals.css：菱形全部属性（content/position/top/width/height/bg/rotate）移入 .wx-voice-tail-left::before 与 .wx-voice-tail-right::before 两个选择器——无 tail 类 = 无 ::before，彻底消失；原生/纯色/七彩（有 tail 类）的菱形尾巴渲染不变
+- [修复②尾巴平行] QQ 弯钩尾巴从「与头像中心线平行」（calc(100% - 26.5px)）改为「与头像顶端平行」（用户指定）：top = max(4px, calc(100% - 46.5px))——40px 头像顶端 = 气泡底上方 40px，尾巴中心 = 40 + SVG 半高 6.5 = 46.5；短气泡（42px）算出负值时 max 收在气泡顶部 4px（此时头像顶端≈气泡顶只差 2px，且与旧版「尾巴贴顶部」参考样式一致）。qq.tsx 主渲染 + wechat.tsx 防御分支同步
+- [修复②预览同步] bubble-style-settings.tsx 预览：26px 头像点 → top = max(0px, calc(100% - 32.5px))（26 + 6.5），尾巴中心 = 头像点顶端线；bubble-tail.tsx 注释更新几何推导
+- [E2E] 全新种子方案（联系人已迁 IndexedDB 本地化，旧 Prisma 种子作废）：agent-browser 390×844 直接种 ios-phone-db——contacts store（u-e2e-owner 小柚 USER 88888888/123456 + c-fanfan 凡凡 CHAR 恋人 friendWx/friendQq）+ kv（wx-chat-msgs:c-fanfan 5 条含 2 语音、qq-chat-msgs:c-fanfan 5 条含 2 引用）+ settings（bubbleStyle: wx=frosted / qq=default+双侧色）+ localStorage 双登录态 → reload 注水
+- [E2E 导航] 解锁（锁屏 pointer 序列）→ 主屏翻页 2 次（pages-track pointer 滑动）→ 微信三连 tap → 凡凡会话；关 App 走底部边缘手势（window 捕获 pointerdown 838px + 上滑）开多任务 → 微信卡片上滑 -145px 关闭 → QQ 图标 → 凡凡会话 → 动态 tab → 个人资料 → 个性装扮设置页
+- [E2E 验证①] 微信毛玻璃：语音气泡 ::before content=none（菱形消失）✓ 高 34px/999px 胶囊 ✓ 0.62 白 + blur(22px) ✓；3 文字气泡全部同款 34px/999px/0.62 白/blur(22px) —— 语音与文字完全统一 ✓ VLM 确认「无白色菱形、外观一致统一、无视觉异常」
+- [E2E 验证②] 原生尾巴无回归（合成元素测试）：.wx-voice-tail-left::before content=""、left -4px、top 13px、10×10、rotate45、bg 继承 #95EC69 ✓ right 侧 ✓ 裸 .wx-voice-bubble（无 tail 类）content=none ✓
+- [E2E 验证③] QQ 尾巴顶端平行：241px 高引用气泡（双侧）tailCenter−avatarTop = 0px（DOM）✓ 像素级复测 tail 绿色像素中心 460.0 = 头像顶边 460（diff +0.0px）✓；42px 短气泡尾巴收在气泡顶部（tail 中心距头像顶 9px，物理最优——头像顶已在气泡顶上方）；设置页预览 4 行 tailCenter−dotTop 全部 0px ✓
+- [质量] tsc 仅 proactive-msg.ts 既有基线；eslint 改动小文件 0 问题（qq/wechat 为 >500KB 大文件全量 lint OOM 属仓库既有现象，改动均为纯字符串/注释）；浏览器 errors/console 零错误；dev.log 仅 ncm-keeper instrumentation 既有警告
+- [方法论] ①「::before 基础规则 + 子类只补定位」的模式在「隐藏子类」场景会漏出无定位伪元素——伪元素属性必须完整挂在「存在性」选择器上；②VLM 对截图中小元素（13px 尾巴 vs 40px 头像）的相对位置判断不可靠（连续两次给出与像素数据相反的结论），几何验证一律以 DOM getBoundingClientRect + PIL 像素扫描为准
+
+Stage Summary:
+- 两项反馈全部落地：①毛玻璃/液态语音气泡白色菱形根除（::before 移到 tail 类上，语音与文字气泡完全同款 34px 磨砂胶囊）；②QQ 弯钩尾巴与头像顶端精确平行（高引用气泡 0px 实测、短气泡收在气泡顶=物理最优，双侧+设置页预览同步）
+- 关键文件：src/app/globals.css（::before 规则迁移）、src/components/apps/qq.tsx + wechat.tsx（top=max(4px, calc(100% - 46.5px))）、bubble-style-settings.tsx（预览 max(0px, calc(100% - 32.5px))）、bubble-tail.tsx（几何注释）
+- E2E 种子新方案沉淀：IndexedDB 直种（contacts/kv/settings store + localStorage 登录态）→ reload 注水，不再依赖服务端数据库

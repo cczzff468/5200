@@ -736,7 +736,13 @@
 }
 
 /* ───────── 微信语音气泡（voice-bubble.tsx）：伪元素小尾巴 + 播放中声波波纹闪烁（第 20 轮：声波改为用户指定现成 SVG 18×18） ───────── */
-.wx-voice-bubble::before {
+/* 尾巴菱形只挂在 .wx-voice-tail-left/right 两个类上（第二十轮修复）：
+   此前基础规则写在 .wx-voice-bubble::before 上、tail 类只补 left/right 定位——
+   毛玻璃/液态装扮隐藏尾巴（hideTail 去掉 tail 类）后 ::before 仍然生成，
+   只是没有 left/right → 落在静态位置（气泡内部左上），变成一块悬浮的白色菱形。
+   现在菱形的全部属性都在 tail 类上：无 tail 类 = 无 ::before，彻底消失。 */
+.wx-voice-tail-left::before,
+.wx-voice-tail-right::before {
   content: '';
   position: absolute;
   top: 13px; /* 10px 正方形 rotate(45deg) 后菱形中心落在 top 18px＝42px 气泡垂直居中偏上（用户指定） */

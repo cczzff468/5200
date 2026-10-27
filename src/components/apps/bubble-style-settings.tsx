@@ -81,8 +81,8 @@ function AuraLayer() {
 
 /** 单条迷你预览气泡：override 时用装扮样式，否则 App 原生配色
  *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 弯钩——与预览行头像圆点（26px，items-end
- *   底对齐）垂直平行，top = calc(100% - 19.5px) → 尾巴中心 = 头像点中心线上；
- *   微信 = 原生小方块随色；胶囊无尾巴） */
+ *   底对齐）顶端平行，top = max(0px, calc(100% - 32.5px)) → 尾巴中心 = 头像点顶端线上
+ *   （26 + 6.5 = 32.5）；微信 = 原生小方块随色；胶囊无尾巴） */
 function PreviewBubble({
   app,
   cfg,
@@ -108,7 +108,7 @@ function PreviewBubble({
       } ${className}`}
       style={vis.override ? vis.style : { backgroundColor: native }}
     >
-      {vis.tail === 'hook' && <BubbleTail side={side} color={vis.tailColor} top="calc(100% - 19.5px)" />}
+      {vis.tail === 'hook' && <BubbleTail side={side} color={vis.tailColor} top="max(0px, calc(100% - 32.5px))" />}
       {vis.tail === 'native' && app === 'wx' && (
         <span
           aria-hidden="true"

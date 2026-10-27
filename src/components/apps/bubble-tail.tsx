@@ -8,10 +8,10 @@
  * 我方（mine）自动水平镜像，尖端指向右侧自己的头像。
  * 尾巴固定尺寸（不随气泡行数缩放），与主流 IM 实现一致。
  *
- * 垂直定位（第十九轮）：top 支持 number（距顶 px）或 string（CSS calc）——
- * QQ 聊天行头像底对齐（items-end），弯钩尾巴要与头像垂直平行：
- * top = calc(100% - 26.5px) → 尾巴中心落在气泡底部上方 20px = 40px 头像的中心线，
- * 短气泡（34px）时 ≈7.5px 仍贴近气泡上部，高引用气泡时精确对齐头像。
+ * 垂直定位（第十九轮）：top 支持 number（距顶 px）或 string（CSS calc/max）——
+ * QQ 聊天行头像底对齐（items-end），弯钩尾巴要与**头像顶端**平行（第二十轮，用户指定）：
+ * top = max(4px, calc(100% - 46.5px)) → 尾巴中心落在气泡底部上方 40px = 40px 头像的顶端线
+ * （46.5 = 头像高 40 + SVG 半高 6.5）；短气泡算出负值时 max 收在气泡顶部（≈头像顶端）。
  */
 import { BUBBLE_TAIL_PATH } from '@/lib/ios/bubble-style';
 
@@ -24,7 +24,7 @@ export function BubbleTail({
   side: 'mine' | 'theirs';
   /** 尾巴填充色（与气泡本体同色） */
   color: string;
-  /** 距气泡顶部偏移：number=px；string=原样 CSS（如 'calc(100% - 26.5px)' 头像平行定位） */
+  /** 距气泡顶部偏移：number=px；string=原样 CSS（如 'max(4px, calc(100% - 46.5px))' 头像顶端平行定位） */
   top?: number | string;
 }) {
   const theirs = side === 'theirs';
