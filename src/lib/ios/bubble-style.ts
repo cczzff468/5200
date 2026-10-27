@@ -9,9 +9,9 @@
  *             （亮黄→青柠→杏色→青色→粉色→薰衣草→灰褐→琥珀→珊瑚）；
  *             QQ 装扮后圆一点点（14px），微信保持原生
  *  - frosted  毛玻璃：乳白磨砂胶囊——近乎不透明的奶白雾面（背后内容基本看不见）+
- *             强高斯模糊，无描边无高光；上下收窄（苗条胶囊）
- *  - liquid   液态玻璃：透亮清玻璃胶囊——背景清晰透出只留一层亮膜（brightness 提亮 +
- *             高饱和 .bub-liquid）+ 细白玻璃描边；上下收窄；无高光无闪光（用户指定）
+ *             强高斯模糊，无描边无高光无投影；高度与语音胶囊同高（34px）
+ *  - liquid   液态玻璃：清透玻璃胶囊——背景清晰透出只留一层极淡白膜（无 brightness
+ *             提亮，更透明）+ 细白玻璃描边；高度与语音胶囊同高（34px）；无高光无闪光
  *
  * 微信 / QQ 两 App 装扮完全隔离（wx / qq 各持 { kind, mineColor, theirsColor }），
  * 在微信里选的样式不影响 QQ，反之亦然。
@@ -328,9 +328,10 @@ export function bubbleVisual(
   }
 
   if (kind === 'frosted') {
-    // 毛玻璃（第十八轮终版）：乳白磨砂玻璃——近乎不透明的奶白雾面（背后内容基本
-    // 看不见，与液态的「透亮」一眼区分）+ 强高斯模糊；无描边无高光（磨砂哑光面）；
-    // 胶囊上下收窄（用户指定「上下变小一点」）；自定义色 = 磨砂彩色玻璃（0.78 奶化）
+    // 毛玻璃（第十九轮终版）：乳白磨砂玻璃——近乎不透明的奶白雾面（背后内容基本
+    // 看不见，与液态的「透底」一眼区分）+ 强高斯模糊；无描边无高光无投影（磨砂哑光面，
+    // 用户指定删高光）；高度对齐语音胶囊 34px（lineHeight 1.5 × 16px 字 = 24px 行盒 +
+    // 上下 padding 5px）；自定义色 = 磨砂彩色玻璃（0.78 奶化）
     const base = color ?? '#FFFFFF';
     return {
       override: true,
@@ -340,9 +341,9 @@ export function bubbleVisual(
         backgroundColor: withAlpha(base, color ? 0.78 : 0.86),
         backdropFilter: 'blur(24px)',
         WebkitBackdropFilter: 'blur(24px)',
-        paddingTop: '6px',
-        paddingBottom: '6px',
-        boxShadow: '0 4px 14px rgba(31, 35, 41, 0.10)',
+        paddingTop: '5px',
+        paddingBottom: '5px',
+        lineHeight: 1.5,
         color: color ? yiqTextOn(color) : '#111111',
       },
       tail: 'none',
@@ -351,9 +352,10 @@ export function bubbleVisual(
   }
 
   if (kind === 'liquid') {
-    // 液态玻璃（第十八轮终版）：透亮清玻璃（用户指定「透亮」）——背景清晰透出，
-    // 只留一层极淡亮膜（.bub-liquid：brightness 提亮 + 高饱和）+ 细白玻璃描边；
-    // 胶囊上下收窄；自定义色 = 该色极淡渐变（α 0.22↔0.08）
+    // 液态玻璃（第十九轮终版）：清透玻璃胶囊——背景清晰透出只留一层极淡白膜
+    // （.bub-liquid：无 brightness 提亮，用户指定删除；更透明的高饱和磨砂）+
+    // 细白玻璃描边；高度对齐语音胶囊 34px（24px 行盒 + 4px×2 padding + 2px 描边）；
+    // 自定义色 = 该色极淡渐变（α 0.16↔0.05）
     const base = color;
     return {
       override: true,
@@ -362,11 +364,12 @@ export function bubbleVisual(
         borderRadius: '999px',
         ...(base
           ? {
-              background: `linear-gradient(165deg, ${withAlpha(base, 0.22)} 0%, ${withAlpha(base, 0.08)} 45%, ${withAlpha(base, 0.14)} 75%, ${withAlpha(base, 0.20)} 100%)`,
+              background: `linear-gradient(165deg, ${withAlpha(base, 0.16)} 0%, ${withAlpha(base, 0.05)} 45%, ${withAlpha(base, 0.10)} 75%, ${withAlpha(base, 0.14)} 100%)`,
             }
           : {}),
-        paddingTop: '6px',
-        paddingBottom: '6px',
+        paddingTop: '4px',
+        paddingBottom: '4px',
+        lineHeight: 1.5,
       },
       tail: 'none',
       tailColor: '',

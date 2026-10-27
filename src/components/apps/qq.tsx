@@ -7197,7 +7197,10 @@ function ChatPage({
                       {bvis.tail === 'hook' && (
                         <BubbleTail side={mine ? 'mine' : 'theirs'} color={bvis.tailColor} top={4} />
                       )}
-                      {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方） */}
+                      {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方）。
+                          第十九轮修订：紧凑化（更小的内边距/字号，引用卡不再占大半个气泡）+ 引用文字用
+                          InlineEmojiText 渲染内置表情（[呲牙] 显示为小表情图而非文字代码，且不会被
+                          break-all 拆成 [呲 / 牙] 两截）+ 我方引用卡底色加深一档拉开与气泡本体的层次 */}
                       {m.quote && (() => {
                         const qTime = m.quote.time ?? (m.quote.id ? msgs.find((x) => x.id === m.quote?.id)?.time : undefined);
                         // Task 30：引用块按源消息类型加迷你预览——图片/表情=36px 缩略图，语音=图标+时长；
@@ -7208,25 +7211,25 @@ function ChatPage({
                         return (
                           <div
                             data-testid="qq-quote-block"
-                            className={`mb-2 rounded-[8px] px-3 py-2 ${mine ? 'bg-black/[0.14]' : 'bg-black/[0.06] dark:bg-white/[0.08]'}`}
+                            className={`mb-1.5 rounded-[6px] px-2.5 py-[6px] ${mine ? 'bg-black/[0.18]' : 'bg-black/[0.08] dark:bg-white/[0.08]'}`}
                           >
-                            <div className={`flex items-center gap-1.5 text-[13px] leading-[1.4] ${mine ? 'text-white/85' : 'text-black/50 dark:text-white/50'}`}>
+                            <div className={`flex items-center gap-1 text-[12px] leading-[1.35] ${mine ? 'text-white/80' : 'text-black/50 dark:text-white/50'}`}>
                               <span className="min-w-0 flex-1 truncate">
                                 {m.quote.name}
                                 {qTime ? ` ${qqQuoteTime(qTime)}` : ''}
                               </span>
-                              <CornerRightDown className={`h-3.5 w-3.5 shrink-0 ${mine ? 'text-white/70' : 'text-black/35 dark:text-white/40'}`} />
+                              <CornerRightDown className={`h-3 w-3 shrink-0 ${mine ? 'text-white/65' : 'text-black/35 dark:text-white/40'}`} />
                             </div>
-                            <div className="mt-0.5 flex items-center gap-2">
+                            <div className="mt-[2px] flex items-center gap-2">
                               {qThumb && <QqQuoteThumb src={qThumb} mine={mine} />}
-                              <p className={`min-w-0 flex-1 line-clamp-2 whitespace-pre-wrap break-all text-[14.5px] leading-[1.45] ${mine ? 'text-white' : 'text-black/80 dark:text-white/85'}`}>
+                              <p className={`min-w-0 flex-1 line-clamp-2 whitespace-pre-wrap break-all text-[13.5px] leading-[1.4] ${mine ? 'text-white' : 'text-black/80 dark:text-white/85'}`}>
                                 {qVoice ? (
                                   <span className="inline-flex items-center gap-1" data-testid="qq-quote-voice-row">
                                     <AudioLines className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
                                     [语音]{qVoice.duration ? ` ${qVoice.duration}"` : ''}
                                   </span>
                                 ) : (
-                                  m.quote.content
+                                  <InlineEmojiText app="qq" text={m.quote.content} imgSize={16} />
                                 )}
                               </p>
                             </div>

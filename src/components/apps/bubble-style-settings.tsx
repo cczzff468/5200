@@ -62,7 +62,7 @@ const KIND_CAPTIONS: Record<BubbleStyleKind, string> = {
   default: '纯色 · 可自选颜色',
   rainbow: '九色 · 按消息循环',
   frosted: '乳白磨砂 · 不透底',
-  liquid: '清透玻璃 · 透亮',
+  liquid: '清透玻璃 · 透底',
 };
 
 // ---------------- 迷你预览气泡（与聊天页同一渲染引擎，所见即所得） ----------------
