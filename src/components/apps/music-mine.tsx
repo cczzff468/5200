@@ -85,28 +85,30 @@ export function cnNum(n: number): string {
 }
 
 /**
- * VIP 徽章（第十三轮：按用户最新参考截图 1:1 重制）。
- * 唱片：用户截图原像素抠底 —— public/music-vip-disc-{vip,svip}.png。VIP 换新截图 285px 高清大黑胶
- * （外暗环 + 灰盘面 + 左上高光 + 中央小黑胶红标 + 右下反光）；SVIP 沿用金胶抠底。
- * 布局（新截图实测：唱片 Ø285 / 胶囊高 225 → 等比换算到胶囊 13.5px）：
- * - 唱片直径 17.5px（1.28×胶囊高），上下微溢出胶囊；
- * - 胶囊左端不是平头也不是圆角，而是**凹弧**（圆心=唱片圆心、半径 0.74×胶囊高的圆弧，
- *   与唱片边缘留 ~1.3px 间隙，弧最深处切入胶囊 ~2.6px）——用 CSS radial-gradient mask 精确复刻；
- * - 文字「VIP·柒」：字号 9px（参考图实测 ≈0.66×胶囊高），VIP 米白 #EDE6DD / SVIP 金 #FBF2DC，
- *   胶囊底 VIP #302B28（截图实测 48,43,40）/ SVIP #362E2B；数字跟随等级动态变化。
+ * VIP 徽章（第十四轮：双盘重抠 + 按各自参考截图实测微调）。
+ * 唱片：用户截图原像素抠底 —— public/music-vip-disc-{vip,svip}.png：
+ * - VIP 284px 大黑胶（新截图重抠+内缩 0.75px 防边缘污染；**盘面整体压暗 ×0.78**——用户反馈深色
+ *   资料页上原灰盘面像一圈白晕，压暗后黑胶感回归、无白晕）；
+ * - SVIP 92px 金胶（用户新横条参考图重抠：金渐变盘面+黑外环+深金标签+中心孔）。
+ * 布局（按各自参考实测等比换算，胶囊高 13.5px）：
+ * - VIP 参考（Ø285/胶囊222→0.78）：盘 17.3px；SVIP 参考（Ø93.5/胶囊74→0.79）：盘 17px；
+ * - 胶囊左端**凹弧**（圆心=唱片圆心、半径 10px，与盘缘留 VIP 1.35 / SVIP 1.5px 间隙）；
+ * - 文字 9px：VIP 米白 #EDE6DD / SVIP 金 #F4E8D0（横条实测 244,232,208）；
+ *   胶囊底 VIP #302B28 / SVIP #3D3533（横条实测 61,53,51）；内边距 VIP 4.8/5.2、SVIP 5.4/6。
  * level<1 只显示 VIP。
  */
 export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
   const svip = type === 'svip';
-  const DISC = 17.5; // 唱片直径（1.28×13.5）
-  const ARC = 10; // 胶囊左端凹弧半径（0.74×13.5），圆心=唱片圆心
-  // 胶囊盒左缘 = 唱片半径 - √(ARC²-(H/2)²) = 8.75-7.38 → 盒左缘落在唱片盒内 1.37px
-  const pillMl = 1.37 - DISC; // -1.37px（盒重叠区会被凹弧 mask 挖空，视觉无重叠）
-  // mask：唱片圆心在胶囊盒左缘左侧 7.38px；圆内透明（挖出凹弧）、圆外不透明
+  const DISC = svip ? 17 : 17.3; // 唱片直径（各自参考实测比例）
+  const ARC = 10; // 胶囊左端凹弧半径，圆心=唱片圆心
+  // 胶囊盒左缘 = 唱片半径 - √(ARC²-(H/2)²)=±7.38 → 盒左缘落在唱片盒内 1.12/1.27px
+  const pillInset = DISC / 2 - 7.38;
+  const pillMl = pillInset - DISC;
+  // mask：唱片圆心在胶囊盒左缘右侧 7.38px；圆内透明（挖出凹弧）、圆外不透明
   const maskCss = `radial-gradient(circle ${ARC}px at ${(DISC / 2 + pillMl) * -1}px 50%, transparent ${ARC - 0.15}px, #000 ${ARC}px)`;
   return (
     <span className="relative flex shrink-0 items-center" data-testid="music-mine-vip">
-      {/* 用户截图原像素唱片（圆形抠底无白边），上下溢出胶囊 2px */}
+      {/* 用户截图原像素唱片（圆形抠底无白边），上下微溢出胶囊 */}
       <img
         src={svip ? '/music-vip-disc-svip.png' : '/music-vip-disc-vip.png'}
         alt=""
@@ -118,17 +120,17 @@ export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number 
       />
       {/* 深色胶囊：左端凹弧（radial-gradient mask 挖空唱片+间隙区域），右端全圆角 */}
       <span
-        className="flex h-[13.5px] shrink-0 items-center pl-[4.8px] pr-[5.2px]"
+        className={`flex h-[13.5px] shrink-0 items-center ${svip ? 'pl-[5.4px] pr-[6px]' : 'pl-[4.8px] pr-[5.2px]'}`}
         style={{
           marginLeft: pillMl,
           borderRadius: '0 999px 999px 0',
-          background: svip ? '#362E2B' : '#302B28',
+          background: svip ? '#3D3533' : '#302B28',
           WebkitMaskImage: maskCss,
           maskImage: maskCss,
         }}
       >
         <span
-          className={`text-[9px] font-bold leading-none ${svip ? 'text-[#FBF2DC]' : 'text-[#EDE6DD]'}`}
+          className={`text-[9px] font-bold leading-none ${svip ? 'text-[#F4E8D0]' : 'text-[#EDE6DD]'}`}
         >
           {svip ? 'SVIP' : 'VIP'}
           {level >= 1 && <span className="font-bold">·{cnNum(level)}</span>}

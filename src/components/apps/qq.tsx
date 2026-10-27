@@ -40,7 +40,7 @@
  * - 会话、空间帖子、评论、密友值、登录态 localStorage 持久化
  */
 
-import { Fragment, useLayoutEffect, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Fragment, useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   AudioLines,
@@ -9885,101 +9885,6 @@ function readCoupleBondInfo(peerId: string): { bound: boolean; days: number; pen
   }
 }
 
-/** 情侣卡右侧 3D 装饰（第十三轮：对照用户最新参考图 1:1 重制）
- *  结构（参考图像素级测量：黄丝带双环耳（实心金色花瓣形，从爱心顶部两侧向后展开）
- *  + 蓝色椭圆环托底（上半波爱心遮挡）+ 果冻质感爱心（浅粉顶部圆瓣→玫红中部→淡粉下缘，
- *  顶部 V 四陷深洋红阴影 + 左大右小高光 + 下部大光雾）+ 右侧燕尾丝带垂坠（压在蓝环前）
- *  + 淡粉光晕底。颜色取样自参考图：金 #FFC11B、蓝 #62B2FE、心 #FA9CC2/#F0689F、四陷 #E04FC8 */
-function CoupleHeartMark({ className }: { className?: string }) {
-  const uid = useId().replace(/[^a-zA-Z0-9]/g, '');
-  const id = (n: string) => `chm-${n}-${uid}`;
-  return (
-    <svg viewBox="0 0 204 204" className={className} aria-hidden="true">
-      <defs>
-        <radialGradient id={id('halo')} cx="50%" cy="50%" r="50%">
-          <stop offset="0" stopColor="#FFF2F8" stopOpacity="0.9" />
-          <stop offset="0.55" stopColor="#FFDCF0" stopOpacity="0.45" />
-          <stop offset="1" stopColor="#FFD9EF" stopOpacity="0" />
-        </radialGradient>
-        <linearGradient id={id('earL')} x1="0.8" y1="0" x2="0.2" y2="1">
-          <stop offset="0" stopColor="#FFE275" />
-          <stop offset="0.5" stopColor="#FFC324" />
-          <stop offset="1" stopColor="#EEA01F" />
-        </linearGradient>
-        <linearGradient id={id('earR')} x1="0.2" y1="0" x2="0.8" y2="1">
-          <stop offset="0" stopColor="#FFE275" />
-          <stop offset="0.5" stopColor="#FFC324" />
-          <stop offset="1" stopColor="#EEA01F" />
-        </linearGradient>
-        <linearGradient id={id('tail')} x1="0" y1="0" x2="0.4" y2="1">
-          <stop offset="0" stopColor="#FFD456" />
-          <stop offset="1" stopColor="#EFA122" />
-        </linearGradient>
-        <radialGradient id={id('heart')} cx="50%" cy="30%" r="80%">
-          <stop offset="0" stopColor="#FFD6EB" />
-          <stop offset="0.38" stopColor="#FA9CC2" />
-          <stop offset="0.74" stopColor="#F0689F" />
-          <stop offset="1" stopColor="#FBA5C9" />
-        </radialGradient>
-        <radialGradient id={id('notch')} cx="50%" cy="50%" r="50%">
-          <stop offset="0" stopColor="#E04FC8" stopOpacity="0.85" />
-          <stop offset="1" stopColor="#E04FC8" stopOpacity="0" />
-        </radialGradient>
-        <radialGradient id={id('sheen')} cx="50%" cy="42%" r="60%">
-          <stop offset="0" stopColor="#FFFFFF" stopOpacity="0.72" />
-          <stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
-        </radialGradient>
-        <linearGradient id={id('ring')} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#9FDBFF" />
-          <stop offset="0.55" stopColor="#66B6FE" />
-          <stop offset="1" stopColor="#4A9BE8" />
-        </linearGradient>
-      </defs>
-
-      {/* 淡粉光晕底 */}
-      <circle cx="102" cy="84" r="95" fill={`url(#${id('halo')})`} />
-
-      {/* 金色丝带双环耳（实心花瓣形，心后两侧） */}
-      <g>
-        <path
-          d="M56 24 C 36 8, 14 16, 9 44 C 5 68, 13 94, 33 104 C 52 113, 68 102, 71 83 C 73 66, 64 53, 50 55 Z"
-          fill={`url(#${id('earL')})`}
-        />
-        <path
-          d="M148 24 C 168 8, 190 16, 195 44 C 199 68, 191 94, 171 104 C 152 113, 136 102, 133 83 C 131 66, 140 53, 154 55 Z"
-          fill={`url(#${id('earR')})`}
-        />
-        {/* 耳内折痕（深金）+ 顶部受光边 */}
-        <path d="M44 44 C 30 58, 25 78, 32 95" fill="none" stroke="#E1941B" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
-        <path d="M160 44 C 174 58, 179 78, 172 95" fill="none" stroke="#E1941B" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
-        <path d="M56 24 C 36 8, 14 16, 9 44" fill="none" stroke="#FFEC9C" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
-        <path d="M148 24 C 168 8, 190 16, 195 44" fill="none" stroke="#FFEC9C" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
-      </g>
-
-      {/* 蓝色椭圆环托底（上半段被爱心遮挡） */}
-      <ellipse cx="102" cy="127" rx="67" ry="21.5" fill="none" stroke={`url(#${id('ring')})`} strokeWidth="13" />
-
-      {/* 果冻爱心本体 */}
-      <path
-        d="M102 130 C 64 105, 46 80, 49 56 C 52 33, 76 26, 92 40 C 97 44, 100 49, 102 55 C 104 49, 107 44, 112 40 C 128 26, 152 33, 155 56 C 158 80, 140 105, 102 130 Z"
-        fill={`url(#${id('heart')})`}
-      />
-      {/* 顶部 V 四陷深洋红阴影 + 下部大光雾 + 左大右小高光 */}
-      <ellipse cx="102" cy="49" rx="6.5" ry="9" fill={`url(#${id('notch')})`} />
-      <ellipse cx="102" cy="103" rx="31" ry="21" fill={`url(#${id('sheen')})`} />
-      <ellipse cx="82" cy="64" rx="21" ry="12.5" fill="#fff" opacity="0.55" transform="rotate(-20 82 64)" />
-      <ellipse cx="124" cy="52" rx="8.5" ry="5.5" fill="#fff" opacity="0.38" transform="rotate(-20 124 52)" />
-
-      {/* 右侧燕尾丝带（压在蓝环前，参考图右耳下自然垂坠） */}
-      <path
-        d="M152 96 C 170 106, 181 120, 179 141 L 172 132 L 166 143 C 165 124, 157 110, 145 101 Z"
-        fill={`url(#${id('tail')})`}
-      />
-      <path d="M152 96 C 164 104, 173 114, 177 127" fill="none" stroke="#FFEC9C" strokeWidth="2" strokeLinecap="round" opacity="0.7" />
-    </svg>
-  );
-}
-
 function FriendBondPage({
   me,
   peer,
@@ -10086,8 +9991,16 @@ function FriendBondPage({
                 'linear-gradient(105deg, #D28AE0 0%, #E999D9 38%, #F4AFD4 68%, #FEC9D0 100%)',
             }}
           >
-            {/* 右侧 3D 爱心装饰（绝对定位：参考图实测图标占卡宽 41%，右上留 21px/46px） */}
-            <CoupleHeartMark className="pointer-events-none absolute right-[21px] top-[46px] h-[147px] w-[147px]" />
+            {/* 右侧情侣徽章（用户第十四轮：跟随聊天界面名字右面的徽章图标，放大版——
+                public/qq-couple-badge-lg.png 554×560 高清抠自用户素材图，与聊天气泡旁 CoupleMark 同源同设计；
+                尺寸 158×160 蓝底座收在进度条上方 7px，不压条） */}
+            <img
+              src="/qq-couple-badge-lg.png"
+              alt=""
+              draggable={false}
+              className="pointer-events-none absolute right-[10px] top-[24px] select-none"
+              style={{ width: 158, height: 160 }}
+            />
 
             {/* 左列内容（宽度让开右侧图标区） */}
             <div className="relative w-[160px]">
@@ -10138,7 +10051,12 @@ function FriendBondPage({
                   }}
                 />
               </div>
-              <CoupleHeartMark className="h-[19px] w-[19px] shrink-0 drop-shadow-[0_2px_4px_rgba(180,60,140,0.35)]" />
+              <img
+                src="/qq-couple-badge-lg.png"
+                alt=""
+                draggable={false}
+                className="h-[24px] w-[24px] shrink-0 select-none drop-shadow-[0_2px_4px_rgba(180,60,140,0.35)]"
+              />
             </div>
             <p className="relative mt-[7px] text-[9.5px] leading-none text-white/75">
               再得 {coupleLv.need} 分升级 Lv{coupleLv.lv + 1}
