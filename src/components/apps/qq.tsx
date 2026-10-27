@@ -10016,11 +10016,12 @@ function FriendBondPage({
               <p className="mt-[13px] text-[13px] leading-none text-white/85" data-testid="qq-bond-couple-days">
                 已绑定 {couple.days} 天
               </p>
+              {/* 第十七轮反馈：胶囊（rounded-full）→ 方形圆角 rounded-[7px] */}
               <button
                 type="button"
                 data-testid="qq-bond-couple-space"
                 onClick={openCoupleSpace}
-                className="mt-[7px] flex h-[26px] items-center gap-[1px] rounded-full bg-[#F255D7] pl-[11px] pr-[8px] text-[11.5px] font-medium leading-none text-white shadow-[0_3px_9px_rgba(214,45,180,0.38)] transition active:scale-95 active:bg-[#E040C4]"
+                className="mt-[7px] flex h-[26px] items-center gap-[1px] rounded-[7px] bg-[#F255D7] pl-[11px] pr-[8px] text-[11.5px] font-medium leading-none text-white shadow-[0_3px_9px_rgba(214,45,180,0.38)] transition active:scale-95 active:bg-[#E040C4]"
               >
                 情侣空间
                 <ChevronRight className="h-[13px] w-[13px]" aria-hidden="true" />

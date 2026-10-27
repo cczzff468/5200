@@ -847,3 +847,22 @@ Stage Summary:
 - 关键文件：public/music-vip-disc-vip.png(284px 压暗版)、public/music-vip-disc-svip.png(92px 新抠)、public/qq-couple-badge-lg.png(新 554×560)、music-mine.tsx(VipBadge)、qq.tsx(情侣卡/CoupleHeartMark删除)
 - 方法论沉淀：小尺寸位图徽章的"盘面亮度≈背景亮度"原则——盘面显著亮于深色背景就会读作白晕；抠底时内缩0.75px+超采样防边缘污染
 
+---
+Task ID: 30
+Agent: Z.ai Code (main)
+Task: 第十五轮反馈——VIP徽章显示不全（"VI"被遮罩吃掉）修复 + QQ情侣关系卡「情侣空间」按钮改方形圆角
+
+Work Log:
+- [根因定位] 用户截图 Screenshot_20261027_114250.jpg（游客"财财"资料页）VLM 逐字读出徽章文字为「P·叁」——"VI" 缺失！几何推演确认根因：VipBadge 凹弧遮罩（radial-gradient mask，圆心=唱片圆心 r10px）的透明区在胶囊中线上延伸到胶囊左缘+17.23px，而旧内边距 pl 仅 4.8/5.4px → "VI"（及 P 左半）完全落在透明区被吃掉，用户只看到「P·叁」（与截图完全吻合，此前多轮 E2E 未发现）
+- [参考实测] SVIP 横条参考图（IMG_20261027_101745.jpg）逐像素测量：胶囊内文字 x1325-1492，起点距胶囊左缘 1217.1 为 107.9px（×0.1824 = 19.68px 渲染尺寸，即凹弧凸点+2.17px）；文字距右缘 4.0px；胶囊总宽 54.2px
+- [修复] music-mine.tsx VipBadge：pl 4.8/5.4（VIP/SVIP 分设）→ 统一 19.7px，pr 5.2/6 → 4.2px；修复后胶囊总宽 ≈54px 与参考 54.2px 一致；VIP/SVIP 凹弧几何相同（ARC=10 同心）故统一取值
+- [按钮形状] qq.tsx 情侣关系卡「情侣空间 >」按钮：rounded-full（胶囊）→ rounded-[7px]（方形圆角，26px 高按钮配 7px 圆角）
+- [E2E 实机验证] 游客资料写入"财财/VIP·叁/显示徽章"（IndexedDB music-guest-profile）→ 音乐App「我的」：DOM 徽章 52×17 文本"VIP·叁"完整；8x 放大 VLM 逐字母确认 V/I/P/·/叁 全部完整可见、唱片凹弧衔接自然；像素级验证「VI」区域 27 个文字亮像素（修复前为 0）
+- [E2E SVIP] 切 svip/肆 → 徽章 57.5×17 "SVIP·肆" 完整，SVI 区域 40 亮像素，金色唱片衔接自然；SVIP 金色昵称同步验证（255 金色像素+VLM 确认金渐变）
+- [E2E 情侣卡] QQ→凡凡聊天（上轮测试数据仍在，情侣关系已绑定）→ PointerEvent 序列触发左滑手势（起点避开 button，代码里 el.closest('button') 会拦截）→ 好友标识页情侣卡：computed style borderRadius=7px；像素检测四角为混合色（圆角切角）顶边纯玫红直线；7x 放大 VLM 确认「方形圆角（矩形+小圆角），并非胶囊形」；整卡布局无变形；点击按钮成功跳转恋人空间 App（已相恋1天）
+- [质量] tsc 0 新增；eslint 两改动文件 0 问题；浏览器 console/errors 零新增；dev.log 无新错误
+
+Stage Summary:
+- 第十五轮两项全部完成并实机像素级验证：VIP 徽章「VI 被凹弧遮罩吃掉」根因修复（pl 19.7/pr 4.2 按参考逐像素实测）、情侣空间按钮改方形圆角（rounded-[7px]）
+- 关键文件：music-mine.tsx（VipBadge 内边距）、qq.tsx（情侣空间按钮圆角）
+- 方法论沉淀：CSS mask 挖空类设计的内边距必须按「透明区最大延伸（本例凹弧中线凸点=左缘+17.2px）+间隙」计算，不能只看盒子边缘；E2E 截图验证要逐字母读字（VLM 整体印象会说"正常"但逐字读才发现 VI 缺失）

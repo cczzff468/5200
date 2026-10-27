@@ -94,7 +94,11 @@ export function cnNum(n: number): string {
  * - VIP 参考（Ø285/胶囊222→0.78）：盘 17.3px；SVIP 参考（Ø93.5/胶囊74→0.79）：盘 17px；
  * - 胶囊左端**凹弧**（圆心=唱片圆心、半径 10px，与盘缘留 VIP 1.35 / SVIP 1.5px 间隙）；
  * - 文字 9px：VIP 米白 #EDE6DD / SVIP 金 #F4E8D0（横条实测 244,232,208）；
- *   胶囊底 VIP #302B28 / SVIP #3D3533（横条实测 61,53,51）；内边距 VIP 4.8/5.2、SVIP 5.4/6。
+ *   胶囊底 VIP #302B28 / SVIP #3D3533（横条实测 61,53,51）。
+ * - 第十七轮修复「VIP 显示不全」：凹弧遮罩透明区在胶囊中线上延伸到左缘+17.2px，旧内边距
+ *   pl 4.8/5.4 落在透明区内 →「VI」被遮罩吃掉只剩「P·叁」。按横条参考逐像素实测：
+ *   文字起点距胶囊左缘 19.7px（凹弧凸点+2.2px）、距右缘 4.0px → pl 19.7 / pr 4.2，
+ *   修复后胶囊总宽 ≈54px 与参考 54.2px 一致。
  * level<1 只显示 VIP。
  */
 export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
@@ -118,9 +122,10 @@ export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number 
         className="shrink-0 select-none"
         style={{ width: DISC, height: DISC }}
       />
-      {/* 深色胶囊：左端凹弧（radial-gradient mask 挖空唱片+间隙区域），右端全圆角 */}
+      {/* 深色胶囊：左端凹弧（radial-gradient mask 挖空唱片+间隙区域），右端全圆角。
+          pl 19.7px：文字必须从凹弧透明区（左缘+17.2px）之后开始，否则「VI」会被遮罩吃掉（参考实测 19.68px） */}
       <span
-        className={`flex h-[13.5px] shrink-0 items-center ${svip ? 'pl-[5.4px] pr-[6px]' : 'pl-[4.8px] pr-[5.2px]'}`}
+        className={`flex h-[13.5px] shrink-0 items-center pl-[19.7px] pr-[4.2px]`}
         style={{
           marginLeft: pillMl,
           borderRadius: '0 999px 999px 0',
