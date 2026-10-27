@@ -61,8 +61,8 @@ const KIND_ICONS: Record<BubbleStyleKind, typeof Palette> = {
 const KIND_CAPTIONS: Record<BubbleStyleKind, string> = {
   default: '纯色 · 可自选颜色',
   rainbow: '九色 · 按消息循环',
-  frosted: '乳白磨砂 · 不透底',
-  liquid: '清透玻璃 · 透底',
+  frosted: '奶白磨砂 · 隐约透底',
+  liquid: '清透水膜 · 透底',
 };
 
 // ---------------- 迷你预览气泡（与聊天页同一渲染引擎，所见即所得） ----------------
@@ -80,7 +80,9 @@ function AuraLayer() {
 }
 
 /** 单条迷你预览气泡：override 时用装扮样式，否则 App 原生配色
- *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 弯钩；微信 = 原生小方块随色；胶囊无尾巴） */
+ *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 弯钩——与预览行头像圆点（26px，items-end
+ *   底对齐）垂直平行，top = calc(100% - 19.5px) → 尾巴中心 = 头像点中心线上；
+ *   微信 = 原生小方块随色；胶囊无尾巴） */
 function PreviewBubble({
   app,
   cfg,
@@ -106,7 +108,7 @@ function PreviewBubble({
       } ${className}`}
       style={vis.override ? vis.style : { backgroundColor: native }}
     >
-      {vis.tail === 'hook' && <BubbleTail side={side} color={vis.tailColor} top={2} />}
+      {vis.tail === 'hook' && <BubbleTail side={side} color={vis.tailColor} top="calc(100% - 19.5px)" />}
       {vis.tail === 'native' && app === 'wx' && (
         <span
           aria-hidden="true"

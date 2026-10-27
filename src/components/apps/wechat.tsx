@@ -9162,7 +9162,8 @@ function ChatPage({
                     {/* 气泡小尾巴：装扮纯色/七彩 = 微信原生小三角随色（用户指定不变）；
                         QQ 弯钩在 qq.tsx；毛玻璃/液态胶囊无尾巴；无装扮 = 原生绿/白三角 */}
                     {bvis.tail === 'hook' ? (
-                      <BubbleTail side={m.role === 'me' ? 'mine' : 'theirs'} color={bvis.tailColor} top={4} />
+                      /* 防御分支：微信装扮永不返回 hook（原生小三角），仅类型完备性保留 */
+                      <BubbleTail side={m.role === 'me' ? 'mine' : 'theirs'} color={bvis.tailColor} top="calc(100% - 26.5px)" />
                     ) : bvis.tail === 'native' ? (
                       <span
                         aria-hidden="true"

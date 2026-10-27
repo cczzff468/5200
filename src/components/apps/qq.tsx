@@ -7193,9 +7193,12 @@ function ChatPage({
                       style={bvis.override ? bvis.style : mine ? { backgroundColor: '#0099FF' } : undefined}
                     >
                       {/* 气泡小尾巴（第十八轮）：装扮 solid/七彩 = 参考图同款弯钩尾巴（QQ 原生无尾巴）；
-                          毛玻璃/液态胶囊无尾巴 */}
+                          毛玻璃/液态胶囊无尾巴。
+                          垂直定位（第十九轮）：与头像垂直平行——消息行 items-end（头像底对齐，
+                          40px 头像中心 = 气泡底上方 20px），尾巴中心取 calc(100% - 26.5px)
+                          （SVG 高 13px 中心 6.5px）：短气泡 ≈7.5px 贴近上部，高引用气泡精确落在头像中心线 */}
                       {bvis.tail === 'hook' && (
-                        <BubbleTail side={mine ? 'mine' : 'theirs'} color={bvis.tailColor} top={4} />
+                        <BubbleTail side={mine ? 'mine' : 'theirs'} color={bvis.tailColor} top="calc(100% - 26.5px)" />
                       )}
                       {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方）。
                           第十九轮修订：紧凑化（更小的内边距/字号，引用卡不再占大半个气泡）+ 引用文字用
