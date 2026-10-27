@@ -85,59 +85,35 @@ export function cnNum(n: number): string {
 }
 
 /**
- * VIP 徽章（第十轮 1:1 重制，用户参考图）：大号黑胶唱片图标（上下溢出胶囊，约为胶囊 1.35 倍）
- * + 黑色胶囊文字。
- * - VIP（红）：黑胶唱片（深黑盘面 + 唱片纹路 + 红色唱片标 + 深红中孔），白字「VIP·叁」；
- * - SVIP（金）：金胶唱片（金色盘面 + 金纹 + 深棕唱片标带金环 + 深色中孔），金字「SVIP·肆」；
- * 唱片压在胶囊左端上（z 浮于胶囊），与真机网易云一致。level<1 只显示 VIP。
+ * VIP 徽章（第十二轮：唱片直接用用户截图原像素抠底 —— public/music-vip-disc-{vip,svip}.png，
+ * 圆形 alpha 无白边）+ CSS 黑胶囊 + 动态等级文字（其他不变，就数字变）。
+ * - VIP：黑胶唱片（红色唱片标）+ 暖黑胶囊白字「VIP·叁」；
+ * - SVIP：金胶唱片 + 深棕胶囊金字「SVIP·肆」；
+ * 唱片压在胶囊左端上（z 浮于胶囊），尺寸比例按截图实测（VIP 盘 16px / SVIP 盘 19px，胶囊 13.5px）。
+ * level<1 只显示 VIP。
  */
 export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
   const svip = type === 'svip';
+  const disc = svip ? 19 : 16;
   return (
     <span className="relative flex shrink-0 items-center" data-testid="music-mine-vip">
-      {/* 大号黑胶唱片：17×17，垂直方向溢出 13px 胶囊上下各 2px；右端压进胶囊 6px */}
-      <span className="relative z-10 -mr-[6px] shrink-0" style={{ width: 17, height: 17 }}>
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width={17} height={17} aria-hidden="true">
-          <defs>
-            <linearGradient id={svip ? 'vip-disc-svip' : 'vip-disc-vip'} x1="0" y1="0" x2="1" y2="1">
-              {svip ? (
-                <>
-                  <stop offset="0" stopColor="#F7DE9B" />
-                  <stop offset="0.45" stopColor="#E3B866" />
-                  <stop offset="1" stopColor="#B98A3B" />
-                </>
-              ) : (
-                <>
-                  <stop offset="0" stopColor="#3A3A40" />
-                  <stop offset="0.5" stopColor="#1C1C21" />
-                  <stop offset="1" stopColor="#101014" />
-                </>
-              )}
-            </linearGradient>
-            <linearGradient id={svip ? 'vip-sheen-svip' : 'vip-sheen-vip'} x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stopColor="#FFFFFF" stopOpacity="0.5" />
-              <stop offset="0.5" stopColor="#FFFFFF" stopOpacity="0.04" />
-              <stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
-            </linearGradient>
-          </defs>
-          {/* 盘面 + 外缘高光 */}
-          <circle cx="20" cy="20" r="19" fill={`url(#${svip ? 'vip-disc-svip' : 'vip-disc-vip'})`} stroke={svip ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.4)'} strokeWidth="1" />
-          {/* 唱片纹路（两道细环） */}
-          <circle cx="20" cy="20" r="14.6" fill="none" stroke={svip ? 'rgba(122,84,24,0.5)' : 'rgba(255,255,255,0.13)'} strokeWidth="0.9" />
-          <circle cx="20" cy="20" r="11.2" fill="none" stroke={svip ? 'rgba(122,84,24,0.4)' : 'rgba(255,255,255,0.1)'} strokeWidth="0.8" />
-          {/* 左上高光 */}
-          <circle cx="20" cy="20" r="19" fill={`url(#${svip ? 'vip-sheen-svip' : 'vip-sheen-vip'})`} />
-          {/* 唱片标（红标/深棕标+金环）+ 中孔 */}
-          <circle cx="20" cy="20" r="7.2" fill={svip ? '#4A3818' : '#EF6A61'} stroke={svip ? '#E9C575' : 'rgba(0,0,0,0.25)'} strokeWidth={svip ? 1.6 : 0.8} />
-          <circle cx="20" cy="20" r="1.9" fill={svip ? '#171106' : '#8D2B27'} />
-        </svg>
+      {/* 用户截图原像素唱片（圆形抠底无白边），垂直溢出胶囊，右端压进胶囊 5px */}
+      <span className="relative z-10 -mr-[5px] shrink-0" style={{ width: disc, height: disc }}>
+        <img
+          src={svip ? '/music-vip-disc-svip.png' : '/music-vip-disc-vip.png'}
+          alt=""
+          width={disc}
+          height={disc}
+          draggable={false}
+          className="select-none"
+        />
       </span>
-      {/* 黑胶囊：右侧文字（VIP 白字 / SVIP 金字），高度 13px */}
+      {/* 黑胶囊：右侧文字（VIP 白字 / SVIP 金字），高度 13.5px，数字跟随等级动态变化 */}
       <span
-        className={`flex h-[13.5px] items-center rounded-full pl-[13px] pr-[8px] ${svip ? 'bg-[#241F15]' : 'bg-[#1B191B]'}`}
+        className={`flex h-[13.5px] items-center rounded-full pl-[9px] pr-[5px] ${svip ? 'bg-[#362E2B]' : 'bg-[#3D3634]'}`}
       >
         <span
-          className={`text-[10.5px] font-bold leading-none tracking-[0.01em] ${svip ? 'text-[#EECD82]' : 'text-[#FDF9F2]'}`}
+          className={`text-[11px] font-bold leading-none tracking-[0.01em] ${svip ? 'text-[#FBF2DC]' : 'text-[#F8F3F1]'}`}
         >
           {svip ? 'SVIP' : 'VIP'}
           {level >= 1 && <span className="font-bold">·{cnNum(level)}</span>}

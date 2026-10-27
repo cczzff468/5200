@@ -12,12 +12,12 @@ import { useCoupleBadgeOn } from '@/lib/ios/couple-invite';
  */
 export function CoupleMark({
   contactId,
-  size = 14,
+  size = 20,
   className = '',
   testId,
 }: {
   contactId: string | null | undefined;
-  /** 图标边长（px），徽章与钥匙同尺寸 */
+  /** 图标边长（px），徽章与钥匙同尺寸（第十二轮：14→20，用户反馈太小） */
   size?: number;
   className?: string;
   /** 测试锚点（会话列表/聊天页可区分） */
@@ -27,7 +27,7 @@ export function CoupleMark({
   if (!on) return null;
   return (
     <span
-      className={`inline-flex shrink-0 items-center align-[-2px] ${className}`}
+      className={`inline-flex shrink-0 items-center align-[-3px] ${className}`}
       {...(testId ? { 'data-testid': testId } : {})}
       role="img"
       aria-label="恋人空间标识"

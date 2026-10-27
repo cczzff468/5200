@@ -710,3 +710,19 @@ Stage Summary:
 - 第九轮全部改动（时长黑字/想你打卡/100件小事按经历/AI自主决策/QQ徽章）在新沙箱重建并实机验证通过
 - 第十轮：我方语音气泡镜像（5″圆弧菱形）、QQ标识换用户素材图（无白边）、消息列表同样显示标识、网易云 VIP 徽章 1:1 重制、礼物卡蝴蝶结实心化
 - 关键文件：couple-hundred.ts(新)、couple-mark.tsx(新)、public/qq-couple-{badge,key}.png(新)、couple-ai.ts、couple-invite.ts、couple-space.tsx、qq.tsx、voice-bubble.tsx、wx-gift.tsx、music-mine.tsx
+
+---
+Task ID: 27
+Agent: Z.ai 主控（Z.ai Code）
+Task: 第十二轮反馈——QQ徽章+钥匙放大 / 网易云VIP徽章改用户截图原像素抠底（只数字变、无白边） / 删除礼物参与冷却（多次要礼物不再被「刚刚才送过，先歇一歇」拦截）
+
+Work Log:
+- [QQ徽章放大] couple-mark.tsx 默认 size 14→20（对齐基线 align-[-2px]→[-3px]）；qq.tsx 聊天页标题栏与消息列表会话行两处调用同步 14→20，浏览器实机放大验证清晰
+- [VIP徽章真像素] 从用户截图（IMG_20261026_212231.jpg / 212208.jpg）按暗环几何精确定位唱片（VIP 盘圆心(609,672.5) r24；SVIP 盘圆心(1258.5,1369.5) r48——初测 1252 偏了 6.5px 导致左缘切进灰背景，已按环 bbox 修正），6x 超采样圆形 alpha 抠底 → public/music-vip-disc-{vip,svip}.png（51/99px，白/深/灰三底验证无白边、无点阵残留）；music-mine.tsx VipBadge 重写：SVG 手绘唱片 → <img> 用户原图唱片 + CSS 胶囊（按截图采样 VIP #3D3634 / SVIP #362E2B）+ 动态文字（VIP 白 #F8F3F1 / SVIP 金 #FBF2DC，等级 cnNum 照旧随 loginVip/游客等级变化——「其他不变，就数字变」）；盘/胶囊比例按截图实测（VIP 16px / SVIP 19px，胶囊 13.5px）
+- [冷却删除] tb-ai-engage.ts：TB_ENGAGE_COOLDOWN_MS（5min/角色）+ PROACTIVE_PAY_CD_MS（3min 全局）+ engageCdKey/tbEngageCoolingDown/tbMarkEngage/globalCoolingDown/markGlobal 全部删除；执行器 5 处拦截（帮付/买票/代买/自己买/送礼物）+ 3 处打点 + 提示词层【参与节流】规则一并移除；tbEngageTick 主动代付路径只剩 per-order aiAsked 一次性守卫
+- [兜底保证] E2E 发现模型偶发不输出 [帮你买] 标记而只嘴上答应（甚至照抄历史序列化行「[礼物卡片 ID:…]（你送出…）」假送）→ 三层修复：①buyRule/giftRule 教学加「回执行不是标记，绝不能照抄进回复；机主说再买/换一个/重新买同样直接输出标记，无任何次数限制」；②chat-rich.ts【动作与说话】纪律补反向分支「说给你买/马上送必须同一回复输出标记」；③wechat.tsx buildReplyMsgs 末尾运行时兜底：机主明确要买/送 + AI 正文有购买承诺 + 无婉拒语 + 本轮未执行过代买标记 → 新增 tbPickProductForText（目录 2 字滑窗评分，阈值 ≥2）按聊天文本选品合成 [帮你买:pid] 执行，礼物卡照常送进聊天
+- [验证] tsc 0 新增；eslint 改动文件 0 问题；E2E 实机 390×844：网易云游客资料开启 SVIP·肆 → 徽章=截图原像素金盘+深棕胶囊金字（编辑预览+资料页头部均正常，数字随等级动态）；重建测试账号（USER 小柚/CHAR 陈凡，QQ 微信均互通好友）→ 恋人空间 QQ 渠道邀请 AI 自动接受 → QQ 消息列表与聊天页名字后徽章+钥匙 20px 清晰显示；微信连发 4 次买礼物请求：第1次 [帮你买] 正常送礼卡、第2次无冷却拦截（模型回显假序列化行被识别）→ 第4次触发运行时兜底（AI 承诺「马上再给你买」后礼物卡立即真实送达，收下礼物→灰卡+通知行全链路正常）；浏览器 console 仅 HMR 瞬态警告，无新增错误
+
+Stage Summary:
+- 第十二轮三项全部完成：QQ 恋人标识放大到 20px；网易云 VIP/SVIP 徽章换用户截图原像素唱片（圆形抠底无白边，数字仍动态）；礼物/代买/代付/取件参与冷却整体删除 + 提示词禁回显 + 运行时兜底保证「要就送到」
+- 关键文件：couple-mark.tsx、qq.tsx、music-mine.tsx、public/music-vip-disc-{vip,svip}.png(新)、tb-ai-engage.ts、wechat.tsx、chat-rich.ts

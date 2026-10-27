@@ -97,7 +97,7 @@ import { WxGiftCardBubble, WxGiftPicker, WxGiftReceiveSheet, type WxGiftData } f
 import { TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT, tbGetProxy, tbProxyHistoryLine, tbProxyMeHistoryLine, tbReshareProxy, tbCreateOrderShare, stripTbEchoText } from '@/lib/ios/tb-share-proxy';
 import { tbShareHistoryLine } from '@/lib/ios/tb-share-proxy';
 import { TbDraftBubble } from './tb-draft-card';
-import { applyTbEngageAction, buildTbEngageCtx, isTbEngageActionKind, tbDraftHistoryLine } from '@/lib/ios/tb-ai-engage';
+import { applyTbEngageAction, buildTbEngageCtx, isTbEngageActionKind, tbDraftHistoryLine, tbPickProductForText } from '@/lib/ios/tb-ai-engage';
 import { tbMarkOrderGifted } from '@/lib/ios/taobao-store';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import {
@@ -6047,6 +6047,8 @@ function ChatPage({
     let cur = latest;
     const out: WxMsg[] = [];
     let t = baseTime;
+    // 第十二轮反馈兜底追踪：本轮是否真实执行过代买/送礼标记（兜底块防重复触发用）
+    let tbBuyActionDone = false;
     for (const part of extractRichActionParts(text)) {
       if (part.type === 'action') {
         // 40-a 拉黑拦截（审计破口一）：仅申请卡模式（byUser）下回复正文会在下方被整段丢弃，动作标记同样
@@ -6319,6 +6321,7 @@ function ChatPage({
         // 同步执行（帮付立即生效/草稿卡生成），产出卡片随回复队列投递；异步流（自己买/帮取快递）
         // fire-and-forget，卡片经 TB_PROXY_CARD_EVENT 实时合并；角色记忆由执行器直写
         if (isTbEngageActionKind(part.action.kind)) {
+          if (part.action.kind === 'tb-order-draft' || part.action.kind === 'tb-gift-send') tbBuyActionDone = true;
           const tbRes = applyTbEngageAction(part.action, peer, {
             app: 'wx',
             meName: addressNameOf(me, useSettings.getState().addressMode),
@@ -6425,6 +6428,35 @@ function ChatPage({
           }
           ctx.msgIdx += 1;
           t += 600 + Math.floor(Math.random() * 600);
+        }
+      }
+    }
+    // —— 第十二轮反馈运行时兜底（冷却已删，这里保证「要就送到」）——
+    // 机主这轮明确让买/让送，但 AI 只嘴上答应（没输出 [帮你买]/[送礼物] 标记，也没输出任何代付/买票
+    // 标记；提示词已禁但仍偶发）→ 按聊天文本匹配淘宝商品，直接合成 [帮你买] 执行——礼物卡照常送进聊天。
+    // 反向守卫：AI 明确婉拒/给理由改期时不强买；本轮已执行过代买标记时不重复。
+    if (!tbBuyActionDone) {
+      const lastMe = [...cur].reverse().find((m) => m.role === 'me' && typeof m.content === 'string' && m.content.trim());
+      const ask = lastMe?.content ?? '';
+      const wantsBuy = /(给我买|帮我买|再买|重新买|重买|换一个|换个|再送|买一个|买个|买份|送我一个|送我个|送我一份)/.test(ask);
+      const promised = /(给你买|给你送|重新给你买|马上给你|这就给你|去给你|重新买一|再给你买|给你买个|重新送你|给你补一个|这就去买)/.test(text);
+      const refused = /(不给你买|不能买|先不买|先不送|下次再|以后再|等你生日|等你过节|别急|没有合适的|没找到合适的|没找到贴合)/.test(text);
+      if (wantsBuy && promised && !refused) {
+        const pid = tbPickProductForText(`${ask} ${text}`);
+        if (pid) {
+          const tbRes = applyTbEngageAction({ kind: 'tb-order-draft', targetId: pid }, peer, {
+            app: 'wx',
+            meName: addressNameOf(me, useSettings.getState().addressMode),
+            recentTexts: cur.slice(-8).map((mm) => (typeof mm.content === 'string' ? mm.content : '')),
+          });
+          for (const cm of tbRes.msgs) {
+            out.push(cm as WxMsg);
+            t += 600 + Math.floor(Math.random() * 400);
+          }
+          if (tbRes.sys) {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: tbRes.sys } });
+            t += 1;
+          }
         }
       }
     }
