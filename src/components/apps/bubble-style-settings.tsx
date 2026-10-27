@@ -71,7 +71,8 @@ function AuraLayer() {
   );
 }
 
-/** 单条迷你预览气泡：override 时用装扮样式（含弯钩尾巴），否则 App 原生配色 */
+/** 单条迷你预览气泡：override 时用装扮样式，否则 App 原生配色
+ *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 弯钩；微信 = 原生小方块随色；胶囊无尾巴） */
 function PreviewBubble({
   app,
   cfg,
@@ -98,6 +99,13 @@ function PreviewBubble({
       style={vis.override ? vis.style : { backgroundColor: native }}
     >
       {vis.tail === 'hook' && <BubbleTail side={side} color={vis.tailColor} top={2} />}
+      {vis.tail === 'native' && app === 'wx' && (
+        <span
+          aria-hidden="true"
+          className={`absolute top-[7px] h-[6px] w-[6px] rotate-45 ${side === 'mine' ? '-right-[2px]' : '-left-[2px]'}`}
+          style={{ backgroundColor: vis.tailColor || native }}
+        />
+      )}
       {children}
     </div>
   );
@@ -199,8 +207,8 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
   const setBubbleStyle = useSettings((s) => s.setBubbleStyle);
   const setBubbleSchemes = useSettings((s) => s.setBubbleSchemes);
 
-  /** 自定义颜色正在编辑的侧（仅颜色分侧；样式对两侧同时生效） */
-  const [side, setSide] = useState<'mine' | 'theirs'>('mine');
+  /** 自定义颜色编辑目标（第十八轮修订）：both=两侧一起改 / mine=我的 / theirs=TA的（仅颜色分侧；样式对两侧同时生效） */
+  const [side, setSide] = useState<'both' | 'mine' | 'theirs'>('mine');
   /** 命名弹窗 */
   const [naming, setNaming] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -208,9 +216,15 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
   /** 当前 App 的装扮（微信/QQ 隔离：只读写 bubbleStyle[app]） */
   const appStyle: BubbleAppStyle = bubbleStyle[app] ?? { kind: 'default' };
   const kindDisabled = appStyle.kind === 'rainbow';
-  const currentColor = side === 'mine' ? appStyle.mineColor : appStyle.theirsColor;
+  /** 当前编辑目标展示色：both 优先取我的（未设时回退 TA 的） */
+  const currentColor =
+    side === 'both'
+      ? appStyle.mineColor ?? appStyle.theirsColor
+      : side === 'mine'
+        ? appStyle.mineColor
+        : appStyle.theirsColor;
   /** 无自定义色时滑条落在 App 原生默认色位置（拖动任意一杆立即生成自定义色落地） */
-  const fallbackHex = NATIVE_BUBBLE[app][side];
+  const fallbackHex = NATIVE_BUBBLE[app][side === 'theirs' ? 'theirs' : 'mine'];
   const hsl = useMemo(() => hexToHsl(currentColor ?? fallbackHex), [currentColor, fallbackHex]);
 
   /** 修改当前 App 的装扮（另一个 App 原样保留 —— 装扮隔离） */
@@ -221,9 +235,16 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
     });
   };
 
-  /** 滑条拖动：实时合成 hex 写入当前侧（预览卡/聊天页即时跟随） */
+  /** 写入颜色到编辑目标（both = 两侧同步写） */
+  const commitColor = (hex: string) => {
+    if (side === 'both') patchAppStyle({ mineColor: hex, theirsColor: hex });
+    else if (side === 'mine') patchAppStyle({ mineColor: hex });
+    else patchAppStyle({ theirsColor: hex });
+  };
+
+  /** 滑条拖动：实时合成 hex 写入编辑目标（预览卡/聊天页即时跟随） */
   const commitHsl = (h: number, s: number, l: number) => {
-    patchAppStyle(side === 'mine' ? { mineColor: hslToHex(h, s, l) } : { theirsColor: hslToHex(h, s, l) });
+    commitColor(hslToHex(h, s, l));
   };
 
   const saveScheme = () => {
@@ -355,7 +376,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
           </div>
         </section>
 
-        {/* ---------- 3. 自定义颜色（分侧：我的 / TA的） ---------- */}
+        {/* ---------- 3. 自定义颜色（可一起改 / 分侧：一起 · 我的 / TA的） ---------- */}
         <section
           aria-label="自定义颜色"
           className={`mt-5 rounded-[20px] bg-white/70 p-4 ring-1 ring-white/70 backdrop-blur-xl transition-opacity dark:bg-white/[0.07] dark:ring-white/10 ${
@@ -364,15 +385,15 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
         >
           <div className="mb-3 flex items-center justify-between gap-2">
             <p className="shrink-0 text-[14px] font-semibold">自定义颜色</p>
-            {/* 侧别切换（仅颜色分侧）：我的气泡 / TA的气泡 */}
+            {/* 编辑目标三段切换（仅颜色分侧）：一起 / 我的 / TA的 */}
             <div className="relative flex rounded-full bg-black/[0.06] p-[3px] dark:bg-white/10">
-              {(['mine', 'theirs'] as const).map((k) => (
+              {(['both', 'mine', 'theirs'] as const).map((k) => (
                 <button
                   key={k}
                   type="button"
                   onClick={() => setSide(k)}
                   aria-pressed={side === k}
-                  className={`relative z-10 rounded-full px-3 py-[5px] text-[12px] font-semibold transition-colors ${
+                  className={`relative z-10 rounded-full px-2.5 py-[5px] text-[12px] font-semibold transition-colors ${
                     side === k ? 'text-white' : 'text-black/50 dark:text-white/55'
                   }`}
                 >
@@ -384,15 +405,23 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                       transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                     />
                   )}
-                  <span className="relative">{k === 'mine' ? '我的' : 'TA的'}</span>
+                  <span className="relative">{k === 'both' ? '一起' : k === 'mine' ? '我的' : 'TA的'}</span>
                 </button>
               ))}
             </div>
-            {currentColor ? (
+            {(side === 'both' ? appStyle.mineColor || appStyle.theirsColor : currentColor) ? (
               <button
                 type="button"
                 aria-label="恢复默认色"
-                onClick={() => patchAppStyle(side === 'mine' ? { mineColor: undefined } : { theirsColor: undefined })}
+                onClick={() =>
+                  patchAppStyle(
+                    side === 'both'
+                      ? { mineColor: undefined, theirsColor: undefined }
+                      : side === 'mine'
+                        ? { mineColor: undefined }
+                        : { theirsColor: undefined },
+                  )
+                }
                 className="flex shrink-0 items-center gap-1 rounded-full bg-black/[0.06] px-2.5 py-1 text-[11.5px] font-medium text-muted-foreground transition-colors active:bg-black/10 dark:bg-white/10 dark:active:bg-white/15"
               >
                 <RotateCcw className="h-3 w-3" aria-hidden="true" />
@@ -454,7 +483,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                   type="button"
                   aria-label={`预设色 ${c}`}
                   aria-pressed={selected}
-                  onClick={() => patchAppStyle(side === 'mine' ? { mineColor: c } : { theirsColor: c })}
+                  onClick={() => commitColor(c)}
                   className={`flex aspect-square items-center justify-center rounded-full ring-1 ring-black/10 transition-transform active:scale-90 dark:ring-white/15 ${
                     selected ? 'ring-2' : ''
                   }`}
@@ -466,7 +495,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
             })}
           </div>
           <p className="mt-2.5 px-0.5 text-[11px] text-muted-foreground">
-            颜色分「{side === 'mine' ? '我的' : 'TA的'}」独立设置，互不影响
+            {side === 'both' ? '「一起」同步修改我的与TA的气泡颜色' : `颜色分「${side === 'mine' ? '我的' : 'TA的'}」独立设置，互不影响`}
           </p>
           {kindDisabled && (
             <p className="mt-2 rounded-xl bg-black/[0.05] px-3 py-2 text-[12px] text-muted-foreground dark:bg-white/[0.07]">

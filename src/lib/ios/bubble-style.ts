@@ -79,12 +79,12 @@ export const DEFAULT_BUBBLE_STYLE: BubbleStyleConfig = {
 };
 
 /**
- * 弯钩小尾巴 SVG path（viewBox 0 0 11 14）——参考图同款「水滴弯钩」：
- * 尖端在左上指向头像方向，外缘凸弧向下掠入气泡本体，内缘与气泡圆角之间留出月牙缺口；
- * 右缘直线藏在气泡身下（宿主定位时横向重叠 2px 保证无缝）。
+ * 弯钩小尾巴 SVG path（viewBox 0 0 11 14）——参考图同款「水滴弯钩」第十八轮修订版：
+ * 尖端更细（末尾收敛成窄尖，参考图同款）；尖端在左上指向头像方向，
+ * 外缘凸弧向下掠入气泡本体，右缘直线藏在气泡身下（宿主定位时横向重叠 2px 保证无缝）。
  */
 export const BUBBLE_TAIL_PATH =
-  'M11 3.2 C7.4 1.4 3.8 0.5 2 1.7 C0.6 2.6 0.6 4.1 1.8 4.8 C4.3 6.5 7.3 9.7 11 13.4 Z';
+  'M11 3.4 C7.8 1.5 4 0.5 2.2 0.9 C1 1.15 0.7 2 1.5 2.6 C3.5 4.6 7.5 8.6 11 12.6 Z';
 
 /** 预设色板（全色彩盘快捷区：参考图 9 色打头 + 常用色补充，共 24 色） */
 export const PRESET_SWATCHES: readonly string[] = [
@@ -269,13 +269,13 @@ export interface BubbleVisual {
   /** override 时的内联样式（背景/圆角/文字色/模糊/描边/高光） */
   style: CSSProperties;
   /**
-   * 小尾巴指令：
-   *  - 'native' 保持 App 原生尾巴（微信小方块三角 / QQ 无尾巴）
-   *  - 'hook'   渲染参考图同款弯钩尾巴（fill = tailColor；我方自动镜像）
+   * 小尾巴指令（第十八轮修订：尾巴策略按 App 区分）：
+   *  - 'native' 保持 App 原生尾巴（微信小方块三角 · 纯色/七彩时随 tailColor 上色；QQ 原生无尾巴）
+   *  - 'hook'   渲染参考图同款弯钩尾巴（QQ 纯色/七彩；fill = tailColor；我方自动镜像）
    *  - 'none'   不渲染尾巴（毛玻璃/液态胶囊）
    */
   tail: 'native' | 'hook' | 'none';
-  /** tail='hook' 时的填充色 */
+  /** 尾巴填充色（hook 的 SVG fill / native 方块的 backgroundColor；无装扮时为空） */
   tailColor: string;
 }
 
@@ -303,14 +303,15 @@ export function bubbleVisual(
   if (kind === 'default' && !color) return NO_VISUAL;
 
   if (kind === 'rainbow') {
-    // 七彩：参考图 9 色按消息序号循环 + 大圆角 + 弯钩尾巴
+    // 七彩：参考图 9 色按消息序号循环；尾巴按 App —— 微信保持原生小三角（随色），
+    // QQ 用参考图同款弯钩（QQ 原生无尾巴，装扮后才有）
     const idx = ((msgIndex % RAINBOW_COLORS.length) + RAINBOW_COLORS.length) % RAINBOW_COLORS.length;
     const c = RAINBOW_COLORS[idx];
     return {
       override: true,
       className: '',
       style: { backgroundColor: c, borderRadius: '14px', color: yiqTextOn(c) },
-      tail: 'hook',
+      tail: app === 'wx' ? 'native' : 'hook',
       tailColor: c,
     };
   }
@@ -336,7 +337,9 @@ export function bubbleVisual(
   }
 
   if (kind === 'liquid') {
-    // 液态气泡：胶囊形（椭圆）无尾巴 + 流动高光 + 折射边缘（质感在 .bub-liquid 全局类）
+    // 液态气泡（第十八轮修订）：极透明冰玻璃（参考图 IMG_20261027_163645）——
+    // 胶囊形无尾巴；默认 = 深色冰玻璃底（.bub-liquid 全局类，白字）；
+    // 自定义色 = 该色极低透明度渐变（α 0.30↔0.14，背景几乎完全透出，只留一层色膜）
     const base = color;
     return {
       override: true,
@@ -344,21 +347,22 @@ export function bubbleVisual(
       style: base
         ? {
             borderRadius: '999px',
-            background: `linear-gradient(165deg, ${withAlpha(base, 0.6)} 0%, ${withAlpha(base, 0.26)} 45%, ${withAlpha(base, 0.38)} 75%, ${withAlpha(base, 0.55)} 100%)`,
+            background: `linear-gradient(165deg, ${withAlpha(base, 0.30)} 0%, ${withAlpha(base, 0.14)} 45%, ${withAlpha(base, 0.20)} 75%, ${withAlpha(base, 0.28)} 100%)`,
             color: yiqTextOn(base),
           }
-        : { borderRadius: '999px', color: '#111111' },
+        : { borderRadius: '999px', color: '#FFFFFF' },
       tail: 'none',
       tailColor: '',
     };
   }
 
-  // default + 自定义色：参考图同款大圆角纯色气泡 + 弯钩尾巴
+  // default + 自定义色：参考图同款大圆角纯色气泡；尾巴按 App ——
+  // 微信保持原生小三角（随色，用户指定不变），QQ 用弯钩尾巴
   return {
     override: true,
     className: '',
     style: { backgroundColor: color, borderRadius: '14px', color: yiqTextOn(color as string) },
-    tail: 'hook',
+    tail: app === 'wx' ? 'native' : 'hook',
     tailColor: color as string,
   };
 }

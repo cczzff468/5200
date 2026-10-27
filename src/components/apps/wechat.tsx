@@ -9026,9 +9026,19 @@ function ChatPage({
                   />
                 </div>
               ) : m.kind === 'voice' && m.voice ? (
-                /* 语音消息：播放/暂停 + 波形 + 时长；长按菜单：转文字/复制/…；转写结果显示在气泡下方 */
+                /* 语音消息：播放/暂停 + 波形 + 时长；长按菜单：转文字/复制/…；转写结果显示在气泡下方
+                   （第十八轮：语音气泡跟随装扮 —— 纯色/七彩原生尾巴随色，毛玻璃/液态胶囊无尾巴） */
                 <div {...bubblePress}>
-                  <VoiceMsgBubble msgId={m.id} voice={m.voice} side={m.role} theme="wx" />
+                  <VoiceMsgBubble
+                    msgId={m.id}
+                    voice={m.voice}
+                    side={m.role}
+                    theme="wx"
+                    bubbleClassName={bvis.override ? bvis.className : undefined}
+                    decorated={bvis.override}
+                    hideTail={bvis.override && bvis.tail === 'none'}
+                    style={bvis.override ? bvis.style : undefined}
+                  />
                 </div>
               ) : m.kind === 'call' && m.call ? (
                 /* 语音通话卡片：微信配色电话卡；整卡可点回拨（用户需求：点击通话卡片就能回拨电话）；长按菜单复制/删除等默认项。
@@ -9149,18 +9159,17 @@ function ChatPage({
                     }`}
                     style={bvis.override ? bvis.style : undefined}
                   >
-                    {/* 气泡小尾巴：装扮 solid/七彩 = 参考图同款弯钩尾巴；毛玻璃/液态胶囊无尾巴；
-                        原生默认保持微信同款小三角 */}
+                    {/* 气泡小尾巴：装扮纯色/七彩 = 微信原生小三角随色（用户指定不变）；
+                        QQ 弯钩在 qq.tsx；毛玻璃/液态胶囊无尾巴；无装扮 = 原生绿/白三角 */}
                     {bvis.tail === 'hook' ? (
                       <BubbleTail side={m.role === 'me' ? 'mine' : 'theirs'} color={bvis.tailColor} top={4} />
                     ) : bvis.tail === 'native' ? (
                       <span
                         aria-hidden="true"
                         className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
-                          m.role === 'me'
-                            ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]'
-                            : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
-                        }`}
+                          m.role === 'me' ? '-right-[3px]' : '-left-[3px]'
+                        } ${bvis.tailColor ? '' : m.role === 'me' ? 'bg-[#95EC69] dark:bg-[#3EB575]' : 'bg-white dark:bg-[#1E1E1E]'}`}
+                        style={bvis.tailColor ? { backgroundColor: bvis.tailColor } : undefined}
                       />
                     ) : null}
                     {bubbleContent ? (

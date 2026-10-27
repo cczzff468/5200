@@ -774,42 +774,48 @@
 }
 
 /* ---------------------------------------------------------------------------
- * 液态气泡（第十八轮）：胶囊外形 + 顶部液面高光 + 流动光泽扫过 + 折射边缘。
+ * 液态气泡（第十八轮修订）：极透明冰玻璃（参考图 IMG_20261027_163645）。
+ * 胶囊外形 + 深色冰玻璃极低透明底（背景几乎完全透出，只隔一层色膜）+
+ * 高斯模糊提饱和 + 顶部月牙高光 + 细白描边 + 柔和悬浮阴影 + 缓慢流动光泽。
  * 由 bubbleVisual() 在 kind=liquid 时挂到气泡上（className: bub-liquid）；
- * 自定义色时内联 background 覆盖默认白玻璃底，::before/::after 高光不受影响。
+ * 自定义色时内联 background 覆盖默认深色底，高光/描边不受影响。
  * ------------------------------------------------------------------------- */
 .bub-liquid {
   position: relative;
   overflow: hidden;
-  background: linear-gradient(165deg, rgba(255, 255, 255, 0.58) 0%, rgba(255, 255, 255, 0.14) 45%, rgba(255, 255, 255, 0.30) 75%, rgba(255, 255, 255, 0.5) 100%);
-  -webkit-backdrop-filter: blur(10px) saturate(180%);
-  backdrop-filter: blur(10px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: linear-gradient(
+    165deg,
+    rgba(64, 72, 82, 0.30) 0%,
+    rgba(26, 30, 36, 0.16) 45%,
+    rgba(34, 39, 46, 0.24) 100%
+  );
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  backdrop-filter: blur(14px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.42);
   box-shadow:
-    inset 0 1.2px 1px rgba(255, 255, 255, 0.95),
-    inset 0 -8px 14px rgba(255, 255, 255, 0.22),
-    0 6px 18px rgba(31, 35, 41, 0.14);
+    inset 0 1px 0 rgba(255, 255, 255, 0.32),
+    0 8px 22px rgba(31, 35, 41, 0.16);
 }
-/* 顶部液面高光：椭圆 specular，模拟液面反光 */
+/* 顶部月牙高光：玻璃曲面反光（参考图同款左上集中亮斑） */
 .bub-liquid::before {
   content: '';
   position: absolute;
-  left: 10%;
-  right: 10%;
+  left: 8%;
+  right: 22%;
   top: 1px;
-  height: 42%;
+  height: 46%;
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0) 100%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.38) 0%, rgba(255, 255, 255, 0) 100%);
   pointer-events: none;
 }
-/* 流动光泽：斜向光带周期性扫过液面，赋予「液态」流动感 */
+/* 流动光泽：极淡光带缓慢扫过液面（液态感；参考图静态版可无视） */
 .bub-liquid::after {
   content: '';
   position: absolute;
   inset: -60% -30%;
-  background: linear-gradient(105deg, transparent 40%, rgba(255, 255, 255, 0.42) 50%, transparent 60%);
+  background: linear-gradient(105deg, transparent 42%, rgba(255, 255, 255, 0.22) 50%, transparent 58%);
   transform: translateX(-80%);
-  animation: bub-liquid-sweep 4.8s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+  animation: bub-liquid-sweep 5.6s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
   pointer-events: none;
 }
 @keyframes bub-liquid-sweep {
@@ -817,5 +823,5 @@
   100% { transform: translateX(80%); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .bub-liquid::after { animation: none; opacity: 0.5; }
+  .bub-liquid::after { animation: none; opacity: 0.4; }
 }

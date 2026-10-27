@@ -187,6 +187,7 @@ export function VoiceMsgBubble({
   theme,
   bubbleClassName,
   decorated,
+  hideTail,
   style,
 }: {
   msgId: string;
@@ -198,6 +199,8 @@ export function VoiceMsgBubble({
   bubbleClassName?: string;
   /** 气泡装扮已接管配色（播放钮/波形改用 currentColor 适配任意底色） */
   decorated?: boolean;
+  /** 隐藏尾巴（第十八轮：毛玻璃/液态胶囊无尾巴；仅微信端有原生尾巴可隐藏） */
+  hideTail?: boolean;
   /** QQ/信息 我方气泡的底色等自定义样式（由调用方传 backgroundColor） */
   style?: React.CSSProperties;
 }) {
@@ -222,9 +225,13 @@ export function VoiceMsgBubble({
         ? 'bg-[#007AFF] text-white'
         : 'bg-[#0099FF] text-white';
 
-  /** 圆角：微信 4px（用户指定微圆角）；QQ 12px；信息 18px。微信尾巴由 ::before 伪元素绘制（globals.css） */
+  /** 圆角：微信 4px（用户指定微圆角）；QQ 12px；信息 18px。微信尾巴由 ::before 伪元素绘制（globals.css）。
+   *  装扮接管（第十八轮）：微信语音气泡跟随装扮 —— 纯色/七彩保留原生尾巴（随 inline
+   *  backgroundColor 经 background-color:inherit 自动同色），毛玻璃/液态胶囊隐藏尾巴 */
   const bubbleCls = isWx
-    ? `wx-voice-bubble relative h-[42px] rounded-[4px] px-3 ${mine ? 'wx-voice-tail-right' : 'wx-voice-tail-left'} ${mine ? t.own : t.peer}${isPlaying ? ' wx-voice-playing' : ''}`
+    ? `wx-voice-bubble relative h-[42px] rounded-[4px] px-3 ${hideTail ? '' : mine ? 'wx-voice-tail-right' : 'wx-voice-tail-left'} ${
+        decorated ? '' : mine ? t.own : t.peer
+      }${isPlaying ? ' wx-voice-playing' : ''}`
     : theme === 'im'
       ? `rounded-[18px] ${mine ? 'text-white' : t.peer}`
       : `rounded-[12px] ${mine ? 'text-white' : t.peer}`;
