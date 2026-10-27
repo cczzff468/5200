@@ -1451,9 +1451,14 @@ export const MT_MERCHANTS: MtMerchant[] = [
 const AI_MERCHANTS = new Map<string, MtMerchant>();
 const AI_DEALS = new Map<string, MtDeal>();
 
-/** 注册 AI 生成的商家（同 id 覆盖） */
+/** 注册 AI 生成的商家（同 id 覆盖；第十三轮起 AI 自主入驻的店也走这里，随 mt-ai-registry 持久化，刷新恢复） */
 export function mtRegisterAiMerchant(m: MtMerchant): void {
   AI_MERCHANTS.set(m.id, m);
+  try {
+    mtPersistAiRegistry();
+  } catch {
+    /* 存储不可用忽略 */
+  }
 }
 
 /** 商家入驻：批量注册当前账号的自有店铺（App 启动恢复 / 保存后即时生效，同 id 覆盖） */

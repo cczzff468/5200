@@ -18,6 +18,8 @@
  *   主动帮忙付掉（全付；每单只问一次 + 全局冷却，不刷屏）；LLM 失败时本地兑底直接帮付
  *   + 一句兑底话术（不再静默：用户要求机主一定能看到一次参与）；到货/发货主动问候由 AI 自主
  *   决定发不发（没聊天对象不消耗机会，不发模板）；
+ * - 自主创建宝贝（第十三轮用户反馈）：[帮你买]/[送礼物]/[自己买] 里写目录没有的宝贝（*名字
+ *   或直接中文名）→ 现场创建上架再买/送，不再报「没有找到这个商品」；
  * - 金额无硬门槛（用户要求全部取消）：帮付/代买/请客都不设金额上限，超过与否由 AI 按人设/关系/
  *   上下文自然拿捉（不再用同意词表，判断全部交给 LLM）；
  * - 全部动作写事件记忆（memAddEventFragment），代付/订单互相关联（订单挂 proxy 快照）。
@@ -32,7 +34,7 @@ import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { pushChatNotification } from './island-notify';
 import { wxUnreads, qqUnreads } from '@/lib/unread-store';
 import { getActiveAccountIdFor, getActiveAccountFor, type AccountApp } from './accounts';
-import { productById, shopById, tbSearchPool } from './taobao-data';
+import { productById, shopById, tbSearchPool, tbShopIdForTag, type TbCatId, type TbProduct } from './taobao-data';
 import {
   tbArrivedAtStation,
   tbConfirmReceive,
@@ -71,6 +73,8 @@ import {
   tbShareOrderOf,
 } from './tb-share-proxy';
 import { callTbLlm, extractJsonObject, deliverPeerMsgs } from './tb-proxy-ai';
+import { tbPersistAiProducts } from './tb-ai-store';
+import { tbSkuForTag } from './tb-product-gen';
 import type { RichAction } from '@/lib/chat-rich';
 
 export type TbEngageApp = 'wx' | 'qq';
@@ -676,11 +680,11 @@ export function buildTbEngageCtx(
       // [帮你买] 直购与 [送礼物] 都是微信端礼物卡链路：QQ 端不注入教学（执行器会拒，避免 AI 空承诺）
       const buyRule =
         app === 'wx'
-          ? `【帮机主买淘宝商品（你出钱，直接买）】聊到想买什么/缺什么/让你推荐/求你买时，结合你记得的偏好、当前季节节日、机主买过的东西先聊一句，然后直接输出标记 [帮你买:商品id|数量?,商品id|数量?]（id 原样抄目录，数量可省略默认 1；多个商品用英文逗号分隔，最多 5 件）。选品必须贴合机主正在说的东西（优先从【与机主正在聊的相关商品】里选；比如机主说想买玩偶/毛绒玩具就绝不能推荐手机数码）；目录里实在没有贴合的就直说没有，绝不拿不相关的品类凑数。系统会立即下单（你付款）、不用等物流直接送达，并以礼物卡片形式送进聊天（TA 点开就能收下），宝贝同时落进 TA 的礼物页——没有确认卡片、不用再问一遍。金额没有上限，买多少钱由你按人设/关系/上下文自然拿捉。机主说「再买一个/换一个/重新买/没送对」时同样直接输出标记，可以连续多次买，没有任何次数或频率限制；决不能因为「刚送过」就拒绝或空口答应。\n【回执行不是标记】历史里形如 [礼物卡片 ID:…]（你送出…）的方括号行是系统内部的记录格式，你只能读它，绝不能把它复制/仿写到你的回复里——抄了也没有任何效果，真实送出只有 [帮你买:…]/[送礼物:…] 标记才会执行。\n`
+          ? `【帮机主买淘宝商品（你出钱，直接买）】聊到想买什么/缺什么/让你推荐/求你买时，结合你记得的偏好、当前季节节日、机主买过的东西先聊一句，然后直接输出标记 [帮你买:商品id|数量?,商品id|数量?]（id 原样抄目录，数量可省略默认 1；多个商品用英文逗号分隔，最多 5 件）。选品必须贴合机主正在说的东西（优先从【与机主正在聊的相关商品】里选；比如机主说想买玩偶/毛绒玩具就绝不能推荐手机数码）。目录里没有想要的？不用放弃——直接把宝贝名字写进标记并在最前面加 *（例如 [帮你买:*定制款奶油兔玩偶大号|1]），系统会现场帮你把这个宝贝上架，再由你付款买下直接送出（一样走礼物卡+礼物页），所以几乎任何合理的东西你都能买到送TA。系统会立即下单（你付款）、不用等物流直接送达，并以礼物卡片形式送进聊天（TA 点开就能收下），宝贝同时落进 TA 的礼物页——没有确认卡片、不用再问一遍。金额没有上限，买多少钱由你按人设/关系/上下文自然拿捉。机主说「再买一个/换一个/重新买/没送对」时同样直接输出标记，可以连续多次买，没有任何次数或频率限制；决不能因为「刚送过」就拒绝或空口答应。\n【回执行不是标记】历史里形如 [礼物卡片 ID:…]（你送出…）的方括号行是系统内部的记录格式，你只能读它，绝不能把它复制/仿写到你的回复里——抄了也没有任何效果，真实送出只有 [帮你买:…]/[送礼物:…] 标记才会执行。\n`
           : '';
       const giftRule =
         app === 'wx'
-          ? `【你想送礼物给机主（你出钱直接送）】聊到送礼物/生日节日纪念日/哄TA开心/TA提到喜欢什么时（按人设与关系判断），输出标记 [送礼物:商品id]（id 原样抄目录，选贴合对方心意的）——系统会把礼物以卡片形式送到聊天里，TA 点开就能收下；送之前用正文铺垫一句心意。送过几次都不受限制，机主要就送；别把历史里的 [礼物卡片 ID:…]（你送出…）回执行照抄进回复，那不是标记、没有效果。`
+          ? `【你想送礼物给机主（你出钱直接送）】聊到送礼物/生日节日纪念日/哄TA开心/TA提到喜欢什么时（按人设与关系判断），输出标记 [送礼物:商品id]（id 原样抄目录，选贴合对方心意的）——系统会把礼物以卡片形式送到聊天里，TA 点开就能收下；目录里没有合心意的就直接写宝贝名字并在前面加 *（例如 [送礼物:*永生花礼盒]），系统会现场帮你上架这个宝贝再送出。送之前用正文铺垫一句心意。送过几次都不受限制，机主要就送；别把历史里的 [礼物卡片 ID:…]（你送出…）回执行照抄进回复，那不是标记、没有效果。`
           : '';
       rules.push(
         `${cat}\n\n` +
@@ -741,6 +745,148 @@ export function tbPickProductForText(text: string): string | null {
   } catch {
     return null;
   }
+}
+
+// ---------------- AI 自主创建宝贝（第十三轮用户反馈：目录里没有的现场创建，不再「没找到这个商品」） ----------------
+
+/** 宝贝名 → 淘宝品类启发式（分类/图/店铺都按它走） */
+function guessTbCat(name: string): TbCatId {
+  const n = name.toLowerCase();
+  if (/手机|耳机|电脑|笔记本|平板|手表|键盘|音箱|音响|充电|相机|摄像机|鼠标|显示器|电视|无人机|手柄|硬盘|路由|智能|戒指环|灯泡智能/.test(n)) return 'digital';
+  if (/口红|香水|护肤|面膜|面霜|乳液|精华|眼影|粉底|化妆|眉笔|睫毛|美容仪/.test(n)) return 'beauty';
+  if (/零食|糖果|糖|茶|咖啡豆|坚果|辣条|饼干|蛋糕|巧克力|蜂蜜|果汁|饮料|大米|粮油|挂面/.test(n)) return 'food';
+  if (/书|小说|漫画|绘本|教辅|杂志|字典|词典/.test(n)) return 'book';
+  if (/衣|裙|裤|鞋|袜|帽|包|围巾|皮带|衫|卫衣|外套|西装|睡衣|家居服|领带|首饰|项链|手链|戒指|耳环/.test(n)) return 'fashion';
+  return 'home';
+}
+
+/** 宝贝名 → 主图 tag 启发式（本地卡通图池关键词映射；未命中走品类默认图，任何情况都有图） */
+function guessTbTag(name: string, cat: TbCatId): string {
+  const n = name.toLowerCase();
+  const rules: [RegExp, string][] = [
+    [/玩偶|娃娃|公仔|毛绒|抱枕|手办|盲盒/, 'toy'],
+    [/手机/, 'phone'], [/耳机/, 'earbuds'], [/电脑|笔记本/, 'laptop'], [/平板/, 'tablet'], [/手表/, 'watch'],
+    [/键盘/, 'keyboard'], [/音箱|音响/, 'speaker'], [/充电|充电宝/, 'powerbank'], [/相机/, 'camera'],
+    [/鼠标/, 'mouse'], [/显示器/, 'monitor'], [/电视/, 'tv'], [/风扇/, 'fan'], [/加湿/, 'humidifier'],
+    [/口红|唇釉|唇泥/, 'lipstick'], [/香水/, 'perfume'], [/面膜|面霜|乳液|精华|水乳|护肤/, 'skincare'], [/眼影|粉底|气垫|腮红/, 'makeup'],
+    [/零食|坚果|辣条|礼包/, 'snacks'], [/饼干|曲奇|糕|蛋糕|甜点/, 'cookies'], [/茶|茶叶/, 'tea'],
+    [/沙发/, 'sofa'], [/床|被|四件套|枕/, 'bedding'], [/台灯|灯/, 'lamp'], [/杯/, 'water-bottle'], [/马克杯|陶瓷杯/, 'mug'],
+    [/花瓶|鲜花|花/, 'vase'], [/伞/, 'umbrella'], [/鞋/, 'sneakers'], [/裙|连衣裙/, 'dress'], [/卫衣|连帽/, 'hoodie'],
+    [/外套|夹克|风衣|大衣/, 'jacket'], [/包|背包|双肩/, 'backpack'], [/围巾|手套/, 'scarf'], [/行李箱|旅行箱/, 'suitcase'],
+    [/钱包|卡包/, 'wallet'], [/墨镜|太阳镜/, 'sunglasses'], [/梳|化妆刷|刷/, 'brush'], [/项链|手链|戒指|耳环|首饰/, 'gift'],
+    [/礼物|礼品|礼盒/, 'gift'], [/书|小说|漫画|绘本/, 'books'],
+  ];
+  for (const [re, tag] of rules) {
+    if (re.test(n)) return tag;
+  }
+  return cat === 'digital' ? 'phone' : cat === 'fashion' ? 'tshirt' : cat === 'beauty' ? 'skincare' : cat === 'food' ? 'snacks' : cat === 'book' ? 'books' : 'gift';
+}
+
+/** 宝贝名 → 价格启发式（元） */
+function guessTbPrice(name: string): number {
+  const n = name.toLowerCase();
+  if (/手机|笔记本|电脑|相机|摄像机/.test(n)) return 2999;
+  if (/平板|显示器|电视|无人机/.test(n)) return 1599;
+  if (/手表|音箱|键盘|耳机/.test(n)) return 199;
+  if (/香水|精华|美容仪/.test(n)) return 129;
+  if (/口红|唇釉|眼影|粉底/.test(n)) return 79;
+  if (/玩偶|娃娃|公仔|毛绒|手办|盲盒/.test(n)) return 45;
+  if (/衣|裙|裤|鞋|包|卫衣|外套/.test(n)) return 99;
+  if (/零食|糖|茶|坚果|饼干|蛋糕|书|小说|漫画/.test(n)) return 39.9;
+  if (/杯|伞|灯|枕|摆件/.test(n)) return 29.9;
+  return 68;
+}
+
+/**
+ * 宝贝名 → 商品（永不失败）：AI 在 [帮你买]/[送礼物]/[自己买] 里写了一个目录里没有的宝贝名时
+ * 现场创建并注册上架（价格/分类/图按名启发式；id 走 ai- 前缀 → 随 AI 商品注册表持久化，
+ * 刷新恢复后照常可搜/可下单，下次同名直接命中）。
+ */
+function ensureTbProductAi(name: string, uid: string): TbProduct {
+  const clean = name.trim().slice(0, 40);
+  const cat = guessTbCat(clean);
+  const tag = guessTbTag(clean, cat);
+  const price = guessTbPrice(clean);
+  const p: TbProduct = {
+    id: `ai-c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    title: clean,
+    price,
+    originPrice: Math.round(price * 1.6),
+    sales: 500 + Math.floor(Math.random() * 4000),
+    shopId: tbShopIdForTag(tag),
+    cat,
+    tag,
+    freight: 0,
+    tags: ['退货宝', '正品保证'],
+    skus: tbSkuForTag(tag, price),
+  };
+  try {
+    tbPersistAiProducts(uid, [p]); // 注册进运行时注册表 + 按 uid 持久化（刷新恢复）
+  } catch {
+    /* 持久化失败不影响本次下单 */
+  }
+  return p;
+}
+
+/** 标记体里的一段是否是「自定义宝贝名」（含中文、去掉可选 * 前缀后 2~40 字；商品 id 全 ASCII 不会误伤） */
+function customProductName(raw: string): string | null {
+  const s = raw.trim().replace(/^[*＊]+/, '').trim();
+  if (s.length < 2 || s.length > 40) return null;
+  if (!/[\u4e00-\u9fff]/.test(s)) return null;
+  return s;
+}
+
+/**
+ * 第十三轮运行时兜底配套：从聊天文本里提取「机主想要的宝贝名」（目录里实在没有、
+ * AI 又只嘴上答应没输出标记时，由 wechat.tsx 兕底合成为 [帮你买:*名字] 走自创链路）。
+ * 提取不到合理宝贝名返回 null（不强买）。
+ */
+export function tbCustomProductFromText(text: string): string | null {
+  try {
+    // 净化：门牌号[M33]/方括号标记/引号统一替换为句读（防止标记残骸混进宝贝名）
+    const t = text.replace(/\s+/g, '').replace(/\[M\d+\]/g, '，').replace(/\[[^\]]{1,16}\]/g, '，').replace(/[「」『』"]/g, '');
+    const valids: string[] = [];
+    const consider = (cap?: string) => {
+      if (!cap) return;
+      const s = cap
+        .replace(/^(一个|一份|一只|一台|一盒|一套|这个|那个|就|个)+/g, '')
+        .split(/我要|我想|请你|麻烦你|给我买|帮我买|买一个|买一份|谢谢/)[0]
+        .replace(/[吧呀哦嗯呢哈嘛呗了啦～~!！?？。，,.\s]+$/g, '')
+        .trim();
+      if (s.length >= 2 && s.length <= 14 && /[\u4e00-\u9fff]/.test(s) && !/的$/.test(s) && !/^(东西|礼物|宝贝|它|这个|那个|送我|给我|我来|一个)$/.test(s) && !/(话题|别的|聊天|风格|音乐|歌|铃声|故事|天气|给你|送给你|送我|谢谢|好不好)/.test(s)) valids.push(s);
+    };
+    // A 欲望动词式：「想要/就要/买个…X」（到句读/语气词为止）
+    for (const m of t.matchAll(/(?:想要|想买|要买|就要|就想|买个|买一|买台|买只|买份|来个|弄个|整个|给我整|给我来)([^，。！？!?,.～~]{2,16}?)(?=[，。！？!?,.~～]|吧|呀|哦|嘛|呗|哈|啦|了|谢谢|好不好|可以|送我|给我|下单|放|摆|挂|吃|穿|戴|用|抱|铺|盖|$)/g)) consider(m[1]);
+    // B 指示式：「这个/那个 X（吧/了/，）」
+    for (const m of t.matchAll(/(?:这个|那个)([^，。！？!?,.～~]{2,16}?)(?=[，。！？!?,.~～]|吧|呀|哦|嘛|了|就|的|啦|$)/g)) consider(m[1]);
+    // C 拍板式：「那 X 就定了/就那个」
+    for (const m of t.matchAll(/(?:那|那就)([^，。！？!?,.～~]{2,16}?)(?=就定了|定了|就那个|就这个|就它|吧|啦|$)/g)) consider(m[1]);
+    // D AI 承诺式：「弄/买/送 一个 X（上架/给你/送你…）」
+    for (const m of t.matchAll(/(?:弄|买|做|找|送)一?[个份只台盒套]([^，。！？!?,.～~]{2,14}?)(?=上架|给你|送你|送我|买好|寄|啦|了|哦|呀|哈|$)/g)) consider(m[1]);
+    // 多个候选时取最短（口语尾巴剥得最干净的那个，如「草莓加湿器」胜过「草莓加湿器就定了」）
+    return valids.sort((a, b) => a.length - b.length)[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 第十三轮兜底防双投递守卫：同一回合管线可能对同一段回复二次构建（文本消息同 id 会被去重，
+ * 兜底卡若用随机 id 会双投）。同一把 key（会话+机主原话+AI回复）90 秒内只放行一次。
+ */
+let tbFallbackLast = { key: '', at: 0 };
+export function tbFallbackShouldFire(key: string): boolean {
+  const now = Date.now();
+  if (tbFallbackLast.key === key && now - tbFallbackLast.at < 90_000) return false;
+  tbFallbackLast = { key, at: now };
+  return true;
+}
+
+/** 兜底礼物卡确定性 id（同 seed 永远同 id：即使守卫窗口外的重复构建也能被按 id 去重） */
+export function tbFallbackCardId(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return `tbgift-fb-${h.toString(36)}-${seed.length}`;
 }
 
 // ---------------- 动作执行（wechat/qq buildReplyMsgs 分流调用） ----------------
@@ -929,10 +1075,15 @@ export function applyTbEngageAction(
     if (opts.app !== 'wx') return { msgs: [], sys: '（直接代买送礼物暂时只在微信里支持）' };
     const body = parseTbBuyBody(action.targetId);
     if (!body) return { msgs: [], sys: '（代买格式有误，未能下单）' };
-    // 商品校验 + 数量规范（任一商品不存在则整单拒绝，提示 AI 别乱买）
+    // 商品校验 + 数量规范（任一商品不存在则整单拒绝，提示 AI 别乱买）；
+    // 第十三轮起：目录里没有的可以直接写宝贝名（*前缀或直接中文名）→ AI 自主创建上架再买
     const buys: { pid: string; title: string; img: string; price: number; qty: number; shopId: string; shopName: string }[] = [];
     for (const raw of body.items.slice(0, 5)) {
-      const p = productById(raw.pid);
+      let p = productById(raw.pid);
+      if (!p) {
+        const custom = customProductName(raw.pid);
+        if (custom) p = ensureTbProductAi(custom, uidInfo.uid);
+      }
       if (!p) return { msgs: [], sys: '（没有找到这个商品，没下单——要贴合机主说的品类重新选，没有合适的就明说）' };
       const qty = Math.max(1, Math.min(5, Math.round(raw.qty ?? 1)));
       if (buys.some((it) => it.pid === p.id)) continue; // 同商品去重
@@ -994,9 +1145,13 @@ export function applyTbEngageAction(
     const body = parseTbBuyBody(action.targetId);
     if (!body) return { msgs: [], sys: '（下单格式有误）' };
     const first = body.items[0];
-    const p = productById(first.pid);
+    let p = productById(first.pid);
+    if (!p) {
+      const custom = customProductName(first.pid);
+      if (custom) p = ensureTbProductAi(custom, uidInfo.uid);
+    }
     if (!p) return { msgs: [], sys: '（没有找到这个商品，没法下单）' };
-    void tbSelfOrderFlow({ pid: first.pid, qty: first.qty }, peer, opts).catch(() => undefined);
+    void tbSelfOrderFlow({ pid: p.id, qty: first.qty }, peer, opts).catch(() => undefined);
     return { msgs: [] };
   }
 
@@ -1004,7 +1159,13 @@ export function applyTbEngageAction(
     // [送礼物:商品id]（第 21 轮）：AI 自己买淘宝商品直接以礼物卡发给机主（真机微信礼物语义：虚拟下单秒送）。
     // giftcard 是微信 WxMsg 卡片——仅微信端启用，QQ/信息端回退系统提示
     if (opts.app !== 'wx') return { msgs: [], sys: '（送礼物暂时只在微信里支持）' };
-    const p = productById(action.targetId.trim());
+    let p = productById(action.targetId.trim());
+    if (!p) {
+      // 第十三轮起：目录里没有 → AI 自主创建宝贝再送（*前缀或直接中文名都认）
+      const custom = customProductName(action.targetId);
+      const uidInfoGift = uidInfo;
+      if (custom && uidInfoGift) p = ensureTbProductAi(custom, uidInfoGift.uid);
+    }
     if (!p) return { msgs: [], sys: '（没有找到这个商品，礼物没送出去）' };
     const gid = `tbgf-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     void memAddEventFragment(peer.id, opts.app, `你给机主${meName}买了一份礼物「${p.title}」（¥${fmt2(p.price)}），以礼物卡片送到了聊天里`, { eventTime: now, sourceTag: 'tb-gift-send' });
