@@ -2321,9 +2321,11 @@ const AUTONOMY_BEHAVIORS: AutonomyBehavior[] = [
     run: (s, me, ta, p) => aiTickQuiz(s, me, ta, p),
   },
   {
+    // 第十三轮决策修复：guard 原本只拦「今天写过」，而 run 内还有 3 天冷却——
+    // 选中后被静默空转仍扣自主额度。现在 guard 与 run 的 3 天窗口完全对齐。
     key: 'impress',
-    label: '在情侣印象里认真写一条对对方的印象（今天写过了就先不写）',
-    guard: (s) => s.aiImpressAt == null || todayKey(new Date(s.aiImpressAt)) !== todayKey(),
+    label: '在情侣印象里认真写一条对对方的印象（三天内写过了就先不写）',
+    guard: (s) => s.aiImpressAt == null || Date.now() - s.aiImpressAt >= 3 * 86400000,
     run: (s, me, ta, p) => aiTickImpress(s, me, ta, p),
   },
   {
@@ -2333,9 +2335,14 @@ const AUTONOMY_BEHAVIORS: AutonomyBehavior[] = [
     run: (s, me, ta, p) => aiTickHundred(s, me, ta, p),
   },
   {
+    // 第十三轮决策修复：guard 原本只拦「终身 3 个」，而 run 内还有「每月 1 个」——同月第二次选中必空转扣额度。
     key: 'anniv',
-    label: '主动设一个只属于你们俩的纪念日（设得太多就先不设）',
-    guard: (s) => (s.aiAnnivKeys ?? []).length < 3,
+    label: '主动设一个只属于你们俩的纪念日（这个月设过了就先不设）',
+    guard: (s) => {
+      const keys = s.aiAnnivKeys ?? [];
+      if (keys.length >= 3) return false;
+      return !keys.some((k) => k.startsWith(`ai-${todayKey().slice(0, 7)}`));
+    },
     run: (s, me, ta, p) => aiTickAnniv(s, me, ta, p),
   },
   {
@@ -2351,9 +2358,15 @@ const AUTONOMY_BEHAVIORS: AutonomyBehavior[] = [
     run: (s, me, ta, p) => aiTickComment(s, me, ta, p),
   },
   {
+    // 第十三轮决策修复：guard 原本只查「我的卷子」，而 run 查的是 TA 卷子（examTaPaper 未答/三天内）——
+    // 我出过卷未答时选中必空转扣额度。现在两边一起拦。
     key: 'exam',
-    label: '出一张恋爱水平考卷喊对方来答（还有没答的卷子就先不出）',
-    guard: (s) => !s.examPaper,
+    label: '出一张恋爱水平考卷喊对方来答（还有没答的卷子/三天内出过就先不出）',
+    guard: (s) => {
+      if (s.examPaper) return false;
+      const t = s.examTaPaper;
+      return !(t && !t.answered && Date.now() - t.at < 3 * 86400000);
+    },
     run: (s, me, ta, p) => aiTickExam(s, me, ta, p),
   },
   {

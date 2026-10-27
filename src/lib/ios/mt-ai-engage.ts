@@ -17,8 +17,12 @@
  *   待处理代付请求，状态实时读 kv）与【美团外卖精选】目录（食物话题命中时，按时段加权 B7）
  *   + 动作教学规则；群聊 scope 只下发目录+帮点外卖（C11，草稿由机主确认自付）；
  *   美团未登录+食物话题时注入「先登录」口径（C10）；
- * - 节流（B6）：同角色 5 分钟最多 1 次主动请客/帮付/自己点（引擎级冷却）；金额门槛与同意词表
- *   已按用户要求全部取消——请不请/付不付/付多少全由 AI 按人设/关系/上下文自主拿捉；
+ * - 自主开店/补菜（第十三轮用户反馈）：目录里没有想点的店，商家ID直接写店名 → 现场入驻
+ *   （ensureMerchantForAi，随 mt-ai-registry 持久化）；菜名没有 → ensureDish 现场上架，
+ *   AI 想点的几乎任何东西都能真的点到；
+ * - 节流（B6→已废）：原「同角色 5 分钟最多 1 次」的引擎级冷却已按第十三轮用户反馈整体删除
+ *   （连点/连请都照办）；金额门槛与同意词表已按用户要求全部取消——请不请/付不付/付多少
+ *   全由 AI 按人设/关系/上下文自主拿捉；
  * - 失败反馈（A3）：请客/自己点外卖的商家/菜品/地址问题不再静默——落系统提示行到聊天；
  * - 终态记忆（C9）：订单送达/取消时给参与角色补写事件记忆（买单史/代点史长期可忆）；
  * - 记忆：AI 参与（代付/帮付/代点/请付）的时刻按角色 contactId 直写事件记忆
@@ -42,7 +46,7 @@ import {
   MT_STATUS_LABEL,
   type MtOrder,
 } from './meituan-store';
-import { mtAllMerchants, mtMerchantOf, mtDishesOf, mtRegisterAiDish, type MtDish, type MtMerchant } from './meituan-data';
+import { mtAllMerchants, mtMerchantOf, mtDishesOf, mtRegisterAiDish, mtRegisterAiMerchant, type MtDish, type MtMerchant } from './meituan-data';
 import {
   mtGetProxy,
   mtProxyChatCid,
@@ -66,31 +70,9 @@ import type { RichAction } from '@/lib/chat-rich';
 
 export type MtEngageApp = 'wx' | 'qq';
 
-// ---------------- 主动参与节流（B6）：引擎级冷却（金额门槛/同意词表已按用户要求全部取消——
-// 付不付/请不请/付多少全由 AI 按人设/关系/上下文自主拿捉，不再用词表判定） ----------------
-
-/** 同角色主动请客/帮付/自己点的引擎级冷却（5 分钟内最多 1 次） */
-export const MT_ENGAGE_COOLDOWN_MS = 5 * 60_000;
-
-const engageCdKey = (app: MtEngageApp, charId: string): string => `mt-engage-cd:${app}:${charId}`;
-
-/** 该角色是否正处于主动参与冷却中（请客/帮付/自己点共用同一个计时器） */
-export function mtEngageCoolingDown(app: MtEngageApp, charId: string): boolean {
-  try {
-    const last = kvGet<number>(engageCdKey(app, charId)) ?? 0;
-    return typeof last === 'number' && Date.now() - last < MT_ENGAGE_COOLDOWN_MS;
-  } catch {
-    return false;
-  }
-}
-
-function mtMarkEngage(app: MtEngageApp, charId: string): void {
-  try {
-    kvSet(engageCdKey(app, charId), Date.now());
-  } catch {
-    /* 忽略 */
-  }
-}
+// ---------------- 主动参与（第十三轮用户反馈）----------------
+// 第十三轮用户反馈：美团参与冷却（原 5min/角色引擎级冷却 MT_ENGAGE_COOLDOWN_MS）整体删除——
+// 机主让点/让请/让帮付多少次都照办，与淘宝礼物链路同口径（第十二轮已删），不再有「先歇一歇」拦截。
 
 // ---------------- AI 代点外卖草稿 ----------------
 
@@ -272,6 +254,119 @@ function checkMerchantOrderable(merchant: MtMerchant | undefined): string | null
   if (!merchant) return null; // 不存在时由调用方各自报错（文案带商家 ID）
   if (merchant.mine && merchant.mtStatus === 'closed') return `「${merchant.name}」已打烊，今天点不了`;
   return null;
+}
+
+// ---------------- AI 自主开店（第十三轮用户反馈：目录里没有想点的店，AI 直接写店名 → 现场入驻再下单） ----------------
+
+/** 店名 → emoji 启发式 */
+function guessShopEmoji(name: string): string {
+  if (/奶茶|茶/.test(name)) return '🧋';
+  if (/咖啡/.test(name)) return '☕';
+  if (/火锅|麻辣烫|冒菜|香锅/.test(name)) return '🍲';
+  if (/面|粉/.test(name)) return '🍜';
+  if (/饭|煲|菜馆|小厨|食堂/.test(name)) return '🍛';
+  if (/烧烤|烤|串/.test(name)) return '🍢';
+  if (/披萨/.test(name)) return '🍕';
+  if (/汉堡|炸鸡/.test(name)) return '🍔';
+  if (/甜品|蛋糕|烘培|面包/.test(name)) return '🍰';
+  if (/粥|早/.test(name)) return '🥣';
+  if (/果|鲜/.test(name)) return '🍉';
+  if (/药/.test(name)) return '💊';
+  return '🍜';
+}
+
+/** 标记里的一段是否是「自定义店名」（含中文、去可选 * 前缀后 2~16 字；纯 ASCII 商家 id 不会误伤） */
+function customMerchantName(raw: string): string | null {
+  const s = raw.trim().replace(/^[*＊]+/, '').trim();
+  if (s.length < 2 || s.length > 16) return null;
+  if (!/[\u4e00-\u9fff]/.test(s)) return null;
+  return s;
+}
+
+/**
+ * 商家ID/店名 → 商家（目录内命中直接返回；否则若是店名 → AI 自主帮这家店入驻）：
+ * 挂进 AI 商家注册表（随 mt-ai-registry 持久化）→ 搜索/首页/下单全链路无感命中；
+ * 菜单先留空，AI 报的菜名会由 ensureDish 现场自动上架。
+ */
+function ensureMerchantForAi(idOrName: string): MtMerchant | null {
+  const hit = mtMerchantOf(idOrName);
+  if (hit) return hit;
+  const name = customMerchantName(idOrName);
+  if (!name) return null;
+  const merchant: MtMerchant = {
+    id: `aimt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    name,
+    emoji: guessShopEmoji(name),
+    cats: ['waimai'],
+    rating: 4.6,
+    monthSale: 80 + Math.floor(Math.random() * 600),
+    minOrder: 0,
+    deliveryFee: 2,
+    distanceKm: Math.round((0.8 + Math.random() * 2.4) * 10) / 10,
+    deliveryMin: 25 + Math.floor(Math.random() * 20),
+    notice: '新店入驻，欢迎光临',
+    deals: [],
+    hours: '09:00-23:00',
+    addr: '离你最近的新店',
+    sections: [],
+    reviews: [],
+    mtStatus: 'open',
+  };
+  try {
+    mtRegisterAiMerchant(merchant);
+  } catch {
+    /* 持久化失败不影响本次下单 */
+  }
+  return merchant;
+}
+
+/**
+ * 第十三轮运行时兜底配套：从机主原话解析「请客/代点外卖」诉求（AI 只嘴上答应、没输出
+ * [请客点外卖]/[帮点外卖] 标记时，由 wechat.tsx 兜底合成动作——冷却已删，说点就点）。
+ * 支持三种句式：「点外卖：商家名|菜xN…」「请你点一[份杯]商家名的菜名」「在商家名点菜名」。
+ * 解析不出「商家 + 菜品」组合返回 null（不瞎点）。
+ */
+export function parseMtAskFromText(text: string): { merchantId: string; items: { name: string; qty: number }[]; treat: boolean } | null {
+  try {
+    // 净化：门牌号/方括号标记替换为句读（防标记残骸混进店名/菜名）
+    const t = text.replace(/\s+/g, '').replace(/\[M\d+\]/g, '，').replace(/\[[^\]]{1,16}\]/g, '，').replace(/[「」『』"]/g, '');
+    const treat = /(请你点|请客|你来买单|我请客|你请|请我|请我吃|请我喝|我买单|你买单)/.test(t);
+    let merchant = '';
+    let rest = '';
+    const mColon = /(?:点外卖|点个外卖|帮我点|请你点|给我点)[：:，,]([^，。！？!?,.|]{2,14}?)(?:的|，|、|\||$)(.*)$/.exec(t);
+    const mDe = /(?:请你点|给我点|帮我点|来一?份|点一?[份杯])一?[份杯个]?([^，。！？!?,.]{2,14}?)的([^，。！？!?,.]{2,30})/.exec(t);
+    const mAt = /在([^，。！？!?,.]{2,14}?)(?:点|买)(.*)$/.exec(t);
+    if (mColon) {
+      merchant = mColon[1];
+      rest = mColon[2] ?? '';
+    } else if (mDe) {
+      merchant = mDe[1];
+      rest = mDe[2] ?? '';
+    } else if (mAt) {
+      merchant = mAt[1];
+      rest = mAt[2] ?? '';
+    }
+    if (!merchant) return null;
+    // 菜品段：菜名x数量（和/、/，分隔；跳过口语残句）
+    const items: { name: string; qty: number }[] = [];
+    for (const seg of rest.split(/[，,、和跟加]/)) {
+      const s = seg.trim().replace(/^点?一?[份杯个只碗串]*/, '');
+      if (!s || /[你我吧呢哦嘛谢呀哈买单]/.test(s)) continue;
+      const m = /^(.{1,16}?)\s*[xX×*]\s*(\d{1,2})$/.exec(s);
+      if (m) {
+        const name = m[1].trim();
+        if (name.length >= 2) items.push({ name, qty: Math.max(1, Math.min(9, Number(m[2]))) });
+      } else {
+        const name = s.replace(/[一份杯个只碗串]+$/, '').replace(/^(来|点|要|再)/, '').trim();
+        if (name.length >= 2 && name.length <= 16) items.push({ name, qty: 1 });
+      }
+      if (items.length >= 6) break;
+    }
+    if (items.length === 0) return null;
+    return { merchantId: merchant, items, treat };
+  } catch {
+    return null;
+  }
 }
 
 export type MtCreateDraftResult = { ok: true; draft: MtAiDraft } | { ok: false; error: string };
@@ -591,11 +686,7 @@ export function buildMtEngageCtx(
           `金额没有上限，付不付/付多少由你按人设/关系/上下文自然拿捉；也别每次都抢着付。`
       );
     }
-    if (mtEngageCoolingDown(app, chatContactId)) {
-      rules.push(
-        '【参与节流】你刚刚（5分钟内）已经主动请客/帮付/点过一次单了（冷却中）：这一轮不要再输出 [请客点外卖]/[帮付]/[自己点外卖] 标记（发了系统也不会执行），用正文正常聊就好。'
-      );
-    }
+    // 第十三轮用户反馈：参与冷却已整体删除，不再注入「参与节流」规则（连点/连请都照办）
     // 券到期提醒（一次性）：与食物话题无关，任何单聊回合都可能自然提一嘴
     const couponRule = mtExpiringCouponRule(uid, ownerName);
     if (couponRule) rules.push(couponRule);
@@ -605,20 +696,20 @@ export function buildMtEngageCtx(
       rules.push(
         `${buildCatalogBlock()}\n\n` +
           `【帮机主点外卖（群里）】聊到吃的、有人说饿/懒得动/想点外卖时，你可以结合当前时段（早餐/午餐/夜宵）和大家的口味推荐上面的商家和菜品；` +
-          `有人想要你帮忙点时输出标记 [帮点外卖:商家ID|菜名x数量,菜名x数量|备注?]（菜名优先原样抄目录里的名字，目录里实在没有的也可以直接写——系统会自动帮你上架；备注可省略）。` +
+          `有人想要你帮忙点时输出标记 [帮点外卖:商家ID|菜名x数量,菜名x数量|备注?]（菜名优先原样抄目录里的名字，目录里实在没有的也可以直接写——系统会自动帮你上架；备注可省略；目录里没有想点的店，可以把商家ID直接写成店名，系统会自动帮这家店入驻）。` +
           `系统会生成一张代点卡片，机主确认后才真正下单并自己付款。别频繁发，一次就好；只帮机主点，不要帮其他成员下单。`
       );
     } else {
       rules.push(
         `${buildCatalogBlock()}\n\n` +
-          `【帮机主点外卖（机主自己付款）】聊到吃的、机主说饿/懒得动/让你推荐时，你可以先问问口味或结合你记得的偏好、当前时间（早餐/午餐/夜宵）推荐上面的商家和菜品；机主同意后输出标记 [帮点外卖:商家ID|菜名x数量,菜名x数量|备注?]（菜名优先原样抄目录里的名字，目录里实在没有的也可以直接写——系统会自动帮你上架；备注可省略）。系统会生成一张代点卡片，机主确认后才真正下单并自己付款，你不用再重复确认。\n` +
-          `【请客点外卖（你直接付好）】如果你按人设/你们的关系想直接请TA吃（说好了请客、想宠TA、庆祝纪念等，别频繁），可以输出标记 [请客点外卖:商家ID|菜名x数量,菜名x数量|备注?]——系统会直接下单并由你付款（演示语义，不扣真钱），TA会收到一张已支付的订单卡片（实时显示配送状态），不需要再付款。金额没有上限，请不请/请多少由你按人设/关系/上下文自然拿捉。\n` +
+          `【帮机主点外卖（机主自己付款）】聊到吃的、机主说饿/懒得动/让你推荐时，你可以先问问口味或结合你记得的偏好、当前时间（早餐/午餐/夜宵）推荐上面的商家和菜品；机主同意后输出标记 [帮点外卖:商家ID|菜名x数量,菜名x数量|备注?]（菜名优先原样抄目录里的名字，目录里实在没有的也可以直接写——系统会自动帮你上架；备注可省略；目录里没有想点的店，可以把商家ID直接写成店名——系统会自动帮这家店入驻）。系统会生成一张代点卡片，机主确认后才真正下单并自己付款，你不用再重复确认。\n` +
+          `【请客点外卖（你直接付好）】如果你按人设/你们的关系想直接请TA吃（说好了请客、想宠TA、庆祝纪念等，别频繁），可以输出标记 [请客点外卖:商家ID|菜名x数量,菜名x数量|备注?]——系统会直接下单并由你付款（演示语义，不扣真钱），TA会收到一张已支付的订单卡片（实时显示配送状态），不需要再付款；目录里没有想点的店，商家ID直接写店名就行（系统自动帮这家店入驻）。金额没有上限，请不请/请多少由你按人设/关系/上下文自然拿捉；连着请也照办，没有次数限制。\n` +
           `【给你自己点外卖】你自己想吃/馋了的时候（按人设判断，别频繁），可以输出标记 [自己点外卖:商家ID|菜名x数量,菜名x数量]——系统会生成待支付订单并请机主帮你代付，记得用正文说一句让TA帮你付。`
       );
       const repeat = mtRepeatPickOf(orders);
       if (repeat) {
         rules.push(
-          `【复购彩蛋】${ownerName}最近常点「${repeat.merchant.name}」（已经点过 ${repeat.times} 次），最常点「${repeat.dishName}」——如果你一时想不出推荐什么，可以自然提议“要不要再来一次那家？”，TA感兴趣就按上面的 [帮点外卖] 教学输出标记（同样遵守冷却和大额规则，一次就好，别太刻意）。`
+          `【复购彩蛋】${ownerName}最近常点「${repeat.merchant.name}」（已经点过 ${repeat.times} 次），最常点「${repeat.dishName}」——如果你一时想不出推荐什么，可以自然提议“要不要再来一次那家？”，TA感兴趣就按上面的 [帮点外卖] 教学输出标记（一次就好，别太刻意）。`
         );
       }
     }
@@ -702,14 +793,10 @@ export function applyMtEngageAction(
     if (!uidInfo) return { msgs: [], sys: '（美团尚未登录，无法帮付）' };
     const order = mtLoadOrders(uidInfo.uid).find((o) => o.id === action.targetId.trim());
     if (!order || order.status !== 'pendingPay') return { msgs: [], sys: '（订单不存在或已支付）' };
-    // B6：主动帮付受引擎级冷却约束（金额门槛/同意词表已取消，付不付由 AI 人设自主拿捉）
-    if (mtEngageCoolingDown(opts.app, peer.id)) {
-      return { msgs: [], sys: '（刚刚才请客/帮付过一次，先歇一歇，这次先不帮付啦）' };
-    }
+    // 第十三轮用户反馈：帮付冷却已删——机主让帮多少次都照办
     const res = mtAiPayPendingOrder(order, { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) }, opts.app);
     if (!res.ok) return { msgs: [], sys: `（帮付未成功：${res.error}）` };
     if (!res.card) return { msgs: [], sys: '（帮付未完成，请稍后再试）' };
-    mtMarkEngage(opts.app, peer.id);
     const summary = order.items.map((i) => `${i.name}${i.qty > 1 ? `x${i.qty}` : ''}`).join('、');
     memAddEventFragment(peer.id, opts.app, `你主动帮机主${meName}付了美团「${order.merchantName}」¥${fmt2(order.total)}的订单（${summary}）`, { eventTime: now, sourceTag: 'mt-help-pay' });
     return { msgs: [res.card] };
@@ -720,9 +807,12 @@ export function applyMtEngageAction(
     if (!uidInfo) return { msgs: [], sys: '（美团尚未登录，无法代点外卖）' };
     const body = parseMtOrderBody(action.targetId);
     if (!body) return { msgs: [], sys: '（代点外卖格式有误，未能下单）' };
+    // 第十三轮起：目录里没有的店可以直接写店名 → AI 自主帮这家店入驻再代点
+    const m = ensureMerchantForAi(body.merchantId);
+    if (!m) return { msgs: [], sys: `（代点失败：没有找到这家店（${body.merchantId}））` };
     const res = mtCreateAiDraft({
       uid: uidInfo.uid,
-      merchantId: body.merchantId,
+      merchantId: m.id,
       items: body.items,
       note: body.note,
       charId: peer.id,
@@ -745,13 +835,12 @@ export function applyMtEngageAction(
   if (kind === 'mt-order-self') {
     const uidInfo = mtEngageSessionUid();
     if (!uidInfo) return { msgs: [], sys: '（美团尚未登录，无法点外卖）' };
-    const body = parseMtOrderBody(action.targetId);
-    if (!body) return { msgs: [], sys: '（点外卖格式有误，未能下单）' };
-    // B6：自己点同样受主动参与冷却约束（大额不拦：付钱的是机主，TA自己决定）
-    if (mtEngageCoolingDown(opts.app, peer.id)) {
-      return { msgs: [], sys: '（刚刚才请客/帮付/点过一次，先歇一歇，这次先不点啦）' };
-    }
-    // A3 同步预校验：商家/菜品/地址问题当场报，不再静默进异步流
+    const parsed = parseMtOrderBody(action.targetId);
+    if (!parsed) return { msgs: [], sys: '（点外卖格式有误，未能下单）' };
+    // 第十三轮起：目录里没有的店 → AI 自主入驻
+    const ensured = ensureMerchantForAi(parsed.merchantId);
+    const body = { ...parsed, merchantId: ensured ? ensured.id : parsed.merchantId };
+    // 第十三轮用户反馈：冷却已删；A3 同步预校验：商家/菜品/地址问题当场报，不再静默进异步流
     const pre = mtValidateParsedOrder(uidInfo.uid, body);
     if (!pre.ok) return { msgs: [], sys: `（点外卖失败：${pre.error}）` };
     void mtSelfOrderFlow(body, peer, opts).catch(() => undefined);
@@ -760,12 +849,12 @@ export function applyMtEngageAction(
   // mt-order-treat：[请客点外卖:商家ID|菜名x数量,...|备注?] —— 异步流：直接下单 + AI 付款 + 发已支付订单卡
   const uidInfo2 = mtEngageSessionUid();
   if (!uidInfo2) return { msgs: [], sys: '（美团尚未登录，无法点外卖）' };
-  const body2 = parseMtOrderBody(action.targetId);
-  if (!body2) return { msgs: [], sys: '（请客点外卖格式有误，未能下单）' };
-  // B6：主动请客受引擎级冷却约束（金额门槛/同意词表已取消，请不请由 AI 人设自主拿捉）
-  if (mtEngageCoolingDown(opts.app, peer.id)) {
-    return { msgs: [], sys: '（刚刚才请客/帮付过一次，先歇一歇，这次先不请啦）' };
-  }
+  const parsed2 = parseMtOrderBody(action.targetId);
+  if (!parsed2) return { msgs: [], sys: '（请客点外卖格式有误，未能下单）' };
+  // 第十三轮起：目录里没有的店 → AI 自主入驻
+  const ensured2 = ensureMerchantForAi(parsed2.merchantId);
+  const body2 = { ...parsed2, merchantId: ensured2 ? ensured2.id : parsed2.merchantId };
+  // 第十三轮用户反馈：请客冷却已删——机主让请多少次都照办
   const pre2 = mtValidateParsedOrder(uidInfo2.uid, body2);
   if (!pre2.ok) return { msgs: [], sys: `（请客失败：${pre2.error}）` };
   void mtTreatOrderFlow(body2, peer, opts).catch(() => undefined);
@@ -869,7 +958,6 @@ async function mtSelfOrderFlow(
     char: { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) },
     payer,
   });
-  mtMarkEngage(opts.app, peer.id);
   const meName = opts.meName?.trim() || cachedOwnerName() || '机主';
   const summary = order.items.map((i) => `${i.name}x${i.qty}`).join('、');
   memAddEventFragment(peer.id, opts.app, `你在美团给自己点了「${order.merchantName}」的外卖（${summary}，¥${fmt2(order.total)}），请机主${meName}帮你代付`, { eventTime: order.createdAt, sourceTag: 'mt-self-order' });
@@ -904,7 +992,6 @@ async function mtTreatOrderFlow(
     insertEngageSys(opts.app, peer.id, `（请客失败：${!payRes.ok ? payRes.error : '支付未完成'}）`);
     return;
   }
-  mtMarkEngage(opts.app, peer.id);
   const paidOrder = payRes.order;
   // 已支付订单动态卡发给机主（实时状态时间线，点击进订单详情）
   const shareRes = await mtCreateOrderShare({

@@ -766,3 +766,24 @@ Work Log:
 Stage Summary:
 - 第十二轮三项全部完成：QQ 恋人标识放大到 20px；网易云 VIP/SVIP 徽章换用户截图原像素唱片（圆形抠底无白边，数字仍动态）；礼物/代买/代付/取件参与冷却整体删除 + 提示词禁回显 + 运行时兜底保证「要就送到」
 - 关键文件：couple-mark.tsx、qq.tsx、music-mine.tsx、public/music-vip-disc-{vip,svip}.png(新)、tb-ai-engage.ts、wechat.tsx、chat-rich.ts
+
+---
+Task ID: 13
+Agent: Z.ai Code (main)
+Task: 第十三轮反馈——AI淘宝买东西/美团点外卖（没货就自创商品/订单）+ AI决策问题修复 + QQ/微信差异梳理
+
+Work Log:
+- 并行派 2 个 Explore 代理摸清：自主决策系统（AUTONOMY_BEHAVIORS 10项/autonomyDecide/每日2次额度/链式唤醒）、淘宝[帮你买]链路（tb-order-draft→tbInstantCompleteAiOrder→giftcard）、美团外卖引擎（mt-ai-engage 5种标记/ensureDish 自创菜品先例）、两端差异对照表
+- 修复3处自主决策 guard/执行条件不一致（额度空耗bug）：impress 3天冷却、anniv 每月1个、exam TA卷子状态——全部把 run 内真实条件提升进 guard（couple-ai.ts）
+- 删除美团遗漏的参与冷却（MT_ENGAGE_COOLDOWN_MS 5min引擎级 + 3处执行器拦截 + 节流规则注入 + 复购彩蛋文案），与第十二轮淘宝侧对齐（mt-ai-engage.ts）
+- 淘宝 AI 自创商品：新增 ensureTbProductAi（猜品类/猜图tag/猜价格/挂店→tbPersistAiProducts 持久化），[帮你买]/[送礼物]/[自己买] 支持写「*宝贝名」或直接中文名，教学文案同步更新（tb-ai-engage.ts）
+- 美团 AI 自主开店：ensureMerchantForAi（目录没有的店直接写店名→现场入驻，随 mt-ai-registry 持久化），mtRegisterAiMerchant 复用已有注册函数并补持久化（meituan-data.ts/mt-ai-engage.ts），教学文案更新
+- wechat.tsx 运行时兜底强化：wantsBuy 口吻扩充+放宽触发（机主明确要买且 AI 未婉拒就保送到，不再依赖 AI 嘴上承诺）；新增 tbCustomProductFromText（4类句式提取宝贝名，净化[M33]门牌号/标记残骸/口语尾巴，短候选优先）+ tbFallbackShouldFire 90s幂等守卫 + tbFallbackCardId 确定性卡片id（修同回合双构建双投递）
+- 新增美团运行时兜底：parseMtAskFromText（3种句式解析商家+菜品+请客意图）+ wechat.tsx 兜底合成 mt-order-treat/mt-order-draft（mtActionDone 标记防重复）
+- E2E 全绿：柠檬造型的加湿器（自创商品→单张礼物卡→礼物页）、喜运来大排档（自创店→小龙虾拌面+冰柠檬茶→AI付款¥71→订单卡→状态机推进）、蜜雪冰城珍珠奶茶连请第二单无任何「先歇一歇」拦截；美团微信一键登录跑通；测试脏数据已清理
+- tsc 0新增；eslint 在本沙箱因内存受限无法跑大文件（SIGKILL），以全量 tsc 为准
+
+Stage Summary:
+- 第十三轮全部落地：AI 买不到就自创（淘宝宝贝级/美团店级+菜品级）+ 决策额度不再空耗 + 美团冷却彻底删除 + 兜底保送到（淘宝+美团双端）
+- 关键决策：兜底触发从「AI承诺才买」放宽为「机主明确要买且 AI 未婉拒」（用户核心诉求是必须送到）；自创商品用本地启发式（不阻塞同步执行链），图走本地卡图按关键词映射
+- 遗留选项清单已列给用户：QQ端礼物卡/帮你买/送礼物补齐方案、QQ亲属卡、自主额度2次/天是否上调、自主链刷新断链、QQ端教学矛盾（承诺纪律vs执行器拒绝）

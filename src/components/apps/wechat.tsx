@@ -97,7 +97,7 @@ import { WxGiftCardBubble, WxGiftPicker, WxGiftReceiveSheet, type WxGiftData } f
 import { TB_PROXY_CARD_EVENT, TB_SHARE_CARD_EVENT, tbGetProxy, tbProxyHistoryLine, tbProxyMeHistoryLine, tbReshareProxy, tbCreateOrderShare, stripTbEchoText } from '@/lib/ios/tb-share-proxy';
 import { tbShareHistoryLine } from '@/lib/ios/tb-share-proxy';
 import { TbDraftBubble } from './tb-draft-card';
-import { applyTbEngageAction, buildTbEngageCtx, isTbEngageActionKind, tbDraftHistoryLine, tbPickProductForText } from '@/lib/ios/tb-ai-engage';
+import { applyTbEngageAction, buildTbEngageCtx, isTbEngageActionKind, tbCustomProductFromText, tbDraftHistoryLine, tbFallbackCardId, tbFallbackShouldFire, tbPickProductForText } from '@/lib/ios/tb-ai-engage';
 import { tbMarkOrderGifted } from '@/lib/ios/taobao-store';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import {
@@ -185,7 +185,7 @@ import {
 } from '@/lib/ios/group-social';
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 // 美团×AI 联动（外卖参与/双向代付）：动作执行、上下文块、历史序列化
-import { applyMtEngageAction, buildMtEngageCtx, isMtEngageActionKind, mtDraftHistoryLine, mtOrderShareHistoryLine, mtProxyHistoryLine, stripMtEchoText } from '@/lib/ios/mt-ai-engage';
+import { applyMtEngageAction, buildMtEngageCtx, isMtEngageActionKind, mtDraftHistoryLine, mtOrderShareHistoryLine, mtProxyHistoryLine, parseMtAskFromText, stripMtEchoText } from '@/lib/ios/mt-ai-engage';
 import { MtDraftBubble } from './mt-draft-card';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -6048,6 +6048,7 @@ function ChatPage({
     const out: WxMsg[] = [];
     let t = baseTime;
     // 第十二轮反馈兜底追踪：本轮是否真实执行过代买/送礼标记（兜底块防重复触发用）
+    let mtActionDone = false;
     let tbBuyActionDone = false;
     for (const part of extractRichActionParts(text)) {
       if (part.type === 'action') {
@@ -6301,6 +6302,7 @@ function ChatPage({
         // 同步执行（代付立即生效/草稿生成），产出的卡片随本回复队列投递；异步流（自己点外卖）
         // fire-and-forget，卡片经 MT_PROXY_CARD_EVENT 实时合并；角色记忆由执行器直写
         if (isMtEngageActionKind(part.action.kind)) {
+          mtActionDone = true;
           const mtRes = applyMtEngageAction(part.action, peer, {
             app: 'wx',
             meName: addressNameOf(me, useSettings.getState().addressMode),
@@ -6438,11 +6440,21 @@ function ChatPage({
     if (!tbBuyActionDone) {
       const lastMe = [...cur].reverse().find((m) => m.role === 'me' && typeof m.content === 'string' && m.content.trim());
       const ask = lastMe?.content ?? '';
-      const wantsBuy = /(给我买|帮我买|再买|重新买|重买|换一个|换个|再送|买一个|买个|买份|送我一个|送我个|送我一份)/.test(ask);
-      const promised = /(给你买|给你送|重新给你买|马上给你|这就给你|去给你|重新买一|再给你买|给你买个|重新送你|给你补一个|这就去买)/.test(text);
-      const refused = /(不给你买|不能买|先不买|先不送|下次再|以后再|等你生日|等你过节|别急|没有合适的|没找到合适的|没找到贴合)/.test(text);
-      if (wantsBuy && promised && !refused) {
-        const pid = tbPickProductForText(`${ask} ${text}`);
+      // 第十三轮：补充自创宝贝相关口吻（直接送我/买好了/给我弄/安排一个…）
+      const wantsBuy = /(给我买|帮我买|再买|重新买|重买|换一个|换个|再送|买一个|买个|买份|送我一个|送我个|送我一份|直接送我|买好|送我吧|给我弄|弄一个|整一个|安排一个|买了吧)/.test(ask);
+      const refused = /(不给你买|不能买|先不买|先不送|下次再|以后再|等你生日|等你过节|别急|没有合适的|没找到合适的|没找到贴合|换个话题|换个别的|聊点别的|说点别的|换个风格|先看看|让我想想)/.test(text);
+      if (wantsBuy && !refused) {
+        // 第十三轮：放宽触发——机主明确开口要买/要送（且 AI 没有明确婉拒）就保证送到，
+        // 不再依赖 AI 嘴上是否承诺（实测「好的老婆我马上弄」/纯语音回复都可能漏标记）。
+        // 同回合管线可能对同一段回复二次构建（文本同 id 会去重，但两次构建的 AI 回复原文可能有差异）：
+        // 兜底 key 只用会话+机主原话（两次构建间稳定）→ 90s 幂等守卫 + 确定性卡片 id 防双投递。
+        const fbKey = `${peer.id}|${ask.slice(0, 100)}`;
+        if (!tbFallbackShouldFire(fbKey)) return { msgs: out, cur, dirty: cur !== latest };
+        // 第十三轮：目录选不到贴合宝贝时，从聊天文本提取宝贝名 → AI 自主创建上架再买（[帮你买:*名字] 同链路）
+        const pid = tbPickProductForText(`${ask} ${text}`) ?? (() => {
+          const custom = tbCustomProductFromText(`${ask} ${text}`);
+          return custom ? `*${custom}` : null;
+        })();
         if (pid) {
           const tbRes = applyTbEngageAction({ kind: 'tb-order-draft', targetId: pid }, peer, {
             app: 'wx',
@@ -6450,11 +6462,43 @@ function ChatPage({
             recentTexts: cur.slice(-8).map((mm) => (typeof mm.content === 'string' ? mm.content : '')),
           });
           for (const cm of tbRes.msgs) {
-            out.push(cm as WxMsg);
+            out.push({ ...(cm as WxMsg), id: tbFallbackCardId(fbKey) });
             t += 600 + Math.floor(Math.random() * 400);
           }
           if (tbRes.sys) {
             out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: tbRes.sys } });
+            t += 1;
+          }
+        }
+      }
+    }
+    // —— 第十三轮反馈美团运行时兜底（冷却已删，说点就点）——
+    // 机主明确让点外卖/请客，但 AI 只嘴上答应（没输出 [请客点外卖]/[帮点外卖] 标记；
+    // 实测纯语音/口语回复都可能漏标记）→ 从机主原话解析「商家+菜品」，直接合成请客/代点动作执行。
+    // 反向守卫：AI 明确婉拒时不强点；本轮已执行过美团标记时不重复；同一把机主原话 90s 幂等。
+    if (!mtActionDone) {
+      const lastMeMt = [...cur].reverse().find((m) => m.role === 'me' && typeof m.content === 'string' && m.content.trim());
+      const askMt = lastMeMt?.content ?? '';
+      const wantsOrder = /(请你点|请客|给我点|帮我点|点一份|点外卖|点个外卖|来一份)/.test(askMt);
+      const refusedMt = /(不点|先不点|下次再|吃过了|不饿|别点|点不了|没法点)/.test(text);
+      if (wantsOrder && !refusedMt && tbFallbackShouldFire(`mt|${peer.id}|${askMt.slice(0, 100)}`)) {
+        const parsed = parseMtAskFromText(askMt);
+        if (parsed) {
+          const mtRes = applyMtEngageAction(
+            { kind: parsed.treat ? 'mt-order-treat' : 'mt-order-draft', targetId: `${parsed.merchantId}|${parsed.items.map((i) => `${i.name}x${i.qty}`).join(',')}` },
+            peer,
+            {
+              app: 'wx',
+              meName: addressNameOf(me, useSettings.getState().addressMode),
+              recentTexts: cur.slice(-8).map((mm) => (typeof mm.content === 'string' ? mm.content : '')),
+            },
+          );
+          for (const cm of mtRes.msgs) {
+            out.push(cm as WxMsg);
+            t += 600 + Math.floor(Math.random() * 400);
+          }
+          if (mtRes.sys) {
+            out.push({ id: uid(), role: 'peer', content: '', time: t, kind: 'sys', sys: { text: mtRes.sys } });
             t += 1;
           }
         }
