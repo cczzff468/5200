@@ -209,6 +209,8 @@ import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegment
 import { getTranslateCfg, saveTranslateCfg, requestTranslation, translateLangLabel, normalizeTranslateCfg, detectTranslateTarget, type ChatTranslateCfg } from '@/lib/chat-translate';
 import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters, setMemScopeForApp } from '@/lib/memory';
 import { aiWriteLetterOnRequest, coupleChatBlock, coupleLetterAskHit } from '@/lib/ios/couple-ai';
+// 第十六轮：AI 动态状态（情绪+作息）注入
+import { buildDynamicStateBlocks } from '@/lib/ios/ai-mood';
 import {
   addCharMomentPost,
   addUserMomentComment,
@@ -5150,6 +5152,9 @@ function ChatPage({
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
       memoryBlock,
+      // 第十六轮：AI 动态状态（情绪+作息）——AI 带着当前心情说话（开心/吃醋/委屈…影响语气与表情选择）、
+      // 按 TA 记住的作息规律拿捏说话时机（清早道早安/深夜催睡/饭点关心）
+      buildDynamicStateBlocks(peer.id),
       // 40-b 跨 App 环境感知：当前 App 记忆 → 其他 App 最近 10 条 → 群聊最近 10 条（长期/核心在 memoryBlock 内）
       crossCtxRef.current.crossAppBlock,
       crossCtxRef.current.groupBlock,

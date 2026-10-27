@@ -105,7 +105,7 @@ export default function TopBar({
         <button
           onClick={onClose}
           aria-label="返回"
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/75 dark:bg-zinc-900/70 dark:text-zinc-100 shadow-sm backdrop-blur transition active:scale-95"
         >
           <ChevronLeft className="h-5 w-5" />
         </button>
@@ -113,14 +113,14 @@ export default function TopBar({
           onClick={onPhotoMode}
           aria-label="拍照模式"
           title="拍照模式"
-          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/75 text-[#5a5a5e] shadow-sm backdrop-blur transition active:scale-95"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/75 dark:bg-zinc-900/70 dark:text-zinc-100 shadow-sm backdrop-blur transition active:scale-95"
         >
           <Camera className="h-[18px] w-[18px]" />
         </button>
       </div>
 
       {/* v13 毛玻璃胶囊：TA的心 / 宠物头像 / 装修小家 / ⋮ 一整排按钮同住一颗胶囊（用户第九轮；第十三轮按钮间距拉开） */}
-      <div className="pointer-events-auto flex items-center gap-[7px] rounded-full border border-white/60 bg-white/40 p-[5px] shadow-[0_12px_32px_rgba(90,60,50,0.16)] backdrop-blur-2xl">
+      <div className="pointer-events-auto flex items-center gap-[7px] rounded-full border border-white/60 dark:border-white/15 bg-white/40 dark:bg-zinc-900/50 p-[5px] shadow-[0_12px_32px_rgba(90,60,50,0.16)] backdrop-blur-2xl">
         {/* v10.3 TA 的心（宠物头像左侧独立按钮）：甜度/情绪/需求一览 */}
         <button
           onClick={onToggleHeart}
@@ -130,7 +130,7 @@ export default function TopBar({
           className={
             heartOpen
               ? 'flex h-9 w-9 items-center justify-center rounded-full bg-[#e88a9a] text-white shadow-sm transition active:scale-90'
-              : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/65 text-[#e88a9a] shadow-sm ring-1 ring-white/70 transition hover:bg-white/90 active:scale-90'
+              : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/65 dark:bg-zinc-800/80 text-[#e88a9a] shadow-sm ring-1 ring-white/70 dark:ring-white/20 transition hover:bg-white/90 dark:hover:bg-zinc-700/80 active:scale-90'
           }
         >
           <Heart className="h-[17px] w-[17px]" />
@@ -201,7 +201,7 @@ export default function TopBar({
             className={
               moreOpen
                 ? 'flex h-9 w-9 items-center justify-center rounded-full bg-[#3a3a3e]/80 text-white shadow-sm transition active:scale-95'
-                : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/65 text-[#5a5a5e] shadow-sm ring-1 ring-white/70 transition hover:bg-white/90 active:scale-95'
+                : 'flex h-9 w-9 items-center justify-center rounded-full bg-white/65 dark:bg-zinc-800/80 dark:text-zinc-100 shadow-sm ring-1 ring-white/70 dark:ring-white/20 transition hover:bg-white/90 dark:hover:bg-zinc-700/80 active:scale-95'
             }
           >
             <MoreVertical className="h-[17px] w-[17px]" />
@@ -213,116 +213,116 @@ export default function TopBar({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -6, scale: 0.96 }}
                 transition={{ type: 'spring', damping: 28, stiffness: 400 }}
-                className="absolute right-0 top-12 z-50 w-[218px] origin-top-right overflow-hidden rounded-2xl bg-white/95 p-1.5 shadow-2xl ring-1 ring-black/5 backdrop-blur-xl"
+                className="absolute right-0 top-12 z-50 w-[218px] origin-top-right overflow-hidden rounded-2xl bg-white/95 dark:bg-zinc-900/95 p-1.5 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 backdrop-blur-xl"
               >
                 {/* 时间变化：手动切白天 / 夜晚 */}
                 <button
                   onClick={onToggleNight}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] dark:text-zinc-100 transition active:bg-black/5 dark:active:bg-white/10"
                 >
                   {night ? <Moon className="h-4 w-4 shrink-0 text-[#8a7ab0]" /> : <Sun className="h-4 w-4 shrink-0 text-[#e0a458]" />}
                   <span className="flex-1 text-left">{night ? '切换到白天' : '切换到夜晚'}</span>
-                  <span className="text-[11px] text-[#b0aeb4]">{night ? '夜晚' : '白天'}</span>
+                  <span className="text-[11px] text-[#b0aeb4] dark:text-zinc-400">{night ? '夜晚' : '白天'}</span>
                 </button>
                 {/* 时间变化：昼夜跟随真实时间（19点~6点为夜晚） */}
                 <button
                   onClick={onEnableAutoNight}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] dark:text-zinc-100 transition active:bg-black/5 dark:active:bg-white/10"
                 >
                   <Clock className="h-4 w-4 shrink-0 text-[#7fa8c9]" />
                   <span className="flex-1 text-left">昼夜跟随现实</span>
                   {nightAuto ? (
                     <span className="rounded-full bg-[#dff0e2] px-2 py-0.5 text-[10px] font-semibold text-[#3f9a58]">已开启</span>
                   ) : (
-                    <span className="text-[11px] text-[#b0aeb4]">关</span>
+                    <span className="text-[11px] text-[#b0aeb4] dark:text-zinc-400">关</span>
                   )}
                 </button>
-                <div className="mx-2.5 my-1 h-px bg-[#f0eeea]" />
+                <div className="mx-2.5 my-1 h-px bg-[#f0eeea] dark:bg-white/10" />
                 {/* 声音开关 */}
                 <button
                   onClick={onToggleSfx}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] dark:text-zinc-100 transition active:bg-black/5 dark:active:bg-white/10"
                 >
                   {sfxOn ? <Volume2 className="h-4 w-4 shrink-0 text-[#6a8a6a]" /> : <VolumeX className="h-4 w-4 shrink-0 text-[#b09a9a]" />}
                   <span className="flex-1 text-left">音效</span>
                   {sfxOn ? (
                     <span className="rounded-full bg-[#dff0e2] px-2 py-0.5 text-[10px] font-semibold text-[#3f9a58]">已开</span>
                   ) : (
-                    <span className="rounded-full bg-[#f0eff1] px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90]">已关</span>
+                    <span className="rounded-full bg-[#f0eff1] dark:bg-zinc-800 px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90] dark:text-zinc-400">已关</span>
                   )}
                 </button>
                 {/* 视角：第一 / 第三人称 */}
                 <button
                   onClick={onToggleFp}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] dark:text-zinc-100 transition active:bg-black/5 dark:active:bg-white/10"
                 >
                   {fp ? <Eye className="h-4 w-4 shrink-0 text-[#c99a5b]" /> : <Users className="h-4 w-4 shrink-0 text-[#c99a5b]" />}
                   <span className="flex-1 text-left">视角</span>
-                  <span className="text-[11px] text-[#b0aeb4]">{fp ? '第一人称' : '第三人称'}</span>
+                  <span className="text-[11px] text-[#b0aeb4] dark:text-zinc-400">{fp ? '第一人称' : '第三人称'}</span>
                 </button>
                 {/* v8.0 小人声音开关：开 = 男生小人开口说话（TTS 播报），关 = 只显示文字气泡 */}
-                <div className="mx-2.5 my-1 h-px bg-[#f0eeea]" />
+                <div className="mx-2.5 my-1 h-px bg-[#f0eeea] dark:bg-white/10" />
                 <button
                   onClick={onToggleVoice}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] dark:text-zinc-100 transition active:bg-black/5 dark:active:bg-white/10"
                 >
                   {voiceOn ? <Volume2 className="h-4 w-4 shrink-0 text-[#6a8a6a]" /> : <VolumeX className="h-4 w-4 shrink-0 text-[#b09a9a]" />}
                   <span className="flex-1 text-left">小人声音</span>
                   {voiceOn ? (
                     <span className="rounded-full bg-[#dff0e2] px-2 py-0.5 text-[10px] font-semibold text-[#3f9a58]">已开</span>
                   ) : (
-                    <span className="rounded-full bg-[#f0eff1] px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90]">已关</span>
+                    <span className="rounded-full bg-[#f0eff1] dark:bg-zinc-800 px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90] dark:text-zinc-400">已关</span>
                   )}
                 </button>
                 {/* v11 G2 环境音效开关：开 = 跟天气/壁炉智能联动（雨→雨声 / 雪→风声 / 壁炉→炉火），关 = 恒静 */}
-                <div className="mx-2.5 my-1 h-px bg-[#f0eeea]" />
+                <div className="mx-2.5 my-1 h-px bg-[#f0eeea] dark:bg-white/10" />
                 <button
                   onClick={onToggleAmbient}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] dark:text-zinc-100 transition active:bg-black/5 dark:active:bg-white/10"
                 >
                   <Waves className="h-4 w-4 shrink-0 text-[#6a9ab0]" />
                   <span className="flex-1 text-left">环境音效</span>
                   {ambientOn ? (
                     <span className="rounded-full bg-[#dff0e2] px-2 py-0.5 text-[10px] font-semibold text-[#3f9a58]">已开</span>
                   ) : (
-                    <span className="rounded-full bg-[#f0eff1] px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90]">已关</span>
+                    <span className="rounded-full bg-[#f0eff1] dark:bg-zinc-800 px-2 py-0.5 text-[10px] font-semibold text-[#8a8a90] dark:text-zinc-400">已关</span>
                   )}
                 </button>
                 {/* v11 F2 TA 的日记：TA 每天自己写一篇，抽屉翻阅 */}
                 <button
                   onClick={onOpenTaDiary}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] dark:text-zinc-100 transition active:bg-black/5 dark:active:bg-white/10"
                 >
                   <BookOpen className="h-4 w-4 shrink-0 text-[#c9a58a]" />
                   <span className="flex-1 text-left">TA 的日记</span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-[#d8cfc4]" />
+                  <ChevronRight className="h-4 w-4 shrink-0 text-[#d8cfc4] dark:text-zinc-500" />
                 </button>
                 {/* v11 I2 我们的里程碑：在一起天数/聊天/做饭/拥抱/牵手/照顾宠物 */}
                 <button
                   onClick={onOpenStats}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] dark:text-zinc-100 transition active:bg-black/5 dark:active:bg-white/10"
                 >
                   <Sparkles className="h-4 w-4 shrink-0 text-[#b89ad4]" />
                   <span className="flex-1 text-left">我们的里程碑</span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-[#d8cfc4]" />
+                  <ChevronRight className="h-4 w-4 shrink-0 text-[#d8cfc4] dark:text-zinc-500" />
                 </button>
                 {/* v10.3 TA 的心：移到顶栏爱心按钮独立面板（此处保留入口行） */}
                 <button
                   onClick={onOpenHeart}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] dark:text-zinc-100 transition active:bg-black/5 dark:active:bg-white/10"
                 >
                   <Heart className="h-4 w-4 shrink-0 text-[#e88a9a]" />
                   <span className="flex-1 text-left">TA 的心 · 甜度 / 情绪 / 需求</span>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-[#d8cfc4]" />
+                  <ChevronRight className="h-4 w-4 shrink-0 text-[#d8cfc4] dark:text-zinc-500" />
                 </button>
                 {/* v8.0 换个TA：重弹陪伴角色选择列表 */}
                 <button
                   onClick={onOpenPicker}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] transition active:bg-black/5"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] font-medium text-[#3a3a3e] dark:text-zinc-100 transition active:bg-black/5 dark:active:bg-white/10"
                 >
                   <Heart className="h-4 w-4 shrink-0 text-[#e8a3b3]" />
                   <span className="flex-1 text-left">换个TA陪伴</span>
-                  <span className="truncate text-[11px] text-[#b0aeb4]">{companion?.name ?? '未选择'}</span>
+                  <span className="truncate text-[11px] text-[#b0aeb4] dark:text-zinc-400">{companion?.name ?? '未选择'}</span>
                 </button>
               </motion.div>
             )}

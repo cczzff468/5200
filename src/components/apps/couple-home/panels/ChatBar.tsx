@@ -57,7 +57,7 @@ export default function ChatBar({
           className="pointer-events-auto absolute bottom-[152px] left-1/2 z-30 w-[min(88%,352px)] -translate-x-1/2"
         >
           {photoChip && (
-            <div className="mx-auto mb-1.5 w-fit rounded-full bg-white/80 px-3 py-1 text-[10.5px] text-[#b07193] shadow-sm ring-1 ring-white/70 backdrop-blur">
+            <div className="mx-auto mb-1.5 w-fit rounded-full bg-white/80 dark:bg-zinc-900/80 px-3 py-1 text-[10.5px] text-[#b07193] dark:text-rose-300 shadow-sm ring-1 ring-white/70 dark:ring-white/15 backdrop-blur">
               已附照片 · 发送时 TA 会看到照片内容
             </div>
           )}
@@ -72,7 +72,7 @@ export default function ChatBar({
               className={
                 intercomOn
                   ? 'relative flex h-11 w-11 items-center justify-center rounded-full bg-[#5aa58a] text-white shadow-md transition active:scale-90'
-                  : 'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/75 text-[#8a837a] shadow-md backdrop-blur-xl transition active:scale-90'
+                  : 'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/70 dark:border-white/15 bg-white/75 dark:bg-zinc-900/70 text-[#8a837a] dark:text-zinc-300 shadow-md backdrop-blur-xl transition active:scale-90'
               }
             >
               {intercomOn && <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-[#5aa58a]/35" />}
@@ -83,7 +83,7 @@ export default function ChatBar({
               onClick={onOpenHistory}
               aria-label="查看聊天记忆"
               title="和 TA 的聊天记忆"
-              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/75 text-[#8a837a] shadow-md backdrop-blur-xl transition active:scale-90"
+              className="pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/70 dark:border-white/15 bg-white/75 dark:bg-zinc-900/70 text-[#8a837a] dark:text-zinc-300 shadow-md backdrop-blur-xl transition active:scale-90"
             >
               <History className="h-[19px] w-[19px]" />
             </button>
@@ -95,14 +95,14 @@ export default function ChatBar({
               className={
                 micOn
                   ? 'relative flex h-11 w-11 items-center justify-center rounded-full bg-[#e46a6a] text-white shadow-md transition active:scale-90'
-                  : 'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-white/75 text-[#8a837a] shadow-md backdrop-blur-xl transition active:scale-90'
+                  : 'pointer-events-auto flex h-11 w-11 items-center justify-center rounded-full border border-white/70 dark:border-white/15 bg-white/75 dark:bg-zinc-900/70 text-[#8a837a] dark:text-zinc-300 shadow-md backdrop-blur-xl transition active:scale-90'
               }
             >
               {micOn && <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-[#e46a6a]/35" />}
               <Mic className="h-[19px] w-[19px]" />
             </button>
           </div>
-          <div className="flex items-center gap-1.5 rounded-full border border-white/70 bg-white/75 p-1.5 pl-3.5 shadow-[0_10px_28px_rgba(90,70,60,0.22)] backdrop-blur-xl">
+          <div className="flex items-center gap-1.5 rounded-full border border-white/70 dark:border-white/15 bg-white/75 dark:bg-zinc-900/70 p-1.5 pl-3.5 shadow-[0_10px_28px_rgba(90,70,60,0.22)] backdrop-blur-xl">
             <input
               value={chatText}
               onChange={(e) => onChatText(e.target.value)}
@@ -112,14 +112,14 @@ export default function ChatBar({
               placeholder={micOn ? '在听…请说话' : `跟${companion.name}说点什么…`}
               disabled={chatBusy}
               aria-label="和小屋里的TA聊天"
-              className="h-9 min-w-0 flex-1 bg-transparent text-[13.5px] text-[#3a3a3e] outline-none placeholder:text-[#b8b2aa] disabled:opacity-50"
+              className="h-9 min-w-0 flex-1 bg-transparent text-[13.5px] text-[#3a3a3e] dark:text-zinc-100 outline-none placeholder:text-[#b8b2aa] dark:placeholder:text-zinc-500 disabled:opacity-50"
             />
             {/* 附照片（识图模型转文字注入情境） */}
             <button
               onClick={onPickPhoto}
               aria-label="发一张照片"
               title="发一张照片（识图）"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8a837a] transition active:scale-90"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#8a837a] dark:text-zinc-300 transition active:scale-90"
             >
               <ImagePlus className="h-[17px] w-[17px]" />
             </button>

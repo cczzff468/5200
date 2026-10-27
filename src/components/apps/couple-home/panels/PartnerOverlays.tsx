@@ -52,7 +52,7 @@ export function PartnerMenu({
           role="menu"
           aria-label={`${companion.name}互动菜单`}
         >
-          <div className="flex items-center gap-2 rounded-full border border-white/70 bg-white/85 p-2 shadow-[0_12px_30px_rgba(90,70,60,0.24)] backdrop-blur-xl">
+          <div className="flex items-center gap-2 rounded-full border border-white/70 dark:border-white/15 bg-white/85 dark:bg-zinc-900/80 p-2 shadow-[0_12px_30px_rgba(90,70,60,0.24)] backdrop-blur-xl">
             {holdingUI ? (
               <button
                 onClick={onRelease}
@@ -85,7 +85,7 @@ export function PartnerMenu({
             <button
               onClick={onClose}
               aria-label="关闭菜单"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/70 text-[#8a8a90] ring-1 ring-white/80 transition active:scale-90"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/70 dark:bg-zinc-800/70 text-[#8a8a90] dark:text-zinc-300 ring-1 ring-white/80 dark:ring-white/15 transition active:scale-90"
             >
               <X className="h-4 w-4" />
             </button>
@@ -141,7 +141,7 @@ export function PartnerRing({
                   onClick={onPat}
                   role="menuitem"
                   aria-label="摸摸头"
-                  className="pointer-events-auto absolute bottom-0 left-0 flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-full border border-white/70 bg-white/75 text-[#6a5a62] shadow-[0_10px_26px_rgba(90,70,60,0.22)] backdrop-blur-xl transition active:scale-90"
+                  className="pointer-events-auto absolute bottom-0 left-0 flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-full border border-white/70 dark:border-white/15 bg-white/75 dark:bg-zinc-900/70 text-[#6a5a62] dark:text-zinc-200 shadow-[0_10px_26px_rgba(90,70,60,0.22)] backdrop-blur-xl transition active:scale-90"
                 >
                   <Hand className="h-[19px] w-[19px] text-[#e8a3b3]" />
                   <span className="text-[10px] font-semibold">摸头</span>
@@ -154,7 +154,7 @@ export function PartnerRing({
                   onClick={onFeed}
                   role="menuitem"
                   aria-label="投喂食物"
-                  className="pointer-events-auto absolute left-1/2 top-0 flex h-16 w-16 -translate-x-1/2 flex-col items-center justify-center gap-0.5 rounded-full border border-white/70 bg-white/75 text-[#6a5a62] shadow-[0_10px_26px_rgba(90,70,60,0.22)] backdrop-blur-xl transition active:scale-90"
+                  className="pointer-events-auto absolute left-1/2 top-0 flex h-16 w-16 -translate-x-1/2 flex-col items-center justify-center gap-0.5 rounded-full border border-white/70 dark:border-white/15 bg-white/75 dark:bg-zinc-900/70 text-[#6a5a62] dark:text-zinc-200 shadow-[0_10px_26px_rgba(90,70,60,0.22)] backdrop-blur-xl transition active:scale-90"
                 >
                   <UtensilsCrossed className="h-[19px] w-[19px] text-[#e0a458]" />
                   <span className="text-[10px] font-semibold">喂食</span>
@@ -167,7 +167,7 @@ export function PartnerRing({
                   onClick={onTickle}
                   role="menuitem"
                   aria-label="挠痒痒"
-                  className="pointer-events-auto absolute bottom-0 right-0 flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-full border border-white/70 bg-white/75 text-[#6a5a62] shadow-[0_10px_26px_rgba(90,70,60,0.22)] backdrop-blur-xl transition active:scale-90"
+                  className="pointer-events-auto absolute bottom-0 right-0 flex h-16 w-16 flex-col items-center justify-center gap-0.5 rounded-full border border-white/70 dark:border-white/15 bg-white/75 dark:bg-zinc-900/70 text-[#6a5a62] dark:text-zinc-200 shadow-[0_10px_26px_rgba(90,70,60,0.22)] backdrop-blur-xl transition active:scale-90"
                 >
                   <Feather className="h-[19px] w-[19px] text-[#b89ad4]" />
                   <span className="text-[10px] font-semibold">挠痒痒</span>
@@ -179,7 +179,7 @@ export function PartnerRing({
                   transition={{ type: 'spring', damping: 20, stiffness: 420, delay: 0.12 }}
                   onClick={onClose}
                   aria-label="关闭轮盘"
-                  className="pointer-events-auto absolute bottom-1.5 left-1/2 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full bg-white/70 text-[#8a8a90] ring-1 ring-white/80 transition active:scale-90"
+                  className="pointer-events-auto absolute bottom-1.5 left-1/2 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full bg-white/70 dark:bg-zinc-800/70 text-[#8a8a90] dark:text-zinc-300 ring-1 ring-white/80 dark:ring-white/15 transition active:scale-90"
                 >
                   <X className="h-4 w-4" />
                 </motion.button>
@@ -221,12 +221,12 @@ export function RequestDialog({
             animate={{ scale: 1, y: 0 }}
             exit={{ scale: 0.94, y: 10 }}
             transition={{ type: 'spring', damping: 26, stiffness: 320 }}
-            className="w-full max-w-[290px] rounded-3xl bg-white/95 p-5 text-center shadow-2xl backdrop-blur-xl"
+            className="w-full max-w-[290px] rounded-3xl bg-white/95 dark:bg-zinc-900/95 p-5 text-center shadow-2xl backdrop-blur-xl"
           >
             <div className="mx-auto mb-2.5 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-[#f6cdd6] to-[#dcd2ec] text-[20px] font-bold text-white shadow-inner">
               {companion.name.slice(0, 1)}
             </div>
-            <p className="text-[15px] font-semibold text-[#3a3a3e]">
+            <p className="text-[15px] font-semibold text-[#3a3a3e] dark:text-zinc-100">
               {companion.name}
               {request.kind === 'hug'
                 ? '想要拥抱你'
@@ -238,7 +238,7 @@ export function RequestDialog({
                       ? '说 TA 想你了'
                       : '有话想对你说'}
             </p>
-            <p className="mb-4 mt-1 text-[11.5px] text-[#9a9a96]">
+            <p className="mb-4 mt-1 text-[11.5px] text-[#9a9a96] dark:text-zinc-400">
               {request.kind === 'hug'
                 ? 'TA 张开了双臂，就站在你面前'
                 : request.kind === 'holdhand'
@@ -250,7 +250,7 @@ export function RequestDialog({
             <div className="flex gap-2">
               <button
                 onClick={onReject}
-                className="h-11 flex-1 rounded-full bg-[#f1efe9] text-[13.5px] font-semibold text-[#8a8a86] transition active:scale-95"
+                className="h-11 flex-1 rounded-full bg-[#f1efe9] dark:bg-zinc-800 text-[13.5px] font-semibold text-[#8a8a86] dark:text-zinc-400 transition active:scale-95"
               >
                 拒绝
               </button>

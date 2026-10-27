@@ -866,3 +866,75 @@ Stage Summary:
 - 第十五轮两项全部完成并实机像素级验证：VIP 徽章「VI 被凹弧遮罩吃掉」根因修复（pl 19.7/pr 4.2 按参考逐像素实测）、情侣空间按钮改方形圆角（rounded-[7px]）
 - 关键文件：music-mine.tsx（VipBadge 内边距）、qq.tsx（情侣空间按钮圆角）
 - 方法论沉淀：CSS mask 挖空类设计的内边距必须按「透明区最大延伸（本例凹弧中线凸点=左缘+17.2px）+间隙」计算，不能只看盒子边缘；E2E 截图验证要逐字母读字（VLM 整体印象会说"正常"但逐字读才发现 VI 缺失）
+
+---
+Task ID: 31-a
+Agent: 深色适配子代理1
+Task: 日历 App + 情侣塔罗 + 考试/协议/情书气泡深色适配
+
+Work Log:
+- [方案] 日历 App 大量颜色走 shared.tsx 常量 + 组件内 style={{}} 注入（Tailwind dark: 类无法覆盖内联样式）→ 采用「CSS 变量桥接」：颜色常量改为 var(--cal-*, 原浅色值) 形式（浅色回退 = 原值，视觉零变化），CalendarApp 根节点挂 Tailwind dark:[--cal-*:…] 任意属性变体注入深色值，全树自动切换；App 外（如主屏日历小组件）无变量定义自动回退浅色，无副作用
+- [shared.tsx] 9 个常量转 var()：ACCENT_SOFT/BG/CARD/TEXT/TEXT_2/TEXT_3/DIVIDER/GOLD_SOFT/MI_BLUE（ACCENT 珊瑚红与 GOLD 金深浅色通用保留），新增 FILL_SOFT/FILL_MED 两个填充常量（搜索框底/清除钮底/开关断电底）
+- [index.tsx] CAL_DARK_VARS 16 个 dark:[--cal-*] 类挂到加载屏与主根节点（bg zinc-900/card zinc-800/text zinc-100/400/500/divider white9%/accent-soft 红18%/gold-soft 金22%/mi-blue 提亮 #6E9EFC/表单底 zinc-900/胶囊轨道 #26262B/选中片 #3F3F46/fill 白8%/22%/滚轮近远 白45%/20%）；toast 补 dark:bg-zinc-700/90!（!important 覆盖内联深底）
+- [chrome.tsx] App 小图标白底块/视图下拉/更多菜单三处 bg-white → dark:bg-zinc-800/95（任务点名的 L62/134/170），菜单项 active:bg-black → dark:active:bg-white/10，菜单阴影 dark:shadow!important；视图切换胶囊轨道 #F0F0F0 与选中片 #FFFFFF 改 SEG_TRACK/SEG_ACTIVE 变量引用
+- [event-form.tsx] FORM_BG 转 var(--cal-form-bg)；FormCard bg-white → dark:bg-zinc-800；错误横幅 #FBEAE7 → ACCENT_SOFT 常量（同值）；全天开关断电底 rgba(41,36,31,0.14) → FILL_MED
+- [其余页面] search-view/link-notes 搜索框底与清除钮 → FILL 常量；datetime-pickers 时间滚轮邻/远两项暗色 var 化；option-pickers 颜色卡 #FFFFFF → CARD 常量；month/agenda/year/week-day/event-detail/widgets 六个文件零改动（颜色全走常量自动适配）
+- [couple-tarot.tsx] 132 处 dark: 追加：根容器 bg-[#f1f2f4]→dark:bg-zinc-900、氛围光斑白晕→dark:white[0.05-0.07]、毛玻璃卡 bg-white/60→dark:bg-zinc-800/60+border-white/10、文字 gray-900/800/700/600/500/400→zinc-100/200/300/400/400/500、主 CTA bg-gray-900 白字→dark:bg-zinc-100 深字（反色更醒目）、次级按钮→dark:white/10 边框白15、解读面板 gray-50/100→dark:white[0.06]、牌位虚线框双态、步骤条、历史卡、删除钮红色系 dark:red-500/30 底；牌面深蓝金 artwork 与牌背白灰纹按规则保留不动
+- [couple-exam-bubble.tsx] 4 处：卡片壳 bg-white→dark:bg-zinc-800/95、小箭头同、头部「恋人空间」text-black/85→dark:text-zinc-200、主标题 text-black/90→dark:text-zinc-100；米黄试卷纸面与卷内黑字按规则保留（彩色 artwork）
+- [couple-pact-bubble.tsx] 16 处：壳/箭头/头部/主标题同上；协议纸面 #fffdfa→dark:bg-zinc-900/60 并全套适配纸内文字（标题/前言/条款/折叠提示/空态/状态附注 → zinc-100~500）与装饰渐变线（to-black/25→dark:to-white/25、via-black/30→dark:via-white/30）、虚线分隔 border-black/10→dark:border-white/10；已生效红章与粉色编号保留
+- [couple-letter-bubble.tsx] 信封卡为纯彩色渐变 artwork（粉兔/暖黄/香芋等 8 款渐变+SVG 火漆/蕾丝/邮戳/小动物），无白底黑字部分，按「渐变保留」规则不动 artwork，仅补 dark:shadow 提升深色下卡片层次
+- [验证] bunx tsc --noEmit 0 错误（基线 0）；eslint 改动文件仅 couple-tarot 既有 13 个 ref-during-render 历史问题（行号 1417~1736 均非本次触碰行，git diff 确认全部改动仅 className 字符串）；agent-browser 实机 390×844：设置 App→显示与亮度→深色（html.dark 真实管线）→ 日历月视图 root #18181B/图标块 zinc-800@95%/胶囊轨道 #26262B/选中片 #3F3F46/标题 zinc-100；视图与更多下拉菜单 bg zinc-800/95+文字 zinc-100；新建日程表单 root #18181B/卡片 zinc-800/输入文字 zinc-100/取消键 #6E9EFC/禁用完成 zinc-500；恋人空间→发现→爱情塔罗（种子 couple-space:state 绑定）主题页 root zinc-900/卡片 zinc-800@60%/边框 white10/文字 zinc-100；切回浅色后逐项对比基线：root 250,249,247 / 图标块 255,255,255 / 轨道 240,240,240 / 选中片 255,255,255 / 标题 41,36,31——与改动前完全一致；console/page errors 零新增
+- [截图] /tmp/dark-tarot-theme.png、/tmp/dark-tarot-2.png、/tmp/light-calendar-month.png
+
+Stage Summary:
+- 12 个文件：calendar/{shared,index,chrome,event-form,search-view,link-notes,datetime-pickers,option-pickers}.tsx + couple-tarot.tsx + couple-{exam,pact,letter}-bubble.tsx；共约 180 处适配（tarot 132 处 dark: + 日历 16 变量×2根 + 菜单/表单/胶囊等 28 处 + 三气泡 21 处）；月/年/周/日/日程/详情六视图经变量桥接零改动自动适配
+- 机制沉淀：内联 style 为主的旧组件深色适配可用「常量 var(--x, 浅色值) + 根节点 dark:[--x:深色值] 任意属性类」桥接，浅色像素级不变、无全局 CSS 侵入；内联样式的个别覆盖用 Tailwind v4 尾缀 ! （dark:xxx!）
+- tsc 0 新增；实机深/浅双态验证通过（深色无刺眼白底、浅色与基线逐像素一致）
+
+---
+Task ID: 31-b
+Agent: 深色适配子代理2（超时部分完成，主控补验收）
+Task: 情侣空间 + 拾光小屋面板 + 心动模式 + 礼物卡深色适配
+
+Work Log:
+- [couple-space.tsx] 子代理完成 901 处 dark: 追加（白底玻璃卡→zinc-800/95、灰字→zinc-200 等）；主控甄别剩余 56 行 bg-white 全部为有意设计（星星粒子/白光晕 blur/深底白玻璃 bg-white/10+text-white/开关白旋钮），无需适配
+- [couple-home/panels/] 11 个面板文件全部适配：StatusPanels 35 处、StylePanels 34 处、TopBar 29 处、EditBars 24 处、ShopDrawer 16 处、AdoptDialog 11 处、PartnerOverlays 10 处、CompanionPicker 9 处、ChatBar 7 处、PetDiarySheet 6 处；PetActionBar/QuickBars 经查无浅色硬编码（0 处 bg-white/text-black）无需适配
+- [wx-gift.tsx] 5 处深色适配
+- [music-heart.tsx] 主控复核：探索报告误判——该文件全为深底玻璃风格（bg-white/10/15 半透明 + text-white），唱片米白外圈为黑胶样式有意设计，无需适配，零改动
+- [验收] 主控 tsc --noEmit 0 新增错误；实机深色抽查：日历月视图（root #18181B/图标块 zinc-800/胶囊轨道 #26262B 无白底）✓、主屏深色 ✓、音乐 App 深色 ✓（登录页二维码白底为扫码功能有意设计）；切回浅色恢复正常；console 零新增错误
+
+Stage Summary:
+- 深色适配子任务 31-b 核心完成：couple-space 901 处 + couple-home/panels 11 文件约 181 处 + wx-gift 5 处；music-heart 经复核无需适配
+- 与 31-a（日历 CSS 变量桥接 16 变量 + 塔罗 132 处 + 三气泡 21 处）合计 25 文件约 1100+ 处深色适配
+- 方法论：3D 场景 UI 面板用半透明深底（dark:bg-zinc-900/80）+ 浅字；装饰性白色元素（粒子/光晕/白环）保留不算适配缺口
+
+---
+Task ID: 32-36（第十六轮）
+Agent: Z.ai Code (main)
+Task: 五项 AI 能力升级——AI 主动聊天跨 App 联动 + 作息记忆（早安晚安吃饭提醒）+ AI 情绪系统 + 语音通话 z-ai ASR 兜底 + 深色模式全面适配
+
+Work Log:
+- [31-a 深色代理1] 日历 App 用「CSS 变量桥接」（常量 var(--cal-*, 浅色值) + 根节点 dark:[--cal-*] 任意属性类，16 变量）+ 塔罗 132 处 + 考试/协议/情书三气泡 21 处；月/年/周/日/日程/详情六视图零改动自动适配；浅色像素级不变
+- [31-b 深色代理2] couple-space 901 处 + couple-home/panels 11 文件约 181 处 + wx-gift 5 处；主控甄别剩余 bg-white 全为有意设计（星星粒子/白光晕/深底玻璃）；music-heart 经复核为深底玻璃风格无需适配；PetActionBar/QuickBars 无浅色硬编码零改动
+- [33 情绪系统] 新增 src/lib/ios/ai-mood.ts：心情值 0-100 + 7 类情绪标签（happy/sweet/normal/jealous/sad/angry/miss）；词表打点（亲密夸奖→开心+5、提别的异性→吃醋-10、骂人→生气-8、冷淡短回复→委屈、≥6h 没聊→想念）+ 事件打点（送礼物→甜蜜+8）+ 40min 档自动衰减回归平静；MOOD_PROMPT 每类情绪配语气描述+表情/表情包倾向指引；平静不注入省 token
+- [32 作息记忆] 新增 src/lib/ios/routine.ts：全局活跃直方图（每日 first/last，滚动 14 天）→ 近 7 天中位数推断起床/入睡（样本≥3 天 ready）→ buildRoutineBlock 注入（作息画像+当前时刻状态对照+说话时机指引）；routineNudgeDue/Mark 支持早安（起床+20min~11:00）/晚安（入睡-50min~+60min）/饭点（11:30-12:40/17:40-19:00）每类每天 1 次
+- [打点接线] chat-stream-store.beginChatStream 加 noteEngagement（noteActive 全局作息 + blockSessionOf 解析 1:1 会话 → noteUserMsgMood 本轮最后一条用户消息）；三端聊天统一覆盖、群聊/助手只计作息
+- [注入点×5] wechat.tsx/qq.tsx systemFull + chat.tsx baseSys（仅联系人会话）+ proactive-msg generateProactiveText + couple-ai llmSystem 均 import buildDynamicStateBlocks(cid)（=情绪块+作息块组合）；persona.ts 本身是客户端+服务端共用纯函数不能带 localStorage 依赖故由调用方注入（架构决策）
+- [34 跨 App 联动] 新增 src/lib/ios/cross-app-nudge.ts（mtOrderArrivedNudge/tbOrderArrivedNudge，动态 import 防环）；proactive-msg.ts 新增导出 fireProactiveNudge（幂等键 24h + 每日上限 3 条 + master off/拉黑/通话守卫，复用 fireProactive 全管线：生成→去重→投递→通知→未读→记忆→历史）；挂钩：MeituanOrderWatcher 状态机 completed → mtOrderArrivedNudge；taobao-store.tbConfirmReceive → tbOrderArrivedNudge（新增 opts.fromAi，tbRunPickup 传 true 防重复——AI 帮取件自己会报喜）
+- [32 作息提醒] couple-ai.ts 新增 runRoutineNudgeTick（三类提醒各自情境 prompt：早安带余温/晚安催睡撒娇/饭点顺外卖话题）+ ROUTINE_NUDGE_CTX；CoupleResidentWatcher 每 60s kick 调用（不占每日 5 次自主额度）
+- [35 语音强化] 发现 cabin-voice.ts 已有现成 transcribeBlob 三级链（① SenseVoice 端侧 ② 用户云端 STT ③ 内置 z-ai ASR 免配置 /api/phone/asr）；chat-call.ts + phone.tsx 双端识别兜底从「仅用户配置 STT 时 transcribeAudioBlob」升级为「Web Speech 失败即走 transcribeBlob」——不配任何东西也能连续语音对话
+- [心情胶囊] couple-space.tsx HomePage avatarCol('ta') 头像下新增白胶囊（ai-mood:{partnerContactId} 非平静时显示 emoji+标签，与想念徽章同款样式，data-testid=couple-ta-mood）
+- [E2E 实机] 浏览器 IndexedDB 数据被 agent-browser 重启清空（临时 profile）→ 重新种子（小柚 user 88888888/凡凡 char 恋人 + couple-space:state 绑定 qq + music-guest-profile 财财VIP·叁）+ QQ 登录 + routine-hist 7 天样本（起床 7:30 睡觉 23:10）；fetch 双层 hook 捕获聊天 system：
+  · 发「宝贝我想你了，好爱你」→ ai-mood 打点 {mood:80, tag:'happy'}（75+5）✓
+  · 手动设 jealous 45 → 发「在忙什么呢」→ 捕获完整 system 9748 字符含【你此刻的心情】吃醋（心情值 45/100）+语气/表情指引 ✓ +【TA 的作息规律】TA 通常 07:40 左右起床、23:10 左右睡觉，现在 05:53 该睡觉+时机指引 ✓（7 天中位数 wake 450→7:40 计算正确）
+  · 恋人空间首页 TA 头像下「😗 吃醋」白胶囊渲染（DOM + VLM 双确认）✓
+  · CoupleResidentWatcher 自主链活着（捕获到心情日记+决策请求，当时 normal 不注入属预期）✓
+  · /api/phone/asr 400 参数校验正常 ✓ /api/phone/tts 200 ✓
+  · 已知限制：内置模型对 system 语气控制弱（吃醋指引下回复仍平淡）——用户配置 API 后效果显著提升；打点顺序=本轮打点下一轮生效（真人反应也滞后半拍，合理）
+- [质量] tsc --noEmit 0 新增；eslint 全部 13 个改动文件 0 问题；浏览器 console/errors 零新增；dev.log 仅既有 instrumentation 警告
+
+Stage Summary:
+- 第十六轮五项全部落地：情绪系统（词表+事件打点→心情值/标签→提示词语气+表情倾向→恋人空间可视化）、作息记忆（活跃直方图→中位数画像→注入+早安/晚安/饭点主动消息不占额度）、跨 App 联动（外卖送达/快递签收→恋人 AI 主动聊，幂等+每日上限）、语音通话三级 ASR 兜底（SenseVoice→用户STT→z-ai 免配置）、深色适配 25 文件约 1100+ 处（日历 CSS 变量桥接法）
+- 关键架构决策：persona.ts 保持纯函数（服务端共用），动态状态由 5 个客户端组装点注入；跨 App 事件经动态 import 防循环依赖；ai-mood/routine 用 localStorage（轻量同步读）
+- 关键文件：ai-mood.ts(新)/routine.ts(新)/cross-app-nudge.ts(新)/proactive-msg.ts(fireProactiveNudge)/couple-ai.ts(runRoutineNudgeTick)/chat-stream-store.ts(noteEngagement)/chat-call.ts+phone.tsx(transcribeBlob)/CoupleResidentWatcher.tsx/MeituanOrderWatcher.tsx/taobao-store.ts/couple-space.tsx(心情胶囊)/wechat+qq+chat.tsx(注入) + 25 个深色适配文件
+- 方法论沉淀：浏览器临时 profile 的 IndexedDB 不持久（agent-browser close 即清）——测试数据种子脚本化备用；双层 fetch hook 会叠加（rehook 前先删旧）；截断记录会误判注入缺失（检查用完整捕获）

@@ -12,6 +12,8 @@ import { useEffect } from 'react';
 import { mtAdvanceOrders, mtGetSession, mtUidOf, type MtSession } from '@/lib/ios/meituan-store';
 import { mtSyncProxiesForUid } from '@/lib/ios/mt-proxy-pay';
 import { mtWriteOrderTerminalMemory } from '@/lib/ios/mt-ai-engage';
+// 第十六轮：跨 App 联动——外卖送达 → 恋人 AI 主动到微信/QQ 聊天里聊起
+import { mtOrderArrivedNudge } from '@/lib/ios/cross-app-nudge';
 
 export default function MeituanOrderWatcher() {
   useEffect(() => {
@@ -27,6 +29,8 @@ export default function MeituanOrderWatcher() {
         // C9：终态订单 → 参与角色补写事件记忆（送达/取消各只推进一次，天然幂等）
         for (const tr of transitions) {
           if (tr.to === 'completed' || tr.to === 'canceled') mtWriteOrderTerminalMemory(tr.order);
+          // 第十六轮：送达（completed）→ 跨 App 联动（恋人 AI 主动聊；幂等键含订单号，同单只发一次）
+          if (tr.to === 'completed') mtOrderArrivedNudge(tr.order as unknown as Parameters<typeof mtOrderArrivedNudge>[0]);
         }
         // B4：订单状态变了（尤其取消/直付）→ 挂着的 pending 代付请求对齐真实状态
         mtSyncProxiesForUid(uid);

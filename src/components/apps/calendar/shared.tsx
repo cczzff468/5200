@@ -15,29 +15,35 @@ import { solarToLunar } from '@/lib/ios/lunar';
 import type { CalendarEventRecord, NoteRecord } from '@/lib/ios/db';
 
 // ---------------- 设计常量 ----------------
+// 深色模式（Task 31-a）：颜色常量改为 CSS 变量引用，浅色回退值 = 原浅色 hex（视觉零变化）；
+// CalendarApp 根节点（index.tsx）挂 dark:[--cal-*:…] 变体类，html.dark 时整棵树自动换深色配色。
 
-/** 主色：珊瑚红/朱红 */
+/** 主色：珊瑚红/朱红（深浅色通用，不变量） */
 export const ACCENT = '#E5493C';
 /** 主色浅底（时间胶囊/选中行/删除按钮底） */
-export const ACCENT_SOFT = '#FBEAE7';
+export const ACCENT_SOFT = 'var(--cal-accent-soft, #FBEAE7)';
 /** 暖白页面底色 */
-export const BG = '#FAF9F7';
+export const BG = 'var(--cal-bg, #FAF9F7)';
 /** 卡片白 */
-export const CARD = '#FFFFFF';
+export const CARD = 'var(--cal-card, #FFFFFF)';
 /** 文字主色（暖黑） */
-export const TEXT = '#29241F';
+export const TEXT = 'var(--cal-text, #29241F)';
 /** 辅助文字 */
-export const TEXT_2 = '#8F8A82';
+export const TEXT_2 = 'var(--cal-text-2, #8F8A82)';
 /** 弱化文字（农历/说明） */
-export const TEXT_3 = '#B8B2AA';
+export const TEXT_3 = 'var(--cal-text-3, #B8B2AA)';
 /** 分割线 */
-export const DIVIDER = '#F1EDE7';
-/** 金色操作文字（备忘录相关动作，与备忘录 App 金色主题呼应） */
+export const DIVIDER = 'var(--cal-divider, #F1EDE7)';
+/** 金色操作文字（备忘录相关动作，与备忘录 App 金色主题呼应；深浅色通用） */
 export const GOLD = '#C79A3B';
 /** 金色浅底 */
-export const GOLD_SOFT = '#FBF3E1';
-/** 小米蓝（日程表单 取消/完成 与分类胶囊「个人」） */
-export const MI_BLUE = '#3478F6';
+export const GOLD_SOFT = 'var(--cal-gold-soft, #FBF3E1)';
+/** 小米蓝（日程表单 取消/完成 与分类胶囊「个人」；深色提亮一档保对比度） */
+export const MI_BLUE = 'var(--cal-mi-blue, #3478F6)';
+/** 浅灰填充（搜索框底等）；深色 → 白色低透明度 */
+export const FILL_SOFT = 'var(--cal-fill-soft, rgba(41,36,31,0.05))';
+/** 中灰填充（清除按钮底/开关断电底等）；深色 → 白色中透明度 */
+export const FILL_MED = 'var(--cal-fill-med, rgba(41,36,31,0.14))';
 
 /** 日程颜色卡（11 色，顺序同设计稿；key 存入 CalendarEventRecord.color） */
 export const EVENT_COLORS: { key: string; label: string; hex: string }[] = [

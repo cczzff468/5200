@@ -69,18 +69,18 @@ export default function CoupleExamBubble({ data, mine, testidPrefix = 'wx' }: Co
         e.stopPropagation();
         openExam();
       }}
-      className="relative block w-[252px] cursor-pointer select-none rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 active:brightness-95"
+      className="relative block w-[252px] cursor-pointer select-none rounded-[14px] bg-white p-2.5 text-left shadow-[0_5px_16px_rgba(0,0,0,0.10)] transition-all duration-300 active:brightness-95 dark:bg-zinc-800/95"
       style={{ filter: done ? 'grayscale(0.72) brightness(0.98)' : undefined }}
       role="button"
       aria-label={`恋爱水平考试邀请卡（共 ${data.count} 题，${done ? '已答完' : '待作答'}）`}
     >
       {/* 箭头指向头像侧：我发出（右）/ TA 发来（左），与代付卡一致 */}
-      <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${mine ? '-right-[4px]' : '-left-[4px]'}`} />
+      <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white dark:bg-zinc-800/95 ${mine ? '-right-[4px]' : '-left-[4px]'}`} />
 
       {/* 头部：恋人空间 logo + 真爱保障（外壳保持与代付卡家族一致） */}
       <span className="relative flex items-center gap-1.5">
         <img src="/icons/couple.png" alt="" aria-hidden="true" className="h-[22px] w-[22px] rounded-full object-cover" draggable={false} />
-        <span className="text-[13px] font-semibold text-black/85">恋人空间</span>
+        <span className="text-[13px] font-semibold text-black/85 dark:text-zinc-200">恋人空间</span>
         <span className="ml-auto flex items-center gap-[3px] text-[11px] font-medium text-[#f2536a]">
           <ShieldCheck className="h-[13px] w-[13px]" strokeWidth={2.2} />
           真爱保障
@@ -88,7 +88,7 @@ export default function CoupleExamBubble({ data, mine, testidPrefix = 'wx' }: Co
       </span>
 
       {/* 主标题（参考图：大字粗体，可两行） */}
-      <span className="relative mt-1.5 block text-[15px] font-bold leading-snug text-black/90">{title}</span>
+      <span className="relative mt-1.5 block text-[15px] font-bold leading-snug text-black/90 dark:text-zinc-100">{title}</span>
 
       {/* 试卷预览（第三十轮参考图内容：米黄卷纸 + 卷头 + 大字标题 + 作答按钮） */}
       <span className="relative mt-2 block overflow-hidden rounded-[10px] ring-1 ring-black/[0.06]">

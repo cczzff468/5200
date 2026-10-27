@@ -65,9 +65,9 @@ import { collectWbBlocks, wbRulesBlock, wbScanText } from '@/lib/ios/worldbook';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { getTimeAware, buildTimeAwareBlock } from '@/lib/time-aware';
 import { isTtsConfigured, speakUserTts, stopSpeaking } from '@/lib/ios/tts-client';
-// 通话语音识别：Web Speech（浏览器原生实时识别）为主；transcribeAudioBlob 仅在设置里配置了
-// OpenAI 兼容 STT 时作服务端兜底（内置识别模型已移除，isSttReady 对 builtin 恒为 false）
-import { isSttReady, transcribeAudioBlob } from '@/lib/ios/stt-client';
+// 通话语音识别：Web Speech（浏览器原生实时识别）为主；第十六轮起兜底升级为 transcribeBlob
+// 三级链（① SenseVoice 端侧 ② 用户配置的 OpenAI 兼容 STT ③ 内置 z-ai ASR 免配置）
+import { transcribeBlob } from '@/lib/ios/cabin-voice';
 import { startWebSpeechSession, type WebSpeechSession } from '@/lib/ios/web-speech';
 import {
   startVad,
@@ -1762,11 +1762,11 @@ function CallScreen({
             }
           }
           if (endedRef.current) return;
-          if (!text && isSttReady()) {
-            // 内置识别模型已移除；仅在设置 App 配置了 OpenAI 兼容 STT 时才走服务端兜底
-            // （transcribeAudioBlob 内置 #20 通话链路 60s 超时看门狗，到点必失败）
+          if (!text) {
+            // 第十六轮：三级兜底链（SenseVoice → 用户云端 STT → 内置 z-ai ASR 免配置）——
+            // 不支持 Web Speech 的浏览器/识别抖动时，连续语音对话依然可用
             try {
-              const t = (await transcribeAudioBlob(blob)).trim();
+              const t = (await transcribeBlob(blob)).trim();
               if (t && !STT_NOISE_RE.test(t)) text = t;
             } catch {
               // 兜底也失败：走统一失败提示

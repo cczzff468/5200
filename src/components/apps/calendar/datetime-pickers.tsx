@@ -171,7 +171,7 @@ function WheelCol({
               scrollSnapAlign: 'center',
               fontSize: active ? 20 : 17,
               fontWeight: active ? 600 : 400,
-              color: active ? ACCENT : dist === 1 ? 'rgba(41,36,31,0.4)' : 'rgba(41,36,31,0.18)',
+              color: active ? ACCENT : dist === 1 ? 'var(--cal-wheel-near, rgba(41,36,31,0.4))' : 'var(--cal-wheel-far, rgba(41,36,31,0.18))',
               cursor: 'pointer',
               transition: 'color .12s, font-size .12s',
             }}

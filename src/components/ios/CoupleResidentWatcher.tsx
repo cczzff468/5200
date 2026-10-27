@@ -11,7 +11,7 @@
 
 import { useEffect } from 'react';
 import { readInviteMeta } from '@/lib/ios/couple-invite';
-import { runCoupleAiTick } from '@/lib/ios/couple-ai';
+import { runCoupleAiTick, runRoutineNudgeTick } from '@/lib/ios/couple-ai';
 
 let owned = false;
 
@@ -26,6 +26,12 @@ export default function CoupleResidentWatcher() {
         if (meta.partnerContactId) runCoupleAiTick(meta.partnerApp ?? 'wx', meta.partnerContactId);
       } catch {
         /* 后台增强能力：任何异常静默 */
+      }
+      // 第十六轮：作息提醒（早安/晚安/饭点；有恋人绑定才发，画像未成型自然不发）
+      try {
+        runRoutineNudgeTick();
+      } catch {
+        /* 静默 */
       }
     };
     const first = window.setTimeout(() => {

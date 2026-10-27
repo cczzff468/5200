@@ -36,10 +36,10 @@ export default function AdoptDialog({ open, pets2, onClose, onPickExisting, onAd
             animate={{ scale: 1, y: 0 }}
             exit={{ scale: 0.94, y: 10 }}
             transition={{ type: 'spring', damping: 26, stiffness: 320 }}
-            className="w-full max-w-[290px] rounded-3xl border border-white/60 bg-white/90 p-5 text-center shadow-2xl backdrop-blur-xl"
+            className="w-full max-w-[290px] rounded-3xl border border-white/60 dark:border-white/15 bg-white/90 dark:bg-zinc-900/90 p-5 text-center shadow-2xl backdrop-blur-xl"
           >
-            <p className="text-[15px] font-semibold text-[#3a3a3e]">带一只新伙伴回家？</p>
-            <p className="mb-3 mt-1 text-[11.5px] text-[#9a9a96]">
+            <p className="text-[15px] font-semibold text-[#3a3a3e] dark:text-zinc-100">带一只新伙伴回家？</p>
+            <p className="mb-3 mt-1 text-[11.5px] text-[#9a9a96] dark:text-zinc-400">
               想领几只都可以，它们会一起追着玩～
               {pets2.length > 0 && <span className="ml-1 text-[#c98a9a]">（家里已有 {pets2.length} 只小伙伴）</span>}
             </p>
@@ -49,7 +49,7 @@ export default function AdoptDialog({ open, pets2, onClose, onPickExisting, onAd
                   <button
                     key={i}
                     onClick={() => onPickExisting(i)}
-                    className="flex items-center gap-1 rounded-full bg-white/80 px-2 py-1 text-[10px] font-semibold text-[#7a756e] ring-1 ring-[#f0e2dc] transition active:scale-95"
+                    className="flex items-center gap-1 rounded-full bg-white/80 dark:bg-zinc-800/80 px-2 py-1 text-[10px] font-semibold text-[#7a756e] dark:text-zinc-300 ring-1 ring-[#f0e2dc] dark:ring-white/10 transition active:scale-95"
                   >
                     {b.kind === 'dog' ? <Dog className="h-3 w-3 text-[#c99a5b]" /> : <Rabbit className="h-3 w-3 text-[#e8a3b3]" />}
                     {b.name ?? (b.kind === 'dog' ? '旺财' : '雪球')}
@@ -60,24 +60,24 @@ export default function AdoptDialog({ open, pets2, onClose, onPickExisting, onAd
             <div className="mb-3 grid grid-cols-2 gap-2">
               <button
                 onClick={() => onAdopt('dog')}
-                className="flex flex-col items-center gap-1.5 rounded-2xl bg-white/70 px-3 py-3.5 ring-1 ring-[#f0e2dc] transition active:scale-95"
+                className="flex flex-col items-center gap-1.5 rounded-2xl bg-white/70 dark:bg-zinc-800/70 px-3 py-3.5 ring-1 ring-[#f0e2dc] dark:ring-white/10 transition active:scale-95"
               >
                 <Dog className="h-7 w-7 text-[#c99a5b]" />
-                <span className="text-[12.5px] font-semibold text-[#5a554e]">小狗</span>
-                <span className="text-[10px] text-[#b0a8a0]">摇尾巴·爱追球</span>
+                <span className="text-[12.5px] font-semibold text-[#5a554e] dark:text-zinc-200">小狗</span>
+                <span className="text-[10px] text-[#b0a8a0] dark:text-zinc-400">摇尾巴·爱追球</span>
               </button>
               <button
                 onClick={() => onAdopt('rabbit')}
-                className="flex flex-col items-center gap-1.5 rounded-2xl bg-white/70 px-3 py-3.5 ring-1 ring-[#f0e2dc] transition active:scale-95"
+                className="flex flex-col items-center gap-1.5 rounded-2xl bg-white/70 dark:bg-zinc-800/70 px-3 py-3.5 ring-1 ring-[#f0e2dc] dark:ring-white/10 transition active:scale-95"
               >
                 <Rabbit className="h-7 w-7 text-[#e8a3b3]" />
-                <span className="text-[12.5px] font-semibold text-[#5a554e]">小兔子</span>
-                <span className="text-[10px] text-[#b0a8a0]">蹦蹦跳·软软的</span>
+                <span className="text-[12.5px] font-semibold text-[#5a554e] dark:text-zinc-200">小兔子</span>
+                <span className="text-[10px] text-[#b0a8a0] dark:text-zinc-400">蹦蹦跳·软软的</span>
               </button>
             </div>
             <button
               onClick={onClose}
-              className="h-10 w-full rounded-full bg-[#f1efe9] text-[13px] font-semibold text-[#8a8a86] transition active:scale-95"
+              className="h-10 w-full rounded-full bg-[#f1efe9] dark:bg-zinc-800 text-[13px] font-semibold text-[#8a8a86] dark:text-zinc-400 transition active:scale-95"
             >
               再想想
             </button>

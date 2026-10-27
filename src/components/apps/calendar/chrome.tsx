@@ -16,6 +16,10 @@ import { IconBtn } from './widgets';
 /** 五个主页视图 */
 export type MainView = 'year' | 'month' | 'week' | 'day' | 'agenda';
 
+/** 视图切换胶囊：轨道/选中片底色（Task 31-a 深色适配，变量由 App 根节点 dark: 变体注入） */
+const SEG_TRACK = 'var(--cal-seg-track, #F0F0F0)';
+const SEG_ACTIVE = 'var(--cal-seg-active, #FFFFFF)';
+
 const VIEW_TABS: { key: MainView; label: string }[] = [
   { key: 'year', label: '年' },
   { key: 'month', label: '月' },
@@ -59,7 +63,7 @@ export function CalChrome({
           {/* App 小图标：白底圆角卡 + 红色日历图形 */}
           <span
             aria-hidden="true"
-            className="flex h-[30px] w-[30px] items-center justify-center rounded-[8px] bg-white"
+            className="flex h-[30px] w-[30px] items-center justify-center rounded-[8px] bg-white dark:bg-zinc-800/95"
             style={{ boxShadow: '0 1px 3px rgba(41,36,31,0.10)' }}
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -131,7 +135,7 @@ export function CalChrome({
             <div
               role="menu"
               aria-label="切换视图"
-              className="absolute left-[86px] top-[46px] z-50 w-32 overflow-hidden rounded-[12px] bg-white py-1 shadow-lg"
+              className="absolute left-[86px] top-[46px] z-50 w-32 overflow-hidden rounded-[12px] bg-white py-1 shadow-lg dark:bg-zinc-800/95 dark:shadow-[0_6px_24px_rgba(0,0,0,0.45)]!"
               style={{ boxShadow: '0 6px 24px rgba(41,36,31,0.16)' }}
             >
               {VIEW_TABS.map((t) => (
@@ -143,7 +147,7 @@ export function CalChrome({
                     setViewMenu(false);
                     if (t.key !== view) onSwitchView(t.key);
                   }}
-                  className="flex h-9 w-full items-center justify-between px-3.5 text-[14px] transition-colors active:bg-black/[0.04]"
+                  className="flex h-9 w-full items-center justify-between px-3.5 text-[14px] transition-colors active:bg-black/[0.04] dark:active:bg-white/10"
                   style={{ color: t.key === view ? ACCENT : TEXT, fontWeight: t.key === view ? 500 : 400 }}
                 >
                   {t.label}
@@ -167,7 +171,7 @@ export function CalChrome({
             <div
               role="menu"
               aria-label="更多操作"
-              className="absolute right-3 top-[40px] z-50 w-32 overflow-hidden rounded-[12px] bg-white py-1 shadow-lg"
+              className="absolute right-3 top-[40px] z-50 w-32 overflow-hidden rounded-[12px] bg-white py-1 shadow-lg dark:bg-zinc-800/95 dark:shadow-[0_6px_24px_rgba(0,0,0,0.45)]!"
               style={{ boxShadow: '0 6px 24px rgba(41,36,31,0.16)' }}
             >
               <button
@@ -177,7 +181,7 @@ export function CalChrome({
                   setMoreMenu(false);
                   onToday();
                 }}
-                className="flex h-9 w-full items-center px-3.5 text-[14px] transition-colors active:bg-black/[0.04]"
+                className="flex h-9 w-full items-center px-3.5 text-[14px] transition-colors active:bg-black/[0.04] dark:active:bg-white/10"
                 style={{ color: TEXT }}
               >
                 今天
@@ -189,7 +193,7 @@ export function CalChrome({
                   setMoreMenu(false);
                   onNew();
                 }}
-                className="flex h-9 w-full items-center px-3.5 text-[14px] transition-colors active:bg-black/[0.04]"
+                className="flex h-9 w-full items-center px-3.5 text-[14px] transition-colors active:bg-black/[0.04] dark:active:bg-white/10"
                 style={{ color: TEXT }}
               >
                 新建日程
@@ -204,7 +208,7 @@ export function CalChrome({
         role="tablist"
         aria-label="视图切换"
         className="mx-4 mt-2.5 grid h-9 shrink-0 grid-cols-5 rounded-full"
-        style={{ backgroundColor: '#F0F0F0' }}
+        style={{ backgroundColor: SEG_TRACK }}
       >
         {VIEW_TABS.map((t) => {
           const active = t.key === view;
@@ -221,7 +225,7 @@ export function CalChrome({
               className="flex items-center justify-center rounded-full text-[13px] transition-all duration-200"
               style={
                 active
-                  ? { backgroundColor: '#FFFFFF', boxShadow: '0 1px 4px rgba(41,36,31,0.10)', color: TEXT, fontWeight: 500 }
+                  ? { backgroundColor: SEG_ACTIVE, boxShadow: '0 1px 4px rgba(41,36,31,0.10)', color: TEXT, fontWeight: 500 }
                   : { color: TEXT_2 }
               }
             >

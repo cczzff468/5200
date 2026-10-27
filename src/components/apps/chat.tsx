@@ -88,6 +88,8 @@ import { getTimeAware, setTimeAware, buildTimeAwareBlock } from '@/lib/time-awar
 import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { kvDel, kvGet, kvSet, kvSetDebounced } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memRecallBlock, memSummarizeCallNow, profileRecallBlock, setMemScopeForApp } from '@/lib/memory';
+// 第十六轮：AI 动态状态（情绪+作息）注入
+import { buildDynamicStateBlocks } from '@/lib/ios/ai-mood';
 import { buildMomentsChatBlock } from '@/lib/moments';
 import { ChatReplyCountPage, ChatTranslatePage, ChatVoiceFreqPage, ChatVoicePage, SmsChatSettingsPage, WorldBookPickerPage } from './chat-settings';
 import { ProactiveMsgPage } from './proactive-msg-page';
@@ -1829,6 +1831,9 @@ function ChatView({
       ...(wbBlocks ? [wbBlocks.beforeSystem] : []),
       charBlock,
       memoryBlock,
+      // 第十六轮：AI 动态状态（情绪+作息）——AI 带着当前心情说话、按 TA 记住的作息规律拿捏分寸
+      //（仅联系人会话；AI 助手无角色身份不注入）
+      ...(memContactId ? [buildDynamicStateBlocks(memContactId)] : []),
       // 画像图谱（Task 14-b B1）：用户画像事实层，紧随记忆召回块并列注入
       profileBlock,
       // 40-b 跨 App 环境感知：当前 App 记忆 → 其他 App 最近 10 条 → 群聊最近 10 条（长期/核心在 memoryBlock 内）

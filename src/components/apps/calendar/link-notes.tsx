@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react';
 import { Check, NotebookPen, Search } from 'lucide-react';
 import type { NoteRecord } from '@/lib/ios/db';
 import {
+  FILL_SOFT,
   GOLD,
   GOLD_SOFT,
   NavBar,
@@ -92,7 +93,7 @@ export function LinkNotesPage({
       <div className="px-4 pb-2 pt-1">
         <div
           className="flex h-9 items-center gap-2 rounded-[10px] px-3"
-          style={{ backgroundColor: 'rgba(41,36,31,0.05)' }}
+          style={{ backgroundColor: FILL_SOFT }}
         >
           <Search className="h-4 w-4 shrink-0" style={{ color: TEXT_3 }} strokeWidth={2.2} />
           <input

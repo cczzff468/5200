@@ -200,6 +200,8 @@ import { useEnterSend, setEnterSend, guardEnterToSend } from '@/lib/enter-send';
 import { kvGet, kvGetRaw, kvSet, kvSetDebounced, kvDel } from '@/lib/ios/idb-kv';
 import { getMemSettings, memAddEventFragment, memAfterAiTurn, memChatRecallBlock, memConvoFromRaw, memPurgeMessageSources, memResetConvoCounters, setMemScopeForApp } from '@/lib/memory';
 import { aiWriteLetterOnRequest, coupleChatBlock, coupleLetterAskHit } from '@/lib/ios/couple-ai';
+// 第十六轮：AI 动态状态（情绪+作息）注入 + 送礼物情绪事件
+import { buildDynamicStateBlocks, noteMoodEvent } from '@/lib/ios/ai-mood';
 import {
   addCharMomentPost,
   addUserMomentComment,
@@ -6931,6 +6933,9 @@ function ChatPage({
       wbBlocks.beforeSystem,
       [wbBlocks.beforeChar, system, wbBlocks.afterChar].filter(Boolean).join('\n\n'),
       memoryBlock,
+      // 第十六轮：AI 动态状态（情绪+作息）——AI 带着当前心情说话（开心/吃醋/委屈…影响语气与表情选择）、
+      // 按 TA 记住的作息规律拿捏说话时机（清早道早安/深夜催睡/饭点关心）
+      buildDynamicStateBlocks(peer.id),
       // 40-b 跨 App 环境感知：当前 App 记忆 → 其他 App 最近 10 条 → 群聊最近 10 条（长期/核心在 memoryBlock 内）
       crossCtxRef.current.crossAppBlock,
       crossCtxRef.current.groupBlock,
@@ -9588,6 +9593,12 @@ function ChatPage({
             setMsgs((prev) => [...prev, msg]);
             setCompose(null);
             onToast(`已把「${msg.gift?.name ?? '礼物'}」送给${peer.name}`);
+            // 第十六轮：送礼物 → AI 情绪变甜蜜（收到礼物的 TA 会特别开心）
+            try {
+              noteMoodEvent(peer.id, 'gift');
+            } catch {
+              /* 情绪打点失败不影响送礼 */
+            }
             if (peer.id !== me.id) runAiTurnRef.current?.(null, [msg]);
           }}
         />

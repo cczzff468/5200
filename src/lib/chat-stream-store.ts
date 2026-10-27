@@ -53,6 +53,9 @@ import { memAddEventFragment, memDetectMainAltDisclosure, memLinkAltAccounts } f
 import { localDB } from '@/lib/ios/db';
 import { buildAltAccountsSection } from '@/lib/ios/persona';
 import { cachedOwnerName } from '@/lib/ios/contacts-store';
+// 第十六轮：AI 情绪系统（用户消息打点→情绪变化）+ 作息记忆（活跃时间直方图）
+import { noteUserMsgMood } from '@/lib/ios/ai-mood';
+import { noteActive } from '@/lib/ios/routine';
 
 /** 会话键 → 账号所属 App（v2 per-app 账号）：wx:* → 微信、qq:* → QQ、其余（sms 开头与 assistant 等历史键）→ 信息 */
 function streamAppOf(sessionKey: string): AccountApp {
@@ -183,6 +186,28 @@ function blockSessionOf(sessionKey: string): { app: BlockApp; contactId: string 
   if (sessionKey.startsWith('sms:')) return null; // 其余 sms 键（历史助手兼容等）不参与拉黑
   const m = /^(wx|qq):(.+)$/.exec(sessionKey);
   return m ? { app: m[1] as BlockApp, contactId: m[2] } : null;
+}
+
+/**
+ * 第十六轮：用户发言打点（每轮聊天一次）——
+ * - 作息记忆：noteActive()（全局活跃直方图，群聊/助手也计——机主在用手机）；
+ * - AI 情绪：仅 1:1 会话（blockSessionOf 解析出联系人）→ noteUserMsgMood(cid, 本轮最后一条用户消息文本)。
+ */
+function noteEngagement(sessionKey: string, messages: ChatPayloadMessage[]): void {
+  try {
+    noteActive();
+    const bs = blockSessionOf(sessionKey);
+    if (!bs) return;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg?.role === 'user' && typeof msg.content === 'string' && msg.content.trim()) {
+        noteUserMsgMood(bs.contactId, msg.content);
+        return;
+      }
+    }
+  } catch {
+    /* 打点失败绝不影响聊天 */
+  }
 }
 
 // ---------------- 40-B 小号认知摘录（多账号 AI 认知隔离） ----------------
@@ -770,6 +795,8 @@ export function beginChatStream(opts: BeginChatStreamOptions): boolean {
     const blkEntry = loadBlock(blkSession.app, blkSession.contactId);
     if (blkEntry.byUser && !charRequestOnlyOf(blkEntry)) return true;
   }
+  // 第十六轮：情绪/作息打点（拉黑会话提前 return 不计；正常会话在流发起前记录）
+  noteEngagement(opts.sessionKey, opts.messages);
   const existing = streams.get(opts.sessionKey);
   if (existing && existing.state.status === 'streaming') return false;
   // 新回合接管：清除投递插入边界（#35）——之后投递的消息都是对本回合上下文里最新用户消息的回复，

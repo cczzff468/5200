@@ -1338,7 +1338,8 @@ export async function tbRunPickup(uid: string, orderId: string): Promise<void> {
   const order = tbLoadOrders(uid).find((o) => o.id === orderId);
   if (!order || !order.aiPickup || order.status !== 'shipped' || !tbArrivedAtStation(order)) return;
   const pick = order.aiPickup;
-  if (!tbConfirmReceive(uid, orderId)) return;
+  // fromAi=true：跳过确认收货触发的跨 App 联动（本函数自己会发报喜消息，别重复）
+  if (!tbConfirmReceive(uid, orderId, { fromAi: true })) return;
   // 清标记（幂等：读改写防覆盖）
   const list = tbLoadOrders(uid);
   const hit = list.find((o) => o.id === orderId);

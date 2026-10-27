@@ -416,7 +416,7 @@ function SpreadSlots({ spread, positions, slots, revsBySlot, flippedCount, mode,
                 ) : (
                   <div
                     className={`absolute inset-0 rounded-[9px] border-[1.5px] border-dashed transition-colors ${
-                      activeSlot === i ? 'border-gray-800/70 bg-white/60' : 'border-gray-300/90 bg-white/35'
+                      activeSlot === i ? 'border-gray-800/70 bg-white/60 dark:border-zinc-300/60 dark:bg-white/15' : 'border-gray-300/90 bg-white/35 dark:border-zinc-600 dark:bg-white/[0.07]'
                     }`}
                   >
                     {activeSlot === i && (
@@ -425,7 +425,7 @@ function SpreadSlots({ spread, positions, slots, revsBySlot, flippedCount, mode,
                         style={{ animation: 'tarot-slot-pulse 1.5s ease-in-out infinite' }}
                       />
                     )}
-                    <span className="absolute inset-0 flex items-center justify-center font-semibold text-gray-300" style={{ fontSize: Math.max(8, geo.cardW * 0.22) }}>
+                    <span className="absolute inset-0 flex items-center justify-center font-semibold text-gray-300 dark:text-zinc-600" style={{ fontSize: Math.max(8, geo.cardW * 0.22) }}>
                       {i + 1}
                     </span>
                   </div>
@@ -438,13 +438,13 @@ function SpreadSlots({ spread, positions, slots, revsBySlot, flippedCount, mode,
                   style={{ left: cellCx - geo.colW / 2, top: labelTop, width: geo.colW, pointerEvents: 'none' }}
                 >
                   {mode === 'pick' ? (
-                    <div className="truncate text-[9px] leading-tight text-gray-500">{p.label}</div>
+                    <div className="truncate text-[9px] leading-tight text-gray-500 dark:text-zinc-400">{p.label}</div>
                   ) : (
                     <>
-                      <div className="truncate text-[9.5px] font-semibold leading-tight text-gray-700">
+                      <div className="truncate text-[9.5px] font-semibold leading-tight text-gray-700 dark:text-zinc-300">
                         第{i + 1}张 · {p.label}
                       </div>
-                      {p.en && <div className="truncate text-[7.5px] uppercase tracking-[0.06em] leading-tight text-gray-400">{p.en}</div>}
+                      {p.en && <div className="truncate text-[7.5px] uppercase tracking-[0.06em] leading-tight text-gray-400 dark:text-zinc-500">{p.en}</div>}
                     </>
                   )}
                 </div>
@@ -456,13 +456,13 @@ function SpreadSlots({ spread, positions, slots, revsBySlot, flippedCount, mode,
                   style={{ left: geo.padX, top: cellCy - 16, width: geo.leftW - 10, height: 32, pointerEvents: 'none' }}
                 >
                   {mode === 'pick' ? (
-                    <div className="text-[10px] font-medium text-gray-600">{p.label}</div>
+                    <div className="text-[10px] font-medium text-gray-600 dark:text-zinc-400">{p.label}</div>
                   ) : (
                     <>
-                      <div className="text-[10px] font-semibold leading-tight text-gray-700">
+                      <div className="text-[10px] font-semibold leading-tight text-gray-700 dark:text-zinc-300">
                         第{i + 1}张 · {p.label}
                       </div>
-                      {p.en && <div className="text-[7.5px] uppercase tracking-wide leading-tight text-gray-400">{p.en}</div>}
+                      {p.en && <div className="text-[7.5px] uppercase tracking-wide leading-tight text-gray-400 dark:text-zinc-500">{p.en}</div>}
                     </>
                   )}
                 </div>
@@ -480,8 +480,8 @@ function StepBar({ step }: { step: number }) {
   return (
     <div className="flex items-center gap-3">
       {['洗牌', '牌阵', '选牌', '解读'].map((s, i) => (
-        <div key={s} className={`flex items-center gap-1 transition-colors ${i === step ? 'text-gray-900' : 'text-gray-400/80'}`}>
-          <span className={`h-1.5 w-1.5 rounded-full ${i === step ? 'bg-gray-900' : 'bg-gray-300'}`} />
+        <div key={s} className={`flex items-center gap-1 transition-colors ${i === step ? 'text-gray-900 dark:text-zinc-100' : 'text-gray-400/80 dark:text-zinc-500'}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${i === step ? 'bg-gray-900 dark:bg-zinc-100' : 'bg-gray-300 dark:bg-zinc-600'}`} />
           <span className="text-[11.5px] font-medium">{s}</span>
         </div>
       ))}
@@ -503,8 +503,8 @@ function ThemeView({ themes, customQ, setCustomQ, onPick, historyCount, onHistor
   return (
     <div className="h-full overflow-y-auto overscroll-contain px-4 pb-6">
       <div className="pt-3 text-center">
-        <div className="text-[22px] font-bold tracking-wide text-gray-900">选择占卜主题</div>
-        <div className="mt-1 text-[12px] text-gray-500">静下心来，在心里默想你要问的事</div>
+        <div className="text-[22px] font-bold tracking-wide text-gray-900 dark:text-zinc-100">选择占卜主题</div>
+        <div className="mt-1 text-[12px] text-gray-500 dark:text-zinc-400">静下心来，在心里默想你要问的事</div>
       </div>
 
       <div className="mt-4 flex flex-col gap-2.5">
@@ -512,8 +512,8 @@ function ThemeView({ themes, customQ, setCustomQ, onPick, historyCount, onHistor
           t.custom ? (
             <div
               key={t.key}
-              className={`overflow-hidden rounded-2xl border bg-white/60 backdrop-blur-xl shadow-[0_4px_18px_rgba(17,24,39,0.05)] transition-all ${
-                customOpen ? 'border-gray-300 ring-1 ring-gray-900/10' : 'border-white/80'
+              className={`overflow-hidden rounded-2xl border bg-white/60 backdrop-blur-xl shadow-[0_4px_18px_rgba(17,24,39,0.05)] transition-all dark:bg-zinc-800/60 ${
+                customOpen ? 'border-gray-300 ring-1 ring-gray-900/10 dark:border-white/20 dark:ring-white/10' : 'border-white/80 dark:border-white/10'
               }`}
             >
               <button
@@ -522,8 +522,8 @@ function ThemeView({ themes, customQ, setCustomQ, onPick, historyCount, onHistor
                 className="flex w-full items-center justify-between px-4 py-3.5 text-left transition-opacity active:opacity-70"
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-semibold text-gray-900">{t.label}</span>
-                  <span className="mt-0.5 block text-[12px] text-gray-500">{t.desc}</span>
+                  <span className="block text-[15px] font-semibold text-gray-900 dark:text-zinc-100">{t.label}</span>
+                  <span className="mt-0.5 block text-[12px] text-gray-500 dark:text-zinc-400">{t.desc}</span>
                 </span>
               </button>
               {customOpen && (
@@ -534,14 +534,14 @@ function ThemeView({ themes, customQ, setCustomQ, onPick, historyCount, onHistor
                     maxLength={60}
                     rows={2}
                     placeholder="例如：我们最近的关系会好吗？"
-                    className="w-full resize-none rounded-xl border border-gray-200 bg-white/80 px-3 py-2.5 text-[13px] text-gray-900 outline-none placeholder:text-gray-300 focus:border-gray-400"
+                    className="w-full resize-none rounded-xl border border-gray-200 bg-white/80 px-3 py-2.5 text-[13px] text-gray-900 outline-none placeholder:text-gray-300 focus:border-gray-400 dark:border-white/15 dark:bg-white/10 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-400"
                     data-testid="tarot-custom-q"
                   />
                   <button
                     type="button"
                     disabled={customQ.trim().length < 2}
                     onClick={() => onPick(t)}
-                    className="mt-2 h-10 w-full rounded-full bg-gray-900 text-[14px] font-semibold text-white shadow-[0_6px_18px_rgba(17,24,39,0.2)] transition-all active:scale-[0.98] active:opacity-90 disabled:opacity-35"
+                    className="mt-2 h-10 w-full rounded-full bg-gray-900 text-[14px] font-semibold text-white shadow-[0_6px_18px_rgba(17,24,39,0.2)] transition-all active:scale-[0.98] active:opacity-90 disabled:opacity-35 dark:bg-zinc-100 dark:text-zinc-900"
                   >
                     带着问题去洗牌
                   </button>
@@ -553,11 +553,11 @@ function ThemeView({ themes, customQ, setCustomQ, onPick, historyCount, onHistor
               key={t.key}
               type="button"
               onClick={() => onPick(t)}
-              className="flex w-full items-center justify-between rounded-2xl border border-white/80 bg-white/60 px-4 py-3.5 text-left backdrop-blur-xl shadow-[0_4px_18px_rgba(17,24,39,0.05)] transition-all active:scale-[0.98] active:bg-white/80"
+              className="flex w-full items-center justify-between rounded-2xl border border-white/80 bg-white/60 px-4 py-3.5 text-left backdrop-blur-xl shadow-[0_4px_18px_rgba(17,24,39,0.05)] transition-all active:scale-[0.98] active:bg-white/80 dark:border-white/10 dark:bg-zinc-800/60 dark:active:bg-white/15"
             >
               <span className="min-w-0 flex-1">
-                <span className="block text-[15px] font-semibold text-gray-900">{t.label}</span>
-                <span className="mt-0.5 block text-[12px] text-gray-500">{t.desc}</span>
+                <span className="block text-[15px] font-semibold text-gray-900 dark:text-zinc-100">{t.label}</span>
+                <span className="mt-0.5 block text-[12px] text-gray-500 dark:text-zinc-400">{t.desc}</span>
               </span>
             </button>
           ),
@@ -569,7 +569,7 @@ function ThemeView({ themes, customQ, setCustomQ, onPick, historyCount, onHistor
           type="button"
           onClick={onHistory}
           data-testid="tarot-history-entry"
-          className="mt-4 w-full rounded-2xl border border-white/80 bg-white/45 py-3 text-[13px] text-gray-600 backdrop-blur-xl transition-opacity active:opacity-60"
+          className="mt-4 w-full rounded-2xl border border-white/80 bg-white/45 py-3 text-[13px] text-gray-600 backdrop-blur-xl transition-opacity active:opacity-60 dark:border-white/10 dark:bg-white/[0.08] dark:text-zinc-400"
         >
           占卜记录（{historyCount}）
         </button>
@@ -691,8 +691,8 @@ function ShuffleView({ theme, question, scatter, tick, neat, count, cutting, cut
   return (
     <div className="flex h-full flex-col items-center px-5">
       <div className="mt-2 shrink-0 text-center">
-        <div className="text-[24px] font-bold tracking-wide text-gray-900">洗牌</div>
-        <div className="mt-1 text-[12.5px] text-gray-500">
+        <div className="text-[24px] font-bold tracking-wide text-gray-900 dark:text-zinc-100">洗牌</div>
+        <div className="mt-1 text-[12.5px] text-gray-500 dark:text-zinc-400">
           {theme.label}
           {theme.custom && question ? ` · ${question}` : ''}
         </div>
@@ -740,13 +740,13 @@ function ShuffleView({ theme, question, scatter, tick, neat, count, cutting, cut
             );
           })}
         </div>
-        {holding && <div className="absolute bottom-1 text-[11.5px] text-gray-500" style={{ animation: 'tarot-star-pulse 1.2s ease-in-out infinite' }}>持续洗牌中…</div>}
-        {cutting && <div className="absolute bottom-1 text-[11.5px] text-gray-500">切牌中…</div>}
+        {holding && <div className="absolute bottom-1 text-[11.5px] text-gray-500 dark:text-zinc-400" style={{ animation: 'tarot-star-pulse 1.2s ease-in-out infinite' }}>持续洗牌中…</div>}
+        {cutting && <div className="absolute bottom-1 text-[11.5px] text-gray-500 dark:text-zinc-400">切牌中…</div>}
       </div>
 
       {/* 提示 + 操作按钮（第四十九轮：切牌可无限次，下一步进入牌阵） */}
       <div className="flex w-full shrink-0 flex-col items-center gap-2.5 pb-6">
-        <div className="text-[12px] text-gray-500">{hint}</div>
+        <div className="text-[12px] text-gray-500 dark:text-zinc-400">{hint}</div>
         {cutStage && (
           <div className="flex w-full items-center gap-2.5">
             <button
@@ -754,7 +754,7 @@ function ShuffleView({ theme, question, scatter, tick, neat, count, cutting, cut
               onClick={onCut}
               disabled={cutting}
               data-testid="tarot-cut"
-              className="h-12 flex-1 rounded-full border border-white/90 bg-white/55 text-[13.5px] font-medium text-gray-700 backdrop-blur-xl transition-all active:scale-[0.98] active:opacity-60 disabled:opacity-40"
+              className="h-12 flex-1 rounded-full border border-white/90 bg-white/55 text-[13.5px] font-medium text-gray-700 backdrop-blur-xl transition-all active:scale-[0.98] active:opacity-60 disabled:opacity-40 dark:border-white/15 dark:bg-white/10 dark:text-zinc-300"
             >
               {cutting ? '切牌中…' : '切牌'}
             </button>
@@ -762,7 +762,7 @@ function ShuffleView({ theme, question, scatter, tick, neat, count, cutting, cut
               type="button"
               onClick={onNext}
               data-testid="tarot-next"
-              className="h-12 flex-1 rounded-full bg-gray-900 text-[14.5px] font-semibold text-white shadow-[0_8px_22px_rgba(17,24,39,0.24)] transition-all active:scale-[0.98] active:opacity-90"
+              className="h-12 flex-1 rounded-full bg-gray-900 text-[14.5px] font-semibold text-white shadow-[0_8px_22px_rgba(17,24,39,0.24)] transition-all active:scale-[0.98] active:opacity-90 dark:bg-zinc-100 dark:text-zinc-900"
             >
               下一步
             </button>
@@ -806,8 +806,8 @@ function SpreadView({ theme, question, onStart }: {
   return (
     <div className="h-full overflow-y-auto overscroll-contain px-4 pb-6">
       <div className="pt-2 text-center">
-        <div className="text-[21px] font-bold tracking-wide text-gray-900">选择牌阵</div>
-        <div className="mt-1 truncate text-[12px] text-gray-500">
+        <div className="text-[21px] font-bold tracking-wide text-gray-900 dark:text-zinc-100">选择牌阵</div>
+        <div className="mt-1 truncate text-[12px] text-gray-500 dark:text-zinc-400">
           {theme.label}
           {question ? ` · ${question}` : ''}
         </div>
@@ -815,7 +815,7 @@ function SpreadView({ theme, question, onStart }: {
 
       {groups.map((g) => (
         <div key={g} className="mt-3">
-          <div className="px-1 text-[11px] font-semibold text-gray-400">【{g}】</div>
+          <div className="px-1 text-[11px] font-semibold text-gray-400 dark:text-zinc-500">【{g}】</div>
           <div className="mt-1.5 flex flex-col gap-2">
             {TAROT_SPREADS.filter((s) => s.group === g).map((s) => {
               const variable = s.counts.length > 1;
@@ -823,8 +823,8 @@ function SpreadView({ theme, question, onStart }: {
               return (
                 <div
                   key={s.key}
-                  className={`overflow-hidden rounded-2xl border bg-white/60 backdrop-blur-xl shadow-[0_4px_16px_rgba(17,24,39,0.05)] transition-all ${
-                    open ? 'border-gray-300 ring-1 ring-gray-900/10' : 'border-white/80'
+                  className={`overflow-hidden rounded-2xl border bg-white/60 backdrop-blur-xl shadow-[0_4px_16px_rgba(17,24,39,0.05)] transition-all dark:bg-zinc-800/60 ${
+                    open ? 'border-gray-300 ring-1 ring-gray-900/10 dark:border-white/20 dark:ring-white/10' : 'border-white/80 dark:border-white/10'
                   }`}
                 >
                   <button
@@ -835,10 +835,10 @@ function SpreadView({ theme, question, onStart }: {
                   >
                     <SpreadGlyph spread={s} />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[14.5px] font-semibold text-gray-900">{s.name}</span>
-                      <span className="mt-0.5 block truncate text-[11.5px] text-gray-500">{s.desc}</span>
+                      <span className="block text-[14.5px] font-semibold text-gray-900 dark:text-zinc-100">{s.name}</span>
+                      <span className="mt-0.5 block truncate text-[11.5px] text-gray-500 dark:text-zinc-400">{s.desc}</span>
                     </span>
-                    <span className="shrink-0 rounded-full border border-gray-200/90 bg-white/80 px-2 py-0.5 text-[10px] text-gray-600">
+                    <span className="shrink-0 rounded-full border border-gray-200/90 bg-white/80 px-2 py-0.5 text-[10px] text-gray-600 dark:border-white/10 dark:bg-white/10 dark:text-zinc-400">
                       {variable ? `${s.counts[0]}-${s.counts[s.counts.length - 1]}张` : `${s.counts[0]}张`}
                     </span>
                   </button>
@@ -849,7 +849,7 @@ function SpreadView({ theme, question, onStart }: {
                           key={n}
                           type="button"
                           onClick={() => onStart(s, n)}
-                          className="h-9 flex-1 rounded-full border border-gray-200 bg-white/85 text-[13px] font-medium text-gray-800 transition-all active:scale-[0.97] active:opacity-70"
+                          className="h-9 flex-1 rounded-full border border-gray-200 bg-white/85 text-[13px] font-medium text-gray-800 transition-all active:scale-[0.97] active:opacity-70 dark:border-white/15 dark:bg-white/10 dark:text-zinc-200"
                         >
                           {n} 张牌
                         </button>
@@ -1000,7 +1000,7 @@ function CardWheel({ hidden, onTapCard }: { hidden: number[]; onTapCard: (idx: n
       onPointerLeave={endPtr}
       data-testid="tarot-wheel"
     >
-      <div className="pointer-events-none absolute left-4 top-1 text-[10px] text-gray-400">滑动牌轮 · 双指缩放 · 点选牌背</div>
+      <div className="pointer-events-none absolute left-4 top-1 text-[10px] text-gray-400 dark:text-zinc-500">滑动牌轮 · 双指缩放 · 点选牌背</div>
       {/* 轮心锚点：屏幕右下角外，78 张牌以 transform 挂在圆环上 */}
       <div className="absolute h-0 w-0" style={{ left: `calc(100% + ${WHEEL_AX}px)`, top: `calc(100% + ${WHEEL_AY}px)` }}>
         {TAROT_FULL_DECK.map((c, i) => {
@@ -1097,12 +1097,12 @@ function SlotsView({ theme, question, spread, positions, slots, revsBySlot, fill
   return (
     <div className="relative flex h-full flex-col">
       <div className="shrink-0 px-5 pt-1 text-center">
-        <div className="truncate text-[11px] text-gray-500">
+        <div className="truncate text-[11px] text-gray-500 dark:text-zinc-400">
           {spread.name} · {theme.label}
           {theme.custom && question ? ` · ${question}` : ''}
         </div>
-        <div className="mt-0.5 text-[22px] font-bold tracking-wide text-gray-900">{full ? '牌阵已满' : nextPos?.label}</div>
-        <div className="mt-0.5 text-[11px] text-gray-500">
+        <div className="mt-0.5 text-[22px] font-bold tracking-wide text-gray-900 dark:text-zinc-100">{full ? '牌阵已满' : nextPos?.label}</div>
+        <div className="mt-0.5 text-[11px] text-gray-500 dark:text-zinc-400">
           {full
             ? '点击下方「翻牌」揭晓'
             : `第 ${filledCount + 1} 张 · 已选 ${filledCount}/${need}${filledCount > 0 ? ' · 点牌位可收回' : ''}`}
@@ -1130,7 +1130,7 @@ function SlotsView({ theme, question, spread, positions, slots, revsBySlot, fill
             type="button"
             onClick={onFlip}
             data-testid="tarot-flip"
-            className="h-12 w-full rounded-full bg-gray-900 text-[15px] font-semibold text-white shadow-[0_10px_26px_rgba(17,24,39,0.28)] transition-all active:scale-[0.98] active:opacity-90"
+            className="h-12 w-full rounded-full bg-gray-900 text-[15px] font-semibold text-white shadow-[0_10px_26px_rgba(17,24,39,0.28)] transition-all active:scale-[0.98] active:opacity-90 dark:bg-zinc-100 dark:text-zinc-900"
           >
             翻牌
           </button>
@@ -1139,7 +1139,7 @@ function SlotsView({ theme, question, spread, positions, slots, revsBySlot, fill
             type="button"
             onClick={onGoPick}
             data-testid="tarot-go-pick"
-            className="h-12 w-full rounded-full bg-gray-900 text-[14.5px] font-semibold text-white shadow-[0_8px_22px_rgba(17,24,39,0.24)] transition-all active:scale-[0.98] active:opacity-90"
+            className="h-12 w-full rounded-full bg-gray-900 text-[14.5px] font-semibold text-white shadow-[0_8px_22px_rgba(17,24,39,0.24)] transition-all active:scale-[0.98] active:opacity-90 dark:bg-zinc-100 dark:text-zinc-900"
           >
             去选第 {filledCount + 1} 张牌 · {nextPos?.label}
           </button>
@@ -1169,12 +1169,12 @@ function WheelView({ theme, question, spread, positions, slots, filledCount, onC
   return (
     <div className="relative flex h-full flex-col">
       <div className="shrink-0 px-5 pt-1 text-center">
-        <div className="text-[11px] text-gray-500">
+        <div className="text-[11px] text-gray-500 dark:text-zinc-400">
           第 {Math.min(filledCount + 1, need)} 张牌 · {spread.name}
           {theme.custom && question ? ` · ${question}` : ''}
         </div>
-        <div className="mt-0.5 text-[24px] font-bold tracking-wide text-gray-900">{full ? '选好了' : nextPos.label}</div>
-        <div className="mt-0.5 text-[11.5px] text-gray-500">{full ? '点击下方按钮回到牌位' : '双指放大牌轮 · 滑动牌轮 · 点选牌'}</div>
+        <div className="mt-0.5 text-[24px] font-bold tracking-wide text-gray-900 dark:text-zinc-100">{full ? '选好了' : nextPos.label}</div>
+        <div className="mt-0.5 text-[11.5px] text-gray-500 dark:text-zinc-400">{full ? '点击下方按钮回到牌位' : '双指放大牌轮 · 滑动牌轮 · 点选牌'}</div>
       </div>
 
       <CardWheel hidden={hidden} onTapCard={onCardTap} />
@@ -1184,7 +1184,7 @@ function WheelView({ theme, question, spread, positions, slots, filledCount, onC
           type="button"
           onClick={onBackToSlots}
           data-testid="tarot-back-slots"
-          className="h-11 w-full rounded-full border border-white/90 bg-white/55 text-[13.5px] font-medium text-gray-700 backdrop-blur-xl transition-all active:scale-[0.98] active:opacity-60"
+          className="h-11 w-full rounded-full border border-white/90 bg-white/55 text-[13.5px] font-medium text-gray-700 backdrop-blur-xl transition-all active:scale-[0.98] active:opacity-60 dark:border-white/15 dark:bg-white/10 dark:text-zinc-300"
         >
           查看牌位
         </button>
@@ -1209,7 +1209,7 @@ function ReadingCard({ reading, positions, drawnDefs }: {
   drawnDefs: { def: TarotCardDef; reversed: boolean }[];
 }) {
   return (
-    <div className="mt-3 rounded-2xl border border-white/80 bg-white/65 p-4 backdrop-blur-xl shadow-[0_6px_22px_rgba(17,24,39,0.06)]" data-testid="tarot-reading">
+    <div className="mt-3 rounded-2xl border border-white/80 bg-white/65 p-4 backdrop-blur-xl shadow-[0_6px_22px_rgba(17,24,39,0.06)] dark:border-white/10 dark:bg-zinc-800/60" data-testid="tarot-reading">
       <div className="flex items-center gap-2.5">
         <span
           aria-hidden
@@ -1223,36 +1223,36 @@ function ReadingCard({ reading, positions, drawnDefs }: {
           <MoonStar className="h-[17px] w-[17px]" strokeWidth={1.4} style={{ color: '#ecd9a0' }} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[14px] font-bold text-gray-900">塔罗解读</div>
-          <div className="text-[10.5px] text-gray-500">按牌位职责 · 按正逆位牌意</div>
+          <div className="text-[14px] font-bold text-gray-900 dark:text-zinc-100">塔罗解读</div>
+          <div className="text-[10.5px] text-gray-500 dark:text-zinc-400">按牌位职责 · 按正逆位牌意</div>
         </div>
       </div>
 
       {!reading ? (
-        <div className="mt-3.5 flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50/90 px-3.5 py-3" data-testid="tarot-reading-loading">
+        <div className="mt-3.5 flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50/90 px-3.5 py-3 dark:border-white/10 dark:bg-white/[0.06]" data-testid="tarot-reading-loading">
           <span className="relative flex h-6 w-6 items-center justify-center">
-            <span className="absolute inset-0 rounded-full border-2 border-gray-300 border-t-gray-800" style={{ animation: 'tarot-halo-spin 0.9s linear infinite' }} />
-            <Star className="h-2.5 w-2.5 text-gray-700" />
+            <span className="absolute inset-0 rounded-full border-2 border-gray-300 border-t-gray-800 dark:border-zinc-600 dark:border-t-zinc-200" style={{ animation: 'tarot-halo-spin 0.9s linear infinite' }} />
+            <Star className="h-2.5 w-2.5 text-gray-700 dark:text-zinc-300" />
           </span>
-          <span className="text-[12.5px] text-gray-600">正在解读这副牌…</span>
+          <span className="text-[12.5px] text-gray-600 dark:text-zinc-400">正在解读这副牌…</span>
         </div>
       ) : (
         <div className="mt-3.5 flex flex-col gap-3">
           {reading.per.map((t, i) => {
             const c = drawnDefs[i];
             return (
-              <div key={i} className="rounded-xl border border-gray-100 bg-gray-50/90 px-3.5 py-3" style={{ animation: `tarot-text-in 0.45s ease ${i * 0.12}s both` }}>
+              <div key={i} className="rounded-xl border border-gray-100 bg-gray-50/90 px-3.5 py-3 dark:border-white/10 dark:bg-white/[0.06]" style={{ animation: `tarot-text-in 0.45s ease ${i * 0.12}s both` }}>
                 <div className="flex items-baseline gap-1.5">
-                  <span className="text-[12px] font-semibold text-gray-900">{positions[i]?.label ?? ''}</span>
-                  {c && <span className="text-[11px] text-gray-500">{c.def.name} · {c.reversed ? '逆位' : '正位'}</span>}
+                  <span className="text-[12px] font-semibold text-gray-900 dark:text-zinc-100">{positions[i]?.label ?? ''}</span>
+                  {c && <span className="text-[11px] text-gray-500 dark:text-zinc-400">{c.def.name} · {c.reversed ? '逆位' : '正位'}</span>}
                 </div>
-                <p className="mt-1 text-[13.5px] leading-[1.75] text-gray-800">{t}</p>
+                <p className="mt-1 text-[13.5px] leading-[1.75] text-gray-800 dark:text-zinc-200">{t}</p>
               </div>
             );
           })}
           {reading.overall && (
-            <div className="rounded-xl border border-gray-200 bg-white/90 px-3.5 py-3" style={{ animation: 'tarot-text-in 0.45s ease 0.2s both' }}>
-              <p className="text-[13.5px] leading-[1.8] text-gray-900">{reading.overall}</p>
+            <div className="rounded-xl border border-gray-200 bg-white/90 px-3.5 py-3 dark:border-white/10 dark:bg-white/[0.08]" style={{ animation: 'tarot-text-in 0.45s ease 0.2s both' }}>
+              <p className="text-[13.5px] leading-[1.8] text-gray-900 dark:text-zinc-100">{reading.overall}</p>
             </div>
           )}
         </div>
@@ -1279,8 +1279,8 @@ function RevealBody({ spread, positions, slots, revsBySlot, flippedCount, mode, 
   return (
     <div className="h-full overflow-y-auto overscroll-contain px-4 pb-5">
       <div className="pt-1 text-center">
-        <div className="text-[10.5px] uppercase tracking-[0.14em] text-gray-400">{spread.name}</div>
-        <div className="mt-0.5 text-[18px] font-bold text-gray-900">
+        <div className="text-[10.5px] uppercase tracking-[0.14em] text-gray-400 dark:text-zinc-500">{spread.name}</div>
+        <div className="mt-0.5 text-[18px] font-bold text-gray-900 dark:text-zinc-100">
           {theme.label}
           {question ? `：「${question}」` : ''}
         </div>
@@ -1325,12 +1325,12 @@ function HistoryView({ readings, onBack, onOpen }: {
   return (
     <div className="flex h-full flex-col">
       <div className="shrink-0 px-5 pt-2 text-center">
-        <div className="text-[20px] font-bold tracking-wide text-gray-900">占卜记录</div>
-        <div className="mt-0.5 text-[12px] text-gray-500">每一次提问，牌都有回应</div>
+        <div className="text-[20px] font-bold tracking-wide text-gray-900 dark:text-zinc-100">占卜记录</div>
+        <div className="mt-0.5 text-[12px] text-gray-500 dark:text-zinc-400">每一次提问，牌都有回应</div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6 pt-3">
         {readings.length === 0 ? (
-          <div className="flex h-40 flex-col items-center justify-center gap-2 text-gray-400">
+          <div className="flex h-40 flex-col items-center justify-center gap-2 text-gray-400 dark:text-zinc-500">
             <Star className="h-6 w-6" strokeWidth={1.5} />
             <span className="text-[13px]">还没有占卜记录</span>
           </div>
@@ -1342,32 +1342,32 @@ function HistoryView({ readings, onBack, onOpen }: {
                 type="button"
                 onClick={() => onOpen(r)}
                 data-testid="tarot-history-item"
-                className="rounded-2xl border border-white/80 bg-white/60 px-4 py-3.5 text-left backdrop-blur-xl shadow-[0_4px_16px_rgba(17,24,39,0.05)] transition-all active:scale-[0.98]"
+                className="rounded-2xl border border-white/80 bg-white/60 px-4 py-3.5 text-left backdrop-blur-xl shadow-[0_4px_16px_rgba(17,24,39,0.05)] transition-all active:scale-[0.98] dark:border-white/10 dark:bg-zinc-800/60"
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-[14.5px] font-bold text-gray-900">{r.themeLabel}</span>
-                  {r.spreadName && <span className="shrink-0 rounded-full border border-gray-200 bg-white/80 px-2 py-0.5 text-[10px] text-gray-600">{r.spreadName}</span>}
-                  {r.question ? <span className="min-w-0 flex-1 truncate text-[11.5px] text-gray-500">「{r.question}」</span> : <span className="flex-1" />}
-                  <span className="shrink-0 text-[10.5px] text-gray-400">{fmtTs(r.at)}</span>
+                  <span className="text-[14.5px] font-bold text-gray-900 dark:text-zinc-100">{r.themeLabel}</span>
+                  {r.spreadName && <span className="shrink-0 rounded-full border border-gray-200 bg-white/80 px-2 py-0.5 text-[10px] text-gray-600 dark:border-white/10 dark:bg-white/10 dark:text-zinc-400">{r.spreadName}</span>}
+                  {r.question ? <span className="min-w-0 flex-1 truncate text-[11.5px] text-gray-500 dark:text-zinc-400">「{r.question}」</span> : <span className="flex-1" />}
+                  <span className="shrink-0 text-[10.5px] text-gray-400 dark:text-zinc-500">{fmtTs(r.at)}</span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {r.cards.map((c, i) => {
                     const def = tarotCardById(c.defId);
                     return (
-                      <span key={i} className="rounded-full border border-gray-200/90 bg-gray-50 px-2 py-0.5 text-[10.5px] text-gray-700">
+                      <span key={i} className="rounded-full border border-gray-200/90 bg-gray-50 px-2 py-0.5 text-[10.5px] text-gray-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300">
                         {r.spread?.[i] ? `${r.spread[i]}·` : ''}{def?.name ?? '?'} {c.reversed ? '· 逆' : ''}
                       </span>
                     );
                   })}
                 </div>
-                {r.overall && <p className="mt-2 line-clamp-2 text-[12px] leading-relaxed text-gray-600">{r.overall}</p>}
+                {r.overall && <p className="mt-2 line-clamp-2 text-[12px] leading-relaxed text-gray-600 dark:text-zinc-400">{r.overall}</p>}
               </button>
             ))}
           </div>
         )}
       </div>
       <div className="shrink-0 px-4 pb-5">
-        <button type="button" onClick={onBack} className="h-11 w-full rounded-full border border-white/90 bg-white/65 text-[14px] font-medium text-gray-800 backdrop-blur-xl transition-opacity active:opacity-60">
+        <button type="button" onClick={onBack} className="h-11 w-full rounded-full border border-white/90 bg-white/65 text-[14px] font-medium text-gray-800 backdrop-blur-xl transition-opacity active:opacity-60 dark:border-white/15 dark:bg-white/10 dark:text-zinc-200">
           返回
         </button>
       </div>
@@ -1746,7 +1746,7 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
   return (
     <div
       ref={pageRef}
-      className="relative flex h-full flex-col overflow-hidden bg-[#f1f2f4] text-gray-900"
+      className="relative flex h-full flex-col overflow-hidden bg-[#f1f2f4] text-gray-900 dark:bg-zinc-900 dark:text-zinc-100"
       onPointerDownCapture={() => {
         // 真实指针手势先武装：其后配对的 click 才会被放行（键盘 Enter/Space 走 onKeyDownCapture 同理）
         clickArmedRef.current = true;
@@ -1768,15 +1768,15 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
     >
       {/* 浅色氛围光斑 */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
-        <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-white/85 blur-3xl" />
-        <div className="absolute -right-24 top-1/4 h-72 w-72 rounded-full bg-gray-300/40 blur-3xl" />
-        <div className="absolute -bottom-20 left-1/5 h-64 w-64 rounded-full bg-white/80 blur-3xl" />
+        <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-white/85 blur-3xl dark:bg-white/[0.07]" />
+        <div className="absolute -right-24 top-1/4 h-72 w-72 rounded-full bg-gray-300/40 blur-3xl dark:bg-white/[0.05]" />
+        <div className="absolute -bottom-20 left-1/5 h-64 w-64 rounded-full bg-white/80 blur-3xl dark:bg-white/[0.06]" />
       </div>
 
       {/* 顶栏（步骤条独占一行，不与标题重叠） */}
       <div className="relative z-10 shrink-0 pt-[54px]">
         <div className="relative flex h-11 items-center px-1.5">
-          <button type="button" onClick={back} aria-label="返回" className="flex h-9 w-9 items-center justify-center rounded-full text-gray-800 transition-opacity active:opacity-50">
+          <button type="button" onClick={back} aria-label="返回" className="flex h-9 w-9 items-center justify-center rounded-full text-gray-800 transition-opacity active:opacity-50 dark:text-zinc-200">
             <ArrowLeft className="h-5 w-5" strokeWidth={2.2} />
           </button>
           <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[16px] font-bold tracking-wide">爱情塔罗</div>
@@ -1876,7 +1876,7 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
                   <button
                     type="button"
                     onClick={() => setView('history')}
-                    className="h-11 rounded-full border border-white/90 bg-white/65 text-[14px] font-medium text-gray-800 backdrop-blur-xl transition-opacity active:opacity-60"
+                    className="h-11 rounded-full border border-white/90 bg-white/65 text-[14px] font-medium text-gray-800 backdrop-blur-xl transition-opacity active:opacity-60 dark:border-white/15 dark:bg-white/10 dark:text-zinc-200"
                   >
                     占卜记录
                   </button>
@@ -1884,7 +1884,7 @@ export default function CoupleTarotPage({ state, patch, showToast, close }: {
                     type="button"
                     onClick={restart}
                     data-testid="tarot-again"
-                    className="h-11 rounded-full bg-gray-900 text-[14px] font-semibold text-white shadow-[0_6px_18px_rgba(17,24,39,0.22)] transition-all active:scale-[0.97] active:opacity-90"
+                    className="h-11 rounded-full bg-gray-900 text-[14px] font-semibold text-white shadow-[0_6px_18px_rgba(17,24,39,0.22)] transition-all active:scale-[0.97] active:opacity-90 dark:bg-zinc-100 dark:text-zinc-900"
                   >
                     再占一次
                   </button>
@@ -1961,12 +1961,12 @@ function DetailPage({ reading, onBack, onDelete }: {
           <button
             type="button"
             onClick={onDelete}
-            className="flex h-11 items-center justify-center gap-1.5 rounded-full border border-red-200 bg-red-50/80 text-[14px] font-medium text-red-600 transition-opacity active:opacity-60"
+            className="flex h-11 items-center justify-center gap-1.5 rounded-full border border-red-200 bg-red-50/80 text-[14px] font-medium text-red-600 transition-opacity active:opacity-60 dark:border-red-500/30 dark:bg-red-500/15 dark:text-red-400"
           >
             <Trash2 className="h-4 w-4" />
             删除
           </button>
-          <button type="button" onClick={onBack} className="h-11 rounded-full border border-white/90 bg-white/65 text-[14px] font-medium text-gray-800 backdrop-blur-xl transition-opacity active:opacity-60">
+          <button type="button" onClick={onBack} className="h-11 rounded-full border border-white/90 bg-white/65 text-[14px] font-medium text-gray-800 backdrop-blur-xl transition-opacity active:opacity-60 dark:border-white/15 dark:bg-white/10 dark:text-zinc-200">
             返回列表
           </button>
         </div>

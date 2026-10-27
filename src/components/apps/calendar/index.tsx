@@ -65,6 +65,17 @@ const HOME_VIEWS: Page[] = ['month', 'year', 'week', 'day', 'agenda'];
 type DateTarget = 'date' | 'endDate';
 type TimeTarget = 'start' | 'end';
 
+/**
+ * 深色模式变量覆盖（Task 31-a）：html.dark 时在本 App 根节点注入 --cal-* 深色值，
+ * shared.tsx / chrome.tsx / event-form.tsx 等的颜色常量经 var(--) 引用自动切换;
+ * 浅色时这些类不生效，各常量回退到原浅色值（视觉零变化）。
+ */
+const CAL_DARK_VARS =
+  'dark:[--cal-bg:#18181B] dark:[--cal-card:#27272A] dark:[--cal-text:#F4F4F5] dark:[--cal-text-2:#A1A1AA] dark:[--cal-text-3:#71717A] ' +
+  'dark:[--cal-divider:rgba(255,255,255,0.09)] dark:[--cal-accent-soft:rgba(229,73,60,0.18)] dark:[--cal-gold-soft:rgba(199,154,59,0.22)] dark:[--cal-mi-blue:#6E9EFC] ' +
+  'dark:[--cal-form-bg:#18181B] dark:[--cal-seg-track:#26262B] dark:[--cal-seg-active:#3F3F46] ' +
+  'dark:[--cal-fill-soft:rgba(255,255,255,0.08)] dark:[--cal-fill-med:rgba(255,255,255,0.22)] dark:[--cal-wheel-near:rgba(255,255,255,0.45)] dark:[--cal-wheel-far:rgba(255,255,255,0.20)]';
+
 export default function CalendarApp() {
   const [loaded, setLoaded] = useState(false);
   const [events, setEvents] = useState<CalendarEventRecord[]>([]);
@@ -344,13 +355,13 @@ export default function CalendarApp() {
   // ---------------- 渲染 ----------------
 
   if (!loaded) {
-    return <div className="h-full w-full" style={{ backgroundColor: BG }} />;
+    return <div className={`h-full w-full ${CAL_DARK_VARS}`} style={{ backgroundColor: BG }} />;
   }
 
   const animClass = dir >= 0 ? 'animate-in fade-in slide-in-from-right-2 duration-200' : 'animate-in fade-in slide-in-from-left-2 duration-200';
 
   return (
-    <div className="relative h-full w-full overflow-hidden" style={{ backgroundColor: BG }}>
+    <div className={`relative h-full w-full overflow-hidden ${CAL_DARK_VARS}`} style={{ backgroundColor: BG }}>
       <div key={page} className={`h-full ${animClass}`}>
         {page === 'month' && (
           <MonthView
@@ -527,7 +538,7 @@ export default function CalendarApp() {
       {toastMsg && (
         <div
           role="status"
-          className="pointer-events-none absolute bottom-24 left-1/2 z-50 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 rounded-full px-4 py-2 text-[13px] duration-200"
+          className="pointer-events-none absolute bottom-24 left-1/2 z-50 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 rounded-full px-4 py-2 text-[13px] duration-200 dark:bg-zinc-700/90!"
           style={{ backgroundColor: 'rgba(41,36,31,0.82)', color: '#FFFFFF' }}
         >
           {toastMsg}

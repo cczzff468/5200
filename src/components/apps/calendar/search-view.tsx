@@ -9,6 +9,8 @@
 import { useMemo, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import {
+  FILL_MED,
+  FILL_SOFT,
   TEXT,
   TEXT_2,
   TEXT_3,
@@ -73,7 +75,7 @@ export function SearchView({
       <div className="shrink-0 px-4 pb-1 pt-3">
         <div
           className="flex h-10 items-center gap-2 rounded-[12px] px-3"
-          style={{ backgroundColor: 'rgba(41,36,31,0.05)' }}
+          style={{ backgroundColor: FILL_SOFT }}
         >
           <Search className="h-[17px] w-[17px] shrink-0" style={{ color: TEXT_3 }} strokeWidth={2.2} />
           <input
@@ -92,7 +94,7 @@ export function SearchView({
               aria-label="清空搜索"
               onClick={() => setQ('')}
               className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
-              style={{ backgroundColor: 'rgba(41,36,31,0.14)' }}
+              style={{ backgroundColor: FILL_MED }}
             >
               <X className="h-3 w-3" style={{ color: '#FFFFFF' }} strokeWidth={3} />
             </button>

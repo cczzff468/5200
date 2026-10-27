@@ -26,6 +26,8 @@ import { getActiveAccountIdFor, scopedKvKey, type AccountApp } from './accounts'
 import { listContacts, ownerProfileFor, cachedOwnerName } from './contacts-store';
 import { avatarFor, type ContactAvatarApp, type ContactRecord } from '@/lib/contacts';
 import { buildPersonaSystemPrompt } from './persona';
+// 第十六轮：AI 动态状态（情绪+作息）——主动消息也带着当前心情、按作息拿撑时机
+import { buildDynamicStateBlocks } from './ai-mood';
 import { buildNpcPromptExtra } from './npc-bond';
 import { loadBlock } from './block-state';
 import { isDndWindowActive } from './notify-sound';
@@ -746,7 +748,7 @@ async function generateProactiveText(app: ProactiveApp, contact: ContactRecord, 
   // 跨 App 近况（与三端聊天同口径）：其他 App 最近聊过什么/用户在听什么——主动消息能接上别处的话题
   const crossAppBlock = await buildCrossAppBlock(contact.id, app, userName);
 
-  const system = [persona, memoryBlock, crossAppBlock, momentsBlock, timeBlock].filter(Boolean).join('\n\n');
+  const system = [persona, memoryBlock, crossAppBlock, momentsBlock, timeBlock, buildDynamicStateBlocks(contact.id)].filter(Boolean).join('\n\n');
 
   // user prompt：情境 + 最近对话 + 防重复
   const recent = convoLines(norm, 12, contact.name, userName);
@@ -1360,4 +1362,54 @@ export function dayLabel(days: number[]): string {
 export function eventLabel(e: ProactiveEvent): string {
   const when = e.time ? `${dayLabel(e.days)} ${e.time}` : dayLabel(e.days);
   return `${e.name || '未命名事件'}（${when}）`;
+}
+
+// ---------------- 第十六轮：情境主动消息（跨 App 联动 / 作息提醒） ----------------
+
+/**
+ * 按给定的「情境描述」立即生成并发送一条主动消息（第十六轮）：
+ * - 跨 App 联动：美团外卖送达 / 淘宝快递签收 → AI 在微信/QQ 里自然地聊起这事；
+ * - 作息提醒：早安（起床后）/ 晚安（睡前）/ 饭点关心（couple-ai 的 routine tick 调用）。
+ * 与用户配置的四类触发完全同管线（生成 → 去重 → 投递 → 通知 → 未读 → 记忆 → 历史），
+ * 区别是无需任何预先配置；额外带两层节制：
+ * - 幂等（dedupeKey 24h 内同键只发一次——订单号/提醒日即键）；
+ * - 每日上限（默认 3 条/天，防事件风暴骚扰）。
+ * 返回 true = 已实际投递。
+ */
+export async function fireProactiveNudge(
+  app: ProactiveApp,
+  cid: string,
+  opts: { dedupeKey: string; context: string; dailyCap?: number },
+): Promise<boolean> {
+  try {
+    if (isProactiveMasterOff()) return false;
+    // 幂等：24h 内同键只发一次
+    const firedKey = `proactive-nudge-fired:${opts.dedupeKey}`;
+    try {
+      if (kvGetRaw<{ at: number }>(firedKey) && Date.now() - (kvGetRaw<{ at: number }>(firedKey)?.at ?? 0) < 24 * 3600_000) return false;
+    } catch {
+      /* 读失败放行（多发一次可接受，绝不因存储问题漏发） */
+    }
+    // 每日上限：默认 3
+    const dayKey = `proactive-nudge-day:${new Date().toISOString().slice(0, 10)}`;
+    const cnt = kvGetRaw<number>(dayKey) ?? 0;
+    if (cnt >= (opts.dailyCap ?? 3)) return false;
+    // 目标联系人：必须是真实 AI 角色（与 manuallyFireEvent 同口径）
+    const all = await listContacts().catch(() => [] as ContactRecord[]);
+    const contact = all.find((c) => c.id === cid);
+    if (!contact || contact.kind === 'user' || !contact.name?.trim()) return false;
+    const blk = loadBlock(app, cid);
+    if (blk.byUser) return false; // 用户拉黑时不打扰
+    // 正在通话中不打扰（与 tickInner 守卫同思路；主动消息调度已有互斥，这里轻量跳过）
+    if (useIncomingCall.getState().active || useGlobalCall.getState().session) return false;
+    // 生成 + 投递（fireProactive 自带去重/重试/兜底）
+    const npcExtra = buildNpcPromptExtra(contact, all) as unknown as Record<string, unknown> | null;
+    await fireProactive(app, contact, { kind: 'event', eventName: opts.context }, npcExtra);
+    // 记录幂等与计数（无论生成成败都记——避免失败重试风暴；情境类消息错过就错过）
+    kvSetRaw(firedKey, { at: Date.now() });
+    kvSetRaw(dayKey, cnt + 1);
+    return true;
+  } catch {
+    return false;
+  }
 }

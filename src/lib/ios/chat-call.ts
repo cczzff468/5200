@@ -23,8 +23,9 @@
  *   TTS 失败不中断通话——回复文字整句直接显示在字幕流里，通话继续。
  *   用户录音期间并行跑 Web Speech 实时识别（liveHeard 增量更新；字幕仍只显示 AI 说的话）——
  *   Web Speech 是识别主通道：说完停顿 VAD 停录后 stop() 直接取整句文本，无需服务端；
- *   内置识别模型已移除：仅在设置 App 配置了 OpenAI 兼容 STT 时才以 transcribeAudioBlob 走服务端兑底
- *   （isSttReady 对 builtin 恒为 false）；识别失败给出提示，通话继续、可重试。
+ *   识别兑底（第十六轮）：Web Speech 失败后走 transcribeBlob 三级链
+ *   （① SenseVoice 端侧 ② 用户配置的云端 STT ③ 内置 z-ai ASR 免配置）；
+ *   识别失败给出提示，通话继续、可重试。
  *
  * 三、权限与边界：麦克风首次使用时 getUserMedia 申请；拒绝后界面提示、文字聊天与其他功能不受影响；
  *   通话不涉及真实电话网络；挂断/卸载时释放录音流、停止播报、停表。
@@ -49,7 +50,8 @@ import { ownerRealNameFor, ownerProfileFor } from './contacts-store';
 import { getAccountById, getActiveAccountIdFor } from './accounts';
 import { useSettings } from './store';
 import { directChatStream } from './direct-api';
-import { isSttReady, transcribeAudioBlob } from './stt-client';
+// 第十六轮：通话识别三级兑底链（SenseVoice 端侧 → 用户云端 STT → 内置 z-ai ASR 免配置兑底）
+import { transcribeBlob } from './cabin-voice';
 import { startWebSpeechSession, type WebSpeechSession } from './web-speech';
 import {
   startVad,
@@ -1290,7 +1292,9 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
         busyRef.current = true;
         void (async () => {
           // 识别主通道：Web Speech（浏览器原生实时识别，录音期间已并行累计，stop() 取整句）；
-          // 内置识别模型已移除——仅在设置 App 配置了 OpenAI 兼容 STT 时才以 transcribeAudioBlob 走服务端兑底
+          // 第十六轮兑底升级：Web Speech 失败/无结果时改走 transcribeBlob 三级链
+          //（① SenseVoice 端侧 ② 用户配置的 OpenAI 兼容 STT ③ 内置 z-ai ASR 免配置）——
+          //  不支持 Web Speech 的浏览器/识别抖动时，连续语音对话依然可用（不再要求用户先配 STT）
           let text = '';
           let serverError: unknown = null;
           if (ws) {
@@ -1299,13 +1303,13 @@ export function useChatCall(opts: UseChatCallOptions): ChatCallApi {
               // 过滤 ASR 对静音/噪声的典型无意义输出（纯符号），避免当成有效转写
               if (t && !/^[#\s*_\-.,!?~。？！，、…—·]+$/.test(t)) text = t;
             } catch {
-              // 实时识别失败：走下方服务端兑底
+              // 实时识别失败：走下方三级兑底
             }
           }
           if (endedRef.current) return;
-          if (!text && isSttReady()) {
+          if (!text) {
             try {
-              const t = (await transcribeAudioBlob(blob)).trim();
+              const t = (await transcribeBlob(blob)).trim();
               if (t && !/^[#\s*_\-.,!?~。？！，、…—·]+$/.test(t)) text = t;
             } catch (e) {
               serverError = e;

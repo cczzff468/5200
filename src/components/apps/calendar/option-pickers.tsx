@@ -6,7 +6,7 @@
  */
 
 import { Check } from 'lucide-react';
-import { ACCENT, ALERT_OPTIONS, EVENT_COLORS, NavBar, NavTextButton, REPEAT_OPTIONS, TEXT, TEXT_2, type AlertKey, type RepeatKey } from './shared';
+import { ACCENT, ALERT_OPTIONS, CARD, EVENT_COLORS, NavBar, NavTextButton, REPEAT_OPTIONS, TEXT, TEXT_2, type AlertKey, type RepeatKey } from './shared';
 import { Card, CardDivider } from './widgets';
 
 /** 页面骨架：返回 + 标题（+ 可选副标题） */
@@ -60,7 +60,7 @@ export function ColorPickerPage({
               onClick={() => onPick(c.key)}
               className="flex h-[54px] items-center gap-2.5 rounded-[14px] px-3.5 transition active:opacity-70"
               style={{
-                backgroundColor: '#FFFFFF',
+                backgroundColor: CARD,
                 boxShadow: active ? `0 0 0 1.5px ${ACCENT} inset, 0 1px 4px rgba(41,36,31,0.04)` : '0 1px 4px rgba(41,36,31,0.04)',
               }}
             >

@@ -435,7 +435,7 @@ export default function CoupleLetterBubble({ data, mine, testidPrefix = 'wx' }: 
         e.stopPropagation();
         openLetter();
       }}
-      className="relative block w-[248px] cursor-pointer select-none overflow-hidden rounded-[10px] shadow-sm transition-transform active:scale-[0.985]"
+      className="relative block w-[248px] cursor-pointer select-none overflow-hidden rounded-[10px] shadow-sm transition-transform active:scale-[0.985] dark:shadow-[0_4px_14px_rgba(0,0,0,0.45)]"
     >
       <EnvelopeArt envKey={data.envelope} className="h-[132px] w-full" pets avatar={avatar} faceText={envText} />
     </button>

@@ -21,9 +21,12 @@
 
 import { kvGet, kvSet } from './idb-kv';
 import { memAddEventFragment, memChatRecallBlock, memConvoFromRaw, memRecallBlock } from '@/lib/memory';
+// 第十六轮：AI 动态状态（情绪+作息）注入 + 作息提醒（早安/晚安/饭点，不占自主额度）
+import { buildDynamicStateBlocks } from './ai-mood';
+import { routineNudgeDue, routineNudgeMark, type RoutineNudgeKind } from './routine';
 import { pushChatNotification } from './island-notify';
 import { wxUnreads, qqUnreads } from '@/lib/unread-store';
-import { isProactiveChatActive } from './proactive-msg';
+import { isProactiveChatActive, fireProactiveNudge } from './proactive-msg';
 import { getContact, listContacts } from './contacts-store';
 import { avatarFor, displayNameOf } from '@/lib/contacts';
 import { dispatchStateEvent, readInviteMeta, type CoupleChannel } from './couple-invite';
@@ -1358,7 +1361,7 @@ function snapDigest(snap: CoupleSnap, me: string, ta: string): string {
   return parts.join('；');
 }
 
-/** 组装 LLM system（人设 + 性别纪律 + 共享记忆 + 行为纪律） */
+/** 组装 LLM system（人设 + 性别纪律 + 共享记忆 + 行为纪律 + 第十六轮情绪/作息动态状态） */
 function llmSystem(p: TaPersona, me: string, snap: CoupleSnap): string {
   const ta = p.name;
   return [
@@ -1368,6 +1371,8 @@ function llmSystem(p: TaPersona, me: string, snap: CoupleSnap): string {
     p.background ? `你的背景：${cut(p.background, 100)}` : '',
     genderLine(snap, me),
     `你们在恋人空间里的共享记忆：${snapDigest(snap, me, ta) || '刚刚开始，还很空白'}。`,
+    // 第十六轮：AI 动态状态（情绪+作息）——恋人空间里的行为（日记/情书/留言…）也带着当前心情
+    currentPartnerId ? buildDynamicStateBlocks(currentPartnerId) : '',
     `你正在恋人空间里为你们的感情做一件小事。要求：严格贴合你的人设与你们的真实记忆，口语、简短、真诚，像真实的恋人亲手写下的；禁止出现「AI/系统/用户/模型」等字样；禁止 markdown 格式；禁止使用任何 emoji/表情符号。`,
   ]
     .filter(Boolean)
@@ -2510,6 +2515,45 @@ export function runCoupleAiTick(channel: CoupleChannel, contactId: string): void
   // 自主决策链：每日首次打开时起链；额度用完（或用过的日子）不起
   if (first && autonomyQuota() > 0) {
     autonomyLoop(contactId, me, ta, 25000 + Math.random() * 65000);
+  }
+}
+
+// ---------------- 第十六轮：作息提醒（早安/晚安/饭点，独立于自主额度） ----------------
+
+/** 各类作息提醒的生成情境（注入主动消息 prompt） */
+const ROUTINE_NUDGE_CTX: Record<RoutineNudgeKind, string> = {
+  morning: '现在是早晨、TA 平时这个点刚起床——自然地道一声早安（可以带一点你们最近聊过的事或昨天的余温，一两句话就够，别太正式）',
+  night: '现在是晚上、TA 平时这个点快睡觉了——温柔地催 TA 去睡觉、道晚安（可以带点撒娇或小关心，一两句话就够）',
+  meal: '现在是饭点——自然地关心一句吃饭了没、想吃点什么（可以顺着你们最近聊过的外卖/吃过的东西说，别太正式）',
+};
+
+/**
+ * 作息提醒 tick（CoupleResidentWatcher 每 60s 调用）：
+ * 到点了（routine 模块按 TA 的作息画像判定）就按情境发一条主动消息到恋人的聊天里。
+ * - 不占每日自主额度（早安/晚安是恋人刚需，每天各最多 1 次、饭点提醒每天 1 次）；
+ * - 作息画像未成型（样本 <3 天）时自然不发——AI 还没「摸清」TA 的作息；
+ * - 投递走 fireProactiveNudge（幂等键含日期 + 每日上限兜底）。
+ */
+export function runRoutineNudgeTick(): void {
+  try {
+    const meta = readInviteMeta();
+    if (!meta.partnerContactId) return;
+    const app = meta.partnerApp === 'qq' ? 'qq' : 'wx';
+    const cid = meta.partnerContactId;
+    for (const kind of ['morning', 'night', 'meal'] as RoutineNudgeKind[]) {
+      if (!routineNudgeDue(kind)) continue;
+      // 幂等键含当天日期：fireProactiveNudge 24h 窗口与 nudge-day 标记双保险
+      const day = todayKey();
+      void fireProactiveNudge(app, cid, {
+        dedupeKey: `routine-${kind}-${day}`,
+        context: ROUTINE_NUDGE_CTX[kind],
+        dailyCap: 5,
+      }).then((ok) => {
+        if (ok) routineNudgeMark(kind);
+      });
+    }
+  } catch {
+    /* 后台增强能力：任何异常静默 */
   }
 }
 

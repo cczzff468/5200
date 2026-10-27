@@ -248,7 +248,7 @@ export function PetActionButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={dropped ? '放下宠物' : `${label}宠物`}
-      className={`flex h-11 w-11 flex-col items-center justify-center gap-0.5 rounded-full bg-white/70 shadow-md ring-1 ring-white/70 backdrop-blur-md transition active:scale-90 disabled:cursor-not-allowed ${
+      className={`flex h-11 w-11 flex-col items-center justify-center gap-0.5 rounded-full bg-white/70 dark:bg-zinc-900/70 shadow-md ring-1 ring-white/70 dark:ring-white/15 backdrop-blur-md transition active:scale-90 disabled:cursor-not-allowed ${
         disabled && !dropped ? 'opacity-40' : ''
       }`}
     >
@@ -346,7 +346,7 @@ export function ColorRow({
   const validHex = /^#[0-9a-fA-F]{6}$/.test(value ?? '');
   return (
     <div className="mb-3.5 last:mb-0">
-      <div className="mb-1 text-[12.5px] font-medium text-[#6a6a6e]">{label}</div>
+      <div className="mb-1 text-[12.5px] font-medium text-[#6a6a6e] dark:text-zinc-300">{label}</div>
       <div className="mb-2 grid grid-cols-5 gap-2.5">
         {SWATCHES.map((s) => (
           <button
@@ -359,8 +359,8 @@ export function ColorRow({
             <span
               className={
                 value === s.hex
-                  ? 'h-9 w-9 rounded-full ring-2 ring-[#f2a9bc] ring-offset-2 shadow-md'
-                  : 'h-9 w-9 rounded-full shadow-sm ring-1 ring-black/10 transition group-active:scale-90'
+                  ? 'h-9 w-9 rounded-full ring-2 ring-[#f2a9bc] ring-offset-2 dark:ring-offset-zinc-900 shadow-md'
+                  : 'h-9 w-9 rounded-full shadow-sm ring-1 ring-black/10 dark:ring-white/15 transition group-active:scale-90'
               }
               style={{ background: s.hex }}
             />
@@ -586,16 +586,16 @@ export const HIST_COALESCE = 900;
 
 /** 编辑模式操作条：毛玻璃胶囊容器质感 */
 export const EDIT_GLASS =
-  'border border-white/70 bg-white/55 shadow-[0_10px_28px_rgba(90,70,60,0.20)] backdrop-blur-2xl';
+  'border border-white/70 dark:border-white/15 bg-white/55 dark:bg-zinc-900/70 shadow-[0_10px_28px_rgba(90,70,60,0.20)] backdrop-blur-2xl';
 /** 毛玻璃方向盘小圆钮（移动 · 按下泛绿） */
 export const editDirBtn =
-  'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]';
+  'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] dark:text-zinc-300 shadow-sm ring-1 ring-white/60 dark:ring-white/15 transition active:scale-90 active:bg-[#dff0e2] active:text-[#3f9a58]';
 /** 同上（升降 · 按下泛蓝） */
 export const editDirBtnBlue =
-  'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90 active:bg-[#e2edf3] active:text-[#4e7f95]';
+  'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] dark:text-zinc-300 shadow-sm ring-1 ring-white/60 dark:ring-white/15 transition active:scale-90 active:bg-[#e2edf3] active:text-[#4e7f95]';
 /** 同上（旋转 · 按下泛暖沙） */
 export const editDirBtnAmber =
-  'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] shadow-sm ring-1 ring-white/60 transition active:scale-90 active:bg-[#f5efe2] active:text-[#8a7a54]';
+  'flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#77766e] dark:text-zinc-300 shadow-sm ring-1 ring-white/60 dark:ring-white/15 transition active:scale-90 active:bg-[#f5efe2] active:text-[#8a7a54]';
 
 // ---------------- v11 H3 猫窝换色：12 个精选色 ----------------
 

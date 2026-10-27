@@ -171,11 +171,11 @@ export function WxGiftPicker({
   const orders = tbCompletedOrders().filter((o) => !o.giftedAt);
 
   return (
-    <div className="absolute inset-0 z-50 flex flex-col" data-testid="wx-gift-picker" style={{ background: 'linear-gradient(180deg, #FDF6E7 0%, #F7EDD8 100%)' }}>
+    <div className="absolute inset-0 z-50 flex flex-col dark:bg-[linear-gradient(180deg,#231c10_0%,#1a140b_100%)]!" data-testid="wx-gift-picker" style={{ background: 'linear-gradient(180deg, #FDF6E7 0%, #F7EDD8 100%)' }}>
       {/* 顶栏（奶油金同款） */}
       <div className="shrink-0 pt-[54px]">
         <div className="relative grid h-[48px] place-items-center">
-          <button type="button" aria-label="返回" data-testid="wx-gift-back" onClick={onBack} className="absolute left-1 grid h-10 w-10 place-items-center rounded-full active:bg-black/5">
+          <button type="button" aria-label="返回" data-testid="wx-gift-back" onClick={onBack} className="absolute left-1 grid h-10 w-10 place-items-center rounded-full active:bg-black/5 dark:active:bg-white/10">
             <ChevronLeft className="h-[24px] w-[24px] text-[#8A6B3A]" strokeWidth={2.2} />
           </button>
           <p className="text-[17px] font-semibold" style={{ color: '#7A5C30' }}>礼物</p>
@@ -203,12 +203,12 @@ export function WxGiftPicker({
               const first = o.items[0];
               const qty = o.items.reduce((n, it) => n + it.qty, 0);
               return (
-                <div key={o.id} className="rounded-2xl bg-white p-3 shadow-[0_2px_10px_rgba(122,92,48,0.06)]" data-testid={`wx-gift-item-${o.id}`}>
+                <div key={o.id} className="rounded-2xl bg-white dark:bg-zinc-800/90 p-3 shadow-[0_2px_10px_rgba(122,92,48,0.06)]" data-testid={`wx-gift-item-${o.id}`}>
                   <div className="flex items-center gap-2.5">
                     <img src={first?.pid ? tbProductImgOverride(first.pid) ?? first.img : first?.img} alt={first?.title ?? ''} className="h-[52px] w-[52px] shrink-0 rounded-lg object-cover" />
                     <div className="min-w-0 flex-1">
-                      <p className="line-clamp-1 text-[13px] font-medium leading-[18px] text-[#5C4526]">{first?.title ?? '宝贝'}</p>
-                      <p className="mt-0.5 truncate text-[11px]" style={{ color: 'rgba(160,124,66,0.6)' }}>
+                      <p className="line-clamp-1 text-[13px] font-medium leading-[18px] text-[#5C4526] dark:text-amber-100/90">{first?.title ?? '宝贝'}</p>
+                      <p className="mt-0.5 truncate text-[11px] dark:text-amber-200/60!" style={{ color: 'rgba(160,124,66,0.6)' }}>
                         {o.shopName} · {qty > 1 ? `共 ${qty} 件` : '共 1 件'}
                       </p>
                     </div>

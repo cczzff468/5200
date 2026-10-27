@@ -102,18 +102,18 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
         e.stopPropagation();
         openPact();
       }}
-      className="relative block w-[252px] cursor-pointer select-none rounded-[14px] bg-white p-2 text-left shadow-[0_4px_14px_rgba(0,0,0,0.08)] transition-all duration-300 active:brightness-95"
+      className="relative block w-[252px] cursor-pointer select-none rounded-[14px] bg-white p-2 text-left shadow-[0_4px_14px_rgba(0,0,0,0.08)] transition-all duration-300 active:brightness-95 dark:bg-zinc-800/95"
       style={{ filter: declined ? 'grayscale(0.72) brightness(0.98)' : undefined }}
       role="button"
       aria-label={`恋爱协议邀请卡（${signed ? '已签署生效' : declined ? '已婉拒' : '待签署'}）`}
     >
       {/* 箭头指向头像侧：我发出（右）/ TA 发来（左），与代付卡一致 */}
-      <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white ${mine ? '-right-[4px]' : '-left-[4px]'}`} />
+      <span aria-hidden="true" className={`absolute top-[13px] h-[11px] w-[11px] rotate-45 rounded-[2px] bg-white dark:bg-zinc-800/95 ${mine ? '-right-[4px]' : '-left-[4px]'}`} />
 
       {/* 头部：恋人空间 logo + 真爱保障（外壳保持与代付卡家族一致） */}
       <span className="relative flex items-center gap-1.5">
         <img src="/icons/couple.png" alt="" aria-hidden="true" className="h-[20px] w-[20px] rounded-full object-cover" draggable={false} />
-        <span className="text-[12.5px] font-semibold text-black/85">恋人空间</span>
+        <span className="text-[12.5px] font-semibold text-black/85 dark:text-zinc-200">恋人空间</span>
         <span className="ml-auto flex items-center gap-[3px] text-[10.5px] font-medium text-[#f2536a]">
           <ShieldCheck className="h-[12px] w-[12px]" strokeWidth={2.2} />
           真爱保障
@@ -121,10 +121,10 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
       </span>
 
       {/* 主标题（参考图：大字粗体） */}
-      <span className="relative mt-1 block text-[14px] font-bold leading-snug text-black/90">{title}</span>
+      <span className="relative mt-1 block text-[14px] font-bold leading-snug text-black/90 dark:text-zinc-100">{title}</span>
 
       {/* 协议书正文（第三十一轮：纯白纸面无描边，居中标题 + 装饰线 + 前言 + 编号条款） */}
-      <span className="relative mt-1.5 block overflow-hidden rounded-[10px] bg-[#fffdfa] px-3 pb-2.5 pt-2.5">
+      <span className="relative mt-1.5 block overflow-hidden rounded-[10px] bg-[#fffdfa] px-3 pb-2.5 pt-2.5 dark:bg-zinc-900/60">
         {/* 已签署红章（盖章叠在标题右上角） */}
         {signed && (
           <span aria-hidden="true" className="absolute right-2.5 top-2.5 rotate-[12deg] rounded-[4px] border-[1.5px] border-[#c2402f]/55 px-1.5 py-[3px] text-[9.5px] font-bold leading-none text-[#c2402f]/85">
@@ -134,42 +134,42 @@ export default function CouplePactBubble({ data, mine, testidPrefix = 'wx' }: Co
 
         {/* 协议名（居中加粗 + 两侧短渐变线装饰；自定义协议名照实显示） */}
         <span className="flex items-center justify-center gap-2" data-testid={`${testidPrefix}-pact-card-body`}>
-          <span aria-hidden="true" className="h-px w-5 shrink-0 bg-gradient-to-r from-transparent to-black/25" />
-          <span className="text-center text-[13.5px] font-black tracking-wider text-black/90">{data.title || '恋爱协议书'}</span>
-          <span aria-hidden="true" className="h-px w-5 shrink-0 bg-gradient-to-l from-transparent to-black/25" />
+          <span aria-hidden="true" className="h-px w-5 shrink-0 bg-gradient-to-r from-transparent to-black/25 dark:to-white/25" />
+          <span className="text-center text-[13.5px] font-black tracking-wider text-black/90 dark:text-zinc-100">{data.title || '恋爱协议书'}</span>
+          <span aria-hidden="true" className="h-px w-5 shrink-0 bg-gradient-to-l from-transparent to-black/25 dark:to-white/25" />
         </span>
-        <span aria-hidden="true" className="mt-1.5 block h-[1.5px] w-full rounded-full bg-gradient-to-r from-transparent via-black/30 to-transparent" />
+        <span aria-hidden="true" className="mt-1.5 block h-[1.5px] w-full rounded-full bg-gradient-to-r from-transparent via-black/30 to-transparent dark:via-white/30" />
 
         {/* 前言（为维护双方的感情与信任…共同遵守：；空前言跳过） */}
         {data.preamble && data.preamble.trim() && (
-          <span className="mt-1.5 block text-justify text-[10px] leading-[1.65] text-black/55 line-clamp-3">{data.preamble.trim()}</span>
+          <span className="mt-1.5 block text-justify text-[10px] leading-[1.65] text-black/55 line-clamp-3 dark:text-zinc-400">{data.preamble.trim()}</span>
         )}
 
         {/* 虚线分隔 + 编号条款（1. 2. 3. …竖排列表；最多 5 条，多出折叠；编号粉色点缀） */}
         {shown.length > 0 && (
           <>
-            <span aria-hidden="true" className="my-1.5 block border-t border-dashed border-black/10" />
+            <span aria-hidden="true" className="my-1.5 block border-t border-dashed border-black/10 dark:border-white/10" />
             <span className="block space-y-[3.5px]">
               {shown.map((c, i) => (
-                <span key={i} className="flex items-start gap-1.5 text-[10px] leading-[1.55] text-black/75">
+                <span key={i} className="flex items-start gap-1.5 text-[10px] leading-[1.55] text-black/75 dark:text-zinc-300">
                   <span className="shrink-0 font-semibold leading-[1.55] text-[#f2536a]/75">{i + 1}.</span>
                   <span className="min-w-0 flex-1 line-clamp-2">{c.trim()}</span>
                 </span>
               ))}
             </span>
-            {extra > 0 && <span className="mt-1 block text-[9px] text-black/35">…还有 {extra} 条，点开查看全部</span>}
+            {extra > 0 && <span className="mt-1 block text-[9px] text-black/35 dark:text-zinc-500">…还有 {extra} 条，点开查看全部</span>}
           </>
         )}
         {shown.length === 0 && (
-          <span className="mt-1.5 block text-center text-[10px] text-black/45">甜蜜约定 · 一起遵守的小条款</span>
+          <span className="mt-1.5 block text-center text-[10px] text-black/45 dark:text-zinc-500">甜蜜约定 · 一起遵守的小条款</span>
         )}
 
         {/* 状态附注行（TA 已先签 / 婉拒理由） */}
         {canSign && data.taSigned && (
-          <span className="mt-1.5 block text-center text-[9.5px] text-black/40">{data.fromName}已签名，就等你啦</span>
+          <span className="mt-1.5 block text-center text-[9.5px] text-black/40 dark:text-zinc-500">{data.fromName}已签名，就等你啦</span>
         )}
         {declined && (
-          <span className="mt-1.5 block text-center text-[9.5px] text-black/40">
+          <span className="mt-1.5 block text-center text-[9.5px] text-black/40 dark:text-zinc-500">
             {declinedByMe ? '你已经婉拒，TA 已经知道了' : data.reason ? `TA 想了想：${data.reason}` : '可以再沟通，或换个小约定'}
           </span>
         )}

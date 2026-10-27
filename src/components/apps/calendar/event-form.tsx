@@ -12,6 +12,8 @@ import { useState } from 'react';
 import { Check, ChevronDown, ChevronRight, MoreVertical } from 'lucide-react';
 import {
   ACCENT,
+  ACCENT_SOFT,
+  FILL_MED,
   MI_BLUE,
   TEXT,
   TEXT_2,
@@ -24,8 +26,8 @@ import {
 } from './shared';
 import { CardDivider } from './widgets';
 
-/** 表单浅灰底 */
-const FORM_BG = '#F5F5F5';
+/** 表单浅灰底（Task 31-a 深色适配：变量注入 dark 值，回退 = 原浅色） */
+const FORM_BG = 'var(--cal-form-bg, #F5F5F5)';
 
 /** 分类胶囊（点击映射到 EVENT_COLORS 的 key） */
 const CATEGORIES: { label: string; hex: string; colorKey: string }[] = [
@@ -41,9 +43,9 @@ function cnDate(key: string): string {
   return `${y}年${m + 1}月${d}日`;
 }
 
-/** 白色圆角卡（16px） */
+/** 白色圆角卡（16px；深色 → zinc-800） */
 function FormCard({ children }: { children: React.ReactNode }) {
-  return <div className="overflow-hidden rounded-[16px] bg-white">{children}</div>;
+  return <div className="overflow-hidden rounded-[16px] bg-white dark:bg-zinc-800">{children}</div>;
 }
 
 /** 行式设置：左标签，右侧灰色值 + 箭头 */
@@ -157,7 +159,7 @@ export function EventForm({
       {error && (
         <div
           className="mx-4 mb-1 rounded-lg px-3 py-2 text-[12px]"
-          style={{ backgroundColor: '#FBEAE7', color: ACCENT }}
+          style={{ backgroundColor: ACCENT_SOFT, color: ACCENT }}
         >
           {error}
         </div>
@@ -377,7 +379,7 @@ function SwitchRed({ checked, onChange }: { checked: boolean; onChange: (v: bool
       data-testid="cal-form-allday"
       onClick={() => onChange(!checked)}
       className="relative h-[30px] w-[50px] shrink-0 rounded-full transition-colors duration-200"
-      style={{ backgroundColor: checked ? ACCENT : 'rgba(41,36,31,0.14)' }}
+      style={{ backgroundColor: checked ? ACCENT : FILL_MED }}
     >
       <span
         className="absolute top-[2px] h-[26px] w-[26px] rounded-full bg-white shadow transition-all duration-200"

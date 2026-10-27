@@ -79,21 +79,21 @@ export default function ShopDrawer({
             animate={{ y: 0 }}
             exit={{ y: '100%' }}
             transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-            className="absolute inset-x-0 bottom-0 z-10 flex max-h-[52%] flex-col rounded-t-3xl bg-white/95 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur-xl"
+            className="absolute inset-x-0 bottom-0 z-10 flex max-h-[52%] flex-col rounded-t-3xl bg-white/95 dark:bg-zinc-900/95 shadow-[0_-8px_30px_rgba(0,0,0,0.12)] backdrop-blur-xl"
           >
             <div className="flex items-center justify-between px-4 pb-1 pt-3">
-              <span className="text-[15px] font-semibold text-[#3a3a3e]">家具商店</span>
+              <span className="text-[15px] font-semibold text-[#3a3a3e] dark:text-zinc-100">家具商店</span>
               <div className="flex items-center gap-2">
                 <button
                   onClick={onReset}
-                  className="rounded-full bg-[#f6eded] px-3 py-1 text-[11px] font-medium text-[#c26a6a] transition active:scale-95"
+                  className="rounded-full bg-[#f6eded] dark:bg-[#c26a6a]/20 px-3 py-1 text-[11px] font-medium text-[#c26a6a] transition active:scale-95"
                 >
                   重置
                 </button>
                 <button
                   onClick={onClose}
                   aria-label="关闭商店"
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] text-[#8a8a90] transition active:scale-95"
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0eff1] dark:bg-zinc-800 text-[#8a8a90] dark:text-zinc-400 transition active:scale-95"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -107,7 +107,7 @@ export default function ShopDrawer({
                 className={
                   shopTab === 'win'
                     ? 'shrink-0 rounded-full bg-[#8fbfa8] px-3 py-1 text-[12px] font-medium text-white'
-                    : 'shrink-0 rounded-full bg-[#f1efe9] px-3 py-1 text-[12px] text-[#8a8a86] transition active:scale-95'
+                    : 'shrink-0 rounded-full bg-[#f1efe9] dark:bg-zinc-800 px-3 py-1 text-[12px] text-[#8a8a86] dark:text-zinc-400 transition active:scale-95'
                 }
               >
                 窗户
@@ -119,7 +119,7 @@ export default function ShopDrawer({
                   className={
                     shopTab === t.key
                       ? 'shrink-0 rounded-full bg-[#f4b3c2] px-3 py-1 text-[12px] font-medium text-white'
-                      : 'shrink-0 rounded-full bg-[#f1efe9] px-3 py-1 text-[12px] text-[#8a8a86] transition active:scale-95'
+                      : 'shrink-0 rounded-full bg-[#f1efe9] dark:bg-zinc-800 px-3 py-1 text-[12px] text-[#8a8a86] dark:text-zinc-400 transition active:scale-95'
                   }
                 >
                   {t.label}
@@ -135,7 +135,7 @@ export default function ShopDrawer({
                   return (
                     <div
                       key={i}
-                      className="relative flex flex-col items-start gap-1 rounded-2xl bg-[#faf8f3] p-2 text-left shadow-sm ring-1 ring-[#efece2]"
+                      className="relative flex flex-col items-start gap-1 rounded-2xl bg-[#faf8f3] dark:bg-zinc-800/70 p-2 text-left shadow-sm ring-1 ring-[#efece2] dark:ring-white/10"
                     >
                       {here && (
                         <span className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-full bg-[#dff0e2] px-1.5 py-0.5 text-[9px] font-semibold leading-none text-[#3f9a58]">
@@ -155,11 +155,11 @@ export default function ShopDrawer({
                           <line x1="8" y1="20" x2="40" y2="20" stroke={winCol ?? '#f0e7d4'} strokeWidth="2.5" />
                         </svg>
                       </div>
-                      <span className="w-full truncate text-[11.5px] font-medium leading-tight text-[#4a4a4e]">
+                      <span className="w-full truncate text-[11.5px] font-medium leading-tight text-[#4a4a4e] dark:text-zinc-100">
                         {WIN_NAMES[i] ?? `窗户 ${i + 1}`}
                       </span>
                       {here ? (
-                        <span className="w-full rounded-full bg-[#f1efe9] py-1 text-center text-[11px] text-[#a8a8a4]">
+                        <span className="w-full rounded-full bg-[#f1efe9] dark:bg-zinc-800 py-1 text-center text-[11px] text-[#a8a8a4] dark:text-zinc-400">
                           安装中
                         </span>
                       ) : (
@@ -185,7 +185,7 @@ export default function ShopDrawer({
                   return (
                     <div
                       key={s.id}
-                      className="flex flex-col rounded-2xl bg-[#faf8f3] p-2.5 text-left shadow-sm ring-1 ring-[#efece2]"
+                      className="flex flex-col rounded-2xl bg-[#faf8f3] dark:bg-zinc-800/70 p-2.5 text-left shadow-sm ring-1 ring-[#efece2] dark:ring-white/10"
                     >
                       {setThumb ? (
                         <img
@@ -200,15 +200,15 @@ export default function ShopDrawer({
                         </span>
                       )}
                       <div className="mt-1.5 flex items-center justify-between gap-1.5">
-                        <span className="min-w-0 truncate text-[12.5px] font-semibold text-[#3a3a3e]">
+                        <span className="min-w-0 truncate text-[12.5px] font-semibold text-[#3a3a3e] dark:text-zinc-100">
                           {s.name}
                         </span>
-                        <span className="shrink-0 rounded-full bg-[#f1efe9] px-1.5 py-0.5 text-[9.5px] leading-none text-[#8a8a86]">
+                        <span className="shrink-0 rounded-full bg-[#f1efe9] dark:bg-zinc-800 px-1.5 py-0.5 text-[9.5px] leading-none text-[#8a8a86] dark:text-zinc-400">
                           {s.items.length} 件
                         </span>
                       </div>
-                      <p className="mt-1 text-[11px] leading-snug text-[#8a8a86]">{s.desc}</p>
-                      <p className="mt-0.5 text-[10px] text-[#a8a8a4]">整组一步撤销</p>
+                      <p className="mt-1 text-[11px] leading-snug text-[#8a8a86] dark:text-zinc-400">{s.desc}</p>
+                      <p className="mt-0.5 text-[10px] text-[#a8a8a4] dark:text-zinc-500">整组一步撤销</p>
                       <button
                         onClick={() => onPlaceSet(s.id)}
                         className="mt-2 rounded-full bg-[#f4b3c2] py-1.5 text-[12px] font-semibold text-white shadow-sm transition active:scale-95"
@@ -228,7 +228,7 @@ export default function ShopDrawer({
                     <button
                       key={e.kind}
                       onClick={() => onBuy(e.kind)}
-                      className="relative flex flex-col items-start gap-1 rounded-2xl bg-[#faf8f3] p-2 text-left shadow-sm ring-1 ring-[#efece2] transition active:scale-95"
+                      className="relative flex flex-col items-start gap-1 rounded-2xl bg-[#faf8f3] dark:bg-zinc-800/70 p-2 text-left shadow-sm ring-1 ring-[#efece2] dark:ring-white/10 transition active:scale-95"
                     >
                       {owned > 0 && (
                         <span className="absolute right-1.5 top-1.5 rounded-full bg-[#f4b3c2] px-1.5 py-0.5 text-[9px] font-semibold leading-none text-white shadow-sm">
@@ -248,7 +248,7 @@ export default function ShopDrawer({
                           style={{ background: `linear-gradient(135deg, ${catColor(e.cat)}, ${shade(e.cat)})` }}
                         />
                       )}
-                      <span className="w-full truncate text-[11.5px] font-medium leading-tight text-[#4a4a4e]">
+                      <span className="w-full truncate text-[11.5px] font-medium leading-tight text-[#4a4a4e] dark:text-zinc-100">
                         {e.name}
                       </span>
                     </button>

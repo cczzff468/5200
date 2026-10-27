@@ -907,8 +907,8 @@ export function tbStatusText(o: TbOrder): string {
   }
 }
 
-/** 确认收货 */
-export function tbConfirmReceive(uid: string, id: string): boolean {
+/** 确认收货（fromAi=true 时不再触发跨 App 联动——AI 帮取件场景自己会在聊天里报喜） */
+export function tbConfirmReceive(uid: string, id: string, opts?: { fromAi?: boolean }): boolean {
   const o = tbOrderById(uid, id);
   if (!o || o.status !== 'shipped') return false;
   const list = tbLoadOrders(uid);
@@ -919,6 +919,13 @@ export function tbConfirmReceive(uid: string, id: string): boolean {
   // 票务单：确认收货 = 扫码入场核销（写 enteredAt，票详情/分享卡区分「已入场」与散场自动完成）
   if (hit.ticket && !hit.ticket.enteredAt) hit.ticket.enteredAt = hit.completedAt;
   tbSaveOrders(uid, list);
+  // 第十六轮：跨 App 联动——快递签收 → 恋人 AI 主动到微信/QQ 聊天里聊起
+  //（动态 import 防环，与 tbCancelReceive/tbCancelOrder 的 tb-share-proxy 模式一致；fireProactiveNudge 幂等键含订单号）
+  if (!opts?.fromAi) {
+    void import('./cross-app-nudge')
+      .then((m) => m.tbOrderArrivedNudge(hit))
+      .catch(() => undefined);
+  }
   return true;
 }
 
