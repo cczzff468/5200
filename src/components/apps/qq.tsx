@@ -237,6 +237,7 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, PostMoreMenu, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage } from './bubble-style-settings';
+import { BubbleTail } from './bubble-tail';
 import { bubbleVisual } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
@@ -7170,6 +7171,8 @@ function ChatPage({
                       voice={m.voice}
                       side={m.role}
                       theme="qq"
+                      bubbleClassName={bvis.override ? bvis.className : undefined}
+                      decorated={bvis.override}
                       style={bvis.override ? bvis.style : m.role === 'me' ? { backgroundColor: '#0099FF' } : undefined}
                     />
                   </div>
@@ -7177,7 +7180,7 @@ function ChatPage({
                   <div className={`flex min-w-0 max-w-[calc(100%-96px)] flex-col ${mine ? 'items-end' : 'items-start'}`}>
                     <div
                       {...bubblePress}
-                      className={`w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[10px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
+                      className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[10px] px-3.5 py-[9px] text-[16px] leading-[1.5] ${
                         bvis.override
                           ? bvis.className
                           : mine
@@ -7189,6 +7192,11 @@ function ChatPage({
                       }`}
                       style={bvis.override ? bvis.style : mine ? { backgroundColor: '#0099FF' } : undefined}
                     >
+                      {/* 气泡小尾巴（第十八轮）：装扮 solid/七彩 = 参考图同款弯钩尾巴（QQ 原生无尾巴）；
+                          毛玻璃/液态胶囊无尾巴 */}
+                      {bvis.tail === 'hook' && (
+                        <BubbleTail side={mine ? 'mine' : 'theirs'} color={bvis.tailColor} top={4} />
+                      )}
                       {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方） */}
                       {m.quote && (() => {
                         const qTime = m.quote.time ?? (m.quote.id ? msgs.find((x) => x.id === m.quote?.id)?.time : undefined);

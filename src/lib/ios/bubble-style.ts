@@ -1,48 +1,71 @@
 /**
- * 聊天气泡装扮系统（第十七轮）——核心库
+ * 聊天气泡装扮系统（第十七轮建立 · 第十八轮重构）——核心库
  * ---------------------------------------------------------------------------
- * 四种内置样式：
+ * 四种内置样式（样式对两侧同时生效，不再区分 TA/我）：
  *  - default  纯色气泡（无自定义色 = 跟随 App 原生配色；微信我方绿 / QQ 我方蓝）
- *  - rainbow  七彩气泡：每条消息按序号在 红橙黄绿青蓝紫 间循环取色
- *  - frosted  毛玻璃：半透明底 + backdrop-filter 高斯模糊 + 细白描边
- *  - glass    玻璃：渐变透明底 + 模糊/提饱和 + 内高光反光条
+ *             自定义色后：大圆角矩形 + 左上/右上弯钩小尾巴（参考图同款）
+ *  - rainbow  七彩气泡：每条消息按序号在参考图 9 色间循环取色
+ *             （亮黄→青柠→杏色→青色→粉色→薰衣草→灰褐→琥珀→珊瑚）
+ *  - frosted  毛玻璃：胶囊形（椭圆）无尾巴 + backdrop-filter 高斯模糊 + 细白描边
+ *  - liquid   液态气泡：胶囊形（椭圆）无尾巴 + 流动高光扫过 + 折射边缘（.bub-liquid）
  *
- * 双端独立：mine（我的气泡）/ theirs（TA的气泡）各自持有 { kind, color }，
- * 选色只应用到当前编辑侧；两 App（微信/QQ）共用同一套装扮（装扮随人走）。
+ * 微信 / QQ 两 App 装扮完全隔离（wx / qq 各持 { kind, mineColor, theirsColor }），
+ * 在微信里选的样式不影响 QQ，反之亦然。
+ * 自定义颜色区分「我的 / TA的」两侧独立配色；样式(kind)不分侧。
  *
  * 持久化：zustand useSettings → IndexedDB settings.bubbleStyle / settings.bubbleSchemes。
  * 渲染：bubbleVisual() 输出 override/className/style/tail，聊天页按返回值
- * 覆盖原生背景与文字色（全部走内联样式/CSS 变量，无全局 CSS 污染）。
+ * 覆盖原生背景与文字色（内联样式 + .bub-liquid 一个全局类，无其他 CSS 污染）。
+ *
+ * 旧档迁移：第十七轮格式 { mine:{kind,color}, theirs:{kind,color} }（两 App 共享）
+ * → 自动转成新格式：两侧 kind 取旧 mine.kind，两 App 各得 { kind, mineColor, theirsColor }。
  */
 import type { CSSProperties } from 'react';
 
-export type BubbleStyleKind = 'default' | 'rainbow' | 'frosted' | 'glass';
+export type BubbleStyleKind = 'default' | 'rainbow' | 'frosted' | 'liquid';
 
-export interface BubbleSideStyle {
+/** 单个 App 的装扮：样式（不分侧） + 两侧独立自定义色 */
+export interface BubbleAppStyle {
   kind: BubbleStyleKind;
-  /** 自定义基色（#RRGGBB）；undefined = 跟随默认（default=App 原生 / frosted=白玻璃 / glass=白玻璃） */
-  color?: string;
+  /** 我的气泡自定义基色（#RRGGBB）；undefined = 跟随默认 */
+  mineColor?: string;
+  /** TA 的气泡自定义基色（#RRGGBB）；undefined = 跟随默认 */
+  theirsColor?: string;
 }
 
+/** 全量装扮配置：微信 / QQ 完全隔离 */
 export interface BubbleStyleConfig {
-  /** 我的气泡（右侧） */
-  mine: BubbleSideStyle;
-  /** TA 的气泡（左侧） */
-  theirs: BubbleSideStyle;
+  wx: BubbleAppStyle;
+  qq: BubbleAppStyle;
 }
 
-/** 收藏夹里的一套已命名方案 */
+/** 收藏夹里的一套已命名方案（归属某个 App，应用时只覆盖该 App） */
 export interface BubbleScheme {
   id: string;
   name: string;
-  config: BubbleStyleConfig;
+  /** 方案归属 App（保存时所在的应用） */
+  app: 'wx' | 'qq';
+  style: BubbleAppStyle;
   createdAt: number;
 }
 
-/** 七彩循环色板：红橙黄绿青蓝紫（iOS 系统色域，饱和度统一） */
-export const RAINBOW_COLORS = ['#FF3B30', '#FF9500', '#FFCC00', '#34C759', '#00C7BE', '#3D9BFF', '#AF52DE'] as const;
+/**
+ * 七彩循环色板 —— 用户参考图逐像素提取的 9 色
+ * （气泡浏览数字 01→10 跳过 08 的顺序：亮黄/青柠/杏色/青色/粉色/薰衣草/灰褐/琥珀/珊瑚）
+ */
+export const RAINBOW_COLORS = [
+  '#FFEB00', // 01 亮黄
+  '#B9F000', // 02 青柠
+  '#FEAE8B', // 03 杏色
+  '#46EAEB', // 04 青色
+  '#FE91A6', // 05 粉色
+  '#E19EFF', // 06 薰衣草紫
+  '#BBB4AC', // 07 灰褐
+  '#FFCE0F', // 09 琥珀
+  '#FB9F94', // 10 珊瑚
+] as const;
 
-export const BUBBLE_KINDS: readonly BubbleStyleKind[] = ['default', 'rainbow', 'frosted', 'glass'];
+export const BUBBLE_KINDS: readonly BubbleStyleKind[] = ['default', 'rainbow', 'frosted', 'liquid'];
 
 /** 各 App 原生默认气泡底色（kind=default 且未自定义色时还原成它） */
 export const NATIVE_BUBBLE: Record<'wx' | 'qq', { mine: string; theirs: string }> = {
@@ -51,16 +74,24 @@ export const NATIVE_BUBBLE: Record<'wx' | 'qq', { mine: string; theirs: string }
 };
 
 export const DEFAULT_BUBBLE_STYLE: BubbleStyleConfig = {
-  mine: { kind: 'default' },
-  theirs: { kind: 'default' },
+  wx: { kind: 'default' },
+  qq: { kind: 'default' },
 };
 
-/** 预设色板（全色彩盘快捷区：24 色常用色） */
+/**
+ * 弯钩小尾巴 SVG path（viewBox 0 0 11 14）——参考图同款「水滴弯钩」：
+ * 尖端在左上指向头像方向，外缘凸弧向下掠入气泡本体，内缘与气泡圆角之间留出月牙缺口；
+ * 右缘直线藏在气泡身下（宿主定位时横向重叠 2px 保证无缝）。
+ */
+export const BUBBLE_TAIL_PATH =
+  'M11 3.2 C7.4 1.4 3.8 0.5 2 1.7 C0.6 2.6 0.6 4.1 1.8 4.8 C4.3 6.5 7.3 9.7 11 13.4 Z';
+
+/** 预设色板（全色彩盘快捷区：参考图 9 色打头 + 常用色补充，共 24 色） */
 export const PRESET_SWATCHES: readonly string[] = [
-  '#FF3B30', '#FF6B4A', '#FF9500', '#FFCC00', '#FFE600', '#D4FF3F',
-  '#34C759', '#00C75D', '#00C7BE', '#3DD5F3', '#3D9BFF', '#0A5CFF',
-  '#5856D6', '#AF52DE', '#C86DD7', '#FF2D55', '#FF6FA5', '#FFB3C1',
-  '#F5A623', '#8B5A2B', '#7ADCB0', '#95A5A6', '#4A4A4A', '#111111',
+  '#FFEB00', '#B9F000', '#FEAE8B', '#46EAEB', '#FE91A6', '#E19EFF',
+  '#BBB4AC', '#FFCE0F', '#FB9F94', '#FF3B30', '#FF9500', '#34C759',
+  '#00C75D', '#00C7BE', '#3DD5F3', '#3D9BFF', '#0A5CFF', '#5856D6',
+  '#AF52DE', '#C86DD7', '#FF2D55', '#FF6FA5', '#FFB3C1', '#4A4A4A',
 ];
 
 // ---------------- 颜色工具（hex / rgb / hsl / yiq 互转） ----------------
@@ -146,39 +177,86 @@ export function yiqTextOn(bg: string): '#000000' | '#FFFFFF' {
 
 // ---------------- 存储读回校验（store.load 用） ----------------
 
-function normalizeSide(v: unknown): BubbleSideStyle {
-  const o = (v ?? {}) as Partial<BubbleSideStyle>;
-  const kind = BUBBLE_KINDS.includes(o.kind as BubbleStyleKind) ? (o.kind as BubbleStyleKind) : 'default';
-  return { kind, color: isHexColor(o.color) ? (o.color as string).toUpperCase() : undefined };
+function normKind(v: unknown): BubbleStyleKind {
+  if (v === 'glass') return 'liquid'; // 第十七轮「玻璃」→ 第十八轮「液态」
+  return BUBBLE_KINDS.includes(v as BubbleStyleKind) ? (v as BubbleStyleKind) : 'default';
 }
 
-/** 任何来源（IndexedDB 旧档/脏数据）→ 合法配置；不合法回默认 */
+function normColor(v: unknown): string | undefined {
+  return isHexColor(v) ? (v as string).toUpperCase() : undefined;
+}
+
+/** 单 App 装扮 → 合法对象；不合法回默认 */
+function normalizeAppStyle(v: unknown): BubbleAppStyle {
+  const o = (v ?? {}) as Partial<BubbleAppStyle>;
+  return {
+    kind: normKind(o.kind),
+    mineColor: normColor(o.mineColor),
+    theirsColor: normColor(o.theirsColor),
+  };
+}
+
+/** 任何来源（IndexedDB 旧档/脏数据）→ 合法配置；不合法回默认。含第十七轮旧档自动迁移。 */
 export function normalizeBubbleStyle(v: unknown): BubbleStyleConfig {
-  if (!v || typeof v !== 'object') return { mine: { kind: 'default' }, theirs: { kind: 'default' } };
-  const o = v as Partial<BubbleStyleConfig>;
-  if (!o.mine || !o.theirs) return { mine: { kind: 'default' }, theirs: { kind: 'default' } };
-  return { mine: normalizeSide(o.mine), theirs: normalizeSide(o.theirs) };
+  if (!v || typeof v !== 'object') return { wx: { kind: 'default' }, qq: { kind: 'default' } };
+  const o = v as Record<string, unknown>;
+  // 新格式：{ wx, qq }
+  if (o.wx || o.qq) {
+    return { wx: normalizeAppStyle(o.wx), qq: normalizeAppStyle(o.qq) };
+  }
+  // 第十七轮旧格式：{ mine: {kind,color}, theirs: {kind,color} }（两 App 共享）
+  // → 迁移：kind 取旧 mine.kind（装扮主选择），两侧色各自保留，两 App 同步获得
+  const oldMine = (o.mine ?? {}) as { kind?: unknown; color?: unknown };
+  const oldTheirs = (o.theirs ?? {}) as { kind?: unknown; color?: unknown };
+  const migrated: BubbleAppStyle = {
+    kind: normKind(oldMine.kind ?? oldTheirs.kind),
+    mineColor: normColor(oldMine.color),
+    theirsColor: normColor(oldTheirs.color),
+  };
+  return { wx: { ...migrated }, qq: { ...migrated } };
 }
 
-/** 收藏夹列表读回校验：过滤非法项 */
+/** 收藏夹列表读回校验：过滤非法项；旧格式方案（config.mine/theirs）迁移为 wx 方案 */
 export function normalizeBubbleSchemes(v: unknown): BubbleScheme[] {
   if (!Array.isArray(v)) return [];
-  return v.filter(
-    (s): s is BubbleScheme =>
-      !!s &&
-      typeof s === 'object' &&
-      typeof (s as BubbleScheme).id === 'string' &&
-      typeof (s as BubbleScheme).name === 'string' &&
-      !!(s as BubbleScheme).config?.mine &&
-      !!(s as BubbleScheme).config?.theirs &&
-      typeof (s as BubbleScheme).createdAt === 'number',
-  );
+  const out: BubbleScheme[] = [];
+  for (const s of v) {
+    if (!s || typeof s !== 'object') continue;
+    const r = s as Record<string, unknown>;
+    if (typeof r.id !== 'string' || typeof r.name !== 'string' || typeof r.createdAt !== 'number') continue;
+    if (r.style && typeof r.style === 'object') {
+      // 新格式
+      out.push({
+        id: r.id,
+        name: r.name,
+        app: r.app === 'qq' ? 'qq' : 'wx',
+        style: normalizeAppStyle(r.style),
+        createdAt: r.createdAt,
+      });
+    } else if (r.config && typeof r.config === 'object') {
+      // 第十七轮旧格式 { config: { mine, theirs } } → 迁移为 wx 方案
+      const c = r.config as { mine?: { kind?: unknown; color?: unknown }; theirs?: { kind?: unknown; color?: unknown } };
+      out.push({
+        id: r.id,
+        name: r.name,
+        app: 'wx',
+        style: {
+          kind: normKind(c.mine?.kind ?? c.theirs?.kind),
+          mineColor: normColor(c.mine?.color),
+          theirsColor: normColor(c.theirs?.color),
+        },
+        createdAt: r.createdAt,
+      });
+    }
+  }
+  return out;
 }
 
-/** 是否仍是原生默认（没有任何装扮）——聊天页可借此完全零开销直通 */
-export function isNativeBubbleStyle(cfg: BubbleStyleConfig | undefined): boolean {
+/** 是否仍是原生默认（该 App 没有任何装扮）——聊天页可借此完全零开销直通 */
+export function isNativeBubbleStyle(cfg: BubbleStyleConfig | undefined, app: 'wx' | 'qq'): boolean {
   if (!cfg) return true;
-  return cfg.mine?.kind === 'default' && !cfg.mine?.color && cfg.theirs?.kind === 'default' && !cfg.theirs?.color;
+  const a = cfg[app];
+  return a?.kind === 'default' && !a?.mineColor && !a?.theirsColor;
 }
 
 // ---------------- 气泡视觉计算（聊天页渲染核心） ----------------
@@ -186,23 +264,29 @@ export function isNativeBubbleStyle(cfg: BubbleStyleConfig | undefined): boolean
 export interface BubbleVisual {
   /** true = 需覆盖原生背景/文字（调用方停用原生 bg 类，改用下方 style/className） */
   override: boolean;
-  /** override 时的附加类（当前仅文字色 text-black/text-white） */
+  /** override 时的附加类（液态气泡 = 'bub-liquid'；其余为空字符串） */
   className: string;
-  /** override 时的内联样式（背景/模糊/描边/高光） */
+  /** override 时的内联样式（背景/圆角/文字色/模糊/描边/高光） */
   style: CSSProperties;
-  /** 微信小三角的样式（override 时；QQ 无三角可忽略） */
-  tail: CSSProperties;
+  /**
+   * 小尾巴指令：
+   *  - 'native' 保持 App 原生尾巴（微信小方块三角 / QQ 无尾巴）
+   *  - 'hook'   渲染参考图同款弯钩尾巴（fill = tailColor；我方自动镜像）
+   *  - 'none'   不渲染尾巴（毛玻璃/液态胶囊）
+   */
+  tail: 'native' | 'hook' | 'none';
+  /** tail='hook' 时的填充色 */
+  tailColor: string;
 }
 
-const NO_VISUAL: BubbleVisual = { override: false, className: '', style: {}, tail: {} };
+const NO_VISUAL: BubbleVisual = { override: false, className: '', style: {}, tail: 'native', tailColor: '' };
 
 /**
  * 计算某条消息气泡的最终视觉。
- * @param side      mine=我的消息（右侧）/ theirs=TA 的消息（左侧）
- * @param cfg       全局装扮配置
- * @param msgIndex  消息在会话中的序号（七彩循环的递增索引：渲染时传 map 下标即可，
- *                  每发一条新消息序号 +1 → 颜色自动切到下一色）
- * @param app       宿主 App（default 无自定义色时还原各 App 原生配色）
+ * @param side     mine=我的消息（右侧）/ theirs=TA 的消息（左侧）
+ * @param cfg      全量装扮配置（微信/QQ 隔离，取 cfg[app]）
+ * @param msgIndex 消息在会话中的序号（七彩循环的递增索引：渲染时传 map 下标即可）
+ * @param app      宿主 App（default 无自定义色时还原各 App 原生配色）
  */
 export function bubbleVisual(
   side: 'mine' | 'theirs',
@@ -210,78 +294,72 @@ export function bubbleVisual(
   msgIndex: number,
   app: 'wx' | 'qq',
 ): BubbleVisual {
-  if (!cfg) return NO_VISUAL;
-  const s = cfg[side];
-  if (!s) return NO_VISUAL;
-  const kind: BubbleStyleKind = BUBBLE_KINDS.includes(s.kind) ? s.kind : 'default';
-  const color = isHexColor(s.color) ? (s.color as string).toUpperCase() : undefined;
+  const a = cfg?.[app];
+  if (!a) return NO_VISUAL;
+  const kind = normKind(a.kind);
+  const color = normColor(side === 'mine' ? a.mineColor : a.theirsColor);
 
   // 原生默认：零覆盖直通（微信绿/白、QQ 蓝/白，深浅色模式类名由聊天页原样保留）
   if (kind === 'default' && !color) return NO_VISUAL;
 
-  const textClass = (hex: string) => (yiqTextOn(hex) === '#FFFFFF' ? 'text-white' : 'text-black');
-
   if (kind === 'rainbow') {
+    // 七彩：参考图 9 色按消息序号循环 + 大圆角 + 弯钩尾巴
     const idx = ((msgIndex % RAINBOW_COLORS.length) + RAINBOW_COLORS.length) % RAINBOW_COLORS.length;
     const c = RAINBOW_COLORS[idx];
     return {
       override: true,
-      className: textClass(c),
-      style: { backgroundColor: c },
-      tail: { backgroundColor: c },
+      className: '',
+      style: { backgroundColor: c, borderRadius: '14px', color: yiqTextOn(c) },
+      tail: 'hook',
+      tailColor: c,
     };
   }
 
   if (kind === 'frosted') {
-    // 毛玻璃：半透明底 + 高斯模糊 + 细白描边（无自定义色 = 白玻璃，黑白字均可读）
+    // 毛玻璃：胶囊形（椭圆）无尾巴 + 半透明底 + 高斯模糊 + 细白描边
     const base = color ?? '#FFFFFF';
     return {
       override: true,
-      className: color ? textClass(color) : 'text-black',
+      className: '',
       style: {
-        backgroundColor: withAlpha(base, color ? 0.52 : 0.55),
+        borderRadius: '999px',
+        backgroundColor: withAlpha(base, color ? 0.5 : 0.55),
         backdropFilter: 'blur(18px)',
         WebkitBackdropFilter: 'blur(18px)',
-        border: '1px solid rgba(255, 255, 255, 0.45)',
-        boxShadow: '0 4px 16px rgba(31, 35, 41, 0.10)',
+        border: '1px solid rgba(255, 255, 255, 0.5)',
+        boxShadow: '0 4px 16px rgba(31, 35, 41, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.4)',
+        color: color ? yiqTextOn(color) : '#111111',
       },
-      tail: {
-        backgroundColor: withAlpha(base, color ? 0.52 : 0.55),
-        backdropFilter: 'blur(18px)',
-        WebkitBackdropFilter: 'blur(18px)',
-      },
+      tail: 'none',
+      tailColor: '',
     };
   }
 
-  if (kind === 'glass') {
-    // 玻璃：斜向渐变透明底 + 模糊提饱和 + 顶部内高光反光条（清爽反光质感）
-    const base = color ?? '#FFFFFF';
-    const a = color ? [0.72, 0.38, 0.5, 0.66] : [0.62, 0.3, 0.44, 0.55];
+  if (kind === 'liquid') {
+    // 液态气泡：胶囊形（椭圆）无尾巴 + 流动高光 + 折射边缘（质感在 .bub-liquid 全局类）
+    const base = color;
     return {
       override: true,
-      className: color ? textClass(color) : 'text-black',
-      style: {
-        background: `linear-gradient(150deg, ${withAlpha(base, a[0])} 0%, ${withAlpha(base, a[1])} 42%, ${withAlpha(base, a[2])} 78%, ${withAlpha(base, a[3])} 100%)`,
-        backdropFilter: 'blur(14px) saturate(160%)',
-        WebkitBackdropFilter: 'blur(14px) saturate(160%)',
-        border: '1px solid rgba(255, 255, 255, 0.6)',
-        boxShadow:
-          'inset 0 1px 0 rgba(255, 255, 255, 0.75), inset 0 -1px 0 rgba(255, 255, 255, 0.28), 0 6px 18px rgba(31, 35, 41, 0.14)',
-      },
-      tail: {
-        backgroundColor: withAlpha(base, color ? 0.52 : 0.5),
-        backdropFilter: 'blur(14px)',
-        WebkitBackdropFilter: 'blur(14px)',
-      },
+      className: 'bub-liquid',
+      style: base
+        ? {
+            borderRadius: '999px',
+            background: `linear-gradient(165deg, ${withAlpha(base, 0.6)} 0%, ${withAlpha(base, 0.26)} 45%, ${withAlpha(base, 0.38)} 75%, ${withAlpha(base, 0.55)} 100%)`,
+            color: yiqTextOn(base),
+          }
+        : { borderRadius: '999px', color: '#111111' },
+      tail: 'none',
+      tailColor: '',
     };
   }
 
-  // default + 自定义色：纯色气泡
+  // default + 自定义色：参考图同款大圆角纯色气泡 + 弯钩尾巴
   return {
     override: true,
-    className: textClass(color as string),
-    style: { backgroundColor: color },
-    tail: { backgroundColor: color },
+    className: '',
+    style: { backgroundColor: color, borderRadius: '14px', color: yiqTextOn(color as string) },
+    tail: 'hook',
+    tailColor: color as string,
   };
 }
 
@@ -290,5 +368,5 @@ export const BUBBLE_KIND_LABEL: Record<BubbleStyleKind, string> = {
   default: '默认',
   rainbow: '七彩',
   frosted: '毛玻璃',
-  glass: '玻璃',
+  liquid: '液态',
 };

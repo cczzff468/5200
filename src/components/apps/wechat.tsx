@@ -228,6 +228,7 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage } from './bubble-style-settings';
+import { BubbleTail } from './bubble-tail';
 import { bubbleVisual } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 // 多账号 v2（Task 40-2a）：per-app 账号 API——accLs 键作用域调用时现算；switchAccountFor 切换只写标记+派发事件（不刷新网页）
@@ -9148,20 +9149,20 @@ function ChatPage({
                     }`}
                     style={bvis.override ? bvis.style : undefined}
                   >
-                    {/* 气泡小三角（微信同款；装扮生效时颜色/滤镜跟随气泡本体） */}
-                    <span
-                      aria-hidden="true"
-                      className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
-                        bvis.override
-                          ? m.role === 'me'
-                            ? '-right-[3px]'
-                            : '-left-[3px]'
-                          : m.role === 'me'
-                          ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]'
-                          : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
-                      }`}
-                      style={bvis.override ? bvis.tail : undefined}
-                    />
+                    {/* 气泡小尾巴：装扮 solid/七彩 = 参考图同款弯钩尾巴；毛玻璃/液态胶囊无尾巴；
+                        原生默认保持微信同款小三角 */}
+                    {bvis.tail === 'hook' ? (
+                      <BubbleTail side={m.role === 'me' ? 'mine' : 'theirs'} color={bvis.tailColor} top={4} />
+                    ) : bvis.tail === 'native' ? (
+                      <span
+                        aria-hidden="true"
+                        className={`absolute top-[11px] h-[8px] w-[8px] rotate-45 ${
+                          m.role === 'me'
+                            ? '-right-[3px] bg-[#95EC69] dark:bg-[#3EB575]'
+                            : '-left-[3px] bg-white dark:bg-[#1E1E1E]'
+                        }`}
+                      />
+                    ) : null}
                     {bubbleContent ? (
                       /* 文字消息：内置表情代码 [微笑] 还原为内联小图（混排小图/纯表情大图，真机同款） */
                       <InlineEmojiText app="wx" text={cleanBubbleText(bubbleContent) || bubbleContent} />
@@ -13291,17 +13292,17 @@ function WxLookPage({ onBack, onOpenDress, onToast }: { onBack: () => void; onOp
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-[16.5px] font-bold text-white">聊天气泡装扮</p>
-              <p className="mt-0.5 text-[12.5px] leading-tight text-white/85">七彩 / 毛玻璃 / 玻璃 · 我的与TA的独立配色</p>
+              <p className="mt-0.5 text-[12.5px] leading-tight text-white/85">七彩 / 毛玻璃 / 液态 · 微信装扮独立</p>
             </div>
             <ChevronRight className="h-5 w-5 shrink-0 text-white/85" aria-hidden="true" />
           </div>
-          {/* 三枚迷你气泡示意 */}
+          {/* 三枚迷你气泡示意（七彩参考图色板） */}
           <div className="relative mt-3 flex items-center gap-1.5">
-            <span className="rounded-full bg-[#FF3B30] px-2.5 py-[3px] text-[10.5px] font-semibold text-white">早</span>
-            <span className="rounded-full bg-[#FFCC00] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">上</span>
-            <span className="rounded-full bg-[#34C759] px-2.5 py-[3px] text-[10.5px] font-semibold text-white">好</span>
-            <span className="rounded-full bg-[#3D9BFF] px-2.5 py-[3px] text-[10.5px] font-semibold text-white">呀</span>
-            <span className="rounded-full bg-[#AF52DE] px-2.5 py-[3px] text-[10.5px] font-semibold text-white">~</span>
+            <span className="rounded-full bg-[#FFEB00] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">早</span>
+            <span className="rounded-full bg-[#B9F000] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">上</span>
+            <span className="rounded-full bg-[#46EAEB] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">好</span>
+            <span className="rounded-full bg-[#FE91A6] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">呀</span>
+            <span className="rounded-full bg-[#E19EFF] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">~</span>
             <span className="ml-auto rounded-full bg-white/20 px-2 py-[3px] text-[10.5px] text-white ring-1 ring-white/40 backdrop-blur-md">去装扮</span>
           </div>
         </button>

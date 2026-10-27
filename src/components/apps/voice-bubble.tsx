@@ -185,6 +185,8 @@ export function VoiceMsgBubble({
   voice,
   side,
   theme,
+  bubbleClassName,
+  decorated,
   style,
 }: {
   msgId: string;
@@ -192,6 +194,10 @@ export function VoiceMsgBubble({
   /** 'me' | 'peer'：决定配色 */
   side: 'me' | 'peer';
   theme: VoiceBubbleTheme;
+  /** 装扮附加类（第十八轮：液态气泡 bub-liquid 等由气泡装扮系统透传） */
+  bubbleClassName?: string;
+  /** 气泡装扮已接管配色（播放钮/波形改用 currentColor 适配任意底色） */
+  decorated?: boolean;
   /** QQ/信息 我方气泡的底色等自定义样式（由调用方传 backgroundColor） */
   style?: React.CSSProperties;
 }) {
@@ -206,12 +212,15 @@ export function VoiceMsgBubble({
   const width = isWx ? wxBubbleWidth(voice.duration) : bubbleWidth(voice.duration);
   /** 波形条数随宽度伸缩（仅 QQ/信息端有波形） */
   const bars = isWx ? 0 : barCountFor(bubbleWidth(voice.duration), label);
-  /** 播放钮配色：信息对方品牌蓝；QQ 对方蓝、我方半透明白（微信端不渲染播放钮） */
-  const circleCls = mine
-    ? 'bg-white/25 text-white'
-    : theme === 'im'
-      ? 'bg-[#007AFF] text-white'
-      : 'bg-[#0099FF] text-white';
+  /** 播放钮配色：装扮接管时用 currentColor 半透明底适配任意气泡色；
+   *  原生：信息对方品牌蓝；QQ 对方蓝、我方半透明白（微信端不渲染播放钮） */
+  const circleCls = decorated
+    ? 'bg-black/[0.12] text-current'
+    : mine
+      ? 'bg-white/25 text-white'
+      : theme === 'im'
+        ? 'bg-[#007AFF] text-white'
+        : 'bg-[#0099FF] text-white';
 
   /** 圆角：微信 4px（用户指定微圆角）；QQ 12px；信息 18px。微信尾巴由 ::before 伪元素绘制（globals.css） */
   const bubbleCls = isWx
@@ -231,7 +240,7 @@ export function VoiceMsgBubble({
           e.stopPropagation();
           voicePlayer.toggle(msgId, voice.url, voice.localText, { synth: voice.synth, contactId: voice.contactId });
         }}
-        className={`flex select-none items-center transition-transform active:scale-[0.98] ${bubbleCls} ${
+        className={`flex select-none items-center transition-transform active:scale-[0.98] ${bubbleCls ?? ''} ${bubbleClassName ?? ''} ${
           isWx
             ? /* 第八轮反馈：数字聚拢贴图标（真机同款），不再 justify-between 两端撑开 */
               `gap-[8px] ${mine ? 'justify-end' : 'justify-start'}`

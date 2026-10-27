@@ -360,9 +360,10 @@ interface SettingsState {
   islandPersistent: boolean;
   /** 全局字重（400=标准；300/400/500/600，未显式设 font-weight 的文本生效） */
   appFontWeight: number;
-  /** 聊天气泡装扮（第十七轮：mine=我的气泡 / theirs=TA的气泡，两侧独立；持久化 settings.bubbleStyle，微信/QQ 聊天实时跟随） */
+  /** 聊天气泡装扮（第十八轮重构：微信/QQ 两 App 完全隔离，各持 { kind, mineColor, theirsColor }；
+   * 样式不分侧，自定义色区分我的/TA的；持久化 settings.bubbleStyle，聊天实时跟随） */
   bubbleStyle: BubbleStyleConfig;
-  /** 「我的气泡」收藏夹已命名方案（持久化 settings.bubbleSchemes） */
+  /** 「我的气泡」收藏夹已命名方案（归属某个 App，应用时只覆盖该 App；持久化 settings.bubbleSchemes） */
   bubbleSchemes: BubbleScheme[];
   loaded: boolean;
 
@@ -448,7 +449,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   islandPersistent: true,
   iconStyle: 'real',
   goodsImgStyle: 'cartoon',
-  bubbleStyle: { ...DEFAULT_BUBBLE_STYLE, mine: { ...DEFAULT_BUBBLE_STYLE.mine }, theirs: { ...DEFAULT_BUBBLE_STYLE.theirs } },
+  bubbleStyle: { wx: { ...DEFAULT_BUBBLE_STYLE.wx }, qq: { ...DEFAULT_BUBBLE_STYLE.qq } },
   bubbleSchemes: [],
   loaded: false,
 
