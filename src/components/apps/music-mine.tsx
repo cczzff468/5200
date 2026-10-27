@@ -85,33 +85,39 @@ export function cnNum(n: number): string {
 }
 
 /**
- * VIP 徽章（简约版）：纯黑扁平胶囊 + 迷你黑胶圆点（黑盘白环红芯）+「VIP·柒」奶白字繁体数字；
- * SVIP 同款胶囊金字金环橙芯。无渐变无立体阴影，干净不抢眼。level<1 只显示 VIP。
+ * VIP 徽章（第十二轮：唱片直接用用户截图原像素抠底 —— public/music-vip-disc-{vip,svip}.png，
+ * 圆形 alpha 无白边）+ CSS 黑胶囊 + 动态等级文字（其他不变，就数字变）。
+ * - VIP：黑胶唱片（红色唱片标）+ 暖黑胶囊白字「VIP·叁」；
+ * - SVIP：金胶唱片 + 深棕胶囊金字「SVIP·肆」；
+ * 唱片压在胶囊左端上（z 浮于胶囊），尺寸比例按截图实测（VIP 盘 16px / SVIP 盘 19px，胶囊 13.5px）。
+ * level<1 只显示 VIP。
  */
 export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
   const svip = type === 'svip';
+  const disc = svip ? 19 : 16;
   return (
-    <span
-      className={`flex shrink-0 items-center rounded-full py-[3.5px] pl-[6px] pr-[9px] ${
-        svip ? 'bg-[#26221a]' : 'bg-[#1a1a1c]'
-      }`}
-      data-testid="music-mine-vip"
-    >
-      {/* 迷你黑胶圆点：黑盘 + 外环 + 红芯 */}
-      <span
-        className={`relative mr-[4.5px] flex h-[11px] w-[11px] shrink-0 items-center justify-center rounded-full ring-1 ${
-          svip ? 'bg-[#0c0a06] ring-[#c9a86a]/80' : 'bg-[#0b0b0c] ring-white/45'
-        }`}
-      >
-        <span className={`h-[3.5px] w-[3.5px] rounded-full ${svip ? 'bg-[#e2b25f]' : 'bg-[#ec4141]'}`} />
+    <span className="relative flex shrink-0 items-center" data-testid="music-mine-vip">
+      {/* 用户截图原像素唱片（圆形抠底无白边），垂直溢出胶囊，右端压进胶囊 5px */}
+      <span className="relative z-10 -mr-[5px] shrink-0" style={{ width: disc, height: disc }}>
+        <img
+          src={svip ? '/music-vip-disc-svip.png' : '/music-vip-disc-vip.png'}
+          alt=""
+          width={disc}
+          height={disc}
+          draggable={false}
+          className="select-none"
+        />
       </span>
+      {/* 黑胶囊：右侧文字（VIP 白字 / SVIP 金字），高度 13.5px，数字跟随等级动态变化 */}
       <span
-        className={`text-[11px] font-semibold leading-none tracking-[0.01em] ${
-          svip ? 'text-[#e9cb86]' : 'text-[#f4eddc]'
-        }`}
+        className={`flex h-[13.5px] items-center rounded-full pl-[9px] pr-[5px] ${svip ? 'bg-[#362E2B]' : 'bg-[#3D3634]'}`}
       >
-        {svip ? 'SVIP' : 'VIP'}
-        {level >= 1 && <span className="font-semibold">·{cnNum(level)}</span>}
+        <span
+          className={`text-[11px] font-bold leading-none tracking-[0.01em] ${svip ? 'text-[#FBF2DC]' : 'text-[#F8F3F1]'}`}
+        >
+          {svip ? 'SVIP' : 'VIP'}
+          {level >= 1 && <span className="font-bold">·{cnNum(level)}</span>}
+        </span>
       </span>
     </span>
   );

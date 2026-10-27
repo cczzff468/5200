@@ -391,6 +391,7 @@ import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLon
 import { LocalToast, useLocalToast } from './page-toast';
 import { fwdRecordDate, fwdRecordTime, fwdRecordTitle, type FwdMode, type FwdRecord, type FwdSheetTarget } from './forward-sheet';
 import { QqGroupChatPage, QqGroupCreatePage, QqGroupInfoPage, QqGroupAvatar, qqGroupRowId } from './qq-group';
+import { CoupleMark } from './couple-mark';
 import AlbumPage from './album';
 import VisionLogPage from './vision-log';
 import { buildCrossContextBlocks } from '@/lib/ios/cross-app-context';
@@ -6747,6 +6748,8 @@ function ChatPage({
             >
               {streaming || delivering ? '正在输入中…' : peer.name}
             </span>
+            {/* 恋人空间标识（第九/十轮）：开通恋人空间后名字后的徽章+钥匙（用户素材图），解除后即时消失 */}
+            <CoupleMark contactId={peer.id} size={20} testId="qq-chat-couple-mark" />
             {flags.muted === true && (
               <BellOff
                 className="h-4 w-4 shrink-0 text-black/30 dark:text-white/30"
@@ -11445,6 +11448,8 @@ function MessagesPage({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <div className="truncate text-[16px] font-medium leading-snug">{row.name}</div>
+                  {/* 恋人空间标识（第十轮）：会话列表名字后也显示徽章+钥匙，与聊天页同源同显隐 */}
+                  <CoupleMark contactId={row.contact?.id ?? null} size={20} testId={`qq-list-couple-mark-${row.key}`} />
                   {flagsMap[row.key]?.muted === true && (
                     <BellOff className="h-3.5 w-3.5 shrink-0 text-black/30 dark:text-white/30" strokeWidth={2} aria-label="消息免打扰" />
                   )}

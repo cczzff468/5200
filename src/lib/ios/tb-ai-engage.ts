@@ -75,32 +75,10 @@ import type { RichAction } from '@/lib/chat-rich';
 
 export type TbEngageApp = 'wx' | 'qq';
 
-/** 主动参与冷却（同一角色 5 分钟内只主动一次） */
-export const TB_ENGAGE_COOLDOWN_MS = 5 * 60_000;
-/** 全局主动代付冷却（防多单连发打扰） */
-const PROACTIVE_PAY_CD_MS = 3 * 60_000;
 /** 礼物说明的追溯窗口（分享后 2 小时内说「给你买的」都算） */
 const GIFT_WINDOW_MS = 2 * 60 * 60_000;
 
-const engageCdKey = (app: TbEngageApp, charId: string): string => `tb-engage-cd:${app}:${charId}`;
-
-export function tbEngageCoolingDown(app: TbEngageApp, charId: string): boolean {
-  const at = kvGet<number>(engageCdKey(app, charId));
-  return typeof at === 'number' && Date.now() - at < TB_ENGAGE_COOLDOWN_MS;
-}
-
-export function tbMarkEngage(app: TbEngageApp, charId: string): void {
-  kvSet(engageCdKey(app, charId), Date.now());
-}
-
-function globalCoolingDown(key: string, ms: number): boolean {
-  const at = kvGet<number>(key);
-  return typeof at === 'number' && Date.now() - at < ms;
-}
-
-function markGlobal(key: string): void {
-  kvSet(key, Date.now());
-}
+// 第十二轮用户反馈：参与冷却（原 5min/角色 + 3min 全局）整体删除——机主让买/让送多少次都照办，不再有「刚刚才送过，先歇一歇」拦截。
 
 const fmt2 = (n: number): string => {
   const s = n.toFixed(2);
@@ -698,11 +676,11 @@ export function buildTbEngageCtx(
       // [帮你买] 直购与 [送礼物] 都是微信端礼物卡链路：QQ 端不注入教学（执行器会拒，避免 AI 空承诺）
       const buyRule =
         app === 'wx'
-          ? `【帮机主买淘宝商品（你出钱，直接买）】聊到想买什么/缺什么/让你推荐/求你买时，结合你记得的偏好、当前季节节日、机主买过的东西先聊一句，然后直接输出标记 [帮你买:商品id|数量?,商品id|数量?]（id 原样抄目录，数量可省略默认 1；多个商品用英文逗号分隔，最多 5 件）。选品必须贴合机主正在说的东西（优先从【与机主正在聊的相关商品】里选；比如机主说想买玩偶/毛绒玩具就绝不能推荐手机数码）；目录里实在没有贴合的就直说没有，绝不拿不相关的品类凑数。系统会立即下单（你付款）、不用等物流直接送达，并以礼物卡片形式送进聊天（TA 点开就能收下），宝贝同时落进 TA 的礼物页——没有确认卡片、不用再问一遍。金额没有上限，买多少钱由你按人设/关系/上下文自然拿捉；别频繁送。\n`
+          ? `【帮机主买淘宝商品（你出钱，直接买）】聊到想买什么/缺什么/让你推荐/求你买时，结合你记得的偏好、当前季节节日、机主买过的东西先聊一句，然后直接输出标记 [帮你买:商品id|数量?,商品id|数量?]（id 原样抄目录，数量可省略默认 1；多个商品用英文逗号分隔，最多 5 件）。选品必须贴合机主正在说的东西（优先从【与机主正在聊的相关商品】里选；比如机主说想买玩偶/毛绒玩具就绝不能推荐手机数码）；目录里实在没有贴合的就直说没有，绝不拿不相关的品类凑数。系统会立即下单（你付款）、不用等物流直接送达，并以礼物卡片形式送进聊天（TA 点开就能收下），宝贝同时落进 TA 的礼物页——没有确认卡片、不用再问一遍。金额没有上限，买多少钱由你按人设/关系/上下文自然拿捉。机主说「再买一个/换一个/重新买/没送对」时同样直接输出标记，可以连续多次买，没有任何次数或频率限制；决不能因为「刚送过」就拒绝或空口答应。\n【回执行不是标记】历史里形如 [礼物卡片 ID:…]（你送出…）的方括号行是系统内部的记录格式，你只能读它，绝不能把它复制/仿写到你的回复里——抄了也没有任何效果，真实送出只有 [帮你买:…]/[送礼物:…] 标记才会执行。\n`
           : '';
       const giftRule =
         app === 'wx'
-          ? `【你想送礼物给机主（你出钱直接送）】聊到送礼物/生日节日纪念日/哄TA开心/TA提到喜欢什么时（按人设与关系判断，重要时刻才用，别频繁），输出标记 [送礼物:商品id]（id 原样抄目录，选贴合对方心意的）——系统会把礼物以卡片形式送到聊天里，TA 点开就能收下；送之前用正文铺垫一句心意。`
+          ? `【你想送礼物给机主（你出钱直接送）】聊到送礼物/生日节日纪念日/哄TA开心/TA提到喜欢什么时（按人设与关系判断），输出标记 [送礼物:商品id]（id 原样抄目录，选贴合对方心意的）——系统会把礼物以卡片形式送到聊天里，TA 点开就能收下；送之前用正文铺垫一句心意。送过几次都不受限制，机主要就送；别把历史里的 [礼物卡片 ID:…]（你送出…）回执行照抄进回复，那不是标记、没有效果。`
           : '';
       rules.push(
         `${cat}\n\n` +
@@ -726,12 +704,43 @@ export function buildTbEngageCtx(
     );
   }
 
-  if (tbEngageCoolingDown(app, chatContactId)) {
-    rules.push(
-      '【参与节流】你刚刚（5分钟内）已经主动帮付/代买/取件/送礼过一次了（冷却中）：这一轮不要再输出 [帮付淘宝]/[帮你买]/[帮你买票]/[自己买]/[送礼物] 标记（系统会硬拦截不执行），用正文正常聊就好。',
-    );
-  }
   return { block, rules };
+}
+
+// ---------------- 运行时兜底（第十二轮反馈） ----------------
+
+/**
+ * 按聊天文本从淘宝目录挑最贴合的商品 id（机主明确要买/要送但 AI 只嘴上答应、没输出
+ * [帮你买]/[送礼物] 标记时，wechat.tsx 兜底合成代买动作用）。
+ * 评分与 catalogBlock 同款：中文标题 2 字滑窗在文本中命中 +1/个、英文 ≥3 字母词 +2/个；
+ * 阈值 ≥2（单个常见双字撞词不触发），无达标返回 null（目录实在没贴合就尊重 AI 的婉拒）。
+ */
+export function tbPickProductForText(text: string): string | null {
+  try {
+    const all = tbSearchPool().filter((p) => p.id && p.title && p.price > 0);
+    if (!all.length || !text.trim()) return null;
+    const lower = text.toLowerCase();
+    const gramScore = (title: string): number => {
+      let score = 0;
+      const norm = title.toLowerCase();
+      for (let i = 0; i < norm.length - 1; i++) {
+        const g = norm.slice(i, i + 2);
+        if (/^[\u4e00-\u9fff]{2}$/.test(g) && lower.includes(g)) score += 1;
+      }
+      for (const w of norm.split(/[^a-z0-9]+/)) {
+        if (w.length >= 3 && lower.includes(w)) score += 2;
+      }
+      return score;
+    };
+    let best: { id: string; s: number } | null = null;
+    for (const p of all) {
+      const s = gramScore(p.title);
+      if (s >= 2 && (!best || s > best.s)) best = { id: p.id, s };
+    }
+    return best?.id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------- 动作执行（wechat/qq buildReplyMsgs 分流调用） ----------------
@@ -845,12 +854,8 @@ export function applyTbEngageAction(
     if (!uidInfo) return { msgs: [], sys: '（淘宝尚未登录，无法帮付）' };
     const order = tbLoadOrders(uidInfo.uid).find((o) => o.id === action.targetId.trim());
     if (!order || order.status !== 'pendingPay') return { msgs: [], sys: '（订单不存在或已支付）' };
-    if (tbEngageCoolingDown(opts.app, peer.id)) {
-      return { msgs: [], sys: '（刚刚才帮付/代买过一次，先歇一歇，这次先不帮付啦）' };
-    }
     const res = tbAiPayPendingOrder(order, { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) }, opts.app);
     if (!res.ok) return { msgs: [], sys: `（帮付未成功：${res.error}）` };
-    tbMarkEngage(opts.app, peer.id);
     const summary = order.items.map((i) => `${i.title.slice(0, 14)}${i.qty > 1 ? `x${i.qty}` : ''}`).join('、');
     memAddEventFragment(
       peer.id,
@@ -864,7 +869,7 @@ export function applyTbEngageAction(
   if (kind === 'tb-proxy-pay') {
     // [代付淘宝:请求id]：AI 支付机主发来的代付请求（仅 direction 'friend' 且落在自己聊天）。
     // 这是用户明确再次开口的代付执行路径（机主发了请求卡后 AI 第一次没付/婉拒，TA 在聊天里
-    // 再说「帮我代付/付一下」）——不挂 5min 主动参与冷却（冷却只限 AI 主动抢付），仅校验状态防重复；
+    // 再说「帮我代付/付一下」）——仅校验状态防重复；
     // 之前婉拒的请求也允许改主意帮付（先复活为待付再走支付，请求卡随回执卡一起变已代付）
     const pid = action.targetId.trim();
     const p = tbGetProxy(pid);
@@ -888,14 +893,10 @@ export function applyTbEngageAction(
     // [帮你买票:演出id]：AI 按人设自主帮机主买演出票（喜剧脱口秀/演唱会）——
     // 真实场次生成 pendingPay 票务订单 → AI 代付（tbMarkPaid 票务特判直接出票 shipped）→ 订单分享卡回聊天
     if (!uidInfo) return { msgs: [], sys: '（淘宝尚未登录，无法买票）' };
-    if (tbEngageCoolingDown(opts.app, peer.id)) {
-      return { msgs: [], sys: '（刚刚才帮付/代买过一次，先歇一歇，这次先不买票啦）' };
-    }
     const built = tbAiBuildTicketOrder(uidInfo.uid, action.targetId);
     if (!built.ok) return { msgs: [], sys: `（${built.error}）` };
     const payRes = tbAiPayPendingOrder(built.order, { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) }, opts.app);
     if (!payRes.ok) return { msgs: [], sys: `（买票未成功：${payRes.error}）` };
-    tbMarkEngage(opts.app, peer.id);
     // 异步收尾：订单分享卡（AI 发给机主「X已买单」；票务单渲染演出票卡）+ 角色记忆（完成回执卡用分享卡替代）
     const appSnapshot = opts.app;
     const meNameSnapshot = meName;
@@ -926,9 +927,6 @@ export function applyTbEngageAction(
     // → 以微信礼物卡（kind='giftcard'，点卡开收礼弹窗）发进聊天；多商品跨店分单但聊天里只发一张礼物卡
     if (!uidInfo) return { msgs: [], sys: '（淘宝尚未登录，无法代买）' };
     if (opts.app !== 'wx') return { msgs: [], sys: '（直接代买送礼物暂时只在微信里支持）' };
-    if (tbEngageCoolingDown(opts.app, peer.id)) {
-      return { msgs: [], sys: '（刚刚才送过/帮买过一次，先歇一歇，这次先不买啦）' };
-    }
     const body = parseTbBuyBody(action.targetId);
     if (!body) return { msgs: [], sys: '（代买格式有误，未能下单）' };
     // 商品校验 + 数量规范（任一商品不存在则整单拒绝，提示 AI 别乱买）
@@ -962,7 +960,6 @@ export function applyTbEngageAction(
         /* 支付失败不阻断其余包裹与礼物卡投递 */
       }
     }
-    tbMarkEngage(opts.app, peer.id);
     const total = Math.round(orders.reduce((s, o) => s + o.total, 0) * 100) / 100;
     const first = buys[0];
     const qtyAll = buys.reduce((s, b) => s + b.qty, 0);
@@ -996,9 +993,6 @@ export function applyTbEngageAction(
     if (!uidInfo) return { msgs: [], sys: '（淘宝尚未登录，无法下单）' };
     const body = parseTbBuyBody(action.targetId);
     if (!body) return { msgs: [], sys: '（下单格式有误）' };
-    if (tbEngageCoolingDown(opts.app, peer.id)) {
-      return { msgs: [], sys: '（刚刚才帮付/代买/点过一次，先歇一歇，这次先不买啦）' };
-    }
     const first = body.items[0];
     const p = productById(first.pid);
     if (!p) return { msgs: [], sys: '（没有找到这个商品，没法下单）' };
@@ -1012,9 +1006,6 @@ export function applyTbEngageAction(
     if (opts.app !== 'wx') return { msgs: [], sys: '（送礼物暂时只在微信里支持）' };
     const p = productById(action.targetId.trim());
     if (!p) return { msgs: [], sys: '（没有找到这个商品，礼物没送出去）' };
-    if (tbEngageCoolingDown(opts.app, peer.id)) {
-      return { msgs: [], sys: '（刚刚才送过/帮买过一次，先歇一歇，这次先不送啦）' };
-    }
     const gid = `tbgf-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
     void memAddEventFragment(peer.id, opts.app, `你给机主${meName}买了一份礼物「${p.title}」（¥${fmt2(p.price)}），以礼物卡片送到了聊天里`, { eventTime: now, sourceTag: 'tb-gift-send' });
     return {
@@ -1081,7 +1072,6 @@ async function tbSelfOrderFlow(
     char: { id: peer.id, name: peer.name, avatar: avatarFor(peer, opts.app) },
     payer,
   });
-  tbMarkEngage(opts.app, peer.id);
   const meName = opts.meName?.trim() || ownerNameSync() || '机主';
   memAddEventFragment(peer.id, opts.app, `你在淘宝给自己拍了「${p.title}」（¥${fmt2(order.total)}），请机主${meName}帮你代付`, { eventTime: order.createdAt, sourceTag: 'tb-self-order' });
 }
@@ -1346,13 +1336,12 @@ export async function tbEngageTick(uid: string): Promise<void> {
     const target = orders.find(
       (o) => o.status === 'pendingPay' && !o.aiAsked && !proxyOrderIds.has(o.id) && now - o.createdAt > 20_000,
     );
-    if (target && !globalCoolingDown('tb-proactive-cd', PROACTIVE_PAY_CD_MS)) {
+    if (target) {
       const list = tbLoadOrders(uid);
       const hit = list.find((o) => o.id === target.id);
       if (hit) {
         hit.aiAsked = true;
         tbSaveOrders(uid, list);
-        markGlobal('tb-proactive-cd');
         await runProactivePayEngage(uid, target.id);
         return; // 一轮只做一件主动事
       }

@@ -9,10 +9,10 @@
  *   top 18px＝垂直居中偏上、紧贴气泡左/右边缘，见 globals.css .wx-voice-bubble）；
  *   ⑤ 内部 flex + items-center + **数字与图标聚拢**（第八轮反馈：时长数字无论多久都紧贴声波图标，
  *   真机同款——内容聚在尾巴一侧，剩余宽度留白在远端随时长增长；数字与图标间距固定 8px）
- *   ⑥ 喇叭锥体在左 + 用户指定现成 SVG 声波在右（18×18，**两侧同形不镜像**——真机
- *   截图确认收/发气泡图标完全一致，只是位置贴尾巴一侧：对方图标在左、我方图标在右），
- *   播放中三道弧线按 CSS 动画波纹闪烁（globals.css @keyframes wx-voice-arc-blink），停止静态；
- *   ⑦ 时长 13px、#999，只显示数字 + ″（如 2″）；⑧ 颜色：对方 #FFFFFF / 我方 #95EC69，
+ *   ⑥ 喇叭图标两侧**镜像**（第十轮用户反馈：我方气泡 = 时长5″→圆弧→菱形，菱形贴右缘尾巴侧；
+ *   对方保持菱形在左、弧线在右），播放中三道弧线按 CSS 动画波纹闪烁（globals.css
+ *   @keyframes wx-voice-arc-blink），停止静态；
+ *   ⑦ 时长 13px 黑色（第九轮：跟随气泡文字色，浅色模式纯黑），只显示数字 + ″（如 2″）；⑧ 颜色：对方 #FFFFFF / 我方 #95EC69，
  *   文字与图标 #000（深色模式保留既有暗色映射）。点击气泡任意处播放/暂停
  *   （全局单例：新播自动停旧，也停 TTS 朗读）
  * - QQ / 信息：圆形播放钮（**三角/暂停图标，与 QQ 一致**）+ **随宽度伸缩的录音波形条**
@@ -145,17 +145,14 @@ function VoiceWaveBars({ wave, active, playing, progress, count }: { wave: numbe
 }
 
 /**
- * 微信语音图标（第 22 轮）：实心锥体（三角形）在最左 + 两道声波弧，18×18 单 SVG。
- * 第 22 轮调整：①锥体与两道弧**分开一点点**（锥体右缘距内弧约 2 个 viewBox 单位≈1.5px）；
- * ②两道弧线**改纯黑**（globals.css 去掉灰度衰减，静态不透明度 1）；
- * ③播放中弧线**从前往后一个一个出现**（globals.css wx-voice-arc-seq：内弧先亮、外弧后亮，循环）。
- * **收/发两侧字形完全相同、不做镜像**（真机截图确认：白气泡与绿气泡的
- * 图标一致，只是图标贴尾巴一侧摆放——对方在左、我方在右）。
+ * 微信语音图标（第十轮重制）：收/发两侧**镜像**——
+ * - 对方（收到的白气泡）：菱形在左、弧线在右（字形同旧版：M6.6 8.2 L9.2 12 …）；
+ * - 我方（发出的绿气泡）：水平镜像 → **弧线在左、菱形在右**（用户指定顺序「数字5″→圆弧→菱形」，
+ *   菱形贴右缘尾巴一侧，真机同款）；实现用 CSS scaleX(-1) 镜像同一 SVG，两道弧线/菱形几何不变。
+ * 播放中弧线从前往后一个一个出现（globals.css wx-voice-arc-seq），停止静态。
  */
-function WxVoiceIcon({ playing = false }: { playing?: boolean }) {
+function WxVoiceIcon({ playing = false, mirrored = false }: { playing?: boolean; mirrored?: boolean }) {
   return (
-    /* 第 22 轮：单个 SVG 18×18——实心锥体在最左（与弧线拉开一点点间距），
-       两道弧线为用户 SVG 后两道原样保留；播放中弧线从前往后一个一个出现（globals.css），停止静态 */
     <svg
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 24 24"
@@ -167,24 +164,20 @@ function WxVoiceIcon({ playing = false }: { playing?: boolean }) {
       strokeLinecap="round"
       aria-hidden="true"
       className="wx-voice-wave shrink-0"
+      style={mirrored ? { transform: 'scaleX(-1)' } : undefined}
     >
-      {/* 实心菱形（第二十三轮用户反馈：比上一版 4.4×6.4 大一点点 → 5.2×7.6；
-          右尖 x=9.2 与内弧 x=12 仍保持 2.8 单位间距，不贴回弧线） */}
+      {/* 实心菱形（5.2×7.6，右尖 x=9.2 与内弧 x=12 保持 2.8 单位间距；镜像后菱形贴右缘尾巴侧） */}
       <path className="wx-cone" d="M6.6 8.2 L9.2 12 L6.6 15.8 L4 12 Z" fill="currentColor" stroke="none" />
-      {/* 两道声波弧线（用户 SVG 原样保留中弧+外弧；播放中从前往后一个一个出现） */}
+      {/* 两道声波弧线（镜像后在左侧；播放中从前往后一个一个出现） */}
       <path className="wx-arc wx-arc-2" d="M12 7 Q 16 12 12 17" />
       <path className="wx-arc wx-arc-3" d="M16 4 Q 22 12 16 20" />
     </svg>
   );
 }
 
-/** 微信真机同款时长文字：13px #999，只显示数字 + ″（如 2″，用户指定参数） */
+/** 微信真机同款时长文字（第九轮：黑色——跟随气泡文字色 currentColor，浅色模式纯黑）；13px，只显示数字 + ″（如 2″，用户指定参数） */
 function WxDuration({ label }: { label: string }) {
-  return (
-    <span className="shrink-0 text-[13px] leading-none tabular-nums" style={{ color: '#999999' }}>
-      {label}
-    </span>
-  );
+  return <span className="shrink-0 text-[13px] leading-none tabular-nums text-current">{label}</span>;
 }
 
 export function VoiceMsgBubble({
@@ -247,12 +240,13 @@ export function VoiceMsgBubble({
         style={{ width, ...style }}
       >
         {isWx ? (
-          /* 微信真机同款：图标贴尾巴一侧、时长紧挨图标（固定 8px 间距），剩余宽度留白在远端（真机同款聚拢布局）。
-             字形两侧同形不镜像（真机确认）：弧线在左、锥体朝右 ▶ */
+          /* 第十轮镜像重制（用户指定：我方气泡从左到右 = 时长 5″→ 圆弧 → 菱形，菱形贴右缘尾巴侧）：
+             我方图标 scaleX(-1) 镜像（弧线在左、菱形在右），时长紧挨图标左（固定 8px 间距）；
+             对方保持原字形（菱形在左、弧线在右），时长在图标右侧——两侧镜像对称，真机同款 */
           mine ? (
             <>
               <WxDuration label={label} />
-              <WxVoiceIcon playing={isPlaying} />
+              <WxVoiceIcon playing={isPlaying} mirrored />
             </>
           ) : (
             <>
