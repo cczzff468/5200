@@ -938,3 +938,26 @@ Stage Summary:
 - 关键架构决策：persona.ts 保持纯函数（服务端共用），动态状态由 5 个客户端组装点注入；跨 App 事件经动态 import 防循环依赖；ai-mood/routine 用 localStorage（轻量同步读）
 - 关键文件：ai-mood.ts(新)/routine.ts(新)/cross-app-nudge.ts(新)/proactive-msg.ts(fireProactiveNudge)/couple-ai.ts(runRoutineNudgeTick)/chat-stream-store.ts(noteEngagement)/chat-call.ts+phone.tsx(transcribeBlob)/CoupleResidentWatcher.tsx/MeituanOrderWatcher.tsx/taobao-store.ts/couple-space.tsx(心情胶囊)/wechat+qq+chat.tsx(注入) + 25 个深色适配文件
 - 方法论沉淀：浏览器临时 profile 的 IndexedDB 不持久（agent-browser close 即清）——测试数据种子脚本化备用；双层 fetch hook 会叠加（rehook 前先删旧）；截断记录会误判注入缺失（检查用完整捕获）
+
+---
+Task ID: 17
+Agent: 主控 Agent（Z.ai Code）
+Task: 重新拉取 GitHub 仓库 cczzff468/5200（第十六轮快照）到全新沙箱环境并部署运行，为后续功能修改做准备
+
+Work Log:
+- git clone 直连成功（351MB / 2897 文件，第十六轮 68a104e），克隆至 /home/z/repo-5200
+- rsync 同步全部源码到 /home/z/my-project（--no-g --no-o 避开 OSS 挂载点 upload 的属组/时间戳限制；upload 内容已同步成功 47 文件）
+- .env 合并：保留 DATABASE_URL + 补 VAPID 推送密钥两行；Caddyfile 双方一致无需改动；保留环境 prisma 骨架 schema，db/custom.db 取仓库带数据版本（1MB）
+- git remote 配置：origin 指向 https://<PAT>@github.com/cczzff468/5200.git（用户提供 PAT），分支 main
+- git fetch origin 超时（351MB 太大）→ 改用本地克隆作 remote fetch，git reset --mixed 对齐历史：本地 main = 68a104e，工作树零差异（同步完整）
+- bun install 401 包（新增 three@0.186 / @react-three/fiber / drei / leaflet / speech-asr / web-push / jsmediatags / idb 等）
+- bunx prisma generate + db push（数据库已同步）
+- 重启 dev server（环境守护自动拉起）：Next.js 16.4.3 Turbopack Ready 471ms；instrumentation 自动 spawn ncm-keeper（网易云 API 守护）
+- 修复 next.config.ts：移除 Next 16.4 已废弃的 experimental.turbopackMemoryLimit（消除启动警告），已提交 3f611f9
+- Agent Browser E2E（390×844）：首页渲染完整（主屏桌面+时间/天气/Angelina 信息卡/微信/QQ/美团/恋人空间/拾光小屋等 App 图标）、上滑解锁成功、微信 App 可打开（登录界面正常）；页面 errors 面板为空、console 仅 HMR；dev.log 无运行时错误（instrumentation 的 Edge Runtime 编译警告为仓库既有行为，有 NEXT_RUNTIME 守卫不影响运行）
+
+Stage Summary:
+- 第十六轮快照已完整部署运行；git 历史已继承（后续 commit 可直接 git push origin main，fast-forward）
+- 推送命令：git push -u origin main（remote 已含 PAT）
+- 环境限制备忘：git fetch/push 直连 github.com 大对象传输可能超时（clone 本次成功，push 351MB 需实测；若超时可考虑浅推送或分批）
+- 等待用户明确本轮要修改/新增的功能需求
