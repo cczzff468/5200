@@ -236,6 +236,11 @@ export function VoiceMsgBubble({
       ? `rounded-[18px] ${mine ? 'text-white' : t.peer}`
       : `rounded-[12px] ${mine ? 'text-white' : t.peer}`;
 
+  /** 胶囊装扮（毛玻璃/液态，第十八轮终版）：上下收窄（用户指定「上下变小一点」）——
+   *  文本气泡由 bubbleVisual 直接压上下 padding；语音气泡高度固定（微信 42 / QQ 40），
+   *  在此覆盖为 34px，与苗条文本胶囊同高 */
+  const capsule = decorated && (style?.borderRadius as string | undefined) === '999px';
+
   return (
     <div className={`flex flex-col ${mine ? 'items-end' : 'items-start'}`}>
       <button
@@ -253,7 +258,7 @@ export function VoiceMsgBubble({
               `gap-[8px] ${mine ? 'justify-end' : 'justify-start'}`
             : 'h-[40px] gap-[4px] px-[6px]'
         }`}
-        style={{ width, ...style }}
+        style={{ width, ...style, ...(capsule ? { height: '34px' } : undefined) }}
       >
         {isWx ? (
           /* 第十轮镜像重制（用户指定：我方气泡从左到右 = 时长 5″→ 圆弧 → 菱形，菱形贴右缘尾巴侧）：

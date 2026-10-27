@@ -6,10 +6,12 @@
  *             自定义色后：仅换底色/文字色，圆角不覆盖——与各 App 原生气泡完全一致
  *             （用户指定：微信改色后圆角不能变圆，须和默认一样）
  *  - rainbow  七彩气泡：每条消息按序号在参考图 9 色间循环取色
- *             （亮黄→青柠→杏色→青色→粉色→薰衣草→灰褐→琥珀→珊瑚）；圆角同原生
- *  - frosted  毛玻璃：胶囊形无尾巴 + 奶白磨砂质感（厚重雾面、几乎不透底、无描边光）
- *  - liquid   液态玻璃：胶囊形无尾巴 + 透明清玻璃（背景清晰透出、细白玻璃描边、
- *             无高光无闪光——用户指定；文字色随深浅色模式自适应）
+ *             （亮黄→青柠→杏色→青色→粉色→薰衣草→灰褐→琥珀→珊瑚）；
+ *             QQ 装扮后圆一点点（14px），微信保持原生
+ *  - frosted  毛玻璃：乳白磨砂胶囊——近乎不透明的奶白雾面（背后内容基本看不见）+
+ *             强高斯模糊，无描边无高光；上下收窄（苗条胶囊）
+ *  - liquid   液态玻璃：透亮清玻璃胶囊——背景清晰透出只留一层亮膜（brightness 提亮 +
+ *             高饱和 .bub-liquid）+ 细白玻璃描边；上下收窄；无高光无闪光（用户指定）
  *
  * 微信 / QQ 两 App 装扮完全隔离（wx / qq 各持 { kind, mineColor, theirsColor }），
  * 在微信里选的样式不影响 QQ，反之亦然。
@@ -309,31 +311,37 @@ export function bubbleVisual(
   if (kind === 'rainbow') {
     // 七彩：参考图 9 色按消息序号循环；尾巴按 App —— 微信保持原生小三角（随色），
     // QQ 用参考图同款弯钩（QQ 原生无尾巴，装扮后才有）。
-    // 圆角不覆盖：保留宿主原生 rounded-* 类（微信文本 5px / 语音 4px、QQ 10px / 12px）
+    // 圆角：QQ 原生 10px 略方正——装扮后圆一点点（14px，用户指定）；微信保持原生 5px
     const idx = ((msgIndex % RAINBOW_COLORS.length) + RAINBOW_COLORS.length) % RAINBOW_COLORS.length;
     const c = RAINBOW_COLORS[idx];
     return {
       override: true,
       className: '',
-      style: { backgroundColor: c, color: yiqTextOn(c) },
+      style: {
+        backgroundColor: c,
+        color: yiqTextOn(c),
+        ...(app === 'qq' ? { borderRadius: '14px' } : {}),
+      },
       tail: app === 'wx' ? 'native' : 'hook',
       tailColor: c,
     };
   }
 
   if (kind === 'frosted') {
-    // 毛玻璃（第十八轮再修订）：奶白磨砂胶囊 —— 厚重雾面（高透明度白底几乎不透底）、
-    // 强高斯模糊、无描边无高光（磨砂面是哑光的，漫反射不聚光）；
-    // 自定义色 = 磨砂彩色玻璃（0.62 透明度奶化）；与液态玻璃的「透明清玻璃」明显区分
+    // 毛玻璃（第十八轮终版）：乳白磨砂玻璃——近乎不透明的奶白雾面（背后内容基本
+    // 看不见，与液态的「透亮」一眼区分）+ 强高斯模糊；无描边无高光（磨砂哑光面）；
+    // 胶囊上下收窄（用户指定「上下变小一点」）；自定义色 = 磨砂彩色玻璃（0.78 奶化）
     const base = color ?? '#FFFFFF';
     return {
       override: true,
       className: '',
       style: {
         borderRadius: '999px',
-        backgroundColor: withAlpha(base, color ? 0.62 : 0.68),
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
+        backgroundColor: withAlpha(base, color ? 0.78 : 0.86),
+        backdropFilter: 'blur(24px)',
+        WebkitBackdropFilter: 'blur(24px)',
+        paddingTop: '6px',
+        paddingBottom: '6px',
         boxShadow: '0 4px 14px rgba(31, 35, 41, 0.10)',
         color: color ? yiqTextOn(color) : '#111111',
       },
@@ -343,32 +351,39 @@ export function bubbleVisual(
   }
 
   if (kind === 'liquid') {
-    // 液态玻璃（第十八轮再修订）：透明清玻璃（用户指定去高光去闪光）——胶囊形无尾巴。
-    // 底色与文字色全部交给 .bub-liquid 全局类：极透明玻璃底 + 轻模糊 + 细白玻璃描边，
-    // 无伪元素高光/扫光；文字色随深浅色模式自适应；
-    // 自定义色 = 内联覆盖为该色低透明度渐变（α 0.28↔0.12，背景清晰透出只留色膜）
+    // 液态玻璃（第十八轮终版）：透亮清玻璃（用户指定「透亮」）——背景清晰透出，
+    // 只留一层极淡亮膜（.bub-liquid：brightness 提亮 + 高饱和）+ 细白玻璃描边；
+    // 胶囊上下收窄；自定义色 = 该色极淡渐变（α 0.22↔0.08）
     const base = color;
     return {
       override: true,
       className: 'bub-liquid',
-      style: base
-        ? {
-            borderRadius: '999px',
-            background: `linear-gradient(165deg, ${withAlpha(base, 0.28)} 0%, ${withAlpha(base, 0.12)} 45%, ${withAlpha(base, 0.18)} 75%, ${withAlpha(base, 0.25)} 100%)`,
-          }
-        : { borderRadius: '999px' },
+      style: {
+        borderRadius: '999px',
+        ...(base
+          ? {
+              background: `linear-gradient(165deg, ${withAlpha(base, 0.22)} 0%, ${withAlpha(base, 0.08)} 45%, ${withAlpha(base, 0.14)} 75%, ${withAlpha(base, 0.20)} 100%)`,
+            }
+          : {}),
+        paddingTop: '6px',
+        paddingBottom: '6px',
+      },
       tail: 'none',
       tailColor: '',
     };
   }
 
-  // default + 自定义色：仅换底色/文字色；圆角不覆盖——保留宿主原生 rounded-* 类
-  // （微信文本 5px / 语音 4px、QQ 10px / 12px），改色后圆角与默认气泡完全一致（用户指定）。
+  // default + 自定义色：仅换底色/文字色；圆角——微信保持原生 5px（用户指定不变），
+  // QQ 原生 10px 略方正——装扮后圆一点点（14px，用户指定）。
   // 尾巴按 App —— 微信保持原生小三角（随色，用户指定不变），QQ 用弯钩尾巴
   return {
     override: true,
     className: '',
-    style: { backgroundColor: color, color: yiqTextOn(color as string) },
+    style: {
+      backgroundColor: color,
+      color: yiqTextOn(color as string),
+      ...(app === 'qq' ? { borderRadius: '14px' } : {}),
+    },
     tail: app === 'wx' ? 'native' : 'hook',
     tailColor: color as string,
   };

@@ -1025,3 +1025,22 @@ Stage Summary:
 - 六项反馈全部落地：液态玻璃无高光无闪光（纯透明清玻璃）、毛玻璃奶白磨砂与液态明显区分、QQ 尾巴末尾真·细如线（针尖几何+像素级验证）、气泡样式页标题居中+删平台标签+扁平简约、看一看页白卡简约
 - 关键文件：src/lib/ios/bubble-style.ts（BUBBLE_TAIL_PATH 终版+frosted/liquid 材质）、src/app/globals.css（.bub-liquid 重写）、src/components/apps/bubble-style-settings.tsx（全页简约化重写）、src/components/apps/wechat.tsx（WxLookPage 重写）
 - 方法论沉淀：SVG 细尖设计要先离线 cairosvg 渲染做像素列宽分析（VLM 对小尺寸渲染的尖端判断不可靠，像素数据才可信）；app 内验证用 PIL 按列扫描实际屏幕像素
+
+---
+Task ID: 18-r3
+Agent: Z.ai Code (main)
+Task: 第十八轮反馈修订三 —— 毛玻璃/液态材质拉开差距 + 液态透亮 + 胶囊上下变瘦 + QQ 气泡圆一点点 + 设置页再美化
+
+Work Log:
+- [材质拉开] 用户反馈毛玻璃和液态看起来一样（0.68 白 vs 0.34 白在壁纸上都像灰胶囊）→ 终版：毛玻璃 0.86 乳白近乎不透明（背后基本看不见）+ blur(24px)；液态 0.24/0.06/0.15 极淡亮膜（背景清晰透出）——浴室磨砂玻璃 vs 水晶的差距
+- [液态透亮] backdrop-filter 升级 blur(8px) saturate(180%) brightness(1.12)——brightness 让玻璃内背景发亮，透亮感核心；深色模式 0.11/0.02/0.07 更透
+- [胶囊瘦身] ①文本气泡：bubbleVisual frosted/liquid 分支直接输出 paddingTop/Bottom 6px 内联覆盖宿主 padding（QQ 9px→6px 实高 42→38px；微信 8px→6px）；②语音气泡高度固定：voice-bubble.tsx 新增 capsule 检测（decorated && borderRadius==='999px'）→ 内联 height 34px 覆盖（微信 42 / QQ 40 → 34px，与苗条文本胶囊同高）
+- [QQ 圆一点] 用户反馈 QQ 纯色/七彩「有点不圆」→ bubbleVisual rainbow + default+色 两分支对 app==='qq' 输出 borderRadius 14px（原生 10px，圆一点点）；微信保持原生 5px 不变（前轮用户指定）；选 14px 而非 16px：弯钩尾巴与气泡左缘的接缝在 14px 圆角下零缺口（16px 会产生 0.5px 顶部缝隙）
+- [设置页美化] 样式四格升级：图标从裸图标改为圆形底托（选中 accent 柔色底 / 未选中中性）+ 每格新增质感副标题（默认「纯色·可自选颜色」/七彩「九色·按消息循环」/毛玻璃「乳白磨砂·不透底」/液态「清透玻璃·透亮」——副标题本身帮助用户区分两种玻璃）；预览卡改上下渐变底+呼吸间距；迷你预览区改渐变底圆角 12px；保存按钮加柔和投影
+- [E2E] 设置页实测：液态 computed bgAlpha 0.24/0.06/0.15 + filter brightness(1.12) + 高 32px + padding 6px；毛玻璃 bg rgba(255,255,255,0.86) + blur(24px) + 高 30px；QQ 装扮页默认+橙 → borderRadius 14px；七彩亮黄/青柠均 14px；真实聊天：七彩黄泡 14px+弯钩尾巴 1 个；切液态 → 文本胶囊 38px+padding 6px+brightness 透亮（VLM 确认「苗条、透亮、美观」）；种语音消息 → 语音胶囊 34px/999px/液态类 ✓；浏览器 errors/console 零错误
+- [质量] tsc 仅 proactive-msg.ts 既有基线；eslint 三个改动文件 0 问题
+
+Stage Summary:
+- 五项反馈全部落地：毛玻璃（0.86 乳白不透明+blur24）vs 液态（0.24 极淡亮膜+brightness1.12）一眼可辨、液态透亮（brightness 提亮玻璃内背景）、胶囊上下瘦身（文本 padding 6px/语音高 34px）、QQ 纯色/七彩 14px 圆角（微信不变）、设置页图标底托+质感副标题+渐变预览
+- 关键文件：src/lib/ios/bubble-style.ts（frosted/liquid 材质+胶囊瘦身+QQ 圆角）、src/app/globals.css（.bub-liquid 透亮化）、src/components/apps/voice-bubble.tsx（capsule 检测+34px）、src/components/apps/bubble-style-settings.tsx（KIND_CAPTIONS+卡片美化）
+- 设计决策：QQ 圆角取 14px 而非 16px——几何计算尾巴接缝（尾巴右缘 +2px vs 圆角内缩 x_edge，14px 时全段无缺口，16px 顶部有 0.5px 缝）

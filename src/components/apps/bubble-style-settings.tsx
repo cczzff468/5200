@@ -57,6 +57,14 @@ const KIND_ICONS: Record<BubbleStyleKind, typeof Palette> = {
   liquid: Waves,
 };
 
+/** 样式副标题（简短说明各自质感，帮助区分毛玻璃/液态） */
+const KIND_CAPTIONS: Record<BubbleStyleKind, string> = {
+  default: '纯色 · 可自选颜色',
+  rainbow: '九色 · 按消息循环',
+  frosted: '乳白磨砂 · 不透底',
+  liquid: '清透玻璃 · 透亮',
+};
+
 // ---------------- 迷你预览气泡（与聊天页同一渲染引擎，所见即所得） ----------------
 
 /** 彩色光斑层：垫在毛玻璃/液态泡下面，让 backdrop-filter 的模糊效果肉眼可见（轻量淡彩） */
@@ -294,25 +302,21 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
       />
       <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-10">
         {/* ---------- 1. 实时预览 ---------- */}
-        <section aria-label="实时预览" className="relative mt-1 overflow-hidden rounded-[16px] ring-1 ring-black/[0.05] dark:ring-white/[0.07]">
-          <div className="absolute inset-0 bg-[#E9EDF4] dark:bg-[#1C1F26]" />
+        <section aria-label="实时预览" className="relative mt-1 overflow-hidden rounded-[18px] ring-1 ring-black/[0.05] dark:ring-white/[0.07]">
+          <div className="absolute inset-0 bg-gradient-to-b from-[#EEF1F7] to-[#E4E9F2] dark:from-[#1E222B] dark:to-[#171A21]" />
           <AuraLayer />
-          <div className="relative p-4">
-            <div className="flex flex-col gap-2">
-              {PREVIEW_MESSAGES.map((m, i) => (
-                <div key={i} className={m.side === 'mine' ? 'self-end' : 'self-start'}>
-                  <PreviewRow app={app} cfg={bubbleStyle} side={m.side} index={i} text={m.text} />
-                </div>
-              ))}
-            </div>
+          <div className="relative flex flex-col gap-2.5 px-4 py-5">
+            {PREVIEW_MESSAGES.map((m, i) => (
+              <div key={i} className={m.side === 'mine' ? 'self-end' : 'self-start'}>
+                <PreviewRow app={app} cfg={bubbleStyle} side={m.side} index={i} text={m.text} />
+              </div>
+            ))}
           </div>
         </section>
 
         {/* ---------- 2. 气泡样式四格（不分 TA/我） ---------- */}
         <section aria-label="气泡样式" className="mt-6">
-          <div className="mb-2.5 px-1">
-            <p className="text-[13px] font-semibold text-black/80 dark:text-white/80">样式</p>
-          </div>
+          <p className="mb-2.5 px-1 text-[12.5px] font-semibold text-black/45 dark:text-white/45">样式</p>
           <div className="grid grid-cols-2 gap-2.5">
             {(Object.keys(BUBBLE_KIND_LABEL) as BubbleStyleKind[]).map((kind) => {
               const selected = appStyle.kind === kind;
@@ -335,14 +339,14 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                     }
                   }}
                   aria-pressed={selected}
-                  className={`rounded-[14px] bg-white p-2.5 text-left ring-1 transition-all active:scale-[0.97] dark:bg-[#1B1D21] ${
+                  className={`rounded-[16px] bg-white p-2.5 text-left ring-1 transition-all active:scale-[0.97] dark:bg-[#1B1D21] ${
                     selected
                       ? 'ring-2'
                       : 'ring-black/[0.06] hover:ring-black/[0.12] dark:ring-white/[0.08]'
                   }`}
                   style={selected ? { ['--tw-ring-color' as string]: meta.accent } : undefined}
                 >
-                  <div className="relative mb-2 flex h-[52px] items-center gap-1.5 overflow-hidden rounded-[10px] bg-[#E9EDF4] px-2 dark:bg-[#252932]">
+                  <div className="relative mb-2 flex h-[54px] items-center gap-1.5 overflow-hidden rounded-[12px] bg-gradient-to-br from-[#EDF0F6] to-[#E3E8F1] px-2 dark:from-[#272B36] dark:to-[#1D212B]">
                     <AuraLayer />
                     {/* 迷你对话：TA 一条 + 我一条（两侧同享此样式） */}
                     <div className="relative flex w-full items-center justify-between gap-1">
@@ -354,10 +358,29 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                       </PreviewBubble>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 px-0.5">
-                    <Icon className={`h-4 w-4 ${selected ? '' : 'text-black/40 dark:text-white/40'}`} style={selected ? { color: meta.accent } : undefined} aria-hidden="true" />
-                    <span className="text-[14px] font-semibold leading-tight">{BUBBLE_KIND_LABEL[kind]}</span>
-                    {selected && <Check className="ml-auto h-4 w-4" style={{ color: meta.accent }} aria-hidden="true" />}
+                  <div className="flex items-center gap-2 px-0.5">
+                    {/* 图标：选中 = accent 柔色底，未选 = 中性灰底 */}
+                    <span
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full"
+                      style={
+                        selected
+                          ? { backgroundColor: `${meta.accent}1E` }
+                          : undefined
+                      }
+                    >
+                      <Icon
+                        className={`h-[15px] w-[15px] ${selected ? '' : 'text-black/40 dark:text-white/40'}`}
+                        style={selected ? { color: meta.accent } : undefined}
+                        aria-hidden="true"
+                      />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[14px] font-semibold leading-tight">{BUBBLE_KIND_LABEL[kind]}</span>
+                      <span className="mt-[1px] block truncate text-[10.5px] leading-tight text-black/40 dark:text-white/40">
+                        {KIND_CAPTIONS[kind]}
+                      </span>
+                    </span>
+                    {selected && <Check className="h-4 w-4 shrink-0" style={{ color: meta.accent }} aria-hidden="true" />}
                   </div>
                 </button>
               );
@@ -497,7 +520,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
             setNameDraft('');
             setNaming(true);
           }}
-          className="mt-5 w-full rounded-full py-3 text-[15.5px] font-semibold text-white transition-transform active:scale-[0.98]"
+          className="mt-5 w-full rounded-full py-3 text-[15.5px] font-semibold text-white shadow-[0_6px_16px_rgba(31,35,41,0.14)] transition-transform active:scale-[0.98]"
           style={{ backgroundColor: meta.accent }}
         >
           保存当前设置
