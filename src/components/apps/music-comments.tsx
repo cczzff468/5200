@@ -510,7 +510,14 @@ function CommentRow({
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
-              <p className="min-w-0 truncate text-[14px] font-medium text-zinc-800 dark:text-zinc-200">
+              {/* 黑胶SVIP 用户昵称金色（网易云同款） */}
+              <p
+                className={`min-w-0 truncate text-[14px] font-medium ${
+                  (c.user?.vipType ?? 0) >= 11
+                    ? 'text-[#B9862C] dark:text-[#E8C275]'
+                    : 'text-zinc-800 dark:text-zinc-200'
+                }`}
+              >
                 {c.user?.nickname}
               </p>
               <VipBadge user={c.user} />

@@ -119,8 +119,8 @@ export default function TopBar({
         </button>
       </div>
 
-      {/* v12 毛玻璃胶囊：TA的心 / 宠物头像 / 装修小家 / ⋮ 一整排按钮同住一颗胶囊（用户第九轮） */}
-      <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/60 bg-white/40 p-1 shadow-[0_12px_32px_rgba(90,60,50,0.16)] backdrop-blur-2xl">
+      {/* v13 毛玻璃胶囊：TA的心 / 宠物头像 / 装修小家 / ⋮ 一整排按钮同住一颗胶囊（用户第九轮；第十三轮按钮间距拉开） */}
+      <div className="pointer-events-auto flex items-center gap-[7px] rounded-full border border-white/60 bg-white/40 p-[5px] shadow-[0_12px_32px_rgba(90,60,50,0.16)] backdrop-blur-2xl">
         {/* v10.3 TA 的心（宠物头像左侧独立按钮）：甜度/情绪/需求一览 */}
         <button
           onClick={onToggleHeart}
@@ -135,26 +135,39 @@ export default function TopBar({
         >
           <Heart className="h-[17px] w-[17px]" />
         </button>
-        {/* v12 宠物头像美化（用户第九轮）：奶油径向渐变底 + 粉丝细环 + 顶部光泽 + 暖色投影；点击轮换宠物并唤出状态面板 */}
+        {/* v13 宠物头像再美化（用户第十三轮）：白瓷底座环 + 奶油多段径向渐变面 + 双高光（左上大光泽 + 右下反光）
+            + 暖色双层投影 + 内凹下缘，糖果质感；点击轮换宠物并唤出状态面板 */}
         <button
           onClick={onRotatePet}
           aria-label={`${activePetName}状态面板（点按切换宠物）`}
           aria-expanded={petPanel}
-          className={`relative flex h-11 w-11 items-center justify-center rounded-full bg-[radial-gradient(circle_at_32%_26%,#fffdf9_0%,#fdf3e0_52%,#f8e2c4_100%)] shadow-[0_3px_10px_rgba(228,106,106,0.30),inset_0_-2px_5px_rgba(214,150,90,0.20)] ring-[2.5px] transition active:scale-95 ${
-            petPanel ? 'ring-[#e46a6a]' : 'ring-[#f4b3c2]'
+          className={`relative flex h-11 w-11 items-center justify-center rounded-full ring-[2.5px] transition active:scale-95 ${
+            petPanel
+              ? 'ring-[#fff6f0] shadow-[0_0_0_3px_rgba(228,106,106,0.35),0_4px_14px_rgba(228,106,106,0.40)]'
+              : 'ring-[#fffaf4]'
           }`}
+          style={{
+            background:
+              'radial-gradient(circle at 34% 22%, #fffefb 0%, #fdf3de 42%, #f9e6c6 72%, #f1d5ac 100%)',
+            boxShadow:
+              '0 4px 12px rgba(226,148,120,0.34), 0 1.5px 4px rgba(214,150,90,0.28), inset 0 -3px 7px rgba(214,150,90,0.22), inset 0 2px 5px rgba(255,255,255,0.95)',
+          }}
         >
-          {/* 顶部玻璃光泽（小高光斑） */}
+          {/* 顶部玻璃光泽（大高光斑）+ 右下弦月反光 */}
           <span
             aria-hidden="true"
-            className="absolute left-[16%] top-[9%] h-[26%] w-[38%] -rotate-[18deg] rounded-full bg-white/75 blur-[1.5px]"
+            className="absolute left-[13%] top-[7%] h-[30%] w-[46%] -rotate-[16deg] rounded-full bg-white/85 blur-[1.5px]"
+          />
+          <span
+            aria-hidden="true"
+            className="absolute bottom-[9%] right-[14%] h-[16%] w-[26%] rotate-[14deg] rounded-full bg-white/45 blur-[2px]"
           />
           {activePetIdx < 0 ? (
-            <CatFaceIcon className="relative h-8 w-8 drop-shadow-[0_1.5px_2px_rgba(190,140,90,0.38)]" />
+            <CatFaceIcon className="relative h-8 w-8 drop-shadow-[0_2px_2.5px_rgba(190,140,90,0.45)]" />
           ) : activePetObj.kind === 'dog' ? (
-            <DogFaceIcon className="relative h-8 w-8 drop-shadow-[0_1.5px_2px_rgba(170,130,80,0.38)]" />
+            <DogFaceIcon className="relative h-8 w-8 drop-shadow-[0_2px_2.5px_rgba(170,130,80,0.45)]" />
           ) : (
-            <RabbitFaceIcon className="relative h-8 w-8 drop-shadow-[0_1.5px_2px_rgba(190,140,90,0.38)]" />
+            <RabbitFaceIcon className="relative h-8 w-8 drop-shadow-[0_2px_2.5px_rgba(190,140,90,0.45)]" />
           )}
           {petsCount > 0 && (
             <span aria-hidden="true" className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#e8b06a] px-0.5 text-[8.5px] font-bold leading-none text-white ring-2 ring-white/95 shadow-[0_2px_5px_rgba(220,160,90,0.45)]">

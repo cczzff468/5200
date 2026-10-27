@@ -766,3 +766,23 @@ Work Log:
 Stage Summary:
 - 第十二轮三项全部完成：QQ 恋人标识放大到 20px；网易云 VIP/SVIP 徽章换用户截图原像素唱片（圆形抠底无白边，数字仍动态）；礼物/代买/代付/取件参与冷却整体删除 + 提示词禁回显 + 运行时兜底保证「要就送到」
 - 关键文件：couple-mark.tsx、qq.tsx、music-mine.tsx、public/music-vip-disc-{vip,svip}.png(新)、tb-ai-engage.ts、wechat.tsx、chat-rich.ts
+
+---
+Task ID: 28-B（远程并行环境：第十三轮）
+Agent: Z.ai 主控（Z.ai Code）
+Task: 第十三轮反馈——拾光小屋宠物头像再美化+按钮分开 / QQ抽屉三按钮再下移 / 情侣关系卡对照新参考图1:1重制 / 网易云VIP徽章换新截图高清重抠+凹弧胶囊 / SVIP昵称金色
+
+Work Log:
+- [参考图分析] IMG_20261027_091859.jpg（情侣关系卡 1080×604）像素级测量：卡片 x42-1037（995px，÷2.78=我方 358px 卡宽）；渐变 105deg #D28AE0→#E999D9(38%)→#F4AFD4(68%)→#FEC9D0；标题23px+白描边Lv徽章；玫红#F255D7胶囊按钮26px高；双头像68px白环左前右后重叠27px左对齐；密友值11px；进度条白轨24px+紫芯内嵌+右端mini爱心徽章（黄蝶结+蓝弧）；右侧图标408px见方=卡宽41%（金色实心双环耳花瓣形+果冻爱心(顶部V凹陷深洋红#E04FC8阴影+浅顶瓣+玫红中部+淡粉下缘+左大右小高光+下部光雾)+蓝椭圆环#62B2FE托底(上半被心遮挡)+右侧燕尾丝带+淡粉光晕）。IMG_20261027_095621.jpg（VIP徽章 2328×768）测量：大黑胶盘圆心(1011.5,523.5) r142.5（外暗环+灰盘面+左上高光+中央小黑胶红标+右下反光）；胶囊高222px=盘÷1.28、凹弧左端（圆心=盘心 r164.5=0.74×胶囊高，间隙22px）；文字米白#EDE6DD 字号≈0.66×胶囊高；胶囊底#302B28
+- [网易云VIP重抠] 新截图 6x 超采样双线性插值+圆形alpha（r142.5 边缘±0.5px 平滑）→ public/music-vip-disc-vip.png 285px（旧51px 白边毛刺模糊彻底解决，白/深/灰三底VLM验证边缘干净结构完整）；SVIP 金盘99px沿用（质量本来就合格）
+- [VipBadge重制] music-mine.tsx：唱片17.5px（1.28×胶囊高，上下溢出）；胶囊左端凹弧 CSS mask（radial-gradient circle 10px at -7.38px 50% 圆内透明）+盒重叠-1.37px+右端999px圆角；文字9px（参考实测0.66×H）VIP米白#EDE6DD/SVIP金#FBF2DC；底色VIP#302B28/SVIP#362E2B；pl4.8/pr5.2
+- [SVIP金色昵称] music-mine.tsx 资料页 h2：loginVip?.isVip&&type==='svip' || 游客 guest.vipType==='svip' → 金色渐变文字（#FFE9B0→#F5CE72→#D9A648 bg-clip-text），否则白色；music-comments.tsx 评论作者名 vipType≥11（黑胶SVIP）→ 金色（浅底#B9862C/深底#E8C275）
+- [拾光小屋] TopBar.tsx：宠物头像再美化（白瓷底座环ring-#fffaf4+多段奶油径向渐变(34%,22%高光位)+双高光(左上大光泽30%×46%+右下弦月反光)+暖色双层投影+内凹下缘，petPanel 时粉晕外扩光圈）；毛玻璃胶囊按钮间距 gap-1→gap-[7px]、p-1→p-[5px]
+- [QQ抽屉] MeDrawer 底部三按钮 pb-[34px]→pb-[20px]（贴近抽屉底缘）
+- [情侣关系卡1:1] qq.tsx CoupleHeartMark 全新重画（useId 防重复ID；204 viewBox：淡粉光晕圆+金色实心双环耳(花瓣形+深金折痕+浅金受光边)+蓝渐变椭圆环(上半被心遮)+果冻爱心(径向渐变浅顶→玫红中部→淡粉缘+V凹陷洋红阴影+下部光雾+左大右小高光)+右侧燕尾丝带压环前）；卡片布局按参考÷2.78 全重排：rounded-16 px-27 pt-26、左列 w-160（标题23px/Lv徽章/已绑定N天 mt-13/玫红#F255D7按钮26px/双头像26px白环-mr-9 mt-24/密友值12px semibold）、图标绝对定位 right-21 top-46 147×147、进度条 flex(白轨8.5px+紫芯inset-1px渐变#DC8AE6→#EFA6DC)+gap-13+mini CoupleHeartMark 19px、再得N分9.5px
+- [验证] tsc 0 新增（仅 next.config.ts 既有基线）；eslint 改动文件 0 新问题（music-mine/music-comments 5个 set-state-in-effect 为基线既有）；E2E 全链路实机 390×844：网易云游客模式→编辑资料开启SVIP→昵称「游客」金色渐变✓+徽章金盘/红标/暗环/高光清晰+胶囊左端凹弧+盘上下溢出✓；切回VIP→昵称恢复白色+黑胶盘红标清晰✓；拾光小屋→毛玻璃胶囊按钮间距舒展+宠物头像奶油渐变双高光白环投影精致✓；QQ 新账号(小柚88888888)注册登录→联系人页头像开抽屉→三按钮很贴底（设置/夜间/北京11°晴跟随天气App）✓；加好友凡凡→聊天→左滑→去绑定专属关系→邀请卡→AI 18s自动接受回成功卡→再左滑→新版情侣关系卡（紫粉渐变/神仙眷侣Lv1/已绑定1天/玫红胶囊/双头像白环/密友值/白轨紫芯进度条+mini爱心徽章/金色双环耳+果冻爱心+蓝环+燕尾丝带 VLM 逐项确认与参考高度一致）✓；「情侣空间>」成功跳恋人空间App（已相恋1天）✓；浏览器console零新增错误，dev.log 无新增错误（429为VLM调用限流不影响应用）
+
+Stage Summary:
+- 第十三轮六项全部完成并实机 E2E 验证通过：网易云 VIP 徽章按新参考截图 1:1 重制（285px 高清唱片+凹弧胶囊+0.66H字号）、SVIP 金色昵称（资料页+评论区）、拾光小屋宠物头像再美化+按钮间距拉开、QQ 抽屉三按钮贴底、情侣关系卡对照参考图像素级测量后全结构重制（渐变/布局/图标/进度条）
+- 关键文件：music-mine.tsx（VipBadge/金昵称）、music-comments.tsx（评论金名）、TopBar.tsx（头像/间距）、qq.tsx（CoupleHeartMark/情侣卡/抽屉）、public/music-vip-disc-vip.png（285px 新抠）
+- 本轮新增测试数据：浏览器 IndexedDB 内 小柚(USER 88888888/123456)+凡凡(CHAR) 已互为好友并建立情侣关系（凡凡已接受邀请）

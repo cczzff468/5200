@@ -85,35 +85,50 @@ export function cnNum(n: number): string {
 }
 
 /**
- * VIP 徽章（第十二轮：唱片直接用用户截图原像素抠底 —— public/music-vip-disc-{vip,svip}.png，
- * 圆形 alpha 无白边）+ CSS 黑胶囊 + 动态等级文字（其他不变，就数字变）。
- * - VIP：黑胶唱片（红色唱片标）+ 暖黑胶囊白字「VIP·叁」；
- * - SVIP：金胶唱片 + 深棕胶囊金字「SVIP·肆」；
- * 唱片压在胶囊左端上（z 浮于胶囊），尺寸比例按截图实测（VIP 盘 16px / SVIP 盘 19px，胶囊 13.5px）。
+ * VIP 徽章（第十三轮：按用户最新参考截图 1:1 重制）。
+ * 唱片：用户截图原像素抠底 —— public/music-vip-disc-{vip,svip}.png。VIP 换新截图 285px 高清大黑胶
+ * （外暗环 + 灰盘面 + 左上高光 + 中央小黑胶红标 + 右下反光）；SVIP 沿用金胶抠底。
+ * 布局（新截图实测：唱片 Ø285 / 胶囊高 225 → 等比换算到胶囊 13.5px）：
+ * - 唱片直径 17.5px（1.28×胶囊高），上下微溢出胶囊；
+ * - 胶囊左端不是平头也不是圆角，而是**凹弧**（圆心=唱片圆心、半径 0.74×胶囊高的圆弧，
+ *   与唱片边缘留 ~1.3px 间隙，弧最深处切入胶囊 ~2.6px）——用 CSS radial-gradient mask 精确复刻；
+ * - 文字「VIP·柒」：字号 9px（参考图实测 ≈0.66×胶囊高），VIP 米白 #EDE6DD / SVIP 金 #FBF2DC，
+ *   胶囊底 VIP #302B28（截图实测 48,43,40）/ SVIP #362E2B；数字跟随等级动态变化。
  * level<1 只显示 VIP。
  */
 export function VipBadge({ type, level }: { type: 'vip' | 'svip'; level: number }) {
   const svip = type === 'svip';
-  const disc = svip ? 19 : 16;
+  const DISC = 17.5; // 唱片直径（1.28×13.5）
+  const ARC = 10; // 胶囊左端凹弧半径（0.74×13.5），圆心=唱片圆心
+  // 胶囊盒左缘 = 唱片半径 - √(ARC²-(H/2)²) = 8.75-7.38 → 盒左缘落在唱片盒内 1.37px
+  const pillMl = 1.37 - DISC; // -1.37px（盒重叠区会被凹弧 mask 挖空，视觉无重叠）
+  // mask：唱片圆心在胶囊盒左缘左侧 7.38px；圆内透明（挖出凹弧）、圆外不透明
+  const maskCss = `radial-gradient(circle ${ARC}px at ${(DISC / 2 + pillMl) * -1}px 50%, transparent ${ARC - 0.15}px, #000 ${ARC}px)`;
   return (
     <span className="relative flex shrink-0 items-center" data-testid="music-mine-vip">
-      {/* 用户截图原像素唱片（圆形抠底无白边），垂直溢出胶囊，右端压进胶囊 5px */}
-      <span className="relative z-10 -mr-[5px] shrink-0" style={{ width: disc, height: disc }}>
-        <img
-          src={svip ? '/music-vip-disc-svip.png' : '/music-vip-disc-vip.png'}
-          alt=""
-          width={disc}
-          height={disc}
-          draggable={false}
-          className="select-none"
-        />
-      </span>
-      {/* 黑胶囊：右侧文字（VIP 白字 / SVIP 金字），高度 13.5px，数字跟随等级动态变化 */}
+      {/* 用户截图原像素唱片（圆形抠底无白边），上下溢出胶囊 2px */}
+      <img
+        src={svip ? '/music-vip-disc-svip.png' : '/music-vip-disc-vip.png'}
+        alt=""
+        width={DISC}
+        height={DISC}
+        draggable={false}
+        className="shrink-0 select-none"
+        style={{ width: DISC, height: DISC }}
+      />
+      {/* 深色胶囊：左端凹弧（radial-gradient mask 挖空唱片+间隙区域），右端全圆角 */}
       <span
-        className={`flex h-[13.5px] items-center rounded-full pl-[9px] pr-[5px] ${svip ? 'bg-[#362E2B]' : 'bg-[#3D3634]'}`}
+        className="flex h-[13.5px] shrink-0 items-center pl-[4.8px] pr-[5.2px]"
+        style={{
+          marginLeft: pillMl,
+          borderRadius: '0 999px 999px 0',
+          background: svip ? '#362E2B' : '#302B28',
+          WebkitMaskImage: maskCss,
+          maskImage: maskCss,
+        }}
       >
         <span
-          className={`text-[11px] font-bold leading-none tracking-[0.01em] ${svip ? 'text-[#FBF2DC]' : 'text-[#F8F3F1]'}`}
+          className={`text-[9px] font-bold leading-none ${svip ? 'text-[#FBF2DC]' : 'text-[#EDE6DD]'}`}
         >
           {svip ? 'SVIP' : 'VIP'}
           {level >= 1 && <span className="font-bold">·{cnNum(level)}</span>}
@@ -440,9 +455,17 @@ export function MusicMine({ onSettings }: { onSettings: () => void }) {
           </button>
         </div>
 
-        {/* 昵称 + VIP 徽章 */}
+        {/* 昵称 + VIP 徽章（SVIP 昵称变金色——网易云同款：黑胶SVIP 用户名金色展示） */}
         <div className="mt-2 flex items-center justify-center gap-2 px-6">
-          <h2 className="max-w-[62%] truncate text-[21px] font-bold" data-testid="music-mine-nickname">
+          <h2
+            className={`max-w-[62%] truncate bg-clip-text text-[21px] font-bold ${
+              // 登录账号是黑胶SVIP，或游客资料选择了 SVIP → 金色昵称
+              (loginUid ? loginVip?.isVip && loginVip.type === 'svip' : guest.vipType === 'svip')
+                ? 'text-transparent [background-image:linear-gradient(180deg,#FFE9B0_0%,#F5CE72_45%,#D9A648_100%)]'
+                : 'text-white'
+            }`}
+            data-testid="music-mine-nickname"
+          >
             {name}
           </h2>
           {loginUid ? (

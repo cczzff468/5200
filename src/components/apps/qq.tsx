@@ -40,7 +40,7 @@
  * - 会话、空间帖子、评论、密友值、登录态 localStorage 持久化
  */
 
-import { Fragment, useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useLayoutEffect, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   AudioLines,
@@ -9885,39 +9885,97 @@ function readCoupleBondInfo(peerId: string): { bound: boolean; days: number; pen
   }
 }
 
-/** 情侣卡右侧 3D 装饰：粉渐变立体爱心 + 黄蝴蝶结 + 蓝色光环托底（对照用户参考图） */
+/** 情侣卡右侧 3D 装饰（第十三轮：对照用户最新参考图 1:1 重制）
+ *  结构（参考图像素级测量：黄丝带双环耳（实心金色花瓣形，从爱心顶部两侧向后展开）
+ *  + 蓝色椭圆环托底（上半波爱心遮挡）+ 果冻质感爱心（浅粉顶部圆瓣→玫红中部→淡粉下缘，
+ *  顶部 V 四陷深洋红阴影 + 左大右小高光 + 下部大光雾）+ 右侧燕尾丝带垂坠（压在蓝环前）
+ *  + 淡粉光晕底。颜色取样自参考图：金 #FFC11B、蓝 #62B2FE、心 #FA9CC2/#F0689F、四陷 #E04FC8 */
 function CoupleHeartMark({ className }: { className?: string }) {
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, '');
+  const id = (n: string) => `chm-${n}-${uid}`;
   return (
-    <svg viewBox="0 0 100 100" className={className} aria-hidden="true">
+    <svg viewBox="0 0 204 204" className={className} aria-hidden="true">
       <defs>
-        <radialGradient id="cch-heart" cx="35%" cy="28%" r="85%">
-          <stop offset="0" stopColor="#FFC4DB" />
-          <stop offset="0.45" stopColor="#FF7EB0" />
-          <stop offset="1" stopColor="#E34A8B" />
+        <radialGradient id={id('halo')} cx="50%" cy="50%" r="50%">
+          <stop offset="0" stopColor="#FFF2F8" stopOpacity="0.9" />
+          <stop offset="0.55" stopColor="#FFDCF0" stopOpacity="0.45" />
+          <stop offset="1" stopColor="#FFD9EF" stopOpacity="0" />
         </radialGradient>
-        <linearGradient id="cch-ring" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#8FD0FF" />
-          <stop offset="1" stopColor="#3D9BE0" />
+        <linearGradient id={id('earL')} x1="0.8" y1="0" x2="0.2" y2="1">
+          <stop offset="0" stopColor="#FFE275" />
+          <stop offset="0.5" stopColor="#FFC324" />
+          <stop offset="1" stopColor="#EEA01F" />
         </linearGradient>
-        <linearGradient id="cch-bow" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#FFE08A" />
-          <stop offset="1" stopColor="#F0AE30" />
+        <linearGradient id={id('earR')} x1="0.2" y1="0" x2="0.8" y2="1">
+          <stop offset="0" stopColor="#FFE275" />
+          <stop offset="0.5" stopColor="#FFC324" />
+          <stop offset="1" stopColor="#EEA01F" />
+        </linearGradient>
+        <linearGradient id={id('tail')} x1="0" y1="0" x2="0.4" y2="1">
+          <stop offset="0" stopColor="#FFD456" />
+          <stop offset="1" stopColor="#EFA122" />
+        </linearGradient>
+        <radialGradient id={id('heart')} cx="50%" cy="30%" r="80%">
+          <stop offset="0" stopColor="#FFD6EB" />
+          <stop offset="0.38" stopColor="#FA9CC2" />
+          <stop offset="0.74" stopColor="#F0689F" />
+          <stop offset="1" stopColor="#FBA5C9" />
+        </radialGradient>
+        <radialGradient id={id('notch')} cx="50%" cy="50%" r="50%">
+          <stop offset="0" stopColor="#E04FC8" stopOpacity="0.85" />
+          <stop offset="1" stopColor="#E04FC8" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient id={id('sheen')} cx="50%" cy="42%" r="60%">
+          <stop offset="0" stopColor="#FFFFFF" stopOpacity="0.72" />
+          <stop offset="1" stopColor="#FFFFFF" stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id={id('ring')} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#9FDBFF" />
+          <stop offset="0.55" stopColor="#66B6FE" />
+          <stop offset="1" stopColor="#4A9BE8" />
         </linearGradient>
       </defs>
-      {/* 蓝色光环托底 */}
-      <ellipse cx="50" cy="82" rx="31" ry="8.5" fill="none" stroke="url(#cch-ring)" strokeWidth="5" strokeLinecap="round" />
-      {/* 立体爱心 */}
-      <path d="M50 76 C22 58 14 40 24 28 C31.5 19.5 45 21 50 33 C55 21 68.5 19.5 76 28 C86 40 78 58 50 76 Z" fill="url(#cch-heart)" />
-      {/* 心身高光（左大右小，营造 3D 光泽） */}
-      <ellipse cx="35" cy="36" rx="9" ry="5.5" fill="#fff" opacity="0.55" transform="rotate(-25 35 36)" />
-      <ellipse cx="63" cy="31" rx="4" ry="2.5" fill="#fff" opacity="0.35" transform="rotate(-25 63 31)" />
-      {/* 黄蝴蝶结（心右上角）+ 垂下的丝带尾 */}
-      <g transform="translate(66 18)">
-        <path d="M0 2 C-13 -7 -27 -5 -25 3 C-23.5 9.5 -10 9 0 3.5 Z" fill="url(#cch-bow)" />
-        <path d="M0 2 C13 -7 27 -5 25 3 C23.5 9.5 10 9 0 3.5 Z" fill="url(#cch-bow)" />
-        <circle cx="0" cy="2.5" r="5" fill="#FFD34E" stroke="#E8A62E" strokeWidth="1" />
+
+      {/* 淡粉光晕底 */}
+      <circle cx="102" cy="84" r="95" fill={`url(#${id('halo')})`} />
+
+      {/* 金色丝带双环耳（实心花瓣形，心后两侧） */}
+      <g>
+        <path
+          d="M56 24 C 36 8, 14 16, 9 44 C 5 68, 13 94, 33 104 C 52 113, 68 102, 71 83 C 73 66, 64 53, 50 55 Z"
+          fill={`url(#${id('earL')})`}
+        />
+        <path
+          d="M148 24 C 168 8, 190 16, 195 44 C 199 68, 191 94, 171 104 C 152 113, 136 102, 133 83 C 131 66, 140 53, 154 55 Z"
+          fill={`url(#${id('earR')})`}
+        />
+        {/* 耳内折痕（深金）+ 顶部受光边 */}
+        <path d="M44 44 C 30 58, 25 78, 32 95" fill="none" stroke="#E1941B" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
+        <path d="M160 44 C 174 58, 179 78, 172 95" fill="none" stroke="#E1941B" strokeWidth="3" strokeLinecap="round" opacity="0.5" />
+        <path d="M56 24 C 36 8, 14 16, 9 44" fill="none" stroke="#FFEC9C" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
+        <path d="M148 24 C 168 8, 190 16, 195 44" fill="none" stroke="#FFEC9C" strokeWidth="2.5" strokeLinecap="round" opacity="0.85" />
       </g>
-      <path d="M64 24 C60 34 58 42 59 50" fill="none" stroke="#F0AE30" strokeWidth="3" strokeLinecap="round" opacity="0.9" />
+
+      {/* 蓝色椭圆环托底（上半段被爱心遮挡） */}
+      <ellipse cx="102" cy="127" rx="67" ry="21.5" fill="none" stroke={`url(#${id('ring')})`} strokeWidth="13" />
+
+      {/* 果冻爱心本体 */}
+      <path
+        d="M102 130 C 64 105, 46 80, 49 56 C 52 33, 76 26, 92 40 C 97 44, 100 49, 102 55 C 104 49, 107 44, 112 40 C 128 26, 152 33, 155 56 C 158 80, 140 105, 102 130 Z"
+        fill={`url(#${id('heart')})`}
+      />
+      {/* 顶部 V 四陷深洋红阴影 + 下部大光雾 + 左大右小高光 */}
+      <ellipse cx="102" cy="49" rx="6.5" ry="9" fill={`url(#${id('notch')})`} />
+      <ellipse cx="102" cy="103" rx="31" ry="21" fill={`url(#${id('sheen')})`} />
+      <ellipse cx="82" cy="64" rx="21" ry="12.5" fill="#fff" opacity="0.55" transform="rotate(-20 82 64)" />
+      <ellipse cx="124" cy="52" rx="8.5" ry="5.5" fill="#fff" opacity="0.38" transform="rotate(-20 124 52)" />
+
+      {/* 右侧燕尾丝带（压在蓝环前，参考图右耳下自然垂坠） */}
+      <path
+        d="M152 96 C 170 106, 181 120, 179 141 L 172 132 L 166 143 C 165 124, 157 110, 145 101 Z"
+        fill={`url(#${id('tail')})`}
+      />
+      <path d="M152 96 C 164 104, 173 114, 177 127" fill="none" stroke="#FFEC9C" strokeWidth="2" strokeLinecap="round" opacity="0.7" />
     </svg>
   );
 }
@@ -10016,73 +10074,73 @@ function FriendBondPage({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 pb-8" data-testid="qq-bond-body">
-        {/* 用户第九轮：邀请卡同意后 → 上半部分换情侣关系卡（神仙眷侣/Lv/已绑定天数/情侣空间入口/3D爱心/双头像/密友值进度条，对照用户参考图） */}
+        {/* 用户第十三轮：邀请卡同意后 → 上半部分换情侣关系卡，对照最新参考图 1:1 重制
+            （参考图 1080px 截图实测 ÷2.78 缩放：紫粉渐变 #D28AE0→#FEC6CF、标题 23px+白描边 Lv 徽章、
+            玫红胶囊「情侣空间 >」、左对齐双头像 26px 白环、密友值、白轨紫芯进度条 + 右端 mini 爱心徽章） */}
         {couple.bound ? (
           <div
             data-testid="qq-bond-couple-card"
-            className="relative mt-1 overflow-hidden rounded-[20px] bg-gradient-to-br from-[#C84DFF] via-[#E06FF2] to-[#FF8FC4] px-4 pb-5 pt-5 dark:from-[#6E2BA8] dark:via-[#8E3AA8] dark:to-[#B84E86]"
+            className="relative mt-1 overflow-hidden rounded-[16px] px-[27px] pb-3 pt-[26px]"
+            style={{
+              background:
+                'linear-gradient(105deg, #D28AE0 0%, #E999D9 38%, #F4AFD4 68%, #FEC9D0 100%)',
+            }}
           >
-            {/* 氛围光斑 */}
-            <div aria-hidden="true" className="absolute -right-10 -top-12 h-36 w-36 rounded-full bg-white/25 blur-2xl" />
-            <div aria-hidden="true" className="absolute -left-8 bottom-10 h-28 w-28 rounded-full bg-[#FFD9EC]/45 blur-2xl" />
+            {/* 右侧 3D 爱心装饰（绝对定位：参考图实测图标占卡宽 41%，右上留 21px/46px） */}
+            <CoupleHeartMark className="pointer-events-none absolute right-[21px] top-[46px] h-[147px] w-[147px]" />
 
-            {/* 上半：左侧标题/天数/入口，右侧 3D 爱心装饰 */}
-            <div className="relative flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <p className="text-[22px] font-bold leading-none text-white drop-shadow-[0_1px_3px_rgba(160,40,110,0.28)]">神仙眷侣</p>
-                  <span
-                    data-testid="qq-bond-couple-lv"
-                    className="rounded-[6px] border border-white/85 px-1.5 py-[3px] text-[11px] font-semibold leading-none text-white"
-                  >
-                    Lv{coupleLv.lv}
-                  </span>
-                </div>
-                <p className="mt-2 text-[13px] text-white/85" data-testid="qq-bond-couple-days">
-                  已绑定 {couple.days} 天
-                </p>
-                <button
-                  type="button"
-                  data-testid="qq-bond-couple-space"
-                  onClick={openCoupleSpace}
-                  className="mt-3 flex h-8 items-center gap-0.5 rounded-full bg-black/25 pl-3.5 pr-3 text-[13px] font-medium text-white backdrop-blur-sm active:bg-black/40"
+            {/* 左列内容（宽度让开右侧图标区） */}
+            <div className="relative w-[160px]">
+              <div className="flex items-center gap-1.5">
+                <p className="text-[23px] font-bold leading-none text-white drop-shadow-[0_1px_3px_rgba(160,40,110,0.25)]">神仙眷侣</p>
+                <span
+                  data-testid="qq-bond-couple-lv"
+                  className="rounded-[5px] border border-white/85 px-[5px] py-[3.5px] text-[11px] font-semibold leading-none text-white"
                 >
-                  情侣空间
-                  <ChevronRight className="h-4 w-4" aria-hidden="true" />
-                </button>
+                  Lv{coupleLv.lv}
+                </span>
               </div>
-              <CoupleHeartMark className="h-[92px] w-[92px] shrink-0 drop-shadow-[0_6px_14px_rgba(150,30,100,0.35)]" />
-            </div>
-
-            {/* 中部：双头像（微重叠，白环） */}
-            <div className="relative mt-4 flex items-center justify-center">
-              <span className="z-10 -mr-2.5 grid h-[46px] w-[46px] place-items-center overflow-hidden rounded-full bg-white/30 shadow-[0_4px_12px_rgba(120,30,90,0.30)] ring-[2.5px] ring-white/95">
-                <QqAvatar src={me.avatar} alt={me.name} size={46} />
-              </span>
-              <span className="grid h-[46px] w-[46px] place-items-center overflow-hidden rounded-full bg-white/30 shadow-[0_4px_12px_rgba(120,30,90,0.30)] ring-[2.5px] ring-white/95">
-                <QqAvatar src={peer.avatar} alt={peer.name} size={46} />
-              </span>
-            </div>
-            <p className="relative mt-2 text-center text-[13px] font-medium text-white/95" data-testid="qq-bond-couple-points">
-              密友值 {stat.points} 分
-            </p>
-
-            {/* 底部：升级进度条 + 心形滑块（对照参考图：滑块停在当前分数处） */}
-            <div className="relative mt-2.5">
-              <div className="h-[7px] overflow-visible rounded-full bg-white/30">
-                <div className="h-full rounded-full bg-gradient-to-r from-white/80 to-white" style={{ width: `${coupleLv.pct}%` }} />
-              </div>
-              <span
-                aria-hidden="true"
-                className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
-                style={{ left: `${Math.max(5, Math.min(95, coupleLv.pct))}%` }}
+              <p className="mt-[13px] text-[13px] leading-none text-white/85" data-testid="qq-bond-couple-days">
+                已绑定 {couple.days} 天
+              </p>
+              <button
+                type="button"
+                data-testid="qq-bond-couple-space"
+                onClick={openCoupleSpace}
+                className="mt-[7px] flex h-[26px] items-center gap-[1px] rounded-full bg-[#F255D7] pl-[11px] pr-[8px] text-[11.5px] font-medium leading-none text-white shadow-[0_3px_9px_rgba(214,45,180,0.38)] transition active:scale-95 active:bg-[#E040C4]"
               >
-                <svg viewBox="0 0 24 24" className="h-[19px] w-[19px] drop-shadow-[0_2px_4px_rgba(150,30,100,0.4)]">
-                  <path d="M12 21C4 15 1.5 10.5 4 7c2-2.8 6-2.2 8 1 2-3.2 6-3.8 8-1 2.5 3.5 0 9-8 14Z" fill="#FF5C9E" stroke="#fff" strokeWidth="1.6" />
-                </svg>
-              </span>
+                情侣空间
+                <ChevronRight className="h-[13px] w-[13px]" aria-hidden="true" />
+              </button>
+
+              {/* 双头像（左前右后、白环、重叠约 1/3，左对齐——对照参考图） */}
+              <div className="mt-[24px] flex items-center">
+                <span className="z-10 -mr-[9px] grid h-[26px] w-[26px] place-items-center overflow-hidden rounded-full bg-white/40 shadow-[0_2px_6px_rgba(120,30,90,0.25)] ring-[2.5px] ring-white">
+                  <QqAvatar src={me.avatar} alt={me.name} size={26} />
+                </span>
+                <span className="grid h-[26px] w-[26px] place-items-center overflow-hidden rounded-full bg-white/40 shadow-[0_2px_6px_rgba(120,30,90,0.25)] ring-[2.5px] ring-white">
+                  <QqAvatar src={peer.avatar} alt={peer.name} size={26} />
+                </span>
+              </div>
+              <p className="mt-[8px] text-[12px] font-semibold leading-none text-white" data-testid="qq-bond-couple-points">
+                密友值 {stat.points} 分
+              </p>
             </div>
-            <p className="relative mt-2.5 text-center text-[10.5px] text-white/75">
+
+            {/* 底部升级进度条：白轨 + 紫芯（上下留 1px 白边）+ 右端 mini 爱心徽章（对照参考图） */}
+            <div className="relative mt-[13px] flex items-center gap-[13px]">
+              <div className="relative h-[8.5px] flex-1 rounded-full bg-white/60">
+                <div
+                  className="absolute inset-y-[1px] left-[1px] rounded-full"
+                  style={{
+                    width: `calc(${Math.max(4, Math.min(100, coupleLv.pct))}% - 2px)`,
+                    background: 'linear-gradient(90deg, #DC8AE6 0%, #EFA6DC 100%)',
+                  }}
+                />
+              </div>
+              <CoupleHeartMark className="h-[19px] w-[19px] shrink-0 drop-shadow-[0_2px_4px_rgba(180,60,140,0.35)]" />
+            </div>
+            <p className="relative mt-[7px] text-[9.5px] leading-none text-white/75">
               再得 {coupleLv.need} 分升级 Lv{coupleLv.lv + 1}
             </p>
           </div>
@@ -12424,8 +12482,9 @@ function MeDrawer({
         </div>
         </div>
 
-        {/* 底部：设置 / 夜间 / 天气城市（固定在抽屉底部；用户第九轮：按钮上下变小+整体下移，城市跟随天气 App：城市名+温度+实况图标） */}
-        <div className="shrink-0 px-5 pb-[34px] pt-4">
+        {/* 底部：设置 / 夜间 / 天气城市（固定在抽屉底部；用户第九轮：按钮上下变小+城市跟随天气 App；
+            用户第十三轮：三个按钮再往下移（pb 34→20px，贴近抽屉底缘）） */}
+        <div className="shrink-0 px-5 pb-[20px] pt-4">
           <div className="flex items-start justify-around border-t border-black/[0.05] pt-3.5 dark:border-white/[0.06]">
             {[
               { icon: <Settings className="h-[19px] w-[19px]" strokeWidth={1.9} />, label: '设置', sub: null, fn: onOpenSettings, testid: 'qq-drawer-settings' },
