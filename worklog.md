@@ -1173,3 +1173,25 @@ Stage Summary:
 - 信息 App（iMessage）全气泡装扮系统落地：四种样式（默认纯色/七彩循环/毛玻璃/液态玻璃）+ 我的/TA的 双侧自定义色（HSL 滑条 + 24 色色板）+ 收藏夹方案，与微信/QQ 装扮完全隔离（bubbleStyle.sms 独立槽位）
 - 聊天设置新增「主题」入口（带实时装扮摘要），点入即气泡装扮页；所有色底气泡（文本/语音/输入中指示器及小尾巴）实时跟随装扮变化，IndexedDB 持久化
 - 关键文件：src/lib/ios/bubble-style.ts、src/lib/ios/store.ts、src/components/apps/bubble-style-settings.tsx、src/components/apps/chat-settings.tsx、src/components/apps/chat.tsx
+
+---
+Task ID: 6
+Agent: 主控 Agent（Z.ai Code）
+Task: 气泡样式设置界面美化 —— 简约 + 毛玻璃胶囊风格（用户指定）
+
+Work Log:
+- 重写 src/components/apps/bubble-style-settings.tsx 视觉层（逻辑/props/存储完全不动，第二十轮纯 UI 改版）
+- 新增 AmbientBackdrop 组件：页面底层铺 4 枚低饱和柔彩大光斑（淡青/淡粉紫/淡绿/淡黄，blur-3xl，深色模式降透明度），为毛玻璃提供可模糊底色
+- 全卡片玻璃化：预览卡/样式四格/颜色卡/命名弹窗 = bg-white/55 + backdrop-blur-xl + 发丝白描边（深色 white 7% + 白 12% 描边），圆角加大 24-26px
+- 胶囊语言统一：区块标题玻璃 chip（GlassChip 组件）、分段切换玻璃胶囊壳+白玻璃选中 pill（iOS 分段风）、保存/应用/取消/输入框全胶囊、收藏夹整行 rounded-full 大胶囊+胶囊缩略幕布、空态虚线玻璃胶囊
+- 保存/应用按钮改「玻璃糖果」质感：accent 底 + ring-white/35 内白描边 + inset 顶部高光 + accent 柔投影（withAlpha 合成）
+- HSL 滑条轨道玻璃化（h-3.5 + 白描边 + 顶部内高光）；色点/当前色预览圆加糖珠内高光；导航栏 bg-transparent! 只留 blur = 顶部玻璃条（Tailwind 4 后缀 important）
+- bunx eslint 单文件检查通过（exit 0）；全项目 lint 超时改用单文件
+- Agent Browser E2E 全链路验证：锁屏上滑解锁 → 主屏 → 信息 App → 小助手聊天 → 聊天设置 → 主题页；切换「毛玻璃」样式（上级主题按钮联动显示）→ 我的侧选粉 #FE91A6 / TA 侧选青 #46EAEB（分段切换+色板）→ 保存「青粉磨砂」方案（Enter 提交，弹窗玻璃质感）→ 收藏夹胶囊行渲染 → 删除方案 → 返回聊天页发消息实测：右侧粉色毛玻璃胶囊 / 左侧青色毛玻璃胶囊
+- VLM 截图审查 6 轮：毛玻璃拟态明显、卡片半透明+模糊+描边、控件胶囊形、背景柔彩光斑、无错位/溢出/不可读缺陷
+- console error 计数 0、页面错误 0；dev.log 仅既有 instrumentation Edge Runtime 警告（无关）
+
+Stage Summary:
+- 气泡样式（主题）设置界面完成「简约毛玻璃胶囊」改版：页面柔彩光斑底 + 全玻璃卡片 + 全胶囊控件，深浅色模式双适配
+- 交互链路 E2E 全通过：样式切换/双侧自定义色/分段切换/滑条/色板/保存方案/命名弹窗/收藏夹应用删除/聊天页气泡实时联动（毛玻璃+自定义色在真实聊天中生效）
+- 未改动 bubble-style.ts 核心库与任何聊天渲染逻辑，装扮系统行为完全兼容
