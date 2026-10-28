@@ -1397,3 +1397,47 @@ Stage Summary:
 - 液态玻璃主题按 5 张参考图精确复刻完成：聊天页三件分离玻璃顶栏/纯文字时间戳/大圆角玻璃输入工具面板/竖排宽幅乳白玻璃长按菜单（292px）/玻璃状态卡/主界面头像胶囊三段顶栏+搜索胶囊+六分类分段控件（带过滤与未读角标）+分组玻璃大卡/加号菜单 6 项乳白玻璃竖列（新增小程序+一键已读）/「我」页居中资料卡+双胶囊标签/icon-only 悬浮 TabBar+微信绿玻璃选中泡；默认主题全部零变化（条件渲染隔离）
 - 关键文件：src/app/globals.css（lg-chip/lg-title/lg-sheet/lg-menu-row/lg-seg(-on)/lg-row/lg-tab-bubble）、wechat.tsx（顶栏/搜索/分类/分组列表/加号菜单/我页/TabBar/会话长按菜单）、bubble-menu.tsx（liquid 竖排变体+computeBubbleMenuPosLiquid）、peer-status-card.tsx（液态玻璃化）、qq.tsx（长按菜单 liquid 接线）、next.config.ts（devIndicators:false）
 - E2E 种子方案沉淀在 /home/z/tmp-analysis/seed-eval.js（4 联系人+3 会话+未读+液态主题+登录态）；玻璃材质=blur(40px)+白78%+顶缘高光带+大柔影，全部计算样式验证通过
+
+---
+Task ID: 45-b
+Agent: QQ液态玻璃主题精确修正子代理（主控委派，报告超时但工作已完成，主控验证收录）
+Task: QQ 液态玻璃主题第四十四轮精确修正（顶栏无阻隔模糊带 + 输入区去大椭圆 + 工具钮椭圆 + 语音/加号/表情面板液态化 + 消息列表置顶/非置顶两张白面板）
+
+Work Log:
+- [qq.tsx 聊天页顶栏] 删除整行大椭圆（lg-bar）；wrapper liquid 时改 lg-blur-strip pointer-events-none absolute inset-x-0 top-0 z-20（消息从名字后穿过、轻微模糊）；三个顶栏行加 [&_button]:pointer-events-auto；返回键/右上角三条杠菜单键各 36px lg-chip 椭圆包裹；消息滚动容器 liquid 时 pt-[112px] 让位
+- [qq.tsx 输入区] 输入行删除 lg-bar 大椭圆；ChatRichInput liquid 分支 rounded-[10px]→rounded-full 毛玻璃椭圆（pl-3.5→pl-4）；发送键 liquid 时 rounded-full；六图标工具栏（语音/图片/拍摄/线下/表情/加号）每个按钮 liquid 时 38px lg-chip 椭圆包裹（行容器 px-7→px-4 收紧）
+- [qq.tsx 面板] QqVoicePanel 加 liquid prop（容器 lg-sheet rounded-[28px]，群聊不传不受影响）；加号面板容器 lg-bar→lg-sheet rounded-[24px]；QqPlusGrid 加 liquid 分支＝竖向单列列表（图标左+文字右 lg-menu-row 54px 行，默认彩色宫格不变）；QqStickerPanel 加 liquid prop（容器 lg-sheet rounded-[24px]）
+- [qq.tsx 主界面] MainScreen 根 liquid 时 lg-root→真实 QQ 底色 bg-[#FAFAFC]；MessagesPage 会话列表改「置顶一张 lg-panel + 非置顶一张 lg-panel」（组间 mt-2.5，空组不渲染，默认主题无包裹层零变化）；ContactsPage/DiscoverPage 全部 lg-card→lg-panel
+- [验证] tsc 仅 proactive-msg.ts 既有基线错误；eslint 两文件 exit 0
+
+Stage Summary:
+- QQ 液态玻璃主题第四十四轮修正完成：顶栏无阻隔模糊带+独立椭圆钮、输入区无大椭圆+毛玻璃椭圆输入框+六工具钮椭圆、语音/加号（竖向）/表情面板全部乳白玻璃化、消息列表置顶/非置顶两张白色面板、主界面真实底色
+
+---
+Task ID: 45
+Agent: 主控 Agent（Z.ai Code）
+Task: 第四十四轮液态玻璃主题用户反馈精确修正 —— 微信侧全套 + 共享组件（长按菜单 2 列网格）+ CSS 新件 + E2E 全链路验证 + 双主题回归
+
+Work Log:
+- [需求解析] 用户反馈逐条映射：①微信聊天页名字后无阻隔（气泡穿过+模糊）②输入区删大椭圆/语音钮玻璃圈内嵌黑圈/表情加号共用椭圆 ③微信主界面头像名字去椭圆且仅微信 tab 显示 ④四 tab 背景改真实微信色 ⑤置顶/非置顶各一张白面板（微信+QQ 消息列表）⑥QQ 聊天页返回/三条杠椭圆、名字无包裹、输入毛玻璃椭圆、工具栏每钮椭圆 ⑦微信/QQ 加号面板竖向液态 ⑧QQ 语音录音/表情面板液态化 ⑨长按菜单横向 2×2
+- [VLM 参考图采证] createVision 复核 121245（输入栏=横向胶囊内嵌两圆形钮+左侧竖列菜单）、1793155743330（列表=两张白色大卡+左上头像名字无胶囊+标题纯文字+悬浮 TabBar）、1793155772752（我页=居中白卡）；会话期间用户新传 4 张图（分类标签/聊天顶栏胶囊/TabBar/聊天页）与实现方向一致
+- [CSS] globals.css 新增第四十四轮类：lg-panel（真实微信白色分组面板 96% 白+16px 圆角+发丝描边+.dark）、lg-blur-strip（透明 backdrop-blur(5px) saturate(1.6) 无阻隔模糊带）
+- [wechat.tsx 聊天页] 顶栏 wrapper liquid 时 lg-blur-strip pointer-events-none absolute（气泡从名字后穿过）；名字删 lg-title 胶囊→纯文字 17px；三个顶栏行加 [&_button]:pointer-events-auto；消息容器 liquid 时 pb-3 pt-[96px]；输入行删 lg-bar 大椭圆；语音钮改「lg-chip 40px 玻璃圆圈内嵌 30px 黑圈」；输入框 lg-input rounded-full 毛玻璃椭圆；表情+加号共用一个 lg-chip 玻璃椭圆（有内容时加号移出换发送键）；PlusPanel liquid 改竖向 lg-sheet 列表（11 项 lg-menu-row 54px）；WxStickerPanel 加 liquid prop（lg-sheet 玻璃面板）
+- [wechat.tsx 主界面] 根 lg-root→bg-[#EDEDED]（真实微信底色）；顶栏头像名字删 lg-title 包裹且仅 tab==='chats' 渲染；标题绝对居中改纯文字 16.5px；liquidGroups 四分组重写为「置顶/非置顶」两组；置顶行 bg-[#07C160]/[0.05]→bg-[#ECECEC]（真实微信置顶灰）；chats 列表 lg-card→lg-panel；通讯录/发现/我全部 lg-card→lg-panel（13 处）；字母 sticky 头 liquid 时统一实底 #EDEDED
+- [wechat.tsx 会话长按菜单] liquid 改横向 2×2 玻璃网格（w-[min(84%,320px)] grid-cols-2 p-[5px]，行 54px 图标左+文字右，MENU_W/H 320×118 动态）
+- [bubble-menu.tsx] 消息长按菜单 liquid 变体改横向 2 列网格（LIQ_MENU_W 340、行高 54、grid-cols-2、图标左+truncate 文字右；computeBubbleMenuPosLiquid 按 ceil(n/2) 行数算高度）；wx/qq 三端接线不变
+- [验证] bunx tsc --noEmit 仅 proactive-msg.ts 既有基线；eslint 四个改动文件 exit 0；dev.log ✓ Compiled（仅既有 instrumentation 良性警告）
+- [E2E Agent Browser 390×844]（seed44.js：4 联系人+wx/qq 会话+双液态主题+置顶+登录态；锁屏 pointer 上滑解锁）：
+  * 微信主界面：rootBg=#EDEDED ✓ 2 张 lg-panel（置顶/非置顶）✓ 头像名字无胶囊且仅 chats tab 显示（contacts/discover/me exitShown=false）✓ 置顶行 #ECECEC ✓ 搜索胶囊/分段控件/悬浮 TabBar 保留 ✓
+  * 微信聊天页：名字无玻璃胶囊 ✓ 顶栏 blur(5px) ✓ 语音钮 lg-chip 内嵌黑圈 ✓ 输入框 rounded-full+lg-input ✓ 0 个 lg-bar（大椭圆删除）✓ 表情+加号共用 lg-chip 椭圆（plusInSharedWrap=true）✓ 输入内容→加号消失发送键出现且在共用椭圆外 ✓
+  * 微信面板：加号面板 lg-sheet 竖向 11 行（flexDirection=column、blur(40px)、白78%、24px 圆角）✓ 表情面板 lg-sheet ✓
+  * 长按菜单：消息菜单 grid-cols-2 340px 10 项（复制/删除同排）✓ 会话菜单 2×2 320×118 四项两排 ✓
+  * QQ：消息页 rootBg=#FAFAFC ✓ 2 张 lg-panel（置顶=c-momo / 非置顶=3 会话）✓ 聊天页返回/三条杠 lg-chip ✓ 名字无包裹 ✓ blur(5px) ✓ 输入毛玻璃椭圆 ✓ 六工具钮全 lg-chip ✓ 语音面板 lg-sheet 28px ✓ 加号面板竖向 8 行 ✓ 表情面板 lg-sheet ✓
+  * 默认主题回归：切回 default 重载——0 个 lg-panel、TabBar 恢复文字标签、返回键无 chip、输入框白实底、语音钮黑圈、无共用椭圆、长按菜单深色横排 rgba(44,44,46,0.97) ✓
+  * 浏览器 console 零错误；VLM 审查 8 张关键截图全部「无缺陷」
+- [种子修正] seed44.js 漏写 c-momo name 字段（测试数据笔误，非 App 缺陷，E2E 用凡凡行替代验证）
+
+Stage Summary:
+- 第四十四轮液态玻璃主题修正全部落地：微信/QQ 聊天页顶栏无阻隔模糊带（气泡从名字后穿过）、输入区大椭圆删除+语音钮玻璃圈内嵌黑圈+表情加号共用椭圆+毛玻璃椭圆输入框、QQ 六工具钮逐钮椭圆；微信主界面真实底色+头像名字仅微信 tab+置顶/非置顶两张白色面板（QQ 同款）；加号面板双端竖向液态列表、QQ 语音/表情面板玻璃化；长按菜单（消息 2 列网格+会话 2×2）横向化；默认主题像素级零变化
+- 关键文件：src/app/globals.css（lg-panel/lg-blur-strip）、wechat.tsx（约 30 处条件分支+面板重构）、bubble-menu.tsx（2 列网格变体）、qq.tsx、voice-input.tsx
+- E2E 种子沉淀 /home/z/tmp-analysis/seed44.js（双端液态+置顶+登录态）

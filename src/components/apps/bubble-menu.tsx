@@ -3,8 +3,8 @@
 /**
  * 聊天气泡长按弹窗菜单（微信 / QQ / 信息 三端共用）：
  * - 默认（原生微信/QQ 同款）：深色横向卡片（图标 + 文字竖排），选项多时卡片内部横向滚动（适配屏幕宽度）
- * - 液态玻璃主题（第四十三轮，参考图）：竖排列表菜单（图标左 + 文字右）——乳白强模糊玻璃浮层、
- *   超大圆角、黑图标黑字、无分割线、按下态浅绿荧光；无指向箭头（参考图同款洁净浮层）
+ * - 液态玻璃主题（第四十四轮，用户指定）：横向 2 列网格菜单（图标左 + 文字右）——乳白强模糊玻璃浮层、
+ *   大圆角、黑图标黑字、无分割线、按下态浅绿荧光；无指向箭头（参考图同款洁净浮层）
  * - 位置由 computeBubbleMenuPos / computeBubbleMenuPosLiquid 计算（容器内坐标）：默认气泡下方居中并钳制在容器内，
  *   下方空间不足时翻转到气泡上方（不遮挡气泡内容），小箭头指向气泡（液态无箭头）
  * - 全屏透明遮罩：点击菜单外区域关闭、不执行任何动作
@@ -106,16 +106,17 @@ export function computeBubbleMenuPos(bubble: DOMRect, container: DOMRect | null,
   return { top, left, arrowX, flip: !below, maxW };
 }
 
-/** 液态玻璃竖排列表菜单的尺寸常量：行高 58px、固定宽 292px（参考图同款宽幅列表） */
-const LIQ_MENU_W = 292;
-const LIQ_ROW_H = 58;
+/** 液态玻璃横向 2 列网格菜单的尺寸常量：行高 54px、固定宽 340px（用户指定：长按菜单横向 2×2） */
+const LIQ_MENU_W = 340;
+const LIQ_ROW_H = 54;
 
-/** 液态主题竖排菜单定位：气泡下方居中（下方放不下翻到上方），左右钳制在容器内；无箭头 */
+/** 液态主题 2 列网格菜单定位：气泡下方居中（下方放不下翻到上方），左右钳制在容器内；无箭头 */
 export function computeBubbleMenuPosLiquid(bubble: DOMRect, container: DOMRect | null, itemCount: number): BubbleMenuPos {
   const cw = container?.width ?? (typeof window !== 'undefined' ? window.innerWidth : 393);
   const ch = container?.height ?? (typeof window !== 'undefined' ? window.innerHeight : 852);
   const width = Math.min(LIQ_MENU_W, cw - 24);
-  const menuH = itemCount * LIQ_ROW_H + 10;
+  const rows = Math.ceil(Math.max(itemCount, 1) / 2);
+  const menuH = rows * LIQ_ROW_H + 10;
   const relTop = container ? bubble.top - container.top : bubble.top;
   const centerX = bubble.left + bubble.width / 2 - (container?.left ?? 0);
   const below = relTop + bubble.height + menuH + 16 <= ch;
@@ -138,7 +139,7 @@ export function BubbleActionMenu({
   onSelect: (key: string) => void;
   onClose: () => void;
   testPrefix?: string;
-  /** 液态玻璃主题（第四十三轮）：竖排列表菜单（图标左 + 文字右）乳白强模糊玻璃浮层 */
+  /** 液态玻璃主题（第四十四轮，用户指定）：横向 2 列网格菜单（图标左 + 文字右）乳白强模糊玻璃浮层 */
   liquid?: boolean;
 }) {
   return (
@@ -160,11 +161,11 @@ export function BubbleActionMenu({
         onClick={(e) => e.stopPropagation()}
       >
         {liquid ? (
-          /* 液态玻璃竖排列表菜单（参考图）：乳白强模糊 + 超大圆角 + 黑图标黑字 + 无分割线，按下浅绿荧光；宽幅大呼吸感行 */
+          /* 液态玻璃横向 2 列网格菜单（用户指定）：乳白强模糊 + 大圆角 + 图标左文字右 + 无分割线，按下浅绿荧光 */
           <div
             role="menu"
             data-testid={`${testPrefix}-card`}
-            className="lg-sheet relative flex w-full flex-col overflow-hidden rounded-[28px] py-[5px]"
+            className="lg-sheet grid grid-cols-2 overflow-hidden rounded-[24px] py-[5px]"
             style={{ width: pos.maxW < LIQ_MENU_W ? pos.maxW : LIQ_MENU_W }}
           >
             {items.map((item) => (
@@ -174,12 +175,12 @@ export function BubbleActionMenu({
                 role="menuitem"
                 data-testid={`${testPrefix}-${item.key}`}
                 onClick={() => onSelect(item.key)}
-                className={`lg-menu-row flex h-[58px] w-full items-center gap-4 px-6 text-left ${
+                className={`lg-menu-row flex h-[54px] w-full items-center gap-3 px-5 text-left ${
                   item.danger ? 'text-[#E5484D]' : 'text-[#1C1C1E] dark:text-white/90'
                 }`}
               >
-                <item.icon className="h-[23px] w-[23px] shrink-0" strokeWidth={2} fill={item.filled ? 'currentColor' : 'none'} aria-hidden="true" />
-                <span className="text-[16.5px] font-semibold leading-none">{item.label}</span>
+                <item.icon className="h-[22px] w-[22px] shrink-0" strokeWidth={2} fill={item.filled ? 'currentColor' : 'none'} aria-hidden="true" />
+                <span className="truncate text-[15.5px] font-semibold leading-none">{item.label}</span>
               </button>
             ))}
           </div>

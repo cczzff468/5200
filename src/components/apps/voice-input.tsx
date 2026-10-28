@@ -621,13 +621,16 @@ export function QqVoiceHoldButton({
 
 /** QQ 语音面板（工具栏下方展开）：「按住说话」+ 大圆麦克风 + 变声/对讲/录音页签（装饰）
  *  录音时全部在面板内：计时+两侧波形贴大圆钮正上方；左「文」（转文字）/右「×」（取消）在大圆钮两侧；
- *  不再弹白幕浮层，消息区全程可见（QQ App 原生体验） */
+ *  不再弹白幕浮层，消息区全程可见（QQ App 原生体验）。
+ *  液态玻璃（liquid，单聊传入）：面板换乳白强模糊玻璃（lg-sheet）；群聊等调用点不传保持默认白底 */
 export function QqVoicePanel({
   rec,
   holdTestId = 'qq-voice-hold',
+  liquid = false,
 }: {
   rec: VoiceRecorder;
   holdTestId?: string;
+  liquid?: boolean;
 }) {
   const holding = rec.phase !== 'idle';
   const recording = rec.phase === 'recording';
@@ -637,7 +640,15 @@ export function QqVoicePanel({
   while (bars.length < 7) bars.unshift(0.08);
   const rightBars = [...bars].reverse();
   return (
-    <div className="relative z-10 flex h-[290px] shrink-0 select-none flex-col items-center bg-white pb-3 dark:bg-[#1B1C1F]" data-testid="qq-voice-panel">
+    <div
+      className={
+        liquid
+          ? /* 液态玻璃（用户指定）：去实底白，乳白强模糊玻璃面板（.dark 变体 CSS 内建） */
+            'lg-sheet relative z-10 mx-2.5 mb-2.5 flex h-[290px] shrink-0 select-none flex-col items-center rounded-[28px] pb-3'
+          : 'relative z-10 flex h-[290px] shrink-0 select-none flex-col items-center bg-white pb-3 dark:bg-[#1B1C1F]'
+      }
+      data-testid="qq-voice-panel"
+    >
       {/* 顶部提示：录音时隐藏（计时/波形条绝对定位在同一高度，不挤动布局）；
           划到「文」且 Web Speech 已出文字时，同位置改为实时识别文字 */}
       <p

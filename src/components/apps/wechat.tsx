@@ -2727,12 +2727,15 @@ export function WxStickerPanel({
   onPickBuiltin,
   onClose,
   onToast,
+  liquid = false,
 }: {
   onPick: (s: Sticker) => void;
   /** 内置表情点选回调（插入输入框；面板保持展开可连续点选） */
   onPickBuiltin?: (s: Sticker) => void;
   onClose: () => void;
   onToast: (m: string) => void;
+  /** 液态玻璃主题（单聊传入；群聊等调用点不传保持默认白底面板） */
+  liquid?: boolean;
 }) {
   const [list, setList] = useState<Sticker[]>(() => loadStickers('wx'));
   const [groups, setGroups] = useState<StickerGroup[]>(() => loadStickerGroups('wx'));
@@ -2841,7 +2844,12 @@ export function WxStickerPanel({
   return (
     <div
       ref={panelRef}
-      className="relative shrink-0 border-t border-black/[0.05] bg-[#F7F7F7] dark:border-white/[0.06] dark:bg-[#161616]"
+      className={
+        liquid
+          ? /* 液态玻璃（用户指定）：去实底与上边框，乳白强模糊玻璃面板 */
+            'lg-sheet relative shrink-0 mx-2.5 mb-2.5 rounded-[24px]'
+          : 'relative shrink-0 border-t border-black/[0.05] bg-[#F7F7F7] dark:border-white/[0.06] dark:bg-[#161616]'
+      }
       style={searchOpen ? { height: searchH > 0 ? searchH : 380 } : undefined}
       data-testid="wx-sticker-panel"
     >
@@ -3743,7 +3751,8 @@ function RedPacketIcon() {
   );
 }
 
-/** 加号面板（输入栏下方弹出，输入框跟随保留在面板上方） */
+/** 加号面板（输入栏下方弹出，输入框跟随保留在面板上方）。
+ *  液态玻璃主题（用户指定）：竖向乳白玻璃列表（图标左 + 文字右，lg-menu-row） */
 function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; liquid?: boolean }) {
   const items: Array<{ key: PlusAction; label: string; icon: React.ReactNode }> = [
     { key: 'camera', label: '相机', icon: <Camera className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
@@ -3760,34 +3769,47 @@ function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; li
   ];
   return (
     <div
-      className={`shrink-0 px-2 pt-4 ${
+      className={`shrink-0 ${
         liquid
-          ? /* 液态玻璃主题（参考图：加号面板 = 玻璃浮层 + 玻璃图标砖，去实底去上边框） */
-            'lg-bar mx-2.5 mb-2.5 rounded-[22px]'
-          : 'border-t border-black/[0.05] bg-[#F7F7F7] pb-[max(16px,env(safe-area-inset-bottom))] dark:border-white/[0.06] dark:bg-[#161616]'
+          ? /* 液态玻璃（用户指定）：竖向乳白玻璃列表 */
+            'lg-sheet mx-2.5 mb-2.5 rounded-[24px] py-[5px]'
+          : 'px-2 pt-4 border-t border-black/[0.05] bg-[#F7F7F7] pb-[max(16px,env(safe-area-inset-bottom))] dark:border-white/[0.06] dark:bg-[#161616]'
       }`}
       data-testid="wx-plus-panel"
     >
-      <div className={`grid grid-cols-4 ${liquid ? 'pb-4' : ''}`}>
-        {items.map((it) => (
-          <button
-            key={it.key}
-            type="button"
-            data-testid={`wx-plus-${it.key}`}
-            onClick={() => onAction(it.key)}
-            className="flex flex-col items-center gap-[7px] py-2 active:bg-black/[0.04] dark:active:bg-white/[0.06]"
-          >
-            <span
-              className={`flex h-[57px] w-[57px] items-center justify-center rounded-[14px] text-black/70 dark:text-white/75 ${
-                liquid ? 'lg-input' : 'bg-white shadow-[0_1px_5px_rgba(0,0,0,0.05)] dark:bg-[#242428]'
-              }`}
+      {liquid ? (
+        <div className="flex flex-col">
+          {items.map((it) => (
+            <button
+              key={it.key}
+              type="button"
+              data-testid={`wx-plus-${it.key}`}
+              onClick={() => onAction(it.key)}
+              className="lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16px] font-semibold text-[#1C1C1E] dark:text-white/90"
             >
-              {it.icon}
-            </span>
-            <span className="text-[12px] text-black/60 dark:text-white/60">{it.label}</span>
-          </button>
-        ))}
-      </div>
+              <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center text-black/80 dark:text-white/85">{it.icon}</span>
+              {it.label}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-4">
+          {items.map((it) => (
+            <button
+              key={it.key}
+              type="button"
+              data-testid={`wx-plus-${it.key}`}
+              onClick={() => onAction(it.key)}
+              className="flex flex-col items-center gap-[7px] py-2 active:bg-black/[0.04] dark:active:bg-white/[0.06]"
+            >
+              <span className="flex h-[57px] w-[57px] items-center justify-center rounded-[14px] bg-white text-black/70 shadow-[0_1px_5px_rgba(0,0,0,0.05)] dark:bg-[#242428] dark:text-white/75">
+                {it.icon}
+              </span>
+              <span className="text-[12px] text-black/60 dark:text-white/60">{it.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -8621,11 +8643,18 @@ function ChatPage({
       {/* 顶栏：与消息区/底部输入栏同色（微信灰，非白）；多选模式下变为「取消 + 已选计数」操作栏
           第三十四轮：pt-54→pt-48（顶部再往上移一点，仍避开 54px 状态栏内容区不重叠）
           第三十六轮：pt-48→pt-42（再上移 6px，灵动岛/状态栏下方留白更紧凑；群聊会话页同步） */}
-      <div className={liquid ? 'relative z-10 shrink-0 bg-transparent pt-[42px]' : 'relative z-10 shrink-0 bg-[#EDEDED] pt-[42px] dark:bg-[#111111]'}>
+      <div
+        className={
+          liquid
+            ? /* 液态（用户指定）：顶栏改悬浮无阻隔模糊带——名字后无玻璃阻隔，气泡滚动时从名字后穿过、轻微模糊 */
+              'lg-blur-strip pointer-events-none absolute inset-x-0 top-0 z-20 shrink-0 bg-transparent pt-[42px]'
+            : 'relative z-10 shrink-0 bg-[#EDEDED] pt-[42px] dark:bg-[#111111]'
+        }
+      >
         {selectMode ? (
           fwdFlow === 'choose' ? (
             /* 转发勾选模式顶栏（对照原生微信多选转发：取消 + 已选择计数 + 搜索） */
-            <div className="flex h-11 items-center px-2">
+            <div className="flex h-11 items-center px-2 [&_button]:pointer-events-auto">
               <button
                 type="button"
                 data-testid="wx-select-cancel"
@@ -8648,7 +8677,7 @@ function ChatPage({
               </button>
             </div>
           ) : (
-          <div className="flex h-11 items-center px-2">
+          <div className="flex h-11 items-center px-2 [&_button]:pointer-events-auto">
             <button
               type="button"
               data-testid="wx-select-cancel"
@@ -8664,8 +8693,8 @@ function ChatPage({
           </div>
           )
         ) : (
-        <div className={liquid ? 'flex h-11 items-center gap-2 px-2.5' : 'flex h-11 items-center px-2'}>
-          {/* 液态主题顶栏（参考图）：三个独立玻璃件——返回圆钮 / 标题胶囊 / 更多圆钮，背景透出 */}
+        <div className="flex h-11 items-center px-2 [&_button]:pointer-events-auto">
+          {/* 液态顶栏（第四十四轮，用户指定）：无阻隔模糊带 + 返回/更多独立玻璃圆钮；名字纯文字无胶囊 */}
           <button
             type="button"
             aria-label="返回"
@@ -8693,13 +8722,7 @@ function ChatPage({
             </span>
           )}
           <div className="flex min-w-0 flex-1 items-center justify-center" data-testid="wx-chat-peer-name">
-            <span
-              className={
-                liquid
-                  ? 'lg-title flex max-w-full items-center gap-1.5 truncate rounded-[18px] px-3.5 py-[5px] text-[15.5px] font-medium'
-                  : 'flex items-center gap-1.5 truncate text-[17px] font-medium'
-              }
-            >
+            <span className="flex items-center gap-1.5 truncate text-[17px] font-medium">
               <span className="truncate">{streaming || delivering ? '正在输入中…' : peer.name}</span>
               {flags.muted === true && (
                 <BellOff
@@ -8728,7 +8751,7 @@ function ChatPage({
       </div>
 
       {/* 消息列表：浅灰背景（同微信），自定义聊天背景时透出背景层 */}
-      <div ref={scrollRef} className="no-scrollbar relative z-10 min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div ref={scrollRef} className={`no-scrollbar relative z-10 min-h-0 flex-1 overflow-y-auto px-3 ${liquid ? 'pb-3 pt-[96px]' : 'py-3'}`}>
         {msgs.length === 0 && (
           <p className="mt-16 text-center text-[13px] text-black/35 dark:text-white/35">
             {selfChat ? '给自己发条消息吧' : `和 ${peer.name} 打个招呼吧`}
@@ -9474,8 +9497,9 @@ function ChatPage({
         {/* 第三十三轮：pt-2→pt-1（顶部上移一点）；items-end→items-center（图标和输入框对齐）
             第三十四轮：gap-2.5→gap-2（输入框往右延伸） */}
         <div className={liquid ? 'px-2.5 pb-2 pt-1' : 'px-2.5 pb-[18px] pt-1'}>
-          {/* 液态输入栏（参考图）：大圆角玻璃工具面板 + 内部圆形玻璃钮（语音/表情/加号）+ 内凹输入胶囊 */}
-          <div className={liquid ? 'lg-bar mb-3 flex items-center gap-2 rounded-[28px] px-[7px] py-[7px]' : 'flex items-center gap-2'}>
+          {/* 液态输入栏（第四十四轮，用户指定）：删除大椭圆包裹——语音钮 = 玻璃圆圈内嵌黑圈、
+              输入框毛玻璃椭圆、表情+加号共用一个玻璃椭圆；默认主题原样 */}
+          <div className="flex items-center gap-2">
             <button
               type="button"
               aria-label={voiceMode ? '切换到键盘输入' : '语音输入'}
@@ -9491,12 +9515,21 @@ function ChatPage({
               <span
                 className={
                   liquid
-                    ? /* 液态：圆形玻璃浮钮 */ 'lg-chip flex h-[34px] w-[34px] items-center justify-center rounded-full text-black/85 transition-transform active:scale-95 dark:text-white/90'
+                    ? /* 液态（用户指定）：玻璃圆圈包裹黑圈语音钮 */ 'lg-chip flex h-[40px] w-[40px] items-center justify-center rounded-full transition-transform active:scale-95'
                     : 'flex h-[30px] w-[30px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 transition-colors active:bg-black/[0.05] dark:border-white/70 dark:text-white/90 dark:active:bg-white/10'
                 }
               >
-                {/* 键盘模式 → 声波图标（点按进语音）；语音模式 → 键盘图标（点按切回键盘） */}
-                {voiceMode ? <KeyboardGlyph size={17} /> : <VoiceWaveGlyph size={19} />}
+                {liquid ? (
+                  <span className="flex h-[30px] w-[30px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 dark:border-white/70 dark:text-white/90">
+                    {/* 键盘模式 → 声波图标（点按进语音）；语音模式 → 键盘图标（点按切回键盘） */}
+                    {voiceMode ? <KeyboardGlyph size={17} /> : <VoiceWaveGlyph size={19} />}
+                  </span>
+                ) : (
+                  <>
+                    {/* 键盘模式 → 声波图标（点按进语音）；语音模式 → 键盘图标（点按切回键盘） */}
+                    {voiceMode ? <KeyboardGlyph size={17} /> : <VoiceWaveGlyph size={19} />}
+                  </>
+                )}
               </span>
             </button>
             {voiceMode ? (
@@ -9534,7 +9567,7 @@ function ChatPage({
                   testId="wx-chat-input"
                   className={`block max-h-[132px] w-full overflow-y-auto py-[8px] pl-3.5 pr-11 text-[16px] leading-[22px] caret-[#07C160] outline-none transition-all duration-200 selection:bg-[#07C160]/20 ${
                     liquid
-                      ? /* 液态：内凹输入胶囊（比外框稍深一档 + 内阴影下陷感） */ 'lg-input min-h-[36px] rounded-[19px] shadow-[inset_0_1px_3px_rgba(31,38,135,0.10)]'
+                      ? /* 液态：毛玻璃椭圆输入胶囊（比背景稍深一档 + 内阴影下陷感） */ 'lg-input min-h-[36px] rounded-full shadow-[inset_0_1px_3px_rgba(31,38,135,0.10)]'
                       : 'min-h-[34px] rounded-[4px] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_5px_14px_rgba(0,0,0,0.05)] dark:bg-[#232323] dark:shadow-none'
                   }`}
                 />
@@ -9556,27 +9589,59 @@ function ChatPage({
                 </button>
               </div>
             )}
-            {/* 表情按钮常驻（真机微信同款排版）：有内容时排在发送键左侧，不再被发送键替换/遮挡 */}
-            <button
-              type="button"
-              aria-label="表情"
-              data-testid="wx-chat-sticker"
-              aria-expanded={stickerOpen}
-              onClick={() => {
-                setPlusOpen(false);
-                setStickerOpen((v) => !v);
-              }}
-              className={
-                liquid
-                  ? 'lg-chip flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full transition-transform active:scale-95'
-                  : 'flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60'
-              }
-            >
-              <Smile
-                className={liquid ? `h-[21px] w-[21px] ${stickerOpen ? 'text-[#07C160]' : 'text-black/85 dark:text-white/85'}` : 'h-[25px] w-[25px]'}
-                strokeWidth={2}
-              />
-            </button>
+            {/* 表情 + 加号（液态，用户指定）：共用一个玻璃椭圆包裹，无内容时加号在内、有内容时移出换发送键；
+                默认：表情常驻独立钮（真机微信同款排版），有内容时加号位换发送键 */}
+            {liquid ? (
+              <div className="lg-chip flex shrink-0 items-center gap-1 rounded-full p-[4px]">
+                <button
+                  type="button"
+                  aria-label="表情"
+                  data-testid="wx-chat-sticker"
+                  aria-expanded={stickerOpen}
+                  onClick={() => {
+                    setPlusOpen(false);
+                    setStickerOpen((v) => !v);
+                  }}
+                  className="flex h-[30px] w-[30px] items-center justify-center active:opacity-60"
+                >
+                  <Smile
+                    className={`h-[21px] w-[21px] ${stickerOpen ? 'text-[#07C160]' : 'text-black/85 dark:text-white/85'}`}
+                    strokeWidth={2}
+                  />
+                </button>
+                {!(input.trim() || canDispatch || pendingImgs.length > 0) && (
+                  <button
+                    type="button"
+                    aria-label="更多功能"
+                    data-testid="wx-chat-plus"
+                    onClick={() => {
+                      setStickerOpen(false);
+                      setPlusOpen((v) => !v);
+                    }}
+                    className="flex h-[30px] w-[30px] items-center justify-center active:opacity-60"
+                  >
+                    <CirclePlus
+                      className={`h-[22px] w-[22px] text-black/85 dark:text-white/85 transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`}
+                      strokeWidth={1.8}
+                    />
+                  </button>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                aria-label="表情"
+                data-testid="wx-chat-sticker"
+                aria-expanded={stickerOpen}
+                onClick={() => {
+                  setPlusOpen(false);
+                  setStickerOpen((v) => !v);
+                }}
+                className="flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60"
+              >
+                <Smile className="h-[25px] w-[25px]" strokeWidth={2} />
+              </button>
+            )}
             {(input.trim() || canDispatch || pendingImgs.length > 0) ? (
               <button
                 type="button"
@@ -9596,7 +9661,7 @@ function ChatPage({
               >
                 发送
               </button>
-            ) : (
+            ) : !liquid ? (
               <button
                 type="button"
                 aria-label="更多功能"
@@ -9605,18 +9670,14 @@ function ChatPage({
                   setStickerOpen(false);
                   setPlusOpen((v) => !v);
                 }}
-                className={
-                  liquid
-                    ? 'lg-chip flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full transition-transform active:scale-95'
-                    : '-ml-1 flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60'
-                }
+                className="-ml-1 flex h-10 w-10 shrink-0 items-center justify-center active:opacity-60"
               >
                 <CirclePlus
-                  className={`${liquid ? 'h-[23px] w-[23px] text-black/85 dark:text-white/85' : 'h-[28px] w-[28px]'} transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`}
+                  className={`h-[28px] w-[28px] transition-transform duration-200 ${plusOpen ? 'rotate-45' : ''}`}
                   strokeWidth={1.8}
                 />
               </button>
-            )}
+            ) : null}
           </div>
           {/* 待发送图片预览条（需求2：选图后先显示在输入框下面，点主发送按钮才真正发出；面板展开时隐藏避免遮挡） */}
           {pendingImgs.length > 0 && !plusOpen && !stickerOpen && (
@@ -9637,7 +9698,7 @@ function ChatPage({
             </div>
           )}
         </div>
-        {stickerOpen && <WxStickerPanel onPick={sendSticker} onPickBuiltin={insertBuiltinEmoji} onClose={() => setStickerOpen(false)} onToast={onToast} />}
+        {stickerOpen && <WxStickerPanel onPick={sendSticker} onPickBuiltin={insertBuiltinEmoji} onClose={() => setStickerOpen(false)} onToast={onToast} liquid={liquid} />}
         {plusOpen && <PlusPanel onAction={handlePlusAction} liquid={liquid} />}
         {/* @ 浮层（单聊）：锚定输入区上方，点选后把草稿末尾的 @ 替换为「@名字 」 */}
         {atOpen && !selfChat && (
@@ -14159,23 +14220,19 @@ function MainScreen({
     });
   }, [sessions, liquid, cat, me.id]);
 
-  /** 液态列表分组（参考图）：置顶 / 好友会话 / 群聊 / 服务号各成一张玻璃大卡（组内细分割线，卡间圆角间隙）。
+  /** 液态列表分组（第四十四轮，用户指定）：置顶会话一张白色面板、非置顶会话一张白色面板（组内细分割线，卡间间隙）。
    *  注意：必须挂在所有早退 return 之前（hooks 顺序不可随 page 变化） */
   const liquidGroups = useMemo(() => {
     const pinned: typeof sessions = [];
-    const friendsG: typeof sessions = [];
-    const groupsG: typeof sessions = [];
-    const officials: typeof sessions = [];
+    const rest: typeof sessions = [];
     for (const r of visibleSessions) {
       if (pinSet.has(r.key)) pinned.push(r);
-      else if (r.group) groupsG.push(r);
-      else if (r.contact && r.contact.id === me.id) officials.push(r);
-      else friendsG.push(r);
+      else rest.push(r);
     }
     const out: Array<typeof sessions> = [];
-    for (const g of [pinned, friendsG, groupsG, officials]) if (g.length) out.push(g);
+    for (const g of [pinned, rest]) if (g.length) out.push(g);
     return out;
-  }, [visibleSessions, pinSet, me.id]);
+  }, [visibleSessions, pinSet]);
 
   /** 幽灵未读清理：只保留当前可见会话的未读（不显示该聊天/已删联系人的残留计数没有行可清，
    *  会让底部 tab 与主屏图标角标卡死；prune 无变化时不写入，可安全随 sessions 重算触发） */
@@ -14202,8 +14259,9 @@ function MainScreen({
       // 竖向卡片（4 项，约 176×190）：水平居中于触点，上下钳制不溢出页面
       const rootW = rootRef.current?.clientWidth ?? 390;
       const rootH = rootRef.current?.clientHeight ?? 700;
-      const MENU_W = 176;
-      const MENU_H = 190;
+      // 液态 = 横向 2×2 玻璃网格（320×118）；默认 = 竖向卡片（176×190）
+      const MENU_W = liquid ? 320 : 176;
+      const MENU_H = liquid ? 118 : 190;
       const x = Math.min(Math.max(px - MENU_W / 2, 10), Math.max(rootW - MENU_W - 10, 10));
       const y = Math.min(py, Math.max(rootH - MENU_H - 10, 10));
       setCtx({ contact: c, x, y });
@@ -15224,7 +15282,7 @@ function MainScreen({
             liquid
               ? `flex w-full select-none items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
                   divider ? 'border-b border-black/[0.06] dark:border-white/[0.08]' : ''
-                } ${pinned ? 'bg-[#07C160]/[0.05]' : ''}`
+                } ${pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''}`
               : `flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
                   pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
                 }`
@@ -15285,7 +15343,7 @@ function MainScreen({
           liquid
             ? `flex w-full select-none items-center gap-3 px-4 py-[13px] text-left active:bg-black/[0.04] dark:active:bg-white/[0.06] ${
                 divider ? 'border-b border-black/[0.06] dark:border-white/[0.08]' : ''
-              } ${pinned ? 'bg-[#07C160]/[0.05]' : ''}`
+              } ${pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''}`
             : `flex w-full select-none items-center gap-3 border-b border-black/5 px-4 py-2.5 text-left active:bg-black/5 dark:border-white/10 dark:active:bg-white/5 ${
                 pinned ? 'bg-[#ECECEC] dark:bg-white/[0.06]' : ''
               }`
@@ -15337,34 +15395,32 @@ function MainScreen({
     <div
       ref={rootRef}
       data-liquid-theme={liquid ? 'true' : 'false'}
-      className={
-        liquid
-          ? 'lg-root relative flex h-full w-full flex-col text-black dark:text-white'
-          : 'relative flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white'
-      }
+      className="relative flex h-full w-full flex-col bg-[#EDEDED] text-black dark:bg-[#111111] dark:text-white"
     >
       {/* 顶栏：默认 =（微信：返回+搜索+＋；通讯录：＋；发现/我：无图标；左侧返回键退出微信回主屏）
-          液态 = 参考图（左：头像+名字+在线绿点胶囊 | 中：标题胶囊 | 右：圆形玻璃＋钮；搜索移到下方搜索胶囊） */}
+          液态（第四十四轮，用户指定）：左上头像+名字无椭圆包裹、只在「微信」tab 显示；标题纯文字居中；右＝圆形玻璃＋钮 */}
       <div className="shrink-0 pt-[54px]">
         {liquid ? (
         <div className="relative flex h-12 items-center gap-2 px-2.5">
-          <button
-            type="button"
-            aria-label="返回主屏幕"
-            data-testid="wx-exit"
-            onClick={onExit}
-            className="lg-title flex min-w-0 max-w-[46%] flex-1 items-center gap-2.5 rounded-[20px] px-2 py-1.5 active:opacity-60"
-          >
-            <WxAvatar src={me.avatar} alt={me.name} size={34} />
-            <span className="min-w-0 flex-1 text-left">
-              <span className="block truncate text-[14.5px] font-semibold leading-tight">{me.name}</span>
-              <span className="mt-[3px] flex items-center gap-1 text-[10.5px] leading-none">
-                <span className="h-[6.5px] w-[6.5px] rounded-full bg-[#07C160]" aria-hidden="true" />
-                <span className="font-medium text-[#07C160]">在线</span>
+          {tab === 'chats' && (
+            <button
+              type="button"
+              aria-label="返回主屏幕"
+              data-testid="wx-exit"
+              onClick={onExit}
+              className="flex min-w-0 max-w-[46%] flex-1 items-center gap-2.5 px-1 py-1.5 active:opacity-60"
+            >
+              <WxAvatar src={me.avatar} alt={me.name} size={34} />
+              <span className="min-w-0 flex-1 text-left">
+                <span className="block truncate text-[14.5px] font-semibold leading-tight">{me.name}</span>
+                <span className="mt-[3px] flex items-center gap-1 text-[10.5px] leading-none">
+                  <span className="h-[6.5px] w-[6.5px] rounded-full bg-[#07C160]" aria-hidden="true" />
+                  <span className="font-medium text-[#07C160]">在线</span>
+                </span>
               </span>
-            </span>
-          </button>
-          {/* 右侧配重占位：与左侧头像胶囊等分剩余空间，标题真正居中（参考图三段式） */}
+            </button>
+          )}
+          {/* 右侧配重占位：与左侧头像区等分剩余空间，标题真正居中 */}
           <div className="flex flex-1 justify-end">
             {(tab === 'chats' || tab === 'contacts') ? (
               <button
@@ -15384,7 +15440,8 @@ function MainScreen({
               </button>
             ) : null}
           </div>
-          <div className="lg-title absolute left-1/2 top-1/2 flex h-[42px] max-w-[42%] -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-[18px] px-4 text-[15.5px] font-semibold">
+          {/* 标题绝对居中：纯文字无胶囊（参考图 WeChat 同款） */}
+          <div className="absolute left-1/2 top-1/2 flex h-[42px] max-w-[42%] -translate-x-1/2 -translate-y-1/2 items-center justify-center px-4 text-[16.5px] font-semibold">
             {TITLES[tab]}
           </div>
         </div>
@@ -15598,9 +15655,9 @@ function MainScreen({
                 </div>
               )}
             {liquid ? (
-              /* 液态（参考图）：分组玻璃大卡——置顶/好友/群聊/服务号各一张卡，组内细分割线，卡间圆角间隙 */
+              /* 液态（用户指定）：置顶会话一张白色面板、非置顶会话一张白色面板（组内细分割线，卡间间隙） */
               liquidGroups.map((g, gi) => (
-                <div key={gi} className="lg-card mb-2.5 overflow-hidden">
+                <div key={gi} className="lg-panel mb-2.5 overflow-hidden">
                   {g.map((row, ri) => renderSessionRow(row, ri < g.length - 1))}
                 </div>
               ))
@@ -15614,7 +15671,7 @@ function MainScreen({
         {tab === 'contacts' && (
           <div className="relative min-h-full pb-4">
             {/* 功能入口 */}
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="新的朋友"
@@ -15665,7 +15722,7 @@ function MainScreen({
             </div>
 
             {/* 我（本人）—— 首次登录通讯录只有这一位；点击进入与好友同款的详情页 */}
-            <div className={liquid ? 'mx-2.5 mt-2.5 lg-card' : 'mt-2 bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 mt-2.5 lg-panel' : 'mt-2 bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label={me.name}
@@ -15688,10 +15745,10 @@ function MainScreen({
               <div className="relative">
                 {groups.map((g) => (
                   <div key={g.letter} id={`wx-letter-${g.letter}`}>
-                    <p className={liquid ? 'sticky top-0 bg-[#F4F4F8]/85 px-4 py-1 text-[13px] text-black/50 backdrop-blur-md dark:bg-[#101014]/85 dark:text-white/50' : 'sticky top-0 bg-[#EDEDED] px-4 py-1 text-[13px] text-black/50 dark:bg-[#111111] dark:text-white/50'}>
+                    <p className="sticky top-0 bg-[#EDEDED] px-4 py-1 text-[13px] text-black/50 dark:bg-[#111111] dark:text-white/50">
                       {g.letter}
                     </p>
-                    <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+                    <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
                       {g.list.map((c) => (
                         <button
                           key={c.id}
@@ -15733,7 +15790,7 @@ function MainScreen({
 
         {tab === 'discover' && (
           <div className={liquid ? 'space-y-2.5 pb-6' : 'space-y-2 pb-6'}>
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="朋友圈"
@@ -15747,7 +15804,7 @@ function MainScreen({
                 icon={<WxIcMoments small />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="视频号"
@@ -15755,7 +15812,7 @@ function MainScreen({
                 icon={<WxIcChannels />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="扫一扫"
@@ -15768,7 +15825,7 @@ function MainScreen({
                 icon={<WxIcListen />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="看一看"
@@ -15781,7 +15838,7 @@ function MainScreen({
                 icon={<WxIcSearch />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="游戏"
@@ -15789,7 +15846,7 @@ function MainScreen({
                 icon={<WxIcGames />}
               />
             </div>
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="小程序"
@@ -15804,7 +15861,7 @@ function MainScreen({
           <div className={liquid ? 'space-y-2.5 pb-6' : 'space-y-2 pb-6'}>
             {/* 名片：默认 = 头像+名字+微信号左对齐（微信原生白底样式，点击进个人信息页）；
                 液态 = 参考图居中名片（大头像居中 + 名字下方 + 「+ 状态 / N 个朋友」胶囊标签） */}
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               {liquid ? (
                 <button
                   type="button"
@@ -15857,7 +15914,7 @@ function MainScreen({
               )}
             </div>
 
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="服务"
@@ -15867,7 +15924,7 @@ function MainScreen({
               />
             </div>
 
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="收藏"
@@ -15905,7 +15962,7 @@ function MainScreen({
               />
             </div>
 
-            <div className={liquid ? 'mx-2.5 lg-card' : 'bg-white dark:bg-[#1A1A1A]'}>
+            <div className={liquid ? 'mx-2.5 lg-panel' : 'bg-white dark:bg-[#1A1A1A]'}>
               <WxMenuRow
                 first
                 label="设置"
@@ -16011,7 +16068,7 @@ function MainScreen({
         </div>
       </div>
 
-      {/* 长按会话菜单（标为未读/置顶/不显示/删除；默认 = 浅色白底卡片，液态 = 乳白玻璃浮层无分割线，点空白处关闭） */}
+      {/* 长按会话菜单（标为未读/置顶/不显示/删除；默认 = 浅色白底卡片，液态 = 横向 2×2 玻璃网格，点空白处关闭） */}
       {ctx && (
         <div
           className="absolute inset-0 z-40"
@@ -16025,7 +16082,7 @@ function MainScreen({
             data-testid="wx-session-ctx"
             className={
               liquid
-                ? 'lg-sheet absolute z-50 w-[min(70%,248px)] overflow-hidden rounded-[26px] py-[5px] text-[#1C1C1E] dark:text-white/90'
+                ? /* 液态（用户指定）：横向 2×2 玻璃网格浮层 */ 'lg-sheet absolute z-50 grid w-[min(84%,320px)] grid-cols-2 overflow-hidden rounded-[24px] p-[5px] text-[#1C1C1E] dark:text-white/90'
                 : 'absolute z-50 min-w-[176px] overflow-hidden rounded-[12px] border border-black/[0.08] bg-white/95 text-black shadow-[0_12px_36px_rgba(0,0,0,0.18)] backdrop-blur-md dark:border-white/[0.08] dark:bg-[#4C4C4C]/95 dark:text-white dark:shadow-[0_12px_36px_rgba(0,0,0,0.35)]'
             }
             style={{ left: ctx.x, top: ctx.y }}
@@ -16041,7 +16098,7 @@ function MainScreen({
               }}
               className={
                 liquid
-                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16px] font-semibold'
+                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-2.5 px-3.5 text-left text-[14.5px] font-semibold'
                   : 'flex h-[46px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.05] dark:border-white/10 dark:active:bg-white/10'
               }
             >
@@ -16058,7 +16115,7 @@ function MainScreen({
               }}
               className={
                 liquid
-                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16px] font-semibold'
+                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-2.5 px-3.5 text-left text-[14.5px] font-semibold'
                   : 'flex h-[46px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.05] dark:border-white/10 dark:active:bg-white/10'
               }
             >
@@ -16079,7 +16136,7 @@ function MainScreen({
               }}
               className={
                 liquid
-                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16px] font-semibold'
+                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-2.5 px-3.5 text-left text-[14.5px] font-semibold'
                   : 'flex h-[46px] w-full items-center gap-2.5 border-b border-black/[0.06] px-4 text-left text-[15px] active:bg-black/[0.05] dark:border-white/10 dark:active:bg-white/10'
               }
             >
@@ -16096,7 +16153,7 @@ function MainScreen({
               }}
               className={
                 liquid
-                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16px] font-semibold text-[#E5484D]'
+                  ? 'lg-menu-row flex h-[54px] w-full items-center gap-2.5 px-3.5 text-left text-[14.5px] font-semibold text-[#E5484D]'
                   : 'flex h-[46px] w-full items-center gap-2.5 px-4 text-left text-[15px] text-[#FA5151] active:bg-black/[0.05] dark:text-[#FF9A97] dark:active:bg-white/10'
               }
             >
