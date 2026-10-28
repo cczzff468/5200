@@ -3742,7 +3742,7 @@ function RedPacketIcon() {
 }
 
 /** 加号面板（输入栏下方弹出，输入框跟随保留在面板上方） */
-function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
+function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; liquid?: boolean }) {
   const items: Array<{ key: PlusAction; label: string; icon: React.ReactNode }> = [
     { key: 'camera', label: '相机', icon: <Camera className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
     { key: 'image', label: '图片', icon: <ImageIcon className="h-[26px] w-[26px]" strokeWidth={1.6} /> },
@@ -3758,10 +3758,15 @@ function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
   ];
   return (
     <div
-      className="shrink-0 border-t border-black/[0.05] bg-[#F7F7F7] px-2 pb-[max(16px,env(safe-area-inset-bottom))] pt-4 dark:border-white/[0.06] dark:bg-[#161616]"
+      className={`shrink-0 px-2 pt-4 ${
+        liquid
+          ? /* 液态玻璃主题（参考图：加号面板 = 玻璃浮层 + 玻璃图标砖，去实底去上边框） */
+            'lg-bar mx-2.5 mb-2.5 rounded-[22px]'
+          : 'border-t border-black/[0.05] bg-[#F7F7F7] pb-[max(16px,env(safe-area-inset-bottom))] dark:border-white/[0.06] dark:bg-[#161616]'
+      }`}
       data-testid="wx-plus-panel"
     >
-      <div className="grid grid-cols-4">
+      <div className={`grid grid-cols-4 ${liquid ? 'pb-4' : ''}`}>
         {items.map((it) => (
           <button
             key={it.key}
@@ -3770,7 +3775,11 @@ function PlusPanel({ onAction }: { onAction: (a: PlusAction) => void }) {
             onClick={() => onAction(it.key)}
             className="flex flex-col items-center gap-[7px] py-2 active:bg-black/[0.04] dark:active:bg-white/[0.06]"
           >
-            <span className="flex h-[57px] w-[57px] items-center justify-center rounded-[14px] bg-white text-black/70 shadow-[0_1px_5px_rgba(0,0,0,0.05)] dark:bg-[#242428] dark:text-white/75">
+            <span
+              className={`flex h-[57px] w-[57px] items-center justify-center rounded-[14px] text-black/70 dark:text-white/75 ${
+                liquid ? 'lg-input' : 'bg-white shadow-[0_1px_5px_rgba(0,0,0,0.05)] dark:bg-[#242428]'
+              }`}
+            >
               {it.icon}
             </span>
             <span className="text-[12px] text-black/60 dark:text-white/60">{it.label}</span>
@@ -9575,7 +9584,7 @@ function ChatPage({
           )}
         </div>
         {stickerOpen && <WxStickerPanel onPick={sendSticker} onPickBuiltin={insertBuiltinEmoji} onClose={() => setStickerOpen(false)} onToast={onToast} />}
-        {plusOpen && <PlusPanel onAction={handlePlusAction} />}
+        {plusOpen && <PlusPanel onAction={handlePlusAction} liquid={liquid} />}
         {/* @ 浮层（单聊）：锚定输入区上方，点选后把草稿末尾的 @ 替换为「@名字 」 */}
         {atOpen && !selfChat && (
           <>

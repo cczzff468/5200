@@ -7658,7 +7658,16 @@ function ChatPage({
         {/* QQ 语音面板（工具栏下方展开，相当于键盘区）：「按住说话」+ 大圆麦克风（左滑转文字/右滑取消）+ 变声/对讲/录音 */}
         {voiceMode && <QqVoicePanel rec={rec} holdTestId="qq-voice-hold" />}
         {plusOpen ? (
-          <div data-testid="qq-plus-panel" className="border-t border-black/[0.05] px-5 pb-6 pt-5 dark:border-white/[0.06]" style={{ animation: 'qqPanelIn 0.24s ease-out' }}>
+          <div
+            data-testid="qq-plus-panel"
+            className={`px-5 pt-5 ${
+              liquid
+                ? /* 液态玻璃主题（参考图：加号面板 = 玻璃浮层） */
+                  'lg-bar mx-2.5 mb-2.5 rounded-[22px] pb-5'
+                : 'border-t border-black/[0.05] pb-6 dark:border-white/[0.06]'
+            }`}
+            style={{ animation: 'qqPanelIn 0.24s ease-out' }}
+          >
             <QqPlusGrid items={plusItems} />
           </div>
         ) : null}

@@ -1355,3 +1355,20 @@ Stage Summary:
 - 三大需求全部落地：① 语音转文字面板+微信/QQ 独立正在输入指示气泡跟随气泡装扮（染色/七彩/磨砂/液态四态）② QQ/微信气泡样式设置新增「界面主题」（默认=现状像素级保真 / 液态玻璃=参考图复刻）③ 液态玻璃主题覆盖微信四 tab+聊天铬件、QQ 三 tab+聊天铬件（玻璃卡/悬浮胶囊 TabBar/玻璃顶栏输入栏/lg-input），聊天背景层与气泡装扮系统零影响，IndexedDB 持久化、切换实时生效
 - 关键文件：src/lib/ios/bubble-style.ts、src/lib/ios/store.ts、src/components/apps/voice-bubble.tsx、bubble-style-settings.tsx、wechat.tsx、qq.tsx、chat.tsx、voice-input.tsx、globals.css
 - 群聊页/朋友圈/空间等子页未接主题（与需求范围一致：微信/通讯录/发现/我+聊天界面）
+
+---
+Task ID: 3+（补充）
+Agent: 主控 Agent（Z.ai Code）
+Task: 追加参考图（用户随后上传第 6 张：液态玻璃版微信「+」功能菜单）——聊天页加号面板玻璃化
+
+Work Log:
+- 用户推送期间上传 IMG_20261028_121245.jpg（VLM 识别：微信聊天页 + 号弹出的功能菜单玻璃浮层）
+- [wechat.tsx] PlusPanel 增可选 liquid prop：容器 liquid 时 `lg-bar mx-2.5 mb-2.5 rounded-[22px]`（玻璃浮层，去实底去上边框）；11 个图标砖 liquid 时 `lg-input`（玻璃砖，去白底投影）；调用点传 liquid={liquid}
+- [qq.tsx] qq-plus-panel 容器 liquid 时同样 `lg-bar mx-2.5 mb-2.5 rounded-[22px]`（QqPlusGrid 彩色图标砖保留 QQ 品牌色）
+- tsc 仅基线 1 错；eslint 两文件 exit 0
+- E2E：浏览器 IndexedDB 直种（liquid 主题 + 登录态 + 联系人）→ 微信聊天 → 开加号面板：lg-bar + blur(20px) saturate(1.8) + 圆角 22px + 11 块 lg-input 玻璃砖 ✓；QQ 同规格 ✓；console error 0
+- DOM 级核实文字方向：标签 writing-mode horizontal-tb、宽 48px/按钮 82.5px 水平无截断（VLM 对小尺寸截图的「竖排」读法为误报；9 张全页 VLM 审查亦无排版缺陷）
+- VLM 对比参考图：玻璃材质（半透+模糊+圆角浮层+玻璃砖）复刻到位，无截断/重叠/错位
+
+Stage Summary:
+- 加号面板（微信/QQ 聊天页）在液态玻璃主题下升级为玻璃浮层 + 玻璃图标砖，与参考图第 6 张一致；默认主题零变化
