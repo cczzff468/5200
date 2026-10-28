@@ -3,6 +3,7 @@
 import { Fragment, useLayoutEffect, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from 'react';
 import { motion } from 'framer-motion';
 import {
+  ArrowDownToLine,
   ArrowUp,
   AudioLines,
   Camera,
@@ -3137,19 +3138,48 @@ function ChatView({
   // iMessage 语义：「已送达」挂在最后一条己方消息下方
   const lastUserIdx = msgs.reduce((acc, m, idx) => (m.role === 'user' ? idx : acc), -1);
 
+  /** 第五十二轮（用户参考图 IMG_20261028_192947.png）：新版主题顶栏浅蓝下载圆钮——
+   *  导出当前会话聊天记录为 txt 文件下载（文本/语音/图片/文字卡片均落行，撤回与系统行跳过） */
+  const exportChatRecord = useCallback(() => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const body = msgs
+      .filter((m) => !m.error && !m.sys && !m.recalled)
+      .map((m) => {
+        const who = m.role === 'user' ? '我' : peerLabel;
+        const d = new Date(m.time);
+        const stamp = `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        let line = `${who} ${stamp}：`;
+        if (m.kind === 'voice') line += '[语音]';
+        else if (m.kind === 'image') line += `[图片${m.img?.desc ? `（${m.img.desc}）` : ''}]`;
+        else if (m.kind === 'textcard') line += `[文字卡片] ${m.card?.text ?? ''}`;
+        else line += m.content.trim();
+        return line;
+      })
+      .join('\n');
+    const blob = new Blob([`与 ${peerLabel} 的聊天记录\n\n${body}\n`], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `聊天记录-${peerLabel}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast(`已导出与 ${peerLabel} 的聊天记录`);
+  }, [msgs, peerLabel, showToast]);
+
   return (
     <div
       ref={pageRef}
       className={`relative flex h-full min-h-0 flex-col ${newIm ? 'bg-white dark:bg-[#1C1C1E]' : ''}`}
     >
       {newIm ? (
-        /* 第五十轮新版主题顶栏（用户参考图同款）：纯白实底（无毛玻无分割线）+
-           居中大头像（52px）+ 粗黑名字右随灰箭头 + 「iMessage 信息」灰副标；
-           第五十一轮（用户指定）：名字行改椭圆形玻璃胶囊包裹（lg-title）、
-           左返回键与右侧摄像机改玻璃圆钮（lg-chip），与微信液态主题同材质；
-           左侧返回键 + 黑底未读徽标（其他会话未读数）——侧栏元素垂直对齐头像中心 */
-        <div className="z-20 shrink-0 bg-white pt-[54px] dark:bg-[#1C1C1E]">
-          <div className="relative flex flex-col items-center px-14 pb-2.5 pt-1">
+        /* 第五十二轮新版主题顶栏（用户参考图 IMG_20261028_192947.png 同款）：
+           浅灰毛玻璃底（非纯白）+ 居中大头像（60px）紧贴白色实底名字胶囊（粗名+灰箭头，无副标）+
+           左返回玻璃圆钮/黑底未读徽标 + 右浅蓝下载圆钮（导出聊天记录）与摄像机玻璃圆钮；
+           左右圆钮垂直对齐头像中心 */
+        <div className="z-20 shrink-0 bg-[#F2F2F3] pt-[54px] backdrop-blur-2xl dark:bg-[#202024]">
+          <div className="relative flex flex-col items-center px-14 pb-3 pt-1.5">
             {/* 左：返回（玻璃圆钮）+ 未读徽标（黑底白字，参考图同款；无未读不显示） */}
             <div className="absolute left-2 top-0 flex h-[56px] items-center gap-1.5">
               <button
@@ -3170,8 +3200,8 @@ function ChatView({
                 </span>
               )}
             </div>
-            {/* 居中：大头像 + 粗名字随灰箭头（椭圆形玻璃胶囊包裹，第五十一轮用户指定）+ iMessage 副标
-                （点击头像/名字打开角色状态卡，与默认顶栏同行为） */}
+            {/* 居中：大头像（60px，参考图同比例）+ 紧贴下方白色实底胶囊（粗黑名字 + 灰箭头，无副标——
+                参考图无 iMessage 副标行；点击头像/名字打开角色状态卡，与默认顶栏同行为） */}
             <div
               className={`flex flex-col items-center ${
                 onOpenPeerStatus ? 'cursor-pointer transition-opacity active:opacity-60' : ''
@@ -3182,18 +3212,26 @@ function ChatView({
               data-testid="sms-peer-avatar"
             >
               {peerAvatarSrc ? (
-                <img src={peerAvatarSrc} alt="" className="h-[52px] w-[52px] rounded-full object-cover" />
+                <img src={peerAvatarSrc} alt="" className="h-[60px] w-[60px] rounded-full object-cover" />
               ) : (
-                <DefaultAvatar size={52} />
+                <DefaultAvatar size={60} />
               )}
-              <div className="lg-title mt-1 flex items-center gap-0.5 rounded-full px-[14px] py-[4px] leading-none">
-                <span className="max-w-[180px] truncate text-[17px] font-bold tracking-tight text-black dark:text-white">{peerLabel}</span>
+              <div className="mt-1.5 flex items-center gap-0.5 rounded-full bg-white px-[13px] py-[4px] leading-none shadow-[0_2px_10px_rgba(0,0,0,0.10),inset_0_0_0_0.5px_rgba(255,255,255,0.9)] dark:bg-[#2C2C30] dark:shadow-[0_2px_10px_rgba(0,0,0,0.45)]">
+                <span className="max-w-[180px] truncate text-[15px] font-bold tracking-tight text-black dark:text-white">{peerLabel}</span>
                 <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/40 dark:text-white/40" strokeWidth={2.5} aria-hidden="true" />
               </div>
-              <span className="mt-[3px] text-[12px] leading-none text-black/45 dark:text-white/50">iMessage 信息</span>
             </div>
-            {/* 右：摄像机（聊天设置入口，玻璃圆钮包裹——第五十一轮用户指定） */}
-            <div className="absolute right-2 top-0 flex h-[56px] items-center">
+            {/* 右：浅蓝下载圆钮（导出聊天记录，参考图同款）+ 摄像机（聊天设置入口，玻璃圆钮） */}
+            <div className="absolute right-2 top-0 flex h-[56px] items-center gap-2">
+              <button
+                type="button"
+                aria-label="导出聊天记录"
+                data-testid="sms-chat-export"
+                onClick={exportChatRecord}
+                className="flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full bg-[#C6DDF7] text-white transition-opacity active:opacity-60 dark:bg-[#4E7BC8]/85"
+              >
+                <ArrowDownToLine className="h-[16px] w-[16px] drop-shadow-[0_1px_1.5px_rgba(70,115,190,0.55)]" strokeWidth={2.2} />
+              </button>
               <button
                 type="button"
                 aria-label="聊天设置"

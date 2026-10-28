@@ -9614,6 +9614,10 @@ function ChatPage({
                   data-testid="wx-chat-sticker"
                   aria-expanded={stickerOpen}
                   onClick={() => {
+                    /* 第五十二轮（用户指定）：表情/加号/语音三面板互斥——录音按住中不允许切换，
+                       开表情面板时退出语音模式（按住说话条卸载回键盘），并关加号面板 */
+                    if (rec.phase !== 'idle') return;
+                    setVoiceMode(false);
                     setPlusOpen(false);
                     setStickerOpen((v) => !v);
                   }}
@@ -9630,6 +9634,9 @@ function ChatPage({
                     aria-label="更多功能"
                     data-testid="wx-chat-plus"
                     onClick={() => {
+                      /* 三面板互斥（第五十二轮）：开加号面板时退出语音模式并关表情面板 */
+                      if (rec.phase !== 'idle') return;
+                      setVoiceMode(false);
                       setStickerOpen(false);
                       setPlusOpen((v) => !v);
                     }}
@@ -9649,6 +9656,9 @@ function ChatPage({
                 data-testid="wx-chat-sticker"
                 aria-expanded={stickerOpen}
                 onClick={() => {
+                  /* 三面板互斥（第五十二轮）：开表情面板时退出语音模式并关加号面板 */
+                  if (rec.phase !== 'idle') return;
+                  setVoiceMode(false);
                   setPlusOpen(false);
                   setStickerOpen((v) => !v);
                 }}
@@ -9682,6 +9692,9 @@ function ChatPage({
                 aria-label="更多功能"
                 data-testid="wx-chat-plus"
                 onClick={() => {
+                  /* 三面板互斥（第五十二轮）：开加号面板时退出语音模式并关表情面板 */
+                  if (rec.phase !== 'idle') return;
+                  setVoiceMode(false);
                   setStickerOpen(false);
                   setPlusOpen((v) => !v);
                 }}
