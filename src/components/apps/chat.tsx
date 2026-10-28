@@ -6,6 +6,7 @@ import {
   ArrowUp,
   AudioLines,
   Camera,
+  ChevronLeft,
   ChevronRight,
   CircleCheck,
   EyeOff,
@@ -36,7 +37,7 @@ import PeerStatusCard from '@/components/apps/peer-status-card';
 import { useSettings, useUI } from '@/lib/ios/store';
 // 聊天气泡装扮（信息 App 接入）：bubbleVisual 计算每条消息的覆盖样式（背景/文字色/尾巴），
 // 与微信/QQ 完全隔离（bubbleStyle.sms 独立槽位）；设置入口 = 聊天设置 › 主题
-import { BUBBLE_KIND_LABEL, bubbleVisual } from '@/lib/ios/bubble-style';
+import { BUBBLE_KIND_LABEL, bubbleVisual, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { BubbleStylePage } from './bubble-style-settings';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
@@ -696,10 +697,8 @@ function DaySeparator({ time, newIm }: { time: number; newIm?: boolean }) {
   );
 }
 
-// ---------------- 气泡尾巴（与气泡同色的弧形小尾巴） ----------------
-
-const TAIL_CLIP_LEFT = 'path("M12 0 L12 6 C11 12 7 16 0 18 C4 13 6 8 6 2 L6 0 Z")';
-const TAIL_CLIP_RIGHT = 'path("M2 0 L2 6 C3 12 7 16 14 18 C10 13 8 8 8 2 L8 0 Z")';
+// ---------------- 气泡尾巴（与气泡同色的弧形小尾巴：剪影常量已上移 bubble-style.ts 共享，
+// ---------------- QQ 装扮气泡改成信息 App 同款后两端共用同一对 TAIL_CLIP） ----------------
 
 // ---------------- 会话行 ----------------
 
@@ -3146,24 +3145,33 @@ function ChatView({
       {newIm ? (
         /* 第五十轮新版主题顶栏（用户参考图同款）：纯白实底（无毛玻无分割线）+
            居中大头像（52px）+ 粗黑名字右随灰箭头 + 「iMessage 信息」灰副标；
-           左侧返回键 + 黑底未读徽标（其他会话未读数）；右侧摄像机（聊天设置入口）——
-           侧栏元素垂直对齐头像中心（参考图布局） */
+           第五十一轮（用户指定）：名字行改椭圆形玻璃胶囊包裹（lg-title）、
+           左返回键与右侧摄像机改玻璃圆钮（lg-chip），与微信液态主题同材质；
+           左侧返回键 + 黑底未读徽标（其他会话未读数）——侧栏元素垂直对齐头像中心 */
         <div className="z-20 shrink-0 bg-white pt-[54px] dark:bg-[#1C1C1E]">
           <div className="relative flex flex-col items-center px-14 pb-2.5 pt-1">
-            {/* 左：返回 + 未读徽标（黑底白字，参考图同款；无未读不显示） */}
-            <div className="absolute left-1 top-0 flex h-[56px] items-center">
-              <IOSBackButton label="" onClick={onBack} />
+            {/* 左：返回（玻璃圆钮）+ 未读徽标（黑底白字，参考图同款；无未读不显示） */}
+            <div className="absolute left-2 top-0 flex h-[56px] items-center gap-1.5">
+              <button
+                type="button"
+                aria-label="返回"
+                onClick={onBack}
+                className="lg-chip flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full text-black/85 transition-opacity active:opacity-60 dark:text-white/90"
+              >
+                <ChevronLeft className="h-[21px] w-[21px]" strokeWidth={2.4} />
+              </button>
               {!!headerUnread && headerUnread > 0 && (
                 <span
                   data-testid="sms-header-unread"
                   aria-label={`其他会话 ${headerUnread} 条未读`}
-                  className="-ml-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-black px-[5px] text-[11px] font-semibold leading-none text-white dark:bg-white dark:text-black"
+                  className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-black px-[5px] text-[11px] font-semibold leading-none text-white dark:bg-white dark:text-black"
                 >
                   {headerUnread > 99 ? '99+' : headerUnread}
                 </span>
               )}
             </div>
-            {/* 居中：大头像 + 粗名字随灰箭头 + iMessage 副标（点击头像/名字打开角色状态卡，与默认顶栏同行为） */}
+            {/* 居中：大头像 + 粗名字随灰箭头（椭圆形玻璃胶囊包裹，第五十一轮用户指定）+ iMessage 副标
+                （点击头像/名字打开角色状态卡，与默认顶栏同行为） */}
             <div
               className={`flex flex-col items-center ${
                 onOpenPeerStatus ? 'cursor-pointer transition-opacity active:opacity-60' : ''
@@ -3178,22 +3186,22 @@ function ChatView({
               ) : (
                 <DefaultAvatar size={52} />
               )}
-              <div className="mt-1 flex items-center gap-0.5 leading-none">
-                <span className="text-[17px] font-bold tracking-tight text-black dark:text-white">{peerLabel}</span>
-                <ChevronRight className="h-3.5 w-3.5 text-black/40 dark:text-white/40" strokeWidth={2.5} aria-hidden="true" />
+              <div className="lg-title mt-1 flex items-center gap-0.5 rounded-full px-[14px] py-[4px] leading-none">
+                <span className="max-w-[180px] truncate text-[17px] font-bold tracking-tight text-black dark:text-white">{peerLabel}</span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-black/40 dark:text-white/40" strokeWidth={2.5} aria-hidden="true" />
               </div>
               <span className="mt-[3px] text-[12px] leading-none text-black/45 dark:text-white/50">iMessage 信息</span>
             </div>
-            {/* 右：摄像机（聊天设置入口） */}
-            <div className="absolute right-1 top-0 flex h-[56px] items-center">
+            {/* 右：摄像机（聊天设置入口，玻璃圆钮包裹——第五十一轮用户指定） */}
+            <div className="absolute right-2 top-0 flex h-[56px] items-center">
               <button
                 type="button"
                 aria-label="聊天设置"
                 data-testid="sms-chat-settings-entry"
                 onClick={() => setSettingsOpen(true)}
-                className="flex h-9 w-9 items-center justify-center rounded-full text-black/85 active:bg-black/5 dark:text-white/85 dark:active:bg-white/10"
+                className="lg-chip flex h-[32px] w-[32px] items-center justify-center rounded-full text-black/85 transition-opacity active:opacity-60 dark:text-white/90"
               >
-                <Video className="h-[22px] w-[22px]" strokeWidth={1.8} />
+                <Video className="h-[18px] w-[18px]" strokeWidth={1.8} />
               </button>
             </div>
           </div>
@@ -3809,8 +3817,9 @@ function ChatView({
         }}
         className={
           newIm
-            ? /* 第五十轮新版主题输入栏（参考图同款）：纯白实底无边框线（无毛玻璃），胶囊与加号钮自带投影分层 */
-              'z-20 flex shrink-0 items-center gap-2 bg-white px-2.5 pb-[30px] pt-2 dark:bg-[#1C1C1E]'
+            ? /* 第五十一轮（用户指定：底部变毛玻璃风格）：栏底改半透磨砂（原纯白实底）；
+                加号钮与输入胶囊在下方各自毛玻璃化（默认主题同材质） */
+              'z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-2.5 pb-[30px] pt-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]'
             : 'z-20 flex shrink-0 items-center gap-2 border-t border-white/60 bg-white/60 px-2.5 pb-[30px] pt-2 backdrop-blur-2xl dark:border-white/[0.09] dark:bg-white/[0.06]'
         }
       >
@@ -3823,8 +3832,8 @@ function ChatView({
           onClick={() => setPlusOpen((v) => !v)}
           className={
             newIm
-              ? /* 新版主题加号钮（参考图同款）：白圆 + 黑加号 + 柔和投影（无描边无玻璃） */
-                'flex h-[33px] w-[33px] shrink-0 items-center justify-center rounded-full bg-white text-black shadow-[0_1px_5px_rgba(0,0,0,0.14)] transition-all active:opacity-60 dark:bg-white/[0.12] dark:text-white dark:shadow-[0_1px_5px_rgba(0,0,0,0.4)]'
+              ? /* 第五十一轮（用户指定：底部变毛玻璃风格）：加号钮改半透磨砂圆钮（原白底投影） */
+                'flex h-[33px] w-[33px] shrink-0 items-center justify-center rounded-full bg-white/60 text-muted-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-all active:opacity-60 dark:bg-white/[0.08] dark:ring-white/[0.1]'
               : 'flex h-[33px] w-[33px] shrink-0 items-center justify-center rounded-full bg-white/60 text-muted-foreground shadow-sm ring-1 ring-white/70 backdrop-blur-xl transition-all active:opacity-60 dark:bg-white/[0.08] dark:ring-white/[0.1]'
           }
         >
@@ -3833,8 +3842,9 @@ function ChatView({
         <div
           className={
             newIm
-              ? /* 新版主题输入胶囊（参考图同款）：白底胶囊 + 柔和投影分层（无描边无玻璃），占位灰字 + 右内麦克风 */
-                'flex min-h-[36px] min-w-0 flex-1 items-center rounded-full bg-white pl-3.5 pr-1.5 shadow-[0_1px_5px_rgba(0,0,0,0.10)] dark:bg-white/[0.10] dark:shadow-[0_1px_5px_rgba(0,0,0,0.35)]'
+              ? /* 第五十一轮（用户指定：输入框变毛玻璃风格）：半透磨砂胶囊（原白底投影），
+                 保持新版主题全圆胶囊形 + 占位灰字 + 右内麦克风 */
+                'flex min-h-[36px] min-w-0 flex-1 items-center rounded-full bg-white/60 pl-3.5 pr-1.5 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
               : 'flex min-h-[36px] min-w-0 flex-1 items-center rounded-[18px] bg-white/60 pl-3.5 pr-1.5 ring-1 ring-white/70 backdrop-blur-xl dark:bg-white/[0.08] dark:ring-white/[0.1]'
           }
         >

@@ -19,6 +19,11 @@ import type { CSSProperties } from 'react';
 
 export type BubbleStyleKind = 'default' | 'rainbow' | 'frosted' | 'liquid';
 
+/** 信息 App 同款气泡尾巴剪影（iMessage 弯钩剪影，viewBox 14×18）——
+ *  QQ 装扮（纯色/七彩）气泡改成信息 App 同款后共用这对剪影（第五十一轮） */
+export const TAIL_CLIP_LEFT = 'path("M12 0 L12 6 C11 12 7 16 0 18 C4 13 6 8 6 2 L6 0 Z")';
+export const TAIL_CLIP_RIGHT = 'path("M2 0 L2 6 C3 12 7 16 14 18 C10 13 8 8 8 2 L8 0 Z")';
+
 /** App 级界面主题（第四十二轮）：default = 现状原生；liquid = 液态玻璃主题（参考图）。
  *  主题与气泡样式相互独立：主题只接管页面铭件（导航/TabBar/列表卡/输入栏），
  *  气泡仍由 kind 管；聊天背景层不受主题影响（用户指定）。仅 wx / qq 提供主题切换。
@@ -419,10 +424,12 @@ export interface BubbleVisual {
   /**
    * 小尾巴指令（尾巴策略按 App 区分）：
    *  - 'native' 保持 App 原生尾巴（微信小方块三角 · 信息弯钩剪影 · 纯色/七彩时随 tailColor 上色；QQ 原生无尾巴）
-   *  - 'hook'   渲染参考图同款弯钩尾巴（QQ 纯色/七彩；fill = tailColor；我方自动镜像）
+   *  - 'im'     信息 App 同款底部弯钩剪影尾巴（第五十一轮：QQ 纯色/七彩改用——气泡整体变成信息 App 同款；
+   *             14×18px 剪影随 tailColor 上色，我方右侧/对方左侧，由宿主用 TAIL_CLIP_LEFT/RIGHT 渲染）
+   *  - 'hook'   参考图同款弯钩尾巴（历史值：第五十一轮起 QQ 不再返回，仅类型完备性保留）
    *  - 'none'   不渲染尾巴（毛玻璃/液态胶囊）
    */
-  tail: 'native' | 'hook' | 'none';
+  tail: 'native' | 'im' | 'hook' | 'none';
   /** 尾巴填充色（hook 的 SVG fill / native 方块的 backgroundColor；无装扮时为空） */
   tailColor: string;
 }
@@ -452,8 +459,9 @@ export function bubbleVisual(
 
   if (kind === 'rainbow') {
     // 七彩：参考图 9 色按消息序号循环；尾巴按 App —— 微信保持原生小三角（随色），
-    // QQ 用参考图同款弯钩（QQ 原生无尾巴，装扮后才有），信息保持原生弯钩尾巴（随色）。
-    // 圆角：QQ 原生 10px 略方正——装扮后圆一点点（第五十轮 18px，用户指定「再圆一点」）；微信/信息保持原生
+    // 信息保持原生弯钩尾巴（随色）；QQ 第五十一轮改成信息 App 同款（'im' 底部弯钩剪影 +
+    // 18px 圆角，宿主渲染时另加组尾 5px 小角）——用户指定「七彩气泡变成信息 APP 一样的气泡」。
+    // 圆角：QQ 装扮后 18px（与信息原生同规格）；微信/信息保持原生
     const idx = ((msgIndex % RAINBOW_COLORS.length) + RAINBOW_COLORS.length) % RAINBOW_COLORS.length;
     const c = RAINBOW_COLORS[idx];
     return {
@@ -464,7 +472,7 @@ export function bubbleVisual(
         color: yiqTextOn(c),
         ...(app === 'qq' ? { borderRadius: '18px' } : {}),
       },
-      tail: app === 'qq' ? 'hook' : 'native',
+      tail: app === 'qq' ? 'im' : 'native',
       tailColor: c,
     };
   }
@@ -522,8 +530,8 @@ export function bubbleVisual(
   }
 
   // default + 自定义色：仅换底色/文字色；圆角——微信保持原生 5px、信息保持原生 18px（不覆盖），
-  // QQ 原生 10px 略方正——装扮后圆一点点（第五十轮 18px，用户指定「再圆一点」）。
-  // 尾巴按 App —— 微信/信息保持原生尾巴（随色），QQ 用弯钩尾巴
+  // QQ 装扮后 18px（第五十一轮与信息原生同规格）。
+  // 尾巴按 App —— 微信/信息保持原生尾巴（随色）；QQ 第五十一轮改成信息 App 同款（'im' 底部弯钩剪影）
   return {
     override: true,
     className: '',
@@ -532,7 +540,7 @@ export function bubbleVisual(
       color: yiqTextOn(color as string),
       ...(app === 'qq' ? { borderRadius: '18px' } : {}),
     },
-    tail: app === 'qq' ? 'hook' : 'native',
+    tail: app === 'qq' ? 'im' : 'native',
     tailColor: color as string,
   };
 }

@@ -237,8 +237,7 @@ import {
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, PostMoreMenu, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
 import { BubbleStylePage } from './bubble-style-settings';
-import { BubbleTail } from './bubble-tail';
-import { bubbleVisual, isLiquidTheme } from '@/lib/ios/bubble-style';
+import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
 import { getStickersOn, saveStickersOn, STICKER_OFF_RULE } from '@/lib/sticker-toggle';
@@ -6872,6 +6871,10 @@ function ChatPage({
           const mine = m.role === 'me';
           // 第十七轮聊天气泡装扮：按消息序号计算本条气泡视觉（七彩=序号递增循环取色；原生默认时零覆盖直通）
           const bvis = bubbleVisual(mine ? 'mine' : 'theirs', bubbleStyle, i, 'qq');
+          // 第五十一轮（用户指定：QQ 换色/七彩气泡变成信息 App 同款）：信息式组尾小角判断——
+          // 同侧连续消息的最后一条（或下一条换人）时，尾巴侧底角收 5px（与信息 App rounded-bl/br-[5px] 同口径）
+          const nextMsg = i < msgs.length - 1 ? msgs[i + 1] : undefined;
+          const lastOfGroup = nextMsg === undefined || nextMsg.role !== m.role;
           // #38 拼手气红包（count>1）未领完不算结算：领完/退回/拒收/过期才收起「開」入口（与 cardIsFinal 同口径）
           const rpSettled = m.kind === 'redpacket' && m.packet ? Boolean(m.packet.status) || Boolean(m.packet.expired) || (m.packet.claims ?? []).length >= (m.packet.count ?? 1) : false;
           const rpClaimedByMe = m.kind === 'redpacket' && m.packet ? (m.packet.claims ?? []).some((c) => c.name === me.name) : false;
@@ -7261,17 +7264,31 @@ function ChatPage({
                             ? 'bg-white text-[#FF3B30] dark:bg-[#2A2C31] dark:text-[#FF6B6B]'
                             : 'bg-white text-[#1F2329] dark:bg-[#2A2C31] dark:text-white'
                       }`}
-                      style={bvis.override ? bvis.style : mine ? { backgroundColor: '#0099FF' } : undefined}
+                      style={
+                        bvis.override
+                          ? {
+                              ...bvis.style,
+                              // 信息式组尾小角：装扮纯色/七彩（im 尾巴）时，组尾尾巴侧底角收 5px
+                              //（inline borderRadius 会盖掉类圆角，故在此一并算好四角）；胶囊装扮保持 999px
+                              ...(bvis.tail === 'im'
+                                ? { borderRadius: lastOfGroup ? (mine ? '18px 18px 5px 18px' : '18px 18px 18px 5px') : '18px' }
+                                : {}),
+                            }
+                          : mine
+                          ? { backgroundColor: '#0099FF' }
+                          : undefined
+                      }
                     >
-                      {/* 气泡小尾巴（第十八轮）：装扮 solid/七彩 = 参考图同款弯钩尾巴（QQ 原生无尾巴）；
-                          毛玻璃/液态胶囊无尾巴。
-                          垂直定位（第二十轮）：与头像顶端平行——消息行 items-end（头像底对齐，
-                          40px 头像顶端 = 气泡底上方 40px），尾巴中心取 calc(100% - 46.5px)
-                          （SVG 高 13px 中心 6.5px：40 + 6.5 = 46.5）；短气泡（42px）算出负值，
-                          max(4px, …) 收在气泡顶部——此时头像顶端≈气泡顶（差 2px），视觉一致，
-                          也与旧版「尾巴贴顶部」的参考样式相同 */}
-                      {bvis.tail === 'hook' && (
-                        <BubbleTail side={mine ? 'mine' : 'theirs'} color={bvis.tailColor} top="max(4px, calc(100% - 46.5px))" />
+                      {/* 气泡小尾巴（第五十一轮，用户指定：QQ 换色/七彩气泡变成信息 App 同款）：
+                          装扮 solid/七彩 = 信息 App 同款底部弯钩剪影尾巴（14×18px，随 tailColor 上色，
+                          我方右侧/对方左侧，与头像底端对齐）；毛玻璃/液态胶囊无尾巴。
+                          （田第十八轮的参考图弯钩尾巴已随本轮需求替换） */}
+                      {bvis.tail === 'im' && (
+                        <span
+                          aria-hidden="true"
+                          className={`absolute bottom-0 ${mine ? '-right-[6px]' : '-left-[6px]'} h-[18px] w-[14px]`}
+                          style={{ clipPath: mine ? TAIL_CLIP_RIGHT : TAIL_CLIP_LEFT, backgroundColor: bvis.tailColor }}
+                        />
                       )}
                       {/* QQ 引用卡（截图样式：气泡内深色圆角卡 —— 上行名字+时间+右角箭头，下行引用内容；回复内容在卡片下方）。
                           第十九轮修订：紧凑化（更小的内边距/字号，引用卡不再占大半个气泡）+ 引用文字用
@@ -7397,8 +7414,8 @@ function ChatPage({
             不再有先全文显示后消失的流式气泡；识图失败系统提示在此一并展示 */}
         {(streaming || delivering) && (() => {
           /* 正在输入指示：与 TA 的消息气泡同一装扮视觉（第四十二轮补齐：装扮后不再固定白底，
-             序号取 msgs.length 接续七彩循环；QQ 装扮尾巴为弯钩——胶囊装扮无尾巴，
-             纯色/七彩渲染参考图同款弯钩） */
+             序号取 msgs.length 接续七彩循环；第五十一轮 QQ 装扮尾巴改成信息 App 同款弯钩剪影——
+             胶囊装扮无尾巴，纯色/七彩渲染信息式底部尾巴） */
           const tvis = bubbleVisual('theirs', bubbleStyle, msgs.length, 'qq');
           return (
           <div data-testid="qq-stream-typing">
@@ -7413,9 +7430,23 @@ function ChatPage({
                 className={`relative max-w-[calc(100%-96px)] px-3.5 py-[9px] ${
                   tvis.override ? tvis.className : 'rounded-[10px] bg-white dark:bg-[#2A2C31]'
                 }`}
-                style={tvis.override ? tvis.style : undefined}
+                style={
+                  tvis.override
+                    ? {
+                        ...tvis.style,
+                        // 信息式尾巴侧底角收 5px（与文本气泡组尾同口径；胶囊装扮保持 999px）
+                        ...(tvis.tail === 'im' ? { borderRadius: '18px 18px 18px 5px' } : {}),
+                      }
+                    : undefined
+                }
               >
-                {tvis.tail === 'hook' && <BubbleTail side="theirs" color={tvis.tailColor} top="max(4px, calc(100% - 46.5px))" />}
+                {tvis.tail === 'im' && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute -left-[6px] bottom-0 h-[18px] w-[14px]"
+                    style={{ clipPath: TAIL_CLIP_LEFT, backgroundColor: tvis.tailColor }}
+                  />
+                )}
                 <span className="inline-flex items-center gap-[5px] py-[4px]" role="status" aria-label="对方正在输入">
                   {[0, 1, 2].map((d) => (
                     <span

@@ -24,7 +24,6 @@ import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, ChevronRight, Palette, RotateCcw, Trash2 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
-import { BubbleTail } from '@/components/apps/bubble-tail';
 import { useSettings } from '@/lib/ios/store';
 import {
   BUBBLE_KIND_LABEL,
@@ -32,6 +31,8 @@ import {
   THEMES_OF_APP,
   NATIVE_BUBBLE,
   PRESET_SWATCHES,
+  TAIL_CLIP_LEFT,
+  TAIL_CLIP_RIGHT,
   bubbleVisual,
   hexToHsl,
   hslToHex,
@@ -94,8 +95,8 @@ function AuraLayer() {
 }
 
 /** 单条迷你预览气泡：override 时用装扮样式，否则 App 原生配色
- *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 弯钩——与预览行头像圆点（26px，items-end
- *   底对齐）顶端平行，top = max(0px, calc(100% - 32.5px))；微信/信息 = 原生小方块随色；胶囊无尾巴） */
+ *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 信息 App 同款底部弯钩剪影（第五十一轮，迷你版 12×10px 随色）；
+ *   微信/信息 = 原生小方块随色；胶囊无尾巴） */
 function PreviewBubble({
   app,
   cfg,
@@ -123,7 +124,14 @@ function PreviewBubble({
       } ${className}`}
       style={vis.override ? vis.style : { backgroundColor: native }}
     >
-      {vis.tail === 'hook' && <BubbleTail side={side} color={vis.tailColor} top="max(0px, calc(100% - 32.5px))" />}
+      {vis.tail === 'im' && (
+        /* QQ 装扮纯色/七彩（第五十一轮）：信息 App 同款底部弯钩剪影尾巴（迷你版，随 tailColor 上色） */
+        <span
+          aria-hidden="true"
+          className={`absolute bottom-0 ${side === 'mine' ? '-right-[4px]' : '-left-[4px]'} h-[13px] w-[10px]`}
+          style={{ clipPath: side === 'mine' ? TAIL_CLIP_RIGHT : TAIL_CLIP_LEFT, backgroundColor: vis.tailColor || native }}
+        />
+      )}
       {vis.tail === 'native' && app !== 'qq' && (
         <span
           aria-hidden="true"
