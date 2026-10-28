@@ -6761,6 +6761,9 @@ function ChatPage({
       {bg.mode !== 'default' && (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />
       )}
+      {/* 第四十七轮（用户指定「顶部会逐渐模糊」）：液态主题顶部渐变磨砂带——
+          消息滚入顶栏下方被渐进模糊（顶缘全模糊 → 112px 处透明；不拦截交互，顶栏铭件浮于其上） */}
+      {liquid && <div aria-hidden="true" data-testid="qq-chat-top-blur" className="lg-top-blur pointer-events-none absolute inset-x-0 top-0 z-[15] h-[112px]" />}
       {/* 顶栏：返回 + 名字/徽章/在线 + 企鹅 + 菜单（对照 QQ 真机；对方回复中名字变「正在输入中…」）。
           状态栏预留收进顶栏内（与顶栏同色同层）：自定义聊天背景不再透到状态栏区域（与微信聊天页同套结构）。
           液态玻璃主题（第四十六轮，用户指定）：顶栏完全透明悬浮（无背景遮罩/模糊带），名字纯文字不包裹胶囊
@@ -7228,8 +7231,10 @@ function ChatPage({
                   </div>
                 ) : m.kind === 'voice' && m.voice ? (
                   /* 语音消息：播放/暂停 + 波形 + 时长；长按菜单：转文字/复制/…；转写结果显示在气泡下方
-                     （我方 QQ 蓝底白字与文本气泡一致，圆角由组件内处理） */
-                  <div {...bubblePress}>
+                     （我方 QQ 蓝底白字与文本气泡一致，圆角由组件内处理）。
+                     第四十七轮（用户指定）：包裹层限宽 calc(100%-96px)（与 QQ 文本气泡同口径）——
+                     转文字长面板不再撑满整行、不越过对侧头像区 */
+                  <div {...bubblePress} className="max-w-[calc(100%-96px)]">
                     <VoiceMsgBubble
                       msgId={m.id}
                       voice={m.voice}
@@ -7710,13 +7715,14 @@ function ChatPage({
             液态玻璃：面板换乳白强模糊玻璃（lg-sheet），群聊等调用点不传保持默认 */}
         {voiceMode && <QqVoicePanel rec={rec} holdTestId="qq-voice-hold" liquid={liquid} />}
         {/* 第四十五轮（用户指定）：加号面板点击时输入框不再被顶起——液态主题下面板悬浮在输入区上方
-            （absolute bottom-full 锚定底部容器顶缘，覆盖消息列表底部）；默认主题保持原展开行为 */}
+            （absolute bottom-full 锚定底部容器顶缘，覆盖消息列表底部）；默认主题保持原展开行为。
+            第四十七轮（用户指定）：面板左右太宽——改右锚定固定 248px（与微信聊天面板同宽，悬于加号钮上方） */}
         {plusOpen ? (
           liquid ? (
-            <div className="absolute inset-x-0 bottom-full z-30">
+            <div className="absolute bottom-full right-3 z-30 w-[248px]">
               <div
                 data-testid="qq-plus-panel"
-                className="lg-sheet mx-2.5 mb-2.5 rounded-[20px] py-[4px]"
+                className="lg-sheet mb-2.5 rounded-[20px] py-[4px]"
                 style={{ animation: 'qqPanelIn 0.24s ease-out' }}
               >
                 <QqPlusGrid items={plusItems} liquid={liquid} />

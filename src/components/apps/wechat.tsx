@@ -3771,8 +3771,9 @@ function PlusPanel({ onAction, liquid }: { onAction: (a: PlusAction) => void; li
     <div
       className={`shrink-0 ${
         liquid
-          ? /* 液态玻璃（第四十六轮变小：行 44/字 14.5/图标 20/圆角 20）竖向乳白玻璃列表 */
-            'lg-sheet mx-2.5 mb-2.5 rounded-[20px] py-[4px]'
+          ? /* 液态玻璃（第四十六轮变小：行 44/字 14.5/图标 20/圆角 20；第四十七轮删 mx 横向外边距——
+             宽度由外层包裹容器右锚定 248px 控制）竖向乳白玻璃列表 */
+            'lg-sheet mb-2.5 rounded-[20px] py-[4px]'
           : 'px-2 pt-4 border-t border-black/[0.05] bg-[#F7F7F7] pb-[max(16px,env(safe-area-inset-bottom))] dark:border-white/[0.06] dark:bg-[#161616]'
       }`}
       data-testid="wx-plus-panel"
@@ -8640,6 +8641,9 @@ function ChatPage({
       {bg.mode !== 'default' && (
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={chatBgLayerStyle(bg, bgImageUrl)} />
       )}
+      {/* 第四十七轮（用户指定「顶部会逐渐模糊」）：液态主题顶部渐变磨砂带——
+          消息滚入顶栏下方被渐进模糊（顶缘全模糊 → 96px 处透明；不拦截交互，顶栏铭件浮于其上） */}
+      {liquid && <div aria-hidden="true" data-testid="wx-chat-top-blur" className="lg-top-blur pointer-events-none absolute inset-x-0 top-0 z-[15] h-[96px]" />}
       {/* 顶栏：与消息区/底部输入栏同色（微信灰，非白）；多选模式下变为「取消 + 已选计数」操作栏
           第三十四轮：pt-54→pt-48（顶部再往上移一点，仍避开 54px 状态栏内容区不重叠）
           第三十六轮：pt-48→pt-42（再上移 6px，灵动岛/状态栏下方留白更紧凑；群聊会话页同步） */}
@@ -9109,8 +9113,10 @@ function ChatPage({
                 </div>
               ) : m.kind === 'voice' && m.voice ? (
                 /* 语音消息：播放/暂停 + 波形 + 时长；长按菜单：转文字/复制/…；转写结果显示在气泡下方
-                   （第十八轮：语音气泡跟随装扮 —— 纯色/七彩原生尾巴随色，毛玻璃/液态胶囊无尾巴） */
-                <div {...bubblePress}>
+                   （第十八轮：语音气泡跟随装扮 —— 纯色/七彩原生尾巴随色，毛玻璃/液态胶囊无尾巴）。
+                   第四十七轮（用户指定）：包裹层限宽 calc(100%-92px)（与文本气泡同口径）——
+                   转文字长面板不再撑满整行、不越过对侧头像区 */
+                <div {...bubblePress} className="max-w-[calc(100%-92px)]">
                   <VoiceMsgBubble
                     msgId={m.id}
                     voice={m.voice}
@@ -9503,8 +9509,9 @@ function ChatPage({
           </div>
         )}
         {/* 第三十三轮：pt-2→pt-1（顶部上移一点）；items-end→items-center（图标和输入框对齐）
-            第三十四轮：gap-2.5→gap-2（输入框往右延伸） */}
-        <div className={liquid ? 'px-2.5 pb-2 pt-1' : 'px-2.5 pb-[18px] pt-1'}>
+            第三十四轮：gap-2.5→gap-2（输入框往右延伸）
+            第四十七轮（用户指定）：液态底距 pb-2→pb-[13px]——输入框整体再往上提一点 */}
+        <div className={liquid ? 'px-2.5 pb-[13px] pt-1' : 'px-2.5 pb-[18px] pt-1'}>
           {/* 液态输入栏（第四十四轮，用户指定）：删除大椭圆包裹——语音钮 = 玻璃圆圈内嵌黑圈、
               输入框毛玻璃椭圆、表情+加号共用一个玻璃椭圆；默认主题原样 */}
           <div className="flex items-center gap-2">
@@ -9708,10 +9715,11 @@ function ChatPage({
         </div>
         {stickerOpen && <WxStickerPanel onPick={sendSticker} onPickBuiltin={insertBuiltinEmoji} onClose={() => setStickerOpen(false)} onToast={onToast} liquid={liquid} />}
         {/* 第四十五轮（用户指定）：加号面板点击时输入框不再被顶起——液态主题下面板悬浮在输入区上方
-            （absolute bottom-full 锚定底部容器顶缘，覆盖消息列表底部）；默认主题保持原展开行为 */}
+            （absolute bottom-full 锚定底部容器顶缘，覆盖消息列表底部）；默认主题保持原展开行为。
+            第四十七轮（用户指定）：面板左右太宽——改右锚定固定 248px（与主页加号菜单同宽，悬于加号钮上方） */}
         {plusOpen && (
           liquid ? (
-            <div className="absolute inset-x-0 bottom-full z-30">
+            <div className="absolute bottom-full right-2.5 z-30 w-[248px]">
               <PlusPanel onAction={handlePlusAction} liquid={liquid} />
             </div>
           ) : (
@@ -15622,6 +15630,7 @@ function MainScreen({
                   className="lg-seg mb-2.5 flex items-center gap-1 overflow-x-auto rounded-[17px] p-[3px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                   role="tablist"
                   aria-label="会话分类"
+                  data-testid="wx-cat-bar"
                 >
                   {(
                     [
@@ -15647,7 +15656,9 @@ function MainScreen({
                         aria-selected={active}
                         data-testid={`wx-cat-${id}`}
                         onClick={() => setCat(id)}
-                        className={`relative flex h-[32px] shrink-0 items-center justify-center rounded-[13px] px-3.5 text-[13.5px] transition-colors ${
+                        /* 第四十七轮（用户指定「位置调整」）：五个标签 flex-1 均分铺满容器——
+                           消除原先靠左堆叠、右侧大段空白的失衡（VLM 采证确认） */
+                        className={`relative flex h-[32px] min-w-0 flex-1 basis-0 items-center justify-center px-1 text-[13.5px] transition-colors ${
                           active
                             ? /* 第四十六轮（用户指定，参考图）：选中 = 绿色文字 + 底部绿色横线（删胶囊背景） */
                               'font-semibold text-[#07C160] dark:text-[#3DDC84]'
