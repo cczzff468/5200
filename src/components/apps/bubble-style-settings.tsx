@@ -1,9 +1,10 @@
 'use client';
 
 /**
- * 聊天气泡装扮设置页（第十七轮建立 · 第十八轮重构）——微信/QQ 共用、装扮隔离
+ * 聊天气泡装扮设置页（第十七轮建立 · 第十八轮重构）——微信 / QQ / 信息 三 App 共用、装扮隔离
  * ---------------------------------------------------------------------------
- * 入口：QQ 个人抽屉 › 个性装扮；微信 发现页 › 看一看 › 聊天气泡装扮。
+ * 入口：QQ 个人抽屉 › 个性装扮；微信 发现页 › 看一看 › 聊天气泡装扮；
+ *       信息 App › 聊天设置 › 主题（气泡样式与颜色）。
  *
  * 结构（第十八轮再修订 · 用户指定简约化）：
  *  1. 实时预览卡片（四条模拟消息，所见即所得）
@@ -29,6 +30,7 @@ import {
   hexToHsl,
   hslToHex,
   yiqTextOn,
+  type BubbleAppId,
   type BubbleAppStyle,
   type BubbleScheme,
   type BubbleStyleConfig,
@@ -37,16 +39,17 @@ import {
 
 export interface BubbleStylePageProps {
   /** 宿主 App（装扮完全隔离：本页所有修改只写入 cfg[app]） */
-  app: 'wx' | 'qq';
+  app: BubbleAppId;
   /** 返回上一级 */
   onBack: () => void;
   /** 弹一条本地提示 */
   onToast: (m: string) => void;
 }
 
-const PLATFORM_META: Record<'wx' | 'qq', { name: string; accent: string; accentSoft: string }> = {
+const PLATFORM_META: Record<BubbleAppId, { name: string; accent: string; accentSoft: string }> = {
   wx: { name: '微信', accent: '#07C160', accentSoft: 'rgba(7, 193, 96, 0.14)' },
   qq: { name: 'QQ', accent: '#0099FF', accentSoft: 'rgba(0, 153, 255, 0.14)' },
+  sms: { name: '信息', accent: '#007AFF', accentSoft: 'rgba(0, 122, 255, 0.14)' },
 };
 
 /** 样式四格的图标 */
@@ -82,7 +85,7 @@ function AuraLayer() {
 /** 单条迷你预览气泡：override 时用装扮样式，否则 App 原生配色
  *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 弯钩——与预览行头像圆点（26px，items-end
  *   底对齐）顶端平行，top = max(0px, calc(100% - 32.5px)) → 尾巴中心 = 头像点顶端线上
- *   （26 + 6.5 = 32.5）；微信 = 原生小方块随色；胶囊无尾巴） */
+ *   （26 + 6.5 = 32.5）；微信/信息 = 原生小方块随色；胶囊无尾巴） */
 function PreviewBubble({
   app,
   cfg,
@@ -91,7 +94,7 @@ function PreviewBubble({
   children,
   className = '',
 }: {
-  app: 'wx' | 'qq';
+  app: BubbleAppId;
   cfg: BubbleStyleConfig;
   side: 'mine' | 'theirs';
   index: number;
@@ -100,16 +103,18 @@ function PreviewBubble({
 }) {
   const vis = bubbleVisual(side, cfg, index, app);
   const native = side === 'mine' ? NATIVE_BUBBLE[app].mine : NATIVE_BUBBLE[app].theirs;
-  const nativeText = side === 'mine' && app === 'qq' ? 'text-white' : 'text-black';
+  const nativeText = side === 'mine' && app !== 'wx' ? 'text-white' : 'text-black';
+  // 原生圆角与各端文本气泡同规格：微信 5px / QQ 10px / 信息 18px（iMessage 大圆角）
+  const nativeRadius = app === 'sms' ? 'rounded-[18px]' : app === 'qq' ? 'rounded-[10px]' : 'rounded-[5px]';
   return (
     <div
-      className={`relative w-fit max-w-full whitespace-pre-wrap break-words rounded-[10px] px-2.5 py-[7px] text-[12.5px] leading-[1.45] ${
+      className={`relative w-fit max-w-full whitespace-pre-wrap break-words ${nativeRadius} px-2.5 py-[7px] text-[12.5px] leading-[1.45] ${
         vis.override ? vis.className : nativeText
       } ${className}`}
       style={vis.override ? vis.style : { backgroundColor: native }}
     >
       {vis.tail === 'hook' && <BubbleTail side={side} color={vis.tailColor} top="max(0px, calc(100% - 32.5px))" />}
-      {vis.tail === 'native' && app === 'wx' && (
+      {vis.tail === 'native' && app !== 'qq' && (
         <span
           aria-hidden="true"
           className={`absolute top-[7px] h-[6px] w-[6px] rotate-45 ${side === 'mine' ? '-right-[2px]' : '-left-[2px]'}`}
@@ -129,7 +134,7 @@ function PreviewRow({
   index,
   text,
 }: {
-  app: 'wx' | 'qq';
+  app: BubbleAppId;
   cfg: BubbleStyleConfig;
   side: 'mine' | 'theirs';
   index: number;
@@ -295,9 +300,10 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
 
   return (
     <IOSScreen className="bg-[#F6F7F9] dark:bg-[#111214]">
-      {/* 标题居中（用户指定）；右上角不放平台标签（用户指定删除） */}
+      {/* 标题居中（用户指定）；右上角不放平台标签（用户指定删除）。
+          信息 App 入口名为「主题」，页题与入口一致；微信/QQ 保持「气泡样式」 */}
       <IOSNavBar
-        title="气泡样式"
+        title={app === 'sms' ? '主题' : '气泡样式'}
         large={false}
         left={<IOSBackButton onClick={onBack} label="" />}
         className="!bg-[#F6F7F9] dark:!bg-[#111214]"

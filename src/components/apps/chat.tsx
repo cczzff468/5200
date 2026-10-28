@@ -34,6 +34,10 @@ import { AnonSwitchSheet } from '@/components/ios/AnonSwitchSheet';
 import { DefaultAvatar } from '@/components/apps/default-avatar';
 import PeerStatusCard from '@/components/apps/peer-status-card';
 import { useSettings, useUI } from '@/lib/ios/store';
+// 聊天气泡装扮（信息 App 接入）：bubbleVisual 计算每条消息的覆盖样式（背景/文字色/尾巴），
+// 与微信/QQ 完全隔离（bubbleStyle.sms 独立槽位）；设置入口 = 聊天设置 › 主题
+import { BUBBLE_KIND_LABEL, bubbleVisual } from '@/lib/ios/bubble-style';
+import { BubbleStylePage } from './bubble-style-settings';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -1111,6 +1115,10 @@ function ChatView({
   const profileAvatar = useSettings((s) => s.profile.avatar);
   /** 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 回复条数入口 + 分句发送开关 */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 主题（气泡样式与颜色装扮）页：聊天设置 › 主题 进入，BubbleStylePage app='sms' */
+  const [themeOpen, setThemeOpen] = useState(false);
+  /** 聊天气泡装扮配置（信息 App 独立槽位，与微信/QQ 隔离）：全部气泡（文本/语音/输入中指示器+尾巴）实时跟随 */
+  const bubbleStyle = useSettings((s) => s.bubbleStyle);
   /** 关系本地显示值（多账号关系感知）：保存后乐观更新（重进会话/切号后重读） */
   const [relationLocal, setRelationLocal] = useState<string | null>(null);
   /** 图片全屏预览（点图片气泡打开；自动生图/历史图片共用；点任意处关闭） */
@@ -3169,6 +3177,9 @@ function ChatView({
           const lastOfGroup = next === undefined || next.role !== m.role;
           const mine = m.role === 'user';
           const text = m.content.trim();
+          // 聊天气泡装扮：按消息序号计算本条气泡视觉（七彩=序号递增循环取色；原生默认时零覆盖直通）。
+          // 文本/语音/输入中指示器共用同一 bvis——所有气泡样式一致跟随主题装扮
+          const bvis = bubbleVisual(mine ? 'mine' : 'theirs', bubbleStyle, i, 'sms');
           // 动作描写视图（仅对方 AI 的文本消息；我的消息/系统行/申请卡/错误占位/无星号内容 → null 走原路径）
           const actView = !mine && !m.recalled && !m.sys && !m.blkreq && !m.error ? actionDescViewOf(m.content, actionDescOn) : null;
           const actLines = actView ? [...actView.before, ...actView.after] : [];
@@ -3294,7 +3305,12 @@ function ChatView({
                         }}
                         side={mine ? 'me' : 'peer'}
                         theme="im"
-                        style={mine ? { backgroundColor: SELF_BLUE } : undefined}
+                        // 聊天气泡装扮：语音气泡与文本气泡同一视觉（纯色/七彩换底色随尾巴色、
+                        // 毛玻璃/液态胶囊收窄 34px 无尾巴）；无装扮时保持原生（我方 iOS 蓝底）
+                        bubbleClassName={bvis.override ? bvis.className : undefined}
+                        decorated={bvis.override}
+                        hideTail={bvis.override && bvis.tail === 'none'}
+                        style={bvis.override ? bvis.style : mine ? { backgroundColor: SELF_BLUE } : undefined}
                       />
                     </div>
                     {/* iMessage：已送达挂在最后一条己方消息下沿（与文本气泡同规则） */}
@@ -3457,24 +3473,37 @@ function ChatView({
                   )}
                   <div
                       {...bubblePress}
+                      data-testid="sms-text-bubble"
                       className={`relative w-fit max-w-full select-none whitespace-pre-wrap break-words rounded-[18px] px-3.5 py-2 text-[15px] leading-[1.45] ${
-                        mine
-                          ? `bg-[#007AFF] text-white ${lastOfGroup ? 'rounded-br-[5px]' : ''}`
-                          : `bg-muted text-foreground ${lastOfGroup ? 'rounded-bl-[5px]' : ''}`
+                        bvis.override
+                          ? `${bvis.className} ${
+                              // 纯色/七彩装扮：保留原生气泡圆角与组尾小圆角（信息端 18px 不覆盖——与原生完全一致）
+                              lastOfGroup ? (mine ? 'rounded-br-[5px]' : 'rounded-bl-[5px]') : ''
+                            }`
+                          : mine
+                            ? `bg-[#007AFF] text-white ${lastOfGroup ? 'rounded-br-[5px]' : ''}`
+                            : `bg-muted text-foreground ${lastOfGroup ? 'rounded-bl-[5px]' : ''}`
                       }`}
+                      style={bvis.override ? bvis.style : undefined}
                     >
-                      {!mine && lastOfGroup && (
+                      {/* 气泡小尾巴：装扮纯色/七彩 = 原生弯钩剪影随色（tailColor）；
+                          毛玻璃/液态胶囊无尾巴（tail='none'）；无装扮 = 原生 iOS 蓝/bg-muted */}
+                      {!mine && lastOfGroup && bvis.tail !== 'none' && (
                         <span
                           aria-hidden="true"
-                          className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
-                          style={{ clipPath: TAIL_CLIP_LEFT }}
+                          className={`absolute -left-[6px] bottom-0 h-[18px] w-[14px] ${
+                            bvis.override && bvis.tailColor ? '' : 'bg-muted'
+                          }`}
+                          style={{ clipPath: TAIL_CLIP_LEFT, ...(bvis.override && bvis.tailColor ? { backgroundColor: bvis.tailColor } : {}) }}
                         />
                       )}
-                      {mine && lastOfGroup && (
+                      {mine && lastOfGroup && bvis.tail !== 'none' && (
                         <span
                           aria-hidden="true"
-                          className="absolute -right-[6px] bottom-0 h-[18px] w-[14px] bg-[#007AFF]"
-                          style={{ clipPath: TAIL_CLIP_RIGHT }}
+                          className={`absolute -right-[6px] bottom-0 h-[18px] w-[14px] ${
+                            bvis.override && bvis.tailColor ? '' : 'bg-[#007AFF]'
+                          }`}
+                          style={{ clipPath: TAIL_CLIP_RIGHT, ...(bvis.override && bvis.tailColor ? { backgroundColor: bvis.tailColor } : {}) }}
                         />
                       )}
                       <span className={`relative ${m.error && !mine ? 'text-[#FF3B30]' : ''}`}>{bubbleContent}</span>
@@ -3526,8 +3555,11 @@ function ChatView({
         })}
         {/* 正在输入指示（流式接收 + 逐条投递期间显示）：AI 回复为「边接收边逐条显示」——
             完整分段直接作为真实消息逐条投递上屏（见 runTurn 的 onSegment/finalize），
-            不再有先全文显示后消失的流式气泡（信息端顶栏无「正在输入」标题，这个气泡就是输入指示） */}
-        {(streaming || delivering) && (
+            不再有先全文显示后消失的流式气泡（信息端顶栏无「正在输入」标题，这个气泡就是输入指示）。
+            气泡装扮跟随：与 TA 的消息气泡同一视觉（对方侧、序号 0） */}
+        {(streaming || delivering) && (() => {
+          const tvis = bubbleVisual('theirs', bubbleStyle, 0, 'sms');
+          return (
           <motion.div
             initial={{ opacity: 0, y: 10, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -3535,24 +3567,32 @@ function ChatView({
             className="mt-2.5 flex justify-start"
             data-testid="sms-deliver-typing"
           >
-            <div className="relative rounded-[18px] rounded-bl-[5px] bg-muted px-4 py-3.5">
+            <div
+              className={`relative rounded-[18px] px-4 py-3.5 ${
+                tvis.override ? tvis.className : 'bg-muted'
+              } ${tvis.override ? '' : 'rounded-bl-[5px]'}`}
+              style={tvis.override ? tvis.style : undefined}
+            >
+              {tvis.tail !== 'none' && (
               <span
                 aria-hidden="true"
-                className="absolute -left-[6px] bottom-0 h-[18px] w-[14px] bg-muted"
-                style={{ clipPath: TAIL_CLIP_LEFT }}
+                className={`absolute -left-[6px] bottom-0 h-[18px] w-[14px] ${tvis.override && tvis.tailColor ? '' : 'bg-muted'}`}
+                style={{ clipPath: TAIL_CLIP_LEFT, ...(tvis.override && tvis.tailColor ? { backgroundColor: tvis.tailColor } : {}) }}
               />
+              )}
               <div className="flex items-center gap-1">
                 {[0, 1, 2].map((d) => (
                   <span
                     key={d}
-                    className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/70"
-                    style={{ animationDelay: `${d * 0.15}s` }}
+                    className={`h-1.5 w-1.5 animate-bounce rounded-full ${tvis.override ? 'bg-current' : 'bg-muted-foreground/70'}`}
+                    style={{ animationDelay: `${d * 0.15}s`, ...(tvis.override ? { opacity: 0.65 } : {}) }}
                   />
                 ))}
               </div>
             </div>
           </motion.div>
-        )}
+          );
+        })()}
         <div aria-hidden="true" className="h-1" />
       </div>
 
@@ -3891,6 +3931,15 @@ function ChatView({
           }
           onBack={() => setSettingsOpen(false)}
           onOpenTranslate={() => setTranslateOpen(true)}
+          themeSummary={(() => {
+            const s = bubbleStyle.sms;
+            if (!s || (s.kind === 'default' && !s.mineColor && !s.theirsColor)) return '默认';
+            const parts = [BUBBLE_KIND_LABEL[s.kind] ?? '默认'];
+            if (s.mineColor) parts.push(`我 ${s.mineColor}`);
+            if (s.theirsColor) parts.push(`TA ${s.theirsColor}`);
+            return parts.join(' · ');
+          })()}
+          onOpenTheme={() => setThemeOpen(true)}
           replyCount={replyCountValue}
           onOpenReplyCount={() => setReplyCountOpen(true)}
           onToggleSentenceSend={(v) => {
@@ -3917,6 +3966,15 @@ function ChatView({
           blockedByUser={blk.byUser === true}
           onToggleBlock={wbContactId ? toggleBlockFromSettings : undefined}
         />
+      )}
+
+      {/* 主题页（聊天设置 › 主题，气泡样式与颜色装扮）：BubbleStylePage 复用微信/QQ 同一套
+          （实时预览/样式四格/HSL 色板/收藏夹），装扮写入 bubbleStyle.sms 独立槽位——
+          与微信/QQ 完全隔离；返回即回聊天设置页 */}
+      {themeOpen && (
+        <div className="absolute inset-0 z-[60]">
+          <BubbleStylePage app="sms" onBack={() => setThemeOpen(false)} onToast={showToast} />
+        </div>
       )}
 
       {/* 主动发消息设置页（聊天设置二级页，仅联系人会话）：定时/事件/自主/提醒四类触发 */}

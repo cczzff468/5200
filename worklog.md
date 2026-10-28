@@ -1112,3 +1112,64 @@ Stage Summary:
 - 等待用户提出具体修改/新增功能需求
 
 **推送备注（第38轮补充）**：git push 直连 github.com TLS 握手后响应读取会超时（已知环境限制），但服务器实际已收到——超时后用 `curl -s -H "Authorization: token <PAT>" https://api.github.com/repos/cczzff468/5200/git/ref/heads/main` 验证远程 SHA 即可确认（本轮 15bf744 实际推送成功）。api.github.com 直连可达（200），github.com 主站被墙——必要时可用 GitHub Git Data API 走 api.github.com 推送。
+
+---
+Task ID: 39
+Agent: 主控 Agent（Z.ai Code）
+Task: 重新拉取 5200 仓库并部署到新沙盒环境（环境重置后的完整恢复）
+
+Work Log:
+- 沙盒环境重置：/home/z/my-project 回到默认模板（无 worklog.md、默认 src）。git clone 直连 github.com 超时/HTTP2 报错（沙箱网络限制依旧），改用 codeload.github.com zip 下载 main 分支（130MB）成功
+- 解压至 /home/z/repo-5200-extract/5200-main；确认仓库包含前 4 个 Task 的全部成果（worklog.md Task 1-4、v7.1 宠物系统升级等）
+- 完整同步到 /home/z/my-project：src/（15M）、public/（103M）、prisma/、db/custom.db（复用仓库数据：1 char + 1 user 联系人、50 行 CoupleHome 档案）、scripts/、tools/、deploy/、mini-services/（含 netease-api）、download/、upload/、agent-ctx/、.data/、.e2e-16a/、worklog.md
+- 同步根配置：package.json、next.config.ts、tailwind.config.ts、tsconfig.json、components.json、postcss.config.mjs、eslint.config.mjs、bun.lock、.gitignore
+- .env 合并：保留沙盒 DATABASE_URL=file:/home/z/my-project/db/custom.db，追加仓库 VAPID 密钥对（web-push 推送用）；保留沙盒 Caddyfile/.zscripts/examples/skills
+- bun install 401 包（three/r3f/leaflet/web-push/speech-asr 等）；bunx prisma generate + db push（schema 与 custom.db 已同步）
+- git remote add origin（PAT token 内嵌认证）+ git branch -M main + user.name/email 配置；注意沙盒直连 github.com 推送可能受网络限制（此前 clone 即失败），推送失败时需重试或用户本地推送
+- 启动 dev server（端口 3000）：instrumentation 自动拉起 ncm-keeper（pid=1917）→ netease-api 3010 端口 HTTP 200 正常
+- Turbopack 对 src/instrumentation.ts 仍报 Edge Runtime 静态分析警告（getBuiltinModule），运行时 nodejs 分支正常执行、Edge 分支提前 return —— 与仓库代码注释一致，属良性误报
+- Agent Browser E2E（390×844）验证：
+  * 锁屏渲染✓（时间/农历/小组件/手电筒相机快捷），上滑解锁✓
+  * 主屏 App 网格 + Dock + 3 页横滑✓（第 3 页含音乐/微信/美团/恋人空间/拾光小屋/淘宝等）
+  * 信息 App → AI 小助手对话✓：消息送达（已送达标签）→ AI 回复 10″ TTS 语音气泡；POST /api/chat 200
+  * 拾光小屋 3D 场景渲染✓（暖光房间/家具/HUD：左上返回+相机、右上装修/⋮/宠物头像、右下摇杆）；新浏览器 IndexedDB 无联系人 → 弹「谁陪你住进拾光小屋」引导（预期：联系人为浏览器本地存储，服务端 Contact 表仅为旧版迁移源）
+  * 音乐 App 渲染✓：显示登录页 + 二维码 + 游客模式按钮（netease-api 连通正常，未登录预期态）
+  * 全程无浏览器 console error / page error
+- 关闭 agent-browser 会话
+
+Stage Summary:
+- 5200 仓库（AI Phone 仿 iOS 智能助手）在新沙盒完整恢复运行：Next.js 16 + TS + Tailwind 4 + shadcn/ui + Prisma/SQLite + 3D(three/r3f) + z-ai-web-dev-sdk（LLM/TTS/识图）
+- 数据完整：仓库 custom.db 复用（联系人/CoupleHome 档案）；浏览器本地数据（IndexedDB 联系人等）不跨会话，首次进入需重建 AI 角色联系人
+- mini-service netease-api 已由 instrumentation 自动守护；imggen-mock/mock-imggen 按需启动
+- git remote 已配置（PAT token），后续改完可 `git push origin main`（若网络受限需重试）
+- 环境就绪，等待用户指定要修改/新增的功能
+
+---
+Task ID: 40
+Agent: 主控 Agent（Z.ai Code）
+Task: 信息 App 全气泡装扮接入 —— 所有气泡跟随气泡样式 + 聊天设置新增「主题」入口（气泡颜色选择）
+
+Work Log:
+- [核心库] bubble-style.ts：新增 BubbleAppId = 'wx'|'qq'|'sms'；BubbleStyleConfig 增 sms 槽位（三 App 装扮完全隔离）；NATIVE_BUBBLE.sms = { mine:'#007AFF', theirs:'#E9E9EB' }（iOS 原生）；normalizeBubbleStyle 读回 o.sms（旧档缺失自动补默认）；normalizeBubbleSchemes 收录 sms 方案；bubbleVisual() 尾巴策略更新——sms 纯色/七彩 = 原生弯钩剪影随色（tail:'native'），毛玻璃/液态胶囊无尾巴；圆角 sms 保持原生 18px 不覆盖（与微信同策略，仅 QQ 14px）
+- [存储] store.ts：默认 bubbleStyle 增 sms:{kind:'default'}；setBubbleStyle 经 normalizeBubbleStyle 自动兼容
+- [装扮页] bubble-style-settings.tsx：app 类型放宽为 BubbleAppId；PLATFORM_META 增 sms（名称「信息」/accent #007AFF）；PreviewBubble 原生圆角按 App（wx 5px / qq 10px / sms 18px）+ 我方白字适配；页题按 App（sms='主题'，wx/qq 保持'气泡样式'）
+- [设置页] chat-settings.tsx：SmsChatSettingsPage 新增「主题」入口行（Palette 图标 + 摘要实时显示装扮状态：默认/七彩 · 我 #FF2D55 等，data-testid=sms-settings-theme）；位置在备注/关系卡之后、翻译入口之前
+- [聊天页] chat.tsx：ChatView 接入 bubbleStyle（useSettings 订阅，跨会话实时跟随）+ themeOpen 状态；msgs.map 每条计算 bvis = bubbleVisual(mine?'mine':'theirs', bubbleStyle, i, 'sms')；文本气泡 override 时停用原生 bg 类改内联样式（保留 18px 圆角+组尾 5px 小圆角）、尾巴随 tailColor 上色、胶囊隐藏尾巴；语音气泡透传 bubbleClassName/decorated/hideTail/style（capsule 高度 34px 自动收窄）；「正在输入」指示气泡同样跟随 theirs 视觉（含尾巴与三点颜色 bg-current）；新增 data-testid=sms-text-bubble 便于自检
+- [主题页挂载] chat.tsx：聊天设置 › 主题 → BubbleStylePage app='sms'（absolute inset-0 z-[60] 覆盖层），返回回聊天设置页；onToast 复用 showToast
+- [验证] tsc 仅 1 处仓库既有基线错误（proactive-msg.ts 1404，与本次无关）；eslint 变更文件 15 处均为既有基线模式（基线 16 处，0 新增）
+- [E2E] Agent Browser（390×844）全链路验证：
+  * 聊天设置页出现「主题 默认」入口 ✓（备注卡与翻译入口之间）
+  * 主题页完整渲染（标题「主题」+ 实时预览 + 样式四格 + 一起/我的/TA的 + HSL 三滑条 + 24 色预设色板）✓
+  * 纯色装扮：选「我的」→ #FF2D55 → 我的气泡粉色白字、摘要变「默认 · 我 #FF2D55」✓
+  * 七彩装扮：实际聊天按消息序号循环（对方亮黄 → 我的青柠 → 语音气泡杏色），预览区四色循环 ✓
+  * 毛玻璃装扮：对方奶白 0.62 磨砂胶囊、我的粉色 0.55 磨砂、语音气泡 34px 胶囊、尾巴全部隐藏（计算样式实测）✓
+  * 液态装扮：清透 165° 白膜渐变 + blur(8px) saturate(1.8) + 999px 胶囊 ✓
+  * 恢复默认：原生还原 rgb(0,122,255) + 圆角 18px 18px 5px（组尾）+ 灰色对方气泡 ✓
+  * 主题摘要随装扮实时更新（默认 → 毛玻璃 · 我 #FF2D55 → 七彩 → 默认）✓
+  * 全程零浏览器 console/page error
+- [说明] 图片气泡/文字卡气泡/引用块为卡片型消息（非色底气泡）不参与装扮，与微信/QQ 端同口径；装扮仅影响色底气泡（文本/语音/输入指示器+尾巴）
+
+Stage Summary:
+- 信息 App（iMessage）全气泡装扮系统落地：四种样式（默认纯色/七彩循环/毛玻璃/液态玻璃）+ 我的/TA的 双侧自定义色（HSL 滑条 + 24 色色板）+ 收藏夹方案，与微信/QQ 装扮完全隔离（bubbleStyle.sms 独立槽位）
+- 聊天设置新增「主题」入口（带实时装扮摘要），点入即气泡装扮页；所有色底气泡（文本/语音/输入中指示器及小尾巴）实时跟随装扮变化，IndexedDB 持久化
+- 关键文件：src/lib/ios/bubble-style.ts、src/lib/ios/store.ts、src/components/apps/bubble-style-settings.tsx、src/components/apps/chat-settings.tsx、src/components/apps/chat.tsx

@@ -449,7 +449,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   islandPersistent: true,
   iconStyle: 'real',
   goodsImgStyle: 'cartoon',
-  bubbleStyle: { wx: { ...DEFAULT_BUBBLE_STYLE.wx }, qq: { ...DEFAULT_BUBBLE_STYLE.qq } },
+  bubbleStyle: { wx: { ...DEFAULT_BUBBLE_STYLE.wx }, qq: { ...DEFAULT_BUBBLE_STYLE.qq }, sms: { ...DEFAULT_BUBBLE_STYLE.sms } },
   bubbleSchemes: [],
   loaded: false,
 

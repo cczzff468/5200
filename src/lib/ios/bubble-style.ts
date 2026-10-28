@@ -1,33 +1,26 @@
 /**
  * 聊天气泡装扮系统（第十七轮建立 · 第十八轮重构）——核心库
  * ---------------------------------------------------------------------------
- * 四种内置样式（样式对两侧同时生效，不再区分 TA/我）：
- *  - default  纯色气泡（无自定义色 = 跟随 App 原生配色；微信我方绿 / QQ 我方蓝）
- *             自定义色后：仅换底色/文字色，圆角不覆盖——与各 App 原生气泡完全一致
- *             （用户指定：微信改色后圆角不能变圆，须和默认一样）
- *  - rainbow  七彩气泡：每条消息按序号在参考图 9 色间循环取色
- *             （亮黄→青柠→杏色→青色→粉色→薰衣草→灰褐→琥珀→珊瑚）；
- *             QQ 装扮后圆一点点（14px），微信保持原生
- *  - frosted  毛玻璃（第十九轮重做）：真实磨砂——.bub-frosted 奶白半透底（0.62 白）
- *             + 磨砂颗粒纹理（feTurbulence 噪点）+ 柔和悬浮投影；无描边无光泽高光；
- *             与语音胶囊同高 34px
- *  - liquid   液态玻璃（第十九轮终版）：清透玻璃——背景几乎完全透出只留极淡白膜
- *             （无 brightness、无描边——均用户指定删除）；与语音胶囊同高 34px；无高光无闪光
  *
- * 微信 / QQ 两 App 装扮完全隔离（wx / qq 各持 { kind, mineColor, theirsColor }），
- * 在微信里选的样式不影响 QQ，反之亦然。
- * 自定义颜色区分「我的 / TA的」两侧独立配色；样式(kind)不分侧。
+ * 宿主 App（装扮完全隔离，各持一份互不影响）：
+ *  - wx  微信 / qq QQ / sms 信息（iMessage 风格）
+ *
+ * 四种内置样式（样式对两侧同时生效，不分 TA/我）：
+ *  - default  纯色气泡（无自定义色 = 跟随 App 原生配色；微信我方绿 / QQ 我方蓝 / 信息我方 iOS 蓝）
+ *             自定义色后：仅换底色/文字色，圆角不覆盖——与各 App 原生气泡完全一致
+ *  - rainbow  七彩气泡：每条消息按序号在参考图 9 色间循环取色
+ *  - frosted  毛玻璃：真实磨砂（奶白半透底 + 噪点纹理 + 柔和投影；胶囊无尾巴）
+ *  - liquid   液态玻璃：清透玻璃胶囊（极淡白膜透底；无尾巴）
  *
  * 持久化：zustand useSettings → IndexedDB settings.bubbleStyle / settings.bubbleSchemes。
- * 渲染：bubbleVisual() 输出 override/className/style/tail，聊天页按返回值
- * 覆盖原生背景与文字色（内联样式 + .bub-liquid/.bub-frosted 两个全局类，无其他 CSS 污染）。
- *
- * 旧档迁移：第十七轮格式 { mine:{kind,color}, theirs:{kind,color} }（两 App 共享）
- * → 自动转成新格式：两侧 kind 取旧 mine.kind，两 App 各得 { kind, mineColor, theirsColor }。
+ * 渲染：bubbleVisual() 输出 override/className/style/tail，聊天页按返回值覆盖原生背景与文字色。
  */
 import type { CSSProperties } from 'react';
 
 export type BubbleStyleKind = 'default' | 'rainbow' | 'frosted' | 'liquid';
+
+/** 装扮宿主 App 标识（微信 / QQ / 信息） */
+export type BubbleAppId = 'wx' | 'qq' | 'sms';
 
 /** 单个 App 的装扮：样式（不分侧） + 两侧独立自定义色 */
 export interface BubbleAppStyle {
@@ -38,10 +31,11 @@ export interface BubbleAppStyle {
   theirsColor?: string;
 }
 
-/** 全量装扮配置：微信 / QQ 完全隔离 */
+/** 全量装扮配置：微信 / QQ / 信息 三 App 完全隔离 */
 export interface BubbleStyleConfig {
   wx: BubbleAppStyle;
   qq: BubbleAppStyle;
+  sms: BubbleAppStyle;
 }
 
 /** 收藏夹里的一套已命名方案（归属某个 App，应用时只覆盖该 App） */
@@ -49,7 +43,7 @@ export interface BubbleScheme {
   id: string;
   name: string;
   /** 方案归属 App（保存时所在的应用） */
-  app: 'wx' | 'qq';
+  app: BubbleAppId;
   style: BubbleAppStyle;
   createdAt: number;
 }
@@ -72,15 +66,18 @@ export const RAINBOW_COLORS = [
 
 export const BUBBLE_KINDS: readonly BubbleStyleKind[] = ['default', 'rainbow', 'frosted', 'liquid'];
 
-/** 各 App 原生默认气泡底色（kind=default 且未自定义色时还原成它） */
-export const NATIVE_BUBBLE: Record<'wx' | 'qq', { mine: string; theirs: string }> = {
+/** 各 App 原生默认气泡底色（kind=default 且未自定义色时还原成它）
+ *  （theirs 灰色系仅作为设置页滑条元生位置的参考，聊天页原生仍走 bg-muted 类） */
+export const NATIVE_BUBBLE: Record<BubbleAppId, { mine: string; theirs: string }> = {
   wx: { mine: '#95EC69', theirs: '#FFFFFF' },
   qq: { mine: '#0099FF', theirs: '#FFFFFF' },
+  sms: { mine: '#007AFF', theirs: '#E9E9EB' },
 };
 
 export const DEFAULT_BUBBLE_STYLE: BubbleStyleConfig = {
   wx: { kind: 'default' },
   qq: { kind: 'default' },
+  sms: { kind: 'default' },
 };
 
 /**
@@ -205,14 +202,18 @@ function normalizeAppStyle(v: unknown): BubbleAppStyle {
 
 /** 任何来源（IndexedDB 旧档/脏数据）→ 合法配置；不合法回默认。含第十七轮旧档自动迁移。 */
 export function normalizeBubbleStyle(v: unknown): BubbleStyleConfig {
-  if (!v || typeof v !== 'object') return { wx: { kind: 'default' }, qq: { kind: 'default' } };
+  if (!v || typeof v !== 'object') return { wx: { kind: 'default' }, qq: { kind: 'default' }, sms: { kind: 'default' } };
   const o = v as Record<string, unknown>;
-  // 新格式：{ wx, qq }
-  if (o.wx || o.qq) {
-    return { wx: normalizeAppStyle(o.wx), qq: normalizeAppStyle(o.qq) };
+  // 新格式：{ wx, qq, sms }（sms 为后续接入：旧档缺失时补默认，不影响已有装扮）
+  if (o.wx || o.qq || o.sms) {
+    return {
+      wx: normalizeAppStyle(o.wx),
+      qq: normalizeAppStyle(o.qq),
+      sms: normalizeAppStyle(o.sms),
+    };
   }
   // 第十七轮旧格式：{ mine: {kind,color}, theirs: {kind,color} }（两 App 共享）
-  // → 迁移：kind 取旧 mine.kind（装扮主选择），两侧色各自保留，两 App 同步获得
+  // → 迁移：kind 取旧 mine.kind（装扮主选择），两侧色各自保留，各 App 同步获得
   const oldMine = (o.mine ?? {}) as { kind?: unknown; color?: unknown };
   const oldTheirs = (o.theirs ?? {}) as { kind?: unknown; color?: unknown };
   const migrated: BubbleAppStyle = {
@@ -220,7 +221,7 @@ export function normalizeBubbleStyle(v: unknown): BubbleStyleConfig {
     mineColor: normColor(oldMine.color),
     theirsColor: normColor(oldTheirs.color),
   };
-  return { wx: { ...migrated }, qq: { ...migrated } };
+  return { wx: { ...migrated }, qq: { ...migrated }, sms: { kind: 'default' } };
 }
 
 /** 收藏夹列表读回校验：过滤非法项；旧格式方案（config.mine/theirs）迁移为 wx 方案 */
@@ -236,7 +237,7 @@ export function normalizeBubbleSchemes(v: unknown): BubbleScheme[] {
       out.push({
         id: r.id,
         name: r.name,
-        app: r.app === 'qq' ? 'qq' : 'wx',
+        app: r.app === 'qq' ? 'qq' : r.app === 'sms' ? 'sms' : 'wx',
         style: normalizeAppStyle(r.style),
         createdAt: r.createdAt,
       });
@@ -260,7 +261,7 @@ export function normalizeBubbleSchemes(v: unknown): BubbleScheme[] {
 }
 
 /** 是否仍是原生默认（该 App 没有任何装扮）——聊天页可借此完全零开销直通 */
-export function isNativeBubbleStyle(cfg: BubbleStyleConfig | undefined, app: 'wx' | 'qq'): boolean {
+export function isNativeBubbleStyle(cfg: BubbleStyleConfig | undefined, app: BubbleAppId): boolean {
   if (!cfg) return true;
   const a = cfg[app];
   return a?.kind === 'default' && !a?.mineColor && !a?.theirsColor;
@@ -276,8 +277,8 @@ export interface BubbleVisual {
   /** override 时的内联样式（背景/圆角/文字色/模糊/描边/高光） */
   style: CSSProperties;
   /**
-   * 小尾巴指令（第十八轮修订：尾巴策略按 App 区分）：
-   *  - 'native' 保持 App 原生尾巴（微信小方块三角 · 纯色/七彩时随 tailColor 上色；QQ 原生无尾巴）
+   * 小尾巴指令（尾巴策略按 App 区分）：
+   *  - 'native' 保持 App 原生尾巴（微信小方块三角 · 信息弯钩剪影 · 纯色/七彩时随 tailColor 上色；QQ 原生无尾巴）
    *  - 'hook'   渲染参考图同款弯钩尾巴（QQ 纯色/七彩；fill = tailColor；我方自动镜像）
    *  - 'none'   不渲染尾巴（毛玻璃/液态胶囊）
    */
@@ -291,7 +292,7 @@ const NO_VISUAL: BubbleVisual = { override: false, className: '', style: {}, tai
 /**
  * 计算某条消息气泡的最终视觉。
  * @param side     mine=我的消息（右侧）/ theirs=TA 的消息（左侧）
- * @param cfg      全量装扮配置（微信/QQ 隔离，取 cfg[app]）
+ * @param cfg      全量装扮配置（三 App 隔离，取 cfg[app]）
  * @param msgIndex 消息在会话中的序号（七彩循环的递增索引：渲染时传 map 下标即可）
  * @param app      宿主 App（default 无自定义色时还原各 App 原生配色）
  */
@@ -299,20 +300,20 @@ export function bubbleVisual(
   side: 'mine' | 'theirs',
   cfg: BubbleStyleConfig | undefined,
   msgIndex: number,
-  app: 'wx' | 'qq',
+  app: BubbleAppId,
 ): BubbleVisual {
   const a = cfg?.[app];
   if (!a) return NO_VISUAL;
   const kind = normKind(a.kind);
   const color = normColor(side === 'mine' ? a.mineColor : a.theirsColor);
 
-  // 原生默认：零覆盖直通（微信绿/白、QQ 蓝/白，深浅色模式类名由聊天页原样保留）
+  // 原生默认：零覆盖直通（微信绿/白、QQ 蓝/白、信息 iOS 蓝/bg-muted，深浅色模式类名由聊天页原样保留）
   if (kind === 'default' && !color) return NO_VISUAL;
 
   if (kind === 'rainbow') {
     // 七彩：参考图 9 色按消息序号循环；尾巴按 App —— 微信保持原生小三角（随色），
-    // QQ 用参考图同款弯钩（QQ 原生无尾巴，装扮后才有）。
-    // 圆角：QQ 原生 10px 略方正——装扮后圆一点点（14px，用户指定）；微信保持原生 5px
+    // QQ 用参考图同款弯钩（QQ 原生无尾巴，装扮后才有），信息保持原生弯钩尾巴（随色）。
+    // 圆角：QQ 原生 10px 略方正——装扮后圆一点点（14px，用户指定）；微信/信息保持原生
     const idx = ((msgIndex % RAINBOW_COLORS.length) + RAINBOW_COLORS.length) % RAINBOW_COLORS.length;
     const c = RAINBOW_COLORS[idx];
     return {
@@ -323,7 +324,7 @@ export function bubbleVisual(
         color: yiqTextOn(c),
         ...(app === 'qq' ? { borderRadius: '14px' } : {}),
       },
-      tail: app === 'wx' ? 'native' : 'hook',
+      tail: app === 'qq' ? 'hook' : 'native',
       tailColor: c,
     };
   }
@@ -380,9 +381,9 @@ export function bubbleVisual(
     };
   }
 
-  // default + 自定义色：仅换底色/文字色；圆角——微信保持原生 5px（用户指定不变），
+  // default + 自定义色：仅换底色/文字色；圆角——微信保持原生 5px、信息保持原生 18px（不覆盖），
   // QQ 原生 10px 略方正——装扮后圆一点点（14px，用户指定）。
-  // 尾巴按 App —— 微信保持原生小三角（随色，用户指定不变），QQ 用弯钩尾巴
+  // 尾巴按 App —— 微信/信息保持原生尾巴（随色），QQ 用弯钩尾巴
   return {
     override: true,
     className: '',
@@ -391,7 +392,7 @@ export function bubbleVisual(
       color: yiqTextOn(color as string),
       ...(app === 'qq' ? { borderRadius: '14px' } : {}),
     },
-    tail: app === 'wx' ? 'native' : 'hook',
+    tail: app === 'qq' ? 'hook' : 'native',
     tailColor: color as string,
   };
 }

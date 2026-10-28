@@ -26,7 +26,7 @@
  *   （形象锁定/锁脸页已迁移到「设置 › 图像生成」页尾的 FaceLockSection，数据层 @/lib/imggen 不变）
  */
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Search, Zap } from 'lucide-react';
+import { ArrowLeftRight, AudioLines, BookMarked, Check, ChevronLeft, ChevronRight, Image as ImageIcon, Loader2, Palette, Search, Zap } from 'lucide-react';
 import type { ChatBgMode } from '@/lib/chat-flags';
 import type { ContactRecord } from '@/lib/contacts';
 import { REPLY_COUNT_OPTIONS } from '@/lib/reply-count';
@@ -1423,6 +1423,8 @@ export function SmsChatSettingsPage({
   sentenceSend,
   timeAware,
   worldBooksSummary,
+  /** 主题入口行摘要（当前气泡装扮：样式名 + 自定义色；宿主从 bubbleStyle.sms 计算） */
+  themeSummary,
   onBack,
   onSaveRemark,
   /** 与角色的关系（当前账号视角，多账号关系感知）；不传 = 隐藏该行 */
@@ -1451,6 +1453,8 @@ export function SmsChatSettingsPage({
   onOpenProactive,
   /** 主动发消息入口行摘要（宿主用 proactiveCfgSummary 计算） */
   proactiveSummary,
+  /** 打开主题（气泡样式与颜色装扮）页；不传 = 隐藏该入口行 */
+  onOpenTheme,
 }: {
   peerName: string;
   peerAvatar: string | null;
@@ -1468,6 +1472,8 @@ export function SmsChatSettingsPage({
   actionDescOn: boolean;
   /** 挂载的世界书摘要（未挂载时「未选择」） */
   worldBooksSummary: string;
+  /** 主题入口行摘要（当前气泡装扮：样式名 + 自定义色；不传/空 = 显示「默认」） */
+  themeSummary?: string;
   onBack: () => void;
   /** 保存备注（空串 = 清除备注；宿主负责持久化并刷新展示名） */
   onSaveRemark: (v: string) => void;
@@ -1476,6 +1482,8 @@ export function SmsChatSettingsPage({
   /** 保存关系（当前账号作用域，宿主调 setAppRelation）；不传 = 隐藏该行 */
   onSaveRelation?: (v: string) => void;
   onOpenTranslate: () => void;
+  /** 打开主题页（BubbleStylePage app='sms'，气泡样式与颜色装扮）；不传 = 隐藏入口行 */
+  onOpenTheme?: () => void;
   /** 打开回复条数选择页（ChatReplyCountPage，variant=sms；信息端每会话独立） */
   onOpenReplyCount: () => void;
   onToggleSentenceSend: (v: boolean) => void;
@@ -1586,6 +1594,30 @@ export function SmsChatSettingsPage({
             </button>
           )}
         </div>
+
+        {/* 主题：气泡样式与颜色装扮（默认/七彩/毛玻璃/液态 + 我的/TA的 自定义色）；
+            装扮对信息 App 全部气泡（文本/语音/输入中指示器+尾巴）实时生效，且与微信/QQ 完全隔离 */}
+        {onOpenTheme && (
+          <div className={`${t.cardCls} mt-3`}>
+            <button
+              type="button"
+              data-testid="sms-settings-theme"
+              onClick={onOpenTheme}
+              className={t.rowCls}
+            >
+              <span className="flex items-center gap-2.5">
+                <Palette className="h-[18px] w-[18px] text-muted-foreground" strokeWidth={1.9} aria-hidden="true" />
+                主题
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <span data-testid="sms-theme-summary" className="max-w-[150px] truncate text-[14px] text-muted-foreground">
+                  {themeSummary || '默认'}
+                </span>
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50" strokeWidth={2} />
+              </span>
+            </button>
+          </div>
+        )}
 
         {/* 翻译入口 */}
         <div className={`${t.cardCls} mt-3`}>
