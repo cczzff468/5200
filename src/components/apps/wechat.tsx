@@ -249,7 +249,7 @@ import type { AlbumRecord } from '@/lib/ios/db';
 import AlbumPage from './album';
 import OfflineMeetingPage from '@/components/apps/offline-meeting';
 import type { OfflineOnlineMsg } from '@/lib/offline-meet';
-import { addressNameOf, avatarFor, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount, socialNameOf } from '@/lib/contacts';
+import { addressNameOf, avatarFor, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount, remarkForApp, socialNameOf } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import {
   addFriendReq,
@@ -9966,7 +9966,7 @@ function ChatPage({
           idLabel="微信号"
           idValue={peer.wechatId || peer.qqId || '未设置'}
           metaLine={[peer.region, peer.occupation].filter((x): x is string => Boolean(x)).join(' · ')}
-          remark={peer.remark ?? ''}
+          remark={remarkForApp(peer, 'wx')}
           relation={relationForAccount(peer, 'wx')}
           onSaveRelation={selfChat ? undefined : (v) => {
             // 多账号关系感知：关系落当前微信账号作用域（大号=全局 relation，小号=relationByAcc），重拉联系人刷新 peer
@@ -14646,7 +14646,7 @@ function MainScreen({
     async (target: ContactRecord, payload: { greeting: string; extras: FriendReqExtras }): Promise<WxFriendReq | null> => {
       const altFlow = !!me.altOf && (target.persona ?? '').trim().length > 0; // 无人设角色无法决策：保持直接通过
       try {
-        if (payload.extras.remark) await updateContact(target.id, { remark: payload.extras.remark });
+        if (payload.extras.remark) await updateContact(target.id, { remarks: { wx: payload.extras.remark } });
         if (altFlow) {
           // 小号：不置好友标记；清删除状态（重新加回场景，防止 catch-up 再发一条 AI 申请打架）
           clearFriendDelState('wx', target.id);
@@ -15065,7 +15065,8 @@ function MainScreen({
           }}
           onSaveRemark={async (v) => {
             try {
-              await updateContact(chatPeer.id, { remark: v || null });
+              // 第四十八轮：备注按 App 隔离——微信里的备注只写 wx 槽位，QQ/信息不受影响
+              await updateContact(chatPeer.id, { remarks: { wx: v || null } });
               await reloadContacts();
               showToast(v ? '备注已保存' : '备注已清除');
             } catch {
@@ -15460,11 +15461,12 @@ function MainScreen({
                   }
                   setMenuOpen(true);
                 }}
-                className="lg-chip flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-full active:opacity-60"
+                className="lg-chip flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-full active:opacity-60"
               >
-                {/* 第四十五轮（用户指定）：玻璃圆圈内嵌黑色圆圈（同语音钮样式） */}
-                <span className="flex h-[31px] w-[31px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 dark:border-white/70 dark:text-white/90">
-                  <Plus className="h-[19px] w-[19px]" strokeWidth={2.1} />
+                {/* 第四十五轮（用户指定）：玻璃圆圈内嵌黑色圆圈（同语音钮样式）；
+                    第四十八轮（用户指定）：按钮变小一点 42→36px（内圈 31→26、图标 19→16） */}
+                <span className="flex h-[26px] w-[26px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 dark:border-white/70 dark:text-white/90">
+                  <Plus className="h-[16px] w-[16px]" strokeWidth={2.1} />
                 </span>
               </button>
             ) : null}
@@ -16274,10 +16276,11 @@ export default function WeChatApp() {
   const loadContacts = useCallback(async (): Promise<ContactRecord[]> => {
     // 微信内显示昵称（昵称优先于真实名字，机主本人同规则——社交展示名 socialNameOf；副本 realName 存真名，
     // AI 链路统一走 addressNameOf/ownerRealNameFor 取真名，永不接触机主昵称）。
-    // 头像按 App 隔离：读 wx 投影（App 槽位优先、回退全局 avatar），微信里看到的头像独立于 QQ/信息/电话
+    // 头像按 App 隔离：读 wx 投影（App 槽位优先、回退全局 avatar），微信里看到的头像独立于 QQ/信息/电话。
+    // 备注按 App 隔离（第四十八轮）：微信里设置的备注只写 remarks.wx——微信显示它，QQ/信息不受影响
     const raw = await listContactsFor('wx');
     setRealNameById(Object.fromEntries(raw.map((c) => [c.id, c.name])));
-    return withDisplayNames(raw, { social: true });
+    return withDisplayNames(raw, { social: true, app: 'wx' });
   }, []);
 
   /** 重新拉取联系人（添加好友后调用，列表即时生效）；返回新列表供「我」快照同步复用 */

@@ -120,7 +120,7 @@ import { buildPhotoDescHistory, buildPhotoTagRule, downloadImageSrc, extractPhot
 import { autoCardText } from '@/lib/textcard';
 import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card-bubble';
 import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
-import { displayNameOf, isFriendIn, withDisplayNames, activeAccountIdOf, relationForAccount, type ContactRecord } from '@/lib/contacts';
+import { displayNameOf, isFriendIn, withDisplayNames, activeAccountIdOf, relationForAccount, remarkForApp, type ContactRecord } from '@/lib/contacts';
 import { chatBadge } from '@/lib/unread-store';
 import { BUBBLE_MENU_ICONS, BubbleActionMenu, computeBubbleMenuPos, useBubbleLongPress, type BubbleMenuItem, type BubbleMenuPos } from './bubble-menu';
 import { VoiceMsgBubble, type VoiceMsgData } from '@/components/apps/voice-bubble';
@@ -4875,7 +4875,7 @@ export default function ChatApp() {
     setMemScopeForApp('sms');
     setChatSession({
       key: `c:${c.id}`,
-      peer: { title: c.phone || c.name, avatarSrc: c.avatar, name: displayNameOf(c) || c.name, remark: c.remark ?? '' },
+      peer: { title: c.phone || c.name, avatarSrc: c.avatar, name: displayNameOf(c, 'sms') || c.name, remark: remarkForApp(c, 'sms') },
       systemPrompt: buildPersonaPrompt(
         c,
         owner?.name ?? null,
@@ -4925,8 +4925,9 @@ export default function ChatApp() {
     setContactState('loading');
     try {
       // 信息 App 内显示昵称（昵称优先于真实名字，与 QQ/微信一致）；
-      // 头像按 App 投影：读 sms 槽位（无槽位回退全局默认头像）
-      setContacts(withDisplayNames(await listContactsFor('sms')));
+      // 头像按 App 投影：读 sms 槽位（无槽位回退全局默认头像）；
+      // 备注按 App 隔离（第四十八轮）：读 sms 槽位（未设置回退全局 remark）
+      setContacts(withDisplayNames(await listContactsFor('sms'), { app: 'sms' }));
       setContactState('ready');
     } catch {
       setContactState('error');
@@ -4953,7 +4954,7 @@ export default function ChatApp() {
 
   /** 添加好友后同步联系人数据（列表/面板/会话即时生效；落库记录带真实名字，展示层统一换成昵称） */
   const upsertContact = useCallback((c: ContactRecord) => {
-    const shown = withDisplayNames([c])[0];
+    const shown = withDisplayNames([c], { app: 'sms' })[0];
     setContacts((prev) => {
       const i = prev.findIndex((x) => x.id === c.id);
       if (i === -1) return [shown, ...prev];
@@ -5137,15 +5138,16 @@ export default function ChatApp() {
             const cid = chatSession.key.slice(2);
             void (async () => {
               try {
-                await updateContact(cid, { remark: v || null });
+                // 第四十八轮：备注按 App 隔离——信息里的备注只写 sms 槽位，微信/QQ 不受影响
+                await updateContact(cid, { remarks: { sms: v || null } });
                 const raw = await listContactsFor('sms');
                 const c = raw.find((x) => x.id === cid);
                 await loadContacts();
                 if (c) {
-                  const shown = withDisplayNames([c])[0];
+                  const shown = withDisplayNames([c], { app: 'sms' })[0];
                   setChatSession((prev) =>
                     prev && prev.key === `c:${cid}`
-                      ? { ...prev, peer: { ...prev.peer, name: displayNameOf(shown) || shown.name, remark: shown.remark ?? '' } }
+                      ? { ...prev, peer: { ...prev.peer, name: displayNameOf(shown, 'sms') || shown.name, remark: remarkForApp(shown, 'sms') } }
                       : prev,
                   );
                 }
@@ -5164,10 +5166,10 @@ export default function ChatApp() {
                 const c = raw.find((x) => x.id === cid);
                 await loadContacts();
                 if (c) {
-                  const shown = withDisplayNames([c])[0];
+                  const shown = withDisplayNames([c], { app: 'sms' })[0];
                   setChatSession((prev) =>
                     prev && prev.key === `c:${cid}`
-                      ? { ...prev, peer: { ...prev.peer, avatarSrc: shown.avatar, name: displayNameOf(shown) || shown.name, remark: shown.remark ?? '' } }
+                      ? { ...prev, peer: { ...prev.peer, avatarSrc: shown.avatar, name: displayNameOf(shown, 'sms') || shown.name, remark: remarkForApp(shown, 'sms') } }
                       : prev,
                   );
                 }

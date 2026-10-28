@@ -66,8 +66,14 @@ export interface ContactRecord {
   /** 真实姓名（withDisplayNames 展示副本专用：昵称替换 name 时把原 name 存到这里；
    *  人设注入用——角色要知道自己的大名/真名，别人用真名叫 TA 时不能不承认） */
   realName?: string | null;
-  /** 备注名（仅机主自己可见的显示名；设置后聊天界面/消息列表优先显示备注，AI 人设不变） */
+  /** 备注名（仅机主自己可见的显示名；设置后聊天界面/消息列表优先显示备注，AI 人设不变）。
+   *  第四十八轮：备注按 App 隔离——微信/QQ/信息各自独立（remarks 槽位优先，
+   *  未设置回退此全局 remark，联系人 App 里设的那张对全部 App 生效） */
   remark?: string | null;
+  /** 按 App 隔离的备注槽位（第四十八轮；可选，历史数据无此键）。
+   *  某个 App 没有单独设置备注时回退全局 remark（联系人 App 里设置的那个）。
+   *  微信里改备注只写 remarks.wx，不影响 QQ/信息/电话。 */
+  remarks?: ContactRemarkMap | null;
   /** 语音音色（该角色在电话/微信/QQ 里说活用的 voiceId；空 = 用全局默认音色）。
    *  每次播放时实时重读，切角色/改音色后下一句即生效 */
   voiceId?: string | null;
@@ -118,6 +124,8 @@ export interface ContactPayload {
   /** 与角色的关系·按账号隔离（写入传完整 map；见 ContactRecord 同名字段说明） */
   relationByAcc?: Record<string, string> | null;
   remark?: string | null;
+  /** 按 App 隔离的备注槽位（合并写入：传 { wx: '小凡' } 只改微信备注，传 { wx: null } 清除回退全局 remark） */
+  remarks?: ContactRemarkMap | null;
   /** 语音音色（角色在电话/微信/QQ 里的说话音色；空 = 用全局默认） */
   voiceId?: string | null;
   /** 多账号：小号/匿名号账号档案标记（创建时一次性绑定，见 ContactRecord.altOf） */
@@ -134,12 +142,14 @@ function randInt(min: number, max: number): number {
  * 用户规则：机主本人（kind='user'）在此恒返回真实名字——本函数同时被 AI 邻接链路
  * （cachedOwnerName/群成员解析等）消费，绝不能把机主昵称漏进 AI；
  * 社交 App 展示层要用机主昵称时走 socialNameOf / withDisplayNames({ social: true })。
+ * 第四十八轮：传 app 时备注解析按 App 隔离（remarks 槽位优先，回退全局 remark）。
  */
 export function displayNameOf(
-  c: Pick<ContactRecord, 'name' | 'nickname'> & { remark?: string | null; kind?: string | null }
+  c: Pick<ContactRecord, 'name' | 'nickname'> & { remark?: string | null; remarks?: ContactRemarkMap | null; kind?: string | null },
+  app?: ContactRemarkApp
 ): string {
   if (c.kind === 'user') return c.name;
-  const rk = c.remark?.trim();
+  const rk = (app ? remarkForApp(c, app) : c.remark)?.trim();
   if (rk) return rk;
   const nick = c.nickname?.trim();
   return nick ? nick : c.name;
@@ -150,15 +160,17 @@ export function displayNameOf(
  * 机主（kind='user'）→ 昵称 ?? 真名（联系人 App 里填的昵称就是这些 App 里显示的名字；
  * AI 永远不知道昵称——本函数只允许进纯显示链路，禁止喂给任何人设/决策 prompt）；
  * 其他联系人同 displayNameOf（备注 > 昵称 > 真名）。
+ * 第四十八轮：传 app 时备注解析按 App 隔离。
  */
 export function socialNameOf(
-  c: Pick<ContactRecord, 'name' | 'nickname' | 'kind'> & { remark?: string | null }
+  c: Pick<ContactRecord, 'name' | 'nickname' | 'kind'> & { remark?: string | null; remarks?: ContactRemarkMap | null },
+  app?: ContactRemarkApp
 ): string {
   if (c.kind === 'user') {
     const nick = c.nickname?.trim();
     return nick ? nick : c.name;
   }
-  return displayNameOf(c);
+  return displayNameOf(c, app);
 }
 
 /**
@@ -166,16 +178,19 @@ export function socialNameOf(
  * opts.social = true：机主本人也按 socialNameOf 替换（QQ/微信/美团/淘宝里我显示昵称，
  * 副本 realName 存真名——addressNameOf/meTileLabel 按 realName 优先，AI 链路不受污染）；
  * 缺省（信息/电话/联系人 App/AI 邻接调用）机主跳过，恒真名（Task 31 口径不变）。
+ * opts.app（第四十八轮）：备注按 App 隔离解析（remarks 槽位优先，回退全局 remark）。
  */
-export function withDisplayNames(list: ContactRecord[], opts?: { social?: boolean }): ContactRecord[] {
+export function withDisplayNames(list: ContactRecord[], opts?: { social?: boolean; app?: ContactRemarkApp }): ContactRecord[] {
   const social = opts?.social === true;
+  const app = opts?.app;
   return list.map((c) => {
     if (c.kind === 'user') {
       if (!social) return c;
-      const sn = socialNameOf(c);
+      const sn = socialNameOf(c, app);
       return sn && sn !== c.name ? { ...c, name: sn, realName: c.realName ?? c.name } : c;
     }
-    return !(c.remark?.trim() || c.nickname?.trim()) ? c : { ...c, name: displayNameOf(c), realName: c.realName ?? c.name };
+    const rk = (app ? remarkForApp(c, app) : c.remark)?.trim();
+    return !(rk || c.nickname?.trim()) ? c : { ...c, name: displayNameOf(c, app), realName: c.realName ?? c.name };
   });
 }
 
@@ -425,6 +440,55 @@ export function normalizeAvatar(v: unknown): string | null {
   if (!/^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(v)) return null;
   if (v.length > 400 * 1024) return null;
   return v;
+}
+
+// ---------------- 按 App 隔离的备注（第四十八轮：微信/QQ/信息各自独立，回退全局 remark） ----------------
+
+/** 拥有独立备注槽位的 App（与 FriendApp 同一套短标识；电话/联系人 App 不设独立备注——它们改的是全局 remark） */
+export type ContactRemarkApp = 'wx' | 'qq' | 'sms';
+
+export const CONTACT_REMARK_APPS: ContactRemarkApp[] = ['wx', 'qq', 'sms'];
+
+/** 按 App 备注槽位：键缺省/不存在 = 该 App 未单独设置（读时回退全局 remark）；空串/null = 显式清除 */
+export type ContactRemarkMap = { [K in ContactRemarkApp]?: string | null };
+
+/**
+ * 某 App 里应该显示的备注：App 槽位优先（含空串视为已清除，返回空），
+ * 槽位未设置才回退全局 remark（联系人 App 里设置的那个）。
+ * 全部读点统一走这里，保证「微信里改备注只影响微信」。
+ */
+export function remarkForApp(
+  c: Pick<ContactRecord, 'remark' | 'remarks'> | null | undefined,
+  app: ContactRemarkApp
+): string {
+  if (!c) return '';
+  if (app in (c.remarks ?? {})) {
+    const per = c.remarks?.[app];
+    return (per ?? '').trim();
+  }
+  return (c.remark ?? '').trim();
+}
+
+/** 备注槽位归一化：非法键丢弃、字符串去空白截 60 字（与全局 remark 同限）、null/空串表示显式清除（保留键）。无有效条目返回 null */
+export function normalizeRemarkMap(v: unknown): ContactRemarkMap | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const src = v as Record<string, unknown>;
+  const out: ContactRemarkMap = {};
+  let any = false;
+  for (const k of Object.keys(src)) {
+    if (!(CONTACT_REMARK_APPS as string[]).includes(k)) continue;
+    const val = src[k];
+    if (val == null) {
+      out[k as ContactRemarkApp] = null;
+      any = true;
+      continue;
+    }
+    if (typeof val !== 'string') continue;
+    const t = val.trim().slice(0, 60);
+    out[k as ContactRemarkApp] = t;
+    any = true;
+  }
+  return any ? out : null;
 }
 
 // ---------------- 按 App 隔离的头像（微信/QQ/信息/电话各自独立，回退全局默认） ----------------

@@ -785,29 +785,32 @@
  * 无描边、无伪元素（无高光、无闪光）。文字色随深浅色模式自适应。
  * 与毛玻璃的区别：毛玻璃 = 奶白半透磨砂（0.62 白，背景漫射成柔和轮廓）；
  * 液态 = 0.10 以下极淡白膜，背景清晰可见——一个是磨砂乳白玻璃，一个是水膜。
+ * 第四十八轮（用户指定「去雾，更清透，和玻璃一样」）：白膜再减半（0.10/0.02/0.06 →
+ * 0.055/0.012/0.035）+ 投影减淡减短（去玻璃上的雾感，背景像直接透过玻璃看到）；
+ * blur 微升 8→10px——透明度让给背景，玻璃质感由模糊层承担，清澈而有玻璃厚度。
  * ------------------------------------------------------------------------- */
 .bub-liquid {
   color: #1a1a1a;
-  /* 第十九轮：删白描边（用户指定）+ 更透明（白膜 α 0.16→0.10） */
+  /* 第十九轮：删白描边（用户指定）+ 更透明（白膜 α 0.16→0.10）；第四十八轮：再减半去雾 */
   background: linear-gradient(
     165deg,
-    rgba(255, 255, 255, 0.10) 0%,
-    rgba(255, 255, 255, 0.02) 48%,
-    rgba(255, 255, 255, 0.06) 100%
+    rgba(255, 255, 255, 0.055) 0%,
+    rgba(255, 255, 255, 0.012) 48%,
+    rgba(255, 255, 255, 0.035) 100%
   );
-  -webkit-backdrop-filter: blur(8px) saturate(180%);
-  backdrop-filter: blur(8px) saturate(180%);
-  box-shadow: 0 6px 18px rgba(31, 35, 41, 0.06);
+  -webkit-backdrop-filter: blur(10px) saturate(185%);
+  backdrop-filter: blur(10px) saturate(185%);
+  box-shadow: 0 4px 12px rgba(31, 35, 41, 0.05);
 }
 .dark .bub-liquid {
   color: #ffffff;
   background: linear-gradient(
     165deg,
-    rgba(255, 255, 255, 0.06) 0%,
-    rgba(255, 255, 255, 0.01) 48%,
-    rgba(255, 255, 255, 0.04) 100%
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.008) 48%,
+    rgba(255, 255, 255, 0.025) 100%
   );
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.20);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1073,8 +1076,9 @@
  *  （消息流 z-10 之上、顶栏铭件 z-20 之下）；高度 = 消息区顶部让位值。
  * ------------------------------------------------------------------------- */
 .lg-top-blur {
-  -webkit-backdrop-filter: blur(14px) saturate(175%);
-  backdrop-filter: blur(14px) saturate(175%);
+  /* 第四十八轮（用户指定「再模糊一点点」）：blur 14→18px——顶部磨砂更重一档 */
+  -webkit-backdrop-filter: blur(18px) saturate(175%);
+  backdrop-filter: blur(18px) saturate(175%);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0.10) 46%, rgba(255, 255, 255, 0) 100%);
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.62) 46%, rgba(0, 0, 0, 0) 100%);
   mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.62) 46%, rgba(0, 0, 0, 0) 100%);

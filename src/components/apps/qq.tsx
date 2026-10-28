@@ -272,7 +272,7 @@ import { TextCardActionSheet, TextCardBubble } from '@/components/apps/text-card
 import { ImageRegenSheet } from '@/components/apps/image-regen-sheet';
 import type { AlbumRecord } from '@/lib/ios/db';
 import { genId } from '@/lib/ios/db';
-import { addressNameOf, avatarFor, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount, socialNameOf } from '@/lib/contacts';
+import { addressNameOf, avatarFor, contactByRef, displayNameOf, isFriendIn, liveAvatarOf, withDisplayNames, activeAccountIdOf, relationForAccount, remarkForApp, socialNameOf } from '@/lib/contacts';
 import type { ContactRecord } from '@/lib/contacts';
 import {
   addFriendReq,
@@ -950,7 +950,7 @@ async function expireStaleSingleCards(): Promise<boolean> {
     }
     let changed = false;
     // 展示名与聊天页一致（昵称优先，机主本人同规则——社交展示名），提示行里的名字才能对得上气泡头像旁的称呼
-    for (const c of withDisplayNames(raw, { social: true })) {
+    for (const c of withDisplayNames(raw, { social: true, app: 'qq' })) {
       const msgs = loadMsgs(c.id);
       if (msgs.length === 0) continue;
       let next = msgs;
@@ -8100,7 +8100,7 @@ function ChatPage({
           idLabel="QQ号"
           idValue={peer.qqId || '未设置'}
           metaLine={[peer.region, peer.occupation].filter((x): x is string => Boolean(x)).join(' · ')}
-          remark={peer.remark ?? ''}
+          remark={remarkForApp(peer, 'qq')}
           relation={relationLocal ?? relationForAccount(peer, 'qq')}
           onSaveRelation={peer.id === me.id ? undefined : (v) => {
             // 多账号关系感知：关系落当前 QQ 账号作用域（大号=全局 relation，小号=relationByAcc）；
@@ -11476,15 +11476,16 @@ function MessagesPage({
               data-testid="qq-msgs-add"
               className={
                 liquid
-                  ? /* 液态（第四十五轮，用户指定）：玻璃圆圈内嵌黑色圆圈（同微信语音钮样式） */
-                    'lg-chip flex h-[38px] w-[38px] items-center justify-center rounded-full active:opacity-60'
+                  ? /* 液态（第四十五轮，用户指定）：玻璃圆圈内嵌黑色圆圈（同微信语音钮样式）；
+                     第四十八轮（用户指定）：按钮变小一点 38→34px（内圈 28→24、图标 18→15） */
+                    'lg-chip flex h-[34px] w-[34px] items-center justify-center rounded-full active:opacity-60'
                   : 'rounded-full p-1.5 active:bg-black/5'
               }
               onClick={() => setPlusMenu((v) => !v)}
             >
               {liquid ? (
-                <span className="flex h-[28px] w-[28px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 dark:border-white/70 dark:text-white/90">
-                  <Plus className={`h-[18px] w-[18px] transition-transform duration-200 ${plusMenu ? 'rotate-45' : ''}`} strokeWidth={2.1} />
+                <span className="flex h-[24px] w-[24px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 dark:border-white/70 dark:text-white/90">
+                  <Plus className={`h-[15px] w-[15px] transition-transform duration-200 ${plusMenu ? 'rotate-45' : ''}`} strokeWidth={2.1} />
                 </span>
               ) : (
                 <Plus className={`h-6 w-6 transition-transform duration-200 ${plusMenu ? 'rotate-45' : ''}`} strokeWidth={2} />
@@ -11777,10 +11778,10 @@ function ContactsPage({
           type="button"
           aria-label="加好友"
           data-testid="qq-contacts-add"
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-black/60 active:bg-black/5 dark:text-white/60 dark:active:bg-white/10"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-black/60 active:bg-black/5 dark:text-white/60 dark:active:bg-white/10"
           onClick={onAddFriend}
         >
-          <UserPlus className="h-5 w-5" strokeWidth={2} />
+          <UserPlus className="h-[17px] w-[17px]" strokeWidth={2} />
         </button>
       </div>
       <div className="px-4 pb-2 pt-3">
@@ -17052,7 +17053,7 @@ function MainScreen({
     async (target: ContactRecord, payload: { greeting: string; extras: FriendReqExtras }): Promise<FriendReqEntry | null> => {
       const altFlow = !!me.altOf && (target.persona ?? '').trim().length > 0; // 无人设角色无法决策：保持直接通过
       try {
-        if (payload.extras.remark) await updateContact(target.id, { remark: payload.extras.remark });
+        if (payload.extras.remark) await updateContact(target.id, { remarks: { qq: payload.extras.remark } });
         if (altFlow) {
           // 小号：不置好友标记；清删除状态（重新加回场景，防止 catch-up 再发一条 AI 申请打架）
           clearFriendDelState('qq', target.id);
@@ -17347,7 +17348,8 @@ function MainScreen({
           }}
           onSaveRemark={async (v) => {
             try {
-              await updateContact(chatPeer.id, { remark: v || null });
+              // 第四十八轮：备注按 App 隔离——QQ 里的备注只写 qq 槽位，微信/信息不受影响
+              await updateContact(chatPeer.id, { remarks: { qq: v || null } });
               await refreshContacts();
               showToast(v ? '备注已保存' : '备注已清除');
             } catch {
@@ -18067,7 +18069,8 @@ export default function QQApp() {
       // 头像按 App 隔离：加载读 qq 槽位投影（登录恢复/账号信息展示均用该头像）
       const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
       if (!alive) return;
-      const list = withDisplayNames(raw, { social: true });
+      // 备注按 App 隔离（第四十八轮）：QQ 里设置的备注只写 remarks.qq——展示名解析走 qq 槽位，微信/信息不受影响
+      const list = withDisplayNames(raw, { social: true, app: 'qq' });
       setContacts(list);
       try {
         const savedId = window.localStorage.getItem(accLs(LS_SESSION, 'qq'));
@@ -18154,10 +18157,11 @@ export default function QQApp() {
     switchAccountFor('qq', MAIN_ACCOUNT_ID);
   }, []);
 
-  // 添加好友后刷新联系人列表（同步换成昵称展示名——机主同规则 socialNameOf；头像按 App 隔离读 qq 槽位投影）；返回投影列表供「我」快照同步复用
+  // 添加好友后刷新联系人列表（同步换成昵称展示名——机主同规则 socialNameOf；头像按 App 隔离读 qq 槽位投影；
+  // 备注按 App 隔离读 qq 槽位——第四十八轮）；返回投影列表供「我」快照同步复用
   const refreshContacts = useCallback(async (): Promise<ContactRecord[]> => {
     const raw = await listContactsFor('qq').catch(() => [] as ContactRecord[]);
-    setContacts(withDisplayNames(raw, { social: true }));
+    setContacts(withDisplayNames(raw, { social: true, app: 'qq' }));
     return raw;
   }, []);
 

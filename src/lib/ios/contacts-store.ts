@@ -35,6 +35,7 @@ import {
   isContactKind,
   normalizeAvatar,
   normalizeAvatarMap,
+  normalizeRemarkMap,
   normalizeText,
   setFriendAccountResolver,
   withAvatarsForApp,
@@ -42,6 +43,8 @@ import {
   type ContactAvatarMap,
   type ContactPayload,
   type ContactRecord,
+  type ContactRemarkApp,
+  type ContactRemarkMap,
 } from '@/lib/contacts';
 import { purgeContactFromGroups } from './groups';
 // #46：删联系人时精确中止该联系人单聊会话的在途流式回复与投递尾巴
@@ -431,6 +434,7 @@ export async function createContact(payload: ContactPayload): Promise<ContactRec
     avatar: normalizeAvatar(payload.avatar),
     avatars: normalizeAvatarMap(payload.avatars),
     remark: normalizeText(payload.remark, 60),
+    remarks: normalizeRemarkMap(payload.remarks),
     voiceId: normalizeText(payload.voiceId, 120),
     altOf: normalizeText(payload.altOf, 40) ?? null,
     isFriend: payload.kind === 'user',
@@ -505,6 +509,19 @@ export async function updateContact(id: string, patch: Partial<ContactPayload>):
   // 手机号可编辑但留空不自动生成（避免编辑时悄悄换号）
   if ('phone' in patch) next.phone = normalizeText(patch.phone, 20);
   if ('remark' in patch) next.remark = normalizeText(patch.remark, 60);
+  // 按 App 隔离的备注槽位（第四十八轮）：合并写入（patch 里只传要改的 App；null/空串 = 清除该 App 槽位回退全局 remark）
+  if ('remarks' in patch) {
+    const merged: ContactRemarkMap = { ...(existing.remarks ?? {}) };
+    const inc = normalizeRemarkMap(patch.remarks);
+    if (inc) {
+      for (const k of Object.keys(inc) as ContactRemarkApp[]) {
+        const v = inc[k];
+        if (v == null || !v) delete merged[k];
+        else merged[k] = v;
+      }
+    }
+    next.remarks = Object.keys(merged).length > 0 ? merged : null;
+  }
   // 语音音色（角色独立声线；空 = 清除，回退全局默认）
   if ('voiceId' in patch) next.voiceId = normalizeText(patch.voiceId, 120);
 

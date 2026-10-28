@@ -1477,3 +1477,46 @@ Stage Summary:
 - 两轮反馈 12 项修正全部落地并浏览器验证通过：微信聊天页名字椭圆玻璃胶囊+顶栏无遮罩、QQ 聊天页名字纯文字无胶囊（顶部模糊根治）、微信 TabBar 浅胶囊+绿填充图标、标签栏白色容器+选中绿字绿下划线+加回工作、微信/QQ 聊天加号面板悬浮输入框上方不弹起且整体缩小、微信/QQ 主页加号弹窗液态化缩小（修复 QQ 弹窗 24px 宽 bug）、长按气泡菜单 260px 紧凑化、主题切换气泡双向联动
 - 关键文件：wechat.tsx、qq.tsx、bubble-menu.tsx、bubble-style-settings.tsx、store.ts、globals.css
 - 截图证据：tmp-analysis/e2e46/（9 张）；种子脚本 tmp-analysis/seed45.js；VLM 采证脚本 tmp-analysis/vlm-ask.ts
+
+---
+Task ID: 47+48
+Agent: 主控 Agent（Z.ai Code）
+Task: 第四十七轮 + 第四十八轮液态玻璃主题用户反馈修正（两轮合并提交）——加号面板变窄、标签栏均匀分布、转文字面板限宽、输入框上移、顶部渐变模糊带；加好友按钮变小、备注按App隔离、液态气泡去雾、模糊带加重
+
+Work Log:
+- [47轮·需求解析] ①聊天加号面板左右太宽 ②微信分类标签栏位置调整 ③语音转文字面板太长（不超过头像）④微信聊天底部输入框往上一点点 ⑤聊天界面顶部逐渐模糊
+- [48轮·需求解析] ⑥QQ微信加好友按钮变小 ⑦备注App之间隔离 ⑧液态玻璃气泡去雾更清透 ⑨顶部渐变模糊带再模糊一点点
+- [wechat.tsx 加号面板] 液态面板改右锚定固定 248px（absolute bottom-full right-2.5，删 inset-x-0 全宽 + PlusPanel 删 mx-2.5 横边距）——面板悬于加号钮上方不再占满整行
+- [qq.tsx 加号面板] 同款右锚定 248px（right-3）
+- [wechat.tsx 标签栏] 五个分类标签 flex-1 basis-0 均分铺满容器（删 shrink-0 px-3.5），消除靠左堆叠右侧 ~150px 空白（VLM 采证确认旧缺陷；DOM 实测新分布 5×92px @ 13/109/204/300/395）
+- [wechat.tsx 语音转文字] VoiceMsgBubble 包裹层加 max-w-[calc(100%-92px)]（与文本气泡同口径）；qq.tsx 同款 calc(100%-96px)——长转写面板不再撑满整行越过对侧头像区
+- [wechat.tsx 输入框] 液态底距 pb-2→pb-[13px]——输入区整体上提
+- [globals.css 顶部模糊带] 新增 .lg-top-blur：backdrop blur + saturate + 白膜渐变 + mask 渐变（顶缘全模糊→46%处 0.62→底部全透明）；wechat.tsx/qq.tsx 聊天页插入 aria-hidden 装饰层（wx h-96 / qq h-112，z-15 于消息流 z-10 与顶栏 z-20 之间）
+- [48·加好友按钮] wechat wx-plus 42→36px（内圈 31→26、图标 19→16）；qq-msgs-add 38→34px（内圈 28→24、图标 18→15）；qq-contacts-add h-9→h-8（36→32px、图标 20→17）
+- [48·备注App隔离] 新数据模型（仿 avatars 槽位模式）：
+  * contacts.ts：ContactRemarkApp/ContactRemarkMap/remarks 字段（Record+Payload）+ remarkForApp（槽位优先→回退全局 remark）+ normalizeRemarkMap；displayNameOf/socialNameOf/withDisplayNames 增可选 app 参数（传则按 App 解析备注）
+  * contacts-store.ts：createContact 写 remarks；updateContact 合并写入（null/空串=清除槽位回退全局）；contact-updated 广播 diff 自动覆盖 remarks 变化
+  * wechat.tsx：loadContacts withDisplayNames({app:'wx'})；ChatSettingsPage remark=remarkForApp(peer,'wx')；onSaveRemark 写 remarks.wx；加好友流程写 remarks.wx
+  * qq.tsx：同款 app:'qq' 全套（boot/refresh/过期清算三处投影 + 设置页读写 + 加好友流程）
+  * chat.tsx（信息）：同款 app:'sms'（会话 peer 快照 + upsert + 保存/换头像刷新 + loadContacts）
+  * 联系人 App 的 remark 编辑保持全局（未动）——作为所有 App 的回退基线
+- [48·气泡去雾] .bub-liquid 白膜 0.10/0.02/0.06→0.055/0.012/0.035（dark 0.06/0.01/0.04→0.04/0.008/0.025）+ 投影 6px18px0.06→4px12px0.05 + blur 8→10px（透明度让给背景、玻璃质感由模糊层承担）
+- [48·模糊带加重] .lg-top-blur blur 14→18px
+- [验证] bunx tsc 仅 proactive-msg.ts 既有基线；eslint 六个改动文件 exit 0
+- [E2E Agent Browser 500×701]（seed48.js：remarks.wx/全局 remark 双种子 + kind:voice 长转写消息 + 双液态主题；经 localStorage 迁移清单路径种消息）：
+  * 加号面板：wx 248px x242-490 悬浮（634≤649 输入框不动）✓ qq 248px x240-488（571≤593）✓
+  * 标签栏：5×92px @ 13/109/204/300/395 均分 480px 容器 ✓（像素级复核：文字组左空 38px/右空 30px 平衡）
+  * 语音转文字：wx 面板 384px（=476-92 列内限宽）/qq 376px ✓ 不越头像区（VLM 复核「未超过头像区域」）
+  * 顶部模糊带：wx h-96 / qq h-112 均 blur(18px) saturate(1.75) ✓（VLM 复核「明显柔化过渡」）
+  * 加好友按钮：wx-plus 36px（内圈 26）✓ qq-msgs-add 34px（内圈 24）✓ qq-contacts-add 32px ✓
+  * 备注隔离全链路：微信显示「微信专属备注」（wx 槽读）→ UI 改「新微信备注」→ IndexedDB remarks={wx:新微信备注} 全局 null ✓ QQ 列表显示「凡凡」（无泄漏）→ QQ UI 设「QQ专属备注」→ remarks={wx:…,qq:…} 双槽并存 ✓ 墨墨「全局备注」两端回退显示 ✓
+  * 液态气泡：computed bg=0.055/0.01/0.035 + shadow 4px12px0.05 ✓（VLM「背景透过气泡隐约可见」）
+  * 输入框上移：pb-13px 生效（视觉复核）
+  * 默认主题回归：主界面 0 个 lg-panel/lg-seg/lg-chip/lg-sheet + 文字 TabBar ✓ 聊天页无 top-blur ✓ 加号面板 500px 全宽弹起（输入框 644→317 被顶起）✓ 备注隔离跨主题工作 ✓
+  * 浏览器 console 零错误；dev.log 无应用错误（仅既有 instrumentation 警告）
+- [E2E 方法论沉淀] agent-browser 同会话二次 open 会换 browsing context 丢存储；eval location.reload 需等 IndexedDB 落盘（seed 后 sleep 3s）；种聊天消息走 localStorage 迁移清单（wx-chat-msgs: 前缀 + 先删 kv 旧键，启动 migrateLsToKv 自动搬入）；React 受控输入需原生 setter 触发 onChange
+
+Stage Summary:
+- 两轮 9 项修正全部落地并浏览器验证通过：微信/QQ 聊天加号面板 248px 右锚定悬浮、微信分类标签栏五标签均分铺满、语音转文字面板限宽不越头像区、微信输入框上移 5px、聊天页顶部渐变模糊带（新增 lg-top-blur，48 轮加重到 18px）、微信/QQ/QQ联系人三处加好友按钮缩小、备注按 App 完全隔离（remarks 槽位模型 + wx/qq/sms 三端接线 + 全局回退）、液态气泡去雾（白膜减半+投影减淡+blur 微升）
+- 关键文件：wechat.tsx、qq.tsx、chat.tsx、contacts.ts、contacts-store.ts、globals.css
+- 截图证据：tmp-analysis/e2e47/（12 张）；种子脚本 tmp-analysis/seed48.js
