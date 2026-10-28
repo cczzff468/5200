@@ -385,7 +385,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                     onClick={() => {
                       if (!selected) {
                         setBubbleTheme(app, theme);
-                        onToast(theme === 'liquid' ? '已切换液态玻璃主题' : '已恢复默认主题');
+                        onToast(theme === 'liquid' ? '已切换液态玻璃主题，气泡同步换为液态玻璃' : '已恢复默认主题，气泡同步换为原生默认');
                       }
                     }}
                     className={`relative flex flex-col items-stretch rounded-[22px] bg-white/60 p-1.5 backdrop-blur-xl transition-transform active:scale-[0.98] dark:bg-white/[0.06] ${
@@ -404,7 +404,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
               })}
             </div>
             <p className="mt-2 px-2 text-[11.5px] leading-relaxed text-black/35 dark:text-white/35">
-              液态玻璃：{meta.name}首页/列表与聊天界面铭件换为玻璃质感；气泡样式与聊天背景不受影响
+              切换主题时气泡会跟着换（液态玻璃 ↔ 原生默认）；之后再单独换气泡样式，主题保持不变。铭件（导航/TabBar/列表/输入栏）随主题切换，聊天背景不受影响
             </p>
           </section>
         )}

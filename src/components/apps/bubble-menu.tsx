@@ -106,9 +106,9 @@ export function computeBubbleMenuPos(bubble: DOMRect, container: DOMRect | null,
   return { top, left, arrowX, flip: !below, maxW };
 }
 
-/** 液态玻璃横向 2 列网格菜单的尺寸常量：行高 54px、固定宽 340px（用户指定：长按菜单横向 2×2） */
-const LIQ_MENU_W = 340;
-const LIQ_ROW_H = 54;
+/** 液态玻璃横向 2 列网格菜单的尺寸常量（第四十五轮用户指定：菜单变小）：行高 44px、固定宽 260px */
+const LIQ_MENU_W = 260;
+const LIQ_ROW_H = 44;
 
 /** 液态主题 2 列网格菜单定位：气泡下方居中（下方放不下翻到上方），左右钳制在容器内；无箭头 */
 export function computeBubbleMenuPosLiquid(bubble: DOMRect, container: DOMRect | null, itemCount: number): BubbleMenuPos {
@@ -116,7 +116,7 @@ export function computeBubbleMenuPosLiquid(bubble: DOMRect, container: DOMRect |
   const ch = container?.height ?? (typeof window !== 'undefined' ? window.innerHeight : 852);
   const width = Math.min(LIQ_MENU_W, cw - 24);
   const rows = Math.ceil(Math.max(itemCount, 1) / 2);
-  const menuH = rows * LIQ_ROW_H + 10;
+  const menuH = rows * LIQ_ROW_H + 8;
   const relTop = container ? bubble.top - container.top : bubble.top;
   const centerX = bubble.left + bubble.width / 2 - (container?.left ?? 0);
   const below = relTop + bubble.height + menuH + 16 <= ch;
@@ -161,11 +161,12 @@ export function BubbleActionMenu({
         onClick={(e) => e.stopPropagation()}
       >
         {liquid ? (
-          /* 液态玻璃横向 2 列网格菜单（用户指定）：乳白强模糊 + 大圆角 + 图标左文字右 + 无分割线，按下浅绿荧光 */
+          /* 液态玻璃横向 2 列网格菜单（第四十五轮用户指定：变小——宽 260、行高 44、图标 18、字 14）：
+             乳白强模糊 + 大圆角 + 图标左文字右 + 无分割线，按下浅绿荧光 */
           <div
             role="menu"
             data-testid={`${testPrefix}-card`}
-            className="lg-sheet grid grid-cols-2 overflow-hidden rounded-[24px] py-[5px]"
+            className="lg-sheet grid grid-cols-2 overflow-hidden rounded-[20px] py-[4px]"
             style={{ width: pos.maxW < LIQ_MENU_W ? pos.maxW : LIQ_MENU_W }}
           >
             {items.map((item) => (
@@ -175,12 +176,12 @@ export function BubbleActionMenu({
                 role="menuitem"
                 data-testid={`${testPrefix}-${item.key}`}
                 onClick={() => onSelect(item.key)}
-                className={`lg-menu-row flex h-[54px] w-full items-center gap-3 px-5 text-left ${
+                className={`lg-menu-row flex h-[44px] w-full items-center gap-2.5 px-4 text-left ${
                   item.danger ? 'text-[#E5484D]' : 'text-[#1C1C1E] dark:text-white/90'
                 }`}
               >
-                <item.icon className="h-[22px] w-[22px] shrink-0" strokeWidth={2} fill={item.filled ? 'currentColor' : 'none'} aria-hidden="true" />
-                <span className="truncate text-[15.5px] font-semibold leading-none">{item.label}</span>
+                <item.icon className="h-[18px] w-[18px] shrink-0" strokeWidth={2} fill={item.filled ? 'currentColor' : 'none'} aria-hidden="true" />
+                <span className="truncate text-[14px] font-semibold leading-none">{item.label}</span>
               </button>
             ))}
           </div>

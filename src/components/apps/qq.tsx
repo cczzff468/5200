@@ -2271,9 +2271,9 @@ export function QqPlusGrid({
             type="button"
             data-testid={`qq-plus-${it.key}`}
             onClick={it.onClick}
-            className="lg-menu-row flex h-[54px] w-full items-center gap-4 px-6 text-left text-[16px] font-semibold text-[#1C1C1E] dark:text-white/90"
+            className="lg-menu-row flex h-[44px] w-full items-center gap-3.5 px-5 text-left text-[14.5px] font-semibold text-[#1C1C1E] dark:text-white/90"
           >
-            <span className="flex h-[26px] w-[26px] shrink-0 items-center justify-center text-black/80 dark:text-white/85">{it.icon}</span>
+            <span className="flex h-[20px] w-[20px] shrink-0 items-center justify-center text-black/80 dark:text-white/85 [&_svg]:h-[20px] [&_svg]:w-[20px]">{it.icon}</span>
             {it.label}
           </button>
         ))}
@@ -3147,7 +3147,7 @@ function ChatPage({
   const apiConfig = useSettings((s) => s.apiConfig);
   // 第十七轮聊天气泡装扮：订阅全局配置（装扮页修改 → 聊天气泡实时跟随）
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
-  // 液态玻璃主题（个性装扮 › 界面主题）：只接管页面铬件——页面底 lg-root + 顶栏悬浮无阻隔模糊带（lg-blur-strip，消息从名字后穿过）
+  // 液态玻璃主题（个性装扮 › 界面主题）：只接管页面铬件——页面底 lg-root + 顶栏完全透明悬浮（名字椭圆形玻璃胶囊包裹）
   // + 返回/菜单 lg-chip 椭圆 + 输入框毛玻璃胶囊 + 六工具钮 lg-chip + 语音/加号/表情面板 lg-sheet；
   // 聊天气泡仍由装扮系统（kind）管、聊天背景层完全不受主题影响（用户指定）；默认主题时零覆盖
   const liquid = isLiquidTheme(bubbleStyle, 'qq');
@@ -6763,14 +6763,14 @@ function ChatPage({
       )}
       {/* 顶栏：返回 + 名字/徽章/在线 + 企鹅 + 菜单（对照 QQ 真机；对方回复中名字变「正在输入中…」）。
           状态栏预留收进顶栏内（与顶栏同色同层）：自定义聊天背景不再透到状态栏区域（与微信聊天页同套结构）。
-          液态玻璃主题（用户指定）：删除整行大椭圆胶囊——顶栏改悬浮无阻隔模糊带（lg-blur-strip），
-          消息从名字后面穿过、轻微模糊；空白区 pointer-events-none 穿透点击（按钮经 [&_button]:pointer-events-auto 恢复），
+          液态玻璃主题（第四十六轮，用户指定）：顶栏完全透明悬浮（无背景遮罩/模糊带），名字纯文字不包裹胶囊
+          （与微信区分：QQ 名字后不需要椭圆形包裹）；空白区 pointer-events-none 穿透点击（按钮经 [&_button]:pointer-events-auto 恢复），
           返回键/右上角菜单键各自单独用 lg-chip 椭圆包裹；消息区顶部让位 pt-[112px]（54+48+10 呼吸）。
           多选模式下变为「取消 + 已选计数」操作栏（保持原生样式） */}
       <div
         className={
           liquid
-            ? 'lg-blur-strip pointer-events-none absolute inset-x-0 top-0 z-20 shrink-0 bg-transparent pt-[54px]'
+            ? 'pointer-events-none absolute inset-x-0 top-0 z-20 shrink-0 bg-transparent pt-[54px]'
             : 'relative z-10 shrink-0 pt-[54px] bg-[#F5F6F7] dark:bg-[#111214]'
         }
       >
@@ -7709,21 +7709,28 @@ function ChatPage({
         {/* QQ 语音面板（工具栏下方展开，相当于键盘区）：「按住说话」+ 大圆麦克风（左滑转文字/右滑取消）+ 变声/对讲/录音；
             液态玻璃：面板换乳白强模糊玻璃（lg-sheet），群聊等调用点不传保持默认 */}
         {voiceMode && <QqVoicePanel rec={rec} holdTestId="qq-voice-hold" liquid={liquid} />}
+        {/* 第四十五轮（用户指定）：加号面板点击时输入框不再被顶起——液态主题下面板悬浮在输入区上方
+            （absolute bottom-full 锚定底部容器顶缘，覆盖消息列表底部）；默认主题保持原展开行为 */}
         {plusOpen ? (
-          <div
-            data-testid="qq-plus-panel"
-            className={`${
-              liquid ? 'px-0 pt-0' : 'px-5 pt-5'
-            } ${
-              liquid
-                ? /* 液态玻璃（用户指定）：乳白强模糊玻璃浮层 + 竖向单列列表（QqPlusGrid liquid 分支） */
-                  'lg-sheet mx-2.5 mb-2.5 rounded-[24px] pb-2 pt-[5px]'
-                : 'border-t border-black/[0.05] pb-6 dark:border-white/[0.06]'
-            }`}
-            style={{ animation: 'qqPanelIn 0.24s ease-out' }}
-          >
-            <QqPlusGrid items={plusItems} liquid={liquid} />
-          </div>
+          liquid ? (
+            <div className="absolute inset-x-0 bottom-full z-30">
+              <div
+                data-testid="qq-plus-panel"
+                className="lg-sheet mx-2.5 mb-2.5 rounded-[20px] py-[4px]"
+                style={{ animation: 'qqPanelIn 0.24s ease-out' }}
+              >
+                <QqPlusGrid items={plusItems} liquid={liquid} />
+              </div>
+            </div>
+          ) : (
+            <div
+              data-testid="qq-plus-panel"
+              className="px-5 pt-5 border-t border-black/[0.05] pb-6 dark:border-white/[0.06]"
+              style={{ animation: 'qqPanelIn 0.24s ease-out' }}
+            >
+              <QqPlusGrid items={plusItems} />
+            </div>
+          )
         ) : null}
         {stickerOpen ? (
           <QqStickerPanel
@@ -11417,6 +11424,16 @@ function MessagesPage({
     onToast('已从列表移除，群聊保留在联系人 › 群聊');
   };
 
+  /** 消息页右上角加号下拉菜单项（默认白色卡与液态玻璃竖列两个分支共用；图标 21px，液态分支用 CSS 缩到 18px 保默认主题零变化） */
+  const plusMenuItems = [
+    { key: 'create-group', label: '创建群聊', icon: <MessageSquarePlus className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onCreateGroup(); } },
+    { key: 'create-channel', label: '创建频道', icon: <Hash className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('创建频道暂未开放'); } },
+    { key: 'add-friend', label: '加好友/群', icon: <UserPlus className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onAddFriend(); } },
+    { key: 'scan', label: '扫一扫', icon: <ScanLine className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); openScan('qq'); } },
+    { key: 'send-file', label: '传文件', icon: <FolderOutput className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('传文件暂未开放'); } },
+    { key: 'pay', label: '收付款', icon: <JapaneseYen className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('收付款暂未开放'); } },
+  ] as const;
+
   return (
     <div
       ref={rootRef}
@@ -11451,30 +11468,53 @@ function MessagesPage({
               aria-label="添加"
               aria-expanded={plusMenu}
               data-testid="qq-msgs-add"
-              className="rounded-full p-1.5 active:bg-black/5"
+              className={
+                liquid
+                  ? /* 液态（第四十五轮，用户指定）：玻璃圆圈内嵌黑色圆圈（同微信语音钮样式） */
+                    'lg-chip flex h-[38px] w-[38px] items-center justify-center rounded-full active:opacity-60'
+                  : 'rounded-full p-1.5 active:bg-black/5'
+              }
               onClick={() => setPlusMenu((v) => !v)}
             >
-              <Plus className={`h-6 w-6 transition-transform duration-200 ${plusMenu ? 'rotate-45' : ''}`} strokeWidth={2} />
+              {liquid ? (
+                <span className="flex h-[28px] w-[28px] items-center justify-center rounded-full border-[1.5px] border-black/85 text-black/90 dark:border-white/70 dark:text-white/90">
+                  <Plus className={`h-[18px] w-[18px] transition-transform duration-200 ${plusMenu ? 'rotate-45' : ''}`} strokeWidth={2.1} />
+                </span>
+              ) : (
+                <Plus className={`h-6 w-6 transition-transform duration-200 ${plusMenu ? 'rotate-45' : ''}`} strokeWidth={2} />
+              )}
             </button>
-            {/* 加号下拉菜单（对照需求截图：白色圆角面板 + 指向箭头；点击面板外关闭） */}
+            {/* 加号下拉菜单：默认 = 白色圆角面板 + 指向箭头（对照需求截图）；液态 = 乳白强模糊玻璃竖列（lg-sheet 无箭头）；点击面板外关闭 */}
             {plusMenu && (
               <>
                 <div className="fixed inset-0 z-40" aria-hidden="true" onClick={() => setPlusMenu(false)} />
+                {liquid ? (
+                  <div
+                    data-testid="qq-msgs-plus-menu"
+                    className="lg-sheet absolute right-0 top-[calc(100%+8px)] z-50 w-[208px] overflow-hidden rounded-[18px] py-[4px]"
+                    role="menu"
+                  >
+                    {plusMenuItems.map((it) => (
+                      <button
+                        key={it.key}
+                        type="button"
+                        role="menuitem"
+                        data-testid={`qq-plus-${it.key}`}
+                        onClick={it.action}
+                        className="lg-menu-row flex h-[40px] w-full items-center gap-3 px-4 text-left text-[13.5px] font-semibold text-[#1C1C1E] dark:text-white/90 [&_svg]:h-[18px] [&_svg]:w-[18px]"
+                      >
+                        <span className="shrink-0 text-black/80 dark:text-white/85">{it.icon}</span>
+                        {it.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
                 <div
                   data-testid="qq-msgs-plus-menu"
                   className="absolute right-0 top-[calc(100%+6px)] z-50 w-[172px] rounded-[14px] bg-white p-1.5 shadow-[0_6px_28px_rgba(0,0,0,0.16)] dark:bg-[#2A2C31] dark:shadow-[0_6px_28px_rgba(0,0,0,0.5)]"
                 >
                   <span aria-hidden="true" className="absolute -top-[5px] right-[13px] block h-2.5 w-2.5 rotate-45 rounded-[2px] bg-white dark:bg-[#2A2C31]" />
-                  {(
-                    [
-                      { key: 'create-group', label: '创建群聊', icon: <MessageSquarePlus className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onCreateGroup(); } },
-                      { key: 'create-channel', label: '创建频道', icon: <Hash className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('创建频道暂未开放'); } },
-                      { key: 'add-friend', label: '加好友/群', icon: <UserPlus className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onAddFriend(); } },
-                      { key: 'scan', label: '扫一扫', icon: <ScanLine className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); openScan('qq'); } },
-                      { key: 'send-file', label: '传文件', icon: <FolderOutput className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('传文件暂未开放'); } },
-                      { key: 'pay', label: '收付款', icon: <JapaneseYen className="h-[21px] w-[21px]" strokeWidth={1.9} />, action: () => { setPlusMenu(false); onToast('收付款暂未开放'); } },
-                    ] as const
-                  ).map((it) => (
+                  {plusMenuItems.map((it) => (
                     <button
                       key={it.key}
                       type="button"
@@ -11487,6 +11527,7 @@ function MessagesPage({
                     </button>
                   ))}
                 </div>
+                )}
               </>
             )}
           </div>
