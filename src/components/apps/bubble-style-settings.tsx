@@ -1,29 +1,30 @@
 'use client';
 
 /**
- * 聊天气泡装扮设置页（第十七轮建立 · 第十八轮重构 · 第二十轮毛玻璃胶囊化）——微信 / QQ / 信息 三 App 共用、装扮隔离
+ * 聊天气泡装扮设置页（第十七轮建立 · 第二十一轮整页删除重做）——微信 / QQ / 信息 三 App 共用、装扮隔离
  * ---------------------------------------------------------------------------
  * 入口：QQ 个人抽屉 › 个性装扮；微信 发现页 › 看一看 › 聊天气泡装扮；
  *       信息 App › 聊天设置 › 主题（气泡样式与颜色）。
  *
- * 结构：
+ * 功能（与历轮一致，本轮未动）：
  *  1. 实时预览卡片（四条模拟消息，所见即所得）
  *  2. 气泡样式四格：默认 / 七彩 / 毛玻璃 / 液态 —— 不分 TA/我，样式对两侧同时生效
  *  3. 自定义颜色（这里才分侧）：【一起 / 我的 / TA的】切换 + HSL 三滑条 + 预设色板
  *  4. 【保存当前设置】→ 命名弹窗 → 存入收藏夹（方案归属当前 App）
- *  5. 收藏夹：缩略卡点击应用
+ *  5. 收藏夹：胶囊行点击应用
  *
- * 视觉（第二十轮 · 用户指定「简约 + 毛玻璃胶囊」）：
- *  - 页面铺低饱和柔彩光斑（AmbientBackdrop，blur-3xl），给毛玻璃提供可模糊的底色；
- *  - 所有卡片 / 分段切换 / 收藏夹行 / 弹窗 = 半透明白 + backdrop-blur + 发丝白描边
- *    （深色模式白 7% + 白 12% 描边），导航栏透明化只留 blur —— 整页玻璃材质；
- *  - 胶囊语言：小标题玻璃 chip、分段切换胶囊、保存/应用/取消/输入框胶囊、
- *    收藏夹整行大胶囊（rounded-full）、命名弹窗预览幕布胶囊；
- *  - 克制：无重阴影无花哨渐变，选中态仅 accent 描边 + 一抹柔光。
+ * 排版规范（第二十一轮 · 用户指定「删除重做：简约美观 + 毛玻璃胶囊」）：
+ *  - 全页只允许三种视觉元素：玻璃卡（rounded-[22px] 半透白 + backdrop-blur-xl +
+ *    发丝白描边）、胶囊控件（rounded-full）、弱文字小标题——chip/图标底/选中光晕
+ *    等装饰一律不加；
+ *  - 圆角仅两档：卡片 22px、控件 full（唯一例外：预览相框内层幕布 17px，隐喻聊天窗口）；
+ *  - 节奏统一：区块间 space-y-7、卡内 space-y-4、栅格 gap-2.5，杜绝 mt-4/5/6 混用；
+ *  - 页面底铺柔彩光斑（AmbientBackdrop 柔化档），为毛玻璃提供可模糊的底色；
+ *  - 选中态只靠 accent 描边 + 勾选符号表达，无阴影无发光。
  */
 import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, ChevronRight, GlassWater, Palette, RotateCcw, Sparkles, Trash2, Waves } from 'lucide-react';
+import { Check, ChevronRight, Palette, RotateCcw, Trash2 } from 'lucide-react';
 import { IOSBackButton, IOSNavBar, IOSScreen } from '@/components/ios/IOSNavBar';
 import { BubbleTail } from '@/components/apps/bubble-tail';
 import { useSettings } from '@/lib/ios/store';
@@ -52,18 +53,10 @@ export interface BubbleStylePageProps {
   onToast: (m: string) => void;
 }
 
-const PLATFORM_META: Record<BubbleAppId, { name: string; accent: string; accentSoft: string }> = {
-  wx: { name: '微信', accent: '#07C160', accentSoft: 'rgba(7, 193, 96, 0.14)' },
-  qq: { name: 'QQ', accent: '#0099FF', accentSoft: 'rgba(0, 153, 255, 0.14)' },
-  sms: { name: '信息', accent: '#007AFF', accentSoft: 'rgba(0, 122, 255, 0.14)' },
-};
-
-/** 样式四格的图标 */
-const KIND_ICONS: Record<BubbleStyleKind, typeof Palette> = {
-  default: Palette,
-  rainbow: Sparkles,
-  frosted: GlassWater,
-  liquid: Waves,
+const PLATFORM_META: Record<BubbleAppId, { name: string; accent: string }> = {
+  wx: { name: '微信', accent: '#07C160' },
+  qq: { name: 'QQ', accent: '#0099FF' },
+  sms: { name: '信息', accent: '#007AFF' },
 };
 
 /** 样式副标题（简短说明各自质感，帮助区分毛玻璃/液态） */
@@ -74,26 +67,34 @@ const KIND_CAPTIONS: Record<BubbleStyleKind, string> = {
   liquid: '清透水膜 · 透底',
 };
 
-/** 毛玻璃卡公共材质（圆角/描边由各处按形状自行叠加） */
-const GLASS = 'bg-white/55 backdrop-blur-xl dark:bg-white/[0.07]';
+/** 玻璃卡（统一材质；圆角 22px） */
+const GLASS_CARD =
+  'rounded-[22px] bg-white/60 backdrop-blur-xl ring-1 ring-white/70 dark:bg-white/[0.06] dark:ring-white/[0.14]';
 
-// ---------------- 页面级柔彩光斑（毛玻璃的「底」，滚动时卡片将其晕开） ----------------
+/** 弱文字小标题（区块标签，非装饰） */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="px-2 text-[12.5px] font-semibold tracking-wide text-black/40 dark:text-white/40">{children}</p>
+  );
+}
 
-/** 低饱和大光斑四枚：淡青 / 淡粉紫 / 淡绿 / 淡黄，铺在页面最底层 */
+// ---------------- 页面级柔彩光斑（毛玻璃的「底」） ----------------
+
+/** 四枚低饱和大光斑：淡青 / 淡粉紫 / 淡绿 / 淡杏，铺在页面最底层 */
 function AmbientBackdrop() {
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-      <span className="absolute -left-24 -top-20 h-72 w-72 rounded-full bg-[#9BC8FF]/35 blur-3xl dark:bg-[#5B8DEF]/20" />
-      <span className="absolute -right-28 top-1/4 h-80 w-80 rounded-full bg-[#F5B8E4]/28 blur-3xl dark:bg-[#B46BD1]/15" />
-      <span className="absolute -left-20 top-[52%] h-64 w-64 rounded-full bg-[#A7F3D0]/25 blur-3xl dark:bg-[#4FC08D]/12" />
-      <span className="absolute -bottom-24 left-1/3 h-72 w-72 rounded-full bg-[#FDE68A]/25 blur-3xl dark:bg-[#E8C46B]/12" />
+      <span className="absolute -left-24 -top-24 h-80 w-80 rounded-full bg-[#9BC8FF]/30 blur-3xl dark:bg-[#5B8DEF]/16" />
+      <span className="absolute -right-28 top-1/4 h-88 w-88 rounded-full bg-[#F5B8E4]/25 blur-3xl dark:bg-[#B46BD1]/12" />
+      <span className="absolute -left-20 top-[52%] h-72 w-72 rounded-full bg-[#A7F3D0]/22 blur-3xl dark:bg-[#4FC08D]/10" />
+      <span className="absolute -bottom-28 left-1/3 h-80 w-80 rounded-full bg-[#FDE68A]/22 blur-3xl dark:bg-[#E8C46B]/10" />
     </div>
   );
 }
 
 // ---------------- 迷你预览气泡（与聊天页同一渲染引擎，所见即所得） ----------------
 
-/** 彩色光斑层：垫在毛玻璃/液态泡下面，让 backdrop-filter 的模糊效果肉眼可见（轻量淡彩） */
+/** 彩色光斑层：垫在毛玻璃/液态泡下面，让 backdrop-filter 的模糊效果肉眼可见（功能性，非装饰） */
 function AuraLayer() {
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -107,8 +108,7 @@ function AuraLayer() {
 
 /** 单条迷你预览气泡：override 时用装扮样式，否则 App 原生配色
  *  （尾巴跟随 bubbleVisual：QQ 纯色/七彩 = 弯钩——与预览行头像圆点（26px，items-end
- *   底对齐）顶端平行，top = max(0px, calc(100% - 32.5px)) → 尾巴中心 = 头像点顶端线上
- *   （26 + 6.5 = 32.5）；微信/信息 = 原生小方块随色；胶囊无尾巴） */
+ *   底对齐）顶端平行，top = max(0px, calc(100% - 32.5px))；微信/信息 = 原生小方块随色；胶囊无尾巴） */
 function PreviewBubble({
   app,
   cfg,
@@ -149,7 +149,7 @@ function PreviewBubble({
   );
 }
 
-/** 预览卡/收藏夹缩略图里的一行消息（带头像圆点） */
+/** 预览卡里的一行消息（带头像圆点） */
 function PreviewRow({
   app,
   cfg,
@@ -168,7 +168,7 @@ function PreviewRow({
     <div className={`flex items-end gap-1.5 ${side === 'mine' ? 'flex-row-reverse' : ''}`}>
       <span
         aria-hidden="true"
-        className={`z-[1] flex h-[26px] w-[26px] shrink-0 select-none items-center justify-center rounded-full text-[10px] font-semibold text-white ring-1 ring-white/40 ${
+        className={`z-[1] flex h-[26px] w-[26px] shrink-0 select-none items-center justify-center rounded-full text-[10px] font-semibold text-white ${
           side === 'mine' ? '' : 'bg-gradient-to-br from-[#F0A0B8] to-[#C86DD7]'
         }`}
         style={side === 'mine' ? { background: meta.accent } : undefined}
@@ -190,7 +190,7 @@ const PREVIEW_MESSAGES: { side: 'mine' | 'theirs'; text: string }[] = [
   { side: 'mine', text: '这就发你，等我' },
 ];
 
-// ---------------- HSL 滑条（全色彩盘三杆 · 玻璃轨道胶囊） ----------------
+// ---------------- HSL 滑条（胶囊轨道） ----------------
 
 let hslSliderSeq = 0;
 
@@ -214,10 +214,10 @@ function HslSlider({
     <div className="relative h-6">
       {/* 滑杆手柄底色随当前色变化：内联样式选不中伪元素，挂一段组件级动态样式 */}
       <style>{`#${id}::-webkit-slider-thumb{background-color:${thumbColor}} #${id}::-moz-range-thumb{background-color:${thumbColor}}`}</style>
-      {/* 玻璃轨道胶囊：渐变底 + 白发丝描边 + 顶部内高光（糖珠质感） */}
+      {/* 胶囊轨道：渐变底 + 发丝白描边 */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 top-1/2 h-3.5 -translate-y-1/2 rounded-full ring-1 ring-white/55 shadow-[inset_0_1px_1px_rgba(255,255,255,0.45),inset_0_-1px_2px_rgba(0,0,0,0.10)] dark:ring-white/[0.14]"
+        className="pointer-events-none absolute inset-x-0 top-1/2 h-3 -translate-y-1/2 rounded-full ring-1 ring-white/60 dark:ring-white/[0.14]"
         style={{ background: trackBackground }}
       />
       <input
@@ -230,21 +230,10 @@ function HslSlider({
         step={1}
         onChange={(e) => onChange(Number(e.target.value))}
         className="absolute inset-0 h-6 w-full cursor-pointer appearance-none bg-transparent
-          [&::-webkit-slider-thumb]:h-[22px] [&::-webkit-slider-thumb]:w-[22px] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-thumb]:shadow-[0_2px_6px_rgba(0,0,0,0.24)]
-          [&::-moz-range-thumb]:h-[22px] [&::-moz-range-thumb]:w-[22px] [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white [&::-moz-range-thumb]:shadow-[0_2px_6px_rgba(0,0,0,0.24)]"
+          [&::-webkit-slider-thumb]:h-[22px] [&::-webkit-slider-thumb]:w-[22px] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-thumb]:shadow-[0_2px_6px_rgba(0,0,0,0.22)]
+          [&::-moz-range-thumb]:h-[22px] [&::-moz-range-thumb]:w-[22px] [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white [&::-moz-range-thumb]:shadow-[0_2px_6px_rgba(0,0,0,0.22)]"
       />
     </div>
-  );
-}
-
-// ---------------- 玻璃小 chip（区块标题胶囊） ----------------
-
-function GlassChip({ icon: Icon, children }: { icon: typeof Palette; children: React.ReactNode }) {
-  return (
-    <p className="mb-2.5 flex w-fit items-center gap-1.5 rounded-full bg-white/50 px-3 py-1 text-[11.5px] font-semibold text-black/50 ring-1 ring-white/60 backdrop-blur-md dark:bg-white/[0.08] dark:text-white/55 dark:ring-white/[0.12]">
-      <Icon className="h-3 w-3" aria-hidden="true" />
-      {children}
-    </p>
   );
 }
 
@@ -263,7 +252,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
   const [naming, setNaming] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
 
-  /** 当前 App 的装扮（微信/QQ 隔离：只读写 bubbleStyle[app]） */
+  /** 当前 App 的装扮（三 App 隔离：只读写 bubbleStyle[app]） */
   const appStyle: BubbleAppStyle = bubbleStyle[app] ?? { kind: 'default' };
   const kindDisabled = appStyle.kind === 'rainbow';
   /** 当前编辑目标展示色：both 优先取我的（未设时回退 TA 的） */
@@ -276,8 +265,9 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
   /** 无自定义色时滑条落在 App 原生默认色位置（拖动任意一杆立即生成自定义色落地） */
   const fallbackHex = NATIVE_BUBBLE[app][side === 'theirs' ? 'theirs' : 'mine'];
   const hsl = useMemo(() => hexToHsl(currentColor ?? fallbackHex), [currentColor, fallbackHex]);
+  const hasCustomColor = !!(side === 'both' ? appStyle.mineColor || appStyle.theirsColor : currentColor);
 
-  /** 修改当前 App 的装扮（另一个 App 原样保留 —— 装扮隔离） */
+  /** 修改当前 App 的装扮（其他 App 原样保留 —— 装扮隔离） */
   const patchAppStyle = (patch: Partial<BubbleAppStyle>) => {
     setBubbleStyle({
       ...bubbleStyle,
@@ -334,27 +324,25 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
   }, [schemes, appStyle]);
 
   return (
-    <IOSScreen className="bg-[#EDF0F6] dark:bg-[#0E1013]">
-      {/* 页面底光斑：半透明导航栏与所有毛玻璃卡都把它晕成柔彩 */}
+    <IOSScreen className="bg-[#ECEFF4] dark:bg-[#0D0F13]">
+      {/* 页面底光斑：玻璃卡将其晕开成柔彩 */}
       <AmbientBackdrop />
-      {/* 标题居中（用户指定）；导航栏去底色只留 blur = 顶部玻璃条。
-          信息 App 入口名为「主题」，页题与入口一致；微信/QQ 保持「气泡样式」 */}
+
+      {/* 顶部玻璃条（透明底 + blur）；信息 App 页题与入口「主题」一致 */}
       <IOSNavBar
         title={app === 'sms' ? '主题' : '气泡样式'}
         large={false}
         left={<IOSBackButton onClick={onBack} label="" />}
         className="bg-transparent! dark:bg-transparent!"
       />
-      <div className="no-scrollbar relative flex-1 overflow-y-auto px-4 pb-12">
-        {/* ---------- 1. 实时预览（玻璃外壳 + 内嵌聊天幕布） ---------- */}
-        <section
-          aria-label="实时预览"
-          className={`relative mt-2 rounded-[26px] ${GLASS} ring-1 ring-white/60 dark:ring-white/[0.12]`}
-        >
-          <div className="relative m-2 overflow-hidden rounded-[20px] ring-1 ring-black/[0.04] dark:ring-white/[0.05]">
-            <div className="absolute inset-0 bg-gradient-to-b from-[#E5EAF3] to-[#D8DFEB] dark:from-[#252A38] dark:to-[#191D28]" />
+
+      <div className="no-scrollbar relative flex-1 space-y-7 overflow-y-auto px-4 pb-12">
+        {/* ---------- 1. 实时预览：玻璃相框裱着聊天幕布 ---------- */}
+        <section aria-label="实时预览" className={`${GLASS_CARD} p-1.5`}>
+          <div className="relative overflow-hidden rounded-[17px]">
+            <div className="absolute inset-0 bg-gradient-to-b from-[#E6EAF2] to-[#D9E0EB] dark:from-[#232836] dark:to-[#171B25]" />
             <AuraLayer />
-            <div className="relative flex flex-col gap-2.5 px-4 py-5">
+            <div className="relative flex flex-col gap-3 px-4 py-6">
               {PREVIEW_MESSAGES.map((m, i) => (
                 <div key={i} className={m.side === 'mine' ? 'self-end' : 'self-start'}>
                   <PreviewRow app={app} cfg={bubbleStyle} side={m.side} index={i} text={m.text} />
@@ -364,13 +352,12 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
           </div>
         </section>
 
-        {/* ---------- 2. 气泡样式四格（不分 TA/我） ---------- */}
-        <section aria-label="气泡样式" className="mt-6">
-          <GlassChip icon={Palette}>样式</GlassChip>
-          <div className="grid grid-cols-2 gap-2.5">
+        {/* ---------- 2. 气泡样式四格（示意胶囊 + 名称，无多余装饰） ---------- */}
+        <section aria-label="气泡样式">
+          <SectionLabel>样式</SectionLabel>
+          <div className="mt-2.5 grid grid-cols-2 gap-2.5">
             {(Object.keys(BUBBLE_KIND_LABEL) as BubbleStyleKind[]).map((kind) => {
               const selected = appStyle.kind === kind;
-              const Icon = KIND_ICONS[kind];
               // 每格迷你预览配置：展示「若应用此样式」的效果（样式对两侧同时生效）
               const previewCfg: BubbleStyleConfig = {
                 ...bubbleStyle,
@@ -389,49 +376,27 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                     }
                   }}
                   aria-pressed={selected}
-                  className={`rounded-[24px] ${GLASS} p-2.5 text-left ring-1 transition-all active:scale-[0.97] ${
+                  className={`rounded-[22px] bg-white/60 p-2.5 text-left backdrop-blur-xl ring-1 transition-all active:scale-[0.97] dark:bg-white/[0.06] ${
                     selected
                       ? 'ring-2'
-                      : 'ring-white/55 hover:ring-white/80 dark:ring-white/[0.10] dark:hover:ring-white/[0.16]'
+                      : 'ring-white/70 hover:ring-white dark:ring-white/[0.14] dark:hover:ring-white/[0.18]'
                   }`}
-                  style={
-                    selected
-                      ? {
-                          ['--tw-ring-color' as string]: meta.accent,
-                          boxShadow: `0 10px 28px ${withAlpha(meta.accent, 0.22)}`,
-                        }
-                      : undefined
-                  }
+                  style={selected ? { ['--tw-ring-color' as string]: meta.accent } : undefined}
                 >
-                  <div className="relative mb-2 flex h-[54px] items-center gap-1.5 overflow-hidden rounded-[18px] bg-gradient-to-br from-[#E9EDF5] to-[#DFE5F0] px-2 ring-1 ring-white/40 dark:from-[#272C3A] dark:to-[#1D2230] dark:ring-white/[0.06]">
+                  {/* 示意区：胶囊条 + 左右两颗泡（磨砂/液态需要底光斑才可见） */}
+                  <div className="relative mb-2.5 flex h-[52px] items-center justify-between gap-1.5 overflow-hidden rounded-full bg-black/[0.04] px-3 dark:bg-white/[0.05]">
                     <AuraLayer />
-                    {/* 迷你对话：TA 一条 + 我一条（两侧同享此样式） */}
-                    <div className="relative flex w-full items-center justify-between gap-1">
-                      <PreviewBubble app={app} cfg={previewCfg} side="theirs" index={0}>
-                        哈喽
-                      </PreviewBubble>
-                      <PreviewBubble app={app} cfg={previewCfg} side="mine" index={1}>
-                        {kind === 'rainbow' ? '变色啦' : '你好呀'}
-                      </PreviewBubble>
-                    </div>
+                    <PreviewBubble app={app} cfg={previewCfg} side="theirs" index={0} className="!text-[11px]">
+                      早呀
+                    </PreviewBubble>
+                    <PreviewBubble app={app} cfg={previewCfg} side="mine" index={1} className="!text-[11px]">
+                      {kind === 'rainbow' ? '变啦' : '你好'}
+                    </PreviewBubble>
                   </div>
-                  <div className="flex items-center gap-2 px-0.5">
-                    {/* 图标：小圆玻璃底；选中 = accent 柔光玻璃 */}
-                    <span
-                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full backdrop-blur-md ${
-                        selected ? '' : 'bg-white/55 ring-1 ring-white/60 dark:bg-white/[0.09] dark:ring-white/[0.12]'
-                      }`}
-                      style={selected ? { backgroundColor: withAlpha(meta.accent, 0.16) } : undefined}
-                    >
-                      <Icon
-                        className={`h-[15px] w-[15px] ${selected ? '' : 'text-black/40 dark:text-white/40'}`}
-                        style={selected ? { color: meta.accent } : undefined}
-                        aria-hidden="true"
-                      />
-                    </span>
-                    <span className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2 px-1.5 pb-1">
+                    <span className="min-w-0">
                       <span className="block text-[14px] font-semibold leading-tight">{BUBBLE_KIND_LABEL[kind]}</span>
-                      <span className="mt-[1px] block truncate text-[10.5px] leading-tight text-black/40 dark:text-white/40">
+                      <span className="mt-[2px] block truncate text-[10.5px] leading-tight text-black/40 dark:text-white/40">
                         {KIND_CAPTIONS[kind]}
                       </span>
                     </span>
@@ -443,171 +408,159 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
           </div>
         </section>
 
-        {/* ---------- 3. 自定义颜色（仅颜色分侧：一起 / 我的 / TA的） ---------- */}
-        <section
-          aria-label="自定义颜色"
-          className={`mt-4 rounded-[24px] ${GLASS} p-4 ring-1 transition-opacity ${
-            kindDisabled ? 'pointer-events-none opacity-40 ring-white/55 dark:ring-white/[0.10]' : 'ring-white/60 dark:ring-white/[0.12]'
-          }`}
-        >
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <p className="shrink-0 text-[13px] font-semibold text-black/80 dark:text-white/80">颜色</p>
-            {/* 编辑目标三段切换：玻璃胶囊壳 + 白玻璃选中 pill（iOS 分段风） */}
-            <div className="relative flex rounded-full bg-white/40 p-[3px] ring-1 ring-white/60 backdrop-blur-md dark:bg-white/[0.08] dark:ring-white/[0.12]">
-              {(['both', 'mine', 'theirs'] as const).map((k) => (
+        {/* ---------- 3. 颜色（分段胶囊 / 滑条 / 色板，同卡三分区） ---------- */}
+        <section aria-label="自定义颜色">
+          <SectionLabel>颜色</SectionLabel>
+          <div
+            className={`mt-2.5 space-y-4 ${GLASS_CARD} p-4 transition-opacity ${
+              kindDisabled ? 'pointer-events-none opacity-40' : ''
+            }`}
+          >
+            {/* 分区一：编辑目标分段胶囊 + 恢复默认 */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="relative flex rounded-full bg-black/[0.05] p-[3px] dark:bg-white/[0.08]">
+                {(['both', 'mine', 'theirs'] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setSide(k)}
+                    aria-pressed={side === k}
+                    className={`relative z-10 rounded-full px-3.5 py-[5px] text-[12px] font-semibold transition-colors ${
+                      side === k ? 'text-black/80 dark:text-white' : 'text-black/45 dark:text-white/50'
+                    }`}
+                  >
+                    {side === k && (
+                      <motion.span
+                        layoutId="bubble-color-side-pill"
+                        className="absolute inset-0 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.12)] dark:bg-white/20 dark:ring-1 dark:ring-white/15"
+                        transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                      />
+                    )}
+                    <span className="relative">{k === 'both' ? '一起' : k === 'mine' ? '我的' : 'TA的'}</span>
+                  </button>
+                ))}
+              </div>
+              {hasCustomColor && (
                 <button
-                  key={k}
                   type="button"
-                  onClick={() => setSide(k)}
-                  aria-pressed={side === k}
-                  className={`relative z-10 rounded-full px-3 py-[5px] text-[12px] font-semibold transition-colors ${
-                    side === k
-                      ? 'text-black/80 shadow-[0_2px_8px_rgba(0,0,0,0.10)] dark:text-white'
-                      : 'text-black/45 dark:text-white/50'
-                  }`}
+                  aria-label="恢复默认色"
+                  onClick={() =>
+                    patchAppStyle(
+                      side === 'both'
+                        ? { mineColor: undefined, theirsColor: undefined }
+                        : side === 'mine'
+                          ? { mineColor: undefined }
+                          : { theirsColor: undefined },
+                    )
+                  }
+                  className="flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11.5px] font-medium text-black/45 transition-colors active:bg-black/[0.06] dark:text-white/50 dark:active:bg-white/10"
                 >
-                  {side === k && (
-                    <motion.span
-                      layoutId="bubble-color-side-pill"
-                      className="absolute inset-0 rounded-full bg-white/90 ring-1 ring-black/[0.03] dark:bg-white/20 dark:ring-white/10"
-                      transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-                    />
-                  )}
-                  <span className="relative">{k === 'both' ? '一起' : k === 'mine' ? '我的' : 'TA的'}</span>
+                  <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                  默认
                 </button>
-              ))}
+              )}
             </div>
-            {(side === 'both' ? appStyle.mineColor || appStyle.theirsColor : currentColor) ? (
-              <button
-                type="button"
-                aria-label="恢复默认色"
-                onClick={() =>
-                  patchAppStyle(
-                    side === 'both'
-                      ? { mineColor: undefined, theirsColor: undefined }
-                      : side === 'mine'
-                        ? { mineColor: undefined }
-                        : { theirsColor: undefined },
-                  )
-                }
-                className="flex shrink-0 items-center gap-1 rounded-full bg-white/45 px-2.5 py-1 text-[11.5px] font-medium text-black/50 ring-1 ring-white/60 backdrop-blur-md transition-colors active:bg-white/70 dark:bg-white/[0.08] dark:text-white/55 dark:ring-white/[0.12] dark:active:bg-white/15"
+
+            {/* 分区二：当前色珠 + HSL 三滑条 */}
+            <div className="flex items-center gap-3.5">
+              <span
+                aria-hidden="true"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ring-1 ring-black/[0.06] dark:ring-white/15"
+                style={{
+                  background: currentColor ?? fallbackHex,
+                  color:
+                    (currentColor ?? fallbackHex).toUpperCase() === '#FFFFFF'
+                      ? '#9CA3AF'
+                      : yiqTextOn(currentColor ?? fallbackHex),
+                }}
               >
-                <RotateCcw className="h-3 w-3" aria-hidden="true" />
-                默认
-              </button>
-            ) : null}
-          </div>
-
-          {/* 当前色预览（糖珠高光） + HSL 三滑条 */}
-          <div className="flex items-center gap-3">
-            <span
-              aria-hidden="true"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ring-1 ring-white/45 shadow-[inset_0_1px_2px_rgba(255,255,255,0.40),0_4px_12px_rgba(20,24,34,0.12)] dark:ring-white/20"
-              style={{
-                background: currentColor ?? fallbackHex,
-                color:
-                  (currentColor ?? fallbackHex).toUpperCase() === '#FFFFFF'
-                    ? '#9CA3AF'
-                    : yiqTextOn(currentColor ?? fallbackHex),
-              }}
-            >
-              {(currentColor ?? fallbackHex).slice(1).toUpperCase()}
-            </span>
-            <div className="min-w-0 flex-1 space-y-2.5">
-              <HslSlider
-                label="色相"
-                value={hsl.h}
-                max={360}
-                thumbColor={hslToHex(hsl.h, Math.max(hsl.s, 70), 55)}
-                trackBackground="linear-gradient(90deg, #FF0000, #FFFF00 17%, #00FF00 33%, #00FFFF 50%, #0000FF 67%, #FF00FF 83%, #FF0000)"
-                onChange={(h) => commitHsl(h, hsl.s, hsl.l)}
-              />
-              <HslSlider
-                label="饱和度"
-                value={hsl.s}
-                max={100}
-                thumbColor={currentColor ?? fallbackHex}
-                trackBackground={`linear-gradient(90deg, ${hslToHex(hsl.h, 0, hsl.l)}, ${hslToHex(hsl.h, 100, hsl.l)})`}
-                onChange={(s) => commitHsl(hsl.h, s, hsl.l)}
-              />
-              <HslSlider
-                label="明度"
-                value={hsl.l}
-                max={100}
-                thumbColor={currentColor ?? fallbackHex}
-                trackBackground={`linear-gradient(90deg, #000000, ${hslToHex(hsl.h, hsl.s, 50)} 50%, #FFFFFF)`}
-                onChange={(l) => commitHsl(hsl.h, hsl.s, l)}
-              />
+                {(currentColor ?? fallbackHex).slice(1).toUpperCase()}
+              </span>
+              <div className="min-w-0 flex-1 space-y-2.5">
+                <HslSlider
+                  label="色相"
+                  value={hsl.h}
+                  max={360}
+                  thumbColor={hslToHex(hsl.h, Math.max(hsl.s, 70), 55)}
+                  trackBackground="linear-gradient(90deg, #FF0000, #FFFF00 17%, #00FF00 33%, #00FFFF 50%, #0000FF 67%, #FF00FF 83%, #FF0000)"
+                  onChange={(h) => commitHsl(h, hsl.s, hsl.l)}
+                />
+                <HslSlider
+                  label="饱和度"
+                  value={hsl.s}
+                  max={100}
+                  thumbColor={currentColor ?? fallbackHex}
+                  trackBackground={`linear-gradient(90deg, ${hslToHex(hsl.h, 0, hsl.l)}, ${hslToHex(hsl.h, 100, hsl.l)})`}
+                  onChange={(s) => commitHsl(hsl.h, s, hsl.l)}
+                />
+                <HslSlider
+                  label="明度"
+                  value={hsl.l}
+                  max={100}
+                  thumbColor={currentColor ?? fallbackHex}
+                  trackBackground={`linear-gradient(90deg, #000000, ${hslToHex(hsl.h, hsl.s, 50)} 50%, #FFFFFF)`}
+                  onChange={(l) => commitHsl(hsl.h, hsl.s, l)}
+                />
+              </div>
             </div>
-          </div>
 
-          {/* 预设色板（糖珠色点） */}
-          <div className="mt-3.5 grid grid-cols-12 gap-1.5" role="group" aria-label="预设颜色">
-            {PRESET_SWATCHES.map((c) => {
-              const selected = (currentColor ?? '').toUpperCase() === c;
-              return (
-                <button
-                  key={c}
-                  type="button"
-                  aria-label={`预设色 ${c}`}
-                  aria-pressed={selected}
-                  onClick={() => commitColor(c)}
-                  className={`flex aspect-square items-center justify-center rounded-full transition-transform active:scale-90 ${
-                    selected ? 'ring-2 ring-white/90 dark:ring-white/80' : 'ring-1 ring-black/10 dark:ring-white/15'
-                  }`}
-                  style={{
-                    backgroundColor: c,
-                    boxShadow: selected
-                      ? `0 0 0 2px ${meta.accent}, inset 0 1px 1px rgba(255,255,255,0.40)`
-                      : 'inset 0 1px 1px rgba(255,255,255,0.40)',
-                  }}
-                >
-                  {selected && (
-                    <Check
-                      className="h-3 w-3"
-                      style={{ color: yiqTextOn(c) === '#000000' ? '#111111' : '#FFFFFF' }}
-                      aria-hidden="true"
-                    />
-                  )}
-                </button>
-              );
-            })}
+            {/* 分区三：预设色板（胶囊色点） */}
+            <div className="grid grid-cols-12 gap-[7px]" role="group" aria-label="预设颜色">
+              {PRESET_SWATCHES.map((c) => {
+                const selected = (currentColor ?? '').toUpperCase() === c;
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    aria-label={`预设色 ${c}`}
+                    aria-pressed={selected}
+                    onClick={() => commitColor(c)}
+                    className={`flex aspect-square items-center justify-center rounded-full transition-transform active:scale-90 ${
+                      selected ? 'ring-2 ring-white/90 dark:ring-white/80' : 'ring-1 ring-black/10 dark:ring-white/15'
+                    }`}
+                    style={{ backgroundColor: c, ...(selected ? { boxShadow: `0 0 0 2px ${meta.accent}` } : {}) }}
+                  >
+                    {selected && (
+                      <Check
+                        className="h-3 w-3"
+                        style={{ color: yiqTextOn(c) === '#000000' ? '#111111' : '#FFFFFF' }}
+                        aria-hidden="true"
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {kindDisabled && (
+              <p className="text-[12px] text-black/40 dark:text-white/40">七彩气泡按消息顺序自动循环 9 色，无需选色</p>
+            )}
           </div>
-          {kindDisabled && (
-            <p className="mt-3 text-[12px] text-black/40 dark:text-white/40">
-              七彩气泡按消息顺序自动循环 9 色，无需选色
-            </p>
-          )}
         </section>
 
-        {/* ---------- 4. 保存当前设置（accent 玻璃糖果胶囊） ---------- */}
+        {/* ---------- 4. 保存当前设置（accent 胶囊） ---------- */}
         <button
           type="button"
           onClick={() => {
             setNameDraft('');
             setNaming(true);
           }}
-          className="mt-5 w-full rounded-full py-3 text-[15.5px] font-semibold text-white ring-1 ring-white/35 transition-transform active:scale-[0.98]"
-          style={{
-            backgroundColor: meta.accent,
-            boxShadow: `0 8px 22px ${withAlpha(meta.accent, 0.35)}, inset 0 1px 0 rgba(255,255,255,0.28)`,
-          }}
+          className="w-full rounded-full py-3.5 text-[15.5px] font-semibold text-white transition-transform active:scale-[0.98]"
+          style={{ backgroundColor: meta.accent, boxShadow: `0 6px 18px ${withAlpha(meta.accent, 0.28)}` }}
         >
           保存当前设置
         </button>
 
-        {/* ---------- 5. 收藏夹（整行大胶囊） ---------- */}
-        <section aria-label="我的气泡收藏夹" className="mt-6">
-          <GlassChip icon={Sparkles}>我的气泡</GlassChip>
+        {/* ---------- 5. 收藏夹（胶囊行） ---------- */}
+        <section aria-label="我的气泡收藏夹">
+          <SectionLabel>我的气泡</SectionLabel>
           {schemes.length === 0 ? (
-            <div
-              className={`rounded-full border border-dashed border-black/15 ${GLASS} px-8 py-5 text-center dark:border-white/15`}
-            >
+            <div className={`mt-2.5 border border-dashed border-black/[0.14] ${GLASS_CARD} py-6 text-center dark:border-white/[0.14]`}>
               <Palette className="mx-auto mb-1.5 h-5 w-5 text-black/25 dark:text-white/25" aria-hidden="true" />
               <p className="text-[13px] text-black/40 dark:text-white/40">还没有收藏的气泡方案</p>
             </div>
           ) : (
-            <ul className="space-y-2.5">
+            <ul className="mt-2.5 space-y-2.5">
               {schemes.map((s) => {
                 const active = s.id === activeSchemeId;
                 const sMeta = PLATFORM_META[s.app];
@@ -626,22 +579,15 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                           applyScheme(s);
                         }
                       }}
-                      className={`flex cursor-pointer items-center gap-3 rounded-full ${GLASS} p-2 pl-2 ring-1 transition-all active:scale-[0.98] ${
+                      className={`flex cursor-pointer items-center gap-3 rounded-full bg-white/60 p-1.5 pr-2 backdrop-blur-xl ring-1 transition-all active:scale-[0.98] dark:bg-white/[0.06] ${
                         active
                           ? 'ring-2'
-                          : 'ring-white/55 hover:ring-white/80 dark:ring-white/[0.10] dark:hover:ring-white/[0.16]'
+                          : 'ring-white/70 hover:ring-white dark:ring-white/[0.14] dark:hover:ring-white/[0.18]'
                       }`}
-                      style={
-                        active
-                          ? {
-                              ['--tw-ring-color' as string]: sMeta.accent,
-                              boxShadow: `0 8px 24px ${withAlpha(sMeta.accent, 0.20)}`,
-                            }
-                          : undefined
-                      }
+                      style={active ? { ['--tw-ring-color' as string]: sMeta.accent } : undefined}
                     >
-                      {/* 缩略图：胶囊幕布 + 迷你双泡（按方案归属 App 渲染） */}
-                      <div className="relative flex h-[44px] w-[84px] shrink-0 items-center justify-between gap-1 overflow-hidden rounded-full bg-gradient-to-br from-[#E9EDF4] to-[#DCE3EF] px-2.5 ring-1 ring-white/40 dark:from-[#272C3A] dark:to-[#1D2230] dark:ring-white/[0.06]">
+                      {/* 缩略图：胶囊幕布 + 迷你双泡 */}
+                      <div className="relative flex h-[44px] w-[80px] shrink-0 items-center justify-between gap-1 overflow-hidden rounded-full bg-black/[0.04] px-3 dark:bg-white/[0.05]">
                         <AuraLayer />
                         <PreviewBubble app={s.app} cfg={thumbCfg} side="theirs" index={0} className="!text-[10.5px] !px-1.5 !py-[3px]">
                           早
@@ -652,23 +598,23 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
-                          <p className="truncate text-[14.5px] font-semibold leading-tight">{s.name}</p>
+                          <p className="truncate text-[14px] font-semibold leading-tight">{s.name}</p>
                           {active && (
                             <span
-                              className="shrink-0 rounded-full px-1.5 py-[1px] text-[10px] font-semibold text-white ring-1 ring-white/35"
+                              className="shrink-0 rounded-full px-1.5 py-[1px] text-[10px] font-semibold text-white"
                               style={{ backgroundColor: sMeta.accent }}
                             >
                               使用中
                             </span>
                           )}
                         </div>
-                        <p className="mt-0.5 truncate text-[11.5px] text-black/40 dark:text-white/40">
+                        <p className="mt-[2px] truncate text-[11px] text-black/40 dark:text-white/40">
                           {BUBBLE_KIND_LABEL[s.style.kind]}
                           {s.style.mineColor ? ` · 我 ${s.style.mineColor}` : ''}
                           {s.style.theirsColor ? ` · TA ${s.style.theirsColor}` : ''}
                         </p>
                       </div>
-                      <div className="flex shrink-0 items-center gap-1 pr-1">
+                      <div className="flex shrink-0 items-center gap-1.5">
                         <button
                           type="button"
                           aria-label={`应用 ${s.name}`}
@@ -676,11 +622,8 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                             e.stopPropagation();
                             applyScheme(s);
                           }}
-                          className="flex items-center gap-0.5 rounded-full px-2.5 py-1.5 text-[12px] font-semibold text-white ring-1 ring-white/35 transition-transform active:scale-95"
-                          style={{
-                            backgroundColor: sMeta.accent,
-                            boxShadow: `inset 0 1px 0 rgba(255,255,255,0.25)`,
-                          }}
+                          className="flex items-center gap-0.5 rounded-full px-3 py-1.5 text-[12px] font-semibold text-white transition-transform active:scale-95"
+                          style={{ backgroundColor: sMeta.accent }}
                         >
                           应用
                           <ChevronRight className="h-3 w-3" aria-hidden="true" />
@@ -706,7 +649,7 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
         </section>
       </div>
 
-      {/* ---------- 命名弹窗（毛玻璃卡 + 玻璃胶囊控件） ---------- */}
+      {/* ---------- 命名弹窗（毛玻璃卡 + 胶囊控件） ---------- */}
       <AnimatePresence>
         {naming && (
           <motion.div
@@ -723,12 +666,12 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.95, opacity: 0, y: 6 }}
               transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-              className="w-full max-w-[300px] rounded-[26px] bg-white/75 p-5 shadow-2xl ring-1 ring-white/60 backdrop-blur-2xl dark:bg-[#1F2126]/80 dark:ring-white/[0.12]"
+              className="w-full max-w-[300px] rounded-[22px] bg-white/80 p-5 shadow-2xl ring-1 ring-white/70 backdrop-blur-2xl dark:bg-[#1F2126]/85 dark:ring-white/[0.12]"
               onClick={(e) => e.stopPropagation()}
             >
               <p className="text-center text-[16px] font-bold">给这套气泡起个名字</p>
               {/* 迷你效果预览：胶囊幕布 */}
-              <div className="relative mt-3 flex items-center justify-center gap-1.5 overflow-hidden rounded-full bg-[#E9EDF4] px-4 py-2.5 ring-1 ring-white/40 dark:bg-[#252932] dark:ring-white/[0.08]">
+              <div className="relative mt-3.5 flex items-center justify-center gap-1.5 overflow-hidden rounded-full bg-black/[0.04] px-4 py-2.5 dark:bg-white/[0.05]">
                 <AuraLayer />
                 <PreviewBubble app={app} cfg={bubbleStyle} side="theirs" index={0}>
                   早安
@@ -747,25 +690,22 @@ export function BubbleStylePage({ app, onBack, onToast }: BubbleStylePageProps) 
                 maxLength={16}
                 placeholder="比如：我的天蓝专属"
                 aria-label="方案名称"
-                className="mt-3 w-full rounded-full bg-white/55 px-4 py-2.5 text-center text-[15px] outline-none ring-1 ring-white/70 transition-shadow placeholder:text-black/30 focus:ring-2 dark:bg-white/[0.08] dark:ring-white/[0.12] dark:placeholder:text-white/30"
+                className="mt-3.5 w-full rounded-full bg-black/[0.05] px-4 py-2.5 text-center text-[15px] outline-none transition-shadow placeholder:text-black/30 focus:ring-2 dark:bg-white/[0.08] dark:placeholder:text-white/30"
                 style={{ ['--tw-ring-color' as string]: meta.accent }}
               />
               <div className="mt-4 flex gap-2.5">
                 <button
                   type="button"
                   onClick={() => setNaming(false)}
-                  className="flex-1 rounded-full bg-white/55 py-2.5 text-[15px] font-semibold text-black/60 ring-1 ring-white/60 backdrop-blur-md transition-colors active:bg-white/75 dark:bg-white/[0.08] dark:text-white/70 dark:ring-white/[0.12] dark:active:bg-white/15"
+                  className="flex-1 rounded-full bg-black/[0.05] py-2.5 text-[15px] font-semibold text-black/60 transition-colors active:bg-black/10 dark:bg-white/[0.08] dark:text-white/70 dark:active:bg-white/15"
                 >
                   取消
                 </button>
                 <button
                   type="button"
                   onClick={saveScheme}
-                  className="flex-1 rounded-full py-2.5 text-[15px] font-semibold text-white ring-1 ring-white/35 transition-transform active:scale-95"
-                  style={{
-                    backgroundColor: meta.accent,
-                    boxShadow: `0 6px 16px ${withAlpha(meta.accent, 0.30)}, inset 0 1px 0 rgba(255,255,255,0.28)`,
-                  }}
+                  className="flex-1 rounded-full py-2.5 text-[15px] font-semibold text-white transition-transform active:scale-95"
+                  style={{ backgroundColor: meta.accent }}
                 >
                   保存
                 </button>
