@@ -26,10 +26,9 @@ export const TAIL_CLIP_RIGHT = 'path("M2 0 L2 6 C3 12 7 16 14 18 C10 13 8 8 8 2 
 
 /** App 级界面主题（第四十二轮）：default = 现状原生；liquid = 液态玻璃主题（参考图）。
  *  主题与气泡样式相互独立：主题只接管页面铭件（导航/TabBar/列表卡/输入栏），
- *  气泡仍由 kind 管；聊天背景层不受主题影响（用户指定）。仅 wx / qq 提供主题切换。
- *  第五十轮：新增 new = 新版 iMessage 主题（仅信息 App 提供且只接管聊天界面：
- *  居中大头像顶栏 + 亮蓝/浅灰气泡 + 白底输入栏，用户参考图同款）；会话列表等其他页面不变 */
-export type BubbleTheme = 'default' | 'liquid' | 'new';
+ *  气泡仍由 kind 管；聊天背景层不受主题影响（用户指定）。
+ *  第五十三轮：删除 new（新版 iMessage 主题）——存量档的 'new' 在 normalize 时自动回退 default */
+export type BubbleTheme = 'default' | 'liquid';
 
 /** 装扮宿主 App 标识（微信 / QQ / 信息） */
 export type BubbleAppId = 'wx' | 'qq' | 'sms';
@@ -81,30 +80,24 @@ export const RAINBOW_COLORS = [
 export const BUBBLE_KINDS: readonly BubbleStyleKind[] = ['default', 'rainbow', 'frosted', 'liquid'];
 
 /** 主题列表（设置页用——全部主题的权威清单；设置页按宿主 App 取子集） */
-export const BUBBLE_THEMES: readonly BubbleTheme[] = ['default', 'liquid', 'new'];
+export const BUBBLE_THEMES: readonly BubbleTheme[] = ['default', 'liquid'];
 
-/** 各 App 提供的主题子集（第五十轮）：微信/QQ = 默认+液态玻璃；信息 = 默认+新版 iMessage */
+/** 各 App 提供的主题子集：微信/QQ = 默认+液态玻璃；信息 = 仅默认（第五十三轮删除新版主题） */
 export const THEMES_OF_APP: Record<BubbleAppId, readonly BubbleTheme[]> = {
   wx: ['default', 'liquid'],
   qq: ['default', 'liquid'],
-  sms: ['default', 'new'],
+  sms: ['default'],
 };
 
 /** 主题中文名（设置页展示用） */
 export const BUBBLE_THEME_LABEL: Record<BubbleTheme, string> = {
   default: '默认主题',
   liquid: '液态玻璃',
-  new: '新版',
 };
 
 /** 该 App 是否启用了液态玻璃主题（页面铭件读此值切换玻璃视觉；旧档无 theme 字段 = false） */
 export function isLiquidTheme(cfg: BubbleStyleConfig | undefined, app: BubbleAppId): boolean {
   return cfg?.[app]?.theme === 'liquid';
-}
-
-/** 该 App 是否启用了新版 iMessage 主题（第五十轮：仅信息 App——聊天页铭件读此值切换新版视觉） */
-export function isNewImTheme(cfg: BubbleStyleConfig | undefined, app: BubbleAppId): boolean {
-  return cfg?.[app]?.theme === 'new';
 }
 
 /** 各 App 原生默认气泡底色（kind=default 且未自定义色时还原成它）
@@ -236,7 +229,7 @@ function normalizeAppStyle(v: unknown): BubbleAppStyle {
   const o = (v ?? {}) as Partial<BubbleAppStyle>;
   return {
     kind: normKind(o.kind),
-    theme: o.theme === 'liquid' ? 'liquid' : o.theme === 'new' ? 'new' : 'default',
+    theme: o.theme === 'liquid' ? 'liquid' : 'default',
     mineColor: normColor(o.mineColor),
     theirsColor: normColor(o.theirsColor),
   };
