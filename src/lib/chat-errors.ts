@@ -8,6 +8,8 @@
  *   分类：网络不稳定 / API Key 无效 / 请求太频繁 / 服务暂时不可用 / 请求超时 / 回复解析失败 / 默认未送达；
  * - 连续失败冷却：同一会话连续失败 1 次可立即重试，2 次起进入冷却（10s），3 次及以上 30s；
  *   成功一次立即清零。冷却只拦截「重试」动作——用户发新消息永远放行（用户意图明确）；
+ *   auth 类失败（API Key 未配置/无效）例外：不计冷却、反而清零——文案引导用户去
+ *   「设置 › API 配置」填写，照做后回来重试必须立即放行；保存 API 配置时也会全局清空冷却；
  * - 状态仅存内存（Map）：刷新后计数自然归零，可重新尝试——冷却防的是「疯狂连环重试」，
  *   不需要跨刷新持久化；
  * - 错误原文（detail）仅保存在内存供「复制错误详情」菜单使用，不落库、不进上下文/记忆。
@@ -80,13 +82,20 @@ function cooldownForCount(count: number): number {
   return COOLDOWN_STEPS_MS[idx] ?? 0;
 }
 
-/** 记录一次失败（finalize error/空回复分支调用；原始错误同时记为「复制详情」素材） */
+/** 记录一次失败（finalize error/空回复分支调用；原始错误同时记为「复制详情」素材）。
+ *  auth 类失败（API Key 未配置/无效——文案引导用户去「设置 › API 配置」）不计冷却、
+ *  反而清零既有冷却：用户照提示填好 Key 回来重试必须立即放行，不能被「失败次数较多」拦住。
+ *  冷却只针对瞬时类错误（网络/限频/服务端/超时/解析），防的是疯狂连环重试。 */
 export function recordChatFail(sessionKey: string, rawDetail?: string, nowMs: number = Date.now()): void {
   if (!sessionKey) return;
+  if (rawDetail) lastRawDetail.set(sessionKey, String(rawDetail).slice(0, 500));
+  if (rawDetail && classifyChatError(rawDetail).kind === 'auth') {
+    failState.delete(sessionKey);
+    return;
+  }
   const prev = failState.get(sessionKey);
   const count = Math.min((prev?.count ?? 0) + 1, 99);
   failState.set(sessionKey, { count, lastAt: nowMs });
-  if (rawDetail) lastRawDetail.set(sessionKey, String(rawDetail).slice(0, 500));
 }
 
 /** 记录一次成功（finalize 成功分支调用）——清零失败计数与冷却 */
@@ -104,6 +113,11 @@ export function retryCooldownMs(sessionKey: string, nowMs: number = Date.now()):
   if (cd <= 0) return 0;
   const remain = cd - (nowMs - st.lastAt);
   return remain > 0 ? remain : 0;
+}
+
+/** 清空全部会话的失败计数与冷却（「设置 › API 配置」保存后调用：配置已变，旧失败不再拦重试） */
+export function clearAllChatCooldowns(): void {
+  failState.clear();
 }
 
 /** 冷却提示文案（「请 N 秒后再试」；无冷却返回空串） */

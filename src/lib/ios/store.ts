@@ -13,6 +13,7 @@ import {
 import { useSyncExternalStore, useMemo, useState, useEffect, type CSSProperties } from 'react';
 import { localDB } from './db';
 import { encryptValue, decryptValue } from './secure-store';
+import { clearAllChatCooldowns } from '../chat-errors';
 import { useGlobalCall } from './global-call';
 import { useIncomingCall } from './incoming-call';
 import type { AddressMode } from '../contacts';
@@ -936,6 +937,9 @@ export const useSettings = create<SettingsState>((set, get) => ({
   updateApiConfig: (patch) => {
     const apiConfig = { ...get().apiConfig, ...patch };
     set({ apiConfig });
+    // 「设置 › API 配置」保存即清空聊天重试冷却：用户填好配置回来重试立即放行，
+    // 不再被「失败次数较多，请 N 秒后再试」拦住（配置已变，旧失败计数作废）
+    clearAllChatCooldowns();
     // 安全：含 apiKey，密文落盘（AES-GCM 非可提取密钥），IndexedDB 不存明文
     void encryptValue(apiConfig)
       .then((v) => localDB.put('settings', { key: 'apiConfig', value: v }))
