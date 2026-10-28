@@ -22,7 +22,6 @@ import {
   AppWindow,
   CirclePlus,
   Clock,
-  Compass,
   EyeOff,
   Forward,
   Gift,
@@ -129,6 +128,7 @@ import {
   WxIcWorks,
   WxIcSticker,
   WxIcSettings,
+  WxTabCompassIcon,
 } from './wx-icons';
 import { getReplyCount, saveReplyCount, buildReplyCountPrompt, splitReplySegments } from '@/lib/reply-count';
 import {
@@ -16030,7 +16030,7 @@ function MainScreen({
             [
               ['chats', '微信', <MessageCircle key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, true],
               ['contacts', '通讯录', <Users key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
-              ['discover', '发现', <Compass key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
+              ['discover', '发现', <WxTabCompassIcon key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
               ['me', '我', <User key="i" className="h-[22px] w-[22px]" strokeWidth={1.8} />, false],
             ] as Array<[Tab, string, React.ReactNode, boolean]>
           ).map(([id, label, icon, fillActive]) => {
@@ -16050,7 +16050,7 @@ function MainScreen({
                   /* 液态（第四十五轮，参考图）：纯图标模式；选中 = 浅色半透明胶囊底 + 微信绿填充图标（全部 tab 填充态） */
                   <span className="relative flex h-full w-full items-center justify-center">
                     <span
-                      className={`flex h-[32px] w-[58px] items-center justify-center rounded-full transition-colors duration-200 ${
+                      className={`flex h-[38px] w-[68px] items-center justify-center rounded-full transition-colors duration-200 ${
                         active
                           ? 'bg-black/[0.07] shadow-[inset_0_0_0_0.5px_rgba(255,255,255,0.55)] dark:bg-white/[0.14] dark:shadow-[inset_0_0_0_0.5px_rgba(255,255,255,0.16)]'
                           : ''

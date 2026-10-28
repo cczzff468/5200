@@ -1520,3 +1520,50 @@ Stage Summary:
 - 两轮 9 项修正全部落地并浏览器验证通过：微信/QQ 聊天加号面板 248px 右锚定悬浮、微信分类标签栏五标签均分铺满、语音转文字面板限宽不越头像区、微信输入框上移 5px、聊天页顶部渐变模糊带（新增 lg-top-blur，48 轮加重到 18px）、微信/QQ/QQ联系人三处加好友按钮缩小、备注按 App 完全隔离（remarks 槽位模型 + wx/qq/sms 三端接线 + 全局回退）、液态气泡去雾（白膜减半+投影减淡+blur 微升）
 - 关键文件：wechat.tsx、qq.tsx、chat.tsx、contacts.ts、contacts-store.ts、globals.css
 - 截图证据：tmp-analysis/e2e47/（12 张）；种子脚本 tmp-analysis/seed48.js
+
+---
+Task ID: 5 (round 49 E2E)
+Agent: E2E verification subagent (Z.ai Code)
+Task: 语音转文字面板圆角跟随气泡样式 — Agent Browser 端到端验证
+
+Work Log:
+- 接手既有 agent-browser 会话（500×701 @ localhost:3000）：处于微信·凡凡聊天页但 0 个 voice-bubble/voice-transcript 元素
+- 排障：读 kv 发现 seed49.js 种的消息缺 `kind:'voice'` 字段（wechat.tsx 规范化第 780 行要求 m.kind==='voice' 才保留 voice 数据）→ IndexedDB 直接补丁 wx/qq 两键为 f2/f3/q2 加 kind:'voice'（f1/q1 加 kind:'text'），reload 后语音气泡+转写面板正常渲染（wx 2 个 / qq 1 个）
+- 测试 1 wx default+自定义色（#FF8A65/#FFD180, theme liquid）：panels [4px,4px] / bubbles [4px,4px]，气泡底色 rgb(255,138,101)+rgb(255,209,128) 确认装扮接管 → PASS
+- 测试 2 wx rainbow：panels [4px,4px] / bubbles [4px,4px] → PASS
+- 测试 3 wx frosted：panels [999px,999px] / bubbles [999px,999px]（胶囊）→ PASS
+- 测试 4 wx liquid：panels [999px,999px] / bubbles [999px,999px]（胶囊）→ PASS
+- 测试 5 wx default 无色（原生）：panels [4px,4px]（class rounded-[4px]，style.borderRadius 为空串确认走类路径）/ bubbles [4px,4px]，面板纯白+气泡白/#95EC69 原生色 → PASS
+- 测试 6（bonus）qq rainbow：QQ 会话列表 testid 为 qq-session-c-fanfan（非 qq-chat-item-*），点击后 panels [14px] / bubbles [14px]，面板染七彩循环色 rgba(185,240,0,0.92) → PASS
+- VLM 交叉复核（vlm-ask.ts，截图裁剪 2x 放大）：10 default+色「面板与语音条圆角相同（约4px 小圆角）」✓ 12 frosted「面板也是胶囊形与语音条一致」✓ 13 liquid「面板也是大圆角胶囊一致」✓；11 rainbow 放大裁剪 VLM 误判「面板更圆」→ 用 pngjs 像素级顶行内缩量测量裁定：气泡与面板 depth+1 内缩均=1px、depth+3 均=0px（对应 r≈4px 曲线），两者圆角像素级一致，VLM 属小圆角误判（语音条尖尾巴干扰），DOM computed + 像素双重确证
+- 收尾还原：bubbleStyle 恢复 { wx:{kind:default,theme:default}, qq:{kind:default,theme:default}, sms:{kind:default} }（回读确认），reload 后复测原生态 4px/4px + 原生配色回归；console 仅 HMR/FastRefresh 日志零错误（window.__errs 无标记）
+
+Stage Summary:
+- 第 3 项（转文字面板圆角跟随气泡样式）端到端验证通过：6/6 全 PASS
+- 矩阵实测（panel/bubble computed borderRadius）：wx default+色 4px/4px ✓ wx rainbow 4px/4px ✓（像素级复核一致）wx frosted 999px/999px ✓ wx liquid 999px/999px ✓ wx 原生 4px/4px ✓（类路径）qq rainbow 14px/14px ✓ —— 与 bubble-style.ts DECOR_BUBBLE_RADIUS {wx:4px,qq:14px,sms:18px} + frosted/liquid 999px 完全吻合
+- VLM：default/frosted/liquid 三项一致确认；rainbow VLM 误判已用像素测量推翻（顶行内缩 1px@+1 / 0px@+3 = r≈4px 气泡=面板）
+- 异常与修复：seed49.js 语音消息缺 kind:'voice'（渲染归零）——已在浏览器 IndexedDB 内补丁数据完成验证（种子脚本缺陷记录在案，未改任何源码）；QQ 聊天列表 testid 实为 qq-session-*（任务描述中的 qq-chat-item-* 不存在）
+- 截图证据：tmp-analysis/e2e49/10~15（5 项矩阵+qq bonus）+ 16-wx-rainbow-pixel.png（像素测量源）；upload/ 内 crop-10/11/12/13 VLM 输入
+- 环境已还原：bubbleStyle 全默认（无自定义色），console 零错误
+
+---
+Task ID: 49 (主控)
+Agent: 主控 Agent（Z.ai Code）
+Task: 第49轮修正——微信发现Tab图标、液态TabBar灰色选中胶囊放大、语音转文字面板圆角跟随气泡样式
+
+Work Log:
+- [需求解析] 用户截图 Screenshot_20261028_172256.jpg（1080×262 TabBar 裁剪）VLM 采证：①发现 tab 选中态显示纯实心绿圆——lucide Compass 被 fill-current 填成实心圆、指针被吞 ②灰色当前选中胶囊偏小 ③微信默认（自定义色）/七彩转文字面板圆角硬编码 12px 太圆（语音气泡仅 4px）④面板圆角应跟随气泡样式变化
+- [wx-icons.tsx] 新增 WxTabCompassIcon：单路径 evenodd（外圆+指针菱形合一，指针较 lucide 放大 1.2×）——未选中与 lucide 同形线稿；选中填充态指针成镂空（透出灰色胶囊底），不再变实心绿圆
+- [wechat.tsx] 发现 tab 换用 WxTabCompassIcon（移除 Compass import）；液态 TabBar 灰色选中胶囊 32×58 → 38×68
+- [bubble-style.ts] TranscriptVisual 新增 radius 字段 + DECOR_BUBBLE_RADIUS{wx:4,qq:14,sms:18}px（与 bubbleVisual 同口径）；transcriptVisual 按装扮返回：纯色/七彩=App 原生规格、毛玻璃/液态=999px 胶囊
+- [voice-bubble.tsx] 转写面板装扮分支删硬编码 rounded-[12px]，改 inline borderRadius: tvis.radius——圆角严格跟随所属语音气泡
+- [静态检查] bunx tsc 仅 proactive-msg.ts 既有基线；eslint 四个改动文件 exit 0
+- [E2E] 见 Task ID 5 分节：六格圆角矩阵全过 + TabBar 实测（svgFill=rgb(7,193,96)、fillRule=evenodd、胶囊 68×38）+ VLM 复核指针镂空清晰可见
+- [附注] 用户追加上传 IMG_20261028_174850.jpg（信息 App 与「爸比」对话，展示 iMessage 已可用）——展示性质，非缺陷报告，无新增修正
+- [环境] 主控 Bash 会话中途故障，收尾（seed 修复/worklog/git）由子代理执行
+
+Stage Summary:
+- 发现 tab 修复：evenodd 指南针图标，选中填充态指针镂空可见（VLM：「带有指针镂空的绿色指南针，非纯实心绿色圆形」）
+- 灰色当前选中胶囊：58×32 → 68×38（实测 68×38，bg black/7%）
+- 转写面板圆角跟随气泡：六格矩阵实测通过——wx 默认+色/七彩/原生=4px、毛玻璃/液态=999px、QQ 七彩=14px，逐格与气泡一致
+- 关键文件：wx-icons.tsx、wechat.tsx、bubble-style.ts、voice-bubble.tsx；截图证据 tmp-analysis/e2e49/

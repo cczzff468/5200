@@ -320,8 +320,10 @@ export function VoiceMsgBubble({
           data-testid="voice-transcript"
           className={
             tvis?.override
-              ? /* 装扮接管：与气泡同语言（染色面板/磨砂玻璃/液态玻璃）；玻璃面板圆角 12px */
-                `mt-[5px] w-fit max-w-full whitespace-pre-wrap break-words rounded-[12px] px-3.5 py-2.5 text-[13px] leading-[1.55] ${
+              ? /* 装扮接管：与气泡同语言（染色面板/磨砂玻璃/液态玻璃）。第四十九轮：圆角跟随气泡样式
+                   （inline borderRadius = tvis.radius——纯色/七彩与气泡同规格、毛玻璃/液态胶囊 999px），
+                   不再统一硬编码 12px（用户：微信默认/七彩太圆，要与气泡圆角一样并随装扮变化） */
+                `mt-[5px] w-fit max-w-full whitespace-pre-wrap break-words px-3.5 py-2.5 text-[13px] leading-[1.55] ${
                     isWx ? 'text-[15px]' : ''
                   } ${tvis.className}`
               : isWx
@@ -332,7 +334,7 @@ export function VoiceMsgBubble({
                   mine ? t.ownTranscript : t.peerTranscript
                 }`
           }
-          style={tvis?.override ? tvis.style : undefined}
+          style={tvis?.override ? { borderRadius: tvis.radius, ...tvis.style } : undefined}
         >
           {voice.transcript}
         </span>

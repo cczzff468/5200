@@ -303,9 +303,17 @@ export interface TranscriptVisual {
   style: CSSProperties;
   /** 面板文字色类（原生时为空，用调用方默认） */
   textClass: string;
+  /** 面板圆角（第四十九轮：跟随气泡样式——与所属语音气泡同规格；原生时为空字符串）。
+   *  纯色/七彩：微信 4px / QQ 14px / 信息 18px（与 bubbleVisual 同口径）；
+   *  毛玻璃/液态：999px 胶囊（与气泡胶囊同形） */
+  radius: string;
 }
 
-const NO_TRANSCRIPT: TranscriptVisual = { override: false, className: '', style: {}, textClass: '' };
+const NO_TRANSCRIPT: TranscriptVisual = { override: false, className: '', style: {}, textClass: '', radius: '' };
+
+/** 各 App 装扮后（纯色/七彩）的气泡圆角——与 bubbleVisual 同口径：
+ *  微信/信息保持原生（语音气泡 4px / 18px），QQ 装扮后 14px */
+const DECOR_BUBBLE_RADIUS: Record<BubbleAppId, string> = { wx: '4px', qq: '14px', sms: '18px' };
 
 /** 计算语音转文字面板视觉：与所属语音气泡同一装扮语言。
  *  - 默认无色：原生白面板（微信大字白面板/两端小面板，不变）
@@ -339,6 +347,7 @@ export function transcriptVisual(
       className: '',
       style: { backgroundColor: withAlpha(c, 0.92), color: yiqTextOn(c) },
       textClass: '',
+      radius: DECOR_BUBBLE_RADIUS[app],
     };
   }
 
@@ -352,6 +361,7 @@ export function transcriptVisual(
         ? { backgroundColor: withAlpha(base, 0.55), color: yiqTextOn(base) }
         : {},
       textClass: '',
+      radius: '999px',
     };
   }
 
@@ -367,6 +377,7 @@ export function transcriptVisual(
           }
         : {},
       textClass: '',
+      radius: '999px',
     };
   }
 
@@ -377,6 +388,7 @@ export function transcriptVisual(
     className: '',
     style: { backgroundColor: withAlpha(c, 0.92), color: yiqTextOn(c) },
     textClass: '',
+    radius: DECOR_BUBBLE_RADIUS[app],
   };
 }
 

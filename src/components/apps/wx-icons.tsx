@@ -292,3 +292,35 @@ export function WxIcFamilyCard() {
     </Slot34>
   );
 }
+
+/* ---------------------------------------------------------------------------
+ * TabBar「发现」指南针（第四十九轮修复）
+ * ---------------------------------------------------------------------------
+ * 问题：lucide Compass 是「外圆 + 指针」两个独立图形，TabBar 选中态给 svg 上
+ * fill-current 后整圆被填成实心绿圆、指针被吞（用户截图：发现 tab 变纯绿圆点）。
+ * 方案：单路径 evenodd 自制版——外圆与指针菱形合为一个 path：
+ *  - 未选中（fill=none）：与 lucide 同形（圆环 + 指针线稿描边）；
+ *  - 选中（fill-current）：外圆实心、指针成为镂空（透出灰色胶囊底色），
+ *    指针依旧可辨识，与微信/通讯录/我三个 tab 的「填充态」语言一致。
+ * 指针较 lucide 放大约 1.2×（填充镂空后才够醒目）。
+ * ------------------------------------------------------------------------- */
+export function WxTabCompassIcon({ className, strokeWidth = 1.8 }: { className?: string; strokeWidth?: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={strokeWidth}
+      strokeLinejoin="round"
+      strokeLinecap="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M12 2a10 10 0 0 1 0 20a10 10 0 0 1 0-20Zm5.1 4.9-2.55 7.65-7.65 2.55 2.55-7.65Z"
+      />
+    </svg>
+  );
+}
