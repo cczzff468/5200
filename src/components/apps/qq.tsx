@@ -236,7 +236,7 @@ import {
   type MomentRepostRef, markMomentAutoAttempt } from '@/lib/moments';
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, PostMoreMenu, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
-import { BubbleStylePage } from './bubble-style-settings';
+import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
 import { bubbleVisual, isLiquidTheme, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
 import { getSentenceSend, saveSentenceSend, hasPendingBatch, markPendingBatch } from '@/lib/sentence-send';
@@ -16995,6 +16995,7 @@ type MainRoute =
   | { page: 'zone-notices' }
   | { page: 'momentsSettings' }
   | { page: 'dress' }
+  | { page: 'bubbles' }
   | { page: 'settings' }
   | { page: 'security' }
   | { page: 'stickers' }
@@ -17622,7 +17623,16 @@ function MainScreen({
           renderAvatar={(src, name, size) => <QqAvatar src={src} alt={name} size={size} />}
         />
       ) : route.page === 'dress' ? (
-        <BubbleStylePage app="qq" onBack={() => openTabs('消息')} onToast={showToast} />
+        // 主题页（个性装扮拆分：界面主题独立成页，气泡样式在下一级独立页）
+        <ThemeStylePage
+          app="qq"
+          onBack={() => openTabs('消息')}
+          onOpenBubbles={() => setRoute({ page: 'bubbles' })}
+          onToast={showToast}
+        />
+      ) : route.page === 'bubbles' ? (
+        // 气泡样式页（个性装扮 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
+        <BubbleStylePage app="qq" onBack={() => setRoute({ page: 'dress' })} onToast={showToast} />
       ) : route.page === 'momentsSettings' ? (
         <MomentsSettingsPage
           app="qq"

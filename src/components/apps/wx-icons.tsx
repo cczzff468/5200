@@ -221,6 +221,21 @@ export function WxIcSticker() {
   );
 }
 
+/** 主题：四段彩色弧环（绿/蓝/橙/紫，调色盘色环）+ 中心色点（「我」页 › 主题 入口） */
+export function WxIcTheme() {
+  return (
+    <Slot>
+      <g fill="none" strokeWidth={3}>
+        <path d="M26.95 7.26 A17 17 0 0 1 40.74 21.05" stroke="#07C160" />
+        <path d="M40.74 26.95 A17 17 0 0 1 26.95 40.74" stroke="#1B7AF5" />
+        <path d="M21.05 40.74 A17 17 0 0 1 7.26 26.95" stroke="#FA9D3B" />
+        <path d="M7.26 21.05 A17 17 0 0 1 21.05 7.26" stroke="#AF52DE" />
+      </g>
+      <circle cx="24" cy="24" r="4.6" fill="#07C160" />
+    </Slot>
+  );
+}
+
 /** 设置：蓝色齿轮（lucide 自带 viewBox，独立于 48 画布） */
 export function WxIcSettings() {
   return (

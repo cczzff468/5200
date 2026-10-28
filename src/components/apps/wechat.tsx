@@ -61,7 +61,6 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
-  Palette,
 } from 'lucide-react';
 import { addFavorite, isMsgFavorited, loadFavorites, removeFavorite, unfavoriteMsg, type MsgFavorite } from '@/lib/msg-favorites';
 import { useSettings, useUI } from '@/lib/ios/store';
@@ -127,6 +126,7 @@ import {
   WxIcFavorites,
   WxIcWorks,
   WxIcSticker,
+  WxIcTheme,
   WxIcSettings,
   WxTabCompassIcon,
 } from './wx-icons';
@@ -229,7 +229,7 @@ import {
   markMomentAutoAttempt } from '@/lib/moments';
 import { AskPostSheet, BilingualTranslation, CommentDeleteDialog, EditPostDialog, MomentAutoCfgSheet, MomentInteractionsPage, MomentsEmojiPanel, insertEmojiAtCursor, momentFriendsOf } from './moments-shared';
 import { MomentsSettingsPage } from './moments-settings';
-import { BubbleStylePage } from './bubble-style-settings';
+import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
 import { BubbleTail } from './bubble-tail';
 import { bubbleVisual, isLiquidTheme } from '@/lib/ios/bubble-style';
 import { getMomentsSettings } from '@/lib/ios/moments-settings';
@@ -13461,9 +13461,10 @@ type Page =
   | 'momentsSettings'
   | 'accountSwitch'
   | 'look'
-  | 'dress';
+  | 'dress'
+  | 'bubbles';
 
-// ---------------- 看一看页（发现页 › 看一看：顶部「聊天气泡装扮」入口 + 轻量内容流） ----------------
+// ---------------- 看一看页（发现页 › 看一看：轻量内容流） ----------------
 
 /** 看一看轻量内容流（标题 + 来源 + 阅读量） */
 const LOOK_FEED: { title: string; source: string; reads: string }[] = [
@@ -13473,9 +13474,9 @@ const LOOK_FEED: { title: string; source: string; reads: string }[] = [
   { title: '那些藏在聊天记录里的小心动', source: '夜谈心', reads: '5.7万' },
 ];
 
-/** 看一看页（第二十二轮美化）：与气泡装扮页同一套排版规范——玻璃卡 22px +
- *  胶囊控件 + 弱标题，区块 space-y-7 统一节奏；纯色底（无底层光斑）。 */
-function WxLookPage({ onBack, onOpenDress, onToast }: { onBack: () => void; onOpenDress: () => void; onToast: (m: string) => void }) {
+/** 看一看页（第二十二轮美化）：玻璃卡 22px + 胶囊控件 + 弱标题，
+ *  space-y-7 统一节奏、纯色底（无底层光斑）。装扮入口已移至「我」页 › 主题（表情下方）。 */
+function WxLookPage({ onBack, onToast }: { onBack: () => void; onToast: (m: string) => void }) {
   return (
     <div className="absolute inset-0 z-20 flex flex-col bg-[#F6F7F9] text-black dark:bg-[#111214] dark:text-white" data-testid="wx-look-page">
       {/* 顶部玻璃条：同色半透 + blur，滚动时内容从底下晕开 */}
@@ -13488,33 +13489,6 @@ function WxLookPage({ onBack, onOpenDress, onToast }: { onBack: () => void; onOp
         </div>
       </div>
       <div className="no-scrollbar min-h-0 flex-1 space-y-7 overflow-y-auto px-4 pb-10 pt-3">
-        {/* 聊天气泡装扮入口（玻璃卡 + 柔绿图标 + 迷你七彩胶囊示意） */}
-        <button
-          type="button"
-          data-testid="wx-look-dress-entry"
-          onClick={onOpenDress}
-          className="w-full rounded-[22px] bg-white/60 p-4 text-left backdrop-blur-xl ring-1 ring-white/70 transition-transform active:scale-[0.98] dark:bg-white/[0.06] dark:ring-white/[0.12]"
-        >
-          <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#07C160]/12 dark:bg-[#07C160]/18">
-              <Palette className="h-5 w-5 text-[#07C160]" strokeWidth={2} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-[16px] font-semibold">聊天气泡装扮</p>
-              <p className="mt-0.5 text-[12.5px] leading-tight text-black/45 dark:text-white/45">默认 · 七彩 · 毛玻璃 · 液态玻璃</p>
-            </div>
-            <ChevronRight className="h-5 w-5 shrink-0 text-black/25 dark:text-white/25" aria-hidden="true" />
-          </div>
-          {/* 五枚迷你气泡示意（七彩参考图色板 · 胶囊） */}
-          <div className="mt-3.5 flex items-center gap-1.5 pl-[58px]">
-            <span className="rounded-full bg-[#FFEB00] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">早</span>
-            <span className="rounded-full bg-[#B9F000] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">上</span>
-            <span className="rounded-full bg-[#46EAEB] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">好</span>
-            <span className="rounded-full bg-[#FE91A6] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">呀</span>
-            <span className="rounded-full bg-[#E19EFF] px-2.5 py-[3px] text-[10.5px] font-semibold text-black">~</span>
-          </div>
-        </button>
-
         {/* 轻量内容流：独立玻璃卡 · 标题 + 来源胶囊 + 阅读量 */}
         <section aria-label="大家都在看">
           <p className="px-2 text-[12.5px] font-semibold tracking-wide text-black/40 dark:text-white/40">大家都在看</p>
@@ -15261,15 +15235,19 @@ function MainScreen({
     );
   if (page === 'services') return <WxServices friends={friends} myRealName={myRealName} onExit={() => setPage('main')} />;
   if (page === 'stickers') return <WxStickersPage onBack={() => setPage('main')} onToast={showToast} />;
-  if (page === 'look')
+  if (page === 'look') return <WxLookPage onBack={() => setPage('main')} onToast={showToast} />;
+  // 主题页（「我」页 › 主题，表情下方进入）：界面主题独立成页，气泡样式在下一级独立页
+  if (page === 'dress')
     return (
-      <WxLookPage
+      <ThemeStylePage
+        app="wx"
         onBack={() => setPage('main')}
-        onOpenDress={() => setPage('dress')}
+        onOpenBubbles={() => setPage('bubbles')}
         onToast={showToast}
       />
     );
-  if (page === 'dress') return <BubbleStylePage app="wx" onBack={() => setPage('look')} onToast={showToast} />;
+  // 气泡样式页（主题页 › 聊天气泡样式）：实时预览 + 四格样式 + 颜色 + 收藏夹
+  if (page === 'bubbles') return <BubbleStylePage app="wx" onBack={() => setPage('dress')} onToast={showToast} />;
   if (page === 'favorites') return <WxFavoritesPage onBack={() => setPage('main')} onToast={showToast} />;
   if (page === 'album') {
     // 我的主页「相册」入口：当前用户自己的相册（可增删改）
@@ -16013,6 +15991,13 @@ function MainScreen({
                 testId="wx-me-stickers"
                 onClick={() => setPage('stickers')}
                 icon={<WxIcSticker />}
+              />
+              {/* 主题（原发现 › 看一看 › 聊天气泡装扮入口移此）：界面主题 + 气泡样式两级独立页 */}
+              <WxMenuRow
+                label="主题"
+                testId="wx-me-theme"
+                onClick={() => setPage('dress')}
+                icon={<WxIcTheme />}
               />
             </div>
 

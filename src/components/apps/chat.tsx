@@ -37,7 +37,7 @@ import { useSettings, useUI } from '@/lib/ios/store';
 // 聊天气泡装扮（信息 App 接入）：bubbleVisual 计算每条消息的覆盖样式（背景/文字色/尾巴），
 // 与微信/QQ 完全隔离（bubbleStyle.sms 独立槽位）；设置入口 = 聊天设置 › 主题
 import { BUBBLE_KIND_LABEL, bubbleVisual, TAIL_CLIP_LEFT, TAIL_CLIP_RIGHT } from '@/lib/ios/bubble-style';
-import { BubbleStylePage } from './bubble-style-settings';
+import { BubbleStylePage, ThemeStylePage } from './bubble-style-settings';
 import { pushChatNotification, notifyPreviewText, takeNotifyNavigation, ISLAND_NAV_EVENT } from '@/lib/ios/island-notify';
 import { playNotifySound } from '@/lib/ios/notify-sound';
 import { appendWithBoundary, markDeliverBoundary, peekPendingMsgs, purgeDeliveryQueueByPrefix, sortMsgsByTime, scheduleAiDelivery, subscribeAiDelivery, subscribeAiDeliveryActive, isAiDelivering, typingDelayOf } from '@/lib/ios/ai-delivery';
@@ -1113,8 +1113,10 @@ function ChatView({
   const profileAvatar = useSettings((s) => s.profile.avatar);
   /** 聊天设置页（顶栏摄像机图标进入）：翻译入口 + 回复条数入口 + 分句发送开关 */
   const [settingsOpen, setSettingsOpen] = useState(false);
-  /** 主题（气泡样式与颜色装扮）页：聊天设置 › 主题 进入，BubbleStylePage app='sms' */
+  /** 主题页（聊天设置 › 主题 进入）：界面主题独立成页；ThemeStylePage app='sms'，
+   *  气泡样式在下一级独立页（bubbleOpen，返回时回到主题页） */
   const [themeOpen, setThemeOpen] = useState(false);
+  const [bubbleOpen, setBubbleOpen] = useState(false);
   /** 聊天气泡装扮配置（信息 App 独立槽位，与微信/QQ 隔离）：全部气泡（文本/语音/输入中指示器+尾巴）实时跟随 */
   const bubbleStyle = useSettings((s) => s.bubbleStyle);
   /* 第五十三轮（用户指定）：删除「新版」主题——信息 App 聊天页回归唯一默认主题 */
@@ -3971,12 +3973,24 @@ function ChatView({
         />
       )}
 
-      {/* 主题页（聊天设置 › 主题，气泡样式与颜色装扮）：BubbleStylePage 复用微信/QQ 同一套
-          （实时预览/样式四格/HSL 色板/收藏夹），装扮写入 bubbleStyle.sms 独立槽位——
-          与微信/QQ 完全隔离；返回即回聊天设置页 */}
-      {themeOpen && (
+      {/* 主题页（聊天设置 › 主题）：界面主题（信息仅默认）+ 聊天气泡样式入口；
+          气泡页在其下一级独立打开（bubbleOpen，z 更高，返回回到主题页）；装扮写入
+          bubbleStyle.sms 独立槽位——与微信/QQ 完全隔离 */}
+      {themeOpen && !bubbleOpen && (
         <div className="absolute inset-0 z-[60]">
-          <BubbleStylePage app="sms" onBack={() => setThemeOpen(false)} onToast={showToast} />
+          <ThemeStylePage
+            app="sms"
+            onBack={() => setThemeOpen(false)}
+            onOpenBubbles={() => setBubbleOpen(true)}
+            onToast={showToast}
+          />
+        </div>
+      )}
+
+      {/* 气泡样式页（主题页 › 聊天气泡样式）：实时预览/样式四格/HSL 色板/收藏夹 */}
+      {bubbleOpen && (
+        <div className="absolute inset-0 z-[61]">
+          <BubbleStylePage app="sms" onBack={() => setBubbleOpen(false)} onToast={showToast} />
         </div>
       )}
 
